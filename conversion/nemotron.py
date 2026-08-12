@@ -39,28 +39,48 @@ class NemotronNanoV2VLModel(MmprojModel):
         }
         return vision_config
 
+    def get_audio_config(self) -> dict[str, Any] | None:
+        return self.global_config.get("sound_config")
+
     def set_gguf_parameters(self):
         if "image_mean" not in self.preprocessor_config:
             self.preprocessor_config["image_mean"] = [0.485, 0.456, 0.406]
         if "image_std" not in self.preprocessor_config:
             self.preprocessor_config["image_std"] = [0.229, 0.224, 0.225]
 
+        if self.hparams_audio is not None:
+            self.has_vision_encoder = True
+            self.has_audio_encoder = True
+            self.gguf_writer.add_audio_num_mel_bins(self.hparams_audio["num_mel_bins"])
+            self.gguf_writer.add_audio_attention_layernorm_eps(1e-5)
+            self.gguf_writer.add_audio_subsampling_factor(self.hparams_audio["subsampling_factor"])
+            self.gguf_writer.add_audio_conv_kernel_size(self.hparams_audio["conv_kernel_size"])
+            self.gguf_writer.add_clip_audio_projector_type(gguf.VisionProjectorType.PARAKEET)
+            self.gguf_writer.add_clip_vision_projector_type(gguf.VisionProjectorType.NEMOTRON_V2_VL)
+        else:
+            self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.NEMOTRON_V2_VL)
+
         super().set_gguf_parameters()
         hparams = self.global_config
-        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.NEMOTRON_V2_VL)
         self.gguf_writer.add_vision_attention_layernorm_eps(1e-6)
         self.gguf_writer.add_vision_use_gelu(True)
         downsample_ratio = hparams.get("downsample_ratio", 0.5)
         self.gguf_writer.add_vision_projector_scale_factor(int(1.0 / downsample_ratio))
 
     def tensor_force_quant(self, name, new_name, bid, n_dims):
-        if ".position_embd." in new_name or "pos_embed" in new_name:
-            return gguf.GGMLQuantizationType.F32
+        if "sound_encoder" in name or new_name.startswith("mm.a."):
+            if "bias" in new_name or "norm" in new_name:
+                return gguf.GGMLQuantizationType.F32
+            if "conv" in new_name and "weight" in new_name:
+                return gguf.GGMLQuantizationType.F32
+
         return super().tensor_force_quant(name, new_name, bid, n_dims)
 
     @classmethod
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
-        name, gen = item
+        if (titem := super().filter_tensors(item)) is None:
+            return None
+        name, gen = titem
 
         if "input_conditioner" in name:
             return None
@@ -69,14 +89,18 @@ class NemotronNanoV2VLModel(MmprojModel):
         if "radio_model.model.patch_generator.video_embedder" in name:
             return None
 
-        if not name.startswith("vision_model.radio_model.model.") and not name.startswith("mlp1."):
+        if not name.startswith(("vision_model.radio_model.model.", "mlp1.", "sound_encoder.", "sound_projection.")):
             return None
 
         if "patch_generator.pos_embed" in name:
             if not name.endswith(".weight"):
                 name += ".weight"
 
-        return super().filter_tensors((name, gen))
+        # num_batches is only used for training not inference.
+        if "conv.norm" in name and "num_batches" in name:
+            return None
+
+        return name, gen
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         # RADIO's pos_embed doesn't have .weight suffix, but clip.cpp expects it
@@ -104,7 +128,26 @@ class NemotronNanoV2VLModel(MmprojModel):
             n_embd = self.hparams["hidden_size"]
             data_torch = data_torch.reshape(n_embd, 3, patch_size, patch_size)
 
-        yield from super().modify_tensors(data_torch, name, bid)
+        if "depthwise_conv.weight" in name:
+            data_torch = data_torch.unsqueeze(-1)
+            data_torch = data_torch.permute(3, 1, 0, 2).contiguous()
+
+        if "pointwise_conv" in name and name.endswith(".weight"):
+            if len(data_torch.shape) == 3 and data_torch.shape[2] == 1:
+                data_torch = data_torch.reshape(data_torch.shape[0], data_torch.shape[1])
+
+        if "subsampling.layers" in name and name.endswith(".bias"):
+            if len(data_torch.shape) == 1:
+                data_torch = data_torch.reshape(1, -1, 1, 1)
+
+        if "pointwise_conv" in name and name.endswith(".bias"):
+            if len(data_torch.shape) == 1:
+                data_torch = data_torch.reshape(1, -1, 1, 1)
+
+        for mapped_name, tensor in super().modify_tensors(data_torch, name, bid):
+            if name.startswith("sound_projection.") and mapped_name.startswith("mm.model.mlp."):
+                mapped_name = mapped_name.replace("mm.model.mlp.", "mm.a.mlp.")
+            yield mapped_name, tensor
 
 
 @ModelBase.register("NemotronForCausalLM")
@@ -154,6 +197,7 @@ class NemotronHModel(GraniteHybridModel):
     """Hybrid mamba2/attention model from NVIDIA"""
     model_arch = gguf.MODEL_ARCH.NEMOTRON_H
     is_moe: bool = False
+    supports_mtp_export = True
 
     def __init__(self, *args, **kwargs):
         # We have to determine the correct model architecture (MoE vs non-MoE) before
@@ -193,6 +237,25 @@ class NemotronHModel(GraniteHybridModel):
             self._ssm_layers = [i for i, val in enumerate(pattern) if val == "mamba"]
             self._mlp_layers = [i for i, val in enumerate(pattern) if val == "moe"]
 
+        # `--no-mtp` drops it entirely; `--mtp` exports only the MTP head
+        self._mtp_bid: int | None = None
+        if self.is_moe and not self.no_mtp:
+            n_nextn = self.hparams.get("num_nextn_predict_layers", 0) or 0
+            if n_nextn > 0:
+                assert n_nextn == 1, (
+                    "NemotronH MTP conversion currently supports num_nextn_predict_layers == 1"
+                )
+                self._mtp_bid = self.block_count
+                self.block_count += 1
+                # The folded MTP block carries both an attention sub-layer and a
+                # MoE sub-layer, so register it as both so the per-layer metadata arrays cover it
+                self._attn_layers.append(self._mtp_bid)
+                self._mlp_layers.append(self._mtp_bid)
+                self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
+
+        if self.mtp_only and self._mtp_bid is None:
+            raise ValueError("--mtp was requested, but this model does not contain a supported MTP head")
+
     def get_attn_layers(self):
         pattern = self.hparams.get("hybrid_override_pattern") or self.hparams.get("layers_block_type")
         if pattern is None:
@@ -202,6 +265,44 @@ class NemotronHModel(GraniteHybridModel):
             return [i for i, val in enumerate(pattern) if val == "*"]
 
         return [i for i, val in enumerate(pattern) if val == "attention"]
+
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+        if name.startswith("mtp."):
+            # --no-mtp: drop the MTP head entirely
+            if cls.no_mtp:
+                return None
+        elif cls.mtp_only:
+            # --mtp: export the MTP head plus the tensors it shares with the target model
+            # Include lm_head scale sidecars so NVFP4 packing sees them.
+            keep = name in (
+                "backbone.embeddings.weight",
+                "backbone.norm_f.weight",
+                "lm_head.weight",
+                "lm_head.weight_scale",
+                "lm_head.weight_scale_2",
+                "lm_head.weight_scale_inv",
+                "lm_head.input_scale",
+                "lm_head.input_global_scale",
+                "lm_head.weight_global_scale",
+                "lm_head.weight_packed",
+            )
+            if not keep:
+                return None
+        return super().filter_tensors((name, gen))
+
+    def prepare_metadata(self, vocab_only: bool):
+        from_dir = self.fname_out.is_dir()
+        super().prepare_metadata(vocab_only=vocab_only)
+
+        if not self.mtp_only or not from_dir:
+            return
+        output_type: str = self.ftype.name.partition("_")[2]
+        fname_default: str = gguf.naming_convention(
+            self.metadata.name, self.metadata.basename, self.metadata.finetune,
+            self.metadata.version, size_label=None, output_type=output_type, model_type=None)
+        self.fname_out = self.fname_out.parent / f"mtp-{fname_default}.gguf"
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
@@ -240,6 +341,10 @@ class NemotronHModel(GraniteHybridModel):
 
             if (latent_size := self.hparams.get("moe_latent_size")) is not None:
                 self.gguf_writer.add_moe_latent_size(latent_size)
+
+        # MTP head: number of trailing NextN blocks
+        if self._mtp_bid is not None:
+            self.gguf_writer.add_nextn_predict_layers(self.hparams["num_nextn_predict_layers"])
 
     def set_vocab(self):
         # The NemotronH config uses pattern characters (e.g. '-') that may not
@@ -307,15 +412,24 @@ class NemotronHModel(GraniteHybridModel):
         if not self.is_moe:
             self.gguf_writer.add_add_bos_token(True)
 
-    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        if self.is_moe and bid is not None:
-            # Skip Multi-Token Prediction (MTP) tensors. These are used for
-            # for speculative decoding but we don't include them in this model
-            # conversion. See https://github.com/ggml-org/llama.cpp/pull/18886
-            if name.startswith("mtp."):
-                logger.info(f"gguf: Skipping MTP (Speculative) layer: {name}")
-                return
+    _MTP_SPECIAL_RENAMES = {
+        "mtp.layers.0.enorm.weight":           "model.layers.{bid}.enorm.weight",
+        "mtp.layers.0.hnorm.weight":           "model.layers.{bid}.hnorm.weight",
+        "mtp.layers.0.eh_proj.weight":         "model.layers.{bid}.eh_proj.weight",
+        "mtp.layers.1.norm.weight":            "model.layers.{bid}.post_attention_layernorm.weight",
+        "mtp.layers.1.final_layernorm.weight": "model.layers.{bid}.shared_head.norm.weight",
+    }
 
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        #   mtp.layers.0: NextN input fusion + attention
+        #   mtp.layers.1: MoE + final head norm
+        if self._mtp_bid is not None and name.startswith(("mtp.layers.0.", "mtp.layers.1.")):
+            suffix = name.split(".", 3)[3]
+            bid = self._mtp_bid
+            renamed = self._MTP_SPECIAL_RENAMES.get(name)
+            name = renamed.format(bid=bid) if renamed else f"backbone.layers.{bid}.{suffix}"
+
+        if self.is_moe and bid is not None:
             if name.endswith("mixer.gate.e_score_correction.bias"):
                 yield from ModelBase.modify_tensors(self, data_torch, name, bid)
                 return

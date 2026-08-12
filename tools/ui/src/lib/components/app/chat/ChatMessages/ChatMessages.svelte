@@ -1,24 +1,22 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
-	import { beforeNavigate, afterNavigate } from '$app/navigation';
 	import { ChatMessage, ChatMessageUserPending } from '$lib/components/app';
 	import { setChatActionsContext } from '$lib/contexts';
 	import { MessageRole } from '$lib/enums';
+	import {
+		agenticClearSteeringMessage,
+		agenticInjectSteeringMessage,
+		agenticPendingSteeringMessageContent,
+		agenticPendingSteeringMessageExtras
+	} from '$lib/stores/agentic.svelte';
 	import { chatStore } from '$lib/stores/chat.svelte';
 	import {
-		chatPendingMessageContent,
-		chatPendingMessageExtras,
 		chatClearPendingMessage,
-		chatInjectPendingMessage
+		chatInjectPendingMessage,
+		chatPendingMessageContent,
+		chatPendingMessageExtras
 	} from '$lib/stores/chat.svelte';
-	import { conversationsStore, activeConversation } from '$lib/stores/conversations.svelte';
+	import { activeConversation, conversationsStore } from '$lib/stores/conversations.svelte';
 	import { config } from '$lib/stores/settings.svelte';
-	import {
-		agenticPendingSteeringMessageContent,
-		agenticPendingSteeringMessageExtras,
-		agenticClearSteeringMessage,
-		agenticInjectSteeringMessage
-	} from '$lib/stores/agentic.svelte';
 	import {
 		buildSiblingInfoMap,
 		copyToClipboard,
@@ -32,16 +30,19 @@
 		onMessagesReady?: (messageCount: number) => void;
 	}
 
-	let { messages = [], onUserAction, onMessagesReady }: Props = $props();
+	let { messages = [], onMessagesReady, onUserAction }: Props = $props();
 
 	let allConversationMessages = $state<DatabaseMessage[]>([]);
-	let isVisible = $state(false);
-	let previousConversationId = $state<string | null>(null);
-	let previousRouteId = $state<string | null>(null);
 
 	const currentConfig = config();
 
 	setChatActionsContext({
+		continueAssistantMessage: async (message: DatabaseMessage) => {
+			onUserAction?.();
+			await chatStore.continueAssistantMessage(message.id);
+			refreshAllMessages();
+		},
+
 		copy: async (message: DatabaseMessage) => {
 			const asPlainText = Boolean(currentConfig.copyTextAttachmentsAsPlainText);
 			const clipboardContent = formatMessageForClipboard(
@@ -49,6 +50,7 @@
 				message.extra,
 				asPlainText
 			);
+
 			await copyToClipboard(clipboardContent, 'Message copied to clipboard');
 		},
 
@@ -57,8 +59,14 @@
 			refreshAllMessages();
 		},
 
-		navigateToSibling: async (siblingId: string) => {
-			await conversationsStore.navigateToSibling(siblingId);
+		editUserMessagePreserveResponses: async (
+			message: DatabaseMessage,
+			newContent: string,
+			newExtras?: DatabaseMessageExtra[]
+		) => {
+			onUserAction?.();
+			await chatStore.editUserMessagePreserveResponses(message.id, newContent, newExtras);
+			refreshAllMessages();
 		},
 
 		editWithBranching: async (
@@ -81,33 +89,21 @@
 			refreshAllMessages();
 		},
 
-		editUserMessagePreserveResponses: async (
+		forkConversation: async (
 			message: DatabaseMessage,
-			newContent: string,
-			newExtras?: DatabaseMessageExtra[]
+			options: { name: string; includeAttachments: boolean }
 		) => {
-			onUserAction?.();
-			await chatStore.editUserMessagePreserveResponses(message.id, newContent, newExtras);
-			refreshAllMessages();
+			await conversationsStore.forkConversation(message.id, options);
+		},
+
+		navigateToSibling: async (siblingId: string) => {
+			await conversationsStore.navigateToSibling(siblingId);
 		},
 
 		regenerateWithBranching: async (message: DatabaseMessage, modelOverride?: string) => {
 			onUserAction?.();
 			await chatStore.regenerateMessageWithBranching(message.id, modelOverride);
 			refreshAllMessages();
-		},
-
-		continueAssistantMessage: async (message: DatabaseMessage) => {
-			onUserAction?.();
-			await chatStore.continueAssistantMessage(message.id);
-			refreshAllMessages();
-		},
-
-		forkConversation: async (
-			message: DatabaseMessage,
-			options: { name: string; includeAttachments: boolean }
-		) => {
-			await conversationsStore.forkConversation(message.id, options);
 		}
 	});
 
@@ -123,26 +119,10 @@
 		}
 	}
 
-	// Track conversation changes to trigger transition even on same route
+	// Refresh messages whenever the active conversation changes
 	$effect(() => {
-		const conversation = activeConversation();
-		const currentId = conversation?.id ?? null;
-
-		if (currentId !== previousConversationId && previousConversationId !== null) {
-			// Conversation changed - trigger fade out/in
-			isVisible = false;
-			requestAnimationFrame(() => {
-				refreshAllMessages();
-				previousConversationId = currentId;
-				requestAnimationFrame(() => {
-					isVisible = true;
-				});
-			});
-		} else {
-			previousConversationId = currentId;
-			if (conversation) {
-				refreshAllMessages();
-			}
+		if (activeConversation()) {
+			refreshAllMessages();
 		}
 	});
 
@@ -150,23 +130,6 @@
 		void allConversationMessages;
 
 		onMessagesReady?.(displayMessages.length);
-	});
-
-	onMount(() => {
-		requestAnimationFrame(() => {
-			isVisible = true;
-		});
-	});
-
-	beforeNavigate((navigation) => {
-		isVisible = false;
-		previousRouteId = navigation.from?.route.id ?? null;
-	});
-
-	afterNavigate(() => {
-		requestAnimationFrame(() => {
-			isVisible = true;
-		});
 	});
 
 	let siblingInfoByMessageId = $derived(buildSiblingInfoMap(allConversationMessages));
@@ -179,7 +142,6 @@
 		const filteredMessages = currentConfig.showSystemMessage
 			? messages
 			: messages.filter((msg) => msg.type !== MessageRole.SYSTEM);
-
 		// Build display entries, grouping agentic sessions into single entries.
 		// An agentic session = assistant(with tool_calls) → tool → assistant → tool → ... → assistant(final)
 		const result: Array<{
@@ -198,6 +160,7 @@
 			if (msg.role === MessageRole.TOOL) continue;
 
 			const toolMessages: DatabaseMessage[] = [];
+
 			if (msg.role === MessageRole.ASSISTANT && hasAgenticContent(msg)) {
 				let j = i + 1;
 
@@ -228,27 +191,29 @@
 			}
 
 			const siblingInfo = siblingInfoByMessageId.get(msg.id) ?? {
+				currentIndex: 0,
 				message: msg,
 				siblingIds: [msg.id],
-				currentIndex: 0,
 				totalSiblings: 1
 			};
 
 			result.push({
-				message: msg,
-				toolMessages,
 				isLastAssistantMessage: false,
 				isLastUserMessage: false,
+				message: msg,
 				nextAssistantMessage: null,
-				siblingInfo
+				siblingInfo,
+				toolMessages
 			});
 		}
 
 		let lastAssistantIdx = -1;
+
 		for (let i = result.length - 1; i >= 0; i--) {
 			if (result[i].message.role === MessageRole.ASSISTANT) {
 				result[i].isLastAssistantMessage = true;
 				lastAssistantIdx = i;
+
 				break;
 			}
 		}
@@ -263,6 +228,7 @@
 			for (let j = i + 1; j < result.length; j++) {
 				if (result[j].message.role === MessageRole.ASSISTANT) {
 					result[i].nextAssistantMessage = result[j].message;
+
 					break;
 				}
 			}
@@ -272,12 +238,8 @@
 	});
 </script>
 
-<div
-	class="transition-opacity duration-500 ease-out
-		{isVisible ? 'opacity-100' : 'opacity-0'}
-		{previousRouteId === '/(chat)/chat/[id]' ? '' : 'delay-300'}"
->
-	{#each displayMessages as { message, toolMessages, isLastAssistantMessage, isLastUserMessage, nextAssistantMessage, siblingInfo } (message.id)}
+<div>
+	{#each displayMessages as { isLastAssistantMessage, isLastUserMessage, message, nextAssistantMessage, siblingInfo, toolMessages } (message.id)}
 		<ChatMessage
 			class="mx-auto mt-12 w-full max-w-3xl"
 			{message}

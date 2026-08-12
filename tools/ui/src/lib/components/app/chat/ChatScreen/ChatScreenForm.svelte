@@ -2,9 +2,9 @@
 	import { afterNavigate } from '$app/navigation';
 	import { page } from '$app/state';
 	import { ChatForm } from '$lib/components/app';
+	import { useDraftMessages } from '$lib/hooks/use-draft-messages.svelte';
 	import { isMobile } from '$lib/stores/viewport.svelte';
 	import { onMount } from 'svelte';
-	import { useDraftMessages } from '$lib/hooks/use-draft-messages.svelte';
 
 	interface Props {
 		class?: string;
@@ -40,16 +40,19 @@
 		if (!formWrapperEl) return;
 
 		const formEl = formWrapperEl.querySelector('form') as HTMLElement | null;
+
 		if (!formEl) return;
 
 		const updateHeight = () => {
 			const height = Math.round(formEl.getBoundingClientRect().height);
+
 			document.documentElement.style.setProperty('--chat-form-height', `${height}px`);
 		};
 
 		updateHeight();
 
 		const resizeObserver = new ResizeObserver(updateHeight);
+
 		resizeObserver.observe(formEl);
 
 		return () => {
@@ -64,11 +67,11 @@
 
 	const { clearDraft } = useDraftMessages({
 		getChatId: () => chatId,
-		getMessage: () => message,
 		getFiles: () => uploadedFiles,
-		setMessage: (m) => (message = m),
+		getInitialMessage: () => initialMessage,
+		getMessage: () => message,
 		setFiles: (f) => (uploadedFiles = f),
-		getInitialMessage: () => initialMessage
+		setMessage: (m) => (message = m)
 	});
 
 	function handleFilesAdd(files: File[]) {
@@ -99,22 +102,32 @@
 	}
 
 	function handleSystemPromptClick() {
-		onSystemPromptAdd?.({ message, files: uploadedFiles });
+		onSystemPromptAdd?.({ files: uploadedFiles, message });
 	}
 
 	function handleUploadedFileRemove(fileId: string) {
 		onFileRemove?.(fileId);
 	}
 
+	// Auto-focus must not steal focus already claimed elsewhere (e.g. the system
+	// message editor opened just before a navigation)
+	function focusFormUnlessCaptured() {
+		const active = document.activeElement;
+
+		if (active instanceof HTMLTextAreaElement || active instanceof HTMLInputElement) return;
+
+		chatFormRef?.focus();
+	}
+
 	onMount(() => {
 		if (!isMobile.current) {
-			setTimeout(() => chatFormRef?.focus(), 100);
+			setTimeout(focusFormUnlessCaptured, 100);
 		}
 	});
 
 	afterNavigate((navigation) => {
 		if (navigation?.from != null && !isMobile.current) {
-			setTimeout(() => chatFormRef?.focus(), 100);
+			setTimeout(focusFormUnlessCaptured, 100);
 		}
 	});
 
@@ -127,7 +140,7 @@
 
 	$effect(() => {
 		if (previousIsLoading && !isLoading) {
-			setTimeout(() => chatFormRef?.focus(), 10);
+			setTimeout(focusFormUnlessCaptured, 10);
 		}
 
 		previousIsLoading = isLoading;

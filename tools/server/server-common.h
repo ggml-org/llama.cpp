@@ -9,9 +9,15 @@
 #define JSON_ASSERT GGML_ASSERT
 #include <nlohmann/json.hpp>
 
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
+#include <cinttypes>
+#include <functional>
+#include <mutex>
+#include <queue>
 #include <string>
 #include <vector>
-#include <cinttypes>
 
 using json = nlohmann::ordered_json;
 
@@ -195,10 +201,13 @@ public:
     // for compatibility with context shift and prompt truncation
     void insert(const llama_tokens & inp_tokens);
 
-    // for compatibility with speculative decoding, ctx shift, slot save/load
+    // for compatibility with speculative decoding, ctx shift
     const llama_tokens & get_tokens() const;
 
     llama_tokens get_text_tokens() const;
+
+    std::vector<char> serialize() const;
+    static server_tokens deserialize(const llama_tokens & packed, bool has_mtmd);
 
     // for compatibility with speculative decoding
     void set_token(llama_pos pos, llama_token id);
@@ -221,7 +230,7 @@ public:
     // split the tokens into message spans, skipping over media chunks
     common_chat_msg_spans find_message_spans(const common_chat_msg_delimiters & delims) const;
 
-    // make sure all text tokens are within the vocab range
+    // check text token IDs and the mapping between media chunks and token ranges
     bool validate(const struct llama_context * ctx) const;
 
     server_tokens clone() const;
@@ -373,3 +382,67 @@ server_tokens format_prompt_rerank(
         mtmd_context * mctx,
         const std::string & query,
         const std::string & doc);
+
+// simple implementation of a pipe
+// used for streaming data between threads
+template<typename T>
+struct server_pipe {
+    std::mutex mutex;
+    std::condition_variable cv;
+    std::queue<T> queue;
+    std::atomic<bool> writer_closed{false};
+    std::atomic<bool> reader_closed{false};
+
+    // 0 = unbounded (default)
+    // > 0, write() drops the oldest item once the queue is full
+    size_t max_size = 0;
+
+    void close_write() {
+        writer_closed.store(true, std::memory_order_relaxed);
+        cv.notify_all();
+    }
+
+    void close_read() {
+        reader_closed.store(true, std::memory_order_relaxed);
+        cv.notify_all();
+    }
+
+    // close_on_stop = true: should_stop means the reader is gone for good, so the writer is told the pipe is broken.
+    // close_on_stop = false: should_stop is a per-read deadline and further reads still come, so the pipe stays usable.
+    bool read(T & output, const std::function<bool()> & should_stop, bool close_on_stop = true) {
+        std::unique_lock<std::mutex> lk(mutex);
+        constexpr auto poll_interval = std::chrono::milliseconds(500);
+        while (true) {
+            if (!queue.empty()) {
+                output = std::move(queue.front());
+                queue.pop();
+                return true;
+            }
+            if (writer_closed.load()) {
+                return false; // clean EOF
+            }
+            if (should_stop && should_stop()) { // a null should_stop means "never stop"
+                if (close_on_stop) {
+                    close_read(); // signal broken pipe to writer
+                }
+                return false; // cancelled / deadline reached
+            }
+            cv.wait_for(lk, poll_interval);
+        }
+    }
+
+    bool write(T && data) {
+        std::lock_guard<std::mutex> lk(mutex);
+        if (reader_closed.load()) {
+            return false; // broken pipe
+        }
+        if (max_size > 0) {
+            while (queue.size() >= max_size) {
+                queue.pop(); // drop oldest to stay bounded
+            }
+        }
+        queue.push(std::move(data));
+        cv.notify_one();
+        return true;
+    }
+};

@@ -1,25 +1,21 @@
 <script lang="ts">
 	import {
-		ChatMessageAgenticContent,
 		ChatMessageActionIcons,
-		ChatMessageEditForm,
-		ChatMessageStatistics,
-		ModelBadge,
-		ModelsSelectorDropdown
+		ChatMessageAgenticContent,
+		ChatMessageAssistantModel,
+		ChatMessageAssistantProcessingInfo,
+		ChatMessageAssistantRawOutput,
+		ChatMessageAssistantStatistics,
+		ChatMessageEditForm
 	} from '$lib/components/app';
 	import { getMessageEditContext } from '$lib/contexts';
-	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
-	import { isLoading, isChatStreaming } from '$lib/stores/chat.svelte';
-	import { copyToClipboard, deriveAgenticSections, modelLoadProgressText } from '$lib/utils';
-	import { AgenticSectionType, ChatMessageStatisticsMode } from '$lib/enums';
-	import { REASONING_TAGS } from '$lib/constants/agentic';
-	import { fade } from 'svelte/transition';
 	import { MessageRole } from '$lib/enums';
-	import { config } from '$lib/stores/settings.svelte';
-	import { isRouterMode } from '$lib/stores/server.svelte';
+	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
+	import { chatStore, isChatStreaming, isLoading } from '$lib/stores/chat.svelte';
 	import { modelsStore } from '$lib/stores/models.svelte';
-	import { ServerModelStatus } from '$lib/enums';
-
+	import { isRouterMode } from '$lib/stores/server.svelte';
+	import { config } from '$lib/stores/settings.svelte';
+	import { modelLoadProgressText } from '$lib/utils';
 	import { hasAgenticContent } from '$lib/utils';
 
 	interface Props {
@@ -33,7 +29,6 @@
 		isLastAssistantMessage?: boolean;
 		message: DatabaseMessage;
 		toolMessages?: DatabaseMessage[];
-		messageContent: string | undefined;
 		onCopy: () => void;
 		onConfirmDelete: () => void;
 		onContinue?: () => void;
@@ -53,8 +48,6 @@
 		deletionInfo,
 		isLastAssistantMessage = false,
 		message,
-		toolMessages = [],
-		messageContent,
 		onConfirmDelete,
 		onContinue,
 		onCopy,
@@ -66,7 +59,8 @@
 		onShowDeleteDialogChange,
 		showDeleteDialog,
 		siblingInfo = null,
-		textareaElement = $bindable()
+		textareaElement = $bindable(),
+		toolMessages = []
 	}: Props = $props();
 
 	// Get edit context
@@ -77,62 +71,21 @@
 
 	let currentConfig = $derived(config());
 	let isRouter = $derived(isRouterMode());
+
 	let showRawOutput = $state(false);
 
-	let rawOutputContent = $derived.by(() => {
-		const sections = deriveAgenticSections(message, toolMessages, [], false);
-		const parts: string[] = [];
-
-		for (const section of sections) {
-			switch (section.type) {
-				case AgenticSectionType.REASONING:
-				case AgenticSectionType.REASONING_PENDING:
-					parts.push(`${REASONING_TAGS.START}\n${section.content}\n${REASONING_TAGS.END}`);
-					break;
-
-				case AgenticSectionType.TEXT:
-					parts.push(section.content);
-					break;
-
-				case AgenticSectionType.TOOL_CALL:
-				case AgenticSectionType.TOOL_CALL_PENDING:
-				case AgenticSectionType.TOOL_CALL_STREAMING: {
-					const callObj: Record<string, unknown> = { name: section.toolName };
-
-					if (section.toolArgs) {
-						try {
-							callObj.arguments = JSON.parse(section.toolArgs);
-						} catch {
-							callObj.arguments = section.toolArgs;
-						}
-					}
-
-					parts.push(JSON.stringify(callObj, null, 2));
-
-					if (section.toolResult) {
-						parts.push(`[Tool Result]\n${section.toolResult}`);
-					}
-
-					break;
-				}
-			}
-		}
-
-		return parts.join('\n\n\n');
-	});
-
 	let displayedModel = $derived(message.model ?? null);
-
-	// model being switched to while it loads, so the selector bar tracks it
-	let pendingModel = $state<string | null>(null);
 
 	let isCurrentlyLoading = $derived(isLoading());
 	let isStreaming = $derived(isChatStreaming());
 	let hasNoContent = $derived(!message?.content?.trim());
 	let isActivelyProcessing = $derived(isCurrentlyLoading || isStreaming);
 
-	// during a router auto-load the message has no model yet, so target the selected one
-	let loadTargetModel = $derived(message.model ?? modelsStore.selectedModelName);
+	// during a router auto-load the message has no model yet: target the model frozen in the
+	// persisted stream state (survives a reload), then fall back to the dropdown selection
+	let loadTargetModel = $derived(
+		message.model ?? chatStore.getResumeModel(message.convId) ?? modelsStore.selectedModelName
+	);
 	let modelLoadProgress = $derived(
 		isRouter && loadTargetModel ? modelsStore.getLoadProgress(loadTargetModel) : null
 	);
@@ -170,28 +123,27 @@
 
 		if (!userMessageEl) {
 			lastUserMessageHeight = 0;
+
 			return;
 		}
 
 		const updateHeight = () => {
 			const rect = userMessageEl.getBoundingClientRect();
 			const marginTop = Math.round(parseFloat(getComputedStyle(userMessageEl).marginTop));
+
 			lastUserMessageHeight = Math.round(rect.height + marginTop);
 		};
 
 		updateHeight();
 
 		const resizeObserver = new ResizeObserver(updateHeight);
+
 		resizeObserver.observe(userMessageEl);
 
 		return () => {
 			resizeObserver.disconnect();
 		};
 	});
-
-	function handleCopyModel() {
-		void copyToClipboard(displayedModel ?? '');
-	}
 
 	$effect(() => {
 		if (showProcessingInfoTop || showProcessingInfoBottom) {
@@ -211,23 +163,14 @@
 	aria-label="Assistant message with actions"
 >
 	{#if showProcessingInfoTop}
-		<div class="mt-6 w-full max-w-3xl" in:fade>
-			<div class="processing-container">
-				<span class="processing-text">
-					{modelLoadingText ??
-						processingState.getPromptProgressText() ??
-						processingState.getProcessingMessage() ??
-						'Processing...'}
-				</span>
-			</div>
-		</div>
+		<ChatMessageAssistantProcessingInfo {modelLoadingText} {processingState} position="top" />
 	{/if}
 
 	{#if editCtx.isEditing}
 		<ChatMessageEditForm />
-	{:else if message.role === MessageRole.ASSISTANT}
+	{:else}
 		{#if showRawOutput}
-			<pre class="raw-output">{rawOutputContent || ''}</pre>
+			<ChatMessageAssistantRawOutput {message} {toolMessages} />
 		{:else}
 			<ChatMessageAgenticContent
 				{message}
@@ -236,81 +179,31 @@
 				{isLastAssistantMessage}
 			/>
 		{/if}
-	{:else}
-		<div class="text-sm whitespace-pre-wrap">
-			{messageContent}
-		</div>
 	{/if}
 
 	{#if showProcessingInfoBottom}
-		<div class="mt-4 w-full max-w-3xl" in:fade>
-			<div class="processing-container">
-				<span class="processing-text">
-					{modelLoadingText ??
-						processingState.getPromptProgressText() ??
-						processingState.getProcessingMessage() ??
-						'Processing...'}
-				</span>
+		<ChatMessageAssistantProcessingInfo {modelLoadingText} {processingState} position="bottom" />
+	{/if}
+
+	{#if displayedModel}
+		<div class="info my-6 grid gap-4 tabular-nums">
+			<div class="inline-flex flex-wrap items-start gap-2 text-xs text-muted-foreground">
+				<ChatMessageAssistantModel
+					{displayedModel}
+					isLoading={isLoading()}
+					{isRouter}
+					{onRegenerate}
+				/>
+
+				<ChatMessageAssistantStatistics
+					{message}
+					isLoading={isLoading()}
+					{processingState}
+					showMessageStats={currentConfig.showMessageStats}
+				/>
 			</div>
 		</div>
 	{/if}
-
-	<div class="info my-6 grid gap-4 tabular-nums">
-		{#if displayedModel}
-			<div class="inline-flex flex-wrap items-start gap-2 text-xs text-muted-foreground">
-				{#if isRouter}
-					<ModelsSelectorDropdown
-						currentModel={pendingModel ?? displayedModel}
-						disabled={isLoading()}
-						onModelChange={async (modelId: string, modelName: string) => {
-							const status = modelsStore.getModelStatus(modelId);
-
-							if (status !== ServerModelStatus.LOADED) {
-								pendingModel = modelId;
-
-								try {
-									await modelsStore.loadModel(modelId);
-								} finally {
-									pendingModel = null;
-								}
-							}
-
-							onRegenerate(modelName);
-							return true;
-						}}
-					/>
-				{:else}
-					<ModelBadge model={displayedModel || undefined} onclick={handleCopyModel} />
-				{/if}
-
-				{#if currentConfig.showMessageStats && message.timings && message.timings.predicted_n && message.timings.predicted_ms}
-					{@const agentic = message.timings.agentic}
-					<ChatMessageStatistics
-						mode={ChatMessageStatisticsMode.GENERATION}
-						promptTokens={agentic ? agentic.llm.prompt_n : message.timings.prompt_n}
-						promptMs={agentic ? agentic.llm.prompt_ms : message.timings.prompt_ms}
-						predictedTokens={agentic ? agentic.llm.predicted_n : message.timings.predicted_n}
-						predictedMs={agentic ? agentic.llm.predicted_ms : message.timings.predicted_ms}
-						agenticTimings={agentic}
-					/>
-				{:else if isLoading() && currentConfig.showMessageStats}
-					{@const liveStats = processingState.getLiveProcessingStats()}
-					{@const genStats = processingState.getLiveGenerationStats()}
-
-					{#if genStats}
-						<ChatMessageStatistics
-							mode={ChatMessageStatisticsMode.GENERATION}
-							isLive
-							promptTokens={liveStats?.tokensProcessed}
-							promptMs={liveStats?.timeMs}
-							predictedTokens={genStats.tokensGenerated}
-							predictedMs={genStats.timeMs}
-						/>
-					{/if}
-				{/if}
-			</div>
-		{/if}
-	</div>
 
 	{#if message.timestamp && !editCtx.isEditing}
 		<ChatMessageActionIcons
@@ -352,48 +245,5 @@
 					var(--assistant-margin-top, 3rem)
 			);
 		}
-	}
-
-	.processing-container {
-		display: flex;
-		flex-direction: column;
-		align-items: flex-start;
-		gap: 0.5rem;
-	}
-
-	.processing-text {
-		background: linear-gradient(
-			90deg,
-			var(--muted-foreground),
-			var(--foreground),
-			var(--muted-foreground)
-		);
-		background-size: 200% 100%;
-		background-clip: text;
-		-webkit-background-clip: text;
-		-webkit-text-fill-color: transparent;
-		animation: shine 1s linear infinite;
-		font-weight: 500;
-		font-size: 0.875rem;
-	}
-
-	@keyframes shine {
-		to {
-			background-position: -200% 0;
-		}
-	}
-
-	.raw-output {
-		width: 100%;
-		max-width: 48rem;
-		margin-top: 1.5rem;
-		padding: 1rem 1.25rem;
-		border-radius: 1rem;
-		background: hsl(var(--muted) / 0.3);
-		color: var(--foreground);
-		font-size: 0.875rem;
-		line-height: 1.6;
-		white-space: pre-wrap;
-		word-break: break-word;
 	}
 </style>

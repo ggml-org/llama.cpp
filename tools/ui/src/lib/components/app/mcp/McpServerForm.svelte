@@ -1,34 +1,64 @@
 <script lang="ts">
+	import { KeyValuePairs } from '$lib/components/app';
 	import { Input } from '$lib/components/ui/input';
 	import { Switch } from '$lib/components/ui/switch';
-	import { KeyValuePairs } from '$lib/components/app';
+	import {
+		AUTHORIZATION_HEADER,
+		BEARER_PREFIX,
+		CLI_FLAGS,
+		MCP_SERVER_URL_PLACEHOLDER,
+		REDACTED_HEADERS
+	} from '$lib/constants';
+	import { UrlProtocol } from '$lib/enums';
+	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import type { KeyValuePair } from '$lib/types';
 	import { parseHeadersToArray, serializeHeaders } from '$lib/utils';
-	import { UrlProtocol } from '$lib/enums';
-	import { MCP_SERVER_URL_PLACEHOLDER } from '$lib/constants';
-	import { mcpStore } from '$lib/stores/mcp.svelte';
-	import { CLI_FLAGS } from '$lib/constants';
 
 	interface Props {
 		url: string;
 		headers: string;
+		name?: string;
+		onNameChange?: (name: string) => void;
+		/** Shown in the empty display name field, e.g. the current automatic label. */
+		namePlaceholder?: string;
 		useProxy?: boolean;
 		onUrlChange: (url: string) => void;
 		onHeadersChange: (headers: string) => void;
 		onUseProxyChange?: (useProxy: boolean) => void;
 		urlError?: string | null;
 		id?: string;
+		/**
+		 * "Wants Authorization" is the user's *intent* to add a Bearer token
+		 * (separate from `hasAuthorization` which reflects what's already in
+		 * the headers). Bindable so a parent - e.g. the recommendation cards
+		 * on the "Add New Server" dialog - can flip the switch on when the
+		 * picked server ships a `needsAuthorization: true` flag.
+		 */
+		wantsAuthorization?: boolean;
+		/**
+		 * Marks the "Authorization" field as required. Locks the toggle so the
+		 * user can't dismiss it, and visually marks the field with a red
+		 * asterisk. The parent is expected to gate its submit affordance on
+		 * the bearer token actually being filled. Used by the "Add New Server"
+		 * dialog for recommendations whose `needsAuthorization` flag is true.
+		 */
+		required?: boolean;
 	}
 
 	let {
-		url,
 		headers,
-		useProxy = false,
-		onUrlChange,
+		id = 'server',
+		name = '',
+		namePlaceholder = 'Name reported by the server',
 		onHeadersChange,
+		onNameChange,
+		onUrlChange,
 		onUseProxyChange,
+		required = false,
+		url,
 		urlError = null,
-		id = 'server'
+		useProxy = false,
+		wantsAuthorization = $bindable(false)
 	}: Props = $props();
 
 	let isWebSocket = $derived(
@@ -38,14 +68,11 @@
 
 	let headerPairs = $derived<KeyValuePair[]>(parseHeadersToArray(headers));
 
-	const AUTHORIZATION_HEADER = 'Authorization';
-	const BEARER_PREFIX = 'Bearer ';
-
 	// Heuristic: this dedicated UI only owns Authorization headers that already
 	// carry a Bearer scheme. Anything else (e.g. Basic, raw tokens) stays in the
 	// KV section so the user can still edit those values verbatim.
 	const matchesAuthorizationKey = (key: string): boolean =>
-		key.trim().toLowerCase() === AUTHORIZATION_HEADER.toLowerCase();
+		REDACTED_HEADERS.has(key.trim().toLowerCase());
 
 	const isBearerScheme = (value: string): boolean =>
 		value.trim().toLowerCase().startsWith(BEARER_PREFIX.toLowerCase());
@@ -54,8 +81,6 @@
 		matchesAuthorizationKey(p.key) && isBearerScheme(p.value);
 
 	let hasAuthorization = $derived(headerPairs.some(ownedByBearerUi));
-
-	let wantsAuthorization = $state(false);
 
 	let showAuthorization = $derived(hasAuthorization || wantsAuthorization);
 
@@ -74,7 +99,9 @@
 
 	let bearerToken = $derived.by(() => {
 		const auth = headerPairs.find(ownedByBearerUi);
+
 		if (!auth) return '';
+
 		return auth.value.trim().slice(BEARER_PREFIX.length).trim();
 	});
 
@@ -95,7 +122,6 @@
 	// behavior would otherwise pick one arbitrarily, so we strip first.
 	function updateBearerToken(token: string) {
 		const filtered = headerPairs.filter((p) => !matchesAuthorizationKey(p.key));
-
 		const trimmed = token.trim();
 
 		if (trimmed) {
@@ -112,6 +138,7 @@
 			// Only drop the entry this UI owns; a non-Bearer Authorization row
 			// authored in the KV section must survive a toggle off untouched.
 			const filtered = headerPairs.filter((p) => !ownedByBearerUi(p));
+
 			updateHeaderPairs(filtered);
 		}
 	}
@@ -119,7 +146,7 @@
 
 <div class="grid gap-2">
 	<div class="mb-4">
-		<label for="server-url-{id}" class="mb-2 block text-xs font-medium">
+		<label for="server-url-{id}" class="mb-2 block text-xs font-medium select-none">
 			Server URL <span class="text-destructive">*</span>
 		</label>
 
@@ -138,14 +165,32 @@
 		{/if}
 	</div>
 
-	<label class="flex items-center gap-2 cursor-pointer">
+	<div class="mb-4">
+		<label for="server-name-{id}" class="mb-2 block text-xs font-medium select-none">
+			Display name
+		</label>
+
+		<Input
+			id="server-name-{id}"
+			type="text"
+			placeholder={namePlaceholder}
+			value={name}
+			oninput={(e) => onNameChange?.(e.currentTarget.value)}
+		/>
+	</div>
+
+	<label class="flex items-center gap-2 cursor-pointer select-none">
 		<Switch
 			id="use-authorization-{id}"
 			checked={showAuthorization}
 			onCheckedChange={setUseAuthorization}
+			disabled={required}
 		/>
 
-		<span class="text-xs text-muted-foreground">Authorization</span>
+		<span class="text-xs text-muted-foreground">
+			Authorization{#if required}
+				<span class="text-destructive">*</span>{/if}
+		</span>
 	</label>
 
 	{#if showAuthorization}
@@ -174,6 +219,7 @@
 		pairs={headerPairs.filter((p) => !ownedByBearerUi(p))}
 		onPairsChange={(pairs) => {
 			const auth = headerPairs.find(ownedByBearerUi);
+
 			updateHeaderPairs(auth ? [...pairs, auth] : pairs);
 		}}
 		keyPlaceholder="Header name"

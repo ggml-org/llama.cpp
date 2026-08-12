@@ -1,10 +1,11 @@
 <script lang="ts">
+	import McpLogo from './McpLogo.svelte';
 	import * as Tooltip from '$lib/components/ui/tooltip';
+	import { MAX_DISPLAYED_MCP_AVATARS } from '$lib/constants';
+	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
+	import { HealthCheckStatus } from '$lib/enums';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
-	import { HealthCheckStatus } from '$lib/enums';
-	import { MAX_DISPLAYED_MCP_AVATARS } from '$lib/constants';
-	import McpLogo from './McpLogo.svelte';
 
 	interface Props {
 		class?: string;
@@ -20,6 +21,7 @@
 	let healthyEnabledMcpServers = $derived(
 		enabledMcpServersForChat.filter((s) => {
 			const healthState = mcpStore.getHealthCheckState(s.id);
+
 			return healthState.status !== HealthCheckStatus.ERROR;
 		})
 	);
@@ -50,7 +52,7 @@
 	>
 		<Tooltip.Root>
 			<Tooltip.Trigger>
-				<McpLogo class="h-4 w-4" />
+				<McpLogo class={ICON_CLASS_DEFAULT} />
 			</Tooltip.Trigger>
 
 			<Tooltip.Content>
@@ -68,7 +70,7 @@
 							<img
 								src={favicon.url}
 								alt=""
-								class="h-4 w-4"
+								class={ICON_CLASS_DEFAULT}
 								onerror={(e) => {
 									(e.currentTarget as HTMLImageElement).style.display = 'none';
 								}}

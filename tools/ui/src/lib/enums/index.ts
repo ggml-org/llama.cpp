@@ -6,7 +6,13 @@ export {
 	AttachmentItemVisibleWhen
 } from './attachment.enums';
 
-export { AgenticSectionType, ContinueIntentKind, ToolCallType } from './agentic.enums';
+export {
+	AgenticSectionType,
+	ContinueIntentKind,
+	DiffLineKind,
+	ToolResultKind,
+	ToolCallType
+} from './agentic.enums';
 
 export {
 	ChatMessageStatsView,
@@ -18,8 +24,12 @@ export {
 	MessageRole,
 	MessageType,
 	PdfViewMode,
-	ReasoningFormat
+	ReasoningFormat,
+	ChatFormCommandAction,
+	FileMentionEntryType
 } from './chat.enums';
+
+export { SessionRecordType } from './conversation-import.enums';
 
 export { ReasoningEffort } from './reasoning-effort.enums';
 
@@ -64,6 +74,12 @@ export { ColorMode, HtmlInputType, McpPromptVariant, TooltipSide, UrlProtocol } 
 
 export { KeyboardKey } from './keyboard.enums';
 
-export { ToolSource, ToolPermissionDecision, ToolResponseField } from './tools.enums';
+export {
+	BuiltInTool,
+	GlobSearchType,
+	ToolSource,
+	ToolPermissionDecision,
+	ToolResponseField
+} from './tools.enums';
 
 export { SplashOrientation } from './splash.enums';

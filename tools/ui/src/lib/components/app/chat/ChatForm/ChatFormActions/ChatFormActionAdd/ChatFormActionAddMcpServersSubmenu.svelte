@@ -1,14 +1,15 @@
 <script lang="ts">
-	import { Settings, Plus } from '@lucide/svelte';
-	import { Switch } from '$lib/components/ui/switch';
+	import { Plus, Settings } from '@lucide/svelte';
+	import { goto } from '$app/navigation';
+	import { DropdownMenuSearchable, McpLogo, McpServerIdentity } from '$lib/components/app';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
-	import { McpLogo, DropdownMenuSearchable, McpServerIdentity } from '$lib/components/app';
+	import { Switch } from '$lib/components/ui/switch';
+	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
+	import { ROUTES } from '$lib/constants/routes';
+	import { HealthCheckStatus } from '$lib/enums';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
-	import { HealthCheckStatus } from '$lib/enums';
 	import type { MCPServerSettingsEntry } from '$lib/types';
-	import { goto } from '$app/navigation';
-	import { ROUTES } from '$lib/constants/routes';
 
 	interface Props {
 		onMcpSettingsClick?: () => void;
@@ -23,10 +24,13 @@
 	let hasMcpServers = $derived(mcpServers.length > 0);
 	let filteredMcpServers = $derived.by(() => {
 		const query = mcpSearchQuery.toLowerCase().trim();
+
 		if (!query) return mcpServers;
+
 		return mcpServers.filter((s) => {
 			const name = getServerLabel(s).toLowerCase();
 			const url = s.url.toLowerCase();
+
 			return name.includes(query) || url.includes(query);
 		});
 	});
@@ -60,7 +64,7 @@
 <DropdownMenu.Root>
 	<DropdownMenu.Sub onOpenChange={handleMcpSubMenuOpen}>
 		<DropdownMenu.SubTrigger class="flex cursor-pointer items-center gap-2">
-			<McpLogo class="h-4 w-4" />
+			<McpLogo class={ICON_CLASS_DEFAULT} />
 
 			<span>MCP Servers</span>
 		</DropdownMenu.SubTrigger>
@@ -92,7 +96,7 @@
 										<McpServerIdentity
 											{displayName}
 											{faviconUrl}
-											iconClass="h-4 w-4"
+											iconClass={ICON_CLASS_DEFAULT}
 											iconRounded="rounded-sm"
 											showVersion={false}
 											nameClass="text-sm"
@@ -123,7 +127,7 @@
 							class="flex cursor-pointer items-center gap-2"
 							onclick={handleMcpSettingsClick}
 						>
-							<Settings class="h-4 w-4" />
+							<Settings class={ICON_CLASS_DEFAULT} />
 
 							<span>Manage MCP Servers</span>
 						</DropdownMenu.Item>
@@ -140,7 +144,7 @@
 					class="flex cursor-pointer items-center gap-2"
 					onclick={handleMcpSettingsClick}
 				>
-					<Plus class="h-4 w-4" />
+					<Plus class={ICON_CLASS_DEFAULT} />
 
 					<span>Add MCP Servers</span>
 				</DropdownMenu.Item>

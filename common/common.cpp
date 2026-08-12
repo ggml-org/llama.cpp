@@ -998,6 +998,23 @@ bool fs_is_directory(const std::string & path) {
     return std::filesystem::exists(dir) && std::filesystem::is_directory(dir);
 }
 
+std::string common_get_env(const std::string & name) {
+    const char * value = std::getenv(name.c_str());
+    return value == nullptr ? "" : value;
+}
+
+void common_set_env(const std::string & name, const std::string & value) {
+#if defined(_WIN32)
+    _putenv_s(name.c_str(), value.c_str());
+#else
+    if (value.empty()) {
+        unsetenv(name.c_str());
+    } else {
+        setenv(name.c_str(), value.c_str(), 1);
+    }
+#endif
+}
+
 std::string fs_get_cache_directory() {
     std::string cache_directory = "";
     auto ensure_trailing_slash = [](std::string p) {
@@ -1249,7 +1266,6 @@ common_init_result::common_init_result(common_params & params, bool model_only) 
         lora.reset(llama_adapter_lora_init(model, la.path.c_str()));
         if (lora == nullptr) {
             COM_ERR("failed to load lora adapter '%s'\n", la.path.c_str());
-            pimpl->model.reset(model);
             return;
         }
 
@@ -1285,16 +1301,6 @@ common_init_result::common_init_result(common_params & params, bool model_only) 
                 params.sampling.logit_bias.end(),
                 params.sampling.logit_bias_eog.begin(), params.sampling.logit_bias_eog.end());
     }
-
-    //if (params.sampling.penalty_last_n == -1) {
-    //    LOG_TRC("%s: setting penalty_last_n to ctx_size = %d\n", __func__, llama_n_ctx(lctx));
-    //    params.sampling.penalty_last_n = llama_n_ctx(lctx);
-    //}
-
-    //if (params.sampling.dry_penalty_last_n == -1) {
-    //    LOG_TRC("%s: setting dry_penalty_last_n to ctx_size = %d\n", __func__, llama_n_ctx(lctx));
-    //    params.sampling.dry_penalty_last_n = llama_n_ctx(lctx);
-    //}
 
     // init the backend samplers as part of the context creation
     pimpl->samplers.resize(cparams.n_seq_max);
@@ -1463,18 +1469,32 @@ common_init_result_ptr common_init_from_params(common_params & params, bool mode
 common_init_result::~common_init_result() = default;
 
 std::string common_get_model_endpoint() {
-    const char * model_endpoint_env = getenv("MODEL_ENDPOINT");
-    // We still respect the use of environment-variable "HF_ENDPOINT" for backward-compatibility.
-    const char * hf_endpoint_env = getenv("HF_ENDPOINT");
-    const char * endpoint_env = model_endpoint_env ? model_endpoint_env : hf_endpoint_env;
-    std::string model_endpoint = "https://huggingface.co/";
-    if (endpoint_env) {
-        model_endpoint = endpoint_env;
-        if (model_endpoint.back() != '/') {
-            model_endpoint += '/';
-        }
+    std::string endpoint = common_get_env("MODEL_ENDPOINT");
+    if (endpoint.empty()) {
+        // the HF_ENDPOINT variable is respected for backward compatibility
+        endpoint = common_get_env("HF_ENDPOINT");
     }
-    return model_endpoint;
+    if (endpoint.empty()) {
+        return "https://huggingface.co/";
+    }
+    if (endpoint.back() != '/') {
+        endpoint += '/';
+    }
+    return endpoint;
+}
+
+char * common_get_model_or_exit(int argc, char * argv[]) {
+    if (argc > 1) {
+        return argv[1];
+    }
+
+    char * path = getenv("LLAMACPP_TEST_MODELFILE");
+    if (!path || strlen(path) == 0) {
+        fprintf(stderr, "\033[33mWARNING: No model file provided. Skipping this test. Set LLAMACPP_TEST_MODELFILE=<gguf_model_path> to silence this warning and run this test.\n\033[0m");
+        exit(EXIT_SUCCESS);
+    }
+
+    return path;
 }
 
 common_context_seq_rm_type common_context_can_seq_rm(llama_context * ctx) {
@@ -1519,21 +1539,47 @@ done:
     return res;
 }
 
-void common_context_seq_rm(llama_context * ctx, llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
+static void common_context_seq_rm(llama_context * ctx, llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
     auto * mem = llama_get_memory(ctx);
     if (!llama_memory_seq_rm(mem, seq_id, p0, p1)) {
         GGML_ABORT("%s", string_format("failed to remove sequence %d with p0=%d, p1=%d\n", seq_id, p0, p1).c_str());
     }
 }
 
-void common_context_seq_cp(llama_context * ctx, llama_seq_id seq_id_src, llama_seq_id seq_id_dst, llama_pos p0, llama_pos p1) {
+static void common_context_seq_cp(llama_context * ctx, llama_seq_id seq_id_src, llama_seq_id seq_id_dst, llama_pos p0, llama_pos p1) {
     auto * mem = llama_get_memory(ctx);
     llama_memory_seq_cp(mem, seq_id_src, seq_id_dst, p0, p1);
 }
 
-void common_context_seq_add(llama_context * ctx, llama_seq_id seq_id, llama_pos p0, llama_pos p1, llama_pos delta) {
+static void common_context_seq_add(llama_context * ctx, llama_seq_id seq_id, llama_pos p0, llama_pos p1, llama_pos delta) {
     auto * mem = llama_get_memory(ctx);
     llama_memory_seq_add(mem, seq_id, p0, p1, delta);
+}
+
+void common_memory::init(llama_context * ctx_tgt, llama_context * ctx_dft) {
+    this->ctx_tgt = ctx_tgt;
+    this->ctx_dft = ctx_dft;
+}
+
+void common_memory::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) const {
+    common_context_seq_rm(ctx_tgt, seq_id, p0, p1);
+    if (ctx_dft) {
+        common_context_seq_rm(ctx_dft, seq_id, p0, p1);
+    }
+}
+
+void common_memory::seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_id_dst, llama_pos p0, llama_pos p1) const {
+    common_context_seq_cp(ctx_tgt, seq_id_src, seq_id_dst, p0, p1);
+    if (ctx_dft) {
+        common_context_seq_cp(ctx_dft, seq_id_src, seq_id_dst, p0, p1);
+    }
+}
+
+void common_memory::seq_add(llama_seq_id seq_id, llama_pos p0, llama_pos p1, llama_pos delta) const {
+    common_context_seq_add(ctx_tgt, seq_id, p0, p1, delta);
+    if (ctx_dft) {
+        common_context_seq_add(ctx_dft, seq_id, p0, p1, delta);
+    }
 }
 
 void common_set_adapter_lora(struct llama_context * ctx, std::vector<common_adapter_lora_info> & lora) {
@@ -1558,10 +1604,8 @@ struct llama_model_params common_model_params_to_llama(common_params & params) {
     mparams.n_gpu_layers    = params.n_gpu_layers;
     mparams.main_gpu        = params.main_gpu;
     mparams.split_mode      = params.split_mode;
+    mparams.load_mode       = params.load_mode;
     mparams.tensor_split    = params.tensor_split;
-    mparams.use_mmap        = params.use_mmap;
-    mparams.use_direct_io   = params.use_direct_io;
-    mparams.use_mlock       = params.use_mlock;
     mparams.check_tensors   = params.check_tensors;
     mparams.use_extra_bufts = !params.no_extra_bufts;
     mparams.no_host         = params.no_host;
@@ -1583,6 +1627,7 @@ struct llama_model_params common_model_params_to_llama(common_params & params) {
     mparams.progress_callback           = params.load_progress_callback;
     mparams.progress_callback_user_data = params.load_progress_callback_user_data;
     mparams.no_alloc                    = params.no_alloc;
+    mparams.load_mtp                    = std::find(params.speculative.types.begin(), params.speculative.types.end(), COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params.speculative.types.end();
 
     return mparams;
 }
@@ -1594,6 +1639,7 @@ struct llama_context_params common_context_params_to_llama(const common_params &
     cparams.n_seq_max         = params.n_parallel;
     cparams.n_rs_seq          = params.speculative.need_n_rs_seq();
     cparams.n_outputs_max     = std::max(params.n_outputs_max, 0);
+    cparams.n_outputs_max_per_seq = std::max(params.n_outputs_max_per_seq, 0);
     cparams.n_batch           = params.n_batch;
     cparams.n_ubatch          = params.n_ubatch;
     cparams.n_threads         = params.cpuparams.n_threads;

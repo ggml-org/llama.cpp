@@ -27,7 +27,9 @@ bool llama_model_saver_supports_arch(llm_arch arch) {
         case LLM_ARCH_APERTUS:
         case LLM_ARCH_MIMO2:
         case LLM_ARCH_STEP35:
+        case LLM_ARCH_MUSE_GLIMMER:
         case LLM_ARCH_MELLUM:
+        case LLM_ARCH_LAGUNA:
             return false;
         default:
             return true;
@@ -212,7 +214,7 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_FEED_FORWARD_LENGTH,               hparams.n_ff_arr, true);
     add_kv(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,        hparams.n_ff_exp);
     add_kv(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, hparams.n_ff_shexp);
-    add_kv(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, hparams.n_ff_chexp);
+    add_kv(LLM_KV_EXPERT_CHUNK_FEED_FORWARD_LENGTH,  hparams.n_ff_chexp);
     add_kv(LLM_KV_SWIGLU_CLAMP_EXP,                  hparams.swiglu_clamp_exp);
     add_kv(LLM_KV_SWIGLU_CLAMP_SHEXP,                hparams.swiglu_clamp_shexp);
     add_kv(LLM_KV_USE_PARALLEL_RESIDUAL,             hparams.use_par_res);
@@ -280,6 +282,9 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_ATTENTION_INDEXER_HEAD_COUNT,      hparams.indexer_n_head);
     add_kv(LLM_KV_ATTENTION_INDEXER_KEY_LENGTH,      hparams.indexer_head_size);
     add_kv(LLM_KV_ATTENTION_INDEXER_TOP_K,           hparams.indexer_top_k);
+    add_kv(LLM_KV_ATTENTION_INDEXER_BLOCK_SIZE,      hparams.indexer_block_size);
+    add_kv(LLM_KV_ATTENTION_INDEXER_LOCAL_BLOCKS,    hparams.indexer_local_blocks);
+    add_kv(LLM_KV_ATTENTION_INDEXER_TYPES,           hparams.is_indexer_full_impl, true);
     add_kv(LLM_KV_ATTENTION_RECURRENT_LAYERS,        hparams.is_recr_impl, true);
 
     const float rope_scaling_factor = hparams.rope_freq_scale_train == 1.0f ? 0.0f : 1.0f/hparams.rope_freq_scale_train;

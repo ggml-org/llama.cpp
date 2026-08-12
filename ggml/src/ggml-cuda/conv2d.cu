@@ -126,6 +126,7 @@ void ggml_cuda_op_conv2d(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const float *       X_D    = (const float *) input->data;
     float *             Y_D    = (float *) dst->data;
 
+    GGML_ASSERT(ggml_is_contiguous(input));
     GGML_ASSERT(ggml_is_contiguous(kernel));
     GGML_ASSERT(kernel->type == GGML_TYPE_F16 || kernel->type == GGML_TYPE_F32);
 

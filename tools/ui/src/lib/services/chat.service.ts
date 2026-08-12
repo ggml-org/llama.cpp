@@ -1,64 +1,42 @@
-import { getAuthHeaders, getJsonHeaders } from '$lib/utils/api-headers';
-import { formatAttachmentText } from '$lib/utils/formatters';
-import { isAbortError } from '$lib/utils/abort';
-import { streamIdentity } from '$lib/utils/stream-identity';
+import { settingsStore } from '../stores/settings.svelte';
+import { getAudioInputFormat } from '../utils/audio-format';
+import { capImageDataURLSize } from '../utils/cap-img-size';
 import {
-	ATTACHMENT_LABEL_PDF_FILE,
+	API_CHAT,
+	API_SLOTS,
+	API_STREAM,
 	ATTACHMENT_LABEL_MCP_PROMPT,
 	ATTACHMENT_LABEL_MCP_RESOURCE,
+	ATTACHMENT_LABEL_PDF_FILE,
+	CONTROL_ACTION,
 	LEGACY_AGENTIC_REGEX,
 	REASONING_EFFORT_TOKENS,
 	SETTINGS_KEYS,
-	API_CHAT,
-	API_SLOTS,
-	CONTROL_ACTION,
-	SSE_LINE_SEPARATOR,
 	SSE_DATA_PREFIX,
 	SSE_DONE_MARKER,
-	STREAM_VISIBILITY_KICK_MS,
+	SSE_LINE_SEPARATOR,
 	STREAM_RESUME_LOCALSTORAGE_KEY_PREFIX,
-	API_STREAM
+	STREAM_VISIBILITY_KICK_MS
 } from '$lib/constants';
 import {
 	AttachmentType,
 	ContentPartType,
-	FileTypeAudio,
 	MessageRole,
-	MimeTypeAudio,
 	ReasoningFormat,
 	StreamConnectionState
 } from '$lib/enums';
+import { modelsStore } from '$lib/stores/models.svelte';
+import type { DatabaseMessageExtraMcpPrompt, DatabaseMessageExtraMcpResource } from '$lib/types';
 import type {
+	ApiChatCompletionToolCall,
 	ApiChatMessageContentPart,
 	ApiChatMessageData,
-	ApiChatCompletionToolCall,
 	ApiStreamSession
 } from '$lib/types/api';
-import type {
-	AudioInputFormat,
-	DatabaseMessageExtraMcpPrompt,
-	DatabaseMessageExtraMcpResource
-} from '$lib/types';
-import { modelsStore } from '$lib/stores/models.svelte';
-import { settingsStore } from '../stores/settings.svelte';
-import { capImageDataURLSize } from '../utils/cap-img-size';
-
-function getAudioInputFormat(mimeType: string): AudioInputFormat {
-	const normalizedMimeType = mimeType.trim().toLowerCase();
-
-	if (
-		normalizedMimeType === MimeTypeAudio.WAV ||
-		normalizedMimeType === MimeTypeAudio.WAVE ||
-		normalizedMimeType === MimeTypeAudio.X_WAV ||
-		normalizedMimeType === MimeTypeAudio.X_WAVE ||
-		normalizedMimeType === MimeTypeAudio.VND_WAVE ||
-		normalizedMimeType === MimeTypeAudio.X_PN_WAV
-	) {
-		return FileTypeAudio.WAV;
-	}
-
-	return FileTypeAudio.MP3;
-}
+import { isAbortError } from '$lib/utils/abort';
+import { getAuthHeaders, getJsonHeaders } from '$lib/utils/api-headers';
+import { formatAttachmentText } from '$lib/utils/formatters';
+import { streamIdentity } from '$lib/utils/stream-identity';
 
 interface ResumableStreamState {
 	bytesReceived: number;
@@ -98,16 +76,17 @@ export class ChatService {
 		signal?: AbortSignal
 	): Promise<string> {
 		let titleResponse = '';
+
 		try {
 			await ChatService.sendMessage(
 				[message],
 				{
-					model: model || undefined,
-					stream: true,
 					custom: { chat_template_kwargs: { enable_thinking: false } },
+					model: model || undefined,
 					onChunk: (chunk: string) => {
 						titleResponse += chunk;
-					}
+					},
+					stream: true
 				},
 				undefined,
 				signal
@@ -115,6 +94,7 @@ export class ChatService {
 		} catch {
 			return '';
 		}
+
 		return titleResponse;
 	}
 
@@ -143,52 +123,51 @@ export class ChatService {
 		signal?: AbortSignal
 	): Promise<string | void> {
 		const {
-			stream,
-			onChunk,
-			onComplete,
-			onError,
-			onConnectionState,
-			onReasoningChunk,
-			onToolCallChunk,
-			onModel,
-			onCompletionId,
-			onTimings,
-			// Tools for function calling
-			tools,
-			// Generation parameters
-			temperature,
-			max_tokens,
+			backend_sampling,
+			continueFinalMessage,
+			custom,
+			// Config options
+			disableReasoningParsing,
+			dry_allowed_length,
+			dry_base,
+			dry_multiplier,
+			dry_penalty_last_n,
+			dynatemp_exponent,
 			// Sampling parameters
 			dynatemp_range,
-			dynatemp_exponent,
-			top_k,
-			top_p,
+			enableThinking,
+			excludeReasoningFromContext,
+			frequency_penalty,
+			max_tokens,
 			min_p,
-			xtc_probability,
-			xtc_threshold,
-			typ_p,
+			onChunk,
+			onComplete,
+			onCompletionId,
+			onConnectionState,
+			onError,
+			onModel,
+			onReasoningChunk,
+			onTimings,
+			onToolCallChunk,
+			presence_penalty,
+			reasoningEffort,
 			// Penalty parameters
 			repeat_last_n,
 			repeat_penalty,
-			presence_penalty,
-			frequency_penalty,
-			dry_multiplier,
-			dry_base,
-			dry_allowed_length,
-			dry_penalty_last_n,
 			// Other parameters
 			samplers,
-			backend_sampling,
-			custom,
+			stream,
+			// Generation parameters
+			temperature,
 			timings_per_token,
-			// Config options
-			disableReasoningParsing,
-			excludeReasoningFromContext,
-			enableThinking,
-			reasoningEffort,
-			continueFinalMessage
+			// Tools for function calling
+			tools,
+			top_k,
+			top_p,
+			typ_p,
+			xtc_probability,
+			xtc_threshold
 		} = options;
-
 		const normalizedMessages: ApiChatMessageData[] = (
 			await Promise.all(
 				messages.map((msg) => {
@@ -227,6 +206,7 @@ export class ChatService {
 
 						return true;
 					});
+
 					// If only text remains and it's a single part, simplify to string
 					if (
 						msg.content.length === 1 &&
@@ -242,20 +222,22 @@ export class ChatService {
 		const requestBody: ApiChatCompletionRequest = {
 			messages: normalizedMessages.map((msg: ApiChatMessageData) => {
 				const mapped: ApiChatCompletionRequest['messages'][0] = {
-					role: msg.role,
 					content: msg.content,
-					tool_calls: msg.tool_calls,
-					tool_call_id: msg.tool_call_id
+					role: msg.role,
+					tool_call_id: msg.tool_call_id,
+					tool_calls: msg.tool_calls
 				};
+
 				// Include reasoning_content from the dedicated field
 				if (!excludeReasoningFromContext && msg.reasoning_content) {
 					mapped.reasoning_content = msg.reasoning_content;
 				}
+
 				return mapped;
 			}),
-			stream,
 			return_progress: stream ? true : undefined,
 			sse_ping_interval: stream ? 1 : undefined,
+			stream,
 			tools: tools && tools.length > 0 ? tools : undefined
 		};
 
@@ -271,10 +253,14 @@ export class ChatService {
 		const reasoningBudgetTokens =
 			enableThinking && reasoningEffort ? (REASONING_EFFORT_TOKENS[reasoningEffort] ?? -1) : -1;
 
-		requestBody.chat_template_kwargs = {
-			...(requestBody.chat_template_kwargs ?? {}),
-			enable_thinking: enableThinking
-		};
+		// an explicit user choice injects the kwarg, otherwise it is omitted so
+		// the server default applies (--reasoning flag or chat template)
+		if (enableThinking !== undefined) {
+			requestBody.chat_template_kwargs = {
+				...(requestBody.chat_template_kwargs ?? {}),
+				enable_thinking: enableThinking
+			};
+		}
 
 		if (reasoningBudgetTokens >= 0) {
 			requestBody.thinking_budget_tokens = reasoningBudgetTokens;
@@ -289,27 +275,42 @@ export class ChatService {
 		}
 
 		if (temperature !== undefined) requestBody.temperature = temperature;
+
 		if (max_tokens !== undefined) {
 			// Set max_tokens to -1 (infinite) when explicitly configured as 0 or null
 			requestBody.max_tokens = max_tokens !== null && max_tokens !== 0 ? max_tokens : -1;
 		}
 
 		if (dynatemp_range !== undefined) requestBody.dynatemp_range = dynatemp_range;
+
 		if (dynatemp_exponent !== undefined) requestBody.dynatemp_exponent = dynatemp_exponent;
+
 		if (top_k !== undefined) requestBody.top_k = top_k;
+
 		if (top_p !== undefined) requestBody.top_p = top_p;
+
 		if (min_p !== undefined) requestBody.min_p = min_p;
+
 		if (xtc_probability !== undefined) requestBody.xtc_probability = xtc_probability;
+
 		if (xtc_threshold !== undefined) requestBody.xtc_threshold = xtc_threshold;
+
 		if (typ_p !== undefined) requestBody.typ_p = typ_p;
 
 		if (repeat_last_n !== undefined) requestBody.repeat_last_n = repeat_last_n;
+
 		if (repeat_penalty !== undefined) requestBody.repeat_penalty = repeat_penalty;
+
 		if (presence_penalty !== undefined) requestBody.presence_penalty = presence_penalty;
+
 		if (frequency_penalty !== undefined) requestBody.frequency_penalty = frequency_penalty;
+
 		if (dry_multiplier !== undefined) requestBody.dry_multiplier = dry_multiplier;
+
 		if (dry_base !== undefined) requestBody.dry_base = dry_base;
+
 		if (dry_allowed_length !== undefined) requestBody.dry_allowed_length = dry_allowed_length;
+
 		if (dry_penalty_last_n !== undefined) requestBody.dry_penalty_last_n = dry_penalty_last_n;
 
 		if (samplers !== undefined) {
@@ -326,6 +327,7 @@ export class ChatService {
 		if (custom) {
 			try {
 				const customParams = typeof custom === 'string' ? JSON.parse(custom) : custom;
+
 				Object.assign(requestBody, customParams);
 			} catch (error) {
 				console.warn('Failed to parse custom parameters:', error);
@@ -334,21 +336,31 @@ export class ChatService {
 
 		try {
 			const headers: Record<string, string> = { ...getJsonHeaders() };
+
 			// tag streaming requests with the conversation id, this single header is the opt in for the
 			// server side replay buffer and powers discoverActiveStream on tab reopen. with an explicit
 			// model the ::model suffix keeps the per model session distinct
 			if (stream && conversationId) {
 				headers['X-Conversation-Id'] = streamIdentity(conversationId, options.model);
+				// persist the pending stream before the fetch: a reload during the model load or
+				// the prompt processing must still find its way back to the session once it exists
+				ChatService.saveStreamState(conversationId, 0, options.model ?? null);
 			}
 
 			const response = await fetch(API_CHAT.COMPLETIONS, {
-				method: 'POST',
-				headers,
 				body: JSON.stringify(requestBody),
+				headers,
+				method: 'POST',
 				signal
 			});
 
 			if (!response.ok) {
+				// a rejected request (including one cancelled by a stop during the model load)
+				// leaves nothing to resume
+				if (conversationId) {
+					ChatService.clearStreamState(conversationId);
+				}
+
 				const error = await ChatService.parseErrorResponse(response);
 
 				if (onError) {
@@ -388,6 +400,7 @@ export class ChatService {
 		} catch (error) {
 			if (isAbortError(error)) {
 				console.log('Chat completion request was aborted');
+
 				return;
 			}
 
@@ -436,9 +449,11 @@ export class ChatService {
 		try {
 			const url = model ? `${API_SLOTS.LIST}?model=${encodeURIComponent(model)}` : API_SLOTS.LIST;
 			const res = await fetch(url, { signal });
+
 			if (!res.ok) return true;
 
 			const slots: { is_processing: boolean }[] = await res.json();
+
 			return slots.every((s) => !s.is_processing);
 		} catch {
 			return true;
@@ -457,34 +472,39 @@ export class ChatService {
 			console.error(
 				'stopReasoning: no completion id for the active message, cannot target the running completion'
 			);
+
 			return false;
 		}
 
 		const body: Record<string, unknown> = {
-			id: completionId,
-			action: CONTROL_ACTION.END_REASONING
+			action: CONTROL_ACTION.END_REASONING,
+			id: completionId
 		};
+
 		if (model) body.model = model;
 
 		try {
 			const res = await fetch(API_CHAT.CONTROL, {
-				method: 'POST',
+				body: JSON.stringify(body),
 				headers: getJsonHeaders(),
-				body: JSON.stringify(body)
+				method: 'POST'
 			});
-
 			const data = await res.json().catch(() => null);
+
 			if (!res.ok || data?.success !== true) {
 				console.error('stopReasoning: control request failed', {
-					status: res.status,
 					completionId,
-					response: data
+					response: data,
+					status: res.status
 				});
+
 				return false;
 			}
+
 			return true;
 		} catch (error) {
 			console.error('stopReasoning: control request threw', { completionId, error });
+
 			return false;
 		}
 	}
@@ -506,11 +526,13 @@ export class ChatService {
 	 */
 	static async cancelServerStream(conversationId: string, model?: string | null): Promise<void> {
 		if (!conversationId) return;
+
 		try {
 			const id = streamIdentity(conversationId, model);
-			await fetch(`${API_STREAM.BASE}/${encodeURIComponent(id)}`, {
-				method: 'DELETE',
-				headers: getAuthHeaders()
+
+			await fetch(`${API_STREAM.BASE}?conv_id=${encodeURIComponent(id)}`, {
+				headers: getAuthHeaders(),
+				method: 'DELETE'
 			});
 		} catch (e) {
 			console.warn('cancelServerStream failed:', e);
@@ -533,10 +555,13 @@ export class ChatService {
 		if (!Array.isArray(sessions) || sessions.length === 0) {
 			return null;
 		}
+
 		const running = sessions.filter((s) => !s.is_done);
+
 		if (running.length === 0) {
 			return null;
 		}
+
 		return running.reduce((best, cur) => (cur.started_at > best.started_at ? cur : best));
 	}
 
@@ -548,12 +573,14 @@ export class ChatService {
 		model?: string | null
 	): void {
 		if (!conversationId) return;
+
 		try {
 			const state: ResumableStreamState = {
 				bytesReceived,
-				updatedAt: Date.now(),
-				model: model ?? null
+				model: model ?? null,
+				updatedAt: Date.now()
 			};
+
 			localStorage.setItem(streamStorageKey(conversationId), JSON.stringify(state));
 		} catch {
 			// localStorage may be full or disabled, silently ignore
@@ -562,11 +589,16 @@ export class ChatService {
 
 	static getStreamState(conversationId: string): ResumableStreamState | null {
 		if (!conversationId) return null;
+
 		try {
 			const raw = localStorage.getItem(streamStorageKey(conversationId));
+
 			if (!raw) return null;
+
 			const parsed = JSON.parse(raw) as ResumableStreamState;
+
 			if (!parsed || typeof parsed.bytesReceived !== 'number') return null;
+
 			return parsed;
 		} catch {
 			return null;
@@ -575,6 +607,7 @@ export class ChatService {
 
 	static clearStreamState(conversationId: string): void {
 		if (!conversationId) return;
+
 		try {
 			localStorage.removeItem(streamStorageKey(conversationId));
 		} catch {
@@ -593,6 +626,7 @@ export class ChatService {
 		fallbackModel: string | null
 	): string {
 		const model = state && state.model !== undefined ? state.model : fallbackModel;
+
 		return streamIdentity(conversationId, model);
 	}
 
@@ -601,17 +635,43 @@ export class ChatService {
 	 * existing SSE parser drains it like a fresh stream. The server returns 200 on success, 404 if
 	 * no session exists for the conv_id, and 400 if the offset is below the dropped prefix.
 	 */
+	// probe the resume route status without consuming the stream: the SSE route has no HEAD,
+	// so issue the GET and abort it right after the status line. 0 on network error
+	static async probeResumeStatus(streamId: string): Promise<number> {
+		if (!streamId) return 0;
+
+		const ac = new AbortController();
+
+		try {
+			const resp = await fetch(
+				`${API_STREAM.BASE}?conv_id=${encodeURIComponent(streamId)}&from=0`,
+				{
+					headers: getAuthHeaders(),
+					signal: ac.signal
+				}
+			);
+
+			ac.abort();
+
+			return resp.status;
+		} catch {
+			return 0;
+		}
+	}
+
 	static async resumeStream(
 		conversationId: string,
 		signal?: AbortSignal,
 		model?: string | null
 	): Promise<Response | null> {
 		if (!conversationId) return null;
+
 		const state = ChatService.getStreamState(conversationId);
 		const from = state?.bytesReceived ?? 0;
 		const id = streamIdentity(conversationId, model);
-		const url = `${API_STREAM.BASE}/${encodeURIComponent(id)}?from=${from}`;
-		return await fetch(url, { method: 'GET', signal, headers: getAuthHeaders() });
+		const url = `${API_STREAM.BASE}?conv_id=${encodeURIComponent(id)}&from=${from}`;
+
+		return await fetch(url, { headers: getAuthHeaders(), method: 'GET', signal });
 	}
 
 	static async preEncode(
@@ -641,14 +701,13 @@ export class ChatService {
 
 			return true;
 		});
-
 		const requestBody: Record<string, unknown> = {
 			messages: normalizedMessages.map((msg: ApiChatMessageData) => {
 				const mapped: Record<string, unknown> = {
-					role: msg.role,
 					content: excludeReasoning ? ChatService.stripReasoningContent(msg.content) : msg.content,
-					tool_calls: msg.tool_calls,
-					tool_call_id: msg.tool_call_id
+					role: msg.role,
+					tool_call_id: msg.tool_call_id,
+					tool_calls: msg.tool_calls
 				};
 
 				if (!excludeReasoning && msg.reasoning_content) {
@@ -657,8 +716,8 @@ export class ChatService {
 
 				return mapped;
 			}),
-			stream: false,
-			n_predict: 0
+			n_predict: 0,
+			stream: false
 		};
 
 		if (model) {
@@ -667,9 +726,9 @@ export class ChatService {
 
 		try {
 			await fetch(API_CHAT.COMPLETIONS, {
-				method: 'POST',
-				headers: getJsonHeaders(),
 				body: JSON.stringify(requestBody),
+				headers: getJsonHeaders(),
+				method: 'POST',
 				signal
 			});
 		} catch (error) {
@@ -735,10 +794,13 @@ export class ChatService {
 		// if a resume returns 200 but yields nothing, we abandon
 		// since the session has a bounded size, the total number of retries is bounded by construction
 		let madeProgress = true;
+
 		const encoder = new TextEncoder();
+
 		if (conversationId) {
 			ChatService.saveStreamState(conversationId, 0, streamModel);
 		}
+
 		onConnectionState?.(StreamConnectionState.STREAMING);
 
 		let decoder = new TextDecoder();
@@ -760,7 +822,6 @@ export class ChatService {
 			toolCallIndexOffset = aggregatedToolCalls.length;
 			hasOpenToolCallBatch = false;
 		};
-
 		const processToolCallDelta = (toolCalls?: ApiChatCompletionToolCallDelta[]) => {
 			if (!toolCalls || toolCalls.length === 0) {
 				return;
@@ -792,24 +853,29 @@ export class ChatService {
 				onToolCallChunk?.(serializedToolCalls);
 			}
 		};
-
 		const onVisibilityChange = () => {
 			if (typeof document === 'undefined') return;
+
 			if (document.visibilityState !== 'visible') return;
+
 			if (streamFinished) return;
+
 			if (!conversationId) return;
+
 			// the bytes have been quiet for too long, the OS likely killed the socket
 			// kicking the reader unblocks reader.read with done=true so the outer loop can resume
 			if (Date.now() - lastByteAt > STREAM_VISIBILITY_KICK_MS) {
 				reader!.cancel().catch(() => {});
 			}
 		};
+
 		if (typeof document !== 'undefined') {
 			document.addEventListener('visibilitychange', onVisibilityChange);
 		}
 
 		try {
 			let chunk = '';
+
 			// outer loop drives the resume cycle, swaps reader on premature end of stream
 			while (true) {
 				while (true) {
@@ -817,8 +883,10 @@ export class ChatService {
 
 					let done: boolean;
 					let value: Uint8Array | undefined;
+
 					try {
 						const r = await reader.read();
+
 						done = r.done;
 						value = r.value;
 					} catch (readErr) {
@@ -828,10 +896,12 @@ export class ChatService {
 						if (isAbortError(readErr)) {
 							throw readErr;
 						}
+
 						console.warn('reader.read() rejected, treating as premature end:', readErr);
 						done = true;
 						value = undefined;
 					}
+
 					if (done) break;
 
 					if (abortSignal?.aborted) break;
@@ -839,6 +909,7 @@ export class ChatService {
 					if (value && value.byteLength > 0) {
 						segmentBytesRead += value.byteLength;
 						lastByteAt = Date.now();
+
 						if (!madeProgress) {
 							madeProgress = true;
 							onConnectionState?.(StreamConnectionState.STREAMING);
@@ -847,12 +918,14 @@ export class ChatService {
 
 					chunk += decoder.decode(value, { stream: true });
 					const lines = chunk.split(SSE_LINE_SEPARATOR);
+
 					chunk = lines.pop() || '';
 
 					// the persisted offset must point right after the last fully parsed line,
 					// the trailing `chunk` is partial bytes still waiting for a newline
 					if (conversationId) {
 						const tailBytes = encoder.encode(chunk).byteLength;
+
 						bytesParsed = segmentStartOffset + segmentBytesRead - tailBytes;
 						ChatService.saveStreamState(conversationId, bytesParsed, streamModel);
 					}
@@ -862,6 +935,7 @@ export class ChatService {
 
 						if (line.startsWith(SSE_DATA_PREFIX)) {
 							const data = line.slice(SSE_DATA_PREFIX.length).trim();
+
 							if (data === SSE_DONE_MARKER) {
 								streamFinished = true;
 
@@ -876,8 +950,8 @@ export class ChatService {
 								const toolCalls = choice?.delta?.tool_calls;
 								const timings = parsed.timings;
 								const promptProgress = parsed.prompt_progress;
-
 								const chunkModel = ChatService.extractModelName(parsed);
+
 								if (chunkModel && !modelEmitted) {
 									modelEmitted = true;
 									onModel?.(chunkModel);
@@ -900,6 +974,7 @@ export class ChatService {
 								if (content) {
 									finalizeOpenToolCallBatch();
 									aggregatedContent += content;
+
 									if (!abortSignal?.aborted) {
 										onChunk?.(content);
 									}
@@ -908,6 +983,7 @@ export class ChatService {
 								if (reasoningContent) {
 									finalizeOpenToolCallBatch();
 									fullReasoningContent += reasoningContent;
+
 									if (!abortSignal?.aborted) {
 										onReasoningChunk?.(reasoningContent);
 									}
@@ -921,17 +997,21 @@ export class ChatService {
 					}
 
 					if (abortSignal?.aborted) break;
+
 					if (streamFinished) break;
 				}
 
 				// inner reader done, decide whether to try a resume
 				if (abortSignal?.aborted) break;
+
 				if (streamFinished) break;
+
 				if (!conversationId) break;
 
 				if (!madeProgress) {
 					onConnectionState?.(StreamConnectionState.LOST);
 					onError?.(new Error('Stream resume produced no new bytes, giving up'));
+
 					break;
 				}
 
@@ -946,14 +1026,19 @@ export class ChatService {
 					abortSignal,
 					streamModel
 				).catch(() => null);
+
 				// an abort landing during the resume request is intentional, not a lost connection
 				if (abortSignal?.aborted) break;
+
 				if (!resumeResp || resumeResp.status !== 200) {
 					onConnectionState?.(StreamConnectionState.LOST);
 					onError?.(new Error('Stream connection lost and could not be resumed'));
+
 					break;
 				}
+
 				const newReader = resumeResp.body?.getReader();
+
 				if (!newReader) break;
 
 				try {
@@ -998,6 +1083,7 @@ export class ChatService {
 			if (typeof document !== 'undefined') {
 				document.removeEventListener('visibilitychange', onVisibilityChange);
 			}
+
 			try {
 				reader.releaseLock();
 			} catch {
@@ -1038,8 +1124,8 @@ export class ChatService {
 			}
 
 			const data: ApiChatCompletionResponse = JSON.parse(responseText);
-
 			const responseModel = ChatService.extractModelName(data);
+
 			if (responseModel) {
 				onModel?.(responseModel);
 			}
@@ -1055,6 +1141,7 @@ export class ChatService {
 
 				if (mergedToolCalls.length > 0) {
 					serializedToolCalls = JSON.stringify(mergedToolCalls);
+
 					if (serializedToolCalls) {
 						onToolCallChunk?.(serializedToolCalls);
 					}
@@ -1162,14 +1249,15 @@ export class ChatService {
 		// Handle tool result messages (role: 'tool')
 		if (message.role === MessageRole.TOOL && message.toolCallId) {
 			return {
-				role: MessageRole.TOOL,
 				content: message.content,
+				role: MessageRole.TOOL,
 				tool_call_id: message.toolCallId
 			};
 		}
 
 		// Parse tool calls for assistant messages
 		let toolCalls: ApiChatCompletionToolCall[] | undefined;
+
 		if (message.toolCalls) {
 			try {
 				toolCalls = JSON.parse(message.toolCalls);
@@ -1180,8 +1268,8 @@ export class ChatService {
 
 		if (!message.extra || message.extra.length === 0) {
 			const result: ApiChatMessageData = {
-				role: message.role as MessageRole,
-				content: message.content
+				content: message.content,
+				role: message.role as MessageRole
 			};
 
 			if (message.reasoningContent) {
@@ -1196,7 +1284,6 @@ export class ChatService {
 		}
 
 		const contentParts: ApiChatMessageContentPart[] = [];
-
 		const textFiles = message.extra.filter(
 			(extra: DatabaseMessageExtra): extra is DatabaseMessageExtraTextFile =>
 				extra.type === AttachmentType.TEXT
@@ -1204,8 +1291,8 @@ export class ChatService {
 
 		for (const textFile of textFiles) {
 			contentParts.push({
-				type: ContentPartType.TEXT,
-				text: formatAttachmentText('File', textFile.name, textFile.content)
+				text: formatAttachmentText('File', textFile.name, textFile.content),
+				type: ContentPartType.TEXT
 			});
 		}
 
@@ -1217,8 +1304,8 @@ export class ChatService {
 
 		for (const legacyContextFile of legacyContextFiles) {
 			contentParts.push({
-				type: ContentPartType.TEXT,
-				text: formatAttachmentText('File', legacyContextFile.name, legacyContextFile.content)
+				text: formatAttachmentText('File', legacyContextFile.name, legacyContextFile.content),
+				type: ContentPartType.TEXT
 			});
 		}
 
@@ -1229,14 +1316,13 @@ export class ChatService {
 
 		for (const image of imageFiles) {
 			const maxImageResolution = settingsStore.getConfig(SETTINGS_KEYS.MAX_IMAGE_RESOLUTION);
-
 			// Caps the resolution and bakes the jpeg exif orientation in one pass,
 			// untouched images pass through as is
 			const base64Url = await capImageDataURLSize(image.base64Url, maxImageResolution);
 
 			contentParts.push({
-				type: ContentPartType.IMAGE_URL,
-				image_url: { url: base64Url }
+				image_url: { url: base64Url },
+				type: ContentPartType.IMAGE_URL
 			});
 		}
 
@@ -1247,18 +1333,18 @@ export class ChatService {
 
 		for (const audio of audioFiles) {
 			contentParts.push({
-				type: ContentPartType.INPUT_AUDIO,
 				input_audio: {
 					data: audio.base64Data,
 					format: getAudioInputFormat(audio.mimeType)
-				}
+				},
+				type: ContentPartType.INPUT_AUDIO
 			});
 		}
 
 		if (message.content) {
 			contentParts.push({
-				type: ContentPartType.TEXT,
-				text: message.content
+				text: message.content,
+				type: ContentPartType.TEXT
 			});
 		}
 
@@ -1269,7 +1355,6 @@ export class ChatService {
 
 		for (const video of videoFiles) {
 			contentParts.push({
-				type: ContentPartType.INPUT_VIDEO,
 				input_video: {
 					data: video.base64Data,
 					format: video.mimeType.includes('mp4')
@@ -1277,7 +1362,8 @@ export class ChatService {
 						: video.mimeType.includes('ogg')
 							? 'ogg'
 							: 'auto'
-				}
+				},
+				type: ContentPartType.INPUT_VIDEO
 			});
 		}
 
@@ -1290,14 +1376,14 @@ export class ChatService {
 			if (pdfFile.processedAsImages && pdfFile.images) {
 				for (let i = 0; i < pdfFile.images.length; i++) {
 					contentParts.push({
-						type: ContentPartType.IMAGE_URL,
-						image_url: { url: pdfFile.images[i] }
+						image_url: { url: pdfFile.images[i] },
+						type: ContentPartType.IMAGE_URL
 					});
 				}
 			} else {
 				contentParts.push({
-					type: ContentPartType.TEXT,
-					text: formatAttachmentText(ATTACHMENT_LABEL_PDF_FILE, pdfFile.name, pdfFile.content)
+					text: formatAttachmentText(ATTACHMENT_LABEL_PDF_FILE, pdfFile.name, pdfFile.content),
+					type: ContentPartType.TEXT
 				});
 			}
 		}
@@ -1309,13 +1395,13 @@ export class ChatService {
 
 		for (const mcpPrompt of mcpPrompts) {
 			contentParts.push({
-				type: ContentPartType.TEXT,
 				text: formatAttachmentText(
 					ATTACHMENT_LABEL_MCP_PROMPT,
 					mcpPrompt.name,
 					mcpPrompt.content,
 					mcpPrompt.serverName
-				)
+				),
+				type: ContentPartType.TEXT
 			});
 		}
 
@@ -1326,26 +1412,29 @@ export class ChatService {
 
 		for (const mcpResource of mcpResources) {
 			contentParts.push({
-				type: ContentPartType.TEXT,
 				text: formatAttachmentText(
 					ATTACHMENT_LABEL_MCP_RESOURCE,
 					mcpResource.name,
 					mcpResource.content,
 					mcpResource.serverName
-				)
+				),
+				type: ContentPartType.TEXT
 			});
 		}
 
 		const result: ApiChatMessageData = {
-			role: message.role as MessageRole,
-			content: contentParts
+			content: contentParts,
+			role: message.role as MessageRole
 		};
+
 		if (message.reasoningContent) {
 			result.reasoning_content = message.reasoningContent;
 		}
+
 		if (toolCalls && toolCalls.length > 0) {
 			result.tool_calls = toolCalls;
 		}
+
 		return result;
 	}
 
@@ -1375,6 +1464,7 @@ export class ChatService {
 			if (part.type === ContentPartType.TEXT && part.text) {
 				return { ...part, text: stripFromString(part.text) };
 			}
+
 			return part;
 		});
 	}
@@ -1390,17 +1480,17 @@ export class ChatService {
 		try {
 			const errorText = await response.text();
 			const errorData: ApiErrorResponse = JSON.parse(errorText);
-
 			const message = errorData.error?.message || 'Unknown server error';
 			const error = new Error(message) as Error & {
 				contextInfo?: { n_prompt_tokens: number; n_ctx: number };
 			};
+
 			error.name = response.status === 400 ? 'ServerError' : 'HttpError';
 
 			if (errorData.error && 'n_prompt_tokens' in errorData.error && 'n_ctx' in errorData.error) {
 				error.contextInfo = {
-					n_prompt_tokens: errorData.error.n_prompt_tokens,
-					n_ctx: errorData.error.n_ctx
+					n_ctx: errorData.error.n_ctx,
+					n_prompt_tokens: errorData.error.n_prompt_tokens
 				};
 			}
 
@@ -1411,6 +1501,7 @@ export class ChatService {
 			) as Error & {
 				contextInfo?: { n_prompt_tokens: number; n_ctx: number };
 			};
+
 			fallback.name = 'HttpError';
 
 			return fallback;
@@ -1434,33 +1525,36 @@ export class ChatService {
 				? (value as Record<string, unknown>)
 				: undefined;
 		};
-
 		const getTrimmedString = (value: unknown): string | undefined => {
 			return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 		};
-
 		const root = asRecord(data);
+
 		if (!root) return undefined;
 
 		// 1) root (some implementations provide `model` at the top level)
 		const rootModel = getTrimmedString(root.model);
+
 		if (rootModel) {
 			return rootModel;
 		}
 
 		// 2) streaming choice (delta) or final response (message)
 		const firstChoice = Array.isArray(root.choices) ? asRecord(root.choices[0]) : undefined;
+
 		if (!firstChoice) {
 			return undefined;
 		}
 
 		// priority: delta.model (first chunk) else message.model (final response)
 		const deltaModel = getTrimmedString(asRecord(firstChoice.delta)?.model);
+
 		if (deltaModel) {
 			return deltaModel;
 		}
 
 		const messageModel = getTrimmedString(asRecord(firstChoice.message)?.model);
+
 		if (messageModel) {
 			return messageModel;
 		}

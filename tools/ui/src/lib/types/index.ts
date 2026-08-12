@@ -53,7 +53,9 @@ export type {
 	LiveProcessingStats,
 	LiveGenerationStats,
 	AttachmentDisplayItemsOptions,
-	FileProcessingResult
+	FileProcessingResult,
+	FileMentionEntry,
+	ChatFormCommand
 } from './chat.d';
 
 // Database types
@@ -128,6 +130,7 @@ export type {
 	MCPClientConfig,
 	MCPServerSettingsEntry,
 	MCPServerDisplayInfo,
+	RecommendedMCPServer,
 	MCPToolCall,
 	OpenAIToolDefinition,
 	ServerStatus,

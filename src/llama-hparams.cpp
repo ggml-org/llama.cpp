@@ -241,25 +241,19 @@ bool llama_hparams::is_swa(uint32_t il) const {
     GGML_ABORT("%s: il (%u) out of bounds (n_layer_all: %u)\n", __func__, il, n_layer_all);
 }
 
-bool llama_hparams::has_rope(uint32_t il) const {
-    // If rope_pattern is not set, fall back to rope_finetuned
-    if (rope_pattern[0] == 0 && rope_pattern[1] == 0) {
-        return rope_finetuned;
-    }
-
-    if (il < n_layer_all) {
-        return rope_pattern[il] != 0;
-    }
-
-    GGML_ABORT("%s: il (%u) out of bounds (n_layer_all: %u)\n", __func__, il, n_layer_all);
-}
-
-
 bool llama_hparams::is_mla() const {
     assert((n_embd_head_k_mla_impl == 0 && n_embd_head_v_mla_impl == 0) ||
            (n_embd_head_k_mla_impl != 0 && n_embd_head_v_mla_impl != 0));
 
     return n_embd_head_k_mla_impl != 0 && n_embd_head_v_mla_impl != 0;
+}
+
+bool llama_hparams::is_indexer_full(uint32_t il) const {
+    if (il < n_layer()) {
+        return is_indexer_full_impl[il];
+    }
+
+    GGML_ABORT("%s: il (%u) out of bounds (n_layer: %u)\n", __func__, il, n_layer());
 }
 
 uint32_t llama_hparams::n_embd_head_k_mla() const {
@@ -281,6 +275,25 @@ bool llama_hparams::has_kv(uint32_t il) const {
 
     // by default, all layers have kv
     return true;
+}
+
+bool llama_hparams::has_rope(uint32_t il) const {
+    // the router layer stores adapter routing signal, not positional info,
+    // so it must not be RoPE-shifted
+    if (router_layer >= 0 && (int32_t) il == router_layer) {
+        return false;
+    }
+
+    // If rope_pattern is not set, fall back to rope_finetuned
+    if (rope_pattern[0] == 0 && rope_pattern[1] == 0) {
+        return rope_finetuned;
+    }
+
+    if (il < n_layer_all) {
+        return rope_pattern[il] != 0;
+    }
+
+    GGML_ABORT("%s: il (%u) out of bounds (n_layer_all: %u)\n", __func__, il, n_layer_all);
 }
 
 uint32_t llama_hparams::n_layer() const {

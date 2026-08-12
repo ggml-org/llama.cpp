@@ -119,6 +119,7 @@ jobs:
         run: |
           source ./vulkan_sdk/setup-env.sh
           cmake -B build \
+            -DGGML_NATIVE=OFF \
             -DGGML_VULKAN=ON
           cmake --build build --config Release -j $(nproc)
 
