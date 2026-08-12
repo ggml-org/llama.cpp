@@ -13,23 +13,25 @@
 
 import {
 	CONVERSATION_ID_SEPARATOR,
+	CWD_CLEARED_TEXT,
 	HEADERS,
 	INACTIVE_CONVERSATION,
 	STREAM_RESUME_RETRY_MS,
 	SYSTEM_MESSAGE_PLACEHOLDER,
 	TITLE_GENERATION
 } from '$lib/constants';
-import { MimeTypeApplication } from '$lib/enums';
 import {
 	ContinueIntentKind,
 	ErrorDialogType,
 	MessageRole,
 	MessageType,
+	MimeTypeApplication,
 	ReasoningEffort,
 	StreamConnectionState
 } from '$lib/enums';
 import { ChatService } from '$lib/services/chat.service';
 import { DatabaseService } from '$lib/services/database.service';
+// direct imports between stores, not via the barrel, to avoid circular deps
 import { agenticStore } from '$lib/stores/agentic.svelte';
 import { conversationsStore } from '$lib/stores/conversations.svelte';
 import { mcpStore } from '$lib/stores/mcp.svelte';
@@ -41,29 +43,26 @@ import type {
 	ApiChatMessageData,
 	ApiProcessingState,
 	ApiStreamSession,
-	DatabaseMessage,
-	DatabaseMessageExtra
-} from '$lib/types';
-import type {
 	ChatMessagePromptProgress,
 	ChatMessageTimings,
 	ChatStreamCallbacks,
+	DatabaseMessage,
+	DatabaseMessageExtra,
 	ErrorDialogState
-} from '$lib/types/chat';
+} from '$lib/types';
 import {
-	CWD_CLEARED_TEXT,
+	classifyContinueIntent,
 	filterByLeafNodeId,
 	findDescendantMessages,
 	findLeafNode,
 	findMessageById,
 	formatCwdMessage,
 	generateConversationTitle,
+	getAuthHeaders,
 	isAbortError,
-	normalizeModelName
+	normalizeModelName,
+	streamIdentity
 } from '$lib/utils';
-import { classifyContinueIntent } from '$lib/utils/agentic';
-import { getAuthHeaders } from '$lib/utils/api-headers';
-import { streamIdentity } from '$lib/utils/stream-identity';
 import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 
 interface ConversationStateEntry {

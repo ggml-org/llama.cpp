@@ -9,7 +9,7 @@
 
 // API utilities
 export { getAuthHeaders, getJsonHeaders, sanitizeHeaders } from './api-headers';
-export { apiFetch, apiFetchWithParams, apiPost, type ApiFetchOptions } from './api-fetch';
+export { ApiError, apiFetch, apiFetchWithParams, apiPost } from './api-fetch';
 export { validateApiKey } from './api-key-validation';
 
 // Attachment utilities
@@ -129,7 +129,10 @@ export { getImageErrorFallbackHtml } from './image-error-fallback';
 
 // SSE-with-JSON stream iterator (used by built-in tool streaming, decoupled
 // from chat.service.ts which embeds its own SSE parser for resume support)
-export { parseSseJsonStream, type SseJsonEvent } from './sse';
+export { parseSseJsonStream } from './sse';
+
+// Stream session identity (conversation-id based)
+export { streamIdentity } from './stream-identity';
 
 // MCP utilities
 export {
@@ -241,6 +244,12 @@ export {
 	buildMentionInsertion
 } from './mention-badge';
 
+// Chat template utilities
+export {
+	detectThinkingSupport,
+	detectThinkingSupportWithReason
+} from './chat-template-thinking-detector';
+
 // Agentic content utilities (structured section derivation)
 export {
 	deriveAgenticSections,
@@ -248,7 +257,8 @@ export {
 	parseToolResultWithMedia,
 	splitSearchSummaryList,
 	hasAgenticContent,
-	classifyToolResult
+	classifyToolResult,
+	classifyContinueIntent
 } from './agentic';
 
 // Line-level unified diff for tool result rendering (`edit_file` block)
@@ -275,7 +285,7 @@ export {
 } from './search-results';
 
 // Cache utilities
-export { TTLCache, ReactiveTTLMap, type TTLCacheOptions } from './cache-ttl';
+export { TTLCache, ReactiveTTLMap } from './cache-ttl';
 
 // Redaction utilities
 export { redactValue } from './redact';

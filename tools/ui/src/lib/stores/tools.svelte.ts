@@ -15,6 +15,7 @@ import {
 	ToolSource
 } from '$lib/enums';
 import { ToolsService } from '$lib/services/tools.service';
+// direct imports between stores, not via the barrel, to avoid circular deps
 import { mcpStore } from '$lib/stores/mcp.svelte';
 import { modelsStore, selectedModelName } from '$lib/stores/models.svelte';
 import { settingsStore } from '$lib/stores/settings.svelte';

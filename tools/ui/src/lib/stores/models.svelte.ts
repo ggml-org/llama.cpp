@@ -15,13 +15,15 @@ import {
 } from '$lib/enums';
 import { ModelsService } from '$lib/services/models.service';
 import { PropsService } from '$lib/services/props.service';
+// direct imports between stores, not via the barrel, to avoid circular deps
 import { conversationsStore } from '$lib/stores/conversations.svelte';
 import { serverStore } from '$lib/stores/server.svelte';
-import { getAuthHeaders, TTLCache } from '$lib/utils';
 import {
 	detectThinkingSupport,
-	detectThinkingSupportWithReason
-} from '$lib/utils/chat-template-thinking-detector';
+	detectThinkingSupportWithReason,
+	getAuthHeaders,
+	TTLCache
+} from '$lib/utils';
 import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 import { toast } from 'svelte-sonner';
 

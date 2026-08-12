@@ -42,6 +42,7 @@ import {
 	UrlProtocol
 } from '$lib/enums';
 import { MCPService } from '$lib/services/mcp.service';
+// direct imports between stores, not via the barrel, to avoid circular deps
 import { mcpResourceStore } from '$lib/stores/mcp-resources.svelte';
 import { serverStore } from '$lib/stores/server.svelte';
 import { settingsStore } from '$lib/stores/settings.svelte';

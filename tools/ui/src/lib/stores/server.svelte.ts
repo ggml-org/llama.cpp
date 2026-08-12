@@ -1,6 +1,6 @@
 import { ServerRole } from '$lib/enums';
 import { PropsService } from '$lib/services/props.service';
-import { ApiError } from '$lib/utils/api-fetch';
+import { ApiError } from '$lib/utils';
 
 const LOADING_RETRY_INTERVAL_MS = 1000;
 

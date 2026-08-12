@@ -38,6 +38,7 @@ import {
 import { DatabaseService } from '$lib/services/database.service';
 import { MigrationService } from '$lib/services/migration.service';
 import { RouterService } from '$lib/services/router.service';
+// direct imports between stores, not via the barrel, to avoid circular deps
 import { mcpStore } from '$lib/stores/mcp.svelte';
 import { settingsStore } from '$lib/stores/settings.svelte';
 import type { McpServerOverride } from '$lib/types/database';
