@@ -34,6 +34,7 @@
 #include <regex>
 #include <set>
 #include <string>
+#include <system_error>
 #include <thread> // for hardware_concurrency
 #include <vector>
 
@@ -744,7 +745,8 @@ static void common_params_apply_config_file(common_params & params, llama_exampl
 
     std::vector<std::string> found;
     for (const auto & path : paths) {
-        if (std::filesystem::exists(path)) {
+        std::error_code ec;
+        if (std::filesystem::exists(path, ec)) {
             found.push_back(path);
         }
     }

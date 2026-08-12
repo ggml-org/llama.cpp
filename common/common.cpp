@@ -1047,17 +1047,22 @@ std::string fs_get_cache_directory() {
 std::string fs_get_config_directory() {
     std::string config_directory = "";
     auto ensure_trailing_slash = [](std::string p) {
-        if (p.back() != DIRECTORY_SEPARATOR) {
+        if (p.empty() || p.back() != DIRECTORY_SEPARATOR) {
             p += DIRECTORY_SEPARATOR;
         }
         return p;
     };
+    // an env variable set to an empty value is the same as unset
+    [[maybe_unused]] auto getenv_nonempty = [](const char * name) -> const char * {
+        const char * value = std::getenv(name);
+        return (value && value[0]) ? value : nullptr;
+    };
 #if defined(__linux__) || defined(__FreeBSD__) || defined(_AIX) || \
         defined(__OpenBSD__) || defined(__NetBSD__) || defined(__APPLE__)
-    if (std::getenv("XDG_CONFIG_HOME")) {
-        config_directory = std::getenv("XDG_CONFIG_HOME");
-    } else if (std::getenv("HOME")) {
-        config_directory = std::getenv("HOME") + std::string("/.config/");
+    if (const char * xdg_config_home = getenv_nonempty("XDG_CONFIG_HOME")) {
+        config_directory = xdg_config_home;
+    } else if (const char * home = getenv_nonempty("HOME")) {
+        config_directory = home + std::string("/.config/");
     } else {
 #if defined(__linux__)
         /* no $HOME is defined, fallback to getpwuid */
@@ -1072,9 +1077,14 @@ std::string fs_get_config_directory() {
 #endif
     }
 #elif defined(_WIN32)
-    config_directory = std::getenv("APPDATA");
+    const char * appdata = getenv_nonempty("APPDATA");
+    if (!appdata) {
+        throw std::runtime_error("Failed to find %APPDATA% directory");
+    }
+    config_directory = appdata;
 #elif defined(__EMSCRIPTEN__)
-    GGML_ABORT("not implemented on this platform");
+    // caller decides what to do when there is no config directory
+    throw std::runtime_error("not implemented on this platform");
 #else
 #  error Unknown architecture
 #endif
