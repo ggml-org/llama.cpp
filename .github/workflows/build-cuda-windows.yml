@@ -97,15 +97,15 @@ jobs:
         id: checkout
         uses: actions/checkout@v6
 
-      - name: Cache ROCm Installation
-        uses: actions/cache@v5
-        id: cache-rocm
-        with:
-          path: C:\TheRock\build
-          key: rocm-wheels-${{ env.ROCM_VERSION }}-multi-arch-${{ runner.os }}
+      # - name: Cache ROCm Installation
+      #   uses: actions/cache@v5
+      #   id: cache-rocm
+      #   with:
+      #     path: C:\TheRock\build
+      #     key: rocm-wheels-${{ env.ROCM_VERSION }}-multi-arch-${{ runner.os }}
 
       - name: Setup ROCm
-        if: steps.cache-rocm.outputs.cache-hit != 'true'
+        # if: steps.cache-rocm.outputs.cache-hit != 'true'
         uses: ./.github/actions/windows-setup-rocm
         with:
           version: ${{ env.ROCM_VERSION }}
