@@ -763,13 +763,17 @@ struct runtime {
         gather_string_parts_recursive(val, parts);
         // join consecutive parts with the same type
         auto & p = parts->val_str.parts;
-        for (size_t i = 1; i < p.size(); ) {
-            if (p[i].is_input == p[i - 1].is_input) {
-                p[i - 1].val += p[i].val;
-                p.erase(p.begin() + i);
-            } else {
-                i++;
+        if (!p.empty()) {
+            size_t w = 0;
+            for (size_t r = 1; r < p.size(); r++) {
+                if (p[w].is_input == p[r].is_input) {
+                    p[w].val += p[r].val;
+                } else if (++w != r) {
+                    // the guard is needed, self-move leaves the string in an unspecified state
+                    p[w] = std::move(p[r]);
+                }
             }
+            p.resize(w + 1);
         }
         return parts;
     }

@@ -1,6 +1,7 @@
 #include <string>
 #include <iostream>
 #include <random>
+#include <chrono>
 #include <cstdlib>
 
 #include <nlohmann/json.hpp>
@@ -33,6 +34,7 @@ static void test_array_methods(testing & t);
 static void test_object_methods(testing & t);
 static void test_hasher(testing & t);
 static void test_stats(testing & t);
+static void test_string_parts(testing & t);
 static void test_fuzzing(testing & t);
 
 static bool g_python_mode = false;
@@ -72,6 +74,7 @@ int main(int argc, char *argv[]) {
     if (!g_python_mode) {
         t.test("hasher", test_hasher);
         t.test("stats", test_stats);
+        t.test("string parts", test_string_parts);
         t.test("fuzzing", test_fuzzing);
     }
 
@@ -2054,6 +2057,70 @@ static void test_stats(testing & t) {
 
         t.assert_true("inner_key1[0] is used", val->at("nested")->at("inner_key1")->at(0)->stats.used);
         t.assert_true("inner_key2.a is used", val->at("nested")->at("inner_key2")->at("a")->stats.used);
+    });
+}
+
+static void test_string_parts(testing & t) {
+    static auto render = [](const std::string & tmpl, const json & vars) -> jinja::string {
+        jinja::lexer lexer;
+        auto lexer_res = lexer.tokenize(tmpl);
+
+        jinja::program ast = jinja::parse_from_tokens(lexer_res);
+
+        jinja::context ctx(tmpl);
+        jinja::global_from_json(ctx, vars, true);
+
+        jinja::runtime runtime(ctx);
+        return runtime.gather_string_parts(runtime.execute(ast))->as_string();
+    };
+
+    t.test("merge joins only the neighbours with the same type", [](testing & t) {
+        // "AB" comes from the input and merges, "-" comes from the template and must not
+        jinja::string res = render("{{ val.a }}{{ val.b }}-{{ val.c }}",
+                                   json{{"val", json{{"a", "A"}, {"b", "B"}, {"c", "C"}}}});
+
+        if (t.assert_true("3 parts after the merge", res.parts.size() == 3)) {
+            t.assert_true("part 0 is the merged input", res.parts[0].val == "AB" && res.parts[0].is_input);
+            t.assert_true("part 1 is from the template", res.parts[1].val == "-" && !res.parts[1].is_input);
+            t.assert_true("part 2 is input",             res.parts[2].val == "C" && res.parts[2].is_input);
+        } else {
+            t.log("parts: " + std::to_string(res.parts.size()) + ", rendered: " + json(res.str()).dump());
+        }
+    });
+
+    t.test("gather cost stays linear in the number of parts", [](testing & t) {
+        // gather a plain array of strings, so the cost of the engine itself is not measured
+        static auto secs = [](size_t n) -> double {
+            std::vector<jinja::value> items;
+            items.reserve(n);
+            for (size_t i = 0; i < n; i++) {
+                items.push_back(jinja::mk_val<jinja::value_string>(std::string("x")));
+            }
+            jinja::value arr = jinja::mk_val<jinja::value_array>(std::move(items));
+
+            // best of a few runs, the scheduler adds noise but never removes work
+            double best = 1e9;
+            for (int i = 0; i < 5; i++) {
+                const auto t0 = std::chrono::steady_clock::now();
+                jinja::value_string parts = jinja::runtime::gather_string_parts(arr);
+                const double dt = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+                if (parts->val_str.parts.size() == 1 && dt < best) {
+                    best = dt;
+                }
+            }
+            return best;
+        };
+
+        const double t1 = secs(4000);
+        const double t2 = secs(16000);
+        const double ratio = t1 > 0.0 ? t2 / t1 : 0.0;
+
+        // 4x the parts costs about 4x when linear, it cost about 16x when quadratic
+        if (!t.assert_true("4x the parts must not cost more than 8x", ratio > 0.0 && ratio < 8.0)) {
+            t.log("4000 parts : " + std::to_string(t1) + "s");
+            t.log("16000 parts: " + std::to_string(t2) + "s");
+            t.log("ratio: " + std::to_string(ratio));
+        }
     });
 }
 
