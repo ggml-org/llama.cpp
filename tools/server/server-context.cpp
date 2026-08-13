@@ -17,6 +17,8 @@
 #include "mtmd.h"
 #include "mtmd-helper.h"
 
+#include <cpp-httplib/httplib.h> // client for disaggregated prefill
+
 #include <algorithm>
 #include <cstddef>
 #include <cinttypes>
@@ -38,6 +40,43 @@
 using json = nlohmann::ordered_json;
 
 constexpr int HTTP_POLLING_SECONDS = 1;
+
+// wire format of a serialized prefill state: magic, token count, tokens, raw sequence state
+constexpr uint32_t PREFILL_STATE_MAGIC           = 0x50524631; // "PRF1"
+constexpr int      PREFILL_CONNECT_TIMEOUT_SECS  = 10;
+constexpr int      PREFILL_RESPONSE_TIMEOUT_SECS = 3600;
+
+static std::string prefill_state_pack(const llama_tokens & tokens, const std::vector<uint8_t> & state) {
+    const uint32_t magic    = PREFILL_STATE_MAGIC;
+    const uint32_t n_tokens = tokens.size();
+
+    std::string out;
+    out.reserve(sizeof(magic) + sizeof(n_tokens) + n_tokens * sizeof(llama_token) + state.size());
+    out.append((const char *) &magic,    sizeof(magic));
+    out.append((const char *) &n_tokens, sizeof(n_tokens));
+    out.append((const char *) tokens.data(), n_tokens * sizeof(llama_token));
+    out.append((const char *) state.data(), state.size());
+    return out;
+}
+
+static bool prefill_state_unpack(const std::string & body, llama_tokens & tokens, std::vector<uint8_t> & state) {
+    uint32_t magic    = 0;
+    uint32_t n_tokens = 0;
+    if (body.size() < sizeof(magic) + sizeof(n_tokens)) {
+        return false;
+    }
+    memcpy(&magic,    body.data(),                 sizeof(magic));
+    memcpy(&n_tokens, body.data() + sizeof(magic), sizeof(n_tokens));
+
+    const size_t off = sizeof(magic) + sizeof(n_tokens) + (size_t) n_tokens * sizeof(llama_token);
+    if (magic != PREFILL_STATE_MAGIC || body.size() < off) {
+        return false;
+    }
+    tokens.resize(n_tokens);
+    memcpy(tokens.data(), body.data() + sizeof(magic) + sizeof(n_tokens), n_tokens * sizeof(llama_token));
+    state.assign(body.begin() + off, body.end());
+    return true;
+}
 
 static common_speculative_output_limits server_output_limits(const common_params & params) {
     if (params.embedding ||
@@ -1748,6 +1787,20 @@ private:
         // the per-request limit takes priority over the global one
         slot.n_predict_max = task.params.n_predict != -1 ? task.params.n_predict : params_base.n_predict;
 
+        if (!task.prefill_state.empty()) {
+            // the sequence state comes from the prefill server, install it so prompt processing reuses it as cache
+            slot.prompt_clear();
+            const size_t n = llama_state_seq_set_data_ext(ctx_tgt, task.prefill_state.data(), task.prefill_state.size(), slot.id, 0);
+            if (n != task.prefill_state.size()) {
+                slot.prompt_clear();
+                send_error(task, "Failed to apply the prefill state, no available space in KV cache", ERROR_TYPE_SERVER);
+                return false;
+            }
+            slot.prompt.tokens.insert(task.prefill_tokens);
+            SLT_INF(slot, "applied prefill state, n_tokens = %zu, size = %.3f MiB\n",
+                    task.prefill_tokens.size(), task.prefill_state.size() / (1024.0 * 1024.0));
+        }
+
         slot.task = std::make_unique<const server_task>(std::move(task));
 
         slot.state = slot.task->is_child()
@@ -2121,6 +2174,22 @@ private:
         }
 
         SLT_DBG(slot, "%s", "sending embeddings\n");
+
+        queue_results.send(std::move(res));
+    }
+
+    void send_prefill_state(const server_slot & slot) {
+        auto res = std::make_unique<server_task_result_prefill>();
+        res->id    = slot.task->id;
+        res->index = slot.task->index;
+
+        const size_t size = llama_state_seq_get_size_ext(ctx_tgt, slot.id, LLAMA_STATE_SEQ_FLAGS_NONE);
+        res->state.resize(size);
+        llama_state_seq_get_data_ext(ctx_tgt, res->state.data(), size, slot.id, LLAMA_STATE_SEQ_FLAGS_NONE);
+        res->tokens = slot.prompt.tokens.get_text_tokens();
+
+        SLT_INF(slot, "sending prefill state, n_tokens = %zu, size = %.3f MiB\n",
+                res->tokens.size(), size / (1024.0 * 1024.0));
 
         queue_results.send(std::move(res));
     }
@@ -3698,6 +3767,14 @@ private:
                     return;
                 }
 
+                if (slot.task->prefill_only) {
+                    // the prompt is fully processed, return the serialized state instead of generating
+                    send_prefill_state(slot);
+                    slot.release();
+                    slot.i_batch = -1;
+                    return;
+                }
+
                 GGML_ASSERT(slot.task->need_sampling());
 
                 // prompt evaluated for next-token prediction
@@ -4136,7 +4213,45 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
 
     int32_t sse_ping_interval = params.sse_ping_interval;
 
+    // the x-prefill header makes this server run prompt processing only and return the serialized state
+    const bool prefill_only = req.headers.find("x-prefill") != req.headers.end();
+
+    // a request with "prefill": true delegates prompt processing to the server at --prefill-url
+    llama_tokens         prefill_tokens;
+    std::vector<uint8_t> prefill_state;
+
     try {
+        if (!prefill_only && json_value(data, "prefill", false)) {
+            if (params.prefill_url.empty()) {
+                throw std::runtime_error("\"prefill\": true requires the server to run with --prefill-url");
+            }
+            if (ctx_server.mctx != nullptr || !files.empty()) {
+                throw std::runtime_error("disaggregated prefill does not support multimodal prompts");
+            }
+
+            httplib::Client cli(params.prefill_url);
+            cli.set_connection_timeout(PREFILL_CONNECT_TIMEOUT_SECS, 0);
+            cli.set_read_timeout(PREFILL_RESPONSE_TIMEOUT_SECS, 0);
+
+            const json body = {
+                {"prompt",       data.at("prompt")},
+                {"cache_prompt", true},
+            };
+            const httplib::Headers prefill_headers = {{"x-prefill", "1"}};
+
+            const int64_t t_start = ggml_time_us();
+            auto r = cli.Post("/completions", prefill_headers, body.dump(), "application/json");
+            if (!r || r->status != 200) {
+                throw std::runtime_error(string_format("prefill server request failed, status = %d", r ? r->status : -1));
+            }
+            if (!prefill_state_unpack(r->body, prefill_tokens, prefill_state)) {
+                throw std::runtime_error("invalid prefill state received from the prefill server");
+            }
+            SRV_INF("received prefill state, n_tokens = %zu, size = %.3f MiB, t = %.2f ms\n",
+                    prefill_tokens.size(), prefill_state.size() / (1024.0 * 1024.0),
+                    (ggml_time_us() - t_start) / 1000.0);
+        }
+
         std::vector<server_task> tasks;
 
         const auto & prompt = data.at("prompt");
@@ -4170,10 +4285,26 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
         auto delimiters = common_chat_msg_delimiters_parse(json_value(data, "message_delimiters", json::array()));
         delimiters.tokenize(ctx_server.vocab);
 
+        if ((prefill_only || !prefill_state.empty()) && inputs.size() != 1) {
+            throw std::runtime_error("disaggregated prefill supports a single prompt per request");
+        }
+
+        // the last prompt token stays unprocessed so the decode server computes it, obtaining the logits
+        // and advancing any recurrent state past the shipped position
+        if (prefill_only && inputs[0].size() > 1) {
+            inputs[0].keep_first(inputs[0].size() - 1);
+        }
+
         for (size_t i = 0; i < inputs.size(); i++) {
             server_task task = server_task(type);
 
             task.id = rd.get_new_id();
+
+            task.prefill_only = prefill_only;
+            if (!prefill_state.empty()) {
+                task.prefill_state  = std::move(prefill_state);
+                task.prefill_tokens = std::move(prefill_tokens);
+            }
 
             task.tokens = std::move(inputs[i]);
             task.params = server_schema::eval_llama_cmpl_schema(
@@ -4192,6 +4323,10 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
             task.params.oaicompat_cmpl_id = completion_id;
             task.params.oaicompat_model   = meta->model_name;
 
+            if (prefill_only && task.params.n_cmpl > 1) {
+                throw std::runtime_error("disaggregated prefill supports a single completion per request");
+            }
+
             // prepare child tasks
             if (task.params.n_cmpl > 1) {
                 int n_children = task.params.n_cmpl - 1;
@@ -4206,6 +4341,25 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
         rd.post_tasks(std::move(tasks));
     } catch (const std::exception & e) {
         res->error(format_error_response(e.what(), ERROR_TYPE_INVALID_REQUEST));
+        return res;
+    }
+
+    if (prefill_only) {
+        // the response body is the serialized state, not a completion
+        auto all_results = rd.wait_for_all(req.should_stop);
+        if (all_results.is_terminated) {
+            return res; // connection is closed
+        }
+        if (all_results.error) {
+            res->error(all_results.error->to_json());
+            return res;
+        }
+        GGML_ASSERT(all_results.results.size() == 1);
+        auto * result = dynamic_cast<server_task_result_prefill*>(all_results.results[0].get());
+        GGML_ASSERT(result != nullptr);
+        res->status       = 200;
+        res->content_type = "application/octet-stream";
+        res->data         = prefill_state_pack(result->tokens, result->state);
         return res;
     }
 

@@ -169,6 +169,13 @@ struct server_task {
     };
     slot_action slot_action;
 
+    // used by disaggregated prefill
+    // prefill_only makes the task stop after prompt processing and return the serialized sequence state
+    // prefill_state and prefill_tokens carry a state received from a remote prefill server, applied to the slot before processing
+    bool prefill_only = false;
+    std::vector<uint8_t> prefill_state;
+    llama_tokens         prefill_tokens;
+
     // used by SERVER_TASK_TYPE_METRICS
     bool metrics_reset_bucket = false;
 
@@ -627,6 +634,18 @@ struct server_prompt_cache {
     bool load(server_prompt & prompt, const server_tokens & tokens_new, llama_context * ctx_tgt, llama_context * ctx_dft, int32_t id_slot);
 
     void update();
+};
+
+// used by disaggregated prefill, carries the serialized sequence state after prompt processing
+struct server_task_result_prefill : server_task_result {
+    std::vector<uint8_t> state;
+    llama_tokens         tokens;
+    virtual json to_json() override {
+        return json {
+            {"n_tokens", tokens.size()},
+            {"n_bytes",  state.size()},
+        };
+    }
 };
 
 // used exclusively by router mode
