@@ -1130,7 +1130,7 @@ struct llm_graph_context {
 
     ggml_tensor * build_inp_embd(ggml_tensor * tok_embd) const;
     ggml_tensor * build_inp_pos() const;
-    ggml_tensor * build_inp_logits_mask(const llama_model & model, int64_t n_masked_tokens) const;
+    ggml_tensor * build_inp_logits_mask(int64_t n_vocab, int64_t n_masked_tokens) const;
     ggml_tensor * build_inp_attn_scale() const;
     ggml_tensor * build_inp_out_ids() const;
     ggml_tensor * build_inp_mean() const;

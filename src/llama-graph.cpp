@@ -153,12 +153,12 @@ bool llm_graph_input_pos::can_reuse(const llm_graph_params & params) {
     return res;
 }
 
-ggml_tensor * llm_graph_context::build_inp_logits_mask(const llama_model & model, int64_t n_masked_tokens) const {
-    auto inp = std::make_unique<llm_graph_input_logits_mask>(model.vocab.n_tokens(), n_masked_tokens);
+ggml_tensor * llm_graph_context::build_inp_logits_mask(int64_t n_vocab, int64_t n_masked_tokens) const {
+    auto inp = std::make_unique<llm_graph_input_logits_mask>(n_vocab, n_masked_tokens);
 
     auto & cur = inp->logits_mask;
 
-    cur = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, model.vocab.n_tokens());
+    cur = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, n_vocab);
     ggml_set_input(cur);
     cb(cur, "logits_mask", -1);
 
