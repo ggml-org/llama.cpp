@@ -1087,10 +1087,12 @@ json oaicompat_chat_params_parse(
     }
 
     // Parse the OAI "reasoning_effort" field; "none" disables reasoning.
+    inputs.reasoning_effort = opt.reasoning_effort;
     if (body.contains("reasoning_effort")) {
         auto reasoning_effort = json_value(body, "reasoning_effort", std::string(""));
         if (reasoning_effort == "none") {
             inputs.enable_thinking = false;
+            inputs.reasoning_effort.clear();
         } else {
             inputs.reasoning_effort = reasoning_effort;
         }

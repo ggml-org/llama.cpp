@@ -87,6 +87,7 @@ std::map<std::string, bool> caps::to_map() const {
         {"supports_parallel_tool_calls", supports_parallel_tool_calls},
         {"supports_system_role", supports_system_role},
         {"supports_preserve_reasoning", supports_preserve_reasoning},
+        {"supports_reasoning_effort", supports_reasoning_effort},
         {"supports_object_arguments", supports_object_arguments},
     };
 }
@@ -491,6 +492,33 @@ caps caps_get(jinja::program & prog) {
             if (output.find(reasoning_placeholder) != std::string::npos) {
                 result.supports_preserve_reasoning = true;
             }
+        }
+    );
+
+    JJ_DEBUG("%s\n", ">>> Running capability check: reasoning effort");
+
+    // case: reasoning effort level
+    value effort_var = mk_val<value_string>(std::string("low"));
+    caps_try_execute(
+        prog,
+        [&]() {
+            // messages
+            return json::array({
+                {
+                    {"role", "user"},
+                    {"content", "User message"}
+                },
+            });
+        },
+        [&](context & ctx) {
+            ctx.set_val("enable_thinking", mk_val<value_bool>(true));
+            ctx.set_val("reasoning_effort",   effort_var);
+            ctx.set_val("reasoning_strength", effort_var);
+        },
+        nullptr, // tools_fn
+        [&](bool, value &, value &, const std::string &) {
+            caps_print_stats(effort_var, "reasoning_effort");
+            result.supports_reasoning_effort = effort_var->stats.used;
         }
     );
 

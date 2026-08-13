@@ -3104,12 +3104,7 @@ static common_chat_params common_chat_params_init_muse_glimmer(const common_chat
                                                                const autoparser::generation_params & inputs) {
     common_chat_params data;
 
-    std::optional<json> additional_context;
-    if (inputs.extra_context.contains("reasoning_effort")) {
-        additional_context = json{ { "reasoning_strength", inputs.extra_context["reasoning_effort"] } };
-    }
-
-    data.prompt            = common_chat_template_direct_apply_impl(tmpl, inputs, std::nullopt, std::nullopt, additional_context);
+    data.prompt            = common_chat_template_direct_apply_impl(tmpl, inputs);
     data.generation_prompt = "<|start|>assistant";
     data.format            = COMMON_CHAT_FORMAT_PEG_NATIVE;
     data.supports_thinking = true;
@@ -3446,7 +3441,8 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
         params.extra_context[el.first] = json::parse(el.second);
     }
     if (!inputs.reasoning_effort.empty()) {
-        params.extra_context["reasoning_effort"] = inputs.reasoning_effort;
+        params.extra_context["reasoning_effort"]   = inputs.reasoning_effort;
+        params.extra_context["reasoning_strength"] = inputs.reasoning_effort;
     }
 
     if (!inputs.json_schema.empty()) {
