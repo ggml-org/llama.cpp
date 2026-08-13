@@ -6,10 +6,10 @@ import type {
 	OpenAIToolDefinition,
 	ToolExecutionResult
 } from '$lib/types/mcp';
+import type { DatabaseMessage, DatabaseMessageExtra, DatabaseMessageExtraSkill } from '$lib/types/database';
 import type {
 	SkillCatalogEntry,
 	SkillConsentInfo,
-	SkillIdentity,
 	SkillPackedCatalog,
 	SkillReadResult,
 	SkillRunSnapshot
@@ -37,17 +37,56 @@ export interface SkillAdaptersBuildResult {
 }
 
 /**
+ * Input to the shared successful-base-activation operation. Both the
+ * model consent path (approved `read_skill` base reads) and the explicit
+ * `/skills <name>` path route through it; the durable record is keyed by
+ * conversation plus the exact opaque server identity.
+ */
+export interface SkillActivationInput {
+	conversationId: string;
+	/** Successful server read; only `kind: 'skill'` results persist an activation. */
+	result: SkillReadResult;
+	/** CWD the read resolved under; used only for in-flight metadata, never persisted. */
+	cwd?: string;
+	/**
+	 * Model path: the model's own tool call id. The store anchors the paired
+	 * tool result to the persisted assistant message carrying this call id.
+	 * Absent on the slash path, which creates a synthetic assistant pair.
+	 */
+	toolCallId?: string;
+}
+
+/** Outcome of the shared activation operation. */
+export interface SkillActivationResult {
+	/** Typed durable SKILL metadata for the persisted tool result message. */
+	extra: DatabaseMessageExtraSkill;
+	/** True when this call created a NEW durable record; false on dedupe or session-only resource approval. */
+	created: boolean;
+	/**
+	 * The persisted tool result message when the operation created it (slash
+	 * path, and model path via the store-anchored pair); null otherwise, in
+	 * which case the caller persists the message with `extra` attached.
+	 */
+	toolResultMessage: DatabaseMessage | null;
+}
+
+/**
  * Durable successful-base-activation boundary.
  *
- * Task 3 ships the in-memory per-run implementation; Task 4 replaces it with
- * the shared successful-base persistence operation (typed Skill metadata
- * reconstructed after reload), so an approval survives runs. Keys are the
- * snapshot CWD plus the opaque server identity, so a changed CWD is a
- * distinct consent identity.
+ * Task 4 replaces the Task 3 in-memory per-run seam with the shared
+ * successful-base persistence operation: activations are reconstructed from
+ * the conversation's persisted typed SKILL metadata, keyed by the exact
+ * opaque server identity, so an approval survives runs and reloads. Only
+ * successful base reads persist; denial, failure, and unavailability record
+ * nothing, and resource approvals are session-scoped.
  */
 export interface SkillActivationStore {
-	isActivated(key: string): boolean;
-	recordActivation(key: string, identity: SkillIdentity): void | Promise<void>;
+	/** True when the conversation holds a durable base activation for the exact opaque id. */
+	isActivated(conversationId: string, identityId: string): boolean;
+	/** Load the conversation's persisted activations into the store's cache (e.g. at run start). */
+	loadConversation(conversationId: string): Promise<void>;
+	/** Record a successful base activation through the single shared persistence path. */
+	recordActivation(input: SkillActivationInput): Promise<SkillActivationResult>;
 }
 
 /** Inputs for one run's Skills adapters. */
@@ -55,6 +94,10 @@ export interface SkillRunAdaptersOptions {
 	snapshot: SkillRunSnapshot;
 	packed: SkillPackedCatalog;
 	definitions: OpenAIToolDefinition[];
+	/** Conversation the run belongs to; the durable activation store is keyed by it. */
+	conversationId: string;
+	/** The durable conversation-scoped activation store (Task 4). */
+	activation: SkillActivationStore;
 	/**
 	 * The established consent mechanism: pauses for an explicit allow/deny
 	 * decision and resolves it. `skill` carries only safe server-returned
@@ -66,7 +109,22 @@ export interface SkillRunAdaptersOptions {
 		skill?: SkillConsentInfo,
 		signal?: AbortSignal
 	) => Promise<ToolPermissionDecision>;
-	activation?: SkillActivationStore;
+}
+
+/**
+ * Result of one `SkillRunAdapters.execute` call. Adds the durable-activation
+ * hand-off to the generic tool result: when the shared operation created the
+ * paired tool result message, `activationRecorded` + `recordedToolResultMessageId`
+ * tell the agentic flow to reuse it instead of creating a second message;
+ * `extras` carry the typed SKILL metadata for messages the flow persists.
+ */
+export interface SkillToolExecutionResult extends ToolExecutionResult {
+	/** True when a NEW durable base activation was persisted by the shared store. */
+	activationRecorded?: boolean;
+	/** The tool result message the store created for the activation. */
+	recordedToolResultMessageId?: string;
+	/** Typed SKILL metadata to attach to the flow-persisted tool result message. */
+	extras?: DatabaseMessageExtra[];
 }
 
 /**
@@ -153,14 +211,6 @@ export function listSkillContent(entries: readonly SkillCatalogEntry[]): string 
 	);
 }
 
-/**
- * Consent identity: the snapshot CWD plus the opaque server identity. The
- * same opaque id under a different CWD requires a distinct consent decision.
- */
-export function consentKeyFor(cwd: string | undefined, identityId: string): string {
-	return `${cwd ?? ''}\u0000${identityId}`;
-}
-
 /** Structured no-content/no-activation denial result (never carries XML). */
 export function skillDenialResult(toolName: string): string {
 	return JSON.stringify({
@@ -175,18 +225,6 @@ export function skillErrorResult(toolName: string, message: string): string {
 	return JSON.stringify({ message, status: 'error', tool: toolName });
 }
 
-/** Per-run in-memory activation store; the Task 4 durable store replaces it. */
-export function createInMemorySkillActivationStore(): SkillActivationStore {
-	const activated = new Set<string>();
-
-	return {
-		isActivated: (key) => activated.has(key),
-		recordActivation: (key) => {
-			activated.add(key);
-		}
-	};
-}
-
 /**
  * One run's Skills adapters. Exists only when the run's frozen snapshot
  * authorized at least one adapter; it holds no mutable catalog state, never
@@ -198,6 +236,7 @@ export class SkillRunAdapters {
 	private readonly _definitions: readonly OpenAIToolDefinition[];
 	private readonly _snapshotNames: Set<string>;
 	private readonly _registeredNames: Set<string>;
+	private readonly _conversationId: string;
 	private readonly _activation: SkillActivationStore;
 	private readonly _requestPermission: SkillRunAdaptersOptions['requestPermission'];
 	/** One shared pending consent decision per consent identity. */
@@ -209,7 +248,8 @@ export class SkillRunAdapters {
 		this._definitions = options.definitions;
 		this._snapshotNames = new Set(options.snapshot.entries.map((entry) => entry.name));
 		this._registeredNames = new Set(options.definitions.map((def) => def.function.name));
-		this._activation = options.activation ?? createInMemorySkillActivationStore();
+		this._conversationId = options.conversationId;
+		this._activation = options.activation;
 		this._requestPermission = options.requestPermission;
 	}
 
@@ -230,7 +270,10 @@ export class SkillRunAdapters {
 		return decorateSkillPrompt(messages, this.envelope);
 	}
 
-	async execute(toolCall: AgenticToolCallPayload, signal?: AbortSignal): Promise<ToolExecutionResult> {
+	async execute(
+		toolCall: AgenticToolCallPayload,
+		signal?: AbortSignal
+	): Promise<SkillToolExecutionResult> {
 		const name = toolCall.function.name;
 		let args: Record<string, unknown>;
 
@@ -248,7 +291,7 @@ export class SkillRunAdapters {
 		}
 
 		if (name === SKILL_READ_TOOL) {
-			return this.executeRead(args, signal);
+			return this.executeRead(args, signal, toolCall.id);
 		}
 
 		return {
@@ -264,8 +307,9 @@ export class SkillRunAdapters {
 	 */
 	private async executeRead(
 		args: Record<string, unknown>,
-		signal?: AbortSignal
-	): Promise<ToolExecutionResult> {
+		signal?: AbortSignal,
+		toolCallId?: string
+	): Promise<SkillToolExecutionResult> {
 		const name = args.name;
 		const path = args.path;
 
@@ -310,25 +354,47 @@ export class SkillRunAdapters {
 			return { content: skillDenialResult(SKILL_READ_TOOL), isError: true };
 		}
 
+		// Allowed: route through the single shared durable persistence
+		// operation. A NEW base activation persists the paired tool result
+		// message itself; deduped base reads and session-only resource
+		// approvals hand the typed metadata back for the flow to attach.
+		const record = await this._activation.recordActivation({
+			conversationId: this._conversationId,
+			result,
+			cwd: this._snapshot.cwd,
+			...(toolCallId !== undefined ? { toolCallId } : {})
+		});
+
+		if (record.created && record.toolResultMessage) {
+			return {
+				content: result.content_xml,
+				isError: false,
+				activationRecorded: true,
+				recordedToolResultMessageId: record.toolResultMessage.id,
+				extras: [record.extra]
+			};
+		}
+
 		// Server XML is opaque model content, preserved byte-for-byte.
-		return { content: result.content_xml, isError: false };
+		return { content: result.content_xml, isError: false, extras: [record.extra] };
 	}
 
 	/**
-	 * Per-identity consent: an activated identity proceeds; an unapproved one
-	 * pauses in the established consent mechanism. Concurrent reads of the
-	 * same resolved identity share one pending decision.
+	 * Per-identity consent: an identity with a durable activation proceeds;
+	 * an unapproved one pauses in the established consent mechanism.
+	 * Concurrent reads of the same resolved identity share one pending
+	 * decision; only explicit allow resumes past the pause.
 	 */
 	private async authorize(
 		result: SkillReadResult,
 		path: string | undefined,
 		signal?: AbortSignal
 	): Promise<'allowed' | 'denied'> {
-		const key = consentKeyFor(this._snapshot.cwd, result.skill.id);
+		const identityId = result.skill.id;
 
-		if (this._activation.isActivated(key)) return 'allowed';
+		if (this._activation.isActivated(this._conversationId, identityId)) return 'allowed';
 
-		const pending = this._pendingDecisions.get(key);
+		const pending = this._pendingDecisions.get(identityId);
 
 		if (pending) return pending;
 
@@ -351,17 +417,13 @@ export class SkillRunAdapters {
 					return 'denied' as const;
 				}
 
-				// Explicit per-identity consent records the successful base
-				// activation through the shared seam (Task 4's durable store).
-				await this._activation.recordActivation(key, result.skill);
-
 				return 'allowed' as const;
 			})
 			.finally(() => {
-				this._pendingDecisions.delete(key);
+				this._pendingDecisions.delete(identityId);
 			});
 
-		this._pendingDecisions.set(key, decision);
+		this._pendingDecisions.set(identityId, decision);
 
 		return decision;
 	}

@@ -1,5 +1,6 @@
 import { AttachmentType, ReasoningEffort } from '$lib/enums';
 import type { ChatMessageTimings, ChatMessageType, ChatRole } from '$lib/types/chat';
+import type { SkillMetadata } from '$lib/types/skills';
 
 export interface McpServerOverride {
 	serverId: string;
@@ -90,6 +91,38 @@ export interface DatabaseMessageExtraMcpResource {
 	mimeType?: string;
 }
 
+/**
+ * Durable Skills tool-result metadata attached to `read_skill` tool result
+ * messages. Carries only server-returned safe facts: the opaque skill id,
+ * display name, scope, provider, and the structured server skill metadata —
+ * never host paths, roots, or parsed `content_xml`.
+ *
+ * `kind: 'base'` records persist successful approved base activations (the
+ * shared model/slash persistence operation); their mere presence authorizes
+ * later resource reads for the exact opaque id after reload. `kind:
+ * 'resource'` records tag authorized resource results and are never treated
+ * as activations.
+ */
+export interface DatabaseMessageExtraSkill {
+	type: AttachmentType.SKILL;
+	/** 'base' = persisted successful base activation; 'resource' = authorized resource result. */
+	kind: 'base' | 'resource';
+	/** Approval/success state of the underlying read; only successful reads persist a record. */
+	state: 'approved';
+	/** Server-returned display name. */
+	name: string;
+	/** Server-returned scope. */
+	scope: 'global' | 'project';
+	/** Server-returned provider label. */
+	provider: string;
+	/** Opaque server-owned skill id; the durable activation identity. */
+	skillId: string;
+	/** Structured server skill metadata (base records only, when the server returned any). */
+	metadata?: SkillMetadata;
+	/** Requested resource path (resource records only). */
+	path?: string;
+}
+
 export type DatabaseMessageExtra =
 	| DatabaseMessageExtraImageFile
 	| DatabaseMessageExtraTextFile
@@ -98,6 +131,7 @@ export type DatabaseMessageExtra =
 	| DatabaseMessageExtraPdfFile
 	| DatabaseMessageExtraMcpPrompt
 	| DatabaseMessageExtraMcpResource
+	| DatabaseMessageExtraSkill
 	| DatabaseMessageExtraLegacyContext;
 
 export interface DatabaseMessage {

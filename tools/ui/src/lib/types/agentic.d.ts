@@ -149,6 +149,11 @@ export interface AgenticFlowCallbacks {
 		content: string,
 		extras?: DatabaseMessageExtra[]
 	) => Promise<void>;
+	/** Notifies the message-owning callback layer that a tool result message
+	 *  was created outside the flow's own `createToolResultMessage` (the
+	 *  shared Skills activation operation persisted it directly), so the
+	 *  parent pointer for the next assistant turn tracks the new leaf. */
+	onToolResultMessageCreated?: (messageId: string) => void;
 	/** Create a new assistant message for the next agentic turn */
 	createAssistantMessage?: () => Promise<DatabaseMessage>;
 	/** Entire agentic flow is complete */

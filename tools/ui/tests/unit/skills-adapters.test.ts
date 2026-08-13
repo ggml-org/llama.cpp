@@ -3,7 +3,6 @@ import {
 	SKILL_LIST_TOOL,
 	SKILL_READ_TOOL,
 	buildSkillToolDefinitions,
-	consentKeyFor,
 	decorateSkillPrompt,
 	listSkillContent,
 	skillDenialResult,
@@ -238,17 +237,6 @@ describe('listSkillContent', () => {
 		]);
 		expect(content).not.toContain('<skill>');
 		expect(content).not.toContain('opaque-');
-	});
-});
-
-describe('consentKeyFor', () => {
-	it('treats the same opaque id under different CWDs as distinct consent identities', () => {
-		expect(consentKeyFor('/a', 'opaque-1')).not.toBe(consentKeyFor('/b', 'opaque-1'));
-		expect(consentKeyFor(undefined, 'opaque-1')).not.toBe(consentKeyFor('/a', 'opaque-1'));
-	});
-
-	it('is stable for the same CWD and id', () => {
-		expect(consentKeyFor('/a', 'opaque-1')).toBe(consentKeyFor('/a', 'opaque-1'));
 	});
 });
 

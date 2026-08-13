@@ -1,14 +1,9 @@
 import { buildSkillRunSnapshot } from '$lib/services/skills-packing.service';
-import {
-	SKILL_LIST_TOOL,
-	SKILL_READ_TOOL,
-	SKILL_SERVER_LABEL,
-	SkillRunAdapters,
-	consentKeyFor,
-	createInMemorySkillActivationStore
-} from '$lib/services/skills-adapters.service';
+import { SKILL_LIST_TOOL, SKILL_READ_TOOL, SKILL_SERVER_LABEL, SkillRunAdapters } from '$lib/services/skills-adapters.service';
+import { skillActivationExtra, skillResourceExtra } from '$lib/services/skills-activation.service';
 import { SkillsService } from '$lib/services/skills.service';
 import type {
+	SkillActivationInput,
 	SkillActivationStore,
 	SkillRunAdaptersOptions
 } from '$lib/services/skills-adapters.service';
@@ -19,8 +14,9 @@ import type {
 	SkillIdentity,
 	SkillPackedCatalog
 } from '$lib/types';
-import { ToolPermissionDecision } from '$lib/enums';
+import { MessageRole, ToolPermissionDecision } from '$lib/enums';
 import type { AgenticToolCallPayload } from '$lib/types/agentic';
+import type { DatabaseMessage } from '$lib/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('$lib/services/skills.service', () => ({
@@ -66,6 +62,16 @@ function baseResult(name: string, overrides: Partial<SkillBaseReadResult> = {}):
 	};
 }
 
+function resourceResult(name: string, path: string): SkillBaseReadResult {
+	return {
+		kind: 'resource',
+		skill: { id: `opaque-${name}`, name, scope: 'project', provider: 'agents' },
+		resource: { path },
+		content_xml: `<skill_resource name="${name}" path="${path}">data</skill_resource>`,
+		diagnostics: []
+	};
+}
+
 function defaultPermission(): PermissionMock {
 	const mock = vi.fn<PermissionMock>();
 
@@ -74,9 +80,62 @@ function defaultPermission(): PermissionMock {
 	return mock;
 }
 
+/**
+ * Minimal durable-store double recording every activation input. Mirrors the
+ * real store's contract: a base read with an unactivated identity creates a
+ * record and returns the persisted tool result message; everything else
+ * dedupes or is session-only.
+ */
+function fakeStore(): SkillActivationStore & { inputs: SkillActivationInput[]; activatedIds: Set<string> } {
+	const activatedIds = new Set<string>();
+	const inputs: SkillActivationInput[] = [];
+
+	return {
+		activatedIds,
+		inputs,
+		isActivated: (_conversationId, identityId) => activatedIds.has(identityId),
+		loadConversation: vi.fn().mockResolvedValue(undefined),
+		recordActivation: vi.fn(async (input) => {
+			inputs.push(input);
+
+			const id = input.result.skill.id;
+
+			if (input.result.kind === 'resource') {
+				activatedIds.add(id);
+
+				return {
+					created: false,
+					extra: skillResourceExtra(input.result),
+					toolResultMessage: null
+				};
+			}
+
+			if (activatedIds.has(id)) {
+				return {
+					created: false,
+					extra: skillActivationExtra(input.result),
+					toolResultMessage: null
+				};
+			}
+
+			activatedIds.add(id);
+
+			return {
+				created: true,
+				extra: skillActivationExtra(input.result),
+				toolResultMessage: {
+					id: 'recorded-tool-result',
+					role: MessageRole.TOOL
+				} as DatabaseMessage
+			};
+		})
+	};
+}
+
 function makeAdapters(options: {
 	names?: string[];
 	cwd?: string;
+	conversationId?: string;
 	packed?: SkillPackedCatalog;
 	requestPermission?: SkillRunAdaptersOptions['requestPermission'];
 	activation?: SkillActivationStore;
@@ -100,8 +159,9 @@ function makeAdapters(options: {
 				type: 'function'
 			}
 		],
+		conversationId: options.conversationId ?? 'conv-1',
 		requestPermission: options.requestPermission ?? defaultPermission(),
-		...(options.activation ? { activation: options.activation } : {})
+		activation: options.activation ?? fakeStore()
 	});
 }
 
@@ -196,11 +256,11 @@ describe('SkillRunAdapters', () => {
 		expect(mockRead).not.toHaveBeenCalled();
 	});
 
-	it('pauses an unapproved resolved identity with safe identity metadata and resumes on allow with byte-preserved XML', async () => {
+	it('pauses an unapproved identity, resumes on allow, and records the activation through the shared store', async () => {
 		mockRead.mockResolvedValue(baseResult('demo-skill'));
 		const requestPermission = defaultPermission();
-		const activation = createInMemorySkillActivationStore();
-		const adapters = makeAdapters({ requestPermission, activation });
+		const activation = fakeStore();
+		const adapters = makeAdapters({ conversationId: 'conv-9', cwd: '/run-cwd', requestPermission, activation });
 
 		const result = await adapters.execute(readCall(SKILL_READ_TOOL), new AbortController().signal);
 
@@ -212,7 +272,16 @@ describe('SkillRunAdapters', () => {
 		);
 		expect(result.isError).toBe(false);
 		expect(result.content).toBe('<skill_content name="demo-skill">body</skill_content>');
-		expect(activation.isActivated(consentKeyFor(undefined, 'opaque-demo-skill'))).toBe(true);
+		expect(result.activationRecorded).toBe(true);
+		expect(result.recordedToolResultMessageId).toBe('recorded-tool-result');
+		expect(result.extras).toHaveLength(1);
+		expect(activation.inputs).toEqual([
+			expect.objectContaining({
+				conversationId: 'conv-9',
+				cwd: '/run-cwd',
+				toolCallId: 'call_1'
+			})
+		]);
 	});
 
 	it('returns a structured no-content denial on deny and records no activation', async () => {
@@ -220,7 +289,7 @@ describe('SkillRunAdapters', () => {
 		const requestPermission = defaultPermission();
 
 		requestPermission.mockResolvedValue(ToolPermissionDecision.DENY);
-		const activation = createInMemorySkillActivationStore();
+		const activation = fakeStore();
 		const adapters = makeAdapters({ requestPermission, activation });
 
 		const result = await adapters.execute(readCall(SKILL_READ_TOOL));
@@ -232,13 +301,14 @@ describe('SkillRunAdapters', () => {
 			tool: SKILL_READ_TOOL
 		});
 		expect(result.content).not.toContain('skill_content');
-		expect(activation.isActivated(consentKeyFor(undefined, 'opaque-demo-skill'))).toBe(false);
+		expect(activation.inputs).toHaveLength(0);
+		expect(activation.activatedIds.has('opaque-demo-skill')).toBe(false);
 	});
 
-	it('never consents and never activates on a failed server read', async () => {
+	it('never consents and never records an activation on a failed server read', async () => {
 		mockRead.mockRejectedValue(new Error('skills disabled'));
 		const requestPermission = defaultPermission();
-		const activation = createInMemorySkillActivationStore();
+		const activation = fakeStore();
 		const adapters = makeAdapters({ requestPermission, activation });
 
 		const result = await adapters.execute(readCall(SKILL_READ_TOOL));
@@ -246,25 +316,14 @@ describe('SkillRunAdapters', () => {
 		expect(result.isError).toBe(true);
 		expect(JSON.parse(result.content).status).toBe('error');
 		expect(requestPermission).not.toHaveBeenCalled();
-		expect(activation.isActivated(consentKeyFor(undefined, 'opaque-demo-skill'))).toBe(false);
+		expect(activation.inputs).toHaveLength(0);
 	});
 
-	it('allows a resource read only after the exact resolved identity is activated', async () => {
-		const activation = createInMemorySkillActivationStore();
+	it('authorizes a resource read from the durable base activation without consent and tags the result', async () => {
+		const activation = fakeStore();
 
-		activation.recordActivation(consentKeyFor('/a', 'opaque-demo-skill'), {
-			id: 'opaque-demo-skill',
-			name: 'demo-skill',
-			scope: 'project',
-			provider: 'agents'
-		});
-		mockRead.mockResolvedValue({
-			kind: 'resource',
-			skill: { id: 'opaque-demo-skill', name: 'demo-skill', scope: 'project', provider: 'agents' },
-			resource: { path: 'refs/DETAILS.md' },
-			content_xml: '<skill_resource name="demo-skill" path="refs/DETAILS.md">data</skill_resource>',
-			diagnostics: []
-		});
+		activation.activatedIds.add('opaque-demo-skill');
+		mockRead.mockResolvedValue(resourceResult('demo-skill', 'refs/DETAILS.md'));
 		const requestPermission = defaultPermission();
 		const adapters = makeAdapters({ cwd: '/a', requestPermission, activation });
 
@@ -275,18 +334,14 @@ describe('SkillRunAdapters', () => {
 			'<skill_resource name="demo-skill" path="refs/DETAILS.md">data</skill_resource>'
 		);
 		expect(requestPermission).not.toHaveBeenCalled();
+		expect(result.extras?.[0].kind).toBe('resource');
+		expect(result.extras?.[0].path).toBe('refs/DETAILS.md');
 	});
 
-	it('runs the approval flow for a resource read of an unapproved identity, showing the requested path', async () => {
-		mockRead.mockResolvedValue({
-			kind: 'resource',
-			skill: { id: 'opaque-demo-skill', name: 'demo-skill', scope: 'project', provider: 'agents' },
-			resource: { path: 'refs/DETAILS.md' },
-			content_xml: '<skill_resource>data</skill_resource>',
-			diagnostics: []
-		});
+	it('runs the approval flow for a resource read of an unapproved identity, showing the requested path, with a session-only record', async () => {
+		mockRead.mockResolvedValue(resourceResult('demo-skill', 'refs/DETAILS.md'));
 		const requestPermission = defaultPermission();
-		const activation = createInMemorySkillActivationStore();
+		const activation = fakeStore();
 		const adapters = makeAdapters({ requestPermission, activation });
 
 		const result = await adapters.execute(readCall(SKILL_READ_TOOL, 'refs/DETAILS.md'), new AbortController().signal);
@@ -298,7 +353,28 @@ describe('SkillRunAdapters', () => {
 			expect.anything()
 		);
 		expect(result.isError).toBe(false);
-		expect(result.content).toBe('<skill_resource>data</skill_resource>');
+		expect(result.content).toBe('<skill_resource name="demo-skill" path="refs/DETAILS.md">data</skill_resource>');
+		// Resource approvals are session-only: no durable record, the flow persists the message.
+		expect(result.activationRecorded).toBeUndefined();
+		expect(result.extras?.[0].kind).toBe('resource');
+		expect(activation.inputs).toHaveLength(1);
+	});
+
+	it('does not re-prompt a second base read of an already-activated identity; the store dedupes the record', async () => {
+		mockRead.mockResolvedValue(baseResult('demo-skill'));
+		const requestPermission = defaultPermission();
+		const activation = fakeStore();
+		const adapters = makeAdapters({ requestPermission, activation });
+
+		await adapters.execute(readCall(SKILL_READ_TOOL));
+		await adapters.execute(readCall(SKILL_READ_TOOL));
+
+		expect(requestPermission).toHaveBeenCalledTimes(1);
+		expect(mockRead).toHaveBeenCalledTimes(2);
+		// Both allowed reads route through the shared operation; the store
+		// created exactly one durable record (the second call deduped).
+		expect(activation.inputs).toHaveLength(2);
+		expect(activation.activatedIds.has('opaque-demo-skill')).toBe(true);
 	});
 
 	it('shares one pending decision across concurrent base reads of the same resolved identity', async () => {
@@ -312,7 +388,8 @@ describe('SkillRunAdapters', () => {
 					resolvePermission = resolve;
 				})
 		);
-		const adapters = makeAdapters({ requestPermission });
+		const activation = fakeStore();
+		const adapters = makeAdapters({ requestPermission, activation });
 
 		const first = adapters.execute(readCall(SKILL_READ_TOOL));
 		const second = adapters.execute(readCall(SKILL_READ_TOOL));
@@ -328,16 +405,14 @@ describe('SkillRunAdapters', () => {
 
 		expect(firstResult.content).toBe('<skill_content name="demo-skill">body</skill_content>');
 		expect(secondResult.content).toBe('<skill_content name="demo-skill">body</skill_content>');
+		// One durable record; the second read deduped through the store.
+		expect(activation.inputs).toHaveLength(2);
+		expect(firstResult.activationRecorded).toBe(true);
+		expect(secondResult.activationRecorded).toBeUndefined();
 	});
 
 	it('does not deduplicate resource reads themselves, but shares their approval decision', async () => {
-		mockRead.mockResolvedValue({
-			kind: 'resource',
-			skill: { id: 'opaque-demo-skill', name: 'demo-skill', scope: 'project', provider: 'agents' },
-			resource: { path: 'refs/DETAILS.md' },
-			content_xml: '<skill_resource>data</skill_resource>',
-			diagnostics: []
-		});
+		mockRead.mockResolvedValue(resourceResult('demo-skill', 'refs/DETAILS.md'));
 		let resolvePermission!: (decision: ToolPermissionDecision) => void;
 		const requestPermission = defaultPermission();
 
@@ -363,21 +438,6 @@ describe('SkillRunAdapters', () => {
 		const results = await Promise.all([first, second]);
 
 		expect(results.every((r) => r.isError === false)).toBe(true);
-	});
-
-	it('requires a distinct consent identity when the CWD changes', async () => {
-		const requestPermission = defaultPermission();
-
-		mockRead.mockResolvedValue(baseResult('demo-skill'));
-
-		const adaptersA = makeAdapters({ cwd: '/a', requestPermission });
-		const adaptersB = makeAdapters({ cwd: '/b', requestPermission });
-
-		await adaptersA.execute(readCall(SKILL_READ_TOOL));
-		await adaptersB.execute(readCall(SKILL_READ_TOOL));
-
-		// Same opaque id under a different CWD re-prompts (distinct consent key).
-		expect(requestPermission).toHaveBeenCalledTimes(2);
 	});
 
 	it('preserves server XML byte-for-byte in allowed tool results', async () => {
@@ -406,34 +466,18 @@ describe('SkillRunAdapters', () => {
 		expect(mockRead).not.toHaveBeenCalled();
 	});
 
-	it('does not re-prompt a second base read of an already-activated identity', async () => {
-		mockRead.mockResolvedValue(baseResult('demo-skill'));
-		const requestPermission = defaultPermission();
-		const adapters = makeAdapters({ requestPermission });
-
-		await adapters.execute(readCall(SKILL_READ_TOOL));
-		await adapters.execute(readCall(SKILL_READ_TOOL));
-
-		expect(requestPermission).toHaveBeenCalledTimes(1);
-		expect(mockRead).toHaveBeenCalledTimes(2);
-	});
-
-	it('records activation through the injected activation store (Task 4 durable seam)', async () => {
-		const recorded: { key: string; identity: SkillIdentity }[] = [];
-		const activation: SkillActivationStore = {
-			isActivated: () => false,
-			recordActivation: (key, identity) => {
-				recorded.push({ key, identity });
-			}
-		};
+	it('routes the shared durable record with the model tool call id (activation reconstruction facts)', async () => {
+		const activation = fakeStore();
 
 		mockRead.mockResolvedValue(baseResult('demo-skill'));
-		const adapters = makeAdapters({ activation });
+		const adapters = makeAdapters({ conversationId: 'conv-11', activation });
 
 		await adapters.execute(readCall(SKILL_READ_TOOL));
 
-		expect(recorded).toHaveLength(1);
-		expect(recorded[0].key).toBe(consentKeyFor(undefined, 'opaque-demo-skill'));
-		expect(recorded[0].identity.id).toBe('opaque-demo-skill');
+		expect(activation.inputs[0]).toMatchObject({
+			conversationId: 'conv-11',
+			toolCallId: 'call_1'
+		});
+		expect(activation.inputs[0].result.skill.id).toBe('opaque-demo-skill');
 	});
 });

@@ -115,6 +115,79 @@ export class DatabaseService {
 	}
 
 	/**
+	 * Atomically creates an assistant tool-call message and its paired tool
+	 * result message in ONE transaction: the assistant is attached to
+	 * `parentId`, the tool result becomes its only child, the parent's
+	 * children array and the conversation's currNode are updated, and the
+	 * pairing is preserved by construction. Used by the Skills explicit
+	 * `/skills <name>` activation, which must persist the valid synthetic
+	 * assistant tool call and its tool result as a unit.
+	 *
+	 * @param assistant - Assistant message data (without id); must carry a parseable `toolCalls` array whose first entry id matches `toolResult.toolCallId`.
+	 * @param toolResult - Tool result message data (without id)
+	 * @param parentId - Parent message ID to attach the assistant to
+	 * @returns The created messages as a tuple [assistant, toolResult]
+	 */
+	static async createMessageBranchPair(
+		assistant: Omit<DatabaseMessage, 'id'>,
+		toolResult: Omit<DatabaseMessage, 'id'>,
+		parentId: string | null
+	): Promise<[DatabaseMessage, DatabaseMessage]> {
+		return await db.transaction(
+			'rw',
+			[db[IDXDB_TABLES.conversations], db[IDXDB_TABLES.messages]],
+			async () => {
+				if (parentId !== null) {
+					const parentMessage = await db[IDXDB_TABLES.messages].get(parentId);
+
+					if (!parentMessage) {
+						throw new Error(`Parent message ${parentId} not found`);
+					}
+				}
+
+				const assistantMessage: DatabaseMessage = {
+					...assistant,
+					children: [],
+					id: uuid(),
+					parent: parentId,
+					toolCalls: assistant.toolCalls ?? ''
+				};
+
+				await db[IDXDB_TABLES.messages].add(assistantMessage);
+
+				if (parentId !== null) {
+					const parentMessage = await db[IDXDB_TABLES.messages].get(parentId);
+
+					if (parentMessage) {
+						await db[IDXDB_TABLES.messages].update(parentId, {
+							children: [...parentMessage.children, assistantMessage.id]
+						});
+					}
+				}
+
+				const toolResultMessage: DatabaseMessage = {
+					...toolResult,
+					children: [],
+					id: uuid(),
+					parent: assistantMessage.id,
+					toolCalls: toolResult.toolCalls ?? ''
+				};
+
+				await db[IDXDB_TABLES.messages].add(toolResultMessage);
+				await db[IDXDB_TABLES.messages].update(assistantMessage.id, {
+					children: [toolResultMessage.id]
+				});
+
+				await this.updateConversation(assistant.convId, {
+					currNode: toolResultMessage.id
+				});
+
+				return [assistantMessage, toolResultMessage];
+			}
+		);
+	}
+
+	/**
 	 * Creates a root message for a new conversation.
 	 * Root messages are not displayed but serve as the tree root for branching.
 	 *

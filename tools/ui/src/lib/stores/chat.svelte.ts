@@ -1529,6 +1529,12 @@ class ChatStore {
 				conversationsStore.updateMessageAtIndex(idx, { extra: updatedExtras });
 				DatabaseService.updateMessage(messageId, { extra: updatedExtras }).catch(console.error);
 			},
+			onToolResultMessageCreated: (messageId: string) => {
+				// A tool result created outside createToolResultMessage (the
+				// shared Skills activation operation) still advances the
+				// parent pointer so the next turn anchors to the new leaf.
+				lastCreatedInFlow = messageId;
+			},
 			onChunk: (chunk: string) => {
 				streamedContent += chunk;
 				updateStreamingUI();

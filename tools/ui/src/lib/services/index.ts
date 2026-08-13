@@ -380,12 +380,12 @@ export {
  * unapproved resolved identities in the established consent mechanism;
  * concurrent reads of the same identity share one decision, denial yields a
  * structured no-content result, and allowed `content_xml` is preserved
- * byte-for-byte. The `SkillActivationStore` seam is where Task 4's shared
- * successful-base persistence operation plugs in.
+ * byte-for-byte. Allowed reads route through the durable `SkillActivationStore`
+ * (see stores/skill-activation.svelte.ts) - the single shared successful-base
+ * persistence path for model and explicit `/skills <name>` activations.
  *
  * @see buildSkillToolDefinitions — collision-safe adapter registration
  * @see decorateSkillPrompt — byte-preserved envelope decoration
- * @see consentKeyFor — snapshot-CWD + opaque-identity consent key
  */
 export {
 	SKILL_LIST_TOOL,
@@ -393,8 +393,6 @@ export {
 	SKILL_SERVER_LABEL,
 	SkillRunAdapters,
 	buildSkillToolDefinitions,
-	consentKeyFor,
-	createInMemorySkillActivationStore,
 	decorateSkillPrompt,
 	listSkillContent,
 	skillDenialResult,
@@ -402,7 +400,40 @@ export {
 } from './skills-adapters.service';
 export type {
 	SkillActivationStore,
+	SkillActivationInput,
+	SkillActivationResult,
 	SkillAdapterDiagnostic,
 	SkillAdaptersBuildResult,
-	SkillRunAdaptersOptions
+	SkillRunAdaptersOptions,
+	SkillToolExecutionResult
 } from './skills-adapters.service';
+
+/**
+ * **SkillsActivationService** — durable Skills activation record + presentation
+ *
+ * Pure helpers for the shared successful-base-activation operation: the typed
+ * `DatabaseMessageExtraSkill` record builders, its validation, the synthetic
+ * assistant tool-call + paired tool-result pair for `/skills <name>`, the
+ * reconstruction helpers that read durable metadata back, and the renderer
+ * meta resolution. Never touches host paths, roots, or parses `content_xml`.
+ *
+ * @see skillActivationExtra — typed durable base-activation record
+ * @see buildSkillActivationPair — synthetic assistant/tool-result pair
+ * @see resolveSkillSectionMeta — safe renderer metadata with generic fallback
+ */
+export {
+	buildSkillActivationPair,
+	findBaseSkillActivation,
+	isBaseSkillActivation,
+	isSkillExtra,
+	isSkillToolSection,
+	resolveSkillSectionMeta,
+	skillActivationExtra,
+	skillExtraFromExtras,
+	skillExtraFromMessage,
+	skillResourceExtra
+} from './skills-activation.service';
+export type {
+	SkillActivationPairData,
+	SkillSectionMeta
+} from './skills-activation.service';
