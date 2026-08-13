@@ -43,10 +43,10 @@ import { ReadMediaService } from '$lib/services/read-media.service';
 import { SandboxService } from '$lib/services/sandbox.service';
 import { ToolsService } from '$lib/services/tools.service';
 // direct imports between stores, not via the barrel, to avoid circular deps
+import { AgenticGates } from '$lib/stores/agentic-gates.svelte';
 import { conversationsStore } from '$lib/stores/conversations.svelte';
 import { mcpStore } from '$lib/stores/mcp.svelte';
 import { modelsStore } from '$lib/stores/models.svelte';
-import { permissionsStore } from '$lib/stores/permissions.svelte';
 import { settingsStore } from '$lib/stores/settings.svelte';
 import { toolsStore } from '$lib/stores/tools.svelte';
 import type {
@@ -153,21 +153,8 @@ function toAgenticMessages(messages: ApiChatMessageData[]): AgenticMessage[] {
 
 class AgenticStore {
 	private _sessions = new SvelteMap<string, AgenticSession>();
-	/** Dedicated reactive state for pending permission requests (ensures immediate UI updates) */
-	private _pendingPermissions = new SvelteMap<
-		string,
-		{ toolName: string; serverLabel: string } | null
-	>();
-	/** Non-reactive: stores resolve functions for pending permission Promises */
-	private _permissionResolvers = new Map<string, (decision: ToolPermissionDecision) => void>();
-
-	/** Dedicated reactive state for pending continue requests (turn limit reached) */
-	private _pendingContinueRequests = new SvelteMap<string, boolean>();
-	/** Non-reactive: stores resolve functions for pending continue Promises */
-	private _continueResolvers = new Map<string, (shouldContinue: boolean) => void>();
-
-	/** Reactive: queued steering messages to inject between turns */
-	private _steeringMessages = new SvelteMap<string, SteeringMessage>();
+	// permission, continue and steering gates the loop waits on between turns
+	private gates = new AgenticGates();
 
 	get isReady(): boolean {
 		return true;
@@ -248,29 +235,19 @@ class AgenticStore {
 	pendingPermissionRequest(
 		conversationId: string
 	): { toolName: string; serverLabel: string } | null {
-		return this._pendingPermissions.get(conversationId) ?? null;
+		return this.gates.pendingPermissionRequest(conversationId);
 	}
 
 	pendingContinueRequest(conversationId: string): boolean {
-		return this._pendingContinueRequests.get(conversationId) ?? false;
+		return this.gates.pendingContinueRequest(conversationId);
 	}
 
 	resolveContinue(conversationId: string, shouldContinue: boolean): void {
-		const resolver = this._continueResolvers.get(conversationId);
-
-		if (resolver) {
-			this._continueResolvers.delete(conversationId);
-			resolver(shouldContinue);
-		}
+		this.gates.resolveContinue(conversationId, shouldContinue);
 	}
 
 	resolvePermission(conversationId: string, decision: ToolPermissionDecision): void {
-		const resolver = this._permissionResolvers.get(conversationId);
-
-		if (resolver) {
-			this._permissionResolvers.delete(conversationId);
-			resolver(decision);
-		}
+		this.gates.resolvePermission(conversationId, decision);
 	}
 
 	clearError(conversationId: string): void {
@@ -278,15 +255,15 @@ class AgenticStore {
 	}
 
 	hasPendingSteeringMessage(conversationId: string): boolean {
-		return this._steeringMessages.has(conversationId);
+		return this.gates.hasPendingSteeringMessage(conversationId);
 	}
 
 	pendingSteeringMessageContent(conversationId: string): string | null {
-		return this._steeringMessages.get(conversationId)?.content ?? null;
+		return this.gates.pendingSteeringMessageContent(conversationId);
 	}
 
 	pendingSteeringMessageExtras(conversationId: string): DatabaseMessageExtra[] | undefined {
-		return this._steeringMessages.get(conversationId)?.extras;
+		return this.gates.pendingSteeringMessageExtras(conversationId);
 	}
 
 	/**
@@ -298,14 +275,14 @@ class AgenticStore {
 		content: string,
 		extras?: DatabaseMessageExtra[]
 	): void {
-		this._steeringMessages.set(conversationId, { content, extras });
+		this.gates.injectSteeringMessage(conversationId, content, extras);
 	}
 
 	/**
 	 * Clear the pending steering message without consuming it.
 	 */
 	clearSteeringMessage(conversationId: string): void {
-		this._steeringMessages.delete(conversationId);
+		this.gates.clearSteeringMessage(conversationId);
 	}
 
 	/**
@@ -313,13 +290,7 @@ class AgenticStore {
 	 * Called by chatStore after the agentic flow exits.
 	 */
 	consumePendingSteeringMessage(conversationId: string): SteeringMessage | null {
-		const msg = this._steeringMessages.get(conversationId);
-
-		if (!msg) return null;
-
-		this._steeringMessages.delete(conversationId);
-
-		return msg;
+		return this.gates.consumePendingSteeringMessage(conversationId);
 	}
 
 	getConfig(settings: SettingsConfigType, perChatOverrides?: McpServerOverride[]): AgenticConfig {
@@ -346,97 +317,6 @@ class AgenticStore {
 		return JSON.parse(trimmed) as Record<string, unknown>;
 	}
 
-	private async requestPermission(
-		conversationId: string,
-		toolName: string,
-		serverLabel: string,
-		signal?: AbortSignal
-	): Promise<ToolPermissionDecision> {
-		const permissionKey = toolsStore.getPermissionKey(toolName);
-
-		if (permissionKey && permissionsStore.hasTool(permissionKey)) {
-			return ToolPermissionDecision.ONCE;
-		}
-
-		this._pendingPermissions.set(conversationId, { serverLabel, toolName });
-
-		return new Promise<ToolPermissionDecision>((resolve) => {
-			if (signal?.aborted) {
-				this._pendingPermissions.set(conversationId, null);
-				resolve(ToolPermissionDecision.DENY);
-
-				return;
-			}
-
-			this._permissionResolvers.set(conversationId, (decision) => {
-				this._pendingPermissions.set(conversationId, null);
-
-				if (decision === ToolPermissionDecision.ALWAYS && permissionKey) {
-					permissionsStore.allowTool(permissionKey);
-				} else if (decision === ToolPermissionDecision.ALWAYS_SERVER) {
-					const serverToolKeys = toolsStore.allTools
-						.filter((t) =>
-							t.serverName
-								? t.serverName === serverLabel
-								: toolsStore.getToolServerLabel(t.definition.function.name) === serverLabel
-						)
-						.map((t) => toolsStore.getPermissionKey(t.definition.function.name)!)
-						.filter((k): k is string => k !== null);
-
-					permissionsStore.allowTools(serverToolKeys);
-				}
-
-				resolve(decision);
-			});
-
-			signal?.addEventListener(
-				'abort',
-				() => {
-					const resolver = this._permissionResolvers.get(conversationId);
-
-					if (resolver) {
-						this._permissionResolvers.delete(conversationId);
-						this._pendingPermissions.set(conversationId, null);
-						resolve(ToolPermissionDecision.DENY);
-					}
-				},
-				{ once: true }
-			);
-		});
-	}
-
-	private async requestContinue(conversationId: string, signal?: AbortSignal): Promise<boolean> {
-		this._pendingContinueRequests.set(conversationId, true);
-
-		return new Promise<boolean>((resolve) => {
-			if (signal?.aborted) {
-				this._pendingContinueRequests.set(conversationId, false);
-				resolve(false);
-
-				return;
-			}
-
-			this._continueResolvers.set(conversationId, (shouldContinue) => {
-				this._pendingContinueRequests.set(conversationId, false);
-				resolve(shouldContinue);
-			});
-
-			signal?.addEventListener(
-				'abort',
-				() => {
-					const resolver = this._continueResolvers.get(conversationId);
-
-					if (resolver) {
-						this._continueResolvers.delete(conversationId);
-						this._pendingContinueRequests.set(conversationId, false);
-						resolve(false);
-					}
-				},
-				{ once: true }
-			);
-		});
-	}
-
 	async runAgenticFlow(params: AgenticFlowParams): Promise<AgenticFlowResult> {
 		const {
 			callbacks,
@@ -449,11 +329,7 @@ class AgenticStore {
 		} = params;
 
 		// Clear any pending permissions/continue requests for this conversation when starting a new flow
-		this._pendingPermissions.set(conversationId, null);
-		this._permissionResolvers.delete(conversationId);
-		this._pendingContinueRequests.set(conversationId, false);
-		this._continueResolvers.delete(conversationId);
-		this._steeringMessages.delete(conversationId);
+		this.gates.clear(conversationId);
 
 		// Ensure server tools are fetched before checking if agentic is enabled
 		if (toolsStore.serverTools.length === 0 && !toolsStore.loading) {
@@ -596,7 +472,7 @@ class AgenticStore {
 		while (true) {
 			if (turn >= maxTurns) {
 				// Turn limit reached - ask user whether to continue
-				const shouldContinue = await this.requestContinue(conversationId, signal);
+				const shouldContinue = await this.gates.requestContinue(conversationId, signal);
 
 				// Yield to allow Svelte to flush the UI update
 				await new Promise((r) => setTimeout(r, 0));
@@ -769,7 +645,7 @@ class AgenticStore {
 
 			// === Steering check: if a user message was queued during this turn, exit the flow.
 			// The caller (chatStore) will consume the pending message and re-send it normally.
-			if (this._steeringMessages.has(conversationId)) {
+			if (this.gates.hasPendingSteeringMessage(conversationId)) {
 				console.log('[AgenticStore] Steering message detected after turn, exiting agentic flow');
 				await onAssistantTurnComplete?.(
 					turnContent,
@@ -847,7 +723,7 @@ class AgenticStore {
 				}
 
 				// Check for pending steering message - skip remaining tool calls
-				if (this._steeringMessages.has(conversationId)) {
+				if (this.gates.hasPendingSteeringMessage(conversationId)) {
 					console.log(
 						`[AgenticStore] Steering message detected, skipping ${normalizedCalls.length - i} remaining tool call(s)`
 					);
@@ -872,7 +748,7 @@ class AgenticStore {
 				const toolName = toolCall.function.name;
 				const serverLabel = toolsStore.getToolServerLabel(toolName);
 				// Ask for permission before executing the tool
-				const permission = await this.requestPermission(
+				const permission = await this.gates.requestPermission(
 					conversationId,
 					toolName,
 					serverLabel,
@@ -1101,7 +977,7 @@ class AgenticStore {
 			}
 
 			// If tools were interrupted by a steering message, exit now instead of starting another LLM turn
-			if (this._steeringMessages.has(conversationId)) {
+			if (this.gates.hasPendingSteeringMessage(conversationId)) {
 				console.log(
 					'[AgenticStore] Steering message detected after tool execution, exiting agentic flow'
 				);
