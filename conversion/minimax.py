@@ -10,6 +10,7 @@ if TYPE_CHECKING:
 from .base import ModelBase, TextModel, MmprojModel, gguf
 
 @ModelBase.register("MiniMaxText01ForCausalLM")
+@ModelBase.register("MiniMaxM1ForCausalLM")
 class MiniMaxText01Model(TextModel):
     model_arch = gguf.MODEL_ARCH.MINIMAX01
 
