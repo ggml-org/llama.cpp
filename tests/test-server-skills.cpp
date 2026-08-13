@@ -224,6 +224,8 @@ static void test_catalog_diagnoses_invalid_candidates() {
     write_bytes(invalid_utf8 / "SKILL.md", "---\ndescription: x\n---\n\xff");
     const fs::path missing_description = write_skill(home, "agents", "missing-description");
     write_bytes(missing_description / "SKILL.md", "---\nname: missing-description\n---\nbody");
+    const fs::path malformed_frontmatter = write_skill(home, "agents", "malformed-frontmatter");
+    write_bytes(malformed_frontmatter / "SKILL.md", "---\nname: malformed-frontmatter\ndescription: desc\nbody without closing delimiter");
 
     server_skills skills = make_skills(home, project, /* trust_project_skills */ false);
     const server_http_res_ptr response = do_get(skills);
@@ -234,9 +236,15 @@ static void test_catalog_diagnoses_invalid_candidates() {
     for (const auto & item : body.at("diagnostics")) {
         codes.insert(item.at("code").get<std::string>());
     }
+    CHECK(codes.count("skill_invalid_frontmatter") == 1);
     CHECK(codes.count("skill_too_large") == 1);
     CHECK(codes.count("skill_invalid_utf8") == 1);
     CHECK(codes.count("skill_missing_description") == 1);
+    bool malformed_loaded = false;
+    for (const auto & skill : body.at("skills")) {
+        malformed_loaded = malformed_loaded || skill.at("name") == "malformed-frontmatter";
+    }
+    CHECK(!malformed_loaded);
 }
 
 static void test_reads_current_base_and_resources() {
