@@ -285,6 +285,15 @@ llama_context::llama_context(
         }
     }
 
+    {
+        const char * LLAMA_GRAPH_INPUT_DEBUG = getenv("LLAMA_GRAPH_INPUT_DEBUG");
+        graph_input_debug = LLAMA_GRAPH_INPUT_DEBUG ? (atoi(LLAMA_GRAPH_INPUT_DEBUG) != 0) : graph_input_debug;
+
+        if (graph_input_debug) {
+            LLAMA_LOG_WARN("%s: graph input debug enabled\n", __func__);
+        }
+    }
+
     // ref: https://github.com/ggml-org/llama.cpp/pull/17046#discussion_r2503085732
     cparams.n_ctx = GGML_PAD(cparams.n_ctx, 256);
 
@@ -579,7 +588,7 @@ void llama_context::resolve_fused_ops(const llama_memory_context_i * mctx, uint3
     }
 }
 
-static int llama_graph_n_input_tensors(ggml_cgraph * gf) {
+static int llama_graph_n_input_tensors(ggml_cgraph * gf, int debug) {
     std::unordered_map<const ggml_tensor *, std::vector<ggml_tensor *>> users;
     for (int i = 0; i < ggml_graph_n_nodes(gf); ++i) {
         ggml_tensor * node = ggml_graph_node(gf, i);
@@ -602,9 +611,11 @@ static int llama_graph_n_input_tensors(ggml_cgraph * gf) {
             LLAMA_LOG_WARN("%s: input tensor '%s' has op %s, expected GGML_OP_NONE\n",
                     __func__, tensor->name, ggml_op_name(tensor->op));
         }
-        for (const ggml_tensor * node : nodes) {
-            LLAMA_LOG_DEBUG("%s: input tensor '%s' is used by node '%s' (%s)\n",
-                    __func__, tensor->name, node->name, ggml_op_name(node->op));
+        if (debug > 0) {
+            for (const ggml_tensor * node : nodes) {
+                LLAMA_LOG_INFO("%s: input tensor '%s' is used by node '%s' (%s)\n",
+                        __func__, tensor->name, node->name, ggml_op_name(node->op));
+            }
         }
     }
 
@@ -748,9 +759,9 @@ void llama_context::sched_reserve() {
     }
 
     if (n_input_tensors_pp == n_input_tensors_tg) {
-        LLAMA_LOG_INFO("%s: graph input tensors = %d\n", __func__, n_input_tensors_pp);
+        LLAMA_LOG_INFO("%s: graph input tensors = %d (env LLAMA_GRAPH_INPUT_DEBUG for extra info)\n", __func__, n_input_tensors_pp);
     } else {
-        LLAMA_LOG_INFO("%s: graph input tensors = %d (with bs=%d), %d (with bs=%d)\n", __func__, n_input_tensors_pp, n_tokens, n_input_tensors_tg, n_seqs);
+        LLAMA_LOG_INFO("%s: graph input tensors = %d (with bs=%d), %d (with bs=%d) (env LLAMA_GRAPH_INPUT_DEBUG for extra info)\n", __func__, n_input_tensors_pp, n_tokens, n_input_tensors_tg, n_seqs);
     }
 
     const int64_t t_end_us = ggml_time_us();
@@ -2487,7 +2498,7 @@ llama_context::graph_reserve_result llama_context::graph_reserve(graph_reserve_p
     this->n_outputs = save_n_outputs;
 
     // determine the input tensors before the sched reservation
-    const uint32_t n_intput_tensors = llama_graph_n_input_tensors(gf);
+    const uint32_t n_intput_tensors = llama_graph_n_input_tensors(gf, graph_input_debug);
 
     // initialize scheduler with the specified graph
     if (params.split_only) {
