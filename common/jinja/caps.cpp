@@ -23,6 +23,7 @@ void caps_apply_preserve_reasoning(jinja::context & ctx, bool enabled) {
     ctx.set_val("preserve_thinking",         mk_val<value_bool>(enabled));
     ctx.set_val("clear_thinking",            mk_val<value_bool>(!enabled));
     ctx.set_val("truncate_history_thinking", mk_val<value_bool>(!enabled));
+    ctx.set_val("drop_thinking",            mk_val<value_bool>(!enabled));
 }
 
 static void caps_try_execute(jinja::program & prog,
@@ -481,6 +482,7 @@ caps caps_get(jinja::program & prog) {
             });
         },
         [&](context & ctx) {
+            ctx.set_val("enable_thinking", mk_val<value_bool>(true));
             caps_apply_preserve_reasoning(ctx, true);
         },
         nullptr, // tools_fn

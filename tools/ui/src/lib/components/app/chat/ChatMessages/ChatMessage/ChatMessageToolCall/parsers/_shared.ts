@@ -5,8 +5,8 @@
 // stay focused on its own format quirks.
 
 import { BuiltInTool } from '$lib/enums';
+import type { AgenticSection } from '$lib/types/agentic';
 import { parsePartialJsonArgs } from '$lib/utils/parse-partial-json-args';
-import type { AgenticSection } from '$lib/utils/agentic';
 
 /**
  * Strict (final-state) JSON parser for a tool-args blob. Mirrors the
@@ -17,9 +17,11 @@ import type { AgenticSection } from '$lib/utils/agentic';
 function parseFinalToolArgs(blob: string): Record<string, unknown> | null {
 	try {
 		const parsed: unknown = JSON.parse(blob);
+
 		if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
 			return parsed as Record<string, unknown>;
 		}
+
 		return null;
 	} catch {
 		return null;
@@ -43,6 +45,7 @@ export function parseToolArgs(
 	options: { partial?: boolean } = {}
 ): Record<string, unknown> | null {
 	if (section.toolName !== expected || !section.toolArgs) return null;
+
 	return options.partial
 		? parsePartialJsonArgs(section.toolArgs)
 		: parseFinalToolArgs(section.toolArgs);

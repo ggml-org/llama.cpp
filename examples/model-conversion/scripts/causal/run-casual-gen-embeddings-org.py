@@ -2,12 +2,15 @@
 
 import argparse
 import os
+import sys
 import importlib
 import torch
 import numpy as np
 
 from transformers import AutoTokenizer, AutoConfig, AutoModelForCausalLM
-from pathlib import Path
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+from utils.common import save_output_data
 
 unreleased_model_name = os.getenv('UNRELEASED_MODEL_NAME')
 
@@ -54,6 +57,7 @@ print(f"Model name: {model_name}")
 
 prompt = "Hello world today"
 input_ids = tokenizer(prompt, return_tensors="pt").input_ids  # ty: ignore[call-non-callable]
+token_ids = input_ids[0].cpu().tolist()
 print(f"Input tokens: {input_ids}")
 print(f"Input text: {repr(prompt)}")
 print(f"Tokenized: {tokenizer.convert_ids_to_tokens(input_ids[0])}")  # ty: ignore[unresolved-attribute]
@@ -74,21 +78,8 @@ with torch.no_grad():
     print(f"Hidden dimension: {token_embeddings.shape[-1]}")
     print(f"Number of tokens: {token_embeddings.shape[0]}")
 
-    # Save raw token embeddings
-    data_dir = Path("data")
-    data_dir.mkdir(exist_ok=True)
-    bin_filename = data_dir / f"pytorch-{model_name}-embeddings.bin"
-    txt_filename = data_dir / f"pytorch-{model_name}-embeddings.txt"
-
-    # Save all token embeddings as binary
     print(token_embeddings)
-    token_embeddings.astype(np.float32).tofile(bin_filename)
-
-    # Save as text for inspection
-    with open(txt_filename, "w") as f:
-        for i, embedding in enumerate(token_embeddings):
-            for j, val in enumerate(embedding):
-                f.write(f"{i} {j} {val:.6f}\n")
+    save_output_data(token_embeddings, token_ids, prompt, model_name, type_suffix="-embeddings")
 
     # Print embeddings per token in the requested format
     print("\nToken embeddings:")
@@ -110,5 +101,3 @@ with torch.no_grad():
     for i, token in enumerate(tokens):
         print(f"  Token {i}: {repr(token)}")
 
-    print(f"Saved bin logits to: {bin_filename}")
-    print(f"Saved txt logist to: {txt_filename}")

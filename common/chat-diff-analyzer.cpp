@@ -173,6 +173,26 @@ static std::vector<std::function<void(const common_chat_template & tmpl, autopar
               LOG_DBG(ANSI_ORANGE "[Patch: JSON name/parameters tool instruction]\n" ANSI_RESET);
           }
       },
+      // Laguna (poolside) - the v4 chat template renders reasoning and tool-arg
+      // delimiters with formatting whitespace ("<think>\n", "</arg_value>\n") that
+      // the model does not emit, so the inferred delimiters carry a spurious
+      // newline and never match the model output. Trim to the bare tag. (v8
+      // renders without the whitespace, so this is a no-op there.)
+      [](const common_chat_template & tmpl, autoparser & analysis) -> void {
+          if (tmpl.src.find("laguna_glm_thinking") != std::string::npos) {
+              analysis.reasoning.start              = trim_whitespace(analysis.reasoning.start);
+              analysis.reasoning.end                = trim_whitespace(analysis.reasoning.end);
+              analysis.tools.arguments.value_prefix = trim_whitespace(analysis.tools.arguments.value_prefix);
+              analysis.tools.arguments.value_suffix = trim_whitespace(analysis.tools.arguments.value_suffix);
+              analysis.tools.arguments.separator    = trim_whitespace(analysis.tools.arguments.separator);
+              analysis.tools.arguments.tolerate_intertag_whitespace = true;
+              // The CONTROL/eot </assistant> token only halts generation when emitted as the
+              // single token; after tool calls the model can spell it out as text tokens.
+              // A literal stop string catches it either way.
+              analysis.additional_stops.push_back("</assistant>");
+              LOG_DBG(ANSI_ORANGE "[Patch: Laguna]\n" ANSI_RESET);
+          }
+      },
 
     });
 

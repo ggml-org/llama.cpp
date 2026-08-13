@@ -153,18 +153,27 @@ kernel void kernel_mul_mv_q4_K_f32_flat(
 
             global ushort * q2 = q1 + 32;
 
-            float4 acc1 = {0.f, 0.f, 0.f, 0.f};
-            float4 acc2 = {0.f, 0.f, 0.f, 0.f};
-            for (int i = 0; i < 8; i += 2) {
-                acc1.s0 += yl[i+0] * (q1[i/2] & 0x000F);
-                acc1.s1 += yl[i+1] * (q1[i/2] & 0x0F00);
-                acc1.s2 += yl[i+8] * (q1[i/2] & 0x00F0);
-                acc1.s3 += yl[i+9] * (q1[i/2] & 0xF000);
-                acc2.s0 += yh[i+0] * (q2[i/2] & 0x000F);
-                acc2.s1 += yh[i+1] * (q2[i/2] & 0x0F00);
-                acc2.s2 += yh[i+8] * (q2[i/2] & 0x00F0);
-                acc2.s3 += yh[i+9] * (q2[i/2] & 0xF000);
-            }
+            // Load the 4 q1 / 4 q2 quant ushorts as 2 uints each. 16-bit integer ops are
+            // disproportionately slow on the A7X (E031.41) compiler; keeping the dequant
+            // operands in 32-bit registers avoids the ushort path. q1/q2 are 4-byte aligned
+            // (ib*128 + (32*iq+8*ir) bytes; q1 += blk*128 bytes/row). Math is unchanged:
+            // w & 0x0F00 on the low/high halves equals the original ushort mask value.
+            global uint * q1u = (global uint *)q1;
+            global uint * q2u = (global uint *)q2;
+            uint a0 = q1u[0], a1 = q1u[1];
+            uint b0 = q2u[0], b1 = q2u[1];
+            uint w0 = a0 & 0xFFFF, w1 = a0 >> 16, w2 = a1 & 0xFFFF, w3 = a1 >> 16;
+            uint v0 = b0 & 0xFFFF, v1 = b0 >> 16, v2 = b1 & 0xFFFF, v3 = b1 >> 16;
+
+            float4 acc1, acc2;
+            acc1.s0 = yl[0]*(w0&0x000F) + yl[ 2]*(w1&0x000F) + yl[ 4]*(w2&0x000F) + yl[ 6]*(w3&0x000F);
+            acc1.s1 = yl[1]*(w0&0x0F00) + yl[ 3]*(w1&0x0F00) + yl[ 5]*(w2&0x0F00) + yl[ 7]*(w3&0x0F00);
+            acc1.s2 = yl[8]*(w0&0x00F0) + yl[10]*(w1&0x00F0) + yl[12]*(w2&0x00F0) + yl[14]*(w3&0x00F0);
+            acc1.s3 = yl[9]*(w0&0xF000) + yl[11]*(w1&0xF000) + yl[13]*(w2&0xF000) + yl[15]*(w3&0xF000);
+            acc2.s0 = yh[0]*(v0&0x000F) + yh[ 2]*(v1&0x000F) + yh[ 4]*(v2&0x000F) + yh[ 6]*(v3&0x000F);
+            acc2.s1 = yh[1]*(v0&0x0F00) + yh[ 3]*(v1&0x0F00) + yh[ 5]*(v2&0x0F00) + yh[ 7]*(v3&0x0F00);
+            acc2.s2 = yh[8]*(v0&0x00F0) + yh[10]*(v1&0x00F0) + yh[12]*(v2&0x00F0) + yh[14]*(v3&0x00F0);
+            acc2.s3 = yh[9]*(v0&0xF000) + yh[11]*(v1&0xF000) + yh[13]*(v2&0xF000) + yh[15]*(v3&0xF000);
 
             float dall = *d;
             float dmin = *dm;
