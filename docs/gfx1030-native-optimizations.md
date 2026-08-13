@@ -62,7 +62,7 @@ On RDNA2, stock Q4_K and Q6_K `MUL_MAT_ID` dispatch changes from MMVQ to MMQ abo
 
 The top-k bound is intentionally conservative. Across 48 Q4_K/Q6_K cases with top-k 2 or 4, K from 256 to 8192, N from 256 to 4096, 8 to 256 experts, and both uniform and concentrated routing, six-row MMVQ reduced operation latency by 15.9% to 61.2%. Top-k 6 regressed in one tested Q6_K case, while concentrated top-k 8 routing regressed in 12 of 16 grid cases by as much as 54.5%; those cases therefore retain stock dispatch.
 
-The exact Qwen3.6 35B four-GPU layer-split configuration carries an advisory tensor flag that permits its validated top-k 8 MTP path to use six-row MMVQ. The flag is inert unless `GGML_HIP_GFX1030_NATIVE=1`, so native-off execution remains stock. Other models do not receive this exception.
+The exact Qwen3.6 35B four-GPU layer-split configuration currently carries an advisory tensor flag that permits its validated top-k 8 MTP path to use six-row MMVQ. The flag is generic: another model loader may set it on validated Q4_K/Q6_K routed weights after equivalent testing. It is inert unless `GGML_HIP_GFX1030_NATIVE=1`, so native-off execution remains stock. Without the hint, every model automatically receives the validated top-k 1--4 path; higher top-k routing remains on stock dispatch until separately validated.
 
 MMQ and MMVQ accumulate floating-point products in different orders and are not generally byte-identical. The validation sweep measured NMSE from `4.23e-10` to `9.15e-9`, compared with the backend `MUL_MAT_ID` allowance of `5e-4`; MMVQ graph and non-graph outputs were byte-identical. This path does not alter quantized weights or Q8_1 activation encoding.
 
@@ -168,7 +168,7 @@ GGML_HIP_GFX1030_NATIVE=1 build/bin/test-mmid-rdna2 \
   --type q4_k --k 2048 --n 512 --batch 6 \
   --experts 64 --top-k 4 --routing hot
 
-# Exercise the native-only Qwen-style advisory override
+# Exercise the native-only validated high-top-k advisory override
 GGML_HIP_GFX1030_NATIVE=1 build/bin/test-mmid-rdna2 \
   --type q4_k --k 2048 --n 512 --batch 6 \
   --experts 256 --top-k 8 --mmvq-batch6-hint

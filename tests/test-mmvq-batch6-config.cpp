@@ -18,8 +18,6 @@ void check(bool condition, const char * message) {
 
 ggml_cuda_mmvq_batch6_input generic_input() {
     return {
-        true,
-        true,
         ggml_cuda_mmvq_batch6_type::q4_k,
         false,
         4,
@@ -43,28 +41,26 @@ void test_bounded_generic_policy() {
     check(!ggml_cuda_mmvq_mmid_batch6(input), "missing routed experts accepted");
 }
 
-void test_qwen_hint_policy() {
+void test_validated_hint_policy() {
     auto input = generic_input();
-    input.model_hint = true;
+    input.validated_hint = true;
     input.n_expert_used = 8;
-    check(ggml_cuda_mmvq_mmid_batch6(input), "native Qwen top-k 8 hint rejected");
+    check(ggml_cuda_mmvq_mmid_batch6(input), "validated top-k 8 hint rejected");
 
     input.n_expert_used = 256;
-    check(ggml_cuda_mmvq_mmid_batch6(input), "model hint unexpectedly limited by top-k");
+    check(ggml_cuda_mmvq_mmid_batch6(input), "validated hint unexpectedly limited by top-k");
 }
 
-void test_stock_and_architecture_guards() {
+void test_native_hint_policy() {
+    // Hardware/opt-in gating is handled by mmvq.cu; this pure policy is
+    // intentionally generic for every RDNA2 model loader.
     auto input = generic_input();
-    input.gfx1030_native = false;
-    check(!ggml_cuda_mmvq_mmid_batch6(input), "native-off generic path accepted");
-
-    input.model_hint = true;
+    input.validated_hint = true;
     input.n_expert_used = 8;
-    check(!ggml_cuda_mmvq_mmid_batch6(input), "native-off model hint accepted");
+    check(ggml_cuda_mmvq_mmid_batch6(input), "validated high-top-k hint rejected");
 
-    input.gfx1030_native = true;
-    input.rdna2 = false;
-    check(!ggml_cuda_mmvq_mmid_batch6(input), "non-RDNA2 path accepted");
+    input.n_expert_used = 256;
+    check(ggml_cuda_mmvq_mmid_batch6(input), "validated hint unexpectedly limited by top-k");
 }
 
 void test_type_guard() {
@@ -72,7 +68,7 @@ void test_type_guard() {
     input.type = ggml_cuda_mmvq_batch6_type::other;
     check(!ggml_cuda_mmvq_mmid_batch6(input), "unsupported generic type accepted");
 
-    input.model_hint = true;
+    input.validated_hint = true;
     input.n_expert_used = 8;
     check(!ggml_cuda_mmvq_mmid_batch6(input), "unsupported hinted type accepted");
 }
@@ -81,8 +77,8 @@ void test_type_guard() {
 
 int main() {
     test_bounded_generic_policy();
-    test_qwen_hint_policy();
-    test_stock_and_architecture_guards();
+    test_validated_hint_policy();
+    test_native_hint_policy();
     test_type_guard();
     std::puts("gfx1030 six-row routed MMVQ policy tests: PASS");
     return 0;

@@ -294,9 +294,7 @@ static constexpr __host__ __device__ int get_mmvq_mmid_max_batch_rdna4(ggml_type
 
 static bool mmvq_use_gfx1030_native(int cc) {
 #if defined(GGML_USE_HIP)
-    if (!GGML_CUDA_CC_IS_RDNA2(cc)) {
-        return false;
-    }
+    GGML_UNUSED(cc); // this branch targets RDNA2/gfx1030 exclusively
     static const bool enabled = [] {
         const char * env = std::getenv("GGML_HIP_GFX1030_NATIVE");
         return env != nullptr && std::atoi(env) != 0;
@@ -349,11 +347,12 @@ int get_mmvq_mmid_max_batch(const ggml_tensor * src0, const ggml_tensor * ids, i
         : src0->type == GGML_TYPE_Q6_K
             ? ggml_cuda_mmvq_batch6_type::q6_k
             : ggml_cuda_mmvq_batch6_type::other;
+    if (!mmvq_use_gfx1030_native(cc)) {
+        return max_batch;
+    }
     const ggml_cuda_mmvq_batch6_input input = {
-        /*.gfx1030_native =*/ mmvq_use_gfx1030_native(cc),
-        /*.rdna2          =*/ GGML_CUDA_CC_IS_RDNA2(cc),
         /*.type           =*/ type,
-        /*.model_hint     =*/ (src0->flags & GGML_TENSOR_FLAG_MUL_MAT_ID_MMVQ_BATCH6) != 0,
+        /*.validated_hint =*/ (src0->flags & GGML_TENSOR_FLAG_MUL_MAT_ID_MMVQ_BATCH6) != 0,
         /*.n_expert_used  =*/ ids != nullptr && ids->type == GGML_TYPE_I32 ? ids->ne[0] : 0,
     };
     return ggml_cuda_mmvq_mmid_batch6(input) ? 6 : max_batch;
