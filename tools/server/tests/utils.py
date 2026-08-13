@@ -125,6 +125,7 @@ class ServerProcess:
     mcp_servers_config: str | None = None
     mcp_servers_json: str | None = None
     cors_origins: str | None = None
+    api_prefix: str | None = None
     skills: bool = False
     trust_project_skills: bool = False
     skill_providers: str | None = None
@@ -143,7 +144,13 @@ class ServerProcess:
             self.server_port = int(os.environ["PORT"])
         self.external_server = "DEBUG_EXTERNAL" in os.environ
 
-    def start(self, timeout_seconds: int = DEFAULT_HTTP_TIMEOUT) -> None:
+    def _spawn(self) -> None:
+        """Launch the server process without waiting for readiness.
+
+        Shared by start() (which then polls /health) and by tests that need to
+        observe the not-ready middleware window (503) before the model load
+        completes.
+        """
         env = {
             **os.environ,
             "LLAMA_SERVER_DEBUG_FAKE_TIMING": "1",
@@ -200,6 +207,8 @@ class ServerProcess:
             server_args.extend(["--models-preset", self.models_preset])
         if self.cors_origins:
             server_args.extend(["--cors-origins", self.cors_origins])
+        if self.api_prefix:
+            server_args.extend(["--api-prefix", self.api_prefix])
         if self.n_batch:
             server_args.extend(["--batch-size", self.n_batch])
         if self.n_ubatch:
@@ -338,12 +347,22 @@ class ServerProcess:
 
         print(f"server pid={self.process.pid}, pytest pid={os.getpid()}")
 
+    def spawn(self) -> None:
+        """Launch the server process and return immediately (no readiness wait)."""
+        self._spawn()
+
+    def start(self, timeout_seconds: int = DEFAULT_HTTP_TIMEOUT) -> None:
+        self.spawn()
+        if self.external_server:
+            return
+
         # wait for server to start
         start_time = time.time()
         last_print_time = start_time
         while time.time() - start_time < timeout_seconds:
             try:
-                response = self.make_request("GET", "/health", headers={
+                health_path = f"{self.api_prefix}/health" if self.api_prefix else "/health"
+                response = self.make_request("GET", health_path, headers={
                     "Authorization": f"Bearer {self.api_key}" if self.api_key else None
                 })
                 if response.status_code == 200:

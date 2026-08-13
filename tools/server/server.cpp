@@ -374,6 +374,14 @@ int llama_server(common_params & params, int argc, char ** argv) {
         ctx_http.post("/tools",           ex_wrapper(res_403));
     }
 
+    // Skills: bind only when enabled; when disabled the routes stay ordinary
+    // missing routes (404), never a fallback 403.
+    if (params.skills) {
+        ctx_http.get ("/skills",      ex_wrapper(skills->handle_get));
+        ctx_http.post("/skills/read", ex_wrapper(skills->handle_post));
+        warn_names.push_back("skills");
+    }
+
     if (warn_names.size() > 0) {
         SRV_WRN("%s", "-----------------\n");
         SRV_WRN("%s", "the following feature(s) are enabled:\n");
