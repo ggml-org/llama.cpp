@@ -4,6 +4,7 @@
  */
 
 import {
+	CODE_BLOCK_CLASS,
 	MARKDOWN_DATA_ATTRS,
 	MERMAID_BLOCK_CLASS,
 	MERMAID_SYNTAX_ATTR,
@@ -46,7 +47,7 @@ export function createHandleCopyClick() {
 
 		if (!target) return;
 
-		const wrapper = target.closest('.code-block-wrapper');
+		const wrapper = target.closest(`.${CODE_BLOCK_CLASS.WRAPPER}`);
 
 		if (!wrapper) return;
 
@@ -92,7 +93,7 @@ export function createHandlePreviewClick(previewState: PreviewState) {
 
 		if (!target) return;
 
-		const wrapper = target.closest('.code-block-wrapper');
+		const wrapper = target.closest(`.${CODE_BLOCK_CLASS.WRAPPER}`);
 
 		if (!wrapper) return;
 
@@ -101,7 +102,7 @@ export function createHandlePreviewClick(previewState: PreviewState) {
 		if (!codeElement) return;
 
 		const rawCode = codeElement.textContent ?? '';
-		const languageLabel = wrapper.querySelector<HTMLElement>('.code-language');
+		const languageLabel = wrapper.querySelector<HTMLElement>(`.${CODE_BLOCK_CLASS.LANGUAGE}`);
 		const language = languageLabel?.textContent?.trim() || 'text';
 
 		previewState.setPreviewCode(rawCode);
@@ -118,8 +119,8 @@ export function createHandleMermaidClick(mermaidState: MermaidPreviewState) {
 	return async function handleMermaidClick(event: MouseEvent) {
 		const target = event.target as HTMLElement;
 		// Check if clicking on copy or preview button in mermaid block
-		const copyBtn = target.closest(`.${MERMAID_WRAPPER_CLASS} .copy-code-btn`);
-		const previewBtn = target.closest(`.${MERMAID_WRAPPER_CLASS} .preview-code-btn`);
+		const copyBtn = target.closest(`.${MERMAID_WRAPPER_CLASS} .${CODE_BLOCK_CLASS.COPY_BTN}`);
+		const previewBtn = target.closest(`.${MERMAID_WRAPPER_CLASS} .${CODE_BLOCK_CLASS.PREVIEW_BTN}`);
 
 		if (copyBtn || previewBtn) {
 			const wrapper = target.closest(`.${MERMAID_WRAPPER_CLASS}`);
@@ -254,11 +255,13 @@ export function createSetupCodeBlockActions(
 	return function setupCodeBlockActions(containerRef: HTMLElement | null) {
 		if (!containerRef) return;
 
-		const wrappers = containerRef.querySelectorAll<HTMLElement>('.code-block-wrapper');
+		const wrappers = containerRef.querySelectorAll<HTMLElement>(`.${CODE_BLOCK_CLASS.WRAPPER}`);
 
 		for (const wrapper of wrappers) {
-			const copyButton = wrapper.querySelector<HTMLButtonElement>('.copy-code-btn');
-			const previewButton = wrapper.querySelector<HTMLButtonElement>('.preview-code-btn');
+			const copyButton = wrapper.querySelector<HTMLButtonElement>(`.${CODE_BLOCK_CLASS.COPY_BTN}`);
+			const previewButton = wrapper.querySelector<HTMLButtonElement>(
+				`.${CODE_BLOCK_CLASS.PREVIEW_BTN}`
+			);
 
 			if (
 				copyButton &&
