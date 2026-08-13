@@ -194,6 +194,65 @@ decode is already cheap; the draft head's extra weight traffic is a large net lo
 
 ---
 
+## Concurrency: parallel slots on the R9700 eGPU
+
+Measured by firing `--parallel N` concurrent 300-token requests at a single
+`llama-server` (`GGML_VK_DISABLE_HOST_VISIBLE_VIDMEM=1`). The old "multi-slot drops 5x"
+behavior is gone - that was caused by the host-visible vidmem bug, not by batching.
+
+### Dense 27B Q4_K_S
+
+| --parallel | MTP | KV | total t/s | per-stream t/s | scaling vs p1 |
+|---|---|---|---|---|---|
+| 1 | on | f16 | 40.0 | 40.0 | 1.00x |
+| 2 | on | f16 | 39.3 | 19.7 | 0.98x |
+| 2 | off | f16 | 46.0 | 23.0 | 1.15x |
+| 4 | on | f16 | 74.5 | 18.6 | 1.86x |
+| 4 | off | f16 | 70.6 | 17.6 | 1.77x |
+| 4 | on | q8_0 | 71.3 | 17.8 | 1.78x |
+
+### MoE 35B-A3B-UD Q4_K_S
+
+| --parallel | MTP | KV | total t/s | per-stream t/s | scaling vs p1 |
+|---|---|---|---|---|---|
+| 1 | off | f16 | 60.1 | 60.1 | 1.00x |
+| 2 | off | f16 | 106.4 | 53.2 | 1.77x |
+| 4 | off | f16 | 130.6 | 32.6 | 2.17x |
+| 4 | on | f16 | 112.1 | 28.0 | 1.86x |
+
+### Takeaways
+
+- Concurrency scales: dense p4 = 74.5 t/s (1.86x), MoE p4 = 130.6 t/s (2.17x). MoE wins
+  more because 4 requests hit different experts.
+- MTP is near-redundant under load: +5% on dense, negative on MoE. Keep MTP only for a
+  single dense stream.
+- KV q8_0 gives no speed here; useful only for VRAM headroom (higher `-c` or more slots).
+
+### Recommended configs
+
+```powershell
+# dense 27B - single low-latency user
+--parallel 1 --spec-type draft-mtp                         # 40 t/s/stream
+# dense 27B - many concurrent users (max total throughput)
+--parallel 4  # MTP optional (~+5%)                         # 74 t/s total
+# MoE 35B - ALWAYS --parallel 2-4, never MTP
+--parallel 4                                               # 130.6 t/s total
+```
+
+---
+
+## Multi-GPU (Phase 2, not yet measured)
+
+For 3-4 R9700 over separate Thunderbolt/USB4 links, the recommended topology is one
+`llama-server` per GPU (each pinned with `GGML_VK_VISIBLE_DEVICES=i` or `--device`),
+fronted by a round-robin load balancer, so requests scale linearly with no cross-GPU
+traffic. Single-server `-sm row`/`layer` splitting is not advised across TB eGPU links
+(per-matmul all-reduce over the link becomes the bottleneck) and is pointless for a
+15 GB model that already fits one 32 GB GPU. Each instance should use `--parallel 2-4`
+per the values above.
+
+---
+
 ## Benchmark values for README / verification
 
 Qwen3.6-27B Q4_K_S, R9700 eGPU, `GGML_VK_DISABLE_HOST_VISIBLE_VIDMEM=1`, `--device Vulkan1`:
