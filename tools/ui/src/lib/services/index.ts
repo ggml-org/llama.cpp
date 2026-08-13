@@ -331,3 +331,41 @@ export { RouterService } from './router.service';
  * @see migration.service.ts — full implementation (non-destructive)
  */
 export { MigrationService } from './migration.service';
+
+/**
+ * **SkillsService** — Stateless transport for the llama-server Skills API
+ *
+ * Sends `GET /skills` and `POST /skills/read` through the shared `apiFetch`
+ * envelope with an optional validated CWD header. The server owns discovery,
+ * resolution, identity, containment, parsing, and XML; reads send only `name`
+ * and an optional `path`.
+ *
+ * **Key Responsibilities:**
+ * - `list(cwd?, signal?)` — deterministic catalog for an effective CWD
+ * - `read({ name, path? }, cwd?, signal?)` — current base or resource content
+ *
+ * @see skillsStore in stores/skills.svelte.ts — CWD-keyed catalog screen state and run snapshots
+ */
+export { SkillsService } from './skills.service';
+
+/**
+ * **SkillsPackingService** — Centralized Skills budget packing policy
+ *
+ * Serializes the `<skills_catalog total="..." included="...">` envelope from a
+ * frozen snapshot, applies `maxSkillBudget` by truncating entry fragments at
+ * the budget boundary in server order, and centralizes the direct-tokenizer /
+ * labeled-estimate fallback policy. Direct mode measures with the audited
+ * selected-model `POST /tokenize` request and no-special-token flags; a failed
+ * or unavailable request falls back to a labeled deterministic estimate
+ * (`ceil(bytes / 4)`) without retry, model selection, or wake. Estimated mode
+ * never issues a tokenizer request.
+ *
+ * @see buildSkillRunSnapshot — immutable per-run snapshot construction
+ * @see serializeSkillCatalogEnvelope — verbatim server-XML envelope assembly
+ */
+export { SkillsPackingService } from './skills-packing.service';
+export {
+	buildSkillRunSnapshot,
+	estimateSkillTokens,
+	serializeSkillCatalogEnvelope
+} from './skills-packing.service';
