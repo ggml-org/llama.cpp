@@ -2291,7 +2291,7 @@ private:
 
     // returns false to decline the task, it is offered again after the decode is done
     bool process_single_task(server_task && task) {
-        // only metrics is safe while decoding, it touches neither ctx_tgt nor the slots
+        // during encoding / decoding, only accessing metrics is safe
         if (is_decoding && task.type != SERVER_TASK_TYPE_METRICS) {
             SRV_DBG("decoding, decline task, id_task = %d\n", task.id);
             return false;
@@ -3394,8 +3394,15 @@ private:
                         //       so the timing is queued and flushed on the next sync
                         metrics_pre_decode();
 
+                        // encode on the worker thread, so we can still handle metrics tasks
                         size_t n_tokens_out = 0;
-                        int32_t res = slot.process_mtmd_chunk(cur_token_idx, n_tokens_out);
+                        int32_t res = 0;
+                        is_decoding = true;
+                        queue_tasks.yield_to_queue([&]() {
+                            res = slot.process_mtmd_chunk(cur_token_idx, n_tokens_out);
+                        });
+                        is_decoding = false;
+
                         if (res != 0) {
                             SLT_ERR(slot, "failed to process mtmd chunk, res = %d\n", res);
                             send_error(slot, "failed to process mtmd chunk", ERROR_TYPE_SERVER);
