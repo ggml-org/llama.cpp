@@ -37,6 +37,21 @@ type SkillBaseActivationInput = Omit<SkillActivationInput, 'result'> & {
 export class DurableSkillActivationStore implements SkillActivationStore {
 	/** Durable base activations by conversation, keyed by the opaque skill id. */
 	private readonly _activatedByConversation = new Map<string, Set<string>>();
+	/**
+	 * In-flight durable persistence transactions keyed by conversation plus
+	 * the opaque skill id. Both the slash and the model path call
+	 * `recordActivation`; the first call for an identity registers its
+	 * persistence here before awaiting, so a concurrent call of the same
+	 * identity waits instead of passing the pre-check and duplicating the
+	 * synthetic pair / anchored tool result. The entry lives only while the
+	 * persistence is running and is removed on success or failure.
+	 */
+	private readonly _inFlight = new Map<string, Promise<DatabaseMessage>>();
+
+	/** Stable per-conversation-per-identity key shared by both activation paths. */
+	private static activationKey(conversationId: string, identityId: string): string {
+		return `${conversationId}\u0000${identityId}`;
+	}
 
 	isActivated(conversationId: string, identityId: string): boolean {
 		return this._activatedByConversation.get(conversationId)?.has(identityId) ?? false;
@@ -99,23 +114,49 @@ export class DurableSkillActivationStore implements SkillActivationStore {
 			};
 		}
 
+		// Single in-flight durable transaction per (conversation, opaque id):
+		// a concurrent slash or model activation of the same identity waits
+		// for the first persistence instead of passing the pre-check and
+		// duplicating the synthetic pair / anchored tool result.
+		const key = DurableSkillActivationStore.activationKey(input.conversationId, identityId);
+		const inFlight = this._inFlight.get(key);
+
+		if (inFlight) {
+			await inFlight;
+
+			return {
+				created: false,
+				extra: skillActivationExtra(input.result),
+				toolResultMessage: null
+			};
+		}
+
 		// After the resource early-return above, `input.result` is narrowed to
 		// a base read; carry that narrowing into the persistence helpers so
 		// they build from the concrete base result shape.
 		const baseInput: SkillBaseActivationInput = { ...input, result: input.result };
-
-		const toolResultMessage =
+		const transaction =
 			input.toolCallId !== undefined
-				? await this.persistModelActivation(baseInput, input.toolCallId)
-				: await this.persistSlashActivation(baseInput);
+				? this.persistModelActivation(baseInput, input.toolCallId)
+				: this.persistSlashActivation(baseInput);
 
-		this.remember(input.conversationId, identityId);
+		this._inFlight.set(key, transaction);
 
-		return {
-			created: true,
-			extra: skillActivationExtra(input.result),
-			toolResultMessage
-		};
+		try {
+			const toolResultMessage = await transaction;
+
+			this.remember(input.conversationId, identityId);
+
+			return {
+				created: true,
+				extra: skillActivationExtra(input.result),
+				toolResultMessage
+			};
+		} finally {
+			// Never sticky: a failed persistence clears the slot so a later
+			// activation can retry, and nothing was remembered on failure.
+			this._inFlight.delete(key);
+		}
 	}
 
 	/**
