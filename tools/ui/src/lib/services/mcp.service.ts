@@ -13,12 +13,12 @@ import type {
 	Tool
 } from '@modelcontextprotocol/sdk/types.js';
 import {
+	CORS_PROXY,
 	CORS_PROXY_ENDPOINT,
-	CORS_PROXY_HEADER_PREFIX,
 	DEFAULT_CLIENT_VERSION,
 	DEFAULT_IMAGE_MIME_TYPE,
 	DEFAULT_MCP_CONFIG,
-	MCP_PARTIAL_REDACT_HEADERS
+	HEADERS
 } from '$lib/constants';
 import {
 	MCPConnectionPhase,
@@ -120,7 +120,7 @@ export class MCPService {
 		const details: DiagnosticRequestDetails = {
 			body: summarizeRequestBody(body),
 			credentials: init?.credentials ?? baseInit.credentials,
-			headers: sanitizeHeaders(requestHeaders, extraRedactedHeaders, MCP_PARTIAL_REDACT_HEADERS),
+			headers: sanitizeHeaders(requestHeaders, extraRedactedHeaders, HEADERS.PARTIAL_REDACT),
 			method: getRequestMethod(input, init, baseInit).toUpperCase(),
 			mode: init?.mode ?? baseInit.mode,
 			url: getRequestUrl(input)
@@ -141,8 +141,8 @@ export class MCPService {
 	) {
 		for (const [key, value] of new Headers(headers).entries()) {
 			const proxiedKey =
-				useProxy && !key.toLowerCase().startsWith(CORS_PROXY_HEADER_PREFIX)
-					? `${CORS_PROXY_HEADER_PREFIX}${key}`
+				useProxy && !key.toLowerCase().startsWith(CORS_PROXY.HEADER_PREFIX)
+					? `${CORS_PROXY.HEADER_PREFIX}${key}`
 					: key;
 
 			requestHeaders.set(proxiedKey, value);
@@ -361,7 +361,7 @@ export class MCPService {
 							{
 								response: {
 									durationMs,
-									headers: sanitizeHeaders(response.headers, undefined, MCP_PARTIAL_REDACT_HEADERS),
+									headers: sanitizeHeaders(response.headers, undefined, HEADERS.PARTIAL_REDACT),
 									status: response.status,
 									statusText: response.statusText,
 									url
@@ -751,7 +751,7 @@ export class MCPService {
 							headers: sanitizeHeaders(
 								serverConfig.headers,
 								Object.keys(serverConfig.headers ?? {}),
-								MCP_PARTIAL_REDACT_HEADERS
+								HEADERS.PARTIAL_REDACT
 							),
 							serverName,
 							transportType,

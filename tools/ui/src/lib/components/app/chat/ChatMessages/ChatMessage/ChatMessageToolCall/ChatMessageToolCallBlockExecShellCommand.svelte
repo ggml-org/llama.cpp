@@ -10,8 +10,7 @@
 	import ToolCallBlock from './ToolCallBlock.svelte';
 	import { AlertTriangle, Check, Loader2, XCircle } from '@lucide/svelte';
 	import { CollapsibleTerminalBlock } from '$lib/components/app';
-	import { SETTINGS_KEYS } from '$lib/constants';
-	import { TOOL_RUNTIME_SCROLL_AT_BOTTOM_THRESHOLD_PX } from '$lib/constants/auto-scroll';
+	import { SETTINGS_KEYS, TOOL_RUNTIME_SCROLL_AT_BOTTOM_THRESHOLD_PX } from '$lib/constants';
 	import { config } from '$lib/stores/settings.svelte';
 	import { toolsStore } from '$lib/stores/tools.svelte';
 	import type { DatabaseMessageExtra } from '$lib/types';

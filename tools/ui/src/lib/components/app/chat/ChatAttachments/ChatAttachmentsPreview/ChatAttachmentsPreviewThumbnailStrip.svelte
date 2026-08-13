@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { FileText, Music, Video } from '@lucide/svelte';
 	import { HorizontalScrollCarousel } from '$lib/components/app/misc';
-	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
+	import { ICON_CLASS_DEFAULT } from '$lib/constants';
 
 	interface PreviewItem {
 		id: string;

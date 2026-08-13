@@ -1,5 +1,5 @@
 import { base } from '$app/paths';
-import { API_TOOLS, X_RESP_TYPE_HEADER, X_TOOL_CWD_HEADER } from '$lib/constants';
+import { API_TOOLS, HEADERS } from '$lib/constants';
 import { ToolResponseField } from '$lib/enums';
 import type { ServerBuiltinToolInfo, ToolExecutionResult } from '$lib/types';
 import { apiFetch } from '$lib/utils';
@@ -31,7 +31,7 @@ export class ToolsService {
 	): Promise<ToolExecutionResult> {
 		const result = await apiFetch<Record<string, unknown>>(API_TOOLS.EXECUTE, {
 			body: JSON.stringify({ params, tool: toolName }),
-			headers: cwd ? { [X_TOOL_CWD_HEADER]: cwd } : undefined,
+			headers: cwd ? { [HEADERS.X_TOOL_CWD_HEADER]: cwd } : undefined,
 			method: 'POST',
 			signal
 		});
@@ -64,9 +64,9 @@ export class ToolsService {
 	): Promise<Record<string, unknown>> {
 		const headers: Record<string, string> = {};
 
-		if (cwd) headers[X_TOOL_CWD_HEADER] = cwd;
+		if (cwd) headers[HEADERS.X_TOOL_CWD_HEADER] = cwd;
 
-		if (respType) headers[X_RESP_TYPE_HEADER] = respType;
+		if (respType) headers[HEADERS.X_RESP_TYPE_HEADER] = respType;
 
 		return apiFetch<Record<string, unknown>>(API_TOOLS.EXECUTE, {
 			body: JSON.stringify({ params, tool: toolName }),
@@ -99,7 +99,7 @@ export class ToolsService {
 	): AsyncGenerator<ToolStreamEvent> {
 		const headers = getJsonHeaders();
 
-		if (cwd) headers[X_TOOL_CWD_HEADER] = cwd;
+		if (cwd) headers[HEADERS.X_TOOL_CWD_HEADER] = cwd;
 
 		const response = await fetch(`${base}${API_TOOLS.EXECUTE}`, {
 			body: JSON.stringify({ params, stream: true, tool: toolName }),

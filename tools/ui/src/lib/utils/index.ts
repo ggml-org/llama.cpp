@@ -317,7 +317,16 @@ export { tryParseToolResultObject } from './tool-call-meta';
 // Per-tool UI metadata (label + icon) used by the tool-call chrome.
 // Re-exported through $lib/utils so renderer components can read the
 // label without depending on $lib/constants directly.
-export { getBuiltinToolUi, type BuiltinToolUiEntry } from '$lib/constants/built-in-tools';
+export { getBuiltinToolUi } from './built-in-tools';
+export type { BuiltinToolUiEntry } from '$lib/types';
+
+// Chat command picker
+
+export { getChatCommands } from './chat-commands';
+
+// Sandbox tool definition
+// SANDBOX_TOOL_DEFINITION is deprecated; kept for backward compatibility.
+export { buildSandboxToolDefinition, SANDBOX_TOOL_DEFINITION } from './sandbox-tool';
 
 // Cryptography utilities
 

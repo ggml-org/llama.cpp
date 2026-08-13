@@ -5,7 +5,7 @@
  * naming changes.
  */
 
-import { STORAGE_APP_NAME } from './storage';
+import { STORAGE_APP_NAME } from './storage.constants';
 
 /** IndexedDB database name */
 export const DB_NAME = STORAGE_APP_NAME;

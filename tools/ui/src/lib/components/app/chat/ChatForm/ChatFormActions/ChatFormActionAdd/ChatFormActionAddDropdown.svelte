@@ -12,9 +12,9 @@
 	import {
 		ATTACHMENT_FILE_ITEMS,
 		ATTACHMENT_TOOLTIP_TEXT,
+		ICON_CLASS_DEFAULT,
 		TOOLTIP_DELAY_DURATION
 	} from '$lib/constants';
-	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
 	import { useAttachmentMenu } from '$lib/hooks/use-attachment-menu.svelte';
 
 	interface Props {

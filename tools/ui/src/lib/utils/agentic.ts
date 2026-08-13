@@ -1,17 +1,9 @@
 import {
 	ATTACHMENT_SAVED_REGEX,
-	MARKDOWN_ATX_HEADING_REGEX,
-	MARKDOWN_BLOCKQUOTE_REGEX,
-	MARKDOWN_BOLD_REGEX,
-	MARKDOWN_CODE_FENCE_REGEX,
-	MARKDOWN_LINK_REGEX,
-	MARKDOWN_LIST_BULLET_REGEX,
-	MARKDOWN_LIST_NUMBERED_REGEX,
-	MARKDOWN_TABLE_SEPARATOR_REGEX,
+	MARKDOWN,
 	NEWLINE,
 	REASONING_TAGS,
-	SEARCH_SUMMARY_SEPARATOR,
-	SEARCH_SUMMARY_TOTAL_REGEX,
+	SEARCH_SUMMARY,
 	TOOL_RESULT_JSON_OPEN_REGEX
 } from '$lib/constants';
 import {
@@ -283,11 +275,11 @@ export function splitSearchSummaryList(
 	text: string,
 	captureTotal: (n: number) => void
 ): { lines: string[] } {
-	const separatorIndex = text.indexOf(SEARCH_SUMMARY_SEPARATOR);
+	const separatorIndex = text.indexOf(SEARCH_SUMMARY.SEPARATOR);
 	const matchesText = separatorIndex === -1 ? text : text.slice(0, separatorIndex);
 	const summaryText =
-		separatorIndex === -1 ? '' : text.slice(separatorIndex + SEARCH_SUMMARY_SEPARATOR.length);
-	const totalMatch = summaryText.match(SEARCH_SUMMARY_TOTAL_REGEX);
+		separatorIndex === -1 ? '' : text.slice(separatorIndex + SEARCH_SUMMARY.SEPARATOR.length);
+	const totalMatch = summaryText.match(SEARCH_SUMMARY.TOTAL_REGEX);
 
 	if (totalMatch) {
 		captureTotal(parseInt(totalMatch[1], 10));
@@ -412,31 +404,31 @@ export function classifyToolResult(content: string | undefined): ToolResultKind 
  */
 function looksLikeMarkdown(content: string): boolean {
 	// Code fences are unambiguous - triple backticks or tildes at line start.
-	if (MARKDOWN_CODE_FENCE_REGEX.test(content)) return true;
+	if (MARKDOWN.CODE_FENCE_REGEX.test(content)) return true;
 
 	const lines = content.split(NEWLINE);
 
 	for (const line of lines) {
-		if (MARKDOWN_ATX_HEADING_REGEX.test(line)) return true;
+		if (MARKDOWN.ATX_HEADING_REGEX.test(line)) return true;
 
-		if (MARKDOWN_BLOCKQUOTE_REGEX.test(line)) return true;
+		if (MARKDOWN.BLOCKQUOTE_REGEX.test(line)) return true;
 
-		if (MARKDOWN_LIST_BULLET_REGEX.test(line)) return true;
+		if (MARKDOWN.LIST_BULLET_REGEX.test(line)) return true;
 
-		if (MARKDOWN_LIST_NUMBERED_REGEX.test(line)) return true;
+		if (MARKDOWN.LIST_NUMBERED_REGEX.test(line)) return true;
 	}
 
 	// Inline structural markers anywhere in the body.
-	if (MARKDOWN_LINK_REGEX.test(content)) return true;
+	if (MARKDOWN.LINK_REGEX.test(content)) return true;
 
-	if (MARKDOWN_BOLD_REGEX.test(content)) return true;
+	if (MARKDOWN.BOLD_REGEX.test(content)) return true;
 
 	// Tables: a pipe-bearing header line followed by a separator row.
 	if (lines.length >= 2) {
 		const head = lines[0];
 		const sep = lines[1];
 
-		if (head.includes('|') && MARKDOWN_TABLE_SEPARATOR_REGEX.test(sep)) return true;
+		if (head.includes('|') && MARKDOWN.TABLE_SEPARATOR_REGEX.test(sep)) return true;
 	}
 
 	return false;

@@ -1,6 +1,39 @@
 import type { ApiChatCompletionToolCall } from './api';
 import type { DatabaseMessage, DatabaseMessageExtra } from './database';
-import type { ChatFormCommandAction, ErrorDialogType, FileMentionEntryType } from '$lib/enums';
+import type {
+	AttachmentAction,
+	AttachmentItemEnabledWhen,
+	AttachmentItemVisibleWhen,
+	AttachmentMenuItemId,
+	ChatFormCommandAction,
+	ErrorDialogType,
+	FileMentionEntryType
+} from '$lib/enums';
+import type { Component } from 'svelte';
+
+/**
+ * A single item in the chat form attachment menu.
+ */
+export interface AttachmentMenuItem {
+	/** Unique identifier for the item */
+	id: AttachmentMenuItemId;
+	/** Display label */
+	label: string;
+	/** Lucide icon component */
+	icon: Component;
+	/** Extra CSS class applied to the item (e.g. for test selectors) */
+	class?: string;
+	/** Whether the item requires a specific modality to be enabled */
+	enabledWhen?: AttachmentItemEnabledWhen;
+	/** Tooltip shown when the item is disabled */
+	disabledTooltip?: string;
+	/** Callback key on the Props interface to invoke when clicked */
+	action: AttachmentAction;
+	/** Whether the item is only shown when a specific capability is present */
+	visibleWhen?: AttachmentItemVisibleWhen;
+	/** Whether this item has a tooltip even when enabled (uses dynamic text) */
+	hasEnabledTooltip?: boolean;
+}
 
 export interface ChatUploadedFile {
 	id: string;
@@ -182,6 +215,18 @@ export interface FileMentionEntry {
  * command whose backing capability is unavailable (e.g. `/prompt` when no
  * MCP server exposes prompts): visible but greyed out and not selectable.
  */
+export interface ChatCommandsOptions {
+	/** Gates `/model`. */
+	showModelSelector: boolean;
+	/** Gates `/prompt`. */
+	hasPrompts: () => boolean;
+	/** Gates `/cwd`. */
+	hasCwdTools: () => boolean;
+}
+
+/** Protocol-level verbs accepted by the realtime inference control endpoint. Mirrors `CONTROL_ACTION`. */
+export type ControlAction = 'reasoning_end';
+
 export interface ChatFormCommand {
 	name: string;
 	description: string;

@@ -27,7 +27,8 @@ import {
 	DEFAULT_AUDIO_EXTENSION,
 	DEFAULT_IMAGE_EXTENSION,
 	IMAGE_MIME_TO_EXTENSION,
-	MCP_ATTACHMENT_NAME_PREFIX
+	MCP_ATTACHMENT_NAME_PREFIX,
+	MIME_TYPE_PREFIXES
 } from '$lib/constants';
 import { BuiltInTool, ToolPermissionDecision, ToolSource } from '$lib/enums';
 import {
@@ -1122,7 +1123,7 @@ class AgenticStore {
 			attachmentIndex += 1;
 			const name = this.buildAttachmentName(mimeType, attachmentIndex);
 
-			if (mimeType.startsWith(MimeTypePrefix.IMAGE)) {
+			if (mimeType.startsWith(MIME_TYPE_PREFIXES.IMAGE)) {
 				attachments.push({ base64Url: trimmedLine, name, type: AttachmentType.IMAGE });
 
 				return `[Attachment saved: ${name}]`;

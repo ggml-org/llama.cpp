@@ -2,8 +2,7 @@ import { base } from '$app/paths';
 import {
 	API_MODELS,
 	FAVORITE_MODELS_LOCALSTORAGE_KEY,
-	MODEL_PROPS_CACHE_MAX_ENTRIES,
-	MODEL_PROPS_CACHE_TTL_MS,
+	MODEL_PROPS_CACHE,
 	SSE_DATA_PREFIX,
 	SSE_LINE_SEPARATOR,
 	SSE_RECORD_SEPARATOR
@@ -84,8 +83,8 @@ class ModelsStore {
 	 * TTL: 10 minutes — props don't change frequently.
 	 */
 	private modelPropsCache = new TTLCache<string, ApiLlamaCppServerProps>({
-		maxEntries: MODEL_PROPS_CACHE_MAX_ENTRIES,
-		ttlMs: MODEL_PROPS_CACHE_TTL_MS
+		maxEntries: MODEL_PROPS_CACHE.MAX_ENTRIES,
+		ttlMs: MODEL_PROPS_CACHE.TTL_MS
 	});
 	private modelPropsFetching = $state<Set<string>>(new Set());
 

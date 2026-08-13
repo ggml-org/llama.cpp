@@ -3,7 +3,7 @@
 	import { SyntaxHighlightedCode } from '$lib/components/app';
 	import * as Alert from '$lib/components/ui/alert';
 	import { Button } from '$lib/components/ui/button';
-	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
+	import { ICON_CLASS_DEFAULT } from '$lib/constants';
 	import { PdfViewMode } from '$lib/enums';
 	import type { ChatAttachmentDisplayItem } from '$lib/types';
 	import { getLanguageFromFilename } from '$lib/utils';

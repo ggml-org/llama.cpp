@@ -9,7 +9,7 @@
 	import { McpServerIdentity } from '$lib/components/app/mcp';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import * as Collapsible from '$lib/components/ui/collapsible';
-	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
+	import { ICON_CLASS_DEFAULT } from '$lib/constants';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import type { MCPResourceInfo, MCPResourceTemplateInfo, MCPServerResources } from '$lib/types';
 	import { getDisplayName, getResourceIcon } from '$lib/utils';

@@ -1,5 +1,4 @@
-import { REASONING_EFFORT_LEVELS } from '$lib/constants/reasoning-effort';
-import { REASONING_EFFORT_TOKENS } from '$lib/constants/reasoning-effort-tokens';
+import { REASONING_EFFORT_LEVELS, REASONING_EFFORT_TOKENS } from '$lib/constants';
 import { ReasoningEffort } from '$lib/enums';
 import { chatStore } from '$lib/stores/chat.svelte';
 import { activeMessages, conversationsStore } from '$lib/stores/conversations.svelte';

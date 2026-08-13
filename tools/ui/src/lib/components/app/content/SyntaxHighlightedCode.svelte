@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { browser } from '$app/environment';
-	import { SYNTAX_CODE_SCROLL_AT_BOTTOM_THRESHOLD_PX } from '$lib/constants/auto-scroll';
+	import { SYNTAX_CODE_SCROLL_AT_BOTTOM_THRESHOLD_PX } from '$lib/constants';
 	import { ColorMode } from '$lib/enums';
 	import { highlightCode } from '$lib/utils';
 	import githubLightCss from 'highlight.js/styles/github.css?inline';

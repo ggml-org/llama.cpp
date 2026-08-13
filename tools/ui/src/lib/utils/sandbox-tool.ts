@@ -1,17 +1,10 @@
-import { BuiltInTool, JsonSchemaType, ToolCallType } from '$lib/enums';
+import {
+	SANDBOX_TIMEOUT_MS_DEFAULT,
+	SANDBOX_TIMEOUT_MS_MAX,
+	SANDBOX_TOOL_NAME
+} from '$lib/constants';
+import { JsonSchemaType, ToolCallType } from '$lib/enums';
 import type { OpenAIToolDefinition } from '$lib/types';
-
-export const SANDBOX_TOOL_NAME = BuiltInTool.RUN_JAVASCRIPT;
-
-export const SANDBOX_TIMEOUT_MS_DEFAULT = 10000;
-
-export const SANDBOX_TIMEOUT_MS_MAX = 30000;
-
-export const SANDBOX_OUTPUT_MAX_CHARS = 8192;
-
-export const SANDBOX_EMPTY_OUTPUT = '(no output)';
-
-export const SANDBOX_TRUNCATION_NOTICE = '[output truncated]';
 
 const NERDAMER_DESCRIPTION = `
 Symbolic/numeric math via \`nerdamer\`

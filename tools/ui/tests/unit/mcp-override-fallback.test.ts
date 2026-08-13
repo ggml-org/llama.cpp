@@ -1,5 +1,4 @@
-import { CONFIG_LOCALSTORAGE_KEY } from '$lib/constants';
-import { SETTINGS_KEYS } from '$lib/constants/settings-keys';
+import { CONFIG_LOCALSTORAGE_KEY, SETTINGS_KEYS } from '$lib/constants';
 import type { DatabaseConversation } from '$lib/types/database';
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 

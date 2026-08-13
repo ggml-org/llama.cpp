@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { Music, Video, X } from '@lucide/svelte';
 	import { ActionIcon } from '$lib/components/app';
-	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
+	import { ICON_CLASS_DEFAULT } from '$lib/constants';
 	import { AttachmentType } from '$lib/enums';
 	import {
 		formatFileSize,

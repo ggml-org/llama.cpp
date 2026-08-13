@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { ChevronLeft, ChevronRight, Settings } from '@lucide/svelte';
-	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
+	import { ICON_CLASS_DEFAULT } from '$lib/constants';
 	import { useScrollCarousel } from '$lib/hooks/use-scroll-carousel.svelte';
 	import type { SettingsSection, SettingsSectionTitle } from '$lib/types';
 	import { onMount, tick } from 'svelte';

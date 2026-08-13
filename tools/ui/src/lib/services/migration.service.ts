@@ -22,12 +22,13 @@ import {
 	DB_APP_NAME_DEPRECATED,
 	IDXDB_STORES,
 	IDXDB_TABLES,
+	LEGACY_AGENTIC_REGEX,
+	LEGACY_REASONING_TAGS,
 	NEW_TO_DEPRECATED_MAP,
+	SETTINGS_KEYS,
 	STORAGE_APP_NAME,
 	STORAGE_APP_NAME_DEPRECATED
 } from '$lib/constants';
-import { LEGACY_AGENTIC_REGEX, LEGACY_REASONING_TAGS } from '$lib/constants/agentic';
-import { SETTINGS_KEYS } from '$lib/constants/settings-keys';
 import { MessageRole } from '$lib/enums';
 import Dexie from 'dexie';
 

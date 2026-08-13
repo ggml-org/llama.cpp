@@ -7,9 +7,7 @@
 		ChatMessageSystem,
 		ChatMessageUser
 	} from '$lib/components/app/chat';
-	import { SYSTEM_MESSAGE_PLACEHOLDER } from '$lib/constants';
-	import { REASONING_TAGS } from '$lib/constants/agentic';
-	import { ROUTES } from '$lib/constants/routes';
+	import { REASONING_TAGS, ROUTES, SYSTEM_MESSAGE_PLACEHOLDER } from '$lib/constants';
 	import { getChatActionsContext, setMessageEditContext } from '$lib/contexts';
 	import { AgenticSectionType, AttachmentType, MessageRole } from '$lib/enums';
 	import { DatabaseService } from '$lib/services/database.service';

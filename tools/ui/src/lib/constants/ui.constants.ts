@@ -1,10 +1,39 @@
-import { ROUTES } from './routes';
+import { ROUTES } from './routes.constants';
 import { Package, Search, Settings, SquarePen } from '@lucide/svelte';
 import McpLogo from '$lib/components/app/mcp/McpLogo.svelte';
-import type { Component } from 'svelte';
+import { ToolSource } from '$lib/enums/tools.enums';
+import type { DesktopIconStripItem } from '$lib/types';
 
 export const FORK_TREE_DEPTH_PADDING = 8;
 export const SYSTEM_MESSAGE_PLACEHOLDER = 'System message';
+
+export const TOOL_GROUP_LABELS = {
+	[ToolSource.BUILTIN]: 'Built-in',
+	[ToolSource.CUSTOM]: 'JSON Schema',
+	[ToolSource.FRONTEND]: 'Browser'
+} as const;
+
+export const TOOL_SERVER_LABELS = {
+	[ToolSource.BUILTIN]: 'Built-in Tools',
+	[ToolSource.CUSTOM]: 'Custom Tools',
+	[ToolSource.FRONTEND]: 'Browser Tools'
+} as const;
+
+export const TOOLTIP_DELAY_DURATION = 500;
+
+export const VIEWPORT_GUTTER = 8;
+export const MENU_OFFSET = 6;
+
+export const PROCESSING_INFO_TIMEOUT = 2000;
+
+/**
+ * Statistics units labels
+ */
+export const STATS_UNITS = {
+	TOKENS_PER_SECOND: 't/s'
+} as const;
+
+export const DEFAULT_MOBILE_BREAKPOINT = 768;
 
 /** Icon used for the model selector and the `/model` slash command. */
 export const MODEL_SELECTOR_ICON = Package;
@@ -14,16 +43,6 @@ export const ICON_STRIP_TRANSITION_DELAY_MULTIPLIER = 50;
 
 /** Max height for tool-result code blocks (json / source / diff / streaming code). */
 export const MAX_HEIGHT_CODE_BLOCK = '22rem';
-
-export interface DesktopIconStripItem {
-	icon: Component;
-	tooltip: string;
-	route?: string;
-	activeRouteId?: string;
-	activeRoutePrefix?: string;
-	activeUrlIncludes?: string;
-	keys?: string[];
-}
 
 export const SIDEBAR_ACTIONS_ITEMS: DesktopIconStripItem[] = [
 	{ icon: SquarePen, keys: ['shift', 'cmd', 'o'], route: ROUTES.NEW_CHAT, tooltip: 'New chat' },

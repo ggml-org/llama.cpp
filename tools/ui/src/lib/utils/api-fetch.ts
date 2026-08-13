@@ -1,6 +1,6 @@
 import { getAuthHeaders, getJsonHeaders } from './api-headers';
 import { base } from '$app/paths';
-import { ERROR_MESSAGES, HTTP_CODE_TO_STRING } from '$lib/constants/error';
+import { ERROR_MESSAGES, HTTP_CODE_TO_STRING } from '$lib/constants';
 import { UrlProtocol } from '$lib/enums';
 
 /**

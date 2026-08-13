@@ -19,16 +19,7 @@ import {
 	generateBlockId
 } from './code-block-utils';
 import type { DiagramPreData } from './pre-transform';
-import {
-	DIAGRAM_VIEW_MODE_ATTR,
-	DIAGRAM_VIEW_RENDERED,
-	SVG_BLOCK_CLASS,
-	SVG_ID_ATTR,
-	SVG_LANGUAGE,
-	SVG_SCROLL_CONTAINER_CLASS,
-	SVG_SOURCE_ATTR,
-	SVG_WRAPPER_CLASS
-} from '$lib/constants';
+import { DIAGRAM_VIEW_MODE_ATTR, DIAGRAM_VIEW_RENDERED, SVG } from '$lib/constants';
 import type { Element, ElementContent, Root } from 'hast';
 import type { Plugin } from 'unified';
 import { visit } from 'unist-util-visit';
@@ -48,11 +39,11 @@ export const rehypeEnhanceSvgBlocks: Plugin<[], Root> = () => {
 
 			if (!Array.isArray(className)) return;
 
-			const isSvg = className.some((cls) => typeof cls === 'string' && cls === SVG_BLOCK_CLASS);
+			const isSvg = className.some((cls) => typeof cls === 'string' && cls === SVG.BLOCK_CLASS);
 
 			if (!isSvg) return;
 
-			const svgId = generateBlockId(SVG_LANGUAGE, 'idxSvgBlock');
+			const svgId = generateBlockId(SVG.LANGUAGE, 'idxSvgBlock');
 			// Extract the svg source (text content of the pre element)
 			const svgSource = node.children
 				.map((child) => {
@@ -65,26 +56,26 @@ export const rehypeEnhanceSvgBlocks: Plugin<[], Root> = () => {
 			// Store the svg source in data attribute for copy and render
 			node.properties = {
 				...node.properties,
-				[SVG_ID_ATTR]: svgId,
-				[SVG_SOURCE_ATTR]: svgSource
+				[SVG.ID_ATTR]: svgId,
+				[SVG.SOURCE_ATTR]: svgSource
 			};
 
 			const actions = [
-				createCopyButton(svgId, SVG_ID_ATTR, 'Copy svg source'),
-				createToggleSourceButton(svgId, SVG_ID_ATTR, 'Toggle svg source'),
-				createPreviewButton(svgId, SVG_ID_ATTR, 'Preview svg')
+				createCopyButton(svgId, SVG.ID_ATTR, 'Copy svg source'),
+				createToggleSourceButton(svgId, SVG.ID_ATTR, 'Toggle svg source'),
+				createPreviewButton(svgId, SVG.ID_ATTR, 'Preview svg')
 			];
-			const header = createBlockHeader(SVG_LANGUAGE, svgId, SVG_ID_ATTR, actions);
+			const header = createBlockHeader(SVG.LANGUAGE, svgId, SVG.ID_ATTR, actions);
 			const preservedCode = (node.data as DiagramPreData | undefined)?.sourceCode;
-			const sourceView = createSourceView(preservedCode, svgSource, SVG_LANGUAGE);
+			const sourceView = createSourceView(preservedCode, svgSource, SVG.LANGUAGE);
 			const wrapper = createWrapper(
 				header,
 				node,
-				SVG_WRAPPER_CLASS,
-				SVG_SCROLL_CONTAINER_CLASS,
+				SVG.WRAPPER_CLASS,
+				SVG.SCROLL_CONTAINER_CLASS,
 				{
 					[DIAGRAM_VIEW_MODE_ATTR]: DIAGRAM_VIEW_RENDERED,
-					[SVG_ID_ATTR]: svgId
+					[SVG.ID_ATTR]: svgId
 				},
 				[sourceView]
 			);

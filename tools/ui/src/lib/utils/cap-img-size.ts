@@ -1,6 +1,5 @@
 import { getJpegOrientationFromDataURL, isJpegMimeType } from './jpeg-orientation';
-import { MEGAPIXELS_TO_PIXELS } from '$lib/constants/image-size';
-import { BASE64_IMAGE_URI_REGEX } from '$lib/constants/uri-template';
+import { BASE64_IMAGE_URI_REGEX, IMAGE } from '$lib/constants';
 import { MimeTypeImage } from '$lib/enums';
 
 /**
@@ -51,7 +50,7 @@ export function capImageDataURLSize(
 					const targetWidth = img.naturalWidth;
 					const targetHeight = img.naturalHeight;
 					const totalPixels = targetWidth * targetHeight;
-					const maxPixels = Math.floor(maxMegapixels * MEGAPIXELS_TO_PIXELS);
+					const maxPixels = Math.floor(maxMegapixels * IMAGE.MEGAPIXELS_TO_PIXELS);
 
 					if (maxPixels > 0 && totalPixels > maxPixels) {
 						const scaleFactor = Math.sqrt(maxPixels / totalPixels);

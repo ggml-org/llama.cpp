@@ -1,4 +1,4 @@
-import { BUILD_CONFIG } from '../src/lib/constants/pwa';
+import { BUILD_CONFIG } from '../src/lib/constants/pwa.constants';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'path';
 import type { Plugin } from 'vite';

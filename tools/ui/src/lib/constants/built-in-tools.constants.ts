@@ -20,13 +20,7 @@ import {
 	Terminal
 } from '@lucide/svelte';
 import { BuiltInTool, ToolSource } from '$lib/enums';
-import type { Component } from 'svelte';
-
-export interface BuiltinToolUiEntry {
-	icon: Component;
-	label: string;
-	source: ToolSource.BUILTIN | ToolSource.FRONTEND;
-}
+import type { BuiltinToolUiEntry } from '$lib/types';
 
 export const BUILTIN_TOOL_UI: Readonly<Record<BuiltInTool, BuiltinToolUiEntry>> = {
 	[BuiltInTool.EDIT_FILE]: { icon: FilePen, label: 'Edit file', source: ToolSource.BUILTIN },
@@ -56,9 +50,3 @@ export const BUILTIN_TOOL_UI: Readonly<Record<BuiltInTool, BuiltinToolUiEntry>> 
 	},
 	[BuiltInTool.WRITE_FILE]: { icon: FilePlus, label: 'Write file', source: ToolSource.BUILTIN }
 } as const;
-
-export function getBuiltinToolUi(toolName: string | undefined): BuiltinToolUiEntry | null {
-	if (!toolName) return null;
-
-	return (BUILTIN_TOOL_UI as Record<string, BuiltinToolUiEntry>)[toolName] ?? null;
-}

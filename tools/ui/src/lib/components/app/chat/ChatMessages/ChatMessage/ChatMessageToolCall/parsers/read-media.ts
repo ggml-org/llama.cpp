@@ -1,4 +1,4 @@
-import { FILE_PATH_SEPARATOR_REGEX, NEWLINE } from '$lib/constants/code';
+import { FILE_PATH_SEPARATOR_REGEX, NEWLINE } from '$lib/constants';
 import {
 	PREFIX_FILE,
 	PREFIX_MIME,

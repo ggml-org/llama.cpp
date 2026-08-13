@@ -3,7 +3,7 @@
  * definitions across the codebase.
  */
 
-import { APP_NAME } from './app';
+import { APP_NAME } from './app.constants';
 
 export const MEDIA_QUERIES = {
 	DISPLAY_MODE_STANDALONE: '(display-mode: standalone)',

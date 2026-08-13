@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { Lightbulb } from '@lucide/svelte';
 	import { CollapsibleContentBlock, MarkdownContent } from '$lib/components/app';
-	import { REASONING_SCROLL_AT_BOTTOM_THRESHOLD_PX } from '$lib/constants/auto-scroll';
+	import { REASONING_SCROLL_AT_BOTTOM_THRESHOLD_PX } from '$lib/constants';
 	import { AgenticSectionType } from '$lib/enums';
 	import { config } from '$lib/stores/settings.svelte';
 	import type { DatabaseMessageExtra } from '$lib/types';

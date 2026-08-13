@@ -4,7 +4,7 @@ import {
 	PWA_ASSET_GENERATOR,
 	PWA_GENERATOR_DEVICES,
 	THEME_COLORS
-} from './src/lib/constants/pwa';
+} from './src/lib/constants/pwa.constants';
 import { SplashOrientation } from './src/lib/enums/splash.enums';
 import {
 	combinePresetAndAppleSplashScreens,

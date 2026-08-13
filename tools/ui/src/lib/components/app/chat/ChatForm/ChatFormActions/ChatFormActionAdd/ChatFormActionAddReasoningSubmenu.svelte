@@ -2,7 +2,7 @@
 	import { Check, Info, Lightbulb, LightbulbOff } from '@lucide/svelte';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Tooltip from '$lib/components/ui/tooltip';
-	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
+	import { ICON_CLASS_DEFAULT } from '$lib/constants';
 	import { useReasoningMenu } from '$lib/hooks/use-reasoning-menu.svelte';
 
 	const reasoning = useReasoningMenu();

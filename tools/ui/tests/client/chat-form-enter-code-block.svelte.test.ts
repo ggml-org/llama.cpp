@@ -6,7 +6,7 @@
 // consumes the same case locally; see chat-form-contenteditable).
 
 import ChatFormTestWrapper from './components/ChatFormTestWrapper.svelte';
-import { SETTINGS_KEYS } from '$lib/constants/settings-keys';
+import { SETTINGS_KEYS } from '$lib/constants';
 import { settingsStore } from '$lib/stores/settings.svelte';
 import { tick } from 'svelte';
 import { beforeEach, describe, expect, it, vi } from 'vitest';

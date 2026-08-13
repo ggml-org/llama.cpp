@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
+	import { ICON_CLASS_DEFAULT } from '$lib/constants';
 	import type { Component, Snippet } from 'svelte';
 
 	interface Props {
