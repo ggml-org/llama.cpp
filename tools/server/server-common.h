@@ -303,6 +303,7 @@ struct server_chat_params {
     bool allow_audio;
     bool allow_video;
     bool enable_thinking = true;
+    std::string reasoning_effort;
     int  reasoning_budget = -1;
     std::string reasoning_budget_message;
     std::string media_path;

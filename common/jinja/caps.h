@@ -16,6 +16,9 @@ struct caps {
     // supports preserve reasoning trace in the full history, not just the last assistant message
     bool supports_preserve_reasoning = false;
 
+    // supports reasoning effort levels
+    bool supports_reasoning_effort = false;
+
     // one of the 2 content capabilities must be true
     bool supports_string_content = true;
     bool supports_typed_content = false;
