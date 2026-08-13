@@ -8941,7 +8941,7 @@ static void ggml_compute_forward_flash_attn_ext_tiled(
             for (int tk = 0; tk < kv_tile; tk++) {
                 const char * v_data = (const char *)v->data + (ic + tk)*nbv1 + iv2*nbv2 + iv3*nbv3;
                 if (kv_type == GGML_TYPE_F16) {
-                    ggml_fp16_to_fp32_row((const ggml_fp16_t *)v_data, V32 + tk * DV, DV);
+                    ggml_cpu_fp16_to_fp32((const ggml_fp16_t *)v_data, V32 + tk * DV, DV);
                 } else {
                     memcpy(V32 + tk * DV, v_data, DV * sizeof(float));
                 }
