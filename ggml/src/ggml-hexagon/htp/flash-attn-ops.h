@@ -172,7 +172,7 @@ static inline void hmx_fa_vtcm_layout_build(struct hmx_fa_vtcm_layout * L,
     VTCM_LAYOUT_ALLOC(off, off_q_tiles,       q_tile_size);
     VTCM_LAYOUT_ALLOC(off, off_o_tiles[0],    o_tile_size);
     VTCM_LAYOUT_ALLOC(off, off_o_tiles[1],    o_tile_size);
-    VTCM_LAYOUT_ALLOC(off, off_d_tiles[0], d_tile_size);
+    VTCM_LAYOUT_ALLOC(off, off_d_tiles[0],    d_tile_size);
     VTCM_LAYOUT_ALLOC_OPTIONAL(off, off_d_tiles[1], d_tile_size, pipeline);
     VTCM_LAYOUT_ALLOC(off, off_d_inv_l,       d_tile_size);
 
