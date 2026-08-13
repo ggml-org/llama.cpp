@@ -61,8 +61,7 @@ def test_tokenize_with_pieces():
 
 # In a direct tiny-model server, the catalog instruction token count must
 # equal the existing audited tokenizer operation with no special tokens
-# (POST /tokenize defaults: add_special=false, parse_special=true). Skips
-# until the route-binding task registers GET /skills.
+# (POST /tokenize defaults: add_special=false, parse_special=true).
 def test_skills_catalog_token_count_matches_tokenize(tmp_path):
     global server
     server.skills = True
@@ -81,8 +80,6 @@ def test_skills_catalog_token_count_matches_tokenize(tmp_path):
     server.start()
 
     res = server.make_request("GET", "/skills", headers={"X-Skill-Cwd": str(project)})
-    if res.status_code == 404:
-        pytest.skip("Skills routes are registered by the route-binding task")
     assert res.status_code == 200
     assert len(res.body["skills"]) == 1
     instruction = res.body["skills"][0]["instruction"]

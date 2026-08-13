@@ -1,10 +1,9 @@
-//  Tests the public Skills catalog/read handlers through their constructed
-//  handler interface (server_http_req in, server_http_res out) without binding
-//  any HTTP route. This is the narrow direct-handler verification seam for the
-//  Skills contract while the production routes remain unbound until the
-//  route-binding task: the fixture drives real request headers and request JSON
-//  through server_skills::handle_get / handle_post, exactly as the HTTP layer
-//  would after deserializing a request.
+// Tests the public Skills catalog/read handlers through their constructed
+// handler interface (server_http_req in, server_http_res out) without binding
+// any HTTP route. This is the narrow direct-handler verification seam for the
+// Skills contract: the fixture drives real request headers and request JSON
+// through server_skills::handle_get / handle_post, exactly as the HTTP layer
+// would after deserializing a request.
 //
 #include "../tools/server/server-skills.h"
 
