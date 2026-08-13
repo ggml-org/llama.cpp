@@ -27,7 +27,8 @@ export {
 	PdfViewMode,
 	ReasoningFormat,
 	ChatFormCommandAction,
-	FileMentionEntryType
+	FileMentionEntryType,
+	ContentEditableTokenKind
 } from './chat.enums';
 
 export { SessionRecordType } from './conversation-import.enums';
@@ -71,7 +72,14 @@ export { ServerRole, ServerModelStatus, ServerModelsSseEventType } from './serve
 
 export { ParameterSource, SyncableParameterType, SettingsFieldType } from './settings.enums';
 
-export { ColorMode, HtmlInputType, McpPromptVariant, TooltipSide, UrlProtocol } from './ui.enums';
+export {
+	ColorLevel,
+	ColorMode,
+	HtmlInputType,
+	McpPromptVariant,
+	TooltipSide,
+	UrlProtocol
+} from './ui.enums';
 
 export { KeyboardKey } from './keyboard.enums';
 

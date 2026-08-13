@@ -13,41 +13,13 @@ import {
 	MessageRole,
 	ToolResultKind
 } from '$lib/enums';
+import type { AgenticSection, ContinueIntent, ToolResultLine } from '$lib/types/agentic';
 import type { ApiChatCompletionToolCall } from '$lib/types/api';
 import type {
 	DatabaseMessage,
 	DatabaseMessageExtra,
 	DatabaseMessageExtraImageFile
 } from '$lib/types/database';
-
-/**
- * Represents a parsed section of agentic content for display
- */
-export interface AgenticSection {
-	type: AgenticSectionType;
-	content: string;
-	toolName?: string;
-	toolArgs?: string;
-	toolResult?: string;
-	toolResultExtras?: DatabaseMessageExtra[];
-	/** Working directory the tool call ran with (from the tool result
-	 *  message), shown by the exec_shell_command renderer. */
-	toolCwd?: string;
-	/** ID of the model-side tool call (matches tool_calls[i].id). Lets
-	 *  downstream consumers correlate a section with the agentic loop's
-	 *  currently-executing tool, e.g. to drive live-streaming UI state
-	 *  by matching against agenticStore.executingToolCallId. */
-	toolCallId?: string;
-	wasInterrupted?: boolean;
-}
-
-/**
- * Represents a tool result line that may reference a media attachment (image or audio)
- */
-export type ToolResultLine = {
-	text: string;
-	media?: DatabaseMessageExtraImageFile | DatabaseMessageExtraAudioFile;
-};
 
 /**
  * Derives display sections from a single assistant message and its direct tool results.
@@ -484,29 +456,6 @@ export function hasAgenticContent(
 
 	return toolMessages.length > 0;
 }
-
-/**
- * Classification of how a Continue click on an assistant message should resume
- * generation. The caller dispatches the resume path based on this value.
- *
- *   append_text  -> the target is a plain text turn, resume with
- *                   continue_final_message and rehydrate the persisted
- *                   tool_calls and attachments through the regular DB to API
- *                   message converter.
- *   rerun_turn   -> the target carries tool_calls that were never resolved by
- *                   tool result messages. The agentic stream was cut mid turn,
- *                   so we drop the target and rerun the loop from the previous
- *                   history. truncateAfter is the last kept index, inclusive.
- *   next_turn    -> the target's tool_calls were already resolved by trailing
- *                   tool results. Hand the history up to and including the
- *                   last consecutive tool result back to the agentic loop so it
- *                   starts the next turn naturally. truncateAfter points at
- *                   that last tool result.
- */
-export type ContinueIntent =
-	| { kind: ContinueIntentKind.APPEND_TEXT }
-	| { kind: ContinueIntentKind.RERUN_TURN; truncateAfter: number }
-	| { kind: ContinueIntentKind.NEXT_TURN; truncateAfter: number };
 
 /**
  * Decide how a Continue click on messages[idx] should resume generation.

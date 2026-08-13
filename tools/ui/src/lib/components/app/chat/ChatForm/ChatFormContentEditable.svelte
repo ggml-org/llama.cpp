@@ -2,7 +2,8 @@
 	import { CODE_BLOCK } from '$lib/constants';
 	import { ColorMode } from '$lib/enums';
 	import { isMobile } from '$lib/stores/viewport.svelte';
-	import type { ContentToken, SourceHistoryEntry } from '$lib/utils';
+	import type { ContentEditableToken } from '$lib/types';
+	import type { SourceHistoryEntry } from '$lib/utils';
 	import {
 		badgeAwareWordJump,
 		buildFragment,
@@ -63,7 +64,7 @@
 		rootElement.dataset.empty = source.length === 0 ? 'true' : 'false';
 	}
 
-	function renderTokens(tokens: ContentToken[]) {
+	function renderTokens(tokens: ContentEditableToken[]) {
 		if (!rootElement) return;
 
 		const caret = rangeToTextOffset(rootElement, safeRange());

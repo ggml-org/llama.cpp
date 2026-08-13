@@ -5,7 +5,8 @@
 	import { SyntaxHighlightedCode } from '$lib/components/app';
 	import { MAX_HEIGHT_CODE_BLOCK, RESULT_STAT_SEPARATOR } from '$lib/constants';
 	import { toolsStore } from '$lib/stores/tools.svelte';
-	import { abbreviateHome, type AgenticSection } from '$lib/utils';
+	import type { AgenticSection } from '$lib/types';
+	import { abbreviateHome } from '$lib/utils';
 
 	interface Props {
 		section: AgenticSection;

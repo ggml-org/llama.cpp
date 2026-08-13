@@ -161,6 +161,22 @@ export type {
 	MCPServerResources
 } from './mcp';
 
+// Search result types
+export type { SearchResult } from './search';
+
+// Glob search types (working-directory / mention pickers)
+export type {
+	GlobEntry,
+	GlobSearchArgs,
+	GlobSearchResult,
+	GlobEntryResult,
+	GlobSearchChildOptions,
+	GlobSearchChildResult
+} from './glob';
+
+// Contenteditable token types (chat form)
+export type { ContentEditableToken } from './contenteditable';
+
 // Agentic types
 export type {
 	AgenticConfig,
@@ -174,7 +190,10 @@ export type {
 	AgenticFlowOptions,
 	AgenticFlowParams,
 	AgenticFlowResult,
-	SteeringMessage
+	SteeringMessage,
+	AgenticSection,
+	ToolResultLine,
+	ContinueIntent
 } from './agentic';
 
 // Navigation types

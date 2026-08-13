@@ -3,7 +3,7 @@
 // the native undo stack), and Tab is NOT intercepted (WCAG 2.1.2 no
 // keyboard trap), matching the plain textarea.
 
-import ChatFormContenteditableHarness from './components/ChatFormContenteditableHarness.svelte';
+import ChatFormContentEditableHarness from './components/ChatFormContentEditableHarness.svelte';
 import { tick } from 'svelte';
 import { describe, expect, it } from 'vitest';
 import { render } from 'vitest-browser-svelte';
@@ -31,9 +31,9 @@ function keydown(root: HTMLElement, init: KeyboardEventInit) {
 	return event;
 }
 
-describe('ChatFormContenteditable undo/redo', () => {
+describe('ChatFormContentEditable undo/redo', () => {
 	it('undoes and redoes an edit across a badge-containing buffer', async () => {
-		const screen = render(ChatFormContenteditableHarness, { value: SOURCE });
+		const screen = render(ChatFormContentEditableHarness, { value: SOURCE });
 
 		await tick();
 
@@ -57,7 +57,7 @@ describe('ChatFormContenteditable undo/redo', () => {
 	});
 
 	it('redoes with Ctrl+Y as well', async () => {
-		const screen = render(ChatFormContenteditableHarness, { value: SOURCE });
+		const screen = render(ChatFormContentEditableHarness, { value: SOURCE });
 
 		await tick();
 
@@ -75,7 +75,7 @@ describe('ChatFormContenteditable undo/redo', () => {
 	});
 
 	it('coalesces a typing burst into one undo step', async () => {
-		const screen = render(ChatFormContenteditableHarness, { value: 'abc' });
+		const screen = render(ChatFormContentEditableHarness, { value: 'abc' });
 
 		await tick();
 
@@ -92,7 +92,7 @@ describe('ChatFormContenteditable undo/redo', () => {
 	});
 
 	it('keeps a newline as its own undo step', async () => {
-		const screen = render(ChatFormContenteditableHarness, { value: 'abc' });
+		const screen = render(ChatFormContentEditableHarness, { value: 'abc' });
 
 		await tick();
 
@@ -113,7 +113,7 @@ describe('ChatFormContenteditable undo/redo', () => {
 	});
 
 	it('is a no-op when there is nothing to undo', async () => {
-		const screen = render(ChatFormContenteditableHarness, { value: 'abc' });
+		const screen = render(ChatFormContentEditableHarness, { value: 'abc' });
 
 		await tick();
 
@@ -127,7 +127,7 @@ describe('ChatFormContenteditable undo/redo', () => {
 	});
 
 	it('abandons the redo branch after a fresh edit', async () => {
-		const screen = render(ChatFormContenteditableHarness, { value: 'abc' });
+		const screen = render(ChatFormContentEditableHarness, { value: 'abc' });
 
 		await tick();
 
@@ -147,9 +147,9 @@ describe('ChatFormContenteditable undo/redo', () => {
 	});
 });
 
-describe('ChatFormContenteditable Tab key', () => {
+describe('ChatFormContentEditable Tab key', () => {
 	it('does not trap Tab (focus can leave the editable)', async () => {
-		const screen = render(ChatFormContenteditableHarness, { value: SOURCE });
+		const screen = render(ChatFormContentEditableHarness, { value: SOURCE });
 
 		await tick();
 

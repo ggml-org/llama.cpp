@@ -3,7 +3,7 @@
 	import {
 		ChatAttachmentsList,
 		ChatFormActions,
-		ChatFormContenteditable,
+		ChatFormContentEditable,
 		ChatFormFileInputInvisible,
 		ChatFormMcpResourcesList,
 		ChatFormPickers,
@@ -605,7 +605,7 @@
 			class="flex-column relative min-h-12 items-center rounded-4xl md:rounded-3xl py-2 pb-2.25 shadow-sm transition-all focus-within:shadow-md md:py-3!"
 		>
 			{#if useContenteditable}
-				<ChatFormContenteditable
+				<ChatFormContentEditable
 					class="px-5 py-1.5 md:pt-0 mb-0.5"
 					bind:this={inputRef}
 					bind:value

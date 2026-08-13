@@ -7,7 +7,8 @@
 
 import { parseToolArgs } from './_shared';
 import { BuiltInTool } from '$lib/enums';
-import { type AgenticSection, splitSearchSummaryList } from '$lib/utils';
+import type { AgenticSection } from '$lib/types';
+import { splitSearchSummaryList } from '$lib/utils';
 
 export type GrepSearchMatch = {
 	file: string;

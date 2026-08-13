@@ -11,10 +11,10 @@
 	import { useScrollActiveRow } from '$lib/hooks/use-scroll-active-row.svelte';
 	import { ToolsService } from '$lib/services/tools.service';
 	import { toolsStore } from '$lib/stores/tools.svelte';
+	import type { GlobEntry } from '$lib/types';
 	import {
 		abbreviateHome,
 		buildCaseInsensitiveGlob,
-		type GlobEntry,
 		joinPath,
 		lastPathSegment,
 		runGlobSearchWithChildren

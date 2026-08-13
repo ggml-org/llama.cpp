@@ -5,16 +5,18 @@
  */
 
 import { lastPathSegment } from './path-display';
-import {
-	buildGlobSearchArgs,
-	type GlobEntry,
-	type GlobSearchArgs,
-	joinPath,
-	rankEntries
-} from './working-directory';
+import { buildGlobSearchArgs, joinPath, rankEntries } from './working-directory';
 import { GLOB, PATH_SEPARATOR, SEARCH } from '$lib/constants';
 import { BuiltInTool, GlobSearchType } from '$lib/enums';
 import { ToolsService } from '$lib/services/tools.service';
+import type {
+	GlobEntry,
+	GlobEntryResult,
+	GlobSearchArgs,
+	GlobSearchChildOptions,
+	GlobSearchChildResult,
+	GlobSearchResult
+} from '$lib/types/glob';
 
 const SEARCH_CACHE_TTL_MS = 2000;
 
@@ -25,12 +27,6 @@ interface CacheEntry {
 }
 
 const searchCache = new Map<string, CacheEntry>();
-
-export interface GlobSearchResult {
-	base: string;
-	entries: GlobEntry[];
-	error?: string;
-}
 
 export async function runGlobSearch(
 	args: GlobSearchArgs,
@@ -64,30 +60,6 @@ export async function runGlobSearch(
 	searchCache.set(key, { at: now, base, results: entries });
 
 	return { base, entries };
-}
-
-export interface GlobEntryResult {
-	path: string;
-	name: string;
-	type: string;
-}
-
-export interface GlobSearchChildOptions {
-	type?: GlobSearchType;
-	/** Descend only on a trailing path separator (mention picker); off for
-	 * the WD picker, which descends on any exact match. */
-	descendOnTrailingSeparator?: boolean;
-	childMaxDepth?: number;
-}
-
-export interface GlobSearchChildResult {
-	base: string;
-	args: GlobSearchArgs;
-	/** Outer ranked entries plus the walked directory's children (absolute). */
-	entries: GlobEntryResult[];
-	/** Absolute path of the directory whose children were appended. */
-	exactDir?: string;
-	error?: string;
 }
 
 function toEntryResult(e: GlobEntry, base: string): GlobEntryResult {

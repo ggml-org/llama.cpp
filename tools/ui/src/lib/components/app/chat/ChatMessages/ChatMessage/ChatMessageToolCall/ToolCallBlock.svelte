@@ -14,7 +14,8 @@
 	import { ICON_CLASS_DEFAULT, ICON_CLASS_SPIN } from '$lib/constants';
 	import { AgenticSectionType } from '$lib/enums';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
-	import { type AgenticSection, type BuiltinToolUiEntry, getBuiltinToolUi } from '$lib/utils';
+	import type { AgenticSection, BuiltinToolUiEntry } from '$lib/types';
+	import { getBuiltinToolUi } from '$lib/utils';
 	import type { Component, Snippet } from 'svelte';
 
 	type ToolCallBlockMetaWithError = TMeta & { errorMessage?: string };

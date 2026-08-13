@@ -89,3 +89,13 @@ export enum FileMentionEntryType {
 	FILE = 'file',
 	DIRECTORY = 'directory'
 }
+
+/**
+ * Kinds of tokens the chat-form contenteditable produces.
+ */
+export enum ContentEditableTokenKind {
+	TEXT = 'text',
+	BADGE = 'badge',
+	INLINE_CODE = 'inlineCode',
+	CODE_BLOCK = 'codeBlock'
+}

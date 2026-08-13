@@ -1,6 +1,7 @@
 import { REASONING_TAGS } from '$lib/constants';
 import { AgenticSectionType } from '$lib/enums';
-import { type AgenticSection, buildAssistantRawOutput } from '$lib/utils/agentic';
+import type { AgenticSection } from '$lib/types/agentic';
+import { buildAssistantRawOutput } from '$lib/utils/agentic';
 import { describe, expect, it } from 'vitest';
 
 function makeSection(

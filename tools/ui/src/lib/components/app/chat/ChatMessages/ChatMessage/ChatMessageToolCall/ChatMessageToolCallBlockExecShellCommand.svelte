@@ -11,19 +11,19 @@
 	import { AlertTriangle, Check, Loader2, XCircle } from '@lucide/svelte';
 	import { CollapsibleTerminalBlock } from '$lib/components/app';
 	import { SETTINGS_KEYS, TOOL_RUNTIME_SCROLL_AT_BOTTOM_THRESHOLD_PX } from '$lib/constants';
+	import { AttachmentType } from '$lib/enums';
 	import { config } from '$lib/stores/settings.svelte';
 	import { toolsStore } from '$lib/stores/tools.svelte';
+	import type { AgenticSection, ToolResultLine } from '$lib/types';
 	import type { DatabaseMessageExtra } from '$lib/types';
 	import {
 		abbreviateHome,
-		type AgenticSection,
 		type ExecShellExitStatus,
 		highlightCode,
 		isExitCodeSummaryLine,
 		parseExecShellCommandError,
 		parseExecShellCommandExitStatus,
-		parseToolResultWithMedia,
-		type ToolResultLine
+		parseToolResultWithMedia
 	} from '$lib/utils';
 
 	interface Props {
@@ -222,7 +222,7 @@
 			>
 				{#each outputLines as line, i (i)}
 					<div class="font-mono text-[11px] leading-relaxed whitespace-pre-wrap">{line.text}</div>
-					{#if line.media}
+					{#if line.media?.type === AttachmentType.IMAGE}
 						<img
 							src={line.media.base64Url}
 							alt={line.media.name}

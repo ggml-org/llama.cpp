@@ -17,12 +17,13 @@
 		agenticResolvePermission
 	} from '$lib/stores/agentic.svelte';
 	import { config } from '$lib/stores/settings.svelte';
+	import type { AgenticSection } from '$lib/types';
 	import type {
 		ChatMessageAgenticTimings,
 		ChatMessageAgenticTurnStats,
 		DatabaseMessage
 	} from '$lib/types';
-	import { type AgenticSection, deriveAgenticSections } from '$lib/utils';
+	import { deriveAgenticSections } from '$lib/utils';
 
 	interface Props {
 		message: DatabaseMessage;

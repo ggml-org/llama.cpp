@@ -179,18 +179,11 @@ export {
 	rankEntries,
 	joinPath,
 	highlightMatch,
-	type GlobEntry,
-	type GlobSearchArgs,
 	type PathQuery
 } from './working-directory';
 
 // Shared `file_glob_search` runner with a short-lived result cache
-export {
-	runGlobSearch,
-	runGlobSearchWithChildren,
-	type GlobEntryResult,
-	type GlobSearchResult
-} from './glob-search';
+export { runGlobSearch, runGlobSearchWithChildren } from './glob-search';
 
 // Mention-token detection (for the `@`-triggered file/folder mention picker)
 export {
@@ -219,8 +212,7 @@ export {
 	rangeToTextOffset,
 	textOffsetToRange,
 	badgeAwareWordJump,
-	leadingBadgeEdgeOffset,
-	type ContentToken
+	leadingBadgeEdgeOffset
 } from './contenteditable-tokenizer';
 
 // Source-space undo/redo history for the chat-form contenteditable
@@ -251,9 +243,7 @@ export {
 	parseToolResultWithMedia,
 	splitSearchSummaryList,
 	hasAgenticContent,
-	classifyToolResult,
-	type AgenticSection,
-	type ToolResultLine
+	classifyToolResult
 } from './agentic';
 
 // Line-level unified diff for tool result rendering (`edit_file` block)
@@ -276,8 +266,7 @@ export {
 	extractSearchResults,
 	extractSearchQuery,
 	faviconForUrl,
-	isWebSearchToolName,
-	type SearchResult
+	isWebSearchToolName
 } from './search-results';
 
 // Cache utilities
@@ -318,7 +307,6 @@ export { tryParseToolResultObject } from './tool-call-meta';
 // Re-exported through $lib/utils so renderer components can read the
 // label without depending on $lib/constants directly.
 export { getBuiltinToolUi } from './built-in-tools';
-export type { BuiltinToolUiEntry } from '$lib/types';
 
 // Chat command picker
 

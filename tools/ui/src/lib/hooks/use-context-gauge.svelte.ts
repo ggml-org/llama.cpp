@@ -5,12 +5,9 @@
  */
 
 import { useProcessingState } from './use-processing-state.svelte';
-import {
-	type ColorLevel,
-	colorLevelFromPercent
-} from '$lib/components/app/chat/ChatForm/ChatFormContextGauge/context-gauge';
+import { colorLevelFromPercent } from '$lib/components/app/chat/ChatForm/ChatFormContextGauge/context-gauge';
 import { STATS_UNITS } from '$lib/constants';
-import { MessageRole } from '$lib/enums';
+import { ColorLevel, MessageRole } from '$lib/enums';
 import { chatStore } from '$lib/stores/chat.svelte';
 import { activeMessages } from '$lib/stores/conversations.svelte';
 import {

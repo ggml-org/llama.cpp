@@ -120,7 +120,7 @@ export { default as ChatAttachmentsPreviewCurrentItem } from './ChatAttachments/
  * Used by ChatScreenForm and ChatMessageEditForm for both new conversations and message editing.
  *
  * **Architecture:**
- * - Composes ChatFormTextarea (or ChatFormContenteditable for messages with
+ * - Composes ChatFormTextarea (or ChatFormContentEditable for messages with
  *   file mention links), ChatFormActions, and ChatFormPickerMcpPrompts
  * - Manages file upload state via `uploadedFiles` bindable prop
  * - Integrates with ModelsSelectorDropdown for model selection in router mode
@@ -272,7 +272,7 @@ export { default as ChatFormMcpResourcesList } from './ChatForm/ChatFormMcpResou
  * source string. ChatForm swaps it in once a mention link lands in the
  * buffer. Shares the focus()/resetHeight()/caret handle with the textarea.
  */
-export { default as ChatFormContenteditable } from './ChatForm/ChatFormContenteditable.svelte';
+export { default as ChatFormContentEditable } from './ChatForm/ChatFormContentEditable.svelte';
 
 /**
  * Plain auto-resizing textarea with IME composition support. Default input

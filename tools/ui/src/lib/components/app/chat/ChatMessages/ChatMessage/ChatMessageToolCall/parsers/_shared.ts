@@ -5,7 +5,7 @@
 // stay focused on its own format quirks.
 
 import { BuiltInTool } from '$lib/enums';
-import type { AgenticSection } from '$lib/utils/agentic';
+import type { AgenticSection } from '$lib/types/agentic';
 import { parsePartialJsonArgs } from '$lib/utils/parse-partial-json-args';
 
 /**

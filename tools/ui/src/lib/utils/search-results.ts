@@ -1,3 +1,5 @@
+import type { SearchResult } from '$lib/types/search';
+
 /**
  * Parsers for MCP web-search tool responses shaped like:
  *
@@ -15,14 +17,6 @@
  * separated by `---` qualifies), so it adapts to other web-search MCP
  * servers without hardcoding tool names.
  */
-
-export type SearchResult = {
-	title: string;
-	url: string;
-	published?: string;
-	author?: string;
-	highlights?: string;
-};
 
 const SEPARATOR_LINE_RE = /^\s*---\s*$/;
 const URL_SCHEME_RE = /^https?:\/\//i;

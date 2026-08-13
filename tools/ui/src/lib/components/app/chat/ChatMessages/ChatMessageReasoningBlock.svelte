@@ -5,7 +5,7 @@
 	import { AgenticSectionType } from '$lib/enums';
 	import { config } from '$lib/stores/settings.svelte';
 	import type { DatabaseMessageExtra } from '$lib/types';
-	import type { AgenticSection } from '$lib/utils';
+	import type { AgenticSection } from '$lib/types';
 
 	interface Props {
 		section: AgenticSection;
