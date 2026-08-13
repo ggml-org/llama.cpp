@@ -101,6 +101,7 @@ int g_ggml_sycl_use_level_zero_api = 0;
 int g_ggml_sycl_enable_flash_attention = 1;
 int g_ggml_sycl_dev2dev_memcpy = DEV2DEV_MEMCPY_SYCL;
 int g_ggml_sycl_usm_system = 0;
+int g_ggml_sycl_enable_host_pinned_mem = 1;
 
 static ggml_sycl_device_info ggml_sycl_init() {
     ggml_sycl_device_info info = {};
@@ -317,6 +318,8 @@ static void ggml_check_sycl() try {
 #endif
 
         g_ggml_sycl_usm_system = ggml_sycl_get_env("GGML_SYCL_USM_SYSTEM", 0);
+        g_ggml_sycl_enable_host_pinned_mem =
+            ggml_sycl_get_env("GGML_SYCL_ENABLE_HOST_PINNED_MEM", 1);
 
         GGML_SYCL_DEBUG("[SYCL] call ggml_check_sycl\n");
 
@@ -415,6 +418,7 @@ static void ggml_check_sycl() try {
 #endif
 
         GGML_LOG_INFO("  GGML_SYCL_USM_SYSTEM: %d\n", g_ggml_sycl_usm_system);
+        GGML_LOG_INFO("  GGML_SYCL_ENABLE_HOST_PINNED_MEM: %d\n", g_ggml_sycl_enable_host_pinned_mem);
 
 /* NOT REMOVE, keep it for next optimize for XMX.
 #if defined(SYCL_USE_XMX)
@@ -1442,18 +1446,53 @@ ggml_backend_buffer_type_t ggml_backend_sycl_split_buffer_type(const float * ten
 
 // host buffer type
 
+struct ggml_backend_sycl_device_context {
+    int device;
+    std::string name;
+    std::string description;
+    int op_offload_min_batch_size;
+};
+
 static const char * ggml_backend_sycl_host_buffer_type_name(ggml_backend_buffer_type_t buft) {
     return GGML_SYCL_NAME "_Host";
 
     GGML_UNUSED(buft);
 }
 
+//host pinned memory
+static void * ggml_backend_sycl_host_malloc(size_t size) {
+    void * ptr = nullptr;
+    try {
+        ggml_check_sycl();
+        // USM host memory is page-locked and device-accessible by construction
+        auto & q = dpct::dev_mgr::instance().get_device(0).default_queue();
+        ptr = sycl::malloc_host(size, q, sycl::property_list{});
+    } catch (...) {
+        ptr = nullptr;
+    }
+    if (ptr == nullptr) {
+        GGML_LOG_WARN("%s: failed to allocate %.2f MiB of pinned memory\n", __func__,
+                size / 1024.0 / 1024.0);
+    }
+
+    return ptr;
+}
+
 static void ggml_backend_sycl_host_buffer_free_buffer(ggml_backend_buffer_t buffer) {
-    free_aligned_mem_host((void *)buffer->context);
+    if (buffer->context == nullptr) {
+        return;
+    }
+    if (g_ggml_sycl_enable_host_pinned_mem) {
+        auto & q = dpct::dev_mgr::instance().get_device(0).default_queue();
+        SYCL_CHECK(CHECK_TRY_ERROR(sycl::free(buffer->context, q)));
+    } else {
+        free_aligned_mem_host((void *) buffer->context);
+    }
 }
 
 static ggml_backend_buffer_t ggml_backend_sycl_host_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size) {
-    void * ptr = aligned_malloc_host(TENSOR_ALIGNMENT, size);
+    void * ptr = g_ggml_sycl_enable_host_pinned_mem ? ggml_backend_sycl_host_malloc(size) :
+                                                      aligned_malloc_host(TENSOR_ALIGNMENT, size);
     if (ptr == nullptr) {
         // fallback to cpu buffer
         return ggml_backend_buft_alloc_buffer(ggml_backend_cpu_buffer_type(), size);
@@ -1467,6 +1506,11 @@ static ggml_backend_buffer_t ggml_backend_sycl_host_buffer_type_alloc_buffer(ggm
     return buffer;
 }
 
+static size_t ggml_backend_sycl_host_buffer_type_get_max_size(ggml_backend_buffer_type_t buft) {
+    ggml_backend_sycl_device_context * dev_ctx = (ggml_backend_sycl_device_context *) buft->device->context;
+    return dpct::dev_mgr::instance().get_device(dev_ctx->device).get_max_mem_alloc_size();
+}
+
 ggml_backend_buffer_type_t ggml_backend_sycl_host_buffer_type() {
     GGML_SYCL_DEBUG("[SYCL] call ggml_backend_sycl_host_buffer_type\n");
     static struct ggml_backend_buffer_type ggml_backend_sycl_buffer_type_host = {
@@ -1474,7 +1518,7 @@ ggml_backend_buffer_type_t ggml_backend_sycl_host_buffer_type() {
             /* .get_name         = */ ggml_backend_sycl_host_buffer_type_name,
             /* .alloc_buffer     = */ ggml_backend_sycl_host_buffer_type_alloc_buffer,
             /* .get_alignment    = */ ggml_backend_cpu_buffer_type()->iface.get_alignment,
-            /* .get_max_size     = */ NULL, // TODO: return device.maxBufferLength
+            /* .get_max_size     = */ ggml_backend_sycl_host_buffer_type_get_max_size,
             /* .get_alloc_size   = */ ggml_backend_cpu_buffer_type()->iface.get_alloc_size,
             /* .is_host          = */ ggml_backend_cpu_buffer_type()->iface.is_host,
         },
@@ -5627,13 +5671,6 @@ int ggml_backend_sycl_get_device_count() {
 
 
 // backend device
-
-struct ggml_backend_sycl_device_context {
-    int device;
-    std::string name;
-    std::string description;
-    int op_offload_min_batch_size;
-};
 
 static const char * ggml_backend_sycl_device_get_name(ggml_backend_dev_t dev) {
     ggml_backend_sycl_device_context * ctx = (ggml_backend_sycl_device_context *)dev->context;
