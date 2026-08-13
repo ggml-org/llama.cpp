@@ -3,9 +3,9 @@
 	import { ActionIconCopyToClipboard, SyntaxHighlightedCode } from '$lib/components/app';
 	import { Button } from '$lib/components/ui/button';
 	import * as Dialog from '$lib/components/ui/dialog';
-	import { DEFAULT_RESOURCE_FILENAME } from '$lib/constants';
-	import { MimeTypeIncludes, MimeTypeText } from '$lib/enums';
-	import { mcpStore } from '$lib/stores/mcp.svelte';
+	import { DEFAULT_RESOURCE_FILENAME, MIME_TYPE_SUBSTRINGS } from '$lib/constants';
+	import { MimeTypeText } from '$lib/enums';
+	import { mcpStore } from '$lib/stores';
 	import type { DatabaseMessageExtraMcpResource } from '$lib/types';
 	import {
 		downloadResourceContent,
@@ -26,11 +26,13 @@
 	const favicon = $derived(mcpStore.getServerFavicon(extra.serverName));
 
 	function getLanguage(): string {
-		if (extra.mimeType?.includes(MimeTypeIncludes.JSON)) return MimeTypeIncludes.JSON;
+		if (extra.mimeType?.includes(MIME_TYPE_SUBSTRINGS.JSON)) return MIME_TYPE_SUBSTRINGS.JSON;
 
-		if (extra.mimeType?.includes(MimeTypeIncludes.JAVASCRIPT)) return MimeTypeIncludes.JAVASCRIPT;
+		if (extra.mimeType?.includes(MIME_TYPE_SUBSTRINGS.JAVASCRIPT))
+			return MIME_TYPE_SUBSTRINGS.JAVASCRIPT;
 
-		if (extra.mimeType?.includes(MimeTypeIncludes.TYPESCRIPT)) return MimeTypeIncludes.TYPESCRIPT;
+		if (extra.mimeType?.includes(MIME_TYPE_SUBSTRINGS.TYPESCRIPT))
+			return MIME_TYPE_SUBSTRINGS.TYPESCRIPT;
 
 		const name = extra.name || extra.uri || '';
 

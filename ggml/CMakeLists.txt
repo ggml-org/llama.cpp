@@ -402,7 +402,7 @@ configure_package_config_file(
               GGML_BIN_INSTALL_DIR)
 
 write_basic_package_version_file(
-        ${CMAKE_CURRENT_BINARY_DIR}/ggml-version.cmake
+        ${CMAKE_CURRENT_BINARY_DIR}/ggml-config-version.cmake
     VERSION ${GGML_INSTALL_VERSION}
     COMPATIBILITY SameMajorVersion)
 
@@ -414,7 +414,7 @@ message(STATUS "ggml version: ${GGML_INSTALL_VERSION}")
 message(STATUS "ggml commit:  ${GGML_BUILD_COMMIT}")
 
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/ggml-config.cmake
-              ${CMAKE_CURRENT_BINARY_DIR}/ggml-version.cmake
+              ${CMAKE_CURRENT_BINARY_DIR}/ggml-config-version.cmake
         DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/ggml)
 
 if (MSVC)

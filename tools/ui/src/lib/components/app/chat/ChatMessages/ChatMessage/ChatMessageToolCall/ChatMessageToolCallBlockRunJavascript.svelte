@@ -5,7 +5,8 @@
 	import { SyntaxHighlightedCode } from '$lib/components/app';
 	import { MAX_HEIGHT_CODE_BLOCK } from '$lib/constants';
 	import { FileTypeText } from '$lib/enums';
-	import { type AgenticSection, getBuiltinToolUi } from '$lib/utils';
+	import type { AgenticSection } from '$lib/types';
+	import { getBuiltinToolUi } from '$lib/utils';
 
 	interface Props {
 		section: AgenticSection;

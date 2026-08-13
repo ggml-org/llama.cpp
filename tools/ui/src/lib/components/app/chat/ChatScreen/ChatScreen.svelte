@@ -20,26 +20,20 @@
 	import { useKeyboardShortcuts } from '$lib/hooks/use-keyboard-shortcuts.svelte';
 	import {
 		chatStore,
-		errorDialog,
-		isChatStreaming,
-		isEditing,
-		isLoading
-	} from '$lib/stores/chat.svelte';
-	import {
-		activeConversation,
-		activeMessages,
-		conversationsStore
-	} from '$lib/stores/conversations.svelte';
-	import { device } from '$lib/stores/device.svelte';
-	import { serverError, serverLoading } from '$lib/stores/server.svelte';
-	import { config } from '$lib/stores/settings.svelte';
-	import { isMobile } from '$lib/stores/viewport.svelte';
+		conversationsStore,
+		device,
+		isMobile,
+		serverStore,
+		settingsStore
+	} from '$lib/stores';
 	import { parseFilesToMessageExtras } from '$lib/utils/browser-only';
 	import { onDestroy, onMount, tick } from 'svelte';
 
 	let { showCenteredEmpty = false } = $props();
 
-	let disableAutoScroll = $derived(Boolean(config().disableAutoScroll) || isMobile.current);
+	let disableAutoScroll = $derived(
+		Boolean(settingsStore.config.disableAutoScroll) || isMobile.current
+	);
 	let isMobileUserScrolledUp = $state(false);
 	let mobileScrollDownHint = $state(false);
 	let mobileScrollDownHintLockedUntil = $state(0);
@@ -48,12 +42,15 @@
 	let showDeleteDialog = $state(false);
 	let showEmptyFileDialog = $state(false);
 	let isEmpty = $derived(
-		showCenteredEmpty && !activeConversation() && activeMessages().length === 0 && !isLoading()
+		showCenteredEmpty &&
+			!conversationsStore.activeConversation &&
+			conversationsStore.activeMessages.length === 0 &&
+			!chatStore.isLoading
 	);
-	let activeErrorDialog = $derived(errorDialog());
-	let isServerLoading = $derived(serverLoading());
-	let hasPropsError = $derived(!!serverError());
-	let isCurrentConversationLoading = $derived(isLoading() || isChatStreaming());
+	let activeErrorDialog = $derived(chatStore.errorDialogState);
+	let isServerLoading = $derived(serverStore.loading);
+	let hasPropsError = $derived(!!serverStore.error);
+	let isCurrentConversationLoading = $derived(chatStore.isLoading || chatStore.isStreaming());
 	let chatFormBottomPosition = $derived.by(() => {
 		if (!isMobile.current) return '1rem';
 
@@ -80,7 +77,7 @@
 	});
 	const { handleKeydown } = useKeyboardShortcuts({
 		deleteActiveConversation: () => {
-			if (activeConversation()) {
+			if (conversationsStore.activeConversation) {
 				showDeleteDialog = true;
 			}
 		}
@@ -100,7 +97,7 @@
 	}
 
 	async function handleDeleteConfirm() {
-		const conversation = activeConversation();
+		const conversation = conversationsStore.activeConversation;
 
 		if (conversation) {
 			await conversationsStore.deleteConversation(conversation.id);
@@ -148,7 +145,7 @@
 	async function handleMessagesReady(messageCount: number) {
 		if (messageCount === 0) return;
 
-		const id = activeConversation()?.id ?? null;
+		const id = conversationsStore.activeConversation?.id ?? null;
 
 		if (!id || id === lastScrolledConversationId) return;
 
@@ -168,7 +165,7 @@
 		const settle = () => {
 			if (autoScroll.userScrolledUp) return;
 
-			if (activeConversation()?.id !== id) return;
+			if (conversationsStore.activeConversation?.id !== id) return;
 
 			autoScroll.scrollToBottom();
 			const height = container.scrollHeight;
@@ -246,7 +243,7 @@
 
 	$effect(() => {
 		const shouldDisableAutoScroll =
-			config().disableAutoScroll || (isMobile.current && isCurrentConversationLoading);
+			settingsStore.config.disableAutoScroll || (isMobile.current && isCurrentConversationLoading);
 
 		autoScroll.setDisabled(shouldDisableAutoScroll);
 
@@ -310,7 +307,7 @@
 	>
 		{#if !isEmpty}
 			<ChatMessages
-				messages={activeMessages()}
+				messages={conversationsStore.activeMessages}
 				onMessagesReady={handleMessagesReady}
 				onUserAction={() => {
 					handleSendLikeScroll();
@@ -354,7 +351,7 @@
 
 			<ChatScreenForm
 				class="pointer-events-auto conversation-chat-form"
-				disabled={hasPropsError || isEditing()}
+				disabled={hasPropsError || chatStore.isEditing()}
 				{initialMessage}
 				isLoading={isCurrentConversationLoading}
 				onFileRemove={fileUpload.handleFileRemove}

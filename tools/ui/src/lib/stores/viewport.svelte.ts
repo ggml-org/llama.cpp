@@ -1,5 +1,5 @@
 import { browser } from '$app/environment';
-import { DEFAULT_MOBILE_BREAKPOINT } from '$lib/constants/viewport';
+import { DEFAULT_MOBILE_BREAKPOINT } from '$lib/constants';
 import { MediaQuery } from 'svelte/reactivity';
 
 export const viewport = $state({

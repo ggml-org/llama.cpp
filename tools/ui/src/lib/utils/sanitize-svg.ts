@@ -1,4 +1,4 @@
-import { SVG_MAX_BYTES, SVG_SANITIZE_CONFIG, SVG_TAG_PREFIX } from '$lib/constants';
+import { SVG } from '$lib/constants';
 import DOMPurify from 'dompurify';
 
 /**
@@ -10,13 +10,13 @@ import DOMPurify from 'dompurify';
 export function sanitizeSvg(source: string): string {
 	const trimmed = source.trim();
 
-	if (!trimmed || trimmed.length > SVG_MAX_BYTES) return '';
+	if (!trimmed || trimmed.length > SVG.MAX_BYTES) return '';
 
-	if (!trimmed.startsWith(SVG_TAG_PREFIX)) return '';
+	if (!trimmed.startsWith(SVG.TAG_PREFIX)) return '';
 
-	const clean = DOMPurify.sanitize(trimmed, SVG_SANITIZE_CONFIG) as unknown as string;
+	const clean = DOMPurify.sanitize(trimmed, SVG.SANITIZE_CONFIG) as unknown as string;
 
-	if (!clean || !clean.includes(SVG_TAG_PREFIX)) return '';
+	if (!clean || !clean.includes(SVG.TAG_PREFIX)) return '';
 
 	return clean;
 }

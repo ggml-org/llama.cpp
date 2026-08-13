@@ -4,13 +4,10 @@
 // result blob.
 
 import { parseToolArgs } from './_shared';
-import {
-	DEFAULT_LANGUAGE,
-	FILE_PATH_SEPARATOR_REGEX,
-	TEXT_LANGUAGE_PREFIX_REGEX
-} from '$lib/constants';
+import { CODE_BLOCK, FILE_PATH_SEPARATOR_REGEX } from '$lib/constants';
 import { BuiltInTool } from '$lib/enums';
-import { type AgenticSection, getFileTypeByExtension, tryParseToolResultObject } from '$lib/utils';
+import type { AgenticSection } from '$lib/types';
+import { getFileTypeByExtension, tryParseToolResultObject } from '$lib/utils';
 
 export type WriteFileMeta = {
 	fileName: string;
@@ -36,7 +33,8 @@ export function parseWriteFileMeta(section: AgenticSection): WriteFileMeta | nul
 	const fileName = rawPath.split(FILE_PATH_SEPARATOR_REGEX).pop() || rawPath;
 	const content = typeof args.content === 'string' ? args.content : '';
 	const language =
-		getFileTypeByExtension(rawPath)?.replace(TEXT_LANGUAGE_PREFIX_REGEX, '') ?? DEFAULT_LANGUAGE;
+		getFileTypeByExtension(rawPath)?.replace(CODE_BLOCK.TEXT_LANGUAGE_PREFIX_REGEX, '') ??
+		CODE_BLOCK.DEFAULT_LANGUAGE;
 	const resultObj = tryParseToolResultObject(section.toolResult);
 	const bytesWritten =
 		resultObj && Number.isFinite(Number(resultObj.bytes)) ? Number(resultObj.bytes) : undefined;

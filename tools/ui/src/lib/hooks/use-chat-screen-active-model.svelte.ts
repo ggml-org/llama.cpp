@@ -8,24 +8,21 @@
  * demand if they aren't cached yet.
  */
 
-import { chatStore } from '$lib/stores/chat.svelte';
-import { activeMessages } from '$lib/stores/conversations.svelte';
-import { modelOptions, modelsStore, selectedModelId } from '$lib/stores/models.svelte';
-import { isRouterMode } from '$lib/stores/server.svelte';
+import { chatStore, conversationsStore, modelsStore, serverStore } from '$lib/stores';
 
 export function useChatScreenActiveModel() {
-	const isRouter = $derived(isRouterMode());
+	const isRouter = $derived(serverStore.isRouterMode);
 	const conversationModel = $derived(
-		chatStore.getConversationModel(activeMessages() as DatabaseMessage[])
+		chatStore.getConversationModel(conversationsStore.activeMessages as DatabaseMessage[])
 	);
 	const activeModelId = $derived.by(() => {
-		const options = modelOptions();
+		const options = modelsStore.models;
 
 		if (!isRouter) {
 			return options.length > 0 ? options[0].model : null;
 		}
 
-		const selectedId = selectedModelId();
+		const selectedId = modelsStore.selectedModelId;
 
 		if (selectedId) {
 			const model = options.find((m) => m.id === selectedId);

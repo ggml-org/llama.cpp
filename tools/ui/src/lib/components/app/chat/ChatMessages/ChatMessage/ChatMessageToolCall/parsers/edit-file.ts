@@ -6,7 +6,8 @@
 import { parseToolArgs } from './_shared';
 import { FILE_PATH_SEPARATOR_REGEX } from '$lib/constants';
 import { BuiltInTool } from '$lib/enums';
-import { type AgenticSection, tryParseToolResultObject } from '$lib/utils';
+import type { AgenticSection } from '$lib/types';
+import { tryParseToolResultObject } from '$lib/utils';
 
 export type EditFileEdit = {
 	oldText: string;

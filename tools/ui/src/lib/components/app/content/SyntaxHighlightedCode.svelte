@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { browser } from '$app/environment';
-	import { SYNTAX_CODE_SCROLL_AT_BOTTOM_THRESHOLD_PX } from '$lib/constants/auto-scroll';
-	import { ColorMode } from '$lib/enums';
+	import { SYNTAX_CODE_SCROLL_AT_BOTTOM_THRESHOLD_PX, UI_DATA_ATTRS } from '$lib/constants';
+	import { BooleanString, ColorMode } from '$lib/enums';
 	import { highlightCode } from '$lib/utils';
 	import githubLightCss from 'highlight.js/styles/github.css?inline';
 	import githubDarkCss from 'highlight.js/styles/github-dark.css?inline';
@@ -38,13 +38,15 @@
 	function loadHighlightTheme(isDark: boolean) {
 		if (!browser) return;
 
-		const existingThemes = document.querySelectorAll('style[data-highlight-theme-preview]');
+		const existingThemes = document.querySelectorAll(
+			`style[${UI_DATA_ATTRS.HIGHLIGHT_THEME_PREVIEW}]`
+		);
 
 		existingThemes.forEach((style) => style.remove());
 
 		const style = document.createElement('style');
 
-		style.setAttribute('data-highlight-theme-preview', 'true');
+		style.setAttribute(UI_DATA_ATTRS.HIGHLIGHT_THEME_PREVIEW, BooleanString.TRUE);
 		style.textContent = isDark ? githubDarkCss : githubLightCss;
 
 		document.head.appendChild(style);

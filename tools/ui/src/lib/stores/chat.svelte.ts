@@ -11,63 +11,58 @@
  * @see ChatService in services/chat.service.ts for API operations
  */
 
-import { CONTENT_TYPE_HEADER } from '$lib/constants';
 import {
-	INACTIVE_CONVERSATION_STATE_MAX_AGE_MS,
-	MAX_INACTIVE_CONVERSATION_STATES,
+	CONVERSATION_ID_SEPARATOR,
+	CWD_CLEARED_TEXT,
+	HEADERS,
+	INACTIVE_CONVERSATION,
+	STREAM_RESUME_RETRY_MS,
 	SYSTEM_MESSAGE_PLACEHOLDER,
 	TITLE_GENERATION
 } from '$lib/constants';
-import { STREAM_RESUME_RETRY_MS } from '$lib/constants/api-endpoints';
-import { MimeTypeApplication } from '$lib/enums';
 import {
 	ContinueIntentKind,
 	ErrorDialogType,
 	MessageRole,
 	MessageType,
+	MimeTypeApplication,
 	ReasoningEffort,
 	StreamConnectionState
 } from '$lib/enums';
 import { ChatService } from '$lib/services/chat.service';
 import { DatabaseService } from '$lib/services/database.service';
+// direct imports between stores, not via the barrel, to avoid circular deps
 import { agenticStore } from '$lib/stores/agentic.svelte';
 import { conversationsStore } from '$lib/stores/conversations.svelte';
 import { mcpStore } from '$lib/stores/mcp.svelte';
-import {
-	modelsStore,
-	selectedModelContextSize,
-	selectedModelName
-} from '$lib/stores/models.svelte';
-import { contextSize, isRouterMode } from '$lib/stores/server.svelte';
-import { config } from '$lib/stores/settings.svelte';
+import { modelsStore } from '$lib/stores/models.svelte';
+import { serverStore } from '$lib/stores/server.svelte';
+import { settingsStore } from '$lib/stores/settings.svelte';
 import { toolsStore } from '$lib/stores/tools.svelte';
 import type {
 	ApiChatMessageData,
 	ApiProcessingState,
 	ApiStreamSession,
-	DatabaseMessage,
-	DatabaseMessageExtra
-} from '$lib/types';
-import type {
 	ChatMessagePromptProgress,
 	ChatMessageTimings,
 	ChatStreamCallbacks,
+	DatabaseMessage,
+	DatabaseMessageExtra,
 	ErrorDialogState
-} from '$lib/types/chat';
+} from '$lib/types';
 import {
-	CWD_CLEARED_TEXT,
+	classifyContinueIntent,
 	filterByLeafNodeId,
 	findDescendantMessages,
 	findLeafNode,
 	findMessageById,
 	formatCwdMessage,
 	generateConversationTitle,
+	getAuthHeaders,
 	isAbortError,
-	normalizeModelName
+	normalizeModelName,
+	streamIdentity
 } from '$lib/utils';
-import { classifyContinueIntent } from '$lib/utils/agentic';
-import { getAuthHeaders } from '$lib/utils/api-headers';
-import { streamIdentity } from '$lib/utils/stream-identity';
 import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 
 interface ConversationStateEntry {
@@ -186,7 +181,9 @@ class ChatStore {
 
 		if (convId === conversationsStore.activeConversation?.id) this.currentResponse = '';
 	}
-	private getChatStreaming(convId: string): { response: string; messageId: string } | undefined {
+	private getChatStreamingState(
+		convId: string
+	): { response: string; messageId: string } | undefined {
 		return this.chatStreamingStates.get(convId);
 	}
 	syncLoadingStateForChat(convId: string): void {
@@ -234,7 +231,7 @@ class ChatStore {
 			// POST the one conv id we are probing
 			listResp = await fetch(`./v1/streams/lookup`, {
 				body: JSON.stringify({ conversation_ids: [convId] }),
-				headers: { ...getAuthHeaders(), [CONTENT_TYPE_HEADER]: MimeTypeApplication.JSON },
+				headers: { ...getAuthHeaders(), [HEADERS.CONTENT_TYPE]: MimeTypeApplication.JSON },
 				method: 'POST'
 			});
 		} catch (e) {
@@ -294,7 +291,7 @@ class ChatStore {
 		// fetch the replay stream from byte 0, rebuild the assistant message from scratch.
 		// resolve the server side identity, fall back to streamIdentity when the caller does not
 		// pass a streamId. probeServerStream returns the full id (with ::model suffix when present)
-		const id = streamId || streamIdentity(convId, selectedModelName());
+		const id = streamId || streamIdentity(convId, modelsStore.selectedModelName);
 
 		let response: Response;
 
@@ -414,7 +411,7 @@ class ChatStore {
 
 		// extract the model suffix, the resume calls in handleStreamResponse must reuse the model
 		// the session was tagged with, not the live dropdown
-		const sepIdx = id.indexOf('::');
+		const sepIdx = id.indexOf(CONVERSATION_ID_SEPARATOR);
 		const attachedModel: string | null = sepIdx === -1 ? null : id.slice(sepIdx + 2);
 
 		this.setChatStreaming(convId, existingContent, targetMessageId, attachedModel);
@@ -523,7 +520,11 @@ class ChatStore {
 			// persisted state so the lookup key matches what the server stored. null means a single
 			// model conv with no ::suffix, only guess from the dropdown with no persisted state
 			const localState = ChatService.getStreamState(convId);
-			const streamId = ChatService.resumeStreamIdentity(convId, localState, selectedModelName());
+			const streamId = ChatService.resumeStreamIdentity(
+				convId,
+				localState,
+				modelsStore.selectedModelName
+			);
 			// primary path: ask the server which sessions exist for this identity
 			const serverTarget = await this.probeServerStream(streamId);
 
@@ -808,7 +809,7 @@ class ChatStore {
 		try {
 			const resp = await fetch('./v1/streams/lookup', {
 				body: JSON.stringify({ conversation_ids: lookupIds }),
-				headers: { ...getAuthHeaders(), [CONTENT_TYPE_HEADER]: MimeTypeApplication.JSON },
+				headers: { ...getAuthHeaders(), [HEADERS.CONTENT_TYPE]: MimeTypeApplication.JSON },
 				method: 'POST'
 			});
 
@@ -829,7 +830,7 @@ class ChatStore {
 		for (const s of sessions) {
 			if (s && !s.is_done && typeof s.conversation_id === 'string' && s.conversation_id) {
 				// strip the optional ::model suffix, the sidebar set is keyed by the bare conv id
-				const sepIdx = s.conversation_id.indexOf('::');
+				const sepIdx = s.conversation_id.indexOf(CONVERSATION_ID_SEPARATOR);
 				const bareId = sepIdx === -1 ? s.conversation_id : s.conversation_id.slice(0, sepIdx);
 
 				running.add(bareId);
@@ -845,16 +846,12 @@ class ChatStore {
 		}
 	}
 
-	getChatStreamingPublic(convId: string): { response: string; messageId: string } | undefined {
-		return this.getChatStreaming(convId);
+	getChatStreaming(convId: string): { response: string; messageId: string } | undefined {
+		return this.getChatStreamingState(convId);
 	}
 
-	isChatLoadingPublic(convId: string): boolean {
+	isChatLoading(convId: string): boolean {
 		return this.chatLoadingStates.get(convId) || false;
-	}
-
-	isChatReasoningPublic(convId: string): boolean {
-		return this.chatReasoningStates.get(convId) || false;
 	}
 
 	private isChatLoadingInternal(convId: string): boolean {
@@ -930,8 +927,8 @@ class ChatStore {
 
 		for (const { convId, lastAccessed } of cleanupCandidates) {
 			if (
-				cleanupCandidates.length - cleanedUp > MAX_INACTIVE_CONVERSATION_STATES ||
-				now - lastAccessed > INACTIVE_CONVERSATION_STATE_MAX_AGE_MS
+				cleanupCandidates.length - cleanedUp > INACTIVE_CONVERSATION.MAX_STATES ||
+				now - lastAccessed > INACTIVE_CONVERSATION.MAX_AGE_MS
 			) {
 				this.cleanupConversationState(convId);
 				cleanedUp++;
@@ -1235,7 +1232,7 @@ class ChatStore {
 
 			if (isNewConversation) {
 				const rootId = await DatabaseService.createRootMessage(currentConv.id);
-				const currentConfig = config();
+				const currentConfig = settingsStore.config;
 				const systemPrompt = currentConfig.systemMessage?.toString().trim();
 
 				let sysOrRootId = rootId;
@@ -1282,7 +1279,10 @@ class ChatStore {
 			if (isNewConversation && content)
 				await conversationsStore.updateConversationName(
 					currentConv.id,
-					generateConversationTitle(content, Boolean(config().titleGenerationUseFirstLine))
+					generateConversationTitle(
+						content,
+						Boolean(settingsStore.config.titleGenerationUseFirstLine)
+					)
 				);
 
 			const assistantMessage = await this.createAssistantMessage(userMessage.id);
@@ -1294,7 +1294,7 @@ class ChatStore {
 				undefined,
 				undefined,
 				undefined,
-				config().titleGenerationUseLLM && isNewConversation ? content : undefined
+				settingsStore.config.titleGenerationUseLLM && isNewConversation ? content : undefined
 			);
 		} catch (error) {
 			if (isAbortError(error)) {
@@ -1334,13 +1334,13 @@ class ChatStore {
 		// and reattach all agree, regardless of fresh send vs regenerate passing a resolved model
 		let effectiveModel: string | null | undefined = undefined;
 
-		if (isRouterMode()) {
+		if (serverStore.isRouterMode) {
 			const conversationModel = this.getConversationModel(allMessages);
 
-			effectiveModel = modelOverride || selectedModelName() || conversationModel;
+			effectiveModel = modelOverride || modelsStore.selectedModelName || conversationModel;
 		}
 
-		if (isRouterMode() && effectiveModel) {
+		if (serverStore.isRouterMode && effectiveModel) {
 			if (!modelsStore.getModelProps(effectiveModel))
 				await modelsStore.fetchModelProps(effectiveModel);
 		}
@@ -1582,16 +1582,16 @@ class ChatStore {
 
 				if (onComplete) onComplete(streamedContent);
 
-				if (isRouterMode()) modelsStore.fetchRouterModels().catch(console.error);
+				if (serverStore.isRouterMode) modelsStore.fetchRouterModels().catch(console.error);
 
 				// Pre-encode conversation in KV cache for faster next turn
-				if (config().preEncodeConversation) {
+				if (settingsStore.config.preEncodeConversation) {
 					this.triggerPreEncode(
 						allMessages,
 						assistantMessage,
 						streamedContent,
 						effectiveModel,
-						!!config().excludeReasoningFromContext
+						!!settingsStore.config.excludeReasoningFromContext
 					);
 				}
 			},
@@ -1672,6 +1672,7 @@ class ChatStore {
 			const agenticResult = await agenticStore.runAgenticFlow({
 				callbacks: streamCallbacks,
 				conversationId: convId,
+				flowRootMessageId: assistantMessage.id,
 				messages: allMessages,
 				options: {
 					...this.getApiOptions(),
@@ -1739,7 +1740,7 @@ class ChatStore {
 
 					if (onComplete) await onComplete(content);
 
-					if (isRouterMode()) modelsStore.fetchRouterModels().catch(console.error);
+					if (serverStore.isRouterMode) modelsStore.fetchRouterModels().catch(console.error);
 
 					// Generate LLM based title for new conversations (avoids stale reference
 					// issue when user switches conversations while streaming)
@@ -1810,8 +1811,11 @@ class ChatStore {
 		assistantContent: string,
 		convId: string
 	): Promise<void> {
-		const effectiveModel = isRouterMode() && selectedModelName() ? selectedModelName() : undefined;
-		const configValue = config();
+		const effectiveModel =
+			serverStore.isRouterMode && modelsStore.selectedModelName
+				? modelsStore.selectedModelName
+				: undefined;
+		const configValue = settingsStore.config;
 		const titlePromptTemplate =
 			typeof configValue.titleGenerationPrompt === 'string' &&
 			configValue.titleGenerationPrompt.trim()
@@ -1853,7 +1857,7 @@ class ChatStore {
 
 		if (!conversationId) return;
 
-		const streamingState = this.getChatStreaming(conversationId);
+		const streamingState = this.getChatStreamingState(conversationId);
 
 		if (!streamingState) return;
 
@@ -1949,7 +1953,10 @@ class ChatStore {
 			if (isFirstUserMessage && newContent.trim())
 				await conversationsStore.updateConversationName(
 					activeConv.id,
-					generateConversationTitle(newContent, Boolean(config().titleGenerationUseFirstLine))
+					generateConversationTitle(
+						newContent,
+						Boolean(settingsStore.config.titleGenerationUseFirstLine)
+					)
 				);
 
 			const messagesToRemove = conversationsStore.activeMessages.slice(messageIndex + 1);
@@ -2522,7 +2529,10 @@ class ChatStore {
 			if (rootMessage && msg.parent === rootMessage.id && newContent.trim()) {
 				await conversationsStore.updateConversationName(
 					activeConv.id,
-					generateConversationTitle(newContent, Boolean(config().titleGenerationUseFirstLine))
+					generateConversationTitle(
+						newContent,
+						Boolean(settingsStore.config.titleGenerationUseFirstLine)
+					)
 				);
 			}
 
@@ -2607,7 +2617,10 @@ class ChatStore {
 			if (isFirstUserMessage && newContent.trim())
 				await conversationsStore.updateConversationName(
 					activeConv.id,
-					generateConversationTitle(newContent, Boolean(config().titleGenerationUseFirstLine))
+					generateConversationTitle(
+						newContent,
+						Boolean(settingsStore.config.titleGenerationUseFirstLine)
+					)
 				);
 
 			await conversationsStore.refreshActiveMessages();
@@ -2665,14 +2678,14 @@ class ChatStore {
 		if (activeState && typeof activeState.contextTotal === 'number' && activeState.contextTotal > 0)
 			return activeState.contextTotal;
 
-		if (isRouterMode()) {
-			const modelContextSize = selectedModelContextSize();
+		if (serverStore.isRouterMode) {
+			const modelContextSize = modelsStore.selectedModelContextSize;
 
 			if (typeof modelContextSize === 'number' && modelContextSize > 0) {
 				return modelContextSize;
 			}
 		} else {
-			const propsContextSize = contextSize();
+			const propsContextSize = serverStore.contextSize;
 
 			if (typeof propsContextSize === 'number' && propsContextSize > 0) {
 				return propsContextSize;
@@ -2718,7 +2731,7 @@ class ChatStore {
 			| { total: number; cache: number; processed: number; time_ms: number }
 			| undefined;
 		const contextTotal = this.getContextTotal();
-		const currentConfig = config();
+		const currentConfig = settingsStore.config;
 		const outputTokensMax = currentConfig.max_tokens || -1;
 		const contextUsed = promptTokens + cacheTokens + predictedTokens,
 			outputTokensUsed = predictedTokens;
@@ -2786,13 +2799,13 @@ class ChatStore {
 	}
 
 	private getApiOptions(): Record<string, unknown> {
-		const currentConfig = config();
+		const currentConfig = settingsStore.config;
 		const hasValue = (value: unknown): boolean =>
 			value !== undefined && value !== null && value !== '';
 		const apiOptions: Record<string, unknown> = { stream: true, timings_per_token: true };
 
-		if (isRouterMode()) {
-			const modelName = selectedModelName();
+		if (serverStore.isRouterMode) {
+			const modelName = modelsStore.selectedModelName;
 
 			if (modelName) apiOptions.model = modelName;
 		}
@@ -2910,27 +2923,3 @@ class ChatStore {
 }
 
 export const chatStore = new ChatStore();
-
-export const activeProcessingState = () => chatStore.activeProcessingState;
-export const currentResponse = () => chatStore.currentResponse;
-export const errorDialog = () => chatStore.errorDialogState;
-export const getAddFilesHandler = () => chatStore.getAddFilesHandler();
-export const getAllLoadingChats = () => chatStore.getAllLoadingChats();
-export const getAllStreamingChats = () => chatStore.getAllStreamingChats();
-export const getChatStreaming = (convId: string) => chatStore.getChatStreamingPublic(convId);
-export const isChatLoading = (convId: string) => chatStore.isChatLoadingPublic(convId);
-export const isChatStreaming = () => chatStore.isStreaming();
-export const isEditing = () => chatStore.isEditing();
-export const isLoading = () => chatStore.isLoading;
-export const isReasoning = () => chatStore.isReasoning;
-export const pendingEditMessageId = () => chatStore.pendingEditMessageId;
-export const chatHasPendingMessage = (convId: string) => chatStore.hasPendingMessage(convId);
-export const chatPendingMessageContent = (convId: string) =>
-	chatStore.pendingMessageContent(convId);
-export const chatPendingMessageExtras = (convId: string) => chatStore.pendingMessageExtras(convId);
-export const chatClearPendingMessage = (convId: string) => chatStore.clearPendingMessage(convId);
-export const chatInjectPendingMessage = (
-	convId: string,
-	content: string,
-	extras?: DatabaseMessageExtra[]
-) => chatStore.injectPendingMessage(convId, content, extras);

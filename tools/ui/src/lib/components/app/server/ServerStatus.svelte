@@ -2,9 +2,8 @@
 	import { AlertTriangle, Server } from '@lucide/svelte';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
-	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
-	import { singleModelName } from '$lib/stores/models.svelte';
-	import { serverError, serverLoading, serverProps } from '$lib/stores/server.svelte';
+	import { ICON_CLASS_DEFAULT } from '$lib/constants';
+	import { modelsStore, serverStore } from '$lib/stores';
 
 	interface Props {
 		class?: string;
@@ -13,10 +12,10 @@
 
 	let { class: className = '', showActions = false }: Props = $props();
 
-	let error = $derived(serverError());
-	let loading = $derived(serverLoading());
-	let model = $derived(singleModelName());
-	let serverData = $derived(serverProps());
+	let error = $derived(serverStore.error);
+	let loading = $derived(serverStore.loading);
+	let model = $derived(modelsStore.singleModelName);
+	let serverData = $derived(serverStore.props);
 
 	function getStatusColor() {
 		if (loading) return 'bg-yellow-500';

@@ -114,6 +114,10 @@ bool llama_supports_rpc(void) {
     return ggml_backend_reg_by_name("RPC") != nullptr;
 }
 
+const char * llama_version(void) {
+    return LLAMA_VERSION;
+}
+
 void llama_backend_init(void) {
     ggml_time_init();
 

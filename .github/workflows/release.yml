@@ -774,15 +774,15 @@ jobs:
           key: windows-rocm-${{ matrix.ROCM_VERSION }}-${{ matrix.build }}
           evict-old-files: 1d
 
-      - name: Cache ROCm Installation
-        id: cache-rocm
-        uses: actions/cache@v5
-        with:
-          path: C:\TheRock\build
-          key: rocm-wheels-${{ matrix.ROCM_VERSION }}-multi-arch-${{ runner.os }}
+      # - name: Cache ROCm Installation
+      #   id: cache-rocm
+      #   uses: actions/cache@v5
+      #   with:
+      #     path: C:\TheRock\build
+      #     key: rocm-wheels-${{ matrix.ROCM_VERSION }}-multi-arch-${{ runner.os }}
 
       - name: Setup ROCm
-        if: steps.cache-rocm.outputs.cache-hit != 'true'
+        # if: steps.cache-rocm.outputs.cache-hit != 'true'
         uses: ./.github/actions/windows-setup-rocm
         with:
           version: ${{ matrix.ROCM_VERSION }}
@@ -1285,123 +1285,123 @@ jobs:
           path: llama-${{ steps.tag.outputs.name }}-bin-ubuntu-sycl-${{ matrix.build }}-x64.tar.gz
           name: llama-bin-ubuntu-sycl-${{ matrix.build }}-x64.tar.gz
 
-  ubuntu-22-rocm:
-    needs: [check-release, get-version]
-    if: ${{ needs.check-release.outputs.should_release == 'true' }}
+#   ubuntu-22-rocm:
+#     needs: [check-release, get-version]
+#     if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
-    runs-on: ubuntu-22.04
+#     runs-on: ubuntu-22.04
 
-    permissions:
-      actions: write
+#     permissions:
+#       actions: write
 
-    strategy:
-      matrix:
-        include:
-          - ROCM_VERSION: "7.14.0"
-            gpu_targets: "gfx908;gfx90a;gfx942;gfx950;gfx1010;gfx1011;gfx1012;gfx1030;gfx1031;gfx1032;gfx1033;gfx1034;gfx1035;gfx1036;gfx1100;gfx1101;gfx1102;gfx1150;gfx1151;gfx1152;gfx1200;gfx1201"
-            build: 'x64'
+#     strategy:
+#       matrix:
+#         include:
+#           - ROCM_VERSION: "7.14.0"
+#             gpu_targets: "gfx908;gfx90a;gfx942;gfx950;gfx1010;gfx1011;gfx1012;gfx1030;gfx1031;gfx1032;gfx1033;gfx1034;gfx1035;gfx1036;gfx1100;gfx1101;gfx1102;gfx1150;gfx1151;gfx1152;gfx1200;gfx1201"
+#             build: 'x64'
 
-    steps:
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
+#     steps:
+#       - name: Clone
+#         id: checkout
+#         uses: actions/checkout@v6
+#         with:
+#           fetch-depth: 0
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: "24"
-          cache: "npm"
-          cache-dependency-path: "tools/ui/package-lock.json"
+#       - name: Setup Node.js
+#         uses: actions/setup-node@v6
+#         with:
+#           node-version: "24"
+#           cache: "npm"
+#           cache-dependency-path: "tools/ui/package-lock.json"
 
-      - name: Free up disk space
-        uses: ggml-org/free-disk-space@v1.3.1
-        with:
-          tool-cache: true
+#       - name: Free up disk space
+#         uses: ggml-org/free-disk-space@v1.3.1
+#         with:
+#           tool-cache: true
 
-      - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
-        with:
-          key: release-ubuntu-22.04-rocm-${{ matrix.ROCM_VERSION }}
+#       # - name: ccache
+#       #   uses: ggml-org/ccache-action@v1.2.21
+#       #   with:
+#       #     key: release-ubuntu-22.04-rocm-${{ matrix.ROCM_VERSION }}
 
-      - name: Dependencies
-        id: depends
-        run: |
-          sudo apt install -y build-essential git cmake wget
+#       - name: Dependencies
+#         id: depends
+#         run: |
+#           sudo apt install -y build-essential git cmake wget
 
-      - name: Setup TheRock with Wheels
-        id: therock_env
-        run: |
-          # Create Python virtual environment
-          python3 -m venv .venv
-          source .venv/bin/activate
+#       - name: Setup TheRock with Wheels
+#         id: therock_env
+#         run: |
+#           # Create Python virtual environment
+#           python3 -m venv .venv
+#           source .venv/bin/activate
 
-          # Install ROCm wheels for build
-          # libraries = HIP runtime and CMake configs needed for linking
-          # devel = compilers, headers, static libs
-          python -m pip install --upgrade pip
-          python -m pip install --index-url https://repo.amd.com/rocm/whl-multi-arch/ "rocm[libraries,devel]==${{ matrix.ROCM_VERSION }}"
+#           # Install ROCm wheels for build
+#           # libraries = HIP runtime and CMake configs needed for linking
+#           # devel = compilers, headers, static libs
+#           python -m pip install --upgrade pip
+#           python -m pip install --index-url https://repo.amd.com/rocm/whl-multi-arch/ "rocm[libraries,devel]==${{ matrix.ROCM_VERSION }}"
 
-          # Get ROCm installation paths using the rocm-sdk CLI tool
-          ROCM_PATH=$(rocm-sdk path --root)
-          CMAKE_PATH=$(rocm-sdk path --cmake)
-          BIN_PATH=$(rocm-sdk path --bin)
-          echo "ROCM_PATH=$ROCM_PATH"
-          echo "CMAKE_PATH=$CMAKE_PATH"
-          echo "BIN_PATH=$BIN_PATH"
+#           # Get ROCm installation paths using the rocm-sdk CLI tool
+#           ROCM_PATH=$(rocm-sdk path --root)
+#           CMAKE_PATH=$(rocm-sdk path --cmake)
+#           BIN_PATH=$(rocm-sdk path --bin)
+#           echo "ROCM_PATH=$ROCM_PATH"
+#           echo "CMAKE_PATH=$CMAKE_PATH"
+#           echo "BIN_PATH=$BIN_PATH"
 
-          # Set environment variables
-          echo "ROCM_PATH=$ROCM_PATH" >> $GITHUB_ENV
-          echo "CMAKE_PREFIX_PATH=$CMAKE_PATH" >> $GITHUB_ENV
-          echo "HIP_PATH=$ROCM_PATH" >> $GITHUB_ENV
-          echo "PATH=$BIN_PATH:${PATH}" >> $GITHUB_ENV
-          echo "LD_LIBRARY_PATH=$ROCM_PATH/lib:${LD_LIBRARY_PATH:-}" >> $GITHUB_ENV
+#           # Set environment variables
+#           echo "ROCM_PATH=$ROCM_PATH" >> $GITHUB_ENV
+#           echo "CMAKE_PREFIX_PATH=$CMAKE_PATH" >> $GITHUB_ENV
+#           echo "HIP_PATH=$ROCM_PATH" >> $GITHUB_ENV
+#           echo "PATH=$BIN_PATH:${PATH}" >> $GITHUB_ENV
+#           echo "LD_LIBRARY_PATH=$ROCM_PATH/lib:${LD_LIBRARY_PATH:-}" >> $GITHUB_ENV
 
-          # Keep venv activated for subsequent steps
-          echo "$(pwd)/.venv/bin" >> $GITHUB_PATH
+#           # Keep venv activated for subsequent steps
+#           echo "$(pwd)/.venv/bin" >> $GITHUB_PATH
 
-      - name: Build with native CMake HIP support
-        id: cmake_build
-        run: |
-          cmake -B build -S . \
-            -DCMAKE_HIP_COMPILER="$(hipconfig -l)/clang" \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DGGML_BACKEND_DL=ON \
-            -DGGML_NATIVE=OFF \
-            -DCMAKE_INSTALL_RPATH='$ORIGIN' \
-            -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
-            -DGGML_CPU_ALL_VARIANTS=ON \
-            -DGPU_TARGETS="${{ matrix.gpu_targets }}" \
-            -DGGML_HIP=ON \
-            -DHIP_PLATFORM=amd \
-            -DHF_UI_VERSION=${{ needs.get-version.outputs.ui_version }} \
-            ${{ env.CMAKE_ARGS }}
-          cmake --build build --config Release -j $(nproc)
+#       - name: Build with native CMake HIP support
+#         id: cmake_build
+#         run: |
+#           cmake -B build -S . \
+#             -DCMAKE_HIP_COMPILER="$(hipconfig -l)/clang" \
+#             -DCMAKE_BUILD_TYPE=Release \
+#             -DGGML_BACKEND_DL=ON \
+#             -DGGML_NATIVE=OFF \
+#             -DCMAKE_INSTALL_RPATH='$ORIGIN' \
+#             -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
+#             -DGGML_CPU_ALL_VARIANTS=ON \
+#             -DGPU_TARGETS="${{ matrix.gpu_targets }}" \
+#             -DGGML_HIP=ON \
+#             -DHIP_PLATFORM=amd \
+#             -DHF_UI_VERSION=${{ needs.get-version.outputs.ui_version }} \
+#             ${{ env.CMAKE_ARGS }}
+#           cmake --build build --config Release -j $(nproc)
 
-      - name: ccache-clear
-        uses: ./.github/actions/ccache-clear
-        with:
-          key: release-ubuntu-22.04-rocm-${{ matrix.ROCM_VERSION }}
+#       # - name: ccache-clear
+#       #   uses: ./.github/actions/ccache-clear
+#       #   with:
+#       #     key: release-ubuntu-22.04-rocm-${{ matrix.ROCM_VERSION }}
 
-      - name: Determine tag name
-        id: tag
-        uses: ./.github/actions/get-tag-name
+#       - name: Determine tag name
+#         id: tag
+#         uses: ./.github/actions/get-tag-name
 
-      - name: Get ROCm short version
-        run: echo "ROCM_VERSION_SHORT=$(echo '${{ matrix.ROCM_VERSION }}' | cut -d '.' -f 1,2)" >> $GITHUB_ENV
+#       - name: Get ROCm short version
+#         run: echo "ROCM_VERSION_SHORT=$(echo '${{ matrix.ROCM_VERSION }}' | cut -d '.' -f 1,2)" >> $GITHUB_ENV
 
-      - name: Pack artifacts
-        id: pack_artifacts
-        run: |
-          cp LICENSE ./build/bin/
-          tar -czvf llama-${{ steps.tag.outputs.name }}-bin-ubuntu-rocm-${{ env.ROCM_VERSION_SHORT }}-${{ matrix.build }}.tar.gz --transform "s,^\.,llama-${{ steps.tag.outputs.name }}," -C ./build/bin .
+#       - name: Pack artifacts
+#         id: pack_artifacts
+#         run: |
+#           cp LICENSE ./build/bin/
+#           tar -czvf llama-${{ steps.tag.outputs.name }}-bin-ubuntu-rocm-${{ env.ROCM_VERSION_SHORT }}-${{ matrix.build }}.tar.gz --transform "s,^\.,llama-${{ steps.tag.outputs.name }}," -C ./build/bin .
 
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v6
-        with:
-          path: llama-${{ steps.tag.outputs.name }}-bin-ubuntu-rocm-${{ env.ROCM_VERSION_SHORT }}-${{ matrix.build }}.tar.gz
-          name: llama-bin-ubuntu-rocm-${{ env.ROCM_VERSION_SHORT }}-${{ matrix.build }}.tar.gz
+#       - name: Upload artifacts
+#         uses: actions/upload-artifact@v6
+#         with:
+#           path: llama-${{ steps.tag.outputs.name }}-bin-ubuntu-rocm-${{ env.ROCM_VERSION_SHORT }}-${{ matrix.build }}.tar.gz
+#           name: llama-bin-ubuntu-rocm-${{ env.ROCM_VERSION_SHORT }}-${{ matrix.build }}.tar.gz
 
   ios-xcode:
     needs: [check-release, get-version]
@@ -1578,7 +1578,7 @@ jobs:
       #- windows-sycl
       - windows-rocm
       - windows-openvino
-      - ubuntu-22-rocm
+      #- ubuntu-22-rocm
       - ubuntu-cpu
       - ubuntu-vulkan
       - ubuntu-24-openvino
@@ -1688,7 +1688,7 @@ jobs:
             - [Ubuntu s390x (CPU)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-s390x.tar.gz)
             - [Ubuntu x64 (Vulkan)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-vulkan-x64.tar.gz)
             - [Ubuntu arm64 (Vulkan)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-vulkan-arm64.tar.gz)
-            - [Ubuntu x64 (ROCm 7.14)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-rocm-7.14-x64.tar.gz)
+            - Ubuntu x64 (ROCm 7.14)[DISABLED](https://github.com/ggml-org/llama.cpp/pull/26969)
             - [Ubuntu x64 (OpenVINO)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-openvino-${{ needs.ubuntu-24-openvino.outputs.openvino_version }}-x64.tar.gz)
             - [Ubuntu x64 (SYCL FP32)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-sycl-fp32-x64.tar.gz)
             - [Ubuntu x64 (SYCL FP16)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-sycl-fp16-x64.tar.gz)

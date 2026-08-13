@@ -3,12 +3,12 @@
 	import { ChatForm, DialogConfirmation } from '$lib/components/app';
 	import { Button } from '$lib/components/ui/button';
 	import { Switch } from '$lib/components/ui/switch';
-	import { getMessageEditContext } from '$lib/contexts';
+	import { getChatMessageEditContext } from '$lib/contexts';
 	import { KeyboardKey, MessageRole } from '$lib/enums';
-	import { chatStore } from '$lib/stores/chat.svelte';
+	import { chatStore } from '$lib/stores';
 	import { processFilesToChatUploaded } from '$lib/utils/browser-only';
 
-	const editCtx = getMessageEditContext();
+	const editCtx = getChatMessageEditContext();
 
 	let saveWithoutRegenerate = $state(false);
 	let showDiscardDialog = $state(false);

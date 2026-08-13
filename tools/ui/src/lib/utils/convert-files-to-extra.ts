@@ -5,7 +5,7 @@ import { isWebpMimeType, webpBase64UrlToPngDataURL } from './webp-to-png';
 import { SETTINGS_KEYS } from '$lib/constants';
 import { AttachmentType, FileTypeCategory, SpecialFileType } from '$lib/enums';
 import { modelsStore } from '$lib/stores/models.svelte';
-import { config, settingsStore } from '$lib/stores/settings.svelte';
+import { settingsStore } from '$lib/stores/settings.svelte';
 import type { ChatUploadedFile, DatabaseMessageExtra, FileProcessingResult } from '$lib/types';
 import { getFileTypeCategory } from '$lib/utils';
 import { toast } from 'svelte-sonner';
@@ -109,7 +109,7 @@ export async function parseFilesToMessageExtras(
 			try {
 				// Always get base64 data for preview functionality
 				const base64Data = await readFileAsBase64(file.file);
-				const currentConfig = config();
+				const currentConfig = settingsStore.config;
 				// Use per-model vision check for router mode
 				const hasVisionSupport = activeModelId
 					? modelsStore.modelSupportsVision(activeModelId)
