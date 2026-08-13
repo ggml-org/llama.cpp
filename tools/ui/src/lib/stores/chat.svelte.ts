@@ -12,10 +12,8 @@
  */
 
 import {
-	CONVERSATION_ID_SEPARATOR,
 	CWD_CLEARED_TEXT,
 	INACTIVE_CONVERSATION,
-	STREAM_RESUME_RETRY_MS,
 	SYSTEM_MESSAGE_PLACEHOLDER,
 	TITLE_GENERATION
 } from '$lib/constants';
@@ -31,6 +29,7 @@ import { ChatService } from '$lib/services/chat.service';
 import { DatabaseService } from '$lib/services/database.service';
 // direct imports between stores, not via the barrel, to avoid circular deps
 import { agenticStore } from '$lib/stores/agentic.svelte';
+import { ChatStreamManager } from '$lib/stores/chat-streams.svelte';
 import { conversationsStore } from '$lib/stores/conversations.svelte';
 import { mcpStore } from '$lib/stores/mcp.svelte';
 import { modelsStore } from '$lib/stores/models.svelte';
@@ -40,7 +39,6 @@ import { toolsStore } from '$lib/stores/tools.svelte';
 import type {
 	ApiChatMessageData,
 	ApiProcessingState,
-	ApiStreamSession,
 	ChatMessagePromptProgress,
 	ChatMessageTimings,
 	ChatStreamCallbacks,
@@ -58,8 +56,7 @@ import {
 	generateConversationTitle,
 	getConversationModel,
 	isAbortError,
-	normalizeModelName,
-	streamIdentity
+	normalizeModelName
 } from '$lib/utils';
 import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 
@@ -83,21 +80,8 @@ class ChatStore {
 		string,
 		{ response: string; messageId: string; model?: string | null }
 	>();
-	// convs that the backend reports as having a running session, populated by the global sync
-	// at app mount and on visibilitychange. it does not overlap with chatLoadingStates which
-	// tracks inferences driven by this browser, both are unioned to feed the sidebar spinners
-	private remoteRunningConvs = new SvelteSet<string>();
-	// per conv attach lifecycle, used to derive the global streaming flag without flipping it
-	// off when one conv finishes while another is still streaming. mirrors chatLoadingStates
-	// in scope but tracks the attach + tee replay path specifically
-	private attachingConvs = new SvelteSet<string>();
-	// pending resume retry timers while an owning model loads, one per conv
-	private resumeRetryTimers = new SvelteMap<string, ReturnType<typeof setTimeout>>();
-	// convs whose resume waits on a model load: their loading state belongs to the retry loop,
-	// so discoverActiveStream must not treat it as a live send and bail
-	private resumePendingConvs = new SvelteSet<string>();
-	// in-flight discoverActiveStream guard, keyed by conv id
-	private discoveringConvs = new SvelteSet<string>();
+	// server-side stream sessions: discovery, attach/replay, resume retry, remote sync
+	private streams = new ChatStreamManager(this);
 	private abortControllers = new SvelteMap<string, AbortController>();
 	private preEncodeAbortController: AbortController | null = null;
 	private processingStates = new SvelteMap<string, ApiProcessingState | null>();
@@ -116,7 +100,7 @@ class ChatStore {
 		{ content: string; extras?: DatabaseMessageExtra[] }
 	>();
 
-	private setChatLoading(convId: string, loading: boolean): void {
+	setChatLoading(convId: string, loading: boolean): void {
 		this.touchConversationState(convId);
 
 		if (loading) {
@@ -133,7 +117,7 @@ class ChatStore {
 			// onComplete or explicit Stop), the backend session is finalized too, so we drop the
 			// sidebar hint for this conv right away instead of waiting for the next visibilitychange
 			// snapshot. without this the spinner ghosts until the user toggles the tab
-			this.remoteRunningConvs.delete(convId);
+			this.streams.clearRemoteRunning(convId);
 		}
 	}
 
@@ -148,7 +132,7 @@ class ChatStore {
 			if (convId === conversationsStore.activeConversation?.id) this.isReasoning = false;
 		}
 	}
-	private setChatStreaming(
+	setChatStreaming(
 		convId: string,
 		response: string,
 		messageId: string,
@@ -163,7 +147,7 @@ class ChatStore {
 
 		if (convId === conversationsStore.activeConversation?.id) this.currentResponse = response;
 	}
-	private clearChatStreaming(convId: string, messageId?: string): void {
+	clearChatStreaming(convId: string, messageId?: string): void {
 		// session aware: a stale generation must not wipe a newer one's streaming state on the
 		// same conversation, that would drop the frozen stop identity and stop the wrong session
 		if (messageId !== undefined) {
@@ -199,382 +183,6 @@ class ChatStore {
 			}
 		}
 	}
-	/**
-	 * Server side stream discovery, split in three pieces:
-	 *
-	 * probeServerStream(convId) -> hits POST /v1/streams/lookup with the conv id, returns the session to attach
-	 *   to or null. Pure read, no side effect, no UI lock. Safe to fire in parallel with anything.
-	 *
-	 * attachServerStream(convId) -> flips the spinner immediately, fetches the replay stream
-	 *   from byte 0, finds the assistant slot to splice into (creates a placeholder if the conv has
-	 *   no assistant message yet, for cross device or fresh local DB cases), and pipes the SSE bytes
-	 *   into the message via handleStreamResponse.
-	 *
-	 * discoverActiveStream(convId) -> probe + attach in one call. Used by callers that do not need
-	 *   to overlap the probe with other async work.
-	 *
-	 * The mount of the chat page in +page.svelte calls probeServerStream in parallel with
-	 * loadConversation, then attachServerStream once both have settled. This gives the earliest
-	 * possible time to spinner and avoids racing against an empty activeMessages array.
-	 */
-	async probeServerStream(convId: string): Promise<ApiStreamSession | null> {
-		if (!convId) return null;
-
-		let sessions: ApiStreamSession[];
-
-		try {
-			sessions = await ChatService.lookupStreamSessions([convId]);
-		} catch (e) {
-			console.warn(`probeServerStream failed for conv ${convId}:`, e);
-
-			return null;
-		}
-
-		return ChatService.selectActiveStream(sessions);
-	}
-
-	async attachServerStream(convId: string, streamId?: string): Promise<void> {
-		if (!convId) return;
-
-		if (this.chatStreamingStates.has(convId)) return;
-
-		// flip the spinner immediately, the user sees activity as soon as the conv becomes active.
-		// the global isStreamingActive flag is derived from attachingConvs.size, so adding here
-		// turns it on, and removing in unlock only turns it off when this is the last attach
-		this.setChatLoading(convId, true);
-		this.attachingConvs.add(convId);
-		this.setStreamingActive(true);
-
-		// only set the active processing conv if we are looking at it, otherwise a background
-		// attach would steal the indicator from the conv the user is currently viewing
-		if (convId === conversationsStore.activeConversation?.id) {
-			this.setActiveProcessingConversation(convId);
-		}
-
-		const unlock = () => {
-			this.attachingConvs.delete(convId);
-
-			// flip the global flag off only when no other conv is still attaching
-			if (this.attachingConvs.size === 0) {
-				this.setStreamingActive(false);
-			}
-
-			this.setChatLoading(convId, false);
-			this.clearChatStreaming(convId);
-		};
-		// fetch the replay stream from byte 0, rebuild the assistant message from scratch.
-		// resolve the server side identity, fall back to streamIdentity when the caller does not
-		// pass a streamId. probeServerStream returns the full id (with ::model suffix when present)
-		const id = streamId || streamIdentity(convId, modelsStore.selectedModelName);
-
-		let response: Response;
-
-		try {
-			response = await ChatService.fetchStreamReplay(id);
-		} catch (e) {
-			console.error(`attachServerStream replay failed for conv ${convId}:`, e);
-			unlock();
-
-			return;
-		}
-
-		// load the target conversation messages by id, not via the active store. when multiple
-		// attaches run in parallel the active store may reflect another conv and writing through
-		// its index mixes content across convs (CoT flicker, message bleed). by going through the
-		// DB we stay isolated, and only mirror into the active store when the attached conv is
-		// the one currently displayed
-		let messages: DatabaseMessage[];
-
-		try {
-			messages = await DatabaseService.getConversationMessages(convId);
-		} catch (e) {
-			console.error('attachServerStream load messages failed:', e);
-			unlock();
-
-			return;
-		}
-
-		// locate the slot to splice into, create a placeholder assistant message if there is none.
-		// we use the conv-scoped findLastAssistantIdx helpers, they only depend on the array
-		let targetIdx = this.findLastAssistantIdx(messages);
-
-		if (targetIdx === -1) {
-			const lastUserIdx = this.findLastUserIdx(messages);
-
-			if (lastUserIdx === -1) {
-				console.warn(
-					`attachServerStream: conv ${convId} has no user or assistant message, cannot splice`
-				);
-				unlock();
-
-				return;
-			}
-
-			try {
-				const placeholder = await DatabaseService.createMessageBranch(
-					{
-						children: [],
-						content: '',
-						convId,
-						parent: messages[lastUserIdx].id,
-						role: MessageRole.ASSISTANT,
-						timestamp: Date.now(),
-						toolCalls: '',
-						type: MessageType.TEXT
-					} as Omit<DatabaseMessage, 'id'>,
-					messages[lastUserIdx].id
-				);
-
-				messages = [...messages, placeholder];
-				targetIdx = messages.length - 1;
-
-				// only push into the active store when this conv is the one displayed right now
-				if (convId === conversationsStore.activeConversation?.id) {
-					conversationsStore.addMessageToActive(placeholder);
-				}
-			} catch (e) {
-				console.error('attachServerStream placeholder creation failed:', e);
-				unlock();
-
-				return;
-			}
-		}
-
-		if (targetIdx === -1) {
-			unlock();
-
-			return;
-		}
-
-		const targetMessage = messages[targetIdx];
-		const targetMessageId = targetMessage.id;
-		// when the assistant slot already has content, the running session is a continue or
-		// another append flow and its buffer holds only the appended deltas. preserve the prefix
-		// and let the replay add to it. when the slot is empty the session buffer holds the whole
-		// message so we wipe and rebuild from byte 0
-		const existingContent = targetMessage.content ?? '';
-		const existingReasoning = targetMessage.reasoningContent ?? '';
-		const isAppendMode = existingContent.length > 0;
-		// helper: write to the active store only when the attached conv is currently displayed.
-		// the lookup by message id is robust to reordering of activeMessages, two parallel attaches
-		// can no longer step on each other's indices
-		const writeActive = (updates: Partial<DatabaseMessage>) => {
-			if (convId !== conversationsStore.activeConversation?.id) {
-				return;
-			}
-
-			const liveIdx = conversationsStore.findMessageIndex(targetMessageId);
-
-			if (liveIdx === -1) return;
-
-			conversationsStore.updateMessageAtIndex(liveIdx, updates);
-		};
-
-		if (!isAppendMode) {
-			writeActive({ content: '', reasoningContent: undefined });
-		}
-
-		// extract the model suffix, the resume calls in handleStreamResponse must reuse the model
-		// the session was tagged with, not the live dropdown
-		const sepIdx = id.indexOf(CONVERSATION_ID_SEPARATOR);
-		const attachedModel: string | null = sepIdx === -1 ? null : id.slice(sepIdx + 2);
-
-		this.setChatStreaming(convId, existingContent, targetMessageId, attachedModel);
-		const abortController = this.getOrCreateAbortController(convId);
-
-		let streamedContent = '';
-		let streamedReasoningContent = '';
-
-		const cleanup = () => {
-			unlock();
-			this.setProcessingState(convId, null);
-		};
-
-		try {
-			await ChatService.handleStreamResponse(
-				response,
-				(chunk: string) => {
-					streamedContent += chunk;
-					const displayed = isAppendMode ? existingContent + streamedContent : streamedContent;
-
-					writeActive({ content: displayed });
-					this.setChatStreaming(convId, displayed, targetMessageId);
-				},
-				async (
-					finalContent?: string,
-					reasoningContent?: string,
-					timings?: ChatMessageTimings,
-					toolCalls?: string
-				) => {
-					const streamed = streamedContent || finalContent || '';
-					const streamedR = streamedReasoningContent || reasoningContent || '';
-					const content = isAppendMode ? existingContent + streamed : streamed;
-					const reasoning = isAppendMode ? existingReasoning + streamedR : streamedR;
-
-					// the DB write is the source of truth, mirror to the active store only when
-					// the conv is currently displayed
-					await DatabaseService.updateMessage(targetMessageId, {
-						content,
-						reasoningContent: reasoning || undefined,
-						timings,
-						toolCalls: toolCalls || ''
-					});
-					writeActive({
-						content,
-						reasoningContent: reasoning || undefined,
-						timings
-					});
-					cleanup();
-				},
-				(err: Error) => {
-					console.error('attachServerStream pipe error:', err);
-					cleanup();
-				},
-				(chunk: string) => {
-					streamedReasoningContent += chunk;
-					const displayed = isAppendMode
-						? existingReasoning + streamedReasoningContent
-						: streamedReasoningContent;
-
-					writeActive({ reasoningContent: displayed });
-				},
-				undefined,
-				undefined,
-				undefined,
-				undefined,
-				convId,
-				abortController.signal,
-				(connState: StreamConnectionState) => {
-					if (convId === conversationsStore.activeConversation?.id) {
-						this.streamConnectionState = connState;
-					}
-				},
-				attachedModel
-			);
-		} catch (e) {
-			console.error('attachServerStream pipe crashed:', e);
-			cleanup();
-		}
-	}
-
-	/**
-	 * Model frozen at send time for a stream awaiting resume, from the persisted stream state.
-	 * The load progress indicator targets it after a reload, when the message row has no model
-	 * yet and the dropdown selection may not be restored.
-	 */
-	getResumeModel(convId: string): string | null {
-		return ChatService.getStreamState(convId)?.model ?? null;
-	}
-
-	async discoverActiveStream(convId: string): Promise<void> {
-		if (!convId) return;
-
-		if (this.chatStreamingStates.has(convId)) return;
-
-		if (this.chatLoadingStates.get(convId) && !this.resumePendingConvs.has(convId)) return;
-
-		// concurrency guard: another discover may already be running for this conv (typical race
-		// between mount and visibilitychange on tab switch). a second concurrent fetch on the same
-		// /v1/stream would duplicate every byte into the DB message, this guard bounces it
-		if (this.discoveringConvs.has(convId)) return;
-
-		this.discoveringConvs.add(convId);
-
-		try {
-			// the model is frozen at POST time, rebuild the exact conv::model identity from the
-			// persisted state so the lookup key matches what the server stored. null means a single
-			// model conv with no ::suffix, only guess from the dropdown with no persisted state
-			const localState = ChatService.getStreamState(convId);
-			const streamId = ChatService.resumeStreamIdentity(
-				convId,
-				localState,
-				modelsStore.selectedModelName
-			);
-			// primary path: ask the server which sessions exist for this identity
-			const serverTarget = await this.probeServerStream(streamId);
-
-			if (serverTarget) {
-				// pass the full server side identity (may carry a ::model suffix) so the GET routes
-				// straight to the owning session, no probe or fan out
-				await this.attachServerStream(convId, serverTarget.conversation_id);
-
-				return;
-			}
-
-			// fallback: local state remembers an interrupted byte offset for this conv, the server may
-			// still have a live session matching that identity (we just lost the bytes mid stream). retry
-			// with the frozen identity, the server probe inside attachServerStream tells us if it exists
-			if (!localState) {
-				return;
-			}
-
-			// quiet status probe first: a full attach flips the loading UI on every try, probing
-			// keeps the retry loop invisible while the owning model is still loading (503)
-			const status = await ChatService.probeResumeStatus(streamId);
-
-			if (status === 503) {
-				// make the wait visible: the empty assistant row persisted at send time renders
-				// the processing info, whose model load percentage flows from the models feed
-				this.resumePendingConvs.add(convId);
-				this.setChatLoading(convId, true);
-
-				if (!this.resumeRetryTimers.has(convId)) {
-					this.resumeRetryTimers.set(
-						convId,
-						setTimeout(() => {
-							this.resumeRetryTimers.delete(convId);
-							void this.discoverActiveStream(convId);
-						}, STREAM_RESUME_RETRY_MS)
-					);
-				}
-
-				return;
-			}
-
-			if (this.resumePendingConvs.delete(convId) && status !== 200) {
-				// the wait is over without a session to attach, drop the visible loading state
-				this.setChatLoading(convId, false);
-			}
-
-			if (status === 0) {
-				// transient network failure, the next mount or visibility change retries
-				return;
-			}
-
-			if (status !== 200) {
-				// the session is gone (stopped, TTL expired), nothing to resume anymore
-				ChatService.clearStreamState(convId);
-
-				return;
-			}
-
-			await this.attachServerStream(convId, streamId);
-
-			// if attachServerStream failed (session gone, TTL expired), clear the local state to avoid retrying forever
-			if (!this.chatStreamingStates.has(convId) && !this.chatLoadingStates.get(convId)) {
-				ChatService.clearStreamState(convId);
-			}
-		} finally {
-			this.discoveringConvs.delete(convId);
-		}
-	}
-
-	private findLastAssistantIdx(messages: DatabaseMessage[]): number {
-		for (let i = messages.length - 1; i >= 0; i--) {
-			if (messages[i].role === MessageRole.ASSISTANT) return i;
-		}
-
-		return -1;
-	}
-
-	private findLastUserIdx(messages: DatabaseMessage[]): number {
-		for (let i = messages.length - 1; i >= 0; i--) {
-			if (messages[i].role === MessageRole.USER) return i;
-		}
-
-		return -1;
-	}
-
 	clearUIState(): void {
 		this.isLoading = false;
 		this.currentResponse = '';
@@ -592,7 +200,7 @@ class ChatStore {
 		return this.processingStates.get(conversationId) || null;
 	}
 
-	private setProcessingState(conversationId: string, state: ApiProcessingState | null): void {
+	setProcessingState(conversationId: string, state: ApiProcessingState | null): void {
 		if (state === null) this.processingStates.delete(conversationId);
 		else this.processingStates.set(conversationId, state);
 
@@ -613,7 +221,7 @@ class ChatStore {
 		return this.activeProcessingState;
 	}
 
-	private setStreamingActive(active: boolean): void {
+	setStreamingActive(active: boolean): void {
 		this.isStreamingActive = active;
 	}
 
@@ -621,7 +229,7 @@ class ChatStore {
 		return this.isStreamingActive;
 	}
 
-	private getOrCreateAbortController(convId: string): AbortController {
+	getOrCreateAbortController(convId: string): AbortController {
 		let c = this.abortControllers.get(convId);
 
 		if (!c || c.signal.aborted) {
@@ -721,7 +329,7 @@ class ChatStore {
 		// for this conv but no local pipe yet) sources. the sidebar shows one spinner per entry
 		const out = new SvelteSet<string>(this.chatLoadingStates.keys());
 
-		for (const id of this.remoteRunningConvs) {
+		for (const id of this.streams.remoteRunning) {
 			out.add(id);
 		}
 
@@ -733,70 +341,19 @@ class ChatStore {
 	}
 
 	/**
-	 * Resync the remote running convs set from the backend. Called by the layout at mount and on
-	 * visibilitychange, no polling. A snapshot semantic: the set is replaced wholesale, stale entries
-	 * for sessions that finalized while the browser was elsewhere are dropped naturally.
+	 * Server-side stream sessions (discovery, attach/replay, resume retry,
+	 * remote-running snapshot) live in ChatStreamManager.
 	 */
+	async discoverActiveStream(convId: string): Promise<void> {
+		return this.streams.discoverActiveStream(convId);
+	}
+
 	async syncRemoteRunningStreams(): Promise<void> {
-		// the conversations store loads from IndexedDB asynchronously, the +layout onMount caller
-		// fires before that finishes. read ids straight from the DB so the result does not depend
-		// on the store init race, and the sidebar spinners light up at first paint for every conv
-		// the user owns even if it has not been hydrated into the store yet
-		let ids: string[];
+		return this.streams.syncRemoteRunningStreams();
+	}
 
-		try {
-			const all = await DatabaseService.getAllConversations();
-
-			ids = all.map((c) => c.id).filter((id) => !!id);
-		} catch (e) {
-			console.warn('syncRemoteRunningStreams DB read failed:', e);
-
-			return;
-		}
-
-		// only ask about conv ids the user already owns
-		if (ids.length === 0) {
-			for (const id of Array.from(this.remoteRunningConvs)) {
-				this.remoteRunningConvs.delete(id);
-			}
-
-			return;
-		}
-
-		// rebuild the frozen conv::model identity per conv so a session started with a model still
-		// matches. the server response is mapped back to the bare id below for the sidebar set
-		const lookupIds = ids.map((id) =>
-			ChatService.resumeStreamIdentity(id, ChatService.getStreamState(id), null)
-		);
-
-		let sessions: ApiStreamSession[];
-
-		try {
-			sessions = await ChatService.lookupStreamSessions(lookupIds);
-		} catch (e) {
-			console.warn('syncRemoteRunningStreams lookup failed:', e);
-
-			return;
-		}
-		const running = new SvelteSet<string>();
-
-		for (const s of sessions) {
-			if (s && !s.is_done && typeof s.conversation_id === 'string' && s.conversation_id) {
-				// strip the optional ::model suffix, the sidebar set is keyed by the bare conv id
-				const sepIdx = s.conversation_id.indexOf(CONVERSATION_ID_SEPARATOR);
-				const bareId = sepIdx === -1 ? s.conversation_id : s.conversation_id.slice(0, sepIdx);
-
-				running.add(bareId);
-			}
-		}
-		for (const id of Array.from(this.remoteRunningConvs)) {
-			if (!running.has(id)) {
-				this.remoteRunningConvs.delete(id);
-			}
-		}
-		for (const id of running) {
-			this.remoteRunningConvs.add(id);
-		}
+	getResumeModel(convId: string): string | null {
+		return this.streams.getResumeModel(convId);
 	}
 
 	getChatStreaming(convId: string): { response: string; messageId: string } | undefined {
@@ -1744,14 +1301,7 @@ class ChatStore {
 		void ChatService.cancelServerStream(convId, modelForStop);
 		// an explicit stop leaves nothing to resume and kills a pending resume retry
 		ChatService.clearStreamState(convId);
-		const retryTimer = this.resumeRetryTimers.get(convId);
-
-		if (retryTimer !== undefined) {
-			clearTimeout(retryTimer);
-			this.resumeRetryTimers.delete(convId);
-		}
-
-		this.resumePendingConvs.delete(convId);
+		this.streams.cancelResumeRetry(convId);
 		this.abortRequest(convId);
 		this.setChatLoading(convId, false);
 		this.clearChatStreaming(convId);
