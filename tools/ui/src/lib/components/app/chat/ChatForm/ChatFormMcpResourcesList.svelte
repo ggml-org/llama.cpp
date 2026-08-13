@@ -1,13 +1,9 @@
 <script lang="ts">
-	import { mcpStore } from '$lib/stores/mcp.svelte';
-	import {
-		mcpResourceAttachments,
-		mcpHasResourceAttachments
-	} from '$lib/stores/mcp-resources.svelte';
 	import {
 		ChatAttachmentsListItemMcpResource,
 		HorizontalScrollCarousel
 	} from '$lib/components/app';
+	import { mcpResourceStore, mcpStore } from '$lib/stores';
 
 	interface Props {
 		class?: string;
@@ -16,8 +12,8 @@
 
 	let { class: className, onResourceClick }: Props = $props();
 
-	const attachments = $derived(mcpResourceAttachments());
-	const hasAttachments = $derived(mcpHasResourceAttachments());
+	const attachments = $derived(mcpResourceStore.attachments);
+	const hasAttachments = $derived(mcpResourceStore.hasAttachments);
 
 	function handleRemove(attachmentId: string) {
 		mcpStore.removeResourceAttachment(attachmentId);

@@ -66,12 +66,12 @@ echo PASS
 echo
 
 # 5. Merge
-#$SPLIT --merge $WORK_PATH/ggml-model-split-32-tensors-00001-of-00012.gguf $WORK_PATH/ggml-model-merge-2.gguf
+#$SPLIT --merge $WORK_PATH/ggml-model-split-32-tensors-00001-of-00011.gguf $WORK_PATH/ggml-model-merge-2.gguf
 #echo PASS
 #echo
 
 # 5b. Test the merged model is loading properly
-#$MAIN -no-cnv --model $WORK_PATH/ggml-model-merge-2.gguf --n-predict 32
+#$MAIN -no-cnv --model $WORK_PATH/ggml-model-merge-2.gguf -p "I believe the meaning of life is" --n-predict 32
 #echo PASS
 #echo
 
@@ -84,6 +84,26 @@ echo
 $MAIN -no-cnv --model $WORK_PATH/ggml-model-split-500M-00001-of-00002.gguf -p "I believe the meaning of life is" --n-predict 32
 echo PASS
 echo
+
+# 7. Merge with delete splits
+#for i in $(seq -w 1 11); do
+#    cp "$WORK_PATH/ggml-model-split-32-tensors-000${i}-of-00011.gguf" "$WORK_PATH/ggml-model-split-32-tensors-copy-000${i}-of-00011.gguf"
+#done
+#$SPLIT --merge --delete-splits $WORK_PATH/ggml-model-split-32-tensors-copy-00001-of-00011.gguf $WORK_PATH/ggml-model-merge-3.gguf
+#echo PASS
+#echo
+
+# 7b. Test the merged model is loading properly
+#$MAIN -no-cnv --model $WORK_PATH/ggml-model-merge-3.gguf -p "I believe the meaning of life is" --n-predict 32
+#echo PASS
+#echo
+
+# 7c. Test the files were deleted
+#for i in $(seq -w 1 11); do
+#    test ! -f "$WORK_PATH/ggml-model-split-32-tensors-copy-000${i}-of-00011.gguf"
+#done
+#echo PASS
+#echo
 
 # Clean up
 rm -f $WORK_PATH/ggml-model-split*.gguf $WORK_PATH/ggml-model-merge*.gguf

@@ -51,7 +51,9 @@ export class AutoScrollController {
 	 */
 	setDisabled(disabled: boolean): void {
 		if (this._disabled === disabled) return;
+
 		this._disabled = disabled;
+
 		if (disabled) {
 			this._autoScrollEnabled = false;
 			this.stopInterval();
@@ -67,7 +69,7 @@ export class AutoScrollController {
 	handleScroll(): void {
 		if (this._disabled || !this._container) return;
 
-		const { scrollTop, scrollHeight, clientHeight } = this._container;
+		const { clientHeight, scrollHeight, scrollTop } = this._container;
 		const distanceFromBottom = scrollHeight - clientHeight - scrollTop;
 		const isScrollingUp = scrollTop < this._lastScrollTop;
 		const isAtBottom = distanceFromBottom < AUTO_SCROLL_AT_BOTTOM_THRESHOLD;
@@ -84,11 +86,12 @@ export class AutoScrollController {
 	}
 
 	/**
-	 * Scrolls the container to the bottom.
+	 * Scrolls the container to the bottom instantly.
 	 */
-	scrollToBottom(behavior: ScrollBehavior = 'smooth'): void {
+	scrollToBottom(): void {
 		if (this._disabled || !this._container) return;
-		this._container.scrollTo({ top: this._container.scrollHeight, behavior });
+
+		this._container.scrollTop = this._container.scrollHeight;
 	}
 
 	/**
@@ -96,6 +99,7 @@ export class AutoScrollController {
 	 */
 	enable(): void {
 		if (this._disabled) return;
+
 		this._userScrolledUp = false;
 		this._autoScrollEnabled = true;
 	}
@@ -106,6 +110,7 @@ export class AutoScrollController {
 	resetScrollState(): void {
 		this._userScrolledUp = false;
 		this._autoScrollEnabled = !this._disabled;
+
 		if (this._container) {
 			this._lastScrollTop = this._container.scrollTop;
 		}
@@ -139,6 +144,7 @@ export class AutoScrollController {
 	updateInterval(isStreaming: boolean): void {
 		if (this._disabled) {
 			this.stopInterval();
+
 			return;
 		}
 
@@ -184,9 +190,11 @@ export class AutoScrollController {
 
 		this._mutationObserver = new MutationObserver(() => {
 			if (!this._autoScrollEnabled || this._rafPending) return;
+
 			this._rafPending = true;
 			requestAnimationFrame(() => {
 				this._rafPending = false;
+
 				if (this._autoScrollEnabled && this._container) {
 					this._container.scrollTop = this._container.scrollHeight;
 				}
@@ -194,9 +202,9 @@ export class AutoScrollController {
 		});
 
 		this._mutationObserver.observe(this._container, {
+			characterData: true,
 			childList: true,
-			subtree: true,
-			characterData: true
+			subtree: true
 		});
 	}
 
@@ -205,6 +213,7 @@ export class AutoScrollController {
 			this._mutationObserver.disconnect();
 			this._mutationObserver = null;
 		}
+
 		this._rafPending = false;
 	}
 }

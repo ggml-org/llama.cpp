@@ -1,7 +1,14 @@
 # mtmd
 
-set(MTMD_VIDEO ON CACHE BOOL "enable video support in mtmd (requires ffmpeg binary in PATH)")
+set(MTMD_VIDEO_HELP "enable video support in mtmd (requires ffmpeg binary in PATH)")
+
+set(MTMD_VIDEO ON CACHE BOOL "${MTMD_VIDEO_HELP}")
 # TODO: add MTMD_VIDEO_METHOD in the future to select between ffmpeg and other backends
+
+if (MTMD_VIDEO AND NOT LLAMA_SUBPROCESS)
+    message(STATUS "Disabling MTMD_VIDEO because LLAMA_SUBPROCESS is OFF")
+    set(MTMD_VIDEO OFF CACHE BOOL "${MTMD_VIDEO_HELP}" FORCE)
+endif()
 
 find_package(Threads REQUIRED)
 
@@ -11,6 +18,8 @@ add_library(mtmd
             mtmd-image.cpp
             mtmd.h
             mtmd-helper.cpp
+            mtmd-helper-gen.cpp
+            mtmd-helper-common.h
             mtmd-helper.h
             clip.cpp
             clip.h
@@ -34,15 +43,23 @@ add_library(mtmd
             models/kimivl.cpp
             models/kimik25.cpp
             models/nemotron-v2-vl.cpp
+            models/muse-glimmer.cpp
             models/llama4.cpp
             models/llava.cpp
             models/minicpmv.cpp
             models/paddleocr.cpp
             models/pixtral.cpp
             models/qwen2vl.cpp
+            models/minimax-m3.cpp
             models/qwen3vl.cpp
             models/mimovl.cpp
             models/qwen3a.cpp
+            models/mimo-audio.cpp
+            models/qwen3tts-spkenc.cpp
+            models/qwen3tts-gen.cpp
+            models/pockettts-seanet.cpp
+            models/pockettts-spkenc.cpp
+            models/pockettts-gen.cpp
             models/step3vl.cpp
             models/siglip.cpp
             models/whisper-enc.cpp
@@ -51,11 +68,12 @@ add_library(mtmd
             models/mobilenetv5.cpp
             models/youtuvl.cpp
             models/yasa2.cpp
+            models/parakeet.cpp
             )
 
 set_target_properties(mtmd PROPERTIES
-    VERSION ${LLAMA_INSTALL_VERSION}
-    SOVERSION 0
+    VERSION ${LLAMA_VERSION_BASE}
+    SOVERSION ${LLAMA_VERSION_MAJOR}
     MACHO_CURRENT_VERSION 0 # keep macOS linker from seeing oversized version number
 )
 

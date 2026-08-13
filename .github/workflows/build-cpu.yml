@@ -94,8 +94,10 @@ jobs:
         id: cmake_build
         run: |
           cmake -B build \
+            -DGGML_NATIVE=OFF \
             -DLLAMA_FATAL_WARNINGS=ON \
-            -DGGML_RPC=ON
+            -DGGML_RPC=ON \
+            -DGGML_NATIVE=OFF
           time cmake --build build --config Release -j $(nproc)
 
       - name: Test
@@ -121,7 +123,7 @@ jobs:
     env:
       OPENBLAS_VERSION: 0.3.23
       SDE_VERSION: 9.33.0-2024-01-07
-      VULKAN_VERSION: 1.4.313.2
+      VULKAN_VERSION: 1.4.357.0
 
     strategy:
       matrix:

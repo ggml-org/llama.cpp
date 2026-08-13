@@ -5,7 +5,8 @@
 #include "hmx-queue.h"
 #include "htp-ops.h"
 #include "hex-profile.h"
-#include "worker-pool.h"
+#include "work-queue.h"
+#include "hex-fastdiv.h"
 
 #include <assert.h>
 #include <dspqueue.h>
@@ -17,6 +18,8 @@
 #define HTP_MAX_NTHREADS 10
 #endif
 #define HTP_MAX_MMAPS    16
+
+#define HTP_MAX_DIRTY_RANGES 16
 
 // Memory mapping
 struct htp_mmap {
@@ -52,6 +55,9 @@ struct htp_ops_context {
         const struct htp_tensor * dsts[HTP_OP_MAX_OUTPUTS];
     };
 
+    dma_queue **    src_dma[HTP_OP_MAX_INPUTS];
+    dma_queue **    dst_dma[HTP_OP_MAX_OUTPUTS];
+
     // TODO convert these to an array
     struct htp_spad src0_spad;
     struct htp_spad src1_spad;
@@ -65,11 +71,16 @@ struct htp_ops_context {
 
 // Main context for htp DSP backend
 struct htp_context {
-    dspqueue_t             queue;
-    dma_queue *            dma[HTP_MAX_NTHREADS];
+    dspqueue_t             dsp_queue;
+
     struct htp_mmap        mmap[HTP_MAX_MMAPS];
-    worker_pool_context_t  worker_pool;
+    dma_queue_t            dma[HTP_MAX_NTHREADS];
+    dma_queue_t            dma_cached[HTP_MAX_NTHREADS];
+    work_queue_t           work_queue;
+    hmx_queue_t            hmx_queue;
+
     uint32_t               n_threads;
+    struct fastdiv_values  n_threads_div;
 
     int                    thread_id;
     int                    thread_prio;
@@ -86,6 +97,11 @@ struct htp_context {
     atomic_bool            vtcm_needs_release;
 
     uint64_t               max_vmem;
+    struct htp_dirty_range {
+        uint32_t start;
+        uint32_t end;
+        uint32_t bi;
+    } dirty_ranges[HTP_MAX_DIRTY_RANGES];
 
     // Persistent DDR scratchpad for MUL_MAT_ID mappings
     void *                 ddr_spad_base;
@@ -93,7 +109,10 @@ struct htp_context {
 
     struct htp_ops_context octx;
 
-    struct hmx_queue *     hmx_queue; // Async HMX queue for pipeline overlap
+    qurt_thread_t          main_thread;
+    void *                 main_stack;
+    atomic_bool            killed;
+    size_t                 footprint;
 };
 
 int op_matmul(struct htp_ops_context * octx);
@@ -121,5 +140,6 @@ int op_diag(struct htp_ops_context * octx);
 int op_solve_tri(struct htp_ops_context * octx);
 int op_gated_delta_net(struct htp_ops_context * octx);
 int op_pad(struct htp_ops_context * octx);
+int op_im2col(struct htp_ops_context * octx);
 
 #endif /* HTP_CTX_H */

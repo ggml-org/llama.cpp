@@ -1,9 +1,9 @@
 <script lang="ts">
-	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
 	import { Download } from '@lucide/svelte';
+	import RotateCcwIcon from '@lucide/svelte/icons/rotate-ccw';
 	import ZoomInIcon from '@lucide/svelte/icons/zoom-in';
 	import ZoomOutIcon from '@lucide/svelte/icons/zoom-out';
-	import RotateCcwIcon from '@lucide/svelte/icons/rotate-ccw';
+	import { ICON_CLASS_DEFAULT } from '$lib/constants';
 
 	interface Props {
 		scale: number;
@@ -13,13 +13,15 @@
 		onResetView: () => void;
 	}
 
-	let { scale, svgHtml, onZoomIn, onZoomOut, onResetView }: Props = $props();
+	let { onResetView, onZoomIn, onZoomOut, scale, svgHtml }: Props = $props();
 
 	function downloadSvg() {
 		if (!svgHtml) return;
+
 		const blob = new Blob([svgHtml], { type: 'image/svg+xml' });
 		const url = URL.createObjectURL(blob);
 		const a = document.createElement('a');
+
 		a.href = url;
 		a.download = 'diagram.svg';
 		a.click();
