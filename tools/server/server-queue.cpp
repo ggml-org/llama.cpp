@@ -4,6 +4,7 @@
 #include "log.h"
 
 #include <chrono>
+#include <thread>
 
 #define QUE_INF(fmt, ...) LOG_INF("que  %12.*s: " fmt, 12, __func__, __VA_ARGS__)
 #define QUE_WRN(fmt, ...) LOG_WRN("que  %12.*s: " fmt, 12, __func__, __VA_ARGS__)
@@ -122,9 +123,120 @@ void server_queue::terminate() {
     condition_tasks.notify_all();
 }
 
+bool server_queue::process_new_tasks() {
+    while (true) {
+        std::unique_lock<std::mutex> lock(mutex_tasks);
+        if (!running) {
+            QUE_DBG("%s", "terminate\n");
+            return true;
+        }
+        if (queue_tasks.empty()) {
+            return false;
+        }
+        server_task task = std::move(queue_tasks.front());
+        queue_tasks.pop_front();
+        lock.unlock();
+
+        QUE_DBG("processing task, id = %d\n", task.id);
+        callback_new_task(std::move(task));
+    }
+}
+
+void server_queue::worker_loop() {
+    while (true) {
+        std::function<void()> work;
+        {
+            std::unique_lock<std::mutex> lock(worker.mutex);
+            worker.cv.wait(lock, [&]{
+                return worker.stop || worker.work != nullptr;
+            });
+            if (worker.stop) {
+                return;
+            }
+            work = std::move(worker.work);
+            worker.work = nullptr;
+        }
+
+        // note: do not hold any lock here, work() may post new tasks
+        try {
+            work();
+        } catch (...) {
+            worker.exception = std::current_exception();
+        }
+
+        // signal completion to the thread waiting in yield_to_queue()
+        std::unique_lock<std::mutex> lock(mutex_tasks);
+        worker.busy = false;
+        condition_tasks.notify_all();
+    }
+}
+
+void server_queue::worker_stop() {
+    if (!worker.thread.joinable()) {
+        return;
+    }
+    {
+        std::unique_lock<std::mutex> lock(worker.mutex);
+        worker.stop = true;
+        worker.cv.notify_one();
+    }
+    worker.thread.join();
+}
+
+void server_queue::yield_to_queue(std::function<void()> && work) {
+    GGML_ASSERT(worker.thread.joinable() && "yield_to_queue() must be called from the start_loop() thread");
+
+    QUE_DBG("%s", "yielding to queue\n");
+
+    {
+        std::unique_lock<std::mutex> lock(mutex_tasks);
+        GGML_ASSERT(!worker.busy && "yield_to_queue() cannot be nested");
+        worker.busy = true;
+    }
+    {
+        std::unique_lock<std::mutex> lock(worker.mutex);
+        worker.work = std::move(work);
+        worker.cv.notify_one();
+    }
+
+    while (true) {
+        // note: on terminate, this becomes a no-op and we simply keep waiting for the work to
+        //       finish, we cannot return early because work() borrows the caller's stack
+        process_new_tasks();
+
+        std::unique_lock<std::mutex> lock(mutex_tasks);
+        condition_tasks.wait(lock, [&]{
+            return !worker.busy || (running && !queue_tasks.empty());
+        });
+        if (!worker.busy) {
+            break;
+        }
+    }
+
+    {
+        // make sure to avoid idle timeout here
+        std::unique_lock<std::mutex> lock(mutex_tasks);
+        time_last_task = ggml_time_ms();
+    }
+
+    QUE_DBG("%s", "done yielding to queue\n");
+
+    // the worker thread is idle now, so we can safely access worker.exception
+    if (worker.exception) {
+        std::exception_ptr exception = nullptr;
+        std::swap(exception, worker.exception);
+        std::rethrow_exception(exception);
+    }
+}
+
 void server_queue::start_loop(int64_t idle_sleep_ms) {
     running = true;
     time_last_task = ggml_time_ms();
+
+    // spawn the worker thread used by yield_to_queue()
+    GGML_ASSERT(!worker.thread.joinable() && "start_loop() is already running");
+    worker.stop = false;
+    worker.thread = std::thread([this]() { worker_loop(); });
 
     constexpr auto max_wait_time = std::chrono::seconds(1);
     auto should_sleep = [&]() -> bool {
@@ -138,24 +250,10 @@ void server_queue::start_loop(int64_t idle_sleep_ms) {
 
     while (true) {
         QUE_DBG("%s", "processing new tasks\n");
-
-        while (true) {
-            std::unique_lock<std::mutex> lock(mutex_tasks);
-            if (!running) {
-                QUE_DBG("%s", "terminate\n");
-                return;
-            }
-            if (queue_tasks.empty()) {
-                lock.unlock();
-                break;
-            }
-            server_task task = std::move(queue_tasks.front());
-            queue_tasks.pop_front();
-            lock.unlock();
-
-            QUE_DBG("processing task, id = %d\n", task.id);
-            callback_new_task(std::move(task));
+        if (process_new_tasks()) {
+            break; // terminate
         }
+
         // all tasks in the current loop is processed, slots data is now ready
         QUE_DBG("%s", "update slots\n");
 
@@ -206,6 +304,8 @@ void server_queue::start_loop(int64_t idle_sleep_ms) {
             }
         }
     }
+
+    worker_stop();
 }
 
 void server_queue::cleanup_pending_task(int id_target) {

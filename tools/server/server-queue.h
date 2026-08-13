@@ -5,6 +5,7 @@
 #include <condition_variable>
 #include <deque>
 #include <mutex>
+#include <thread>
 #include <vector>
 #include <unordered_set>
 
@@ -25,12 +26,26 @@ private:
     std::mutex mutex_tasks;
     std::condition_variable condition_tasks;
 
+    // used by yield_to_queue
+    struct worker_t {
+        std::thread thread;
+        std::mutex  mutex;
+        std::condition_variable cv;
+        std::function<void()> work;   // pending work, picked up by the thread
+        std::exception_ptr exception; // exception thrown by work(), if any
+        bool stop = false;
+        bool busy = false; // guarded by mutex_tasks (not by worker_t::mutex)
+    };
+    worker_t worker;
+
     // callback functions
     std::function<void(server_task &&)> callback_new_task;
     std::function<void(void)>           callback_update_slots;
     std::function<void(bool)>           callback_sleeping_state;
 
 public:
+    ~server_queue() { worker_stop(); }
+
     // Add a new task to the end of the queue
     int post(server_task && task, bool front = false);
 
@@ -75,6 +90,12 @@ public:
      */
     void start_loop(int64_t idle_sleep_ms = -1);
 
+    // run work() on a separate thread, while the current thread calls process_new_tasks
+    // returns once work() is done (may throw exceptions)
+    // must be called from start_loop() thread (ideally inside callback_update_slots)
+    // use case: return metrics while encode/decode is running
+    void yield_to_queue(std::function<void()> && work);
+
     // for metrics
     size_t queue_tasks_deferred_size() {
         std::unique_lock<std::mutex> lock(mutex_tasks);
@@ -112,6 +133,14 @@ public:
 
 private:
     void cleanup_pending_task(int id_target);
+
+    // process all pending tasks in the queue
+    // returns true if the queue is terminated, false if there is no more task to process
+    bool process_new_tasks();
+
+    // for worker_t
+    void worker_loop();
+    void worker_stop();
 };
 
 // struct for managing server responses
