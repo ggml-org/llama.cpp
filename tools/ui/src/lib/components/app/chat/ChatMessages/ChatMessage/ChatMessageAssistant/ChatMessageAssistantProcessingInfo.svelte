@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { fade } from 'svelte/transition';
 	import type { UseProcessingStateReturn } from '$lib/hooks/use-processing-state.svelte';
+	import { fade } from 'svelte/transition';
 
 	interface Props {
 		modelLoadingText: string | null;
@@ -8,9 +8,9 @@
 		position: 'top' | 'bottom';
 	}
 
-	let { modelLoadingText, processingState, position }: Props = $props();
+	let { modelLoadingText, position, processingState }: Props = $props();
 
-	const marginClass = position === 'top' ? 'mt-6' : 'mt-4';
+	const marginClass = $derived(position === 'top' ? 'mt-6' : 'mt-4');
 </script>
 
 <div class="{marginClass} w-full max-w-3xl" in:fade>

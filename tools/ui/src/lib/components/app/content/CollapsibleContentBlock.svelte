@@ -1,8 +1,8 @@
 <script lang="ts">
-	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
 	import ChevronDown from '@lucide/svelte/icons/chevron-down';
 	import * as Collapsible from '$lib/components/ui/collapsible/index.js';
 	import { cn } from '$lib/components/ui/utils';
+	import { ICON_CLASS_DEFAULT } from '$lib/constants';
 	import type { Snippet } from 'svelte';
 	import type { Component } from 'svelte';
 
@@ -21,17 +21,17 @@
 	}
 
 	let {
-		open = $bindable(false),
+		children,
 		class: className = '',
 		icon: IconComponent,
 		iconClass = ICON_CLASS_DEFAULT,
 		iconUrl = null,
-		title = '',
-		titleSnippet,
-		subtitle,
-		shimmerTitle = false,
 		onToggle,
-		children
+		open = $bindable(false),
+		shimmerTitle = false,
+		subtitle,
+		title = '',
+		titleSnippet
 	}: Props = $props();
 
 	function hideBrokenIcon(event: Event) {
@@ -89,10 +89,15 @@
 	</Collapsible.Trigger>
 
 	<Collapsible.Content>
-		<div class="pl-1.5 grid min-w-0" style="min-height: var(--min-message-height);">
-			<div class="min-w-0 border-l border-muted-foreground/20 pl-4 pb-2 my-2">
-				{@render children()}
+		<!-- Collapsible.Content renders its children unconditionally and only sets
+		     `hidden`, so a closed block would keep re-rendering its whole body on
+		     every streamed token. Gate on `open` so collapsed content costs nothing. -->
+		{#if open}
+			<div class="pl-1.5 grid min-w-0" style="min-height: var(--min-message-height);">
+				<div class="min-w-0 border-l border-muted-foreground/20 pl-4 pb-2 my-2">
+					{@render children()}
+				</div>
 			</div>
-		</div>
+		{/if}
 	</Collapsible.Content>
 </Collapsible.Root>

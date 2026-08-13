@@ -211,7 +211,30 @@ __kernel void FA_TILE_NAME(
 
     float slope = get_alibi_slope(max_bias, head_idx, n_head_log2, m0, m1);
 
+#ifdef FA_K_LDS_T
+    // K tile transposed: [dk vec][kv row] instead of [kv row][dk vec].
+    //
+    // The QK loop walks 2 or 4 KV rows at a time against the same dk element. Row-major
+    // those are DK_VEC half4s apart, so each is its own 64-bit local read. Transposed they
+    // are adjacent, so a pair is one 128-bit read -- half the LDS issues for the same bytes,
+    // no extra registers, arithmetic untouched.
+    //
+    // This kernel looked like it should be FMA-bound (a half4 mad does ~4 ALU ops per LDS
+    // read, unlike the 1:1 of the dp4a loop), but it is NOT: a wrong-math probe that kept
+    // every FMA and removed the LDS reads ran it 38.6% faster (18.92 -> 11.62 ms/op).
+    // Explicitly 16-byte aligned: FA_LK_PAIR below reads two adjacent half4 as one float4,
+    // and the element type only obliges the compiler to align this array to 8. The indices
+    // are even so the offset is a multiple of 16, but the base has to be too, and relying
+    // on the compiler to over-align it is relying on luck.
+    __local KV_DATA_TYPE4 l_k[DK_VEC][BLOCK_N] __attribute__((aligned(16)));
+#define FA_LK(ROW, C) l_k[C][ROW]
+    // Two adjacent KV rows as one 128-bit local read (half4 pair == 16 B). j is even and
+    // BLOCK_N is even, so &l_k[c][j] is 16 B past a 16 B-aligned base.
+#define FA_LK_PAIR(C, J) as_half8(*(__local const float4 *)(&l_k[C][J]))
+#else
     __local KV_DATA_TYPE4 l_k[BLOCK_N][DK_VEC];
+#define FA_LK(ROW, C) l_k[ROW][C]
+#endif
     __local KV_DATA_TYPE4 l_v[BLOCK_N][DV_VEC];
 
 #if N_SPLIT > 1 && !defined(HAS_SUBGROUP_SHUFFLE)
@@ -254,17 +277,17 @@ __kernel void FA_TILE_NAME(
 #ifdef FA_K_IMG
                 if (use_kv_pad) {
                     const ulong k_row_offset = batch_idx * k_tile_nb3 + head_kv_idx * k_tile_nb2 + k_row_idx * k_nb1;
-                    l_k[row][col] = ((__global KV_DATA_TYPE4*)(k_tile_base + k_row_offset))[col];
+                    FA_LK(row, col) = ((__global KV_DATA_TYPE4*)(k_tile_base + k_row_offset))[col];
                 } else {
                     const int k_row_px = batch_idx * k_pitch_px_batch + head_kv_idx * k_pitch_px_head + k_row_idx * k_pitch_px_row;
-                    l_k[row][col] = read_imageh(k_img, k_row_px + col);
+                    FA_LK(row, col) = read_imageh(k_img, k_row_px + col);
                 }
 #else
                 const ulong k_row_offset = batch_idx * k_tile_nb3 + head_kv_idx * k_tile_nb2 + k_row_idx * k_nb1;
-                l_k[row][col] = ((__global KV_DATA_TYPE4*)(k_tile_base + k_row_offset))[col];
+                FA_LK(row, col) = ((__global KV_DATA_TYPE4*)(k_tile_base + k_row_offset))[col];
 #endif
             } else {
-                l_k[row][col] = (KV_DATA_TYPE4)(0.0h);
+                FA_LK(row, col) = (KV_DATA_TYPE4)(0.0h);
             }
         }
         for (int i = tid; i < BLOCK_N * DV_VEC; i += WG_SIZE) {
@@ -292,8 +315,15 @@ __kernel void FA_TILE_NAME(
                 FA_UNROLL
                 for (int k = 0; k < SPLIT_DK_VEC; k++) {
                     const ACC_TYPE4 qk = q_priv[k];
+#if defined(FA_K_LDS_T)
+                    // 2 KV rows adjacent in the transposed tile: one 128-bit local read.
+                    const half8 kk = FA_LK_PAIR(dk_off + k, j);
+                    ACC_TYPE4 dot0 = qk * CONVERT_KV_ACC4(kk.lo);
+                    ACC_TYPE4 dot1 = qk * CONVERT_KV_ACC4(kk.hi);
+#else
                     ACC_TYPE4 dot0 = qk * CONVERT_KV_ACC4(l_k[j  ][dk_off + k]);
                     ACC_TYPE4 dot1 = qk * CONVERT_KV_ACC4(l_k[j+1][dk_off + k]);
+#endif
                     partial0 += dot0.s0 + dot0.s1 + dot0.s2 + dot0.s3;
                     partial1 += dot1.s0 + dot1.s1 + dot1.s2 + dot1.s3;
                 }
@@ -359,7 +389,7 @@ __kernel void FA_TILE_NAME(
             ACC_TYPE4 dot_acc = (ACC_TYPE4)(0.0f);
             FA_UNROLL
             for (int k = 0; k < SPLIT_DK_VEC; k++) {
-                dot_acc = mad(q_priv[k], CONVERT_KV_ACC4(l_k[j][dk_off + k]), dot_acc);
+                dot_acc = mad(q_priv[k], CONVERT_KV_ACC4(FA_LK(j, dk_off + k)), dot_acc);
             }
             local_partial[j][tid] =
                 dot_acc.s0 + dot_acc.s1 + dot_acc.s2 + dot_acc.s3;
@@ -452,10 +482,21 @@ __kernel void FA_TILE_NAME(
                 FA_UNROLL
                 for (int k = 0; k < DK_VEC; k++) {
                     const ACC_TYPE4 qk = q_priv[k];
+#if defined(FA_K_LDS_T)
+                    // 4 KV rows adjacent in the transposed tile: two 128-bit local reads
+                    // instead of four 64-bit ones.
+                    const half8 kk01 = FA_LK_PAIR(k, j);
+                    const half8 kk23 = FA_LK_PAIR(k, j + 2);
+                    dot_acc0 = mad(qk, CONVERT_KV_ACC4(kk01.lo), dot_acc0);
+                    dot_acc1 = mad(qk, CONVERT_KV_ACC4(kk01.hi), dot_acc1);
+                    dot_acc2 = mad(qk, CONVERT_KV_ACC4(kk23.lo), dot_acc2);
+                    dot_acc3 = mad(qk, CONVERT_KV_ACC4(kk23.hi), dot_acc3);
+#else
                     dot_acc0 = mad(qk, CONVERT_KV_ACC4(l_k[j][k]),   dot_acc0);
                     dot_acc1 = mad(qk, CONVERT_KV_ACC4(l_k[j+1][k]), dot_acc1);
                     dot_acc2 = mad(qk, CONVERT_KV_ACC4(l_k[j+2][k]), dot_acc2);
                     dot_acc3 = mad(qk, CONVERT_KV_ACC4(l_k[j+3][k]), dot_acc3);
+#endif
                 }
                 ACC_TYPE s0 = (dot_acc0.s0 + dot_acc0.s1 + dot_acc0.s2 + dot_acc0.s3) * scale;
                 ACC_TYPE s1 = (dot_acc1.s0 + dot_acc1.s1 + dot_acc1.s2 + dot_acc1.s3) * scale;

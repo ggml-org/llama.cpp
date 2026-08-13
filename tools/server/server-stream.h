@@ -45,7 +45,13 @@ void server_stream_session_manager_start();
 void server_stream_session_manager_stop();
 
 // route handler factories wired under /v1/stream/* by server.cpp
+// child-side handlers for the resumable stream routes. the conv id travels in the conv_id
+// query string because it can embed a model name containing slashes (org/repo), which the
+// decoded path would split before the param is captured
 server_http_context::handler_t server_stream_make_get_handler();
+// POST /v1/streams/lookup with body {"conversation_ids": [...]}: only answers for ids the
+// caller already owns (the WebUI passes the convs visible in its sidebar), the server never
+// lists ids it has not been asked about, so a random caller cannot enumerate live sessions
 server_http_context::handler_t server_stream_make_lookup_handler();
 server_http_context::handler_t server_stream_make_delete_handler();
 

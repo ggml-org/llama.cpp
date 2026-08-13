@@ -78,3 +78,24 @@ export enum PdfViewMode {
 	TEXT = 'text',
 	PAGES = 'pages'
 }
+
+export enum ChatFormCommandAction {
+	PROMPT = 'prompt',
+	CWD = 'cwd',
+	MODEL = 'model'
+}
+
+export enum FileMentionEntryType {
+	FILE = 'file',
+	DIRECTORY = 'directory'
+}
+
+/**
+ * Kinds of tokens the chat-form contenteditable produces.
+ */
+export enum ContentEditableTokenKind {
+	TEXT = 'text',
+	BADGE = 'badge',
+	INLINE_CODE = 'inlineCode',
+	CODE_BLOCK = 'codeBlock'
+}

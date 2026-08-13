@@ -1,8 +1,9 @@
 <script lang="ts">
+	import SearchInput from '$lib/components/app/forms/SearchInput.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Checkbox } from '$lib/components/ui/checkbox';
-	import SearchInput from '$lib/components/app/forms/SearchInput.svelte';
 	import { ScrollArea } from '$lib/components/ui/scroll-area';
+	import { useMarqueeSelection } from '$lib/hooks/use-marquee-selection.svelte';
 	import { SvelteSet } from 'svelte/reactivity';
 
 	interface Props {
@@ -11,13 +12,20 @@
 		mode: 'export' | 'import';
 		onCancel: () => void;
 		onConfirm: (selectedConversations: DatabaseConversation[]) => void;
+		isOpen?: boolean;
 	}
 
-	let { conversations, messageCountMap = new Map(), mode, onCancel, onConfirm }: Props = $props();
+	let {
+		conversations,
+		isOpen = true,
+		messageCountMap = new Map(),
+		mode,
+		onCancel,
+		onConfirm
+	}: Props = $props();
 
 	let searchQuery = $state('');
 	let selectedIds = $state.raw<SvelteSet<string>>(getInitialSelectedIds());
-	let lastClickedId = $state<string | null>(null);
 
 	function getInitialSelectedIds(): SvelteSet<string> {
 		return new SvelteSet(conversations.map((c) => c.id));
@@ -26,9 +34,12 @@
 	let filteredConversations = $derived(
 		conversations.filter((conv) => {
 			const name = conv.name || 'Untitled conversation';
+
 			return name.toLowerCase().includes(searchQuery.toLowerCase());
 		})
 	);
+
+	let orderedIds = $derived(filteredConversations.map((c) => c.id));
 
 	let allSelected = $derived(
 		filteredConversations.length > 0 &&
@@ -39,65 +50,34 @@
 		filteredConversations.some((conv) => selectedIds.has(conv.id)) && !allSelected
 	);
 
-	function toggleConversation(id: string, shiftKey: boolean = false) {
+	const marquee = useMarqueeSelection({
+		enabled: () => isOpen,
+		orderedIds: () => orderedIds,
+		selectedIds: () => selectedIds
+	});
+
+	function toggleAll() {
 		const newSet = new SvelteSet(selectedIds);
 
-		if (shiftKey && lastClickedId !== null) {
-			const lastIndex = filteredConversations.findIndex((c) => c.id === lastClickedId);
-			const currentIndex = filteredConversations.findIndex((c) => c.id === id);
-
-			if (lastIndex !== -1 && currentIndex !== -1) {
-				const start = Math.min(lastIndex, currentIndex);
-				const end = Math.max(lastIndex, currentIndex);
-
-				const shouldSelect = !newSet.has(id);
-
-				for (let i = start; i <= end; i++) {
-					if (shouldSelect) {
-						newSet.add(filteredConversations[i].id);
-					} else {
-						newSet.delete(filteredConversations[i].id);
-					}
-				}
-
-				selectedIds = newSet;
-				return;
-			}
-		}
-
-		if (newSet.has(id)) {
-			newSet.delete(id);
+		if (allSelected) {
+			filteredConversations.forEach((conv) => newSet.delete(conv.id));
 		} else {
-			newSet.add(id);
+			filteredConversations.forEach((conv) => newSet.add(conv.id));
 		}
 
 		selectedIds = newSet;
-		lastClickedId = id;
-	}
-
-	function toggleAll() {
-		if (allSelected) {
-			const newSet = new SvelteSet(selectedIds);
-
-			filteredConversations.forEach((conv) => newSet.delete(conv.id));
-			selectedIds = newSet;
-		} else {
-			const newSet = new SvelteSet(selectedIds);
-
-			filteredConversations.forEach((conv) => newSet.add(conv.id));
-			selectedIds = newSet;
-		}
 	}
 
 	function handleConfirm() {
 		const selected = conversations.filter((conv) => selectedIds.has(conv.id));
+
 		onConfirm(selected);
 	}
 
 	function handleCancel() {
 		selectedIds = getInitialSelectedIds();
 		searchQuery = '';
-		lastClickedId = null;
+		marquee.reset();
 
 		onCancel();
 	}
@@ -105,7 +85,7 @@
 	export function reset() {
 		selectedIds = getInitialSelectedIds();
 		searchQuery = '';
-		lastClickedId = null;
+		marquee.reset();
 	}
 </script>
 
@@ -122,7 +102,7 @@
 	</div>
 
 	<div class="overflow-hidden rounded-md border">
-		<ScrollArea class="h-[400px]">
+		<ScrollArea class="h-100">
 			<table class="w-full">
 				<thead class="sticky top-0 z-10 bg-muted">
 					<tr class="border-b">
@@ -139,6 +119,7 @@
 						<th class="w-32 p-3 text-left text-sm font-medium">Messages</th>
 					</tr>
 				</thead>
+
 				<tbody>
 					{#if filteredConversations.length === 0}
 						<tr>
@@ -152,23 +133,28 @@
 						</tr>
 					{:else}
 						{#each filteredConversations as conv (conv.id)}
+							{@const checked = selectedIds.has(conv.id)}
 							<tr
-								class="cursor-pointer border-b transition-colors hover:bg-muted/50"
-								onclick={(event) => toggleConversation(conv.id, event.shiftKey)}
+								class="cursor-pointer border-b transition-colors hover:bg-muted/50 {checked
+									? 'bg-muted/75'
+									: ''}"
+								data-conversation-row={conv.id}
+								onmousedown={(event) => marquee.rowMouseDown(conv.id, event)}
+								onclick={(event) => marquee.rowClick(conv.id, event.shiftKey)}
 							>
 								<td class="p-3">
 									<Checkbox
-										checked={selectedIds.has(conv.id)}
+										{checked}
 										onclick={(event) => {
 											event.preventDefault();
 											event.stopPropagation();
-											toggleConversation(conv.id, event.shiftKey);
+											marquee.rowClick(conv.id, event.shiftKey);
 										}}
 									/>
 								</td>
 
 								<td class="p-3 text-sm">
-									<div class="max-w-[17rem] truncate" title={conv.name || 'Untitled conversation'}>
+									<div class="max-w-68 truncate" title={conv.name || 'Untitled conversation'}>
 										{conv.name || 'Untitled conversation'}
 									</div>
 								</td>

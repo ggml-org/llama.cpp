@@ -1,20 +1,20 @@
 <script lang="ts">
-	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
-	import { tick } from 'svelte';
-	import * as Card from '$lib/components/ui/card';
-	import { Skeleton } from '$lib/components/ui/skeleton';
-	import type { MCPServerSettingsEntry, HealthCheckState } from '$lib/types';
-	import { HealthCheckStatus } from '$lib/enums';
-	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import {
+		McpConnectionLogs,
 		McpServerCardActions,
 		McpServerCardDeleteDialog,
 		McpServerCardEditForm,
 		McpServerCardHeader,
 		McpServerCardToolsList,
-		McpConnectionLogs,
 		McpServerInfo
 	} from '$lib/components/app/mcp';
+	import * as Card from '$lib/components/ui/card';
+	import { Skeleton } from '$lib/components/ui/skeleton';
+	import { ICON_CLASS_DEFAULT } from '$lib/constants';
+	import { HealthCheckStatus } from '$lib/enums';
+	import { mcpStore } from '$lib/stores';
+	import type { HealthCheckState, MCPServerSettingsEntry } from '$lib/types';
+	import { tick } from 'svelte';
 
 	interface Props {
 		server: MCPServerSettingsEntry;
@@ -24,7 +24,7 @@
 		onDelete: () => void;
 	}
 
-	let { server, enabled, onToggle, onUpdate, onDelete }: Props = $props();
+	let { enabled, onDelete, onToggle, onUpdate, server }: Props = $props();
 
 	let healthState = $derived<HealthCheckState>(mcpStore.getHealthCheckState(server.id));
 	let displayName = $derived(mcpStore.getServerLabel(server));
@@ -70,7 +70,12 @@
 	async function startEditing() {
 		isEditing = true;
 		await tick();
-		editFormRef?.setInitialValues(server.url, server.headers || '', server.useProxy || false);
+		editFormRef?.setInitialValues(
+			server.url,
+			server.headers || '',
+			server.useProxy || false,
+			displayName
+		);
 	}
 
 	function cancelEditing() {
@@ -81,10 +86,13 @@
 		}
 	}
 
-	function saveEditing(url: string, headers: string, useProxy: boolean) {
+	function saveEditing(url: string, headers: string, useProxy: boolean, name?: string) {
 		onUpdate({
-			url: url,
+			// undefined = prefill untouched, keep any existing custom name;
+			// empty string = field cleared, back to the automatic label
+			displayName: name === undefined ? server.displayName : name.trim() || undefined,
 			headers: headers || undefined,
+			url: url,
 			useProxy: useProxy
 		});
 		isEditing = false;
@@ -106,6 +114,7 @@
 			serverId={server.id}
 			serverUrl={server.url}
 			serverUseProxy={server.useProxy}
+			serverLabel={displayName}
 			onSave={saveEditing}
 			onCancel={cancelEditing}
 		/>

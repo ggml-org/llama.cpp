@@ -4,12 +4,12 @@
 	import { expect, waitFor } from 'storybook/test';
 
 	const { Story } = defineMeta({
-		title: 'Components/HorizontalScrollCarousel/Accessibility',
 		component: HorizontalScrollCarousel,
 		parameters: {
 			layout: 'centered'
 		},
-		tags: ['!dev']
+		tags: ['!dev'],
+		title: 'Components/HorizontalScrollCarousel/Accessibility'
 	});
 </script>
 
