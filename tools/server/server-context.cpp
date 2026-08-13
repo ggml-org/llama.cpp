@@ -854,6 +854,9 @@ private:
     int slots_debug = 0;
     int n_empty_consecutive = 0;
 
+    // true while a decode runs on the yield_to_queue() worker thread
+    bool is_decoding = false;
+
     std::unique_ptr<server_prompt_cache> prompt_cache;
 
     server_metrics metrics;
@@ -1355,7 +1358,7 @@ private:
 
         // wiring up server queues
         queue_tasks.on_new_task([this](server_task && task) {
-            process_single_task(std::move(task));
+            return process_single_task(std::move(task));
         });
         queue_tasks.on_update_slots([this]() {
             update_slots();
@@ -2286,7 +2289,14 @@ private:
                 cur.pos_max, cur.n_tokens, (float) cur.size() / 1024 / 1024);
     }
 
-    void process_single_task(server_task && task) {
+    // returns false to decline the task, it is offered again after the decode is done
+    bool process_single_task(server_task && task) {
+        // only metrics is safe while decoding, it touches neither ctx_tgt nor the slots
+        if (is_decoding && task.type != SERVER_TASK_TYPE_METRICS) {
+            SRV_DBG("decoding, decline task, id_task = %d\n", task.id);
+            return false;
+        }
+
         switch (task.type) {
             case SERVER_TASK_TYPE_COMPLETION:
             case SERVER_TASK_TYPE_INFILL:
@@ -2620,6 +2630,8 @@ private:
                     queue_results.send(std::move(res));
                 } break;
         }
+
+        return true;
     }
 
     void iterate(std::vector<server_slot> & slots, std::function<void(server_slot &)> callback) {
@@ -3557,7 +3569,21 @@ private:
             }
         }
 
-        const int ret = llama_decode(ctx_tgt, batch_view);
+        bool has_output = false;
+        for (int i = off; i < off + batch_view.n_tokens; ++i) {
+            has_output |= batch.tokens[i].output;
+        }
+
+        // decode on the worker thread, so we can still handle metrics tasks while waiting
+        int ret = 0;
+        is_decoding = true;
+        queue_tasks.yield_to_queue([&]() {
+            ret = llama_decode(ctx_tgt, batch_view);
+            if (ret == 0 && has_output) {
+                llama_synchronize(ctx_tgt);
+            }
+        });
+        is_decoding = false;
 
         if (ret != 0) {
             {

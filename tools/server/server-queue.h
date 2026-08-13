@@ -39,7 +39,7 @@ private:
     worker_t worker;
 
     // callback functions
-    std::function<void(server_task &&)> callback_new_task;
+    std::function<bool(server_task &&)> callback_new_task;
     std::function<void(void)>           callback_update_slots;
     std::function<void(bool)>           callback_sleeping_state;
 
@@ -94,6 +94,8 @@ public:
     // returns once work() is done (may throw exceptions)
     // must be called from start_loop() thread (ideally inside callback_update_slots)
     // use case: return metrics while encode/decode is running
+    //
+    // tasks declined by callback_new_task are put back in the queue once this returns
     void yield_to_queue(std::function<void()> && work);
 
     // for metrics
@@ -107,7 +109,9 @@ public:
     //
 
     // Register function to process a new task
-    void on_new_task(std::function<void(server_task &&)> callback) {
+    // it returns false to decline the task, which is only allowed while yielding
+    // on decline, the task must be left untouched, it is put back in the queue later
+    void on_new_task(std::function<bool(server_task &&)> callback) {
         callback_new_task = std::move(callback);
     }
 
@@ -136,7 +140,8 @@ private:
 
     // process all pending tasks in the queue
     // returns true if the queue is terminated, false if there is no more task to process
-    bool process_new_tasks();
+    // declined tasks are moved to unhandled, which must be set when called while yielding
+    bool process_new_tasks(std::deque<server_task> * unhandled = nullptr);
 
     // for worker_t
     void worker_loop();

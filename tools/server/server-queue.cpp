@@ -123,7 +123,7 @@ void server_queue::terminate() {
     condition_tasks.notify_all();
 }
 
-bool server_queue::process_new_tasks() {
+bool server_queue::process_new_tasks(std::deque<server_task> * unhandled) {
     while (true) {
         std::unique_lock<std::mutex> lock(mutex_tasks);
         if (!running) {
@@ -138,7 +138,12 @@ bool server_queue::process_new_tasks() {
         lock.unlock();
 
         QUE_DBG("processing task, id = %d\n", task.id);
-        callback_new_task(std::move(task));
+        if (!callback_new_task(std::move(task))) {
+            // set it aside, do not put it back in the queue, else we offer it again in a loop
+            GGML_ASSERT(unhandled && "a task can only be declined while yielding");
+            QUE_DBG("task declined, id = %d\n", task.id);
+            unhandled->push_back(std::move(task));
+        }
     }
 }
 
@@ -164,7 +169,7 @@ void server_queue::worker_loop() {
             worker.exception = std::current_exception();
         }
 
-        // signal completion to the thread waiting in yield_to_queue()
+        // signal completion to yield_to_queue()
         std::unique_lock<std::mutex> lock(mutex_tasks);
         worker.busy = false;
         condition_tasks.notify_all();
@@ -188,6 +193,9 @@ void server_queue::yield_to_queue(std::function<void()> && work) {
 
     QUE_DBG("%s", "yielding to queue\n");
 
+    // tasks declined while the work is running
+    std::deque<server_task> unhandled;
+
     {
         std::unique_lock<std::mutex> lock(mutex_tasks);
         GGML_ASSERT(!worker.busy && "yield_to_queue() cannot be nested");
@@ -200,11 +208,11 @@ void server_queue::yield_to_queue(std::function<void()> && work) {
     }
 
     while (true) {
-        // note: on terminate, this becomes a no-op and we simply keep waiting for the work to
-        //       finish, we cannot return early because work() borrows the caller's stack
-        process_new_tasks();
+        // note: on terminate this is a no-op, but we still wait for the work to finish
+        process_new_tasks(&unhandled);
 
         std::unique_lock<std::mutex> lock(mutex_tasks);
+        // declined tasks are kept in unhandled, so a non-empty queue always has something new
         condition_tasks.wait(lock, [&]{
             return !worker.busy || (running && !queue_tasks.empty());
         });
@@ -214,14 +222,21 @@ void server_queue::yield_to_queue(std::function<void()> && work) {
     }
 
     {
-        // make sure to avoid idle timeout here
         std::unique_lock<std::mutex> lock(mutex_tasks);
+
+        // put the declined tasks back, keeping their order
+        while (!unhandled.empty()) {
+            queue_tasks.push_front(std::move(unhandled.back()));
+            unhandled.pop_back();
+        }
+
+        // make sure to avoid idle timeout here
         time_last_task = ggml_time_ms();
     }
 
     QUE_DBG("%s", "done yielding to queue\n");
 
-    // the worker thread is idle now, so we can safely access worker.exception
+    // the worker is idle now, safe to read worker.exception
     if (worker.exception) {
         std::exception_ptr exception = nullptr;
         std::swap(exception, worker.exception);
