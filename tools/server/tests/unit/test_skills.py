@@ -278,15 +278,16 @@ def test_skills_preflight_allows_x_skill_cwd(tmp_path):
     server, project = _skill_server(tmp_path)
     server.start()
 
-    res = server.make_request("OPTIONS", "/skills", headers={
-        "Origin": "http://localhost:8080",
-        "Access-Control-Request-Method": "GET",
-        "Access-Control-Request-Headers": "X-Skill-Cwd",
-    })
-    assert res.status_code == 200
-    assert res.headers["Access-Control-Allow-Methods"] == "GET, POST, DELETE, OPTIONS"
-    allowed_headers = res.headers["Access-Control-Allow-Headers"]
-    assert allowed_headers == "*" or "x-skill-cwd" in allowed_headers.lower()
+    for path, method in (("/skills", "GET"), ("/skills/read", "POST")):
+        res = server.make_request("OPTIONS", path, headers={
+            "Origin": "http://localhost:8080",
+            "Access-Control-Request-Method": method,
+            "Access-Control-Request-Headers": "X-Skill-Cwd",
+        })
+        assert res.status_code == 200
+        assert res.headers["Access-Control-Allow-Methods"] == "GET, POST, DELETE, OPTIONS"
+        allowed_headers = res.headers["Access-Control-Allow-Headers"]
+        assert allowed_headers == "*" or "x-skill-cwd" in allowed_headers.lower()
 
 
 def test_skills_disabled_keeps_route_missing(server):

@@ -107,6 +107,27 @@ def test_cors_options(origin: str, cors_header: str, cors_header_value: str):
     assert res.headers[cors_header] == cors_header_value
 
 
+def test_cors_headers_restrictive_policy_is_preserved():
+    """A user-supplied --cors-headers policy is echoed verbatim, never overridden.
+
+    The same shared preflight serves regular routes and Skills routes alike:
+    a restrictive policy must not gain '*' or X-Skill-Cwd behind the user's
+    back, and the permissive '*' default must not be forced either.
+    """
+    global server
+    server = ServerPreset.router()
+    server.cors_headers = "Content-Type, Authorization"
+    server.start()
+    for path in ("/completions", "/skills", "/skills/read"):
+        res = server.make_request("OPTIONS", path, headers={
+            "Origin": "http://localhost:8080",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "X-Skill-Cwd",
+        })
+        assert res.status_code == 200
+        assert res.headers["Access-Control-Allow-Headers"] == "Content-Type, Authorization"
+
+
 @pytest.mark.parametrize("origin", [
     "http://localhost",
     "http://localhost:8080",
