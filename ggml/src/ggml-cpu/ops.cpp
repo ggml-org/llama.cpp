@@ -4877,17 +4877,90 @@ static void ggml_compute_forward_get_rows_q(
     const int ir0 = dr*ith;
     const int ir1 = MIN(ir0 + dr, nr);
 
-    for (int64_t i = ir0; i < ir1; ++i) {
-        const int64_t i12 = i/(ne11*ne10);
-        const int64_t i11 = (i - i12*ne11*ne10)/ne10;
-        const int64_t i10 = (i - i12*ne11*ne10 - i11*ne10);
-        const int64_t i01 = *(int32_t *) ((char *) src1->data + i10*nb10 + i11*nb11 + i12*nb12);
+    const bool is_1d = (ne12 == 1 && ne11 == 1);
+    if (is_1d) {
+        const char * src1_ptr = (const char *) src1->data + ir0 * nb10;
+        char * dst_ptr = (char *) dst->data + ir0 * nb1;
 
-        GGML_ASSERT(i01 >= 0 && i01 < ne01);
+        const int64_t src1_step = nb10;
+        const int64_t dst_step = nb1;
 
-        dequantize_row_q(
-                (const void *) ((char *) src0->data + i01*nb01 + i11*nb02 + i12*nb03),
-                     (float *) ((char *)  dst->data + i10*nb1  + i11*nb2  + i12*nb3), nc);
+        int64_t last_i01 = -1;
+        const float * last_dst_ptr = nullptr;
+
+        for (int64_t i = ir0; i < ir1; ++i) {
+            const int64_t i01 = *(const int32_t *) src1_ptr;
+            GGML_ASSERT(i01 >= 0 && i01 < ne01);
+
+            // Cache hit (with prev)
+            if (i01 == last_i01 && last_dst_ptr != nullptr) {
+                memcpy(dst_ptr, last_dst_ptr, nc * sizeof(float));
+            } else {
+                // Prefetch next row
+                if (i + 1 < ir1) {
+                    const int64_t next_i01 = *(const int32_t *)(src1_ptr + src1_step);
+                    const char * next_src0_row = (const char *) src0->data + next_i01 * nb01;
+                    __builtin_prefetch(next_src0_row, 0, 1);
+                    __builtin_prefetch(next_src0_row + 64, 0, 1);
+                    __builtin_prefetch(next_src0_row + 128, 0, 1);
+                }
+
+                dequantize_row_q(
+                    (const void *) ((const char *) src0->data + i01 * nb01),
+                    (float *) dst_ptr,
+                    nc
+                );
+
+                last_i01 = i01;
+                last_dst_ptr = (const float *) dst_ptr;
+            }
+
+            src1_ptr += src1_step;
+            dst_ptr += dst_step;
+        }
+    }
+    else {
+        int64_t i10 = ir0 % ne10;
+        int64_t i11 = (ir0 / ne10) % ne11;
+        int64_t i12 = ir0 / (ne10 * ne11);
+
+        const char * ptr_src1 = (const char *) src1->data + i10*nb10 + i11*nb11 + i12*nb12;
+        char * ptr_dst        = (char *) dst->data        + i10*nb1  + i11*nb2  + i12*nb3;
+        const char * base_src0 = (const char *) src0->data + i11*nb02 + i12*nb03;
+
+        for (int64_t i = ir0; i < ir1; ++i) {
+            const int64_t i01 = *(const int32_t *) ptr_src1;
+            GGML_ASSERT(i01 >= 0 && i01 < ne01);
+
+            dequantize_row_q(
+                (const void *) (base_src0 + i01*nb01),
+                (float *) ptr_dst,
+                nc
+            );
+
+            ptr_src1 += nb10;
+            ptr_dst  += nb1;
+            i10++;
+
+            if (__builtin_expect(i10 == ne10, 0)) {
+                i10 = 0;
+
+                ptr_src1 += nb11 - (ptrdiff_t)ne10 * (ptrdiff_t)nb10;
+                ptr_dst  += nb2  - (ptrdiff_t)ne10 * (ptrdiff_t)nb1;
+
+                i11++;
+                if (__builtin_expect(i11 == ne11, 0)) {
+                    i11 = 0;
+                    ptr_src1 += nb12 - (ptrdiff_t)ne11 * nb11;
+                    ptr_dst  += nb3  - (ptrdiff_t)ne11 * nb2;
+
+                    i12++;
+                    base_src0 = (const char *) src0->data + i12*nb03;
+                } else {
+                    base_src0 += nb02;
+                }
+            }
+        }
     }
 }
 

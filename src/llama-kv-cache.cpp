@@ -1725,17 +1725,26 @@ static void set_input_kq_mask_impl(const args_set_input_kq_mask & args, T * data
             const llama_pos * cpos = cells.pos_data();
             const int32_t rec_lo = seq_pos_min[seq_id] - (int32_t)(n_swa + 32);
 
-            for (uint32_t j = 0; j < n_kv32; ++j) {
+            // Reserve space for idxs
+            idxs.reserve(idxs.size() + n_kv32 / 4);
+            T* GGML_RESTRICT out = data + idst;
+
+            for (uint32_t j = 0; j < n_kv32; ++j, ++out) {
                 const llama_pos p0 = cpos[j];
-                const bool nonempty = (p0 >= 0);
-                const bool has_seq  = cells.seq_has(j, seq_id);
+                const bool alive = (p0 >= 0) && cells.seq_has(j, seq_id);
+                bool visible = alive;
 
-                bool keep = nonempty && has_seq;
-                if (keep && (causal || swa)) keep = (p0 >= wlo && p0 <= whi);
-                if (keep && is_2d && p0 == p1) keep = !cells.ext_get(j).is_2d_gt(p1_x, p1_y);
-                data[idst + j] = keep ? mask_keep : mask_drop;
+                if constexpr (causal || swa) {
+                    visible = visible && (p0 >= wlo && p0 <= whi);
+                }
 
-                if (nonempty && has_seq && p0 >= rec_lo) {
+                if constexpr (is_2d) {
+                    if (visible && p0 == p1) visible = !cells.ext_get(j).is_2d_gt(p1_x, p1_y);
+                }
+
+                *out = visible ? mask_keep : mask_drop;
+
+                if (alive && p0 >= rec_lo) {
                     idxs.push_back(j);
                 }
             }

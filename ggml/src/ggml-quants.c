@@ -13,6 +13,14 @@
 #include <stdlib.h> // for qsort
 #include <stdio.h>  // for GGML_ASSERT
 
+#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+    #include <immintrin.h>
+    #define GGML_HAS_X86_INTRINSICS
+#elif defined(__ARM_NEON)
+    #include <arm_neon.h>
+    #define GGML_HAS_ARM_NEON
+#endif
+
 #ifdef GGML_USE_OPENMP
 #include <omp.h>
 #endif
@@ -1549,12 +1557,12 @@ void dequantize_row_q4_K(const block_q4_K * GGML_RESTRICT x, float * GGML_RESTRI
     const int nb = k / QK_K;
 
     for (int i = 0; i < nb; i++) {
-        if (i + 1 < nb) {
+        /*if (i + 1 < nb) {
             const char * next = (const char *) &x[i+1];
             __builtin_prefetch(next,       0, 1);
             __builtin_prefetch(next + 64,  0, 1);
             __builtin_prefetch(next + 128, 0, 1);
-        }
+        }*/
 
         const float d   = GGML_FP16_TO_FP32(x[i].d);
         const float min = GGML_FP16_TO_FP32(x[i].dmin);
@@ -1565,8 +1573,9 @@ void dequantize_row_q4_K(const block_q4_K * GGML_RESTRICT x, float * GGML_RESTRI
         const uint8_t s8 = scales[8],  s9 = scales[9],  s10 = scales[10], s11 = scales[11];
 
         const uint8_t * GGML_RESTRICT q = x[i].qs;
-        float * GGML_RESTRICT y1 = y;
-        float * GGML_RESTRICT y2 = y + 32;
+        float buf[256];
+        float * GGML_RESTRICT y1 = buf;
+        float * GGML_RESTRICT y2 = buf + 32;
 
         // --- Block j = 0 (is = 0, 1) ---
         DEQUANTIZE_Q4_K_BLOCK(
@@ -1596,7 +1605,25 @@ void dequantize_row_q4_K(const block_q4_K * GGML_RESTRICT x, float * GGML_RESTRI
             ((s11 & 0xF) | ((s3 & 0xC0) >> 2)), ((s11 >> 4) | ((s7 & 0xC0) >> 2))
         );
 
-        y = y2;
+        #if defined(GGML_HAS_X86_INTRINSICS) || defined(GGML_HAS_ARM_NEON)
+            if (((uintptr_t)y & 31) == 0) {
+                #if defined(GGML_HAS_X86_INTRINSICS) && defined(__AVX__)
+                    for (int j = 0; j < 256; j += 8)  _mm256_stream_ps(y + j, _mm256_loadu_ps(buf + j));
+                #elif defined(GGML_HAS_X86_INTRINSICS) && defined(__SSE2__)
+                    for (int j = 0; j < 256; j += 4) _mm_stream_ps(y + j, _mm_loadu_ps(buf + j));
+                #elif defined(GGML_HAS_ARM_NEON)
+                    for (int j = 0; j < 256; j += 4) vst1q_f32(y + j, vld1q_f32(buf + j));
+                #else
+                    memcpy(y, buf, 256 * sizeof(float));
+                #endif
+            } else {
+                memcpy(y, buf, 256 * sizeof(float));
+            }
+        #else
+            memcpy(y, buf, 256 * sizeof(float));
+        #endif
+
+        y += 256;
     }
 }
 
