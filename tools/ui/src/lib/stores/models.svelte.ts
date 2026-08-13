@@ -17,6 +17,7 @@ import {
 	detectThinkingSupport,
 	detectThinkingSupportWithReason
 } from '$lib/utils/chat-template-thinking-detector';
+import { getConversationModel } from '$lib/utils/conversation-utils';
 import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 import { toast } from 'svelte-sonner';
 
@@ -130,6 +131,33 @@ class ModelsStore {
 		if (!props?.model_path) return null;
 
 		return props.model_path.split(/(\\|\/)/).pop() || null;
+	}
+
+	/**
+	 * Model the active conversation view resolves to. Router mode: the user's
+	 * selection first, then the conversation's own model. Otherwise the single
+	 * served model, from the models list or the server props as a fallback.
+	 */
+	get activeModelId(): string | null {
+		if (!serverStore.isRouterMode) {
+			return this.models.length > 0 ? this.models[0].model : this.singleModelName;
+		}
+
+		if (this.selectedModelId) {
+			const selected = this.models.find((m) => m.id === this.selectedModelId);
+
+			if (selected) return selected.model;
+		}
+
+		const conversationModel = getConversationModel(conversationsStore.activeMessages);
+
+		if (conversationModel) {
+			const model = this.models.find((m) => m.model === conversationModel);
+
+			if (model) return model.model;
+		}
+
+		return null;
 	}
 
 	get selectedModelContextSize(): number | null {

@@ -56,6 +56,7 @@ import {
 	findMessageById,
 	formatCwdMessage,
 	generateConversationTitle,
+	getConversationModel,
 	isAbortError,
 	normalizeModelName,
 	streamIdentity
@@ -1287,7 +1288,7 @@ class ChatStore {
 		let effectiveModel: string | null | undefined = undefined;
 
 		if (serverStore.isRouterMode) {
-			const conversationModel = this.getConversationModel(allMessages);
+			const conversationModel = getConversationModel(allMessages);
 
 			effectiveModel = modelOverride || modelsStore.selectedModelName || conversationModel;
 		}
@@ -2738,16 +2739,6 @@ class ChatStore {
 				}
 			}
 		}
-	}
-
-	getConversationModel(messages: DatabaseMessage[]): string | null {
-		for (let i = messages.length - 1; i >= 0; i--) {
-			const message = messages[i];
-
-			if (message.role === MessageRole.ASSISTANT && message.model) return message.model;
-		}
-
-		return null;
 	}
 
 	private getApiOptions(): Record<string, unknown> {
