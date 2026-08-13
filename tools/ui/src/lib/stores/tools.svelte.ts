@@ -38,7 +38,11 @@ class ToolsStore {
 	private _toolsEndpointUnreachable = $state(false);
 	private _serverHome = $state<string | null | undefined>(undefined);
 
-	constructor() {
+	/**
+	 * Load persisted disabled tools and fetch the builtin tool list.
+	 * Called by initStores() after migrations have run.
+	 */
+	initialize(): void {
 		// browser-only init: skip on SSR to avoid localStorage/fetch side effects
 		if (!browser) return;
 

@@ -972,8 +972,3 @@ class ConversationsStore {
 }
 
 export const conversationsStore = new ConversationsStore();
-
-// Auto-initialize in browser
-if (browser) {
-	conversationsStore.init();
-}
