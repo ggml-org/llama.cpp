@@ -56,12 +56,22 @@ def test_skills_enabled_catalog_and_reads(tmp_path):
     assert catalog.body["catalog_instruction_xml"] != ""
     assert "diagnostics" in catalog.body
 
+    skill_file = project / ".agents" / "skills" / "demo" / "SKILL.md"
+    source = "---\nname: demo\ndescription: demo skill\n---\n# Demo\n\nUse **carefully**.\n"
+    skill_file.write_text(source, encoding="utf-8")
+
     base = server.make_request("POST", "/skills/read",
                                data={"name": "demo"}, headers={"X-Skill-Cwd": str(project)})
     assert base.status_code == 200
     assert base.body["kind"] == "skill"
     assert base.body["skill"]["name"] == "demo"
+    assert base.body["source"] == source
+    assert base.body["body_markdown"] == "# Demo\n\nUse **carefully**.\n"
     assert base.body["content_xml"].startswith("<skill_content name=\"demo\">")
+    assert str(project) not in base.body["source"]
+    assert str(tmp_path) not in base.body["source"]
+    assert str(project) not in base.body["body_markdown"]
+    assert str(tmp_path) not in base.body["body_markdown"]
 
     resource = write_skill(project, "agents", "demo", body="demo body", description="demo desc")
     (resource / "references").mkdir(exist_ok=True)
@@ -74,6 +84,8 @@ def test_skills_enabled_catalog_and_reads(tmp_path):
     assert res.body["kind"] == "resource"
     assert res.body["resource"]["path"] == "references/DETAILS.md"
     assert "# details" in res.body["content_xml"]
+    assert "source" not in res.body
+    assert "body_markdown" not in res.body
 
 
 def test_skills_api_prefix_applies_to_both_routes(tmp_path):
