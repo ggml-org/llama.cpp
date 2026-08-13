@@ -22,12 +22,11 @@
 		buildInfoStore,
 		chatStore,
 		conversationsStore,
-		isMobile,
+		deviceStore,
 		mcpStore,
 		modelsStore,
 		serverStore,
-		settingsStore,
-		theme
+		settingsStore
 	} from '$lib/stores';
 	import { ModeWatcher } from 'mode-watcher';
 	import { untrack } from 'svelte';
@@ -55,7 +54,7 @@
 	const { needRefresh, updateServiceWorker } = pwa;
 
 	function updateFavicon() {
-		const dark = theme.isSystemDark;
+		const dark = deviceStore.systemTheme.isDark;
 
 		let icoLink = document.querySelector(FAVICON_SELECTORS.ICO_48X48) as HTMLLinkElement | null;
 
@@ -153,7 +152,7 @@
 	}
 
 	$effect(() => {
-		void theme.isSystemDark;
+		void deviceStore.systemTheme.isDark;
 
 		updateFavicon();
 	});
@@ -274,7 +273,7 @@
 	<div class="flex flex-col md:flex-row">
 		<SidebarNavigation
 			onSearchClick={() => {
-				if (isMobile.current) {
+				if (deviceStore.isMobile) {
 					goto(ROUTES.SEARCH);
 				} else if (chatSidebar?.activateSearchMode) {
 					chatSidebar.activateSearchMode();

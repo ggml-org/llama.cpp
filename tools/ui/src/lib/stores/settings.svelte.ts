@@ -40,9 +40,9 @@ import {
 } from '$lib/constants';
 import { ColorMode } from '$lib/enums';
 import { ParameterSyncService } from '$lib/services/parameter-sync.service';
+import { deviceStore } from '$lib/stores/device.svelte';
 // direct imports between stores, not via the barrel, to avoid circular deps
 import { serverStore } from '$lib/stores/server.svelte';
-import { isMobile } from '$lib/stores/viewport.svelte';
 import type { SettingsExportType } from '$lib/types';
 import {
 	configToParameterRecord,
@@ -138,7 +138,7 @@ class SettingsStore {
 
 			// Default sendOnEnter to false on mobile when the user has no saved preference
 			if (!(SETTINGS_KEYS.SEND_ON_ENTER in savedVal)) {
-				if (isMobile.current) {
+				if (deviceStore.isMobile) {
 					this.config[SETTINGS_KEYS.SEND_ON_ENTER] = false;
 				}
 			}

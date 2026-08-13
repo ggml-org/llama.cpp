@@ -57,11 +57,7 @@ export { buildInfoStore } from './build-info.svelte';
 
 export { versionStore } from './version.svelte';
 
-export { device } from './device.svelte';
-
-export { viewport, isMobile } from './viewport.svelte';
-
-export { theme } from './theme.svelte';
+export { deviceStore } from './device.svelte';
 
 export {
 	gaugePopup,

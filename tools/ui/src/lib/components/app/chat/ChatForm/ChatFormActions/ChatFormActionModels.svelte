@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { ModelsSelectorDropdown, ModelsSelectorSheet } from '$lib/components/app';
-	import { chatStore, conversationsStore, isMobile, modelsStore, serverStore } from '$lib/stores';
+	import { chatStore, conversationsStore, deviceStore, modelsStore, serverStore } from '$lib/stores';
 
 	interface Props {
 		disabled?: boolean;
@@ -170,7 +170,7 @@
 	}
 </script>
 
-{#if isMobile.current}
+{#if deviceStore.isMobile}
 	<ModelsSelectorSheet
 		disabled={disabled || isOffline}
 		bind:this={selectorModelRef}
