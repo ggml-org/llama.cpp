@@ -13,8 +13,10 @@ import type {
 	DatabaseMessage,
 	DatabaseMessageExtra,
 	DatabaseMessageExtraAudioFile,
-	DatabaseMessageExtraImageFile
+	DatabaseMessageExtraImageFile,
+	McpServerOverride
 } from './database';
+import type { SkillConsentInfo } from './skills';
 import type { MessageRole } from '$lib/enums';
 import { AgenticSectionType, ContinueIntentKind, ToolCallType } from '$lib/enums';
 
@@ -68,6 +70,17 @@ export type AgenticChatCompletionRequest = Omit<ApiChatCompletionRequest, 'messa
 };
 
 /**
+ * A tool permission request surfaced through the established consent UI.
+ * `skill` is present only for Skills consent pauses and carries safe,
+ * server-returned identity facts.
+ */
+export interface AgenticPermissionRequest {
+	toolName: string;
+	serverLabel: string;
+	skill?: SkillConsentInfo;
+}
+
+/**
  * Per-conversation agentic session state.
  * Enables parallel agentic flows across multiple chats.
  */
@@ -77,7 +90,7 @@ export interface AgenticSession {
 	totalToolCalls: number;
 	lastError: Error | null;
 	streamingToolCall: { name: string; arguments: string } | null;
-	pendingPermissionRequest: { toolName: string; serverLabel: string } | null;
+	pendingPermissionRequest: AgenticPermissionRequest | null;
 	/** ID of the tool call whose output is currently being streamed back
 	 *  (e.g. exec_shell_command outputting to /tools?stream=true). Lets the
 	 *  matching tool renderer flip into live-update mode while chunks

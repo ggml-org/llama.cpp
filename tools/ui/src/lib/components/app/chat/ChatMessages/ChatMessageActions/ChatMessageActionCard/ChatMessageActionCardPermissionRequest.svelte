@@ -8,20 +8,29 @@
 	import { TOOL_SERVER_LABELS } from '$lib/constants';
 	import { ToolPermissionDecision, ToolSource } from '$lib/enums';
 	import { toolsStore } from '$lib/stores';
+	import type { SkillConsentInfo } from '$lib/types';
 
 	interface Props {
 		toolName: string;
 		serverLabel: string;
+		/** Safe server-returned identity shown for Skills consent pauses. */
+		skill?: SkillConsentInfo;
 		onDecision: (decision: ToolPermissionDecision) => void;
 	}
 
-	let { onDecision, serverLabel, toolName }: Props = $props();
+	let { onDecision, serverLabel, skill, toolName }: Props = $props();
 </script>
 
 <ChatMessageActionCard icon={ShieldQuestion}>
 	{#snippet message()}
 		Allow use of <span class="font-semibold">{toolName}</span>{#if serverLabel}
 			&nbsp;from <span class="font-semibold">{serverLabel}</span>{/if}?
+		{#if skill}
+			<span class="mt-1 block text-sm text-muted-foreground">
+				Skill: <span class="font-semibold text-foreground">{skill.name}</span>
+				({skill.scope} · {skill.provider}){#if skill.path} — resource: {skill.path}{/if}
+			</span>
+		{/if}
 	{/snippet}
 
 	{#snippet actions()}

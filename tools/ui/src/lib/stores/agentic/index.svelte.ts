@@ -10,7 +10,7 @@
  * the permission/continue/steering gates owned by {@link AgenticGates}.
  */
 
-import { DEFAULT_AGENTIC_CONFIG, NEWLINE } from '$lib/constants';
+import { DEFAULT_AGENTIC_CONFIG, NEWLINE, normalizeSkillBudget } from '$lib/constants';
 import {
 	AUDIO_MIME_TO_EXTENSION,
 	DATA_URI_BASE64_REGEX,
@@ -28,7 +28,12 @@ import {
 	MimeTypePrefix,
 	ToolCallType
 } from '$lib/enums';
-import { ChatService } from '$lib/services';
+import {
+	ChatService,
+	SkillRunAdapters,
+	SkillsPackingService,
+	buildSkillToolDefinitions
+} from '$lib/services';
 import { ReadMediaService } from '$lib/services/read-media.service';
 import { SandboxService } from '$lib/services/sandbox.service';
 import { ToolsService } from '$lib/services/tools.service';
@@ -37,17 +42,22 @@ import { AgenticGates } from '$lib/stores/agentic/gates.svelte';
 import { conversationsStore } from '$lib/stores/conversations/index.svelte';
 import { mcpStore } from '$lib/stores/mcp/index.svelte';
 import { modelsStore } from '$lib/stores/models/index.svelte';
+import { serverStore } from '$lib/stores/server.svelte';
 import { settingsStore } from '$lib/stores/settings/index.svelte';
+import { skillsStore } from '$lib/stores/skills.svelte';
 import { toolsStore } from '$lib/stores/tools.svelte';
 import type {
 	AgenticConfig,
 	AgenticFlowParams,
 	AgenticFlowResult,
+	AgenticPermissionRequest,
 	AgenticSession,
 	McpServerOverride,
 	MCPToolCall,
 	SettingsConfigType,
-	ToolExecutionResult
+ToolExecutionResult,
+	SkillConsentInfo,
+	SkillRunSnapshot
 } from '$lib/types';
 import type {
 	AgenticFlowCallbacks,
@@ -241,9 +251,7 @@ class AgenticStore {
 		return this.gates.getPendingContinueRequest(conversationId);
 	}
 
-	getPendingPermissionRequest(
-		conversationId: string
-	): { toolName: string; serverLabel: string } | null {
+	getPendingPermissionRequest(conversationId: string): AgenticPermissionRequest | null {
 		return this.gates.getPendingPermissionRequest(conversationId);
 	}
 
@@ -302,6 +310,84 @@ class AgenticStore {
 		this.gates.resolvePermission(conversationId, decision);
 	}
 
+	private async prepareSkillRun(
+		conversationId: string,
+		options: AgenticFlowOptions,
+		signal?: AbortSignal
+	): Promise<SkillRunAdapters | null> {
+		const budget = normalizeSkillBudget(settingsStore.config.maxSkillBudget);
+
+		if (budget <= 0) return null;
+
+		let snapshot: SkillRunSnapshot;
+
+		try {
+			snapshot = await skillsStore.createRunSnapshot(
+				conversationsStore.activeConversation?.cwd,
+				signal
+			);
+		} catch (error) {
+			console.info(
+				'[AgenticStore] Skills snapshot unavailable; running without Skills adapters:',
+				error
+			);
+
+			return null;
+		}
+
+		if (snapshot.total === 0) return null;
+
+		try {
+			const effectiveModel = options.model || modelsStore.models[0]?.model || '';
+			const directOk =
+				effectiveModel !== '' && (!serverStore.isRouterMode || modelsStore.isModelLoaded(effectiveModel));
+			const packed = await SkillsPackingService.pack(snapshot, {
+				budget,
+				mode: directOk ? 'direct' : 'estimated',
+				model: directOk ? effectiveModel : undefined,
+				signal
+			});
+
+			if (packed.envelope === '') return null;
+
+			const existingNames = new Set(
+				toolsStore.allTools.map((entry) => entry.definition.function.name)
+			);
+			const built = buildSkillToolDefinitions(snapshot, packed, existingNames);
+
+			for (const diagnostic of built.diagnostics) {
+				console.warn(`[AgenticStore] ${diagnostic.code}: ${diagnostic.message}`);
+			}
+
+			if (built.definitions.length === 0) return null;
+
+			return new SkillRunAdapters({
+				snapshot,
+				packed,
+				definitions: built.definitions,
+				requestPermission: (toolName, serverLabel, skill, sig) =>
+					this.requestPermission(conversationId, toolName, serverLabel, skill, sig)
+			});
+		} catch (error) {
+			console.info(
+				'[AgenticStore] Skills packing failed; running without Skills adapters:',
+				error
+			);
+
+			return null;
+		}
+	}
+
+	private requestPermission(
+		conversationId: string,
+		toolName: string,
+		serverLabel: string,
+		skill?: SkillConsentInfo,
+		signal?: AbortSignal
+	): Promise<ToolPermissionDecision> {
+		return this.gates.requestPermission(conversationId, toolName, serverLabel, signal, skill);
+	}
+
 	async runAgenticFlow(params: AgenticFlowParams): Promise<AgenticFlowResult> {
 		const {
 			callbacks,
@@ -320,6 +406,12 @@ class AgenticStore {
 		if (toolsStore.serverTools.length === 0 && !toolsStore.loading) {
 			await toolsStore.fetchServerTools();
 		}
+
+		// Task 3: obtain exactly one immutable SkillRunSnapshot before the
+		// agentic configuration gate. A zero budget, unavailable snapshot, or
+		// empty catalog registers no adapters and leaves existing chat/tools
+		// unchanged.
+		const skillAdapters = await this.prepareSkillRun(conversationId, options, signal);
 
 		const agenticConfig = this.getConfig(settingsStore.config, perChatOverrides);
 
@@ -341,6 +433,15 @@ class AgenticStore {
 			return { handled: false };
 		}
 
+		// Register the run's snapshot-authorized Skills adapters and append
+		// their definitions to the LLM tool list. Collisions were already
+		// resolved in favor of existing non-Skills/custom/MCP tools.
+		if (skillAdapters) {
+			for (const definition of skillAdapters.definitions) {
+				tools.push(definition);
+			}
+		}
+
 		console.log(`[AgenticStore] Starting agentic flow with ${tools.length} tools`);
 
 		const normalizedMessages: ApiChatMessageData[] =
@@ -355,6 +456,13 @@ class AgenticStore {
 			totalToolCalls: 0
 		});
 
+		// Decorate the run's first-request messages with the budgeted catalog
+		// envelope (byte-preserved server XML), request-local only - never
+		// persisted as a system prompt.
+		const runMessages = skillAdapters
+			? skillAdapters.decorate(normalizedMessages)
+			: normalizedMessages;
+
 		if (hasMcpServers) mcpStore.acquireConnection();
 
 		try {
@@ -362,8 +470,9 @@ class AgenticStore {
 				agenticConfig,
 				callbacks,
 				conversationId,
-				messages: normalizedMessages,
+				messages: runMessages,
 				options,
+				serviceAdapters: skillAdapters,
 				signal,
 				tools
 			});
@@ -424,9 +533,20 @@ class AgenticStore {
 		tools: ReturnType<typeof toolsStore.getEnabledToolsForLLM>;
 		agenticConfig: AgenticConfig;
 		callbacks: AgenticFlowCallbacks;
+		/** This run's snapshot-authorized Skills adapters, or null when none registered. */
+		serviceAdapters: SkillRunAdapters | null;
 		signal?: AbortSignal;
 	}): Promise<void> {
-		const { agenticConfig, callbacks, conversationId, messages, options, signal, tools } = params;
+		const {
+			agenticConfig,
+			callbacks,
+			conversationId,
+			messages,
+			options,
+			serviceAdapters,
+			signal,
+			tools
+		} = params;
 		const {
 			createAssistantMessage,
 			createToolResultMessage,
@@ -737,14 +857,21 @@ class AgenticStore {
 				}
 
 				const toolName = toolCall.function.name;
+				const isSkillTool = serviceAdapters?.isSkillTool(toolName) ?? false;
 				const serverLabel = toolsStore.getToolServerLabel(toolName);
-				// Ask for permission before executing the tool
-				const permission = await this.gates.requestPermission(
-					conversationId,
-					toolName,
-					serverLabel,
-					signal
-				);
+
+				// Skills tools skip the registry-wide permission gate: their
+				// consent is per resolved identity and runs inside the adapter
+				// after the server resolves the read.
+				const permission = isSkillTool
+					? ToolPermissionDecision.ONCE
+					: await this.requestPermission(
+							conversationId,
+							toolName,
+							serverLabel,
+							undefined,
+							signal
+						);
 
 				// Yield to allow Svelte to flush the UI update (hide permission dialog)
 				await new Promise((r) => setTimeout(r, 0));
@@ -772,7 +899,13 @@ class AgenticStore {
 					toolSuccess = false;
 				} else {
 					try {
-						if (
+						if (isSkillTool && serviceAdapters) {
+							const executionResult = await serviceAdapters.execute(toolCall, signal);
+
+							result = executionResult.content;
+
+							if (executionResult.isError) toolSuccess = false;
+						} else if (
 							toolSource === ToolSource.SERVER &&
 							toolName === BuiltInTool.SERVER_EXEC_SHELL_COMMAND &&
 							createToolResultMessage &&

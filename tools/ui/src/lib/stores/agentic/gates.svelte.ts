@@ -11,7 +11,12 @@ import { ToolPermissionDecision } from '$lib/enums';
 // direct imports between stores, not via the barrel, to avoid circular deps
 import { permissionsStore } from '$lib/stores/permissions.svelte';
 import { toolsStore } from '$lib/stores/tools.svelte';
-import type { DatabaseMessageExtra, SteeringMessage } from '$lib/types';
+import type {
+	AgenticPermissionRequest,
+	DatabaseMessageExtra,
+	SkillConsentInfo,
+	SteeringMessage
+} from '$lib/types';
 import { SvelteMap } from 'svelte/reactivity';
 
 export class AgenticGates {
@@ -21,10 +26,7 @@ export class AgenticGates {
 	private pendingContinueRequests = new SvelteMap<string, boolean>();
 
 	/** Dedicated reactive state for pending permission requests (ensures immediate UI updates) */
-	private pendingPermissions = new SvelteMap<
-		string,
-		{ toolName: string; serverLabel: string } | null
-	>();
+	private pendingPermissions = new SvelteMap<string, AgenticPermissionRequest | null>();
 	/** Resolve functions for pending permission Promises; nothing derives from this map */
 	private permissionResolvers = new SvelteMap<string, (decision: ToolPermissionDecision) => void>();
 
@@ -67,9 +69,7 @@ export class AgenticGates {
 		return this.pendingContinueRequests.get(conversationId) ?? false;
 	}
 
-	getPendingPermissionRequest(
-		conversationId: string
-	): { toolName: string; serverLabel: string } | null {
+	getPendingPermissionRequest(conversationId: string): AgenticPermissionRequest | null {
 		return this.pendingPermissions.get(conversationId) ?? null;
 	}
 
@@ -133,7 +133,8 @@ export class AgenticGates {
 		conversationId: string,
 		toolName: string,
 		serverLabel: string,
-		signal?: AbortSignal
+		signal?: AbortSignal,
+		skill?: SkillConsentInfo
 	): Promise<ToolPermissionDecision> {
 		const permissionKey = toolsStore.getPermissionKey(toolName);
 
@@ -141,7 +142,10 @@ export class AgenticGates {
 			return ToolPermissionDecision.ONCE;
 		}
 
-		this.pendingPermissions.set(conversationId, { serverLabel, toolName });
+		this.pendingPermissions.set(
+			conversationId,
+			skill ? { serverLabel, skill, toolName } : { serverLabel, toolName }
+		);
 
 		return new Promise<ToolPermissionDecision>((resolve) => {
 			if (signal?.aborted) {
