@@ -2044,21 +2044,22 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
                         }
 
                         // ---- 3. Start HMX O update for block kv_blk - 1 (reads P[1 - buf_idx], V[1 - buf_idx], D) ----
-                        // O update relys on the previous block's P and V tiles. 
+                        // O update relys on the previous block's P and V tiles.
                         // O update MUST be pushed before the next block's QK-dot: hmx_queue_pop() retires the
                         // oldest descriptor, so push order alone decides which pop waits for which job.
                         // If OU went in after QK(i+1), the pop below would retire QK(i+1) and leave
                         // OU(i-1) in flight into the next iteration, where V-prep overwrites V[prev_buf].
-                        if (kv_blk > 0) { 
-                            const size_t prev_buf = 1 - buf_idx;
-                            ou_job[prev_buf].o_curr           = o_tile_curr;
-                            ou_job[prev_buf].o_prev           = o_tile_prev;
-                            ou_job[prev_buf].p_tiles          = factx.vtcm_p_tiles[prev_buf];
-                            ou_job[prev_buf].v_tiles          = factx.vtcm_v_tiles[prev_buf];
-                            ou_job[prev_buf].d_tiles          = factx.vtcm_d_tiles[prev_buf];
-                            ou_job[prev_buf].hmx_scales       = factx.vtcm_hmx_scales_id;
-                            ou_job[prev_buf].n_row_tiles      = n_row_tiles;
-                            ou_job[prev_buf].n_col_tiles      = hmx_ceil_div(hex_smin(Bc, nek1 - (kv_blk - 1) * Bc), HMX_FP16_TILE_N_COLS);
+                        if (kv_blk > 0) {
+                            const size_t prev_buf        = 1 - buf_idx;
+                            ou_job[prev_buf].o_curr      = o_tile_curr;
+                            ou_job[prev_buf].o_prev      = o_tile_prev;
+                            ou_job[prev_buf].p_tiles     = factx.vtcm_p_tiles[prev_buf];
+                            ou_job[prev_buf].v_tiles     = factx.vtcm_v_tiles[prev_buf];
+                            ou_job[prev_buf].d_tiles     = factx.vtcm_d_tiles[prev_buf];
+                            ou_job[prev_buf].hmx_scales  = factx.vtcm_hmx_scales_id;
+                            ou_job[prev_buf].n_row_tiles = n_row_tiles;
+                            ou_job[prev_buf].n_col_tiles =
+                                hmx_ceil_div(hex_smin(Bc, nek1 - (kv_blk - 1) * Bc), HMX_FP16_TILE_N_COLS);
                             ou_job[prev_buf].n_row_tiles_g_br = n_row_tiles_g_br;
                             ou_job[prev_buf].n_tiles_per_bc   = n_tiles_per_bc;
                             ou_job[prev_buf].DV               = DV;

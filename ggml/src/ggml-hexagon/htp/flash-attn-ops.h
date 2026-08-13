@@ -125,7 +125,7 @@ struct hmx_fa_vtcm_layout {
     size_t q_tile_bytes;
     size_t o_tile_bytes;
     size_t s_tile_bytes;       // S and P tiles (same size)
-    size_t d_tile_bytes;     // d_tiles[0..1] + d_inv_l, allocated back to back
+    size_t d_tile_bytes;       // d_tiles[0..1] + d_inv_l, allocated back to back
     size_t m_line_bytes;       // one mask row
     size_t m_buf_slot_bytes;   // one dma_cache slot = align_up(Br * m_line_bytes, 4096)
     size_t col_vec_bytes;
@@ -154,7 +154,7 @@ static inline void hmx_fa_vtcm_layout_build(struct hmx_fa_vtcm_layout * L,
     // tiles that sit on the diagonal, so store just those, packed back to back with
     // a stride of one tile.  The old [g_br, g_br] square layout allocated g_br/32
     // times more than it used, which is also why a second D buffer was unaffordable.
-    const size_t d_tile_size  = (g_br / HMX_FP16_TILE_N_ROWS) * HTP_FA_HMX_TILE_SIZE;
+    const size_t d_tile_size = (g_br / HMX_FP16_TILE_N_ROWS) * HTP_FA_HMX_TILE_SIZE;
 
     const size_t q_dma_size   = hex_align_up(g_br * DK * (is_q_fp32 ? sizeof(float) : sizeof(__fp16)), 128);
     const size_t k_dma_size   = hex_align_up(Bc * hex_round_up(DK * sizeof(__fp16), 128), 128);
@@ -172,7 +172,7 @@ static inline void hmx_fa_vtcm_layout_build(struct hmx_fa_vtcm_layout * L,
     VTCM_LAYOUT_ALLOC(off, off_q_tiles,       q_tile_size);
     VTCM_LAYOUT_ALLOC(off, off_o_tiles[0],    o_tile_size);
     VTCM_LAYOUT_ALLOC(off, off_o_tiles[1],    o_tile_size);
-    VTCM_LAYOUT_ALLOC(off, off_d_tiles[0],    d_tile_size);
+    VTCM_LAYOUT_ALLOC(off, off_d_tiles[0], d_tile_size);
     VTCM_LAYOUT_ALLOC_OPTIONAL(off, off_d_tiles[1], d_tile_size, pipeline);
     VTCM_LAYOUT_ALLOC(off, off_d_inv_l,       d_tile_size);
 
