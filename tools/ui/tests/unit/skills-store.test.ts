@@ -1,4 +1,4 @@
-import { skillsStore } from '$lib/stores/skills.svelte';
+import { skillsStore, type SkillAvailability } from '$lib/stores/skills.svelte';
 import type { SkillCatalogEntry, SkillCatalogResponse } from '$lib/types';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -40,6 +40,16 @@ describe('skillsStore', () => {
 		for (const cwd of TEST_CWDS) {
 			skillsStore.invalidate(cwd);
 		}
+
+		// Reset the singleton probe gate so the initial-unknown assertion is
+		// independent of test order. Test-only: no production reset exists.
+		const store = skillsStore as unknown as {
+			_availability: SkillAvailability;
+			_probeGeneration: number;
+		};
+
+		store._availability = 'unknown';
+		store._probeGeneration = 0;
 	});
 
 	it('keeps the latest catalog per selected CWD and returns each result to its issuer', async () => {
@@ -173,5 +183,121 @@ describe('skillsStore', () => {
 			status: 503
 		});
 		expect(skillsStore.slotFor('/a')?.status).toBe('error');
+	});
+
+	it('starts unknown and hidden, then one shared probe makes the catalog available', async () => {
+		expect(skillsStore.availability).toBe('unknown');
+		expect(skillsStore.showInNavigation).toBe(false);
+
+		const fetchMock = vi.fn().mockResolvedValue(jsonResponse(makeCatalog('alpha')));
+
+		vi.stubGlobal('fetch', fetchMock);
+
+		const first = skillsStore.probeAvailability(undefined);
+		const second = skillsStore.probeAvailability(undefined);
+
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+
+		await expect(Promise.all([first, second])).resolves.toHaveLength(2);
+
+		expect(skillsStore.availability).toBe('available');
+		expect(skillsStore.showInNavigation).toBe(true);
+		// A successful probe leaves a ready slot the route can consume.
+		expect(skillsStore.slotFor(undefined)?.status).toBe('ready');
+		expect(skillsStore.slotFor(undefined)?.catalog?.skills.map((s) => s.name)).toEqual(['alpha']);
+	});
+
+	it('maps a 404 probe to disabled and hides the navigation entry', async () => {
+		vi.stubGlobal(
+			'fetch',
+			vi.fn().mockResolvedValue(jsonResponse({ error: { code: 404, message: 'no skills route' } }, 404))
+		);
+
+		await skillsStore.probeAvailability(undefined);
+
+		expect(skillsStore.availability).toBe('disabled');
+		expect(skillsStore.showInNavigation).toBe(false);
+		expect(skillsStore.slotFor(undefined)?.status).toBe('error');
+	});
+
+	it('maps a 503 probe to error and keeps the navigation entry visible', async () => {
+		vi.stubGlobal(
+			'fetch',
+			vi.fn().mockResolvedValue(jsonResponse({ error: { code: 503, message: 'unavailable' } }, 503))
+		);
+
+		await skillsStore.probeAvailability(undefined);
+
+		expect(skillsStore.availability).toBe('error');
+		expect(skillsStore.showInNavigation).toBe(true);
+		expect(skillsStore.slotFor(undefined)?.status).toBe('error');
+	});
+
+	it('coalesces concurrent ensureCatalog callers only for the same CWD', async () => {
+		const fetchMock = vi.fn(async () => jsonResponse(makeCatalog('alpha')));
+
+		vi.stubGlobal('fetch', fetchMock);
+
+		const [a1, a2] = await Promise.all([
+			skillsStore.ensureCatalog('/a'),
+			skillsStore.ensureCatalog('/a')
+		]);
+
+		expect(a1.skills.map((s) => s.name)).toEqual(['alpha']);
+		expect(a2.skills.map((s) => s.name)).toEqual(['alpha']);
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+
+		const [b1] = await Promise.all([skillsStore.ensureCatalog('/b')]);
+
+		expect(b1.skills.map((s) => s.name)).toEqual(['alpha']);
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+	});
+
+	it('gives each ensureCatalog caller independent abort behavior and aborts the store request after the last subscriber leaves', async () => {
+		const pending: Array<{ resolve: (response: Response) => void; signal: AbortSignal }> = [];
+		const fetchMock = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+			const { promise, resolve } = Promise.withResolvers<Response>();
+
+			pending.push({ resolve, signal: init?.signal ?? new AbortController().signal });
+
+			return promise;
+		});
+
+		vi.stubGlobal('fetch', fetchMock);
+
+		const controllerA = new AbortController();
+		const controllerB = new AbortController();
+
+		const a = skillsStore.ensureCatalog('/a', controllerA.signal);
+		const b = skillsStore.ensureCatalog('/a', controllerB.signal);
+
+		expect(pending).toHaveLength(1);
+		expect(pending[0].signal.aborted).toBe(false);
+
+		controllerA.abort();
+		await expect(a).rejects.toThrow();
+		// B is still attached, so the shared request stays alive.
+		expect(pending[0].signal.aborted).toBe(false);
+		await expect(Promise.race([b, Promise.resolve('still-pending')])).resolves.toBe('still-pending');
+
+		controllerB.abort();
+		await expect(b).rejects.toThrow();
+		// The final subscriber left, so the store-owned request is aborted.
+		expect(pending[0].signal.aborted).toBe(true);
+	});
+
+	it('does not change availability when the probing caller aborts', async () => {
+		vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {})));
+
+		const controller = new AbortController();
+		const probe = skillsStore.probeAvailability(undefined, controller.signal);
+
+		expect(skillsStore.availability).toBe('loading');
+
+		controller.abort();
+		await expect(probe).rejects.toThrow();
+
+		expect(skillsStore.availability).toBe('loading');
+		expect(skillsStore.showInNavigation).toBe(false);
 	});
 });

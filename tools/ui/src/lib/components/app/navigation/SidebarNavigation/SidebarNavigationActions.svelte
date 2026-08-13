@@ -12,7 +12,9 @@
 		SIDEBAR_ACTIONS_ITEMS
 	} from '$lib/constants';
 	import { SidebarAction, TooltipSide } from '$lib/enums';
-	import { conversationsStore, deviceStore } from '$lib/stores';
+	import { conversationsStore } from '$lib/stores/conversations/index.svelte';
+	import { deviceStore, isMobile } from '$lib/stores';
+	import { skillsStore } from '$lib/stores/skills.svelte';
 	import type { Component } from 'svelte';
 	import { onMount } from 'svelte';
 	import { circIn } from 'svelte/easing';
@@ -44,6 +46,13 @@
 
 	const isOnMobile = $derived(deviceStore.isMobile);
 
+	/** Canonical static order, filtered in rendering so the Skills entry follows the startup probe. */
+	const visibleItems = $derived(
+		SIDEBAR_ACTIONS_ITEMS.filter(
+			(item) => item.route !== ROUTES.SKILLS || skillsStore.showInNavigation
+		)
+	);
+
 	$effect(() => {
 		if (isSearchModeActive && searchInputRef) {
 			searchInputRef.focus();
@@ -55,7 +64,19 @@
 
 		setTimeout(() => {
 			initialized = true;
-		}, ICON_STRIP_TRANSITION_DELAY_MULTIPLIER * SIDEBAR_ACTIONS_ITEMS.length);
+		}, ICON_STRIP_TRANSITION_DELAY_MULTIPLIER * visibleItems.length);
+
+		// One-time startup probe; the subscriber aborts when the sidebar unmounts.
+		const probe = new AbortController();
+
+		void skillsStore
+			.probeAvailability(
+				conversationsStore.activeConversation?.cwd ?? conversationsStore.pendingCwd ?? undefined,
+				probe.signal
+			)
+			.catch(() => {});
+
+		return () => probe.abort();
 	});
 
 	function handleSearchModeDeactivate() {
@@ -105,7 +126,7 @@
 			? 'hidden pointer-events-none'
 			: ''}"
 	>
-		{#each SIDEBAR_ACTIONS_ITEMS as item, i (item.tooltip)}
+		{#each visibleItems as item, i (item.tooltip)}
 			{@const isActive = isItemActive(item)}
 			{@const isSearchOnMobile = item.icon === Search && deviceStore.isMobile}
 			{@const itemHref = isSearchOnMobile ? ROUTES.SEARCH : item.route}
@@ -160,7 +181,7 @@
 	</div>
 {:else}
 	<div class="{className} flex-col gap-1 hidden md:flex">
-		{#each SIDEBAR_ACTIONS_ITEMS as item, i (item.tooltip)}
+		{#each visibleItems as item, i (item.tooltip)}
 			{@const isActive = isItemActive(item)}
 			{@const isSearchOnMobile = item.icon === Search && deviceStore.isMobile}
 			{@const itemOnClick =
