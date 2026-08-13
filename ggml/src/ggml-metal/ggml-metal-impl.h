@@ -87,7 +87,7 @@
 #define N_R0_IQ4_XS 2
 #define N_SG_IQ4_XS 2
 
-#define N_R0_TQ2_0 2
+#define N_R0_TQ2_0 4
 #define N_SG_TQ2_0 2
 
 // function constants offsets
