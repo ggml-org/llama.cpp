@@ -2254,8 +2254,7 @@ std::vector<common_speculative_type> common_speculative_types_from_gguf(const st
                     ? COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK
                     : COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH;
 
-    SPC_INF("auto-detected speculative type '%s' from the draft model metadata\n",
-            common_speculative_type_to_str(type).c_str());
+    SPC_INF("auto-detected speculative type '%s' from the draft model metadata\n", common_speculative_type_to_str(type).c_str());
 
     return { type };
 }
