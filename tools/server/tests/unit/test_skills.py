@@ -297,12 +297,16 @@ def test_skills_disabled_keeps_route_missing(server):
     assert res.status_code == 404
 
 
-def test_skills_accepts_normalized_provider_list_with_routes(server):
+def test_skills_accepts_normalized_provider_list_with_routes(tmp_path):
     # duplicates in --skill-providers are normalized at startup, and with the
     # routes bound an enabled server serves the catalog (project skills are
     # untrusted, so no fixture writes are needed: the catalog is simply empty)
+    server = ServerPreset.router()
     server.skills = True
     server.skill_providers = ".claude,gemini,.claude"
+    home = tmp_path / "home"
+    home.mkdir()
+    server.skill_home = str(home)
     server.start()
 
     res = server.make_request("GET", "/skills")
