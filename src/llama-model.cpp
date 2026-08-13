@@ -818,6 +818,7 @@ const char * llm_type_name(llm_type type) {
         case LLM_TYPE_A13B:          return "A13B";
         case LLM_TYPE_7B_A1B:        return "7B.A1B";
         case LLM_TYPE_8B_A1B:        return "8B.A1B";
+        case LLM_TYPE_7_9B_A1_3B:    return "7.9B.A1.3B";
         case LLM_TYPE_12B_A2_5B:     return "12B.A2.5B";
         case LLM_TYPE_16B_A1B:       return "16B.A1B";
         case LLM_TYPE_21B_A3B:       return "21B.A3B";
@@ -834,6 +835,7 @@ const char * llm_type_name(llm_type type) {
         case LLM_TYPE_118B_A8B:      return "118B.A8B";
         case LLM_TYPE_120B_A12B:     return "120B.A12B";
         case LLM_TYPE_122B_A10B:     return "122B.A10B";
+        case LLM_TYPE_124B_A5_1B:    return "124B.A5.1B";
         case LLM_TYPE_196B_A11B:     return "196B.A11B";
         case LLM_TYPE_230B_A10B:     return "230B.A10B";
         case LLM_TYPE_428B_A23B:     return "428B.A23B";

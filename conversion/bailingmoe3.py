@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from typing import Callable, Iterable, TYPE_CHECKING
 
 import torch
@@ -13,14 +15,22 @@ from .base import ModelBase, TextModel, gguf
 @ModelBase.register("BailingMoeV3ForCausalLM")
 class BailingMoeV3Model(TextModel):
     model_arch = gguf.MODEL_ARCH.BAILINGMOE3
+    supports_mtp_export = True
 
     _experts: list[dict[str, Tensor]] | None = None
+    _main_layers: int | None = None
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        if nextn_layers := self.hparams.get("num_nextn_predict_layers", 0):
-            self.block_count = self.hparams["num_hidden_layers"] + nextn_layers
-            self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
+        nextn_layers = self.hparams.get("num_nextn_predict_layers", 0) or 0
+        if self.no_mtp:
+            nextn_layers = 0
+        self.block_count = self.hparams["num_hidden_layers"] + nextn_layers
+        self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
+
+    def index_tensors(self, remote_hf_model_id: str | None = None):
+        type(self)._main_layers = self.hparams["num_hidden_layers"]
+        return super().index_tensors(remote_hf_model_id=remote_hf_model_id)
 
     def set_vocab(self):
         self._set_vocab_gpt2()
@@ -80,14 +90,41 @@ class BailingMoeV3Model(TextModel):
         if (values := clamp_limits("share_expert_swiglu_limit_list")) is not None:
             self.gguf_writer.add_swiglu_clamp_shexp(values)
 
-        if nextn_layers := self.hparams.get("num_nextn_predict_layers", 0):
+        if not self.no_mtp and (nextn_layers := self.hparams.get("num_nextn_predict_layers", 0)):
             self.gguf_writer.add_nextn_predict_layers(nextn_layers)
+
+    def prepare_metadata(self, vocab_only: bool):
+        from_dir = self.fname_out.is_dir()
+        super().prepare_metadata(vocab_only=vocab_only)
+
+        if not self.mtp_only or not from_dir:
+            return
+
+        output_type: str = self.ftype.name.partition("_")[2]
+        fname_default: str = gguf.naming_convention(
+            self.metadata.name, self.metadata.basename, self.metadata.finetune,
+            self.metadata.version, size_label=None, output_type=output_type, model_type=None)
+        self.fname_out = self.fname_out.parent / f"mtp-{fname_default}.gguf"
 
     @classmethod
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
         name, gen = item
         if name.endswith(".expert_bias"):
             name += ".bias"
+
+        if cls._main_layers is None:
+            return super().filter_tensors((name, gen))
+
+        m = re.match(r"model\.layers\.(\d+)\.", name)
+        is_mtp = m is not None and int(m.group(1)) >= cls._main_layers
+
+        if is_mtp and cls.no_mtp:
+            return None
+        if cls.mtp_only and not is_mtp and name not in (
+            "model.word_embeddings.weight", "model.norm.weight", "lm_head.weight",
+        ):
+            return None
+
         return super().filter_tensors((name, gen))
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
@@ -104,6 +141,8 @@ class BailingMoeV3Model(TextModel):
 
         if name.endswith(".attention.f_proj.weight"):
             assert bid is not None
+            if self.is_full_attention(bid):
+                raise ValueError(f"unexpected f_proj on full-attention layer {bid}")
             name = self.format_tensor_name(gguf.MODEL_TENSOR.SSM_F_A, bid)
 
         if name.endswith(".attention.g_proj.weight"):
