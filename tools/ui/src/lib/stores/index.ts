@@ -53,8 +53,6 @@ export { permissionsStore } from './permissions.svelte';
 export { toolsStore } from './tools.svelte';
 
 // ENVIRONMENT / META
-export { buildInfoStore } from './build-info.svelte';
-
 export { versionStore } from './version.svelte';
 
 export { deviceStore } from './device.svelte';

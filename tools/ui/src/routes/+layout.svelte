@@ -19,14 +19,14 @@
 	import { usePwa } from '$lib/hooks/use-pwa.svelte';
 	import { RouterService } from '$lib/services/router.service';
 	import {
-		buildInfoStore,
 		chatStore,
 		conversationsStore,
 		deviceStore,
 		mcpStore,
 		modelsStore,
 		serverStore,
-		settingsStore
+		settingsStore,
+		versionStore
 	} from '$lib/stores';
 	import { ModeWatcher } from 'mode-watcher';
 	import { untrack } from 'svelte';
@@ -293,8 +293,8 @@
 
 <!-- PWA update prompt + version -->
 <div class="fixed right-4 bottom-4 z-9999 flex flex-col items-end gap-1">
-	{#if showBuildVersion && buildInfoStore.value}
-		<span class="text-[10px] tabular-nums text-muted-foreground">{buildInfoStore.value}</span>
+	{#if showBuildVersion && versionStore.build}
+		<span class="text-[10px] tabular-nums text-muted-foreground">{versionStore.build}</span>
 	{/if}
 
 	<PwaRefreshAlert
