@@ -10,10 +10,6 @@ def server():
     return ServerPreset.router()
 
 
-@pytest.fixture(scope="session", autouse=True)
-def load_server_presets():
-    yield
-
 
 # NOTE: the catalog/read contract is verified by the native direct-handler test
 # `tests/test-server-skills.cpp`, which drives the constructed server_skills
