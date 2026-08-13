@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import Iterable, TYPE_CHECKING
 
 import torch
 
@@ -8,6 +8,7 @@ if TYPE_CHECKING:
     from torch import Tensor
 
 from .base import ModelBase, TextModel, MmprojModel, gguf
+
 
 @ModelBase.register("MiniMaxText01ForCausalLM")
 @ModelBase.register("MiniMaxM1ForCausalLM")
@@ -34,9 +35,6 @@ class MiniMaxText01Model(TextModel):
     _experts: list[dict[str, Tensor]] | None = None
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        n_head = self.hparams["num_attention_heads"]
-        n_kv_head = self.hparams.get("num_key_value_heads")
-
         # process the experts separately
         if name.find("block_sparse_moe.experts") != -1:
             n_experts = self.hparams["num_local_experts"]
