@@ -3053,6 +3053,21 @@ static int ggml_cpu_try_fuse_ops(
             }
         }
     }
+    if (node->op == GGML_OP_GET_ROWS) {
+        // GET_ROWS + ADD fusion
+        const enum ggml_op fuse_ops[] = { GGML_OP_GET_ROWS, GGML_OP_ADD };
+        if (ggml_can_fuse(cgraph, node_n, fuse_ops, 2)) {
+            struct ggml_tensor * add_node = cgraph->nodes[node_n + 1];
+            struct ggml_tensor * pos_embd = (add_node->src[0] == node) ? add_node->src[1] : add_node->src[0];
+
+            if (node->src[1]->type == GGML_TYPE_I32 &&
+                pos_embd->type == GGML_TYPE_F32 &&
+                add_node->type == GGML_TYPE_F32) {
+
+                return ggml_compute_forward_get_rows_add_fused(params, node, add_node);
+            }
+        }
+    }
 
     return 0;
 }

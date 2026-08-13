@@ -4964,6 +4964,94 @@ static void ggml_compute_forward_get_rows_q(
     }
 }
 
+static void ggml_compute_forward_get_rows_add_fused_q(
+        const ggml_compute_params * params,
+        const ggml_tensor * dst_get_rows,
+        ggml_tensor * dst_add) {
+
+    const ggml_tensor * src0 = dst_get_rows->src[0];
+    const ggml_tensor * src1 = dst_get_rows->src[1];
+    const ggml_tensor * add_src = (dst_add->src[0] == dst_get_rows)
+                                   ? dst_add->src[1]
+                                   : dst_add->src[0];
+    auto dst = dst_add;
+    GGML_TENSOR_BINARY_OP_LOCALS
+
+    const int64_t nc = ne00;
+    const int64_t nr = ggml_nelements(src1);
+
+    const ggml_type type = src0->type;
+    ggml_to_float_t const dequantize_row_q = ggml_get_type_traits(type)->to_float;
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+
+    const int dr = (nr + nth - 1)/nth;
+    const int ir0 = dr*ith;
+    const int ir1 = MIN(ir0 + dr, nr);
+
+    GGML_ASSERT(ne0 == nc);
+    GGML_ASSERT(ne1 == nc);
+    GGML_ASSERT(nb00 == ggml_type_size(type));
+    GGML_ASSERT(add_src->type == GGML_TYPE_F32);
+
+    const int64_t add_nelem = ggml_nelements(add_src);
+    const bool is_broadcast_single = (add_nelem == nc);
+    const bool is_positional = (add_nelem >= nr * nc);
+
+    const char * src1_ptr = (const char *) src1->data + ir0 * nb10;
+    char * dst_ptr = (char *) dst_add->data + ir0 * nb1;
+    const int64_t src1_step = nb10;
+    const int64_t dst_step = nb1;
+
+    int64_t last_i01 = -1;
+    int64_t last_add_i = -1;
+    const float * last_dst_ptr = nullptr;
+
+    for (int64_t i = ir0; i < ir1; ++i) {
+        const int64_t i01 = *(const int32_t *) src1_ptr;
+        GGML_ASSERT(i01 >= 0 && i01 < ne01);
+
+        int64_t add_i{0};
+        if (!is_broadcast_single) {
+            if (is_positional) {
+                add_i = i;
+            } else {
+                add_i = i % (add_nelem / nc);
+            }
+        }
+
+        const float * add_row = (const float *)((const char *)add_src->data + add_i * nb11);
+
+        if (i01 == last_i01 && add_i == last_add_i && last_dst_ptr != nullptr) {
+            memcpy(dst_ptr, last_dst_ptr, nc * sizeof(float));
+        } else {
+            if (i + 1 < ir1) {
+                const int64_t next_i01 = *(const int32_t *)(src1_ptr + src1_step);
+                const char * next_src0_row = (const char *) src0->data + next_i01 * nb01;
+                __builtin_prefetch(next_src0_row, 0, 1);
+                __builtin_prefetch(next_src0_row + 64, 0, 1);
+                __builtin_prefetch(next_src0_row + 128, 0, 1);
+            }
+
+            dequantize_row_q(
+                (const void *) ((const char *) src0->data + i01 * nb01),
+                (float *) dst_ptr,
+                nc
+            );
+
+            ggml_vec_acc_f32(nc, (float *) dst_ptr, add_row);
+
+            last_i01 = i01;
+            last_add_i = add_i;
+            last_dst_ptr = (const float *) dst_ptr;
+        }
+
+        src1_ptr += src1_step;
+        dst_ptr += dst_step;
+    }
+}
+
 static void ggml_compute_forward_get_rows_f16(
         const ggml_compute_params * params,
               ggml_tensor * dst) {
@@ -5159,6 +5247,47 @@ void ggml_compute_forward_get_rows(
     //    printf("\n");
     //    exit(0);
     //}
+}
+
+int ggml_compute_forward_get_rows_add_fused(const struct ggml_compute_params * params, struct ggml_tensor * dst_get_rows, struct ggml_tensor * dst_add) {
+    const ggml_tensor * src0 = dst_get_rows->src[0];
+
+    switch (src0->type) {
+        case GGML_TYPE_Q1_0:
+        case GGML_TYPE_Q2_0:
+        case GGML_TYPE_Q4_0:
+        case GGML_TYPE_Q4_1:
+        case GGML_TYPE_Q5_0:
+        case GGML_TYPE_Q5_1:
+        case GGML_TYPE_Q8_0:
+        case GGML_TYPE_Q8_1:
+        case GGML_TYPE_MXFP4:
+        case GGML_TYPE_NVFP4:
+        case GGML_TYPE_Q2_K:
+        case GGML_TYPE_Q3_K:
+        case GGML_TYPE_Q4_K:
+        case GGML_TYPE_Q5_K:
+        case GGML_TYPE_Q6_K:
+        case GGML_TYPE_TQ1_0:
+        case GGML_TYPE_TQ2_0:
+        case GGML_TYPE_IQ2_XXS:
+        case GGML_TYPE_IQ2_XS:
+        case GGML_TYPE_IQ3_XXS:
+        case GGML_TYPE_IQ1_S:
+        case GGML_TYPE_IQ1_M:
+        case GGML_TYPE_IQ4_NL:
+        case GGML_TYPE_IQ4_XS:
+        case GGML_TYPE_IQ3_S:
+        case GGML_TYPE_IQ2_S:
+        {
+            ggml_compute_forward_get_rows_add_fused_q(params, dst_get_rows, dst_add);
+        } break;
+        default:
+        {
+            return 0;
+        }
+    }
+    return 1;
 }
 
 template<typename src_t, typename idx_t>
