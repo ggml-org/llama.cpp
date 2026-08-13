@@ -22,26 +22,28 @@ private:
     // queues
     std::deque<server_task> queue_tasks;
     std::deque<server_task> queue_tasks_deferred;
+    // tasks declined while yielding, put back in queue_tasks once the yield is done
+    // note: kept as a member so that cleanup_pending_task() can also reach them
+    std::deque<server_task> queue_tasks_unhandled;
 
     std::mutex mutex_tasks;
     std::condition_variable condition_tasks;
 
-    // used by yield_to_queue
+    // used by yield_to_queue, all fields are guarded by mutex_tasks
     struct worker_t {
-        std::thread thread;
-        std::mutex  mutex;
-        std::condition_variable cv;
-        std::function<void()> work;   // pending work, picked up by the thread
-        std::exception_ptr exception; // exception thrown by work(), if any
+        std::thread             thread;
+        std::condition_variable cv;   // the worker sleeps on this until there is work
+        std::function<void()>   work; // pending work, picked up by the thread
+        std::exception_ptr      exception; // exception thrown by work(), if any
         bool stop = false;
-        bool busy = false; // guarded by mutex_tasks (not by worker_t::mutex)
+        bool busy = false;
     };
     worker_t worker;
 
     // callback functions
-    std::function<bool(server_task &&)> callback_new_task;
-    std::function<void(void)>           callback_update_slots;
-    std::function<void(bool)>           callback_sleeping_state;
+    std::function<bool(server_task &&, bool)> callback_new_task;
+    std::function<void(void)>                 callback_update_slots;
+    std::function<void(bool)>                 callback_sleeping_state;
 
 public:
     ~server_queue() { worker_stop(); }
@@ -94,6 +96,7 @@ public:
     // returns once work() is done (may throw exceptions)
     // must be called from start_loop() thread (ideally inside callback_update_slots)
     // use case: return metrics while encode/decode is running
+    // ref: https://github.com/ggml-org/llama.cpp/pull/27041
     //
     // tasks declined by callback_new_task are put back in the queue once this returns
     void yield_to_queue(std::function<void()> && work);
@@ -109,9 +112,10 @@ public:
     //
 
     // Register function to process a new task
-    // it returns false to decline the task, which is only allowed while yielding
-    // on decline, the task must be left untouched, it is put back in the queue later
-    void on_new_task(std::function<bool(server_task &&)> callback) {
+    // the second argument tells whether the queue is currently yielding (see yield_to_queue)
+    // only then may the callback return false to decline the task, and it must leave it
+    // untouched, so that it can be put back in the queue later
+    void on_new_task(std::function<bool(server_task &&, bool)> callback) {
         callback_new_task = std::move(callback);
     }
 
@@ -140,8 +144,8 @@ private:
 
     // process all pending tasks in the queue
     // returns true if the queue is terminated, false if there is no more task to process
-    // declined tasks are moved to unhandled, which must be set when called while yielding
-    bool process_new_tasks(std::deque<server_task> * unhandled = nullptr);
+    // while yielding, declined tasks are moved to queue_tasks_unhandled
+    bool process_new_tasks(bool is_yielding);
 
     // for worker_t
     void worker_loop();
