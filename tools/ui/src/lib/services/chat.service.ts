@@ -33,6 +33,7 @@ import type {
 	ApiStreamSession
 } from '$lib/types/api';
 import { isAbortError } from '$lib/utils/abort';
+import { ApiError } from '$lib/utils/api-fetch';
 import { getAuthHeaders, getJsonHeaders } from '$lib/utils/api-headers';
 import { formatAttachmentText } from '$lib/utils/formatters';
 import { streamIdentity } from '$lib/utils/stream-identity';
@@ -536,6 +537,46 @@ export class ChatService {
 		} catch (e) {
 			console.warn('cancelServerStream failed:', e);
 		}
+	}
+
+	/**
+	 * Look up server-side stream sessions for the given conversation ids. Ids carry the frozen
+	 * conv::model identity when a model was bound at POST time.
+	 */
+	static async lookupStreamSessions(conversationIds: string[]): Promise<ApiStreamSession[]> {
+		const resp = await fetch(API_STREAM.LOOKUP, {
+			body: JSON.stringify({ conversation_ids: conversationIds }),
+			headers: getJsonHeaders(),
+			method: 'POST'
+		});
+
+		if (!resp.ok) {
+			throw new ApiError(`Stream lookup failed with HTTP ${resp.status}`, resp.status);
+		}
+
+		const body = (await resp.json()) as unknown;
+
+		if (!Array.isArray(body)) {
+			throw new Error('Stream lookup returned a non-array response');
+		}
+
+		return body as ApiStreamSession[];
+	}
+
+	/**
+	 * Fetch the full replay of a server-side stream from byte 0. Returns the raw Response so the
+	 * caller can pipe it through the SSE parser like a fresh stream.
+	 */
+	static async fetchStreamReplay(streamId: string): Promise<Response> {
+		const resp = await fetch(`${API_STREAM.BASE}?conv_id=${encodeURIComponent(streamId)}&from=0`, {
+			headers: getAuthHeaders()
+		});
+
+		if (!resp.ok) {
+			throw new ApiError(`Stream replay failed with HTTP ${resp.status}`, resp.status);
+		}
+
+		return resp;
 	}
 
 	/**
