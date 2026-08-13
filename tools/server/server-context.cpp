@@ -41,39 +41,40 @@ using json = nlohmann::ordered_json;
 
 constexpr int HTTP_POLLING_SECONDS = 1;
 
-// wire format of a serialized prefill state: magic, token count, tokens, raw sequence state
+// wire format of a serialized prefill state: magic, tokens blob size, server_tokens blob, raw sequence state
 constexpr uint32_t PREFILL_STATE_MAGIC           = 0x50524631; // "PRF1"
 constexpr int      PREFILL_CONNECT_TIMEOUT_SECS  = 10;
 constexpr int      PREFILL_RESPONSE_TIMEOUT_SECS = 3600;
 
-static std::string prefill_state_pack(const llama_tokens & tokens, const std::vector<uint8_t> & state) {
-    const uint32_t magic    = PREFILL_STATE_MAGIC;
-    const uint32_t n_tokens = tokens.size();
+static std::string prefill_state_pack(const std::vector<char> & tokens_blob, const std::vector<uint8_t> & state) {
+    const uint32_t magic  = PREFILL_STATE_MAGIC;
+    const uint32_t n_blob = tokens_blob.size();
 
     std::string out;
-    out.reserve(sizeof(magic) + sizeof(n_tokens) + n_tokens * sizeof(llama_token) + state.size());
-    out.append((const char *) &magic,    sizeof(magic));
-    out.append((const char *) &n_tokens, sizeof(n_tokens));
-    out.append((const char *) tokens.data(), n_tokens * sizeof(llama_token));
+    out.reserve(sizeof(magic) + sizeof(n_blob) + tokens_blob.size() + state.size());
+    out.append((const char *) &magic,  sizeof(magic));
+    out.append((const char *) &n_blob, sizeof(n_blob));
+    out.append(tokens_blob.data(), tokens_blob.size());
     out.append((const char *) state.data(), state.size());
     return out;
 }
 
-static bool prefill_state_unpack(const std::string & body, llama_tokens & tokens, std::vector<uint8_t> & state) {
-    uint32_t magic    = 0;
-    uint32_t n_tokens = 0;
-    if (body.size() < sizeof(magic) + sizeof(n_tokens)) {
+static bool prefill_state_unpack(const std::string & body, llama_tokens & tokens_packed, std::vector<uint8_t> & state) {
+    uint32_t magic  = 0;
+    uint32_t n_blob = 0;
+    if (body.size() < sizeof(magic) + sizeof(n_blob)) {
         return false;
     }
-    memcpy(&magic,    body.data(),                 sizeof(magic));
-    memcpy(&n_tokens, body.data() + sizeof(magic), sizeof(n_tokens));
+    memcpy(&magic,  body.data(),                 sizeof(magic));
+    memcpy(&n_blob, body.data() + sizeof(magic), sizeof(n_blob));
 
-    const size_t off = sizeof(magic) + sizeof(n_tokens) + (size_t) n_tokens * sizeof(llama_token);
-    if (magic != PREFILL_STATE_MAGIC || body.size() < off) {
+    const size_t off = sizeof(magic) + sizeof(n_blob) + (size_t) n_blob;
+    if (magic != PREFILL_STATE_MAGIC || body.size() < off || n_blob % sizeof(llama_token) != 0) {
         return false;
     }
-    tokens.resize(n_tokens);
-    memcpy(tokens.data(), body.data() + sizeof(magic) + sizeof(n_tokens), n_tokens * sizeof(llama_token));
+    // server_tokens::deserialize reads the blob as an array of token sized units
+    tokens_packed.resize(n_blob / sizeof(llama_token));
+    memcpy(tokens_packed.data(), body.data() + sizeof(magic) + sizeof(n_blob), n_blob);
     state.assign(body.begin() + off, body.end());
     return true;
 }
@@ -1796,9 +1797,9 @@ private:
                 send_error(task, "Failed to apply the prefill state, no available space in KV cache", ERROR_TYPE_SERVER);
                 return false;
             }
-            slot.prompt.tokens.insert(task.prefill_tokens);
+            slot.prompt.tokens = std::move(task.prefill_tokens);
             SLT_INF(slot, "applied prefill state, n_tokens = %zu, size = %.3f MiB\n",
-                    task.prefill_tokens.size(), task.prefill_state.size() / (1024.0 * 1024.0));
+                    slot.prompt.tokens.size(), task.prefill_state.size() / (1024.0 * 1024.0));
         }
 
         slot.task = std::make_unique<const server_task>(std::move(task));
@@ -2186,10 +2187,10 @@ private:
         const size_t size = llama_state_seq_get_size_ext(ctx_tgt, slot.id, LLAMA_STATE_SEQ_FLAGS_NONE);
         res->state.resize(size);
         llama_state_seq_get_data_ext(ctx_tgt, res->state.data(), size, slot.id, LLAMA_STATE_SEQ_FLAGS_NONE);
-        res->tokens = slot.prompt.tokens.get_text_tokens();
+        res->tokens_blob = slot.prompt.tokens.serialize();
 
         SLT_INF(slot, "sending prefill state, n_tokens = %zu, size = %.3f MiB\n",
-                res->tokens.size(), size / (1024.0 * 1024.0));
+                slot.prompt.tokens.size(), size / (1024.0 * 1024.0));
 
         queue_results.send(std::move(res));
     }
@@ -4217,7 +4218,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
     const bool prefill_only = req.headers.find("x-prefill") != req.headers.end();
 
     // a request with "prefill": true delegates prompt processing to the server at --prefill-url
-    llama_tokens         prefill_tokens;
+    server_tokens        prefill_tokens;
     std::vector<uint8_t> prefill_state;
 
     try {
@@ -4244,9 +4245,11 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
             if (!r || r->status != 200) {
                 throw std::runtime_error(string_format("prefill server request failed, status = %d", r ? r->status : -1));
             }
-            if (!prefill_state_unpack(r->body, prefill_tokens, prefill_state)) {
+            llama_tokens tokens_packed;
+            if (!prefill_state_unpack(r->body, tokens_packed, prefill_state)) {
                 throw std::runtime_error("invalid prefill state received from the prefill server");
             }
+            prefill_tokens = server_tokens::deserialize(tokens_packed, ctx_server.mctx != nullptr);
             SRV_INF("received prefill state, n_tokens = %zu, size = %.3f MiB, t = %.2f ms\n",
                     prefill_tokens.size(), prefill_state.size() / (1024.0 * 1024.0),
                     (ggml_time_us() - t_start) / 1000.0);
@@ -4359,7 +4362,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
         GGML_ASSERT(result != nullptr);
         res->status       = 200;
         res->content_type = "application/octet-stream";
-        res->data         = prefill_state_pack(result->tokens, result->state);
+        res->data         = prefill_state_pack(result->tokens_blob, result->state);
         return res;
     }
 
