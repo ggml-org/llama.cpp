@@ -11,7 +11,10 @@
 #include <cstdlib>
 #include <fstream>
 #include <iomanip>
+#include <list>
 #include <map>
+#include <mutex>
+#include <optional>
 #include <set>
 #include <sstream>
 #include <utility>
@@ -24,6 +27,9 @@ constexpr size_t SKILL_MAX_BYTES = 1024 * 1024;
 constexpr size_t RESOURCE_MAX_BYTES = 10 * 1024 * 1024;
 constexpr size_t RESOURCE_LIST_MAX = 256;
 constexpr int RESOURCE_LIST_MAX_DEPTH = 4;
+// Bounded path-free LRU catalog cache: entries are keyed by canonical
+// effective CWD plus tokenizer generation, promoted on hit, and capped here.
+constexpr size_t CATALOG_CACHE_MAX = 32;
 // Client-supplied resource paths are capped before the missing-resource
 // suggestion ranker runs: listing candidates are bounded by the depth-four
 // enumeration (each component is filesystem-name limited, at most 255 bytes on
@@ -59,6 +65,9 @@ struct skill_entry {
     fs::path directory;
     fs::path skill_file;
     parsed_skill parsed;
+    // instruction measurement for the catalog (exact or estimated)
+    size_t tokens = 0;
+    bool tokens_estimated = true;
 };
 
 struct skill_catalog {
@@ -70,6 +79,46 @@ struct resource_listing {
     std::vector<std::string> paths;
     bool truncated = false;
 };
+
+// One cached skill: safe parsed/serialized values, observable file state
+// sufficient to detect an in-place mutation, and the measured instruction
+// tokens. Deliberately path-free: no raw roots, resource paths, or
+// authorization state.
+struct cached_skill {
+    std::string id;
+    parsed_skill parsed;
+    std::string file_state;
+    size_t tokens = 0;
+    bool tokens_estimated = true;
+};
+
+// One catalog cache entry, keyed by canonical effective CWD plus tokenizer
+// generation. The key string is the canonical CWD (never a stored root or
+// resource path).
+struct catalog_cache_entry {
+    std::string cwd;
+    uint64_t generation = 0;
+    std::vector<cached_skill> skills;
+};
+
+static const cached_skill * entry_find_skill(const catalog_cache_entry & entry, const std::string & id) {
+    for (const auto & skill : entry.skills) {
+        if (skill.id == id) {
+            return &skill;
+        }
+    }
+    return nullptr;
+}
+
+static void entry_upsert_skill(catalog_cache_entry & entry, cached_skill skill) {
+    for (auto & existing : entry.skills) {
+        if (existing.id == skill.id) {
+            existing = std::move(skill);
+            return;
+        }
+    }
+    entry.skills.push_back(std::move(skill));
+}
 
 enum class read_result {
     ok,
@@ -346,6 +395,26 @@ static std::string modified_at(const fs::path & file) {
     return out.str();
 }
 
+// Observable file state (modification time plus size) sufficient to detect an
+// in-place mutation of a skill file. The catalog cache stores this instead of
+// raw file contents so it can decide whether a cached parse is still current.
+// Returns an empty string when the state cannot be observed, which forces a
+// re-read instead of risking a stale cached parse.
+static std::string observable_file_state(const fs::path & file) {
+    std::error_code ec;
+    const fs::file_time_type time = fs::last_write_time(file, ec);
+    if (ec) {
+        return "";
+    }
+    const uintmax_t size = fs::file_size(file, ec);
+    if (ec) {
+        return "";
+    }
+    std::ostringstream out;
+    out << time.time_since_epoch().count() << ":" << size;
+    return out.str();
+}
+
 static bool safe_relative_path(const std::string & source, std::string & normalized) {
     if (source.empty() || source.find('\\') != std::string::npos || !is_valid_utf8(source)) {
         return false;
@@ -514,8 +583,16 @@ static void keep_best_three(std::vector<ranked_path> & best, ranked_path candida
 // name. `base` is the canonical HOME or effective CWD the configured root must
 // stay beneath: a root whose canonical target escapes that base is rejected
 // with skill_root_invalid.
+//
+// When `cache_entry` is non-null, discovery consults the path-free catalog
+// cache entry: an unchanged observable file state reuses the cached parse and
+// instruction measurement without re-reading the file; otherwise the file is
+// re-read and re-measured. `count_tokens` (when non-null) supplies exact
+// direct-tokenizer counts; on absence or an unavailable tokenizer the
+// instruction is estimated as ceil(bytes / 4).
 static void add_root_skills(const fs::path & candidate_root, const fs::path & base, const std::string & scope,
-                            const std::string & provider, skill_catalog & catalog) {
+                            const std::string & provider, skill_catalog & catalog,
+                            catalog_cache_entry * cache_entry, const token_count_callback * count_tokens) {
     std::error_code ec;
     if (!fs::exists(candidate_root, ec) || ec) {
         return;
@@ -544,18 +621,27 @@ static void add_root_skills(const fs::path & candidate_root, const fs::path & ba
             catalog.diagnostics.push_back(diagnostic("warning", "skill_unsafe_path", "Skill could not be used", "", scope, provider));
             continue;
         }
-        std::string source;
-        const read_result state = read_utf8_file(skill_file, SKILL_MAX_BYTES, source);
-        if (state != read_result::ok) {
-            const char * code = state == read_result::too_large ? "skill_too_large" :
-                               state == read_result::invalid_utf8 ? "skill_invalid_utf8" : "skill_unreadable";
-            catalog.diagnostics.push_back(diagnostic("warning", code, "Skill could not be read", "", scope, provider));
-            continue;
-        }
+        const std::string id = stable_id(directory, scope, provider);
+        const std::string state = observable_file_state(skill_file);
+        const cached_skill * cached = cache_entry != nullptr ? entry_find_skill(*cache_entry, id) : nullptr;
+        const bool reuse = cached != nullptr && !state.empty() && cached->file_state == state;
+
         parsed_skill parsed;
-        if (!parse_skill(source, parsed)) {
-            catalog.diagnostics.push_back(diagnostic("warning", "skill_invalid_frontmatter", "Skill frontmatter is invalid", "", scope, provider));
-            continue;
+        if (reuse) {
+            parsed = cached->parsed;
+        } else {
+            std::string source;
+            const read_result read_state = read_utf8_file(skill_file, SKILL_MAX_BYTES, source);
+            if (read_state != read_result::ok) {
+                const char * code = read_state == read_result::too_large ? "skill_too_large" :
+                                   read_state == read_result::invalid_utf8 ? "skill_invalid_utf8" : "skill_unreadable";
+                catalog.diagnostics.push_back(diagnostic("warning", code, "Skill could not be read", "", scope, provider));
+                continue;
+            }
+            if (!parse_skill(source, parsed)) {
+                catalog.diagnostics.push_back(diagnostic("warning", "skill_invalid_frontmatter", "Skill frontmatter is invalid", "", scope, provider));
+                continue;
+            }
         }
         if (parsed.description.empty()) {
             catalog.diagnostics.push_back(diagnostic("warning", "skill_missing_description", "Skill has no description", "", scope, provider));
@@ -582,16 +668,98 @@ static void add_root_skills(const fs::path & candidate_root, const fs::path & ba
             catalog.diagnostics.push_back(diagnostic("warning", "skill_shadowed", "Skill is shadowed by a higher-precedence entry", name, scope, provider));
             continue;
         }
-        catalog.skills.push_back({stable_id(directory, scope, provider), name, scope, provider, root, directory, skill_file, std::move(parsed)});
+
+        // Instruction measurement: reuse cached counts on an unchanged file,
+        // otherwise measure exactly (direct tokenizer available) or estimate
+        // the integer ceiling of bytes / 4.
+        size_t tokens = (parsed.body.size() + 3) / 4;
+        bool tokens_estimated = true;
+        if (reuse) {
+            tokens = cached->tokens;
+            tokens_estimated = cached->tokens_estimated;
+        } else if (count_tokens != nullptr) {
+            try {
+                if (auto snapshot = (*count_tokens)(parsed.body)) {
+                    tokens = snapshot->count;
+                    tokens_estimated = false;
+                }
+            } catch (...) {
+            }
+        }
+
+        if (cache_entry != nullptr) {
+            cached_skill cached_value;
+            cached_value.id = id;
+            cached_value.parsed = parsed;
+            cached_value.file_state = state;
+            cached_value.tokens = tokens;
+            cached_value.tokens_estimated = tokens_estimated;
+            entry_upsert_skill(*cache_entry, std::move(cached_value));
+        }
+        catalog.skills.push_back({std::move(id), std::move(name), scope, provider, root, directory, skill_file,
+                                  std::move(parsed), tokens, tokens_estimated});
     }
 }
 
 } // namespace
 
+// Path-free bounded LRU catalog cache (declared in server-skills.h). Entries
+// are keyed by canonical effective CWD plus tokenizer generation, promoted on
+// hit, and capped at CATALOG_CACHE_MAX. Entries hold only safe
+// parsed/serialized values, observable file state, and measured instruction
+// tokens -- never raw roots, resource paths, or authorization state.
+//
+// The cache is shared by concurrent HTTP worker threads, so every access is
+// serialized by `mutex` and no raw pointer into the internal lists ever
+// escapes: `lookup` returns a copy of the entry (promoting on hit), the
+// caller mutates and measures the copy while doing file I/O, and `store`
+// writes it back under the lock. A concurrent store/eviction can therefore
+// never invalidate an entry a handler is still using.
+struct skill_catalog_cache {
+    std::mutex mutex;
+    std::list<catalog_cache_entry> entries; // front = most recently used
+    std::map<std::pair<std::string, uint64_t>, std::list<catalog_cache_entry>::iterator> index;
+
+    // Find the entry for (cwd, generation) under the cache lock, promote it to
+    // most-recently-used on a hit, and return a copy of it; returns nullopt on
+    // a miss. The copy keeps the caller free of any pointer into the cache.
+    std::optional<catalog_cache_entry> lookup(const std::string & cwd, uint64_t generation) {
+        std::lock_guard<std::mutex> lock(mutex);
+        const auto key = std::make_pair(cwd, generation);
+        const auto found = index.find(key);
+        if (found == index.end()) {
+            return std::nullopt;
+        }
+        entries.splice(entries.begin(), entries, found->second); // promote on hit
+        return *found->second; // copy
+    }
+
+    // Insert or replace the entry for its (cwd, generation) key under the
+    // cache lock, evicting the least-recently-used entry when the cap is
+    // exceeded. Replacing an existing entry keeps the size unchanged, so
+    // eviction only ever happens on a genuine insert.
+    void store(catalog_cache_entry entry) {
+        std::lock_guard<std::mutex> lock(mutex);
+        const auto key = std::make_pair(entry.cwd, entry.generation);
+        const auto found = index.find(key);
+        if (found != index.end()) {
+            entries.erase(found->second);
+            index.erase(found);
+        }
+        entries.push_front(std::move(entry));
+        index[key] = entries.begin();
+        while (entries.size() > CATALOG_CACHE_MAX) {
+            index.erase(std::make_pair(entries.back().cwd, entries.back().generation));
+            entries.pop_back();
+        }
+    }
+};
+
 server_skills::server_skills(server_skills_config config, token_count_callback count_tokens)
     : config(std::move(config)),
       count_tokens(std::move(count_tokens)),
-      process_cwd(std::filesystem::canonical(std::filesystem::current_path())) {
+      process_cwd(std::filesystem::canonical(std::filesystem::current_path())),
+      catalog_cache(std::make_unique<skill_catalog_cache>()) {
     // Follow the server-tools.cpp home_dir() convention: wide environment
     // lookup on Windows (the narrow getenv returns the profile path in the
     // active code page), plain narrow lookup on POSIX.
@@ -631,25 +799,57 @@ server_skills::server_skills(server_skills_config config, token_count_callback c
                 }
             }
 
+            // Tokenizer generation for cache keying: an empty-text probe
+            // returns the current generation, or nullopt when the direct
+            // tokenizer is unavailable (router/unloaded/sleeping), in which
+            // case catalogs are measured by estimation and keyed at
+            // generation 0.
+            uint64_t generation = 0;
+            if (this->count_tokens) {
+                try {
+                    if (auto snapshot = this->count_tokens("")) {
+                        generation = snapshot->generation;
+                    }
+                } catch (...) {
+                }
+            }
+            const std::string cwd_key = path_to_utf8(cwd);
+            // lookup returns a copy of the entry (or nullopt on a miss); the
+            // working entry is a request-local value, so a concurrent store or
+            // eviction can never invalidate it while file I/O runs below.
+            std::optional<catalog_cache_entry> cached_entry = this->catalog_cache->lookup(cwd_key, generation);
+            catalog_cache_entry entry;
+            if (cached_entry.has_value()) {
+                entry = std::move(*cached_entry);
+            } else {
+                entry.cwd = cwd_key;
+                entry.generation = generation;
+            }
+            catalog_cache_entry * cache = &entry;
+
             skill_catalog catalog;
+            const token_count_callback * count_tokens = this->count_tokens ? &this->count_tokens : nullptr;
             if (this->config.trust_project_skills) {
-                add_root_skills(cwd / ".agents" / "skills", cwd, "project", "agents", catalog);
+                add_root_skills(cwd / ".agents" / "skills", cwd, "project", "agents", catalog, cache, count_tokens);
                 for (const std::string & provider : this->config.providers) {
                     if (provider == "agents") {
                         continue; // built-in agents root already scanned above
                     }
-                    add_root_skills(cwd / ("." + provider) / "skills", cwd, "project", provider, catalog);
+                    add_root_skills(cwd / ("." + provider) / "skills", cwd, "project", provider, catalog, cache, count_tokens);
                 }
             }
             if (!process_home.empty()) {
-                add_root_skills(process_home / ".agents" / "skills", process_home, "global", "agents", catalog);
+                add_root_skills(process_home / ".agents" / "skills", process_home, "global", "agents", catalog, cache, count_tokens);
                 for (const std::string & provider : this->config.providers) {
                     if (provider == "agents") {
                         continue; // built-in agents root already scanned above
                     }
-                    add_root_skills(process_home / ("." + provider) / "skills", process_home, "global", provider, catalog);
+                    add_root_skills(process_home / ("." + provider) / "skills", process_home, "global", provider, catalog, cache, count_tokens);
                 }
             }
+            // write the working entry back under the cache lock (replace on a
+            // hit, insert with LRU eviction on a miss)
+            this->catalog_cache->store(std::move(entry));
 
             json output = {
                 {"skills", json::array()},
@@ -657,23 +857,16 @@ server_skills::server_skills(server_skills_config config, token_count_callback c
                 {"diagnostics", diagnostics_json(catalog.diagnostics)},
             };
             for (const skill_entry & skill : catalog.skills) {
+                // resource lists are re-enumerated for every catalog read and
+                // never stored in cache entries
                 const resource_listing resources = list_resources(skill);
                 const size_t bytes = skill.parsed.body.size();
-                bool estimated = true;
-                size_t tokens = (bytes + 3) / 4;
-                if (this->count_tokens) {
-                    try {
-                        tokens = this->count_tokens(skill.parsed.body);
-                        estimated = false;
-                    } catch (...) {
-                    }
-                }
                 const std::string last_modified = modified_at(skill.skill_file);
                 json instruction = {
                     {"bytes", bytes},
                     {"lines", line_count(skill.parsed.body)},
-                    {"tokens", tokens},
-                    {"tokens_estimated", estimated},
+                    {"tokens", skill.tokens},
+                    {"tokens_estimated", skill.tokens_estimated},
                     {"modified_at", last_modified.empty() ? json(nullptr) : json(last_modified)},
                 };
                 output["skills"].push_back({
@@ -734,21 +927,21 @@ server_skills::server_skills(server_skills_config config, token_count_callback c
 
             skill_catalog catalog;
             if (this->config.trust_project_skills) {
-                add_root_skills(cwd / ".agents" / "skills", cwd, "project", "agents", catalog);
+                add_root_skills(cwd / ".agents" / "skills", cwd, "project", "agents", catalog, nullptr, nullptr);
                 for (const std::string & provider : this->config.providers) {
                     if (provider == "agents") {
                         continue; // built-in agents root already scanned above
                     }
-                    add_root_skills(cwd / ("." + provider) / "skills", cwd, "project", provider, catalog);
+                    add_root_skills(cwd / ("." + provider) / "skills", cwd, "project", provider, catalog, nullptr, nullptr);
                 }
             }
             if (!process_home.empty()) {
-                add_root_skills(process_home / ".agents" / "skills", process_home, "global", "agents", catalog);
+                add_root_skills(process_home / ".agents" / "skills", process_home, "global", "agents", catalog, nullptr, nullptr);
                 for (const std::string & provider : this->config.providers) {
                     if (provider == "agents") {
                         continue; // built-in agents root already scanned above
                     }
-                    add_root_skills(process_home / ("." + provider) / "skills", process_home, "global", provider, catalog);
+                    add_root_skills(process_home / ("." + provider) / "skills", process_home, "global", provider, catalog, nullptr, nullptr);
                 }
             }
             const auto found = std::find_if(catalog.skills.begin(), catalog.skills.end(), [&](const skill_entry & skill) {
@@ -836,3 +1029,7 @@ server_skills::server_skills(server_skills_config config, token_count_callback c
         }
     };
 }
+
+server_skills::server_skills(server_skills &&) noexcept = default;
+server_skills & server_skills::operator=(server_skills &&) noexcept = default;
+server_skills::~server_skills() = default;

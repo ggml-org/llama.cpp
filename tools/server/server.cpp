@@ -175,7 +175,12 @@ int llama_server(common_params & params, int argc, char ** argv) {
             params.skills,
             params.trust_project_skills,
             params.skill_providers,
-        }, token_count_callback{});
+        }, [&ctx_server](const std::string & text) {
+            // lifetime-safe direct-tokenizer snapshot; nullopt in router /
+            // unloaded / sleeping states makes the catalog estimate instead.
+            // Never posts tasks, wakes the model, or touches router children.
+            return ctx_server.token_count_snapshot(text);
+        });
     }
 
     server_http_context ctx_http;

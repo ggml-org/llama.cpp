@@ -11,6 +11,8 @@
 #include "common.h"
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
@@ -19,10 +21,12 @@
 #include <iomanip>
 #include <iostream>
 #include <map>
+#include <optional>
 #include <set>
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -95,12 +99,14 @@ static json parse_body(const server_http_res_ptr & res) {
 // Mirrors the server launched with HOME=<home> and process CWD=<project>: the
 // service captures both at construction and re-resolves per request. Requests
 // without an X-Skill-Cwd header therefore resolve against the fixture project,
-// and requests with the header must produce the identical catalog.
+// and requests with the header must produce the identical catalog. An optional
+// token callback lets cache tests observe measurement through public results.
 static server_skills make_skills(const fs::path & home, const fs::path & project, bool trust_project_skills,
-                                 std::vector<std::string> providers = {"claude"}) {
+                                 std::vector<std::string> providers = {"claude"},
+                                 token_count_callback count_tokens = {}) {
     common_set_env("HOME", home.string());
     fs::current_path(project);
-    return server_skills(server_skills_config{true, trust_project_skills, std::move(providers)}, token_count_callback{});
+    return server_skills(server_skills_config{true, trust_project_skills, std::move(providers)}, std::move(count_tokens));
 }
 
 static void test_catalog_global_only() {
@@ -749,6 +755,220 @@ static void test_resource_path_length_bounded() {
     CHECK(too_long->status == 400);
 }
 
+// Fills the 32-entry catalog cache past its cap with 33 distinct effective
+// CWDs, then revisits eviction candidates: every catalog must stay correct
+// (its own fixture's skill), a recently revisited catalog must remain correct
+// after an eviction candidate is revisited, and the counting token callback
+// observes the LRU behavior through public results: a fresh CWD costs one
+// generation probe plus one body measurement, a cache hit costs only the
+// probe.
+static void test_catalog_cache_lru_eviction() {
+    const fs::path tmp = make_temp_dir();
+    const fs::path home = tmp / "home";
+    fs::create_directories(home);
+    std::vector<fs::path> projects;
+    for (int index = 0; index < 33; ++index) {
+        const fs::path project = tmp / ("proj-" + std::to_string(index));
+        fs::create_directories(project);
+        write_skill(project, "agents", "skill-" + std::to_string(index),
+                    "body-" + std::to_string(index), "desc-" + std::to_string(index));
+        projects.push_back(project);
+    }
+
+    size_t measure_calls = 0;
+    auto count_tokens = [&measure_calls](const std::string & text) -> std::optional<server_token_count_snapshot> {
+        ++measure_calls;
+        return server_token_count_snapshot{(text.size() + 3) / 4, 0};
+    };
+    server_skills skills = make_skills(home, projects[0], true, {"agents"}, token_count_callback(count_tokens));
+
+    auto check_skill = [&](int index) {
+        const server_http_res_ptr response = do_get(skills, {{"X-Skill-Cwd", projects[index].string()}});
+        CHECK(response != nullptr);
+        CHECK(response->status == 200);
+        const json body = parse_body(response);
+        CHECK(body.at("skills").size() == 1);
+        const json skill = body.at("skills")[0];
+        CHECK(skill.at("name") == "skill-" + std::to_string(index));
+        CHECK(skill.at("description") == "desc-" + std::to_string(index));
+        const std::string body_text = "body-" + std::to_string(index);
+        const size_t bytes = body_text.size();
+        CHECK(skill.at("instruction").at("bytes") == bytes);
+        CHECK(skill.at("instruction").at("tokens") == (bytes + 3) / 4);
+        CHECK(skill.at("instruction").at("tokens_estimated") == false);
+    };
+
+    // fill the cache past the 32-entry cap: the 33rd fill evicts proj-0
+    for (int index = 0; index < 33; ++index) {
+        check_skill(index);
+    }
+    CHECK(measure_calls == 66); // 33 requests x (generation probe + body)
+
+    // revisit the eviction candidate: refilled (probe + body), then a hit
+    check_skill(0);
+    CHECK(measure_calls == 68);
+    check_skill(0);
+    CHECK(measure_calls == 69);
+    check_skill(1); // an eviction candidate by now; its refill evicts proj-2
+    CHECK(measure_calls == 71);
+    // recently revisited catalogs remain correct (hits, probe only)
+    check_skill(32);
+    check_skill(4);
+    CHECK(measure_calls == 73);
+
+    // every CWD still resolves to its own catalog. The cache holds all 33
+    // except proj-2, but the sweep refills it in ascending order, so the
+    // eviction cascades: proj-2's refill evicts proj-3, which then misses on
+    // the next iteration, and so on through proj-32. The 33 requests hit
+    // proj-0, proj-1, proj-4 (probe only) and miss the other 30 (probe +
+    // measurement), a deterministic sequence regardless of thread timing.
+    for (int index = 0; index < 33; ++index) {
+        check_skill(index);
+    }
+    CHECK(measure_calls == 136); // 73 + 3 hits + 30 misses x 2 calls
+}
+
+// Mutates SKILL.md in place and asserts the catalog refreshes bytes/body
+// values without an identity change; the counting callback proves the
+// unchanged-file request is served from the cache (probe only) while the
+// mutation triggers a re-read and re-measurement.
+static void test_catalog_cache_mutation_freshness() {
+    const fs::path tmp = make_temp_dir();
+    const fs::path home = tmp / "home";
+    const fs::path project = tmp / "project";
+    fs::create_directories(home);
+    fs::create_directories(project);
+    const fs::path skill = write_skill(project, "agents", "mutable", "first body", "first desc");
+
+    size_t measure_calls = 0;
+    auto count_tokens = [&measure_calls](const std::string & text) -> std::optional<server_token_count_snapshot> {
+        ++measure_calls;
+        return server_token_count_snapshot{(text.size() + 3) / 4, 7};
+    };
+    server_skills skills = make_skills(home, project, true, {"agents"}, token_count_callback(count_tokens));
+
+    const server_http_res_ptr first = do_get(skills);
+    CHECK(first != nullptr && first->status == 200);
+    const json first_skill = parse_body(first).at("skills")[0];
+    const std::string first_id = first_skill.at("id").get<std::string>();
+    CHECK(first_skill.at("name") == "mutable");
+    CHECK(first_skill.at("description") == "first desc");
+    CHECK(first_skill.at("instruction").at("bytes") == std::string("first body").size());
+    CHECK(first_skill.at("instruction").at("tokens") == (std::string("first body").size() + 3) / 4);
+    CHECK(first_skill.at("instruction").at("tokens_estimated") == false);
+    CHECK(measure_calls == 2); // probe + body
+
+    // unchanged file: cache hit, only the generation probe runs
+    const server_http_res_ptr second = do_get(skills);
+    CHECK(second != nullptr && second->status == 200);
+    const json second_skill = parse_body(second).at("skills")[0];
+    CHECK(second_skill.at("id") == first_id);
+    CHECK(second_skill.at("instruction").at("bytes") == std::string("first body").size());
+    CHECK(measure_calls == 3); // probe only
+
+    // in-place mutation: observable file state changes, values refresh
+    // without an identity change
+    write_bytes(skill / "SKILL.md", "---\nname: mutable\ndescription: second desc\n---\nsecond body");
+    const server_http_res_ptr third = do_get(skills);
+    CHECK(third != nullptr && third->status == 200);
+    const json third_skill = parse_body(third).at("skills")[0];
+    CHECK(third_skill.at("id") == first_id);
+    CHECK(third_skill.at("name") == "mutable");
+    CHECK(third_skill.at("description") == "second desc");
+    CHECK(third_skill.at("instruction").at("bytes") == std::string("second body").size());
+    CHECK(third_skill.at("instruction").at("tokens") == (std::string("second body").size() + 3) / 4);
+    CHECK(third_skill.at("instruction").at("tokens_estimated") == false);
+    CHECK(measure_calls == 5); // probe + re-measured body
+}
+
+// The cache key includes the tokenizer generation: replacing the tokenizer
+// (model reload during the load/sleep lifecycle) must invalidate entries
+// measured against the old generation instead of serving stale counts.
+static void test_catalog_cache_generation_invalidation() {
+    const fs::path tmp = make_temp_dir();
+    const fs::path home = tmp / "home";
+    const fs::path project = tmp / "project";
+    fs::create_directories(home);
+    fs::create_directories(project);
+    write_skill(project, "agents", "gen-skill", "body", "desc");
+
+    uint64_t generation = 1;
+    auto count_tokens = [&generation](const std::string & text) -> std::optional<server_token_count_snapshot> {
+        return server_token_count_snapshot{(text.size() + 3) / 4 + (generation - 1), generation};
+    };
+    server_skills skills = make_skills(home, project, true, {"agents"}, token_count_callback(count_tokens));
+
+    const server_http_res_ptr first = do_get(skills);
+    CHECK(first != nullptr && first->status == 200);
+    const json first_skill = parse_body(first).at("skills")[0];
+    const size_t first_tokens = first_skill.at("instruction").at("tokens").get<size_t>();
+    CHECK(first_tokens == (std::string("body").size() + 3) / 4);
+    CHECK(first_skill.at("instruction").at("tokens_estimated") == false);
+
+    // tokenizer/model replaced: the generation advances, so the entry cached
+    // under the old generation must not be served
+    generation = 2;
+    const server_http_res_ptr second = do_get(skills);
+    CHECK(second != nullptr && second->status == 200);
+    const json second_skill = parse_body(second).at("skills")[0];
+    CHECK(second_skill.at("instruction").at("tokens") == first_tokens + 1);
+    CHECK(second_skill.at("instruction").at("tokens_estimated") == false);
+
+    // the new-generation entry is now cached and served
+    const server_http_res_ptr third = do_get(skills);
+    CHECK(third != nullptr && third->status == 200);
+    CHECK(parse_body(third).at("skills")[0].at("instruction").at("tokens") == first_tokens + 1);
+}
+
+// The catalog cache is shared by concurrent HTTP worker threads: drive the
+// public GET handler from several threads at once, mixing hits, misses, and
+// eviction-triggering fills, and assert every response resolves to its own
+// fixture. The cache must not crash, deadlock, or return cross-contaminated
+// data under this churn (eviction while another handler is still using an
+// entry would otherwise be a use-after-free).
+static void test_catalog_cache_concurrent_gets() {
+    const fs::path tmp = make_temp_dir();
+    const fs::path home = tmp / "home";
+    fs::create_directories(home);
+    std::vector<fs::path> projects;
+    for (int index = 0; index < 33; ++index) {
+        const fs::path project = tmp / ("conc-" + std::to_string(index));
+        fs::create_directories(project);
+        write_skill(project, "agents", "skill-" + std::to_string(index),
+                    "body-" + std::to_string(index), "desc-" + std::to_string(index));
+        projects.push_back(project);
+    }
+
+    server_skills skills = make_skills(home, projects[0], true, {"agents"});
+
+    std::atomic<size_t> failures = 0;
+    auto worker = [&](int seed) {
+        for (int round = 0; round < 5; ++round) {
+            for (int index = 0; index < 33; ++index) {
+                const int effective = (seed + index) % 33;
+                const server_http_res_ptr response = do_get(skills, {{"X-Skill-Cwd", projects[effective].string()}});
+                if (response == nullptr || response->status != 200) {
+                    ++failures;
+                    continue;
+                }
+                const json body = parse_body(response);
+                if (body.at("skills").size() != 1 ||
+                    body.at("skills")[0].at("name") != "skill-" + std::to_string(effective)) {
+                    ++failures;
+                }
+            }
+        }
+    };
+    std::vector<std::thread> threads;
+    for (int t = 0; t < 8; ++t) {
+        threads.emplace_back(worker, t * 7);
+    }
+    for (auto & thread : threads) {
+        thread.join();
+    }
+    CHECK(failures == 0);
+}
+
 int main() {
     try {
         const fs::path original_cwd = fs::current_path();
@@ -767,6 +987,10 @@ int main() {
         test_provider_agents_not_rescanned();
         test_suggestion_ranking_top_three_bounded();
         test_resource_path_length_bounded();
+        test_catalog_cache_lru_eviction();
+        test_catalog_cache_mutation_freshness();
+        test_catalog_cache_generation_invalidation();
+        test_catalog_cache_concurrent_gets();
 
         std::error_code ec;
         fs::current_path(original_cwd, ec);
