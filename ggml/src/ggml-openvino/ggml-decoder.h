@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <cstring>
 #include <map>
+#include <set>
 #include <memory>
 #include <openvino/core/partial_shape.hpp>
 #include <optional>
@@ -23,6 +24,10 @@ struct ModelParams {
     int32_t rope_params[15];
     bool mixed_rope_params = false;
     std::vector<int> swa_layers;
+    // The sliding-window mask tensor, identified in compute_llm_params() by grouping attention
+    // layers on the mask they consume. Only used to tell the two masks apart when naming OV
+    // parameters -- both carry the same tensor name. Null when the graph has a single mask.
+    const ggml_tensor * swa_mask = nullptr;
 
     std::vector<std::string> kv_names;
     size_t kv_buffer_ctx_id = 0;
@@ -266,6 +271,16 @@ public:
 
     void update_io(ggml_cgraph * cgraph);
 
+    // The cgraph this decoder currently describes. A cached decoder can be handed a DIFFERENT
+    // cgraph instance with the same graph_key, and every cached ggml_tensor* (and m_cgraph itself)
+    // then dangles, so callers must compare and refresh.
+    const ggml_cgraph * get_cgraph() const { return m_cgraph; }
+
+    // Was this decoder built for a graph with the same OUTPUT set as `cgraph`? The cache key is
+    // only (n_nodes, first/last node name), which cannot see a change in which tensors are marked
+    // as outputs, and the compiled model's Results are fixed at compile time.
+    bool has_same_graph_io(const ggml_cgraph * cgraph) const;
+
     inline static bool is_inp_tok(const ggml_tensor * tensor, const ggml_tensor * op) {
         return op->op == GGML_OP_GET_ROWS && tensor == op->src[1] && op->src[0]->op == GGML_OP_NONE;
     }
@@ -276,6 +291,16 @@ public:
 
     inline static bool is_inp_emb(const ggml_tensor * tensor, const ggml_tensor * op) {
         return tensor->op == GGML_OP_GET_ROWS && op->op == GGML_OP_RMS_NORM;
+    }
+
+    // A 2-D float graph input feeding a matmul as src[1]. Speculative decoding hands the draft the
+    // target's hidden features this way ([n_embd, n_tokens], with no GET_ROWS lookup, so none of the
+    // other seeds match it) and the token count differs between the prompt pass and the shorter
+    // draft blocks, so its token dim must stay dynamic.
+    inline static bool is_inp_embd_2d(const ggml_tensor * tensor, const ggml_tensor * op) {
+        return (tensor->flags & GGML_TENSOR_FLAG_INPUT) && tensor->op == GGML_OP_NONE &&
+               tensor->type == GGML_TYPE_F32 && tensor->ne[2] == 1 && tensor->ne[3] == 1 &&
+               op->op == GGML_OP_MUL_MAT && tensor == op->src[1];
     }
 
     inline static bool is_inp_mask(const ggml_tensor * tensor, const ggml_tensor * op) {
@@ -296,6 +321,10 @@ public:
         return op->op == GGML_OP_SET_ROWS && op->src[1] == tensor;
     }
 
+    bool is_swa_mask(const ggml_tensor * tensor) const {
+        return m_model_params.swa_mask != nullptr && tensor == m_model_params.swa_mask;
+    }
+
     inline static bool is_output_idx(const ggml_tensor * tensor, const ggml_tensor * op) {
         return op->op == GGML_OP_GET_ROWS && tensor == op->src[1] && op->src[0]->op != GGML_OP_NONE &&
                op->src[1]->op == GGML_OP_NONE;
@@ -308,8 +337,22 @@ public:
         if (is_inp_emb(tensor, op)) {
             return "embd";
         }
-        if (is_stateful() && is_inp_mask(tensor, op)) {
-            return std::string(tensor->name).find("swa") == std::string::npos ? "self_kq_mask" : "self_kq_mask_swa";
+        if (is_inp_mask(tensor, op)) {
+            // Give the two attention masks distinct OV parameter names.
+            //
+            // An interleaved-SWA model builds one full-attention mask and one sliding-window mask,
+            // but build_attn_inp_kq_mask() names them identically, so keying a parameter off
+            // tensor->name alone makes the second mask OVERWRITE the first in m_model_inputs: both
+            // attention types then read a single parameter, and the windowed layers silently run
+            // against an unbanded mask. Disambiguate using the SWA layer set computed in
+            // compute_llm_params(), which classifies by mask tensor identity rather than by name.
+            //
+            // When no SWA layer was found there is only one mask in play, so the plain name is
+            // correct and no _swa parameter is created.
+            if (m_model_params.swa_layers.empty()) {
+                return "self_kq_mask";
+            }
+            return is_swa_mask(tensor) ? "self_kq_mask_swa" : "self_kq_mask";
         }
         return tensor->name;
     }
@@ -335,6 +378,8 @@ private:
     std::map<std::string, std::shared_ptr<ov::Node>> m_model_weights;
     std::map<std::string, ggml_tensor *> m_model_outputs;
     std::vector<std::string> m_model_output_names;
+    // The output set the compiled model was built from, for has_same_graph_io().
+    std::set<std::string> m_built_output_names;
     std::vector<NodeInfo> m_node_info_list;
     std::map<ggml_tensor *, int> m_node_dynamic_dims;
 

@@ -15,7 +15,10 @@
 #include <string>
 
 // ExtraQuantType enum - defines requantization target formats
-enum class ExtraQuantType { F16, Q4_0_C, Q8_1_C, Q4_0_128, Q8_0_C, Q8_0_32 };
+// Q4_1_64: u4, group 64, *true* asymmetric (per-group scale and zero point). Note that
+// Q4_0_128/Q4_0_C are symmetric despite taking the unsigned branch of quantize_q4_0 -- that branch
+// pins zp to 8 with d = max/-8, which is algebraically symmetric.
+enum class ExtraQuantType { F16, Q4_0_C, Q8_1_C, Q4_0_128, Q8_0_C, Q8_0_32, Q4_1_64 };
 
 ov::Core & ov_singleton_core();
 
@@ -109,6 +112,13 @@ std::optional<ExtraQuantType> ggml_openvino_get_requant_type(const ggml_tensor *
 // They allow:
 // 1. Pre-built ov::Constant nodes for weights (avoiding memcpy during graph construction)
 // 2. ov::Tensor wrappers for KV cache / compute tensors (for direct use with infer_request)
+
+// Host weight-buffer release (GGML_OPENVINO_RELEASE_WEIGHTS, GPU only). The OV weight Constants are
+// zero-copy views into host buffers; once the GPU plugin holds its own device copy those pages can be
+// dropped. Single model per process: a graph compiled after the release would read zeros.
+void ggml_openvino_register_weight_buffer(void * data, size_t size);
+void ggml_openvino_release_weight_buffers();
+bool ggml_openvino_weight_buffers_released();
 
 // Base class for OpenVINO tensor extra data
 struct ggml_openvino_extra_base {

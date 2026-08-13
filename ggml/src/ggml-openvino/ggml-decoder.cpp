@@ -33,6 +33,24 @@
 #include <string>
 #include <vector>
 
+static std::set<std::string> collect_graph_output_names(const ggml_cgraph * cgraph) {
+    std::set<std::string> outputs;
+    for (int node_n = 0; node_n < cgraph->n_nodes; node_n++) {
+        auto * node = cgraph->nodes[node_n];
+        if (node->flags & GGML_TENSOR_FLAG_OUTPUT) {
+            outputs.insert(node->name);
+        }
+    }
+    return outputs;
+}
+
+bool GgmlOvDecoder::has_same_graph_io(const ggml_cgraph * cgraph) const {
+    if (m_built_output_names.empty()) {
+        return true;  // no snapshot (naive / test decoders): nothing to compare against
+    }
+    return collect_graph_output_names(cgraph) == m_built_output_names;
+}
+
 GgmlOvDecoder::GgmlOvDecoder(ggml_cgraph * cgraph,
                              ModelParams & model_params,
                              ComputeParams & compute_params,
@@ -62,6 +80,8 @@ GgmlOvDecoder::GgmlOvDecoder(ggml_cgraph * cgraph,
 
     validate_cgraph();
 
+    m_built_output_names = collect_graph_output_names(cgraph);
+
     set_input_output();
     compute_node_dynamic_dims();
     compute_model_inputs();
@@ -77,6 +97,7 @@ GgmlOvDecoder::GgmlOvDecoder(ggml_cgraph * cgraph,
 
 void GgmlOvDecoder::update_io(ggml_cgraph * cgraph) {
     m_cgraph = cgraph;
+    m_built_output_names = collect_graph_output_names(cgraph);
     m_model_inputs.clear();
     m_model_outputs.clear();
     m_node_info_list.clear();
@@ -369,6 +390,92 @@ std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgr
         return -1;
     };
 
+    // Resolve the attention mask an attention node consumes, mirroring the src layout that
+    // get_attention_pattern_case() classifies. Used by the SWA pre-pass below.
+    auto get_attention_op_mask = [&get_attention_pattern_case](const ggml_tensor * node) -> const ggml_tensor * {
+        switch (get_attention_pattern_case(node)) {
+        case 0:
+        case 1:
+            return node->src[3];
+        case 2:
+        case 3:
+            return node->src[1];
+        default:
+            return nullptr;
+        }
+    };
+
+    // Pre-pass: classify sliding-window vs full-attention layers.
+    //
+    // An interleaved-SWA model keeps two KV caches and two attention masks, and hands each layer
+    // whichever pair matches its attention type. The mask tensor does not say which is which: both
+    // are named "attn_inp_kq_mask" by build_attn_inp_kq_mask(), and both carry the same n_kv because
+    // llama_kv_cache::get_n_kv() pads occupancy up to a common multiple.
+    //
+    // The KV cache does say. Each cache allocates cache_k_l<N> once at load time with its own cell
+    // count: the windowed cache is sized from the window
+    // (PAD(min(size_base, n_swa*(unified ? n_seq_max : 1) + n_ubatch), 256), see
+    // llama_kv_cache_iswa), the full-attention one spans the whole context. Read the LEAF buffer
+    // behind the VIEW rather than the VIEW itself: the leaf extent is a constant per layer, known
+    // from the first graph onwards, while the view grows with context depth and would invert the
+    // comparison at shallow depth.
+    //
+    // Layers whose leaf is smaller than the largest leaf are the windowed ones. When every layer
+    // reports the same extent there is no distinction to draw -- either the model has no windowed
+    // layers, or the window is at least as large as the context so the two caches coincide, in
+    // which case a windowed layer and a full-attention one compute the same thing.
+    //
+    // Getting this wrong is silent and severe: with the windowed layers classified as
+    // full-attention, permute's KV slicing uses attention_size instead of attention_size_swa. The
+    // two agree while the context is shorter than the window, then diverge, and the mask add fails
+    // shape inference ("Failed to broadcast-merge input shapes") partway into a long prompt.
+    {
+        std::map<int, int64_t> layer_extent;                      // layer -> leaf cache_k cell count
+        std::map<int, const ggml_tensor *> layer_mask;            // layer -> mask it consumes
+        int64_t max_extent = 0;
+
+        for (int i = 0; i < cgraph->n_nodes; i++) {
+            const ggml_tensor * mask = get_attention_op_mask(cgraph->nodes[i]);
+            if (mask == nullptr) {
+                continue;
+            }
+            const ggml_tensor * cache_k_permute = nullptr;
+            switch (get_attention_pattern_case(cgraph->nodes[i])) {
+            case 0:  cache_k_permute = cgraph->nodes[i]->src[1];                     break;
+            case 1:  cache_k_permute = cgraph->nodes[i]->src[1]->src[0];             break;
+            case 2:  cache_k_permute = cgraph->nodes[i]->src[0]->src[0];             break;
+            default: cache_k_permute = cgraph->nodes[i]->src[0]->src[0]->src[0];     break;
+            }
+            const ggml_tensor * cache_k_view = cache_k_permute->src[0];
+            if (cache_k_view->op != GGML_OP_VIEW) {
+                continue;
+            }
+            const ggml_tensor * leaf = cache_k_view->src[0];
+            auto layer = extract_layer_from_name(leaf->name);
+            if (!layer.has_value()) {
+                continue;
+            }
+            layer_extent[layer.value()] = leaf->ne[1];
+            layer_mask[layer.value()] = mask;
+            max_extent = std::max(max_extent, leaf->ne[1]);
+        }
+
+        for (const auto & [layer, extent] : layer_extent) {
+            if (extent < max_extent) {
+                model_params.swa_layers.push_back(layer);
+                if (model_params.swa_mask == nullptr) {
+                    model_params.swa_mask = layer_mask[layer];
+                }
+            }
+        }
+        std::sort(model_params.swa_layers.begin(), model_params.swa_layers.end());
+
+        if (ggml_openvino_getenv_int("GGML_OPENVINO_LOG_SWA_LAYERS")) {
+            GGML_LOG_WARN("ov-swa: attn_layers=%zu max_extent=%ld swa_layers=%zu\n", layer_extent.size(),
+                          (long) max_extent, model_params.swa_layers.size());
+        }
+    }
+
     bool rope_seen = false;
     for (int i = 0; i < cgraph->n_nodes; i++) {
         auto * node = cgraph->nodes[i];
@@ -414,11 +521,13 @@ std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgr
             ggml_tensor * cache_k = cache_k_view->src[0];
             int layer = extract_layer_from_name(cache_k->name).value();
 
-            std::string mask_name(mask->name);
+            // Classified by the pre-pass above, which groups layers by mask tensor identity. The
+            // mask NAME cannot be used: build_attn_inp_kq_mask() gives both masks the same name.
+            const bool layer_is_swa = std::find(model_params.swa_layers.begin(), model_params.swa_layers.end(),
+                                                layer) != model_params.swa_layers.end();
 
             model_params.kv_buffer_ctx_id = ggml_backend_openvino_buffer_get_ctx_id(cache_k->buffer);
-            if (mask_name.find("swa") != std::string::npos) {
-                model_params.swa_layers.push_back(layer);
+            if (layer_is_swa) {
                 model_params.ctx_per_seq_swa = cache_k->ne[1];
             } else {
                 model_params.ctx_per_seq = cache_k->ne[1];
@@ -431,7 +540,7 @@ std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgr
             memcpy(&offset, cache_k_view->op_params, sizeof(size_t));
             compute_params.seq_active_start = offset / seq_size;
 
-            if (mask_name.find("swa") != std::string::npos) {
+            if (layer_is_swa) {
                 compute_params.attention_size_swa = mask->ne[0];
             } else {
                 compute_params.attention_size = mask->ne[0];
@@ -687,6 +796,30 @@ void GgmlOvDecoder::compute_model_outputs() {
         auto * cur_node = m_cgraph->nodes[node_n];
         // if the node op is NONE means this node is not used at all, we can skip it directly without adding to model outputs.
         if (cur_node->op == GGML_OP_NONE || cur_node->op == GGML_OP_VIEW || cur_node->op == GGML_OP_RESHAPE) {
+            continue;
+        }
+        // A node explicitly marked by ggml_set_output() must be a model output even when it is
+        // fully consumed inside the graph, because the host reads it back afterwards. The
+        // use-count analysis below cannot see that: it only asks whether anything still in the
+        // graph needs the value.
+        //
+        // Mid-graph taps break that assumption. A model that exposes its residual stream at a few
+        // layers (llm_graph_result marks each such tensor with ggml_set_output()) has tensors that
+        // are read by the host AND feed the next layer, so use-count logic dropped them, the OV
+        // model never produced them, and the host read an unwritten buffer -- whatever consumes
+        // those features saw zeros. This affects any consumer of a mid-graph tensor, not one
+        // particular feature.
+        if (cur_node->flags & GGML_TENSOR_FLAG_OUTPUT) {
+            // in-place ops publish their result through view_src, as in the use_count == 0 path
+            auto * flagged_node = cur_node;
+            if (flagged_node->op == GGML_OP_SET_ROWS && flagged_node->view_src != nullptr) {
+                flagged_node = flagged_node->view_src;
+            }
+            std::string flagged_name(flagged_node->name);
+            if (m_model_outputs.find(flagged_name) == m_model_outputs.end()) {
+                m_model_outputs[flagged_name] = flagged_node;
+                m_model_output_names.push_back(flagged_name);
+            }
             continue;
         }
         auto cur_node_use_count = m_cgraph->use_counts[ggml_hash_find(&m_cgraph->visited_hash_set, cur_node)];
@@ -1289,6 +1422,17 @@ const std::string & GgmlOvDecoder::get_op_type() const {
     return unknown_op;
 }
 
+namespace {
+bool is_same_shape(const ggml_tensor * a, const ggml_tensor * b) {
+    for (int i = 0; i < GGML_MAX_DIMS; i++) {
+        if (a->ne[i] != b->ne[i]) {
+            return false;
+        }
+    }
+    return true;
+}
+}  // namespace
+
 void GgmlOvDecoder::compute_node_dynamic_dims() {
     auto visit_node = [&](auto && self, ggml_tensor * node) -> void {
         if (!node) {
@@ -1325,6 +1469,10 @@ void GgmlOvDecoder::compute_node_dynamic_dims() {
                     continue;
                 }
                 if (node->op == GGML_OP_VIEW && src->op == GGML_OP_NONE && !is_stateful() && !m_model_is_splitted) {
+                    m_node_dynamic_dims[src] = 1;
+                    continue;
+                }
+                if (is_inp_embd_2d(src, node)) {
                     m_node_dynamic_dims[src] = 1;
                     continue;
                 }
@@ -1383,6 +1531,11 @@ void GgmlOvDecoder::compute_node_dynamic_dims() {
             }
             break;
         case GGML_OP_VIEW: {
+            // A VIEW that does not change the shape is a pass-through for dynamic-dim purposes.
+            if (is_same_shape(node->src[0], node)) {
+                m_node_dynamic_dims[node] = m_node_dynamic_dims[node->src[0]];
+                break;
+            }
             // Use stride-based matching: the stride of a VIEW dimension directly
             // encodes which source dimension it indexes into, so it uniquely
             // identifies the dynamic dim even when two dims share the same size.
@@ -1455,6 +1608,19 @@ void GgmlOvDecoder::compute_node_dynamic_dims() {
             }
             break;
         }
+        case GGML_OP_CONCAT:
+            // The concatenated axis is the one whose extent changed.
+            for (int i = 0; i < GGML_MAX_DIMS; i++) {
+                if (node->src[0]->ne[i] != node->ne[i]) {
+                    m_node_dynamic_dims[node] = i;
+                    break;
+                }
+            }
+            break;
+        case GGML_OP_SSM_CONV:
+        case GGML_OP_GATED_DELTA_NET:
+            m_node_dynamic_dims[node] = 1;
+            break;
         case GGML_OP_CONT:
             m_node_dynamic_dims[node] = -1;
             if (m_node_dynamic_dims[node->src[0]] != -1) {

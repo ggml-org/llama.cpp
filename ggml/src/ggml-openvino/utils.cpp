@@ -121,6 +121,12 @@ static std::optional<ov::Tensor> try_make_kv_sliced_tensor(std::shared_ptr<GgmlO
         return std::nullopt;
     }
 
+    if (ggml_tensor->data == nullptr) {
+        // unallocated input: let the caller build an owning zero tensor rather than slice a null
+        // pointer
+        return std::nullopt;
+    }
+
     ov::Shape sliced_shape = full_shape;
     sliced_shape[2] = static_cast<size_t>(n_kv);
 
@@ -159,6 +165,11 @@ ov::Tensor create_ov_output_tensor(std::shared_ptr<GgmlOvDecoder> ggml_decoder,
         output_shape = ggml_decoder->get_shape(ggml_tensor);
     }
 
+    // A graph output can also have no backing storage. Give OV an owning tensor so the infer request
+    // has somewhere to write; nothing downstream reads it.
+    if (ggml_tensor->data == nullptr) {
+        return ov::Tensor(output_type, output_shape);
+    }
     ov::Tensor output_tensor(output_type, output_shape, ggml_tensor->data);
     return output_tensor;
 }
@@ -182,9 +193,9 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, std::shared_ptr<
     std::shared_ptr<ov::InferRequest> infer_request;
     ModelParams m_params;
     ComputeParams c_params;
+    graph_key key(cgraph);
     std::tie(m_params, c_params) = GgmlOvDecoder::compute_llm_params(cgraph, is_static);
 
-    graph_key key(cgraph);
     static const bool cache_enabled = !ggml_openvino_getenv_int("GGML_OPENVINO_DISABLE_CACHE");
     bool cache_hit = false;
 
@@ -219,9 +230,20 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, std::shared_ptr<
 
         if (cache_hit) {
             ggml_decoder = entry->ptr;
+            // The cache key is only (n_nodes, first/last node name), so it cannot see a change in
+            // WHICH tensors are graph outputs -- and the compiled model's Results are fixed when it is
+            // built. A consumer that starts requesting extra outputs later (speculative decoding marks
+            // the target's per-layer residuals only once the draft is initialised) would otherwise keep
+            // reusing a model that never produces them, and the host would read unwritten buffers as
+            // zeros. Recompile when the output set differs.
             old_m_params = ggml_decoder->get_model_params();
             if (!ggml_decoder->is_splited_model()) {
                 cache_hit = old_m_params.can_reuse_dynamically(m_params);
+            }
+            // Must come AFTER can_reuse_dynamically(), which ASSIGNS to cache_hit rather than
+            // and-ing into it and would otherwise silently undo this invalidation.
+            if (cache_hit && !ggml_decoder->has_same_graph_io(cgraph)) {
+                cache_hit = false;
             }
         }
 
@@ -232,7 +254,14 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, std::shared_ptr<
             std::map<std::string, std::shared_ptr<ov::Node>> model_weights;
             ggml_decoder->set_compute_params(c_params);
             ggml_decoder->set_model_params(m_params);
-            if (old_m_params.kv_buffer_changed(m_params)) {
+            // The decoder caches a ggml_tensor* for every graph input and output, and m_cgraph
+            // itself. A cached decoder is keyed only on (n_nodes, first/last node name), so a
+            // DIFFERENT cgraph instance with the same key can hit it -- speculative decoding
+            // rebuilds its graphs every step with freshly allocated tensors. Those pointers then
+            // dangle, and walking them segfaults (get_tensor_used_op iterates m_cgraph->nodes).
+            // Refresh the IO map whenever the cgraph differs; kv_buffer_changed() alone misses
+            // this because the KV buffer is unchanged across those passes.
+            if (ggml_decoder->get_cgraph() != cgraph || old_m_params.kv_buffer_changed(m_params)) {
                 ggml_decoder->update_io(cgraph);
             }
             ggml_decoder->add_extra_inputs();
@@ -290,6 +319,19 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, std::shared_ptr<
                 std::lock_guard<std::mutex> map_lock(r_ctx->ctx_mutex);
                 r_ctx->infer_request_cache.erase(key);
             }
+            // Compiling a NEW graph after GGML_OPENVINO_RELEASE_WEIGHTS dropped the host weight
+            // pages would read those Constants as zeros and silently produce garbage. The guard in
+            // buffer_set_tensor only catches a weight set after the release; with two models
+            // (speculative decoding) both are loaded and registered BEFORE the first cache hit
+            // triggers it, so the draft model's graph would compile here instead. Fail loudly.
+            if (ggml_openvino_weight_buffers_released()) {
+                GGML_ABORT(
+                    "ggml-openvino: a new graph needs compiling after GGML_OPENVINO_RELEASE_WEIGHTS dropped the "
+                    "host weight buffers, so its weights would read as zeros. This mode supports a single model "
+                    "per process -- unset GGML_OPENVINO_RELEASE_WEIGHTS for speculative decoding and any other "
+                    "multi-model run.");
+            }
+
             bool model_is_splitted = is_model_splitted(cgraph);
 
             std::shared_ptr<ov::Model> model;
@@ -472,7 +514,14 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, std::shared_ptr<o
         ggml_decoder->m_is_prefill = is_prefill;
         ggml_decoder->set_model_params(m_params);
         ggml_decoder->set_compute_params(c_params);
-        if (old_m_params.kv_buffer_changed(m_params)) {
+        // The decoder caches a ggml_tensor* for every graph input and output, and m_cgraph
+        // itself. A cached decoder is keyed only on (n_nodes, first/last node name), so a
+        // DIFFERENT cgraph instance with the same key can hit it -- speculative decoding
+        // rebuilds its graphs every step with freshly allocated tensors. Those pointers then
+        // dangle, and walking them segfaults (get_tensor_used_op iterates m_cgraph->nodes).
+        // Refresh the IO map whenever the cgraph differs; kv_buffer_changed() alone misses
+        // this because the KV buffer is unchanged across those passes.
+        if (ggml_decoder->get_cgraph() != cgraph || old_m_params.kv_buffer_changed(m_params)) {
             ggml_decoder->update_io(cgraph);
         }
         ggml_decoder->add_extra_inputs();
@@ -622,6 +671,16 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph, std::shared_ptr<o
                 print_output_tensor_info(ov_output_names_local[i], output_tensor, output_tensor.data());
             }
         }
+    }
+
+    // GGML_OPENVINO_RELEASE_WEIGHTS: on GPU the plugin holds its own device copy of every weight
+    // after compile, so the host weight buffers can be dropped to reclaim their size in RSS. The GPU
+    // path uses one dynamic-shape model for both prefill and decode, so a compiled graph serves the
+    // whole session; release on the first cache HIT, by which point the plugin has its copy. A
+    // genuinely new graph after this point fails fast at the cache-miss branch above.
+    if (cache_hit && device == "GPU" && ggml_openvino_getenv_int("GGML_OPENVINO_RELEASE_WEIGHTS") &&
+        !ggml_openvino_weight_buffers_released()) {
+        ggml_openvino_release_weight_buffers();
     }
 
     if (ggml_openvino_getenv_int("GGML_OPENVINO_PROFILING")) {
@@ -830,6 +889,20 @@ ov::Tensor convert_ggml_input_to_ov(std::shared_ptr<GgmlOvDecoder> ggml_decoder,
         return make_contiguous_split_input_tensor(ggml_decoder, ggml_tensor, input_shape);
     }
 
+    // A graph input may legitimately be left unallocated (data == nullptr, no buffer): llama.cpp
+    // skips filling the attention mask when a graph only stores K/V without attending, which is what
+    // a speculative KV-injection pass does. Such an input is never read, but OpenVINO still requires
+    // a backing tensor for the Parameter and constructing an ov::Tensor over a null pointer asserts.
+    // Hand OV an owning zero-filled tensor; its contents cannot affect the result because no op
+    // consumes them.
+    if (input_data == nullptr) {
+        GGML_LOG_WARN("ggml-openvino: unallocated INPUT '%s' (ggml name '%s', type %s, ne=[%ld,%ld,%ld,%ld]) "
+                      "-> zero tensor\n",
+                      name.c_str(), ggml_tensor->name, ggml_type_name(ggml_tensor->type),
+                      (long) ggml_tensor->ne[0], (long) ggml_tensor->ne[1], (long) ggml_tensor->ne[2],
+                      (long) ggml_tensor->ne[3]);
+        return ov::Tensor(ggml_decoder->get_ov_type(ggml_tensor), input_shape);
+    }
     auto input_tensor = ov::Tensor(ggml_decoder->get_ov_type(ggml_tensor), input_shape, input_data);
     return input_tensor;
 }

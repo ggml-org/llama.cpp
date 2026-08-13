@@ -10,6 +10,8 @@
 #include "ggml.h"
 
 #include <atomic>
+#include <cerrno>
+#include <climits>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -32,6 +34,7 @@
 #    endif
 #    include <windows.h>
 #else
+#    include <sys/mman.h>
 #    include <unistd.h>
 #endif
 
@@ -52,6 +55,77 @@
 // - CPU repack buffer: tensor->extra stores tensor_traits with repacked data
 // =====================================================
 
+// =====================================================
+// Host weight-buffer release (GGML_OPENVINO_RELEASE_WEIGHTS)
+// =====================================================
+// The OpenVINO weight Constants are zero-copy views into the host buffers allocated here. On GPU the
+// plugin holds its own device copy after compile_model, so the host pages are dead weight for
+// inference and can be dropped to reclaim roughly the weights' size in RSS.
+//
+// The buffer is NOT freed: ggml owns its lifetime and tensors still point into it. madvise(
+// MADV_DONTNEED) drops the resident pages while keeping the mapping valid. A later recompile would
+// re-read those Constants from now-zeroed memory and silently produce garbage, so once released the
+// cache-miss compile path must fail loudly rather than run -- see the check in ov_graph_compute.
+namespace {
+struct ov_weight_buffer_registry {
+    std::mutex mutex;
+    std::vector<std::pair<void *, size_t>> buffers;
+    bool released = false;
+};
+
+ov_weight_buffer_registry & ov_weight_registry() {
+    static ov_weight_buffer_registry reg;
+    return reg;
+}
+}  // namespace
+
+void ggml_openvino_register_weight_buffer(void * data, size_t size) {
+    if (data == nullptr || size == 0) {
+        return;
+    }
+    auto & reg = ov_weight_registry();
+    std::lock_guard<std::mutex> lock(reg.mutex);
+    for (const auto & b : reg.buffers) {
+        if (b.first == data) {
+            return;  // already registered
+        }
+    }
+    reg.buffers.emplace_back(data, size);
+}
+
+bool ggml_openvino_weight_buffers_released() {
+    auto & reg = ov_weight_registry();
+    std::lock_guard<std::mutex> lock(reg.mutex);
+    return reg.released;
+}
+
+void ggml_openvino_release_weight_buffers() {
+    auto & reg = ov_weight_registry();
+    std::lock_guard<std::mutex> lock(reg.mutex);
+    if (reg.released) {
+        return;
+    }
+    size_t total = 0;
+#if !defined(_WIN32)
+    const long page = sysconf(_SC_PAGESIZE);
+    for (const auto & b : reg.buffers) {
+        // Align inwards to page boundaries so madvise only drops whole pages owned by this buffer.
+        uintptr_t start = reinterpret_cast<uintptr_t>(b.first);
+        uintptr_t end = start + b.second;
+        uintptr_t astart = (start + page - 1) & ~(uintptr_t) (page - 1);
+        uintptr_t aend = end & ~(uintptr_t) (page - 1);
+        if (aend > astart) {
+            if (madvise(reinterpret_cast<void *>(astart), aend - astart, MADV_DONTNEED) == 0) {
+                total += aend - astart;
+            }
+        }
+    }
+#endif
+    reg.released = true;
+    GGML_LOG_INFO("%s: released %zu MB of host weight buffers (%zu buffers)\n", __func__, total / 1024 / 1024,
+                  reg.buffers.size());
+}
+
 // Buffer context that manages per-tensor allocations (no contiguous buffer for weights)
 struct ggml_backend_openvino_buffer_context {
     int device;
@@ -62,6 +136,11 @@ struct ggml_backend_openvino_buffer_context {
     void * data;
     size_t size;
     bool is_remote;
+
+    // Set when the buffer is a file-backed spill mapping (GGML_OPENVINO_SPILL_DIR); it must be
+    // munmap'd rather than freed.
+    void * spill_mapping = nullptr;
+    size_t spill_size = 0;
 
     // Wrapping of the buffer
     std::shared_ptr<ov::Tensor> ov_buffer;
@@ -96,6 +175,42 @@ struct ggml_backend_openvino_buffer_context {
                 gpu_context.create_usm_device_tensor(ov::element::u8, ov::Shape{size});
             data = usm_tensor.get();
             ov_buffer = std::make_shared<ov::intel_gpu::ocl::USMTensor>(std::move(usm_tensor));
+        } else if (const char * spill_dir = ggml_openvino_getenv_str("GGML_OPENVINO_SPILL_DIR")) {
+            // Disk-backed weight buffer: back the repacked weights with a temp file via MAP_SHARED
+            // instead of anonymous memory. Anonymous pages can only be evicted to swap, so the
+            // repacked buffer stays pinned alongside the mmap'd source and both are resident at once
+            // -- that double residency is the load-time peak. File-backed pages are reclaimable: the
+            // kernel can write them back and drop them under pressure, then re-read on demand, so RSS
+            // becomes a working set rather than the whole buffer. The file is unlinked immediately,
+            // so it disappears when the process exits.
+            //
+            // The directory must be real storage. Pointing this at a tmpfs mount (/tmp on many
+            // systems) backs the "spill" with RAM and makes matters worse.
+            char path[PATH_MAX];
+            snprintf(path, sizeof(path), "%s/ggml-ov-weights-%d-XXXXXX", spill_dir, (int) getpid());
+            int fd = mkstemp(path);
+            if (fd < 0) {
+                GGML_LOG_ERROR("%s: mkstemp(%s) failed: %s\n", __func__, path, strerror(errno));
+                return;
+            }
+            unlink(path);  // anonymous-but-file-backed: freed on process exit
+            if (ftruncate(fd, (off_t) size) != 0) {
+                GGML_LOG_ERROR("%s: ftruncate(%zu) failed: %s\n", __func__, size, strerror(errno));
+                close(fd);
+                return;
+            }
+            void * m = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+            close(fd);  // the mapping keeps the file alive
+            if (m == MAP_FAILED) {
+                GGML_LOG_ERROR("%s: mmap(%zu) failed: %s\n", __func__, size, strerror(errno));
+                return;
+            }
+            data = m;
+            spill_mapping = m;
+            spill_size = size;
+            GGML_LOG_INFO("%s: weight buffer spilled to %s (%zu MB, file-backed)\n", __func__, spill_dir,
+                          size / 1024 / 1024);
+            ov_buffer = std::make_shared<ov::Tensor>(ov::element::u8, ov::Shape{size}, data);
         } else {
             data = ggml_aligned_malloc(size);
             GGML_ASSERT(data);
@@ -123,7 +238,9 @@ struct ggml_backend_openvino_buffer_context {
             delete pair.second;
         }
         tensor_extras.clear();
-        if (!is_remote && data != nullptr) {
+        if (spill_mapping != nullptr) {
+            munmap(spill_mapping, spill_size);
+        } else if (!is_remote && data != nullptr) {
             ggml_aligned_free(data, size);
         }
     }
@@ -240,6 +357,19 @@ static void ggml_backend_openvino_buffer_set_tensor(ggml_backend_buffer_t buffer
 
     if (is_weight_buffer && is_full_tensor_set && is_2d) {
         try {
+            // Register the host buffer so its pages can be dropped once the GPU plugin has its own
+            // device copy (GGML_OPENVINO_RELEASE_WEIGHTS). Weights are set once at model load, so a
+            // weight arriving AFTER a release means a second model is loading while the first
+            // model's compiled graph is pinned; that graph would be reused with this model's key.
+            if (!ctx->is_remote) {
+                if (ggml_openvino_weight_buffers_released()) {
+                    GGML_ABORT(
+                        "ggml-openvino: loading a new model while GGML_OPENVINO_RELEASE_WEIGHTS pinned a previous "
+                        "model's compiled graph. This mode supports a single model per process; unset it for "
+                        "multi-model runs.");
+                }
+                ggml_openvino_register_weight_buffer(ctx->data, ctx->size);
+            }
             auto result = process_weight_tensor(tensor, data, tensor->data);
             result.weight_node->set_friendly_name(tensor->name);
 
@@ -896,6 +1026,13 @@ static bool is_op_unsupported_case(const ggml_tensor * op) {
         if (op->ne[3] != 1) {
             return true;
         }
+        // A bf16 gather is miscomputed on GPU, not merely imprecise:
+        //   ERR = 1.949733963 > 0.000000100  GET_ROWS(type=bf16,n=256,m=5,r=4,be1=7,be2=1,v=1)
+        // Decline it so the scheduler keeps it on CPU.
+        if (op->op == GGML_OP_GET_ROWS && ggml_openvino_get_device_name() == "GPU" &&
+            op->src[0]->type == GGML_TYPE_BF16) {
+            return true;
+        }
         if (op->ne[0] == 256 && (op->src[0]->type == GGML_TYPE_Q4_K || op->src[0]->type == GGML_TYPE_Q5_K)) {
             // ERR = 0.000000306 > 0.000000100   GET_ROWS(type=q4_K,n=256,m=5,r=4,be1=1,be2=1,v=0)
             // ERR = 0.000000197 > 0.000000100   GET_ROWS(type=q5_K,n=256,m=5,r=4,be1=1,be2=1,v=0)
@@ -968,7 +1105,7 @@ static bool is_op_unsupported_case(const ggml_tensor * op) {
     }
     case GGML_OP_SOFT_MAX: {
         if (op->src[2] != nullptr) {
-            // GGML_LOG_WARN("OpenVINO backend does not support SOFT_MAX with sinks\n");
+            GGML_LOG_WARN("OpenVINO backend does not support SOFT_MAX with sinks\n");
             return true;
         }
 
@@ -1019,18 +1156,18 @@ static bool is_op_unsupported_case(const ggml_tensor * op) {
         }
 
         if (op->src[4] != nullptr) {
-            // GGML_LOG_WARN("OpenVINO backend does not support FLASH_ATTN_EXT with sinks\n");
+            GGML_LOG_WARN("OpenVINO backend does not support FLASH_ATTN_EXT with sinks\n");
             return true;
         }
         if (!is_supported_flash_attn_pattern(op)) {
             return true;
         }
         if (max_bias > 0) {
-            // GGML_LOG_WARN("OpenVINO backend does not support FLASH_ATTN_EXT with max_bias > 0\n");
+            GGML_LOG_WARN("OpenVINO backend does not support FLASH_ATTN_EXT with max_bias > 0\n");
             return true;
         }
         if (logit_softcap != 0) {
-            // GGML_LOG_WARN("OpenVINO backend does not support FLASH_ATTN_EXT with logit_softcap != 0\n");
+            GGML_LOG_WARN("OpenVINO backend does not support FLASH_ATTN_EXT with logit_softcap != 0\n");
             return true;
         }
         break;
@@ -1038,14 +1175,14 @@ static bool is_op_unsupported_case(const ggml_tensor * op) {
     case GGML_OP_PERMUTE: {
         if (op->type == GGML_TYPE_BF16) {
             // err msg: [GPU] Could not find a suitable kernel for transpose
-            // GGML_LOG_WARN("OpenVINO backend does not support PERMUTE with BF16 type\n");
+            GGML_LOG_WARN("OpenVINO backend does not support PERMUTE with BF16 type\n");
             return true;
         }
         break;
     }
     case GGML_OP_CPY: {
         if (op->src[0]->type == GGML_TYPE_BF16 || op->src[1]->type == GGML_TYPE_BF16) {
-            // GGML_LOG_WARN("OpenVINO backend does not support CPY with non-contiguous data or bf16 types\n");
+            GGML_LOG_WARN("OpenVINO backend does not support CPY with non-contiguous data or bf16 types\n");
             return true;
         }
         // op test case with non-contiguous src or dst
@@ -1091,16 +1228,16 @@ static bool is_op_unsupported_case(const ggml_tensor * op) {
         const int n_dims = op_params[1];
         const int mode = op_params[2];
         if (mode != GGML_ROPE_TYPE_NORMAL && mode != GGML_ROPE_TYPE_NEOX && mode != GGML_ROPE_TYPE_IMROPE) {
-            // GGML_LOG_WARN("OpenVINO backend does not support ROPE with mode %d\n", mode);
+            GGML_LOG_WARN("OpenVINO backend does not support ROPE with mode %d\n", mode);
             return true;
         }
         if (n_dims != 0.0f && n_dims != op->src[0]->ne[0]) {
-            // GGML_LOG_WARN("OpenVINO backend does not support ROPE with n_dims %d != src[0]->ne[0] %ld\n", n_dims,
-            //               op->src[0]->ne[0]);
+            GGML_LOG_WARN("OpenVINO backend does not support ROPE with n_dims %d != src[0]->ne[0] %ld\n", n_dims,
+                          op->src[0]->ne[0]);
             return true;
         }
         if (op->type != GGML_TYPE_F32 && op->type != GGML_TYPE_F16) {
-            // GGML_LOG_WARN("OpenVINO backend does not support ROPE with type %s\n", ggml_type_name(op->type));
+            GGML_LOG_WARN("OpenVINO backend does not support ROPE with type %s\n", ggml_type_name(op->type));
             return true;
         }
         if (op->src[0]->op == GGML_OP_VIEW) {
@@ -1115,7 +1252,7 @@ static bool is_op_unsupported_case(const ggml_tensor * op) {
         if (mode == GGML_ROPE_TYPE_IMROPE &&
             (op->src[2] != 0 || ((const float *) op_params)[6] != 1 || ((const float *) op_params)[7] != 0 ||
              ((const float *) op_params)[8] != 1)) {
-            // GGML_LOG_WARN("OpenVINO backend does not support IMROPE with freq_factors, freq_scale, ext_factor, and attn_factor\n");
+            GGML_LOG_WARN("OpenVINO backend does not support IMROPE with freq_factors, freq_scale, ext_factor, and attn_factor\n");
             return true;
         }
         break;
@@ -1123,7 +1260,7 @@ static bool is_op_unsupported_case(const ggml_tensor * op) {
     case GGML_OP_TRANSPOSE: {
         // if the type is bf16, will return true
         if (op->type == GGML_TYPE_BF16) {
-            // GGML_LOG_WARN("OpenVINO backend does not support CONT with BF16 type\n");
+            GGML_LOG_WARN("OpenVINO backend does not support CONT with BF16 type\n");
             return true;
         }
         break;
@@ -1221,7 +1358,7 @@ static bool ggml_backend_openvino_device_supports_op(ggml_backend_dev_t dev, con
     case GGML_OP_UNARY: {
         auto supported = supported_unary_ops.find(ggml_get_unary_op(op)) != supported_unary_ops.end();
         if (!supported) {
-            // GGML_LOG_WARN("OpenVINO backend does not support unary op %s\n", ggml_unary_op_name(ggml_get_unary_op(op)));
+            GGML_LOG_WARN("OpenVINO backend does not support unary op %s\n", ggml_unary_op_name(ggml_get_unary_op(op)));
             return false;
         }
         break;
@@ -1229,12 +1366,12 @@ static bool ggml_backend_openvino_device_supports_op(ggml_backend_dev_t dev, con
     case GGML_OP_GLU: {
         auto supported = supported_glu_ops.find(ggml_get_glu_op(op)) != supported_glu_ops.end();
         if (!supported) {
-            // GGML_LOG_WARN("OpenVINO backend does not support GLU op %s\n", ggml_glu_op_name(ggml_get_glu_op(op)));
+            GGML_LOG_WARN("OpenVINO backend does not support GLU op %s\n", ggml_glu_op_name(ggml_get_glu_op(op)));
             return false;
         }
         if (has_view_op_input(op)) {
-            // GGML_LOG_WARN("OpenVINO backend does not support unary op %s with view input\n",
-            //               ggml_glu_op_name(ggml_get_glu_op(op)));
+            GGML_LOG_WARN("OpenVINO backend does not support GLU op %s with view input\n",
+                          ggml_glu_op_name(ggml_get_glu_op(op)));
             return false;
         }
         if (op->src[1] == nullptr && op->src[0]->ne[0] % 2 != 0) {
@@ -1246,14 +1383,14 @@ static bool ggml_backend_openvino_device_supports_op(ggml_backend_dev_t dev, con
     default: {
         auto supported = supported_ops.find(op->op) != supported_ops.end();
         if (!supported) {
-            // GGML_LOG_WARN("OpenVINO backend does not support op %s\n", ggml_op_name(op->op));
+            GGML_LOG_WARN("OpenVINO backend does not support op %s\n", ggml_op_name(op->op));
             return false;
         }
         static std::set<ggml_op> ops_not_support_view_input{
             GGML_OP_L2_NORM,
         };
         if (ops_not_support_view_input.find(op->op) != ops_not_support_view_input.end() && has_view_op_input(op)) {
-            // GGML_LOG_WARN("OpenVINO backend does not support op %s with view input\n", ggml_op_name(op->op));
+            GGML_LOG_WARN("OpenVINO backend does not support op %s with view input\n", ggml_op_name(op->op));
             return false;
         }
         if (op->op == GGML_OP_RMS_NORM && has_non_contiguous_view_input(op)) {
@@ -1263,7 +1400,7 @@ static bool ggml_backend_openvino_device_supports_op(ggml_backend_dev_t dev, con
     }
 
     if (supported_types.find(op->type) == supported_types.end()) {
-        // GGML_LOG_WARN("OpenVINO backend does not support tensor type %s\n", ggml_type_name(op->type));
+        GGML_LOG_WARN("OpenVINO backend does not support tensor type %s\n", ggml_type_name(op->type));
         return false;
     }
     for (int i = 0; i < GGML_MAX_SRC; i++) {
@@ -1272,11 +1409,11 @@ static bool ggml_backend_openvino_device_supports_op(ggml_backend_dev_t dev, con
             break;
         }
         if (supported_types.find(src->type) == supported_types.end()) {
-            // GGML_LOG_WARN("OpenVINO backend does not support tensor type %s\n", ggml_type_name(src->type));
+            GGML_LOG_WARN("OpenVINO backend does not support tensor type %s\n", ggml_type_name(src->type));
             return false;
         }
         if (ggml_is_quantized(src->type) && src->ne[2] != 1) {
-            // GGML_LOG_WARN("OpenVINO backend does not support 3D quantized tensors\n");
+            GGML_LOG_WARN("OpenVINO backend does not support 3D quantized tensors\n");
             return false;
         }
     }
