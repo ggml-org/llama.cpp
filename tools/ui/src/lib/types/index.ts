@@ -210,6 +210,26 @@ export type { DesktopIconStripItem } from './navigation';
 // Tools types
 export type { ToolEntry, ToolGroup, ToolUiEntry } from './tools';
 
+// Skills types
+export type {
+	SkillBaseReadResult,
+	SkillCatalogEntry,
+	SkillCatalogResponse,
+	SkillDiagnostic,
+	SkillErrorResponse,
+	SkillIdentity,
+	SkillInstructionFacts,
+	SkillMetadata,
+	SkillPackOptions,
+	SkillPackedCatalog,
+	SkillPackingMode,
+	SkillReadRequest,
+	SkillReadResult,
+	SkillResourceReadResult,
+	SkillResourceSummary,
+	SkillRunSnapshot
+} from './skills';
+
 // Reasoning
 export type { ReasoningEffortLevel } from './reasoning';
 

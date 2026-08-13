@@ -21,6 +21,14 @@ export const API_TOOLS = {
 	LIST: '/tools'
 };
 
+export const API_SKILLS = {
+	LIST: '/skills',
+	READ: '/skills/read'
+};
+
+/** Direct-mode tokenizer route used by Skills catalog packing with the audited no-special-token flags. */
+export const API_TOKENIZE = '/tokenize';
+
 // resumable stream routes, the conv::model identity travels as the conv_id query param
 // because model names can contain slashes that a path segment cannot carry
 // resume retry cadence while the owning model is still loading (server answers 503)
