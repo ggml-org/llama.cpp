@@ -1527,26 +1527,76 @@ void quantize_row_q4_K_ref(const float * GGML_RESTRICT x, block_q4_K * GGML_REST
 }
 
 void dequantize_row_q4_K(const block_q4_K * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+#define Q4K_ONE() \
+    *y1 = d1 * (*q & 0xF) - m1; \
+    *y2 = d2 * (*q >> 4) - m2; \
+    ++q; ++y1; ++y2;
+// manual unroll, because compiler unrolling is different
+#define Q4K_FOUR()  Q4K_ONE() Q4K_ONE() Q4K_ONE() Q4K_ONE()
+#define Q4K_16() Q4K_FOUR() Q4K_FOUR() Q4K_FOUR() Q4K_FOUR()
+#define Q4K_32()  Q4K_16() Q4K_16()
+
+#define DEQUANTIZE_Q4_K_BLOCK(scale1_expr, min1_expr, scale2_expr, min2_expr) \
+    do { \
+        const float d1 = d * (scale1_expr); \
+        const float m1 = min * (min1_expr); \
+        const float d2 = d * (scale2_expr); \
+        const float m2 = min * (min2_expr); \
+        Q4K_32() \
+    } while (0)
+
     assert(k % QK_K == 0);
     const int nb = k / QK_K;
 
     for (int i = 0; i < nb; i++) {
-        const uint8_t * q = x[i].qs;
+        if (i + 1 < nb) {
+            const char * next = (const char *) &x[i+1];
+            __builtin_prefetch(next,       0, 1);
+            __builtin_prefetch(next + 64,  0, 1);
+            __builtin_prefetch(next + 128, 0, 1);
+        }
 
         const float d   = GGML_FP16_TO_FP32(x[i].d);
         const float min = GGML_FP16_TO_FP32(x[i].dmin);
+        const uint8_t * GGML_RESTRICT scales = x[i].scales;
 
-        int is = 0;
-        uint8_t sc, m;
-        for (int j = 0; j < QK_K; j += 64) {
-            get_scale_min_k4(is + 0, x[i].scales, &sc, &m);
-            const float d1 = d * sc; const float m1 = min * m;
-            get_scale_min_k4(is + 1, x[i].scales, &sc, &m);
-            const float d2 = d * sc; const float m2 = min * m;
-            for (int l = 0; l < 32; ++l) *y++ = d1 * (q[l] & 0xF) - m1;
-            for (int l = 0; l < 32; ++l) *y++ = d2 * (q[l]  >> 4) - m2;
-            q += 32; is += 2;
-        }
+        const uint8_t s0 = scales[0],  s1 = scales[1],  s2 = scales[2],  s3 = scales[3];
+        const uint8_t s4 = scales[4],  s5 = scales[5],  s6 = scales[6],  s7 = scales[7];
+        const uint8_t s8 = scales[8],  s9 = scales[9],  s10 = scales[10], s11 = scales[11];
+
+        const uint8_t * GGML_RESTRICT q = x[i].qs;
+        float * GGML_RESTRICT y1 = y;
+        float * GGML_RESTRICT y2 = y + 32;
+
+        // --- Block j = 0 (is = 0, 1) ---
+        DEQUANTIZE_Q4_K_BLOCK(
+            (s0 & 63), (s4 & 63),
+            (s1 & 63), (s5 & 63)
+        );
+        y1 += 32; y2 += 32;
+
+        // --- Block j = 64 (is = 2, 3) ---
+        DEQUANTIZE_Q4_K_BLOCK(
+            (s2 & 63), (s6 & 63),
+            (s3 & 63), (s7 & 63)
+        );
+        y1 += 32; y2 += 32;
+
+        // --- Block j = 128 (is = 4, 5) ---
+        // (s >> 6) << 4  ===  (s & 0xC0) >> 2
+        DEQUANTIZE_Q4_K_BLOCK(
+            ((s8 & 0xF) | ((s0 & 0xC0) >> 2)), ((s8 >> 4) | ((s4 & 0xC0) >> 2)),
+            ((s9 & 0xF) | ((s1 & 0xC0) >> 2)), ((s9 >> 4) | ((s5 & 0xC0) >> 2))
+        );
+        y1 += 32; y2 += 32;
+
+        // --- Block j = 192 (is = 6, 7) ---
+        DEQUANTIZE_Q4_K_BLOCK(
+            ((s10 & 0xF) | ((s2 & 0xC0) >> 2)), ((s10 >> 4) | ((s6 & 0xC0) >> 2)),
+            ((s11 & 0xF) | ((s3 & 0xC0) >> 2)), ((s11 >> 4) | ((s7 & 0xC0) >> 2))
+        );
+
+        y = y2;
     }
 }
 
