@@ -74,5 +74,3 @@ export {
 	gaugeCardEnter,
 	gaugeCardLeave
 } from './context-gauge-popup.svelte';
-
-export { persisted } from './persisted.svelte';
