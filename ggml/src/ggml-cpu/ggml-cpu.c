@@ -2493,6 +2493,85 @@ static thread_ret_t ggml_graph_compute_secondary_thread(void* data);
 #if defined(_WIN32)
 #include "windows.h"
 
+static void ggml_win32_detect_cores(bool * p_cores_mask, bool * e_cores_mask) {
+    memset(p_cores_mask, 0, GGML_MAX_N_THREADS * sizeof(bool));
+    memset(e_cores_mask, 0, GGML_MAX_N_THREADS * sizeof(bool));
+
+    DWORD length = 0;
+    GetLogicalProcessorInformationEx(RelationProcessorCore, NULL, &length);
+    if (GetLastError() != ERROR_INSUFFICIENT_BUFFER) {
+        return;
+    }
+
+    void * buffer = malloc(length);
+    if (!buffer) {
+        return;
+    }
+
+    if (!GetLogicalProcessorInformationEx(RelationProcessorCore, (PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX)buffer, &length)) {
+        free(buffer);
+        return;
+    }
+
+    PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX ptr = (PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX)buffer;
+    PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX endPtr = (PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX)((char*)buffer + length);
+
+    bool has_hybrid = false;
+    BYTE max_efficiency = 0;
+
+    // First pass: find if we have hybrid and what the max efficiency is
+    while (ptr < endPtr) {
+        if (ptr->Relationship == RelationProcessorCore) {
+            BYTE eff = ptr->Processor.EfficiencyClass;
+            if (eff > max_efficiency) {
+                max_efficiency = eff;
+            }
+            if (eff > 0) {
+                has_hybrid = true;
+            }
+        }
+        ptr = (PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX)((char*)ptr + ptr->Size);
+    }
+
+    if (!has_hybrid) {
+        // If not a heterogeneous system, treat all cores as P-cores
+        free(buffer);
+        return;
+    }
+
+    // Second pass: fill masks
+    ptr = (PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX)buffer;
+    while (ptr < endPtr) {
+        if (ptr->Relationship == RelationProcessorCore) {
+            BYTE eff = ptr->Processor.EfficiencyClass;
+            bool is_p_core = (eff == max_efficiency);
+
+            for (WORD g = 0; g < ptr->Processor.GroupCount; g++) {
+                if (ptr->Processor.GroupMask[g].Group == 0) {
+                    KAFFINITY mask = ptr->Processor.GroupMask[g].Mask;
+                    int lowest_bit = -1;
+                    for (int i = 0; i < 64; i++) {
+                        if ((mask >> i) & 1) {
+                            lowest_bit = i;
+                            break;
+                        }
+                    }
+                    if (lowest_bit >= 0) {
+                        if (is_p_core) {
+                            if (lowest_bit < GGML_MAX_N_THREADS) p_cores_mask[lowest_bit] = true;
+                        } else {
+                            if (lowest_bit < GGML_MAX_N_THREADS) e_cores_mask[lowest_bit] = true;
+                        }
+                    }
+                }
+            }
+        }
+        ptr = (PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX)((char*)ptr + ptr->Size);
+    }
+
+    free(buffer);
+}
+
 // TODO: support > 64 CPUs
 static bool ggml_thread_apply_affinity(bool * mask) {
     HANDLE    h = GetCurrentThread();
@@ -3294,6 +3373,35 @@ static struct ggml_threadpool * ggml_threadpool_new_impl(
         threadpool->ec               = GGML_STATUS_SUCCESS;
     }
 
+    bool cpumask[GGML_MAX_N_THREADS];
+    bool strict_cpu = tpp->strict_cpu;
+    memcpy(cpumask, tpp->cpumask, GGML_MAX_N_THREADS * sizeof(bool));
+
+#if defined(_WIN32)
+    // If no cpumask is provided, auto-detect P-cores on Windows and pin threads to them
+    if (!ggml_thread_cpumask_is_valid(cpumask)) {
+        bool p_cores_mask[GGML_MAX_N_THREADS];
+        bool e_cores_mask[GGML_MAX_N_THREADS];
+        ggml_win32_detect_cores(p_cores_mask, e_cores_mask);
+        if (ggml_thread_cpumask_is_valid(p_cores_mask)) {
+            int num_p_cores = 0;
+            for (int i = 0; i < GGML_MAX_N_THREADS; i++) {
+                if (p_cores_mask[i]) num_p_cores++;
+            }
+            if (tpp->n_threads <= num_p_cores) {
+                memcpy(cpumask, p_cores_mask, GGML_MAX_N_THREADS * sizeof(bool));
+                strict_cpu = true;
+            } else {
+                memcpy(cpumask, p_cores_mask, GGML_MAX_N_THREADS * sizeof(bool));
+                for (int i = 0; i < GGML_MAX_N_THREADS; i++) {
+                    if (e_cores_mask[i]) cpumask[i] = true;
+                }
+                strict_cpu = true;
+            }
+        }
+    }
+#endif
+
     // Allocate and init workers state
     const size_t workers_size = sizeof(struct ggml_compute_state) * tpp->n_threads;
     struct ggml_compute_state * workers = ggml_aligned_malloc(workers_size);
@@ -3311,7 +3419,7 @@ static struct ggml_threadpool * ggml_threadpool_new_impl(
 
     // Compute CPU masks for each thread
     for (int j = 0; j < tpp->n_threads; j++) {
-        ggml_thread_cpumask_next(tpp->cpumask, workers[j].cpumask, tpp->strict_cpu, &cpumask_iter);
+        ggml_thread_cpumask_next(cpumask, workers[j].cpumask, strict_cpu, &cpumask_iter);
     }
 #else // GGML_USE_OPENMP
     ggml_mutex_init(&threadpool->mutex);
@@ -3323,13 +3431,13 @@ static struct ggml_threadpool * ggml_threadpool_new_impl(
     int32_t cpumask_iter = 0;
 
     for (int j = 1; j < tpp->n_threads; j++) {
-        ggml_thread_cpumask_next(tpp->cpumask, workers[j].cpumask, tpp->strict_cpu, &cpumask_iter);
+        ggml_thread_cpumask_next(cpumask, workers[j].cpumask, strict_cpu, &cpumask_iter);
 
         int32_t rc = ggml_thread_create(&workers[j].thrd, NULL, ggml_graph_compute_secondary_thread, &workers[j]);
         GGML_ASSERT(rc == 0);
     }
 
-    ggml_thread_cpumask_next(tpp->cpumask, workers[0].cpumask, tpp->strict_cpu, &cpumask_iter);
+    ggml_thread_cpumask_next(cpumask, workers[0].cpumask, strict_cpu, &cpumask_iter);
 
     if (!threadpool->pause) {
         // Update main thread prio and affinity at the start, otherwise we'll do it in resume
