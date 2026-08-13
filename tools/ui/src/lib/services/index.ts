@@ -276,7 +276,7 @@ export { MCPService } from './mcp.service';
  * - **toolsStore**: Exposes the tool definition when the sandbox is enabled
  * - **agenticStore**: Dispatches ToolSource.FRONTEND calls here
  *
- * @see buildSandboxToolDefinition in constants/sandbox.ts - tool schema sent to the LLM
+ * @see buildSandboxToolDefinition in utils/sandbox-tool - tool schema sent to the LLM
  * @see agenticStore in stores/agentic.svelte.ts - tool dispatch
  */
 export { SandboxService } from './sandbox.service';

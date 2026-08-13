@@ -1,9 +1,9 @@
 <script lang="ts">
-	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
-	import * as AlertDialog from '$lib/components/ui/alert-dialog';
 	import { AlertTriangle, ArrowRight } from '@lucide/svelte';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
+	import * as AlertDialog from '$lib/components/ui/alert-dialog';
+	import { ICON_CLASS_DEFAULT, URL_PARAMS } from '$lib/constants';
 
 	interface Props {
 		open: boolean;
@@ -12,7 +12,7 @@
 		onOpenChange?: (open: boolean) => void;
 	}
 
-	let { open = $bindable(), modelName, availableModels = [], onOpenChange }: Props = $props();
+	let { availableModels = [], modelName, onOpenChange, open = $bindable() }: Props = $props();
 
 	function handleOpenChange(newOpen: boolean) {
 		open = newOpen;
@@ -22,7 +22,8 @@
 	function handleSelectModel(model: string) {
 		// Build URL with selected model, preserving other params
 		const url = new URL(page.url);
-		url.searchParams.set('model', model);
+
+		url.searchParams.set(URL_PARAMS.MODEL, model);
 
 		handleOpenChange(false);
 		goto(url.toString());

@@ -10,7 +10,7 @@
 		onPreview?: (code: string, language: string) => void;
 	}
 
-	let { code, language, disabled = false, onPreview }: Props = $props();
+	let { code, disabled = false, language, onPreview }: Props = $props();
 
 	const showPreview = $derived(language?.toLowerCase() === FileTypeText.HTML);
 </script>

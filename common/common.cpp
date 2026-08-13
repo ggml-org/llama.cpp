@@ -998,24 +998,42 @@ bool fs_is_directory(const std::string & path) {
     return std::filesystem::exists(dir) && std::filesystem::is_directory(dir);
 }
 
+std::string common_get_env(const std::string & name) {
+    const char * value = std::getenv(name.c_str());
+    return value == nullptr ? "" : value;
+}
+
+void common_set_env(const std::string & name, const std::string & value) {
+#if defined(_WIN32)
+    _putenv_s(name.c_str(), value.c_str());
+#else
+    if (value.empty()) {
+        unsetenv(name.c_str());
+    } else {
+        setenv(name.c_str(), value.c_str(), 1);
+    }
+#endif
+}
+
 std::string fs_get_cache_directory() {
     std::string cache_directory = "";
     auto ensure_trailing_slash = [](std::string p) {
         // Make sure to add trailing slash
-        if (p.back() != DIRECTORY_SEPARATOR) {
+        if (p.empty() || p.back() != DIRECTORY_SEPARATOR) {
             p += DIRECTORY_SEPARATOR;
         }
         return p;
     };
-    if (getenv("LLAMA_CACHE")) {
-        cache_directory = std::getenv("LLAMA_CACHE");
-    } else {
+    cache_directory = common_get_env("LLAMA_CACHE");
+    if (cache_directory.empty()) {
 #if defined(__linux__) || defined(__FreeBSD__) || defined(_AIX) || \
         defined(__OpenBSD__) || defined(__NetBSD__)
-        if (std::getenv("XDG_CACHE_HOME")) {
-            cache_directory = std::getenv("XDG_CACHE_HOME");
-        } else if (std::getenv("HOME")) {
-            cache_directory = std::getenv("HOME") + std::string("/.cache/");
+        const std::string xdg_cache_home = common_get_env("XDG_CACHE_HOME");
+        const std::string home           = common_get_env("HOME");
+        if (!xdg_cache_home.empty()) {
+            cache_directory = xdg_cache_home;
+        } else if (!home.empty()) {
+            cache_directory = home + "/.cache/";
         } else {
 #if defined(__linux__)
             /* no $HOME is defined, fallback to getpwuid */
@@ -1030,9 +1048,16 @@ std::string fs_get_cache_directory() {
 #endif /* defined(__linux__) */
         }
 #elif defined(__APPLE__)
-        cache_directory = std::getenv("HOME") + std::string("/Library/Caches/");
+        cache_directory = common_get_env("HOME");
+        if (cache_directory.empty()) {
+            throw std::runtime_error("Failed to find $HOME directory");
+        }
+        cache_directory += "/Library/Caches/";
 #elif defined(_WIN32)
-        cache_directory = std::getenv("LOCALAPPDATA");
+        cache_directory = common_get_env("LOCALAPPDATA");
+        if (cache_directory.empty()) {
+            throw std::runtime_error("Failed to find %LOCALAPPDATA% directory");
+        }
 #elif defined(__EMSCRIPTEN__)
         GGML_ABORT("not implemented on this platform");
 #else
@@ -1042,6 +1067,51 @@ std::string fs_get_cache_directory() {
         cache_directory += "llama.cpp";
     }
     return ensure_trailing_slash(cache_directory);
+}
+
+std::string fs_get_config_directory() {
+    std::string config_directory = "";
+    auto ensure_trailing_slash = [](std::string p) {
+        if (p.empty() || p.back() != DIRECTORY_SEPARATOR) {
+            p += DIRECTORY_SEPARATOR;
+        }
+        return p;
+    };
+#if defined(__linux__) || defined(__FreeBSD__) || defined(_AIX) || \
+        defined(__OpenBSD__) || defined(__NetBSD__) || defined(__APPLE__)
+    const std::string xdg_config_home = common_get_env("XDG_CONFIG_HOME");
+    const std::string home            = common_get_env("HOME");
+    if (!xdg_config_home.empty()) {
+        config_directory = xdg_config_home;
+    } else if (!home.empty()) {
+        config_directory = home + "/.config/";
+    } else {
+#if defined(__linux__)
+        /* no $HOME is defined, fallback to getpwuid */
+        struct passwd *pw = getpwuid(getuid());
+        if ((!pw) || (!pw->pw_dir)) {
+            throw std::runtime_error("Failed to find $HOME directory");
+        }
+
+        config_directory = std::string(pw->pw_dir) + std::string("/.config/");
+#else
+        throw std::runtime_error("Failed to find $HOME directory");
+#endif
+    }
+#elif defined(_WIN32)
+    config_directory = common_get_env("APPDATA");
+    if (config_directory.empty()) {
+        throw std::runtime_error("Failed to find %APPDATA% directory");
+    }
+#elif defined(__EMSCRIPTEN__)
+    // caller decides what to do when there is no config directory
+    throw std::runtime_error("not implemented on this platform");
+#else
+#  error Unknown architecture
+#endif
+    config_directory = ensure_trailing_slash(config_directory);
+    config_directory += "llama.cpp";
+    return ensure_trailing_slash(config_directory);
 }
 
 std::string fs_get_cache_file(const std::string & filename) {
@@ -1285,16 +1355,6 @@ common_init_result::common_init_result(common_params & params, bool model_only) 
                 params.sampling.logit_bias_eog.begin(), params.sampling.logit_bias_eog.end());
     }
 
-    //if (params.sampling.penalty_last_n == -1) {
-    //    LOG_TRC("%s: setting penalty_last_n to ctx_size = %d\n", __func__, llama_n_ctx(lctx));
-    //    params.sampling.penalty_last_n = llama_n_ctx(lctx);
-    //}
-
-    //if (params.sampling.dry_penalty_last_n == -1) {
-    //    LOG_TRC("%s: setting dry_penalty_last_n to ctx_size = %d\n", __func__, llama_n_ctx(lctx));
-    //    params.sampling.dry_penalty_last_n = llama_n_ctx(lctx);
-    //}
-
     // init the backend samplers as part of the context creation
     pimpl->samplers.resize(cparams.n_seq_max);
     pimpl->samplers_seq_config.resize(cparams.n_seq_max);
@@ -1462,18 +1522,18 @@ common_init_result_ptr common_init_from_params(common_params & params, bool mode
 common_init_result::~common_init_result() = default;
 
 std::string common_get_model_endpoint() {
-    const char * model_endpoint_env = getenv("MODEL_ENDPOINT");
-    // We still respect the use of environment-variable "HF_ENDPOINT" for backward-compatibility.
-    const char * hf_endpoint_env = getenv("HF_ENDPOINT");
-    const char * endpoint_env = model_endpoint_env ? model_endpoint_env : hf_endpoint_env;
-    std::string model_endpoint = "https://huggingface.co/";
-    if (endpoint_env) {
-        model_endpoint = endpoint_env;
-        if (model_endpoint.back() != '/') {
-            model_endpoint += '/';
-        }
+    std::string endpoint = common_get_env("MODEL_ENDPOINT");
+    if (endpoint.empty()) {
+        // the HF_ENDPOINT variable is respected for backward compatibility
+        endpoint = common_get_env("HF_ENDPOINT");
     }
-    return model_endpoint;
+    if (endpoint.empty()) {
+        return "https://huggingface.co/";
+    }
+    if (endpoint.back() != '/') {
+        endpoint += '/';
+    }
+    return endpoint;
 }
 
 char * common_get_model_or_exit(int argc, char * argv[]) {
@@ -1632,6 +1692,7 @@ struct llama_context_params common_context_params_to_llama(const common_params &
     cparams.n_seq_max         = params.n_parallel;
     cparams.n_rs_seq          = params.speculative.need_n_rs_seq();
     cparams.n_outputs_max     = std::max(params.n_outputs_max, 0);
+    cparams.n_outputs_max_per_seq = std::max(params.n_outputs_max_per_seq, 0);
     cparams.n_batch           = params.n_batch;
     cparams.n_ubatch          = params.n_ubatch;
     cparams.n_threads         = params.cpuparams.n_threads;
