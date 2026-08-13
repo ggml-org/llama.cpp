@@ -19,6 +19,7 @@
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 //
 // llama_context
@@ -3794,6 +3795,102 @@ float * llama_get_embeddings_layer_inp(llama_context * ctx, uint32_t lid) {
     ctx->synchronize();
 
     return ctx->get_embeddings_layer_inp(lid);
+}
+
+bool llama_prefill_probe_pool(
+        llama_context * ctx,
+        uint32_t        layer,
+        int32_t         token_start,
+        int32_t         token_end,
+        int32_t         pooling,
+        const float *   projection,
+        int32_t         output_dim,
+        const float *   logistic_weights,
+        float *         output_vector,
+        llama_prefill_probe_result * result) {
+    if (!ctx || !output_vector || !result || token_start < 0 || token_end <= token_start) {
+        return false;
+    }
+
+    const int32_t hidden_dim = (int32_t) ctx->get_model().hparams.n_embd;
+    const bool projected = projection != nullptr && output_dim > 0;
+    const int32_t actual_output_dim = projected ? output_dim : hidden_dim;
+
+    *result = {};
+    result->layer = layer;
+    result->token_start = token_start;
+    result->token_end = token_end;
+    result->pooling = pooling;
+    result->hidden_dim = hidden_dim;
+    result->output_dim = actual_output_dim;
+    result->projected = projected;
+    result->scored = logistic_weights != nullptr;
+    result->source_row_start = token_start;
+    result->source_row_end = token_end;
+
+    const int64_t sync_start_us = ggml_time_us();
+    ctx->synchronize();
+    result->synchronize_seconds = double(ggml_time_us() - sync_start_us) / 1000000.0;
+
+    const float * data = ctx->get_embeddings_layer_inp(layer);
+    if (!data) {
+        return false;
+    }
+
+    std::vector<float> pooled((size_t) hidden_dim, pooling == LLAMA_PREFILL_PROBE_POOLING_MAX ? -std::numeric_limits<float>::infinity() : 0.0f);
+    const int64_t pool_start_us = ggml_time_us();
+    const int32_t count = token_end - token_start;
+    for (int32_t row = token_start; row < token_end; ++row) {
+        const float * src = data + int64_t(row) * hidden_dim;
+        if (pooling == LLAMA_PREFILL_PROBE_POOLING_FINAL) {
+            if (row == token_end - 1) {
+                std::memcpy(pooled.data(), src, (size_t) hidden_dim * sizeof(float));
+            }
+        } else if (pooling == LLAMA_PREFILL_PROBE_POOLING_MAX) {
+            for (int32_t col = 0; col < hidden_dim; ++col) {
+                pooled[col] = std::max(pooled[col], src[col]);
+            }
+        } else {
+            for (int32_t col = 0; col < hidden_dim; ++col) {
+                pooled[col] += src[col];
+            }
+        }
+    }
+    if (pooling != LLAMA_PREFILL_PROBE_POOLING_FINAL && pooling != LLAMA_PREFILL_PROBE_POOLING_MAX) {
+        const float inv_count = 1.0f / float(count);
+        for (float & value : pooled) {
+            value *= inv_count;
+        }
+    }
+    result->pooling_seconds = double(ggml_time_us() - pool_start_us) / 1000000.0;
+
+    const int64_t proj_start_us = ggml_time_us();
+    if (projected) {
+        for (int32_t out = 0; out < output_dim; ++out) {
+            const float * weights = projection + int64_t(out) * hidden_dim;
+            double acc = 0.0;
+            for (int32_t col = 0; col < hidden_dim; ++col) {
+                acc += double(weights[col]) * double(pooled[col]);
+            }
+            output_vector[out] = float(acc);
+        }
+    } else {
+        std::memcpy(output_vector, pooled.data(), (size_t) hidden_dim * sizeof(float));
+    }
+    result->projection_seconds = double(ggml_time_us() - proj_start_us) / 1000000.0;
+
+    if (logistic_weights) {
+        const int64_t score_start_us = ggml_time_us();
+        double logit = double(logistic_weights[actual_output_dim]);
+        for (int32_t idx = 0; idx < actual_output_dim; ++idx) {
+            logit += double(logistic_weights[idx]) * double(output_vector[idx]);
+        }
+        result->score = float(1.0 / (1.0 + std::exp(-logit)));
+        result->scoring_seconds = double(ggml_time_us() - score_start_us) / 1000000.0;
+    }
+
+    result->copied_bytes = (uint64_t) count * (uint64_t) hidden_dim * sizeof(float);
+    return true;
 }
 
 bool llama_set_sampler(llama_context * ctx, llama_seq_id seq_id, llama_sampler * smpl) {

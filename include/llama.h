@@ -1050,6 +1050,56 @@ extern "C" {
     // otherwise: float[n_embd] (1-dimensional)
     LLAMA_API float * llama_get_embeddings_seq(struct llama_context * ctx, llama_seq_id seq_id);
 
+    // Experimental: enable extraction of the input hidden state for transformer layer `lid`.
+    // This is intended for research probes and is disabled in normal inference.
+    LLAMA_API void llama_set_embeddings_layer_inp(struct llama_context * ctx, uint32_t lid, bool value);
+
+    // Experimental: get selected-layer input hidden states from the last decode.
+    // Shape is [n_tokens, n_embd] for the active decode buffer.
+    LLAMA_API float * llama_get_embeddings_layer_inp(struct llama_context * ctx, uint32_t lid);
+
+    enum llama_prefill_probe_pooling {
+        LLAMA_PREFILL_PROBE_POOLING_MEAN  = 0,
+        LLAMA_PREFILL_PROBE_POOLING_FINAL = 1,
+        LLAMA_PREFILL_PROBE_POOLING_MAX   = 2,
+    };
+
+    struct llama_prefill_probe_result {
+        uint32_t layer;
+        int32_t  token_start;
+        int32_t  token_end;
+        int32_t  pooling;
+        int32_t  hidden_dim;
+        int32_t  output_dim;
+        bool     projected;
+        bool     scored;
+        float    score;
+        double   synchronize_seconds;
+        double   pooling_seconds;
+        double   projection_seconds;
+        double   scoring_seconds;
+        bool     windowed_capture;
+        int32_t  source_row_start;
+        int32_t  source_row_end;
+        uint64_t copied_bytes;
+    };
+
+    // Experimental: compact selected-layer prompt hidden states inside llama.cpp.
+    // The layer input buffer must have been enabled with llama_set_embeddings_layer_inp()
+    // before decode/eval. This pools rows [token_start, token_end) and optionally applies
+    // a row-major projection matrix [output_dim, n_embd].
+    LLAMA_API bool llama_prefill_probe_pool(
+            struct llama_context * ctx,
+                     uint32_t   layer,
+                      int32_t   token_start,
+                      int32_t   token_end,
+                      int32_t   pooling,
+                const float   * projection,
+                      int32_t   output_dim,
+                const float   * logistic_weights,
+                      float   * output_vector,
+            struct llama_prefill_probe_result * result);
+
     //
     // backend sampling API [EXPERIMENTAL]
     // note: use only if the llama_context was created with at least one llama_sampler_seq_config
