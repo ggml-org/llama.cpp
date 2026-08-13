@@ -28,7 +28,6 @@
 	import {
 		chatStore,
 		conversationsStore,
-		mcpResourceStore,
 		mcpStore,
 		modelsStore,
 		serverStore,
@@ -595,7 +594,7 @@
 				{useRichInput}
 			/>
 
-			{#if mcpResourceStore.hasAttachments}
+			{#if mcpStore.resources.hasAttachments}
 				<ChatFormMcpResourcesList
 					class="mb-3"
 					onResourceClick={(uri) => {

@@ -97,6 +97,11 @@ class MCPStore {
 		return serverStore.props?.cors_proxy_enabled ?? false;
 	}
 
+	/** Resource state, composed here so consumers have a single MCP scope. */
+	get resources() {
+		return mcpResourceStore;
+	}
+
 	/**
 	 * Generates a unique server ID from an optional ID string or index.
 	 */
