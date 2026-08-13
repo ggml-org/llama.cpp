@@ -59,6 +59,15 @@ Llama UI supports two server operation modes:
 - **Modality validation** - Prevents sending images to non-vision models
 - **LRU unloading** - Server auto-manages model cache
 
+### Agent Skills (requires `llama-server --skills`)
+
+- **Read-only catalog** - Browse the server's discovered skills per working directory (name, description, scope, provider, instruction facts, resource count, diagnostics)
+- **Budget control** - `maxSkillBudget` (default 2000) limits how much of the catalog is packed into each run's prompt; zero injects no skill content
+- **Exact/estimated counts** - Skill instruction sizes are labeled exact or estimated depending on whether the server can tokenize directly
+- **`/skills` command** - `/skills` opens the catalog; `/skills <name>` reads and activates a skill by name
+- **Model consent** - First model access to a skill pauses for explicit approval; allow persists durable per-conversation activation, deny records nothing
+- **Durable activation** - Approved skills survive reload and conversation export/import; a changed working directory can require a fresh approval
+
 ### Keyboard Shortcuts
 
 | Shortcut           | Action               |
@@ -124,6 +133,7 @@ proxy: {
 	'/props': SERVER_ORIGIN,
 	'/models': SERVER_ORIGIN,
 	'/tools': SERVER_ORIGIN,
+	'/skills': SERVER_ORIGIN,
 	'/slots': SERVER_ORIGIN,
 	'/cors-proxy': SERVER_ORIGIN
 },
@@ -451,6 +461,7 @@ sequenceDiagram
 | Conversations | CRUD, branching, import/export             | [`conversations-flow.md`](docs/flows/conversations-flow.md) |
 | Database      | IndexedDB schema, operations               | [`database-flow.md`](docs/flows/database-flow.md)           |
 | Settings      | Parameter sync, user overrides             | [`settings-flow.md`](docs/flows/settings-flow.md)           |
+| Skills        | Catalog, budget, consent, activation       | [`skills-flow.md`](docs/flows/skills-flow.md)               |
 
 ---
 

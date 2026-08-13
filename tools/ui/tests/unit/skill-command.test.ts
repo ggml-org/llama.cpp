@@ -1,5 +1,5 @@
 import { getChatCommands } from '$lib/utils';
-import { ChatFormCommandAction } from '$lib/enums';
+import { AttachmentType, ChatFormCommandAction } from '$lib/enums';
 import { activateSkillByName } from '$lib/services/skill-command.service';
 import { skillActivationStore } from '$lib/stores/skill-activation.svelte';
 import { SkillsService } from '$lib/services/skills.service';
@@ -19,12 +19,15 @@ vi.mock('$lib/stores/skill-activation.svelte', () => ({
 
 const mockRead = vi.mocked(SkillsService.read);
 const mockRecordActivation = vi.mocked(skillActivationStore.recordActivation);
+const mockLoadConversation = vi.mocked(skillActivationStore.loadConversation);
 
 function baseResult(name: string): SkillBaseReadResult {
 	return {
 		kind: 'skill',
 		skill: { id: `opaque-${name}`, name, scope: 'project', provider: 'agents' },
 		resources: { paths: [], truncated: false },
+		source: `---\nname: ${name}\n---\n# Body`,
+		body_markdown: '# Body',
 		content_xml: `<skill_content name="${name}">body</skill_content>`,
 		diagnostics: []
 	};
@@ -34,8 +37,8 @@ beforeEach(() => {
 	vi.clearAllMocks();
 	mockRecordActivation.mockResolvedValue({
 		created: true,
-		extra: { type: 'SKILL', kind: 'base', state: 'approved', name: 'demo-skill', scope: 'project', provider: 'agents', skillId: 'opaque-demo-skill' },
-		toolResultMessage: { id: 'tool-result-1' }
+		extra: { type: AttachmentType.SKILL, kind: 'base', state: 'approved', name: 'demo-skill', scope: 'project', provider: 'agents', skillId: 'opaque-demo-skill' },
+		toolResultMessage: null
 	});
 });
 
@@ -82,6 +85,17 @@ describe('activateSkillByName (explicit /skills <name>)', () => {
 		});
 	});
 
+	it('reconstructs the durable activation cache before recording so reloads dedupe', async () => {
+		mockRead.mockResolvedValue(baseResult('demo-skill'));
+
+		await activateSkillByName('conv-1', 'demo-skill');
+
+		expect(mockLoadConversation).toHaveBeenCalledWith('conv-1');
+		expect(mockLoadConversation.mock.invocationCallOrder[0]).toBeLessThan(
+			mockRecordActivation.mock.invocationCallOrder[0]
+		);
+	});
+
 	it('persists nothing when the base read is unavailable or fails', async () => {
 		mockRead.mockRejectedValue(new Error('skills disabled'));
 
@@ -89,6 +103,7 @@ describe('activateSkillByName (explicit /skills <name>)', () => {
 
 		expect(outcome).toEqual({ ok: false, reason: 'unavailable' });
 		expect(mockRecordActivation).not.toHaveBeenCalled();
+		expect(mockLoadConversation).not.toHaveBeenCalled();
 	});
 
 	it('persists nothing when the resolved read is not a base skill result', async () => {
@@ -104,5 +119,6 @@ describe('activateSkillByName (explicit /skills <name>)', () => {
 
 		expect(outcome).toEqual({ ok: false, reason: 'not-found' });
 		expect(mockRecordActivation).not.toHaveBeenCalled();
+		expect(mockLoadConversation).not.toHaveBeenCalled();
 	});
 });
