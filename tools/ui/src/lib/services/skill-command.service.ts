@@ -36,6 +36,13 @@ export async function activateSkillByName(
 		return { ok: false, reason: 'not-found' };
 	}
 
+	// Reconstruct the conversation's durable activations from persisted
+	// messages before recording, so a repeated `/skills <name>` after a
+	// reload reports "already activated" instead of persisting a duplicate
+	// synthetic pair. (The agentic path primes this cache at run start;
+	// the explicit command path must do the same.)
+	await skillActivationStore.loadConversation(conversationId);
+
 	const record = await skillActivationStore.recordActivation({
 		conversationId,
 		cwd: options.cwd,
