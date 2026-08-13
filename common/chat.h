@@ -260,9 +260,9 @@ struct common_chat_templates_inputs {
     bool                                  parallel_tool_calls = false;
     common_reasoning_format               reasoning_format    = COMMON_REASONING_FORMAT_NONE; // TODO: refactor this to "bool enable_thinking"
     bool                                  enable_thinking     = true;
+    std::string                           reasoning_effort;
     std::chrono::system_clock::time_point now                 = std::chrono::system_clock::now();
     std::map<std::string, std::string>    chat_template_kwargs;
-    std::string                           reasoning_effort;
     bool                                  add_bos = false;
     bool                                  add_eos = false;
     bool                                  force_pure_content = false;
