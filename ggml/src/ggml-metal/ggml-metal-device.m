@@ -1407,6 +1407,7 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
                            case GGML_TYPE_Q5_0:
                            case GGML_TYPE_Q5_1:
                            case GGML_TYPE_IQ4_NL:
+                           case GGML_TYPE_TQ2_0:
                            case GGML_TYPE_I32:
                                 return true;
                            default:
@@ -1435,6 +1436,7 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
                     case GGML_TYPE_Q5_0:
                     case GGML_TYPE_Q5_1:
                     case GGML_TYPE_Q8_0:
+                    case GGML_TYPE_TQ2_0:
                         switch (op->type) {
                             case GGML_TYPE_F32:
                             case GGML_TYPE_F16:
@@ -1470,6 +1472,7 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
                     case GGML_TYPE_Q5_0:
                     case GGML_TYPE_Q5_1:
                     case GGML_TYPE_IQ4_NL:
+                    case GGML_TYPE_TQ2_0:
                         return true;
                     default:
                         return false;
