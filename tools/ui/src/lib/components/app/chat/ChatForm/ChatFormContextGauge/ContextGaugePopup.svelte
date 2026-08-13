@@ -1,15 +1,10 @@
 <script lang="ts">
-	import { formatParameters } from '$lib/utils/formatters';
-	import { useContextGauge } from '$lib/hooks/use-context-gauge.svelte';
+	import { colorLevelBgClass, colorLevelTextClass } from './context-gauge';
 	import ContextGaugeDetails from './ContextGaugeDetails.svelte';
 	import ContextGaugeLoadModel from './ContextGaugeLoadModel.svelte';
-	import { colorLevelBgClass, colorLevelTextClass } from './context-gauge';
-	import {
-		gaugePopup,
-		gaugeCardEnter,
-		gaugeCardLeave,
-		gaugePopupClose
-	} from '$lib/stores/context-gauge-popup.svelte';
+	import { useContextGauge } from '$lib/hooks/use-context-gauge.svelte';
+	import { gaugeCardEnter, gaugeCardLeave, gaugePopup, gaugePopupClose } from '$lib/stores';
+	import { formatParameters } from '$lib/utils/formatters';
 
 	const gauge = useContextGauge();
 
@@ -30,13 +25,18 @@
 
 		const onPointerDown = (event: PointerEvent) => {
 			const target = event.target;
+
 			if (!(target instanceof Node)) return;
+
 			if (cardEl?.contains(target)) return;
+
 			if (target instanceof Element && target.closest('[data-context-gauge-trigger]')) return;
+
 			gaugePopupClose();
 		};
 
 		document.addEventListener('pointerdown', onPointerDown, true);
+
 		return () => document.removeEventListener('pointerdown', onPointerDown, true);
 	});
 
@@ -87,7 +87,7 @@
 						<span class={colorLevelTextClass(gauge.colorLevel)}>{gauge.contextPercent}%</span> used
 					</span>
 					<span>
-						{formatParameters((gauge.contextTotal ?? 0) - gauge.contextUsed)} remaining
+						{formatParameters(gauge.contextAvailable ?? 0)} remaining
 					</span>
 				</div>
 			{:else}

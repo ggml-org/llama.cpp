@@ -89,7 +89,7 @@ int llama_server(int argc, char ** argv) {
     std::setlocale(LC_NUMERIC, "C");
 
 #ifndef _WIN32
-    // Ignore SIGPIPE so the server does not crash if an MCP child exits while we are writing to its stdin
+    // Ignore SIGPIPE so the server does not crash if a child (MCP server, tools runtime) exits while we are writing to its stdin
     signal(SIGPIPE, SIG_IGN);
 #endif
 
@@ -338,7 +338,7 @@ int llama_server(common_params & params, int argc, char ** argv) {
 
     if (!params.server_tools.empty() || !mcp_mgr.empty()) {
         try {
-            tools.setup(params.server_tools, mcp_mgr);
+            tools.setup(params.server_tools, mcp_mgr, params.server_tools_runtime);
         } catch (const std::exception & e) {
             SRV_ERR("tools setup failed: %s\n", e.what());
             return 1;
@@ -347,6 +347,9 @@ int llama_server(common_params & params, int argc, char ** argv) {
         ctx_http.post("/tools",           ex_wrapper(tools.handle_post));
         if (!params.server_tools.empty()) {
             warn_names.push_back("built-in tools (experimental)");
+        }
+        if (!params.server_tools_runtime.empty()) {
+            warn_names.push_back("tools runtime (experimental)");
         }
         if (!mcp_mgr.empty()) {
             warn_names.push_back("MCP servers (experimental)");
@@ -485,6 +488,13 @@ int llama_server(common_params & params, int argc, char ** argv) {
     }
 
     SRV_INF("listening on %s\n", ctx_http.listening_address.c_str());
+
+    // TODO: remove this in the future
+    // check the string to also handle the .sock case
+    if (string_ends_with(ctx_http.listening_address, ":8080")) {
+        SRV_WRN("%s", "NOTICE: server default port will be changed to :9931 in a future release\n");
+        SRV_WRN("%s", "        ref: https://github.com/ggml-org/llama.cpp/pull/26508\n");
+    }
 
     if (is_router_server) {
         if (!params.models_preset_hf.empty()) {

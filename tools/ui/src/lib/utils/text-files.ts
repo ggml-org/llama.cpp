@@ -4,8 +4,8 @@
  */
 
 import { DEFAULT_BINARY_DETECTION_OPTIONS } from '$lib/constants';
-import type { BinaryDetectionOptions } from '$lib/types';
 import { FileExtensionText } from '$lib/enums';
+import type { BinaryDetectionOptions } from '$lib/types';
 
 /**
  * Check if a filename indicates a text file based on its extension

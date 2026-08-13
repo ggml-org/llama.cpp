@@ -1,9 +1,9 @@
 <script lang="ts">
-	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
-	import { Settings, ChevronLeft, ChevronRight } from '@lucide/svelte';
-	import { onMount, tick } from 'svelte';
-	import type { SettingsSection, SettingsSectionTitle } from '$lib/types';
+	import { ChevronLeft, ChevronRight, Settings } from '@lucide/svelte';
+	import { ICON_CLASS_DEFAULT } from '$lib/constants';
 	import { useScrollCarousel } from '$lib/hooks/use-scroll-carousel.svelte';
+	import type { SettingsSection, SettingsSectionTitle } from '$lib/types';
+	import { onMount, tick } from 'svelte';
 
 	interface Props {
 		sections: SettingsSection[];
@@ -12,14 +12,16 @@
 		onSectionChange?: (section: SettingsSectionTitle) => void;
 	}
 
-	let { sections, isActive, getHref, onSectionChange }: Props = $props();
+	let { getHref, isActive, onSectionChange, sections }: Props = $props();
 
 	const carousel = useScrollCarousel();
 
 	onMount(async () => {
 		await tick();
+
 		if (carousel.scrollContainer) {
 			const activeTab = carousel.scrollContainer.querySelector('[data-active="true"]');
+
 			if (activeTab instanceof HTMLElement) {
 				carousel.scrollToCenter(activeTab);
 			}

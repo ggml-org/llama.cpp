@@ -665,7 +665,18 @@ class Gemma4Model(Gemma3Model):
         swa_layers = [t == "sliding_attention" for t in self.hparams["layer_types"]]
         self.gguf_writer.add_sliding_window_pattern(swa_layers)
 
-        head_dim_full = self.hparams["global_head_dim"]
+        per_layer_config = self.hparams.get("per_layer_config")
+        layer_types = self.hparams.get("layer_types", [])
+        if (head_dim_full := self.hparams.get("global_head_dim")) is None and per_layer_config is not None:
+            for layer_idx, layer_config in per_layer_config.items():
+                layer_idx = int(layer_idx)
+                if layer_idx < len(layer_types):
+                    if layer_types[layer_idx] == "full_attention" and "head_dim" in layer_config:
+                        head_dim_full = layer_config["head_dim"]
+                        break
+
+        assert head_dim_full is not None
+
         head_dim_swa = self.hparams["head_dim"]
         # correct the head dim for global/swa layers
         self.gguf_writer.add_key_length(head_dim_full)
@@ -685,8 +696,14 @@ class Gemma4Model(Gemma3Model):
             n_ff_arr = [n_ff if il < first_kv_shared_layer_idx else n_ff * 2 for il in range(self.block_count)]
             self.gguf_writer.add_feed_forward_length(n_ff_arr)
 
-        # handle num_global_key_value_heads
-        num_key_value_heads_full = self.hparams.get("num_global_key_value_heads")
+        if (num_key_value_heads_full := self.hparams.get("num_global_key_value_heads")) is None and per_layer_config is not None:
+            for layer_idx, layer_config in per_layer_config.items():
+                layer_idx = int(layer_idx)
+                if layer_idx < len(layer_types):
+                    if layer_types[layer_idx] == "full_attention" and "num_key_value_heads" in layer_config:
+                        num_key_value_heads_full = layer_config["num_key_value_heads"]
+                        break
+
         num_key_value_heads_swa = self.hparams.get("num_key_value_heads")
         if num_key_value_heads_full is not None and num_key_value_heads_swa is not None:
             value_arr = [num_key_value_heads_swa if is_swa else num_key_value_heads_full for is_swa in swa_layers]
@@ -708,7 +725,19 @@ class Gemma4Model(Gemma3Model):
         # IMPORTANT: this ROPE_FREQS tensor is ONLY used by the full_attention layers
         rope_params_full = self.hparams["rope_parameters"]["full_attention"]
         assert rope_params_full["rope_type"] == "proportional"
-        head_dim_full = (self.hparams["global_head_dim"])
+
+        per_layer_config = self.hparams.get("per_layer_config")
+        if (head_dim_full := self.hparams.get("global_head_dim")) is None and per_layer_config is not None:
+            layer_types = self.hparams.get("layer_types", [])
+            for layer_idx, layer_config in per_layer_config.items():
+                layer_idx = int(layer_idx)
+                if layer_idx < len(layer_types):
+                    if layer_types[layer_idx] == "full_attention" and "head_dim" in layer_config:
+                        head_dim_full = layer_config["head_dim"]
+                        break
+
+        assert head_dim_full is not None
+
         partial_rotary_factor_full = rope_params_full["partial_rotary_factor"]
         n_rot_full = int(head_dim_full * partial_rotary_factor_full / 2)
         n_unrot_full = int(head_dim_full / 2) - n_rot_full

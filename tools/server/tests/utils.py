@@ -86,6 +86,7 @@ class ServerProcess:
     server_reranking: bool | None = False
     server_metrics: bool | None = False
     kv_unified: bool | None = False
+    swa_full: bool | None = False
     server_slots: bool | None = False
     pooling: str | None = None
     api_key: str | None = None
@@ -106,6 +107,7 @@ class ServerProcess:
     chat_template_file: str | None = None
     server_path: str | None = None
     mmproj_url: str | None = None
+    no_mmproj: bool | None = None
     media_path: str | None = None
     sleep_idle_seconds: int | None = None
     cache_ram: int | None = None
@@ -115,6 +117,7 @@ class ServerProcess:
     backend_sampling: bool = False
     gcp_compat: bool = False
     server_tools: str | None = None
+    server_tools_runtime: str | None = None
     mcp_servers_config: str | None = None
     mcp_servers_json: str | None = None
     cors_origins: str | None = None
@@ -132,7 +135,10 @@ class ServerProcess:
         self.external_server = "DEBUG_EXTERNAL" in os.environ
 
     def start(self, timeout_seconds: int = DEFAULT_HTTP_TIMEOUT) -> None:
-        env = {**os.environ}
+        env = {
+            **os.environ,
+            "LLAMA_SERVER_DEBUG_FAKE_TIMING": "1",
+        }
         if "LLAMA_CACHE" not in os.environ:
             env["LLAMA_CACHE"] = "tmp"
         if self.external_server:
@@ -194,6 +200,8 @@ class ServerProcess:
             server_args.append("--metrics")
         if self.kv_unified:
             server_args.append("--kv-unified")
+        if self.swa_full:
+            server_args.append("--swa-full")
         if self.server_slots:
             server_args.append("--slots")
         else:
@@ -255,6 +263,8 @@ class ServerProcess:
             server_args.extend(["--chat-template-file", self.chat_template_file])
         if self.mmproj_url:
             server_args.extend(["--mmproj-url", self.mmproj_url])
+        if self.no_mmproj:
+            server_args.append("--no-mmproj")
         if self.media_path:
             server_args.extend(["--media-path", self.media_path])
         if self.sleep_idle_seconds is not None:
@@ -267,6 +277,8 @@ class ServerProcess:
             server_args.append("--ui-mcp-proxy")
         if self.server_tools:
             server_args.extend(["--tools", self.server_tools])
+        if self.server_tools_runtime:
+            server_args.extend(["--tools-runtime", self.server_tools_runtime])
         if self.mcp_servers_config:
             server_args.extend(["--mcp-servers-config", self.mcp_servers_config])
         if self.mcp_servers_json:
@@ -303,6 +315,7 @@ class ServerProcess:
 
         # wait for server to start
         start_time = time.time()
+        last_print_time = start_time
         while time.time() - start_time < timeout_seconds:
             try:
                 response = self.make_request("GET", "/health", headers={
@@ -317,8 +330,10 @@ class ServerProcess:
             if self.process.poll() is not None:
                 raise RuntimeError(f"Server process died with return code {self.process.returncode}")
 
-            print(f"Waiting for server to start...")
-            time.sleep(0.5)
+            if time.time() - last_print_time >= 1.0:
+                print(f"Waiting for server to start...")
+                last_print_time = time.time()
+            time.sleep(0.01)
         raise TimeoutError(f"Server did not start within {timeout_seconds} seconds")
 
     def stop(self) -> None:
