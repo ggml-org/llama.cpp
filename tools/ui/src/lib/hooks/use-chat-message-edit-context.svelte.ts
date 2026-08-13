@@ -1,15 +1,15 @@
-import { setMessageEditContext } from '$lib/contexts';
+import { setChatMessageEditContext } from '$lib/contexts';
 import { MessageRole } from '$lib/enums';
 import { parseFilesToMessageExtras } from '$lib/utils/convert-files-to-extra';
 
-interface UseMessageEditContextOptions {
+interface UseChatMessageEditContextOptions {
 	getContent: () => string;
 	getExtras: () => DatabaseMessageExtra[];
 	showSaveOnlyOption?: boolean;
 	onSave: (content: string, extras?: DatabaseMessageExtra[]) => void;
 }
 
-export function useMessageEditContext(options: UseMessageEditContextOptions) {
+export function useChatMessageEditContext(options: UseChatMessageEditContextOptions) {
 	let isEditing = $state(false);
 	let editedContent = $state('');
 	let editedExtras = $state<DatabaseMessageExtra[]>([]);
@@ -45,7 +45,7 @@ export function useMessageEditContext(options: UseMessageEditContextOptions) {
 		isEditing = false;
 	}
 
-	setMessageEditContext({
+	setChatMessageEditContext({
 		cancel: handleCancelEdit,
 		get editedContent() {
 			return editedContent;

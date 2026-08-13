@@ -9,8 +9,8 @@
 	} from '$lib/components/app';
 	import { AgenticSectionType, ChatMessageStatsView, ToolPermissionDecision } from '$lib/enums';
 	import { agenticStore, settingsStore } from '$lib/stores';
-	import type { AgenticSection } from '$lib/types';
 	import type {
+		AgenticSection,
 		ChatMessageAgenticTimings,
 		ChatMessageAgenticTurnStats,
 		DatabaseMessage

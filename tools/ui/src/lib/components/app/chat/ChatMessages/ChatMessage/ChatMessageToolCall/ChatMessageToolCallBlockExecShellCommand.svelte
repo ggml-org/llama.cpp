@@ -13,8 +13,7 @@
 	import { SETTINGS_KEYS, TOOL_RUNTIME_SCROLL_AT_BOTTOM_THRESHOLD_PX } from '$lib/constants';
 	import { AttachmentType } from '$lib/enums';
 	import { settingsStore, toolsStore } from '$lib/stores';
-	import type { AgenticSection, ToolResultLine } from '$lib/types';
-	import type { DatabaseMessageExtra } from '$lib/types';
+	import type { AgenticSection, DatabaseMessageExtra, ToolResultLine } from '$lib/types';
 	import {
 		abbreviateHome,
 		type ExecShellExitStatus,

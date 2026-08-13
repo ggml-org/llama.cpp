@@ -32,8 +32,8 @@ import type {
 	ApiRouterModelsStatusResponse,
 	ApiRouterModelsUnloadRequest,
 	ApiRouterModelsUnloadResponse,
-	// Chat types
 	ChatAttachmentDisplayItem,
+	// Chat types
 	ChatMessagePromptProgress,
 	ChatMessageSiblingInfo,
 	ChatMessageTimings,

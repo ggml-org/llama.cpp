@@ -1,6 +1,7 @@
 <script module lang="ts">
 	import { defineMeta } from '@storybook/addon-svelte-csf';
 	import ChatMessage from '$lib/components/app/chat/ChatMessages/ChatMessage/ChatMessage.svelte';
+	import type { ChatMessageActions } from '$lib/types';
 
 	const { Story } = defineMeta({
 		component: ChatMessage,
@@ -9,6 +10,18 @@
 		},
 		title: 'Components/ChatScreen/ChatMessage'
 	});
+
+	const chatActions: ChatMessageActions = {
+		continueAssistantMessage: () => {},
+		copy: () => {},
+		delete: () => {},
+		editUserMessagePreserveResponses: () => {},
+		editWithBranching: () => {},
+		editWithReplacement: () => {},
+		forkConversation: () => {},
+		navigateToSibling: () => {},
+		regenerateWithBranching: () => {}
+	};
 
 	// Mock messages for different scenarios
 	const userMessage: DatabaseMessage = {
@@ -190,7 +203,7 @@
 	}}
 >
 	<div class="w-[56rem]">
-		<ChatMessage message={streamingMessage} />
+		<ChatMessage message={streamingMessage} {chatActions} />
 	</div>
 </Story>
 

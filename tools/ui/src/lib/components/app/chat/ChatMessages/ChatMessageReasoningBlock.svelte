@@ -4,8 +4,7 @@
 	import { REASONING_SCROLL_AT_BOTTOM_THRESHOLD_PX } from '$lib/constants';
 	import { AgenticSectionType } from '$lib/enums';
 	import { settingsStore } from '$lib/stores';
-	import type { DatabaseMessageExtra } from '$lib/types';
-	import type { AgenticSection } from '$lib/types';
+	import type { AgenticSection, DatabaseMessageExtra } from '$lib/types';
 
 	interface Props {
 		section: AgenticSection;

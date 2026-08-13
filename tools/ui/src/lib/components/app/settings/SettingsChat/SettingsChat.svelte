@@ -17,7 +17,6 @@
 		SETTINGS_CHAT_SECTIONS,
 		SETTINGS_SECTION_TITLES
 	} from '$lib/constants';
-	import { setChatSettingsConfigContext } from '$lib/contexts';
 	import { ColorMode } from '$lib/enums/ui.enums';
 	import { RouterService } from '$lib/services/router.service';
 	import { modelsStore, serverStore, settingsReferrer, settingsStore } from '$lib/stores';
@@ -122,14 +121,6 @@
 	export function reset() {
 		localConfig = { ...settingsStore.config };
 	}
-
-	setChatSettingsConfigContext({
-		handleConfigChange,
-		handleThemeChange,
-		get localConfig() {
-			return localConfig;
-		}
-	});
 </script>
 
 <div class="mx-auto flex h-full w-full flex-col md:pl-8" in:fade={{ duration: 150 }}>
