@@ -7,10 +7,8 @@ import {
 	MERMAID_BLOCK_CLASS,
 	MERMAID_SYNTAX_ATTR,
 	MERMAID_WRAPPER_CLASS,
-	COPY_CODE_BTN_CLASS,
-	DOWNLOAD_CODE_BTN_CLASS,
-	PREVIEW_CODE_BTN_CLASS,
-	CODE_BLOCK_CODE_DATA_ATTR
+	CODE_BLOCK_CLASS,
+	CODE_BLOCK_ATTR
 } from '$lib/constants';
 
 import {
@@ -56,7 +54,7 @@ export function createHandleCopyClick() {
 
 		if (!wrapper) return;
 
-		const codeElement = wrapper.querySelector<HTMLElement>(`code[${CODE_BLOCK_CODE_DATA_ATTR}]`);
+		const codeElement = wrapper.querySelector<HTMLElement>(`code[${CODE_BLOCK_ATTR.CODE_ID}]`);
 
 		if (!codeElement) return;
 
@@ -102,7 +100,7 @@ export function createHandlePreviewClick(previewState: PreviewState) {
 
 		if (!wrapper) return;
 
-		const codeElement = wrapper.querySelector<HTMLElement>(`code[${CODE_BLOCK_CODE_DATA_ATTR}]`);
+		const codeElement = wrapper.querySelector<HTMLElement>(`code[${CODE_BLOCK_ATTR.CODE_ID}]`);
 
 		if (!codeElement) return;
 
@@ -124,8 +122,8 @@ export function createHandleMermaidClick(mermaidState: MermaidPreviewState) {
 	return async function handleMermaidClick(event: MouseEvent) {
 		const target = event.target as HTMLElement;
 		// Check if clicking on copy or preview button in mermaid block
-		const copyBtn = target.closest(`.${MERMAID_WRAPPER_CLASS} .${COPY_CODE_BTN_CLASS}`);
-		const previewBtn = target.closest(`.${MERMAID_WRAPPER_CLASS} .${PREVIEW_CODE_BTN_CLASS}`);
+		const copyBtn = target.closest(`.${MERMAID_WRAPPER_CLASS} .${CODE_BLOCK_CLASS.COPY_BTN}`);
+		const previewBtn = target.closest(`.${MERMAID_WRAPPER_CLASS} .${CODE_BLOCK_CLASS.PREVIEW_BTN}`);
 
 		if (copyBtn || previewBtn) {
 			const wrapper = target.closest(`.${MERMAID_WRAPPER_CLASS}`);
@@ -258,8 +256,8 @@ export function createSetupCodeBlockActions(
 		const wrappers = containerRef.querySelectorAll<HTMLElement>('.code-block-wrapper');
 
 		for (const wrapper of wrappers) {
-			const copyButton = wrapper.querySelector<HTMLButtonElement>(`.${COPY_CODE_BTN_CLASS}`);
-			const previewButton = wrapper.querySelector<HTMLButtonElement>(`.${PREVIEW_CODE_BTN_CLASS}`);
+			const copyButton = wrapper.querySelector<HTMLButtonElement>(`.${CODE_BLOCK_CLASS.COPY_BTN}`);
+			const previewButton = wrapper.querySelector<HTMLButtonElement>(`.${CODE_BLOCK_CLASS.PREVIEW_BTN}`);
 
 			if (copyButton && copyButton.dataset.listenerBound !== 'true') {
 				copyButton.dataset.listenerBound = 'true';

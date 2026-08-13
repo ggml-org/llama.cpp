@@ -320,11 +320,11 @@
 			while (curr && curr !== containerRef && prevTexts.length < 3) {
 				if (curr.previousElementSibling) {
 					curr = curr.previousElementSibling as HTMLElement;
-					
+
 					// Break immediately if we encounter a preceding code block
 					if (
-						curr.classList.contains('code-block-wrapper') || 
-						curr.querySelector('.code-block-wrapper') || 
+						curr.classList.contains('code-block-wrapper') ||
+						curr.querySelector('.code-block-wrapper') ||
 						curr.tagName === 'PRE'
 					) break;
 
@@ -348,7 +348,7 @@
 				while ((match = boundaryRegex.exec(text)) !== null) {
 					// Extract matched string from whatever capture group matched
 					const innerText = match[1] || match[2] || match[3] || match[4] || match[5];
-					
+
 					if (!innerText || !innerText.includes('.')) continue;
 
 					// If we found an extension mapped to the code block type, the boundary string MUST end with it

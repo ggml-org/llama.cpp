@@ -65,9 +65,9 @@ export const CODE_BLOCK_ATTR = {
 
 /** Language sensitive texts */
 export const CODE_BLOCK_TEXT = {
-	COPY_BTN_TITLE = 'Copy code',
-	DOWNLOAD_BTN_TITLE = 'Download file',
-	PREVIEW_TITLE = 'Preview code'
+	COPY_BTN_TITLE: 'Copy code',
+	DOWNLOAD_BTN_TITLE: 'Download file',
+	PREVIEW_TITLE: 'Preview code'
 } as const;
 
 /** Markdown code block type name to file extension mapping */

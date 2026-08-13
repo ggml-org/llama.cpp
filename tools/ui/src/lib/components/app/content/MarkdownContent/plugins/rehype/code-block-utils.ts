@@ -7,7 +7,6 @@ import {
 	CODE_BLOCK_CLASS,
 	CODE_ICON_SVG,
 	COPY_ICON_SVG,
-	DOWNLOAD_CODE_BTN_CLASS,
 	DOWNLOAD_ICON_SVG,
 	DIAGRAM_SOURCE_CLASS,
 	PREVIEW_ICON_SVG,
@@ -68,7 +67,7 @@ export function createCopyButton(id: string, idAttribute: string, title: string 
  * Creates a download button element.
  */
 export function createDownloadButton(id: string, idAttribute: string, title: string = 'Download'): Element {
-	return createButton(DOWNLOAD_CODE_BTN_CLASS, title, DOWNLOAD_ICON_SVG, id, idAttribute);
+	return createButton(CODE_BLOCK_CLASS.DOWNLOAD_BTN, title, DOWNLOAD_ICON_SVG, id, idAttribute);
 }
 
 /**
