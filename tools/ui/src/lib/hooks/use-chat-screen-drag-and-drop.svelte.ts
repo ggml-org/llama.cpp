@@ -7,7 +7,7 @@
  * caller's onDrop callback.
  */
 
-import { getAddFilesHandler, isEditing } from '$lib/stores/chat.svelte';
+import { chatStore } from '$lib/stores';
 
 interface UseChatScreenDragAndDropOptions {
 	/** Called when the user drops files and no message is being edited. */
@@ -49,8 +49,8 @@ export function useChatScreenDragAndDrop(options: UseChatScreenDragAndDropOption
 
 		const files = Array.from(event.dataTransfer.files);
 
-		if (isEditing()) {
-			const handler = getAddFilesHandler();
+		if (chatStore.isEditing()) {
+			const handler = chatStore.getAddFilesHandler();
 
 			if (handler) {
 				handler(files);

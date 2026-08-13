@@ -3110,6 +3110,17 @@ size_t llama_context::state_seq_load_file(llama_seq_id seq_id, const char * file
     {
         const uint32_t n_token_count = file.read_u32();
 
+        if (tokens_out == nullptr) {
+            const size_t n_token_max = (file.size() - file.tell()) / sizeof(llama_token);
+            if (n_token_count > n_token_max) {
+                LLAMA_LOG_ERROR("%s: token count in sequence state file exceeds the file size! %u > %zu\n", __func__, n_token_count, n_token_max);
+                return 0;
+            }
+
+            *n_token_count_out = n_token_count;
+            return file.tell();
+        }
+
         if (n_token_count > n_token_capacity) {
             LLAMA_LOG_ERROR("%s: token count in sequence state file exceeded capacity! %u > %zu\n", __func__, n_token_count, n_token_capacity);
             return 0;

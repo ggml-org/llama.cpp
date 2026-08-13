@@ -3942,6 +3942,7 @@ static void ggml_backend_webgpu_device_get_props(ggml_backend_dev_t dev, struct 
         /* .host_buffer           = */ false,
         /* .buffer_from_host_ptr  = */ false,
         /* .events                = */ false,
+        /* .mmap_support          = */ true,
     };
 }
 
@@ -4283,9 +4284,8 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
             break;
         case GGML_OP_CPY:
         case GGML_OP_CONT:
-            supports_op = ((op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16) &&
-                           (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16)) ||
-                          (op->type == GGML_TYPE_I32 && src0->type == GGML_TYPE_F32);
+            supports_op = (op->type == GGML_TYPE_F16 || op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_I32) &&
+                          (src0->type == GGML_TYPE_F16 || src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_I32);
             break;
         case GGML_OP_SET:
             supports_op = src0->type == src1->type && src0->type == op->type &&

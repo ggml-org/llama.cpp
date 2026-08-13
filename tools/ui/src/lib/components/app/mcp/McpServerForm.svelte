@@ -2,15 +2,9 @@
 	import { KeyValuePairs } from '$lib/components/app';
 	import { Input } from '$lib/components/ui/input';
 	import { Switch } from '$lib/components/ui/switch';
-	import {
-		AUTHORIZATION_HEADER,
-		BEARER_PREFIX,
-		CLI_FLAGS,
-		MCP_SERVER_URL_PLACEHOLDER,
-		REDACTED_HEADERS
-	} from '$lib/constants';
+	import { CLI_FLAGS, HEADERS, MCP_SERVER_URL_PLACEHOLDER } from '$lib/constants';
 	import { UrlProtocol } from '$lib/enums';
-	import { mcpStore } from '$lib/stores/mcp.svelte';
+	import { mcpStore } from '$lib/stores';
 	import type { KeyValuePair } from '$lib/types';
 	import { parseHeadersToArray, serializeHeaders } from '$lib/utils';
 
@@ -72,10 +66,10 @@
 	// carry a Bearer scheme. Anything else (e.g. Basic, raw tokens) stays in the
 	// KV section so the user can still edit those values verbatim.
 	const matchesAuthorizationKey = (key: string): boolean =>
-		REDACTED_HEADERS.has(key.trim().toLowerCase());
+		HEADERS.REDACTED.has(key.trim().toLowerCase());
 
 	const isBearerScheme = (value: string): boolean =>
-		value.trim().toLowerCase().startsWith(BEARER_PREFIX.toLowerCase());
+		value.trim().toLowerCase().startsWith(HEADERS.BEARER.toLowerCase());
 
 	const ownedByBearerUi = (p: KeyValuePair): boolean =>
 		matchesAuthorizationKey(p.key) && isBearerScheme(p.value);
@@ -102,7 +96,7 @@
 
 		if (!auth) return '';
 
-		return auth.value.trim().slice(BEARER_PREFIX.length).trim();
+		return auth.value.trim().slice(HEADERS.BEARER.length).trim();
 	});
 
 	$effect(() => {
@@ -125,7 +119,7 @@
 		const trimmed = token.trim();
 
 		if (trimmed) {
-			filtered.push({ key: AUTHORIZATION_HEADER, value: `${BEARER_PREFIX}${trimmed}` });
+			filtered.push({ key: HEADERS.AUTHORIZATION, value: `${HEADERS.BEARER}${trimmed}` });
 		}
 
 		updateHeaderPairs(filtered);

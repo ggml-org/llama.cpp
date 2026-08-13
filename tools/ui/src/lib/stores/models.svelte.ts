@@ -2,8 +2,7 @@ import { base } from '$app/paths';
 import {
 	API_MODELS,
 	FAVORITE_MODELS_LOCALSTORAGE_KEY,
-	MODEL_PROPS_CACHE_MAX_ENTRIES,
-	MODEL_PROPS_CACHE_TTL_MS,
+	MODEL_PROPS_CACHE,
 	SSE_DATA_PREFIX,
 	SSE_LINE_SEPARATOR,
 	SSE_RECORD_SEPARATOR
@@ -16,9 +15,13 @@ import {
 } from '$lib/enums';
 import { ModelsService } from '$lib/services/models.service';
 import { PropsService } from '$lib/services/props.service';
+// direct imports between stores, not via the barrel, to avoid circular deps
 import { conversationsStore } from '$lib/stores/conversations.svelte';
-import { isRouterMode, serverStore } from '$lib/stores/server.svelte';
-import { getAuthHeaders, TTLCache } from '$lib/utils';
+import { serverStore } from '$lib/stores/server.svelte';
+// deep imports, not the '$lib/utils' barrel: it re-exports modules that reach back
+// into the stores, and going through it here would read a half-built module
+import { getAuthHeaders } from '$lib/utils/api-headers';
+import { TTLCache } from '$lib/utils/cache-ttl';
 import {
 	detectThinkingSupport,
 	detectThinkingSupportWithReason
@@ -81,8 +84,8 @@ class ModelsStore {
 	 * TTL: 10 minutes — props don't change frequently.
 	 */
 	private modelPropsCache = new TTLCache<string, ApiLlamaCppServerProps>({
-		maxEntries: MODEL_PROPS_CACHE_MAX_ENTRIES,
-		ttlMs: MODEL_PROPS_CACHE_TTL_MS
+		maxEntries: MODEL_PROPS_CACHE.MAX_ENTRIES,
+		ttlMs: MODEL_PROPS_CACHE.TTL_MS
 	});
 	private modelPropsFetching = $state<Set<string>>(new Set());
 
@@ -127,7 +130,7 @@ class ModelsStore {
 	 * In ROUTER mode, returns null (model is per-conversation).
 	 */
 	get singleModelName(): string | null {
-		if (isRouterMode()) return null;
+		if (serverStore.isRouterMode) return null;
 
 		const props = serverStore.props;
 
@@ -153,7 +156,7 @@ class ModelsStore {
 	 */
 
 	getModelModalities(modelId: string): ModelModalities | null {
-		if (!isRouterMode() && serverStore.props?.modalities) {
+		if (!serverStore.isRouterMode && serverStore.props?.modalities) {
 			return this.buildModalities(serverStore.props.modalities);
 		}
 
@@ -265,7 +268,7 @@ class ModelsStore {
 	 *   triggering an async fetch if not yet cached
 	 */
 	get supportsThinking(): boolean {
-		if (!isRouterMode()) {
+		if (!serverStore.isRouterMode) {
 			return detectThinkingSupport(serverStore.props?.chat_template ?? '');
 		}
 
@@ -288,7 +291,7 @@ class ModelsStore {
 	 * In ROUTER mode, fetches model props if not cached.
 	 */
 	checkModelSupportsThinking(modelId: string): boolean {
-		if (!isRouterMode()) {
+		if (!serverStore.isRouterMode) {
 			return detectThinkingSupport(serverStore.props?.chat_template ?? '');
 		}
 
@@ -307,7 +310,7 @@ class ModelsStore {
 	 * Detailed thinking support detection result with reason for debugging/UI.
 	 */
 	get thinkingSupportDetails(): { supported: boolean; reason: string } {
-		if (!isRouterMode()) {
+		if (!serverStore.isRouterMode) {
 			return detectThinkingSupportWithReason(serverStore.props?.chat_template ?? '');
 		}
 
@@ -360,7 +363,7 @@ class ModelsStore {
 				await serverStore.fetch();
 			}
 
-			const router = isRouterMode();
+			const router = serverStore.isRouterMode;
 
 			if (router) {
 				const response = await ModelsService.listRouter();
@@ -432,7 +435,7 @@ class ModelsStore {
 	 * Kept for API compatibility (e.g. handleOpenChange dropdown open handler).
 	 */
 	async fetchRouterModels(): Promise<void> {
-		if (!isRouterMode()) return;
+		if (!serverStore.isRouterMode) return;
 
 		try {
 			const response = await ModelsService.listRouter();
@@ -724,7 +727,7 @@ class ModelsStore {
 	subscribeStatus(): void {
 		if (this.statusReaderActive) return;
 
-		if (!isRouterMode()) return;
+		if (!serverStore.isRouterMode) return;
 
 		this.statusReaderActive = true;
 		this.statusAbort = new AbortController();
@@ -1117,22 +1120,3 @@ class ModelsStore {
 }
 
 export const modelsStore = new ModelsStore();
-
-export const modelOptions = () => modelsStore.models;
-export const routerModels = () => modelsStore.routerModels;
-export const modelsLoading = () => modelsStore.loading;
-export const modelsUpdating = () => modelsStore.updating;
-export const modelsError = () => modelsStore.error;
-export const selectedModelId = () => modelsStore.selectedModelId;
-export const selectedModelName = () => modelsStore.selectedModelName;
-export const selectedModelOption = () => modelsStore.selectedModel;
-export const loadedModelIds = () => modelsStore.loadedModelIds;
-export const loadingModelIds = () => modelsStore.loadingModelIds;
-export const propsCacheVersion = () => modelsStore.propsCacheVersion;
-export const singleModelName = () => modelsStore.singleModelName;
-export const selectedModelContextSize = () => modelsStore.selectedModelContextSize;
-export const favoriteModelIds = () => modelsStore.favoriteModelIds;
-export const supportsThinking = () => modelsStore.supportsThinking;
-export const checkModelSupportsThinking = (modelId: string) =>
-	modelsStore.checkModelSupportsThinking(modelId);
-export const thinkingSupportDetails = () => modelsStore.thinkingSupportDetails;

@@ -141,6 +141,20 @@ struct clip_hparams {
     int32_t rvq_num_quantizers = 0;
     std::vector<int32_t> rvq_codebook_size; // per-quantizer bin count (ragged, e.g. 1024/1024/256/128x17)
 
+    // threshold for the "out_eos_score" graph output
+    float gen_eos_threshold = 0.0f;
+
+    // name of the weight variant, some pipelines tune themselves on it
+    std::string gen_model_variant;
+
+    // pocket-tts
+    static constexpr int32_t pockettts_max_spk_seconds = 30;
+    int32_t seanet_n_stage    = 0;
+    std::vector<int32_t> seanet_ratios; // encoder order (reversed compared to the config)
+    int32_t mimi_downsample   = 0;      // encoder frame rate / model frame rate
+    int32_t mimi_tfm_context  = 0;      // attention window of the mimi transformers, in frames
+    int32_t flow_n_step       = 1;      // lsd_decode steps
+
     // qwen3tts code2wav
     int32_t wav_tfm_n_layer      = 0;
     int32_t wav_tfm_n_embd       = 0;
@@ -400,6 +414,63 @@ struct qf_block {
     ggml_tensor * qf_proj_post_norm_b = nullptr;
     ggml_tensor * qf_proj_img_pos     = nullptr; // Vision only
     std::vector<clip_layer> qf_proj_layers;
+};
+
+// pocket-tts SEANet stack, used in both directions:
+// encoder = conv_in -> per stage (residual unit, strided conv) -> conv_out
+// decoder = conv_in -> per stage (strided convtr, residual unit) -> conv_out
+struct clip_seanet {
+    // one residual unit: ELU -> dilated conv -> ELU -> pointwise conv, added to the input
+    struct stage {
+        ggml_tensor * res_conv1_w = nullptr;
+        ggml_tensor * res_conv1_b = nullptr;
+        ggml_tensor * res_conv2_w = nullptr;
+        ggml_tensor * res_conv2_b = nullptr;
+        ggml_tensor * scale_conv_w = nullptr; // strided conv (encoder) or convtr (decoder)
+        ggml_tensor * scale_conv_b = nullptr;
+    };
+
+    ggml_tensor * conv_in_w  = nullptr;
+    ggml_tensor * conv_in_b  = nullptr;
+    ggml_tensor * conv_out_w = nullptr;
+    ggml_tensor * conv_out_b = nullptr;
+    std::vector<stage> stages;
+};
+
+// pocket-tts flow-matching decoder (SimpleMLPAdaLN)
+struct clip_flow_net {
+    // AdaLN res block: in_ln -> modulate -> Linear -> SiLU -> Linear, gated residual
+    struct block {
+        ggml_tensor * norm_w = nullptr;
+        ggml_tensor * norm_b = nullptr;
+        ggml_tensor * up_w   = nullptr;
+        ggml_tensor * up_b   = nullptr;
+        ggml_tensor * down_w = nullptr;
+        ggml_tensor * down_b = nullptr;
+        ggml_tensor * ada_w  = nullptr; // -> shift, scale, gate
+        ggml_tensor * ada_b  = nullptr;
+    };
+
+    // timestep embedder: cos/sin(t * freqs) -> Linear -> SiLU -> Linear -> RMSNorm
+    struct time_embd {
+        ggml_tensor * freqs  = nullptr;
+        ggml_tensor * up_w   = nullptr;
+        ggml_tensor * up_b   = nullptr;
+        ggml_tensor * down_w = nullptr;
+        ggml_tensor * down_b = nullptr;
+        ggml_tensor * norm   = nullptr; // RMSNorm alpha
+    };
+
+    ggml_tensor * input_proj_w = nullptr;
+    ggml_tensor * input_proj_b = nullptr;
+    ggml_tensor * cond_embd_w  = nullptr;
+    ggml_tensor * cond_embd_b  = nullptr;
+    ggml_tensor * final_ada_w  = nullptr; // -> shift, scale
+    ggml_tensor * final_ada_b  = nullptr;
+    ggml_tensor * final_proj_w = nullptr;
+    ggml_tensor * final_proj_b = nullptr;
+    std::vector<time_embd> time;
+    std::vector<block> blocks;
 };
 
 // qwen3tts code2wav: RVQ codes -> raw PCM
@@ -698,6 +769,24 @@ struct clip_model {
 
     // qwen3tts code2wav: RVQ codes -> raw PCM
     clip_code2wav c2w;
+
+    // pocket-tts: SEANet stack, shared by the encoder (speaker path) and the decoder (gen path)
+    clip_seanet seanet;
+
+    // pocket-tts: voice latent -> backbone embd (speaker path)
+    ggml_tensor * spk_proj_w      = nullptr;
+    ggml_tensor * downsample_w    = nullptr;
+
+    // pocket-tts: flow-matching decoder, backbone hidden state -> next latent
+    clip_flow_net flow;
+    ggml_tensor * gen_out_eos_w   = nullptr;
+    ggml_tensor * gen_out_eos_b   = nullptr;
+    ggml_tensor * gen_input_lin_w = nullptr; // latent -> backbone embd
+    ggml_tensor * gen_emb_mean    = nullptr;
+    ggml_tensor * gen_emb_std     = nullptr;
+    ggml_tensor * gen_quant_out_w = nullptr; // latent -> decoder dim
+    ggml_tensor * gen_upsample_w  = nullptr; // depthwise convtr, frame rate -> encoder frame rate
+    std::vector<clip_layer> gen_tfm_layers; // mimi decoder_transformer
 
     // cogvlm
     ggml_tensor * mm_post_fc_norm_w = nullptr;

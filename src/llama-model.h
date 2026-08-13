@@ -623,8 +623,9 @@ struct llama_model {
     struct ggml_tensor * per_layer_model_proj = nullptr;
     struct ggml_tensor * per_layer_proj_norm  = nullptr;
 
-    // eagle3
-    struct ggml_tensor * fc  = nullptr;  // feature fusion layer
+    // eagle3 / dflash feature fusion layer
+    struct ggml_tensor * fc   = nullptr;
+    struct ggml_tensor * fc_s = nullptr;
     struct ggml_tensor * d2t = nullptr;  // draft to target vocabulary mapping
 
     // dspark

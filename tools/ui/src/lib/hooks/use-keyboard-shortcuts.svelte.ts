@@ -1,5 +1,5 @@
 import { goto } from '$app/navigation';
-import { ROUTES } from '$lib/constants/routes';
+import { ROUTES } from '$lib/constants';
 import { KeyboardKey } from '$lib/enums';
 
 interface KeyboardShortcutsCallbacks {

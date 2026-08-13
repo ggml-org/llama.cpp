@@ -10,9 +10,9 @@
 	} from '$lib/components/app/mcp';
 	import * as Card from '$lib/components/ui/card';
 	import { Skeleton } from '$lib/components/ui/skeleton';
-	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
+	import { ICON_CLASS_DEFAULT } from '$lib/constants';
 	import { HealthCheckStatus } from '$lib/enums';
-	import { mcpStore } from '$lib/stores/mcp.svelte';
+	import { mcpStore } from '$lib/stores';
 	import type { HealthCheckState, MCPServerSettingsEntry } from '$lib/types';
 	import { tick } from 'svelte';
 

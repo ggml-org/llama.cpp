@@ -15,11 +15,9 @@
 	import { TruncatedText } from '$lib/components/app';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import * as Tooltip from '$lib/components/ui/tooltip';
-	import { FORK_TREE_DEPTH_PADDING } from '$lib/constants';
-	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
+	import { FORK_TREE_DEPTH_PADDING, ICON_CLASS_DEFAULT } from '$lib/constants';
 	import { RouterService } from '$lib/services/router.service';
-	import { getAllLoadingChats } from '$lib/stores/chat.svelte';
-	import { conversationsStore } from '$lib/stores/conversations.svelte';
+	import { chatStore, conversationsStore } from '$lib/stores';
 	import { onMount } from 'svelte';
 
 	interface Props {
@@ -57,7 +55,7 @@
 	let renderActionsDropdown = $state(false);
 	let dropdownOpen = $state(false);
 
-	let isLoading = $derived(getAllLoadingChats().includes(conversation.id));
+	let isLoading = $derived(chatStore.getAllLoadingChats().includes(conversation.id));
 
 	function handleEdit(event: Event) {
 		event.stopPropagation();

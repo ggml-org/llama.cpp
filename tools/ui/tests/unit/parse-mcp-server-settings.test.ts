@@ -1,4 +1,4 @@
-import { MCP_SERVER_ID_PREFIX } from '$lib/constants/mcp';
+import { MCP_SERVER_ID_PREFIX } from '$lib/constants';
 import { parseMcpServerSettings } from '$lib/utils/mcp';
 import { describe, expect, it, vi } from 'vitest';
 

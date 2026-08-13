@@ -473,7 +473,7 @@ struct common_params {
     std::vector<size_t> fit_params_target = std::vector<size_t>(llama_max_devices(), 1024 * 1024*1024);
 
     enum llama_split_mode split_mode = LLAMA_SPLIT_MODE_LAYER; // how to split the model across GPUs
-    enum llama_load_mode  load_mode  = LLAMA_LOAD_MODE_MMAP; // how to load the model
+    enum llama_load_mode  load_mode  = LLAMA_LOAD_MODE_AUTO; // how to load the model
 
     common_cpu_params cpuparams;
     common_cpu_params cpuparams_batch;
@@ -881,6 +881,7 @@ bool fs_is_directory(const std::string & path);
 
 std::string fs_get_cache_directory();
 std::string fs_get_cache_file(const std::string & filename);
+std::string fs_get_config_directory();
 
 struct common_file_info {
     std::string path;

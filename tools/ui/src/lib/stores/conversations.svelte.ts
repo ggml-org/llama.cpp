@@ -21,22 +21,12 @@
 import { browser } from '$app/environment';
 import { goto } from '$app/navigation';
 import {
-	EXPORT_CONV_ID_TRIM_LENGTH,
-	EXPORT_CONV_NAME_SUFFIX_MAX_LENGTH,
-	EXPORT_CONV_NONALNUM_REPLACEMENT,
-	ISO_DATE_TIME_SEPARATOR,
-	ISO_DATE_TIME_SEPARATOR_REPLACEMENT,
-	ISO_TIME_SEPARATOR,
-	ISO_TIME_SEPARATOR_REPLACEMENT,
-	ISO_TIMESTAMP_SLICE_LENGTH,
-	MULTIPLE_UNDERSCORE_REGEX,
+	EXPORT_CONV,
 	NEWLINE,
-	NON_ALPHANUMERIC_REGEX,
 	REASONING_EFFORT_DEFAULT_LOCALSTORAGE_KEY,
-	SESSION_HARNESS,
+	ROUTES,
 	ZIP_MAGIC
 } from '$lib/constants';
-import { ROUTES } from '$lib/constants/routes';
 import {
 	FileExtensionText,
 	MessageRole,
@@ -48,18 +38,14 @@ import {
 import { DatabaseService } from '$lib/services/database.service';
 import { MigrationService } from '$lib/services/migration.service';
 import { RouterService } from '$lib/services/router.service';
+// direct imports between stores, not via the barrel, to avoid circular deps
 import { mcpStore } from '$lib/stores/mcp.svelte';
-import { config } from '$lib/stores/settings.svelte';
+import { settingsStore } from '$lib/stores/settings.svelte';
 import type { McpServerOverride } from '$lib/types/database';
 import { filterByLeafNodeId, findLeafNode, generateConversationTitle } from '$lib/utils';
 import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
-import { SvelteMap, SvelteSet } from 'svelte/reactivity';
+import { SvelteSet } from 'svelte/reactivity';
 import { toast } from 'svelte-sonner';
-
-export interface ConversationTreeItem {
-	conversation: DatabaseConversation;
-	depth: number;
-}
 
 class ConversationsStore {
 	/**
@@ -711,7 +697,7 @@ class ConversationsStore {
 					this.activeConversation.id,
 					generateConversationTitle(
 						newFirstUserMessage.content,
-						Boolean(config().titleGenerationUseFirstLine)
+						Boolean(settingsStore.config.titleGenerationUseFirstLine)
 					)
 				);
 			}
@@ -1002,18 +988,18 @@ class ConversationsStore {
 	): string {
 		const conversationName = (conversation.name ?? '').trim().toLowerCase();
 		const sanitizedName = conversationName
-			.replace(NON_ALPHANUMERIC_REGEX, EXPORT_CONV_NONALNUM_REPLACEMENT)
-			.replace(MULTIPLE_UNDERSCORE_REGEX, '_')
-			.substring(0, EXPORT_CONV_NAME_SUFFIX_MAX_LENGTH);
+			.replace(EXPORT_CONV.NON_ALPHANUMERIC_REGEX, EXPORT_CONV.NONALNUM_REPLACEMENT)
+			.replace(EXPORT_CONV.MULTIPLE_UNDERSCORE_REGEX, '_')
+			.substring(0, EXPORT_CONV.NAME_SUFFIX_MAX_LENGTH);
 		// If we have messages, use the timestamp of the newest message
 		const referenceDate = msgs?.length
 			? new Date(Math.max(...msgs.map((m) => m.timestamp)))
 			: new Date();
-		const iso = referenceDate.toISOString().slice(0, ISO_TIMESTAMP_SLICE_LENGTH);
+		const iso = referenceDate.toISOString().slice(0, EXPORT_CONV.ISO_TIMESTAMP_SLICE);
 		const formattedDate = iso
-			.replace(ISO_DATE_TIME_SEPARATOR, ISO_DATE_TIME_SEPARATOR_REPLACEMENT)
-			.replaceAll(ISO_TIME_SEPARATOR, ISO_TIME_SEPARATOR_REPLACEMENT);
-		const trimmedConvId = conversation.id?.slice(0, EXPORT_CONV_ID_TRIM_LENGTH) ?? '';
+			.replace(EXPORT_CONV.ISO_DATE_TIME_SEPARATOR, EXPORT_CONV.ISO_DATE_TIME_SEPARATOR_REPLACEMENT)
+			.replaceAll(EXPORT_CONV.ISO_TIME_SEPARATOR, EXPORT_CONV.ISO_TIME_SEPARATOR_REPLACEMENT);
+		const trimmedConvId = conversation.id?.slice(0, EXPORT_CONV.ID_TRIM_LENGTH) ?? '';
 
 		return `${formattedDate}_conv_${trimmedConvId}_${sanitizedName}${FileExtensionText.JSONL}`;
 	}
@@ -1028,7 +1014,7 @@ class ConversationsStore {
 	serializeSessionToJsonl(data: ExportedConversation): string {
 		const { conv, messages } = data;
 		const sessionLine = JSON.stringify({
-			harness: SESSION_HARNESS,
+			harness: EXPORT_CONV.HARNESS,
 			type: SessionRecordType.SESSION,
 			...conv
 		});
@@ -1209,7 +1195,7 @@ class ConversationsStore {
 			files[entryName] = strToU8(this.serializeSessionToJsonl(session));
 		}
 
-		const archiveName = `${new Date().toISOString().split(ISO_DATE_TIME_SEPARATOR)[0]}_conversations${FileExtensionText.ZIP}`;
+		const archiveName = `${new Date().toISOString().split(EXPORT_CONV.ISO_DATE_TIME_SEPARATOR)[0]}_conversations${FileExtensionText.ZIP}`;
 		const zipped = zipSync(files);
 		const blob = new Blob([zipped], { type: MimeTypeApplication.ZIP });
 
@@ -1269,76 +1255,4 @@ export const conversationsStore = new ConversationsStore();
 // Auto-initialize in browser
 if (browser) {
 	conversationsStore.init();
-}
-
-export const conversations = () => conversationsStore.conversations;
-export const activeConversation = () => conversationsStore.activeConversation;
-export const activeMessages = () => conversationsStore.activeMessages;
-export const pendingCwd = () => conversationsStore.pendingCwd;
-export const isConversationsInitialized = () => conversationsStore.isInitialized;
-
-/**
- * Builds a flat tree of conversations with depth levels for nested forks.
- * Accepts a pre-filtered list so search filtering stays in the component.
- *
- * Output order matches the sidebar render exactly: pinned first, then
- * unpinned by lastModified desc, with forks interleaved under their parents.
- * Range-select / marquee in the sidebar rely on this alignment.
- */
-
-// Pinned conversations first, then by lastModified descending
-const comparePinnedThenRecent = (a: DatabaseConversation, b: DatabaseConversation) => {
-	if (a.pinned && !b.pinned) return -1;
-
-	if (!a.pinned && b.pinned) return 1;
-
-	return b.lastModified - a.lastModified;
-};
-
-export function buildConversationTree(convs: DatabaseConversation[]): ConversationTreeItem[] {
-	const childrenByParent = new SvelteMap<string, DatabaseConversation[]>();
-	const forkIds = new SvelteSet<string>();
-
-	for (const conv of convs) {
-		if (conv.forkedFromConversationId) {
-			forkIds.add(conv.id);
-
-			const siblings = childrenByParent.get(conv.forkedFromConversationId) || [];
-
-			siblings.push(conv);
-			childrenByParent.set(conv.forkedFromConversationId, siblings);
-		}
-	}
-
-	const result: ConversationTreeItem[] = [];
-	const visited = new SvelteSet<string>();
-
-	function walk(conv: DatabaseConversation, depth: number) {
-		visited.add(conv.id);
-		result.push({ conversation: conv, depth });
-
-		const children = childrenByParent.get(conv.id);
-
-		if (children) {
-			children.sort(comparePinnedThenRecent);
-
-			for (const child of children) {
-				walk(child, depth + 1);
-			}
-		}
-	}
-
-	const roots = convs.filter((c) => !forkIds.has(c.id)).sort(comparePinnedThenRecent);
-
-	for (const root of roots) {
-		walk(root, 0);
-	}
-
-	for (const conv of convs) {
-		if (!visited.has(conv.id)) {
-			walk(conv, 1);
-		}
-	}
-
-	return result;
 }

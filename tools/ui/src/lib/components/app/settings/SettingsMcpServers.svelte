@@ -10,9 +10,7 @@
 	import * as Empty from '$lib/components/ui/empty';
 	import { ROUTES } from '$lib/constants';
 	import { HealthCheckStatus } from '$lib/enums';
-	import { conversationsStore } from '$lib/stores/conversations.svelte';
-	import { mcpStore } from '$lib/stores/mcp.svelte';
-	import { toolsStore } from '$lib/stores/tools.svelte';
+	import { conversationsStore, mcpStore, toolsStore } from '$lib/stores';
 	import { onMount } from 'svelte';
 	import { fade } from 'svelte/transition';
 

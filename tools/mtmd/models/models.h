@@ -318,6 +318,59 @@ struct clip_graph_qwen3tts_gen : clip_graph {
     };
 };
 
+//
+// pocket-tts: SEANet convolution stack, shared by the voice encoder and the mimi decoder.
+// stateless unless state_in is populated: convs then pad instead of carrying left-context.
+//
+struct clip_graph_pockettts_seanet : clip_graph {
+    clip_graph_pockettts_seanet(const clip_graph & parent) : clip_graph(parent) {}
+    ggml_cgraph * build() override { GGML_ABORT("call encode()/decode() instead"); }
+
+    // per-call streaming state, keyed by slot name (see list_pockettts_state_slots)
+    std::map<std::string, ggml_tensor *> state_in;
+    mutable std::vector<std::pair<std::string, ggml_tensor *>> state_out;
+
+    ggml_tensor * conv1d(ggml_tensor * x, ggml_tensor * w, ggml_tensor * b, int stride, int dilation,
+                         bool pad_replicate = false, const std::string & state_name = "") const;
+    ggml_tensor * conv_transpose1d(ggml_tensor * x, ggml_tensor * w, ggml_tensor * b, int stride,
+                                   const std::string & state_name = "") const;
+    ggml_tensor * res_unit(ggml_tensor * x, const clip_seanet::stage & stage, int dilation,
+                           const std::string & state_prefix = "") const;
+
+    // x: [T, C] -> [T / hop, dim]
+    ggml_tensor * encode(ggml_tensor * x) const;
+    // x: [T, dim] -> [T * hop, 1], streams when state_in is populated
+    ggml_tensor * decode(ggml_tensor * x) const;
+};
+
+// mimi encoder + speaker_proj: reference waveform -> voice conditioning rows
+struct clip_graph_pockettts_spkenc : clip_graph {
+    clip_graph_pockettts_spkenc(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+    ggml_cgraph * build() override;
+
+    ggml_tensor * tfm_layer_forward(ggml_tensor * cur, const clip_layer & layer, ggml_tensor * inp_pos, ggml_tensor * kq_mask, int il) const;
+};
+
+//
+// pocket-tts generation:
+// GEN_CODE = flow-matching decoder + end-of-speech head, one latent per call
+// GEN_WAV  = mimi decoder, a window of latents -> PCM
+//
+struct clip_graph_pockettts_gen : clip_graph {
+    clip_graph_pockettts_gen(clip_ctx * ctx, const clip_image_f32 & img, clip_gen_process_type gen_process, int n_step, int n_frames)
+        : clip_graph(ctx, img), gen_process(gen_process), n_step(n_step), n_frames(n_frames) {}
+    ggml_cgraph * build() override;
+
+    clip_gen_process_type gen_process;
+    int n_step;   // lsd_decode steps, fixed at graph-build time
+    int n_frames; // GEN_WAV only: number of latents to decode
+
+    // AdaLN modulation: x * (1 + scale) + shift
+    ggml_tensor * modulate(ggml_tensor * x, ggml_tensor * shift, ggml_tensor * scale) const;
+    ggml_tensor * time_embed(const clip_flow_net::time_embd & te, float t) const;
+    ggml_tensor * flow_forward(ggml_tensor * cond, ggml_tensor * x, float s, float t) const;
+};
+
 // one persisted state buffer used by code2wav, see qwen3tts-gen.cpp
 struct c2w_state_slot {
     std::string name;
@@ -325,6 +378,9 @@ struct c2w_state_slot {
     int64_t     ne1;
 };
 std::vector<c2w_state_slot> list_c2w_state_slots(const clip_hparams & hparams, const clip_model & model);
+
+// same, for the streaming mimi decoder (pocket-tts GEN_WAV)
+std::vector<c2w_state_slot> list_pockettts_state_slots(const clip_hparams & hparams, const clip_model & model);
 
 struct clip_graph_kimik25 : clip_graph {
     clip_graph_kimik25(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}

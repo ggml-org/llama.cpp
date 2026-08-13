@@ -8,7 +8,7 @@ import {
 	SANDBOX_TOOL_NAME,
 	SANDBOX_TRUNCATION_NOTICE
 } from '$lib/constants';
-import { config } from '$lib/stores/settings.svelte';
+import { settingsStore } from '$lib/stores/settings.svelte';
 import type { ToolExecutionResult } from '$lib/types';
 
 /** Cached harnesses keyed by whether nerdamer is included. */
@@ -20,7 +20,7 @@ const harnessCache: Record<string, string> = {};
  * prelude. Cached per variant so toggling the setting is instant.
  */
 async function getHarness(): Promise<string> {
-	const enabled = !!config().symbolicMathEnabled;
+	const enabled = !!settingsStore.config.symbolicMathEnabled;
 	const key = enabled ? 'nerdamer' : 'plain';
 
 	if (!harnessCache[key]) {

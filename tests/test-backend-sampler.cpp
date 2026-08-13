@@ -2105,7 +2105,9 @@ static std::vector<const backend_test_case *> collect_tests_to_run(const std::st
 #ifdef GGML_USE_HIP
             // TODO: remove this when https://github.com/ggml-org/llama.cpp/pull/26592 is merged
             if (test.name == "penalties" || test.name == "set_sampler" ||
-                test.name == "mixed"     || test.name == "top_p") {
+                test.name == "mixed"     || test.name == "top_p"       ||
+                test.name == "multi_output_sampling_chain" ||
+                test.name == "multi_output_cpu") {
                 fprintf(stderr, "Skipping test '%s' on HIP backend (no backend TOP_K support)\n", test.name.c_str());
                 continue;
             }

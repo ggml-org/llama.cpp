@@ -8,76 +8,48 @@
 		ChatMessageAssistantStatistics,
 		ChatMessageEditForm
 	} from '$lib/components/app';
-	import { getMessageEditContext } from '$lib/contexts';
+	import { getChatMessageEditContext } from '$lib/contexts';
 	import { MessageRole } from '$lib/enums';
 	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
-	import { chatStore, isChatStreaming, isLoading } from '$lib/stores/chat.svelte';
-	import { modelsStore } from '$lib/stores/models.svelte';
-	import { isRouterMode } from '$lib/stores/server.svelte';
-	import { config } from '$lib/stores/settings.svelte';
+	import { chatStore, modelsStore, serverStore, settingsStore } from '$lib/stores';
 	import { modelLoadProgressText } from '$lib/utils';
 	import { hasAgenticContent } from '$lib/utils';
 
 	interface Props {
 		class?: string;
-		deletionInfo: {
-			totalCount: number;
-			userMessages: number;
-			assistantMessages: number;
-			messageTypes: string[];
-		} | null;
 		isLastAssistantMessage?: boolean;
 		message: DatabaseMessage;
 		toolMessages?: DatabaseMessage[];
-		onCopy: () => void;
-		onConfirmDelete: () => void;
 		onContinue?: () => void;
-		onDelete: () => void;
-		onEdit?: () => void;
-		onForkConversation?: (options: { name: string; includeAttachments: boolean }) => void;
-		onNavigateToSibling?: (siblingId: string) => void;
 		onRegenerate: (modelOverride?: string) => void;
-		onShowDeleteDialogChange: (show: boolean) => void;
-		showDeleteDialog: boolean;
-		siblingInfo?: ChatMessageSiblingInfo | null;
 		textareaElement?: HTMLTextAreaElement;
 	}
 
 	let {
 		class: className = '',
-		deletionInfo,
 		isLastAssistantMessage = false,
 		message,
-		onConfirmDelete,
 		onContinue,
-		onCopy,
-		onDelete,
-		onEdit,
-		onForkConversation,
-		onNavigateToSibling,
 		onRegenerate,
-		onShowDeleteDialogChange,
-		showDeleteDialog,
-		siblingInfo = null,
 		textareaElement = $bindable(),
 		toolMessages = []
 	}: Props = $props();
 
 	// Get edit context
-	const editCtx = getMessageEditContext();
+	const editCtx = getChatMessageEditContext();
 
 	const isAgentic = $derived(hasAgenticContent(message, toolMessages));
 	const processingState = useProcessingState();
 
-	let currentConfig = $derived(config());
-	let isRouter = $derived(isRouterMode());
+	let currentConfig = $derived(settingsStore.config);
+	let isRouter = $derived(serverStore.isRouterMode);
 
 	let showRawOutput = $state(false);
 
 	let displayedModel = $derived(message.model ?? null);
 
-	let isCurrentlyLoading = $derived(isLoading());
-	let isStreaming = $derived(isChatStreaming());
+	let isCurrentlyLoading = $derived(chatStore.isLoading);
+	let isStreaming = $derived(chatStore.isStreaming());
 	let hasNoContent = $derived(!message?.content?.trim());
 	let isActivelyProcessing = $derived(isCurrentlyLoading || isStreaming);
 
@@ -175,7 +147,7 @@
 			<ChatMessageAgenticContent
 				{message}
 				{toolMessages}
-				isStreaming={isChatStreaming()}
+				isStreaming={chatStore.isStreaming()}
 				{isLastAssistantMessage}
 			/>
 		{/if}
@@ -190,14 +162,14 @@
 			<div class="inline-flex flex-wrap items-start gap-2 text-xs text-muted-foreground">
 				<ChatMessageAssistantModel
 					{displayedModel}
-					isLoading={isLoading()}
+					isLoading={chatStore.isLoading}
 					{isRouter}
 					{onRegenerate}
 				/>
 
 				<ChatMessageAssistantStatistics
 					{message}
-					isLoading={isLoading()}
+					isLoading={chatStore.isLoading}
 					{processingState}
 					showMessageStats={currentConfig.showMessageStats}
 				/>
@@ -210,18 +182,8 @@
 			role={MessageRole.ASSISTANT}
 			justify="start"
 			actionsPosition="left"
-			{siblingInfo}
-			{showDeleteDialog}
-			{deletionInfo}
-			{onCopy}
-			{onEdit}
 			{onRegenerate}
 			onContinue={currentConfig.enableContinueGeneration ? onContinue : undefined}
-			{onForkConversation}
-			{onDelete}
-			{onConfirmDelete}
-			{onNavigateToSibling}
-			{onShowDeleteDialogChange}
 			showRawOutputSwitch={currentConfig.showRawOutputSwitch}
 			rawOutputEnabled={showRawOutput}
 			onRawOutputToggle={(enabled) => (showRawOutput = enabled)}

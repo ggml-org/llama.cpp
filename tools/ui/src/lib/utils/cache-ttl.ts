@@ -1,4 +1,4 @@
-import { DEFAULT_CACHE_MAX_ENTRIES, DEFAULT_CACHE_TTL_MS } from '$lib/constants';
+import { CACHE } from '$lib/constants';
 
 /**
  * TTL Cache - Time-To-Live cache implementation for memory optimization
@@ -36,8 +36,8 @@ export class TTLCache<K extends string, V> {
 	private readonly onEvict?: (key: string, value: unknown) => void;
 
 	constructor(options: TTLCacheOptions = {}) {
-		this.ttlMs = options.ttlMs ?? DEFAULT_CACHE_TTL_MS;
-		this.maxEntries = options.maxEntries ?? DEFAULT_CACHE_MAX_ENTRIES;
+		this.ttlMs = options.ttlMs ?? CACHE.DEFAULT_TTL_MS;
+		this.maxEntries = options.maxEntries ?? CACHE.DEFAULT_MAX_ENTRIES;
 		this.onEvict = options.onEvict;
 	}
 
@@ -217,8 +217,8 @@ export class ReactiveTTLMap<K extends string, V> {
 	private readonly maxEntries: number;
 
 	constructor(options: TTLCacheOptions = {}) {
-		this.ttlMs = options.ttlMs ?? DEFAULT_CACHE_TTL_MS;
-		this.maxEntries = options.maxEntries ?? DEFAULT_CACHE_MAX_ENTRIES;
+		this.ttlMs = options.ttlMs ?? CACHE.DEFAULT_TTL_MS;
+		this.maxEntries = options.maxEntries ?? CACHE.DEFAULT_MAX_ENTRIES;
 	}
 
 	get(key: K): V | null {

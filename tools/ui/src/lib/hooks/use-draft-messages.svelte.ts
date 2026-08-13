@@ -1,5 +1,5 @@
 import { afterNavigate, beforeNavigate } from '$app/navigation';
-import { draftMessagesStore } from '$lib/stores/draft-messages.svelte';
+import { draftMessagesStore } from '$lib/stores';
 import { onMount } from 'svelte';
 
 interface UseDraftMessagesOptions {

@@ -7,14 +7,8 @@
 	} from '$lib/components/app';
 	import { Button } from '$lib/components/ui/button';
 	import * as Dialog from '$lib/components/ui/dialog';
-	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
-	import { conversationsStore } from '$lib/stores/conversations.svelte';
-	import { mcpStore } from '$lib/stores/mcp.svelte';
-	import {
-		mcpResources,
-		mcpResourceStore,
-		mcpTotalResourceCount
-	} from '$lib/stores/mcp-resources.svelte';
+	import { ICON_CLASS_DEFAULT } from '$lib/constants';
+	import { conversationsStore, mcpResourceStore, mcpStore } from '$lib/stores';
 	import type { MCPResourceContent, MCPResourceInfo, MCPResourceTemplateInfo } from '$lib/types';
 	import { getResourceDisplayName } from '$lib/utils';
 	import { SvelteSet } from 'svelte/reactivity';
@@ -39,7 +33,7 @@
 	let templatePreviewLoading = $state(false);
 	let templatePreviewError = $state<string | null>(null);
 
-	const totalCount = $derived(mcpTotalResourceCount());
+	const totalCount = $derived(mcpResourceStore.totalResourceCount);
 
 	$effect(() => {
 		if (open) {
@@ -205,7 +199,7 @@
 
 	function getAllResourcesFlatInTreeOrder(): MCPResourceInfo[] {
 		const allResources: MCPResourceInfo[] = [];
-		const resourcesMap = mcpResources();
+		const resourcesMap = mcpResourceStore.serverResources;
 
 		for (const [serverName, serverRes] of resourcesMap.entries()) {
 			for (const resource of serverRes.resources) {

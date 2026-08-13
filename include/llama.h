@@ -203,11 +203,12 @@ extern "C" {
     };
 
     enum llama_load_mode {
-        LLAMA_LOAD_MODE_NONE       = 0, // no special loading mode
-        LLAMA_LOAD_MODE_MMAP       = 1, // memory map the model
-        LLAMA_LOAD_MODE_MLOCK      = 2, // force system to keep model in RAM rather than swapping or compressing
-        LLAMA_LOAD_MODE_MMAP_MLOCK = 3, // mmap + force system to keep model in RAM rather than swapping or compressing
-        LLAMA_LOAD_MODE_DIRECT_IO  = 4, // use direct I/O if available
+        LLAMA_LOAD_MODE_AUTO       = -1, // auto-detect based on device capabilities
+        LLAMA_LOAD_MODE_NONE       =  0, // no special loading mode
+        LLAMA_LOAD_MODE_MMAP       =  1, // memory map the model
+        LLAMA_LOAD_MODE_MLOCK      =  2, // force system to keep model in RAM rather than swapping or compressing
+        LLAMA_LOAD_MODE_MMAP_MLOCK =  3, // mmap + force system to keep model in RAM rather than swapping or compressing
+        LLAMA_LOAD_MODE_DIRECT_IO  =  4, // use direct I/O if available
     };
 
     LLAMA_API const char * llama_load_mode_name(enum llama_load_mode load_mode);
@@ -455,6 +456,8 @@ extern "C" {
 
     // lora adapter
     struct llama_adapter_lora;
+
+    LLAMA_API const char * llama_version(void);
 
     // Helpers for getting default parameters
     // TODO: update API to start accepting pointers to params structs (https://github.com/ggml-org/llama.cpp/discussions/9172)
@@ -882,6 +885,7 @@ extern "C" {
                const llama_token * tokens,
                           size_t   n_token_count);
 
+    // If tokens_out is NULL, only the token count is reported through n_token_count_out and no state is loaded
     LLAMA_API size_t llama_state_seq_load_file(
             struct llama_context * ctx,
                       const char * filepath,

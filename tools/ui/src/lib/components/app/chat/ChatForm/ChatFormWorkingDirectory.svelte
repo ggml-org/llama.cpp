@@ -4,26 +4,17 @@
 	import { FolderOpen } from '@lucide/svelte';
 	import SearchInput from '$lib/components/app/forms/SearchInput.svelte';
 	import * as Popover from '$lib/components/ui/popover';
-	import {
-		DEFAULT_MOBILE_BREAKPOINT,
-		HOME_TILDE,
-		MAX_RESULTS_SHOWN,
-		NATIVE_LIMIT,
-		NATIVE_MAX_DEPTH,
-		SEARCH_DEBOUNCE_MS,
-		SEARCH_LIMIT,
-		SEARCH_MAX_DEPTH
-	} from '$lib/constants';
+	import { DEFAULT_MOBILE_BREAKPOINT, HOME_TILDE, SEARCH } from '$lib/constants';
 	import { BuiltInTool, GlobSearchType, KeyboardKey } from '$lib/enums';
 	import { useDebouncedSearch } from '$lib/hooks/use-debounced-search.svelte';
 	import { usePickerNavigation } from '$lib/hooks/use-picker-navigation.svelte';
 	import { useScrollActiveRow } from '$lib/hooks/use-scroll-active-row.svelte';
 	import { ToolsService } from '$lib/services/tools.service';
-	import { toolsStore } from '$lib/stores/tools.svelte';
+	import { toolsStore } from '$lib/stores';
+	import type { GlobEntry } from '$lib/types';
 	import {
 		abbreviateHome,
 		buildCaseInsensitiveGlob,
-		type GlobEntry,
 		joinPath,
 		lastPathSegment,
 		runGlobSearchWithChildren
@@ -142,7 +133,7 @@
 	// children too, so path navigation does not require a trailing slash.
 	const search = useDebouncedSearch({
 		canRun: () => isOpen && fileSearchEnabled,
-		debounceMs: SEARCH_DEBOUNCE_MS,
+		debounceMs: SEARCH.DEBOUNCE_MS,
 		getQuery: () => query.trim(),
 		run: async (q, signal, isCurrent) => {
 			const trimmed = q.trim();
@@ -162,8 +153,8 @@
 				const res = await runGlobSearchWithChildren(
 					trimmed,
 					homeBase ?? HOME_TILDE,
-					SEARCH_MAX_DEPTH,
-					SEARCH_LIMIT,
+					SEARCH.MAX_DEPTH,
+					SEARCH.LIMIT,
 					signal,
 					{ type: GlobSearchType.DIR }
 				);
@@ -179,7 +170,7 @@
 				}
 
 				searchScope = res.exactDir ?? res.args.path;
-				queryResults = res.entries.map((e) => e.path).slice(0, MAX_RESULTS_SHOWN);
+				queryResults = res.entries.map((e) => e.path).slice(0, SEARCH.MAX_RESULTS_SHOWN);
 
 				if (queryResults.length > 0) {
 					nav.reset(0);
@@ -223,8 +214,8 @@
 		try {
 			const res = await ToolsService.executeToolRaw(BuiltInTool.FILE_GLOB_SEARCH, {
 				include: buildCaseInsensitiveGlob(name),
-				limit: NATIVE_LIMIT,
-				max_depth: NATIVE_MAX_DEPTH,
+				limit: SEARCH.NATIVE_LIMIT,
+				max_depth: SEARCH.NATIVE_MAX_DEPTH,
 				path: homeBase ?? HOME_TILDE,
 				type: GlobSearchType.DIR
 			});
