@@ -962,6 +962,9 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 
 				return msg;
 			},
+			onToolResultMessageCreated: (messageId: string) => {
+				lastCreatedInFlow = messageId;
+			},
 			onAssistantTurnComplete: async (
 				content: string,
 				reasoningContent: string | undefined,

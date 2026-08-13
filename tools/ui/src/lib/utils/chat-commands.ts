@@ -19,6 +19,13 @@ export function getChatCommands(options: ChatCommandsOptions): ChatFormCommand[]
 			name: 'prompt'
 		},
 		{
+			action: ChatFormCommandAction.SKILLS,
+			description: 'Browse skills, or read one by name',
+			disabled: !options.hasSkills(),
+			keywords: ['agent skills', 'read skill'],
+			name: 'skills'
+		},
+		{
 			action: ChatFormCommandAction.CWD,
 			description: SET_WORKING_DIRECTORY_LABEL,
 			disabled: !options.hasCwdTools(),

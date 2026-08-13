@@ -15,6 +15,7 @@
 		INITIAL_FILE_SIZE,
 		INPUT_CLASSES,
 		PROMPT_CONTENT_SEPARATOR,
+		ROUTES,
 		SETTING_CONFIG_DEFAULT
 	} from '$lib/constants';
 	import {
@@ -25,6 +26,7 @@
 		SpecialFileType
 	} from '$lib/enums';
 	import { useChatFormPickers } from '$lib/hooks/use-chat-form-pickers.svelte';
+	import { activateSkillByName } from '$lib/services/skill-command.service';
 	import {
 		chatStore,
 		conversationsStore,
@@ -34,6 +36,7 @@
 		settingsStore,
 		toolsStore
 	} from '$lib/stores';
+	import { skillsStore } from '$lib/stores/skills.svelte';
 	import type {
 		FileMentionEntry,
 		GetPromptResult,
@@ -59,6 +62,8 @@
 		createAudioFile,
 		isAudioRecordingSupported
 	} from '$lib/utils/browser-only';
+	import { goto } from '$app/navigation';
+	import { toast } from 'svelte-sonner';
 	import { onMount } from 'svelte';
 
 	interface Props {
@@ -144,6 +149,7 @@
 	);
 
 	const pickers = useChatFormPickers({
+		dispatchSkillsCommand: handleSkillsCommand,
 		focusInput: refocusInput,
 		getCaretOffset: () => inputRef?.getCaretOffset(),
 		getCwd: () => cwd,
@@ -154,6 +160,7 @@
 		hasCwdTools: () => toolsStore.hasEnabledCwdTools,
 		hasPrompts: () =>
 			mcpStore.hasPromptsCapability(conversationsStore.preferences.getAllMcpServerOverrides()),
+		hasSkills: () => skillsStore.slotFor(cwd)?.status !== 'error',
 		openModelSelector: () => chatFormActionsRef?.openModelSelector(),
 		setCaretOffset: (offset) => inputRef?.setCaretOffset(offset),
 		setValue: (v) => {
@@ -161,6 +168,41 @@
 			onValueChange?.(v);
 		}
 	});
+
+	/**
+	 * `/skills` command dispatch. No args opens/discovers the read-only
+	 * catalog route (existing command behavior); a name resolves the base
+	 * read through the server and routes the successful result through the
+	 * shared durable activation operation. Unavailable/not-found reads
+	 * persist nothing and surface a toast.
+	 */
+	function handleSkillsCommand(args: string): void {
+		const conversation = conversationsStore.activeConversation;
+
+		if (!args) {
+			void goto(ROUTES.SKILLS);
+
+			return;
+		}
+
+		if (!conversation) return;
+
+		void activateSkillByName(conversation.id, args, { cwd: conversation.cwd }).then((outcome) => {
+			if (!outcome.ok) {
+				if (outcome.reason === 'not-found') {
+					toast.error(`Skill "${args}" was not found`);
+				} else {
+					toast.error('Skills are unavailable on this server');
+				}
+
+				return;
+			}
+
+			if (!outcome.created) {
+				toast.info(`Skill "${args}" is already activated in this conversation`);
+			}
+		});
+	}
 
 	async function handleWorkingDirectoryChange(newDir: string | null) {
 		// Committing a directory consumes the `/cwd` token; the chip's

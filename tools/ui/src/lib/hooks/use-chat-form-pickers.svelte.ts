@@ -26,6 +26,10 @@ export interface UseChatFormPickersOptions {
 	hasPrompts: () => boolean;
 	/** Gates `/cwd`. */
 	hasCwdTools: () => boolean;
+	/** Gates `/skills`. */
+	hasSkills: () => boolean;
+	/** Executes a picked `/skills` command: catalog navigation for no args, server base read + durable activation for a name. */
+	dispatchSkillsCommand: (args: string) => void;
 	getCwd: () => string | null;
 	/** Mention search fallback scope. */
 	getServerHome: () => string | null;
@@ -61,6 +65,7 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 		getChatCommands({
 			hasCwdTools: opts.hasCwdTools,
 			hasPrompts: opts.hasPrompts,
+			hasSkills: opts.hasSkills,
 			showModelSelector: opts.getShowModelSelector()
 		})
 	);
@@ -101,6 +106,12 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 				isWorkingDirectoryPickerOpen = false;
 				opts.setValue('');
 				opts.openModelSelector();
+
+				break;
+			case ChatFormCommandAction.SKILLS:
+				isWorkingDirectoryPickerOpen = false;
+				opts.setValue('');
+				opts.dispatchSkillsCommand(args.trim());
 
 				break;
 		}

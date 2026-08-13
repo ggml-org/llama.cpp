@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { FolderOpen, Sparkles } from '@lucide/svelte';
+	import { BookOpen, FolderOpen, Sparkles } from '@lucide/svelte';
 	import {
 		ChatFormPickerList,
 		ChatFormPickerListItem,
@@ -29,7 +29,8 @@
 	const commandIcon: Record<ChatFormCommandAction, typeof Sparkles> = {
 		[ChatFormCommandAction.CWD]: FolderOpen,
 		[ChatFormCommandAction.MODEL]: MODEL_SELECTOR_ICON,
-		[ChatFormCommandAction.PROMPT]: Sparkles
+		[ChatFormCommandAction.PROMPT]: Sparkles,
+		[ChatFormCommandAction.SKILLS]: BookOpen
 	};
 
 	const trimmedQuery = $derived((query ?? '').trim().toLowerCase());

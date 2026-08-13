@@ -1,5 +1,6 @@
 import { buildSkillRunSnapshot, serializeSkillCatalogEnvelope } from '$lib/services/skills-packing.service';
 import { SKILL_READ_TOOL, skillDenialResult } from '$lib/services/skills-adapters.service';
+import { skillActivationExtra, skillResourceExtra } from '$lib/services/skills-activation.service';
 import { SkillsService } from '$lib/services/skills.service';
 import { ChatService } from '$lib/services';
 import { agenticStore } from '$lib/stores/agentic.svelte';
@@ -17,6 +18,17 @@ vi.mock('$lib/services/skills.service', () => ({
 }));
 vi.mock('$lib/stores/skills.svelte', () => ({
 	skillsStore: { createRunSnapshot: vi.fn() }
+}));
+const skillActivationMockState = vi.hoisted(() => ({
+	store: {
+		isActivated: vi.fn(() => false),
+		loadConversation: vi.fn().mockResolvedValue(undefined),
+		recordActivation: vi.fn()
+	}
+}));
+
+vi.mock('$lib/stores/skill-activation.svelte', () => ({
+	skillActivationStore: skillActivationMockState.store
 }));
 vi.mock('$lib/services/chat.service', () => ({
 	ChatService: {
@@ -87,6 +99,8 @@ const mockRead = vi.mocked(SkillsService.read);
 const mockSettingsStore = vi.mocked(settingsStore);
 const mockServerStore = vi.mocked(serverStore);
 const mockGetEnabledToolsForLLM = vi.mocked(toolsStore.getEnabledToolsForLLM);
+const mockRecordActivation = vi.mocked(skillActivationMockState.store.recordActivation);
+const mockLoadConversation = vi.mocked(skillActivationMockState.store.loadConversation);
 
 function makeEntry(name: string): SkillCatalogEntry {
 	return {
@@ -119,6 +133,16 @@ function baseResult(name: string): SkillBaseReadResult {
 	};
 }
 
+function resourceResult(name: string, path: string): SkillBaseReadResult {
+	return {
+		kind: 'resource',
+		skill: { id: `opaque-${name}`, name, scope: 'project', provider: 'agents' },
+		resource: { path },
+		content_xml: `<skill_resource name="${name}" path="${path}">data</skill_resource>`,
+		diagnostics: []
+	};
+}
+
 function dummyTool() {
 	return {
 		type: 'function' as const,
@@ -131,18 +155,21 @@ function makeCallbacks(): { callbacks: AgenticFlowCallbacks } & Record<string, R
 	const createToolResultMessage = vi.fn().mockResolvedValue({ id: 'tool-result-1' });
 	const onAssistantTurnComplete = vi.fn().mockResolvedValue(undefined);
 	const onFlowComplete = vi.fn();
+	const onToolResultMessageCreated = vi.fn();
 
 	return {
 		callbacks: {
 			createAssistantMessage,
 			createToolResultMessage,
 			onAssistantTurnComplete,
-			onFlowComplete
+			onFlowComplete,
+			onToolResultMessageCreated
 		},
 		createAssistantMessage,
 		createToolResultMessage,
 		onAssistantTurnComplete,
-		onFlowComplete
+		onFlowComplete,
+		onToolResultMessageCreated
 	};
 }
 
@@ -205,6 +232,12 @@ beforeEach(() => {
 	mockSettingsStore.config = { agenticMaxTurns: 100, maxSkillBudget: 2000 };
 	mockGetEnabledToolsForLLM.mockReturnValue([dummyTool()]);
 	toolsMockState.allTools = [{ definition: dummyTool(), key: 'builtin:test_tool' }];
+	mockRecordActivation.mockResolvedValue({
+		created: true,
+		extra: skillActivationExtra(baseResult('demo-skill')),
+		toolResultMessage: { id: 'recorded-tool-result' }
+	});
+	mockLoadConversation.mockResolvedValue(undefined);
 	agenticStore.clearSession('conv-1');
 });
 
@@ -220,6 +253,7 @@ describe('agenticStore.runAgenticFlow Skills integration', () => {
 		expect(result).toEqual({ handled: true });
 		expect(mockSnapshot).toHaveBeenCalledTimes(1);
 		expect(mockSnapshot).toHaveBeenCalledWith('/run-cwd', undefined);
+		expect(mockLoadConversation).toHaveBeenCalledWith('conv-1');
 
 		const tools = mockSendMessage.mock.calls[0][1].tools as { function: { name: string } }[];
 		const names = tools.map((t) => t.function.name);
@@ -234,7 +268,7 @@ describe('agenticStore.runAgenticFlow Skills integration', () => {
 		expect(firstMessages[0].content).toBe(serializeSkillCatalogEnvelope(snapshot.catalog));
 	});
 
-	it('does not touch tools or fetch a snapshot when the budget is zero', async () => {
+	it('does not touch tools, snapshots, or the activation store when the budget is zero', async () => {
 		mockSettingsStore.config = { agenticMaxTurns: 100, maxSkillBudget: 0 };
 		mockSendMessage.mockResolvedValue(undefined);
 
@@ -242,6 +276,7 @@ describe('agenticStore.runAgenticFlow Skills integration', () => {
 
 		expect(result).toEqual({ handled: true });
 		expect(mockSnapshot).not.toHaveBeenCalled();
+		expect(mockLoadConversation).not.toHaveBeenCalled();
 
 		const tools = mockSendMessage.mock.calls[0][1].tools as { function: { name: string } }[];
 
@@ -326,7 +361,7 @@ describe('agenticStore.runAgenticFlow Skills integration', () => {
 		expect(createToolResultMessage).toHaveBeenCalledWith('call_1', 'mcp-ok', undefined);
 	});
 
-	it('denies an unapproved base read with a structured no-content tool result', async () => {
+	it('denies an unapproved base read with a structured no-content tool result and no activation', async () => {
 		const snapshot = buildSkillRunSnapshot('/run-cwd', makeCatalog('demo-skill'));
 
 		mockSnapshot.mockResolvedValue(snapshot);
@@ -350,14 +385,61 @@ describe('agenticStore.runAgenticFlow Skills integration', () => {
 
 		expect(result).toEqual({ handled: true });
 		expect(createToolResultMessage).toHaveBeenCalledWith('call_1', skillDenialResult(SKILL_READ_TOOL), undefined);
+		expect(mockRecordActivation).not.toHaveBeenCalled();
 	});
 
-	it('allows an approved base read and persists the byte-preserved XML content', async () => {
+	it('routes an approved base read through the shared durable operation, persisting the store-created tool result once', async () => {
 		const snapshot = buildSkillRunSnapshot('/run-cwd', makeCatalog('demo-skill'));
 
 		mockSnapshot.mockResolvedValue(snapshot);
 		mockRead.mockResolvedValue(baseResult('demo-skill'));
 		mockToolCallTurn(readSkillToolCallJson());
+
+		const { callbacks, createToolResultMessage, onToolResultMessageCreated } = makeCallbacks();
+		const runPromise = agenticStore.runAgenticFlow(runParams('conv-1', callbacks));
+
+		await waitForPermission('conv-1');
+		agenticStore.resolvePermission('conv-1', ToolPermissionDecision.ONCE);
+
+		const result = await runPromise;
+
+		expect(result).toEqual({ handled: true });
+		expect(mockRecordActivation).toHaveBeenCalledWith(
+			expect.objectContaining({
+				conversationId: 'conv-1',
+				cwd: '/run-cwd',
+				toolCallId: 'call_1'
+			})
+		);
+		// The shared operation already created the paired tool result message:
+		// the flow must not create a second one, and must update its own
+		// parent pointer so the next turn anchors to the new leaf.
+		expect(createToolResultMessage).not.toHaveBeenCalled();
+		expect(onToolResultMessageCreated).toHaveBeenCalledWith('recorded-tool-result');
+	});
+
+	it('persists a resource read tool result through the flow with its typed metadata attached', async () => {
+		const snapshot = buildSkillRunSnapshot('/run-cwd', makeCatalog('demo-skill'));
+
+		mockSnapshot.mockResolvedValue(snapshot);
+		mockRead.mockResolvedValue(resourceResult('demo-skill', 'refs/DETAILS.md'));
+		mockRecordActivation.mockResolvedValue({
+			created: false,
+			extra: skillResourceExtra(resourceResult('demo-skill', 'refs/DETAILS.md')),
+			toolResultMessage: null
+		});
+		mockToolCallTurn(
+			JSON.stringify([
+				{
+					id: 'call_1',
+					type: 'function',
+					function: {
+						name: SKILL_READ_TOOL,
+						arguments: '{"name":"demo-skill","path":"refs/DETAILS.md"}'
+					}
+				}
+			])
+		);
 
 		const { callbacks, createToolResultMessage } = makeCallbacks();
 		const runPromise = agenticStore.runAgenticFlow(runParams('conv-1', callbacks));
@@ -368,10 +450,11 @@ describe('agenticStore.runAgenticFlow Skills integration', () => {
 		const result = await runPromise;
 
 		expect(result).toEqual({ handled: true });
+		expect(mockRecordActivation).toHaveBeenCalled();
 		expect(createToolResultMessage).toHaveBeenCalledWith(
 			'call_1',
-			'<skill_content name="demo-skill">body</skill_content>',
-			undefined
+			'<skill_resource name="demo-skill" path="refs/DETAILS.md">data</skill_resource>',
+			[expect.objectContaining({ kind: 'resource', path: 'refs/DETAILS.md' })]
 		);
 	});
 });
