@@ -77,6 +77,7 @@
 #include <cinttypes>
 #include <condition_variable>
 #include <cstddef>
+#include <ctime>
 #include <cstdint>
 #include <cfloat>
 #include <initializer_list>
@@ -789,9 +790,229 @@ static void ggml_backend_cuda_buffer_set_tensor(ggml_backend_buffer_t buffer, gg
     CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
 }
 
+
+static void ggml_cuda_handoff_emit(uint32_t kind, int device, uint64_t duration_ns = 0);
+
+enum ggml_cuda_handoff_kind : uint32_t {
+    GGML_CUDA_HANDOFF_GRAPH_BEGIN = 1,
+    GGML_CUDA_HANDOFF_GRAPH_END,
+    GGML_CUDA_HANDOFF_PEER_BEGIN,
+    GGML_CUDA_HANDOFF_PEER_END,
+    GGML_CUDA_HANDOFF_D2H_BEGIN,
+    GGML_CUDA_HANDOFF_D2H_END,
+    GGML_CUDA_HANDOFF_D2H_SUBMIT_BEGIN,
+    GGML_CUDA_HANDOFF_D2H_SUBMIT_END,
+    GGML_CUDA_HANDOFF_GRAPH_SUBMIT_BEGIN,
+    GGML_CUDA_HANDOFF_GRAPH_SUBMIT_END,
+    GGML_CUDA_HANDOFF_PEER_SUBMIT_BEGIN,
+    GGML_CUDA_HANDOFF_PEER_SUBMIT_END,
+    GGML_CUDA_HANDOFF_STREAM_SYNC_BEGIN,
+    GGML_CUDA_HANDOFF_STREAM_SYNC_END,
+    GGML_CUDA_HANDOFF_EVENT_SYNC_BEGIN,
+    GGML_CUDA_HANDOFF_EVENT_SYNC_END,
+    GGML_CUDA_HANDOFF_EVENT_WAIT_BEGIN,
+    GGML_CUDA_HANDOFF_EVENT_WAIT_END,
+    GGML_CUDA_HANDOFF_EVENT_RECORD_BEGIN,
+    GGML_CUDA_HANDOFF_EVENT_RECORD_END,
+};
+
+struct ggml_cuda_handoff_record {
+    uint64_t timestamp_ns;
+    uint64_t sequence;
+    uint64_t duration_ns;
+    uint32_t kind;
+    int32_t device;
+};
+
+static constexpr uint64_t GGML_CUDA_HANDOFF_MAX_RECORDS = 1u << 20;
+static ggml_cuda_handoff_record ggml_cuda_handoff_records[GGML_CUDA_HANDOFF_MAX_RECORDS];
+static std::atomic<uint64_t> ggml_cuda_handoff_record_count{0};
+static cudaEvent_t ggml_cuda_handoff_peer_start[GGML_CUDA_MAX_DEVICES] = {};
+static cudaEvent_t ggml_cuda_handoff_peer_end[GGML_CUDA_MAX_DEVICES] = {};
+static cudaEvent_t ggml_cuda_handoff_graph_start[GGML_CUDA_MAX_DEVICES] = {};
+static cudaEvent_t ggml_cuda_handoff_graph_end[GGML_CUDA_MAX_DEVICES] = {};
+static std::mutex ggml_cuda_handoff_peer_events_mutex;
+static uint64_t ggml_cuda_handoff_peer_generation[GGML_CUDA_MAX_DEVICES] = {};
+static uint64_t ggml_cuda_handoff_peer_completed[GGML_CUDA_MAX_DEVICES] = {};
+
+static uint64_t ggml_cuda_handoff_time_ns() {
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
+        return 0;
+    }
+    return uint64_t(ts.tv_sec) * 1000000000ULL + uint64_t(ts.tv_nsec);
+}
+
+static const char * ggml_cuda_handoff_kind_name(uint32_t kind) {
+    switch (kind) {
+        case GGML_CUDA_HANDOFF_GRAPH_BEGIN:       return "graph_begin";
+        case GGML_CUDA_HANDOFF_GRAPH_END:         return "graph_end";
+        case GGML_CUDA_HANDOFF_PEER_BEGIN:       return "peer_begin";
+        case GGML_CUDA_HANDOFF_PEER_END:         return "peer_end";
+        case GGML_CUDA_HANDOFF_D2H_BEGIN:        return "d2h_begin";
+        case GGML_CUDA_HANDOFF_D2H_END:          return "d2h_end";
+        case GGML_CUDA_HANDOFF_D2H_SUBMIT_BEGIN:  return "d2h_submit_begin";
+        case GGML_CUDA_HANDOFF_D2H_SUBMIT_END:    return "d2h_submit_end";
+        case GGML_CUDA_HANDOFF_GRAPH_SUBMIT_BEGIN:return "graph_submit_begin";
+        case GGML_CUDA_HANDOFF_GRAPH_SUBMIT_END:  return "graph_submit_end";
+        case GGML_CUDA_HANDOFF_PEER_SUBMIT_BEGIN:return "peer_submit_begin";
+        case GGML_CUDA_HANDOFF_PEER_SUBMIT_END:  return "peer_submit_end";
+        case GGML_CUDA_HANDOFF_STREAM_SYNC_BEGIN:return "stream_sync_begin";
+        case GGML_CUDA_HANDOFF_STREAM_SYNC_END:  return "stream_sync_end";
+        case GGML_CUDA_HANDOFF_EVENT_SYNC_BEGIN: return "event_sync_begin";
+        case GGML_CUDA_HANDOFF_EVENT_SYNC_END:   return "event_sync_end";
+        case GGML_CUDA_HANDOFF_EVENT_WAIT_BEGIN: return "event_wait_begin";
+        case GGML_CUDA_HANDOFF_EVENT_WAIT_END:   return "event_wait_end";
+        case GGML_CUDA_HANDOFF_EVENT_RECORD_BEGIN:return "event_record_begin";
+        case GGML_CUDA_HANDOFF_EVENT_RECORD_END: return "event_record_end";
+        default: return "unknown";
+    }
+}
+
+static void ggml_cuda_handoff_peer_events_init(int device) {
+    std::lock_guard<std::mutex> lock(ggml_cuda_handoff_peer_events_mutex);
+    if (ggml_cuda_handoff_peer_start[device] != nullptr) {
+        return;
+    }
+    ggml_cuda_set_device(device);
+    CUDA_CHECK(cudaEventCreateWithFlags(&ggml_cuda_handoff_peer_start[device], 0));
+    CUDA_CHECK(cudaEventCreateWithFlags(&ggml_cuda_handoff_peer_end[device], 0));
+}
+
+static void ggml_cuda_handoff_graph_events_init(int device) {
+    std::lock_guard<std::mutex> lock(ggml_cuda_handoff_peer_events_mutex);
+    if (ggml_cuda_handoff_graph_start[device] != nullptr) {
+        return;
+    }
+    ggml_cuda_set_device(device);
+    CUDA_CHECK(cudaEventCreateWithFlags(&ggml_cuda_handoff_graph_start[device], 0));
+    CUDA_CHECK(cudaEventCreateWithFlags(&ggml_cuda_handoff_graph_end[device], 0));
+}
+
+static uint64_t ggml_cuda_handoff_event_elapsed_ns(cudaEvent_t start, cudaEvent_t end) {
+    float ms = 0.0f;
+#if defined(GGML_USE_HIP)
+    const hipError_t err = hipEventElapsedTime(&ms, start, end);
+    if (err != hipSuccess) {
+        return 0;
+    }
+#else
+    const cudaError_t err = cudaEventElapsedTime(&ms, start, end);
+    if (err != cudaSuccess) {
+        return 0;
+    }
+#endif
+    return uint64_t(ms * 1.0e6f);
+}
+
+static uint64_t ggml_cuda_handoff_peer_elapsed_ns(int device) {
+    return ggml_cuda_handoff_event_elapsed_ns(
+        ggml_cuda_handoff_peer_start[device], ggml_cuda_handoff_peer_end[device]);
+}
+
+static void ggml_cuda_handoff_peer_complete(int device) {
+    if (ggml_cuda_handoff_peer_generation[device] == ggml_cuda_handoff_peer_completed[device] ||
+        ggml_cuda_handoff_peer_end[device] == nullptr) {
+        return;
+    }
+    const uint64_t duration_ns = ggml_cuda_handoff_peer_elapsed_ns(device);
+    ggml_cuda_handoff_emit(GGML_CUDA_HANDOFF_PEER_END, device, duration_ns);
+    ggml_cuda_handoff_peer_completed[device] = ggml_cuda_handoff_peer_generation[device];
+}
+
+static void ggml_cuda_handoff_emit(uint32_t kind, int device, uint64_t duration_ns);
+
+static void ggml_cuda_handoff_record_impl(uint32_t kind, int device, uint64_t duration_ns) {
+    const uint64_t sequence = ggml_cuda_handoff_record_count.fetch_add(1, std::memory_order_relaxed);
+    if (sequence >= GGML_CUDA_HANDOFF_MAX_RECORDS) {
+        return;
+    }
+    ggml_cuda_handoff_records[sequence] = {
+        ggml_cuda_handoff_time_ns(), sequence, duration_ns, kind, device,
+    };
+}
+
+static void ggml_cuda_handoff_emit(uint32_t kind, int device, uint64_t duration_ns) {
+    ggml_cuda_handoff_record_impl(kind, device, duration_ns);
+}
+
+static void ggml_cuda_handoff_callback(void * user_data) {
+    const uintptr_t payload = reinterpret_cast<uintptr_t>(user_data);
+    const uint32_t kind = uint32_t(payload >> 32);
+    const int device = int(payload & 0xffffffffu);
+    const uint64_t duration_ns = 0;
+    ggml_cuda_handoff_emit(kind, device, duration_ns);
+}
+
+static void ggml_cuda_handoff_enqueue(cudaStream_t stream, uint32_t kind, int device) {
+    const uintptr_t payload = (uintptr_t(kind) << 32) | uintptr_t(uint32_t(device));
+    CUDA_CHECK(cudaLaunchHostFunc(stream, ggml_cuda_handoff_callback, reinterpret_cast<void *>(payload)));
+}
+
+static bool ggml_cuda_handoff_trace_enabled() {
+    static const bool enabled = [] {
+        const char * value = std::getenv("GGML_HIP_TRACE_HANDOFF");
+        const bool result = value != nullptr && std::atoi(value) != 0;
+        if (result) {
+            std::atexit([] {
+                const char * path = std::getenv("GGML_HIP_TRACE_HANDOFF_FILE");
+                if (path == nullptr || *path == '\0') {
+                    return;
+                }
+                FILE * f = std::fopen(path, "w");
+                if (f == nullptr) {
+                    return;
+                }
+                std::fprintf(f, "sequence\tkind\tdevice\ttimestamp_monotonic_ns\tduration_ns\n");
+                const uint64_t count = std::min(ggml_cuda_handoff_record_count.load(std::memory_order_relaxed), GGML_CUDA_HANDOFF_MAX_RECORDS);
+                for (uint64_t i = 0; i < count; ++i) {
+                    const auto & r = ggml_cuda_handoff_records[i];
+                    std::fprintf(f, "%" PRIu64 "\t%s\t%d\t%" PRIu64 "\t%" PRIu64 "\n", r.sequence, ggml_cuda_handoff_kind_name(r.kind), r.device, r.timestamp_ns, r.duration_ns);
+                }
+                std::fclose(f);
+            });
+        }
+        return result;
+    }();
+    return enabled;
+}
+
+static bool ggml_cuda_trace_tensor_copies() {
+    static const bool enabled = [] {
+        const char * value = std::getenv("GGML_HIP_TRACE_TENSOR_COPIES");
+        return value != nullptr && std::atoi(value) != 0;
+    }();
+    return enabled;
+}
+
+static void ggml_cuda_trace_d2h(const char * path, int device, const ggml_tensor * tensor, size_t offset, size_t size) {
+    if (!ggml_cuda_trace_tensor_copies()) {
+        return;
+    }
+    std::fprintf(stderr,
+        "GGML_CUDA_COPY_TRACE kind=D2H path=%s device=%d tensor=%s type=%s offset=%zu size=%zu ne=[%lld,%lld,%lld,%lld]\n",
+        path, device, tensor->name, ggml_type_name(tensor->type), offset, size,
+        (long long) tensor->ne[0], (long long) tensor->ne[1],
+        (long long) tensor->ne[2], (long long) tensor->ne[3]);
+}
+
+static void ggml_cuda_trace_d2d(const char * path, int src_device, int dst_device,
+                                const ggml_tensor * src, const ggml_tensor * dst, size_t size) {
+    if (!ggml_cuda_trace_tensor_copies()) {
+        return;
+    }
+    std::fprintf(stderr,
+        "GGML_CUDA_COPY_TRACE kind=%s path=%s src_device=%d dst_device=%d src=%s dst=%s type=%s size=%zu ne=[%lld,%lld,%lld,%lld]\n",
+        src_device == dst_device ? "D2D" : "PEER", path, src_device, dst_device,
+        src->name, dst->name, ggml_type_name(src->type), size,
+        (long long) src->ne[0], (long long) src->ne[1],
+        (long long) src->ne[2], (long long) src->ne[3]);
+}
+
 static void ggml_backend_cuda_buffer_get_tensor(ggml_backend_buffer_t buffer, const ggml_tensor * tensor, void * data, size_t offset, size_t size) {
     ggml_backend_cuda_buffer_context * ctx = (ggml_backend_cuda_buffer_context *) buffer->context;
 
+    ggml_cuda_trace_d2h("buffer", ctx->device, tensor, offset, size);
     ggml_cuda_set_device(ctx->device);
     CUDA_CHECK(cudaMemcpyAsync(data, (const char *) tensor->data + offset, size, cudaMemcpyDeviceToHost, cudaStreamPerThread));
     CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
@@ -2679,7 +2900,15 @@ static void ggml_backend_cuda_get_tensor_async(ggml_backend_t backend, const ggm
 
     GGML_ASSERT(buf->buft == ggml_backend_cuda_buffer_type(cuda_ctx->device) && "unsupported buffer type");
 
+    ggml_cuda_trace_d2h("async", cuda_ctx->device, tensor, offset, size);
+    const bool trace_handoff = ggml_cuda_handoff_trace_enabled();
+    if (trace_handoff) {
+        ggml_cuda_handoff_emit(GGML_CUDA_HANDOFF_D2H_SUBMIT_BEGIN, cuda_ctx->device);
+    }
     CUDA_CHECK(cudaMemcpyAsync(data, (const char *) tensor->data + offset, size, cudaMemcpyDeviceToHost, cuda_ctx->stream()));
+    if (trace_handoff) {
+        ggml_cuda_handoff_emit(GGML_CUDA_HANDOFF_D2H_SUBMIT_END, cuda_ctx->device);
+    }
 }
 
 static void ggml_backend_cuda_set_tensor_2d_async(ggml_backend_t backend, struct ggml_tensor * tensor, const void * data,
@@ -2736,6 +2965,7 @@ static bool ggml_backend_cuda_cpy_tensor_async(ggml_backend_t backend_src, ggml_
         // in which case a same-device copy (not a peer copy) is required
         const int src_physical = ggml_cuda_get_physical_device(cuda_ctx_src->device);
         const int dst_physical = ggml_cuda_get_physical_device(cuda_ctx_dst->device);
+        ggml_cuda_trace_d2d("async", src_physical, dst_physical, src, dst, ggml_nbytes(dst));
         if (src_physical == dst_physical) {
             CUDA_CHECK(cudaMemcpyAsync(dst->data, src->data, ggml_nbytes(dst), cudaMemcpyDeviceToDevice, cuda_ctx_src->stream()));
         } else {
@@ -2767,7 +2997,6 @@ static void ggml_backend_cuda_synchronize(ggml_backend_t backend) {
     ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *)backend->context;
 
     CUDA_CHECK(cudaStreamSynchronize(cuda_ctx->stream()));
-
     GGML_UNUSED(backend);
 }
 
@@ -4584,8 +4813,18 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
         if (cuda_graph_update_required) { // Update graph executable
             ggml_cuda_graph_update_executable(cuda_ctx, graph_key);
         }
-        // Launch graph
+        // Lightweight handoff timing on stable graph replays only.
+        const bool trace_handoff = ggml_cuda_handoff_trace_enabled() &&
+            use_cuda_graph && !cuda_graph_update_required && graph->instance != nullptr;
+        if (trace_handoff) {
+            ggml_cuda_handoff_enqueue(cuda_ctx->stream(), GGML_CUDA_HANDOFF_GRAPH_BEGIN, cuda_ctx->device);
+            ggml_cuda_handoff_emit(GGML_CUDA_HANDOFF_GRAPH_SUBMIT_BEGIN, cuda_ctx->device);
+        }
         CUDA_CHECK(cudaGraphLaunch(graph->instance, cuda_ctx->stream()));
+        if (trace_handoff) {
+            ggml_cuda_handoff_emit(GGML_CUDA_HANDOFF_GRAPH_SUBMIT_END, cuda_ctx->device);
+            ggml_cuda_handoff_enqueue(cuda_ctx->stream(), GGML_CUDA_HANDOFF_GRAPH_END, cuda_ctx->device);
+        }
 #else
         GGML_UNUSED(graph_key);
         graph_evaluated_or_captured = true;

@@ -713,7 +713,13 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
                 }
                 return {granularity_q};
             }
-            if (std::regex_match(tensor_name, pattern_attn_out_weight)) {
+            if (std::regex_match(tensor_name, pattern_attn_out_weight) ||
+                    (ud->model->arch == LLM_ARCH_MUSE_GLIMMER &&
+                     std::regex_match(tensor_name, pattern_attn_gate_weight))) {
+                // Muse multiplies the sigmoid gate directly into the sharded
+                // attention output before o_proj. Keep both tensors on the same
+                // GQA-aligned slices so the multiply stays local and requires no
+                // redistribution or additional collective.
                 GGML_ASSERT(segments.size() == 1);
                 return {granularity_q};
             }

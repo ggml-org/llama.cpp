@@ -107,6 +107,12 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
         n_head  = 8;
         n_ff    = 1024;
         n_layer = 4;
+    } else if (arch == LLM_ARCH_MUSE_GLIMMER) {
+        // Exercise grouped-query tensor sharding: the attention gate must use
+        // the same KV-group-aligned layout as the Q/attention output path.
+        n_embd = 512;
+        n_head = 8;
+        n_ff   = 768;
     } else if (arch == LLM_ARCH_DEEPSEEK2
             || arch == LLM_ARCH_DEEPSEEK32
             || arch == LLM_ARCH_GLM_DSA
@@ -162,7 +168,9 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
         ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT_KV, n_head_per_layer);
     } else {
         ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT, n_head);
-        ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT_KV, arch == LLM_ARCH_DEEPSEEK4 ? uint32_t(1) : n_head);
+        const uint32_t n_head_kv = arch == LLM_ARCH_DEEPSEEK4 ? 1 :
+            arch == LLM_ARCH_MUSE_GLIMMER ? 2 : n_head;
+        ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT_KV, n_head_kv);
     }
 
     ms.add_kv(LLM_KV_ATTENTION_MAX_ALIBI_BIAS, 8.0f);
