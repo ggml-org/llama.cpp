@@ -125,6 +125,7 @@ class ServerProcess:
     mcp_servers_config: str | None = None
     mcp_servers_json: str | None = None
     cors_origins: str | None = None
+    cors_headers: str | None = None
     api_prefix: str | None = None
     skills: bool = False
     trust_project_skills: bool = False
@@ -207,6 +208,8 @@ class ServerProcess:
             server_args.extend(["--models-preset", self.models_preset])
         if self.cors_origins:
             server_args.extend(["--cors-origins", self.cors_origins])
+        if self.cors_headers:
+            server_args.extend(["--cors-headers", self.cors_headers])
         if self.api_prefix:
             server_args.extend(["--api-prefix", self.api_prefix])
         if self.n_batch:
