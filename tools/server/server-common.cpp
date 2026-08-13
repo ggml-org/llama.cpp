@@ -1086,19 +1086,9 @@ json oaicompat_chat_params_parse(
         throw std::invalid_argument("invalid type for \"enable_thinking\" (expected boolean, got string)");
     }
 
-    // Parse also the OAI "reasoning_effort": "none" specific value
-    // official values: none, minimal, low, medium, high, xhigh, max
-    // Also support "reasoning": { "effort": "..." } syntax
-    auto reasoning_effort = json_value(
-        body,
-        "reasoning_effort",
-        json_value(
-            json_value(body, "reasoning", json::object()),
-            "effort",
-            std::string("")
-        )
-    );
-    if (!reasoning_effort.empty()) {
+    // Parse the OAI "reasoning_effort" field; "none" disables reasoning.
+    if (body.contains("reasoning_effort")) {
+        auto reasoning_effort = json_value(body, "reasoning_effort", std::string(""));
         if (reasoning_effort == "none") {
             inputs.enable_thinking = false;
         } else {

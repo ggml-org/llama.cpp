@@ -1250,7 +1250,7 @@ The `response_format` parameter supports both plain JSON output (e.g. `{"type": 
 
 `chat_template_kwargs`: Allows sending additional parameters to the json templating system. For example: `{"enable_thinking": false}`
 
-`reasoning_effort`: If `none`, reasoning/thinking is disabled. Otherwise, the value is made available to the jinja template. Also accepts `"reasoning": { "effort": "string" }`.
+`reasoning_effort`: If `none`, reasoning/thinking is disabled. Otherwise, the value is made available to the jinja template.
 
 `reasoning_format`: The reasoning format to be parsed. If set to `none`, it will output the raw generated text.
 
