@@ -184,8 +184,8 @@ void concat_impl_sycl(ggml_backend_sycl_context & ctx, ggml_tensor *dst) {
             const size_t size0 = ggml_nbytes(src0);
             const size_t size1 = ggml_nbytes(src1);
 
-            SYCL_CHECK(CHECK_TRY_ERROR(stream->memcpy(dst_d, src0_d, size0).wait()));
-            SYCL_CHECK(CHECK_TRY_ERROR(stream->memcpy(dst_d + size0 / type_size, src1_d, size1).wait()));
+            SYCL_CHECK(CHECK_TRY_ERROR(stream->memcpy(dst_d, src0_d, size0)));
+            SYCL_CHECK(CHECK_TRY_ERROR(stream->memcpy(dst_d + size0 / type_size, src1_d, size1)));
         }
     } else {
         concat_T_sycl_non_cont<T>(stream, (const char *) src0->data, (const char *) src1->data, (char *) dst->data,
@@ -193,6 +193,270 @@ void concat_impl_sycl(ggml_backend_sycl_context & ctx, ggml_tensor *dst) {
                                  src0->nb[2], src0->nb[3], src1->ne[0], src1->ne[1], src1->ne[2], src1->ne[3],
                                  src1->nb[0], src1->nb[1], src1->nb[2], src1->nb[3], dst->ne[0], dst->ne[1], dst->ne[2],
                                  dst->ne[3], dst->nb[0], dst->nb[1], dst->nb[2], dst->nb[3], dim);
+    }
+}
+
+static void concat_impl_q4_0_sycl(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/2);
+    const ggml_tensor * src0   = dst->src[0];
+    const ggml_tensor * src1   = dst->src[1];
+    queue_ptr           stream = ctx.stream();
+
+    const int32_t dim = ((int32_t *) dst->op_params)[0];
+
+    GGML_ASSERT(src0->type == GGML_TYPE_Q4_0);
+    GGML_ASSERT(src1->type == GGML_TYPE_Q4_0);
+    GGML_ASSERT(dst->type == GGML_TYPE_Q4_0);
+    GGML_ASSERT(src0->ne[0] % QK4_0 == 0);
+    GGML_ASSERT(src1->ne[0] % QK4_0 == 0);
+    GGML_ASSERT(dst->ne[0] % QK4_0 == 0);
+
+    const int ne00_blk = src0->ne[0] / QK4_0;
+    const int ne0_blk  = dst->ne[0] / QK4_0;
+
+    if (ggml_is_contiguous(src0) && ggml_is_contiguous(src1)) {
+        const block_q4_0 * src0_d = (const block_q4_0 *) src0->data;
+        const block_q4_0 * src1_d = (const block_q4_0 *) src1->data;
+        block_q4_0 * dst_d        = (block_q4_0 *) dst->data;
+        const size_t type_size    = sizeof(block_q4_0);
+
+        if (dim != 3) {
+            for (int i3 = 0; i3 < dst->ne[3]; i3++) {
+                concat_T_sycl<block_q4_0>(
+                    src0_d + i3 * (src0->nb[3] / type_size),
+                    src1_d + i3 * (src1->nb[3] / type_size),
+                    dst_d + i3 * (dst->nb[3] / type_size),
+                    ne00_blk, src0->ne[1], src0->ne[2], ne0_blk,
+                    dst->ne[1], dst->ne[2], dim, stream);
+            }
+        } else {
+            const size_t size0 = ggml_nbytes(src0);
+            const size_t size1 = ggml_nbytes(src1);
+
+            SYCL_CHECK(CHECK_TRY_ERROR(stream->memcpy(dst_d, src0_d, size0)));
+            SYCL_CHECK(CHECK_TRY_ERROR(stream->memcpy((char *) dst_d + size0, src1_d, size1)));
+        }
+    } else {
+        concat_T_sycl_non_cont<block_q4_0>(
+            stream, (const char *) src0->data, (const char *) src1->data,
+            (char *) dst->data,
+            ne00_blk, src0->ne[1], src0->ne[2], src0->ne[3],
+            src0->nb[0], src0->nb[1], src0->nb[2], src0->nb[3],
+            src1->ne[0] / QK4_0, src1->ne[1], src1->ne[2], src1->ne[3],
+            src1->nb[0], src1->nb[1], src1->nb[2], src1->nb[3],
+            ne0_blk, dst->ne[1], dst->ne[2], dst->ne[3],
+            dst->nb[0], dst->nb[1], dst->nb[2], dst->nb[3], dim);
+    }
+}
+
+static void concat_impl_q4_1_sycl(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/2);
+    const ggml_tensor * src0   = dst->src[0];
+    const ggml_tensor * src1   = dst->src[1];
+    queue_ptr           stream = ctx.stream();
+
+    const int32_t dim = ((int32_t *) dst->op_params)[0];
+
+    GGML_ASSERT(src0->type == GGML_TYPE_Q4_1);
+    GGML_ASSERT(src1->type == GGML_TYPE_Q4_1);
+    GGML_ASSERT(dst->type == GGML_TYPE_Q4_1);
+    GGML_ASSERT(src0->ne[0] % QK4_1 == 0);
+    GGML_ASSERT(src1->ne[0] % QK4_1 == 0);
+    GGML_ASSERT(dst->ne[0] % QK4_1 == 0);
+
+    const int ne00_blk = src0->ne[0] / QK4_1;
+    const int ne0_blk  = dst->ne[0] / QK4_1;
+
+    if (ggml_is_contiguous(src0) && ggml_is_contiguous(src1)) {
+        const block_q4_1 * src0_d = (const block_q4_1 *) src0->data;
+        const block_q4_1 * src1_d = (const block_q4_1 *) src1->data;
+        block_q4_1 * dst_d        = (block_q4_1 *) dst->data;
+        const size_t type_size    = sizeof(block_q4_1);
+
+        if (dim != 3) {
+            for (int i3 = 0; i3 < dst->ne[3]; i3++) {
+                concat_T_sycl<block_q4_1>(
+                    src0_d + i3 * (src0->nb[3] / type_size),
+                    src1_d + i3 * (src1->nb[3] / type_size),
+                    dst_d + i3 * (dst->nb[3] / type_size),
+                    ne00_blk, src0->ne[1], src0->ne[2], ne0_blk,
+                    dst->ne[1], dst->ne[2], dim, stream);
+            }
+        } else {
+            const size_t size0 = ggml_nbytes(src0);
+            const size_t size1 = ggml_nbytes(src1);
+
+            SYCL_CHECK(CHECK_TRY_ERROR(stream->memcpy(dst_d, src0_d, size0)));
+            SYCL_CHECK(CHECK_TRY_ERROR(stream->memcpy((char *) dst_d + size0, src1_d, size1)));
+        }
+    } else {
+        concat_T_sycl_non_cont<block_q4_1>(
+            stream, (const char *) src0->data, (const char *) src1->data,
+            (char *) dst->data,
+            ne00_blk, src0->ne[1], src0->ne[2], src0->ne[3],
+            src0->nb[0], src0->nb[1], src0->nb[2], src0->nb[3],
+            src1->ne[0] / QK4_1, src1->ne[1], src1->ne[2], src1->ne[3],
+            src1->nb[0], src1->nb[1], src1->nb[2], src1->nb[3],
+            ne0_blk, dst->ne[1], dst->ne[2], dst->ne[3],
+            dst->nb[0], dst->nb[1], dst->nb[2], dst->nb[3], dim);
+    }
+}
+
+static void concat_impl_q5_0_sycl(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/2);
+    const ggml_tensor * src0   = dst->src[0];
+    const ggml_tensor * src1   = dst->src[1];
+    queue_ptr           stream = ctx.stream();
+
+    const int32_t dim = ((int32_t *) dst->op_params)[0];
+
+    GGML_ASSERT(src0->type == GGML_TYPE_Q5_0);
+    GGML_ASSERT(src1->type == GGML_TYPE_Q5_0);
+    GGML_ASSERT(dst->type == GGML_TYPE_Q5_0);
+    GGML_ASSERT(src0->ne[0] % QK5_0 == 0);
+    GGML_ASSERT(src1->ne[0] % QK5_0 == 0);
+    GGML_ASSERT(dst->ne[0] % QK5_0 == 0);
+
+    const int ne00_blk = src0->ne[0] / QK5_0;
+    const int ne0_blk  = dst->ne[0] / QK5_0;
+
+    if (ggml_is_contiguous(src0) && ggml_is_contiguous(src1)) {
+        const block_q5_0 * src0_d = (const block_q5_0 *) src0->data;
+        const block_q5_0 * src1_d = (const block_q5_0 *) src1->data;
+        block_q5_0 * dst_d        = (block_q5_0 *) dst->data;
+        const size_t type_size    = sizeof(block_q5_0);
+
+        if (dim != 3) {
+            for (int i3 = 0; i3 < dst->ne[3]; i3++) {
+                concat_T_sycl<block_q5_0>(
+                    src0_d + i3 * (src0->nb[3] / type_size),
+                    src1_d + i3 * (src1->nb[3] / type_size),
+                    dst_d + i3 * (dst->nb[3] / type_size),
+                    ne00_blk, src0->ne[1], src0->ne[2], ne0_blk,
+                    dst->ne[1], dst->ne[2], dim, stream);
+            }
+        } else {
+            const size_t size0 = ggml_nbytes(src0);
+            const size_t size1 = ggml_nbytes(src1);
+
+            SYCL_CHECK(CHECK_TRY_ERROR(stream->memcpy(dst_d, src0_d, size0)));
+            SYCL_CHECK(CHECK_TRY_ERROR(stream->memcpy((char *) dst_d + size0, src1_d, size1)));
+        }
+    } else {
+        concat_T_sycl_non_cont<block_q5_0>(
+            stream, (const char *) src0->data, (const char *) src1->data,
+            (char *) dst->data,
+            ne00_blk, src0->ne[1], src0->ne[2], src0->ne[3],
+            src0->nb[0], src0->nb[1], src0->nb[2], src0->nb[3],
+            src1->ne[0] / QK5_0, src1->ne[1], src1->ne[2], src1->ne[3],
+            src1->nb[0], src1->nb[1], src1->nb[2], src1->nb[3],
+            ne0_blk, dst->ne[1], dst->ne[2], dst->ne[3],
+            dst->nb[0], dst->nb[1], dst->nb[2], dst->nb[3], dim);
+    }
+}
+
+static void concat_impl_q5_1_sycl(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/2);
+    const ggml_tensor * src0   = dst->src[0];
+    const ggml_tensor * src1   = dst->src[1];
+    queue_ptr           stream = ctx.stream();
+
+    const int32_t dim = ((int32_t *) dst->op_params)[0];
+
+    GGML_ASSERT(src0->type == GGML_TYPE_Q5_1);
+    GGML_ASSERT(src1->type == GGML_TYPE_Q5_1);
+    GGML_ASSERT(dst->type == GGML_TYPE_Q5_1);
+    GGML_ASSERT(src0->ne[0] % QK5_1 == 0);
+    GGML_ASSERT(src1->ne[0] % QK5_1 == 0);
+    GGML_ASSERT(dst->ne[0] % QK5_1 == 0);
+
+    const int ne00_blk = src0->ne[0] / QK5_1;
+    const int ne0_blk  = dst->ne[0] / QK5_1;
+
+    if (ggml_is_contiguous(src0) && ggml_is_contiguous(src1)) {
+        const block_q5_1 * src0_d = (const block_q5_1 *) src0->data;
+        const block_q5_1 * src1_d = (const block_q5_1 *) src1->data;
+        block_q5_1 * dst_d        = (block_q5_1 *) dst->data;
+        const size_t type_size    = sizeof(block_q5_1);
+
+        if (dim != 3) {
+            for (int i3 = 0; i3 < dst->ne[3]; i3++) {
+                concat_T_sycl<block_q5_1>(
+                    src0_d + i3 * (src0->nb[3] / type_size),
+                    src1_d + i3 * (src1->nb[3] / type_size),
+                    dst_d + i3 * (dst->nb[3] / type_size),
+                    ne00_blk, src0->ne[1], src0->ne[2], ne0_blk,
+                    dst->ne[1], dst->ne[2], dim, stream);
+            }
+        } else {
+            const size_t size0 = ggml_nbytes(src0);
+            const size_t size1 = ggml_nbytes(src1);
+
+            SYCL_CHECK(CHECK_TRY_ERROR(stream->memcpy(dst_d, src0_d, size0)));
+            SYCL_CHECK(CHECK_TRY_ERROR(stream->memcpy((char *) dst_d + size0, src1_d, size1)));
+        }
+    } else {
+        concat_T_sycl_non_cont<block_q5_1>(
+            stream, (const char *) src0->data, (const char *) src1->data,
+            (char *) dst->data,
+            ne00_blk, src0->ne[1], src0->ne[2], src0->ne[3],
+            src0->nb[0], src0->nb[1], src0->nb[2], src0->nb[3],
+            src1->ne[0] / QK5_1, src1->ne[1], src1->ne[2], src1->ne[3],
+            src1->nb[0], src1->nb[1], src1->nb[2], src1->nb[3],
+            ne0_blk, dst->ne[1], dst->ne[2], dst->ne[3],
+            dst->nb[0], dst->nb[1], dst->nb[2], dst->nb[3], dim);
+    }
+}
+
+static void concat_impl_q8_0_sycl(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/2);
+    const ggml_tensor * src0   = dst->src[0];
+    const ggml_tensor * src1   = dst->src[1];
+    queue_ptr           stream = ctx.stream();
+
+    const int32_t dim = ((int32_t *) dst->op_params)[0];
+
+    GGML_ASSERT(src0->type == GGML_TYPE_Q8_0);
+    GGML_ASSERT(src1->type == GGML_TYPE_Q8_0);
+    GGML_ASSERT(dst->type == GGML_TYPE_Q8_0);
+    GGML_ASSERT(src0->ne[0] % QK8_0 == 0);
+    GGML_ASSERT(src1->ne[0] % QK8_0 == 0);
+    GGML_ASSERT(dst->ne[0] % QK8_0 == 0);
+
+    const int ne00_blk = src0->ne[0] / QK8_0;
+    const int ne0_blk  = dst->ne[0] / QK8_0;
+
+    if (ggml_is_contiguous(src0) && ggml_is_contiguous(src1)) {
+        const block_q8_0 * src0_d = (const block_q8_0 *) src0->data;
+        const block_q8_0 * src1_d = (const block_q8_0 *) src1->data;
+        block_q8_0 * dst_d        = (block_q8_0 *) dst->data;
+        const size_t type_size    = sizeof(block_q8_0);
+
+        if (dim != 3) {
+            for (int i3 = 0; i3 < dst->ne[3]; i3++) {
+                concat_T_sycl<block_q8_0>(
+                    src0_d + i3 * (src0->nb[3] / type_size),
+                    src1_d + i3 * (src1->nb[3] / type_size),
+                    dst_d + i3 * (dst->nb[3] / type_size),
+                    ne00_blk, src0->ne[1], src0->ne[2], ne0_blk,
+                    dst->ne[1], dst->ne[2], dim, stream);
+            }
+        } else {
+            const size_t size0 = ggml_nbytes(src0);
+            const size_t size1 = ggml_nbytes(src1);
+            SYCL_CHECK(CHECK_TRY_ERROR(stream->memcpy(dst_d, src0_d, size0)));
+            SYCL_CHECK(CHECK_TRY_ERROR(stream->memcpy((char *) dst_d + size0, src1_d, size1)));
+        }
+    } else {
+        concat_T_sycl_non_cont<block_q8_0>(
+            stream, (const char *) src0->data, (const char *) src1->data,
+            (char *) dst->data,
+            ne00_blk, src0->ne[1], src0->ne[2], src0->ne[3],
+            src0->nb[0], src0->nb[1], src0->nb[2], src0->nb[3],
+            src1->ne[0] / QK8_0, src1->ne[1], src1->ne[2], src1->ne[3],
+            src1->nb[0], src1->nb[1], src1->nb[2], src1->nb[3],
+            ne0_blk, dst->ne[1], dst->ne[2], dst->ne[3],
+            dst->nb[0], dst->nb[1], dst->nb[2], dst->nb[3], dim);
     }
 }
 
@@ -221,6 +485,21 @@ void ggml_sycl_op_concat(ggml_backend_sycl_context & ctx, ggml_tensor *dst) {
         break;
     case GGML_TYPE_I8:
         concat_impl_sycl<int8_t>(ctx, dst);
+        break;
+    case GGML_TYPE_Q4_0:
+        concat_impl_q4_0_sycl(ctx, dst);
+        break;
+    case GGML_TYPE_Q4_1:
+        concat_impl_q4_1_sycl(ctx, dst);
+        break;
+    case GGML_TYPE_Q5_0:
+        concat_impl_q5_0_sycl(ctx, dst);
+        break;
+    case GGML_TYPE_Q5_1:
+        concat_impl_q5_1_sycl(ctx, dst);
+        break;
+    case GGML_TYPE_Q8_0:
+        concat_impl_q8_0_sycl(ctx, dst);
         break;
     default:
         fprintf(stderr, "%s: unsupported types: dst: %s\n", __func__, ggml_type_name(dst->type));
