@@ -29,6 +29,8 @@ on:
     ]
 
 env:
+  # note: this is dud token to avoid rate limiting (https://github.com/ggml-org/llama.cpp/pull/25706#issuecomment-4979941302)
+  HF_TOKEN: ${{ secrets.HF_TOKEN_CI }}
   LLAMA_ARG_LOG_COLORS: 1
   LLAMA_ARG_LOG_PREFIX: 1
   LLAMA_ARG_LOG_TIMESTAMPS: 1
@@ -70,7 +72,7 @@ jobs:
         run: |
           cd tools/server/tests
           source venv/bin/activate
-          pytest -v -x -m "not slow"
+          ./tests.sh
 
       - name: Tests (GPUx1, backend-sampling)
         id: server_integration_tests_backend_sampling
@@ -79,7 +81,7 @@ jobs:
           cd tools/server/tests
           source venv/bin/activate
           export LLAMA_ARG_BACKEND_SAMPLING=1
-          pytest -v -x -m "not slow"
+          ./tests.sh
 
       - name: Tests (GPUx2)
         id: server_integration_tests_gpu2
@@ -88,7 +90,7 @@ jobs:
           cd tools/server/tests
           source venv/bin/activate
           export GGML_METAL_DEVICES=2
-          pytest -v -x -m "not slow"
+          ./tests.sh
 
       - name: Tests (GPUx2, backend-sampling)
         id: server_integration_tests_gpu2_backend_sampling
@@ -97,7 +99,7 @@ jobs:
           cd tools/server/tests
           source venv/bin/activate
           export GGML_METAL_DEVICES=2 LLAMA_ARG_BACKEND_SAMPLING=1
-          pytest -v -x -m "not slow"
+          ./tests.sh
 
   server-cuda:
     runs-on: [self-hosted, llama-server, Linux, NVIDIA]
@@ -130,7 +132,7 @@ jobs:
         run: |
           cd tools/server/tests
           source venv/bin/activate
-          pytest -v -x -m "not slow"
+          ./tests.sh
 
       - name: Tests (GPUx1, backend-sampling)
         id: server_integration_tests_backend_sampling
@@ -139,7 +141,25 @@ jobs:
           cd tools/server/tests
           source venv/bin/activate
           export LLAMA_ARG_BACKEND_SAMPLING=1
-          pytest -v -x -m "not slow"
+          ./tests.sh
+
+      - name: Tests (GPUx2)
+        id: server_integration_tests_gpu2
+        if: ${{ !github.event.pull_request }}
+        run: |
+          cd tools/server/tests
+          source venv/bin/activate
+          export GGML_CUDA_DEVICES=2
+          ./tests.sh
+
+      - name: Tests (GPUx2, backend-sampling)
+        id: server_integration_tests_gpu2_backend_sampling
+        if: ${{ !github.event.pull_request }}
+        run: |
+          cd tools/server/tests
+          source venv/bin/activate
+          export GGML_CUDA_DEVICES=2 LLAMA_ARG_BACKEND_SAMPLING=1
+          ./tests.sh
 
   server-kleidiai:
     runs-on: ah-ubuntu_22_04-c8g_8x
@@ -199,4 +219,4 @@ jobs:
         run: |
           cd tools/server/tests
           source venv/bin/activate
-          pytest -v -x -m "not slow"
+          ./tests.sh

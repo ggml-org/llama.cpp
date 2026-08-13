@@ -137,9 +137,11 @@ llama-completion.exe -m models\gemma-1.1-7b-it.Q4_K_M.gguf --ignore-eos -n -1
 | `-ctv, --cache-type-v TYPE` | KV cache data type for V<br/>allowed values: f32, f16, bf16, q8_0, q4_0, q4_1, iq4_nl, q5_0, q5_1<br/>(default: f16)<br/>(env: LLAMA_ARG_CACHE_TYPE_V) |
 | `-dt, --defrag-thold N` | KV cache defragmentation threshold (DEPRECATED)<br/>(env: LLAMA_ARG_DEFRAG_THOLD) |
 | `-np, --parallel N` | number of parallel sequences to decode (default: 1)<br/>(env: LLAMA_ARG_N_PARALLEL) |
-| `--mlock` | force system to keep model in RAM rather than swapping or compressing<br/>(env: LLAMA_ARG_MLOCK) |
-| `--mmap, --no-mmap` | whether to memory-map model. (if mmap disabled, slower load but may reduce pageouts if not using mlock) (default: enabled)<br/>(env: LLAMA_ARG_MMAP) |
-| `-dio, --direct-io, -ndio, --no-direct-io` | use DirectIO if available. (default: disabled)<br/>(env: LLAMA_ARG_DIO) |
+| `--rpc SERVERS` | comma-separated list of RPC servers (host:port)<br/>(env: LLAMA_ARG_RPC) |
+| `--mlock` | DEPRECATED in favor of `--load-mode`: force system to keep model in RAM rather than swapping or compressing<br/>(env: LLAMA_ARG_MLOCK) |
+| `--mmap, --no-mmap` | DEPRECATED in favor of `--load-mode`: whether to memory-map model. (if mmap disabled, slower load but may reduce pageouts if not using mlock)<br/>(env: LLAMA_ARG_MMAP) |
+| `-dio, --direct-io, -ndio, --no-direct-io` | DEPRECATED in favor of `--load-mode`: use DirectIO if available<br/>(env: LLAMA_ARG_DIO) |
+| `-lm, --load-mode MODE` | model loading mode (default: auto)<br/>- auto: mmap, unless a device does not support it<br/>- none: no special loading mode<br/>- mmap: memory-map model (if mmap disabled, slower load but may reduce pageouts if not using mlock)<br/>- mlock: force system to keep model in RAM rather than swapping or compressing<br/>- mmap+mlock: mmap + force system to keep model in RAM rather than swapping or compressing<br/>- dio: use DirectIO if available<br/><br/>(env: LLAMA_ARG_LOAD_MODE) |
 | `--numa TYPE` | attempt optimizations that help on some NUMA systems<br/>- distribute: spread execution evenly over all nodes<br/>- isolate: only spawn threads on CPUs on the node that execution started on<br/>- numactl: use the CPU map provided by numactl<br/>if run without this previously, it is recommended to drop the system page cache before using this<br/>see https://github.com/ggml-org/llama.cpp/issues/1437<br/>(env: LLAMA_ARG_NUMA) |
 | `-dev, --device <dev1,dev2,..>` | comma-separated list of devices to use for offloading (none = don't offload)<br/>use --list-devices to see a list of available devices<br/>(env: LLAMA_ARG_DEVICE) |
 | `--list-devices` | print list of available devices and exit |
@@ -166,8 +168,6 @@ llama-completion.exe -m models\gemma-1.1-7b-it.Q4_K_M.gguf --ignore-eos -n -1
 | `-dr, --docker-repo [<repo>/]<model>[:quant]` | Docker Hub model repository. repo is optional, default to ai/. quant is optional, default to :latest.<br/>example: gemma3<br/>(default: unused)<br/>(env: LLAMA_ARG_DOCKER_REPO) |
 | `-hf, -hfr, --hf-repo <user>/<model>[:quant]` | Hugging Face model repository; quant is optional, case-insensitive, default to Q4_K_M, or falls back to the first file in the repo if Q4_K_M doesn't exist.<br/>mmproj is also downloaded automatically if available. to disable, add --no-mmproj<br/>example: ggml-org/GLM-4.7-Flash-GGUF:Q4_K_M<br/>(default: unused)<br/>(env: LLAMA_ARG_HF_REPO) |
 | `-hff, --hf-file FILE` | Hugging Face model file. If specified, it will override the quant in --hf-repo (default: unused)<br/>(env: LLAMA_ARG_HF_FILE) |
-| `-hfv, -hfrv, --hf-repo-v <user>/<model>[:quant]` | Hugging Face model repository for the vocoder model (default: unused)<br/>(env: LLAMA_ARG_HF_REPO_V) |
-| `-hffv, --hf-file-v FILE` | Hugging Face model file for the vocoder model (default: unused)<br/>(env: LLAMA_ARG_HF_FILE_V) |
 | `-hft, --hf-token TOKEN` | Hugging Face access token (default: value from HF_TOKEN environment variable)<br/>(env: HF_TOKEN) |
 | `--log-disable` | Log disable |
 | `--log-file FNAME` | Log to file<br/>(env: LLAMA_ARG_LOG_FILE) |
@@ -197,14 +197,14 @@ llama-completion.exe -m models\gemma-1.1-7b-it.Q4_K_M.gguf --ignore-eos -n -1
 | `--xtc-probability N` | xtc probability (default: 0.00, 0.0 = disabled) |
 | `--xtc-threshold N` | xtc threshold (default: 0.10, 1.0 = disabled) |
 | `--typical, --typical-p N` | locally typical sampling, parameter p (default: 1.00, 1.0 = disabled) |
-| `--repeat-last-n N` | last n tokens to consider for penalize (default: 64, 0 = disabled, -1 = ctx_size) |
+| `--repeat-last-n N` | last n tokens to consider for penalize (default: 64, 0 = disabled) |
 | `--repeat-penalty N` | penalize repeat sequence of tokens (default: 1.00, 1.0 = disabled) |
 | `--presence-penalty N` | repeat alpha presence penalty (default: 0.00, 0.0 = disabled) |
 | `--frequency-penalty N` | repeat alpha frequency penalty (default: 0.00, 0.0 = disabled) |
 | `--dry-multiplier N` | set DRY sampling multiplier (default: 0.00, 0.0 = disabled) |
 | `--dry-base N` | set DRY sampling base value (default: 1.75) |
 | `--dry-allowed-length N` | set allowed length for DRY sampling (default: 2) |
-| `--dry-penalty-last-n N` | set DRY penalty for the last n tokens (default: -1, 0 = disable, -1 = context size) |
+| `--dry-penalty-last-n N` | set DRY penalty for the last n tokens (default: 64, 0 = disable) |
 | `--dry-sequence-breaker STRING` | add sequence breaker for DRY sampling, clearing out default breakers ('\n', ':', '"', '*') in the process; use "none" to not use any sequence breakers |
 | `--adaptive-target N` | adaptive-p: select tokens near this probability (valid range 0.0 to 1.0; negative = disabled) (default: -1.00)<br/>[(more info)](https://github.com/ggml-org/llama.cpp/pull/17927) |
 | `--adaptive-decay N` | adaptive-p: decay rate for target adaptation over time. lower values are more reactive, higher values are more stable.<br/>(valid range 0.0 to 0.99) (default: 0.90) |
@@ -253,6 +253,7 @@ llama-completion.exe -m models\gemma-1.1-7b-it.Q4_K_M.gguf --ignore-eos -n -1
 | `-rea, --reasoning [on\|off\|auto]` | Use reasoning/thinking in the chat ('on', 'off', or 'auto', default: 'auto' (detect from template))<br/>(env: LLAMA_ARG_REASONING) |
 | `--reasoning-budget N` | token budget for thinking: -1 for unrestricted, 0 for immediate end, N>0 for token budget (default: -1)<br/>(env: LLAMA_ARG_THINK_BUDGET) |
 | `--reasoning-budget-message MESSAGE` | message injected before the end-of-thinking tag when reasoning budget is exhausted (default: none)<br/>(env: LLAMA_ARG_THINK_BUDGET_MESSAGE) |
+| `--reasoning-preserve, --no-reasoning-preserve` | preserve reasoning trace in the full history, not just the last assistant message (default: template default)<br/>compatible with certain templates having 'supports_preserve_reasoning' capability<br/>example: https://docs.z.ai/guides/capabilities/thinking-mode#preserved-thinking<br/>(env: LLAMA_ARG_REASONING_PRESERVE) |
 | `--chat-template JINJA_TEMPLATE` | set custom jinja chat template (default: template taken from model's metadata)<br/>if suffix/prefix are specified, template will be disabled<br/>only commonly used templates are accepted (unless --jinja is set before this flag):<br/>list of built-in templates:<br/>bailing, bailing-think, bailing2, chatglm3, chatglm4, chatml, command-r, deepseek, deepseek-ocr, deepseek2, deepseek3, exaone-moe, exaone3, exaone4, falcon3, gemma, gigachat, glmedge, gpt-oss, granite, granite-4.0, granite-4.1, grok-2, hunyuan-dense, hunyuan-moe, hunyuan-vl, kimi-k2, llama2, llama2-sys, llama2-sys-bos, llama2-sys-strip, llama3, llama4, megrez, minicpm, mistral-v1, mistral-v3, mistral-v3-tekken, mistral-v7, mistral-v7-tekken, monarch, openchat, orion, pangu-embedded, phi3, phi4, rwkv-world, seed_oss, smolvlm, solar-open, vicuna, vicuna-orca, yandex, zephyr<br/>(env: LLAMA_ARG_CHAT_TEMPLATE) |
 | `--chat-template-file JINJA_TEMPLATE_FILE` | set custom jinja chat template file (default: template taken from model's metadata)<br/>if suffix/prefix are specified, template will be disabled<br/>only commonly used templates are accepted (unless --jinja is set before this flag):<br/>list of built-in templates:<br/>bailing, bailing-think, bailing2, chatglm3, chatglm4, chatml, command-r, deepseek, deepseek-ocr, deepseek2, deepseek3, exaone-moe, exaone3, exaone4, falcon3, gemma, gigachat, glmedge, gpt-oss, granite, granite-4.0, granite-4.1, grok-2, hunyuan-dense, hunyuan-moe, hunyuan-vl, kimi-k2, llama2, llama2-sys, llama2-sys-bos, llama2-sys-strip, llama3, llama4, megrez, minicpm, mistral-v1, mistral-v3, mistral-v3-tekken, mistral-v7, mistral-v7-tekken, monarch, openchat, orion, pangu-embedded, phi3, phi4, rwkv-world, seed_oss, smolvlm, solar-open, vicuna, vicuna-orca, yandex, zephyr<br/>(env: LLAMA_ARG_CHAT_TEMPLATE_FILE) |
 | `--skip-chat-parsing, --no-skip-chat-parsing` | force a pure content parser, even if a Jinja template is specified; model will output everything in the content section, including any reasoning and/or tool calls (default: disabled)<br/>(env: LLAMA_ARG_SKIP_CHAT_PARSING) |
@@ -385,11 +386,11 @@ Example usage: `--temp 0`
 ### Repeat Penalty
 
 -   `--repeat-penalty N`: Control the repetition of token sequences in the generated text default: 1.0, 1.0 = disabled).
--   `--repeat-last-n N`: Last n tokens to consider for penalizing repetition (default: 64, 0 = disabled, -1 = ctx-size).
+-   `--repeat-last-n N`: Last n tokens to consider for penalizing repetition (default: 64, 0 = disabled).
 
 The `repeat-penalty` option helps prevent the model from generating repetitive or monotonous text. A higher value (e.g., 1.5) will penalize repetitions more strongly, while a lower value (e.g., 0.9) will be more lenient. The default value is 1.
 
-The `repeat-last-n` option controls the number of tokens in the history to consider for penalizing repetition. A larger value will look further back in the generated text to prevent repetitions, while a smaller value will only consider recent tokens. A value of 0 disables the penalty, and a value of -1 sets the number of tokens considered equal to the context size (`ctx-size`).
+The `repeat-last-n` option controls the number of tokens in the history to consider for penalizing repetition. A larger value will look further back in the generated text to prevent repetitions, while a smaller value will only consider recent tokens. A value of 0 disables the penalty.
 
 ### DRY Repetition Penalty
 
@@ -398,7 +399,7 @@ DRY (Don't Repeat Yourself) sampling is an effective technique for reducing repe
 - `--dry-multiplier N`: Set the DRY sampling multiplier (default: 0.0, 0.0 = disabled).
 - `--dry-base N`: Set the DRY sampling base value (default: 1.75).
 - `--dry-allowed-length N`: Set the allowed length for DRY sampling (default: 2).
-- `--dry-penalty-last-n N`: Set DRY penalty for the last n tokens (default: -1, 0 = disable, -1 = context size).
+- `--dry-penalty-last-n N`: Set DRY penalty for the last n tokens (default: 64, 0 = disable).
 - `--dry-sequence-breaker STRING`: Add a sequence breaker for DRY sampling. Can be used more than once to add multiple sequence breakers. Using this clears out the default breakers, which consist of: `['\n', ':', '"', '*']`. If the string `"none"` is supplied, no sequence breakers are used.
 
 The `dry-multiplier` option controls the strength of the DRY sampling effect. A value of 0.0 disables DRY sampling, while higher values increase its influence. A typical recommended value is 0.8.
@@ -407,13 +408,13 @@ The `dry-base` option sets the base value for the exponential penalty calculatio
 
 The `dry-allowed-length` option sets the maximum length of repeated sequences that will not be penalized. Repetitions shorter than or equal to this length are not penalized, allowing for natural repetitions of short phrases or common words.
 
-The `dry-penalty-last-n` option controls how many recent tokens to consider when applying the DRY penalty. A value of -1 considers the entire context. Use a positive value to limit the consideration to a specific number of recent tokens.
+The `dry-penalty-last-n` option controls how many recent tokens to consider when applying the DRY penalty. A value of 0 disables the penalty. Use a positive value to limit the consideration to a specific number of recent tokens.
 
 The `dry-sequence-breaker` option adds a single sequence breaker and can be used more than once to specify multiple sequence breakers. Sequence breakers interrupt sequence matching and break the input into parts where matching can be applied.
 
 DRY sampling provides more nuanced control over text generation, particularly for reducing long-range repetitions and maintaining global coherence.
 
-Example usage: `--dry-multiplier 0.8 --dry-base 1.75 --dry-allowed-length 2 --dry-penalty-last-n -1 --dry-sequence-breaker "—" --dry-sequence-breaker "##"`
+Example usage: `--dry-multiplier 0.8 --dry-base 1.75 --dry-allowed-length 2 --dry-penalty-last-n 64 --dry-sequence-breaker "—" --dry-sequence-breaker "##"`
 
 ### Top-K Sampling
 

@@ -4,7 +4,7 @@
 #include "hexagon_protos.h"
 #include "hvx_hexagon_protos.h"
 #include "hex-dma.h"
-#include "vtcm-utils.h"
+#include "htp-vtcm.h"
 #include "hvx-utils.h"
 #include "hex-fastdiv.h"
 #include <string.h>

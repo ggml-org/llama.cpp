@@ -14,6 +14,7 @@ enum llama_expert_gating_func_type {
     LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX        = 1,
     LLAMA_EXPERT_GATING_FUNC_TYPE_SIGMOID        = 2,
     LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX_WEIGHT = 3, // applied to the router weights instead of the logits
+    LLAMA_EXPERT_GATING_FUNC_TYPE_SQRT_SOFTPLUS  = 4,
 };
 
 enum llama_swa_type {
@@ -46,11 +47,16 @@ struct llama_hparams {
     bool use_par_res;
     bool swin_norm;
     bool norm_before_residual = false;
+    bool norm_before_fc       = false;
 
     uint32_t n_ctx_train; // context size the model was trained on
     uint32_t n_embd;
     uint32_t n_layer_all;
     uint32_t n_layer_nextn = 0;
+
+    // granite-switch: index of the single-head "router" KV layer that encodes
+    // per-token adapter selection. -1 when the model has no such layer.
+    int32_t  router_layer = -1;
     uint32_t n_expert = 0;
     uint32_t n_expert_used = 0;
     uint32_t n_rel_attn_bkts = 0;
@@ -225,6 +231,23 @@ struct llama_hparams {
     uint32_t indexer_n_head    = 0;
     uint32_t indexer_head_size = 0;
     uint32_t indexer_top_k     = 0;
+    // MSA
+    uint32_t indexer_block_size  = 0;
+    uint32_t indexer_local_blocks = 0;
+
+    // Indexer is "full" (1) or "shared" (0)
+    // Shared indexers reuse top-k from previous full layer
+    std::array<uint32_t, LLAMA_MAX_LAYERS> is_indexer_full_impl;
+
+    // DeepSeek-V4
+    uint32_t dsv4_o_group_count        = 0;
+    uint32_t dsv4_o_lora_rank          = 0;
+    uint32_t dsv4_hc_mult              = 0;
+    uint32_t dsv4_hc_sinkhorn_iters    = 0;
+    uint32_t dsv4_hash_layer_count     = 0;
+    float    dsv4_compress_rope_base   = 0.0f;
+    float    dsv4_hc_eps               = 0.0f;
+    std::array<uint32_t, LLAMA_MAX_LAYERS> dsv4_compress_ratios;
 
     // qwen3vl deepstack
     // When parsed from GGUF, this implies the first N layers consume the first
@@ -291,6 +314,8 @@ struct llama_hparams {
 
     bool is_swa(uint32_t il) const;
 
+    bool is_indexer_full(uint32_t il) const;
+
     void set_recr_pattern(uint32_t n_pattern, bool dense_first = false);
 
     // whether or not the given layer is recurrent (for hybrid models)
@@ -349,6 +374,8 @@ struct llama_hparams {
     uint32_t n_embd_head_v_mla() const;
 
     bool has_kv(uint32_t il) const;
+
+    bool has_rope(uint32_t il) const;
 
     // number of effective layers (excludes nextn layers)
     uint32_t n_layer() const;

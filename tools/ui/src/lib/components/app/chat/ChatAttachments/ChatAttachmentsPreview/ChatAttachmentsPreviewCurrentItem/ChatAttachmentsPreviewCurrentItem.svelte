@@ -1,12 +1,12 @@
 <script lang="ts">
-	import type { ChatAttachmentDisplayItem } from '$lib/types';
-	import { Image, Music, Video, FileText, FileIcon } from '@lucide/svelte';
-	import ChatAttachmentsPreviewCurrentItemPdf from './ChatAttachmentsPreviewCurrentItemPdf.svelte';
-	import ChatAttachmentsPreviewCurrentItemImage from './ChatAttachmentsPreviewCurrentItemImage.svelte';
 	import ChatAttachmentsPreviewCurrentItemAudio from './ChatAttachmentsPreviewCurrentItemAudio.svelte';
-	import ChatAttachmentsPreviewCurrentItemVideo from './ChatAttachmentsPreviewCurrentItemVideo.svelte';
+	import ChatAttachmentsPreviewCurrentItemImage from './ChatAttachmentsPreviewCurrentItemImage.svelte';
+	import ChatAttachmentsPreviewCurrentItemPdf from './ChatAttachmentsPreviewCurrentItemPdf.svelte';
 	import ChatAttachmentsPreviewCurrentItemText from './ChatAttachmentsPreviewCurrentItemText.svelte';
 	import ChatAttachmentsPreviewCurrentItemUnavailable from './ChatAttachmentsPreviewCurrentItemUnavailable.svelte';
+	import ChatAttachmentsPreviewCurrentItemVideo from './ChatAttachmentsPreviewCurrentItemVideo.svelte';
+	import { FileIcon, FileText, Image, Music, Video } from '@lucide/svelte';
+	import type { ChatAttachmentDisplayItem } from '$lib/types';
 
 	interface Props {
 		currentItem: ChatAttachmentDisplayItem | null;
@@ -25,19 +25,19 @@
 	}
 
 	let {
+		activeModelId,
+		audioSrc,
 		currentItem,
-		isImage,
-		isAudio,
-		isVideo,
-		isPdf,
-		isText,
 		displayPreview,
 		displayTextContent,
-		audioSrc,
-		videoSrc,
-		language,
 		hasVisionModality,
-		activeModelId
+		isAudio,
+		isImage,
+		isPdf,
+		isText,
+		isVideo,
+		language,
+		videoSrc
 	}: Props = $props();
 
 	let IconComponent = $derived(

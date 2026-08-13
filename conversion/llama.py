@@ -23,6 +23,7 @@ from .base import ModelBase, TextModel, gguf, logger
     "LlavaForConditionalGeneration",
     "VoxtralForConditionalGeneration",
     "LlamaForCausalLMEagle3",
+    "Eagle3LlamaForCausalLM",
     "Eagle3Speculator",
     "Eagle3DraftModel",
     "IQuestCoderForCausalLM",
@@ -68,11 +69,16 @@ class LlamaModel(TextModel):
                 target_config = {**target_config, **target_config["text_config"]}
             self.target_vocab_size = target_config["vocab_size"]
 
-            # target_layers: derived from target model layer count (low/mid/high)
+            # target_layers: use the eagle3 config's explicit aux hidden-state layer ids
+            # if present, else derive from the target layer count.
             target_num_layers = target_config["num_hidden_layers"]
-            target_layers = [2, target_num_layers // 2, target_num_layers - 3]
+            aux_layer_ids = eagle3_raw_config.get("eagle_aux_hidden_state_layer_ids")
+            if aux_layer_ids:
+                target_layers = aux_layer_ids
+            else:
+                target_layers = [2, target_num_layers // 2, target_num_layers - 3]
             logger.info(f"EAGLE-3: target_layers = {target_layers} (target model has {target_num_layers} layers)")
-            self.gguf_writer.add_array(f"{self.gguf_writer.arch}.target_layers", target_layers)
+            self.gguf_writer.add_target_layers(target_layers)
 
             # target_hidden_size: prefer eagle3 config, fallback to target config
             if eagle3_raw_config.get("target_hidden_size") is not None:
@@ -82,12 +88,18 @@ class LlamaModel(TextModel):
                 target_hidden_size = target_config["hidden_size"]
                 src = "target model config"
             logger.info(f"EAGLE-3: target_hidden_size = {target_hidden_size} (from {src})")
-            self.gguf_writer.add_uint32(f"{self.gguf_writer.arch}.target_hidden_size", target_hidden_size)
+            self.gguf_writer.add_target_hidden_size(target_hidden_size)
 
             # norm_before_residual (RedHat-style eagle3 specific)
             norm_before_residual = eagle3_raw_config.get("norm_before_residual", False)
             logger.info(f"EAGLE-3: norm_before_residual = {norm_before_residual}")
-            self.gguf_writer.add_bool(f"{self.gguf_writer.arch}.norm_before_residual", norm_before_residual)
+            self.gguf_writer.add_norm_before_residual(norm_before_residual)
+
+            # norm_before_fc: RMSNorm applied to the fused target features before the
+            # fc projection (e.g. nvidia/gpt-oss-120b-Eagle3-v3)
+            norm_before_fc = eagle3_raw_config.get("norm_before_fc", False)
+            logger.info(f"EAGLE-3: norm_before_fc = {norm_before_fc}")
+            self.gguf_writer.add_norm_before_fc(norm_before_fc)
 
     def set_vocab(self):
         # eagle3: use tokenizer from target model if provided
@@ -107,7 +119,7 @@ class LlamaModel(TextModel):
         path_tekken_json = self.dir_model / "tekken.json"
         path_tokenizer_json = self.dir_model / "tokenizer.json"
         if path_tekken_json.is_file() and not path_tokenizer_json.is_file():
-            self._set_vocab_mistral()
+            return self._set_vocab_mistral()
 
         tokenizer_config_file = self.dir_model / 'tokenizer_config.json'
         if tokenizer_config_file.is_file():
@@ -220,6 +232,9 @@ class LlamaModel(TextModel):
         if getattr(self, 'is_eagle3', False):
             if name == "fc.weight":
                 yield (name, data_torch)
+                return
+            if name == "input_norm.weight":
+                yield (self.format_tensor_name(gguf.MODEL_TENSOR.ENC_OUTPUT_NORM), data_torch)
                 return
             if name == "d2t":
                 # store for manual int64 handling in prepare_tensors (avoid F32 conversion)

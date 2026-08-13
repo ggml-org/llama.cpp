@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { isMobile } from '$lib/stores';
 	import { autoResizeTextarea } from '$lib/utils';
 	import { onMount } from 'svelte';
 
@@ -27,23 +28,36 @@
 	onMount(() => {
 		if (textareaElement) {
 			autoResizeTextarea(textareaElement);
-			textareaElement.focus();
+			textareaElement.focus({ preventScroll: true });
 		}
 	});
 
-	// Expose the textarea element for external access
 	export function getElement() {
 		return textareaElement;
 	}
 
 	export function focus() {
-		textareaElement?.focus();
+		if (isMobile.current) return;
+
+		textareaElement?.focus({ preventScroll: true });
 	}
 
 	export function resetHeight() {
 		if (textareaElement) {
 			textareaElement.style.height = '1rem';
 		}
+	}
+
+	// Plain-text caret offsets, shared with the contenteditable variant so
+	// the picker/paste flows can address either renderer through one handle.
+	export function getCaretOffset(): number {
+		if (!textareaElement) return 0;
+
+		return textareaElement.selectionStart ?? textareaElement.value.length;
+	}
+
+	export function setCaretOffset(offset: number) {
+		textareaElement?.setSelectionRange(offset, offset);
 	}
 </script>
 

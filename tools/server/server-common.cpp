@@ -13,6 +13,8 @@
 #include <sstream>
 #include <fstream>
 #include <limits>
+#include <cstring>
+#include <type_traits>
 
 json format_error_response(const std::string & message, const enum error_type type) {
     std::string type_str;
@@ -56,6 +58,33 @@ json format_error_response(const std::string & message, const enum error_type ty
         {"message", message},
         {"type", type_str},
     };
+}
+
+//
+// server_slot_stats
+//
+
+json server_slot_stats::to_json() const {
+    json base = {
+        {"cache_n",                n_prompt_cached},
+
+        {"prompt_n",               n_prompt_processed},
+        {"prompt_ms",              t_prompt_ms()},
+        {"prompt_per_token_ms",    t_prompt_per_token_ms()},
+        {"prompt_per_second",      n_prompt_tps()},
+
+        {"predicted_n",            n_gen},
+        {"predicted_ms",           t_gen_ms()},
+        {"predicted_per_token_ms", t_gen_per_token_ms()},
+        {"predicted_per_second",   n_gen_tps()},
+    };
+
+    if (n_draft_tokens > 0) {
+        base["draft_n"]          = n_draft_tokens;
+        base["draft_n_accepted"] = n_draft_accepted;
+    }
+
+    return base;
 }
 
 //
@@ -235,6 +264,102 @@ static inline raw_buffer base64_decode(const std::string & encoded_string) {
 // server_tokens implementation
 //
 
+namespace {
+
+constexpr uint32_t SERVER_TOKENS_STATE_VERSION = 1;
+
+uint32_t server_tokens_state_u32(size_t value) {
+    if (value > std::numeric_limits<uint32_t>::max()) {
+        throw std::runtime_error("Server tokens state is too large");
+    }
+    return value;
+}
+
+class server_tokens_state_writer {
+public:
+    template <typename T>
+    void write(T value) {
+        static_assert(std::is_trivially_copyable<T>::value, "T must be trivially copyable");
+        const auto * ptr = reinterpret_cast<const char *>(&value);
+        data.insert(data.end(), ptr, ptr + sizeof(value));
+    }
+
+    template <typename T>
+    void write(const std::vector<T> & values) {
+        static_assert(std::is_trivially_copyable<T>::value, "T must be trivially copyable");
+        write(server_tokens_state_u32(values.size()));
+        if (values.empty()) {
+            return;
+        }
+        const auto * ptr = reinterpret_cast<const char *>(values.data());
+        data.insert(data.end(), ptr, ptr + values.size() * sizeof(T));
+    }
+
+    void write_media_chunk(const mtmd_input_chunk * chunk) {
+        size_t chunk_size = 0;
+        if (mtmd_input_chunk_save(chunk, nullptr, 0, &chunk_size) != 0 || chunk_size == 0) {
+            throw std::runtime_error("Cannot serialize media chunk in server tokens");
+        }
+        std::vector<char> chunk_data(server_tokens_state_u32(chunk_size));
+        if (mtmd_input_chunk_save(chunk, chunk_data.data(), chunk_data.size(), nullptr) != 0) {
+            throw std::runtime_error("Cannot serialize media chunk in server tokens");
+        }
+        write(chunk_data);
+    }
+
+    std::vector<char> take() {
+        data.resize((data.size() + sizeof(llama_token) - 1) / sizeof(llama_token) * sizeof(llama_token), 0);
+        return std::move(data);
+    }
+
+private:
+    std::vector<char> data;
+};
+
+class server_tokens_state_reader {
+public:
+    server_tokens_state_reader(const char * data, size_t size) : data(data), size(size) {}
+
+    template <typename T>
+    T read() {
+        static_assert(std::is_trivially_copyable<T>::value, "T must be trivially copyable");
+        if (size - pos < sizeof(T)) {
+            throw std::runtime_error("Unexpected end of server tokens state");
+        }
+        T value;
+        std::memcpy(&value, data + pos, sizeof(value));
+        pos += sizeof(value);
+        return value;
+    }
+
+    template <typename T>
+    std::vector<T> read_vector() {
+        static_assert(std::is_trivially_copyable<T>::value, "T must be trivially copyable");
+        const uint32_t n_values = read<uint32_t>();
+        // reject before resizing, so that a small corrupted payload cannot request a huge allocation
+        if (n_values > remaining() / sizeof(T)) {
+            throw std::runtime_error("Unexpected end of server tokens state");
+        }
+        std::vector<T> values(n_values);
+        if (n_values > 0) {
+            std::memcpy(values.data(), data + pos, values.size() * sizeof(T));
+            pos += values.size() * sizeof(T);
+        }
+        return values;
+    }
+
+    size_t remaining() const {
+        return size - pos;
+    }
+
+private:
+    const char * data;
+    size_t size;
+    size_t pos = 0;
+};
+
+} // namespace
+
 server_tokens::server_tokens(mtmd::input_chunks & mtmd_chunks, bool has_mtmd) : has_mtmd(has_mtmd) {
     for (size_t i = 0; i < mtmd_chunks.size(); ++i) {
         push_back(mtmd_chunks[i]);
@@ -408,6 +533,73 @@ const llama_tokens & server_tokens::get_tokens() const {
     return tokens;
 }
 
+std::vector<char> server_tokens::serialize() const {
+    static_assert(sizeof(llama_token) == sizeof(uint32_t), "unexpected llama_token size");
+
+    server_tokens_state_writer writer;
+    writer.write((llama_token) LLAMA_TOKEN_NULL);
+    writer.write(SERVER_TOKENS_STATE_VERSION);
+    writer.write(tokens);
+
+    std::vector<uint32_t> media_keys;
+    media_keys.reserve(map_idx_to_media.size());
+    for (const auto & item : map_idx_to_media) {
+        media_keys.push_back(server_tokens_state_u32(item.first));
+    }
+    writer.write(media_keys);
+
+    for (const auto & item : map_idx_to_media) {
+        writer.write_media_chunk(item.second.get());
+    }
+
+    return writer.take();
+}
+
+server_tokens server_tokens::deserialize(const llama_tokens & packed, bool has_mtmd) {
+    static_assert(sizeof(llama_token) == sizeof(uint32_t), "unexpected llama_token size");
+
+    if (packed.empty() || packed[0] != LLAMA_TOKEN_NULL) {
+        // plain token list, as written by older versions
+        return server_tokens(packed, has_mtmd);
+    }
+
+    server_tokens_state_reader reader(reinterpret_cast<const char *>(packed.data()), packed.size() * sizeof(llama_token));
+    reader.read<llama_token>(); // format marker
+    if (reader.read<uint32_t>() != SERVER_TOKENS_STATE_VERSION) {
+        throw std::runtime_error("Unsupported server tokens state version");
+    }
+
+    const llama_tokens tokens = reader.read_vector<llama_token>();
+
+    // the media start indices, followed by the media chunks in the same order
+    const std::vector<uint32_t> media_keys = reader.read_vector<uint32_t>();
+    if (!media_keys.empty() && !has_mtmd) {
+        throw std::runtime_error("Cannot restore media tokens without an mmproj");
+    }
+
+    server_tokens result(tokens, has_mtmd);
+
+    for (const uint32_t key : media_keys) {
+        const size_t start_idx = key;
+        const std::vector<char> chunk_data = reader.read_vector<char>();
+        if (chunk_data.empty()) {
+            throw std::runtime_error("Cannot load media chunk from server tokens state");
+        }
+
+        mtmd::input_chunk_ptr chunk(mtmd_input_chunk_load(chunk_data.data(), chunk_data.size()));
+        if (!chunk) {
+            throw std::runtime_error("Cannot load media chunk from server tokens state");
+        }
+        result.map_idx_to_media[start_idx] = std::move(chunk);
+    }
+
+    if (reader.remaining() >= sizeof(llama_token)) {
+        throw std::runtime_error("Trailing data in server tokens state");
+    }
+
+    return result;
+}
+
 llama_tokens server_tokens::get_text_tokens() const {
     llama_tokens res;
     res.reserve(tokens.size());
@@ -518,18 +710,40 @@ size_t server_tokens::get_common_prefix(const server_tokens & b) const {
     return max_idx; // all tokens are equal
 }
 
+common_chat_msg_spans server_tokens::find_message_spans(const common_chat_msg_delimiters & delims) const {
+    std::map<size_t, size_t> skips;
+    for (const auto & it : map_idx_to_media) {
+        skips[it.first] = mtmd_input_chunk_get_n_tokens(it.second.get());
+    }
+    return delims.split(tokens, skips);
+}
+
 bool server_tokens::validate(const struct llama_context * ctx) const {
     const llama_model * model = llama_get_model(ctx);
     const llama_vocab * vocab = llama_model_get_vocab(model);
     const int32_t n_vocab = llama_vocab_n_tokens(vocab);
+    size_t n_media = 0;
 
     for (size_t i = 0; i < tokens.size(); ++i) {
         const auto & t = tokens[i];
         if (t == LLAMA_TOKEN_NULL) {
             try {
                 const auto & chunk = find_chunk(i);
-                size_t n_tokens = mtmd_input_chunk_get_n_tokens(chunk.get());
-                i += n_tokens - 1; // will be +1 by the for loop
+                if (mtmd_input_chunk_get_type(chunk.get()) == MTMD_INPUT_CHUNK_TYPE_TEXT) {
+                    return false;
+                }
+                const size_t n_tokens = mtmd_input_chunk_get_n_tokens(chunk.get());
+                const llama_pos n_pos = mtmd_input_chunk_get_n_pos(chunk.get());
+                if (n_tokens == 0 || n_pos <= 0 || n_tokens > tokens.size() - i) {
+                    return false;
+                }
+                for (size_t j = i; j < i + n_tokens; ++j) {
+                    if (tokens[j] != LLAMA_TOKEN_NULL) {
+                        return false;
+                    }
+                }
+                ++n_media;
+                i += n_tokens - 1;
             } catch (const std::exception & e) {
                 return false;
             }
@@ -537,7 +751,7 @@ bool server_tokens::validate(const struct llama_context * ctx) const {
             return false;
         }
     }
-    return true;
+    return n_media == map_idx_to_media.size();
 }
 
 server_tokens server_tokens::clone() const {
@@ -697,7 +911,8 @@ server_tokens process_mtmd_prompt(mtmd_context * mctx, const std::string & promp
     std::vector<server_tokens> inputs;
     // multimodal
     mtmd_input_text inp_txt = {
-        prompt.c_str(),
+        prompt.data(),
+        prompt.size(),
         /* add_special */   true,
         /* parse_special */ true,
     };
@@ -817,12 +1032,21 @@ json oaicompat_completion_params_parse(const json & body) {
     return llama_params;
 }
 
-// media_path always end with '/', see arg.cpp
+// url can be
+// - http(s):// for remote files
+// - file:// for local files (only allowed if media_path is set)
+// - data: for base64 encoded data with uri scheme (e.g. data:image/png;base64,...)
+// - raw base64 encoded data
 static void handle_media(
         std::vector<raw_buffer> & out_files,
-        json & media_obj,
-        const std::string & media_path) {
-    std::string url = json_value(media_obj, "url", std::string());
+        const std::string & url,
+        const std::string & media_path,
+        bool accept_base64_uri) {
+    if (!media_path.empty()) {
+        // should already be enforced by arg.cpp, but checking just in case
+        GGML_ASSERT(media_path.back() == DIRECTORY_SEPARATOR);
+    }
+
     if (string_starts_with(url, "http")) {
         // download remote image
         // TODO @ngxson : maybe make these params configurable
@@ -858,20 +1082,28 @@ static void handle_media(
         data.assign((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
         out_files.push_back(data);
 
-    } else {
+    } else if (accept_base64_uri && string_starts_with(url, "data:")) {
         // try to decode base64 image
         std::vector<std::string> parts = string_split<std::string>(url, /*separator*/ ',');
         if (parts.size() != 2) {
-            throw std::runtime_error("Invalid url value");
+            throw std::runtime_error("Invalid uri-encoded base64 value");
         } else if (!string_starts_with(parts[0], "data:image/")) {
-            throw std::runtime_error("Invalid url format: " + parts[0]);
+            throw std::runtime_error("Invalid uri format: " + parts[0]);
         } else if (!string_ends_with(parts[0], "base64")) {
-            throw std::runtime_error("url must be base64 encoded");
+            throw std::runtime_error("uri must be base64 encoded");
         } else {
             auto base64_data = parts[1];
             auto decoded_data = base64_decode(base64_data);
             out_files.push_back(decoded_data);
         }
+
+    } else {
+        // try as raw base64 string
+        auto decoded_data = base64_decode(url);
+        if (decoded_data.empty()) {
+            throw std::runtime_error("Invalid base64 value");
+        }
+        out_files.push_back(decoded_data);
     }
 }
 
@@ -957,14 +1189,15 @@ json oaicompat_chat_params_parse(
         }
 
         for (auto & p : content) {
-            std::string type      = json_value(p, "type", std::string());
+            std::string type = json_value(p, "type", std::string());
             if (type == "image_url") {
                 if (!opt.allow_image) {
                     throw std::runtime_error("image input is not supported - hint: if this is unexpected, you may need to provide the mmproj");
                 }
 
                 json image_url = json_value(p, "image_url", json::object());
-                handle_media(out_files, image_url, opt.media_path);
+                std::string url = json_value(image_url, "url", std::string());
+                handle_media(out_files, url, opt.media_path, true);
 
                 p["type"] = "media_marker";
                 p["text"] = get_media_marker();
@@ -975,17 +1208,11 @@ json oaicompat_chat_params_parse(
                     throw std::runtime_error("audio input is not supported - hint: if this is unexpected, you may need to provide the mmproj");
                 }
 
-                json input_audio   = json_value(p, "input_audio", json::object());
-                std::string data   = json_value(input_audio, "data", std::string());
-                std::string format = json_value(input_audio, "format", std::string());
-                // while we also support flac, we don't allow it here so we matches the OAI spec
-                if (format != "wav" && format != "mp3") {
-                    throw std::invalid_argument("input_audio.format must be either 'wav' or 'mp3'");
-                }
-                auto decoded_data = base64_decode(data); // expected to be base64 encoded
-                out_files.push_back(decoded_data);
-
-                // TODO: add audio_url support by reusing handle_media()
+                // note: don't need to validate "format", it's redundant
+                json input_audio = json_value(p, "input_audio", json::object());
+                std::string url  = json_value(input_audio, "data",
+                                        json_value(input_audio, "url", std::string()));
+                handle_media(out_files, url, opt.media_path, false);
 
                 p["type"] = "media_marker";
                 p["text"] = get_media_marker();
@@ -996,10 +1223,10 @@ json oaicompat_chat_params_parse(
                     throw std::runtime_error("video input is not supported - hint: if this is unexpected, you may need to provide the mmproj");
                 }
 
-                json input_video  = json_value(p, "input_video", json::object());
-                std::string data  = json_value(input_video, "data", std::string());
-                auto decoded_data = base64_decode(data); // expected to be base64 encoded
-                out_files.push_back(decoded_data);
+                json input_video = json_value(p, "input_video", json::object());
+                std::string url  = json_value(input_video, "data",
+                                        json_value(input_video, "url", std::string()));
+                handle_media(out_files, url, opt.media_path, false);
 
                 p["type"] = "media_marker";
                 p["text"] = get_media_marker();
@@ -1065,6 +1292,14 @@ json oaicompat_chat_params_parse(
         throw std::invalid_argument("invalid type for \"enable_thinking\" (expected boolean, got string)");
     }
 
+    // Parse also the OAI "reasoning_effort": "none" specific value
+    if (body.contains("reasoning_effort")) {
+        auto reasoning_effort = json_value(body, "reasoning_effort", std::string(""));
+        if (reasoning_effort == "none") {
+            inputs.enable_thinking = false;
+        } // other reasoning_effort values are model-specific and not yet handled
+    }
+
     inputs.force_pure_content = opt.force_pure_content;
 
     // Apply chat template to the list of messages
@@ -1092,28 +1327,21 @@ json oaicompat_chat_params_parse(
         llama_params["chat_parser"] = chat_params.parser;
     }
 
-    llama_params["message_spans"] = json::array();
-
-    for (const auto & span : chat_params.message_spans) {
-        llama_params["message_spans"].push_back({
-            { "role", span.role },
-            { "pos",  span.pos  },
-            { "len",  span.len  },
-        });
-    }
+    llama_params["message_delimiters"] = chat_params.message_delimiters.to_json();
 
     // Reasoning budget: pass parameters through to sampling layer
     {
-        int reasoning_budget = json_value(body, "thinking_budget_tokens", -1);
+        int reasoning_budget = json_value(body, "reasoning_budget_tokens",
+                               json_value(body, "thinking_budget_tokens", -1));
         if (reasoning_budget == -1) {
             reasoning_budget = opt.reasoning_budget;
         }
 
-        if (!chat_params.thinking_end_tag.empty()) {
+        if (!chat_params.thinking_end_tags.empty()) {
             llama_params["reasoning_budget_tokens"] = reasoning_budget;
             llama_params["reasoning_budget_start_tag"] = chat_params.thinking_start_tag;
-            llama_params["reasoning_budget_end_tag"] = chat_params.thinking_end_tag;
-            llama_params["reasoning_budget_message"] = opt.reasoning_budget_message;
+            llama_params["reasoning_budget_end_tags"] = chat_params.thinking_end_tags;
+            llama_params["reasoning_budget_message"] = json_value(body, "reasoning_budget_message", opt.reasoning_budget_message);
             llama_params["reasoning_control"] = json_value(body, "reasoning_control", false);
         }
     }

@@ -763,6 +763,7 @@ static void ggml_backend_openvino_device_get_props(ggml_backend_dev_t dev, ggml_
         /* .host_buffer           = */ false,
         /* .buffer_from_host_ptr  = */ false,
         /* .events                = */ false,
+        /* .mmap_support          = */ true,
     };
 }
 
@@ -1051,6 +1052,10 @@ static bool is_op_unsupported_case(const ggml_tensor * op) {
         if ((op->ne[0] == 3 && op->ne[1] == 4 && op->ne[2] == 3 && op->ne[3] == 2) ||
             (op->ne[0] == 1 && op->ne[1] == 4 && op->ne[2] == 3 && op->ne[3] == 2) ||
             (op->ne[0] == 2 && op->ne[1] == 4 && op->ne[2] == 3 && op->ne[3] == 2)) {
+            return true;
+        }
+        // CPY into a strided view of a larger buffer (recurrent-state snapshots) not supported
+        if (op->view_src && ggml_nbytes(op) != ggml_nbytes(op->view_src)) {
             return true;
         }
         break;
@@ -1374,3 +1379,5 @@ GGML_BACKEND_API ggml_backend_reg_t ggml_backend_openvino_reg(void) {
 
     return &reg;
 }
+
+GGML_BACKEND_DL_IMPL(ggml_backend_openvino_reg)

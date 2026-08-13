@@ -11,7 +11,10 @@
 #include <condition_variable>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <set>
+#include <string>
+#include <unordered_map>
 
 /**
  * state diagram:
@@ -38,6 +41,11 @@ enum server_model_source {
     SERVER_MODEL_SOURCE_PRESET,
     SERVER_MODEL_SOURCE_MODELS_DIR,
     SERVER_MODEL_SOURCE_CACHE,
+};
+
+enum server_child_mode {
+    SERVER_CHILD_MODE_NORMAL,   // load the model and run normally
+    SERVER_CHILD_MODE_DOWNLOAD, // download the model and exit
 };
 
 static std::string server_model_status_to_string(server_model_status status) {
@@ -72,10 +80,10 @@ struct server_model_meta {
     int64_t last_used = 0; // for LRU unloading
     std::vector<std::string> args; // args passed to the model instance, will be populated by render_args()
     json loaded_info; // info to be reflected via /v1/models endpoint ; if in DOWNLOADING state, it should contain download progress info
+    json progress; // reflect load or download progress info, if any
     int exit_code = 0; // exit code of the model instance process (only valid if status == FAILED)
     int stop_timeout = 0; // seconds to wait before force-killing the model instance during shutdown
     mtmd_caps multimodal; // multimodal capabilities
-    // bool need_download = false; // whether the model needs to be downloaded before loading // TODO @ngxson: implement this
 
     bool is_ready() const {
         return status == SERVER_MODEL_STATUS_LOADED;
@@ -83,6 +91,10 @@ struct server_model_meta {
 
     bool is_running() const {
         return status == SERVER_MODEL_STATUS_LOADED || status == SERVER_MODEL_STATUS_LOADING || status == SERVER_MODEL_STATUS_SLEEPING;
+    }
+
+    bool is_ready_or_sleep() const {
+        return status == SERVER_MODEL_STATUS_LOADED || status == SERVER_MODEL_STATUS_SLEEPING;
     }
 
     bool is_failed() const {
@@ -94,17 +106,19 @@ struct server_model_meta {
 };
 
 struct server_models_routes;
-struct server_subproc; // defined in server-models.cpp
+struct server_subproc;   // defined in server-models.cpp
+struct server_lru_sched; // defined in server-models.cpp
 
 struct server_models {
     friend struct server_models_routes;
+    friend struct server_lru_sched;
 
 private:
     struct instance_t {
         std::shared_ptr<server_subproc> subproc; // shared between main thread and monitoring thread
         std::thread th;
         server_model_meta meta;
-        FILE * stdin_file = nullptr;
+        int req_count = 0; // number of active proxy requests
     };
 
     std::mutex mutex;
@@ -121,12 +135,73 @@ private:
     // if true, the next get_meta() will trigger a reload of model list
     bool need_reload = false;
 
+    // conv_id -> model name that currently serves its stream session, lets the resumable stream
+    // routes go straight to the owning child instead of polling every one. populated when
+    // proxy_request forwards a POST carrying an X-Conversation-Id. best effort: a stale entry just
+    // makes the child answer not found and the client recovers. owns its lock, one mutex per struct
+    struct conv_model_tracker {
+        // returns the ticket of this registration, 0 when nothing was registered. erasing or
+        // replacing the entry invalidates the ticket, which is how a stop cancels a request
+        // parked in the model load wait
+        uint64_t remember(const std::string & conv_id, const std::string & model) {
+            if (conv_id.empty() || model.empty()) {
+                return 0;
+            }
+            std::lock_guard<std::mutex> lock(mu);
+            uint64_t ticket = next_ticket++;
+            map[conv_id] = { model, ticket };
+            return ticket;
+        }
+
+        // false means a stop erased the entry or a newer request replaced it
+        bool alive(const std::string & conv_id, uint64_t ticket) {
+            std::lock_guard<std::mutex> lock(mu);
+            auto it = map.find(conv_id);
+            return it != map.end() && it->second.ticket == ticket;
+        }
+
+        std::optional<std::string> lookup(const std::string & conv_id) {
+            if (conv_id.empty()) {
+                return std::nullopt;
+            }
+            std::lock_guard<std::mutex> lock(mu);
+            auto it = map.find(conv_id);
+            if (it == map.end()) {
+                return std::nullopt;
+            }
+            return it->second.model;
+        }
+
+        void forget(const std::string & conv_id) {
+            if (conv_id.empty()) {
+                return;
+            }
+            std::lock_guard<std::mutex> lock(mu);
+            map.erase(conv_id);
+        }
+
+      private:
+        struct entry_t {
+            std::string model;
+            uint64_t    ticket;
+        };
+        std::mutex                               mu;
+        uint64_t                                 next_ticket = 1;
+        std::unordered_map<std::string, entry_t> map;
+    };
+
     common_preset_context ctx_preset;
 
     common_params base_params;
     std::string bin_path;
     std::vector<std::string> base_env;
     common_preset base_preset; // base preset from llama-server CLI args
+
+    // queue of requests waiting for a models_max slot
+    std::unique_ptr<server_lru_sched> sched;
+
+    // if true, add some delay to simulate works (useful for testing)
+    bool debug_fake_timing = false;
 
     void update_meta(const std::string & name, const server_model_meta & meta);
 
@@ -140,7 +215,11 @@ private:
     void notify_sse(const std::string & event, const std::string & model_id, const json & data = nullptr);
 
 public:
+    // conv_id -> model tracker for the resumable stream routes, owns its lock
+    conv_model_tracker conv_models;
+
     server_models(const common_params & params, int argc, char ** argv);
+    ~server_models();
 
     server_response sse; // for real-time updates via SSE endpoint
 
@@ -160,22 +239,27 @@ public:
     // return a copy of all model metadata (thread-safe)
     std::vector<server_model_meta> get_all_meta();
 
+    struct load_options {
+        server_child_mode mode = SERVER_CHILD_MODE_NORMAL;
+        // used for spawning a downloading child process
+        std::optional<server_model_meta> custom_meta = std::nullopt;
+    };
+
     // load and unload model instances
     // these functions are thread-safe
     void load(const std::string & name);
+    void load(const std::string & name, const load_options & opts);
     void unload(const std::string & name);
     void unload_all();
 
-    // download a new model, progress is reported via SSE
-    // to stop the download, call unload()
-    void download(common_params_model && model, common_download_opts && opts);
-
-    // update the status of a model instance (thread-safe)
     struct update_status_args {
         server_model_status status;
         int exit_code = 0; // only valid if status == UNLOADED
         json loaded_info = nullptr;
+        json progress = nullptr;
     };
+    // update the status of a model instance (thread-safe)
+    // also send SSE notification to /models/sse endpoint
     void update_status(const std::string & name, const update_status_args & args);
     void update_download_progress(const std::string & name, const common_download_progress & progress, bool done, bool ok = true);
 
@@ -192,10 +276,12 @@ public:
     // ensure the model is in ready state (thread-safe)
     // return false if model is ready
     // otherwise, load the model and blocking wait until it's ready, then return true (meta may need to be refreshed)
-    bool ensure_model_ready(const std::string & name);
+    // if models_max is reached, the request waits in a queue until a slot frees up
+    // throws if the load fails, or if should_stop fires while waiting
+    bool ensure_model_ready(const std::string & name, const std::function<bool()> & should_stop = nullptr);
 
     // proxy an HTTP request to the model instance
-    server_http_res_ptr proxy_request(const server_http_req & req, const std::string & method, const std::string & name, bool update_last_used);
+    server_http_res_ptr proxy_request(const server_http_req & req, const std::string & method, const std::string & name, bool update_last_used, bool detached = false);
 
     // handle message sent from server_child::notify_to_router()
     // raw input must starts with CMD_CHILD_TO_ROUTER_STATE, followed by a JSON string
@@ -208,8 +294,14 @@ public:
 };
 
 struct server_child {
+    // serializes the notify_to_router writes
+    std::mutex mtx_stdout;
+    std::atomic<bool> is_finished_downloading = false; // set by run_download
+
     // return true if the current process is a child server instance
     bool is_child();
+    server_child_mode get_mode();
+    int run_download(common_params & params);
 
     // register the shutdown_handler to be called by the router
     // return the monitoring thread (to be joined by the caller)
@@ -252,6 +344,12 @@ struct server_models_routes {
     server_http_context::handler_t get_router_models_sse;
     server_http_context::handler_t post_router_models;
     server_http_context::handler_t del_router_models;
+
+    // router side handlers for the resumable streaming routes. each resolves the child that owns
+    // a conversation through the conv_id -> model map, no probing or fan out
+    server_http_context::handler_t router_stream_get;
+    server_http_context::handler_t router_streams_lookup;
+    server_http_context::handler_t router_stream_delete;
 };
 
 /**
@@ -260,7 +358,6 @@ struct server_models_routes {
  */
 struct server_http_proxy : server_http_res {
     std::function<void()> cleanup = nullptr;
-public:
     server_http_proxy(const std::string & method,
                       const std::string & scheme,
                       const std::string & host,
@@ -274,11 +371,15 @@ public:
                       int32_t timeout_write
                       );
     ~server_http_proxy() {
+        if (cleanup_pipes) {
+            cleanup_pipes();
+        }
         if (cleanup) {
             cleanup();
         }
     }
 private:
+    std::function<void()> cleanup_pipes = nullptr;
     std::thread thread;
     struct msg_t {
         std::map<std::string, std::string> headers;

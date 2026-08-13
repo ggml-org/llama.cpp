@@ -32,6 +32,20 @@
 export { default as MarkdownContent } from './MarkdownContent/MarkdownContent.svelte';
 
 /**
+ * **MentionText** - Plain text with file mention badges
+ *
+ * Renders a message verbatim, turning only `[name](file://path)` links
+ * into the same badge chips the markdown path draws. Nothing else is
+ * interpreted, so pasted code keeps its `#` comments and underscores.
+ *
+ * @example
+ * ```svelte
+ * <span class="whitespace-pre-wrap"><MentionText content={message.content} /></span>
+ * ```
+ */
+export { default as MentionText } from './MentionText.svelte';
+
+/**
  * **SyntaxHighlightedCode** - Code syntax highlighting
  *
  * Renders code with syntax highlighting using highlight.js.
@@ -68,7 +82,6 @@ export { default as SyntaxHighlightedCode } from './SyntaxHighlightedCode.svelte
  * ```svelte
  * <CollapsibleContentBlock
  *   bind:open
- *   icon={BrainIcon}
  *   title="Thinking..."
  *   isStreaming
  * >
@@ -77,6 +90,22 @@ export { default as SyntaxHighlightedCode } from './SyntaxHighlightedCode.svelte
  * ```
  */
 export { default as CollapsibleContentBlock } from './CollapsibleContentBlock.svelte';
+
+/**
+ * **CollapsibleTerminalBlock** - Expandable content card with a terminal-style frame
+ *
+ * Same shape as CollapsibleContentBlock, but with a `code-background`
+ * fill, subtle border, and tightened padding suited for shell command
+ * output and similar dense / monospace content.
+ *
+ * @example
+ * ```svelte
+ * <CollapsibleTerminalBlock bind:open title="Run command">
+ *   <pre>{output}</pre>
+ * </CollapsibleTerminalBlock>
+ * ```
+ */
+export { default as CollapsibleTerminalBlock } from './CollapsibleTerminalBlock.svelte';
 
 /**
  * **MermaidPreview** - Interactive Mermaid diagram viewer

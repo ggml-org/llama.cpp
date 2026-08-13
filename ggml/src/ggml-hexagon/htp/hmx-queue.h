@@ -17,14 +17,18 @@
 extern "C" {
 #endif
 
-#define HMX_QUEUE_THREAD_STACK_SIZE (16 * 1024)
-#define HMX_QUEUE_POLL_COUNT        2000
+#if __HVX_ARCH__ > 79
+#define HMX_QUEUE_POLL_COUNT 2000
+#else
+#define HMX_QUEUE_POLL_COUNT 1
+#endif
 
 typedef void (*hmx_queue_func)(void *);
 
 // Dummy funcs used as signals
 enum hmx_queue_signal {
     HMX_QUEUE_NOOP = 0, // aka NULL
+    HMX_QUEUE_WAKEUP,
     HMX_QUEUE_SUSPEND,
     HMX_QUEUE_KILL
 };
@@ -35,7 +39,7 @@ struct hmx_queue_desc {
     atomic_uint      done;
 };
 
-struct hmx_queue {
+struct hmx_queue_s {
     struct hmx_queue_desc * desc;
     atomic_uint      idx_write; // updated by producer (push)
     atomic_uint      idx_read;  // updated by consumer (process)
@@ -49,19 +53,24 @@ struct hmx_queue {
     uint32_t         hap_rctx;
     bool             hmx_locked;
     struct htp_thread_trace * trace;
+    bool             external_mem; // memory owned externally
 };
 
-struct hmx_queue * hmx_queue_create(size_t capacity, uint32_t hap_rctx);
-void hmx_queue_delete(struct hmx_queue * q);
+typedef struct hmx_queue_s * hmx_queue_t;
+
+size_t      hmx_queue_sizeof(size_t capacity, uint32_t stack_size);
+size_t      hmx_queue_alignof(void);
+hmx_queue_t hmx_queue_init(void * ptr, size_t capacity, uint32_t stack_size, uint32_t hap_rctx, struct htp_thread_trace * trace);
+void        hmx_queue_free(hmx_queue_t q);
 
 static inline struct hmx_queue_desc hmx_queue_make_desc(hmx_queue_func func, void * data) {
     struct hmx_queue_desc d = { func, data };
     return d;
 }
 
-static inline bool hmx_queue_push(struct hmx_queue * q, struct hmx_queue_desc d) {
+static inline bool hmx_queue_push(hmx_queue_t q, struct hmx_queue_desc d) {
     unsigned int ir = atomic_load(&q->idx_read);
-    unsigned int iw = q->idx_write;
+    unsigned int iw = atomic_load(&q->idx_write);
 
     if (((iw + 1) & q->idx_mask) == ir) {
         FARF(HIGH, "hmx-queue-push: queue is full\n");
@@ -81,25 +90,25 @@ static inline bool hmx_queue_push(struct hmx_queue * q, struct hmx_queue_desc d)
     return true;
 }
 
-static inline bool hmx_queue_signal(struct hmx_queue *q, enum hmx_queue_signal sig) {
+static inline bool hmx_queue_signal(hmx_queue_t q, enum hmx_queue_signal sig) {
     return hmx_queue_push(q, hmx_queue_make_desc((hmx_queue_func) sig, NULL));
 }
 
-static inline bool hmx_queue_empty(struct hmx_queue * q) {
-    return q->idx_pop == q->idx_write;
+static inline bool hmx_queue_empty(hmx_queue_t q) {
+    return q->idx_pop == atomic_load(&q->idx_write);
 }
 
-static inline uint32_t hmx_queue_depth(struct hmx_queue * q) {
-    return (q->idx_read - q->idx_read) & q->idx_mask;
+static inline uint32_t hmx_queue_depth(hmx_queue_t q) {
+    return (atomic_load(&q->idx_write) - atomic_load(&q->idx_read)) & q->idx_mask;
 }
 
-static inline uint32_t hmx_queue_capacity(struct hmx_queue * q) {
+static inline uint32_t hmx_queue_capacity(hmx_queue_t q) {
     return q->capacity;
 }
 
-static inline struct hmx_queue_desc hmx_queue_pop(struct hmx_queue * q) {
+static inline struct hmx_queue_desc hmx_queue_pop_one(hmx_queue_t q) {
     unsigned int ip = q->idx_pop;
-    unsigned int iw = q->idx_write;
+    unsigned int iw = atomic_load(&q->idx_write);
 
     struct hmx_queue_desc rd = { NULL, NULL };
     if (ip == iw) {
@@ -120,13 +129,28 @@ static inline struct hmx_queue_desc hmx_queue_pop(struct hmx_queue * q) {
     return rd;
 }
 
-static inline void hmx_queue_flush(struct hmx_queue * q) {
-    while (hmx_queue_pop(q).func != NULL) ;
+static inline struct hmx_queue_desc hmx_queue_pop(hmx_queue_t q) {
+    while (1) {
+        struct hmx_queue_desc d = hmx_queue_pop_one(q);
+
+        uint32_t sig = (uint32_t) d.func;
+        if (sig && sig <= HMX_QUEUE_KILL)
+            continue;
+
+        return d;
+    }
 }
 
-static inline void hmx_queue_suspend(struct hmx_queue *q) {
+static inline void hmx_queue_flush(hmx_queue_t q) {
+    while (hmx_queue_pop_one(q).func != NULL) ;
+}
+
+static inline void hmx_queue_wakeup(hmx_queue_t q) {
+    hmx_queue_signal(q, HMX_QUEUE_WAKEUP);
+}
+
+static inline void hmx_queue_suspend(hmx_queue_t q) {
     hmx_queue_signal(q, HMX_QUEUE_SUSPEND);
-    hmx_queue_flush(q);
 }
 
 #ifdef __cplusplus
