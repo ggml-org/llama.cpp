@@ -12,7 +12,7 @@ Model-specific fusions and graph-scoped Q8_1 reuse require additional switches. 
 
 | Variable | Default | Effect |
 |---|---:|---|
-| `GGML_HIP_GFX1030_NATIVE` | unset / `0` | Master opt-in for validated gfx1030 kernel specializations. Enables the Q4_0 DOT8 MMVQ path, bounded six-row Q4_K/Q6_K routed MMVQ dispatch, native tiled-FlashAttention arithmetic/reductions, and chunked GDN prefill loads. |
+| `GGML_HIP_GFX1030_NATIVE` | unset / `0` | Master opt-in for validated gfx1030 kernel specializations. Enables the Q4_0 DOT8 MMVQ path, the exact-shape Muse Q8_0 eight-warp MMVQ path, bounded six-row Q4_K/Q6_K routed MMVQ dispatch, native tiled-FlashAttention arithmetic/reductions, and chunked GDN prefill loads. |
 | `GGML_HIP_GFX1030_Q8_1_FUSION` | unset / `0` | In combination with the master switch, fuses routed SwiGLU evaluation into Q8_1 activation staging for eligible prompt-processing `MUL_MAT_ID` down projections. |
 | `GGML_HIP_GFX1030_GDN_SIBLING_FUSION` | unset / `0` | In combination with the master switch, creates and uses fused Qwen3.5/Qwen3.6 DeltaNet sibling projection weights. |
 | `GGML_HIP_GFX1030_Q8_CACHE` | unset / `0` | In combination with the master switch, enables graph-owned reuse of exact standard Q8_1 TG activations and the eligible dual RMSNorm F32/Q8_1 producer. |
@@ -51,6 +51,12 @@ Multi-GPU ROCm state save/restore stability has a separate opt-in, `GGML_HIP_SAF
 For Q4_0 decode with one destination column, the native MMVQ specialization preserves the ordinary Q4_0 weights and Q8_1 activation bytes. A two-byte `sum_hi` sidecar per Q8_1 block supplies the exact high-nibble correction needed by gfx1030 `UDOT8`/`SDOT8`; no model conversion or persistent layout change is required. Other quantization types remain on their normal vector-dot implementations.
 
 The path is exact and opt-in, but the measured Qwen end-to-end result was neutral to approximately 0.7% slower. It is retained as a validated native arithmetic experiment rather than advertised as a default speedup. See [the Q4_0 DOT8 experiment](rdna2-v620-q4-0-dot8-experiment.md).
+
+### Muse Q8_0 eight-warp MMVQ
+
+Muse-Glimmer-30B tensor splitting exposes its promoted attention K/V weights to each backend as single-token, non-routed Q8_0 MMVQ with `K=6656` and `N=128`. Native mode launches an eight-wave kernel for that exact standard-Q8_1 shape. All other dimensions, quant types, routed operations, packed Q8_1 layouts, and multi-column batches retain the normal architecture policy; in particular, the measured `6656x2048` Q/gate sibling remains at one wave.
+
+Across four paired synthetic passes, eight waves reduced production-graph latency for `6656x128` by 17.4%; `6656x2048` regressed by 6.2%, which is why the selector is exact rather than a general RDNA2 warp table. On four V620s with Muse Q4S8 tensor split, TG128 improved from a paired mean of `42.057` to `42.992 tok/s` (**+2.22%**) in A/B/B/A testing. Q8_0 outputs agreed with the one-wave path with zero tolerance failures, maximum absolute difference `2.44e-4`, and RMSE `4.78e-5`; different reduction order means byte identity is not claimed. Q4_0 and non-selected Q8_0 controls remained byte-identical.
 
 ### Bounded six-row routed MMVQ
 

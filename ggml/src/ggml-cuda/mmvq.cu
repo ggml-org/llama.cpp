@@ -1,5 +1,6 @@
 #include "mmvq.cuh"
 #include "mmvq-batch6-config.h"
+#include "mmvq-rdna2-config.h"
 #include "quantize.cuh"
 #include "unary.cuh"
 #include "vecdotq.cuh"
@@ -692,11 +693,19 @@ static int mmvq_select_q8_1_layout_block_size(ggml_type type, int64_t ncols_dst)
     return default_block_size;
 }
 
+template <ggml_type type, int q8_1_layout_block_size, int nwarps_override>
+static constexpr __host__ __device__ int mmvq_calc_nwarps(
+        int ncols_dst, mmvq_parameter_table_id table_id) {
+    static_assert(nwarps_override == 0 || nwarps_override == 8);
+    return nwarps_override != 0 ? nwarps_override :
+        mmvq_layout_policy<type, q8_1_layout_block_size>::nwarps(ncols_dst, table_id);
+}
+
 template <
     ggml_type type, int ncols_dst, bool has_fusion, bool small_k = false,
     int q8_1_layout_block_size = MMVQ_Q8_1_BLOCK_SIZE_STANDARD, bool use_q4_0_dot8 = false,
-    bool use_gfx1030_native = false>
-__launch_bounds__((mmvq_layout_policy<type, q8_1_layout_block_size>::nwarps(ncols_dst, get_device_table_id())*ggml_cuda_get_physical_warp_size()), 1)
+    bool use_gfx1030_native = false, int nwarps_override = 0>
+__launch_bounds__((mmvq_calc_nwarps<type, q8_1_layout_block_size, nwarps_override>(ncols_dst, get_device_table_id())*ggml_cuda_get_physical_warp_size()), 1)
 static __global__ void mul_mat_vec_q(
         const void * vx_ptr, const void * vy_ptr, const block_q8_1_sum_hi * sum_hi_ptr,
         const int32_t * ids_ptr, const ggml_cuda_mm_fusion_args_device fusion, float * dst_ptr,
@@ -722,7 +731,7 @@ static __global__ void mul_mat_vec_q(
 
     constexpr int qk  = ggml_cuda_type_traits<type>::qk;
     constexpr mmvq_parameter_table_id table_id = get_device_table_id();
-    constexpr int nwarps = layout_policy::nwarps(ncols_dst, table_id);
+    constexpr int nwarps = mmvq_calc_nwarps<type, q8_1_layout_block_size, nwarps_override>(ncols_dst, table_id);
     constexpr int rows_per_cuda_block = layout_policy::rows_per_block(ncols_dst, table_id, small_k, nwarps);
     constexpr int warp_size = ggml_cuda_get_physical_warp_size();
 
@@ -1053,7 +1062,7 @@ static std::pair<dim3, dim3> calc_launch_params(
 template <
     ggml_type type, int c_ncols_dst, bool small_k = false,
     int q8_1_layout_block_size = MMVQ_Q8_1_BLOCK_SIZE_STANDARD, bool use_q4_0_dot8 = false,
-    bool use_gfx1030_native = false>
+    bool use_gfx1030_native = false, int nwarps_override = 0>
 static void mul_mat_vec_q_switch_fusion(
         const void * vx, const void * vy, const block_q8_1_sum_hi * sum_hi, const int32_t * ids,
         const ggml_cuda_mm_fusion_args_device fusion, float * dst,
@@ -1067,7 +1076,7 @@ static void mul_mat_vec_q_switch_fusion(
                             fusion.x_scale != nullptr || fusion.gate_scale != nullptr;
     if constexpr (c_ncols_dst == 1) {
         if (has_fusion) {
-            mul_mat_vec_q<type, c_ncols_dst, true, small_k, q8_1_layout_block_size, use_q4_0_dot8, use_gfx1030_native><<<block_nums, block_dims, nbytes_shared, stream>>>
+            mul_mat_vec_q<type, c_ncols_dst, true, small_k, q8_1_layout_block_size, use_q4_0_dot8, use_gfx1030_native, nwarps_override><<<block_nums, block_dims, nbytes_shared, stream>>>
                 (vx, vy, sum_hi, ids, fusion, dst, ncols_x, nchannels_y, stride_row_x, stride_col_y, stride_col_dst,
                  channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
                  sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst, ids_stride);
@@ -1077,7 +1086,7 @@ static void mul_mat_vec_q_switch_fusion(
 
     GGML_ASSERT(!has_fusion && "fusion only supported for ncols_dst=1");
 
-    mul_mat_vec_q<type, c_ncols_dst, false, small_k, q8_1_layout_block_size, use_q4_0_dot8, use_gfx1030_native><<<block_nums, block_dims, nbytes_shared, stream>>>
+    mul_mat_vec_q<type, c_ncols_dst, false, small_k, q8_1_layout_block_size, use_q4_0_dot8, use_gfx1030_native, nwarps_override><<<block_nums, block_dims, nbytes_shared, stream>>>
         (vx, vy, sum_hi, ids, fusion, dst, ncols_x, nchannels_y, stride_row_x, stride_col_y, stride_col_dst,
         channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
         sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst, ids_stride);
@@ -1399,6 +1408,35 @@ static void mul_mat_vec_q_switch_type(
         const int nsamples_x, const int nsamples_dst, const int stride_sample_x, const int stride_sample_y, const int stride_sample_dst,
         const int ids_stride, cudaStream_t stream,
         const int q8_1_layout_block_size = MMVQ_Q8_1_BLOCK_SIZE_STANDARD) {
+    if constexpr (use_gfx1030_native) {
+        const ggml_cuda_mmvq_rdna2_q8_w8_input input = {
+            type_x == GGML_TYPE_Q8_0 ? ggml_cuda_mmvq_rdna2_type::q8_0 : ggml_cuda_mmvq_rdna2_type::other,
+            ids != nullptr,
+            q8_1_layout_block_size == MMVQ_Q8_1_BLOCK_SIZE_STANDARD,
+            ncols_x,
+            nrows_x,
+            ncols_dst,
+        };
+        if (ggml_cuda_mmvq_use_rdna2_q8_w8(input)) {
+            constexpr int c_ncols_dst = 1;
+            constexpr int nwarps = 8;
+            const uint3 nchannels_y_fd   = make_uint3(0, 0, 0);
+            const uint3 channel_ratio_fd = init_fastdiv_values(nchannels_dst / nchannels_x);
+            const uint3 sample_ratio_fd  = init_fastdiv_values(nsamples_dst / nsamples_x);
+            const int warp_size = ggml_cuda_info().devices[ggml_cuda_get_device()].warp_size;
+            const dim3 block_nums(nrows_x, nchannels_dst, nsamples_dst);
+            const dim3 block_dims(warp_size, nwarps, 1);
+            mul_mat_vec_q_switch_fusion<GGML_TYPE_Q8_0, c_ncols_dst, false,
+                    MMVQ_Q8_1_BLOCK_SIZE_STANDARD, false, true, nwarps>(
+                vx, vy, sum_hi, ids, fusion, dst, ncols_x, nchannels_y_fd,
+                stride_row_x, stride_col_y, stride_col_dst, channel_ratio_fd,
+                stride_channel_x, stride_channel_y, stride_channel_dst, sample_ratio_fd,
+                stride_sample_x, stride_sample_y, stride_sample_dst,
+                block_nums, block_dims, 0, ids_stride, stream);
+            return;
+        }
+    }
+
     switch (type_x) {
 #define MMVQ_SWITCH_TYPE(type) \
         case type: \
