@@ -100,6 +100,8 @@ export interface SkillBaseReadResult {
 	kind: 'skill';
 	skill: SkillIdentity & { metadata?: SkillMetadata };
 	resources: { paths: string[]; truncated: boolean };
+	source: string;
+	body_markdown: string;
 	content_xml: string;
 	diagnostics: SkillDiagnostic[];
 }

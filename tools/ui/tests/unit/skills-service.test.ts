@@ -36,6 +36,10 @@ function makeCatalog(): SkillCatalogResponse {
 	};
 }
 
+const BASE_SKILL_SOURCE =
+	'---\nname: example-skill\ndescription: Use when processing example inputs.\n---\n# Example\n\nUse **carefully**.\n';
+const BASE_SKILL_BODY_MARKDOWN = '# Example\n\nUse **carefully**.\n';
+
 function makeBaseReadResult(): SkillReadResult {
 	return {
 		kind: 'skill',
@@ -47,6 +51,8 @@ function makeBaseReadResult(): SkillReadResult {
 			metadata: { description: 'Use when processing example inputs.' }
 		},
 		resources: { paths: ['references/DETAILS.md'], truncated: false },
+		source: BASE_SKILL_SOURCE,
+		body_markdown: BASE_SKILL_BODY_MARKDOWN,
 		content_xml:
 			'<skill_content name="example-skill"><skill_resources><file>references/DETAILS.md</file></skill_resources></skill_content>',
 		diagnostics: []
@@ -199,8 +205,12 @@ describe('SkillsService', () => {
 			const result = await SkillsService.read({ name: 'example-skill' });
 
 			expect(result.kind).toBe('skill');
-			expect(result.content_xml).toContain('<skill_content');
-			expect(result.skill.id).toBe('opaque-resolved-skill-identity');
+			if (result.kind === 'skill') {
+				expect(result.source).toBe(BASE_SKILL_SOURCE);
+				expect(result.body_markdown).toBe(BASE_SKILL_BODY_MARKDOWN);
+				expect(result.content_xml).toBe(makeBaseReadResult().content_xml);
+				expect(result.skill.id).toBe('opaque-resolved-skill-identity');
+			}
 		});
 	});
 });

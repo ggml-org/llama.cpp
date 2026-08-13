@@ -981,6 +981,8 @@ server_skills::server_skills(server_skills_config config, token_count_callback c
                     {"kind", "skill"},
                     {"skill", {{"id", skill.id}, {"name", skill.name}, {"scope", skill.scope}, {"provider", skill.provider}, {"metadata", std::move(metadata)}}},
                     {"resources", {{"paths", resources.paths}, {"truncated", resources.truncated}}},
+                    {"source", source},
+                    {"body_markdown", current.body},
                     {"content_xml", content_xml},
                     {"diagnostics", diagnostics_json(catalog.diagnostics)},
                 });
