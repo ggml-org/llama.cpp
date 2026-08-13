@@ -19,16 +19,8 @@ def load_server_presets():
 # `tests/test-server-skills.cpp`, which drives the constructed server_skills
 # GET/POST handlers with real request headers and request JSON. The cache and
 # token-measurement tests below exercise the same contract through the public
-# HTTP surface and require the route-binding task's registered GET /skills;
-# the route-facing tests below cover the enabled registration, prefix,
+# HTTP surface; the route-facing tests cover the enabled registration, prefix,
 # middleware, and envelope behavior.
-
-
-def skills_route_bound(server):
-    """True once the route-binding task registers GET /skills; before that the
-    catalog cache/token tests cannot run through the public HTTP surface."""
-    res = server.make_request("GET", "/skills")
-    return res.status_code != 404
 
 
 def write_skill(root, provider, name, body="Use <safe> & sound.", description="Use <safe> & sound."):
@@ -39,8 +31,6 @@ def write_skill(root, provider, name, body="Use <safe> & sound.", description="U
         f"---\nname: {name}\ndescription: {description}\n---\n{body}", encoding="utf-8"
     )
     return skill
-
-
 # Route-facing integration tests: enabled GET /skills and POST /skills/read,
 # prefix behavior, shared error envelopes, middleware ordering, and the
 # preflight that the shared CORS policy must keep allowing X-Skill-Cwd.
@@ -347,8 +337,6 @@ def test_skills_catalog_cache_lru_eviction(tmp_path):
                     body=f"body-{index:02d}", description=f"desc-{index:02d}")
         projects.append(project)
     server.start()
-    if not skills_route_bound(server):
-        pytest.skip("Skills routes are registered by the route-binding task")
 
     def check(index):
         res = server.make_request("GET", "/skills", headers={"X-Skill-Cwd": str(projects[index])})
@@ -387,8 +375,6 @@ def test_skills_catalog_mutation_freshness(tmp_path):
     project.mkdir()
     skill = write_skill(project, "agents", "mutable", body="first body", description="first desc")
     server.start()
-    if not skills_route_bound(server):
-        pytest.skip("Skills routes are registered by the route-binding task")
 
     res = server.make_request("GET", "/skills", headers={"X-Skill-Cwd": str(project)})
     assert res.status_code == 200
@@ -428,8 +414,6 @@ def test_skills_catalog_tokens_estimated_in_router_mode(tmp_path):
     project.mkdir()
     write_skill(project, "agents", "estimated", body="estimate me", description="desc")
     server.start()
-    if not skills_route_bound(server):
-        pytest.skip("Skills routes are registered by the route-binding task")
 
     res = server.make_request("GET", "/skills", headers={"X-Skill-Cwd": str(project)})
     assert res.status_code == 200
