@@ -653,6 +653,7 @@ struct common_params {
     bool endpoint_slots   = true;
     bool endpoint_props   = false; // only control POST requests, not GET
     bool endpoint_metrics = false;
+    std::vector<uint64_t> metrics_ctx_buckets = {1024, 4096, 8192, 16384, 32768, 65536, 131072, 262144};
 
     // enable built-in tools
     std::vector<std::string> server_tools;

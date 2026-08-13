@@ -486,6 +486,30 @@ struct server_metrics {
     void add_prompt_cached(uint64_t n_tokens) {
         n_prompt_cached += n_tokens;
     }
+
+    // context-size histogram (Prometheus cumulative buckets)
+    std::vector<uint64_t> ctx_buckets;
+    std::vector<uint64_t> ctx_bucket_counts;
+    uint64_t              ctx_total_count = 0;
+    uint64_t              ctx_total_sum   = 0;
+
+    void init_ctx_histogram(const std::vector<uint64_t> & boundaries) {
+        ctx_buckets = boundaries;
+        ctx_bucket_counts.assign(boundaries.size(), 0);
+    }
+
+    void record_ctx_histogram(uint64_t n_ctx_tokens) {
+        ctx_total_count++;
+        ctx_total_sum += n_ctx_tokens;
+        for (size_t i = 0; i < ctx_buckets.size(); i++) {
+            if (n_ctx_tokens <= ctx_buckets[i]) {
+                for (size_t j = i; j < ctx_buckets.size(); j++) {
+                    ctx_bucket_counts[j]++;
+                }
+                return;
+            }
+        }
+    }
 };
 
 //

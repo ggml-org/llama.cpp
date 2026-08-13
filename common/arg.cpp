@@ -3538,6 +3538,22 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_ENDPOINT_METRICS"));
     add_opt(common_arg(
+        {"--metrics-ctx-buckets"}, "B1,B2,...",
+        string_format(
+            "context-size histogram bucket boundaries for /metrics (default: %s)",
+            "1024,4096,8192,16384,32768,65536,131072,262144"),
+        [](common_params & params, const std::string & value) {
+            params.metrics_ctx_buckets.clear();
+            for (auto & tok : string_split<std::string>(value, ',')) {
+                auto s = string_strip(tok);
+                if (!s.empty()) {
+                    params.metrics_ctx_buckets.push_back(std::stoull(s));
+                }
+            }
+            std::sort(params.metrics_ctx_buckets.begin(), params.metrics_ctx_buckets.end());
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_METRICS_CTX_BUCKETS"));
+    add_opt(common_arg(
         {"--props"},
         string_format("enable changing global properties via POST /props (default: %s)", params.endpoint_props ? "enabled" : "disabled"),
         [](common_params & params) {

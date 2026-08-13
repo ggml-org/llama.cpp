@@ -1610,6 +1610,31 @@ std::string server_task_result_metrics::to_metrics() {
         }
     }
 
+    // context-size histogram
+    if (!metrics.ctx_buckets.empty()) {
+        const std::string & mname  = model_name;
+        const std::string & malias = model_aliases.empty() ? mname : *model_aliases.begin();
+
+        prometheus << "# HELP llamacpp:request_context_tokens "
+                      "Distribution of context sizes (in tokens) across completed requests\n"
+                   << "# TYPE llamacpp:request_context_tokens histogram\n";
+        for (size_t i = 0; i < metrics.ctx_buckets.size(); i++) {
+            prometheus << "llamacpp:request_context_tokens_bucket{model_name=\"" << mname
+                       << "\",model_alias=\"" << malias
+                       << "\",le=\"" << metrics.ctx_buckets[i]
+                       << "\"} " << metrics.ctx_bucket_counts[i] << "\n";
+        }
+        prometheus << "llamacpp:request_context_tokens_bucket{model_name=\"" << mname
+                   << "\",model_alias=\"" << malias
+                   << "\",le=\"+Inf\"} " << metrics.ctx_total_count << "\n"
+                   << "llamacpp:request_context_tokens_sum{model_name=\"" << mname
+                   << "\",model_alias=\"" << malias
+                   << "\"} " << metrics.ctx_total_sum << "\n"
+                   << "llamacpp:request_context_tokens_count{model_name=\"" << mname
+                   << "\",model_alias=\"" << malias
+                   << "\"} " << metrics.ctx_total_count << "\n";
+    }
+
     return prometheus.str();
 }
 

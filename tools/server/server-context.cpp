@@ -1365,6 +1365,7 @@ private:
         });
 
         metrics.init();
+        metrics.init_ctx_histogram(params_base.metrics_ctx_buckets);
 
         if (params_base.cache_idle_slots) {
             if (params_base.cache_ram_mib == 0) {
@@ -2433,6 +2434,8 @@ private:
                     res->n_processing_slots  = n_processing_slots;
                     res->n_tasks_deferred    = queue_tasks.queue_tasks_deferred_size();
                     res->metrics             = metrics;
+                    res->model_name          = model_name;
+                    res->model_aliases       = model_aliases;
 
                     if (task.metrics_reset_bucket) {
                         metrics.reset_bucket();
@@ -4006,6 +4009,8 @@ private:
         for (size_t i = 0; i < src.size(); i++) {
             dst[i] += src[i];
         }
+
+        metrics.record_ctx_histogram(slot.prompt.n_tokens());
     }
 };
 
