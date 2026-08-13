@@ -184,7 +184,7 @@ static void add_smcus_from_smidr(uint64_t smidr, size_t & num_private, std::map<
 }
 
 static size_t detect_num_smcus() {
-    auto runtime_feat = ggml_get_aarch64_runtime_features();
+    const auto runtime_feat = ggml_feats_get_arch64_runtime();
     if (!runtime_feat.has_sme) {
         return 0;
     }
@@ -310,7 +310,7 @@ static void init_kleidiai_context(void) {
         const char *env_threads     = getenv("GGML_TOTAL_THREADS");
         const char *env_chunk_mult  = getenv("GGML_KLEIDIAI_CHUNK_MULTIPLIER");
 
-        auto runtime_feat = ggml_get_aarch64_runtime_features();
+        const auto runtime_feat = ggml_feats_get_arch64_runtime();
 
         size_t detected_smcus = 0;
 
