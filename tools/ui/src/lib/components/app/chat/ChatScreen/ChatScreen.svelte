@@ -242,7 +242,8 @@
 
 	$effect(() => {
 		const shouldDisableAutoScroll =
-			settingsStore.config.disableAutoScroll || (deviceStore.isMobile && isCurrentConversationLoading);
+			settingsStore.config.disableAutoScroll ||
+			(deviceStore.isMobile && isCurrentConversationLoading);
 
 		autoScroll.setDisabled(shouldDisableAutoScroll);
 

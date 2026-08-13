@@ -56,15 +56,3 @@ export { toolsStore } from './tools.svelte';
 export { versionStore } from './version.svelte';
 
 export { deviceStore } from './device.svelte';
-
-export {
-	gaugePopup,
-	gaugePopupClose,
-	gaugeTriggerPointerDown,
-	gaugeTriggerClick,
-	gaugeTriggerKeydown,
-	gaugeTriggerEnter,
-	gaugeTriggerLeave,
-	gaugeCardEnter,
-	gaugeCardLeave
-} from './context-gauge-popup.svelte';
