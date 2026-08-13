@@ -183,7 +183,7 @@ export type {
 } from './glob';
 
 // Contenteditable token types (chat form)
-export type { ContentEditableToken } from './contenteditable';
+export type { ChatFormInputRichToken } from './chat-form-input-rich';
 
 // Agentic types
 export type {

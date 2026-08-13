@@ -2,7 +2,7 @@
 	import { CODE_BLOCK } from '$lib/constants';
 	import { ColorMode } from '$lib/enums';
 	import { isMobile } from '$lib/stores';
-	import type { ContentEditableToken } from '$lib/types';
+	import type { ChatFormInputRichToken } from '$lib/types';
 	import type { SourceHistoryEntry } from '$lib/utils';
 	import {
 		badgeAwareWordJump,
@@ -64,7 +64,7 @@
 		rootElement.dataset.empty = source.length === 0 ? 'true' : 'false';
 	}
 
-	function renderTokens(tokens: ContentEditableToken[]) {
+	function renderTokens(tokens: ChatFormInputRichToken[]) {
 		if (!rootElement) return;
 
 		const caret = rangeToTextOffset(rootElement, safeRange());
@@ -127,7 +127,7 @@
 	}
 
 	function highlightCodeBlocks(root: HTMLElement) {
-		for (const el of root.querySelectorAll<HTMLElement>('code[data-code-token="block"]')) {
+		for (const el of root.querySelectorAll<HTMLElement>('code[data-code-token="code_block"]')) {
 			highlightCodeBlockElement(el);
 		}
 	}
@@ -151,7 +151,7 @@
 		}
 
 		while (node && node !== rootElement) {
-			if (node instanceof HTMLElement && node.dataset.codeToken === 'block') {
+			if (node instanceof HTMLElement && node.dataset.codeToken === 'code_block') {
 				const caret = rangeToTextOffset(rootElement, range);
 
 				if (highlightCodeBlockElement(node)) {
@@ -404,7 +404,7 @@
 			let node: Node | null = container.parentNode;
 
 			while (node && node !== rootElement) {
-				if (node instanceof HTMLElement && node.dataset.codeToken === 'block') {
+				if (node instanceof HTMLElement && node.dataset.codeToken === 'code_block') {
 					const tail = document.createRange();
 
 					tail.setStart(container, offset);
@@ -462,7 +462,7 @@
 
 		const first = rootElement.firstChild;
 
-		if (!(first instanceof HTMLElement) || first.dataset.codeToken !== 'block') return false;
+		if (!(first instanceof HTMLElement) || first.dataset.codeToken !== 'code_block') return false;
 
 		const range = safeRange();
 
@@ -507,7 +507,7 @@
 
 		const second = first.nextSibling;
 
-		if (!(second instanceof HTMLElement) || second.dataset.codeToken !== 'block') return;
+		if (!(second instanceof HTMLElement) || second.dataset.codeToken !== 'code_block') return;
 
 		const range = safeRange();
 		const onHatch =
@@ -787,7 +787,7 @@
 	}
 </script>
 
-<div class="flex-1 {className}">
+<div class="flex-1 {className} mb-0.5">
 	<div
 		bind:this={rootElement}
 		contenteditable={!disabled}
@@ -798,7 +798,7 @@
 		data-placeholder={placeholder}
 		tabindex={disabled ? -1 : 0}
 		class={[
-			'chat-form-contenteditable text-md min-h-12 w-full overflow-y-auto whitespace-pre-wrap wrap-break-word border-0 bg-transparent p-0 leading-6 outline-none focus-visible:ring-0 focus-visible:ring-offset-0',
+			'chat-form-input-rich text-md min-h-12 w-full overflow-y-auto whitespace-pre-wrap wrap-break-word border-0 bg-transparent p-0 leading-6 outline-none focus-visible:ring-0 focus-visible:ring-offset-0',
 			disabled && 'cursor-not-allowed'
 		]}
 		style="max-height: var(--max-message-height);"
@@ -815,18 +815,18 @@
 <style>
 	/* pre-wrap is load-bearing: without it Chromium collapses \n in
 	   text nodes and converts them to spaces while typing */
-	.chat-form-contenteditable {
+	.chat-form-input-rich {
 		white-space: pre-wrap;
 	}
 
-	.chat-form-contenteditable:global([data-empty='true'])::before {
+	.chat-form-input-rich:global([data-empty='true'])::before {
 		content: attr(data-placeholder);
 		color: var(--muted-foreground);
 		pointer-events: none;
 	}
 
 	/* Inline code - mirrors markdown-content.css */
-	.chat-form-contenteditable :global(code[data-code-token='inline']) {
+	.chat-form-input-rich :global(code[data-code-token='code_inline']) {
 		background: var(--muted);
 		color: var(--muted-foreground);
 		padding: 0.125rem 0.375rem;
@@ -835,7 +835,7 @@
 	}
 
 	/* Fenced code block - mirrors .code-block-wrapper in markdown-content.css */
-	.chat-form-contenteditable :global(code[data-code-token='block']) {
+	.chat-form-input-rich :global(code[data-code-token='code_block']) {
 		display: block;
 		margin: 0.25rem 0;
 		padding: 0.75rem 1rem;

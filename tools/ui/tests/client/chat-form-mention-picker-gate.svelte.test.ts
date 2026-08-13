@@ -3,7 +3,7 @@
 // it, the picker still opens but explains why instead of firing searches
 // that would only fail with "Search failed".
 
-import ChatFormMentionPicker from '$lib/components/app/chat/ChatForm/ChatFormPickers/ChatFormMentionPicker.svelte';
+import ChatFormMentionPicker from '$lib/components/app/chat/ChatForm/ChatFormPickers/ChatFormPickerMention.svelte';
 import { DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY } from '$lib/constants';
 import { BuiltInTool } from '$lib/enums';
 import { toolsStore } from '$lib/stores/tools.svelte';

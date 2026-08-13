@@ -3,12 +3,11 @@
 	import {
 		ChatAttachmentsList,
 		ChatFormActions,
-		ChatFormContentEditable,
-		ChatFormFileInputInvisible,
+		ChatFormCurrentWorkingDirectory,
+		ChatFormInput,
+		ChatFormInputFileInputInvisible,
 		ChatFormMcpResourcesList,
 		ChatFormPickers,
-		ChatFormTextarea,
-		ChatFormWorkingDirectory,
 		DialogMcpResourcesBrowser
 	} from '$lib/components/app';
 	import {
@@ -121,7 +120,7 @@
 
 	let audioRecorder: AudioRecorder | undefined;
 	let chatFormActionsRef: ChatFormActions | undefined = $state(undefined);
-	let fileInputRef: ChatFormFileInputInvisible | undefined = $state(undefined);
+	let fileInputRef: ChatFormInputFileInputInvisible | undefined = $state(undefined);
 	let pickersRef: { handleKeydown: (event: KeyboardEvent) => boolean } | undefined =
 		$state(undefined);
 	let inputRef: ChatInputHandle | undefined = $state(undefined);
@@ -544,7 +543,7 @@
 	}
 </script>
 
-<ChatFormFileInputInvisible bind:this={fileInputRef} onFileSelect={handleFileSelect} />
+<ChatFormInputFileInputInvisible bind:this={fileInputRef} onFileSelect={handleFileSelect} />
 
 <form
 	class="relative grid {className}"
@@ -603,35 +602,20 @@
 		<div
 			class="flex-column relative min-h-12 items-center rounded-4xl md:rounded-3xl py-2 pb-2.25 shadow-sm transition-all focus-within:shadow-md md:py-3!"
 		>
-			{#if useContenteditable}
-				<ChatFormContentEditable
-					class="px-5 py-1.5 md:pt-0 mb-0.5"
-					bind:this={inputRef}
-					bind:value
-					onKeydown={handleKeydown}
-					onInput={() => {
-						pickers.handleInput();
-						onValueChange?.(value);
-					}}
-					onPaste={handlePaste}
-					{disabled}
-					{placeholder}
-				/>
-			{:else}
-				<ChatFormTextarea
-					class="px-5 py-1.5 md:pt-0"
-					bind:this={inputRef}
-					bind:value
-					onKeydown={handleKeydown}
-					onInput={() => {
-						pickers.handleInput();
-						onValueChange?.(value);
-					}}
-					onPaste={handlePaste}
-					{disabled}
-					{placeholder}
-				/>
-			{/if}
+			<ChatFormInput
+				class="px-5 py-1.5 md:pt-0"
+				bind:this={inputRef}
+				bind:value
+				onKeydown={handleKeydown}
+				onInput={() => {
+					pickers.handleInput();
+					onValueChange?.(value);
+				}}
+				onPaste={handlePaste}
+				{disabled}
+				{placeholder}
+				{useContenteditable}
+			/>
 
 			{#if mcpResourceStore.hasAttachments}
 				<ChatFormMcpResourcesList
@@ -667,7 +651,7 @@
 	<ContextGaugePopup />
 
 	{#if toolsStore.hasEnabledCwdTools}
-		<ChatFormWorkingDirectory
+		<ChatFormCurrentWorkingDirectory
 			directory={cwd}
 			isOpen={pickers.isWorkingDirectoryPickerOpen}
 			bind:query={pickers.workingDirectoryQuery}

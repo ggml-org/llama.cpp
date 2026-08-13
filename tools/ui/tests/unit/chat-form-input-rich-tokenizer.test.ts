@@ -97,7 +97,7 @@ describe('tokenizeContent', () => {
 	it('tokenizes inline code with the backticks included', () => {
 		expect(tokenizeContent('run `npm test` now')).toEqual([
 			{ kind: 'text', text: 'run ' },
-			{ kind: 'inlineCode', text: '`npm test`' },
+			{ kind: 'code_inline', text: '`npm test`' },
 			{ kind: 'text', text: ' now' }
 		]);
 	});
@@ -107,7 +107,7 @@ describe('tokenizeContent', () => {
 
 		expect(tokenizeContent(source)).toEqual([
 			{ kind: 'text', text: 'before\n' },
-			{ kind: 'codeBlock', text: '```\nconst a = 1;\n```' },
+			{ kind: 'code_block', text: '```\nconst a = 1;\n```' },
 			{ kind: 'text', text: '\nafter' }
 		]);
 	});
@@ -116,15 +116,15 @@ describe('tokenizeContent', () => {
 		const source = '```js\nconst a = 1;\n```';
 
 		expect(tokenizeContent(source)).toEqual([
-			{ kind: 'codeBlock', text: '```js\nconst a = 1;\n```' }
+			{ kind: 'code_block', text: '```js\nconst a = 1;\n```' }
 		]);
 	});
 
 	it('prefers the fenced block over inline spans at triple backticks', () => {
 		expect(tokenizeContent('```a``` ```b```')).toEqual([
-			{ kind: 'codeBlock', text: '```a```' },
+			{ kind: 'code_block', text: '```a```' },
 			{ kind: 'text', text: ' ' },
-			{ kind: 'codeBlock', text: '```b```' }
+			{ kind: 'code_block', text: '```b```' }
 		]);
 	});
 
@@ -140,7 +140,7 @@ describe('tokenizeContent', () => {
 
 	it('does not recognize badges inside code spans', () => {
 		expect(tokenizeContent('`[a](file:///p)`')).toEqual([
-			{ kind: 'inlineCode', text: '`[a](file:///p)`' }
+			{ kind: 'code_inline', text: '`[a](file:///p)`' }
 		]);
 	});
 
@@ -148,7 +148,7 @@ describe('tokenizeContent', () => {
 		expect(tokenizeContent('[a](file:///p) `x`')).toEqual([
 			{ kind: 'badge', name: 'a', path: '/p' },
 			{ kind: 'text', text: ' ' },
-			{ kind: 'inlineCode', text: '`x`' }
+			{ kind: 'code_inline', text: '`x`' }
 		]);
 	});
 });
