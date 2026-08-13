@@ -36,7 +36,8 @@ import {
 	CONFIG_LOCALSTORAGE_KEY,
 	SETTING_CONFIG_DEFAULT,
 	SETTINGS_KEYS,
-	USER_OVERRIDES_LOCALSTORAGE_KEY
+	USER_OVERRIDES_LOCALSTORAGE_KEY,
+	normalizeSkillBudget
 } from '$lib/constants';
 import { ColorMode } from '$lib/enums';
 import { ParameterSyncService } from '$lib/services/parameter-sync.service';
@@ -135,6 +136,12 @@ class SettingsStore {
 				...SETTING_CONFIG_DEFAULT,
 				...savedVal
 			};
+
+			// maxSkillBudget must persist as a non-negative integer; sanitize
+			// any tampered or legacy stored value so consumers can rely on it.
+			this.config[SETTINGS_KEYS.MAX_SKILL_BUDGET] = normalizeSkillBudget(
+				this.config[SETTINGS_KEYS.MAX_SKILL_BUDGET]
+			);
 
 			// Default sendOnEnter to false on mobile when the user has no saved preference
 			if (!(SETTINGS_KEYS.SEND_ON_ENTER in savedVal)) {

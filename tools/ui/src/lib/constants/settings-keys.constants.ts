@@ -35,6 +35,7 @@ export const SETTINGS_KEYS = {
 	// MCP
 	MCP_SERVERS: 'mcpServers',
 	MENTION_SEARCH_MAX_DEPTH: 'mentionSearchMaxDepth',
+	MAX_SKILL_BUDGET: 'maxSkillBudget',
 	MIN_P: 'min_p',
 	PASTE_LONG_TEXT_TO_FILE_LEN: 'pasteLongTextToFileLen',
 	PDF_AS_IMAGE: 'pdfAsImage',
