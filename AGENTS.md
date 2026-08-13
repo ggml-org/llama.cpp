@@ -197,7 +197,7 @@ Commit message:
 
 llama : fix KV being cleared during context shift
 
-Assisted-by: Claude Sonnet
+Assisted-by: <LLM model name>
 
 
 // BAD: Write a verbose commit
@@ -206,7 +206,7 @@ This commit introduces a comprehensive fix for the key-value cache management
 system, addressing an issue where context shifting could lead to unintended
 overwriting of cached values, thereby improving model inference stability.
 
-Co-authored-by: Claude Sonnet
+Co-authored-by: <LLM model name>
 ```
 
 Commands:
