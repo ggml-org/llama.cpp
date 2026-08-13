@@ -144,10 +144,13 @@ describe('/skills route presentation', () => {
 		expect(text).toContain('42');
 		expect(text).toContain('estimated');
 		expect(text).toContain('2024');
+		// `Resources:` and the count are sibling text nodes, so the browser
+		// serializes the inter-node whitespace into textContent; assert the
+		// label/count contract tolerantly of that whitespace.
 		// Truncated resource listing renders as a lower bound.
-		expect(text).toContain('Resources: 3+');
+		expect(text).toMatch(/Resources:\s*3\+/);
 		// A complete resource listing renders the exact count.
-		expect(text).toContain('Resources: 2');
+		expect(text).toMatch(/Resources:\s*2\b/);
 		expect(text).toContain('exact');
 	});
 
