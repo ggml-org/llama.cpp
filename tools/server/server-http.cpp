@@ -355,8 +355,15 @@ bool server_http_context::init(const common_params & params) {
                 return true;
             };
 
-            auto serve_asset_cached = [](const std::string & name, bool isolation) {
-                return [name, isolation](const httplib::Request & req, httplib::Response & res) {
+            // Hashed assets never change under a given name, so they can be cached forever.
+            // `index.html` is the exception: its name is stable while its contents change on
+            // every build, and it is what names the hashed asset versions the UI loads.
+            static constexpr auto cache_immutable  = "public, max-age=31536000, immutable";
+            static constexpr auto cache_revalidate = "no-cache";
+
+            // Serves an asset with ETag/304 handling, under the given caching policy.
+            auto serve_asset_cached = [](const std::string & name, bool isolation, const char * cache_control) {
+                return [name, isolation, cache_control](const httplib::Request & req, httplib::Response & res) {
                     if (!handle_gzip_header(req, res)) {
                         return true; // returns error message
                     }
@@ -372,7 +379,7 @@ bool server_http_context::init(const common_params & params) {
                         res.set_header("Cross-Origin-Embedder-Policy", "require-corp");
                         res.set_header("Cross-Origin-Opener-Policy",   "same-origin");
                     }
-                    res.set_header("Cache-Control", "public, max-age=31536000, immutable");
+                    res.set_header("Cache-Control", cache_control);
                     res.set_content(reinterpret_cast<const char*>(a->data), a->size, a->type.c_str());
                     return false;
                 };
@@ -394,9 +401,9 @@ bool server_http_context::init(const common_params & params) {
                 };
             };
 
-            // main index file
-            srv->Get(params.api_prefix + "/",           serve_asset_cached("index.html", true));
-            srv->Get(params.api_prefix + "/index.html", serve_asset_cached("index.html", true));
+            // main index file -- revalidated, so a new build is picked up on the next load
+            srv->Get(params.api_prefix + "/",           serve_asset_cached("index.html", true, cache_revalidate));
+            srv->Get(params.api_prefix + "/index.html", serve_asset_cached("index.html", true, cache_revalidate));
 
             // All remaining assets registered directly from the embedded asset table.
             // PWA revalidation files (sw.js, manifest, version.json) use no-cache;
@@ -414,7 +421,7 @@ bool server_http_context::init(const common_params & params) {
                     SRV_DBG("serve nocache for %s\n", a.name.c_str());
                     srv->Get(params.api_prefix + "/" + a.name, serve_asset_nocache(a.name));
                 } else {
-                    srv->Get(params.api_prefix + "/" + a.name, serve_asset_cached(a.name, false));
+                    srv->Get(params.api_prefix + "/" + a.name, serve_asset_cached(a.name, false, cache_immutable));
                 }
             }
 
