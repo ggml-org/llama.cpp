@@ -1,4 +1,4 @@
-/** Data attribute that tags contenteditable code spans and blocks. */
+/** Data attribute that tags ChatFormInputRich code spans and blocks. */
 export const CODE_TOKEN_ATTR = 'data-code-token';
 
 export const INITIAL_FILE_SIZE = 0;

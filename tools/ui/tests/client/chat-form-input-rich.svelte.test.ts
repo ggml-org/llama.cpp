@@ -1,4 +1,4 @@
-// Guards the clipboard contract of the chat-form contenteditable:
+// Guards the clipboard contract of the ChatFormInputRich:
 // copy/cut expose the markdown SOURCE of the selection (each badge
 // contributes its full `[name](file://...)` link) and pasting such
 // markdown re-renders the badges.
@@ -16,7 +16,7 @@ const BADGE_SELECTOR = '[data-mention-badge="true"]';
 function editableIn(container: HTMLElement): HTMLElement {
 	const el = container.querySelector('[role="textbox"]');
 
-	if (!(el instanceof HTMLElement)) throw new Error('contenteditable not rendered');
+	if (!(el instanceof HTMLElement)) throw new Error('ChatFormInputRich not rendered');
 
 	return el;
 }

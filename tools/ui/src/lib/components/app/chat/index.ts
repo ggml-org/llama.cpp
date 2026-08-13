@@ -120,7 +120,7 @@ export { default as ChatAttachmentsPreviewCurrentItem } from './ChatAttachments/
  * Used by ChatScreenForm and ChatMessageEditForm for both new conversations and message editing.
  *
  * **Architecture:**
- * - Composes ChatFormInput (a plain textarea, or a contenteditable for
+ * - Composes ChatFormInput (a plain textarea, or a ChatFormInputRich for
  *   messages with file mention links), ChatFormActions, and ChatFormPickerMcpPrompts
  * - Manages file upload state via `uploadedFiles` bindable prop
  * - Integrates with ModelsSelectorDropdown for model selection in router mode
@@ -268,10 +268,10 @@ export { default as ChatFormMcpResourcesList } from './ChatForm/ChatFormMcpResou
 
 /**
  * The message editor. Renders a plain auto-resizing textarea by default,
- * or a contenteditable that renders `[name](file://...)` mention links as
+ * or a ChatFormInputRich that renders `[name](file://...)` mention links as
  * inline chips (keeping the value as the markdown source string) once a
  * mention link lands in the buffer. The variant is selected via the
- * `useContenteditable` prop; both share one imperative handle.
+ * `useRichInput` prop; both share one imperative handle.
  */
 export { default as ChatFormInput } from './ChatForm/ChatFormInput/ChatFormInput.svelte';
 
@@ -384,14 +384,14 @@ export { default as ChatFormPickerListItemSkeleton } from './ChatForm/ChatFormPi
  * tool, scoped to the conversation cwd (or server home when unset).
  * Selection splices a `[name](file:///<abs path>)` link into the input.
  */
-export { default as ChatFormMentionPicker } from './ChatForm/ChatFormPickers/ChatFormPickerMention.svelte';
+export { default as ChatFormPickerMention } from './ChatForm/ChatFormPickers/ChatFormPickerMention.svelte';
 
 /**
  * `/`-triggered slash-command picker. Lists the available slash commands
  * (`/prompt`, `/cwd`, `/model`) filtered by the typed query; selection
  * hands the command to the parent for dispatch.
  */
-export { default as ChatFormCommandPicker } from './ChatForm/ChatFormPickers/ChatFormPickerCommand.svelte';
+export { default as ChatFormPickerCommand } from './ChatForm/ChatFormPickers/ChatFormPickerCommand.svelte';
 
 /**
  * Hosts the chat-form pickers (slash-command, MCP prompt, file mention)

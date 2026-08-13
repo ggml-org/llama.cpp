@@ -53,7 +53,7 @@
 	// browser's native undo stack.
 	const history = new SourceHistory();
 
-	// Browsers disagree on what an empty contenteditable contains (`<br>`,
+	// Browsers disagree on what an empty rich chat form input contains (`<br>`,
 	// `<div><br></div>`, or nothing), so emptiness is decided by the
 	// serialized source, not the DOM shape.
 	function syncEmptyState(serialized?: string) {
@@ -69,7 +69,7 @@
 
 		const caret = rangeToTextOffset(rootElement, safeRange());
 
-		// eslint-disable-next-line svelte/no-dom-manipulating -- the token layer is owned imperatively; Svelte renders only the contenteditable host, never its children
+		// eslint-disable-next-line svelte/no-dom-manipulating -- the token layer is owned imperatively; Svelte renders only the rich chat form input host, never its children
 		rootElement.replaceChildren(buildFragment(tokens));
 
 		syncCodeBlockHatches(rootElement);
@@ -318,7 +318,7 @@
 					source[source.length - 2] !== '\n' &&
 					last?.nodeType === Node.TEXT_NODE
 				) {
-					// eslint-disable-next-line svelte/no-dom-manipulating -- the token layer is owned imperatively; Svelte renders only the contenteditable host, never its children
+					// eslint-disable-next-line svelte/no-dom-manipulating -- the token layer is owned imperatively; Svelte renders only the rich chat form input host, never its children
 					rootElement.appendChild(document.createTextNode('\n'));
 					restoreCaret(source.length);
 					resizeHeight();
@@ -497,7 +497,7 @@
 			if (firstLineEnd !== -1 && caret > firstLineEnd) return false;
 		}
 
-		// eslint-disable-next-line svelte/no-dom-manipulating -- the token layer is owned imperatively; Svelte renders only the contenteditable host, never its children
+		// eslint-disable-next-line svelte/no-dom-manipulating -- the token layer is owned imperatively; Svelte renders only the rich chat form input host, never its children
 		rootElement.prepend(document.createElement('br'));
 		restoreCaret(0, extend);
 

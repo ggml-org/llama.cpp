@@ -20,7 +20,7 @@ interface UseMarqueeSelectionOptions {
 	/** Document listeners attach only while the getter returns true. */
 	enabled: () => boolean;
 	/** Full `data-*` attribute that marks selectable rows. */
-	attributeName?: () => string;
+	dataAttr?: () => string;
 	/** Minimum pixel distance before a press becomes a marquee drag. */
 	dragThresholdPx?: number;
 }
@@ -37,8 +37,8 @@ export function useMarqueeSelection(options: UseMarqueeSelectionOptions) {
 	let dragMode: 'add' | 'remove' | null = null;
 	let suppressNextClick = false;
 
-	function resolveAttributeName(): string {
-		return options.attributeName?.() ?? UI_DATA_ATTRS.CONVERSATION_ROW;
+	function resolveDataAttr(): string {
+		return options.dataAttr?.() ?? UI_DATA_ATTRS.CONVERSATION_ROW;
 	}
 
 	function decideDragMode(startingRowId: string | null, currentlySelected: ReadonlySet<string>) {
@@ -71,7 +71,7 @@ export function useMarqueeSelection(options: UseMarqueeSelectionOptions) {
 	}
 
 	function findRowAtPoint(x: number, y: number): string | null {
-		const attr = resolveAttributeName();
+		const attr = resolveDataAttr();
 		const selector = `[${attr}]`;
 
 		let bestMatch: HTMLElement | null = null;
@@ -98,7 +98,7 @@ export function useMarqueeSelection(options: UseMarqueeSelectionOptions) {
 	}
 
 	function updateMarqueeRect(currentX: number, currentY: number) {
-		const attr = resolveAttributeName();
+		const attr = resolveDataAttr();
 		const selector = `[${attr}]`;
 		const selected = options.selectedIds();
 		const left = Math.min(dragStartX, currentX);

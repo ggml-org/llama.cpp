@@ -1,6 +1,6 @@
 /**
  * Rehype plugin that rewrites `file://` markdown anchors into the inline
- * mention chip, sharing the class string with the contenteditable
+ * mention chip, sharing the class string with the ChatFormInputRich
  * tokenizer via `$lib/constants`.
  *
  * The chip is presentational: `file://` navigation is blocked from

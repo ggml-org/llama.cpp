@@ -230,8 +230,10 @@ export function serializeContent(root: HTMLElement): string {
 				continue;
 			}
 
-			if (el.getAttribute(CODE_TOKEN_ATTR) !== null) {
-				const isBlock = el.getAttribute(CODE_TOKEN_ATTR) === ChatFormInputRichTokenKind.CODE_BLOCK;
+			const codeToken = el.getAttribute(CODE_TOKEN_ATTR);
+
+			if (codeToken !== null) {
+				const isBlock = codeToken === ChatFormInputRichTokenKind.CODE_BLOCK;
 
 				if (isBlock && (pendingBlockBoundary || !first)) out += '\n';
 
@@ -453,8 +455,10 @@ export function rangeToTextOffset(root: HTMLElement, range: Range | null): numbe
 				continue;
 			}
 
-			if (el.getAttribute(CODE_TOKEN_ATTR) !== null) {
-				const isBlock = el.getAttribute(CODE_TOKEN_ATTR) === ChatFormInputRichTokenKind.CODE_BLOCK;
+			const codeToken = el.getAttribute(CODE_TOKEN_ATTR);
+
+			if (codeToken !== null) {
+				const isBlock = codeToken === ChatFormInputRichTokenKind.CODE_BLOCK;
 
 				if (isBlock && !first) {
 					if (!atOrBeforeCaret(el, 0)) {
@@ -924,8 +928,10 @@ export function textOffsetToRange(root: HTMLElement, offset: number): Range {
 				continue;
 			}
 
-			if (el.getAttribute(CODE_TOKEN_ATTR) !== null) {
-				const isBlock = el.getAttribute(CODE_TOKEN_ATTR) === ChatFormInputRichTokenKind.CODE_BLOCK;
+			const codeToken = el.getAttribute(CODE_TOKEN_ATTR);
+
+			if (codeToken !== null) {
+				const isBlock = codeToken === ChatFormInputRichTokenKind.CODE_BLOCK;
 
 				if (isBlock && (pendingBlockBoundary || !first)) {
 					pendingBlockBoundary = false;
