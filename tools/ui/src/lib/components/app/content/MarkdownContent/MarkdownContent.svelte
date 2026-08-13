@@ -1,5 +1,5 @@
 <script lang="ts">
-	import '$styles/katex-custom.scss';
+	import '$lib/styles/katex-custom.scss';
 	import {
 		getCodeInfoFromTarget,
 		getHastNodeId,
