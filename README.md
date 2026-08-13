@@ -25,6 +25,22 @@ This fork adds AMD RDNA4 (gfx1201) support and eGPU (Thunderbolt) compatibility 
 - **RDNA4 / gfx1201 detection**: the AMD proprietary Windows driver does not expose `VK_NV_cooperative_matrix2`, so upstream mis-detects RDNA4 as RDNA3. This fork detects gfx1201/gfx1200 by PCI device ID (0x755x / 0x759x) and applies the correct pipeline config (subgroup size 32).
 - **WMMA (matrix cores) on gfx12**: enables the `VK_KHR_cooperative_matrix` path on RDNA4. The coopmat shaders (`OpCooperativeMatrixLoad/MulAdd/StoreKHR`, 16x16x16 f16/f32/int8/fp8/bf16) lower to `v_wmma_*` instructions on gfx12. Verify at startup: the log line `matrix cores: KHR_coopmat`.
 - **eGPU / Thunderbolt memory fix**: the AMD proprietary driver mis-reports buffer `memoryTypeBits` as host-memory-only on eGPUs, which makes every device-local buffer allocation fail with `ErrorOutOfDeviceMemory` despite free VRAM. This fork probes for the broken condition at device init and then trusts the memory type property flags for device-local requests. Force with `GGML_VK_IGNORE_BUFFER_MEMORY_TYPE_BITS=1`.
+- **Host-visible vidmem workaround (big TG win)**: on an eGPU over Thunderbolt/USB4 the driver prefers `DEVICE_LOCAL|HOST_VISIBLE` (BAR) memory for small device buffers. GPU access to that heap goes over the link, so per-token recurrent-state ops crawl at ~5 GB/s and drag decode (a 27B dense model) to ~6 t/s. Set `GGML_VK_DISABLE_HOST_VISIBLE_VIDMEM=1` to force plain `DEVICE_LOCAL`; this alone took the same model from ~6 to ~30 t/s raw decode (+28% PP too). Strongly recommended for eGPU systems.
+- **Transposed CONCAT fast path**: the generic concat shader reads a transposed src1 one element at a time with a huge stride (~82 GB/s). `ggml_vk_concat` now detects a dim-0 concat whose second source is a transposed 2D matrix and copies it with the existing tiled transpose shader (`copy_transpose`) into the right columns of the output, plus a plain copy for the first source. ~12% faster prompt processing on delta-net models (GDN conv input). Covered by `test_concat_transposed_src1` in `test-backend-ops`.
+
+### Host tuning (Windows / eGPU)
+
+```powershell
+# run every shell that uses the eGPU; persistent version below
+$env:GGML_VK_DISABLE_HOST_VISIBLE_VIDMEM = "1"
+[Environment]::SetEnvironmentVariable("GGML_VK_DISABLE_HOST_VISIBLE_VIDMEM", "1", "User")   # permanent
+
+# pin to the AMD GPU only; multi-GPU splitting is slower on this setup
+$env:GGML_VK_VISIBLE_DEVICES = "1"
+# when ALL devices are visible instead, pass --device Vulkan1 (the R9700's index)
+```
+
+Use one device-selection mechanism, not both: if `GGML_VK_VISIBLE_DEVICES=1` makes the R9700 the only device (index `Vulkan0`), drop `--device Vulkan1` or it will error.
 
 ### Build (Windows)
 
@@ -56,12 +72,18 @@ Key findings:
 
 - Use `--parallel 1` for maximum single-stream speed. With 2+ slots on this hybrid (deltanet + attention) model, per-token decode drops ~5x even when only one slot is active.
 - MTP speculative decoding (`--spec-type draft-mtp`) is **model-dependent** on this eGPU:
-  - **Dense models (e.g. Qwen3.6-27B Q4_K_S): use it, it is a 11-12x win.** 3.8 t/s baseline -> 42-48 t/s (62-70% acceptance). Verification of ~3 drafted tokens in one batch reads the weights once, so a dense bandwidth/latency-bound decode becomes a batched one.
+  - **Dense models (e.g. Qwen3.6-27B Q4_K_S): use it.** With the host-visible vidmem workaround applied, raw decode is ~30 t/s and MTP raises it to ~38-47 t/s (`--spec-draft-n-max 3`, ~75% acceptance). Verification of ~3 drafted tokens in one batch reads the weights once, so a dense bandwidth/latency-bound decode becomes a batched one.
   - **MoE models (e.g. Qwen3.6-35B-A3B): avoid it.** Only ~3B active params/token, so the base decode is already cheap (85 t/s); the draft-head overhead is a net 5x loss (~15 t/s).
+- MTP draft length (`--spec-draft-n-max`): the default of 3 is already optimal. The single MTP head drafts recursively, so acceptance collapses past ~3 tokens (0.75 @ 3 -> 0.45 @ 8) and rejected drafts waste whole decode passes. A sweep on the 27B model gave 47.5 / 46.7 / 41.8 / 31.8 t/s for n-max 3 / 4 / 6 / 8.
+- Prompt-processing ubatch: `-ub 512` is optimal (tested 256/512/1024/2048: 780/805/796/771 t/s on pp2048).
+- Long-context scaling is healthy: on the 27B, pp512 = 787 -> 603 t/s and tg32 = 28 -> 25 t/s going from depth 0 to 32K.
 - `-fa on` helps prompt processing slightly but hurts single-token decode; leave it on `auto`.
 
 ### Roadmap (further speed work)
 
+- TG is now ~90% of the R9700's bandwidth roofline, so the biggest remaining raw-TG win is the `q5_K` mat-vec path (ssm_out, 40% efficiency vs ~90% for q4_K; ~3.7 ms/token) - tune its RDNA4 /RDNA pipeline.
+- Fuse the per-layer `m=48` dt/a projections and `RMS_NORM_MUL(128,48)` elementwise ops (dispatch-bound) for ~+4% raw TG.
+- PP elementwise ops (sigmoid/GLU/mul/add) run at 100-200 GB/s vs ~500 peak; vectorized loads could add a few percent.
 - Investigate why multi-slot decode is slow on this hybrid model (recurrent state cache copies?)
 - KV cache quantization (`-ctk q8_0 -ctv q8_0`), and Q4_0/IQ4_XS quants
 - Coopmat is already active in the MoE `mul_mat_id` path for batches (prompt processing, verified via SPIR-V + `matrix cores: KHR_coopmat`); n=1 decode correctly uses the `mul_mat_vec` path (bandwidth-bound). Remaining win: faster K/V or smaller quants for dense decode.

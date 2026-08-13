@@ -5798,6 +5798,38 @@ struct test_concat : public test_case {
     }
 };
 
+// GGML_OP_CONCAT with src1 transposed (used by GDN conv input)
+struct test_concat_transposed_src1 : public test_case {
+    const ggml_type type;
+    const std::array<int64_t, 2> ne_a;     // {old tokens, channels}
+    const int64_t ne_b_tokens;             // new tokens being transposed
+
+    std::string vars() override {
+        return VARS_TO_STR3(type, ne_a, ne_b_tokens);
+    }
+
+    test_concat_transposed_src1(ggml_type type = GGML_TYPE_F32,
+            std::array<int64_t, 2> ne_a = {3, 10},
+            int64_t ne_b_tokens = 4)
+        : type(type), ne_a(ne_a), ne_b_tokens(ne_b_tokens) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * a = ggml_new_tensor_2d(ctx, type, ne_a[0], ne_a[1]);
+        ggml_set_name(a, "a");
+
+        // b is stored channel-major: {channels, tokens}; transposed to {tokens, channels}
+        ggml_tensor * b_raw = ggml_new_tensor_2d(ctx, type, ne_a[1], ne_b_tokens);
+        ggml_set_name(b_raw, "b_raw");
+        ggml_tensor * b = ggml_transpose(ctx, b_raw);
+        ggml_set_name(b, "b");
+
+        ggml_tensor * out = ggml_concat(ctx, a, b, 0);
+        ggml_set_name(out, "out");
+
+        return out;
+    }
+};
+
 // GGML_OP_ARGSORT
 struct test_argsort : public test_case {
     const ggml_type type;
@@ -9354,6 +9386,12 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
                 test_cases.emplace_back(new test_concat(type_a, {128, 12, 13, 14}, dim == 0 ? 256 : 7, dim, v));
             }
         }
+    }
+
+    for (ggml_type t : { GGML_TYPE_F32, GGML_TYPE_F16 }) {
+        test_cases.emplace_back(new test_concat_transposed_src1(t, {3, 10240}, 4));
+        test_cases.emplace_back(new test_concat_transposed_src1(t, {3, 10240}, 512));
+        test_cases.emplace_back(new test_concat_transposed_src1(t, {3, 10240}, 1024));
     }
 
     for (ggml_sort_order order : {GGML_SORT_ORDER_ASC, GGML_SORT_ORDER_DESC}) {

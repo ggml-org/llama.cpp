@@ -12935,8 +12935,93 @@ static void ggml_vk_opt_step_sgd(ggml_backend_vk_context * ctx, vk_context& subc
     ggml_vk_op_f32<vk_op_push_constants>(ctx, subctx, src0, src1, src2, nullptr, dst, GGML_OP_OPT_STEP_SGD, { (uint32_t)n, 0, 0.0f, 0.0f, 0.0f, 0.0f });
 }
 
+// dim-0 concat where src1 is a transposed matrix. The generic shader reads src1
+// with a large stride, which is very slow. Copy the src0 and src1 regions with
+// two dispatches instead, using the tiled transpose shader for src1.
+static bool ggml_vk_concat_transposed_src1(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst, int dim) {
+    const ggml_type type = dst->type;
+    const size_t ts = ggml_type_size(type);
+
+    if (dim != 0 || src0->type != type || src1->type != type) {
+        return false;
+    }
+    if (type != GGML_TYPE_F32 && type != GGML_TYPE_F16) {
+        return false;
+    }
+    if (!ggml_is_contiguous(dst) || !ggml_is_contiguous(src0)) {
+        return false;
+    }
+    // src1 must be a transposed matrix (dim1 is the innermost dimension)
+    if (src1->nb[1] != ts || src1->nb[0] <= ts) {
+        return false;
+    }
+    // the dst column offset for the src1 region is passed as a 16-bit push constant
+    if (src0->ne[0] >= 65536) {
+        return false;
+    }
+    if (get_misalign_bytes(ctx, src0) != 0 || get_misalign_bytes(ctx, src1) != 0 || get_misalign_bytes(ctx, dst) != 0) {
+        return false;
+    }
+
+    vk_pipeline pipeline_copy = type == GGML_TYPE_F32 ? ctx->device->pipeline_cpy_f32_f32 : ctx->device->pipeline_cpy_f16_f16;
+    vk_pipeline pipeline_transpose = type == GGML_TYPE_F32 ? ctx->device->pipeline_cpy_transpose_32 : ctx->device->pipeline_cpy_transpose_16;
+
+    ggml_pipeline_request_descriptor_sets(ctx, pipeline_copy, 1);
+    ggml_pipeline_request_descriptor_sets(ctx, pipeline_transpose, 1);
+
+    vk_subbuffer src0_buf = ggml_vk_tensor_subbuffer(ctx, src0);
+    vk_subbuffer src1_buf = ggml_vk_tensor_subbuffer(ctx, src1);
+    vk_subbuffer dst_buf  = ggml_vk_tensor_subbuffer(ctx, dst);
+
+    // copy src0 into the first ne00 columns of dst
+    vk_op_unary_push_constants pc0 = vk_op_unary_push_constants_init(src0, src0, ggml_nelements(src0));
+    pc0.nb10 = (uint32_t)(dst->nb[0] / ts);
+    pc0.nb11 = (uint32_t)(dst->nb[1] / ts);
+    pc0.nb12 = (uint32_t)(dst->nb[2] / ts);
+    pc0.nb13 = (uint32_t)(dst->nb[3] / ts);
+    init_pushconst_fastdiv(pc0);
+
+    const uint32_t ne0 = ggml_nelements(src0);
+    std::array<uint32_t, 3> elements0;
+    if (ne0 > 262144) {
+        elements0 = { 512, 512, CEIL_DIV(ne0, 262144) };
+    } else if (ne0 > 512) {
+        elements0 = { 512, CEIL_DIV(ne0, 512), 1 };
+    } else {
+        elements0 = { ne0, 1, 1 };
+    }
+
+    // transpose src1 into the remaining columns of dst
+    vk_op_unary_push_constants pc1 = vk_op_unary_push_constants_init(src1, src1, ggml_nelements(src1));
+    pc1.nb10 = (uint32_t)(dst->nb[0] / ts);
+    pc1.nb11 = (uint32_t)(dst->nb[1] / ts);
+    pc1.nb12 = (uint32_t)(dst->nb[2] / ts);
+    pc1.nb13 = (uint32_t)(dst->nb[3] / ts);
+    pc1.misalign_offsets = (uint32_t)src0->ne[0];
+    init_pushconst_fastdiv(pc1);
+
+    std::array<uint32_t, 3> elements1 = {
+        (uint32_t)CEIL_DIV(src1->ne[0], 32),
+        (uint32_t)CEIL_DIV(src1->ne[1], 32),
+        (uint32_t)(src1->ne[2] * src1->ne[3]),
+    };
+    elements1[0] = std::min(elements1[0], ctx->device->properties.limits.maxComputeWorkGroupCount[0]);
+    elements1[1] = std::min(elements1[1], ctx->device->properties.limits.maxComputeWorkGroupCount[1]);
+    elements1[2] = std::min(elements1[2], ctx->device->properties.limits.maxComputeWorkGroupCount[2]);
+
+    // the two dispatches write disjoint dst regions, no barrier is needed between them
+    ggml_vk_dispatch_pipeline(ctx, subctx, pipeline_copy, { src0_buf, dst_buf }, pc0, elements0);
+    ggml_vk_dispatch_pipeline(ctx, subctx, pipeline_transpose, { src1_buf, dst_buf }, pc1, elements1);
+
+    return true;
+}
+
 static void ggml_vk_concat(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
     int * op_params = (int *)dst->op_params;
+
+    if (ggml_vk_concat_transposed_src1(ctx, subctx, src0, src1, dst, op_params[0])) {
+        return;
+    }
 
     const uint32_t unit_size = ggml_vk_concat_unit_size(dst->type);
     const uint32_t units_per_block = ggml_type_size(dst->type) / unit_size;
