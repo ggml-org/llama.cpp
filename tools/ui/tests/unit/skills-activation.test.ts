@@ -12,7 +12,7 @@ import {
 	skillResourceExtra
 } from '$lib/services/skills-activation.service';
 import { SKILL_READ_TOOL } from '$lib/services/skills-adapters.service';
-import type { DatabaseMessage, DatabaseMessageExtraSkill } from '$lib/types';
+import type { DatabaseMessage, DatabaseMessageExtra, DatabaseMessageExtraSkill } from '$lib/types';
 import type {
 	SkillBaseReadResult,
 	SkillMetadata,
@@ -37,6 +37,8 @@ function baseResult(overrides: Partial<SkillBaseReadResult> = {}): SkillBaseRead
 			metadata: METADATA
 		},
 		resources: { paths: ['refs/DETAILS.md'], truncated: false },
+		source: '---\nname: demo-skill\ndescription: A demo skill\n---\n# Body',
+		body_markdown: '# Body',
 		content_xml: '<skill_content name="demo-skill">body &amp; more</skill_content>',
 		diagnostics: [],
 		...overrides
@@ -151,7 +153,7 @@ describe('skillExtraFromExtras / skillExtraFromMessage', () => {
 		expect(
 			skillExtraFromExtras([
 				{ type: AttachmentType.TEXT, name: 't', content: 'c' },
-				{ ...valid, skillId: undefined },
+				{ ...valid, skillId: undefined } as unknown as DatabaseMessageExtra,
 				valid
 			])
 		).toEqual(valid);
@@ -160,7 +162,9 @@ describe('skillExtraFromExtras / skillExtraFromMessage', () => {
 	it('returns undefined for empty, undefined, or all-invalid extras', () => {
 		expect(skillExtraFromExtras(undefined)).toBeUndefined();
 		expect(skillExtraFromExtras([])).toBeUndefined();
-		expect(skillExtraFromExtras([{ type: AttachmentType.IMAGE, name: 'i' }])).toBeUndefined();
+		expect(
+			skillExtraFromExtras([{ type: AttachmentType.IMAGE, name: 'i', base64Url: 'data:image/png;base64,AA==' }])
+		).toBeUndefined();
 	});
 
 	it('reads the SKILL extra from a persisted message', () => {
@@ -193,7 +197,7 @@ describe('findBaseSkillActivation', () => {
 	it('ignores resource records and malformed extras for reconstruction', () => {
 		const messages = [
 			toolMessage(skillResourceExtra(resourceResult())),
-			toolMessage({ ...skillActivationExtra(baseResult()), skillId: undefined } as DatabaseMessageExtraSkill)
+			toolMessage({ ...skillActivationExtra(baseResult()), skillId: undefined } as unknown as DatabaseMessageExtraSkill)
 		];
 
 		expect(findBaseSkillActivation(messages, 'opaque-id-1')).toBeUndefined();
@@ -234,8 +238,10 @@ describe('buildSkillActivationPair', () => {
 		const [extra] = pair.toolResult.extra ?? [];
 
 		expect(isSkillExtra(extra)).toBe(true);
-		expect(extra.kind).toBe('base');
-		expect(extra.skillId).toBe('opaque-id-1');
+		if (isSkillExtra(extra)) {
+			expect(extra.kind).toBe('base');
+			expect(extra.skillId).toBe('opaque-id-1');
+		}
 		expect(JSON.stringify(pair)).not.toContain('content_xml');
 	});
 
@@ -282,7 +288,7 @@ describe('resolveSkillSectionMeta / isSkillToolSection', () => {
 	it('falls back to generic rendering for unknown tools, missing, or malformed metadata', () => {
 		expect(resolveSkillSectionMeta({ toolName: 'other_tool', toolResultExtras: [skillActivationExtra(baseResult())] })).toBeUndefined();
 		expect(resolveSkillSectionMeta({ toolName: SKILL_READ_TOOL, toolResultExtras: [] })).toBeUndefined();
-		expect(resolveSkillSectionMeta({ toolName: SKILL_READ_TOOL, toolResultExtras: [{ type: AttachmentType.TEXT, name: 'x' }] })).toBeUndefined();
+		expect(resolveSkillSectionMeta({ toolName: SKILL_READ_TOOL, toolResultExtras: [{ type: AttachmentType.TEXT, name: 'x', content: 'x' }] })).toBeUndefined();
 		expect(resolveSkillSectionMeta({ toolName: SKILL_READ_TOOL })).toBeUndefined();
 		expect(isSkillToolSection({ toolName: SKILL_READ_TOOL })).toBe(false);
 	});

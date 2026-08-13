@@ -8,12 +8,8 @@ import {
 	skillDenialResult,
 	skillErrorResult
 } from '$lib/services/skills-adapters.service';
-import type {
-	SkillAdaptersBuildResult,
-	SkillCatalogEntry,
-	SkillCatalogResponse,
-	SkillPackedCatalog
-} from '$lib/services/skills-adapters.service';
+import type { SkillAdaptersBuildResult } from '$lib/services/skills-adapters.service';
+import type { SkillCatalogEntry, SkillCatalogResponse, SkillPackedCatalog } from '$lib/types';
 import { MessageRole } from '$lib/enums';
 import { describe, expect, it } from 'vitest';
 
@@ -109,8 +105,10 @@ describe('buildSkillToolDefinitions', () => {
 		const second = buildSkillToolDefinitions(snapshot, packed({ total: 1 }), new Set());
 
 		const nameParam = (defs: SkillAdaptersBuildResult['definitions']) =>
-			defs.find((d) => d.function.name === SKILL_READ_TOOL)!.function.parameters.properties
-				.name as { enum: string[] };
+			(
+				defs.find((d) => d.function.name === SKILL_READ_TOOL)!.function.parameters
+					.properties as { name: { enum: string[] } }
+			).name;
 
 		expect(nameParam(first.definitions)).toEqual({ enum: ['alpha'], type: 'string' });
 		expect(nameParam(second.definitions)).toEqual({ enum: ['alpha'], type: 'string' });

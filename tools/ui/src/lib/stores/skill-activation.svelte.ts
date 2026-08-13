@@ -27,7 +27,12 @@ import type {
 } from '$lib/services/skills-adapters.service';
 import { conversationsStore } from '$lib/stores/conversations.svelte';
 import type { DatabaseMessage, DatabaseMessageExtraSkill } from '$lib/types/database';
-import type { SkillReadResult } from '$lib/types/skills';
+import type { SkillBaseReadResult, SkillReadResult } from '$lib/types/skills';
+
+/** Activation input narrowed to a base (`kind: 'skill'`) read result. */
+type SkillBaseActivationInput = Omit<SkillActivationInput, 'result'> & {
+	result: SkillBaseReadResult;
+};
 
 export class DurableSkillActivationStore implements SkillActivationStore {
 	/** Durable base activations by conversation, keyed by the opaque skill id. */
@@ -94,10 +99,15 @@ export class DurableSkillActivationStore implements SkillActivationStore {
 			};
 		}
 
+		// After the resource early-return above, `input.result` is narrowed to
+		// a base read; carry that narrowing into the persistence helpers so
+		// they build from the concrete base result shape.
+		const baseInput: SkillBaseActivationInput = { ...input, result: input.result };
+
 		const toolResultMessage =
 			input.toolCallId !== undefined
-				? await this.persistModelActivation(input, input.toolCallId)
-				: await this.persistSlashActivation(input);
+				? await this.persistModelActivation(baseInput, input.toolCallId)
+				: await this.persistSlashActivation(baseInput);
 
 		this.remember(input.conversationId, identityId);
 
@@ -113,7 +123,7 @@ export class DurableSkillActivationStore implements SkillActivationStore {
 	 * message that carries the model's own tool call id.
 	 */
 	private async persistModelActivation(
-		input: SkillActivationInput,
+		input: SkillBaseActivationInput,
 		toolCallId: string
 	): Promise<DatabaseMessage> {
 		const assistant = await this.resolveAssistantForToolCall(input.conversationId, toolCallId);
@@ -141,7 +151,7 @@ export class DurableSkillActivationStore implements SkillActivationStore {
 	}
 
 	/** Slash path: persist the synthetic assistant tool-call + paired tool result atomically. */
-	private async persistSlashActivation(input: SkillActivationInput): Promise<DatabaseMessage> {
+	private async persistSlashActivation(input: SkillBaseActivationInput): Promise<DatabaseMessage> {
 		const pair = buildSkillActivationPair(input.result, {
 			conversationId: input.conversationId,
 			cwd: input.cwd

@@ -152,6 +152,7 @@ export function buildSkillActivationPair(
 			children: [],
 			content: '',
 			convId: options.conversationId,
+			parent: null,
 			role: MessageRole.ASSISTANT,
 			timestamp: Date.now(),
 			toolCalls: JSON.stringify([
@@ -171,6 +172,7 @@ export function buildSkillActivationPair(
 			content: result.content_xml,
 			convId: options.conversationId,
 			extra: [skillActivationExtra(result)],
+			parent: null,
 			role: MessageRole.TOOL,
 			timestamp: Date.now() + 1,
 			toolCallId,

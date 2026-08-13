@@ -4,7 +4,7 @@ import { DatabaseService } from '$lib/services/database.service';
 import { conversationsStore } from '$lib/stores/conversations.svelte';
 import { skillActivationStore } from '$lib/stores/skill-activation.svelte';
 import type { DatabaseMessage, DatabaseMessageExtraSkill } from '$lib/types';
-import type { SkillBaseReadResult } from '$lib/types/skills';
+import type { SkillBaseReadResult, SkillResourceReadResult } from '$lib/types/skills';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('$lib/services/database.service', () => ({
@@ -58,7 +58,7 @@ function baseResult(overrides: Partial<SkillBaseReadResult> = {}): SkillBaseRead
 	};
 }
 
-function resourceResult(): SkillBaseReadResult {
+function resourceResult(): SkillResourceReadResult {
 	return {
 		kind: 'resource',
 		skill: { id: 'opaque-id-1', name: 'demo-skill', scope: 'project', provider: 'agents' },
@@ -95,17 +95,24 @@ beforeEach(() => {
 		id: 'created-tool-result',
 		parent: 'assistant-1'
 	})) as typeof DatabaseService.createMessageBranch);
-	mockCreateMessageBranchPair.mockImplementation((async (first, second) => {
-		const assistant = {
-			...first,
-			children: ['created-tool-result'],
-			id: 'created-assistant',
-			parent: 'parent-1'
-		};
-		const toolResult = { ...second, children: [], id: 'created-tool-result', parent: 'created-assistant' };
+	mockCreateMessageBranchPair.mockImplementation(
+		(async (first: Omit<DatabaseMessage, 'id'>, second: Omit<DatabaseMessage, 'id'>) => {
+			const assistant: DatabaseMessage = {
+				...first,
+				children: ['created-tool-result'],
+				id: 'created-assistant',
+				parent: 'parent-1'
+			};
+			const toolResult: DatabaseMessage = {
+				...second,
+				children: [],
+				id: 'created-tool-result',
+				parent: 'created-assistant'
+			};
 
-		return [assistant, toolResult] as [DatabaseMessage, DatabaseMessage];
-	}) as typeof DatabaseService.createMessageBranchPair);
+			return [assistant, toolResult];
+		}) as typeof DatabaseService.createMessageBranchPair
+	);
 });
 
 describe('DurableSkillActivationStore (Task 4 durable seam)', () => {

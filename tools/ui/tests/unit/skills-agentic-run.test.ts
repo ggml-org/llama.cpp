@@ -8,10 +8,16 @@ import { skillsStore } from '$lib/stores/skills.svelte';
 import { toolsStore } from '$lib/stores/tools.svelte';
 import { settingsStore } from '$lib/stores/settings.svelte';
 import { serverStore } from '$lib/stores/server.svelte';
-import type { SkillBaseReadResult, SkillCatalogEntry, SkillCatalogResponse } from '$lib/types';
+import type {
+	SkillBaseReadResult,
+	SkillCatalogEntry,
+	SkillCatalogResponse,
+	SkillResourceReadResult
+} from '$lib/types';
 import type { AgenticFlowCallbacks } from '$lib/types/agentic';
 import { MessageRole, ToolPermissionDecision } from '$lib/enums';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { Mock } from 'vitest';
 
 vi.mock('$lib/services/skills.service', () => ({
 	SkillsService: { list: vi.fn(), read: vi.fn() }
@@ -43,7 +49,10 @@ vi.mock('$lib/services/sandbox.service', () => ({
 	SandboxService: { executeTool: vi.fn() }
 }));
 const toolsMockState = vi.hoisted(() => ({
-	allTools: [] as { definition: { function: { name: string; parameters: Record<string, unknown> } }; key: string }[]
+	allTools: [] as {
+		definition: { function: { name: string; parameters: Record<string, unknown> }; type: string };
+		key: string;
+	}[]
 }));
 
 vi.mock('$lib/stores/tools.svelte', () => ({
@@ -97,7 +106,6 @@ const mockSnapshot = vi.mocked(skillsStore.createRunSnapshot);
 const mockSendMessage = vi.mocked(ChatService.sendMessage);
 const mockRead = vi.mocked(SkillsService.read);
 const mockSettingsStore = vi.mocked(settingsStore);
-const mockServerStore = vi.mocked(serverStore);
 const mockGetEnabledToolsForLLM = vi.mocked(toolsStore.getEnabledToolsForLLM);
 const mockRecordActivation = vi.mocked(skillActivationMockState.store.recordActivation);
 const mockLoadConversation = vi.mocked(skillActivationMockState.store.loadConversation);
@@ -128,12 +136,14 @@ function baseResult(name: string): SkillBaseReadResult {
 		kind: 'skill',
 		skill: { id: `opaque-${name}`, name, scope: 'project', provider: 'agents' },
 		resources: { paths: [], truncated: false },
+		source: `---\nname: ${name}\n---\n# Body`,
+		body_markdown: '# Body',
 		content_xml: `<skill_content name="${name}">body</skill_content>`,
 		diagnostics: []
 	};
 }
 
-function resourceResult(name: string, path: string): SkillBaseReadResult {
+function resourceResult(name: string, path: string): SkillResourceReadResult {
 	return {
 		kind: 'resource',
 		skill: { id: `opaque-${name}`, name, scope: 'project', provider: 'agents' },
@@ -150,7 +160,13 @@ function dummyTool() {
 	};
 }
 
-function makeCallbacks(): { callbacks: AgenticFlowCallbacks } & Record<string, ReturnType<typeof vi.fn>> {
+function makeCallbacks(): { callbacks: AgenticFlowCallbacks } & {
+	createAssistantMessage: Mock;
+	createToolResultMessage: Mock;
+	onAssistantTurnComplete: Mock;
+	onFlowComplete: Mock;
+	onToolResultMessageCreated: Mock;
+} {
 	const createAssistantMessage = vi.fn().mockResolvedValue({ id: 'assistant-2' });
 	const createToolResultMessage = vi.fn().mockResolvedValue({ id: 'tool-result-1' });
 	const onAssistantTurnComplete = vi.fn().mockResolvedValue(undefined);
@@ -228,7 +244,6 @@ function readSkillToolCallJson(): string {
 
 beforeEach(() => {
 	vi.clearAllMocks();
-	mockServerStore.isRouterMode = false;
 	mockSettingsStore.config = { agenticMaxTurns: 100, maxSkillBudget: 2000 };
 	mockGetEnabledToolsForLLM.mockReturnValue([dummyTool()]);
 	toolsMockState.allTools = [{ definition: dummyTool(), key: 'builtin:test_tool' }];
