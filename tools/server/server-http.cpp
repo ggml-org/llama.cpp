@@ -211,8 +211,11 @@ bool server_http_context::init(const common_params & params) {
             return true;
         }
 
-        // If path is public or a UI asset, skip validation
-        if (get_public_endpoints.count(req.path)) {
+        // If path is public or a UI asset, skip validation.
+        // GET only: in router mode /models also answers POST (add a model) and
+        // DELETE (remove one). Those change server state and must stay behind
+        // the API key, so matching on the path alone is not enough.
+        if (req.method == "GET" && get_public_endpoints.count(req.path)) {
             return true;
         }
 
