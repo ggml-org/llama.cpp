@@ -41,6 +41,19 @@ typedef void (* fattn_kernel_t)(
                             const int32_t ne31, const int32_t ne32, const int32_t ne33,
                             const int32_t nb31, const int32_t nb32, const int64_t nb33);
 
+static inline bool ggml_cuda_fattn_use_gfx1030_native() {
+#if defined(GGML_USE_HIP)
+    const char * env = std::getenv("GGML_HIP_GFX1030_NATIVE");
+    if (env == nullptr || std::atoi(env) == 0) {
+        return false;
+    }
+    const int device = ggml_cuda_get_device();
+    return GGML_CUDA_CC_IS_RDNA2(ggml_cuda_info().devices[device].cc);
+#else
+    return false;
+#endif
+}
+
 typedef float (*vec_dot_KQ_t)(
     const char * __restrict__ K_c, const void * __restrict__ Q_v, const int * __restrict__ Q_q8 , const void * __restrict__ Q_ds);
 

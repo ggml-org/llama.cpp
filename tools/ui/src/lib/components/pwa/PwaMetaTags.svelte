@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { APPLE_META_TAGS, MEDIA_QUERIES, THEME_COLORS } from '$lib/constants/pwa';
 	import { APP_NAME } from '$lib/constants';
+	import { APPLE_META_TAGS, MEDIA_QUERIES, THEME_COLORS } from '$lib/constants/pwa';
 
 	let { appName = APP_NAME } = $props();
 </script>

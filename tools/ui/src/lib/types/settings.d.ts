@@ -1,15 +1,15 @@
-import type { SETTING_CONFIG_DEFAULT, SETTINGS_SECTION_TITLES } from '$lib/constants';
 import type { ChatMessagePromptProgress, ChatMessageTimings } from './chat';
-import type { OpenAIToolDefinition } from './mcp';
 import type { DatabaseMessageExtra } from './database';
+import type { OpenAIToolDefinition } from './mcp';
+import type { Icon } from '@lucide/svelte';
+import type { SETTING_CONFIG_DEFAULT, SETTINGS_SECTION_TITLES } from '$lib/constants';
 import type {
 	ParameterSource,
-	SyncableParameterType,
+	ReasoningEffort,
 	SettingsFieldType,
 	StreamConnectionState,
-	ReasoningEffort
+	SyncableParameterType
 } from '$lib/enums';
-import type { Icon } from '@lucide/svelte';
 import type { Component } from 'svelte';
 
 export type SettingsConfigValue = string | number | boolean | undefined;
@@ -31,6 +31,9 @@ export interface SettingsEntry {
 	radioOptions?: Array<{ value: string; label: string; key: string; isExperimental?: boolean }>;
 	isExperimental?: boolean;
 	isPositiveInteger?: boolean;
+	placeholder?: string;
+	min?: number;
+	max?: number;
 	dependsOn?: string;
 	sync?: {
 		serverKey: string;
@@ -52,6 +55,9 @@ export interface SettingsFieldConfig {
 	type: SettingsFieldType;
 	isExperimental?: boolean;
 	isPositiveInteger?: boolean;
+	placeholder?: string;
+	min?: number;
+	max?: number;
 	dependsOn?: string;
 	help?: string;
 	options?: Array<{ value: string; label: string; icon?: typeof Icon }>;

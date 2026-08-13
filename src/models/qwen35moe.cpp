@@ -45,6 +45,26 @@ void llama_model_qwen35moe::load_arch_tensors(llama_model_loader & ml) {
     const int trunk_flags = mtp_only ? TENSOR_NOT_REQUIRED : 0;
     int mtp_flags = !ml.load_mtp ? TENSOR_SKIP : 0;
 
+    const int64_t model_n_ff_exp = hparams.n_ff_exp ? hparams.n_ff_exp : n_ff / n_expert_used;
+    const bool tensor_parallel = split_mode() == LLAMA_SPLIT_MODE_TENSOR &&
+        devices.size() == 1 && devices[0].is_meta;
+    const bool layer_split = split_mode() == LLAMA_SPLIT_MODE_LAYER && devices.size() == 4 &&
+        !devices[0].is_meta && !devices[1].is_meta && !devices[2].is_meta && !devices[3].is_meta;
+    const qwen35moe_mmq_model_config mmq_config = {
+        /*.is_35b_a3b     =*/ type == LLM_TYPE_35B_A3B,
+        /*.is_122b_a10b   =*/ type == LLM_TYPE_122B_A10B,
+        /*.n_embd          =*/ n_embd,
+        /*.n_ff_exp        =*/ model_n_ff_exp,
+        /*.n_expert        =*/ n_expert,
+        /*.n_expert_used   =*/ n_expert_used,
+        /*.tensor_parallel =*/ tensor_parallel,
+        /*.layer_split     =*/ layer_split,
+        /*.n_devices       =*/ tensor_parallel ? get_split_state_ud.n_devices : devices.size(),
+        /*.tensor_split    =*/ tensor_split(),
+    };
+    const bool qwen36_35b_layer_mmvq_batch6 = mmq_config.is_35b_a3b &&
+        qwen35moe_use_auto_rdna2_q4_k_j16(mmq_config);
+
     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), { n_embd, n_vocab }, 0);
 
     // output
@@ -101,26 +121,17 @@ void llama_model_qwen35moe::load_arch_tensors(llama_model_loader & ml) {
         layer.ffn_down_exps = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", il), { n_ff_exp, n_embd, n_expert }, flags);
         create_tensor_gate_up_exps(layer, il, n_embd, n_ff_exp, n_expert, flags);
 
-        const bool tensor_parallel = split_mode() == LLAMA_SPLIT_MODE_TENSOR &&
-            devices.size() == 1 && devices[0].is_meta;
-        const bool layer_split = split_mode() == LLAMA_SPLIT_MODE_LAYER && devices.size() == 4 &&
-            !devices[0].is_meta && !devices[1].is_meta && !devices[2].is_meta && !devices[3].is_meta;
-        const qwen35moe_mmq_model_config mmq_config = {
-            /*.is_35b_a3b     =*/ type == LLM_TYPE_35B_A3B,
-            /*.is_122b_a10b   =*/ type == LLM_TYPE_122B_A10B,
-            /*.n_embd          =*/ n_embd,
-            /*.n_ff_exp        =*/ n_ff_exp,
-            /*.n_expert        =*/ n_expert,
-            /*.n_expert_used   =*/ n_expert_used,
-            /*.tensor_parallel =*/ tensor_parallel,
-            /*.layer_split     =*/ layer_split,
-            /*.n_devices       =*/ tensor_parallel ? get_split_state_ud.n_devices : devices.size(),
-            /*.tensor_split    =*/ tensor_split(),
-        };
         if (qwen35moe_use_auto_rdna2_q4_k_j16(mmq_config)) {
             for (ggml_tensor * tensor : { layer.ffn_gate_exps, layer.ffn_up_exps }) {
                 if (tensor != nullptr && tensor->type == GGML_TYPE_Q4_K) {
                     tensor->flags |= GGML_TENSOR_FLAG_MUL_MAT_ID_MMQ_J16;
+                }
+            }
+        }
+        if (qwen36_35b_layer_mmvq_batch6) {
+            for (ggml_tensor * tensor : { layer.ffn_down_exps, layer.ffn_gate_exps, layer.ffn_up_exps }) {
+                if (tensor != nullptr && (tensor->type == GGML_TYPE_Q4_K || tensor->type == GGML_TYPE_Q6_K)) {
+                    tensor->flags |= GGML_TENSOR_FLAG_MUL_MAT_ID_MMVQ_BATCH6;
                 }
             }
         }
@@ -151,6 +162,13 @@ void llama_model_qwen35moe::load_arch_tensors(llama_model_loader & ml) {
         layer.ffn_gate_inp  = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP,  "weight", il), { n_embd, n_expert }, mtp_flags);
         layer.ffn_down_exps = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", il), { n_ff_exp, n_embd, n_expert }, mtp_flags);
         create_tensor_gate_up_exps(layer, il, n_embd, n_ff_exp, n_expert, mtp_flags);
+        if (qwen36_35b_layer_mmvq_batch6) {
+            for (ggml_tensor * tensor : { layer.ffn_down_exps, layer.ffn_gate_exps, layer.ffn_up_exps }) {
+                if (tensor != nullptr && (tensor->type == GGML_TYPE_Q4_K || tensor->type == GGML_TYPE_Q6_K)) {
+                    tensor->flags |= GGML_TENSOR_FLAG_MUL_MAT_ID_MMVQ_BATCH6;
+                }
+            }
+        }
 
         // Shared experts
         layer.ffn_gate_inp_shexp = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP_SHEXP, "weight", il), { n_embd }, mtp_flags);
@@ -286,12 +304,33 @@ std::pair<ggml_tensor *, ggml_tensor *> llama_model_qwen35moe::graph::build_qkvz
                         int   il) {
     const int64_t n_seqs       = ubatch.n_seqs;
     const int64_t n_seq_tokens = ubatch.n_seq_tokens;
+    const llama_layer & layer  = model.layers[il];
 
-    ggml_tensor * qkv_mixed = build_lora_mm(model.layers[il].wqkv, input, model.layers[il].wqkv_s);
+    if (layer.ssm_in != nullptr && loras->empty()) {
+        ggml_tensor * mixed_qkvz = ggml_mul_mat(ctx0, layer.ssm_in, input);
+        cb(mixed_qkvz, "linear_attn_mixed_qkvz", il);
+
+        const int64_t qkv_rows = layer.wqkv->ne[1];
+        const int64_t z_rows   = layer.wqkv_gate->ne[1];
+        const size_t element_size = ggml_element_size(mixed_qkvz);
+
+        ggml_tensor * qkv_mixed = ggml_view_3d(ctx0, mixed_qkvz,
+            qkv_rows, n_seq_tokens, n_seqs,
+            mixed_qkvz->nb[1], mixed_qkvz->nb[1] * n_seq_tokens, 0);
+        cb(qkv_mixed, "linear_attn_qkv_mixed", il);
+
+        ggml_tensor * z = ggml_view_2d(ctx0, mixed_qkvz,
+            z_rows, ubatch.n_tokens, mixed_qkvz->nb[1], qkv_rows * element_size);
+        cb(z, "z", il);
+
+        return { qkv_mixed, z };
+    }
+
+    ggml_tensor * qkv_mixed = build_lora_mm(layer.wqkv, input, layer.wqkv_s);
     qkv_mixed = ggml_reshape_3d(ctx0, qkv_mixed, qkv_mixed->ne[0], n_seq_tokens, n_seqs);
     cb(qkv_mixed, "linear_attn_qkv_mixed", il);
 
-    ggml_tensor * z = build_lora_mm(model.layers[il].wqkv_gate, input, model.layers[il].wqkv_gate_s);
+    ggml_tensor * z = build_lora_mm(layer.wqkv_gate, input, layer.wqkv_gate_s);
     cb(z, "z", il);
 
     return { qkv_mixed, z };
@@ -408,22 +447,51 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_attn_linear(
     GGML_ASSERT(ubatch.n_tokens == n_seq_tokens * n_seqs);
 
     // Input projections
+    const llama_layer & layer = model.layers[il];
+    const bool use_fused_qkvz = layer.ssm_in != nullptr && loras->empty();
+    const bool use_fused_ba   = layer.ssm_beta_alpha != nullptr && loras->empty();
+
     auto qkvz = build_qkvz(cur, il);
     ggml_tensor * qkv_mixed = qkvz.first;
     ggml_tensor * z         = qkvz.second;
 
-    ggml_tensor * beta = build_lora_mm(model.layers[il].ssm_beta, cur, model.layers[il].ssm_beta_s);
-    beta = ggml_reshape_4d(ctx0, beta, 1, num_v_heads, n_seq_tokens, n_seqs);
-    cb(beta, "beta", il);
+    ggml_tensor * beta;
+    ggml_tensor * alpha;
+    if (use_fused_ba) {
+        ggml_tensor * mixed_ba = ggml_mul_mat(ctx0, layer.ssm_beta_alpha, cur);
+        cb(mixed_ba, "linear_attn_mixed_ba", il);
+
+        const size_t element_size = ggml_element_size(mixed_ba);
+        beta = ggml_view_4d(ctx0, mixed_ba,
+            1, num_v_heads, n_seq_tokens, n_seqs,
+            element_size, mixed_ba->nb[1], mixed_ba->nb[1] * n_seq_tokens, 0);
+        if (!ggml_is_contiguous(beta)) {
+            beta = ggml_cont(ctx0, beta);
+        }
+        cb(beta, "beta", il);
+
+        alpha = ggml_view_3d(ctx0, mixed_ba,
+            num_v_heads, n_seq_tokens, n_seqs,
+            mixed_ba->nb[1], mixed_ba->nb[1] * n_seq_tokens,
+            num_v_heads * element_size);
+        if (!ggml_is_contiguous(alpha)) {
+            alpha = ggml_cont(ctx0, alpha);
+        }
+        cb(alpha, "alpha", il);
+    } else {
+        beta = build_lora_mm(layer.ssm_beta, cur, layer.ssm_beta_s);
+        beta = ggml_reshape_4d(ctx0, beta, 1, num_v_heads, n_seq_tokens, n_seqs);
+        cb(beta, "beta", il);
+
+        alpha = build_lora_mm(layer.ssm_alpha, cur, layer.ssm_alpha_s);
+        alpha = ggml_reshape_3d(ctx0, alpha, num_v_heads, n_seq_tokens, n_seqs);
+        cb(alpha, "alpha", il);
+    }
 
     beta = ggml_sigmoid(ctx0, beta);
     cb(beta, "beta_sigmoid", il);
 
-    ggml_tensor * alpha = build_lora_mm(model.layers[il].ssm_alpha, cur, model.layers[il].ssm_alpha_s);
-    alpha = ggml_reshape_3d(ctx0, alpha, num_v_heads, n_seq_tokens, n_seqs);
-    cb(alpha, "alpha", il);
-
-    ggml_tensor * alpha_biased   = ggml_add(ctx0, alpha, model.layers[il].ssm_dt);
+    ggml_tensor * alpha_biased   = ggml_add(ctx0, alpha, layer.ssm_dt);
     ggml_tensor * alpha_softplus = ggml_softplus(ctx0, alpha_biased);
     cb(alpha_softplus, "a_softplus", il);
 
@@ -504,7 +572,18 @@ ggml_tensor * llama_model_qwen35moe::graph::build_layer_attn_linear(
     ggml_tensor * output = build_recurrent_attn(inp, ssm_states_all, q_conv, k_conv, v_conv, gate, beta, state, il);
 
     // z: [head_dim, n_heads, n_tokens, n_seqs] -> [n_heads * n_tokens * n_seqs, head_dim]
-    ggml_tensor * z_2d = ggml_reshape_4d(ctx0, z, head_v_dim, num_v_heads, n_seq_tokens, n_seqs);
+    ggml_tensor * z_2d;
+    if (use_fused_qkvz) {
+        const size_t element_size = ggml_element_size(z);
+        z_2d = ggml_view_4d(ctx0, z,
+            head_v_dim, num_v_heads, n_seq_tokens, n_seqs,
+            head_v_dim * element_size, z->nb[1], z->nb[1] * n_seq_tokens, 0);
+        if (!ggml_is_contiguous(z_2d)) {
+            z_2d = ggml_cont(ctx0, z_2d);
+        }
+    } else {
+        z_2d = ggml_reshape_4d(ctx0, z, head_v_dim, num_v_heads, n_seq_tokens, n_seqs);
+    }
 
     // Apply gated normalization: self.norm(core_attn_out, z)
     ggml_tensor * attn_out_norm = build_norm_gated(output, model.layers[il].ssm_norm, z_2d, il);

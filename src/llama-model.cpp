@@ -27,6 +27,7 @@
 #include <cassert>
 #include <cfloat>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <cmath>
 #include <functional>
@@ -38,8 +39,20 @@
 #include <string>
 #include <vector>
 
+static bool llama_model_use_gfx1030_gdn_sibling_fusion() {
+    static const bool enabled = []() {
+        const char * native = std::getenv("GGML_HIP_GFX1030_NATIVE");
+        const char * fusion = std::getenv("GGML_HIP_GFX1030_GDN_SIBLING_FUSION");
+        return native != nullptr && std::atoi(native) != 0 &&
+               fusion != nullptr && std::atoi(fusion) != 0;
+    }();
+    return enabled;
+}
+
 static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params & params) {
     switch (arch) {
+        case LLM_ARCH_CLIP:
+            return new llama_model_clip(params);
         case LLM_ARCH_LLAMA:
             return new llama_model_llama(params);
         case LLM_ARCH_LLAMA4:
@@ -114,6 +127,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
             return new llama_model_qwen3vlmoe(params);
         case LLM_ARCH_QWEN3TTS:
             return new llama_model_qwen3tts(params);
+        case LLM_ARCH_POCKETTTS:
+            return new llama_model_pockettts(params);
         case LLM_ARCH_PHI2:
             return new llama_model_phi2(params);
         case LLM_ARCH_PHI3:
@@ -174,6 +189,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
             return new llama_model_olmo2(params);
         case LLM_ARCH_OLMOE:
             return new llama_model_olmoe(params);
+        case LLM_ARCH_MUSE_GLIMMER:
+            return new llama_model_muse_glimmer(params);
         case LLM_ARCH_OPENELM:
             return new llama_model_openelm(params);
         case LLM_ARCH_GPTNEOX:
@@ -234,6 +251,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
             return new llama_model_granite(params);
         case LLM_ARCH_GRANITE_MOE:
             return new llama_model_granite_moe(params);
+        case LLM_ARCH_GRANITE_SWITCH:
+            return new llama_model_granite_switch(params);
         case LLM_ARCH_MINICPM:
             return new llama_model_minicpm(params);
         case LLM_ARCH_GRANITE_HYBRID:
@@ -694,7 +713,13 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
                 }
                 return {granularity_q};
             }
-            if (std::regex_match(tensor_name, pattern_attn_out_weight)) {
+            if (std::regex_match(tensor_name, pattern_attn_out_weight) ||
+                    (ud->model->arch == LLM_ARCH_MUSE_GLIMMER &&
+                     std::regex_match(tensor_name, pattern_attn_gate_weight))) {
+                // Muse multiplies the sigmoid gate directly into the sharded
+                // attention output before o_proj. Keep both tensors on the same
+                // GQA-aligned slices so the multiply stays local and requires no
+                // redistribution or additional collective.
                 GGML_ASSERT(segments.size() == 1);
                 return {granularity_q};
             }
@@ -1326,8 +1351,23 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
 
     this->ml = &ml; // to be used by create_tensor() and load_arch_tensors()
 
+    if (ml.use_mmap && params.load_mode == LLAMA_LOAD_MODE_AUTO) {
+        for (const auto & dev : devices) {
+            ggml_backend_dev_props props;
+            ggml_backend_dev_get_props(dev.dev, &props);
+            if (!props.caps.mmap_support) {
+                ml.use_mmap = false;
+                break;
+            }
+        }
+    }
+
+    const char * load_mode_name = params.load_mode == LLAMA_LOAD_MODE_AUTO
+        ? llama_load_mode_name(ml.use_mmap ? LLAMA_LOAD_MODE_MMAP : LLAMA_LOAD_MODE_NONE)
+        : llama_load_mode_name(params.load_mode);
+
     LLAMA_LOG_INFO("%s: loading model tensors, this can take a while... (load_mode = %s)\n",
-        __func__, llama_load_mode_name(params.load_mode));
+        __func__, load_mode_name);
 
     // build a list of buffer types for the CPU and GPU devices
     pimpl->cpu_buft_list = make_cpu_buft_list(devices, params.use_extra_bufts, params.no_host);
@@ -1719,6 +1759,104 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
         }
     }
 
+    // Opt-in Qwen3.5/3.6 GDN sibling projection fusion. The source tensors are
+    // retained so graph construction can fall back for LoRA adapters. Packed
+    // Q8_0 rows and F32 rows are copied byte-for-byte without requantization.
+    if (llama_model_use_gfx1030_gdn_sibling_fusion() &&
+            arch == LLM_ARCH_QWEN35MOE && type == LLM_TYPE_35B_A3B &&
+            split_mode == LLAMA_SPLIT_MODE_LAYER) {
+        size_t fused_bytes = 0;
+        int fused_qkvz = 0;
+        int fused_ba = 0;
+
+        auto fuse_rows = [&](ggml_tensor * first, ggml_tensor * second, ggml_type expected_type,
+                             const std::string & name) -> ggml_tensor * {
+            if (first == nullptr || second == nullptr || first->buffer == nullptr || second->buffer == nullptr ||
+                    first->type != expected_type || second->type != expected_type ||
+                    ggml_n_dims(first) != 2 || ggml_n_dims(second) != 2 ||
+                    first->ne[0] != second->ne[0] ||
+                    !ggml_is_contiguous(first) || !ggml_is_contiguous(second)) {
+                return nullptr;
+            }
+
+            ggml_backend_buffer_type_t first_buft = ggml_backend_buffer_get_type(first->buffer);
+            ggml_backend_buffer_type_t second_buft = ggml_backend_buffer_get_type(second->buffer);
+            if (first_buft == nullptr || first_buft != second_buft) {
+                return nullptr;
+            }
+
+            ggml_backend_dev_t dev = ggml_backend_buft_get_device(first_buft);
+            ggml_backend_reg_t reg = dev ? ggml_backend_dev_backend_reg(dev) : nullptr;
+            if (reg == nullptr || std::strcmp(ggml_backend_reg_name(reg), "ROCm") != 0) {
+                return nullptr;
+            }
+
+            const size_t row_size = ggml_row_size(expected_type, first->ne[0]);
+            const size_t first_bytes = row_size * first->ne[1];
+            const size_t second_bytes = row_size * second->ne[1];
+            if (ggml_nbytes(first) != first_bytes || ggml_nbytes(second) != second_bytes) {
+                return nullptr;
+            }
+
+            const ggml_init_params ctx_params = {
+                /*.mem_size   =*/ ggml_tensor_overhead(),
+                /*.mem_buffer =*/ nullptr,
+                /*.no_alloc   =*/ true,
+            };
+            ggml_context_ptr fused_ctx(ggml_init(ctx_params));
+            if (!fused_ctx) {
+                return nullptr;
+            }
+
+            ggml_tensor * fused = ggml_new_tensor_2d(
+                fused_ctx.get(), expected_type, first->ne[0], first->ne[1] + second->ne[1]);
+            ggml_set_name(fused, name.c_str());
+
+            ggml_backend_buffer_ptr fused_buf(
+                ggml_backend_alloc_ctx_tensors_from_buft(fused_ctx.get(), first_buft));
+            if (!fused_buf) {
+                return nullptr;
+            }
+            ggml_backend_buffer_set_usage(fused_buf.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+
+            std::vector<uint8_t> packed(first_bytes + second_bytes);
+            ggml_backend_tensor_get(first, packed.data(), 0, first_bytes);
+            ggml_backend_tensor_get(second, packed.data() + first_bytes, 0, second_bytes);
+            ggml_backend_tensor_set(fused, packed.data(), 0, packed.size());
+
+            std::vector<ggml_backend_buffer_ptr> fused_bufs;
+            fused_bufs.emplace_back(std::move(fused_buf));
+            pimpl->ctxs_bufs.emplace_back(std::move(fused_ctx), std::move(fused_bufs));
+            fused_bytes += packed.size();
+            return fused;
+        };
+
+        for (int il = 0; il < n_layer_all; ++il) {
+            llama_layer & layer = layers[il];
+
+            if (layer.ssm_in == nullptr &&
+                    layer.wqkv_s == nullptr && layer.wqkv_gate_s == nullptr &&
+                    layer.wqkv_in_s == nullptr && layer.wqkv_gate_in_s == nullptr) {
+                layer.ssm_in = fuse_rows(layer.wqkv, layer.wqkv_gate, GGML_TYPE_Q8_0,
+                    format("blk.%d.gdn_qkvz.fused", il));
+                fused_qkvz += layer.ssm_in != nullptr;
+            }
+
+            if (layer.ssm_beta_alpha == nullptr &&
+                    layer.ssm_beta_s == nullptr && layer.ssm_alpha_s == nullptr &&
+                    layer.ssm_beta_in_s == nullptr && layer.ssm_alpha_in_s == nullptr) {
+                layer.ssm_beta_alpha = fuse_rows(layer.ssm_beta, layer.ssm_alpha, GGML_TYPE_F32,
+                    format("blk.%d.gdn_beta_alpha.fused", il));
+                fused_ba += layer.ssm_beta_alpha != nullptr;
+            }
+        }
+
+        if (fused_qkvz != 0 || fused_ba != 0) {
+            LLAMA_LOG_INFO("%s: gfx1030 GDN sibling fusion: qkvz=%d, beta_alpha=%d, buffers=%.2f MiB\n",
+                __func__, fused_qkvz, fused_ba, fused_bytes / 1024.0 / 1024.0);
+        }
+    }
+
     if (use_mmap_buffer) {
         for (auto & mapping : ml.mappings) {
             pimpl->mappings.emplace_back(std::move(mapping));
@@ -2056,6 +2194,7 @@ void llama_model::print_info() const {
                 arch == LLM_ARCH_GRANITE ||
                 arch == LLM_ARCH_GRANITE_MOE ||
                 arch == LLM_ARCH_GRANITE_HYBRID ||
+                arch == LLM_ARCH_GRANITE_SWITCH ||
                 arch == LLM_ARCH_NEMOTRON_H_MOE) {
             LLAMA_LOG_INFO("%s: f_embedding_scale     = %f\n", __func__, hparams.f_embedding_scale);
             LLAMA_LOG_INFO("%s: f_residual_scale      = %f\n", __func__, hparams.f_residual_scale);
@@ -2372,6 +2511,9 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                     params.ctx_type == LLAMA_CONTEXT_TYPE_MTP &&
                     (arch == LLM_ARCH_QWEN3NEXT || arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_QWEN35MOE);
 
+                const bool mtp_on_hybrid_nemotron =
+                    params.ctx_type == LLAMA_CONTEXT_TYPE_MTP && arch == LLM_ARCH_NEMOTRON_H_MOE;
+
                 if (llm_arch_is_recurrent(arch)) {
                     res = new llama_memory_recurrent(
                             *this,
@@ -2382,7 +2524,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                             cparams.n_seq_max,
                             cparams.n_rs_seq,
                             nullptr);
-                } else if (llm_arch_is_hybrid(arch) && !mtp_on_hybrid_qwen) {
+                } else if (llm_arch_is_hybrid(arch) && !mtp_on_hybrid_qwen && !mtp_on_hybrid_nemotron) {
                     // The main difference between hybrid architectures is the
                     // layer filters, so pick the right one here
                     llama_memory_hybrid::layer_filter_cb filter_attn = nullptr;
@@ -2463,7 +2605,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                         };
                     }
 
-                    if (mtp_on_hybrid_qwen) {
+                    if (mtp_on_hybrid_qwen || mtp_on_hybrid_nemotron) {
                         filter = [&](uint32_t il) { return il >= hparams.n_layer(); };
                     }
 
@@ -2586,7 +2728,7 @@ llama_model_params llama_model_default_params() {
         /*.tensor_buft_overrides       =*/ nullptr,
         /*.n_gpu_layers                =*/ -1,
         /*.split_mode                  =*/ LLAMA_SPLIT_MODE_LAYER,
-        /*.load_mode                   =*/ LLAMA_LOAD_MODE_MMAP,
+        /*.load_mode                   =*/ LLAMA_LOAD_MODE_AUTO,
         /*.main_gpu                    =*/ 0,
         /*.tensor_split                =*/ nullptr,
         /*.progress_callback           =*/ nullptr,
@@ -2736,11 +2878,13 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_DEEPSEEK2OCR:
         case LLM_ARCH_DEEPSEEK32:
         case LLM_ARCH_DEEPSEEK4:
+        case LLM_ARCH_MUSE_GLIMMER:
         case LLM_ARCH_PLM:
         case LLM_ARCH_CHATGLM:
         case LLM_ARCH_GRANITE:
         case LLM_ARCH_GRANITE_MOE:
         case LLM_ARCH_GRANITE_HYBRID:
+        case LLM_ARCH_GRANITE_SWITCH:
         case LLM_ARCH_CHAMELEON:
         case LLM_ARCH_BAILINGMOE:
         case LLM_ARCH_NEO_BERT:
@@ -2755,6 +2899,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_MAINCODER:
         case LLM_ARCH_GLM_DSA:
         case LLM_ARCH_NANBEIGE:
+        case LLM_ARCH_POCKETTTS:
             return LLAMA_ROPE_TYPE_NORM;
 
         // the pairs of head values are offset by n_rot/2

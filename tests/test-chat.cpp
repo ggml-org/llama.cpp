@@ -5843,6 +5843,52 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .run();
     }
 
+    // Muse Glimmer format tests
+    {
+        auto tst = peg_tester("models/templates/muse-glimmer.jinja", detailed_debug);
+
+        const std::string call_markup =
+            "<atem:function_calls>\n"
+            "<atem:invoke name=\"special_function\">\n"
+            "<atem:parameter name=\"arg1\">1</atem:parameter>\n"
+            "</atem:invoke>\n"
+            "</atem:function_calls>";
+
+        // A plain answer is unaffected
+        tst.test(" to=user<|message|>Hello, world!\nWhat's up?<|eot|>")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect(message_assist)
+            .run();
+
+        // "Inform then act": the model answers the user and calls a tool in ONE generation,
+        // closing the answer with <|eom|>. The answer must stop there rather than swallow it.
+        tst.test(" to=user<|message|>Hello, world!\nWhat's up?<|eom|>"
+                 "<|start|>assistant to=special_function<|message|>" +
+                 call_markup)
+            .tools({ special_function_tool })
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect(message_with_content_and_tool_call("Hello, world!\nWhat's up?", "special_function",
+                                                       "{\"arg1\":1}"))
+            .run();
+
+        // Markup quoted in an answer has no preceding <|eom|>, so it stays content instead of
+        // becoming an invocation the user never asked for
+        tst.test(" to=user<|message|>You invoke it like this:\n" + call_markup + "<|eot|>")
+            .tools({ special_function_tool })
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect_content("You invoke it like this:\n" + call_markup)
+            .run();
+
+        // Tool markup inside the analysis channel is reasoning, not a call
+        tst.test(" to=self<|message|>I could use " + call_markup + " here<|eom|>"
+                 "<|start|>assistant to=user<|message|>Hello!<|eot|>")
+            .tools({ special_function_tool })
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect_reasoning("I could use " + call_markup + " here")
+            .expect_content("Hello!")
+            .run();
+    }
+
     // GPT-OSS format tests
     {
         auto tst = peg_tester("models/templates/openai-gpt-oss-120b.jinja", detailed_debug);

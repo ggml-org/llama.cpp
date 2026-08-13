@@ -1,6 +1,6 @@
-import { getContext, setContext } from 'svelte';
 import { CONTEXT_KEY_MESSAGE_EDIT } from '$lib/constants';
 import { MessageRole } from '$lib/enums';
+import { getContext, setContext } from 'svelte';
 
 export interface MessageEditState {
 	readonly isEditing: boolean;

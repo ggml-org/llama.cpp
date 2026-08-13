@@ -1,7 +1,7 @@
 <script lang="ts">
-	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
-	import { Music, Video, FileText } from '@lucide/svelte';
+	import { FileText, Music, Video } from '@lucide/svelte';
 	import { HorizontalScrollCarousel } from '$lib/components/app/misc';
+	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
 
 	interface PreviewItem {
 		id: string;
@@ -18,13 +18,15 @@
 		onNavigate: (index: number) => void;
 	}
 
-	let { items, currentIndex, onNavigate }: Props = $props();
+	let { currentIndex, items, onNavigate }: Props = $props();
 
 	function getFileExtension(name: string): string {
 		const parts = name.split('.');
+
 		if (parts.length > 1) {
 			return parts.pop()?.toUpperCase() ?? '';
 		}
+
 		return '';
 	}
 </script>
