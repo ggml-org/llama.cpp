@@ -4438,7 +4438,7 @@ struct test_mul_mat_id : public test_case {
     const bool duplicated_id;
 
     std::string vars() override {
-        return VARS_TO_STR8(type_a, type_b, n_mats, n_used, b, m, n, k);
+        return VARS_TO_STR9(type_a, type_b, n_mats, n_used, b, m, n, k, duplicated_id);
     }
 
     double max_nmse_err() override {
@@ -9052,6 +9052,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     }
 
     test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_Q8_0, GGML_TYPE_F32, 144, 6, true, 2048, 9, 4096, /* duplicated_id */ true));
+    // Each token uses the ids 0..n_used-1 once and one row has a duplicate, so a single expert is used
+    // n_tokens + 1 times. n_used == 4 needs no padding for neu_padded, unlike the n_used == 6 case above:
+    test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_F16, GGML_TYPE_F32, 4, 4, false, 32, 32, 32, /* duplicated_id */ true));
+    // n_expert_used == 5 has no specialized implementation, so this covers the generic one:
+    test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_F16, GGML_TYPE_F32, 5, 5, false, 32, 32, 32, /* duplicated_id */ true));
 
     for (int bs : {1, 4, 512}) {
         for (ggml_type type_a : {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_Q4_0, GGML_TYPE_Q4_K}) {

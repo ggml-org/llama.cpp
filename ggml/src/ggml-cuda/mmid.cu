@@ -41,21 +41,30 @@ static __global__ void mm_ids_helper(
     if constexpr (n_expert_used_template == 0) {
         // Generic implementation:
         for (int it = 0; it < n_tokens; ++it) {
-            int iex_used = -1; // The index at which the expert is used, if any.
-            for (int iex = threadIdx.x; iex < n_expert_used; iex += warp_size) {
-                const int expert_used = ids[it*si1 + iex];
+            // A token can use the same expert more than once, so a single thread must not collapse
+            // multiple uses into one: give every use its own iteration and its own slot.
+            for (int iex0 = 0; iex0 < n_expert_used; iex0 += warp_size) {
+                const int iex = iex0 + threadIdx.x; // The index at which the expert is used, if any.
+                const int expert_used = iex < n_expert_used ? ids[it*si1 + iex] : INT_MAX;
+                const int iex_used = expert_used == expert ? iex : -1;
                 nex_prev += expert_used < expert;
-                if (expert_used == expert) {
-                    iex_used = iex;
+
+                // Count how many times the threads in this warp have used the expert:
+                int it_compact_add_self = iex_used != -1 ? 1 : 0;
+#pragma unroll
+                for (int offset = 1; offset < warp_size; offset *= 2) {
+                    const int tmp = __shfl_up_sync(0xFFFFFFFF, it_compact_add_self, offset, warp_size);
+                    if (threadIdx.x >= static_cast<unsigned int>(offset)) {
+                        it_compact_add_self += tmp;
+                    }
                 }
-            }
+                const int rank_in_token = it_compact_add_self - (iex_used != -1 ? 1 : 0);
 
-            if (iex_used != -1) {
-                store[it_compact] = mm_ids_helper_store(it, iex_used);
-            }
+                if (iex_used != -1) {
+                    store[it_compact + rank_in_token] = mm_ids_helper_store(it, iex_used);
+                }
 
-            if (warp_reduce_any<warp_size>(iex_used != -1)) {
-                it_compact++;
+                it_compact += __shfl_sync(0xFFFFFFFF, it_compact_add_self, warp_size - 1, warp_size);
             }
         }
     } else {
@@ -80,7 +89,6 @@ static __global__ void mm_ids_helper(
                     it_compact_add_self += tmp;
                 }
             }
-            // The prefix sum gives each use of the expert its own slot, the last thread has the total for this token:
             const int rank_in_token = it_compact_add_self - (iex_used != -1 ? 1 : 0);
             it_compact_add_self = __shfl_sync(0xFFFFFFFF, it_compact_add_self, neu_padded - 1, neu_padded);
 
