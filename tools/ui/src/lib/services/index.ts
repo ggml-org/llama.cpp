@@ -369,3 +369,40 @@ export {
 	estimateSkillTokens,
 	serializeSkillCatalogEnvelope
 } from './skills-packing.service';
+
+/**
+ * **SkillRunAdapters** — Snapshot-only Skills adapters for frontend-driven runs
+ *
+ * Builds collision-safe `read_skill(name, path?)` / `list_skill()` tool
+ * definitions and prompt decoration from one frozen `SkillRunSnapshot`, and
+ * executes model reads through `SkillsService` using only the snapshot
+ * CWD/name/path. Reads resolve through the server first, then pause
+ * unapproved resolved identities in the established consent mechanism;
+ * concurrent reads of the same identity share one decision, denial yields a
+ * structured no-content result, and allowed `content_xml` is preserved
+ * byte-for-byte. The `SkillActivationStore` seam is where Task 4's shared
+ * successful-base persistence operation plugs in.
+ *
+ * @see buildSkillToolDefinitions — collision-safe adapter registration
+ * @see decorateSkillPrompt — byte-preserved envelope decoration
+ * @see consentKeyFor — snapshot-CWD + opaque-identity consent key
+ */
+export {
+	SKILL_LIST_TOOL,
+	SKILL_READ_TOOL,
+	SKILL_SERVER_LABEL,
+	SkillRunAdapters,
+	buildSkillToolDefinitions,
+	consentKeyFor,
+	createInMemorySkillActivationStore,
+	decorateSkillPrompt,
+	listSkillContent,
+	skillDenialResult,
+	skillErrorResult
+} from './skills-adapters.service';
+export type {
+	SkillActivationStore,
+	SkillAdapterDiagnostic,
+	SkillAdaptersBuildResult,
+	SkillRunAdaptersOptions
+} from './skills-adapters.service';

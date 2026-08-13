@@ -73,6 +73,18 @@ export interface SkillIdentity {
 	provider: string;
 }
 
+/**
+ * Safe, server-returned facts shown during a Skills consent pause: the
+ * resolved identity plus the requested action. Never carries host paths.
+ */
+export interface SkillConsentInfo {
+	name: string;
+	scope: 'global' | 'project';
+	provider: string;
+	/** Requested resource path for `read_skill(name, path)`; absent for base reads. */
+	path?: string;
+}
+
 /** Structured skill metadata for the full supported field set. */
 export interface SkillMetadata {
 	name?: string;
