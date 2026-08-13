@@ -3,12 +3,7 @@
 	import ContextGaugeDetails from './ContextGaugeDetails.svelte';
 	import ContextGaugeLoadModel from './ContextGaugeLoadModel.svelte';
 	import { useContextGauge } from '$lib/hooks/use-context-gauge.svelte';
-	import {
-		gaugeCardEnter,
-		gaugeCardLeave,
-		gaugePopup,
-		gaugePopupClose
-	} from '$lib/stores/context-gauge-popup.svelte';
+	import { gaugeCardEnter, gaugeCardLeave, gaugePopup, gaugePopupClose } from '$lib/stores';
 	import { formatParameters } from '$lib/utils/formatters';
 
 	const gauge = useContextGauge();
@@ -92,7 +87,7 @@
 						<span class={colorLevelTextClass(gauge.colorLevel)}>{gauge.contextPercent}%</span> used
 					</span>
 					<span>
-						{formatParameters((gauge.contextTotal ?? 0) - gauge.contextUsed)} remaining
+						{formatParameters(gauge.contextAvailable ?? 0)} remaining
 					</span>
 				</div>
 			{:else}

@@ -8,8 +8,7 @@
 	} from '$lib/components/app';
 	import SettingsGroup from '$lib/components/app/settings/SettingsGroup.svelte';
 	import { ConversationSelectionMode, FileExtensionText, HtmlInputType } from '$lib/enums';
-	import { conversations, conversationsStore } from '$lib/stores/conversations.svelte';
-	import { settingsStore } from '$lib/stores/settings.svelte';
+	import { conversationsStore, settingsStore } from '$lib/stores';
 	import { createMessageCountMap } from '$lib/utils';
 	import { fade } from 'svelte/transition';
 	import { toast } from 'svelte-sonner';
@@ -112,7 +111,7 @@
 
 	async function handleExportClick() {
 		try {
-			const allConversations = conversations();
+			const allConversations = conversationsStore.conversations;
 
 			if (allConversations.length === 0) {
 				toast.info('No conversations to export');
@@ -231,7 +230,7 @@
 
 	async function handleDeleteAllClick() {
 		try {
-			const allConversations = conversations();
+			const allConversations = conversationsStore.conversations;
 
 			if (allConversations.length === 0) {
 				toast.info('No conversations to delete');

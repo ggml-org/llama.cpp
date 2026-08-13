@@ -3,7 +3,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { MIN_AUTOCOMPLETE_INPUT_LENGTH } from '$lib/constants';
 	import { KeyboardKey } from '$lib/enums';
-	import { mcpStore } from '$lib/stores/mcp.svelte';
+	import { mcpStore } from '$lib/stores';
 	import type { MCPResourceTemplateInfo } from '$lib/types';
 	import {
 		debounce,

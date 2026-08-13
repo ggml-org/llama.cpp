@@ -1,6 +1,6 @@
 import { CONFIG_LOCALSTORAGE_KEY } from '$lib/constants';
 import { serverStore } from '$lib/stores/server.svelte';
-import { config, settingsStore } from '$lib/stores/settings.svelte';
+import { settingsStore } from '$lib/stores/settings.svelte';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 function mockProps(uiSettings: Record<string, string | number | boolean>) {
@@ -25,7 +25,7 @@ describe('server ui_settings application semantics', () => {
 
 		settingsStore.syncWithServerDefaults();
 
-		expect(config().theme).toBe('dark');
+		expect(settingsStore.config.theme).toBe('dark');
 	});
 
 	it('never reapplies on later loads: the user config diverges freely', () => {
@@ -40,8 +40,8 @@ describe('server ui_settings application semantics', () => {
 		settingsStore.syncWithServerDefaults();
 		settingsStore.syncWithServerDefaults();
 
-		expect(config().theme).toBe('light');
-		expect(config().apiKey).toBe('sk-user-key');
+		expect(settingsStore.config.theme).toBe('light');
+		expect(settingsStore.config.apiKey).toBe('sk-user-key');
 		const stored = JSON.parse(localStorage.getItem(CONFIG_LOCALSTORAGE_KEY) ?? '{}');
 
 		expect(stored.apiKey).toBe('sk-user-key');
@@ -55,8 +55,8 @@ describe('server ui_settings application semantics', () => {
 
 		settingsStore.forceSyncWithServerDefaults();
 
-		expect(config().theme).toBe('dark');
-		expect(config().apiKey).toBe('');
+		expect(settingsStore.config.theme).toBe('dark');
+		expect(settingsStore.config.apiKey).toBe('');
 	});
 });
 

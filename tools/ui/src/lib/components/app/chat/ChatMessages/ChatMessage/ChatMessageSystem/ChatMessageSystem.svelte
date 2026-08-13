@@ -6,7 +6,7 @@
 	import { INPUT_CLASSES } from '$lib/constants';
 	import { getMessageEditContext } from '$lib/contexts';
 	import { KeyboardKey, MessageRole } from '$lib/enums';
-	import { config } from '$lib/stores/settings.svelte';
+	import { settingsStore } from '$lib/stores';
 	import { autoResizeTextarea, isIMEComposing } from '$lib/utils';
 
 	interface Props {
@@ -64,7 +64,7 @@
 	let contentHeight = $state(0);
 
 	const MAX_HEIGHT = 200; // pixels
-	const currentConfig = config();
+	const currentConfig = settingsStore.config;
 
 	let showExpandButton = $derived(contentHeight > MAX_HEIGHT);
 

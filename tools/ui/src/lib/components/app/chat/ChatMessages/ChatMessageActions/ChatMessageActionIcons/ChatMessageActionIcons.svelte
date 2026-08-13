@@ -10,7 +10,7 @@
 	import Label from '$lib/components/ui/label/label.svelte';
 	import { Switch } from '$lib/components/ui/switch';
 	import { MessageRole } from '$lib/enums';
-	import { activeConversation } from '$lib/stores/conversations.svelte';
+	import { conversationsStore } from '$lib/stores';
 
 	interface Props {
 		role: MessageRole.USER | MessageRole.ASSISTANT;
@@ -69,7 +69,7 @@
 	}
 
 	function handleOpenForkDialog() {
-		const conv = activeConversation();
+		const conv = conversationsStore.activeConversation;
 
 		forkName = `Fork of ${conv?.name ?? 'Conversation'}`;
 		forkIncludeAttachments = true;

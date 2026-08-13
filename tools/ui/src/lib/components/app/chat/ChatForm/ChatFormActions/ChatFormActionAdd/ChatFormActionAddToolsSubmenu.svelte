@@ -6,8 +6,7 @@
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { CLI_FLAGS, ICON_CLASS_DEFAULT } from '$lib/constants';
 	import { useToolsPanel } from '$lib/hooks/use-tools-panel.svelte';
-	import { mcpStore } from '$lib/stores/mcp.svelte';
-	import { toolsStore } from '$lib/stores/tools.svelte';
+	import { mcpStore, toolsStore } from '$lib/stores';
 
 	const toolsPanel = useToolsPanel();
 	const hasMcpServersAvailable = $derived(mcpStore.getServers().length > 0);

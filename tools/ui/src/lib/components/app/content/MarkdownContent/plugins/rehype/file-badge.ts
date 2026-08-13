@@ -16,8 +16,7 @@ import {
 	PATH_SEPARATOR,
 	SETTINGS_KEYS
 } from '$lib/constants';
-import { settingsStore } from '$lib/stores/settings.svelte';
-import { toolsStore } from '$lib/stores/tools.svelte';
+import { settingsStore, toolsStore } from '$lib/stores';
 import { decodeFileLinkPath, getMentionBadgeIconPaths, getMentionBadgeLabel } from '$lib/utils';
 import type { Element, Root } from 'hast';
 import type { Plugin } from 'unified';

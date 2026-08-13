@@ -5,7 +5,7 @@
 		ChatAttachmentsPreviewNavButtons,
 		ChatAttachmentsPreviewThumbnailStrip
 	} from '$lib/components/app';
-	import { modelsStore } from '$lib/stores/models.svelte';
+	import { modelsStore } from '$lib/stores';
 	import {
 		createBase64DataUrl,
 		formatFileSize,

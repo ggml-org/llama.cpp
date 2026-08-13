@@ -13,14 +13,7 @@
 	import { ICON_CLASS_DEFAULT, ROUTES } from '$lib/constants';
 	import { FileTypeCategory, MessageRole } from '$lib/enums';
 	import { ChatService } from '$lib/services';
-	import {
-		activeProcessingState,
-		isChatStreaming,
-		isLoading as chatIsLoading
-	} from '$lib/stores/chat.svelte';
-	import { activeMessages, conversationsStore } from '$lib/stores/conversations.svelte';
-	import { mcpStore } from '$lib/stores/mcp.svelte';
-	import { config } from '$lib/stores/settings.svelte';
+	import { chatStore, conversationsStore, mcpStore, settingsStore } from '$lib/stores';
 	import { getFileTypeCategory } from '$lib/utils';
 
 	interface Props {
@@ -61,7 +54,7 @@
 		uploadedFiles = []
 	}: Props = $props();
 
-	let currentConfig = $derived(config());
+	let currentConfig = $derived(settingsStore.config);
 
 	let hasMcpPromptsSupport = $derived.by(() => {
 		const perChatOverrides = conversationsStore.getAllMcpServerOverrides();
@@ -103,7 +96,7 @@
 	let hasProcessedTokens = $derived.by(() => {
 		if (!page.params.id) return false;
 
-		const messages = activeMessages() as DatabaseMessage[];
+		const messages = conversationsStore.activeMessages as DatabaseMessage[];
 
 		let totalHistoricalTokens = 0;
 
@@ -125,9 +118,9 @@
 
 		if (totalHistoricalTokens > 0) return true;
 
-		if (!chatIsLoading() && !isChatStreaming()) return false;
+		if (!chatStore.isLoading && !chatStore.isStreaming()) return false;
 
-		const processingState = activeProcessingState();
+		const processingState = chatStore.activeProcessingState;
 
 		if (!processingState) return false;
 

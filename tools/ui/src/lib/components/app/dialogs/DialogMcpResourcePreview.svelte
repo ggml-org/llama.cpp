@@ -5,7 +5,7 @@
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { DEFAULT_RESOURCE_FILENAME, MIME_TYPE_SUBSTRINGS } from '$lib/constants';
 	import { MimeTypeText } from '$lib/enums';
-	import { mcpStore } from '$lib/stores/mcp.svelte';
+	import { mcpStore } from '$lib/stores';
 	import type { DatabaseMessageExtraMcpResource } from '$lib/types';
 	import {
 		downloadResourceContent,

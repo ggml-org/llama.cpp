@@ -3,8 +3,7 @@
 	import { Package } from '@lucide/svelte';
 	import { ActionIconCopyToClipboard, BadgeInfo } from '$lib/components/app';
 	import * as Tooltip from '$lib/components/ui/tooltip';
-	import { modelsStore } from '$lib/stores/models.svelte';
-	import { serverStore } from '$lib/stores/server.svelte';
+	import { modelsStore, serverStore } from '$lib/stores';
 
 	interface Props {
 		class?: string;

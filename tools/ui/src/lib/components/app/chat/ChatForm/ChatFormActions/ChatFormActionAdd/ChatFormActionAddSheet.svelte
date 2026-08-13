@@ -24,8 +24,7 @@
 	import { useAttachmentMenu } from '$lib/hooks/use-attachment-menu.svelte';
 	import { useReasoningMenu } from '$lib/hooks/use-reasoning-menu.svelte';
 	import { useToolsPanel } from '$lib/hooks/use-tools-panel.svelte';
-	import { conversationsStore } from '$lib/stores/conversations.svelte';
-	import { mcpStore } from '$lib/stores/mcp.svelte';
+	import { conversationsStore, mcpStore } from '$lib/stores';
 	import type { Snippet } from 'svelte';
 
 	interface Props {

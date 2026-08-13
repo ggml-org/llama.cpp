@@ -29,3 +29,73 @@ export function createMessageCountMap(
 export function getMessageCount(conversationId: string, countMap: Map<string, number>): number {
 	return countMap.get(conversationId) ?? 0;
 }
+
+export interface ConversationTreeItem {
+	conversation: DatabaseConversation;
+	depth: number;
+}
+
+// Pinned conversations first, then by lastModified descending
+const comparePinnedThenRecent = (a: DatabaseConversation, b: DatabaseConversation) => {
+	if (a.pinned && !b.pinned) return -1;
+
+	if (!a.pinned && b.pinned) return 1;
+
+	return b.lastModified - a.lastModified;
+};
+
+/**
+ * Builds a flat tree of conversations with depth levels for nested forks.
+ * Accepts a pre-filtered list so search filtering stays in the component.
+ *
+ * Output order matches the sidebar render exactly: pinned first, then
+ * unpinned by lastModified desc, with forks interleaved under their parents.
+ * Range-select / marquee in the sidebar rely on this alignment.
+ */
+export function buildConversationTree(convs: DatabaseConversation[]): ConversationTreeItem[] {
+	const childrenByParent = new Map<string, DatabaseConversation[]>();
+	const forkIds = new Set<string>();
+
+	for (const conv of convs) {
+		if (conv.forkedFromConversationId) {
+			forkIds.add(conv.id);
+
+			const siblings = childrenByParent.get(conv.forkedFromConversationId) || [];
+
+			siblings.push(conv);
+			childrenByParent.set(conv.forkedFromConversationId, siblings);
+		}
+	}
+
+	const result: ConversationTreeItem[] = [];
+	const visited = new Set<string>();
+
+	function walk(conv: DatabaseConversation, depth: number) {
+		visited.add(conv.id);
+		result.push({ conversation: conv, depth });
+
+		const children = childrenByParent.get(conv.id);
+
+		if (children) {
+			children.sort(comparePinnedThenRecent);
+
+			for (const child of children) {
+				walk(child, depth + 1);
+			}
+		}
+	}
+
+	const roots = convs.filter((c) => !forkIds.has(c.id)).sort(comparePinnedThenRecent);
+
+	for (const root of roots) {
+		walk(root, 0);
+	}
+
+	for (const conv of convs) {
+		if (!visited.has(conv.id)) {
+			walk(conv, 1);
+		}
+	}
+
+	return result;
+}

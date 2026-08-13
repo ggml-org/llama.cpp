@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { SETTINGS_KEYS } from '$lib/constants';
-	import { settingsStore } from '$lib/stores/settings.svelte';
-	import { toolsStore } from '$lib/stores/tools.svelte';
+	import { settingsStore, toolsStore } from '$lib/stores';
 	import {
 		getMentionBadgeIconPaths,
 		getMentionBadgeLabel,

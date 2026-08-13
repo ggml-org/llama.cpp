@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { Loader2 } from '@lucide/svelte';
 	import { StreamConnectionState } from '$lib/enums';
-	import { chatStore } from '$lib/stores/chat.svelte';
+	import { chatStore } from '$lib/stores';
 
 	let state = $derived(chatStore.streamConnectionState);
 </script>

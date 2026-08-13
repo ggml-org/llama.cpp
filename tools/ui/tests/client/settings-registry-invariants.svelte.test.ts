@@ -1,7 +1,7 @@
 import { CONFIG_LOCALSTORAGE_KEY, SETTING_CONFIG_DEFAULT } from '$lib/constants';
 import { ParameterSyncService } from '$lib/services/parameter-sync.service';
 import { serverStore } from '$lib/stores/server.svelte';
-import { config, settingsStore } from '$lib/stores/settings.svelte';
+import { settingsStore } from '$lib/stores/settings.svelte';
 import type { SettingsConfigType } from '$lib/types';
 import { beforeEach, describe, expect, it } from 'vitest';
 
@@ -40,7 +40,7 @@ function mockProps(uiSettings: Record<string, Primitive>) {
 
 const setUser = (key: string, value: Primitive) =>
 	settingsStore.updateConfig(key as keyof SettingsConfigType, value as never);
-const current = (key: string) => (config() as Record<string, unknown>)[key];
+const current = (key: string) => (settingsStore.config as Record<string, unknown>)[key];
 
 describe('registry-wide invariants', () => {
 	beforeEach(() => {

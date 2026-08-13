@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { mcpStore } from '$lib/stores/mcp.svelte';
+	import { mcpStore } from '$lib/stores';
 	import type { MCPServerSettingsEntry } from '$lib/types';
 	import type { Snippet } from 'svelte';
 

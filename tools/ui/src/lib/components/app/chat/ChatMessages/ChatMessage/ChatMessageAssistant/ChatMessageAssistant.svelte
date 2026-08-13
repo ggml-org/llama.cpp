@@ -11,10 +11,7 @@
 	import { getMessageEditContext } from '$lib/contexts';
 	import { MessageRole } from '$lib/enums';
 	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
-	import { chatStore, isChatStreaming, isLoading } from '$lib/stores/chat.svelte';
-	import { modelsStore } from '$lib/stores/models.svelte';
-	import { isRouterMode } from '$lib/stores/server.svelte';
-	import { config } from '$lib/stores/settings.svelte';
+	import { chatStore, modelsStore, serverStore, settingsStore } from '$lib/stores';
 	import { modelLoadProgressText } from '$lib/utils';
 	import { hasAgenticContent } from '$lib/utils';
 
@@ -69,15 +66,15 @@
 	const isAgentic = $derived(hasAgenticContent(message, toolMessages));
 	const processingState = useProcessingState();
 
-	let currentConfig = $derived(config());
-	let isRouter = $derived(isRouterMode());
+	let currentConfig = $derived(settingsStore.config);
+	let isRouter = $derived(serverStore.isRouterMode);
 
 	let showRawOutput = $state(false);
 
 	let displayedModel = $derived(message.model ?? null);
 
-	let isCurrentlyLoading = $derived(isLoading());
-	let isStreaming = $derived(isChatStreaming());
+	let isCurrentlyLoading = $derived(chatStore.isLoading);
+	let isStreaming = $derived(chatStore.isStreaming());
 	let hasNoContent = $derived(!message?.content?.trim());
 	let isActivelyProcessing = $derived(isCurrentlyLoading || isStreaming);
 
@@ -175,7 +172,7 @@
 			<ChatMessageAgenticContent
 				{message}
 				{toolMessages}
-				isStreaming={isChatStreaming()}
+				isStreaming={chatStore.isStreaming()}
 				{isLastAssistantMessage}
 			/>
 		{/if}
@@ -190,14 +187,14 @@
 			<div class="inline-flex flex-wrap items-start gap-2 text-xs text-muted-foreground">
 				<ChatMessageAssistantModel
 					{displayedModel}
-					isLoading={isLoading()}
+					isLoading={chatStore.isLoading}
 					{isRouter}
 					{onRegenerate}
 				/>
 
 				<ChatMessageAssistantStatistics
 					{message}
-					isLoading={isLoading()}
+					isLoading={chatStore.isLoading}
 					{processingState}
 					showMessageStats={currentConfig.showMessageStats}
 				/>

@@ -1,3 +1,4 @@
+import { browser } from '$app/environment';
 import {
 	buildReadMediaToolDefinition,
 	DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY,
@@ -14,9 +15,10 @@ import {
 	ToolSource
 } from '$lib/enums';
 import { ToolsService } from '$lib/services/tools.service';
+// direct imports between stores, not via the barrel, to avoid circular deps
 import { mcpStore } from '$lib/stores/mcp.svelte';
-import { modelsStore, selectedModelName } from '$lib/stores/models.svelte';
-import { config } from '$lib/stores/settings.svelte';
+import { modelsStore } from '$lib/stores/models.svelte';
+import { settingsStore } from '$lib/stores/settings.svelte';
 import type { OpenAIToolDefinition, ToolEntry, ToolGroup } from '$lib/types';
 import { buildSandboxToolDefinition } from '$lib/utils';
 import { SvelteMap, SvelteSet } from 'svelte/reactivity';
@@ -35,6 +37,9 @@ class ToolsStore {
 	private _serverHome = $state<string | null | undefined>(undefined);
 
 	constructor() {
+		// browser-only init: skip on SSR to avoid localStorage/fetch side effects
+		if (!browser) return;
+
 		try {
 			const stored = localStorage.getItem(DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY);
 
@@ -172,8 +177,8 @@ class ToolsStore {
 	get frontendTools(): OpenAIToolDefinition[] {
 		const tools: OpenAIToolDefinition[] = [];
 
-		if (config().jsSandboxEnabled) {
-			tools.push(buildSandboxToolDefinition(!!config().symbolicMathEnabled));
+		if (settingsStore.config.jsSandboxEnabled) {
+			tools.push(buildSandboxToolDefinition(!!settingsStore.config.symbolicMathEnabled));
 		}
 
 		const readMedia = this.readMediaTool();
@@ -196,7 +201,7 @@ class ToolsStore {
 
 		if (!hasReadFile) return null;
 
-		const model = selectedModelName() ?? modelsStore.models[0]?.model ?? '';
+		const model = modelsStore.selectedModelName ?? modelsStore.models[0]?.model ?? '';
 
 		if (!model) return null;
 
@@ -209,7 +214,7 @@ class ToolsStore {
 	}
 
 	get customTools(): OpenAIToolDefinition[] {
-		const raw = config().customJson;
+		const raw = settingsStore.config.customJson;
 
 		if (!raw || typeof raw !== 'string') return [];
 
@@ -624,7 +629,3 @@ class ToolsStore {
 }
 
 export const toolsStore = new ToolsStore();
-
-export const allTools = () => toolsStore.allTools;
-export const allToolDefinitions = () => toolsStore.allToolDefinitions;
-export const toolGroups = () => toolsStore.toolGroups;

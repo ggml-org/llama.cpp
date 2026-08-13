@@ -8,8 +8,7 @@
 	import { getMessageEditContext } from '$lib/contexts';
 	import { ChatMessageStatisticsMode, MessageRole } from '$lib/enums';
 	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
-	import { isLoading } from '$lib/stores/chat.svelte';
-	import { config } from '$lib/stores/settings.svelte';
+	import { chatStore, settingsStore } from '$lib/stores';
 
 	interface Props {
 		class?: string;
@@ -54,8 +53,8 @@
 	const editCtx = getMessageEditContext();
 	const processingState = useProcessingState();
 
-	const currentConfig = $derived(config());
-	const isActivelyProcessing = $derived(isLastUserMessage && isLoading());
+	const currentConfig = $derived(settingsStore.config);
+	const isActivelyProcessing = $derived(isLastUserMessage && chatStore.isLoading);
 
 	// For agentic turns, prefer the cumulative agentic.llm totals over per-call timings.
 	let storedReadingStats = $derived.by(() => {

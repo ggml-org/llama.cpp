@@ -38,18 +38,14 @@ import {
 import { DatabaseService } from '$lib/services/database.service';
 import { MigrationService } from '$lib/services/migration.service';
 import { RouterService } from '$lib/services/router.service';
+// direct imports between stores, not via the barrel, to avoid circular deps
 import { mcpStore } from '$lib/stores/mcp.svelte';
-import { config } from '$lib/stores/settings.svelte';
+import { settingsStore } from '$lib/stores/settings.svelte';
 import type { McpServerOverride } from '$lib/types/database';
 import { filterByLeafNodeId, findLeafNode, generateConversationTitle } from '$lib/utils';
 import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
-import { SvelteMap, SvelteSet } from 'svelte/reactivity';
+import { SvelteSet } from 'svelte/reactivity';
 import { toast } from 'svelte-sonner';
-
-export interface ConversationTreeItem {
-	conversation: DatabaseConversation;
-	depth: number;
-}
 
 class ConversationsStore {
 	/**
@@ -701,7 +697,7 @@ class ConversationsStore {
 					this.activeConversation.id,
 					generateConversationTitle(
 						newFirstUserMessage.content,
-						Boolean(config().titleGenerationUseFirstLine)
+						Boolean(settingsStore.config.titleGenerationUseFirstLine)
 					)
 				);
 			}
@@ -1259,76 +1255,4 @@ export const conversationsStore = new ConversationsStore();
 // Auto-initialize in browser
 if (browser) {
 	conversationsStore.init();
-}
-
-export const conversations = () => conversationsStore.conversations;
-export const activeConversation = () => conversationsStore.activeConversation;
-export const activeMessages = () => conversationsStore.activeMessages;
-export const pendingCwd = () => conversationsStore.pendingCwd;
-export const isConversationsInitialized = () => conversationsStore.isInitialized;
-
-/**
- * Builds a flat tree of conversations with depth levels for nested forks.
- * Accepts a pre-filtered list so search filtering stays in the component.
- *
- * Output order matches the sidebar render exactly: pinned first, then
- * unpinned by lastModified desc, with forks interleaved under their parents.
- * Range-select / marquee in the sidebar rely on this alignment.
- */
-
-// Pinned conversations first, then by lastModified descending
-const comparePinnedThenRecent = (a: DatabaseConversation, b: DatabaseConversation) => {
-	if (a.pinned && !b.pinned) return -1;
-
-	if (!a.pinned && b.pinned) return 1;
-
-	return b.lastModified - a.lastModified;
-};
-
-export function buildConversationTree(convs: DatabaseConversation[]): ConversationTreeItem[] {
-	const childrenByParent = new SvelteMap<string, DatabaseConversation[]>();
-	const forkIds = new SvelteSet<string>();
-
-	for (const conv of convs) {
-		if (conv.forkedFromConversationId) {
-			forkIds.add(conv.id);
-
-			const siblings = childrenByParent.get(conv.forkedFromConversationId) || [];
-
-			siblings.push(conv);
-			childrenByParent.set(conv.forkedFromConversationId, siblings);
-		}
-	}
-
-	const result: ConversationTreeItem[] = [];
-	const visited = new SvelteSet<string>();
-
-	function walk(conv: DatabaseConversation, depth: number) {
-		visited.add(conv.id);
-		result.push({ conversation: conv, depth });
-
-		const children = childrenByParent.get(conv.id);
-
-		if (children) {
-			children.sort(comparePinnedThenRecent);
-
-			for (const child of children) {
-				walk(child, depth + 1);
-			}
-		}
-	}
-
-	const roots = convs.filter((c) => !forkIds.has(c.id)).sort(comparePinnedThenRecent);
-
-	for (const root of roots) {
-		walk(root, 0);
-	}
-
-	for (const conv of convs) {
-		if (!visited.has(conv.id)) {
-			walk(conv, 1);
-		}
-	}
-
-	return result;
 }

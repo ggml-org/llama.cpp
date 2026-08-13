@@ -5,7 +5,7 @@
 	import { Switch } from '$lib/components/ui/switch';
 	import { getMessageEditContext } from '$lib/contexts';
 	import { KeyboardKey, MessageRole } from '$lib/enums';
-	import { chatStore } from '$lib/stores/chat.svelte';
+	import { chatStore } from '$lib/stores';
 	import { processFilesToChatUploaded } from '$lib/utils/browser-only';
 
 	const editCtx = getMessageEditContext();

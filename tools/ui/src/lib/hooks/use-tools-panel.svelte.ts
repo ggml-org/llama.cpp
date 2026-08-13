@@ -1,8 +1,6 @@
 import { CLI_FLAGS } from '$lib/constants';
 import { ToolSource } from '$lib/enums';
-import { conversationsStore } from '$lib/stores/conversations.svelte';
-import { mcpStore } from '$lib/stores/mcp.svelte';
-import { toolsStore } from '$lib/stores/tools.svelte';
+import { conversationsStore, mcpStore, toolsStore } from '$lib/stores';
 import type { ToolGroup } from '$lib/types';
 import { SvelteSet } from 'svelte/reactivity';
 

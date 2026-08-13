@@ -3,7 +3,7 @@
 	import { page } from '$app/state';
 	import { ChatForm } from '$lib/components/app';
 	import { useDraftMessages } from '$lib/hooks/use-draft-messages.svelte';
-	import { isMobile } from '$lib/stores/viewport.svelte';
+	import { isMobile } from '$lib/stores';
 	import { onMount } from 'svelte';
 
 	interface Props {

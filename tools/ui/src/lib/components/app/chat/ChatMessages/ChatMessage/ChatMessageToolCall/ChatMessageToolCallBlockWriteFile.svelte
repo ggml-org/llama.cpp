@@ -4,7 +4,7 @@
 	import { XCircle } from '@lucide/svelte';
 	import { SyntaxHighlightedCode } from '$lib/components/app';
 	import { MAX_HEIGHT_CODE_BLOCK, RESULT_STAT_SEPARATOR } from '$lib/constants';
-	import { toolsStore } from '$lib/stores/tools.svelte';
+	import { toolsStore } from '$lib/stores';
 	import type { AgenticSection } from '$lib/types';
 	import { abbreviateHome } from '$lib/utils';
 

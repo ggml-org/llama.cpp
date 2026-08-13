@@ -26,19 +26,16 @@
 		SpecialFileType
 	} from '$lib/enums';
 	import { useChatFormPickers } from '$lib/hooks/use-chat-form-pickers.svelte';
-	import { chatStore } from '$lib/stores/chat.svelte';
 	import {
-		activeConversation,
-		activeMessages,
+		chatStore,
 		conversationsStore,
-		pendingCwd
-	} from '$lib/stores/conversations.svelte';
-	import { mcpStore } from '$lib/stores/mcp.svelte';
-	import { mcpHasResourceAttachments } from '$lib/stores/mcp-resources.svelte';
-	import { modelOptions, selectedModelId } from '$lib/stores/models.svelte';
-	import { isRouterMode } from '$lib/stores/server.svelte';
-	import { config } from '$lib/stores/settings.svelte';
-	import { toolsStore } from '$lib/stores/tools.svelte';
+		mcpResourceStore,
+		mcpStore,
+		modelsStore,
+		serverStore,
+		settingsStore,
+		toolsStore
+	} from '$lib/stores';
 	import type {
 		FileMentionEntry,
 		GetPromptResult,
@@ -143,7 +140,7 @@
 	// float above the box.
 	let mentionAnchor: HTMLDivElement | null = $state(null);
 
-	let cwd = $derived(activeConversation()?.cwd ?? pendingCwd());
+	let cwd = $derived(conversationsStore.activeConversation?.cwd ?? conversationsStore.pendingCwd);
 
 	const pickers = useChatFormPickers({
 		focusInput: refocusInput,
@@ -184,7 +181,7 @@
 	let isResourceDialogOpen = $state(false);
 	let preSelectedResourceUri = $state<string | undefined>(undefined);
 
-	let currentConfig = $derived(config());
+	let currentConfig = $derived(settingsStore.config);
 
 	let pasteLongTextToFileLength = $derived.by(() => {
 		const n = Number(currentConfig.pasteLongTextToFileLen);
@@ -192,18 +189,18 @@
 		return Number.isNaN(n) ? Number(SETTING_CONFIG_DEFAULT.pasteLongTextToFileLen) : n;
 	});
 
-	let isRouter = $derived(isRouterMode());
+	let isRouter = $derived(serverStore.isRouterMode);
 	let conversationModel = $derived(
-		chatStore.getConversationModel(activeMessages() as DatabaseMessage[])
+		chatStore.getConversationModel(conversationsStore.activeMessages as DatabaseMessage[])
 	);
 	let activeModelId = $derived.by(() => {
-		const options = modelOptions();
+		const options = modelsStore.models;
 
 		if (!isRouter) {
 			return options.length > 0 ? options[0].model : null;
 		}
 
-		const selectedId = selectedModelId();
+		const selectedId = modelsStore.selectedModelId;
 
 		if (selectedId) {
 			const model = options.find((m) => m.id === selectedId);
@@ -220,7 +217,9 @@
 		return null;
 	});
 
-	let hasModelSelected = $derived(!isRouter || !!conversationModel || !!selectedModelId());
+	let hasModelSelected = $derived(
+		!isRouter || !!conversationModel || !!modelsStore.selectedModelId
+	);
 	let hasLoadingAttachments = $derived(uploadedFiles.some((f) => f.isLoading));
 	let hasAttachments = $derived(
 		(attachments && attachments.length > 0) || (uploadedFiles && uploadedFiles.length > 0)
@@ -634,7 +633,7 @@
 				/>
 			{/if}
 
-			{#if mcpHasResourceAttachments()}
+			{#if mcpResourceStore.hasAttachments}
 				<ChatFormMcpResourcesList
 					class="mb-3"
 					onResourceClick={(uri) => {

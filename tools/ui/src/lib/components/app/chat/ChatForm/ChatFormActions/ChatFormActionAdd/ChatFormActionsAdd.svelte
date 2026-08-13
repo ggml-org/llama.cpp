@@ -2,7 +2,7 @@
 	import ChatFormActionAddButton from './ChatFormActionAddButton.svelte';
 	import ChatFormActionAddDropdown from './ChatFormActionAddDropdown.svelte';
 	import ChatFormActionAddSheet from './ChatFormActionAddSheet.svelte';
-	import { isMobile } from '$lib/stores/viewport.svelte';
+	import { isMobile } from '$lib/stores';
 
 	interface Props {
 		disabled?: boolean;

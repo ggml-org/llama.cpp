@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { CODE_BLOCK } from '$lib/constants';
 	import { ColorMode } from '$lib/enums';
-	import { isMobile } from '$lib/stores/viewport.svelte';
+	import { isMobile } from '$lib/stores';
 	import type { ContentEditableToken } from '$lib/types';
 	import type { SourceHistoryEntry } from '$lib/utils';
 	import {
