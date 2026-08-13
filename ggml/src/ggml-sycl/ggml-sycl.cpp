@@ -1496,12 +1496,8 @@ static ggml_backend_buffer_t ggml_backend_sycl_host_buffer_type_alloc_buffer(ggm
 }
 
 static size_t ggml_backend_sycl_host_buffer_type_get_max_size(ggml_backend_buffer_type_t buft) {
-    static size_t max_size = -1;
-    if (max_size == (size_t)-1) {
-        ggml_backend_sycl_device_context * dev_ctx = (ggml_backend_sycl_device_context *) buft->device->context;
-        max_size = dpct::dev_mgr::instance().get_device(dev_ctx->device).get_max_mem_alloc_size();
-    }
-    return max_size;
+    ggml_backend_sycl_device_context * dev_ctx = (ggml_backend_sycl_device_context *) buft->device->context;
+    return dpct::dev_mgr::instance().get_device(dev_ctx->device).get_max_mem_alloc_size();
 }
 
 ggml_backend_buffer_type_t ggml_backend_sycl_host_buffer_type() {
