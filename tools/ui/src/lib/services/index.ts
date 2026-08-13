@@ -104,6 +104,15 @@ export { ChatService } from './chat.service';
 export { DatabaseService } from './database.service';
 
 /**
+ * **ConversationTransferService** - Conversation import/export format layer
+ *
+ * Owns the JSONL session format (SESSION header + MESSAGE records), ZIP
+ * archiving and browser downloads. Stateless; DB access and store refreshes
+ * stay in conversationsStore.
+ */
+export { ConversationTransferService } from './conversation-transfer.service';
+
+/**
  * **ModelsService** - Model management API communication
  *
  * Handles communication with model-related endpoints for both MODEL (single model)
