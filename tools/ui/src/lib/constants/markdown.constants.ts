@@ -1,8 +1,14 @@
 export const IMAGE_NOT_ERROR_BOUND_SELECTOR = 'img:not([data-error-bound])';
-export const DATA_ERROR_BOUND_ATTR = 'errorBound';
-export const DATA_ERROR_HANDLED_ATTR = 'errorHandled';
-export const BOOL_TRUE_STRING = 'true';
-export const BOOL_FALSE_STRING = 'false';
+
+/** Data attributes for the markdown renderer DOM contract. */
+export const MARKDOWN_DATA_ATTRS = {
+	BLOCK_ID: 'data-block-id',
+	CODE_ID: 'data-code-id',
+	ERROR_BOUND: 'data-error-bound',
+	ERROR_HANDLED: 'data-error-handled',
+	LISTENER_BOUND: 'data-listener-bound',
+	ORIGINAL_SRC: 'data-original-src'
+} as const;
 
 /** Markdown structural markers used by `looksLikeMarkdown`. Inline / line-level. */
 export const MARKDOWN = {

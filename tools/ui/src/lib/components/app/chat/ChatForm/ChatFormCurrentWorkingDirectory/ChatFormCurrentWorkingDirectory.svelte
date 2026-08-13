@@ -4,7 +4,7 @@
 	import { FolderOpen } from '@lucide/svelte';
 	import SearchInput from '$lib/components/app/forms/SearchInput.svelte';
 	import * as Popover from '$lib/components/ui/popover';
-	import { DEFAULT_MOBILE_BREAKPOINT, HOME_TILDE, SEARCH } from '$lib/constants';
+	import { DEFAULT_MOBILE_BREAKPOINT, HOME_TILDE, SEARCH, UI_DATA_ATTRS } from '$lib/constants';
 	import { BuiltInTool, GlobSearchType, KeyboardKey } from '$lib/enums';
 	import { useDebouncedSearch } from '$lib/hooks/use-debounced-search.svelte';
 	import { usePickerNavigation } from '$lib/hooks/use-picker-navigation.svelte';
@@ -120,7 +120,7 @@
 	});
 
 	useScrollActiveRow({
-		dataIndex: 'result',
+		dataAttr: UI_DATA_ATTRS.RESULT_INDEX,
 		getContainer: () => listContainer,
 		getCount: () => queryResults.length,
 		getIndex: () => nav.hoveredIndex,

@@ -3,7 +3,13 @@
  * Uses dependency injection pattern to avoid direct component state access.
  */
 
-import { MERMAID_BLOCK_CLASS, MERMAID_SYNTAX_ATTR, MERMAID_WRAPPER_CLASS } from '$lib/constants';
+import {
+	MARKDOWN_DATA_ATTRS,
+	MERMAID_BLOCK_CLASS,
+	MERMAID_SYNTAX_ATTR,
+	MERMAID_WRAPPER_CLASS
+} from '$lib/constants';
+import { BooleanString } from '$lib/enums';
 import { copyCodeToClipboard, copyToClipboard } from '$lib/utils';
 
 export interface PreviewState {
@@ -44,7 +50,7 @@ export function createHandleCopyClick() {
 
 		if (!wrapper) return;
 
-		const codeElement = wrapper.querySelector<HTMLElement>('code[data-code-id]');
+		const codeElement = wrapper.querySelector<HTMLElement>(`code[${MARKDOWN_DATA_ATTRS.CODE_ID}]`);
 
 		if (!codeElement) return;
 
@@ -90,7 +96,7 @@ export function createHandlePreviewClick(previewState: PreviewState) {
 
 		if (!wrapper) return;
 
-		const codeElement = wrapper.querySelector<HTMLElement>('code[data-code-id]');
+		const codeElement = wrapper.querySelector<HTMLElement>(`code[${MARKDOWN_DATA_ATTRS.CODE_ID}]`);
 
 		if (!codeElement) return;
 
@@ -189,15 +195,17 @@ export function createHandleMermaidPreviewOpenChange(mermaidState: MermaidPrevie
 export function createHandleImageError(
 	renderedBlocksState: RenderedBlocksState,
 	IMAGE_NOT_ERROR_BOUND_SELECTOR: string,
-	DATA_ERROR_BOUND_ATTR: string,
-	BOOL_TRUE_STRING: string
+	errorBoundAttr: string,
+	booleanString: BooleanString
 ) {
 	return async function handleImageError(event: Event) {
 		const img = event.target as HTMLImageElement;
 
 		if (!img) return;
 
-		const blockId = img.closest('[data-block-id]')?.getAttribute('data-block-id');
+		const blockId = img
+			.closest(`[${MARKDOWN_DATA_ATTRS.BLOCK_ID}]`)
+			?.getAttribute(MARKDOWN_DATA_ATTRS.BLOCK_ID);
 
 		if (!blockId) return;
 
@@ -206,19 +214,22 @@ export function createHandleImageError(
 		if (!block) return;
 
 		// Skip if already handled
-		if (img.dataset[DATA_ERROR_BOUND_ATTR] === BOOL_TRUE_STRING) return;
+		if (img.getAttribute(errorBoundAttr) === booleanString) return;
 
-		img.dataset[DATA_ERROR_BOUND_ATTR] = BOOL_TRUE_STRING;
+		img.setAttribute(errorBoundAttr, booleanString);
 
 		// Get the fallback HTML and replace the image
-		const fallbackHtml = `<div class="image-error-placeholder" data-original-src="${img.src}">
+		const fallbackHtml = `<div class="image-error-placeholder" ${MARKDOWN_DATA_ATTRS.ORIGINAL_SRC}="${img.src}">
 			<span class="image-error-icon">⚠️</span>
 			<span class="image-error-text">Failed to load image</span>
 		</div>`;
 		// Replace the img element with fallback in the block's HTML
 		const newHtml = block.html.replace(/img[^>]*src=["']([^"']*)[^>]*>/g, (match, src) => {
 			if (src === img.src) {
-				return fallbackHtml.replace('data-original-src=""', `data-original-src="${src}"`);
+				return fallbackHtml.replace(
+					`${MARKDOWN_DATA_ATTRS.ORIGINAL_SRC}=""`,
+					`${MARKDOWN_DATA_ATTRS.ORIGINAL_SRC}="${src}"`
+				);
 			}
 
 			return match;
@@ -249,13 +260,19 @@ export function createSetupCodeBlockActions(
 			const copyButton = wrapper.querySelector<HTMLButtonElement>('.copy-code-btn');
 			const previewButton = wrapper.querySelector<HTMLButtonElement>('.preview-code-btn');
 
-			if (copyButton && copyButton.dataset.listenerBound !== 'true') {
-				copyButton.dataset.listenerBound = 'true';
+			if (
+				copyButton &&
+				copyButton.getAttribute(MARKDOWN_DATA_ATTRS.LISTENER_BOUND) !== BooleanString.TRUE
+			) {
+				copyButton.setAttribute(MARKDOWN_DATA_ATTRS.LISTENER_BOUND, BooleanString.TRUE);
 				copyButton.addEventListener('click', handleCopyClick);
 			}
 
-			if (previewButton && previewButton.dataset.listenerBound !== 'true') {
-				previewButton.dataset.listenerBound = 'true';
+			if (
+				previewButton &&
+				previewButton.getAttribute(MARKDOWN_DATA_ATTRS.LISTENER_BOUND) !== BooleanString.TRUE
+			) {
+				previewButton.setAttribute(MARKDOWN_DATA_ATTRS.LISTENER_BOUND, BooleanString.TRUE);
 				previewButton.addEventListener('click', handlePreviewClick);
 			}
 		}
@@ -269,8 +286,8 @@ export function createSetupCodeBlockActions(
 export function createSetupImageErrorHandlers(
 	handleImageError: (event: Event) => void,
 	IMAGE_NOT_ERROR_BOUND_SELECTOR: string,
-	DATA_ERROR_BOUND_ATTR: string,
-	BOOL_TRUE_STRING: string
+	errorBoundAttr: string,
+	booleanString: BooleanString
 ) {
 	return function setupImageErrorHandlers(containerRef: HTMLElement | null) {
 		if (!containerRef) return;
@@ -278,7 +295,7 @@ export function createSetupImageErrorHandlers(
 		const images = containerRef.querySelectorAll<HTMLImageElement>(IMAGE_NOT_ERROR_BOUND_SELECTOR);
 
 		for (const img of images) {
-			img.dataset[DATA_ERROR_BOUND_ATTR] = BOOL_TRUE_STRING;
+			img.setAttribute(errorBoundAttr, booleanString);
 			img.addEventListener('error', handleImageError);
 		}
 	};

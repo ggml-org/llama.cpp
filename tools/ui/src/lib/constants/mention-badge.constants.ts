@@ -10,6 +10,13 @@ export const MENTION_BADGE_CLASSNAME =
 
 export const MENTION_BADGE_ICON_CLASSNAME = 'h-3 w-3 shrink-0';
 
+/** Dataset keys (camelCased `data-*`) that tag contenteditable mention badges. */
+export const MENTION_BADGE_DATA_ATTRS = {
+	BADGE: 'data-mention-badge',
+	NAME: 'data-mention-name',
+	PATH: 'data-mention-path'
+} as const;
+
 /** Regex flag that makes the mention scanner walk every link in a message instead of the first. */
 export const MENTION_LINK_SCAN_FLAGS = 'g';
 

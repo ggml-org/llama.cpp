@@ -1,3 +1,6 @@
+/** Number of trailing characters to keep visible when partially redacting mcp-session-id */
+const MCP_SESSION_ID_VISIBLE_CHARS = 5;
+
 /** HTTP header handling for API and MCP requests. */
 export const HEADERS = {
 	/** Canonical casing for the Authorization header (RFC 7235) */
@@ -7,7 +10,7 @@ export const HEADERS = {
 	/** Content-Type HTTP header name */
 	CONTENT_TYPE: 'Content-Type',
 	/** Partial-redaction rules for MCP headers: header name -> visible trailing chars */
-	PARTIAL_REDACT: new Map<string, number>([['mcp-session-id', 5]]),
+	PARTIAL_REDACT: new Map<string, number>([['mcp-session-id', MCP_SESSION_ID_VISIBLE_CHARS]]),
 
 	/** Header names whose values should be redacted in diagnostic logs */
 	REDACTED: new Set([

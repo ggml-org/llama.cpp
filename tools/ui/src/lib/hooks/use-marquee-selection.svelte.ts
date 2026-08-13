@@ -9,6 +9,7 @@
  * matches what the user sees on screen.
  */
 
+import { UI_DATA_ATTRS } from '$lib/constants';
 import { SvelteSet } from 'svelte/reactivity';
 
 interface UseMarqueeSelectionOptions {
@@ -18,7 +19,7 @@ interface UseMarqueeSelectionOptions {
 	orderedIds: () => string[];
 	/** Document listeners attach only while the getter returns true. */
 	enabled: () => boolean;
-	/** DOM attribute key (after the `data-` prefix) that marks selectable rows. */
+	/** Full `data-*` attribute that marks selectable rows. */
 	attributeName?: () => string;
 	/** Minimum pixel distance before a press becomes a marquee drag. */
 	dragThresholdPx?: number;
@@ -37,15 +38,7 @@ export function useMarqueeSelection(options: UseMarqueeSelectionOptions) {
 	let suppressNextClick = false;
 
 	function resolveAttributeName(): string {
-		return options.attributeName?.() ?? 'conversation-row';
-	}
-
-	/**
-	 * `dataset` keys are camelCased. `data-conversation-row` -> `conversationRow`.
-	 * We resolve the attribute name once per call and read via the camelCase key.
-	 */
-	function datasetKey(key: string = resolveAttributeName()): string {
-		return key.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+		return options.attributeName?.() ?? UI_DATA_ATTRS.CONVERSATION_ROW;
 	}
 
 	function decideDragMode(startingRowId: string | null, currentlySelected: ReadonlySet<string>) {
@@ -79,8 +72,7 @@ export function useMarqueeSelection(options: UseMarqueeSelectionOptions) {
 
 	function findRowAtPoint(x: number, y: number): string | null {
 		const attr = resolveAttributeName();
-		const selector = `[data-${attr}]`;
-		const key = datasetKey(attr);
+		const selector = `[${attr}]`;
 
 		let bestMatch: HTMLElement | null = null;
 		let bestCenterDistance = Infinity;
@@ -89,7 +81,7 @@ export function useMarqueeSelection(options: UseMarqueeSelectionOptions) {
 			const rect = row.getBoundingClientRect();
 
 			if (y >= rect.top && y <= rect.bottom && x >= rect.left && x <= rect.right) {
-				return row.dataset[key] ?? null;
+				return row.getAttribute(attr);
 			}
 
 			if (x >= rect.left && x <= rect.right) {
@@ -102,13 +94,12 @@ export function useMarqueeSelection(options: UseMarqueeSelectionOptions) {
 			}
 		}
 
-		return bestMatch ? (bestMatch.dataset[key] ?? null) : null;
+		return bestMatch ? bestMatch.getAttribute(attr) : null;
 	}
 
 	function updateMarqueeRect(currentX: number, currentY: number) {
 		const attr = resolveAttributeName();
-		const selector = `[data-${attr}]`;
-		const key = datasetKey(attr);
+		const selector = `[${attr}]`;
 		const selected = options.selectedIds();
 		const left = Math.min(dragStartX, currentX);
 		const top = Math.min(dragStartY, currentY);
@@ -117,7 +108,7 @@ export function useMarqueeSelection(options: UseMarqueeSelectionOptions) {
 		const visibleIds = new SvelteSet(options.orderedIds());
 
 		for (const row of document.querySelectorAll<HTMLElement>(selector)) {
-			const id = row.dataset[key];
+			const id = row.getAttribute(attr);
 
 			if (!id || !visibleIds.has(id)) continue;
 

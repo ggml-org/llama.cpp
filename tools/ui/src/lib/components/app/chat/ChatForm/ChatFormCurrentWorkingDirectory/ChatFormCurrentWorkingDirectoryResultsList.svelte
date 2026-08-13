@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { Folder } from '@lucide/svelte';
 	import { cn } from '$lib/components/ui/utils';
+	import { UI_DATA_ATTRS } from '$lib/constants';
 	import { highlightMatch } from '$lib/utils';
 	import { fly } from 'svelte/transition';
 
@@ -46,7 +47,7 @@
 		{#each results as path, index (path)}
 			<button
 				type="button"
-				data-result-index={index}
+				{...{ [UI_DATA_ATTRS.RESULT_INDEX]: index }}
 				data-highlighted={index === hoveredIndex ? '' : undefined}
 				class={cn(
 					'relative flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-hidden select-none data-highlighted:bg-accent data-highlighted:text-accent-foreground'
