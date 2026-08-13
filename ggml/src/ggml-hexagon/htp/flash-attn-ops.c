@@ -132,8 +132,8 @@ struct hmx_fa_context {
     __fp16 *     vtcm_v_tiles[2];      // V tiles (column-major, double-buffered)
     __fp16 *     vtcm_s_tiles[2];      // S = QK^T [g_br, Bc] (double-buffered)
     __fp16 *     vtcm_p_tiles[2];      // P = softmax(S) [g_br, Bc]
-    __fp16 *     vtcm_d_tiles;         // Diagonal rescale [g_br, g_br]
-    __fp16 *     vtcm_d_inv_l;         // Diagonal rescale (1/l) [g_br, g_br]
+    __fp16 *     vtcm_d_tiles[2];      // Diagonal rescale, g_br/32 packed diagonal tiles (double-buffered)
+    __fp16 *     vtcm_d_inv_l;         // Diagonal rescale (1/l), same packed layout
     HVX_Vector * vtcm_m_vec;           // Row max [g_br]
     HVX_Vector * vtcm_l_vec;           // Row sum [g_br]
     HVX_Vector * vtcm_s_rowmax;        // Softmax intermediate [g_br]
@@ -782,13 +782,14 @@ static void fa_q_load_thread(unsigned int n, unsigned int i, void * data) {
             }
         }
 
-        // Initialize vtcm_d_tiles and vtcm_d_inv_l to 0
+        // Zero the whole rescale region: vtcm_d_tiles[0], the optional vtcm_d_tiles[1]
+        // and vtcm_d_inv_l are equal-sized and allocated back to back, so one run covers
+        // them all.  The scatter only ever writes the diagonal, ignore the rest.
         const size_t d_bytes_per_t = hex_align_up(d_tile_bytes / n, 128);
         const size_t d_start       = i * d_bytes_per_t;
         const size_t d_end         = hex_smin(d_start + d_bytes_per_t, d_tile_bytes);
         if (d_start < d_tile_bytes) {
-            hvx_splat_u8_a((char *) factx->vtcm_d_tiles + d_start, 0, d_end - d_start);
-            hvx_splat_u8_a((char *) factx->vtcm_d_inv_l + d_start, 0, d_end - d_start);
+            hvx_splat_u8_a((char *) factx->vtcm_d_tiles[0] + d_start, 0, d_end - d_start);
         }
     }
 
@@ -1432,17 +1433,19 @@ static inline void fa_softmax_impl(
         const HVX_VectorPred q_32_mask = Q6_Q_vsetq_R(32 * sizeof(__fp16));
         HVX_Vector           v_exp_m_diff = exp_m_diff_f16;
 
+        __fp16 * const d_tiles_out = factx->vtcm_d_tiles[args->buf_idx];
+
         size_t t0 = r_vec_idx * 2;
         if (t0 < args->n_row_tiles) {
             const HVX_Vector v_content = v_exp_m_diff;
-            __fp16 *         out_base  = factx->vtcm_d_tiles + t0 * (args->n_row_tiles_g_br + 1) * HMX_FP16_TILE_N_ELMS;
+            __fp16 *         out_base  = d_tiles_out + t0 * HMX_FP16_TILE_N_ELMS;
             Q6_vscatter_QRMVhV(q_32_mask, (size_t) out_base, HMX_FP16_TILE_SIZE - 1, v_offsets, v_content);
         }
 
         size_t t1 = r_vec_idx * 2 + 1;
         if (t1 < args->n_row_tiles) {
             const HVX_Vector v_content = Q6_V_vror_VR(v_exp_m_diff, 64);
-            __fp16 *         out_base  = factx->vtcm_d_tiles + t1 * (args->n_row_tiles_g_br + 1) * HMX_FP16_TILE_N_ELMS;
+            __fp16 *         out_base  = d_tiles_out + t1 * HMX_FP16_TILE_N_ELMS;
             Q6_vscatter_QRMVhV(q_32_mask, (size_t) out_base, HMX_FP16_TILE_SIZE - 1, v_offsets, v_content);
         }
     }
@@ -1506,7 +1509,7 @@ static __attribute__((noinline)) void fa_build_d_diag_inv_l(struct hmx_fa_contex
             v_content = Q6_V_vror_VR(v_content, 64);
         }
 
-        __fp16 * out_base = factx->vtcm_d_inv_l + i * (n_row_tiles_g_br + 1) * HMX_FP16_TILE_N_ELMS;
+        __fp16 * out_base = factx->vtcm_d_inv_l + i * HMX_FP16_TILE_N_ELMS;
         Q6_vscatter_QRMVhV(q_32_mask, (size_t) out_base, HMX_FP16_TILE_SIZE - 1, v_offsets, v_content);
     }
 }
@@ -1615,7 +1618,7 @@ static void hmx_fa_o_update_worker(void * data) {
     const size_t o_stride = n_row_tiles_g_br * HMX_FP16_TILE_N_ELMS;
     const size_t v_stride = n_tiles_per_bc * HMX_FP16_TILE_N_ELMS;
     for (size_t r = 0; r < n_row_tiles; ++r) {
-        const __fp16 * d_diag     = d_tiles + r * (n_row_tiles_g_br + 1) * HMX_FP16_TILE_N_ELMS;
+        const __fp16 * d_diag     = d_tiles + r * HMX_FP16_TILE_N_ELMS;
         const __fp16 * p_tile_in  = p_tiles + (r * n_tiles_per_bc) * HMX_FP16_TILE_N_ELMS;
         const __fp16 * o_rc       = o_prev + r * HMX_FP16_TILE_N_ELMS;
         const __fp16 * v_tile_in  = v_tiles;
@@ -1654,7 +1657,7 @@ static void hmx_fa_o_norm_worker(void * data) {
     asm volatile(HMX_SET_BIAS("%0") :: "r"((unsigned int)job->hmx_scales));
     const size_t o_stride = n_row_tiles_g_br * HMX_FP16_TILE_N_ELMS;
     for (size_t r = 0; r < n_row_tiles; ++r) {
-        const __fp16 * d_diag = d_tiles + r * (n_row_tiles_g_br + 1) * HMX_FP16_TILE_N_ELMS;
+        const __fp16 * d_diag = d_tiles + r * HMX_FP16_TILE_N_ELMS;
         const __fp16 * o_rc = o_prev + r * HMX_FP16_TILE_N_ELMS;
         __fp16 *       o_out = o_curr + r * DV_tiles * HMX_FP16_TILE_N_ELMS;
 
@@ -1882,7 +1885,8 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
     factx.vtcm_s_tiles[1]     = VTCM_LAYOUT_PTR_OPTIONAL(__fp16, base, L.off_s_tiles[1], pipeline);
     factx.vtcm_p_tiles[0]     = VTCM_LAYOUT_PTR(__fp16, base, L.off_p_tiles[0]);
     factx.vtcm_p_tiles[1]     = VTCM_LAYOUT_PTR_OPTIONAL(__fp16, base, L.off_p_tiles[1], pipeline);
-    factx.vtcm_d_tiles        = VTCM_LAYOUT_PTR(__fp16, base, L.off_d_tiles);
+    factx.vtcm_d_tiles[0]     = VTCM_LAYOUT_PTR(__fp16, base, L.off_d_tiles[0]);
+    factx.vtcm_d_tiles[1]     = VTCM_LAYOUT_PTR_OPTIONAL(__fp16, base, L.off_d_tiles[1], pipeline);
     factx.vtcm_d_inv_l        = VTCM_LAYOUT_PTR(__fp16, base, L.off_d_inv_l);
     factx.vtcm_m_vec          = VTCM_LAYOUT_PTR(HVX_Vector, base, L.off_m_vec);
     factx.vtcm_l_vec          = VTCM_LAYOUT_PTR(HVX_Vector, base, L.off_l_vec);
@@ -2051,7 +2055,7 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
                             ou_job[prev_buf].o_prev           = o_tile_prev;
                             ou_job[prev_buf].p_tiles          = factx.vtcm_p_tiles[prev_buf];
                             ou_job[prev_buf].v_tiles          = factx.vtcm_v_tiles[prev_buf];
-                            ou_job[prev_buf].d_tiles          = factx.vtcm_d_tiles;
+                            ou_job[prev_buf].d_tiles          = factx.vtcm_d_tiles[prev_buf];
                             ou_job[prev_buf].hmx_scales       = factx.vtcm_hmx_scales_id;
                             ou_job[prev_buf].n_row_tiles      = n_row_tiles;
                             ou_job[prev_buf].n_col_tiles      = hmx_ceil_div(hex_smin(Bc, nek1 - (kv_blk - 1) * Bc), HMX_FP16_TILE_N_COLS);
@@ -2133,7 +2137,7 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
                         ou_job[0].o_prev           = o_tile_prev;
                         ou_job[0].p_tiles          = factx.vtcm_p_tiles[1 - buf_idx];
                         ou_job[0].v_tiles          = factx.vtcm_v_tiles[1 - buf_idx];
-                        ou_job[0].d_tiles          = factx.vtcm_d_tiles;
+                        ou_job[0].d_tiles          = factx.vtcm_d_tiles[1 - buf_idx];
                         ou_job[0].hmx_scales       = factx.vtcm_hmx_scales_id;
                         ou_job[0].n_row_tiles      = n_row_tiles;
                         ou_job[0].n_col_tiles      = last_cols;
@@ -2237,7 +2241,7 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
                             ou_job.o_prev           = o_tile_prev;
                             ou_job.p_tiles          = factx.vtcm_p_tiles[0];
                             ou_job.v_tiles          = factx.vtcm_v_tiles[0];
-                            ou_job.d_tiles          = factx.vtcm_d_tiles;
+                            ou_job.d_tiles          = factx.vtcm_d_tiles[0];
                             ou_job.hmx_scales       = factx.vtcm_hmx_scales_id;
                             ou_job.n_row_tiles      = n_row_tiles;
                             ou_job.n_col_tiles      = n_col_tiles;
