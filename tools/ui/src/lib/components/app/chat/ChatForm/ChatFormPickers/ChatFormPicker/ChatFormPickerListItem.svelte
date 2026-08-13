@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { UI_DATA_ATTRS } from '$lib/constants';
 	import type { Snippet } from 'svelte';
 
 	interface Props {
@@ -24,7 +25,7 @@
 
 <button
 	type="button"
-	data-picker-index={dataIndex}
+	{...{ [UI_DATA_ATTRS.PICKER_INDEX]: dataIndex }}
 	{disabled}
 	{onclick}
 	{onmouseenter}

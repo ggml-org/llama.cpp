@@ -7,6 +7,16 @@ import type { DesktopIconStripItem } from '$lib/types';
 export const FORK_TREE_DEPTH_PADDING = 8;
 export const SYSTEM_MESSAGE_PLACEHOLDER = 'System message';
 
+/** Data attributes for app-level DOM contracts. */
+export const UI_DATA_ATTRS = {
+	ACTIVE: 'data-active',
+	CONVERSATION_ROW: 'data-conversation-row',
+	HIGHLIGHT_THEME_PREVIEW: 'data-highlight-theme-preview',
+	PICKER_INDEX: 'data-picker-index',
+	RESULT_INDEX: 'data-result-index',
+	THUMBNAIL_INDEX: 'data-thumbnail-index'
+} as const;
+
 export const TOOL_GROUP_LABELS = {
 	[ToolSource.BUILTIN]: 'Built-in',
 	[ToolSource.CUSTOM]: 'JSON Schema',

@@ -48,7 +48,7 @@
 		}
 	}
 
-	// Plain-text caret offsets, shared with the contenteditable variant so
+	// Plain-text caret offsets, shared with the rich chat form input variant so
 	// the picker/paste flows can address either renderer through one handle.
 	export function getCaretOffset(): number {
 		if (!textareaElement) return 0;

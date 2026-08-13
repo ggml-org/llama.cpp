@@ -2,6 +2,7 @@
  * Utility functions for markdown processing in MarkdownContent component.
  */
 
+import { MARKDOWN_DATA_ATTRS } from '$lib/constants';
 import type { RootContent as HastRootContent } from 'hast';
 
 /**
@@ -69,7 +70,7 @@ export function getCodeInfoFromTarget(target: HTMLElement): CodeInfo | null {
 		return null;
 	}
 
-	const codeElement = wrapper.querySelector<HTMLElement>('code[data-code-id]');
+	const codeElement = wrapper.querySelector<HTMLElement>(`code[${MARKDOWN_DATA_ATTRS.CODE_ID}]`);
 
 	if (!codeElement) {
 		console.error('No code element found in wrapper');

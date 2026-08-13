@@ -1,4 +1,4 @@
-// Guards the newline contract of the chat-form contenteditable: browsers
+// Guards the newline contract of the ChatFormInputRich: browsers
 // restructure the flat DOM on Enter (`<div>` wrappers, `<br>` shapes) and
 // serialization must fold those back into `\n` so the emitted value never
 // diverges from what is on screen.
@@ -13,7 +13,7 @@ const SOURCE = 'see [docs](file:///a/b) here';
 function editableIn(container: HTMLElement): HTMLElement {
 	const el = container.querySelector('[role="textbox"]');
 
-	if (!(el instanceof HTMLElement)) throw new Error('contenteditable not rendered');
+	if (!(el instanceof HTMLElement)) throw new Error('ChatFormInputRich not rendered');
 
 	return el;
 }

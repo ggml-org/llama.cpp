@@ -182,7 +182,7 @@ export type {
 	GlobSearchChildResult
 } from './glob';
 
-// Contenteditable token types (chat form)
+// ChatFormInputRich token types (chat form)
 export type { ChatFormInputRichToken } from './chat-form-input-rich';
 
 // Agentic types

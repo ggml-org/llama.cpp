@@ -30,12 +30,14 @@ import {
 	getMentionBadgeLabel
 } from './mention-badge';
 import {
+	CODE_TOKEN_ATTR,
 	MENTION_BADGE_CLASSNAME,
+	MENTION_BADGE_DATA_ATTRS,
 	MENTION_BADGE_ICON_CLASSNAME,
 	MENTION_BADGE_SVG_ATTRIBUTES,
 	SETTINGS_KEYS
 } from '$lib/constants';
-import { ChatFormInputRichTokenKind } from '$lib/enums';
+import { BooleanString, ChatFormInputRichTokenKind } from '$lib/enums';
 import { settingsStore } from '$lib/stores/settings.svelte';
 import { toolsStore } from '$lib/stores/tools.svelte';
 import type { ChatFormInputRichToken } from '$lib/types/chat-form-input-rich';
@@ -168,7 +170,8 @@ function pushTextAndBadgeTokens(input: string, tokens: ChatFormInputRichToken[])
 
 function isCodeBlockElement(node: Node | null): node is HTMLElement {
 	return (
-		node instanceof HTMLElement && node.dataset.codeToken === ChatFormInputRichTokenKind.CODE_BLOCK
+		node instanceof HTMLElement &&
+		node.getAttribute(CODE_TOKEN_ATTR) === ChatFormInputRichTokenKind.CODE_BLOCK
 	);
 }
 
@@ -210,9 +213,9 @@ export function serializeContent(root: HTMLElement): string {
 
 			const el = child as HTMLElement;
 
-			if (el.dataset.mentionBadge === 'true') {
-				const name = el.dataset.mentionName ?? '';
-				const path = el.dataset.mentionPath ?? '';
+			if (el.getAttribute(MENTION_BADGE_DATA_ATTRS.BADGE) === BooleanString.TRUE) {
+				const name = el.getAttribute(MENTION_BADGE_DATA_ATTRS.NAME) ?? '';
+				const path = el.getAttribute(MENTION_BADGE_DATA_ATTRS.PATH) ?? '';
 
 				if (name && path) {
 					if (pendingBlockBoundary) {
@@ -227,8 +230,10 @@ export function serializeContent(root: HTMLElement): string {
 				continue;
 			}
 
-			if (el.dataset.codeToken !== undefined) {
-				const isBlock = el.dataset.codeToken === ChatFormInputRichTokenKind.CODE_BLOCK;
+			const codeToken = el.getAttribute(CODE_TOKEN_ATTR);
+
+			if (codeToken !== null) {
+				const isBlock = codeToken === ChatFormInputRichTokenKind.CODE_BLOCK;
 
 				if (isBlock && (pendingBlockBoundary || !first)) out += '\n';
 
@@ -297,8 +302,8 @@ export function domMatchesTokens(root: HTMLElement, tokens: ChatFormInputRichTok
 			if (child.nodeType !== Node.ELEMENT_NODE) continue;
 
 			const el = child as HTMLElement;
-			const isBadge = el.dataset.mentionBadge === 'true';
-			const isCode = el.dataset.codeToken !== undefined;
+			const isBadge = el.getAttribute(MENTION_BADGE_DATA_ATTRS.BADGE) === BooleanString.TRUE;
+			const isCode = el.getAttribute(CODE_TOKEN_ATTR) !== null;
 
 			if (!isBadge && !isCode) {
 				if (!walk(el)) return false;
@@ -313,15 +318,15 @@ export function domMatchesTokens(root: HTMLElement, tokens: ChatFormInputRichTok
 			if (isBadge) {
 				if (token.kind !== ChatFormInputRichTokenKind.BADGE) return false;
 
-				if (token.name !== (el.dataset.mentionName ?? '')) return false;
+				if (token.name !== (el.getAttribute(MENTION_BADGE_DATA_ATTRS.NAME) ?? '')) return false;
 
-				if (token.path !== (el.dataset.mentionPath ?? '')) return false;
+				if (token.path !== (el.getAttribute(MENTION_BADGE_DATA_ATTRS.PATH) ?? '')) return false;
 
 				continue;
 			}
 
 			const codeKind: ChatFormInputRichTokenKind =
-				el.dataset.codeToken === ChatFormInputRichTokenKind.CODE_BLOCK
+				el.getAttribute(CODE_TOKEN_ATTR) === ChatFormInputRichTokenKind.CODE_BLOCK
 					? ChatFormInputRichTokenKind.CODE_BLOCK
 					: ChatFormInputRichTokenKind.CODE_INLINE;
 
@@ -430,8 +435,11 @@ export function rangeToTextOffset(root: HTMLElement, range: Range | null): numbe
 				total += 1;
 			}
 
-			if (el.dataset.mentionBadge === 'true') {
-				const len = badgeSourceLength(el.dataset.mentionName ?? '', el.dataset.mentionPath ?? '');
+			if (el.getAttribute(MENTION_BADGE_DATA_ATTRS.BADGE) === BooleanString.TRUE) {
+				const len = badgeSourceLength(
+					el.getAttribute(MENTION_BADGE_DATA_ATTRS.NAME) ?? '',
+					el.getAttribute(MENTION_BADGE_DATA_ATTRS.PATH) ?? ''
+				);
 
 				if (len === 0) continue;
 
@@ -447,8 +455,10 @@ export function rangeToTextOffset(root: HTMLElement, range: Range | null): numbe
 				continue;
 			}
 
-			if (el.dataset.codeToken !== undefined) {
-				const isBlock = el.dataset.codeToken === ChatFormInputRichTokenKind.CODE_BLOCK;
+			const codeToken = el.getAttribute(CODE_TOKEN_ATTR);
+
+			if (codeToken !== null) {
+				const isBlock = codeToken === ChatFormInputRichTokenKind.CODE_BLOCK;
 
 				if (isBlock && !first) {
 					if (!atOrBeforeCaret(el, 0)) {
@@ -562,7 +572,7 @@ export function buildFragment(tokens: ChatFormInputRichToken[]): DocumentFragmen
 		) {
 			const code = document.createElement('code');
 
-			code.dataset.codeToken = token.kind;
+			code.setAttribute(CODE_TOKEN_ATTR, token.kind);
 			code.textContent = token.text;
 			fragment.appendChild(code);
 
@@ -578,9 +588,9 @@ export function buildFragment(tokens: ChatFormInputRichToken[]): DocumentFragmen
 
 		const badge = document.createElement('span');
 
-		badge.dataset.mentionBadge = 'true';
-		badge.dataset.mentionName = token.name;
-		badge.dataset.mentionPath = token.path;
+		badge.setAttribute(MENTION_BADGE_DATA_ATTRS.BADGE, BooleanString.TRUE);
+		badge.setAttribute(MENTION_BADGE_DATA_ATTRS.NAME, token.name);
+		badge.setAttribute(MENTION_BADGE_DATA_ATTRS.PATH, token.path);
 		badge.title = decodeFileLinkPath(token.path);
 		badge.className = MENTION_BADGE_CLASSNAME;
 		badge.contentEditable = 'false';
@@ -876,8 +886,11 @@ export function textOffsetToRange(root: HTMLElement, offset: number): Range {
 
 			const el = child as HTMLElement;
 
-			if (el.dataset.mentionBadge === 'true') {
-				const len = badgeSourceLength(el.dataset.mentionName ?? '', el.dataset.mentionPath ?? '');
+			if (el.getAttribute(MENTION_BADGE_DATA_ATTRS.BADGE) === BooleanString.TRUE) {
+				const len = badgeSourceLength(
+					el.getAttribute(MENTION_BADGE_DATA_ATTRS.NAME) ?? '',
+					el.getAttribute(MENTION_BADGE_DATA_ATTRS.PATH) ?? ''
+				);
 
 				if (len === 0) continue;
 
@@ -915,8 +928,10 @@ export function textOffsetToRange(root: HTMLElement, offset: number): Range {
 				continue;
 			}
 
-			if (el.dataset.codeToken !== undefined) {
-				const isBlock = el.dataset.codeToken === ChatFormInputRichTokenKind.CODE_BLOCK;
+			const codeToken = el.getAttribute(CODE_TOKEN_ATTR);
+
+			if (codeToken !== null) {
+				const isBlock = codeToken === ChatFormInputRichTokenKind.CODE_BLOCK;
 
 				if (isBlock && (pendingBlockBoundary || !first)) {
 					pendingBlockBoundary = false;

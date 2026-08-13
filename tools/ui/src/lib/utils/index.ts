@@ -207,7 +207,7 @@ export {
 	type CommandDismissSnapshot
 } from './command-token';
 
-// Tokenization for the chat-form contenteditable (mention links + code spans <-> chip DOM)
+// Tokenization for the ChatFormInputRich (mention links + code spans <-> chip DOM)
 export {
 	tokenizeContent,
 	containsCodeSpan,
@@ -223,10 +223,10 @@ export {
 	leadingBadgeEdgeOffset
 } from './chat-form-input-rich-tokenizer';
 
-// Source-space undo/redo history for the chat-form contenteditable
+// Source-space undo/redo history for the ChatFormInputRich
 export { SourceHistory, type SourceHistoryEntry } from './source-history';
 
-// Mention-badge visual contract (used by the contenteditable / rehype
+// Mention-badge visual contract (used by the ChatFormInputRich / rehype
 // DOM paths that build the same chip without a Svelte mount)
 export {
 	containsFileMentionLink,

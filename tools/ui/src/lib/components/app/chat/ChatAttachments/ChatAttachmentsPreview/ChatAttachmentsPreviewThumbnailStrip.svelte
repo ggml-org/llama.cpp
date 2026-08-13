@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { FileText, Music, Video } from '@lucide/svelte';
 	import { HorizontalScrollCarousel } from '$lib/components/app/misc';
-	import { ICON_CLASS_DEFAULT } from '$lib/constants';
+	import { ICON_CLASS_DEFAULT, UI_DATA_ATTRS } from '$lib/constants';
 
 	interface PreviewItem {
 		id: string;
@@ -36,7 +36,7 @@
 		<HorizontalScrollCarousel class="max-w-full">
 			{#each items as item, index (item.id)}
 				<button
-					data-thumbnail-index={index}
+					{...{ [UI_DATA_ATTRS.THUMBNAIL_INDEX]: index }}
 					class={[
 						'relative flex-shrink-0 cursor-pointer overflow-hidden rounded border-2 bg-black/80 backdrop-blur-sm transition-all hover:opacity-90',
 						index === currentIndex ? 'border-white' : 'border-transparent opacity-60',

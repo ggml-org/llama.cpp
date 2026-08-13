@@ -1,4 +1,4 @@
-// Guards the editing-key contract of the chat-form contenteditable:
+// Guards the editing-key contract of the ChatFormInputRich:
 // undo/redo is replayed from source snapshots (the token rebuilds destroy
 // the native undo stack), and Tab is NOT intercepted (WCAG 2.1.2 no
 // keyboard trap), matching the plain textarea.
@@ -13,7 +13,7 @@ const SOURCE = 'see [docs](file:///a/b)';
 function editableIn(container: HTMLElement): HTMLElement {
 	const el = container.querySelector('[role="textbox"]');
 
-	if (!(el instanceof HTMLElement)) throw new Error('contenteditable not rendered');
+	if (!(el instanceof HTMLElement)) throw new Error('ChatFormInputRich not rendered');
 
 	return el;
 }

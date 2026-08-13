@@ -109,7 +109,7 @@
 	}: Props = $props();
 
 	// Component References
-	// Shared handle of the two input renderers (textarea + contenteditable).
+	// Shared handle of the two input renderers (plain textarea + rich chat form input).
 	type ChatInputHandle = {
 		focus(): void;
 		resetHeight(): void;
@@ -125,11 +125,11 @@
 		$state(undefined);
 	let inputRef: ChatInputHandle | undefined = $state(undefined);
 
-	// Render-mode gate: the plain textarea by default, the contenteditable
+	// Render-mode gate: the plain textarea by default, the rich chat form input
 	// while the buffer carries a `file://` mention link or a complete code
 	// span (badges and code chips need a DOM the textarea cannot provide).
 	// Demotes back once neither remains.
-	let useContenteditable = $state(false);
+	let useRichInput = $state(false);
 
 	// Audio Recording State
 	let isRecording = $state(false);
@@ -241,16 +241,15 @@
 	}
 
 	$effect(() => {
-		const wantContenteditable =
-			containsFileMentionLink(value ?? '') || containsCodeSpan(value ?? '');
+		const wantRichInput = containsFileMentionLink(value ?? '') || containsCodeSpan(value ?? '');
 
-		if (useContenteditable === wantContenteditable) return;
+		if (useRichInput === wantRichInput) return;
 
 		if (!caretOffsetPinned) {
 			pendingCaretOffset = inputRef?.getCaretOffset() ?? (value ?? '').length;
 		}
 
-		useContenteditable = wantContenteditable;
+		useRichInput = wantRichInput;
 		queueCaretRestore();
 	});
 
@@ -314,7 +313,7 @@
 
 			// Caret inside a fenced code block (closed, or still open
 			// while being typed): Enter adds a line, never submits. The
-			// contenteditable consumes this case locally; this gate
+			// rich chat form input consumes this case locally; this gate
 			// covers the plain textarea, where skipping submit lets the
 			// native newline through.
 			if (!isModifier && isOffsetInCodeBlock(value ?? '', inputRef?.getCaretOffset() ?? 0)) {
@@ -507,9 +506,9 @@
 		value = built.newValue;
 		onValueChange?.(built.newValue);
 
-		// Already in contenteditable mode: no renderer flip, so the swap
+		// Already in rich chat form input mode: no renderer flip, so the swap
 		// effect's caret restore never runs.
-		if (useContenteditable) {
+		if (useRichInput) {
 			queueCaretRestore();
 		}
 	}
@@ -614,7 +613,7 @@
 				onPaste={handlePaste}
 				{disabled}
 				{placeholder}
-				{useContenteditable}
+				{useRichInput}
 			/>
 
 			{#if mcpResourceStore.hasAttachments}
