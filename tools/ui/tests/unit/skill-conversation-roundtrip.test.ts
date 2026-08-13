@@ -4,6 +4,7 @@ import { skillActivationExtra, isSkillExtra } from '$lib/services/skills-activat
 import { SKILL_READ_TOOL } from '$lib/services/skills-adapters.service';
 import type { DatabaseMessage, ExportedConversation } from '$lib/types/database';
 import type { SkillBaseReadResult } from '$lib/types/skills';
+import { filterByLeafNodeId } from '$lib/utils';
 import { beforeAll, describe, expect, it } from 'vitest';
 
 let conversationsStore: typeof import('$lib/stores/conversations.svelte').conversationsStore;
@@ -46,6 +47,8 @@ function baseResult(): SkillBaseReadResult {
 			metadata: { name: 'demo-skill', description: 'A demo skill', license: 'MIT' }
 		},
 		resources: { paths: [], truncated: false },
+		source: '---\nname: demo-skill\ndescription: A demo skill\nlicense: MIT\n---\n# Body',
+		body_markdown: '# Body',
 		content_xml: '<skill_content name="demo-skill">body &amp; more</skill_content>',
 		diagnostics: []
 	};
@@ -243,5 +246,136 @@ describe('paired message validity for the model', () => {
 		expect(toolApi.role).toBe(MessageRole.TOOL);
 		expect(toolApi.tool_call_id).toBe('call_skill_1');
 		expect(toolApi.content).toBe('<skill_content name="demo-skill">body &amp; more</skill_content>');
+	});
+});
+
+describe('visible-path branch filtering preserves Skills metadata', () => {
+	it('keeps the SKILL extra on the filtered root-to-leaf path and drops the off-path branch', () => {
+		const convId = 'conv-branch';
+		const root: DatabaseMessage = {
+			children: ['user-1'],
+			content: '',
+			convId,
+			id: 'root-1',
+			parent: null,
+			role: MessageRole.USER,
+			timestamp: 0,
+			type: MessageType.ROOT
+		};
+		const user1: DatabaseMessage = {
+			children: ['assistant-1'],
+			content: 'which skill?',
+			convId,
+			id: 'user-1',
+			parent: 'root-1',
+			role: MessageRole.USER,
+			timestamp: 1,
+			type: MessageType.TEXT
+		};
+		const assistant1: DatabaseMessage = {
+			children: ['tool-result-1', 'user-2'],
+			content: '',
+			convId,
+			id: 'assistant-1',
+			parent: 'user-1',
+			role: MessageRole.ASSISTANT,
+			timestamp: 2,
+			toolCalls: JSON.stringify([
+				{
+					id: 'call_1',
+					type: 'function',
+					function: { name: SKILL_READ_TOOL, arguments: '{"name":"demo-skill"}' }
+				}
+			]),
+			type: MessageType.TEXT
+		};
+		const toolResult1: DatabaseMessage = {
+			children: [],
+			content: '<skill_content name="demo-skill">body</skill_content>',
+			convId,
+			extra: [skillActivationExtra(baseResult())],
+			id: 'tool-result-1',
+			parent: 'assistant-1',
+			role: MessageRole.TOOL,
+			timestamp: 3,
+			toolCallId: 'call_1',
+			toolCalls: '',
+			type: MessageType.TEXT
+		};
+		const user2: DatabaseMessage = {
+			children: ['assistant-2'],
+			content: 'edited follow-up',
+			convId,
+			id: 'user-2',
+			parent: 'assistant-1',
+			role: MessageRole.USER,
+			timestamp: 4,
+			type: MessageType.TEXT
+		};
+		const assistant2: DatabaseMessage = {
+			children: ['tool-result-2'],
+			content: '',
+			convId,
+			id: 'assistant-2',
+			parent: 'user-2',
+			role: MessageRole.ASSISTANT,
+			timestamp: 5,
+			toolCalls: JSON.stringify([
+				{
+					id: 'call_2',
+					type: 'function',
+					function: { name: SKILL_READ_TOOL, arguments: '{"name":"demo-skill"}' }
+				}
+			]),
+			type: MessageType.TEXT
+		};
+		const toolResult2: DatabaseMessage = {
+			children: [],
+			content: '<skill_content name="demo-skill">body</skill_content>',
+			convId,
+			extra: [skillActivationExtra(baseResult())],
+			id: 'tool-result-2',
+			parent: 'assistant-2',
+			role: MessageRole.TOOL,
+			timestamp: 6,
+			toolCallId: 'call_2',
+			toolCalls: '',
+			type: MessageType.TEXT
+		};
+		const all = [root, user1, assistant1, toolResult1, user2, assistant2, toolResult2];
+
+		// The visible-path compaction to branch B's leaf keeps the paired
+		// SKILL tool result on the path and filters out branch A entirely.
+		const pathB = filterByLeafNodeId(all, 'tool-result-2', false);
+
+		expect(pathB.map((message) => message.id)).toEqual([
+			'user-1',
+			'assistant-1',
+			'user-2',
+			'assistant-2',
+			'tool-result-2'
+		]);
+		// Same object reference: the filter copies nothing and strips nothing,
+		// so the typed SKILL metadata survives intact.
+		expect(pathB).toContain(toolResult2);
+		expect(pathB).not.toContain(toolResult1);
+
+		const [extra] = toolResult2.extra ?? [];
+
+		expect(isSkillExtra(extra)).toBe(true);
+		expect(extra).toMatchObject({
+			kind: 'base',
+			skillId: 'opaque-demo',
+			name: 'demo-skill',
+			scope: 'project',
+			provider: 'agents'
+		});
+
+		// Navigating to branch A's leaf keeps ITS SKILL record and drops branch B.
+		const pathA = filterByLeafNodeId(all, 'tool-result-1', false);
+
+		expect(pathA.map((message) => message.id)).toEqual(['user-1', 'assistant-1', 'tool-result-1']);
+		expect(pathA).toContain(toolResult1);
+		expect(pathA).not.toContain(toolResult2);
 	});
 });

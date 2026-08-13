@@ -59,6 +59,8 @@ function baseResult(name: string, overrides: Partial<SkillBaseReadResult> = {}):
 		kind: 'skill',
 		skill: { id: `opaque-${name}`, name, scope: 'project', provider: 'agents' },
 		resources: { paths: [], truncated: false },
+		source: `---\nname: ${name}\n---\n# Body`,
+		body_markdown: '# Body',
 		content_xml: `<skill_content name="${name}">body</skill_content>`,
 		diagnostics: [],
 		...overrides
@@ -377,6 +379,53 @@ describe('SkillRunAdapters', () => {
 		// created exactly one durable record (the second call deduped).
 		expect(activation.inputs).toHaveLength(2);
 		expect(activation.activatedIds.has('opaque-demo-skill')).toBe(true);
+	});
+
+	it('treats the same skill name under a changed CWD as a distinct opaque identity requiring its own approval', async () => {
+		const activation = fakeStore();
+
+		// Durable activation of identity A (resolved under /a).
+		activation.activatedIds.add('opaque-id-A');
+		const requestPermission = defaultPermission();
+		const adaptersA = makeAdapters({ cwd: '/a', requestPermission, activation });
+		const adaptersB = makeAdapters({ cwd: '/b', requestPermission, activation });
+
+		mockRead.mockResolvedValueOnce(
+			baseResult('demo-skill', {
+				skill: { id: 'opaque-id-A', name: 'demo-skill', scope: 'project', provider: 'agents' }
+			})
+		);
+		mockRead.mockResolvedValueOnce(
+			baseResult('demo-skill', {
+				skill: { id: 'opaque-id-B', name: 'demo-skill', scope: 'project', provider: 'agents' }
+			})
+		);
+
+		// The already-activated opaque id reads without any consent pause.
+		await adaptersA.execute(readCall(SKILL_READ_TOOL));
+
+		expect(requestPermission).not.toHaveBeenCalled();
+
+		// The same skill name now resolves to a different opaque id (the
+		// server resolved it under the changed CWD): the durable activation
+		// of A does not authorize B, so B requires its own approval.
+		const result = await adaptersB.execute(readCall(SKILL_READ_TOOL), new AbortController().signal);
+
+		expect(requestPermission).toHaveBeenCalledTimes(1);
+		expect(requestPermission).toHaveBeenCalledWith(
+			SKILL_READ_TOOL,
+			SKILL_SERVER_LABEL,
+			{ name: 'demo-skill', scope: 'project', provider: 'agents' },
+			expect.anything()
+		);
+		expect(result.isError).toBe(false);
+		expect(result.content).toBe('<skill_content name="demo-skill">body</skill_content>');
+		expect(result.activationRecorded).toBe(true);
+		// Both allowed reads route through the shared operation: A deduped,
+		// B created a new durable record under its own opaque id.
+		expect(activation.inputs).toHaveLength(2);
+		expect(activation.inputs[0].result.skill.id).toBe('opaque-id-A');
+		expect(activation.inputs[1].result.skill.id).toBe('opaque-id-B');
 	});
 
 	it('shares one pending decision across concurrent base reads of the same resolved identity', async () => {

@@ -52,6 +52,8 @@ function baseResult(overrides: Partial<SkillBaseReadResult> = {}): SkillBaseRead
 			metadata: { name: 'demo-skill', description: 'A demo skill' }
 		},
 		resources: { paths: [], truncated: false },
+		source: '---\nname: demo-skill\ndescription: A demo skill\n---\n# Body',
+		body_markdown: '# Body',
 		content_xml: '<skill_content name="demo-skill">body</skill_content>',
 		diagnostics: [],
 		...overrides
@@ -207,6 +209,124 @@ describe('DurableSkillActivationStore (Task 4 durable seam)', () => {
 		expect(second.created).toBe(false);
 		expect(second.toolResultMessage).toBeNull();
 		expect(mockCreateMessageBranchPair).toHaveBeenCalledTimes(1);
+	});
+
+	it('recordActivation serializes a concurrent slash activation and model read of the same opaque id into one durable record', async () => {
+		conversationsMockState.activeConversation = { currNode: 'last-msg', id: 'conv-cross-race' };
+		conversationsMockState.activeMessages = [{ id: 'last-msg', role: MessageRole.USER } as DatabaseMessage];
+
+		mockGetConversationMessages.mockResolvedValue([
+			{
+				children: ['tool-1'],
+				content: '',
+				convId: 'conv-cross-race',
+				id: 'assistant-1',
+				parent: 'user-1',
+				role: MessageRole.ASSISTANT,
+				timestamp: 1,
+				toolCalls: JSON.stringify([
+					{
+						id: 'call_1',
+						type: 'function',
+						function: { name: 'read_skill', arguments: '{"name":"demo-skill"}' }
+					}
+				]),
+				type: MessageType.TEXT
+			} as DatabaseMessage
+		]);
+
+		// Both calls are issued before either awaits a microtask, so without
+		// the in-flight transaction both would pass the pre-activation check
+		// and persist a duplicate durable record.
+		const slash = skillActivationStore.recordActivation({ conversationId: 'conv-cross-race', result: baseResult() });
+		const model = skillActivationStore.recordActivation({
+			conversationId: 'conv-cross-race',
+			result: baseResult(),
+			toolCallId: 'call_1'
+		});
+
+		const [slashRecord, modelRecord] = await Promise.all([slash, model]);
+
+		expect(slashRecord.created).toBe(true);
+		// The model read waited for the in-flight slash transaction instead of
+		// persisting its own anchored tool result: exactly one durable record.
+		expect(modelRecord.created).toBe(false);
+		expect(modelRecord.toolResultMessage).toBeNull();
+		expect(modelRecord.extra.skillId).toBe('opaque-id-1');
+		expect(mockCreateMessageBranch).not.toHaveBeenCalled();
+		expect(mockCreateMessageBranchPair).toHaveBeenCalledTimes(1);
+		expect(skillActivationStore.isActivated('conv-cross-race', 'opaque-id-1')).toBe(true);
+	});
+
+	it('recordActivation awaits an in-flight model activation when a slash activation of the same opaque id joins', async () => {
+		conversationsMockState.activeConversation = { currNode: 'last-msg', id: 'conv-cross-race-2' };
+		conversationsMockState.activeMessages = [{ id: 'last-msg', role: MessageRole.USER } as DatabaseMessage];
+
+		mockGetConversationMessages.mockResolvedValue([
+			{
+				children: ['tool-1'],
+				content: '',
+				convId: 'conv-cross-race-2',
+				id: 'assistant-1',
+				parent: 'user-1',
+				role: MessageRole.ASSISTANT,
+				timestamp: 1,
+				toolCalls: JSON.stringify([
+					{
+						id: 'call_1',
+						type: 'function',
+						function: { name: 'read_skill', arguments: '{"name":"demo-skill"}' }
+					}
+				]),
+				type: MessageType.TEXT
+			} as DatabaseMessage
+		]);
+
+		// The model call is issued first, so its persistence registers the
+		// in-flight transaction before the slash activation of the same id.
+		const model = skillActivationStore.recordActivation({
+			conversationId: 'conv-cross-race-2',
+			result: baseResult(),
+			toolCallId: 'call_1'
+		});
+		const slash = skillActivationStore.recordActivation({ conversationId: 'conv-cross-race-2', result: baseResult() });
+
+		const [modelRecord, slashRecord] = await Promise.all([model, slash]);
+
+		expect(modelRecord.created).toBe(true);
+		// The slash activation waited for the in-flight model transaction: no
+		// synthetic pair was persisted.
+		expect(slashRecord.created).toBe(false);
+		expect(slashRecord.toolResultMessage).toBeNull();
+		expect(mockCreateMessageBranchPair).not.toHaveBeenCalled();
+		expect(mockCreateMessageBranch).toHaveBeenCalledTimes(1);
+		expect(skillActivationStore.isActivated('conv-cross-race-2', 'opaque-id-1')).toBe(true);
+	});
+
+	it('recordActivation persists nothing and clears the in-flight slot when the persistence fails', async () => {
+		conversationsMockState.activeConversation = { currNode: 'last-msg', id: 'conv-fail-retry' };
+		conversationsMockState.activeMessages = [{ id: 'last-msg', role: MessageRole.USER } as DatabaseMessage];
+
+		mockCreateMessageBranchPair.mockRejectedValueOnce(new Error('db write failed'));
+
+		const first = skillActivationStore.recordActivation({ conversationId: 'conv-fail-retry', result: baseResult() });
+		const second = skillActivationStore.recordActivation({ conversationId: 'conv-fail-retry', result: baseResult() });
+
+		await expect(first).rejects.toThrow('db write failed');
+		await expect(second).rejects.toThrow('db write failed');
+		// No durable activation on a failed persistence.
+		expect(skillActivationStore.isActivated('conv-fail-retry', 'opaque-id-1')).toBe(false);
+
+		// The failed transaction is not sticky: a later activation retries and persists.
+		const retry = await skillActivationStore.recordActivation({
+			conversationId: 'conv-fail-retry',
+			result: baseResult()
+		});
+
+		expect(retry.created).toBe(true);
+		// The concurrent second call did not attempt its own persistence.
+		expect(mockCreateMessageBranchPair).toHaveBeenCalledTimes(2);
+		expect(skillActivationStore.isActivated('conv-fail-retry', 'opaque-id-1')).toBe(true);
 	});
 
 	it('recordActivation anchors a model read to the persisted assistant tool call carrying the model call id', async () => {
