@@ -2336,6 +2336,11 @@ struct ggml_backend_vk_context {
     size_t semaphore_idx, event_idx;
     ggml_vk_garbage_collector gc;
     size_t prealloc_size_x, prealloc_size_y, prealloc_size_split_k, prealloc_size_add_rms_partials, prealloc_size_add_rms_partials_offset;
+    // Peak prealloc size required by the graph currently being computed.
+    // Reset each graph, used to detect when the prealloc buffers can be shrunk.
+    size_t graph_prealloc_size_x {}, graph_prealloc_size_y {}, graph_prealloc_size_split_k {};
+    // Consecutive graphs where the prealloc peak stayed below the shrink threshold.
+    int prealloc_x_shrink_count {}, prealloc_y_shrink_count {}, prealloc_split_k_shrink_count {};
     vk_buffer prealloc_x, prealloc_y, prealloc_split_k, prealloc_add_rms_partials, sync_staging;
     vk::Fence fence, almost_ready_fence;
     bool submit_pending {};
@@ -9267,13 +9272,22 @@ static void ggml_vk_mul_mat_q_f16(ggml_backend_vk_context * ctx, vk_context& sub
                 (split_k > 1 && split_k_size > ctx->device->properties.limits.maxStorageBufferRange)) {
             GGML_ABORT("Requested preallocation size is too large");
         }
+        if (qx_needs_dequant && ctx->graph_prealloc_size_x < x_sz) {
+            ctx->graph_prealloc_size_x = x_sz;
+        }
         if (qx_needs_dequant && ctx->prealloc_size_x < x_sz) {
             ctx->prealloc_size_x = x_sz;
             ggml_vk_preallocate_buffers(ctx, subctx);
         }
+        if ((qy_needs_dequant || quantize_y) && ctx->graph_prealloc_size_y < y_sz) {
+            ctx->graph_prealloc_size_y = y_sz;
+        }
         if ((qy_needs_dequant || quantize_y) && ctx->prealloc_size_y < y_sz) {
             ctx->prealloc_size_y = y_sz;
             ggml_vk_preallocate_buffers(ctx, subctx);
+        }
+        if (split_k > 1 && ctx->graph_prealloc_size_split_k < split_k_size) {
+            ctx->graph_prealloc_size_split_k = split_k_size;
         }
         if (split_k > 1 && ctx->prealloc_size_split_k < split_k_size) {
             ctx->prealloc_size_split_k = split_k_size;
@@ -9578,9 +9592,15 @@ static void ggml_vk_mul_mat_vec_q_f16(ggml_backend_vk_context * ctx, vk_context&
                 (qy_needs_dequant && y_sz > ctx->device->properties.limits.maxStorageBufferRange)) {
             GGML_ABORT("Requested preallocation size is too large");
         }
+        if (qx_needs_dequant && ctx->graph_prealloc_size_x < x_sz) {
+            ctx->graph_prealloc_size_x = x_sz;
+        }
         if (qx_needs_dequant && ctx->prealloc_size_x < x_sz) {
             ctx->prealloc_size_x = x_sz;
             ggml_vk_preallocate_buffers(ctx, subctx);
+        }
+        if ((qy_needs_dequant || quantize_y) && ctx->graph_prealloc_size_y < y_sz) {
+            ctx->graph_prealloc_size_y = y_sz;
         }
         if ((qy_needs_dequant || quantize_y) && ctx->prealloc_size_y < y_sz) {
             ctx->prealloc_size_y = y_sz;
@@ -10218,13 +10238,22 @@ static void ggml_vk_mul_mat_id_q_f16(ggml_backend_vk_context * ctx, vk_context& 
                 (qy_needs_dequant && y_sz > ctx->device->properties.limits.maxStorageBufferRange)) {
             GGML_ABORT("Requested preallocation size is too large");
         }
+        if (qx_needs_dequant && ctx->graph_prealloc_size_x < x_sz) {
+            ctx->graph_prealloc_size_x = x_sz;
+        }
         if (qx_needs_dequant && ctx->prealloc_size_x < x_sz) {
             ctx->prealloc_size_x = x_sz;
             ggml_vk_preallocate_buffers(ctx, subctx);
         }
+        if ((qy_needs_dequant || quantize_y) && ctx->graph_prealloc_size_y < y_sz) {
+            ctx->graph_prealloc_size_y = y_sz;
+        }
         if ((qy_needs_dequant || quantize_y) && ctx->prealloc_size_y < y_sz) {
             ctx->prealloc_size_y = y_sz;
             ggml_vk_preallocate_buffers(ctx, subctx);
+        }
+        if (ctx->graph_prealloc_size_split_k < expert_count_size) {
+            ctx->graph_prealloc_size_split_k = expert_count_size;
         }
         if (ctx->prealloc_size_split_k < expert_count_size) {
             ctx->prealloc_size_split_k = expert_count_size;
@@ -10476,9 +10505,15 @@ static void ggml_vk_mul_mat_vec_id_q_f16(ggml_backend_vk_context * ctx, vk_conte
                 (qy_needs_dequant && y_sz > ctx->device->properties.limits.maxStorageBufferRange)) {
             GGML_ABORT("Requested preallocation size is too large");
         }
+        if (qx_needs_dequant && ctx->graph_prealloc_size_x < x_sz) {
+            ctx->graph_prealloc_size_x = x_sz;
+        }
         if (qx_needs_dequant && ctx->prealloc_size_x < x_sz) {
             ctx->prealloc_size_x = x_sz;
             ggml_vk_preallocate_buffers(ctx, subctx);
+        }
+        if ((qy_needs_dequant || quantize_y) && ctx->graph_prealloc_size_y < y_sz) {
+            ctx->graph_prealloc_size_y = y_sz;
         }
         if ((qy_needs_dequant || quantize_y) && ctx->prealloc_size_y < y_sz) {
             ctx->prealloc_size_y = y_sz;
@@ -10913,6 +10948,9 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
     if (split_k_size > ctx->device->properties.limits.maxStorageBufferRange) {
         GGML_ABORT("Requested preallocation size is too large");
     }
+    if (ctx->graph_prealloc_size_split_k < split_k_size) {
+        ctx->graph_prealloc_size_split_k = split_k_size;
+    }
     if (ctx->prealloc_size_split_k < split_k_size) {
         ctx->prealloc_size_split_k = split_k_size;
         ggml_vk_preallocate_buffers(ctx, subctx);
@@ -10936,6 +10974,9 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
         assert(pipeline_fa_mask_opt);
         ggml_pipeline_request_descriptor_sets(ctx, pipeline_fa_mask_opt, 1);
 
+        if (ctx->graph_prealloc_size_y < mask_opt_size) {
+            ctx->graph_prealloc_size_y = mask_opt_size;
+        }
         if (ctx->prealloc_size_y < mask_opt_size) {
             ctx->prealloc_size_y = mask_opt_size;
             ggml_vk_preallocate_buffers(ctx, subctx);
@@ -13402,9 +13443,15 @@ static void ggml_vk_soft_max(ggml_backend_vk_context * ctx, vk_context& subctx, 
         uint32_t num_wgs = CEIL_DIV(ncols, elems_per_wg);
         size_t tmp_size = num_wgs * nrows_x * sizeof(float);
 
+        if (ctx->graph_prealloc_size_x < tmp_size) {
+            ctx->graph_prealloc_size_x = tmp_size;
+        }
         if (ctx->prealloc_size_x < tmp_size) {
             ctx->prealloc_size_x = tmp_size;
             ggml_vk_preallocate_buffers(ctx, subctx);
+        }
+        if (ctx->graph_prealloc_size_y < tmp_size) {
+            ctx->graph_prealloc_size_y = tmp_size;
         }
         if (ctx->prealloc_size_y < tmp_size) {
             ctx->prealloc_size_y = tmp_size;
@@ -13592,6 +13639,9 @@ static void ggml_vk_argsort(ggml_backend_vk_context * ctx, vk_context& subctx, c
     if (!use_small) {
         const size_t x_sz = size_t{ncolsp2} * nrows * 2 * sizeof(int);
 
+        if (ctx->graph_prealloc_size_x < x_sz) {
+            ctx->graph_prealloc_size_x = x_sz;
+        }
         if (ctx->prealloc_size_x < x_sz) {
             ctx->prealloc_size_x = x_sz;
             ggml_vk_preallocate_buffers(ctx, subctx);
@@ -13721,6 +13771,9 @@ static void ggml_vk_topk(ggml_backend_vk_context * ctx, vk_context& subctx, cons
             dbl_buf_size = ROUNDUP_POW2(dbl_buf_size, ctx->device->properties.limits.minStorageBufferOffsetAlignment);
             const size_t x_sz = dbl_buf_size * 2;
 
+            if (ctx->graph_prealloc_size_x < x_sz) {
+                ctx->graph_prealloc_size_x = x_sz;
+            }
             if (ctx->prealloc_size_x < x_sz) {
                 ctx->prealloc_size_x = x_sz;
                 ggml_vk_preallocate_buffers(ctx, subctx);
@@ -13800,6 +13853,9 @@ static void ggml_vk_cumsum(ggml_backend_vk_context * ctx, vk_context& subctx, co
 
     size_t temp_size = sizeof(float) * elements[0] * ggml_nrows(dst);
 
+    if (ctx->graph_prealloc_size_split_k < temp_size) {
+        ctx->graph_prealloc_size_split_k = temp_size;
+    }
     if (ctx->prealloc_size_split_k < temp_size) {
         ctx->prealloc_size_split_k = temp_size;
         ggml_vk_preallocate_buffers(ctx, subctx);
@@ -15135,6 +15191,11 @@ static void ggml_vk_preallocate_buffers(ggml_backend_vk_context * ctx, vk_contex
             ggml_vk_destroy_buffer(ctx->prealloc_x);
         }
         ctx->prealloc_x = ggml_vk_create_buffer_device(ctx->device, ctx->prealloc_size_x);
+    } else if (ctx->prealloc_size_x > 0 && ctx->prealloc_x->size > ctx->prealloc_size_x * 2) {
+        // Shrink a buffer that is much larger than the recent graphs need
+        VK_LOG_MEMORY("ggml_vk_preallocate_buffers(shrink x_size: " << ctx->prealloc_size_x << ")");
+        ggml_vk_destroy_buffer(ctx->prealloc_x);
+        ctx->prealloc_x = ggml_vk_create_buffer_device(ctx->device, ctx->prealloc_size_x);
     }
     if (ctx->prealloc_y == nullptr || (ctx->prealloc_size_y > 0 && ctx->prealloc_y->size < ctx->prealloc_size_y)) {
         VK_LOG_MEMORY("ggml_vk_preallocate_buffers(y_size: " << ctx->prealloc_size_y << ")");
@@ -15146,6 +15207,14 @@ static void ggml_vk_preallocate_buffers(ggml_backend_vk_context * ctx, vk_contex
         ctx->prealloc_y_last_pipeline_used = nullptr;
         ctx->prealloc_y_last_tensor_used = nullptr;
         ctx->prealloc_y_last_decode_vector_staging = false;
+    } else if (ctx->prealloc_size_y > 0 && ctx->prealloc_y->size > ctx->prealloc_size_y * 2) {
+        // Shrink a buffer that is much larger than the recent graphs need
+        VK_LOG_MEMORY("ggml_vk_preallocate_buffers(shrink y_size: " << ctx->prealloc_size_y << ")");
+        ggml_vk_destroy_buffer(ctx->prealloc_y);
+        ctx->prealloc_y = ggml_vk_create_buffer_device(ctx->device, ctx->prealloc_size_y);
+        ctx->prealloc_y_last_pipeline_used = nullptr;
+        ctx->prealloc_y_last_tensor_used = nullptr;
+        ctx->prealloc_y_last_decode_vector_staging = false;
     }
     if (ctx->prealloc_split_k == nullptr || (ctx->prealloc_size_split_k > 0 && ctx->prealloc_split_k->size < ctx->prealloc_size_split_k)) {
         VK_LOG_MEMORY("ggml_vk_preallocate_buffers(split_k_size: " << ctx->prealloc_size_split_k << ")");
@@ -15153,6 +15222,11 @@ static void ggml_vk_preallocate_buffers(ggml_backend_vk_context * ctx, vk_contex
         if (ctx->prealloc_split_k != nullptr) {
             ggml_vk_destroy_buffer(ctx->prealloc_split_k);
         }
+        ctx->prealloc_split_k = ggml_vk_create_buffer_device(ctx->device, ctx->prealloc_size_split_k);
+    } else if (ctx->prealloc_size_split_k > 0 && ctx->prealloc_split_k->size > ctx->prealloc_size_split_k * 2) {
+        // Shrink a buffer that is much larger than the recent graphs need
+        VK_LOG_MEMORY("ggml_vk_preallocate_buffers(shrink split_k_size: " << ctx->prealloc_size_split_k << ")");
+        ggml_vk_destroy_buffer(ctx->prealloc_split_k);
         ctx->prealloc_split_k = ggml_vk_create_buffer_device(ctx->device, ctx->prealloc_size_split_k);
     }
     if (ctx->prealloc_add_rms_partials == nullptr || (ctx->prealloc_size_add_rms_partials > 0 && ctx->prealloc_add_rms_partials->size < ctx->prealloc_size_add_rms_partials)) {
@@ -16955,6 +17029,11 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
     ctx->do_add_rms_partials = false;
     ctx->do_add_rms_partials_offset_calculation = false;
 
+    // Reset the per-graph prealloc peaks, they accumulate during the node loop below
+    ctx->graph_prealloc_size_x = 0;
+    ctx->graph_prealloc_size_y = 0;
+    ctx->graph_prealloc_size_split_k = 0;
+
     int last_node = cgraph->n_nodes - 1;
 
     // If the last op in the cgraph isn't backend GPU, the command buffer doesn't get closed properly
@@ -17391,6 +17470,44 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
 
     if (!ctx->device->support_async) {
         ggml_vk_synchronize(ctx);
+    }
+
+    // Shrink the prealloc buffers if they are much larger than what the recent
+    // graphs need. Only shrink after several consecutive low-demand graphs to
+    // avoid churn, and only when the peak was actually used this graph.
+    // The buffers grow back through the normal preallocate path if needed.
+    const int prealloc_shrink_threshold = 10;
+    auto const track_shrink = [&](size_t graph_size, size_t buf_size, int & count) -> bool {
+        if (graph_size > 0 && buf_size > 0 && graph_size * 2 < buf_size) {
+            count++;
+        } else {
+            count = 0;
+        }
+        return count >= prealloc_shrink_threshold;
+    };
+
+    bool do_shrink = track_shrink(ctx->graph_prealloc_size_x, ctx->prealloc_x ? ctx->prealloc_x->size : 0, ctx->prealloc_x_shrink_count);
+    do_shrink = track_shrink(ctx->graph_prealloc_size_y, ctx->prealloc_y ? ctx->prealloc_y->size : 0, ctx->prealloc_y_shrink_count) || do_shrink;
+    do_shrink = track_shrink(ctx->graph_prealloc_size_split_k, ctx->prealloc_split_k ? ctx->prealloc_split_k->size : 0, ctx->prealloc_split_k_shrink_count) || do_shrink;
+
+    if (do_shrink) {
+        // Wait for pending work before destroying the buffers
+        ggml_vk_synchronize(ctx);
+
+        if (ctx->prealloc_x_shrink_count >= prealloc_shrink_threshold) {
+            ctx->prealloc_size_x = ctx->graph_prealloc_size_x;
+            ctx->prealloc_x_shrink_count = 0;
+        }
+        if (ctx->prealloc_y_shrink_count >= prealloc_shrink_threshold) {
+            ctx->prealloc_size_y = ctx->graph_prealloc_size_y;
+            ctx->prealloc_y_shrink_count = 0;
+        }
+        if (ctx->prealloc_split_k_shrink_count >= prealloc_shrink_threshold) {
+            ctx->prealloc_size_split_k = ctx->graph_prealloc_size_split_k;
+            ctx->prealloc_split_k_shrink_count = 0;
+        }
+
+        ggml_vk_preallocate_buffers(ctx, nullptr);
     }
 
     return GGML_STATUS_SUCCESS;
