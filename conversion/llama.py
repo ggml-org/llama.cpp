@@ -73,6 +73,9 @@ class LlamaModel(TextModel):
             # if present, else derive from the target layer count.
             target_num_layers = target_config["num_hidden_layers"]
             aux_layer_ids = eagle3_raw_config.get("eagle_aux_hidden_state_layer_ids")
+            if aux_layer_ids is None:
+                # EAGLE-3.1 checkpoints nest these under "eagle_config"
+                aux_layer_ids = (eagle3_raw_config.get("eagle_config") or {}).get("eagle_aux_hidden_state_layer_ids")
             if aux_layer_ids:
                 target_layers = aux_layer_ids
             else:
