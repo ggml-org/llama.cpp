@@ -192,7 +192,7 @@ void server_queue::worker_stop() {
 }
 
 void server_queue::yield_to_queue(std::function<void()> && work) {
-    GGML_ASSERT(worker.thread.joinable() && "yield_to_queue() must be called from the start_loop() thread");
+    GGML_ASSERT(worker.thread.joinable() && "yield_to_queue() requires start_loop() to be running");
 
     QUE_DBG("%s", "yielding to queue\n");
 
