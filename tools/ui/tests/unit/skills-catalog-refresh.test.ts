@@ -44,6 +44,13 @@ interface PendingRequest {
 	resolve: (response: Response) => void;
 }
 
+/**
+ * Requests a test captured but never resolved (so the shared store entry stays
+ * live). afterEach releases them so a settled entry cannot leak into the next
+ * test's deduplication decision.
+ */
+const liveRequests: Array<() => void> = [];
+
 /** Stub fetch to capture requests without resolving them until asked. */
 function captureFetch(pending: PendingRequest[]): Mock {
 	const fetchMock = vi.fn(
@@ -55,6 +62,7 @@ function captureFetch(pending: PendingRequest[]): Mock {
 					signal: init?.signal ?? new AbortController().signal,
 					url: String(input)
 				});
+				liveRequests.push(() => resolve(jsonResponse(makeCatalog('released'))));
 			})
 	);
 
@@ -67,7 +75,16 @@ function captureFetch(pending: PendingRequest[]): Mock {
 const TEST_CWDS = [undefined, '/a', '/b'] as const;
 
 describe('useSkillCatalogRefresh', () => {
-	afterEach(() => {
+	afterEach(async () => {
+		// Settle any still-pending captured request so its shared store entry
+		// is removed before the next test probes the same CWD.
+		for (const release of liveRequests) release();
+		liveRequests.length = 0;
+		const { promise, resolve } = Promise.withResolvers<void>();
+
+		setTimeout(resolve, 0);
+		await promise;
+
 		vi.restoreAllMocks();
 		vi.unstubAllGlobals();
 		for (const cwd of TEST_CWDS) {
@@ -201,5 +218,40 @@ describe('useSkillCatalogRefresh', () => {
 		refresh.onCwdChange('/a');
 
 		expect(pending).toHaveLength(1);
+	});
+
+	it('shares one request between sidebar probing and route loading, while retry forces a new one', async () => {
+		const pending: PendingRequest[] = [];
+
+		captureFetch(pending);
+		const refresh = useSkillCatalogRefresh();
+		const probeController = new AbortController();
+
+		const probe = skillsStore.probeAvailability('/a', probeController.signal);
+
+		refresh.onCwdChange('/a');
+
+		// Sidebar probing and initial route loading for one CWD share one request.
+		expect(pending).toHaveLength(1);
+		expect(pending[0].headers).toMatchObject({ 'x-skill-cwd': '/a' });
+
+		pending[0].resolve(jsonResponse(makeCatalog('alpha')));
+
+		await Promise.all([
+			probe,
+			vi.waitFor(() => expect(skillsStore.slotFor('/a')?.status).toBe('ready'))
+		]);
+
+		expect(skillsStore.availability).toBe('available');
+
+		// Retry is a forced refresh and always issues a fresh request.
+		refresh.retry();
+		expect(pending).toHaveLength(2);
+
+		pending[1].resolve(jsonResponse(makeCatalog('alpha-2')));
+
+		await vi.waitFor(() => expect(skillsStore.slotFor('/a')?.catalog?.skills.map((s) => s.name)).toEqual(['alpha-2']));
+
+		probeController.abort();
 	});
 });
