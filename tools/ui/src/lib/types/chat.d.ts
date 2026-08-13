@@ -151,6 +151,11 @@ export interface ChatStreamCallbacks {
 		extras?: DatabaseMessageExtra[]
 	) => Promise<void>;
 	createAssistantMessage?: () => Promise<DatabaseMessage>;
+	/** Notifies the callback layer that a tool result message was created
+	 *  outside the stream's own `createToolResultMessage` (the shared Skills
+	 *  activation operation persisted it directly), so the parent pointer for
+	 *  the next turn tracks the new leaf. */
+	onToolResultMessageCreated?: (messageId: string) => void;
 	onFlowComplete?: (timings?: ChatMessageTimings) => void;
 	onError?: (error: Error) => void;
 	onTurnComplete?: (intermediateTimings: ChatMessageTimings) => void;

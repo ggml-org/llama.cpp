@@ -12,12 +12,14 @@ import type {
 	SkillCatalogEntry,
 	SkillCatalogResponse,
 	SkillIdentity,
-	SkillPackedCatalog
+	SkillPackedCatalog,
+	SkillResourceReadResult
 } from '$lib/types';
-import { MessageRole, ToolPermissionDecision } from '$lib/enums';
+import { MessageRole, ToolCallType, ToolPermissionDecision } from '$lib/enums';
 import type { AgenticToolCallPayload } from '$lib/types/agentic';
 import type { DatabaseMessage } from '$lib/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { Mock } from 'vitest';
 
 vi.mock('$lib/services/skills.service', () => ({
 	SkillsService: { list: vi.fn(), read: vi.fn() }
@@ -25,7 +27,8 @@ vi.mock('$lib/services/skills.service', () => ({
 
 const mockRead = vi.mocked(SkillsService.read);
 
-type PermissionMock = (...args: unknown[]) => Promise<ToolPermissionDecision>;
+type PermissionFn = (...args: unknown[]) => Promise<ToolPermissionDecision>;
+type PermissionMock = Mock<PermissionFn>;
 
 function makeEntry(name: string): SkillCatalogEntry {
 	return {
@@ -62,7 +65,7 @@ function baseResult(name: string, overrides: Partial<SkillBaseReadResult> = {}):
 	};
 }
 
-function resourceResult(name: string, path: string): SkillBaseReadResult {
+function resourceResult(name: string, path: string): SkillResourceReadResult {
 	return {
 		kind: 'resource',
 		skill: { id: `opaque-${name}`, name, scope: 'project', provider: 'agents' },
@@ -73,7 +76,7 @@ function resourceResult(name: string, path: string): SkillBaseReadResult {
 }
 
 function defaultPermission(): PermissionMock {
-	const mock = vi.fn<PermissionMock>();
+	const mock = vi.fn<PermissionFn>();
 
 	mock.mockResolvedValue(ToolPermissionDecision.ONCE);
 
@@ -173,7 +176,7 @@ function readCall(name: string, path?: string): AgenticToolCallPayload {
 
 	return {
 		id: 'call_1',
-		type: 'function',
+		type: ToolCallType.FUNCTION,
 		function: { name, arguments: args }
 	};
 }
@@ -334,8 +337,7 @@ describe('SkillRunAdapters', () => {
 			'<skill_resource name="demo-skill" path="refs/DETAILS.md">data</skill_resource>'
 		);
 		expect(requestPermission).not.toHaveBeenCalled();
-		expect(result.extras?.[0].kind).toBe('resource');
-		expect(result.extras?.[0].path).toBe('refs/DETAILS.md');
+		expect(result.extras?.[0]).toMatchObject({ kind: 'resource', path: 'refs/DETAILS.md' });
 	});
 
 	it('runs the approval flow for a resource read of an unapproved identity, showing the requested path, with a session-only record', async () => {
@@ -356,7 +358,7 @@ describe('SkillRunAdapters', () => {
 		expect(result.content).toBe('<skill_resource name="demo-skill" path="refs/DETAILS.md">data</skill_resource>');
 		// Resource approvals are session-only: no durable record, the flow persists the message.
 		expect(result.activationRecorded).toBeUndefined();
-		expect(result.extras?.[0].kind).toBe('resource');
+		expect(result.extras?.[0]).toMatchObject({ kind: 'resource' });
 		expect(activation.inputs).toHaveLength(1);
 	});
 

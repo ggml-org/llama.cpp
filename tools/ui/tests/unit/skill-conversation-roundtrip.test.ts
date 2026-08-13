@@ -147,7 +147,9 @@ function makeSession(): ExportedConversation {
 describe('conversation export/import round trip with Skills metadata', () => {
 	it('retains the typed SKILL metadata, the paired message structure, and ordinary non-Skills messages', async () => {
 		const jsonl = conversationsStore.serializeSessionToJsonl(makeSession());
-		const sessions = await conversationsStore.parseImportFile(new File([jsonl], 'export.jsonl'));
+		const sessions: ExportedConversation[] = await conversationsStore.parseImportFile(
+			new File([jsonl], 'export.jsonl')
+		);
 
 		expect(sessions).toHaveLength(1);
 
@@ -182,14 +184,18 @@ describe('conversation export/import round trip with Skills metadata', () => {
 			scope: 'project',
 			provider: 'agents'
 		});
-		expect(extra.metadata?.license).toBe('MIT');
+		if (isSkillExtra(extra)) {
+			expect(extra.metadata?.license).toBe('MIT');
+		}
 	});
 
 	it('preserves the paired structure when the export is a multi-session JSONL file', async () => {
 		const jsonl = [makeSession(), makeSession()]
 			.map((s) => conversationsStore.serializeSessionToJsonl(s))
 			.join(NEWLINE);
-		const sessions = await conversationsStore.parseImportFile(new File([jsonl], 'multi.jsonl'));
+		const sessions: ExportedConversation[] = await conversationsStore.parseImportFile(
+			new File([jsonl], 'multi.jsonl')
+		);
 
 		for (const session of sessions) {
 			const assistant = session.messages.find((m) => m.id === 'assistant-1');
@@ -210,7 +216,9 @@ describe('conversation export/import round trip with Skills metadata', () => {
 		] as unknown as typeof toolResult.extra;
 
 		const jsonl = conversationsStore.serializeSessionToJsonl(session);
-		const sessions = await conversationsStore.parseImportFile(new File([jsonl], 'export.jsonl'));
+		const sessions: ExportedConversation[] = await conversationsStore.parseImportFile(
+			new File([jsonl], 'export.jsonl')
+		);
 		const [extra] = sessions[0].messages.find((m) => m.id === 'tool-result-1')!.extra ?? [];
 
 		// The record survives as opaque data but is not a valid activation:
@@ -225,10 +233,12 @@ describe('paired message validity for the model', () => {
 		const assistantApi = await ChatService.convertDbMessageToApiChatMessageData(assistant);
 		const toolApi = await ChatService.convertDbMessageToApiChatMessageData(toolResult);
 
+		const toolCalls = assistantApi.tool_calls ?? [];
+
 		expect(assistantApi.role).toBe(MessageRole.ASSISTANT);
 		expect(assistantApi.content).toBe('');
-		expect(assistantApi.tool_calls?.[0].id).toBe('call_skill_1');
-		expect(assistantApi.tool_calls?.[0].function.name).toBe(SKILL_READ_TOOL);
+		expect(toolCalls[0].id).toBe('call_skill_1');
+		expect(toolCalls[0].function!.name).toBe(SKILL_READ_TOOL);
 
 		expect(toolApi.role).toBe(MessageRole.TOOL);
 		expect(toolApi.tool_call_id).toBe('call_skill_1');
