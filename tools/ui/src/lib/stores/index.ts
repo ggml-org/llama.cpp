@@ -34,8 +34,6 @@ export { contextStatsStore } from './context-stats.svelte';
 // MCP
 export { mcpStore } from './mcp.svelte';
 
-export { mcpResourceStore } from './mcp-resources.svelte';
-
 // MODELS
 export { modelsStore } from './models.svelte';
 
