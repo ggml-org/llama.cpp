@@ -47,8 +47,6 @@ class MiniMaxText01Model(TextModel):
             self._experts[bid][name] = data_torch
 
             if len(self._experts[bid]) >= n_experts * 3:
-                tensors: list[tuple[str, Tensor]] = []
-
                 # merge the experts into a single 3d tensor
                 for wid in ["w1", "w2", "w3"]:
                     datas: list[Tensor] = []
@@ -64,12 +62,12 @@ class MiniMaxText01Model(TextModel):
 
                     new_name = self.map_tensor_name(merged_name)
 
-                    tensors.append((new_name, data_torch))
-                return tensors
+                    yield from super().modify_tensors(data_torch, new_name, bid)
+                return
             else:
-                return []
+                return
 
-        return [(self.map_tensor_name(name), data_torch)]
+        yield from super().modify_tensors(data_torch, name, bid)
 
 
 @ModelBase.register("MiniMaxM2ForCausalLM")
