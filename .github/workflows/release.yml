@@ -748,8 +748,6 @@ jobs:
       - name: Pack artifacts
         id: pack_artifacts
         run: |
-          $dest = ".\build\bin\Release"
-          Copy-Item LICENSE $dest
           7z a -snl llama-bin-win-cpu-${{ matrix.arch }}.zip .\build\bin\Release\*
 
       - name: Upload artifacts
