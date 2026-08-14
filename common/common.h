@@ -285,12 +285,23 @@ struct common_params_sampling {
 
     // reasoning budget sampler parameters
     // these are populated by the server/CLI based on chat template params
+    bool                      reasoning_budget_enabled  = false; // master switch: must be true for the budget/soft/intro/grace mechanism to run at all
     int32_t                   reasoning_budget_tokens   = -1;  // -1 = disabled, >= 0 = token budget
     std::vector<llama_token>  reasoning_budget_start;          // start tag token sequence
     std::vector<llama_tokens> reasoning_budget_end;            // end tag token sequences; the first tag is used as the forcing sequence
     std::vector<llama_token>  reasoning_budget_forced;         // forced sequence (message + first end tag)
     std::string               reasoning_budget_message;        // message injected before end tag when budget exhausted
     bool                      reasoning_control = false;       // create the budget sampler on demand so reasoning can be ended at runtime
+
+    float                     reasoning_budget_soft_ratio   = -1.0f; // <= 0 = disabled, (0,1] = fraction of budget at which to warn
+    std::vector<llama_token>  reasoning_budget_soft_forced;         // tokenized soft warning message (no end tag)
+    std::string               reasoning_budget_soft_message;        // soft warning message injected at the soft threshold
+
+    std::vector<llama_token>  reasoning_budget_intro_forced;        // tokenized intro message forced when the block starts (empty = disabled)
+    std::string               reasoning_budget_intro_message =      // intro message announcing the budget; supports a {budget} placeholder
+        "I'll keep this reasoning under {budget} tokens, so I'll stay focused and efficient. ";
+
+    int32_t                  reasoning_budget_grace_tokens = 0;    // <= 0 = force immediately, N>0 = wait up to N tokens for a paragraph break
 
     bool backend_sampling = false;
 
