@@ -689,12 +689,17 @@ static struct gguf_context * gguf_init_from_reader(const struct gguf_reader & gr
             }
 
             // check that the total number of elements is representable
-            // (a zero-element tensor is trivially representable; the guard also avoids a division by zero below)
-            if (ok && ggml_nelements(&info.t) > 0 &&
-                ((INT64_MAX/info.t.ne[1] <= info.t.ne[0]) ||
-                 (INT64_MAX/info.t.ne[2] <= info.t.ne[0]*info.t.ne[1]) ||
-                 (INT64_MAX/info.t.ne[3] <= info.t.ne[0]*info.t.ne[1]*info.t.ne[2]))) {
+            bool ne_overflow = false;
+            int64_t ne_total = info.t.ne[0];
+            for (uint32_t j = 1; ok && j < GGML_MAX_DIMS; ++j) {
+                if (info.t.ne[j] != 0 && ne_total != 0 && INT64_MAX/info.t.ne[j] <= ne_total) {
+                    ne_overflow = true;
+                    break;
+                }
+                ne_total *= info.t.ne[j];
+            }
 
+            if (ok && ne_overflow) {
                 GGML_LOG_ERROR("%s: total number of elements in tensor '%s' with shape "
                     "(%" PRIi64 ", %" PRIi64 ", %" PRIi64 ", %" PRIi64 ") is >= %" PRIi64 "\n",
                     __func__, info.t.name, info.t.ne[0], info.t.ne[1], info.t.ne[2], info.t.ne[3], INT64_MAX);

@@ -603,7 +603,7 @@ struct clip_image_u8 {
             // return a dummy value, so that legacy code can still process image without errors
             return { 0, 0, 0 };
         }
-        int idx = (y * nx + x) * 3;
+        size_t idx = ((size_t) y * (size_t) nx + (size_t) x) * 3;
         return { buf[idx], buf[idx + 1], buf[idx + 2] };
     }
 
@@ -611,8 +611,8 @@ struct clip_image_u8 {
         if (is_placeholder()) {
             return; // no-op
         }
-        int idx = (y * nx + x) * 3;
-        buf[idx] = rgb[0];
+        size_t idx = ((size_t) y * (size_t) nx + (size_t) x) * 3;
+        buf[idx]     = rgb[0];
         buf[idx + 1] = rgb[1];
         buf[idx + 2] = rgb[2];
     }
