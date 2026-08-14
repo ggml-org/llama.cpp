@@ -2066,7 +2066,8 @@ struct ggml_vk_garbage_collector {
 static void ggml_vk_preallocate_buffers(ggml_backend_vk_context * ctx, vk_context subctx);
 static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested = nullptr);
 static void ggml_pipeline_allocate_descriptor_sets(ggml_backend_vk_context * ctx);
-static bool ggml_vk_intel_windows_driver_equals_or_newer_than(uint32_t driver_version, uint32_t threshold_major, uint32_t threshold_minor);
+static bool ggml_vk_intel_windows_driver_in_range(uint32_t driver_version,
+    uint32_t lower_major, uint32_t lower_minor, uint32_t upper_major, uint32_t upper_minor);
 
 static bool vk_memory_logger_enabled = false;
 
@@ -5742,10 +5743,9 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
     ggml_vk_create_pipeline(device, device->pipeline_argmax_f32, "argmax_f32", argmax_f32_len, argmax_f32_data, "main", 2, sizeof(vk_op_push_constants), {1, 1, 1}, { device->subgroup_size }, 1);
 
     ggml_vk_create_pipeline(device, device->pipeline_sum_rows_f32, "sum_rows_f32", sum_rows_f32_len, sum_rows_f32_data, "main", 2, sizeof(vk_op_sum_rows_push_constants), {1, 1, 1}, { device->subgroup_size }, 1);
-    // Intel Windows driver older than 32.0.101.8860 will crash when using fwht kernels on Xe2+ GPUS so we gate that here
+    // Intel Windows driver in range [32.0.101.8509, 32.0.101.8860) will crash when using fwht kernels so we gate that here
     const bool can_use_fwht = device->driver_id != vk::DriverId::eIntelProprietaryWindows ||
-        device->architecture != vk_device_architecture::INTEL_XE2 ||
-        (device->architecture == vk_device_architecture::INTEL_XE2 && ggml_vk_intel_windows_driver_equals_or_newer_than(device->properties.driverVersion, 101, 8860));
+        !ggml_vk_intel_windows_driver_in_range(device->properties.driverVersion, 101, 8509, 101, 8860);
     if (can_use_fwht && device->subgroup_basic && device->subgroup_shuffle) {
         int idx = 0;
         for (uint32_t n : {64, 128, 256, 512}) {
@@ -18871,17 +18871,24 @@ static uint32_t ggml_vk_intel_shader_core_count(const vk::PhysicalDevice& vkdev)
     }
 }
 
-static bool ggml_vk_intel_windows_driver_equals_or_newer_than(uint32_t driver_version, uint32_t threshold_major, uint32_t threshold_minor) {
+// checks whether lower <= driver_version < upper, with each bound given as xxx.yyyy
+static bool ggml_vk_intel_windows_driver_in_range(uint32_t driver_version,
+        uint32_t lower_major, uint32_t lower_minor, uint32_t upper_major, uint32_t upper_minor) {
 #if defined(_WIN32)
     // Intel Windows encodes xxx.yyyy as [31:14].[13:0].
     const uint32_t major = driver_version >> 14;
     const uint32_t minor = driver_version & 0x3fff;
 
-    return major > threshold_major || (major == threshold_major && minor >= threshold_minor);
+    const bool ge_lower = major > lower_major || (major == lower_major && minor >= lower_minor);
+    const bool lt_upper = major < upper_major || (major == upper_major && minor < upper_minor);
+
+    return ge_lower && lt_upper;
 #else
     GGML_UNUSED(driver_version);
-    GGML_UNUSED(threshold_major);
-    GGML_UNUSED(threshold_minor);
+    GGML_UNUSED(lower_major);
+    GGML_UNUSED(lower_minor);
+    GGML_UNUSED(upper_major);
+    GGML_UNUSED(upper_minor);
     return true;
 #endif
 }
