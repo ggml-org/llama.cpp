@@ -1126,6 +1126,8 @@ class ModelBase:
         except KeyError:
             raise NotImplementedError(f'Architecture {arch!r} not supported!') from None
 
+    def get_block_count(self) -> Any:
+        return self.find_hparam(["n_layers", "num_hidden_layers", "n_layer", "num_layers"])
 
 class TextModel(ModelBase):
     model_type = ModelType.TEXT
@@ -1142,7 +1144,7 @@ class TextModel(ModelBase):
             # move the text_config to the root level
             self.hparams = {**self.hparams, **self.hparams["text_config"]}
 
-        self.block_count = self.find_hparam(["n_layers", "num_hidden_layers", "n_layer", "num_layers"])
+        self.block_count = self.get_block_count()
         self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
 
         self.rope_parameters = self.hparams.get("rope_parameters", self.hparams.get("rope_scaling")) or {}

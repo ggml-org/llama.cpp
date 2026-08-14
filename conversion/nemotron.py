@@ -497,3 +497,11 @@ class NemotronHModel(GraniteHybridModel):
             experts = [k for d in self._experts for k in d.keys()]
             if len(experts) > 0:
                 raise ValueError(f"Unprocessed experts: {experts}")
+
+    def get_block_count(self) -> Any:
+        types = self.find_hparam(["layers_block_type"], True)
+
+        if types is not None:
+            return len(types)
+
+        return super().get_block_count()
