@@ -688,97 +688,99 @@ struct server_slot {
         other.prompt = prompt.clone();
         other.init_sampler();
     }
-
-    // returns 0 on success
-    // caller need to update prompt.tokens after a successful call to keep track of the processing progress
-    int process_mtmd_chunk(size_t idx, size_t & n_tokens_out) {
-        GGML_ASSERT(mctx);
-        const auto & input_tokens = task->tokens;
-        const auto & chunk = input_tokens.find_chunk(idx);
-        int32_t res = 0;
-
-        auto try_decode = [&]() -> int32_t {
-            if (mbatch) {
-                float * embd = mtmd_batch_get_output_embd(mbatch.get(), chunk.get());
-                if (embd) {
-                    void * cb_data = spec;
-                    static auto cb = [](llama_batch batch, void * user_data) {
-                        common_speculative * spec = static_cast<common_speculative *>(user_data);
-                        if (!common_speculative_process(spec, batch)) {
-                            return 1;
-                        }
-                        return 0;
-                    };
-
-                    llama_pos new_n_past; // unused for now
-                    res = mtmd_helper_decode_image_chunk(
-                        mctx,
-                        ctx_tgt,
-                        chunk.get(),
-                        embd,
-                        prompt.tokens.pos_next(),
-                        id,
-                        llama_n_batch(ctx_tgt),
-                        &new_n_past,
-                        cb,
-                        cb_data
-                    );
-                    if (res != 0) {
-                        SLT_ERR(*this, "failed to decode mtmd chunk, idx = %zu, res = %d\n", idx, res);
-                        return -1;
-                    }
-                    n_tokens_out = mtmd_input_chunk_get_n_tokens(chunk.get());
-                    return 0; // success
-                }
-            }
-            return 1; // (non-error) need to create & encode batch
-        };
-
-        // if the batch is already exist, try searching & encode
-        res = try_decode();
-        if (res == 0) {
-            return 0;
-        }
-        if (res < 0) {
-            // fatal error
-            return res;
-        }
-
-        // otherwise, the batch is either uninitialized or is used up
-        // we need to create & encode a new batch
-        mbatch.reset(mtmd_batch_init(mctx));
-        res = mtmd_batch_add_chunk(mbatch.get(), chunk.get());
-        GGML_ASSERT(res == 0); // we should never have an empty batch
-
-        // try batching as much as possible
-        int n_added = 1;
-        size_t idx_cur = idx;
-        while (res == 0) {
-            auto [next_chunk, next_idx] = input_tokens.find_next_media_chunk(idx_cur);
-            if (next_chunk == nullptr) {
-                break;
-            }
-            res = mtmd_batch_add_chunk(mbatch.get(), next_chunk->get());
-            n_added += (res == 0 ? 1 : 0);
-            idx_cur = next_idx;
-            SLT_DBG(*this, "try adding media chunk idx = %zu to batch, res = %d\n", next_idx, res);
-            // if res != 0, batch is full or chunk is not compatible -> this loop breaks
-        }
-
-        // TODO @ngxson : move this log line to debug when it become more stable
-        SLT_TRC(*this, "encoding mtmd batch from idx = %zu, n_chunks = %d\n", idx, n_added);
-
-        res = mtmd_batch_encode(mbatch.get());
-        if (res != 0) {
-            SLT_ERR(*this, "failed to encode mtmd batch for chunk idx = %zu, res = %d\n", idx, res);
-            return -1;
-        }
-
-        return try_decode();
-    }
 };
 
+// returns 0 on success
+// caller need to update prompt.tokens after a successful call to keep track of the processing progress
+// note: this is not a member of server_slot because we want to run it inside yield_to_queue
+//       slot is passed as const to avoid accidental modification of the slot state
+//       some pointers are allowed to be used, they are not used by to_json()
+static int process_mtmd_chunk(const server_slot & slot, mtmd::batch_ptr & mbatch, size_t idx, size_t & n_tokens_out) {
+    GGML_ASSERT(slot.mctx);
+    const auto & mctx = slot.mctx;
+    const auto & input_tokens = slot.task->tokens;
+    const auto & chunk = input_tokens.find_chunk(idx);
+    int32_t res = 0;
 
+    auto try_decode = [&]() -> int32_t {
+        if (mbatch) {
+            float * embd = mtmd_batch_get_output_embd(mbatch.get(), chunk.get());
+            if (embd) {
+                void * cb_data = slot.spec;
+                static auto cb = [](llama_batch batch, void * user_data) {
+                    common_speculative * spec = static_cast<common_speculative *>(user_data);
+                    if (!common_speculative_process(spec, batch)) {
+                        return 1;
+                    }
+                    return 0;
+                };
+
+                llama_pos new_n_past; // unused for now
+                res = mtmd_helper_decode_image_chunk(
+                    mctx,
+                    slot.ctx_tgt,
+                    chunk.get(),
+                    embd,
+                    slot.prompt.tokens.pos_next(),
+                    slot.id,
+                    llama_n_batch(slot.ctx_tgt),
+                    &new_n_past,
+                    cb,
+                    cb_data
+                );
+                if (res != 0) {
+                    SLT_ERR(slot, "failed to decode mtmd chunk, idx = %zu, res = %d\n", idx, res);
+                    return -1;
+                }
+                n_tokens_out = mtmd_input_chunk_get_n_tokens(chunk.get());
+                return 0; // success
+            }
+        }
+        return 1; // (non-error) need to create & encode batch
+    };
+
+    // if the batch is already exist, try searching & encode
+    res = try_decode();
+    if (res == 0) {
+        return 0;
+    }
+    if (res < 0) {
+        // fatal error
+        return res;
+    }
+
+    // otherwise, the batch is either uninitialized or is used up
+    // we need to create & encode a new batch
+    mbatch.reset(mtmd_batch_init(mctx));
+    res = mtmd_batch_add_chunk(mbatch.get(), chunk.get());
+    GGML_ASSERT(res == 0); // we should never have an empty batch
+
+    // try batching as much as possible
+    int n_added = 1;
+    size_t idx_cur = idx;
+    while (res == 0) {
+        auto [next_chunk, next_idx] = input_tokens.find_next_media_chunk(idx_cur);
+        if (next_chunk == nullptr) {
+            break;
+        }
+        res = mtmd_batch_add_chunk(mbatch.get(), next_chunk->get());
+        n_added += (res == 0 ? 1 : 0);
+        idx_cur = next_idx;
+        SLT_DBG(slot, "try adding media chunk idx = %zu to batch, res = %d\n", next_idx, res);
+        // if res != 0, batch is full or chunk is not compatible -> this loop breaks
+    }
+
+    // TODO @ngxson : move this log line to debug when it become more stable
+    SLT_TRC(slot, "encoding mtmd batch from idx = %zu, n_chunks = %d\n", idx, n_added);
+
+    res = mtmd_batch_encode(mbatch.get());
+    if (res != 0) {
+        SLT_ERR(slot, "failed to encode mtmd batch for chunk idx = %zu, res = %d\n", idx, res);
+        return -1;
+    }
+
+    return try_decode();
+}
 
 //
 // server_context_impl (private implementation)
@@ -1354,8 +1356,8 @@ private:
         GGML_ASSERT(!sleeping);
 
         // wiring up server queues
-        queue_tasks.on_new_task([this](server_task && task) {
-            process_single_task(std::move(task));
+        queue_tasks.on_new_task([this](server_task && task, bool is_yielding) {
+            return process_single_task(std::move(task), is_yielding);
         });
         queue_tasks.on_update_slots([this]() {
             update_slots();
@@ -2286,7 +2288,14 @@ private:
                 cur.pos_max, cur.n_tokens, (float) cur.size() / 1024 / 1024);
     }
 
-    void process_single_task(server_task && task) {
+    // returns false to decline the task, it is offered again after the decode is done
+    bool process_single_task(server_task && task, bool is_yielding) {
+        // while yielding, an encode / decode is running and only accessing metrics is safe
+        if (is_yielding && task.type != SERVER_TASK_TYPE_METRICS) {
+            SRV_DBG("decoding, decline task, id_task = %d\n", task.id);
+            return false;
+        }
+
         switch (task.type) {
             case SERVER_TASK_TYPE_COMPLETION:
             case SERVER_TASK_TYPE_INFILL:
@@ -2620,6 +2629,8 @@ private:
                     queue_results.send(std::move(res));
                 } break;
         }
+
+        return true;
     }
 
     void iterate(std::vector<server_slot> & slots, std::function<void(server_slot &)> callback) {
@@ -3382,8 +3393,13 @@ private:
                         //       so the timing is queued and flushed on the next sync
                         metrics_pre_decode();
 
+                        // encode on the worker thread, so we can still handle metrics tasks
                         size_t n_tokens_out = 0;
-                        int32_t res = slot.process_mtmd_chunk(cur_token_idx, n_tokens_out);
+                        int32_t res = 0;
+                        queue_tasks.yield_to_queue([&]() {
+                            res = process_mtmd_chunk(slot, slot.mbatch, cur_token_idx, n_tokens_out);
+                        });
+
                         if (res != 0) {
                             SLT_ERR(slot, "failed to process mtmd chunk, res = %d\n", res);
                             send_error(slot, "failed to process mtmd chunk", ERROR_TYPE_SERVER);
@@ -3557,7 +3573,20 @@ private:
             }
         }
 
-        const int ret = llama_decode(ctx_tgt, batch_view);
+        bool has_output = false;
+        for (int i = off; i < off + batch_view.n_tokens; ++i) {
+            has_output |= batch.tokens[i].output;
+        }
+
+        // decode on the worker thread, so we can still handle metrics tasks while waiting
+        // note: the sync is done here too, so that the wait also happens off the main thread
+        int ret = 0;
+        queue_tasks.yield_to_queue([&]() {
+            ret = llama_decode(ctx_tgt, batch_view);
+            if (ret == 0 && has_output) {
+                llama_synchronize(ctx_tgt);
+            }
+        });
 
         if (ret != 0) {
             {
@@ -3609,7 +3638,7 @@ private:
             return false; // retry with the updated n_batch
         } else {
             // success, apply batch metrics
-            metrics_post_decode(off, batch_view.n_tokens);
+            metrics_post_decode(off, batch_view.n_tokens, has_output);
         }
 
         // TODO: avoid restoring the draft context and re-evaluating the drafted tokens when not needed [TAG_SPEC_AVOID_DRAFT_REEVAL]
@@ -3922,7 +3951,8 @@ private:
         n_prompt_queued = 0;
     }
 
-    void metrics_post_decode(int32_t off, int32_t n_tokens) {
+    // has_output is computed by the caller, which also already synchronized the context if it is set
+    void metrics_post_decode(int32_t off, int32_t n_tokens, bool has_output) {
         metrics.n_decode++;
         for (const auto & slot : slots) {
             if (slot.is_processing()) {
@@ -3935,12 +3965,9 @@ private:
         // note: a slot can be released before we get here, which clears its stats
         //       the tokens were still computed, counted in the global metrics, not in slot
         uint64_t n_prompt_tokens = 0;
-        bool     has_output      = false;
 
         for (int i = off; i < off + n_tokens; ++i) {
             const auto & t = batch.tokens[i];
-
-            has_output |= t.output;
 
             if (!t.is_prompt) {
                 continue; // generated tokens are handled after sampling
@@ -3957,14 +3984,12 @@ private:
         metrics_queue_prompt(n_prompt_tokens);
 
         if (has_output) {
-            // sync if we have at least one output in batch
-            // so that we can calculate the timings correctly
-            llama_synchronize(ctx_tgt);
+            // the context is already synchronized, so the timings are correct
             metrics_flush_prompt();
         }
 
         // advance the prompt timing of the slots that had tokens in this batch
-        // note: a second pass, it must run after the sync above to reflect the compute
+        // note: a second pass, it must run after the sync to reflect the compute
         const int64_t t_now = ggml_time_us();
         for (int i = off; i < off + n_tokens; ++i) {
             const auto & t = batch.tokens[i];
