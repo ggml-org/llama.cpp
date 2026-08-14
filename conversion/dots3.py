@@ -226,6 +226,7 @@ class Dots3NoteMmprojModel(MmprojModel):
 
         self.gguf_writer.add_clip_audio_projector_type(gguf.VisionProjectorType.DOTS3NOTE_A)
         self.gguf_writer.add_audio_num_mel_bins(self.hparams_audio["whisper_config"]["num_mel_bins"])
+        self.gguf_writer.add_audio_attention_layernorm_eps(1e-6)  # Dots3NoteAudioRMSNorm default
 
     @classmethod
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
