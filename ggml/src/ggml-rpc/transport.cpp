@@ -21,6 +21,7 @@
 #include <cstdlib>
 #include <mutex>
 #include <optional>
+#include <string>
 
 #ifdef GGML_RPC_RDMA
 #  include <infiniband/verbs.h>
