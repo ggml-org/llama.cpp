@@ -64,7 +64,6 @@ struct generation_params {
     common_chat_continuation              continue_final_message = COMMON_CHAT_CONTINUATION_NONE;
     common_chat_msg                       continue_msg;
     bool                                  enable_thinking        = true;
-    std::string                           reasoning_effort;
     std::chrono::system_clock::time_point now                    = std::chrono::system_clock::now();
     json                                  extra_context;
     bool                                  add_bos       = false;

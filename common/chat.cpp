@@ -920,6 +920,10 @@ static std::string common_chat_template_direct_apply_impl(
         bool enabled = inp["preserve_reasoning"].get<bool>();
         jinja::caps_apply_preserve_reasoning(ctx, enabled);
     }
+    if (inp.contains("reasoning_effort") && inp["reasoning_effort"].is_string() && !inp["reasoning_effort"].empty()) {
+        std::string reasoning_effort = inp["reasoning_effort"].get<std::string>();
+        jinja::caps_apply_reasoning_effort(ctx, reasoning_effort);
+    }
 
     jinja::global_from_json(ctx, inp, inputs.mark_input);
 
@@ -3439,11 +3443,6 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
     params.extra_context = common_chat_extra_context();
     for (auto el : inputs.chat_template_kwargs) {
         params.extra_context[el.first] = json::parse(el.second);
-    }
-    params.reasoning_effort = inputs.reasoning_effort;
-    if (!inputs.reasoning_effort.empty()) {
-        params.extra_context["reasoning_effort"]   = inputs.reasoning_effort;
-        params.extra_context["reasoning_strength"] = inputs.reasoning_effort;
     }
 
     if (!inputs.json_schema.empty()) {

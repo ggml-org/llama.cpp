@@ -26,6 +26,12 @@ void caps_apply_preserve_reasoning(jinja::context & ctx, bool enabled) {
     ctx.set_val("drop_thinking",            mk_val<value_bool>(!enabled));
 }
 
+void caps_apply_reasoning_effort(jinja::context & ctx, const std::string & effort) {
+    value var = mk_val<value_string>(effort); // bind to the same value for stats
+    ctx.set_val("reasoning_effort",   var);
+    ctx.set_val("reasoning_strength", var);
+}
+
 static void caps_try_execute(jinja::program & prog,
                              const caps_json_fn & messages_fn,
                              const caps_ctx_fn & ctx_fn,
@@ -498,7 +504,7 @@ caps caps_get(jinja::program & prog) {
     JJ_DEBUG("%s\n", ">>> Running capability check: reasoning effort");
 
     // case: reasoning effort level
-    value effort_var = mk_val<value_string>(std::string("low"));
+    value effort_var;
     caps_try_execute(
         prog,
         [&]() {
@@ -512,8 +518,8 @@ caps caps_get(jinja::program & prog) {
         },
         [&](context & ctx) {
             ctx.set_val("enable_thinking", mk_val<value_bool>(true));
-            ctx.set_val("reasoning_effort",   effort_var);
-            ctx.set_val("reasoning_strength", effort_var);
+            caps_apply_reasoning_effort(ctx, "low");
+            effort_var = ctx.get_val("reasoning_effort");
         },
         nullptr, // tools_fn
         [&](bool, value &, value &, const std::string &) {

@@ -3593,7 +3593,11 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         "reasoning effort level given to the chat template: 'default' to keep the template default,\n"
         "or a level such as 'minimal', 'low', 'medium', 'high', 'xhigh' or 'max' (default: default)",
         [](common_params & params, const std::string & value) {
-            params.reasoning_effort = value == "default" ? "" : value;
+            if (value == "default") {
+                params.default_template_kwargs.erase("reasoning_effort");
+            } else {
+                params.default_template_kwargs["reasoning_effort"] = json(value).dump();
+            }
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_REASONING_EFFORT"));
     add_opt(common_arg(
