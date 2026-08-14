@@ -124,6 +124,7 @@ fn main(
     let head_seq = wg_linear / params.d_inner;
     let ir = head_seq % params.n_head;
     let i3 = head_seq / params.n_head;
+    let n_seqs = params.y_elems / (params.n_seq_tokens * params.n_head * params.d_inner);
 
     let state_slot = read_state_slot(i3);
     let g = ir / (params.n_head / params.n_group);
@@ -185,7 +186,7 @@ fn main(
                 let snapshot_idx =
                     params.offset_dst + params.y_elems + tid + i1 * params.d_state +
                     ir * (params.d_state * params.d_inner) +
-                    (slot * params.n_seqs + i3) * (params.d_state * params.d_inner * params.n_head);
+                    (slot * n_seqs + i3) * (params.d_state * params.d_inner * params.n_head);
                 dst[snapshot_idx] = s;
             }
 
