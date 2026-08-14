@@ -10,7 +10,7 @@ import ChatMessageToolCallBlock from '$lib/components/app/chat/ChatMessages/Chat
 import { AgenticSectionType } from '$lib/enums';
 import { AttachmentType } from '$lib/enums';
 import type { DatabaseMessageExtraSkill } from '$lib/types';
-import type { AgenticSection } from '$lib/utils';
+import type { AgenticSection } from '$lib/types';
 import { tick } from 'svelte';
 import { describe, expect, it } from 'vitest';
 import { render } from 'vitest-browser-svelte';
@@ -89,6 +89,30 @@ describe('read_skill result rendering', () => {
 		expect(container.querySelector('skill_resource')).toBeNull();
 	});
 
+	it.each([
+		['scripts/run.py', 'lucide-terminal'],
+		['references/API.md', 'lucide-book-open-text'],
+		['assets/template.json', 'lucide-package-open'],
+		['other/files.json', 'lucide-file-text']
+	])('uses %s resource icon', async (path, iconClass) => {
+		const container = await renderBlock(
+			section({
+				toolResultExtras: [skillExtra({ kind: 'resource', path, metadata: undefined })]
+			})
+		);
+
+		expect(container.querySelector(`svg.${iconClass}`)).toBeTruthy();
+	});
+
+	it('does not replace the base Skill result icon with a directory icon', async () => {
+		const container = await renderBlock(section({ toolResultExtras: [skillExtra()] }));
+
+		expect(container.querySelector('svg.lucide-terminal')).toBeNull();
+		expect(container.querySelector('svg.lucide-book-open-text')).toBeNull();
+		expect(container.querySelector('svg.lucide-package-open')).toBeNull();
+		expect(container.querySelector('svg.lucide-file-text')).toBeNull();
+	});
+
 	it('falls back to the generic tool card for a read_skill section without valid metadata', async () => {
 		const container = await renderBlock(section({ toolResultExtras: [] }));
 
@@ -97,6 +121,11 @@ describe('read_skill result rendering', () => {
 		expect(text).toContain('read_skill');
 		expect(text).not.toContain('Skill ·');
 		expect(text).not.toContain('Skill resource ·');
+		// The generic card never gets a directory-specific icon.
+		expect(container.querySelector('svg.lucide-terminal')).toBeNull();
+		expect(container.querySelector('svg.lucide-book-open-text')).toBeNull();
+		expect(container.querySelector('svg.lucide-package-open')).toBeNull();
+		expect(container.querySelector('svg.lucide-file-text')).toBeNull();
 	});
 
 	it('shows the pending state while the read is in flight', async () => {

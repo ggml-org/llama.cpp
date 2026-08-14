@@ -43,6 +43,12 @@
 		 */
 		extraLiveStreaming?: boolean;
 		/**
+		 * Optional renderer-supplied icon. When present it wins over the
+		 * built-in registry icon for the tool, but never over the spinner
+		 * while `spinIconWhenActive && showSpinner` is active.
+		 */
+		icon?: Component;
+		/**
 		 * Swap the title-row icon for a spinning `Loader2` while the
 		 * spinner is showing. Only meaningful for tools where "live"
 		 * is interesting (e.g. exec_shell_command showing the in-flight
@@ -66,6 +72,7 @@
 	let {
 		children,
 		extraLiveStreaming = false,
+		icon,
 		isStreaming,
 		meta,
 		onToggle,
@@ -84,7 +91,7 @@
 
 	const toolUi: ToolUiEntry | null = $derived(getToolUi(section.toolName));
 	const toolIcon: Component = $derived(
-		spinIconWhenActive && showSpinner ? Loader2 : (toolUi?.icon ?? Wrench)
+		spinIconWhenActive && showSpinner ? Loader2 : (icon ?? toolUi?.icon ?? Wrench)
 	);
 	const toolIconClass = $derived(
 		spinIconWhenActive && showSpinner ? ICON_CLASS_SPIN : ICON_CLASS_DEFAULT
