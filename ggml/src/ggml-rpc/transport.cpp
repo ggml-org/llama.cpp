@@ -17,6 +17,7 @@
 #  include <netdb.h>
 #  include <unistd.h>
 #endif
+#include <cstdio>
 #include <cstdlib>
 #include <mutex>
 #include <optional>
@@ -191,6 +192,25 @@ std::optional<rdma_gid_t> socket_t::impl::rdma_build_target_gid() {
     return std::nullopt;
 }
 
+// Format an RDMA GID (16 bytes) as a colon-separated hex string for diagnostics.
+static std::string rdma_gid_to_string(const uint8_t * gid) {
+    char buf[3 * RDMA_GID_SIZE]; // 16 * 2 hex digits + 15 separators + NUL
+    char * p = buf;
+    for (size_t i = 0; i < RDMA_GID_SIZE; i++) {
+        p += sprintf(p, "%02x%s", gid[i], i + 1 < RDMA_GID_SIZE ? ":" : "");
+    }
+    return std::string(buf);
+}
+
+static const char * rdma_gid_type_str(enum ibv_gid_type type) {
+    switch (type) {
+        case IBV_GID_TYPE_IB:       return "IB";
+        case IBV_GID_TYPE_ROCE_V1:  return "RoCEv1";
+        case IBV_GID_TYPE_ROCE_V2:  return "RoCEv2";
+        default:                    return "unknown";
+    }
+}
+
 bool socket_t::impl::rdma_probe() {
     const char * dev_env = std::getenv("GGML_RDMA_DEV");
     const char * gid_env = std::getenv("GGML_RDMA_GID");
@@ -199,6 +219,11 @@ bool socket_t::impl::rdma_probe() {
     if (!target_gid) {
         GGML_LOG_INFO("RDMA probe: cannot build target GID from socket local address, staying on TCP\n");
         return false;
+    }
+    GGML_LOG_INFO("RDMA probe: target GID (local addr) = %s\n", rdma_gid_to_string(target_gid->data()));
+    if (dev_env || gid_env) {
+        GGML_LOG_INFO("RDMA probe: env GGML_RDMA_DEV=%s GGML_RDMA_GID=%s\n",
+                      dev_env ? dev_env : "(unset)", gid_env ? gid_env : "(unset)");
     }
 
     const uint8_t ib_port = 1;
@@ -243,7 +268,12 @@ bool socket_t::impl::rdma_probe() {
             for (int i = 0; i < pa.gid_tbl_len; i++) {
                 ibv_gid_entry entry = {};
                 if (ibv_query_gid_ex(ctx, ib_port, i, &entry, 0) != 0) continue;
-                if (memcmp(entry.gid.raw, target_gid->data(), RDMA_GID_SIZE) != 0) continue;
+                const bool matches = memcmp(entry.gid.raw, target_gid->data(), RDMA_GID_SIZE) == 0;
+                GGML_LOG_INFO("RDMA probe: device %s port %u GID[%d] type=%s gid=%s%s\n",
+                              dn, ib_port, i, rdma_gid_type_str(entry.gid_type),
+                              rdma_gid_to_string(entry.gid.raw),
+                              matches ? " [MATCH]" : "");
+                if (!matches) continue;
                 if (entry.gid_type == IBV_GID_TYPE_ROCE_V2 && v2_idx < 0) {
                     v2_idx = i;
                 } else if (entry.gid_type == IBV_GID_TYPE_ROCE_V1 && v1_idx < 0) {
@@ -272,7 +302,8 @@ bool socket_t::impl::rdma_probe() {
             rdma_local.path_mtu = pa.active_mtu;
             break;
         }
-        GGML_LOG_INFO("RDMA probe: no GID on device %s matching local address, skipping\n", dn);
+        GGML_LOG_INFO("RDMA probe: device %s port %u: no GID matching local addr %s, skipping\n",
+                      dn, ib_port, rdma_gid_to_string(target_gid->data()));
         ibv_close_device(ctx);
     }
     ibv_free_device_list(devs);
