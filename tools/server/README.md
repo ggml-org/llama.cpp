@@ -72,6 +72,7 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `-ctv, --cache-type-v TYPE` | KV cache data type for V<br/>allowed values: f32, f16, bf16, q8_0, q4_0, q4_1, iq4_nl, q5_0, q5_1<br/>(default: f16)<br/>(env: LLAMA_ARG_CACHE_TYPE_V) |
 | `-dt, --defrag-thold N` | KV cache defragmentation threshold (DEPRECATED)<br/>(env: LLAMA_ARG_DEFRAG_THOLD) |
 | `--rpc SERVERS` | comma-separated list of RPC servers (host:port)<br/>(env: LLAMA_ARG_RPC) |
+| `--prefill-node HOST:PORT` | RPC server used by a dedicated prompt prefill context; repeat for multiple nodes<br/>(env: LLAMA_ARG_PREFILL_NODE) |
 | `--mlock` | DEPRECATED in favor of `--load-mode`: force system to keep model in RAM rather than swapping or compressing<br/>(env: LLAMA_ARG_MLOCK) |
 | `--mmap, --no-mmap` | DEPRECATED in favor of `--load-mode`: whether to memory-map model. (if mmap disabled, slower load but may reduce pageouts if not using mlock)<br/>(env: LLAMA_ARG_MMAP) |
 | `-dio, --direct-io, -ndio, --no-direct-io` | DEPRECATED in favor of `--load-mode`: use DirectIO if available<br/>(env: LLAMA_ARG_DIO) |
@@ -386,6 +387,26 @@ docker run -p 8080:8080 -v /path/to/models:/models ghcr.io/ggml-org/llama.cpp:se
 # or, with CUDA:
 docker run -p 8080:8080 -v /path/to/models:/models --gpus all ghcr.io/ggml-org/llama.cpp:server-cuda -m models/7B/ggml-model.gguf -c 512 --host 0.0.0.0 --port 8080 --n-gpu-layers 99
 ```
+
+### Disaggregated prefill and decode
+
+`--prefill-node` creates one model and context for an RPC node. These contexts process prompt prefixes without occupying slots in the main decode context. Each completed prefix state is copied to host memory, restored into the main context, and continued from its final prompt token.
+
+Start `ggml-rpc-server` on each prefill node:
+
+```bash
+bin/ggml-rpc-server --host 192.168.1.108 --port 50052 -c
+```
+
+Then register the nodes with the main server:
+
+```bash
+bin/llama-server -m model.gguf \
+    --prefill-node 192.168.1.108:50052 \
+    --prefill-node 192.168.1.109:50052
+```
+
+The main model uses the normal local device selection. Each prefill node loads another full model copy. Requests with a reusable local prompt prefix stay on the main context. Speculative decoding, multimodal input, and LoRA adapters also use the main context.
 
 ## Using with CURL
 

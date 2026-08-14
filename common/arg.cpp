@@ -1161,7 +1161,7 @@ void common_print_available_devices() {
     }
 }
 
-static void add_rpc_devices(const std::string & servers) {
+std::vector<ggml_backend_dev_t> common_add_rpc_devices(const std::string & servers) {
     auto rpc_servers = string_split<std::string>(servers, ',');
     if (rpc_servers.empty()) {
         throw std::invalid_argument("no RPC servers specified");
@@ -1176,10 +1176,21 @@ static void add_rpc_devices(const std::string & servers) {
     if (!ggml_backend_rpc_add_server_fn) {
         throw std::invalid_argument("failed to find RPC add server function");
     }
+
+    std::vector<ggml_backend_dev_t> devices;
     for (const auto & server : rpc_servers) {
         auto reg = ggml_backend_rpc_add_server_fn(server.c_str());
+        if (!reg) {
+            throw std::invalid_argument(string_format("failed to connect to RPC server: %s", server.c_str()));
+        }
         ggml_backend_register(reg);
+        for (size_t i = 0; i < ggml_backend_reg_dev_count(reg); ++i) {
+            devices.push_back(ggml_backend_reg_dev_get(reg, i));
+        }
     }
+    devices.push_back(nullptr);
+
+    return devices;
 }
 
 bool common_params_to_map(int argc, char ** argv, llama_example ex, std::map<common_arg, std::string> & out_map) {
@@ -2630,10 +2641,20 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             {"--rpc"}, "SERVERS",
             "comma-separated list of RPC servers (host:port)",
             [](common_params & params, const std::string & value) {
-                add_rpc_devices(value);
+                common_add_rpc_devices(value);
                 GGML_UNUSED(params);
             }
         ).set_env("LLAMA_ARG_RPC"));
+        add_opt(common_arg(
+            {"--prefill-node"}, "HOST:PORT",
+            "RPC server used by a dedicated prompt prefill context; repeat for multiple nodes",
+            [](common_params & params, const std::string & value) {
+                if (std::find(params.prefill_nodes.begin(), params.prefill_nodes.end(), value) != params.prefill_nodes.end()) {
+                    throw std::invalid_argument(string_format("duplicate prefill node: %s", value.c_str()));
+                }
+                params.prefill_nodes.push_back(value);
+            }
+        ).set_env("LLAMA_ARG_PREFILL_NODE").set_examples({LLAMA_EXAMPLE_SERVER}));
     }
     add_opt(common_arg(
         {"--mlock"},

@@ -126,6 +126,9 @@ bool common_params_parse(int argc, char ** argv, common_params & params, llama_e
 // load all backends and print the list of available (non-CPU) devices to stdout
 void common_print_available_devices();
 
+// register RPC servers and return their devices
+std::vector<ggml_backend_dev_t> common_add_rpc_devices(const std::string & servers);
+
 // parse input arguments from CLI into a map
 bool common_params_to_map(int argc, char ** argv, llama_example ex, std::map<common_arg, std::string> & out_map);
 
