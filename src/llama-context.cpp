@@ -4,6 +4,7 @@
 #include "llama-arch.h"
 #include "llama-graph.h"
 #include "llama-impl.h"
+#include "ggml-cpu.h"
 #include "llama-batch.h"
 #include "llama-io.h"
 #include "llama-memory.h"
@@ -3597,6 +3598,33 @@ llama_context * llama_init_from_model(
         if (params.flash_attn_type == LLAMA_FLASH_ATTN_TYPE_DISABLED) {
             LLAMA_LOG_ERROR("%s: quantized V cache requires flash_attn to be enabled\n", __func__);
             return nullptr;
+        }
+    }
+
+    // Arm cores with i8mm + SVE (Neoverse V1/V2, e.g. AWS Graviton3/4) run the tiled
+    // CPU flash-attention path substantially slower than the direct path.
+    // FlashAttention trades extra arithmetic for fewer memory round-trips, which is
+    // the right trade on a GPU. These cores pair a large private L2 with a big shared
+    // SLC, so for typical prefill the attention working set is already cache-resident:
+    // the traffic FA exists to avoid was never the bottleneck, and only the extra
+    // arithmetic remains. perf on Graviton4 shows the FA path retiring ~1.97x the
+    // instructions for identical work.
+    //
+    // Measured prefill, Qwen2.5-1.5B Q4_0, 16 threads, 512-token prompt:
+    //   Neoverse-V2 (c8g):  430 -> 854 tok/s with FA off  (1.99x)
+    //   Neoverse-V1 (c7g):  398 -> 615 tok/s with FA off  (1.55x)
+    //   Neoverse-N1 (c6g):  450 -> 441 tok/s with FA off  (0.98x; correctly excluded,
+    //                       N1 has neither i8mm nor SVE)
+    // The gap widens with context, reaching 5.20x at 8192 tokens on Neoverse-V2.
+    // On x86 (AVX2) the same change is a 4.7% loss, so this is Arm-specific.
+    // Data: https://github.com/ggml-org/llama.cpp/issues/27086
+    //
+    // CPU-only inference; GPU backends are unaffected. Override with -fa on.
+    if (params.flash_attn_type == LLAMA_FLASH_ATTN_TYPE_AUTO && model->devices.empty()) {
+        if (ggml_cpu_has_matmul_int8() && ggml_cpu_has_sve()) {
+            LLAMA_LOG_INFO("%s: disabling flash_attn by default on this Arm CPU "
+                           "(i8mm+SVE); pass -fa on to override\n", __func__);
+            params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED;
         }
     }
 
