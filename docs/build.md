@@ -75,7 +75,7 @@ cmake --build build --config Release
     cmake --preset arm64-windows-llvm-release -D GGML_OPENMP_FETCH=ON
     cmake --build build-arm64-windows-llvm-release
     ```
-    `GGML_OPENMP_FETCH` downloads and builds the target LLVM OpenMP runtime and requires CMake 3.20 or later, Clang, Python 3 and network access during configuration. This also works when cross-compiling for WoA from x64. See the [LLVM OpenMP build and performance notes](development/llvm-openmp.md) for the release configuration and validation procedure. Omit the option to use CMake's normal OpenMP detection, or pass `-D GGML_OPENMP=OFF` to disable OpenMP.
+    `GGML_OPENMP_FETCH` downloads the official LLVM OpenMP runtime and requires Clang, 7-Zip and network access during the first configuration. This also works when cross-compiling for WoA from x64. See the [LLVM OpenMP fetch notes](development/llvm-openmp.md) for caching and validation details. Omit the option to use CMake's normal OpenMP detection, or pass `-D GGML_OPENMP=OFF` to disable OpenMP.
     For building with ninja generator and clang compiler as default:
       -set path:set LIB=C:\Program Files (x86)\Windows Kits\10\Lib\10.0.22621.0\um\x64;C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.41.34120\lib\x64\uwp;C:\Program Files (x86)\Windows Kits\10\Lib\10.0.22621.0\ucrt\x64
       ```bash

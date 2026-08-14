@@ -227,81 +227,106 @@ if (GGML_OPENMP_FETCH)
         message(FATAL_ERROR "GGML_OPENMP_FETCH requires GGML_OPENMP")
     elseif (NOT WIN32 OR NOT (CMAKE_C_COMPILER_ID MATCHES "Clang"))
         message(FATAL_ERROR "GGML_OPENMP_FETCH currently requires Clang on Windows")
-    elseif (CMAKE_VERSION VERSION_LESS 3.20)
-        message(FATAL_ERROR "GGML_OPENMP_FETCH requires CMake 3.20 or later")
     endif()
-
-    include(FetchContent)
 
     set(GGML_OPENMP_LLVM_VERSION "20.1.8")
-    set(LLVM_OPENMP_CMAKE_ARGS
-        URL      "https://github.com/llvm/llvm-project/releases/download/llvmorg-${GGML_OPENMP_LLVM_VERSION}/cmake-${GGML_OPENMP_LLVM_VERSION}.src.tar.xz"
-        URL_HASH SHA256=3319203cfd1172bbac50f06fa68e318af84dcb5d65353310c0586354069d6634
-    )
-    if (CMAKE_VERSION VERSION_GREATER_EQUAL 3.24)
-        list(APPEND LLVM_OPENMP_CMAKE_ARGS DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+    string(REGEX MATCH "^[0-9]+" GGML_OPENMP_LLVM_VERSION_MAJOR "${GGML_OPENMP_LLVM_VERSION}")
+    string(REGEX MATCH "^[0-9]+" GGML_OPENMP_COMPILER_VERSION_MAJOR "${CMAKE_C_COMPILER_VERSION}")
+    if (NOT GGML_OPENMP_COMPILER_VERSION_MAJOR STREQUAL GGML_OPENMP_LLVM_VERSION_MAJOR)
+        message(FATAL_ERROR "LLVM OpenMP ${GGML_OPENMP_LLVM_VERSION} requires Clang ${GGML_OPENMP_LLVM_VERSION_MAJOR}.x")
     endif()
-    FetchContent_Declare(llvm_openmp_cmake ${LLVM_OPENMP_CMAKE_ARGS})
-    FetchContent_MakeAvailable(llvm_openmp_cmake)
 
-    set(LLVM_OPENMP_ARGS
-        URL      "https://github.com/llvm/llvm-project/releases/download/llvmorg-${GGML_OPENMP_LLVM_VERSION}/openmp-${GGML_OPENMP_LLVM_VERSION}.src.tar.xz"
-        URL_HASH SHA256=b21c04ee9cbe56e200c5d83823765a443ee6389bbc3f64154c96e94016e6cee9
-    )
-    if (CMAKE_VERSION VERSION_GREATER_EQUAL 3.28)
-        list(APPEND LLVM_OPENMP_ARGS EXCLUDE_FROM_ALL)
-    endif()
-    if (CMAKE_VERSION VERSION_GREATER_EQUAL 3.24)
-        list(APPEND LLVM_OPENMP_ARGS DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
-    endif()
-    FetchContent_Declare(llvm_openmp ${LLVM_OPENMP_ARGS})
-
-    set(OPENMP_STANDALONE_BUILD ON)
-    set(OPENMP_ENABLE_LIBOMPTARGET OFF CACHE BOOL "" FORCE)
-    set(OPENMP_ENABLE_LIBOMP_PROFILING OFF CACHE BOOL "" FORCE)
-    set(OPENMP_ENABLE_OMPT_TOOLS OFF CACHE BOOL "" FORCE)
-    set(LIBOMP_ENABLE_ASSERTIONS OFF CACHE BOOL "" FORCE)
-    set(LIBOMP_ENABLE_SHARED ON CACHE BOOL "" FORCE)
-    set(LIBOMP_FORTRAN_MODULES OFF CACHE BOOL "" FORCE)
-    set(LIBOMP_LIB_TYPE normal CACHE STRING "" FORCE)
-    set(LIBOMP_OMPD_SUPPORT OFF CACHE BOOL "" FORCE)
-    set(LIBOMP_OMPT_SUPPORT OFF CACHE BOOL "" FORCE)
-    set(LIBOMP_STATS OFF CACHE BOOL "" FORCE)
-    set(LIBOMP_USE_DEBUGGER OFF CACHE BOOL "" FORCE)
-    set(LIBOMP_USE_HWLOC OFF CACHE BOOL "" FORCE)
-    set(LIBOMP_USE_ITT_NOTIFY OFF CACHE BOOL "" FORCE)
-
-    set(SAVED_CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH})
-    list(PREPEND CMAKE_MODULE_PATH "${llvm_openmp_cmake_SOURCE_DIR}/Modules")
-
-    if (CMAKE_VERSION VERSION_GREATER_EQUAL 3.28)
-        FetchContent_MakeAvailable(llvm_openmp)
+    string(TOLOWER "${CMAKE_SYSTEM_PROCESSOR}" GGML_OPENMP_SYSTEM_PROCESSOR)
+    if (GGML_OPENMP_SYSTEM_PROCESSOR MATCHES "^(amd64|x86_64)$")
+        set(GGML_OPENMP_ARCH "x64")
+        set(GGML_OPENMP_INSTALLER_SUFFIX "win64")
+        set(GGML_OPENMP_INSTALLER_SHA256 "3197846a2b19063687dd56e93e34cd941e3548d907f23a6131571321bdf9fe7b")
+    elseif (GGML_OPENMP_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$")
+        set(GGML_OPENMP_ARCH "arm64")
+        set(GGML_OPENMP_INSTALLER_SUFFIX "woa64")
+        set(GGML_OPENMP_INSTALLER_SHA256 "7c4ac97eb2ae6b960ca5f9caf3ff6124c8d2a18cc07a7840a4d2ea15537bad8e")
     else()
-        FetchContent_GetProperties(llvm_openmp)
-        if (NOT llvm_openmp_POPULATED)
-            FetchContent_Populate(llvm_openmp)
-            add_subdirectory(${llvm_openmp_SOURCE_DIR} ${llvm_openmp_BINARY_DIR} EXCLUDE_FROM_ALL)
-        endif()
+        message(FATAL_ERROR "GGML_OPENMP_FETCH does not support ${CMAKE_SYSTEM_PROCESSOR}")
     endif()
 
-    set(CMAKE_MODULE_PATH ${SAVED_CMAKE_MODULE_PATH})
-    set_target_properties(omp PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
-    target_compile_options(omp PRIVATE -w)
-    install(TARGETS omp RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+    if (GGML_OPENMP_FETCH_CACHE_DIR)
+        set(GGML_OPENMP_CACHE_DIR "${GGML_OPENMP_FETCH_CACHE_DIR}")
+    else()
+        set(GGML_OPENMP_CACHE_DIR "${CMAKE_BINARY_DIR}/_deps")
+    endif()
+    set(GGML_OPENMP_ROOT "${GGML_OPENMP_CACHE_DIR}/llvm-openmp-${GGML_OPENMP_LLVM_VERSION}-${GGML_OPENMP_ARCH}")
+    set(GGML_OPENMP_LIBRARY "${GGML_OPENMP_ROOT}/lib/libomp.lib")
+    set(GGML_OPENMP_RUNTIME "${GGML_OPENMP_ROOT}/bin/libomp.dll")
+    set(GGML_OPENMP_HEADER "${GGML_OPENMP_ROOT}/include/omp.h")
+    set(GGML_OPENMP_LICENSE "${GGML_OPENMP_ROOT}/LICENSE.TXT")
+
+    if (NOT EXISTS "${GGML_OPENMP_LIBRARY}" OR NOT EXISTS "${GGML_OPENMP_RUNTIME}" OR NOT EXISTS "${GGML_OPENMP_HEADER}")
+        find_program(GGML_OPENMP_7Z NAMES 7z 7zz 7za)
+        if (NOT GGML_OPENMP_7Z)
+            message(FATAL_ERROR "GGML_OPENMP_FETCH requires 7-Zip to extract the LLVM installer")
+        endif()
+
+        set(GGML_OPENMP_INSTALLER "${GGML_OPENMP_ROOT}/LLVM-${GGML_OPENMP_LLVM_VERSION}-${GGML_OPENMP_INSTALLER_SUFFIX}.exe")
+        set(GGML_OPENMP_EXTRACT_DIR "${GGML_OPENMP_ROOT}/extract")
+        set(GGML_OPENMP_INSTALLER_URL "https://github.com/llvm/llvm-project/releases/download/llvmorg-${GGML_OPENMP_LLVM_VERSION}/LLVM-${GGML_OPENMP_LLVM_VERSION}-${GGML_OPENMP_INSTALLER_SUFFIX}.exe")
+
+        file(MAKE_DIRECTORY "${GGML_OPENMP_EXTRACT_DIR}")
+        file(DOWNLOAD "${GGML_OPENMP_INSTALLER_URL}" "${GGML_OPENMP_INSTALLER}"
+            EXPECTED_HASH "SHA256=${GGML_OPENMP_INSTALLER_SHA256}"
+            SHOW_PROGRESS
+            STATUS GGML_OPENMP_DOWNLOAD_STATUS)
+        list(GET GGML_OPENMP_DOWNLOAD_STATUS 0 GGML_OPENMP_DOWNLOAD_RESULT)
+        if (NOT GGML_OPENMP_DOWNLOAD_RESULT EQUAL 0)
+            list(GET GGML_OPENMP_DOWNLOAD_STATUS 1 GGML_OPENMP_DOWNLOAD_ERROR)
+            message(FATAL_ERROR "Failed to download LLVM OpenMP: ${GGML_OPENMP_DOWNLOAD_ERROR}")
+        endif()
+
+        execute_process(
+            COMMAND "${GGML_OPENMP_7Z}" e -y "-o${GGML_OPENMP_EXTRACT_DIR}" "${GGML_OPENMP_INSTALLER}" -r libomp.lib libomp.dll omp.h
+            RESULT_VARIABLE GGML_OPENMP_EXTRACT_RESULT
+            OUTPUT_QUIET)
+        if (NOT GGML_OPENMP_EXTRACT_RESULT EQUAL 0 OR
+            NOT EXISTS "${GGML_OPENMP_EXTRACT_DIR}/libomp.lib" OR
+            NOT EXISTS "${GGML_OPENMP_EXTRACT_DIR}/libomp.dll" OR
+            NOT EXISTS "${GGML_OPENMP_EXTRACT_DIR}/omp.h")
+            message(FATAL_ERROR "Failed to extract libomp from ${GGML_OPENMP_INSTALLER}")
+        endif()
+
+        file(MAKE_DIRECTORY "${GGML_OPENMP_ROOT}/lib" "${GGML_OPENMP_ROOT}/bin" "${GGML_OPENMP_ROOT}/include")
+        file(COPY "${GGML_OPENMP_EXTRACT_DIR}/libomp.lib" DESTINATION "${GGML_OPENMP_ROOT}/lib")
+        file(COPY "${GGML_OPENMP_EXTRACT_DIR}/libomp.dll" DESTINATION "${GGML_OPENMP_ROOT}/bin")
+        file(COPY "${GGML_OPENMP_EXTRACT_DIR}/omp.h" DESTINATION "${GGML_OPENMP_ROOT}/include")
+        file(REMOVE_RECURSE "${GGML_OPENMP_INSTALLER}" "${GGML_OPENMP_EXTRACT_DIR}")
+    endif()
+
+    if (NOT EXISTS "${GGML_OPENMP_LICENSE}")
+        file(DOWNLOAD "https://raw.githubusercontent.com/llvm/llvm-project/llvmorg-${GGML_OPENMP_LLVM_VERSION}/LICENSE.TXT" "${GGML_OPENMP_LICENSE}"
+            EXPECTED_HASH "SHA256=8d85c1057d742e597985c7d4e6320b015a9139385cff4cbae06ffc0ebe89afee")
+    endif()
+
+    if (COMMAND license_add_file)
+        license_add_file("LLVM" "${GGML_OPENMP_LICENSE}")
+    endif()
 
     add_library(ggml-openmp-c INTERFACE)
     target_compile_options(ggml-openmp-c INTERFACE "$<$<COMPILE_LANGUAGE:C>:-fopenmp=libomp>")
-    target_include_directories(ggml-openmp-c SYSTEM INTERFACE "${llvm_openmp_BINARY_DIR}/runtime/src")
-    target_link_libraries(ggml-openmp-c INTERFACE omp)
+    target_include_directories(ggml-openmp-c SYSTEM INTERFACE "${GGML_OPENMP_ROOT}/include")
+    target_link_libraries(ggml-openmp-c INTERFACE "${GGML_OPENMP_LIBRARY}")
 
     add_library(ggml-openmp-cxx INTERFACE)
     target_compile_options(ggml-openmp-cxx INTERFACE "$<$<COMPILE_LANGUAGE:CXX>:-fopenmp=libomp>")
-    target_include_directories(ggml-openmp-cxx SYSTEM INTERFACE "${llvm_openmp_BINARY_DIR}/runtime/src")
-    target_link_libraries(ggml-openmp-cxx INTERFACE omp)
+    target_include_directories(ggml-openmp-cxx SYSTEM INTERFACE "${GGML_OPENMP_ROOT}/include")
+    target_link_libraries(ggml-openmp-cxx INTERFACE "${GGML_OPENMP_LIBRARY}")
 
-    if (COMMAND license_add_file)
-        license_add_file("LLVM" "${llvm_openmp_SOURCE_DIR}/LICENSE.TXT")
+    set(GGML_OPENMP_RUNTIME_OUTPUT_DIR "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
+    if (CMAKE_CONFIGURATION_TYPES)
+        string(APPEND GGML_OPENMP_RUNTIME_OUTPUT_DIR "/$<CONFIG>")
     endif()
+    add_custom_target(ggml-openmp-runtime ALL
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${GGML_OPENMP_RUNTIME_OUTPUT_DIR}"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${GGML_OPENMP_RUNTIME}" "${GGML_OPENMP_RUNTIME_OUTPUT_DIR}/libomp.dll")
+    add_dependencies(ggml-base ggml-openmp-runtime)
+    install(FILES "${GGML_OPENMP_RUNTIME}" DESTINATION ${CMAKE_INSTALL_BINDIR})
 
     set(GGML_OPENMP_TARGET_C ggml-openmp-c)
     set(GGML_OPENMP_TARGET_CXX ggml-openmp-cxx)
