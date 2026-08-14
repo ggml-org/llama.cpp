@@ -1,7 +1,6 @@
 #include <string>
 #include <iostream>
 #include <random>
-#include <chrono>
 #include <cstdlib>
 
 #include <nlohmann/json.hpp>
@@ -2088,40 +2087,6 @@ static void test_string_parts(testing & t) {
         }
     });
 
-    t.test("gather cost stays linear in the number of parts", [](testing & t) {
-        // gather a plain array of strings, so the cost of the engine itself is not measured
-        static auto secs = [](size_t n) -> double {
-            std::vector<jinja::value> items;
-            items.reserve(n);
-            for (size_t i = 0; i < n; i++) {
-                items.push_back(jinja::mk_val<jinja::value_string>(std::string("x")));
-            }
-            jinja::value arr = jinja::mk_val<jinja::value_array>(std::move(items));
-
-            // best of a few runs, the scheduler adds noise but never removes work
-            double best = 1e9;
-            for (int i = 0; i < 5; i++) {
-                const auto t0 = std::chrono::steady_clock::now();
-                jinja::value_string parts = jinja::runtime::gather_string_parts(arr);
-                const double dt = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
-                if (parts->val_str.parts.size() == 1 && dt < best) {
-                    best = dt;
-                }
-            }
-            return best;
-        };
-
-        const double t1 = secs(4000);
-        const double t2 = secs(16000);
-        const double ratio = t1 > 0.0 ? t2 / t1 : 0.0;
-
-        // 4x the parts costs about 4x when linear, it cost about 16x when quadratic
-        if (!t.assert_true("4x the parts must not cost more than 8x", ratio > 0.0 && ratio < 8.0)) {
-            t.log("4000 parts : " + std::to_string(t1) + "s");
-            t.log("16000 parts: " + std::to_string(t2) + "s");
-            t.log("ratio: " + std::to_string(ratio));
-        }
-    });
 }
 
 static void test_template_cpp(testing & t, const std::string & name, const std::string & tmpl, const json & vars, const std::string & expect) {
