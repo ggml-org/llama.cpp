@@ -324,6 +324,7 @@ bool socket_t::impl::rdma_probe() {
 
     GGML_LOG_INFO("RDMA probe: device %s port %u: GID[%d] type=%s gid=%s\n",
                   matched_dev, rdma_local.ib_port, gid_idx, rdma_gid_type_str((enum ibv_gid_type) gid_version),
+                  rdma_gid_to_string(target_gid->data()).c_str());
 
     rdma = std::make_unique<rdma_conn>();
     rdma->ctx = ibctx;
