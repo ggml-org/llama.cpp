@@ -26,6 +26,12 @@
 #include <utility>
 #include <fstream>
 
+#if defined(_OPENMP)
+#define CR_SIMD _Pragma("omp simd")
+#else
+#define CR_SIMD
+#endif
+
 // fix problem with std::min and std::max
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
@@ -42,6 +48,19 @@ constexpr int HTTP_POLLING_SECONDS = 1;
 static common_speculative_output_limits server_output_limits(const common_params & params) {
     if (params.embedding ||
             (params.pooling_type != LLAMA_POOLING_TYPE_UNSPECIFIED && params.pooling_type != LLAMA_POOLING_TYPE_NONE)) {
+        return { params.n_batch, 1 };
+    }
+
+    // the /hidden-states endpoint processes tasks that need
+    // per-token output buffers (like embedding/pooling mode). When hidden-states
+    // is active, the server must allocate n_batch outputs. For pure-generation
+    // workloads, fall through to upstream's optimized calculation to save memory.
+    //
+    // Since hidden-states tasks arrive dynamically and n_outputs_max is computed
+    // once at startup, we must be conservative: if this server might receive
+    // hidden-states requests, allocate full n_batch. The --no-hidden-states flag
+    // explicitly disables the endpoint and allows the upstream optimization.
+    if (!params.no_hidden_states) {
         return { params.n_batch, 1 };
     }
 
@@ -393,9 +412,17 @@ struct server_slot {
 
     // if the context does not have a memory module then all embeddings have to be computed within a single ubatch
     // also we cannot split if the pooling would require any past tokens
-    // (MTP supports splitting — uses task->need_embd() not need_embd())
+    // (MTP supports splitting - uses task->need_embd() not need_embd())
     bool can_split() const {
         GGML_ASSERT(task);
+
+        // hidden-state extraction: captures each ubatch into a
+        // preallocated full-prompt buffer and pools after decode, so it can
+        // split safely across ubatches. The upstream embedding restriction
+        // does not apply here.
+        if (task->type == SERVER_TASK_TYPE_HIDDEN_STATES) {
+            return true;
+        }
 
         return
             !task->need_embd() ||
@@ -1498,7 +1525,11 @@ private:
         }
 
         // find the slot that has at least n% prompt similarity
-        if (slot_prompt_similarity != 0.0f) {
+        // HIDDEN_STATES tasks must bypass LCP similarity: they require a fresh
+        // full forward pass to populate t_hidden_layers[], and reusing a slot
+        // with cached KV state skips the decode for matched tokens, producing
+        // stale/partial hidden states. Force LRU selection for these tasks.
+        if (slot_prompt_similarity != 0.0f && task.type != SERVER_TASK_TYPE_HIDDEN_STATES) {
             float f_sim_best = 0;
 
             for (server_slot & slot : slots) {
@@ -1751,6 +1782,33 @@ private:
         slot.n_predict_max = task.params.n_predict != -1 ? task.params.n_predict : params_base.n_predict;
 
         slot.task = std::make_unique<const server_task>(std::move(task));
+
+        // For HIDDEN_STATES tasks, clear any leftover prompt tokens and KV cache
+        // from previous tasks on this slot. Hidden state extraction requires the
+        // forward pass to decode every token fresh. If the slot retains tokens
+        // from a prior request, the new tokens are decoded at wrong positions
+        // (pos_next() returns the old count), producing incorrect activations.
+        // This ensures position 0 start, matching the llama-hs-extract CLI path.
+        if (slot.task->type == SERVER_TASK_TYPE_HIDDEN_STATES && !slot.task->is_child()) {
+            // CRITICAL: For Gated Delta Net architectures (Qwen3.5), common_context_seq_rm()
+            // removes entries from the memory table but does NOT zero the underlying KV cache
+            // or recurrence state buffers. The linear attention layers maintain running
+            // recurrence state that persists across requests on the same slot, causing
+            // non-deterministic hidden states that drift with each request.
+            // Synchronize first to ensure all GPU operations are complete, then clear
+            // the entire memory to zero all recurrence state and match the CLI's
+            // fresh-context behavior.
+            //
+            // Scope assumption: llama_memory_clear(true) zeros ALL sequences in this
+            // context's memory module. This is safe because HIDDEN_STATES tasks decode
+            // exclusively (the server processes one slot at a time for this task type),
+            // and each slot has its own llama_context with independent memory. If future
+            // changes introduce shared memory across slots, this must be replaced with
+            // per-sequence clearing.
+            llama_synchronize(slot.ctx_tgt);
+            slot.prompt_clear();
+            llama_memory_clear(llama_get_memory(slot.ctx_tgt), true);
+        }
 
         slot.state = slot.task->is_child()
             ? SLOT_STATE_WAIT_OTHER // wait for the parent to process prompt
@@ -2287,6 +2345,150 @@ private:
                 (int) slot.prompt.checkpoints.size(), params_base.n_ctx_checkpoints, cur.pos_min,
                 cur.pos_max, cur.n_tokens, (float) cur.size() / 1024 / 1024);
     }
+    void send_hidden_states(const server_slot & slot, const llama_batch & batch) {
+        (void) batch;
+
+        // CRITICAL: CUDA operations are async. llama_decode() submits work to the
+        // GPU and returns immediately. Reading hidden state memory without this
+        // barrier returns garbage or stale data (CUDA race condition).
+        llama_synchronize(slot.ctx_tgt);
+
+        auto res = std::make_unique<server_task_result_hidden_states>();
+        res->id       = slot.task->id;
+        res->index    = slot.task->index;
+        res->n_tokens = slot.task->n_tokens();
+
+        const int32_t n_embd = llama_model_n_embd_out(model_tgt);
+        const int32_t n_layer = llama_model_n_layer(model_tgt);
+
+        // determine which layers to extract
+        std::vector<int> layers;
+        if (slot.task->params.hidden_all_layers) {
+            layers.resize(n_layer);
+            for (int i = 0; i < n_layer; i++) {
+                layers[i] = i;
+            }
+        } else {
+            layers = slot.task->params.hidden_layers;
+        }
+
+        const int32_t n_hs_tokens = llama_get_hidden_state_n_tokens(slot.ctx_tgt);
+
+        if (n_hs_tokens == 0) {
+            auto err = std::make_unique<server_task_result_error>();
+            err->id    = slot.task->id;
+            err->index = slot.task->index;
+            err->err_type = ERROR_TYPE_SERVER;
+            err->err_msg = "no hidden states available (decode may have failed)";
+            queue_results.send(std::move(err));
+            return;
+        }
+
+        // Response size guard for pool=none: returns n_tokens * n_embd * n_layers
+        // floats as JSON. Without a cap, a single request with long input + all
+        // layers can exhaust server memory (DoS vector).
+        // 100 MB float data limit (~1.5 GB JSON after serialization).
+        // Hoisted before the layer loop since it doesn't depend on individual layer.
+        if (slot.task->params.hidden_pool == "none") {
+            const size_t MAX_POOL_NONE_FLOATS = 25'000'000;  // 100 MB / 4 bytes
+            size_t total_all_layers = (size_t)n_hs_tokens * (size_t)n_embd * (size_t)layers.size();
+            if (total_all_layers > MAX_POOL_NONE_FLOATS) {
+                auto err = std::make_unique<server_task_result_error>();
+                err->id    = slot.task->id;
+                err->index = slot.task->index;
+                err->err_type = ERROR_TYPE_INVALID_REQUEST;
+                err->err_msg = "pool=none response too large: " +
+                               std::to_string(total_all_layers) + " floats across " +
+                               std::to_string(layers.size()) + " layers (limit: " +
+                               std::to_string(MAX_POOL_NONE_FLOATS) +
+                               "). Reduce input length or number of layers.";
+                queue_results.send(std::move(err));
+                return;
+            }
+        }
+
+        for (int layer : layers) {
+            if (layer < 0 || layer >= n_layer) {
+                auto err = std::make_unique<server_task_result_error>();
+                err->id   = slot.task->id;
+                err->index = slot.task->index;
+                err->err_type = ERROR_TYPE_SERVER;
+                err->err_msg = "hidden state layer " + std::to_string(layer) +
+                               " out of range [0, " + std::to_string(n_layer) + ")";
+                queue_results.send(std::move(err));
+                return;
+            }
+
+            float * hs = llama_get_hidden_state(slot.ctx_tgt, layer);
+            if (hs == nullptr) {
+                auto err = std::make_unique<server_task_result_error>();
+                err->id   = slot.task->id;
+                err->index = slot.task->index;
+                err->err_type = ERROR_TYPE_SERVER;
+                err->err_msg = "failed to get hidden state for layer " + std::to_string(layer);
+                queue_results.send(std::move(err));
+                return;
+            }
+
+            std::vector<float> vec;
+
+            if (slot.task->params.hidden_pool == "none") {
+                // Per-token: return all n_hs_tokens vectors (flattened)
+                // Size guard is hoisted before the layer loop (above).
+                size_t total = (size_t)n_hs_tokens * (size_t)n_embd;
+                vec.assign(hs, hs + total);
+            } else if (slot.task->params.hidden_pool == "skip_mean") {
+                // Masked-mean pooling: mean over [skip_offset, n_hs_tokens)
+                int32_t start = slot.task->params.hidden_skip_offset;
+                // Defense-in-depth: clamp negative skip_offset (should be caught by HTTP validation)
+                if (start < 0) start = 0;
+                if (start >= n_hs_tokens) {
+                    auto err = std::make_unique<server_task_result_error>();
+                    err->id   = slot.task->id;
+                    err->index = slot.task->index;
+                    err->err_type = ERROR_TYPE_INVALID_REQUEST;
+                    err->err_msg = "skip_offset (" + std::to_string(start) +
+                                   ") >= n_tokens (" + std::to_string(n_hs_tokens) + "): prompt too short";
+                    queue_results.send(std::move(err));
+                    return;
+                }
+                int32_t count = n_hs_tokens - start;
+                vec.resize(n_embd, 0.0f);
+                for (int32_t t = start; t < n_hs_tokens; t++) {
+                    // size_t cast: t*n_embd is computed in int32 and overflows for
+                    // large ctx·embd (the pool=none path at :2492 already casts;
+                    // this path must match or it reads from a wrapped pointer).
+                    const float * tok = hs + (size_t)t * n_embd;
+                    CR_SIMD
+                    for (int d = 0; d < n_embd; d++) vec[d] += tok[d];
+                }
+                float inv = 1.0f / (float)count;
+                CR_SIMD
+                for (int d = 0; d < n_embd; d++) vec[d] *= inv;
+            } else {
+                // Default: last token's hidden state
+                vec.assign(hs + (size_t)(n_hs_tokens - 1) * n_embd,
+                           hs + (size_t)n_hs_tokens * n_embd);
+            }
+
+            if (slot.task->params.hidden_normalize) {
+                float norm = 0.0f;
+                for (float v : vec) norm += v * v;
+                norm = std::sqrt(norm);
+                if (norm > 0.0f) {
+                    for (float & v : vec) v /= norm;
+                }
+            }
+
+            res->hidden_states[layer] = std::move(vec);
+        }
+
+        // disable hidden state extraction after reading
+        llama_set_extract_hidden_states(slot.ctx_tgt, false);
+
+        SLT_DBG(slot, "%s", "sending hidden states\n");
+        queue_results.send(std::move(res));
+    }
 
     // returns false to decline the task, it is offered again after the decode is done
     bool process_single_task(server_task && task, bool is_yielding) {
@@ -2301,6 +2503,7 @@ private:
             case SERVER_TASK_TYPE_INFILL:
             case SERVER_TASK_TYPE_EMBEDDING:
             case SERVER_TASK_TYPE_RERANK:
+            case SERVER_TASK_TYPE_HIDDEN_STATES:
                 {
                     // special case: if input is provided via CLI, tokenize it first
                     // otherwise, no need to tokenize as it's already done inside the HTTP thread
@@ -3552,6 +3755,29 @@ private:
 
         metrics_pre_decode();
 
+        auto & slot_batched      = batch.slot_batched;
+        auto & alora_scale       = batch.alora_scale;
+        auto & alora_disabled_id = batch.alora_disabled_id;
+
+        // TODO @ngxson : alora handling is too messy, need to refactor it to be more clear and maintainable
+        if (slot_batched) {
+            // apply lora, only need to do it once per batch
+            common_set_adapter_lora(ctx_tgt, slot_batched->lora);
+
+            // if the lora is temporarily disabled for an alora, re-enable it
+            // for next time
+            if (alora_scale > 0.0f) {
+                SRV_DBG("re-enabling alora with scale %f\n", alora_scale);
+                slot_batched->lora[alora_disabled_id].scale = alora_scale;
+            }
+
+            llama_set_embeddings(ctx_tgt, slot_batched->need_embd());
+
+            // enable/disable hidden state extraction before decode so the
+            // compute graph populates t_hidden_layers tensors
+            llama_set_extract_hidden_states(ctx_tgt, slot_batched->task->type == SERVER_TASK_TYPE_HIDDEN_STATES);
+        }
+
         if (batch.size() == 0) {
             SRV_WRN("%s", "no tokens to decode\n");
 
@@ -3722,6 +3948,13 @@ private:
 
                 if (slot.task->type == SERVER_TASK_TYPE_RERANK) {
                     send_rerank(slot, batch_view);
+                    slot.release();
+                    slot.i_batch = -1;
+                    return;
+                }
+
+                if (slot.task->type == SERVER_TASK_TYPE_HIDDEN_STATES) {
+                    send_hidden_states(slot, batch_view);
                     slot.release();
                     slot.i_batch = -1;
                     return;
@@ -4965,6 +5198,158 @@ void server_routes::init_routes() {
     this->post_embeddings_oai = [this](const server_http_req & req) {
         return handle_embeddings_impl(req, TASK_RESPONSE_TYPE_OAI_EMBD);
     };
+    this->post_hidden_states = [this](const server_http_req & req) {
+        auto res = create_response();
+
+        // Check if hidden-states endpoint is disabled via --no-hidden-states
+        if (params.no_hidden_states) {
+            res->error(format_error_response("Hidden states endpoint disabled by --no-hidden-states flag", ERROR_TYPE_NOT_SUPPORTED));
+            return res;
+        }
+
+        // Check if hidden states are supported
+        const int32_t n_layer = llama_model_n_layer(ctx_server.model_tgt);
+        if (n_layer <= 0) {
+            res->error(format_error_response("Hidden states extraction not supported by this model", ERROR_TYPE_INVALID_REQUEST));
+            return res;
+        }
+
+        const json body = json::parse(req.body);
+
+        // Parse layers parameter
+        std::vector<int> layers;
+        bool all_layers = false;
+
+        if (body.contains("layers")) {
+            const json & layers_json = body["layers"];
+            if (layers_json.is_string() && layers_json.get<std::string>() == "all") {
+                all_layers = true;
+            } else if (layers_json.is_array()) {
+                for (const auto & layer : layers_json) {
+                    if (!layer.is_number_integer()) {
+                        res->error(format_error_response("layers array must contain integers", ERROR_TYPE_INVALID_REQUEST));
+                        return res;
+                    }
+                    int layer_num = layer.get<int>();
+                    if (layer_num < 0 || layer_num >= n_layer) {
+                        res->error(format_error_response(
+                            "layer " + std::to_string(layer_num) + " out of range [0, " + std::to_string(n_layer) + "]",
+                            ERROR_TYPE_INVALID_REQUEST));
+                        return res;
+                    }
+                    layers.push_back(layer_num);
+                }
+            } else {
+                res->error(format_error_response("layers must be an array or string 'all'", ERROR_TYPE_INVALID_REQUEST));
+                return res;
+            }
+        } else {
+            // Default to all layers if not specified
+            all_layers = true;
+        }
+
+        // Parse normalize parameter
+        bool normalize = false;
+        if (body.contains("normalize")) {
+            if (!body["normalize"].is_boolean()) {
+                res->error(format_error_response("normalize must be a boolean", ERROR_TYPE_INVALID_REQUEST));
+                return res;
+            }
+            normalize = body["normalize"].get<bool>();
+        }
+
+        // Parse pool parameter (default: "last" = last token, "skip_mean" = masked-mean)
+        std::string pool = "last";
+        if (body.contains("pool")) {
+            if (!body["pool"].is_string()) {
+                res->error(format_error_response("pool must be a string ('last' or 'skip_mean')", ERROR_TYPE_INVALID_REQUEST));
+                return res;
+            }
+            pool = body["pool"].get<std::string>();
+            if (pool != "last" && pool != "skip_mean" && pool != "none") {
+                res->error(format_error_response("pool must be 'last', 'skip_mean', or 'none'", ERROR_TYPE_INVALID_REQUEST));
+                return res;
+            }
+        }
+
+        // Parse skip_offset parameter (default: 50, used with pool="skip_mean")
+        int32_t skip_offset = 50;
+        if (body.contains("skip_offset")) {
+            if (!body["skip_offset"].is_number_integer()) {
+                res->error(format_error_response("skip_offset must be an integer", ERROR_TYPE_INVALID_REQUEST));
+                return res;
+            }
+            skip_offset = body["skip_offset"].get<int32_t>();
+            if (skip_offset < 0) {
+                res->error(format_error_response("skip_offset must be non-negative", ERROR_TYPE_INVALID_REQUEST));
+                return res;
+            }
+        }
+
+        // Get input text
+        json prompt;
+        if (body.contains("input")) {
+            prompt = body["input"];
+        } else {
+            res->error(format_error_response("input field is required", ERROR_TYPE_INVALID_REQUEST));
+            return res;
+        }
+
+        // Tokenize the input using the same pattern as embeddings
+        auto tokenized_prompts = tokenize_input_prompts(ctx_server.vocab, ctx_server.mctx, prompt, true, true);
+        if (tokenized_prompts.empty() || tokenized_prompts[0].empty()) {
+            res->error(format_error_response("Failed to tokenize input", ERROR_TYPE_INVALID_REQUEST));
+            return res;
+        }
+
+        // Create and queue the task
+        json responses = json::array();
+        auto & rd = res->rd;
+        {
+            std::vector<server_task> tasks;
+            for (size_t i = 0; i < tokenized_prompts.size(); i++) {
+                server_task task = server_task(SERVER_TASK_TYPE_HIDDEN_STATES);
+                task.id = rd.get_new_id();
+                task.tokens = std::move(tokenized_prompts[i]);
+                // Disable prompt caching for hidden-states extraction. Cached tokens
+                // skip the forward pass, but t_hidden_layers[] is only populated for
+                // decoded tokens. With cache_prompt=true, repeated requests for the
+                // same text return stale/partial hidden states because the matched
+                // tokens are not re-decoded. Hidden-states requires a fresh full
+                // forward pass every time to produce correct, deterministic results.
+                task.params.cache_prompt = false;
+                task.params.hidden_layers = layers;
+                task.params.hidden_all_layers = all_layers;
+                task.params.hidden_normalize = normalize;
+                task.params.hidden_pool = pool;
+                task.params.hidden_skip_offset = skip_offset;
+                tasks.push_back(std::move(task));
+            }
+            rd.post_tasks(std::move(tasks));
+        }
+
+        // Wait for the results
+        auto all_results = rd.wait_for_all(req.should_stop);
+
+        // Collect results
+        if (all_results.is_terminated) {
+            return res;
+        } else if (all_results.error) {
+            res->error(all_results.error->to_json());
+            return res;
+        } else {
+            for (auto & result : all_results.results) {
+                GGML_ASSERT(dynamic_cast<server_task_result_hidden_states*>(result.get()) != nullptr);
+                responses.push_back(result->to_json());
+            }
+        }
+
+        // Format response
+        json root = json(responses);
+        res->ok(root);
+        return res;
+    };
+
 
     this->post_rerank = [this](const server_http_req & req) {
         auto res = create_response();

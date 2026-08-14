@@ -600,6 +600,9 @@ struct common_params {
     std::string embd_sep   = "\n";  // separator of embeddings
     std::string cls_sep    = "\t";  // separator of classification sequences
 
+    // hidden-states extraction
+    bool    no_hidden_states   = false;         // disable /hidden-states endpoint (enables upstream output-allocation optimization)
+
     // server params
     int32_t port                = 8080;          // server listens on this network port
     bool    reuse_port          = false;         // allow multiple sockets to bind to the same port

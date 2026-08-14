@@ -16,6 +16,7 @@ using json = nlohmann::ordered_json;
 enum server_task_type {
     SERVER_TASK_TYPE_COMPLETION,
     SERVER_TASK_TYPE_EMBEDDING,
+    SERVER_TASK_TYPE_HIDDEN_STATES,
     SERVER_TASK_TYPE_RERANK,
     SERVER_TASK_TYPE_INFILL,
     SERVER_TASK_TYPE_CANCEL,
@@ -96,6 +97,14 @@ struct task_params {
 
     // Embeddings
     int32_t embd_normalize = 2; // (-1=none, 0=max absolute int16, 1=taxicab, 2=Euclidean/L2, >2=p-norm)
+
+    // Hidden states
+    std::vector<int> hidden_layers; // specific layers to extract
+    bool hidden_all_layers = false; // extract all layers
+    bool hidden_normalize = false; // normalize hidden state vectors
+    // Pooling: "last" (default) = last token only, "skip_mean" = mean over [skip_offset, n_tokens), "none" = all per-token vectors
+    std::string hidden_pool = "last";
+    int32_t hidden_skip_offset = 50; // tokens to skip for skip_mean pooling
 
     json format_logit_bias(const std::vector<llama_logit_bias> & logit_bias) const;
     json to_json(bool only_metrics = false) const;
@@ -188,6 +197,15 @@ struct server_task {
             case SERVER_TASK_TYPE_EMBEDDING:
             case SERVER_TASK_TYPE_RERANK:
                 return true;
+            // SERVER_TASK_TYPE_HIDDEN_STATES does NOT need embeddings output.
+            // Hidden states are captured per-layer from t_hidden_layers[] tensors
+            // during the forward pass, independent of the embedding/logit output
+            // path. Setting need_embd()=true forces output_all=true in the batch
+            // allocator, which changes the graph structure (inp_out_ids row
+            // selection) and produces different hidden state values than the
+            // CLI path (llama-hs-extract). For consistency with the offline
+            // extraction pipeline, hidden-states must use the same graph shape
+            // as generation: output_all=false, last-token logits only.
             default:
                 return false;
         }
@@ -464,6 +482,15 @@ struct server_task_result_embd : server_task_result {
     json to_json_non_oaicompat();
 
     json to_json_oaicompat();
+};
+
+
+struct server_task_result_hidden_states : server_task_result {
+    std::map<int32_t, std::vector<float>> hidden_states; // layer -> vector
+
+    int32_t n_tokens;
+
+    virtual json to_json() override;
 };
 
 struct server_task_result_rerank : server_task_result {

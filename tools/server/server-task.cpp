@@ -1487,6 +1487,21 @@ json server_task_result_embd::to_json_oaicompat() {
 }
 
 //
+// server_task_result_hidden_states
+//
+json server_task_result_hidden_states::to_json() {
+    json layers = json::object();
+    for (const auto & kv : hidden_states) {
+        layers[std::to_string(kv.first)] = kv.second;
+    }
+    return json {
+        {"index",            index},
+        {"hidden_states",    layers},
+        {"tokens_evaluated", n_tokens},
+    };
+}
+
+//
 // server_task_result_rerank
 //
 json server_task_result_rerank::to_json() {

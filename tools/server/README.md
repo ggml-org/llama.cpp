@@ -904,6 +904,52 @@ Same as the `/v1/embeddings` endpoint.
 ]
 ```
 
+### POST `/hidden-states`: Extract hidden-state activations from the model
+
+This is a fork-specific endpoint for extracting per-layer hidden-state vectors from a forward pass. It does not generate tokens.
+
+*Request body (JSON):*
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `input` | string or array | yes | - | The input text (or array of texts) to process |
+| `layers` | int[] or `"all"` | no | `"all"` | Which layers to extract. Array of integers in `[0, n_layer)` or `"all"` |
+| `pool` | string | no | `"last"` | Pooling mode: `"last"`, `"skip_mean"`, or `"none"` |
+| `skip_offset` | int | no | `50` | Number of initial tokens to skip when `pool="skip_mean"` |
+| `normalize` | bool | no | `false` | L2-normalize each output vector |
+
+*Pooling modes:*
+
+- **`last`**: Returns the hidden state at the last token position. Shape per layer: `[1, n_embd_out]`.
+- **`skip_mean`**: Returns the mean over tokens `[skip_offset, n_tokens)`. Shape per layer: `[1, n_embd_out]`.
+- **`none`**: Returns all per-token hidden states without pooling. Shape per layer: `[n_tokens, n_embd_out]`.
+
+*Response format:*
+
+```json
+[
+  {
+    "hidden_states": {
+      "0":  [0.012, -0.034, ...],
+      "15": [0.056,  0.078, ...],
+      "34": [-0.011, 0.022, ...]
+    }
+  }
+]
+```
+
+Each key in `hidden_states` is the layer index (as a string). The value is a flat float array:
+- For `pool="last"` or `pool="skip_mean"`: length = `n_embd_out`
+- For `pool="none"`: length = `n_tokens * n_embd_out` (reshape to `[n_tokens, n_embd_out]` client-side)
+
+*Example:*
+
+```bash
+curl -X POST http://localhost:8080/hidden-states \
+  -H "Content-Type: application/json" \
+  -d '{"input": "The cat sat on the mat", "layers": [0, 15, 34], "pool": "none"}'
+```
+
 ### GET `/slots`: Returns the current slots processing state
 
 This endpoint is enabled by default and can be disabled with `--no-slots`. It can be used to query various per-slot metrics, such as speed, processed tokens, sampling parameters, etc.
