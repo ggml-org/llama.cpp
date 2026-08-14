@@ -296,6 +296,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
             return new llama_model_grovemoe(params);
         case LLM_ARCH_APERTUS:
             return new llama_model_apertus(params);
+        case LLM_ARCH_MINIMAX_01:
+            return new llama_model_minimax_01(params);
         case LLM_ARCH_MINIMAX_M2:
             return new llama_model_minimax_m2(params);
         case LLM_ARCH_MINIMAX_M3:
@@ -798,6 +800,7 @@ const char * llm_type_name(llm_type type) {
         case LLM_TYPE_290B:          return "290B";
         case LLM_TYPE_314B:          return "314B";
         case LLM_TYPE_405B:          return "405B";
+        case LLM_TYPE_456B:          return "456B";
         case LLM_TYPE_671B:          return "671B";
         case LLM_TYPE_SMALL:         return "0.1B";
         case LLM_TYPE_MEDIUM:        return "0.4B";
@@ -2283,7 +2286,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                         filter_recr = [&](uint32_t il) {
                             return hparams.is_recr(il) && hparams.n_ff(il) == 0;
                         };
-                    } else if (arch == LLM_ARCH_QWEN3NEXT || arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_QWEN35MOE) {
+                    } else if (arch == LLM_ARCH_QWEN3NEXT || arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_QWEN35MOE || arch == LLM_ARCH_MINIMAX_01) {
                         filter_attn = [&](uint32_t il) {
                             return il < hparams.n_layer() && !hparams.is_recr(il);
                         };
@@ -2704,6 +2707,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_SEED_OSS:
         case LLM_ARCH_GROVEMOE:
         case LLM_ARCH_APERTUS:
+        case LLM_ARCH_MINIMAX_01:
         case LLM_ARCH_MINIMAX_M2:
         case LLM_ARCH_MINIMAX_M3:
         case LLM_ARCH_COGVLM:

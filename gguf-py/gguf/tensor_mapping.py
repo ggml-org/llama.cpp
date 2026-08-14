@@ -225,6 +225,7 @@ class TensorNameMap:
             "rwkv.blocks.{bid}.ln2",                        # rwkv6
             "model.layers.{bid}.ln2",                       # rwkv7
             "model.layers.{bid}.post_attention_layernorm",  # cogvlm
+            "model.layers.{bid}.self_attn.norm",            # minimax-01
         ),
 
         # Attention query-key-value
@@ -321,7 +322,7 @@ class TensorNameMap:
             "h.{bid}.self_attention.dense",                                 # bloom
             "model.layers.{bid}.self_attn.o_proj",                          # llama-hf nemotron olmoe olmo2 phimoe
             "layers.{bid}.self_attn.o_proj",                                # embeddinggemma
-            "model.layers.{bid}.self_attn.out_proj",                        # lfm2
+            "model.layers.{bid}.self_attn.out_proj",                        # lfm2 minimax-01
             "model.layers.{bid}.self_attn.linear_attn",                     # deci
             "layers.{bid}.attention.wo",                                    # llama-pth
             "encoder.layer.{bid}.attention.output.dense",                   # bert
@@ -385,6 +386,7 @@ class TensorNameMap:
             "model.layers.{bid}.self_attn.gate_proj", # afmoe muse-glimmer
             "model.layers.{bid}.linear_attn.in_proj_z",  # qwen3.5
             "model.layers.{bid}.self_attn.g_proj",    # step3.5 head-wise attention gate
+            "model.layers.{bid}.self_attn.output_gate",  # minimax-01
         ),
 
         # Feed-forward norm
