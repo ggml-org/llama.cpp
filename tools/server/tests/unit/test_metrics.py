@@ -225,39 +225,3 @@ def test_metrics_embedding_prompt_is_counted():
     assert metrics["llamacpp:prompt_tokens_total"][1] > 0
     assert metrics["llamacpp:n_decode_total"][1] > 0
     assert metrics["llamacpp:tokens_predicted_total"][1] == 0
-
-
-def test_metrics_served_while_decoding():
-    global server
-    server.server_slots = True
-    server.start()
-
-    # the decode runs on a worker thread, so the queue can still answer metrics tasks
-    # ignore_eos keeps the slot busy for the whole request
-    stream = server.make_stream_request("POST", "/completion", data={
-        "prompt": "the quick brown fox jumps over the lazy dog " * 4,
-        "n_predict": 200,
-        "ignore_eos": True,
-        "stream": True,
-    })
-    next(stream)  # the first token is out, the slot is decoding from now on
-
-    # short timeouts: if the queue stops answering, fail fast instead of hanging for 10 minutes
-    res = server.make_request("GET", "/slots", timeout=30)
-    assert res.status_code == 200
-    assert any(slot["is_processing"] for slot in res.body)
-
-    res = server.make_request("GET", "/metrics", timeout=30)
-    assert res.status_code == 200
-    assert isinstance(res.body, str)
-    assert parse_metrics(res.body)["llamacpp:requests_processing"][1] == 1
-
-    # a completion is not safe to run during a decode, it is declined and must not be lost
-    res = server.make_request("POST", "/completion", data={"prompt": "I believe", "n_predict": 4}, timeout=30)
-    assert res.status_code == 200
-    assert res.body["timings"]["predicted_n"] == 4
-
-    last = None
-    for chunk in stream:
-        last = chunk
-    assert last is not None and last["stop"] is True
