@@ -721,8 +721,8 @@ class DSparkModel(DFlashModel):
             hparams = ModelBase.load_hparams(dir_model, False)
 
         # block layout default by arch: speculators drafts are 1+N, DeepSpec ones sample from the anchor
-        self._sample_from_anchor = hparams.get("sample_from_anchor",
-            hparams["architectures"][0] not in ("DSparkDraftModel", "DSparkSpeculator"))
+        self._sample_from_anchor = hparams.get(
+            "sample_from_anchor", hparams["architectures"][0] not in ("DSparkDraftModel", "DSparkSpeculator"))
         if "transformer_layer_config" in hparams:  # speculators nests the backbone hparams
             hparams = {**hparams, **hparams["transformer_layer_config"]}
 
