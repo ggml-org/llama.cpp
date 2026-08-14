@@ -295,6 +295,7 @@ bool socket_t::impl::rdma_probe() {
                 found_version = entry.gid_type;
                 GGML_LOG_INFO("RDMA probe: device %s port %u: GID[%d] type=%s gid=%s\n",
                               dn, ib_port, found_gid, rdma_gid_type_str((enum ibv_gid_type) found_version),
+                              rdma_gid_to_string(entry.gid.raw).c_str());
             }
         }
         if (found_gid >= 0) {
@@ -305,6 +306,7 @@ bool socket_t::impl::rdma_probe() {
             rdma_local.path_mtu = pa.active_mtu;
             GGML_LOG_INFO("RDMA probe: device %s port %u: GID[%d] type=%s gid=%s\n",
                           dn, ib_port, found_gid, rdma_gid_type_str((enum ibv_gid_type) found_version),
+                          rdma_gid_to_string(target_gid->data()).c_str());
             break;
         }
         GGML_LOG_INFO("RDMA probe: device %s port %u: no GID matching local addr %s, skipping\n",
