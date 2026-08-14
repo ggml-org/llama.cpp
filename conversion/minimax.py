@@ -44,6 +44,20 @@ class MiniMaxText01Model(TextModel):
 
         return tokens_zero_embeddings_ids
 
+    def set_vocab(self) -> None:
+        from pathlib import Path
+
+        self._set_vocab_gpt2()
+
+        for tmpl_file in [
+            self.dir_model / "chat_template.jinja",
+            Path(__file__).parent.parent / "models" / "templates" / "MiniMax-M1.jinja"
+        ]:
+            if tmpl_file.is_file():
+                self.gguf_writer.add_chat_template(tmpl_file.read_text(encoding="utf-8"))
+                logger.info(f"Chat template overridden with {tmpl_file}.")
+                break
+
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
 
