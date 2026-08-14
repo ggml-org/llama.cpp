@@ -2437,7 +2437,15 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
         !ggml_is_transposed(op->src[1]) &&
         // for now the matrix-matrix multiplication kernel only works on A14+/M1+ SoCs
         // AMD GPU and older A-chips will reuse matrix-vector multiplication kernel
-        props_dev->has_simdgroup_mm && ne00 >= 64 && ne11 > ne11_mm_min) {
+        props_dev->has_simdgroup_mm && ne00 >= 64 && ne11 > ne11_mm_min &&
+        // the tensor API variant of kernel_mul_mm reads src1 directly from device memory through
+        // a cooperative tensor, which has two limitations - use the mat-vec kernels in these cases:
+        // - the src1 row stride is limited to 16 bits
+        //   example: the permuted src1 produced by the MLA + FA attention epilogue in llama.cpp
+        // - the last K tile is read out of bounds when ne00 is not a multiple of the tile size,
+        //   unlike src0 which is staged through threadgroup memory with zero padding
+        //   example: the im2col src1 of a conv_2d with K = 14*14*3 (see #25652)
+        (!props_dev->has_tensor || (nb11/ggml_type_size(op->src[1]->type) < 65536 && ne00 % 32 == 0))) {
         //GGML_LOG_INFO("matrix: ne00 = %6d, ne01 = %6d, ne02 = %6d, ne11 = %6d, ne12 = %6d\n", ne00, ne01, ne02, ne11, ne12);
 
         // some Metal matrix data types require aligned pointers
