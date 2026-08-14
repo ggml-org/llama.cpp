@@ -1,60 +1,41 @@
 <script lang="ts">
-	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
-	import type { Snippet } from 'svelte';
-	import * as Tooltip from '$lib/components/ui/tooltip';
-	import * as Sheet from '$lib/components/ui/sheet';
-	import * as Collapsible from '$lib/components/ui/collapsible';
-	import { File, MessageSquare, Zap, FolderOpen } from '@lucide/svelte';
-	import { Switch } from '$lib/components/ui/switch';
-	import { Checkbox } from '$lib/components/ui/checkbox';
-	import { TOOLTIP_DELAY_DURATION } from '$lib/constants';
-	import { ATTACHMENT_FILE_ITEMS } from '$lib/constants/attachment-menu';
-	import { useAttachmentMenu } from '$lib/hooks/use-attachment-menu.svelte';
-	import { useToolsPanel } from '$lib/hooks/use-tools-panel.svelte';
-	import { useReasoningMenu } from '$lib/hooks/use-reasoning-menu.svelte';
-	import { conversationsStore } from '$lib/stores/conversations.svelte';
-	import { mcpStore } from '$lib/stores/mcp.svelte';
-	import { McpLogo } from '$lib/components/app';
+	import { File, FolderOpen, MessageSquare, Zap } from '@lucide/svelte';
 	import {
-		PencilRuler,
+		Check,
 		ChevronDown,
 		ChevronRight,
 		Lightbulb,
 		LightbulbOff,
-		Check
+		PencilRuler
 	} from '@lucide/svelte';
+	import { McpLogo } from '$lib/components/app';
+	import { Checkbox } from '$lib/components/ui/checkbox';
+	import * as Collapsible from '$lib/components/ui/collapsible';
+	import * as Sheet from '$lib/components/ui/sheet';
+	import { Switch } from '$lib/components/ui/switch';
+	import * as Tooltip from '$lib/components/ui/tooltip';
+	import {
+		ATTACHMENT_FILE_ITEMS,
+		ICON_CLASS_DEFAULT,
+		TOOLTIP_DELAY_DURATION
+	} from '$lib/constants';
+	import { getChatFormActionsContext } from '$lib/contexts';
 	import { HealthCheckStatus } from '$lib/enums';
 	import { AttachmentAction } from '$lib/enums/attachment.enums';
+	import { useAttachmentMenu } from '$lib/hooks/use-attachment-menu.svelte';
+	import { useReasoningMenu } from '$lib/hooks/use-reasoning-menu.svelte';
+	import { useToolsPanel } from '$lib/hooks/use-tools-panel.svelte';
+	import { conversationsStore, mcpStore } from '$lib/stores';
+	import type { Snippet } from 'svelte';
 
 	interface Props {
 		class?: string;
-		disabled?: boolean;
-		hasAudioModality?: boolean;
-		hasVideoModality?: boolean;
-		hasVisionModality?: boolean;
-		hasMcpPromptsSupport?: boolean;
-		hasMcpResourcesSupport?: boolean;
-		onFileUpload?: () => void;
-		onSystemPromptClick?: () => void;
-		onMcpPromptClick?: () => void;
-		onMcpResourcesClick?: () => void;
 		trigger: Snippet<[{ disabled: boolean; onclick?: () => void }]>;
 	}
 
-	let {
-		class: className = '',
-		disabled = false,
-		hasAudioModality = false,
-		hasVisionModality = false,
-		hasVideoModality = false,
-		hasMcpPromptsSupport = false,
-		hasMcpResourcesSupport = false,
-		onFileUpload,
-		onSystemPromptClick,
-		onMcpPromptClick,
-		onMcpResourcesClick,
-		trigger
-	}: Props = $props();
+	let { class: className = '', trigger }: Props = $props();
+
+	const chatFormActions = getChatFormActionsContext();
 
 	let sheetOpen = $state(false);
 	let reasoningExpanded = $state(false);
@@ -64,13 +45,18 @@
 
 	const attachmentMenu = useAttachmentMenu(
 		() => ({
-			hasVisionModality,
-			hasAudioModality,
-			hasVideoModality,
-			hasMcpPromptsSupport,
-			hasMcpResourcesSupport
+			hasAudioModality: chatFormActions.hasAudioModality,
+			hasMcpPromptsSupport: chatFormActions.hasMcpPromptsSupport,
+			hasMcpResourcesSupport: chatFormActions.hasMcpResourcesSupport,
+			hasVideoModality: chatFormActions.hasVideoModality,
+			hasVisionModality: chatFormActions.hasVisionModality
 		}),
-		() => ({ onFileUpload, onSystemPromptClick, onMcpPromptClick, onMcpResourcesClick }),
+		() => ({
+			onFileUpload: chatFormActions.onFileUpload,
+			onMcpPromptClick: chatFormActions.onMcpPromptClick,
+			onMcpResourcesClick: chatFormActions.onMcpResourcesClick,
+			onSystemPromptClick: chatFormActions.onSystemPromptClick
+		}),
 		() => {
 			sheetOpen = false;
 		}
@@ -90,7 +76,7 @@
 
 <div class="flex items-center gap-1 {className}">
 	<Sheet.Root bind:open={sheetOpen}>
-		{@render trigger({ disabled, onclick: () => (sheetOpen = true) })}
+		{@render trigger({ disabled: chatFormActions.disabled, onclick: () => (sheetOpen = true) })}
 
 		<Sheet.Content side="bottom" class="max-h-[85vh] gap-0 overflow-y-auto">
 			<Sheet.Header>
@@ -349,7 +335,7 @@
 					<span>System Message</span>
 				</button>
 
-				{#if hasMcpPromptsSupport}
+				{#if chatFormActions.hasMcpPromptsSupport}
 					<button
 						type="button"
 						class={sheetItemClass}
@@ -361,7 +347,7 @@
 					</button>
 				{/if}
 
-				{#if hasMcpResourcesSupport}
+				{#if chatFormActions.hasMcpResourcesSupport}
 					<button
 						type="button"
 						class={sheetItemClass}

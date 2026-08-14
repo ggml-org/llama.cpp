@@ -201,10 +201,13 @@ public:
     // for compatibility with context shift and prompt truncation
     void insert(const llama_tokens & inp_tokens);
 
-    // for compatibility with speculative decoding, ctx shift, slot save/load
+    // for compatibility with speculative decoding, ctx shift
     const llama_tokens & get_tokens() const;
 
     llama_tokens get_text_tokens() const;
+
+    std::vector<char> serialize() const;
+    static server_tokens deserialize(const llama_tokens & packed, bool has_mtmd);
 
     // for compatibility with speculative decoding
     void set_token(llama_pos pos, llama_token id);
@@ -212,9 +215,6 @@ public:
     size_t size() const { return tokens.size(); }
 
     bool empty() const { return tokens.empty(); }
-
-    // true if the sequence actually contains image/audio chunks.
-    bool has_media() const { return !map_idx_to_media.empty(); }
 
     void clear() {
         map_idx_to_media.clear();
@@ -230,7 +230,7 @@ public:
     // split the tokens into message spans, skipping over media chunks
     common_chat_msg_spans find_message_spans(const common_chat_msg_delimiters & delims) const;
 
-    // make sure all text tokens are within the vocab range
+    // check text token IDs and the mapping between media chunks and token ranges
     bool validate(const struct llama_context * ctx) const;
 
     server_tokens clone() const;
@@ -333,6 +333,160 @@ json format_response_rerank(
         bool is_tei_format,
         std::vector<std::string> & texts,
         int top_n);
+
+//
+// stats and metrics
+//
+
+// shared between server_slot and server_task_result_*
+struct server_slot_stats {
+    uint64_t n_prompt_cached    = 0;
+    uint64_t n_prompt_processed = 0;
+    uint64_t n_gen              = 0;
+
+    // speculative decoding stats
+    // note: the per-position breakdown lives in server_slot, it is not needed in a task result
+    uint64_t n_draft_tokens      = 0;
+    uint64_t n_draft_accepted    = 0;
+    uint64_t n_draft_verif_steps = 0;
+
+    // these are absolute timestamps (in us)
+    // note: must be signed - they are subtracted before the later ones are set
+    int64_t t_start       = 0;
+    int64_t t_prompt_last = 0;
+    int64_t t_gen_last    = 0;
+
+    // can only move one direction: start -> prompt -> gen
+    void update_prompt_start() {
+        GGML_ASSERT(t_start == 0);
+        t_start = ggml_time_us();
+    }
+    void set_prompt_last(int64_t t_us) {
+        GGML_ASSERT(t_start > 0);
+        t_prompt_last = t_us;
+    }
+    void update_prompt_last() {
+        set_prompt_last(ggml_time_us());
+    }
+    void update_gen_last() {
+        GGML_ASSERT(t_prompt_last > 0);
+        t_gen_last = ggml_time_us();
+    }
+
+    // these are time durations
+    int64_t t_elapsed_us() const {
+        return ggml_time_us() - t_start;
+    }
+    double t_prompt_ms() const {
+        if (t_prompt_last == 0) {
+            return 0.0; // the prompt is not processed yet
+        }
+        return (t_prompt_last - t_start) / 1000.0;
+    }
+    int64_t t_gen_us() const {
+        if (t_gen_last == 0) {
+            return 0; // the generation is not started yet
+        }
+        // clamp to 1 us, the first token can land in the same us as t_prompt_last
+        return std::max<int64_t>(1, t_gen_last - t_prompt_last);
+    }
+    double t_gen_ms() const {
+        return t_gen_us() / 1000.0;
+    }
+
+    // number of decode steps spent on generation
+    // the first token is free, it comes from the logits of the last prompt batch
+    uint64_t n_gen_steps() const {
+        return n_gen > 0 ? n_gen - 1 : 0;
+    }
+
+    // other derived metrics
+    // note: all of them return 0.0 if the divisor is not known yet
+    double t_prompt_per_token_ms() const {
+        return n_prompt_processed > 0 ? t_prompt_ms() / n_prompt_processed : 0.0;
+    }
+    double t_gen_per_token_ms() const {
+        return n_gen_steps() > 0 ? t_gen_ms() / n_gen_steps() : 0.0;
+    }
+    double n_prompt_tps() const {
+        const double t_ms = t_prompt_ms();
+        return t_ms > 0.0 ? 1e3 / t_ms * n_prompt_processed : 0.0;
+    }
+    double n_gen_tps() const {
+        const double t_ms = t_gen_ms();
+        return t_ms > 0.0 ? 1e3 / t_ms * n_gen_steps() : 0.0;
+    }
+
+    // false if the slot never started, i.e. the task result carries no stats
+    bool is_set() const {
+        return t_start > 0;
+    }
+
+    json to_json() const;
+};
+
+// shared between server_context_impl and server_task_result_*
+// unlike server_slot_stats, server_metrics is server-global and cumulative, not tied to a slot
+struct server_metrics {
+    int64_t t_start = 0;
+
+    struct bucket {
+        uint64_t count = 0; // number of tokens
+        uint64_t steps = 0; // number of decode steps,
+                            // this excludes first generated token (logits from prompt batch)
+        uint64_t time  = 0; // in microseconds
+
+        // the rate uses the decode steps, so that "free" tokens do not inflate it
+        double n_per_second() const {
+            return time > 0 ? (double) steps / (double) time * 1e6 : 0.0;
+        }
+
+        void add(uint64_t n, uint64_t n_steps, uint64_t t_us) {
+            count += n;
+            steps += n_steps;
+            time  += t_us;
+        }
+    };
+
+    // these are reset by reset_bucket(), only the rate is read from them
+    bucket prompt_bucket;
+    bucket predict_bucket;
+
+    // metrics below are cumulative since the server started
+    bucket prompt; // only processed tokens, cached ones are counted separately below
+    bucket predict;
+
+    // tokens reused from the cache need no decode, so they only have a count
+    uint64_t n_prompt_cached = 0;
+
+    uint64_t n_tokens_max = 0;
+
+    uint64_t n_decode     = 0;
+    uint64_t n_busy_slots = 0;
+
+    uint64_t n_draft_tokens      = 0; // Total draft tokens generated
+    uint64_t n_draft_accepted    = 0; // Draft tokens actually accepted
+    uint64_t n_draft_verif_steps = 0; // Total draft token verification steps by the target model
+    std::vector<uint64_t> n_accepted_per_pos; // Accepted tokens per draft position
+
+    void init() {
+        t_start = ggml_time_us();
+    }
+
+    void reset_bucket() {
+        prompt_bucket  = {};
+        predict_bucket = {};
+    }
+
+    void add_prompt(uint64_t n_tokens, uint64_t t_us) {
+        prompt       .add(n_tokens, n_tokens, t_us);
+        prompt_bucket.add(n_tokens, n_tokens, t_us);
+    }
+
+    void add_prompt_cached(uint64_t n_tokens) {
+        n_prompt_cached += n_tokens;
+    }
+};
 
 //
 // other utils

@@ -2608,7 +2608,7 @@ static bool ggml_thread_apply_priority(int32_t prio) {
     return true;
 }
 
-#elif defined(__gnu_linux__)
+#elif defined(__linux__)
 // TODO: this may not work on BSD, to be verified
 
 static bool ggml_thread_apply_affinity(const bool * mask) {
@@ -2792,6 +2792,11 @@ struct ggml_cplan ggml_graph_plan(
 
 #if defined(__EMSCRIPTEN__) && !defined(__EMSCRIPTEN_PTHREADS__)
     // Emscripten without pthreads support can only use a single thread
+    n_threads = 1;
+#endif
+
+#if defined(__wasi__)
+    // WASI doesn't support parallelism yet
     n_threads = 1;
 #endif
 

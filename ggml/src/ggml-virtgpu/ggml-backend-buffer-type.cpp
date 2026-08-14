@@ -11,9 +11,9 @@ static ggml_backend_buffer_t ggml_backend_remoting_buffer_type_alloc_buffer(ggml
 
     context->gpu = gpu;
 
-    bool async__unused, host_buffer__unused, events__unused;
+    bool async__unused, host_buffer__unused, events__unused, mmap_support__unused;
     bool buffer_from_host_ptr;
-    apir_device_get_props(gpu, &async__unused, &host_buffer__unused, &buffer_from_host_ptr, &events__unused);
+    apir_device_get_props(gpu, &async__unused, &host_buffer__unused, &buffer_from_host_ptr, &events__unused, &mmap_support__unused);
 
     if (buffer_from_host_ptr) {
         context->apir_context = apir_device_buffer_from_ptr(gpu, size, size);

@@ -1,4 +1,7 @@
 <script lang="ts">
+	import { RefreshCw } from '@lucide/svelte';
+	import { goto } from '$app/navigation';
+	import { page } from '$app/state';
 	import {
 		SettingsChatDesktopSidebar,
 		SettingsChatFields,
@@ -7,32 +10,25 @@
 		SettingsChatToolsTab,
 		SettingsFooter
 	} from '$lib/components/app/settings';
-	import { config, settingsStore } from '$lib/stores/settings.svelte';
+	import { Button } from '$lib/components/ui/button';
 	import {
 		NUMERIC_FIELDS,
 		POSITIVE_INTEGER_FIELDS,
 		SETTINGS_CHAT_SECTIONS,
 		SETTINGS_SECTION_TITLES
 	} from '$lib/constants';
-	import type { SettingsSection } from '$lib/types';
-	import { RouterService } from '$lib/services/router.service';
-	import { setMode } from 'mode-watcher';
 	import { ColorMode } from '$lib/enums/ui.enums';
+	import { RouterService } from '$lib/services/router.service';
+	import { modelsStore, serverStore, settingsReferrer, settingsStore } from '$lib/stores';
+	import type { SettingsSection } from '$lib/types';
+	import { setMode } from 'mode-watcher';
 	import { fade } from 'svelte/transition';
-	import { goto } from '$app/navigation';
-	import { Button } from '$lib/components/ui/button';
-	import { RefreshCw } from '@lucide/svelte';
-	import { page } from '$app/state';
-	import { setChatSettingsConfigContext } from '$lib/contexts';
-	import { settingsReferrer } from '$lib/stores/settings-referrer.svelte';
-	import { modelsStore } from '$lib/stores/models.svelte';
-	import { isRouterMode } from '$lib/stores/server.svelte';
 	interface Props {
 		initialSection?: string;
 		getSectionHref?: (section: SettingsSection) => string;
 	}
 
-	let { initialSection, getSectionHref }: Props = $props();
+	let { getSectionHref, initialSection }: Props = $props();
 
 	let activeSlug = $derived(
 		initialSection ?? (page.params as Record<string, string | undefined>).section ?? 'general'
@@ -43,14 +39,14 @@
 			SETTINGS_CHAT_SECTIONS[0]
 	);
 
-	let localConfig: SettingsConfigType = $state({ ...config() });
+	let localConfig: SettingsConfigType = $state({ ...settingsStore.config });
 
 	let mobileHeader: { updateCarousel: () => void } | undefined;
 
 	let fetchInitiated = false;
 
 	$effect(() => {
-		if (isRouterMode() && currentSection.fields && !fetchInitiated) {
+		if (serverStore.isRouterMode && currentSection.fields && !fetchInitiated) {
 			fetchInitiated = true;
 
 			void modelsStore
@@ -71,7 +67,7 @@
 	}
 
 	function handleReset() {
-		localConfig = { ...config() };
+		localConfig = { ...settingsStore.config };
 		setMode(localConfig.theme as ColorMode);
 		mobileHeader?.updateCarousel();
 	}
@@ -87,6 +83,7 @@
 			} catch (error) {
 				alert('Invalid JSON in custom parameters. Please check the format and try again.');
 				console.error(error);
+
 				return;
 			}
 		}
@@ -96,14 +93,22 @@
 		for (const field of NUMERIC_FIELDS) {
 			if (processedConfig[field] !== undefined && processedConfig[field] !== '') {
 				const numValue = Number(processedConfig[field]);
+
 				if (!isNaN(numValue)) {
 					if ((POSITIVE_INTEGER_FIELDS as readonly string[]).includes(field)) {
-						processedConfig[field] = Math.max(1, Math.round(numValue));
+						const entryByMinMax = SETTINGS_CHAT_SECTIONS.flatMap(
+							(section) => section.fields ?? []
+						).find((entry) => entry.key === field);
+						const lo = entryByMinMax?.min ?? 1;
+						const hi = entryByMinMax?.max ?? Number.POSITIVE_INFINITY;
+
+						processedConfig[field] = Math.max(lo, Math.min(hi, Math.round(numValue)));
 					} else {
 						processedConfig[field] = numValue;
 					}
 				} else {
 					alert(`Invalid numeric value for ${field}. Please enter a valid number.`);
+
 					return;
 				}
 			}
@@ -114,16 +119,8 @@
 	}
 
 	export function reset() {
-		localConfig = { ...config() };
+		localConfig = { ...settingsStore.config };
 	}
-
-	setChatSettingsConfigContext({
-		get localConfig() {
-			return localConfig;
-		},
-		handleConfigChange,
-		handleThemeChange
-	});
 </script>
 
 <div class="mx-auto flex h-full w-full flex-col md:pl-8" in:fade={{ duration: 150 }}>
