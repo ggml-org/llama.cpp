@@ -785,6 +785,15 @@ class GGUFWriter:
     def add_key_length_swa(self, length: int) -> None:
         self.add_uint32(Keys.Attention.KEY_LENGTH_SWA.format(arch=self.arch), length)
 
+    def add_key_length_mla_swa(self, length: int) -> None:
+        self.add_uint32(Keys.Attention.KEY_LENGTH_MLA_SWA.format(arch=self.arch), length)
+
+    def add_value_length_mla_swa(self, length: int) -> None:
+        self.add_uint32(Keys.Attention.VALUE_LENGTH_MLA_SWA.format(arch=self.arch), length)
+
+    def add_kv_lora_rank_swa(self, length: int) -> None:
+        self.add_uint32(Keys.Attention.KV_LORA_RANK_SWA.format(arch=self.arch), length)
+
     def add_value_length_swa(self, length: int) -> None:
         self.add_uint32(Keys.Attention.VALUE_LENGTH_SWA.format(arch=self.arch), length)
 
