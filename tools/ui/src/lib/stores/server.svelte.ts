@@ -1,6 +1,6 @@
-import { PropsService } from '$lib/services/props.service';
 import { ServerRole } from '$lib/enums';
-import { ApiError } from '$lib/utils/api-fetch';
+import { PropsService } from '$lib/services/props.service';
+import { ApiError } from '$lib/utils';
 
 const LOADING_RETRY_INTERVAL_MS = 1000;
 
@@ -84,9 +84,11 @@ class ServerStore {
 		if (this.fetchPromise) return this.fetchPromise;
 
 		this.clearRetryTimer();
+
 		if (!background) {
 			this.loading = true;
 		}
+
 		// Don't clear an existing "still loading" error before a retry -
 		// doing so would unmount/remount the error banner every second.
 		if (this.status !== 503) {
@@ -96,6 +98,7 @@ class ServerStore {
 		const fetchPromise = (async () => {
 			try {
 				const props = await PropsService.fetch();
+
 				this.props = props;
 				this.error = null;
 				this.status = null;
@@ -112,6 +115,7 @@ class ServerStore {
 				if (!background) {
 					this.loading = false;
 				}
+
 				this.fetchPromise = null;
 			}
 		})();
@@ -132,6 +136,7 @@ class ServerStore {
 
 	private scheduleRetry(): void {
 		if (this.retryTimer) return;
+
 		this.retryTimer = setTimeout(() => {
 			this.retryTimer = null;
 			this.fetch({ background: true });
@@ -155,6 +160,7 @@ class ServerStore {
 
 	private detectRole(props: ApiLlamaCppServerProps): void {
 		const newRole = props?.role === ServerRole.ROUTER ? ServerRole.ROUTER : ServerRole.MODEL;
+
 		if (this.role !== newRole) {
 			this.role = newRole;
 			console.info(`Server running in ${newRole === ServerRole.ROUTER ? 'ROUTER' : 'MODEL'} mode`);
@@ -163,13 +169,3 @@ class ServerStore {
 }
 
 export const serverStore = new ServerStore();
-
-export const serverProps = () => serverStore.props;
-export const serverLoading = () => serverStore.loading;
-export const serverError = () => serverStore.error;
-export const serverStatus = () => serverStore.status;
-export const serverRole = () => serverStore.role;
-export const defaultParams = () => serverStore.defaultParams;
-export const contextSize = () => serverStore.contextSize;
-export const isRouterMode = () => serverStore.isRouterMode;
-export const isModelMode = () => serverStore.isModelMode;

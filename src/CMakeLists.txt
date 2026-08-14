@@ -10,7 +10,6 @@ file(GLOB LLAMA_MODELS_SOURCES "models/*.cpp")
 
 add_library(llama
             ../include/llama.h
-            ../include/llama-tiered.h
             llama.cpp
             llama-adapter.cpp
             llama-arch.cpp
@@ -38,7 +37,6 @@ add_library(llama
             llama-model.cpp
             llama-quant.cpp
             llama-sampler.cpp
-            llama-tiered.cpp
             llama-vocab.cpp
             unicode-data.cpp
             unicode.cpp
@@ -46,10 +44,22 @@ add_library(llama
             ${LLAMA_MODELS_SOURCES}
             )
 
+if (GGML_CUDA)
+    target_sources(llama PRIVATE
+        ../include/llama-tiered.h
+        llama-tiered.cpp
+    )
+endif()
+
 set_target_properties(llama PROPERTIES
-    VERSION ${LLAMA_INSTALL_VERSION}
-    SOVERSION 0
+    VERSION ${LLAMA_VERSION_BASE}
+    SOVERSION ${LLAMA_VERSION_MAJOR}
     MACHO_CURRENT_VERSION 0 # keep macOS linker from seeing oversized version number
+)
+
+target_compile_definitions(llama PRIVATE
+    LLAMA_VERSION="${LLAMA_VERSION}"
+    LLAMA_COMMIT="${LLAMA_BUILD_COMMIT}"
 )
 
 target_include_directories(llama PRIVATE .)
@@ -58,7 +68,9 @@ target_compile_features   (llama PRIVATE cxx_std_17) # don't bump
 
 target_link_libraries(llama PUBLIC ggml)
 
-install(FILES ../include/llama-tiered.h DESTINATION include)
+if (GGML_CUDA)
+    install(FILES ../include/llama-tiered.h DESTINATION include)
+endif()
 
 if (BUILD_SHARED_LIBS)
     set_target_properties(llama PROPERTIES POSITION_INDEPENDENT_CODE ON)

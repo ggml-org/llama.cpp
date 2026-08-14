@@ -16,20 +16,23 @@ import {
 let closeTimer: ReturnType<typeof setTimeout> | undefined;
 let lastPointerType = '';
 
-export const gaugePopup = $state({ open: false, centerX: 0, bottom: 0 });
+export const gaugePopup = $state({ bottom: 0, centerX: 0, detailsOpen: false, open: false });
 
 function openFrom(trigger: HTMLElement): void {
 	clearTimeout(closeTimer);
 	const frame = trigger.closest('form');
+
 	if (frame) {
 		const frameRect = frame.getBoundingClientRect();
 		const triggerRect = trigger.getBoundingClientRect();
 		const centerX = triggerRect.left + triggerRect.width / 2 - frameRect.left;
 		const min = CONTEXT_GAUGE_CARD_HALF_WIDTH_PX + CONTEXT_GAUGE_EDGE_MARGIN_PX;
 		const max = frameRect.width - CONTEXT_GAUGE_CARD_HALF_WIDTH_PX - CONTEXT_GAUGE_EDGE_MARGIN_PX;
+
 		gaugePopup.centerX = Math.min(Math.max(centerX, min), Math.max(min, max));
 		gaugePopup.bottom = frameRect.bottom - triggerRect.top + CONTEXT_GAUGE_DIAL_GAP_PX;
 	}
+
 	gaugePopup.open = true;
 }
 
@@ -53,32 +56,38 @@ export function gaugeTriggerPointerDown(event: PointerEvent): void {
 
 export function gaugeTriggerClick(event: MouseEvent): void {
 	if (lastPointerType !== 'touch') return;
+
 	toggleFrom(event.currentTarget as HTMLElement);
 }
 
 export function gaugeTriggerKeydown(event: KeyboardEvent): void {
 	if (event.key !== 'Enter' && event.key !== ' ') return;
+
 	event.preventDefault();
 	toggleFrom(event.currentTarget as HTMLElement);
 }
 
 export function gaugeTriggerEnter(event: PointerEvent): void {
 	if (event.pointerType !== 'mouse') return;
+
 	openFrom(event.currentTarget as HTMLElement);
 }
 
 export function gaugeTriggerLeave(event: PointerEvent): void {
 	if (event.pointerType !== 'mouse') return;
+
 	scheduleClose();
 }
 
 export function gaugeCardEnter(event: PointerEvent): void {
 	if (event.pointerType !== 'mouse') return;
+
 	clearTimeout(closeTimer);
 }
 
 export function gaugeCardLeave(event: PointerEvent): void {
 	if (event.pointerType !== 'mouse') return;
+
 	scheduleClose();
 }
 

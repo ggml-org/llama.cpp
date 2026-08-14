@@ -164,6 +164,13 @@ class Keys:
         NORM_BEFORE_RESIDUAL              = "{arch}.norm_before_residual"
         NORM_BEFORE_FC                    = "{arch}.norm_before_fc"
 
+    class Adapters:
+        COUNT                = "{arch}.adapters.count"
+        TOKEN_IDS_ACTIVATE   = "{arch}.adapters.token_ids_activate"
+        TOKEN_IDS_SUBSTITUTE = "{arch}.adapters.token_ids_substitute"
+        LORA_RANK            = "{arch}.adapters.lora_rank"
+        ROUTER_GAIN          = "{arch}.adapters.router_gain"
+
     class Attention:
         HEAD_COUNT                   = "{arch}.attention.head_count"
         HEAD_COUNT_KV                = "{arch}.attention.head_count_kv"
@@ -400,6 +407,8 @@ class Keys:
 
     class ClipGenAudio:
         PROJECTOR_TYPE      = "clip.gen.audio.projector_type" # for mixed modality models
+        # name of the weight variant, for settings that are not in the checkpoint
+        MODEL_VARIANT       = "clip.gen.audio.model_variant"
         EMBEDDING_LENGTH    = "clip.gen.audio.embedding_length"
         FEED_FORWARD_LENGTH = "clip.gen.audio.feed_forward_length"
         BLOCK_COUNT         = "clip.gen.audio.block_count"
@@ -502,6 +511,7 @@ class MODEL_ARCH(IntEnum):
     OLMO             = auto()
     OLMO2            = auto()
     OLMOE            = auto()
+    MUSE_GLIMMER     = auto()
     OPENELM          = auto()
     ARCTIC           = auto()
     DEEPSEEK         = auto()
@@ -527,6 +537,7 @@ class MODEL_ARCH(IntEnum):
     GRANITE          = auto()
     GRANITE_MOE      = auto()
     GRANITE_HYBRID   = auto()
+    GRANITE_SWITCH   = auto()
     CHAMELEON        = auto()
     WAVTOKENIZER_DEC = auto()
     PLM              = auto()
@@ -572,6 +583,7 @@ class MODEL_ARCH(IntEnum):
     MELLUM           = auto()
     NANBEIGE         = auto()
     QWEN3TTS         = auto()
+    POCKETTTS        = auto()
 
 
 class VISION_PROJECTOR_TYPE(IntEnum):
@@ -1031,6 +1043,38 @@ class MODEL_TENSOR(IntEnum):
     A_GEN_WAV_DAC_RES_CONV2        = auto() # DAC residual unit, pointwise causal conv
     A_GEN_WAV_DAC_POST_SNAKE       = auto() # DAC final SnakeBeta
     A_GEN_WAV_DAC_POST_CONV        = auto() # DAC conv_post -> 1-channel PCM
+    # pocket-tts: SEANet encoder (speaker path) and decoder (a.gen.wav path)
+    A_ENC_SEANET_CONV_IN     = auto()
+    A_ENC_SEANET_CONV_OUT    = auto()
+    A_ENC_SEANET_RES_CONV1   = auto() # residual unit, dilated conv
+    A_ENC_SEANET_RES_CONV2   = auto() # residual unit, pointwise conv
+    A_ENC_SEANET_SCALE_CONV  = auto() # strided downsample conv
+    A_ENC_ATTN_SCALE         = auto() # layer scale (gamma) on the attn output
+    A_ENC_FFN_SCALE_LS       = auto() # layer scale (gamma) on the FFN output
+    A_ENC_SPEAKER_PROJ       = auto() # voice latent -> backbone embd
+    A_GEN_FLOW_INPUT_PROJ    = auto()
+    A_GEN_FLOW_COND_EMBD     = auto()
+    A_GEN_FLOW_TIME_FREQS    = auto() # timestep embedder, stored cos/sin frequencies
+    A_GEN_FLOW_TIME_UP       = auto()
+    A_GEN_FLOW_TIME_DOWN     = auto()
+    A_GEN_FLOW_TIME_NORM     = auto() # RMSNorm alpha
+    A_GEN_FLOW_BLK_NORM      = auto() # AdaLN res block, in_ln
+    A_GEN_FLOW_BLK_UP        = auto()
+    A_GEN_FLOW_BLK_DOWN      = auto()
+    A_GEN_FLOW_BLK_ADA       = auto() # AdaLN modulation, -> shift/scale/gate
+    A_GEN_FLOW_FINAL_ADA     = auto() # final layer AdaLN modulation, -> shift/scale
+    A_GEN_FLOW_FINAL_PROJ    = auto()
+    A_GEN_OUT_EOS            = auto() # end-of-speech head on the backbone hidden state
+    A_GEN_INPUT_LINEAR       = auto() # generated latent -> backbone embd
+    A_GEN_EMB_MEAN           = auto() # latent denormalization stats
+    A_GEN_EMB_STD            = auto()
+    A_GEN_WAV_QUANT_OUT      = auto() # DummyQuantizer output_proj, latent -> decoder dim
+    A_GEN_WAV_UPSAMPLE       = auto() # frame rate -> encoder frame rate, depthwise convtr
+    A_GEN_WAV_SEANET_CONV_IN   = auto()
+    A_GEN_WAV_SEANET_CONV_OUT  = auto() # -> 1-channel PCM
+    A_GEN_WAV_SEANET_RES_CONV1 = auto()
+    A_GEN_WAV_SEANET_RES_CONV2 = auto()
+    A_GEN_WAV_SEANET_SCALE_CONV = auto() # strided upsample convtr
     A_MMPROJ              = auto()
     A_MMPROJ_FC           = auto()
     A_MM_NORM_PRE         = auto()
@@ -1173,6 +1217,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.OLMO:             "olmo",
     MODEL_ARCH.OLMO2:            "olmo2",
     MODEL_ARCH.OLMOE:            "olmoe",
+    MODEL_ARCH.MUSE_GLIMMER:     "muse-glimmer",
     MODEL_ARCH.OPENELM:          "openelm",
     MODEL_ARCH.ARCTIC:           "arctic",
     MODEL_ARCH.DEEPSEEK:         "deepseek",
@@ -1198,6 +1243,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.GRANITE:          "granite",
     MODEL_ARCH.GRANITE_MOE:      "granitemoe",
     MODEL_ARCH.GRANITE_HYBRID:   "granitehybrid",
+    MODEL_ARCH.GRANITE_SWITCH:   "graniteswitch",
     MODEL_ARCH.CHAMELEON:        "chameleon",
     MODEL_ARCH.WAVTOKENIZER_DEC: "wavtokenizer-dec",
     MODEL_ARCH.PLM:              "plm",
@@ -1244,6 +1290,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.MELLUM:           "mellum",
     MODEL_ARCH.NANBEIGE:         "nanbeige",
     MODEL_ARCH.QWEN3TTS:         "qwen3tts",
+    MODEL_ARCH.POCKETTTS:        "pockettts",
 }
 
 VISION_PROJECTOR_TYPE_NAMES: dict[VISION_PROJECTOR_TYPE, str] = {
@@ -1553,8 +1600,8 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.V_MM_UP:                   "mm.up",
     MODEL_TENSOR.V_MM_DOWN:                 "mm.down",
     MODEL_TENSOR.V_MM_GATE:                 "mm.gate",
-    MODEL_TENSOR.V_MM_MERGER_FC1:            "mm.merger.fc1",
-    MODEL_TENSOR.V_MM_MERGER_FC2:            "mm.merger.fc2",
+    MODEL_TENSOR.V_MM_MERGER_FC1:           "mm.merger.fc1",
+    MODEL_TENSOR.V_MM_MERGER_FC2:           "mm.merger.fc2",
     MODEL_TENSOR.V_TOK_BOI:                 "v.boi",
     MODEL_TENSOR.V_TOK_EOI:                 "v.eoi",
     MODEL_TENSOR.V_MM_PRE_NORM:             "mm.pre_norm",
@@ -1698,6 +1745,37 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.A_GEN_WAV_DAC_RES_CONV2:   "a.gen.wav.dac.blk.{bid}.res.{xid}.conv2",
     MODEL_TENSOR.A_GEN_WAV_DAC_POST_SNAKE:  "a.gen.wav.dac.post_snake",
     MODEL_TENSOR.A_GEN_WAV_DAC_POST_CONV:   "a.gen.wav.dac.post_conv",
+    MODEL_TENSOR.A_ENC_SEANET_CONV_IN:      "a.seanet.conv_in",
+    MODEL_TENSOR.A_ENC_SEANET_CONV_OUT:     "a.seanet.conv_out",
+    MODEL_TENSOR.A_ENC_SEANET_RES_CONV1:    "a.seanet.blk.{bid}.res_conv1",
+    MODEL_TENSOR.A_ENC_SEANET_RES_CONV2:    "a.seanet.blk.{bid}.res_conv2",
+    MODEL_TENSOR.A_ENC_SEANET_SCALE_CONV:   "a.seanet.blk.{bid}.scale_conv",
+    MODEL_TENSOR.A_ENC_ATTN_SCALE:          "a.blk.{bid}.ls1",
+    MODEL_TENSOR.A_ENC_FFN_SCALE_LS:        "a.blk.{bid}.ls2",
+    MODEL_TENSOR.A_ENC_SPEAKER_PROJ:        "a.speaker_proj",
+    MODEL_TENSOR.A_GEN_FLOW_INPUT_PROJ:     "a.gen.flow.input_proj",
+    MODEL_TENSOR.A_GEN_FLOW_COND_EMBD:      "a.gen.flow.cond_embd",
+    MODEL_TENSOR.A_GEN_FLOW_TIME_FREQS:     "a.gen.flow.time.{bid}.freqs",
+    MODEL_TENSOR.A_GEN_FLOW_TIME_UP:        "a.gen.flow.time.{bid}.up",
+    MODEL_TENSOR.A_GEN_FLOW_TIME_DOWN:      "a.gen.flow.time.{bid}.down",
+    MODEL_TENSOR.A_GEN_FLOW_TIME_NORM:      "a.gen.flow.time.{bid}.norm",
+    MODEL_TENSOR.A_GEN_FLOW_BLK_NORM:       "a.gen.flow.blk.{bid}.norm",
+    MODEL_TENSOR.A_GEN_FLOW_BLK_UP:         "a.gen.flow.blk.{bid}.up",
+    MODEL_TENSOR.A_GEN_FLOW_BLK_DOWN:       "a.gen.flow.blk.{bid}.down",
+    MODEL_TENSOR.A_GEN_FLOW_BLK_ADA:        "a.gen.flow.blk.{bid}.ada",
+    MODEL_TENSOR.A_GEN_FLOW_FINAL_ADA:      "a.gen.flow.final.ada",
+    MODEL_TENSOR.A_GEN_FLOW_FINAL_PROJ:     "a.gen.flow.final.proj",
+    MODEL_TENSOR.A_GEN_OUT_EOS:             "a.gen.out_eos",
+    MODEL_TENSOR.A_GEN_INPUT_LINEAR:        "a.gen.input_linear",
+    MODEL_TENSOR.A_GEN_EMB_MEAN:            "a.gen.emb_mean",
+    MODEL_TENSOR.A_GEN_EMB_STD:             "a.gen.emb_std",
+    MODEL_TENSOR.A_GEN_WAV_QUANT_OUT:       "a.gen.wav.quant_out",
+    MODEL_TENSOR.A_GEN_WAV_UPSAMPLE:        "a.gen.wav.upsample",
+    MODEL_TENSOR.A_GEN_WAV_SEANET_CONV_IN:  "a.gen.wav.seanet.conv_in",
+    MODEL_TENSOR.A_GEN_WAV_SEANET_CONV_OUT: "a.gen.wav.seanet.conv_out",
+    MODEL_TENSOR.A_GEN_WAV_SEANET_RES_CONV1: "a.gen.wav.seanet.blk.{bid}.res_conv1",
+    MODEL_TENSOR.A_GEN_WAV_SEANET_RES_CONV2: "a.gen.wav.seanet.blk.{bid}.res_conv2",
+    MODEL_TENSOR.A_GEN_WAV_SEANET_SCALE_CONV: "a.gen.wav.seanet.blk.{bid}.scale_conv",
     MODEL_TENSOR.A_MMPROJ:                  "mm.a.mlp.{bid}",
     MODEL_TENSOR.A_MMPROJ_FC:               "mm.a.fc",
     MODEL_TENSOR.A_MM_NORM_PRE:             "mm.a.norm_pre",
@@ -2009,6 +2087,37 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.A_GEN_WAV_DAC_RES_CONV2,
         MODEL_TENSOR.A_GEN_WAV_DAC_POST_SNAKE,
         MODEL_TENSOR.A_GEN_WAV_DAC_POST_CONV,
+        MODEL_TENSOR.A_ENC_SEANET_CONV_IN,
+        MODEL_TENSOR.A_ENC_SEANET_CONV_OUT,
+        MODEL_TENSOR.A_ENC_SEANET_RES_CONV1,
+        MODEL_TENSOR.A_ENC_SEANET_RES_CONV2,
+        MODEL_TENSOR.A_ENC_SEANET_SCALE_CONV,
+        MODEL_TENSOR.A_ENC_ATTN_SCALE,
+        MODEL_TENSOR.A_ENC_FFN_SCALE_LS,
+        MODEL_TENSOR.A_ENC_SPEAKER_PROJ,
+        MODEL_TENSOR.A_GEN_FLOW_INPUT_PROJ,
+        MODEL_TENSOR.A_GEN_FLOW_COND_EMBD,
+        MODEL_TENSOR.A_GEN_FLOW_TIME_FREQS,
+        MODEL_TENSOR.A_GEN_FLOW_TIME_UP,
+        MODEL_TENSOR.A_GEN_FLOW_TIME_DOWN,
+        MODEL_TENSOR.A_GEN_FLOW_TIME_NORM,
+        MODEL_TENSOR.A_GEN_FLOW_BLK_NORM,
+        MODEL_TENSOR.A_GEN_FLOW_BLK_UP,
+        MODEL_TENSOR.A_GEN_FLOW_BLK_DOWN,
+        MODEL_TENSOR.A_GEN_FLOW_BLK_ADA,
+        MODEL_TENSOR.A_GEN_FLOW_FINAL_ADA,
+        MODEL_TENSOR.A_GEN_FLOW_FINAL_PROJ,
+        MODEL_TENSOR.A_GEN_OUT_EOS,
+        MODEL_TENSOR.A_GEN_INPUT_LINEAR,
+        MODEL_TENSOR.A_GEN_EMB_MEAN,
+        MODEL_TENSOR.A_GEN_EMB_STD,
+        MODEL_TENSOR.A_GEN_WAV_QUANT_OUT,
+        MODEL_TENSOR.A_GEN_WAV_UPSAMPLE,
+        MODEL_TENSOR.A_GEN_WAV_SEANET_CONV_IN,
+        MODEL_TENSOR.A_GEN_WAV_SEANET_CONV_OUT,
+        MODEL_TENSOR.A_GEN_WAV_SEANET_RES_CONV1,
+        MODEL_TENSOR.A_GEN_WAV_SEANET_RES_CONV2,
+        MODEL_TENSOR.A_GEN_WAV_SEANET_SCALE_CONV,
         MODEL_TENSOR.A_ENC_CONV_NORM_MEAN,
         MODEL_TENSOR.A_ENC_CONV_NORM_VAR,
         MODEL_TENSOR.A_ENC_MEL_FILTERS,
@@ -3322,6 +3431,25 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_UP_EXP,
         MODEL_TENSOR.FFN_DOWN_EXP,
     ],
+    MODEL_ARCH.MUSE_GLIMMER: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_Q_NORM,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_K_NORM,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.ATTN_GATE,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_POST_NORM,
+        MODEL_TENSOR.FFN_PRE_NORM,
+        MODEL_TENSOR.FFN_POST_NORM,
+    ],
     MODEL_ARCH.OPENELM: [
         MODEL_TENSOR.TOKEN_EMBD,
         MODEL_TENSOR.OUTPUT_NORM,
@@ -3837,6 +3965,12 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_DOWN_SHEXP,
         MODEL_TENSOR.FFN_UP_SHEXP,
         MODEL_TENSOR.FFN_EXP_PROBS_B,
+        # NextN/MTP (draft head)
+        MODEL_TENSOR.ATTN_POST_NORM,
+        MODEL_TENSOR.NEXTN_EH_PROJ,
+        MODEL_TENSOR.NEXTN_ENORM,
+        MODEL_TENSOR.NEXTN_HNORM,
+        MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM,
     ],
     MODEL_ARCH.EXAONE: [
         MODEL_TENSOR.TOKEN_EMBD,
@@ -3968,6 +4102,21 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_UP_SHEXP,
         MODEL_TENSOR.FFN_DOWN_SHEXP,
         # Dense
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+    ],
+    MODEL_ARCH.GRANITE_SWITCH: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_QKV,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.FFN_NORM,
         MODEL_TENSOR.FFN_GATE,
         MODEL_TENSOR.FFN_DOWN,
         MODEL_TENSOR.FFN_UP,
@@ -4577,6 +4726,7 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.D2T,
     ],
     MODEL_ARCH.DFLASH: [
+        MODEL_TENSOR.TOKEN_EMBD,
         MODEL_TENSOR.OUTPUT_NORM,
         MODEL_TENSOR.ATTN_NORM,
         MODEL_TENSOR.ATTN_Q,
@@ -4849,6 +4999,18 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.ATTN_OUT,
         MODEL_TENSOR.FFN_NORM,
         MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+    ],
+    MODEL_ARCH.POCKETTTS: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.FFN_NORM,
         MODEL_TENSOR.FFN_DOWN,
         MODEL_TENSOR.FFN_UP,
     ],
@@ -5128,6 +5290,8 @@ class VisionProjectorType:
     NEMOTRON_V2_VL = "nemotron_v2_vl"
     QWEN3TTS_SPKENC = "qwen3tts_spkenc" # audio: ECAPA-TDNN speaker encoder
     QWEN3TTS_GEN = "qwen3tts_gen" # audio generation: code_predictor
+    POCKETTTS_SPKENC = "pockettts_spkenc" # audio: mimi encoder as voice-prompt encoder
+    POCKETTTS_GEN = "pockettts_gen" # audio generation: flow-matching decoder + mimi decoder
     HUNYUANVL      = "hunyuanvl"
     PARAKEET       = "parakeet"  # audio
     MINIMAXM3      = "minimax_m3"
@@ -5136,6 +5300,7 @@ class VisionProjectorType:
     MIMOVL         = "mimovl"
     MIMO_AUDIO     = "mimo_audio"
     GRANITE4_VISION = "granite4_vision"
+    MUSE_GLIMMER   = "muse-glimmer"
 
 
 # Items here are (block size, type size)

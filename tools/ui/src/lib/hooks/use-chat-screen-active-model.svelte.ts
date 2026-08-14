@@ -8,32 +8,31 @@
  * demand if they aren't cached yet.
  */
 
-import { modelsStore, modelOptions, selectedModelId } from '$lib/stores/models.svelte';
-import { isRouterMode } from '$lib/stores/server.svelte';
-import { chatStore } from '$lib/stores/chat.svelte';
-import { activeMessages } from '$lib/stores/conversations.svelte';
+import { chatStore, conversationsStore, modelsStore, serverStore } from '$lib/stores';
 
 export function useChatScreenActiveModel() {
-	const isRouter = $derived(isRouterMode());
+	const isRouter = $derived(serverStore.isRouterMode);
 	const conversationModel = $derived(
-		chatStore.getConversationModel(activeMessages() as DatabaseMessage[])
+		chatStore.getConversationModel(conversationsStore.activeMessages as DatabaseMessage[])
 	);
-
 	const activeModelId = $derived.by(() => {
-		const options = modelOptions();
+		const options = modelsStore.models;
 
 		if (!isRouter) {
 			return options.length > 0 ? options[0].model : null;
 		}
 
-		const selectedId = selectedModelId();
+		const selectedId = modelsStore.selectedModelId;
+
 		if (selectedId) {
 			const model = options.find((m) => m.id === selectedId);
+
 			if (model) return model.model;
 		}
 
 		if (conversationModel) {
 			const model = options.find((m) => m.model === conversationModel);
+
 			if (model) return model.model;
 		}
 
@@ -45,6 +44,7 @@ export function useChatScreenActiveModel() {
 	$effect(() => {
 		if (activeModelId) {
 			const cached = modelsStore.getModelProps(activeModelId);
+
 			if (!cached) {
 				modelsStore.fetchModelProps(activeModelId).then(() => {
 					modelPropsVersion++;
@@ -56,36 +56,37 @@ export function useChatScreenActiveModel() {
 	const hasAudioModality = $derived.by(() => {
 		if (activeModelId) {
 			void modelPropsVersion;
+
 			return modelsStore.modelSupportsAudio(activeModelId);
 		}
+
 		return false;
 	});
-
 	const hasVideoModality = $derived.by(() => {
 		if (activeModelId) {
 			void modelPropsVersion;
+
 			return modelsStore.modelSupportsVideo(activeModelId);
 		}
+
 		return false;
 	});
-
 	const hasVisionModality = $derived.by(() => {
 		if (activeModelId) {
 			void modelPropsVersion;
+
 			return modelsStore.modelSupportsVision(activeModelId);
 		}
+
 		return false;
 	});
 
 	return {
-		get isRouter() {
-			return isRouter;
+		get activeModelId() {
+			return activeModelId;
 		},
 		get conversationModel() {
 			return conversationModel;
-		},
-		get activeModelId() {
-			return activeModelId;
 		},
 		get hasAudioModality() {
 			return hasAudioModality;
@@ -95,6 +96,9 @@ export function useChatScreenActiveModel() {
 		},
 		get hasVisionModality() {
 			return hasVisionModality;
+		},
+		get isRouter() {
+			return isRouter;
 		}
 	};
 }

@@ -6,26 +6,23 @@
 	// The scroll-to-bottom auto-scroll logic mirrors what was here
 	// before extraction.
 
-	import { Check, Loader2, XCircle, AlertTriangle } from '@lucide/svelte';
+	import { parseExecShellCommandMeta } from './parsers/exec-shell-command';
+	import ToolCallBlock from './ToolCallBlock.svelte';
+	import { AlertTriangle, Check, Loader2, XCircle } from '@lucide/svelte';
 	import { CollapsibleTerminalBlock } from '$lib/components/app';
-	import { SETTINGS_KEYS } from '$lib/constants';
-	import { config } from '$lib/stores/settings.svelte';
-	import { TOOL_RUNTIME_SCROLL_AT_BOTTOM_THRESHOLD_PX } from '$lib/constants/auto-scroll';
+	import { SETTINGS_KEYS, TOOL_RUNTIME_SCROLL_AT_BOTTOM_THRESHOLD_PX } from '$lib/constants';
+	import { AttachmentType } from '$lib/enums';
+	import { settingsStore, toolsStore } from '$lib/stores';
+	import type { AgenticSection, DatabaseMessageExtra, ToolResultLine } from '$lib/types';
 	import {
 		abbreviateHome,
+		type ExecShellExitStatus,
 		highlightCode,
 		isExitCodeSummaryLine,
 		parseExecShellCommandError,
 		parseExecShellCommandExitStatus,
-		parseToolResultWithImages,
-		type AgenticSection,
-		type ExecShellExitStatus,
-		type ToolResultLine
+		parseToolResultWithMedia
 	} from '$lib/utils';
-	import { toolsStore } from '$lib/stores/tools.svelte';
-	import { parseExecShellCommandMeta } from './parsers/exec-shell-command';
-	import type { DatabaseMessageExtra } from '$lib/types';
-	import ToolCallBlock from './ToolCallBlock.svelte';
 
 	interface Props {
 		section: AgenticSection;
@@ -39,7 +36,7 @@
 		onToggle?: () => void;
 	}
 
-	let { section, open, isStreaming, isExecuting = false, attachments, onToggle }: Props = $props();
+	let { attachments, isExecuting = false, isStreaming, onToggle, open, section }: Props = $props();
 
 	// `isLive` covers all in-flight phases: pre-chunk spinner and
 	// streaming itself. Frozen output (tool done while agent continues)
@@ -53,7 +50,7 @@
 	);
 
 	const parsedLines: ToolResultLine[] = $derived(
-		section.toolResult ? parseToolResultWithImages(section.toolResult, attachments) : []
+		section.toolResult ? parseToolResultWithMedia(section.toolResult, attachments) : []
 	);
 
 	// Drop the trailing "[exit code: N]" line - rendered as a colored
@@ -94,7 +91,7 @@
 	);
 
 	const useFullHeightCodeBlocks = $derived(
-		Boolean(config()[SETTINGS_KEYS.FULL_HEIGHT_CODE_BLOCKS])
+		Boolean(settingsStore.config[SETTINGS_KEYS.FULL_HEIGHT_CODE_BLOCKS])
 	);
 
 	const autoScroll = $derived(isLive && !useFullHeightCodeBlocks);
@@ -108,6 +105,7 @@
 
 	function isAtBottom(): boolean {
 		if (!scrollEl) return false;
+
 		return (
 			scrollEl.scrollHeight - scrollEl.clientHeight - scrollEl.scrollTop <=
 			SCROLL_BOTTOM_THRESHOLD_PX
@@ -116,6 +114,7 @@
 
 	function scrollToBottomOnFrame() {
 		if (pendingFrame !== null || !scrollEl || userScrolledUp) return;
+
 		pendingFrame = requestAnimationFrame(() => {
 			pendingFrame = null;
 
@@ -128,18 +127,23 @@
 
 	function handleScrollEvent() {
 		if (!scrollEl) return;
+
 		const isScrollingUp = scrollEl.scrollTop < lastScrollTop;
+
 		if (isScrollingUp && !isAtBottom()) {
 			userScrolledUp = true;
 		} else if (isAtBottom()) {
 			userScrolledUp = false;
 		}
+
 		lastScrollTop = scrollEl.scrollTop;
 	}
 
 	$effect(() => {
 		void section.toolResult;
+
 		if (!scrollEl || !autoScroll) return;
+
 		scrollToBottomOnFrame();
 	});
 
@@ -149,10 +153,11 @@
 		if (!scrollEl || !autoScroll) return;
 
 		const observer = new MutationObserver(() => scrollToBottomOnFrame());
+
 		observer.observe(scrollEl, {
+			characterData: true,
 			childList: true,
-			subtree: true,
-			characterData: true
+			subtree: true
 		});
 
 		return () => observer.disconnect();
@@ -215,10 +220,10 @@
 			>
 				{#each outputLines as line, i (i)}
 					<div class="font-mono text-[11px] leading-relaxed whitespace-pre-wrap">{line.text}</div>
-					{#if line.image}
+					{#if line.media?.type === AttachmentType.IMAGE}
 						<img
-							src={line.image.base64Url}
-							alt={line.image.name}
+							src={line.media.base64Url}
+							alt={line.media.name}
 							class="mt-2 mb-2 h-auto max-w-full rounded-lg"
 							loading="lazy"
 						/>

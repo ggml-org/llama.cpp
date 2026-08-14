@@ -1,51 +1,30 @@
 <script lang="ts">
-	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
-	import { Plus, File, MessageSquare, Zap, FolderOpen } from '@lucide/svelte';
+	import { File, FolderOpen, MessageSquare, Plus, Zap } from '@lucide/svelte';
+	import {
+		ChatFormActionAddMcpServersSubmenu,
+		ChatFormActionAddReasoningSubmenu,
+		ChatFormActionAddToolsSubmenu
+	} from '$lib/components/app';
+	import { buttonVariants } from '$lib/components/ui/button';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Tooltip from '$lib/components/ui/tooltip';
-	import { buttonVariants } from '$lib/components/ui/button';
 	import { cn } from '$lib/components/ui/utils';
 	import {
 		ATTACHMENT_FILE_ITEMS,
 		ATTACHMENT_TOOLTIP_TEXT,
+		ICON_CLASS_DEFAULT,
 		TOOLTIP_DELAY_DURATION
 	} from '$lib/constants';
-	import {
-		ChatFormActionAddToolsSubmenu,
-		ChatFormActionAddMcpServersSubmenu,
-		ChatFormActionAddReasoningSubmenu
-	} from '$lib/components/app';
+	import { getChatFormActionsContext } from '$lib/contexts';
 	import { useAttachmentMenu } from '$lib/hooks/use-attachment-menu.svelte';
 
 	interface Props {
 		class?: string;
-		disabled?: boolean;
-		hasAudioModality?: boolean;
-		hasVideoModality?: boolean;
-		hasVisionModality?: boolean;
-		hasMcpPromptsSupport?: boolean;
-		hasMcpResourcesSupport?: boolean;
-		onFileUpload?: () => void;
-		onSystemPromptClick?: () => void;
-		onMcpPromptClick?: () => void;
-		onMcpSettingsClick?: () => void;
-		onMcpResourcesClick?: () => void;
 	}
 
-	let {
-		class: className = '',
-		disabled = false,
-		hasAudioModality = false,
-		hasVideoModality = false,
-		hasVisionModality = false,
-		hasMcpPromptsSupport = false,
-		hasMcpResourcesSupport = false,
-		onFileUpload,
-		onSystemPromptClick,
-		onMcpPromptClick,
-		onMcpSettingsClick,
-		onMcpResourcesClick
-	}: Props = $props();
+	let { class: className = '' }: Props = $props();
+
+	const chatFormActions = getChatFormActionsContext();
 
 	let dropdownOpen = $state(false);
 	// The system message action moves focus to the message editor, so the menu
@@ -54,18 +33,23 @@
 
 	function handleMcpSettingsClick() {
 		dropdownOpen = false;
-		onMcpSettingsClick?.();
+		chatFormActions.onMcpSettingsClick?.();
 	}
 
 	const attachmentMenu = useAttachmentMenu(
 		() => ({
-			hasVisionModality,
-			hasAudioModality,
-			hasVideoModality,
-			hasMcpPromptsSupport,
-			hasMcpResourcesSupport
+			hasAudioModality: chatFormActions.hasAudioModality,
+			hasMcpPromptsSupport: chatFormActions.hasMcpPromptsSupport,
+			hasMcpResourcesSupport: chatFormActions.hasMcpResourcesSupport,
+			hasVideoModality: chatFormActions.hasVideoModality,
+			hasVisionModality: chatFormActions.hasVisionModality
 		}),
-		() => ({ onFileUpload, onSystemPromptClick, onMcpPromptClick, onMcpResourcesClick }),
+		() => ({
+			onFileUpload: chatFormActions.onFileUpload,
+			onMcpPromptClick: chatFormActions.onMcpPromptClick,
+			onMcpResourcesClick: chatFormActions.onMcpResourcesClick,
+			onSystemPromptClick: chatFormActions.onSystemPromptClick
+		}),
 		() => {
 			dropdownOpen = false;
 		}
@@ -85,7 +69,7 @@
 							buttonVariants({ variant: 'secondary' }),
 							'file-upload-button h-8 w-8 cursor-pointer rounded-full p-0'
 						)}
-						{disabled}
+						disabled={chatFormActions.disabled}
 					>
 						<span class="sr-only">{ATTACHMENT_TOOLTIP_TEXT}</span>
 
@@ -162,7 +146,7 @@
 				class="flex cursor-pointer items-center gap-2"
 				onclick={() => {
 					suppressCloseAutoFocus = true;
-					onSystemPromptClick?.();
+					chatFormActions.onSystemPromptClick?.();
 				}}
 			>
 				<MessageSquare class={ICON_CLASS_DEFAULT} />
@@ -174,12 +158,12 @@
 
 			<ChatFormActionAddMcpServersSubmenu onMcpSettingsClick={handleMcpSettingsClick} />
 
-			{#if hasMcpPromptsSupport}
+			{#if chatFormActions.hasMcpPromptsSupport}
 				<DropdownMenu.Separator />
 
 				<DropdownMenu.Item
 					class="flex cursor-pointer items-center gap-2"
-					onclick={onMcpPromptClick}
+					onclick={chatFormActions.onMcpPromptClick}
 				>
 					<Zap class={ICON_CLASS_DEFAULT} />
 
@@ -187,10 +171,10 @@
 				</DropdownMenu.Item>
 			{/if}
 
-			{#if hasMcpResourcesSupport}
+			{#if chatFormActions.hasMcpResourcesSupport}
 				<DropdownMenu.Item
 					class="flex cursor-pointer items-center gap-2"
-					onclick={onMcpResourcesClick}
+					onclick={chatFormActions.onMcpResourcesClick}
 				>
 					<FolderOpen class={ICON_CLASS_DEFAULT} />
 

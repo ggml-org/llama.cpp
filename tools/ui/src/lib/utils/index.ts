@@ -9,7 +9,7 @@
 
 // API utilities
 export { getAuthHeaders, getJsonHeaders, sanitizeHeaders } from './api-headers';
-export { apiFetch, apiFetchWithParams, apiPost, type ApiFetchOptions } from './api-fetch';
+export { ApiError, apiFetch, apiFetchWithParams, apiPost } from './api-fetch';
 export { validateApiKey } from './api-key-validation';
 
 // Attachment utilities
@@ -33,6 +33,7 @@ export {
 export {
 	highlightCode,
 	detectIncompleteCodeBlock,
+	splitGluedClosingCodeFences,
 	trimCodePadding,
 	type IncompleteCodeBlock
 } from './code';
@@ -50,7 +51,12 @@ export { extractRootDomain, sanitizeExternalUrl, canonicalizeServerUrl } from '.
 export { modelLoadFraction, modelLoadProgressText } from './progress';
 
 // Conversation utilities
-export { createMessageCountMap, getMessageCount } from './conversation-utils';
+export {
+	createMessageCountMap,
+	getMessageCount,
+	buildConversationTree,
+	type ConversationTreeItem
+} from './conversation-utils';
 
 // Clipboard utilities
 export {
@@ -123,7 +129,10 @@ export { getImageErrorFallbackHtml } from './image-error-fallback';
 
 // SSE-with-JSON stream iterator (used by built-in tool streaming, decoupled
 // from chat.service.ts which embeds its own SSE parser for resume support)
-export { parseSseJsonStream, type SseJsonEvent } from './sse';
+export { parseSseJsonStream } from './sse';
+
+// Stream session identity (conversation-id based)
+export { streamIdentity } from './stream-identity';
 
 // MCP utilities
 export {
@@ -174,23 +183,82 @@ export {
 export {
 	splitPathQuery,
 	buildCaseInsensitiveGlob,
+	buildGlobSearchArgs,
 	rankEntries,
 	joinPath,
 	highlightMatch,
-	type GlobEntry,
 	type PathQuery
 } from './working-directory';
+
+// Shared `file_glob_search` runner with a short-lived result cache
+export { runGlobSearch, runGlobSearchWithChildren } from './glob-search';
+
+// Mention-token detection (for the `@`-triggered file/folder mention picker)
+export {
+	findMentionToken,
+	takeMentionDismissSnapshot,
+	type MentionDismissSnapshot
+} from './mention-token';
+
+// Slash-command token detection (for the `/`-triggered command picker)
+export {
+	findCommandToken,
+	takeCommandDismissSnapshot,
+	type CommandDismissSnapshot
+} from './command-token';
+
+// Tokenization for the ChatFormInputRich (mention links + code spans <-> chip DOM)
+export {
+	tokenizeContent,
+	containsCodeSpan,
+	isOffsetInCodeBlock,
+	domMatchesTokens,
+	syncCodeBlockHatches,
+	stripBlockBoundaryLineBreaks,
+	serializeContent,
+	buildFragment,
+	rangeToTextOffset,
+	textOffsetToRange,
+	badgeAwareWordJump,
+	leadingBadgeEdgeOffset
+} from './chat-form-input-rich-tokenizer';
+
+// Source-space undo/redo history for the ChatFormInputRich
+export { SourceHistory, type SourceHistoryEntry } from './source-history';
+
+// Mention-badge visual contract (used by the ChatFormInputRich / rehype
+// DOM paths that build the same chip without a Svelte mount)
+export {
+	containsFileMentionLink,
+	fileMentionLinkRe,
+	encodeFileLinkPath,
+	decodeFileLinkPath,
+	MENTION_BADGE_CLASSNAME,
+	MENTION_BADGE_ICON_CLASSNAME,
+	MENTION_BADGE_SVG_ATTRIBUTES,
+	MENTION_BADGE_FILE_ICON_PATHS,
+	MENTION_BADGE_FOLDER_ICON_PATHS,
+	getMentionBadgeIconPaths,
+	getMentionBadgeLabel,
+	splitMentionSegments,
+	buildMentionInsertion
+} from './mention-badge';
+
+// Chat template utilities
+export {
+	detectThinkingSupport,
+	detectThinkingSupportWithReason
+} from './chat-template-thinking-detector';
 
 // Agentic content utilities (structured section derivation)
 export {
 	deriveAgenticSections,
 	buildAssistantRawOutput,
-	parseToolResultWithImages,
+	parseToolResultWithMedia,
 	splitSearchSummaryList,
 	hasAgenticContent,
 	classifyToolResult,
-	type AgenticSection,
-	type ToolResultLine
+	classifyContinueIntent
 } from './agentic';
 
 // Line-level unified diff for tool result rendering (`edit_file` block)
@@ -213,12 +281,11 @@ export {
 	extractSearchResults,
 	extractSearchQuery,
 	faviconForUrl,
-	isWebSearchToolName,
-	type SearchResult
+	isWebSearchToolName
 } from './search-results';
 
 // Cache utilities
-export { TTLCache, ReactiveTTLMap, type TTLCacheOptions } from './cache-ttl';
+export { TTLCache, ReactiveTTLMap } from './cache-ttl';
 
 // Redaction utilities
 export { redactValue } from './redact';
@@ -254,7 +321,15 @@ export { tryParseToolResultObject } from './tool-call-meta';
 // Per-tool UI metadata (label + icon) used by the tool-call chrome.
 // Re-exported through $lib/utils so renderer components can read the
 // label without depending on $lib/constants directly.
-export { getBuiltinToolUi, type BuiltinToolUiEntry } from '$lib/constants/built-in-tools';
+export { getBuiltinToolUi } from './built-in-tools';
+
+// Chat command picker
+
+export { getChatCommands } from './chat-commands';
+
+// Sandbox tool definition
+// SANDBOX_TOOL_DEFINITION is deprecated; kept for backward compatibility.
+export { buildSandboxToolDefinition, SANDBOX_TOOL_DEFINITION } from './sandbox-tool';
 
 // Cryptography utilities
 
@@ -262,3 +337,6 @@ export { uuid } from './uuid';
 
 // CSS utilities
 export { remToPx } from './css';
+
+// Audio format helper (used by agentic store and chat service)
+export { getAudioInputFormat } from './audio-format';
