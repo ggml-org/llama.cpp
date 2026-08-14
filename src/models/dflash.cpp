@@ -43,6 +43,8 @@ void llama_model_dflash::load_arch_hparams(llama_model_loader & ml) {
         ml.get_key(LLM_KV_HYPER_CONNECTION_EPSILON,             hparams.dsv4_hc_eps);
         ml.get_arr(LLM_KV_ATTENTION_COMPRESS_RATIOS,            hparams.dsv4_compress_ratios, false);
 
+        GGML_ASSERT(hparams.dsv4_o_group_count > 0); // avoid div by zero
+
         if (hparams.expert_gating_func != LLAMA_EXPERT_GATING_FUNC_TYPE_SQRT_SOFTPLUS) {
             throw std::runtime_error("DSpark DSV4 draft expects sqrtsoftplus MoE scoring");
         }

@@ -1317,7 +1317,7 @@ void mtmd_image_preprocessor_step3vl::img_u8_resize_bilinear_to_f32(
     const float scale_x = static_cast<float>(src_size.width)  / target_width;
     const float scale_y = static_cast<float>(src_size.height) / target_height;
 
-    std::vector<float> local_buf(3 * target_width * target_height);
+    std::vector<float> local_buf((size_t) 3 * (size_t) target_width * (size_t) target_height);
 
     for (int y = 0; y < target_height; ++y) {
         const float src_y = (static_cast<float>(y) + 0.5f) * scale_y - 0.5f;
@@ -1338,7 +1338,7 @@ void mtmd_image_preprocessor_step3vl::img_u8_resize_bilinear_to_f32(
             const auto p10 = src.get_pixel(x0, y1);
             const auto p11 = src.get_pixel(x1, y1);
 
-            const size_t idx_dst = 3 * (y * target_width + x);
+            const size_t idx_dst = (size_t) 3 * ((size_t) y * (size_t) target_width + (size_t) x);
             for (int c = 0; c < 3; ++c) {
                 const float v00 = (static_cast<float>(p00[c]) / 255.0f - mean[c]) / std[c];
                 const float v01 = (static_cast<float>(p01[c]) / 255.0f - mean[c]) / std[c];

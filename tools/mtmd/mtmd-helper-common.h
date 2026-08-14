@@ -82,7 +82,7 @@ struct decode_embd_batch {
     llama_batch batch;
     decode_embd_batch(float * embd, int32_t n_tokens, int n_pos_per_embd, int n_mmproj_embd) : n_pos_per_embd(n_pos_per_embd), n_mmproj_embd(n_mmproj_embd) {
         GGML_ASSERT(n_tokens > 0 && n_pos_per_embd > 0 && n_mmproj_embd > 0);
-        pos     .resize(n_tokens * n_pos_per_embd);
+        pos     .resize((size_t) n_tokens * (size_t) n_pos_per_embd);
         n_seq_id.resize(n_tokens);
         seq_ids .resize(n_tokens + 1);
         logits  .resize(n_tokens);
@@ -115,10 +115,12 @@ struct decode_embd_batch {
         GGML_ASSERT(!rel_pos.empty() && (int32_t)rel_pos.size() == batch.n_tokens);
         seq_id_0[0] = seq_id;
         for (int32_t i = 0; i < batch.n_tokens; i++) {
-            pos[i                     ] = rel_pos[i].t;
-            pos[i + batch.n_tokens    ] = rel_pos[i].y;
-            pos[i + batch.n_tokens * 2] = rel_pos[i].x;
-            pos[i + batch.n_tokens * 3] = rel_pos[i].z;
+            const size_t idx = (size_t) i;
+            const size_t n_tokens = (size_t) batch.n_tokens;
+            pos[idx                    ] = rel_pos[i].t;
+            pos[idx + n_tokens         ] = rel_pos[i].y;
+            pos[idx + n_tokens * 2     ] = rel_pos[i].x;
+            pos[idx + n_tokens * 3     ] = rel_pos[i].z;
         }
         for (int i = 0; i < batch.n_tokens; i++) {
             batch.n_seq_id[i] = 1;
@@ -132,10 +134,12 @@ struct decode_embd_batch {
         GGML_ASSERT(n_pos_per_embd == 4);
         seq_id_0[0] = seq_id;
         for (int i = 0; i < batch.n_tokens; i++) {
-            pos[i                     ] = pos_0 + i;
-            pos[i + batch.n_tokens    ] = pos_0 + i;
-            pos[i + batch.n_tokens * 2] = pos_0 + i;
-            pos[i + batch.n_tokens * 3] = pos_0 + i;
+            const size_t idx = (size_t) i;
+            const size_t n_tokens = (size_t) batch.n_tokens;
+            pos[idx                    ] = pos_0 + i;
+            pos[idx + n_tokens         ] = pos_0 + i;
+            pos[idx + n_tokens * 2     ] = pos_0 + i;
+            pos[idx + n_tokens * 3     ] = pos_0 + i;
         }
         for (int i = 0; i < batch.n_tokens; i++) {
             batch.n_seq_id[i] = 1;
@@ -148,7 +152,7 @@ struct decode_embd_batch {
         GGML_ASSERT(offset >= 0 && n_tokens > 0 && offset + n_tokens <= batch.n_tokens);
         llama_pos * pos_ptr;
         pos_view.clear();
-        pos_view.reserve(n_tokens * n_pos_per_embd);
+        pos_view.reserve((size_t) n_tokens * (size_t) n_pos_per_embd);
         if (n_pos_per_embd > 1) {
             // mrope
             // for example, with layout of src: 1234...1234...1234...1234...
@@ -157,7 +161,7 @@ struct decode_embd_batch {
                 // assume n_tokens is less than or equal to batch.n_tokens
                 // batch.n_tokens is number of **total** tokens
                 // n_tokens is number of viewed token
-                size_t src_idx = i * batch.n_tokens + offset;
+                size_t src_idx = (size_t) i * (size_t) batch.n_tokens + (size_t) offset;
                 pos_view.insert(pos_view.end(),
                     pos.data() + src_idx,
                     pos.data() + src_idx + n_tokens);
