@@ -67,9 +67,12 @@ fn main(
 
     // gather the selected experts for the target token.
     for (var col = thread_id;col < params.n_expert_used;col += WG_SIZE) {
-        let expert = ids[params.offset_ids + col];
-        gathered_count_ids[expert] = 1;
-        gathered_expert_used[expert] = col;
+        let expert = i32(ids[params.offset_ids + col]);
+        if (expert == -1) { // skipped slot, owned by no expert
+            continue;
+        }
+        gathered_count_ids[u32(expert)] = 1;
+        gathered_expert_used[u32(expert)] = col;
     }
 
     workgroupBarrier();
@@ -77,9 +80,22 @@ fn main(
     let output_groups:u32 = (params.m + OUTPUTS_PER_WG - 1u) / OUTPUTS_PER_WG;
     let wg_linear = wg_id.y * num_wg.x + wg_id.x;
 
+    // the matmul below only writes the rows an expert owns, zero the skipped rows
+    if (wg_linear == 0u) {
+        for (var col = 0u;col < params.n_expert_used;col++) {
+            if (i32(ids[params.offset_ids + col]) != -1) {
+                continue;
+            }
+            for (var row = thread_id;row < params.m;row += WG_SIZE) {
+                dst[params.offset_dst + col * params.m + row] = 0.0f;
+            }
+        }
+    }
+
     var own_expert:u32 = 0;
     var wg_in_batch:u32 = 0;
     var wg_sum:u32 = 0;
+    var found = false;
 
     for (var i = 0u;i < params.n_expert;i += 1) {
         let wg_vec_count = gathered_count_ids[i]; // 1 or 0
@@ -87,9 +103,15 @@ fn main(
         if (wg_sum <= wg_linear && wg_linear < wg_sum + wg_per_matrix) {
             own_expert = i;
             wg_in_batch = wg_linear - wg_sum;
+            found = true;
             break;
         }
         wg_sum += wg_per_matrix;
+    }
+
+    // skipped slots shrink the gathered set, so excess workgroups have nothing to do
+    if (!found) {
+        return;
     }
 
     let row_base = (wg_linear % output_groups) * OUTPUTS_PER_WG;
