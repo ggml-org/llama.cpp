@@ -300,6 +300,7 @@ if (GGML_OPENMP_FETCH)
         file(REMOVE_RECURSE "${GGML_OPENMP_INSTALLER}" "${GGML_OPENMP_EXTRACT_DIR}")
     endif()
 
+    # The NSIS installer embeds LLVM's general license in its UI but does not install it as a file; use OpenMP's license to include its additional notices.
     if (EXISTS "${GGML_OPENMP_LICENSE}")
         file(SHA256 "${GGML_OPENMP_LICENSE}" GGML_OPENMP_LICENSE_ACTUAL_SHA256)
     endif()
