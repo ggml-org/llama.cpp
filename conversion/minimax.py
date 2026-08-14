@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from typing import Iterable, TYPE_CHECKING
+from typing import Iterable, Sequence, TYPE_CHECKING
 
 import torch
 
 if TYPE_CHECKING:
     from torch import Tensor
 
-from .base import ModelBase, TextModel, MmprojModel, gguf
+from .base import ModelBase, TextModel, MmprojModel, gguf, logger
 
 
 @ModelBase.register("MiniMaxText01ForCausalLM")
@@ -15,8 +15,42 @@ from .base import ModelBase, TextModel, MmprojModel, gguf
 class MiniMaxText01Model(TextModel):
     model_arch = gguf.MODEL_ARCH.MINIMAX01
 
+    def _get_suppress_tokens(self) -> Sequence[int] | None:
+        import json
+        from transformers import AutoTokenizer
+        from .base import LazyTorchTensor
+
+        # check added tokens embeddings in embeddings tensor for zero-valued embeddings
+        # they get in the way of the token sampling process and must be suppressed
+
+        tokenizer = AutoTokenizer.from_pretrained(self.dir_model, trust_remote_code=True)
+        tokenizer_vocab_size = tokenizer.vocab_size
+
+        with open(self.dir_model / "model.safetensors.index.json", "r", encoding="utf-8") as f:
+            weight_map = json.load(f)["weight_map"]
+
+        embeddings_tensor_name = "model.embed_tokens.weight"
+        embeddings_shard_name = weight_map[embeddings_tensor_name]
+        with gguf.utility.SafetensorsLocal(self.dir_model / embeddings_shard_name) as model_shard:
+            embeddings_data = model_shard[embeddings_tensor_name]
+
+        embeddings_weights_dtype = LazyTorchTensor._dtype_str_map[embeddings_data.dtype]
+        embeddings_weights = torch.from_numpy(embeddings_data.mmap_bytes()).view(embeddings_weights_dtype).reshape(embeddings_data.shape)
+        embeddings_vocab_size = embeddings_weights.shape[0]
+
+        embeddings_added_tokens = embeddings_weights[tokenizer_vocab_size:embeddings_vocab_size]
+        embeddings_zero_rows = torch.all(embeddings_added_tokens == 0, dim=1)
+        tokens_zero_embeddings_ids = (torch.nonzero(embeddings_zero_rows, as_tuple=False).flatten() + tokenizer_vocab_size).tolist()
+
+        return tokens_zero_embeddings_ids
+
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
+
+        suppress_tokens = self._get_suppress_tokens()
+        if suppress_tokens:
+            logger.info(f"Suppressing tokens with zero embeddings {suppress_tokens}")
+            self.gguf_writer.add_suppress_tokens(suppress_tokens)
 
         layernorm_full_attention_alpha = self.hparams["layernorm_full_attention_alpha"]
         layernorm_full_attention_beta = self.hparams["layernorm_full_attention_beta"]
