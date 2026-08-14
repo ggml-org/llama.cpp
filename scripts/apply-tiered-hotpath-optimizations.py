@@ -166,5 +166,87 @@ replace_once(
 "update cache call",
 )
 
+replace_once(
+'''static void initialize_expert_cache(tiered_buffer_context * ctx) {
+''',
+'''static void initialize_expert_cache(tiered_buffer_context * ctx, size_t minimum_slots) {
+''',
+"pass decode working-set size to cache allocator",
+)
+
+replace_once(
+'''            used = 0;
+            bool made_progress = true;
+            while (made_progress) {
+                made_progress = false;
+                for (cache_candidate & candidate : candidates) {
+                    if (candidate.n_slots >= static_cast<size_t>(candidate.tensor->ne[2]) ||
+                            candidate.slot_size > budget - used) {
+                        continue;
+                    }
+                    ++candidate.n_slots;
+                    used += candidate.slot_size;
+                    made_progress = true;
+                }
+            }
+
+            if (used == 0) {
+                GGML_LOG_WARN("tiered-memory: expert cache budget %.2f MiB is too small for one slot\\n",
+                        budget / 1024.0 / 1024.0);
+                return;
+            }
+''',
+'''            used = 0;
+
+            // cache-direct needs one slot for every expert selected in the row.
+            // A smaller per-tensor cache is never consulted by stage_cached_experts,
+            // so assigning a few round-robin slots to every tensor can reserve a
+            // large amount of VRAM that produces zero hits. Allocate complete
+            // decode working sets first; only then spend the remainder on extra
+            // retention capacity for tensors whose direct path is actually usable.
+            const size_t floor_slots = std::max<size_t>(1, minimum_slots);
+            for (cache_candidate & candidate : candidates) {
+                const size_t required_slots = std::min(
+                        floor_slots, static_cast<size_t>(candidate.tensor->ne[2]));
+                if (required_slots == 0 || candidate.slot_size > (budget - used) / required_slots) {
+                    continue;
+                }
+                candidate.n_slots = required_slots;
+                used += candidate.slot_size * required_slots;
+            }
+
+            bool made_progress = true;
+            while (made_progress) {
+                made_progress = false;
+                for (cache_candidate & candidate : candidates) {
+                    if (candidate.n_slots == 0 ||
+                            candidate.n_slots >= static_cast<size_t>(candidate.tensor->ne[2]) ||
+                            candidate.slot_size > budget - used) {
+                        continue;
+                    }
+                    ++candidate.n_slots;
+                    used += candidate.slot_size;
+                    made_progress = true;
+                }
+            }
+
+            if (used == 0) {
+                GGML_LOG_WARN(
+                        "tiered-memory: expert cache budget %.2f MiB is too small for a %zu-slot decode working set\\n",
+                        budget / 1024.0 / 1024.0, floor_slots);
+                return;
+            }
+''',
+"allocate complete cache-direct working sets",
+)
+
+replace_once(
+'''    initialize_expert_cache(ctx);
+''',
+'''    initialize_expert_cache(ctx, ids_per_row);
+''',
+"initialize cache with router top-k",
+)
+
 path.write_text(text, encoding="utf-8")
 print(f"applied tiered decode hot-path optimizations: {path}")
