@@ -4229,18 +4229,20 @@ int clip_n_output_tokens(const clip_ctx * ctx, const clip_image_f32 * img) {
         case PROJECTOR_TYPE_GRANITE4_VISION:
             {
                 // Per-tile output token count: each projector block outputs
-                // query_side^2 tokens per window × n^2 windows.
-                // For 384×384 input: n = 24/8 = 3, query_side = 4 → 144.
+                // query_side^2 tokens per window x n^2 windows.
+                // For 384x384 input: n = 24/8 = 3, query_side = 4 -> 144.
                 const int window_side = ctx->model.hparams.downsample_window_side;
                 const int query_side  = ctx->model.hparams.downsample_query_side;
                 const int side        = img->nx() / params.patch_size;
                 const int n           = side / window_side;
-                n_patches             = (query_side * n) * (query_side * n);
-                if (img->add_newline) {
-                    // For single-tile case: append 1 newline row.
-                    // For multi-tile rowwise: handled by caller, but here we
-                    // report the per-tile count including one trailing newline.
-                    n_patches += 1;
+                const int out_side    = query_side * n;
+                n_patches             = out_side * out_side;
+                if (img->anyres.is_tiled()) {
+                    // overview tile, then the unpadded tile grid with one newline per row
+                    int off_x, off_y, w, h;
+                    clip_anyres_unpad(img->anyres.grid_x * out_side, img->anyres.grid_y * out_side,
+                                      img->anyres.orig_nx, img->anyres.orig_ny, off_x, off_y, w, h);
+                    n_patches += h * (w + 1);
                 }
             } break;
         default:
@@ -5505,10 +5507,18 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
                     return idx;
                 };
 
+                // the same permutation is applied to every tile of the stacked image
                 auto upload = [&](const std::string & name, const std::vector<int32_t> & idx) {
                     ggml_tensor * t = ggml_graph_get_tensor(gf, name.c_str());
                     GGML_ASSERT(t);
-                    ggml_backend_tensor_set(t, idx.data(), 0, idx.size() * sizeof(int32_t));
+                    GGML_ASSERT(ggml_nelements(t) % (int64_t) idx.size() == 0);
+                    const int n_rep = ggml_nelements(t) / idx.size();
+                    std::vector<int32_t> buf;
+                    buf.reserve(idx.size() * n_rep);
+                    for (int i = 0; i < n_rep; ++i) {
+                        buf.insert(buf.end(), idx.begin(), idx.end());
+                    }
+                    ggml_backend_tensor_set(t, buf.data(), 0, ggml_nbytes(t));
                 };
 
                 // Stage 1b only uses block 0's permutations; future stages
