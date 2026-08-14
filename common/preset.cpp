@@ -450,7 +450,6 @@ common_presets common_preset_context::load_from_models_dir(const std::string & m
             preset.set_option(*this, "LLAMA_ARG_MMPROJ", model.path_mmproj);
         }
         if (!model.path_mtp.empty()) {
-            preset.set_option(*this, "LLAMA_ARG_SPEC_TYPE", "draft-mtp");
             preset.set_option(*this, "LLAMA_ARG_SPEC_DRAFT_MODEL", model.path_mtp);
         }
         out[preset.name] = preset;
