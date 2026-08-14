@@ -365,8 +365,10 @@ struct local_model {
     std::string name;
     std::string path;
     std::string path_mmproj;
-    std::string path_mtp;
+    std::string path_draft;
 };
+
+static const char * draft_prefixes[] = { "mtp-", "dspark-", "dflash-", "eagle3-" };
 
 common_presets common_preset_context::load_from_models_dir(const std::string & models_dir) const {
     if (!std::filesystem::exists(models_dir) || !std::filesystem::is_directory(models_dir)) {
@@ -379,13 +381,22 @@ common_presets common_preset_context::load_from_models_dir(const std::string & m
         common_file_info model_file;
         common_file_info first_shard_file;
         common_file_info mmproj_file;
-        common_file_info mtp_file;
+        common_file_info draft_file;
         for (const auto & file : files) {
             if (string_ends_with(file.name, ".gguf")) {
+                bool is_draft = false;
+                for (const auto & prefix : draft_prefixes) {
+                    if (file.name.rfind(prefix, 0) == 0) {
+                        is_draft = true;
+                        break;
+                    }
+                }
                 if (file.name.find("mmproj") != std::string::npos) {
                     mmproj_file = file;
-                } else if (file.name.rfind("mtp-", 0) != std::string::npos) {
-                    mtp_file = file;
+                } else if (is_draft) {
+                    if (draft_file.path.empty()) {
+                        draft_file = file; // first sidecar found wins
+                    }
                 } else if (file.name.find("-00001-of-") != std::string::npos) {
                     first_shard_file = file;
                 } else {
@@ -398,7 +409,7 @@ common_presets common_preset_context::load_from_models_dir(const std::string & m
             /* name        */ name,
             /* path        */ first_shard_file.path.empty() ? model_file.path : first_shard_file.path,
             /* path_mmproj */ mmproj_file.path, // can be empty
-            /* path_mtp    */ mtp_file.path // can be empty
+            /* path_draft  */ draft_file.path   // can be empty
         };
         if (!model.path.empty()) {
             models.push_back(model);
@@ -417,7 +428,7 @@ common_presets common_preset_context::load_from_models_dir(const std::string & m
                 /* name        */ name,
                 /* path        */ file.path,
                 /* path_mmproj */ "",
-                /* path_mtp    */ ""
+                /* path_draft  */ ""
             };
             models.push_back(model);
         }
@@ -432,8 +443,8 @@ common_presets common_preset_context::load_from_models_dir(const std::string & m
         if (!model.path_mmproj.empty()) {
             preset.set_option(*this, "LLAMA_ARG_MMPROJ", model.path_mmproj);
         }
-        if (!model.path_mtp.empty()) {
-            preset.set_option(*this, "LLAMA_ARG_SPEC_DRAFT_MODEL", model.path_mtp);
+        if (!model.path_draft.empty()) {
+            preset.set_option(*this, "LLAMA_ARG_SPEC_DRAFT_MODEL", model.path_draft);
         }
         out[preset.name] = preset;
     }
