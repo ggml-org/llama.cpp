@@ -24,18 +24,20 @@ void llama_kv_cells::compact(llama_seq_id s) {
     const uint32_t h = v.head;
     const uint32_t t = v.tail;
 
+    if (t + 1 < v.cnt.size()) {
+        v.cnt.resize(t + 1);
+    }
+
     if (h == 0 && t + 1 == v.cnt.size()) {
         return;
     }
 
-    if (h > 0) {
+    if (h > 0 && h > v.cnt.size() / 4) {
         v.cnt.erase(v.cnt.begin(), v.cnt.begin() + h);
+        v.base += (llama_pos)h;
+        v.tail  = t - h;
+        v.head  = 0;
     }
-    v.cnt.resize(t + 1 - h);
-
-    v.base += (llama_pos)h;
-    v.head  = 0;
-    v.tail  = t - h;
 }
 
 uint32_t llama_kv_cells::next_head(int32_t seq_id, llama_pos p0, llama_pos p1) {
