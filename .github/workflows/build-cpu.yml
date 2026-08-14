@@ -8,7 +8,6 @@ on:
     paths: [
       '.github/workflows/build-cpu.yml',
       '.github/workflows/build-cmake-pkg.yml',
-      '.github/actions/windows-setup-llvm-openmp/action.yml',
       '**/CMakeLists.txt',
       '**/.cmake',
       '**/*.h',
@@ -23,7 +22,6 @@ on:
       '.github/workflows/build-cpu.yml',
       '.github/workflows/build-cmake-pkg.yml',
       'ggml/src/ggml-rpc/**',
-      '.github/actions/windows-setup-llvm-openmp/action.yml',
       '**/CMakeLists.txt',
       '**/.cmake',
       '**/*.h',
@@ -39,7 +37,6 @@ concurrency:
 env:
   GGML_NLOOP: 3
   GGML_N_THREADS: 1
-  LLVM_OPENMP_VERSION: 20.1.8
   LLAMA_ARG_LOG_COLORS: 1
   LLAMA_ARG_LOG_PREFIX: 1
   LLAMA_ARG_LOG_TIMESTAMPS: 1
@@ -134,32 +131,18 @@ jobs:
         include:
           - build: 'x64-cpu-static'
             arch: 'x64'
-            openmp: true
-            openmp_sha256: '3197846a2b19063687dd56e93e34cd941e3548d907f23a6131571321bdf9fe7b'
-            defines: '-G "Ninja Multi-Config" -D CMAKE_TOOLCHAIN_FILE=cmake/x64-windows-llvm.cmake -DGGML_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DGGML_RPC=ON -DBUILD_SHARED_LIBS=OFF'
+            defines: '-G "Ninja Multi-Config" -D CMAKE_TOOLCHAIN_FILE=cmake/x64-windows-llvm.cmake -DGGML_NATIVE=OFF -DGGML_OPENMP_FETCH=ON -DLLAMA_BUILD_SERVER=ON -DGGML_RPC=ON -DBUILD_SHARED_LIBS=OFF'
           - build: 'x64-openblas'
             arch: 'x64'
-            openmp: false
             defines: '-G "Ninja Multi-Config" -D CMAKE_TOOLCHAIN_FILE=cmake/x64-windows-llvm.cmake -DGGML_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DGGML_RPC=ON -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON -DGGML_OPENMP=OFF -DGGML_BLAS=ON -DGGML_BLAS_VENDOR=OpenBLAS -DBLAS_INCLUDE_DIRS="$env:RUNNER_TEMP/openblas/include" -DBLAS_LIBRARIES="$env:RUNNER_TEMP/openblas/lib/openblas.lib"'
           - build: 'arm64'
             arch: 'arm64'
-            openmp: true
-            openmp_sha256: '7c4ac97eb2ae6b960ca5f9caf3ff6124c8d2a18cc07a7840a4d2ea15537bad8e'
-            defines: '-G "Ninja Multi-Config" -D CMAKE_TOOLCHAIN_FILE=cmake/arm64-windows-llvm.cmake -DGGML_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON'
+            defines: '-G "Ninja Multi-Config" -D CMAKE_TOOLCHAIN_FILE=cmake/arm64-windows-llvm.cmake -DGGML_NATIVE=OFF -DGGML_OPENMP_FETCH=ON -DLLAMA_BUILD_SERVER=ON'
 
     steps:
       - name: Clone
         id: checkout
         uses: actions/checkout@v6
-
-      - name: Setup LLVM OpenMP
-        id: llvm_openmp
-        if: ${{ matrix.openmp }}
-        uses: ./.github/actions/windows-setup-llvm-openmp
-        with:
-          arch: ${{ matrix.arch }}
-          version: ${{ env.LLVM_OPENMP_VERSION }}
-          sha256: ${{ matrix.openmp_sha256 }}
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
@@ -191,16 +174,8 @@ jobs:
         id: cmake_build
         run: |
           cmake -S . -B build ${{ matrix.defines }} `
-            ${{ matrix.openmp && format('-DGGML_OPENMP_LLVM_ROOT={0}', steps.llvm_openmp.outputs.root) || '' }} `
             -DLLAMA_BUILD_BORINGSSL=ON
           cmake --build build --config Release -j ${env:NUMBER_OF_PROCESSORS}
-
-      - name: Add LLVM OpenMP runtime
-        if: ${{ matrix.openmp }}
-        run: |
-          $root = "${{ steps.llvm_openmp.outputs.root }}"
-          $dest = ".\build\bin\Release"
-          Copy-Item (Join-Path $root "bin\libomp.dll") $dest
 
       - name: Add libopenblas.dll
         id: add_libopenblas_dll

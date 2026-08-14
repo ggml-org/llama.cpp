@@ -222,9 +222,95 @@ if (GGML_SCHED_NO_REALLOC)
     target_compile_definitions(ggml-base PUBLIC GGML_SCHED_NO_REALLOC)
 endif()
 
-if (GGML_OPENMP)
+if (GGML_OPENMP_FETCH)
+    if (NOT GGML_OPENMP)
+        message(FATAL_ERROR "GGML_OPENMP_FETCH requires GGML_OPENMP")
+    elseif (NOT WIN32 OR NOT (CMAKE_C_COMPILER_ID MATCHES "Clang"))
+        message(FATAL_ERROR "GGML_OPENMP_FETCH currently requires Clang on Windows")
+    elseif (CMAKE_VERSION VERSION_LESS 3.20)
+        message(FATAL_ERROR "GGML_OPENMP_FETCH requires CMake 3.20 or later")
+    endif()
+
+    include(FetchContent)
+
+    set(GGML_OPENMP_LLVM_VERSION "20.1.8")
+    set(LLVM_OPENMP_CMAKE_ARGS
+        URL      "https://github.com/llvm/llvm-project/releases/download/llvmorg-${GGML_OPENMP_LLVM_VERSION}/cmake-${GGML_OPENMP_LLVM_VERSION}.src.tar.xz"
+        URL_HASH SHA256=3319203cfd1172bbac50f06fa68e318af84dcb5d65353310c0586354069d6634
+    )
+    if (CMAKE_VERSION VERSION_GREATER_EQUAL 3.24)
+        list(APPEND LLVM_OPENMP_CMAKE_ARGS DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+    endif()
+    FetchContent_Declare(llvm_openmp_cmake ${LLVM_OPENMP_CMAKE_ARGS})
+    FetchContent_MakeAvailable(llvm_openmp_cmake)
+
+    set(LLVM_OPENMP_ARGS
+        URL      "https://github.com/llvm/llvm-project/releases/download/llvmorg-${GGML_OPENMP_LLVM_VERSION}/openmp-${GGML_OPENMP_LLVM_VERSION}.src.tar.xz"
+        URL_HASH SHA256=b21c04ee9cbe56e200c5d83823765a443ee6389bbc3f64154c96e94016e6cee9
+    )
+    if (CMAKE_VERSION VERSION_GREATER_EQUAL 3.28)
+        list(APPEND LLVM_OPENMP_ARGS EXCLUDE_FROM_ALL)
+    endif()
+    if (CMAKE_VERSION VERSION_GREATER_EQUAL 3.24)
+        list(APPEND LLVM_OPENMP_ARGS DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+    endif()
+    FetchContent_Declare(llvm_openmp ${LLVM_OPENMP_ARGS})
+
+    set(OPENMP_STANDALONE_BUILD ON)
+    set(OPENMP_ENABLE_LIBOMPTARGET OFF CACHE BOOL "" FORCE)
+    set(OPENMP_ENABLE_LIBOMP_PROFILING OFF CACHE BOOL "" FORCE)
+    set(OPENMP_ENABLE_OMPT_TOOLS OFF CACHE BOOL "" FORCE)
+    set(LIBOMP_ENABLE_ASSERTIONS OFF CACHE BOOL "" FORCE)
+    set(LIBOMP_ENABLE_SHARED ON CACHE BOOL "" FORCE)
+    set(LIBOMP_FORTRAN_MODULES OFF CACHE BOOL "" FORCE)
+    set(LIBOMP_LIB_TYPE normal CACHE STRING "" FORCE)
+    set(LIBOMP_OMPD_SUPPORT OFF CACHE BOOL "" FORCE)
+    set(LIBOMP_OMPT_SUPPORT OFF CACHE BOOL "" FORCE)
+    set(LIBOMP_STATS OFF CACHE BOOL "" FORCE)
+    set(LIBOMP_USE_DEBUGGER OFF CACHE BOOL "" FORCE)
+    set(LIBOMP_USE_HWLOC OFF CACHE BOOL "" FORCE)
+    set(LIBOMP_USE_ITT_NOTIFY OFF CACHE BOOL "" FORCE)
+
+    set(SAVED_CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH})
+    list(PREPEND CMAKE_MODULE_PATH "${llvm_openmp_cmake_SOURCE_DIR}/Modules")
+
+    if (CMAKE_VERSION VERSION_GREATER_EQUAL 3.28)
+        FetchContent_MakeAvailable(llvm_openmp)
+    else()
+        FetchContent_GetProperties(llvm_openmp)
+        if (NOT llvm_openmp_POPULATED)
+            FetchContent_Populate(llvm_openmp)
+            add_subdirectory(${llvm_openmp_SOURCE_DIR} ${llvm_openmp_BINARY_DIR} EXCLUDE_FROM_ALL)
+        endif()
+    endif()
+
+    set(CMAKE_MODULE_PATH ${SAVED_CMAKE_MODULE_PATH})
+    set_target_properties(omp PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
+    target_compile_options(omp PRIVATE -w)
+    install(TARGETS omp RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+
+    add_library(ggml-openmp-c INTERFACE)
+    target_compile_options(ggml-openmp-c INTERFACE "$<$<COMPILE_LANGUAGE:C>:-fopenmp=libomp>")
+    target_include_directories(ggml-openmp-c SYSTEM INTERFACE "${llvm_openmp_BINARY_DIR}/runtime/src")
+    target_link_libraries(ggml-openmp-c INTERFACE omp)
+
+    add_library(ggml-openmp-cxx INTERFACE)
+    target_compile_options(ggml-openmp-cxx INTERFACE "$<$<COMPILE_LANGUAGE:CXX>:-fopenmp=libomp>")
+    target_include_directories(ggml-openmp-cxx SYSTEM INTERFACE "${llvm_openmp_BINARY_DIR}/runtime/src")
+    target_link_libraries(ggml-openmp-cxx INTERFACE omp)
+
+    if (COMMAND license_add_file)
+        license_add_file("LLVM" "${llvm_openmp_SOURCE_DIR}/LICENSE.TXT")
+    endif()
+
+    set(GGML_OPENMP_TARGET_C ggml-openmp-c)
+    set(GGML_OPENMP_TARGET_CXX ggml-openmp-cxx)
+    set(GGML_OPENMP_ENABLED "ON" CACHE INTERNAL "")
+elseif (GGML_OPENMP)
     find_package(OpenMP)
     if (OpenMP_FOUND)
+        set(GGML_OPENMP_TARGET_C OpenMP::OpenMP_C)
+        set(GGML_OPENMP_TARGET_CXX OpenMP::OpenMP_CXX)
         set(GGML_OPENMP_ENABLED "ON" CACHE INTERNAL "")
     else()
         set(GGML_OPENMP_ENABLED "OFF" CACHE INTERNAL "")
@@ -236,7 +322,7 @@ endif()
 
 if (GGML_OPENMP_ENABLED)
     target_compile_definitions(ggml-base PRIVATE GGML_USE_OPENMP)
-    target_link_libraries(ggml-base PRIVATE OpenMP::OpenMP_C OpenMP::OpenMP_CXX)
+    target_link_libraries(ggml-base PRIVATE ${GGML_OPENMP_TARGET_C} ${GGML_OPENMP_TARGET_CXX})
 endif()
 
 add_library(ggml
