@@ -499,6 +499,7 @@ static struct ggml_tensor * ggml_backend_meta_buffer_simple_tensor(const struct 
 }
 
 static enum ggml_status ggml_backend_meta_buffer_init_tensor_impl(ggml_backend_meta_simple_tensor_container & stc, ggml_tensor * tensor);
+static enum ggml_status ggml_backend_meta_buffer_init_tensor_one(ggml_backend_meta_simple_tensor_container & stc, ggml_tensor * tensor);
 
 // Resolve the per-device shard of `tensor`: static registrations first, then
 // the owner's container, creating the registration there on demand.
@@ -588,8 +589,10 @@ struct ggml_backend_meta_scratch_shards {
 };
 
 static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(const struct ggml_tensor * tensor, bool assume_sync);
-
 static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(
+        ggml_backend_meta_simple_tensor_container & stc, const struct ggml_tensor * tensor, bool assume_sync);
+
+static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state_impl(
         ggml_backend_meta_simple_tensor_container & stc, const struct ggml_tensor * tensor, bool assume_sync) {
     // FIXME Currently this function preserves/erases the information in n_segments and nr in an inconsistent way.
     // Since the operations in question are developed specifically for llama.cpp this currently does not manifest as a bug there.
@@ -1278,6 +1281,89 @@ static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(
     return ret;
 }
 
+static const struct ggml_backend_meta_split_state * ggml_backend_meta_split_state_cached(
+        const struct ggml_tensor * tensor, bool assume_sync) {
+    if (tensor->buffer == nullptr || !ggml_backend_buffer_is_meta(tensor->buffer)) {
+        return nullptr;
+    }
+
+    ggml_backend_meta_buffer_context * buf_ctx = (ggml_backend_meta_buffer_context *) tensor->buffer->context;
+    const std::pair key = std::make_pair(tensor, assume_sync);
+    const auto it = buf_ctx->split_state_cache.find(key);
+    if (it == buf_ctx->split_state_cache.end() ||
+            memcmp(it->second.second, (const char *) tensor, sizeof(it->second.second)) != 0) {
+        return nullptr;
+    }
+    return &it->second.first;
+}
+
+static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(
+        ggml_backend_meta_simple_tensor_container & stc, const struct ggml_tensor * tensor, bool assume_sync) {
+    if (tensor->buffer == nullptr || !ggml_backend_buffer_is_meta(tensor->buffer)) {
+        return {GGML_BACKEND_SPLIT_AXIS_MIRRORED, {0}, {1}, 1};
+    }
+    if (const ggml_backend_meta_split_state * cached = ggml_backend_meta_split_state_cached(tensor, assume_sync)) {
+        return *cached;
+    }
+
+    // Split-state records are large (more than 2 KiB) and the implementation
+    // keeps several of them in each call frame. Deep model graphs can therefore
+    // exhaust the normal 8 MiB process stack before graph execution begins.
+    // Evaluate uncached dependencies in post-order so implementation calls are
+    // never recursively nested by graph depth.
+    struct pending_split_state {
+        const struct ggml_tensor * tensor;
+        bool                       assume_sync;
+        size_t                     next_src;
+    };
+
+    using split_state_key = std::pair<const struct ggml_tensor *, bool>;
+    std::map<split_state_key, uint8_t> visit_state;
+    std::vector<pending_split_state> pending;
+
+    const split_state_key root_key = std::make_pair(tensor, assume_sync);
+    visit_state[root_key] = 1;
+    pending.push_back({tensor, assume_sync, 0});
+
+    while (!pending.empty()) {
+        pending_split_state & current = pending.back();
+        bool pushed_dependency = false;
+
+        while (current.next_src < GGML_MAX_SRC) {
+            const struct ggml_tensor * src = current.tensor->src[current.next_src++];
+            if (src == nullptr || src == current.tensor || ggml_nelements(src) == 0 || src->buffer == nullptr ||
+                    !ggml_backend_buffer_is_meta(src->buffer) ||
+                    ggml_backend_meta_split_state_cached(src, /*assume_sync =*/ true) != nullptr) {
+                continue;
+            }
+
+            const split_state_key src_key = std::make_pair(src, true);
+            const uint8_t state = visit_state[src_key];
+            if (state == 0) {
+                visit_state[src_key] = 1;
+                pending.push_back({src, true, 0});
+                pushed_dependency = true;
+                break;
+            }
+            if (state == 1) {
+                GGML_ABORT("cycle while resolving tensor split state");
+            }
+        }
+
+        if (pushed_dependency) {
+            continue;
+        }
+
+        ggml_backend_meta_get_split_state_impl(stc, current.tensor, current.assume_sync);
+        visit_state[std::make_pair(current.tensor, current.assume_sync)] = 2;
+        pending.pop_back();
+    }
+
+    const ggml_backend_meta_split_state * result = ggml_backend_meta_split_state_cached(tensor, assume_sync);
+    GGML_ASSERT(result != nullptr);
+    return *result;
+}
+
 static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(const struct ggml_tensor * tensor, bool assume_sync) {
     if (tensor->buffer == nullptr || !ggml_backend_buffer_is_meta(tensor->buffer)) {
         return {GGML_BACKEND_SPLIT_AXIS_MIRRORED, {0}, {1}, 1};
@@ -1292,7 +1378,7 @@ static void * ggml_backend_meta_buffer_get_base(ggml_backend_buffer_t buffer) {
     return (void *) 0x1000000000000000; // FIXME
 }
 
-static enum ggml_status ggml_backend_meta_buffer_init_tensor_impl(ggml_backend_meta_simple_tensor_container & stc, ggml_tensor * tensor) {
+static enum ggml_status ggml_backend_meta_buffer_init_tensor_one(ggml_backend_meta_simple_tensor_container & stc, ggml_tensor * tensor) {
     GGML_ASSERT(ggml_backend_buffer_is_meta(tensor->buffer));
     ggml_backend_meta_buffer_context * buf_ctx = (ggml_backend_meta_buffer_context *) tensor->buffer->context;
     const size_t n_simple_bufs = ggml_backend_meta_buffer_n_bufs(tensor->buffer);
@@ -1456,6 +1542,92 @@ static enum ggml_status ggml_backend_meta_buffer_init_tensor_impl(ggml_backend_m
     }
 
     stc.simple_tensors[tensor] = simple_tensors;
+    if (stc.validate_identity) {
+        auto & identity = stc.identities[tensor];
+        memcpy(identity.data(), (const char *) tensor, identity.size());
+    }
+
+    return GGML_STATUS_SUCCESS;
+}
+
+static bool ggml_backend_meta_simple_tensor_is_initialized(
+        ggml_backend_meta_simple_tensor_container & stc, const struct ggml_tensor * tensor) {
+    if (tensor->buffer == nullptr || !ggml_backend_buffer_is_meta(tensor->buffer)) {
+        return true;
+    }
+    if (ggml_backend_meta_buffer_simple_tensor(tensor, 0) != nullptr) {
+        return true;
+    }
+
+    auto it = stc.simple_tensors.find(tensor);
+    if (it != stc.simple_tensors.end() && stc.validate_identity) {
+        const auto id_it = stc.identities.find(tensor);
+        if (id_it == stc.identities.end() ||
+                memcmp(id_it->second.data(), (const char *) tensor, id_it->second.size()) != 0) {
+            stc.simple_tensors.erase(it);
+            stc.identities.erase(tensor);
+            it = stc.simple_tensors.end();
+        }
+    }
+    return it != stc.simple_tensors.end();
+}
+
+static enum ggml_status ggml_backend_meta_buffer_init_tensor_impl(
+        ggml_backend_meta_simple_tensor_container & stc, ggml_tensor * tensor) {
+    if (ggml_backend_meta_simple_tensor_is_initialized(stc, tensor)) {
+        return GGML_STATUS_SUCCESS;
+    }
+
+    // Initializing a shard recursively initializes its view and op sources.
+    // As with split-state resolution, a deep graph can overflow the process
+    // stack because each initialization frame contains a full split state.
+    // Initialize dependencies in iterative post-order instead.
+    struct pending_init {
+        struct ggml_tensor * tensor;
+        size_t               next_dependency;
+    };
+
+    std::map<struct ggml_tensor *, uint8_t> visit_state;
+    std::vector<pending_init> pending;
+    visit_state[tensor] = 1;
+    pending.push_back({tensor, 0});
+
+    while (!pending.empty()) {
+        pending_init & current = pending.back();
+        bool pushed_dependency = false;
+
+        while (current.next_dependency < GGML_MAX_SRC + 1) {
+            const size_t dependency_index = current.next_dependency++;
+            ggml_tensor * dependency = dependency_index == 0 ?
+                current.tensor->view_src : current.tensor->src[dependency_index - 1];
+            if (dependency == nullptr || dependency == current.tensor ||
+                    ggml_backend_meta_simple_tensor_is_initialized(stc, dependency)) {
+                continue;
+            }
+
+            const uint8_t state = visit_state[dependency];
+            if (state == 0) {
+                visit_state[dependency] = 1;
+                pending.push_back({dependency, 0});
+                pushed_dependency = true;
+                break;
+            }
+            if (state == 1) {
+                GGML_ABORT("cycle while initializing tensor shards");
+            }
+        }
+
+        if (pushed_dependency) {
+            continue;
+        }
+
+        const ggml_status status = ggml_backend_meta_buffer_init_tensor_one(stc, current.tensor);
+        if (status != GGML_STATUS_SUCCESS) {
+            return status;
+        }
+        visit_state[current.tensor] = 2;
+        pending.pop_back();
+    }
 
     return GGML_STATUS_SUCCESS;
 }

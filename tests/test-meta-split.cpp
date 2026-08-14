@@ -48,6 +48,78 @@ static ggml_backend_meta_split_state split_state_callback(const ggml_tensor * te
     return state;
 }
 
+static bool test_deep_meta_graph(ggml_backend_t backend) {
+    static constexpr size_t depth = 2048;
+    const ggml_init_params params = {
+        /*.mem_size   =*/ 32*1024*1024,
+        /*.mem_buffer =*/ nullptr,
+        /*.no_alloc   =*/ true,
+    };
+    ggml_context_ptr ctx(ggml_init(params));
+    if (!ctx) {
+        std::fprintf(stderr, "failed to initialize deep-graph context\n");
+        return false;
+    }
+
+    ggml_tensor * root = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_F32, 1);
+    ggml_set_name(root, "deep-root");
+    std::vector<ggml_tensor *> chain = {root};
+    chain.reserve(depth + 1);
+    ggml_tensor * output = root;
+    for (size_t i = 0; i < depth; ++i) {
+        output = ggml_scale(ctx.get(), output, 1.0f);
+        chain.push_back(output);
+    }
+    ggml_set_name(output, "deep-output");
+
+    ggml_cgraph * graph = ggml_new_graph_custom(ctx.get(), depth + 1, false);
+    ggml_build_forward_expand(graph, output);
+    if ((size_t) ggml_graph_n_nodes(graph) != depth) {
+        std::fprintf(stderr, "deep graph has %d nodes, expected %zu\n", ggml_graph_n_nodes(graph), depth);
+        return false;
+    }
+
+    ggml_backend_buffer_ptr buffer(ggml_backend_alloc_ctx_tensors(ctx.get(), backend));
+    if (!buffer) {
+        std::fprintf(stderr, "failed to allocate deep-graph tensors\n");
+        return false;
+    }
+    ggml_backend_buffer_set_usage(buffer.get(), GGML_BACKEND_BUFFER_USAGE_COMPUTE);
+
+    // Invalidate allocation-time identity snapshots to model compute-arena
+    // address reuse. Resolving the output must rebuild the entire dependency
+    // chain without recursing once per node.
+    for (size_t i = 0; i < chain.size(); ++i) {
+        ggml_format_name(chain[i], "deep-mutated-%zu", i);
+    }
+
+    const float expected = 0.125f;
+    ggml_backend_tensor_set(root, &expected, 0, sizeof(expected));
+
+    // Force graph-external shard resolution from the deepest output before
+    // normal topological graph execution. Recursive resolution needs more than
+    // the default process stack for a chain of this depth.
+    float unresolved = 0.0f;
+    ggml_backend_tensor_get(output, &unresolved, 0, sizeof(unresolved));
+
+    const ggml_status status = ggml_backend_graph_compute(backend, graph);
+    if (status != GGML_STATUS_SUCCESS) {
+        std::fprintf(stderr, "deep meta graph compute failed: %s\n", ggml_status_to_string(status));
+        return false;
+    }
+    ggml_backend_synchronize(backend);
+
+    float actual = 0.0f;
+    ggml_backend_tensor_get(output, &actual, 0, sizeof(actual));
+    if (actual != expected) {
+        std::fprintf(stderr, "deep meta graph mismatch: %.9g != %.9g\n", actual, expected);
+        return false;
+    }
+
+    std::printf("deep meta graph passed (%zu nodes)\n", depth);
+    return true;
+}
+
 int main() {
     ggml_backend_load_all();
 
@@ -228,6 +300,10 @@ int main() {
     ggml_backend_tensor_get(segments, segments_actual.data(), 0, segments_nbytes);
     if (segments_actual != segments_expected) {
         std::fprintf(stderr, "multi-segment readback mismatch\n");
+        return 1;
+    }
+
+    if (!test_deep_meta_graph(backend.get())) {
         return 1;
     }
 
