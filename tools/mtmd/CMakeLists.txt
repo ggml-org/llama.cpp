@@ -10,6 +10,8 @@ if (MTMD_VIDEO AND NOT LLAMA_SUBPROCESS)
     set(MTMD_VIDEO OFF CACHE BOOL "${MTMD_VIDEO_HELP}" FORCE)
 endif()
 
+option(MTMD_JXL "enable JPEG XL support via libjxl" OFF)
+
 find_package(Threads REQUIRED)
 
 add_library(mtmd
@@ -86,6 +88,14 @@ target_compile_features   (mtmd PRIVATE cxx_std_17)
 
 if (MTMD_VIDEO)
     target_compile_definitions(mtmd PRIVATE MTMD_VIDEO)
+endif()
+
+if (MTMD_JXL)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(JXL REQUIRED IMPORTED_TARGET libjxl libjxl_threads)
+    target_link_libraries(mtmd PRIVATE PkgConfig::JXL)
+    target_compile_definitions(mtmd PRIVATE MTMD_JXL)
+    message(STATUS "mtmd: JPEG XL support enabled (libjxl)")
 endif()
 
 if (BUILD_SHARED_LIBS)
