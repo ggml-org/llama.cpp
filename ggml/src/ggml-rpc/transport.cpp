@@ -197,13 +197,17 @@ bool socket_t::impl::rdma_probe() {
 
     auto target_gid = rdma_build_target_gid();
     if (!target_gid) {
+        GGML_LOG_INFO("RDMA probe: cannot build target GID from socket local address, staying on TCP\n");
         return false;
     }
 
     const uint8_t ib_port = 1;
     int num_devs = 0;
     ibv_device ** devs = ibv_get_device_list(&num_devs);
-    if (!devs || num_devs == 0) return false;
+    if (!devs || num_devs == 0) {
+        GGML_LOG_INFO("RDMA probe: no RDMA devices found, staying on TCP\n");
+        return false;
+    }
 
     ibv_context * ibctx = nullptr;
     const char * matched_dev = nullptr;
@@ -215,10 +219,17 @@ bool socket_t::impl::rdma_probe() {
         if (dev_env && strcmp(dev_env, dn) != 0) continue;
 
         ibv_context * ctx = ibv_open_device(devs[d]);
-        if (!ctx) continue;
+        if (!ctx) {
+            GGML_LOG_INFO("RDMA probe: failed to open device %s\n", dn);
+            continue;
+        }
 
         ibv_port_attr pa;
-        if (ibv_query_port(ctx, ib_port, &pa) != 0) { ibv_close_device(ctx); continue; }
+        if (ibv_query_port(ctx, ib_port, &pa) != 0) {
+            GGML_LOG_INFO("RDMA probe: failed to query port %u of device %s\n", ib_port, dn);
+            ibv_close_device(ctx);
+            continue;
+        }
 
         int found_gid = gid_idx;
         int found_version = IBV_GID_TYPE_IB;
@@ -261,10 +272,14 @@ bool socket_t::impl::rdma_probe() {
             rdma_local.path_mtu = pa.active_mtu;
             break;
         }
+        GGML_LOG_INFO("RDMA probe: no GID on device %s matching local address, skipping\n", dn);
         ibv_close_device(ctx);
     }
     ibv_free_device_list(devs);
-    if (!ibctx) return false;
+    if (!ibctx) {
+        GGML_LOG_INFO("RDMA probe: no matching device/GID found, staying on TCP\n");
+        return false;
+    }
 
     rdma_local.ib_port = ib_port;
     rdma_local.gid_idx = gid_idx;
@@ -273,11 +288,17 @@ bool socket_t::impl::rdma_probe() {
     rdma->ctx = ibctx;
 
     rdma->pd = ibv_alloc_pd(ibctx);
-    if (!rdma->pd) return false;
+    if (!rdma->pd) {
+        GGML_LOG_INFO("RDMA probe: failed to allocate protection domain\n");
+        return false;
+    }
 
     rdma->scq = ibv_create_cq(ibctx, 16, nullptr, nullptr, 0);
     rdma->rcq = ibv_create_cq(ibctx, RDMA_RX_DEPTH + 4, nullptr, nullptr, 0);
-    if (!rdma->scq || !rdma->rcq) return false;
+    if (!rdma->scq || !rdma->rcq) {
+        GGML_LOG_INFO("RDMA probe: failed to create completion queues\n");
+        return false;
+    }
 
     ibv_qp_init_attr qia = {};
     qia.send_cq = rdma->scq;
@@ -290,20 +311,32 @@ bool socket_t::impl::rdma_probe() {
     qia.cap.max_inline_data = 256;
 
     rdma->qp = ibv_create_qp(rdma->pd, &qia);
-    if (!rdma->qp) return false;
+    if (!rdma->qp) {
+        GGML_LOG_INFO("RDMA probe: failed to create queue pair\n");
+        return false;
+    }
     rdma->max_inline = qia.cap.max_inline_data;
 
     rdma->tx_buf = aligned_alloc(4096, RDMA_CHUNK);
     rdma->rx_buf = aligned_alloc(4096, static_cast<size_t>(RDMA_RX_DEPTH) * RDMA_CHUNK);
-    if (!rdma->tx_buf || !rdma->rx_buf) return false;
+    if (!rdma->tx_buf || !rdma->rx_buf) {
+        GGML_LOG_INFO("RDMA probe: failed to allocate buffers\n");
+        return false;
+    }
 
     rdma->tx_mr = ibv_reg_mr(rdma->pd, rdma->tx_buf, RDMA_CHUNK, IBV_ACCESS_LOCAL_WRITE);
     rdma->rx_mr = ibv_reg_mr(rdma->pd, rdma->rx_buf, static_cast<size_t>(RDMA_RX_DEPTH) * RDMA_CHUNK,
                            IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE);
-    if (!rdma->tx_mr || !rdma->rx_mr) return false;
+    if (!rdma->tx_mr || !rdma->rx_mr) {
+        GGML_LOG_INFO("RDMA probe: failed to register memory regions\n");
+        return false;
+    }
 
     ibv_gid local_gid;
-    if (ibv_query_gid(ibctx, ib_port, gid_idx, &local_gid) != 0) return false;
+    if (ibv_query_gid(ibctx, ib_port, gid_idx, &local_gid) != 0) {
+        GGML_LOG_INFO("RDMA probe: failed to query local GID\n");
+        return false;
+    }
 
     rdma_local.qpn = rdma->qp->qp_num;
     rdma_local.psn = rdma->qp->qp_num & 0xffffff;
@@ -527,11 +560,13 @@ void socket_t::impl::update_caps(const uint8_t * remote_caps) {
     rdma_caps rc = {};
     memcpy(&rc, remote_caps, sizeof(rc));
     if (rc.qpn == 0) {
+        GGML_LOG_INFO("RDMA not negotiated, staying on TCP\n");
         rdma.reset();
         return;
     }
     if (rdma_activate(rc.qpn, rc.psn, rc.gid)) {
         use_rdma = true;
+        GGML_LOG_INFO("RDMA transport active\n");
     } else {
         GGML_LOG_ERROR("RDMA activate failed, staying on TCP\n");
         rdma.reset();
