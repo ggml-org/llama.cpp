@@ -259,6 +259,7 @@ if (GGML_OPENMP_FETCH)
     set(GGML_OPENMP_RUNTIME "${GGML_OPENMP_ROOT}/bin/libomp.dll")
     set(GGML_OPENMP_HEADER "${GGML_OPENMP_ROOT}/include/omp.h")
     set(GGML_OPENMP_LICENSE "${GGML_OPENMP_ROOT}/LICENSE.TXT")
+    set(GGML_OPENMP_LICENSE_SHA256 "fdad1758a9e1f9d5a81e18879b3406772115edc92c24bfa36b70c654f325e8e4")
 
     if (NOT EXISTS "${GGML_OPENMP_LIBRARY}" OR NOT EXISTS "${GGML_OPENMP_RUNTIME}" OR NOT EXISTS "${GGML_OPENMP_HEADER}")
         find_program(GGML_OPENMP_7Z NAMES 7z 7zz 7za)
@@ -299,13 +300,16 @@ if (GGML_OPENMP_FETCH)
         file(REMOVE_RECURSE "${GGML_OPENMP_INSTALLER}" "${GGML_OPENMP_EXTRACT_DIR}")
     endif()
 
-    if (NOT EXISTS "${GGML_OPENMP_LICENSE}")
-        file(DOWNLOAD "https://raw.githubusercontent.com/llvm/llvm-project/llvmorg-${GGML_OPENMP_LLVM_VERSION}/LICENSE.TXT" "${GGML_OPENMP_LICENSE}"
-            EXPECTED_HASH "SHA256=8d85c1057d742e597985c7d4e6320b015a9139385cff4cbae06ffc0ebe89afee")
+    if (EXISTS "${GGML_OPENMP_LICENSE}")
+        file(SHA256 "${GGML_OPENMP_LICENSE}" GGML_OPENMP_LICENSE_ACTUAL_SHA256)
+    endif()
+    if (NOT GGML_OPENMP_LICENSE_ACTUAL_SHA256 STREQUAL GGML_OPENMP_LICENSE_SHA256)
+        file(DOWNLOAD "https://raw.githubusercontent.com/llvm/llvm-project/llvmorg-${GGML_OPENMP_LLVM_VERSION}/openmp/LICENSE.TXT" "${GGML_OPENMP_LICENSE}"
+            EXPECTED_HASH "SHA256=${GGML_OPENMP_LICENSE_SHA256}")
     endif()
 
     if (COMMAND license_add_file)
-        license_add_file("LLVM" "${GGML_OPENMP_LICENSE}")
+        license_add_file("LLVM OpenMP" "${GGML_OPENMP_LICENSE}")
     endif()
 
     add_library(ggml-openmp-c INTERFACE)
@@ -324,9 +328,11 @@ if (GGML_OPENMP_FETCH)
     endif()
     add_custom_target(ggml-openmp-runtime ALL
         COMMAND ${CMAKE_COMMAND} -E make_directory "${GGML_OPENMP_RUNTIME_OUTPUT_DIR}"
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${GGML_OPENMP_RUNTIME}" "${GGML_OPENMP_RUNTIME_OUTPUT_DIR}/libomp.dll")
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${GGML_OPENMP_RUNTIME}" "${GGML_OPENMP_RUNTIME_OUTPUT_DIR}/libomp.dll"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${GGML_OPENMP_LICENSE}" "${GGML_OPENMP_RUNTIME_OUTPUT_DIR}/LICENSE-LLVM-OpenMP")
     add_dependencies(ggml-base ggml-openmp-runtime)
     install(FILES "${GGML_OPENMP_RUNTIME}" DESTINATION ${CMAKE_INSTALL_BINDIR})
+    install(FILES "${GGML_OPENMP_LICENSE}" DESTINATION ${CMAKE_INSTALL_BINDIR} RENAME LICENSE-LLVM-OpenMP)
 
     set(GGML_OPENMP_TARGET_C ggml-openmp-c)
     set(GGML_OPENMP_TARGET_CXX ggml-openmp-cxx)
