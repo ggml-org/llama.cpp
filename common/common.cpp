@@ -1584,15 +1584,6 @@ common_context_seq_rm_type common_context_can_seq_rm(llama_context * ctx) {
         goto done;
     }
 
-    {
-        const llama_model * model = llama_get_model(ctx);
-        if (llama_model_is_recurrent(model) || llama_model_is_hybrid(model)) {
-            COM_TRC("%s", "the context requires full sequence removal\n");
-            res = COMMON_CONTEXT_SEQ_RM_TYPE_FULL;
-            goto done;
-        }
-    }
-
     // try to remove the last tokens
     if (!llama_memory_seq_rm(mem, 0, 1, -1)) {
         COM_TRC("%s", "the context does not support partial sequence removal\n");

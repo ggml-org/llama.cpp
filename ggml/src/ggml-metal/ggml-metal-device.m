@@ -1377,7 +1377,7 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
                 ggml_is_contiguous_rows(op->src[2]) &&
                 ggml_is_contiguous_rows(op->src[3]);
         case GGML_OP_SSM_SCAN:
-            return has_simdgroup_reduction && ggml_get_op_params_i32(op, 0) == 1;
+            return has_simdgroup_reduction;
         case GGML_OP_SSM_CONV:
             return has_simdgroup_reduction;
         case GGML_OP_RWKV_WKV6:

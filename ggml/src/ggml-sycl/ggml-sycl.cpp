@@ -6273,10 +6273,6 @@ static bool do_ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, cons
         case GGML_OP_ARANGE:
             return op->type == GGML_TYPE_F32;
         case GGML_OP_SSM_SCAN:
-            if (ggml_get_op_params_i32(op, 0) > 1) {
-                return false;
-            }
-
             if (op->src[3]->ne[0] == 1) {
                 // Mamba2
                 // (kernel only supports (d_state == 128 || d_state == 256) && d_head % WARP_SIZE == 0)

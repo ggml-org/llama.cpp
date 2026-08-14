@@ -167,7 +167,7 @@ ggml_tensor * llm_build_mamba_base::build_mamba2_layer(llm_graph_input_rs * inp,
     const int64_t n_seqs   = ubatch.n_seqs;
 
     const int64_t n_seq_tokens = ubatch.n_seq_tokens;
-    const int64_t K            = cparams.n_rs_seq > 0 && cparams.fused_ssm_scan ? (int64_t) cparams.n_rs_seq + 1 : 1;
+    const int64_t K            = cparams.n_rs_seq > 0 ? (int64_t) cparams.n_rs_seq + 1 : 1;
 
     GGML_ASSERT(n_seqs != 0);
     GGML_ASSERT(ubatch.equal_seqs());
@@ -262,10 +262,6 @@ ggml_tensor * llm_build_mamba_base::build_mamba2_layer(llm_graph_input_rs * inp,
         };
 
         ggml_tensor * y_ssm = build_rs(inp, ssm_states_all, hparams.n_embd_s(), ubatch.n_seqs, get_ssm_rows);
-        if (K > 1) {
-            res->add_fused_node({ LLM_FUSED_OP_SSM_ROLLBACK, y_ssm, il });
-        }
-
         const int64_t D            = d_state * d_inner;
         const int64_t n_written    = std::min<int64_t>(n_seq_tokens, K);
         const size_t  row_size     = ggml_row_size(ssm_states_all->type, D);

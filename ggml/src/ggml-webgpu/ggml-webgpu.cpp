@@ -1327,6 +1327,7 @@ static webgpu_encoded_op ggml_webgpu_ssm_scan(webgpu_context & ctx,
         (uint32_t) src4->ne[1],
         (uint32_t) src1->ne[2],
         (uint32_t) ggml_nelements(src1),
+        (uint32_t) ggml_get_op_params_i32(dst, 0),
     };
 
     std::vector<wgpu::BindGroupEntry> entries = {
@@ -4541,7 +4542,7 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
             supports_op = op->type == GGML_TYPE_F32;
             break;
         case GGML_OP_SSM_SCAN:
-            supports_op = ggml_get_op_params_i32(op, 0) == 1 && op->type == GGML_TYPE_F32 &&
+            supports_op = op->type == GGML_TYPE_F32 &&
                           src0->ne[0] <= ctx->webgpu_global_ctx->capabilities.limits.maxComputeInvocationsPerWorkgroup;
             break;
         case GGML_OP_GATED_DELTA_NET:
