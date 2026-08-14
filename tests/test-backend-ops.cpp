@@ -10256,6 +10256,15 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
         }
     }
 
+    // prefill-shaped attention (nb=512): the sweep above uses nb=1, which measures decode.
+    // hs=256 is covered by the correctness tests but not benchmarked; GQA 6 and head_dim 256
+    // match Qwen3.5/3.8-class hybrid attention layers.
+    for (int kv : { 4096, 8192, 16384, 32768, }) {
+        for (int hs : { 128, 256, }) {
+            test_cases.emplace_back(new test_flash_attn_ext(hs, hs, 4, {6, 1}, kv, 512, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
+        }
+    }
+
     for (int col : {8192, 16384, 32768, 65536, 131072, 262144, 524288}) {
         for (int rows : {1, 4, 16}){
             test_cases.emplace_back(new test_soft_max(GGML_TYPE_F32, {col, rows, 1, 1}, false,  false,  GGML_TYPE_F32, {1, 1}, 1.0f, 0.0f));
