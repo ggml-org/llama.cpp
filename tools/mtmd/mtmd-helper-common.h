@@ -117,7 +117,7 @@ struct decode_embd_batch {
         for (int32_t i = 0; i < batch.n_tokens; i++) {
             const size_t idx = (size_t) i;
             const size_t n_tokens = (size_t) batch.n_tokens;
-            pos[idx                                  ] = rel_pos[i].t;
+            pos[idx                    ] = rel_pos[i].t;
             pos[idx + n_tokens         ] = rel_pos[i].y;
             pos[idx + n_tokens * 2     ] = rel_pos[i].x;
             pos[idx + n_tokens * 3     ] = rel_pos[i].z;
@@ -136,6 +136,7 @@ struct decode_embd_batch {
         for (int i = 0; i < batch.n_tokens; i++) {
             const size_t idx = (size_t) i;
             const size_t n_tokens = (size_t) batch.n_tokens;
+            pos[idx                    ] = pos_0 + i;
             pos[idx + n_tokens         ] = pos_0 + i;
             pos[idx + n_tokens * 2     ] = pos_0 + i;
             pos[idx + n_tokens * 3     ] = pos_0 + i;
