@@ -201,7 +201,6 @@ llama_model_minimax_01::graph::graph(const llama_model & model, const llm_graph_
 
     const int64_t n_seqs  = ubatch.n_seqs;
     const int64_t n_seq_tokens = ubatch.n_seq_tokens;
-    const int64_t n_vocab_out = model.output->ne[1];
 
     GGML_ASSERT(n_seqs != 0);
     GGML_ASSERT(ubatch.equal_seqs());
@@ -243,8 +242,6 @@ llama_model_minimax_01::graph::graph(const llama_model & model, const llm_graph_
     la = (llm_graph_input_la *) res->add_input(std::move(inp));
 
     ggml_tensor * slopes = la->inp_slopes;
-
-    ggml_tensor * logits_mask = build_inp_logits_mask(n_vocab_out, 32);
 
     for (int il = 0; il < n_layer; ++il) {
         res->t_layer_inp[il] = inpL;
@@ -527,7 +524,6 @@ llama_model_minimax_01::graph::graph(const llama_model & model, const llm_graph_
 
     // lm_head
     cur = build_lora_mm(model.output, cur, model.output_s);
-    cur = ggml_add(ctx0, cur, logits_mask);
 
     cb(cur, "result_output", -1);
     res->t_logits = cur;

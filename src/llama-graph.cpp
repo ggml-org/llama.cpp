@@ -153,41 +153,6 @@ bool llm_graph_input_pos::can_reuse(const llm_graph_params & params) {
     return res;
 }
 
-ggml_tensor * llm_graph_context::build_inp_logits_mask(int64_t n_vocab, int64_t n_masked_tokens) const {
-    auto inp = std::make_unique<llm_graph_input_logits_mask>(n_vocab, n_masked_tokens);
-
-    auto & cur = inp->logits_mask;
-
-    cur = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, n_vocab);
-    ggml_set_input(cur);
-    cb(cur, "logits_mask", -1);
-
-    res->add_input(std::move(inp));
-
-    return cur;
-}
-
-void llm_graph_input_logits_mask::set_input(const llama_ubatch * ubatch) {
-    GGML_UNUSED(ubatch);
-
-    if (logits_mask) {
-        GGML_ASSERT(n_vocab != 0);
-        GGML_ASSERT(ggml_backend_buffer_is_host(logits_mask->buffer));
-
-        float * data = (float *) logits_mask->data;
-
-        for (int t = 0; t < n_vocab; ++t) {
-            data[t] = t < n_vocab - n_masked_tokens ? 0.0f : -INFINITY;
-        }
-    }
-}
-
-bool llm_graph_input_logits_mask::can_reuse(const llm_graph_params & params) {
-    GGML_UNUSED(params);
-    // logits mask does not change, so it can be reused always
-    return true;
-}
-
 void llm_graph_input_attn_temp::set_input(const llama_ubatch * ubatch) {
     if (ubatch->pos && attn_scale) {
         const int64_t n_tokens = ubatch->n_tokens;
