@@ -104,17 +104,43 @@ static void mul_mat_vec_q_reorder_ncols(const void * __restrict__ vx, const void
         for (int elem = 0; elem < block_elements_per_subgroup; elem += WARP_SIZE) {
             const int iqs = elem + block_traits::vdr_mmvq * (sg.get_local_linear_id() % block_elements_per_subgroup);
 
-#pragma unroll
-            for (int j = 0; j < ncols_dst; ++j) {
-                const char        * vy_j           = (const char *) vy + j * stride_col_y_bytes;
-                const int8_t      * q8_1_quant_ptr = (const int8_t *) vy_j + iby * QK8_1;
-                const sycl::half2 * q8_1_ds_ptr    = (const sycl::half2 *) (vy_j + ncols + iby * sizeof(sycl::half2));
-
-                partial_sum[j] += reorder_vec_dot_q_sycl()(vx, bx_offset, d_offset, q8_1_quant_ptr, q8_1_ds_ptr, iqs);
-
+            if constexpr (reorder_vec_dot_shared_weights<reorder_vec_dot_q_sycl::gtype>::value) {
+                const auto wx = reorder_vec_dot_q_sycl::load(vx, bx_offset, d_offset, iqs);
                 if constexpr (has_fusion) {
-                    partial_gate[j] +=
-                        reorder_vec_dot_q_sycl()(vgate, bx_offset, d_offset, q8_1_quant_ptr, q8_1_ds_ptr, iqs);
+                    const auto wg = reorder_vec_dot_q_sycl::load(vgate, bx_offset, d_offset, iqs);
+
+#pragma unroll
+                    for (int j = 0; j < ncols_dst; ++j) {
+                        const char        * vy_j           = (const char *) vy + j * stride_col_y_bytes;
+                        const int8_t      * q8_1_quant_ptr = (const int8_t *) vy_j + iby * QK8_1;
+                        const sycl::half2 * q8_1_ds_ptr =
+                            (const sycl::half2 *) (vy_j + ncols + iby * sizeof(sycl::half2));
+                        partial_sum[j] += reorder_vec_dot_q_sycl::dot(wx, q8_1_quant_ptr, q8_1_ds_ptr, iqs);
+                        partial_gate[j] += reorder_vec_dot_q_sycl::dot(wg, q8_1_quant_ptr, q8_1_ds_ptr, iqs);
+                    }
+                } else {
+#pragma unroll
+                    for (int j = 0; j < ncols_dst; ++j) {
+                        const char        * vy_j           = (const char *) vy + j * stride_col_y_bytes;
+                        const int8_t      * q8_1_quant_ptr = (const int8_t *) vy_j + iby * QK8_1;
+                        const sycl::half2 * q8_1_ds_ptr =
+                            (const sycl::half2 *) (vy_j + ncols + iby * sizeof(sycl::half2));
+                        partial_sum[j] += reorder_vec_dot_q_sycl::dot(wx, q8_1_quant_ptr, q8_1_ds_ptr, iqs);
+                    }
+                }
+            } else {
+#pragma unroll
+                for (int j = 0; j < ncols_dst; ++j) {
+                    const char        * vy_j           = (const char *) vy + j * stride_col_y_bytes;
+                    const int8_t      * q8_1_quant_ptr = (const int8_t *) vy_j + iby * QK8_1;
+                    const sycl::half2 * q8_1_ds_ptr =
+                        (const sycl::half2 *) (vy_j + ncols + iby * sizeof(sycl::half2));
+                    partial_sum[j] +=
+                        reorder_vec_dot_q_sycl()(vx, bx_offset, d_offset, q8_1_quant_ptr, q8_1_ds_ptr, iqs);
+                    if constexpr (has_fusion) {
+                        partial_gate[j] +=
+                            reorder_vec_dot_q_sycl()(vgate, bx_offset, d_offset, q8_1_quant_ptr, q8_1_ds_ptr, iqs);
+                    }
                 }
             }
         }
