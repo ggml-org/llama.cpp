@@ -82,43 +82,6 @@ static __dpct_inline__ T op_elu(T x) {
 }
 
 template<typename T>
-static __dpct_inline__ T op_tanh(T x) {
-    if constexpr (std::is_same_v<T, sycl::ext::oneapi::bfloat16>) {
-        constexpr int ver = __INTEL_LLVM_COMPILER;
-#if defined(__INTEL_LLVM_COMPILER) && (__INTEL_LLVM_COMPILER >= 20260000)
-            return sycl::ext::oneapi::experimental::tanh(x);
-#else
-            return static_cast<T>(sycl::tanh(static_cast<float>(x)));
-#endif
-    } else {
-        return sycl::tanh(x);
-    }
-}
-
-template<typename T>
-static __dpct_inline__ T op_gelu(T x) {
-    const T GELU_COEF_A    = static_cast<T>(0.044715f);
-    const T SQRT_2_OVER_PI = static_cast<T>(0.79788456080286535587989211986876f);
-    return static_cast<T>(0.5f) * x *
-           (static_cast<T>(1.0f) +
-            op_tanh(SQRT_2_OVER_PI * x * (static_cast<T>(1.0f) + GELU_COEF_A * x * x)));
-}
-
-template<typename T>
-static __dpct_inline__ T op_exp(T x) {
-    if constexpr (std::is_same_v<T, sycl::ext::oneapi::bfloat16>) {
-        return sycl::ext::oneapi::experimental::exp(x);
-    } else {
-        return sycl::exp(x);
-    }
-}
-
-template<typename T>
-static __dpct_inline__ T op_silu(T x) {
-    return x / (static_cast<T>(1.0f) + op_exp(-x));
-}
-
-template<typename T>
 static __dpct_inline__ T op_erf(T x) {
     if constexpr (std::is_same_v<T, sycl::ext::oneapi::bfloat16>) {
         return static_cast<sycl::ext::oneapi::bfloat16>(
