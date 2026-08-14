@@ -396,19 +396,7 @@ bool llama_kv_cache::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
         auto & cells = v_cells[seq_to_stream[seq_id]];
         auto & head  = v_heads[seq_to_stream[seq_id]];
 
-        uint32_t new_head = cells.size();
-
-        for (uint32_t i = 0; i < cells.size(); ++i) {
-            if (!cells.pos_in(i, p0, p1)) {
-                continue;
-            }
-
-            if (cells.seq_has(i, seq_id) && cells.seq_rm(i, seq_id)) {
-                if (new_head == cells.size()) {
-                    new_head = i;
-                }
-            }
-        }
+        uint32_t new_head = cells.nextHead(seq_id, p0, p1);
 
         // If we freed up a slot, set head to it so searching can start there.
         if (new_head != cells.size() && new_head < head) {
@@ -1121,7 +1109,7 @@ void llama_kv_cache::apply_ubatch(const slot_info & sinfo, const llama_ubatch & 
 
                 seq_pos_max_rm[seq_id] = std::max(seq_pos_max_rm[seq_id], pos);
 
-                cells.rm(idx);
+                cells.rm_single(idx, seq_id);
             }
 
             cells.pos_set(idx, ubatch.pos[i]);
@@ -1133,10 +1121,7 @@ void llama_kv_cache::apply_ubatch(const slot_info & sinfo, const llama_ubatch & 
                 };
                 cells.ext_set(idx, ext);
             }
-
-            for (int32_t s = 0; s < ubatch.n_seq_id[i]; s++) {
-                cells.seq_add(idx, ubatch.seq_id[i][s]);
-            }
+            cells.seqS_add(idx, ubatch.n_seq_id[i], ubatch.seq_id[i]);
         }
     }
 
@@ -1157,6 +1142,8 @@ void llama_kv_cache::apply_ubatch(const slot_info & sinfo, const llama_ubatch & 
                     __func__, cells.seq_pos_min(s), seq_pos_max_rm[s], s);
 
             seq_rm(s, cells.seq_pos_min(s), seq_pos_max_rm[s] + 1);
+        } else {
+            cells.compact(s); // compact after seq_rm
         }
     }
 
