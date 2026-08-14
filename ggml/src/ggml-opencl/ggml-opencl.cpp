@@ -6079,8 +6079,7 @@ static ggml_backend_opencl_context * ggml_cl_init(ggml_backend_dev_t dev) {
     //    (queue = clCreateCommandQueue(context, device, 0, &err), err)
     //)));
     cl_command_queue_properties command_queue_props = 0;
-#if defined(GGML_OPENCL_PROFILING) || defined(GGML_OPENCL_USE_ADRENO_KERNELS)
-    // Avoid a driver visibility issue with near-limit image-backed buffers.
+#ifdef GGML_OPENCL_PROFILING
     command_queue_props |= CL_QUEUE_PROFILING_ENABLE;
 #endif
     CL_CHECK((backend_ctx->queue = clCreateCommandQueue(context, device, command_queue_props, &err), err));
