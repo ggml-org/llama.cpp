@@ -11,6 +11,7 @@
 // utilizes two instances of llama_kv_cache:
 // - the first instance is for caching key tensors of the model,
 // - the second instance is for caching lightning indexer key tensors
+// when swa_type != NONE, a third instance holds the SWA layers (iswa-style, window-sized)
 
 class llama_kv_cache_dsa : public llama_memory_i {
 public:
@@ -23,6 +24,7 @@ public:
                          bool   unified,
                      uint32_t   kv_size,
                      uint32_t   n_seq_max,
+                     uint32_t   n_ubatch,
                      uint32_t   n_pad,
                      uint32_t   n_swa,
                llama_swa_type   swa_type,
@@ -69,8 +71,9 @@ public:
     // llama_kv_cache_dsa specific API
     //
 
-    llama_kv_cache * get_mla() const;
-    llama_kv_cache * get_lid() const;
+    llama_kv_cache * get_mla()     const;
+    llama_kv_cache * get_mla_swa() const; // null when the model has no SWA layers
+    llama_kv_cache * get_lid()     const;
 
 private:
     // we keep indexer KV cache hparams instance here as llama_kv_cache stores only reference to it
@@ -78,6 +81,7 @@ private:
     const uint32_t n_stream  = 1;
 
     std::unique_ptr<llama_kv_cache> kv_mla;
+    std::unique_ptr<llama_kv_cache> kv_mla_swa;
     std::unique_ptr<llama_kv_cache> kv_lid;
 };
 
@@ -102,6 +106,7 @@ public:
     llama_kv_cache_dsa_context(
             llama_kv_cache_dsa * kv,
             slot_info_vec_t sinfos_base,
+            slot_info_vec_t sinfos_swa,
             slot_info_vec_t sinfos_ik,
             std::vector<llama_ubatch> ubatches);
 
@@ -121,8 +126,9 @@ public:
     // llama_kv_cache_dsa_context specific API
     //
 
-    const llama_kv_cache_context * get_mla() const;
-    const llama_kv_cache_context * get_lid()  const;
+    const llama_kv_cache_context * get_mla()     const;
+    const llama_kv_cache_context * get_mla_swa() const; // null when the model has no SWA layers
+    const llama_kv_cache_context * get_lid()     const;
 
 private:
     //llama_kv_cache_dsa * kv;
@@ -133,6 +139,7 @@ private:
     std::vector<llama_ubatch> ubatches;
 
     const llama_memory_context_ptr ctx_mla;
+    const llama_memory_context_ptr ctx_mla_swa;
     const llama_memory_context_ptr ctx_lid;
 
     const llama_memory_status status;
