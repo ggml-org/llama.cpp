@@ -8,6 +8,7 @@
 #include "server-stream.h"
 
 #include "build-info.h"
+#include "arg.h"
 #include "common.h"
 #include "fit.h"
 #include "llama.h"
@@ -18,11 +19,17 @@
 #include "mtmd-helper.h"
 
 #include <algorithm>
+#include <condition_variable>
 #include <cstddef>
 #include <cinttypes>
+#include <deque>
 #include <exception>
 #include <memory>
+#include <mutex>
 #include <filesystem>
+#include <thread>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <fstream>
 
@@ -778,6 +785,244 @@ struct server_slot {
     }
 };
 
+struct server_prefill_worker {
+    using result_callback = std::function<void(server_task &&)>;
+
+    int id = -1;
+
+    common_init_result_ptr llama_init;
+    llama_context * ctx = nullptr;
+
+    std::deque<server_task> tasks;
+    std::unordered_set<int> cancelled;
+
+    std::mutex mutex;
+    std::condition_variable condition;
+    std::thread thread;
+
+    result_callback callback;
+
+    bool running = false;
+    int id_active = -1;
+    int id_returning = -1;
+
+    ~server_prefill_worker() {
+        stop();
+    }
+
+    bool init(common_params params, const std::string & endpoint, int id_worker, result_callback callback_result) {
+        id = id_worker;
+        callback = std::move(callback_result);
+
+        try {
+            params.devices = common_add_rpc_devices(endpoint);
+        } catch (const std::exception & e) {
+            SRV_ERR("prefill worker %d failed to register node %s: %s\n", id, endpoint.c_str(), e.what());
+            return false;
+        }
+
+        params.prefill_nodes.clear();
+        params.fit_params = false;
+        params.embedding = false;
+        params.sampling.backend_sampling = false;
+        params.load_progress_callback = nullptr;
+        params.load_progress_callback_user_data = nullptr;
+
+        llama_init = common_init_from_params(params);
+        if (llama_init->model() == nullptr) {
+            SRV_ERR("prefill worker %d failed to load model '%s'\n", id, params.model.path.c_str());
+            return false;
+        }
+
+        ctx = llama_init->context();
+        if (ctx == nullptr) {
+            SRV_ERR("prefill worker %d failed to create context\n", id);
+            llama_init.reset();
+            return false;
+        }
+
+        running = true;
+        thread = std::thread([this]() { loop(); });
+
+        SRV_INF("prefill worker %d ready on %s\n", id, endpoint.c_str());
+        return true;
+    }
+
+    void stop() {
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            if (!running) {
+                return;
+            }
+            running = false;
+            if (id_active >= 0) {
+                cancelled.insert(id_active);
+            }
+            tasks.clear();
+        }
+        condition.notify_all();
+
+        if (thread.joinable()) {
+            thread.join();
+        }
+
+        ctx = nullptr;
+        llama_init.reset();
+    }
+
+    bool submit(server_task && task) {
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            if (!running) {
+                return false;
+            }
+            tasks.push_back(std::move(task));
+        }
+        condition.notify_one();
+        return true;
+    }
+
+    bool cancel(int id_task) {
+        server_task task;
+        bool found = false;
+        bool will_return = false;
+
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            for (auto it = tasks.begin(); it != tasks.end(); ++it) {
+                if (it->id == id_task) {
+                    task = std::move(*it);
+                    tasks.erase(it);
+                    cancelled.erase(id_task);
+                    found = true;
+                    break;
+                }
+            }
+
+            if (found) {
+                will_return = true;
+            } else if (id_active == id_task || id_returning == id_task) {
+                cancelled.insert(id_task);
+                will_return = true;
+            }
+        }
+
+        if (found) {
+            task.prefill_cancelled = true;
+            callback(std::move(task));
+        }
+
+        return will_return;
+    }
+
+    size_t pending() {
+        std::lock_guard<std::mutex> lock(mutex);
+        return tasks.size() + (id_active >= 0 ? 1 : 0);
+    }
+
+private:
+    bool is_cancelled(int id_task) {
+        std::lock_guard<std::mutex> lock(mutex);
+        return cancelled.find(id_task) != cancelled.end();
+    }
+
+    void process(server_task & task) {
+        const int32_t n_prefill = task.n_tokens() - 1;
+        const int32_t n_batch = llama_n_batch(ctx);
+
+        llama_memory_seq_rm(llama_get_memory(ctx), 0, -1, -1);
+
+        llama_batch batch = llama_batch_init(std::min(n_prefill, n_batch), 0, 1);
+
+        for (int32_t i = 0; i < n_prefill;) {
+            if (is_cancelled(task.id)) {
+                break;
+            }
+
+            const int32_t n_cur = std::min(n_prefill - i, n_batch);
+            common_batch_clear(batch);
+
+            for (int32_t j = 0; j < n_cur; ++j) {
+                common_batch_add(batch, task.tokens[i + j], i + j, { 0 }, false);
+            }
+
+            const int ret = llama_decode(ctx, batch);
+            if (ret != 0) {
+                task.prefill_error = string_format("llama_decode failed with code %d", ret);
+                break;
+            }
+
+            i += n_cur;
+        }
+
+        llama_batch_free(batch);
+
+        if (task.prefill_error.empty() && !is_cancelled(task.id)) {
+            const size_t size = llama_state_seq_get_size_ext(ctx, 0, LLAMA_STATE_SEQ_FLAGS_NONE);
+
+            try {
+                auto state = std::make_shared<server_prompt_cache_state>();
+                state->prompt.tokens = task.tokens.clone();
+                state->prompt.tokens.keep_first(n_prefill);
+                state->data.main.resize(size);
+
+                const size_t n = llama_state_seq_get_data_ext(
+                        ctx, state->data.main.data(), size, 0, LLAMA_STATE_SEQ_FLAGS_NONE);
+                if (n == size) {
+                    task.prefill_state = std::move(state);
+                    task.n_prefilled = n_prefill;
+                    task.prefill_bytes = size;
+                } else {
+                    task.prefill_error = string_format("state read failed (%zu / %zu)", n, size);
+                }
+            } catch (const std::bad_alloc & e) {
+                task.prefill_error = string_format("state allocation failed: %s", e.what());
+            }
+        } else {
+            llama_synchronize(ctx);
+        }
+
+        llama_memory_seq_rm(llama_get_memory(ctx), 0, -1, -1);
+        task.t_prefill_us = ggml_time_us() - task.t_prefill_start_us;
+    }
+
+    void loop() {
+        while (true) {
+            server_task task;
+
+            {
+                std::unique_lock<std::mutex> lock(mutex);
+                condition.wait(lock, [this]() { return !running || !tasks.empty(); });
+
+                if (!running) {
+                    return;
+                }
+
+                task = std::move(tasks.front());
+                tasks.pop_front();
+                id_active = task.id;
+            }
+
+            process(task);
+
+            {
+                std::lock_guard<std::mutex> lock(mutex);
+                task.prefill_cancelled = cancelled.erase(task.id) > 0;
+                id_active = -1;
+                id_returning = task.id;
+            }
+
+            callback(std::move(task));
+
+            {
+                std::lock_guard<std::mutex> lock(mutex);
+                cancelled.erase(id_returning);
+                id_returning = -1;
+            }
+        }
+    }
+};
+
 
 
 //
@@ -834,6 +1079,10 @@ private:
 
     common_speculative_init_result_ptr spec_init;
 
+    std::vector<std::unique_ptr<server_prefill_worker>> prefill_workers;
+    std::unordered_map<int, server_prefill_worker *> prefill_pending;
+    std::unordered_set<int> prefill_cancelled;
+
     common_context_seq_rm_type ctx_tgt_seq_rm_type = COMMON_CONTEXT_SEQ_RM_TYPE_NO;
     common_context_seq_rm_type ctx_dft_seq_rm_type = COMMON_CONTEXT_SEQ_RM_TYPE_NO;
 
@@ -878,6 +1127,10 @@ private:
     int64_t t_last_load_progress_ms = 0;
 
     void destroy() {
+        prefill_workers.clear();
+        prefill_pending.clear();
+        prefill_cancelled.clear();
+
         spec.reset();
         spec_init.reset();
 
@@ -949,6 +1202,16 @@ private:
         const bool is_resume = sleeping;
 
         params_base = params;
+        if (!params_base.prefill_nodes.empty() && params_base.devices.empty()) {
+            for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
+                auto * dev = ggml_backend_dev_get(i);
+                const auto * reg_name = ggml_backend_reg_name(ggml_backend_dev_backend_reg(dev));
+                if (ggml_backend_dev_type(dev) != GGML_BACKEND_DEVICE_TYPE_CPU && std::string(reg_name) != "RPC") {
+                    params_base.devices.push_back(dev);
+                }
+            }
+            params_base.devices.push_back(nullptr);
+        }
         const auto output_limits = server_output_limits(params_base);
         params_base.n_outputs_max = output_limits.total;
         params_base.n_outputs_max_per_seq = output_limits.per_seq;
@@ -1240,6 +1503,36 @@ private:
             spec_init.reset();
             ctx_dft   = nullptr;
             model_dft = nullptr;
+        }
+
+        if (!params_base.prefill_nodes.empty()) {
+            if (spec) {
+                SRV_WRN("%s", "disaggregated prefill is disabled while speculative decoding is enabled\n");
+            } else if (mctx != nullptr) {
+                SRV_WRN("%s", "disaggregated prefill is disabled for multimodal models\n");
+            } else if (!params_base.lora_adapters.empty()) {
+                SRV_WRN("%s", "disaggregated prefill is disabled while LoRA adapters are loaded\n");
+            } else {
+                for (size_t i = 0; i < params_base.prefill_nodes.size(); ++i) {
+                    auto params_pfx = params_base;
+                    params_pfx.n_ctx = llama_n_ctx(ctx_tgt);
+                    params_pfx.n_batch = llama_n_batch(ctx_tgt);
+                    params_pfx.n_ubatch = llama_n_ubatch(ctx_tgt);
+
+                    auto worker = std::make_unique<server_prefill_worker>();
+                    if (!worker->init(
+                                std::move(params_pfx),
+                                params_base.prefill_nodes[i],
+                                i,
+                                [this](server_task && task) {
+                                    queue_tasks.post(std::move(task));
+                                })) {
+                        prefill_workers.clear();
+                        return false;
+                    }
+                    prefill_workers.push_back(std::move(worker));
+                }
+            }
         }
 
         for (int i = 0; i < params_base.n_parallel; i++) {
@@ -1712,6 +2005,8 @@ private:
             send_error(task, "Prompt contains invalid tokens", ERROR_TYPE_INVALID_REQUEST);
             return false;
         }
+
+        apply_prefill_state(slot, task);
 
         SLT_DBG(slot, "launching slot : %s\n", safe_json_to_str(slot.to_json()).c_str());
 
@@ -2286,6 +2581,106 @@ private:
                 cur.pos_max, cur.n_tokens, (float) cur.size() / 1024 / 1024);
     }
 
+    int get_cached_prefix(const server_task & task) const {
+        if (!task.params.cache_prompt) {
+            return 0;
+        }
+
+        int n_cached = 0;
+        for (const auto & slot : slots) {
+            if (!slot.is_processing()) {
+                n_cached = std::max<int>(n_cached, slot.prompt.tokens.get_common_prefix(task.tokens));
+            }
+        }
+
+        if (prompt_cache) {
+            for (const auto & state : prompt_cache->states) {
+                n_cached = std::max<int>(n_cached, state.prompt.tokens.get_common_prefix(task.tokens));
+            }
+        }
+
+        return n_cached;
+    }
+
+    bool try_dispatch_prefill(server_task & task) {
+        if (prefill_workers.empty() || task.prefill_attempted || task.type != SERVER_TASK_TYPE_COMPLETION) {
+            return false;
+        }
+        if (spec || mctx != nullptr || !params_base.lora_adapters.empty() || !task.params.lora.empty()) {
+            return false;
+        }
+        if (task.tokens.has_mtmd || task.n_tokens() < 2 || task.n_tokens() >= slots.front().n_ctx) {
+            return false;
+        }
+
+        const int32_t n_prefill = task.n_tokens() - 1;
+        const int32_t n_cached = std::min(n_prefill, get_cached_prefix(task));
+        if (n_cached > 1 || !task.tokens.validate(ctx_tgt)) {
+            return false;
+        }
+
+        server_prefill_worker * worker = prefill_workers.front().get();
+        size_t pending_min = worker->pending();
+        for (size_t i = 1; i < prefill_workers.size(); ++i) {
+            const size_t pending = prefill_workers[i]->pending();
+            if (pending < pending_min) {
+                pending_min = pending;
+                worker = prefill_workers[i].get();
+            }
+        }
+
+        task.prefill_attempted = true;
+        task.t_prefill_start_us = ggml_time_us();
+        const int id_task = task.id;
+        prefill_pending.emplace(id_task, worker);
+
+        if (!worker->submit(std::move(task))) {
+            prefill_pending.erase(id_task);
+            task.prefill_attempted = false;
+            task.t_prefill_start_us = 0;
+            return false;
+        }
+
+        SRV_DBG("delegated task %d to prefill worker %d, queued = %zu\n", id_task, worker->id, pending_min);
+        return true;
+    }
+
+    void apply_prefill_state(server_slot & slot, server_task & task) {
+        if (!task.prefill_state) {
+            return;
+        }
+
+        const int n_remote = task.prefill_state->prompt.tokens.get_common_prefix(task.tokens);
+        const int n_local = task.params.cache_prompt
+            ? slot.prompt.tokens.get_common_prefix(task.tokens)
+            : 0;
+
+        if (n_remote > n_local) {
+            slot.prompt_clear();
+
+            const auto & data = task.prefill_state->data.main;
+            const size_t n = llama_state_seq_set_data_ext(
+                    ctx_tgt, data.data(), data.size(), slot.id, LLAMA_STATE_SEQ_FLAGS_NONE);
+            if (n != data.size()) {
+                task.prefill_error = "failed to restore prefill state";
+                task.n_prefilled = 0;
+                slot.prompt_clear();
+                SRV_WRN("failed to restore prefill state for task %d; falling back to local processing\n", task.id);
+            } else {
+                slot.prompt = task.prefill_state->prompt.clone();
+                SRV_INF("restored task %d from prefill, tokens = %d, size = %.2f MiB, time = %.2f ms\n",
+                        task.id, n_remote, task.prefill_bytes / (1024.0 * 1024.0), task.t_prefill_us / 1000.0);
+                SRV_DBG("%s", "__TEST_TAG_PREFILL_RESTORED__\n");
+            }
+        } else {
+            SRV_DBG("discarded prefill state for task %d, remote prefix = %d, local prefix = %d\n",
+                    task.id, n_remote, n_local);
+            task.n_prefilled = 0;
+        }
+
+        task.prefill_state.reset();
+    }
+
     void process_single_task(server_task && task) {
         switch (task.type) {
             case SERVER_TASK_TYPE_COMPLETION:
@@ -2299,6 +2694,22 @@ private:
                         if (!tokenize_cli_input(task)) {
                             break;
                         }
+                    }
+
+                    if (task.prefill_attempted) {
+                        prefill_pending.erase(task.id);
+                        const bool was_cancelled = task.prefill_cancelled || prefill_cancelled.erase(task.id) > 0;
+                        if (was_cancelled) {
+                            break;
+                        }
+                        if (!task.prefill_error.empty()) {
+                            SRV_WRN("prefill failed for task %d: %s; falling back to local processing\n",
+                                    task.id, task.prefill_error.c_str());
+                        } else if (task.n_prefilled > 0) {
+                            metrics.add_prompt(task.n_prefilled, task.t_prefill_us);
+                        }
+                    } else if (try_dispatch_prefill(task)) {
+                        break;
                     }
 
                     const int id_task = task.id;
@@ -2361,6 +2772,14 @@ private:
                 } break;
             case SERVER_TASK_TYPE_CANCEL:
                 {
+                    auto it_prefill = prefill_pending.find(task.id_target);
+                    if (it_prefill != prefill_pending.end()) {
+                        prefill_cancelled.insert(task.id_target);
+                        if (!it_prefill->second->cancel(task.id_target)) {
+                            prefill_pending.erase(it_prefill);
+                        }
+                    }
+
                     // release slot linked with the task id
                     for (auto & slot : slots) {
                         if (slot.task && slot.task->id == task.id_target) {
@@ -3033,7 +3452,11 @@ private:
 
                     // TODO: maybe move branch to outside of this loop in the future
                     if (slot.state == SLOT_STATE_STARTED) {
-                        slot.stats.update_prompt_start();
+                        if (slot.task->t_prefill_start_us > 0) {
+                            slot.stats.t_start = slot.task->t_prefill_start_us;
+                        } else {
+                            slot.stats.update_prompt_start();
+                        }
 
                         slot.state = SLOT_STATE_PROCESSING_PROMPT;
 
@@ -3055,6 +3478,7 @@ private:
 
                         // keep track how many tokens we can reuse from the previous state
                         int n_past = 0;
+                        int32_t n_prefilled = slot.task->n_prefilled;
 
                         // empty prompt passed -> release the slot and send empty response
                         if (input_tokens.empty()) {
@@ -3107,7 +3531,17 @@ private:
                                 return;
                             }
 
-                            if (slot.task->params.cache_prompt) {
+                            if (n_prefilled > 0) {
+                                n_past = slot.prompt.tokens.get_common_prefix(input_tokens);
+                                if (n_past != n_prefilled) {
+                                    SLT_WRN(slot,
+                                            "restored prefill prefix mismatch, expected = %d, actual = %d; falling back to local processing\n",
+                                            n_prefilled, n_past);
+                                    slot.prompt_clear();
+                                    n_prefilled = 0;
+                                    n_past = 0;
+                                }
+                            } else if (slot.task->params.cache_prompt) {
                                 // reuse any previously computed tokens that are common with the new prompt
                                 n_past = slot.prompt.tokens.get_common_prefix(input_tokens);
 
@@ -3239,7 +3673,7 @@ private:
                                     SLT_WRN(slot, "%s\n", st1.str().c_str());
                                 }
 
-                                if (pos_min >= pos_min_thold) {
+                                if (n_prefilled == 0 && pos_min >= pos_min_thold) {
                                     // search for a context checkpoint
                                     const auto it = std::find_if(
                                         slot.prompt.checkpoints.rbegin(),
@@ -3299,10 +3733,10 @@ private:
                             SLT_WRN(slot, "n_past was set to %d\n", n_past);
                         }
 
-                        slot.stats.n_prompt_cached    = n_past;
-                        slot.stats.n_prompt_processed = 0;
+                        slot.stats.n_prompt_cached    = std::max(0, n_past - n_prefilled);
+                        slot.stats.n_prompt_processed = n_prefilled;
 
-                        metrics.add_prompt_cached(n_past);
+                        metrics.add_prompt_cached(slot.stats.n_prompt_cached);
 
                         slot.prompt.tokens.keep_first(n_past);
 
