@@ -27,10 +27,10 @@ Build/run this project using the installation created above:
 (venv) $ ./build.sh
 -- Configuring done (0.0s)
 -- Generating done (0.0s)
--- Build files have been written to: /home/danbev/work/ai/llama.cpp/examples/test-cmake/build
+-- Build files have been written to: /path/to/llama.cpp/examples/test-cmake/build
 [100%] Built target test-cmake
 [test-cmake] Using llama.cpp version 0.1.0-dev-b10335
 [test-cmake] Initializing backend...
-load_backend: loaded CPU backend from /home/danbev/work/ai/llama.cpp/examples/test-cmake/install/lib/llama.cpp/libggml-cpu-alderlake.so
+load_backend: loaded CPU backend from /path/to/llama.cpp/examples/test-cmake/install/lib/llama.cpp/libggml-cpu-alderlake.so
 [test-cmake] Backend initialized.
 ```

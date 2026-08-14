@@ -4618,7 +4618,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
 
         // Real life test - execute_command
         tst.test("<|tool_call_begin|>functions.execute_command:0<|tool_call_argument_begin|>{\"command\": \"ls -lah\""
-            ", \"cwd\": \"/home/jarvis/development/exllamav3\", \"timeout\": 10}")
+            ", \"cwd\": \"/home/user/development/exllamav3\", \"timeout\": 10}")
             .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
             .parallel_tool_calls(true)
             .tools({
@@ -4648,7 +4648,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             expect_tool_calls({
                 {
                     "execute_command",
-                    R"({"command": "ls -lah", "cwd": "/home/jarvis/development/exllamav3", "timeout": 10})",
+                    R"({"command": "ls -lah", "cwd": "/home/user/development/exllamav3", "timeout": 10})",
                     "functions.execute_command:0"
                 }
             })
