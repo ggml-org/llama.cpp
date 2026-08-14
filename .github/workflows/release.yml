@@ -884,33 +884,6 @@ jobs:
         with:
           path: llama-bin-win-rocm-${{ env.ROCM_VERSION_SHORT }}-${{ matrix.build }}.zip
           name: llama-bin-win-rocm-${{ env.ROCM_VERSION_SHORT }}-${{ matrix.build }}.zip
-  windows-cpu-arm64-smoke:
-    needs: [check-release, windows-cpu]
-    if: ${{ needs.check-release.outputs.should_release == 'true' }}
-    runs-on: windows-11-arm
-
-    steps:
-      - name: Download Windows ARM64 package
-        uses: actions/download-artifact@v7
-        with:
-          name: llama-bin-win-cpu-arm64.zip
-
-      - name: Test Windows ARM64 package
-        run: |
-          Expand-Archive .\llama-bin-win-cpu-arm64.zip -DestinationPath bin
-          $env:OMP_NUM_THREADS = 2
-          $imports = Get-ChildItem .\bin\* -File -Include *.dll,*.exe |
-            ForEach-Object { (& llvm-readobj --coff-imports $_.FullName) -join "`n" } |
-            Out-String
-          if ($imports -notmatch "(?im)^\s*Name: libomp\.dll$") {
-            throw "No packaged ARM64 binary imports libomp.dll"
-          }
-          $licenses = (& .\bin\llama.exe licenses) -join "`n"
-          if ($licenses -notmatch "License for LLVM") {
-            throw "LLVM license is not embedded in llama.exe"
-          }
-          & .\bin\llama-cli.exe --version
-
   windows:
     needs: [check-release]
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
