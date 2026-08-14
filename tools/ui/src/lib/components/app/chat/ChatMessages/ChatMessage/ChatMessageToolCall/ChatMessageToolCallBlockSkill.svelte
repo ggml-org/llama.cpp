@@ -7,6 +7,7 @@
 	// and is never rendered as UI markup.
 
 	import ToolCallBlock from './ToolCallBlock.svelte';
+	import { classifySkillResourcePath } from '$lib/components/app/skills/skill-resource-presentation';
 	import { resolveSkillSectionMeta } from '$lib/services/skills-activation.service';
 	import type { AgenticSection } from '$lib/types';
 
@@ -24,9 +25,15 @@
 		meta ? (meta.kind === 'resource' ? `Skill resource · ${meta.name}` : `Skill · ${meta.name}`) : 'Skill result'
 	);
 	const detail = $derived(meta ? [meta.provider, meta.scope, meta.path].filter(Boolean).join(' · ') : '');
+	// Directory-specific header icon for valid typed resource records only:
+	// the path comes from the persisted typed metadata, never from tool args
+	// or the raw XML, and base reads / untyped records keep the default.
+	const icon = $derived(
+		meta?.kind === 'resource' && meta.path ? classifySkillResourcePath(meta.path).icon : undefined
+	);
 </script>
 
-<ToolCallBlock {section} {open} {isStreaming} meta={null} {title} {onToggle}>
+<ToolCallBlock {section} {open} {isStreaming} meta={null} {title} {icon} {onToggle}>
 	{#snippet children(_meta, ctx)}
 		{#if ctx.isPending}
 			<div class="rounded bg-muted/20 p-2 text-xs text-muted-foreground/70 italic">
