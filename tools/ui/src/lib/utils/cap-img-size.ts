@@ -29,6 +29,11 @@ export function capImageDataURLSize(
 
 			const mimeType = mimeMatch[1] as MimeTypeImage;
 
+			// Browsers cannot decode JPEG XL; send bytes through unchanged.
+			if (mimeType === MimeTypeImage.JXL) {
+				return resolve(base64UrlImage);
+			}
+
 			if (!Object.values(MimeTypeImage).includes(mimeType)) {
 				return reject(new Error(`Unsupported image MIME type: ${mimeType}`));
 			}

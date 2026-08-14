@@ -1,12 +1,13 @@
 import { heicFileToJpegDataURL, isHeicMimeType } from './heic-to-jpeg';
+import { isJxlFile, normalizeJxlDataUrl } from './jxl';
 import { convertPDFToText } from './pdf-processing';
 import { isSvgMimeType, svgBase64UrlToPngDataURL } from './svg-to-png';
 import { isWebpMimeType, webpBase64UrlToPngDataURL } from './webp-to-png';
 import { SETTINGS_KEYS } from '$lib/constants';
-import { FileTypeCategory } from '$lib/enums';
+import { FileTypeCategory, MimeTypeImage } from '$lib/enums';
 import { modelsStore } from '$lib/stores/models.svelte';
 import { settingsStore } from '$lib/stores/settings.svelte';
-import { getFileTypeCategory } from '$lib/utils';
+import { getUploadedFileCategory } from '$lib/utils';
 import { toast } from 'svelte-sonner';
 
 /**
@@ -44,6 +45,7 @@ function readFileAsUTF8(file: File): Promise<string> {
  *
  * This function processes various file types and generates appropriate previews:
  * - Images: Base64 data URLs with format normalization (SVG/WebP → PNG)
+ * - JPEG XL: kept as image/jxl data URLs (not converted)
  * - Text files: UTF-8 content extraction
  * - PDFs: Metadata only (processed later in conversion pipeline)
  * - Audio: Base64 data URLs for preview
@@ -68,11 +70,15 @@ export async function processFilesToChatUploaded(
 		};
 
 		try {
-			if (getFileTypeCategory(file.type) === FileTypeCategory.IMAGE) {
+			if (getUploadedFileCategory(file) === FileTypeCategory.IMAGE || isJxlFile(file)) {
 				let preview = await readFileAsDataURL(file);
 
-				// Normalize SVG and WebP to PNG, and HEIC to compressed JPEG, in previews
-				if (isSvgMimeType(file.type)) {
+				// browsers often report an empty type for .jxl, so set it here
+				const imageType = isJxlFile(file) ? MimeTypeImage.JXL : file.type;
+
+				if (isJxlFile(file)) {
+					preview = normalizeJxlDataUrl(preview, file.name);
+				} else if (isSvgMimeType(file.type)) {
 					try {
 						preview = await svgBase64UrlToPngDataURL(preview);
 					} catch (err) {
@@ -94,8 +100,8 @@ export async function processFilesToChatUploaded(
 					}
 				}
 
-				results.push({ ...base, preview });
-			} else if (getFileTypeCategory(file.type) === FileTypeCategory.PDF) {
+				results.push({ ...base, preview, type: imageType });
+			} else if (getUploadedFileCategory(file) === FileTypeCategory.PDF) {
 				// Extract text content from PDF for preview
 				try {
 					const textContent = await convertPDFToText(file);
@@ -126,12 +132,12 @@ export async function processFilesToChatUploaded(
 						duration: 8000
 					});
 				}
-			} else if (getFileTypeCategory(file.type) === FileTypeCategory.AUDIO) {
+			} else if (getUploadedFileCategory(file) === FileTypeCategory.AUDIO) {
 				// Generate preview URL for audio files
 				const preview = await readFileAsDataURL(file);
 
 				results.push({ ...base, preview });
-			} else if (getFileTypeCategory(file.type) === FileTypeCategory.VIDEO) {
+			} else if (getUploadedFileCategory(file) === FileTypeCategory.VIDEO) {
 				// Generate preview URL for video files
 				const preview = await readFileAsDataURL(file);
 
