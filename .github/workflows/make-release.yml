@@ -1,0 +1,46 @@
+name: Make Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run - validate without creating the tag'
+        required: true
+        type: boolean
+        default: true
+
+env:
+  GH_TOKEN: ${{ github.token }}
+
+permissions:
+  contents: write
+
+jobs:
+  make-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Run release checks
+        id: checks
+        run: bash scripts/make-release-checks.sh ${{ github.event.inputs.dry_run == 'true' && '--dry-run' || '' }}
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+
+      - name: Create release tag
+        if: ${{ github.event.inputs.dry_run == 'false' }}
+        run: |
+          VERSION="${{ steps.checks.outputs.version }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "${VERSION}" -m "Release ${VERSION}"
+          git push origin "${VERSION}"
+          echo "Created and pushed tag ${VERSION}"
+
+      - name: Dry run summary
+        if: ${{ github.event.inputs.dry_run == 'true' }}
+        run: |
+          echo "Dry run complete - all checks passed."
+          echo "Would have created tag: ${{ steps.checks.outputs.version }}"

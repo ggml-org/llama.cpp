@@ -15,10 +15,10 @@ import {
 	LATEX_INLINE_CONVERT_REGEXP,
 	LATEX_INLINE_DELIMITER,
 	LATEX_INLINE_OPEN,
+	LATEX_LINEBREAK_REGEXP,
 	LATEX_MATH_AND_CODE_PATTERN,
 	LATEX_MHCHEM_CE,
 	LATEX_MHCHEM_PU,
-	LATEX_LINEBREAK_REGEXP,
 	LATEX_NEIGHBOR_CHAR_REGEXP,
 	LATEX_NON_WHITESPACE_REGEXP,
 	LATEX_PLACEHOLDER_REGEXP,
@@ -45,6 +45,7 @@ export function maskInlineLaTeX(content: string, latexExpressions: string[]): st
 	if (!content.includes(LATEX_INLINE_DELIMITER)) {
 		return content;
 	}
+
 	return content
 		.split(NEWLINE)
 		.map((line) => {
@@ -60,6 +61,7 @@ export function maskInlineLaTeX(content: string, latexExpressions: string[]): st
 
 				if (openDollarIndex == -1) {
 					processedLine += line.slice(currentPosition);
+
 					break;
 				}
 
@@ -68,6 +70,7 @@ export function maskInlineLaTeX(content: string, latexExpressions: string[]): st
 
 				if (closeDollarIndex == -1) {
 					processedLine += line.slice(currentPosition);
+
 					break;
 				}
 
@@ -107,6 +110,7 @@ export function maskInlineLaTeX(content: string, latexExpressions: string[]): st
 				// Treat as LaTeX
 				processedLine += line.slice(currentPosition, openDollarIndex);
 				const latexContent = line.slice(openDollarIndex, closeDollarIndex + 1);
+
 				latexExpressions.push(latexContent);
 				processedLine += `<<LATEX_${latexExpressions.length - 1}>>`;
 				currentPosition = closeDollarIndex + 1;
@@ -147,7 +151,6 @@ function escapeMhchem(text: string): string {
 }
 
 const doEscapeMhchem = false;
-
 /**
  * Preprocesses markdown content to safely handle LaTeX math expressions while protecting
  * against false positives (e.g., dollar amounts like $5.99) and ensuring proper rendering.
@@ -179,6 +182,7 @@ export function preprocessLaTeX(content: string): string {
 	// incomplete code block stays the same across multiple tokens, so the
 	// full protect/restore pipeline would re-run unnecessarily.
 	const cached = latexCache.get(content);
+
 	if (cached !== undefined) return cached;
 
 	// Save original before the function mutates `content` through steps 0-8
@@ -193,7 +197,9 @@ export function preprocessLaTeX(content: string): string {
 		if (latexCache.size >= LATEX_CACHE_MAX_SIZE) {
 			latexCache.delete(latexCache.keys().next().value!);
 		}
+
 		latexCache.set(originalContent, content);
+
 		return content;
 	}
 
@@ -203,12 +209,16 @@ export function preprocessLaTeX(content: string): string {
 	const lines = content.split(NEWLINE);
 	const processedLines = lines.map((line, index) => {
 		const match = line.match(LATEX_BLOCKQUOTE_PREFIX_REGEXP);
+
 		if (match) {
 			blockquoteMarkers.set(index, match[1]);
+
 			return line.slice(match[1].length);
 		}
+
 		return line;
 	});
+
 	content = processedLines.join(NEWLINE);
 
 	// Step 1: Protect code blocks
@@ -232,7 +242,9 @@ export function preprocessLaTeX(content: string): string {
 			if (group1.endsWith(LATEX_BACKSLASH)) {
 				return match; // Backslash before \[, do nothing.
 			}
+
 			const hasSuffix = LATEX_NON_WHITESPACE_REGEXP.test(group3);
+
 			let optBreak;
 
 			if (hasSuffix) {
@@ -264,15 +276,19 @@ export function preprocessLaTeX(content: string): string {
 	// Step 4: Restore protected LaTeX expressions (they are valid)
 	content = content.replace(LATEX_PLACEHOLDER_REGEXP, (_, index) => {
 		let expr = latexExpressions[parseInt(index)];
+
 		const match = expr.match(LATEX_LINEBREAK_REGEXP);
+
 		if (match) {
 			// Katex: The $$-delimiters should be in their own line
 			// if there are \\-line-breaks.
 			const formula = match[1];
 			const prefix = formula.startsWith(NEWLINE) ? '' : NEWLINE;
 			const suffix = formula.endsWith(NEWLINE) ? '' : NEWLINE;
+
 			expr = LATEX_DISPLAY_DELIMITER + prefix + formula + suffix + LATEX_DISPLAY_DELIMITER;
 		}
+
 		return expr;
 	});
 
@@ -313,14 +329,17 @@ export function preprocessLaTeX(content: string): string {
 		const finalLines = content.split(NEWLINE);
 		const restoredLines = finalLines.map((line, index) => {
 			const marker = blockquoteMarkers.get(index);
+
 			return marker ? marker + line : line;
 		});
+
 		content = restoredLines.join(NEWLINE);
 	}
 
 	if (latexCache.size >= LATEX_CACHE_MAX_SIZE) {
 		latexCache.delete(latexCache.keys().next().value!);
 	}
+
 	latexCache.set(originalContent, content);
 
 	return content;

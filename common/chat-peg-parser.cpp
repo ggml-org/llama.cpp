@@ -594,9 +594,7 @@ common_peg_parser common_chat_peg_builder::python_style_tool_calls(
 
                 // Full argument: name="value" or name=value
                 auto arg_rule = tool_arg(
-                    tool_arg_open(eps()) +
-                    tool_arg_name(arg_name_parser) +
-                    literal("=") +
+                    tool_arg_open(tool_arg_name(arg_name_parser) + literal("=")) +
                     arg_value_parser +
                     tool_arg_close(eps())
                 );

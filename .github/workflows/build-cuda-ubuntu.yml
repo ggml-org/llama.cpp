@@ -1,12 +1,13 @@
 name: CI (CUDA, ubuntu)
 
 on:
-  workflow_dispatch: # allows manual triggering
+  workflow_dispatch:
   push:
     branches:
       - master
     paths: [
       '.github/workflows/build-cuda-ubuntu.yml',
+      'scripts/apply-tiered-*.py',
       '**/CMakeLists.txt',
       '**/.cmake',
       '**/*.h',
@@ -21,6 +22,10 @@ on:
     types: [opened, synchronize, reopened]
     paths: [
       '.github/workflows/build-cuda-ubuntu.yml',
+      'scripts/apply-tiered-*.py',
+      'include/**',
+      'src/**',
+      'examples/tiered-*/**',
       'ggml/src/ggml-cuda/**'
     ]
 
@@ -59,8 +64,10 @@ jobs:
           evict-old-files: 1d
           save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
-      - name: Apply tiered CUDA transforms
-        run: python3 scripts/apply-tiered-hotpath-optimizations.py
+      - name: Apply Summer compatibility and hot-path transforms
+        run: |
+          python3 scripts/apply-tiered-upstream-compat.py
+          python3 scripts/apply-tiered-hotpath-optimizations.py
 
       - name: Build with CMake
         # TODO: Remove GGML_CUDA_CUB_3DOT2 flag once CCCL 3.2 is bundled within CTK and that CTK version is used in this project
@@ -102,7 +109,6 @@ jobs:
         run: |
           cmake -B build -S . \
             -DCMAKE_HIP_COMPILER="$(hipconfig -l)/clang" \
-            -DGGML_HIP_ROCWMMA_FATTN=ON \
             -DGPU_TARGETS="gfx1030" \
             -DGGML_HIP=ON
           cmake --build build --config Release -j $(nproc)

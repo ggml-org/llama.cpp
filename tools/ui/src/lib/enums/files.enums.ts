@@ -163,6 +163,7 @@ export enum FileExtensionText {
 // MIME type prefixes and includes for content detection
 export enum MimeTypePrefix {
 	IMAGE = 'image/',
+	AUDIO = 'audio/',
 	TEXT = 'text'
 }
 

@@ -37,6 +37,7 @@ export enum GlobSearchType {
  */
 export enum BuiltInTool {
 	READ_FILE = 'read_file',
+	READ_MEDIA = 'read_media',
 	EDIT_FILE = 'edit_file',
 	WRITE_FILE = 'write_file',
 	GET_DATETIME = 'get_datetime',

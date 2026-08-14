@@ -17,6 +17,7 @@
 #include <openvino/op/reshape.hpp>
 #include <openvino/op/shape_of.hpp>
 #include <openvino/op/sin.hpp>
+#include <openvino/op/slice.hpp>
 #include <openvino/op/split.hpp>
 #include <openvino/op/squeeze.hpp>
 #include <openvino/op/subtract.hpp>
@@ -195,7 +196,24 @@ std::pair<ov::Output<Node>, ov::Output<Node>> make_sin_cos(int32_t * rope_params
                 std::make_shared<ov::op::v0::Constant>(ov::element::f32, ov::Shape{1, 1, 1, factor.size()}, factor);
         }
         if (rope_freqs_weight) {
-            freq_factors = std::make_shared<ov::op::v1::Divide>(freq_factors, rope_freqs_weight);
+            Output<Node> rope_factors = std::make_shared<ov::op::v8::Slice>(
+                rope_freqs_weight,
+                ov::op::v0::Constant::create(ov::element::i64, {1}, {0}),
+                ov::op::v0::Constant::create(ov::element::i64, {1}, {(int64_t) n_dims_half}),
+                ov::op::v0::Constant::create(ov::element::i64, {1}, {1}),
+                ov::op::v0::Constant::create(ov::element::i64, {1}, {rope_freqs_weight->get_output_partial_shape(0).rank().get_length() - 1}));
+            if (stateful) {
+                rope_factors = std::make_shared<ov::op::v1::Reshape>(
+                    rope_factors,
+                    ov::op::v0::Constant::create(ov::element::i64, {3}, {(int64_t) 1, (int64_t) 1, (int64_t) n_dims_half}),
+                    false);
+            } else {
+                rope_factors = std::make_shared<ov::op::v1::Reshape>(
+                    rope_factors,
+                    ov::op::v0::Constant::create(ov::element::i64, {4}, {(int64_t) 1, (int64_t) 1, (int64_t) 1, (int64_t) n_dims_half}),
+                    false);
+            }
+            freq_factors = std::make_shared<ov::op::v1::Divide>(freq_factors, rope_factors);
         }
 
         auto theta_extrap = std::make_shared<ov::op::v1::Multiply>(freq_factors, inp_pos);
@@ -234,23 +252,30 @@ std::pair<ov::Output<Node>, ov::Output<Node>> make_sin_cos(int32_t * rope_params
     return std::make_pair(sin_theta, cos_theta);
 }
 
-ov::Output<ov::Node> process_view_input(const NodeContext & context, int input_index, int slice_len) {
-    // Only works for VIEW operations that slice at the lowest dimension
-    // If the VIEW also reshape the result, `slice_len` should be provided
+ov::Output<ov::Node> process_view_input(const NodeContext & context, int input_index, int slice_len, int axis) {
+    // Only works for VIEW operations that does a non-strided slice with optinal reshape on the slice result.
+    // The function only does the slice part, the reshape (if any) should be handled by the caller.
+    // Default axis is -1, which means slicing the last dimension.
+    // If the VIEW reshapes the result, `slice_len` should be provided
     auto input = context.get_input(input_index);
     auto * op_params = (size_t *) context.get_input_op_params(input_index);
-    auto src1_stride = context.get_input_stride(input_index);
+    auto src_stride = context.get_input_stride(input_index);
 
-    int64_t split_addr = op_params[0] / src1_stride[3];
+    int64_t slice_start = op_params[0] / src_stride[3];
     if (slice_len == 0) {
         slice_len = context.get_input_shape(input_index)[3].get_length();
     }
-    int64_t slice_end = split_addr + slice_len;
+    int64_t slice_end = slice_start + slice_len;
 
-    auto begin = ov::op::v0::Constant::create(ov::element::i64, {1}, {split_addr});
+    auto begin = ov::op::v0::Constant::create(ov::element::i64, {1}, {slice_start});
     auto end = ov::op::v0::Constant::create(ov::element::i64, {1}, {slice_end});
     auto stride = ov::op::v0::Constant::create(ov::element::i64, {1}, {1});
-    auto axes = ov::op::v0::Constant::create(ov::element::i64, {1}, {context.is_stateful() ? 2 : 3});
+    ov::Output<ov::Node> axes;
+    if (axis == -1) {
+        axes = ov::op::v0::Constant::create(ov::element::i64, {1}, {context.is_stateful() ? 2 : 3});
+    } else {
+        axes = ov::op::v0::Constant::create(ov::element::i64, {1}, {axis});
+    }
     auto sliced = std::make_shared<ov::op::v8::Slice>(input, begin, end, stride, axes);
     return sliced;
 }
@@ -267,17 +292,40 @@ ov::Output<ov::Node> process_view_input_new(const NodeContext & context, int inp
 
     // If translate_view already resolved this VIEW (produced a Slice), the input
     // will already have the expected shape — skip re-slicing.
+    //
+    // Two notions of "matches" are accepted per axis:
+    //   - both dims static and equal, OR
+    //   - both dims dynamic.
+    // The dynamic case matters for the MoE expert-plane views: translate_view now emits a
+    // DYNAMIC-token slice (so the token dim is not frozen). An all-static-only check would
+    // see the dynamic token dim, decide the shapes "don't match", and fall through to
+    // re-slice/flatten the already-resolved view (a Reshape to the full flattened
+    // n_expert_used*n_embd tail, which then conflicts with the single-plane input). Treat a
+    // dynamic-vs-dynamic axis as matching so the already-resolved view is reused as-is.
+    //
+    // A third case matters for split-model MoE fragments: translate_view resolves the
+    // expert-plane view against the fragment's INPUT parameter. When the graph is split
+    // the token axis of that parameter may already be concrete (static n_tokens) even
+    // though get_view_input_ov_shape() still reports it as dynamic (-1). The resolved
+    // view is then static [1,1,n_tokens,n_embd] while `expected` is [1,1,?,n_embd].
+    // An "expected dynamic, actual static" axis is a valid concretization of the SAME
+    // resolved view, so treat it as matching too. Falling through to process_single_view
+    // here would re-slice/re-flatten the already-resolved single-plane view against the
+    // recorded (multi-plane) source strides and emit a constant-target Reshape whose baked
+    // dims no longer divide the concretized input -> "dimensions do not evenly divide".
     auto expected_ov_shape = context.get_view_input_ov_shape(input_index, 0);
     auto actual_shape = input.get_partial_shape();
     if (expected_ov_shape.rank().is_static() && actual_shape.rank().is_static() &&
         expected_ov_shape.rank() == actual_shape.rank()) {
         bool shapes_match = true;
         for (int64_t i = 0; i < expected_ov_shape.rank().get_length(); ++i) {
-            if (!expected_ov_shape[i].is_static() || !actual_shape[i].is_static()) {
-                shapes_match = false;
-                break;
-            }
-            if (expected_ov_shape[i] != actual_shape[i]) {
+            const bool both_dynamic = expected_ov_shape[i].is_dynamic() && actual_shape[i].is_dynamic();
+            const bool both_static_equal = expected_ov_shape[i].is_static() && actual_shape[i].is_static() &&
+                                           expected_ov_shape[i] == actual_shape[i];
+            // expected dynamic, actual static: the resolved view already carries the
+            // concrete size for this fragment; reuse it rather than re-materializing.
+            const bool expected_dyn_actual_static = expected_ov_shape[i].is_dynamic() && actual_shape[i].is_static();
+            if (!both_dynamic && !both_static_equal && !expected_dyn_actual_static) {
                 shapes_match = false;
                 break;
             }
@@ -757,6 +805,41 @@ ov::Output<ov::Node> process_view_input_new(const NodeContext & context, int inp
 
         return current;
     };
+
+    // Special case: ggml collapses VIEW-of-VIEW chains so that `view_offs` is always an
+    // ABSOLUTE offset from the true root allocation, regardless of how many VIEW levels
+    // are in between (see ggml_new_tensor_impl). `src[0]` is still the immediate op-graph
+    // parent though, which can be a DIFFERENT (already narrowed) VIEW with the SAME ggml
+    // shape as this one but a different absolute offset -- e.g. a per-layer deepstack
+    // slice `view_2d(embd, n_embd, n_tokens, embd->nb[1], layer*n_embd*sizeof(float))`
+    // whose src[0] ("embd") is itself already a zero-offset VIEW of the true root (the
+    // padded embedding). Chaining through "embd" here would try to re-slice an already
+    // 2-narrowed tensor using a root-relative offset, going out of bounds and silently
+    // falling back to a no-op (returning the wrong, already-resolved sibling slice).
+    // Detect this (same shape as the immediate src, but different absolute offset) and
+    // re-slice directly from the untouched root using the innermost view's absolute
+    // offset against the ROOT's own shape/stride instead of chaining through src[0].
+    {
+        auto innermost_offset = context.get_view_input_offset(input_index, 0);
+        auto innermost_src_offset = context.get_view_input_src_offset(input_index, 0);
+        auto innermost_shape = context.get_view_input_ggml_shape(input_index, 0);
+        auto innermost_src_shape = context.get_view_input_src_ggml_shape(input_index, 0);
+        if (innermost_offset != innermost_src_offset && innermost_shape == innermost_src_shape) {
+            size_t root_view_idx = view_input_size - 1;
+            auto root_ggml_shape = context.get_view_input_src_ggml_shape(input_index, root_view_idx);
+            auto root_stride = context.get_view_input_src_stride(input_index, root_view_idx);
+            auto root_offset = context.get_view_input_src_offset(input_index, root_view_idx);
+            auto root_ov_shape = context.get_view_input_src_ov_shape(input_index, root_view_idx);
+            auto root_name = context.get_view_input_src_name(input_index, root_view_idx);
+            auto innermost_stride = context.get_view_input_stride(input_index, 0);
+            auto innermost_ov_shape = context.get_view_input_ov_shape(input_index, 0);
+            auto innermost_name = context.get_view_input_name(input_index, 0);
+
+            return process_single_view(input, innermost_offset, innermost_stride, innermost_shape, innermost_ov_shape,
+                                       innermost_name, root_offset, root_stride, root_ggml_shape, root_ov_shape,
+                                       root_name);
+        }
+    }
 
     // Process views from the base tensor (last) to the current view (first)
     // Start with the base tensor

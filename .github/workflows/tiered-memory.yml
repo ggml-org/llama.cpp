@@ -1,86 +1,44 @@
 name: tiered-memory
 
 on:
+  workflow_dispatch:
   pull_request:
     paths:
-      - "include/llama.h"
       - "include/llama-tiered.h"
-      - "src/llama-model.cpp"
+      - "scripts/apply-tiered-*.py"
       - "src/llama-tiered.cpp"
+      - "src/llama-mmap.*"
+      - "src/CMakeLists.txt"
       - "ggml/include/ggml-cuda.h"
       - "ggml/src/ggml-cuda/**"
       - "examples/tiered-memory/**"
-      - "src/CMakeLists.txt"
+      - "examples/tiered-server/**"
       - ".github/workflows/tiered-memory.yml"
   push:
     branches:
-      - feature/llamay-tiered-memory-planner
+      - master
+    paths:
+      - "include/llama-tiered.h"
+      - "scripts/apply-tiered-*.py"
+      - "src/llama-tiered.cpp"
+      - "src/llama-mmap.*"
+      - "src/CMakeLists.txt"
+      - "ggml/include/ggml-cuda.h"
+      - "ggml/src/ggml-cuda/**"
+      - "examples/tiered-memory/**"
+      - "examples/tiered-server/**"
+      - ".github/workflows/tiered-memory.yml"
 
-permissions:
-  contents: write
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  apply-ssd-view-offset:
-    if: github.actor != 'github-actions[bot]'
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: feature/llamay-tiered-memory-planner
-      - name: Convert expert view offsets to base tensor offsets
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-
-          path = Path('ggml/src/ggml-cuda/tiered.cu')
-          text = path.read_text()
-          old = '''    std::vector<size_t> chunks;
-    chunks.reserve(host_ids.size());
-    const size_t granularity = state->sparse_granularity;
-
-    for (const int32_t expert : host_ids) {
-        if (expert < 0 || expert >= tensor->ne[2]) {
-            throw std::runtime_error("MUL_MAT_ID produced an out-of-range expert id");
-        }
-        for (int64_t i3 = 0; i3 < tensor->ne[3]; ++i3) {
-            const size_t slab_begin = static_cast<size_t>(i3) * tensor->nb[3] +
-                    static_cast<size_t>(expert) * tensor->nb[2];
-            const size_t slab_end = std::min(state->size, slab_begin + tensor->nb[2]);'''
-          new = '''    std::vector<size_t> chunks;
-    chunks.reserve(host_ids.size());
-    const size_t granularity = state->sparse_granularity;
-    size_t tensor_offset = 0;
-    tiered_view_base(tensor, &tensor_offset);
-
-    for (const int32_t expert : host_ids) {
-        if (expert < 0 || expert >= tensor->ne[2]) {
-            throw std::runtime_error("MUL_MAT_ID produced an out-of-range expert id");
-        }
-        for (int64_t i3 = 0; i3 < tensor->ne[3]; ++i3) {
-            const size_t slab_begin = tensor_offset +
-                    static_cast<size_t>(i3) * tensor->nb[3] +
-                    static_cast<size_t>(expert) * tensor->nb[2];
-            const size_t slab_end = std::min(state->size, slab_begin + tensor->nb[2]);'''
-          if new in text:
-              raise SystemExit(0)
-          if old not in text:
-              raise SystemExit('expected SSD expert loop was not found')
-          path.write_text(text.replace(old, new, 1))
-          PY
-          if git diff --quiet; then
-            exit 0
-          fi
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add ggml/src/ggml-cuda/tiered.cu
-          git commit -m "cuda: account for expert tensor view offsets"
-          git push origin HEAD:feature/llamay-tiered-memory-planner
-
   cpu-build:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - name: Configure
+      - uses: actions/checkout@v6
+      - name: Configure upstream-compatible CPU build
         run: >-
           cmake -S . -B build
           -DGGML_CUDA=OFF
@@ -89,8 +47,8 @@ jobs:
           -DLLAMA_BUILD_TOOLS=OFF
           -DLLAMA_BUILD_SERVER=OFF
           -DLLAMA_BUILD_APP=OFF
-      - name: Build public API and example
-        run: cmake --build build --target llama llama-tiered -j2
+      - name: Build llama library
+        run: cmake --build build --target llama -j2
 
   cuda-build:
     runs-on: ubuntu-24.04
@@ -101,9 +59,13 @@ jobs:
         run: |
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            ca-certificates cmake git g++ make pkg-config
-      - uses: actions/checkout@v4
-      - name: Configure
+            ca-certificates cmake git g++ make pkg-config python3
+      - uses: actions/checkout@v6
+      - name: Apply Summer compatibility and hot-path transforms
+        run: |
+          python3 scripts/apply-tiered-upstream-compat.py
+          python3 scripts/apply-tiered-hotpath-optimizations.py
+      - name: Configure CUDA tiered build
         run: >-
           cmake -S . -B build
           -DGGML_CUDA=ON
@@ -115,5 +77,5 @@ jobs:
           -DLLAMA_BUILD_TOOLS=OFF
           -DLLAMA_BUILD_SERVER=OFF
           -DLLAMA_BUILD_APP=OFF
-      - name: Build CUDA backend and example
+      - name: Build CUDA tiered target
         run: cmake --build build --target llama-tiered -j2
