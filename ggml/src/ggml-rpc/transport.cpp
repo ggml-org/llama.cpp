@@ -271,7 +271,7 @@ bool socket_t::impl::rdma_probe() {
                 if (ibv_query_gid_ex(ctx, ib_port, i, &entry, 0) != 0) continue;
                 const bool matches = memcmp(entry.gid.raw, target_gid->data(), RDMA_GID_SIZE) == 0;
                 GGML_LOG_INFO("RDMA probe: device %s port %u GID[%d] type=%s gid=%s%s\n",
-                              dn, ib_port, i, rdma_gid_type_str(entry.gid_type),
+                              dn, ib_port, i, rdma_gid_type_str((enum ibv_gid_type) entry.gid_type),
                               rdma_gid_to_string(entry.gid.raw).c_str(),
                               matches ? " [MATCH]" : "");
                 if (!matches) continue;
