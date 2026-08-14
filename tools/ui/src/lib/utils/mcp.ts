@@ -1,38 +1,33 @@
-import type { MCPServerSettingsEntry, MCPResourceContent, MCPResourceInfo } from '$lib/types';
 import {
-	MCPTransportType,
-	MCPLogLevel,
-	UrlProtocol,
-	MimeTypePrefix,
-	MimeTypeIncludes,
-	UriPattern,
-	MimeTypeText
-} from '$lib/enums';
-import {
-	DEFAULT_MCP_CONFIG,
-	MCP_SERVER_ID_PREFIX,
-	IMAGE_FILE_EXTENSION_REGEX,
-	CODE_FILE_EXTENSION_REGEX,
-	TEXT_FILE_EXTENSION_REGEX,
-	PROTOCOL_PREFIX_REGEX,
-	FILE_EXTENSION_REGEX,
-	DISPLAY_NAME_SEPARATOR_REGEX,
-	PATH_SEPARATOR,
-	RESOURCE_TEXT_CONTENT_SEPARATOR,
-	DEFAULT_RESOURCE_FILENAME
-} from '$lib/constants';
-import {
+	AlertTriangle,
+	Code,
 	Database,
 	File,
 	FileText,
 	Image,
-	Code,
 	Info,
-	AlertTriangle,
 	XCircle
 } from '@lucide/svelte';
-import type { Component } from 'svelte';
+import {
+	CODE_FILE_EXTENSION_REGEX,
+	DEFAULT_RESOURCE_FILENAME,
+	DISPLAY_NAME_SEPARATOR_REGEX,
+	FILE_EXTENSION_REGEX,
+	IMAGE_FILE_EXTENSION_REGEX,
+	MCP_SERVER_ID_PREFIX,
+	MCP_SSE,
+	MIME_TYPE_PREFIXES,
+	MIME_TYPE_SUBSTRINGS,
+	PATH_SEPARATOR,
+	PROTOCOL_PREFIX_REGEX,
+	RESOURCE_TEXT_CONTENT_SEPARATOR,
+	TEXT_FILE_EXTENSION_REGEX,
+	URI_PATTERNS
+} from '$lib/constants';
+import { MCPLogLevel, MCPTransportType, MimeTypeText, UrlProtocol } from '$lib/enums';
+import type { MCPResourceContent, MCPResourceInfo, MCPServerSettingsEntry } from '$lib/types';
 import type { MimeTypeUnion } from '$lib/types/common';
+import type { Component } from 'svelte';
 
 /**
  * Detects the MCP transport type from a URL.
@@ -41,15 +36,26 @@ import type { MimeTypeUnion } from '$lib/types/common';
 export function detectMcpTransportFromUrl(url: string): MCPTransportType {
 	const normalized = url.trim().toLowerCase();
 
-	return normalized.startsWith(UrlProtocol.WEBSOCKET) ||
+	if (
+		normalized.startsWith(UrlProtocol.WEBSOCKET) ||
 		normalized.startsWith(UrlProtocol.WEBSOCKET_SECURE)
-		? MCPTransportType.WEBSOCKET
-		: MCPTransportType.STREAMABLE_HTTP;
+	) {
+		return MCPTransportType.WEBSOCKET;
+	}
+
+	if (
+		normalized.endsWith(MCP_SSE.ENDPOINT) ||
+		normalized.endsWith(MCP_SSE.ENDPOINT_SLASH) ||
+		normalized.includes(MCP_SSE.ENDPOINT_QUERY)
+	) {
+		return MCPTransportType.SSE;
+	}
+
+	return MCPTransportType.STREAMABLE_HTTP;
 }
 
 /**
  * Parses MCP server settings from a JSON string or array.
- * Preserves per-server requestTimeoutSeconds if stored, otherwise falls back to the global default.
  * @param rawServers - The raw servers to parse
  * @returns An empty array if the input is invalid.
  */
@@ -60,6 +66,7 @@ export function parseMcpServerSettings(rawServers: unknown): MCPServerSettingsEn
 
 	if (typeof rawServers === 'string') {
 		const trimmed = rawServers.trim();
+
 		if (!trimmed) return [];
 
 		try {
@@ -84,14 +91,12 @@ export function parseMcpServerSettings(rawServers: unknown): MCPServerSettingsEn
 				: `${MCP_SERVER_ID_PREFIX}-${index + 1}`;
 
 		return {
-			id,
+			displayName: (entry as { displayName?: string })?.displayName,
 			enabled: Boolean((entry as { enabled?: unknown })?.enabled),
-			url,
-			name: (entry as { name?: string })?.name,
-			requestTimeoutSeconds:
-				(entry as { requestTimeoutSeconds?: number })?.requestTimeoutSeconds ??
-				DEFAULT_MCP_CONFIG.requestTimeoutSeconds,
 			headers: headers || undefined,
+			id,
+			name: (entry as { name?: string })?.name,
+			url,
 			useProxy: Boolean((entry as { useProxy?: unknown })?.useProxy)
 		} satisfies MCPServerSettingsEntry;
 	});
@@ -138,7 +143,7 @@ export function getMcpLogLevelClass(level: MCPLogLevel): string {
  * @returns True if the MIME type starts with 'image/'
  */
 export function isImageMimeType(mimeType?: MimeTypeUnion): boolean {
-	return mimeType?.startsWith(MimeTypePrefix.IMAGE) ?? false;
+	return mimeType?.startsWith(MIME_TYPE_PREFIXES.IMAGE) ?? false;
 }
 
 /**
@@ -150,6 +155,7 @@ export function isImageMimeType(mimeType?: MimeTypeUnion): boolean {
 export function parseResourcePath(uri: string): string[] {
 	try {
 		const withoutProtocol = uri.replace(PROTOCOL_PREFIX_REGEX, '');
+
 		return withoutProtocol.split(PATH_SEPARATOR).filter((p) => p.length > 0);
 	} catch {
 		return [uri];
@@ -165,6 +171,7 @@ export function parseResourcePath(uri: string): string[] {
  */
 export function getDisplayName(pathPart: string): string {
 	const withoutExt = pathPart.replace(FILE_EXTENSION_REGEX, '');
+
 	return withoutExt
 		.split(DISPLAY_NAME_SEPARATOR_REGEX)
 		.map((word) => word.charAt(0).toUpperCase() + word.slice(1))
@@ -180,6 +187,7 @@ export function getDisplayName(pathPart: string): string {
 export function getResourceDisplayName(resource: MCPResourceInfo): string {
 	try {
 		const parts = parseResourcePath(resource.uri);
+
 		return parts[parts.length - 1] || resource.name || resource.uri;
 	} catch {
 		return resource.name || resource.uri;
@@ -196,10 +204,11 @@ export function getResourceDisplayName(resource: MCPResourceInfo): string {
 export function isCodeResource(mimeType?: MimeTypeUnion, uri?: string): boolean {
 	const mime = mimeType?.toLowerCase() || '';
 	const u = uri?.toLowerCase() || '';
+
 	return (
-		mime.includes(MimeTypeIncludes.JSON) ||
-		mime.includes(MimeTypeIncludes.JAVASCRIPT) ||
-		mime.includes(MimeTypeIncludes.TYPESCRIPT) ||
+		mime.includes(MIME_TYPE_SUBSTRINGS.JSON) ||
+		mime.includes(MIME_TYPE_SUBSTRINGS.JAVASCRIPT) ||
+		mime.includes(MIME_TYPE_SUBSTRINGS.TYPESCRIPT) ||
 		CODE_FILE_EXTENSION_REGEX.test(u)
 	);
 }
@@ -214,7 +223,8 @@ export function isCodeResource(mimeType?: MimeTypeUnion, uri?: string): boolean 
 export function isImageResource(mimeType?: MimeTypeUnion, uri?: string): boolean {
 	const mime = mimeType?.toLowerCase() || '';
 	const u = uri?.toLowerCase() || '';
-	return mime.startsWith(MimeTypePrefix.IMAGE) || IMAGE_FILE_EXTENSION_REGEX.test(u);
+
+	return mime.startsWith(MIME_TYPE_PREFIXES.IMAGE) || IMAGE_FILE_EXTENSION_REGEX.test(u);
 }
 
 /**
@@ -228,24 +238,24 @@ export function getResourceIcon(mimeType?: MimeTypeUnion, uri?: string): Compone
 	const mime = mimeType?.toLowerCase() || '';
 	const u = uri?.toLowerCase() || '';
 
-	if (mime.startsWith(MimeTypePrefix.IMAGE) || IMAGE_FILE_EXTENSION_REGEX.test(u)) {
+	if (mime.startsWith(MIME_TYPE_PREFIXES.IMAGE) || IMAGE_FILE_EXTENSION_REGEX.test(u)) {
 		return Image;
 	}
 
 	if (
-		mime.includes(MimeTypeIncludes.JSON) ||
-		mime.includes(MimeTypeIncludes.JAVASCRIPT) ||
-		mime.includes(MimeTypeIncludes.TYPESCRIPT) ||
+		mime.includes(MIME_TYPE_SUBSTRINGS.JSON) ||
+		mime.includes(MIME_TYPE_SUBSTRINGS.JAVASCRIPT) ||
+		mime.includes(MIME_TYPE_SUBSTRINGS.TYPESCRIPT) ||
 		CODE_FILE_EXTENSION_REGEX.test(u)
 	) {
 		return Code;
 	}
 
-	if (mime.includes(MimeTypePrefix.TEXT) || TEXT_FILE_EXTENSION_REGEX.test(u)) {
+	if (mime.includes(MIME_TYPE_PREFIXES.TEXT) || TEXT_FILE_EXTENSION_REGEX.test(u)) {
 		return FileText;
 	}
 
-	if (u.includes(UriPattern.DATABASE_KEYWORD) || u.includes(UriPattern.DATABASE_SCHEME)) {
+	if (u.includes(URI_PATTERNS.DATABASE_KEYWORD) || u.includes(URI_PATTERNS.DATABASE_SCHEME)) {
 		return Database;
 	}
 
@@ -260,6 +270,7 @@ export function getResourceIcon(mimeType?: MimeTypeUnion, uri?: string): Compone
  */
 export function getResourceTextContent(content: MCPResourceContent[] | null | undefined): string {
 	if (!content) return '';
+
 	return content
 		.filter((c): c is { uri: string; mimeType?: MimeTypeUnion; text: string } => 'text' in c)
 		.map((c) => c.text)
@@ -297,6 +308,7 @@ export function downloadResourceContent(
 	const blob = new Blob([text], { type: mimeType });
 	const url = URL.createObjectURL(blob);
 	const a = document.createElement('a');
+
 	a.href = url;
 	a.download = filename;
 	document.body.appendChild(a);

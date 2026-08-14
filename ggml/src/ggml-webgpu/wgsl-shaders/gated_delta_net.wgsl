@@ -63,10 +63,10 @@ fn main(
     let iq3 = seq_id / params.rq3;
 
     let state_size = S_V * S_V;
-    let state_in_base = (seq_id * params.K * params.h + head_id) * state_size;
+    // input state holds s0 only [S_v, S_v, H, n_seqs]: per-seq stride is H*D.
+    let state_in_base = (seq_id * params.h + head_id) * state_size;
     let state_out_base = (seq_id * params.h + head_id) * state_size;
     let state_size_per_snap = state_size * params.h * params.n_seqs;
-    let shift = i32(params.n_tokens) - i32(params.K);
 
     var state: array<f32, S_V>;
     for (var i = 0u; i < S_V; i++) {
@@ -128,7 +128,8 @@ fn main(
         attn_off += S_V * params.h;
 
         if (params.K > 1u) {
-            let target_slot = i32(t) - shift;
+            // snapshot slot mapping: slot 0 = most recent state, slot s = s tokens back.
+            let target_slot = i32(params.n_tokens) - 1 - i32(t);
             if (target_slot >= 0 && target_slot < i32(params.K)) {
                 let slot_base = params.s_off + u32(target_slot) * state_size_per_snap + state_out_base;
                 for (var i = 0u; i < S_V; i++) {

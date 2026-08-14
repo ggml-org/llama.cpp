@@ -1,8 +1,10 @@
 <script lang="ts">
-	import { Settings, ChevronLeft, ChevronRight } from '@lucide/svelte';
-	import { onMount, tick } from 'svelte';
-	import type { SettingsSection, SettingsSectionTitle } from '$lib/constants';
+	import { ChevronLeft, ChevronRight, Settings } from '@lucide/svelte';
+	import { ICON_CLASS_DEFAULT, UI_DATA_ATTRS } from '$lib/constants';
+	import { BooleanString } from '$lib/enums';
 	import { useScrollCarousel } from '$lib/hooks/use-scroll-carousel.svelte';
+	import type { SettingsSection, SettingsSectionTitle } from '$lib/types';
+	import { onMount, tick } from 'svelte';
 
 	interface Props {
 		sections: SettingsSection[];
@@ -11,14 +13,18 @@
 		onSectionChange?: (section: SettingsSectionTitle) => void;
 	}
 
-	let { sections, isActive, getHref, onSectionChange }: Props = $props();
+	let { getHref, isActive, onSectionChange, sections }: Props = $props();
 
 	const carousel = useScrollCarousel();
 
 	onMount(async () => {
 		await tick();
+
 		if (carousel.scrollContainer) {
-			const activeTab = carousel.scrollContainer.querySelector('[data-active="true"]');
+			const activeTab = carousel.scrollContainer.querySelector(
+				`[${UI_DATA_ATTRS.ACTIVE}="${BooleanString.TRUE}"]`
+			);
+
 			if (activeTab instanceof HTMLElement) {
 				carousel.scrollToCenter(activeTab);
 			}
@@ -46,7 +52,7 @@
 				onclick={carousel.scrollLeft}
 				aria-label="Scroll left"
 			>
-				<ChevronLeft class="h-4 w-4" />
+				<ChevronLeft class={ICON_CLASS_DEFAULT} />
 			</button>
 
 			<div
@@ -63,13 +69,13 @@
 								)
 									? 'bg-accent text-accent-foreground'
 									: 'text-muted-foreground'}"
-								data-active={isActive(section)}
+								{...{ [UI_DATA_ATTRS.ACTIVE]: isActive(section) }}
 								href={getHref(section)}
 								onclick={(e: MouseEvent) => {
 									carousel.scrollToCenter(e.currentTarget as HTMLElement);
 								}}
 							>
-								<section.icon class="h-4 w-4 flex-shrink-0" />
+								<section.icon class="{ICON_CLASS_DEFAULT} flex-shrink-0" />
 								<span>{section.title}</span>
 							</a>
 						{:else}
@@ -79,13 +85,13 @@
 								)
 									? 'bg-accent text-accent-foreground'
 									: 'text-muted-foreground'}"
-								data-active={isActive(section)}
+								{...{ [UI_DATA_ATTRS.ACTIVE]: isActive(section) }}
 								onclick={(e: MouseEvent) => {
 									onSectionChange?.(section.title);
 									carousel.scrollToCenter(e.currentTarget as HTMLElement);
 								}}
 							>
-								<section.icon class="h-4 w-4 flex-shrink-0" />
+								<section.icon class="{ICON_CLASS_DEFAULT} flex-shrink-0" />
 								<span>{section.title}</span>
 							</button>
 						{/if}
@@ -100,7 +106,7 @@
 				onclick={carousel.scrollRight}
 				aria-label="Scroll right"
 			>
-				<ChevronRight class="h-4 w-4" />
+				<ChevronRight class={ICON_CLASS_DEFAULT} />
 			</button>
 		</div>
 	</div>

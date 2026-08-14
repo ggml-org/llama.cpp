@@ -7,7 +7,7 @@
 		class?: string;
 	}
 
-	let { instructions, class: className }: Props = $props();
+	let { class: className, instructions }: Props = $props();
 
 	let isExpanded = $state(false);
 </script>

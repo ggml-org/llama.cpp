@@ -233,7 +233,7 @@ And a non-exhaustive list of other unsupported features that are unlikely to be 
 > [!WARNING]
 > The JSON schemas spec states `object`s accept [additional properties](https://json-schema.org/understanding-json-schema/reference/object#additionalproperties) by default.
 > Since this is slow and seems prone to hallucinations, we default to no additional properties.
-> You can set `"additionalProperties": true` in the the schema of any object to explicitly allow additional properties.
+> You can set `"additionalProperties": true` in the schema of any object to explicitly allow additional properties.
 
 If you're using [Pydantic](https://pydantic.dev/) to generate schemas, you can enable additional properties with the `extra` config on each model class:
 

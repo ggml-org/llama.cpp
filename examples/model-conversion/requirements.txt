@@ -1,6 +1,6 @@
 --extra-index-url https://download.pytorch.org/whl/cpu
 torch
-torchvision
+torchvision; platform_machine != "s390x"
 transformers
 huggingface-hub
 accelerate

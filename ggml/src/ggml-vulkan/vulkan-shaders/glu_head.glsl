@@ -15,14 +15,33 @@ layout (push_constant) uniform parameter
     uint mode;
     float alpha;
     float limit;
+    uint nb00;
     uint nb01;
     uint nb02;
     uint nb03;
-    uint ne01;
-    uint ne02;
+    uint nb10;
     uint nb11;
     uint nb12;
     uint nb13;
-    uint ne11;
-    uint ne12;
+    uint nb20;
+    uint nb21;
+    uint nb22;
+    uint nb23;
+    uint ne21;
+    uint ne22;
+    uint misalign_offsets;
+    uint ne2_012mp; uint ne2_012L;
+    uint ne2_01mp;  uint ne2_01L;
+    uint ne2_0mp;   uint ne2_0L;
 } p;
+
+uint get_aoffset() { return p.misalign_offsets >> 16; }
+uint get_boffset() { return (p.misalign_offsets >> 8) & 0xFF; }
+uint get_doffset() { return p.misalign_offsets & 0xFF; }
+
+// see init_fastdiv_values in ggml-vulkan.cpp
+uint fastdiv(uint n, uint mp, uint L) {
+    uint msbs, lsbs;
+    umulExtended(n, mp, msbs, lsbs);
+    return (msbs + n) >> L;
+}
