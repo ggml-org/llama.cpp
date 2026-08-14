@@ -368,7 +368,8 @@ struct local_model {
     std::string path_draft;
 };
 
-static const char * draft_prefixes[] = { "mtp-", "dspark-", "dflash-", "eagle3-" };
+// TODO @ngxson: handle "eagle3-" when it's supported by common_speculative_types_from_gguf()
+static const char * draft_prefixes[] = { "mtp-", "dspark-", "dflash-" };
 
 common_presets common_preset_context::load_from_models_dir(const std::string & models_dir) const {
     if (!std::filesystem::exists(models_dir) || !std::filesystem::is_directory(models_dir)) {
