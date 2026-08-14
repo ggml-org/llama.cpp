@@ -1327,6 +1327,7 @@ static webgpu_encoded_op ggml_webgpu_ssm_scan(webgpu_context & ctx,
         (uint32_t) src4->ne[1],
         (uint32_t) src1->ne[2],
         (uint32_t) ggml_nelements(src1),
+        (uint32_t) ggml_get_op_params_i32(dst, 0),
     };
 
     std::vector<wgpu::BindGroupEntry> entries = {
