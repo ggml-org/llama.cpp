@@ -371,6 +371,19 @@ struct local_model {
 // TODO @ngxson: handle "eagle3-" when it's supported by common_speculative_types_from_gguf()
 static const char * draft_prefixes[] = { "mtp-", "dspark-", "dflash-" };
 
+static bool is_mmproj_file(const std::string & fname) {
+    return fname.find("mmproj") != std::string::npos;
+}
+
+static bool is_draft_file(const std::string & fname) {
+    for (const auto & prefix : draft_prefixes) {
+        if (fname.rfind(prefix, 0) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 common_presets common_preset_context::load_from_models_dir(const std::string & models_dir) const {
     if (!std::filesystem::exists(models_dir) || !std::filesystem::is_directory(models_dir)) {
         throw std::runtime_error(string_format("error: '%s' does not exist or is not a directory\n", models_dir.c_str()));
@@ -385,16 +398,9 @@ common_presets common_preset_context::load_from_models_dir(const std::string & m
         common_file_info draft_file;
         for (const auto & file : files) {
             if (string_ends_with(file.name, ".gguf")) {
-                bool is_draft = false;
-                for (const auto & prefix : draft_prefixes) {
-                    if (file.name.rfind(prefix, 0) == 0) {
-                        is_draft = true;
-                        break;
-                    }
-                }
-                if (file.name.find("mmproj") != std::string::npos) {
+                if (is_mmproj_file(file.name)) {
                     mmproj_file = file;
-                } else if (is_draft) {
+                } else if (is_draft_file(file.name)) {
                     if (draft_file.path.empty()) {
                         draft_file = file; // first sidecar found wins
                     }
@@ -422,6 +428,9 @@ common_presets common_preset_context::load_from_models_dir(const std::string & m
         if (file.is_dir) {
             scan_subdir(file.path, file.name);
         } else if (string_ends_with(file.name, ".gguf")) {
+            if (is_mmproj_file(file.name) || is_draft_file(file.name)) {
+                continue; // companion file, cannot be loaded as a model on its own
+            }
             // single file model
             std::string name = file.name;
             string_replace_all(name, ".gguf", "");
