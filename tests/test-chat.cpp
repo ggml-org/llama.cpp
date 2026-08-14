@@ -6955,6 +6955,24 @@ static void test_reasoning_budget_message_per_request() {
     }
 }
 
+static void test_reasoning_effort_caps() {
+    LOG_DBG("%s\n", __func__);
+
+    auto assert_supports_effort = [](const std::string & path, bool expected) {
+        auto tmpls = read_templates(path);
+        assert_equals(expected, common_chat_templates_get_caps(tmpls.get()).at("supports_reasoning_effort"));
+    };
+
+    assert_supports_effort("models/templates/deepseek-ai-DeepSeek-V4.jinja", true);
+    assert_supports_effort("models/templates/muse-glimmer.jinja", true);
+    assert_supports_effort("models/templates/tencent-Hy3.jinja", true);
+    assert_supports_effort("models/templates/openai-gpt-oss-120b.jinja", true);
+    assert_supports_effort("models/templates/upstage-Solar-Open-100B.jinja", true);
+    assert_supports_effort("models/templates/Cohere2MoE.jinja", true);
+    assert_supports_effort("models/templates/meta-llama-Llama-3.1-8B-Instruct.jinja", false);
+    assert_supports_effort("models/templates/Qwen-Qwen3-0.6B.jinja", false);
+}
+
 static void test_msg_diffs_compute() {
     LOG_DBG("%s\n", __func__);
     {
@@ -7114,6 +7132,7 @@ int main(int argc, char ** argv) {
         test_deepseek_v4_thinking_retention();
         test_deepseek_v4_tool_result_ordering();
         test_template_generation_prompt();
+        test_reasoning_effort_caps();
         test_reasoning_budget_tokens_per_request();
         test_reasoning_budget_message_per_request();
         test_template_output_peg_parsers(detailed_debug);
