@@ -361,7 +361,7 @@ static ggml_kleidiai_kernels gemm_gemv_kernels[] = {
             /* .packed_stride_ex      = */ &rhs_stride_fn4<kai_get_rhs_packed_stride_rhs_pack_nxk_qsi4c32ps1s0scalef16_qsu4c32s16s0_neon>,
             /* .pack_func_ex          = */ &rhs_pack_fn12<kai_run_rhs_pack_nxk_qsi4c32ps1s0scalef16_qsu4c32s16s0_neon>,
         },
-        /* .required_cpu       = */ CPU_FEATURE_SME2,
+        /* .required_cpu       = */ CPU_FEATURE_SME2 | CPU_FEATURE_FP16,
         /* .lhs_type           = */ GGML_TYPE_F32,
         /* .rhs_type           = */ GGML_TYPE_Q4_0,
         /* .op_type            = */ GGML_TYPE_F32,
@@ -1049,7 +1049,8 @@ ggml_kleidiai_kernels * ggml_kleidiai_select_kernels_q4_0(cpu_feature features) 
     ggml_kleidiai_kernels * kernels = nullptr;
 
     for (size_t i = 0; i < NELEMS(gemm_gemv_kernels) - 1; ++i) {
-        if ((features & gemm_gemv_kernels[i].required_cpu) == gemm_gemv_kernels[i].required_cpu) {
+        if ((features & gemm_gemv_kernels[i].required_cpu) == gemm_gemv_kernels[i].required_cpu &&
+            gemm_gemv_kernels[i].rhs_type == GGML_TYPE_Q4_0) {
             kernels = &gemm_gemv_kernels[i];
             break;
         }
