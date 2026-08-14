@@ -90,7 +90,7 @@ llama_model_gemma::graph::graph(const llama_model & model, const llm_graph_param
                     model.layers[il].wo, NULL, model.layers[il].wo_s,
                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f, il);
         }
-        if (il == n_layer - 1 && inp_out_ids) {
+        if (il == n_layer - 1 && inp_out_ids && !cparams.extract_hidden_states) {
             cur  = ggml_get_rows(ctx0,  cur, inp_out_ids);
             inpL = ggml_get_rows(ctx0, inpL, inp_out_ids);
         }
@@ -119,6 +119,10 @@ llama_model_gemma::graph::graph(const llama_model & model, const llm_graph_param
 
         // input for next layer
         inpL = cur;
+
+        if (cparams.extract_hidden_states) {
+            res->t_hidden_layers.push_back(cur);
+        }
     }
     cur = inpL;
 

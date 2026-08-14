@@ -3,10 +3,10 @@
 #include "llama.h"
 #include "llama-cparams.h"
 
+#include <algorithm>
 #include <bitset>
 #include <cassert>
 #include <cstring>
-#include <map>
 #include <set>
 #include <vector>
 
@@ -43,9 +43,12 @@ public:
 
         used.clear();
 
-        for (uint32_t s = 0; s < LLAMA_MAX_SEQ; ++s) {
-            seq_pos[s].clear();
-        }
+        // Zero the flat position-count table and reset cached min/max.
+        // This replaces per-node std::map clear/erase which caused heap
+        // corruption after millions of rb-tree node alloc/free cycles.
+        std::fill(pos_counts.begin(), pos_counts.end(), 0);
+        std::fill(seq_min.begin(), seq_min.end(), -1);
+        std::fill(seq_max.begin(), seq_max.end(), -1);
     }
 
     void reset_shift() {
@@ -65,6 +68,15 @@ public:
         ext.resize(n);
         shift.resize(n);
         seq.resize(n);
+
+        // Flat position-count table: [LLAMA_MAX_SEQ][n].
+        // Replaces the old std::map<llama_pos, int>[LLAMA_MAX_SEQ] which
+        // allocated rb-tree nodes on the heap per position insert/erase.
+        // The flat table is allocated once here and zeroed in reset().
+        pos_counts.assign((size_t) LLAMA_MAX_SEQ * n, 0);
+        seq_min.assign(LLAMA_MAX_SEQ, -1);
+        seq_max.assign(LLAMA_MAX_SEQ, -1);
+        n_cells = n;
 
         reset();
     }
@@ -335,13 +347,7 @@ public:
         assert(seq_id >= 0);
         assert(seq_id < LLAMA_MAX_SEQ);
 
-        if (seq_pos[seq_id].empty()) {
-            return -1;
-        }
-
-        assert(seq_pos[seq_id].begin()->second > 0);
-
-        return seq_pos[seq_id].begin()->first;
+        return seq_min[seq_id];
     }
 
     // the maximum position of sequence seq_id currently present in any of the cells
@@ -350,13 +356,7 @@ public:
         assert(seq_id >= 0);
         assert(seq_id < LLAMA_MAX_SEQ);
 
-        if (seq_pos[seq_id].empty()) {
-            return -1;
-        }
-
-        assert(seq_pos[seq_id].rbegin()->second > 0);
-
-        return seq_pos[seq_id].rbegin()->first;
+        return seq_max[seq_id];
     }
 
     // note: call only if the cell is not empty
@@ -488,29 +488,74 @@ private:
     // the bitset seq[i] tells us which sequences are currently occupying the i-th cell
     std::vector<seq_set_t> seq;
 
-    // the set seq_pos[s][p] tells us how many times the position p is currently present for sequence s
-    // if the position p is not present, seq_pos[s][p] is not set
-    // this way seq_pos[s].begin() and seq_pos[s].rbegin() give us the min/max positions currently in the cache
+    // Flat position-count table replacing the old std::map<llama_pos, int>[LLAMA_MAX_SEQ].
     //
-    // note that we cannot a use an std::set because in some cases a position can occur more than once for the same seq:
-    //  - during performing a cache reuse via (rm + add)
-    //  - some vision models have input embeddings with repeating positions
+    // pos_counts[s * n_cells + p] = number of cells at position p for sequence s.
+    // Allocated once at resize(), zeroed at reset(). No per-iteration heap allocs.
     //
-    std::map<llama_pos, int> seq_pos[LLAMA_MAX_SEQ];
+    // The old std::map allocated an rb-tree node for every distinct position,
+    // then freed it on erase/clear. After ~164K decode cycles with ~100-200
+    // positions per cycle, that's millions of malloc/free calls from the
+    // rb-tree node allocator. If any of those nodes' memory was corrupted by
+    // CUDA/ggml heap interactions, the next map traversal hit a dangling
+    // pointer in _Rb_tree::_M_erase() and crashed with a GP fault.
+    //
+    // The flat table eliminates all per-iteration heap allocations from
+    // position tracking, removing the corruption surface entirely.
+    std::vector<int> pos_counts;
+    uint32_t n_cells = 0;
 
-    // helper functions for updating `seq_pos`, once cell at a time:
+    // Cached min/max position per sequence, updated incrementally on inc/dec.
+    // Replaces the O(1) begin()/rbegin() access pattern from std::map.
+    std::vector<llama_pos> seq_min;
+    std::vector<llama_pos> seq_max;
+
+    // helper functions for updating position counts, one cell at a time:
 
     void seq_pos_dec(llama_seq_id s, llama_pos p) {
-        auto it = seq_pos[s].find(p);
-        assert(it != seq_pos[s].end());
+        assert(s >= 0 && s < LLAMA_MAX_SEQ);
+        assert(p >= 0 && (uint32_t) p < n_cells);
 
-        if (--it->second == 0) {
-            seq_pos[s].erase(it);
+        auto & count = pos_counts[(size_t) s * n_cells + p];
+        assert(count > 0);
+        count--;
+
+        // Update cached min/max when the last cell at this position is removed
+        if (count == 0) {
+            if (p == seq_min[s] || p == seq_max[s]) {
+                recompute_min_max(s);
+            }
         }
     }
 
     void seq_pos_inc(llama_seq_id s, llama_pos p) {
-        seq_pos[s][p]++;
+        assert(s >= 0 && s < LLAMA_MAX_SEQ);
+        assert(p >= 0 && (uint32_t) p < n_cells);
+
+        auto & count = pos_counts[(size_t) s * n_cells + p];
+        count++;
+
+        if (seq_min[s] < 0 || p < seq_min[s]) seq_min[s] = p;
+        if (seq_max[s] < 0 || p > seq_max[s]) seq_max[s] = p;
+    }
+
+    // Recompute cached min/max for a sequence by scanning the count table.
+    // Called only when a boundary position is removed -- amortized O(n_cells)
+    // but rare relative to the number of inc/dec calls.
+    void recompute_min_max(llama_seq_id s) {
+        assert(s >= 0 && s < LLAMA_MAX_SEQ);
+
+        llama_pos new_min = -1;
+        llama_pos new_max = -1;
+        const int * row = pos_counts.data() + (size_t) s * n_cells;
+        for (uint32_t p = 0; p < n_cells; ++p) {
+            if (row[p] > 0) {
+                if (new_min < 0) new_min = (llama_pos) p;
+                new_max = (llama_pos) p;
+            }
+        }
+        seq_min[s] = new_min;
+        seq_max[s] = new_max;
     }
 
     // remove cell i

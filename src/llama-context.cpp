@@ -117,6 +117,7 @@ llama_context::llama_context(
     cparams.embeddings              = params.embeddings;
     cparams.embeddings_nextn        = false;
     cparams.embeddings_nextn_masked = false;
+    cparams.extract_hidden_states   = params.extract_hidden_states;
     cparams.offload_kqv             = params.offload_kqv;
     cparams.no_perf                 = params.no_perf;
     cparams.warmup                  = false;
@@ -734,6 +735,12 @@ void llama_context::synchronize() {
 
     n_queued_tokens = 0;
     t_compute_start_us = 0;
+
+    // After synchronization, if hidden state extraction is enabled and data exists,
+    // mark it as synced so subsequent API calls don't redundantly re-sync.
+    if (cparams.extract_hidden_states && n_hidden_tokens > 0) {
+        _hs_synced.store(true, std::memory_order_release);
+    }
 }
 
 const llama_model & llama_context::get_model() const {
@@ -979,6 +986,46 @@ float * llama_context::get_embeddings_layer_inp(uint32_t lid) {
     return embd_layer_inp[lid].data;
 }
 
+float * llama_context::get_hidden_state(int32_t layer) {
+    if (hidden_state_buf.empty() || n_hidden_tokens == 0) {
+        return nullptr;
+    }
+
+    GGML_ASSERT(n_hidden_layers > 0 && "n_hidden_layers not set  -  hidden state extraction was not initialized");
+
+    if (layer < 0 || layer >= n_hidden_layers) {
+        return nullptr;
+    }
+
+    const size_t offset = (size_t)layer * n_hidden_tokens * model.hparams.n_embd_out();
+    GGML_ASSERT(offset < hidden_state_buf.size() && "hidden state offset exceeds buffer  -  internal state corruption");
+
+    return hidden_state_buf.data() + offset;
+}
+
+float * llama_context::get_hidden_state_ith(int32_t layer, int32_t i) {
+    const float * layer_data = get_hidden_state(layer);
+    if (layer_data == nullptr) {
+        return nullptr;
+    }
+
+    // support negative indices: -1 = last token
+    if (i < 0) {
+        i = n_hidden_tokens + i;
+    }
+
+    if (i < 0 || i >= n_hidden_tokens) {
+        return nullptr;
+    }
+
+    const uint32_t n_embd_out = model.hparams.n_embd_out();
+    return const_cast<float *>(layer_data) + i * n_embd_out;
+}
+
+int32_t llama_context::get_hidden_state_n_tokens() const {
+    return n_hidden_tokens;
+}
+
 llama_token llama_context::get_sampled_token_ith(int32_t idx) {
     output_reorder();
 
@@ -1179,6 +1226,36 @@ void llama_context::set_embeddings_layer_inp(uint32_t lid, bool enable) {
 
 void llama_context::set_nextn_layer_offset(int32_t offset) {
     cparams.nextn_layer_offset = offset;
+}
+
+void llama_context::set_extract_hidden_states(bool value) {
+    LLAMA_LOG_DEBUG("%s: value = %d\n", __func__, value);
+
+    if (cparams.extract_hidden_states == value) {
+        return;
+    }
+
+    cparams.extract_hidden_states = value;
+
+    // Toggling extract_hidden_states changes the graph topology (adds/removes
+    // t_hidden_layers output tensors). The scheduler must re-reserve compute
+    // buffers to allocate space for these tensors. Without this, the graph
+    // compiled during warmup (with extract_hidden_states=false) is reused,
+    // and hidden state reads hit unallocated memory, producing incorrect values.
+    sched_need_reserve = true;
+
+    // Clear stale data when extraction is disabled. Without this, a subsequent
+    // call to llama_get_hidden_state() would return stale data from the
+    // previous extraction instead of nullptr.
+    if (!value) {
+        hidden_state_buf.clear();
+        n_hidden_tokens = 0;
+        n_hidden_layers = 0;
+        _hs_synced.store(false, std::memory_order_release);
+    } else {
+        // Mark dirty before new extraction (async copies will set synced=true after completion)
+        _hs_synced.store(false, std::memory_order_release);
+    }
 }
 
 void llama_context::set_causal_attn(bool value) {
@@ -1654,7 +1731,9 @@ int llama_context::decode(const llama_batch & batch_inp) {
     const bool    mtp_embd = cparams.ctx_type == LLAMA_CONTEXT_TYPE_MTP && batch_inp.embd;
     const int64_t n_embd  = mtp_embd ? hparams.n_embd_out() : hparams.n_embd_inp();
 
-    // when computing embeddings, all tokens are output
+    // when computing embeddings, all tokens are output.
+    // extract_hidden_states reads from per-layer t_hidden_layers[] during the
+    // model forward pass, which is independent of the output slot mapping.
     const bool output_all   = cparams.embeddings;
     const bool has_samplers = !sampling.samplers.empty();
 
@@ -1788,6 +1867,25 @@ int llama_context::decode(const llama_batch & batch_inp) {
     for (const auto & entry : sampling.samplers) {
         llama_sampler_backend_begin(entry.second);
     }
+
+    // Pre-allocate hidden state buffer for all tokens if extraction enabled
+    if (cparams.extract_hidden_states) {
+        const uint32_t n_embd_out = hparams.n_embd_out();
+        const int32_t n_layers = (int32_t) hparams.n_layer();
+        n_hidden_layers = n_layers;  // P4.1: Store explicit layer count
+        const size_t total_size = (size_t)n_layers * n_tokens_all * n_embd_out;
+        hidden_state_buf.resize(total_size);
+        std::fill(hidden_state_buf.begin(), hidden_state_buf.end(), 0.0f);
+        n_hidden_tokens = 0;  // Will accumulate across ubatches
+        // Mark not-synced for this decode pass. Symmetric with
+        // set_extract_hidden_states(): without this, _hs_synced retains its
+        // stale `true` from the previous decode until the ubatch loop completes
+        // (store at the end of decode()), so an async reader of hs_synced()
+        // could observe "synced" while the buffer is mid-refill. The release
+        // store at the end of decode() republishes it once accumulation is done.
+        _hs_synced.store(false, std::memory_order_release);
+    }
+
 
     int64_t n_outputs_prev = 0;
     int64_t n_tokens_prev  = 0;
@@ -1965,9 +2063,132 @@ int llama_context::decode(const llama_batch & batch_inp) {
             copy_tensor_async_rows(res->t_candidates,     sampling.candidates, stride, n_outputs_prev, sched.get(), &sampling.candidates_count);
         }
 
+        // Extract per-layer hidden states for this ubatch (accumulate across all ubatches)
+        if (cparams.extract_hidden_states) {
+            auto * hres = gf_res_prev.get();
+            const uint32_t n_embd_out = hparams.n_embd_out();
+            const int32_t n_layers = (int32_t) hres->t_hidden_layers.size();
+
+            if (n_layers > 0) {
+                // Validate layer count matches what was declared at init
+                GGML_ASSERT(n_layers == n_hidden_layers && "hidden state layer count mismatch");
+
+                // All supported architectures (llama, gemma, gemma4, qwen35) push
+                // exactly one non-null tensor per layer (the layer-output residual).
+                // A null entry here indicates a bug in the graph builder or memory
+                // corruption — not a legitimate conditional skip. Fail loud rather
+                // than silently zero-filling (which would poison compute_masked_mean
+                // downstream with an all-zero layer contribution).
+                uint32_t n_tokens = 0;
+                for (int32_t il = 0; il < n_layers; il++) {
+                    if (hres->t_hidden_layers[il] == nullptr) {
+                        LLAMA_LOG_ERROR("%s: t_hidden_layers[%d] is null — graph builder "
+                                        "failed to populate layer %d (this should never happen "
+                                        "on supported architectures)\n", __func__, il, il);
+                        n_hidden_tokens = 0;
+                        return -1;
+                    }
+                    if (il == 0) {
+                        n_tokens = (uint32_t) hres->t_hidden_layers[0]->ne[1];
+                    }
+                }
+
+                // Assert all layers have matching token counts (prevent silent corruption)
+                for (int32_t il = 0; il < n_layers; il++) {
+                    if (hres->t_hidden_layers[il]) {
+                        GGML_ASSERT((uint32_t) hres->t_hidden_layers[il]->ne[1] == n_tokens &&
+                                    "hidden state layer token count mismatch");
+                    }
+                }
+
+                // Accumulate token count across ubatches with overflow check
+                {
+                    int64_t total_hidden = (int64_t)n_hidden_tokens + (int64_t)n_tokens;
+                    if (total_hidden > (int64_t)INT32_MAX) {
+                        LLAMA_LOG_ERROR("%s: hidden token count overflow (%lld tokens exceeds INT32_MAX)\n",
+                                        __func__, (long long)total_hidden);
+                        n_hidden_tokens = 0;
+                        return -1;
+                    }
+                    n_hidden_tokens = (int32_t)total_hidden;
+                }
+
+                // CRITICAL: Synchronize the compute backend BEFORE reading hidden states.
+                // The compute graph runs on the backend's internal stream (cuda_ctx->stream()),
+                // but ggml_backend_tensor_get() uses the buffer interface which dispatches on
+                // cudaStreamPerThread — a different CUDA stream. Without this sync, the memcpy
+                // reads stale/zero data before the compute stream finishes writing.
+                // (Vulkan uses a single queue so this race is Vulkan-immune.)
+                ggml_backend_sched_synchronize(sched.get());
+
+                // Copy this ubatch's hidden states to the pre-allocated buffer at the correct offset
+                for (int32_t il = 0; il < n_layers; il++) {
+                    auto * t = hres->t_hidden_layers[il];
+                    // Null check already done above — this is guaranteed non-null.
+                    // Defensive assert to catch any future regression.
+                    GGML_ASSERT(t != nullptr && "t_hidden_layers[il] is null in copy loop — internal error");
+                    ggml_backend_t backend_res = ggml_backend_sched_get_tensor_backend(sched.get(), t);
+                    GGML_ASSERT(backend_res != nullptr);
+
+                    // Offset into the pre-allocated buffer: layer * total_tokens * embd + ubatch_offset * embd
+                    // All quantities in bytes for consistency with copy_size and the overflow check.
+                    // Cast to size_t to prevent integer overflow when il * n_tokens_all * n_embd_out > 2^31
+                    const size_t dst_offset = (size_t)il * n_tokens_all * n_embd_out * sizeof(float)
+                                            + (size_t)n_tokens_prev * n_embd_out * sizeof(float);
+                    const size_t copy_size = (size_t)n_tokens * n_embd_out * sizeof(float);
+                    if (dst_offset + copy_size > hidden_state_buf.size() * sizeof(float)) {
+                        LLAMA_LOG_ERROR("%s: hidden state copy would overflow buffer "
+                                        "(offset=%zu, size=%zu, buf_size=%zu)\n",
+                                        __func__, dst_offset, copy_size,
+                                        hidden_state_buf.size() * sizeof(float));
+                        n_hidden_tokens = 0;
+                        return -1;
+                    }
+                    float * dst = hidden_state_buf.data() + dst_offset / sizeof(float);
+                    ggml_backend_tensor_get(t, dst, 0, copy_size);
+                }
+
+                // Defensive synchronization after the copy loop. Strictly redundant
+                // for correctness — ggml_backend_tensor_get() is synchronous (it
+                // blocks the CPU thread until the D2H copy completes, see
+                // ggml_backend_cuda_buffer_get_tensor which calls cudaStreamSynchronize
+                // on cudaStreamPerThread). The next mctx->next() iteration cannot
+                // start its compute graph until this loop body returns, so GPU
+                // compute buffers are safe to reuse. Kept as defense-in-depth at
+                // ~0.1-0.5ms per ubatch; the pre-copy sync at line 2150 is the
+                // load-bearing one for multi-stream backends (CUDA).
+                ggml_backend_sched_synchronize(sched.get());
+                // NOTE: the memory-ordering release store on _hs_synced happens
+                // AFTER the multi-ubatch loop completes (see the store below,
+                // outside this loop), not here. That placement is deliberate:
+                // it publishes the fully-accumulated buffer to acquire-load
+                // readers in hs_synced(). Setting it here would let callers
+                // observe a partially-filled buffer mid-accumulation.
+            } else {
+                // This model architecture does not populate t_hidden_layers.
+                // Log the error and set n_hidden_tokens=0 so get_hidden_state()
+                // returns nullptr. The calling tool checks for nullptr and exits.
+                LLAMA_LOG_ERROR("%s: extract_hidden_states is enabled but this model architecture "
+                                "does not support it (t_hidden_layers is empty)\n", __func__);
+                n_hidden_tokens = 0;
+                // Mark as synced to prevent redundant synchronize() calls on every API access
+                _hs_synced.store(true, std::memory_order_release);
+            }
+        }
+
         n_outputs_prev += n_outputs;
         n_tokens_prev  += ubatch.n_tokens;
     } while (mctx->next());
+
+    // P1.1: Validate multi-ubatch hidden state accumulation captured all tokens
+    if (cparams.extract_hidden_states && n_hidden_tokens != 0) {
+        GGML_ASSERT((uint32_t)n_hidden_tokens == n_tokens_all &&
+                    "hidden state token count mismatch after multi-ubatch accumulation");
+        // C7: Only signal synced AFTER the entire multi-ubatch loop is complete.
+        // Previously this was set inside the loop, creating a race window where
+        // callers could read partially-filled buffers.
+        _hs_synced.store(true, std::memory_order_release);
+    }
 
     // set to total number of outputs in the batch, for use in llama_get_logits_ith
     n_outputs = n_outputs_all;
@@ -2020,7 +2241,6 @@ int llama_context::decode(const llama_batch & batch_inp) {
     }
 
     // wait for the computation to finish (automatically done when obtaining the model output)
-    //synchronize();
 
     return 0;
 }
@@ -3536,6 +3756,7 @@ llama_context_params llama_context_default_params() {
         /*.abort_callback              =*/ nullptr,
         /*.abort_callback_data         =*/ nullptr,
         /*.embeddings                  =*/ false,
+        /*.extract_hidden_states       =*/ false,
         /*.offload_kqv                 =*/ true,
         /*.no_perf                     =*/ true,
         /*.op_offload                  =*/ true,
@@ -3719,6 +3940,10 @@ void llama_set_embeddings(llama_context * ctx, bool embeddings) {
     ctx->set_embeddings(embeddings);
 }
 
+void llama_set_extract_hidden_states(llama_context * ctx, bool extract_hidden_states) {
+    ctx->set_extract_hidden_states(extract_hidden_states);
+}
+
 void llama_set_causal_attn(llama_context * ctx, bool causal_attn) {
     ctx->set_causal_attn(causal_attn);
 }
@@ -3805,6 +4030,64 @@ float * llama_get_embeddings_layer_inp(llama_context * ctx, uint32_t lid) {
     ctx->synchronize();
 
     return ctx->get_embeddings_layer_inp(lid);
+}
+
+float * llama_get_hidden_state(llama_context * ctx, int32_t layer) {
+    if (!ctx->hs_synced()) {
+        ctx->synchronize();
+    }
+
+    return ctx->get_hidden_state(layer);
+}
+
+float * llama_get_hidden_state_ith(llama_context * ctx, int32_t layer, int32_t i) {
+    if (!ctx->hs_synced()) {
+        ctx->synchronize();
+    }
+
+    return ctx->get_hidden_state_ith(layer, i);
+}
+
+int32_t llama_get_hidden_state_n_tokens(llama_context * ctx) {
+    if (!ctx->hs_synced()) {
+        ctx->synchronize();
+    }
+    return ctx->get_hidden_state_n_tokens();
+}
+
+int32_t llama_get_hidden_states_batch(
+        llama_context * ctx,
+        const int32_t * layers,
+        int32_t         n_layers,
+        float        ** out_ptrs) {
+    // Single sync point instead of one per layer
+    if (!ctx->hs_synced()) {
+        ctx->synchronize();
+    }
+
+    if (n_layers <= 0 || !layers || !out_ptrs) {
+        return -1;
+    }
+
+    if (ctx->get_hidden_state_n_tokens() == 0) {
+        return -1;
+    }
+
+    // Pre-validate all layer indices before filling to avoid partial-success
+    const int32_t n_model_layers = llama_model_n_layer(&ctx->get_model());
+    for (int32_t i = 0; i < n_layers; i++) {
+        if (layers[i] < 0 || layers[i] >= n_model_layers) {
+            LLAMA_LOG_ERROR("%s: layer %d out of range [0, %d)\n",
+                            __func__, layers[i], n_model_layers);
+            return -1;
+        }
+    }
+
+    for (int32_t i = 0; i < n_layers; i++) {
+        out_ptrs[i] = ctx->get_hidden_state(layers[i]);
+    }
+
+    return 0;
 }
 
 bool llama_set_sampler(llama_context * ctx, llama_seq_id seq_id, llama_sampler * smpl) {

@@ -840,6 +840,7 @@ struct llm_graph_params {
             cparams.embeddings              == other.cparams.embeddings              &&
             cparams.embeddings_nextn        == other.cparams.embeddings_nextn        &&
             cparams.embeddings_nextn_masked == other.cparams.embeddings_nextn_masked &&
+            cparams.extract_hidden_states   == other.cparams.extract_hidden_states   &&
             cparams.causal_attn             == other.cparams.causal_attn             &&
             arch  == other.arch  &&
             gtype == other.gtype &&
@@ -868,6 +869,8 @@ public:
     ggml_tensor * get_h_nextn()     const { return t_h_nextn; }
 
     ggml_tensor * get_layer_inp(int il) const { return t_layer_inp[il]; }
+
+    std::vector<ggml_tensor*> t_hidden_layers;
 
     ggml_cgraph  * get_gf()  const { return gf; }
     ggml_context * get_ctx() const { return ctx_compute.get(); }

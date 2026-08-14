@@ -389,6 +389,7 @@ extern "C" {
 
         // Keep the booleans together and at the end of the struct to avoid misalignment during copy-by-value.
         bool embeddings;  // if true, extract embeddings (together with logits)
+        bool extract_hidden_states; // if true, extract per-layer hidden states
         bool offload_kqv; // offload the KQV ops (including the KV cache) to GPU
         bool no_perf;     // measure performance timings
         bool op_offload;  // offload host tensor operations to device
@@ -997,6 +998,9 @@ extern "C" {
     // TODO: rename to avoid confusion with llama_get_embeddings()
     LLAMA_API void llama_set_embeddings(struct llama_context * ctx, bool embeddings);
 
+    // Set whether the context extracts per-layer hidden states
+    LLAMA_API void llama_set_extract_hidden_states(struct llama_context * ctx, bool extract_hidden_states);
+
     // Set whether to use causal attention or not
     // If set to true, the model will only attend to the past tokens
     LLAMA_API void llama_set_causal_attn(struct llama_context * ctx, bool causal_attn);
@@ -1052,6 +1056,44 @@ extern "C" {
     // when pooling_type == LLAMA_POOLING_TYPE_RANK, returns float[n_cls_out] with the rank(s) of the sequence
     // otherwise: float[n_embd] (1-dimensional)
     LLAMA_API float * llama_get_embeddings_seq(struct llama_context * ctx, llama_seq_id seq_id);
+
+    //
+    // Hidden state extraction
+    //
+
+    // Get the per-layer hidden states for all tokens in the last decode.
+    // Returns a pointer to a flat float array of size n_tokens * n_embd_out,
+    // or NULL if extract_hidden_states was not set in context params.
+    // The stride per token is n_embd_out (not n_embd) -- most models have
+    // n_embd == n_embd_out but this is not guaranteed (e.g. models with
+    // a separate output projection dimension).
+    // The number of tokens can be queried with llama_get_hidden_state_n_tokens().
+    //
+    // Ownership: the returned pointer is owned by the context and MUST NOT be freed.
+    // The pointer remains valid until the next llama_decode() call,
+    // llama_set_extract_hidden_states(ctx, false), or llama_free().
+    LLAMA_API float * llama_get_hidden_state(struct llama_context * ctx, int32_t layer);
+
+    // Get the hidden state for a specific token at the given layer.
+    // Returns float[n_embd_out] for the i-th token.
+    // i can be negative to index from the end (-1 = last token).
+    // Returns NULL if extract_hidden_states was not set or i is out of range.
+    LLAMA_API float * llama_get_hidden_state_ith(struct llama_context * ctx, int32_t layer, int32_t i);
+
+    // Returns the number of tokens for which hidden states were extracted.
+    LLAMA_API int32_t llama_get_hidden_state_n_tokens(struct llama_context * ctx);
+
+    // Batch-get hidden state pointers for multiple layers in a single call.
+    // Fills out_ptrs[i] with the float* for layers[i] (n_tokens * n_embd_out floats),
+    // or NULL if that layer is out of range.
+    // Returns 0 on success, -1 if hidden states are unavailable.
+    // This is faster than calling llama_get_hidden_state() in a loop because it
+    // performs the sync and bounds validation only once, not per-layer.
+    LLAMA_API int32_t llama_get_hidden_states_batch(
+            struct llama_context * ctx,
+            const int32_t        * layers,
+            int32_t                n_layers,
+            float               ** out_ptrs);
 
     //
     // backend sampling API [EXPERIMENTAL]

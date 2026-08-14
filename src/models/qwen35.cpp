@@ -202,6 +202,10 @@ llama_model_qwen35::graph::graph(const llama_model & model, const llm_graph_para
         cur = build_cvec(cur, il);
         cb(cur, "l_out", il);
 
+        if (cparams.extract_hidden_states) {
+            res->t_hidden_layers.push_back(cur);
+        }
+
         // Input for next layer
         inpL = cur;
     }

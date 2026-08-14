@@ -171,7 +171,7 @@ llama_model_llama::graph<embed>::graph(const llama_model & model, const llm_grap
                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
             cb(cur, "attn_out", il);
         }
-        if (il == n_layer - 1 && inp_out_ids) {
+        if (il == n_layer - 1 && inp_out_ids && !cparams.extract_hidden_states) {
             cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
             inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
         }
@@ -225,6 +225,10 @@ llama_model_llama::graph<embed>::graph(const llama_model & model, const llm_grap
 
         // input for next layer
         inpL = cur;
+
+        if (cparams.extract_hidden_states) {
+            res->t_hidden_layers.push_back(cur);
+        }
     }
     cur = inpL;
 
