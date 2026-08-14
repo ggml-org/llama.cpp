@@ -293,6 +293,8 @@ bool socket_t::impl::rdma_probe() {
             ibv_gid_entry entry = {};
             if (ibv_query_gid_ex(ctx, ib_port, found_gid, &entry, 0) == 0) {
                 found_version = entry.gid_type;
+                GGML_LOG_INFO("RDMA probe: device %s port %u: GID[%d] type=%s gid=%s\n",
+                              dn, ib_port, found_gid, rdma_gid_type_str((enum ibv_gid_type) found_version),
             }
         }
         if (found_gid >= 0) {
@@ -301,6 +303,8 @@ bool socket_t::impl::rdma_probe() {
             gid_version = found_version;
             matched_dev = dn;
             rdma_local.path_mtu = pa.active_mtu;
+            GGML_LOG_INFO("RDMA probe: device %s port %u: GID[%d] type=%s gid=%s\n",
+                          dn, ib_port, found_gid, rdma_gid_type_str((enum ibv_gid_type) found_version),
             break;
         }
         GGML_LOG_INFO("RDMA probe: device %s port %u: no GID matching local addr %s, skipping\n",
@@ -315,6 +319,9 @@ bool socket_t::impl::rdma_probe() {
 
     rdma_local.ib_port = ib_port;
     rdma_local.gid_idx = gid_idx;
+
+    GGML_LOG_INFO("RDMA probe: device %s port %u: GID[%d] type=%s gid=%s\n",
+                  matched_dev, rdma_local.ib_port, gid_idx, rdma_gid_type_str((enum ibv_gid_type) gid_version),
 
     rdma = std::make_unique<rdma_conn>();
     rdma->ctx = ibctx;
