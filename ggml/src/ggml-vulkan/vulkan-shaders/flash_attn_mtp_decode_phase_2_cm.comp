@@ -1,0 +1,231 @@
+#version 450
+
+#extension GL_EXT_control_flow_attributes : enable
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_KHR_memory_scope_semantics : enable
+#extension GL_KHR_cooperative_matrix : enable
+#extension GL_KHR_shader_subgroup_basic : enable
+#extension GL_KHR_shader_subgroup_arithmetic : enable
+#extension GL_KHR_shader_subgroup_ballot : enable
+#extension GL_EXT_shared_memory_block : enable
+
+layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
+
+layout (binding = 0) readonly buffer P          { float16_t p_temp[];     };
+layout (binding = 0) readonly buffer P_U32VEC4  { uvec4 p_temp_u32vec4[]; };
+layout (binding = 1) readonly buffer V          { float16_t vbuf[];       };
+layout (binding = 2) readonly buffer GMAX       { float      group_max[]; };
+layout (binding = 3) readonly buffer SINK       { float      sink_f32[];  };
+layout (binding = 4)          buffer OUT        { float      out_f32[];   };
+
+layout (push_constant) uniform parameter
+{
+  uint kvSeqLen;
+  uint activationLength;
+  uint qHead;
+  uint kvHead;
+  uint qkRatio;
+  uint qkSubGroups;
+  uint flag;
+  uint kvStride;
+  uint batchStrideQ;
+  uint batchStrideK;
+  uint batchStrideV;
+  uint batchStrideM;
+  uint batchStrideO;
+  float softMaxScale;
+} p;
+
+layout (constant_id = 0) const uint GROUPSIZE = 16;
+layout (constant_id = 1) const uint GQA_RATIO = 16;
+layout (constant_id = 2) const uint HEAD_DIM  = 128;
+layout (constant_id = 3) const uint WARPSIZE  = 16;
+layout (constant_id = 4) const uint KV_TILE   = 16;
+layout (constant_id = 5) const uint KV_SPLIT  = 4;
+layout (constant_id = 6) const uint MTP       = 1;
+layout (constant_id = 7) const uint TOKENS_EXACT = 0;
+layout (constant_id = 8) const uint TOKEN_BATCHES = 1;
+
+#define N_TOKS (MTP + 1)
+#define NUM_TOKEN_GROUPS ((N_TOKS + TOKEN_BATCHES - 1) / TOKEN_BATCHES)
+#define MAT_HEAD_TILES (GQA_RATIO / 8)
+#define TILE_HD 16u
+#define SUBGROUPS_PER_WG (KV_SPLIT * NUM_TOKEN_GROUPS)
+#define KV_U32VEC4_BLOCKS (KV_TILE / 8u)
+#define TOK_VALID(idx) (TOKENS_EXACT != 0u || (idx) < N_TOKS)
+
+const float NEG_INF = -3.402823466e+38f;
+
+#define PSCALED_BUF_STRIDE (SUBGROUPS_PER_WG * KV_TILE * WARPSIZE)
+#define SLM_OUT_SIZE (SUBGROUPS_PER_WG * WARPSIZE * TILE_HD)
+#define SLM_LSE_SIZE (SUBGROUPS_PER_WG * WARPSIZE)
+#define SLM_LSE_OFFSET SLM_OUT_SIZE
+
+#define BK_COUNT 1u
+
+shared slm_pscaled_block { float16_t slm_pscaled[PSCALED_BUF_STRIDE * BK_COUNT]; } slm_pscaled_blk;
+#define slm_pscaled slm_pscaled_blk.slm_pscaled
+
+shared slm_gmax_block { float slm_gmax[SLM_LSE_SIZE]; } slm_gmax_blk;
+#define slm_gmax slm_gmax_blk.slm_gmax
+
+shared slm_post_block { float slm_post[SLM_OUT_SIZE + SLM_LSE_SIZE]; } slm_post_blk;
+#define slm_out slm_post_blk.slm_post
+
+void main() {
+  const uint kv_head       = gl_WorkGroupID.x;
+  const uint hd_tile       = gl_WorkGroupID.y;
+  const uint batch_idx      = gl_WorkGroupID.z / TOKEN_BATCHES;
+  const uint token_batch_idx = gl_WorkGroupID.z % TOKEN_BATCHES;
+  const uint token_base_offset = token_batch_idx * NUM_TOKEN_GROUPS;
+  const uint lane          = gl_SubgroupInvocationID;
+
+  const uint token_group_idx = gl_SubgroupID / KV_SPLIT;
+  const uint split         = gl_SubgroupID % KV_SPLIT;
+  const uint subgroup_slot  = gl_SubgroupID;
+  const uint group_base     = token_group_idx * KV_SPLIT;
+  const uint token_idx      = token_base_offset + token_group_idx;
+
+  const uint kv_len   = p.kvSeqLen;
+  const uint kv_tiles = (kv_len + KV_TILE - 1u) / KV_TILE;
+  const uint q_base   = kv_head * GQA_RATIO;
+  const uint hd_start = hd_tile * TILE_HD;
+  const uint kv_dim    = p.kvStride;
+
+  const uint head_global = q_base + lane;
+  const bool lane_valid = lane < GQA_RATIO;
+
+  const uint tiles_per_split = (kv_tiles + KV_SPLIT - 1u) / KV_SPLIT;
+  const uint ck_start = min(split * tiles_per_split, kv_tiles);
+  const uint ck_end   = min(ck_start + tiles_per_split, kv_tiles);
+
+  const uint pscaled_base_sg = subgroup_slot * KV_TILE * WARPSIZE;
+  const uint out_base_sg     = subgroup_slot * WARPSIZE * TILE_HD;
+  const uint lse_base_sg     = subgroup_slot * WARPSIZE;
+
+  const bool sinks_enabled = (0x1 == (p.flag & 0x1));
+  const float fp32_sink_coeff = (sinks_enabled && lane_valid) ? sink_f32[kv_head * GQA_RATIO + lane] : NEG_INF;
+
+  float gmax;
+  {
+    float local_max = NEG_INF;
+    if (TOK_VALID(token_idx) && lane_valid) {
+      const uint token_global_idx = batch_idx * N_TOKS + token_idx;
+      const uint gm_token_base = (token_global_idx * p.kvHead + kv_head) * kv_tiles * GQA_RATIO;
+      for (uint ck = ck_start; ck < ck_end; ck++) {
+        local_max = max(local_max, group_max[gm_token_base + ck * GQA_RATIO + lane]);
+      }
+    }
+    slm_gmax[lse_base_sg + lane] = local_max;
+  }
+  barrier();
+  {
+    float m = slm_gmax[group_base * WARPSIZE + lane];
+    for (uint s = 1; s < KV_SPLIT; s++) {
+      m = max(m, slm_gmax[(group_base + s) * WARPSIZE + lane]);
+    }
+    gmax = m;
+  }
+  barrier();
+
+  coopmat<float, gl_ScopeSubgroup, 8, TILE_HD, gl_MatrixUseAccumulator> sums[MAT_HEAD_TILES];
+  [[unroll]] for (uint ht = 0; ht < MAT_HEAD_TILES; ht++)
+    sums[ht] = coopmat<float, gl_ScopeSubgroup, 8, TILE_HD, gl_MatrixUseAccumulator>(0.0);
+  float lse = 0.0;
+
+  #define V_COOP_OFF(ckv) (batch_idx * p.batchStrideV + ((ckv) * KV_TILE) * kv_dim + kv_head * HEAD_DIM + hd_start)
+
+  #define STAGE_PSCALED(CK, SLOT) \
+    if (TOK_VALID(token_idx) && lane_valid) { \
+      const uint token_global_idx = batch_idx * N_TOKS + token_idx; \
+      const uint p_token_base_u32 = token_global_idx * kv_tiles * p.qHead * (KV_TILE / 2u); \
+      const uint gm_token_base = (token_global_idx * p.kvHead + kv_head) * kv_tiles * GQA_RATIO; \
+      const uint pscaled_base = (SLOT) * PSCALED_BUF_STRIDE + pscaled_base_sg; \
+      const float comp   = exp(group_max[gm_token_base + (CK) * GQA_RATIO + lane] - gmax); \
+      const uint p_row_u32 = p_token_base_u32 + (CK) * p.qHead * (KV_TILE / 2u) + head_global * (KV_TILE / 2u); \
+      float praw[KV_TILE]; \
+      [[unroll]] for (uint blk = 0; blk < KV_U32VEC4_BLOCKS; blk++) { \
+        const uvec4 packed = p_temp_u32vec4[(p_row_u32 + blk * 4u) / 4u]; \
+        const vec2 h0 = unpackHalf2x16(packed.x); \
+        const vec2 h1 = unpackHalf2x16(packed.y); \
+        const vec2 h2 = unpackHalf2x16(packed.z); \
+        const vec2 h3 = unpackHalf2x16(packed.w); \
+        praw[blk * 8u + 0u] = h0.x; praw[blk * 8u + 1u] = h0.y; \
+        praw[blk * 8u + 2u] = h1.x; praw[blk * 8u + 3u] = h1.y; \
+        praw[blk * 8u + 4u] = h2.x; praw[blk * 8u + 5u] = h2.y; \
+        praw[blk * 8u + 6u] = h3.x; praw[blk * 8u + 7u] = h3.y; \
+      } \
+      [[unroll]] for (uint kv_local = 0; kv_local < KV_TILE; kv_local++) { \
+        const float ps = praw[kv_local] * comp; \
+        slm_pscaled[pscaled_base + lane * KV_TILE + kv_local] = float16_t(ps); \
+        lse += ps; \
+      } \
+    }
+
+  #define DPAS_STEP(VB, SLOT) \
+    if (TOK_VALID(token_idx)) { \
+      const uint pscaled_base = (SLOT) * PSCALED_BUF_STRIDE + pscaled_base_sg; \
+      [[unroll]] for (uint ht = 0; ht < MAT_HEAD_TILES; ht++) { \
+        coopmat<float16_t, gl_ScopeSubgroup, 8, KV_TILE, gl_MatrixUseA> mat_p; \
+        coopMatLoad(mat_p, slm_pscaled, pscaled_base + ht * 8u * KV_TILE, KV_TILE, gl_CooperativeMatrixLayoutRowMajor); \
+        sums[ht] = coopMatMulAdd(mat_p, VB, sums[ht]); \
+      } \
+    }
+
+  coopmat<float16_t, gl_ScopeSubgroup, KV_TILE, TILE_HD, gl_MatrixUseB> mat_v[BK_COUNT];
+  const uint v_loop_count = (ck_end - ck_start + (BK_COUNT - 1u)) / BK_COUNT;
+  for (uint v_loop = 0; v_loop < v_loop_count; v_loop++) {
+    [[unroll]] for (uint dd = 0; dd < BK_COUNT; dd++) {
+      const uint ck = ck_start + v_loop * BK_COUNT + dd;
+      if (ck < ck_end) {
+        coopMatLoad(mat_v[dd], vbuf, V_COOP_OFF(ck), kv_dim, gl_CooperativeMatrixLayoutRowMajor);
+        STAGE_PSCALED(ck, dd)
+      }
+    }
+    [[unroll]] for (uint dd = 0; dd < BK_COUNT; dd++) {
+      const uint ck = ck_start + v_loop * BK_COUNT + dd;
+      if (ck < ck_end) {
+        DPAS_STEP(mat_v[dd], dd)
+      }
+    }
+  }
+
+  barrier();
+  if (TOK_VALID(token_idx)) {
+    [[unroll]] for (uint ht = 0; ht < MAT_HEAD_TILES; ht++)
+      coopMatStore(sums[ht], slm_out, out_base_sg + ht * 8u * TILE_HD, TILE_HD, gl_CooperativeMatrixLayoutRowMajor);
+    slm_out[SLM_LSE_OFFSET + lse_base_sg + lane] = lse;
+  }
+  barrier();
+
+  if (split == 0u && TOK_VALID(token_idx)) {
+    const uint o_dim = p.qHead * HEAD_DIM;
+    const uint o_token_base = batch_idx * p.batchStrideO + token_idx * o_dim;
+
+    float den = 0.0;
+    for (uint s = 0; s < KV_SPLIT; s++)
+      den += slm_out[SLM_LSE_OFFSET + (group_base + s) * WARPSIZE + lane];
+
+    float mul;
+    if (sinks_enabled) {
+      float sink_comp = exp(gmax - fp32_sink_coeff);
+      float den_temp  = den * sink_comp;
+      mul = den + 1.0 / sink_comp;
+      mul = 1.0 / mul;
+      sink_comp = sink_comp / (1.0 + den_temp);
+      mul = (gmax < fp32_sink_coeff) ? sink_comp : mul;
+    } else {
+      mul = (den > 0.0) ? (1.0 / den) : 0.0;
+    }
+
+    if (lane_valid) {
+      [[unroll]] for (uint hd_local = 0; hd_local < TILE_HD; hd_local++) {
+        float num = 0.0;
+        for (uint s = 0; s < KV_SPLIT; s++)
+          num += slm_out[(group_base + s) * WARPSIZE * TILE_HD + lane * TILE_HD + hd_local];
+        out_f32[o_token_base + head_global * HEAD_DIM + hd_start + hd_local] = num * mul;
+      }
+    }
+  }
+}

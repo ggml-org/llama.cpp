@@ -1,0 +1,220 @@
+#version 450
+
+#extension GL_EXT_control_flow_attributes : enable
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_KHR_memory_scope_semantics : enable
+#extension GL_KHR_cooperative_matrix : enable
+#extension GL_KHR_shader_subgroup_basic : enable
+#extension GL_KHR_shader_subgroup_arithmetic : enable
+#extension GL_EXT_shared_memory_block : enable
+
+layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
+
+layout (binding = 0) readonly buffer Q { float16_t qf16[]; };
+layout (binding = 1) readonly buffer K { float16_t kbuf[]; };
+layout (binding = 1) readonly buffer K_U32VEC4 { uvec4 kbuf_u32vec4[]; };
+layout (binding = 2) readonly buffer MASK { float16_t mstate[]; };
+layout (binding = 3) buffer P_FP16 { float16_t p_temp[]; };
+layout (binding = 3) buffer P_U32VEC4 { uvec4 p_temp_u32vec4[]; };
+layout (binding = 4) buffer GMAX { float group_max[]; };
+
+layout (push_constant) uniform parameter
+{
+  uint kvSeqLen;
+  uint activationLength;
+  uint qHead;
+  uint kvHead;
+  uint qkRatio;
+  uint qkSubGroups;
+  uint flag;
+  uint kvStride;
+  uint batchStrideQ;
+  uint batchStrideK;
+  uint batchStrideV;
+  uint batchStrideM;
+  uint batchStrideO;
+  float softMaxScale;
+} p;
+
+layout (constant_id = 0) const uint GROUPSIZE = 16;
+layout (constant_id = 1) const uint GQA_RATIO = 16;
+layout (constant_id = 2) const uint HEAD_DIM  = 128;
+layout (constant_id = 3) const uint WARPSIZE  = 16;
+layout (constant_id = 4) const uint KV_TILE   = 16;
+layout (constant_id = 5) const uint MTP       = 1;
+layout (constant_id = 6) const uint KV_TILE_EXACT = 0;
+
+#define N_TOKS (MTP + 1)
+#define NUM_CHUNKS N_TOKS
+#define MAT_P_COUNT (KV_TILE / 8)
+#define KV_U32VEC4_BLOCKS (KV_TILE / 8u)
+#define NUM_K_CHUNKS 4u
+#define D_STEPS (HEAD_DIM / 16u)
+#define K_CHUNK_D_STEPS (D_STEPS / NUM_K_CHUNKS)
+#define K_CHUNK_U32VEC4 (KV_TILE * K_CHUNK_D_STEPS * 2u)
+#define K_CHUNK_ELEMS (KV_TILE * K_CHUNK_D_STEPS * 16u)
+#define K_LANES_PER_ROW (K_CHUNK_D_STEPS * 2u)
+#define ROWS_PER_PASS (WARPSIZE / K_LANES_PER_ROW)
+#define KV_ROWGROUP_VALID(idx) (KV_TILE_EXACT != 0u || (idx) < KV_TILE)
+#define K_LOAD_ITERS ((KV_TILE / ROWS_PER_PASS + NUM_CHUNKS - 1u) / NUM_CHUNKS)
+
+#define K_PREFETCH(CHUNK_IDX) \
+  { \
+    const uint row_group   = lane / K_LANES_PER_ROW; \
+    const uint lane_in_row  = lane % K_LANES_PER_ROW; \
+    const uint d_step_local = lane_in_row / 2u; \
+    const uint half_      = lane_in_row % 2u; \
+    const uint d_global    = (CHUNK_IDX) * K_CHUNK_D_STEPS + d_step_local; \
+    [[unroll]] for (uint it = 0; it < K_LOAD_ITERS; it++) { \
+      const uint row_group_idx = chunk_idx + it * NUM_CHUNKS; \
+      const uint kv_local = row_group_idx * ROWS_PER_PASS + row_group; \
+      if (KV_ROWGROUP_VALID(kv_local)) { \
+        const uint k_row_off_u32v4 = (batch_idx * p.batchStrideK + (kv_base + kv_local) * kv_dim + kv_head * HEAD_DIM + d_global * 16u) / 8u + half_; \
+        k_prefetch[it] = kbuf_u32vec4[k_row_off_u32v4]; \
+      } \
+    } \
+  }
+
+#define K_STORE(DEST_SLOT) \
+  { \
+    const uint row_group   = lane / K_LANES_PER_ROW; \
+    const uint lane_in_row  = lane % K_LANES_PER_ROW; \
+    const uint d_step_local = lane_in_row / 2u; \
+    const uint half_      = lane_in_row % 2u; \
+    [[unroll]] for (uint it = 0; it < K_LOAD_ITERS; it++) { \
+      const uint row_group_idx = chunk_idx + it * NUM_CHUNKS; \
+      const uint kv_local = row_group_idx * ROWS_PER_PASS + row_group; \
+      if (KV_ROWGROUP_VALID(kv_local)) { \
+        slm_K_u32[(DEST_SLOT) * K_CHUNK_U32VEC4 + d_step_local * (KV_TILE * 2u) + kv_local * 2u + half_] = k_prefetch[it]; \
+      } \
+    } \
+  }
+
+const float NEG_INF = -3.402823466e+38f;
+
+shared slm_scores_block { float slm_scores[NUM_CHUNKS * MAT_P_COUNT * 8 * WARPSIZE]; } slm_scores_blk;
+#define slm_scores slm_scores_blk.slm_scores
+
+shared slm_K_u32_block { uvec4 slm_K_u32[K_CHUNK_U32VEC4 * 2u]; } slm_K_u32_blk;
+#define slm_K_u32 slm_K_u32_blk.slm_K_u32
+shared slm_K_f16_block { float16_t slm_K_f16[K_CHUNK_ELEMS * 2u]; } slm_K_f16_blk;
+#define slm_K_f16 slm_K_f16_blk.slm_K_f16
+
+void main() {
+  const uint kv_head       = gl_WorkGroupID.x;
+  const uint kv_tile       = gl_WorkGroupID.y;
+  const uint batch_idx      = gl_WorkGroupID.z;
+  const uint lane          = gl_SubgroupInvocationID;
+  const uint chunk_idx      = gl_SubgroupID;
+
+  const uint kv_len   = p.kvSeqLen;
+  const uint kv_tiles = (kv_len + KV_TILE - 1u) / KV_TILE;
+  const uint kv_base  = kv_tile * KV_TILE;
+  const uint kv_dim    = p.kvStride;
+  const uint mask_dim  = kv_len;
+  const uint q_base   = kv_head * GQA_RATIO;
+  const uint base      = min(q_base, p.qHead - WARPSIZE);
+  const uint col_offset = q_base - base;
+  const uint slm_base  = chunk_idx * MAT_P_COUNT * 8u * WARPSIZE;
+
+  const uint d_steps = D_STEPS;
+
+  uvec4 k_prefetch[K_LOAD_ITERS];
+  K_PREFETCH(0u)
+  K_STORE(0u)
+  barrier();
+
+  coopmat<float, gl_ScopeSubgroup, 8, WARPSIZE, gl_MatrixUseAccumulator> mat_c[MAT_P_COUNT];
+  [[unroll]] for (uint i = 0; i < MAT_P_COUNT; i++)
+    mat_c[i] = coopmat<float, gl_ScopeSubgroup, 8, WARPSIZE, gl_MatrixUseAccumulator>(0.0);
+
+  const uint q_token_base = batch_idx * p.batchStrideQ + chunk_idx * p.qHead * HEAD_DIM;
+  coopmat<float16_t, gl_ScopeSubgroup, 16, WARPSIZE, gl_MatrixUseB> mat_b_next;
+  coopMatLoad(mat_b_next, qf16, q_token_base + base * HEAD_DIM, HEAD_DIM, gl_CooperativeMatrixLayoutColumnMajor);
+
+  [[unroll]] for (uint k_chunk_idx = 0; k_chunk_idx < NUM_K_CHUNKS; k_chunk_idx++) {
+    const uint load_slot = k_chunk_idx % 2u;
+
+    if (k_chunk_idx + 1u < NUM_K_CHUNKS) {
+      K_PREFETCH(k_chunk_idx + 1u)
+    }
+
+    barrier();
+
+    [[unroll]] for (uint d_local = 0; d_local < K_CHUNK_D_STEPS; d_local++) {
+      const uint d = k_chunk_idx * K_CHUNK_D_STEPS + d_local;
+      coopmat<float16_t, gl_ScopeSubgroup, 8, 16, gl_MatrixUseA> mat_a[MAT_P_COUNT];
+      [[unroll]] for (uint cc = 0; cc < MAT_P_COUNT; cc++) {
+        const uint a_off = load_slot * K_CHUNK_ELEMS + d_local * (KV_TILE * 16u) + cc * 8u * 16u;
+        coopMatLoad(mat_a[cc], slm_K_f16, a_off, 16u, gl_CooperativeMatrixLayoutRowMajor);
+      }
+
+      coopmat<float16_t, gl_ScopeSubgroup, 16, WARPSIZE, gl_MatrixUseB> mat_b = mat_b_next;
+
+      if (d + 1u < d_steps) {
+        const uint b_off = q_token_base + base * HEAD_DIM + (d + 1u) * 16u;
+        coopMatLoad(mat_b_next, qf16, b_off, HEAD_DIM, gl_CooperativeMatrixLayoutColumnMajor);
+      }
+
+      [[unroll]] for (uint cc = 0; cc < MAT_P_COUNT; cc++) {
+        mat_c[cc] = coopMatMulAdd(mat_a[cc], mat_b, mat_c[cc]);
+      }
+    }
+
+    if (k_chunk_idx + 1u < NUM_K_CHUNKS) {
+      K_STORE((k_chunk_idx + 1u) % 2u)
+    }
+  }
+
+  barrier();
+
+  [[unroll]] for (uint cc = 0; cc < MAT_P_COUNT; cc++)
+    coopMatStore(mat_c[cc], slm_scores, slm_base + cc * 8u * WARPSIZE, WARPSIZE, gl_CooperativeMatrixLayoutRowMajor);
+
+  {
+    const bool lane_valid = lane >= col_offset && lane < col_offset + GQA_RATIO;
+    const uint head_local = lane - col_offset;
+    const uint head_global = base + lane;
+
+    const uint mask_base = batch_idx * p.batchStrideM + chunk_idx * mask_dim + kv_base;
+
+    const uint token_global_idx = batch_idx * N_TOKS + chunk_idx;
+    const uint p_row_base_u32 = (token_global_idx * kv_tiles + kv_tile) * (p.qHead / 2u) * KV_TILE;
+    const uint gm_base   = (token_global_idx * p.kvHead + kv_head) * kv_tiles * GQA_RATIO + kv_tile * GQA_RATIO;
+
+    float s_vals[MAT_P_COUNT * 8];
+    float local_max = uintBitsToFloat(0xFF800000u);
+    [[unroll]] for (uint cc = 0; cc < MAT_P_COUNT; cc++) {
+      [[unroll]] for (uint row = 0; row < 8; row++) {
+        const uint kv_local = cc * 8u + row;
+        const bool valid   = (kv_base + kv_local) < kv_len;
+        const float mask_val = valid ? float(mstate[mask_base + kv_local]) : NEG_INF;
+        float s = slm_scores[slm_base + cc * 8u * WARPSIZE + row * WARPSIZE + lane] * p.softMaxScale + mask_val;
+        if (!valid) s = NEG_INF;
+        s_vals[cc * 8u + row] = s;
+        local_max = max(local_max, s);
+      }
+    }
+
+    float pvals[MAT_P_COUNT * 8];
+    [[unroll]] for (uint kv_local = 0; kv_local < MAT_P_COUNT * 8u; kv_local++) {
+      float pval = exp(s_vals[kv_local] - local_max);
+      if (isnan(pval)) pval = 0.0;
+      pvals[kv_local] = pval;
+    }
+
+    if (lane_valid) {
+      const uint head_row_u32 = p_row_base_u32 + head_global * (KV_TILE / 2u);
+      [[unroll]] for (uint blk = 0; blk < KV_U32VEC4_BLOCKS; blk++) {
+        uvec4 packed;
+        packed.x = packHalf2x16(vec2(pvals[blk * 8u + 0u], pvals[blk * 8u + 1u]));
+        packed.y = packHalf2x16(vec2(pvals[blk * 8u + 2u], pvals[blk * 8u + 3u]));
+        packed.z = packHalf2x16(vec2(pvals[blk * 8u + 4u], pvals[blk * 8u + 5u]));
+        packed.w = packHalf2x16(vec2(pvals[blk * 8u + 6u], pvals[blk * 8u + 7u]));
+        p_temp_u32vec4[(head_row_u32 + blk * 4u) / 4u] = packed;
+      }
+      group_max[gm_base + head_local] = local_max;
+    }
+  }
+}
