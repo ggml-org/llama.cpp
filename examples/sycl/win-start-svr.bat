@@ -188,9 +188,9 @@ if not "%GGML_SYCL_DEVICE%"=="-1" (
   set "GPUS_SETTING=-sm %SPLIT_MODE%"
 )
 
-echo run cmd: ZES_ENABLE_SYSMAN=1 %BIN_FILE% -m "%MODEL_FILE%" -ngl %NGL% -s %SEED% -c %CONTEXT% %GPUS_SETTING% -lv %LOG_VERBOSE% --device %SYCL_DEVICES% --mmap --host 0.0.0.0 --port 8000
+echo run cmd: ZES_ENABLE_SYSMAN=1 %BIN_FILE% -m "%MODEL_FILE%" -ngl %NGL% -s %SEED% -c %CONTEXT% %GPUS_SETTING% -lv %LOG_VERBOSE% --device %SYCL_DEVICES% --load-mode auto --host 0.0.0.0 --port 8000
 set "ZES_ENABLE_SYSMAN=1"
-%BIN_FILE% -m "%MODEL_FILE%" -ngl %NGL% -s %SEED% -c %CONTEXT% %GPUS_SETTING% -lv %LOG_VERBOSE% --device "%SYCL_DEVICES%" --mmap --host 0.0.0.0 --port 8000
+%BIN_FILE% -m "%MODEL_FILE%" -ngl %NGL% -s %SEED% -c %CONTEXT% %GPUS_SETTING% -lv %LOG_VERBOSE% --device "%SYCL_DEVICES%" --load-mode auto --host 0.0.0.0 --port 8000
 
 endlocal
 

@@ -3,7 +3,7 @@
 // it, the picker still opens but explains why instead of firing searches
 // that would only fail with "Search failed".
 
-import ChatFormMentionPicker from '$lib/components/app/chat/ChatForm/ChatFormPickers/ChatFormMentionPicker.svelte';
+import ChatFormPickerMention from '$lib/components/app/chat/ChatForm/ChatFormPickers/ChatFormPickerMention.svelte';
 import { DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY } from '$lib/constants';
 import { BuiltInTool } from '$lib/enums';
 import { toolsStore } from '$lib/stores/tools.svelte';
@@ -25,7 +25,7 @@ function setBuiltinTools(defs: OpenAIToolDefinition[]) {
 }
 
 function renderPicker() {
-	return render(ChatFormMentionPicker, {
+	return render(ChatFormPickerMention, {
 		isOpen: true,
 		onClose: () => {},
 		onSelect: () => {},
@@ -39,7 +39,7 @@ afterEach(() => {
 	localStorage.removeItem(DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY);
 });
 
-describe('ChatFormMentionPicker file_glob_search gate', () => {
+describe('ChatFormPickerMention file_glob_search gate', () => {
 	it('explains that file search is unavailable when the server has no tools', async () => {
 		setBuiltinTools([]);
 		renderPicker();

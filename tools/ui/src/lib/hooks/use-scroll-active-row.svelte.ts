@@ -11,8 +11,8 @@ export interface UseScrollActiveRowOptions {
 	getContainer: () => HTMLDivElement | null;
 	getIndex: () => number;
 	getCount: () => number;
-	/** Attribute prefix, e.g. 'picker' for `[data-picker-index="0"]`. */
-	dataIndex: string;
+	/** Full data attribute marking the row, e.g. `data-picker-index`. */
+	dataAttr: string;
 }
 
 export function useScrollActiveRow(opts: UseScrollActiveRowOptions) {
@@ -41,9 +41,7 @@ export function useScrollActiveRow(opts: UseScrollActiveRowOptions) {
 
 			if (!container || index < 0 || index >= opts.getCount()) return;
 
-			const row = container.querySelector(
-				`[data-${opts.dataIndex}-index="${index}"]`
-			) as HTMLElement | null;
+			const row = container.querySelector(`[${opts.dataAttr}="${index}"]`) as HTMLElement | null;
 
 			row?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 		});

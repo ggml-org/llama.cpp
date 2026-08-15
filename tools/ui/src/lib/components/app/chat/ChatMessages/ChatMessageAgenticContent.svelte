@@ -8,21 +8,14 @@
 		MarkdownContent
 	} from '$lib/components/app';
 	import { AgenticSectionType, ChatMessageStatsView, ToolPermissionDecision } from '$lib/enums';
-	import {
-		agenticExecutingToolCallId,
-		agenticLastError,
-		agenticPendingContinueRequest,
-		agenticPendingPermissionRequest,
-		agenticResolveContinue,
-		agenticResolvePermission
-	} from '$lib/stores/agentic.svelte';
-	import { config } from '$lib/stores/settings.svelte';
+	import { agenticStore, settingsStore } from '$lib/stores';
 	import type {
+		AgenticSection,
 		ChatMessageAgenticTimings,
 		ChatMessageAgenticTurnStats,
 		DatabaseMessage
 	} from '$lib/types';
-	import { type AgenticSection, deriveAgenticSections } from '$lib/utils';
+	import { deriveAgenticSections } from '$lib/utils';
 
 	interface Props {
 		message: DatabaseMessage;
@@ -40,19 +33,25 @@
 
 	let expandedStates: Record<number, boolean> = $state({});
 
-	const showThoughtInProgress = $derived(Boolean(config().showThoughtInProgress));
-	const alwaysShowToolCallContent = $derived(Boolean(config().alwaysShowToolCallContent));
-	const showMessageStats = $derived(Boolean(config().showMessageStats));
-	const showAgenticTurnStats = $derived(showMessageStats && Boolean(config().showAgenticTurnStats));
+	const showThoughtInProgress = $derived(Boolean(settingsStore.config.showThoughtInProgress));
+	const alwaysShowToolCallContent = $derived(
+		Boolean(settingsStore.config.alwaysShowToolCallContent)
+	);
+	const showMessageStats = $derived(Boolean(settingsStore.config.showMessageStats));
+	const showAgenticTurnStats = $derived(
+		showMessageStats && Boolean(settingsStore.config.showAgenticTurnStats)
+	);
 
 	const hasReasoningError = $derived(
-		isLastAssistantMessage ? !!agenticLastError(message.convId) : false
+		isLastAssistantMessage ? !!agenticStore.lastError(message.convId) : false
 	);
 
 	let permissionDismissed = $state(false);
 
 	const pendingPermission = $derived(
-		isStreaming && isLastAssistantMessage ? agenticPendingPermissionRequest(message.convId) : null
+		isStreaming && isLastAssistantMessage
+			? agenticStore.pendingPermissionRequest(message.convId)
+			: null
 	);
 
 	let prevPendingRef: typeof pendingPermission = null;
@@ -68,13 +67,15 @@
 
 	function handlePermission(decision: ToolPermissionDecision) {
 		permissionDismissed = true;
-		agenticResolvePermission(message.convId, decision);
+		agenticStore.resolvePermission(message.convId, decision);
 	}
 
 	let continueDismissed = $state(false);
 
 	const pendingContinue = $derived(
-		isStreaming && isLastAssistantMessage ? agenticPendingContinueRequest(message.convId) : false
+		isStreaming && isLastAssistantMessage
+			? agenticStore.pendingContinueRequest(message.convId)
+			: false
 	);
 
 	let prevContinueRef = false;
@@ -90,13 +91,13 @@
 
 	function handleContinue(shouldContinue: boolean) {
 		continueDismissed = true;
-		agenticResolveContinue(message.convId, shouldContinue);
+		agenticStore.resolveContinue(message.convId, shouldContinue);
 	}
 
 	const sections = $derived(deriveAgenticSections(message, toolMessages, [], isStreaming));
 
 	const currentlyExecutingToolCallId = $derived(
-		isStreaming ? agenticExecutingToolCallId(message.convId) : null
+		isStreaming ? agenticStore.executingToolCallId(message.convId) : null
 	);
 
 	type TurnGroup = {

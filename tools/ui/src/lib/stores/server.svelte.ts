@@ -1,6 +1,6 @@
 import { ServerRole } from '$lib/enums';
 import { PropsService } from '$lib/services/props.service';
-import { ApiError } from '$lib/utils/api-fetch';
+import { ApiError } from '$lib/utils';
 
 const LOADING_RETRY_INTERVAL_MS = 1000;
 
@@ -169,13 +169,3 @@ class ServerStore {
 }
 
 export const serverStore = new ServerStore();
-
-export const serverProps = () => serverStore.props;
-export const serverLoading = () => serverStore.loading;
-export const serverError = () => serverStore.error;
-export const serverStatus = () => serverStore.status;
-export const serverRole = () => serverStore.role;
-export const defaultParams = () => serverStore.defaultParams;
-export const contextSize = () => serverStore.contextSize;
-export const isRouterMode = () => serverStore.isRouterMode;
-export const isModelMode = () => serverStore.isModelMode;

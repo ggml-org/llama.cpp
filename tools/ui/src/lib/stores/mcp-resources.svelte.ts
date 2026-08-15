@@ -13,8 +13,7 @@
 import {
 	BINARY_CONTENT_LABEL,
 	MCP_RESOURCE_ATTACHMENT_ID_PREFIX,
-	MCP_RESOURCE_CACHE_MAX_ENTRIES,
-	MCP_RESOURCE_CACHE_TTL_MS,
+	MCP_RESOURCE_CACHE,
 	NEWLINE,
 	RESOURCE_UNKNOWN_TYPE
 } from '$lib/constants';
@@ -251,7 +250,7 @@ class MCPResourceStore {
 	 */
 	cacheResourceContent(resource: MCPResourceInfo, content: MCPResourceContent[]): void {
 		// Enforce cache size limit
-		if (this._cachedResources.size >= MCP_RESOURCE_CACHE_MAX_ENTRIES) {
+		if (this._cachedResources.size >= MCP_RESOURCE_CACHE.MAX_ENTRIES) {
 			// Remove oldest entry
 			const oldestKey = this._cachedResources.keys().next().value;
 
@@ -280,7 +279,7 @@ class MCPResourceStore {
 		// Check if cache is still valid
 		const age = Date.now() - cached.fetchedAt.getTime();
 
-		if (age > MCP_RESOURCE_CACHE_TTL_MS && !cached.subscribed) {
+		if (age > MCP_RESOURCE_CACHE.TTL_MS && !cached.subscribed) {
 			// Cache expired and not subscribed, remove it
 			this._cachedResources.delete(uri);
 
@@ -609,11 +608,3 @@ class MCPResourceStore {
 }
 
 export const mcpResourceStore = new MCPResourceStore();
-
-// Export convenience functions
-export const mcpResources = () => mcpResourceStore.serverResources;
-export const mcpResourceAttachments = () => mcpResourceStore.attachments;
-export const mcpResourceAttachmentCount = () => mcpResourceStore.attachmentCount;
-export const mcpHasResourceAttachments = () => mcpResourceStore.hasAttachments;
-export const mcpTotalResourceCount = () => mcpResourceStore.totalResourceCount;
-export const mcpResourcesLoading = () => mcpResourceStore.isLoading;

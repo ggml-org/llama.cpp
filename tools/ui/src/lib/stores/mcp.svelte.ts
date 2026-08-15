@@ -26,14 +26,11 @@ import type { ListChangedHandlers } from '@modelcontextprotocol/sdk/types.js';
 import { browser } from '$app/environment';
 import { SETTINGS_KEYS } from '$lib/constants';
 import {
-	DEFAULT_CACHE_TTL_MS,
+	CACHE,
 	DEFAULT_MCP_CONFIG,
 	EXPECTED_THEMED_ICON_PAIR_COUNT,
 	MCP_ALLOWED_ICON_MIME_TYPES,
-	MCP_RECONNECT_ATTEMPT_TIMEOUT_MS,
-	MCP_RECONNECT_BACKOFF_MULTIPLIER,
-	MCP_RECONNECT_INITIAL_DELAY,
-	MCP_RECONNECT_MAX_DELAY,
+	MCP_RECONNECT,
 	MCP_SERVER_ID_PREFIX
 } from '$lib/constants';
 import {
@@ -45,9 +42,10 @@ import {
 	UrlProtocol
 } from '$lib/enums';
 import { MCPService } from '$lib/services/mcp.service';
+// direct imports between stores, not via the barrel, to avoid circular deps
 import { mcpResourceStore } from '$lib/stores/mcp-resources.svelte';
 import { serverStore } from '$lib/stores/server.svelte';
-import { config, settingsStore } from '$lib/stores/settings.svelte';
+import { settingsStore } from '$lib/stores/settings.svelte';
 import type {
 	ClientCapabilities,
 	GetPromptResult,
@@ -164,7 +162,8 @@ class MCPStore {
 	 */
 	#requestTimeoutMs(): number {
 		const seconds =
-			Number(config().mcpRequestTimeoutSeconds) || DEFAULT_MCP_CONFIG.requestTimeoutSeconds;
+			Number(settingsStore.config.mcpRequestTimeoutSeconds) ||
+			DEFAULT_MCP_CONFIG.requestTimeoutSeconds;
 
 		return Math.round(seconds * 1000);
 	}
@@ -313,7 +312,7 @@ class MCPStore {
 	}
 
 	get isEnabled(): boolean {
-		const mcpConfig = this.#buildMcpClientConfig(config());
+		const mcpConfig = this.#buildMcpClientConfig(settingsStore.config);
 
 		return (
 			mcpConfig !== null && mcpConfig !== undefined && Object.keys(mcpConfig.servers).length > 0
@@ -377,7 +376,7 @@ class MCPStore {
 	}
 
 	getServers(): MCPServerSettingsEntry[] {
-		return parseMcpServerSettings(config().mcpServers);
+		return parseMcpServerSettings(settingsStore.config.mcpServers);
 	}
 
 	/**
@@ -594,10 +593,12 @@ class MCPStore {
 	}
 
 	hasAvailableServers(): boolean {
-		return parseMcpServerSettings(config().mcpServers).some((s) => s.enabled && s.url.trim());
+		return parseMcpServerSettings(settingsStore.config.mcpServers).some(
+			(s) => s.enabled && s.url.trim()
+		);
 	}
 	hasEnabledServers(perChatOverrides?: McpServerOverride[]): boolean {
-		return Boolean(this.#buildMcpClientConfig(config(), perChatOverrides));
+		return Boolean(this.#buildMcpClientConfig(settingsStore.config, perChatOverrides));
 	}
 
 	getEnabledServersForConversation(
@@ -613,7 +614,7 @@ class MCPStore {
 			return false;
 		}
 
-		const mcpConfig = this.#buildMcpClientConfig(config(), perChatOverrides);
+		const mcpConfig = this.#buildMcpClientConfig(settingsStore.config, perChatOverrides);
 		const signature = mcpConfig ? JSON.stringify(mcpConfig) : null;
 
 		if (!signature) {
@@ -917,7 +918,7 @@ class MCPStore {
 		}
 
 		this.reconnectingServers.add(serverName);
-		let backoff = MCP_RECONNECT_INITIAL_DELAY;
+		let backoff = MCP_RECONNECT.INITIAL_DELAY;
 		// Flag set by the phase callback when a DISCONNECTED event fires while
 		// reconnectingServers still holds this server (see JSDoc above).
 		let needsReconnect = false;
@@ -936,10 +937,10 @@ class MCPStore {
 							() =>
 								reject(
 									new Error(
-										`Reconnect attempt timed out after ${MCP_RECONNECT_ATTEMPT_TIMEOUT_MS}ms`
+										`Reconnect attempt timed out after ${MCP_RECONNECT.ATTEMPT_TIMEOUT_MS}ms`
 									)
 								),
-							MCP_RECONNECT_ATTEMPT_TIMEOUT_MS
+							MCP_RECONNECT.ATTEMPT_TIMEOUT_MS
 						)
 					);
 
@@ -980,7 +981,7 @@ class MCPStore {
 					break;
 				} catch (error) {
 					console.warn(`[MCPStore][${serverName}] Reconnection failed:`, error);
-					backoff = Math.min(backoff * MCP_RECONNECT_BACKOFF_MULTIPLIER, MCP_RECONNECT_MAX_DELAY);
+					backoff = Math.min(backoff * MCP_RECONNECT.BACKOFF_MULTIPLIER, MCP_RECONNECT.MAX_DELAY);
 				}
 			}
 		} finally {
@@ -1737,7 +1738,7 @@ class MCPStore {
 				// Cache is valid for 5 minutes
 				const age = Date.now() - serverRes.lastFetched.getTime();
 
-				return age < DEFAULT_CACHE_TTL_MS;
+				return age < CACHE.DEFAULT_TTL_MS;
 			});
 
 			if (allServersCached) {
@@ -1981,20 +1982,3 @@ class MCPStore {
 }
 
 export const mcpStore = new MCPStore();
-
-export const mcpIsInitializing = () => mcpStore.isInitializing;
-export const mcpIsInitialized = () => mcpStore.isInitialized;
-export const mcpError = () => mcpStore.error;
-export const mcpIsEnabled = () => mcpStore.isEnabled;
-export const mcpIsProxyAvailable = () => mcpStore.isProxyAvailable;
-export const mcpAvailableTools = () => mcpStore.availableTools;
-export const mcpConnectedServerCount = () => mcpStore.connectedServerCount;
-export const mcpConnectedServerNames = () => mcpStore.connectedServerNames;
-export const mcpToolCount = () => mcpStore.toolCount;
-export const mcpServerInstructions = () => mcpStore.getServerInstructions();
-export const mcpHasServerInstructions = () => mcpStore.hasServerInstructions();
-
-// Resources exports
-export const mcpHasResourcesCapability = () => mcpStore.hasResourcesCapability();
-export const mcpServersWithResources = () => mcpStore.getServersWithResources();
-export const mcpResourceContext = () => mcpStore.getResourceContextForChat();

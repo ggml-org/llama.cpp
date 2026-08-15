@@ -3,6 +3,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import { ScrollArea } from '$lib/components/ui/scroll-area';
+	import { UI_DATA_ATTRS } from '$lib/constants';
 	import { useMarqueeSelection } from '$lib/hooks/use-marquee-selection.svelte';
 	import { SvelteSet } from 'svelte/reactivity';
 
@@ -138,7 +139,7 @@
 								class="cursor-pointer border-b transition-colors hover:bg-muted/50 {checked
 									? 'bg-muted/75'
 									: ''}"
-								data-conversation-row={conv.id}
+								{...{ [UI_DATA_ATTRS.CONVERSATION_ROW]: conv.id }}
 								onmousedown={(event) => marquee.rowMouseDown(conv.id, event)}
 								onclick={(event) => marquee.rowClick(conv.id, event.shiftKey)}
 							>

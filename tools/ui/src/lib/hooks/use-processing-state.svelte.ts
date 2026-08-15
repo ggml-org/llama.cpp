@@ -1,5 +1,5 @@
 import { STATS_UNITS } from '$lib/constants';
-import { activeProcessingState } from '$lib/stores/chat.svelte';
+import { chatStore } from '$lib/stores';
 import type { ApiProcessingState, LiveGenerationStats, LiveProcessingStats } from '$lib/types';
 
 export interface UseProcessingStateReturn {
@@ -42,8 +42,8 @@ export function useProcessingState(): UseProcessingStateReturn {
 			return lastKnownState;
 		}
 
-		// Read directly from the reactive state export
-		return activeProcessingState();
+		// Read directly from the reactive state
+		return chatStore.activeProcessingState;
 	});
 
 	$effect(() => {

@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { Button, type ButtonVariant } from '$lib/components/ui/button';
-	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
+	import { ICON_CLASS_DEFAULT } from '$lib/constants';
 	import type { Component } from 'svelte';
 
 	let {

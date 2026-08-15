@@ -3,10 +3,7 @@
 	import { page } from '$app/state';
 	import { DialogModelNotAvailable } from '$lib/components/app';
 	import { APP_NAME, URL_PARAMS } from '$lib/constants';
-	import { chatStore } from '$lib/stores/chat.svelte';
-	import { conversationsStore, isConversationsInitialized } from '$lib/stores/conversations.svelte';
-	import { modelOptions, modelsStore } from '$lib/stores/models.svelte';
-	import { isRouterMode } from '$lib/stores/server.svelte';
+	import { chatStore, conversationsStore, modelsStore, serverStore } from '$lib/stores';
 	import { onMount } from 'svelte';
 
 	let qParam = $derived(page.url.searchParams.get(URL_PARAMS.QUERY));
@@ -17,7 +14,7 @@
 	// Dialog state for model not available error
 	let showModelNotAvailable = $state(false);
 	let requestedModelName = $state('');
-	let availableModelNames = $derived(modelOptions().map((m) => m.model));
+	let availableModelNames = $derived(modelsStore.models.map((m) => m.model));
 
 	/**
 	 * Clear URL params after message is sent to prevent re-sending on refresh
@@ -45,7 +42,11 @@
 
 					// with ?load=true, start loading right away so the model is ready sooner;
 					// not awaited, so the UI stays usable during the load
-					if (loadParam === 'true' && isRouterMode() && !modelsStore.isModelLoaded(model.id)) {
+					if (
+						loadParam === 'true' &&
+						serverStore.isRouterMode &&
+						!modelsStore.isModelLoaded(model.id)
+					) {
 						modelsStore
 							.loadModel(model.id)
 							.catch((error) => console.error('Failed to load model:', error));
@@ -75,7 +76,7 @@
 	}
 
 	onMount(async () => {
-		if (!isConversationsInitialized()) {
+		if (!conversationsStore.isInitialized) {
 			await conversationsStore.initialize();
 		}
 

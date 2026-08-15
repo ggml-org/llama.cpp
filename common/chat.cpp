@@ -920,6 +920,10 @@ static std::string common_chat_template_direct_apply_impl(
         bool enabled = inp["preserve_reasoning"].get<bool>();
         jinja::caps_apply_preserve_reasoning(ctx, enabled);
     }
+    if (inp.contains("reasoning_effort") && inp["reasoning_effort"].is_string() && !inp["reasoning_effort"].empty()) {
+        std::string reasoning_effort = inp["reasoning_effort"].get<std::string>();
+        jinja::caps_apply_reasoning_effort(ctx, reasoning_effort);
+    }
 
     jinja::global_from_json(ctx, inp, inputs.mark_input);
 
@@ -3328,7 +3332,8 @@ static common_chat_params common_chat_params_init_muse_glimmer(const common_chat
         auto analysis = p.ref("analysis");
 
         auto recipient  = p.optional(p.literal(" to=user"));
-        auto final_msg  = p.rule("final", recipient + p.literal("<|message|>") + p.content(p.until("<|eot|>")));
+        auto final_msg  = p.rule("final", recipient + p.literal("<|message|>") +
+                                              p.content(p.until_one_of({ "<|eot|>", "<|eom|>" })));
 
         if (has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE) {
             auto string_value = p.ac(
@@ -3384,7 +3389,8 @@ static common_chat_params common_chat_params_init_muse_glimmer(const common_chat
             if (inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED) {
                 return p.zero_or_more(start + analysis) + start + tool_calls;
             }
-            return p.zero_or_more(start + analysis) + start + (tool_calls | final_msg);
+            auto trailing_calls = p.optional(p.literal("<|eom|>") + start + tool_calls);
+            return p.zero_or_more(start + analysis) + start + (tool_calls | (final_msg + trailing_calls));
         }
 
         return p.zero_or_more(start + analysis) + start + final_msg;
