@@ -32,7 +32,7 @@ void llama_model_kimi_k3::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_EXPERT_WEIGHTS_SCALE,       hparams.expert_weights_scale, false);
     ml.get_key(LLM_KV_EXPERT_WEIGHTS_NORM,        hparams.expert_weights_norm, false);
     ml.get_key(LLM_KV_EXPERT_GATING_FUNC,         hparams.expert_gating_func);
-    ml.get_key(LLM_KV_EXPERT_LATENT_LENGTH,       hparams.n_expert_latent);
+    ml.get_key(LLM_KV_EXPERT_LATENT_LENGTH,       hparams.n_expert_latent, false);
 
     ml.get_key(LLM_KV_ATTN_RES_BLOCK_SIZE,          hparams.attn_res_block_size);
     ml.get_key(LLM_KV_ACTIVATION_SITU_BETA,         hparams.situ_beta);
@@ -90,7 +90,7 @@ void llama_model_kimi_k3::load_arch_tensors(llama_model_loader &) {
             layer.ssm_beta = create_tensor(tn(LLM_TENSOR_SSM_BETA, "weight", i), {n_embd, n_head}, 0);
 
             // K3's A_log is a plain 1-D [n_head] tensor (kimi-linear's is padded)
-            layer.ssm_a = create_tensor(tn(LLM_TENSOR_SSM_A, i), {n_head}, TENSOR_NOT_REQUIRED);
+            layer.ssm_a = create_tensor(tn(LLM_TENSOR_SSM_A, i), {n_head}, 0);
             layer.ssm_dt_b = create_tensor(tn(LLM_TENSOR_SSM_DT, "bias", i), {d_inner}, 0);
 
             // K3 uses a single full-rank gate instead of kimi-linear's g_a/g_b pair
