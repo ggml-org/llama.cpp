@@ -1,5 +1,6 @@
 import { MessageRole, MessageType } from '$lib/enums';
 import { skillActivationExtra } from '$lib/services/skills-activation.service';
+import { SkillsService } from '$lib/services/skills.service';
 import { DatabaseService } from '$lib/services/database.service';
 import { conversationsStore } from '$lib/stores/conversations.svelte';
 import { skillActivationStore } from '$lib/stores/skill-activation.svelte';
@@ -383,5 +384,27 @@ describe('DurableSkillActivationStore (Task 4 durable seam)', () => {
 		expect(mockCreateMessageBranch).not.toHaveBeenCalled();
 		// Session-scoped: authorizes the remainder of this run only.
 		expect(skillActivationStore.isActivated('conv-resource', 'opaque-id-1')).toBe(true);
+	});
+});
+
+describe('Catalog preview reads are inert (Task 5)', () => {
+	function jsonResponse(body: unknown, status = 200): Response {
+		return new Response(JSON.stringify(body), {
+			headers: { 'content-type': 'application/json' },
+			status
+		});
+	}
+
+	it('a preview read through SkillsService never creates a message or an activation record', async () => {
+		vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(baseResult())));
+
+		const result = await SkillsService.read({ name: 'demo-skill' }, '/srv/project');
+
+		expect(result.kind).toBe('skill');
+		// The preview transport is inert: no durable record, no session
+		// activation, and no synthetic message pair for the slash path.
+		expect(skillActivationStore.isActivated('conv-preview', 'opaque-id-1')).toBe(false);
+		expect(mockCreateMessageBranch).not.toHaveBeenCalled();
+		expect(mockCreateMessageBranchPair).not.toHaveBeenCalled();
 	});
 });

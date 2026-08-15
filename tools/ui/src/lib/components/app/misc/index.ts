@@ -59,3 +59,12 @@ export { default as CodeBlockActions } from './CodeBlockActions.svelte';
  * `class` and `style` props and inherits color via `currentColor`.
  */
 export { default as Logo } from './Logo.svelte';
+
+/**
+ * **StandalonePageShell** - Shared shell for standalone (full-page) routes
+ *
+ * Renders the route icon, the visible page title, a mobile Close action, and
+ * the route body. The shell owns only presentation; route history and the
+ * close fallback stay in the consuming feature component.
+ */
+export { default as StandalonePageShell } from './StandalonePageShell.svelte';

@@ -1,5 +1,6 @@
 <script lang="ts">
-	import { AlertCircle, RefreshCw, X } from '@lucide/svelte';
+	import { fade } from 'svelte/transition';
+	import { ChevronDown, Circle, RefreshCw, X } from '@lucide/svelte';
 	import { MarkdownContent, SyntaxHighlightedCode } from '$lib/components/app';
 	import { ActionIcon } from '$lib/components/app/actions';
 	import { Alert, AlertDescription, AlertTitle } from '$lib/components/ui/alert';
@@ -38,6 +39,8 @@
 
 	// Each newly selected skill starts in the rendered markdown mode.
 	let mode = $state<'markdown' | 'raw'>('markdown');
+
+	let resourcesOpen = $state(true);
 
 	$effect(() => {
 		void entry.id;
@@ -83,11 +86,6 @@
 		retryToken += 1;
 	}
 
-	const metadata = $derived(result?.skill.metadata);
-	const metadataEntries = $derived(
-		metadata?.metadata ? Object.entries(metadata.metadata) : []
-	);
-
 	// Discovery is derived only from the successful base read; nothing else
 	// renders or requests resources for the preview.
 	const resourceGroups = $derived(
@@ -95,7 +93,7 @@
 	);
 </script>
 
-<div data-testid="skill-detail" class="flex h-full min-h-0 flex-col">
+<div data-testid="skill-detail" class="flex p-6 h-full min-h-0 flex-col" in:fade={{ duration: 200 }}>
 	<div data-testid="skill-detail-header" class="flex shrink-0 flex-col gap-4">
 		<div class="flex items-start justify-between gap-2">
 			<div class="min-w-0">
@@ -127,44 +125,24 @@
 		</div>
 
 		{#if result}
-			<div
-				data-testid="skill-detail-metadata"
-				class="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground"
-			>
-				<span>Scope: {result.skill.scope}</span>
-				<span>Provider: {result.skill.provider}</span>
-				{#if metadata?.description}
-					<span>Description: {metadata.description}</span>
-				{/if}
-				{#if metadata?.license}
-					<span>License: {metadata.license}</span>
-				{/if}
-				{#if metadata?.compatibility}
-					<span>Compatibility: {metadata.compatibility}</span>
-				{/if}
-				{#if metadata?.allowed_tools}
-					<span>Allowed tools: {metadata.allowed_tools}</span>
-				{/if}
-				{#each metadataEntries as [key, value] (key)}
-					<span>{key}: {value}</span>
-				{/each}
-				{#if result.resources.paths.length > 0}
-					<span>Resources: {result.resources.paths.length}</span>
-				{/if}
-			</div>
-
 			{#if resourceGroups.length > 0}
 				<Collapsible
-					open={true}
+					bind:open={resourcesOpen}
 					data-testid="skill-detail-resources"
 					class="rounded-md border"
 				>
 					<CollapsibleTrigger
-						class="flex w-full items-center justify-between px-3 py-2 text-sm font-medium"
+						class="flex cursor-pointer w-full items-center justify-between px-3 py-2 text-sm font-medium"
 					>
 						Resources ({result.resources.paths.length})
+						<ChevronDown
+							class="size-4 transition-transform duration-200 {resourcesOpen ? 'rotate-180' : ''}"
+							aria-hidden="true"
+						/>
 					</CollapsibleTrigger>
-					<CollapsibleContent class="px-3 pb-3">
+					<CollapsibleContent
+						class="overflow-hidden px-3 pb-3 data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down"
+					>
 						<div class="flex flex-col gap-3">
 							{#each resourceGroups as resourceGroup (resourceGroup.group)}
 								{@const ResourceIcon = resourceGroup.icon}
@@ -190,7 +168,7 @@
 		{/if}
 	</div>
 
-	<div data-testid="skill-detail-separator" class="border-t" aria-hidden="true"></div>
+	<div data-testid="skill-detail-separator" class="border-t mt-4" aria-hidden="true"></div>
 
 	<div data-testid="skill-detail-body" class="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto pt-4">
 		{#if readState === 'loading'}
@@ -202,7 +180,7 @@
 			<p class="text-sm text-muted-foreground">Loading skill content...</p>
 		{:else if readState === 'error'}
 			<Alert variant="destructive">
-				<AlertCircle class="h-4 w-4" />
+				<Circle class="h-4 w-4" />
 				<AlertTitle>Could not load the skill</AlertTitle>
 				<AlertDescription>{errorMessage}</AlertDescription>
 			</Alert>
@@ -215,11 +193,15 @@
 			</div>
 		{:else if result}
 			{#if mode === 'markdown'}
-				<div data-testid="skill-detail-markdown" class="min-w-0">
+				<div data-testid="skill-detail-markdown" class="min-w-0" in:fade={{ duration: 150 }}>
 					<MarkdownContent content={result.body_markdown} />
 				</div>
 			{:else}
-				<div data-testid="skill-detail-raw" class="min-w-0">
+				<div
+					data-testid="skill-detail-raw"
+					class="min-w-0 overflow-y-hidden"
+					in:fade={{ duration: 150 }}
+				>
 					<SyntaxHighlightedCode code={result.source} language={FileTypeText.MARKDOWN} />
 				</div>
 			{/if}

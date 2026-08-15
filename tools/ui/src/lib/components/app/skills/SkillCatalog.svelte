@@ -1,26 +1,29 @@
-/**
- * SkillCatalog - read-only presentation of the server's GET /skills catalog.
- *
- * Renders only contract-safe fields (name, description, scope, provider,
- * instruction facts, estimate state, timestamp, bounded resource count) plus
- * safe diagnostics. Opaque server XML is never rendered, the selected CWD is
- * never displayed, and unavailable (missing `--skills` route) stays distinct
- * from a request error and from a server-empty catalog. A zero budget keeps
- * the catalog listed while noting that no prompt envelope is packed.
- */
 <script lang="ts">
-	import { AlertCircle, BookOpen, CircleSlash, Clock, FileText, Layers, RefreshCw } from '@lucide/svelte';
+	import { Circle, BookOpen, CircleSlash, RefreshCw, X } from '@lucide/svelte';
+	import { browser } from '$app/environment';
+	import { goto } from '$app/navigation';
+	import { page } from '$app/state';
+	import { StandalonePageShell } from '$lib/components/app';
+	import { ActionIcon } from '$lib/components/app/actions';
+	import * as Resizable from '$lib/components/ui/resizable/index.js';
 	import { Alert, AlertDescription, AlertTitle } from '$lib/components/ui/alert';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
-	import { Card, CardContent, CardHeader, CardTitle } from '$lib/components/ui/card';
 	import * as Empty from '$lib/components/ui/empty';
 	import { Skeleton } from '$lib/components/ui/skeleton';
-	import { SETTINGS_KEYS, normalizeSkillBudget } from '$lib/constants';
+	import { ROUTES, SETTINGS_KEYS, normalizeSkillBudget } from '$lib/constants';
+	import { SkillsPackingService, buildSkillRunSnapshot, resolveSkillPackOptions } from '$lib/services';
+	import { modelsStore } from '$lib/stores/models.svelte';
+	import { serverStore } from '$lib/stores/server.svelte';
 	import { skillsStore } from '$lib/stores/skills.svelte';
 	import { settingsStore } from '$lib/stores/settings.svelte';
+	import { isMobile } from '$lib/stores';
 	import { ApiError } from '$lib/utils/api-fetch';
-	import type { SkillCatalogEntry, SkillDiagnostic } from '$lib/types';
+	import { isAbortError } from '$lib/utils';
+	import type { SkillCatalogEntry, SkillDiagnostic, SkillPackedCatalog } from '$lib/types';
+	import SkillBudgetStatus from './SkillBudgetStatus.svelte';
+	import SkillCatalogList from './SkillCatalogList.svelte';
+	import SkillDetail from './SkillDetail.svelte';
 
 	interface Props {
 		cwd: string | undefined;
@@ -28,6 +31,59 @@
 	}
 
 	let { cwd, onRetry }: Props = $props();
+
+	let previousRouteId = $state<string | null>(null);
+
+	$effect(() => {
+		const currentId = page.route.id;
+
+		return () => {
+			previousRouteId = currentId;
+		};
+	});
+
+	function handleClose() {
+		const prevIsSkills = previousRouteId === '/skills';
+
+		if (browser && window.history.length > 1 && !prevIsSkills) {
+			history.back();
+		} else {
+			goto(ROUTES.START);
+		}
+	}
+
+	// Route-local preview selection: the chosen entry and the last desktop
+	// split sizes live only in this component, never in a store or storage.
+	const mobile = $derived(isMobile.current);
+	let selectedEntry = $state<SkillCatalogEntry | null>(null);
+	const selectedId = $derived(selectedEntry?.id ?? null);
+	let sizes = $state<[number, number]>([55, 45]);
+
+	// Dismissed catalog diagnostics and budget status; reset on catalog reload.
+	let diagnosticsDismissed = $state(false);
+	let budgetDismissed = $state(false);
+
+	function handleSelect(entry: SkillCatalogEntry) {
+		selectedEntry = entry;
+	}
+
+	function closeDetail() {
+		selectedEntry = null;
+	}
+
+	function rememberPaneSize(index: 0 | 1, size: number) {
+		sizes = index === 0 ? [size, sizes[1]] : [sizes[0], size];
+	}
+
+	// A CWD change invalidates the selection: the old detail is cleared (and
+	// its in-flight read aborted when the detail unmounts). Dismissed state is
+	// also cleared so a fresh catalog starts with its notices visible.
+	$effect(() => {
+		void cwd;
+		selectedEntry = null;
+		diagnosticsDismissed = false;
+		budgetDismissed = false;
+	});
 
 	const budget = $derived(normalizeSkillBudget(settingsStore.config[SETTINGS_KEYS.MAX_SKILL_BUDGET]));
 	const slot = $derived(skillsStore.slotFor(cwd));
@@ -38,39 +94,95 @@
 	);
 	const catalog = $derived(slot?.catalog);
 	const isEmpty = $derived(status === 'ready' && (catalog?.skills.length ?? 0) === 0);
-	const isZeroBudget = $derived(status === 'ready' && !isEmpty && budget === 0);
 	const errorMessage = $derived(
 		error instanceof Error ? error.message : 'The catalog could not be loaded.'
 	);
 
-	function formatTimestamp(value: string | null): string {
-		if (!value) return '—';
+	// Only a selected ready desktop catalog is permitted to use the full
+	// application width; every other state keeps the centered reading column.
+	const isDesktopWorkspace = $derived(
+		status === 'ready' && selectedEntry !== null && !mobile
+	);
 
-		const date = new Date(value);
+	// Run-equivalent budget packing of the ready catalog, exactly as an
+	// agentic run would pack it: same frozen snapshot shape, same
+	// direct/estimated option resolution, same SkillsPackingService.pack. The
+	// previous call is aborted when any input (catalog, CWD, budget, selected
+	// model, router mode, loaded-model state) changes, so a stale result never
+	// renders. No tokenizer request, model selection, or model loading is
+	// ever done for presentation alone.
+	let packed = $state<SkillPackedCatalog | null>(null);
+	let packState = $state<'idle' | 'packing' | 'error'>('idle');
+	let packError = $state<unknown>(null);
 
-		if (Number.isNaN(date.getTime())) return '—';
+	const packErrorMessage = $derived(
+		packError instanceof Error ? packError.message : 'The Skills catalog could not be packed.'
+	);
 
-		return date.toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' });
-	}
+	$effect(() => {
+		void catalog;
+		diagnosticsDismissed = false;
+		budgetDismissed = false;
+	});
 
-	function resourceLabel(entry: SkillCatalogEntry): string {
-		return entry.resources.truncated ? `${entry.resources.count}+` : `${entry.resources.count}`;
-	}
+	$effect(() => {
+		if (status !== 'ready' || !catalog || catalog.skills.length === 0) {
+			packed = null;
+			packError = null;
+			packState = 'idle';
+
+			return;
+		}
+
+		const controller = new AbortController();
+		const snapshot = buildSkillRunSnapshot(cwd, catalog);
+		const effectiveModel = modelsStore.selectedModelName ?? modelsStore.models[0]?.model ?? '';
+		const packOptions = resolveSkillPackOptions(effectiveModel, serverStore.isRouterMode, (model) =>
+			modelsStore.isModelLoaded(model)
+		);
+
+		packed = null;
+		packError = null;
+		packState = 'packing';
+
+		SkillsPackingService.pack(snapshot, { budget, ...packOptions, signal: controller.signal })
+			.then((result) => {
+				// The direct tokenizer's abort surfaces as a plain fetch
+				// failure inside pack(), which resolves through the estimate
+				// fallback instead of rejecting: a superseded pack can
+				// therefore settle successfully after this controller was
+				// aborted. Never let a stale result overwrite the replacement
+				// pack's state.
+				if (controller.signal.aborted) return;
+
+				packed = result;
+				packState = 'idle';
+			})
+			.catch((packFailure) => {
+				if (isAbortError(packFailure)) return;
+
+				packError = packFailure;
+				packState = 'error';
+			});
+
+		return () => controller.abort();
+	});
 </script>
 
-<div class="mx-auto flex min-h-full w-full max-w-4xl flex-col gap-4 p-4 md:p-8">
-	<div class="flex items-center gap-2">
-		<BookOpen class="h-5 w-5 md:h-6 md:w-6" />
-
-		<h1 class="text-lg font-semibold md:text-2xl">Skills catalog</h1>
-	</div>
-
-	<p class="text-sm text-muted-foreground">
-		Budget:
-		{budget === 0 ? '0 (no Skills prompt is packed)' : `${budget.toLocaleString()} tokens`}
-	</p>
-
-	{#if status === 'loading'}
+<StandalonePageShell
+	icon={BookOpen}
+	title="Skills"
+	onClose={handleClose}
+	class="w-full"
+	headerClass="mx-auto w-full max-w-4xl"
+>
+	<div
+		data-testid="skills-catalog-content"
+		class="flex w-full flex-col gap-4 p-4 md:p-8"
+		class:mx-auto={!isDesktopWorkspace}
+		class:max-w-4xl={!isDesktopWorkspace}
+	>
+		{#if status === 'loading'}
 		<div aria-label="Loading skills catalog" class="flex flex-col gap-3">
 			<Skeleton class="h-24 w-full" />
 			<Skeleton class="h-24 w-full" />
@@ -89,7 +201,7 @@
 			</Alert>
 		{:else}
 			<Alert variant="destructive">
-				<AlertCircle class="h-4 w-4" />
+				<Circle class="h-4 w-4" />
 				<AlertTitle>Could not load the Skills catalog</AlertTitle>
 				<AlertDescription>{errorMessage}</AlertDescription>
 			</Alert>
@@ -118,80 +230,99 @@
 			</Empty.Root>
 		</div>
 	{:else}
-		{#if isZeroBudget}
-			<Alert>
-				<CircleSlash class="h-4 w-4" />
-				<AlertTitle>Budget is 0</AlertTitle>
-				<AlertDescription>
-					The catalog is listed here but no Skills prompt envelope is packed into agentic runs
-					and no Skills tools are registered.
-				</AlertDescription>
-			</Alert>
-		{/if}
+		{#if !selectedEntry && !diagnosticsDismissed && catalog && catalog.diagnostics.length > 0}
+			<div class="relative">
+				<div class="flex flex-col gap-2">
+					{#each catalog.diagnostics as diagnostic (diagnostic.code)}
+						<div class="flex items-start gap-2 text-sm">
+							<Badge
+								variant={diagnostic.severity === 'error' ? 'destructive' : 'outline'}
+								class="shrink-0 {diagnostic.severity === 'warning' ? 'border-amber-500/40 text-amber-700 dark:text-amber-400' : ''}"
+							>
+								{diagnostic.severity}
+							</Badge>
 
-		{#if catalog && catalog.diagnostics.length > 0}
-			<div class="flex flex-col gap-2">
-				{#each catalog.diagnostics as diagnostic (diagnostic.code)}
-					<div class="flex items-start gap-2 text-sm">
-						<Badge
-							variant={diagnostic.severity === 'error' ? 'destructive' : 'secondary'}
-							class="shrink-0"
-						>
-							{diagnostic.severity}
-						</Badge>
+							<span class="min-w-0 text-muted-foreground">
+								<code class="mr-1">{diagnostic.code}</code>
+								{diagnostic.name ?? diagnostic.scope ?? diagnostic.provider ?? ''}
+								{diagnostic.message}
+							</span>
+						</div>
+					{/each}
+				</div>
 
-						<span class="min-w-0 text-muted-foreground">
-							<code class="mr-1">{diagnostic.code}</code>
-							{diagnostic.name ?? diagnostic.scope ?? diagnostic.provider ?? ''}
-							{diagnostic.message}
-						</span>
-					</div>
-				{/each}
+				<ActionIcon
+					icon={X}
+					tooltip="Dismiss diagnostics"
+					class="absolute right-2 top-2"
+					onclick={() => (diagnosticsDismissed = true)}
+				/>
 			</div>
 		{/if}
 
-		<div class="flex flex-col gap-3">
-			{#each catalog?.skills ?? [] as entry (entry.id)}
-				<Card>
-					<CardHeader class="flex-row items-start justify-between gap-2 space-y-0">
-						<div class="flex flex-col gap-1">
-							<CardTitle class="text-base">{entry.name}</CardTitle>
+		{#if mobile}
+			{#if selectedEntry}
+				<SkillDetail entry={selectedEntry} {cwd} onClose={closeDetail} mobile />
+			{:else}
+			<SkillCatalogList
+				entries={catalog?.skills ?? []}
+				selectedId={selectedId}
+				open={selectedEntry !== null}
+				onSelect={handleSelect}
+			/>
+			{/if}
+		{:else}
+			{#if selectedEntry}
+				<Resizable.PaneGroup direction="horizontal" class="h-[60vh]! min-h-82">
+					<Resizable.Pane
+						defaultSize={sizes[0]}
+						minSize={35}
+						onResize={(size) => rememberPaneSize(0, size)}
+					>
+						<SkillCatalogList
+							entries={catalog?.skills ?? []}
+							selectedId={selectedId}
+							open={true}
+							onSelect={handleSelect}
+						/>
+					</Resizable.Pane>
 
-							<div class="flex flex-wrap items-center gap-1.5">
-								<Badge variant="secondary">{entry.scope}</Badge>
-								<Badge variant="outline">{entry.provider}</Badge>
-								<Badge variant={entry.instruction.tokens_estimated ? 'tertiary' : 'outline'}>
-									{entry.instruction.tokens_estimated ? 'estimated' : 'exact'}
-								</Badge>
-							</div>
-						</div>
-					</CardHeader>
+					<Resizable.Handle withHandle class="w-3 bg-muted after:bg-border after:w-px" />
 
-					<CardContent class="flex flex-col gap-3">
-						{#if entry.description}
-							<p class="text-sm text-muted-foreground">{entry.description}</p>
-						{/if}
-
-						<div class="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
-							<span class="inline-flex items-center gap-1">
-								<FileText class="h-3 w-3" />
-								{entry.instruction.tokens.toLocaleString()} tokens
-							</span>
-							<span>{entry.instruction.lines.toLocaleString()} lines</span>
-							<span>{entry.instruction.bytes.toLocaleString()} bytes</span>
-							<span class="inline-flex items-center gap-1">
-								<Clock class="h-3 w-3" />
-								Modified: {formatTimestamp(entry.instruction.modified_at)}
-							</span>
-							<span class="inline-flex items-center gap-1">
-								<Layers class="h-3 w-3" />
-								Resources:
-								{resourceLabel(entry)}
-							</span>
-						</div>
-					</CardContent>
-				</Card>
-			{/each}
-		</div>
+					<Resizable.Pane
+						defaultSize={sizes[1]}
+						minSize={30}
+						onResize={(size) => rememberPaneSize(1, size)}
+					>
+						<SkillDetail entry={selectedEntry} {cwd} onClose={closeDetail} mobile={false} />
+					</Resizable.Pane>
+				</Resizable.PaneGroup>
+			{:else}
+				<SkillCatalogList
+					entries={catalog?.skills ?? []}
+					selectedId={selectedId}
+					open={selectedEntry !== null}
+					onSelect={handleSelect}
+				/>
+			{/if}
+		{/if}
 	{/if}
-</div>
+	{#if !selectedEntry && !budgetDismissed}
+		{#if packState === 'packing'}
+			<p class="text-sm text-muted-foreground">Calculating the Skills prompt budget...</p>
+		{:else if packState === 'error'}
+			<Alert variant="destructive">
+				<Circle class="h-4 w-4" />
+				<AlertTitle>Could not pack the Skills catalog</AlertTitle>
+				<AlertDescription>{packErrorMessage}</AlertDescription>
+			</Alert>
+		{:else if packed}
+			<SkillBudgetStatus
+				{packed}
+				{budget}
+				onDismiss={() => (budgetDismissed = true)}
+			/>
+		{/if}
+	{/if}
+	</div>
+</StandalonePageShell>
