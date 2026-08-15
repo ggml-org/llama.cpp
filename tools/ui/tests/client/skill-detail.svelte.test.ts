@@ -1,8 +1,8 @@
 // Guards the resizable SKILL.md preview pane: rendered body vs raw source
 // separation, Markdown/Raw mode toggle, exact { name } request body with the
 // selected CWD header, no database message or activation record from a
-// preview read, base-result-only acceptance, structured metadata rendered
-// separately, collapsible resource discovery groups, and stale /
+// preview read, base-result-only acceptance, intentionally omitted
+// read-result metadata, collapsible resource discovery groups, and stale /
 // CWD-changed / retried / unmounted response suppression.
 
 import SkillDetail from '$lib/components/app/skills/SkillDetail.svelte';
@@ -159,12 +159,12 @@ describe('SkillDetail preview', () => {
 		const separator = screen.getByTestId('skill-detail-separator').element();
 
 		expect(header.textContent).toContain('demo-skill');
-		expect(header.contains(screen.getByTestId('skill-detail-metadata').element())).toBe(true);
+		// Read-result structured metadata is intentionally not rendered at all.
+		expect(screen.getByTestId('skill-detail-metadata').query()).toBeNull();
 		expect(header.contains(screen.getByTestId('skill-detail-resources').element())).toBe(true);
 		expect(header.contains(screen.getByRole('button', { name: 'Markdown' }).element())).toBe(true);
 		expect(header.contains(screen.getByRole('button', { name: 'Raw' }).element())).toBe(true);
 		expect(body.contains(screen.getByTestId('skill-detail-markdown').element())).toBe(true);
-		expect(body.contains(screen.getByTestId('skill-detail-metadata').element())).toBe(false);
 		expect(body.contains(screen.getByTestId('skill-detail-resources').element())).toBe(false);
 		expect(separator.classList.contains('border-t')).toBe(true);
 		expect(body.classList.contains('overflow-y-auto')).toBe(true);
@@ -412,7 +412,7 @@ describe('SkillDetail preview', () => {
 		expect(screen.getByTestId('skill-detail-markdown').query()).not.toBeNull();
 	});
 
-	it('renders structured metadata separately from the markdown body', async () => {
+	it('omits read-result structured metadata from the preview', async () => {
 		mockRead(() => jsonResponse(baseResult()));
 
 		const screen = await render(SkillDetail, {
@@ -421,14 +421,12 @@ describe('SkillDetail preview', () => {
 
 		await vi.waitFor(() => expect(bodyText()).toContain('Rendered heading'));
 
-		const metadata = screen.getByTestId('skill-detail-metadata').element();
-
-		expect(metadata.textContent).toContain('Structured metadata description');
-		expect(metadata.textContent).toContain('MIT');
-
-		const markdownPane = screen.getByTestId('skill-detail-markdown').element();
-
-		expect(markdownPane.textContent).not.toContain('Structured metadata description');
+		// Read-result metadata (description, license) is intentionally not
+		// rendered anywhere in the preview: no metadata block exists and the
+		// values never leak into the markdown body.
+		expect(screen.getByTestId('skill-detail-metadata').query()).toBeNull();
+		expect(bodyText()).not.toContain('Structured metadata description');
+		expect(bodyText()).not.toContain('MIT');
 	});
 
 	it('renders only populated convention groups in the required order', async () => {
