@@ -717,9 +717,6 @@ export const SETTING_CONFIG_INFO: Record<string, string> = Object.fromEntries(
 	getAllSettings().map((s) => [s.key, s.help])
 ) as Record<string, string>;
 
-/** Exit destination for the settings view (fallback when no referrer). */
-export const SETTINGS_FALLBACK_EXIT_ROUTE = ROUTES.START;
-
 /** Sidebar sections + field configs (as consumed by UI). */
 function toSettingsSection(section: SettingsSectionEntry): SettingsSection {
 	return {
