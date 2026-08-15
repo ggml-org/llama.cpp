@@ -66,9 +66,11 @@
 	class={[
 		'group relative flex w-full items-center gap-2 rounded-sm p-2 text-left text-sm transition focus:outline-none',
 		'cursor-pointer',
-		isSelected && 'bg-accent/50 text-accent-foreground',
+		isSelected && !isHighlighted && 'bg-accent/50',
 		isHighlighted && 'bg-accent',
-		!isSelected && !isHighlighted && 'hover:bg-muted',
+		(isSelected || isHighlighted) && 'text-accent-foreground',
+		'hover:bg-accent',
+		'focus:bg-accent',
 		isLoaded ? 'text-popover-foreground' : 'text-muted-foreground'
 	]}
 	role="option"
