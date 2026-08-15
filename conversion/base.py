@@ -79,23 +79,17 @@ class ModelType(IntEnum):
 
 def repack_mxfp4_blocks(packed: Tensor, scale: Tensor) -> np.ndarray:
     """
-    Repack 4-bit MX weights into ggml `block_mxfp4`. Lossless - this only moves
-    bits, it does not dequantize and requantize.
+    Repack 4-bit MX weights into ggml `block_mxfp4`. Lossless - only moves bits.
 
-    Source (compressed-tensors "mxfp4-pack-quantized", and DeepSeek-V4's
-    equivalent weight/scale pair):
-      packed  uint8 [rows, cols/2]  two 4-bit codes per byte, element 2i in the
-                                    low nibble and 2i+1 in the high nibble
+    Source (compressed-tensors "mxfp4-pack-quantized", also used by DeepSeek-V4):
+      packed  uint8 [rows, cols/2]  element 2i in the low nibble, 2i+1 in the high one
       scale   uint8 [rows, cols/32] one E8M0 biased exponent per 32-element group
 
-    Destination, per 32-element group: one scale byte then 16 code bytes, where
-    byte j holds element j in the low nibble and element j+16 in the high nibble
-    (see dequantize_row_mxfp4 in ggml-quants.c).
+    Destination, per group: one scale byte then 16 code bytes, where byte j holds
+    element j in the low nibble and element j+16 in the high one.
 
-    The 4-bit codes themselves need no remapping: both sides use sign in bit 3
-    and a magnitude index into (0, .5, 1, 1.5, 2, 3, 4, 6), which is exactly
-    ggml's kvalues_mxfp4 order. ggml's kvalues are doubled and its scale is
-    halved (GGML_E8M0_TO_FP32_HALF), so the represented value is unchanged.
+    The 4-bit codes need no remapping: both sides index into ggml's kvalues_mxfp4
+    order. ggml doubles the kvalues and halves the scale, so the value is the same.
     """
     p = packed.contiguous().view(torch.uint8)
     s = scale.contiguous().view(torch.uint8)

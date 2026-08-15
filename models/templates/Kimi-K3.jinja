@@ -61,9 +61,8 @@
 {%- endmacro -%}
 
 {%- macro json_sorted(value) -%}
-{#- Minja は tojson(sort_keys=true) を実装していない。K3 参照実装は
-    deep_sort_dict() の後に compact JSON 化するため、dictsort と再帰マクロで
-    同じバイト列を作る。配列の順序は保持し、mapping の各階層だけソートする。 -#}
+{#- tojson has no sort_keys, so sort each mapping level with dictsort to match the
+    reference implementation. Array order is kept as-is. -#}
 {%- if value is mapping -%}
 {{- '{' -}}
 {%- for key, item in value|dictsort -%}

@@ -19,10 +19,9 @@ class KimiK3Model(TextModel):
     """
     Kimi-K3 text model (KimiLinearForCausalLM under a `language_model.` prefix).
 
-    Shares the hybrid MLA + KDA skeleton with Kimi-Linear-48B but is not
-    loadable by that converter: K3 adds cross-layer attention residuals, a
-    latent MoE, the situ activation, an MLA output gate and a full-rank KDA
-    gate, none of which exist in the older architecture.
+    Shares the hybrid MLA + KDA skeleton with kimi-linear, but that converter
+    cannot load it: K3 adds cross-layer attention residuals, a latent MoE, the
+    situ activation, an MLA output gate and a full-rank KDA gate.
 
     The vision tower and mm_projector are skipped - text only for now.
     """
@@ -31,11 +30,9 @@ class KimiK3Model(TextModel):
 
     _experts: list[dict[str, Tensor]] | None = None
 
-    # `<x>_res_norm.weight` and `<x>_res_proj.weight` are only ever used as the
-    # elementwise product norm.weight * proj.weight (see _apply_attn_res in
-    # modeling_kimi_linear.py), so they are fused into a single [n_embd] vector
-    # at conversion time. They arrive as separate tensors, so buffer whichever
-    # comes first, tagged with which one it is.
+    # `<x>_res_norm.weight` and `<x>_res_proj.weight` are only used as their
+    # elementwise product, so they are fused into one [n_embd] vector here.
+    # they arrive apart, so buffer the first one and tag it with its kind.
     _res_parts: dict[str, tuple[str, Tensor]]
 
     # HF suffix -> (gguf tensor, per-layer?)
@@ -45,9 +42,8 @@ class KimiK3Model(TextModel):
         "output_attn_res":    (gguf.MODEL_TENSOR.OUTPUT_RES_SCORE, False),
     }
 
-    # compressed-tensors MXFP4. The `language_model.` prefix is still present here:
-    # self.model_tensors is keyed by the raw checkpoint names, get_tensors() strips
-    # the prefix only on the way out.
+    # compressed-tensors MXFP4. the `language_model.` prefix is still there, as
+    # self.model_tensors is keyed by the raw checkpoint names
     _MXFP4_FORMAT = "mxfp4-pack-quantized"
     _MXFP4_EXPERT_RE = re.compile(
         r"^(?:language_model\.)?model\.layers\.(\d+)"
@@ -64,20 +60,14 @@ class KimiK3Model(TextModel):
         self._res_parts = {}
 
     def set_vocab(self):
-        # K3 ships the same TikToken vocab as K2: its pre-tokenizer hashes to
-        # 81212dc7... which base.py already maps to "kimi-k2", so no new
-        # pre-tokenizer registration is needed.
-        #
-        # Borrowed rather than inherited: K3 shares kimi-linear's vocab handling
-        # but none of its tensor layout. The method only touches TextModel
-        # members, so an unrelated TextModel is a valid receiver.
+        # K3 has the same TikToken vocab as K2, so kimi-linear's vocab handling works.
+        # borrowed, not inherited: the method only touches TextModel members, and K3
+        # shares none of kimi-linear's tensor layout.
         KimiLinearModel.set_vocab(self)  # ty: ignore[invalid-argument-type]
 
-        # ...but K2's converter ends by forcing eos to the tokenizer's own
-        # eos_id, which for K3 is 163585 = [EOS], the *document* terminator.
-        # K3's config and generation_config both say 163586 = <|end_of_msg|>,
-        # the chat turn terminator. Keeping [EOS] means generation never stops
-        # at the end of an assistant turn. Restore the configured value.
+        # ...but that forces eos to the tokenizer's eos_id, which is [EOS], the
+        # document terminator. K3's config says <|end_of_msg|>, the turn terminator;
+        # with [EOS] the generation never stops at the end of a turn.
         if (eos := self.hparams.get("eos_token_id")) is not None:
             logger.info(f"restoring configured eos_token_id {eos} (kimi-linear forces the tokenizer's)")
             self.gguf_writer.add_eos_token_id(eos)
@@ -95,8 +85,8 @@ class KimiK3Model(TextModel):
         if not self._is_mxfp4_packed():
             return super().dequant_model()
 
-        # Skipping base.py's dequant is only safe because the experts are the
-        # *only* quantized tensors. Verify that rather than assume it.
+        # skipping base.py's dequant is only safe if the experts are the only
+        # quantized tensors, so check it
         stray = [n for n in self.model_tensors
                  if n.endswith(".weight_packed") and not self._MXFP4_EXPERT_RE.match(n)]
         if stray:
@@ -109,11 +99,9 @@ class KimiK3Model(TextModel):
         """
         One stacked [n_expert, rows, cols] MXFP4 tensor, built lazily.
 
-        Laziness is not an optimization here, it is the difference between
-        working and not: gguf_writer holds every added tensor until the final
-        write, so materializing this eagerly (as the DeepSeek-V4 and NVFP4 paths
-        do) would keep all ~1.38 TB of experts resident. Deferring it means only
-        the tensor currently being written is in memory, one expert at a time.
+        gguf_writer holds every added tensor until the final write, so building
+        this eagerly (like the DeepSeek-V4 path does) keeps all ~1.38 TB of
+        experts in memory. lazy means only the tensor being written is resident.
         """
         # meta shapes, so this does not read any weights
         rows, packed_cols = loaders[0][0]().shape
@@ -129,9 +117,8 @@ class KimiK3Model(TextModel):
                 )
             return out
 
-        # loaders goes through args rather than the closure so that `func` matches
-        # LazyBase's single-argument shape; _recurse_apply passes plain callables
-        # through untouched.
+        # loaders goes through args, not the closure, so that `func` matches
+        # LazyBase's single-argument shape
         return gguf.LazyNumpyTensor(
             meta=gguf.LazyNumpyTensor.meta_with_dtype_and_shape(np.uint8, byte_shape),
             args=(loaders,),
@@ -183,9 +170,8 @@ class KimiK3Model(TextModel):
             del self.model_tensors[name]
 
     def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
-        # Deliberately not a generator: base.py builds
-        # chain(generate_extra_tensors(), get_tensors()), so the tensors consumed
-        # here must be removed from model_tensors before get_tensors() starts.
+        # not a generator on purpose: base.py chains this with get_tensors(), so the
+        # tensors used here must be removed from model_tensors before that starts
         if self._is_mxfp4_packed():
             self._write_mxfp4_experts()
         return ()
@@ -207,9 +193,8 @@ class KimiK3Model(TextModel):
 
         linear_attn_config = self.hparams["linear_attn_config"]
 
-        # layer types: n_head_kv == 0 marks a KDA (recurrent) layer.
-        # KimiLinearConfig.is_kda_layer uses (layer_idx + 1) in kda_layers, so
-        # the lists are 1-indexed - an off-by-one here silently produces garbage.
+        # n_head_kv == 0 marks a KDA (recurrent) layer. the layer lists are 1-indexed,
+        # as KimiLinearConfig.is_kda_layer uses (layer_idx + 1)
         full_attn_layers = linear_attn_config["full_attn_layers"]
         n_kv_heads = [
             self.hparams["num_key_value_heads"] if (il + 1) in full_attn_layers else 0
@@ -278,9 +263,7 @@ class KimiK3Model(TextModel):
         """
         Pair <x>_res_norm.weight with <x>_res_proj.weight and emit their product.
 
-        proj is [1, n_embd]; norm is [n_embd]. _apply_attn_res only ever uses
-        norm.weight * proj.weight.squeeze(0), so one vector is enough.
-        Returns None if this is not a res tensor, [] if buffered pending its pair.
+        Returns None if this is not a res tensor, [] if buffered until its pair.
         """
         for prefix, (tensor_id, per_layer) in self._RES_FUSIONS.items():
             for kind in ("norm", "proj"):
@@ -312,7 +295,7 @@ class KimiK3Model(TextModel):
 
         # --- KDA conv1d: HF [d_inner, 1, d_conv] -> ggml ne [d_conv, 1, d_inner, 1] ---
         # GGUF reverses the numpy shape on write, so target numpy (1, d_inner, 1, d_conv).
-        # Both layouts have conv_step varying fastest, so this is a pure reshape.
+        # conv_step varies fastest in both layouts, so this is a pure reshape.
         if name.endswith((".q_conv1d.weight", ".k_conv1d.weight", ".v_conv1d.weight")):
             if data_torch.ndim == 3:      # [d_inner, 1, d_conv]
                 d_inner, _, d_conv = data_torch.shape

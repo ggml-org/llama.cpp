@@ -4463,7 +4463,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
     }
 
     // Kimi-K3 tests - custom parser
-    // Unique feature: XTML-ish tags built from <|open|>/<|close|>/<|sep|>, and a
+    // Unique feature: XTML tags built from <|open|>/<|close|>/<|sep|>, and a
     // generation prompt that leaves the think section already open.
     {
         auto tst = peg_tester("models/templates/Kimi-K3.jinja", detailed_debug);
@@ -4474,8 +4474,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .expect(message_assist)
             .run();
 
-        // Reasoning with NO opening tag - the generation prompt already opened
-        // it. This is the case that silently loses reasoning if unhandled.
+        // Reasoning with no opening tag - the generation prompt already opened it
         tst.test("I'm thinking about this<|close|>think<|sep|>"
                  "<|open|>response<|sep|>Hello, world!\nWhat's up?<|close|>response<|sep|>"
                  "<|close|>message<|sep|>")
@@ -4520,8 +4519,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
                                       R"({"arg1":1})", ""))
             .run();
 
-        // Multiple typed arguments: the type lives in an attribute, and the
-        // value must come back as a JSON number, not the string "2".
+        // Multiple typed arguments: values must come back as JSON numbers, not strings
         tst.test("<|open|>response<|sep|><|close|>response<|sep|>"
                  "<|open|>tools<|sep|>"
                  "<|open|>call tool=\"special_function_with_opt\" index=\"1\"<|sep|>"

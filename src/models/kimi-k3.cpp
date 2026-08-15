@@ -2,11 +2,8 @@
 #include "llama-memory-recurrent.h"
 
 //
-// Kimi-K3 text model.
-//
-// Hybrid KDA (linear) + MLA (full) attention, as in Kimi-Linear-48B, plus five
-// things that architecture does not have:
-//
+// Kimi-K3 text model: hybrid KDA (linear) + MLA (full) attention, as in kimi-linear.
+// Parts that kimi-linear does not have:
 //   1. cross-layer residual attention  (attn_res_block_size)
 //   2. latent MoE                      (routed experts run at n_expert_latent)
 //   3. situ activation                 (replaces SwiGLU everywhere)
@@ -92,7 +89,7 @@ void llama_model_kimi_k3::load_arch_tensors(llama_model_loader &) {
             layer.ssm_f_b  = create_tensor(tn(LLM_TENSOR_SSM_F_B,  "weight", i), {head_dim, d_inner}, 0);
             layer.ssm_beta = create_tensor(tn(LLM_TENSOR_SSM_BETA, "weight", i), {n_embd, n_head}, 0);
 
-            // K3's A_log is a plain 1-D [n_head] parameter (kimi-linear's is padded);
+            // K3's A_log is a plain 1-D [n_head] tensor (kimi-linear's is padded)
             layer.ssm_a = create_tensor(tn(LLM_TENSOR_SSM_A, i), {n_head}, TENSOR_NOT_REQUIRED);
             layer.ssm_dt_b = create_tensor(tn(LLM_TENSOR_SSM_DT, "bias", i), {d_inner}, 0);
 
@@ -167,11 +164,8 @@ std::unique_ptr<llm_graph_context> llama_model_kimi_k3::build_arch_graph(const l
     return std::make_unique<graph>(*this, params);
 }
 
-//
-// situ activation:
-//   situ(gate, up) = beta*tanh(gate/beta)*sigmoid(gate) * linear_beta*tanh(up/linear_beta)
-// linear_beta <= 0 disables the transform on the up branch.
-//
+// situ(gate, up) = beta*tanh(gate/beta)*sigmoid(gate) * linear_beta*tanh(up/linear_beta)
+// linear_beta <= 0 disables the transform on the up branch
 static ggml_tensor * kimi_k3_situ(ggml_context * ctx0, ggml_tensor * gate, ggml_tensor * up,
                                   float beta, float linear_beta) {
     ggml_tensor * a = ggml_scale(ctx0, ggml_tanh(ctx0, ggml_scale(ctx0, gate, 1.0f/beta)), beta);
@@ -215,27 +209,18 @@ ggml_tensor * llama_model_kimi_k3::graph::res_mix(ggml_tensor * cur, ggml_tensor
 
     const float eps = hparams.f_norm_rms_eps;
 
-    // `src` holds the block-residual checkpoints, one [n_embd, n_token] slab
-    // per checkpoint, packed as [n_embd, n_ckpt, n_token] so that:
-    //   - ggml_rms_norm reduces over ne0 = n_embd (scores all slabs at once)
-    //   - ggml_dsv4_hc_pre reduces over ne1 = n_ckpt (the weighted sum)
-    // Both requirements are satisfied by the same layout, which is why this
-    // needs no transpose of the (large) stack.
-    // Each checkpoint is kept as its own [n_embd, 1, n_token] tensor and the
-    // [n_embd, n_ckpt, n_token] stack is materialised with ggml_concat only when
-    // the set changes (8 times per forward pass for the real model).
+    // the checkpoint stack is packed as [n_embd, n_ckpt, n_tokens]: rms_norm reduces over
+    // ne0 = n_embd and dsv4_hc_pre reduces over ne1 = n_ckpt, so no transpose is needed
     ggml_tensor * src = res_stack(n_embd, n_tokens);   // [n_embd, n_ckpt, n_tokens]
 
-    // Scores for the banked checkpoints. One rms_norm covers all of them because
-    // ne0 is n_embd. NOTE: the scores use the *normalized* values, but the weighted
-    // sum below uses the *raw* ones - mirroring _apply_attn_res.
+    // one rms_norm scores all checkpoints at once
+    // note: the scores use the normalized values, but the sum below uses the raw ones
     ggml_tensor * sc_src = ggml_rms_norm(ctx0, src, eps);
     sc_src = ggml_mul(ctx0, sc_src, score_w);
     sc_src = ggml_sum_rows(ctx0, sc_src);                          // [1, n_ckpt, n_tokens]
     sc_src = ggml_reshape_2d(ctx0, sc_src, n_ckpt, n_tokens);
 
-    // The current residual stream is scored separately and kept out of the stack,
-    // so the stack stays append-only.
+    // the current residual stream is scored apart, so the stack stays append-only
     ggml_tensor * sc_cur = ggml_rms_norm(ctx0, cur, eps);
     sc_cur = ggml_mul(ctx0, sc_cur, score_w);
     sc_cur = ggml_sum_rows(ctx0, sc_cur);                          // [1, n_tokens]
@@ -244,8 +229,7 @@ ggml_tensor * llama_model_kimi_k3::graph::res_mix(ggml_tensor * cur, ggml_tensor
     ggml_tensor * probs  = ggml_soft_max(ctx0, scores);            // over ne0 = n_ckpt+1
     cb(probs, "res_probs", il);
 
-    // Split the convex combination: hc_pre reduces over ne1 for the stacked part,
-    // a plain broadcast-multiply handles the current stream.
+    // split the sum: hc_pre handles the stack, a broadcast-multiply the current stream
     ggml_tensor * p_src = ggml_cont(ctx0, ggml_view_2d(ctx0, probs, n_ckpt, n_tokens, probs->nb[1], 0));
     ggml_tensor * p_cur = ggml_cont(ctx0, ggml_view_2d(ctx0, probs, 1, n_tokens, probs->nb[1],
                                                        probs->nb[0] * n_ckpt));
@@ -300,8 +284,8 @@ llama_model_kimi_k3::graph::graph(const llama_model & model, const llm_graph_par
     for (int il = 0; il < n_layer; ++il) {
         const auto & layer = model.layers[il];
 
-        // `prefix_sum` is the residual stream. On checkpoint layers it is banked
-        // into res_stack and restarts from the attention output alone.
+        // the residual stream, banked on checkpoint layers and then restarted
+        // from the attention output alone
         ggml_tensor * prefix_sum = inpL;
 
         cur = use_attn_res ? res_mix(prefix_sum, layer.attn_res_score, n_embd, n_tokens, il)
@@ -377,8 +361,7 @@ llama_model_kimi_k3::graph::graph(const llama_model & model, const llm_graph_par
 // KDA layer
 //
 
-// Causal conv1d over one of Q/K/V. `qkv` selects which third of the conv state to use.
-// Polled rather than blocking is not a concern here; this mirrors kimi-linear's helper.
+// causal conv1d over one of Q/K/V. `qkv` selects which third of the conv state to use
 static ggml_tensor * kimi_k3_conv1d(ggml_cgraph * gf, ggml_context * ctx0,
                                     ggml_tensor * conv_states_all, ggml_tensor * conv_state_all,
                                     int64_t qkv, ggml_tensor * x, ggml_tensor * proj_w, ggml_tensor * conv_w,
@@ -432,14 +415,10 @@ ggml_tensor * llama_model_kimi_k3::graph::build_kda_layer(
     cb(Kcur, "kda_k_conv", il);
     cb(Vcur, "kda_v_conv", il);
 
-    // The decay gate has two forms, selected by linear_attn_config.gate_lower_bound
-    // (fla/ops/kda/gate.py). `lower_bound` is NOT a clamp - when set it swaps the
-    // activation entirely:
-    //
+    // gate_lower_bound is not a clamp - when set, it swaps the decay gate activation:
     //   unset (kimi-linear):  g = -exp(A_log) * softplus(f_b(f_a(x)) + dt_bias)
     //   set   (K3, -5.0):     g = lower_bound * sigmoid(exp(A_log) * (f_b(f_a(x)) + dt_bias))
-    //
-    // ssm_a holds -exp(A_log) (folded at conversion time), so exp(A_log) == -ssm_a.
+    // ssm_a holds -exp(A_log) (folded at conversion time), so exp(A_log) == -ssm_a
     ggml_tensor * f_a = ggml_mul_mat(ctx0, layer.ssm_f_a, cur);
     ggml_tensor * g1  = ggml_mul_mat(ctx0, layer.ssm_f_b, f_a);
     g1 = ggml_add(ctx0, g1, layer.ssm_dt_b);
@@ -602,14 +581,13 @@ ggml_tensor * llama_model_kimi_k3::graph::build_latent_moe(
         ? ggml_mul_mat(ctx0, layer.ffn_routed_down, cur)
         : cur;
 
-    // The router scores the FULL-WIDTH input while the experts consume the latent
-    // one, so the logits are computed here and handed to build_moe_ffn via
-    // `probs_in` (which substitutes for the gate_inp matmul).
+    // the router scores the full-width input while the experts take the latent one,
+    // so the logits are computed here and passed to build_moe_ffn
     ggml_tensor * logits = ggml_mul_mat(ctx0, layer.ffn_gate_inp, identity);
     cb(logits, "ffn_moe_logits", il);
 
     ggml_tensor * moe_out = build_moe_ffn(routed_in,
-        nullptr, // gate_inp unused: logits supplied below
+        nullptr, // gate_inp unused: the logits above are passed instead
         layer.ffn_up_exps,
         layer.ffn_gate_exps,
         layer.ffn_down_exps,

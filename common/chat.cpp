@@ -2321,11 +2321,11 @@ static common_chat_params common_chat_params_init_deepseek_v3_2(const common_cha
     return data;
 }
 
-// Kimi K3 - XTML-ish tagged format from the model's own template:
+// Kimi K3 - XTML tagged format, built by open_tag/close_tag macros:
 //   open_tag(t, attrs) = <|open|>t k="v"...<|sep|>   close_tag(t) = <|close|>t<|sep|>
 //   assistant := [think] [response] [tools] close_tag(message) <|end_of_msg|>
-// Note the generation prompt already opens the think (or response) section, so
-// the section opener is optional here - same situation as Kimi K2 Thinking.
+// the generation prompt already opens the think (or response) section, so the
+// section opener is optional here - same as Kimi K2 Thinking
 static common_chat_params common_chat_params_init_kimi_k3(const common_chat_template &          tmpl,
                                                           const autoparser::generation_params & inputs) {
     common_chat_params data;
@@ -2350,9 +2350,8 @@ static common_chat_params common_chat_params_init_kimi_k3(const common_chat_temp
     const std::string MSG_END     = "<|close|>message<|sep|>";
     const std::string EOM_TOKEN   = "<|end_of_msg|>";
 
-    // The four markers are the only special tokens; tag names ("think",
-    // "response", "message") are ordinary tokens and must NOT be preserved,
-    // or ordinary prose containing those words would be mangled.
+    // only the markers are special tokens. tag names ("think", "response", ...) are
+    // normal tokens and must not be preserved, or prose with those words is broken
     data.preserved_tokens = {
         "<|open|>",
         "<|close|>",
@@ -2363,12 +2362,9 @@ static common_chat_params common_chat_params_init_kimi_k3(const common_chat_temp
     data.thinking_start_tag = THINK_START;
     data.thinking_end_tags  = { THINK_END };
 
-    // Per-role message-start delimiters. User/assistant messages carry only the
-    // role attribute, so their full opener (through <|sep|>) is used. System and
-    // tool messages continue with more attributes (type=/tool=/index=), so those
-    // delimiters stop after the role's closing quote - verified against the K3
-    // tokenizer that the quote is always its own token and never merges with the
-    // following attribute text, keeping the token-level prefix match exact.
+    // per-role message-start delimiters. user/assistant messages only have the role
+    // attribute, so the full opener is used. system and tool messages have more
+    // attributes, so those delimiters stop after the closing quote of the role
     data.message_delimiters = {
         { COMMON_CHAT_ROLE_ASSISTANT, "<|open|>message role=\"assistant\"<|sep|>" },
         { COMMON_CHAT_ROLE_USER,      "<|open|>message role=\"user\"<|sep|>"      },
@@ -2396,27 +2392,23 @@ static common_chat_params common_chat_params_init_kimi_k3(const common_chat_temp
 
         auto start = p.optional(p.literal(MSG_START));
 
-        // The think section is ALWAYS consumed, even when reasoning extraction
-        // is off: K3's generation prompt ends with open_tag('think'), so the
-        // opener is present on every request and would otherwise leak into
-        // content. With extraction off the thoughts fall into content, matching
-        // how the other reasoning models behave.
-        // Reasoning stops at its own closer, or at the response opener if the
-        // model skips the closer entirely (seen on short answers).
+        // the think section is always consumed, even with reasoning extraction off:
+        // the generation prompt ends with open_tag('think'), so it is always present.
+        // reasoning stops at its own closer, or at the response opener if the model
+        // skips the closer
         auto think_body = extract_reasoning ? p.reasoning(p.until_one_of({ THINK_END, RESP_START })) :
                                               p.content(p.until_one_of({ THINK_END, RESP_START }));
 
         auto reasoning = p.optional(p.optional(p.literal(THINK_START)) + think_body +
                                     p.optional(p.literal(THINK_END)));
 
-        // Content runs to the response closer, or to whatever comes next if a
-        // truncated generation never emits one.
+        // content runs to the response closer, or to the next section if truncated
         auto response = p.optional(p.literal(RESP_START)) +
                         p.content(p.until_one_of({ RESP_END, TOOLS_START, MSG_END })) +
                         p.optional(p.literal(RESP_END));
 
-        // The message closer is followed by the EOG token, which reaches the
-        // parser as text and must be consumed or the parse is left incomplete.
+        // the EOG token after the message closer reaches the parser as text,
+        // so it must be consumed or the parse stays incomplete
         auto trailer = p.optional(p.literal(MSG_END)) + p.optional(p.literal(EOM_TOKEN));
 
         if (!has_tools || inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_NONE) {
@@ -2429,10 +2421,9 @@ static common_chat_params common_chat_params_init_kimi_k3(const common_chat_temp
             std::string  name     = function.at("name");
             const json   schema   = function.contains("parameters") ? function.at("parameters") : json::object();
 
-            // Arguments arrive one tag per key, with the JSON type carried in a
-            // type="..." attribute. We take the type from the tool schema
-            // instead - it is authoritative, and it tells us whether the value
-            // should be parsed as JSON or kept as a literal string.
+            // arguments come one tag per key, with the JSON type in a type="..."
+            // attribute. the type is taken from the tool schema instead, as it tells
+            // us if the value is JSON or a literal string
             auto args = p.eps();
             if (schema.contains("properties") && !schema.at("properties").empty()) {
                 auto arg_choices = p.choice();
@@ -2466,10 +2457,9 @@ static common_chat_params common_chat_params_init_kimi_k3(const common_chat_temp
             tool_choices |= p.rule("kimi-k3-tool-" + name, call);
         });
 
-        // K3 emits every call inside one <|open|>tools<|sep|> section, then
-        // closes the message. The message closer is part of the trigger rule so
-        // that the lazy grammar still permits it once tool calls have started -
-        // otherwise constrained decoding rejects the model's own closing tag.
+        // all calls go inside one tools section, then the message is closed. the
+        // message closer is part of the trigger rule, or else the lazy grammar
+        // rejects it once tool calls have started
         auto tools_section =
             p.trigger_rule("kimi-k3-tool-call", p.literal(TOOLS_START) + p.one_or_more(tool_choices) +
                                                     p.literal(TOOLS_END) + p.optional(p.literal(MSG_END)) +
@@ -3470,8 +3460,7 @@ std::optional<common_chat_params> common_chat_try_specialized_template(
         return common_chat_params_init_kimi_k2(tmpl, params);
     }
 
-    // Kimi K3 - XTML-ish tagged format built from open_tag/close_tag macros.
-    // Detection: the <|open|>/<|close|>/<|sep|> marker trio is unique to K3.
+    // Kimi K3 - the <|open|>/<|close|>/<|end_of_msg|> markers are unique to it
     if (src.find("<|open|>") != std::string::npos && src.find("<|close|>") != std::string::npos &&
         src.find("<|end_of_msg|>") != std::string::npos) {
         LOG_DBG("Using specialized template: Kimi K3\n");
