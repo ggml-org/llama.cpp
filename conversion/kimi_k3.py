@@ -229,7 +229,9 @@ class KimiK3Model(TextModel):
         # K3 is nope-only; qk_rope_head_dim still sizes the un-absorbed part of K
         assert self.hparams.get("mla_use_nope"), "K3 MLA is expected to be nope-only"
         self.gguf_writer.add_rope_dimension_count(qk_rope_head_dim)
+        # MLA is served as MQA, so the cache holds the compressed latent
         self.gguf_writer.add_key_length(kv_lora_rank + qk_rope_head_dim)
+        self.gguf_writer.add_value_length(kv_lora_rank)
         self.gguf_writer.add_key_length_mla(qk_nope_head_dim + qk_rope_head_dim)
         self.gguf_writer.add_value_length_mla(v_head_dim)
 

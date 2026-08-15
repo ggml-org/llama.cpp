@@ -21,6 +21,10 @@ void llama_model_kimi_k3::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_KDA_HEAD_DIM,                hparams.n_embd_head_kda);
     ml.get_key(LLM_KV_KDA_GATE_LOWER_BOUND,        hparams.kda_gate_lower_bound, false);
 
+    // MLA is served as MQA, so the cache holds the compressed latent. set it here too,
+    // as GGUFs converted before value_length was written fall back to n_embd/n_head
+    hparams.n_embd_head_v_full = hparams.n_lora_kv;
+
     // n_head_kv == 0 marks a KDA (recurrent) layer, as in kimi-linear
     for (uint32_t i = 0; i < hparams.n_layer(); ++i) {
         hparams.is_recr_impl[i] = hparams.n_head_kv(i) == 0;
