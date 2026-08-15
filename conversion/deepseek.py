@@ -12,7 +12,7 @@ import torch
 if TYPE_CHECKING:
     from torch import Tensor
 
-from .base import LazyTorchTensor, MmprojModel, ModelBase, TextModel, gguf, logger, repack_mxfp4_blocks
+from .base import LazyTorchTensor, MmprojModel, ModelBase, TextModel, gguf, logger
 
 from .qwen import QwenModel
 
@@ -709,8 +709,6 @@ class DeepseekV4Model(TextModel):
         for name in tensors_to_remove:
             del self.model_tensors[name]
 
-    _pack_mxfp4_blocks = staticmethod(repack_mxfp4_blocks)
-
     def _write_mxfp4_expert_tensor(self, bid: int, proj: str, tensor_key: gguf.MODEL_TENSOR) -> list[str]:
         n_experts = self.hparams["n_routed_experts"]
         data: np.ndarray | None = None
@@ -724,7 +722,7 @@ class DeepseekV4Model(TextModel):
 
             weight = LazyTorchTensor.to_eager(self.model_tensors[weight_name]())
             scale = LazyTorchTensor.to_eager(self.model_tensors[scale_name]())
-            packed = self._pack_mxfp4_blocks(weight, scale)
+            packed = self.repack_mxfp4_blocks(weight, scale)
             if data is None:
                 data = np.empty((n_experts, *packed.shape), dtype=packed.dtype)
             data[eid] = packed

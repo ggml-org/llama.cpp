@@ -10,7 +10,7 @@ import torch
 if TYPE_CHECKING:
     from torch import Tensor
 
-from .base import LazyTorchTensor, ModelBase, TextModel, gguf, logger, repack_mxfp4_blocks
+from .base import LazyTorchTensor, ModelBase, TextModel, gguf, logger
 
 from .kimi_linear import KimiLinearModel
 
@@ -119,7 +119,7 @@ class KimiK3Model(TextModel):
         def load(fns: list[tuple[Callable[[], Tensor], Callable[[], Tensor]]]) -> np.ndarray:
             out = np.empty(byte_shape, dtype=np.uint8)
             for eid, (packed_fn, scale_fn) in enumerate(fns):
-                out[eid] = repack_mxfp4_blocks(
+                out[eid] = self.repack_mxfp4_blocks(
                     LazyTorchTensor.to_eager(packed_fn()),
                     LazyTorchTensor.to_eager(scale_fn()),
                 )
