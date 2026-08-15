@@ -92,7 +92,7 @@
 								<ChevronRight class="{ICON_CLASS_DEFAULT} shrink-0" />
 							{/if}
 
-							{#if reasoning.thinkingEnabled}
+							{#if reasoning.isReasoningActive}
 								<Lightbulb class="{ICON_CLASS_DEFAULT} shrink-0 text-amber-400" />
 							{:else if reasoning.isOff}
 								<LightbulbOff class="{ICON_CLASS_DEFAULT} shrink-0 text-muted-foreground" />
