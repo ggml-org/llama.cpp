@@ -100,7 +100,7 @@
 								<ChevronRight class="{ICON_CLASS_DEFAULT} shrink-0" />
 							{/if}
 
-							{#if reasoning.thinkingEnabled}
+							{#if reasoning.isReasoningActive}
 								<Lightbulb class="{ICON_CLASS_DEFAULT} shrink-0 text-amber-400" />
 							{:else if reasoning.isOff}
 								<LightbulbOff class="{ICON_CLASS_DEFAULT} shrink-0 text-muted-foreground" />
@@ -194,7 +194,9 @@
 					</Collapsible.Content>
 				</Collapsible.Root>
 
-				<Collapsible.Root onOpenChange={(open) => (mcpExpanded = open)} open={mcpExpanded}>
+				<div class="h-px bg-border"></div>
+
+				<Collapsible.Root open={mcpExpanded} onOpenChange={(open) => (mcpExpanded = open)}>
 					<Collapsible.Trigger class={sheetItemClass}>
 						{#if mcpExpanded}
 							<ChevronDown class="{ICON_CLASS_DEFAULT} shrink-0" />
