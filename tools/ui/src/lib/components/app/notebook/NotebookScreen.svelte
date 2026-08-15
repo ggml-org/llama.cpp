@@ -262,86 +262,102 @@
 	{/if}
 
 	<div class="relative bg-background p-2 md:p-4" data-gauge-container>
-		<div class="flex flex-col-reverse gap-4 md:flex-row md:items-center md:justify-between">
-			<div class="flex items-center gap-2">
-				<Tooltip.Root>
-					<Tooltip.Trigger>
-						<Button variant="ghost" size="icon" disabled={!canUndo} onclick={handleUndo}>
-							<Undo class="h-4 w-4" />
-						</Button>
-					</Tooltip.Trigger>
-					<Tooltip.Content>
-						<p>Undo last generation</p>
-						<KeyboardShortcutInfo keys={['cmd', 'z']} class="w-full justify-center opacity-100" />
-					</Tooltip.Content>
-				</Tooltip.Root>
-
-				<Tooltip.Root>
-					<Tooltip.Trigger>
-						<Button variant="ghost" size="icon" disabled={!canRedo} onclick={handleRedo}>
-							<Redo class="h-4 w-4" />
-						</Button>
-					</Tooltip.Trigger>
-					<Tooltip.Content>
-						<p>Redo last generation</p>
-						<KeyboardShortcutInfo keys={['cmd', 'y']} class="w-full justify-center opacity-100" />
-					</Tooltip.Content>
-				</Tooltip.Root>
-
-				{#snippet generateButton()}
-					<Button
-						disabled={isDisabled}
-						onclick={notebookStore.isGenerating ? handleStop : handleGenerate}
-						size="sm"
-						variant={notebookStore.isGenerating ? 'destructive' : 'default'}
-						class="min-w-[120px] gap-2"
-					>
-						{#if notebookStore.isGenerating}
-							<Square class="h-4 w-4 fill-current" />
-							Stop
-						{:else}
-							<Play class="h-4 w-4 fill-current" />
-							Generate
-						{/if}
-					</Button>
-				{/snippet}
-
-				<Tooltip.Root>
-					<Tooltip.Trigger>
-						{@render generateButton()}
-					</Tooltip.Trigger>
-
-					<Tooltip.Content>
-						{#if generateTooltip}
-							<p>{generateTooltip}</p>
-						{:else}
-							<div class="flex items-center justify-center py-1">
-								<KeyboardShortcutInfo keys={['shift', 'enter']} class="opacity-100" />
-							</div>
-						{/if}
-					</Tooltip.Content>
-				</Tooltip.Root>
-
-				<ModelsSelectorDropdown
-					forceForegroundText={true}
-					useGlobalSelection={true}
-					disabled={notebookStore.isGenerating}
-				/>
-			</div>
-
-			<div class="flex min-h-[42px] w-full items-center justify-end gap-2.5 md:w-auto">
-				<ChatFormContextGauge notebookMode={true} />
-
-				{#if showMessageStats && hasGeneratedStats && processingState}
-					<ChatMessageStatistics
-						promptTokens={processingState.promptTokens}
-						promptMs={processingState.promptMs}
-						predictedTokens={processingState.tokensDecoded}
-						predictedMs={processingState.predictedMs}
-						isLive={notebookStore.isGenerating}
-						isProcessingPrompt={notebookStore.isGenerating && processingState.tokensDecoded === 0}
-					/>
+		{#snippet generateButton()}
+			<Button
+				disabled={isDisabled}
+				onclick={notebookStore.isGenerating ? handleStop : handleGenerate}
+				size="sm"
+				variant={notebookStore.isGenerating ? 'destructive' : 'default'}
+				class="min-w-[120px] gap-2"
+			>
+				{#if notebookStore.isGenerating}
+					<Square class="h-4 w-4 fill-current" />
+					Stop
+				{:else}
+					<Play class="h-4 w-4 fill-current" />
+					Generate
 				{/if}
+			</Button>
+		{/snippet}
+
+		{#snippet statisticsWidget()}
+			{#if processingState}
+				<ChatMessageStatistics
+					promptTokens={processingState.promptTokens}
+					promptMs={processingState.promptMs}
+					predictedTokens={processingState.tokensDecoded}
+					predictedMs={processingState.predictedMs}
+					isLive={notebookStore.isGenerating}
+					isProcessingPrompt={notebookStore.isGenerating && processingState.tokensDecoded === 0}
+				/>
+			{/if}
+		{/snippet}
+
+		<div class="flex flex-col gap-2 md:gap-3">
+			{#if showMessageStats && hasGeneratedStats && processingState}
+				<div class="flex items-center justify-end md:hidden">
+					{@render statisticsWidget()}
+				</div>
+			{/if}
+
+			<div class="flex flex-wrap items-center justify-between gap-2.5">
+				<div class="flex flex-wrap items-center gap-2">
+					<Tooltip.Root>
+						<Tooltip.Trigger>
+							<Button variant="ghost" size="icon" disabled={!canUndo} onclick={handleUndo}>
+								<Undo class="h-4 w-4" />
+							</Button>
+						</Tooltip.Trigger>
+						<Tooltip.Content>
+							<p>Undo last generation</p>
+							<KeyboardShortcutInfo keys={['cmd', 'z']} class="w-full justify-center opacity-100" />
+						</Tooltip.Content>
+					</Tooltip.Root>
+
+					<Tooltip.Root>
+						<Tooltip.Trigger>
+							<Button variant="ghost" size="icon" disabled={!canRedo} onclick={handleRedo}>
+								<Redo class="h-4 w-4" />
+							</Button>
+						</Tooltip.Trigger>
+						<Tooltip.Content>
+							<p>Redo last generation</p>
+							<KeyboardShortcutInfo keys={['cmd', 'y']} class="w-full justify-center opacity-100" />
+						</Tooltip.Content>
+					</Tooltip.Root>
+
+					<Tooltip.Root>
+						<Tooltip.Trigger>
+							{@render generateButton()}
+						</Tooltip.Trigger>
+
+						<Tooltip.Content>
+							{#if generateTooltip}
+								<p>{generateTooltip}</p>
+							{:else}
+								<div class="flex items-center justify-center py-1">
+									<KeyboardShortcutInfo keys={['shift', 'enter']} class="opacity-100" />
+								</div>
+							{/if}
+						</Tooltip.Content>
+					</Tooltip.Root>
+
+					<ModelsSelectorDropdown
+						forceForegroundText={true}
+						useGlobalSelection={true}
+						disabled={notebookStore.isGenerating}
+					/>
+				</div>
+
+				<div class="flex items-center gap-2.5">
+					<ChatFormContextGauge notebookMode={true} />
+
+					{#if showMessageStats && hasGeneratedStats && processingState}
+						<div class="hidden md:block">
+							{@render statisticsWidget()}
+						</div>
+					{/if}
+				</div>
 			</div>
 		</div>
 
