@@ -329,22 +329,20 @@
 				/>
 			</div>
 
-			{#if showMessageStats}
-				<div class="flex min-h-[42px] w-full items-center justify-end gap-2.5 md:w-auto">
-					<ChatFormContextGauge notebookMode={true} />
+			<div class="flex min-h-[42px] w-full items-center justify-end gap-2.5 md:w-auto">
+				<ChatFormContextGauge notebookMode={true} />
 
-					{#if hasGeneratedStats && processingState}
-						<ChatMessageStatistics
-							promptTokens={processingState.promptTokens}
-							promptMs={processingState.promptMs}
-							predictedTokens={processingState.tokensDecoded}
-							predictedMs={processingState.predictedMs}
-							isLive={notebookStore.isGenerating}
-							isProcessingPrompt={notebookStore.isGenerating && processingState.tokensDecoded === 0}
-						/>
-					{/if}
-				</div>
-			{/if}
+				{#if showMessageStats && hasGeneratedStats && processingState}
+					<ChatMessageStatistics
+						promptTokens={processingState.promptTokens}
+						promptMs={processingState.promptMs}
+						predictedTokens={processingState.tokensDecoded}
+						predictedMs={processingState.predictedMs}
+						isLive={notebookStore.isGenerating}
+						isProcessingPrompt={notebookStore.isGenerating && processingState.tokensDecoded === 0}
+					/>
+				{/if}
+			</div>
 		</div>
 
 		<ContextGaugePopup />
