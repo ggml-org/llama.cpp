@@ -3580,8 +3580,8 @@ private:
             has_output |= batch.tokens[i].output;
         }
 
-        // decode on the worker thread, so we can still handle metrics tasks while waiting
-        // note: the sync is done here too, so that the wait also happens off the main thread
+        // yield to the queue, so we can still handle metrics tasks while decoding
+        // note: the sync is done here too, so that the wait is also covered by the yield
         int ret = 0;
         queue_tasks.yield_to_queue([&]() {
             ret = llama_decode(ctx_tgt, batch_view);
