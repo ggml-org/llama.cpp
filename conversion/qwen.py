@@ -575,8 +575,17 @@ class _LinearAttentionVReorderBase(Qwen3NextModel):
                 data_torch = self._reorder_v_heads(data_torch, 0, num_k_heads, num_v_per_k, head_v_dim)
 
             elif ".in_proj_b." in name or ".in_proj_a." in name:
-                # Beta/Alpha weight: reorder rows (num_v_heads, head_dim=1)
-                data_torch = self._reorder_v_heads(data_torch, 0, num_k_heads, num_v_per_k, 1)
+                # Alpha/Beta. HF stores either the already-expanded
+                # [num_v_heads, dim] (v = k*v_per_k + j, k-major) or the flat
+                # k-head representation [num_k_heads*dim, 1] that must be
+                # expanded. GGUF layout: [dim, num_v_heads] k-major.
+                if data_torch.ndim == 2 and data_torch.shape[0] == num_v_heads:
+                    data_torch = torch.transpose(data_torch, 0, 1).contiguous()
+                else:
+                    data = data_torch.squeeze(-1)
+                    data = data.reshape(num_k_heads, -1)
+                    data = data.repeat_interleave(num_v_per_k, dim=0)
+                    data_torch = data.T.contiguous()
 
             elif ".A_log" in name or ".dt_bias" in name or ".dt_proj" in name:
                 # A_log / dt_bias: 1D parameters with num_v_heads elements
@@ -588,13 +597,20 @@ class _LinearAttentionVReorderBase(Qwen3NextModel):
                     data_torch = self._reorder_v_heads(data_torch, -1, num_k_heads, num_v_per_k, 1)
 
             elif ".conv1d" in name:
-                # Conv1d kernel: reorder only the V channel portion
+                # Conv1d kernel: reorder only the V channel portion.
+                # The tensor is [dim, kernel] after squeeze(); the head reorder
+                # must preserve the kernel dim (Qwen3.5 hybrid arch).
                 data = data_torch.squeeze()
                 qk_channels = head_k_dim * num_k_heads * 2
                 qk_part = data[:qk_channels]
                 v_part = data[qk_channels:]
-                v_part = self._reorder_v_heads(v_part, 0, num_k_heads, num_v_per_k, head_v_dim)
-                data_torch = torch.cat([qk_part, v_part], dim=0)
+                k = v_part.shape[-1]
+                v_part = (
+                    v_part.reshape(num_k_heads, num_v_per_k, head_v_dim, k)
+                    .permute(1, 0, 2, 3)
+                    .reshape(-1, k)
+                )
+                data_torch = torch.cat([qk_part, v_part], dim=0).unsqueeze(1)
 
             elif ".out_proj." in name:
                 # Out projection weight: reorder columns (input dimension)
