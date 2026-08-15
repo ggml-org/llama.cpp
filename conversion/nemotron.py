@@ -204,7 +204,9 @@ class NemotronHModel(GraniteHybridModel):
         # calling the parent __init__. This is because the parent constructor
         # uses self.model_arch to build the tensor name map, and all MoE-specific
         # mappings would be missed if it were called with the default non-MoE arch.
-        hparams = ModelBase.load_hparams(args[0], self.is_mistral_format)
+        hparams = kwargs.pop("hparams", None)
+        if hparams is None:
+            hparams = ModelBase.load_hparams(args[0], self.is_mistral_format)
         has_moe_params = (
             "num_experts_per_tok" in hparams
             or (isinstance(hparams.get("llm_config"), dict) and "num_experts_per_tok" in hparams["llm_config"])
@@ -212,8 +214,11 @@ class NemotronHModel(GraniteHybridModel):
         if has_moe_params:
             self.model_arch = gguf.MODEL_ARCH.NEMOTRON_H_MOE
             self.is_moe = True
+        layers_block_type = hparams.get("layers_block_type")
+        if layers_block_type is not None:
+            hparams["num_hidden_layers"] = len(layers_block_type)
 
-        super().__init__(*args, **kwargs)
+        super().__init__(*args, hparams=hparams, **kwargs)
 
         # Save the top-level head_dim for later
         self.head_dim = self.hparams.get("head_dim", self.hparams.get("attention_head_dim"))
@@ -497,11 +502,3 @@ class NemotronHModel(GraniteHybridModel):
             experts = [k for d in self._experts for k in d.keys()]
             if len(experts) > 0:
                 raise ValueError(f"Unprocessed experts: {experts}")
-
-    def get_block_count(self) -> Any:
-        types = self.find_hparam(["layers_block_type"], True)
-
-        if types is not None:
-            return len(types)
-
-        return super().get_block_count()
