@@ -87,7 +87,8 @@ int main(int argc, char ** argv) {
         mparams.print_timings    = true;
         mparams.n_threads        = params.cpuparams.n_threads;
         mparams.flash_attn_type  = params.flash_attn_type;
-        mparams.warmup           = params.warmup;
+        // no warmup, so the debug callback only sees the encode requested by the user
+        mparams.warmup           = false;
         mparams.image_min_tokens = params.image_min_tokens;
         mparams.image_max_tokens = params.image_max_tokens;
         {
