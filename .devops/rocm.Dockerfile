@@ -1,11 +1,11 @@
-ARG UBUNTU_VERSION=24.04
+ARG UBUNTU_VERSION=26.04
 
 # This needs to generally match the container host's environment.
-ARG ROCM_VERSION=7.2.1
-ARG AMDGPU_VERSION=7.2.1
+ARG ROCM_VERSION=7.14.0
+ARG AMDGPU_VERSION=7.14.0
 
 # Target the ROCm build image
-ARG BASE_ROCM_DEV_CONTAINER=docker.io/rocm/dev-ubuntu-${UBUNTU_VERSION}:${ROCM_VERSION}-complete
+ARG BASE_ROCM_DEV_CONTAINER=docker.io/rocm/dev-ubuntu-${UBUNTU_VERSION}:${ROCM_VERSION}-full
 
 ARG BUILD_DATE=N/A
 ARG APP_VERSION=N/A
@@ -30,11 +30,11 @@ FROM ${BASE_ROCM_DEV_CONTAINER} AS build
 
 # Unless otherwise specified, we make a fat build.
 # This is mostly tied to rocBLAS supported archs.
-# check https://rocm.docs.amd.com/projects/install-on-linux/en/docs-7.2.1/reference/system-requirements.html
-# check https://rocm.docs.amd.com/projects/radeon-ryzen/en/latest/docs/compatibility/compatibilityrad/native_linux/native_linux_compatibility.html
-# check https://rocm.docs.amd.com/projects/radeon-ryzen/en/latest/docs/compatibility/compatibilityryz/native_linux/native_linux_compatibility.html
+# check https://rocm.docs.amd.com/en/docs-7.14.0/install/rocm.html
+# check https://rocm.docs.amd.com/en/docs-7.14.0/reference/gpu-specs.html
 
-ARG ROCM_DOCKER_ARCH='gfx908;gfx90a;gfx942;gfx1030;gfx1100;gfx1101;gfx1102;gfx1151;gfx1150;gfx1200;gfx1201'
+# Here used all architectures that have amdrocm-blas7.14-gfx*** related package inside container
+ARG ROCM_DOCKER_ARCH='gfx908;gfx90a;gfx942;gfx950;gfx1010;gfx1011;gfx1012;gfx1030;gfx1031;gfx1032;gfx1033;gfx1034;gfx1035;gfx1036;gfx1100;gfx1101;gfx1102;gfx1103;gfx1150;gfx1151;gfx1152;gfx1153;gfx1200;gfx1201'
 
 # Set ROCm architectures
 ENV AMDGPU_TARGETS=${ROCM_DOCKER_ARCH}
@@ -90,8 +90,14 @@ LABEL org.opencontainers.image.created=$BUILD_DATE \
       org.opencontainers.image.url=$IMAGE_URL \
       org.opencontainers.image.source=$IMAGE_SOURCE
 
+# ROCm's amdrocm-* packaging installs the libraries under /opt/rocm/core-<ver>/lib
+# behind /etc/alternatives and no longer registers them with the dynamic loader.
+# Without this, libggml-hip.so cannot resolve libamdhip64/libhipblas/librocblas
+# at runtime and ggml silently skips the HIP backend -> "no usable GPU found".
 RUN apt-get update \
     && apt-get install -y libgomp1 curl ffmpeg \
+    && printf '/opt/rocm/lib\n/opt/rocm/lib/llvm/lib\n' > /etc/ld.so.conf.d/rocm.conf \
+    && ldconfig \
     && apt autoremove -y \
     && apt clean -y \
     && rm -rf /tmp/* /var/tmp/* \
