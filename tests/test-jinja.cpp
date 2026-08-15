@@ -10,6 +10,7 @@
 #include "jinja/parser.h"
 #include "jinja/lexer.h"
 #include "jinja/utils.h"
+#include "jinja/caps.h"
 
 #include "testing.h"
 
@@ -33,6 +34,7 @@ static void test_array_methods(testing & t);
 static void test_object_methods(testing & t);
 static void test_hasher(testing & t);
 static void test_stats(testing & t);
+static void test_caps(testing & t);
 static void test_string_parts(testing & t);
 static void test_fuzzing(testing & t);
 
@@ -73,6 +75,7 @@ int main(int argc, char *argv[]) {
     if (!g_python_mode) {
         t.test("hasher", test_hasher);
         t.test("stats", test_stats);
+        t.test("caps", test_caps);
         t.test("string parts", test_string_parts);
         t.test("fuzzing", test_fuzzing);
     }
@@ -2056,6 +2059,52 @@ static void test_stats(testing & t) {
 
         t.assert_true("inner_key1[0] is used", val->at("nested")->at("inner_key1")->at(0)->stats.used);
         t.assert_true("inner_key2.a is used", val->at("nested")->at("inner_key2")->at("a")->stats.used);
+    });
+}
+
+static void test_caps(testing & t) {
+    static auto get_caps = [](const std::string & tmpl) -> jinja::caps {
+        jinja::lexer lexer;
+        auto lexer_res = lexer.tokenize(tmpl);
+
+        jinja::program prog = jinja::parse_from_tokens(lexer_res);
+
+        return jinja::caps_get(prog);
+    };
+
+    t.test("string content", [](testing & t) {
+        auto caps = get_caps(
+            "{% for message in messages %}"
+            "{{ message['role'] + ': ' + message['content'] }}"
+            "{% endfor %}"
+        );
+        t.assert_true("supports string content", caps.supports_string_content);
+        t.assert_true("does not support typed content", !caps.supports_typed_content);
+    });
+
+    t.test("typed content, raises on string", [](testing & t) {
+        // rendering with string content throws: 'selectattr' is not a String filter
+        auto caps = get_caps(
+            "{% for message in messages %}"
+            "{% for content in message['content'] | selectattr('type', 'equalto', 'text') %}"
+            "{{ content['text'] }}"
+            "{% endfor %}"
+            "{% endfor %}"
+        );
+        t.assert_true("does not support string content", !caps.supports_string_content);
+        t.assert_true("supports typed content", caps.supports_typed_content);
+    });
+
+    t.test("typed content, silently drops string", [](testing & t) {
+        // rendering with string content does not throw, but content[0]['text'] yields
+        // undefined for a string, so the message is silently dropped (MiniMax-M1 shape)
+        auto caps = get_caps(
+            "{% for message in messages %}"
+            "{{ message['content'][0]['text'] }}"
+            "{% endfor %}"
+        );
+        t.assert_true("does not support string content", !caps.supports_string_content);
+        t.assert_true("supports typed content", caps.supports_typed_content);
     });
 }
 
