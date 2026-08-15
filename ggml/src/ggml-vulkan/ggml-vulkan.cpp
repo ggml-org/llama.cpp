@@ -18253,8 +18253,15 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
         case GGML_OP_REPEAT_BACK:
             return op->type == GGML_TYPE_F32 && op->src[0]->type == GGML_TYPE_F32;
         case GGML_OP_ROPE:
+            if (((const int32_t *) op->op_params)[15] != 0) {
+                return false; // FIXME: support ggml_rope_set_offset
+            }
             return ggml_is_contiguous_rows(op) && ggml_is_contiguous_rows(op->src[0]);
         case GGML_OP_ROPE_BACK:
+            if (((const int32_t *) op->op_params)[15] != 0) {
+                return false; // FIXME: support ggml_rope_set_offset
+            }
+            return true;
         case GGML_OP_NONE:
         case GGML_OP_RESHAPE:
         case GGML_OP_VIEW:

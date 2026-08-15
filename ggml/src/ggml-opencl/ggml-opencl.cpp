@@ -7376,6 +7376,9 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
         case GGML_OP_DIAG_MASK_INF:
             return op->ne[3] == 1;
         case GGML_OP_ROPE: {
+            if (((const int32_t *) op->op_params)[15] != 0) {
+                return false; // FIXME: support ggml_rope_set_offset
+            }
             const int mode = ((const int32_t *) op->op_params)[2];
             const bool is_mrope = mode & GGML_ROPE_TYPE_MROPE;
             const bool is_vision = mode == GGML_ROPE_TYPE_VISION;
