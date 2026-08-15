@@ -23,8 +23,7 @@ import type {
 	SettingsEntry,
 	SettingsFieldConfig,
 	SettingsSection,
-	SettingsSectionEntry,
-	SyncableParameter
+	SettingsSectionEntry
 } from '$lib/types';
 
 /** Settings sections — slug is the routing identity, title is the display label. */
@@ -754,15 +753,3 @@ export const NUMERIC_FIELDS = getAllSettings()
 export const POSITIVE_INTEGER_FIELDS = getAllSettings()
 	.filter((s) => s.isPositiveInteger)
 	.map((s) => s.key) as readonly string[];
-
-/** Mapping of UI setting keys to server parameter keys, for the sync service. */
-export const SYNCABLE_PARAMETERS: SyncableParameter[] = SETTINGS_REGISTRY.flatMap(
-	(section) => section.settings
-)
-	.filter((s) => s.sync !== undefined)
-	.map((s) => ({
-		canSync: true,
-		key: s.key,
-		serverKey: s.sync!.serverKey,
-		type: s.sync!.paramType
-	}));
