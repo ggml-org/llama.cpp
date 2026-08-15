@@ -367,6 +367,7 @@ export { SkillsPackingService } from './skills-packing.service';
 export {
 	buildSkillRunSnapshot,
 	estimateSkillTokens,
+	resolveSkillPackOptions,
 	serializeSkillCatalogEnvelope
 } from './skills-packing.service';
 

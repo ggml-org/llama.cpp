@@ -27,6 +27,21 @@ export function estimateSkillTokens(text: string): number {
 }
 
 /**
+ * Shared direct/estimated pack-option resolution used by agentic runs and the
+ * catalog presentation, so both present the same budget policy. Direct mode
+ * requires a non-empty effective model and, in router mode, a loaded model.
+ */
+export function resolveSkillPackOptions(
+	effectiveModel: string,
+	routerMode: boolean,
+	isModelLoaded: (model: string) => boolean
+): Pick<SkillPackOptions, 'mode' | 'model'> {
+	const directOk = effectiveModel !== '' && (!routerMode || isModelLoaded(effectiveModel));
+
+	return directOk ? { mode: 'direct', model: effectiveModel } : { mode: 'estimated' };
+}
+
+/**
  * Serialize the complete `<skills_catalog total="..." included="...">`
  * envelope: the server's `catalog_instruction_xml` fragment verbatim first,
  * then each entry's `catalog_xml` fragment in server order, never re-escaped.
@@ -103,7 +118,7 @@ export class SkillsPackingService {
 		const total = snapshot.total;
 
 		if (budget <= 0 || total === 0) {
-			return { envelope: '', total, included: 0, estimated: false };
+			return { envelope: '', total, included: 0, estimated: false, fullTokens: null };
 		}
 
 		if (mode === 'direct' && model) {
@@ -132,6 +147,9 @@ export class SkillsPackingService {
  * Measure the complete envelope, then walk leading entry fragments in server
  * order to find the budget boundary. `measure` is exact (direct mode) or the
  * deterministic estimate; both grow monotonically with the serialized prefix.
+ * The complete envelope is measured exactly once: the final prefix equals the
+ * complete envelope and is known to exceed the budget here, so the walk stops
+ * before it.
  */
 async function packWithMeasure(
 	snapshot: SkillRunSnapshot,
@@ -141,14 +159,16 @@ async function packWithMeasure(
 ): Promise<SkillPackedCatalog> {
 	const { catalog, entries, envelope, total } = snapshot;
 
-	if ((await measure(envelope)) <= budget) {
-		return { envelope, total, included: total, estimated };
+	const fullTokens = await measure(envelope);
+
+	if (fullTokens <= budget) {
+		return { envelope, total, included: total, estimated, fullTokens };
 	}
 
 	const instructionXml = catalog.catalog_instruction_xml;
 	let included = 0;
 
-	for (let i = 1; i <= total; i++) {
+	for (let i = 1; i < total; i++) {
 		if ((await measure(serializeEnvelope(instructionXml, entries, total, i))) > budget) {
 			break;
 		}
@@ -160,7 +180,8 @@ async function packWithMeasure(
 		envelope: serializeEnvelope(instructionXml, entries, total, included),
 		total,
 		included,
-		estimated
+		estimated,
+		fullTokens
 	};
 }
 

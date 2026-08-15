@@ -42,7 +42,8 @@ import {
 	ChatService,
 	SkillRunAdapters,
 	SkillsPackingService,
-	buildSkillToolDefinitions
+	buildSkillToolDefinitions,
+	resolveSkillPackOptions
 } from '$lib/services';
 import { ReadMediaService } from '$lib/services/read-media.service';
 import { SandboxService } from '$lib/services/sandbox.service';
@@ -394,14 +395,10 @@ class AgenticStore {
 
 		try {
 			const effectiveModel = options.model || modelsStore.models[0]?.model || '';
-			const directOk =
-				effectiveModel !== '' && (!serverStore.isRouterMode || modelsStore.isModelLoaded(effectiveModel));
-			const packed = await SkillsPackingService.pack(snapshot, {
-				budget,
-				mode: directOk ? 'direct' : 'estimated',
-				model: directOk ? effectiveModel : undefined,
-				signal
-			});
+			const packOptions = resolveSkillPackOptions(effectiveModel, serverStore.isRouterMode, (model) =>
+				modelsStore.isModelLoaded(model)
+			);
+			const packed = await SkillsPackingService.pack(snapshot, { budget, ...packOptions, signal });
 
 			if (packed.envelope === '') return null;
 

@@ -160,4 +160,10 @@ export interface SkillPackedCatalog {
 	included: number;
 	/** True when the measurement is a labeled deterministic estimate. */
 	estimated: boolean;
+	/**
+	 * Measured token count of the COMPLETE envelope, exact or estimated per
+	 * `estimated`; null when no envelope was produced (zero budget or empty
+	 * catalog). Never derived from per-entry instruction facts.
+	 */
+	fullTokens: number | null;
 }

@@ -2,6 +2,7 @@ import {
 	SkillsPackingService,
 	buildSkillRunSnapshot,
 	estimateSkillTokens,
+	resolveSkillPackOptions,
 	serializeSkillCatalogEnvelope
 } from '$lib/services/skills-packing.service';
 import type { SkillCatalogEntry, SkillCatalogResponse, SkillRunSnapshot } from '$lib/types';
@@ -277,5 +278,139 @@ describe('SkillsPackingService.pack', () => {
 
 		expect(packed.estimated).toBe(true);
 		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
+	it('retains the exact full-envelope token count for a complete direct pack', async () => {
+		vi.stubGlobal('fetch', charCountingTokenizer());
+
+		const snap = snapshot();
+		const packed = await SkillsPackingService.pack(snap, {
+			budget: 10_000,
+			mode: 'direct',
+			model: 'selected-model'
+		});
+
+		expect(packed.fullTokens).toBe(snap.envelope.length);
+		expect(packed.included).toBe(snap.total);
+		expect(packed.estimated).toBe(false);
+	});
+
+	it('retains the exact full-envelope token count for a partial direct pack', async () => {
+		vi.stubGlobal('fetch', charCountingTokenizer());
+
+		const snap = snapshot();
+		const budget = expectedEnvelope(2).length;
+		const packed = await SkillsPackingService.pack(snap, { budget, mode: 'direct', model: 'selected-model' });
+
+		expect(packed.fullTokens).toBe(snap.envelope.length);
+		expect(packed.included).toBe(2);
+		expect(packed.estimated).toBe(false);
+	});
+
+	it('retains the deterministic full-envelope estimate for a complete estimated pack', async () => {
+		const snap = snapshot();
+		const packed = await SkillsPackingService.pack(snap, { budget: 10_000, mode: 'estimated' });
+
+		expect(packed.fullTokens).toBe(estimateSkillTokens(snap.envelope));
+		expect(packed.included).toBe(snap.total);
+		expect(packed.estimated).toBe(true);
+	});
+
+	it('retains the deterministic full-envelope estimate for a partial estimated pack', async () => {
+		const snap = snapshot();
+		const budget = estimateSkillTokens(expectedEnvelope(1));
+		const packed = await SkillsPackingService.pack(snap, { budget, mode: 'estimated' });
+
+		expect(packed.fullTokens).toBe(estimateSkillTokens(snap.envelope));
+		expect(packed.included).toBe(1);
+		expect(packed.estimated).toBe(true);
+	});
+
+	it('returns null fullTokens for a zero budget without any tokenizer request', async () => {
+		const fetchMock = vi.fn();
+
+		vi.stubGlobal('fetch', fetchMock);
+
+		const packed = await SkillsPackingService.pack(snapshot(), {
+			budget: 0,
+			mode: 'direct',
+			model: 'selected-model'
+		});
+
+		expect(packed.fullTokens).toBeNull();
+		expect(packed.included).toBe(0);
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
+	it('returns null fullTokens for an empty catalog without any tokenizer request', async () => {
+		const fetchMock = vi.fn();
+
+		vi.stubGlobal('fetch', fetchMock);
+
+		const empty = buildSkillRunSnapshot(undefined, makeCatalog([], '<inst/>'));
+		const packed = await SkillsPackingService.pack(empty, {
+			budget: 10_000,
+			mode: 'direct',
+			model: 'selected-model'
+		});
+
+		expect(packed.fullTokens).toBeNull();
+		expect(packed.included).toBe(0);
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
+	it('does not remeasure the full envelope for presentation in complete direct packing', async () => {
+		const measure = vi
+			.spyOn(SkillsPackingService, 'countTokens')
+			.mockImplementation(async (content) => content.length);
+		const snap = snapshot();
+
+		const packed = await SkillsPackingService.pack(snap, {
+			budget: 10_000,
+			mode: 'direct',
+			model: 'selected-model'
+		});
+
+		expect(packed.fullTokens).toBe(snap.envelope.length);
+		expect(measure.mock.calls.filter(([content]) => content === snap.envelope)).toHaveLength(1);
+		expect(packed.included).toBe(snap.total);
+	});
+
+	it('does not remeasure the full envelope for presentation in partial direct packing', async () => {
+		const measure = vi
+			.spyOn(SkillsPackingService, 'countTokens')
+			.mockImplementation(async (content) => content.length);
+		const snap = snapshot();
+		const budget = expectedEnvelope(2).length;
+
+		const packed = await SkillsPackingService.pack(snap, { budget, mode: 'direct', model: 'selected-model' });
+
+		expect(packed.fullTokens).toBe(snap.envelope.length);
+		expect(measure.mock.calls.filter(([content]) => content === snap.envelope)).toHaveLength(1);
+		expect(packed.included).toBe(2);
+	});
+});
+
+describe('resolveSkillPackOptions', () => {
+	it('resolves direct mode for a non-empty effective model in model mode', () => {
+		expect(resolveSkillPackOptions('model-a', false, () => false)).toEqual({
+			mode: 'direct',
+			model: 'model-a'
+		});
+	});
+
+	it('resolves estimated mode without an effective model', () => {
+		expect(resolveSkillPackOptions('', false, () => false)).toEqual({ mode: 'estimated' });
+	});
+
+	it('resolves estimated mode in router mode when the model is not loaded', () => {
+		expect(resolveSkillPackOptions('model-a', true, () => false)).toEqual({ mode: 'estimated' });
+	});
+
+	it('resolves direct mode in router mode only for a loaded model', () => {
+		expect(resolveSkillPackOptions('model-a', true, (model) => model === 'model-a')).toEqual({
+			mode: 'direct',
+			model: 'model-a'
+		});
 	});
 });
