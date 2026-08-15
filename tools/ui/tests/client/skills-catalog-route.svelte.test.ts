@@ -228,6 +228,53 @@ describe('/skills route presentation', () => {
 		expect(bodyText()).not.toContain('catalog_instruction_xml');
 	});
 
+	it('renders every diagnostic identity field with labels and keeps duplicate-code rows independent', async () => {
+		const catalog: SkillCatalogResponse = {
+			...makeCatalog(makeEntry('demo-skill')),
+			diagnostics: [
+				{
+					severity: 'warning',
+					code: 'overlapping-skill',
+					name: 'Alpha Skill',
+					scope: 'global',
+					provider: 'agents',
+					message: 'first diagnostic message'
+				},
+				{
+					severity: 'error',
+					code: 'overlapping-skill',
+					name: 'Beta Skill',
+					scope: 'project',
+					provider: 'local',
+					message: 'second diagnostic message'
+				}
+			]
+		};
+
+		mockFetchOnce(catalog);
+		render(SkillsPage);
+
+		await vi.waitFor(() => expect(bodyText()).toContain('first diagnostic message'));
+
+		const text = bodyText();
+
+		// Code plus every identity field, each under its own readable label.
+		expect(text).toContain('overlapping-skill');
+		expect(text).toContain('Skill: Alpha Skill');
+		expect(text).toContain('Skill: Beta Skill');
+		expect(text).toContain('Scope: global');
+		expect(text).toContain('Scope: project');
+		expect(text).toContain('Provider: agents');
+		expect(text).toContain('Provider: local');
+
+		// Both messages render; duplicate codes stay two independent rows.
+		expect(text).toContain('first diagnostic message');
+		expect(text).toContain('second diagnostic message');
+		expect(text.match(/Skill:/g)).toHaveLength(2);
+		expect(text.match(/Scope:/g)).toHaveLength(2);
+		expect(text.match(/Provider:/g)).toHaveLength(2);
+	});
+
 	it('shows a distinct empty state for a server-empty catalog', async () => {
 		mockFetchOnce(makeCatalog());
 		render(SkillsPage);

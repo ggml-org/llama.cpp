@@ -226,20 +226,58 @@ static void test_catalog_diagnoses_invalid_candidates() {
     write_bytes(missing_description / "SKILL.md", "---\nname: missing-description\n---\nbody");
     const fs::path malformed_frontmatter = write_skill(home, "agents", "malformed-frontmatter");
     write_bytes(malformed_frontmatter / "SKILL.md", "---\nname: malformed-frontmatter\ndescription: desc\nbody without closing delimiter");
+    // An unsafe directory basename (contains a backslash) must be diagnosed but
+    // must never surface as a diagnostic name. Its SKILL.md is a directory, so
+    // the candidate is rejected with skill_unreadable after the canonical checks.
+    const fs::path unsafe_basename = home / ".agents" / "skills" / "bad\\name";
+    fs::create_directories(unsafe_basename);
+    fs::create_directories(unsafe_basename / "SKILL.md");
+    // A safe-named symlink candidate escaping the configured root is rejected
+    // with skill_unsafe_path and identified by its directory basename.
+    const fs::path outside = tmp / "outside";
+    fs::create_directories(outside);
+    write_bytes(outside / "SKILL.md", "---\ndescription: secret\n---\nbody");
+    std::error_code link_ec;
+    fs::create_directory_symlink(outside, home / ".agents" / "skills" / "escape", link_ec);
 
     server_skills skills = make_skills(home, project, /* trust_project_skills */ false);
     const server_http_res_ptr response = do_get(skills);
     CHECK(response != nullptr);
     CHECK(response->status == 200);
     const json body = parse_body(response);
-    std::set<std::string> codes;
+    std::map<std::string, json> diagnostics;
     for (const auto & item : body.at("diagnostics")) {
-        codes.insert(item.at("code").get<std::string>());
+        diagnostics[item.at("code").get<std::string>()] = item;
     }
-    CHECK(codes.count("skill_invalid_frontmatter") == 1);
-    CHECK(codes.count("skill_too_large") == 1);
-    CHECK(codes.count("skill_invalid_utf8") == 1);
-    CHECK(codes.count("skill_missing_description") == 1);
+    CHECK(diagnostics.count("skill_invalid_frontmatter") == 1);
+    CHECK(diagnostics.count("skill_too_large") == 1);
+    CHECK(diagnostics.count("skill_invalid_utf8") == 1);
+    CHECK(diagnostics.count("skill_missing_description") == 1);
+    CHECK(diagnostics.count("skill_unreadable") == 1);
+    // Each safe candidate diagnostic carries its directory name and the global
+    // agents identity; the unsafe basename stays empty.
+    CHECK(diagnostics.at("skill_invalid_frontmatter").at("name") == "malformed-frontmatter");
+    CHECK(diagnostics.at("skill_invalid_frontmatter").at("scope") == "global");
+    CHECK(diagnostics.at("skill_invalid_frontmatter").at("provider") == "agents");
+    CHECK(diagnostics.at("skill_too_large").at("name") == "oversized");
+    CHECK(diagnostics.at("skill_too_large").at("scope") == "global");
+    CHECK(diagnostics.at("skill_too_large").at("provider") == "agents");
+    CHECK(diagnostics.at("skill_invalid_utf8").at("name") == "invalid-utf8");
+    CHECK(diagnostics.at("skill_invalid_utf8").at("scope") == "global");
+    CHECK(diagnostics.at("skill_invalid_utf8").at("provider") == "agents");
+    CHECK(diagnostics.at("skill_missing_description").at("name") == "missing-description");
+    CHECK(diagnostics.at("skill_missing_description").at("scope") == "global");
+    CHECK(diagnostics.at("skill_missing_description").at("provider") == "agents");
+    CHECK(diagnostics.at("skill_unreadable").value("name", "") == "");
+    CHECK(diagnostics.at("skill_unreadable").at("scope") == "global");
+    CHECK(diagnostics.at("skill_unreadable").at("provider") == "agents");
+    if (!link_ec) {
+        // symlinks unavailable (e.g. Windows without developer mode): skip
+        CHECK(diagnostics.count("skill_unsafe_path") == 1);
+        CHECK(diagnostics.at("skill_unsafe_path").at("name") == "escape");
+        CHECK(diagnostics.at("skill_unsafe_path").at("scope") == "global");
+        CHECK(diagnostics.at("skill_unsafe_path").at("provider") == "agents");
+    }
     bool malformed_loaded = false;
     for (const auto & skill : body.at("skills")) {
         malformed_loaded = malformed_loaded || skill.at("name") == "malformed-frontmatter";

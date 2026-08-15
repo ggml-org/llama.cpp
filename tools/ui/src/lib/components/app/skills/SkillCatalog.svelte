@@ -233,7 +233,7 @@
 		{#if !selectedEntry && !diagnosticsDismissed && catalog && catalog.diagnostics.length > 0}
 			<div class="relative">
 				<div class="flex flex-col gap-2">
-					{#each catalog.diagnostics as diagnostic (diagnostic.code)}
+					{#each catalog.diagnostics as diagnostic, i (`${diagnostic.code}-${i}`)}
 						<div class="flex items-start gap-2 text-sm">
 							<Badge
 								variant={diagnostic.severity === 'error' ? 'destructive' : 'outline'}
@@ -244,7 +244,15 @@
 
 							<span class="min-w-0 text-muted-foreground">
 								<code class="mr-1">{diagnostic.code}</code>
-								{diagnostic.name ?? diagnostic.scope ?? diagnostic.provider ?? ''}
+								{#if diagnostic.name}
+									<span class="mr-2">Skill: {diagnostic.name}</span>
+								{/if}
+								{#if diagnostic.scope}
+									<span class="mr-2">Scope: {diagnostic.scope}</span>
+								{/if}
+								{#if diagnostic.provider}
+									<span class="mr-2">Provider: {diagnostic.provider}</span>
+								{/if}
 								{diagnostic.message}
 							</span>
 						</div>
