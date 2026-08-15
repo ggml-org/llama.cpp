@@ -720,9 +720,10 @@ class DSparkModel(DFlashModel):
         if hparams is None:
             hparams = ModelBase.load_hparams(dir_model, False)
 
-        # block layout default by arch: speculators drafts are 1+N, DeepSpec ones sample from the anchor
+        # EAGLE3-style exports use the 1+N bonus-anchor block, DFlash-lineage exports sample from the anchor
         self._sample_from_anchor = hparams.get(
-            "sample_from_anchor", hparams["architectures"][0] not in ("DSparkDraftModel", "DSparkSpeculator"))
+            "sample_from_anchor",
+            "transformer_layer_config" not in hparams and "aux_hidden_state_layer_ids" not in hparams)
         if "transformer_layer_config" in hparams:
             hparams = {**hparams, **hparams["transformer_layer_config"]}
 
