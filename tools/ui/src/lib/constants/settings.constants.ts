@@ -285,6 +285,13 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 			},
 			{
 				defaultValue: false,
+				help: 'Display the organization name in the model selector trigger button.',
+				key: SETTINGS_KEYS.SHOW_MODEL_ORG_NAME_IN_TRIGGER,
+				label: 'Show organization name in model selector trigger',
+				type: SettingsFieldType.CHECKBOX
+			},
+			{
+				defaultValue: false,
 				help: 'Display the current build version in the bottom-right corner of the interface.',
 				key: SETTINGS_KEYS.SHOW_BUILD_VERSION,
 				label: 'Show build version information',
