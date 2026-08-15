@@ -88,6 +88,7 @@
 		modelId={option.model}
 		modalities={modalities}
 		{supportsThinking}
+		showRawTooltip
 		tags={option.tags}
 	/>
 
