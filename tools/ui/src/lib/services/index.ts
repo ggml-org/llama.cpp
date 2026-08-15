@@ -389,9 +389,6 @@ export {
  * @see decorateSkillPrompt — byte-preserved envelope decoration
  */
 export {
-	SKILL_LIST_TOOL,
-	SKILL_READ_TOOL,
-	SKILL_SERVER_LABEL,
 	SkillRunAdapters,
 	buildSkillToolDefinitions,
 	decorateSkillPrompt,
