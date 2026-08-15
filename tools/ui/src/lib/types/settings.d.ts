@@ -31,7 +31,8 @@ export interface SettingsEntry {
 	radioOptions?: Array<{ value: string; label: string; key: string; isExperimental?: boolean }>;
 	isExperimental?: boolean;
 	isPositiveInteger?: boolean;
-	isPrivate?: boolean;
+	/** When false, the setting is stored/synced but has no standalone field; it is rendered by a sibling control or a dedicated page. */
+	standaloneField?: boolean;
 	placeholder?: string;
 	min?: number;
 	max?: number;
@@ -56,7 +57,6 @@ export interface SettingsFieldConfig {
 	type: SettingsFieldType;
 	isExperimental?: boolean;
 	isPositiveInteger?: boolean;
-	isPrivate?: boolean;
 	placeholder?: string;
 	min?: number;
 	max?: number;
