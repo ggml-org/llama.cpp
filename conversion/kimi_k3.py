@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from typing import Callable, Iterable, Iterator, TYPE_CHECKING
 
 import numpy as np
@@ -71,6 +72,13 @@ class KimiK3Model(TextModel):
         if (eos := self.hparams.get("eos_token_id")) is not None:
             logger.info(f"restoring configured eos_token_id {eos} (kimi-linear forces the tokenizer's)")
             self.gguf_writer.add_eos_token_id(eos)
+
+        # K3 renders chats in python (encoding_k3.py) and ships no jinja template,
+        # so add the bundled one when the model has none
+        if gguf.SpecialVocab(self.dir_model, load_merges=False).chat_template is None:
+            template_path = Path(__file__).parent.parent / "models" / "templates" / "Kimi-K3.jinja"
+            logger.info(f"gguf: model has no chat template, using {template_path.name}")
+            self.gguf_writer.add_chat_template(template_path.read_text(encoding="utf-8"))
 
     #
     # compressed-tensors MXFP4 -> ggml MXFP4
