@@ -3746,6 +3746,9 @@ struct clip_model_loader {
             }
             return;
         }
+        if (gguf_get_kv_type(ctx_gguf.get(), i) != GGUF_TYPE_ARRAY) {
+            throw std::runtime_error(string_format("%s: key '%s' is not an array\n", __func__, key.c_str()));
+        }
         const auto type = gguf_get_arr_type(ctx_gguf.get(), i);
         if (type != GGUF_TYPE_FLOAT32) {
             throw std::runtime_error(string_format("%s: array '%s' has type %d, expected %d (GGUF_TYPE_FLOAT32)\n", __func__, key.c_str(), type, GGUF_TYPE_FLOAT32));
@@ -3779,6 +3782,9 @@ struct clip_model_loader {
                 throw std::runtime_error("Key not found: " + key);
             }
             return;
+        }
+        if (gguf_get_kv_type(ctx_gguf.get(), i) != GGUF_TYPE_ARRAY) {
+            throw std::runtime_error(string_format("%s: key '%s' is not an array\n", __func__, key.c_str()));
         }
         const auto type = gguf_get_arr_type(ctx_gguf.get(), i);
         if (type != GGUF_TYPE_INT32) {
