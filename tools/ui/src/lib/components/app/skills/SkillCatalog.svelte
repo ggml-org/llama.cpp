@@ -173,12 +173,12 @@
 	icon={BookOpen}
 	title="Skills"
 	onClose={handleClose}
-	class="w-full"
+	class="w-full {selectedEntry ? 'h-[calc(100dvh-4rem)]' : ''}"
 	headerClass="mx-auto w-full max-w-4xl"
 >
 	<div
 		data-testid="skills-catalog-content"
-		class="flex w-full flex-col gap-4 p-4 md:p-8"
+		class="flex w-full flex-1 min-h-0 flex-col gap-4 p-4 md:p-8"
 		class:mx-auto={!isDesktopWorkspace}
 		class:max-w-4xl={!isDesktopWorkspace}
 	>
@@ -273,7 +273,7 @@
 			{/if}
 		{:else}
 			{#if selectedEntry}
-				<Resizable.PaneGroup direction="horizontal" class="h-[60vh]! min-h-82">
+				<Resizable.PaneGroup direction="horizontal" class="min-h-82">
 					<Resizable.Pane
 						defaultSize={sizes[0]}
 						minSize={35}
@@ -287,7 +287,7 @@
 						/>
 					</Resizable.Pane>
 
-					<Resizable.Handle withHandle class="w-3 bg-muted after:bg-border after:w-px" />
+					<Resizable.Handle withHandle class="w-3 bg-transparent after:bg-border after:w-px" />
 
 					<Resizable.Pane
 						defaultSize={sizes[1]}
