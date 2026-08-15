@@ -613,12 +613,17 @@ static void add_root_skills(const fs::path & candidate_root, const fs::path & ba
         return path_to_utf8(left.filename()) < path_to_utf8(right.filename());
     });
     for (const fs::path & child : children) {
+        // Diagnostic identity for rejected candidates comes from the candidate
+        // directory basename, derived before any file parsing. Unsafe basenames
+        // are not echoed: the name stays empty.
+        const std::string candidate_name = path_to_utf8(child.filename());
+        const std::string candidate_diagnostic_name = is_safe_name(candidate_name) ? candidate_name : "";
         fs::path directory;
         fs::path skill_file;
         if (!canonical_below(child, root, directory) ||
             !canonical_below(child / "SKILL.md", root, skill_file) ||
             !is_descendant(skill_file, directory)) {
-            catalog.diagnostics.push_back(diagnostic("warning", "skill_unsafe_path", "Skill could not be used", "", scope, provider));
+            catalog.diagnostics.push_back(diagnostic("warning", "skill_unsafe_path", "Skill could not be used", candidate_diagnostic_name, scope, provider));
             continue;
         }
         const std::string id = stable_id(directory, scope, provider);
@@ -635,16 +640,16 @@ static void add_root_skills(const fs::path & candidate_root, const fs::path & ba
             if (read_state != read_result::ok) {
                 const char * code = read_state == read_result::too_large ? "skill_too_large" :
                                    read_state == read_result::invalid_utf8 ? "skill_invalid_utf8" : "skill_unreadable";
-                catalog.diagnostics.push_back(diagnostic("warning", code, "Skill could not be read", "", scope, provider));
+                catalog.diagnostics.push_back(diagnostic("warning", code, "Skill could not be read", candidate_diagnostic_name, scope, provider));
                 continue;
             }
             if (!parse_skill(source, parsed)) {
-                catalog.diagnostics.push_back(diagnostic("warning", "skill_invalid_frontmatter", "Skill frontmatter is invalid", "", scope, provider));
+                catalog.diagnostics.push_back(diagnostic("warning", "skill_invalid_frontmatter", "Skill frontmatter is invalid", candidate_diagnostic_name, scope, provider));
                 continue;
             }
         }
         if (parsed.description.empty()) {
-            catalog.diagnostics.push_back(diagnostic("warning", "skill_missing_description", "Skill has no description", "", scope, provider));
+            catalog.diagnostics.push_back(diagnostic("warning", "skill_missing_description", "Skill has no description", candidate_diagnostic_name, scope, provider));
             continue;
         }
         std::string name = parsed.name;
