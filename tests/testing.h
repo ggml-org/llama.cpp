@@ -23,7 +23,7 @@ struct testing {
     int exceptions = 0;
     int skipped = 0;
 
-    // set by skip(), consumed by the innermost enclosing test()
+    // set by skip(), read by the innermost test()
     bool skip_current = false;
     std::string skip_reason;
 
@@ -136,7 +136,7 @@ struct testing {
         int before_failures   = failures;
         int before_assertions = assertions;
 
-        // save/restore, so that a skipped subtest does not mark its parent as skipped
+        // do not let a skipped subtest also mark its parent as skipped
         bool        outer_skip        = skip_current;
         std::string outer_skip_reason = skip_reason;
         skip_current = false;

@@ -2083,7 +2083,7 @@ static void test_caps(testing & t) {
     });
 
     t.test("typed content, raises on string", [](testing & t) {
-        // rendering with string content throws: 'selectattr' is not a String filter
+        // 'selectattr' is not a String filter, so it throws
         auto caps = get_caps(
             "{% for message in messages %}"
             "{% for content in message['content'] | selectattr('type', 'equalto', 'text') %}"
@@ -2096,8 +2096,7 @@ static void test_caps(testing & t) {
     });
 
     t.test("typed content, silently drops string", [](testing & t) {
-        // rendering with string content does not throw, but content[0]['text'] yields
-        // undefined for a string, so the message is silently dropped (MiniMax-M1 shape)
+        // no throw here, but content[0]['text'] is undefined for a string (MiniMax-M1 case)
         auto caps = get_caps(
             "{% for message in messages %}"
             "{{ message['content'][0]['text'] }}"
