@@ -47,7 +47,7 @@ if ($null -ne $env:HB) {
 $env:ADSP_LIBRARY_PATH="$basedir\lib"
 
 & "$basedir\bin\llama-cli.exe" `
-    --no-mmap -m $basedir\..\..\gguf\$model `
+    --load-mode none -m $basedir\..\..\gguf\$model `
     --poll 1000 -t 6 --cpu-mask 0xfc --cpu-strict 1 `
     --ctx-size 8192 --ubatch-size 1024 -fa on `
     -ngl 99 --device $device $cli_opts

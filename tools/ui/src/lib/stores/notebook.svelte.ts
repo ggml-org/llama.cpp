@@ -3,10 +3,10 @@
  *
  */
 import { CompletionService } from '$lib/services/completion.service';
-import { config } from '$lib/stores/settings.svelte';
+import { settingsStore } from '$lib/stores/settings.svelte';
 import { tokenize } from '$lib/services/tokenize.service';
-import { STATS_UNITS } from '$lib/constants/processing-info';
-import { getContextSize } from '$lib/stores/models.svelte';
+import { STATS_UNITS } from '$lib/constants';
+import { modelsStore } from '$lib/stores/models.svelte';
 import { ErrorDialogType } from '$lib/enums';
 import { getETASecs } from '$lib/hooks/use-processing-state.svelte';
 import { chatStore } from '$lib/stores/chat.svelte';
@@ -50,7 +50,7 @@ export class NotebookStore {
 		this.generationStartTokens = this.totalTokens;
 
 		try {
-			const currentConfig = config();
+			const currentConfig = settingsStore.config;
 			const callbacks = {
 				onChunk: (chunk: string) => {
 					this.content += chunk;
@@ -115,7 +115,7 @@ export class NotebookStore {
 		cache_n: number;
 		prompt_progress?: ChatMessagePromptProgress;
 	}): void {
-		this.processingState = chatStore.parseTimingData(timingData, getContextSize());
+		this.processingState = chatStore.parseTimingData(timingData);
 		this.totalTokens = this.processingState?.contextUsed ?? 0;
 	}
 
@@ -200,7 +200,7 @@ export class NotebookStore {
 	getProcessingContextDetail(): string {
 		const state = this.processingState;
 		const contextUsed = state?.contextUsed;
-		const contextTotal = getContextSize();
+		const contextTotal = modelsStore.contextSize;
 
 		if (
 			typeof contextUsed === 'number' &&

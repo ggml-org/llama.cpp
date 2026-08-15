@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from typing import Iterable, TYPE_CHECKING
+import re
+
+from typing import Callable, Iterable, TYPE_CHECKING
 
 import torch
 
@@ -204,20 +206,115 @@ class Glm4MoeModel(TextModel):
 @ModelBase.register("Glm4MoeLiteForCausalLM")
 class Glm4MoeLiteModel(DeepseekV2Model):
     model_arch = gguf.MODEL_ARCH.DEEPSEEK2
+    skip_mtp = False
+    supports_mtp_export = True
+    _n_main_layers: int | None = None
 
     def set_vocab(self):
         return self._set_vocab_glm()
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        num_hidden_layers = self.hparams["num_hidden_layers"]
+        self.num_nextn_predict_layers = self.hparams.get("num_nextn_predict_layers", 0)
+        self.skip_mtp = self.no_mtp or self.num_nextn_predict_layers == 0
+
+        if self.skip_mtp:
+            self.block_count = num_hidden_layers
+        else:
+            self.block_count = num_hidden_layers + self.num_nextn_predict_layers
+
+        self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+
+        if self.skip_mtp:
+            return
+
+        self.gguf_writer.add_nextn_predict_layers(self.num_nextn_predict_layers)
+
+    def index_tensors(self, remote_hf_model_id: str | None = None):
+        type(self)._n_main_layers = self.hparams["num_hidden_layers"]
+        return super().index_tensors(remote_hf_model_id=remote_hf_model_id)
+
+    @classmethod
+    def filter_tensors(cls, item):
+        if (titem := super().filter_tensors(item)) is None:
+            return None
+        name, gen = titem
+
+        if cls._n_main_layers is not None:
+            match = re.match(r"model\.layers\.(\d+)\.", name)
+            is_mtp = match is not None and int(match.group(1)) >= cls._n_main_layers
+            if is_mtp and cls.no_mtp:
+                return None
+            if cls.mtp_only and not is_mtp and name not in (
+                "model.embed_tokens.weight", "model.norm.weight", "lm_head.weight",
+            ):
+                return None
+
+        return name, gen
+
+    def prepare_metadata(self, vocab_only: bool):
+        from_dir = self.fname_out.is_dir()
+        super().prepare_metadata(vocab_only=vocab_only)
+
+        if not self.mtp_only or not from_dir:
+            return
+
+        output_type: str = self.ftype.name.partition("_")[2]
+        fname_default: str = gguf.naming_convention(
+            self.metadata.name, self.metadata.basename, self.metadata.finetune,
+            self.metadata.version, size_label=None, output_type=output_type, model_type=None)
+        self.fname_out = self.fname_out.parent / f"mtp-{fname_default}.gguf"
 
 
 @ModelBase.register("GlmMoeDsaForCausalLM")
 class GlmMoeDsaModel(DeepseekV2Model):
     model_arch = gguf.MODEL_ARCH.GLM_DSA
     skip_mtp = False
+    supports_mtp_export = True
+
+    # Trunk layer count, stashed before indexing so the classmethod
+    # filter_tensors can identify the appended NextN/MTP block (mirrors
+    # HYV3Model / Step35Model).
+    _n_main_layers: int | None = None
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.block_count = self.hparams["num_hidden_layers"] + self.hparams.get("num_nextn_predict_layers", 0)
+        self.block_count = self.hparams["num_hidden_layers"]
+        if not self.no_mtp:
+            self.block_count += self.hparams.get("num_nextn_predict_layers", 0)
         self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
+
+    def index_tensors(self, remote_hf_model_id: str | None = None):
+        type(self)._n_main_layers = self.hparams["num_hidden_layers"]
+        return super().index_tensors(remote_hf_model_id=remote_hf_model_id)
+
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        if (titem := super().filter_tensors(item)) is None:
+            return None
+        name, gen = titem
+
+        # GLM-5.2 appends the NextN/MTP block past num_hidden_layers
+        # (model.layers.78 -> blk.78 in the 79-block file).
+        assert cls._n_main_layers is not None
+        is_mtp = (m := re.match(r"model\.layers\.(\d+)\.", name)) is not None and int(m.group(1)) >= cls._n_main_layers
+
+        # --no-mtp: drop the appended NextN block entirely.
+        if is_mtp and cls.no_mtp:
+            return None
+        # --mtp: keep ONLY NextN-block tensors plus the shared embeddings/
+        # norm/lm_head (so the resulting GGUF carries just the draft head).
+        if cls.mtp_only and not is_mtp and name not in (
+            "model.embed_tokens.weight", "model.norm.weight", "lm_head.weight",
+        ):
+            return None
+
+        return name, gen
 
     def set_vocab(self):
         return self._set_vocab_glm()
@@ -230,13 +327,16 @@ class GlmMoeDsaModel(DeepseekV2Model):
         self.gguf_writer.add_rope_dimension_count(int(rope_dim * partial_rotary_factor))
 
         # NextN/MTP prediction layers
-        if (num_nextn_predict_layers := self.hparams.get("num_nextn_predict_layers")) is not None:
+        if not self.no_mtp and (num_nextn_predict_layers := self.hparams.get("num_nextn_predict_layers")) is not None:
             self.gguf_writer.add_nextn_predict_layers(num_nextn_predict_layers)
 
         # DSA indexer parameters
         self.gguf_writer.add_indexer_head_count(self.hparams["index_n_heads"])
         self.gguf_writer.add_indexer_key_length(self.hparams["index_head_dim"])
         self.gguf_writer.add_indexer_top_k(self.hparams["index_topk"])
+        if (indexer_types := self.hparams.get("indexer_types")) is not None:
+            indexer_types = [t == "full" for t in indexer_types]
+            self.gguf_writer.add_indexer_types(indexer_types)
 
 
 @ModelBase.register("SolarOpenForCausalLM")

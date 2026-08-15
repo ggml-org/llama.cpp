@@ -397,6 +397,7 @@ static void ggml_backend_cpu_device_get_props(ggml_backend_dev_t dev, struct ggm
         /* .host_buffer           = */ false,
         /* .buffer_from_host_ptr  = */ true,
         /* .events                = */ false,
+        /* .mmap_support          = */ true,
     };
 }
 
@@ -469,6 +470,10 @@ static bool ggml_backend_cpu_device_supports_op(ggml_backend_dev_t dev, const st
             return (src0->type == GGML_TYPE_F32 ||
                     ((src0->type == GGML_TYPE_F16 || ggml_is_quantized(src0->type)) && src0->ne[2] == src1->ne[2] && src0->ne[3] == src1->ne[3])) &&
                 src1->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32;
+        case GGML_OP_CONV_2D:
+            return ggml_is_contiguous(op->src[0]);
+        case GGML_OP_SSM_SCAN:
+            return ggml_get_op_params_i32(op, 0) == 1 || op->src[3]->ne[0] == 1;
         default:
             return true;
     }

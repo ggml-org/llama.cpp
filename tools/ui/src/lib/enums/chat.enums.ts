@@ -78,3 +78,24 @@ export enum PdfViewMode {
 	TEXT = 'text',
 	PAGES = 'pages'
 }
+
+export enum ChatFormCommandAction {
+	PROMPT = 'prompt',
+	CWD = 'cwd',
+	MODEL = 'model'
+}
+
+export enum FileMentionEntryType {
+	FILE = 'file',
+	DIRECTORY = 'directory'
+}
+
+/**
+ * Kinds of tokens the chat-form-input-rich produces.
+ */
+export enum ChatFormInputRichTokenKind {
+	TEXT = 'text',
+	BADGE = 'badge',
+	CODE_INLINE = 'code_inline',
+	CODE_BLOCK = 'code_block'
+}

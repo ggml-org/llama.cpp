@@ -51,7 +51,7 @@ export class CompletionService {
 			// Other parameters
 			samplers,
 			backend_sampling,
-			custom,
+			customJson,
 			timings_per_token
 		} = options;
 
@@ -108,9 +108,9 @@ export class CompletionService {
 		if (backend_sampling !== undefined) requestBody.backend_sampling = backend_sampling;
 		if (timings_per_token !== undefined) requestBody.timings_per_token = timings_per_token;
 
-		if (custom) {
+		if (customJson) {
 			try {
-				const customParams = typeof custom === 'string' ? JSON.parse(custom) : custom;
+				const customParams = typeof customJson === 'string' ? JSON.parse(customJson) : customJson;
 				Object.assign(requestBody, customParams);
 			} catch (error) {
 				console.warn('Failed to parse custom parameters:', error);

@@ -1,10 +1,10 @@
-import { describe, expect, it } from 'vitest';
 import {
-	extractSearchResults,
 	extractSearchQuery,
+	extractSearchResults,
 	faviconForUrl,
 	isWebSearchToolName
 } from '$lib/utils/search-results';
+import { describe, expect, it } from 'vitest';
 
 describe('extractSearchResults', () => {
 	it('parses the Exa fixture with multiple results', () => {
@@ -30,6 +30,7 @@ Highlights:
 # FIFA World Cup Schedule
 ...`;
 		const results = extractSearchResults(fixture);
+
 		expect(results.length).toBe(3);
 		expect(results[0].title).toContain('World Cup 2026');
 		expect(results[0].url).toBe('https://www.fifa.com/articles/match-schedule');
@@ -60,6 +61,7 @@ just a paragraph
 Title: b
 URL: not a url`;
 		const results = extractSearchResults(txt);
+
 		// Only middle one should pass (has title + url).
 		expect(results.length).toBe(1);
 		expect(results[0].url).toBe('https://x.com');
@@ -73,6 +75,7 @@ Author: alice
 Highlights:
 a highlight`;
 		const results = extractSearchResults(txt);
+
 		expect(results.length).toBe(1);
 		expect(results[0].title).toBe('only one');
 		expect(results[0].author).toBe('alice');

@@ -5,7 +5,9 @@
 #include <openvino/op/constant.hpp>
 #include <openvino/op/group_conv.hpp>
 #include <openvino/op/reshape.hpp>
+#include <openvino/op/squeeze.hpp>
 #include <openvino/op/transpose.hpp>
+#include <openvino/op/unsqueeze.hpp>
 
 namespace ov {
 namespace frontend {
@@ -21,15 +23,15 @@ OutputVector translate_ssm_conv(const NodeContext & context) {
     auto sx_shape = context.get_input_shape(0).to_shape();  // [1, n_s, d_inner, ncs]
     auto c_shape = context.get_input_shape(1).to_shape();   // [1, 1, d_inner, d_conv]
 
-    int64_t n_s = sx_shape[1];
+    // int64_t n_s  = sx_shape[1];
     int64_t d_inner = sx_shape[2];
-    int64_t ncs = sx_shape[3];  // d_conv - 1 + n_t
-    int64_t d_conv = c_shape[3];
-    int64_t n_t = ncs - d_conv + 1;
+    // int64_t ncs  = sx_shape[3];  // d_conv - 1 + n_t
+    int64_t d_conv  = c_shape[3];
+    // int64_t n_t  = ncs - d_conv + 1;
 
     // Reshape sx from [1, n_s, d_inner, ncs] to [n_s, d_inner, ncs] for 1D GroupConvolution
-    auto sx_new_shape = ov::op::v0::Constant::create(ov::element::i64, {3}, std::vector<int64_t>{n_s, d_inner, ncs});
-    auto sx_reshaped = std::make_shared<ov::op::v1::Reshape>(sx, sx_new_shape, false);
+    auto sx_reshaped =
+        std::make_shared<ov::op::v0::Squeeze>(sx, ov::op::v0::Constant::create(ov::element::i64, {1}, {0}));
 
     // Reshape c from [1, 1, d_inner, d_conv] to [d_inner, 1, 1, d_conv]
     // GroupConvolution filter: [groups, out_channels/groups, in_channels/groups, kernel_size]
@@ -47,8 +49,8 @@ OutputVector translate_ssm_conv(const NodeContext & context) {
     auto transposed = std::make_shared<ov::op::v1::Transpose>(conv, perm);
 
     // Reshape to output shape [1, n_s, n_t, d_inner]
-    auto out_shape = ov::op::v0::Constant::create(ov::element::i64, {4}, std::vector<int64_t>{1, n_s, n_t, d_inner});
-    auto res = std::make_shared<ov::op::v1::Reshape>(transposed, out_shape, false);
+    auto res =
+        std::make_shared<ov::op::v0::Unsqueeze>(transposed, ov::op::v0::Constant::create(ov::element::i64, {1}, {0}));
 
     return rename_outputs_with_suffix({res}, context.get_name());
 }

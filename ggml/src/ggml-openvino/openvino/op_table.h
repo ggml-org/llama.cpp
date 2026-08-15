@@ -10,10 +10,12 @@ namespace op {
 
 #define GGML_OP_CONVERTER(op) OutputVector op(const NodeContext & context)
 
+GGML_OP_CONVERTER(translate_add);
 GGML_OP_CONVERTER(translate_cont);
 GGML_OP_CONVERTER(translate_concat);
 GGML_OP_CONVERTER(translate_add_id);
 GGML_OP_CONVERTER(translate_div);
+GGML_OP_CONVERTER(translate_fill);
 GGML_OP_CONVERTER(translate_get_rows);
 GGML_OP_CONVERTER(translate_im2col);
 GGML_OP_CONVERTER(translate_mulmat);
@@ -24,8 +26,10 @@ GGML_OP_CONVERTER(translate_rms_norm);
 GGML_OP_CONVERTER(translate_norm);
 GGML_OP_CONVERTER(translate_l2_norm);
 GGML_OP_CONVERTER(translate_sum_rows);
+GGML_OP_CONVERTER(translate_sqr);
 GGML_OP_CONVERTER(translate_rope);
 GGML_OP_CONVERTER(translate_scale);
+GGML_OP_CONVERTER(translate_sqrt);
 GGML_OP_CONVERTER(translate_unary_silu);
 GGML_OP_CONVERTER(translate_unary_softplus);
 GGML_OP_CONVERTER(translate_soft_max);
@@ -43,6 +47,12 @@ GGML_OP_CONVERTER(translate_pad);
 GGML_OP_CONVERTER(translate_ssm_conv);
 GGML_OP_CONVERTER(translate_gated_delta_net);
 GGML_OP_CONVERTER(translate_repeat);
+GGML_OP_CONVERTER(translate_cumsum);
+GGML_OP_CONVERTER(translate_fill);
+GGML_OP_CONVERTER(translate_set);
+GGML_OP_CONVERTER(translate_diag);
+GGML_OP_CONVERTER(translate_tri);
+GGML_OP_CONVERTER(translate_solve_tri);
 
 }  // namespace op
 

@@ -163,6 +163,7 @@ export enum FileExtensionText {
 // MIME type prefixes and includes for content detection
 export enum MimeTypePrefix {
 	IMAGE = 'image/',
+	AUDIO = 'audio/',
 	TEXT = 'text'
 }
 
@@ -180,6 +181,7 @@ export enum UriPattern {
 
 // MIME type enums
 export enum MimeTypeApplication {
+	JSON = 'application/json',
 	PDF = 'application/pdf',
 	OCTET_STREAM = 'application/octet-stream',
 	ZIP = 'application/zip'

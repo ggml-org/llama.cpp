@@ -1,18 +1,16 @@
 <script lang="ts">
-	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
-	import { RotateCcw, FlaskConical } from '@lucide/svelte';
+	import { FlaskConical, RotateCcw } from '@lucide/svelte';
+	import { SettingsChatParameterSourceIndicator } from '$lib/components/app/settings';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import { Input } from '$lib/components/ui/input';
 	import Label from '$lib/components/ui/label/label.svelte';
+	import * as RadioGroup from '$lib/components/ui/radio-group';
 	import * as Select from '$lib/components/ui/select';
 	import { Textarea } from '$lib/components/ui/textarea';
-	import { SETTING_CONFIG_INFO, SETTINGS_KEYS } from '$lib/constants';
+	import { ICON_CLASS_DEFAULT, SETTING_CONFIG_INFO, SETTINGS_KEYS } from '$lib/constants';
 	import { SettingsFieldType } from '$lib/enums/settings.enums';
-	import { settingsStore } from '$lib/stores/settings.svelte';
-	import { serverStore } from '$lib/stores/server.svelte';
-	import { modelsStore, selectedModelName, propsCacheVersion } from '$lib/stores/models.svelte';
+	import { modelsStore, serverStore, settingsStore } from '$lib/stores';
 	import { normalizeFloatingPoint } from '$lib/utils/precision';
-	import { SettingsChatParameterSourceIndicator } from '$lib/components/app/settings';
 	import type { Component } from 'svelte';
 
 	interface Props {
@@ -25,10 +23,10 @@
 	let { fields, localConfig, onConfigChange, onThemeChange }: Props = $props();
 
 	let currentModelParams = $derived.by(() => {
-		propsCacheVersion();
+		void modelsStore.propsCacheVersion;
 
 		if (serverStore.isRouterMode) {
-			const currentModelName = selectedModelName();
+			const currentModelName = modelsStore.selectedModelName;
 
 			if (currentModelName) {
 				const currentModelProps = modelsStore.getModelProps(currentModelName);
@@ -39,6 +37,7 @@
 				>;
 			}
 		}
+
 		return (serverStore.defaultParams ?? {}) as Record<string, unknown>;
 	});
 </script>
@@ -51,6 +50,7 @@
 				{@const serverDefault = currentModelParams[field.key]}
 				{@const isCustomRealTime = (() => {
 					if (serverDefault == null) return false;
+
 					if (currentValue === '') return false;
 
 					const numericInput = parseFloat(currentValue);
@@ -81,16 +81,20 @@
 				<div class="relative w-full">
 					<Input
 						id={field.key}
-						type={field.isPositiveInteger ? 'number' : 'text'}
-						{...field.isPositiveInteger ? { min: '1', step: '1' } : {}}
+						type={field.isPrivate ? 'password' : field.isPositiveInteger ? 'number' : 'text'}
+						autocomplete={field.isPrivate ? 'new-password' : undefined}
+						{...field.isPositiveInteger
+							? {
+									min: String(field.min ?? 1),
+									step: '1',
+									...(field.max != null ? { max: String(field.max) } : {})
+								}
+							: {}}
 						value={currentValue}
-						oninput={(e) => {
-							// Update local config immediately for real-time badge feedback
-							onConfigChange(field.key, e.currentTarget.value);
-						}}
+						oninput={(e) => onConfigChange(field.key, e.currentTarget.value)}
 						placeholder={currentModelParams[field.key] != null
 							? `Default: ${normalizeFloatingPoint(currentModelParams[field.key])}`
-							: ''}
+							: (field.placeholder ?? '')}
 						class="w-full {isCustomRealTime ? 'pr-8' : ''}"
 					/>
 					{#if isCustomRealTime}
@@ -161,7 +165,9 @@
 				{@const serverDefault = currentModelParams[field.key]}
 				{@const isCustomRealTime = (() => {
 					if (serverDefault == null) return false;
+
 					if (currentValue === '' || currentValue === undefined) return false;
+
 					return currentValue !== serverDefault;
 				})()}
 
@@ -233,6 +239,52 @@
 				</Select.Root>
 				{#if field.help || SETTING_CONFIG_INFO[field.key]}
 					<p class="mt-1 text-xs text-muted-foreground">
+						{field.help || SETTING_CONFIG_INFO[field.key]}
+					</p>
+				{/if}
+			{:else if field.type === SettingsFieldType.RADIO && field.radioOptions}
+				{@const radioOptions = field.radioOptions}
+				{@const currentMode =
+					radioOptions.find((o: { key: string }) => Boolean(localConfig[o.key]))?.value ??
+					radioOptions[0].value}
+
+				<Label class="flex items-center gap-1.5 text-sm font-medium mb-4">
+					{field.label}
+
+					{#if field.isExperimental}
+						<FlaskConical class="h-3.5 w-3.5 text-muted-foreground" />
+					{/if}
+				</Label>
+
+				<RadioGroup.Root
+					class="gap-4"
+					value={currentMode}
+					onValueChange={(value) => {
+						for (const opt of radioOptions) {
+							onConfigChange(opt.key, opt.value === value);
+						}
+					}}
+				>
+					{#each radioOptions as opt (opt.value)}
+						{@const itemId = `${field.key}-${opt.value}`}
+						<div class="flex items-center gap-2">
+							<RadioGroup.Item value={opt.value} id={itemId} />
+							<Label
+								for={itemId}
+								class="flex cursor-pointer items-center gap-1.5 text-sm font-normal"
+							>
+								{opt.label}
+
+								{#if opt.isExperimental}
+									<FlaskConical class="h-3.5 w-3.5 text-muted-foreground" />
+								{/if}
+							</Label>
+						</div>
+					{/each}
+				</RadioGroup.Root>
+
+				{#if field.help || SETTING_CONFIG_INFO[field.key]}
+					<p class="text-xs text-muted-foreground">
 						{field.help || SETTING_CONFIG_INFO[field.key]}
 					</p>
 				{/if}

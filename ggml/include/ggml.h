@@ -2459,7 +2459,8 @@ extern "C" {
             struct ggml_tensor  * A,
             struct ggml_tensor  * B,
             struct ggml_tensor  * C,
-            struct ggml_tensor  * ids);
+            struct ggml_tensor  * ids,
+            int64_t               K);
 
     // partition into non-overlapping windows with padding if needed
     // example:
@@ -2785,6 +2786,12 @@ extern "C" {
             int                   idx);
 
     GGML_API void ggml_build_forward_expand(
+            struct ggml_cgraph * cgraph,
+            struct ggml_tensor * tensor);
+
+    // add the tensor and its parents to the graph without marking them for compute
+    // the flag is set later, when the tensor is reached from a node that computes
+    GGML_API void ggml_build_forward_order(
             struct ggml_cgraph * cgraph,
             struct ggml_tensor * tensor);
 

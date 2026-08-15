@@ -3,7 +3,7 @@
 	import Button from '$lib/components/ui/button/button.svelte';
 	import Textarea from '$lib/components/ui/textarea/textarea.svelte';
 	import { Play, Square, Undo, Redo, RulerDimensionLine } from '@lucide/svelte';
-	import { config } from '$lib/stores/settings.svelte';
+	import { settingsStore } from '$lib/stores/settings.svelte';
 	import {
 		ChatMessageStatistics,
 		DialogChatError,
@@ -13,15 +13,14 @@
 	import { ProcessingText, ProcessingInfo } from '$lib/components/app/misc';
 	import { ErrorDialogType } from '$lib/enums';
 
-	import { modelOptions, selectedModelId } from '$lib/stores/models.svelte';
-	import { isRouterMode } from '$lib/stores/server.svelte';
+	import { modelsStore } from '$lib/stores/models.svelte';
+	import { serverStore } from '$lib/stores/server.svelte';
 	import * as Tooltip from '$lib/components/ui/tooltip';
-
 
 	import {
 		AUTO_SCROLL_AT_BOTTOM_THRESHOLD,
 		AUTO_SCROLL_INTERVAL
-	} from '$lib/constants/auto-scroll';
+	} from '$lib/constants';
 
 	// Note: this constant was previously in the constants/auto-scroll file above but was
 	// removed in the PR #20999
@@ -29,8 +28,8 @@
 
 	import { onMount } from 'svelte';
 
-	let disableAutoScroll = $derived(Boolean(config().disableAutoScroll));
-	let showMessageStats = $derived(config().showMessageStats);
+	let disableAutoScroll = $derived(Boolean(settingsStore.config.disableAutoScroll));
+	let showMessageStats = $derived(settingsStore.config.showMessageStats);
 	let autoScrollEnabled = $state(true);
 	let scrollContainer: HTMLTextAreaElement | null = $state(null);
 	let lastScrollTop = $state(0);
@@ -38,7 +37,7 @@
 	let scrollTimeout: ReturnType<typeof setTimeout> | undefined;
 	let userScrolledUp = $state(false);
 
-	let isRouter = $derived(isRouterMode());
+	let isRouter = $derived(serverStore.isRouterMode);
 	let processingState = $derived(notebookStore.processingState);
 
 	let errorDialog = $derived(notebookStore.error);
@@ -50,7 +49,7 @@
 		notebookStore.content = target.value;
 		notebookStore.resetUndoRedo();
 		if (activeModelId || !isRouter) {
-			notebookStore.updateTokenCount(activeModelId);
+			notebookStore.updateTokenCount(activeModelId ?? undefined);
 		}
 	}
 
@@ -85,13 +84,13 @@
 	}
 
 	let activeModelId = $derived.by(() => {
-		const options = modelOptions();
+		const options = modelsStore.models;
 
 		if (!isRouter) {
 			return options.length > 0 ? options[0].model : null;
 		}
 
-		const selectedId = selectedModelId();
+		const selectedId = modelsStore.selectedModelId;
 		if (selectedId) {
 			const model = options.find((m) => m.id === selectedId);
 			if (model) return model.model;
@@ -100,7 +99,7 @@
 		return null;
 	});
 
-	let hasModelSelected = $derived(!isRouter || !!selectedModelId());
+	let hasModelSelected = $derived(!isRouter || !!modelsStore.selectedModelId);
 
 	let generateTooltip = $derived.by(() => {
 		if (!hasModelSelected) {

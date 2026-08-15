@@ -87,7 +87,7 @@ function(llama_build_and_test source)
     set(multiValueArgs ARGS)
     cmake_parse_arguments(LLAMA_TEST "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
 
-    set(TEST_SOURCES ${source} ${LLAMA_TEST_UNPARSED_ARGUMENTS} get-model.cpp)
+    set(TEST_SOURCES ${source} ${LLAMA_TEST_UNPARSED_ARGUMENTS})
 
     if (NOT DEFINED LLAMA_TEST_LABEL)
         set(LLAMA_TEST_LABEL "main")
@@ -148,7 +148,7 @@ if (LLAMA_LLGUIDANCE)
     llama_build_and_test(test-grammar-llguidance.cpp ARGS ${PROJECT_SOURCE_DIR}/models/ggml-vocab-llama-bpe.gguf)
 endif ()
 
-llama_build(test-recurrent-state-rollback.cpp get-model.cpp)
+llama_build(test-recurrent-state-rollback.cpp)
 
 if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
     # these tests are disabled on Windows because they use internal functions not exported with LLAMA_API (when building with shared libraries)
@@ -217,6 +217,16 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
     set_tests_properties(test-recurrent-state-rollback PROPERTIES
         FIXTURES_REQUIRED generate-models
     )
+
+    llama_test(
+        test-recurrent-state-rollback
+        NAME test-recurrent-state-rollback-nemotron-h
+        LABEL main
+        ARGS -m "${MODEL_DIR}/nemotron_h-dense.gguf"
+    )
+    set_tests_properties(test-recurrent-state-rollback-nemotron-h PROPERTIES
+        FIXTURES_REQUIRED generate-models
+    )
 endif()
 
 llama_build_and_test(test-chat-peg-parser.cpp peg-parser/simple-tokenize.cpp)
@@ -258,6 +268,9 @@ llama_build_and_test(test-thread-safety.cpp ARGS -m "${MODEL_DEST}" -ngl 99 -p "
 set_tests_properties(test-thread-safety PROPERTIES FIXTURES_REQUIRED test-download-model)
 
 llama_build_and_test(test-arg-parser.cpp)
+llama_build_and_test(test-model-resolution.cpp)
+# the test serves its repos from an httplib server, and the library links it privately
+target_link_libraries(test-model-resolution PRIVATE cpp-httplib)
 
 if (NOT LLAMA_SANITIZE_ADDRESS AND NOT GGML_SCHED_NO_REALLOC)
   # TODO: repair known memory leaks
@@ -277,6 +290,10 @@ set_tests_properties(test-state-restore-fragmented PROPERTIES FIXTURES_REQUIRED 
 # Test state save/load functionality
 llama_build_and_test(test-save-load-state.cpp LABEL "model" ARGS -m "${MODEL_DEST}")
 set_tests_properties(test-save-load-state PROPERTIES FIXTURES_REQUIRED test-download-model)
+
+if (APPLE)
+    llama_build(test-rset-release.cpp)
+endif()
 
 if (NOT GGML_BACKEND_DL)
     # these tests use the backends directly and cannot be built with dynamic loading
