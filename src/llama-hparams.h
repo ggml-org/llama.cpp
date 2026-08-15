@@ -164,6 +164,9 @@ struct llama_hparams {
     uint32_t ssm_dt_rank = 0;
     uint32_t ssm_n_group = 0;
 
+    // for MiniMax-Text-01 linear attention
+    uint32_t n_embd_head_la = 0;
+
     // for Kimi Linear KDA
     uint32_t n_embd_head_kda = 0;
 
