@@ -35,7 +35,7 @@
 	}
 </script>
 
-<div class="flex h-full min-h-0 flex-col overflow-y-auto">
+<div class="flex h-full min-h-0 flex-col gap-4 overflow-y-auto">
 	{#each entries as entry (entry.id)}
 		<Card
 			role="button"

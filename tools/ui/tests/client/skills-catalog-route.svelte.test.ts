@@ -590,13 +590,13 @@ describe('/skills catalog preview', () => {
 		await vi.waitFor(() => expect(panes()).toHaveLength(2));
 
 		// The existing draggable handle is the gutter: a fixed 12px (w-3)
-		// neutral band carrying a single centered 1px border divider. The
+		// transparent band carrying a single centered 1px border divider. The
 		// class contract pins width and treatment (no layout measurement).
 		const handle = document.querySelector<HTMLElement>('[data-pane-resizer]');
 
 		expect(handle).not.toBeNull();
 		expect(handle!.classList.contains('w-3')).toBe(true);
-		expect(handle!.classList.contains('bg-muted')).toBe(true);
+		expect(handle!.classList.contains('bg-transparent')).toBe(true);
 		expect(handle!.classList.contains('after:bg-border')).toBe(true);
 		expect(handle!.classList.contains('after:w-px')).toBe(true);
 
