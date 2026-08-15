@@ -10,6 +10,7 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <cctype>
 #include <filesystem>
 #include <fstream>
 #include <future>
@@ -662,6 +663,13 @@ static hf_cache::hf_file find_best_dspark(const hf_cache::hf_files & files,
     return find_best_sibling(files, model, "dspark-", tag);
 }
 
+static bool string_iequal(const std::string & a, const std::string & b) {
+    return a.size() == b.size() &&
+        std::equal(a.begin(), a.end(), b.begin(), [](unsigned char ca, unsigned char cb) {
+            return std::tolower(ca) == std::tolower(cb);
+        });
+}
+
 static bool gguf_filename_is_model(const std::string & filepath) {
     if (!string_ends_with(filepath, ".gguf")) {
         return false;
@@ -757,7 +765,7 @@ common_download_hf_plan common_download_get_hf_plan(const common_params_model & 
 
     if (!model.hf_file.empty()) {
         for (const auto & f : all) {
-            if (f.path == model.hf_file) {
+            if (string_iequal(f.path, model.hf_file)) {
                 primary = f;
                 break;
             }

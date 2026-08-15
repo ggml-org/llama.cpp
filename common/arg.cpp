@@ -4555,7 +4555,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         string_format("use gpt-oss-20b (note: can download weights from the internet)"),
         [](common_params & params) {
             params.model.hf_repo = "ggml-org/gpt-oss-20b-GGUF";
-            params.model.hf_file = "gpt-oss-20b-mxfp4.gguf";
+            params.model.hf_file = "gpt-oss-20b-MXFP4.gguf";
             params.port = 8013;
             params.n_ubatch = 2048;
             params.n_batch = 32768;
