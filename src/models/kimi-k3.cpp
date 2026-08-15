@@ -185,24 +185,30 @@ static ggml_tensor * kimi_k3_situ(ggml_context * ctx0, ggml_tensor * gate, ggml_
 // cross-layer residual attention
 //
 
-// layout is [n_embd, n_ckpt, n_tokens]: rms_norm reduces over ne0, dsv4_hc_pre over ne1
-// append the new checkpoint, do not re-fold the whole chain
+// layout is [n_embd, n_ckpt_max, n_tokens]: rms_norm reduces over ne0, dsv4_hc_pre over ne1
+// the bank is allocated once, each push only writes the new checkpoint into its slot
 void llama_model_kimi_k3::graph::res_push(ggml_tensor * cur, int64_t n_embd, int64_t n_tokens) {
     ggml_tensor * ckpt = ggml_reshape_3d(ctx0, cur, n_embd, 1, n_tokens);
 
-    resi_stack = resi_stack ? ggml_concat(ctx0, resi_stack, ckpt, 1) : ckpt;
+    // keep the result view so that later reads depend on this write
+    resi_stack = ggml_set_inplace(ctx0, resi_stack, ckpt,
+                                  resi_stack->nb[1], resi_stack->nb[2], resi_stack->nb[3],
+                                  n_ckpt*resi_stack->nb[1]);
+
+    n_ckpt++;
 }
 
 ggml_tensor * llama_model_kimi_k3::graph::res_mix(ggml_tensor * cur, ggml_tensor * score_w,
                                                   int64_t n_tokens, int il) {
-    if (!resi_stack) {
+    if (n_ckpt == 0) {
         return cur; // layer 0: nothing banked yet
     }
 
-    const int   n_ckpt = (int) resi_stack->ne[1];
-    const float eps    = hparams.f_norm_rms_eps;
+    const float eps = hparams.f_norm_rms_eps;
 
-    ggml_tensor * src = resi_stack;   // [n_embd, n_ckpt, n_tokens]
+    // the written slots of the bank, strided over ne2 while the bank is not full
+    ggml_tensor * src = ggml_view_3d(ctx0, resi_stack, resi_stack->ne[0], n_ckpt, n_tokens,
+                                     resi_stack->nb[1], resi_stack->nb[2], 0);
 
     // one rms_norm scores all checkpoints at once
     // note: the scores use the normalized values, but the sum below uses the raw ones
@@ -271,6 +277,13 @@ llama_model_kimi_k3::graph::graph(const llama_model & model, const llm_graph_par
     const uint32_t res_bs        = hparams.attn_res_block_size;
     const bool     use_attn_res  = res_bs > 0;
     const int64_t  n_embd_latent = hparams.n_expert_latent > 0 ? hparams.n_expert_latent : n_embd;
+
+    if (use_attn_res) {
+        // one checkpoint per res_bs layers, see res_push for the bank layout
+        const int64_t n_ckpt_max = (n_layer + res_bs - 1) / res_bs;
+
+        resi_stack = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, n_embd, n_ckpt_max, n_tokens);
+    }
 
     for (int il = 0; il < n_layer; ++il) {
         const auto & layer = model.layers[il];

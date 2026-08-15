@@ -162,14 +162,20 @@ bool common_debug_cb_eval(struct ggml_tensor * t, bool ask, void * user_data) {
         }
     }
 
+    // some ops have no sources, for example ggml_arange
+    char src0_str[128] = { 0 };
+    if (src0) {
+        snprintf(src0_str, sizeof(src0_str), "%s{%s}", src0->name, common_ggml_ne_string(src0).c_str());
+    }
+
     char src1_str[128] = { 0 };
     if (src1) {
         snprintf(src1_str, sizeof(src1_str), "%s{%s}", src1->name, common_ggml_ne_string(src1).c_str());
     }
 
     if (matches_filter) {
-        LOG("%s: %24s = (%s) %10s(%s{%s}, %s}) = {%s}\n", __func__, t->name, ggml_type_name(t->type),
-            ggml_op_desc(t), src0->name, common_ggml_ne_string(src0).c_str(), src1 ? src1_str : "",
+        LOG("%s: %24s = (%s) %10s(%s, %s}) = {%s}\n", __func__, t->name, ggml_type_name(t->type),
+            ggml_op_desc(t), src0 ? src0_str : "", src1 ? src1_str : "",
             common_ggml_ne_string(t).c_str());
     }
 

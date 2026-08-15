@@ -2296,7 +2296,8 @@ struct llama_model_kimi_k3 : public llama_model_base {
         const llama_model & model;
 
         // Cross-layer residual attention (K3's `_apply_attn_res`).
-        ggml_tensor * resi_stack = nullptr;
+        ggml_tensor * resi_stack = nullptr; // checkpoint bank [n_embd, n_ckpt_max, n_tokens]
+        int           n_ckpt     = 0;       // bank slots written so far
 
         void          res_push(ggml_tensor * cur, int64_t n_embd, int64_t n_tokens);
         ggml_tensor * res_mix(ggml_tensor * cur, ggml_tensor * score_w,
