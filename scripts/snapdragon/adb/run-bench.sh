@@ -43,7 +43,7 @@ adb $adbserial $adbhost shell " \
   cd $basedir;         \
   LD_LIBRARY_PATH=$basedir/$branch/lib   \
   ADSP_LIBRARY_PATH=$basedir/$branch/lib \
-    $ndev $nhvx $opmask $verbose $profile $hb ./$branch/bin/llama-bench --device $device --mmap 0 -m $basedir/../gguf/$model \
+    $ndev $nhvx $opmask $verbose $profile $hb ./$branch/bin/llama-bench --device $device --load-mode none -m $basedir/../gguf/$model \
         --poll 1000 -t 6 --cpu-mask 0xfc --cpu-strict 1 \
         --ubatch-size 1024 -fa 1 -ngl 99 $cli_opts $@   \
 "

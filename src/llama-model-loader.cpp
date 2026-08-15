@@ -1178,7 +1178,7 @@ struct ggml_tensor * llama_model_loader::create_tensor(
                         if (use_mmap) {
                             static std::once_flag once;
                             std::call_once(once, [] {
-                                LLAMA_LOG_WARN("llama_model_loader: tensor overrides to CPU are used with mmap enabled - consider using --no-mmap for better performance\n");
+                                LLAMA_LOG_WARN("llama_model_loader: tensor overrides to CPU are used with mmap enabled - consider using --load-mode none for better performance\n");
                             });
                         }
                     } else {

@@ -62,7 +62,7 @@ adb $adbserial $adbhost shell " \
     LD_LIBRARY_PATH=$basedir/$branch/lib   \
     ADSP_LIBRARY_PATH=$basedir/$branch/lib \
     $verbose $experimental $sched $opmask $profile $hmx $nhvx $ndev $mtmd_backend \
-      ./$branch/bin/llama-mtmd-cli --no-mmap -m $basedir/../gguf/$model      \
+      ./$branch/bin/llama-mtmd-cli --load-mode none -m $basedir/../gguf/$model      \
          --mmproj $basedir/../gguf/$mmproj                                   \
          --image $basedir/../gguf/$image                                     \
          --poll 1000 -t 6 --cpu-mask 0xfc --cpu-strict 1                     \
