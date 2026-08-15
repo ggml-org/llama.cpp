@@ -58,6 +58,8 @@
 	let loadProgress = $derived(isLoading ? modelsStore.status.getLoadProgress(option.model) : null);
 	let loadPercent = $derived(Math.round(modelLoadFraction(loadProgress) * 100));
 	let loadTitle = $derived(modelLoadProgressText(loadProgress));
+	let modalities = $derived(option.modalities);
+	let supportsThinking = $derived(modelsStore.props.checkModelSupportsThinking(option.model));
 </script>
 
 <div
@@ -82,6 +84,8 @@
 		{hideOrgName}
 		aliases={option.aliases}
 		tags={option.tags}
+		modalities={modalities}
+		{supportsThinking}
 		class="flex-1"
 	/>
 
