@@ -146,6 +146,17 @@
 
 	let cwd = $derived(conversationsStore.activeConversation?.cwd ?? conversationsStore.pendingCwd);
 
+	// Skills picker candidates come only from the active CWD's current
+	// successful catalog slot: no catalog request is issued from here (the
+	// store's probe/route load owns fetching), and any non-ready slot yields
+	// no suggestions. The store's canonical no-CWD key is `undefined`; the
+	// form's `cwd` is `null` with no selection, so every Skills lookup
+	// canonicalizes with `?? undefined`.
+	const skillCatalogSlot = $derived(skillsStore.slotFor(cwd ?? undefined));
+	const skillSuggestions = $derived(
+		skillCatalogSlot?.status === 'ready' ? (skillCatalogSlot.catalog?.skills ?? []) : []
+	);
+
 	const pickers = useChatFormPickers({
 		dispatchSkillsCommand: handleSkillsCommand,
 		focusInput: refocusInput,
@@ -157,7 +168,7 @@
 		getValue: () => value,
 		hasCwdTools: () => toolsStore.hasEnabledCwdTools,
 		hasPrompts: () => mcpStore.hasPromptsCapability(conversationsStore.getAllMcpServerOverrides()),
-		hasSkills: () => skillsStore.slotFor(cwd)?.status !== 'error',
+		hasSkills: () => skillsStore.slotFor(cwd ?? undefined)?.status !== 'error',
 		openModelSelector: () => chatFormActionsRef?.openModelSelector(),
 		setCaretOffset: (offset) => inputRef?.setCaretOffset(offset),
 		setValue: (v) => {
@@ -171,7 +182,8 @@
 	 * catalog route (existing command behavior); a name resolves the base
 	 * read through the server and routes the successful result through the
 	 * shared durable activation operation. Unavailable/not-found reads
-	 * persist nothing and surface a toast.
+	 * persist nothing and surface a toast; a fresh activation confirms with
+	 * a success toast.
 	 */
 	function handleSkillsCommand(args: string): void {
 		const conversation = conversationsStore.activeConversation;
@@ -197,7 +209,11 @@
 
 			if (!outcome.created) {
 				toast.info(`Skill "${args}" is already activated in this conversation`);
+
+				return;
 			}
+
+			toast.success(`Skill "${args}" activated`);
 		});
 	}
 
@@ -616,6 +632,11 @@
 		onPromptLoadStart={handlePromptLoadStart}
 		onPromptLoadComplete={handlePromptLoadComplete}
 		onPromptLoadError={handlePromptLoadError}
+		isSkillPickerOpen={pickers.isSkillPickerOpen}
+		skillQuery={pickers.skillQuery}
+		skills={skillSuggestions}
+		onSkillPickerClose={pickers.handleSkillPickerClose}
+		onSkillSelect={pickers.handleSkillSelect}
 	/>
 
 	<div
