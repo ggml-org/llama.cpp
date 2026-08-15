@@ -2726,7 +2726,11 @@ class ChatStore {
 	parseTimingData(timingData: Record<string, unknown>): ApiProcessingState | null {
 		const cacheTokens = (timingData.cache_n as number) || 0,
 			predictedTokens = (timingData.predicted_n as number) || 0,
-			predictedMs = (timingData.predicted_ms as number) || undefined,
+			rawPredictedMs = (timingData.predicted_ms as number) || undefined,
+			predictedMs =
+				predictedTokens <= 1 && rawPredictedMs !== undefined && rawPredictedMs < 0.01
+					? undefined
+					: rawPredictedMs,
 			promptMs = (timingData.prompt_ms as number) || undefined,
 			promptTokens = (timingData.prompt_n as number) || 0,
 			tokensPerSecond =
