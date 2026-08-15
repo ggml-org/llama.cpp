@@ -4257,9 +4257,12 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
             } else if (res_type == TASK_RESPONSE_TYPE_OAI_CHAT || res_type == TASK_RESPONSE_TYPE_OAI_CMPL) {
                 // if multiple results in OAI format, we need to re-format them
                 json & choices = arr[0]["choices"];
+                json & usage   = arr[0]["usage"];
                 for (size_t i = 1; i < arr.size(); i++) {
                     choices.push_back(std::move(arr[i]["choices"][0]));
+                    usage["completion_tokens"] = usage["completion_tokens"].get<int32_t>() + arr[i]["usage"]["completion_tokens"].get<int32_t>();
                 }
+                usage["total_tokens"] = usage["prompt_tokens"].get<int32_t>() + usage["completion_tokens"].get<int32_t>();
                 res->ok(arr[0]);
             } else {
                 // multi-results, non-OAI compat
