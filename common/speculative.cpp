@@ -2396,6 +2396,21 @@ common_speculative_init_result::common_speculative_init_result(
     cparams.n_rs_seq  = 0;
     cparams.ctx_other = ctx_tgt;
 
+    // the draft context inherits the target's n_batch/n_ubatch, but a drafter only submits
+    // n_seq*(n_max+1) tokens when drafting, and chunks prompt processing by n_ubatch anyway.
+    // for a small drafter the oversized compute buffer does not matter, but a DFlash/DSpark
+    // drafter is an MoE model (3 blocks x 256 experts) where buffers sized for the target's
+    // batch cost GBs - memory the target's expert cache needs.
+    {
+        const uint32_t n_batch_dft = 512; // >= n_seq*(n_max+1) for any supported block size
+        if (cparams.n_batch > n_batch_dft) {
+            cparams.n_batch = n_batch_dft;
+        }
+        if (cparams.n_ubatch > n_batch_dft) {
+            cparams.n_ubatch = n_batch_dft;
+        }
+    }
+
     std::string model_path;
     if (has_draft) {
         model_path = params.speculative.draft.mparams.path;
