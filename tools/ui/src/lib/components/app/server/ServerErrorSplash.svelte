@@ -159,6 +159,7 @@
 						<Input
 							id="api-key-input"
 							type="password"
+							autocomplete="new-password"
 							placeholder="Enter your API key..."
 							bind:value={apiKeyInput}
 							onkeydown={handleApiKeyKeydown}

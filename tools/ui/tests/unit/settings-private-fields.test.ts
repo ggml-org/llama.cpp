@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
 import { SETTINGS_CHAT_SECTIONS, SETTINGS_KEYS } from '$lib/constants';
+import { describe, expect, it } from 'vitest';
 
 describe('checkApiKeyField', () => {
 	it('should have isPrivate set to true', () => {
