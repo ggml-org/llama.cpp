@@ -8,10 +8,9 @@
 	const reasoning = useReasoningMenu();
 </script>
 
-{#if reasoning.modelSupportsThinking}
-	<DropdownMenu.Sub>
+<DropdownMenu.Sub>
 		<DropdownMenu.SubTrigger class="flex cursor-pointer items-center gap-2">
-			{#if reasoning.thinkingEnabled}
+			{#if reasoning.isReasoningActive}
 				<Lightbulb class="{ICON_CLASS_DEFAULT} shrink-0 text-amber-400" />
 			{:else if reasoning.isOff}
 				<LightbulbOff class="{ICON_CLASS_DEFAULT} shrink-0 text-muted-foreground" />
@@ -20,7 +19,7 @@
 			{/if}
 
 			<span
-				class="text-sm inline-flex gap-2 {!reasoning.thinkingEnabled
+				class="text-sm inline-flex gap-2 {!reasoning.isReasoningActive
 					? 'text-muted-foreground'
 					: ''}"
 			>
@@ -73,4 +72,3 @@
 			{/each}
 		</DropdownMenu.SubContent>
 	</DropdownMenu.Sub>
-{/if}
