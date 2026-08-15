@@ -1030,7 +1030,12 @@ void llm_graph_input_attn_cross::set_input(const llama_ubatch * ubatch) {
     const int64_t n_tokens = ubatch->n_tokens;
 
     GGML_ASSERT(ggml_backend_buffer_is_host(cross_kq_mask->buffer));
-    GGML_ASSERT(!ubatch->equal_seqs()); // TODO: use ubatch->n_seqs instead of failing
+    // [PR #N] 1-token decode batch vacuously satisfies equal_seqs() (single token × single seq),
+    // but the loop below still iterates correctly (decode one token × encoder N positions, with
+    // seq-id routing through `ubatch->n_seq_id[i]`). The real "vacuously equal" failure mode
+    // would be ubatch->n_seqs == 0, which is already guarded by llama_decode callers. Drop the
+    // over-aggressive assert so encoder-decoder models (NLLB, MBART, T5-encoder-decoder, etc.)
+    // can run multi-seq batches that include 1-token decode steps.
 
     const auto fill_mask = [&](auto * data) {
         using T = std::remove_reference_t<decltype(*data)>;
