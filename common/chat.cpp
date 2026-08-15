@@ -2745,6 +2745,52 @@ static void map_developer_role_to_system(json & messages) {
 }
 
 
+// reorder messages to place all system/developer messages at the beginning
+// this fixes incompatibility with templates that require system at position 0
+// (e.g., Qwen3.5+, MiniMax, etc.) when clients send system messages out of order
+static void reorder_system_messages_first(json & messages) {
+    json system_msgs;
+    json other_msgs;
+    for (auto & msg : messages) {
+        if (msg.contains("role") &&
+            (msg["role"] == "system" || msg["role"] == "developer")) {
+            system_msgs.push_back(msg);
+        } else {
+            other_msgs.push_back(msg);
+        }
+    }
+    if (system_msgs.size() != messages.size() &&
+        (system_msgs.size() != 0 || messages.size() != other_msgs.size())) {
+        messages = json::array();
+        for (auto & msg : system_msgs) {
+            messages.push_back(msg);
+        }
+        for (auto & msg : other_msgs) {
+            messages.push_back(msg);
+        }
+    }
+}
+
+// strip image/audio/video content parts for non-multimodal models
+// Claude Code sends multimodal content even for text-only models
+static void strip_non_text_content(json & messages) {
+    for (auto & msg : messages) {
+        if (msg.contains("content") && msg["content"].is_array()) {
+            json filtered = json::array();
+            for (auto & part : msg["content"]) {
+                std::string type = part.contains("type") ? part.at("type").get<std::string>() : "";
+                if (type == "text" || type == "media_marker") {
+                    filtered.push_back(part);
+                }
+                // drop image_url, image, input_audio, input_video, etc.
+            }
+            if (filtered.size() != msg["content"].size()) {
+                msg["content"] = filtered;
+            }
+        }
+    }
+}
+
 // if first message is system and template does not support it, merge it with next message
 static void system_message_not_supported(json & messages) {
     if (!messages.empty() && messages.front().at("role") == "system") {
@@ -3423,6 +3469,12 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
     if (src.find("<|channel|>") == std::string::npos) {
         // map developer to system for all models except for GPT-OSS
         workaround::map_developer_role_to_system(params.messages);
+        // reorder so that system messages come first; this fixes templates
+        // that enforce system at position 0 when clients send them out of order
+        workaround::reorder_system_messages_first(params.messages);
+        // strip image/audio/video content for non-multimodal models;
+        // Claude Code sends multimodal content even for text-only models
+        workaround::strip_non_text_content(params.messages);
     }
 
     if (!tmpl.original_caps().supports_system_role) {

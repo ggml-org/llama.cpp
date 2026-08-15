@@ -1188,13 +1188,30 @@ json oaicompat_chat_params_parse(
             throw std::invalid_argument("Expected 'content' to be a string or an array");
         }
 
+        // collect indices to remove (for non-multimodal models)
+        std::vector<size_t> to_remove;
+        for (size_t i = 0; i < content.size(); ++i) {
+            std::string type = json_value(content[i], "type", std::string());
+            if ((type == "image_url" && !opt.allow_image) ||
+                (type == "input_audio" && !opt.allow_audio) ||
+                (type == "input_video" && !opt.allow_video)) {
+                std::string kind;
+                if (type == "image_url") kind = "image";
+                else if (type == "input_audio") kind = "audio";
+                else kind = "video";
+                SRV_WRN("stripping %s content (model does not support it)\n", kind.c_str());
+                to_remove.push_back(i);
+            }
+        }
+        if (!to_remove.empty()) {
+            for (auto it = to_remove.rbegin(); it != to_remove.rend(); ++it) {
+                content.erase(content.begin() + *it);
+            }
+        }
+
         for (auto & p : content) {
             std::string type = json_value(p, "type", std::string());
             if (type == "image_url") {
-                if (!opt.allow_image) {
-                    throw std::runtime_error("image input is not supported - hint: if this is unexpected, you may need to provide the mmproj");
-                }
-
                 json image_url = json_value(p, "image_url", json::object());
                 std::string url = json_value(image_url, "url", std::string());
                 handle_media(out_files, url, opt.media_path, true);
@@ -1204,10 +1221,6 @@ json oaicompat_chat_params_parse(
                 p.erase("image_url");
 
             } else if (type == "input_audio") {
-                if (!opt.allow_audio) {
-                    throw std::runtime_error("audio input is not supported - hint: if this is unexpected, you may need to provide the mmproj");
-                }
-
                 // note: don't need to validate "format", it's redundant
                 json input_audio = json_value(p, "input_audio", json::object());
                 std::string url  = json_value(input_audio, "data",
@@ -1219,10 +1232,6 @@ json oaicompat_chat_params_parse(
                 p.erase("input_audio");
 
             } else if (type == "input_video") {
-                if (!opt.allow_video) {
-                    throw std::runtime_error("video input is not supported - hint: if this is unexpected, you may need to provide the mmproj");
-                }
-
                 json input_video = json_value(p, "input_video", json::object());
                 std::string url  = json_value(input_video, "data",
                                         json_value(input_video, "url", std::string()));
