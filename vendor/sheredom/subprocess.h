@@ -351,6 +351,7 @@ typedef struct _PROCESS_INFORMATION *LPPROCESS_INFORMATION;
 typedef struct _SECURITY_ATTRIBUTES *LPSECURITY_ATTRIBUTES;
 typedef struct _STARTUPINFOW *LPSTARTUPINFOW;
 typedef struct _OVERLAPPED *LPOVERLAPPED;
+typedef struct _PROC_THREAD_ATTRIBUTE_LIST *LPPROC_THREAD_ATTRIBUTE_LIST;
 
 #ifdef __clang__
 #pragma clang diagnostic pop
@@ -402,6 +403,11 @@ struct subprocess_startup_info_s {
   void *hStdError;
 };
 
+struct subprocess_startup_info_ex_s {
+  struct subprocess_startup_info_s startupInfo;
+  void *attributeList;
+};
+
 struct subprocess_overlapped_s {
   uintptr_t Internal;
   uintptr_t InternalHigh;
@@ -451,6 +457,14 @@ __declspec(dllimport) int __stdcall CreateProcessW(
     const subprocess_wchar_t *, subprocess_wchar_t *, LPSECURITY_ATTRIBUTES,
     LPSECURITY_ATTRIBUTES, int, unsigned long, void *,
     const subprocess_wchar_t *, LPSTARTUPINFOW, LPPROCESS_INFORMATION);
+__declspec(dllimport) int __stdcall
+InitializeProcThreadAttributeList(LPPROC_THREAD_ATTRIBUTE_LIST, unsigned long,
+                                  unsigned long, subprocess_size_t *);
+__declspec(dllimport) int __stdcall UpdateProcThreadAttribute(
+    LPPROC_THREAD_ATTRIBUTE_LIST, unsigned long, subprocess_size_t, void *,
+    subprocess_size_t, void *, subprocess_size_t *);
+__declspec(dllimport) void __stdcall
+DeleteProcThreadAttributeList(LPPROC_THREAD_ATTRIBUTE_LIST);
 __declspec(dllimport) int __stdcall MultiByteToWideChar(
     unsigned int, unsigned long, const char *, int, subprocess_wchar_t *, int);
 __declspec(dllimport) int __stdcall CloseHandle(void *);
@@ -667,6 +681,49 @@ int subprocess_create_named_pipe_helper(void **rd, void **wr) {
 }
 #endif
 
+#if !defined(_WIN32)
+/* Create pipes with close-on-exec set so later subprocesses do not inherit
+   descriptors belonging to subprocesses which are already running. */
+static int subprocess_pipe_cloexec(int fds[2]) {
+  int fd_flags;
+  int index;
+  int saved_errno;
+
+#if defined(__linux__) || defined(__FreeBSD__) || defined(__NetBSD__) ||       \
+    defined(__OpenBSD__) || defined(__DragonFly__) ||                         \
+    (defined(__sun) && defined(__SVR4))
+  if (0 == pipe2(fds, O_CLOEXEC)) {
+    return 0;
+  }
+
+  /* Older kernels can lack pipe2 even when the C library declares it. */
+  if (ENOSYS != errno) {
+    return -1;
+  }
+#endif
+
+  if (0 != pipe(fds)) {
+    return -1;
+  }
+
+  for (index = 0; index < 2; index++) {
+    fd_flags = fcntl(fds[index], F_GETFD, 0);
+    if ((-1 == fd_flags) ||
+        (-1 == fcntl(fds[index], F_SETFD, fd_flags | FD_CLOEXEC))) {
+      saved_errno = errno;
+      close(fds[0]);
+      close(fds[1]);
+      fds[0] = -1;
+      fds[1] = -1;
+      errno = saved_errno;
+      return -1;
+    }
+  }
+
+  return 0;
+}
+#endif
+
 int subprocess_create(const char *const commandLine[], int options,
                       struct subprocess_s *const out_process) {
   return subprocess_create_ex(commandLine, options, SUBPROCESS_NULL,
@@ -692,6 +749,7 @@ int subprocess_create_ex(const char *const commandLine[], int options,
   subprocess_size_t bs_run;
   unsigned long flags = 0;
   unsigned long last_error = 0;
+  int attribute_list_initialized = 0;
   int result = subprocess_error_unknown;
   const unsigned int codePageUtf8 = 65001;
   const unsigned long mbErrInvalidChars = 0x00000008;
@@ -699,6 +757,8 @@ int subprocess_create_ex(const char *const commandLine[], int options,
   const unsigned long handleFlagInherit = 0x00000001;
   const unsigned long createNoWindow = 0x08000000;
   const unsigned long createUnicodeEnvironment = 0x00000400;
+  const unsigned long extendedStartupInfoPresent = 0x00080000;
+  const subprocess_size_t procThreadAttributeHandleList = 0x00020002;
   struct subprocess_subprocess_information_s processInfo = {SUBPROCESS_NULL,
                                                             SUBPROCESS_NULL, 0,
                                                             0};
@@ -706,6 +766,11 @@ int subprocess_create_ex(const char *const commandLine[], int options,
                                                     SUBPROCESS_NULL, 1};
   subprocess_wchar_t empty_environment[2] = {0, 0};
   subprocess_wchar_t *used_environment = SUBPROCESS_NULL;
+  subprocess_size_t attribute_list_size = 0;
+  subprocess_size_t inherited_handle_count = 0;
+  LPPROC_THREAD_ATTRIBUTE_LIST attribute_list = SUBPROCESS_NULL;
+  void *inherited_handles[3];
+  struct subprocess_startup_info_ex_s startInfoEx;
   struct subprocess_startup_info_s startInfo = {0,
                                                 SUBPROCESS_NULL,
                                                 SUBPROCESS_NULL,
@@ -1080,6 +1145,44 @@ int subprocess_create_ex(const char *const commandLine[], int options,
     }
   }
 
+  /* Restrict inheritance to this subprocess's standard streams. Without a
+     handle list, concurrent subprocess_create calls can inherit each other's
+     temporarily-inheritable child pipe handles. */
+  inherited_handles[inherited_handle_count++] = startInfo.hStdInput;
+  inherited_handles[inherited_handle_count++] = startInfo.hStdOutput;
+  if (startInfo.hStdError != startInfo.hStdOutput) {
+    inherited_handles[inherited_handle_count++] = startInfo.hStdError;
+  }
+
+  InitializeProcThreadAttributeList(SUBPROCESS_NULL, 1, 0,
+                                    &attribute_list_size);
+  if (0 == attribute_list_size) {
+    result = subprocess_error_spawn;
+    goto cleanup;
+  }
+
+  attribute_list = SUBPROCESS_PTR_CAST(LPPROC_THREAD_ATTRIBUTE_LIST,
+                                       _alloca(attribute_list_size));
+  if (!attribute_list || !InitializeProcThreadAttributeList(
+                             attribute_list, 1, 0, &attribute_list_size)) {
+    result = subprocess_error_spawn;
+    goto cleanup;
+  }
+  attribute_list_initialized = 1;
+
+  if (!UpdateProcThreadAttribute(
+          attribute_list, 0, procThreadAttributeHandleList, inherited_handles,
+          inherited_handle_count * sizeof(inherited_handles[0]),
+          SUBPROCESS_NULL, SUBPROCESS_NULL)) {
+    result = subprocess_error_spawn;
+    goto cleanup;
+  }
+
+  startInfoEx.startupInfo = startInfo;
+  startInfoEx.startupInfo.cb = sizeof(startInfoEx);
+  startInfoEx.attributeList = attribute_list;
+  flags |= extendedStartupInfoPresent;
+
   if (!CreateProcessW(
           SUBPROCESS_NULL,
           commandLineCombinedWide, // command line
@@ -1090,7 +1193,7 @@ int subprocess_create_ex(const char *const commandLine[], int options,
           used_environment,        // used environment
           process_cwd_wide,        // use specified current directory
           SUBPROCESS_PTR_CAST(LPSTARTUPINFOW,
-                              &startInfo), // STARTUPINFO pointer
+                              &startInfoEx), // STARTUPINFOEX pointer
           SUBPROCESS_PTR_CAST(LPPROCESS_INFORMATION, &processInfo))) {
     result = subprocess_error_from_windows_error(GetLastError());
     if (subprocess_error_unknown == result) {
@@ -1098,6 +1201,9 @@ int subprocess_create_ex(const char *const commandLine[], int options,
     }
     goto cleanup;
   }
+
+  DeleteProcThreadAttributeList(attribute_list);
+  attribute_list_initialized = 0;
 
   out_process->hProcess = processInfo.hProcess;
   processInfo.hProcess = SUBPROCESS_NULL;
@@ -1127,6 +1233,10 @@ int subprocess_create_ex(const char *const commandLine[], int options,
 
 cleanup:
   last_error = GetLastError();
+
+  if (attribute_list_initialized) {
+    DeleteProcThreadAttributeList(attribute_list);
+  }
 
   if (subprocess_error_unknown == result) {
     result = subprocess_error_from_windows_error(last_error);
@@ -1202,13 +1312,13 @@ cleanup:
 
   memset(out_process, 0, sizeof(*out_process));
 
-  if (0 != pipe(stdinfd)) {
+  if (0 != subprocess_pipe_cloexec(stdinfd)) {
     saved_errno = errno;
     result = subprocess_error_pipe;
     goto cleanup;
   }
 
-  if (0 != pipe(stdoutfd)) {
+  if (0 != subprocess_pipe_cloexec(stdoutfd)) {
     saved_errno = errno;
     result = subprocess_error_pipe;
     goto cleanup;
@@ -1216,7 +1326,7 @@ cleanup:
 
   if (subprocess_option_combined_stdout_stderr !=
       (options & subprocess_option_combined_stdout_stderr)) {
-    if (0 != pipe(stderrfd)) {
+    if (0 != subprocess_pipe_cloexec(stderrfd)) {
       saved_errno = errno;
       result = subprocess_error_pipe;
       goto cleanup;

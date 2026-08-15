@@ -99,6 +99,7 @@ patches = {
         "  uint32_t W[16];\n",
         "  uint32_t W[16] = {0};\n"
     )],
+    "https://raw.githubusercontent.com/sheredom/subprocess.h/9ce0d701b6fb10f8f8c4445edd31e7c60a1237e3/subprocess.h": "vendor/sheredom/subprocess.h",
 }
 
 for url, filename in vendor.items():
