@@ -88,6 +88,7 @@
 		tags={option.tags}
 		modalities={modalities}
 		{supportsThinking}
+		showRawTooltip
 		class="flex-1"
 	/>
 
