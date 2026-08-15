@@ -524,13 +524,15 @@ These options help improve the performance and memory usage of the LLaMA models.
 -   `-t N, --threads N`: Set the number of threads to use during generation. For optimal performance, it is recommended to set this value to the number of physical CPU cores your system has (as opposed to the logical number of cores). Using the correct number of threads can greatly improve performance.
 -   `-tb N, --threads-batch N`: Set the number of threads to use during batch and prompt processing. In some systems, it is beneficial to use a higher number of threads during batch processing than during generation. If not specified, the number of threads used for batch processing will be the same as the number of threads used for generation.
 
-### Mlock
+### Model Loading Mode
 
--   `--mlock`: Lock the model in memory, preventing it from being swapped out when memory-mapped. This can improve performance but trades away some of the advantages of memory-mapping by requiring more RAM to run and potentially slowing down load times as the model loads into RAM.
-
-### No Memory Mapping
-
--   `--no-mmap`: Do not memory-map the model. By default, models are mapped into memory, which allows the system to load only the necessary parts of the model as needed. However, if the model is larger than your total amount of RAM or if your system is low on available memory, using mmap might increase the risk of pageouts, negatively impacting performance. Disabling mmap results in slower load times but may reduce pageouts if you're not using `--mlock`. Note that if the model is larger than the total amount of RAM, turning off mmap would prevent the model from loading at all.
+-   `-lm MODE, --load-mode MODE`: Specify the model loading mode (default: `auto`).
+    -   `auto`: Memory-map the model, unless the device does not support it.
+    -   `none`: No special loading mode. Disabling mmap results in slower load times but may reduce pageouts if you're not using `mlock`. Note that if the model is larger than the total amount of RAM, turning off mmap would prevent the model from loading at all.
+    -   `mmap`: Memory-map the model.
+    -   `mlock`: Lock the model in memory, preventing it from being swapped out when memory-mapped. This can improve performance but trades away some of the advantages of memory-mapping by requiring more RAM to run and potentially slowing down load times as the model loads into RAM.
+    -   `mmap+mlock`: Memory-map the model and lock it in memory.
+    -   `dio`: Use DirectIO if available.
 
 ### NUMA support
 

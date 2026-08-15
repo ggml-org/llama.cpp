@@ -145,6 +145,7 @@ enum llm_arch {
     LLM_ARCH_LLAMA_EMBED,
     LLM_ARCH_MAINCODER,
     LLM_ARCH_KIMI_LINEAR,
+    LLM_ARCH_KIMI_K3,
     LLM_ARCH_TALKIE,
     LLM_ARCH_MELLUM,
     LLM_ARCH_EAGLE3,
@@ -192,6 +193,9 @@ enum llm_kv {
     LLM_KV_FEATURES_LENGTH,
     LLM_KV_BLOCK_COUNT,
     LLM_KV_LEADING_DENSE_BLOCK_COUNT,
+    LLM_KV_ATTN_RES_BLOCK_SIZE,
+    LLM_KV_ACTIVATION_SITU_BETA,
+    LLM_KV_ACTIVATION_SITU_LINEAR_BETA,
     LLM_KV_FEED_FORWARD_LENGTH,
     LLM_KV_EXPERT_FEED_FORWARD_LENGTH,
     LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH,
@@ -207,6 +211,7 @@ enum llm_kv {
     LLM_KV_EXPERT_GROUP_USED_COUNT,
     LLM_KV_EXPERT_WEIGHTS_SCALE,
     LLM_KV_EXPERT_WEIGHTS_NORM,
+    LLM_KV_EXPERT_LATENT_LENGTH,
     LLM_KV_EXPERT_GATING_FUNC,
     LLM_KV_EXPERT_GROUP_SCALE,
     LLM_KV_EXPERTS_PER_GROUP,
@@ -318,6 +323,7 @@ enum llm_kv {
     LLM_KV_SSM_DT_B_C_RMS,
 
     LLM_KV_KDA_HEAD_DIM,
+    LLM_KV_KDA_GATE_LOWER_BOUND,
 
     LLM_KV_WKV_HEAD_SIZE,
 
@@ -492,6 +498,13 @@ enum llm_tensor {
     LLM_TENSOR_SSM_BETA,            // kimi: beta mixing coefficient and qwen3.5
     LLM_TENSOR_SSM_G_A,             // kimi: output gate projection A
     LLM_TENSOR_SSM_G_B,             // kimi: output gate projection B
+    LLM_TENSOR_SSM_G,               // kimi-k3: full-rank KDA gate
+    LLM_TENSOR_ATTN_RES_SCORE,      // kimi-k3: fused res_norm*res_proj (pre-attn)
+    LLM_TENSOR_FFN_RES_SCORE,       // kimi-k3: fused res_norm*res_proj (pre-ffn)
+    LLM_TENSOR_OUTPUT_RES_SCORE,    // kimi-k3: fused res_norm*res_proj (final)
+    LLM_TENSOR_FFN_ROUTED_DOWN,     // kimi-k3: latent MoE down
+    LLM_TENSOR_FFN_ROUTED_UP,       // kimi-k3: latent MoE up
+    LLM_TENSOR_FFN_ROUTED_NORM,     // kimi-k3: latent MoE norm
     LLM_TENSOR_TIME_MIX_W0,
     LLM_TENSOR_TIME_MIX_W1,
     LLM_TENSOR_TIME_MIX_W2,

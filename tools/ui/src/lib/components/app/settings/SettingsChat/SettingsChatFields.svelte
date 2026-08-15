@@ -81,7 +81,8 @@
 				<div class="relative w-full">
 					<Input
 						id={field.key}
-						type={field.isPositiveInteger ? 'number' : 'text'}
+						type={field.isPrivate ? 'password' : field.isPositiveInteger ? 'number' : 'text'}
+						autocomplete={field.isPrivate ? 'new-password' : undefined}
 						{...field.isPositiveInteger
 							? {
 									min: String(field.min ?? 1),

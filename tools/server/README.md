@@ -296,10 +296,17 @@ For the full list of features, please refer to [server's changelog](https://gith
 
 Note: If both command line argument and environment variable are both set for the same param, the argument will take precedence over env var.
 
-For boolean options like `--mmap` or `--kv-offload`, the environment variable is handled as shown in this example:
-- `LLAMA_ARG_MMAP=true` means enabled, other accepted values are: `1`, `on`, `enabled`
-- `LLAMA_ARG_MMAP=false` means disabled, other accepted values are: `0`, `off`, `disabled`
-- If `LLAMA_ARG_NO_MMAP` is present (no matter the value), it means disabling mmap
+For string options like `--load-mode`, the environment variable is handled as shown in this example:
+- `LLAMA_ARG_LOAD_MODE=auto` sets the loading mode to auto (default)
+- `LLAMA_ARG_LOAD_MODE=none` disables special loading
+- `LLAMA_ARG_LOAD_MODE=mmap` enables memory-mapping
+- `LLAMA_ARG_LOAD_MODE=mlock` locks the model in RAM
+- `LLAMA_ARG_LOAD_MODE=mmap+mlock` enables memory-mapping and locks in RAM
+- `LLAMA_ARG_LOAD_MODE=dio` uses DirectIO if available
+
+For boolean options like `--kv-offload`:
+- `LLAMA_ARG_KV_OFFLOAD=true` means enabled, other accepted values are: `1`, `on`, `enabled`
+- `LLAMA_ARG_KV_OFFLOAD=false` means disabled, other accepted values are: `0`, `off`, `disabled`
 
 Example usage of docker compose with environment variables:
 
@@ -1893,7 +1900,7 @@ Example events:
 }
 // note for "loading" status:
 // - subsequent events will follow the same order of "stages" list
-// - mmap is may report incorrect progress on some platforms; if you need exact progress, use --no-mmap
+// - mmap may report incorrect progress on some platforms; if you need exact progress, use --load-mode none
 
 {
   "model": "...",
