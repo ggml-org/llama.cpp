@@ -21,6 +21,8 @@ export const ROUTES = {
 	SEARCH: '#/search',
 	/** Settings base — for dynamic settings URLs use RouterService. */
 	SETTINGS: '#/settings',
+	/** Exit destination for the settings view (fallback when no referrer). */
+	SETTINGS_EXIT: '#/',
 	/** Root — start of the app. */
 	START: '#/'
 } as const;
