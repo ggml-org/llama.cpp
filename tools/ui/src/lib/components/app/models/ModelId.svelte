@@ -10,6 +10,7 @@
 		modelId: string;
 		hideOrgName?: boolean;
 		showRaw?: boolean;
+		showRawTooltip?: boolean;
 		hideQuantization?: boolean;
 		hideTags?: boolean;
 		aliases?: string[];
@@ -28,6 +29,7 @@
 		modalities,
 		modelId,
 		showRaw = undefined,
+		showRawTooltip = false,
 		supportsThinking = false,
 		tags,
 		...rest
@@ -60,7 +62,7 @@
 {#if resolvedShowRaw}
 	<TruncatedText class="font-medium {className}" showTooltip={false} text={modelId} {...rest} />
 {:else}
-	<span class="flex min-w-0 items-center gap-1.5 {className}" {...rest}>
+	{#snippet nameAndBadges()}
 		<span class="min-w-0 truncate font-medium">
 			{#if !hideOrgName && parsed.orgName}{parsed.orgName}/{/if}{displayName}
 		</span>
@@ -94,6 +96,22 @@
 				{/each}
 			{/if}
 		</span>
+	{/snippet}
+
+	<span class="flex min-w-0 items-center gap-1.5 {className}" {...rest}>
+		{#if showRawTooltip}
+			<Tooltip.Root>
+				<Tooltip.Trigger class="flex min-w-0 items-center gap-1.5">
+					{@render nameAndBadges()}
+				</Tooltip.Trigger>
+
+				<Tooltip.Content>
+					<p>{modelId}</p>
+				</Tooltip.Content>
+			</Tooltip.Root>
+		{:else}
+			{@render nameAndBadges()}
+		{/if}
 
 		{#if hasModalityIcons}
 			<span class="inline-flex items-center gap-1.25 text-muted-foreground">
