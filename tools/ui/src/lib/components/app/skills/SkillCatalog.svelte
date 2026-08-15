@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { fly } from 'svelte/transition';
 	import { Circle, BookOpen, CircleSlash, RefreshCw, X } from '@lucide/svelte';
 	import { browser } from '$app/environment';
 	import { goto } from '$app/navigation';
@@ -230,6 +231,23 @@
 			</Empty.Root>
 		</div>
 	{:else}
+		{#if !selectedEntry && !budgetDismissed}
+			{#if packState === 'packing'}
+				<p class="text-sm text-muted-foreground">Calculating the Skills prompt budget...</p>
+			{:else if packState === 'error'}
+				<Alert variant="destructive">
+					<Circle class="h-4 w-4" />
+					<AlertTitle>Could not pack the Skills catalog</AlertTitle>
+					<AlertDescription>{packErrorMessage}</AlertDescription>
+				</Alert>
+			{:else if packed}
+				<SkillBudgetStatus
+					{packed}
+					{budget}
+					onDismiss={() => (budgetDismissed = true)}
+				/>
+			{/if}
+		{/if}
 		{#if !selectedEntry && !diagnosticsDismissed && catalog && catalog.diagnostics.length > 0}
 			<div class="relative">
 				<div class="flex flex-col gap-2">
@@ -287,12 +305,14 @@
 						minSize={35}
 						onResize={(size) => rememberPaneSize(0, size)}
 					>
-						<SkillCatalogList
-							entries={catalog?.skills ?? []}
-							selectedId={selectedId}
-							open={true}
-							onSelect={handleSelect}
-						/>
+						<div class="h-full" in:fly|global={{ x: 200, duration: 200, opacity: 1 }}>
+							<SkillCatalogList
+								entries={catalog?.skills ?? []}
+								selectedId={selectedId}
+								open={true}
+								onSelect={handleSelect}
+							/>
+						</div>
 					</Resizable.Pane>
 
 					<Resizable.Handle withHandle class="w-3 bg-transparent after:bg-border after:w-px" />
@@ -313,23 +333,6 @@
 					onSelect={handleSelect}
 				/>
 			{/if}
-		{/if}
-	{/if}
-	{#if !selectedEntry && !budgetDismissed}
-		{#if packState === 'packing'}
-			<p class="text-sm text-muted-foreground">Calculating the Skills prompt budget...</p>
-		{:else if packState === 'error'}
-			<Alert variant="destructive">
-				<Circle class="h-4 w-4" />
-				<AlertTitle>Could not pack the Skills catalog</AlertTitle>
-				<AlertDescription>{packErrorMessage}</AlertDescription>
-			</Alert>
-		{:else if packed}
-			<SkillBudgetStatus
-				{packed}
-				{budget}
-				onDismiss={() => (budgetDismissed = true)}
-			/>
 		{/if}
 	{/if}
 	</div>
