@@ -41,7 +41,10 @@ function packed(overrides: Partial<SkillPackedCatalog>): SkillPackedCatalog {
 		total: 1,
 		included: 1,
 		estimated: true,
-		...overrides
+		...overrides,
+		// fullTokens is required; resolve it explicitly after the spread so a
+		// Partial spread cannot introduce `undefined` into the result type.
+		fullTokens: overrides.fullTokens ?? null
 	};
 }
 

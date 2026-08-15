@@ -1,5 +1,5 @@
 import { buildSkillRunSnapshot, serializeSkillCatalogEnvelope } from '$lib/services/skills-packing.service';
-import { SKILL_READ_TOOL, skillDenialResult } from '$lib/services/skills-adapters.service';
+import { SKILL_LIST_TOOL, SKILL_READ_TOOL, skillDenialResult } from '$lib/services/skills-adapters.service';
 import { skillActivationExtra, skillResourceExtra } from '$lib/services/skills-activation.service';
 import { SkillsService } from '$lib/services/skills.service';
 import { ChatService } from '$lib/services';
@@ -324,6 +324,26 @@ describe('agenticStore.runAgenticFlow Skills integration', () => {
 		const tools = mockSendMessage.mock.calls[0][1].tools as { function: { name: string } }[];
 
 		expect(tools.map((t) => t.function.name)).toEqual(['test_tool']);
+	});
+
+	it('exposes both adapters for a partial envelope: read_skill and list_skill', async () => {
+		mockSettingsStore.config = { agenticMaxTurns: 100, maxSkillBudget: 1 };
+		mockSnapshot.mockResolvedValue(
+			buildSkillRunSnapshot('/run-cwd', makeCatalog('demo-skill', 'other-skill'))
+		);
+		mockSendMessage.mockResolvedValue(undefined);
+
+		const result = await agenticStore.runAgenticFlow(runParams('conv-1', makeCallbacks().callbacks));
+
+		expect(result).toEqual({ handled: true });
+
+		const tools = mockSendMessage.mock.calls[0][1].tools as { function: { name: string } }[];
+
+		expect(tools.map((t) => t.function.name)).toEqual([
+			'test_tool',
+			SKILL_READ_TOOL,
+			SKILL_LIST_TOOL
+		]);
 	});
 
 	it('omits a colliding Skills adapter in favor of the existing registry tool', async () => {
