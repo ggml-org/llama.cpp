@@ -624,6 +624,29 @@ describe('/skills catalog preview', () => {
 		expect(parseFloat(panes()[0].style.flexGrow)).toBeCloseTo(70, 0);
 	});
 
+	it('glides the desktop catalog left while the detail enters from the right', async () => {
+		await useDesktopViewport();
+		mockCatalogWithReads(makeCatalog(makeEntry('demo-skill'), makeEntry('second-skill')));
+
+		const screen = await render(SkillsPageWrapper);
+
+		await vi.waitFor(() => expect(bodyText()).toContain('demo-skill'));
+		(screen.getByRole('button', { name: /demo-skill/ }).element() as HTMLElement).click();
+		await Promise.resolve();
+		await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+		await vi.waitFor(() => expect(panes()).toHaveLength(2));
+
+		for (const pane of panes()) {
+			expect(
+				pane.getAnimations({ subtree: true }).some((animation) =>
+					(animation.effect as KeyframeEffect | null)
+						?.getKeyframes()
+						.some((keyframe) => String(keyframe.transform).includes('translate'))
+				)
+			).toBe(true);
+		}
+	});
+
 	it('renders the desktop split boundary as a neutral 12px gutter with one centered divider', async () => {
 		await useDesktopViewport();
 		mockCatalogWithReads(makeCatalog(makeEntry('demo-skill'), makeEntry('second-skill')));
@@ -681,7 +704,7 @@ describe('/skills catalog preview', () => {
 		)!;
 		const content = document.querySelector<HTMLElement>('[data-testid="skills-catalog-content"]')!;
 		const detailBody = document.querySelector<HTMLElement>('[data-testid="skill-detail-body"]')!;
-		const list = document.querySelector<HTMLElement>('[data-pane] > div')!;
+		const list = document.querySelector<HTMLElement>('[data-pane] > div > div')!;
 
 		expect(shell.classList.contains('max-w-4xl')).toBe(false);
 		expect(header.classList.contains('mx-auto')).toBe(true);

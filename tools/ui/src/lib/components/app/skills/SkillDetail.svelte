@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { fade } from 'svelte/transition';
+	import { fade, fly } from 'svelte/transition';
 	import { ChevronDown, Circle, RefreshCw, X } from '@lucide/svelte';
 	import { MarkdownContent, SyntaxHighlightedCode } from '$lib/components/app';
 	import { ActionIcon } from '$lib/components/app/actions';
@@ -93,7 +93,11 @@
 	);
 </script>
 
-<div data-testid="skill-detail" class="flex p-6 h-full min-h-0 flex-col" in:fade={{ duration: 200 }}>
+<div
+	data-testid="skill-detail"
+	class="flex p-6 h-full min-h-0 flex-col"
+	in:fly|global={{ x: mobile ? 0 : 48, duration: 200, opacity: 0 }}
+>
 	<div data-testid="skill-detail-header" class="flex shrink-0 flex-col gap-4">
 		<div class="flex items-start justify-between gap-2">
 			<div class="min-w-0">
