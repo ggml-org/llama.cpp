@@ -4429,6 +4429,11 @@ struct ggml_tensor * ggml_rope_set_offset(
         struct ggml_tensor  * a,
         int                   n_offs) {
     GGML_ASSERT(a->op == GGML_OP_ROPE || a->op == GGML_OP_ROPE_BACK);
+    GGML_ASSERT(n_offs >= 0);
+
+    const int32_t mode = ggml_get_op_params_i32(a, 2);
+    GGML_ASSERT(mode != GGML_ROPE_TYPE_VISION);
+
     ggml_set_op_params_i32(a, 15, n_offs);
     return a;
 }
