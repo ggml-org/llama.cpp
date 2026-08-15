@@ -1,4 +1,12 @@
-import { JsonSchemaType, MessageRole, ToolCallType, ToolPermissionDecision } from '$lib/enums';
+import { MessageRole, ToolPermissionDecision } from '$lib/enums';
+import {
+	SKILL_LIST_TOOL,
+	SKILL_READ_TOOL,
+	SKILL_SERVER_LABEL,
+	buildSkillListToolDefinition,
+	buildSkillReadToolDefinition,
+	freezeSkillToolDefinition
+} from '$lib/constants';
 import { SkillsService } from '$lib/services/skills.service';
 import type { AgenticToolCallPayload } from '$lib/types/agentic';
 import type { ApiChatMessageData } from '$lib/types/api';
@@ -14,12 +22,6 @@ import type {
 	SkillReadResult,
 	SkillRunSnapshot
 } from '$lib/types/skills';
-
-/** Model-facing tool names owned by the Skills adapters. */
-export const SKILL_LIST_TOOL = 'list_skill';
-export const SKILL_READ_TOOL = 'read_skill';
-/** Display label for the Skills tool source in the established consent UI. */
-export const SKILL_SERVER_LABEL = 'Skills';
 
 const SKILL_ADAPTER_COLLISION_CODE = 'skill_adapter_collision';
 
@@ -160,13 +162,13 @@ export function buildSkillToolDefinitions(
 			return;
 		}
 
-		definitions.push(freezeDefinition(def));
+		definitions.push(freezeSkillToolDefinition(def));
 	};
 
-	register(readSkillDefinition(names));
+	register(buildSkillReadToolDefinition(names));
 
 	if (packed.included < packed.total) {
-		register(listSkillDefinition());
+		register(buildSkillListToolDefinition());
 	}
 
 	return { definitions, diagnostics };
@@ -435,48 +437,4 @@ function parseSkillArguments(raw: string): Record<string, unknown> {
 	if (trimmed === '') return {};
 
 	return JSON.parse(trimmed) as Record<string, unknown>;
-}
-
-function readSkillDefinition(names: string[]): OpenAIToolDefinition {
-	return {
-		type: ToolCallType.FUNCTION,
-		function: {
-			description:
-				'Read the current base content of a skill by name, or one of its resources by a relative path.',
-			name: SKILL_READ_TOOL,
-			parameters: {
-				type: JsonSchemaType.OBJECT,
-				properties: {
-					name: { type: 'string', enum: names },
-					path: { type: 'string' }
-				},
-				required: ['name']
-			}
-		}
-	};
-}
-
-function listSkillDefinition(): OpenAIToolDefinition {
-	return {
-		type: ToolCallType.FUNCTION,
-		function: {
-			description: 'List the skills available in this run, with their descriptions.',
-			name: SKILL_LIST_TOOL,
-			parameters: {
-				type: JsonSchemaType.OBJECT,
-				properties: {},
-				required: []
-			}
-		}
-	};
-}
-
-function freezeDefinition(def: OpenAIToolDefinition): OpenAIToolDefinition {
-	return Object.freeze({
-		...def,
-		function: Object.freeze({
-			...def.function,
-			parameters: Object.freeze({ ...def.function.parameters })
-		})
-	});
 }

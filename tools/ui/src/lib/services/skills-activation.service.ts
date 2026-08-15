@@ -10,7 +10,7 @@
  * message content.
  */
 import { AttachmentType, MessageRole, MessageType } from '$lib/enums';
-import { SKILL_READ_TOOL } from '$lib/services/skills-adapters.service';
+import { SKILL_READ_TOOL } from '$lib/constants';
 import type {
 	DatabaseMessage,
 	DatabaseMessageExtra,
