@@ -90,6 +90,7 @@
 		{hideOrgName}
 		{modalities}
 		modelId={option.model}
+		{supportsThinking}
 		showRawTooltip
 		tags={option.tags}
 	/>

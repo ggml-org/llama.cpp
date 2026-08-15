@@ -39,6 +39,7 @@
 		modelId,
 		showRaw = undefined,
 		showRawTooltip = false,
+		supportsThinking = false,
 		tags,
 		...rest
 	}: Props = $props();
@@ -128,7 +129,7 @@
 			{@render nameAndBadges()}
 		{/if}
 
-		{#if activeCapabilities.length > 0 || activeModalities.length > 0}
+		{#if hasModalityIcons}
 			<span class="inline-flex items-center gap-1.25 text-muted-foreground">
 				{#each activeCapabilities as capability (capability)}
 					{@const CapabilityIcon = CAPABILITY_ICONS[capability]}
