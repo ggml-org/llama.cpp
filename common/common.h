@@ -77,6 +77,27 @@ int32_t common_cpu_get_num_physical_cores();
 int32_t common_cpu_get_num_math();
 
 //
+// Threadpool utils
+//
+
+struct common_threadpools {
+    common_threadpools() = default;
+    ~common_threadpools();
+
+    common_threadpools(const common_threadpools &) = delete;
+    common_threadpools & operator=(const common_threadpools &) = delete;
+
+    void init(const common_cpu_params & cpu_params, const common_cpu_params & cpu_params_batch);
+    void attach(llama_context * ctx);
+
+private:
+    ggml_threadpool * threadpool       = nullptr;
+    ggml_threadpool * threadpool_batch = nullptr;
+
+    decltype(ggml_threadpool_free) * free_fn = nullptr;
+};
+
+//
 // Common params
 //
 
@@ -477,6 +498,8 @@ struct common_params {
 
     common_cpu_params cpuparams;
     common_cpu_params cpuparams_batch;
+
+    std::shared_ptr<common_threadpools> threadpools;
 
     ggml_backend_sched_eval_callback cb_eval = nullptr;
     void * cb_eval_user_data                 = nullptr;
@@ -940,28 +963,6 @@ std::string common_get_model_endpoint();
 
 // for testing purposes
 char * common_get_model_or_exit(int, char*[]);
-
-//
-// Threadpool utils
-//
-
-struct ggml_threadpool_params ggml_threadpool_params_from_cpu_params(const common_cpu_params & params);
-
-struct common_threadpools {
-    common_threadpools() = default;
-    ~common_threadpools();
-
-    common_threadpools(const common_threadpools &) = delete;
-    common_threadpools & operator=(const common_threadpools &) = delete;
-
-    void init(llama_context * ctx, const common_params & params);
-
-private:
-    ggml_threadpool * threadpool       = nullptr;
-    ggml_threadpool * threadpool_batch = nullptr;
-
-    decltype(ggml_threadpool_free) * free_fn = nullptr;
-};
 
 //
 // Context utils
