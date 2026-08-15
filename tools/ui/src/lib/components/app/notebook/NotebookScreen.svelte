@@ -327,7 +327,7 @@
 						</Tooltip.Root>
 					{/if}
 
-					{#if processingState?.promptTokens}
+					{#if processingState}
 						<ChatMessageStatistics
 							promptTokens={processingState.promptTokens}
 							promptMs={processingState.promptMs}

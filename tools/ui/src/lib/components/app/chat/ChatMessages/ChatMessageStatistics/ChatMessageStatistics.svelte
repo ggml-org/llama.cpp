@@ -38,18 +38,20 @@
 
 	let isSwitchable = $derived(mode === ChatMessageStatisticsMode.SWITCHABLE);
 
-	let activeView: ChatMessageStatsView = $derived(
-		mode === ChatMessageStatisticsMode.READING
-			? ChatMessageStatsView.READING
-			: mode === ChatMessageStatisticsMode.GENERATION
-				? ChatMessageStatsView.GENERATION
-				: initialView
-	);
+	let activeView = $state<ChatMessageStatsView>(initialView);
 	let hasAutoSwitchedToGeneration = $state(false);
 
 	$effect(() => {
 		if (isSwitchable) {
 			onActiveViewChange?.(activeView);
+		}
+	});
+
+	$effect(() => {
+		if (mode === ChatMessageStatisticsMode.READING) {
+			activeView = ChatMessageStatsView.READING;
+		} else if (mode === ChatMessageStatisticsMode.GENERATION) {
+			activeView = ChatMessageStatsView.GENERATION;
 		}
 	});
 
@@ -65,9 +67,12 @@
 			) {
 				activeView = ChatMessageStatsView.GENERATION;
 				hasAutoSwitchedToGeneration = true;
-			} else if (!hasAutoSwitchedToGeneration) {
+			} else if (!hasAutoSwitchedToGeneration || isProcessingPrompt) {
 				// Stay on READING while prompt is still being processed
 				activeView = ChatMessageStatsView.READING;
+				if (isProcessingPrompt) {
+					hasAutoSwitchedToGeneration = false;
+				}
 			}
 		}
 	});

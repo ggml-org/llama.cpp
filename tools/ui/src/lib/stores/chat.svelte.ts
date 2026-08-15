@@ -2726,9 +2726,12 @@ class ChatStore {
 	parseTimingData(timingData: Record<string, unknown>): ApiProcessingState | null {
 		const cacheTokens = (timingData.cache_n as number) || 0,
 			predictedTokens = (timingData.predicted_n as number) || 0,
+			predictedMs = (timingData.predicted_ms as number) || undefined,
 			promptMs = (timingData.prompt_ms as number) || undefined,
 			promptTokens = (timingData.prompt_n as number) || 0,
-			tokensPerSecond = (timingData.predicted_per_second as number) || 0;
+			tokensPerSecond =
+				(timingData.predicted_per_second as number) ||
+				(predictedMs && predictedTokens ? (predictedTokens / predictedMs) * 1000 : 0);
 		const promptProgress = timingData.prompt_progress as
 			| { total: number; cache: number; processed: number; time_ms: number }
 			| undefined;
@@ -2751,6 +2754,7 @@ class ChatStore {
 			hasNextToken: predictedTokens > 0,
 			outputTokensMax,
 			outputTokensUsed,
+			predictedMs,
 			progressPercent,
 			promptMs,
 			promptProgress,
