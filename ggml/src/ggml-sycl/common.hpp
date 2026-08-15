@@ -67,6 +67,7 @@ extern int g_ggml_sycl_enable_flash_attention;
 extern int g_ggml_sycl_dev2dev_memcpy;
 extern int g_ggml_sycl_fa_onednn;
 extern int g_ggml_sycl_fa_onednn_max_kv;
+extern int g_ggml_sycl_enable_mkl_fa;
 
 
 #if defined(__clang__) && __has_builtin(__builtin_expect)
