@@ -255,10 +255,10 @@ static void build_dspark_markov_head(llm_graph_context & g, const llama_model & 
     const int64_t block_size = std::stoi(it->second);
     GGML_ASSERT(block_size > 0);
 
-    // bonus anchor (SpecForge exports): slot 0 holds a bonus token, not a prediction slot
-    const auto it_sample_from_anchor = model.gguf_kv.find("dflash.sample_from_anchor");
-    const bool    sample_from_anchor = it_sample_from_anchor == model.gguf_kv.end() || it_sample_from_anchor->second == "true";
-    const int64_t i_first_pred       = sample_from_anchor ? 0 : 1;
+    // bonus anchor (SpecForge exports): slot 0 is a bonus token, not a prediction slot
+    const auto it_anchor          = model.gguf_kv.find("dflash.sample_from_anchor");
+    const bool sample_from_anchor = it_anchor == model.gguf_kv.end() || it_anchor->second == "true";
+    const int64_t i_draft_beg    = sample_from_anchor ? 0 : 1;
 
     const int64_t n_blocks = g.ubatch.n_seqs_unq;
     GGML_ASSERT(n_blocks > 0 && n_tok % n_blocks == 0 && "DSpark markov head requires equal-size blocks");
@@ -289,7 +289,7 @@ static void build_dspark_markov_head(llm_graph_context & g, const llama_model & 
 
     // TODO: the in-graph chain is greedy (argmax); sampling params affect only the final
     //       token pick, not the Markov conditioning path
-    for (int64_t i = i_first_pred; i < block_drafts; ++i) {
+    for (int64_t i = i_draft_beg; i < block_drafts; ++i) {
         ggml_tensor * w1_prev = ggml_get_rows(ctx0, w1, prev);   // [R, n_blocks]
         ggml_tensor * bias    = ggml_mul_mat(ctx0, w2, w1_prev); // [n_vocab_draft, n_blocks]
         if (model.d2t) {
