@@ -61,6 +61,8 @@ function deriveLiveStats(state: ApiProcessingState | null): LiveStats | null {
 }
 
 class ContextStatsStore {
+	notebookMode = $state(false);
+
 	// Resolve the model the stats report context for: explicit selection >
 	// last assistant model > single-model mode (mirrors useChatScreenActiveModel).
 	activeModelId = $derived.by(() => {
@@ -75,6 +77,8 @@ class ContextStatsStore {
 
 			if (model) return model.model;
 		}
+
+		if (this.notebookMode) return null;
 
 		return chatStore.getConversationModel(conversationsStore.activeMessages as DatabaseMessage[]);
 	});
@@ -97,6 +101,10 @@ class ContextStatsStore {
 	private liveStats = $derived(deriveLiveStats(chatStore.activeProcessingState));
 
 	currentRead = $derived.by(() => {
+		if (this.notebookMode) {
+			return this.liveStats?.promptTokens ?? 0;
+		}
+
 		const timings = lastAssistantTimings(conversationsStore.activeMessages as DatabaseMessage[]);
 
 		let read = 0;
@@ -115,6 +123,10 @@ class ContextStatsStore {
 	});
 
 	currentFresh = $derived.by(() => {
+		if (this.notebookMode) {
+			return this.liveStats?.freshTokens ?? 0;
+		}
+
 		const timings = lastAssistantTimings(conversationsStore.activeMessages as DatabaseMessage[]);
 		const fresh = timings?.prompt_n ?? 0;
 
@@ -122,6 +134,10 @@ class ContextStatsStore {
 	});
 
 	currentCache = $derived.by(() => {
+		if (this.notebookMode) {
+			return this.liveStats?.cacheTokens ?? 0;
+		}
+
 		const timings = lastAssistantTimings(conversationsStore.activeMessages as DatabaseMessage[]);
 		const cached = timings?.cache_n ?? 0;
 
@@ -133,6 +149,10 @@ class ContextStatsStore {
 	});
 
 	currentOutput = $derived.by(() => {
+		if (this.notebookMode) {
+			return this.liveStats?.outputTokens ?? 0;
+		}
+
 		if (this.liveStats && this.liveStats.outputTokens > 0) return this.liveStats.outputTokens;
 
 		const timings = lastAssistantTimings(conversationsStore.activeMessages as DatabaseMessage[]);
@@ -155,6 +175,21 @@ class ContextStatsStore {
 	});
 
 	private cumulative = $derived.by(() => {
+		if (this.notebookMode) {
+			const state = chatStore.activeProcessingState;
+			const output = state?.tokensDecoded ?? 0;
+			const predictedMs = state?.predictedMs ?? 0;
+			const averageTokensPerSecond =
+				predictedMs > 0 && output > 0 ? (output / predictedMs) * 1000 : null;
+
+			return {
+				averageTokensPerSecond,
+				cacheTotal: state?.cacheTokens ?? 0,
+				output,
+				read: state?.promptTokens ?? 0
+			};
+		}
+
 		const messages = conversationsStore.activeMessages as DatabaseMessage[];
 		const convId = conversationsStore.activeConversation?.id;
 		// A running agentic flow stamps llm totals on messages only when it
@@ -222,3 +257,4 @@ class ContextStatsStore {
 }
 
 export const contextStatsStore = new ContextStatsStore();
+

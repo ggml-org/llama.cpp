@@ -16,6 +16,7 @@
 	import { ErrorDialogType } from '$lib/enums';
 
 	import { chatStore } from '$lib/stores/chat.svelte';
+	import { contextStatsStore } from '$lib/stores/context-stats.svelte';
 	import { modelsStore } from '$lib/stores/models.svelte';
 	import { serverStore } from '$lib/stores/server.svelte';
 	import * as Tooltip from '$lib/components/ui/tooltip';
@@ -29,7 +30,7 @@
 	// removed in the PR #20999
 	const INITIAL_SCROLL_DELAY = 50;
 
-	import { onMount } from 'svelte';
+	import { onMount, onDestroy } from 'svelte';
 
 	let disableAutoScroll = $derived(Boolean(settingsStore.config.disableAutoScroll));
 	let showMessageStats = $derived(settingsStore.config.showMessageStats);
@@ -42,6 +43,11 @@
 
 	let isRouter = $derived(serverStore.isRouterMode);
 	let processingState = $derived(notebookStore.processingState);
+	let hasGeneratedStats = $derived(
+		notebookStore.isGenerating ||
+			processingState?.promptMs !== undefined ||
+			(processingState?.tokensDecoded ?? 0) > 0
+	);
 
 	let errorDialog = $derived(notebookStore.error);
 	let canUndo = $derived(notebookStore.previousContent !== null && !notebookStore.isGenerating);
@@ -159,12 +165,17 @@
 
 	onMount(() => {
 		chatStore.setActiveProcessingConversation('notebook');
+		contextStatsStore.notebookMode = true;
 		if (notebookStore.content.length > 0) {
 			notebookStore.updateTokenCount(activeModelId ?? undefined);
 		}
 		if (!disableAutoScroll) {
 			setTimeout(() => scrollToBottom('instant'), INITIAL_SCROLL_DELAY);
 		}
+	});
+
+	onDestroy(() => {
+		contextStatsStore.notebookMode = false;
 	});
 
 	$effect(() => {
@@ -320,9 +331,9 @@
 
 			{#if showMessageStats}
 				<div class="flex min-h-[42px] w-full items-center justify-end gap-2.5 md:w-auto">
-					<ChatFormContextGauge />
+					<ChatFormContextGauge notebookMode={true} />
 
-					{#if processingState}
+					{#if hasGeneratedStats && processingState}
 						<ChatMessageStatistics
 							promptTokens={processingState.promptTokens}
 							promptMs={processingState.promptMs}

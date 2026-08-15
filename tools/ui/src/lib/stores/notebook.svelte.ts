@@ -178,24 +178,31 @@ export class NotebookStore {
 
 			if (!this.isGenerating) {
 				const contextTotal = modelsStore.contextSize;
-				const state: ApiProcessingState = {
-					cacheTokens: 0,
-					contextTotal,
-					contextUsed: this.totalTokens,
-					hasNextToken: false,
-					outputTokensMax: settingsStore.config.max_tokens || -1,
-					outputTokensUsed: 0,
-					promptTokens: this.totalTokens,
-					speculative: false,
-					status: 'idle',
-					temperature: settingsStore.config.temperature ?? 0.8,
-					tokensDecoded: 0,
-					tokensPerSecond: 0,
-					tokensRemaining: (contextTotal ?? 0) - this.totalTokens,
-					topP: settingsStore.config.top_p ?? 0.95
-				};
-				this.processingState = state;
-				chatStore.setProcessingState('notebook', state);
+				if (this.processingState) {
+					this.processingState.contextUsed = this.totalTokens;
+					this.processingState.promptTokens = this.totalTokens;
+					this.processingState.contextTotal = contextTotal;
+					this.processingState.tokensRemaining = (contextTotal ?? 0) - this.totalTokens;
+				} else {
+					const state: ApiProcessingState = {
+						cacheTokens: 0,
+						contextTotal,
+						contextUsed: this.totalTokens,
+						hasNextToken: false,
+						outputTokensMax: settingsStore.config.max_tokens || -1,
+						outputTokensUsed: 0,
+						promptTokens: this.totalTokens,
+						speculative: false,
+						status: 'idle',
+						temperature: settingsStore.config.temperature ?? 0.8,
+						tokensDecoded: 0,
+						tokensPerSecond: 0,
+						tokensRemaining: (contextTotal ?? 0) - this.totalTokens,
+						topP: settingsStore.config.top_p ?? 0.95
+					};
+					this.processingState = state;
+				}
+				chatStore.setProcessingState('notebook', this.processingState);
 			}
 		}, 500);
 	}
