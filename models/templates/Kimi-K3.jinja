@@ -1,0 +1,324 @@
+{%- macro escape_attr(value) -%}
+{{- value|string|replace('&', '&amp;')|replace('"', '&quot;') -}}
+{%- endmacro -%}
+
+{%- macro open_tag(tag, attrs=[]) -%}
+{{- '<|open|>' + tag -}}
+{%- for attr in attrs -%}
+{{- ' ' + attr[0] + '="' -}}{{- escape_attr(attr[1]) -}}{{- '"' -}}
+{%- endfor -%}
+{{- '<|sep|>' -}}
+{%- endmacro -%}
+
+{%- macro close_tag(tag) -%}
+{{- '<|close|>' + tag + '<|sep|>' -}}
+{%- endmacro -%}
+
+{%- macro next_image(state) -%}
+{%- if image_prompts is defined and image_prompts is not none -%}
+    {%- if state.image_index >= image_prompts|length -%}
+        {{- raise_exception('More image placeholders than image prompts.') -}}
+    {%- endif -%}
+    {{- image_prompts[state.image_index] -}}
+    {%- set state.image_index = state.image_index + 1 -%}
+{%- else -%}
+    {{- '<|kimi_image_placeholder|>' -}}
+{%- endif -%}
+{%- endmacro -%}
+
+{%- macro render_text(text, state) -%}
+{%- set text = text|string -%}
+{%- if image_prompts is defined and image_prompts is not none and '<|kimi_image_placeholder|>' in text -%}
+    {%- set parts = text.split('<|kimi_image_placeholder|>') -%}
+    {%- for part in parts -%}
+        {{- part -}}
+        {%- if not loop.last -%}{{- next_image(state) -}}{%- endif -%}
+    {%- endfor -%}
+{%- else -%}
+    {{- text -}}
+{%- endif -%}
+{%- endmacro -%}
+
+{%- macro render_content(content, state) -%}
+{%- if content is string -%}
+    {{- render_text(content, state) -}}
+{%- elif content is not none and content is defined -%}
+    {%- for part in content -%}
+        {%- if part.type in ['image', 'image_url'] -%}
+            {{- next_image(state) -}}
+        {%- else -%}
+            {{- render_text(part.text, state) -}}
+        {%- endif -%}
+    {%- endfor -%}
+{%- endif -%}
+{%- endmacro -%}
+
+{%- macro internal_system_message(message_type, body) -%}
+{{- open_tag('message', [('role', 'system'), ('type', message_type)]) -}}
+{{- body|trim -}}
+{{- close_tag('message') -}}
+{{- '<|end_of_msg|>' -}}
+{%- endmacro -%}
+
+{%- macro json_sorted(value) -%}
+{#- tojson has no sort_keys, so sort each mapping level with dictsort to match the
+    reference implementation. Array order is kept as-is. -#}
+{%- if value is mapping -%}
+{{- '{' -}}
+{%- for key, item in value|dictsort -%}
+{%- if not loop.first -%}{{- ',' -}}{%- endif -%}
+{{- key|tojson(ensure_ascii=false) -}}{{- ':' -}}{{- json_sorted(item) -}}
+{%- endfor -%}
+{{- '}' -}}
+{%- elif value is string or value is number or value is boolean or value is none -%}
+{{- value|tojson(ensure_ascii=false) -}}
+{%- else -%}
+{{- '[' -}}
+{%- for item in value -%}
+{%- if not loop.first -%}{{- ',' -}}{%- endif -%}
+{{- json_sorted(item) -}}
+{%- endfor -%}
+{{- ']' -}}
+{%- endif -%}
+{%- endmacro -%}
+
+{%- macro render_tool_declare(tool_list, dynamic=false) -%}
+{{- open_tag('message', [('role', 'system'), ('type', 'tool-declare')]) -}}
+{%- if dynamic -%}
+{{- '## New Tools Available\nThe system dynamically extends the toolset via lazy-loading.\nYou have access to all existing and extended tools.\nHere are the specs for the extended tools.\n\n```json\n' -}}
+{%- else -%}
+{{- '# Tools\nHere are the available tools, described in JSONSchema.\n\n```json\n' -}}
+{%- endif -%}
+{{- json_sorted(tool_list) -}}
+{{- '\n```' -}}
+{{- close_tag('message') -}}
+{{- '<|end_of_msg|>' -}}
+{%- endmacro -%}
+
+{%- macro xtml_type(value) -%}
+{%- if value is boolean -%}boolean
+{%- elif value is none -%}null
+{%- elif value is number -%}number
+{%- elif value is string -%}string
+{%- elif value is mapping -%}object
+{%- else -%}array
+{%- endif -%}
+{%- endmacro -%}
+
+{%- macro xtml_value(value) -%}
+{%- if value is string -%}
+{{- value -}}
+{%- else -%}
+{{- value|tojson(ensure_ascii=false) -}}
+{%- endif -%}
+{%- endmacro -%}
+
+{%- macro render_assistant(message, state) -%}
+{%- if thinking -%}
+    {%- set reasoning_content = message.get('reasoning_content') or message.get('reasoning') -%}
+    {{- open_tag('think') -}}
+    {%- if reasoning_content is not none and reasoning_content|string|trim -%}
+        {{- render_text(reasoning_content, state) -}}
+    {%- endif -%}
+    {{- close_tag('think') -}}
+{%- endif -%}
+{{- open_tag('response') -}}
+{{- render_content(message.get('content'), state) -}}
+{{- close_tag('response') -}}
+{%- set tool_calls = message.get('tool_calls') -%}
+{%- if tool_calls -%}
+    {{- open_tag('tools') -}}
+    {%- for tool_call in tool_calls -%}
+        {%- if tool_call is not mapping -%}
+            {{- raise_exception('Kimi K3 tool calls must be mappings.') -}}
+        {%- endif -%}
+        {%- set fn = tool_call.function if tool_call.function is defined and tool_call.function is mapping else tool_call -%}
+        {%- if fn.get('name') is none -%}
+            {{- raise_exception('Kimi K3 tool calls require a function name.') -}}
+        {%- endif -%}
+        {{- open_tag('call', [('tool', fn.name), ('index', loop.index)]) -}}
+        {%- set arguments = fn.get('arguments', {}) -%}
+        {%- set json_block = fn.get('_xtml_json_block') -%}
+        {%- if json_block is not none -%}
+            {{- open_tag('json', [('type', 'object')]) -}}
+            {{- render_text(json_block, state) -}}
+            {{- close_tag('json') -}}
+        {%- elif arguments is mapping -%}
+            {%- for key, value in arguments.items() -%}
+                {{- open_tag('argument', [('key', key), ('type', xtml_type(value))]) -}}
+                {{- render_text(xtml_value(value), state) -}}
+                {{- close_tag('argument') -}}
+            {%- endfor -%}
+        {%- elif arguments is string and arguments|trim -%}
+            {{- open_tag('json', [('type', 'object')]) -}}
+            {{- render_text(arguments, state) -}}
+            {{- close_tag('json') -}}
+        {%- elif arguments is not none and arguments is not string -%}
+            {{- raise_exception('Kimi K3 tool call arguments must be a mapping or a JSON object string.') -}}
+        {%- endif -%}
+        {{- close_tag('call') -}}
+    {%- endfor -%}
+    {{- close_tag('tools') -}}
+{%- endif -%}
+{%- endmacro -%}
+
+{%- macro render_tool_message(message, state, resolved_name=none) -%}
+{%- set state.tool_index = state.tool_index + 1 -%}
+{%- if resolved_name is not none -%}
+    {%- set tool_name = resolved_name -%}
+{%- elif 'tool' in message -%}
+    {%- set tool_name = message.get('tool') -%}
+{%- else -%}
+    {%- set tool_name = message.get('name') -%}
+{%- endif -%}
+{%- if tool_name is none and state.tool_calls is not none and state.tool_index <= state.tool_calls|length -%}
+    {%- set fallback_call = state.tool_calls[state.tool_index - 1] -%}
+    {%- set fallback_fn = fallback_call.function if fallback_call.function is defined and fallback_call.function is mapping else fallback_call -%}
+    {%- set tool_name = fallback_fn.name -%}
+{%- endif -%}
+{%- if tool_name is none -%}
+    {{- raise_exception('Kimi K3 tool messages need a resolvable tool name: carry `tool`/`name`, or match a preceding assistant tool_call by order.') -}}
+{%- endif -%}
+{{- open_tag('message', [('role', 'tool'), ('tool', tool_name), ('index', state.tool_index)]) -}}
+{{- render_content(message.get('content'), state) -}}
+{{- close_tag('message') -}}
+{{- '<|end_of_msg|>' -}}
+{%- endmacro -%}
+
+{%- if thinking is undefined -%}
+    {%- set thinking = true -%}
+{%- endif -%}
+{%- if thinking_effort is undefined -%}
+    {%- set thinking_effort = 'max' -%}
+{%- endif -%}
+{%- if thinking and thinking_effort is not none and thinking_effort not in ['low', 'high', 'max'] -%}
+    {{- raise_exception('Unsupported thinking_effort=' + thinking_effort|string + '; supported values are low, high, and max.') -}}
+{%- endif -%}
+
+{%- set state = namespace(image_index=0, tool_calls=none, tool_index=0, response_schema=none) -%}
+
+{%- if tools is defined and tools -%}
+    {{- render_tool_declare(tools) -}}
+{%- endif -%}
+
+{%- if thinking and thinking_effort in ['low', 'high', 'max'] -%}
+    {{- internal_system_message(
+        'thinking-effort',
+        '`thinking_effort` guides on how much to think in your thinking channel (not including the response channel), supported values include `low`, `medium`, `high`, and `max`.\nNow the system is invoked with `thinking_effort=' + thinking_effort|string + '`.'
+    ) -}}
+{%- endif -%}
+
+{%- for message in messages -%}
+    {%- if message is mapping -%}
+        {%- if 'role' not in message -%}
+            {{- raise_exception('Kimi K3 messages require a role.') -}}
+        {%- elif message.role == 'user' -%}
+            {%- set attrs = [('role', 'user')] -%}
+            {%- if message.get('name') -%}{%- set attrs = attrs + [('name', message.name)] -%}{%- endif -%}
+            {{- open_tag('message', attrs) -}}
+            {{- render_content(message.get('content'), state) -}}
+            {{- close_tag('message') -}}
+            {{- '<|end_of_msg|>' -}}
+        {%- elif message.role == 'system' and message.get('tools') -%}
+            {{- render_tool_declare(message.tools, dynamic=true) -}}
+        {%- elif message.role == 'system' -%}
+            {%- set attrs = [('role', 'system')] -%}
+            {%- if message.get('name') -%}{%- set attrs = attrs + [('name', message.name)] -%}{%- endif -%}
+            {{- open_tag('message', attrs) -}}
+            {{- render_content(message.get('content'), state) -}}
+            {{- close_tag('message') -}}
+            {{- '<|end_of_msg|>' -}}
+        {%- elif message.role == 'assistant' -%}
+            {%- set state.tool_calls = message.get('tool_calls') -%}
+            {%- set state.tool_index = 0 -%}
+            {%- set attrs = [('role', 'assistant')] -%}
+            {%- if message.get('name') -%}{%- set attrs = attrs + [('name', message.name)] -%}{%- endif -%}
+            {{- open_tag('message', attrs) -}}
+            {{- render_assistant(message, state) -}}
+            {{- close_tag('message') -}}
+            {{- '<|end_of_msg|>' -}}
+        {%- elif message.role == 'tool' and (loop.first or messages[loop.index0 - 1].role != 'tool') -%}
+            {%- set run = namespace(tool_messages=[], resolved_count=0) -%}
+            {%- for candidate in messages[loop.index0:] -%}
+                {%- if candidate is not mapping or candidate.role != 'tool' -%}{%- break -%}{%- endif -%}
+                {%- set run.tool_messages = run.tool_messages + [candidate] -%}
+                {%- set call_id = candidate.get('tool_call_id', candidate.get('id')) -%}
+                {%- set match = namespace(found=false) -%}
+                {%- if call_id is not none and state.tool_calls is not none -%}
+                    {%- for tool_call in state.tool_calls -%}
+                        {%- if not match.found and tool_call is mapping and tool_call.get('id') is not none and tool_call.get('id')|string == call_id|string -%}
+                            {%- set match.found = true -%}
+                        {%- endif -%}
+                    {%- endfor -%}
+                {%- endif -%}
+                {%- if match.found -%}{%- set run.resolved_count = run.resolved_count + 1 -%}{%- endif -%}
+            {%- endfor -%}
+            {%- if run.tool_messages|length > 0 and run.resolved_count == run.tool_messages|length -%}
+                {%- set emitted = namespace(ids=[]) -%}
+                {%- for tool_call in state.tool_calls -%}
+                    {%- if tool_call is mapping and tool_call.get('id') is not none and tool_call.get('id')|string not in emitted.ids -%}
+                        {%- set emitted.ids = emitted.ids + [tool_call.get('id')|string] -%}
+                        {%- set fn = tool_call.function if tool_call.function is defined and tool_call.function is mapping else tool_call -%}
+                        {%- for tool_message in run.tool_messages -%}
+                            {%- set result_id = tool_message.get('tool_call_id', tool_message.get('id')) -%}
+                            {%- if result_id is not none and result_id|string == tool_call.get('id')|string -%}
+                                {{- render_tool_message(tool_message, state, fn.get('name')) -}}
+                            {%- endif -%}
+                        {%- endfor -%}
+                    {%- endif -%}
+                {%- endfor -%}
+            {%- else -%}
+                {%- for tool_message in run.tool_messages -%}
+                    {{- render_tool_message(tool_message, state) -}}
+                {%- endfor -%}
+            {%- endif -%}
+        {%- endif -%}
+    {%- endif -%}
+{%- endfor -%}
+
+{%- if tool_choice is defined and tool_choice == 'required' -%}
+    {{- internal_system_message('tool-choice', 'The system is invoked with `tool_choice=required`.\nYou MUST call tools in the next message.') -}}
+{%- elif tool_choice is defined and tool_choice == 'none' -%}
+    {{- internal_system_message('tool-choice', 'The system is invoked with `tool_choice=none`.\nYou MUST NOT call any tools in the next message.') -}}
+{%- endif -%}
+
+{%- if response_schema is defined -%}
+    {%- set state.response_schema = response_schema -%}
+{%- elif response_format is defined and response_format is mapping and response_format.get('json_schema') is not none -%}
+    {%- set schema_wrapper = response_format.get('json_schema') -%}
+    {%- if schema_wrapper is mapping and 'schema' in schema_wrapper -%}
+        {%- set state.response_schema = schema_wrapper.get('schema') -%}
+    {%- elif schema_wrapper is mapping and 'json_schema' in schema_wrapper -%}
+        {%- set state.response_schema = schema_wrapper.get('json_schema') -%}
+    {%- else -%}
+        {%- set state.response_schema = schema_wrapper -%}
+    {%- endif -%}
+{%- endif -%}
+
+{%- set response_format_type = none -%}
+{%- if response_format is defined and response_format is mapping -%}
+    {%- set response_format_type = response_format.get('type') -%}
+{%- elif response_format is defined -%}
+    {%- set response_format_type = response_format -%}
+{%- endif -%}
+{%- if response_format_type == 'json_object' -%}
+    {{- internal_system_message(
+        'response-format',
+        'The system is invoked with `response_format=json_object`.\nYour response must be raw JSON data without markdown code blocks (```json) or any additional formatting.'
+    ) -}}
+{%- elif response_format_type == 'json_schema' -%}
+    {{- internal_system_message(
+        'response-format',
+        'The system is invoked with `response_format=json_schema`.\nYour response must be raw JSON data without markdown code blocks (```json) or any additional formatting.\nThe JSON data must match the following schema:\n```json\n' + json_sorted(state.response_schema) + '\n```'
+    ) -}}
+{%- endif -%}
+
+{%- if add_generation_prompt -%}
+    {{- open_tag('message', [('role', 'assistant')]) -}}
+    {{- open_tag('think' if thinking else 'response') -}}
+{%- endif -%}
+
+{%- if image_prompts is defined and image_prompts is not none and state.image_index != image_prompts|length -%}
+    {{- raise_exception('image prompt count ' + image_prompts|length|string + ' != consumed placeholder count ' + state.image_index|string) -}}
+{%- endif -%}
+

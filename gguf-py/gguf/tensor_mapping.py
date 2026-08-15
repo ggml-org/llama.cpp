@@ -912,6 +912,19 @@ class TensorNameMap:
             "model.layers.{bid}.linear_attn.in_proj_b",  # qwen3.5
             "model.layers.{bid}.self_attn.b_proj",       # Kimi Linear
         ),
+        # Kimi K3 latent MoE: routed experts operate in a down-projected space
+        MODEL_TENSOR.FFN_ROUTED_DOWN: (
+            "model.layers.{bid}.block_sparse_moe.routed_expert_down_proj",
+        ),
+
+        MODEL_TENSOR.FFN_ROUTED_UP: (
+            "model.layers.{bid}.block_sparse_moe.routed_expert_up_proj",
+        ),
+
+        MODEL_TENSOR.FFN_ROUTED_NORM: (
+            "model.layers.{bid}.block_sparse_moe.routed_expert_norm",
+        ),
+
         MODEL_TENSOR.SSM_G_A: (
             "model.layers.{bid}.self_attn.g_a_proj",
         ),
