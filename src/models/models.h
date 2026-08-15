@@ -2283,14 +2283,11 @@ struct llama_model_kimi_k3 : public llama_model_base {
         const llama_model & model;
 
         // Cross-layer residual attention (K3's `_apply_attn_res`).
-        std::vector<ggml_tensor *> resi;
-        ggml_tensor *              resi_stack   = nullptr;
-        int                        resi_stack_n = -1;
+        ggml_tensor * resi_stack = nullptr;
 
         void          res_push(ggml_tensor * cur, int64_t n_embd, int64_t n_tokens);
-        ggml_tensor * res_stack(int64_t n_embd, int64_t n_tokens);
         ggml_tensor * res_mix(ggml_tensor * cur, ggml_tensor * score_w,
-                              int64_t n_embd, int64_t n_tokens, int il);
+                              int64_t n_tokens, int il);
 
         ggml_tensor * build_kda_layer(ggml_tensor * cur, const llama_layer & layer,
                                       llm_graph_input_rs * inp_rs,

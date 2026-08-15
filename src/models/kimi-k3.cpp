@@ -21,8 +21,8 @@ void llama_model_kimi_k3::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_KDA_HEAD_DIM,                hparams.n_embd_head_kda);
     ml.get_key(LLM_KV_KDA_GATE_LOWER_BOUND,        hparams.kda_gate_lower_bound, false);
 
-    // MLA is served as MQA, so the cache holds the compressed latent. set it here too,
-    // as GGUFs converted before value_length was written fall back to n_embd/n_head
+    // the MLA cache holds the compressed latent
+    // set it here too, as older GGUFs have no value_length key
     hparams.n_embd_head_v_full = hparams.n_lora_kv;
 
     // n_head_kv == 0 marks a KDA (recurrent) layer, as in kimi-linear
@@ -185,37 +185,24 @@ static ggml_tensor * kimi_k3_situ(ggml_context * ctx0, ggml_tensor * gate, ggml_
 // cross-layer residual attention
 //
 
+// layout is [n_embd, n_ckpt, n_tokens]: rms_norm reduces over ne0, dsv4_hc_pre over ne1
+// append the new checkpoint, do not re-fold the whole chain
 void llama_model_kimi_k3::graph::res_push(ggml_tensor * cur, int64_t n_embd, int64_t n_tokens) {
-    resi.push_back(ggml_reshape_3d(ctx0, cur, n_embd, 1, n_tokens));
-}
+    ggml_tensor * ckpt = ggml_reshape_3d(ctx0, cur, n_embd, 1, n_tokens);
 
-ggml_tensor * llama_model_kimi_k3::graph::res_stack(int64_t n_embd, int64_t n_tokens) {
-    GGML_UNUSED(n_embd);
-    GGML_UNUSED(n_tokens);
-    if (resi_stack_n == (int) resi.size()) {
-        return resi_stack;   // set unchanged since the last mix
-    }
-    ggml_tensor * acc = resi[0];
-    for (size_t i = 1; i < resi.size(); ++i) {
-        acc = ggml_concat(ctx0, acc, resi[i], 1);
-    }
-    resi_stack   = acc;
-    resi_stack_n = (int) resi.size();
-    return acc;
+    resi_stack = resi_stack ? ggml_concat(ctx0, resi_stack, ckpt, 1) : ckpt;
 }
 
 ggml_tensor * llama_model_kimi_k3::graph::res_mix(ggml_tensor * cur, ggml_tensor * score_w,
-                                                  int64_t n_embd, int64_t n_tokens, int il) {
-    const int n_ckpt = (int) resi.size();
-    if (n_ckpt == 0) {
+                                                  int64_t n_tokens, int il) {
+    if (!resi_stack) {
         return cur; // layer 0: nothing banked yet
     }
 
-    const float eps = hparams.f_norm_rms_eps;
+    const int   n_ckpt = (int) resi_stack->ne[1];
+    const float eps    = hparams.f_norm_rms_eps;
 
-    // the checkpoint stack is packed as [n_embd, n_ckpt, n_tokens]: rms_norm reduces over
-    // ne0 = n_embd and dsv4_hc_pre reduces over ne1 = n_ckpt, so no transpose is needed
-    ggml_tensor * src = res_stack(n_embd, n_tokens);   // [n_embd, n_ckpt, n_tokens]
+    ggml_tensor * src = resi_stack;   // [n_embd, n_ckpt, n_tokens]
 
     // one rms_norm scores all checkpoints at once
     // note: the scores use the normalized values, but the sum below uses the raw ones
@@ -292,7 +279,7 @@ llama_model_kimi_k3::graph::graph(const llama_model & model, const llm_graph_par
         // from the attention output alone
         ggml_tensor * prefix_sum = inpL;
 
-        cur = use_attn_res ? res_mix(prefix_sum, layer.attn_res_score, n_embd, n_tokens, il)
+        cur = use_attn_res ? res_mix(prefix_sum, layer.attn_res_score, n_tokens, il)
                            : prefix_sum;
 
         bool banked = false;
@@ -317,7 +304,7 @@ llama_model_kimi_k3::graph::graph(const llama_model & model, const llm_graph_par
         prefix_sum = banked ? cur : ggml_add(ctx0, prefix_sum, cur);
         cb(prefix_sum, "prefix_sum_attn", il);
 
-        cur = use_attn_res ? res_mix(prefix_sum, layer.ffn_res_score, n_embd, n_tokens, il)
+        cur = use_attn_res ? res_mix(prefix_sum, layer.ffn_res_score, n_tokens, il)
                            : prefix_sum;
 
         cur = build_norm(cur, layer.ffn_norm, NULL, LLM_NORM_RMS, il);
@@ -344,7 +331,7 @@ llama_model_kimi_k3::graph::graph(const llama_model & model, const llm_graph_par
 
     // final mix, then narrow to the output tokens
     if (use_attn_res) {
-        cur = res_mix(cur, model.output_res_score, n_embd, n_tokens, -1);
+        cur = res_mix(cur, model.output_res_score, n_tokens, -1);
     }
     if (inp_out_ids) {
         cur = ggml_get_rows(ctx0, cur, inp_out_ids);
