@@ -38,7 +38,7 @@
 
 	let isSwitchable = $derived(mode === ChatMessageStatisticsMode.SWITCHABLE);
 
-	let activeView = $state<ChatMessageStatsView>(initialView);
+	let activeView = $state<ChatMessageStatsView>(ChatMessageStatsView.GENERATION);
 	let hasAutoSwitchedToGeneration = $state(false);
 
 	$effect(() => {

@@ -2,17 +2,20 @@
 	import { notebookStore } from '$lib/stores/notebook.svelte';
 	import Button from '$lib/components/ui/button/button.svelte';
 	import Textarea from '$lib/components/ui/textarea/textarea.svelte';
-	import { Play, Square, Undo, Redo, RulerDimensionLine } from '@lucide/svelte';
+	import { Play, Square, Undo, Redo } from '@lucide/svelte';
 	import { settingsStore } from '$lib/stores/settings.svelte';
 	import {
+		ChatFormContextGauge,
 		ChatMessageStatistics,
 		DialogChatError,
 		KeyboardShortcutInfo,
 		ModelsSelectorDropdown
 	} from '$lib/components/app';
+	import ContextGaugePopup from '$lib/components/app/chat/ChatForm/ChatFormContextGauge/ContextGaugePopup.svelte';
 	import { ProcessingText, ProcessingInfo } from '$lib/components/app/misc';
 	import { ErrorDialogType } from '$lib/enums';
 
+	import { chatStore } from '$lib/stores/chat.svelte';
 	import { modelsStore } from '$lib/stores/models.svelte';
 	import { serverStore } from '$lib/stores/server.svelte';
 	import * as Tooltip from '$lib/components/ui/tooltip';
@@ -155,6 +158,10 @@
 	}
 
 	onMount(() => {
+		chatStore.setActiveProcessingConversation('notebook');
+		if (notebookStore.content.length > 0) {
+			notebookStore.updateTokenCount(activeModelId ?? undefined);
+		}
 		if (!disableAutoScroll) {
 			setTimeout(() => scrollToBottom('instant'), INITIAL_SCROLL_DELAY);
 		}
@@ -243,7 +250,7 @@
 		/>
 	{/if}
 
-	<div class="bg-background p-2 md:p-4">
+	<div class="relative bg-background p-2 md:p-4" data-gauge-container>
 		<div class="flex flex-col-reverse gap-4 md:flex-row md:items-center md:justify-between">
 			<div class="flex items-center gap-2">
 				<Tooltip.Root>
@@ -312,20 +319,8 @@
 			</div>
 
 			{#if showMessageStats}
-				<div class="flex min-h-[42px] w-full flex-col items-end justify-center gap-0.5 md:w-auto">
-					{#if notebookStore.totalTokens > 0}
-						<Tooltip.Root>
-							<Tooltip.Trigger>
-								<div class="flex items-center gap-1.5 pr-3.5 text-xs text-muted-foreground">
-									<RulerDimensionLine class="h-3.5 w-3.5" />
-									<span>{notebookStore.totalTokens} tokens</span>
-								</div>
-							</Tooltip.Trigger>
-							<Tooltip.Content>
-								<p>Total tokens</p>
-							</Tooltip.Content>
-						</Tooltip.Root>
-					{/if}
+				<div class="flex min-h-[42px] w-full items-center justify-end gap-2.5 md:w-auto">
+					<ChatFormContextGauge />
 
 					{#if processingState}
 						<ChatMessageStatistics
@@ -340,6 +335,8 @@
 				</div>
 			{/if}
 		</div>
+
+		<ContextGaugePopup />
 	</div>
 
 	<DialogChatError

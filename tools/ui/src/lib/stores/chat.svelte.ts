@@ -627,7 +627,7 @@ class ChatStore {
 		return this.processingStates.get(conversationId) || null;
 	}
 
-	private setProcessingState(conversationId: string, state: ApiProcessingState | null): void {
+	setProcessingState(conversationId: string, state: ApiProcessingState | null): void {
 		if (state === null) this.processingStates.delete(conversationId);
 		else this.processingStates.set(conversationId, state);
 

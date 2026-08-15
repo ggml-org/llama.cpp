@@ -33,17 +33,29 @@ function lastAssistantTimings(messages: DatabaseMessage[]): ChatMessageTimings |
 }
 
 function deriveLiveStats(state: ApiProcessingState | null): LiveStats | null {
-	if (!state || (state.status !== 'preparing' && state.status !== 'generating')) {
+	if (!state) {
 		return null;
 	}
 
-	const promptTokens = state.promptTokens ?? 0;
+	const promptTokens =
+		state.promptTokens ??
+		Math.max(0, (state.contextUsed ?? 0) - (state.outputTokensUsed ?? state.tokensDecoded ?? 0));
 	const cacheTokens = state.cacheTokens ?? 0;
+	const outputTokens = state.outputTokensUsed ?? state.tokensDecoded ?? 0;
+
+	if (
+		promptTokens === 0 &&
+		cacheTokens === 0 &&
+		outputTokens === 0 &&
+		(state.contextUsed ?? 0) === 0
+	) {
+		return null;
+	}
 
 	return {
 		cacheTokens,
 		freshTokens: promptTokens,
-		outputTokens: state.outputTokensUsed ?? 0,
+		outputTokens,
 		promptTokens: promptTokens + cacheTokens
 	};
 }

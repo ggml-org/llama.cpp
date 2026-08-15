@@ -117,6 +117,9 @@ export class NotebookStore {
 	}): void {
 		this.processingState = chatStore.parseTimingData(timingData);
 		this.totalTokens = this.processingState?.contextUsed ?? 0;
+		if (this.processingState) {
+			chatStore.setProcessingState('notebook', this.processingState);
+		}
 	}
 
 	undo() {
@@ -154,6 +157,7 @@ export class NotebookStore {
 		this.isGenerating = false;
 		if (this.processingState) {
 			this.processingState.status = 'idle';
+			chatStore.setProcessingState('notebook', this.processingState);
 		}
 	}
 
@@ -165,10 +169,34 @@ export class NotebookStore {
 		this.tokenizeTimeout = setTimeout(async () => {
 			if (this.content.length === 0) {
 				this.totalTokens = 0;
+				this.processingState = null;
+				chatStore.clearProcessingState('notebook');
 				return;
 			}
 			const tokens = await tokenize(this.content, model);
 			this.totalTokens = tokens.length;
+
+			if (!this.isGenerating) {
+				const contextTotal = modelsStore.contextSize;
+				const state: ApiProcessingState = {
+					cacheTokens: 0,
+					contextTotal,
+					contextUsed: this.totalTokens,
+					hasNextToken: false,
+					outputTokensMax: settingsStore.config.max_tokens || -1,
+					outputTokensUsed: 0,
+					promptTokens: this.totalTokens,
+					speculative: false,
+					status: 'idle',
+					temperature: settingsStore.config.temperature ?? 0.8,
+					tokensDecoded: 0,
+					tokensPerSecond: 0,
+					tokensRemaining: (contextTotal ?? 0) - this.totalTokens,
+					topP: settingsStore.config.top_p ?? 0.95
+				};
+				this.processingState = state;
+				chatStore.setProcessingState('notebook', state);
+			}
 		}, 500);
 	}
 
