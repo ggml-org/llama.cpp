@@ -476,7 +476,8 @@ void analyze_reasoning::compare_reasoning_presence() {
     json assistant_with_reasoning = json{
         { "role",              "assistant"                },
         { "content",           ASSISTANT_MSG              },
-        { "reasoning_content", THINKING_CONTENT           }
+        { "reasoning_content", THINKING_CONTENT           },
+        { "thinking",          THINKING_CONTENT           }
     };
 
     template_params params;
@@ -609,13 +610,15 @@ void analyze_reasoning::compare_reasoning_scope() {
     json assistant_reasoning_content = json{
         { "role",              "assistant"      },
         { "content",           ASSISTANT_MSG    },
-        { "reasoning_content", THINKING_CONTENT }
+        { "reasoning_content", THINKING_CONTENT },
+        { "thinking",          THINKING_CONTENT }
     };
 
     json assistant_reasoning_tools = json{
         { "role",              "assistant"                                                                  },
         { "content",           nullptr                                                                      },
         { "reasoning_content", THINKING_CONTENT                                                             },
+        { "thinking",          THINKING_CONTENT                                                             },
         { "tool_calls",
          json::array({ build_tool_call(FUN_FIRST, json{ { ARG_FIRST, "VVVV" }, { ARG_SECOND, "XXXX" } }) }) }
     };
@@ -684,7 +687,8 @@ analyze_content::analyze_content(const common_chat_template & tmpl, const analyz
     json assistant_with_reasoning = json{
         { "role",              "assistant"      },
         { "content",           ""               },
-        { "reasoning_content", THINKING_CONTENT }
+        { "reasoning_content", THINKING_CONTENT },
+        { "thinking",          THINKING_CONTENT }
     };
 
     template_params params_content_only;
