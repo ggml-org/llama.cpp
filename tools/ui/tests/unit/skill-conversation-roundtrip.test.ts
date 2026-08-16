@@ -207,23 +207,23 @@ describe('conversation export/import round trip with Skills metadata', () => {
 		if (isSkillExtra(extra)) {
 			expect(extra.metadata?.license).toBe('MIT');
 		}
-	});
 
-	it('preserves the paired structure when the export is a multi-session JSONL file', async () => {
-		const jsonl = [makeSession(), makeSession()]
+		// A multi-session JSONL file preserves the same pairing in every session.
+		const multiJsonl = [makeSession(), makeSession()]
 			.map((s) => conversationsStore.serializeSessionToJsonl(s))
 			.join(NEWLINE);
-		const sessions: ExportedConversation[] = await conversationsStore.parseImportFile(
-			new File([jsonl], 'multi.jsonl')
+		const multiSessions: ExportedConversation[] = await conversationsStore.parseImportFile(
+			new File([multiJsonl], 'multi.jsonl')
 		);
 
-		for (const session of sessions) {
-			const assistant = session.messages.find((m) => m.id === 'assistant-1');
-			const toolResult = session.messages.find((m) => m.id === 'tool-result-1');
-			const calls = JSON.parse(assistant!.toolCalls ?? '') as Array<{ id: string }>;
+		expect(multiSessions).toHaveLength(2);
+		for (const session of multiSessions) {
+			const sessionAssistant = session.messages.find((m) => m.id === 'assistant-1');
+			const sessionToolResult = session.messages.find((m) => m.id === 'tool-result-1');
+			const calls = JSON.parse(sessionAssistant!.toolCalls ?? '') as Array<{ id: string }>;
 
-			expect(toolResult!.toolCallId).toBe(calls[0].id);
-			expect(isSkillExtra(toolResult!.extra?.[0])).toBe(true);
+			expect(sessionToolResult!.toolCallId).toBe(calls[0].id);
+			expect(isSkillExtra(sessionToolResult!.extra?.[0])).toBe(true);
 		}
 	});
 

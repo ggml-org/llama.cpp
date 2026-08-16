@@ -18,6 +18,7 @@ import { conversationsStore } from '$lib/stores/conversations.svelte';
 import { skillActivationStore } from '$lib/stores/skill-activation.svelte';
 import type { DatabaseConversation, DatabaseMessage } from '$lib/types/database';
 import type { SkillBaseReadResult } from '$lib/types/skills';
+import { classifyLeafResume } from '$lib/utils';
 import { tick } from 'svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -248,5 +249,28 @@ describe('chatStore.runTurnFromLeaf in an active conversation', () => {
 		);
 		// The wake streamed a real turn (the sink's onComplete payload).
 		expect(mockSendMessage).toHaveBeenCalledTimes(2);
+	});
+});
+
+// Pure routing contract for waking a turn after a command-only activation:
+// assistant leaves continue through the existing continuation machinery,
+// tool result and user leaves open a fresh turn, and an empty conversation
+// is a no-op.
+
+describe('classifyLeafResume', () => {
+	it('continues assistant leaves through the continuation machinery', () => {
+		expect(classifyLeafResume(MessageRole.ASSISTANT)).toBe('continue-assistant');
+	});
+
+	it('opens a fresh turn after a tool result leaf', () => {
+		expect(classifyLeafResume(MessageRole.TOOL)).toBe('fresh-turn');
+	});
+
+	it('opens a fresh turn after a user leaf', () => {
+		expect(classifyLeafResume(MessageRole.USER)).toBe('fresh-turn');
+	});
+
+	it('is a no-op on an empty conversation', () => {
+		expect(classifyLeafResume(undefined)).toBe('no-op');
 	});
 });
