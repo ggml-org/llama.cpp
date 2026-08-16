@@ -695,7 +695,7 @@ static void test_cosmetic_name_leading_trailing_hyphen() {
 // Literal (`|`) and folded (`>`) block-scalar descriptions, each chomping sign
 // (none = clip, `-` = strip, `+` = keep): the parser must consume the indented
 // continuation, strip the common indentation, and expose the parsed text
-// through GET /skills and POST /skills/read metadata — never the raw
+// through GET /skills and POST /skills/read metadata - never the raw
 // `|-`/`>-` indicators.
 static void test_block_scalar_descriptions() {
     const fs::path tmp = make_temp_dir();
