@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { fade, fly } from 'svelte/transition';
-	import { ChevronDown, Circle, RefreshCw, X } from '@lucide/svelte';
+	import { Circle, RefreshCw, X } from '@lucide/svelte';
 	import { MarkdownContent, SyntaxHighlightedCode } from '$lib/components/app';
 	import { ActionIcon } from '$lib/components/app/actions';
 	import { Alert, AlertDescription, AlertTitle } from '$lib/components/ui/alert';
@@ -40,7 +40,7 @@
 	// Each newly selected skill starts in the rendered markdown mode.
 	let mode = $state<'markdown' | 'raw'>('markdown');
 
-	let resourcesOpen = $state(true);
+	let resourceGroupsOpen = $state<Record<string, boolean>>({});
 
 	$effect(() => {
 		void entry.id;
@@ -52,8 +52,8 @@
 		const controller = new AbortController();
 		const generation = ++readGeneration;
 
-		readState = 'loading';
 		result = null;
+		resourceGroupsOpen = {};
 		errorMessage = '';
 
 		SkillsService.read({ name: entry.name }, cwd, controller.signal)
@@ -68,6 +68,12 @@
 					return;
 				}
 
+				resourceGroupsOpen = Object.fromEntries(
+					groupSkillResourcePaths(readResult.resources.paths).map((group) => [
+						group.group,
+						false
+					])
+				);
 				result = readResult;
 				readState = 'ready';
 			})
@@ -91,6 +97,7 @@
 	const resourceGroups = $derived(
 		result ? groupSkillResourcePaths(result.resources.paths) : []
 	);
+
 </script>
 
 <div
@@ -128,47 +135,34 @@
 			</div>
 		</div>
 
-		{#if result}
-			{#if resourceGroups.length > 0}
-				<Collapsible
-					bind:open={resourcesOpen}
-					data-testid="skill-detail-resources"
-					class="rounded-md border"
-				>
-					<CollapsibleTrigger
-						class="flex cursor-pointer w-full items-center justify-between px-3 py-2 text-sm font-medium"
+		{#if result && resourceGroups.length > 0}
+			<div class="flex flex-col gap-2">
+				{#each resourceGroups as resourceGroup (resourceGroup.group)}
+					{@const ResourceIcon = resourceGroup.icon}
+					<Collapsible
+						bind:open={resourceGroupsOpen[resourceGroup.group]}
+						data-testid="skill-detail-resources-{resourceGroup.group}"
+						class="rounded-md border transition-colors"
 					>
-						Resources ({result.resources.paths.length})
-						<ChevronDown
-							class="size-4 transition-transform duration-200 {resourcesOpen ? 'rotate-180' : ''}"
-							aria-hidden="true"
-						/>
-					</CollapsibleTrigger>
-					<CollapsibleContent
-						class="overflow-hidden px-3 pb-3 data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down"
-					>
-						<div class="flex flex-col gap-3">
-							{#each resourceGroups as resourceGroup (resourceGroup.group)}
-								{@const ResourceIcon = resourceGroup.icon}
-								<section
-									data-testid="skill-resource-group"
-									class="flex flex-col gap-1"
-								>
-									<div
-										class="flex items-center gap-2 text-xs font-medium text-muted-foreground"
-									>
-										<ResourceIcon class="size-3.5" aria-hidden="true" />
-										{resourceGroup.label}
-									</div>
-									{#each resourceGroup.paths as path (path)}
-										<div class="pl-5 font-mono text-xs break-all">{path}</div>
-									{/each}
-								</section>
-							{/each}
-						</div>
-					</CollapsibleContent>
-				</Collapsible>
-			{/if}
+						<CollapsibleTrigger
+							data-testid="skill-detail-resource-trigger-{resourceGroup.group}"
+							class="flex w-full cursor-pointer items-center gap-2 rounded-md px-3 py-2 text-left text-sm font-medium transition-colors hover:bg-accent/50"
+						>
+							<ResourceIcon class="size-3.5 text-muted-foreground" aria-hidden="true" />
+							{resourceGroup.label} ({resourceGroup.paths.length})
+						</CollapsibleTrigger>
+						<CollapsibleContent
+							class="overflow-hidden px-3 pb-3 data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down"
+						>
+							<div class="flex flex-col gap-3">
+								{#each resourceGroup.paths as path (path)}
+									<div class="pl-5 font-mono text-xs break-all">{path}</div>
+								{/each}
+							</div>
+						</CollapsibleContent>
+					</Collapsible>
+				{/each}
+			</div>
 		{/if}
 	</div>
 
