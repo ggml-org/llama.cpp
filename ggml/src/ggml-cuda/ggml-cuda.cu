@@ -1223,7 +1223,7 @@ static void ggml_cuda_op_mul_mat_cublas(
                     &alpha_f32,  src0_ptr,       CUDA_R_16BF, ne00,
                                  src1_ptr,       CUDA_R_16BF, ne10,
                     &beta_f32,   dst_bf16.get(), CUDA_R_16BF, ldc,
-                    CUBLAS_COMPUTE_32F,
+                    (cublasComputeType_t)(int)CUBLAS_COMPUTE_32F,
                     CUBLAS_GEMM_DEFAULT_TENSOR_OP));
 
         const to_fp32_cuda_t to_fp32_cuda = ggml_get_to_fp32_cuda(GGML_TYPE_BF16);
@@ -1261,7 +1261,7 @@ static void ggml_cuda_op_mul_mat_cublas(
                         &alpha, src0_ptr,  CUDA_R_16F, ne00,
                                 src1_ptr,  CUDA_R_16F, ne10,
                         &beta,   dst_dd_i, CUDA_R_32F, ldc,
-                        CUBLAS_COMPUTE_32F,
+                        (cublasComputeType_t)(int)CUBLAS_COMPUTE_32F,
                         CUBLAS_GEMM_DEFAULT_TENSOR_OP));
         } else {
             ggml_cuda_pool_alloc<half> dst_f16(ctx.pool(id), row_diff*src1_ncols);
@@ -1275,7 +1275,7 @@ static void ggml_cuda_op_mul_mat_cublas(
                         &alpha_f16, src0_ptr,      CUDA_R_16F, ne00,
                                     src1_ptr,      CUDA_R_16F, ne10,
                         &beta_f16,  dst_f16.get(), CUDA_R_16F, ldc,
-                        CUBLAS_COMPUTE_16F,
+                        (cublasComputeType_t)(int)CUBLAS_COMPUTE_16F,
                         CUBLAS_GEMM_DEFAULT_TENSOR_OP));
 
             const to_fp32_cuda_t to_fp32_cuda = ggml_get_to_fp32_cuda(GGML_TYPE_F16);
@@ -1790,8 +1790,8 @@ static void ggml_cuda_mul_mat_batched_cublas(ggml_backend_cuda_context & ctx, co
     ggml_cuda_pool_alloc<half> dst_f16(ctx.pool());
     char * dst_t;
 
-    cublasComputeType_t cu_compute_type = CUBLAS_COMPUTE_16F;
-    cudaDataType_t      cu_data_type    = CUDA_R_16F;
+    cublasComputeType_t cu_compute_type = (cublasComputeType_t)(int)CUBLAS_COMPUTE_16F;
+    cudaDataType_t      cu_data_type    = (cudaDataType_t)(int)CUDA_R_16F;
 
     // dst strides
     size_t nbd2 = dst->nb[2];
@@ -1814,8 +1814,8 @@ static void ggml_cuda_mul_mat_batched_cublas(ggml_backend_cuda_context & ctx, co
     } else {
         dst_t = (char *) dst_ddf;
 
-        cu_compute_type = CUBLAS_COMPUTE_32F;
-        cu_data_type    = CUDA_R_32F;
+        cu_compute_type = (cublasComputeType_t)(int)CUBLAS_COMPUTE_32F;
+        cu_data_type    = (cudaDataType_t)(int)CUDA_R_32F;
 
         alpha = &alpha_f32;
         beta  = &beta_f32;
@@ -1824,7 +1824,7 @@ static void ggml_cuda_mul_mat_batched_cublas(ggml_backend_cuda_context & ctx, co
     int id = ggml_cuda_get_device();
     const int cc = ggml_cuda_info().devices[id].cc;
     if (GGML_CUDA_CC_IS_CDNA(cc) || GGML_CUDA_CC_IS_RDNA4(cc)) {
-        cu_compute_type = CUBLAS_COMPUTE_32F;
+        cu_compute_type = (cublasComputeType_t)(int)CUBLAS_COMPUTE_32F;
         alpha = &alpha_f32;
         beta  = &beta_f32;
     }
