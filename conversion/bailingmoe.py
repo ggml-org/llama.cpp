@@ -7,7 +7,7 @@ import torch
 if TYPE_CHECKING:
     from torch import Tensor
 
-from .base import ModelBase, TextModel, gguf
+from .base import MOE_HF_MLP, ModelBase, TextModel, gguf
 
 
 @ModelBase.register("BailingMoeForCausalLM")
@@ -31,7 +31,7 @@ class BailingMoeModel(TextModel):
         self.gguf_writer.add_expert_shared_count(hparams["num_shared_experts"])
         self.gguf_writer.add_expert_weights_norm(hparams["norm_topk_prob"])
 
-    _experts: list[dict[str, Tensor]] | None = None
+    moe_experts = [MOE_HF_MLP]
 
     @staticmethod
     def permute(weights: Tensor, n_head: int, n_head_kv: int | None):
@@ -60,34 +60,6 @@ class BailingMoeModel(TextModel):
             yield from super().modify_tensors(BailingMoeModel.permute(k, n_head, n_kv_head), self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_K, bid), bid)
             yield from super().modify_tensors(v,self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_V, bid), bid)
             return
-        elif name.find("mlp.experts") != -1:
-            n_experts = self.find_hparam(["num_local_experts", "num_experts"])
-            assert bid is not None
-
-            if self._experts is None:
-                self._experts = [{} for _ in range(self.block_count)]
-
-            self._experts[bid][name] = data_torch
-
-            if len(self._experts[bid]) >= n_experts * 3:
-                # merge the experts into a single 3d tensor
-                for w_name in ["down_proj", "gate_proj", "up_proj"]:
-                    datas: list[Tensor] = []
-
-                    for xid in range(n_experts):
-                        ename = f"model.layers.{bid}.mlp.experts.{xid}.{w_name}.weight"
-                        datas.append(self._experts[bid][ename])
-                        del self._experts[bid][ename]
-
-                    data_torch = torch.stack(datas, dim=0)
-
-                    merged_name = f"model.layers.{bid}.mlp.experts.{w_name}.weight"
-
-                    new_name = self.map_tensor_name(merged_name)
-
-                    yield from super().modify_tensors(data_torch, new_name, bid)
-
-            return
 
         new_name = self.map_tensor_name(name)
 
@@ -96,15 +68,6 @@ class BailingMoeModel(TextModel):
             data_torch /= torch.norm(data_torch, p=2, dim=0, keepdim=True) + 1e-7
 
         yield from super().modify_tensors(data_torch, new_name, bid)
-
-    def prepare_tensors(self):
-        super().prepare_tensors()
-
-        if self._experts is not None:
-            # flatten `list[dict[str, Tensor]]` into `list[str]`
-            experts = [k for d in self._experts for k in d.keys()]
-            if len(experts) > 0:
-                raise ValueError(f"Unprocessed experts: {experts}")
 
 
 @ModelBase.register("BailingMoeV2ForCausalLM")
@@ -138,7 +101,7 @@ class BailingMoeV2Model(TextModel):
         if (nextn_layers := self.hparams.get("num_nextn_predict_layers")) is not None:
             self.gguf_writer.add_nextn_predict_layers(nextn_layers)
 
-    _experts: list[dict[str, Tensor]] | None = None
+    moe_experts = [MOE_HF_MLP]
 
     @classmethod
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
@@ -148,44 +111,6 @@ class BailingMoeV2Model(TextModel):
             name = name.replace(".expert_bias", ".expert_bias.bias")
 
         return super().filter_tensors((name, gen))
-
-    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        if "mlp.experts" in name:
-            n_experts = self.find_hparam(["num_local_experts", "num_experts"])
-            assert bid is not None
-
-            if self._experts is None:
-                self._experts = [{} for _ in range(self.block_count)]
-
-            self._experts[bid][name] = data_torch
-
-            if len(self._experts[bid]) >= n_experts * 3:
-                # merge the experts into a single 3d tensor
-                for w_name in ["down_proj", "gate_proj", "up_proj"]:
-                    datas: list[Tensor] = []
-
-                    for xid in range(n_experts):
-                        ename = f"model.layers.{bid}.mlp.experts.{xid}.{w_name}.weight"
-                        datas.append(self._experts[bid][ename])
-                        del self._experts[bid][ename]
-
-                    data_torch = torch.stack(datas, dim=0)
-
-                    merged_name = f"model.layers.{bid}.mlp.experts.{w_name}.weight"
-
-                    yield from super().modify_tensors(data_torch, merged_name, bid)
-            return
-
-        yield from super().modify_tensors(data_torch, name, bid)
-
-    def prepare_tensors(self):
-        super().prepare_tensors()
-
-        if self._experts is not None:
-            # flatten `list[dict[str, Tensor]]` into `list[str]`
-            experts = [k for d in self._experts for k in d.keys()]
-            if len(experts) > 0:
-                raise ValueError(f"Unprocessed experts: {experts}")
 
 
 @ModelBase.register("SarvamMoEForCausalLM", "modeling_sarvam_moe.SarvamMoEForCausalLM")

@@ -11,9 +11,10 @@ import os
 import re
 import sys
 from enum import IntEnum
+from functools import lru_cache
 from pathlib import Path
 from hashlib import sha256
-from typing import TYPE_CHECKING, Any, Callable, ContextManager, Iterable, Iterator, Literal, Sequence, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Callable, ContextManager, Iterable, Iterator, Literal, NamedTuple, Sequence, TypeVar, cast
 from itertools import chain
 from transformers import AutoConfig
 
@@ -77,6 +78,50 @@ class ModelType(IntEnum):
     MMPROJ = 2
 
 
+class MoEExpertSpec(NamedTuple):
+    # src/dst are name templates using {bid}, {xid} (src only) and {w}
+    # the order of weights is the order the stacked tensors are written in
+    src: str
+    dst: str
+    weights: tuple[str, ...]
+    n_expert: tuple[str, ...] | Callable[[ModelBase], int] = ("num_local_experts", "num_experts", "n_routed_experts")
+
+
+_MOE_PLACEHOLDER_RE = re.compile(r"\{(bid|xid|w)\}")
+
+
+@lru_cache(maxsize=None)
+def _compile_moe_src(spec: MoEExpertSpec) -> re.Pattern[str]:
+    groups = {
+        "bid": r"(?P<bid>\d+)",
+        "xid": r"(?P<xid>\d+)",
+        "w":   "(?P<w>" + "|".join(re.escape(w) for w in spec.weights) + ")",
+    }
+    parts: list[str] = []
+    pos = 0
+    for m in _MOE_PLACEHOLDER_RE.finditer(spec.src):
+        parts.append(re.escape(spec.src[pos:m.start()]))
+        parts.append(groups[m.group(1)])
+        pos = m.end()
+    parts.append(re.escape(spec.src[pos:]))
+    return re.compile("".join(parts) + r"\Z")
+
+
+MOE_HF_MLP = MoEExpertSpec(
+    src="model.layers.{bid}.mlp.experts.{xid}.{w}.weight",
+    dst="model.layers.{bid}.mlp.experts.{w}.weight",
+    weights=("down_proj", "gate_proj", "up_proj"),
+)
+
+MOE_BLOCK_SPARSE = MoEExpertSpec(
+    src="model.layers.{bid}.block_sparse_moe.experts.{xid}.{w}.weight",
+    dst="model.layers.{bid}.block_sparse_moe.experts.{w}.weight",
+    weights=("w1", "w2", "w3"),
+)
+
+MOE_BLOCK_SPARSE_MIXTRAL = MOE_BLOCK_SPARSE._replace(dst="layers.{bid}.feed_forward.experts.{w}.weight")
+
+
 class ModelBase:
     _model_classes: dict[ModelType, dict[str, type[ModelBase]]] = {
         ModelType.TEXT: {},
@@ -108,6 +153,9 @@ class ModelBase:
     # subclasses should initialize this!
     block_count: int
     tensor_map: gguf.TensorNameMap
+
+    # per-expert tensors to stack into 3d tensors, see _stack_moe_experts()
+    moe_experts: Sequence[MoEExpertSpec] = ()
 
     # Mistral format specifics
     is_mistral_format: bool = False
@@ -153,6 +201,7 @@ class ModelBase:
         self.fuse_gate_up_exps = fuse_gate_up_exps
         self._gate_exp_buffer: dict[int, Tensor] = {}
         self._up_exp_buffer: dict[int, Tensor] = {}
+        self._moe_buffers: dict[tuple[int, int], dict[str, Tensor]] = {}
         self.hparams = ModelBase.load_hparams(self.dir_model, self.is_mistral_format) if hparams is None else hparams
         self.model_tensors = self.index_tensors(remote_hf_model_id=remote_hf_model_id)
         self.metadata_override = metadata_override
@@ -620,6 +669,53 @@ class ModelBase:
     def set_gguf_parameters(self):
         raise NotImplementedError("set_gguf_parameters() must be implemented in subclasses")
 
+    def moe_expert_specs(self) -> Sequence[MoEExpertSpec]:
+        return self.moe_experts
+
+    def moe_n_expert(self, spec: MoEExpertSpec) -> int:
+        if callable(spec.n_expert):
+            return spec.n_expert(self)
+        return self.find_hparam(spec.n_expert)
+
+    def _stack_moe_experts(self, data_torch: Tensor, name: str) -> list[tuple[str, Tensor, int]] | None:
+        # returns None if name is not a per-expert tensor, or an empty list while the block is incomplete
+        for sid, spec in enumerate(self.moe_expert_specs()):
+            m = _compile_moe_src(spec).match(name)
+            if m is None:
+                continue
+
+            bid = int(m.group("bid"))
+            n_expert = self.moe_n_expert(spec)
+
+            buf = self._moe_buffers.setdefault((sid, bid), {})
+            buf[name] = data_torch
+            if len(buf) < n_expert * len(spec.weights):
+                return []
+
+            del self._moe_buffers[(sid, bid)]
+
+            merged: list[tuple[str, Tensor, int]] = []
+            for w in spec.weights:
+                datas = [buf.pop(spec.src.format(bid=bid, xid=xid, w=w)) for xid in range(n_expert)]
+                merged.append((spec.dst.format(bid=bid, w=w), torch.stack(datas, dim=0), bid))
+
+            if buf:
+                raise ValueError(f"Unexpected experts: {list(buf)}")
+
+            return merged
+
+        return None
+
+    def dispatch_tensor(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        stacked = self._stack_moe_experts(data_torch, name)
+        if stacked is None:
+            yield from self.modify_tensors(data_torch, name, bid)
+            return
+
+        # stacked tensors re-enter modify_tensors() as if stored that way
+        for merged_name, merged_data, merged_bid in stacked:
+            yield from self.modify_tensors(merged_data, merged_name, merged_bid)
+
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         new_name = self.map_tensor_name(name)
 
@@ -923,7 +1019,7 @@ class ModelBase:
                     bid = int(part)
                     break
 
-            for new_name, data_torch in (self.modify_tensors(data_torch, name, bid)):
+            for new_name, data_torch in (self.dispatch_tensor(data_torch, name, bid)):
                 # TODO: why do we squeeze here?
                 # data = data_torch.squeeze().numpy()
                 data = data_torch.numpy()
@@ -1022,6 +1118,10 @@ class ModelBase:
                 logger.info(f"{f'%-{max_name_len}s' % f'{new_name},'} {old_dtype} --> {data_qtype.name}, shape = {shape_str}")
 
                 self.gguf_writer.add_tensor(new_name, data, raw_dtype=data_qtype)
+
+        if self._moe_buffers:
+            experts = [k for buf in self._moe_buffers.values() for k in buf]
+            raise ValueError(f"Unprocessed experts: {experts}")
 
     def set_type(self):
         self.gguf_writer.add_type(gguf.GGUFType.MODEL)

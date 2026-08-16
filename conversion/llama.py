@@ -11,7 +11,7 @@ import torch
 if TYPE_CHECKING:
     from torch import Tensor
 
-from .base import ModelBase, TextModel, gguf, logger
+from .base import MOE_BLOCK_SPARSE_MIXTRAL, ModelBase, TextModel, gguf, logger
 
 
 @ModelBase.register(
@@ -192,7 +192,7 @@ class LlamaModel(TextModel):
                     scale  = LlamaModel.permute(scale, n_head, n_kv_head)
         super()._repack_nvfp4(name, weight, scale, scale2, input_scale)
 
-    _experts: list[dict[str, Tensor]] | None = None
+    moe_experts = [MOE_BLOCK_SPARSE_MIXTRAL._replace(n_expert=("num_local_experts",))]
 
     @classmethod
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
@@ -261,36 +261,6 @@ class LlamaModel(TextModel):
             if name.endswith(("k_proj.weight", "k_proj.bias")):
                 data_torch = LlamaModel.permute(data_torch, n_head, n_kv_head)
 
-        # process the experts separately
-        if name.find("block_sparse_moe.experts") != -1:
-            n_experts = self.hparams["num_local_experts"]
-
-            assert bid is not None
-
-            if self._experts is None:
-                self._experts = [{} for _ in range(self.block_count)]
-
-            self._experts[bid][name] = data_torch
-
-            if len(self._experts[bid]) >= n_experts * 3:
-                # merge the experts into a single 3d tensor
-                for wid in ["w1", "w2", "w3"]:
-                    datas: list[Tensor] = []
-
-                    for xid in range(n_experts):
-                        ename = f"model.layers.{bid}.block_sparse_moe.experts.{xid}.{wid}.weight"
-                        datas.append(self._experts[bid][ename])
-                        del self._experts[bid][ename]
-
-                    data_torch = torch.stack(datas, dim=0)
-
-                    merged_name = f"layers.{bid}.feed_forward.experts.{wid}.weight"
-
-                    yield from super().modify_tensors(data_torch, merged_name, bid)
-                return
-            else:
-                return
-
         yield from super().modify_tensors(data_torch, name, bid)
 
     def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
@@ -350,12 +320,6 @@ class LlamaModel(TextModel):
                 shape_str = f"{{{', '.join(str(n) for n in reversed(data.shape))}}}"
                 logger.info(f"{name + ',':<30} {old_dtype} --> {data_qtype.name}, shape = {shape_str}")
                 self.gguf_writer.add_tensor(name, data, raw_dtype=data_qtype)
-
-        if self._experts is not None:
-            # flatten `list[dict[str, Tensor]]` into `list[str]`
-            experts = [k for d in self._experts for k in d.keys()]
-            if len(experts) > 0:
-                raise ValueError(f"Unprocessed experts: {experts}")
 
 
 @ModelBase.register("ArceeForCausalLM")

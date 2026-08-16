@@ -1,22 +1,20 @@
 from __future__ import annotations
 
-import re
 from collections.abc import Iterable
 from typing import TYPE_CHECKING
-
-import torch
 
 if TYPE_CHECKING:
     from torch import Tensor
 
-from .base import ModelBase, TextModel, gguf, logger
+from .base import MOE_HF_MLP, ModelBase, TextModel, gguf, logger
 
 
 @ModelBase.register("LagunaForCausalLM")
 class LagunaModel(TextModel):
     model_arch = gguf.MODEL_ARCH.LAGUNA
-    _experts: list[dict] | None = None
     _gate_types: list[str] | None = None
+
+    moe_experts = [MOE_HF_MLP._replace(weights=("gate_proj", "up_proj", "down_proj"))]
 
     # --- vocab ---------------------------------------------------------------
 
@@ -168,27 +166,6 @@ class LagunaModel(TextModel):
     # --- tensor handling -----------------------------------------------------
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        # Per-expert MoE weights: model.layers.{bid}.mlp.experts.{xid}.{w}.weight.
-        # Only the NUMBERED per-expert weights are stacked; the router bias
-        # (mlp.experts.e_score_correction_bias) takes the normal mapping path.
-        if re.search(r"mlp\.experts\.\d+\.", name):
-            n_experts = self.find_hparam(["num_local_experts", "num_experts"])
-            assert bid is not None
-            if self._experts is None:
-                self._experts = [{} for _ in range(self.block_count)]
-            self._experts[bid][name] = data_torch
-            needed = [f"model.layers.{bid}.mlp.experts.{x}.{w}.weight"
-                      for x in range(n_experts) for w in ("gate_proj", "up_proj", "down_proj")]
-            if all(e in self._experts[bid] for e in needed):
-                for w_name in ["gate_proj", "up_proj", "down_proj"]:
-                    datas = [self._experts[bid][f"model.layers.{bid}.mlp.experts.{x}.{w_name}.weight"]
-                             for x in range(n_experts)]
-                    stacked = torch.stack(datas, dim=0)
-                    merged = f"model.layers.{bid}.mlp.experts.{w_name}.weight"
-                    yield from TextModel.modify_tensors(self, stacked, merged, bid)
-                self._experts[bid].clear()
-                return
-            return
         # Cross-check the gate projection width against the declared gate type;
         # a mismatch means the weights and config disagree -> fail, do not guess.
         if bid is not None and name.endswith("self_attn.g_proj.weight"):

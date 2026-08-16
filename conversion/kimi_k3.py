@@ -10,7 +10,7 @@ import torch
 if TYPE_CHECKING:
     from torch import Tensor
 
-from .base import LazyTorchTensor, ModelBase, TextModel, gguf, logger
+from .base import MOE_BLOCK_SPARSE, LazyTorchTensor, ModelBase, TextModel, gguf, logger
 
 from .kimi_linear import KimiLinearModel
 
@@ -29,7 +29,8 @@ class KimiK3Model(TextModel):
 
     model_arch = gguf.MODEL_ARCH.KIMI_K3
 
-    _experts: list[dict[str, Tensor]] | None = None
+    # w1: gate, w2: down, w3: up
+    moe_experts = [MOE_BLOCK_SPARSE._replace(n_expert=("num_experts",))]
 
     # `<x>_res_norm.weight` and `<x>_res_proj.weight` are only used as their
     # elementwise product, so they are fused into one [n_embd] vector here.
@@ -258,10 +259,6 @@ class KimiK3Model(TextModel):
 
     def prepare_tensors(self):
         super().prepare_tensors()
-        if self._experts is not None:
-            leftover = [k for d in self._experts for k in d.keys()]
-            if leftover:
-                raise ValueError(f"Unprocessed experts: {leftover}")
         if self._res_parts:
             raise ValueError(f"Unpaired attention-residual tensors: {sorted(self._res_parts)}")
         if self._is_mxfp4_packed():
@@ -333,30 +330,6 @@ class KimiK3Model(TextModel):
             is_kda = (bid + 1) not in self.hparams["linear_attn_config"]["full_attn_layers"]
             tensor_id = gguf.MODEL_TENSOR.SSM_G if is_kda else gguf.MODEL_TENSOR.ATTN_GATE
             yield self.format_tensor_name(tensor_id, bid), data_torch
-            return
-
-        # --- routed experts: stack per-expert 2D weights into one 3D tensor ---
-        if ".block_sparse_moe.experts." in name:
-            n_experts = self.hparams["num_experts"]
-            assert bid is not None
-
-            if self._experts is None:
-                self._experts = [{} for _ in range(self.block_count)]
-            self._experts[bid][name] = data_torch
-
-            if len(self._experts[bid]) < n_experts * 3:
-                return
-
-            # w1: gate, w2: down, w3: up
-            for wid, tensor_id in (("w1", gguf.MODEL_TENSOR.FFN_GATE_EXP),
-                                   ("w2", gguf.MODEL_TENSOR.FFN_DOWN_EXP),
-                                   ("w3", gguf.MODEL_TENSOR.FFN_UP_EXP)):
-                datas = []
-                for xid in range(n_experts):
-                    ename = f"model.layers.{bid}.block_sparse_moe.experts.{xid}.{wid}.weight"
-                    datas.append(self._experts[bid].pop(ename))
-                stacked = torch.stack(datas, dim=0)
-                yield from super().modify_tensors(stacked, self.format_tensor_name(tensor_id, bid), bid)
             return
 
         # --- MLA absorption: split kv_b into k_b (transposed) and v_b ---

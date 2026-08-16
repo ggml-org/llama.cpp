@@ -9,7 +9,7 @@ import torch
 if TYPE_CHECKING:
     from torch import Tensor
 
-from .base import ModelBase, TextModel, gguf, logger
+from .base import MOE_HF_MLP, ModelBase, TextModel, gguf, logger
 
 from .deepseek import DeepseekV2Model
 
@@ -154,7 +154,7 @@ class Glm4MoeModel(TextModel):
         if (num_nextn_predict_layers := self.hparams.get("num_nextn_predict_layers")) is not None:
             self.gguf_writer.add_nextn_predict_layers(num_nextn_predict_layers)
 
-    _experts: list[dict[str, Tensor]] | None = None
+    moe_experts = [MOE_HF_MLP._replace(n_expert=("n_routed_experts",))]
 
     # note: unlike GLM4V non-MoE, we don't need to permute Q/K here since GLM4V_MOE uses Neox ordering already
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
@@ -163,44 +163,7 @@ class Glm4MoeModel(TextModel):
             yield from super().modify_tensors(data_torch, "token_embd.weight", bid)
             return
 
-        # Handle routed experts
-        if name.find("mlp.experts") != -1:
-            n_experts = self.hparams["n_routed_experts"]
-            assert bid is not None
-
-            if self._experts is None:
-                self._experts = [{} for _ in range(self.block_count)]
-
-            self._experts[bid][name] = data_torch
-
-            if len(self._experts[bid]) >= n_experts * 3:
-                # merge the experts into a single 3d tensor
-                for w_name in ["down_proj", "gate_proj", "up_proj"]:
-                    datas: list[Tensor] = []
-
-                    for xid in range(n_experts):
-                        ename = f"model.layers.{bid}.mlp.experts.{xid}.{w_name}.weight"
-                        datas.append(self._experts[bid][ename])
-                        del self._experts[bid][ename]
-
-                    data_torch = torch.stack(datas, dim=0)
-
-                    merged_name = f"model.layers.{bid}.mlp.experts.{w_name}.weight"
-
-                    yield from super().modify_tensors(data_torch, merged_name, bid)
-                return
-            else:
-                return
-
         yield from super().modify_tensors(data_torch, name, bid)
-
-    def prepare_tensors(self):
-        super().prepare_tensors()
-        if self._experts is not None:
-            # flatten `list[dict[str, Tensor]]` into `list[str]`
-            experts = [k for d in self._experts for k in d.keys()]
-            if len(experts) > 0:
-                raise ValueError(f"Unprocessed experts: {experts}")
 
 
 @ModelBase.register("Glm4MoeLiteForCausalLM")

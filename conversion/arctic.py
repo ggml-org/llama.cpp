@@ -5,12 +5,10 @@ import sys
 
 from typing import Iterable, TYPE_CHECKING
 
-import torch
-
 if TYPE_CHECKING:
     from torch import Tensor
 
-from .base import ModelBase, SentencePieceTokenTypes, TextModel, gguf, logger
+from .base import MOE_BLOCK_SPARSE_MIXTRAL, ModelBase, SentencePieceTokenTypes, TextModel, gguf, logger
 
 from .llama import LlamaModel
 
@@ -109,7 +107,7 @@ class ArcticModel(TextModel):
         self.gguf_writer.add_vocab_size(hparams["vocab_size"])
         self.gguf_writer.add_rope_dimension_count(hparams["hidden_size"] // hparams["num_attention_heads"])
 
-    _experts: list[dict[str, Tensor]] | None = None
+    moe_experts = [MOE_BLOCK_SPARSE_MIXTRAL._replace(n_expert=("num_local_experts",))]
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         n_head = self.hparams["num_attention_heads"]
@@ -120,43 +118,4 @@ class ArcticModel(TextModel):
         if name.endswith("k_proj.weight"):
             data_torch = LlamaModel.permute(data_torch, n_head, n_kv_head)
 
-        # process the experts separately
-        if name.find("block_sparse_moe.experts") != -1:
-            n_experts = self.hparams["num_local_experts"]
-
-            assert bid is not None
-
-            if self._experts is None:
-                self._experts = [{} for _ in range(self.block_count)]
-
-            self._experts[bid][name] = data_torch
-
-            if len(self._experts[bid]) >= n_experts * 3:
-                # merge the experts into a single 3d tensor
-                for wid in ["w1", "w2", "w3"]:
-                    datas: list[Tensor] = []
-
-                    for xid in range(n_experts):
-                        ename = f"model.layers.{bid}.block_sparse_moe.experts.{xid}.{wid}.weight"
-                        datas.append(self._experts[bid][ename])
-                        del self._experts[bid][ename]
-
-                    data_torch = torch.stack(datas, dim=0)
-
-                    merged_name = f"layers.{bid}.feed_forward.experts.{wid}.weight"
-
-                    yield from super().modify_tensors(data_torch, merged_name, bid)
-                return
-            else:
-                return
-
         yield from super().modify_tensors(data_torch, name, bid)
-
-    def prepare_tensors(self):
-        super().prepare_tensors()
-
-        if self._experts is not None:
-            # flatten `list[dict[str, Tensor]]` into `list[str]`
-            experts = [k for d in self._experts for k in d.keys()]
-            if len(experts) > 0:
-                raise ValueError(f"Unprocessed experts: {experts}")

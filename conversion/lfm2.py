@@ -2,12 +2,10 @@ from __future__ import annotations
 
 from typing import Any, Callable, Iterable, TYPE_CHECKING
 
-import torch
-
 if TYPE_CHECKING:
     from torch import Tensor
 
-from .base import MmprojModel, ModelBase, TextModel, gguf
+from .base import MOE_BLOCK_SPARSE, MmprojModel, ModelBase, TextModel, gguf
 
 from .gemma import ConformerAudioModel
 
@@ -112,8 +110,10 @@ class LFM2MoeModel(TextModel):
         self.gguf_writer.add_vocab_size(self.hparams["vocab_size"])
         self.gguf_writer.add_shortconv_l_cache(self.hparams["conv_L_cache"])
 
-    # cache for experts weights for merging
-    _experts_cache: dict[int, dict[str, Tensor]] = {}
+    moe_experts = [MOE_BLOCK_SPARSE._replace(
+        src="model.layers.{bid}.feed_forward.experts.{xid}.{w}.weight",
+        dst="layers.{bid}.feed_forward.experts.{w}.weight",
+    )]
 
     @classmethod
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
@@ -129,40 +129,7 @@ class LFM2MoeModel(TextModel):
         if 'conv.conv' in name:
             data_torch = data_torch.squeeze(1)
 
-        # merge expert weights
-        if 'experts' in name:
-            n_experts = self.find_hparam(["num_local_experts", "num_experts"])
-            assert bid is not None
-
-            expert_cache = self._experts_cache.setdefault(bid, {})
-            expert_cache[name] = data_torch
-            expert_weights = ["w1", "w2", "w3"]
-
-            # not enough expert weights to merge
-            if len(expert_cache) < n_experts * len(expert_weights):
-                return
-
-            for w_name in expert_weights:
-                datas: list[Tensor] = []
-
-                for xid in range(n_experts):
-                    ename = f"model.layers.{bid}.feed_forward.experts.{xid}.{w_name}.weight"
-                    datas.append(expert_cache[ename])
-                    del expert_cache[ename]
-
-                data_torch = torch.stack(datas, dim=0)
-                merged_name = f"layers.{bid}.feed_forward.experts.{w_name}.weight"
-
-                yield from super().modify_tensors(data_torch, merged_name, bid)
-
-            del self._experts_cache[bid]
-            return
-
         yield from super().modify_tensors(data_torch, name, bid)
-
-    def prepare_tensors(self):
-        super().prepare_tensors()
-        assert not self._experts_cache
 
 
 @ModelBase.register("Lfm2VlForConditionalGeneration")

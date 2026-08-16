@@ -7,7 +7,7 @@ import torch
 if TYPE_CHECKING:
     from torch import Tensor
 
-from .base import ModelBase, TextModel, gguf, logger
+from .base import MOE_BLOCK_SPARSE, ModelBase, TextModel, gguf, logger
 
 from .qwen import QwenModel
 
@@ -17,7 +17,8 @@ class KimiLinearModel(TextModel):
     """Kimi-Linear model with hybrid MLA+KDA architecture"""
     model_arch = gguf.MODEL_ARCH.KIMI_LINEAR
 
-    _experts: list[dict[str, Tensor]] | None = None
+    # w1: gate, w2: down, w3: up
+    moe_experts = [MOE_BLOCK_SPARSE]
 
     def set_vocab(self):
         try:
@@ -140,13 +141,6 @@ class KimiLinearModel(TextModel):
         # Routed scaling factor (expert_weights_scale = 2.446 for Kimi)
         self.gguf_writer.add_expert_weights_scale(self.hparams["routed_scaling_factor"])
 
-    def prepare_tensors(self):
-        super().prepare_tensors()
-        if self._experts is not None:
-            experts = [k for d in self._experts for k in d.keys()]
-            if len(experts) > 0:
-                raise ValueError(f"Unprocessed experts: {experts}")
-
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         logger.info(f"Processing {name}: shape before = {tuple(data_torch.shape)}")
 
@@ -177,32 +171,6 @@ class KimiLinearModel(TextModel):
         if name.endswith(".dt_bias"):
             name = name.rpartition(".dt_bias")[0] + ".dt_proj.bias"
             logger.info("Changed dt_bias to dt_proj.bias")
-
-        # process the experts separately
-        if name.find("block_sparse_moe.experts") != -1:
-            n_experts = self.find_hparam(["num_local_experts", "num_experts"])
-            assert bid is not None
-
-            if self._experts is None:
-                self._experts = [{} for _ in range(self.block_count)]
-
-            self._experts[bid][name] = data_torch
-
-            if len(self._experts[bid]) >= n_experts * 3:
-                # merge the experts into a single 3d tensor
-                # w1: gate, w2: down, w3: up
-                for wid, tname in [("w1", gguf.MODEL_TENSOR.FFN_GATE_EXP),
-                                   ("w2", gguf.MODEL_TENSOR.FFN_DOWN_EXP),
-                                   ("w3", gguf.MODEL_TENSOR.FFN_UP_EXP)]:
-                    datas: list[Tensor] = []
-                    for xid in range(n_experts):
-                        ename = f"model.layers.{bid}.block_sparse_moe.experts.{xid}.{wid}.weight"
-                        datas.append(self._experts[bid][ename])
-                        del self._experts[bid][ename]
-                    data_torch = torch.stack(datas, dim=0)
-                    new_name = self.format_tensor_name(tname, bid)
-                    yield from super().modify_tensors(data_torch, new_name, bid)
-            return
 
         # note: MLA with the absorption optimization, needs these two split and k_b_proj transposed
         if name.endswith("kv_b_proj.weight"):

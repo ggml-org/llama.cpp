@@ -6,12 +6,10 @@ import re
 
 from typing import Callable, Iterable, TYPE_CHECKING
 
-import torch
-
 if TYPE_CHECKING:
     from torch import Tensor
 
-from .base import MmprojModel, ModelBase, TextModel, gguf
+from .base import MOE_HF_MLP, MmprojModel, ModelBase, TextModel, gguf
 
 
 @ModelBase.register("Ernie4_5_ForCausalLM", "Ernie4_5ForCausalLM")
@@ -75,11 +73,8 @@ class Ernie4_5Model(TextModel):
 @ModelBase.register("Ernie4_5_MoeForCausalLM")
 class Ernie4_5MoeModel(Ernie4_5Model):
     model_arch = gguf.MODEL_ARCH.ERNIE4_5_MOE
-    _experts: list[dict[str, Tensor]] | None = None
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._experts = [{} for _ in range(self.block_count)]
+    moe_experts = [MOE_HF_MLP._replace(weights=("gate_proj", "up_proj", "down_proj"), n_expert=("moe_num_experts",))]
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
@@ -119,40 +114,7 @@ class Ernie4_5MoeModel(Ernie4_5Model):
         return super().filter_tensors(item)
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        # process the experts separately
-        if name.find("mlp.experts") != -1:
-            n_experts = self.hparams["moe_num_experts"]
-            assert bid is not None
-
-            if self._experts is None:
-                self._experts = [{} for _ in range(self.block_count)]
-
-            self._experts[bid][name] = data_torch
-
-            if len(self._experts[bid]) >= n_experts * 3:
-                # merge the experts into a single 3d tensor
-                for w_name in ["gate_proj", "up_proj", "down_proj"]:
-                    datas: list[Tensor] = []
-
-                    for xid in range(n_experts):
-                        ename_to_retrieve = f"model.layers.{bid}.mlp.experts.{xid}.{w_name}.weight"
-                        datas.append(self._experts[bid][ename_to_retrieve])
-                        del self._experts[bid][ename_to_retrieve]
-
-                    data_torch = torch.stack(datas, dim=0)
-                    merged_name = f"model.layers.{bid}.mlp.experts.{w_name}.weight"
-                    yield from super().modify_tensors(data_torch, merged_name, bid)
-        else:
-            yield from ModelBase.modify_tensors(self, data_torch, name, bid)
-
-    def prepare_tensors(self):
-        super().prepare_tensors()
-
-        if self._experts is not None:
-            # flatten `list[dict[str, Tensor]]` into `list[str]`
-            experts = [k for d in self._experts for k in d.keys()]
-            if len(experts) > 0:
-                raise ValueError(f"Unprocessed experts: {experts}")
+        yield from ModelBase.modify_tensors(self, data_torch, name, bid)
 
 
 @ModelBase.register("PaddleOCRVLForConditionalGeneration")

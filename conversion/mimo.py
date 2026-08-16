@@ -10,7 +10,7 @@ import torch
 if TYPE_CHECKING:
     from torch import Tensor
 
-from .base import MmprojModel, ModelBase, TextModel, gguf
+from .base import MOE_HF_MLP, MmprojModel, ModelBase, TextModel, gguf
 
 
 @ModelBase.register("MiMoV2FlashForCausalLM", "MiMoV2ForCausalLM")
@@ -166,7 +166,16 @@ class MimoV2Model(TextModel):
 
         self.gguf_writer.add_nextn_predict_layers(self._n_nextn)
 
-    _experts: list[dict[str, Tensor]] | None = None
+    # MTP experts keep their mtp name until modify_tensors() remaps them below
+    moe_experts = [
+        MOE_HF_MLP._replace(weights=("gate_proj", "up_proj", "down_proj"), n_expert=("n_routed_experts",)),
+        MOE_HF_MLP._replace(
+            src="model.mtp.layers.{bid}.mlp.experts.{xid}.{w}.weight",
+            dst="model.mtp.layers.{bid}.mlp.experts.{w}.weight",
+            weights=("gate_proj", "up_proj", "down_proj"),
+            n_expert=("n_routed_experts",),
+        ),
+    ]
 
     @classmethod
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
@@ -190,43 +199,7 @@ class MimoV2Model(TextModel):
             name = f"model.layers.{new_bid}.{rest}"
             bid = new_bid
 
-        # process the experts separately
-        if name.find("mlp.experts") != -1:
-            n_experts = self.hparams["n_routed_experts"]
-            assert bid is not None
-
-            if self._experts is None:
-                self._experts = [{} for _ in range(self.block_count)]
-
-            self._experts[bid][name] = data_torch
-
-            if len(self._experts[bid]) >= n_experts * 3:
-                # merge the experts into a single 3d tensor
-                for w_name in ["gate_proj", "up_proj", "down_proj"]:
-                    datas: list[Tensor] = []
-
-                    for xid in range(n_experts):
-                        ename_to_retrieve = f"model.layers.{bid}.mlp.experts.{xid}.{w_name}.weight"
-                        datas.append(self._experts[bid][ename_to_retrieve])
-                        del self._experts[bid][ename_to_retrieve]
-
-                    data_torch = torch.stack(datas, dim=0)
-                    merged_name = f"model.layers.{bid}.mlp.experts.{w_name}.weight"
-
-                    yield from super().modify_tensors(data_torch, merged_name, bid)
-                return
-            else:
-                return
         yield from super().modify_tensors(data_torch, name, bid)
-
-    def prepare_tensors(self):
-        super().prepare_tensors()
-
-        if self._experts is not None:
-            # flatten `list[dict[str, Tensor]]` into `list[str]`
-            experts = [k for d in self._experts for k in d.keys()]
-            if len(experts) > 0:
-                raise ValueError(f"Unprocessed experts: {experts}")
 
 
 @ModelBase.register("MiMoV2ForCausalLM")

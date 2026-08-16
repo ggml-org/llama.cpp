@@ -8,7 +8,7 @@ import torch
 if TYPE_CHECKING:
     from torch import Tensor
 
-from .base import ModelBase, TextModel, gguf, logger
+from .base import MOE_HF_MLP, ModelBase, TextModel, gguf, logger
 
 
 @ModelBase.register("CohereForCausalLM")
@@ -62,16 +62,14 @@ class Cohere2Model(TextModel):
 class Cohere2MoeModel(TextModel):
     model_arch = gguf.MODEL_ARCH.COHERE2MOE
     _n_main_layers: int | None = None
-    _expert_tensor_re = re.compile(
-        r"model\.layers\.(\d+)\.mlp\.experts\.(\d+)\.(down_proj|gate_proj|up_proj)\.weight"
-    )
+
+    moe_experts = [MOE_HF_MLP._replace(n_expert=("num_experts",))]
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         if (n_nextn := int(self.hparams.get("num_nextn_predict_layers", 0) or 0)) > 0 and not self.no_mtp:
             self.block_count += n_nextn
             self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
-        self._experts: list[dict[str, Tensor]] = [{} for _ in range(self.block_count)]
 
     def _set_vocab_gpt2(self) -> None:
         tokens, toktypes, tokpre = self.get_vocab_base()
@@ -140,38 +138,4 @@ class Cohere2MoeModel(TextModel):
             logger.debug(f"Skipping bias tensor {name!r}.")
             return
 
-        if (m := self._expert_tensor_re.fullmatch(name)) is not None:
-            n_experts = self.hparams["num_experts"]
-            layer_idx = int(m.group(1))
-            assert bid is None or bid == layer_idx
-
-            self._experts[layer_idx][name] = data_torch
-
-            expected = {
-                f"model.layers.{layer_idx}.mlp.experts.{xid}.{w_name}.weight"
-                for xid in range(n_experts)
-                for w_name in ("down_proj", "gate_proj", "up_proj")
-            }
-            if expected.issubset(self._experts[layer_idx]):
-                for w_name in ["down_proj", "gate_proj", "up_proj"]:
-                    datas: list[Tensor] = []
-
-                    for xid in range(n_experts):
-                        ename = f"model.layers.{layer_idx}.mlp.experts.{xid}.{w_name}.weight"
-                        datas.append(self._experts[layer_idx][ename])
-                        del self._experts[layer_idx][ename]
-
-                    data_torch = torch.stack(datas, dim=0)
-                    merged_name = f"model.layers.{layer_idx}.mlp.experts.{w_name}.weight"
-
-                    yield from super().modify_tensors(data_torch, merged_name, layer_idx)
-            return
-
         yield from super().modify_tensors(data_torch, name, bid)
-
-    def prepare_tensors(self):
-        super().prepare_tensors()
-
-        experts = [k for d in self._experts for k in d.keys()]
-        if len(experts) > 0:
-            raise ValueError(f"Unprocessed experts: {experts}")

@@ -12,7 +12,7 @@ import torch
 if TYPE_CHECKING:
     from torch import Tensor
 
-from .base import LazyTorchTensor, MmprojModel, ModelBase, TextModel, gguf, logger
+from .base import MOE_HF_MLP, LazyTorchTensor, MmprojModel, ModelBase, TextModel, gguf, logger
 
 from .qwen import QwenModel
 
@@ -158,7 +158,7 @@ class DeepseekModel(TextModel):
         self.gguf_writer.add_expert_count(hparams["n_routed_experts"])
         self.gguf_writer.add_expert_shared_count(hparams["n_shared_experts"])
 
-    _experts: list[dict[str, Tensor]] | None = None
+    moe_experts = [MOE_HF_MLP._replace(n_expert=("n_routed_experts",))]
 
     @staticmethod
     def permute(weights: Tensor, n_head: int, n_head_kv: int | None):
@@ -177,45 +177,7 @@ class DeepseekModel(TextModel):
         if name.endswith(("k_proj.weight", "k_proj.bias")):
             data_torch = DeepseekModel.permute(data_torch, n_head, n_kv_head)
 
-        # process the experts separately
-        if name.find("mlp.experts") != -1:
-            n_experts = self.hparams["n_routed_experts"]
-            assert bid is not None
-
-            if self._experts is None:
-                self._experts = [{} for _ in range(self.block_count)]
-
-            self._experts[bid][name] = data_torch
-
-            if len(self._experts[bid]) >= n_experts * 3:
-                # merge the experts into a single 3d tensor
-                for w_name in ["down_proj", "gate_proj", "up_proj"]:
-                    datas: list[Tensor] = []
-
-                    for xid in range(n_experts):
-                        ename = f"model.layers.{bid}.mlp.experts.{xid}.{w_name}.weight"
-                        datas.append(self._experts[bid][ename])
-                        del self._experts[bid][ename]
-
-                    data_torch = torch.stack(datas, dim=0)
-
-                    merged_name = f"model.layers.{bid}.mlp.experts.{w_name}.weight"
-
-                    yield from super().modify_tensors(data_torch, merged_name, bid)
-                return
-            else:
-                return
-
         yield from super().modify_tensors(data_torch, name, bid)
-
-    def prepare_tensors(self):
-        super().prepare_tensors()
-
-        if self._experts is not None:
-            # flatten `list[dict[str, Tensor]]` into `list[str]`
-            experts = [k for d in self._experts for k in d.keys()]
-            if len(experts) > 0:
-                raise ValueError(f"Unprocessed experts: {experts}")
 
 
 @ModelBase.register(
@@ -380,7 +342,10 @@ class DeepseekV2Model(TextModel):
             # ref https://github.com/ggml-org/llama.cpp/pull/17945
             self.gguf_writer.add_rope_scaling_yarn_log_mul(0.1 * rope_mscale_all)
 
-    _experts: list[dict[str, Tensor]] | None = None
+    moe_experts = [MOE_HF_MLP._replace(n_expert=("n_routed_experts",))]
+
+    def moe_expert_specs(self):
+        return self.moe_experts if self.merge_expert else ()
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         # skip lm_head.weight if tie_word_embeddings is True
@@ -394,35 +359,6 @@ class DeepseekV2Model(TextModel):
             block_count = self.hparams["num_hidden_layers"]
             match = re.match(r"model.layers.(\d+)", name)
             if match and int(match.group(1)) >= block_count:
-                return
-
-        # process the experts separately
-        if self.merge_expert and name.find("mlp.experts") != -1:
-            n_experts = self.hparams["n_routed_experts"]
-            assert bid is not None
-
-            if self._experts is None:
-                self._experts = [{} for _ in range(self.block_count)]
-
-            self._experts[bid][name] = data_torch
-
-            if len(self._experts[bid]) >= n_experts * 3:
-                # merge the experts into a single 3d tensor
-                for w_name in ["down_proj", "gate_proj", "up_proj"]:
-                    datas: list[Tensor] = []
-
-                    for xid in range(n_experts):
-                        ename = f"model.layers.{bid}.mlp.experts.{xid}.{w_name}.weight"
-                        datas.append(self._experts[bid][ename])
-                        del self._experts[bid][ename]
-
-                    data_torch = torch.stack(datas, dim=0)
-
-                    merged_name = f"model.layers.{bid}.mlp.experts.{w_name}.weight"
-
-                    yield from super().modify_tensors(data_torch, merged_name, bid)
-                return
-            else:
                 return
 
         # note: MLA with the absorption optimization, needs these two split and k_b_proj transposed
@@ -445,15 +381,6 @@ class DeepseekV2Model(TextModel):
             return
 
         yield from super().modify_tensors(data_torch, name, bid)
-
-    def prepare_tensors(self):
-        super().prepare_tensors()
-
-        if self._experts is not None:
-            # flatten `list[dict[str, Tensor]]` into `list[str]`
-            experts = [k for d in self._experts for k in d.keys()]
-            if len(experts) > 0:
-                raise ValueError(f"Unprocessed experts: {experts}")
 
 
 @ModelBase.register("DeepseekV32ForCausalLM")

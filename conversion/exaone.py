@@ -10,7 +10,7 @@ import torch
 if TYPE_CHECKING:
     from torch import Tensor
 
-from .base import MmprojModel, ModelBase, TextModel, gguf
+from .base import MOE_HF_MLP, MmprojModel, ModelBase, TextModel, gguf
 from .qwenvl import Qwen2VLVisionModel
 
 
@@ -149,7 +149,7 @@ class ExaoneMoEModel(Exaone4Model):
 
         self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.NONE)
 
-    _experts: list[dict[str, Tensor]] | None = None
+    moe_experts = [MOE_HF_MLP]
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         if name.startswith("mtp."):
@@ -172,45 +172,7 @@ class ExaoneMoEModel(Exaone4Model):
                     yield from super().modify_tensors(data_torch, new_name.format(bid=bid), bid)
                 return
 
-        if name.find("mlp.experts") != -1:
-            n_experts = self.find_hparam(["num_local_experts", "num_experts"])
-            assert bid is not None
-
-            if self._experts is None:
-                self._experts = [{} for _ in range(self.block_count)]
-
-            self._experts[bid][name] = data_torch
-
-            if len(self._experts[bid]) >= n_experts * 3:
-                # merge the experts into a single 3d tensor
-                for w_name in ["down_proj", "gate_proj", "up_proj"]:
-                    datas: list[Tensor] = []
-
-                    for xid in range(n_experts):
-                        ename = f"model.layers.{bid}.mlp.experts.{xid}.{w_name}.weight"
-                        datas.append(self._experts[bid][ename])
-                        del self._experts[bid][ename]
-
-                    data_torch = torch.stack(datas, dim=0)
-
-                    merged_name = f"model.layers.{bid}.mlp.experts.{w_name}.weight"
-
-                    new_name = self.map_tensor_name(merged_name)
-
-                    yield from super().modify_tensors(data_torch, new_name, bid)
-                return
-            else:
-                return
-
         yield from super().modify_tensors(data_torch, name, bid)
-
-    def prepare_tensors(self):
-        super().prepare_tensors()
-        if self._experts is not None:
-            # flatten `list[dict[str, Tensor]]` into `list[str]`
-            experts = [k for d in self._experts for k in d.keys()]
-            if len(experts) > 0:
-                raise ValueError(f"Unprocessed experts: {experts}")
 
 
 @ModelBase.register("Exaone4_5_ForConditionalGeneration")

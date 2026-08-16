@@ -412,6 +412,11 @@ class NemotronHModel(GraniteHybridModel):
         if not self.is_moe:
             self.gguf_writer.add_add_bos_token(True)
 
+    # the MTP experts are renamed in modify_tensors() before they are stacked,
+    # so this arch keeps its own stacking instead of using moe_experts
+    moe_experts = []
+    _experts: list[dict[str, Tensor]] | None = None
+
     _MTP_SPECIAL_RENAMES = {
         "mtp.layers.0.enorm.weight":           "model.layers.{bid}.enorm.weight",
         "mtp.layers.0.hnorm.weight":           "model.layers.{bid}.hnorm.weight",

@@ -1,13 +1,6 @@
 from __future__ import annotations
 
-from typing import Iterable, TYPE_CHECKING
-
-import torch
-
-if TYPE_CHECKING:
-    from torch import Tensor
-
-from .base import ModelBase, TextModel, gguf, logger
+from .base import MOE_BLOCK_SPARSE, ModelBase, TextModel, gguf, logger
 
 
 @ModelBase.register("SmallThinkerForCausalLM")
@@ -38,45 +31,7 @@ class SmallThinkerModel(TextModel):
                         self.gguf_writer.add_sliding_window(sliding_window)
                     break
 
-    _experts: list[dict[str, Tensor]] | None = None
-
-    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        # process the experts separately
-        if name.find("experts") != -1:
-            n_experts = self.hparams.get("moe_num_primary_experts") or self.find_hparam(["num_local_experts", "num_experts"])
-            assert bid is not None
-
-            if self._experts is None:
-                self._experts = [{} for _ in range(self.block_count)]
-
-            self._experts[bid][name] = data_torch
-
-            if len(self._experts[bid]) >= n_experts * 3:
-                # merge the experts into a single 3d tensor
-                for w_name in ["down", "gate", "up"]:
-                    datas: list[Tensor] = []
-
-                    for xid in range(n_experts):
-                        ename = f"model.layers.{bid}.block_sparse_moe.experts.{xid}.{w_name}.weight"
-                        datas.append(self._experts[bid][ename])
-                        del self._experts[bid][ename]
-
-                    data_torch = torch.stack(datas, dim=0)
-
-                    merged_name = f"model.layers.{bid}.block_sparse_moe.experts.{w_name}.weight"
-
-                    yield from super().modify_tensors(data_torch, merged_name, bid)
-                return
-            else:
-                return
-
-        yield from super().modify_tensors(data_torch, name, bid)
-
-    def prepare_tensors(self):
-        super().prepare_tensors()
-
-        if self._experts is not None:
-            # flatten `list[dict[str, Tensor]]` into `list[str]`
-            experts = [k for d in self._experts for k in d.keys()]
-            if len(experts) > 0:
-                raise ValueError(f"Unprocessed experts: {experts}")
+    moe_experts = [MOE_BLOCK_SPARSE._replace(
+        weights=("down", "gate", "up"),
+        n_expert=("moe_num_primary_experts", "num_local_experts", "num_experts"),
+    )]
