@@ -17,6 +17,7 @@ export const DB_APP_NAME_DEPRECATED = 'LlamacppWebui';
 export const ALWAYS_ALLOWED_TOOLS_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.alwaysAllowedTools`;
 export const CONFIG_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.config`;
 export const DISABLED_TOOLS_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.disabledTools`;
+export const SKILLS_PANE_SIZES_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.skillsPaneSizes`;
 
 /** Disabled tools keyed by stable selection identity, no migration from the name based key */
 export const DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.disabledToolKeys`;
