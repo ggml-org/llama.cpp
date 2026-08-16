@@ -224,9 +224,10 @@ static __global__ void ggml_cuda_ar_add_kernel(
 // Number of slots in the event / arrival ring.  Two slots is sufficient:
 // lockstep guarantees the two GPUs are at most one AR (or chunk) apart, so
 // slot[N%2] is always safe to reuse -- peer has already consumed slot[N%2]
-// from AR N-2 by the time we get to AR N.  acquire_slot's
-// cudaEventSynchronize on ev.ker for both devices makes that consumption
-// explicit before we overwrite host_buf[slot] for the new AR.
+// from AR N-2 by the time we get to AR N.  The copy-engine path makes that
+// explicit with acquire_slot's cudaEventSynchronize on ev.ker; the chunked
+// path relies on the in-kernel arrival handshake (see
+// ggml_cuda_ar_kernel_slot).
 static constexpr int GGML_CUDA_AR_POOL_SIZE = 2;
 
 // Maximum chunk size (bytes per GPU) handled by one chunked kernel launch.
@@ -305,6 +306,7 @@ struct ggml_cuda_ar_pipeline {
     size_t   copy_chunk_bytes;
     size_t   bf16_threshold; // tensors >= this size (bytes) are reduced via FP32->BF16 round-trip; 0 disables
     uint64_t call_count;
+    uint64_t kernel_call_count; // chunked-kernel path only; see ggml_cuda_ar_kernel_slot
 
     // Per-device resources.
     ggml_cuda_ar_host_mapping host_buf[GGML_CUDA_MAX_DEVICES];   // pinned staging (chunked kernel)
@@ -370,6 +372,24 @@ static ggml_cuda_ar_slot_info ggml_cuda_ar_acquire_slot(ggml_cuda_ar_pipeline * 
     }
 
     return { slot, (int) p->call_count };
+}
+
+// Chunked-kernel path slot assignment. No host synchronization: the arrival
+// handshake already serializes reuse of the 2-slot staging ring. The chain
+// runs through the intervening AR, not through the current one: before this
+// GPU's kernel T can launch, its kernel T-1 retired (same stream), and every
+// block of T-1 observed the peer's token T-1 in its phase-2 spin. The peer
+// signals T-1 from inside kernel T-1, which in its stream order means the
+// peer's kernel T-2 fully retired, including the phase-3 reads of the slot
+// that T reuses. This lets the host enqueue a full token's worth of
+// subgraphs and reductions ahead of the GPUs. Requires every chunked AR of
+// a device to launch on the same stream; the meta backend calls this
+// between subgraphs where that holds. Uses its own counter so tokens in
+// the arrival ring never mix with copy-engine slot bookkeeping.
+static ggml_cuda_ar_slot_info ggml_cuda_ar_kernel_slot(ggml_cuda_ar_pipeline * p) {
+    const int slot = static_cast<int>(p->kernel_call_count % GGML_CUDA_AR_POOL_SIZE);
+    p->kernel_call_count++;
+    return { slot, (int) p->kernel_call_count };
 }
 
 // Per-AR copy-engine chunk size: env-var override if set, else heuristic
@@ -539,7 +559,10 @@ void ggml_cuda_ar_pipeline_free(ggml_cuda_ar_pipeline * p) {
         return;
     }
 
-    // Drain all in-flight kernels before tearing down resources.
+    // Drain the AR streams before tearing down resources.  Chunked kernels
+    // run on the caller's compute streams and record no events, so the
+    // caller must synchronize its backends before freeing the pipeline;
+    // ggml_backend_cuda_comm_free runs at backend teardown where that holds.
     for (int i = 0; i < p->n_devices; ++i) {
         if (p->streams[i]) {
             ggml_cuda_set_device(p->devices[i]);
@@ -890,15 +913,14 @@ bool ggml_cuda_ar_allreduce(
         // since AR is a barrier here, same-stream ordering subsumes any
         // cross-stream event handshake that the copy-engine path needs, and
         // skips the cross-stream scheduling overhead that was hurting the
-        // small-tensor (tg) latency on the AR-stream variant.  Only ev.ker is
-        // still recorded at end-of-AR for acquire_slot's pool-wraparound check.
+        // small-tensor (tg) latency on the AR-stream variant.  No events are
+        // recorded; slot reuse safety comes from the arrival handshake.
         for (int64_t chunk_start = 0; chunk_start < ne; chunk_start += (int64_t) max_chunk_elems) {
             const size_t remaining_elems = (size_t) (ne - chunk_start);
             const size_t chunk_elems = remaining_elems < max_chunk_elems ? remaining_elems : max_chunk_elems;
             const size_t chunk_dst_bytes  = chunk_elems * input_type_size;
 
-            const auto [slot, token] = ggml_cuda_ar_acquire_slot(p);
-            const bool last_chunk = chunk_start + (int64_t) chunk_elems == ne;
+            const auto [slot, token] = ggml_cuda_ar_kernel_slot(p);
 
             for (int i = 0; i < n; ++i) {
                 const int peer = 1 - i;  // valid for n == 2 only
@@ -941,10 +963,6 @@ bool ggml_cuda_ar_allreduce(
 
 #undef LAUNCH_AR_KERNEL
                 CUDA_CHECK(cudaGetLastError());
-
-                if (last_chunk) {
-                    CUDA_CHECK(cudaEventRecord(p->ev_pool[i][slot].ker, stream));
-                }
             }
         }
     }
