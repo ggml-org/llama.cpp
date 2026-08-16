@@ -65,6 +65,8 @@ export { default as ModelsSelectorList } from './ModelsSelectorList.svelte';
  */
 export { default as ModelsSelectorOption } from './ModelsSelectorOption.svelte';
 
+export { default as ModelsSelectorSettingsSubmenu } from './ModelsSelectorSettingsSubmenu.svelte';
+
 /**
  * **ModelsSelectorSheet** - Mobile model selection sheet
  *
