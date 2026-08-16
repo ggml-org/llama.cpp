@@ -4121,23 +4121,37 @@ size_t llama_state_seq_load_file(llama_context * ctx, const char * filepath, lla
 int32_t llama_encode(
         llama_context * ctx,
           llama_batch   batch) {
-    const int ret = ctx->encode(batch);
-    if (ret != 0) {
-        LLAMA_LOG_ERROR("%s: failed to encode, ret = %d\n", __func__, ret);
-    }
+    // llama_encode() is extern "C", so an exception must not escape it
+    try {
+        const int ret = ctx->encode(batch);
+        if (ret != 0) {
+            LLAMA_LOG_ERROR("%s: failed to encode, ret = %d\n", __func__, ret);
+        }
 
-    return ret;
+        return ret;
+    } catch (const std::exception & err) {
+        LLAMA_LOG_ERROR("%s: failed to encode: %s\n", __func__, err.what());
+
+        return -4;
+    }
 }
 
 int32_t llama_decode(
         llama_context * ctx,
           llama_batch   batch) {
-    const int ret = ctx->decode(batch);
-    if (ret != 0 && ret != 1) {
-        LLAMA_LOG_ERROR("%s: failed to decode, ret = %d\n", __func__, ret);
-    }
+    // llama_decode() is extern "C", so an exception must not escape it
+    try {
+        const int ret = ctx->decode(batch);
+        if (ret != 0 && ret != 1) {
+            LLAMA_LOG_ERROR("%s: failed to decode, ret = %d\n", __func__, ret);
+        }
 
-    return ret;
+        return ret;
+    } catch (const std::exception & err) {
+        LLAMA_LOG_ERROR("%s: failed to decode: %s\n", __func__, err.what());
+
+        return -4;
+    }
 }
 
 //
