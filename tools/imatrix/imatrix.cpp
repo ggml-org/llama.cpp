@@ -505,6 +505,11 @@ static bool all_finite(const float * v, size_t n) {
     return true;
 }
 
+// Round to nearest instead of truncating
+static int32_t rows_to_chunks(int64_t n_rows, int32_t chunk_size) {
+    return (int32_t) ((n_rows + chunk_size / 2) / chunk_size);
+}
+
 bool IMatrixCollector::collect_imatrix(struct ggml_tensor * t, bool ask, void * user_data) {
     GGML_UNUSED(user_data);
 
@@ -618,7 +623,7 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor * t, bool ask, void * 
         }
 
         for (int64_t ex = 0; ex < n_as; ++ex) {
-            const int32_t n_chunk = e.counts[ex] / chunk_size;
+            const int32_t n_chunk = rows_to_chunks(e.counts[ex], chunk_size);
             if (n_chunk > m_last_chunk) {
                 const int32_t chunk_step = n_chunk - m_last_chunk;
                 m_last_chunk = n_chunk;
@@ -687,7 +692,7 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor * t, bool ask, void * 
         // only 1 count in practice, except when a tensor is used for both MUL_MAT_ID and MUL_MAT
         for (size_t i = 0; i < e.counts.size(); ++i) {
             e.counts[i] += ggml_nrows(src1) / n_mat;
-            const int32_t n_chunk = e.counts[i] / chunk_size;
+            const int32_t n_chunk = rows_to_chunks(e.counts[i], chunk_size);
             if (n_chunk > m_last_chunk) {
                 const int32_t chunk_step = n_chunk - m_last_chunk;
                 m_last_chunk = n_chunk;
@@ -1090,7 +1095,8 @@ bool IMatrixCollector::load_imatrix(const char * file_name) {
             }
         }
     }
-    m_last_chunk = max_count / chunk_size;
+
+    m_last_chunk = rows_to_chunks(max_count, chunk_size);
 
     return true;
 }
