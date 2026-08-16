@@ -8,7 +8,11 @@
 import SkillsPage from '../../src/routes/skills/+page.svelte';
 import SkillsPageWrapper from './components/SkillsPageWrapper.svelte';
 import { page } from 'vitest/browser';
-import { CONFIG_LOCALSTORAGE_KEY, SETTINGS_KEYS } from '$lib/constants';
+import {
+	CONFIG_LOCALSTORAGE_KEY,
+	SETTINGS_KEYS,
+	SKILLS_PANE_SIZES_LOCALSTORAGE_KEY
+} from '$lib/constants';
 import { serializeSkillCatalogEnvelope } from '$lib/services/skills-packing.service';
 import { conversationsStore } from '$lib/stores/conversations.svelte';
 import { modelsStore } from '$lib/stores/models.svelte';
@@ -517,6 +521,7 @@ describe('/skills catalog preview', () => {
 
 	beforeEach(() => {
 		localStorage.removeItem(CONFIG_LOCALSTORAGE_KEY);
+		localStorage.removeItem(SKILLS_PANE_SIZES_LOCALSTORAGE_KEY);
 		settingsStore.initialize();
 		skillsStore.invalidate(undefined);
 		modelsStore.selectedModelName = null;
@@ -526,6 +531,74 @@ describe('/skills catalog preview', () => {
 
 	afterEach(async () => {
 		await page.viewport(414, 896);
+	});
+
+	it('restores a valid persisted desktop split', async () => {
+		await useDesktopViewport();
+		localStorage.setItem(SKILLS_PANE_SIZES_LOCALSTORAGE_KEY, JSON.stringify([40, 60]));
+		mockCatalogWithReads(makeCatalog(makeEntry('demo-skill')));
+
+		const screen = await render(SkillsPageWrapper);
+
+		await vi.waitFor(() => expect(bodyText()).toContain('demo-skill'));
+		await screen.getByRole('button', { name: /demo-skill/ }).click();
+		await vi.waitFor(() => expect(panes()).toHaveLength(2));
+		await vi.waitFor(() => {
+			expect(parseFloat(panes()[0].style.flexGrow)).toBeCloseTo(40, 0);
+			expect(parseFloat(panes()[1].style.flexGrow)).toBeCloseTo(60, 0);
+		});
+	});
+
+	it('normalizes persisted pane sizes and falls back for malformed values', async () => {
+		await useDesktopViewport();
+		mockCatalogWithReads(makeCatalog(makeEntry('demo-skill')));
+
+		localStorage.setItem(SKILLS_PANE_SIZES_LOCALSTORAGE_KEY, JSON.stringify([40, 40]));
+		const first = await render(SkillsPageWrapper);
+		await vi.waitFor(() => expect(bodyText()).toContain('demo-skill'));
+		await first.getByRole('button', { name: /demo-skill/ }).click();
+		await vi.waitFor(() => expect(panes()).toHaveLength(2));
+		await vi.waitFor(() => expect(parseFloat(panes()[0].style.flexGrow)).toBeCloseTo(50, 0));
+		first.unmount();
+
+		localStorage.setItem(SKILLS_PANE_SIZES_LOCALSTORAGE_KEY, JSON.stringify([10, 90]));
+		const second = await render(SkillsPageWrapper);
+		await vi.waitFor(() => expect(bodyText()).toContain('demo-skill'));
+		await second.getByRole('button', { name: /demo-skill/ }).click();
+		await vi.waitFor(() => expect(panes()).toHaveLength(2));
+		await vi.waitFor(() => expect(parseFloat(panes()[0].style.flexGrow)).toBeCloseTo(35, 0));
+		second.unmount();
+
+		localStorage.setItem(SKILLS_PANE_SIZES_LOCALSTORAGE_KEY, JSON.stringify({ left: 40 }));
+		const third = await render(SkillsPageWrapper);
+		await vi.waitFor(() => expect(bodyText()).toContain('demo-skill'));
+		await third.getByRole('button', { name: /demo-skill/ }).click();
+		await vi.waitFor(() => expect(panes()).toHaveLength(2));
+		await vi.waitFor(() => expect(parseFloat(panes()[0].style.flexGrow)).toBeCloseTo(55, 0));
+	});
+
+	it('persists normalized sizes after resizing the desktop split', async () => {
+		await useDesktopViewport();
+		mockCatalogWithReads(makeCatalog(makeEntry('demo-skill')));
+
+		const screen = await render(SkillsPageWrapper);
+
+		await vi.waitFor(() => expect(bodyText()).toContain('demo-skill'));
+		await screen.getByRole('button', { name: /demo-skill/ }).click();
+		await vi.waitFor(() => expect(panes()).toHaveLength(2));
+
+		const handle = document.querySelector<HTMLElement>('[data-pane-resizer]')!;
+		handle.focus();
+		handle.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }));
+
+		await vi.waitFor(() => {
+			const stored = JSON.parse(
+				localStorage.getItem(SKILLS_PANE_SIZES_LOCALSTORAGE_KEY) ?? 'null'
+			) as unknown;
+			expect(Array.isArray(stored)).toBe(true);
+			expect(stored).toHaveLength(2);
+			expect((stored as number[]).reduce((total, value) => total + value, 0)).toBeCloseTo(100);
+		});
 	});
 
 	it('selects a focused card with Enter and shows the detail', async () => {
@@ -774,6 +847,25 @@ describe('/skills catalog preview', () => {
 		await vi.waitFor(() => expect(panes()).toHaveLength(2));
 		await vi.waitFor(() => expect(parseFloat(panes()[0].style.flexGrow)).toBeCloseTo(35, 0));
 		expect(parseFloat(panes()[1].style.flexGrow)).toBeCloseTo(65, 0);
+	});
+
+	it('does not read or write the pane preference on mobile', async () => {
+		const getItem = vi.spyOn(Storage.prototype, 'getItem');
+		const setItem = vi.spyOn(Storage.prototype, 'setItem');
+		mockCatalogWithReads(makeCatalog(makeEntry('demo-skill')));
+
+		const screen = await render(SkillsPageWrapper);
+
+		await vi.waitFor(() => expect(bodyText()).toContain('demo-skill'));
+		expect(getItem).not.toHaveBeenCalledWith(SKILLS_PANE_SIZES_LOCALSTORAGE_KEY);
+
+		await screen.getByRole('button', { name: /demo-skill/ }).click();
+		await vi.waitFor(() => expect(bodyText()).toContain('Content of demo-skill'));
+
+		expect(setItem).not.toHaveBeenCalledWith(
+			SKILLS_PANE_SIZES_LOCALSTORAGE_KEY,
+			expect.any(String)
+		);
 	});
 
 	it('shows a full-screen detail on mobile and Back restores the list', async () => {

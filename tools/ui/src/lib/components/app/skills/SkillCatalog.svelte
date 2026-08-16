@@ -12,13 +12,19 @@
 	import { Button } from '$lib/components/ui/button';
 	import * as Empty from '$lib/components/ui/empty';
 	import { Skeleton } from '$lib/components/ui/skeleton';
-	import { ROUTES, SETTINGS_KEYS, normalizeSkillBudget } from '$lib/constants';
+	import {
+		ROUTES,
+		SETTINGS_KEYS,
+		SKILLS_PANE_SIZES_LOCALSTORAGE_KEY,
+		normalizeSkillBudget
+	} from '$lib/constants';
 	import { SkillsPackingService, buildSkillRunSnapshot, resolveSkillPackOptions } from '$lib/services';
 	import { modelsStore } from '$lib/stores/models.svelte';
 	import { serverStore } from '$lib/stores/server.svelte';
 	import { skillsStore } from '$lib/stores/skills.svelte';
 	import { settingsStore } from '$lib/stores/settings.svelte';
 	import { isMobile } from '$lib/stores';
+	import { persisted } from '$lib/stores/persisted.svelte';
 	import { ApiError } from '$lib/utils/api-fetch';
 	import { isAbortError } from '$lib/utils';
 	import type { SkillCatalogEntry, SkillDiagnostic, SkillPackedCatalog } from '$lib/types';
@@ -53,12 +59,49 @@
 		}
 	}
 
-	// Route-local preview selection: the chosen entry and the last desktop
-	// split sizes live only in this component, never in a store or storage.
 	const mobile = $derived(isMobile.current);
 	let selectedEntry = $state<SkillCatalogEntry | null>(null);
 	const selectedId = $derived(selectedEntry?.id ?? null);
-	let sizes = $state<[number, number]>([55, 45]);
+
+	const DEFAULT_PANE_SIZES: [number, number] = [55, 45];
+	const MIN_CATALOG_PANE = 35;
+	const MIN_DETAIL_PANE = 30;
+
+	function normalizePaneSizes(value: unknown): [number, number] {
+		if (
+			!Array.isArray(value) ||
+			value.length !== 2 ||
+			typeof value[0] !== 'number' ||
+			typeof value[1] !== 'number' ||
+			!Number.isFinite(value[0]) ||
+			!Number.isFinite(value[1]) ||
+			value[0] <= 0 ||
+			value[1] <= 0
+		) {
+			return [...DEFAULT_PANE_SIZES];
+		}
+
+		const total = value[0] + value[1];
+		const catalog = Math.min(
+			100 - MIN_DETAIL_PANE,
+			Math.max(MIN_CATALOG_PANE, (value[0] / total) * 100)
+		);
+
+		return [catalog, 100 - catalog];
+	}
+
+	let persistedPaneSizes: ReturnType<typeof persisted> | null = null;
+	let sizes = $state<[number, number]>([...DEFAULT_PANE_SIZES]);
+
+	$effect(() => {
+		if (mobile || persistedPaneSizes) return;
+
+		persistedPaneSizes = persisted<[number, number]>(
+			SKILLS_PANE_SIZES_LOCALSTORAGE_KEY,
+			DEFAULT_PANE_SIZES
+		);
+		sizes = normalizePaneSizes(persistedPaneSizes.value);
+	});
 
 	// Dismissed catalog diagnostics and budget status; reset on catalog reload.
 	let diagnosticsDismissed = $state(false);
@@ -73,7 +116,10 @@
 	}
 
 	function rememberPaneSize(index: 0 | 1, size: number) {
-		sizes = index === 0 ? [size, sizes[1]] : [sizes[0], size];
+		const next = index === 0 ? [size, sizes[1]] : [sizes[0], size];
+		const normalized = normalizePaneSizes(next);
+		sizes = normalized;
+		if (persistedPaneSizes) persistedPaneSizes.value = normalized;
 	}
 
 	// A CWD change invalidates the selection: the old detail is cleared (and
