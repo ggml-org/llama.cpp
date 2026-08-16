@@ -89,7 +89,7 @@ int llama_server(int argc, char ** argv) {
     std::setlocale(LC_NUMERIC, "C");
 
 #ifndef _WIN32
-    // Ignore SIGPIPE so the server does not crash if an MCP child exits while we are writing to its stdin
+    // Ignore SIGPIPE so the server does not crash if a child (MCP server, tools runtime) exits while we are writing to its stdin
     signal(SIGPIPE, SIG_IGN);
 #endif
 
@@ -338,7 +338,7 @@ int llama_server(common_params & params, int argc, char ** argv) {
 
     if (!params.server_tools.empty() || !mcp_mgr.empty()) {
         try {
-            tools.setup(params.server_tools, mcp_mgr);
+            tools.setup(params.server_tools, mcp_mgr, params.server_tools_runtime);
         } catch (const std::exception & e) {
             SRV_ERR("tools setup failed: %s\n", e.what());
             return 1;
@@ -347,6 +347,9 @@ int llama_server(common_params & params, int argc, char ** argv) {
         ctx_http.post("/tools",           ex_wrapper(tools.handle_post));
         if (!params.server_tools.empty()) {
             warn_names.push_back("built-in tools (experimental)");
+        }
+        if (!params.server_tools_runtime.empty()) {
+            warn_names.push_back("tools runtime (experimental)");
         }
         if (!mcp_mgr.empty()) {
             warn_names.push_back("MCP servers (experimental)");

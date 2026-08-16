@@ -17,8 +17,11 @@ from .base import LazyTorchTensor, MmprojModel, ModelBase, TextModel, gguf, logg
 from .qwen import QwenModel
 
 
-@ModelBase.register("DeepseekOCRForCausalLM", "UnlimitedOCRForCausalLM")
+@ModelBase.register("DeepseekOCRForCausalLM")
 class DeepseekOCRVisionModel(MmprojModel):
+    # HF dynamic_preprocess() max_num, which differs per model
+    preproc_max_tiles = 9
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.clip_projector_type = gguf.VisionProjectorType.DEEPSEEKOCR
@@ -42,6 +45,9 @@ class DeepseekOCRVisionModel(MmprojModel):
             self.gguf_writer.add_vision_projector_scale_factor(proj_scale_factor)
         # @bluebread: there's no window_size in config but just add it here anyway
         self.gguf_writer.add_vision_window_size(self.hparams.get("window_size", 14))
+
+        self.gguf_writer.add_vision_preproc_min_tiles(2)
+        self.gguf_writer.add_vision_preproc_max_tiles(self.preproc_max_tiles)
 
         # SAM configuration
         sam_hparams = hparams['sam']
@@ -93,8 +99,15 @@ class DeepseekOCRVisionModel(MmprojModel):
         return super().filter_tensors((name, gen))
 
 
+@ModelBase.register("UnlimitedOCRForCausalLM")
+class UnlimitedOCRVisionModel(DeepseekOCRVisionModel):
+    preproc_max_tiles = 32
+
+
 @ModelBase.register("DeepseekOCR2ForCausalLM")
 class DeepseekOCR2VisionModel(DeepseekOCRVisionModel):
+    preproc_max_tiles = 6
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.clip_projector_type = gguf.VisionProjectorType.DEEPSEEKOCR2
@@ -520,6 +533,13 @@ class DeepseekV4Model(TextModel):
         for key, value in raw_hparams.items():
             self.hparams.setdefault(key, value)
 
+        # workaround for special rope_parameters (main/compress) in transformers 5.x
+        if self.rope_parameters.get("full_attention", self.rope_parameters).get("rope_type") is None:
+            if (rope_scaling := raw_hparams.get("rope_scaling")) is not None:
+                if "rope_type" not in rope_scaling and (rope_type := rope_scaling.get("type")) is not None:
+                    rope_scaling["rope_type"] = rope_type
+                self.rope_parameters.update(**rope_scaling)
+
         self.block_count = self.hparams["num_hidden_layers"]
         if self.mtp_only:
             self.block_count += self.hparams.get("num_nextn_predict_layers", 0)
@@ -689,31 +709,6 @@ class DeepseekV4Model(TextModel):
         for name in tensors_to_remove:
             del self.model_tensors[name]
 
-    @staticmethod
-    def _pack_mxfp4_blocks(weight: Tensor, scale: Tensor) -> np.ndarray:
-        packed = weight.contiguous().view(torch.uint8)
-        scale_u8 = scale.contiguous().view(torch.uint8)
-
-        out_features, packed_cols = packed.shape
-        logical_cols = packed_cols * 2
-        if logical_cols % 32 != 0:
-            raise ValueError(f"MXFP4 source row has {logical_cols} values, expected a multiple of 32")
-
-        n_blocks = logical_cols // 32
-        if tuple(scale_u8.shape) != (out_features, n_blocks):
-            raise ValueError(f"MXFP4 scale shape {tuple(scale_u8.shape)} does not match {(out_features, n_blocks)}")
-
-        src = packed.reshape(out_features, n_blocks, 16)
-        low = src & 0x0F
-        high = (src >> 4) & 0x0F
-
-        # The safetensors bytes store adjacent values as low/high nibbles.
-        # ggml MXFP4 blocks store values 0..15 in low nibbles and 16..31 in high nibbles.
-        vals = torch.stack((low, high), dim=-1).reshape(out_features, n_blocks, 32)
-        qs = vals[:, :, :16] | (vals[:, :, 16:] << 4)
-        raw = torch.cat((scale_u8.unsqueeze(-1), qs.to(torch.uint8)), dim=-1)
-        return raw.reshape(out_features, n_blocks * 17).cpu().numpy()
-
     def _write_mxfp4_expert_tensor(self, bid: int, proj: str, tensor_key: gguf.MODEL_TENSOR) -> list[str]:
         n_experts = self.hparams["n_routed_experts"]
         data: np.ndarray | None = None
@@ -727,7 +722,7 @@ class DeepseekV4Model(TextModel):
 
             weight = LazyTorchTensor.to_eager(self.model_tensors[weight_name]())
             scale = LazyTorchTensor.to_eager(self.model_tensors[scale_name]())
-            packed = self._pack_mxfp4_blocks(weight, scale)
+            packed = self.repack_mxfp4_blocks(weight, scale)
             if data is None:
                 data = np.empty((n_experts, *packed.shape), dtype=packed.dtype)
             data[eid] = packed

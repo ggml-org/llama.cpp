@@ -1,14 +1,14 @@
 <script lang="ts">
 	import { Clock, Loader2 } from '@lucide/svelte';
 	import { AgenticSectionType } from '$lib/enums';
-	import type { AgenticSection } from '$lib/utils';
+	import type { AgenticSection } from '$lib/types';
 
 	interface Props {
 		section: AgenticSection;
 		isStreaming?: boolean;
 	}
 
-	let { section, isStreaming = false }: Props = $props();
+	let { isStreaming = false, section }: Props = $props();
 
 	const isPending = $derived(section.type === AgenticSectionType.TOOL_CALL_PENDING);
 	const isStreamingCall = $derived(section.type === AgenticSectionType.TOOL_CALL_STREAMING);
@@ -24,9 +24,12 @@
 
 		try {
 			const parsed: unknown = JSON.parse(toolResultString);
+
 			if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
 				const obj = parsed as Record<string, unknown>;
+
 				if (typeof obj.error === 'string') return { errorMessage: obj.error };
+
 				if (typeof obj.result === 'string') return { dateString: obj.result.trim() };
 			}
 		} catch {

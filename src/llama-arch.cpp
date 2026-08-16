@@ -71,6 +71,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_OLMO,             "olmo"             },
     { LLM_ARCH_OLMO2,            "olmo2"            },
     { LLM_ARCH_OLMOE,            "olmoe"            },
+    { LLM_ARCH_MUSE_GLIMMER,     "muse-glimmer"     },
     { LLM_ARCH_OPENELM,          "openelm"          },
     { LLM_ARCH_ARCTIC,           "arctic"           },
     { LLM_ARCH_DEEPSEEK,         "deepseek"         },
@@ -100,6 +101,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_GRANITE,          "granite"          },
     { LLM_ARCH_GRANITE_MOE,      "granitemoe"       },
     { LLM_ARCH_GRANITE_HYBRID,   "granitehybrid"    },
+    { LLM_ARCH_GRANITE_SWITCH,   "graniteswitch"    },
     { LLM_ARCH_CHAMELEON,        "chameleon"        },
     { LLM_ARCH_WAVTOKENIZER_DEC, "wavtokenizer-dec" },
     { LLM_ARCH_PLM,              "plm"              },
@@ -126,6 +128,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_SEED_OSS,         "seed_oss"         },
     { LLM_ARCH_GROVEMOE,         "grovemoe"         },
     { LLM_ARCH_APERTUS,          "apertus"          },
+    { LLM_ARCH_MINIMAX_01,       "minimax-01"       },
     { LLM_ARCH_MINIMAX_M2,       "minimax-m2"       },
     { LLM_ARCH_MINIMAX_M3,       "minimax-m3"       },
     { LLM_ARCH_COGVLM,           "cogvlm"           },
@@ -141,10 +144,12 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_LLAMA_EMBED,      "llama-embed"      },
     { LLM_ARCH_MAINCODER,        "maincoder"        },
     { LLM_ARCH_KIMI_LINEAR,      "kimi-linear"      },
+    { LLM_ARCH_KIMI_K3,          "kimi-k3"          },
     { LLM_ARCH_TALKIE,           "talkie"           },
     { LLM_ARCH_MELLUM,           "mellum"           },
     { LLM_ARCH_NANBEIGE,         "nanbeige"         },
     { LLM_ARCH_QWEN3TTS,         "qwen3tts"         },
+    { LLM_ARCH_POCKETTTS,        "pockettts"        },
     { LLM_ARCH_UNKNOWN,          "(unknown)"        },
 };
 
@@ -183,6 +188,9 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_FEATURES_LENGTH,                   "%s.features_length"                   },
     { LLM_KV_BLOCK_COUNT,                       "%s.block_count"                       },
     { LLM_KV_LEADING_DENSE_BLOCK_COUNT,         "%s.leading_dense_block_count"         },
+    { LLM_KV_ATTN_RES_BLOCK_SIZE,               "%s.attn_res.block_size"               },
+    { LLM_KV_ACTIVATION_SITU_BETA,              "%s.activation.situ_beta"              },
+    { LLM_KV_ACTIVATION_SITU_LINEAR_BETA,       "%s.activation.situ_linear_beta"       },
     { LLM_KV_FEED_FORWARD_LENGTH,               "%s.feed_forward_length"               },
     { LLM_KV_EXPERT_FEED_FORWARD_LENGTH,        "%s.expert_feed_forward_length"        },
     { LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, "%s.expert_shared_feed_forward_length" },
@@ -198,6 +206,7 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_EXPERT_GROUP_USED_COUNT,           "%s.expert_group_used_count"           },
     { LLM_KV_EXPERT_WEIGHTS_SCALE,              "%s.expert_weights_scale"              },
     { LLM_KV_EXPERT_WEIGHTS_NORM,               "%s.expert_weights_norm"               },
+    { LLM_KV_EXPERT_LATENT_LENGTH,              "%s.expert_latent_length"              },
     { LLM_KV_EXPERT_GATING_FUNC,                "%s.expert_gating_func"                },
     { LLM_KV_EXPERT_GROUP_SCALE,                "%s.expert_group_scale"                },
     { LLM_KV_EXPERTS_PER_GROUP,                 "%s.experts_per_group"                 },
@@ -220,6 +229,11 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_TIME_DECAY_EXTRA_DIM,              "%s.time_decay_extra_dim"              },
     { LLM_KV_RESIDUAL_SCALE,                    "%s.residual_scale"                    },
     { LLM_KV_EMBEDDING_SCALE,                   "%s.embedding_scale"                   },
+    { LLM_KV_ADAPTER_COUNT,                     "%s.adapters.count"                    },
+    { LLM_KV_ADAPTER_TOKEN_IDS_ACTIVATE,        "%s.adapters.token_ids_activate"       },
+    { LLM_KV_ADAPTER_TOKEN_IDS_SUBSTITUTE,      "%s.adapters.token_ids_substitute"     },
+    { LLM_KV_ADAPTER_LORA_RANK,                 "%s.adapters.lora_rank"                },
+    { LLM_KV_ADAPTER_ROUTER_GAIN,               "%s.adapters.router_gain"              },
     { LLM_KV_TOKEN_SHIFT_COUNT,                 "%s.token_shift_count"                 },
     { LLM_KV_INTERLEAVE_MOE_LAYER_STEP,         "%s.interleave_moe_layer_step"         },
     { LLM_KV_FULL_ATTENTION_INTERVAL,           "%s.full_attention_interval"           },
@@ -304,6 +318,7 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_SSM_DT_B_C_RMS,     "%s.ssm.dt_b_c_rms"     },
 
     { LLM_KV_KDA_HEAD_DIM, "%s.kda.head_dim" },
+    { LLM_KV_KDA_GATE_LOWER_BOUND, "%s.kda.gate_lower_bound" },
 
     { LLM_KV_WKV_HEAD_SIZE, "%s.wkv.head_size" },
 
@@ -454,6 +469,13 @@ static const std::map<llm_tensor, const char *> LLM_TENSOR_NAMES = {
     { LLM_TENSOR_SSM_F_B,                                "blk.%d.ssm_f_b" },
     { LLM_TENSOR_SSM_BETA,                               "blk.%d.ssm_beta" },
     { LLM_TENSOR_SSM_G_A,                                "blk.%d.ssm_g_a" },
+    { LLM_TENSOR_SSM_G,                                  "blk.%d.ssm_g" },
+    { LLM_TENSOR_ATTN_RES_SCORE,                         "blk.%d.attn_res_score" },
+    { LLM_TENSOR_FFN_RES_SCORE,                          "blk.%d.ffn_res_score" },
+    { LLM_TENSOR_OUTPUT_RES_SCORE,                       "output_res_score" },
+    { LLM_TENSOR_FFN_ROUTED_DOWN,                        "blk.%d.ffn_routed_down" },
+    { LLM_TENSOR_FFN_ROUTED_UP,                          "blk.%d.ffn_routed_up" },
+    { LLM_TENSOR_FFN_ROUTED_NORM,                        "blk.%d.ffn_routed_norm" },
     { LLM_TENSOR_SSM_G_B,                                "blk.%d.ssm_g_b" },
     { LLM_TENSOR_SSM_NORM,                               "blk.%d.ssm_norm" },
     { LLM_TENSOR_ATTN_Q_A_NORM,                          "blk.%d.attn_q_a_norm" },
@@ -747,6 +769,13 @@ static const std::map<llm_tensor, llm_tensor_info> LLM_TENSOR_INFOS = {
     {LLM_TENSOR_SSM_F_B,                    {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_SSM_BETA,                   {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_SSM_G_A,                    {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_SSM_G,                      {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_ATTN_RES_SCORE,             {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
+    {LLM_TENSOR_FFN_RES_SCORE,              {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
+    {LLM_TENSOR_OUTPUT_RES_SCORE,           {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL}},
+    {LLM_TENSOR_FFN_ROUTED_DOWN,            {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_FFN_ROUTED_UP,              {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_FFN_ROUTED_NORM,            {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
     {LLM_TENSOR_SSM_G_B,                    {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_TIME_MIX_LERP_X,            {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
     {LLM_TENSOR_TIME_MIX_LN,                {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
@@ -967,9 +996,11 @@ bool llm_arch_is_hybrid(const llm_arch & arch) {
         case LLM_ARCH_NEMOTRON_H_MOE:
         case LLM_ARCH_QWEN3NEXT:
         case LLM_ARCH_KIMI_LINEAR:
+        case LLM_ARCH_KIMI_K3:
         case LLM_ARCH_QWEN35:
         case LLM_ARCH_QWEN35MOE:
         case LLM_ARCH_DEEPSEEK4:
+        case LLM_ARCH_MINIMAX_01:
             return true;
         default:
             return false;
@@ -993,6 +1024,8 @@ bool llm_arch_supports_rs_rollback(const llm_arch & arch) {
         case LLM_ARCH_QWEN35:
         case LLM_ARCH_QWEN35MOE:
         case LLM_ARCH_DEEPSEEK4:
+        case LLM_ARCH_NEMOTRON_H:
+        case LLM_ARCH_NEMOTRON_H_MOE:
             return true;
         default:
             return false;
@@ -1023,10 +1056,12 @@ bool llm_arch_supports_sm_tensor(const llm_arch & arch) {
         case LLM_ARCH_GRANITE_HYBRID:
         case LLM_ARCH_LFM2:
         case LLM_ARCH_LFM2MOE:
+        case LLM_ARCH_MINIMAX_01:
         case LLM_ARCH_MINIMAX_M2:
         case LLM_ARCH_MINIMAX_M3:
         case LLM_ARCH_MISTRAL4:
         case LLM_ARCH_KIMI_LINEAR:
+        case LLM_ARCH_KIMI_K3:
         case LLM_ARCH_QWEN3TTS:
             return false;
         default:

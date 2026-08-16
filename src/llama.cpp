@@ -48,6 +48,8 @@ const char * llama_flash_attn_type_name(enum llama_flash_attn_type flash_attn_ty
 
 const char * llama_load_mode_name(enum llama_load_mode load_mode) {
     switch (load_mode) {
+        case LLAMA_LOAD_MODE_AUTO:
+            return "auto";
         case LLAMA_LOAD_MODE_NONE:
             return "none";
         case LLAMA_LOAD_MODE_MMAP:
@@ -63,11 +65,12 @@ const char * llama_load_mode_name(enum llama_load_mode load_mode) {
 }
 
 enum llama_load_mode llama_load_mode_from_str(const char * str) {
-    if (std::strcmp(str, "none") == 0)       { return LLAMA_LOAD_MODE_NONE;       }
-    if (std::strcmp(str, "mmap") == 0)       { return LLAMA_LOAD_MODE_MMAP;       }
-    if (std::strcmp(str, "mlock") == 0)      { return LLAMA_LOAD_MODE_MLOCK;      }
+    if (std::strcmp(str, "auto")       == 0) { return LLAMA_LOAD_MODE_AUTO;       }
+    if (std::strcmp(str, "none")       == 0) { return LLAMA_LOAD_MODE_NONE;       }
+    if (std::strcmp(str, "mmap")       == 0) { return LLAMA_LOAD_MODE_MMAP;       }
+    if (std::strcmp(str, "mlock")      == 0) { return LLAMA_LOAD_MODE_MLOCK;      }
     if (std::strcmp(str, "mmap+mlock") == 0) { return LLAMA_LOAD_MODE_MMAP_MLOCK; }
-    if (std::strcmp(str, "dio") == 0)        { return LLAMA_LOAD_MODE_DIRECT_IO;  }
+    if (std::strcmp(str, "dio")        == 0) { return LLAMA_LOAD_MODE_DIRECT_IO;  }
     throw std::invalid_argument(std::string("unknown load mode: ") + str);
 }
 
@@ -109,6 +112,10 @@ bool llama_supports_rpc(void) {
         ggml_backend_load_all();
     }
     return ggml_backend_reg_by_name("RPC") != nullptr;
+}
+
+const char * llama_version(void) {
+    return LLAMA_VERSION;
 }
 
 void llama_backend_init(void) {
@@ -250,7 +257,11 @@ static bool llama_prepare_model_devices(const llama_model_params & params, llama
                     }
 
                     case GGML_BACKEND_DEVICE_TYPE_IGPU:
-                        if (igpus.empty()) {
+                        // igpus.empty() - workaround for integrated devices seen by multiple backends
+                        // ref: https://github.com/ggml-org/llama.cpp/pull/23897
+                        // ggml_backend_dev_backend_reg - allow devices of the same backend regardless if integrated
+                        // ref: https://github.com/ggml-org/llama.cpp/pull/23897#issuecomment-5264222997
+                        if (igpus.empty() || ggml_backend_dev_backend_reg(dev) == ggml_backend_dev_backend_reg(igpus.back().dev)) {
                             igpus.push_back({false, dev});
                         }
                         break;
