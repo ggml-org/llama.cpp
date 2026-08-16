@@ -1,36 +1,40 @@
 <script lang="ts">
-	import { fly } from 'svelte/transition';
-	import { Circle, BookOpen, CircleSlash, RefreshCw, X } from '@lucide/svelte';
+	import SkillBudgetStatus from './SkillBudgetStatus.svelte';
+	import SkillCatalogList from './SkillCatalogList.svelte';
+	import SkillDetail from './SkillDetail.svelte';
+	import { BookOpen, Circle, CircleSlash, RefreshCw, X } from '@lucide/svelte';
 	import { browser } from '$app/environment';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { StandalonePageShell } from '$lib/components/app';
 	import { ActionIcon } from '$lib/components/app/actions';
-	import * as Resizable from '$lib/components/ui/resizable/index.js';
 	import { Alert, AlertDescription, AlertTitle } from '$lib/components/ui/alert';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import * as Empty from '$lib/components/ui/empty';
+	import * as Resizable from '$lib/components/ui/resizable/index.js';
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import {
+		normalizeSkillBudget,
 		ROUTES,
 		SETTINGS_KEYS,
-		SKILLS_PANE_SIZES_LOCALSTORAGE_KEY,
-		normalizeSkillBudget
+		SKILLS_PANE_SIZES_LOCALSTORAGE_KEY
 	} from '$lib/constants';
-	import { SkillsPackingService, buildSkillRunSnapshot, resolveSkillPackOptions } from '$lib/services';
-	import { modelsStore } from '$lib/stores/models.svelte';
-	import { serverStore } from '$lib/stores/server.svelte';
-	import { skillsStore } from '$lib/stores/skills.svelte';
-	import { settingsStore } from '$lib/stores/settings.svelte';
+	import {
+		buildSkillRunSnapshot,
+		resolveSkillPackOptions,
+		SkillsPackingService
+	} from '$lib/services';
 	import { isMobile } from '$lib/stores';
+	import { modelsStore } from '$lib/stores/models.svelte';
 	import { persisted } from '$lib/stores/persisted.svelte';
-	import { ApiError } from '$lib/utils/api-fetch';
+	import { serverStore } from '$lib/stores/server.svelte';
+	import { settingsStore } from '$lib/stores/settings.svelte';
+	import { skillsStore } from '$lib/stores/skills.svelte';
+	import type { SkillCatalogEntry, SkillPackedCatalog } from '$lib/types';
 	import { isAbortError } from '$lib/utils';
-	import type { SkillCatalogEntry, SkillDiagnostic, SkillPackedCatalog } from '$lib/types';
-	import SkillBudgetStatus from './SkillBudgetStatus.svelte';
-	import SkillCatalogList from './SkillCatalogList.svelte';
-	import SkillDetail from './SkillDetail.svelte';
+	import { ApiError } from '$lib/utils/api-fetch';
+	import { fly } from 'svelte/transition';
 
 	interface Props {
 		cwd: string | undefined;
@@ -118,15 +122,18 @@
 	}
 
 	function rememberPaneSize(index: 0 | 1, size: number) {
-		const next = index === 0 ? [size, sizes[1]] : [sizes[0], size];
+		// The pane group layout always sums to 100; derive the sibling instead
+		// of reusing the stale `sizes` entry, or the recomputed default sizes
+		// diverge from the live layout and the group rebuilds from them.
+		const next = index === 0 ? [size, 100 - size] : [100 - size, size];
 		const normalized = normalizePaneSizes(next);
+
 		sizes = normalized;
+
 		if (persistedPaneSizes) persistedPaneSizes.value = normalized;
 	}
 
-	// A CWD change invalidates the selection: the old detail is cleared (and
-	// its in-flight read aborted when the detail unmounts). Dismissed state is
-	// also cleared so a fresh catalog starts with its notices visible.
+	// Clear the selection and dismissed state on CWD change.
 	$effect(() => {
 		void cwd;
 		selectedEntry = null;
@@ -134,7 +141,9 @@
 		budgetDismissed = false;
 	});
 
-	const budget = $derived(normalizeSkillBudget(settingsStore.config[SETTINGS_KEYS.MAX_SKILL_BUDGET]));
+	const budget = $derived(
+		normalizeSkillBudget(settingsStore.config[SETTINGS_KEYS.MAX_SKILL_BUDGET])
+	);
 	const slot = $derived(skillsStore.slotFor(cwd));
 	const status = $derived(slot?.status ?? 'loading');
 	const error = $derived(slot?.error);
@@ -147,19 +156,11 @@
 		error instanceof Error ? error.message : 'The catalog could not be loaded.'
 	);
 
-	// Only a selected ready desktop catalog is permitted to use the full
-	// application width; every other state keeps the centered reading column.
-	const isDesktopWorkspace = $derived(
-		status === 'ready' && selectedEntry !== null && !mobile
-	);
+	// Full width only for a selected desktop catalog; keep the centered column otherwise.
+	const isDesktopWorkspace = $derived(status === 'ready' && selectedEntry !== null && !mobile);
 
-	// Run-equivalent budget packing of the ready catalog, exactly as an
-	// agentic run would pack it: same frozen snapshot shape, same
-	// direct/estimated option resolution, same SkillsPackingService.pack. The
-	// previous call is aborted when any input (catalog, CWD, budget, selected
-	// model, router mode, loaded-model state) changes, so a stale result never
-	// renders. No tokenizer request, model selection, or model loading is
-	// ever done for presentation alone.
+	// Pack exactly as an agent run would; presentation alone never tokenizes,
+	// selects, or loads a model.
 	let packed = $state<SkillPackedCatalog | null>(null);
 	let packState = $state<'idle' | 'packing' | 'error'>('idle');
 	let packError = $state<unknown>(null);
@@ -196,12 +197,7 @@
 
 		SkillsPackingService.pack(snapshot, { budget, ...packOptions, signal: controller.signal })
 			.then((result) => {
-				// The direct tokenizer's abort surfaces as a plain fetch
-				// failure inside pack(), which resolves through the estimate
-				// fallback instead of rejecting: a superseded pack can
-				// therefore settle successfully after this controller was
-				// aborted. Never let a stale result overwrite the replacement
-				// pack's state.
+				// A superseded pack can settle via the estimate fallback; drop it.
 				if (controller.signal.aborted) return;
 
 				packed = result;
@@ -232,156 +228,154 @@
 		class:max-w-4xl={!isDesktopWorkspace}
 	>
 		{#if status === 'loading'}
-		<div aria-label="Loading skills catalog" class="flex flex-col gap-3">
-			<Skeleton class="h-24 w-full" />
-			<Skeleton class="h-24 w-full" />
-			<Skeleton class="h-24 w-full" />
-		</div>
-		<p class="text-sm text-muted-foreground">Loading catalog…</p>
-	{:else if status === 'error'}
-		{#if isUnavailable}
-			<Alert>
-				<CircleSlash class="h-4 w-4" />
-				<AlertTitle>Skills are not enabled</AlertTitle>
-				<AlertDescription>
-					The server does not expose a Skills catalog. Start it with the <code>--skills</code>
-					flag to browse skills here.
-				</AlertDescription>
-			</Alert>
-		{:else}
-			<Alert variant="destructive">
-				<Circle class="h-4 w-4" />
-				<AlertTitle>Could not load the Skills catalog</AlertTitle>
-				<AlertDescription>{errorMessage}</AlertDescription>
-			</Alert>
-
-			<div class="flex justify-start">
-				<Button onclick={onRetry}>
-					<RefreshCw class="h-3 w-3" />
-					Retry
-				</Button>
+			<div aria-label="Loading skills catalog" class="flex flex-col gap-3">
+				<Skeleton class="h-24 w-full" />
+				<Skeleton class="h-24 w-full" />
+				<Skeleton class="h-24 w-full" />
 			</div>
-		{/if}
-	{:else if isEmpty}
-		<div class="flex flex-1 items-center justify-center py-16">
-			<Empty.Root class="max-w-md">
-				<Empty.Header>
-					<Empty.Media variant="icon">
-						<BookOpen />
-					</Empty.Media>
-
-					<Empty.Title>No skills found</Empty.Title>
-
-					<Empty.Description>
-						The server returned an empty catalog for this working directory.
-					</Empty.Description>
-				</Empty.Header>
-			</Empty.Root>
-		</div>
-	{:else}
-		{#if !selectedEntry && !budgetDismissed}
-			{#if packState === 'packing'}
-				<p class="text-sm text-muted-foreground">Calculating the Skills prompt budget...</p>
-			{:else if packState === 'error'}
+			<p class="text-sm text-muted-foreground">Loading catalog…</p>
+		{:else if status === 'error'}
+			{#if isUnavailable}
+				<Alert>
+					<CircleSlash class="h-4 w-4" />
+					<AlertTitle>Skills are not enabled</AlertTitle>
+					<AlertDescription>
+						The server does not expose a Skills catalog. Start it with the <code>--skills</code>
+						flag to browse skills here.
+					</AlertDescription>
+				</Alert>
+			{:else}
 				<Alert variant="destructive">
 					<Circle class="h-4 w-4" />
-					<AlertTitle>Could not pack the Skills catalog</AlertTitle>
-					<AlertDescription>{packErrorMessage}</AlertDescription>
+					<AlertTitle>Could not load the Skills catalog</AlertTitle>
+					<AlertDescription>{errorMessage}</AlertDescription>
 				</Alert>
-			{:else if packed}
-				<SkillBudgetStatus
-					{packed}
-					{budget}
-					onDismiss={() => (budgetDismissed = true)}
-				/>
-			{/if}
-		{/if}
-		{#if !selectedEntry && !diagnosticsDismissed && catalog && catalog.diagnostics.length > 0}
-			<div class="relative">
-				<div class="flex flex-col gap-2">
-					{#each catalog.diagnostics as diagnostic, i (`${diagnostic.code}-${i}`)}
-						<div class="flex items-start gap-2 text-sm">
-							<Badge
-								variant={diagnostic.severity === 'error' ? 'destructive' : 'outline'}
-								class="shrink-0 {diagnostic.severity === 'warning' ? 'border-amber-500/40 text-amber-700 dark:text-amber-400' : ''}"
-							>
-								{diagnostic.severity}
-							</Badge>
 
-							<span class="min-w-0 text-muted-foreground">
-								<code class="mr-1">{diagnostic.code}</code>
-								{#if diagnostic.name}
-									<span class="mr-2">Skill: {diagnostic.name}</span>
-								{/if}
-								{#if diagnostic.scope}
-									<span class="mr-2">Scope: {diagnostic.scope}</span>
-								{/if}
-								{#if diagnostic.provider}
-									<span class="mr-2">Provider: {diagnostic.provider}</span>
-								{/if}
-								{diagnostic.message}
-							</span>
-						</div>
-					{/each}
+				<div class="flex justify-start">
+					<Button onclick={onRetry}>
+						<RefreshCw class="h-3 w-3" />
+						Retry
+					</Button>
 				</div>
+			{/if}
+		{:else if isEmpty}
+			<div class="flex flex-1 items-center justify-center py-16">
+				<Empty.Root class="max-w-md">
+					<Empty.Header>
+						<Empty.Media variant="icon">
+							<BookOpen />
+						</Empty.Media>
 
-				<ActionIcon
-					icon={X}
-					tooltip="Dismiss diagnostics"
-					class="absolute right-2 top-2"
-					onclick={() => (diagnosticsDismissed = true)}
-				/>
+						<Empty.Title>No skills found</Empty.Title>
+
+						<Empty.Description>
+							The server returned an empty catalog for this working directory.
+						</Empty.Description>
+					</Empty.Header>
+				</Empty.Root>
 			</div>
-		{/if}
-
-		{#if mobile}
-			{#if selectedEntry}
-				<SkillDetail entry={selectedEntry} {cwd} onClose={closeDetail} mobile />
-			{:else}
-			<SkillCatalogList
-				entries={catalog?.skills ?? []}
-				selectedId={selectedId}
-				open={selectedEntry !== null}
-				onSelect={handleSelect}
-			/>
-			{/if}
 		{:else}
-			{#if selectedEntry}
-				<Resizable.PaneGroup direction="horizontal" class="min-h-82">
-					<Resizable.Pane
-						defaultSize={sizes[0]}
-						minSize={35}
-						onResize={(size) => rememberPaneSize(0, size)}
-					>
-						<div class="h-full" in:fly|global={{ x: 200, duration: 200, opacity: 1 }}>
-							<SkillCatalogList
-								entries={catalog?.skills ?? []}
-								selectedId={selectedId}
-								open={true}
-								onSelect={handleSelect}
-							/>
-						</div>
-					</Resizable.Pane>
+			{#if !selectedEntry && !budgetDismissed}
+				{#if packState === 'packing'}
+					<p class="text-sm text-muted-foreground">Calculating the Skills prompt budget...</p>
+				{:else if packState === 'error'}
+					<Alert variant="destructive">
+						<Circle class="h-4 w-4" />
+						<AlertTitle>Could not pack the Skills catalog</AlertTitle>
+						<AlertDescription>{packErrorMessage}</AlertDescription>
+					</Alert>
+				{:else if packed}
+					<SkillBudgetStatus {packed} {budget} onDismiss={() => (budgetDismissed = true)} />
+				{/if}
+			{/if}
+			{#if !selectedEntry && !diagnosticsDismissed && catalog && catalog.diagnostics.length > 0}
+				<div class="relative">
+					<div class="flex flex-col gap-2">
+						{#each catalog.diagnostics as diagnostic, i (`${diagnostic.code}-${i}`)}
+							<div class="flex items-start gap-2 text-sm">
+								<Badge
+									variant={diagnostic.severity === 'error' ? 'destructive' : 'outline'}
+									class="shrink-0 {diagnostic.severity === 'warning'
+										? 'border-amber-500/40 text-amber-700 dark:text-amber-400'
+										: ''}"
+								>
+									{diagnostic.severity}
+								</Badge>
 
-					<Resizable.Handle withHandle class="w-3 bg-transparent after:bg-border after:w-px" />
+								<span class="min-w-0 text-muted-foreground">
+									<code class="mr-1">{diagnostic.code}</code>
+									{#if diagnostic.name}
+										<span class="mr-2">Skill: {diagnostic.name}</span>
+									{/if}
+									{#if diagnostic.scope}
+										<span class="mr-2">Scope: {diagnostic.scope}</span>
+									{/if}
+									{#if diagnostic.provider}
+										<span class="mr-2">Provider: {diagnostic.provider}</span>
+									{/if}
+									{diagnostic.message}
+								</span>
+							</div>
+						{/each}
+					</div>
 
-					<Resizable.Pane
-						defaultSize={sizes[1]}
-						minSize={30}
-						onResize={(size) => rememberPaneSize(1, size)}
-					>
-						<SkillDetail entry={selectedEntry} {cwd} onClose={closeDetail} mobile={false} />
-					</Resizable.Pane>
-				</Resizable.PaneGroup>
+					<ActionIcon
+						icon={X}
+						tooltip="Dismiss diagnostics"
+						class="absolute right-2 top-2"
+						onclick={() => (diagnosticsDismissed = true)}
+					/>
+				</div>
+			{/if}
+
+			{#if mobile}
+				{#if selectedEntry}
+					<SkillDetail entry={selectedEntry} {cwd} onClose={closeDetail} mobile />
+				{:else}
+					<SkillCatalogList
+						entries={catalog?.skills ?? []}
+						{selectedId}
+						open={selectedEntry !== null}
+						onSelect={handleSelect}
+					/>
+				{/if}
 			{:else}
-				<SkillCatalogList
-					entries={catalog?.skills ?? []}
-					selectedId={selectedId}
-					open={selectedEntry !== null}
-					onSelect={handleSelect}
-				/>
+				{#if selectedEntry}
+					<Resizable.PaneGroup direction="horizontal" class="min-h-82">
+						<Resizable.Pane
+							defaultSize={sizes[0]}
+							minSize={35}
+							onResize={(size) => rememberPaneSize(0, size)}
+						>
+							<div class="h-full" in:fly|global={{ duration: 200, opacity: 1, x: 200 }}>
+								<SkillCatalogList
+									entries={catalog?.skills ?? []}
+									{selectedId}
+									open={true}
+									onSelect={handleSelect}
+								/>
+							</div>
+						</Resizable.Pane>
+
+						<Resizable.Handle withHandle class="w-3 bg-transparent after:bg-border after:w-px" />
+
+						<Resizable.Pane
+							defaultSize={sizes[1]}
+							minSize={30}
+							onResize={(size) => rememberPaneSize(1, size)}
+						>
+							<SkillDetail entry={selectedEntry} {cwd} onClose={closeDetail} mobile={false} />
+						</Resizable.Pane>
+					</Resizable.PaneGroup>
+				{:else}
+					<SkillCatalogList
+						entries={catalog?.skills ?? []}
+						{selectedId}
+						open={selectedEntry !== null}
+						onSelect={handleSelect}
+					/>
+				{/if}
 			{/if}
 		{/if}
-	{/if}
 	</div>
 </StandalonePageShell>

@@ -59,6 +59,12 @@ export function useSkillCatalogRefresh(): SkillCatalogRefresh {
 	}
 
 	return {
+		dispose() {
+			if (disposed) return;
+
+			disposed = true;
+			inflight?.abort();
+		},
 		onCwdChange(cwd) {
 			if (disposed) return;
 
@@ -70,12 +76,6 @@ export function useSkillCatalogRefresh(): SkillCatalogRefresh {
 			if (disposed || !initialized) return;
 
 			request(currentCwd, true);
-		},
-		dispose() {
-			if (disposed) return;
-
-			disposed = true;
-			inflight?.abort();
 		}
 	};
 }

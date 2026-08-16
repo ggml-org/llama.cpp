@@ -25,22 +25,23 @@ function jsonResponse(body: unknown, status = 200): Response {
 
 function makeEntry(name: string): SkillCatalogEntry {
 	return {
-		id: `opaque-${name}`,
-		name,
+		catalog_xml: `<skill><name>${name}</name></skill>`,
 		description: `description of ${name}`,
-		scope: 'project',
+		id: `opaque-${name}`,
+		instruction: { bytes: 16, lines: 1, modified_at: null, tokens: 4, tokens_estimated: true },
+		name,
 		provider: 'agents',
-		instruction: { bytes: 16, lines: 1, tokens: 4, tokens_estimated: true, modified_at: null },
 		resources: { count: 0, truncated: false },
-		catalog_xml: `<skill><name>${name}</name></skill>`
+		scope: 'project'
 	};
 }
 
 function makeCatalog(...names: string[]): SkillCatalogResponse {
 	return {
-		skills: names.map(makeEntry),
-		catalog_instruction_xml: '<available_skills>Call read_skill(name) when matching.</available_skills>',
-		diagnostics: []
+		catalog_instruction_xml:
+			'<available_skills>Call read_skill(name) when matching.</available_skills>',
+		diagnostics: [],
+		skills: names.map(makeEntry)
 	};
 }
 
@@ -90,8 +91,8 @@ describe('Skills sidebar availability', () => {
 	});
 
 	it('keeps the Skills entry hidden when the probe confirms a 404 (disabled)', async () => {
-		vi.mocked(fetch).mockImplementation(
-			async () => jsonResponse({ error: { code: 404, message: 'no skills route' } }, 404)
+		vi.mocked(fetch).mockImplementation(async () =>
+			jsonResponse({ error: { code: 404, message: 'no skills route' } }, 404)
 		);
 
 		const screen = await render(SidebarNavigationActions, {
@@ -108,8 +109,8 @@ describe('Skills sidebar availability', () => {
 	});
 
 	it('keeps the Skills entry visible when the probe fails with a non-404 error', async () => {
-		vi.mocked(fetch).mockImplementation(
-			async () => jsonResponse({ error: { code: 503, message: 'unavailable' } }, 503)
+		vi.mocked(fetch).mockImplementation(async () =>
+			jsonResponse({ error: { code: 503, message: 'unavailable' } }, 503)
 		);
 
 		const screen = await render(SidebarNavigationActions, {
@@ -142,7 +143,12 @@ describe('Skills sidebar availability', () => {
 			name: 'Demo'
 		};
 
-		await render(SidebarNavigationActions, { class: 'w-64', isExpandedMode: true, isSearchModeActive: false, searchQuery: '' });
+		await render(SidebarNavigationActions, {
+			class: 'w-64',
+			isExpandedMode: true,
+			isSearchModeActive: false,
+			searchQuery: ''
+		});
 
 		await vi.waitFor(() => expect(skillsStore.availability).toBe('available'));
 		expect(calls[0].headers['x-skill-cwd']).toBe('/proj/a');
@@ -159,7 +165,12 @@ describe('Skills sidebar availability', () => {
 
 		conversationsStore.pendingCwd = '/pending';
 
-		await render(SidebarNavigationActions, { class: 'w-64', isExpandedMode: true, isSearchModeActive: false, searchQuery: '' });
+		await render(SidebarNavigationActions, {
+			class: 'w-64',
+			isExpandedMode: true,
+			isSearchModeActive: false,
+			searchQuery: ''
+		});
 
 		await vi.waitFor(() => expect(skillsStore.availability).toBe('available'));
 		expect(calls[0].headers['x-skill-cwd']).toBe('/pending');
@@ -174,7 +185,12 @@ describe('Skills sidebar availability', () => {
 			return jsonResponse(makeCatalog('demo'));
 		});
 
-		await render(SidebarNavigationActions, { class: 'w-64', isExpandedMode: true, isSearchModeActive: false, searchQuery: '' });
+		await render(SidebarNavigationActions, {
+			class: 'w-64',
+			isExpandedMode: true,
+			isSearchModeActive: false,
+			searchQuery: ''
+		});
 
 		await vi.waitFor(() => expect(skillsStore.availability).toBe('available'));
 		expect('x-skill-cwd' in calls[0].headers).toBe(false);

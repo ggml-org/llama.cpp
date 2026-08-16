@@ -1,24 +1,12 @@
 /**
- * skillsStore - CWD-keyed latest catalog screen state, per-run snapshots,
- * and the startup Skills navigation availability probe.
- *
- * Each selected-CWD string owns an independent screen slot and a monotonic
- * request generation. A stale response (an older generation resolving late) is
- * still returned to its issuing caller but can never replace the current slot.
- * Run snapshots are built from the run's own response, never the mutable slot,
- * so concurrent runs and CWD changes cannot swap a run's CWD/catalog data.
- *
- * Startup loading (sidebar probe and initial route load) shares one
- * store-owned request per CWD: callers attach as independent subscribers,
- * aborting one caller rejects only that caller, and the shared request is
- * aborted only after its final subscriber leaves. `refresh` stays the
- * force-refresh primitive and always issues a new request.
+ * skillsStore - CWD-keyed catalog screen state, per-run snapshots, and the
+ * startup Skills navigation availability probe.
  */
-import { SvelteMap } from 'svelte/reactivity';
-import { buildSkillRunSnapshot } from '$lib/services/skills-packing.service';
 import { SkillsService } from '$lib/services/skills.service';
+import { buildSkillRunSnapshot } from '$lib/services/skills-packing.service';
 import type { SkillCatalogResponse, SkillRunSnapshot } from '$lib/types';
 import { ApiError } from '$lib/utils/api-fetch';
+import { SvelteMap } from 'svelte/reactivity';
 
 export type SkillCatalogStatus = 'loading' | 'ready' | 'error';
 
@@ -77,9 +65,8 @@ class SkillsStore {
 	}
 
 	/**
-	 * Fetch the catalog for the screen. Bumps the CWD's generation; the result
-	 * is always returned to this caller, but only replaces the UI slot while it
-	 * remains the latest generation for that CWD.
+	 * Fetch the catalog. The result always returns to the caller but updates
+	 * the UI slot only while it is still the latest generation for that CWD.
 	 */
 	async refresh(cwd: string | undefined, signal?: AbortSignal): Promise<SkillCatalogResponse> {
 		const generation = this.bumpGeneration(cwd);
@@ -104,14 +91,14 @@ class SkillsStore {
 	}
 
 	/**
-	 * Startup and initial route loading: one store-owned request per CWD,
-	 * shared by every concurrent caller for that CWD. Each caller attaches as
-	 * an independent subscriber; aborting one caller rejects only that caller,
-	 * and the store-owned request is aborted only after the final subscriber
-	 * leaves. Settlement removes only the matching map entry, so an older
-	 * request can never delete a replacement.
+	 * Startup and initial route loading: one shared request per CWD. Aborting
+	 * one caller rejects only that caller; the shared request is aborted only
+	 * after its final subscriber leaves.
 	 */
-	async ensureCatalog(cwd: string | undefined, signal?: AbortSignal): Promise<SkillCatalogResponse> {
+	async ensureCatalog(
+		cwd: string | undefined,
+		signal?: AbortSignal
+	): Promise<SkillCatalogResponse> {
 		const existing = this._catalogEnsures.get(cwd);
 
 		if (existing && !existing.settled) {
@@ -162,11 +149,8 @@ class SkillsStore {
 	}
 
 	/**
-	 * Probe whether the server exposes a Skills catalog and gate the sidebar
-	 * entry on it. Success maps to `available`, only an HTTP 404 maps to
-	 * `disabled`, and every other failure to `error`. An aborted caller does
-	 * not change availability; an older CWD probe cannot overwrite a newer
-	 * terminal state.
+	 * Probe the catalog and gate the sidebar entry: success -> available,
+	 * only 404 -> disabled, every other failure -> error.
 	 */
 	async probeAvailability(cwd: string | undefined, signal?: AbortSignal): Promise<void> {
 		const generation = ++this._probeGeneration;
@@ -182,8 +166,7 @@ class SkillsStore {
 		} catch (error) {
 			if (this._probeGeneration !== generation) return;
 
-			// An aborted caller does not change availability; the abort still
-			// propagates so the caller sees its own cancellation.
+			// An aborted caller changes nothing; the abort still propagates.
 			if (signal?.aborted || isAbortError(error)) {
 				throw error;
 			}
@@ -196,22 +179,17 @@ class SkillsStore {
 		}
 	}
 
-	/**
-	 * Create an immutable per-run snapshot from the run's OWN catalog response.
-	 * Never reads or writes the mutable screen slot, so concurrent runs and
-	 * CWD changes cannot swap a run's CWD/catalog data.
-	 */
-	async createRunSnapshot(cwd: string | undefined, signal?: AbortSignal): Promise<SkillRunSnapshot> {
+	/** Create an immutable per-run snapshot from the run's own catalog response. */
+	async createRunSnapshot(
+		cwd: string | undefined,
+		signal?: AbortSignal
+	): Promise<SkillRunSnapshot> {
 		const catalog = await SkillsService.list(cwd, signal);
 
 		return buildSkillRunSnapshot(cwd, catalog);
 	}
 
-	/**
-	 * Immediately invalidate the screen state for a CWD (e.g. the selected CWD
-	 * changed). Bumps the generation so any in-flight response for the key
-	 * becomes stale; frozen run snapshots are unaffected.
-	 */
+	/** Invalidate screen state for a CWD; in-flight responses become stale. */
 	invalidate(cwd: string | undefined): void {
 		this.bumpGeneration(cwd);
 		this._slots.delete(cwd);
@@ -227,8 +205,7 @@ class SkillsStore {
 			return Promise.reject(abortError());
 		}
 
-		const { promise, resolve, reject } = Promise.withResolvers<SkillCatalogResponse>();
-
+		const { promise, reject, resolve } = Promise.withResolvers<SkillCatalogResponse>();
 		const onAbort = () => {
 			entry.subscribers.delete(signal);
 

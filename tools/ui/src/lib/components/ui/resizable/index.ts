@@ -1,6 +1,6 @@
-import { Pane } from "paneforge";
-import Handle from "./resizable-handle.svelte";
-import PaneGroup from "./resizable-pane-group.svelte";
+import Handle from './resizable-handle.svelte';
+import PaneGroup from './resizable-pane-group.svelte';
+import { Pane } from 'paneforge';
 
 export {
 	PaneGroup,
@@ -9,5 +9,5 @@ export {
 	//
 	PaneGroup as ResizablePaneGroup,
 	Pane as ResizablePane,
-	Handle as ResizableHandle,
+	Handle as ResizableHandle
 };

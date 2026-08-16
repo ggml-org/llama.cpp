@@ -28,6 +28,7 @@ import type {
 import { conversationsStore } from '$lib/stores/conversations.svelte';
 import type { DatabaseMessage, DatabaseMessageExtraSkill } from '$lib/types/database';
 import type { SkillBaseReadResult, SkillReadResult } from '$lib/types/skills';
+import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 
 /** Activation input narrowed to a base (`kind: 'skill'`) read result. */
 type SkillBaseActivationInput = Omit<SkillActivationInput, 'result'> & {
@@ -36,17 +37,8 @@ type SkillBaseActivationInput = Omit<SkillActivationInput, 'result'> & {
 
 export class DurableSkillActivationStore implements SkillActivationStore {
 	/** Durable base activations by conversation, keyed by the opaque skill id. */
-	private readonly _activatedByConversation = new Map<string, Set<string>>();
-	/**
-	 * In-flight durable persistence transactions keyed by conversation plus
-	 * the opaque skill id. Both the slash and the model path call
-	 * `recordActivation`; the first call for an identity registers its
-	 * persistence here before awaiting, so a concurrent call of the same
-	 * identity waits instead of passing the pre-check and duplicating the
-	 * synthetic pair / anchored tool result. The entry lives only while the
-	 * persistence is running and is removed on success or failure.
-	 */
-	private readonly _inFlight = new Map<string, Promise<DatabaseMessage>>();
+	private readonly _activatedByConversation = new SvelteMap<string, SvelteSet<string>>();
+	private readonly _inFlight = new SvelteMap<string, Promise<DatabaseMessage>>();
 
 	/** Stable per-conversation-per-identity key shared by both activation paths. */
 	private static activationKey(conversationId: string, identityId: string): string {
@@ -64,7 +56,7 @@ export class DurableSkillActivationStore implements SkillActivationStore {
 	 */
 	async loadConversation(conversationId: string): Promise<void> {
 		const messages = await conversationsStore.getConversationMessages(conversationId);
-		const activated = new Set<string>();
+		const activated = new SvelteSet<string>();
 
 		for (const message of messages) {
 			const extra = skillExtraFromMessage(message);
@@ -169,8 +161,8 @@ export class DurableSkillActivationStore implements SkillActivationStore {
 	): Promise<DatabaseMessage> {
 		const assistant = await this.resolveAssistantForToolCall(input.conversationId, toolCallId);
 		const parentId = assistant?.id ?? (await this.appendParentFor(input.conversationId)) ?? null;
-		const resolvedParent = parentId ?? (await DatabaseService.createRootMessage(input.conversationId));
-
+		const resolvedParent =
+			parentId ?? (await DatabaseService.createRootMessage(input.conversationId));
 		const toolResult = await DatabaseService.createMessageBranch(
 			{
 				children: [],
@@ -198,7 +190,8 @@ export class DurableSkillActivationStore implements SkillActivationStore {
 			cwd: input.cwd
 		});
 		const parentId = (await this.appendParentFor(input.conversationId)) ?? null;
-		const resolvedParent = parentId ?? (await DatabaseService.createRootMessage(input.conversationId));
+		const resolvedParent =
+			parentId ?? (await DatabaseService.createRootMessage(input.conversationId));
 		const [assistant, toolResult] = await DatabaseService.createMessageBranchPair(
 			pair.assistant,
 			pair.toolResult,
@@ -214,13 +207,11 @@ export class DurableSkillActivationStore implements SkillActivationStore {
 
 	/** The typed metadata for a non-persisting record (dedupe). */
 	private extraFor(result: SkillReadResult): DatabaseMessageExtraSkill {
-		return result.kind === 'resource'
-			? skillResourceExtra(result)
-			: skillActivationExtra(result);
+		return result.kind === 'resource' ? skillResourceExtra(result) : skillActivationExtra(result);
 	}
 
 	private remember(conversationId: string, identityId: string): void {
-		const set = this._activatedByConversation.get(conversationId) ?? new Set<string>();
+		const set = this._activatedByConversation.get(conversationId) ?? new SvelteSet<string>();
 
 		set.add(identityId);
 		this._activatedByConversation.set(conversationId, set);

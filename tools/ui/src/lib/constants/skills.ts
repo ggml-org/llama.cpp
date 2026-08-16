@@ -32,35 +32,35 @@ export const SKILL_LIST_TOOL_DESCRIPTION =
  */
 export function buildSkillReadToolDefinition(names?: readonly string[]): OpenAIToolDefinition {
 	return {
-		type: ToolCallType.FUNCTION,
 		function: {
 			description: SKILL_READ_TOOL_DESCRIPTION,
 			name: SKILL_READ_TOOL,
 			parameters: {
-				type: JsonSchemaType.OBJECT,
 				properties: {
 					name: names ? { enum: [...names], type: 'string' } : { type: 'string' },
 					path: { type: 'string' }
 				},
-				required: ['name']
+				required: ['name'],
+				type: JsonSchemaType.OBJECT
 			}
-		}
+		},
+		type: ToolCallType.FUNCTION
 	};
 }
 
 /** Build the no-argument `list_skill` definition. */
 export function buildSkillListToolDefinition(): OpenAIToolDefinition {
 	return {
-		type: ToolCallType.FUNCTION,
 		function: {
 			description: SKILL_LIST_TOOL_DESCRIPTION,
 			name: SKILL_LIST_TOOL,
 			parameters: {
-				type: JsonSchemaType.OBJECT,
 				properties: {},
-				required: []
+				required: [],
+				type: JsonSchemaType.OBJECT
 			}
-		}
+		},
+		type: ToolCallType.FUNCTION
 	};
 }
 
@@ -84,19 +84,19 @@ export function freezeSkillToolDefinition(def: OpenAIToolDefinition): OpenAITool
  */
 export const SKILL_TOOL_SETTINGS: readonly SkillToolSetting[] = Object.freeze([
 	{
-		key: 'skill:read_skill',
-		toolName: SKILL_READ_TOOL,
-		label: 'Read skill',
+		definition: freezeSkillToolDefinition(buildSkillReadToolDefinition()),
 		description: SKILL_READ_TOOL_DESCRIPTION,
 		icon: BookOpen,
-		definition: freezeSkillToolDefinition(buildSkillReadToolDefinition())
+		key: 'skill:read_skill',
+		label: 'Read skill',
+		toolName: SKILL_READ_TOOL
 	},
 	{
-		key: 'skill:list_skill',
-		toolName: SKILL_LIST_TOOL,
-		label: 'List skills',
+		definition: freezeSkillToolDefinition(buildSkillListToolDefinition()),
 		description: SKILL_LIST_TOOL_DESCRIPTION,
 		icon: List,
-		definition: freezeSkillToolDefinition(buildSkillListToolDefinition())
+		key: 'skill:list_skill',
+		label: 'List skills',
+		toolName: SKILL_LIST_TOOL
 	}
 ]);

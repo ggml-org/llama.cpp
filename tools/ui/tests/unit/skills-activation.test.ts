@@ -21,37 +21,37 @@ import type {
 import { describe, expect, it } from 'vitest';
 
 const METADATA: SkillMetadata = {
-	name: 'demo-skill',
 	description: 'A demo skill',
-	license: 'MIT'
+	license: 'MIT',
+	name: 'demo-skill'
 };
 
 function baseResult(overrides: Partial<SkillBaseReadResult> = {}): SkillBaseReadResult {
 	return {
-		kind: 'skill',
-		skill: {
-			id: 'opaque-id-1',
-			name: 'demo-skill',
-			scope: 'project',
-			provider: 'agents',
-			metadata: METADATA
-		},
-		resources: { paths: ['refs/DETAILS.md'], truncated: false },
-		source: '---\nname: demo-skill\ndescription: A demo skill\n---\n# Body',
 		body_markdown: '# Body',
 		content_xml: '<skill_content name="demo-skill">body &amp; more</skill_content>',
 		diagnostics: [],
+		kind: 'skill',
+		resources: { paths: ['refs/DETAILS.md'], truncated: false },
+		skill: {
+			id: 'opaque-id-1',
+			metadata: METADATA,
+			name: 'demo-skill',
+			provider: 'agents',
+			scope: 'project'
+		},
+		source: '---\nname: demo-skill\ndescription: A demo skill\n---\n# Body',
 		...overrides
 	};
 }
 
 function resourceResult(overrides: Partial<SkillResourceReadResult> = {}): SkillResourceReadResult {
 	return {
-		kind: 'resource',
-		skill: { id: 'opaque-id-1', name: 'demo-skill', scope: 'project', provider: 'agents' },
-		resource: { path: 'refs/DETAILS.md' },
 		content_xml: '<skill_resource>data</skill_resource>',
 		diagnostics: [],
+		kind: 'resource',
+		resource: { path: 'refs/DETAILS.md' },
+		skill: { id: 'opaque-id-1', name: 'demo-skill', provider: 'agents', scope: 'project' },
 		...overrides
 	};
 }
@@ -98,7 +98,9 @@ describe('skillActivationExtra', () => {
 	});
 
 	it('omits the metadata field when the server returned none', () => {
-		const extra = skillActivationExtra(baseResult({ skill: { id: 'x', name: 'n', scope: 'global', provider: 'p' } }));
+		const extra = skillActivationExtra(
+			baseResult({ skill: { id: 'x', name: 'n', provider: 'p', scope: 'global' } })
+		);
 
 		expect(extra.metadata).toBeUndefined();
 	});
@@ -129,7 +131,7 @@ describe('isSkillExtra', () => {
 		expect(isSkillExtra(undefined)).toBe(false);
 		expect(isSkillExtra('nope')).toBe(false);
 		expect(isSkillExtra(42)).toBe(false);
-		expect(isSkillExtra({ type: AttachmentType.TEXT, name: 'x' })).toBe(false);
+		expect(isSkillExtra({ name: 'x', type: AttachmentType.TEXT })).toBe(false);
 	});
 
 	it('rejects malformed SKILL-shaped records (missing or invalid required fields)', () => {
@@ -152,7 +154,7 @@ describe('skillExtraFromExtras / skillExtraFromMessage', () => {
 
 		expect(
 			skillExtraFromExtras([
-				{ type: AttachmentType.TEXT, name: 't', content: 'c' },
+				{ content: 'c', name: 't', type: AttachmentType.TEXT },
 				{ ...valid, skillId: undefined } as unknown as DatabaseMessageExtra,
 				valid
 			])
@@ -163,7 +165,9 @@ describe('skillExtraFromExtras / skillExtraFromMessage', () => {
 		expect(skillExtraFromExtras(undefined)).toBeUndefined();
 		expect(skillExtraFromExtras([])).toBeUndefined();
 		expect(
-			skillExtraFromExtras([{ type: AttachmentType.IMAGE, name: 'i', base64Url: 'data:image/png;base64,AA==' }])
+			skillExtraFromExtras([
+				{ base64Url: 'data:image/png;base64,AA==', name: 'i', type: AttachmentType.IMAGE }
+			])
 		).toBeUndefined();
 	});
 
@@ -197,21 +201,29 @@ describe('findBaseSkillActivation', () => {
 	it('ignores resource records and malformed extras for reconstruction', () => {
 		const messages = [
 			toolMessage(skillResourceExtra(resourceResult())),
-			toolMessage({ ...skillActivationExtra(baseResult()), skillId: undefined } as unknown as DatabaseMessageExtraSkill)
+			toolMessage({
+				...skillActivationExtra(baseResult()),
+				skillId: undefined
+			} as unknown as DatabaseMessageExtraSkill)
 		];
 
 		expect(findBaseSkillActivation(messages, 'opaque-id-1')).toBeUndefined();
 	});
 
 	it('returns undefined when the opaque id was never activated', () => {
-		expect(findBaseSkillActivation([toolMessage(skillActivationExtra(baseResult()))], 'other-id')).toBeUndefined();
+		expect(
+			findBaseSkillActivation([toolMessage(skillActivationExtra(baseResult()))], 'other-id')
+		).toBeUndefined();
 		expect(findBaseSkillActivation([], 'opaque-id-1')).toBeUndefined();
 	});
 });
 
 describe('buildSkillActivationPair', () => {
 	it('builds a valid synthetic assistant tool-call message paired with its tool result', () => {
-		const pair = buildSkillActivationPair(baseResult(), { conversationId: 'conv-1', cwd: undefined });
+		const pair = buildSkillActivationPair(baseResult(), {
+			conversationId: 'conv-1',
+			cwd: undefined
+		});
 
 		expect(pair.assistant.role).toBe(MessageRole.ASSISTANT);
 		expect(pair.assistant.convId).toBe('conv-1');
@@ -219,7 +231,9 @@ describe('buildSkillActivationPair', () => {
 		expect(pair.assistant.type).toBe(MessageType.TEXT);
 		expect(pair.toolResult.role).toBe(MessageRole.TOOL);
 		expect(pair.toolResult.convId).toBe('conv-1');
-		expect(pair.toolResult.content).toBe('<skill_content name="demo-skill">body &amp; more</skill_content>');
+		expect(pair.toolResult.content).toBe(
+			'<skill_content name="demo-skill">body &amp; more</skill_content>'
+		);
 
 		const calls = JSON.parse(pair.assistant.toolCalls ?? '') as Array<{
 			id: string;
@@ -238,15 +252,20 @@ describe('buildSkillActivationPair', () => {
 		const [extra] = pair.toolResult.extra ?? [];
 
 		expect(isSkillExtra(extra)).toBe(true);
+
 		if (isSkillExtra(extra)) {
 			expect(extra.kind).toBe('base');
 			expect(extra.skillId).toBe('opaque-id-1');
 		}
+
 		expect(JSON.stringify(pair)).not.toContain('content_xml');
 	});
 
 	it('never carries host paths or roots in either message', () => {
-		const pair = buildSkillActivationPair(baseResult(), { conversationId: 'conv-1', cwd: '/home/user' });
+		const pair = buildSkillActivationPair(baseResult(), {
+			conversationId: 'conv-1',
+			cwd: '/home/user'
+		});
 
 		expect(pair.toolResult.toolCwd).toBeUndefined();
 		expect(JSON.stringify(pair)).not.toContain('/home/user');
@@ -264,8 +283,8 @@ describe('resolveSkillSectionMeta / isSkillToolSection', () => {
 		expect(resolveSkillSectionMeta(section)).toEqual({
 			kind: 'base',
 			name: 'demo-skill',
-			scope: 'project',
-			provider: 'agents'
+			provider: 'agents',
+			scope: 'project'
 		});
 		expect(isSkillToolSection(section)).toBe(true);
 	});
@@ -279,16 +298,28 @@ describe('resolveSkillSectionMeta / isSkillToolSection', () => {
 		expect(resolveSkillSectionMeta(section)).toEqual({
 			kind: 'resource',
 			name: 'demo-skill',
-			scope: 'project',
+			path: 'refs/DETAILS.md',
 			provider: 'agents',
-			path: 'refs/DETAILS.md'
+			scope: 'project'
 		});
 	});
 
 	it('falls back to generic rendering for unknown tools, missing, or malformed metadata', () => {
-		expect(resolveSkillSectionMeta({ toolName: 'other_tool', toolResultExtras: [skillActivationExtra(baseResult())] })).toBeUndefined();
-		expect(resolveSkillSectionMeta({ toolName: SKILL_READ_TOOL, toolResultExtras: [] })).toBeUndefined();
-		expect(resolveSkillSectionMeta({ toolName: SKILL_READ_TOOL, toolResultExtras: [{ type: AttachmentType.TEXT, name: 'x', content: 'x' }] })).toBeUndefined();
+		expect(
+			resolveSkillSectionMeta({
+				toolName: 'other_tool',
+				toolResultExtras: [skillActivationExtra(baseResult())]
+			})
+		).toBeUndefined();
+		expect(
+			resolveSkillSectionMeta({ toolName: SKILL_READ_TOOL, toolResultExtras: [] })
+		).toBeUndefined();
+		expect(
+			resolveSkillSectionMeta({
+				toolName: SKILL_READ_TOOL,
+				toolResultExtras: [{ content: 'x', name: 'x', type: AttachmentType.TEXT }]
+			})
+		).toBeUndefined();
 		expect(resolveSkillSectionMeta({ toolName: SKILL_READ_TOOL })).toBeUndefined();
 		expect(isSkillToolSection({ toolName: SKILL_READ_TOOL })).toBe(false);
 	});

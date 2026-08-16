@@ -28,7 +28,8 @@
 		{#if skill}
 			<span class="mt-1 block text-sm text-muted-foreground">
 				Skill: <span class="font-semibold text-foreground">{skill.name}</span>
-				({skill.scope} · {skill.provider}){#if skill.path} — resource: {skill.path}{/if}
+				({skill.scope} · {skill.provider}){#if skill.path}
+					— resource: {skill.path}{/if}
 			</span>
 		{/if}
 	{/snippet}

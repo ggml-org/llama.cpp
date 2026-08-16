@@ -29,11 +29,11 @@ import {
 	ToolCallType
 } from '$lib/enums';
 import {
-	ChatService,
-	SkillRunAdapters,
-	SkillsPackingService,
 	buildSkillToolDefinitions,
-	resolveSkillPackOptions
+	ChatService,
+	resolveSkillPackOptions,
+	SkillRunAdapters,
+	SkillsPackingService
 } from '$lib/services';
 import { ReadMediaService } from '$lib/services/read-media.service';
 import { SandboxService } from '$lib/services/sandbox.service';
@@ -345,8 +345,10 @@ class AgenticStore {
 
 		try {
 			const effectiveModel = options.model || modelsStore.models[0]?.model || '';
-			const packOptions = resolveSkillPackOptions(effectiveModel, serverStore.isRouterMode, (model) =>
-				modelsStore.isModelLoaded(model)
+			const packOptions = resolveSkillPackOptions(
+				effectiveModel,
+				serverStore.isRouterMode,
+				(model) => modelsStore.isModelLoaded(model)
 			);
 			const packed = await SkillsPackingService.pack(snapshot, { budget, ...packOptions, signal });
 
@@ -372,19 +374,16 @@ class AgenticStore {
 			if (built.definitions.length === 0) return null;
 
 			return new SkillRunAdapters({
-				snapshot,
-				packed,
-				definitions: built.definitions,
-				conversationId,
 				activation: skillActivationStore,
+				conversationId,
+				definitions: built.definitions,
+				packed,
 				requestPermission: (toolName, serverLabel, skill, sig) =>
-					this.requestPermission(conversationId, toolName, serverLabel, skill, sig)
+					this.requestPermission(conversationId, toolName, serverLabel, skill, sig),
+				snapshot
 			});
 		} catch (error) {
-			console.info(
-				'[AgenticStore] Skills packing failed; running without Skills adapters:',
-				error
-			);
+			console.info('[AgenticStore] Skills packing failed; running without Skills adapters:', error);
 
 			return null;
 		}
@@ -424,7 +423,6 @@ class AgenticStore {
 		// empty catalog registers no adapters and leaves existing chat/tools
 		// unchanged.
 		const skillAdapters = await this.prepareSkillRun(conversationId, options, signal);
-
 		const agenticConfig = this.getConfig(settingsStore.config, perChatOverrides);
 
 		if (!agenticConfig.enabled) return { handled: false };
@@ -872,19 +870,12 @@ class AgenticStore {
 				const toolName = toolCall.function.name;
 				const isSkillTool = serviceAdapters?.isSkillTool(toolName) ?? false;
 				const serverLabel = toolsStore.getToolServerLabel(toolName);
-
 				// Skills tools skip the registry-wide permission gate: their
 				// consent is per resolved identity and runs inside the adapter
 				// after the server resolves the read.
 				const permission = isSkillTool
 					? ToolPermissionDecision.ONCE
-					: await this.requestPermission(
-							conversationId,
-							toolName,
-							serverLabel,
-							undefined,
-							signal
-						);
+					: await this.requestPermission(conversationId, toolName, serverLabel, undefined, signal);
 
 				// Yield to allow Svelte to flush the UI update (hide permission dialog)
 				await new Promise((r) => setTimeout(r, 0));

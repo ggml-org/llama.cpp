@@ -1,5 +1,6 @@
 import { SKILL_LIST_TOOL, SKILL_READ_TOOL } from '$lib/constants';
-import { buildSkillRunSnapshot } from '$lib/services/skills-packing.service';
+import { MessageRole } from '$lib/enums';
+import type { SkillAdaptersBuildResult } from '$lib/services/skills-adapters.service';
 import {
 	buildSkillToolDefinitions,
 	decorateSkillPrompt,
@@ -7,29 +8,29 @@ import {
 	skillDenialResult,
 	skillErrorResult
 } from '$lib/services/skills-adapters.service';
-import type { SkillAdaptersBuildResult } from '$lib/services/skills-adapters.service';
+import { buildSkillRunSnapshot } from '$lib/services/skills-packing.service';
 import type { SkillCatalogEntry, SkillCatalogResponse, SkillPackedCatalog } from '$lib/types';
-import { MessageRole } from '$lib/enums';
 import { describe, expect, it } from 'vitest';
 
 function makeEntry(name: string): SkillCatalogEntry {
 	return {
-		id: `opaque-${name}`,
-		name,
+		catalog_xml: `<skill><name>${name}</name></skill>`,
 		description: `description of ${name}`,
-		scope: 'project',
+		id: `opaque-${name}`,
+		instruction: { bytes: 16, lines: 1, modified_at: null, tokens: 4, tokens_estimated: true },
+		name,
 		provider: 'agents',
-		instruction: { bytes: 16, lines: 1, tokens: 4, tokens_estimated: true, modified_at: null },
 		resources: { count: 0, truncated: false },
-		catalog_xml: `<skill><name>${name}</name></skill>`
+		scope: 'project'
 	};
 }
 
 function makeCatalog(...names: string[]): SkillCatalogResponse {
 	return {
-		skills: names.map(makeEntry),
-		catalog_instruction_xml: '<available_skills>Call read_skill(name) when matching.</available_skills>',
-		diagnostics: []
+		catalog_instruction_xml:
+			'<available_skills>Call read_skill(name) when matching.</available_skills>',
+		diagnostics: [],
+		skills: names.map(makeEntry)
 	};
 }
 
@@ -37,9 +38,9 @@ function packed(overrides: Partial<SkillPackedCatalog>): SkillPackedCatalog {
 	return {
 		envelope:
 			'<skills_catalog total="1" included="1"><available_skills>instr</available_skills><skill><name>alpha</name></skill></skills_catalog>',
-		total: 1,
-		included: 1,
 		estimated: true,
+		included: 1,
+		total: 1,
 		...overrides,
 		// fullTokens is required; resolve it explicitly after the spread so a
 		// Partial spread cannot introduce `undefined` into the result type.
@@ -50,7 +51,6 @@ function packed(overrides: Partial<SkillPackedCatalog>): SkillPackedCatalog {
 describe('buildSkillToolDefinitions', () => {
 	it('registers no adapters and no diagnostics for a zero-budget or empty envelope', () => {
 		const snapshot = buildSkillRunSnapshot('/cwd', makeCatalog('alpha'));
-
 		const result = buildSkillToolDefinitions(snapshot, packed({ envelope: '' }), new Set());
 
 		expect(result).toEqual({ definitions: [], diagnostics: [] });
@@ -63,7 +63,6 @@ describe('buildSkillToolDefinitions', () => {
 			included: 2,
 			total: 2
 		});
-
 		const { definitions, diagnostics } = buildSkillToolDefinitions(snapshot, complete, new Set());
 
 		expect(diagnostics).toEqual([]);
@@ -77,7 +76,6 @@ describe('buildSkillToolDefinitions', () => {
 			included: 1,
 			total: 2
 		});
-
 		const { definitions } = buildSkillToolDefinitions(snapshot, partial, new Set());
 
 		expect(definitions.map((d) => d.function.name)).toEqual([SKILL_READ_TOOL, SKILL_LIST_TOOL]);
@@ -85,31 +83,28 @@ describe('buildSkillToolDefinitions', () => {
 
 	it('constrains read_skill name to frozen snapshot names via a dynamic enum and keeps path optional', () => {
 		const snapshot = buildSkillRunSnapshot('/cwd', makeCatalog('alpha', 'beta'));
-
 		const { definitions } = buildSkillToolDefinitions(snapshot, packed({ total: 2 }), new Set());
-
 		const readSkill = definitions.find((d) => d.function.name === SKILL_READ_TOOL)!;
 
 		expect(readSkill.function.parameters).toMatchObject({
-			type: 'object',
-			required: ['name'],
 			properties: {
-				name: { type: 'string', enum: ['alpha', 'beta'] },
+				name: { enum: ['alpha', 'beta'], type: 'string' },
 				path: { type: 'string' }
-			}
+			},
+			required: ['name'],
+			type: 'object'
 		});
 	});
 
 	it('derives the enum from the snapshot entries, never from the caller', () => {
 		const snapshot = buildSkillRunSnapshot('/cwd', makeCatalog('alpha'));
-
 		const first = buildSkillToolDefinitions(snapshot, packed({ total: 1 }), new Set());
 		const second = buildSkillToolDefinitions(snapshot, packed({ total: 1 }), new Set());
-
 		const nameParam = (defs: SkillAdaptersBuildResult['definitions']) =>
 			(
-				defs.find((d) => d.function.name === SKILL_READ_TOOL)!.function.parameters
-					.properties as { name: { enum: string[] } }
+				defs.find((d) => d.function.name === SKILL_READ_TOOL)!.function.parameters.properties as {
+					name: { enum: string[] };
+				}
 			).name;
 
 		expect(nameParam(first.definitions)).toEqual({ enum: ['alpha'], type: 'string' });
@@ -118,7 +113,6 @@ describe('buildSkillToolDefinitions', () => {
 
 	it('omits colliding adapters in favor of existing non-Skills tools with a safe diagnostic', () => {
 		const snapshot = buildSkillRunSnapshot('/cwd', makeCatalog('alpha'));
-
 		const { definitions, diagnostics } = buildSkillToolDefinitions(
 			snapshot,
 			packed({}),
@@ -137,9 +131,15 @@ describe('buildSkillToolDefinitions', () => {
 
 	it('keeps the non-colliding adapter when only one name collides', () => {
 		const snapshot = buildSkillRunSnapshot('/cwd', makeCatalog('alpha'));
-		const partial = packed({ envelope: '<skills_catalog total="1" included="0">i</skills_catalog>', included: 0 });
-
-		const { definitions, diagnostics } = buildSkillToolDefinitions(snapshot, partial, new Set([SKILL_LIST_TOOL]));
+		const partial = packed({
+			envelope: '<skills_catalog total="1" included="0">i</skills_catalog>',
+			included: 0
+		});
+		const { definitions, diagnostics } = buildSkillToolDefinitions(
+			snapshot,
+			partial,
+			new Set([SKILL_LIST_TOOL])
+		);
 
 		expect(definitions.map((d) => d.function.name)).toEqual([SKILL_READ_TOOL]);
 		expect(diagnostics).toHaveLength(1);
@@ -148,7 +148,6 @@ describe('buildSkillToolDefinitions', () => {
 
 	it('returns immutable definitions', () => {
 		const snapshot = buildSkillRunSnapshot('/cwd', makeCatalog('alpha'));
-
 		const { definitions } = buildSkillToolDefinitions(snapshot, packed({}), new Set());
 
 		for (const def of definitions) {
@@ -165,7 +164,6 @@ describe('buildSkillToolDefinitions', () => {
 			included: 1,
 			total: 2
 		});
-
 		const { definitions, diagnostics } = buildSkillToolDefinitions(
 			snapshot,
 			partial,
@@ -180,7 +178,7 @@ describe('buildSkillToolDefinitions', () => {
 		const readSkill = definitions.find((d) => d.function.name === SKILL_READ_TOOL)!;
 
 		expect(readSkill.function.parameters).toMatchObject({
-			properties: { name: { type: 'string', enum: ['alpha', 'beta'] } }
+			properties: { name: { enum: ['alpha', 'beta'], type: 'string' } }
 		});
 	});
 
@@ -191,7 +189,6 @@ describe('buildSkillToolDefinitions', () => {
 			included: 1,
 			total: 2
 		});
-
 		const { definitions, diagnostics } = buildSkillToolDefinitions(
 			snapshot,
 			partial,
@@ -210,7 +207,6 @@ describe('buildSkillToolDefinitions', () => {
 			included: 1,
 			total: 2
 		});
-
 		const { definitions, diagnostics } = buildSkillToolDefinitions(
 			snapshot,
 			partial,
@@ -229,7 +225,6 @@ describe('buildSkillToolDefinitions', () => {
 			included: 1,
 			total: 2
 		});
-
 		const { definitions, diagnostics } = buildSkillToolDefinitions(
 			snapshot,
 			partial,
@@ -248,7 +243,6 @@ describe('buildSkillToolDefinitions', () => {
 			included: 2,
 			total: 2
 		});
-
 		const { definitions, diagnostics } = buildSkillToolDefinitions(
 			snapshot,
 			complete,
@@ -262,7 +256,6 @@ describe('buildSkillToolDefinitions', () => {
 
 	it('keeps a zero-budget envelope empty even when both names are enabled', () => {
 		const snapshot = buildSkillRunSnapshot('/cwd', makeCatalog('alpha'));
-
 		const { definitions, diagnostics } = buildSkillToolDefinitions(
 			snapshot,
 			packed({ envelope: '' }),
@@ -280,7 +273,6 @@ describe('buildSkillToolDefinitions', () => {
 			envelope: '<skills_catalog total="1" included="0">i</skills_catalog>',
 			included: 0
 		});
-
 		const { definitions, diagnostics } = buildSkillToolDefinitions(
 			snapshot,
 			partial,
@@ -304,7 +296,6 @@ describe('buildSkillToolDefinitions', () => {
 			envelope: '<skills_catalog total="1" included="0">i</skills_catalog>',
 			included: 0
 		});
-
 		const { definitions, diagnostics } = buildSkillToolDefinitions(
 			snapshot,
 			partial,
@@ -326,7 +317,6 @@ describe('decorateSkillPrompt', () => {
 			{ content: 'You are a helpful assistant.', role: MessageRole.SYSTEM },
 			{ content: 'hi', role: MessageRole.USER }
 		];
-
 		const decorated = decorateSkillPrompt(messages, envelope);
 
 		expect(decorated).toHaveLength(2);
@@ -337,7 +327,6 @@ describe('decorateSkillPrompt', () => {
 
 	it('prepends a system message when the run has no system message', () => {
 		const messages = [{ content: 'hi', role: MessageRole.USER }];
-
 		const decorated = decorateSkillPrompt(messages, envelope);
 
 		expect(decorated).toHaveLength(2);
@@ -367,7 +356,6 @@ describe('decorateSkillPrompt', () => {
 		const tricky =
 			'<skills_catalog total="1" included="1"><skill_content name="a&amp;b">&lt;script&gt;alert(1)&lt;/script&gt;</skill_content></skills_catalog>';
 		const messages = [{ content: 'You are a helpful assistant.', role: MessageRole.SYSTEM }];
-
 		const decorated = decorateSkillPrompt(messages, tricky);
 
 		expect(decorated[0].content).toContain(tricky);
@@ -377,20 +365,22 @@ describe('decorateSkillPrompt', () => {
 
 describe('listSkillContent', () => {
 	it('returns structured snapshot entries only, never XML', () => {
-		const content = listSkillContent(buildSkillRunSnapshot('/cwd', makeCatalog('alpha', 'beta')).entries);
+		const content = listSkillContent(
+			buildSkillRunSnapshot('/cwd', makeCatalog('alpha', 'beta')).entries
+		);
 
 		expect(JSON.parse(content)).toEqual([
 			{
-				name: 'alpha',
 				description: 'description of alpha',
-				scope: 'project',
-				provider: 'agents'
+				name: 'alpha',
+				provider: 'agents',
+				scope: 'project'
 			},
 			{
-				name: 'beta',
 				description: 'description of beta',
-				scope: 'project',
-				provider: 'agents'
+				name: 'beta',
+				provider: 'agents',
+				scope: 'project'
 			}
 		]);
 		expect(content).not.toContain('<skill>');

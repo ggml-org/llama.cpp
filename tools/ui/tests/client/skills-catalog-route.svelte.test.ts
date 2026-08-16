@@ -7,21 +7,21 @@
 
 import SkillsPage from '../../src/routes/skills/+page.svelte';
 import SkillsPageWrapper from './components/SkillsPageWrapper.svelte';
-import { page } from 'vitest/browser';
 import {
 	CONFIG_LOCALSTORAGE_KEY,
 	SETTINGS_KEYS,
 	SKILLS_PANE_SIZES_LOCALSTORAGE_KEY
 } from '$lib/constants';
 import { serializeSkillCatalogEnvelope } from '$lib/services/skills-packing.service';
+import { isMobile } from '$lib/stores';
 import { conversationsStore } from '$lib/stores/conversations.svelte';
 import { modelsStore } from '$lib/stores/models.svelte';
-import { skillsStore } from '$lib/stores/skills.svelte';
 import { settingsStore } from '$lib/stores/settings.svelte';
-import { isMobile } from '$lib/stores';
+import { skillsStore } from '$lib/stores/skills.svelte';
 import type { SkillCatalogEntry, SkillCatalogResponse, SkillReadResult } from '$lib/types';
 import { tick } from 'svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { page } from 'vitest/browser';
 import { render } from 'vitest-browser-svelte';
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -33,16 +33,16 @@ function jsonResponse(body: unknown, status = 200): Response {
 
 function makeEntry(name: string, overrides: Partial<SkillCatalogEntry> = {}): SkillCatalogEntry {
 	return {
-		id: `opaque-${name}`,
-		name,
-		description: `description of ${name}`,
-		scope: 'project',
-		provider: 'agents',
-		instruction: { bytes: 16, lines: 1, tokens: 4, tokens_estimated: true, modified_at: null },
-		resources: { count: 0, truncated: false },
 		// Server-owned opaque XML; the UI must never render it (it may hold
 		// host paths the catalog presentation is forbidden from showing).
 		catalog_xml: `<skill><name>${name}</name></skill>`,
+		description: `description of ${name}`,
+		id: `opaque-${name}`,
+		instruction: { bytes: 16, lines: 1, modified_at: null, tokens: 4, tokens_estimated: true },
+		name,
+		provider: 'agents',
+		resources: { count: 0, truncated: false },
+		scope: 'project',
 		...overrides
 	};
 }
@@ -55,9 +55,10 @@ const SHORT_DESCRIPTION = 'A short skill description.';
 
 function makeCatalog(...entries: SkillCatalogEntry[]): SkillCatalogResponse {
 	return {
-		skills: entries,
-		catalog_instruction_xml: '<available_skills>Call read_skill(name) when matching.</available_skills>',
-		diagnostics: []
+		catalog_instruction_xml:
+			'<available_skills>Call read_skill(name) when matching.</available_skills>',
+		diagnostics: [],
+		skills: entries
 	};
 }
 
@@ -85,7 +86,7 @@ function makePaddedCatalog(
 	instructionXml: string,
 	targetBytes: number
 ): SkillCatalogResponse {
-	const base = { skills: entries, catalog_instruction_xml: instructionXml, diagnostics: [] };
+	const base = { catalog_instruction_xml: instructionXml, diagnostics: [], skills: entries };
 	const pad = targetBytes - serializeSkillCatalogEnvelope(base).length;
 
 	if (pad < 0) {
@@ -244,20 +245,20 @@ describe('/skills route presentation', () => {
 			...makeCatalog(makeEntry('demo-skill')),
 			diagnostics: [
 				{
-					severity: 'warning',
 					code: 'overlapping-skill',
+					message: 'first diagnostic message',
 					name: 'Alpha Skill',
-					scope: 'global',
 					provider: 'agents',
-					message: 'first diagnostic message'
+					scope: 'global',
+					severity: 'warning'
 				},
 				{
-					severity: 'error',
 					code: 'overlapping-skill',
+					message: 'second diagnostic message',
 					name: 'Beta Skill',
-					scope: 'project',
 					provider: 'local',
-					message: 'second diagnostic message'
+					scope: 'project',
+					severity: 'error'
 				}
 			]
 		};
@@ -334,7 +335,10 @@ describe('/skills route presentation', () => {
 	it('renders complete budget copy from the measured full token count and drops the old Budget line', async () => {
 		modelsStore.selectedModelName = 'test-model';
 		const catalog = makePaddedCatalog(
-			[makeEntry('demo-skill', { catalog_xml: '<s/>' }), makeEntry('second-skill', { catalog_xml: '<s/>' })],
+			[
+				makeEntry('demo-skill', { catalog_xml: '<s/>' }),
+				makeEntry('second-skill', { catalog_xml: '<s/>' })
+			],
 			'<inst/>',
 			120
 		);
@@ -399,13 +403,17 @@ describe('/skills route presentation', () => {
 
 	it('aborts a stale pack when the budget changes while tokenization is pending', async () => {
 		modelsStore.selectedModelName = 'test-model';
-		const catalog = makePaddedCatalog([makeEntry('demo-skill', { catalog_xml: '<s/>' })], '<inst/>', 80);
+		const catalog = makePaddedCatalog(
+			[makeEntry('demo-skill', { catalog_xml: '<s/>' })],
+			'<inst/>',
+			80
+		);
 		const tokenizeResolvers: Array<(response: Response) => void> = [];
 
 		vi.mocked(fetch).mockImplementation(async (url, init) => {
 			if (String(url).includes('/tokenize')) {
 				const signal = (init as RequestInit).signal;
-				const { promise, resolve, reject } = Promise.withResolvers<Response>();
+				const { promise, reject, resolve } = Promise.withResolvers<Response>();
 
 				tokenizeResolvers.push(resolve);
 				// Like a real fetch, reject the in-flight request when its
@@ -462,19 +470,19 @@ describe('/skills catalog preview', () => {
 	/** Base read result whose rendered body and raw source carry the entry name. */
 	function previewResult(name: string): SkillReadResult {
 		return {
-			kind: 'skill',
-			skill: {
-				id: `opaque-${name}`,
-				name,
-				scope: 'project',
-				provider: 'agents',
-				metadata: { description: `Structured description of ${name}` }
-			},
-			resources: { paths: [], truncated: false },
-			source: `---\nname: ${name}\ndescription: raw frontmatter\n---\n# Content of ${name}\n\nBody text.\n`,
 			body_markdown: `# Content of ${name}\n\nBody text.\n`,
 			content_xml: `<skill_content name="${name}">body</skill_content>`,
-			diagnostics: []
+			diagnostics: [],
+			kind: 'skill',
+			resources: { paths: [], truncated: false },
+			skill: {
+				id: `opaque-${name}`,
+				metadata: { description: `Structured description of ${name}` },
+				name,
+				provider: 'agents',
+				scope: 'project'
+			},
+			source: `---\nname: ${name}\ndescription: raw frontmatter\n---\n# Content of ${name}\n\nBody text.\n`
 		};
 	}
 
@@ -499,9 +507,10 @@ describe('/skills catalog preview', () => {
 
 				observe(node: Element) {
 					const overflowing = (node.textContent?.length ?? 0) > 100;
+
 					Object.defineProperties(node, {
-						scrollHeight: { configurable: true, value: overflowing ? 200 : 20 },
-						clientHeight: { configurable: true, value: overflowing ? 50 : 20 }
+						clientHeight: { configurable: true, value: overflowing ? 50 : 20 },
+						scrollHeight: { configurable: true, value: overflowing ? 200 : 20 }
 					});
 					this.callback([], this as unknown as ResizeObserver);
 				}
@@ -517,12 +526,9 @@ describe('/skills catalog preview', () => {
 	 */
 	function deferredRead() {
 		const state: { signal?: AbortSignal } = {};
-		const { promise, resolve, reject } = Promise.withResolvers<Response>();
+		const { promise, reject, resolve } = Promise.withResolvers<Response>();
 
 		return {
-			promise,
-			resolve,
-			reject,
 			attach(init?: RequestInit) {
 				state.signal = init?.signal ?? undefined;
 				init?.signal?.addEventListener(
@@ -531,6 +537,9 @@ describe('/skills catalog preview', () => {
 					{ once: true }
 				);
 			},
+			promise,
+			reject,
+			resolve,
 			get signal() {
 				return state.signal;
 			}
@@ -583,6 +592,7 @@ describe('/skills catalog preview', () => {
 
 		localStorage.setItem(SKILLS_PANE_SIZES_LOCALSTORAGE_KEY, JSON.stringify([40, 40]));
 		const first = await render(SkillsPageWrapper);
+
 		await vi.waitFor(() => expect(bodyText()).toContain('demo-skill'));
 		await first.getByRole('button', { name: /demo-skill/ }).click();
 		await vi.waitFor(() => expect(panes()).toHaveLength(2));
@@ -591,6 +601,7 @@ describe('/skills catalog preview', () => {
 
 		localStorage.setItem(SKILLS_PANE_SIZES_LOCALSTORAGE_KEY, JSON.stringify([10, 90]));
 		const second = await render(SkillsPageWrapper);
+
 		await vi.waitFor(() => expect(bodyText()).toContain('demo-skill'));
 		await second.getByRole('button', { name: /demo-skill/ }).click();
 		await vi.waitFor(() => expect(panes()).toHaveLength(2));
@@ -599,6 +610,7 @@ describe('/skills catalog preview', () => {
 
 		localStorage.setItem(SKILLS_PANE_SIZES_LOCALSTORAGE_KEY, JSON.stringify({ left: 40 }));
 		const third = await render(SkillsPageWrapper);
+
 		await vi.waitFor(() => expect(bodyText()).toContain('demo-skill'));
 		await third.getByRole('button', { name: /demo-skill/ }).click();
 		await vi.waitFor(() => expect(panes()).toHaveLength(2));
@@ -616,13 +628,15 @@ describe('/skills catalog preview', () => {
 		await vi.waitFor(() => expect(panes()).toHaveLength(2));
 
 		const handle = document.querySelector<HTMLElement>('[data-pane-resizer]')!;
+
 		handle.focus();
-		handle.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }));
+		handle.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'ArrowLeft' }));
 
 		await vi.waitFor(() => {
 			const stored = JSON.parse(
 				localStorage.getItem(SKILLS_PANE_SIZES_LOCALSTORAGE_KEY) ?? 'null'
 			) as unknown;
+
 			expect(Array.isArray(stored)).toBe(true);
 			expect(stored).toHaveLength(2);
 			expect((stored as number[]).reduce((total, value) => total + value, 0)).toBeCloseTo(100);
@@ -640,7 +654,7 @@ describe('/skills catalog preview', () => {
 		const element = card.element();
 
 		element.focus();
-		element.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+		element.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Enter' }));
 
 		await vi.waitFor(() => expect(bodyText()).toContain('Content of demo-skill'));
 		expect(screen.getByRole('button', { name: 'Back' }).query()).not.toBeNull();
@@ -657,7 +671,7 @@ describe('/skills catalog preview', () => {
 		const element = card.element();
 
 		element.focus();
-		element.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true }));
+		element.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: ' ' }));
 
 		await vi.waitFor(() => expect(bodyText()).toContain('Content of demo-skill'));
 		expect(screen.getByRole('button', { name: 'Back' }).query()).not.toBeNull();
@@ -686,6 +700,7 @@ describe('/skills catalog preview', () => {
 		const longEntry = makeEntry('long-skill', { description: LONG_DESCRIPTION });
 		const shortEntry = makeEntry('short-skill', { description: SHORT_DESCRIPTION });
 		const emptyEntry = makeEntry('empty-skill', { description: '' });
+
 		mockCatalogWithReads(makeCatalog(longEntry, shortEntry, emptyEntry));
 
 		const screen = await render(SkillsPageWrapper);
@@ -715,6 +730,7 @@ describe('/skills catalog preview', () => {
 		const entry = makeEntry('multiline-skill', {
 			description: 'This is line one.\n  This is line two.\n\nThis is the final line.'
 		});
+
 		mockCatalogWithReads(makeCatalog(entry));
 
 		const screen = await render(SkillsPageWrapper);
@@ -729,6 +745,7 @@ describe('/skills catalog preview', () => {
 	it('does not select a card when its description disclosure is clicked', async () => {
 		stubDescriptionMeasurement();
 		const longEntry = makeEntry('long-skill', { description: LONG_DESCRIPTION });
+
 		mockCatalogWithReads(makeCatalog(longEntry));
 
 		const screen = await render(SkillsPageWrapper);
@@ -771,7 +788,7 @@ describe('/skills catalog preview', () => {
 		expect(handle).not.toBeNull();
 		handle!.focus();
 		for (let i = 0; i < 6; i++) {
-			handle!.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }));
+			handle!.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'ArrowLeft' }));
 		}
 
 		await vi.waitFor(() => expect(parseFloat(panes()[0].style.flexGrow)).toBeCloseTo(35, 0));
@@ -779,7 +796,7 @@ describe('/skills catalog preview', () => {
 
 		// Now the other way: the detail pane clamps at its 30 minimum.
 		for (let i = 0; i < 10; i++) {
-			handle!.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+			handle!.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'ArrowRight' }));
 		}
 
 		await vi.waitFor(() => expect(parseFloat(panes()[1].style.flexGrow)).toBeCloseTo(30, 0));
@@ -800,11 +817,13 @@ describe('/skills catalog preview', () => {
 
 		for (const pane of panes()) {
 			expect(
-				pane.getAnimations({ subtree: true }).some((animation) =>
-					(animation.effect as KeyframeEffect | null)
-						?.getKeyframes()
-						.some((keyframe) => String(keyframe.transform).includes('translate'))
-				)
+				pane
+					.getAnimations({ subtree: true })
+					.some((animation) =>
+						(animation.effect as KeyframeEffect | null)
+							?.getKeyframes()
+							.some((keyframe) => String(keyframe.transform).includes('translate'))
+					)
 			).toBe(true);
 		}
 	});
@@ -836,14 +855,14 @@ describe('/skills catalog preview', () => {
 		// detail at 30.
 		handle!.focus();
 		for (let i = 0; i < 6; i++) {
-			handle!.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }));
+			handle!.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'ArrowLeft' }));
 		}
 
 		await vi.waitFor(() => expect(parseFloat(panes()[0].style.flexGrow)).toBeCloseTo(35, 0));
 		expect(parseFloat(panes()[1].style.flexGrow)).toBeCloseTo(65, 0);
 
 		for (let i = 0; i < 10; i++) {
-			handle!.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+			handle!.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'ArrowRight' }));
 		}
 
 		await vi.waitFor(() => expect(parseFloat(panes()[1].style.flexGrow)).toBeCloseTo(30, 0));
@@ -892,6 +911,7 @@ describe('/skills catalog preview', () => {
 
 		const readCount = () =>
 			vi.mocked(fetch).mock.calls.filter(([url]) => String(url).includes('/skills/read')).length;
+
 		expect(readCount()).toBe(1);
 
 		await card.click();
@@ -917,7 +937,7 @@ describe('/skills catalog preview', () => {
 		const handle = document.querySelector<HTMLElement>('[data-pane-resizer]')!;
 
 		for (let i = 0; i < 4; i++) {
-			handle.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }));
+			handle.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'ArrowLeft' }));
 		}
 
 		await vi.waitFor(() => expect(parseFloat(panes()[0].style.flexGrow)).toBeCloseTo(35, 0));
@@ -944,7 +964,7 @@ describe('/skills catalog preview', () => {
 		const handle = document.querySelector<HTMLElement>('[data-pane-resizer]')!;
 
 		for (let i = 0; i < 4; i++) {
-			handle.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }));
+			handle.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'ArrowLeft' }));
 		}
 
 		await vi.waitFor(() => expect(parseFloat(panes()[0].style.flexGrow)).toBeCloseTo(35, 0));
@@ -965,6 +985,7 @@ describe('/skills catalog preview', () => {
 	it('does not read or write the pane preference on mobile', async () => {
 		const getItem = vi.spyOn(Storage.prototype, 'getItem');
 		const setItem = vi.spyOn(Storage.prototype, 'setItem');
+
 		mockCatalogWithReads(makeCatalog(makeEntry('demo-skill')));
 
 		const screen = await render(SkillsPageWrapper);
@@ -1011,10 +1032,9 @@ describe('/skills catalog preview', () => {
 
 		vi.mocked(fetch).mockImplementation(async (url, init) => {
 			if (String(url).includes('/skills/read')) {
-				readCwdHeaders.push(
-					new Headers((init as RequestInit).headers).get('x-skill-cwd') ?? ''
-				);
+				readCwdHeaders.push(new Headers((init as RequestInit).headers).get('x-skill-cwd') ?? '');
 				read.attach(init);
+
 				return read.promise;
 			}
 

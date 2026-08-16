@@ -11,28 +11,28 @@ function jsonResponse(body: unknown, status = 200): Response {
 
 function makeCatalog(): SkillCatalogResponse {
 	return {
+		catalog_instruction_xml:
+			'<available_skills>Call read_skill(name) when a task matches a skill description.</available_skills>',
+		diagnostics: [],
 		skills: [
 			{
-				id: 'opaque-resolved-skill-identity',
-				name: 'example-skill',
+				catalog_xml:
+					'<skill><name>example-skill</name><description>Use when processing example inputs.</description></skill>',
 				description: 'Use when processing example inputs.',
-				scope: 'project',
-				provider: 'agents',
+				id: 'opaque-resolved-skill-identity',
 				instruction: {
 					bytes: 4096,
 					lines: 128,
+					modified_at: '2026-08-11T12:34:56Z',
 					tokens: 1024,
-					tokens_estimated: false,
-					modified_at: '2026-08-11T12:34:56Z'
+					tokens_estimated: false
 				},
+				name: 'example-skill',
+				provider: 'agents',
 				resources: { count: 2, truncated: false },
-				catalog_xml:
-					'<skill><name>example-skill</name><description>Use when processing example inputs.</description></skill>'
+				scope: 'project'
 			}
-		],
-		catalog_instruction_xml:
-			'<available_skills>Call read_skill(name) when a task matches a skill description.</available_skills>',
-		diagnostics: []
+		]
 	};
 }
 
@@ -42,20 +42,20 @@ const BASE_SKILL_BODY_MARKDOWN = '# Example\n\nUse **carefully**.\n';
 
 function makeBaseReadResult(): SkillReadResult {
 	return {
-		kind: 'skill',
-		skill: {
-			id: 'opaque-resolved-skill-identity',
-			name: 'example-skill',
-			scope: 'project',
-			provider: 'agents',
-			metadata: { description: 'Use when processing example inputs.' }
-		},
-		resources: { paths: ['references/DETAILS.md'], truncated: false },
-		source: BASE_SKILL_SOURCE,
 		body_markdown: BASE_SKILL_BODY_MARKDOWN,
 		content_xml:
 			'<skill_content name="example-skill"><skill_resources><file>references/DETAILS.md</file></skill_resources></skill_content>',
-		diagnostics: []
+		diagnostics: [],
+		kind: 'skill',
+		resources: { paths: ['references/DETAILS.md'], truncated: false },
+		skill: {
+			id: 'opaque-resolved-skill-identity',
+			metadata: { description: 'Use when processing example inputs.' },
+			name: 'example-skill',
+			provider: 'agents',
+			scope: 'project'
+		},
+		source: BASE_SKILL_SOURCE
 	};
 }
 
@@ -109,12 +109,14 @@ describe('SkillsService', () => {
 		it('propagates handler errors as ApiError with the status code', async () => {
 			vi.stubGlobal(
 				'fetch',
-				vi.fn().mockResolvedValue(
-					jsonResponse(
-						{ error: { code: 400, message: 'Invalid CWD', type: 'invalid_request_error' } },
-						400
+				vi
+					.fn()
+					.mockResolvedValue(
+						jsonResponse(
+							{ error: { code: 400, message: 'Invalid CWD', type: 'invalid_request_error' } },
+							400
+						)
 					)
-				)
 			);
 
 			await expect(SkillsService.list('/bad')).rejects.toMatchObject({
@@ -205,6 +207,7 @@ describe('SkillsService', () => {
 			const result = await SkillsService.read({ name: 'example-skill' });
 
 			expect(result.kind).toBe('skill');
+
 			if (result.kind === 'skill') {
 				expect(result.source).toBe(BASE_SKILL_SOURCE);
 				expect(result.body_markdown).toBe(BASE_SKILL_BODY_MARKDOWN);

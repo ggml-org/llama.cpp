@@ -14,14 +14,14 @@ import { render } from 'vitest-browser-svelte';
 
 function skill(name: string, description = `${name} description`): SkillCatalogEntry {
 	return {
-		id: `opaque-${name}`,
-		name,
+		catalog_xml: '<skill />',
 		description,
-		scope: 'global',
-		provider: 'agents',
+		id: `opaque-${name}`,
 		instruction: { bytes: 1, lines: 1, modified_at: null, tokens: 1, tokens_estimated: false },
+		name,
+		provider: 'agents',
 		resources: { count: 0, truncated: false },
-		catalog_xml: '<skill />'
+		scope: 'global'
 	};
 }
 
@@ -34,10 +34,10 @@ function renderPicker(query: string) {
 	const onSelect = vi.fn();
 	const screen = render(ChatFormSkillPicker, {
 		isOpen: true,
-		query,
-		skills: [skill('alpha'), skill('format-alpha'), skill('beta')],
 		onClose,
-		onSelect
+		onSelect,
+		query,
+		skills: [skill('alpha'), skill('format-alpha'), skill('beta')]
 	});
 
 	return { onClose, onSelect, screen };
@@ -81,12 +81,10 @@ describe('ChatFormSkillPicker', () => {
 
 		render(ChatFormSkillPicker, {
 			isOpen: true,
-			query: 'alpha',
-			skills: [
-				skill('alpha', 'This is line one.\n  This is line two.\n\nThis is the final line.')
-			],
 			onClose,
-			onSelect
+			onSelect,
+			query: 'alpha',
+			skills: [skill('alpha', 'This is line one.\n  This is line two.\n\nThis is the final line.')]
 		});
 
 		await tick();

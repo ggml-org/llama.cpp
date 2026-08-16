@@ -16,6 +16,9 @@
 	const calls: string[] = [];
 
 	const pickers = useChatFormPickers({
+		dispatchSkillsCommand: (args: string) => {
+			calls.push(`dispatchSkillsCommand:${args}`);
+		},
 		focusInput: () => {},
 		getCaretOffset: () => caretOffset,
 		getCwd: () => null,
@@ -26,9 +29,6 @@
 		hasCwdTools: () => true,
 		hasPrompts: () => true,
 		hasSkills: () => hasSkills,
-		dispatchSkillsCommand: (args: string) => {
-			calls.push(`dispatchSkillsCommand:${args}`);
-		},
 		openModelSelector: () => {
 			calls.push('openModelSelector');
 		},

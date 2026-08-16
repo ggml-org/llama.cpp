@@ -1,9 +1,9 @@
-import { getChatCommands } from '$lib/utils';
 import { AttachmentType, ChatFormCommandAction } from '$lib/enums';
 import { activateSkillByName } from '$lib/services/skill-command.service';
-import { skillActivationStore } from '$lib/stores/skill-activation.svelte';
 import { SkillsService } from '$lib/services/skills.service';
+import { skillActivationStore } from '$lib/stores/skill-activation.svelte';
 import type { SkillBaseReadResult } from '$lib/types';
+import { getChatCommands } from '$lib/utils';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('$lib/services/skills.service', () => ({
@@ -23,13 +23,13 @@ const mockLoadConversation = vi.mocked(skillActivationStore.loadConversation);
 
 function baseResult(name: string): SkillBaseReadResult {
 	return {
-		kind: 'skill',
-		skill: { id: `opaque-${name}`, name, scope: 'project', provider: 'agents' },
-		resources: { paths: [], truncated: false },
-		source: `---\nname: ${name}\n---\n# Body`,
 		body_markdown: '# Body',
 		content_xml: `<skill_content name="${name}">body</skill_content>`,
-		diagnostics: []
+		diagnostics: [],
+		kind: 'skill',
+		resources: { paths: [], truncated: false },
+		skill: { id: `opaque-${name}`, name, provider: 'agents', scope: 'project' },
+		source: `---\nname: ${name}\n---\n# Body`
 	};
 }
 
@@ -37,7 +37,15 @@ beforeEach(() => {
 	vi.clearAllMocks();
 	mockRecordActivation.mockResolvedValue({
 		created: true,
-		extra: { type: AttachmentType.SKILL, kind: 'base', state: 'approved', name: 'demo-skill', scope: 'project', provider: 'agents', skillId: 'opaque-demo-skill' },
+		extra: {
+			kind: 'base',
+			name: 'demo-skill',
+			provider: 'agents',
+			scope: 'project',
+			skillId: 'opaque-demo-skill',
+			state: 'approved',
+			type: AttachmentType.SKILL
+		},
 		toolResultMessage: null
 	});
 });
@@ -108,11 +116,11 @@ describe('activateSkillByName (explicit /skills <name>)', () => {
 
 	it('persists nothing when the resolved read is not a base skill result', async () => {
 		mockRead.mockResolvedValue({
-			kind: 'resource',
-			skill: { id: 'opaque-demo-skill', name: 'demo-skill', scope: 'project', provider: 'agents' },
-			resource: { path: 'refs/DETAILS.md' },
 			content_xml: '<skill_resource>data</skill_resource>',
-			diagnostics: []
+			diagnostics: [],
+			kind: 'resource',
+			resource: { path: 'refs/DETAILS.md' },
+			skill: { id: 'opaque-demo-skill', name: 'demo-skill', provider: 'agents', scope: 'project' }
 		});
 
 		const outcome = await activateSkillByName('conv-1', 'demo-skill');

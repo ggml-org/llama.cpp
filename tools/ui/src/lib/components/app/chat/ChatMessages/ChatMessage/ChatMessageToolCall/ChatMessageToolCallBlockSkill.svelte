@@ -22,9 +22,15 @@
 
 	const meta = $derived(resolveSkillSectionMeta(section));
 	const title = $derived(
-		meta ? (meta.kind === 'resource' ? `Skill resource · ${meta.name}` : `Skill · ${meta.name}`) : 'Skill result'
+		meta
+			? meta.kind === 'resource'
+				? `Skill resource · ${meta.name}`
+				: `Skill · ${meta.name}`
+			: 'Skill result'
 	);
-	const detail = $derived(meta ? [meta.provider, meta.scope, meta.path].filter(Boolean).join(' · ') : '');
+	const detail = $derived(
+		meta ? [meta.provider, meta.scope, meta.path].filter(Boolean).join(' · ') : ''
+	);
 	// Directory-specific header icon for valid typed resource records only:
 	// the path comes from the persisted typed metadata, never from tool args
 	// or the raw XML, and base reads / untyped records keep the default.

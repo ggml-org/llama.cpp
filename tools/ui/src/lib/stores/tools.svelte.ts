@@ -303,7 +303,7 @@ class ToolsStore {
 	 * generic permission/consent key.
 	 */
 	getEnabledSkillToolNames(): ReadonlySet<string> {
-		const enabled = new Set<string>();
+		const enabled = new SvelteSet<string>();
 
 		for (const setting of SKILL_TOOL_SETTINGS) {
 			if (!this._disabledTools.has(setting.key)) {

@@ -1,10 +1,3 @@
-// Guards the resizable SKILL.md preview pane: rendered body vs raw source
-// separation, Markdown/Raw mode toggle, exact { name } request body with the
-// selected CWD header, no database message or activation record from a
-// preview read, base-result-only acceptance, intentionally omitted
-// read-result metadata, collapsible resource discovery groups, and stale /
-// CWD-changed / retried / unmounted response suppression.
-
 import SkillDetail from '$lib/components/app/skills/SkillDetail.svelte';
 import { DatabaseService } from '$lib/services/database.service';
 import { skillActivationStore } from '$lib/stores/skill-activation.svelte';
@@ -14,7 +7,6 @@ import { render } from 'vitest-browser-svelte';
 
 const READ_URL = '/skills/read';
 const CWD = '/srv/project-a';
-
 const RAW_SOURCE =
 	'---\nname: demo-skill\ndescription: raw frontmatter\n---\n# Rendered heading\n\nBody text.\n';
 const BODY_MARKDOWN = '# Rendered heading\n\nBody text.\n';
@@ -28,62 +20,56 @@ function jsonResponse(body: unknown, status = 200): Response {
 
 function makeEntry(name = 'demo-skill'): SkillCatalogEntry {
 	return {
-		id: `opaque-${name}`,
-		name,
+		catalog_xml: `<skill><name>${name}</name></skill>`,
 		description: `description of ${name}`,
-		scope: 'project',
+		id: `opaque-${name}`,
+		instruction: { bytes: 16, lines: 1, modified_at: null, tokens: 4, tokens_estimated: true },
+		name,
 		provider: 'agents',
-		instruction: { bytes: 16, lines: 1, tokens: 4, tokens_estimated: true, modified_at: null },
 		resources: { count: 0, truncated: false },
-		catalog_xml: `<skill><name>${name}</name></skill>`
+		scope: 'project'
 	};
 }
 
 function baseResult(overrides: Partial<SkillBaseReadResult> = {}): SkillBaseReadResult {
 	return {
-		kind: 'skill',
-		skill: {
-			id: 'opaque-demo-skill',
-			name: 'demo-skill',
-			scope: 'project',
-			provider: 'agents',
-			metadata: {
-				name: 'demo-skill',
-				description: 'Structured metadata description',
-				license: 'MIT'
-			}
-		},
-		resources: { paths: [], truncated: false },
-		source: RAW_SOURCE,
 		body_markdown: BODY_MARKDOWN,
 		content_xml: '<skill_content name="demo-skill">body</skill_content>',
 		diagnostics: [],
+		kind: 'skill',
+		resources: { paths: [], truncated: false },
+		skill: {
+			id: 'opaque-demo-skill',
+			metadata: {
+				description: 'Structured metadata description',
+				license: 'MIT',
+				name: 'demo-skill'
+			},
+			name: 'demo-skill',
+			provider: 'agents',
+			scope: 'project'
+		},
+		source: RAW_SOURCE,
 		...overrides
 	};
 }
 
 function resourceResult(name = 'demo-skill'): SkillResourceReadResult {
 	return {
-		kind: 'resource',
-		skill: { id: `opaque-${name}`, name, scope: 'project', provider: 'agents' },
-		resource: { path: 'refs/DETAILS.md' },
 		content_xml: '<skill_resource>data</skill_resource>',
-		diagnostics: []
+		diagnostics: [],
+		kind: 'resource',
+		resource: { path: 'refs/DETAILS.md' },
+		skill: { id: `opaque-${name}`, name, provider: 'agents', scope: 'project' }
 	};
 }
 
-/**
- * A controllable /skills/read fetch: records the request signal and, like a
- * real fetch, rejects the in-flight request when that signal aborts.
- */
+/** Controllable /skills/read fetch that rejects the in-flight request on abort. */
 function deferredRead() {
 	const state: { signal?: AbortSignal } = {};
-	const { promise, resolve, reject } = Promise.withResolvers<Response>();
+	const { promise, reject, resolve } = Promise.withResolvers<Response>();
 
 	return {
-		promise,
-		resolve,
-		reject,
 		attach(init?: RequestInit) {
 			state.signal = init?.signal ?? undefined;
 			init?.signal?.addEventListener(
@@ -92,6 +78,9 @@ function deferredRead() {
 				{ once: true }
 			);
 		},
+		promise,
+		reject,
+		resolve,
 		get signal() {
 			return state.signal;
 		}
@@ -101,7 +90,8 @@ function deferredRead() {
 function mockRead(read: (init: RequestInit) => Response | Promise<Response>) {
 	vi.mocked(fetch).mockImplementation(async (url, init) => {
 		if (String(url).includes(READ_URL)) return read(init as RequestInit);
-		return jsonResponse({ skills: [], catalog_instruction_xml: '', diagnostics: [] });
+
+		return jsonResponse({ catalog_instruction_xml: '', diagnostics: [], skills: [] });
 	});
 }
 
@@ -118,7 +108,7 @@ describe('SkillDetail preview', () => {
 		mockRead(() => jsonResponse(baseResult()));
 
 		const screen = await render(SkillDetail, {
-			props: { entry: makeEntry(), cwd: undefined, onClose: vi.fn(), mobile: false }
+			props: { cwd: undefined, entry: makeEntry(), mobile: false, onClose: vi.fn() }
 		});
 
 		await vi.waitFor(() => expect(bodyText()).toContain('Rendered heading'));
@@ -144,12 +134,7 @@ describe('SkillDetail preview', () => {
 			jsonResponse(
 				baseResult({
 					resources: {
-						paths: [
-							'assets/template.txt',
-							'references/guide.md',
-							'scripts/check.py',
-							'notes.txt'
-						],
+						paths: ['assets/template.txt', 'references/guide.md', 'scripts/check.py', 'notes.txt'],
 						truncated: false
 					}
 				})
@@ -157,7 +142,7 @@ describe('SkillDetail preview', () => {
 		);
 
 		const screen = await render(SkillDetail, {
-			props: { entry: makeEntry(), cwd: undefined, onClose: vi.fn(), mobile: false }
+			props: { cwd: undefined, entry: makeEntry(), mobile: false, onClose: vi.fn() }
 		});
 
 		await vi.waitFor(() => expect(bodyText()).toContain('Rendered heading'));
@@ -168,6 +153,7 @@ describe('SkillDetail preview', () => {
 
 		for (const group of ['assets', 'references', 'scripts', 'other']) {
 			const resourceGroup = screen.getByTestId(`skill-detail-resources-${group}`).element();
+
 			expect(header.contains(resourceGroup)).toBe(true);
 			expect(body.contains(resourceGroup)).toBe(false);
 		}
@@ -180,17 +166,17 @@ describe('SkillDetail preview', () => {
 		expect(body.classList.contains('overflow-y-auto')).toBe(true);
 	});
 
-
 	it('sends exactly { name } with the selected CWD header and never a path', async () => {
 		const readCalls: RequestInit[] = [];
 
 		mockRead((init) => {
 			readCalls.push(init);
+
 			return jsonResponse(baseResult());
 		});
 
 		await render(SkillDetail, {
-			props: { entry: makeEntry(), cwd: CWD, onClose: vi.fn(), mobile: false }
+			props: { cwd: CWD, entry: makeEntry(), mobile: false, onClose: vi.fn() }
 		});
 
 		await vi.waitFor(() => expect(readCalls).toHaveLength(1));
@@ -210,7 +196,7 @@ describe('SkillDetail preview', () => {
 		mockRead(() => jsonResponse(baseResult()));
 
 		const screen = await render(SkillDetail, {
-			props: { entry: makeEntry(), cwd: CWD, onClose: vi.fn(), mobile: false }
+			props: { cwd: CWD, entry: makeEntry(), mobile: false, onClose: vi.fn() }
 		});
 
 		await vi.waitFor(() => expect(bodyText()).toContain('Rendered heading'));
@@ -226,7 +212,7 @@ describe('SkillDetail preview', () => {
 		mockRead(() => jsonResponse(resourceResult()));
 
 		const screen = await render(SkillDetail, {
-			props: { entry: makeEntry(), cwd: undefined, onClose: vi.fn(), mobile: false }
+			props: { cwd: undefined, entry: makeEntry(), mobile: false, onClose: vi.fn() }
 		});
 
 		await vi.waitFor(() => expect(bodyText()).toContain('Could not load the skill'));
@@ -237,19 +223,23 @@ describe('SkillDetail preview', () => {
 
 	it('keeps the selected name visible and retries the same name and CWD after a failure', async () => {
 		const readCalls: RequestInit[] = [];
+
 		let failNext = true;
 
 		mockRead((init) => {
 			readCalls.push(init);
+
 			if (failNext) {
 				failNext = false;
+
 				return jsonResponse({ error: { code: 500, message: 'boom' } }, 500);
 			}
+
 			return jsonResponse(baseResult());
 		});
 
 		const screen = await render(SkillDetail, {
-			props: { entry: makeEntry(), cwd: CWD, onClose: vi.fn(), mobile: false }
+			props: { cwd: CWD, entry: makeEntry(), mobile: false, onClose: vi.fn() }
 		});
 
 		await vi.waitFor(() => expect(bodyText()).toContain('Could not load the skill'));
@@ -270,27 +260,29 @@ describe('SkillDetail preview', () => {
 		const readA = deferredRead();
 		const readB = deferredRead();
 		const reads = [readA, readB];
+
 		let index = 0;
 
 		mockRead((init) => {
 			const current = reads[Math.min(index++, reads.length - 1)];
 
 			current.attach(init);
+
 			return current.promise;
 		});
 
 		const { rerender } = await render(SkillDetail, {
-			props: { entry: makeEntry('skill-a'), cwd: undefined, onClose: vi.fn(), mobile: false }
+			props: { cwd: undefined, entry: makeEntry('skill-a'), mobile: false, onClose: vi.fn() }
 		});
 
 		await vi.waitFor(() => expect(readA.signal).toBeDefined());
 		expect(readA.signal?.aborted).toBe(false);
 
 		await rerender({
-			entry: makeEntry('skill-b'),
 			cwd: undefined,
-			onClose: vi.fn(),
-			mobile: false
+			entry: makeEntry('skill-b'),
+			mobile: false,
+			onClose: vi.fn()
 		});
 
 		await vi.waitFor(() => expect(readA.signal?.aborted).toBe(true));
@@ -306,28 +298,27 @@ describe('SkillDetail preview', () => {
 
 	it('never renders a stale response that resolves after its read was superseded', async () => {
 		const resolvers: Array<(response: Response) => void> = [];
-		let index = 0;
 
-		// This mock ignores the abort signal entirely: the superseded request
-		// still resolves successfully and must still be dropped.
+		// This mock ignores abort; the stale resolution must still be dropped.
 		mockRead(() => {
 			const { promise, resolve } = Promise.withResolvers<Response>();
 
 			resolvers.push(resolve);
+
 			return promise;
 		});
 
 		const { rerender } = await render(SkillDetail, {
-			props: { entry: makeEntry('skill-a'), cwd: undefined, onClose: vi.fn(), mobile: false }
+			props: { cwd: undefined, entry: makeEntry('skill-a'), mobile: false, onClose: vi.fn() }
 		});
 
 		await vi.waitFor(() => expect(resolvers).toHaveLength(1));
 
 		await rerender({
-			entry: makeEntry('skill-b'),
 			cwd: undefined,
-			onClose: vi.fn(),
-			mobile: false
+			entry: makeEntry('skill-b'),
+			mobile: false,
+			onClose: vi.fn()
 		});
 
 		await vi.waitFor(() => expect(resolvers).toHaveLength(2));
@@ -345,26 +336,28 @@ describe('SkillDetail preview', () => {
 		const readOld = deferredRead();
 		const readNew = deferredRead();
 		const reads = [readOld, readNew];
+
 		let index = 0;
 
 		mockRead((init) => {
 			const current = reads[Math.min(index++, reads.length - 1)];
 
 			current.attach(init);
+
 			return current.promise;
 		});
 
 		const { rerender } = await render(SkillDetail, {
-			props: { entry: makeEntry(), cwd: '/srv/old', onClose: vi.fn(), mobile: false }
+			props: { cwd: '/srv/old', entry: makeEntry(), mobile: false, onClose: vi.fn() }
 		});
 
 		await vi.waitFor(() => expect(readOld.signal).toBeDefined());
 
 		await rerender({
-			entry: makeEntry(),
 			cwd: '/srv/new',
-			onClose: vi.fn(),
-			mobile: false
+			entry: makeEntry(),
+			mobile: false,
+			onClose: vi.fn()
 		});
 
 		await vi.waitFor(() => expect(readOld.signal?.aborted).toBe(true));
@@ -381,11 +374,12 @@ describe('SkillDetail preview', () => {
 
 		mockRead((init) => {
 			read.attach(init);
+
 			return read.promise;
 		});
 
 		const { unmount } = await render(SkillDetail, {
-			props: { entry: makeEntry(), cwd: undefined, onClose: vi.fn(), mobile: false }
+			props: { cwd: undefined, entry: makeEntry(), mobile: false, onClose: vi.fn() }
 		});
 
 		await vi.waitFor(() => expect(read.signal).toBeDefined());
@@ -400,7 +394,7 @@ describe('SkillDetail preview', () => {
 		mockRead(() => jsonResponse(baseResult()));
 
 		const screen = await render(SkillDetail, {
-			props: { entry: makeEntry('skill-a'), cwd: undefined, onClose: vi.fn(), mobile: false }
+			props: { cwd: undefined, entry: makeEntry('skill-a'), mobile: false, onClose: vi.fn() }
 		});
 
 		await vi.waitFor(() => expect(bodyText()).toContain('Rendered heading'));
@@ -411,10 +405,10 @@ describe('SkillDetail preview', () => {
 		const { rerender } = screen;
 
 		await rerender({
-			entry: makeEntry('skill-b'),
 			cwd: undefined,
-			onClose: vi.fn(),
-			mobile: false
+			entry: makeEntry('skill-b'),
+			mobile: false,
+			onClose: vi.fn()
 		});
 
 		await vi.waitFor(() => expect(bodyText()).toContain('Rendered heading'));
@@ -427,14 +421,12 @@ describe('SkillDetail preview', () => {
 		mockRead(() => jsonResponse(baseResult()));
 
 		const screen = await render(SkillDetail, {
-			props: { entry: makeEntry(), cwd: undefined, onClose: vi.fn(), mobile: false }
+			props: { cwd: undefined, entry: makeEntry(), mobile: false, onClose: vi.fn() }
 		});
 
 		await vi.waitFor(() => expect(bodyText()).toContain('Rendered heading'));
 
-		// Read-result metadata (description, license) is intentionally not
-		// rendered anywhere in the preview: no metadata block exists and the
-		// values never leak into the markdown body.
+		// Read-result metadata is intentionally never rendered.
 		expect(screen.getByTestId('skill-detail-metadata').query()).toBeNull();
 		expect(bodyText()).not.toContain('Structured metadata description');
 		expect(bodyText()).not.toContain('MIT');
@@ -448,15 +440,11 @@ describe('SkillDetail preview', () => {
 
 		mockRead((init) => {
 			readCalls.push(init);
+
 			return jsonResponse(
 				baseResult({
 					resources: {
-						paths: [
-							'assets/template.txt',
-							'references/guide.md',
-							'scripts/check.py',
-							'notes.txt'
-						],
+						paths: ['assets/template.txt', 'references/guide.md', 'scripts/check.py', 'notes.txt'],
 						truncated: false
 					}
 				})
@@ -464,16 +452,14 @@ describe('SkillDetail preview', () => {
 		});
 
 		const screen = await render(SkillDetail, {
-			props: { entry: makeEntry(), cwd: CWD, onClose: vi.fn(), mobile: false }
+			props: { cwd: CWD, entry: makeEntry(), mobile: false, onClose: vi.fn() }
 		});
 
 		await vi.waitFor(() => expect(bodyText()).toContain('Rendered heading'));
 
 		for (const group of ['assets', 'references', 'scripts', 'other']) {
 			const resourceGroup = screen.getByTestId(`skill-detail-resources-${group}`).element();
-			const trigger = screen
-				.getByTestId(`skill-detail-resource-trigger-${group}`)
-				.element();
+			const trigger = screen.getByTestId(`skill-detail-resource-trigger-${group}`).element();
 
 			expect(resourceGroup.getAttribute('data-state')).toBe('closed');
 			expect(trigger.getAttribute('aria-expanded')).toBe('false');
@@ -493,12 +479,7 @@ describe('SkillDetail preview', () => {
 			jsonResponse(
 				baseResult({
 					resources: {
-						paths: [
-							'assets/template.txt',
-							'references/guide.md',
-							'scripts/check.py',
-							'notes.txt'
-						],
+						paths: ['assets/template.txt', 'references/guide.md', 'scripts/check.py', 'notes.txt'],
 						truncated: false
 					}
 				})
@@ -506,16 +487,13 @@ describe('SkillDetail preview', () => {
 		);
 
 		const screen = await render(SkillDetail, {
-			props: { entry: makeEntry(), cwd: CWD, onClose: vi.fn(), mobile: false }
+			props: { cwd: CWD, entry: makeEntry(), mobile: false, onClose: vi.fn() }
 		});
 
 		await vi.waitFor(() => expect(bodyText()).toContain('Rendered heading'));
 
 		const state = (group: string) =>
-			screen
-				.getByTestId(`skill-detail-resources-${group}`)
-				.element()
-				.getAttribute('data-state');
+			screen.getByTestId(`skill-detail-resources-${group}`).element().getAttribute('data-state');
 
 		await screen.getByTestId('skill-detail-resource-trigger-references').click();
 		await vi.waitFor(() => expect(state('references')).toBe('open'));
@@ -543,44 +521,37 @@ describe('SkillDetail preview', () => {
 		);
 
 		const screen = await render(SkillDetail, {
-			props: { entry: makeEntry('skill-a'), cwd: CWD, onClose: vi.fn(), mobile: false }
+			props: { cwd: CWD, entry: makeEntry('skill-a'), mobile: false, onClose: vi.fn() }
 		});
 
 		await vi.waitFor(() => expect(bodyText()).toContain('Rendered heading'));
 		await screen.getByTestId('skill-detail-resource-trigger-references').click();
 		await vi.waitFor(() =>
 			expect(
-				screen
-					.getByTestId('skill-detail-resources-references')
-					.element()
-					.getAttribute('data-state')
+				screen.getByTestId('skill-detail-resources-references').element().getAttribute('data-state')
 			).toBe('open')
 		);
 
 		await screen.rerender({
-			entry: makeEntry('skill-b'),
 			cwd: CWD,
-			onClose: vi.fn(),
-			mobile: false
+			entry: makeEntry('skill-b'),
+			mobile: false,
+			onClose: vi.fn()
 		});
 
 		await vi.waitFor(() => expect(bodyText()).toContain('skill-b'));
 		await vi.waitFor(() =>
 			expect(
-				screen
-					.getByTestId('skill-detail-resources-references')
-					.element()
-					.getAttribute('data-state')
+				screen.getByTestId('skill-detail-resources-references').element().getAttribute('data-state')
 			).toBe('closed')
 		);
 	});
-
 
 	it('omits resource discovery entirely for a SKILL.md-only result', async () => {
 		mockRead(() => jsonResponse(baseResult({ resources: { paths: [], truncated: false } })));
 
 		const screen = await render(SkillDetail, {
-			props: { entry: makeEntry(), cwd: CWD, onClose: vi.fn(), mobile: false }
+			props: { cwd: CWD, entry: makeEntry(), mobile: false, onClose: vi.fn() }
 		});
 
 		await vi.waitFor(() => expect(bodyText()).toContain('Rendered heading'));

@@ -14,20 +14,26 @@ export interface SkillResourceGroupPresentation extends SkillResourcePresentatio
 }
 
 const RESOURCE_GROUPS: readonly SkillResourcePresentation[] = [
-	{ group: 'scripts', label: 'Scripts', icon: Terminal },
-	{ group: 'references', label: 'References', icon: BookOpenText },
-	{ group: 'assets', label: 'Assets', icon: PackageOpen },
-	{ group: 'other', label: 'Other files', icon: FileText }
+	{ group: 'scripts', icon: Terminal, label: 'Scripts' },
+	{ group: 'references', icon: BookOpenText, label: 'References' },
+	{ group: 'assets', icon: PackageOpen, label: 'Assets' },
+	{ group: 'other', icon: FileText, label: 'Other files' }
 ];
 
 export function classifySkillResourcePath(path: string): SkillResourcePresentation {
 	const firstSegment = path.split('/', 1)[0];
+
 	return RESOURCE_GROUPS.find(({ group }) => group === firstSegment) ?? RESOURCE_GROUPS[3];
 }
 
-export function groupSkillResourcePaths(paths: readonly string[]): SkillResourceGroupPresentation[] {
+export function groupSkillResourcePaths(
+	paths: readonly string[]
+): SkillResourceGroupPresentation[] {
 	return RESOURCE_GROUPS.flatMap((presentation) => {
-		const groupedPaths = paths.filter((path) => classifySkillResourcePath(path).group === presentation.group);
+		const groupedPaths = paths.filter(
+			(path) => classifySkillResourcePath(path).group === presentation.group
+		);
+
 		return groupedPaths.length === 0 ? [] : [{ ...presentation, paths: groupedPaths }];
 	});
 }

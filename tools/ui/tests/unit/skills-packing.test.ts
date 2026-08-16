@@ -1,9 +1,9 @@
 import {
-	SkillsPackingService,
 	buildSkillRunSnapshot,
 	estimateSkillTokens,
 	resolveSkillPackOptions,
-	serializeSkillCatalogEnvelope
+	serializeSkillCatalogEnvelope,
+	SkillsPackingService
 } from '$lib/services/skills-packing.service';
 import type { SkillCatalogEntry, SkillCatalogResponse, SkillRunSnapshot } from '$lib/types';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -17,14 +17,14 @@ function jsonResponse(body: unknown, status = 200): Response {
 
 function makeEntry(name: string, xml: string): SkillCatalogEntry {
 	return {
-		id: `opaque-${name}`,
-		name,
+		catalog_xml: xml,
 		description: `description of ${name}`,
-		scope: 'project',
+		id: `opaque-${name}`,
+		instruction: { bytes: 16, lines: 1, modified_at: null, tokens: 4, tokens_estimated: true },
+		name,
 		provider: 'agents',
-		instruction: { bytes: 16, lines: 1, tokens: 4, tokens_estimated: true, modified_at: null },
 		resources: { count: 0, truncated: false },
-		catalog_xml: xml
+		scope: 'project'
 	};
 }
 
@@ -32,7 +32,7 @@ function makeCatalog(
 	entries: SkillCatalogEntry[],
 	instructionXml = '<available_skills>Call read_skill(name) when a task matches.</available_skills>'
 ): SkillCatalogResponse {
-	return { skills: entries, catalog_instruction_xml: instructionXml, diagnostics: [] };
+	return { catalog_instruction_xml: instructionXml, diagnostics: [], skills: entries };
 }
 
 /** Deterministic tokenizer double: one token per character. */
@@ -61,7 +61,10 @@ describe('estimateSkillTokens', () => {
 
 describe('envelope serialization', () => {
 	it('serializes the complete envelope with deterministic count attributes', () => {
-		const catalog = makeCatalog([makeEntry('one', '<one/>'), makeEntry('two', '<two/>')], '<inst/>');
+		const catalog = makeCatalog(
+			[makeEntry('one', '<one/>'), makeEntry('two', '<two/>')],
+			'<inst/>'
+		);
 
 		expect(serializeSkillCatalogEnvelope(catalog)).toBe(
 			'<skills_catalog total="2" included="2"><inst/><one/><two/></skills_catalog>'
@@ -69,10 +72,8 @@ describe('envelope serialization', () => {
 	});
 
 	it('preserves server XML verbatim without re-escaping', () => {
-		const raw =
-			'<skill a="1">&amp;<b>&lt;raw&gt; &quot;text&quot;</b></skill>';
+		const raw = '<skill a="1">&amp;<b>&lt;raw&gt; &quot;text&quot;</b></skill>';
 		const catalog = makeCatalog([makeEntry('escaped', raw)]);
-
 		const envelope = serializeSkillCatalogEnvelope(catalog);
 
 		expect(envelope).toContain(raw);
@@ -84,7 +85,6 @@ describe('envelope serialization', () => {
 describe('buildSkillRunSnapshot', () => {
 	it('copies entries immutably so later store mutations cannot reach the snapshot', () => {
 		const catalog = makeCatalog([makeEntry('one', '<one/>'), makeEntry('two', '<two/>')]);
-
 		const snapshot = buildSkillRunSnapshot('/w', catalog);
 
 		catalog.skills[0].catalog_xml = 'MUTATED';
@@ -122,7 +122,10 @@ describe('SkillsPackingService.pack', () => {
 	function snapshot(): SkillRunSnapshot {
 		return buildSkillRunSnapshot(
 			'/w',
-			makeCatalog(entryXmls.map((xml, i) => makeEntry(`s${i}`, xml)), instructionXml)
+			makeCatalog(
+				entryXmls.map((xml, i) => makeEntry(`s${i}`, xml)),
+				instructionXml
+			)
 		);
 	}
 
@@ -189,7 +192,10 @@ describe('SkillsPackingService.pack', () => {
 
 		vi.stubGlobal('fetch', fetchMock);
 
-		const packed = await SkillsPackingService.pack(snapshot(), { budget: 10_000, mode: 'estimated' });
+		const packed = await SkillsPackingService.pack(snapshot(), {
+			budget: 10_000,
+			mode: 'estimated'
+		});
 
 		expect(packed.estimated).toBe(true);
 		expect(fetchMock).not.toHaveBeenCalled();
@@ -230,9 +236,9 @@ describe('SkillsPackingService.pack', () => {
 
 		expect(String(url)).toContain('/tokenize');
 		expect(body).toMatchObject({
+			add_special: false,
 			content: snap.envelope,
 			model: 'selected-model',
-			add_special: false,
 			parse_special: true
 		});
 	});
@@ -300,7 +306,11 @@ describe('SkillsPackingService.pack', () => {
 
 		const snap = snapshot();
 		const budget = expectedEnvelope(2).length;
-		const packed = await SkillsPackingService.pack(snap, { budget, mode: 'direct', model: 'selected-model' });
+		const packed = await SkillsPackingService.pack(snap, {
+			budget,
+			mode: 'direct',
+			model: 'selected-model'
+		});
 
 		expect(packed.fullTokens).toBe(snap.envelope.length);
 		expect(packed.included).toBe(2);
@@ -364,7 +374,6 @@ describe('SkillsPackingService.pack', () => {
 			.spyOn(SkillsPackingService, 'countTokens')
 			.mockImplementation(async (content) => content.length);
 		const snap = snapshot();
-
 		const packed = await SkillsPackingService.pack(snap, {
 			budget: 10_000,
 			mode: 'direct',
@@ -382,8 +391,11 @@ describe('SkillsPackingService.pack', () => {
 			.mockImplementation(async (content) => content.length);
 		const snap = snapshot();
 		const budget = expectedEnvelope(2).length;
-
-		const packed = await SkillsPackingService.pack(snap, { budget, mode: 'direct', model: 'selected-model' });
+		const packed = await SkillsPackingService.pack(snap, {
+			budget,
+			mode: 'direct',
+			model: 'selected-model'
+		});
 
 		expect(packed.fullTokens).toBe(snap.envelope.length);
 		expect(measure.mock.calls.filter(([content]) => content === snap.envelope)).toHaveLength(1);

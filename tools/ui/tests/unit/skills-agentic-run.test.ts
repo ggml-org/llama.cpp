@@ -1,19 +1,19 @@
 import { SKILL_LIST_TOOL, SKILL_READ_TOOL } from '$lib/constants';
+import { MessageRole, ToolPermissionDecision } from '$lib/enums';
+import { ChatService } from '$lib/services';
+import { SkillsService } from '$lib/services/skills.service';
+import { skillActivationExtra, skillResourceExtra } from '$lib/services/skills-activation.service';
+import { skillDenialResult } from '$lib/services/skills-adapters.service';
 import {
 	buildSkillRunSnapshot,
 	resolveSkillPackOptions,
 	serializeSkillCatalogEnvelope,
 	SkillsPackingService
 } from '$lib/services/skills-packing.service';
-import { skillDenialResult } from '$lib/services/skills-adapters.service';
-import { skillActivationExtra, skillResourceExtra } from '$lib/services/skills-activation.service';
-import { SkillsService } from '$lib/services/skills.service';
-import { ChatService } from '$lib/services';
 import { agenticStore } from '$lib/stores/agentic.svelte';
+import { settingsStore } from '$lib/stores/settings.svelte';
 import { skillsStore } from '$lib/stores/skills.svelte';
 import { toolsStore } from '$lib/stores/tools.svelte';
-import { settingsStore } from '$lib/stores/settings.svelte';
-import { serverStore } from '$lib/stores/server.svelte';
 import type {
 	SkillBaseReadResult,
 	SkillCatalogEntry,
@@ -21,9 +21,8 @@ import type {
 	SkillResourceReadResult
 } from '$lib/types';
 import type { AgenticFlowCallbacks } from '$lib/types/agentic';
-import { MessageRole, ToolPermissionDecision } from '$lib/enums';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Mock } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('$lib/services/skills.service', () => ({
 	SkillsService: { list: vi.fn(), read: vi.fn() }
@@ -67,7 +66,10 @@ vi.mock('$lib/stores/tools.svelte', () => ({
 			return toolsMockState.allTools;
 		},
 		builtinTools: [
-			{ function: { name: 'test_tool', parameters: { properties: {}, type: 'object' } }, type: 'function' }
+			{
+				function: { name: 'test_tool', parameters: { properties: {}, type: 'object' } },
+				type: 'function'
+			}
 		],
 		customTools: [],
 		fetchBuiltinTools: vi.fn(),
@@ -92,8 +94,8 @@ vi.mock('$lib/stores/mcp.svelte', () => ({
 vi.mock('$lib/stores/models.svelte', () => ({
 	modelsStore: {
 		isModelLoaded: vi.fn(() => false),
-		modelSupportsVision: vi.fn(() => false),
-		models: []
+		models: [],
+		modelSupportsVision: vi.fn(() => false)
 	}
 }));
 vi.mock('$lib/stores/permissions.svelte', () => ({
@@ -120,51 +122,52 @@ const mockLoadConversation = vi.mocked(skillActivationMockState.store.loadConver
 
 function makeEntry(name: string): SkillCatalogEntry {
 	return {
-		id: `opaque-${name}`,
-		name,
+		catalog_xml: `<skill><name>${name}</name></skill>`,
 		description: `description of ${name}`,
-		scope: 'project',
+		id: `opaque-${name}`,
+		instruction: { bytes: 16, lines: 1, modified_at: null, tokens: 4, tokens_estimated: true },
+		name,
 		provider: 'agents',
-		instruction: { bytes: 16, lines: 1, tokens: 4, tokens_estimated: true, modified_at: null },
 		resources: { count: 0, truncated: false },
-		catalog_xml: `<skill><name>${name}</name></skill>`
+		scope: 'project'
 	};
 }
 
 function makeCatalog(...names: string[]): SkillCatalogResponse {
 	return {
-		skills: names.map(makeEntry),
-		catalog_instruction_xml: '<available_skills>Call read_skill(name) when matching.</available_skills>',
-		diagnostics: []
+		catalog_instruction_xml:
+			'<available_skills>Call read_skill(name) when matching.</available_skills>',
+		diagnostics: [],
+		skills: names.map(makeEntry)
 	};
 }
 
 function baseResult(name: string): SkillBaseReadResult {
 	return {
-		kind: 'skill',
-		skill: { id: `opaque-${name}`, name, scope: 'project', provider: 'agents' },
-		resources: { paths: [], truncated: false },
-		source: `---\nname: ${name}\n---\n# Body`,
 		body_markdown: '# Body',
 		content_xml: `<skill_content name="${name}">body</skill_content>`,
-		diagnostics: []
+		diagnostics: [],
+		kind: 'skill',
+		resources: { paths: [], truncated: false },
+		skill: { id: `opaque-${name}`, name, provider: 'agents', scope: 'project' },
+		source: `---\nname: ${name}\n---\n# Body`
 	};
 }
 
 function resourceResult(name: string, path: string): SkillResourceReadResult {
 	return {
-		kind: 'resource',
-		skill: { id: `opaque-${name}`, name, scope: 'project', provider: 'agents' },
-		resource: { path },
 		content_xml: `<skill_resource name="${name}" path="${path}">data</skill_resource>`,
-		diagnostics: []
+		diagnostics: [],
+		kind: 'resource',
+		resource: { path },
+		skill: { id: `opaque-${name}`, name, provider: 'agents', scope: 'project' }
 	};
 }
 
 function dummyTool() {
 	return {
-		type: 'function' as const,
-		function: { name: 'test_tool', parameters: { properties: {}, type: 'object' } }
+		function: { name: 'test_tool', parameters: { properties: {}, type: 'object' } },
+		type: 'function' as const
 	};
 }
 
@@ -243,9 +246,9 @@ function mockToolCallTurn(toolCallJson: string): void {
 function readSkillToolCallJson(): string {
 	return JSON.stringify([
 		{
+			function: { arguments: '{"name":"demo-skill"}', name: SKILL_READ_TOOL },
 			id: 'call_1',
-			type: 'function',
-			function: { name: SKILL_READ_TOOL, arguments: '{"name":"demo-skill"}' }
+			type: 'function'
 		}
 	]);
 }
@@ -272,7 +275,9 @@ describe('agenticStore.runAgenticFlow Skills integration', () => {
 		mockSnapshot.mockResolvedValue(snapshot);
 		mockSendMessage.mockResolvedValue(undefined);
 
-		const result = await agenticStore.runAgenticFlow(runParams('conv-1', makeCallbacks().callbacks));
+		const result = await agenticStore.runAgenticFlow(
+			runParams('conv-1', makeCallbacks().callbacks)
+		);
 
 		expect(result).toEqual({ handled: true });
 		expect(mockSnapshot).toHaveBeenCalledTimes(1);
@@ -296,7 +301,9 @@ describe('agenticStore.runAgenticFlow Skills integration', () => {
 		mockSettingsStore.config = { agenticMaxTurns: 100, maxSkillBudget: 0 };
 		mockSendMessage.mockResolvedValue(undefined);
 
-		const result = await agenticStore.runAgenticFlow(runParams('conv-1', makeCallbacks().callbacks));
+		const result = await agenticStore.runAgenticFlow(
+			runParams('conv-1', makeCallbacks().callbacks)
+		);
 
 		expect(result).toEqual({ handled: true });
 		expect(mockSnapshot).not.toHaveBeenCalled();
@@ -311,7 +318,9 @@ describe('agenticStore.runAgenticFlow Skills integration', () => {
 		mockSnapshot.mockRejectedValue(new Error('skills disabled'));
 		mockSendMessage.mockResolvedValue(undefined);
 
-		const result = await agenticStore.runAgenticFlow(runParams('conv-1', makeCallbacks().callbacks));
+		const result = await agenticStore.runAgenticFlow(
+			runParams('conv-1', makeCallbacks().callbacks)
+		);
 
 		expect(result).toEqual({ handled: true });
 		expect(mockSendMessage).toHaveBeenCalledTimes(1);
@@ -325,7 +334,9 @@ describe('agenticStore.runAgenticFlow Skills integration', () => {
 		mockSnapshot.mockResolvedValue(buildSkillRunSnapshot('/run-cwd', makeCatalog()));
 		mockSendMessage.mockResolvedValue(undefined);
 
-		const result = await agenticStore.runAgenticFlow(runParams('conv-1', makeCallbacks().callbacks));
+		const result = await agenticStore.runAgenticFlow(
+			runParams('conv-1', makeCallbacks().callbacks)
+		);
 
 		expect(result).toEqual({ handled: true });
 		expect(mockSnapshot).toHaveBeenCalledTimes(1);
@@ -342,7 +353,9 @@ describe('agenticStore.runAgenticFlow Skills integration', () => {
 		);
 		mockSendMessage.mockResolvedValue(undefined);
 
-		const result = await agenticStore.runAgenticFlow(runParams('conv-1', makeCallbacks().callbacks));
+		const result = await agenticStore.runAgenticFlow(
+			runParams('conv-1', makeCallbacks().callbacks)
+		);
 
 		expect(result).toEqual({ handled: true });
 
@@ -368,7 +381,9 @@ describe('agenticStore.runAgenticFlow Skills integration', () => {
 			{ definition: dummyTool(), key: 'builtin:test_tool' }
 		];
 
-		const result = await agenticStore.runAgenticFlow(runParams('conv-1', makeCallbacks().callbacks));
+		const result = await agenticStore.runAgenticFlow(
+			runParams('conv-1', makeCallbacks().callbacks)
+		);
 
 		expect(result).toEqual({ handled: true });
 
@@ -385,7 +400,9 @@ describe('agenticStore.runAgenticFlow Skills integration', () => {
 		mockSendMessage.mockResolvedValue(undefined);
 		mockGetEnabledSkillToolNames.mockReturnValue(new Set([SKILL_LIST_TOOL]));
 
-		const result = await agenticStore.runAgenticFlow(runParams('conv-1', makeCallbacks().callbacks));
+		const result = await agenticStore.runAgenticFlow(
+			runParams('conv-1', makeCallbacks().callbacks)
+		);
 
 		expect(result).toEqual({ handled: true });
 
@@ -422,7 +439,6 @@ describe('agenticStore.runAgenticFlow Skills integration', () => {
 
 		const { callbacks } = makeCallbacks();
 		const runPromise = agenticStore.runAgenticFlow(runParams('conv-1', callbacks));
-
 		const pending = await waitForPermission('conv-1');
 
 		// The disabled adapter is not registered for this run, so the call is
@@ -443,16 +459,15 @@ describe('agenticStore.runAgenticFlow Skills integration', () => {
 		mockToolCallTurn(
 			JSON.stringify([
 				{
+					function: { arguments: '{}', name: 'test_tool' },
 					id: 'call_1',
-					type: 'function',
-					function: { name: 'test_tool', arguments: '{}' }
+					type: 'function'
 				}
 			])
 		);
 
 		const { callbacks, createToolResultMessage } = makeCallbacks();
 		const runPromise = agenticStore.runAgenticFlow(runParams('conv-1', callbacks));
-
 		const pending = await waitForPermission('conv-1');
 
 		expect(pending).toEqual({ serverLabel: '', toolName: 'test_tool' });
@@ -475,7 +490,6 @@ describe('agenticStore.runAgenticFlow Skills integration', () => {
 
 		const { callbacks, createToolResultMessage } = makeCallbacks();
 		const runPromise = agenticStore.runAgenticFlow(runParams('conv-1', callbacks));
-
 		const pending = await waitForPermission('conv-1');
 
 		expect(pending).toEqual({
@@ -489,7 +503,11 @@ describe('agenticStore.runAgenticFlow Skills integration', () => {
 		const result = await runPromise;
 
 		expect(result).toEqual({ handled: true });
-		expect(createToolResultMessage).toHaveBeenCalledWith('call_1', skillDenialResult(SKILL_READ_TOOL), undefined);
+		expect(createToolResultMessage).toHaveBeenCalledWith(
+			'call_1',
+			skillDenialResult(SKILL_READ_TOOL),
+			undefined
+		);
 		expect(mockRecordActivation).not.toHaveBeenCalled();
 	});
 
@@ -536,12 +554,12 @@ describe('agenticStore.runAgenticFlow Skills integration', () => {
 		mockToolCallTurn(
 			JSON.stringify([
 				{
-					id: 'call_1',
-					type: 'function',
 					function: {
-						name: SKILL_READ_TOOL,
-						arguments: '{"name":"demo-skill","path":"refs/DETAILS.md"}'
-					}
+						arguments: '{"name":"demo-skill","path":"refs/DETAILS.md"}',
+						name: SKILL_READ_TOOL
+					},
+					id: 'call_1',
+					type: 'function'
 				}
 			])
 		);

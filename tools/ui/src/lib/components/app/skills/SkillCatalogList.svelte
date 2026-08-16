@@ -4,6 +4,7 @@
 	import { Card, CardContent, CardHeader, CardTitle } from '$lib/components/ui/card';
 	import type { SkillCatalogEntry } from '$lib/types';
 	import { normalizeSkillDescription } from '$lib/utils';
+	import { SvelteSet } from 'svelte/reactivity';
 
 	interface Props {
 		entries: readonly SkillCatalogEntry[];
@@ -12,10 +13,10 @@
 		onSelect: (entry: SkillCatalogEntry) => void;
 	}
 
-	let { entries, selectedId, open, onSelect }: Props = $props();
+	let { entries, onSelect, open, selectedId }: Props = $props();
 
-	let expandedDescriptions = $state<Set<string>>(new Set());
-	let overflowingDescriptions = $state<Set<string>>(new Set());
+	let expandedDescriptions = new SvelteSet();
+	let overflowingDescriptions = new SvelteSet();
 
 	function isDescriptionExpanded(id: string): boolean {
 		return expandedDescriptions.has(id);
@@ -25,30 +26,32 @@
 		event.preventDefault();
 		event.stopPropagation();
 
-		const next = new Set(expandedDescriptions);
+		const next = new SvelteSet(expandedDescriptions);
+
 		if (next.has(id)) next.delete(id);
 		else next.add(id);
+
 		expandedDescriptions = next;
 	}
 
-	function measureDescription(
-		node: HTMLElement,
-		params: { id: string; expanded: boolean }
-	) {
+	function measureDescription(node: HTMLElement, params: { id: string; expanded: boolean }) {
 		let current = params;
-		const observer =
-			typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(measure);
+
+		const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(measure);
 
 		function measure() {
 			if (!observer || current.expanded) return;
 
 			const overflowing = node.scrollHeight > node.clientHeight + 1;
 			const alreadyTracked = overflowingDescriptions.has(current.id);
+
 			if (alreadyTracked === overflowing) return;
 
-			const next = new Set(overflowingDescriptions);
+			const next = new SvelteSet(overflowingDescriptions);
+
 			if (overflowing) next.add(current.id);
 			else next.delete(current.id);
+
 			overflowingDescriptions = next;
 		}
 
@@ -56,15 +59,16 @@
 		measure();
 
 		return {
+			destroy() {
+				observer?.disconnect();
+				const next = new SvelteSet(overflowingDescriptions);
+
+				next.delete(current.id);
+				overflowingDescriptions = next;
+			},
 			update(next: { id: string; expanded: boolean }) {
 				current = next;
 				measure();
-			},
-			destroy() {
-				observer?.disconnect();
-				const next = new Set(overflowingDescriptions);
-				next.delete(current.id);
-				overflowingDescriptions = next;
 			}
 		};
 	}
@@ -97,7 +101,9 @@
 			role="button"
 			tabindex={0}
 			aria-pressed={entry.id === selectedId}
-			class="cursor-pointer transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-hidden hover:bg-accent/50 {open ? 'me-6' : ''}"
+			class="cursor-pointer transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-hidden hover:bg-accent/50 {open
+				? 'me-6'
+				: ''}"
 			onclick={() => onSelect(entry)}
 			onkeydown={(event) => handleKeydown(event, entry)}
 		>
@@ -123,8 +129,8 @@
 							? 'line-clamp-3'
 							: ''}"
 						use:measureDescription={{
-							id: entry.id,
-							expanded: isDescriptionExpanded(entry.id)
+							expanded: isDescriptionExpanded(entry.id),
+							id: entry.id
 						}}
 					>
 						{normalizeSkillDescription(entry.description)}

@@ -1,26 +1,25 @@
 import { SKILL_LIST_TOOL, SKILL_READ_TOOL, SKILL_SERVER_LABEL } from '$lib/constants';
-import { buildSkillRunSnapshot } from '$lib/services/skills-packing.service';
-import { SkillRunAdapters } from '$lib/services/skills-adapters.service';
-import { skillActivationExtra, skillResourceExtra } from '$lib/services/skills-activation.service';
+import { MessageRole, ToolCallType, ToolPermissionDecision } from '$lib/enums';
 import { SkillsService } from '$lib/services/skills.service';
+import { skillActivationExtra, skillResourceExtra } from '$lib/services/skills-activation.service';
 import type {
 	SkillActivationInput,
 	SkillActivationStore,
 	SkillRunAdaptersOptions
 } from '$lib/services/skills-adapters.service';
+import { SkillRunAdapters } from '$lib/services/skills-adapters.service';
+import { buildSkillRunSnapshot } from '$lib/services/skills-packing.service';
 import type {
 	SkillBaseReadResult,
 	SkillCatalogEntry,
 	SkillCatalogResponse,
-	SkillIdentity,
 	SkillPackedCatalog,
 	SkillResourceReadResult
 } from '$lib/types';
-import { MessageRole, ToolCallType, ToolPermissionDecision } from '$lib/enums';
-import type { AgenticToolCallPayload } from '$lib/types/agentic';
 import type { DatabaseMessage } from '$lib/types';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { AgenticToolCallPayload } from '$lib/types/agentic';
 import type { Mock } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('$lib/services/skills.service', () => ({
 	SkillsService: { list: vi.fn(), read: vi.fn() }
@@ -33,48 +32,52 @@ type PermissionMock = Mock<PermissionFn>;
 
 function makeEntry(name: string): SkillCatalogEntry {
 	return {
-		id: `opaque-${name}`,
-		name,
+		catalog_xml: `<skill><name>${name}</name></skill>`,
 		description: `description of ${name}`,
-		scope: 'project',
+		id: `opaque-${name}`,
+		instruction: { bytes: 16, lines: 1, modified_at: null, tokens: 4, tokens_estimated: true },
+		name,
 		provider: 'agents',
-		instruction: { bytes: 16, lines: 1, tokens: 4, tokens_estimated: true, modified_at: null },
 		resources: { count: 0, truncated: false },
-		catalog_xml: `<skill><name>${name}</name></skill>`
+		scope: 'project'
 	};
 }
 
 function makeCatalog(...names: string[]): SkillCatalogResponse {
 	return {
-		skills: names.map(makeEntry),
-		catalog_instruction_xml: '<available_skills>Call read_skill(name) when matching.</available_skills>',
-		diagnostics: []
+		catalog_instruction_xml:
+			'<available_skills>Call read_skill(name) when matching.</available_skills>',
+		diagnostics: [],
+		skills: names.map(makeEntry)
 	};
 }
 
 const PARTIAL_ENVELOPE =
 	'<skills_catalog total="1" included="0"><available_skills>instr</available_skills></skills_catalog>';
 
-function baseResult(name: string, overrides: Partial<SkillBaseReadResult> = {}): SkillBaseReadResult {
+function baseResult(
+	name: string,
+	overrides: Partial<SkillBaseReadResult> = {}
+): SkillBaseReadResult {
 	return {
-		kind: 'skill',
-		skill: { id: `opaque-${name}`, name, scope: 'project', provider: 'agents' },
-		resources: { paths: [], truncated: false },
-		source: `---\nname: ${name}\n---\n# Body`,
 		body_markdown: '# Body',
 		content_xml: `<skill_content name="${name}">body</skill_content>`,
 		diagnostics: [],
+		kind: 'skill',
+		resources: { paths: [], truncated: false },
+		skill: { id: `opaque-${name}`, name, provider: 'agents', scope: 'project' },
+		source: `---\nname: ${name}\n---\n# Body`,
 		...overrides
 	};
 }
 
 function resourceResult(name: string, path: string): SkillResourceReadResult {
 	return {
-		kind: 'resource',
-		skill: { id: `opaque-${name}`, name, scope: 'project', provider: 'agents' },
-		resource: { path },
 		content_xml: `<skill_resource name="${name}" path="${path}">data</skill_resource>`,
-		diagnostics: []
+		diagnostics: [],
+		kind: 'resource',
+		resource: { path },
+		skill: { id: `opaque-${name}`, name, provider: 'agents', scope: 'project' }
 	};
 }
 
@@ -92,7 +95,10 @@ function defaultPermission(): PermissionMock {
  * record and returns the persisted tool result message; everything else
  * dedupes or is session-only.
  */
-function fakeStore(): SkillActivationStore & { inputs: SkillActivationInput[]; activatedIds: Set<string> } {
+function fakeStore(): SkillActivationStore & {
+	inputs: SkillActivationInput[];
+	activatedIds: Set<string>;
+} {
 	const activatedIds = new Set<string>();
 	const inputs: SkillActivationInput[] = [];
 
@@ -150,11 +156,16 @@ function makeAdapters(options: {
 	const snapshot = buildSkillRunSnapshot(options.cwd, makeCatalog(...names));
 	const packed =
 		options.packed ??
-		({ envelope: PARTIAL_ENVELOPE, total: names.length, included: 0, estimated: true } as SkillPackedCatalog);
+		({
+			envelope: PARTIAL_ENVELOPE,
+			estimated: true,
+			included: 0,
+			total: names.length
+		} as SkillPackedCatalog);
 
 	return new SkillRunAdapters({
-		snapshot,
-		packed,
+		activation: options.activation ?? fakeStore(),
+		conversationId: options.conversationId ?? 'conv-1',
 		definitions: [
 			{
 				function: { name: SKILL_READ_TOOL, parameters: {} },
@@ -165,9 +176,9 @@ function makeAdapters(options: {
 				type: 'function'
 			}
 		],
-		conversationId: options.conversationId ?? 'conv-1',
+		packed,
 		requestPermission: options.requestPermission ?? defaultPermission(),
-		activation: options.activation ?? fakeStore()
+		snapshot
 	});
 }
 
@@ -178,9 +189,9 @@ function readCall(name: string, path?: string): AgenticToolCallPayload {
 			: JSON.stringify({ name: 'demo-skill' });
 
 	return {
+		function: { arguments: args, name },
 		id: 'call_1',
-		type: ToolCallType.FUNCTION,
-		function: { name, arguments: args }
+		type: ToolCallType.FUNCTION
 	};
 }
 
@@ -202,13 +213,12 @@ describe('SkillRunAdapters', () => {
 
 		requestPermission.mockResolvedValue(ToolPermissionDecision.DENY);
 		const adapters = makeAdapters({ names: ['alpha', 'beta'], requestPermission });
-
 		const result = await adapters.execute(readCall(SKILL_LIST_TOOL));
 
 		expect(result.isError).toBe(false);
 		expect(JSON.parse(result.content)).toEqual([
-			{ name: 'alpha', description: 'description of alpha', scope: 'project', provider: 'agents' },
-			{ name: 'beta', description: 'description of beta', scope: 'project', provider: 'agents' }
+			{ description: 'description of alpha', name: 'alpha', provider: 'agents', scope: 'project' },
+			{ description: 'description of beta', name: 'beta', provider: 'agents', scope: 'project' }
 		]);
 		expect(mockRead).not.toHaveBeenCalled();
 		expect(requestPermission).not.toHaveBeenCalled();
@@ -234,10 +244,9 @@ describe('SkillRunAdapters', () => {
 	it('never dispatches a read for a name outside the snapshot', async () => {
 		mockRead.mockResolvedValue(baseResult('demo-skill'));
 		const adapters = makeAdapters({ names: ['demo-skill'] });
-
 		const result = await adapters.execute({
 			...readCall(SKILL_READ_TOOL),
-			function: { name: SKILL_READ_TOOL, arguments: JSON.stringify({ name: 'not-in-snapshot' }) }
+			function: { arguments: JSON.stringify({ name: 'not-in-snapshot' }), name: SKILL_READ_TOOL }
 		});
 
 		expect(result.isError).toBe(true);
@@ -247,14 +256,16 @@ describe('SkillRunAdapters', () => {
 
 	it('rejects malformed arguments without a server call', async () => {
 		const adapters = makeAdapters({});
-
 		const missingName = await adapters.execute({
 			...readCall(SKILL_READ_TOOL),
-			function: { name: SKILL_READ_TOOL, arguments: JSON.stringify({}) }
+			function: { arguments: JSON.stringify({}), name: SKILL_READ_TOOL }
 		});
 		const badPath = await adapters.execute({
 			...readCall(SKILL_READ_TOOL),
-			function: { name: SKILL_READ_TOOL, arguments: JSON.stringify({ name: 'demo-skill', path: 7 }) }
+			function: {
+				arguments: JSON.stringify({ name: 'demo-skill', path: 7 }),
+				name: SKILL_READ_TOOL
+			}
 		});
 
 		expect(missingName.isError).toBe(true);
@@ -266,14 +277,18 @@ describe('SkillRunAdapters', () => {
 		mockRead.mockResolvedValue(baseResult('demo-skill'));
 		const requestPermission = defaultPermission();
 		const activation = fakeStore();
-		const adapters = makeAdapters({ conversationId: 'conv-9', cwd: '/run-cwd', requestPermission, activation });
-
+		const adapters = makeAdapters({
+			activation,
+			conversationId: 'conv-9',
+			cwd: '/run-cwd',
+			requestPermission
+		});
 		const result = await adapters.execute(readCall(SKILL_READ_TOOL), new AbortController().signal);
 
 		expect(requestPermission).toHaveBeenCalledWith(
 			SKILL_READ_TOOL,
 			SKILL_SERVER_LABEL,
-			{ name: 'demo-skill', scope: 'project', provider: 'agents' },
+			{ name: 'demo-skill', provider: 'agents', scope: 'project' },
 			expect.anything()
 		);
 		expect(result.isError).toBe(false);
@@ -296,8 +311,7 @@ describe('SkillRunAdapters', () => {
 
 		requestPermission.mockResolvedValue(ToolPermissionDecision.DENY);
 		const activation = fakeStore();
-		const adapters = makeAdapters({ requestPermission, activation });
-
+		const adapters = makeAdapters({ activation, requestPermission });
 		const result = await adapters.execute(readCall(SKILL_READ_TOOL));
 
 		expect(result.isError).toBe(true);
@@ -315,8 +329,7 @@ describe('SkillRunAdapters', () => {
 		mockRead.mockRejectedValue(new Error('skills disabled'));
 		const requestPermission = defaultPermission();
 		const activation = fakeStore();
-		const adapters = makeAdapters({ requestPermission, activation });
-
+		const adapters = makeAdapters({ activation, requestPermission });
 		const result = await adapters.execute(readCall(SKILL_READ_TOOL));
 
 		expect(result.isError).toBe(true);
@@ -331,8 +344,7 @@ describe('SkillRunAdapters', () => {
 		activation.activatedIds.add('opaque-demo-skill');
 		mockRead.mockResolvedValue(resourceResult('demo-skill', 'refs/DETAILS.md'));
 		const requestPermission = defaultPermission();
-		const adapters = makeAdapters({ cwd: '/a', requestPermission, activation });
-
+		const adapters = makeAdapters({ activation, cwd: '/a', requestPermission });
 		const result = await adapters.execute(readCall(SKILL_READ_TOOL, 'refs/DETAILS.md'));
 
 		expect(result.isError).toBe(false);
@@ -347,18 +359,22 @@ describe('SkillRunAdapters', () => {
 		mockRead.mockResolvedValue(resourceResult('demo-skill', 'refs/DETAILS.md'));
 		const requestPermission = defaultPermission();
 		const activation = fakeStore();
-		const adapters = makeAdapters({ requestPermission, activation });
-
-		const result = await adapters.execute(readCall(SKILL_READ_TOOL, 'refs/DETAILS.md'), new AbortController().signal);
+		const adapters = makeAdapters({ activation, requestPermission });
+		const result = await adapters.execute(
+			readCall(SKILL_READ_TOOL, 'refs/DETAILS.md'),
+			new AbortController().signal
+		);
 
 		expect(requestPermission).toHaveBeenCalledWith(
 			SKILL_READ_TOOL,
 			SKILL_SERVER_LABEL,
-			{ name: 'demo-skill', scope: 'project', provider: 'agents', path: 'refs/DETAILS.md' },
+			{ name: 'demo-skill', path: 'refs/DETAILS.md', provider: 'agents', scope: 'project' },
 			expect.anything()
 		);
 		expect(result.isError).toBe(false);
-		expect(result.content).toBe('<skill_resource name="demo-skill" path="refs/DETAILS.md">data</skill_resource>');
+		expect(result.content).toBe(
+			'<skill_resource name="demo-skill" path="refs/DETAILS.md">data</skill_resource>'
+		);
 		// Resource approvals are session-only: no durable record, the flow persists the message.
 		expect(result.activationRecorded).toBeUndefined();
 		expect(result.extras?.[0]).toMatchObject({ kind: 'resource' });
@@ -369,7 +385,7 @@ describe('SkillRunAdapters', () => {
 		mockRead.mockResolvedValue(baseResult('demo-skill'));
 		const requestPermission = defaultPermission();
 		const activation = fakeStore();
-		const adapters = makeAdapters({ requestPermission, activation });
+		const adapters = makeAdapters({ activation, requestPermission });
 
 		await adapters.execute(readCall(SKILL_READ_TOOL));
 		await adapters.execute(readCall(SKILL_READ_TOOL));
@@ -388,17 +404,17 @@ describe('SkillRunAdapters', () => {
 		// Durable activation of identity A (resolved under /a).
 		activation.activatedIds.add('opaque-id-A');
 		const requestPermission = defaultPermission();
-		const adaptersA = makeAdapters({ cwd: '/a', requestPermission, activation });
-		const adaptersB = makeAdapters({ cwd: '/b', requestPermission, activation });
+		const adaptersA = makeAdapters({ activation, cwd: '/a', requestPermission });
+		const adaptersB = makeAdapters({ activation, cwd: '/b', requestPermission });
 
 		mockRead.mockResolvedValueOnce(
 			baseResult('demo-skill', {
-				skill: { id: 'opaque-id-A', name: 'demo-skill', scope: 'project', provider: 'agents' }
+				skill: { id: 'opaque-id-A', name: 'demo-skill', provider: 'agents', scope: 'project' }
 			})
 		);
 		mockRead.mockResolvedValueOnce(
 			baseResult('demo-skill', {
-				skill: { id: 'opaque-id-B', name: 'demo-skill', scope: 'project', provider: 'agents' }
+				skill: { id: 'opaque-id-B', name: 'demo-skill', provider: 'agents', scope: 'project' }
 			})
 		);
 
@@ -416,7 +432,7 @@ describe('SkillRunAdapters', () => {
 		expect(requestPermission).toHaveBeenCalledWith(
 			SKILL_READ_TOOL,
 			SKILL_SERVER_LABEL,
-			{ name: 'demo-skill', scope: 'project', provider: 'agents' },
+			{ name: 'demo-skill', provider: 'agents', scope: 'project' },
 			expect.anything()
 		);
 		expect(result.isError).toBe(false);
@@ -432,6 +448,7 @@ describe('SkillRunAdapters', () => {
 	it('shares one pending decision across concurrent base reads of the same resolved identity', async () => {
 		mockRead.mockResolvedValue(baseResult('demo-skill'));
 		let resolvePermission!: (decision: ToolPermissionDecision) => void;
+
 		const requestPermission = defaultPermission();
 
 		requestPermission.mockImplementation(
@@ -441,8 +458,7 @@ describe('SkillRunAdapters', () => {
 				})
 		);
 		const activation = fakeStore();
-		const adapters = makeAdapters({ requestPermission, activation });
-
+		const adapters = makeAdapters({ activation, requestPermission });
 		const first = adapters.execute(readCall(SKILL_READ_TOOL));
 		const second = adapters.execute(readCall(SKILL_READ_TOOL));
 
@@ -466,6 +482,7 @@ describe('SkillRunAdapters', () => {
 	it('does not deduplicate resource reads themselves, but shares their approval decision', async () => {
 		mockRead.mockResolvedValue(resourceResult('demo-skill', 'refs/DETAILS.md'));
 		let resolvePermission!: (decision: ToolPermissionDecision) => void;
+
 		const requestPermission = defaultPermission();
 
 		requestPermission.mockImplementation(
@@ -475,7 +492,6 @@ describe('SkillRunAdapters', () => {
 				})
 		);
 		const adapters = makeAdapters({ requestPermission });
-
 		const first = adapters.execute(readCall(SKILL_READ_TOOL, 'refs/DETAILS.md'));
 		const second = adapters.execute(readCall(SKILL_READ_TOOL, 'refs/DETAILS.md'));
 
@@ -498,7 +514,6 @@ describe('SkillRunAdapters', () => {
 
 		mockRead.mockResolvedValue(baseResult('demo-skill', { content_xml: contentXml }));
 		const adapters = makeAdapters({});
-
 		const result = await adapters.execute(readCall(SKILL_READ_TOOL));
 
 		expect(result.isError).toBe(false);
@@ -507,10 +522,9 @@ describe('SkillRunAdapters', () => {
 
 	it('rejects malformed tool call JSON with a structured error', async () => {
 		const adapters = makeAdapters({});
-
 		const result = await adapters.execute({
 			...readCall(SKILL_READ_TOOL),
-			function: { name: SKILL_READ_TOOL, arguments: '{not json' }
+			function: { arguments: '{not json', name: SKILL_READ_TOOL }
 		});
 
 		expect(result.isError).toBe(true);
@@ -522,7 +536,7 @@ describe('SkillRunAdapters', () => {
 		const activation = fakeStore();
 
 		mockRead.mockResolvedValue(baseResult('demo-skill'));
-		const adapters = makeAdapters({ conversationId: 'conv-11', activation });
+		const adapters = makeAdapters({ activation, conversationId: 'conv-11' });
 
 		await adapters.execute(readCall(SKILL_READ_TOOL));
 
