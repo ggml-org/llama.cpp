@@ -486,7 +486,14 @@ static void ggml_opt_build(ggml_opt_context_t opt_ctx) {
     }
 
     // gb_grad == graph backward gradients, forward pass, then backward pass to calculate gradients.
-    opt_ctx->gb_grad = ggml_graph_dup(opt_ctx->ctx_compute, opt_ctx->gf, /*force_grads =*/ true);
+    // ggml_graph_dup() keeps the forward graph's capacity, but ggml_build_backward_expand() appends
+    // the grad nodes to the same graph; for large attention graphs the backward graph is up to ~3x
+    // the forward graph, so allocate extra capacity here
+    {
+        struct ggml_cgraph * gb = ggml_new_graph_custom(opt_ctx->ctx_compute, 6*opt_ctx->gf->size, /*grads =*/ true);
+        ggml_graph_cpy(opt_ctx->gf, gb);
+        opt_ctx->gb_grad = gb;
+    }
     ggml_build_backward_expand(opt_ctx->ctx_compute, opt_ctx->gb_grad, opt_ctx->grad_accs.data());
 
     if (opt_ctx->buf_static) {
@@ -501,7 +508,12 @@ static void ggml_opt_build(ggml_opt_context_t opt_ctx) {
     GGML_ASSERT(opt_ctx->build_type_alloc == GGML_OPT_BUILD_TYPE_OPT);
 
     // gb_opt == graph backward optimize, forward pass, then backward pass to calculate gradients, then optimizer step.
-    opt_ctx->gb_opt = ggml_graph_dup(opt_ctx->ctx_compute, opt_ctx->gb_grad, /*force_grads =*/ true);
+    // like gb_grad above, allocate extra capacity for the per-param optimizer step nodes
+    {
+        struct ggml_cgraph * gb = ggml_new_graph_custom(opt_ctx->ctx_compute, opt_ctx->gb_grad->size + 16*n_param, /*grads =*/ true);
+        ggml_graph_cpy(opt_ctx->gb_grad, gb);
+        opt_ctx->gb_opt = gb;
+    }
 
     opt_ctx->opt_step_params = ggml_new_tensor_1d(opt_ctx->ctx_cpu, GGML_TYPE_F32, need_momenta ? 7 : 2);
     ggml_tensor * adamw_params = opt_ctx->opt_step_params;

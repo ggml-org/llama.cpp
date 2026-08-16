@@ -1,5 +1,6 @@
 #include "ggml-vulkan.h"
 #include <vulkan/vulkan_core.h>
+#include <fstream>
 #if defined(GGML_VULKAN_RUN_TESTS) || defined(GGML_VULKAN_CHECK_RESULTS)
 #include <chrono>
 #include "ggml-cpu.h"
@@ -777,6 +778,10 @@ struct vk_device_struct {
     // runs with no lock held, so different pipelines can compile in parallel.
     // Lock order is device->mutex -> compile_mutex, never the reverse.
     std::mutex compile_mutex;
+
+    // Pipeline cache for Vulkan shader compilation
+    vk::PipelineCache pipeline_cache;
+    std::string pipeline_cache_path;
     std::condition_variable compile_cv;
 
     vk::PhysicalDevice physical_device;
@@ -1109,6 +1114,19 @@ struct vk_device_struct {
 
     ~vk_device_struct() {
         VK_LOG_DEBUG("destroy device " << name);
+
+        // Save pipeline cache
+        if (pipeline_cache) {
+            auto data = device.getPipelineCacheData(pipeline_cache);
+            if (!data.empty()) {
+                std::ofstream ofs(pipeline_cache_path, std::ios::binary);
+                if (ofs) {
+                    ofs.write(reinterpret_cast<const char*>(data.data()), data.size());
+                    VK_LOG_DEBUG("Saved pipeline cache to " << pipeline_cache_path << " (" << data.size() << " bytes)");
+                }
+            }
+            device.destroyPipelineCache(pipeline_cache);
+        }
 
         device.destroyFence(fence);
 
@@ -3026,7 +3044,7 @@ static void ggml_vk_create_pipeline_func(vk_device& device, vk_pipeline& pipelin
 #endif
 
     try {
-        pipeline->pipeline = device->device.createComputePipeline(VK_NULL_HANDLE, compute_pipeline_create_info).value;
+        pipeline->pipeline = device->device.createComputePipeline(device->pipeline_cache, compute_pipeline_create_info).value;
     } catch (const vk::SystemError& e) {
         std::cerr << "ggml_vulkan: Compute pipeline creation failed for " << pipeline->name << std::endl;
         std::cerr << "ggml_vulkan: " << e.what() << std::endl;
@@ -6938,6 +6956,44 @@ static vk_device ggml_vk_get_device(size_t idx) {
         if (device->device_fault) {
             device->pfn_vkGetDeviceFaultInfoEXT = (PFN_vkGetDeviceFaultInfoEXT)
                 vkGetDeviceProcAddr(device->device, "vkGetDeviceFaultInfoEXT");
+        }
+
+        // Initialize pipeline cache
+        {
+            // Use GGML_VK_PIPELINE_CACHE_DIR env var or default to ~/.cache/ggml-vulkan-pipeline.bin
+            const char* cache_dir = getenv("GGML_VK_PIPELINE_CACHE_DIR");
+            std::string cache_path;
+            if (cache_dir) {
+                cache_path = std::string(cache_dir) + "/ggml-vulkan-pipeline.bin";
+            } else {
+                const char* home = getenv("HOME");
+                if (home) {
+                    cache_path = std::string(home) + "/.cache/ggml-vulkan-pipeline.bin";
+                }
+            }
+            if (!cache_path.empty()) {
+                device->pipeline_cache_path = cache_path;
+                std::ifstream ifs(cache_path, std::ios::binary | std::ios::ate);
+                if (ifs) {
+                    size_t size = ifs.tellg();
+                    ifs.seekg(0);
+                    std::vector<uint8_t> data(size);
+                    ifs.read(reinterpret_cast<char*>(data.data()), size);
+                    vk::PipelineCacheCreateInfo pcci(vk::PipelineCacheCreateFlags{}, data.size(), data.data());
+                    try {
+                        device->pipeline_cache = device->device.createPipelineCache(pcci);
+                        VK_LOG_DEBUG("Loaded pipeline cache from " << cache_path << " (" << size << " bytes)");
+                    } catch (const vk::SystemError& e) {
+                        // Cache might be corrupted or from a different driver version
+                        VK_LOG_DEBUG("Failed to load pipeline cache: " << e.what() << ", creating new one");
+                        device->pipeline_cache = device->device.createPipelineCache({});
+                    }
+                } else {
+                    device->pipeline_cache = device->device.createPipelineCache({});
+                }
+            } else {
+                device->pipeline_cache = device->device.createPipelineCache({});
+            }
         }
 
         // Queues
@@ -17916,10 +17972,11 @@ static void ggml_backend_vk_device_get_props(ggml_backend_dev_t dev, struct ggml
     props->type        = ggml_backend_vk_device_get_type(dev);
     props->device_id   = ctx->pci_bus_id.empty() ? nullptr : ctx->pci_bus_id.c_str();
     ggml_backend_vk_device_get_memory(dev, &props->memory_free, &props->memory_total);
+    auto device = ggml_vk_get_device(ctx->device);
     props->caps = {
         /* .async                 = */ true,
         /* .host_buffer           = */ true,
-        /* .buffer_from_host_ptr  = */ false,
+        /* .buffer_from_host_ptr  = */ device->external_memory_host,
         /* .events                = */ true,
         /* .mmap_support          = */ !ctx->is_integrated_gpu,
     };

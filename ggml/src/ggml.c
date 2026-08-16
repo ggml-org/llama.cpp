@@ -6934,6 +6934,21 @@ static void ggml_compute_backward(
                 // noop
             }
         } break;
+        case GGML_OP_SET_ROWS: {
+            // SET_ROWS: writes src0 (rows) into a view of src2 (state buffer, e.g. KV cache)
+            // at positions src1; the node itself is the (view of) src2
+            // gradient flows only into src0 (the written rows), gathered from the
+            // accumulated gradient of the cache at the written positions
+            if (src0_needs_grads) {
+                ggml_add_or_set(ctx, cgraph, isrc0, ggml_get_rows(ctx, grad, src1));
+            }
+            if (src1_needs_grads) {
+                // noop (indices not differentiable)
+            }
+            if (src2_needs_grads) {
+                // noop (dst is a state buffer, not a parameter)
+            }
+        } break;
         case GGML_OP_DIAG_MASK_INF: {
             if (src0_needs_grads) {
                 /* ggml_diag_mask_inf_impl() shouldn't be here */
@@ -7263,6 +7278,7 @@ void ggml_build_backward_expand(
             case GGML_OP_CPY:           // gradients in CPY target are irrelevant
             case GGML_OP_GET_ROWS:      // row indices not differentiable
             case GGML_OP_GET_ROWS_BACK: // same as for GET_ROWS
+            case GGML_OP_SET_ROWS:      // row indices not differentiable, cache dst is state
             case GGML_OP_ROPE:          // positions not differentiable
                 ignore_src[1] = true;
                 break;
@@ -7283,8 +7299,11 @@ void ggml_build_backward_expand(
         }
 
         // inplace operations are currently not supported
+        // SET_ROWS writes into a view of a state buffer (e.g. KV cache); the backward
+        // pass handles it by routing gradients only into the written rows (src0)
         GGML_ASSERT(!node->view_src || node->op == GGML_OP_CPY || node->op == GGML_OP_VIEW ||
-            node->op == GGML_OP_RESHAPE || node->op == GGML_OP_PERMUTE || node->op == GGML_OP_TRANSPOSE);
+            node->op == GGML_OP_RESHAPE || node->op == GGML_OP_PERMUTE || node->op == GGML_OP_TRANSPOSE ||
+            node->op == GGML_OP_SET_ROWS);
 
         const size_t ihash = ggml_hash_find(&cgraph->visited_hash_set, node);
         GGML_ASSERT(ihash != GGML_HASHSET_FULL);
