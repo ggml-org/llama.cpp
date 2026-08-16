@@ -3,6 +3,10 @@
 
 #ifdef GGML_CUDA_USE_CUB
 #    include <cub/cub.cuh>
+#    if __has_include(<cub/device/device_batched_topk.cuh>)
+#        include <cub/device/device_batched_topk.cuh>
+#        define CUB_BATCHED_TOP_K_AVAILABLE
+#    endif
 #    if (CCCL_MAJOR_VERSION >= 3 && CCCL_MINOR_VERSION >= 2)
 #        define CUB_TOP_K_AVAILABLE
 #        include <cuda/iterator>
@@ -10,7 +14,67 @@ using namespace cub;
 #    endif  // CCCL_MAJOR_VERSION >= 3 && CCCL_MINOR_VERSION >= 2
 #endif      // GGML_CUDA_USE_CUB
 
-#ifdef CUB_TOP_K_AVAILABLE
+#ifdef CUB_BATCHED_TOP_K_AVAILABLE
+
+static void batched_top_k_cub(ggml_cuda_pool & pool,
+                      const float *    src,
+                      int *            dst,
+                      const int        ncols,
+                      const int        k,
+                      const int        nrows,
+                      cudaStream_t     stream) {
+    auto requirements = cuda::execution::require(cuda::execution::determinism::not_guaranteed,
+                                                 cuda::execution::tie_break::unspecified,
+                                                 cuda::execution::output_ordering::unsorted);
+    auto stream_env   = cuda::stream_ref{ stream };
+    auto env          = cuda::std::execution::env{ stream_env, requirements };
+
+
+    // Outer iterator: one element per row.
+    auto rows = cuda::make_counting_iterator(0);
+
+    // Dereferencing keys_in[row] yields an iterator to the row's keys.
+    auto keys_in = cuda::make_transform_iterator(
+        rows,
+        [=] __host__ __device__(int row) {
+            return src + static_cast<size_t>(row) * ncols;
+        });
+
+    // Dereferencing keys_out[row] yields a discard iterator.
+    auto keys_out = cuda::make_transform_iterator(
+        rows,
+        [] __host__ __device__(int) {
+            return cuda::discard_iterator{};
+        });
+
+    // Each row gets values 0, 1, ..., ncols - 1.
+    auto values_in = cuda::make_transform_iterator(
+        rows,
+        [] __host__ __device__(int) {
+            return cuda::make_counting_iterator(0);
+        });
+
+    // Each row writes k selected indices.
+    auto values_out = cuda::make_transform_iterator(
+        rows,
+        [=] __host__ __device__(int row) {
+            return dst + static_cast<size_t>(row) * k;
+        });
+
+    auto ncols_arg = cuda::args::immediate{ncols, cuda::args::bounds<1, 2097152>()};
+
+    size_t temp_storage_bytes = 0;
+    CUDA_CHECK(DeviceBatchedTopK::MaxPairs(nullptr, temp_storage_bytes, keys_in, keys_out, values_in, values_out,
+                         ncols_arg, k, nrows, env));
+
+    ggml_cuda_pool_alloc<uint8_t> temp_storage_alloc(pool, temp_storage_bytes);
+    void *                        d_temp_storage = temp_storage_alloc.get();
+
+    CUDA_CHECK(DeviceBatchedTopK::MaxPairs(d_temp_storage, temp_storage_bytes, keys_in, keys_out, values_in, values_out,
+                         ncols_arg, k, nrows, env));
+}
+
+#elif defied CUB_TOP_K_AVAILABLE
 
 static void top_k_cub(ggml_cuda_pool & pool,
                       const float *    src,
@@ -63,7 +127,9 @@ void ggml_cuda_op_top_k(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const int64_t    nrows = ggml_nrows(src0);
     const int64_t    k     = dst->ne[0];
     ggml_cuda_pool & pool  = ctx.pool();
-#ifdef CUB_TOP_K_AVAILABLE
+#ifdef CUB_BATCHED_TOP_K_AVAILABLE
+    batched_top_k_cub(pool, src0_d, dst_d, ncols, k, nrows, stream);
+#elif defined CUB_TOP_K_AVAILABLE
     // TODO: Switch to `DeviceSegmentedTopK` for multi-row TopK once implemented
     // https://github.com/NVIDIA/cccl/issues/6391
     // TODO: investigate if there exists a point where parallelized argsort is faster than sequential top-k
