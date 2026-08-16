@@ -121,13 +121,14 @@ static __device__ __forceinline__ void dequantize_q8_0(const void * vx, const in
 
 //================================== non-linear quants
 
+#define QR_NL_DEQUANTIZE 2
+
 static __device__ __forceinline__ void dequantize_iq2_nl(const void * vx, const int64_t ib, const int iqs, float2 & v){
     const block_iq2_nl * x = (const block_iq2_nl *) vx;
 
     const float d = (float) x[ib].d;
 
-    // the layout is planar: element p sits in group p/(QK2_NL/4), byte p%(QK2_NL/4).
-    // iqs pairs p with p + QK2_NL/2, so both values come from the same qs byte
+    // the layout is planar, element p sits in group p/(QK2_NL/4), byte p%(QK2_NL/4).
     const int j = iqs % (QK2_NL/4);
     const int g = iqs / (QK2_NL/4);
 
