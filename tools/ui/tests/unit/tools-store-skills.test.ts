@@ -6,7 +6,7 @@ import {
 	SKILL_TOOL_SETTINGS
 } from '$lib/constants';
 import { ToolSource } from '$lib/enums';
-import type { toolsStore as ToolsStoreApi } from '$lib/stores/tools.svelte';
+import type { toolsStore as ToolsStoreValue } from '$lib/stores/tools.svelte';
 import type { ToolEntry } from '$lib/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -62,7 +62,7 @@ vi.mock('$lib/services/tools.service', () => ({
 	}
 }));
 
-let toolsStore: ToolsStoreApi;
+let toolsStore: typeof ToolsStoreValue;
 
 beforeEach(async () => {
 	storageState.clear();
