@@ -3,20 +3,22 @@
 // Typing `/model is broken` is prose until the command is picked - the
 // buffer must survive; only an actual selection consumes the token.
 
-import { describe, it, expect } from 'vitest';
-import { render } from 'vitest-browser-svelte';
-import { tick } from 'svelte';
 import ChatFormPickersHarness from './components/ChatFormPickersHarness.svelte';
+import { tick } from 'svelte';
+import { describe, expect, it } from 'vitest';
+import { render } from 'vitest-browser-svelte';
 
 describe('slash command dispatch', () => {
 	it('does not dispatch or clear the buffer when a space follows the name', async () => {
 		const screen = render(ChatFormPickersHarness);
+
 		await tick();
 
 		screen.component.type('/model is broken');
 		await tick();
 
 		const pickers = screen.component.getPickers();
+
 		expect(screen.component.getValue()).toBe('/model is broken');
 		expect(screen.component.getCalls()).not.toContain('openModelSelector');
 		expect(screen.component.getCalls().some((c) => c.startsWith('setValue:'))).toBe(false);
@@ -26,6 +28,7 @@ describe('slash command dispatch', () => {
 
 	it('dispatches /model on explicit selection and consumes the token', async () => {
 		const screen = render(ChatFormPickersHarness);
+
 		await tick();
 
 		screen.component.type('/model is broken');
@@ -33,7 +36,9 @@ describe('slash command dispatch', () => {
 
 		const pickers = screen.component.getPickers();
 		const model = pickers.availableCommands.find((c) => c.name === 'model');
+
 		if (!model) throw new Error('model command missing');
+
 		pickers.handleCommandSelect(model);
 		await tick();
 
@@ -44,16 +49,20 @@ describe('slash command dispatch', () => {
 
 	it('seeds the prompt picker search from the token args on selection', async () => {
 		const screen = render(ChatFormPickersHarness);
+
 		await tick();
 
 		screen.component.type('/prompt weather');
 		await tick();
 
 		const pickers = screen.component.getPickers();
+
 		expect(pickers.isPromptPickerOpen).toBe(false);
 
 		const prompt = pickers.availableCommands.find((c) => c.name === 'prompt');
+
 		if (!prompt) throw new Error('prompt command missing');
+
 		pickers.handleCommandSelect(prompt);
 		await tick();
 
@@ -64,16 +73,20 @@ describe('slash command dispatch', () => {
 
 	it('normalizes a partial /cwd token on selection and keeps it in the buffer', async () => {
 		const screen = render(ChatFormPickersHarness);
+
 		await tick();
 
 		screen.component.type('/cw docs');
 		await tick();
 
 		const pickers = screen.component.getPickers();
+
 		expect(pickers.isWorkingDirectoryPickerOpen).toBe(false);
 
 		const cwd = pickers.availableCommands.find((c) => c.name === 'cwd');
+
 		if (!cwd) throw new Error('cwd command missing');
+
 		pickers.handleCommandSelect(cwd);
 		await tick();
 
@@ -84,10 +97,12 @@ describe('slash command dispatch', () => {
 
 	it('syncs the /cwd token into the picker search while the picker is open', async () => {
 		const screen = render(ChatFormPickersHarness);
+
 		await tick();
 
 		const pickers = screen.component.getPickers();
 		const cwd = pickers.availableCommands.find((c) => c.name === 'cwd');
+
 		if (!cwd) throw new Error('cwd command missing');
 
 		screen.component.type('/cwd docs');
@@ -104,10 +119,12 @@ describe('slash command dispatch', () => {
 
 	it('abandons the /cwd picker when the token is edited away from /cwd', async () => {
 		const screen = render(ChatFormPickersHarness);
+
 		await tick();
 
 		const pickers = screen.component.getPickers();
 		const cwd = pickers.availableCommands.find((c) => c.name === 'cwd');
+
 		if (!cwd) throw new Error('cwd command missing');
 
 		screen.component.type('/cwd docs');

@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cstddef>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <openvino/runtime/core.hpp>
@@ -17,28 +18,68 @@ struct graph_key {
     int n_nodes;
     std::string first_node_name;
     std::string last_node_name;
+    std::vector<std::string> input_src_names;
 
     graph_key(const ggml_cgraph * cgraph) : n_nodes(cgraph->n_nodes) {
         if (n_nodes > 0) {
             first_node_name = cgraph->nodes[0]->name;
             last_node_name = cgraph->nodes[n_nodes - 1]->name;
         }
+
+        auto get_input_key_name = [](const ggml_cgraph * graph, const ggml_tensor * tensor) {
+            std::string name = tensor->name;
+            const size_t hash_pos = ggml_hash_find(&graph->visited_hash_set, tensor);
+            if (((tensor->flags & GGML_TENSOR_FLAG_COMPUTE) || GgmlOvDecoder::is_kvcache(tensor, nullptr)) &&
+                hash_pos != GGML_HASHSET_FULL && ggml_bitset_get(graph->visited_hash_set.used, hash_pos)) {
+                name += "#" + std::to_string(hash_pos);
+            }
+            return name;
+        };
+
+        std::vector<std::string> node_names;
+        node_names.reserve(cgraph->n_nodes);
+        for (int node_idx = 0; node_idx < cgraph->n_nodes; node_idx++) {
+            node_names.emplace_back(cgraph->nodes[node_idx]->name);
+        }
+
+        for (int node_idx = 0; node_idx < cgraph->n_nodes; node_idx++) {
+            const ggml_tensor * node = cgraph->nodes[node_idx];
+            for (int src_idx = 0; src_idx < GGML_MAX_SRC; src_idx++) {
+                const ggml_tensor * src = node->src[src_idx];
+                if (src == nullptr || src->name[0] == '\0') {
+                    continue;
+                }
+
+                const std::string src_name = get_input_key_name(cgraph, src);
+                if (std::find(node_names.begin(), node_names.end(), src_name) != node_names.end()) {
+                    continue;
+                }
+                if (src_name.find("weight") != std::string::npos) {
+                    continue;
+                }
+
+                input_src_names.push_back(std::to_string(node_idx) + ":" + std::to_string(src_idx) + ":" + src_name);
+            }
+        }
     }
 
     bool operator==(const graph_key & other) const {
         return n_nodes == other.n_nodes && first_node_name == other.first_node_name &&
-               last_node_name == other.last_node_name;
+               last_node_name == other.last_node_name && input_src_names == other.input_src_names;
     }
 };
 
 struct graph_key_hash {
     size_t operator()(const graph_key & key) const {
-        size_t h = std::hash<int>{}(key.n_nodes);
+        size_t hash = std::hash<int>{}(key.n_nodes);
         if (key.n_nodes > 0) {
-            h ^= std::hash<std::string>{}(key.first_node_name) + 0x9e3779b9 + (h << 6) + (h >> 2);
-            h ^= std::hash<std::string>{}(key.last_node_name) + 0x9e3779b9 + (h << 6) + (h >> 2);
+            hash ^= std::hash<std::string>{}(key.first_node_name) + 0x9e3779b9 + (hash << 6) + (hash >> 2);
+            hash ^= std::hash<std::string>{}(key.last_node_name) + 0x9e3779b9 + (hash << 6) + (hash >> 2);
         }
-        return h;
+        for (const auto & input_src_name : key.input_src_names) {
+            hash ^= std::hash<std::string>{}(input_src_name) + 0x9e3779b9 + (hash << 6) + (hash >> 2);
+        }
+        return hash;
     }
 };
 
@@ -66,13 +107,19 @@ struct ov_runtime_context {
 
     ov_runtime_context() : device("CPU"), stateful(false), stateful_kv_size(0), backend_count(0) {}
 
-    void clear_caches() {
-        std::lock_guard<std::mutex> lock(ctx_mutex);
+    void clear_caches_locked() {
         decoder_cache.clear();
         infer_request_cache.clear();
         infer_request_cache_prefill.clear();
         ov_input_names_cache.clear();
         ov_output_names_cache.clear();
+        kv_state_input_name_map.clear();
+        stateful_kv_size = 0;
+    }
+
+    void clear_caches() {
+        std::lock_guard<std::mutex> lock(ctx_mutex);
+        clear_caches_locked();
     }
 };
 

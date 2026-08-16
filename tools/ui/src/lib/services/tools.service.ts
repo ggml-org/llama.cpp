@@ -1,10 +1,10 @@
 import { base } from '$app/paths';
+import { API_TOOLS, HEADERS } from '$lib/constants';
+import { ToolResponseField } from '$lib/enums';
+import type { ServerBuiltinToolInfo, ToolExecutionResult } from '$lib/types';
+import { apiFetch } from '$lib/utils';
 import { getJsonHeaders } from '$lib/utils/api-headers';
 import { parseSseJsonStream, type SseJsonEvent } from '$lib/utils/sse';
-import { apiFetch } from '$lib/utils';
-import { API_TOOLS, X_TOOL_CWD_HEADER } from '$lib/constants';
-import { ToolResponseField } from '$lib/enums';
-import type { ToolExecutionResult, ServerBuiltinToolInfo } from '$lib/types';
 
 export class ToolsService {
 	/**
@@ -30,9 +30,9 @@ export class ToolsService {
 		cwd?: string
 	): Promise<ToolExecutionResult> {
 		const result = await apiFetch<Record<string, unknown>>(API_TOOLS.EXECUTE, {
+			body: JSON.stringify({ params, tool: toolName }),
+			headers: cwd ? { [HEADERS.X_TOOL_CWD_HEADER]: cwd } : undefined,
 			method: 'POST',
-			body: JSON.stringify({ tool: toolName, params }),
-			headers: cwd ? { [X_TOOL_CWD_HEADER]: cwd } : undefined,
 			signal
 		});
 
@@ -51,17 +51,27 @@ export class ToolsService {
 	 * Execute a built-in tool and return the raw JSON response. Unlike
 	 * executeTool, this preserves structured fields (e.g. file_glob_search's
 	 * `entries` and `base`) that the flattened ToolExecutionResult drops.
+	 *
+	 * @param respType - sent as the x-resp-type request header. Only read_file
+	 * honors it, with `base64` to get the raw bytes instead of decoded text.
 	 */
 	static async executeToolRaw(
 		toolName: string,
 		params: Record<string, unknown>,
 		signal?: AbortSignal,
-		cwd?: string
+		cwd?: string,
+		respType?: string
 	): Promise<Record<string, unknown>> {
+		const headers: Record<string, string> = {};
+
+		if (cwd) headers[HEADERS.X_TOOL_CWD_HEADER] = cwd;
+
+		if (respType) headers[HEADERS.X_RESP_TYPE_HEADER] = respType;
+
 		return apiFetch<Record<string, unknown>>(API_TOOLS.EXECUTE, {
+			body: JSON.stringify({ params, tool: toolName }),
+			headers: Object.keys(headers).length > 0 ? headers : undefined,
 			method: 'POST',
-			body: JSON.stringify({ tool: toolName, params }),
-			headers: cwd ? { [X_TOOL_CWD_HEADER]: cwd } : undefined,
 			signal
 		});
 	}
@@ -88,16 +98,19 @@ export class ToolsService {
 		cwd?: string
 	): AsyncGenerator<ToolStreamEvent> {
 		const headers = getJsonHeaders();
-		if (cwd) headers[X_TOOL_CWD_HEADER] = cwd;
+
+		if (cwd) headers[HEADERS.X_TOOL_CWD_HEADER] = cwd;
+
 		const response = await fetch(`${base}${API_TOOLS.EXECUTE}`, {
-			method: 'POST',
+			body: JSON.stringify({ params, stream: true, tool: toolName }),
 			headers,
-			body: JSON.stringify({ tool: toolName, params, stream: true }),
+			method: 'POST',
 			signal
 		});
 
 		if (!response.ok || !response.body) {
 			const detail = await formatNonOkResponse(response);
+
 			throw new Error(detail);
 		}
 
@@ -105,14 +118,18 @@ export class ToolsService {
 
 		while (true) {
 			const next: IteratorResult<SseJsonEvent<ToolServerEvent>> = await iterator.next();
+
 			if (next.done) return;
+
 			const event = next.value.data;
 
 			if (event.chunk !== undefined) {
 				yield { chunk: event.chunk, done: false };
 			}
+
 			if (event.done) {
 				yield { chunk: null, done: true, error: event.error };
+
 				return;
 			}
 		}
@@ -140,18 +157,23 @@ interface ToolServerEvent {
 
 async function formatNonOkResponse(response: Response): Promise<string> {
 	const status = `${response.status} ${response.statusText}`.trim();
+
 	try {
 		const errBody = (await response.clone().json()) as { error?: string; message?: string };
+
 		if (errBody?.error) return `${status}: ${errBody.error}`;
+
 		if (errBody?.message) return `${status}: ${errBody.message}`;
 	} catch (error) {
 		console.error('[tools] Non-JSON error response, falling back to raw text:', error);
 		try {
 			const text = await response.text();
+
 			if (text.trim()) return `${status}: ${text.trim()}`;
 		} catch (error) {
 			console.error('[tools] Failed to read error response as text:', error);
 		}
 	}
+
 	return status || `HTTP ${response.status}`;
 }
