@@ -1,7 +1,7 @@
 <script lang="ts">
-	import { ChatAttachmentsList, MarkdownContent } from '$lib/components/app';
+	import { ChatAttachmentsList, MarkdownContent, MentionText } from '$lib/components/app';
 	import { Card } from '$lib/components/ui/card';
-	import { config } from '$lib/stores/settings.svelte';
+	import { settingsStore } from '$lib/stores';
 	import type { DatabaseMessageExtra } from '$lib/types/database';
 
 	interface Props {
@@ -24,7 +24,7 @@
 
 	let isMultiline = $state(false);
 	let messageElement: HTMLElement | undefined = $state();
-	const currentConfig = config();
+	const currentConfig = settingsStore.config;
 
 	$effect(() => {
 		if (!messageElement || !content.trim()) return;
@@ -64,14 +64,14 @@
 		data-multiline={isMultiline ? '' : undefined}
 		style="{maxHeightStyle} overflow-wrap: anywhere; word-break: break-word;"
 	>
-		{#if renderMarkdown && !currentConfig.renderContentAsRawText}
+		{#if renderMarkdown && currentConfig.renderUserContentAsMarkdown}
 			<div bind:this={messageElement}>
 				<MarkdownContent class="markdown-user-content" {content} />
 			</div>
 		{:else}
-			<span bind:this={messageElement} class="text-md whitespace-pre-wrap">
-				{content}
-			</span>
+			<span bind:this={messageElement} class="text-md whitespace-pre-wrap"
+				><MentionText {content} /></span
+			>
 		{/if}
 	</Card>
 {/if}

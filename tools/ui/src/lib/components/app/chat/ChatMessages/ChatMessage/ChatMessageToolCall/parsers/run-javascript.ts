@@ -7,7 +7,7 @@
 
 import { parseToolArgs } from './_shared';
 import { BuiltInTool } from '$lib/enums';
-import type { AgenticSection } from '$lib/utils';
+import type { AgenticSection } from '$lib/types';
 
 export type RunJavascriptMeta = {
 	code: string;

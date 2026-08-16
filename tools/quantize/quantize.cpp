@@ -611,7 +611,7 @@ int llama_quantize(int argc, char ** argv) {
         }
     }
 
-    llama_print_build_info();
+    llama_print_build_info(llama_version());
 
     if (params.dry_run) {
         fprintf(stderr, "%s: calculating quantization size for '%s' as %s", __func__, fname_inp.c_str(), ftype_str.c_str());

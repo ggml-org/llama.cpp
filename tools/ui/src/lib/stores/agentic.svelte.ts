@@ -22,10 +22,13 @@
 
 import { DEFAULT_AGENTIC_CONFIG, NEWLINE } from '$lib/constants';
 import {
+	AUDIO_MIME_TO_EXTENSION,
 	DATA_URI_BASE64_REGEX,
+	DEFAULT_AUDIO_EXTENSION,
 	DEFAULT_IMAGE_EXTENSION,
 	IMAGE_MIME_TO_EXTENSION,
-	MCP_ATTACHMENT_NAME_PREFIX
+	MCP_ATTACHMENT_NAME_PREFIX,
+	MIME_TYPE_PREFIXES
 } from '$lib/constants';
 import { BuiltInTool, ToolPermissionDecision, ToolSource } from '$lib/enums';
 import {
@@ -36,13 +39,15 @@ import {
 	ToolCallType
 } from '$lib/enums';
 import { ChatService } from '$lib/services';
+import { ReadMediaService } from '$lib/services/read-media.service';
 import { SandboxService } from '$lib/services/sandbox.service';
 import { ToolsService } from '$lib/services/tools.service';
+// direct imports between stores, not via the barrel, to avoid circular deps
 import { conversationsStore } from '$lib/stores/conversations.svelte';
 import { mcpStore } from '$lib/stores/mcp.svelte';
 import { modelsStore } from '$lib/stores/models.svelte';
 import { permissionsStore } from '$lib/stores/permissions.svelte';
-import { config } from '$lib/stores/settings.svelte';
+import { settingsStore } from '$lib/stores/settings.svelte';
 import { toolsStore } from '$lib/stores/tools.svelte';
 import type {
 	AgenticConfig,
@@ -75,17 +80,20 @@ import type {
 import type {
 	DatabaseMessage,
 	DatabaseMessageExtra,
+	DatabaseMessageExtraAudioFile,
 	DatabaseMessageExtraImageFile
 } from '$lib/types/database';
-import { isAbortError } from '$lib/utils';
+import { getAudioInputFormat, isAbortError } from '$lib/utils';
 import { SvelteMap } from 'svelte/reactivity';
 
 function createDefaultSession(): AgenticSession {
 	return {
 		currentTurn: 0,
 		executingToolCallId: null,
+		flowRootMessageId: null,
 		isRunning: false,
 		lastError: null,
+		liveLlm: null,
 		pendingPermissionRequest: null,
 		streamingToolCall: null,
 		totalToolCalls: 0
@@ -199,6 +207,16 @@ class AgenticStore {
 
 	isRunning(conversationId: string): boolean {
 		return this._sessions.get(conversationId)?.isRunning ?? false;
+	}
+
+	// read-only: safe to call from derivations, unlike getSession
+	getLiveLlmTotals(conversationId: string): AgenticSession['liveLlm'] {
+		return this._sessions.get(conversationId)?.liveLlm ?? null;
+	}
+
+	// read-only: safe to call from derivations, unlike getSession
+	getFlowRootMessageId(conversationId: string): string | null {
+		return this._sessions.get(conversationId)?.flowRootMessageId ?? null;
 	}
 
 	currentTurn(conversationId: string): number {
@@ -414,7 +432,15 @@ class AgenticStore {
 	}
 
 	async runAgenticFlow(params: AgenticFlowParams): Promise<AgenticFlowResult> {
-		const { callbacks, conversationId, messages, options = {}, perChatOverrides, signal } = params;
+		const {
+			callbacks,
+			conversationId,
+			flowRootMessageId,
+			messages,
+			options = {},
+			perChatOverrides,
+			signal
+		} = params;
 
 		// Clear any pending permissions/continue requests for this conversation when starting a new flow
 		this._pendingPermissions.set(conversationId, null);
@@ -428,7 +454,7 @@ class AgenticStore {
 			await toolsStore.fetchBuiltinTools();
 		}
 
-		const agenticConfig = this.getConfig(config(), perChatOverrides);
+		const agenticConfig = this.getConfig(settingsStore.config, perChatOverrides);
 
 		if (!agenticConfig.enabled) return { handled: false };
 
@@ -473,8 +499,10 @@ class AgenticStore {
 
 		this.updateSession(conversationId, {
 			currentTurn: 0,
+			flowRootMessageId: flowRootMessageId ?? null,
 			isRunning: true,
 			lastError: null,
+			liveLlm: null,
 			totalToolCalls: 0
 		});
 
@@ -500,7 +528,11 @@ class AgenticStore {
 
 			return { error: normalizedError, handled: true };
 		} finally {
-			this.updateSession(conversationId, { isRunning: false });
+			this.updateSession(conversationId, {
+				flowRootMessageId: null,
+				isRunning: false,
+				liveLlm: null
+			});
 
 			if (hasMcpServers) {
 				await mcpStore
@@ -628,6 +660,16 @@ class AgenticStore {
 							if (timings) {
 								capturedTimings = timings;
 								turnTimings = timings;
+
+								// completed turns + in-flight turn live counts
+								this.updateSession(conversationId, {
+									liveLlm: {
+										predicted_ms: agenticTimings.llm.predicted_ms + (timings.predicted_ms ?? 0),
+										predicted_n: agenticTimings.llm.predicted_n + (timings.predicted_n ?? 0),
+										prompt_ms: agenticTimings.llm.prompt_ms + (timings.prompt_ms ?? 0),
+										prompt_n: agenticTimings.llm.prompt_n + (timings.prompt_n ?? 0)
+									}
+								});
 							}
 						},
 						onToolCallChunk: (serialized: string) => {
@@ -900,7 +942,18 @@ class AgenticStore {
 							if (executionResult.isError) toolSuccess = false;
 						} else if (toolSource === ToolSource.FRONTEND) {
 							const args = this.parseToolArguments(toolCall.function.arguments);
-							const executionResult = await SandboxService.executeTool(toolName, args, signal);
+							const executionResult =
+								toolName === BuiltInTool.READ_MEDIA
+									? await ReadMediaService.executeTool(
+											args,
+											{
+												audio: modelsStore.modelSupportsAudio(effectiveModel),
+												vision: modelsStore.modelSupportsVision(effectiveModel)
+											},
+											signal,
+											conversationsStore.activeConversation?.cwd
+										)
+									: await SandboxService.executeTool(toolName, args, signal);
 
 							result = executionResult.content;
 
@@ -990,7 +1043,19 @@ class AgenticStore {
 				];
 
 				for (const attachment of attachments) {
-					if (attachment.type === AttachmentType.IMAGE) {
+					if (attachment.type === AttachmentType.AUDIO) {
+						if (modelsStore.modelSupportsAudio(effectiveModel)) {
+							contentParts.push({
+								input_audio: {
+									data: (attachment as DatabaseMessageExtraAudioFile).base64Data,
+									format: getAudioInputFormat(
+										(attachment as DatabaseMessageExtraAudioFile).mimeType
+									)
+								},
+								type: ContentPartType.INPUT_AUDIO
+							});
+						}
+					} else if (attachment.type === AttachmentType.IMAGE) {
 						if (modelsStore.modelSupportsVision(effectiveModel)) {
 							contentParts.push({
 								image_url: {
@@ -1095,8 +1160,20 @@ class AgenticStore {
 			attachmentIndex += 1;
 			const name = this.buildAttachmentName(mimeType, attachmentIndex);
 
-			if (mimeType.startsWith(MimeTypePrefix.IMAGE)) {
+			if (mimeType.startsWith(MIME_TYPE_PREFIXES.IMAGE)) {
 				attachments.push({ base64Url: trimmedLine, name, type: AttachmentType.IMAGE });
+
+				return `[Attachment saved: ${name}]`;
+			}
+
+			if (mimeType.startsWith(MimeTypePrefix.AUDIO)) {
+				// audio extras hold the bare base64, the input_audio part has no room for a data URI
+				attachments.push({
+					base64Data,
+					mimeType,
+					name,
+					type: AttachmentType.AUDIO
+				});
 
 				return `[Attachment saved: ${name}]`;
 			}
@@ -1108,78 +1185,12 @@ class AgenticStore {
 	}
 
 	private buildAttachmentName(mimeType: string, index: number): string {
-		const extension = IMAGE_MIME_TO_EXTENSION[mimeType] ?? DEFAULT_IMAGE_EXTENSION;
+		const extension = mimeType.startsWith(MimeTypePrefix.AUDIO)
+			? (AUDIO_MIME_TO_EXTENSION[mimeType] ?? DEFAULT_AUDIO_EXTENSION)
+			: (IMAGE_MIME_TO_EXTENSION[mimeType] ?? DEFAULT_IMAGE_EXTENSION);
 
 		return `${MCP_ATTACHMENT_NAME_PREFIX}-${Date.now()}-${index}.${extension}`;
 	}
 }
 
 export const agenticStore = new AgenticStore();
-
-export function agenticIsRunning(conversationId: string) {
-	return agenticStore.isRunning(conversationId);
-}
-
-export function agenticCurrentTurn(conversationId: string) {
-	return agenticStore.currentTurn(conversationId);
-}
-
-export function agenticTotalToolCalls(conversationId: string) {
-	return agenticStore.totalToolCalls(conversationId);
-}
-
-export function agenticLastError(conversationId: string) {
-	return agenticStore.lastError(conversationId);
-}
-
-export function agenticStreamingToolCall(conversationId: string) {
-	return agenticStore.streamingToolCall(conversationId);
-}
-
-export function agenticPendingPermissionRequest(conversationId: string) {
-	return agenticStore.pendingPermissionRequest(conversationId);
-}
-
-export function agenticResolvePermission(conversationId: string, decision: ToolPermissionDecision) {
-	agenticStore.resolvePermission(conversationId, decision);
-}
-
-export function agenticPendingContinueRequest(conversationId: string) {
-	return agenticStore.pendingContinueRequest(conversationId);
-}
-
-export function agenticResolveContinue(conversationId: string, shouldContinue: boolean) {
-	agenticStore.resolveContinue(conversationId, shouldContinue);
-}
-
-export function agenticHasPendingSteeringMessage(conversationId: string) {
-	return agenticStore.hasPendingSteeringMessage(conversationId);
-}
-
-export function agenticInjectSteeringMessage(
-	conversationId: string,
-	content: string,
-	extras?: DatabaseMessageExtra[]
-) {
-	agenticStore.injectSteeringMessage(conversationId, content, extras);
-}
-
-export function agenticPendingSteeringMessageContent(conversationId: string) {
-	return agenticStore.pendingSteeringMessageContent(conversationId);
-}
-
-export function agenticPendingSteeringMessageExtras(conversationId: string) {
-	return agenticStore.pendingSteeringMessageExtras(conversationId);
-}
-
-export function agenticClearSteeringMessage(conversationId: string) {
-	agenticStore.clearSteeringMessage(conversationId);
-}
-
-export function agenticIsAnyRunning() {
-	return agenticStore.isAnyRunning;
-}
-
-export function agenticExecutingToolCallId(conversationId: string) {
-	return agenticStore.executingToolCallId(conversationId);
-}

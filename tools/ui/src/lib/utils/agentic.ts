@@ -1,17 +1,9 @@
 import {
 	ATTACHMENT_SAVED_REGEX,
-	MARKDOWN_ATX_HEADING_REGEX,
-	MARKDOWN_BLOCKQUOTE_REGEX,
-	MARKDOWN_BOLD_REGEX,
-	MARKDOWN_CODE_FENCE_REGEX,
-	MARKDOWN_LINK_REGEX,
-	MARKDOWN_LIST_BULLET_REGEX,
-	MARKDOWN_LIST_NUMBERED_REGEX,
-	MARKDOWN_TABLE_SEPARATOR_REGEX,
+	MARKDOWN,
 	NEWLINE,
 	REASONING_TAGS,
-	SEARCH_SUMMARY_SEPARATOR,
-	SEARCH_SUMMARY_TOTAL_REGEX,
+	SEARCH_SUMMARY,
 	TOOL_RESULT_JSON_OPEN_REGEX
 } from '$lib/constants';
 import {
@@ -21,41 +13,13 @@ import {
 	MessageRole,
 	ToolResultKind
 } from '$lib/enums';
+import type { AgenticSection, ContinueIntent, ToolResultLine } from '$lib/types/agentic';
 import type { ApiChatCompletionToolCall } from '$lib/types/api';
 import type {
 	DatabaseMessage,
 	DatabaseMessageExtra,
 	DatabaseMessageExtraImageFile
 } from '$lib/types/database';
-
-/**
- * Represents a parsed section of agentic content for display
- */
-export interface AgenticSection {
-	type: AgenticSectionType;
-	content: string;
-	toolName?: string;
-	toolArgs?: string;
-	toolResult?: string;
-	toolResultExtras?: DatabaseMessageExtra[];
-	/** Working directory the tool call ran with (from the tool result
-	 *  message), shown by the exec_shell_command renderer. */
-	toolCwd?: string;
-	/** ID of the model-side tool call (matches tool_calls[i].id). Lets
-	 *  downstream consumers correlate a section with the agentic loop's
-	 *  currently-executing tool, e.g. to drive live-streaming UI state
-	 *  by matching against agenticStore.executingToolCallId. */
-	toolCallId?: string;
-	wasInterrupted?: boolean;
-}
-
-/**
- * Represents a tool result line that may reference an image attachment
- */
-export type ToolResultLine = {
-	text: string;
-	image?: DatabaseMessageExtraImageFile;
-};
 
 /**
  * Derives display sections from a single assistant message and its direct tool results.
@@ -283,11 +247,11 @@ export function splitSearchSummaryList(
 	text: string,
 	captureTotal: (n: number) => void
 ): { lines: string[] } {
-	const separatorIndex = text.indexOf(SEARCH_SUMMARY_SEPARATOR);
+	const separatorIndex = text.indexOf(SEARCH_SUMMARY.SEPARATOR);
 	const matchesText = separatorIndex === -1 ? text : text.slice(0, separatorIndex);
 	const summaryText =
-		separatorIndex === -1 ? '' : text.slice(separatorIndex + SEARCH_SUMMARY_SEPARATOR.length);
-	const totalMatch = summaryText.match(SEARCH_SUMMARY_TOTAL_REGEX);
+		separatorIndex === -1 ? '' : text.slice(separatorIndex + SEARCH_SUMMARY.SEPARATOR.length);
+	const totalMatch = summaryText.match(SEARCH_SUMMARY.TOTAL_REGEX);
 
 	if (totalMatch) {
 		captureTotal(parseInt(totalMatch[1], 10));
@@ -301,16 +265,16 @@ export function splitSearchSummaryList(
 	return { lines };
 }
 
-/** Bounded cache for parseToolResultWithImages results. */
+/** Bounded cache for parseToolResultWithMedia results. */
 const TOOL_RESULT_LINES_CACHE_MAX_SIZE = 32;
 const toolResultLinesCache = new Map<string, ToolResultLine[]>();
 
 /**
- * Parse tool result text into lines, matching image attachments by name.
+ * Parse tool result text into lines, matching media attachments (images and audio) by name.
  * Memoized: called per render during streaming on unchanged tool result
  * strings with unchanged extras.
  */
-export function parseToolResultWithImages(
+export function parseToolResultWithMedia(
 	toolResult: string,
 	extras?: DatabaseMessageExtra[]
 ): ToolResultLine[] {
@@ -332,12 +296,13 @@ export function parseToolResultWithImages(
 		if (!match || !extras) return { text: line };
 
 		const attachmentName = match[1];
-		const image = extras.find(
-			(e): e is DatabaseMessageExtraImageFile =>
-				e.type === AttachmentType.IMAGE && e.name === attachmentName
+		const media = extras.find(
+			(e): e is DatabaseMessageExtraImageFile | DatabaseMessageExtraAudioFile =>
+				(e.type === AttachmentType.IMAGE || e.type === AttachmentType.AUDIO) &&
+				e.name === attachmentName
 		);
 
-		return { image, text: line };
+		return { media, text: line };
 	});
 
 	if (toolResultLinesCache.size >= TOOL_RESULT_LINES_CACHE_MAX_SIZE) {
@@ -411,31 +376,31 @@ export function classifyToolResult(content: string | undefined): ToolResultKind 
  */
 function looksLikeMarkdown(content: string): boolean {
 	// Code fences are unambiguous - triple backticks or tildes at line start.
-	if (MARKDOWN_CODE_FENCE_REGEX.test(content)) return true;
+	if (MARKDOWN.CODE_FENCE_REGEX.test(content)) return true;
 
 	const lines = content.split(NEWLINE);
 
 	for (const line of lines) {
-		if (MARKDOWN_ATX_HEADING_REGEX.test(line)) return true;
+		if (MARKDOWN.ATX_HEADING_REGEX.test(line)) return true;
 
-		if (MARKDOWN_BLOCKQUOTE_REGEX.test(line)) return true;
+		if (MARKDOWN.BLOCKQUOTE_REGEX.test(line)) return true;
 
-		if (MARKDOWN_LIST_BULLET_REGEX.test(line)) return true;
+		if (MARKDOWN.LIST_BULLET_REGEX.test(line)) return true;
 
-		if (MARKDOWN_LIST_NUMBERED_REGEX.test(line)) return true;
+		if (MARKDOWN.LIST_NUMBERED_REGEX.test(line)) return true;
 	}
 
 	// Inline structural markers anywhere in the body.
-	if (MARKDOWN_LINK_REGEX.test(content)) return true;
+	if (MARKDOWN.LINK_REGEX.test(content)) return true;
 
-	if (MARKDOWN_BOLD_REGEX.test(content)) return true;
+	if (MARKDOWN.BOLD_REGEX.test(content)) return true;
 
 	// Tables: a pipe-bearing header line followed by a separator row.
 	if (lines.length >= 2) {
 		const head = lines[0];
 		const sep = lines[1];
 
-		if (head.includes('|') && MARKDOWN_TABLE_SEPARATOR_REGEX.test(sep)) return true;
+		if (head.includes('|') && MARKDOWN.TABLE_SEPARATOR_REGEX.test(sep)) return true;
 	}
 
 	return false;
@@ -491,29 +456,6 @@ export function hasAgenticContent(
 
 	return toolMessages.length > 0;
 }
-
-/**
- * Classification of how a Continue click on an assistant message should resume
- * generation. The caller dispatches the resume path based on this value.
- *
- *   append_text  -> the target is a plain text turn, resume with
- *                   continue_final_message and rehydrate the persisted
- *                   tool_calls and attachments through the regular DB to API
- *                   message converter.
- *   rerun_turn   -> the target carries tool_calls that were never resolved by
- *                   tool result messages. The agentic stream was cut mid turn,
- *                   so we drop the target and rerun the loop from the previous
- *                   history. truncateAfter is the last kept index, inclusive.
- *   next_turn    -> the target's tool_calls were already resolved by trailing
- *                   tool results. Hand the history up to and including the
- *                   last consecutive tool result back to the agentic loop so it
- *                   starts the next turn naturally. truncateAfter points at
- *                   that last tool result.
- */
-export type ContinueIntent =
-	| { kind: ContinueIntentKind.APPEND_TEXT }
-	| { kind: ContinueIntentKind.RERUN_TURN; truncateAfter: number }
-	| { kind: ContinueIntentKind.NEXT_TURN; truncateAfter: number };
 
 /**
  * Decide how a Continue click on messages[idx] should resume generation.

@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { TruncatedText } from '$lib/components/app';
 	import { ModelsService } from '$lib/services/models.service';
-	import { config } from '$lib/stores/settings.svelte';
+	import { settingsStore } from '$lib/stores';
 
 	interface Props {
 		modelId: string;
@@ -32,9 +32,13 @@
 		'inline-flex w-fit shrink-0 items-center justify-center whitespace-nowrap rounded-md border border-border/50 px-1 py-0 text-[10px] font-mono text-foreground [a&]:hover:bg-accent [a&]:hover:text-accent-foreground';
 
 	let parsed = $derived(ModelsService.parseModelId(modelId));
-	let resolvedShowRaw = $derived(showRaw ?? (config().showRawModelNames as boolean) ?? false);
-	let resolvedHideQuantization = $derived(hideQuantization ?? !config().showModelQuantization);
-	let resolvedHideTags = $derived(hideTags ?? !config().showModelTags);
+	let resolvedShowRaw = $derived(
+		showRaw ?? (settingsStore.config.showRawModelNames as boolean) ?? false
+	);
+	let resolvedHideQuantization = $derived(
+		hideQuantization ?? !settingsStore.config.showModelQuantization
+	);
+	let resolvedHideTags = $derived(hideTags ?? !settingsStore.config.showModelTags);
 
 	let uniqueAliases = $derived([...new Set(aliases ?? [])]);
 	let uniqueTags = $derived([...new Set([...(parsed.tags ?? []), ...(tags ?? [])])]);

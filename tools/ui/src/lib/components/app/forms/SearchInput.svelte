@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { Search, X } from '@lucide/svelte';
 	import { Input } from '$lib/components/ui/input';
-	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
+	import { ICON_CLASS_DEFAULT } from '$lib/constants';
 
 	interface Props {
 		autofocus?: boolean;

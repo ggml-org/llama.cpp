@@ -1,6 +1,6 @@
 <script lang="ts">
 	import MermaidPreviewControls from './MermaidPreviewControls.svelte';
-	import { SVG_DIALOG_SHADOW_STYLE } from '$lib/constants';
+	import { SVG } from '$lib/constants';
 	import { mountSvgShadow } from '$lib/utils/svg-shadow';
 
 	interface Props {
@@ -13,7 +13,7 @@
 
 	// Re-mount on every svgHtml change so a live streaming svg keeps rendering while zoomed
 	$effect(() => {
-		if (svgHost) mountSvgShadow(svgHost, svgHtml, SVG_DIALOG_SHADOW_STYLE);
+		if (svgHost) mountSvgShadow(svgHost, svgHtml, SVG.DIALOG_SHADOW_STYLE);
 	});
 
 	// Zoom and pan state

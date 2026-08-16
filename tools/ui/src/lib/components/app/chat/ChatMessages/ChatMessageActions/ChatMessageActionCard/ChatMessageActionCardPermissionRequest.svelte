@@ -7,7 +7,7 @@
 	import { cn } from '$lib/components/ui/utils';
 	import { TOOL_SERVER_LABELS } from '$lib/constants';
 	import { ToolPermissionDecision, ToolSource } from '$lib/enums';
-	import { toolsStore } from '$lib/stores/tools.svelte';
+	import { toolsStore } from '$lib/stores';
 
 	interface Props {
 		toolName: string;
