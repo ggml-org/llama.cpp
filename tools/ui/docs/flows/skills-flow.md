@@ -5,7 +5,9 @@ sequenceDiagram
     participant skillsStore as skillsStore
     participant activationStore as skillActivationStore
     participant agenticStore as agenticStore
+    participant toolsStore as toolsStore
     participant SkillsSvc as SkillsService
+    participant CmdSvc as SkillCommandService
     participant PackingSvc as SkillsPackingService
     participant Tokenize as POST /tokenize
     participant ChatSvc as ChatService
@@ -70,6 +72,7 @@ sequenceDiagram
     skillsStore->>skillsStore: accept only latest generation for cwd
     skillsStore-->>UI: safe catalog fields
     Note right of UI: name, description, scope, provider,<br/>instruction facts, estimate label,<br/>timestamp, resource count, diagnostics
+    Note right of UI: Diagnostics render as separate rows with explicit<br/>Skill, Scope, and Provider labels when returned,<br/>duplicate diagnostic codes remain distinct
     deactivate skillsStore
 
     alt CWD changes while a request is in flight
@@ -102,6 +105,7 @@ sequenceDiagram
 
     UI->>UI: select catalog entry
     UI->>SkillsSvc: read({name}, cwd)
+        Note right of SkillsSvc: Sends X-Skill-Cwd when `cwd` is selected,<br/>absent header uses the server process CWD
     SkillsSvc->>server: POST /skills/read<br/>{name}
     server->>server: re-resolve name for effective CWD
     alt Base skill read
@@ -120,37 +124,56 @@ sequenceDiagram
     Note over UI: Selecting another skill, changing CWD, retrying,<br/>or unmounting aborts the prior read, stale results do not render
 
     %% =========================================================================
+    Note over UI,PackingSvc: CATALOG BUDGET STATUS
+    %% =========================================================================
+
+    UI->>PackingSvc: buildSkillRunSnapshot(cwd, catalog)
+    UI->>PackingSvc: pack(snapshot, {budget, ...packOptions})
+        Note right of UI: budget = maxSkillBudget from settings,<br/>packOptions = resolveSkillPackOptions(model,<br/>router mode, loaded check)
+        Note right of PackingSvc: Same tokenizer/estimate policy as the<br/>agentic run path below
+    PackingSvc-->>UI: SkillPackedCatalog | pack error
+    UI->>UI: render dismissible SkillBudgetStatus banner
+        Note right of UI: Budget status only; no consent and<br/>no activation persistence
+
+    %% =========================================================================
     Note over UI,server: EXPLICIT /skills AND /skills name argument
     %% =========================================================================
 
     UI->>UI: type /skills in ChatForm
     UI->>UI: command picker uses prefix/substring matches<br/>from ready catalog names
+        Note right of UI: The picker reads the ready catalog slot,<br/>it does not fetch or resolve names
     alt Select /skills without an argument
         UI->>UI: goto /skills
         UI->>skillsStore: route refresh for current CWD
     else Select /skills name argument
-        UI->>SkillsSvc: activateSkillByName(name, cwd)
+        UI->>CmdSvc: activateSkillByName(name, cwd)
+            Note right of CmdSvc: SkillCommandService entry point.<br/>Resolves the base read, then routes<br/>through the shared durable activation path
+        CmdSvc->>SkillsSvc: read({name}, cwd)
+            Note right of SkillsSvc: Sends the active conversation CWD<br/>through X-Skill-Cwd when selected
         SkillsSvc->>server: POST /skills/read<br/>{name}
         alt Base read succeeds
             server-->>SkillsSvc: SkillBaseReadResult with opaque identity
-            SkillsSvc-->>UI: resolved base result
-            UI->>activationStore: loadConversation(conversationId)
+            SkillsSvc-->>CmdSvc: resolved base result
+            CmdSvc->>activationStore: loadConversation(conversationId)
             activationStore->>DbSvc: read conversation messages
             DbSvc-->>activationStore: persisted typed skill metadata
             activationStore->>activationStore: reconstruct base identities
             alt Identity already activated
-                activationStore-->>UI: created = false
+                activationStore-->>CmdSvc: created = false
+                CmdSvc-->>UI: created = false
                 UI-->>UI: info toast: already activated
             else New identity
-                UI->>activationStore: recordActivation(base result, no tool call id)
+                CmdSvc->>activationStore: recordActivation(base result, no tool call id)
                 activationStore->>DbSvc: persist synthetic assistant tool call<br/>and paired tool result
                 DbSvc-->>activationStore: persisted messages
-                activationStore->>UI: mirror active messages and remember identity
+                activationStore->>CmdSvc: mirror active messages and remember identity
+                CmdSvc-->>UI: created = true
                 UI-->>UI: success toast: activated
             end
         else Missing or failed read
             server-->>SkillsSvc: 404 or error envelope
-            SkillsSvc-->>UI: failed command
+            SkillsSvc-->>CmdSvc: failed read
+            CmdSvc-->>UI: failed command
             UI-->>UI: not-found or unavailable notice
             Note over activationStore: No activation or message is persisted
         end
@@ -162,13 +185,13 @@ sequenceDiagram
 
     UI->>agenticStore: runAgenticFlow(conversationId, messages, options)
     activate agenticStore
-    agenticStore->>activationStore: loadConversation(conversationId)
-    activationStore->>DbSvc: read persisted conversation metadata
-    DbSvc-->>activationStore: typed base activation records
     agenticStore->>agenticStore: read maxSkillBudget
     alt Budget is zero
         agenticStore-->>agenticStore: register no Skills prompt or adapters
     else Budget is positive
+        agenticStore->>activationStore: loadConversation(conversationId)
+        activationStore->>DbSvc: read persisted conversation metadata
+        DbSvc-->>activationStore: typed base activation records
         agenticStore->>skillsStore: createRunSnapshot(cwd)
         skillsStore->>SkillsSvc: list(cwd)
         SkillsSvc->>server: GET /skills
@@ -193,8 +216,11 @@ sequenceDiagram
             PackingSvc->>PackingSvc: keep leading entries in server order
             PackingSvc-->>agenticStore: partial envelope, list_skill + read_skill
         end
+        agenticStore->>toolsStore: read enabled Skills tool names
+        Note right of toolsStore: Settings-only `skill:<tool>` keys<br/>filter the budget-authorized adapters
         agenticStore->>agenticStore: compare adapter names with existing tools
         Note right of agenticStore: Existing custom, builtin, and MCP names win,<br/>colliding Skills adapters are omitted with diagnostics
+        Note right of agenticStore: User-disabled Skills tools are omitted<br/>after budget and collision checks
         agenticStore->>agenticStore: decorate first system message request-locally
     end
     deactivate agenticStore
@@ -211,12 +237,14 @@ sequenceDiagram
     alt list_skill tool call
         agenticStore->>agenticStore: return JSON snapshot entries
         Note right of agenticStore: name, description, scope, provider,<br/>never raw XML or identity
+        Note right of agenticStore: list_skill returns only safe snapshot facts,<br/>read_skill errors are structured and contain no XML
     else read_skill tool call
         agenticStore->>agenticStore: parse name and optional relative path
         alt Invalid arguments or name outside frozen snapshot
             agenticStore-->>ChatSvc: structured Skills error result
         else Valid snapshot request
             agenticStore->>SkillsSvc: read({name, path?}, snapshot.cwd)
+            Note right of SkillsSvc: Sends X-Skill-Cwd from the frozen<br/>snapshot CWD when selected
             SkillsSvc->>server: POST /skills/read<br/>{name, optional path}
             server->>server: resolve current identity and validate containment
             alt Base read
@@ -283,6 +311,7 @@ sequenceDiagram
     UI->>UI: render persisted tool result
     alt Valid typed Skills metadata
         UI->>UI: use Skill or Skill resource title
+        Note right of UI: Typed metadata supplies the skill name,<br/>scope, provider, and safe resource path
         UI->>UI: show provider, scope, and safe relative resource path
         UI->>UI: render server XML as ordinary text
     else Missing or malformed metadata

@@ -3,6 +3,7 @@ flowchart TB
 subgraph Routes["📍 Routes"]
 R1["/ (+page.svelte)"]
 R2["/chat/[id]"]
+R3["/skills (+page.svelte)"]
 RL["+layout.svelte"]
 end
 
@@ -29,12 +30,18 @@ end
             C_McpResourcePreview["McpResourcePreview"]
             C_McpServersSelector["McpServersSelector"]
         end
+        subgraph SkillsComponents["Skills UI"]
+            C_SkillCatalog["SkillCatalog"]
+            C_SkillCatalogList["SkillCatalogList"]
+            C_SkillDetail["SkillDetail"]
+            C_SkillPicker["ChatFormSkillPicker"]
+            C_SkillToolResult["ChatMessageToolCallBlockSkill"]
+        end
     end
 
     subgraph Hooks["🪝 Hooks"]
-        H1["useModelChangeValidation"]
+        H1["useModelsSelector"]
         H2["useProcessingState"]
-        H3["isMobile"]
     end
 
     subgraph Stores["🗄️ Stores"]
@@ -104,6 +111,19 @@ end
             S7Cache["<b>Caching:</b><br/>cacheResourceContent()<br/>getCachedContent()<br/>invalidateCache()<br/>clearCache()"]
             S7Subs["<b>Subscriptions:</b><br/>addSubscription()<br/>removeSubscription()<br/>isSubscribed()<br/>handleResourceUpdate()"]
             S7Attach["<b>Attachments:</b><br/>addAttachment()<br/>updateAttachmentContent()<br/>removeAttachment()<br/>clearAttachments()<br/>toMessageExtras()"]
+        end
+        subgraph S8["toolsStore"]
+            S8State["<b>State:</b><br/>allTools, disabledTools"]
+            S8Skills["<b>Skills settings:</b><br/>skillToolGroups<br/>getEnabledSkillToolNames()"]
+        end
+        subgraph S9["skillsStore"]
+            S9State["<b>State:</b><br/>CWD-keyed catalog slots<br/>availability<br/>request generations"]
+            S9Catalog["<b>Catalog:</b><br/>ensureCatalog()<br/>refresh()<br/>probeAvailability()<br/>invalidate()"]
+            S9Run["<b>Run snapshots:</b><br/>createRunSnapshot()"]
+        end
+        subgraph S10["skillActivationStore"]
+            S10State["<b>State:</b><br/>conversation -> opaque identity set<br/>in-flight persistence"]
+            S10Ops["<b>Activation:</b><br/>loadConversation()<br/>recordActivation()"]
         end
 
         subgraph ReactiveExports["⚡ Reactive Exports"]
@@ -212,6 +232,17 @@ end
             SV6Resources["<b>Resources:</b><br/>listResources()<br/>listResourceTemplates()<br/>readResource()<br/>subscribeResource()<br/>unsubscribeResource()"]
             SV6Complete["<b>Completions:</b><br/>complete()"]
         end
+        subgraph SV7["SkillsService"]
+            SV7Transport["<b>Transport:</b><br/>list()<br/>read()"]
+            SV7Contract["<b>Contract:</b><br/>CWD header<br/>opaque server results"]
+        end
+        subgraph SV8["SkillsPackingService"]
+            SV8Snapshot["<b>Snapshot:</b><br/>buildSkillRunSnapshot()"]
+            SV8Pack["<b>Packing:</b><br/>pack()<br/>direct or estimated token policy"]
+        end
+        subgraph SV9["SkillCommandService"]
+            SV9Activate["<b>Explicit activation:</b><br/>activateSkillByName()"]
+        end
     end
 
     subgraph ExternalMCP["🔌 External MCP Servers"]
@@ -234,27 +265,29 @@ end
         API2["/props<br/>/props?model="]
         API3["/models<br/>/models/load<br/>/models/unload"]
         API4["/v1/models"]
+        API5["/skills"]
+        API6["/skills/read"]
+        API7["/tokenize"]
     end
 
     %% Routes render Components
     R1 --> C_Screen
     R2 --> C_Screen
+    R3 --> C_SkillCatalog
     RL --> C_Sidebar
 
-    %% Layout runs MCP health checks on startup
+    %% Layout runs MCP health checks; sidebar probes Skills availability
     RL --> S6
 
     %% Component hierarchy
     C_Screen --> C_Form & C_Messages & C_Settings
     C_Messages --> C_Message
-    C_Message --> C_MessageUser
+    C_Message --> C_MessageUser & C_SkillToolResult
     C_MessageUser --> C_MessageEditForm
     C_MessageEditForm --> C_ModelsSelector
     C_MessageEditForm --> C_Attach
-    C_Form --> C_ModelsSelector
-    C_Form --> C_Attach
-    C_Form --> C_McpServersSelector
-    C_Message --> C_Attach
+    C_Form --> C_ModelsSelector & C_Attach & C_McpServersSelector & C_SkillPicker
+    C_SkillCatalog --> C_SkillCatalogList & C_SkillDetail
 
     %% MCP Components hierarchy
     C_Settings --> C_McpSettings
@@ -272,18 +305,21 @@ end
     H1 --> S3 & S4
     H2 --> S1 & S5
 
-    %% Components use Stores
+    %% Components use Stores and Skills services
     C_Screen --> S1 & S2
     C_Messages --> S2
     C_Message --> S1 & S2 & S3
-    C_Form --> S1 & S3 & S6
-    C_Sidebar --> S2
+    C_Form --> S1 & S3 & S6 & S8 & S9 & SV9
+    C_Sidebar --> S2 & S9
     C_ModelsSelector --> S3 & S4
-    C_Settings --> S5
+    C_Settings --> S5 & S8 & S9
     C_McpSettings --> S6
     C_McpServerCard --> S6
     C_McpResourceBrowser --> S6 & S7
     C_McpServersSelector --> S6
+    C_SkillCatalog --> S9 & SV8
+    C_SkillDetail --> SV7
+    C_SkillPicker --> S9
 
     %% Stores export Reactive State
     S1 -. exports .-> ChatExports
@@ -295,10 +331,10 @@ end
     S6 -. exports .-> MCPExports
     S7 -. exports .-> MCPExports
 
-    %% chatStore → agenticStore (agentic loop orchestration)
+    %% chatStore -> agenticStore (agentic loop orchestration)
     S1 --> SA
     SA --> SV1
-    SA --> S6
+    SA --> S6 & S8 & S9 & S10 & SV8
 
     %% Stores use Services
     S1 --> SV1 & SV4
@@ -308,6 +344,8 @@ end
     S5 --> SV5
     S6 --> SV6
     S7 --> SV6
+    S9 --> SV7 & SV8
+    S10 --> SV4
 
     %% Services to Storage
     SV4 --> ST1
@@ -319,8 +357,11 @@ end
     SV1 --> API1
     SV2 --> API3 & API4
     SV3 --> API2
+    SV7 --> API5 & API6
+    SV8 --> API7
+    SV9 --> SV7 & S10
 
-    %% MCP → External Servers
+    %% MCP -> External Servers
     SV6 --> EXT1 & EXT2
 
     %% Styling
@@ -338,20 +379,18 @@ end
     classDef storageStyle fill:#fce4ec,stroke:#c2185b,stroke-width:2px
     classDef apiStyle fill:#e3f2fd,stroke:#1565c0,stroke-width:2px
 
-    class R1,R2,RL routeStyle
-    class C_Sidebar,C_Screen,C_Form,C_Messages,C_Message,C_MessageUser,C_MessageEditForm componentStyle
-    class C_ModelsSelector,C_Settings componentStyle
-    class C_Attach componentStyle
+    class R1,R2,R3,RL routeStyle
+    class C_Sidebar,C_Screen,C_Form,C_Messages,C_Message,C_MessageUser,C_MessageEditForm,C_ModelsSelector,C_Settings,C_SkillCatalog,C_SkillCatalogList,C_SkillDetail,C_SkillPicker,C_SkillToolResult,C_Attach componentStyle
     class C_McpSettings,C_McpServerCard,C_McpResourceBrowser,C_McpResourcePreview,C_McpServersSelector componentStyle
-    class H1,H2,H3 hookStyle
-    class LayoutComponents,ChatUIComponents,MCPComponents componentGroupStyle
+    class H1,H2 hookStyle
+    class LayoutComponents,ChatUIComponents,MCPComponents,SkillsComponents componentGroupStyle
     class Hooks hookStyle
     classDef agenticStyle fill:#e8eaf6,stroke:#283593,stroke-width:2px
     classDef agenticMethodStyle fill:#c5cae9,stroke:#283593,stroke-width:1px
 
-    class S1,S2,S3,S4,S5,SA,S6,S7 storeStyle
-    class S1State,S2State,S3State,S4State,S5State,SAState,S6State,S7State stateStyle
-    class S1Msg,S1Regen,S1Edit,S1Stream,S1LoadState,S1ProcState,S1Error,S1Utils methodStyle
+    class S1,S2,S3,S4,S5,SA,S6,S7,S8,S9,S10 storeStyle
+    class S1State,S2State,S3State,S4State,S5State,SAState,S6State,S7State,S8State,S9State,S10State stateStyle
+    class S1Msg,S1Regen,S1Edit,S1Stream,S1LoadState,S1ProcState,S1Error,S1Utils,S8Skills,S9Catalog,S9Run,S10Ops methodStyle
     class SASession,SAConfig,SAFlow methodStyle
     class S2Lifecycle,S2ConvCRUD,S2MsgMgmt,S2Nav,S2McpOverrides,S2Export,S2Utils methodStyle
     class S3Getters,S3Modal,S3Status,S3Fetch,S3Select,S3LoadUnload,S3Utils methodStyle
@@ -360,8 +399,8 @@ end
     class S6Lifecycle,S6Health,S6Servers,S6Tools,S6Prompts methodStyle
     class S7Resources,S7Cache,S7Subs,S7Attach methodStyle
     class ChatExports,AgenticExports,ConvExports,ModelsExports,ServerExports,SettingsExports,MCPExports reactiveStyle
-    class SV1,SV2,SV3,SV4,SV5,SV6 serviceStyle
-    class SV6Transport,SV6Conn,SV6Tools,SV6Prompts,SV6Resources,SV6Complete serviceMStyle
+    class SV1,SV2,SV3,SV4,SV5,SV6,SV7,SV8,SV9 serviceStyle
+    class SV6Transport,SV6Conn,SV6Tools,SV6Prompts,SV6Resources,SV6Complete,SV7Transport,SV7Contract,SV8Snapshot,SV8Pack,SV9Activate serviceMStyle
     class EXT1,EXT2 externalStyle
     class SV1Msg,SV1Stream,SV1Convert,SV1Utils serviceMStyle
     class SV2List,SV2LoadUnload,SV2Status serviceMStyle
@@ -369,5 +408,7 @@ end
     class SV4Conv,SV4Msg,SV4Node,SV4Import serviceMStyle
     class SV5Extract,SV5Merge,SV5Info,SV5Diff serviceMStyle
     class ST1,ST2,ST3,ST5,ST6,ST7,ST8 storageStyle
-    class API1,API2,API3,API4 apiStyle
+    class API1,API2,API3,API4,API5,API6,API7 apiStyle
 ```
+
+The Skills path is capability-gated by the server's `/skills` endpoint. The route activates nothing and persists nothing: catalog and preview state stays in `skillsStore` (the catalog page only computes a budget-status pack via SkillsPackingService), while successful model or slash-command activations persist typed metadata through `skillActivationStore`. See [Skills flow](../flows/skills-flow.md) for request, budget, consent, and presentation details.
