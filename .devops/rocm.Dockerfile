@@ -33,8 +33,13 @@ FROM ${BASE_ROCM_DEV_CONTAINER} AS build
 # check https://rocm.docs.amd.com/en/docs-7.14.0/install/rocm.html
 # check https://rocm.docs.amd.com/en/docs-7.14.0/reference/gpu-specs.html
 
-# Here used all architectures that have amdrocm-blas7.14-gfx*** related package inside container
-ARG ROCM_DOCKER_ARCH='gfx908;gfx90a;gfx942;gfx950;gfx1010;gfx1011;gfx1012;gfx1030;gfx1031;gfx1032;gfx1033;gfx1034;gfx1035;gfx1036;gfx1100;gfx1101;gfx1102;gfx1103;gfx1150;gfx1151;gfx1152;gfx1153;gfx1200;gfx1201'
+# Discrete GPUs plus the fastest APUs, out of the architectures that have an
+# amdrocm-blas7.14-gfx*** package inside the container. The remaining APU targets
+# (gfx1033, gfx1035, gfx1036, gfx1103, gfx1152, gfx1153) are left out to keep the
+# build within the CI time budget - they are several times slower than gfx1151
+# anyway. ROCm supports them, so build locally with e.g.
+# --build-arg ROCM_DOCKER_ARCH=gfx1103 if you need one of them.
+ARG ROCM_DOCKER_ARCH='gfx908;gfx90a;gfx942;gfx950;gfx1010;gfx1011;gfx1012;gfx1030;gfx1031;gfx1032;gfx1034;gfx1100;gfx1101;gfx1102;gfx1150;gfx1151;gfx1200;gfx1201'
 
 # Set ROCm architectures
 ENV AMDGPU_TARGETS=${ROCM_DOCKER_ARCH}
