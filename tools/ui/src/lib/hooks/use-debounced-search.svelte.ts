@@ -33,14 +33,17 @@ export function useDebouncedSearch(opts: UseDebouncedSearchOptions) {
 
 	const schedule = debounce((query: string) => {
 		if (!opts.canRun() || query !== opts.getQuery().trim()) return;
+
 		void start(query);
 	}, opts.debounceMs);
 
 	async function start(query: string) {
 		cancel();
 		const fresh = new AbortController();
+
 		controller = fresh;
 		const mySeq = ++searchSeq;
+
 		isSearching = true;
 		try {
 			await opts.run(query, fresh.signal, () => isCurrent(mySeq));
@@ -50,17 +53,17 @@ export function useDebouncedSearch(opts: UseDebouncedSearchOptions) {
 	}
 
 	return {
+		cancel,
 		get isSearching() {
 			return isSearching;
-		},
-		/** Bump the loading flag synchronously (e.g. before the debounce fires). */
-		setLoading(value: boolean) {
-			isSearching = value;
 		},
 		run(query: string) {
 			schedule(query);
 		},
-		cancel
+		/** Bump the loading flag synchronously (e.g. before the debounce fires). */
+		setLoading(value: boolean) {
+			isSearching = value;
+		}
 	};
 }
 

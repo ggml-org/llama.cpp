@@ -1,13 +1,17 @@
+import { browser } from '$app/environment';
 import { ALWAYS_ALLOWED_TOOLS_LOCALSTORAGE_KEY } from '$lib/constants';
-
 import { SvelteSet } from 'svelte/reactivity';
 
 class PermissionsStore {
 	private _tools = $state(new SvelteSet<string>());
 
 	constructor() {
+		// browser-only init: skip on SSR to avoid localStorage side effects
+		if (!browser) return;
+
 		try {
 			const stored = localStorage.getItem(ALWAYS_ALLOWED_TOOLS_LOCALSTORAGE_KEY);
+
 			if (stored) {
 				for (const name of JSON.parse(stored) as string[]) {
 					if (typeof name === 'string') this._tools.add(name);

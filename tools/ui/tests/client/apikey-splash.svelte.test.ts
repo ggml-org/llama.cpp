@@ -1,11 +1,12 @@
-import { beforeEach, describe, expect, it } from 'vitest';
-import { validateApiKey } from '$lib/utils/api-key-validation';
+import { CONFIG_LOCALSTORAGE_KEY } from '$lib/constants';
 import { settingsStore } from '$lib/stores/settings.svelte';
-import { CONFIG_LOCALSTORAGE_KEY } from '$lib/constants/storage';
+import { validateApiKey } from '$lib/utils/api-key-validation';
+import { beforeEach, describe, expect, it } from 'vitest';
 
 function fakeFetch(status: number, capture: { auth?: string | null } = {}) {
 	return (async (_url: RequestInfo | URL, init?: RequestInit) => {
 		capture.auth = (init?.headers as Record<string, string>)?.['Authorization'] ?? null;
+
 		return new Response(status === 200 ? '{}' : 'Unauthorized', { status });
 	}) as typeof globalThis.fetch;
 }
@@ -35,6 +36,7 @@ describe('api key validation surfaces the splash', () => {
 	it('valid stored key: passes and sends the bearer header', async () => {
 		settingsStore.updateConfig('apiKey', 'sk-good');
 		const capture: { auth?: string | null } = {};
+
 		await expect(validateApiKey(fakeFetch(200, capture))).resolves.toBeUndefined();
 		expect(capture.auth).toBe('Bearer sk-good');
 	});
