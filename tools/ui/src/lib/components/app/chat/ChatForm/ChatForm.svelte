@@ -3,12 +3,11 @@
 	import {
 		ChatAttachmentsList,
 		ChatFormActions,
-		ChatFormContentEditable,
-		ChatFormFileInputInvisible,
+		ChatFormCurrentWorkingDirectory,
+		ChatFormInput,
+		ChatFormInputFileInputInvisible,
 		ChatFormMcpResourcesList,
 		ChatFormPickers,
-		ChatFormTextarea,
-		ChatFormWorkingDirectory,
 		DialogMcpResourcesBrowser
 	} from '$lib/components/app';
 	import {
@@ -110,7 +109,7 @@
 	}: Props = $props();
 
 	// Component References
-	// Shared handle of the two input renderers (textarea + contenteditable).
+	// Shared handle of the two input renderers (plain textarea + rich chat form input).
 	type ChatInputHandle = {
 		focus(): void;
 		resetHeight(): void;
@@ -121,16 +120,16 @@
 
 	let audioRecorder: AudioRecorder | undefined;
 	let chatFormActionsRef: ChatFormActions | undefined = $state(undefined);
-	let fileInputRef: ChatFormFileInputInvisible | undefined = $state(undefined);
+	let fileInputRef: ChatFormInputFileInputInvisible | undefined = $state(undefined);
 	let pickersRef: { handleKeydown: (event: KeyboardEvent) => boolean } | undefined =
 		$state(undefined);
 	let inputRef: ChatInputHandle | undefined = $state(undefined);
 
-	// Render-mode gate: the plain textarea by default, the contenteditable
+	// Render-mode gate: the plain textarea by default, the rich chat form input
 	// while the buffer carries a `file://` mention link or a complete code
 	// span (badges and code chips need a DOM the textarea cannot provide).
 	// Demotes back once neither remains.
-	let useContenteditable = $state(false);
+	let useRichInput = $state(false);
 
 	// Audio Recording State
 	let isRecording = $state(false);
@@ -242,16 +241,15 @@
 	}
 
 	$effect(() => {
-		const wantContenteditable =
-			containsFileMentionLink(value ?? '') || containsCodeSpan(value ?? '');
+		const wantRichInput = containsFileMentionLink(value ?? '') || containsCodeSpan(value ?? '');
 
-		if (useContenteditable === wantContenteditable) return;
+		if (useRichInput === wantRichInput) return;
 
 		if (!caretOffsetPinned) {
 			pendingCaretOffset = inputRef?.getCaretOffset() ?? (value ?? '').length;
 		}
 
-		useContenteditable = wantContenteditable;
+		useRichInput = wantRichInput;
 		queueCaretRestore();
 	});
 
@@ -315,7 +313,7 @@
 
 			// Caret inside a fenced code block (closed, or still open
 			// while being typed): Enter adds a line, never submits. The
-			// contenteditable consumes this case locally; this gate
+			// rich chat form input consumes this case locally; this gate
 			// covers the plain textarea, where skipping submit lets the
 			// native newline through.
 			if (!isModifier && isOffsetInCodeBlock(value ?? '', inputRef?.getCaretOffset() ?? 0)) {
@@ -508,9 +506,9 @@
 		value = built.newValue;
 		onValueChange?.(built.newValue);
 
-		// Already in contenteditable mode: no renderer flip, so the swap
+		// Already in rich chat form input mode: no renderer flip, so the swap
 		// effect's caret restore never runs.
-		if (useContenteditable) {
+		if (useRichInput) {
 			queueCaretRestore();
 		}
 	}
@@ -544,7 +542,7 @@
 	}
 </script>
 
-<ChatFormFileInputInvisible bind:this={fileInputRef} onFileSelect={handleFileSelect} />
+<ChatFormInputFileInputInvisible bind:this={fileInputRef} onFileSelect={handleFileSelect} />
 
 <form
 	class="relative grid {className}"
@@ -603,35 +601,20 @@
 		<div
 			class="flex-column relative min-h-12 items-center rounded-4xl md:rounded-3xl py-2 pb-2.25 shadow-sm transition-all focus-within:shadow-md md:py-3!"
 		>
-			{#if useContenteditable}
-				<ChatFormContentEditable
-					class="px-5 py-1.5 md:pt-0 mb-0.5"
-					bind:this={inputRef}
-					bind:value
-					onKeydown={handleKeydown}
-					onInput={() => {
-						pickers.handleInput();
-						onValueChange?.(value);
-					}}
-					onPaste={handlePaste}
-					{disabled}
-					{placeholder}
-				/>
-			{:else}
-				<ChatFormTextarea
-					class="px-5 py-1.5 md:pt-0"
-					bind:this={inputRef}
-					bind:value
-					onKeydown={handleKeydown}
-					onInput={() => {
-						pickers.handleInput();
-						onValueChange?.(value);
-					}}
-					onPaste={handlePaste}
-					{disabled}
-					{placeholder}
-				/>
-			{/if}
+			<ChatFormInput
+				class="px-5 py-1.5 md:pt-0"
+				bind:this={inputRef}
+				bind:value
+				onKeydown={handleKeydown}
+				onInput={() => {
+					pickers.handleInput();
+					onValueChange?.(value);
+				}}
+				onPaste={handlePaste}
+				{disabled}
+				{placeholder}
+				{useRichInput}
+			/>
 
 			{#if mcpResourceStore.hasAttachments}
 				<ChatFormMcpResourcesList
@@ -667,7 +650,7 @@
 	<ContextGaugePopup />
 
 	{#if toolsStore.hasEnabledCwdTools}
-		<ChatFormWorkingDirectory
+		<ChatFormCurrentWorkingDirectory
 			directory={cwd}
 			isOpen={pickers.isWorkingDirectoryPickerOpen}
 			bind:query={pickers.workingDirectoryQuery}

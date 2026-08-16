@@ -213,6 +213,7 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_LEADING_DENSE_BLOCK_COUNT,         hparams.n_layer_dense_lead);
     add_kv(LLM_KV_FEED_FORWARD_LENGTH,               hparams.n_ff_arr, true);
     add_kv(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,        hparams.n_ff_exp);
+    add_kv(LLM_KV_EXPERT_LATENT_LENGTH,              hparams.n_expert_latent);
     add_kv(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, hparams.n_ff_shexp);
     add_kv(LLM_KV_EXPERT_CHUNK_FEED_FORWARD_LENGTH,  hparams.n_ff_chexp);
     add_kv(LLM_KV_SWIGLU_CLAMP_EXP,                  hparams.swiglu_clamp_exp);
@@ -319,6 +320,7 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_SSM_DT_B_C_RMS,                    hparams.ssm_dt_b_c_rms);
 
     add_kv(LLM_KV_KDA_HEAD_DIM,                      hparams.n_embd_head_kda);
+    add_kv(LLM_KV_KDA_GATE_LOWER_BOUND,              hparams.kda_gate_lower_bound);
 
     add_kv(LLM_KV_WKV_HEAD_SIZE,                     hparams.wkv_head_size);
 
@@ -376,6 +378,10 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_XIELU_BETA,                        hparams.xielu_beta);
     add_kv(LLM_KV_XIELU_EPS,                         hparams.xielu_eps);
 
+    add_kv(LLM_KV_ATTN_RES_BLOCK_SIZE,               hparams.attn_res_block_size);
+    add_kv(LLM_KV_ACTIVATION_SITU_BETA,              hparams.situ_beta);
+    add_kv(LLM_KV_ACTIVATION_SITU_LINEAR_BETA,       hparams.situ_linear_beta);
+
     // deprecated
     // add_kv(LLM_KV_TOKENIZER_PREFIX_ID,               ???);
     // add_kv(LLM_KV_TOKENIZER_SUFFIX_ID,               ???);
@@ -403,6 +409,7 @@ void llama_model_saver::add_tensors_from_model() {
     add_tensor(model->output_norm_enc);
     add_tensor(model->output_s);
     add_tensor(model->output_in_s);
+    add_tensor(model->output_res_score);
     add_tensor(model->cls);
     add_tensor(model->cls_b);
     add_tensor(model->cls_out);

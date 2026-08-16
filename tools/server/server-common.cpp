@@ -61,6 +61,33 @@ json format_error_response(const std::string & message, const enum error_type ty
 }
 
 //
+// server_slot_stats
+//
+
+json server_slot_stats::to_json() const {
+    json base = {
+        {"cache_n",                n_prompt_cached},
+
+        {"prompt_n",               n_prompt_processed},
+        {"prompt_ms",              t_prompt_ms()},
+        {"prompt_per_token_ms",    t_prompt_per_token_ms()},
+        {"prompt_per_second",      n_prompt_tps()},
+
+        {"predicted_n",            n_gen},
+        {"predicted_ms",           t_gen_ms()},
+        {"predicted_per_token_ms", t_gen_per_token_ms()},
+        {"predicted_per_second",   n_gen_tps()},
+    };
+
+    if (n_draft_tokens > 0) {
+        base["draft_n"]          = n_draft_tokens;
+        base["draft_n_accepted"] = n_draft_accepted;
+    }
+
+    return base;
+}
+
+//
 // random string / id
 //
 
@@ -1265,12 +1292,15 @@ json oaicompat_chat_params_parse(
         throw std::invalid_argument("invalid type for \"enable_thinking\" (expected boolean, got string)");
     }
 
-    // Parse also the OAI "reasoning_effort": "none" specific value
+    // Parse the OAI "reasoning_effort" field; "none" disables reasoning.
     if (body.contains("reasoning_effort")) {
         auto reasoning_effort = json_value(body, "reasoning_effort", std::string(""));
         if (reasoning_effort == "none") {
             inputs.enable_thinking = false;
-        } // other reasoning_effort values are model-specific and not yet handled
+            inputs.chat_template_kwargs.erase("reasoning_effort");
+        } else if (!reasoning_effort.empty()) {
+            inputs.chat_template_kwargs["reasoning_effort"] = json(reasoning_effort).dump();
+        }
     }
 
     inputs.force_pure_content = opt.force_pure_content;
