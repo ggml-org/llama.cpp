@@ -89,6 +89,65 @@ ARM warps per core 64
 ARM rates: pixel=4 texel=8 fma=128
 ```
 
+## What counts as an optimization
+
+`GGML_VK_DEBUG=1` is a capability and dispatch diagnostic mode. It must not be
+used as a performance mode. The backend's `GGML_VK_PERF_LOGGER=1` mode uses
+Vulkan timestamp queries and is useful for locating slow nodes or fusions, but
+it adds synchronization and query overhead, so its wall-clock output is not a
+production benchmark.
+
+A change counts as a Mali optimization only when all of the following are
+checked:
+
+1. Vulkan timestamp GPU time decreases for the targeted workload, or the same
+   GPU time is achieved with fewer dispatches, submissions, barriers, or
+   intermediate buffers.
+2. The intended graph path is actually selected, confirmed by fusion/dispatch
+   logs rather than inferred from the device name.
+3. Correctness remains unchanged, including quantized matmul and gradient tests
+   where applicable.
+4. The result survives fixed-workload repeated runs in both execution orders.
+5. Prompt/matmul, generation/matvec, and first-token latency are reported
+   separately. A prompt-only win must not be reported as a decode win.
+6. Devices without the required ARM capability remain on the generic path.
+
+Recommended diagnostic run:
+
+```bash
+GGML_VK_PERF_LOGGER=1 GGML_VK_PERF_LOGGER_CONCURRENT=1 \
+  ./bin/llama-bench -m /path/to/model.gguf -ngl 99 -p 128 -n 128 -r 1 -o json
+```
+
+Recommended production benchmark run:
+
+```bash
+./bin/llama-bench -m /path/to/model.gguf \
+  -ngl 99 -p 128 -n 128 -r 5 -o json
+```
+
+The current submission has a subgroup-16 warptile result on the reference
+Mali-G720, but no stable generation improvement. It therefore does not claim a
+universal Mali speedup.
+
+## Submission-boundary experiment
+
+`GGML_VK_MAX_NODES_PER_SUBMIT` is an existing experiment knob for submission
+batching. On the reference device and SmolLM2 Q4_K_M (`-p 128 -n 128 -r 3`),
+changing it produced:
+
+```text
+nodes/submit   prompt tok/s   generation tok/s
+25             176.65         55.90
+50             159.34         60.44
+100            159.14         59.36
+200            152.37         56.09
+```
+
+This is not a default change: the result is workload-sensitive and does not
+improve both prompt and generation. It demonstrates why reducing submission
+boundaries or GPU steps must be evaluated with GPU timestamps and end-to-end
+latency together.
 ## Emulator and simulator boundary
 
 The Android Emulator can run generic software Vulkan with:
