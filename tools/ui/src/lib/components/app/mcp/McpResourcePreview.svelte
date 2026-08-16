@@ -4,7 +4,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { ICON_CLASS_DEFAULT } from '$lib/constants';
 	import { MimeTypeApplication, MimeTypeText } from '$lib/enums';
-	import { mcpStore } from '$lib/stores/mcp.svelte';
+	import { mcpStore } from '$lib/stores';
 	import type { MCPResourceContent, MCPResourceInfo } from '$lib/types';
 	import {
 		createBase64DataUrl,

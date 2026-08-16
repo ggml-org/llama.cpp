@@ -15,10 +15,9 @@
 	import { TruncatedText } from '$lib/components/app';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import * as Tooltip from '$lib/components/ui/tooltip';
-	import { FORK_TREE_DEPTH_PADDING, ICON_CLASS_DEFAULT } from '$lib/constants';
+	import { FORK_TREE_DEPTH_PADDING, ICON_CLASS_DEFAULT, UI_DATA_ATTRS } from '$lib/constants';
 	import { RouterService } from '$lib/services/router.service';
-	import { getAllLoadingChats } from '$lib/stores/chat.svelte';
-	import { conversationsStore } from '$lib/stores/conversations.svelte';
+	import { chatStore, conversationsStore } from '$lib/stores';
 	import { onMount } from 'svelte';
 
 	interface Props {
@@ -56,7 +55,7 @@
 	let renderActionsDropdown = $state(false);
 	let dropdownOpen = $state(false);
 
-	let isLoading = $derived(getAllLoadingChats().includes(conversation.id));
+	let isLoading = $derived(chatStore.getAllLoadingChats().includes(conversation.id));
 
 	function handleEdit(event: Event) {
 		event.stopPropagation();
@@ -155,14 +154,13 @@
 	});
 </script>
 
-<!-- svelte-ignore a11y_mouse_events_have_key_events -->
 <button
 	class="group flex min-h-9 w-full cursor-pointer items-center justify-between space-x-3 rounded-lg py-1.5 text-left transition-colors hover:bg-foreground/10 {isActive
 		? 'bg-foreground/5 text-accent-foreground'
 		: ''} {isSelected ? 'bg-primary/10 hover:bg-primary/15' : ''} {isSelectionMode
 		? 'is-selection-mode'
 		: ''} px-2"
-	data-conversation-row={conversation.id}
+	{...{ [UI_DATA_ATTRS.CONVERSATION_ROW]: conversation.id }}
 	onclick={(e) => handleSelect(e)}
 	onmouseover={handleMouseOver}
 	onmouseleave={handleMouseLeave}

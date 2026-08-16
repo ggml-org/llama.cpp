@@ -1,6 +1,6 @@
 <script lang="ts">
-	import type { ColorLevel } from './context-gauge';
 	import { colorLevelTextClass } from './context-gauge';
+	import type { ColorLevel } from '$lib/enums';
 
 	interface Props {
 		percent: number | null;

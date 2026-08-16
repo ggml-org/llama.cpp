@@ -40,6 +40,7 @@ import {
 } from '$lib/constants';
 import { ColorMode } from '$lib/enums';
 import { ParameterSyncService } from '$lib/services/parameter-sync.service';
+// direct imports between stores, not via the barrel, to avoid circular deps
 import { serverStore } from '$lib/stores/server.svelte';
 import { isMobile } from '$lib/stores/viewport.svelte';
 import type { SettingsExportType } from '$lib/types';
@@ -575,7 +576,3 @@ class SettingsStore {
 }
 
 export const settingsStore = new SettingsStore();
-
-export const config = () => settingsStore.config;
-export const theme = () => settingsStore.config[SETTINGS_KEYS.THEME];
-export const isInitialized = () => settingsStore.isInitialized;

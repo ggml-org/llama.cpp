@@ -9,7 +9,7 @@
 
 // API utilities
 export { getAuthHeaders, getJsonHeaders, sanitizeHeaders } from './api-headers';
-export { apiFetch, apiFetchWithParams, apiPost, type ApiFetchOptions } from './api-fetch';
+export { ApiError, apiFetch, apiFetchWithParams, apiPost } from './api-fetch';
 export { validateApiKey } from './api-key-validation';
 
 // Attachment utilities
@@ -51,7 +51,12 @@ export { extractRootDomain, sanitizeExternalUrl, canonicalizeServerUrl } from '.
 export { modelLoadFraction, modelLoadProgressText } from './progress';
 
 // Conversation utilities
-export { createMessageCountMap, getMessageCount } from './conversation-utils';
+export {
+	createMessageCountMap,
+	getMessageCount,
+	buildConversationTree,
+	type ConversationTreeItem
+} from './conversation-utils';
 
 // Clipboard utilities
 export {
@@ -124,7 +129,10 @@ export { getImageErrorFallbackHtml } from './image-error-fallback';
 
 // SSE-with-JSON stream iterator (used by built-in tool streaming, decoupled
 // from chat.service.ts which embeds its own SSE parser for resume support)
-export { parseSseJsonStream, type SseJsonEvent } from './sse';
+export { parseSseJsonStream } from './sse';
+
+// Stream session identity (conversation-id based)
+export { streamIdentity } from './stream-identity';
 
 // MCP utilities
 export {
@@ -179,18 +187,11 @@ export {
 	rankEntries,
 	joinPath,
 	highlightMatch,
-	type GlobEntry,
-	type GlobSearchArgs,
 	type PathQuery
 } from './working-directory';
 
 // Shared `file_glob_search` runner with a short-lived result cache
-export {
-	runGlobSearch,
-	runGlobSearchWithChildren,
-	type GlobEntryResult,
-	type GlobSearchResult
-} from './glob-search';
+export { runGlobSearch, runGlobSearchWithChildren } from './glob-search';
 
 // Mention-token detection (for the `@`-triggered file/folder mention picker)
 export {
@@ -206,7 +207,7 @@ export {
 	type CommandDismissSnapshot
 } from './command-token';
 
-// Tokenization for the chat-form contenteditable (mention links + code spans <-> chip DOM)
+// Tokenization for the ChatFormInputRich (mention links + code spans <-> chip DOM)
 export {
 	tokenizeContent,
 	containsCodeSpan,
@@ -219,14 +220,13 @@ export {
 	rangeToTextOffset,
 	textOffsetToRange,
 	badgeAwareWordJump,
-	leadingBadgeEdgeOffset,
-	type ContentToken
-} from './contenteditable-tokenizer';
+	leadingBadgeEdgeOffset
+} from './chat-form-input-rich-tokenizer';
 
-// Source-space undo/redo history for the chat-form contenteditable
+// Source-space undo/redo history for the ChatFormInputRich
 export { SourceHistory, type SourceHistoryEntry } from './source-history';
 
-// Mention-badge visual contract (used by the contenteditable / rehype
+// Mention-badge visual contract (used by the ChatFormInputRich / rehype
 // DOM paths that build the same chip without a Svelte mount)
 export {
 	containsFileMentionLink,
@@ -244,6 +244,12 @@ export {
 	buildMentionInsertion
 } from './mention-badge';
 
+// Chat template utilities
+export {
+	detectThinkingSupport,
+	detectThinkingSupportWithReason
+} from './chat-template-thinking-detector';
+
 // Agentic content utilities (structured section derivation)
 export {
 	deriveAgenticSections,
@@ -252,8 +258,7 @@ export {
 	splitSearchSummaryList,
 	hasAgenticContent,
 	classifyToolResult,
-	type AgenticSection,
-	type ToolResultLine
+	classifyContinueIntent
 } from './agentic';
 
 // Line-level unified diff for tool result rendering (`edit_file` block)
@@ -276,12 +281,11 @@ export {
 	extractSearchResults,
 	extractSearchQuery,
 	faviconForUrl,
-	isWebSearchToolName,
-	type SearchResult
+	isWebSearchToolName
 } from './search-results';
 
 // Cache utilities
-export { TTLCache, ReactiveTTLMap, type TTLCacheOptions } from './cache-ttl';
+export { TTLCache, ReactiveTTLMap } from './cache-ttl';
 
 // Redaction utilities
 export { redactValue } from './redact';
@@ -318,7 +322,6 @@ export { tryParseToolResultObject } from './tool-call-meta';
 // Re-exported through $lib/utils so renderer components can read the
 // label without depending on $lib/constants directly.
 export { getBuiltinToolUi } from './built-in-tools';
-export type { BuiltinToolUiEntry } from '$lib/types';
 
 // Chat command picker
 

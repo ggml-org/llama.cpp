@@ -608,11 +608,3 @@ class MCPResourceStore {
 }
 
 export const mcpResourceStore = new MCPResourceStore();
-
-// Export convenience functions
-export const mcpResources = () => mcpResourceStore.serverResources;
-export const mcpResourceAttachments = () => mcpResourceStore.attachments;
-export const mcpResourceAttachmentCount = () => mcpResourceStore.attachmentCount;
-export const mcpHasResourceAttachments = () => mcpResourceStore.hasAttachments;
-export const mcpTotalResourceCount = () => mcpResourceStore.totalResourceCount;
-export const mcpResourcesLoading = () => mcpResourceStore.isLoading;

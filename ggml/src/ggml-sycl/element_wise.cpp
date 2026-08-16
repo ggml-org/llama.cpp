@@ -82,43 +82,6 @@ static __dpct_inline__ T op_elu(T x) {
 }
 
 template<typename T>
-static __dpct_inline__ T op_tanh(T x) {
-    if constexpr (std::is_same_v<T, sycl::ext::oneapi::bfloat16>) {
-        constexpr int ver = __INTEL_LLVM_COMPILER;
-#if defined(__INTEL_LLVM_COMPILER) && (__INTEL_LLVM_COMPILER >= 20260000)
-            return sycl::ext::oneapi::experimental::tanh(x);
-#else
-            return static_cast<T>(sycl::tanh(static_cast<float>(x)));
-#endif
-    } else {
-        return sycl::tanh(x);
-    }
-}
-
-template<typename T>
-static __dpct_inline__ T op_gelu(T x) {
-    const T GELU_COEF_A    = static_cast<T>(0.044715f);
-    const T SQRT_2_OVER_PI = static_cast<T>(0.79788456080286535587989211986876f);
-    return static_cast<T>(0.5f) * x *
-           (static_cast<T>(1.0f) +
-            op_tanh(SQRT_2_OVER_PI * x * (static_cast<T>(1.0f) + GELU_COEF_A * x * x)));
-}
-
-template<typename T>
-static __dpct_inline__ T op_exp(T x) {
-    if constexpr (std::is_same_v<T, sycl::ext::oneapi::bfloat16>) {
-        return sycl::ext::oneapi::experimental::exp(x);
-    } else {
-        return sycl::exp(x);
-    }
-}
-
-template<typename T>
-static __dpct_inline__ T op_silu(T x) {
-    return x / (static_cast<T>(1.0f) + op_exp(-x));
-}
-
-template<typename T>
 static __dpct_inline__ T op_erf(T x) {
     if constexpr (std::is_same_v<T, sycl::ext::oneapi::bfloat16>) {
         return static_cast<sycl::ext::oneapi::bfloat16>(
@@ -446,6 +409,47 @@ static void unary_gated_op_generic_kernel(
         const int64_t j1 = o0 == o1 ? j0 : rc.x() * o1 + rc.y();
         dst[i] = func(x[j0]) * g[j1];
     }
+}
+
+// Fused UNARY + MUL. Unlike the gated ops above, `x` and `g` are separate tensors of the
+// same shape; `o0`/`o1` are their row strides in elements, so a half-view needs no repack.
+// `dst` is contiguous and indexed flat. Math is done in f32, as the CPU and CUDA references do.
+template<typename T, typename F>
+static void unary_mul_flat_kernel(const T * x, const T * g, T * dst, const int64_t k, const sycl::nd_item<1> &item_ct1, F op) {
+    SYCL_GLOBAL_ID_LOOP(k, item_ct1) {
+        dst[i] = (T) (op((float) x[i]) * (float) g[i]);
+    }
+}
+
+template<typename T, typename F>
+static void unary_mul_strided_kernel(const T * x, const T * g, T * dst, const int64_t k, const sycl::uint3 n_fd, const int64_t o0, const int64_t o1, const sycl::nd_item<1> &item_ct1, F op) {
+    SYCL_GLOBAL_ID_LOOP(k, item_ct1) {
+        const sycl::uint2 rc = fast_div_modulo((uint32_t) i, n_fd);
+        const int64_t j0 = rc.x() * o0 + rc.y();
+        const int64_t j1 = o0 == o1 ? j0 : rc.x() * o1 + rc.y();
+        dst[i] = (T) (op((float) x[j0]) * (float) g[j1]);
+    }
+}
+
+template<typename T, typename F>
+static void unary_mul_sycl(const T * x, const T * g, T * dst, const int64_t k, const int64_t n, const int64_t o0, const int64_t o1, queue_ptr main_stream, F op) {
+    const size_t            num_blocks = ceil_div((size_t) k, (size_t) SYCL_GLU_BLOCK_SIZE);
+    const sycl::nd_range<1> range(num_blocks * sycl::range<1>(SYCL_GLU_BLOCK_SIZE), sycl::range<1>(SYCL_GLU_BLOCK_SIZE));
+
+    // o0 == o1 == n makes (i/n)*o0 + (i%n) == i, so the strided kernel degenerates to the flat one
+    if (o0 == n && o1 == n) {
+        main_stream->parallel_for(range, [=](sycl::nd_item<1> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+            unary_mul_flat_kernel(x, g, dst, k, item_ct1, op);
+        });
+        return;
+    }
+
+    // 32-bit fastdiv, exact only below 2^31; ggml_sycl_can_fuse() already declined past that
+    GGML_ASSERT(k < ((int64_t) 1 << 31));
+    const sycl::uint3 n_fd = init_fastdiv_values((uint32_t) n);
+    main_stream->parallel_for(range, [=](sycl::nd_item<1> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+        unary_mul_strided_kernel(x, g, dst, k, n_fd, o0, o1, item_ct1, op);
+    });
 }
 
 namespace ggml_sycl_detail {
@@ -989,6 +993,52 @@ static inline void ggml_sycl_op_swiglu(ggml_backend_sycl_context & ctx, ggml_ten
     ggml_sycl_detail::ggml_sycl_op_unary_gated(ctx, dst, [](auto x) {
         return op_silu(x);
     });
+}
+
+// dst = op(unary_node->src[0]) * other, written straight to the MUL output, saving the
+// standalone unary launch. Preconditions come from ggml_sycl_can_fuse(); re-asserted here.
+void ggml_sycl_op_unary_mul_fused(ggml_backend_sycl_context & ctx, ggml_tensor * unary_node, ggml_tensor * mul_node) {
+    scope_op_debug_print scope_dbg_print(__func__, mul_node, /*num_src=*/2);
+
+    const ggml_tensor * x = unary_node->src[0];
+    const ggml_tensor * g = (mul_node->src[0] == unary_node) ? mul_node->src[1] : mul_node->src[0];
+
+    // g is picked by elimination; ggml_can_fuse()'s single-use rule rules out MUL(unary, unary)
+    GGML_ASSERT(g != unary_node);
+    GGML_ASSERT(x->type == g->type && x->type == mul_node->type);
+    GGML_ASSERT(ggml_are_same_shape(x, g) && ggml_are_same_shape(x, mul_node));
+    GGML_ASSERT(ggml_is_contiguous_1(x) && ggml_is_contiguous_1(g));
+    // dst is indexed flat
+    GGML_ASSERT(ggml_is_contiguous(mul_node));
+
+    queue_ptr main_stream = ctx.stream();
+    SYCL_CHECK(ggml_sycl_set_device(ctx.device));
+
+    const int64_t k = ggml_nelements(mul_node);
+    const int64_t n = mul_node->ne[0];
+
+    const auto dispatch_type = [&](auto op) {
+        switch (mul_node->type) {
+            case GGML_TYPE_F32:
+                unary_mul_sycl((const float *) x->data, (const float *) g->data, (float *) mul_node->data,
+                               k, n, x->nb[1] / sizeof(float), g->nb[1] / sizeof(float), main_stream, op);
+                break;
+            case GGML_TYPE_F16:
+                unary_mul_sycl((const sycl::half *) x->data, (const sycl::half *) g->data, (sycl::half *) mul_node->data,
+                               k, n, x->nb[1] / sizeof(sycl::half), g->nb[1] / sizeof(sycl::half), main_stream, op);
+                break;
+            default:
+                GGML_ABORT("fused unary+mul: unsupported type %s", ggml_type_name(mul_node->type));
+        }
+    };
+
+    switch (ggml_get_unary_op(unary_node)) {
+        case GGML_UNARY_OP_SILU:     dispatch_type([](float v) { return op_silu(v); });     break;
+        case GGML_UNARY_OP_SIGMOID:  dispatch_type([](float v) { return op_sigmoid(v); });  break;
+        case GGML_UNARY_OP_SOFTPLUS: dispatch_type([](float v) { return op_softplus(v); }); break;
+        default:
+            GGML_ABORT("fused unary+mul: unsupported unary op %s", ggml_unary_op_name(ggml_get_unary_op(unary_node)));
+    }
 }
 
 __dpct_inline__ float ggml_sycl_op_swiglu_oai_single(float x, float g, float alpha = 1.702f, float limit = 7.0f) {

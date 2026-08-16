@@ -2,6 +2,7 @@
 	import { ChatMessageStatistics } from '$lib/components/app';
 	import { ChatMessageStatisticsMode } from '$lib/enums';
 	import type { UseProcessingStateReturn } from '$lib/hooks/use-processing-state.svelte';
+	import { agenticStore } from '$lib/stores';
 
 	interface Props {
 		message: DatabaseMessage;
@@ -11,9 +12,26 @@
 	}
 
 	let { isLoading, message, processingState, showMessageStats }: Props = $props();
+
+	// A running agentic flow stamps per-turn timings on its root message at each
+	// turn boundary and the cumulative agentic totals only on exit; while it runs,
+	// show the session's live totals on the root message instead.
+	const liveLlm = $derived(agenticStore.getLiveLlmTotals(message.convId));
+	const isLiveFlowRoot = $derived(
+		liveLlm !== null && agenticStore.getFlowRootMessageId(message.convId) === message.id
+	);
 </script>
 
-{#if showMessageStats && message.timings && message.timings.predicted_n && message.timings.predicted_ms}
+{#if showMessageStats && isLiveFlowRoot && liveLlm}
+	<ChatMessageStatistics
+		mode={ChatMessageStatisticsMode.GENERATION}
+		isLive
+		promptTokens={liveLlm.prompt_n}
+		promptMs={liveLlm.prompt_ms}
+		predictedTokens={liveLlm.predicted_n}
+		predictedMs={liveLlm.predicted_ms}
+	/>
+{:else if showMessageStats && message.timings && message.timings.predicted_n && message.timings.predicted_ms}
 	{@const agentic = message.timings.agentic}
 	<ChatMessageStatistics
 		mode={ChatMessageStatisticsMode.GENERATION}

@@ -6,8 +6,7 @@
 	import { Switch } from '$lib/components/ui/switch';
 	import { ICON_CLASS_DEFAULT, ROUTES } from '$lib/constants';
 	import { HealthCheckStatus } from '$lib/enums';
-	import { conversationsStore } from '$lib/stores/conversations.svelte';
-	import { mcpStore } from '$lib/stores/mcp.svelte';
+	import { conversationsStore, mcpStore } from '$lib/stores';
 	import type { MCPServerSettingsEntry } from '$lib/types';
 
 	interface Props {

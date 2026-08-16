@@ -1,9 +1,9 @@
-// Guards the clipboard contract of the chat-form contenteditable:
+// Guards the clipboard contract of the ChatFormInputRich:
 // copy/cut expose the markdown SOURCE of the selection (each badge
 // contributes its full `[name](file://...)` link) and pasting such
 // markdown re-renders the badges.
 
-import ChatFormContenteditable from '$lib/components/app/chat/ChatForm/ChatFormContenteditable.svelte';
+import ChatFormInputRich from '$lib/components/app/chat/ChatForm/ChatFormInput/ChatFormInputRich.svelte';
 import { rangeToTextOffset, serializeContent, textOffsetToRange } from '$lib/utils';
 import { tick } from 'svelte';
 import { describe, expect, it, vi } from 'vitest';
@@ -16,7 +16,7 @@ const BADGE_SELECTOR = '[data-mention-badge="true"]';
 function editableIn(container: HTMLElement): HTMLElement {
 	const el = container.querySelector('[role="textbox"]');
 
-	if (!(el instanceof HTMLElement)) throw new Error('contenteditable not rendered');
+	if (!(el instanceof HTMLElement)) throw new Error('ChatFormInputRich not rendered');
 
 	return el;
 }
@@ -43,9 +43,9 @@ function clipboardEvent(type: 'copy' | 'cut' | 'paste', text = '') {
 	return { data, event };
 }
 
-describe('ChatFormContenteditable clipboard', () => {
+describe('ChatFormInputRich clipboard', () => {
 	it('copy exposes the markdown source of the selection', async () => {
-		const { container } = render(ChatFormContenteditable, { value: SOURCE });
+		const { container } = render(ChatFormInputRich, { value: SOURCE });
 
 		await tick();
 
@@ -62,7 +62,7 @@ describe('ChatFormContenteditable clipboard', () => {
 	});
 
 	it('cut exposes the markdown source and removes the slice', async () => {
-		const { container } = render(ChatFormContenteditable, { value: SOURCE });
+		const { container } = render(ChatFormInputRich, { value: SOURCE });
 
 		await tick();
 
@@ -88,7 +88,7 @@ describe('ChatFormContenteditable clipboard', () => {
 	});
 
 	it('paste of markdown mention links re-renders badges', async () => {
-		const { container } = render(ChatFormContenteditable, { value: 'hello ' });
+		const { container } = render(ChatFormInputRich, { value: 'hello ' });
 
 		await tick();
 
@@ -114,7 +114,7 @@ describe('ChatFormContenteditable clipboard', () => {
 	});
 
 	it('paste without mention links keeps the DOM untouched', async () => {
-		const { container } = render(ChatFormContenteditable, { value: 'hello ' });
+		const { container } = render(ChatFormInputRich, { value: 'hello ' });
 
 		await tick();
 
@@ -138,14 +138,14 @@ describe('ChatFormContenteditable clipboard', () => {
 	});
 });
 
-describe('ChatFormContenteditable code spans', () => {
+describe('ChatFormInputRich code spans', () => {
 	it('renders inline code from the initial value', async () => {
-		const { container } = render(ChatFormContenteditable, { value: 'run `npm test` now' });
+		const { container } = render(ChatFormInputRich, { value: 'run `npm test` now' });
 
 		await tick();
 
 		const root = editableIn(container);
-		const code = root.querySelector('code[data-code-token="inline"]');
+		const code = root.querySelector('code[data-code-token="code_inline"]');
 
 		expect(code).not.toBeNull();
 		expect(code!.textContent).toBe('`npm test`');
@@ -153,12 +153,12 @@ describe('ChatFormContenteditable code spans', () => {
 
 	it('renders a fenced code block with a language', async () => {
 		const source = 'before\n```js\nconst a = 1;\n```\nafter';
-		const { container } = render(ChatFormContenteditable, { value: source });
+		const { container } = render(ChatFormInputRich, { value: source });
 
 		await tick();
 
 		const root = editableIn(container);
-		const code = root.querySelector('code[data-code-token="block"]');
+		const code = root.querySelector('code[data-code-token="code_block"]');
 
 		expect(code).not.toBeNull();
 		expect(code!.textContent).toBe('```js\nconst a = 1;\n```');
@@ -166,7 +166,7 @@ describe('ChatFormContenteditable code spans', () => {
 
 	it('copy exposes the markdown source of a selection spanning code', async () => {
 		const source = 'run `npm test` now';
-		const { container } = render(ChatFormContenteditable, { value: source });
+		const { container } = render(ChatFormInputRich, { value: source });
 
 		await tick();
 
@@ -183,7 +183,7 @@ describe('ChatFormContenteditable code spans', () => {
 	});
 
 	it('paste of a code span renders the styled element', async () => {
-		const { container } = render(ChatFormContenteditable, { value: 'run ' });
+		const { container } = render(ChatFormInputRich, { value: 'run ' });
 
 		await tick();
 
@@ -201,7 +201,7 @@ describe('ChatFormContenteditable code spans', () => {
 		await tick();
 
 		expect(event.defaultPrevented).toBe(true);
-		const code = root.querySelector('code[data-code-token="inline"]');
+		const code = root.querySelector('code[data-code-token="code_inline"]');
 
 		expect(code).not.toBeNull();
 		expect(code!.textContent).toBe('`npm test`');
@@ -210,12 +210,12 @@ describe('ChatFormContenteditable code spans', () => {
 
 	it('highlights a fenced block content and stays byte-exact', async () => {
 		const source = '```js\nconst a = 1;\n```';
-		const { container } = render(ChatFormContenteditable, { value: source });
+		const { container } = render(ChatFormInputRich, { value: source });
 
 		await tick();
 
 		const root = editableIn(container);
-		const code = root.querySelector('code[data-code-token="block"]');
+		const code = root.querySelector('code[data-code-token="code_block"]');
 
 		expect(code).not.toBeNull();
 		expect(code!.querySelector('.hljs-keyword')).not.toBeNull();
@@ -223,7 +223,7 @@ describe('ChatFormContenteditable code spans', () => {
 	});
 
 	it('does not highlight inline code', async () => {
-		const { container } = render(ChatFormContenteditable, { value: 'run `const` now' });
+		const { container } = render(ChatFormInputRich, { value: 'run `const` now' });
 
 		await tick();
 
@@ -233,9 +233,9 @@ describe('ChatFormContenteditable code spans', () => {
 	});
 });
 
-describe('ChatFormContenteditable code block escape hatches', () => {
+describe('ChatFormInputRich code block escape hatches', () => {
 	const BLOCK_SOURCE = '```js\nconst a = 1;\n```';
-	const BLOCK_SELECTOR = 'code[data-code-token="block"]';
+	const BLOCK_SELECTOR = 'code[data-code-token="code_block"]';
 
 	function blockIn(root: HTMLElement): HTMLElement {
 		const el = root.querySelector(BLOCK_SELECTOR);
@@ -273,7 +273,7 @@ describe('ChatFormContenteditable code block escape hatches', () => {
 	}
 
 	it('pads a trailing code block with a br hatch that stays invisible to copy', async () => {
-		const { container } = render(ChatFormContenteditable, { value: BLOCK_SOURCE });
+		const { container } = render(ChatFormInputRich, { value: BLOCK_SOURCE });
 
 		await tick();
 
@@ -292,7 +292,7 @@ describe('ChatFormContenteditable code block escape hatches', () => {
 	});
 
 	it('escapes a trailing code block with ArrowDown and types after it', async () => {
-		const { container } = render(ChatFormContenteditable, { value: BLOCK_SOURCE });
+		const { container } = render(ChatFormInputRich, { value: BLOCK_SOURCE });
 
 		await tick();
 
@@ -318,7 +318,7 @@ describe('ChatFormContenteditable code block escape hatches', () => {
 	});
 
 	it('escapes a leading code block with ArrowUp and types before it', async () => {
-		const { container } = render(ChatFormContenteditable, { value: BLOCK_SOURCE });
+		const { container } = render(ChatFormInputRich, { value: BLOCK_SOURCE });
 
 		await tick();
 
@@ -343,7 +343,7 @@ describe('ChatFormContenteditable code block escape hatches', () => {
 	});
 
 	it('escapes a leading code block with ArrowLeft from its first character', async () => {
-		const { container } = render(ChatFormContenteditable, { value: BLOCK_SOURCE });
+		const { container } = render(ChatFormInputRich, { value: BLOCK_SOURCE });
 
 		await tick();
 
@@ -358,7 +358,7 @@ describe('ChatFormContenteditable code block escape hatches', () => {
 	});
 
 	it('removes the transient leading hatch when the caret moves back into the block', async () => {
-		const { container } = render(ChatFormContenteditable, { value: BLOCK_SOURCE });
+		const { container } = render(ChatFormInputRich, { value: BLOCK_SOURCE });
 
 		await tick();
 
@@ -378,7 +378,7 @@ describe('ChatFormContenteditable code block escape hatches', () => {
 	});
 
 	it('extends the selection out of the block with Shift+ArrowDown', async () => {
-		const { container } = render(ChatFormContenteditable, { value: BLOCK_SOURCE });
+		const { container } = render(ChatFormInputRich, { value: BLOCK_SOURCE });
 
 		await tick();
 
@@ -397,7 +397,7 @@ describe('ChatFormContenteditable code block escape hatches', () => {
 	});
 
 	it('line-separates text typed right after the closing fence', async () => {
-		const { container } = render(ChatFormContenteditable, { value: BLOCK_SOURCE });
+		const { container } = render(ChatFormInputRich, { value: BLOCK_SOURCE });
 
 		await tick();
 
@@ -419,7 +419,7 @@ describe('ChatFormContenteditable code block escape hatches', () => {
 	});
 
 	it('does not double the newline when Shift+Enter already added one', async () => {
-		const { container } = render(ChatFormContenteditable, { value: BLOCK_SOURCE });
+		const { container } = render(ChatFormInputRich, { value: BLOCK_SOURCE });
 
 		await tick();
 
@@ -437,7 +437,7 @@ describe('ChatFormContenteditable code block escape hatches', () => {
 	});
 
 	it('moves a caret stuck before the inserted newline onto the new line', async () => {
-		const { container } = render(ChatFormContenteditable, {
+		const { container } = render(ChatFormInputRich, {
 			value: BLOCK_SOURCE + '\ntext after the code block'
 		});
 
@@ -469,7 +469,7 @@ describe('ChatFormContenteditable code block escape hatches', () => {
 	});
 
 	it('appends the artificial trailing newline when the browser did not add one', async () => {
-		const { container } = render(ChatFormContenteditable, {
+		const { container } = render(ChatFormInputRich, {
 			value: BLOCK_SOURCE + '\ntext after the code block'
 		});
 
@@ -501,7 +501,7 @@ describe('ChatFormContenteditable code block escape hatches', () => {
 	});
 
 	it('lands the caret on the new line with a single Shift+Enter after text below a block', async () => {
-		const { container } = render(ChatFormContenteditable, {
+		const { container } = render(ChatFormInputRich, {
 			value: BLOCK_SOURCE + '\ntext after the code block'
 		});
 
@@ -534,7 +534,7 @@ describe('ChatFormContenteditable code block escape hatches', () => {
 	});
 
 	it('lets Backspace at the text start move into the block without a source fight', async () => {
-		const { container } = render(ChatFormContenteditable, { value: BLOCK_SOURCE });
+		const { container } = render(ChatFormInputRich, { value: BLOCK_SOURCE });
 
 		await tick();
 
@@ -560,7 +560,7 @@ describe('ChatFormContenteditable code block escape hatches', () => {
 	});
 
 	it('lets forward Delete eat the text after a block normally', async () => {
-		const { container } = render(ChatFormContenteditable, { value: BLOCK_SOURCE });
+		const { container } = render(ChatFormInputRich, { value: BLOCK_SOURCE });
 
 		await tick();
 
@@ -581,7 +581,7 @@ describe('ChatFormContenteditable code block escape hatches', () => {
 	});
 
 	it('renders text after a block without a phantom empty line', async () => {
-		const { container } = render(ChatFormContenteditable, {
+		const { container } = render(ChatFormInputRich, {
 			value: BLOCK_SOURCE + '\nhello'
 		});
 
@@ -594,7 +594,7 @@ describe('ChatFormContenteditable code block escape hatches', () => {
 	});
 
 	it('keeps an intentional blank line after a block out of the separator', async () => {
-		const { container } = render(ChatFormContenteditable, {
+		const { container } = render(ChatFormInputRich, {
 			value: BLOCK_SOURCE + '\n\nhello'
 		});
 
@@ -607,7 +607,7 @@ describe('ChatFormContenteditable code block escape hatches', () => {
 	});
 
 	it('re-highlights while typing inside a block and keeps the caret', async () => {
-		const { container } = render(ChatFormContenteditable, { value: BLOCK_SOURCE });
+		const { container } = render(ChatFormInputRich, { value: BLOCK_SOURCE });
 
 		await tick();
 
@@ -639,12 +639,12 @@ describe('ChatFormContenteditable code block escape hatches', () => {
 	});
 });
 
-describe('ChatFormContenteditable Enter in code blocks', () => {
+describe('ChatFormInputRich Enter in code blocks', () => {
 	const BLOCK_SOURCE = '```js\nconst a = 1;\n```';
 
 	it('adds a line instead of submitting on plain Enter inside a block', async () => {
 		const onKeydown = vi.fn();
-		const { container } = render(ChatFormContenteditable, {
+		const { container } = render(ChatFormInputRich, {
 			onKeydown,
 			value: BLOCK_SOURCE
 		});
@@ -670,7 +670,7 @@ describe('ChatFormContenteditable Enter in code blocks', () => {
 		expect(onKeydown).not.toHaveBeenCalled();
 		expect(serializeContent(root)).toBe('```js\n\nconst a = 1;\n```');
 
-		const code = root.querySelector('code[data-code-token="block"]');
+		const code = root.querySelector('code[data-code-token="code_block"]');
 		const selection = window.getSelection();
 
 		expect(code!.contains(selection!.getRangeAt(0).startContainer)).toBe(true);
@@ -679,7 +679,7 @@ describe('ChatFormContenteditable Enter in code blocks', () => {
 
 	it('adds a line after a still-open fence (no closing ``` yet)', async () => {
 		const onKeydown = vi.fn();
-		const { container } = render(ChatFormContenteditable, {
+		const { container } = render(ChatFormInputRich, {
 			onKeydown,
 			value: '```js\nconst a = 1;'
 		});
@@ -707,7 +707,7 @@ describe('ChatFormContenteditable Enter in code blocks', () => {
 
 	it('forwards plain Enter to the parent when the caret is outside a block', async () => {
 		const onKeydown = vi.fn();
-		const { container } = render(ChatFormContenteditable, {
+		const { container } = render(ChatFormInputRich, {
 			onKeydown,
 			value: BLOCK_SOURCE + '\nafter'
 		});
@@ -730,7 +730,7 @@ describe('ChatFormContenteditable Enter in code blocks', () => {
 
 	it('forwards plain Enter on the trailing hatch line after a block', async () => {
 		const onKeydown = vi.fn();
-		const { container } = render(ChatFormContenteditable, {
+		const { container } = render(ChatFormInputRich, {
 			onKeydown,
 			value: BLOCK_SOURCE
 		});
@@ -753,7 +753,7 @@ describe('ChatFormContenteditable Enter in code blocks', () => {
 
 	it('forwards Ctrl+Enter inside a block so explicit submit survives', async () => {
 		const onKeydown = vi.fn();
-		const { container } = render(ChatFormContenteditable, {
+		const { container } = render(ChatFormInputRich, {
 			onKeydown,
 			value: BLOCK_SOURCE
 		});
@@ -780,7 +780,7 @@ describe('ChatFormContenteditable Enter in code blocks', () => {
 
 	it('forwards Enter inside an inline code span', async () => {
 		const onKeydown = vi.fn();
-		const { container } = render(ChatFormContenteditable, {
+		const { container } = render(ChatFormInputRich, {
 			onKeydown,
 			value: 'run `npm test` now'
 		});
@@ -790,7 +790,7 @@ describe('ChatFormContenteditable Enter in code blocks', () => {
 		const root = editableIn(container);
 
 		root.focus();
-		const code = root.querySelector('code[data-code-token="inline"]')!;
+		const code = root.querySelector('code[data-code-token="code_inline"]')!;
 
 		setSelection(root, (range) => {
 			range.setStart(code.firstChild!, 3);

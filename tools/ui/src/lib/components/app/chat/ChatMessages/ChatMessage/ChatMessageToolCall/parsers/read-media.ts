@@ -5,7 +5,7 @@ import {
 	PREFIX_SIZE,
 	READ_MEDIA_SIZE_REGEX
 } from '$lib/constants/read-media';
-import type { AgenticSection } from '$lib/utils';
+import type { AgenticSection } from '$lib/types';
 
 export interface ReadMediaMeta {
 	fileName: string;

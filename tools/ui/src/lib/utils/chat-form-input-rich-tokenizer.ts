@@ -1,5 +1,5 @@
 /**
- * Maps between the chat-form contenteditable's markdown source and the
+ * Maps between the chat-form-input-rich's markdown source and the
  * badge/code/text token stream the DOM is built from. A badge is one
  * opaque source contribution (`[name](file://path)`); its own subtree
  * is never walked, and the caret cannot land inside it, so offsets
@@ -30,19 +30,17 @@ import {
 	getMentionBadgeLabel
 } from './mention-badge';
 import {
+	CODE_TOKEN_ATTR,
 	MENTION_BADGE_CLASSNAME,
+	MENTION_BADGE_DATA_ATTRS,
 	MENTION_BADGE_ICON_CLASSNAME,
 	MENTION_BADGE_SVG_ATTRIBUTES,
 	SETTINGS_KEYS
 } from '$lib/constants';
+import { BooleanString, ChatFormInputRichTokenKind } from '$lib/enums';
 import { settingsStore } from '$lib/stores/settings.svelte';
 import { toolsStore } from '$lib/stores/tools.svelte';
-
-export type ContentToken =
-	| { kind: 'text'; text: string }
-	| { kind: 'badge'; name: string; path: string }
-	| { kind: 'inlineCode'; text: string }
-	| { kind: 'codeBlock'; text: string };
+import type { ChatFormInputRichToken } from '$lib/types/chat-form-input-rich';
 
 // Block wrappers browsers insert for newlines; each folds back into a
 // single `\n` during serialization.
@@ -70,7 +68,7 @@ const CODE_SPAN_RE = /(```[\s\S]*?```)|(`[^`\n]+`)/g;
 /**
  * Cheap gate check for `ChatForm`: does the buffer contain a
  * complete code span (inline or fenced)? Used to promote the plain
- * textarea to the contenteditable renderer.
+ * textarea to the chat-form-input-rich renderer.
  */
 export function containsCodeSpan(value: string): boolean {
 	CODE_SPAN_RE.lastIndex = 0;
@@ -106,14 +104,14 @@ export function isOffsetInCodeBlock(source: string, offset: number): boolean {
 
 /**
  * Tokenize a markdown source value into the segments the
- * contenteditable will render. Code spans are carved out first
+ * chat-form-input-rich will render. Code spans are carved out first
  * (their content is literal - a `file://` link inside backticks
  * must NOT render as a badge), then plain text and badges
  * interleave in the remaining gaps. Any whitespace after a badge
  * stays in a plain text token so the round trip is byte-exact.
  */
-export function tokenizeContent(input: string): ContentToken[] {
-	const tokens: ContentToken[] = [];
+export function tokenizeContent(input: string): ChatFormInputRichToken[] {
+	const tokens: ChatFormInputRichToken[] = [];
 
 	let cursor = 0;
 
@@ -130,8 +128,8 @@ export function tokenizeContent(input: string): ContentToken[] {
 
 		tokens.push(
 			match[1] !== undefined
-				? { kind: 'codeBlock', text: match[1] }
-				: { kind: 'inlineCode', text: match[2] }
+				? { kind: ChatFormInputRichTokenKind.CODE_BLOCK, text: match[1] }
+				: { kind: ChatFormInputRichTokenKind.CODE_INLINE, text: match[2] }
 		);
 		cursor = start + match[0].length;
 	}
@@ -146,7 +144,7 @@ export function tokenizeContent(input: string): ContentToken[] {
 /**
  * Tokenize a code-free segment into text and badge tokens.
  */
-function pushTextAndBadgeTokens(input: string, tokens: ContentToken[]) {
+function pushTextAndBadgeTokens(input: string, tokens: ChatFormInputRichToken[]) {
 	let cursor = 0;
 
 	MENTION_BADGE_RE.lastIndex = 0;
@@ -158,24 +156,27 @@ function pushTextAndBadgeTokens(input: string, tokens: ContentToken[]) {
 		const start = match.index;
 
 		if (start > cursor) {
-			tokens.push({ kind: 'text', text: input.slice(cursor, start) });
+			tokens.push({ kind: ChatFormInputRichTokenKind.TEXT, text: input.slice(cursor, start) });
 		}
 
-		tokens.push({ kind: 'badge', name, path });
+		tokens.push({ kind: ChatFormInputRichTokenKind.BADGE, name, path });
 		cursor = start + whole.length;
 	}
 
 	if (cursor < input.length) {
-		tokens.push({ kind: 'text', text: input.slice(cursor) });
+		tokens.push({ kind: ChatFormInputRichTokenKind.TEXT, text: input.slice(cursor) });
 	}
 }
 
 function isCodeBlockElement(node: Node | null): node is HTMLElement {
-	return node instanceof HTMLElement && node.dataset.codeToken === 'block';
+	return (
+		node instanceof HTMLElement &&
+		node.getAttribute(CODE_TOKEN_ATTR) === ChatFormInputRichTokenKind.CODE_BLOCK
+	);
 }
 
 /**
- * Serialize a contenteditable subtree back to source. `<br>` and block
+ * Serialize a chat-form-input-rich subtree back to source. `<br>` and block
  * wrappers the browser inserted for newlines fold back into `\n` (a
  * trailing `<br>` is the browser's caret placeholder, not a newline);
  * any other element is transparent. Code spans serialize their
@@ -212,9 +213,9 @@ export function serializeContent(root: HTMLElement): string {
 
 			const el = child as HTMLElement;
 
-			if (el.dataset.mentionBadge === 'true') {
-				const name = el.dataset.mentionName ?? '';
-				const path = el.dataset.mentionPath ?? '';
+			if (el.getAttribute(MENTION_BADGE_DATA_ATTRS.BADGE) === BooleanString.TRUE) {
+				const name = el.getAttribute(MENTION_BADGE_DATA_ATTRS.NAME) ?? '';
+				const path = el.getAttribute(MENTION_BADGE_DATA_ATTRS.PATH) ?? '';
 
 				if (name && path) {
 					if (pendingBlockBoundary) {
@@ -229,8 +230,10 @@ export function serializeContent(root: HTMLElement): string {
 				continue;
 			}
 
-			if (el.dataset.codeToken !== undefined) {
-				const isBlock = el.dataset.codeToken === 'block';
+			const codeToken = el.getAttribute(CODE_TOKEN_ATTR);
+
+			if (codeToken !== null) {
+				const isBlock = codeToken === ChatFormInputRichTokenKind.CODE_BLOCK;
 
 				if (isBlock && (pendingBlockBoundary || !first)) out += '\n';
 
@@ -289,8 +292,8 @@ export function serializeContent(root: HTMLElement): string {
  * A mismatch means token boundaries shifted (a code span was just
  * completed or broken) and the DOM needs a rebuild to restyle.
  */
-export function domMatchesTokens(root: HTMLElement, tokens: ContentToken[]): boolean {
-	const expected = tokens.filter((token) => token.kind !== 'text');
+export function domMatchesTokens(root: HTMLElement, tokens: ChatFormInputRichToken[]): boolean {
+	const expected = tokens.filter((token) => token.kind !== ChatFormInputRichTokenKind.TEXT);
 
 	let index = 0;
 
@@ -299,8 +302,8 @@ export function domMatchesTokens(root: HTMLElement, tokens: ContentToken[]): boo
 			if (child.nodeType !== Node.ELEMENT_NODE) continue;
 
 			const el = child as HTMLElement;
-			const isBadge = el.dataset.mentionBadge === 'true';
-			const isCode = el.dataset.codeToken !== undefined;
+			const isBadge = el.getAttribute(MENTION_BADGE_DATA_ATTRS.BADGE) === BooleanString.TRUE;
+			const isCode = el.getAttribute(CODE_TOKEN_ATTR) !== null;
 
 			if (!isBadge && !isCode) {
 				if (!walk(el)) return false;
@@ -313,24 +316,27 @@ export function domMatchesTokens(root: HTMLElement, tokens: ContentToken[]): boo
 			if (!token) return false;
 
 			if (isBadge) {
-				if (token.kind !== 'badge') return false;
+				if (token.kind !== ChatFormInputRichTokenKind.BADGE) return false;
 
-				if (token.name !== (el.dataset.mentionName ?? '')) return false;
+				if (token.name !== (el.getAttribute(MENTION_BADGE_DATA_ATTRS.NAME) ?? '')) return false;
 
-				if (token.path !== (el.dataset.mentionPath ?? '')) return false;
+				if (token.path !== (el.getAttribute(MENTION_BADGE_DATA_ATTRS.PATH) ?? '')) return false;
 
 				continue;
 			}
 
-			const codeKind = el.dataset.codeToken === 'block' ? 'codeBlock' : 'inlineCode';
+			const codeKind: ChatFormInputRichTokenKind =
+				el.getAttribute(CODE_TOKEN_ATTR) === ChatFormInputRichTokenKind.CODE_BLOCK
+					? ChatFormInputRichTokenKind.CODE_BLOCK
+					: ChatFormInputRichTokenKind.CODE_INLINE;
 
 			if (token.kind !== codeKind) return false;
 
 			if (
-				(token.kind === 'inlineCode' || token.kind === 'codeBlock') &&
-				token.text !== (el.textContent ?? '')
+				token.kind === ChatFormInputRichTokenKind.CODE_INLINE ||
+				token.kind === ChatFormInputRichTokenKind.CODE_BLOCK
 			) {
-				return false;
+				if (token.text !== (el.textContent ?? '')) return false;
 			}
 		}
 
@@ -429,8 +435,11 @@ export function rangeToTextOffset(root: HTMLElement, range: Range | null): numbe
 				total += 1;
 			}
 
-			if (el.dataset.mentionBadge === 'true') {
-				const len = badgeSourceLength(el.dataset.mentionName ?? '', el.dataset.mentionPath ?? '');
+			if (el.getAttribute(MENTION_BADGE_DATA_ATTRS.BADGE) === BooleanString.TRUE) {
+				const len = badgeSourceLength(
+					el.getAttribute(MENTION_BADGE_DATA_ATTRS.NAME) ?? '',
+					el.getAttribute(MENTION_BADGE_DATA_ATTRS.PATH) ?? ''
+				);
 
 				if (len === 0) continue;
 
@@ -446,8 +455,10 @@ export function rangeToTextOffset(root: HTMLElement, range: Range | null): numbe
 				continue;
 			}
 
-			if (el.dataset.codeToken !== undefined) {
-				const isBlock = el.dataset.codeToken === 'block';
+			const codeToken = el.getAttribute(CODE_TOKEN_ATTR);
+
+			if (codeToken !== null) {
+				const isBlock = codeToken === ChatFormInputRichTokenKind.CODE_BLOCK;
 
 				if (isBlock && !first) {
 					if (!atOrBeforeCaret(el, 0)) {
@@ -522,23 +533,29 @@ export function rangeToTextOffset(root: HTMLElement, range: Range | null): numbe
  * string + inline SVG are shared with the rehype plugin via
  * `$lib/constants`.
  */
-export function buildFragment(tokens: ContentToken[]): DocumentFragment {
+export function buildFragment(tokens: ChatFormInputRichToken[]): DocumentFragment {
 	const fragment = document.createDocumentFragment();
 
 	for (let index = 0; index < tokens.length; index++) {
 		const token = tokens[index];
 
-		if (token.kind === 'text') {
+		if (token.kind === ChatFormInputRichTokenKind.TEXT) {
 			let text = token.text;
 
 			// The separator \n at a fenced-block boundary is synthesized
 			// at serialization time; keeping it in the DOM would render a
 			// phantom empty line next to the block.
-			if (tokens[index - 1]?.kind === 'codeBlock' && text.startsWith('\n')) {
+			if (
+				tokens[index - 1]?.kind === ChatFormInputRichTokenKind.CODE_BLOCK &&
+				text.startsWith('\n')
+			) {
 				text = text.slice(1);
 			}
 
-			if (tokens[index + 1]?.kind === 'codeBlock' && text.endsWith('\n')) {
+			if (
+				tokens[index + 1]?.kind === ChatFormInputRichTokenKind.CODE_BLOCK &&
+				text.endsWith('\n')
+			) {
 				text = text.slice(0, -1);
 			}
 
@@ -549,10 +566,13 @@ export function buildFragment(tokens: ContentToken[]): DocumentFragment {
 			continue;
 		}
 
-		if (token.kind === 'inlineCode' || token.kind === 'codeBlock') {
+		if (
+			token.kind === ChatFormInputRichTokenKind.CODE_INLINE ||
+			token.kind === ChatFormInputRichTokenKind.CODE_BLOCK
+		) {
 			const code = document.createElement('code');
 
-			code.dataset.codeToken = token.kind === 'codeBlock' ? 'block' : 'inline';
+			code.setAttribute(CODE_TOKEN_ATTR, token.kind);
 			code.textContent = token.text;
 			fragment.appendChild(code);
 
@@ -568,9 +588,9 @@ export function buildFragment(tokens: ContentToken[]): DocumentFragment {
 
 		const badge = document.createElement('span');
 
-		badge.dataset.mentionBadge = 'true';
-		badge.dataset.mentionName = token.name;
-		badge.dataset.mentionPath = token.path;
+		badge.setAttribute(MENTION_BADGE_DATA_ATTRS.BADGE, BooleanString.TRUE);
+		badge.setAttribute(MENTION_BADGE_DATA_ATTRS.NAME, token.name);
+		badge.setAttribute(MENTION_BADGE_DATA_ATTRS.PATH, token.path);
 		badge.title = decodeFileLinkPath(token.path);
 		badge.className = MENTION_BADGE_CLASSNAME;
 		badge.contentEditable = 'false';
@@ -728,11 +748,14 @@ export function badgeAwareWordJump(
 
 	for (const token of tokenizeContent(source)) {
 		const len =
-			token.kind === 'badge' ? badgeSourceLength(token.name, token.path) : token.text.length;
+			token.kind === ChatFormInputRichTokenKind.BADGE
+				? badgeSourceLength(token.name, token.path)
+				: token.text.length;
 
-		if (token.kind === 'badge') badgeSpans.push([masked.length, masked.length + len]);
+		if (token.kind === ChatFormInputRichTokenKind.BADGE)
+			badgeSpans.push([masked.length, masked.length + len]);
 
-		masked += token.kind === 'badge' ? 'a'.repeat(len) : token.text;
+		masked += token.kind === ChatFormInputRichTokenKind.BADGE ? 'a'.repeat(len) : token.text;
 	}
 
 	if (badgeSpans.length === 0) return null;
@@ -795,7 +818,7 @@ export function badgeAwareWordJump(
 export function leadingBadgeEdgeOffset(source: string, caret: number): number | null {
 	const [first] = tokenizeContent(source);
 
-	if (!first || first.kind !== 'badge') return null;
+	if (!first || first.kind !== ChatFormInputRichTokenKind.BADGE) return null;
 
 	return caret === badgeSourceLength(first.name, first.path) ? 0 : null;
 }
@@ -863,8 +886,11 @@ export function textOffsetToRange(root: HTMLElement, offset: number): Range {
 
 			const el = child as HTMLElement;
 
-			if (el.dataset.mentionBadge === 'true') {
-				const len = badgeSourceLength(el.dataset.mentionName ?? '', el.dataset.mentionPath ?? '');
+			if (el.getAttribute(MENTION_BADGE_DATA_ATTRS.BADGE) === BooleanString.TRUE) {
+				const len = badgeSourceLength(
+					el.getAttribute(MENTION_BADGE_DATA_ATTRS.NAME) ?? '',
+					el.getAttribute(MENTION_BADGE_DATA_ATTRS.PATH) ?? ''
+				);
 
 				if (len === 0) continue;
 
@@ -902,8 +928,10 @@ export function textOffsetToRange(root: HTMLElement, offset: number): Range {
 				continue;
 			}
 
-			if (el.dataset.codeToken !== undefined) {
-				const isBlock = el.dataset.codeToken === 'block';
+			const codeToken = el.getAttribute(CODE_TOKEN_ATTR);
+
+			if (codeToken !== null) {
+				const isBlock = codeToken === ChatFormInputRichTokenKind.CODE_BLOCK;
 
 				if (isBlock && (pendingBlockBoundary || !first)) {
 					pendingBlockBoundary = false;

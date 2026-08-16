@@ -11,19 +11,17 @@
 	import { AlertTriangle, Check, Loader2, XCircle } from '@lucide/svelte';
 	import { CollapsibleTerminalBlock } from '$lib/components/app';
 	import { SETTINGS_KEYS, TOOL_RUNTIME_SCROLL_AT_BOTTOM_THRESHOLD_PX } from '$lib/constants';
-	import { config } from '$lib/stores/settings.svelte';
-	import { toolsStore } from '$lib/stores/tools.svelte';
-	import type { DatabaseMessageExtra } from '$lib/types';
+	import { AttachmentType } from '$lib/enums';
+	import { settingsStore, toolsStore } from '$lib/stores';
+	import type { AgenticSection, DatabaseMessageExtra, ToolResultLine } from '$lib/types';
 	import {
 		abbreviateHome,
-		type AgenticSection,
 		type ExecShellExitStatus,
 		highlightCode,
 		isExitCodeSummaryLine,
 		parseExecShellCommandError,
 		parseExecShellCommandExitStatus,
-		parseToolResultWithMedia,
-		type ToolResultLine
+		parseToolResultWithMedia
 	} from '$lib/utils';
 
 	interface Props {
@@ -93,7 +91,7 @@
 	);
 
 	const useFullHeightCodeBlocks = $derived(
-		Boolean(config()[SETTINGS_KEYS.FULL_HEIGHT_CODE_BLOCKS])
+		Boolean(settingsStore.config[SETTINGS_KEYS.FULL_HEIGHT_CODE_BLOCKS])
 	);
 
 	const autoScroll = $derived(isLive && !useFullHeightCodeBlocks);
@@ -222,7 +220,7 @@
 			>
 				{#each outputLines as line, i (i)}
 					<div class="font-mono text-[11px] leading-relaxed whitespace-pre-wrap">{line.text}</div>
-					{#if line.media}
+					{#if line.media?.type === AttachmentType.IMAGE}
 						<img
 							src={line.media.base64Url}
 							alt={line.media.name}

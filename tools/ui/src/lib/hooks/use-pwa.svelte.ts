@@ -1,6 +1,6 @@
 import { browser } from '$app/environment';
 import { BUILD_VERSION_LOCALSTORAGE_KEY, SW_CONFIG } from '$lib/constants';
-import { versionStore } from '$lib/stores/version.svelte';
+import { versionStore } from '$lib/stores';
 import { useRegisterSW } from 'virtual:pwa-register/svelte';
 
 /**

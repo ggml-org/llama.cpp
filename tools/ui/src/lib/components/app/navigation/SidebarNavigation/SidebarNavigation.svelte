@@ -14,15 +14,8 @@
 	import { useKeyboardShortcuts } from '$lib/hooks/use-keyboard-shortcuts.svelte';
 	import { useMarqueeSelection } from '$lib/hooks/use-marquee-selection.svelte';
 	import { RouterService } from '$lib/services/router.service';
-	import { chatStore } from '$lib/stores/chat.svelte';
-	import {
-		buildConversationTree,
-		conversations,
-		conversationsStore
-	} from '$lib/stores/conversations.svelte';
-	import { device } from '$lib/stores/device.svelte';
-	import { config } from '$lib/stores/settings.svelte';
-	import { isMobile } from '$lib/stores/viewport.svelte';
+	import { chatStore, conversationsStore, device, isMobile, settingsStore } from '$lib/stores';
+	import { buildConversationTree } from '$lib/utils';
 	import { circIn } from 'svelte/easing';
 	import { SvelteSet } from 'svelte/reactivity';
 	import { fade } from 'svelte/transition';
@@ -44,7 +37,7 @@
 
 	const isStripExpanded = $derived(isExpandedMode || hoveredTooltip !== null);
 	const isOnMobile = $derived(isMobile.current);
-	const alwaysShowOnDesktop = $derived(config().alwaysShowSidebarOnDesktop as boolean);
+	const alwaysShowOnDesktop = $derived(settingsStore.config.alwaysShowSidebarOnDesktop as boolean);
 
 	$effect(() => {
 		if (alwaysShowOnDesktop && !isOnMobile) {
@@ -84,7 +77,7 @@
 	let filteredConversations = $derived.by(() => {
 		if (isSearchModeActive) {
 			if (searchQuery.trim().length > 0) {
-				return conversations().filter((conversation: { name: string }) =>
+				return conversationsStore.conversations.filter((conversation: { name: string }) =>
 					conversation.name.toLowerCase().includes(searchQuery.toLowerCase())
 				);
 			}
@@ -92,7 +85,7 @@
 			return [];
 		}
 
-		return conversations();
+		return conversationsStore.conversations;
 	});
 
 	let isSelectionMode = $state(false);
@@ -110,7 +103,7 @@
 	const allSelectedArePinned = $derived.by(() => {
 		if (selectedIds.size === 0) return false;
 
-		const convs = conversations();
+		const convs = conversationsStore.conversations;
 
 		for (const id of selectedIds) {
 			const c = convs.find((conv) => conv.id === id);
@@ -124,7 +117,7 @@
 	const pinStateIsMixed = $derived.by(() => {
 		if (selectedIds.size === 0) return false;
 
-		const convs = conversations();
+		const convs = conversationsStore.conversations;
 
 		let anyPinned = false;
 		let anyUnpinned = false;
@@ -242,7 +235,7 @@
 	}
 
 	async function handleEditConversation(id: string) {
-		const conversation = conversations().find((conv) => conv.id === id);
+		const conversation = conversationsStore.conversations.find((conv) => conv.id === id);
 
 		if (!conversation) return;
 
@@ -275,7 +268,7 @@
 	}
 
 	async function handleDeleteConversation(id: string) {
-		const conversation = conversations().find((conv) => conv.id === id);
+		const conversation = conversationsStore.conversations.find((conv) => conv.id === id);
 
 		if (!conversation) return;
 

@@ -5,7 +5,8 @@
 		ChatAttachmentsPreviewNavButtons,
 		ChatAttachmentsPreviewThumbnailStrip
 	} from '$lib/components/app';
-	import { modelsStore } from '$lib/stores/models.svelte';
+	import { UI_DATA_ATTRS } from '$lib/constants';
+	import { modelsStore } from '$lib/stores';
 	import {
 		createBase64DataUrl,
 		formatFileSize,
@@ -90,7 +91,7 @@
 		const index = currentIndex;
 
 		setTimeout(() => {
-			const thumbnail = document.querySelector(`[data-thumbnail-index="${index}"]`);
+			const thumbnail = document.querySelector(`[${UI_DATA_ATTRS.THUMBNAIL_INDEX}="${index}"]`);
 
 			thumbnail?.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
 		}, 0);

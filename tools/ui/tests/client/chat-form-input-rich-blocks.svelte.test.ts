@@ -1,9 +1,9 @@
-// Guards the newline contract of the chat-form contenteditable: browsers
+// Guards the newline contract of the ChatFormInputRich: browsers
 // restructure the flat DOM on Enter (`<div>` wrappers, `<br>` shapes) and
 // serialization must fold those back into `\n` so the emitted value never
 // diverges from what is on screen.
 
-import ChatFormContenteditableHarness from './components/ChatFormContenteditableHarness.svelte';
+import ChatFormInputRichHarness from './components/ChatFormInputRichHarness.svelte';
 import { tick } from 'svelte';
 import { describe, expect, it } from 'vitest';
 import { render } from 'vitest-browser-svelte';
@@ -13,7 +13,7 @@ const SOURCE = 'see [docs](file:///a/b) here';
 function editableIn(container: HTMLElement): HTMLElement {
 	const el = container.querySelector('[role="textbox"]');
 
-	if (!(el instanceof HTMLElement)) throw new Error('contenteditable not rendered');
+	if (!(el instanceof HTMLElement)) throw new Error('ChatFormInputRich not rendered');
 
 	return el;
 }
@@ -35,9 +35,9 @@ function setCaret(node: Node, offset: number) {
 	selection.addRange(range);
 }
 
-describe('ChatFormContenteditable browser newline shapes', () => {
+describe('ChatFormInputRich browser newline shapes', () => {
 	it('serializes a Chromium Enter <div> wrapper as a newline', async () => {
-		const screen = render(ChatFormContenteditableHarness, { value: SOURCE });
+		const screen = render(ChatFormInputRichHarness, { value: SOURCE });
 
 		await tick();
 
@@ -53,7 +53,7 @@ describe('ChatFormContenteditable browser newline shapes', () => {
 	});
 
 	it('serializes a Firefox full <div> wrap as lines, badge included', async () => {
-		const screen = render(ChatFormContenteditableHarness, { value: SOURCE });
+		const screen = render(ChatFormInputRichHarness, { value: SOURCE });
 
 		await tick();
 
@@ -73,7 +73,7 @@ describe('ChatFormContenteditable browser newline shapes', () => {
 	});
 
 	it('serializes a <br> as a newline', async () => {
-		const screen = render(ChatFormContenteditableHarness, { value: 'here' });
+		const screen = render(ChatFormInputRichHarness, { value: 'here' });
 
 		await tick();
 
@@ -88,7 +88,7 @@ describe('ChatFormContenteditable browser newline shapes', () => {
 	});
 
 	it('ignores a trailing <br> (browser caret placeholder)', async () => {
-		const screen = render(ChatFormContenteditableHarness, { value: 'abc' });
+		const screen = render(ChatFormInputRichHarness, { value: 'abc' });
 
 		await tick();
 
@@ -102,7 +102,7 @@ describe('ChatFormContenteditable browser newline shapes', () => {
 	});
 
 	it('serializes one newline per empty-line <div><br></div>', async () => {
-		const screen = render(ChatFormContenteditableHarness, { value: 'abc' });
+		const screen = render(ChatFormInputRichHarness, { value: 'abc' });
 
 		await tick();
 
@@ -121,7 +121,7 @@ describe('ChatFormContenteditable browser newline shapes', () => {
 	});
 
 	it('treats a <div><br></div>-only buffer as empty for the placeholder', async () => {
-		const screen = render(ChatFormContenteditableHarness, { value: 'abc' });
+		const screen = render(ChatFormInputRichHarness, { value: 'abc' });
 
 		await tick();
 
@@ -138,7 +138,7 @@ describe('ChatFormContenteditable browser newline shapes', () => {
 	});
 
 	it('maps the caret across block boundaries in both directions', async () => {
-		const screen = render(ChatFormContenteditableHarness, { value: 'abc\ndef' });
+		const screen = render(ChatFormInputRichHarness, { value: 'abc\ndef' });
 
 		await tick();
 

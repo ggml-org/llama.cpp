@@ -17,7 +17,7 @@ import {
 	createWrapper,
 	generateBlockId
 } from './code-block-utils';
-import { CODE_BLOCK_CLASS } from '$lib/constants';
+import { CODE_BLOCK_CLASS, MARKDOWN_DATA_ATTRS } from '$lib/constants';
 import type { Element, ElementContent, Root } from 'hast';
 import type { Plugin } from 'unified';
 import { visit } from 'unist-util-visit';
@@ -65,16 +65,18 @@ export const rehypeEnhanceCodeBlocks: Plugin<[], Root> = () => {
 
 			codeElement.properties = {
 				...codeElement.properties,
-				'data-code-id': codeId
+				[MARKDOWN_DATA_ATTRS.CODE_ID]: codeId
 			};
 
-			const actions: Element[] = [createCopyButton(codeId, 'data-code-id', 'Copy code')];
+			const actions: Element[] = [
+				createCopyButton(codeId, MARKDOWN_DATA_ATTRS.CODE_ID, 'Copy code')
+			];
 
 			if (language.toLowerCase() === 'html') {
-				actions.push(createPreviewButton(codeId, 'data-code-id', 'Preview code'));
+				actions.push(createPreviewButton(codeId, MARKDOWN_DATA_ATTRS.CODE_ID, 'Preview code'));
 			}
 
-			const header = createBlockHeader(language, codeId, 'data-code-id', actions);
+			const header = createBlockHeader(language, codeId, MARKDOWN_DATA_ATTRS.CODE_ID, actions);
 			const wrapper = createWrapper(
 				header,
 				node,

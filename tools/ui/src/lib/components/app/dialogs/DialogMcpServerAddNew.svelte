@@ -4,16 +4,13 @@
 	import { Button } from '$lib/components/ui/button';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import {
-		BOOL_FALSE_STRING,
-		BOOL_TRUE_STRING,
 		DISMISSED_RECOMMENDED_MCP_SERVERS_LOCALSTORAGE_KEY,
 		HEADERS,
 		MCP_SERVER_ID_PREFIX,
 		RECOMMENDED_MCP_SERVERS
 	} from '$lib/constants';
-	import { HealthCheckStatus } from '$lib/enums';
-	import { conversationsStore } from '$lib/stores/conversations.svelte';
-	import { mcpStore } from '$lib/stores/mcp.svelte';
+	import { BooleanString, HealthCheckStatus } from '$lib/enums';
+	import { conversationsStore, mcpStore } from '$lib/stores';
 	import { canonicalizeServerUrl, parseHeadersToArray, uuid } from '$lib/utils';
 
 	interface Props {
@@ -98,9 +95,9 @@
 
 		if (!raw) return false;
 
-		if (raw === BOOL_TRUE_STRING) return true;
+		if (raw === BooleanString.TRUE) return true;
 
-		if (raw === BOOL_FALSE_STRING) return false;
+		if (raw === BooleanString.FALSE) return false;
 
 		try {
 			const parsed = JSON.parse(raw);
@@ -117,7 +114,7 @@
 		if (browser) {
 			localStorage.setItem(
 				DISMISSED_RECOMMENDED_MCP_SERVERS_LOCALSTORAGE_KEY,
-				dismissed ? BOOL_TRUE_STRING : BOOL_FALSE_STRING
+				dismissed ? BooleanString.TRUE : BooleanString.FALSE
 			);
 		}
 	}

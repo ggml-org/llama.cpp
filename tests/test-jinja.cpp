@@ -10,6 +10,7 @@
 #include "jinja/parser.h"
 #include "jinja/lexer.h"
 #include "jinja/utils.h"
+#include "jinja/caps.h"
 
 #include "testing.h"
 
@@ -33,6 +34,8 @@ static void test_array_methods(testing & t);
 static void test_object_methods(testing & t);
 static void test_hasher(testing & t);
 static void test_stats(testing & t);
+static void test_caps(testing & t);
+static void test_string_parts(testing & t);
 static void test_fuzzing(testing & t);
 
 static bool g_python_mode = false;
@@ -72,6 +75,8 @@ int main(int argc, char *argv[]) {
     if (!g_python_mode) {
         t.test("hasher", test_hasher);
         t.test("stats", test_stats);
+        t.test("caps", test_caps);
+        t.test("string parts", test_string_parts);
         t.test("fuzzing", test_fuzzing);
     }
 
@@ -2057,6 +2062,81 @@ static void test_stats(testing & t) {
     });
 }
 
+static void test_caps(testing & t) {
+    static auto get_caps = [](const std::string & tmpl) -> jinja::caps {
+        jinja::lexer lexer;
+        auto lexer_res = lexer.tokenize(tmpl);
+
+        jinja::program prog = jinja::parse_from_tokens(lexer_res);
+
+        return jinja::caps_get(prog);
+    };
+
+    t.test("string content", [](testing & t) {
+        auto caps = get_caps(
+            "{% for message in messages %}"
+            "{{ message['role'] + ': ' + message['content'] }}"
+            "{% endfor %}"
+        );
+        t.assert_true("supports string content", caps.supports_string_content);
+        t.assert_true("does not support typed content", !caps.supports_typed_content);
+    });
+
+    t.test("typed content, raises on string", [](testing & t) {
+        // 'selectattr' is not a String filter, so it throws
+        auto caps = get_caps(
+            "{% for message in messages %}"
+            "{% for content in message['content'] | selectattr('type', 'equalto', 'text') %}"
+            "{{ content['text'] }}"
+            "{% endfor %}"
+            "{% endfor %}"
+        );
+        t.assert_true("does not support string content", !caps.supports_string_content);
+        t.assert_true("supports typed content", caps.supports_typed_content);
+    });
+
+    t.test("typed content, silently drops string", [](testing & t) {
+        // no throw here, but content[0]['text'] is undefined for a string (MiniMax-M1 case)
+        auto caps = get_caps(
+            "{% for message in messages %}"
+            "{{ message['content'][0]['text'] }}"
+            "{% endfor %}"
+        );
+        t.assert_true("does not support string content", !caps.supports_string_content);
+        t.assert_true("supports typed content", caps.supports_typed_content);
+    });
+}
+
+static void test_string_parts(testing & t) {
+    static auto render = [](const std::string & tmpl, const json & vars) -> jinja::string {
+        jinja::lexer lexer;
+        auto lexer_res = lexer.tokenize(tmpl);
+
+        jinja::program ast = jinja::parse_from_tokens(lexer_res);
+
+        jinja::context ctx(tmpl);
+        jinja::global_from_json(ctx, vars, true);
+
+        jinja::runtime runtime(ctx);
+        return runtime.gather_string_parts(runtime.execute(ast))->as_string();
+    };
+
+    t.test("merge joins only the neighbours with the same type", [](testing & t) {
+        // "AB" comes from the input and merges, "-" comes from the template and must not
+        jinja::string res = render("{{ val.a }}{{ val.b }}-{{ val.c }}",
+                                   json{{"val", json{{"a", "A"}, {"b", "B"}, {"c", "C"}}}});
+
+        if (t.assert_true("3 parts after the merge", res.parts.size() == 3)) {
+            t.assert_true("part 0 is the merged input", res.parts[0].val == "AB" && res.parts[0].is_input);
+            t.assert_true("part 1 is from the template", res.parts[1].val == "-" && !res.parts[1].is_input);
+            t.assert_true("part 2 is input",             res.parts[2].val == "C" && res.parts[2].is_input);
+        } else {
+            t.log("parts: " + std::to_string(res.parts.size()) + ", rendered: " + json(res.str()).dump());
+        }
+    });
+
+}
+
 static void test_template_cpp(testing & t, const std::string & name, const std::string & tmpl, const json & vars, const std::string & expect) {
     t.test(name, [&tmpl, &vars, &expect](testing & t) {
         jinja::lexer lexer;
@@ -2084,8 +2164,7 @@ static void test_template_cpp(testing & t, const std::string & name, const std::
                 t.log("Actual  : " + json(rendered).dump());
             }
         } catch (const jinja::not_implemented_exception & e) {
-            // TODO @ngxson : remove this when the test framework supports skipping tests
-            t.log("Skipped: " + std::string(e.what()));
+            t.skip(e.what());
         }
     });
 }

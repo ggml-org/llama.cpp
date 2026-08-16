@@ -4,14 +4,13 @@
 	import * as HoverCard from '$lib/components/ui/hover-card';
 	import { ICON_CLASS_DEFAULT, ICON_CLASS_SPIN } from '$lib/constants';
 	import { AgenticSectionType } from '$lib/enums';
-	import { mcpStore } from '$lib/stores/mcp.svelte';
+	import { mcpStore } from '$lib/stores';
+	import type { AgenticSection, SearchResult } from '$lib/types';
 	import {
-		type AgenticSection,
 		extractSearchQuery,
 		extractSearchResults,
 		faviconForUrl,
-		sanitizeExternalUrl,
-		type SearchResult
+		sanitizeExternalUrl
 	} from '$lib/utils';
 
 	interface Props {

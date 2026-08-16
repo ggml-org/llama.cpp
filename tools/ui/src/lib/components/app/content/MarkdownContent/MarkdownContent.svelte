@@ -1,5 +1,5 @@
 <script lang="ts">
-	import '$styles/katex-custom.scss';
+	import '$lib/styles/katex-custom.scss';
 	import {
 		getCodeInfoFromTarget,
 		getHastNodeId,
@@ -25,14 +25,12 @@
 		DialogMermaidPreview
 	} from '$lib/components/app';
 	import {
-		BOOL_TRUE_STRING,
 		CODE_BLOCK_CLASS,
-		DATA_ERROR_BOUND_ATTR,
-		DATA_ERROR_HANDLED_ATTR,
 		DIAGRAM_VIEW_MODE_ATTR,
 		DIAGRAM_VIEW_RENDERED,
 		DIAGRAM_VIEW_SOURCE,
 		IMAGE_NOT_ERROR_BOUND_SELECTOR,
+		MARKDOWN_DATA_ATTRS,
 		MERMAID_BLOCK_CLASS,
 		MERMAID_LANGUAGE,
 		MERMAID_RENDERED_ATTR,
@@ -42,10 +40,10 @@
 		SVG,
 		TOGGLE_SOURCE_BTN_CLASS
 	} from '$lib/constants';
-	import { ColorMode, UrlProtocol } from '$lib/enums';
+	import { BooleanString, ColorMode, UrlProtocol } from '$lib/enums';
 	import { FileTypeText } from '$lib/enums/files.enums';
 	import { createAutoScrollController } from '$lib/hooks/use-auto-scroll.svelte';
-	import { config } from '$lib/stores/settings.svelte';
+	import { settingsStore } from '$lib/stores';
 	import type { DatabaseMessageExtra } from '$lib/types/database';
 	import {
 		copyCodeToClipboard,
@@ -486,13 +484,19 @@
 			const copyButton = wrapper.querySelector<HTMLButtonElement>('.copy-code-btn');
 			const previewButton = wrapper.querySelector<HTMLButtonElement>('.preview-code-btn');
 
-			if (copyButton && copyButton.dataset.listenerBound !== 'true') {
-				copyButton.dataset.listenerBound = 'true';
+			if (
+				copyButton &&
+				copyButton.getAttribute(MARKDOWN_DATA_ATTRS.LISTENER_BOUND) !== BooleanString.TRUE
+			) {
+				copyButton.setAttribute(MARKDOWN_DATA_ATTRS.LISTENER_BOUND, BooleanString.TRUE);
 				copyButton.addEventListener('click', handleCopyClick);
 			}
 
-			if (previewButton && previewButton.dataset.listenerBound !== 'true') {
-				previewButton.dataset.listenerBound = 'true';
+			if (
+				previewButton &&
+				previewButton.getAttribute(MARKDOWN_DATA_ATTRS.LISTENER_BOUND) !== BooleanString.TRUE
+			) {
+				previewButton.setAttribute(MARKDOWN_DATA_ATTRS.LISTENER_BOUND, BooleanString.TRUE);
 				previewButton.addEventListener('click', handlePreviewClick);
 			}
 		}
@@ -508,7 +512,7 @@
 		const images = containerRef.querySelectorAll<HTMLImageElement>(IMAGE_NOT_ERROR_BOUND_SELECTOR);
 
 		for (const img of images) {
-			img.dataset[DATA_ERROR_BOUND_ATTR] = BOOL_TRUE_STRING;
+			img.setAttribute(MARKDOWN_DATA_ATTRS.ERROR_BOUND, BooleanString.TRUE);
 			img.addEventListener('error', handleImageError);
 		}
 	}
@@ -691,7 +695,7 @@
 
 		// Mark nodes immediately to prevent duplicate renders if called again during streaming.
 		// This avoids needing a guard that would block node discovery.
-		nodes.forEach((node) => node.setAttribute(MERMAID_RENDERED_ATTR, 'true'));
+		nodes.forEach((node) => node.setAttribute(MERMAID_RENDERED_ATTR, BooleanString.TRUE));
 
 		// Read mode before await so Svelte tracks it reactively.
 		const isDark = mode.current === ColorMode.DARK;
@@ -738,7 +742,7 @@
 		if (nodes.length === 0) return;
 
 		nodes.forEach((node) => {
-			node.setAttribute(SVG.RENDERED_ATTR, 'true');
+			node.setAttribute(SVG.RENDERED_ATTR, BooleanString.TRUE);
 
 			const source = node.getAttribute(SVG.SOURCE_ATTR) ?? node.textContent ?? '';
 			const clean = sanitizeSvg(source);
@@ -765,11 +769,11 @@
 		// Don't handle data URLs or already-handled images
 		if (
 			img.src.startsWith(UrlProtocol.DATA) ||
-			img.dataset[DATA_ERROR_HANDLED_ATTR] === BOOL_TRUE_STRING
+			img.getAttribute(MARKDOWN_DATA_ATTRS.ERROR_HANDLED) === BooleanString.TRUE
 		)
 			return;
 
-		img.dataset[DATA_ERROR_HANDLED_ATTR] = BOOL_TRUE_STRING;
+		img.setAttribute(MARKDOWN_DATA_ATTRS.ERROR_HANDLED, BooleanString.TRUE);
 
 		const src = img.src;
 		// Create fallback element
@@ -864,18 +868,21 @@
 <div
 	bind:this={containerRef}
 	onclick={handleMermaidClick}
-	class="markdown-content {className}{config()[SETTINGS_KEYS.FULL_HEIGHT_CODE_BLOCKS]
+	class="markdown-content {className}{settingsStore.config[SETTINGS_KEYS.FULL_HEIGHT_CODE_BLOCKS]
 		? ' full-height-code-blocks'
 		: ''}"
 >
 	{#each renderedBlocks as block (block.id)}
-		<div class="markdown-block" data-block-id={block.id}>
+		<div class="markdown-block" {...{ [MARKDOWN_DATA_ATTRS.BLOCK_ID]: block.id }}>
 			{@html block.html}
 		</div>
 	{/each}
 
 	{#if unstableBlockHtml}
-		<div class="markdown-block markdown-block--unstable" data-block-id="unstable">
+		<div
+			class="markdown-block markdown-block--unstable"
+			{...{ [MARKDOWN_DATA_ATTRS.BLOCK_ID]: 'unstable' }}
+		>
 			<!-- eslint-disable-next-line no-at-html-tags -->
 			{@html unstableBlockHtml}
 		</div>

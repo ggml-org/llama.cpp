@@ -8,14 +8,12 @@
 	import { MarkdownContent, SyntaxHighlightedCode } from '$lib/components/app';
 	import { MAX_HEIGHT_CODE_BLOCK } from '$lib/constants';
 	import { AttachmentType, FileTypeText, MimeTypeAudio, ToolResultKind } from '$lib/enums';
-	import type { DatabaseMessageExtra } from '$lib/types';
+	import type { AgenticSection, DatabaseMessageExtra, ToolResultLine } from '$lib/types';
 	import {
-		type AgenticSection,
 		classifyToolResult,
 		formatJsonPretty,
 		getBuiltinToolUi,
-		parseToolResultWithMedia,
-		type ToolResultLine
+		parseToolResultWithMedia
 	} from '$lib/utils';
 	import { createBase64DataUrl } from '$lib/utils/data-url';
 

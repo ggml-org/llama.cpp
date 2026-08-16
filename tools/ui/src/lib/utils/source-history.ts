@@ -1,5 +1,5 @@
 /**
- * Source-space undo/redo history for the chat-form contenteditable, whose
+ * Source-space undo/redo history for the ChatFormInputRich, whose
  * imperative DOM rebuilds destroy the browser's native undo stack.
  * Entries record the state BEFORE an edit; edits within `groupWindowMs`
  * extend the open group so a typing burst undoes as a unit, while

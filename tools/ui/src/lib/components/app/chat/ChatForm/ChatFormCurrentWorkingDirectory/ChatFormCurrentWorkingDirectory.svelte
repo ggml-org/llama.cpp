@@ -1,20 +1,20 @@
 <script lang="ts">
-	import ChatFormWorkingDirectoryChip from './ChatFormWorkingDirectoryChip.svelte';
-	import ChatFormWorkingDirectoryResultsList from './ChatFormWorkingDirectoryResultsList.svelte';
+	import ChatFormCurrentWorkingDirectoryChip from './ChatFormCurrentWorkingDirectoryChip.svelte';
+	import ChatFormCurrentWorkingDirectoryResultsList from './ChatFormCurrentWorkingDirectoryResultsList.svelte';
 	import { FolderOpen } from '@lucide/svelte';
 	import SearchInput from '$lib/components/app/forms/SearchInput.svelte';
 	import * as Popover from '$lib/components/ui/popover';
-	import { DEFAULT_MOBILE_BREAKPOINT, HOME_TILDE, SEARCH } from '$lib/constants';
+	import { DEFAULT_MOBILE_BREAKPOINT, HOME_TILDE, SEARCH, UI_DATA_ATTRS } from '$lib/constants';
 	import { BuiltInTool, GlobSearchType, KeyboardKey } from '$lib/enums';
 	import { useDebouncedSearch } from '$lib/hooks/use-debounced-search.svelte';
 	import { usePickerNavigation } from '$lib/hooks/use-picker-navigation.svelte';
 	import { useScrollActiveRow } from '$lib/hooks/use-scroll-active-row.svelte';
 	import { ToolsService } from '$lib/services/tools.service';
-	import { toolsStore } from '$lib/stores/tools.svelte';
+	import { toolsStore } from '$lib/stores';
+	import type { GlobEntry } from '$lib/types';
 	import {
 		abbreviateHome,
 		buildCaseInsensitiveGlob,
-		type GlobEntry,
 		joinPath,
 		lastPathSegment,
 		runGlobSearchWithChildren
@@ -120,7 +120,7 @@
 	});
 
 	useScrollActiveRow({
-		dataIndex: 'result',
+		dataAttr: UI_DATA_ATTRS.RESULT_INDEX,
 		getContainer: () => listContainer,
 		getCount: () => queryResults.length,
 		getIndex: () => nav.hoveredIndex,
@@ -250,7 +250,7 @@
 			// user cancelled - silently ignore; other errors are logged
 			if (err instanceof DOMException && err.name === 'AbortError') return;
 
-			console.error('[ChatFormWorkingDirectory] showDirectoryPicker failed:', err);
+			console.error('[ChatFormCurrentWorkingDirectory] showDirectoryPicker failed:', err);
 		}
 	}
 
@@ -331,7 +331,7 @@
 	onclick={onOpen}
 	{disabled}
 >
-	<ChatFormWorkingDirectoryChip
+	<ChatFormCurrentWorkingDirectoryChip
 		{directory}
 		{homeBase}
 		{disabled}
@@ -372,7 +372,7 @@
 			{#if !fileSearchEnabled}
 				<div class="px-2 py-1.5 text-sm text-muted-foreground">{searchUnavailableMessage}</div>
 			{:else if query.trim() && (search.isSearching || queryResults.length > 0 || searchError)}
-				<ChatFormWorkingDirectoryResultsList
+				<ChatFormCurrentWorkingDirectoryResultsList
 					results={queryResults}
 					hoveredIndex={nav.hoveredIndex}
 					isSearching={search.isSearching}

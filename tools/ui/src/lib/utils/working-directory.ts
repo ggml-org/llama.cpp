@@ -14,11 +14,7 @@ import {
 	SEARCH,
 	TRAILING_SLASHES_REGEX
 } from '$lib/constants';
-
-export interface GlobEntry {
-	path: string;
-	type: string;
-}
+import type { GlobEntry, GlobSearchArgs } from '$lib/types/glob';
 
 export interface PathQuery {
 	parent: string;
@@ -91,17 +87,6 @@ export function buildCaseInsensitiveGlob(query: string): string {
 	}
 
 	return out + GLOB.WILDCARD;
-}
-
-export interface GlobSearchArgs {
-	path: string;
-	include: string;
-	maxDepth: number;
-	rankQuery: string;
-	/** Last segment of a path-navigation query (`~/dir/sub`), undefined for
-	 * a plain home-relative glob. Lets callers act on the exact targeted
-	 * segment (e.g. the WD picker "entering" a directory). */
-	last?: string;
 }
 
 export function buildGlobSearchArgs(

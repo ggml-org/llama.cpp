@@ -19,44 +19,23 @@
 		ICON_CLASS_DEFAULT,
 		TOOLTIP_DELAY_DURATION
 	} from '$lib/constants';
+	import { getChatFormActionsContext } from '$lib/contexts';
 	import { HealthCheckStatus } from '$lib/enums';
 	import { AttachmentAction } from '$lib/enums/attachment.enums';
 	import { useAttachmentMenu } from '$lib/hooks/use-attachment-menu.svelte';
 	import { useReasoningMenu } from '$lib/hooks/use-reasoning-menu.svelte';
 	import { useToolsPanel } from '$lib/hooks/use-tools-panel.svelte';
-	import { conversationsStore } from '$lib/stores/conversations.svelte';
-	import { mcpStore } from '$lib/stores/mcp.svelte';
+	import { conversationsStore, mcpStore } from '$lib/stores';
 	import type { Snippet } from 'svelte';
 
 	interface Props {
 		class?: string;
-		disabled?: boolean;
-		hasAudioModality?: boolean;
-		hasVideoModality?: boolean;
-		hasVisionModality?: boolean;
-		hasMcpPromptsSupport?: boolean;
-		hasMcpResourcesSupport?: boolean;
-		onFileUpload?: () => void;
-		onSystemPromptClick?: () => void;
-		onMcpPromptClick?: () => void;
-		onMcpResourcesClick?: () => void;
 		trigger: Snippet<[{ disabled: boolean; onclick?: () => void }]>;
 	}
 
-	let {
-		class: className = '',
-		disabled = false,
-		hasAudioModality = false,
-		hasMcpPromptsSupport = false,
-		hasMcpResourcesSupport = false,
-		hasVideoModality = false,
-		hasVisionModality = false,
-		onFileUpload,
-		onMcpPromptClick,
-		onMcpResourcesClick,
-		onSystemPromptClick,
-		trigger
-	}: Props = $props();
+	let { class: className = '', trigger }: Props = $props();
+
+	const chatFormActions = getChatFormActionsContext();
 
 	let sheetOpen = $state(false);
 	let reasoningExpanded = $state(false);
@@ -66,13 +45,18 @@
 
 	const attachmentMenu = useAttachmentMenu(
 		() => ({
-			hasAudioModality,
-			hasMcpPromptsSupport,
-			hasMcpResourcesSupport,
-			hasVideoModality,
-			hasVisionModality
+			hasAudioModality: chatFormActions.hasAudioModality,
+			hasMcpPromptsSupport: chatFormActions.hasMcpPromptsSupport,
+			hasMcpResourcesSupport: chatFormActions.hasMcpResourcesSupport,
+			hasVideoModality: chatFormActions.hasVideoModality,
+			hasVisionModality: chatFormActions.hasVisionModality
 		}),
-		() => ({ onFileUpload, onMcpPromptClick, onMcpResourcesClick, onSystemPromptClick }),
+		() => ({
+			onFileUpload: chatFormActions.onFileUpload,
+			onMcpPromptClick: chatFormActions.onMcpPromptClick,
+			onMcpResourcesClick: chatFormActions.onMcpResourcesClick,
+			onSystemPromptClick: chatFormActions.onSystemPromptClick
+		}),
 		() => {
 			sheetOpen = false;
 		}
@@ -92,7 +76,7 @@
 
 <div class="flex items-center gap-1 {className}">
 	<Sheet.Root bind:open={sheetOpen}>
-		{@render trigger({ disabled, onclick: () => (sheetOpen = true) })}
+		{@render trigger({ disabled: chatFormActions.disabled, onclick: () => (sheetOpen = true) })}
 
 		<Sheet.Content side="bottom" class="max-h-[85vh] gap-0 overflow-y-auto">
 			<Sheet.Header>
@@ -351,7 +335,7 @@
 					<span>System Message</span>
 				</button>
 
-				{#if hasMcpPromptsSupport}
+				{#if chatFormActions.hasMcpPromptsSupport}
 					<button
 						type="button"
 						class={sheetItemClass}
@@ -363,7 +347,7 @@
 					</button>
 				{/if}
 
-				{#if hasMcpResourcesSupport}
+				{#if chatFormActions.hasMcpResourcesSupport}
 					<button
 						type="button"
 						class={sheetItemClass}
