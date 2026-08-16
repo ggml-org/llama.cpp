@@ -690,7 +690,7 @@ static struct gguf_context * gguf_init_from_reader(const struct gguf_reader & gr
 
             // check that the total number of elements is representable
             // (a zero-element tensor is trivially representable; the guard also avoids a division by zero below)
-            if (ok && ggml_nelements(&info.t) > 0 &&
+            if (ok && info.t.ne[0] > 0 && info.t.ne[1] > 0 && info.t.ne[2] > 0 && info.t.ne[3] > 0 &&
                 ((INT64_MAX/info.t.ne[1] <= info.t.ne[0]) ||
                  (INT64_MAX/info.t.ne[2] <= info.t.ne[0]*info.t.ne[1]) ||
                  (INT64_MAX/info.t.ne[3] <= info.t.ne[0]*info.t.ne[1]*info.t.ne[2]))) {

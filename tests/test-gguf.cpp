@@ -1417,6 +1417,105 @@ static std::pair<int, int> test_gguf_set_kv(ggml_backend_dev_t dev, const unsign
     return std::make_pair(npass, ntest);
 }
 
+// regression test for integer overflow in tensor dimension / size validation
+// - ne = (INT64_MAX, 2, 1, 1): ggml_nelements wraps to a negative value, must be rejected
+// - ne = (2^33, 2^33, 1, 1): ggml_nelements wraps to exactly 0, must be rejected
+static std::pair<int, int> test_gguf_reject_overflow_dims() {
+    int npass = 0;
+    int ntest = 0;
+
+    const auto write_tensor = [](FILE * file, const std::string & name, const int64_t ne[GGML_MAX_DIMS], const int32_t type) {
+        const uint64_t name_len = name.length();
+        helper_write(file, name_len);
+        helper_write(file, name.c_str(), name_len);
+
+        const uint32_t n_dims = GGML_MAX_DIMS;
+        helper_write(file, n_dims);
+        helper_write(file, ne, GGML_MAX_DIMS*sizeof(int64_t));
+        helper_write(file, type);
+
+        const uint64_t offset = 0;
+        helper_write(file, offset);
+    };
+
+    const auto make_file = [&](const int64_t ne[GGML_MAX_DIMS], const int32_t type) -> FILE * {
+        FILE * file = tmpfile();
+#ifdef _WIN32
+        if (file == nullptr) {
+            return nullptr; // tmpfile() needs elevated privileges on Windows
+        }
+#else
+        GGML_ASSERT(file);
+#endif // _WIN32
+
+        helper_write(file, GGUF_MAGIC, 4);
+        const uint32_t version = GGUF_VERSION;
+        helper_write(file, version);
+        const uint64_t n_tensors = 1;
+        helper_write(file, n_tensors);
+        const uint64_t n_kv = 0;
+        helper_write(file, n_kv);
+
+        write_tensor(file, "overflow_test", ne, type);
+
+        // pad to the default alignment so the data-section seek succeeds
+        while (ftell(file) % GGUF_DEFAULT_ALIGNMENT != 0) {
+            const char pad = 0;
+            helper_write(file, pad);
+        }
+
+        rewind(file);
+        return file;
+    };
+
+    const auto check = [&](const char * what, const int64_t ne[GGML_MAX_DIMS], const int32_t type, const bool expect_null) {
+        FILE * file = make_file(ne, type);
+#ifdef _WIN32
+        if (file == nullptr) {
+            printf("%s: %s: SKIP (cannot create tmpfile)\n", __func__, what);
+            return;
+        }
+#endif // _WIN32
+
+        struct gguf_init_params params = {
+            /*no_alloc =*/ false,
+            /*ctx      =*/ nullptr,
+        };
+        struct gguf_context * gguf_ctx = gguf_init_from_file_ptr(file, params);
+        fclose(file);
+
+        printf("%s: %s: ", __func__, what);
+        if ((gguf_ctx == nullptr) == expect_null) {
+            printf("\033[1;32mOK\033[0m\n");
+            npass++;
+        } else {
+            printf("\033[1;31mFAIL\033[0m\n");
+        }
+        if (gguf_ctx != nullptr) {
+            gguf_free(gguf_ctx);
+        }
+        ntest++;
+    };
+
+    // dims product overflows int64 and wraps to a negative value
+    {
+        const int64_t ne[GGML_MAX_DIMS] = { INT64_MAX, 2, 1, 1 };
+        check("reject_ne_overflow", ne, GGML_TYPE_F32, true);
+    }
+    // dims product overflows int64 and wraps to exactly 0 (2^33 x 2^33 = 2^66), the old guard was bypassed
+    {
+        const int64_t ne[GGML_MAX_DIMS] = { int64_t(1) << 33, int64_t(1) << 33, 1, 1 };
+        check("reject_ne_wrap_zero", ne, GGML_TYPE_F32, true);
+    }
+    // a valid tensor must still parse
+    {
+        const int64_t ne[GGML_MAX_DIMS] = { 16, 3, 1, 1 };
+        check("accept_valid_tensor", ne, GGML_TYPE_F32, false);
+    }
+
+    return std::make_pair(npass, ntest);
+}
+
 static void print_usage() {
     printf("usage: test-gguf [seed]\n");
     printf("  if no seed is unspecified then a random seed is used\n");
@@ -1439,6 +1538,12 @@ int main(int argc, char ** argv) {
     int ntest = 0;
     {
         std::pair<int, int> result = test_handcrafted_file(seed);
+        npass += result.first;
+        ntest += result.second;
+    }
+
+    {
+        std::pair<int, int> result = test_gguf_reject_overflow_dims();
         npass += result.first;
         ntest += result.second;
     }
