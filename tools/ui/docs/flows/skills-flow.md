@@ -146,8 +146,8 @@ sequenceDiagram
         UI->>UI: goto /skills
         UI->>skillsStore: route refresh for current CWD
     else Select /skills name argument
-        UI->>CmdSvc: activateSkillByName(name, cwd)
-            Note right of CmdSvc: SkillCommandService entry point.<br/>Resolves the base read, then routes<br/>through the shared durable activation path
+        UI->>CmdSvc: dispatchSkillActivation(name, cwd)
+            Note right of CmdSvc: SkillCommandService entry point.<br/>Resolves the base read, then routes<br/>through the shared durable activation path.<br/>Success wakes the agentic loop as an<br/>assistant turn (never a system-tagged<br/>user message).
         CmdSvc->>SkillsSvc: read({name}, cwd)
             Note right of SkillsSvc: Sends the active conversation CWD<br/>through X-Skill-Cwd when selected
         SkillsSvc->>server: POST /skills/read<br/>{name}

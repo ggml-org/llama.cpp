@@ -27,7 +27,7 @@
 		SpecialFileType
 	} from '$lib/enums';
 	import { useChatFormPickers } from '$lib/hooks/use-chat-form-pickers.svelte';
-	import { activateSkillByName } from '$lib/services/skill-command.service';
+	import { dispatchSkillActivation } from '$lib/services/skill-command.service';
 	import {
 		chatStore,
 		conversationsStore,
@@ -182,24 +182,23 @@
 	 * catalog route (existing command behavior); a name resolves the base
 	 * read through the server and routes the successful result through the
 	 * shared durable activation operation. Unavailable/not-found reads
-	 * persist nothing and surface a toast; a fresh activation confirms with
-	 * a success toast.
+	 * persist nothing and surface a toast; a persistence failure after the
+	 * read surfaces an error toast and never wakes (the conversation, if
+	 * created, stays); a fresh activation confirms with a success toast.
 	 */
 	function handleSkillsCommand(args: string): void {
-		const conversation = conversationsStore.activeConversation;
-
 		if (!args) {
 			void goto(ROUTES.SKILLS);
 
 			return;
 		}
 
-		if (!conversation) return;
-
-		void activateSkillByName(conversation.id, args, { cwd: conversation.cwd }).then((outcome) => {
+		void dispatchSkillActivation(args).then((outcome) => {
 			if (!outcome.ok) {
 				if (outcome.reason === 'not-found') {
 					toast.error(`Skill "${args}" was not found`);
+				} else if (outcome.reason === 'persistence-failed') {
+					toast.error(`Skill "${args}" could not be saved`);
 				} else {
 					toast.error('Skills are unavailable on this server');
 				}
@@ -209,11 +208,11 @@
 
 			if (!outcome.created) {
 				toast.info(`Skill "${args}" is already activated in this conversation`);
-
-				return;
+			} else {
+				toast.success(`Skill "${args}" activated`);
 			}
 
-			toast.success(`Skill "${args}" activated`);
+			void chatStore.runTurnFromLeaf();
 		});
 	}
 

@@ -52,6 +52,7 @@ import type {
 } from '$lib/types';
 import {
 	classifyContinueIntent,
+	classifyLeafResume,
 	filterByLeafNodeId,
 	findDescendantMessages,
 	findLeafNode,
@@ -98,6 +99,9 @@ class ChatStore {
 	// convs whose resume waits on a model load: their loading state belongs to the retry loop,
 	// so discoverActiveStream must not treat it as a live send and bail
 	private resumePendingConvs = new SvelteSet<string>();
+	// convs with a queued post-activation wake: the wake arrived while another
+	// flow was still streaming and must run once that flow's loading clears
+	private pendingWakes = new SvelteSet<string>();
 	// in-flight discoverActiveStream guard, keyed by conv id
 	private discoveringConvs = new SvelteSet<string>();
 	private abortControllers = new SvelteMap<string, AbortController>();
@@ -139,6 +143,18 @@ class ChatStore {
 			// sidebar hint for this conv right away instead of waiting for the next visibilitychange
 			// snapshot. without this the spinner ghosts until the user toggles the tab
 			this.remoteRunningConvs.delete(convId);
+
+			// a wake queued while the previous flow was still streaming can now
+			// re-anchor at the current leaf instead of being silently dropped
+			if (this.pendingWakes.has(convId)) {
+				this.pendingWakes.delete(convId);
+
+				setTimeout(() => {
+					if (conversationsStore.activeConversation?.id !== convId) return;
+
+					void this.runTurnFromLeaf();
+				}, 0);
+			}
 		}
 	}
 
@@ -2457,6 +2473,43 @@ class ChatStore {
 			if (!isAbortError(error)) console.error('Failed to continue message:', error);
 
 			if (activeConv) this.setChatLoading(activeConv.id, false);
+		}
+	}
+
+	/**
+	 * Wake the agentic loop after a command-only activation: anchor a fresh
+	 * assistant turn at the current leaf. Assistant leaves continue through
+	 * the existing continuation machinery; tool result and user leaves open
+	 * a fresh turn. No-op while another flow is loading or when the
+	 * conversation has no messages.
+	 */
+	async runTurnFromLeaf(): Promise<void> {
+		const activeConv = conversationsStore.activeConversation;
+
+		if (!activeConv) return;
+
+		if (this.isChatLoadingInternal(activeConv.id)) {
+			// another flow (e.g. the previous wake's turn, a tool permission
+			// prompt, or a normal generation) is still running. queue the wake
+			// and let setChatLoading flush it once the loading state clears,
+			// otherwise a /skills activation during an active conversation is
+			// silently dropped while the pair itself is already persisted
+			this.pendingWakes.add(activeConv.id);
+
+			return;
+		}
+
+		const messages = conversationsStore.activeMessages;
+		const resume = classifyLeafResume(messages[messages.length - 1]?.role);
+
+		if (resume === 'continue-assistant') {
+			await this.continueAssistantMessage(messages[messages.length - 1].id);
+
+			return;
+		}
+
+		if (resume === 'fresh-turn') {
+			await this.continueAsNextAgenticTurn(messages.length - 1);
 		}
 	}
 

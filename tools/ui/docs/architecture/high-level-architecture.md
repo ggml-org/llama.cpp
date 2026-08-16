@@ -241,7 +241,7 @@ end
             SV8Pack["<b>Packing:</b><br/>pack()<br/>direct or estimated token policy"]
         end
         subgraph SV9["SkillCommandService"]
-            SV9Activate["<b>Explicit activation:</b><br/>activateSkillByName()"]
+            SV9Activate["<b>Explicit activation:</b><br/>dispatchSkillActivation()<br/>wakes the agentic loop as an<br/>assistant turn (never a system-tagged<br/>user message)"]
         end
     end
 
