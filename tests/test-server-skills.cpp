@@ -176,6 +176,53 @@ static void test_catalog_precedence_and_cwd_identity() {
     CHECK(shadows[0].at("message") == "Skill is shadowed by a higher-precedence entry");
 }
 
+// disable-model-invocation is parsed and exposed per catalog entry, and the
+// parsed value survives a cache hit on an unchanged file.
+static void test_manual_only_catalog_flag() {
+    const fs::path root = make_temp_dir();
+    const fs::path home = root / "home";
+    const fs::path project = root / "proj";
+    fs::create_directories(home);
+    fs::create_directories(project);
+
+    const fs::path manual = write_skill(project, "agents", "manual-only");
+    write_bytes(manual / "SKILL.md", "---\nname: manual-only\ndescription: manual\ndisable-model-invocation: true\n---\nbody");
+    const fs::path normal = write_skill(project, "agents", "normal", "normal body", "normal desc");
+    const fs::path weird = write_skill(project, "agents", "weird");
+    write_bytes(weird / "SKILL.md", "---\nname: weird\ndescription: weird\ndisable-model-invocation: maybe\n---\nbody");
+
+    server_skills skills = make_skills(home, project, /* trust_project_skills */ true, {"agents"});
+
+    const server_http_res_ptr first = do_get(skills);
+    CHECK(first != nullptr);
+    CHECK(first->status == 200);
+    const json first_body = parse_body(first);
+    CHECK(first_body.at("skills").size() == 3);
+    for (const auto & skill : first_body.at("skills")) {
+        if (skill.at("name") == "manual-only") {
+            CHECK(skill.at("disable_model_invocation") == true);
+        } else if (skill.at("name") == "weird") {
+            CHECK(skill.at("disable_model_invocation") == false);
+        } else {
+            CHECK(skill.at("name") == "normal");
+            CHECK(skill.at("disable_model_invocation") == false);
+        }
+    }
+
+    // unchanged files: the cached parse must keep the flag
+    const server_http_res_ptr second = do_get(skills);
+    CHECK(second != nullptr);
+    CHECK(second->status == 200);
+    const json second_body = parse_body(second);
+    for (const auto & skill : second_body.at("skills")) {
+        if (skill.at("name") == "manual-only") {
+            CHECK(skill.at("disable_model_invocation") == true);
+        } else {
+            CHECK(skill.at("disable_model_invocation") == false);
+        }
+    }
+}
+
 static void test_catalog_rejects_invalid_cwd_and_escapes_xml() {
     const fs::path tmp = make_temp_dir();
     const fs::path home = tmp / "home";
@@ -1134,6 +1181,7 @@ int main() {
 
         test_catalog_global_only();
         test_catalog_precedence_and_cwd_identity();
+        test_manual_only_catalog_flag();
         test_catalog_rejects_invalid_cwd_and_escapes_xml();
         test_catalog_diagnoses_invalid_candidates();
         test_reads_current_base_and_resources();

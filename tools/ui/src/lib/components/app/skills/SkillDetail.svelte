@@ -4,6 +4,7 @@
 	import { ActionIcon } from '$lib/components/app/actions';
 	import { groupSkillResourcePaths } from '$lib/components/app/skills/skill-resource-presentation';
 	import { Alert, AlertDescription, AlertTitle } from '$lib/components/ui/alert';
+	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import {
 		Collapsible,
@@ -99,6 +100,15 @@
 				<p class="text-xs text-muted-foreground">
 					{entry.scope} / {entry.provider}
 				</p>
+				{#if entry.disable_model_invocation}
+					<Badge
+						variant="secondary"
+						class="mt-1"
+						title="Not available to the model; activate with /skills <name> or from this catalog."
+					>
+						Manual only
+					</Badge>
+				{/if}
 			</div>
 
 			<div class="flex shrink-0 items-center gap-1">
