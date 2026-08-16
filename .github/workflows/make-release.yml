@@ -42,5 +42,10 @@ jobs:
       - name: Dry run summary
         if: ${{ github.event.inputs.dry_run == 'true' }}
         run: |
-          echo "Dry run complete - all checks passed."
-          echo "Would have created tag: ${{ steps.checks.outputs.version }}"
+          if [[ "${{ steps.checks.outputs.checks_passed }}" == "true" ]]; then
+            echo "Dry run complete - all checks passed."
+            echo "Would have created tag: ${{ steps.checks.outputs.version }}"
+          else
+            echo "::error::Dry run found release check failures. A release tag would not be created."
+            exit 1
+          fi

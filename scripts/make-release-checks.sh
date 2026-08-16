@@ -11,6 +11,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 DRY_RUN=false
+CHECKS_PASSED=true
 for arg in "$@"; do
     case "$arg" in
         --dry-run) DRY_RUN=true ;;
@@ -44,6 +45,7 @@ else
     if [[ "$RUNS" -eq 0 ]]; then
         if [[ "$DRY_RUN" == "true" ]]; then
             echo "Warning: no successful release.yml run found for HEAD (${SHA}) (dry run, continuing)."
+            CHECKS_PASSED=false
         else
             echo "Error: no successful release.yml run found for HEAD (${SHA})"
             echo "The nightly build must complete successfully before making a release."
@@ -73,6 +75,7 @@ else
         echo "$DIFF"
         if [[ "$DRY_RUN" == "true" ]]; then
             echo "Warning: would abort release due to ggml mismatch (dry run, continuing)."
+            CHECKS_PASSED=false
         else
             echo "Error: ggml must match upstream before making a release."
             exit 1
@@ -80,4 +83,8 @@ else
     else
         echo "local ggml/ matches upstream ${GGML_VERSION}"
     fi
+fi
+
+if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
+    echo "checks_passed=${CHECKS_PASSED}" >> "$GITHUB_OUTPUT"
 fi
