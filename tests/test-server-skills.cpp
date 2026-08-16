@@ -692,6 +692,120 @@ static void test_cosmetic_name_leading_trailing_hyphen() {
     CHECK(read_saw_defect);
 }
 
+// Literal (`|`) and folded (`>`) block-scalar descriptions, each chomping sign
+// (none = clip, `-` = strip, `+` = keep): the parser must consume the indented
+// continuation, strip the common indentation, and expose the parsed text
+// through GET /skills and POST /skills/read metadata — never the raw
+// `|-`/`>-` indicators.
+static void test_block_scalar_descriptions() {
+    const fs::path tmp = make_temp_dir();
+    const fs::path home = tmp / "home";
+    const fs::path project = tmp / "project";
+    fs::create_directories(home);
+    fs::create_directories(project);
+
+    const fs::path literal = project / ".agents" / "skills" / "literal";
+    fs::create_directories(literal);
+    write_bytes(literal / "SKILL.md",
+        "---\n"
+        "name: literal\n"
+        "description: |\n"
+        "  First line\n"
+        "  Second line\n"
+        "\n"
+        "  Fourth line\n"
+        "license: Apache-2.0\n"
+        "---\n"
+        "body");
+    const fs::path literal_strip = project / ".agents" / "skills" / "literal-strip";
+    fs::create_directories(literal_strip);
+    write_bytes(literal_strip / "SKILL.md",
+        "---\n"
+        "name: literal-strip\n"
+        "description: |-\n"
+        "  Strip line one\n"
+        "  Strip line two\n"
+        "\n"
+        "license: Apache-2.0\n"
+        "---\n"
+        "body");
+    const fs::path literal_keep = project / ".agents" / "skills" / "literal-keep";
+    fs::create_directories(literal_keep);
+    write_bytes(literal_keep / "SKILL.md",
+        "---\n"
+        "name: literal-keep\n"
+        "description: |+\n"
+        "  Keep line one\n"
+        "  Keep line two\n"
+        "\n"
+        "license: Apache-2.0\n"
+        "---\n"
+        "body");
+    const fs::path folded = project / ".agents" / "skills" / "folded";
+    fs::create_directories(folded);
+    write_bytes(folded / "SKILL.md",
+        "---\n"
+        "name: folded\n"
+        "description: >\n"
+        "  Folded first\n"
+        "  folded second\n"
+        "\n"
+        "  folded third\n"
+        "license: Apache-2.0\n"
+        "---\n"
+        "body");
+    const fs::path folded_strip = project / ".agents" / "skills" / "folded-strip";
+    fs::create_directories(folded_strip);
+    write_bytes(folded_strip / "SKILL.md",
+        "---\n"
+        "name: folded-strip\n"
+        "description: >-\n"
+        "  Folded strip first\n"
+        "  folded strip second\n"
+        "license: Apache-2.0\n"
+        "---\n"
+        "body");
+    const fs::path folded_keep = project / ".agents" / "skills" / "folded-keep";
+    fs::create_directories(folded_keep);
+    write_bytes(folded_keep / "SKILL.md",
+        "---\n"
+        "name: folded-keep\n"
+        "description: >+\n"
+        "  Folded keep first\n"
+        "  folded keep second\n"
+        "\n"
+        "license: Apache-2.0\n"
+        "---\n"
+        "body");
+
+    server_skills skills = make_skills(home, project, /* trust_project_skills */ true);
+
+    const server_http_res_ptr catalog = do_get(skills);
+    CHECK(catalog != nullptr);
+    CHECK(catalog->status == 200);
+    const json catalog_body = parse_body(catalog);
+    std::map<std::string, std::string> descriptions;
+    for (const auto & skill : catalog_body.at("skills")) {
+        descriptions[skill.at("name").get<std::string>()] = skill.at("description").get<std::string>();
+    }
+    // literal keeps interior line breaks (including blank lines); clip keeps
+    // one trailing break
+    CHECK(descriptions.at("literal") == "First line\nSecond line\n\nFourth line\n");
+    CHECK(descriptions.at("literal-strip") == "Strip line one\nStrip line two");
+    CHECK(descriptions.at("literal-keep") == "Keep line one\nKeep line two\n\n");
+    // folded turns single breaks into spaces and blank lines into paragraph breaks
+    CHECK(descriptions.at("folded") == "Folded first folded second\nfolded third\n");
+    CHECK(descriptions.at("folded-strip") == "Folded strip first folded strip second");
+    CHECK(descriptions.at("folded-keep") == "Folded keep first folded keep second\n\n");
+
+    // the read path surfaces the same parsed literal description in metadata
+    const server_http_res_ptr read = do_post(skills, R"({"name":"literal"})");
+    CHECK(read != nullptr);
+    CHECK(read->status == 200);
+    const json read_body = parse_body(read);
+    CHECK(read_body.at("skill").at("metadata").at("description") == "First line\nSecond line\n\nFourth line\n");
+}
+
 static void test_provider_agents_not_rescanned() {
     const fs::path tmp = make_temp_dir();
     const fs::path home = tmp / "home";
@@ -1029,6 +1143,7 @@ int main() {
         test_configured_root_symlink_containment();
         test_cosmetic_name_diagnostics();
         test_cosmetic_name_leading_trailing_hyphen();
+        test_block_scalar_descriptions();
         test_provider_agents_not_rescanned();
         test_suggestion_ranking_top_three_bounded();
         test_resource_path_length_bounded();

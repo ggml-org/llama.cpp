@@ -235,6 +235,122 @@ static bool parse_scalar(const std::string & source, std::string & value) {
     return !value.empty() && value.front() != '[' && value.front() != '{' && value.front() != '&' && value.front() != '*';
 }
 
+// A block-scalar header value: a `|` (literal) or `>` (folded) indicator with
+// an optional chomping sign (`-` strips trailing line breaks, `+` keeps all of
+// them). Returns false for anything else so callers fall back to scalar
+// parsing.
+static bool parse_block_indicator(const std::string & value, char & style, char & chomp) {
+    if (value.empty()) {
+        return false;
+    }
+    style = value[0];
+    if (style != '|' && style != '>') {
+        return false;
+    }
+    if (value.size() == 1) {
+        chomp = '\0';
+        return true;
+    }
+    if (value.size() == 2 && (value[1] == '-' || value[1] == '+')) {
+        chomp = value[1];
+        return true;
+    }
+    return false;
+}
+
+// Consumes the indented continuation lines of a `|`/`>` block scalar whose
+// header line was already read, starting at *position. Blank lines and lines
+// indented at or beyond the content indent (the indent of the first non-blank
+// line) are content; the block ends at the first non-blank line indented less
+// than the content indent, which is the next frontmatter field or the closing
+// delimiter. The common content indentation is removed. Literal style keeps
+// source line breaks; folded style folds single line breaks to spaces and
+// turns blank lines into paragraph breaks. The chomping sign controls the
+// trailing line breaks. *position is left at the terminator line.
+static std::string parse_block_scalar(const std::string & source, size_t & position, char style, char chomp) {
+    std::vector<std::string> lines;
+    std::vector<bool> more_indented;
+    bool saw_content = false;
+    size_t content_indent = 0;
+    bool final_break = false;
+    while (position <= source.size()) {
+        const size_t end = source.find('\n', position);
+        std::string line = source.substr(position, end == std::string::npos ? std::string::npos : end - position);
+        if (!line.empty() && line.back() == '\r') {
+            line.pop_back();
+        }
+        const bool blank = line.find_first_not_of(" \t") == std::string::npos;
+        if (!blank) {
+            const size_t leading = line.find_first_not_of(" \t");
+            if (!saw_content) {
+                if (leading == 0) {
+                    break; // first non-blank line not indented: terminator
+                }
+                content_indent = leading;
+                saw_content = true;
+            } else if (leading < content_indent) {
+                break; // less indented non-blank line: terminator
+            }
+            lines.push_back(line.substr(content_indent));
+            more_indented.push_back(leading > content_indent);
+        } else {
+            lines.push_back("");
+            more_indented.push_back(false);
+        }
+        final_break = end != std::string::npos;
+        if (end == std::string::npos) {
+            position = source.size();
+            break;
+        }
+        position = end + 1;
+    }
+
+    std::string result;
+    for (size_t i = 0; i < lines.size(); ++i) {
+        if (i > 0) {
+            const std::string & previous = lines[i - 1];
+            const std::string & current = lines[i];
+            if (style == '>') {
+                if (previous.empty() && current.empty()) {
+                    result += '\n'; // blank run continues
+                } else if (previous.empty()) {
+                    // end of a blank run: its line breaks already emitted
+                } else if (current.empty()) {
+                    result += '\n'; // blank run starts
+                } else if (more_indented[i - 1] || more_indented[i]) {
+                    result += '\n'; // more-indented lines are not folded
+                } else {
+                    result += ' ';
+                }
+            } else {
+                result += '\n';
+            }
+        }
+        result += lines[i];
+    }
+    if (final_break) {
+        result += '\n';
+    }
+    switch (chomp) {
+        case '-': // strip: remove all trailing line breaks
+            while (!result.empty() && result.back() == '\n') {
+                result.pop_back();
+            }
+            break;
+        case '+': // keep: all trailing line breaks and blank lines retained
+            break;
+        default: { // clip: one final line break, no trailing blank lines
+            while (!result.empty() && result.back() == '\n') {
+                result.pop_back();
+            }
+            if (final_break) {
+                result += '\n';
+            }
+        }
+    }
+    return result;
+}
+
 static bool parse_skill(const std::string & source, parsed_skill & skill) {
     const size_t first_end = source.find('\n');
     const std::string first = source.substr(0, first_end == std::string::npos ? source.size() : first_end);
@@ -275,11 +391,25 @@ static bool parse_skill(const std::string & source, parsed_skill & skill) {
                 std::string value;
                 if (key == "metadata" && trim(line.substr(colon + 1)).empty()) {
                     in_metadata = true;
+                } else if (key == "description") {
+                    char style = '\0';
+                    char chomp = '\0';
+                    if (parse_block_indicator(trim(line.substr(colon + 1)), style, chomp)) {
+                        // continuation starts after this header line; the
+                        // block parser leaves it at the terminator line.
+                        position = end == std::string::npos ? source.size() : end + 1;
+                        skill.description = parse_block_scalar(source, position, style, chomp);
+                        // position already advanced past the block content to
+                        // the terminator line; the shared advance below would
+                        // move it back, so continue the loop directly.
+                        continue;
+                    }
+                    if (parse_scalar(line.substr(colon + 1), value)) {
+                        skill.description = value;
+                    }
                 } else if (parse_scalar(line.substr(colon + 1), value)) {
                     if (key == "name") {
                         skill.name = value;
-                    } else if (key == "description") {
-                        skill.description = value;
                     } else if (key == "license") {
                         skill.license = value;
                     } else if (key == "compatibility") {
