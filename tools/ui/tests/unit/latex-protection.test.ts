@@ -1,6 +1,6 @@
 /* eslint-disable no-irregular-whitespace */
-import { describe, it, expect, test } from 'vitest';
 import { maskInlineLaTeX, preprocessLaTeX } from '$lib/utils/latex-protection';
+import { describe, expect, it, test } from 'vitest';
 
 describe('maskInlineLaTeX', () => {
 	it('should protect LaTeX $x + y$ but not money $3.99', () => {
@@ -126,6 +126,7 @@ describe('preprocessLaTeX', () => {
 		const input =
 			'\\( \\mathrm{GL}_2(\\mathbb{F}_7) \\): Group of invertible matrices with entries in \\(\\mathbb{F}_7\\).';
 		const output = preprocessLaTeX(input);
+
 		expect(output).toBe(
 			'$ \\mathrm{GL}_2(\\mathbb{F}_7) $: Group of invertible matrices with entries in $\\mathbb{F}_7$.'
 		);
@@ -135,6 +136,7 @@ describe('preprocessLaTeX', () => {
 		const input =
 			'Chapter 20 of The TeXbook, in source "Definitions\\\\(also called Macros)", containst the formula \\((x_1,\\ldots,x_n)\\).';
 		const output = preprocessLaTeX(input);
+
 		expect(output).toBe(
 			'Chapter 20 of The TeXbook, in source "Definitions\\\\(also called Macros)", containst the formula $(x_1,\\ldots,x_n)$.'
 		);
@@ -229,6 +231,7 @@ h \\bigl[\\, d_{\\text{model}}\\;d_{k} + d_{\\text{model}}\\;d_{v}\\, \\bigr]   
 \\end{aligned}}
 \\]`;
 		const output = preprocessLaTeX(input);
+
 		expect(output).toBe(
 			`$$
 \\boxed{
@@ -280,6 +283,7 @@ $$\pi_n(\mathbb{S}^3) = \begin{cases}
 \mathbb{Z}_2 & n = 4 \\
 \end{cases}$$`;
 		const output = preprocessLaTeX(input);
+
 		// If the formula contains '\\' the $$-delimiters should be in their own line.
 		expect(output).toBe(`- Algebraic topology, Homotopy Groups of $\\mathbb{S}^3$:
 $$\n\\pi_n(\\mathbb{S}^3) = \\begin{cases}

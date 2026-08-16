@@ -34,3 +34,13 @@ export enum UrlProtocol {
 export enum HtmlInputType {
 	FILE = 'file'
 }
+
+/**
+ * Alert level that drives the context gauge dial color.
+ */
+export enum ColorLevel {
+	OK = 'ok',
+	WARNING = 'warning',
+	CRITICAL = 'critical',
+	NEUTRAL = 'neutral'
+}

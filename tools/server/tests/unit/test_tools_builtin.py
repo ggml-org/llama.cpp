@@ -1,4 +1,6 @@
 import os
+import shutil
+import subprocess
 
 import pytest
 from utils import *
@@ -10,6 +12,9 @@ PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..
 
 # marker for the grep_search test to find in this file
 GREP_MARKER = "llama_cpp_test_tools_builtin_marker_grep_search"
+
+# image the container runtime tests run their shell in
+CONTAINER_IMAGE = "busybox"
 
 
 @pytest.fixture(autouse=True)
@@ -144,6 +149,130 @@ def test_tools_builtin_cwd_header():
     finally:
         if os.path.exists(marker_path):
             os.remove(marker_path)
+
+
+def _container_engine_unavailable_reason(engine: str) -> str | None:
+    """None if `engine` can run the image these tests use, otherwise the reason it can't."""
+    engine_bin = shutil.which(engine)
+    if engine_bin is None:
+        return f"{engine} is not installed"
+    try:
+        # a daemon that answers `info` still cannot run a linux image when it serves windows
+        # containers, so probe the image itself, which also pulls it before the tests
+        subprocess.run([engine_bin, "run", "--rm", CONTAINER_IMAGE, "true"], capture_output=True, timeout=60, check=True)
+    except Exception as e:
+        return f"{engine} cannot run {CONTAINER_IMAGE}: {e}"
+    return None
+
+
+@pytest.fixture(params=["docker", "podman"])
+def container_engine(request):
+    engine = request.param
+    reason = _container_engine_unavailable_reason(engine)
+    if reason is not None:
+        pytest.skip(reason)  # ty: ignore[too-many-positional-arguments, invalid-argument-type]
+    return engine
+
+
+@pytest.fixture
+def container_id(container_engine: str):
+    proc = subprocess.run(
+        [container_engine, "run", "-d", "--rm", CONTAINER_IMAGE, "sleep", "300"],
+        capture_output=True, text=True,
+    )
+    if proc.returncode != 0:
+        pytest.skip(f"failed to start {container_engine} container: {proc.stderr.strip()}")  # ty: ignore[too-many-positional-arguments, invalid-argument-type]
+
+    cid = proc.stdout.strip()
+    try:
+        yield cid
+    finally:
+        subprocess.run([container_engine, "rm", "-f", cid], capture_output=True)
+
+
+def test_tools_builtin_runtime_header(container_engine: str, container_id: str):
+    global server
+    server.start()
+
+    headers = {"x-tool-runtime": f"{container_engine}-container:{container_id}", "x-tool-cwd": "/tmp"}
+
+    write_res = call_tool("write_file", {"path": "test.log", "content": "hello container\n"}, headers=headers)
+    assert write_res["result"] == "file written successfully"
+
+    read_res = call_tool("read_file", {"path": "test.log"}, headers=headers)
+    assert read_res["plain_text_response"] == "hello container\n"
+
+    exec_res = call_tool("exec_shell_command", {"command": "cat test.log"}, headers=headers)
+    assert "hello container" in exec_res["plain_text_response"]
+
+
+def test_tools_builtin_runtime_header_unknown_scheme():
+    global server
+    server.start()
+
+    # an unknown runtime must fail, never silently fall back to running on the host
+    res = server.make_request("POST", "/tools",
+                              data={"tool": "exec_shell_command", "params": {"command": "echo hi"}},
+                              headers={"x-tool-runtime": "fake:does-not-exist"})
+    assert res.status_code == 500, res.body
+    assert "unknown tool runtime" in str(res.body)
+
+
+def test_tools_builtin_runtime_header_rejects_ssh_option_injection():
+    global server
+    server.start()
+
+    # ssh reads options from its argv, so a target starting with '-' must be rejected
+    res = server.make_request("POST", "/tools",
+                              data={"tool": "exec_shell_command", "params": {"command": "echo hi"}},
+                              headers={"x-tool-runtime": "ssh:-oProxyCommand=touch /tmp/pwned"})
+    assert res.status_code == 500, res.body
+    assert "invalid ssh target" in str(res.body)
+
+
+@pytest.mark.parametrize("engine", ["docker", "podman"])
+def test_tools_builtin_runtime_header_rejects_container_option_injection(engine: str):
+    global server
+    server.start()
+
+    # the container id lands on the `<engine> exec` command line, so an id that looks
+    # like an option must be rejected
+    res = server.make_request("POST", "/tools",
+                              data={"tool": "exec_shell_command", "params": {"command": "echo hi"}},
+                              headers={"x-tool-runtime": f"{engine}-container:--privileged"})
+    assert res.status_code == 500, res.body
+    assert "invalid container id" in str(res.body)
+
+
+def test_tools_builtin_docker_runtime_cleans_up_spawned_container():
+    # docker-only: this reads the container hostname to get the spawned id, which only docker
+    # sets to the short id. podman is covered by the attach path above
+    reason = _container_engine_unavailable_reason("docker")
+    if reason is not None:
+        pytest.skip(reason)  # ty: ignore[too-many-positional-arguments, invalid-argument-type]
+
+    global server
+    server.server_tools_runtime = f"docker:{CONTAINER_IMAGE}"
+    server.start()
+
+    # exec_shell_command runs inside the container spawned for --tools-runtime; docker sets
+    # the container's hostname to its own short id, so this also tells us which one to check
+    res = call_tool("exec_shell_command", {"command": "hostname"})
+    container_id = res["plain_text_response"].splitlines()[0].strip()
+    assert len(container_id) >= 8, res
+
+    running = subprocess.run(
+        ["docker", "inspect", "-f", "{{.State.Running}}", container_id],
+        capture_output=True, text=True,
+    )
+    assert running.returncode == 0 and running.stdout.strip() == "true", running.stderr
+
+    server.stop()
+
+    # a clean server shutdown must stop and remove the container it spawned (it runs with --rm),
+    # not leave it behind as an abandoned child
+    leftover = subprocess.run(["docker", "inspect", container_id], capture_output=True, text=True)
+    assert leftover.returncode != 0, f"container {container_id} was not cleaned up after server exit"
 
 
 def test_tools_builtin_edit_file_rejects_overlapping_edits():
