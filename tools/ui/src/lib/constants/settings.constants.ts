@@ -121,9 +121,8 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 				type: SettingsFieldType.CHECKBOX
 			},
 			{
-				defaultValue: false,
+				defaultValue: true,
 				help: 'Automatically show microphone button instead of send button when textarea is empty for models with audio modality support.',
-				isExperimental: true,
 				key: SETTINGS_KEYS.AUTO_MIC_ON_EMPTY,
 				label: 'Show microphone on empty input',
 				section: SETTINGS_SECTION_SLUGS.GENERAL,
