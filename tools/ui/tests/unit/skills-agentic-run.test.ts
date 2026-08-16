@@ -1,5 +1,6 @@
+import { SKILL_LIST_TOOL, SKILL_READ_TOOL } from '$lib/constants';
 import { buildSkillRunSnapshot, serializeSkillCatalogEnvelope } from '$lib/services/skills-packing.service';
-import { SKILL_LIST_TOOL, SKILL_READ_TOOL, skillDenialResult } from '$lib/services/skills-adapters.service';
+import { skillDenialResult } from '$lib/services/skills-adapters.service';
 import { skillActivationExtra, skillResourceExtra } from '$lib/services/skills-activation.service';
 import { SkillsService } from '$lib/services/skills.service';
 import { ChatService } from '$lib/services';

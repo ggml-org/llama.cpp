@@ -1,7 +1,6 @@
-import { NEWLINE } from '$lib/constants';
+import { NEWLINE, SKILL_READ_TOOL } from '$lib/constants';
 import { AttachmentType, MessageRole, MessageType } from '$lib/enums';
 import { skillActivationExtra, isSkillExtra } from '$lib/services/skills-activation.service';
-import { SKILL_READ_TOOL } from '$lib/services/skills-adapters.service';
 import type { DatabaseMessage, ExportedConversation } from '$lib/types/database';
 import type { SkillBaseReadResult } from '$lib/types/skills';
 import { filterByLeafNodeId } from '$lib/utils';
