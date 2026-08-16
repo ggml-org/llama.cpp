@@ -137,11 +137,19 @@ export interface SkillToolExecutionResult extends ToolExecutionResult {
  * `read_skill` carries a dynamic `enum` of frozen snapshot names; existing
  * non-Skills/custom/MCP names win collisions and the colliding adapter is
  * omitted with a safe diagnostic.
+ *
+ * The optional `enabledNames` set narrows the budget-authorized,
+ * collision-checked result to the model-facing adapters the user enabled:
+ * an omitted set keeps both names, and a provided set suppresses only
+ * disabled definitions after the existing budget rule and collision checks.
+ * It can never add an adapter the budget policy did not authorize, and
+ * collision diagnostics are preserved exactly.
  */
 export function buildSkillToolDefinitions(
 	snapshot: SkillRunSnapshot,
 	packed: SkillPackedCatalog,
-	existingNames: ReadonlySet<string>
+	existingNames: ReadonlySet<string>,
+	enabledNames?: ReadonlySet<string>
 ): SkillAdaptersBuildResult {
 	if (packed.envelope === '') {
 		return { definitions: [], diagnostics: [] };
@@ -169,6 +177,15 @@ export function buildSkillToolDefinitions(
 
 	if (packed.included < packed.total) {
 		register(buildSkillListToolDefinition());
+	}
+
+	// Budget selection and collision checks run first, unchanged; the
+	// settings-enabled set only removes disabled definitions afterwards.
+	if (enabledNames !== undefined) {
+		return {
+			definitions: definitions.filter((def) => enabledNames.has(def.function.name)),
+			diagnostics
+		};
 	}
 
 	return { definitions, diagnostics };

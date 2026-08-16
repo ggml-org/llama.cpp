@@ -199,6 +199,85 @@ static void test(void) {
         assert((skills_params.skill_providers == std::vector<std::string>{"claude", "gemini"}));
     }
 
+    // --skills without --tools: Skills is enabled and the generic
+    // server_tools allowlist stays empty
+    {
+        common_params skills_params;
+        argv = {"binary_name", "--skills"};
+        assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), skills_params, LLAMA_EXAMPLE_SERVER));
+        assert(skills_params.skills == true);
+        assert(skills_params.server_tools.empty());
+        assert(skills_params.ui_mcp_proxy == false);
+    }
+
+    // --tools read_file with --skills: the generic allowlist contains only
+    // read_file; no Skill names are appended
+    {
+        common_params skills_params;
+        argv = {"binary_name", "--tools", "read_file", "--skills"};
+        assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), skills_params, LLAMA_EXAMPLE_SERVER));
+        assert((skills_params.server_tools == std::vector<std::string>{"read_file"}));
+        assert(skills_params.skills == true);
+    }
+
+    // --agent stays generic-only: it selects all built-in tools without
+    // enabling Skills
+    {
+        common_params agent_params;
+        argv = {"binary_name", "--agent"};
+        assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), agent_params, LLAMA_EXAMPLE_SERVER));
+        assert((agent_params.server_tools == std::vector<std::string>{"all"}));
+        assert(agent_params.ui_mcp_proxy == true);
+        assert(agent_params.skills == false);
+    }
+
+    // --skills with no explicit origin selects the localhost CORS default
+    {
+        common_params skills_params;
+        argv = {"binary_name", "--skills"};
+        assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), skills_params, LLAMA_EXAMPLE_SERVER));
+        assert(skills_params.skills == true);
+        assert(skills_params.cors_origins == "localhost");
+        assert(skills_params.cors_origins_explicit == false);
+    }
+
+    // an explicit --cors-origins always wins over the Skills localhost default
+    {
+        common_params skills_params;
+        argv = {"binary_name", "--skills", "--cors-origins", "https://example.test"};
+        assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), skills_params, LLAMA_EXAMPLE_SERVER));
+        assert(skills_params.skills == true);
+        assert(skills_params.cors_origins == "https://example.test");
+        assert(skills_params.cors_origins_explicit == true);
+    }
+
+    // --tools help: the documented generic allowlist does not include Skill
+    // names, and the independent Skills boundary is documented
+    {
+        common_params help_params;
+        auto ctx_help = common_params_parser_init(help_params, LLAMA_EXAMPLE_SERVER);
+        common_params_add_preset_options(ctx_help.options);
+        const common_arg * tools_opt = nullptr;
+        for (const auto & opt : ctx_help.options) {
+            if (!opt.args.empty() && opt.args[0] == std::string("--tools")) {
+                tools_opt = &opt;
+                break;
+            }
+        }
+        assert(tools_opt != nullptr);
+        const std::string tools_help = tools_opt->help;
+        // the documented available-tools line does not include Skill names
+        const size_t avail = tools_help.find("available tools:");
+        assert(avail != std::string::npos);
+        const size_t avail_end = tools_help.find('\n', avail);
+        const std::string avail_line = tools_help.substr(avail, avail_end == std::string::npos ? std::string::npos : avail_end - avail);
+        assert(avail_line.find("read_skill") == std::string::npos);
+        assert(avail_line.find("list_skill") == std::string::npos);
+        // the Skills boundary note names both Skill tools and --skills
+        assert(tools_help.find("read_skill, list_skill") != std::string::npos);
+        assert(tools_help.find("--skills") != std::string::npos);
+    }
+
     // --draft cannot be used outside llama-speculative
     argv = {"binary_name", "--spec-draft-n-max", "123"};
     assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_SPECULATIVE));

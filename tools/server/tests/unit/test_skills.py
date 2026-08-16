@@ -295,6 +295,24 @@ def test_skills_disabled_keeps_route_missing(server):
     assert res.status_code == 404
 
 
+def test_skills_enabled_keeps_tools_route_forbidden(tmp_path):
+    """Enabling Skills does not expose generic /tools; it stays a 403 while server_tools is unset."""
+    server, project = _skill_server(tmp_path)
+    server.start()
+
+    res = server.make_request("GET", "/tools")
+    assert res.status_code == 403
+
+
+def test_tools_enabled_keeps_skills_route_missing(server):
+    """Enabling generic tools does not bind /skills; the route stays missing while Skills are off."""
+    server.server_tools = "all"
+    server.start()
+
+    res = server.make_request("GET", "/skills")
+    assert res.status_code == 404
+
+
 def test_skills_accepts_normalized_provider_list_with_routes(tmp_path):
     # duplicates in --skill-providers are normalized at startup, and with the
     # routes bound an enabled server serves the catalog (project skills are

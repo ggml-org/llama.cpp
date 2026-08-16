@@ -965,8 +965,9 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
     }
 
     const bool mcp_enabled = !params.mcp_servers_config.empty() || !params.mcp_servers_json.empty();
-    if ((!params.server_tools.empty() || mcp_enabled) && !params.cors_origins_explicit) {
-        LOG_WRN("server tools or MCP servers are enabled, using localhost as default CORS origin (change via --cors-origins)\n");
+    const bool skills_enabled = params.skills;
+    if ((!params.server_tools.empty() || mcp_enabled || skills_enabled) && !params.cors_origins_explicit) {
+        LOG_WRN("server tools, MCP servers, or Skills are enabled, using localhost as default CORS origin (change via --cors-origins)\n");
         params.cors_origins = "localhost";
     }
 
@@ -3410,6 +3411,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         "experimental: whether to enable built-in tools for AI agents - do not enable in untrusted environments (default: no tools)\n"
         "specify \"all\" to enable all tools\n"
         "available tools: read_file, file_glob_search, grep_search, exec_shell_command, write_file, edit_file, get_info\n"
+        "Skills tools (read_skill, list_skill) are controlled separately by --skills and the UI Skills settings\n"
         "note: for security reasons, this will limit --cors-origins to localhost by default",
         [](common_params & params, const std::string & value) {
             params.server_tools = parse_csv_row(value);

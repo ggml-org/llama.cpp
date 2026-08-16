@@ -355,7 +355,15 @@ class AgenticStore {
 			const existingNames = new Set(
 				toolsStore.allTools.map((entry) => entry.definition.function.name)
 			);
-			const built = buildSkillToolDefinitions(snapshot, packed, existingNames);
+			// Read the user's enabled Skill tool names once, at preparation
+			// time, from the current run's settings. SkillRunAdapters holds
+			// only the frozen snapshot and these already-filtered definitions.
+			const built = buildSkillToolDefinitions(
+				snapshot,
+				packed,
+				existingNames,
+				toolsStore.getEnabledSkillToolNames()
+			);
 
 			for (const diagnostic of built.diagnostics) {
 				console.warn(`[AgenticStore] ${diagnostic.code}: ${diagnostic.message}`);

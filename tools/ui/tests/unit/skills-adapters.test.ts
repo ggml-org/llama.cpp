@@ -157,6 +157,164 @@ describe('buildSkillToolDefinitions', () => {
 			expect(Object.isFrozen(def.function.parameters)).toBe(true);
 		}
 	});
+
+	it('registers both adapters for a partial budget when the enabled set contains both names', () => {
+		const snapshot = buildSkillRunSnapshot('/cwd', makeCatalog('alpha', 'beta'));
+		const partial = packed({
+			envelope: '<skills_catalog total="2" included="1">...</skills_catalog>',
+			included: 1,
+			total: 2
+		});
+
+		const { definitions, diagnostics } = buildSkillToolDefinitions(
+			snapshot,
+			partial,
+			new Set(),
+			new Set([SKILL_READ_TOOL, SKILL_LIST_TOOL])
+		);
+
+		expect(definitions.map((d) => d.function.name)).toEqual([SKILL_READ_TOOL, SKILL_LIST_TOOL]);
+		expect(diagnostics).toEqual([]);
+
+		// The dynamic snapshot enum survives the enabled-name filter.
+		const readSkill = definitions.find((d) => d.function.name === SKILL_READ_TOOL)!;
+
+		expect(readSkill.function.parameters).toMatchObject({
+			properties: { name: { type: 'string', enum: ['alpha', 'beta'] } }
+		});
+	});
+
+	it('suppresses read_skill when the enabled set omits it', () => {
+		const snapshot = buildSkillRunSnapshot('/cwd', makeCatalog('alpha', 'beta'));
+		const partial = packed({
+			envelope: '<skills_catalog total="2" included="1">...</skills_catalog>',
+			included: 1,
+			total: 2
+		});
+
+		const { definitions, diagnostics } = buildSkillToolDefinitions(
+			snapshot,
+			partial,
+			new Set(),
+			new Set([SKILL_LIST_TOOL])
+		);
+
+		expect(definitions.map((d) => d.function.name)).toEqual([SKILL_LIST_TOOL]);
+		expect(diagnostics).toEqual([]);
+	});
+
+	it('suppresses list_skill when the enabled set omits it', () => {
+		const snapshot = buildSkillRunSnapshot('/cwd', makeCatalog('alpha', 'beta'));
+		const partial = packed({
+			envelope: '<skills_catalog total="2" included="1">...</skills_catalog>',
+			included: 1,
+			total: 2
+		});
+
+		const { definitions, diagnostics } = buildSkillToolDefinitions(
+			snapshot,
+			partial,
+			new Set(),
+			new Set([SKILL_READ_TOOL])
+		);
+
+		expect(definitions.map((d) => d.function.name)).toEqual([SKILL_READ_TOOL]);
+		expect(diagnostics).toEqual([]);
+	});
+
+	it('registers no adapters when the enabled set is empty', () => {
+		const snapshot = buildSkillRunSnapshot('/cwd', makeCatalog('alpha', 'beta'));
+		const partial = packed({
+			envelope: '<skills_catalog total="2" included="1">...</skills_catalog>',
+			included: 1,
+			total: 2
+		});
+
+		const { definitions, diagnostics } = buildSkillToolDefinitions(
+			snapshot,
+			partial,
+			new Set(),
+			new Set()
+		);
+
+		expect(definitions).toEqual([]);
+		expect(diagnostics).toEqual([]);
+	});
+
+	it('keeps complete-budget read_skill-only precedence even when list_skill is enabled', () => {
+		const snapshot = buildSkillRunSnapshot('/cwd', makeCatalog('alpha', 'beta'));
+		const complete = packed({
+			envelope: '<skills_catalog total="2" included="2">...</skills_catalog>',
+			included: 2,
+			total: 2
+		});
+
+		const { definitions, diagnostics } = buildSkillToolDefinitions(
+			snapshot,
+			complete,
+			new Set(),
+			new Set([SKILL_READ_TOOL, SKILL_LIST_TOOL])
+		);
+
+		expect(definitions.map((d) => d.function.name)).toEqual([SKILL_READ_TOOL]);
+		expect(diagnostics).toEqual([]);
+	});
+
+	it('keeps a zero-budget envelope empty even when both names are enabled', () => {
+		const snapshot = buildSkillRunSnapshot('/cwd', makeCatalog('alpha'));
+
+		const { definitions, diagnostics } = buildSkillToolDefinitions(
+			snapshot,
+			packed({ envelope: '' }),
+			new Set(),
+			new Set([SKILL_READ_TOOL, SKILL_LIST_TOOL])
+		);
+
+		expect(definitions).toEqual([]);
+		expect(diagnostics).toEqual([]);
+	});
+
+	it('keeps the collision diagnostic for an enabled colliding adapter while a disabled name is suppressed', () => {
+		const snapshot = buildSkillRunSnapshot('/cwd', makeCatalog('alpha'));
+		const partial = packed({
+			envelope: '<skills_catalog total="1" included="0">i</skills_catalog>',
+			included: 0
+		});
+
+		const { definitions, diagnostics } = buildSkillToolDefinitions(
+			snapshot,
+			partial,
+			new Set([SKILL_READ_TOOL]),
+			new Set([SKILL_READ_TOOL])
+		);
+
+		expect(definitions).toEqual([]);
+		expect(diagnostics).toEqual([
+			{
+				code: 'skill_adapter_collision',
+				message: `Skills tool "${SKILL_READ_TOOL}" collides with an existing tool and was not registered.`,
+				name: SKILL_READ_TOOL
+			}
+		]);
+	});
+
+	it('preserves the collision diagnostic for a disabled adapter name that would collide', () => {
+		const snapshot = buildSkillRunSnapshot('/cwd', makeCatalog('alpha'));
+		const partial = packed({
+			envelope: '<skills_catalog total="1" included="0">i</skills_catalog>',
+			included: 0
+		});
+
+		const { definitions, diagnostics } = buildSkillToolDefinitions(
+			snapshot,
+			partial,
+			new Set([SKILL_LIST_TOOL]),
+			new Set([SKILL_READ_TOOL])
+		);
+
+		expect(definitions.map((d) => d.function.name)).toEqual([SKILL_READ_TOOL]);
+		expect(diagnostics.map((d) => d.name)).toEqual([SKILL_LIST_TOOL]);
+	});
 });
 
 describe('decorateSkillPrompt', () => {
