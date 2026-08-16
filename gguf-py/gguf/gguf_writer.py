@@ -1103,6 +1103,21 @@ class GGUFWriter:
     def add_ssm_dt_b_c_rms(self, value: bool) -> None:
         self.add_bool(Keys.SSM.DT_B_C_RMS.format(arch=self.arch), value)
 
+    def add_kda_gate_lower_bound(self, value: float) -> None:
+        self.add_float32(Keys.KDA.GATE_LOWER_BOUND.format(arch=self.arch), value)
+
+    def add_expert_latent_length(self, value: int) -> None:
+        self.add_uint32(Keys.LLM.EXPERT_LATENT_LENGTH.format(arch=self.arch), value)
+
+    def add_activation_situ_beta(self, value: float) -> None:
+        self.add_float32(Keys.Activation.SITU_BETA.format(arch=self.arch), value)
+
+    def add_activation_situ_linear_beta(self, value: float) -> None:
+        self.add_float32(Keys.Activation.SITU_LINEAR_BETA.format(arch=self.arch), value)
+
+    def add_attn_res_block_size(self, value: int) -> None:
+        self.add_uint32(Keys.AttnRes.BLOCK_SIZE.format(arch=self.arch), value)
+
     def add_kda_head_dim(self, value: int) -> None:
         self.add_uint32(Keys.KDA.HEAD_DIM.format(arch=self.arch), value)
 

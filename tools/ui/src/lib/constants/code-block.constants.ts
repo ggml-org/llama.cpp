@@ -56,13 +56,6 @@ export const CODE_BLOCK_CLASS = {
 	WRAPPER: 'code-block-wrapper'
 } as const;
 
-/** Attributes applied by the markdown code-block renderer. */
-export const CODE_BLOCK_ATTR = {
-	CODE_ID: 'data-code-id',
-	META_DATA: 'data-meta',
-	FILE_NAME: 'data-filename'
-} as const;
-
 /** Language sensitive texts */
 export const CODE_BLOCK_TEXT = {
 	COPY_BTN_TITLE: 'Copy code',

@@ -316,14 +316,18 @@ namespace GGUFMeta {
         struct GGUFMeta::ArrayInfo arr_info =
             GGUFMeta::GKV<GGUFMeta::ArrayInfo>::get_kv(ctx, kid);
 
+        bool type_ok = false;
         switch (arr_info.gt) {
             case GGUF_TYPE_UINT32:
-            case GGUF_TYPE_INT32:   GGML_ASSERT((std::is_same<T,     int32_t>::value) ||
-                                                (std::is_same<T,    uint32_t>::value)); break;
-            case GGUF_TYPE_FLOAT32: GGML_ASSERT((std::is_same<T,       float>::value)); break;
-            case GGUF_TYPE_STRING:  GGML_ASSERT((std::is_same<T, std::string>::value)); break;
+            case GGUF_TYPE_INT32:   type_ok = (std::is_same<T,     int32_t>::value) ||
+                                              (std::is_same<T,    uint32_t>::value); break;
+            case GGUF_TYPE_FLOAT32: type_ok = (std::is_same<T,       float>::value); break;
+            case GGUF_TYPE_STRING:  type_ok = (std::is_same<T, std::string>::value); break;
             default:
                 throw std::runtime_error(format("%s is not a string/float32/uint32/int32 array", key.c_str()));
+        }
+        if (!type_ok) {
+            throw std::runtime_error(format("%s has wrong array element type %s", key.c_str(), gguf_type_name(arr_info.gt)));
         }
 
         if constexpr (std::is_same<T, std::string>::value) {
@@ -357,15 +361,19 @@ namespace GGUFMeta {
         struct GGUFMeta::ArrayInfo arr_info =
             GGUFMeta::GKV<GGUFMeta::ArrayInfo>::get_kv(ctx, kid);
 
+        bool type_ok = false;
         switch (arr_info.gt) {
             case GGUF_TYPE_BOOL:
             case GGUF_TYPE_UINT32:
-            case GGUF_TYPE_INT32:   GGML_ASSERT((std::is_same<T,     int32_t>::value) ||
-                                                (std::is_same<T,    uint32_t>::value)); break;
-            case GGUF_TYPE_FLOAT32: GGML_ASSERT((std::is_same<T,       float>::value)); break;
-            case GGUF_TYPE_STRING:  GGML_ASSERT((std::is_same<T, std::string>::value)); break;
+            case GGUF_TYPE_INT32:   type_ok = (std::is_same<T,     int32_t>::value) ||
+                                              (std::is_same<T,    uint32_t>::value); break;
+            case GGUF_TYPE_FLOAT32: type_ok = (std::is_same<T,       float>::value); break;
+            case GGUF_TYPE_STRING:  type_ok = (std::is_same<T, std::string>::value); break;
             default:
                 throw std::runtime_error(format("%s is not a string/float32/uint32/int32 array", key.c_str()));
+        }
+        if (!type_ok) {
+            throw std::runtime_error(format("%s has wrong array element type %s", key.c_str(), gguf_type_name(arr_info.gt)));
         }
 
         if (arr_info.length > N_MAX) {
@@ -1002,7 +1010,7 @@ static bool weight_buft_supported(const llama_hparams & hparams, ggml_tensor * w
                 ggml_tensor * B   = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, d_state, n_group, n_seq_tokens, n_seqs);
                 ggml_tensor * C   = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, d_state, n_group, n_seq_tokens, n_seqs);
                 ggml_tensor * ids = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, n_seqs);
-                op_tensor = ggml_ssm_scan(ctx, s, x, dt, w, B, C, ids);
+                op_tensor = ggml_ssm_scan(ctx, s, x, dt, w, B, C, ids, /*K=*/1);
             } break;
         case GGML_OP_RWKV_WKV6:
             {
@@ -1178,7 +1186,7 @@ struct ggml_tensor * llama_model_loader::create_tensor(
                         if (use_mmap) {
                             static std::once_flag once;
                             std::call_once(once, [] {
-                                LLAMA_LOG_WARN("llama_model_loader: tensor overrides to CPU are used with mmap enabled - consider using --no-mmap for better performance\n");
+                                LLAMA_LOG_WARN("llama_model_loader: tensor overrides to CPU are used with mmap enabled - consider using --load-mode none for better performance\n");
                             });
                         }
                     } else {

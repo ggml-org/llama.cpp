@@ -2,8 +2,7 @@
  * Utility functions for markdown processing in MarkdownContent component.
  */
 
-import { CODE_BLOCK_ATTR } from '$lib/constants';
-import type { RootContent as HastRootContent } from 'hast';
+import { MARKDOWN_DATA_ATTRS } from '$lib/constants';
 
 /**
  * Generates a unique identifier for a HAST node based on its position.
@@ -70,7 +69,7 @@ export function getCodeInfoFromTarget(target: HTMLElement): CodeInfo | null {
 		return null;
 	}
 
-	const codeElement = wrapper.querySelector<HTMLElement>(`code[${CODE_BLOCK_ATTR.CODE_ID}]`);
+	const codeElement = wrapper.querySelector<HTMLElement>(`code[${MARKDOWN_DATA_ATTRS.CODE_ID}]`);
 
 	if (!codeElement) {
 		console.error('No code element found in wrapper');

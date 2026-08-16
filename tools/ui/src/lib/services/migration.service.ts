@@ -29,7 +29,7 @@ import {
 	STORAGE_APP_NAME,
 	STORAGE_APP_NAME_DEPRECATED
 } from '$lib/constants';
-import { MessageRole } from '$lib/enums';
+import { BooleanString, MessageRole } from '$lib/enums';
 import Dexie from 'dexie';
 
 // Types
@@ -613,10 +613,10 @@ const configTypesMigration: Migration = {
 		// schema rejects them. No config string field holds exactly "true"/"false", so the
 		// match is unambiguous.
 		for (const key of Object.keys(config)) {
-			if (config[key] === 'true') {
+			if (config[key] === BooleanString.TRUE) {
 				config[key] = true;
 				changed = true;
-			} else if (config[key] === 'false') {
+			} else if (config[key] === BooleanString.FALSE) {
 				config[key] = false;
 				changed = true;
 			}

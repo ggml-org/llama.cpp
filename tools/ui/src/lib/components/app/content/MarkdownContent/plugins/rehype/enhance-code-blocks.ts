@@ -23,7 +23,7 @@ import {
 import {
 	CODE_BLOCK,
 	CODE_BLOCK_CLASS,
-	CODE_BLOCK_ATTR,
+	MARKDOWN_DATA_ATTRS,
 	CODE_BLOCK_TEXT
 } from '$lib/constants';
 
@@ -50,7 +50,7 @@ export const remarkPreserveCodeMeta: Plugin<[], any> = () => {
 			if (node.meta) {
 				node.data = node.data || {};
 				node.data.hProperties = node.data.hProperties || {};
-				node.data.hProperties[CODE_BLOCK_ATTR.META_DATA] = node.meta;
+				node.data.hProperties[MARKDOWN_DATA_ATTRS.META_DATA] = node.meta;
 			}
 		});
 	};
@@ -75,7 +75,7 @@ function extractLanguage(codeElement: Element): string {
  * Matches patterns like title="app.js", file=app.js, "app.js", `app.js`, or just app.js
  */
 function extractFilenameFromInfo(node: Element, codeElement: Element): string | undefined {
-	const meta = node.properties?.[CODE_BLOCK_ATTR.META_DATA] ?? codeElement.properties?.[CODE_BLOCK_ATTR.META_DATA];
+	const meta = node.properties?.[MARKDOWN_DATA_ATTRS.META_DATA] ?? codeElement.properties?.[MARKDOWN_DATA_ATTRS.META_DATA];
 	if (typeof meta !== 'string') return undefined;
 
 	// Matches a file extension and name, optionally preceded by a key like name=, file=, or title=
@@ -108,26 +108,26 @@ export const rehypeEnhanceCodeBlocks: Plugin<[], Root> = () => {
 
 			codeElement.properties = {
 				...codeElement.properties,
-				[CODE_BLOCK_ATTR.CODE_ID]: codeId
+				[MARKDOWN_DATA_ATTRS.CODE_ID]: codeId
 			};
 
 			const actions: Element[] = [
-				createDownloadButton(codeId, CODE_BLOCK_ATTR.CODE_ID, CODE_BLOCK_TEXT.DOWNLOAD_BTN_TITLE),
-				createCopyButton(codeId, CODE_BLOCK_ATTR.CODE_ID, CODE_BLOCK_TEXT.COPY_BTN_TITLE)
+				createDownloadButton(codeId, MARKDOWN_DATA_ATTRS.CODE_ID, CODE_BLOCK_TEXT.DOWNLOAD_BTN_TITLE),
+				createCopyButton(codeId, MARKDOWN_DATA_ATTRS.CODE_ID, CODE_BLOCK_TEXT.COPY_BTN_TITLE)
 			];
 
 			if (language.toLowerCase() === 'html') {
-				actions.push(createPreviewButton(codeId, CODE_BLOCK_ATTR.CODE_ID, CODE_BLOCK_TEXT.PREVIEW_TITLE));
+				actions.push(createPreviewButton(codeId, MARKDOWN_DATA_ATTRS.CODE_ID, CODE_BLOCK_TEXT.PREVIEW_TITLE));
 			}
 
-			const header = createBlockHeader(language, codeId, CODE_BLOCK_ATTR.CODE_ID, actions);
+			const header = createBlockHeader(language, codeId, MARKDOWN_DATA_ATTRS.CODE_ID, actions);
 			const wrapper = createWrapper(
 				header,
 				node,
 				CODE_BLOCK_CLASS.WRAPPER,
 				CODE_BLOCK_CLASS.SCROLL_CONTAINER,
 				{
-					...(filename ? { [CODE_BLOCK_ATTR.FILE_NAME] : filename } : {})
+					...(filename ? { [MARKDOWN_DATA_ATTRS.FILE_NAME] : filename } : {})
 				}
 			);
 

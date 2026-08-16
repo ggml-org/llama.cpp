@@ -659,6 +659,43 @@ class ModelBase:
         return ()
 
     @staticmethod
+    def repack_mxfp4_blocks(packed: Tensor, scale: Tensor) -> np.ndarray:
+        """
+        Repack 4-bit MX weights into ggml `block_mxfp4`. Lossless - only moves bits.
+
+        Source (compressed-tensors "mxfp4-pack-quantized", also used by DeepSeek-V4):
+          packed  uint8 [rows, cols/2]  element 2i in the low nibble, 2i+1 in the high one
+          scale   uint8 [rows, cols/32] one E8M0 biased exponent per 32-element group
+
+        Destination, per group: one scale byte then 16 code bytes, where byte j holds
+        element j in the low nibble and element j+16 in the high one.
+
+        The 4-bit codes need no remapping: both sides index into ggml's kvalues_mxfp4
+        order. ggml doubles the kvalues and halves the scale, so the value is the same.
+        """
+        p = packed.contiguous().view(torch.uint8)
+        s = scale.contiguous().view(torch.uint8)
+
+        rows, packed_cols = p.shape
+        cols = packed_cols * 2
+        if cols % 32 != 0:
+            raise ValueError(f"MXFP4 source row has {cols} values, expected a multiple of 32")
+
+        n_blocks = cols // 32
+        if tuple(s.shape) != (rows, n_blocks):
+            raise ValueError(f"MXFP4 scale shape {tuple(s.shape)} does not match {(rows, n_blocks)}")
+
+        src = p.reshape(rows, n_blocks, 16)
+        lo = src & 0x0F           # elements 0, 2, 4, ...
+        hi = (src >> 4) & 0x0F    # elements 1, 3, 5, ...
+
+        vals = torch.stack((lo, hi), dim=-1).reshape(rows, n_blocks, 32)
+        qs = vals[:, :, :16] | (vals[:, :, 16:] << 4)
+
+        raw = torch.cat((s.unsqueeze(-1), qs.to(torch.uint8)), dim=-1)
+        return raw.reshape(rows, n_blocks * 17).cpu().numpy()
+
+    @staticmethod
     def _nvfp4_pack(weight: Tensor, scale: Tensor) -> tuple[np.ndarray, list[int]]:
         """Repack NVFP4 ModelOpt tensors into ggml super-block layout.
         Preserves original E4M3 scale bits as UE4M3 (strip sign bit).
@@ -2661,7 +2698,10 @@ def get_model_architecture(hparams: dict[str, Any], model_type: ModelType) -> st
     # Step3-VL keeps text config under text_config but uses a custom top-level architecture.
     # For text conversion we route to a dedicated text-only class.
     # TODO: refactor this later to avoid adding exception here
-    if model_type == ModelType.TEXT and arch in ("StepVLForConditionalGeneration", "Sarashina2VisionForCausalLM", "Exaone4_5_ForConditionalGeneration", "Step3p7ForConditionalGeneration"):
+    # Kimi-K3's text_config reports "KimiLinearForCausalLM", which is the older
+    # Kimi-Linear-48B architecture and cannot load K3 (no attention residuals,
+    # latent MoE, situ, ...). Route on the top-level architecture instead.
+    if model_type == ModelType.TEXT and arch in ("StepVLForConditionalGeneration", "Sarashina2VisionForCausalLM", "Exaone4_5_ForConditionalGeneration", "Step3p7ForConditionalGeneration", "KimiK3ForConditionalGeneration"):
         return arch
 
     # if "architectures" is found in the sub-config, use that instead

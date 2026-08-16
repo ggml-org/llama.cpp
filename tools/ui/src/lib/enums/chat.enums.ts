@@ -91,11 +91,11 @@ export enum FileMentionEntryType {
 }
 
 /**
- * Kinds of tokens the chat-form contenteditable produces.
+ * Kinds of tokens the chat-form-input-rich produces.
  */
-export enum ContentEditableTokenKind {
+export enum ChatFormInputRichTokenKind {
 	TEXT = 'text',
 	BADGE = 'badge',
-	INLINE_CODE = 'inlineCode',
-	CODE_BLOCK = 'codeBlock'
+	CODE_INLINE = 'code_inline',
+	CODE_BLOCK = 'code_block'
 }
