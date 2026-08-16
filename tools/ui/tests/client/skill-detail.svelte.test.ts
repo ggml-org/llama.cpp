@@ -18,7 +18,7 @@ function jsonResponse(body: unknown, status = 200): Response {
 	});
 }
 
-function makeEntry(name = 'demo-skill'): SkillCatalogEntry {
+function makeEntry(name = 'demo-skill', overrides: Partial<SkillCatalogEntry> = {}): SkillCatalogEntry {
 	return {
 		catalog_xml: `<skill><name>${name}</name></skill>`,
 		description: `description of ${name}`,
@@ -27,7 +27,8 @@ function makeEntry(name = 'demo-skill'): SkillCatalogEntry {
 		name,
 		provider: 'agents',
 		resources: { count: 0, truncated: false },
-		scope: 'project'
+		scope: 'project',
+		...overrides
 	};
 }
 
@@ -127,6 +128,22 @@ describe('SkillDetail preview', () => {
 
 		expect(rawPane.textContent).toContain('---');
 		expect(rawPane.textContent).toContain('description: raw frontmatter');
+	});
+
+	it('shows a Manual only badge for a flagged entry', async () => {
+		mockRead(() => jsonResponse(baseResult()));
+
+		const screen = await render(SkillDetail, {
+			props: {
+				cwd: CWD,
+				entry: makeEntry('manual-only', { disable_model_invocation: true }),
+				mobile: false,
+				onClose: vi.fn()
+			}
+		});
+
+		await vi.waitFor(() => expect(bodyText()).toContain('Manual only'));
+		expect(screen.getByRole('button', { name: 'Markdown' })).toBeTruthy();
 	});
 
 	it('keeps each resource group in the detail header outside the scrolling body', async () => {

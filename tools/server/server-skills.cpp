@@ -52,6 +52,7 @@ struct parsed_skill {
     std::string license;
     std::string compatibility;
     std::string allowed_tools;
+    bool disable_model_invocation = false;
     std::map<std::string, std::string> metadata;
     std::string body;
 };
@@ -416,6 +417,9 @@ static bool parse_skill(const std::string & source, parsed_skill & skill) {
                         skill.compatibility = value;
                     } else if (key == "allowed-tools") {
                         skill.allowed_tools = value;
+                    } else if (key == "disable-model-invocation") {
+                        std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) { return std::tolower(c); });
+                        skill.disable_model_invocation = value == "true" || value == "yes";
                     }
                 }
             }
@@ -1010,6 +1014,7 @@ server_skills::server_skills(server_skills_config config, token_count_callback c
                     {"description", skill.parsed.description},
                     {"scope", skill.scope},
                     {"provider", skill.provider},
+                    {"disable_model_invocation", skill.parsed.disable_model_invocation},
                     {"instruction", std::move(instruction)},
                     {"resources", {{"count", resources.paths.size()}, {"truncated", resources.truncated}}},
                     {"catalog_xml", "<skill><name>" + xml_escape(skill.name) + "</name><description>" + xml_escape(skill.parsed.description) + "</description></skill>"},

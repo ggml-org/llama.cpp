@@ -88,6 +88,28 @@ def test_skills_enabled_catalog_and_reads(tmp_path):
     assert "body_markdown" not in res.body
 
 
+def test_catalog_exposes_disable_model_invocation(tmp_path):
+    """A flagged skill is exposed as disable_model_invocation true in the catalog."""
+    server = ServerPreset.router()
+    server.skills = True
+    server.trust_project_skills = True
+    home = tmp_path / "home"
+    home.mkdir()
+    server.skill_home = str(home)
+    project = tmp_path / "proj"
+    project.mkdir()
+    skill = write_skill(project, "agents", "manual", body="manual body", description="manual desc")
+    (skill / "SKILL.md").write_text(
+        "---\nname: manual\ndescription: manual desc\ndisable-model-invocation: true\n---\nmanual body",
+        encoding="utf-8",
+    )
+    server.start()
+
+    catalog = server.make_request("GET", "/skills", headers={"X-Skill-Cwd": str(project)})
+    assert catalog.status_code == 200
+    assert catalog.body["skills"][0]["disable_model_invocation"] is True
+
+
 def test_skills_api_prefix_applies_to_both_routes(tmp_path):
     """A configured API prefix applies to GET /skills and POST /skills/read."""
     server, project = _skill_server(tmp_path)

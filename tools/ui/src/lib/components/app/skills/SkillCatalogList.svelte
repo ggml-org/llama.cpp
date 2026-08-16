@@ -117,6 +117,14 @@
 						<Badge variant={entry.instruction.tokens_estimated ? 'tertiary' : 'outline'}>
 							{entry.instruction.tokens_estimated ? 'estimated' : 'exact'}
 						</Badge>
+						{#if entry.disable_model_invocation}
+							<Badge
+								variant="secondary"
+								title="Not available to the model; activate with /skills <name> or from this catalog."
+							>
+								Manual only
+							</Badge>
+						{/if}
 					</div>
 				</div>
 			</CardHeader>

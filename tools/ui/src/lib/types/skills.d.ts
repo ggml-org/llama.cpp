@@ -38,6 +38,8 @@ export interface SkillCatalogEntry {
 	description: string;
 	scope: 'global' | 'project';
 	provider: string;
+	/** True when the skill is user-activation-only and excluded from the model-facing catalog view. */
+	disable_model_invocation?: boolean;
 	instruction: SkillInstructionFacts;
 	resources: SkillResourceSummary;
 	catalog_xml: string;

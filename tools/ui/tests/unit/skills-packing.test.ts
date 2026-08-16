@@ -110,6 +110,43 @@ describe('buildSkillRunSnapshot', () => {
 	});
 });
 
+describe('buildSkillRunSnapshot model-view filtering', () => {
+	it('excludes manual-only entries from entries, total, and the envelope', () => {
+		const manual = { ...makeEntry('manual', '<manual/>'), disable_model_invocation: true };
+		const normal = makeEntry('normal', '<normal/>');
+		const snapshot = buildSkillRunSnapshot('/cwd', makeCatalog([manual, normal], '<inst/>'));
+
+		expect(snapshot.total).toBe(1);
+		expect(snapshot.entries.map((e) => e.name)).toEqual(['normal']);
+		expect(snapshot.envelope).toContain('<normal/>');
+		expect(snapshot.envelope).not.toContain('<manual/>');
+		expect(snapshot.envelope).toContain('total="1"');
+		expect(snapshot.envelope).toContain('included="1"');
+		// the raw catalog is retained for the UI listing and the /skills picker
+		expect(snapshot.catalog.skills).toHaveLength(2);
+	});
+
+	it('keeps entries whose flag is absent or false', () => {
+		const normal = makeEntry('normal', '<normal/>');
+		const legacy = { ...makeEntry('legacy', '<legacy/>'), disable_model_invocation: false };
+		const snapshot = buildSkillRunSnapshot(undefined, makeCatalog([normal, legacy], '<inst/>'));
+
+		expect(snapshot.total).toBe(2);
+		expect(snapshot.entries.map((e) => e.name)).toEqual(['normal', 'legacy']);
+		expect(snapshot.envelope).toContain('<normal/>');
+		expect(snapshot.envelope).toContain('<legacy/>');
+	});
+
+	it('produces an empty model view when every entry is manual-only', () => {
+		const manual = { ...makeEntry('manual', '<manual/>'), disable_model_invocation: true };
+		const snapshot = buildSkillRunSnapshot('/cwd', makeCatalog([manual], '<inst/>'));
+
+		expect(snapshot.total).toBe(0);
+		expect(snapshot.entries).toEqual([]);
+		expect(snapshot.envelope).toBe('<skills_catalog total="0" included="0"><inst/></skills_catalog>');
+	});
+});
+
 describe('SkillsPackingService.pack', () => {
 	afterEach(() => {
 		vi.restoreAllMocks();
