@@ -1,10 +1,10 @@
 <script lang="ts">
 	import { ExternalLink } from '@lucide/svelte';
-	import { Badge } from '$lib/components/ui/badge';
 	import { McpLogo } from '$lib/components/app/mcp';
 	import { TruncatedText } from '$lib/components/app/misc';
-	import { sanitizeExternalUrl } from '$lib/utils';
+	import { Badge } from '$lib/components/ui/badge';
 	import type { MCPServerInfo } from '$lib/types';
+	import { sanitizeExternalUrl } from '$lib/utils';
 
 	interface Props {
 		displayName?: string;
@@ -20,12 +20,12 @@
 	let {
 		displayName,
 		faviconUrl = null,
-		serverInfo,
 		iconClass = 'h-5 w-5',
 		iconRounded = 'rounded-sm',
+		nameClass,
+		serverInfo,
 		showVersion = true,
-		showWebsite = true,
-		nameClass
+		showWebsite = true
 	}: Props = $props();
 
 	let safeWebsiteUrl = $derived(

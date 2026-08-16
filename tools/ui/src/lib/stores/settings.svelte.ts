@@ -32,24 +32,25 @@
  */
 
 import { browser } from '$app/environment';
-import { ColorMode } from '$lib/enums';
-import type { SettingsExportType } from '$lib/types';
-import { setMode } from 'mode-watcher';
 import {
 	CONFIG_LOCALSTORAGE_KEY,
 	SETTING_CONFIG_DEFAULT,
 	SETTINGS_KEYS,
 	USER_OVERRIDES_LOCALSTORAGE_KEY
 } from '$lib/constants';
-import { isMobile } from '$lib/stores/viewport.svelte';
+import { ColorMode } from '$lib/enums';
 import { ParameterSyncService } from '$lib/services/parameter-sync.service';
+// direct imports between stores, not via the barrel, to avoid circular deps
 import { serverStore } from '$lib/stores/server.svelte';
+import { isMobile } from '$lib/stores/viewport.svelte';
+import type { SettingsExportType } from '$lib/types';
 import {
 	configToParameterRecord,
-	normalizeFloatingPoint,
 	getConfigValue,
+	normalizeFloatingPoint,
 	setConfigValue
 } from '$lib/utils';
+import { setMode } from 'mode-watcher';
 
 class SettingsStore {
 	/**
@@ -135,30 +136,6 @@ class SettingsStore {
 				...savedVal
 			};
 
-			// Migrate the legacy render keys into `renderContentAsRawText`
-			// (inverted semantics: the old keys opted INTO markdown). Any
-			// explicit raw-text preference wins when the legacy keys disagree.
-			const LEGACY_MARKDOWN_KEYS = ['renderUserContentAsMarkdown', 'renderThinkingAsMarkdown'];
-			const LEGACY_RAW_TEXT_KEY = 'renderUserContentAsRawText'; // this branch's intermediate key
-			const legacyKeys = [...LEGACY_MARKDOWN_KEYS, LEGACY_RAW_TEXT_KEY].filter(
-				(key) => key in savedVal
-			);
-			if (legacyKeys.length > 0) {
-				if (!(SETTINGS_KEYS.RENDER_CONTENT_AS_RAW_TEXT in savedVal)) {
-					if (LEGACY_RAW_TEXT_KEY in savedVal) {
-						this.config[SETTINGS_KEYS.RENDER_CONTENT_AS_RAW_TEXT] = savedVal[LEGACY_RAW_TEXT_KEY];
-					} else {
-						this.config[SETTINGS_KEYS.RENDER_CONTENT_AS_RAW_TEXT] = LEGACY_MARKDOWN_KEYS.filter(
-							(key) => key in savedVal
-						).some((key) => savedVal[key] === false);
-					}
-				}
-				for (const key of legacyKeys) {
-					delete (this.config as Record<string, unknown>)[key];
-				}
-				this.saveConfig();
-			}
-
 			// Default sendOnEnter to false on mobile when the user has no saved preference
 			if (!(SETTINGS_KEYS.SEND_ON_ENTER in savedVal)) {
 				if (isMobile.current) {
@@ -170,6 +147,7 @@ class SettingsStore {
 			const savedOverrides = JSON.parse(
 				localStorage.getItem(USER_OVERRIDES_LOCALSTORAGE_KEY) || '[]'
 			);
+
 			this.userOverrides = new Set(savedOverrides);
 		} catch (error) {
 			console.warn('Failed to parse config from localStorage, using defaults:', error);
@@ -188,6 +166,7 @@ class SettingsStore {
 		if (!browser) return;
 
 		const legacyTheme = localStorage.getItem('theme');
+
 		if (legacyTheme) {
 			this.config[SETTINGS_KEYS.THEME] = legacyTheme;
 			localStorage.removeItem('theme');
@@ -358,6 +337,7 @@ class SettingsStore {
 	 */
 	syncWithServerDefaults(): void {
 		const propsDefaults = this.getServerDefaults();
+
 		if (Object.keys(propsDefaults).length === 0) return;
 
 		const uiSettings = serverStore.uiSettings;
@@ -365,7 +345,6 @@ class SettingsStore {
 
 		for (const [key, propsValue] of Object.entries(propsDefaults)) {
 			const currentValue = getConfigValue(this.config, key);
-
 			const normalizedCurrent = normalizeFloatingPoint(currentValue);
 			const normalizedDefault = normalizeFloatingPoint(propsValue);
 
@@ -497,6 +476,7 @@ class SettingsStore {
 	 */
 	getParameterDiff() {
 		const serverDefaults = this.getServerDefaults();
+
 		if (Object.keys(serverDefaults).length === 0) return {};
 
 		const configAsRecord = configToParameterRecord(
@@ -545,8 +525,10 @@ class SettingsStore {
 				>;
 				const safeServers = mcpServers.map((server) => {
 					delete server.headers;
+
 					return server;
 				});
+
 				configToExport.mcpServers = JSON.stringify(safeServers);
 			} catch {
 				// If parsing fails, just exclude the entire mcpServers field
@@ -555,10 +537,10 @@ class SettingsStore {
 		}
 
 		return {
-			version: 1,
-			timestamp: Date.now(),
 			config: configToExport,
-			userOverrides: Array.from(this.userOverrides)
+			timestamp: Date.now(),
+			userOverrides: Array.from(this.userOverrides),
+			version: 1
 		};
 	}
 
@@ -594,7 +576,3 @@ class SettingsStore {
 }
 
 export const settingsStore = new SettingsStore();
-
-export const config = () => settingsStore.config;
-export const theme = () => settingsStore.config[SETTINGS_KEYS.THEME];
-export const isInitialized = () => settingsStore.isInitialized;

@@ -33,12 +33,12 @@ npx vitest --project=client --run tests/client/agentic-stream.perf.svelte.test.t
 
 The point of the harness is the _scaling curve_, not any single number.
 
-| Knob                        | Reads on                                                                                             |
-| --------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `priorToolCalls` (0/1/5/20) | the reactive fan-out. Flat => no fan-out. Linear => confirmed.                                       |
-| `toolResultBytes`           | whole-blob string scans (`extractSearchResults`, `parseToolResultWithImages`, `classifyToolResult`). |
-| `editFileEdits`             | `computeLineDiff`, the O(m\*n) LCS.                                                                  |
-| `openCodeFence`             | `hljs.highlightAuto` on partial code.                                                                |
+| Knob                        | Reads on                                                                                            |
+| --------------------------- | --------------------------------------------------------------------------------------------------- |
+| `priorToolCalls` (0/1/5/20) | the reactive fan-out. Flat => no fan-out. Linear => confirmed.                                      |
+| `toolResultBytes`           | whole-blob string scans (`extractSearchResults`, `parseToolResultWithMedia`, `classifyToolResult`). |
+| `editFileEdits`             | `computeLineDiff`, the O(m\*n) LCS.                                                                 |
+| `openCodeFence`             | `hljs.highlightAuto` on partial code.                                                               |
 
 Deliberately no hard assertions: CI timing is noisy and the value here is the
 before/after delta, not a gate.

@@ -1,19 +1,18 @@
 <script lang="ts">
-	import { conversationsStore } from '$lib/stores/conversations.svelte';
-	import { mcpStore } from '$lib/stores/mcp.svelte';
-	import { debounce, uuid } from '$lib/utils';
-	import { KeyboardKey } from '$lib/enums';
-	import type { MCPPromptInfo, GetPromptResult, MCPServerSettingsEntry } from '$lib/types';
-	import { SvelteMap } from 'svelte/reactivity';
 	import {
-		ChatFormPickerPopover,
+		ChatFormPickerItemHeader,
 		ChatFormPickerList,
 		ChatFormPickerListItem,
-		ChatFormPickerItemHeader,
 		ChatFormPickerListItemSkeleton,
+		ChatFormPickerPopover,
 		ChatFormPromptPickerArgumentForm
 	} from '$lib/components/app/chat';
 	import Badge from '$lib/components/ui/badge/badge.svelte';
+	import { KeyboardKey } from '$lib/enums';
+	import { conversationsStore, mcpStore } from '$lib/stores';
+	import type { GetPromptResult, MCPPromptInfo, MCPServerSettingsEntry } from '$lib/types';
+	import { debounce, uuid } from '$lib/utils';
+	import { SvelteMap } from 'svelte/reactivity';
 
 	interface Props {
 		class?: string;
@@ -32,11 +31,11 @@
 	let {
 		class: className = '',
 		isOpen = false,
-		searchQuery = '',
 		onClose,
-		onPromptLoadStart,
 		onPromptLoadComplete,
-		onPromptLoadError
+		onPromptLoadError,
+		onPromptLoadStart,
+		searchQuery = ''
 	}: Props = $props();
 
 	let prompts = $state<MCPPromptInfo[]>([]);
@@ -89,7 +88,6 @@
 
 		try {
 			const perChatOverrides = conversationsStore.getAllMcpServerOverrides();
-
 			const initialized = await mcpStore.ensureInitialized(perChatOverrides);
 
 			if (!initialized) {
@@ -118,6 +116,7 @@
 
 			requestAnimationFrame(() => {
 				const firstInput = document.querySelector(`#arg-${args[0].name}`) as HTMLInputElement;
+
 				if (firstInput) {
 					firstInput.focus();
 				}
@@ -131,7 +130,6 @@
 		promptError = null;
 
 		const placeholderId = uuid();
-
 		const nonEmptyArgs = Object.fromEntries(
 			Object.entries(args).filter(([, value]) => value.trim() !== '')
 		);
@@ -142,10 +140,12 @@
 
 		try {
 			const result = await mcpStore.getPrompt(prompt.serverName, prompt.name, args);
+
 			onPromptLoadComplete?.(placeholderId, result);
 		} catch (error) {
 			const errorMessage =
 				error instanceof Error ? error.message : 'Unknown error executing prompt';
+
 			onPromptLoadError?.(placeholderId, errorMessage);
 		}
 	}
@@ -167,9 +167,9 @@
 
 		if (import.meta.env.DEV && import.meta.env.VITE_DEBUG) {
 			console.log('[ChatFormPickerMcpPrompts] Fetching completions for:', {
-				serverName: selectedPrompt.serverName,
-				promptName: selectedPrompt.name,
 				argName,
+				promptName: selectedPrompt.name,
+				serverName: selectedPrompt.serverName,
 				value
 			});
 		}
@@ -187,9 +187,9 @@
 			if (import.meta.env.DEV && import.meta.env.VITE_DEBUG) {
 				console.log('[ChatFormPickerMcpPrompts] Autocomplete result:', {
 					argName,
-					value,
 					result,
-					suggestionsCount: result?.values.length ?? 0
+					suggestionsCount: result?.values.length ?? 0,
+					value
 				});
 			}
 
@@ -234,6 +234,7 @@
 			event.preventDefault();
 			event.stopPropagation();
 			handleCancelArgumentForm();
+
 			return;
 		}
 
@@ -274,6 +275,7 @@
 			selectedIndex = selectedIndexBeforeArgumentForm;
 			selectedIndexBeforeArgumentForm = null;
 		}
+
 		selectedPrompt = null;
 		promptArgs = {};
 		promptError = null;
@@ -284,6 +286,7 @@
 
 		if (event.key === KeyboardKey.ESCAPE) {
 			event.preventDefault();
+
 			if (selectedPrompt) {
 				// Return to prompt selection list, keeping the selected prompt active
 				handleCancelArgumentForm();
@@ -296,6 +299,7 @@
 
 		if (event.key === KeyboardKey.ARROW_DOWN) {
 			event.preventDefault();
+
 			if (filteredPrompts.length > 0) {
 				selectedIndex = (selectedIndex + 1) % filteredPrompts.length;
 				scrollTrigger++;
@@ -306,6 +310,7 @@
 
 		if (event.key === KeyboardKey.ARROW_UP) {
 			event.preventDefault();
+
 			if (filteredPrompts.length > 0) {
 				selectedIndex = selectedIndex === 0 ? filteredPrompts.length - 1 : selectedIndex - 1;
 				scrollTrigger++;
@@ -316,6 +321,7 @@
 
 		if (event.key === KeyboardKey.ENTER && !selectedPrompt) {
 			event.preventDefault();
+
 			if (filteredPrompts[selectedIndex]) {
 				handlePromptClick(filteredPrompts[selectedIndex]);
 			}
@@ -329,14 +335,14 @@
 	let filteredPrompts = $derived.by(() => {
 		const sortedServers = mcpStore.getServers();
 		const serverOrderMap = new Map(sortedServers.map((server, index) => [server.id, index]));
-
 		const sortedPrompts = [...prompts].sort((a, b) => {
 			const orderA = serverOrderMap.get(a.serverName) ?? Number.MAX_SAFE_INTEGER;
 			const orderB = serverOrderMap.get(b.serverName) ?? Number.MAX_SAFE_INTEGER;
+
 			return orderA - orderB;
 		});
-
 		const query = (searchQuery || internalSearchQuery).toLowerCase();
+
 		if (!query) return sortedPrompts;
 
 		return sortedPrompts.filter(

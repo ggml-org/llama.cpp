@@ -1,15 +1,5 @@
+import { CODE_BLOCK, NEWLINE } from '$lib/constants';
 import hljs from 'highlight.js';
-import {
-	NEWLINE,
-	DEFAULT_LANGUAGE,
-	LANG_PATTERN,
-	AMPERSAND_REGEX,
-	LT_REGEX,
-	GT_REGEX,
-	FENCE_PATTERN,
-	TRIM_LEADING_PADDING_REGEX,
-	TRIM_TRAILING_PADDING_REGEX
-} from '$lib/constants';
 
 export interface IncompleteCodeBlock {
 	language: string;
@@ -41,21 +31,25 @@ export function splitGluedClosingCodeFences(markdown: string): string {
 	if (!markdown.includes('```')) return markdown;
 
 	const lines = markdown.split(NEWLINE);
+
 	let inside = false;
 	let changed = false;
 
 	for (let i = 0; i < lines.length; i++) {
 		const match = FENCE_LINE_REGEX.exec(lines[i]);
+
 		if (!match) continue;
 
 		if (!inside) {
 			inside = true;
+
 			continue;
 		}
 
 		inside = false;
 
 		const trailing = match[2];
+
 		if (trailing.includes('`') || !/\s/.test(trailing)) continue;
 
 		lines[i] = lines[i].slice(0, lines[i].length - trailing.length);
@@ -77,11 +71,16 @@ export function splitGluedClosingCodeFences(markdown: string): string {
  * so internal blank lines are still rendered as such.
  */
 function trimCodePadding(code: string): string {
-	return code.replace(TRIM_LEADING_PADDING_REGEX, '').replace(TRIM_TRAILING_PADDING_REGEX, '');
+	return code
+		.replace(CODE_BLOCK.TRIM_LEADING_PADDING_REGEX, '')
+		.replace(CODE_BLOCK.TRIM_TRAILING_PADDING_REGEX, '');
 }
 
 function escapeCode(code: string): string {
-	return code.replace(AMPERSAND_REGEX, '&amp;').replace(LT_REGEX, '&lt;').replace(GT_REGEX, '&gt;');
+	return code
+		.replace(CODE_BLOCK.AMPERSAND_REGEX, '&amp;')
+		.replace(CODE_BLOCK.LT_REGEX, '&lt;')
+		.replace(CODE_BLOCK.GT_REGEX, '&gt;');
 }
 
 /** Bounded cache for highlightCode results. */
@@ -106,9 +105,11 @@ export function highlightCode(code: string, language: string, autoDetect = true)
 	// (e.g., when text after a code block changes but the code itself doesn't).
 	const cacheKey = `${language}:${autoDetect}:${code}`;
 	const cached = highlightCache.get(cacheKey);
+
 	if (cached) return cached;
 
 	const trimmed = trimCodePadding(code);
+
 	let result: string;
 
 	try {
@@ -129,6 +130,7 @@ export function highlightCode(code: string, language: string, autoDetect = true)
 	if (highlightCache.size >= HIGHLIGHT_CACHE_MAX_SIZE) {
 		highlightCache.delete(highlightCache.keys().next().value!);
 	}
+
 	highlightCache.set(cacheKey, result);
 
 	return result;
@@ -145,13 +147,15 @@ export { trimCodePadding };
 export function detectIncompleteCodeBlock(markdown: string): IncompleteCodeBlock | null {
 	// Count all code fences in the markdown
 	// A code block is incomplete if there's an odd number of ``` fences
-	const fencePattern = new RegExp(FENCE_PATTERN.source, FENCE_PATTERN.flags);
+	const fencePattern = new RegExp(CODE_BLOCK.FENCE_PATTERN.source, CODE_BLOCK.FENCE_PATTERN.flags);
 	const fences: number[] = [];
+
 	let fenceMatch;
 
 	while ((fenceMatch = fencePattern.exec(markdown)) !== null) {
 		// Store the position after the ```
 		const pos = fenceMatch[0].startsWith(NEWLINE) ? fenceMatch.index + 1 : fenceMatch.index;
+
 		fences.push(pos);
 	}
 
@@ -164,16 +168,15 @@ export function detectIncompleteCodeBlock(markdown: string): IncompleteCodeBlock
 	// The last fence is the opening of the incomplete block
 	const openingIndex = fences[fences.length - 1];
 	const afterOpening = markdown.slice(openingIndex + 3);
-
 	// Extract language and code content
-	const langMatch = afterOpening.match(LANG_PATTERN);
-	const language = langMatch?.[1] || DEFAULT_LANGUAGE;
+	const langMatch = afterOpening.match(CODE_BLOCK.LANG_PATTERN);
+	const language = langMatch?.[1] || CODE_BLOCK.DEFAULT_LANGUAGE;
 	const codeStartIndex = openingIndex + 3 + (langMatch?.[0]?.length ?? 0);
 	const code = markdown.slice(codeStartIndex);
 
 	return {
-		language,
 		code,
+		language,
 		openingIndex
 	};
 }
