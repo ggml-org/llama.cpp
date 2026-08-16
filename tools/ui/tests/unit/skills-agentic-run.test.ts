@@ -1,5 +1,10 @@
 import { SKILL_LIST_TOOL, SKILL_READ_TOOL } from '$lib/constants';
-import { buildSkillRunSnapshot, serializeSkillCatalogEnvelope } from '$lib/services/skills-packing.service';
+import {
+	buildSkillRunSnapshot,
+	resolveSkillPackOptions,
+	serializeSkillCatalogEnvelope,
+	SkillsPackingService
+} from '$lib/services/skills-packing.service';
 import { skillDenialResult } from '$lib/services/skills-adapters.service';
 import { skillActivationExtra, skillResourceExtra } from '$lib/services/skills-activation.service';
 import { SkillsService } from '$lib/services/skills.service';
@@ -67,6 +72,7 @@ vi.mock('$lib/stores/tools.svelte', () => ({
 		customTools: [],
 		fetchBuiltinTools: vi.fn(),
 		frontendTools: [],
+		getEnabledSkillToolNames: vi.fn(),
 		getEnabledToolsForLLM: vi.fn(),
 		getPermissionKey: vi.fn(() => null),
 		getToolServerLabel: vi.fn(() => ''),
@@ -108,6 +114,7 @@ const mockSendMessage = vi.mocked(ChatService.sendMessage);
 const mockRead = vi.mocked(SkillsService.read);
 const mockSettingsStore = vi.mocked(settingsStore);
 const mockGetEnabledToolsForLLM = vi.mocked(toolsStore.getEnabledToolsForLLM);
+const mockGetEnabledSkillToolNames = vi.mocked(toolsStore.getEnabledSkillToolNames);
 const mockRecordActivation = vi.mocked(skillActivationMockState.store.recordActivation);
 const mockLoadConversation = vi.mocked(skillActivationMockState.store.loadConversation);
 
@@ -247,6 +254,7 @@ beforeEach(() => {
 	vi.clearAllMocks();
 	mockSettingsStore.config = { agenticMaxTurns: 100, maxSkillBudget: 2000 };
 	mockGetEnabledToolsForLLM.mockReturnValue([dummyTool()]);
+	mockGetEnabledSkillToolNames.mockReturnValue(new Set([SKILL_READ_TOOL, SKILL_LIST_TOOL]));
 	toolsMockState.allTools = [{ definition: dummyTool(), key: 'builtin:test_tool' }];
 	mockRecordActivation.mockResolvedValue({
 		created: true,
@@ -367,6 +375,67 @@ describe('agenticStore.runAgenticFlow Skills integration', () => {
 		const tools = mockSendMessage.mock.calls[0][1].tools as { function: { name: string } }[];
 
 		expect(tools.map((t) => t.function.name)).toEqual(['test_tool']);
+	});
+
+	it('excludes a disabled Skill definition from the model request while catalog decoration and activation plumbing remain', async () => {
+		const snapshot = buildSkillRunSnapshot('/run-cwd', makeCatalog('demo-skill', 'other-skill'));
+
+		mockSettingsStore.config = { agenticMaxTurns: 100, maxSkillBudget: 1 };
+		mockSnapshot.mockResolvedValue(snapshot);
+		mockSendMessage.mockResolvedValue(undefined);
+		mockGetEnabledSkillToolNames.mockReturnValue(new Set([SKILL_LIST_TOOL]));
+
+		const result = await agenticStore.runAgenticFlow(runParams('conv-1', makeCallbacks().callbacks));
+
+		expect(result).toEqual({ handled: true });
+
+		const tools = mockSendMessage.mock.calls[0][1].tools as { function: { name: string } }[];
+
+		expect(tools.map((t) => t.function.name)).toEqual(['test_tool', SKILL_LIST_TOOL]);
+		expect(tools.map((t) => t.function.name)).not.toContain(SKILL_READ_TOOL);
+
+		// Catalog prompt decoration is unchanged: the run's packed envelope
+		// (budget-truncated) is still prepended as the first system message.
+		const firstMessages = mockSendMessage.mock.calls[0][0] as { role: string; content: string }[];
+
+		expect(firstMessages[0].role).toBe(MessageRole.SYSTEM);
+		expect(firstMessages[0].content).toBe(
+			(
+				await SkillsPackingService.pack(snapshot, {
+					budget: 1,
+					...resolveSkillPackOptions('', false, () => false)
+				})
+			).envelope
+		);
+
+		// Durable base activations are still reconstructed for the run, so
+		// explicit `/skills <name>` activation remains available.
+		expect(mockLoadConversation).toHaveBeenCalledWith('conv-1');
+	});
+
+	it('does not recognize a disabled Skill name as a Skill tool call', async () => {
+		const snapshot = buildSkillRunSnapshot('/run-cwd', makeCatalog('demo-skill'));
+
+		mockSnapshot.mockResolvedValue(snapshot);
+		mockGetEnabledSkillToolNames.mockReturnValue(new Set([SKILL_LIST_TOOL]));
+		mockToolCallTurn(readSkillToolCallJson());
+
+		const { callbacks } = makeCallbacks();
+		const runPromise = agenticStore.runAgenticFlow(runParams('conv-1', callbacks));
+
+		const pending = await waitForPermission('conv-1');
+
+		// The disabled adapter is not registered for this run, so the call is
+		// a generic tool call: no skill identity metadata, no Skills consent.
+		expect(pending).toEqual({ serverLabel: '', toolName: SKILL_READ_TOOL });
+		expect('skill' in pending).toBe(false);
+
+		agenticStore.resolvePermission('conv-1', ToolPermissionDecision.ONCE);
+
+		const result = await runPromise;
+
+		expect(result).toEqual({ handled: true });
+		expect(mockRecordActivation).not.toHaveBeenCalled();
 	});
 
 	it('keeps the generic non-Skills permission path untouched (no skill metadata, abort-safe signal)', async () => {
