@@ -12,7 +12,6 @@
 		ModelsSelectorDropdown
 	} from '$lib/components/app';
 	import ContextGaugePopup from '$lib/components/app/chat/ChatForm/ChatFormContextGauge/ContextGaugePopup.svelte';
-	import { ProcessingText, ProcessingInfo } from '$lib/components/app/misc';
 	import { ErrorDialogType } from '$lib/enums';
 
 	import { chatStore } from '$lib/stores/chat.svelte';
@@ -251,15 +250,6 @@
 			placeholder="Enter your text here..."
 		/>
 	</div>
-
-	{#if notebookStore.processingState?.status === 'preparing'}
-		<ProcessingText cls="px-4 md:px-6" processingText={notebookStore.getPromptProcessingText()} />
-	{:else if showMessageStats}
-		<ProcessingInfo
-			visible={notebookStore.processingState?.status === 'generating'}
-			processingDetails={notebookStore.getProcessingDetails()}
-		/>
-	{/if}
 
 	<div class="relative bg-background p-2 md:p-4" data-gauge-container>
 		{#snippet generateButton()}
