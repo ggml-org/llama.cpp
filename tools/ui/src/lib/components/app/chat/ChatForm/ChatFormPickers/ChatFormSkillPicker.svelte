@@ -6,6 +6,7 @@
 	} from '$lib/components/app/chat';
 	import { usePickerNavigation } from '$lib/hooks/use-picker-navigation.svelte';
 	import type { SkillCatalogEntry } from '$lib/types';
+	import { normalizeSkillDescription } from '$lib/utils';
 
 	/**
 	 * Catalog-name picker for `/skills <name>`: the composer is the sole
@@ -103,7 +104,7 @@
 				<div class="flex min-w-0 flex-1 flex-col">
 					<span class="font-mono text-sm font-medium">{skill.name}</span>
 					<span class="min-w-0 flex-1 truncate text-left text-xs text-muted-foreground">
-						{skill.description}
+						{normalizeSkillDescription(skill.description)}
 					</span>
 					<span class="text-[10px] uppercase tracking-wide text-muted-foreground/70">
 						{skill.scope} · {skill.provider}

@@ -75,6 +75,27 @@ describe('ChatFormSkillPicker', () => {
 		expect(bodyText).not.toContain('<skill />');
 	});
 
+	it('renders multiline descriptions as one paragraph', async () => {
+		const onClose = vi.fn();
+		const onSelect = vi.fn();
+
+		render(ChatFormSkillPicker, {
+			isOpen: true,
+			query: 'alpha',
+			skills: [
+				skill('alpha', 'This is line one.\n  This is line two.\n\nThis is the final line.')
+			],
+			onClose,
+			onSelect
+		});
+
+		await tick();
+
+		expect(rows()[0].textContent).toContain(
+			'This is line one. This is line two. This is the final line.'
+		);
+	});
+
 	it('selects the exact name with ArrowDown + Enter and closes', async () => {
 		const { onClose, onSelect, screen } = renderPicker('alpha');
 

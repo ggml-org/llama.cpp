@@ -3,6 +3,7 @@
 	import { Badge } from '$lib/components/ui/badge';
 	import { Card, CardContent, CardHeader, CardTitle } from '$lib/components/ui/card';
 	import type { SkillCatalogEntry } from '$lib/types';
+	import { normalizeSkillDescription } from '$lib/utils';
 
 	interface Props {
 		entries: readonly SkillCatalogEntry[];
@@ -126,7 +127,7 @@
 							expanded: isDescriptionExpanded(entry.id)
 						}}
 					>
-						{entry.description}
+						{normalizeSkillDescription(entry.description)}
 					</p>
 
 					{#if overflowingDescriptions.has(entry.id)}

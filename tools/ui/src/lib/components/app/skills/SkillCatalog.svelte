@@ -108,6 +108,8 @@
 	let budgetDismissed = $state(false);
 
 	function handleSelect(entry: SkillCatalogEntry) {
+		if (selectedId === entry.id) return;
+
 		selectedEntry = entry;
 	}
 

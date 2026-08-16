@@ -20,6 +20,7 @@ import { skillsStore } from '$lib/stores/skills.svelte';
 import { settingsStore } from '$lib/stores/settings.svelte';
 import { isMobile } from '$lib/stores';
 import type { SkillCatalogEntry, SkillCatalogResponse, SkillReadResult } from '$lib/types';
+import { tick } from 'svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-svelte';
 
@@ -45,6 +46,12 @@ function makeEntry(name: string, overrides: Partial<SkillCatalogEntry> = {}): Sk
 		...overrides
 	};
 }
+
+const LONG_DESCRIPTION =
+	'This description contains enough repeated words to wrap across more than three lines in the catalog card at the default viewport width. '.repeat(
+		4
+	);
+const SHORT_DESCRIPTION = 'A short skill description.';
 
 function makeCatalog(...entries: SkillCatalogEntry[]): SkillCatalogResponse {
 	return {
@@ -484,6 +491,26 @@ describe('/skills catalog preview', () => {
 		});
 	}
 
+	function stubDescriptionMeasurement() {
+		vi.stubGlobal(
+			'ResizeObserver',
+			class {
+				constructor(private readonly callback: ResizeObserverCallback) {}
+
+				observe(node: Element) {
+					const overflowing = (node.textContent?.length ?? 0) > 100;
+					Object.defineProperties(node, {
+						scrollHeight: { configurable: true, value: overflowing ? 200 : 20 },
+						clientHeight: { configurable: true, value: overflowing ? 50 : 20 }
+					});
+					this.callback([], this as unknown as ResizeObserver);
+				}
+
+				disconnect() {}
+			}
+		);
+	}
+
 	/**
 	 * A controllable /skills/read fetch: records the request signal and, like
 	 * a real fetch, rejects the in-flight request when that signal aborts.
@@ -530,6 +557,7 @@ describe('/skills catalog preview', () => {
 	});
 
 	afterEach(async () => {
+		vi.unstubAllGlobals();
 		await page.viewport(414, 896);
 	});
 
@@ -651,6 +679,67 @@ describe('/skills catalog preview', () => {
 		await expect
 			.element(screen.getByRole('button', { name: /second-skill/ }))
 			.toHaveAttribute('aria-pressed', 'false');
+	});
+
+	it('toggles long card descriptions with a chevron disclosure', async () => {
+		stubDescriptionMeasurement();
+		const longEntry = makeEntry('long-skill', { description: LONG_DESCRIPTION });
+		const shortEntry = makeEntry('short-skill', { description: SHORT_DESCRIPTION });
+		const emptyEntry = makeEntry('empty-skill', { description: '' });
+		mockCatalogWithReads(makeCatalog(longEntry, shortEntry, emptyEntry));
+
+		const screen = await render(SkillsPageWrapper);
+
+		await vi.waitFor(() => expect(bodyText()).toContain('long-skill'));
+
+		const description = screen.getByTestId(`skill-description-${longEntry.id}`).element();
+		const showMore = screen.getByTestId(`skill-description-toggle-${longEntry.id}`);
+
+		expect(description.classList.contains('line-clamp-3')).toBe(true);
+		expect(showMore.query()).not.toBeNull();
+		expect(screen.getByTestId(`skill-description-toggle-${shortEntry.id}`).query()).toBeNull();
+		expect(screen.getByTestId(`skill-description-${emptyEntry.id}`).query()).toBeNull();
+
+		await showMore.click();
+		await vi.waitFor(() => expect(bodyText()).toContain('Show less'));
+		expect(description.classList.contains('line-clamp-3')).toBe(false);
+		expect(showMore.element().getAttribute('aria-expanded')).toBe('true');
+
+		await showMore.click();
+		await vi.waitFor(() => expect(bodyText()).toContain('Show more'));
+		expect(description.classList.contains('line-clamp-3')).toBe(true);
+		expect(showMore.element().getAttribute('aria-expanded')).toBe('false');
+	});
+
+	it('renders multiline catalog descriptions as one paragraph', async () => {
+		const entry = makeEntry('multiline-skill', {
+			description: 'This is line one.\n  This is line two.\n\nThis is the final line.'
+		});
+		mockCatalogWithReads(makeCatalog(entry));
+
+		const screen = await render(SkillsPageWrapper);
+
+		await vi.waitFor(() => expect(bodyText()).toContain('multiline-skill'));
+
+		expect(screen.getByTestId(`skill-description-${entry.id}`).element().textContent).toBe(
+			'This is line one. This is line two. This is the final line.'
+		);
+	});
+
+	it('does not select a card when its description disclosure is clicked', async () => {
+		stubDescriptionMeasurement();
+		const longEntry = makeEntry('long-skill', { description: LONG_DESCRIPTION });
+		mockCatalogWithReads(makeCatalog(longEntry));
+
+		const screen = await render(SkillsPageWrapper);
+
+		await vi.waitFor(() => expect(bodyText()).toContain('long-skill'));
+		await screen.getByTestId(`skill-description-toggle-${longEntry.id}`).click();
+		await vi.waitFor(() => expect(bodyText()).toContain('Show less'));
+		expect(screen.getByTestId('skill-detail').query()).toBeNull();
+
+		await screen.getByText('long-skill').click();
+		await vi.waitFor(() => expect(bodyText()).toContain('Content of long-skill'));
 	});
 
 	it('opens a horizontal 55/45 split with 35/30 minimums on desktop selection', async () => {
@@ -787,6 +876,30 @@ describe('/skills catalog preview', () => {
 		expect(list.classList.contains('overflow-y-auto')).toBe(true);
 		// Task 1 moved the preview's scroll container to skill-detail-body.
 		expect(detailBody.classList.contains('overflow-y-auto')).toBe(true);
+	});
+
+	it('does not re-read or replay detail selection for the already-selected card', async () => {
+		await useDesktopViewport();
+		mockCatalogWithReads(makeCatalog(makeEntry('demo-skill'), makeEntry('second-skill')));
+
+		const screen = await render(SkillsPageWrapper);
+
+		await vi.waitFor(() => expect(bodyText()).toContain('demo-skill'));
+		const card = screen.getByRole('button', { name: /demo-skill/ });
+
+		await card.click();
+		await vi.waitFor(() => expect(bodyText()).toContain('Content of demo-skill'));
+
+		const readCount = () =>
+			vi.mocked(fetch).mock.calls.filter(([url]) => String(url).includes('/skills/read')).length;
+		expect(readCount()).toBe(1);
+
+		await card.click();
+		await tick();
+		await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+
+		expect(readCount()).toBe(1);
+		expect(bodyText()).toContain('Content of demo-skill');
 	});
 
 	it('preserves the resized session split when selecting another skill', async () => {

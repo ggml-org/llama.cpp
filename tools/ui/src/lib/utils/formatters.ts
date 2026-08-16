@@ -153,3 +153,17 @@ export function formatAttachmentText(
 
 	return `\n\n--- ${label}: ${header} ---\n${content}`;
 }
+
+/**
+ * Normalizes a skill description for display: trims leading/trailing
+ * whitespace and collapses every contiguous whitespace sequence (spaces,
+ * tabs, newlines, indentation, blank lines) into a single ASCII space.
+ * Returns an empty string for whitespace-only input. Pure function; the
+ * input string is not mutated.
+ *
+ * @param description - Raw skill description
+ * @returns Normalized single-line description
+ */
+export function normalizeSkillDescription(description: string): string {
+	return description.trim().replace(/\s+/g, ' ');
+}
