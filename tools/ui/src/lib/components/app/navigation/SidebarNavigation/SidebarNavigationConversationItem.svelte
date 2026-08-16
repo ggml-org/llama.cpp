@@ -1,25 +1,23 @@
 <script lang="ts">
-	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
 	import {
-		Trash2,
-		Pencil,
-		MoreHorizontal,
 		Download,
-		Loader2,
-		Square,
 		GitBranch,
+		ListChecks,
+		Loader2,
+		MoreHorizontal,
+		Pencil,
 		Pin,
 		PinOff,
-		ListChecks
+		Square,
+		Trash2
 	} from '@lucide/svelte';
 	import { DropdownMenuActions } from '$lib/components/app';
-	import * as Tooltip from '$lib/components/ui/tooltip';
-	import { Checkbox } from '$lib/components/ui/checkbox';
-	import { FORK_TREE_DEPTH_PADDING } from '$lib/constants';
-	import { RouterService } from '$lib/services/router.service';
-	import { getAllLoadingChats } from '$lib/stores/chat.svelte';
-	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { TruncatedText } from '$lib/components/app';
+	import { Checkbox } from '$lib/components/ui/checkbox';
+	import * as Tooltip from '$lib/components/ui/tooltip';
+	import { FORK_TREE_DEPTH_PADDING, ICON_CLASS_DEFAULT, UI_DATA_ATTRS } from '$lib/constants';
+	import { RouterService } from '$lib/services/router.service';
+	import { chatStore, conversationsStore } from '$lib/stores';
 	import { onMount } from 'svelte';
 
 	interface Props {
@@ -40,24 +38,24 @@
 
 	let {
 		conversation,
+		depth = 0,
+		isActive = false,
+		isSelected = false,
+		isSelectionMode = false,
 		onDelete,
 		onEdit,
-		onSelect,
-		onStop,
-		onToggleSelect,
 		onEnterSelectionMode,
-		onSelectionClick,
 		onRowMouseDown,
-		isActive = false,
-		isSelectionMode = false,
-		isSelected = false,
-		depth = 0
+		onSelect,
+		onSelectionClick,
+		onStop,
+		onToggleSelect
 	}: Props = $props();
 
 	let renderActionsDropdown = $state(false);
 	let dropdownOpen = $state(false);
 
-	let isLoading = $derived(getAllLoadingChats().includes(conversation.id));
+	let isLoading = $derived(chatStore.getAllLoadingChats().includes(conversation.id));
 
 	function handleEdit(event: Event) {
 		event.stopPropagation();
@@ -99,6 +97,7 @@
 
 	function handleMouseOver() {
 		if (isSelectionMode) return;
+
 		renderActionsDropdown = true;
 	}
 
@@ -112,6 +111,7 @@
 
 	function handleCheckboxClick(event: MouseEvent) {
 		event.stopPropagation();
+
 		if (isSelectionMode) {
 			onSelectionClick?.(conversation.id, { shiftKey: event.shiftKey });
 		} else {
@@ -125,8 +125,10 @@
 
 	function handleCheckboxKeydown(event: KeyboardEvent) {
 		if (event.key !== ' ' && event.key !== 'Enter') return;
+
 		event.stopPropagation();
 		event.preventDefault();
+
 		if (isSelectionMode) {
 			onSelectionClick?.(conversation.id, { shiftKey: event.shiftKey });
 		} else {
@@ -152,14 +154,13 @@
 	});
 </script>
 
-<!-- svelte-ignore a11y_mouse_events_have_key_events -->
 <button
 	class="group flex min-h-9 w-full cursor-pointer items-center justify-between space-x-3 rounded-lg py-1.5 text-left transition-colors hover:bg-foreground/10 {isActive
 		? 'bg-foreground/5 text-accent-foreground'
 		: ''} {isSelected ? 'bg-primary/10 hover:bg-primary/15' : ''} {isSelectionMode
 		? 'is-selection-mode'
 		: ''} px-2"
-	data-conversation-row={conversation.id}
+	{...{ [UI_DATA_ATTRS.CONVERSATION_ROW]: conversation.id }}
 	onclick={(e) => handleSelect(e)}
 	onmouseover={handleMouseOver}
 	onmouseleave={handleMouseLeave}
@@ -278,9 +279,9 @@
 						icon: Trash2,
 						label: 'Delete',
 						onclick: handleDelete,
-						variant: 'destructive',
+						separator: true,
 						shortcut: ['shift', 'cmd', 'd'],
-						separator: true
+						variant: 'destructive'
 					}
 				]}
 			/>
