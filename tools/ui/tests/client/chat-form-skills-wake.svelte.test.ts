@@ -77,39 +77,17 @@ describe('/skills <name> wake', () => {
 		await vi.waitFor(() => expect(runTurn).toHaveBeenCalledTimes(1));
 	});
 
-	it('does not wake when the activation is not found', async () => {
-		const runTurn = vi.spyOn(chatStore, 'runTurnFromLeaf').mockResolvedValue();
+	it.each(['not-found', 'unavailable', 'persistence-failed'] as const)(
+		'does not wake when the activation %s',
+		async (reason) => {
+			const runTurn = vi.spyOn(chatStore, 'runTurnFromLeaf').mockResolvedValue();
 
-		vi.mocked(dispatchSkillActivation).mockResolvedValue({ ok: false, reason: 'not-found' });
+			vi.mocked(dispatchSkillActivation).mockResolvedValue({ ok: false, reason });
 
-		await selectSkill('frontend-design');
+			await selectSkill('frontend-design');
 
-		await vi.waitFor(() => expect(vi.mocked(dispatchSkillActivation)).toHaveBeenCalled());
-		expect(runTurn).not.toHaveBeenCalled();
-	});
-
-	it('does not wake when the activation is unavailable', async () => {
-		const runTurn = vi.spyOn(chatStore, 'runTurnFromLeaf').mockResolvedValue();
-
-		vi.mocked(dispatchSkillActivation).mockResolvedValue({ ok: false, reason: 'unavailable' });
-
-		await selectSkill('frontend-design');
-
-		await vi.waitFor(() => expect(vi.mocked(dispatchSkillActivation)).toHaveBeenCalled());
-		expect(runTurn).not.toHaveBeenCalled();
-	});
-
-	it('does not wake when the activation persistence fails', async () => {
-		const runTurn = vi.spyOn(chatStore, 'runTurnFromLeaf').mockResolvedValue();
-
-		vi.mocked(dispatchSkillActivation).mockResolvedValue({
-			ok: false,
-			reason: 'persistence-failed'
-		});
-
-		await selectSkill('frontend-design');
-
-		await vi.waitFor(() => expect(vi.mocked(dispatchSkillActivation)).toHaveBeenCalled());
-		expect(runTurn).not.toHaveBeenCalled();
-	});
+			await vi.waitFor(() => expect(vi.mocked(dispatchSkillActivation)).toHaveBeenCalled());
+			expect(runTurn).not.toHaveBeenCalled();
+		}
+	);
 });

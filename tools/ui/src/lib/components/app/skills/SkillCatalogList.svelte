@@ -26,12 +26,8 @@
 		event.preventDefault();
 		event.stopPropagation();
 
-		const next = new SvelteSet(expandedDescriptions);
-
-		if (next.has(id)) next.delete(id);
-		else next.add(id);
-
-		expandedDescriptions = next;
+		if (expandedDescriptions.has(id)) expandedDescriptions.delete(id);
+		else expandedDescriptions.add(id);
 	}
 
 	function measureDescription(node: HTMLElement, params: { id: string; expanded: boolean }) {
@@ -47,12 +43,8 @@
 
 			if (alreadyTracked === overflowing) return;
 
-			const next = new SvelteSet(overflowingDescriptions);
-
-			if (overflowing) next.add(current.id);
-			else next.delete(current.id);
-
-			overflowingDescriptions = next;
+			if (overflowing) overflowingDescriptions.add(current.id);
+			else overflowingDescriptions.delete(current.id);
 		}
 
 		observer?.observe(node);
@@ -61,10 +53,7 @@
 		return {
 			destroy() {
 				observer?.disconnect();
-				const next = new SvelteSet(overflowingDescriptions);
-
-				next.delete(current.id);
-				overflowingDescriptions = next;
+				overflowingDescriptions.delete(current.id);
 			},
 			update(next: { id: string; expanded: boolean }) {
 				current = next;

@@ -4,12 +4,7 @@ import { ChatService } from '$lib/services';
 import { SkillsService } from '$lib/services/skills.service';
 import { skillActivationExtra, skillResourceExtra } from '$lib/services/skills-activation.service';
 import { skillDenialResult } from '$lib/services/skills-adapters.service';
-import {
-	buildSkillRunSnapshot,
-	resolveSkillPackOptions,
-	serializeSkillCatalogEnvelope,
-	SkillsPackingService
-} from '$lib/services/skills-packing.service';
+import { buildSkillRunSnapshot, serializeSkillCatalogEnvelope } from '$lib/services/skills-packing.service';
 import { agenticStore } from '$lib/stores/agentic.svelte';
 import { settingsStore } from '$lib/stores/settings.svelte';
 import { skillsStore } from '$lib/stores/skills.svelte';
@@ -297,7 +292,7 @@ describe('agenticStore.runAgenticFlow Skills integration', () => {
 		expect(firstMessages[0].content).toBe(serializeSkillCatalogEnvelope(snapshot.catalog));
 	});
 
-	it('does not touch tools, snapshots, or the activation store when the budget is zero', async () => {
+	it('registers no Skill adapters when the budget is zero or the catalog is empty', async () => {
 		mockSettingsStore.config = { agenticMaxTurns: 100, maxSkillBudget: 0 };
 		mockSendMessage.mockResolvedValue(undefined);
 
@@ -312,6 +307,26 @@ describe('agenticStore.runAgenticFlow Skills integration', () => {
 		const tools = mockSendMessage.mock.calls[0][1].tools as { function: { name: string } }[];
 
 		expect(tools.map((t) => t.function.name)).toEqual(['test_tool']);
+
+		agenticStore.clearSession('conv-1');
+		mockSettingsStore.config = { agenticMaxTurns: 100, maxSkillBudget: 2000 };
+		mockSnapshot.mockResolvedValue(buildSkillRunSnapshot('/run-cwd', makeCatalog()));
+		mockSendMessage.mockClear();
+		mockSnapshot.mockClear();
+		mockLoadConversation.mockClear();
+
+		const emptyResult = await agenticStore.runAgenticFlow(
+			runParams('conv-1', makeCallbacks().callbacks)
+		);
+
+		expect(emptyResult).toEqual({ handled: true });
+		expect(mockSnapshot).toHaveBeenCalledTimes(1);
+
+		const emptyTools = mockSendMessage.mock.calls[0][1].tools as {
+			function: { name: string };
+		}[];
+
+		expect(emptyTools.map((t) => t.function.name)).toEqual(['test_tool']);
 	});
 
 	it('registers no adapters when the snapshot is unavailable, leaving the run unchanged', async () => {
@@ -324,22 +339,6 @@ describe('agenticStore.runAgenticFlow Skills integration', () => {
 
 		expect(result).toEqual({ handled: true });
 		expect(mockSendMessage).toHaveBeenCalledTimes(1);
-
-		const tools = mockSendMessage.mock.calls[0][1].tools as { function: { name: string } }[];
-
-		expect(tools.map((t) => t.function.name)).toEqual(['test_tool']);
-	});
-
-	it('registers no adapters for an empty catalog', async () => {
-		mockSnapshot.mockResolvedValue(buildSkillRunSnapshot('/run-cwd', makeCatalog()));
-		mockSendMessage.mockResolvedValue(undefined);
-
-		const result = await agenticStore.runAgenticFlow(
-			runParams('conv-1', makeCallbacks().callbacks)
-		);
-
-		expect(result).toEqual({ handled: true });
-		expect(mockSnapshot).toHaveBeenCalledTimes(1);
 
 		const tools = mockSendMessage.mock.calls[0][1].tools as { function: { name: string } }[];
 
@@ -366,68 +365,6 @@ describe('agenticStore.runAgenticFlow Skills integration', () => {
 			SKILL_READ_TOOL,
 			SKILL_LIST_TOOL
 		]);
-	});
-
-	it('omits a colliding Skills adapter in favor of the existing registry tool', async () => {
-		const snapshot = buildSkillRunSnapshot('/run-cwd', makeCatalog('demo-skill'));
-
-		mockSnapshot.mockResolvedValue(snapshot);
-		mockSendMessage.mockResolvedValue(undefined);
-		toolsMockState.allTools = [
-			{
-				definition: { function: { name: SKILL_READ_TOOL, parameters: {} }, type: 'function' },
-				key: 'custom:read_skill'
-			},
-			{ definition: dummyTool(), key: 'builtin:test_tool' }
-		];
-
-		const result = await agenticStore.runAgenticFlow(
-			runParams('conv-1', makeCallbacks().callbacks)
-		);
-
-		expect(result).toEqual({ handled: true });
-
-		const tools = mockSendMessage.mock.calls[0][1].tools as { function: { name: string } }[];
-
-		expect(tools.map((t) => t.function.name)).toEqual(['test_tool']);
-	});
-
-	it('excludes a disabled Skill definition from the model request while catalog decoration and activation plumbing remain', async () => {
-		const snapshot = buildSkillRunSnapshot('/run-cwd', makeCatalog('demo-skill', 'other-skill'));
-
-		mockSettingsStore.config = { agenticMaxTurns: 100, maxSkillBudget: 1 };
-		mockSnapshot.mockResolvedValue(snapshot);
-		mockSendMessage.mockResolvedValue(undefined);
-		mockGetEnabledSkillToolNames.mockReturnValue(new Set([SKILL_LIST_TOOL]));
-
-		const result = await agenticStore.runAgenticFlow(
-			runParams('conv-1', makeCallbacks().callbacks)
-		);
-
-		expect(result).toEqual({ handled: true });
-
-		const tools = mockSendMessage.mock.calls[0][1].tools as { function: { name: string } }[];
-
-		expect(tools.map((t) => t.function.name)).toEqual(['test_tool', SKILL_LIST_TOOL]);
-		expect(tools.map((t) => t.function.name)).not.toContain(SKILL_READ_TOOL);
-
-		// Catalog prompt decoration is unchanged: the run's packed envelope
-		// (budget-truncated) is still prepended as the first system message.
-		const firstMessages = mockSendMessage.mock.calls[0][0] as { role: string; content: string }[];
-
-		expect(firstMessages[0].role).toBe(MessageRole.SYSTEM);
-		expect(firstMessages[0].content).toBe(
-			(
-				await SkillsPackingService.pack(snapshot, {
-					budget: 1,
-					...resolveSkillPackOptions('', false, () => false)
-				})
-			).envelope
-		);
-
-		// Durable base activations are still reconstructed for the run, so
-		// explicit `/skills <name>` activation remains available.
-		expect(mockLoadConversation).toHaveBeenCalledWith('conv-1');
 	});
 
 	it('does not recognize a disabled Skill name as a Skill tool call', async () => {

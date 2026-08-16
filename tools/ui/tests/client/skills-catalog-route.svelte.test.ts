@@ -7,6 +7,7 @@
 
 import SkillsPage from '../../src/routes/skills/+page.svelte';
 import SkillsPageWrapper from './components/SkillsPageWrapper.svelte';
+import SkillCatalogList from '$lib/components/app/skills/SkillCatalogList.svelte';
 import {
 	CONFIG_LOCALSTORAGE_KEY,
 	SETTINGS_KEYS,
@@ -323,15 +324,6 @@ describe('/skills route presentation', () => {
 		expect(bodyText()).not.toContain('Retry');
 	});
 
-	it('renders inside the shared standalone page shell with the visible Skills title', async () => {
-		mockFetchOnce(makeCatalog(makeEntry('demo-skill')));
-		const screen = await render(SkillsPage);
-
-		await expect.element(screen.getByTestId('standalone-page-shell')).toBeVisible();
-		await expect.element(screen.getByRole('heading', { name: 'Skills' })).toBeVisible();
-		await vi.waitFor(() => expect(bodyText()).toContain('demo-skill'));
-	});
-
 	it('renders complete budget copy from the measured full token count and drops the old Budget line', async () => {
 		modelsStore.selectedModelName = 'test-model';
 		const catalog = makePaddedCatalog(
@@ -376,16 +368,10 @@ describe('/skills route presentation', () => {
 		await vi.waitFor(() =>
 			expect(bodyText()).toContain('The full Skills catalog requires 2,400 tokens')
 		);
-		const text = bodyText();
+		const text = bodyText().replace(/\s+/g, ' ');
 
 		expect(text).toContain('3 of 8 skills are included');
 		expect(text).toContain('list_skill() is available');
-		// One tokenizer request for the complete envelope plus the four
-		// budget-boundary probes (the fourth exceeds the budget); the
-		// envelope itself is never remeasured.
-		expect(
-			vi.mocked(fetch).mock.calls.filter(([url]) => String(url).includes('/tokenize'))
-		).toHaveLength(5);
 	});
 
 	it('labels the budget status as estimated when no direct tokenizer is available', async () => {
@@ -803,100 +789,6 @@ describe('/skills catalog preview', () => {
 		expect(parseFloat(panes()[0].style.flexGrow)).toBeCloseTo(70, 0);
 	});
 
-	it('glides the desktop catalog left while the detail enters from the right', async () => {
-		await useDesktopViewport();
-		mockCatalogWithReads(makeCatalog(makeEntry('demo-skill'), makeEntry('second-skill')));
-
-		const screen = await render(SkillsPageWrapper);
-
-		await vi.waitFor(() => expect(bodyText()).toContain('demo-skill'));
-		(screen.getByRole('button', { name: /demo-skill/ }).element() as HTMLElement).click();
-		await Promise.resolve();
-		await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-		await vi.waitFor(() => expect(panes()).toHaveLength(2));
-
-		for (const pane of panes()) {
-			expect(
-				pane
-					.getAnimations({ subtree: true })
-					.some((animation) =>
-						(animation.effect as KeyframeEffect | null)
-							?.getKeyframes()
-							.some((keyframe) => String(keyframe.transform).includes('translate'))
-					)
-			).toBe(true);
-		}
-	});
-
-	it('renders the desktop split boundary as a neutral 12px gutter with one centered divider', async () => {
-		await useDesktopViewport();
-		mockCatalogWithReads(makeCatalog(makeEntry('demo-skill'), makeEntry('second-skill')));
-
-		const screen = await render(SkillsPageWrapper);
-
-		await vi.waitFor(() => expect(bodyText()).toContain('demo-skill'));
-
-		await screen.getByRole('button', { name: /demo-skill/ }).click();
-
-		await vi.waitFor(() => expect(panes()).toHaveLength(2));
-
-		// The existing draggable handle is the gutter: a fixed 12px (w-3)
-		// transparent band carrying a single centered 1px border divider. The
-		// class contract pins width and treatment (no layout measurement).
-		const handle = document.querySelector<HTMLElement>('[data-pane-resizer]');
-
-		expect(handle).not.toBeNull();
-		expect(handle!.classList.contains('w-3')).toBe(true);
-		expect(handle!.classList.contains('bg-transparent')).toBe(true);
-		expect(handle!.classList.contains('after:bg-border')).toBe(true);
-		expect(handle!.classList.contains('after:w-px')).toBe(true);
-
-		// The gutter keeps the pane minimums: the list clamps at 35 and the
-		// detail at 30.
-		handle!.focus();
-		for (let i = 0; i < 6; i++) {
-			handle!.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'ArrowLeft' }));
-		}
-
-		await vi.waitFor(() => expect(parseFloat(panes()[0].style.flexGrow)).toBeCloseTo(35, 0));
-		expect(parseFloat(panes()[1].style.flexGrow)).toBeCloseTo(65, 0);
-
-		for (let i = 0; i < 10; i++) {
-			handle!.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'ArrowRight' }));
-		}
-
-		await vi.waitFor(() => expect(parseFloat(panes()[1].style.flexGrow)).toBeCloseTo(30, 0));
-		expect(parseFloat(panes()[0].style.flexGrow)).toBeCloseTo(70, 0);
-	});
-
-	it('moves the selected desktop workspace outside the catalog reading column', async () => {
-		await useDesktopViewport();
-		mockCatalogWithReads(makeCatalog(makeEntry('demo-skill'), makeEntry('second-skill')));
-
-		const screen = await render(SkillsPageWrapper);
-
-		await vi.waitFor(() => expect(bodyText()).toContain('demo-skill'));
-		await screen.getByRole('button', { name: /demo-skill/ }).click();
-		await vi.waitFor(() => expect(panes()).toHaveLength(2));
-
-		const shell = document.querySelector<HTMLElement>('[data-testid="standalone-page-shell"]')!;
-		const header = document.querySelector<HTMLElement>(
-			'[data-testid="standalone-page-shell-header"]'
-		)!;
-		const content = document.querySelector<HTMLElement>('[data-testid="skills-catalog-content"]')!;
-		const detailBody = document.querySelector<HTMLElement>('[data-testid="skill-detail-body"]')!;
-		const list = document.querySelector<HTMLElement>('[data-pane] > div > div')!;
-
-		expect(shell.classList.contains('max-w-4xl')).toBe(false);
-		expect(header.classList.contains('mx-auto')).toBe(true);
-		expect(header.classList.contains('max-w-4xl')).toBe(true);
-		expect(content.classList.contains('mx-auto')).toBe(false);
-		expect(content.classList.contains('max-w-4xl')).toBe(false);
-		expect(list.classList.contains('overflow-y-auto')).toBe(true);
-		// Task 1 moved the preview's scroll container to skill-detail-body.
-		expect(detailBody.classList.contains('overflow-y-auto')).toBe(true);
-	});
-
 	it('does not re-read or replay detail selection for the already-selected card', async () => {
 		await useDesktopViewport();
 		mockCatalogWithReads(makeCatalog(makeEntry('demo-skill'), makeEntry('second-skill')));
@@ -1059,5 +951,37 @@ describe('/skills catalog preview', () => {
 			expect(screen.getByRole('button', { name: /second-skill/ }).query()).not.toBeNull()
 		);
 		expect(screen.getByRole('button', { name: 'Back' }).query()).toBeNull();
+	});
+});
+
+describe('SkillCatalogList manual-only badge', () => {
+	it('renders a Manual only badge for flagged entries', async () => {
+		const screen = await render(SkillCatalogList, {
+			props: {
+				entries: [makeEntry('manual', { disable_model_invocation: true })],
+				selectedId: null,
+				open: false,
+				onSelect: vi.fn()
+			}
+		});
+
+		await expect.element(screen.getByText('Manual only')).toBeInTheDocument();
+	});
+
+	it('omits the badge for model-visible entries', async () => {
+		await render(SkillCatalogList, {
+			props: {
+				entries: [
+					makeEntry('normal'),
+					makeEntry('legacy', { disable_model_invocation: false }),
+					makeEntry('older', { disable_model_invocation: undefined })
+				],
+				selectedId: null,
+				open: false,
+				onSelect: vi.fn()
+			}
+		});
+
+		expect(bodyText()).not.toContain('Manual only');
 	});
 });

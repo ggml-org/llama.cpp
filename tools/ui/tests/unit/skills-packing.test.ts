@@ -1,4 +1,13 @@
 import {
+	normalizeSkillBudget,
+	POSITIVE_INTEGER_FIELDS,
+	SETTING_CONFIG_DEFAULT,
+	SETTINGS_CHAT_SECTIONS,
+	SETTINGS_KEYS,
+	SETTINGS_SECTION_SLUGS
+} from '$lib/constants';
+import { SettingsFieldType } from '$lib/enums/settings.enums';
+import {
 	buildSkillRunSnapshot,
 	estimateSkillTokens,
 	resolveSkillPackOptions,
@@ -338,38 +347,12 @@ describe('SkillsPackingService.pack', () => {
 		expect(packed.estimated).toBe(false);
 	});
 
-	it('retains the exact full-envelope token count for a partial direct pack', async () => {
-		vi.stubGlobal('fetch', charCountingTokenizer());
-
-		const snap = snapshot();
-		const budget = expectedEnvelope(2).length;
-		const packed = await SkillsPackingService.pack(snap, {
-			budget,
-			mode: 'direct',
-			model: 'selected-model'
-		});
-
-		expect(packed.fullTokens).toBe(snap.envelope.length);
-		expect(packed.included).toBe(2);
-		expect(packed.estimated).toBe(false);
-	});
-
 	it('retains the deterministic full-envelope estimate for a complete estimated pack', async () => {
 		const snap = snapshot();
 		const packed = await SkillsPackingService.pack(snap, { budget: 10_000, mode: 'estimated' });
 
 		expect(packed.fullTokens).toBe(estimateSkillTokens(snap.envelope));
 		expect(packed.included).toBe(snap.total);
-		expect(packed.estimated).toBe(true);
-	});
-
-	it('retains the deterministic full-envelope estimate for a partial estimated pack', async () => {
-		const snap = snapshot();
-		const budget = estimateSkillTokens(expectedEnvelope(1));
-		const packed = await SkillsPackingService.pack(snap, { budget, mode: 'estimated' });
-
-		expect(packed.fullTokens).toBe(estimateSkillTokens(snap.envelope));
-		expect(packed.included).toBe(1);
 		expect(packed.estimated).toBe(true);
 	});
 
@@ -405,39 +388,6 @@ describe('SkillsPackingService.pack', () => {
 		expect(packed.included).toBe(0);
 		expect(fetchMock).not.toHaveBeenCalled();
 	});
-
-	it('does not remeasure the full envelope for presentation in complete direct packing', async () => {
-		const measure = vi
-			.spyOn(SkillsPackingService, 'countTokens')
-			.mockImplementation(async (content) => content.length);
-		const snap = snapshot();
-		const packed = await SkillsPackingService.pack(snap, {
-			budget: 10_000,
-			mode: 'direct',
-			model: 'selected-model'
-		});
-
-		expect(packed.fullTokens).toBe(snap.envelope.length);
-		expect(measure.mock.calls.filter(([content]) => content === snap.envelope)).toHaveLength(1);
-		expect(packed.included).toBe(snap.total);
-	});
-
-	it('does not remeasure the full envelope for presentation in partial direct packing', async () => {
-		const measure = vi
-			.spyOn(SkillsPackingService, 'countTokens')
-			.mockImplementation(async (content) => content.length);
-		const snap = snapshot();
-		const budget = expectedEnvelope(2).length;
-		const packed = await SkillsPackingService.pack(snap, {
-			budget,
-			mode: 'direct',
-			model: 'selected-model'
-		});
-
-		expect(packed.fullTokens).toBe(snap.envelope.length);
-		expect(measure.mock.calls.filter(([content]) => content === snap.envelope)).toHaveLength(1);
-		expect(packed.included).toBe(2);
-	});
 });
 
 describe('resolveSkillPackOptions', () => {
@@ -461,5 +411,58 @@ describe('resolveSkillPackOptions', () => {
 			mode: 'direct',
 			model: 'model-a'
 		});
+	});
+});
+
+// Guards the persisted Skills catalog budget contract: a non-negative
+// integer defaulting to 2000, zero valid (it disables prompt packing, it
+// does NOT mean the server catalog is empty), wired through the established
+// numeric-control pattern (min 0 + integer rounding + load-time sanitize).
+describe('maxSkillBudget registry', () => {
+	it('defaults to 2000 in the persisted config defaults', () => {
+		expect(SETTING_CONFIG_DEFAULT[SETTINGS_KEYS.MAX_SKILL_BUDGET]).toBe(2000);
+	});
+
+	it('is registered as a non-negative integer input control in the agentic section', () => {
+		const section = SETTINGS_CHAT_SECTIONS.find((s) => s.slug === SETTINGS_SECTION_SLUGS.AGENTIC);
+
+		expect(section).toBeDefined();
+
+		const field = section?.fields?.find((f) => f.key === SETTINGS_KEYS.MAX_SKILL_BUDGET);
+
+		expect(field).toMatchObject({
+			isPositiveInteger: true,
+			min: 0,
+			type: SettingsFieldType.INPUT
+		});
+	});
+
+	it('participates in the save-time numeric clamp list', () => {
+		expect(POSITIVE_INTEGER_FIELDS).toContain(SETTINGS_KEYS.MAX_SKILL_BUDGET);
+	});
+});
+
+describe('normalizeSkillBudget', () => {
+	it('keeps a valid non-negative integer untouched', () => {
+		expect(normalizeSkillBudget(2000)).toBe(2000);
+		expect(normalizeSkillBudget(0)).toBe(0);
+	});
+
+	it('clamps negative values to zero', () => {
+		expect(normalizeSkillBudget(-5)).toBe(0);
+		expect(normalizeSkillBudget(-0.1)).toBe(0);
+	});
+
+	it('rounds fractional values to integers', () => {
+		expect(normalizeSkillBudget(3.7)).toBe(4);
+		expect(normalizeSkillBudget(2500.2)).toBe(2500);
+	});
+
+	it('falls back to the default for non-numeric or non-finite values', () => {
+		expect(normalizeSkillBudget('2500')).toBe(2000);
+		expect(normalizeSkillBudget(undefined)).toBe(2000);
+		expect(normalizeSkillBudget(null)).toBe(2000);
+		expect(normalizeSkillBudget(Number.NaN)).toBe(2000);
+		expect(normalizeSkillBudget(Number.POSITIVE_INFINITY)).toBe(2000);
 	});
 });

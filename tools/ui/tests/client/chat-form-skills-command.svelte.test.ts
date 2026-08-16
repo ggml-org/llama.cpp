@@ -5,7 +5,16 @@
 // `/skills` stays on the command list, where Enter navigates to the catalog.
 // Selecting a skill dispatches the trimmed name exactly once (server base
 // read + durable activation); mid-typing never dispatches.
+//
+// The picker itself guards the safe catalog-name contract: candidates are
+// ordered prefix-first then substring in source catalog order, rows expose
+// only the safe display facts (name, description, scope, provider) - never
+// the opaque id, instruction facts, resources, or raw catalog XML - and
+// keyboard / pointer selection reports the exact skill name. The picker
+// receives everything via props; it must never fetch, call SkillsService,
+// resolve names, or render XML itself.
 
+import ChatFormSkillPicker from '$lib/components/app/chat/ChatForm/ChatFormPickers/ChatFormSkillPicker.svelte';
 import ChatFormPickersHarness from './components/ChatFormPickersHarness.svelte';
 import ChatFormSkillPickerHarness from './components/ChatFormSkillPickerHarness.svelte';
 import ChatFormTestWrapper from './components/ChatFormTestWrapper.svelte';
@@ -36,6 +45,28 @@ function skillsCommand(pickers: { availableCommands: ChatFormCommand[] }): ChatF
 	if (!command) throw new Error('skills command missing');
 
 	return command;
+}
+
+function keydown(key: string): KeyboardEvent {
+	return new KeyboardEvent('keydown', { bubbles: true, cancelable: true, key });
+}
+
+function renderPicker(query: string) {
+	const onClose = vi.fn();
+	const onSelect = vi.fn();
+	const screen = render(ChatFormSkillPicker, {
+		isOpen: true,
+		onClose,
+		onSelect,
+		query,
+		skills: [skill('alpha'), skill('format-alpha'), skill('beta')]
+	});
+
+	return { onClose, onSelect, screen };
+}
+
+function rows(): HTMLElement[] {
+	return Array.from(document.querySelectorAll<HTMLElement>('[data-picker-index]'));
 }
 
 describe('/skills command', () => {
@@ -99,6 +130,18 @@ describe('/skills command', () => {
 		expect(screen.component.getCalls().some((c) => c.startsWith('dispatchSkillsCommand'))).toBe(
 			false
 		);
+
+		// The token doubles as the search field: typing further narrows the
+		// query and never re-dispatches or reopens the command picker.
+		screen.component.type('/skills frontend');
+		await tick();
+
+		expect(pickers.skillQuery).toBe('frontend');
+		expect(pickers.isSkillPickerOpen).toBe(true);
+		expect(pickers.isCommandPickerOpen).toBe(false);
+		expect(screen.component.getCalls().some((c) => c.startsWith('dispatchSkillsCommand'))).toBe(
+			false
+		);
 	});
 
 	it('dispatches the named command exactly once on explicit skill selection and clears the buffer', async () => {
@@ -112,6 +155,12 @@ describe('/skills command', () => {
 		const pickers = screen.component.getPickers();
 
 		expect(pickers.isSkillPickerOpen).toBe(true);
+
+		// Mid-typing the token never dispatches and never clears the buffer.
+		expect(screen.component.getValue()).toBe('/skills   frontend-design');
+		expect(screen.component.getCalls().some((c) => c.startsWith('dispatchSkillsCommand'))).toBe(
+			false
+		);
 
 		pickers.handleSkillSelect('frontend-design');
 		await tick();
@@ -163,51 +212,6 @@ describe('/skills command', () => {
 		expect(pickers.skillQuery).toBe('other');
 	});
 
-	it('never dispatches or clears the buffer while the token is being typed', async () => {
-		const screen = render(ChatFormPickersHarness);
-
-		await tick();
-
-		screen.component.type('/skills add-new-model');
-		await tick();
-
-		const pickers = screen.component.getPickers();
-
-		expect(screen.component.getValue()).toBe('/skills add-new-model');
-		expect(screen.component.getCalls().some((c) => c.startsWith('dispatchSkillsCommand'))).toBe(
-			false
-		);
-		expect(pickers.isSkillPickerOpen).toBe(true);
-		expect(pickers.skillQuery).toBe('add-new-model');
-		expect(pickers.isCommandPickerOpen).toBe(false);
-	});
-
-	it('syncs skillQuery and keeps the picker open while typing /skills after auto-open', async () => {
-		const screen = render(ChatFormPickersHarness);
-
-		await tick();
-
-		screen.component.type('/skills frontend-design');
-		await tick();
-
-		const pickers = screen.component.getPickers();
-
-		expect(pickers.isSkillPickerOpen).toBe(true);
-		expect(pickers.skillQuery).toBe('frontend-design');
-
-		// The token doubles as the search field: typing narrows the query
-		// and never re-dispatches or reopens the command picker.
-		screen.component.type('/skills frontend');
-		await tick();
-
-		expect(pickers.skillQuery).toBe('frontend');
-		expect(pickers.isSkillPickerOpen).toBe(true);
-		expect(pickers.isCommandPickerOpen).toBe(false);
-		expect(screen.component.getCalls().some((c) => c.startsWith('dispatchSkillsCommand'))).toBe(
-			false
-		);
-	});
-
 	it('closes and resets the Skills picker when the token is edited away from /skills', async () => {
 		const screen = render(ChatFormPickersHarness);
 
@@ -231,40 +235,6 @@ describe('/skills command', () => {
 		expect(screen.component.getValue()).toBe('/cwd foo');
 		expect(screen.component.getCalls().some((c) => c.startsWith('dispatchSkillsCommand'))).toBe(
 			false
-		);
-	});
-
-	it('falls back to the command list when the trailing space is deleted', async () => {
-		const screen = render(ChatFormPickersHarness);
-
-		await tick();
-
-		screen.component.type('/skills ');
-		await tick();
-
-		const pickers = screen.component.getPickers();
-
-		expect(pickers.isSkillPickerOpen).toBe(true);
-
-		// Deleting the trailing space turns `/skills ` back into the command
-		// trigger: Enter now navigates to the catalog instead.
-		screen.component.type('/skills');
-		await tick();
-
-		expect(pickers.isSkillPickerOpen).toBe(false);
-		expect(pickers.skillQuery).toBe('');
-		expect(pickers.isCommandPickerOpen).toBe(true);
-		expect(screen.component.getValue()).toBe('/skills');
-		expect(screen.component.getCalls().some((c) => c.startsWith('dispatchSkillsCommand'))).toBe(
-			false
-		);
-
-		pickers.handleCommandSelect(skillsCommand(pickers));
-		await tick();
-
-		expect(screen.component.getValue()).toBe('');
-		expect(screen.component.getCalls().filter((c) => c === 'dispatchSkillsCommand:')).toHaveLength(
-			1
 		);
 	});
 
@@ -308,20 +278,9 @@ describe('/skills command', () => {
 	});
 });
 
-// Composition boundary for the `ChatFormPickers` Skills props: candidates
-// arrive only as a `SkillCatalogEntry[]` prop (the ready CWD slot is derived
-// in `ChatForm.svelte` and exercised by the live browser smoke test) and
-// selection reports exactly the chosen skill name. The picker itself must
-// never issue a catalog request.
-describe('ChatFormSkillPickerHarness (ChatFormPickers Skills props)', () => {
-	function rows(): HTMLElement[] {
-		return Array.from(document.querySelectorAll<HTMLElement>('[data-picker-index]'));
-	}
-
-	it('renders the two catalog candidates as the displayed picker rows', async () => {
-		render(ChatFormSkillPickerHarness, {
-			skills: [skill('alpha'), skill('format-alpha')]
-		});
+describe('ChatFormSkillPicker', () => {
+	it('lists prefix matches before substring matches in source order', async () => {
+		renderPicker('alpha');
 
 		await tick();
 
@@ -330,30 +289,105 @@ describe('ChatFormSkillPickerHarness (ChatFormPickers Skills props)', () => {
 		expect(rowTexts).toHaveLength(2);
 		expect(rowTexts[0]).toContain('alpha description');
 		expect(rowTexts[0]).not.toContain('format-alpha');
-		expect(rowTexts[1]).toContain('format-alpha description');
+		expect(rowTexts[1]).toContain('format-alpha');
 	});
 
-	it('records exactly the selected candidate name', async () => {
-		const screen = render(ChatFormSkillPickerHarness, {
-			skills: [skill('alpha'), skill('format-alpha')]
-		});
+	it('renders only safe display facts, never id, instruction, or catalog XML', async () => {
+		renderPicker('alpha');
+
+		await tick();
+
+		const bodyText = document.body.textContent ?? '';
+
+		expect(bodyText).toContain('alpha');
+		expect(bodyText).toContain('format-alpha');
+		expect(bodyText).not.toContain('opaque-alpha');
+		expect(bodyText).not.toContain('opaque-format-alpha');
+		expect(bodyText).not.toContain('<skill />');
+	});
+
+	it('selects the exact name with ArrowDown + Enter and closes', async () => {
+		const { onClose, onSelect, screen } = renderPicker('alpha');
+
+		await tick();
+
+		// The first candidate is pre-highlighted on open; one ArrowDown
+		// moves to the second candidate (prefix first: alpha, then
+		// format-alpha) and Enter reports the exact name.
+		screen.component.handleKeydown(keydown('ArrowDown'));
+		screen.component.handleKeydown(keydown('Enter'));
+		await tick();
+
+		expect(onSelect).toHaveBeenCalledTimes(1);
+		expect(onSelect).toHaveBeenCalledWith('format-alpha');
+		expect(onClose).toHaveBeenCalledTimes(1);
+	});
+
+	it('selects the exact name on row click', async () => {
+		const { onClose, onSelect } = renderPicker('alpha');
 
 		await tick();
 
 		rows()[1].click();
 		await tick();
 
-		expect(screen.component.getSelectedName()).toBe('format-alpha');
+		expect(onSelect).toHaveBeenCalledTimes(1);
+		expect(onSelect).toHaveBeenCalledWith('format-alpha');
+		expect(onClose).toHaveBeenCalledTimes(1);
 	});
 
-	it('shows the no-match state and records no selection when the catalog is empty', async () => {
-		const screen = render(ChatFormSkillPickerHarness, { skills: [] });
+	it('closes on Escape without selecting', async () => {
+		const { onClose, onSelect, screen } = renderPicker('alpha');
+
+		await tick();
+
+		screen.component.handleKeydown(keydown('Escape'));
+		await tick();
+
+		expect(onClose).toHaveBeenCalledTimes(1);
+		expect(onSelect).not.toHaveBeenCalled();
+	});
+
+	it('shows the empty message and does not select for a no-match query', async () => {
+		const { onClose, onSelect, screen } = renderPicker('missing');
 
 		await tick();
 
 		expect(rows()).toHaveLength(0);
 		expect(document.body.textContent).toContain('No matching skills');
+
+		// Enter is not consumed without a selectable row, so the caller's
+		// Enter-to-submit still runs; nothing is selected or closed.
+		expect(screen.component.handleKeydown(keydown('Enter'))).toBe(false);
+		expect(onSelect).not.toHaveBeenCalled();
+		expect(onClose).not.toHaveBeenCalled();
+	});
+});
+
+// Composition boundary for the `ChatFormPickers` Skills props: candidates
+// arrive only as a `SkillCatalogEntry[]` prop (the ready CWD slot is derived
+// in `ChatForm.svelte` and exercised by the live browser smoke test) and
+// selection reports exactly the chosen skill name. The picker itself must
+// never issue a catalog request.
+describe('ChatFormSkillPickerHarness (ChatFormPickers Skills props)', () => {
+	it('renders the controlled candidates and shows the no-match state when the catalog is empty', async () => {
+		const empty = render(ChatFormSkillPickerHarness, { skills: [] });
+
+		await tick();
+
+		expect(rows()).toHaveLength(0);
+		expect(document.body.textContent).toContain('No matching skills');
+		expect(empty.component.getSelectedName()).toBeNull();
+
+		const screen = render(ChatFormSkillPickerHarness, {
+			skills: [skill('alpha'), skill('format-alpha')]
+		});
+
+		await tick();
+
+		expect(rows()).toHaveLength(2);
 		expect(screen.component.getSelectedName()).toBeNull();
+		expect(rows()[0].textContent).toContain('alpha description');
 	});
 });
 
@@ -399,10 +433,10 @@ describe('ChatForm no-CWD ready catalog slot', () => {
 
 		// Typing the token auto-opens the picker with the ready no-CWD
 		// catalog, prefix match first.
-		const rows = Array.from(document.querySelectorAll<HTMLElement>('[data-picker-index]'));
+		const candidateRows = Array.from(document.querySelectorAll<HTMLElement>('[data-picker-index]'));
 
-		expect(rows).toHaveLength(2);
-		expect(rows[0].textContent).toContain('frontend-design');
-		expect(rows[1].textContent).toContain('format-frontend-design');
+		expect(candidateRows).toHaveLength(2);
+		expect(candidateRows[0].textContent).toContain('frontend-design');
+		expect(candidateRows[1].textContent).toContain('format-frontend-design');
 	});
 });
