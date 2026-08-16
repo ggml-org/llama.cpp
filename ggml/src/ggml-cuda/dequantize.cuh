@@ -119,6 +119,34 @@ static __device__ __forceinline__ void dequantize_q8_0(const void * vx, const in
     v.y *= d;
 }
 
+//================================== non-linear quants
+
+static __device__ __forceinline__ void dequantize_iq2_nl(const void * vx, const int64_t ib, const int iqs, float2 & v){
+    const block_iq2_nl * x = (const block_iq2_nl *) vx;
+
+    const float d = (float) x[ib].d;
+
+    // the layout is planar: element p sits in group p/(QK2_NL/4), byte p%(QK2_NL/4).
+    // iqs pairs p with p + QK2_NL/2, so both values come from the same qs byte
+    const int j = iqs % (QK2_NL/4);
+    const int g = iqs / (QK2_NL/4);
+
+    v.x = d * iq2_nl_value(x[ib].qs, j, g);
+    v.y = d * iq2_nl_value(x[ib].qs, j, g + 2);
+}
+
+static __device__ __forceinline__ void dequantize_iq3_nl(const void * vx, const int64_t ib, const int iqs, float2 & v){
+    const block_iq3_nl * x = (const block_iq3_nl *) vx;
+
+    const float d = (float) x[ib].d;
+
+    const int j = iqs % (QK3_NL/4);
+    const int g = iqs / (QK3_NL/4);
+
+    v.x = d * iq3_nl_value(x[ib].qs, x[ib].qh, j, g);
+    v.y = d * iq3_nl_value(x[ib].qs, x[ib].qh, j, g + 2);
+}
+
 //================================== k-quants
 
 // Each call dequantizes one super-block of QK_K values into y using the
