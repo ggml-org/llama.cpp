@@ -585,27 +585,26 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor * t, bool ask, void * 
         }
         LOG_DBGV(2, "%s[%d]: %32s, %s, %5d x %5d, %d\n", __func__, m_last_chunk, wname.c_str(), ggml_op_name(t->op), (int)src1->ne[0], (int)src1->ne[2], (int)src1->type);
 
-        const int64_t ne0      = src1->ne[0];
+        const int64_t ne0 = src1->ne[0];
         const int64_t n_tokens = src1->ne[2];
+        const bool has_act = !e.activations.empty();
 
         // single pass over the routing ids
         std::vector<uint8_t> touched(n_as, 0);
         for (int64_t idx = 0; idx < n_ids; ++idx) {
             for (int64_t row = 0; row < n_tokens; ++row) {
                 const int32_t ex = *(const int32_t *) (m_ids.data() + row * ids->nb[1] + idx * ids->nb[0]);
-
                 GGML_ASSERT(ex >= 0 && ex < n_as);  // sanity check
-
                 const int64_t i11 = idx % src1->ne[1];
-                const float * x   = (const float *) (data + i11 * src1->nb[1] + row * src1->nb[2]);
-                float *       acc = e.values.data() + ex * ne0;
-                float *       act = e.activations.data() + ex * ne0;
+                const float * x = (const float *) (data + i11 * src1->nb[1] + row * src1->nb[2]);
+                float * acc = e.values.data() + ex * ne0;
+                float * act = has_act ? e.activations.data() + ex * ne0 : nullptr; // legacy imatrix tensors do not have activation sums
 
                 e.counts[ex]++;
                 touched[ex] = 1;
-                for (int64_t j = 0; j < ne0; ++j) {
-                    act[j] += x[j];
-                    acc[j] += x[j] * x[j];
+                for (int64_t j = 0; j < ne0; ++j) { acc[j] += x[j] * x[j]; }
+                if (act) {
+                    for (int64_t j = 0; j < ne0; ++j) { act[j] += x[j]; }
                 }
             }
         }
@@ -655,23 +654,26 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor * t, bool ask, void * 
             e.counts.resize(1, 0);
         }
         else if (e.values.size() != (size_t)(src1->ne[0] * n_mat)) {
-            LOG_ERR("%s: inconsistent size for %s (%d vs %d)\n", __func__, wname.c_str(), (int)e.values.size(), (int)(src1->ne[0] * n_mat));
+            LOG_ERR("%s: inconsistent size for %s (%d vs %d)\n",
+                __func__, wname.c_str(), (int)e.values.size(), (int)(src1->ne[0] * n_mat));
             exit(1); //GGML_ABORT("fatal error");
         }
-        LOG_DBGV(2, "%s[%d]: %32s, %s, %5d x %5d x %5d, %d\n", __func__, m_last_chunk, wname.c_str(), ggml_op_name(t->op), (int)src1->ne[0], (int)src1->ne[1], (int)src1->ne[2], (int)src1->type);
+        LOG_DBGV(2, "%s[%d]: %32s, %s, %5d x %5d x %5d, %d\n",
+            __func__, m_last_chunk, wname.c_str(), ggml_op_name(t->op), (int)src1->ne[0], (int)src1->ne[1], (int)src1->ne[2], (int)src1->type);
 
         const int64_t ne0 = src1->ne[0];
+        const bool has_act = !e.activations.empty();
         for (int64_t i3 = 0; i3 < src1->ne[3]; ++i3) {
             for (int64_t i2 = 0; i2 < src1->ne[2]; ++i2) {
                 // handle 3D+ tensors, but flatten 3D+ activations when model tensor is 2D
                 const int64_t mat_id = (i3 % src0->ne[3]) * src0->ne[2] + (i2 % src0->ne[2]);
                 float * acc = e.values.data() + mat_id * ne0;
-                float * act = e.activations.data() + mat_id * ne0;
+                float * act = has_act ? e.activations.data() + mat_id * ne0 : nullptr;
                 for (int64_t row = 0; row < src1->ne[1]; ++row) {
                     const float * x = (const float *) (data + row * src1->nb[1] + i2 * src1->nb[2] + i3 * src1->nb[3]);
-                    for (int64_t j = 0; j < ne0; ++j) {
-                        act[j] += x[j];
-                        acc[j] += x[j] * x[j];
+                    for (int64_t j = 0; j < ne0; ++j) { acc[j] += x[j] * x[j]; }
+                    if (act) {
+                        for (int64_t j = 0; j < ne0; ++j) { act[j] += x[j]; }
                     }
                 }
             }
