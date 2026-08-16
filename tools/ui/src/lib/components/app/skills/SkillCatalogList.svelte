@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Clock, FileText, Layers } from '@lucide/svelte';
+	import { ChevronDown, Clock, FileText, Layers } from '@lucide/svelte';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Card, CardContent, CardHeader, CardTitle } from '$lib/components/ui/card';
 	import type { SkillCatalogEntry } from '$lib/types';
@@ -12,6 +12,61 @@
 	}
 
 	let { entries, selectedId, open, onSelect }: Props = $props();
+
+	let expandedDescriptions = $state<Set<string>>(new Set());
+	let overflowingDescriptions = $state<Set<string>>(new Set());
+
+	function isDescriptionExpanded(id: string): boolean {
+		return expandedDescriptions.has(id);
+	}
+
+	function toggleDescription(event: MouseEvent, id: string) {
+		event.preventDefault();
+		event.stopPropagation();
+
+		const next = new Set(expandedDescriptions);
+		if (next.has(id)) next.delete(id);
+		else next.add(id);
+		expandedDescriptions = next;
+	}
+
+	function measureDescription(
+		node: HTMLElement,
+		params: { id: string; expanded: boolean }
+	) {
+		let current = params;
+		const observer =
+			typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(measure);
+
+		function measure() {
+			if (!observer || current.expanded) return;
+
+			const overflowing = node.scrollHeight > node.clientHeight + 1;
+			const alreadyTracked = overflowingDescriptions.has(current.id);
+			if (alreadyTracked === overflowing) return;
+
+			const next = new Set(overflowingDescriptions);
+			if (overflowing) next.add(current.id);
+			else next.delete(current.id);
+			overflowingDescriptions = next;
+		}
+
+		observer?.observe(node);
+		measure();
+
+		return {
+			update(next: { id: string; expanded: boolean }) {
+				current = next;
+				measure();
+			},
+			destroy() {
+				observer?.disconnect();
+				const next = new Set(overflowingDescriptions);
+				next.delete(current.id);
+				overflowingDescriptions = next;
+			}
+		};
+	}
 
 	function handleKeydown(event: KeyboardEvent, entry: SkillCatalogEntry) {
 		if (event.key !== 'Enter' && event.key !== ' ') return;
@@ -61,7 +116,37 @@
 
 			<CardContent class="flex flex-col gap-3">
 				{#if entry.description}
-					<p class="text-sm text-muted-foreground">{entry.description}</p>
+					<p
+						data-testid="skill-description-{entry.id}"
+						class="text-sm text-muted-foreground {!isDescriptionExpanded(entry.id)
+							? 'line-clamp-3'
+							: ''}"
+						use:measureDescription={{
+							id: entry.id,
+							expanded: isDescriptionExpanded(entry.id)
+						}}
+					>
+						{entry.description}
+					</p>
+
+					{#if overflowingDescriptions.has(entry.id)}
+						<button
+							type="button"
+							data-testid="skill-description-toggle-{entry.id}"
+							class="inline-flex w-fit items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
+							aria-expanded={isDescriptionExpanded(entry.id)}
+							onclick={(event) => toggleDescription(event, entry.id)}
+							onkeydown={(event) => event.stopPropagation()}
+						>
+							{isDescriptionExpanded(entry.id) ? 'Show less' : 'Show more'}
+							<ChevronDown
+								class="size-3.5 transition-transform duration-200 {isDescriptionExpanded(entry.id)
+									? 'rotate-180'
+									: ''}"
+								aria-hidden="true"
+							/>
+						</button>
+					{/if}
 				{/if}
 
 				<div class="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
