@@ -4173,7 +4173,7 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
     // some shaders have a minimum subgroup size
     const uint32_t subgroup_size_8 = std::max(device->subgroup_size, 8u);
     const uint32_t subgroup_size_16 = std::max(device->subgroup_size, 16u);
-    const uint32_t subgroup_size_32 = std::max(device->subgroup_size, 32u);
+    const uint32_t subgroup_size_32 = device->architecture == vk_device_architecture::ARM_MALI ? device->subgroup_size : std::max(device->subgroup_size, 32u);
 
     const uint32_t mul_mat_subgroup_size = (device->vendor_id == VK_VENDOR_ID_INTEL && device->subgroup_size_control) ? device->subgroup_min_size : device->subgroup_size;
     const uint32_t mul_mat_subgroup_size_8 = std::max(mul_mat_subgroup_size, 8u);

@@ -63,7 +63,17 @@ Record the device name, Vulkan API version, driver version, subgroup size,
 shader compiler versions, build commit, model quantization, and all benchmark
 samples. A single run is not sufficient for a tuning claim.
 
-The reference device for this change was:
+The backend keeps the generic 32-wide fallback for other architectures. For an ARM Mali device, the warptile configuration uses the device's actual subgroup size instead of forcing the 32-wide lower bound. This is guarded by both the ARM vendor architecture classification and the advertised ARM shader-core extension.
+
+On the reference Mali-G720 device, two five-sample runs with the same SmolLM2 Q4_K_M workload measured the following ranges:
+
+```text
+prompt/matmul:  generic 154.27 tok/s -> ARM subgroup 162.34 tok/s (+5.24%)
+generation:     generic  60.58 tok/s -> ARM subgroup  59.58 tok/s (-1.65%)
+```
+
+The generation result is not claimed as an improvement. More Mali devices and
+larger model/batch matrices are still needed before tuning this path further.
 
 ```text
 Mali-G720-Immortalis MC12
