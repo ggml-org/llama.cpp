@@ -8,9 +8,9 @@
 #include <cstdio>
 #include <vector>
 
-static llama_context * make_ctx(const common_params & params, llama_model * model) {
+static llama_context * make_ctx(const common_params & params, llama_model * model, uint32_t n_seq_max = 1) {
     auto cparams = common_context_params_to_llama(params);
-    cparams.n_seq_max = 1;
+    cparams.n_seq_max = n_seq_max;
     cparams.n_rs_seq  = 8;
     cparams.n_batch   = std::max(cparams.n_batch,  (uint32_t) (cparams.n_rs_seq + 1));
     cparams.n_ubatch  = std::max(cparams.n_ubatch, (uint32_t) (cparams.n_rs_seq + 1));
@@ -120,8 +120,8 @@ int main(int argc, char ** argv) {
     ckpt.load_tgt(ctx_dst, 0, 0);
 
     constexpr float eps = 1e-5f;
-    std::vector<std::vector<float>> logits_src_replay(n_rollback);
-    const auto replay_and_compare = [&](const char * mode) {
+    std::vector<std::vector<float>> logits_full_replay(n_rollback);
+    const auto replay_and_compare = [&](const char * mode, bool record_full_replay) {
         for (uint32_t i = 0; i < n_rollback; ++i) {
             const llama_pos pos = rollback_pos + i;
             if (!decode_one(ctx_src, tokens[pos], pos) ||
@@ -137,7 +137,9 @@ int main(int argc, char ** argv) {
                 return false;
             }
 
-            logits_src_replay[i].assign(logits_src, logits_src + n_vocab);
+            if (record_full_replay) {
+                logits_full_replay[i].assign(logits_src, logits_src + n_vocab);
+            }
             for (int token = 0; token < n_vocab; ++token) {
                 if (std::fabs(logits_src[token] - logits_dst[token]) > eps) {
                     fprintf(stderr, "%s : %s logits mismatch at position %d, token %d (%g != %g)\n",
@@ -148,7 +150,7 @@ int main(int argc, char ** argv) {
         }
         return true;
     };
-    if (!replay_and_compare("full")) {
+    if (!replay_and_compare("full", true)) {
         return 1;
     }
 
@@ -163,18 +165,15 @@ int main(int argc, char ** argv) {
     ckpt_partial.update_tgt(ctx_src, 0, partial_flags);
     ckpt_partial.load_tgt(ctx_dst, 0, partial_flags);
 
-    if (!replay_and_compare("partial")) {
+    if (!replay_and_compare("partial", false)) {
         return 1;
     }
 
     // Repeat the load into a context that already has its own rollback state:
     // groups 1..n_rs_seq hold a different prompt's history, and rs_idx[0] is
     // non-zero at load time. The restore must wipe that state and still match.
-    llama_context * ctx_dirty = make_ctx(params, model);
-    if (ctx_dirty == nullptr) {
-        fprintf(stderr, "%s : failed to init dirty ctx\n", __func__);
-        return 1;
-    }
+    llama_context * ctx_dirty = ctx_dst;
+    llama_memory_clear(llama_get_memory(ctx_dirty), true);
 
     std::vector<llama_token> noise = tokens;
     for (auto & t : noise) {
@@ -194,6 +193,19 @@ int main(int argc, char ** argv) {
 
     ckpt.load_tgt(ctx_dirty, 0, 0);
 
+    common_prompt_checkpoint ckpt_dirty;
+    ckpt_dirty.update_tgt(ctx_dirty, 0, 0);
+    if (ckpt_dirty.data_tgt != ckpt.data_tgt) {
+        const size_t n = std::min(ckpt_dirty.data_tgt.size(), ckpt.data_tgt.size());
+        size_t first = 0;
+        while (first < n && ckpt_dirty.data_tgt[first] == ckpt.data_tgt[first]) {
+            ++first;
+        }
+        fprintf(stderr, "%s : dirty state bytes mismatch at %zu (%zu != %zu bytes)\n", __func__, first,
+                ckpt_dirty.data_tgt.size(), ckpt.data_tgt.size());
+        return 1;
+    }
+
     for (uint32_t i = 0; i < n_rollback; ++i) {
         const llama_pos pos = rollback_pos + i;
         if (!decode_one(ctx_dirty, tokens[pos], pos)) {
@@ -208,17 +220,53 @@ int main(int argc, char ** argv) {
         }
 
         for (int token = 0; token < n_vocab; ++token) {
-            if (std::fabs(logits_src_replay[i][token] - logits_dirty[token]) > eps) {
+            if (std::fabs(logits_full_replay[i][token] - logits_dirty[token]) > eps) {
                 fprintf(stderr, "%s : dirty-ctx logits mismatch at position %d, token %d (%g != %g)\n",
-                        __func__, pos, token, (double) logits_src_replay[i][token], (double) logits_dirty[token]);
+                        __func__, pos, token, (double) logits_full_replay[i][token], (double) logits_dirty[token]);
                 return 1;
             }
         }
     }
 
-    fprintf(stderr, "%s : recurrent rollback checkpoint restored successfully\n", __func__);
+    // Verify that the real resize path still copies active recurrent state. The
+    // no-op guard in llama_context must only skip requests that cannot change size.
+    llama_context * ctx_resize = make_ctx(params, model, 2);
+    llama_context * ctx_ref    = make_ctx(params, model, 2);
+    if (ctx_resize == nullptr || ctx_ref == nullptr) {
+        fprintf(stderr, "%s : failed to init resize contexts\n", __func__);
+        return 1;
+    }
+    if (!decode_tokens(ctx_resize, tokens, n_tokens) || !decode_tokens(ctx_ref, tokens, n_tokens)) {
+        fprintf(stderr, "%s : resize prefix decode failed\n", __func__);
+        return 1;
+    }
+    if (!llama_context_recurrent_shrink(ctx_resize, 1) || !llama_context_recurrent_expand(ctx_resize, 2)) {
+        fprintf(stderr, "%s : recurrent shrink/expand failed\n", __func__);
+        return 1;
+    }
+    if (!decode_one(ctx_resize, tokens.back(), n_tokens) || !decode_one(ctx_ref, tokens.back(), n_tokens)) {
+        fprintf(stderr, "%s : resize continuation decode failed\n", __func__);
+        return 1;
+    }
+
+    const float * logits_resize = llama_get_logits_ith(ctx_resize, 0);
+    const float * logits_ref    = llama_get_logits_ith(ctx_ref, 0);
+    if (logits_resize == nullptr || logits_ref == nullptr) {
+        fprintf(stderr, "%s : missing resize logits\n", __func__);
+        return 1;
+    }
+    for (int token = 0; token < n_vocab; ++token) {
+        if (std::fabs(logits_resize[token] - logits_ref[token]) > eps) {
+            fprintf(stderr, "%s : resize logits mismatch at token %d (%g != %g)\n",
+                    __func__, token, (double) logits_resize[token], (double) logits_ref[token]);
+            return 1;
+        }
+    }
+
+    fprintf(stderr, "%s : recurrent rollback checkpoint and resize restored successfully\n", __func__);
     llama_free(ctx_src);
     llama_free(ctx_dst);
-    llama_free(ctx_dirty);
+    llama_free(ctx_resize);
+    llama_free(ctx_ref);
     return 0;
 }
