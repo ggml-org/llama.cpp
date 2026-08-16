@@ -1,7 +1,6 @@
+import { SKILL_LIST_TOOL, SKILL_READ_TOOL } from '$lib/constants';
 import { buildSkillRunSnapshot } from '$lib/services/skills-packing.service';
 import {
-	SKILL_LIST_TOOL,
-	SKILL_READ_TOOL,
 	buildSkillToolDefinitions,
 	decorateSkillPrompt,
 	listSkillContent,

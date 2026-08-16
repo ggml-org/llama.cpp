@@ -1,3 +1,4 @@
+import { SKILL_READ_TOOL } from '$lib/constants';
 import { AttachmentType, MessageRole, MessageType } from '$lib/enums';
 import {
 	buildSkillActivationPair,
@@ -11,7 +12,6 @@ import {
 	skillExtraFromMessage,
 	skillResourceExtra
 } from '$lib/services/skills-activation.service';
-import { SKILL_READ_TOOL } from '$lib/services/skills-adapters.service';
 import type { DatabaseMessage, DatabaseMessageExtra, DatabaseMessageExtraSkill } from '$lib/types';
 import type {
 	SkillBaseReadResult,

@@ -1,5 +1,6 @@
+import { SKILL_LIST_TOOL, SKILL_READ_TOOL, SKILL_SERVER_LABEL } from '$lib/constants';
 import { buildSkillRunSnapshot } from '$lib/services/skills-packing.service';
-import { SKILL_LIST_TOOL, SKILL_READ_TOOL, SKILL_SERVER_LABEL, SkillRunAdapters } from '$lib/services/skills-adapters.service';
+import { SkillRunAdapters } from '$lib/services/skills-adapters.service';
 import { skillActivationExtra, skillResourceExtra } from '$lib/services/skills-activation.service';
 import { SkillsService } from '$lib/services/skills.service';
 import type {
