@@ -240,13 +240,14 @@
 		<h1 class="text-lg font-semibold">Notebook</h1>
 	</header>
 
-	<div class="min-h-0 flex-1 overflow-hidden px-2 pt-2 pb-0 md:px-4 md:pt-4">
+	<div class="min-h-0 min-w-0 flex-1 overflow-hidden px-2 pt-2 pb-0 md:px-4 md:pt-4">
 		<Textarea
 			bind:ref={scrollContainer}
 			onscroll={handleScroll}
 			value={notebookStore.content}
 			oninput={handleInput}
-			class="h-full min-h-[100px] w-full resize-none rounded-xl border-none bg-muted p-4 text-base focus-visible:ring-0 md:p-6"
+			style="display: block !important; field-sizing: normal !important; width: 100% !important; max-width: 100% !important; box-sizing: border-box !important; overflow-x: hidden !important; overflow-y: auto !important; word-break: normal !important; overflow-wrap: anywhere !important;"
+			class="h-full min-h-[100px] w-full max-w-full min-w-0 resize-none rounded-xl border-none bg-muted p-4 text-base focus-visible:ring-0 md:p-6"
 			placeholder="Enter your text here..."
 		/>
 	</div>
