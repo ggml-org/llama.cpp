@@ -914,13 +914,6 @@ public:
 
     llm_graph_input_i * add_input(llm_graph_input_ptr input);
 
-    // the scheduler rewires node sources to its own split-input copies, which die on the
-    // next scheduler reset. To re-allocate a cached graph after other graphs used the
-    // scheduler, snapshot the sources right after the build and restore them before the
-    // re-allocation re-splits the graph.
-    void snapshot_srcs();
-    void restore_srcs();
-
     void add_fused_node(llm_graph_fused_node result);
 
     const std::vector<llm_graph_fused_node> & get_fused_nodes() const { return fused_nodes; }
@@ -953,9 +946,6 @@ public:
     ggml_cgraph * gf;
 
     int64_t max_nodes;
-
-    // node sources as built, before scheduler rewiring; see snapshot_srcs()
-    std::vector<ggml_tensor *> pristine_srcs;
 
 private:
     // keep a copy of the previous graph parameters

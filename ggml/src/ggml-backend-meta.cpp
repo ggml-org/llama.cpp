@@ -6,11 +6,11 @@
 #include "ggml-cpp.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cassert>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <atomic>
 #include <cstring>
 #include <map>
 #include <memory>
@@ -1991,7 +1991,7 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
         return env != nullptr ? atoi(env) : 0;
     }();
     if (meta_dbg > 0) {
-        GGML_LOG_ERROR("meta: compute uid=%llu n_nodes=%d plan=%s\n",
+        GGML_LOG_DEBUG("meta: compute uid=%llu n_nodes=%d plan=%s\n",
                 (unsigned long long) cgraph->uid, cgraph->n_nodes,
                 plan == nullptr ? "MISS" : "hit");
     }
@@ -2010,6 +2010,7 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
             buf_ctx->stc_active = stc;
         }
         if (ok && plan->alloc_epoch != g_meta_alloc_epoch.load(std::memory_order_relaxed)) {
+            ok = plan->node_fps.size() == (size_t) cgraph->n_nodes;
             for (int i = 0; i < cgraph->n_nodes && ok; i++) {
                 ok = plan->node_fps[i] == ggml_backend_meta_shadow_fp::of(cgraph->nodes[i]);
             }

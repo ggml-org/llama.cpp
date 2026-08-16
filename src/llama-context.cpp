@@ -600,7 +600,6 @@ void llama_context::sched_reserve() {
     LLAMA_LOG_DEBUG("%s: max_nodes = %zu\n", __func__, max_nodes);
 
     gf_res_prev.reset(new llm_graph_result(max_nodes));
-    gf_res_tg.reset(new llm_graph_result(max_nodes));
     gf_res_reserve.reset(new llm_graph_result(max_nodes));
 
     gf_res_alloced = nullptr;
@@ -675,24 +674,6 @@ void llama_context::sched_reserve() {
         }
     }
 
-    // experimental: dedicated scheduler for 1-token decode graphs, reserved with a
-    // 1-token-per-seq worst case; keeps draft and verification allocations warm at the
-    // same time. Requires meta-backend multi-graph support under tensor split, so it
-    // stays off unless LLAMA_SCHED_TG=1.
-    static const bool sched_tg_enable = [] {
-        const char * env = getenv("LLAMA_SCHED_TG");
-        return env != nullptr && atoi(env) != 0;
-    }();
-    if (sched_tg_enable && !model.hparams.no_alloc) {
-        sched_tg.reset(ggml_backend_sched_new(backend_ptrs.data(), backend_buft.data(), backend_ptrs.size(), max_nodes, cparams.pipeline_parallel, cparams.op_offload));
-
-        auto * gf = graph_reserve(n_seqs, n_seqs, n_seqs, mctx.get(), false, nullptr, sched_tg.get());
-        if (!gf) {
-            LLAMA_LOG_WARN("%s: failed to reserve the 1-token scheduler; falling back to a single scheduler\n", __func__);
-            sched_tg.reset();
-        }
-    }
-
     // experimental: per-shape scheduler pool for small decode graphs. Every recurring
     // batch shape keeps its own scheduler, allocation, and cached graph, so shapes
     // alternating under speculative decoding stop evicting each other. Requires the
@@ -707,7 +688,6 @@ void llama_context::sched_reserve() {
     }
 
     sched_active = sched.get();
-
 
     for (size_t i = 0; i < backend_ptrs.size(); ++i) {
         ggml_backend_t             backend = backend_ptrs[i];
@@ -746,10 +726,6 @@ void llama_context::synchronize() {
     }
 
     ggml_backend_sched_synchronize(sched.get());
-
-    if (sched_tg) {
-        ggml_backend_sched_synchronize(sched_tg.get());
-    }
 
     for (auto & s : sched_pool) {
         ggml_backend_sched_synchronize(s.sched.get());
@@ -855,11 +831,7 @@ bool llama_context::memory_update(bool optimize) {
         // TODO: change the mctx->apply() to return information if a graph reserve is needed
         //       reset the graph result only if the memory module did reset the scheduler
         gf_res_prev->reset();
-        if (gf_res_tg) {
-            gf_res_tg->reset();
-        }
-        gf_res_alloced    = nullptr;
-        gf_res_alloced_tg = nullptr;
+        gf_res_alloced = nullptr;
 
         for (auto & s : sched_pool) {
             s.gf_res->reset();
@@ -1433,16 +1405,12 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         slot->last_used = ++sched_pool_tick;
     }
 
-    // 1-token graphs run on a dedicated scheduler so that the draft and verification
-    // evals of speculative decoding do not evict each other's graph or allocation
-    const bool use_tg = slot == nullptr && sched_tg && gf_res_tg && ubatch.n_tokens == 1;
+    ggml_backend_sched_t sched_cur = slot ? slot->sched.get() : sched.get();
 
-    ggml_backend_sched_t sched_cur = slot ? slot->sched.get() : use_tg ? sched_tg.get() : sched.get();
-
-    auto * res = slot ? slot->gf_res.get() : use_tg ? gf_res_tg.get() : gf_res_prev.get();
+    auto * res = slot ? slot->gf_res.get() : gf_res_prev.get();
     auto * gf  = res->get_gf();
 
-    llm_graph_result * & res_alloced = slot ? slot->alloced : use_tg ? gf_res_alloced_tg : gf_res_alloced;
+    llm_graph_result * & res_alloced = slot ? slot->alloced : gf_res_alloced;
 
     sched_active = sched_cur;
 
@@ -1450,45 +1418,17 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
     // in order to correctly reuse a graph, it's full topology has to be uniquely determined by these parameters
     const auto gparams = graph_params(res, ubatch, mctx, gtype);
 
-    // experimental: also reuse a cached topology whose scheduler allocation went stale,
-    // by re-allocating it without a rebuild. Slower than a rebuild in practice; off
-    // unless LLAMA_GRAPH_REALLOC=1.
-    static const bool graph_realloc_enable = [] {
-        const char * env = getenv("LLAMA_GRAPH_REALLOC");
-        return env != nullptr && atoi(env) != 0;
-    }();
-
-    const char * path_dbg = "rebuild";
-
-    if (!graph_reuse_disable && res->can_reuse(gparams) && (res == res_alloced || graph_realloc_enable)) {
+    // res == res_alloced: a matching topology alone is not enough, the graph must also
+    // still hold its scheduler allocation. Everywhere the scheduler is reset, the
+    // matching res_alloced is set back to null.
+    if (!graph_reuse_disable && res->can_reuse(gparams) && res == res_alloced) {
         //LLAMA_LOG_DEBUG("%s: reusing previous graph\n", __func__);
-
-        path_dbg = res == res_alloced ? "fast" : "realloc";
 
         // with pipeline parallelism, the previous graph_compute_async may still be running
         // on the GPU. we must synchronize before set_inputs to avoid overwriting input tensors
         // that the previous compute is still reading.
         if (cparams.pipeline_parallel) {
             ggml_backend_sched_synchronize(sched_cur);
-        }
-
-        if (res != res_alloced) {
-            // cached topology with a stale allocation: re-allocate the graph without
-            // rebuilding it. The node addresses do not change, so backend-side graph
-            // caches (subgraph splits, CUDA graphs) stay warm. The scheduler rewired
-            // the node sources to its now-dead split copies, so restore them first.
-            res->restore_srcs();
-
-            ggml_backend_sched_reset(sched_cur);
-            ggml_backend_sched_set_eval_callback(sched_cur, cparams.cb_eval, cparams.cb_eval_user_data);
-
-            if (!ggml_backend_sched_alloc_graph(sched_cur, gf)) {
-                LLAMA_LOG_ERROR("%s: failed to allocate graph\n", __func__);
-                ret = GGML_STATUS_ALLOC_FAILED;
-                return nullptr;
-            }
-
-            res_alloced = res;
         }
 
         n_reused++;
@@ -1509,9 +1449,6 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
             ret = GGML_STATUS_FAILED;
             return nullptr;
         }
-
-        // capture the built node sources before the scheduler rewires them
-        res->snapshot_srcs();
 
         if (!ggml_backend_sched_alloc_graph(sched_cur, gf)) {
             LLAMA_LOG_ERROR("%s: failed to allocate graph\n", __func__);
@@ -1537,52 +1474,6 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         LLAMA_LOG_ERROR("%s: failed to compute graph, compute status: %d\n", __func__, status);
         ret = status;
         return nullptr;
-    }
-
-    // debug: per-eval logits checksum for localizing graph-reuse corruption
-    static const bool graph_debug_sum = [] {
-        const char * env = getenv("LLAMA_GRAPH_DEBUG_SUM");
-        return env != nullptr && atoi(env) != 0;
-    }();
-    if (graph_debug_sum) {
-        static int eval_no = 0;
-        eval_no++;
-        double sum = 0.0;
-        int64_t n = 0;
-        ggml_tensor * t_logits = res->get_logits();
-        if (t_logits != nullptr && ggml_nelements(t_logits) > 0) {
-            ggml_backend_sched_synchronize(sched_active);
-            // read the full first row: split buffers reject partial-row reads
-            n = t_logits->ne[0];
-            std::vector<float> row(n);
-            ggml_backend_tensor_get(t_logits, row.data(), 0, n*sizeof(float));
-            for (int64_t i = 0; i < std::min<int64_t>(n, 256); i++) {
-                sum += row[i];
-            }
-        }
-        double in_embd_sum = 0.0;
-        int64_t in_tok_sum = 0;
-        ggml_tensor * t_in_tok = res->get_inp_tokens();
-        if (t_in_tok != nullptr && ggml_nelements(t_in_tok) > 0) {
-            std::vector<int32_t> toks(ggml_nelements(t_in_tok));
-            ggml_backend_tensor_get(t_in_tok, toks.data(), 0, toks.size()*sizeof(int32_t));
-            for (int32_t v : toks) {
-                in_tok_sum += v;
-            }
-        }
-        ggml_tensor * t_in_embd = res->t_inp_embd;
-        if (t_in_embd != nullptr && ggml_nelements(t_in_embd) > 0) {
-            const int64_t ne = std::min<int64_t>(ggml_nelements(t_in_embd), 512);
-            std::vector<float> vals(ne);
-            ggml_backend_tensor_get(t_in_embd, vals.data(), 0, ne*sizeof(float));
-            for (float v : vals) {
-                in_embd_sum += v;
-            }
-        }
-        fprintf(stderr, "EVALSUM %d slot=%s path=%s n_tokens=%u n_out=%d in_tok=%lld in_embd=%.6f sum=%.6f\n",
-            eval_no, use_tg ? "tg" : "main", path_dbg, ubatch.n_tokens, this->n_outputs,
-            (long long) in_tok_sum, in_embd_sum, sum);
-        fflush(stderr);
     }
 
     ret = GGML_STATUS_SUCCESS;
@@ -2617,9 +2508,6 @@ ggml_cgraph * llama_context::graph_reserve(
     if (sched_use == sched.get()) {
         gf_res_prev->reset();
         gf_res_alloced = nullptr;
-    } else if (gf_res_tg) {
-        gf_res_tg->reset();
-        gf_res_alloced_tg = nullptr;
     }
 
     // store the n_outputs as it is, and restore it afterwards

@@ -486,57 +486,6 @@ ggml_tensor * llama_model_qwen35::graph::build_layer_ffn(ggml_tensor * cur, cons
     return cur;
 }
 
-// per-step causal masks for the chained MTP draft: one [n_kv, GGML_KQ_MASK_PAD]
-// mask per chain step, filled through the stock mask builder with a 1-token
-// view of the ubatch row
-struct llm_graph_input_mtp_chain_masks : public llm_graph_input_i {
-    llm_graph_input_mtp_chain_masks(const llama_kv_cache_context * mctx, bool causal) : mctx(mctx), causal(causal) {}
-    virtual ~llm_graph_input_mtp_chain_masks() = default;
-
-    void set_input(const llama_ubatch * ubatch) override {
-        for (size_t j = 0; j < masks.size(); ++j) {
-            llama_ubatch ub = *ubatch;
-            ub.n_tokens     = 1;
-            ub.n_seq_tokens = 1;
-            ub.n_seqs       = 1;
-            ub.n_seqs_unq   = 1;
-            ub.token        = ubatch->token ? ubatch->token + j : nullptr;
-            ub.pos          = ubatch->pos + j;
-            ub.n_seq_id     = ubatch->n_seq_id + j;
-            ub.seq_id       = ubatch->seq_id + j;
-            ub.seq_id_unq   = ubatch->seq_id_unq;
-            ub.seq_idx      = ubatch->seq_idx;
-            ub.output       = ubatch->output + j;
-
-            mctx->set_input_kq_mask(masks[j], &ub, causal);
-
-            static const bool dbg = getenv("LLAMA_CHAIN_DEBUG") != nullptr;
-            if (dbg) {
-                int64_t n_open = 0;
-                const int64_t n_kv = masks[j]->ne[0];
-                if (masks[j]->type == GGML_TYPE_F16) {
-                    const ggml_fp16_t * d = (const ggml_fp16_t *) masks[j]->data;
-                    for (int64_t i = 0; i < n_kv; ++i) {
-                        n_open += ggml_fp16_to_fp32(d[i]) == 0.0f;
-                    }
-                } else {
-                    const float * d = (const float *) masks[j]->data;
-                    for (int64_t i = 0; i < n_kv; ++i) {
-                        n_open += d[i] == 0.0f;
-                    }
-                }
-                fprintf(stderr, "CHAINMASK j=%zu pos=%d open=%lld/%lld\n", j, (int) ub.pos[0], (long long) n_open, (long long) n_kv);
-                fflush(stderr);
-            }
-        }
-    }
-
-    const llama_kv_cache_context * mctx;
-    bool causal;
-
-    std::vector<ggml_tensor *> masks;
-};
-
 // LLM_GRAPH_TYPE_DECODER_MTP draft head for Qwen3.5/3.6 dense series
 llama_model_qwen35::graph_mtp::graph_mtp(const llama_model & model, const llm_graph_params & params)
     : llm_graph_context(params) {
@@ -597,19 +546,11 @@ llama_model_qwen35::graph_mtp::graph_mtp(const llama_model & model, const llm_gr
 
     // chained drafting: rows 1..n-1 take their inputs from the previous row's
     // in-graph argmax and hidden state, so one decode drafts n_tokens tokens
-    {
-        static const bool dbg = getenv("LLAMA_CHAIN_DEBUG") != nullptr;
-        if (dbg) {
-            fprintf(stderr, "CHAINGRAPH mtp_chain=%d n_tokens=%d n_seqs=%d token=%d\n",
-                (int) cparams.mtp_chain, (int) n_tokens, (int) ubatch.n_seqs, ubatch.token != nullptr);
-            fflush(stderr);
-        }
-    }
     if (cparams.mtp_chain && n_tokens > 1 && ubatch.n_seqs_unq == 1 && ubatch.token) {
         const auto * mctx_kv = static_cast<const llama_kv_cache_context *>(mctx);
 
-        // per-step causal masks: row j of the stock kq mask (this tree pads masks to
-        // exactly n_tokens rows, so plain row views work)
+        // per-step causal masks: row j of the stock kq mask (the mask builder pads
+        // masks to exactly n_tokens rows, so plain row views work)
         ggml_tensor * kq_mask = inp_attn->get_kq_mask();
         const int64_t n_kv = kq_mask->ne[0];
 
@@ -746,9 +687,10 @@ llama_model_qwen35::graph_mtp::graph_mtp(const llama_model & model, const llm_gr
 
             // drafting rarely picks tokens outside the leading vocabulary range
             // (BPE ids correlate with frequency), so the chain can run a small
-            // sub-head instead of the full one and pad the tail of the logits to
-            // -1e9. The full-vocab verify on the target decides acceptance, so
-            // this only narrows what gets drafted, never what gets committed.
+            // sub-head instead of the full one. The full-vocab verify on the target
+            // decides acceptance, so this only narrows what gets drafted, never what
+            // gets committed. The emitted probability normalizes over the sub-head
+            // only, so it reads slightly high against --spec-draft-p-min.
             // LLAMA_SPEC_CHAIN_SUB sets the width; 0 restores the full head.
             static const int64_t n_sub_env = [] {
                 const char * env = getenv("LLAMA_SPEC_CHAIN_SUB");

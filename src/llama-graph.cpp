@@ -1376,28 +1376,6 @@ void llm_graph_result::set_outputs(const llm_graph_params & params) {
     }
 }
 
-void llm_graph_result::snapshot_srcs() {
-    const int n_nodes = ggml_graph_n_nodes(gf);
-    pristine_srcs.resize((size_t) n_nodes * GGML_MAX_SRC);
-    for (int i = 0; i < n_nodes; i++) {
-        ggml_tensor * node = ggml_graph_node(gf, i);
-        for (int j = 0; j < GGML_MAX_SRC; j++) {
-            pristine_srcs[(size_t) i * GGML_MAX_SRC + j] = node->src[j];
-        }
-    }
-}
-
-void llm_graph_result::restore_srcs() {
-    const int n_nodes = ggml_graph_n_nodes(gf);
-    GGML_ASSERT(pristine_srcs.size() == (size_t) n_nodes * GGML_MAX_SRC);
-    for (int i = 0; i < n_nodes; i++) {
-        ggml_tensor * node = ggml_graph_node(gf, i);
-        for (int j = 0; j < GGML_MAX_SRC; j++) {
-            node->src[j] = pristine_srcs[(size_t) i * GGML_MAX_SRC + j];
-        }
-    }
-}
-
 bool llm_graph_result::can_reuse(const llm_graph_params & params) {
     if (!this->params.allow_reuse(params)) {
         if (debug > 1) {

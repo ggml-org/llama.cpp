@@ -346,12 +346,6 @@ private:
 
     ggml_backend_sched_ptr sched;
 
-    // dedicated scheduler for 1-token decode graphs. Draft and verification evals of
-    // speculative decoding alternate between two graph shapes; with one scheduler each
-    // eval evicts the other shape's allocation and pays a full re-split. Routing
-    // 1-token ubatches here keeps both allocations warm.
-    ggml_backend_sched_ptr sched_tg;
-
     // per-shape scheduler pool for small decode graphs (LLAMA_SCHED_POOL=N). Each
     // recurring batch shape keeps its own scheduler and cached graph, so alternating
     // shapes reuse warm allocations, splits, and backend graph plans instead of
@@ -394,16 +388,8 @@ private:
     std::vector<ggml_backend_buffer_type_t> backend_buft;
     std::vector<size_t>                     backend_buf_exp_size; // expected buffer sizes
 
-    // two cached graph topologies: during speculative decoding, draft (1-token) and
-    // verification evals alternate between two graph shapes; with a single cached
-    // graph each eval evicts the other shape and most evals pay a full rebuild.
-    // 1-token ubatches use gf_res_tg, everything else gf_res_prev. Only one of the
-    // two is allocated in the scheduler at a time (gf_res_alloced); switching slots
-    // re-allocates the cached graph but skips rebuilding it.
     llm_graph_result_ptr gf_res_prev;
-    llm_graph_result_ptr gf_res_tg;
-    llm_graph_result *   gf_res_alloced    = nullptr; // last result allocated in sched
-    llm_graph_result *   gf_res_alloced_tg = nullptr; // last result allocated in sched_tg
+    llm_graph_result *   gf_res_alloced = nullptr; // last result allocated in sched
     llm_graph_result_ptr gf_res_reserve;
 
     // host buffer for the model output (logits and embeddings)

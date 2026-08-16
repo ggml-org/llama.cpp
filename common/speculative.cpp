@@ -1381,11 +1381,6 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         is_mem_shared = llama_get_ctx_other(ctx_dft) == ctx_tgt;
         chain_heads   = n_mtp_layers > 1 && !is_mem_shared;
 
-        // experimental: merge the catch-up decode into the first draft decode (one eval
-        // less per round). Verified output stays identical, but draft acceptance drops
-        // (under investigation), so this is opt-in.
-        defer_enabled = !is_mem_shared && !chain_heads && getenv("LLAMA_SPEC_DEFER") != nullptr;
-
         // experimental: draft all n_max tokens with one chained decode (in-graph argmax
         // feeds each next step); replaces n_max sequential draft decodes
         chain_graph = !is_mem_shared && !chain_heads && getenv("LLAMA_SPEC_CHAIN") != nullptr;
@@ -1694,13 +1689,6 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
             any_drafting = any_drafting || dparams[seq_id].drafting;
         }
 
-        // LLAMA_SPEC_DEFER=2 decodes deferred rows as a separate eval instead of
-        // merging them into the draft decode (debug mode for isolating merge effects)
-        static const bool defer_split_debug = [] {
-            const char * env = getenv("LLAMA_SPEC_DEFER");
-            return env != nullptr && atoi(env) == 2;
-        }();
-
         // chained drafting: one decode drafts n_max tokens for a single sequence.
         // this block must run before the generic defer merge below - it consumes
         // the deferred rows itself and prepends them to the chain batch
@@ -1719,7 +1707,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                 auto * smpl = smpls[seq_one].get();
                 common_sampler_reset(smpl);
 
-                // the caller can cap the depth per round (adaptive drafting)
+                // dp.n_max caps the round so the draft fits the remaining context
                 const int n_chain = dp.n_max > 0 ? std::min(params.n_max, dp.n_max) : params.n_max;
 
                 // deferred rows at or past n_past hold candidates the verify
@@ -1732,8 +1720,8 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                 for (size_t k = 0; k < defer.tok.size(); ++k) {
                     defer_other = defer_other || defer.seq[k] != seq_one;
                 }
-                if (defer_other || defer_split_debug) {
-                    flush_deferred();
+                if (defer_other && !flush_deferred()) {
+                    return;
                 }
 
                 common_batch_clear(batch);
@@ -1804,19 +1792,14 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         // advances in batch order. If nothing drafts this round they stay deferred
         // and process() flushes them later.
         if (any_drafting && !defer.tok.empty()) {
-            if (defer_split_debug) {
-                flush_deferred();
-                common_batch_clear(batch);
-            } else {
-                for (size_t k = 0; k < defer.tok.size(); ++k) {
-                    common_batch_add(batch, defer.tok[k], defer.pos[k], { defer.seq[k] }, false);
-                    std::memcpy(batch.embd + (size_t) (batch.n_tokens - 1) * n_embd, defer.embd.data() + k * (size_t) n_embd, row_bytes);
-                }
-                defer.tok.clear();
-                defer.pos.clear();
-                defer.seq.clear();
-                defer.embd.clear();
+            for (size_t k = 0; k < defer.tok.size(); ++k) {
+                common_batch_add(batch, defer.tok[k], defer.pos[k], { defer.seq[k] }, false);
+                std::memcpy(batch.embd + (size_t) (batch.n_tokens - 1) * n_embd, defer.embd.data() + k * (size_t) n_embd, row_bytes);
             }
+            defer.tok.clear();
+            defer.pos.clear();
+            defer.seq.clear();
+            defer.embd.clear();
         }
 
         for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
