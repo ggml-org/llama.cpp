@@ -1310,7 +1310,7 @@ size_t ggml_nbytes(const struct ggml_tensor * tensor) {
         }
     }
     else {
-        nbytes = tensor->ne[0]*tensor->nb[0]/blck_size;
+        nbytes = (tensor->ne[0]/blck_size)*tensor->nb[0];
         for (int i = 1; i < GGML_MAX_DIMS; ++i) {
             nbytes += (tensor->ne[i] - 1)*tensor->nb[i];
         }
@@ -1339,7 +1339,7 @@ size_t ggml_row_size(enum ggml_type type, int64_t ne) {
     assert(type >= 0);
     assert(type < GGML_TYPE_COUNT);
     assert(ne % ggml_blck_size(type) == 0);
-    return ggml_type_size(type)*ne/ggml_blck_size(type);
+    return (ne/ggml_blck_size(type))*ggml_type_size(type);
 }
 
 double ggml_type_sizef(enum ggml_type type) {
