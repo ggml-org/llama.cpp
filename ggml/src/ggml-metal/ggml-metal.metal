@@ -2009,6 +2009,26 @@ template [[host_name("kernel_tri_bf16_2")]] kernel kernel_tri_t kernel_tri<bfloa
 template [[host_name("kernel_tri_bf16_3")]] kernel kernel_tri_t kernel_tri<bfloat, 3>;
 #endif
 
+kernel void kernel_diag_mask_inf_f32(
+        constant ggml_metal_kargs_diag_mask_inf & args,
+        device const char * src0,
+        device       char * dst,
+        uint3   tgpig[[threadgroup_position_in_grid]],
+        ushort3 tpitg[[thread_position_in_threadgroup]],
+        ushort3   ntg[[threads_per_threadgroup]]) {
+    const int i3 = tgpig.z;
+    const int i2 = tgpig.y;
+    const int i1 = tgpig.x;
+    if (i3 >= args.ne03 || i2 >= args.ne02 || i1 >= args.ne01) {
+        return;
+    }
+    device const float * src_row = (device const float *) (src0 + i1*args.nb01 + i2*args.nb02 + i3*args.nb03);
+    device       float * dst_row = (device       float *) (dst  + i1*args.nb1  + i2*args.nb2  + i3*args.nb3);
+    for (int64_t i0 = tpitg.x; i0 < args.ne00; i0 += ntg.x) {
+        dst_row[i0] = (i0 > args.n_past + i1) ? -INFINITY : src_row[i0];
+    }
+}
+
 template<typename T>
 kernel void kernel_soft_max(
         constant ggml_metal_kargs_soft_max & args,
