@@ -270,7 +270,8 @@ architecture that removes/reduces the 80 host-submitted boundaries.
 ## Experimental sharded LM head
 
 Set the following before model load to enable embedding-axis sharding of
-validated Qwen3.5/Qwen3.6 35B-A3B and 122B-A10B main/MTP output heads:
+validated dense Qwen3.5-family 27B, Qwen3.5/Qwen3.6 35B-A3B, and 122B-A10B
+main/MTP output heads:
 
 ```bash
 export GGML_TP_SHARDED_OUTPUT=1
@@ -286,6 +287,9 @@ and zero-width rotated splits retain mirrored placement.
 
 | Workload | Mirrored | Sharded | Change |
 |---|---:|---:|---:|
+| 27B Q8 raw tg128, six-sample ABBA mean | 29.223 t/s | **30.850 t/s** | **+5.57%** |
+| 27B Q8 raw tg512, six-sample ABBA mean | 29.237 t/s | **30.930 t/s** | **+5.79%** |
+| 27B Q8 + external Q4 MTP, two-run ABBA mean | 49.414 t/s | **53.555 t/s** | **+8.38%** |
 | 35B MTP, five-run mean | 86.59 t/s | **92.41 t/s** | **+6.72%** |
 | 35B raw tg128 | 62.93 t/s | **65.61 t/s** | **+4.25%** |
 | 122B MTP, five-run mean | 49.02 t/s | **65.51 t/s** | **+33.65% observed** |
@@ -297,14 +301,18 @@ interpreted as a topology-independent estimate.
 
 Five paired 35B runs had identical draft/accepted counts in every pair. A
 separate deterministic 64-token test produced the same output SHA-256 in both
-modes.
+modes. The 27B Q8 validation also produced identical 64-token greedy output and
+top-10 token IDs; its maximum top-10 log-probability difference was 4.30e-6.
+All four fixed-seed 27B MTP runs produced the same 256 tokens and accepted the
+same 159 of 284 draft tokens.
 
 ### Prompt processing
 
-Clean-reset, isolated process results:
+Clean-reset long-context and isolated-process 27B results:
 
 | Prompt | Mirrored | Sharded | Change |
 |---|---:|---:|---:|
+| 27B Q8 PP4096, six-sample ABBA mean | 1,335.39 t/s | 1,338.12 t/s | +0.20% |
 | 64k (65,533 actual) | 1,361.57 t/s | 1,361.57 t/s | parity |
 | 128k (131,071 actual) | **1,029.30 t/s** | 1,020.43 t/s | -0.86% |
 

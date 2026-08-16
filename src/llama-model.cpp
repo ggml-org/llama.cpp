@@ -1949,10 +1949,11 @@ bool llama_model::is_tensor_parallel_output_head(const ggml_tensor * tensor) con
     if (!tp_sharded_output_initialized) {
         tp_sharded_output_initialized = true;
         const char * enabled = getenv("GGML_TP_SHARDED_OUTPUT");
-        const bool supported_model = type == LLM_TYPE_35B_A3B || type == LLM_TYPE_122B_A10B;
-        const bool supported_arch =
-            ((arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_QWEN35MOE) && supported_model) ||
-            arch == LLM_ARCH_DEEPSEEK4;
+        const bool supported_qwen =
+            (arch == LLM_ARCH_QWEN35 && type == LLM_TYPE_27B) ||
+            ((arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_QWEN35MOE) &&
+                (type == LLM_TYPE_35B_A3B || type == LLM_TYPE_122B_A10B));
+        const bool supported_arch = supported_qwen || arch == LLM_ARCH_DEEPSEEK4;
         const char * vocab_sharded = getenv("GGML_TP_VOCAB_SHARDED_OUTPUT");
         const bool vocab_sharded_output = arch == LLM_ARCH_DEEPSEEK4 &&
             vocab_sharded != nullptr && strcmp(vocab_sharded, "1") == 0;
