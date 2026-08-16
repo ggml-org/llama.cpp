@@ -91,10 +91,33 @@ ARM rates: pixel=4 texel=8 fma=128
 
 ## Emulator and simulator boundary
 
-llvmpipe and SwiftShader are useful for Vulkan API and shader correctness
-checks, but they do not emulate ARM Mali hardware, ARM shader-core properties,
-Mali scheduling, or Mali performance. Android Emulator GPU modes likewise do
-not provide a Mali-G720 driver contract.
+The Android Emulator can run generic software Vulkan with:
+
+```bash
+emulator @AVD -gpu swiftshader_indirect
+emulator @AVD -gpu lavapipe
+```
+
+It can also use `-gpu host`, which passes through the development host GPU;
+that is not Mali emulation. These modes require a desktop emulator host and
+do not reproduce the Android ARM Mali driver ABI.
+
+Mesa PanVK is an open Mali-family Vulkan driver on supported Linux hardware,
+but it is not the proprietary Android r44p1 driver used by the reference phone.
+It may help test generic Mali-family shader behavior, but it cannot stand in
+for this device's performance result.
+
+References:
+
+- https://developer.android.com/studio/run/emulator-acceleration
+- https://developer.android.com/studio/run/emulator-commandline
+- https://docs.mesa3d.org/panfrost.html
+
+llvmpipe, SwiftShader, and Android Emulator software modes are useful for
+Vulkan API and shader correctness checks, but they do not emulate ARM Mali
+hardware, ARM shader-core properties, Mali scheduling, or Mali performance.
+Android Emulator GPU modes likewise do not provide a Mali-G720 driver
+contract.
 
 Therefore:
 
