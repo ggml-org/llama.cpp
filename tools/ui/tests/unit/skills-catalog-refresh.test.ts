@@ -6,7 +6,7 @@
 import { useSkillCatalogRefresh } from '$lib/hooks/use-skill-catalog-refresh.svelte';
 import { skillsStore } from '$lib/stores/skills.svelte';
 import type { SkillCatalogEntry, SkillCatalogResponse } from '$lib/types';
-import { afterEach, describe, expect, it, vi, type Mock } from 'vitest';
+import { afterEach, describe, expect, it, type Mock, vi } from 'vitest';
 
 function jsonResponse(body: unknown, status = 200): Response {
 	return new Response(JSON.stringify(body), {
@@ -17,22 +17,23 @@ function jsonResponse(body: unknown, status = 200): Response {
 
 function makeEntry(name: string): SkillCatalogEntry {
 	return {
-		id: `opaque-${name}`,
-		name,
+		catalog_xml: `<skill><name>${name}</name></skill>`,
 		description: `description of ${name}`,
-		scope: 'project',
+		id: `opaque-${name}`,
+		instruction: { bytes: 16, lines: 1, modified_at: null, tokens: 4, tokens_estimated: true },
+		name,
 		provider: 'agents',
-		instruction: { bytes: 16, lines: 1, tokens: 4, tokens_estimated: true, modified_at: null },
 		resources: { count: 0, truncated: false },
-		catalog_xml: `<skill><name>${name}</name></skill>`
+		scope: 'project'
 	};
 }
 
 function makeCatalog(...names: string[]): SkillCatalogResponse {
 	return {
-		skills: names.map(makeEntry),
-		catalog_instruction_xml: '<available_skills>Call read_skill(name) when matching.</available_skills>',
-		diagnostics: []
+		catalog_instruction_xml:
+			'<available_skills>Call read_skill(name) when matching.</available_skills>',
+		diagnostics: [],
+		skills: names.map(makeEntry)
 	};
 }
 
@@ -226,7 +227,6 @@ describe('useSkillCatalogRefresh', () => {
 		captureFetch(pending);
 		const refresh = useSkillCatalogRefresh();
 		const probeController = new AbortController();
-
 		const probe = skillsStore.probeAvailability('/a', probeController.signal);
 
 		refresh.onCwdChange('/a');
@@ -250,7 +250,9 @@ describe('useSkillCatalogRefresh', () => {
 
 		pending[1].resolve(jsonResponse(makeCatalog('alpha-2')));
 
-		await vi.waitFor(() => expect(skillsStore.slotFor('/a')?.catalog?.skills.map((s) => s.name)).toEqual(['alpha-2']));
+		await vi.waitFor(() =>
+			expect(skillsStore.slotFor('/a')?.catalog?.skills.map((s) => s.name)).toEqual(['alpha-2'])
+		);
 
 		probeController.abort();
 	});

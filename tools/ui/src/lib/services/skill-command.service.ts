@@ -6,8 +6,8 @@
  * model-approved read takes. Unavailable/not-found/error reads persist
  * nothing.
  */
-import { skillActivationStore } from '$lib/stores/skill-activation.svelte';
 import { SkillsService } from '$lib/services/skills.service';
+import { skillActivationStore } from '$lib/stores/skill-activation.svelte';
 import type { SkillReadResult } from '$lib/types/skills';
 
 /** Outcome of an explicit `/skills <name>` activation. */

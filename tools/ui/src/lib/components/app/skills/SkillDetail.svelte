@@ -1,16 +1,20 @@
 <script lang="ts">
-	import { fade, fly } from 'svelte/transition';
 	import { Circle, RefreshCw, X } from '@lucide/svelte';
 	import { MarkdownContent, SyntaxHighlightedCode } from '$lib/components/app';
 	import { ActionIcon } from '$lib/components/app/actions';
+	import { groupSkillResourcePaths } from '$lib/components/app/skills/skill-resource-presentation';
 	import { Alert, AlertDescription, AlertTitle } from '$lib/components/ui/alert';
 	import { Button } from '$lib/components/ui/button';
-	import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '$lib/components/ui/collapsible';
+	import {
+		Collapsible,
+		CollapsibleContent,
+		CollapsibleTrigger
+	} from '$lib/components/ui/collapsible';
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import { FileTypeText } from '$lib/enums/files.enums';
-	import { groupSkillResourcePaths } from '$lib/components/app/skills/skill-resource-presentation';
 	import { SkillsService } from '$lib/services/skills.service';
 	import type { SkillBaseReadResult, SkillCatalogEntry } from '$lib/types';
+	import { fade, fly } from 'svelte/transition';
 
 	interface Props {
 		entry: SkillCatalogEntry;
@@ -19,18 +23,9 @@
 		mobile: boolean;
 	}
 
-	let { entry, cwd, onClose, mobile }: Props = $props();
+	let { cwd, entry, mobile, onClose }: Props = $props();
 
-	/**
-	 * The read lifecycle is owned by one cleanup-returning effect keyed on the
-	 * entry and the selected CWD (plus a retry token). Every run takes a fresh
-	 * AbortController and bumps a generation counter; the previous controller
-	 * is aborted by the effect cleanup before the next run starts. A settling
-	 * response is accepted only when it is still the current generation AND
-	 * its own controller was not aborted, so a superseded, CWD-changed,
-	 * retried, or unmounted read can never render. The retry replaces only the
-	 * in-flight request.
-	 */
+	// Accept a response only while it is the current generation and un-aborted.
 	let readState = $state<'loading' | 'ready' | 'error'>('loading');
 	let result = $state<SkillBaseReadResult | null>(null);
 	let errorMessage = $state('');
@@ -60,19 +55,16 @@
 			.then((readResult) => {
 				if (generation !== readGeneration || controller.signal.aborted) return;
 
-				// Preview accepts base results only; a resource result is an
-				// error, never a content fallback.
+				// Preview accepts base results only; a resource result is an error.
 				if (readResult.kind !== 'skill') {
 					errorMessage = 'The server returned a resource instead of the skill base content.';
 					readState = 'error';
+
 					return;
 				}
 
 				resourceGroupsOpen = Object.fromEntries(
-					groupSkillResourcePaths(readResult.resources.paths).map((group) => [
-						group.group,
-						false
-					])
+					groupSkillResourcePaths(readResult.resources.paths).map((group) => [group.group, false])
 				);
 				result = readResult;
 				readState = 'ready';
@@ -80,8 +72,7 @@
 			.catch((failure) => {
 				if (generation !== readGeneration || controller.signal.aborted) return;
 
-				errorMessage =
-					failure instanceof Error ? failure.message : 'The skill could not be read.';
+				errorMessage = failure instanceof Error ? failure.message : 'The skill could not be read.';
 				readState = 'error';
 			});
 
@@ -92,18 +83,14 @@
 		retryToken += 1;
 	}
 
-	// Discovery is derived only from the successful base read; nothing else
-	// renders or requests resources for the preview.
-	const resourceGroups = $derived(
-		result ? groupSkillResourcePaths(result.resources.paths) : []
-	);
-
+	// Resource groups derive only from the successful base read.
+	const resourceGroups = $derived(result ? groupSkillResourcePaths(result.resources.paths) : []);
 </script>
 
 <div
 	data-testid="skill-detail"
 	class="flex p-6 h-full min-h-0 flex-col"
-	in:fly|global={{ x: mobile ? 0 : 48, duration: 200, opacity: 0 }}
+	in:fly|global={{ duration: 200, opacity: 0, x: mobile ? 0 : 48 }}
 >
 	<div data-testid="skill-detail-header" class="flex shrink-0 flex-col gap-4">
 		<div class="flex items-start justify-between gap-2">
@@ -168,7 +155,10 @@
 
 	<div data-testid="skill-detail-separator" class="border-t mt-4" aria-hidden="true"></div>
 
-	<div data-testid="skill-detail-body" class="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto pt-4">
+	<div
+		data-testid="skill-detail-body"
+		class="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto pt-4"
+	>
 		{#if readState === 'loading'}
 			<div aria-label="Loading skill content" class="flex flex-col gap-3">
 				<Skeleton class="h-8 w-40" />

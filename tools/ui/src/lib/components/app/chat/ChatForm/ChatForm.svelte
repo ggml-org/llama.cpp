@@ -1,5 +1,6 @@
 <script lang="ts">
 	import ContextGaugePopup from './ChatFormContextGauge/ContextGaugePopup.svelte';
+	import { goto } from '$app/navigation';
 	import {
 		ChatAttachmentsList,
 		ChatFormActions,
@@ -62,9 +63,8 @@
 		createAudioFile,
 		isAudioRecordingSupported
 	} from '$lib/utils/browser-only';
-	import { goto } from '$app/navigation';
-	import { toast } from 'svelte-sonner';
 	import { onMount } from 'svelte';
+	import { toast } from 'svelte-sonner';
 
 	interface Props {
 		// Data

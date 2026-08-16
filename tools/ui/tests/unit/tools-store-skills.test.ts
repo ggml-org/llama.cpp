@@ -7,7 +7,6 @@ import {
 } from '$lib/constants';
 import { ToolSource } from '$lib/enums';
 import type { toolsStore as ToolsStoreValue } from '$lib/stores/tools.svelte';
-import type { ToolEntry } from '$lib/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // The node unit project has no DOM or localStorage; install a Map-backed
@@ -46,11 +45,11 @@ vi.mock('$lib/services/tools.service', () => ({
 		list: vi.fn().mockResolvedValue([
 			{
 				definition: {
-					type: 'function',
 					function: {
 						name: 'read_file',
-						parameters: { type: 'object', properties: {} }
-					}
+						parameters: { properties: {}, type: 'object' }
+					},
+					type: 'function'
 				},
 				display_name: 'Read File',
 				permissions: { write: false },
@@ -112,7 +111,9 @@ describe('ToolsStore Skills settings group', () => {
 		// The group reuses the centralized settings definitions unchanged
 		// (deep-equal; `vi.resetModules()` creates a fresh registry instance
 		// per test, so object identity cannot span the boundary).
-		const expected = new Map(SKILL_TOOL_SETTINGS.map((setting) => [setting.key, setting.definition]));
+		const expected = new Map(
+			SKILL_TOOL_SETTINGS.map((setting) => [setting.key, setting.definition])
+		);
 
 		for (const tool of group.tools) {
 			expect(tool.definition).toEqual(expected.get(tool.key));
@@ -120,10 +121,7 @@ describe('ToolsStore Skills settings group', () => {
 	});
 
 	it('restores disabled Skill settings from persisted localStorage', async () => {
-		storageState.set(
-			DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY,
-			JSON.stringify(['skill:list_skill'])
-		);
+		storageState.set(DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY, JSON.stringify(['skill:list_skill']));
 
 		vi.resetModules();
 		({ toolsStore } = await import('$lib/stores/tools.svelte'));
@@ -153,16 +151,16 @@ describe('ToolsStore Skills settings group', () => {
 		expect(toolsStore.isToolEnabled('skill:read_skill')).toBe(false);
 		expect(toolsStore.isToolEnabled('skill:list_skill')).toBe(true);
 		expect([...toolsStore.getEnabledSkillToolNames()]).toEqual([SKILL_LIST_TOOL]);
-		expect(
-			JSON.parse(localStorage.getItem(DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY) ?? '[]')
-		).toEqual(['skill:read_skill']);
+		expect(JSON.parse(localStorage.getItem(DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY) ?? '[]')).toEqual([
+			'skill:read_skill'
+		]);
 
 		toolsStore.toggleTool('skill:read_skill');
 
 		expect(toolsStore.isToolEnabled('skill:read_skill')).toBe(true);
-		expect(
-			JSON.parse(localStorage.getItem(DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY) ?? '[]')
-		).toEqual([]);
+		expect(JSON.parse(localStorage.getItem(DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY) ?? '[]')).toEqual(
+			[]
+		);
 	});
 
 	it('round-trips independently toggled Skill settings through a fresh store', async () => {

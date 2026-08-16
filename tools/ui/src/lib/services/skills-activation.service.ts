@@ -9,8 +9,8 @@
  * roots, or parses `content_xml`; the XML travels only as opaque tool-result
  * message content.
  */
-import { AttachmentType, MessageRole, MessageType } from '$lib/enums';
 import { SKILL_READ_TOOL } from '$lib/constants';
+import { AttachmentType, MessageRole, MessageType } from '$lib/enums';
 import type {
 	DatabaseMessage,
 	DatabaseMessageExtra,
@@ -82,11 +82,17 @@ export function isSkillExtra(value: unknown): value is DatabaseMessageExtraSkill
 	const record = value as Partial<DatabaseMessageExtraSkill>;
 
 	if (record.type !== AttachmentType.SKILL) return false;
+
 	if (record.kind !== 'base' && record.kind !== 'resource') return false;
+
 	if (record.state !== 'approved') return false;
+
 	if (typeof record.name !== 'string' || record.name.length === 0) return false;
+
 	if (record.scope !== 'global' && record.scope !== 'project') return false;
+
 	if (typeof record.provider !== 'string' || record.provider.length === 0) return false;
+
 	if (typeof record.skillId !== 'string' || record.skillId.length === 0) return false;
 
 	return true;
@@ -106,7 +112,9 @@ export function skillExtraFromExtras(
 }
 
 /** First valid SKILL record persisted on a message, or undefined. */
-export function skillExtraFromMessage(message: DatabaseMessage): DatabaseMessageExtraSkill | undefined {
+export function skillExtraFromMessage(
+	message: DatabaseMessage
+): DatabaseMessageExtraSkill | undefined {
 	return skillExtraFromExtras(message.extra);
 }
 
@@ -157,12 +165,12 @@ export function buildSkillActivationPair(
 			timestamp: Date.now(),
 			toolCalls: JSON.stringify([
 				{
-					id: toolCallId,
-					type: 'function',
 					function: {
-						name: SKILL_READ_TOOL,
-						arguments: JSON.stringify({ name: result.skill.name })
-					}
+						arguments: JSON.stringify({ name: result.skill.name }),
+						name: SKILL_READ_TOOL
+					},
+					id: toolCallId,
+					type: 'function'
 				}
 			]),
 			type: MessageType.TEXT

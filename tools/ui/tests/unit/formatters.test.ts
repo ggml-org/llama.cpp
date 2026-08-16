@@ -9,9 +9,7 @@ describe('normalizeSkillDescription', () => {
 	});
 
 	it('trims leading and trailing whitespace', () => {
-		expect(normalizeSkillDescription('  leading and trailing  ')).toBe(
-			'leading and trailing'
-		);
+		expect(normalizeSkillDescription('  leading and trailing  ')).toBe('leading and trailing');
 		expect(normalizeSkillDescription('\t\npadded\t\n')).toBe('padded');
 	});
 

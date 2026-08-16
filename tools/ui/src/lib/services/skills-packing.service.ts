@@ -2,8 +2,8 @@ import { API_TOKENIZE } from '$lib/constants';
 import type {
 	SkillCatalogEntry,
 	SkillCatalogResponse,
-	SkillPackOptions,
 	SkillPackedCatalog,
+	SkillPackOptions,
 	SkillRunSnapshot
 } from '$lib/types';
 import { apiFetch } from '$lib/utils';
@@ -64,8 +64,8 @@ export function buildSkillRunSnapshot(
 	const entries = Object.freeze(catalog.skills.map(freezeEntry));
 
 	return {
-		cwd,
 		catalog,
+		cwd,
 		entries,
 		envelope: serializeSkillCatalogEnvelope(catalog),
 		total: catalog.skills.length
@@ -118,7 +118,7 @@ export class SkillsPackingService {
 		const total = snapshot.total;
 
 		if (budget <= 0 || total === 0) {
-			return { envelope: '', total, included: 0, estimated: false, fullTokens: null };
+			return { envelope: '', estimated: false, fullTokens: null, included: 0, total };
 		}
 
 		if (mode === 'direct' && model) {
@@ -158,14 +158,14 @@ async function packWithMeasure(
 	estimated: boolean
 ): Promise<SkillPackedCatalog> {
 	const { catalog, entries, envelope, total } = snapshot;
-
 	const fullTokens = await measure(envelope);
 
 	if (fullTokens <= budget) {
-		return { envelope, total, included: total, estimated, fullTokens };
+		return { envelope, estimated, fullTokens, included: total, total };
 	}
 
 	const instructionXml = catalog.catalog_instruction_xml;
+
 	let included = 0;
 
 	for (let i = 1; i < total; i++) {
@@ -178,10 +178,10 @@ async function packWithMeasure(
 
 	return {
 		envelope: serializeEnvelope(instructionXml, entries, total, included),
-		total,
-		included,
 		estimated,
-		fullTokens
+		fullTokens,
+		included,
+		total
 	};
 }
 

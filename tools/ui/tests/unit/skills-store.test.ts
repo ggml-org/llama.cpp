@@ -1,4 +1,4 @@
-import { skillsStore, type SkillAvailability } from '$lib/stores/skills.svelte';
+import { type SkillAvailability, skillsStore } from '$lib/stores/skills.svelte';
 import type { SkillCatalogEntry, SkillCatalogResponse } from '$lib/types';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -11,22 +11,23 @@ function jsonResponse(body: unknown, status = 200): Response {
 
 function makeEntry(name: string): SkillCatalogEntry {
 	return {
-		id: `opaque-${name}`,
-		name,
+		catalog_xml: `<skill><name>${name}</name></skill>`,
 		description: `description of ${name}`,
-		scope: 'project',
+		id: `opaque-${name}`,
+		instruction: { bytes: 16, lines: 1, modified_at: null, tokens: 4, tokens_estimated: true },
+		name,
 		provider: 'agents',
-		instruction: { bytes: 16, lines: 1, tokens: 4, tokens_estimated: true, modified_at: null },
 		resources: { count: 0, truncated: false },
-		catalog_xml: `<skill><name>${name}</name></skill>`
+		scope: 'project'
 	};
 }
 
 function makeCatalog(...names: string[]): SkillCatalogResponse {
 	return {
-		skills: names.map(makeEntry),
-		catalog_instruction_xml: '<available_skills>Call read_skill(name) when matching.</available_skills>',
-		diagnostics: []
+		catalog_instruction_xml:
+			'<available_skills>Call read_skill(name) when matching.</available_skills>',
+		diagnostics: [],
+		skills: names.map(makeEntry)
 	};
 }
 
@@ -75,6 +76,7 @@ describe('skillsStore', () => {
 	it('discards a stale response from the slot but still returns it to its caller', async () => {
 		let resolveFirst!: (response: Response) => void;
 		let resolveSecond!: (response: Response) => void;
+
 		const fetchMock = vi
 			.fn()
 			.mockImplementationOnce(
@@ -150,6 +152,7 @@ describe('skillsStore', () => {
 
 	it('invalidates the screen slot and stales any in-flight response for that CWD', async () => {
 		let resolvePending!: (response: Response) => void;
+
 		const fetchMock = vi.fn(
 			() =>
 				new Promise<Response>((resolve) => {
@@ -210,7 +213,9 @@ describe('skillsStore', () => {
 	it('maps a 404 probe to disabled and hides the navigation entry', async () => {
 		vi.stubGlobal(
 			'fetch',
-			vi.fn().mockResolvedValue(jsonResponse({ error: { code: 404, message: 'no skills route' } }, 404))
+			vi
+				.fn()
+				.mockResolvedValue(jsonResponse({ error: { code: 404, message: 'no skills route' } }, 404))
 		);
 
 		await skillsStore.probeAvailability(undefined);
@@ -267,7 +272,6 @@ describe('skillsStore', () => {
 
 		const controllerA = new AbortController();
 		const controllerB = new AbortController();
-
 		const a = skillsStore.ensureCatalog('/a', controllerA.signal);
 		const b = skillsStore.ensureCatalog('/a', controllerB.signal);
 
@@ -278,7 +282,9 @@ describe('skillsStore', () => {
 		await expect(a).rejects.toThrow();
 		// B is still attached, so the shared request stays alive.
 		expect(pending[0].signal.aborted).toBe(false);
-		await expect(Promise.race([b, Promise.resolve('still-pending')])).resolves.toBe('still-pending');
+		await expect(Promise.race([b, Promise.resolve('still-pending')])).resolves.toBe(
+			'still-pending'
+		);
 
 		controllerB.abort();
 		await expect(b).rejects.toThrow();
@@ -287,7 +293,10 @@ describe('skillsStore', () => {
 	});
 
 	it('does not change availability when the probing caller aborts', async () => {
-		vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {})));
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(() => new Promise(() => {}))
+		);
 
 		const controller = new AbortController();
 		const probe = skillsStore.probeAvailability(undefined, controller.signal);

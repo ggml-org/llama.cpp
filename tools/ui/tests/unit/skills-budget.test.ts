@@ -4,12 +4,12 @@
 // numeric-control pattern (min 0 + integer rounding + load-time sanitize).
 
 import {
+	normalizeSkillBudget,
 	POSITIVE_INTEGER_FIELDS,
-	SETTINGS_CHAT_SECTIONS,
 	SETTING_CONFIG_DEFAULT,
+	SETTINGS_CHAT_SECTIONS,
 	SETTINGS_KEYS,
-	SETTINGS_SECTION_SLUGS,
-	normalizeSkillBudget
+	SETTINGS_SECTION_SLUGS
 } from '$lib/constants';
 import { SettingsFieldType } from '$lib/enums/settings.enums';
 import { describe, expect, it } from 'vitest';

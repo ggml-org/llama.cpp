@@ -1,7 +1,7 @@
 <script lang="ts">
-	import type { Component, Snippet } from 'svelte';
 	import { X } from '@lucide/svelte';
 	import { ActionIcon } from '$lib/components/app/actions';
+	import type { Component, Snippet } from 'svelte';
 	import { fade } from 'svelte/transition';
 
 	interface Props {
@@ -13,8 +13,14 @@
 		headerClass?: string;
 	}
 
-	let { icon: Icon, title, onClose, children, class: className = '', headerClass = '' }: Props =
-		$props();
+	let {
+		children,
+		class: className = '',
+		headerClass = '',
+		icon: Icon,
+		onClose,
+		title
+	}: Props = $props();
 </script>
 
 <div

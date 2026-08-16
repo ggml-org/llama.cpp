@@ -30,12 +30,12 @@ export const SETTINGS_KEYS = {
 	FULL_HEIGHT_CODE_BLOCKS: 'fullHeightCodeBlocks',
 	JS_SANDBOX_ENABLED: 'jsSandboxEnabled',
 	MAX_IMAGE_RESOLUTION: 'maxImageMPixels',
+	MAX_SKILL_BUDGET: 'maxSkillBudget',
 	MAX_TOKENS: 'max_tokens',
 	MCP_REQUEST_TIMEOUT_SECONDS: 'mcpRequestTimeoutSeconds',
 	// MCP
 	MCP_SERVERS: 'mcpServers',
 	MENTION_SEARCH_MAX_DEPTH: 'mentionSearchMaxDepth',
-	MAX_SKILL_BUDGET: 'maxSkillBudget',
 	MIN_P: 'min_p',
 	PASTE_LONG_TEXT_TO_FILE_LEN: 'pasteLongTextToFileLen',
 	PDF_AS_IMAGE: 'pdfAsImage',

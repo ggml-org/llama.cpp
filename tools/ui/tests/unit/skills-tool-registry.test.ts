@@ -1,10 +1,10 @@
 import {
+	buildSkillListToolDefinition,
+	buildSkillReadToolDefinition,
 	SKILL_LIST_TOOL,
 	SKILL_READ_TOOL,
 	SKILL_SERVER_LABEL,
-	SKILL_TOOL_SETTINGS,
-	buildSkillListToolDefinition,
-	buildSkillReadToolDefinition
+	SKILL_TOOL_SETTINGS
 } from '$lib/constants';
 import { describe, expect, it } from 'vitest';
 
@@ -22,13 +22,13 @@ describe('Skills tool registry names and settings keys', () => {
 
 		expect(byName.get(SKILL_READ_TOOL)).toMatchObject({
 			key: 'skill:read_skill',
-			toolName: 'read_skill',
-			label: 'Read skill'
+			label: 'Read skill',
+			toolName: 'read_skill'
 		});
 		expect(byName.get(SKILL_LIST_TOOL)).toMatchObject({
 			key: 'skill:list_skill',
-			toolName: 'list_skill',
-			label: 'List skills'
+			label: 'List skills',
+			toolName: 'list_skill'
 		});
 	});
 
@@ -58,9 +58,9 @@ describe('buildSkillListToolDefinition', () => {
 			'List the skills available in this run, with their descriptions.'
 		);
 		expect(def.function.parameters).toEqual({
-			type: 'object',
 			properties: {},
-			required: []
+			required: [],
+			type: 'object'
 		});
 	});
 });
@@ -72,29 +72,25 @@ describe('buildSkillReadToolDefinition', () => {
 		expect(def.type).toBe('function');
 		expect(def.function.name).toBe(SKILL_READ_TOOL);
 		expect(def.function.parameters).toMatchObject({
-			type: 'object',
-			required: ['name'],
 			properties: {
 				name: { type: 'string' },
 				path: { type: 'string' }
-			}
+			},
+			required: ['name'],
+			type: 'object'
 		});
 	});
 
 	it('adds the dynamic snapshot name enum only when names are supplied', () => {
 		const run = buildSkillReadToolDefinition(['alpha', 'beta']);
-		const nameParam = (
-			run.function.parameters.properties as { name: { enum?: string[] } }
-		).name;
+		const nameParam = (run.function.parameters.properties as { name: { enum?: string[] } }).name;
 
 		expect(nameParam.enum).toEqual(['alpha', 'beta']);
 	});
 
 	it('never carries a static name enum in the no-argument display form', () => {
 		const display = buildSkillReadToolDefinition();
-		const nameParam = (
-			display.function.parameters.properties as { name: { enum?: unknown } }
-		).name;
+		const nameParam = (display.function.parameters.properties as { name: { enum?: unknown } }).name;
 
 		expect(nameParam.enum).toBeUndefined();
 	});
@@ -102,10 +98,9 @@ describe('buildSkillReadToolDefinition', () => {
 	it('copies the supplied names so later caller mutation cannot leak into a run definition', () => {
 		const names = ['alpha'];
 		const run = buildSkillReadToolDefinition(names);
+
 		names.push('beta');
-		const nameParam = (
-			run.function.parameters.properties as { name: { enum?: string[] } }
-		).name;
+		const nameParam = (run.function.parameters.properties as { name: { enum?: string[] } }).name;
 
 		expect(nameParam.enum).toEqual(['alpha']);
 	});

@@ -1,6 +1,6 @@
 import { NEWLINE, SKILL_READ_TOOL } from '$lib/constants';
 import { AttachmentType, MessageRole, MessageType } from '$lib/enums';
-import { skillActivationExtra, isSkillExtra } from '$lib/services/skills-activation.service';
+import { isSkillExtra, skillActivationExtra } from '$lib/services/skills-activation.service';
 import type { DatabaseMessage, ExportedConversation } from '$lib/types/database';
 import type { SkillBaseReadResult } from '$lib/types/skills';
 import { filterByLeafNodeId } from '$lib/utils';
@@ -37,19 +37,19 @@ beforeAll(async () => {
 
 function baseResult(): SkillBaseReadResult {
 	return {
-		kind: 'skill',
-		skill: {
-			id: 'opaque-demo',
-			name: 'demo-skill',
-			scope: 'project',
-			provider: 'agents',
-			metadata: { name: 'demo-skill', description: 'A demo skill', license: 'MIT' }
-		},
-		resources: { paths: [], truncated: false },
-		source: '---\nname: demo-skill\ndescription: A demo skill\nlicense: MIT\n---\n# Body',
 		body_markdown: '# Body',
 		content_xml: '<skill_content name="demo-skill">body &amp; more</skill_content>',
-		diagnostics: []
+		diagnostics: [],
+		kind: 'skill',
+		resources: { paths: [], truncated: false },
+		skill: {
+			id: 'opaque-demo',
+			metadata: { description: 'A demo skill', license: 'MIT', name: 'demo-skill' },
+			name: 'demo-skill',
+			provider: 'agents',
+			scope: 'project'
+		},
+		source: '---\nname: demo-skill\ndescription: A demo skill\nlicense: MIT\n---\n# Body'
 	};
 }
 
@@ -66,9 +66,9 @@ function skillTurn(convId: string): DatabaseMessage[] {
 		timestamp: 2,
 		toolCalls: JSON.stringify([
 			{
+				function: { arguments: JSON.stringify({ name: 'demo-skill' }), name: SKILL_READ_TOOL },
 				id: toolCallId,
-				type: 'function',
-				function: { name: SKILL_READ_TOOL, arguments: JSON.stringify({ name: 'demo-skill' }) }
+				type: 'function'
 			}
 		]),
 		type: MessageType.TEXT
@@ -129,7 +129,13 @@ function makeSession(): ExportedConversation {
 		content: 'mcp output',
 		convId,
 		extra: [
-			{ type: AttachmentType.MCP_RESOURCE, name: 'r', serverName: 'srv', uri: 'file:///r', content: 'c' }
+			{
+				content: 'c',
+				name: 'r',
+				serverName: 'srv',
+				type: AttachmentType.MCP_RESOURCE,
+				uri: 'file:///r'
+			}
 		],
 		id: 'tool-result-2',
 		parent: 'assistant-2',
@@ -165,15 +171,26 @@ describe('conversation export/import round trip with Skills metadata', () => {
 		expect(toolResult).toBeDefined();
 		expect(plainAssistant?.content).toBe('Plain non-Skills reply');
 		expect(mcpToolResult?.extra).toEqual([
-			{ type: AttachmentType.MCP_RESOURCE, name: 'r', serverName: 'srv', uri: 'file:///r', content: 'c' }
+			{
+				content: 'c',
+				name: 'r',
+				serverName: 'srv',
+				type: AttachmentType.MCP_RESOURCE,
+				uri: 'file:///r'
+			}
 		]);
 
 		// The synthetic assistant tool call still pairs with its tool result.
-		const calls = JSON.parse(assistant!.toolCalls ?? '') as Array<{ id: string; function: { name: string } }>;
+		const calls = JSON.parse(assistant!.toolCalls ?? '') as Array<{
+			id: string;
+			function: { name: string };
+		}>;
 
 		expect(calls[0].function.name).toBe(SKILL_READ_TOOL);
 		expect(toolResult!.toolCallId).toBe(calls[0].id);
-		expect(toolResult!.content).toBe('<skill_content name="demo-skill">body &amp; more</skill_content>');
+		expect(toolResult!.content).toBe(
+			'<skill_content name="demo-skill">body &amp; more</skill_content>'
+		);
 
 		// The typed durable metadata survives the round trip intact.
 		const [extra] = toolResult!.extra ?? [];
@@ -181,11 +198,12 @@ describe('conversation export/import round trip with Skills metadata', () => {
 		expect(isSkillExtra(extra)).toBe(true);
 		expect(extra).toMatchObject({
 			kind: 'base',
-			skillId: 'opaque-demo',
 			name: 'demo-skill',
+			provider: 'agents',
 			scope: 'project',
-			provider: 'agents'
+			skillId: 'opaque-demo'
 		});
+
 		if (isSkillExtra(extra)) {
 			expect(extra.metadata?.license).toBe('MIT');
 		}
@@ -214,7 +232,13 @@ describe('conversation export/import round trip with Skills metadata', () => {
 		const toolResult = session.messages.find((m) => m.id === 'tool-result-1')!;
 
 		toolResult.extra = [
-			{ type: AttachmentType.SKILL, kind: 'base', state: 'approved', name: 'demo-skill', skillId: undefined }
+			{
+				kind: 'base',
+				name: 'demo-skill',
+				skillId: undefined,
+				state: 'approved',
+				type: AttachmentType.SKILL
+			}
 		] as unknown as typeof toolResult.extra;
 
 		const jsonl = conversationsStore.serializeSessionToJsonl(session);
@@ -234,7 +258,6 @@ describe('paired message validity for the model', () => {
 		const [assistant, toolResult] = skillTurn('conv-roundtrip');
 		const assistantApi = await ChatService.convertDbMessageToApiChatMessageData(assistant);
 		const toolApi = await ChatService.convertDbMessageToApiChatMessageData(toolResult);
-
 		const toolCalls = assistantApi.tool_calls ?? [];
 
 		expect(assistantApi.role).toBe(MessageRole.ASSISTANT);
@@ -244,7 +267,9 @@ describe('paired message validity for the model', () => {
 
 		expect(toolApi.role).toBe(MessageRole.TOOL);
 		expect(toolApi.tool_call_id).toBe('call_skill_1');
-		expect(toolApi.content).toBe('<skill_content name="demo-skill">body &amp; more</skill_content>');
+		expect(toolApi.content).toBe(
+			'<skill_content name="demo-skill">body &amp; more</skill_content>'
+		);
 	});
 });
 
@@ -281,9 +306,9 @@ describe('visible-path branch filtering preserves Skills metadata', () => {
 			timestamp: 2,
 			toolCalls: JSON.stringify([
 				{
+					function: { arguments: '{"name":"demo-skill"}', name: SKILL_READ_TOOL },
 					id: 'call_1',
-					type: 'function',
-					function: { name: SKILL_READ_TOOL, arguments: '{"name":"demo-skill"}' }
+					type: 'function'
 				}
 			]),
 			type: MessageType.TEXT
@@ -321,9 +346,9 @@ describe('visible-path branch filtering preserves Skills metadata', () => {
 			timestamp: 5,
 			toolCalls: JSON.stringify([
 				{
+					function: { arguments: '{"name":"demo-skill"}', name: SKILL_READ_TOOL },
 					id: 'call_2',
-					type: 'function',
-					function: { name: SKILL_READ_TOOL, arguments: '{"name":"demo-skill"}' }
+					type: 'function'
 				}
 			]),
 			type: MessageType.TEXT
@@ -342,7 +367,6 @@ describe('visible-path branch filtering preserves Skills metadata', () => {
 			type: MessageType.TEXT
 		};
 		const all = [root, user1, assistant1, toolResult1, user2, assistant2, toolResult2];
-
 		// The visible-path compaction to branch B's leaf keeps the paired
 		// SKILL tool result on the path and filters out branch A entirely.
 		const pathB = filterByLeafNodeId(all, 'tool-result-2', false);
@@ -364,10 +388,10 @@ describe('visible-path branch filtering preserves Skills metadata', () => {
 		expect(isSkillExtra(extra)).toBe(true);
 		expect(extra).toMatchObject({
 			kind: 'base',
-			skillId: 'opaque-demo',
 			name: 'demo-skill',
+			provider: 'agents',
 			scope: 'project',
-			provider: 'agents'
+			skillId: 'opaque-demo'
 		});
 
 		// Navigating to branch A's leaf keeps ITS SKILL record and drops branch B.

@@ -13,7 +13,7 @@
 		onDismiss?: () => void;
 	}
 
-	let { packed, budget, onDismiss }: Props = $props();
+	let { budget, onDismiss, packed }: Props = $props();
 
 	const disabled = $derived(budget === 0 || packed.fullTokens === null);
 	const complete = $derived(!disabled && packed.included === packed.total);
@@ -31,8 +31,8 @@
 			<CircleSlash class="h-4 w-4" />
 			<AlertTitle>Skills tools are disabled</AlertTitle>
 			<AlertDescription>
-				Skills tools are disabled because the catalog budget is 0 tokens. The catalog stays available
-				for browsing, but no Skills prompt envelope is packed into agentic runs.
+				Skills tools are disabled because the catalog budget is 0 tokens. The catalog stays
+				available for browsing, but no Skills prompt envelope is packed into agentic runs.
 			</AlertDescription>
 		</Alert>
 	{:else if complete}
@@ -40,7 +40,8 @@
 			<BookOpen class="h-4 w-4" />
 			<AlertTitle>The full catalog fits the budget</AlertTitle>
 			<AlertDescription>
-				The full Skills catalog uses {fullTokensLabel} of {budget.toLocaleString()} budget tokens ({measureLabel}). list_skill() is not registered; read_skill() covers the full catalog.
+				The full Skills catalog uses {fullTokensLabel} of {budget.toLocaleString()} budget tokens ({measureLabel}).
+				list_skill() is not registered; read_skill() covers the full catalog.
 			</AlertDescription>
 		</Alert>
 	{:else}
@@ -48,7 +49,8 @@
 			<Files class="h-4 w-4" />
 			<AlertTitle>The full catalog exceeds the budget</AlertTitle>
 			<AlertDescription>
-				The full Skills catalog requires {fullTokensLabel} tokens ({measureLabel}). {packed.included} of {packed.total} skills are included; list_skill() is available.
+				The full Skills catalog requires {fullTokensLabel} tokens ({measureLabel}). {packed.included}
+				of {packed.total} skills are included; list_skill() is available.
 			</AlertDescription>
 		</Alert>
 	{/if}

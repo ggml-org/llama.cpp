@@ -431,7 +431,4 @@ export {
 	skillExtraFromMessage,
 	skillResourceExtra
 } from './skills-activation.service';
-export type {
-	SkillActivationPairData,
-	SkillSectionMeta
-} from './skills-activation.service';
+export type { SkillActivationPairData, SkillSectionMeta } from './skills-activation.service';

@@ -5,7 +5,6 @@
 // established generic text unchanged.
 
 import ChatMessageActionCardPermissionRequest from '$lib/components/app/chat/ChatMessages/ChatMessageActions/ChatMessageActionCard/ChatMessageActionCardPermissionRequest.svelte';
-import { ToolPermissionDecision } from '$lib/enums';
 import type { SkillConsentInfo } from '$lib/types';
 import { tick } from 'svelte';
 import { describe, expect, it, vi } from 'vitest';
@@ -32,10 +31,9 @@ describe('permission request card skill identity', () => {
 	it('shows the safe skill identity for a base consent pause', async () => {
 		const container = await renderCard({
 			name: 'add-new-model',
-			scope: 'project',
-			provider: 'agents'
+			provider: 'agents',
+			scope: 'project'
 		});
-
 		const text = textOf(container);
 
 		expect(text).toContain('Allow use of read_skill from llama-server?');
@@ -46,17 +44,18 @@ describe('permission request card skill identity', () => {
 	it('shows the requested relative path for a resource consent pause', async () => {
 		const container = await renderCard({
 			name: 'add-new-model',
-			scope: 'project',
+			path: 'refs/DETAILS.md',
 			provider: 'agents',
-			path: 'refs/DETAILS.md'
+			scope: 'project'
 		});
 
-		expect(textOf(container)).toContain('Skill: add-new-model (project · agents)— resource: refs/DETAILS.md');
+		expect(textOf(container)).toContain(
+			'Skill: add-new-model (project · agents)— resource: refs/DETAILS.md'
+		);
 	});
 
 	it('renders the generic prompt unchanged when no skill identity is present', async () => {
 		const container = await renderCard();
-
 		const text = textOf(container);
 
 		expect(text).toContain('Allow use of read_skill from llama-server?');

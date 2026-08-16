@@ -34,10 +34,10 @@
 import { browser } from '$app/environment';
 import {
 	CONFIG_LOCALSTORAGE_KEY,
+	normalizeSkillBudget,
 	SETTING_CONFIG_DEFAULT,
 	SETTINGS_KEYS,
-	USER_OVERRIDES_LOCALSTORAGE_KEY,
-	normalizeSkillBudget
+	USER_OVERRIDES_LOCALSTORAGE_KEY
 } from '$lib/constants';
 import { ColorMode } from '$lib/enums';
 import { ParameterSyncService } from '$lib/services/parameter-sync.service';

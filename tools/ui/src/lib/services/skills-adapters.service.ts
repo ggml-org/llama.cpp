@@ -1,20 +1,21 @@
-import { MessageRole, ToolPermissionDecision } from '$lib/enums';
 import {
-	SKILL_LIST_TOOL,
-	SKILL_READ_TOOL,
-	SKILL_SERVER_LABEL,
 	buildSkillListToolDefinition,
 	buildSkillReadToolDefinition,
-	freezeSkillToolDefinition
+	freezeSkillToolDefinition,
+	SKILL_LIST_TOOL,
+	SKILL_READ_TOOL,
+	SKILL_SERVER_LABEL
 } from '$lib/constants';
+import { MessageRole, ToolPermissionDecision } from '$lib/enums';
 import { SkillsService } from '$lib/services/skills.service';
 import type { AgenticToolCallPayload } from '$lib/types/agentic';
 import type { ApiChatMessageData } from '$lib/types/api';
 import type {
-	OpenAIToolDefinition,
-	ToolExecutionResult
-} from '$lib/types/mcp';
-import type { DatabaseMessage, DatabaseMessageExtra, DatabaseMessageExtraSkill } from '$lib/types/database';
+	DatabaseMessage,
+	DatabaseMessageExtra,
+	DatabaseMessageExtraSkill
+} from '$lib/types/database';
+import type { OpenAIToolDefinition, ToolExecutionResult } from '$lib/types/mcp';
 import type {
 	SkillCatalogEntry,
 	SkillConsentInfo,
@@ -158,7 +159,6 @@ export function buildSkillToolDefinitions(
 	const names = snapshot.entries.map((entry) => entry.name);
 	const diagnostics: SkillAdapterDiagnostic[] = [];
 	const definitions: OpenAIToolDefinition[] = [];
-
 	const register = (def: OpenAIToolDefinition) => {
 		if (existingNames.has(def.function.name)) {
 			diagnostics.push({
@@ -222,10 +222,10 @@ export function decorateSkillPrompt(
 export function listSkillContent(entries: readonly SkillCatalogEntry[]): string {
 	return JSON.stringify(
 		entries.map((entry) => ({
-			name: entry.name,
 			description: entry.description,
-			scope: entry.scope,
-			provider: entry.provider
+			name: entry.name,
+			provider: entry.provider,
+			scope: entry.scope
 		}))
 	);
 }
@@ -294,6 +294,7 @@ export class SkillRunAdapters {
 		signal?: AbortSignal
 	): Promise<SkillToolExecutionResult> {
 		const name = toolCall.function.name;
+
 		let args: Record<string, unknown>;
 
 		try {
@@ -341,14 +342,20 @@ export class SkillRunAdapters {
 
 		if (path !== undefined && (typeof path !== 'string' || path.length === 0)) {
 			return {
-				content: skillErrorResult(SKILL_READ_TOOL, 'read_skill "path" must be a non-empty string when provided.'),
+				content: skillErrorResult(
+					SKILL_READ_TOOL,
+					'read_skill "path" must be a non-empty string when provided.'
+				),
 				isError: true
 			};
 		}
 
 		if (!this._snapshotNames.has(name)) {
 			return {
-				content: skillErrorResult(SKILL_READ_TOOL, `Unknown skill "${name}" in this run's catalog snapshot.`),
+				content: skillErrorResult(
+					SKILL_READ_TOOL,
+					`Unknown skill "${name}" in this run's catalog snapshot.`
+				),
 				isError: true
 			};
 		}
@@ -379,23 +386,23 @@ export class SkillRunAdapters {
 		// approvals hand the typed metadata back for the flow to attach.
 		const record = await this._activation.recordActivation({
 			conversationId: this._conversationId,
-			result,
 			cwd: this._snapshot.cwd,
+			result,
 			...(toolCallId !== undefined ? { toolCallId } : {})
 		});
 
 		if (record.created && record.toolResultMessage) {
 			return {
-				content: result.content_xml,
-				isError: false,
 				activationRecorded: true,
-				recordedToolResultMessageId: record.toolResultMessage.id,
-				extras: [record.extra]
+				content: result.content_xml,
+				extras: [record.extra],
+				isError: false,
+				recordedToolResultMessageId: record.toolResultMessage.id
 			};
 		}
 
 		// Server XML is opaque model content, preserved byte-for-byte.
-		return { content: result.content_xml, isError: false, extras: [record.extra] };
+		return { content: result.content_xml, extras: [record.extra], isError: false };
 	}
 
 	/**
@@ -422,8 +429,8 @@ export class SkillRunAdapters {
 			SKILL_SERVER_LABEL,
 			{
 				name: result.skill.name,
-				scope: result.skill.scope,
 				provider: result.skill.provider,
+				scope: result.skill.scope,
 				...(path !== undefined ? { path } : {})
 			},
 			signal

@@ -23,7 +23,9 @@
 	let skillsVisible = $derived(skillsStore.availability !== 'disabled');
 
 	let groups = $derived(
-		skillsVisible ? [...toolsStore.toolGroups, ...toolsStore.skillToolGroups] : toolsStore.toolGroups
+		skillsVisible
+			? [...toolsStore.toolGroups, ...toolsStore.skillToolGroups]
+			: toolsStore.toolGroups
 	);
 
 	/** Centralized Skills settings metadata, keyed by stable `skill:<tool>` key. */

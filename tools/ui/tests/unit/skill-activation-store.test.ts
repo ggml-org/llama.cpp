@@ -1,7 +1,7 @@
 import { MessageRole, MessageType } from '$lib/enums';
-import { skillActivationExtra } from '$lib/services/skills-activation.service';
-import { SkillsService } from '$lib/services/skills.service';
 import { DatabaseService } from '$lib/services/database.service';
+import { SkillsService } from '$lib/services/skills.service';
+import { skillActivationExtra } from '$lib/services/skills-activation.service';
 import { conversationsStore } from '$lib/stores/conversations.svelte';
 import { skillActivationStore } from '$lib/stores/skill-activation.svelte';
 import type { DatabaseMessage, DatabaseMessageExtraSkill } from '$lib/types';
@@ -44,30 +44,30 @@ const mockAddMessageToActive = vi.mocked(conversationsStore.addMessageToActive);
 
 function baseResult(overrides: Partial<SkillBaseReadResult> = {}): SkillBaseReadResult {
 	return {
-		kind: 'skill',
-		skill: {
-			id: 'opaque-id-1',
-			name: 'demo-skill',
-			scope: 'project',
-			provider: 'agents',
-			metadata: { name: 'demo-skill', description: 'A demo skill' }
-		},
-		resources: { paths: [], truncated: false },
-		source: '---\nname: demo-skill\ndescription: A demo skill\n---\n# Body',
 		body_markdown: '# Body',
 		content_xml: '<skill_content name="demo-skill">body</skill_content>',
 		diagnostics: [],
+		kind: 'skill',
+		resources: { paths: [], truncated: false },
+		skill: {
+			id: 'opaque-id-1',
+			metadata: { description: 'A demo skill', name: 'demo-skill' },
+			name: 'demo-skill',
+			provider: 'agents',
+			scope: 'project'
+		},
+		source: '---\nname: demo-skill\ndescription: A demo skill\n---\n# Body',
 		...overrides
 	};
 }
 
 function resourceResult(): SkillResourceReadResult {
 	return {
-		kind: 'resource',
-		skill: { id: 'opaque-id-1', name: 'demo-skill', scope: 'project', provider: 'agents' },
-		resource: { path: 'refs/DETAILS.md' },
 		content_xml: '<skill_resource>data</skill_resource>',
-		diagnostics: []
+		diagnostics: [],
+		kind: 'resource',
+		resource: { path: 'refs/DETAILS.md' },
+		skill: { id: 'opaque-id-1', name: 'demo-skill', provider: 'agents', scope: 'project' }
 	};
 }
 
@@ -98,24 +98,25 @@ beforeEach(() => {
 		id: 'created-tool-result',
 		parent: 'assistant-1'
 	})) as typeof DatabaseService.createMessageBranch);
-	mockCreateMessageBranchPair.mockImplementation(
-		(async (first: Omit<DatabaseMessage, 'id'>, second: Omit<DatabaseMessage, 'id'>) => {
-			const assistant: DatabaseMessage = {
-				...first,
-				children: ['created-tool-result'],
-				id: 'created-assistant',
-				parent: 'parent-1'
-			};
-			const toolResult: DatabaseMessage = {
-				...second,
-				children: [],
-				id: 'created-tool-result',
-				parent: 'created-assistant'
-			};
+	mockCreateMessageBranchPair.mockImplementation((async (
+		first: Omit<DatabaseMessage, 'id'>,
+		second: Omit<DatabaseMessage, 'id'>
+	) => {
+		const assistant: DatabaseMessage = {
+			...first,
+			children: ['created-tool-result'],
+			id: 'created-assistant',
+			parent: 'parent-1'
+		};
+		const toolResult: DatabaseMessage = {
+			...second,
+			children: [],
+			id: 'created-tool-result',
+			parent: 'created-assistant'
+		};
 
-			return [assistant, toolResult];
-		}) as typeof DatabaseService.createMessageBranchPair
-	);
+		return [assistant, toolResult];
+	}) as typeof DatabaseService.createMessageBranchPair);
 });
 
 describe('DurableSkillActivationStore (Task 4 durable seam)', () => {
@@ -137,14 +138,14 @@ describe('DurableSkillActivationStore (Task 4 durable seam)', () => {
 	it('loadConversation does not treat resource records as durable activations', async () => {
 		mockGetConversationMessages.mockResolvedValue([
 			toolResultMessage('msg-3', {
-				type: 'SKILL',
 				kind: 'resource',
-				state: 'approved',
 				name: 'demo-skill',
-				scope: 'project',
+				path: 'refs/DETAILS.md',
 				provider: 'agents',
+				scope: 'project',
 				skillId: 'opaque-id-1',
-				path: 'refs/DETAILS.md'
+				state: 'approved',
+				type: 'SKILL'
 			} as DatabaseMessageExtraSkill)
 		]);
 
@@ -156,13 +157,13 @@ describe('DurableSkillActivationStore (Task 4 durable seam)', () => {
 	it('loadConversation ignores malformed and unrelated extras', async () => {
 		mockGetConversationMessages.mockResolvedValue([
 			toolResultMessage('msg-1', {
-				type: 'SKILL',
 				kind: 'base',
-				state: 'approved',
 				name: 'demo-skill',
-				scope: 'project',
 				provider: 'agents',
-				skillId: undefined
+				scope: 'project',
+				skillId: undefined,
+				state: 'approved',
+				type: 'SKILL'
 			} as unknown as DatabaseMessageExtraSkill)
 		]);
 
@@ -173,7 +174,9 @@ describe('DurableSkillActivationStore (Task 4 durable seam)', () => {
 
 	it('recordActivation persists a synthetic pair for the slash path and returns the created tool result', async () => {
 		conversationsMockState.activeConversation = { currNode: 'last-msg', id: 'conv-slash' };
-		conversationsMockState.activeMessages = [{ id: 'last-msg', role: MessageRole.USER } as DatabaseMessage];
+		conversationsMockState.activeMessages = [
+			{ id: 'last-msg', role: MessageRole.USER } as DatabaseMessage
+		];
 
 		const record = await skillActivationStore.recordActivation({
 			conversationId: 'conv-slash',
@@ -201,10 +204,18 @@ describe('DurableSkillActivationStore (Task 4 durable seam)', () => {
 
 	it('recordActivation dedupes a second slash activation for the same opaque id', async () => {
 		conversationsMockState.activeConversation = { currNode: 'last-msg', id: 'conv-dedupe' };
-		conversationsMockState.activeMessages = [{ id: 'last-msg', role: MessageRole.USER } as DatabaseMessage];
+		conversationsMockState.activeMessages = [
+			{ id: 'last-msg', role: MessageRole.USER } as DatabaseMessage
+		];
 
-		const first = await skillActivationStore.recordActivation({ conversationId: 'conv-dedupe', result: baseResult() });
-		const second = await skillActivationStore.recordActivation({ conversationId: 'conv-dedupe', result: baseResult() });
+		const first = await skillActivationStore.recordActivation({
+			conversationId: 'conv-dedupe',
+			result: baseResult()
+		});
+		const second = await skillActivationStore.recordActivation({
+			conversationId: 'conv-dedupe',
+			result: baseResult()
+		});
 
 		expect(first.created).toBe(true);
 		expect(second.created).toBe(false);
@@ -214,7 +225,9 @@ describe('DurableSkillActivationStore (Task 4 durable seam)', () => {
 
 	it('recordActivation serializes a concurrent slash activation and model read of the same opaque id into one durable record', async () => {
 		conversationsMockState.activeConversation = { currNode: 'last-msg', id: 'conv-cross-race' };
-		conversationsMockState.activeMessages = [{ id: 'last-msg', role: MessageRole.USER } as DatabaseMessage];
+		conversationsMockState.activeMessages = [
+			{ id: 'last-msg', role: MessageRole.USER } as DatabaseMessage
+		];
 
 		mockGetConversationMessages.mockResolvedValue([
 			{
@@ -227,9 +240,9 @@ describe('DurableSkillActivationStore (Task 4 durable seam)', () => {
 				timestamp: 1,
 				toolCalls: JSON.stringify([
 					{
+						function: { arguments: '{"name":"demo-skill"}', name: 'read_skill' },
 						id: 'call_1',
-						type: 'function',
-						function: { name: 'read_skill', arguments: '{"name":"demo-skill"}' }
+						type: 'function'
 					}
 				]),
 				type: MessageType.TEXT
@@ -239,13 +252,15 @@ describe('DurableSkillActivationStore (Task 4 durable seam)', () => {
 		// Both calls are issued before either awaits a microtask, so without
 		// the in-flight transaction both would pass the pre-activation check
 		// and persist a duplicate durable record.
-		const slash = skillActivationStore.recordActivation({ conversationId: 'conv-cross-race', result: baseResult() });
+		const slash = skillActivationStore.recordActivation({
+			conversationId: 'conv-cross-race',
+			result: baseResult()
+		});
 		const model = skillActivationStore.recordActivation({
 			conversationId: 'conv-cross-race',
 			result: baseResult(),
 			toolCallId: 'call_1'
 		});
-
 		const [slashRecord, modelRecord] = await Promise.all([slash, model]);
 
 		expect(slashRecord.created).toBe(true);
@@ -261,7 +276,9 @@ describe('DurableSkillActivationStore (Task 4 durable seam)', () => {
 
 	it('recordActivation awaits an in-flight model activation when a slash activation of the same opaque id joins', async () => {
 		conversationsMockState.activeConversation = { currNode: 'last-msg', id: 'conv-cross-race-2' };
-		conversationsMockState.activeMessages = [{ id: 'last-msg', role: MessageRole.USER } as DatabaseMessage];
+		conversationsMockState.activeMessages = [
+			{ id: 'last-msg', role: MessageRole.USER } as DatabaseMessage
+		];
 
 		mockGetConversationMessages.mockResolvedValue([
 			{
@@ -274,9 +291,9 @@ describe('DurableSkillActivationStore (Task 4 durable seam)', () => {
 				timestamp: 1,
 				toolCalls: JSON.stringify([
 					{
+						function: { arguments: '{"name":"demo-skill"}', name: 'read_skill' },
 						id: 'call_1',
-						type: 'function',
-						function: { name: 'read_skill', arguments: '{"name":"demo-skill"}' }
+						type: 'function'
 					}
 				]),
 				type: MessageType.TEXT
@@ -290,8 +307,10 @@ describe('DurableSkillActivationStore (Task 4 durable seam)', () => {
 			result: baseResult(),
 			toolCallId: 'call_1'
 		});
-		const slash = skillActivationStore.recordActivation({ conversationId: 'conv-cross-race-2', result: baseResult() });
-
+		const slash = skillActivationStore.recordActivation({
+			conversationId: 'conv-cross-race-2',
+			result: baseResult()
+		});
 		const [modelRecord, slashRecord] = await Promise.all([model, slash]);
 
 		expect(modelRecord.created).toBe(true);
@@ -306,12 +325,20 @@ describe('DurableSkillActivationStore (Task 4 durable seam)', () => {
 
 	it('recordActivation persists nothing and clears the in-flight slot when the persistence fails', async () => {
 		conversationsMockState.activeConversation = { currNode: 'last-msg', id: 'conv-fail-retry' };
-		conversationsMockState.activeMessages = [{ id: 'last-msg', role: MessageRole.USER } as DatabaseMessage];
+		conversationsMockState.activeMessages = [
+			{ id: 'last-msg', role: MessageRole.USER } as DatabaseMessage
+		];
 
 		mockCreateMessageBranchPair.mockRejectedValueOnce(new Error('db write failed'));
 
-		const first = skillActivationStore.recordActivation({ conversationId: 'conv-fail-retry', result: baseResult() });
-		const second = skillActivationStore.recordActivation({ conversationId: 'conv-fail-retry', result: baseResult() });
+		const first = skillActivationStore.recordActivation({
+			conversationId: 'conv-fail-retry',
+			result: baseResult()
+		});
+		const second = skillActivationStore.recordActivation({
+			conversationId: 'conv-fail-retry',
+			result: baseResult()
+		});
 
 		await expect(first).rejects.toThrow('db write failed');
 		await expect(second).rejects.toThrow('db write failed');
@@ -342,9 +369,9 @@ describe('DurableSkillActivationStore (Task 4 durable seam)', () => {
 				timestamp: 1,
 				toolCalls: JSON.stringify([
 					{
+						function: { arguments: '{"name":"demo-skill"}', name: 'read_skill' },
 						id: 'call_1',
-						type: 'function',
-						function: { name: 'read_skill', arguments: '{"name":"demo-skill"}' }
+						type: 'function'
 					}
 				]),
 				type: MessageType.TEXT

@@ -17,23 +17,23 @@ import { render } from 'vitest-browser-svelte';
 
 function skillExtra(overrides: Partial<DatabaseMessageExtraSkill> = {}): DatabaseMessageExtraSkill {
 	return {
-		type: AttachmentType.SKILL,
 		kind: 'base',
-		state: 'approved',
-		skillId: 'opaque-id-1',
 		name: 'add-new-model',
-		scope: 'project',
 		provider: 'agents',
+		scope: 'project',
+		skillId: 'opaque-id-1',
+		state: 'approved',
+		type: AttachmentType.SKILL,
 		...overrides
 	};
 }
 
 function section(overrides: Partial<AgenticSection> = {}): AgenticSection {
 	return {
-		type: AgenticSectionType.TOOL_CALL,
 		content: '',
 		toolName: 'read_skill',
 		toolResult: '<skill_content name="add-new-model">body &amp; more</skill_content>',
+		type: AgenticSectionType.TOOL_CALL,
 		...overrides
 	};
 }
@@ -56,10 +56,7 @@ function textOf(container: HTMLElement): string {
 
 describe('read_skill result rendering', () => {
 	it('renders a base activation with typed labels and opaque XML text', async () => {
-		const container = await renderBlock(
-			section({ toolResultExtras: [skillExtra()] })
-		);
-
+		const container = await renderBlock(section({ toolResultExtras: [skillExtra()] }));
 		const text = textOf(container);
 
 		expect(text).toContain('Skill · add-new-model');
@@ -76,11 +73,10 @@ describe('read_skill result rendering', () => {
 			section({
 				toolResult: '<skill_resource>data</skill_resource>',
 				toolResultExtras: [
-					skillExtra({ kind: 'resource', path: 'refs/DETAILS.md', metadata: undefined })
+					skillExtra({ kind: 'resource', metadata: undefined, path: 'refs/DETAILS.md' })
 				]
 			})
 		);
-
 		const text = textOf(container);
 
 		expect(text).toContain('Skill resource · add-new-model');
@@ -97,7 +93,7 @@ describe('read_skill result rendering', () => {
 	])('uses %s resource icon', async (path, iconClass) => {
 		const container = await renderBlock(
 			section({
-				toolResultExtras: [skillExtra({ kind: 'resource', path, metadata: undefined })]
+				toolResultExtras: [skillExtra({ kind: 'resource', metadata: undefined, path })]
 			})
 		);
 
@@ -115,7 +111,6 @@ describe('read_skill result rendering', () => {
 
 	it('falls back to the generic tool card for a read_skill section without valid metadata', async () => {
 		const container = await renderBlock(section({ toolResultExtras: [] }));
-
 		const text = textOf(container);
 
 		expect(text).toContain('read_skill');
@@ -130,14 +125,16 @@ describe('read_skill result rendering', () => {
 
 	it('shows the pending state while the read is in flight', async () => {
 		const container = await renderBlock(
-			section({ type: AgenticSectionType.TOOL_CALL_PENDING, toolResultExtras: [skillExtra()] })
+			section({ toolResultExtras: [skillExtra()], type: AgenticSectionType.TOOL_CALL_PENDING })
 		);
 
 		expect(textOf(container)).toContain('Waiting for result...');
 	});
 
 	it('shows the no-output state for a terminal section without a result', async () => {
-		const container = await renderBlock(section({ toolResult: undefined, toolResultExtras: [skillExtra()] }));
+		const container = await renderBlock(
+			section({ toolResult: undefined, toolResultExtras: [skillExtra()] })
+		);
 
 		expect(textOf(container)).toContain('No output');
 	});

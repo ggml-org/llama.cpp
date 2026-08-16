@@ -35,22 +35,22 @@ function jsonResponse(body: unknown, status = 200): Response {
 
 function makeEntry(name: string): SkillCatalogEntry {
 	return {
-		id: `opaque-${name}`,
-		name,
+		catalog_xml: `<skill><name>${name}</name></skill>`,
 		description: `description of ${name}`,
-		scope: 'project',
+		id: `opaque-${name}`,
+		instruction: { bytes: 16, lines: 1, modified_at: null, tokens: 4, tokens_estimated: true },
+		name,
 		provider: 'agents',
-		instruction: { bytes: 16, lines: 1, tokens: 4, tokens_estimated: true, modified_at: null },
 		resources: { count: 0, truncated: false },
-		catalog_xml: `<skill><name>${name}</name></skill>`
+		scope: 'project'
 	};
 }
 
 function makeCatalog(...entries: SkillCatalogEntry[]): SkillCatalogResponse {
 	return {
-		skills: entries,
 		catalog_instruction_xml: '',
-		diagnostics: []
+		diagnostics: [],
+		skills: entries
 	};
 }
 
@@ -60,7 +60,9 @@ describe('shared standalone page shell', () => {
 		settingsStore.initialize();
 		settingsStore.updateConfig(SETTINGS_KEYS.MCP_SERVERS, '[]');
 		skillsStore.invalidate(undefined);
-		vi.mocked(fetch).mockImplementation(async () => jsonResponse(makeCatalog(makeEntry('demo-skill'))));
+		vi.mocked(fetch).mockImplementation(async () =>
+			jsonResponse(makeCatalog(makeEntry('demo-skill')))
+		);
 		vi.mocked(goto).mockClear();
 		// A fresh browser page has no navigable history, so the close action
 		// falls back to the start route; the deep-history branch is forced in
@@ -75,7 +77,9 @@ describe('shared standalone page shell', () => {
 	it('renders the MCP Servers route with the shared title and a Close action', async () => {
 		const mcp = await render(McpServersPage);
 
-		await expect.element(mcp.getByRole('heading', { name: 'MCP Servers', exact: true })).toBeVisible();
+		await expect
+			.element(mcp.getByRole('heading', { exact: true, name: 'MCP Servers' }))
+			.toBeVisible();
 		await expect
 			.element(mcp.getByTestId('standalone-page-shell').getByRole('button', { name: 'Close' }))
 			.toBeVisible();
@@ -84,7 +88,9 @@ describe('shared standalone page shell', () => {
 	it('renders the Skills route with the shared title and a Close action', async () => {
 		const skills = await render(SkillsPage);
 
-		await expect.element(skills.getByRole('heading', { name: 'Skills', exact: true })).toBeVisible();
+		await expect
+			.element(skills.getByRole('heading', { exact: true, name: 'Skills' }))
+			.toBeVisible();
 		await expect
 			.element(skills.getByTestId('standalone-page-shell').getByRole('button', { name: 'Close' }))
 			.toBeVisible();
@@ -115,7 +121,6 @@ describe('shared standalone page shell', () => {
 	it('closes MCP Servers through the history fallback when a previous route exists', async () => {
 		Object.defineProperty(window.history, 'length', { configurable: true, value: 2 });
 		const back = vi.spyOn(History.prototype, 'back').mockImplementation(() => {});
-
 		const mcp = await render(McpServersPage);
 
 		await mcp.getByRole('button', { name: 'Close' }).click();
@@ -135,7 +140,6 @@ describe('shared standalone page shell', () => {
 	it('closes Skills through the history fallback when a previous route exists', async () => {
 		Object.defineProperty(window.history, 'length', { configurable: true, value: 2 });
 		const back = vi.spyOn(History.prototype, 'back').mockImplementation(() => {});
-
 		const skills = await render(SkillsPage);
 
 		await skills.getByRole('button', { name: 'Close' }).click();

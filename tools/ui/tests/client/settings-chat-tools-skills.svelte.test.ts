@@ -29,9 +29,9 @@ function jsonResponse(body: unknown, status = 200): Response {
 
 function makeCatalog(): SkillCatalogResponse {
 	return {
-		skills: [],
 		catalog_instruction_xml: '<available_skills/>',
-		diagnostics: []
+		diagnostics: [],
+		skills: []
 	};
 }
 
@@ -40,11 +40,11 @@ function makeReadFileListing() {
 	return [
 		{
 			definition: {
-				type: 'function',
 				function: {
 					name: 'read_file',
-					parameters: { type: 'object', properties: {} }
-				}
+					parameters: { properties: {}, type: 'object' }
+				},
+				type: 'function'
 			},
 			display_name: 'Read File',
 			permissions: { write: false },
@@ -108,9 +108,7 @@ describe('SettingsChatToolsTab Skills group', () => {
 
 		// Skills stay out of the generic tool collections consumed by chat.
 		expect(toolsStore.allTools.some((entry) => toolsStore.isSkillToolKey(entry.key))).toBe(false);
-		expect(
-			toolsStore.toolGroups.some((group) => group.source === 'skills')
-		).toBe(false);
+		expect(toolsStore.toolGroups.some((group) => group.source === 'skills')).toBe(false);
 
 		await screen.getByRole('button', { name: /Skills/ }).click();
 		await vi.waitFor(() => expect(screen.getByText('Read skill').query()).toBeTruthy());
@@ -129,9 +127,9 @@ describe('SettingsChatToolsTab Skills group', () => {
 		expect(toolsStore.isToolEnabled('skill:read_skill')).toBe(false);
 		expect(toolsStore.isToolEnabled('skill:list_skill')).toBe(true);
 		expect([...toolsStore.getEnabledSkillToolNames()]).toEqual([SKILL_LIST_TOOL]);
-		expect(
-			JSON.parse(localStorage.getItem(DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY) ?? '[]')
-		).toEqual(['skill:read_skill']);
+		expect(JSON.parse(localStorage.getItem(DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY) ?? '[]')).toEqual([
+			'skill:read_skill'
+		]);
 
 		await expect.element(readCheckbox).toHaveAttribute('data-state', 'unchecked');
 		await expect.element(listCheckbox).toHaveAttribute('data-state', 'checked');
@@ -165,7 +163,6 @@ describe('SettingsChatToolsTab Skills group', () => {
 					resolveCatalog = resolve;
 				})
 		});
-
 		// Probe stays pending: availability is `loading`.
 		const probe = skillsStore.probeAvailability(undefined);
 
@@ -230,12 +227,11 @@ describe('SettingsChatToolsTab Skills group', () => {
 		// Skills rows: exactly the two Enabled toggles, no Always allow control,
 		// and the per-skill consent note.
 		expect(contents[1]?.querySelectorAll('[data-slot="checkbox"]').length ?? 0).toBe(2);
-		expect(
-			document.querySelectorAll('[title*="per resolved skill identity"]').length
-		).toBe(2);
-		const skillCheckboxes = [
-			...document.querySelectorAll<HTMLElement>('[role="checkbox"]')
-		].filter((el) => /^Enable (Read skill|List skills)$/.test(el.getAttribute('aria-label') ?? ''));
+		expect(document.querySelectorAll('[title*="per resolved skill identity"]').length).toBe(2);
+		const skillCheckboxes = [...document.querySelectorAll<HTMLElement>('[role="checkbox"]')].filter(
+			(el) => /^Enable (Read skill|List skills)$/.test(el.getAttribute('aria-label') ?? '')
+		);
+
 		expect(skillCheckboxes).toHaveLength(2);
 
 		// The generic permission flow still resolves read_file.
