@@ -1317,7 +1317,7 @@ void mtmd_image_preprocessor_step3vl::img_u8_resize_bilinear_to_f32(
     const float scale_x = static_cast<float>(src_size.width)  / target_width;
     const float scale_y = static_cast<float>(src_size.height) / target_height;
 
-    std::vector<float> local_buf(3 * target_width * target_height);
+    std::vector<float> local_buf((size_t) 3 * (size_t) target_width * (size_t) target_height);
 
     for (int y = 0; y < target_height; ++y) {
         const float src_y = (static_cast<float>(y) + 0.5f) * scale_y - 0.5f;
@@ -1338,7 +1338,7 @@ void mtmd_image_preprocessor_step3vl::img_u8_resize_bilinear_to_f32(
             const auto p10 = src.get_pixel(x0, y1);
             const auto p11 = src.get_pixel(x1, y1);
 
-            const size_t idx_dst = 3 * (y * target_width + x);
+            const size_t idx_dst = (size_t) 3 * ((size_t) y * (size_t) target_width + (size_t) x);
             for (int c = 0; c < 3; ++c) {
                 const float v00 = (static_cast<float>(p00[c]) / 255.0f - mean[c]) / std[c];
                 const float v01 = (static_cast<float>(p01[c]) / 255.0f - mean[c]) / std[c];
@@ -1602,16 +1602,111 @@ mtmd_image_preproc_out mtmd_image_preprocessor_youtuvl::preprocess(const clip_im
 }
 
 mtmd_image_preproc_out mtmd_image_preprocessor_granite::preprocess(const clip_image_u8 & img) {
-    auto output = mtmd_image_preprocessor_llava_uhd::preprocess(img);
-    if (output.entries.size() == 0) {
-        // Single-tile (overview only): append one newline row.
-        output.overview.add_newline = true;
-    } else {
-        // Multi-tile: overview gets no newline, grid tiles get one.
-        output.overview.add_newline = false;
-        for (size_t i = 0; i < output.entries.size(); ++i) {
-            output.entries[i].add_newline = true;
+    GGML_ASSERT(!hparams.image_res_candidates.empty());
+
+    const clip_image_size orig_size = img.get_size();
+    const int             tile_size = hparams.image_size;
+
+    // llava-next always encodes an overview plus a grid of tiles, even for small images
+    const clip_image_size refined_size = select_best_resolution(orig_size, hparams.image_res_candidates);
+    const int             grid_x       = refined_size.width  / tile_size;
+    const int             grid_y       = refined_size.height / tile_size;
+
+    clip_image_u8 overview;
+    img_tool::resize(img, overview, {tile_size, tile_size}, hparams.image_resize_algo_ov,
+                        hparams.image_pad_ov, hparams.image_pad_color_ov);
+
+    clip_image_u8 refined;
+    img_tool::resize(img, refined, refined_size, hparams.image_resize_algo_rf,
+                        hparams.image_pad_rf, hparams.image_pad_color_rf);
+
+    // stack the overview and the tiles on the Y axis, so the whole grid goes through one graph
+    clip_image_u8 stacked;
+    stacked.set_size({tile_size, tile_size * (1 + grid_x * grid_y)}, false);
+    auto copy_tile = [&](const clip_image_u8 & src, int src_x, int src_y, int dst_idx) {
+        for (int py = 0; py < tile_size; py++) {
+            for (int px = 0; px < tile_size; px++) {
+                stacked.set_pixel(px, dst_idx * tile_size + py, src.get_pixel(src_x + px, src_y + py));
+            }
+        }
+    };
+    copy_tile(overview, 0, 0, 0);
+    for (int ty = 0; ty < grid_y; ty++) {
+        for (int tx = 0; tx < grid_x; tx++) {
+            copy_tile(refined, tx * tile_size, ty * tile_size, 1 + ty * grid_x + tx);
         }
     }
+
+    LOG_DBG("%s: grid size: %d x %d (%d tiles) + overview\n", __func__, grid_x, grid_y, grid_x * grid_y);
+
+    mtmd_image_preproc_out output;
+    output.append(hparams, stacked, true);
+    auto & entry = output.entries.back();
+    entry.anyres.grid_x  = grid_x;
+    entry.anyres.grid_y  = grid_y;
+    entry.anyres.orig_nx = orig_size.width;
+    entry.anyres.orig_ny = orig_size.height;
+    return output;
+}
+
+//
+// mtmd_image_preprocessor_muse_glimmer
+//
+
+// Replicates transformers' get_aspect_ratio_preserving_size
+static clip_image_size muse_glimmer_grid_size(int img_w, int img_h, int patch_hw, int max_tokens) {
+    double i_nph = (double) img_h / patch_hw;
+    double i_npw = (double) img_w / patch_hw;
+    const double ratio = i_nph > 0.0 ? i_npw / i_nph : 1.0;
+    if (i_nph * i_npw > (double) max_tokens) {
+        i_nph = std::sqrt((double) max_tokens / ratio);
+        i_npw = i_nph * ratio;
+    }
+    const int hs[2] = { (int) std::floor(i_nph), (int) std::ceil(i_nph) };
+    const int ws[2] = { (int) std::floor(i_npw), (int) std::ceil(i_npw) };
+    const double target_ar = (double) img_h / (double) img_w;
+    int    best_nph = -1;
+    int    best_npw = -1;
+    double best_d   = 0.0;
+    for (int a = 0; a < 2; ++a) {
+        for (int b = 0; b < 2; ++b) {
+            const int nph = hs[a];
+            const int npw = ws[b];
+            if (nph < 1 || npw < 1 || nph * npw > max_tokens) {
+                continue;
+            }
+            const double d = std::fabs((double) nph / (double) npw - target_ar);
+            const int n_tokens      = nph * npw;
+            const int best_n_tokens = best_nph * best_npw;
+            if (best_nph < 0 || d < best_d || (d == best_d && n_tokens > best_n_tokens)) {
+                best_nph = nph;
+                best_npw = npw;
+                best_d   = d;
+            }
+        }
+    }
+    if (best_nph < 0) { // no candidate fit under the cap: round and clamp
+        best_nph = std::max(1, (int) std::lround(i_nph));
+        best_npw = std::max(1, (int) std::lround(i_npw));
+    }
+    return clip_image_size{ best_npw * patch_hw, best_nph * patch_hw };
+}
+
+mtmd_image_preproc_out mtmd_image_preprocessor_muse_glimmer::preprocess(const clip_image_u8 & img) {
+    const int patch_hw   = hparams.patch_size * hparams.n_merge;
+    const int patch_area = hparams.patch_size * hparams.patch_size * hparams.n_merge * hparams.n_merge;
+    GGML_ASSERT(patch_area > 0 && hparams.image_max_pixels > 0);
+    const int max_tokens = hparams.image_max_pixels / patch_area;
+
+    const clip_image_size original_size = img.get_size();
+    const clip_image_size target_size   = muse_glimmer_grid_size(
+        original_size.width, original_size.height, patch_hw, max_tokens);
+
+    // PIL resizes directly to (target_w, target_h) -- a stretch, no padding.
+    clip_image_u8 resized_image;
+    img_tool::resize(img, resized_image, target_size, hparams.image_resize_algo, PAD_NONE);
+
+    mtmd_image_preproc_out output;
+    output.append(hparams, resized_image, true);
     return output;
 }

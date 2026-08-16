@@ -160,47 +160,6 @@ int llama_completion(int argc, char ** argv) {
     // start measuring performance timings from here
     llama_perf_context_reset(ctx);
 
-    LOG_INF("%s: llama threadpool init, n_threads = %d\n", __func__, (int) params.cpuparams.n_threads);
-
-    auto * cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
-    if (!cpu_dev) {
-        LOG_ERR("%s: no CPU backend found\n", __func__);
-        return 1;
-    }
-    auto * reg = ggml_backend_dev_backend_reg(cpu_dev);
-    auto * ggml_threadpool_new_fn = (decltype(ggml_threadpool_new) *) ggml_backend_reg_get_proc_address(reg, "ggml_threadpool_new");
-    auto * ggml_threadpool_free_fn = (decltype(ggml_threadpool_free) *) ggml_backend_reg_get_proc_address(reg, "ggml_threadpool_free");
-
-    struct ggml_threadpool_params tpp_batch =
-            ggml_threadpool_params_from_cpu_params(params.cpuparams_batch);
-    struct ggml_threadpool_params tpp =
-            ggml_threadpool_params_from_cpu_params(params.cpuparams);
-
-    if (!set_process_priority(params.cpuparams.priority)) {
-        LOG_ERR("%s: error: failed to set process priority\n", __func__);
-        return 1;
-    }
-
-    struct ggml_threadpool * threadpool_batch = NULL;
-    if (!ggml_threadpool_params_match(&tpp, &tpp_batch)) {
-        threadpool_batch = ggml_threadpool_new_fn(&tpp_batch);
-        if (!threadpool_batch) {
-            LOG_ERR("%s: batch threadpool create failed : n_threads %d\n", __func__, tpp_batch.n_threads);
-            return 1;
-        }
-
-        // start the non-batch threadpool in the paused state
-        tpp.paused = true;
-    }
-
-    struct ggml_threadpool * threadpool = ggml_threadpool_new_fn(&tpp);
-    if (!threadpool) {
-        LOG_ERR("%s: threadpool create failed : n_threads %d\n", __func__, tpp.n_threads);
-        return 1;
-    }
-
-    llama_attach_threadpool(ctx, threadpool, threadpool_batch);
-
     const int n_ctx_train = llama_model_n_ctx_train(model);
     const int n_ctx = llama_n_ctx(ctx);
 
@@ -992,9 +951,6 @@ int llama_completion(int argc, char ** argv) {
     common_perf_print(ctx, smpl);
 
     llama_backend_free();
-
-    ggml_threadpool_free_fn(threadpool);
-    ggml_threadpool_free_fn(threadpool_batch);
 
     return 0;
 }

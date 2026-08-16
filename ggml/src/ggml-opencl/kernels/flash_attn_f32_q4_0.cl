@@ -1631,8 +1631,25 @@ __kernel void flash_attn_f32_q4_0(
     float slope = get_alibi_slope(max_bias, head_idx, n_head_log2, m0, m1);
 
 #ifdef FA_HAVE_INT_DOT
+// Accessors so the staging code is layout-agnostic.
+#ifdef FA_K_LDS_T
+#define FA_K_PACKED(ROW, IDX) l_k_packed[IDX][ROW]
+#define FA_K_SCALE(ROW, BLK)  l_k_scale[BLK][ROW]
+#else
+#define FA_K_PACKED(ROW, IDX) l_k_packed[ROW][IDX]
+#define FA_K_SCALE(ROW, BLK)  l_k_scale[ROW][BLK]
+#endif
+
+#ifdef FA_K_LDS_T
+    // K tile transposed: the 4 KV rows the QK loop walks together become adjacent, so each
+    // (block, group) step is ONE 128-bit local read instead of four 32-bit ones. The QK
+    // loop is LDS-read-issue-bound.
+    __local uint  l_k_packed[DK_Q4_BLOCKS_PREFILL * 8][BLOCK_N];
+    __local float l_k_scale [DK_Q4_BLOCKS_PREFILL][BLOCK_N];
+#else
     __local uint  l_k_packed[BLOCK_N][DK_Q4_BLOCKS_PREFILL * 8];
     __local float l_k_scale [BLOCK_N][DK_Q4_BLOCKS_PREFILL];
+#endif
 #else
     __local half4 l_k[BLOCK_N][DK_VEC];
 #endif
@@ -1660,17 +1677,17 @@ __kernel void flash_attn_f32_q4_0(
                     const global char * blk_ptr = k_base + k_row_off + blk * Q4_0_BLOCK_SIZE;
                     const float df = (float) vload_half(0, (const global half *) blk_ptr);
                     const global uchar * qs = (const global uchar *)(blk_ptr + 2);
-                    l_k_scale[row][blk] = df;
+                    FA_K_SCALE(row, blk) = df;
                     uint k_packed[8];
                     pack_q4_0_nibbles(qs, k_packed);
                     #pragma unroll
                     for (int j = 0; j < 8; ++j) {
-                        l_k_packed[row][blk * 8 + j] = k_packed[j];
+                        FA_K_PACKED(row, blk * 8 + j) = k_packed[j];
                     }
                 } else {
-                    l_k_scale[row][blk] = 0.0f;
+                    FA_K_SCALE(row, blk) = 0.0f;
                     #pragma unroll
-                    for (int j = 0; j < 8; ++j) l_k_packed[row][blk * 8 + j] = 0u;
+                    for (int j = 0; j < 8; ++j) FA_K_PACKED(row, blk * 8 + j) = 0u;
                 }
             }
 #else
@@ -1760,6 +1777,19 @@ __kernel void flash_attn_f32_q4_0(
                 for (int b_local = 0; b_local < SPLIT_DK_Q4_BLOCKS; ++b_local) {
                     const int b = k_blk_base + b_local;
                     int sum0 = 0, sum1 = 0, sum2 = 0, sum3 = 0;
+#ifdef FA_K_LDS_T
+                    // 4 KV rows are adjacent in the transposed tile: one 128-bit local
+                    // read per (block, group) instead of four 32-bit ones.
+                    #pragma unroll
+                    for (int g = 0; g < 8; ++g) {
+                        const uint  qp  = q_packed_pf[b_local * 8 + g];
+                        const uint4 kq4 = vload4(0, &l_k_packed[b * 8 + g][j]);
+                        sum0 = dot_acc_sat_4x8packed_ss_int(qp, kq4.s0, sum0);
+                        sum1 = dot_acc_sat_4x8packed_ss_int(qp, kq4.s1, sum1);
+                        sum2 = dot_acc_sat_4x8packed_ss_int(qp, kq4.s2, sum2);
+                        sum3 = dot_acc_sat_4x8packed_ss_int(qp, kq4.s3, sum3);
+                    }
+#else
                     #pragma unroll
                     for (int g = 0; g < 8; ++g) {
                         const uint qp = q_packed_pf[b_local * 8 + g];
@@ -1768,12 +1798,21 @@ __kernel void flash_attn_f32_q4_0(
                         sum2 = dot_acc_sat_4x8packed_ss_int(qp, l_k_packed[j+2][b * 8 + g], sum2);
                         sum3 = dot_acc_sat_4x8packed_ss_int(qp, l_k_packed[j+3][b * 8 + g], sum3);
                     }
+#endif
                     const float qd    = q_d_pf[b_local];
                     const int   q_sum = q_sum_pf[b_local];
+#ifdef FA_K_LDS_T
+                    const float4 ks4 = vload4(0, &l_k_scale[b][j]);
+                    s0 += (float)(sum0 - 8 * q_sum) * qd * ks4.s0;
+                    s1 += (float)(sum1 - 8 * q_sum) * qd * ks4.s1;
+                    s2 += (float)(sum2 - 8 * q_sum) * qd * ks4.s2;
+                    s3 += (float)(sum3 - 8 * q_sum) * qd * ks4.s3;
+#else
                     s0 += (float)(sum0 - 8 * q_sum) * qd * l_k_scale[j  ][b];
                     s1 += (float)(sum1 - 8 * q_sum) * qd * l_k_scale[j+1][b];
                     s2 += (float)(sum2 - 8 * q_sum) * qd * l_k_scale[j+2][b];
                     s3 += (float)(sum3 - 8 * q_sum) * qd * l_k_scale[j+3][b];
+#endif
                 }
 #else
                 ACC_TYPE4 dot_acc0 = (ACC_TYPE4)(0.0f);
