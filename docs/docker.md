@@ -107,6 +107,109 @@ docker run --gpus all -v /path/to/models:/models local/llama.cpp:light-cuda -m /
 docker run --gpus all -v /path/to/models:/models local/llama.cpp:server-cuda -m /models/7B/ggml-model-q4_0.gguf --port 8080 --host 0.0.0.0 -n 512 --n-gpu-layers 1
 ```
 
+## Docker With ROCm
+
+The ROCm images are built from `rocm/dev-ubuntu-26.04:7.14.0-full` and contain the ROCm 7.14.0 user-space runtime.
+
+The `amdgpu` kernel module and the GPU firmware are **not** part of the image — they always come from the host, and they have to be recent enough for the ROCm version running inside the container. Either:
+
+- install AMD's packages on the host (`amdgpu-install --usecase=dkms`, or the `amdgpu-dkms` package), matching the same ROCm release, or
+- if you would rather not use AMD's repositories, run an upstream kernel new enough to support your GPU together with a current [`linux-firmware`](https://gitlab.com/kernel-firmware/linux-firmware).
+
+A host driver or firmware that is too old typically shows up as the GPU not being listed at all, rather than as an explicit error. Check the host side before involving llama.cpp:
+
+```bash
+docker run --rm \
+    --device /dev/kfd --device /dev/dri \
+    --group-add $(getent group video | cut -d: -f3) \
+    --group-add $(getent group render | cut -d: -f3) \
+    --entrypoint rocminfo ghcr.io/ggml-org/llama.cpp:server-rocm
+```
+
+Note that the group IDs have to be passed numerically: the images do not define `video` and `render` groups, so `--group-add render` fails to resolve.
+
+### Supported GPU architectures
+
+The images are a fat build covering every architecture for which ROCm 7.14.0 ships an optimized library package, so the same image runs on all of the following without a rebuild.
+
+Parentheses group SKU variants that share a target, so `RX 6700(XT)` covers both the RX 6700 and the RX 6700 XT.
+
+| Family | Target | Products |
+| --- | --- | --- |
+| CDNA (server & data center accelerators) | `gfx908` | Instinct MI100 |
+| | `gfx90a` | Instinct MI210, MI250(X) |
+| | `gfx942` | Instinct MI300A, MI300X(-HF), MI308X, MI325X |
+| | `gfx950` | Instinct MI350(X/P), MI355X |
+| RDNA 1 (Navi 1X — consumer & workstation) | `gfx1010` | Radeon RX 5700(XT/M), RX 5600(XT/OEM/M), Pro W5700(X), Pro 5700(XT) |
+| | `gfx1011` | Radeon Pro 5600M, Pro V520, Pro V540 |
+| | `gfx1012` | Radeon RX 5500(XT/OEM/M), RX 5300(XT OEM/M), Pro W5500(X/M), Pro 5500(XT/M), Pro 5300(M) |
+| RDNA 2 (Navi 2X — consumer, workstation & APUs) | `gfx1030` | Radeon RX 6950 XT, RX 6900 XT, RX 6800(XT), Pro W6800(X), Pro W6800X Duo, Pro W6900X, Pro V620 |
+| | `gfx1031` | Radeon RX 6750(XT/GRE), RX 6700(XT/M), RX 6850M XT, RX 6800M, Pro W6700 |
+| | `gfx1032` | Radeon RX 6650(XT/M/M XT), RX 6600(XT/M/S), RX 6800S, RX 6700S, Pro W6600(X/M) |
+| | `gfx1033` | Steam Deck LCD/OLED APU — "Van Gogh" ("Aerith", "Sephiroth") |
+| | `gfx1034` | Radeon RX 6500(XT/M), RX 6400, RX 6300(M), RX 6550M, RX 6450M, Pro W6400, Pro W6300(M), Pro W6500M |
+| | `gfx1035` | Radeon 680M, 660M, 610M — Ryzen 6000 "Rembrandt"/"Rembrandt-R" mobile APUs |
+| | `gfx1036` | Radeon Graphics 2CU — Ryzen 7000/9000 desktop, Threadripper 7000/9000, EPYC 4004/4005; Radeon 610M — "Dragon Range" mobile |
+| RDNA 3 (Navi 3X — consumer, workstation & APUs) | `gfx1100` | Radeon RX 7900(XT/XTX/GRE/M), Pro W7900, Pro W7800 |
+| | `gfx1101` | Radeon RX 7800 XT, RX 7700 XT, Pro W7700, Pro V710 |
+| | `gfx1102` | Radeon RX 7600(XT/S/M/M XT), RX 7650 GRE, RX 7700S, RX 7550M, Pro W7600, Pro W7500 |
+| | `gfx1103` | Radeon 780M, 760M, 740M, 610M — Ryzen 7040/8040 "Phoenix/Phoenix 2/Hawk Point" mobile APUs; Ryzen Z1(Extreme), Ryzen Z2 Go |
+| RDNA 3.5 (Ryzen AI 300 / Max — APUs) | `gfx1150` | Radeon 890M, 880M — Ryzen AI 300 "Strix Point" APUs; Ryzen Z2 Extreme |
+| | `gfx1151` | Radeon 8060S, 8050S — Ryzen AI Max "Strix Halo" APUs |
+| | `gfx1152` | Radeon 860M, 820M — Ryzen AI "Krackan Point" APUs |
+| | `gfx1153` | Radeon 840M — Ryzen AI "Krackan Point 2" APUs |
+| RDNA 4 (Navi 4X — consumer & pro) | `gfx1200` | Radeon RX 9060(XT/M/S), RX 9050 |
+| | `gfx1201` | Radeon RX 9070(XT/GRE/S/M XT), RX 9080M, Radeon AI PRO R9700 |
+
+Because ROCm 7.14.0 provides an optimized library package per architecture, `HSA_OVERRIDE_GFX_VERSION` should **not** be set for any of the targets above — spoofing a different architecture only costs performance now, and can produce incorrect results. It remains relevant only for architectures that are absent from this list.
+
+This is a wider set than AMD's official support matrix, which is worth keeping in mind:
+
+- RDNA 1 (`gfx1010`, `gfx1011`, `gfx1012`) is not officially supported at all. ROCm still ships packages for it and it does work in practice — an RX 5500M (`gfx1012`) handles Qwen 3.5 4B fine, for instance — but expect it to be validated rather than tuned.
+- For RDNA 2, only `gfx1030` is officially supported. The notable change in 7.14.0 is that the rest of the generation (`gfx1031` through `gfx1036`) now has its own packages too, so those cards no longer need `HSA_OVERRIDE_GFX_VERSION=10.3.0` to masquerade as `gfx1030` — they run on their own target.
+
+Treat everything outside the official matrix as working but less optimized than RDNA 3 and newer, where AMD puts most of the tuning effort.
+
+## Building Docker locally
+
+```bash
+docker build -t local/llama.cpp:full-rocm --target full -f .devops/rocm.Dockerfile .
+docker build -t local/llama.cpp:light-rocm --target light -f .devops/rocm.Dockerfile .
+docker build -t local/llama.cpp:server-rocm --target server -f .devops/rocm.Dockerfile .
+```
+
+Building for every architecture takes a long time and produces a large image. To build only for your own GPU, pass its target through `ROCM_DOCKER_ARCH`:
+
+```bash
+docker build -t local/llama.cpp:server-rocm --target server \
+    --build-arg ROCM_DOCKER_ARCH=gfx1100 -f .devops/rocm.Dockerfile .
+```
+
+Refer to [.devops/rocm.Dockerfile](../.devops/rocm.Dockerfile) for the remaining `ARGS` and their defaults.
+
+## Usage
+
+After building locally, usage is similar to the non-ROCm examples, but you'll need to expose the GPU devices to the container and use the `--n-gpu-layers` flag.
+
+```bash
+docker run --device /dev/kfd --device /dev/dri \
+    --group-add $(getent group video | cut -d: -f3) \
+    --group-add $(getent group render | cut -d: -f3) \
+    -v /path/to/models:/models local/llama.cpp:full-rocm --run -m /models/7B/ggml-model-q4_0.gguf -p "Building a website can be done in 10 simple steps:" -n 512 --n-gpu-layers 99
+docker run --device /dev/kfd --device /dev/dri \
+    --group-add $(getent group video | cut -d: -f3) \
+    --group-add $(getent group render | cut -d: -f3) \
+    -v /path/to/models:/models local/llama.cpp:light-rocm -m /models/7B/ggml-model-q4_0.gguf -p "Building a website can be done in 10 simple steps:" -n 512 --n-gpu-layers 99
+docker run --device /dev/kfd --device /dev/dri \
+    --group-add $(getent group video | cut -d: -f3) \
+    --group-add $(getent group render | cut -d: -f3) \
+    -p 8080:8080 -v /path/to/models:/models local/llama.cpp:server-rocm -m /models/7B/ggml-model-q4_0.gguf --port 8080 --host 0.0.0.0 -n 512 --n-gpu-layers 99
+```
+
+*Notes:*
+- `--device /dev/dri` exposes every render node on the host. To restrict the container to one GPU, pass the individual nodes instead, for example `--device /dev/dri/renderD128 --device /dev/dri/card0`.
+- If llama.cpp reports `no usable GPU found` while `rocminfo` inside the same container does list the GPU, the HIP backend failed to load rather than the GPU being unavailable. `--list-devices` shows the loader error.
+
 ## Docker With MUSA
 
 Assuming one has the [mt-container-toolkit](https://developer.mthreads.com/musa/native) properly installed on Linux, `muBLAS` should be accessible inside the container.
