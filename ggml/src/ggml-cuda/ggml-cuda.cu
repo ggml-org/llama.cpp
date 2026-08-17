@@ -2597,8 +2597,6 @@ static ggml_cuda_graph::node_properties ggml_cuda_graph_node_props(const ggml_te
     return prop;
 }
 
-// on in debug builds, opt-in via GGML_CUDA_GRAPH_VERIFY_UID elsewhere - release builds are
-// where a ring/pipelining change is actually exercised, so the check has to be reachable there
 static bool ggml_cuda_graph_verify_uid() {
     static const bool verify = []() {
 #ifndef NDEBUG
@@ -2610,16 +2608,8 @@ static bool ggml_cuda_graph_verify_uid() {
     return verify;
 }
 
-// [TAG_CUDA_GRAPH_UID]
-// A non-zero cgraph->uid that has not changed since the last call is a promise from the caller
-// that nothing the captured graph baked in has changed either - in particular that no node's
-// data pointer, and no src's data pointer, ne or nb, has moved. On that promise we skip the
-// property comparison below and replay the existing executable graph as-is.
-//
-// Breaking the promise does not fall back to a slow path, it replays a graph that reads stale
-// addresses, which corrupts results silently. Any caller that re-points tensors without going
-// through a re-split (which re-stamps the uid, see ggml_backend_sched_split_graph) must
-// invalidate the uid itself. Debug builds verify the promise instead of trusting it.
+// an unchanged cgraph->uid promises the caller has not moved anything this graph baked in.
+// see "Graph input ring buffer" in ggml-backend.h - breaking it replays stale addresses silently
 static bool ggml_cuda_graph_update_required(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph) {
     bool res = false;
 
