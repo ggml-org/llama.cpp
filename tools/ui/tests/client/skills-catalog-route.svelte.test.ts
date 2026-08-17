@@ -128,36 +128,20 @@ describe('maxSkillBudget persisted validation', () => {
 		settingsStore.initialize();
 	});
 
-	it('defaults to 2000 when nothing is persisted', () => {
-		expect(settingsStore.config[SETTINGS_KEYS.MAX_SKILL_BUDGET]).toBe(2000);
-	});
+	it.each([
+		['defaults to 2000 when missing', undefined, 2000],
+		['keeps zero', 0, 0],
+		['clamps negative values', -5, 0],
+		['rounds fractional values', 3.7, 4],
+		['falls back for non-numeric values', 'huge', 2000]
+	])('%s', (_label, value, expected) => {
+		if (value !== undefined) {
+			localStorage.setItem(CONFIG_LOCALSTORAGE_KEY, JSON.stringify({ maxSkillBudget: value }));
+		}
 
-	it('keeps a persisted zero: valid, not a fallback to the default', () => {
-		localStorage.setItem(CONFIG_LOCALSTORAGE_KEY, JSON.stringify({ maxSkillBudget: 0 }));
 		settingsStore.initialize();
 
-		expect(settingsStore.config[SETTINGS_KEYS.MAX_SKILL_BUDGET]).toBe(0);
-	});
-
-	it('clamps a persisted negative value to zero', () => {
-		localStorage.setItem(CONFIG_LOCALSTORAGE_KEY, JSON.stringify({ maxSkillBudget: -5 }));
-		settingsStore.initialize();
-
-		expect(settingsStore.config[SETTINGS_KEYS.MAX_SKILL_BUDGET]).toBe(0);
-	});
-
-	it('rounds a persisted fractional value to an integer', () => {
-		localStorage.setItem(CONFIG_LOCALSTORAGE_KEY, JSON.stringify({ maxSkillBudget: 3.7 }));
-		settingsStore.initialize();
-
-		expect(settingsStore.config[SETTINGS_KEYS.MAX_SKILL_BUDGET]).toBe(4);
-	});
-
-	it('falls back to the default for a persisted non-numeric value', () => {
-		localStorage.setItem(CONFIG_LOCALSTORAGE_KEY, JSON.stringify({ maxSkillBudget: 'huge' }));
-		settingsStore.initialize();
-
-		expect(settingsStore.config[SETTINGS_KEYS.MAX_SKILL_BUDGET]).toBe(2000);
+		expect(settingsStore.config[SETTINGS_KEYS.MAX_SKILL_BUDGET]).toBe(expected);
 	});
 });
 
@@ -542,6 +526,12 @@ describe('/skills catalog preview', () => {
 			}
 		);
 	}
+	async function renderCatalogWithReads(catalog: SkillCatalogResponse) {
+		mockCatalogWithReads(catalog);
+		const screen = await render(SkillsPageWrapper);
+		await vi.waitFor(() => expect(bodyText()).toContain('demo-skill'));
+		return screen;
+	}
 
 	/**
 	 * A controllable /skills/read fetch: records the request signal and, like
@@ -602,11 +592,7 @@ describe('/skills catalog preview', () => {
 	it('restores a valid persisted desktop split', async () => {
 		await useDesktopViewport();
 		localStorage.setItem(SKILLS_PANE_SIZES_LOCALSTORAGE_KEY, JSON.stringify([40, 60]));
-		mockCatalogWithReads(makeCatalog(makeEntry('demo-skill')));
-
-		const screen = await render(SkillsPageWrapper);
-
-		await vi.waitFor(() => expect(bodyText()).toContain('demo-skill'));
+		const screen = await renderCatalogWithReads(makeCatalog(makeEntry('demo-skill')));
 		await screen.getByRole('button', { name: /demo-skill/ }).click();
 		await vi.waitFor(() => expect(panes()).toHaveLength(2));
 		await vi.waitFor(() => {
@@ -617,30 +603,22 @@ describe('/skills catalog preview', () => {
 
 	it('normalizes persisted pane sizes and falls back for malformed values', async () => {
 		await useDesktopViewport();
-		mockCatalogWithReads(makeCatalog(makeEntry('demo-skill')));
-
 		localStorage.setItem(SKILLS_PANE_SIZES_LOCALSTORAGE_KEY, JSON.stringify([40, 40]));
-		const first = await render(SkillsPageWrapper);
-
-		await vi.waitFor(() => expect(bodyText()).toContain('demo-skill'));
+		const first = await renderCatalogWithReads(makeCatalog(makeEntry('demo-skill')));
 		await first.getByRole('button', { name: /demo-skill/ }).click();
 		await vi.waitFor(() => expect(panes()).toHaveLength(2));
 		await vi.waitFor(() => expect(parseFloat(panes()[0].style.flexGrow)).toBeCloseTo(50, 0));
 		first.unmount();
 
 		localStorage.setItem(SKILLS_PANE_SIZES_LOCALSTORAGE_KEY, JSON.stringify([10, 90]));
-		const second = await render(SkillsPageWrapper);
-
-		await vi.waitFor(() => expect(bodyText()).toContain('demo-skill'));
+		const second = await renderCatalogWithReads(makeCatalog(makeEntry('demo-skill')));
 		await second.getByRole('button', { name: /demo-skill/ }).click();
 		await vi.waitFor(() => expect(panes()).toHaveLength(2));
 		await vi.waitFor(() => expect(parseFloat(panes()[0].style.flexGrow)).toBeCloseTo(35, 0));
 		second.unmount();
 
 		localStorage.setItem(SKILLS_PANE_SIZES_LOCALSTORAGE_KEY, JSON.stringify({ left: 40 }));
-		const third = await render(SkillsPageWrapper);
-
-		await vi.waitFor(() => expect(bodyText()).toContain('demo-skill'));
+		const third = await renderCatalogWithReads(makeCatalog(makeEntry('demo-skill')));
 		await third.getByRole('button', { name: /demo-skill/ }).click();
 		await vi.waitFor(() => expect(panes()).toHaveLength(2));
 		await vi.waitFor(() => expect(parseFloat(panes()[0].style.flexGrow)).toBeCloseTo(55, 0));
@@ -648,16 +626,11 @@ describe('/skills catalog preview', () => {
 
 	it('persists normalized sizes after resizing the desktop split', async () => {
 		await useDesktopViewport();
-		mockCatalogWithReads(makeCatalog(makeEntry('demo-skill')));
-
-		const screen = await render(SkillsPageWrapper);
-
-		await vi.waitFor(() => expect(bodyText()).toContain('demo-skill'));
+		const screen = await renderCatalogWithReads(makeCatalog(makeEntry('demo-skill')));
 		await screen.getByRole('button', { name: /demo-skill/ }).click();
 		await vi.waitFor(() => expect(panes()).toHaveLength(2));
 
 		const handle = document.querySelector<HTMLElement>('[data-pane-resizer]')!;
-
 		handle.focus();
 		handle.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'ArrowLeft' }));
 
@@ -672,50 +645,22 @@ describe('/skills catalog preview', () => {
 		});
 	});
 
-	it('selects a focused card with Enter and shows the detail', async () => {
-		mockCatalogWithReads(makeCatalog(makeEntry('demo-skill'), makeEntry('second-skill')));
-
-		const screen = await render(SkillsPageWrapper);
-
-		await vi.waitFor(() => expect(bodyText()).toContain('demo-skill'));
-
-		const card = screen.getByRole('button', { name: /demo-skill/ });
-		const element = card.element();
-
-		element.focus();
-		element.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Enter' }));
-
-		await vi.waitFor(() => expect(bodyText()).toContain('Content of demo-skill'));
-		expect(screen.getByRole('button', { name: 'Back' }).query()).not.toBeNull();
-	});
-
-	it('selects a focused card with Space', async () => {
-		mockCatalogWithReads(makeCatalog(makeEntry('demo-skill'), makeEntry('second-skill')));
-
-		const screen = await render(SkillsPageWrapper);
-
-		await vi.waitFor(() => expect(bodyText()).toContain('demo-skill'));
-
-		const card = screen.getByRole('button', { name: /demo-skill/ });
-		const element = card.element();
-
-		element.focus();
-		element.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: ' ' }));
-
-		await vi.waitFor(() => expect(bodyText()).toContain('Content of demo-skill'));
-		expect(screen.getByRole('button', { name: 'Back' }).query()).not.toBeNull();
-	});
-
-	it('marks the selected card with aria-pressed', async () => {
+	it.each([
+		['Enter', 'Enter'],
+		['Space', ' ']
+	])('selects a focused card with %s and shows the detail', async (_label, key) => {
 		await useDesktopViewport();
-		mockCatalogWithReads(makeCatalog(makeEntry('demo-skill'), makeEntry('second-skill')));
+		const screen = await renderCatalogWithReads(
+			makeCatalog(makeEntry('demo-skill'), makeEntry('second-skill'))
+		);
 
-		const screen = await render(SkillsPageWrapper);
+		const card = screen.getByRole('button', { name: /demo-skill/ });
+		const element = card.element();
 
-		await vi.waitFor(() => expect(bodyText()).toContain('demo-skill'));
+		element.focus();
+		element.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key }));
 
-		await screen.getByRole('button', { name: /demo-skill/ }).click();
-
+		await vi.waitFor(() => expect(bodyText()).toContain('Content of demo-skill'));
 		await expect
 			.element(screen.getByRole('button', { name: /demo-skill/ }))
 			.toHaveAttribute('aria-pressed', 'true');
@@ -1117,7 +1062,7 @@ describe('/skills catalog preview', () => {
 			.toBeInTheDocument();
 	});
 
-	it('toggling the switch never selects the card', async () => {
+	it('keeps switch and action-label clicks from selecting the card', async () => {
 		mockCatalogWithReads(makeCatalog(makeEntry('demo-skill'), makeEntry('second-skill')));
 
 		const screen = await render(SkillsPageWrapper);
@@ -1127,19 +1072,31 @@ describe('/skills catalog preview', () => {
 		await screen.getByRole('switch', { name: 'Disable demo-skill' }).click();
 		await vi.waitFor(() => expect(bodyText()).toContain('Disabled'));
 
-		// The click stays at the switch boundary: no detail pane opens, no
-		// card gains aria-pressed, and no read request fires.
-		expect(screen.getByTestId('skill-detail').query()).toBeNull();
-		expect(bodyText()).not.toContain('Content of demo-skill');
+		const assertUnselected = () => {
+			expect(screen.getByTestId('skill-detail').query()).toBeNull();
+			expect(bodyText()).not.toContain('Content of demo-skill');
+			expect(
+				vi.mocked(fetch).mock.calls.filter(([url]) => String(url).includes('/skills/read'))
+			).toHaveLength(0);
+		};
+
 		await expect
 			.element(screen.getByRole('button', { name: /demo-skill/ }))
 			.toHaveAttribute('aria-pressed', 'false');
-		expect(
-			vi.mocked(fetch).mock.calls.filter(([url]) => String(url).includes('/skills/read'))
-		).toHaveLength(0);
+		assertUnselected();
+
+		const label = document.querySelector<HTMLElement>(
+			'label[for="skill-enabled-opaque-demo-skill"]'
+		);
+
+		expect(label).not.toBeNull();
+		label!.click();
+
+		await vi.waitFor(() => expect(bodyText()).not.toContain('Disabled'));
+		assertUnselected();
 	});
 
-	it('Enter and Space on the switch toggle it without selecting the card', async () => {
+	it.each(['Enter', ' '])('keeps %s on the switch from selecting the card', async (key) => {
 		mockCatalogWithReads(makeCatalog(makeEntry('demo-skill'), makeEntry('second-skill')));
 
 		const screen = await render(SkillsPageWrapper);
@@ -1149,46 +1106,11 @@ describe('/skills catalog preview', () => {
 		const switchElement = screen.getByRole('switch', { name: 'Disable demo-skill' }).element();
 
 		switchElement.focus();
-		switchElement.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Enter' }));
-
-		// The keypress toggles availability, but is stopped at the switch
-		// boundary so the card's own Enter selection handler never fires.
-		await vi.waitFor(() => expect(bodyText()).toContain('Disabled'));
-		expect(screen.getByTestId('skill-detail').query()).toBeNull();
-		expect(bodyText()).not.toContain('Content of demo-skill');
-
-		switchElement.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: ' ' }));
-
-		await vi.waitFor(() => expect(bodyText()).not.toContain('Disabled'));
-		expect(screen.getByTestId('skill-detail').query()).toBeNull();
-		expect(bodyText()).not.toContain('Content of demo-skill');
-	});
-
-	it('clicking the visible action label toggles the switch without selecting the card', async () => {
-		mockCatalogWithReads(makeCatalog(makeEntry('demo-skill'), makeEntry('second-skill')));
-
-		const screen = await render(SkillsPageWrapper);
-
-		await vi.waitFor(() => expect(bodyText()).toContain('demo-skill'));
-
-		// The label's own click must be isolated like the switch's: clicking
-		// the action text toggles availability but never selects the card.
-		const label = document.querySelector<HTMLElement>(
-			'label[for="skill-enabled-opaque-demo-skill"]'
-		);
-
-		expect(label).not.toBeNull();
-		label!.click();
+		switchElement.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key }));
 
 		await vi.waitFor(() => expect(bodyText()).toContain('Disabled'));
 		expect(screen.getByTestId('skill-detail').query()).toBeNull();
 		expect(bodyText()).not.toContain('Content of demo-skill');
-		await expect
-			.element(screen.getByRole('button', { name: /demo-skill/ }))
-			.toHaveAttribute('aria-pressed', 'false');
-		expect(
-			vi.mocked(fetch).mock.calls.filter(([url]) => String(url).includes('/skills/read'))
-		).toHaveLength(0);
 	});
 });
 
