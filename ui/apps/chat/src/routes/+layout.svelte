@@ -1,7 +1,16 @@
 <script lang="ts">
 	import '../app.css';
 	import * as Tooltip from '@ggml-org/llama-ui/ui/tooltip';
-	import { GlassKey, MenuIcon, SidebarNavigation } from '#lib/components/app/index.ts';
+	import {
+		DialogConversationSelection,
+		DialogImportConversationPreview,
+		DialogImportConversationsResult,
+		DialogSettingsImportPreview,
+		DropImportOverlay,
+		GlassKey,
+		MenuIcon,
+		SidebarNavigation
+	} from '#lib/components/app/index.ts';
 	import { PwaMetaTags, PwaRefreshAlert } from '#lib/components/pwa/index.ts';
 	import {
 		BOX_BORDER,
@@ -15,6 +24,7 @@
 		SETTINGS_KEYS,
 		TOOLTIP_DELAY_DURATION
 	} from '#lib/constants/index.ts';
+	import { useDropImport } from '#lib/hooks/use-drop-import.svelte.ts';
 	import { useKeyboardShortcuts } from '#lib/hooks/use-keyboard-shortcuts.svelte.ts';
 	import { usePwa } from '#lib/hooks/use-pwa.svelte.ts';
 	import { useSidebarReveal } from '#lib/hooks/use-sidebar-reveal.svelte.ts';
@@ -151,6 +161,9 @@
 
 		uiStore.rememberModelsReturnRoute();
 	});
+
+	// Global drag-and-drop import (works on any route)
+	const dropImport = useDropImport();
 
 	// Global keyboard shortcuts
 	const { handleKeydown } = useKeyboardShortcuts({
@@ -318,7 +331,13 @@
 </svelte:head>
 
 <svelte:window bind:innerHeight bind:innerWidth onkeydown={handleKeydown} />
-<svelte:document onvisibilitychange={handleVisibilityChange} />
+<svelte:document
+	ondragenter={dropImport.dragHandlers.dragenter}
+	ondragleave={dropImport.dragHandlers.dragleave}
+	ondragover={dropImport.dragHandlers.dragover}
+	ondrop={dropImport.dragHandlers.drop}
+	onvisibilitychange={handleVisibilityChange}
+/>
 
 <Tooltip.Provider delayDuration={TOOLTIP_DELAY_DURATION}>
 	<!-- clip, not hide: the page slid aside for the phone sidebar must not widen the document,
@@ -441,6 +460,42 @@
 	<ModeWatcher />
 
 	<Toaster closeButton richColors />
+
+	{#if dropImport.isDragOver}
+		<DropImportOverlay />
+	{/if}
+
+	<DialogConversationSelection
+		bind:open={dropImport.ui.showSelection}
+		conversations={dropImport.ui.availableConversations}
+		messageCountMap={dropImport.ui.selectionMessageCountMap}
+		mode="import"
+		onCancel={dropImport.cancelSelection}
+		onConfirm={dropImport.handleSelectionConfirm}
+	/>
+
+	<DialogSettingsImportPreview
+		bind:open={dropImport.ui.showSettingsPreview}
+		diff={dropImport.ui.settingsDiff}
+		onCancel={dropImport.cancelSettingsImport}
+		onConfirm={dropImport.confirmSettingsImport}
+	/>
+
+	<DialogImportConversationPreview
+		bind:open={dropImport.ui.showPreview}
+		conversationName={dropImport.ui.previewData?.conv.name}
+		messages={dropImport.ui.previewData?.messages}
+		onCancel={dropImport.cancelPreview}
+		onConfirm={dropImport.confirmImportSingle}
+	/>
+
+	<DialogImportConversationsResult
+		bind:open={dropImport.ui.showOpenBulk}
+		conversations={dropImport.ui.importedConversations}
+		messageCountMap={dropImport.ui.bulkMessageCountMap}
+		onClose={dropImport.cancelBulk}
+		onOpen={dropImport.openConversation}
+	/>
 
 	<!-- a debug tool, kept with the tests and loaded on demand, so it stays out of the production bundle -->
 	{#if import.meta.env.DEV && import.meta.env.VITE_DEBUG}
