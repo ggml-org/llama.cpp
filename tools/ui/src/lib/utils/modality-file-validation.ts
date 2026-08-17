@@ -5,7 +5,7 @@
 
 import { FileTypeCategory } from '$lib/enums';
 import type { ModalityCapabilities } from '$lib/types';
-import { getFileTypeCategory } from '$lib/utils';
+import { getFileTypeCategory, getUploadedFileCategory } from '$lib/utils';
 
 /**
  * Check if a file type is supported by the given modalities
@@ -75,7 +75,7 @@ export function filterFilesByModalities(
 	const { hasAudio, hasVideo, hasVision } = capabilities;
 
 	for (const file of files) {
-		const category = getFileTypeCategory(file.type);
+		const category = getUploadedFileCategory(file);
 
 		let isSupported = true;
 		let reason = '';

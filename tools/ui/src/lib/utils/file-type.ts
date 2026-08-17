@@ -32,6 +32,7 @@ export function getFileTypeCategory(mimeType: string): FileTypeCategory | null {
 		case MimeTypeImage.SVG:
 		case MimeTypeImage.HEIC:
 		case MimeTypeImage.HEIF:
+		case MimeTypeImage.JXL:
 			return FileTypeCategory.IMAGE;
 
 		// Audio
@@ -122,6 +123,7 @@ export function getFileTypeCategoryByExtension(filename: string): FileTypeCatego
 		case FileExtensionImage.SVG:
 		case FileExtensionImage.HEIC:
 		case FileExtensionImage.HEIF:
+		case FileExtensionImage.JXL:
 			return FileTypeCategory.IMAGE;
 
 		// Audio
@@ -218,6 +220,13 @@ export function getFileTypeByExtension(filename: string): string | null {
 	}
 
 	return null;
+}
+
+export function getUploadedFileCategory(file: {
+	name: string;
+	type: string;
+}): FileTypeCategory | null {
+	return getFileTypeCategory(file.type) ?? getFileTypeCategoryByExtension(file.name);
 }
 
 export function isFileTypeSupported(filename: string, mimeType?: string): boolean {

@@ -33,6 +33,10 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb/stb_image.h"
 
+#ifdef MTMD_JXL
+#include "mtmd-jxl.h"
+#endif
+
 #ifdef MTMD_INTERNAL_HEADER
 #error "mtmd-helper is a public library outside of mtmd. it must not include internal headers"
 #endif
@@ -376,6 +380,24 @@ mtmd_helper_bitmap_wrapper mtmd_helper_bitmap_init_from_buf(mtmd_context * ctx, 
     if (!placeholder) {
         id = fnv_hash(buf, len);
     }
+
+#ifdef MTMD_JXL
+    // Check JXL before audio/stb_image. Raw JXL starts with 0xFF 0x0A, which is
+    // adjacent to the crude MPEG sync-word sniff in is_audio_file().
+    if (jxl_is_jxl(buf, len)) {
+        int nx = 0, ny = 0;
+        unsigned char * data = nullptr;
+        if (!jxl_decode_rgb(buf, len, &data, &nx, &ny)) {
+            LOG_ERR("%s: failed to decode JXL image\n", __func__);
+            return {nullptr, nullptr};
+        }
+        LOG_INF("%s: decoded JXL image (%d x %d)\n", __func__, nx, ny);
+        result = mtmd_bitmap_init(nx, ny, placeholder ? nullptr : data);
+        mtmd_bitmap_set_id(result, id.empty() ? nullptr : id.c_str());
+        free(data);
+        return {result, nullptr};
+    }
+#endif
 
     if (audio_helpers::is_audio_file((const char *)buf, len)) {
         std::vector<float> pcmf32;

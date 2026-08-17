@@ -1,3 +1,4 @@
+import { isJxlFile, normalizeJxlDataUrl } from './jxl';
 import { convertPDFToImage, convertPDFToText } from './pdf-processing';
 import { isSvgMimeType, svgBase64UrlToPngDataURL } from './svg-to-png';
 import { isLikelyTextFile, readFileAsText } from './text-files';
@@ -7,8 +8,18 @@ import { AttachmentType, FileTypeCategory, SpecialFileType } from '$lib/enums';
 import { modelsStore } from '$lib/stores/models.svelte';
 import { settingsStore } from '$lib/stores/settings.svelte';
 import type { ChatUploadedFile, DatabaseMessageExtra, FileProcessingResult } from '$lib/types';
-import { getFileTypeCategory } from '$lib/utils';
+import { getFileTypeCategory, getUploadedFileCategory } from '$lib/utils';
 import { toast } from 'svelte-sonner';
+
+function readFileAsDataURL(file: File): Promise<string> {
+	return new Promise((resolve, reject) => {
+		const reader = new FileReader();
+
+		reader.onload = () => resolve(reader.result as string);
+		reader.onerror = () => reject(reader.error);
+		reader.readAsDataURL(file);
+	});
+}
 
 function readFileAsBase64(file: File): Promise<string> {
 	return new Promise((resolve, reject) => {
@@ -50,30 +61,37 @@ export async function parseFilesToMessageExtras(
 			continue;
 		}
 
-		if (getFileTypeCategory(file.type) === FileTypeCategory.IMAGE) {
-			if (file.preview) {
+		if (getUploadedFileCategory(file) === FileTypeCategory.IMAGE || isJxlFile(file)) {
+			if (file.preview || isJxlFile(file)) {
 				let base64Url = file.preview;
 
-				if (isSvgMimeType(file.type)) {
+				if (isJxlFile(file)) {
+					base64Url = normalizeJxlDataUrl(
+						base64Url ?? (await readFileAsDataURL(file.file)),
+						file.name
+					);
+				} else if (isSvgMimeType(file.type)) {
 					try {
-						base64Url = await svgBase64UrlToPngDataURL(base64Url);
+						base64Url = await svgBase64UrlToPngDataURL(base64Url!);
 					} catch (error) {
 						console.error('Failed to convert SVG to PNG for database storage:', error);
 					}
 				} else if (isWebpMimeType(file.type)) {
 					try {
-						base64Url = await webpBase64UrlToPngDataURL(base64Url);
+						base64Url = await webpBase64UrlToPngDataURL(base64Url!);
 					} catch (error) {
 						console.error('Failed to convert WebP to PNG for database storage:', error);
 					}
 				}
 
-				extras.push({
-					base64Url,
-					name: file.name,
-					size: file.size,
-					type: AttachmentType.IMAGE
-				});
+				if (base64Url) {
+					extras.push({
+						base64Url,
+						name: file.name,
+						size: file.size,
+						type: AttachmentType.IMAGE
+					});
+				}
 			}
 		} else if (getFileTypeCategory(file.type) === FileTypeCategory.AUDIO) {
 			// Process audio files (MP3 and WAV)

@@ -56,6 +56,10 @@ export const IMAGE_FILE_TYPES = {
 		extensions: [FileExtensionImage.JPG, FileExtensionImage.JPEG],
 		mimeTypes: [MimeTypeImage.JPEG]
 	},
+	[FileTypeImage.JXL]: {
+		extensions: [FileExtensionImage.JXL],
+		mimeTypes: [MimeTypeImage.JXL]
+	},
 	[FileTypeImage.PNG]: {
 		extensions: [FileExtensionImage.PNG],
 		mimeTypes: [MimeTypeImage.PNG]

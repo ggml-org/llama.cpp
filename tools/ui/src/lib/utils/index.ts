@@ -75,6 +75,7 @@ export { getPreviewText, generateConversationTitle } from './text';
 export {
 	getFileTypeCategory,
 	getFileTypeCategoryByExtension,
+	getUploadedFileCategory,
 	getFileTypeByExtension,
 	isFileTypeSupported
 } from './file-type';
