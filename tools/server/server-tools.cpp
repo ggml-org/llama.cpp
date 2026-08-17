@@ -8,7 +8,6 @@
 #include <regex>
 #include <thread>
 #include <chrono>
-#include <ctime>
 #include <atomic>
 #include <cstring>
 #include <cctype>

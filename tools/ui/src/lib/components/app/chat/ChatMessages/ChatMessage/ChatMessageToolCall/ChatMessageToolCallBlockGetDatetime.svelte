@@ -33,7 +33,7 @@
 				if (typeof obj.result === 'string') return { dateString: obj.result.trim() };
 			}
 		} catch {
-			return { dateString: toolResultString.trim() };
+			// not JSON - nothing to show
 		}
 
 		return {};
