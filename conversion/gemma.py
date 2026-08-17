@@ -123,7 +123,7 @@ class Gemma2Model(TextModel):
 
 @ModelBase.register("Gemma3ForCausalLM", "Gemma3ForConditionalGeneration")
 # [TAG_HF_EXAMPLE_GATED] google/gemma-3-4b-it is gated
-@ModelBase.example("trl-internal-testing/tiny-Gemma3ForConditionalGeneration")
+@ModelBase.example("trl-internal-testing/tiny-Gemma3ForConditionalGeneration", "hf-tiny-v2/tiny-random-Gemma3ForCausalLM")
 class Gemma3Model(TextModel):
     model_arch = gguf.MODEL_ARCH.GEMMA3
 
@@ -629,7 +629,7 @@ class Gemma3NModel(Gemma3Model):
 
 
 @ModelBase.register("Gemma4ForConditionalGeneration", "Gemma4ForCausalLM")
-@ModelBase.example("google/gemma-4-31B-it", "google/gemma-4-26B-A4B-it")
+@ModelBase.example("google/gemma-4-31B-it", "google/gemma-4-26B-A4B-it", "google/gemma-4-E2B-it")
 class Gemma4Model(Gemma3Model):
     model_arch = gguf.MODEL_ARCH.GEMMA4
 
@@ -831,7 +831,7 @@ class Gemma4UnifiedModel(Gemma4Model):
 
 
 @ModelBase.register("Gemma4AssistantForCausalLM", "Gemma4UnifiedAssistantForCausalLM")
-@ModelBase.example("google/gemma-4-31B-it-assistant")
+@ModelBase.example("google/gemma-4-31B-it-assistant", "google/gemma-4-26B-A4B-it-assistant", "google/gemma-4-E2B-it-assistant")
 class Gemma4AssistantModel(Gemma4Model):
     model_arch = gguf.MODEL_ARCH.GEMMA4_ASSISTANT
 
@@ -852,7 +852,7 @@ class Gemma4AssistantModel(Gemma4Model):
 
 
 @ModelBase.register("Gemma4ForConditionalGeneration")
-@ModelBase.example("google/gemma-4-31B-it")
+@ModelBase.example("google/gemma-4-31B-it", "google/gemma-4-26B-A4B-it", "google/gemma-4-E2B-it")
 class Gemma4VisionAudioModel(MmprojModel):
     has_audio_encoder = True
     has_vision_encoder = True
