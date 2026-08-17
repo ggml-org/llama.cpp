@@ -135,12 +135,12 @@ class GraniteMoeSWAModel(GraniteSWAModel):
         """Split merged MoE tensors (gate+up) following standard MoE pattern."""
 
         # Handle expert FFN tensors (merged gate+up) - swash format: experts.gate_up_proj
+        # Kept fused since inference (build_moe_ffn) supports a single gate_up_exps
+        # tensor for the routed experts.
         if name.endswith("block_sparse_moe.experts.gate_up_proj"):
             ffn_dim = self.hparams["intermediate_size"]
             assert data_torch.shape[-2] == 2 * ffn_dim, f"Merged FFN tensor size must be 2 * intermediate_size, got {data_torch.shape[-2]}"
-            gate, up = data_torch.split(ffn_dim, dim=-2)
-            yield from ModelBase.modify_tensors(self, gate, self.format_tensor_name(gguf.MODEL_TENSOR.FFN_GATE_EXP, bid), bid)
-            yield from ModelBase.modify_tensors(self, up, self.format_tensor_name(gguf.MODEL_TENSOR.FFN_UP_EXP, bid), bid)
+            yield from ModelBase.modify_tensors(self, data_torch, self.format_tensor_name(gguf.MODEL_TENSOR.FFN_GATE_UP_EXP, bid), bid)
             return
 
         # Handle expert FFN down projection - swash format: experts.down_proj
@@ -149,12 +149,12 @@ class GraniteMoeSWAModel(GraniteSWAModel):
             return
 
         # Handle expert FFN tensors (merged gate+up) - standard granite format: input_linear.weight
+        # Kept fused since inference (build_moe_ffn) supports a single gate_up_exps
+        # tensor for the routed experts.
         if name.endswith("block_sparse_moe.input_linear.weight"):
             ffn_dim = self.hparams["intermediate_size"]
             assert data_torch.shape[-2] == 2 * ffn_dim, "Merged FFN tensor size must be 2 * intermediate_size"
-            gate, up = data_torch.split(ffn_dim, dim=-2)
-            yield from ModelBase.modify_tensors(self, gate, self.format_tensor_name(gguf.MODEL_TENSOR.FFN_GATE_EXP, bid), bid)
-            yield from ModelBase.modify_tensors(self, up, self.format_tensor_name(gguf.MODEL_TENSOR.FFN_UP_EXP, bid), bid)
+            yield from ModelBase.modify_tensors(self, data_torch, self.format_tensor_name(gguf.MODEL_TENSOR.FFN_GATE_UP_EXP, bid), bid)
             return
 
         # Handle shared expert FFN tensors (if present)
