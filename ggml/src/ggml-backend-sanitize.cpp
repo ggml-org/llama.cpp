@@ -21,6 +21,17 @@ int ggml_san_level(void) {
     return level;
 }
 
+// GGML_SCHED_SANITIZE_NONFATAL=1 reports every distinct race and keeps going, instead of
+// aborting on the first one. the shadow state is updated after a report, so a reported
+// range does not keep firing - this lets a single run enumerate all races in a workload.
+static int ggml_san_nonfatal(void) {
+    static const int nonfatal = []() {
+        const char * env = getenv("GGML_SCHED_SANITIZE_NONFATAL");
+        return env ? atoi(env) : 0;
+    }();
+    return nonfatal;
+}
+
 namespace {
 
 constexpr int    SAN_MAX_ACTORS      = 64;
@@ -54,6 +65,8 @@ struct san_state {
 
     std::unordered_map<const void *, vclock> ev_vc;
     std::unordered_map<const void *, int>    events;
+
+    size_t n_races = 0; // only counted in nonfatal mode
 };
 
 san_state & state() {
@@ -61,6 +74,12 @@ san_state & state() {
         san_state * st = new san_state();
         st->actor_names.push_back("HOST");
         st->vc.emplace_back(SAN_MAX_ACTORS, 0);
+        if (ggml_san_nonfatal()) {
+            static san_state * at_exit = st;
+            atexit([]() {
+                fprintf(stderr, "\nggml-sched-sanitize: %zu race(s) reported\n", at_exit->n_races);
+            });
+        }
         return st;
     }();
     return *s;
@@ -176,6 +195,11 @@ void report(san_state & s, const mem_range & mr, const san_access & cur, const s
     fprintf(stderr, "ggml-sched-sanitize:   no happens-before edge: %s knows %s@%llu, needs >=%llu\n\n",
             actor_name(s, cur.actor), actor_name(s, prev.actor),
             (unsigned long long) s.vc[cur.actor][prev.actor], (unsigned long long) prev.clock);
+
+    if (ggml_san_nonfatal()) {
+        s.n_races++;
+        return;
+    }
 
     GGML_ABORT("ggml-sched-sanitize: race detected");
 }
