@@ -363,13 +363,13 @@ export { SkillsService } from './skills.service';
  * @see buildSkillRunSnapshot — immutable per-run snapshot construction
  * @see serializeSkillCatalogEnvelope — verbatim server-XML envelope assembly
  */
-export { SkillsPackingService } from './skills-packing.service';
+export { SkillsPackingService } from './skills.service';
 export {
 	buildSkillRunSnapshot,
 	estimateSkillTokens,
 	resolveSkillPackOptions,
 	serializeSkillCatalogEnvelope
-} from './skills-packing.service';
+} from './skills.service';
 
 /**
  * **SkillRunAdapters** — Snapshot-only Skills adapters for frontend-driven runs
