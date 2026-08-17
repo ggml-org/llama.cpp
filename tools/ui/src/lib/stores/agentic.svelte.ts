@@ -84,7 +84,12 @@ import type {
 	DatabaseMessageExtraAudioFile,
 	DatabaseMessageExtraImageFile
 } from '$lib/types/database';
-import { executeGetDatetimeTool, getAudioInputFormat, isAbortError } from '$lib/utils';
+import {
+	executeBrowserInfoTool,
+	executeGetDatetimeTool,
+	getAudioInputFormat,
+	isAbortError
+} from '$lib/utils';
 import { SvelteMap } from 'svelte/reactivity';
 
 function createDefaultSession(): AgenticSession {
@@ -948,6 +953,8 @@ class AgenticStore {
 
 							if (toolName === BuiltInTool.GET_DATETIME) {
 								executionResult = executeGetDatetimeTool();
+							} else if (toolName === BuiltInTool.GET_INFO) {
+								executionResult = executeBrowserInfoTool();
 							} else if (toolName === BuiltInTool.READ_MEDIA) {
 								executionResult = await ReadMediaService.executeTool(
 									args,

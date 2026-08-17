@@ -334,6 +334,9 @@ export { buildSandboxToolDefinition, SANDBOX_TOOL_DEFINITION } from './sandbox-t
 // Frontend `get_datetime` executor (the browser clock, not the server's)
 export { executeGetDatetimeTool } from './get-datetime';
 
+// Browser fallback for the server's get_info tool
+export { executeBrowserInfoTool } from './browser-info';
+
 // Cryptography utilities
 
 export { uuid } from './uuid';
