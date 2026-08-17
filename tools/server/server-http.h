@@ -1,5 +1,7 @@
 #pragma once
 
+#include "server-telemetry.h"
+
 #include <atomic>
 #include <functional>
 #include <map>
@@ -54,6 +56,7 @@ struct server_http_req {
     std::string body;
     std::map<std::string, uploaded_file> files; // used for file uploads (form data)
     const std::function<bool()> & should_stop;
+    server_telemetry_span_ptr trace_span;
 
     std::string get_param(const std::string & key, const std::string & def = "") const {
         auto it = params.find(key);

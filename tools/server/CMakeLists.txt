@@ -43,12 +43,23 @@ add_library(${TARGET}
     server-http.h
     server-models.cpp
     server-models.h
+    server-telemetry.cpp
+    server-telemetry.h
 )
 set_target_properties(${TARGET} PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
 
 target_include_directories(${TARGET} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_include_directories(${TARGET} PRIVATE ../mtmd ${CMAKE_SOURCE_DIR})
 target_link_libraries(${TARGET} PUBLIC server-context llama-ui cpp-httplib ${CMAKE_THREAD_LIBS_INIT})
+
+if(LLAMA_SERVER_OPEN_TELEMETRY)
+    find_package(opentelemetry-cpp CONFIG REQUIRED COMPONENTS exporters_otlp_http)
+    if(OPENTELEMETRY_VERSION VERSION_LESS 1.27.0)
+        message(FATAL_ERROR "LLAMA_SERVER_OPEN_TELEMETRY requires opentelemetry-cpp 1.27.0 or newer")
+    endif()
+    target_compile_definitions(${TARGET} PRIVATE LLAMA_SERVER_OPEN_TELEMETRY)
+    target_link_libraries(${TARGET} PRIVATE opentelemetry-cpp::otlp_http_exporter)
+endif()
 
 if(LLAMA_TOOLS_INSTALL)
     install(TARGETS ${TARGET} LIBRARY)

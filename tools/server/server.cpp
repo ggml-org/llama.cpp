@@ -3,6 +3,7 @@
 #include "server-models.h"
 #include "server-cors-proxy.h"
 #include "server-stream.h"
+#include "server-telemetry.h"
 #include "server-tools.h"
 
 #include "arg.h"
@@ -24,6 +25,12 @@
 
 static std::function<void(int)> shutdown_handler;
 static std::atomic_flag is_terminating = ATOMIC_FLAG_INIT;
+
+struct server_telemetry_guard {
+    ~server_telemetry_guard() {
+        server_telemetry_shutdown();
+    }
+};
 
 static inline void signal_handler(int signal) {
     if (is_terminating.test_and_set()) {
@@ -137,6 +144,13 @@ int llama_server(common_params & params, int argc, char ** argv) {
 
     // skip device enumeration so the CUDA primary context stays uncreated
     common_params_print_info(params, !is_router_server);
+
+    std::string telemetry_error;
+    if (!server_telemetry_init(params.endpoint_otel, llama_build_info(), telemetry_error)) {
+        SRV_ERR("failed to initialize OpenTelemetry: %s\n", telemetry_error.c_str());
+        return 1;
+    }
+    server_telemetry_guard telemetry_guard;
 
     if (!is_router_server) {
         // validate batch size for embeddings
