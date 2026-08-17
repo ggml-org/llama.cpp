@@ -74,6 +74,7 @@ target_link_libraries(llama PUBLIC ggml)
 if (LLAMA_WEIGHT_CACHE)
     target_sources(llama PRIVATE llama-weight-cache.cpp)
     target_compile_definitions(llama PRIVATE LLAMA_WEIGHT_CACHE)
+    target_include_directories(llama PRIVATE ../vendor/hash/xxhash)
 endif()
 
 if (BUILD_SHARED_LIBS)
