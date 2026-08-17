@@ -1,22 +1,22 @@
 export enum ColorMode {
-	LIGHT = 'light',
 	DARK = 'dark',
+	LIGHT = 'light',
 	SYSTEM = 'system'
 }
 
 export enum TooltipSide {
-	TOP = 'top',
-	RIGHT = 'right',
 	BOTTOM = 'bottom',
-	LEFT = 'left'
+	LEFT = 'left',
+	RIGHT = 'right',
+	TOP = 'top'
 }
 
 /**
  * MCP prompt display variant
  */
 export enum McpPromptVariant {
-	MESSAGE = 'message',
-	ATTACHMENT = 'attachment'
+	ATTACHMENT = 'attachment',
+	MESSAGE = 'message'
 }
 
 /**
@@ -39,8 +39,8 @@ export enum HtmlInputType {
  * Alert level that drives the context gauge dial color.
  */
 export enum ColorLevel {
-	OK = 'ok',
-	WARNING = 'warning',
 	CRITICAL = 'critical',
-	NEUTRAL = 'neutral'
+	NEUTRAL = 'neutral',
+	OK = 'ok',
+	WARNING = 'warning'
 }

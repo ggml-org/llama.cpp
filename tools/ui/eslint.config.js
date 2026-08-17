@@ -61,6 +61,9 @@ export default ts.config(
 				{ blankLine: 'always', next: ['return', 'throw', 'break', 'continue'], prev: '*' }
 			],
 
+			// Alphabetical order for enum members
+			'perfectionist/sort-enums': ['error', { type: 'natural' }],
+
 			'perfectionist/sort-objects': ['error', { type: 'natural' }],
 
 			// Alphabetical order for variable declarations and object keys

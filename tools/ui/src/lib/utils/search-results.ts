@@ -50,10 +50,10 @@ const FAVICON_PATH = '/favicon.ico';
 // (and that callers read off `SearchResult`), so `FieldKey.TITLE` is a
 // drop-in for the literal `'title'`.
 enum FieldKey {
-	TITLE = 'title',
-	URL = 'url',
+	AUTHOR = 'author',
 	PUBLISHED = 'published',
-	AUTHOR = 'author'
+	TITLE = 'title',
+	URL = 'url'
 }
 const FIELD_PREFIXES: ReadonlyArray<{ key: FieldKey; prefix: string }> = [
 	{ key: FieldKey.TITLE, prefix: 'Title:' },

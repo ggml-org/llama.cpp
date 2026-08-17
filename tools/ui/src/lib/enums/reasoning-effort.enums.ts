@@ -4,9 +4,9 @@
  */
 export enum ReasoningEffort {
 	DEFAULT = 'default',
-	OFF = 'off',
-	LOW = 'low',
-	MEDIUM = 'medium',
 	HIGH = 'high',
-	MAX = 'max'
+	LOW = 'low',
+	MAX = 'max',
+	MEDIUM = 'medium',
+	OFF = 'off'
 }
