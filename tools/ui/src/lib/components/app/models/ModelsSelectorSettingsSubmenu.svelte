@@ -1,27 +1,27 @@
 <script lang="ts">
-	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import { Checkbox } from '$lib/components/ui/checkbox';
+	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import { Input } from '$lib/components/ui/input';
 	import { SettingsFieldType } from '$lib/enums/settings.enums';
 	import { modelsStore, serverStore, settingsStore } from '$lib/stores';
-	import { normalizeFloatingPoint } from '$lib/utils/precision';
 	import type { SettingsSection } from '$lib/types';
+	import { normalizeFloatingPoint } from '$lib/utils/precision';
 
 	interface Props {
 		section: SettingsSection;
 		disabled?: boolean;
 	}
 
-	let { section, disabled = false }: Props = $props();
+	let { disabled = false, section }: Props = $props();
 
 	let currentModelParams = $derived.by(() => {
-		void modelsStore.propsCacheVersion;
+		void modelsStore.props.cacheVersion;
 
 		if (serverStore.isRouterMode) {
 			const currentModelName = modelsStore.selectedModelName;
 
 			if (currentModelName) {
-				const currentModelProps = modelsStore.getModelProps(currentModelName);
+				const currentModelProps = modelsStore.props.getModelProps(currentModelName);
 
 				return (currentModelProps?.default_generation_settings?.params ?? {}) as Record<
 					string,
