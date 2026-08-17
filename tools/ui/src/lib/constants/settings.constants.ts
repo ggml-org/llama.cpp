@@ -81,6 +81,7 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 			{
 				defaultValue: '',
 				help: `Set the API Key if you are using <code> ${CLI_FLAGS.API_KEY} </code> option for the server.`,
+				isPrivate: true,
 				key: SETTINGS_KEYS.API_KEY,
 				label: 'API Key',
 				section: SETTINGS_SECTION_SLUGS.GENERAL,
@@ -726,6 +727,7 @@ function toSettingsSection(section: SettingsSectionEntry): SettingsSection {
 				help: s.help,
 				isExperimental: s.isExperimental,
 				isPositiveInteger: s.isPositiveInteger,
+				isPrivate: s.isPrivate,
 				key: s.key,
 				label: s.label,
 				max: s.max,
