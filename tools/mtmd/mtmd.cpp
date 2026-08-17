@@ -891,10 +891,10 @@ struct mtmd_context {
                 } break;
             case PROJECTOR_TYPE_GRANITE4_VISION:
                 {
-                    img_beg = "<image>";
-                    img_end = "";
+                    // ... (image embeddings) \n ...
+                    img_beg = "";
+                    img_end = "\n";
                     image_preproc = std::make_unique<mtmd_image_preprocessor_granite>(ctx_v);
-                    ov_img_first = true;
                 } break;
             default:
                 throw std::runtime_error(string_format("%s: unexpected vision projector type %d\n", __func__, proj));

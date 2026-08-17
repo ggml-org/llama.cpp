@@ -56,7 +56,8 @@ import type {
 	AgenticSession,
 	McpServerOverride,
 	MCPToolCall,
-	SettingsConfigType
+	SettingsConfigType,
+	ToolExecutionResult
 } from '$lib/types';
 import type {
 	AgenticFlowCallbacks,
@@ -83,7 +84,12 @@ import type {
 	DatabaseMessageExtraAudioFile,
 	DatabaseMessageExtraImageFile
 } from '$lib/types/database';
-import { getAudioInputFormat, isAbortError } from '$lib/utils';
+import {
+	executeBrowserInfoTool,
+	executeGetDatetimeTool,
+	getAudioInputFormat,
+	isAbortError
+} from '$lib/utils';
 import { SvelteMap } from 'svelte/reactivity';
 
 function createDefaultSession(): AgenticSession {
@@ -942,18 +948,26 @@ class AgenticStore {
 							if (executionResult.isError) toolSuccess = false;
 						} else if (toolSource === ToolSource.FRONTEND) {
 							const args = this.parseToolArguments(toolCall.function.arguments);
-							const executionResult =
-								toolName === BuiltInTool.READ_MEDIA
-									? await ReadMediaService.executeTool(
-											args,
-											{
-												audio: modelsStore.modelSupportsAudio(effectiveModel),
-												vision: modelsStore.modelSupportsVision(effectiveModel)
-											},
-											signal,
-											conversationsStore.activeConversation?.cwd
-										)
-									: await SandboxService.executeTool(toolName, args, signal);
+
+							let executionResult: ToolExecutionResult;
+
+							if (toolName === BuiltInTool.GET_DATETIME) {
+								executionResult = executeGetDatetimeTool();
+							} else if (toolName === BuiltInTool.GET_INFO) {
+								executionResult = executeBrowserInfoTool();
+							} else if (toolName === BuiltInTool.READ_MEDIA) {
+								executionResult = await ReadMediaService.executeTool(
+									args,
+									{
+										audio: modelsStore.modelSupportsAudio(effectiveModel),
+										vision: modelsStore.modelSupportsVision(effectiveModel)
+									},
+									signal,
+									conversationsStore.activeConversation?.cwd
+								);
+							} else {
+								executionResult = await SandboxService.executeTool(toolName, args, signal);
+							}
 
 							result = executionResult.content;
 

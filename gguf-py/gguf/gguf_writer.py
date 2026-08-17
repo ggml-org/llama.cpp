@@ -981,6 +981,9 @@ class GGUFWriter:
     def add_block_size(self, value: int) -> None:
         self.add_uint32(Keys.LLM.BLOCK_SIZE.format(arch=self.arch), value)
 
+    def add_sample_from_anchor(self, value: bool) -> None:
+        self.add_bool(Keys.LLM.SAMPLE_FROM_ANCHOR.format(arch=self.arch), value)
+
     def add_target_layers(self, value: Sequence[int]) -> None:
         self.add_array(Keys.LLM.TARGET_LAYERS.format(arch=self.arch), value)
 
@@ -1103,8 +1106,26 @@ class GGUFWriter:
     def add_ssm_dt_b_c_rms(self, value: bool) -> None:
         self.add_bool(Keys.SSM.DT_B_C_RMS.format(arch=self.arch), value)
 
+    def add_expert_latent_length(self, value: int) -> None:
+        self.add_uint32(Keys.LLM.EXPERT_LATENT_LENGTH.format(arch=self.arch), value)
+
+    def add_activation_situ_beta(self, value: float) -> None:
+        self.add_float32(Keys.Activation.SITU_BETA.format(arch=self.arch), value)
+
+    def add_activation_situ_linear_beta(self, value: float) -> None:
+        self.add_float32(Keys.Activation.SITU_LINEAR_BETA.format(arch=self.arch), value)
+
+    def add_attn_res_block_size(self, value: int) -> None:
+        self.add_uint32(Keys.AttnRes.BLOCK_SIZE.format(arch=self.arch), value)
+
     def add_kda_head_dim(self, value: int) -> None:
         self.add_uint32(Keys.KDA.HEAD_DIM.format(arch=self.arch), value)
+
+    def add_kda_safe_gate(self, value: bool) -> None:
+        self.add_bool(Keys.KDA.SAFE_GATE.format(arch=self.arch), value)
+
+    def add_kda_gate_lower_bound(self, value: float) -> None:
+        self.add_float32(Keys.KDA.GATE_LOWER_BOUND.format(arch=self.arch), value)
 
     def add_tokenizer_model(self, model: str) -> None:
         self.add_string(Keys.Tokenizer.MODEL, model)

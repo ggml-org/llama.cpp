@@ -1,5 +1,7 @@
 import { browser } from '$app/environment';
 import {
+	buildBrowserInfoToolDefinition,
+	buildGetDatetimeToolDefinition,
 	buildReadMediaToolDefinition,
 	DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY,
 	HOME_TILDE,
@@ -175,7 +177,7 @@ class ToolsStore {
 	}
 
 	get frontendTools(): OpenAIToolDefinition[] {
-		const tools: OpenAIToolDefinition[] = [];
+		const tools: OpenAIToolDefinition[] = [buildGetDatetimeToolDefinition()];
 
 		if (settingsStore.config.jsSandboxEnabled) {
 			tools.push(buildSandboxToolDefinition(!!settingsStore.config.symbolicMathEnabled));
@@ -185,7 +187,16 @@ class ToolsStore {
 
 		if (readMedia) tools.push(readMedia);
 
+		// provide browser's get_info tool if server doesn't provide one
+		if (!this.hasBuiltinTool(BuiltInTool.GET_INFO)) {
+			tools.push(buildBrowserInfoToolDefinition());
+		}
+
 		return tools;
+	}
+
+	private hasBuiltinTool(name: BuiltInTool): boolean {
+		return this._builtinTools.some((def) => def.function.name === name);
 	}
 
 	/**
@@ -195,11 +206,7 @@ class ToolsStore {
 	 * conversation uses.
 	 */
 	private readMediaTool(): OpenAIToolDefinition | null {
-		const hasReadFile = this._builtinTools.some(
-			(def) => def.function.name === BuiltInTool.READ_FILE
-		);
-
-		if (!hasReadFile) return null;
+		if (!this.hasBuiltinTool(BuiltInTool.READ_FILE)) return null;
 
 		const model = modelsStore.selectedModelName ?? modelsStore.models[0]?.model ?? '';
 

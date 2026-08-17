@@ -16,6 +16,7 @@ from .granite import GraniteHybridModel
     "NemotronH_Nano_VL_V2",
     "RADIOModel",
 )
+@ModelBase.example("nvidia/NVIDIA-Nemotron-Nano-12B-v2-VL-BF16")
 class NemotronNanoV2VLModel(MmprojModel):
     # ViT-Huge architecture parameters for RADIO v2.5-h
     _vit_hidden_size = 1280
@@ -151,6 +152,7 @@ class NemotronNanoV2VLModel(MmprojModel):
 
 
 @ModelBase.register("NemotronForCausalLM")
+@ModelBase.example("nvidia/Minitron-4B-Base")
 class NemotronModel(TextModel):
     model_arch = gguf.MODEL_ARCH.NEMOTRON
 
@@ -193,6 +195,7 @@ class NemotronModel(TextModel):
 
 
 @ModelBase.register("NemotronHForCausalLM")
+@ModelBase.example("nvidia/Nemotron-H-8B-Base-8K")
 class NemotronHModel(GraniteHybridModel):
     """Hybrid mamba2/attention model from NVIDIA"""
     model_arch = gguf.MODEL_ARCH.NEMOTRON_H
