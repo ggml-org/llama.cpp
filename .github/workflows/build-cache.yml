@@ -10,33 +10,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  ubuntu-24-vulkan-cache:
-    runs-on: ubuntu-24.04
-
-    steps:
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v6
-
-      - name: Get latest Vulkan SDK version
-        id: vulkan_sdk_version
-        run: |
-          echo "VULKAN_SDK_VERSION=$(curl https://vulkan.lunarg.com/sdk/latest/linux.txt)" >> "$GITHUB_ENV"
-
-      - name: Setup Cache
-        uses: actions/cache@v5
-        id: cache-sdk
-        with:
-          path: ./vulkan_sdk
-          key: cache-gha-vulkan-sdk-${{ env.VULKAN_SDK_VERSION }}-${{ runner.os }}
-
-      - name: Setup Vulkan SDK
-        if: steps.cache-sdk.outputs.cache-hit != 'true'
-        uses: ./.github/actions/linux-setup-vulkan
-        with:
-          path: ./vulkan_sdk
-          version: ${{ env.VULKAN_SDK_VERSION }}
-
   #ubuntu-24-spacemit-cache:
   #  runs-on: ubuntu-24.04
 
