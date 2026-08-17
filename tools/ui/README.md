@@ -89,7 +89,7 @@ Llama UI supports two server operation modes:
 
 ```bash
 cd tools/ui
-npm install
+npm ci
 ```
 
 ### 2. Start llama-server

@@ -1,14 +1,12 @@
 <script lang="ts">
-	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
-	import { PencilRuler, ChevronDown, ChevronRight, Loader2, Info, Check } from '@lucide/svelte';
+	import { Check, ChevronDown, ChevronRight, Info, Loader2, PencilRuler } from '@lucide/svelte';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import * as Collapsible from '$lib/components/ui/collapsible';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Tooltip from '$lib/components/ui/tooltip';
-	import { toolsStore } from '$lib/stores/tools.svelte';
-	import { CLI_FLAGS } from '$lib/constants';
-	import { mcpStore } from '$lib/stores/mcp.svelte';
+	import { CLI_FLAGS, ICON_CLASS_DEFAULT } from '$lib/constants';
 	import { useToolsPanel } from '$lib/hooks/use-tools-panel.svelte';
+	import { mcpStore, toolsStore } from '$lib/stores';
 
 	const toolsPanel = useToolsPanel();
 	const hasMcpServersAvailable = $derived(mcpStore.getServers().length > 0);
@@ -37,7 +35,7 @@
 						<span>
 							Run llama-server with <code>{CLI_FLAGS.TOOLS}</code> flag to enable
 
-							<strong>Built-in Tools</strong>.
+							<strong>Server Tools</strong>.
 						</span>
 					</span>
 
@@ -64,14 +62,14 @@
 			{/if}
 		{:else}
 			<div class="max-h-80 overflow-y-auto p-2 pr-1">
-				{#each toolsPanel.activeGroups as group (group.label)}
-					{@const isExpanded = toolsPanel.expandedGroups.has(group.label)}
+				{#each toolsPanel.activeGroups as group (group.key)}
+					{@const isExpanded = toolsPanel.expandedGroups.has(group.key)}
 					{@const checked = toolsPanel.isGroupChecked(group)}
 					{@const favicon = toolsPanel.getFavicon(group)}
 
 					<Collapsible.Root
 						open={isExpanded}
-						onOpenChange={() => toolsPanel.toggleGroupExpanded(group.label)}
+						onOpenChange={() => toolsPanel.toggleGroupExpanded(group.key)}
 					>
 						<div class="flex items-center gap-1">
 							<Collapsible.Trigger
@@ -109,7 +107,7 @@
 										<Checkbox
 											{...props}
 											{checked}
-											onCheckedChange={() => toolsPanel.toggleGroupByLabel(group.label)}
+											onCheckedChange={() => toolsPanel.toggleGroupByKey(group.key)}
 											class="mr-2 {ICON_CLASS_DEFAULT} shrink-0"
 										/>
 									{/snippet}

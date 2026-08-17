@@ -1,8 +1,9 @@
 <script lang="ts">
+	import ContextGaugeDetailRow from './ContextGaugeDetailRow.svelte';
 	import { ChevronDown } from '@lucide/svelte';
 	import * as Collapsible from '$lib/components/ui/collapsible';
 	import { STATS_UNITS } from '$lib/constants';
-	import ContextGaugeDetailRow from './ContextGaugeDetailRow.svelte';
+	import { gaugePopup } from '$lib/stores/context-gauge-popup.svelte';
 
 	interface Props {
 		currentRead: number;
@@ -18,31 +19,31 @@
 	}
 
 	let {
-		currentRead,
-		currentFresh,
-		currentCache,
-		currentOutput,
-		kvTotal,
-		cumulativeRead,
-		cumulativeOutput,
-		cumulativeCacheTotal,
 		averageTokensPerSecond,
+		cumulativeCacheTotal,
+		cumulativeOutput,
+		cumulativeRead,
+		currentCache,
+		currentFresh,
+		currentOutput,
+		currentRead,
+		kvTotal,
 		transientDetails
 	}: Props = $props();
-
-	let open = $state(false);
 
 	const hasCumulative = $derived(cumulativeRead > 0 || cumulativeOutput > 0);
 	const hasCurrent = $derived(currentRead > 0 || currentOutput > 0);
 </script>
 
-<Collapsible.Root bind:open class="mt-3 border-t border-border/50 pt-4">
+<Collapsible.Root bind:open={gaugePopup.detailsOpen} class="mt-3 border-t border-border/50 pt-4">
 	<Collapsible.Trigger
 		class="flex w-full cursor-pointer items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
 	>
 		<span>Token usage details</span>
 
-		<ChevronDown class={'ml-auto h-3 w-3 transition-transform' + (open ? ' rotate-180' : '')} />
+		<ChevronDown
+			class={'ml-auto h-3 w-3 transition-transform' + (gaugePopup.detailsOpen ? ' rotate-180' : '')}
+		/>
 	</Collapsible.Trigger>
 
 	<Collapsible.Content class="flex flex-col gap-4 text-xs pt-4">

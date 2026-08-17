@@ -25,6 +25,28 @@ typedef void (*dequantize_kernel_f32_t)(const void * vx, const int64_t ib, const
 static inline void get_scale_min_k4(int j, const uint8_t * q, uint8_t & d, uint8_t & m);
 #endif
 
+static __dpct_inline__ void dequantize_q2_0(const void *vx, const int64_t ib,
+                                            const int iqs, dfloat2 &v) {
+    const block_q2_0 * x = (const block_q2_0 *) vx;
+
+    const dfloat d = x[ib].d;
+
+    const int byte_idx = iqs / 4;
+    const int shift = (iqs % 4) * 2;
+    const uint8_t vui = x[ib].qs[byte_idx];
+
+    v.x() = (vui >> shift) & 3;
+    v.y() = (vui >> (shift + 2)) & 3;
+
+#ifdef GGML_SYCL_F16
+    v.s0() = ((dfloat)v.s0() - 1.0f) * d;
+    v.s1() = ((dfloat)v.s1() - 1.0f) * d;
+#else
+    v.x() = ((dfloat)v.x() - 1.0f) * d;
+    v.y() = ((dfloat)v.y() - 1.0f) * d;
+#endif // GGML_SYCL_F16
+}
+
 static __dpct_inline__ void dequantize_q4_0(const void *vx, const int64_t ib,
                                             const int iqs, dfloat2 &v) {
     const block_q4_0 * x = (const block_q4_0 *) vx;

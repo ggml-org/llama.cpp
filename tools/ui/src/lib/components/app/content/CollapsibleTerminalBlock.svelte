@@ -21,17 +21,17 @@
 	}
 
 	let {
-		open = $bindable(false),
+		children,
 		class: className = '',
 		icon: IconComponent,
 		iconClass = ICON_CLASS_DEFAULT,
 		iconUrl = null,
-		title = '',
-		titleSnippet,
-		subtitle,
-		shimmerTitle = false,
 		onToggle,
-		children
+		open = $bindable(false),
+		shimmerTitle = false,
+		subtitle,
+		title = '',
+		titleSnippet
 	}: Props = $props();
 
 	function hideBrokenIcon(event: Event) {
@@ -90,8 +90,12 @@
 	</Collapsible.Trigger>
 
 	<Collapsible.Content>
-		<div class="p-3 pt-1">
-			{@render children()}
-		</div>
+		<!-- See CollapsibleContentBlock: bits-ui keeps closed content mounted, which
+		     makes a collapsed tool result re-render on every streamed token. -->
+		{#if open}
+			<div class="p-3 pt-1">
+				{@render children()}
+			</div>
+		{/if}
 	</Collapsible.Content>
 </Collapsible.Root>

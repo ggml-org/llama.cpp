@@ -4,10 +4,11 @@
 
 #include <array>
 #include <cassert>
+#include <cmath>
 
 // bump if necessary
 #define LLAMA_MAX_LAYERS  512
-#define LLAMA_MAX_EXPERTS 512 // Qwen3 Next
+#define LLAMA_MAX_EXPERTS 1024 // Kimi K3
 
 enum llama_expert_gating_func_type {
     LLAMA_EXPERT_GATING_FUNC_TYPE_NONE           = 0,
@@ -47,11 +48,16 @@ struct llama_hparams {
     bool use_par_res;
     bool swin_norm;
     bool norm_before_residual = false;
+    bool norm_before_fc       = false;
 
     uint32_t n_ctx_train; // context size the model was trained on
     uint32_t n_embd;
     uint32_t n_layer_all;
     uint32_t n_layer_nextn = 0;
+
+    // granite-switch: index of the single-head "router" KV layer that encodes
+    // per-token adapter selection. -1 when the model has no such layer.
+    int32_t  router_layer = -1;
     uint32_t n_expert = 0;
     uint32_t n_expert_used = 0;
     uint32_t n_rel_attn_bkts = 0;
@@ -159,8 +165,19 @@ struct llama_hparams {
     uint32_t ssm_dt_rank = 0;
     uint32_t ssm_n_group = 0;
 
+    // for MiniMax-Text-01 linear attention
+    uint32_t n_embd_head_la = 0;
+
     // for Kimi Linear KDA
     uint32_t n_embd_head_kda = 0;
+    bool     kda_safe_gate = false;
+
+    // kimi-k3
+    uint32_t n_expert_latent      = 0;      // routed_expert_hidden_size (0 = experts run at n_embd)
+    uint32_t attn_res_block_size  = 0;      // 0 = no cross-layer attention residuals
+    float    kda_gate_lower_bound = -INFINITY;
+    float    situ_beta            = 1.0f;
+    float    situ_linear_beta     = 0.0f;   // 0 = no linear-beta transform on the up branch
 
     bool ssm_dt_b_c_rms = false;
 
@@ -226,6 +243,13 @@ struct llama_hparams {
     uint32_t indexer_n_head    = 0;
     uint32_t indexer_head_size = 0;
     uint32_t indexer_top_k     = 0;
+    // MSA
+    uint32_t indexer_block_size  = 0;
+    uint32_t indexer_local_blocks = 0;
+
+    // Indexer is "full" (1) or "shared" (0)
+    // Shared indexers reuse top-k from previous full layer
+    std::array<uint32_t, LLAMA_MAX_LAYERS> is_indexer_full_impl;
 
     // DeepSeek-V4
     uint32_t dsv4_o_group_count        = 0;
@@ -302,6 +326,8 @@ struct llama_hparams {
 
     bool is_swa(uint32_t il) const;
 
+    bool is_indexer_full(uint32_t il) const;
+
     void set_recr_pattern(uint32_t n_pattern, bool dense_first = false);
 
     // whether or not the given layer is recurrent (for hybrid models)
@@ -360,6 +386,8 @@ struct llama_hparams {
     uint32_t n_embd_head_v_mla() const;
 
     bool has_kv(uint32_t il) const;
+
+    bool has_rope(uint32_t il) const;
 
     // number of effective layers (excludes nextn layers)
     uint32_t n_layer() const;

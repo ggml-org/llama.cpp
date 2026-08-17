@@ -1,22 +1,20 @@
 <script lang="ts">
+	import { KeyValuePairs } from '$lib/components/app';
 	import { Input } from '$lib/components/ui/input';
 	import { Switch } from '$lib/components/ui/switch';
-	import { KeyValuePairs } from '$lib/components/app';
+	import { CLI_FLAGS, HEADERS, MCP_SERVER_URL_PLACEHOLDER } from '$lib/constants';
+	import { UrlProtocol } from '$lib/enums';
+	import { mcpStore } from '$lib/stores';
 	import type { KeyValuePair } from '$lib/types';
 	import { parseHeadersToArray, serializeHeaders } from '$lib/utils';
-	import { UrlProtocol } from '$lib/enums';
-	import {
-		AUTHORIZATION_HEADER,
-		BEARER_PREFIX,
-		CLI_FLAGS,
-		MCP_SERVER_URL_PLACEHOLDER,
-		REDACTED_HEADERS
-	} from '$lib/constants';
-	import { mcpStore } from '$lib/stores/mcp.svelte';
 
 	interface Props {
 		url: string;
 		headers: string;
+		name?: string;
+		onNameChange?: (name: string) => void;
+		/** Shown in the empty display name field, e.g. the current automatic label. */
+		namePlaceholder?: string;
 		useProxy?: boolean;
 		onUrlChange: (url: string) => void;
 		onHeadersChange: (headers: string) => void;
@@ -42,16 +40,19 @@
 	}
 
 	let {
-		url,
 		headers,
-		useProxy = false,
-		onUrlChange,
-		onHeadersChange,
-		onUseProxyChange,
-		urlError = null,
 		id = 'server',
-		wantsAuthorization = $bindable(false),
-		required = false
+		name = '',
+		namePlaceholder = 'Name reported by the server',
+		onHeadersChange,
+		onNameChange,
+		onUrlChange,
+		onUseProxyChange,
+		required = false,
+		url,
+		urlError = null,
+		useProxy = false,
+		wantsAuthorization = $bindable(false)
 	}: Props = $props();
 
 	let isWebSocket = $derived(
@@ -65,10 +66,10 @@
 	// carry a Bearer scheme. Anything else (e.g. Basic, raw tokens) stays in the
 	// KV section so the user can still edit those values verbatim.
 	const matchesAuthorizationKey = (key: string): boolean =>
-		REDACTED_HEADERS.has(key.trim().toLowerCase());
+		HEADERS.REDACTED.has(key.trim().toLowerCase());
 
 	const isBearerScheme = (value: string): boolean =>
-		value.trim().toLowerCase().startsWith(BEARER_PREFIX.toLowerCase());
+		value.trim().toLowerCase().startsWith(HEADERS.BEARER.toLowerCase());
 
 	const ownedByBearerUi = (p: KeyValuePair): boolean =>
 		matchesAuthorizationKey(p.key) && isBearerScheme(p.value);
@@ -92,8 +93,10 @@
 
 	let bearerToken = $derived.by(() => {
 		const auth = headerPairs.find(ownedByBearerUi);
+
 		if (!auth) return '';
-		return auth.value.trim().slice(BEARER_PREFIX.length).trim();
+
+		return auth.value.trim().slice(HEADERS.BEARER.length).trim();
 	});
 
 	$effect(() => {
@@ -113,11 +116,10 @@
 	// behavior would otherwise pick one arbitrarily, so we strip first.
 	function updateBearerToken(token: string) {
 		const filtered = headerPairs.filter((p) => !matchesAuthorizationKey(p.key));
-
 		const trimmed = token.trim();
 
 		if (trimmed) {
-			filtered.push({ key: AUTHORIZATION_HEADER, value: `${BEARER_PREFIX}${trimmed}` });
+			filtered.push({ key: HEADERS.AUTHORIZATION, value: `${HEADERS.BEARER}${trimmed}` });
 		}
 
 		updateHeaderPairs(filtered);
@@ -130,6 +132,7 @@
 			// Only drop the entry this UI owns; a non-Bearer Authorization row
 			// authored in the KV section must survive a toggle off untouched.
 			const filtered = headerPairs.filter((p) => !ownedByBearerUi(p));
+
 			updateHeaderPairs(filtered);
 		}
 	}
@@ -154,6 +157,20 @@
 		{#if urlError}
 			<p class="mt-1.5 text-xs text-destructive">{urlError}</p>
 		{/if}
+	</div>
+
+	<div class="mb-4">
+		<label for="server-name-{id}" class="mb-2 block text-xs font-medium select-none">
+			Display name
+		</label>
+
+		<Input
+			id="server-name-{id}"
+			type="text"
+			placeholder={namePlaceholder}
+			value={name}
+			oninput={(e) => onNameChange?.(e.currentTarget.value)}
+		/>
 	</div>
 
 	<label class="flex items-center gap-2 cursor-pointer select-none">
@@ -196,6 +213,7 @@
 		pairs={headerPairs.filter((p) => !ownedByBearerUi(p))}
 		onPairsChange={(pairs) => {
 			const auth = headerPairs.find(ownedByBearerUi);
+
 			updateHeaderPairs(auth ? [...pairs, auth] : pairs);
 		}}
 		keyPlaceholder="Header name"

@@ -4,21 +4,23 @@ import json
 
 from typing import Any, Callable, Iterable, TYPE_CHECKING
 
+import numpy as np
 import torch
 
 if TYPE_CHECKING:
     from torch import Tensor
 
-from .base import ModelBase, TextModel, gguf, logger
+from .base import LazyTorchTensor, ModelBase, TextModel, gguf, logger
 
 
 @ModelBase.register("QWenLMHeadModel")
+@ModelBase.example("Qwen/Qwen-7B")
 class QwenModel(TextModel):
     model_arch = gguf.MODEL_ARCH.QWEN
 
     @staticmethod
     def token_bytes_to_string(b):
-        from transformers.models.gpt2.tokenization_gpt2 import bytes_to_unicode  # ty: ignore[unresolved-import]
+        from transformers.convert_slow_tokenizer import bytes_to_unicode
         byte_encoder = bytes_to_unicode()
         return ''.join([byte_encoder[ord(char)] for char in b.decode('latin-1')])
 
@@ -51,6 +53,7 @@ class QwenModel(TextModel):
     "AudioFlamingo3ForConditionalGeneration",
     "DotsOCRForCausalLM",
 )
+@ModelBase.example("Qwen/Qwen2.5-7B-Instruct")
 class Qwen2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.QWEN2
 
@@ -71,6 +74,7 @@ class Qwen2Model(TextModel):
 
 
 @ModelBase.register("Qwen2MoeForCausalLM")
+@ModelBase.example("Qwen/Qwen1.5-MoE-A2.7B")
 class Qwen2MoeModel(TextModel):
     model_arch = gguf.MODEL_ARCH.QWEN2MOE
 
@@ -153,6 +157,7 @@ class Qwen2MoeModel(TextModel):
 
 
 @ModelBase.register("Qwen3ForCausalLM", "Qwen3Model")
+@ModelBase.example("Qwen/Qwen3-8B")
 class Qwen3Model(Qwen2Model):
     model_arch = gguf.MODEL_ARCH.QWEN3
 
@@ -251,6 +256,7 @@ class Qwen3Model(Qwen2Model):
 
 
 @ModelBase.register("Qwen3MoeForCausalLM")
+@ModelBase.example("Qwen/Qwen3-30B-A3B")
 class Qwen3MoeModel(Qwen2MoeModel):
     model_arch = gguf.MODEL_ARCH.QWEN3MOE
 
@@ -268,8 +274,102 @@ class Qwen3MoeModel(Qwen2MoeModel):
         super().set_vocab()
 
 
+class _QwenMtpMixin:
+    """Shared MTP wiring for Qwen3-Next and Qwen3.5/3.6 text variants. The HF
+    config carries the MTP block under `mtp_num_hidden_layers` (computed from
+    the checkpoint when absent, e.g. Qwen3-Next) and the tensors under
+    `mtp.*`; we extend block_count, emit the nextn metadata key, and remap
+    `mtp.*` to the standard layer-indexed nextn naming so the existing
+    tensor_map handles them."""
+
+    supports_mtp_export = True
+    hparams: dict[str, Any]
+    model_arch: gguf.MODEL_ARCH
+    gguf_writer: gguf.GGUFWriter
+    block_count: int
+    tensor_map: gguf.TensorNameMap
+    no_mtp: bool
+    mtp_only: bool
+    _original_block_count: int | None = None
+    opt_num_mtp_layers: int = 0
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.block_count = self.hparams["num_hidden_layers"]
+        if not self.no_mtp:
+            n_mtp = self.hparams.get("mtp_num_hidden_layers", 0)
+            # Qwen-3-Next doesn't include `mtp_num_hidden_layers` in config.
+            if n_mtp == 0:
+                assert self.opt_num_mtp_layers != 0
+                n_mtp = self.opt_num_mtp_layers
+            self.block_count += n_mtp
+        self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
+
+    def index_tensors(self, remote_hf_model_id: str | None = None) -> dict[str, Callable[[], Tensor]]:
+        hparams = {**self.hparams, **self.hparams.get("text_config", {})}
+        key = next((k for k in ["n_layers", "num_hidden_layers", "n_layer", "num_layers"] if k in hparams), None)
+        type(self)._original_block_count = hparams.get(key)
+        type(self).opt_num_mtp_layers = 0
+        return super().index_tensors(remote_hf_model_id=remote_hf_model_id)  # ty: ignore[unresolved-attribute]
+
+    @classmethod
+    def filter_tensors(cls, item):
+        assert cls._original_block_count is not None
+        # TODO: change TextModel to super()
+        if (titem := TextModel.filter_tensors(item)) is None:
+            return None
+        name, gen = titem
+        if name.startswith("model.mtp."):
+            name = name.replace("model.", "", 1)
+        if name.startswith("mtp."):
+            if cls.no_mtp:
+                return None
+            remapper = {
+                "fc":                    "eh_proj",
+                "pre_fc_norm_embedding": "enorm",
+                "pre_fc_norm_hidden":    "hnorm",
+                "norm":                  "shared_head.norm",
+            }
+            parts = name.split(".", 3)
+            if len(parts) == 4 and parts[1] == "layers" and parts[2].isdecimal():
+                mtp_idx = int(parts[2])
+                name = f"model.layers.{cls._original_block_count + mtp_idx}.{parts[3]}"
+                cls.opt_num_mtp_layers = max(cls.opt_num_mtp_layers, mtp_idx + 1)
+            elif len(parts) == 3 and parts[1] in remapper:
+                name = f"model.layers.{cls._original_block_count}.{remapper[parts[1]]}.{parts[2]}"
+        elif cls.mtp_only:
+            keep = name in (
+                "model.embed_tokens.weight", "model.norm.weight", "lm_head.weight",
+                "embed_tokens.weight", "norm.weight",
+            )
+            if not keep:
+                return None
+        return name, gen
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()  # ty: ignore[unresolved-attribute]
+        if self.no_mtp:
+            return
+        if (n := self.block_count - self.hparams["num_hidden_layers"]) > 0:
+            self.gguf_writer.add_nextn_predict_layers(n)
+
+    def prepare_metadata(self, vocab_only: bool):
+        from_dir = self.fname_out.is_dir()
+        super().prepare_metadata(vocab_only=vocab_only)  # ty: ignore[unresolved-attribute]
+
+        if not self.mtp_only or not from_dir:
+            return
+
+        output_type: str = self.ftype.name.partition("_")[2]  # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[unresolved-attribute]
+        fname_default: str = gguf.naming_convention(
+            self.metadata.name, self.metadata.basename, self.metadata.finetune,                  # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[unresolved-attribute]
+            self.metadata.version, size_label=None, output_type=output_type, model_type=None)    # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[unresolved-attribute]
+        self.fname_out = self.fname_out.parent / f"mtp-{fname_default}.gguf"
+
+
 @ModelBase.register("Qwen3NextForCausalLM")
-class Qwen3NextModel(Qwen2MoeModel):
+@ModelBase.example("Qwen/Qwen3-Next-80B-A3B-Instruct")
+class Qwen3NextModel(_QwenMtpMixin, Qwen2MoeModel):
     model_arch = gguf.MODEL_ARCH.QWEN3NEXT
 
     def set_gguf_parameters(self):
@@ -283,16 +383,6 @@ class Qwen3NextModel(Qwen2MoeModel):
         if (rope_dim := self.hparams.get("head_dim")) is None:
             rope_dim = self.hparams["hidden_size"] // self.hparams["num_attention_heads"]
         self.gguf_writer.add_rope_dimension_count(int(rope_dim * self.rope_parameters.get("partial_rotary_factor", 0.25)))
-
-    @classmethod
-    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
-        name, gen = item
-
-        if name.startswith("mtp"):
-            # ignore MTP layers for now
-            return None
-
-        return super().filter_tensors(item)
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         if name.endswith(".A_log"):
@@ -338,6 +428,7 @@ class Qwen3NextModel(Qwen2MoeModel):
 
 
 @ModelBase.register("RND1")
+@ModelBase.example("radicalnumerics/RND1-Base-0910")
 class RND1Model(Qwen2MoeModel):
     model_arch = gguf.MODEL_ARCH.RND1
 
@@ -536,101 +627,20 @@ class _Qwen35MRopeMixin:
             self.gguf_writer.add_rope_dimension_sections(self._QWEN35_DEFAULT_MROPE_SECTION)
 
 
-class _Qwen35MtpMixin:
-    """Shared MTP wiring for Qwen3.5/3.6 text variants. The HF config carries
-    the MTP block under `mtp_num_hidden_layers` and the tensors under
-    `mtp.*`; we extend block_count, emit the nextn metadata key, and remap
-    `mtp.*` to the standard layer-indexed nextn naming so the existing
-    tensor_map handles them."""
-
-    supports_mtp_export = True
-    hparams: dict[str, Any]
-    model_arch: gguf.MODEL_ARCH
-    gguf_writer: gguf.GGUFWriter
-    block_count: int
-    tensor_map: gguf.TensorNameMap
-    no_mtp: bool
-    mtp_only: bool
-    _original_block_count: int | None = None
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.block_count = self.hparams["num_hidden_layers"]
-        if not self.no_mtp:
-            self.block_count += self.hparams.get("mtp_num_hidden_layers", 0)
-        self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
-
-    def index_tensors(self, remote_hf_model_id: str | None = None) -> dict[str, Callable[[], Tensor]]:
-        hparams = {**self.hparams, **self.hparams.get("text_config", {})}
-        key = next((k for k in ["n_layers", "num_hidden_layers", "n_layer", "num_layers"] if k in hparams), None)
-        type(self)._original_block_count = hparams.get(key)
-        return super().index_tensors(remote_hf_model_id=remote_hf_model_id)  # ty: ignore[unresolved-attribute]
-
-    @classmethod
-    def filter_tensors(cls, item):
-        assert cls._original_block_count is not None
-        # TODO: change TextModel to super()
-        if (titem := TextModel.filter_tensors(item)) is None:
-            return None
-        name, gen = titem
-        if name.startswith("model.mtp."):
-            name = name.replace("model.", "", 1)
-        if name.startswith("mtp."):
-            if cls.no_mtp:
-                return None
-            remapper = {
-                "fc":                    "eh_proj",
-                "pre_fc_norm_embedding": "enorm",
-                "pre_fc_norm_hidden":    "hnorm",
-                "norm":                  "shared_head.norm",
-            }
-            parts = name.split(".", 3)
-            if len(parts) == 4 and parts[1] == "layers" and parts[2].isdecimal():
-                mtp_idx = int(parts[2])
-                name = f"model.layers.{cls._original_block_count + mtp_idx}.{parts[3]}"
-            elif len(parts) == 3 and parts[1] in remapper:
-                name = f"model.layers.{cls._original_block_count}.{remapper[parts[1]]}.{parts[2]}"
-        elif cls.mtp_only:
-            keep = name in (
-                "model.embed_tokens.weight", "model.norm.weight", "lm_head.weight",
-                "embed_tokens.weight", "norm.weight",
-            )
-            if not keep:
-                return None
-        return name, gen
-
-    def set_gguf_parameters(self):
-        super().set_gguf_parameters()  # ty: ignore[unresolved-attribute]
-        if self.no_mtp:
-            return
-        if (n := self.hparams.get("mtp_num_hidden_layers", 0)) > 0:
-            self.gguf_writer.add_nextn_predict_layers(n)
-
-    def prepare_metadata(self, vocab_only: bool):
-        from_dir = self.fname_out.is_dir()
-        super().prepare_metadata(vocab_only=vocab_only)  # ty: ignore[unresolved-attribute]
-
-        if not self.mtp_only or not from_dir:
-            return
-
-        output_type: str = self.ftype.name.partition("_")[2]  # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[unresolved-attribute]
-        fname_default: str = gguf.naming_convention(
-            self.metadata.name, self.metadata.basename, self.metadata.finetune,                  # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[unresolved-attribute]
-            self.metadata.version, size_label=None, output_type=output_type, model_type=None)    # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[unresolved-attribute]
-        self.fname_out = self.fname_out.parent / f"mtp-{fname_default}.gguf"
-
-
 @ModelBase.register("Qwen3_5ForConditionalGeneration", "Qwen3_5ForCausalLM")
-class Qwen3_5TextModel(_Qwen35MtpMixin, _Qwen35MRopeMixin, _LinearAttentionVReorderBase):
+@ModelBase.example("Qwen/Qwen3.5-9B")
+class Qwen3_5TextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
     model_arch = gguf.MODEL_ARCH.QWEN35
 
 
 @ModelBase.register("Qwen3_5MoeForConditionalGeneration", "Qwen3_5MoeForCausalLM")
-class Qwen3_5MoeTextModel(_Qwen35MtpMixin, _Qwen35MRopeMixin, _LinearAttentionVReorderBase):
+@ModelBase.example("Qwen/Qwen3.5-35B-A3B")
+class Qwen3_5MoeTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
     model_arch = gguf.MODEL_ARCH.QWEN35MOE
 
 
 @ModelBase.register("DFlashDraftModel")
+@ModelBase.example("z-lab/Qwen3.5-9B-DFlash")
 class DFlashModel(Qwen3Model):
     model_arch = gguf.MODEL_ARCH.DFLASH
 
@@ -648,10 +658,13 @@ class DFlashModel(Qwen3Model):
         # own tokenizer logic, not the Qwen default).
         from . import get_model_class
         with open(self.target_model_dir / "config.json", "r", encoding="utf-8") as f:
-            target_arch = json.load(f)["architectures"][0]
+            target_hparams = json.load(f)
+            target_arch = target_hparams["architectures"][0]
         target_cls = get_model_class(target_arch)
 
         if target_cls is not type(self):
+            if target_arch == "NemotronHForCausalLM":
+                setattr(self, "is_moe", "num_experts_per_tok" in target_hparams)
             target_cls.set_vocab(self)  # ty: ignore[unresolved-attribute]
         else:
             super().set_vocab()
@@ -688,3 +701,90 @@ class DFlashModel(Qwen3Model):
         if not name.startswith("model."):
             name = "model." + name
         return super().filter_tensors((name, gen))
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if name == "model.embed_tokens.weight" and not self.hparams.get("has_embed_tokens", True):
+            return
+
+        yield from super().modify_tensors(data_torch, name, bid)
+
+
+@ModelBase.register("Qwen3DSparkModel", "DSparkDraftModel", "DSparkSpeculator")
+@ModelBase.example("satgeze/Qwen3.6-27B-DSpark")
+class DSparkModel(DFlashModel):
+    # DSpark = DFlash + a semi-autoregressive Markov head.
+    model_arch = gguf.MODEL_ARCH.DFLASH
+
+    def __init__(self, dir_model, *args, **kwargs):
+        hparams = kwargs.pop("hparams", None)
+        if hparams is None:
+            hparams = ModelBase.load_hparams(dir_model, False)
+
+        # EAGLE3-style exports use the 1+N bonus-anchor block, DFlash-lineage exports sample from the anchor
+        self._sample_from_anchor = hparams.get(
+            "sample_from_anchor",
+            "transformer_layer_config" not in hparams and "aux_hidden_state_layer_ids" not in hparams)
+        if "transformer_layer_config" in hparams:
+            hparams = {**hparams, **hparams["transformer_layer_config"]}
+
+        super().__init__(dir_model, *args, hparams=hparams, **kwargs)
+
+        # normalize both schemas to DFlash's nested dflash_config
+        if "aux_hidden_state_layer_ids" in self.hparams:
+            self.hparams.setdefault("dflash_config", {
+                "mask_token_id": self.hparams.get("mask_token_id"),
+                "target_layer_ids": [i - 1 for i in self.hparams["aux_hidden_state_layer_ids"]],
+            })
+        else:
+            self.hparams.setdefault("dflash_config", {
+                k: self.hparams[k] for k in ("target_layer_ids", "mask_token_id") if k in self.hparams
+            })
+
+        if (markov_head_type := self.hparams.get("markov_head_type", "vanilla")) != "vanilla":
+            raise ValueError(f"unsupported markov_head_type {markov_head_type!r} (only 'vanilla' is supported)")
+
+        n_vocab = self.hparams["vocab_size"]
+        self._n_vocab_draft = self.hparams.get("draft_vocab_size") or n_vocab
+        if self._n_vocab_draft > n_vocab:
+            raise ValueError(f"draft_vocab_size {self._n_vocab_draft} exceeds vocab_size {n_vocab}")
+        self._d2t: Tensor | None = None
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        self.gguf_writer.add_sample_from_anchor(self._sample_from_anchor)
+
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        if item[0] == "t2d":  # not used at runtime
+            return None
+        return super().filter_tensors(item)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if name == "model.d2t":
+            self._d2t = data_torch
+            return
+
+        if self._n_vocab_draft == self.hparams["vocab_size"] and name.endswith(("embed_tokens.weight", "lm_head.weight")):
+            return
+
+        yield from super().modify_tensors(data_torch, name, bid)
+
+    def prepare_tensors(self):
+        super().prepare_tensors()
+
+        n_vocab = self.hparams["vocab_size"]
+        if self._n_vocab_draft < n_vocab and self._d2t is None:
+            raise ValueError(f"draft_vocab_size {self._n_vocab_draft} < vocab_size {n_vocab} but no d2t table found")
+
+        # write d2t as absolute target token ids
+        if self._d2t is not None:
+            data = LazyTorchTensor.to_eager(self._d2t).to(torch.int64).cpu().numpy().reshape(-1)
+            if data.size != self._n_vocab_draft:
+                raise ValueError(f"d2t size {data.size} does not match draft_vocab_size {self._n_vocab_draft}")
+            data = data + np.arange(data.size, dtype=np.int64)
+            if np.any((data < 0) | (data >= n_vocab)):
+                raise ValueError(f"d2t target ids out of range for target vocab size {n_vocab}")
+            if np.unique(data).size != data.size:
+                raise ValueError("d2t contains duplicate target ids")
+            logger.info(f"{'d2t,':<30} --> I64, shape = {{{data.size}}}")
+            self.gguf_writer.add_tensor("d2t", data, raw_dtype=gguf.GGMLQuantizationType.I64)
