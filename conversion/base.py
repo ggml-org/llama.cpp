@@ -84,6 +84,9 @@ class ModelBase:
     }
     _hparams_loaders: list[tuple[HparamsMatcher, HparamsLoader]] = []
 
+    # HF repos usable to test conversion of this model, set by @ModelBase.example()
+    model_hf_examples: tuple[str, ...] = ()
+
     dir_model: Path
     ftype: gguf.LlamaFileType
     fname_out: Path
@@ -1151,9 +1154,10 @@ class ModelBase:
 
     @classmethod
     def example(cls, *hf_repos: str) -> Callable[[AnyModel], AnyModel]:
-        del hf_repos  # unused
+        assert hf_repos
 
         def func(modelcls: AnyModel) -> AnyModel:
+            modelcls.model_hf_examples = hf_repos
             return modelcls
         return func
 
