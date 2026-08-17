@@ -1693,61 +1693,6 @@ private:
 };
 
 //
-// get_datetime: returns the current date and time
-//
-
-struct server_tool_get_datetime : server_tool {
-    server_tool_get_datetime() {
-        name = "get_datetime";
-        display_name = "Get Date & Time";
-        permission_write = false;
-    }
-
-    json get_definition() const override {
-        return {
-            {"type", "function"},
-            {"function", {
-                {"name", name},
-                {"description", "Returns the current date and time in UTC"},
-                {"parameters", {
-                    {"type", "object"},
-                    {"properties", {
-                        {"format", {
-                            {"type", "string"},
-                            {"description",
-                                "strftime()-style format string for the output (default: \"%Y-%m-%dT%H:%M:%SZ\", "
-                                "e.g. ISO 8601). Choose your own format if you need something else, "
-                                "e.g. \"%A, %B %d %Y\" for a human-readable date."},
-                        }},
-                    }},
-                }},
-            }},
-        };
-    }
-
-    json invoke(json params, server_tool::stream *) const override {
-        std::string format = json_value(params, "format", std::string("%Y-%m-%dT%H:%M:%SZ"));
-
-        auto now  = std::chrono::system_clock::now();
-        auto time = std::chrono::system_clock::to_time_t(now);
-        std::tm tm_utc;
-#ifdef _WIN32
-        gmtime_s(&tm_utc, &time);
-#else
-        gmtime_r(&time, &tm_utc);
-#endif
-
-        char buf[256];
-        size_t len = std::strftime(buf, sizeof(buf), format.c_str(), &tm_utc);
-        if (len == 0) {
-            return {{"error", "invalid format string"}};
-        }
-
-        return {{"result", std::string(buf, len)}};
-    }
-};
-
-//
 // get_info: returns runtime info (OS name/version and cwd)
 //
 
@@ -2012,7 +1957,6 @@ static std::vector<std::unique_ptr<server_tool>> build_tools() {
     tools.push_back(std::make_unique<server_tool_exec_shell_command>());
     tools.push_back(std::make_unique<server_tool_write_file>());
     tools.push_back(std::make_unique<server_tool_edit_file>());
-    tools.push_back(std::make_unique<server_tool_get_datetime>());
     tools.push_back(std::make_unique<server_tool_get_info>());
     return tools;
 }

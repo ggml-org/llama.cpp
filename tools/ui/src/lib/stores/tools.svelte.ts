@@ -1,5 +1,6 @@
 import { browser } from '$app/environment';
 import {
+	buildGetDatetimeToolDefinition,
 	buildReadMediaToolDefinition,
 	DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY,
 	HOME_TILDE,
@@ -175,7 +176,7 @@ class ToolsStore {
 	}
 
 	get frontendTools(): OpenAIToolDefinition[] {
-		const tools: OpenAIToolDefinition[] = [];
+		const tools: OpenAIToolDefinition[] = [buildGetDatetimeToolDefinition()];
 
 		if (settingsStore.config.jsSandboxEnabled) {
 			tools.push(buildSandboxToolDefinition(!!settingsStore.config.symbolicMathEnabled));

@@ -34,7 +34,7 @@ export const BUILTIN_TOOL_UI: Readonly<Record<BuiltInTool, BuiltinToolUiEntry>> 
 		label: 'Search files',
 		source: ToolSource.BUILTIN
 	},
-	[BuiltInTool.GET_DATETIME]: { icon: Clock, label: 'Current time', source: ToolSource.BUILTIN },
+	[BuiltInTool.GET_DATETIME]: { icon: Clock, label: 'Current time', source: ToolSource.FRONTEND },
 	[BuiltInTool.GET_INFO]: { icon: Info, label: 'Runtime info', source: ToolSource.BUILTIN },
 	[BuiltInTool.GREP_SEARCH]: {
 		icon: SearchCode,
