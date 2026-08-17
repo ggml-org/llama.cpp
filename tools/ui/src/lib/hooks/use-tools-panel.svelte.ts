@@ -1,6 +1,7 @@
 import { CLI_FLAGS } from '$lib/constants';
 import { ToolSource } from '$lib/enums';
 import { conversationsStore, mcpStore, toolsStore } from '$lib/stores';
+import { skillsStore } from '$lib/stores/skills.svelte';
 import type { ToolGroup } from '$lib/types';
 import { SvelteSet } from 'svelte/reactivity';
 
@@ -29,7 +30,11 @@ export interface UseToolsPanelReturn {
  */
 export function useToolsPanel(): UseToolsPanelReturn {
 	const expandedGroups = new SvelteSet<string>();
-	const groups = $derived(toolsStore.toolGroups);
+	const groups = $derived(
+		skillsStore.availability === 'disabled'
+			? toolsStore.toolGroups
+			: [...toolsStore.toolGroups, ...toolsStore.skillToolGroups]
+	);
 	const activeGroups = $derived(
 		groups.filter(
 			(g) =>
@@ -42,7 +47,7 @@ export function useToolsPanel(): UseToolsPanelReturn {
 	const noToolsInfoMessage = $derived.by(() => {
 		if (toolsStore.loading) return null;
 
-		if (toolsStore.toolGroups.length > 0) return null;
+		if (groups.length > 0) return null;
 
 		// Tools endpoint is unreachable (404) — server started without --tools
 		if (toolsStore.isToolsEndpointUnreachable) {
