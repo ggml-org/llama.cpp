@@ -27,12 +27,14 @@ from gguf.constants import (
     GGUF_DEFAULT_ALIGNMENT,
     GGUF_MAGIC,
     GGUF_VERSION,
-    GGUF_MAX_STRING_LENGTH,
-    GGUF_MAX_ARRAY_ELEMENTS,
     GGMLQuantizationType,
     GGUFValueType,
     GGUFEndian,
 )
+
+# limits mirroring ggml/src/gguf.cpp (not part of gguf.h)
+GGUF_MAX_STRING_LENGTH  = 1024 * 1024 * 1024
+GGUF_MAX_ARRAY_ELEMENTS = 1024 * 1024 * 1024
 
 logger = logging.getLogger(__name__)
 
