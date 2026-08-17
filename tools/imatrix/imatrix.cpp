@@ -219,7 +219,7 @@ static bool compute_vector_statistics(std::vector<tensor_statistics> & tstats, c
     if (valid_n == 0) { return false; }
 
     float std_deviation = 0.0f;
-    float entropy = 0.0f;
+    double entropy = 0.0;
 
     // Std Dev, Skew, Kurtosis, Entropy
     const double inv_sum_energy = sum_energy > 0.0 ? 1.0 / sum_energy : 0.0;
@@ -246,7 +246,7 @@ static bool compute_vector_statistics(std::vector<tensor_statistics> & tstats, c
             if (inv_sum_energy > 0.0) {
                 const double v_energy = (double)e.values[off + j] * inv_c;
                 const double p = std::max(0.0, v_energy) * inv_sum_energy;
-                if (p > 1e-10) { entropy -= (float)(p * std::log(p) * log2_inv); }
+                if (p > 1e-10) { entropy -= p * std::log(p) * log2_inv; }
             }
         }
     }
@@ -271,7 +271,7 @@ static bool compute_vector_statistics(std::vector<tensor_statistics> & tstats, c
     ts.skewness = skewness;
     ts.kurtosis = kurtosis;
     ts.gain = fnan;
-    ts.entropy = entropy;
+    ts.entropy = (float)entropy;
     ts.l2_dist = fnan;
     ts.cossim = fnan;
     ts.pearson = fnan;
@@ -366,7 +366,7 @@ static void compute_tensor_statistics(std::vector<tensor_statistics> & tstats) {
             var_p_sum += dp * dp;
         }
 
-        ts.n_features = (int64_t)n;
+        ts.n_features = (int64_t)valid_n;
         ts.dot_prod = dot_prod;
         ts.norm1_sq = norm1_sq;
         ts.norm2_sq = norm2_sq;
@@ -380,14 +380,14 @@ static void compute_tensor_statistics(std::vector<tensor_statistics> & tstats) {
             ts.covariance = (float)(cov_sum / (double)valid_n);
         }
 
-        if (norm1_sq > 1e-12 && norm2_sq > 1e-12) {
+        if (norm1_sq > 0.0 && norm2_sq > 0.0) {
             ts.cossim = (float)(dot_prod / (std::sqrt(norm1_sq) * std::sqrt(norm2_sq)));
             ts.cossim = std::clamp(ts.cossim, -1.0f, 1.0f);
         } else {
             ts.cossim = (norm1_sq == 0.0 && norm2_sq == 0.0) ? fnan : 0.0f;
         }
 
-        if (var_c_sum > 1e-12 && var_p_sum > 1e-12) {
+        if (var_c_sum > 0.0 && var_p_sum > 0.0) {
             ts.pearson = (float)(cov_sum / (std::sqrt(var_c_sum) * std::sqrt(var_p_sum)));
             ts.pearson = std::clamp(ts.pearson, -1.0f, 1.0f);
         } else {
@@ -420,9 +420,10 @@ static void compute_layer_statistics(const std::vector<tensor_statistics> & tsta
         double sum_cov = 0.0;
         double sum_var_c = 0.0;
         double sum_var_p = 0.0;
-        double sum_total_energy_curr = 0.0;
-        double sum_total_energy_prev = 0.0;
-        int64_t sum_valid_n = 0;
+        double sum_energy_curr = 0.0;
+        double sum_energy_prev = 0.0;
+        int64_t sum_elements_curr = 0;
+        int64_t sum_elements_prev = 0;
         int64_t sum_n_features = 0;
         int n_tensors = 0;
     };
@@ -453,12 +454,15 @@ static void compute_layer_statistics(const std::vector<tensor_statistics> & tsta
         entry.sum_var_c += ts.var_c_sum;
         entry.sum_var_p += ts.var_p_sum;
         entry.n_tensors++;
-        if (ts.elements > 0) { entry.sum_valid_n += ts.elements; }
         if (ts.n_features > 0) { entry.sum_n_features += ts.n_features; }
 
-        // Accumulate Energy for correct Layer Gain calculation
-        entry.sum_total_energy_curr += ts.sum;
-        if (ts.sum_prev > 0.0) { entry.sum_total_energy_prev += ts.sum_prev; }
+        // gain needs both sides, so skip tensors with no live match in a previous layer
+        if (ts.elements_prev > 0) {
+            entry.sum_energy_curr += ts.sum;
+            entry.sum_energy_prev += ts.sum_prev;
+            entry.sum_elements_curr += ts.elements;
+            entry.sum_elements_prev += ts.elements_prev;
+        }
     }
 
     for (const auto & [layer, agg] : laggr) {
@@ -472,11 +476,11 @@ static void compute_layer_statistics(const std::vector<tensor_statistics> & tsta
             cossim = fnan;
         }
 
-        float gain = 0.0f;
-        if (agg.sum_total_energy_prev > 0.0) {
-            gain = (float)(std::sqrt(agg.sum_total_energy_curr) / std::sqrt(agg.sum_total_energy_prev));
-        } else {
-            gain = fnan;
+        float gain = fnan;
+        if (agg.sum_elements_curr > 0 && agg.sum_elements_prev > 0 && agg.sum_energy_prev > 0.0) {
+            const double rms_curr = std::sqrt(agg.sum_energy_curr / (double)agg.sum_elements_curr);
+            const double rms_prev = std::sqrt(agg.sum_energy_prev / (double)agg.sum_elements_prev);
+            gain = (float)(rms_curr / rms_prev);
         }
 
         layer_cossim[layer] = cossim;
@@ -486,7 +490,7 @@ static void compute_layer_statistics(const std::vector<tensor_statistics> & tsta
         if (agg.sum_n_features > 0) { layer_covariance[layer] = (float)(agg.sum_cov / (double)agg.sum_n_features); }
         else { layer_covariance[layer] = fnan; }
 
-        if (agg.sum_var_c > 1e-12 && agg.sum_var_p > 1e-12) {
+        if (agg.sum_var_c > 0.0 && agg.sum_var_p > 0.0) {
             auto pearson = (float)(agg.sum_cov / (std::sqrt(agg.sum_var_c) * std::sqrt(agg.sum_var_p)));
             layer_pearson[layer] = std::clamp(pearson, -1.0f, 1.0f);
         } else if (agg.sum_var_c == 0.0 && agg.sum_var_p == 0.0) {
