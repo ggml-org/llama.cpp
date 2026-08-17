@@ -95,10 +95,7 @@ extern "C" {
     GGML_API void ggml_backend_tensor_get_2d(const struct ggml_tensor * tensor,       void * data, size_t offset, size_t size, size_t n_copies, size_t stride_tensor, size_t stride_data);
     GGML_API void ggml_backend_tensor_memset(      struct ggml_tensor * tensor,     uint8_t value, size_t offset, size_t size);
 
-    // declare an imminent direct write to tensor->data, bypassing ggml_backend_tensor_set.
-    // callers that write host-visible tensors in place must announce it here, otherwise the
-    // scheduler sanitizer cannot see the write and will not detect races against it.
-    // no-op unless GGML_SCHED_SANITIZE is set.
+    // announce a direct write to tensor->data that bypasses ggml_backend_tensor_set
     GGML_API void ggml_backend_tensor_set_direct(struct ggml_tensor * tensor, size_t offset, size_t size);
 
     GGML_API void ggml_backend_synchronize(ggml_backend_t backend);
@@ -310,6 +307,46 @@ extern "C" {
     }
     */
 
+    //
+    // Graph input ring buffer
+    //
+    // Graph inputs are assigned to the last backend, which is assumed to be the CPU. The caller may
+    // pass a device host buffer type for that slot, and some devices - integrated GPUs in
+    // particular - accept that buffer type for compute. When that happens no input copy is created
+    // and the device reads exactly the memory the host thread writes. The host must then not write
+    // the next iteration's inputs while the device is still reading the previous ones.
+    //
+    // The scheduler detects this in ggml_backend_sched_new() by testing the condition that elides
+    // the copy - a host buffer type in the last slot that some other backend accepts - rather than
+    // by identifying particular devices. Backends that deliberately refuse to compute on pinned
+    // host memory are therefore unaffected. When it holds, each graph input is given a ring of
+    // buffers instead of one, and the scheduler moves the inputs onto the next slot rather than
+    // waiting for the device. GGML_SCHED_UMA_RING overrides the detection: 0 or 1 disables it, a
+    // larger value sets the ring depth.
+    //
+    // The extra buffers are not free. The cost is one additional copy of every graph input per
+    // extra slot, which for attention masks scales with the context and batch size, so the default
+    // depth is 2 - enough to remove the wait, at the smallest cost that does.
+    //
+    // Inputs are only rotated when a compute may still be in flight. Anything that waits for the
+    // backends clears that state, so a caller that synchronizes between iterations - reading logits
+    // in a sampling loop, say - keeps its inputs at fixed addresses and does not pay for the ring.
+    // Callers that issue several computes without synchronizing rotate between them.
+    //
+    // Two obligations come with this:
+    //
+    // - Callers must call ggml_backend_sched_prepare_inputs() before writing the inputs of a graph
+    //   that is being reused, since that path allocates nothing and so cannot rotate on its own.
+    //   After ggml_backend_sched_alloc_graph() it is a no-op; allocating already rotated.
+    //
+    // - Rotating moves tensor addresses without re-splitting the graph. A backend that caches work
+    //   against a graph, such as the CUDA graph cache, may treat an unchanged ggml_cgraph::uid as a
+    //   promise that nothing it captured has moved, and skip re-reading the addresses. The
+    //   scheduler re-stamps the split uids whenever it re-points inputs; a backend keeping such a
+    //   cache must key it on the uid or re-check the addresses itself. Violating this does not
+    //   degrade gracefully - the cached work replays against stale addresses.
+    //
+
     typedef struct ggml_backend_sched * ggml_backend_sched_t;
 
     // Evaluation callback for each node in the graph (set with ggml_backend_sched_set_eval_callback)
@@ -347,11 +384,7 @@ extern "C" {
 
     // Allocate and compute graph on the backend scheduler
     GGML_API bool                 ggml_backend_sched_alloc_graph(ggml_backend_sched_t sched, struct ggml_cgraph * graph); // returns success
-    // make the graph inputs safe for the caller to write again. must be called before writing
-    // inputs for an iteration that reuses an already allocated graph, since a previously issued
-    // compute may still be reading them. rotates onto a spare set of inputs where one is
-    // available, and only falls back to waiting when it is not. calling it after
-    // ggml_backend_sched_alloc_graph() is a no-op - allocating already did this.
+    // make the graph inputs safe to write again, see "Graph input ring buffer" above
     GGML_API void                 ggml_backend_sched_prepare_inputs(ggml_backend_sched_t sched);
     GGML_API enum ggml_status     ggml_backend_sched_graph_compute(ggml_backend_sched_t sched, struct ggml_cgraph * graph);
     GGML_API enum ggml_status     ggml_backend_sched_graph_compute_async(ggml_backend_sched_t sched, struct ggml_cgraph * graph);

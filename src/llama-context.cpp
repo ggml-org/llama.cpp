@@ -1348,10 +1348,6 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
     if (!graph_reuse_disable && res->can_reuse(gparams)) {
         //LLAMA_LOG_DEBUG("%s: reusing previous graph\n", __func__);
 
-        // a previously issued graph_compute_async may still be reading the graph inputs, so they
-        // cannot simply be overwritten here. this holds whenever a compute can still be in
-        // flight - under pipeline parallelism, and on a device that computes directly on the
-        // buffer the inputs live in, where no input copy is made to decouple the two.
         ggml_backend_sched_prepare_inputs(sched.get());
 
         n_reused++;
