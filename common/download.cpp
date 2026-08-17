@@ -771,7 +771,11 @@ common_download_hf_plan common_download_get_hf_plan(const common_params_model & 
         primary = find_best_model(all, tag);
         // a requested sidecar can resolve on its own, without a full model of the same tag
         if (primary.path.empty() && !opts.download_mtp && !opts.download_dflash && !opts.download_eagle3 && !opts.download_dspark) {
-            LOG_ERR("%s: no GGUF files found in repository %s\n", __func__, repo.c_str());
+            if (!tag.empty()) {
+                LOG_ERR("%s: no file matching quant '%s' found in repository %s\n", __func__, tag.c_str(), repo.c_str());
+            } else {
+                LOG_ERR("%s: no GGUF files found in repository %s\n", __func__, repo.c_str());
+            }
             list_available_gguf_files(all);
             return plan;
         }
