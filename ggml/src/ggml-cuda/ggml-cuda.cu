@@ -346,7 +346,30 @@ static ggml_cuda_device_info ggml_cuda_init() {
                       id, prop.name, prop.major, prop.minor, device_vmm ? "yes" : "no",
                       device_vram_mib);
 #else
+        // On some Blackwell (SM120) cards/drivers, prop.sharedMemPerBlockOptin
+        // comes back as a bogus value -- observed in the wild as exactly
+        // 0x100000001 (4294967297) instead of a sane ~100KB figure (see
+        // issue #23385). The bogus value gets passed to cudaFuncSetAttribute
+        // via CUDA_SET_SHARED_MEMORY_LIMIT, which the driver correctly
+        // rejects with "invalid argument"; the next kernel launch that
+        // relies on the raised limit (e.g. ggml_cuda_launch_mm_ids_helper's
+        // MoE id-routing kernel) then fails the same way, and
+        // ggml_cuda_error() aborts the process. Confirmed via a debug print
+        // immediately before the crashing launch: smpbo was exactly
+        // 4294967297 on an RTX 5080, even though a standalone
+        // cudaGetDeviceProperties() call in isolation reported a sane
+        // value -- the bad read appears tied to this specific
+        // multi-device-aware init path, not a permanently broken driver.
+        // Sanity-clamp to prop.sharedMemPerBlock (the guaranteed-valid
+        // non-optin figure) whenever the optin value is zero or larger
+        // than any real GPU's physical limit (512KB, generous headroom).
         info.devices[id].smpbo = prop.sharedMemPerBlockOptin;
+        if (info.devices[id].smpbo == 0 || info.devices[id].smpbo > 512 * 1024) {
+            GGML_LOG_WARN("  Device %d: sharedMemPerBlockOptin reported as %zu -- bogus driver value, "
+                           "falling back to sharedMemPerBlock (%zu)\n",
+                           id, info.devices[id].smpbo, (size_t) prop.sharedMemPerBlock);
+            info.devices[id].smpbo = prop.sharedMemPerBlock;
+        }
         info.devices[id].cc = 100*prop.major + 10*prop.minor;
         GGML_LOG_INFO("  Device %d: %s, compute capability %d.%d, VMM: %s, VRAM: %zu MiB\n",
                       id, prop.name, prop.major, prop.minor, device_vmm ? "yes" : "no",
