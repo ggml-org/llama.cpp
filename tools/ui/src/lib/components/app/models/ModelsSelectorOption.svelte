@@ -86,7 +86,7 @@
 		{hideOrgName}
 		aliases={option.aliases}
 		tags={option.tags}
-		modalities={modalities}
+		{modalities}
 		{supportsThinking}
 		showRawTooltip
 		class="flex-1"
