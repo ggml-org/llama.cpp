@@ -347,6 +347,12 @@ extern "C" {
 
     // Allocate and compute graph on the backend scheduler
     GGML_API bool                 ggml_backend_sched_alloc_graph(ggml_backend_sched_t sched, struct ggml_cgraph * graph); // returns success
+    // make the graph inputs safe for the caller to write again. must be called before writing
+    // inputs for an iteration that reuses an already allocated graph, since a previously issued
+    // compute may still be reading them. rotates onto a spare set of inputs where one is
+    // available, and only falls back to waiting when it is not. calling it after
+    // ggml_backend_sched_alloc_graph() is a no-op - allocating already did this.
+    GGML_API void                 ggml_backend_sched_prepare_inputs(ggml_backend_sched_t sched);
     GGML_API enum ggml_status     ggml_backend_sched_graph_compute(ggml_backend_sched_t sched, struct ggml_cgraph * graph);
     GGML_API enum ggml_status     ggml_backend_sched_graph_compute_async(ggml_backend_sched_t sched, struct ggml_cgraph * graph);
     GGML_API void                 ggml_backend_sched_synchronize(ggml_backend_sched_t sched);
