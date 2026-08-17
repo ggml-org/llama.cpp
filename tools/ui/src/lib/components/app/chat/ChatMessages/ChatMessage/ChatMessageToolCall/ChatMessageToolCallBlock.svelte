@@ -7,17 +7,13 @@
 	import ChatMessageToolCallBlockGetInfo from './ChatMessageToolCallBlockGetInfo.svelte';
 	import ChatMessageToolCallBlockGrepSearch from './ChatMessageToolCallBlockGrepSearch.svelte';
 	import ChatMessageToolCallBlockReadFile from './ChatMessageToolCallBlockReadFile.svelte';
+	import ChatMessageToolCallBlockReadMedia from './ChatMessageToolCallBlockReadMedia.svelte';
 	import ChatMessageToolCallBlockRunJavascript from './ChatMessageToolCallBlockRunJavascript.svelte';
 	import ChatMessageToolCallBlockSearchResults from './ChatMessageToolCallBlockSearchResults.svelte';
 	import ChatMessageToolCallBlockWriteFile from './ChatMessageToolCallBlockWriteFile.svelte';
 	import { BuiltInTool } from '$lib/enums';
-	import type { DatabaseMessageExtra } from '$lib/types';
-	import {
-		type AgenticSection,
-		extractSearchQuery,
-		extractSearchResults,
-		isWebSearchToolName
-	} from '$lib/utils';
+	import type { AgenticSection, DatabaseMessageExtra } from '$lib/types';
+	import { extractSearchQuery, extractSearchResults, isWebSearchToolName } from '$lib/utils';
 
 	interface Props {
 		section: AgenticSection;
@@ -45,6 +41,8 @@
 	<ChatMessageToolCallBlockGetInfo {section} {isStreaming} />
 {:else if section.toolName === BuiltInTool.READ_FILE}
 	<ChatMessageToolCallBlockReadFile {section} {open} {isStreaming} {onToggle} />
+{:else if section.toolName === BuiltInTool.READ_MEDIA}
+	<ChatMessageToolCallBlockReadMedia {section} {open} {isStreaming} {onToggle} />
 {:else if section.toolName === BuiltInTool.EDIT_FILE}
 	<ChatMessageToolCallBlockEditFile {section} {open} {isStreaming} {onToggle} />
 {:else if section.toolName === BuiltInTool.WRITE_FILE}

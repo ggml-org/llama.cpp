@@ -1,0 +1,61 @@
+name: Make Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: 'Commit SHA to release (empty = branch HEAD)'
+        required: false
+        default: ''
+        type: string
+      dry_run:
+        description: 'Dry run - validate without creating the tag'
+        required: true
+        type: boolean
+        default: true
+
+env:
+  GH_TOKEN: ${{ github.token }}
+
+permissions:
+  contents: write
+
+jobs:
+  make-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ssh-key: ${{ secrets.DEPLOY_KEY_RELEASE }}
+          ref: ${{ inputs.commit != '' && inputs.commit || github.ref_name }}
+          fetch-depth: 0
+
+      - name: Run release checks
+        id: checks
+        run: bash scripts/make-release-checks.sh ${{ github.event.inputs.dry_run == 'true' && '--dry-run' || '' }}
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          RELEASE_BRANCH: ${{ github.ref_name }}
+
+      - name: Create release tag
+        if: ${{ github.event.inputs.dry_run == 'false' }}
+        run: |
+          VERSION="${{ steps.checks.outputs.version }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "${VERSION}" -m "Release ${VERSION}"
+          git push origin "${VERSION}"
+          echo "Created and pushed tag ${VERSION}"
+
+      - name: Dry run summary
+        if: ${{ github.event.inputs.dry_run == 'true' }}
+        run: |
+          if [[ "${{ steps.checks.outputs.checks_passed }}" == "true" ]]; then
+            echo "Dry run complete - all checks passed."
+            echo "Would have created tag: ${{ steps.checks.outputs.version }}"
+          else
+            echo "::error::Dry run found release check failures. A release tag would not be created."
+            exit 1
+          fi

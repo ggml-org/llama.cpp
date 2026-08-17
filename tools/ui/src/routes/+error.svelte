@@ -2,8 +2,7 @@
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
 	import { ServerErrorSplash } from '$lib/components/app';
-	import { APP_NAME } from '$lib/constants';
-	import { ROUTES } from '$lib/constants/routes';
+	import { APP_NAME, ROUTES } from '$lib/constants';
 
 	let error = $derived($page.error);
 	let status = $derived($page.status);

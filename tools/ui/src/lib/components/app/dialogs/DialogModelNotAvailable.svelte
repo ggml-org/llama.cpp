@@ -3,8 +3,7 @@
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import * as AlertDialog from '$lib/components/ui/alert-dialog';
-	import { URL_PARAMS } from '$lib/constants';
-	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
+	import { ICON_CLASS_DEFAULT, URL_PARAMS } from '$lib/constants';
 
 	interface Props {
 		open: boolean;

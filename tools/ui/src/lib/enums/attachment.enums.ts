@@ -48,6 +48,16 @@ export enum AttachmentAction {
 }
 
 /**
+ * Human-readable labels used when embedding attachments in outgoing messages.
+ */
+export enum AttachmentLabel {
+	FILE = 'File',
+	PDF_FILE = 'PDF File',
+	MCP_PROMPT = 'MCP Prompt',
+	MCP_RESOURCE = 'MCP Resource'
+}
+
+/**
  * Visibility conditions for attachment menu items.
  */
 export enum AttachmentItemVisibleWhen {

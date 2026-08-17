@@ -1,7 +1,7 @@
 <script lang="ts" generics="T">
 	import { SearchInput } from '$lib/components/app';
 	import ScrollArea from '$lib/components/ui/scroll-area/scroll-area.svelte';
-	import { CHAT_FORM_POPOVER_MAX_HEIGHT } from '$lib/constants';
+	import { CHAT_FORM_POPOVER_MAX_HEIGHT, UI_DATA_ATTRS } from '$lib/constants';
 	import { useScrollActiveRow } from '$lib/hooks/use-scroll-active-row.svelte';
 	import type { Snippet } from 'svelte';
 
@@ -55,7 +55,7 @@
 	// selectedIndex/items.length are untracked so hover and result replacement
 	// never re-fire the scroll; keyboard nav is the only path that bumps the trigger.
 	useScrollActiveRow({
-		dataIndex: 'picker',
+		dataAttr: UI_DATA_ATTRS.PICKER_INDEX,
 		getContainer: () => listContainer,
 		getCount: () => items.length,
 		getIndex: () => selectedIndex,

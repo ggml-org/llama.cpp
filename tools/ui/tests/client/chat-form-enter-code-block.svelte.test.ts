@@ -2,11 +2,11 @@
 // fenced-code-block flow: while the caret sits inside a fenced
 // block region - closed, or still OPEN while the user is typing
 // one - plain Enter adds a line instead of submitting the message.
-// The textarea path is covered here end-to-end (the contenteditable
-// consumes the same case locally; see chat-form-contenteditable).
+// The textarea path is covered here end-to-end (the ChatFormInputRich
+// consumes the same case locally; see chat-form-input-rich).
 
 import ChatFormTestWrapper from './components/ChatFormTestWrapper.svelte';
-import { SETTINGS_KEYS } from '$lib/constants/settings-keys';
+import { SETTINGS_KEYS } from '$lib/constants';
 import { settingsStore } from '$lib/stores/settings.svelte';
 import { tick } from 'svelte';
 import { beforeEach, describe, expect, it, vi } from 'vitest';

@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { ChatAttachmentsList, MarkdownContent, MentionText } from '$lib/components/app';
 	import { Card } from '$lib/components/ui/card';
-	import { config } from '$lib/stores/settings.svelte';
+	import { settingsStore } from '$lib/stores';
 	import type { DatabaseMessageExtra } from '$lib/types/database';
 
 	interface Props {
@@ -24,7 +24,7 @@
 
 	let isMultiline = $state(false);
 	let messageElement: HTMLElement | undefined = $state();
-	const currentConfig = config();
+	const currentConfig = settingsStore.config;
 
 	$effect(() => {
 		if (!messageElement || !content.trim()) return;

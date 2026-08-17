@@ -3,8 +3,9 @@
 	import ToolCallBlock from './ToolCallBlock.svelte';
 	import { XCircle } from '@lucide/svelte';
 	import { MAX_HEIGHT_CODE_BLOCK, RESULT_STAT_SEPARATOR } from '$lib/constants';
-	import { toolsStore } from '$lib/stores/tools.svelte';
-	import { abbreviateHome, type AgenticSection, computeLineDiff, prefixFor } from '$lib/utils';
+	import { toolsStore } from '$lib/stores';
+	import type { AgenticSection } from '$lib/types';
+	import { abbreviateHome, computeLineDiff, prefixFor } from '$lib/utils';
 
 	interface Props {
 		section: AgenticSection;
