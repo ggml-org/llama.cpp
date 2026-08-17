@@ -7,7 +7,7 @@ import {
 } from '$lib/enums';
 import type { OpenAIToolDefinition } from '$lib/types';
 
-export const READ_MEDIA_TOOL_NAME = BuiltInTool.READ_MEDIA;
+export const READ_MEDIA_TOOL_NAME = BuiltInTool.BROWSER_READ_MEDIA;
 
 // header lines of the tool result, parsed back by the read_media renderer
 export const PREFIX_FILE = 'File: ';

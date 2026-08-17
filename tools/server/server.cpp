@@ -346,7 +346,7 @@ int llama_server(common_params & params, int argc, char ** argv) {
         ctx_http.get ("/tools",           ex_wrapper(tools.handle_get));
         ctx_http.post("/tools",           ex_wrapper(tools.handle_post));
         if (!params.server_tools.empty()) {
-            warn_names.push_back("built-in tools (experimental)");
+            warn_names.push_back("server tools (experimental)");
         }
         if (!params.server_tools_runtime.empty()) {
             warn_names.push_back("tools runtime (experimental)");

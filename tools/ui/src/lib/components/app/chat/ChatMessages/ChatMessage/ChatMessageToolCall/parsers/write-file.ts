@@ -20,7 +20,7 @@ export type WriteFileMeta = {
 };
 
 export function parseWriteFileMeta(section: AgenticSection): WriteFileMeta | null {
-	const args = parseToolArgs(BuiltInTool.WRITE_FILE, section, { partial: true });
+	const args = parseToolArgs(BuiltInTool.SERVER_WRITE_FILE, section, { partial: true });
 
 	if (!args) return null;
 

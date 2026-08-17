@@ -2,7 +2,9 @@ import { CLI_FLAGS } from './cli-flags.constants';
 import { BuiltInTool, JsonSchemaType, ToolCallType } from '$lib/enums';
 import type { OpenAIToolDefinition } from '$lib/types';
 
-export const BROWSER_INFO_TOOL_NAME = BuiltInTool.GET_INFO;
+// get_info is served by the server, but the browser falls back to this
+// implementation when the server does not provide it - same wire name.
+export const BROWSER_INFO_TOOL_NAME = BuiltInTool.SERVER_GET_INFO;
 
 /** UA token to OS name, first match wins - Android and iOS UAs also carry the Linux / Mac OS X tokens */
 export const BROWSER_INFO_OS_UA_PATTERNS: readonly [RegExp, string][] = [

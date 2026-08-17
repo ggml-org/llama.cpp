@@ -6,7 +6,7 @@
 	import { ICON_CLASS_DEFAULT } from '$lib/constants';
 	import { ToolSource } from '$lib/enums/tools.enums';
 	import { mcpStore, permissionsStore, toolsStore } from '$lib/stores';
-	import { getBuiltinToolUi } from '$lib/utils';
+	import { getToolUi } from '$lib/utils';
 	import { SvelteSet } from 'svelte/reactivity';
 
 	let expandedGroups = new SvelteSet<string>();
@@ -69,12 +69,12 @@
 
 						{#each group.tools as entry (entry.key)}
 							{@const toolName = entry.definition.function.name}
-							{@const builtinUi =
-								entry.source === ToolSource.BUILTIN || entry.source === ToolSource.FRONTEND
-									? getBuiltinToolUi(toolName)
+							{@const toolUi =
+								entry.source === ToolSource.SERVER || entry.source === ToolSource.BROWSER
+									? getToolUi(toolName)
 									: null}
-							{@const displayLabel = builtinUi?.label ?? toolName}
-							{@const IconComponent = builtinUi?.icon ?? null}
+							{@const displayLabel = toolUi?.label ?? toolName}
+							{@const IconComponent = toolUi?.icon ?? null}
 							{@const isEnabled = toolsStore.isToolEnabled(entry.key)}
 							{@const permissionKey = entry.key}
 							{@const isAlwaysAllowed = permissionsStore.hasTool(permissionKey)}

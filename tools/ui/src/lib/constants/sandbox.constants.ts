@@ -1,6 +1,6 @@
 import { BuiltInTool } from '$lib/enums';
 
-export const SANDBOX_TOOL_NAME = BuiltInTool.RUN_JAVASCRIPT;
+export const SANDBOX_TOOL_NAME = BuiltInTool.BROWSER_RUN_JAVASCRIPT;
 
 export const SANDBOX_TIMEOUT_MS_DEFAULT = 10000;
 

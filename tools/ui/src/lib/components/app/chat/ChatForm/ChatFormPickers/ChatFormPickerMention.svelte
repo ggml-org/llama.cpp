@@ -51,7 +51,7 @@
 	// When the server does not expose file_glob_search (started without
 	// --tools) or the user disabled it, the picker still opens but explains
 	// why instead of firing searches that would only fail.
-	const fileSearchKey = $derived(toolsStore.getPermissionKey(BuiltInTool.FILE_GLOB_SEARCH));
+	const fileSearchKey = $derived(toolsStore.getPermissionKey(BuiltInTool.SERVER_FILE_GLOB_SEARCH));
 	const fileSearchEnabled = $derived(
 		fileSearchKey !== null && toolsStore.isToolEnabled(fileSearchKey)
 	);

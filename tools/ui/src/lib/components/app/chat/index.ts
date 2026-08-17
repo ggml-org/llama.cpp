@@ -278,7 +278,7 @@ export { default as ChatFormInput } from './ChatForm/ChatFormInput/ChatFormInput
 /**
  * Working directory selector for agent mode. Renders a chip below the chat
  * form; clicking it opens a popover with a directory picker backed by the
- * server's `file_glob_search` built-in tool (POST /tools). The picked
+ * server's `file_glob_search` server tool (POST /tools). The picked
  * directory is exposed via `bind:directory`; changing it records a
  * synthetic "Set working directory to ..." user message into chat history
  * and is enforced on tool calls via the `x-tool-cwd` request header.
@@ -380,7 +380,7 @@ export { default as ChatFormPickerListItemSkeleton } from './ChatForm/ChatFormPi
 
 /**
  * `@`-triggered file/folder mention picker. Resolves `@<query>` in the chat
- * input to a filesystem match via the server's `file_glob_search` built-in
+ * input to a filesystem match via the server's `file_glob_search` server tool
  * tool, scoped to the conversation cwd (or server home when unset).
  * Selection splices a `[name](file:///<abs path>)` link into the input.
  */

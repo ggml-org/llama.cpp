@@ -14,7 +14,7 @@ export type ExecShellCommandMeta = {
 };
 
 export function parseExecShellCommandMeta(section: AgenticSection): ExecShellCommandMeta | null {
-	const args = parseToolArgs(BuiltInTool.EXEC_SHELL_COMMAND, section);
+	const args = parseToolArgs(BuiltInTool.SERVER_EXEC_SHELL_COMMAND, section);
 
 	if (!args) return null;
 

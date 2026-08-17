@@ -1,5 +1,5 @@
 /**
- * Frontend executor for the `get_datetime` tool. It runs in the browser, so it
+ * Browser executor for the `get_datetime` tool. It runs in the browser, so it
  * reports the user's own clock and time zone instead of the server's UTC time -
  * a chat about "tomorrow" means the user's tomorrow, not the host's.
  *

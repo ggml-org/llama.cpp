@@ -28,15 +28,15 @@ function fileExtension(path: string): string {
 }
 
 /**
- * **ReadMediaService** - frontend executor for the `read_media` tool
+ * **ReadMediaService** - browser executor for the `read_media` tool
  *
  * The tool is synthetic: no such tool exists on the server. It reads the file
- * through the built-in `read_file` tool with the `base64` response type, then
+ * through the server `read_file` tool with the `base64` response type, then
  * turns the bytes into a data URI line. The agentic store lifts that line into
  * an image or audio attachment on the tool result message, which is what makes
  * the model perceive the file instead of reading a wall of base64.
  *
- * Living in the frontend is what lets it exist only for models that can
+ * Living in the browser is what lets it exist only for models that can
  * actually use the result - the server has no idea which model is selected.
  *
  * @see buildReadMediaToolDefinition in constants/read-media.ts - tool schema sent to the LLM
@@ -82,7 +82,7 @@ export class ReadMediaService {
 		}
 
 		const raw = await ToolsService.executeToolRaw(
-			BuiltInTool.READ_FILE,
+			BuiltInTool.SERVER_READ_FILE,
 			{ path },
 			signal,
 			cwd,

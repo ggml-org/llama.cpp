@@ -1,8 +1,8 @@
 export enum ToolSource {
-	BUILTIN = 'builtin',
-	MCP = 'mcp',
+	BROWSER = 'browser',
 	CUSTOM = 'custom',
-	FRONTEND = 'frontend'
+	MCP = 'mcp',
+	SERVER = 'server'
 }
 
 export enum ToolPermissionDecision {
@@ -28,22 +28,28 @@ export enum GlobSearchType {
 }
 
 /**
- * Wire-format identifiers for built-in and frontend tools. The string
+ * Wire-format identifiers for server and browser tools. The string
  * value matches what the model emits in tool call names, so comparing
- * against `BuiltInTool.READ_FILE` is equivalent to comparing against the
- * raw `'read_file'` literal - the enum just keeps the two in lock-step
- * and gives TypeScript a single source of truth for autocomplete / rename
- * support.
+ * against `BuiltInTool.SERVER_READ_FILE` is equivalent to comparing
+ * against the raw `'read_file'` literal - the enum just keeps the two in
+ * lock-step and gives TypeScript a single source of truth for autocomplete
+ * / rename support.
+ *
+ * The `SERVER_` / `BROWSER_` prefixes mirror the tool's primary source
+ * (llama-server vs llama-ui). `get_info` is the exception: it is served by
+ * the server, but llama-ui falls back to a browser implementation when the
+ * server does not provide it, so it can surface under both categories in
+ * the UI while keeping a single wire name.
  */
 export enum BuiltInTool {
-	READ_FILE = 'read_file',
-	READ_MEDIA = 'read_media',
-	EDIT_FILE = 'edit_file',
-	WRITE_FILE = 'write_file',
-	GET_DATETIME = 'get_datetime',
-	GET_INFO = 'get_info',
-	FILE_GLOB_SEARCH = 'file_glob_search',
-	GREP_SEARCH = 'grep_search',
-	EXEC_SHELL_COMMAND = 'exec_shell_command',
-	RUN_JAVASCRIPT = 'run_javascript'
+	BROWSER_GET_DATETIME = 'get_datetime',
+	BROWSER_READ_MEDIA = 'read_media',
+	BROWSER_RUN_JAVASCRIPT = 'run_javascript',
+	SERVER_EDIT_FILE = 'edit_file',
+	SERVER_EXEC_SHELL_COMMAND = 'exec_shell_command',
+	SERVER_FILE_GLOB_SEARCH = 'file_glob_search',
+	SERVER_GET_INFO = 'get_info',
+	SERVER_GREP_SEARCH = 'grep_search',
+	SERVER_READ_FILE = 'read_file',
+	SERVER_WRITE_FILE = 'write_file'
 }

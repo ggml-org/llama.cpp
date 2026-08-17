@@ -61,8 +61,8 @@
 				{:else}
 					{@const source = toolsStore.getToolSource(toolName)}
 					{@const providerName =
-						source === ToolSource.BUILTIN
-							? TOOL_SERVER_LABELS[ToolSource.BUILTIN]
+						source === ToolSource.SERVER
+							? TOOL_SERVER_LABELS[ToolSource.SERVER]
 							: source === ToolSource.CUSTOM
 								? TOOL_SERVER_LABELS[ToolSource.CUSTOM]
 								: 'MCP Tools'}

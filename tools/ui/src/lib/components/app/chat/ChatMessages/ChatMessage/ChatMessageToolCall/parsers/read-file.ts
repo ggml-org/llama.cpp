@@ -16,7 +16,7 @@ export type ReadFileMeta = {
 };
 
 export function parseReadFileMeta(section: AgenticSection): ReadFileMeta | null {
-	const args = parseToolArgs(BuiltInTool.READ_FILE, section, { partial: true });
+	const args = parseToolArgs(BuiltInTool.SERVER_READ_FILE, section, { partial: true });
 
 	if (!args) return null;
 

@@ -189,7 +189,7 @@ This endpoint is intended to be used internally by the Web UI and subject to cha
 Get a list of tools, each tool has these fields:
 - `tool` (string): the ID name of the tool, to be used in POST call. Example: `read_file`
 - `display_name` (string): the name to be displayed on UI. Example: `Read file`
-- `type` (string): `"builtin"` for a built-in tool, or `"mcp"` for a tool exposed by an MCP server
+- `type` (string): `"server"` for a server tool, or `"mcp"` for a tool exposed by an MCP server
 - `permissions` (object): a mapping string --> boolean that indicates the permission required by this tool. This is useful for the UI to ask the user before calling the tool. For now, the only permission supported is `"write"`
 - `definition` (object): the OAI-compat definition of this tool
 

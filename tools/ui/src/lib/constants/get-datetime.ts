@@ -1,7 +1,7 @@
 import { BuiltInTool, JsonSchemaType, ToolCallType } from '$lib/enums';
 import type { OpenAIToolDefinition } from '$lib/types';
 
-export const GET_DATETIME_TOOL_NAME = BuiltInTool.GET_DATETIME;
+export const GET_DATETIME_TOOL_NAME = BuiltInTool.BROWSER_GET_DATETIME;
 
 export function buildGetDatetimeToolDefinition(): OpenAIToolDefinition {
 	return {

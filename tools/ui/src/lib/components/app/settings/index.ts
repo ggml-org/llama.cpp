@@ -69,7 +69,7 @@ export { default as SettingsChatFields } from './SettingsChat/SettingsChatFields
 /**
  * **SettingsChatToolsTab** - Tools configuration tab for chat settings
  *
- * Displays available tools grouped by source (built-in, MCP, custom) with
+ * Displays available tools grouped by source (server, browser, MCP, custom) with
  * toggles to enable/disable individual tools and tool groups. Shows MCP
  * server favicons and permission management controls.
  */

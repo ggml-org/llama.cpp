@@ -14,8 +14,8 @@
 	import { ICON_CLASS_DEFAULT, ICON_CLASS_SPIN } from '$lib/constants';
 	import { AgenticSectionType } from '$lib/enums';
 	import { mcpStore } from '$lib/stores';
-	import type { AgenticSection, BuiltinToolUiEntry } from '$lib/types';
-	import { getBuiltinToolUi } from '$lib/utils';
+	import type { AgenticSection, ToolUiEntry } from '$lib/types';
+	import { getToolUi } from '$lib/utils';
 	import type { Component, Snippet } from 'svelte';
 
 	type ToolCallBlockMetaWithError = TMeta & { errorMessage?: string };
@@ -82,7 +82,7 @@
 	const showSpinner = $derived(isPending || (isStreamingCall && isStreaming) || extraLiveStreaming);
 	const isCodeStreaming = $derived(isStreaming && (isPending || isStreamingCall));
 
-	const toolUi: BuiltinToolUiEntry | null = $derived(getBuiltinToolUi(section.toolName));
+	const toolUi: ToolUiEntry | null = $derived(getToolUi(section.toolName));
 	const toolIcon: Component = $derived(
 		spinIconWhenActive && showSpinner ? Loader2 : (toolUi?.icon ?? Wrench)
 	);

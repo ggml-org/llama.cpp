@@ -262,9 +262,9 @@ export { ParameterSyncService } from './parameter-sync.service';
 export { MCPService } from './mcp.service';
 
 /**
- * **SandboxService** - Frontend JavaScript execution in a browser sandbox
+ * **SandboxService** - Browser JavaScript execution in a browser sandbox
  *
- * Stateless executor for the run_javascript frontend tool. Model generated
+ * Stateless executor for the run_javascript browser tool. Model generated
  * code runs in a Web Worker spawned inside a sandboxed iframe with an opaque
  * origin: no access to the app origin, its storage or its API, and outgoing
  * requests carry a null origin. The code never touches a main thread, so the
@@ -274,7 +274,7 @@ export { MCPService } from './mcp.service';
  * **Architecture & Relationships:**
  * - **SandboxService** (this class): Stateless sandbox execution
  * - **toolsStore**: Exposes the tool definition when the sandbox is enabled
- * - **agenticStore**: Dispatches ToolSource.FRONTEND calls here
+ * - **agenticStore**: Dispatches ToolSource.BROWSER calls here
  *
  * @see buildSandboxToolDefinition in utils/sandbox-tool - tool schema sent to the LLM
  * @see agenticStore in stores/agentic.svelte.ts - tool dispatch

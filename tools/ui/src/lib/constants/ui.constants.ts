@@ -18,15 +18,15 @@ export const UI_DATA_ATTRS = {
 } as const;
 
 export const TOOL_GROUP_LABELS = {
-	[ToolSource.BUILTIN]: 'Built-in',
+	[ToolSource.BROWSER]: 'Browser',
 	[ToolSource.CUSTOM]: 'JSON Schema',
-	[ToolSource.FRONTEND]: 'Browser'
+	[ToolSource.SERVER]: 'Server'
 } as const;
 
 export const TOOL_SERVER_LABELS = {
-	[ToolSource.BUILTIN]: 'Built-in Tools',
+	[ToolSource.BROWSER]: 'Browser Tools',
 	[ToolSource.CUSTOM]: 'Custom Tools',
-	[ToolSource.FRONTEND]: 'Browser Tools'
+	[ToolSource.SERVER]: 'Server Tools'
 } as const;
 
 export const TOOLTIP_DELAY_DURATION = 500;

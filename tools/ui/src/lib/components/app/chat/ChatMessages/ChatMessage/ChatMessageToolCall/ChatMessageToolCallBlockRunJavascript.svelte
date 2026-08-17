@@ -6,7 +6,7 @@
 	import { MAX_HEIGHT_CODE_BLOCK } from '$lib/constants';
 	import { FileTypeText } from '$lib/enums';
 	import type { AgenticSection } from '$lib/types';
-	import { getBuiltinToolUi } from '$lib/utils';
+	import { getToolUi } from '$lib/utils';
 
 	interface Props {
 		section: AgenticSection;
@@ -18,7 +18,7 @@
 	let { isStreaming, onToggle, open, section }: Props = $props();
 
 	const runJsMeta = $derived(parseRunJavascriptMeta(section));
-	const title = $derived(getBuiltinToolUi(section.toolName)?.label ?? section.toolName ?? '');
+	const title = $derived(getToolUi(section.toolName)?.label ?? section.toolName ?? '');
 </script>
 
 <ToolCallBlock {section} {open} {isStreaming} meta={runJsMeta} {title} {onToggle}>
