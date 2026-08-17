@@ -774,6 +774,7 @@ jobs:
         with:
           key: windows-rocm-${{ matrix.ROCM_VERSION }}-${{ matrix.build }}
           evict-old-files: 1d
+          max-size: "1G"
 
       # - name: Cache ROCm Installation
       #   id: cache-rocm
@@ -1321,10 +1322,12 @@ jobs:
         with:
           tool-cache: true
 
-      # - name: ccache
-      #   uses: ggml-org/ccache-action@v1.2.21
-      #   with:
-      #     key: release-ubuntu-22.04-rocm-${{ matrix.ROCM_VERSION }}
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.21
+        with:
+          key: release-ubuntu-rocm-${{ matrix.ROCM_VERSION }}-${{ matrix.build }}
+          evict-old-files: 1d
+          max-size: "1G"
 
       - name: Tune ccache for reinstalled ROCm toolchain
         run: |
@@ -1389,10 +1392,10 @@ jobs:
             ${{ env.CMAKE_ARGS }}
           cmake --build build --config Release -j $(nproc)
 
-      # - name: ccache-clear
-      #   uses: ./.github/actions/ccache-clear
-      #   with:
-      #     key: release-ubuntu-22.04-rocm-${{ matrix.ROCM_VERSION }}
+      - name: ccache-clear
+        uses: ./.github/actions/ccache-clear
+        with:
+          key: release-ubuntu-rocm-${{ matrix.ROCM_VERSION }}-${{ matrix.build }}
 
       - name: Determine tag name
         id: tag
