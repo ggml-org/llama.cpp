@@ -2388,6 +2388,8 @@ struct ggml_backend_vk_context {
     int fused_ops_write_mask {};
     topk_moe_mode fused_topk_moe_mode {};
     bool fused_topk_moe_scale {};
+    // UNARY skipped; MUL will dispatch fused act*mul
+    const ggml_tensor * pending_unary_mul {};
 
     // for GGML_VK_PERF_LOGGER
     std::unique_ptr<vk_perf_logger> perf_logger;
@@ -12491,7 +12493,8 @@ static void ggml_vk_sub(ggml_backend_vk_context * ctx, vk_context& subctx, const
     });
 }
 
-static void ggml_vk_mul(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+// act: 0=plain, 1=sigmoid(src1), 2=silu(src1), 3=softplus(src1)
+static void ggml_vk_mul(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst, int32_t act = 0) {
     const uint32_t src0_type_size = ggml_type_size(src0->type);
     const uint32_t src1_type_size = ggml_type_size(src1->type);
     const uint32_t dst_type_size = ggml_type_size(dst->type);
@@ -12502,8 +12505,65 @@ static void ggml_vk_mul(ggml_backend_vk_context * ctx, vk_context& subctx, const
         (uint32_t)src1->ne[0], (uint32_t)src1->ne[1], (uint32_t)src1->ne[2],(uint32_t)src1->ne[3], (uint32_t)src1->nb[0] / src1_type_size, (uint32_t)src1->nb[1] / src1_type_size, (uint32_t)src1->nb[2] / src1_type_size, (uint32_t)src1->nb[3] / src1_type_size,
         (uint32_t) dst->ne[0], (uint32_t) dst->ne[1], (uint32_t) dst->ne[2],(uint32_t) dst->ne[3], (uint32_t) dst->nb[0] /  dst_type_size, (uint32_t) dst->nb[1] /  dst_type_size, (uint32_t) dst->nb[2] /  dst_type_size, (uint32_t) dst->nb[3] /  dst_type_size,
         0,
-        0.0f, 0.0f, 0,
+        0.0f, 0.0f, act,
     });
+}
+
+static int32_t ggml_vk_unary_mul_act(const ggml_tensor * unary) {
+    switch (ggml_get_unary_op(unary)) {
+        case GGML_UNARY_OP_SIGMOID:  return 1;
+        case GGML_UNARY_OP_SILU:     return 2;
+        case GGML_UNARY_OP_SOFTPLUS: return 3;
+        default:                     return 0;
+    }
+}
+
+static bool ggml_vk_should_fuse_unary_mul(const ggml_tensor * unary, const ggml_tensor * mul) {
+    if (ggml_vk_unary_mul_act(unary) == 0) {
+        return false;
+    }
+    if (unary->type != GGML_TYPE_F32 && unary->type != GGML_TYPE_F16) {
+        return false;
+    }
+    if (unary->type != mul->type) {
+        return false;
+    }
+    if (mul->src[0] != unary && mul->src[1] != unary) {
+        return false;
+    }
+    const ggml_tensor * other = (mul->src[0] == unary) ? mul->src[1] : mul->src[0];
+    if (other == nullptr || other->type != unary->type) {
+        return false;
+    }
+    if (!ggml_is_contiguous_1(other) || !ggml_is_contiguous_1(unary->src[0]) || !ggml_are_same_shape(other, unary)) {
+        return false;
+    }
+    return true;
+}
+
+static ggml_tensor * ggml_vk_find_unary_mul_consumer(const ggml_cgraph * cgraph, int unary_idx) {
+    if (!ggml_node_has_n_uses(cgraph, unary_idx, 1)) {
+        return nullptr;
+    }
+    const ggml_tensor * unary = cgraph->nodes[unary_idx];
+    ggml_tensor * found = nullptr;
+    for (int i = unary_idx + 1; i < cgraph->n_nodes; ++i) {
+        ggml_tensor * n = cgraph->nodes[i];
+        if (n->src[0] != unary && n->src[1] != unary) {
+            continue;
+        }
+        if (n->op != GGML_OP_MUL || found != nullptr) {
+            return nullptr;
+        }
+        found = n;
+    }
+    return found;
+}
+
+static void ggml_vk_unary_mul(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * unary, ggml_tensor * mul) {
+    const ggml_tensor * unary_src = unary->src[0];
+    const ggml_tensor * other = (mul->src[0] == unary) ? mul->src[1] : mul->src[0];
+    ggml_vk_mul(ctx, subctx, other, unary_src, mul, ggml_vk_unary_mul_act(unary));
 }
 
 static void ggml_vk_div(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
@@ -15354,6 +15414,11 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgr
     case GGML_OP_MUL:
         if (ctx->num_additional_fused_ops) {
             ggml_vk_snake_dispatch_fused(ctx, compute_ctx, cgraph, node_idx);
+        } else if (ctx->pending_unary_mul &&
+                   (src0 == ctx->pending_unary_mul || src1 == ctx->pending_unary_mul) &&
+                   ggml_vk_should_fuse_unary_mul(ctx->pending_unary_mul, node)) {
+            ggml_vk_unary_mul(ctx, compute_ctx, ctx->pending_unary_mul, node);
+            ctx->pending_unary_mul = nullptr;
         } else {
             ggml_vk_mul(ctx, compute_ctx, src0, src1, node);
         }
@@ -15468,6 +15533,20 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgr
         if (ctx->fused_topk_moe_mode != TOPK_MOE_COUNT) {
             ggml_vk_topk_moe(ctx, compute_ctx, cgraph, node_idx);
             break;
+        }
+        if (ctx->num_additional_fused_ops) {
+            ggml_vk_unary_mul(ctx, compute_ctx, node, cgraph->nodes[node_idx + 1]);
+            break;
+        }
+        if (!ctx->device->disable_fusion) {
+            ggml_tensor * consumer = ggml_vk_find_unary_mul_consumer(cgraph, node_idx);
+            // skip if the MUL is the next node: adjacent fuse already ran (or was disabled)
+            if (consumer &&
+                (node_idx + 1 >= cgraph->n_nodes || consumer != cgraph->nodes[node_idx + 1]) &&
+                ggml_vk_should_fuse_unary_mul(node, consumer)) {
+                ctx->pending_unary_mul = node;
+                break;
+            }
         }
 
         switch (ggml_get_unary_op(node)) {
@@ -16432,6 +16511,12 @@ static bool ggml_vk_can_fuse(const ggml_backend_vk_context * ctx, const struct g
             return false;
         }
     }
+
+    if (ops.size() == 2 && ops.begin()[0] == GGML_OP_UNARY && ops.begin()[1] == GGML_OP_MUL) {
+        if (!ggml_vk_should_fuse_unary_mul(cgraph->nodes[node_idx], cgraph->nodes[node_idx + 1])) {
+            return false;
+        }
+    }
     auto const &mm_add_ok = [&](const ggml_tensor *mul, const ggml_tensor *add) {
         const ggml_tensor *bias = add->src[0] == mul ? add->src[1] : add->src[0];
 
@@ -16963,6 +17048,7 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
     ctx->prealloc_size_add_rms_partials_offset = 0;
     ctx->do_add_rms_partials = false;
     ctx->do_add_rms_partials_offset_calculation = false;
+    ctx->pending_unary_mul = nullptr;
 
     int last_node = cgraph->n_nodes - 1;
 
@@ -17161,6 +17247,16 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
                 fusion_string = "RMS_NORM_MUL";
                 // rms_norm is not elementwise, but whole rows must be consumed and the scale factor computed before
                 // they are overwritten, and one workgroup per row. So close enough.
+                op_srcs_fused_elementwise[0] = true;
+                op_srcs_fused_elementwise[1] = true;
+            } else if (ggml_vk_can_fuse(ctx, cgraph, i, { GGML_OP_UNARY, GGML_OP_MUL })) {
+                ctx->num_additional_fused_ops = 1;
+                switch (ggml_get_unary_op(cgraph->nodes[i])) {
+                    case GGML_UNARY_OP_SIGMOID:  fusion_string = "SIGMOID_MUL";  break;
+                    case GGML_UNARY_OP_SILU:     fusion_string = "SILU_MUL";     break;
+                    case GGML_UNARY_OP_SOFTPLUS: fusion_string = "SOFTPLUS_MUL"; break;
+                    default:                     fusion_string = "UNARY_MUL";    break;
+                }
                 op_srcs_fused_elementwise[0] = true;
                 op_srcs_fused_elementwise[1] = true;
             } else if (ggml_vk_can_fuse_ssm_conv(ctx, cgraph, i, 2)) {
@@ -17495,6 +17591,48 @@ static void ggml_vk_graph_optimize(ggml_backend_t backend, struct ggml_cgraph * 
         // First, grab the next unused node.
         current_set.push_back(first_unused);
 
+        auto const &try_pull_unary_mul = [&](int unary_idx) {
+            ggml_tensor * unary = graph->nodes[unary_idx];
+            if (unary->op != GGML_OP_UNARY) {
+                return;
+            }
+            const ggml_unary_op uop = ggml_get_unary_op(unary);
+            if (uop != GGML_UNARY_OP_SIGMOID && uop != GGML_UNARY_OP_SILU && uop != GGML_UNARY_OP_SOFTPLUS) {
+                return;
+            }
+            for (int k = unary_idx + 1; k < std::min(unary_idx + 15, graph->n_nodes); ++k) {
+                if (used[k]) {
+                    continue;
+                }
+                if (std::find(current_set.begin(), current_set.end(), k) != current_set.end()) {
+                    return;
+                }
+                ggml_tensor * n = graph->nodes[k];
+                if (n->op != GGML_OP_MUL || (n->src[0] != unary && n->src[1] != unary)) {
+                    continue;
+                }
+                ggml_tensor * other = (n->src[0] == unary) ? n->src[1] : n->src[0];
+                if (other && other->op != GGML_OP_NONE &&
+                    used_node_set.find(other) == used_node_set.end()) {
+                    bool other_in_set = false;
+                    for (int idx : current_set) {
+                        if (graph->nodes[idx] == other) {
+                            other_in_set = true;
+                            break;
+                        }
+                    }
+                    if (!other_in_set) {
+                        continue;
+                    }
+                }
+                current_set.push_back(k);
+                used[k] = true;
+                return;
+            }
+        };
+
+        try_pull_unary_mul(first_unused);
+
         // Loop through the next N nodes. Grab any that don't depend on other nodes that
         // haven't already been run. Nodes that have already been run have used[i] set
         // to true. Allow nodes that depend on the previous node if it's a fusion pattern
@@ -17523,6 +17661,7 @@ static void ggml_vk_graph_optimize(ggml_backend_t backend, struct ggml_cgraph * 
                 if (!used[c] &&
                     is_src_of(graph->nodes[j], graph->nodes[c]) &&
                     !(j == c+1 && c == current_set.back() && graph->nodes[c]->op == GGML_OP_RMS_NORM && graph->nodes[j]->op == GGML_OP_MUL) &&
+                    !(j == c+1 && c == current_set.back() && graph->nodes[c]->op == GGML_OP_UNARY && graph->nodes[j]->op == GGML_OP_MUL) &&
                     !(j == c+1 && c == current_set.back() && graph->nodes[c]->op == GGML_OP_MUL_MAT && graph->nodes[j]->op == GGML_OP_ADD) &&
                     !(j == c+1 && c == current_set.back() && graph->nodes[c]->op == GGML_OP_MUL_MAT_ID && graph->nodes[j]->op == GGML_OP_ADD_ID) &&
                     !(j == c+1 && c == current_set.back() && graph->nodes[c]->op == GGML_OP_MUL_MAT_ID && graph->nodes[j]->op == GGML_OP_MUL) &&
@@ -17535,6 +17674,7 @@ static void ggml_vk_graph_optimize(ggml_backend_t backend, struct ggml_cgraph * 
             }
             if (ok) {
                 current_set.push_back(j);
+                try_pull_unary_mul(j);
 
                 int rope_idx = j;
 
