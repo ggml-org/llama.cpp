@@ -71,6 +71,26 @@ if git ls-remote --tags origin "${VERSION}" | grep -q "${VERSION}"; then
 fi
 echo "Tag ${VERSION} does not exist on remote - OK"
 
+echo "Checking release.yml status for commit ${SHA}..."
+if [[ -z "${GITHUB_REPOSITORY:-}" ]]; then
+    echo "Warning: GITHUB_REPOSITORY not set - skipping CI check (local run)"
+else
+    RUNS=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/release.yml/runs?per_page=100" \
+        --jq "[.workflow_runs[] | select(.head_sha == \"${SHA}\" and .conclusion == \"success\")] | length")
+    if [[ "$RUNS" -eq 0 ]]; then
+        if [[ "$DRY_RUN" == "true" ]]; then
+            echo "Warning: no successful release.yml run found for HEAD (${SHA}) (dry run, continuing)."
+            CHECKS_PASSED=false
+        else
+            echo "Error: no successful release.yml run found for HEAD (${SHA})"
+            echo "The nightly build must complete successfully before making a release."
+            exit 1
+        fi
+    else
+        echo "Found successful release.yml run for HEAD."
+    fi
+fi
+
 MAJOR=$(grep "set(GGML_VERSION_MAJOR" "$REPO_ROOT/ggml/CMakeLists.txt" | grep -oP '\d+')
 MINOR=$(grep "set(GGML_VERSION_MINOR" "$REPO_ROOT/ggml/CMakeLists.txt" | grep -oP '\d+')
 PATCH=$(grep "set(GGML_VERSION_PATCH" "$REPO_ROOT/ggml/CMakeLists.txt" | grep -oP '\d+')
