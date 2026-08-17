@@ -13,6 +13,7 @@ from .base import ModelBase, TextModel, gguf, logger
 
 
 @ModelBase.register("QWenLMHeadModel")
+@ModelBase.example("Qwen/Qwen-7B")
 class QwenModel(TextModel):
     model_arch = gguf.MODEL_ARCH.QWEN
 
@@ -51,6 +52,7 @@ class QwenModel(TextModel):
     "AudioFlamingo3ForConditionalGeneration",
     "DotsOCRForCausalLM",
 )
+@ModelBase.example("Qwen/Qwen2.5-7B-Instruct")
 class Qwen2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.QWEN2
 
@@ -71,6 +73,7 @@ class Qwen2Model(TextModel):
 
 
 @ModelBase.register("Qwen2MoeForCausalLM")
+@ModelBase.example("Qwen/Qwen1.5-MoE-A2.7B")
 class Qwen2MoeModel(TextModel):
     model_arch = gguf.MODEL_ARCH.QWEN2MOE
 
@@ -153,6 +156,7 @@ class Qwen2MoeModel(TextModel):
 
 
 @ModelBase.register("Qwen3ForCausalLM", "Qwen3Model")
+@ModelBase.example("Qwen/Qwen3-8B")
 class Qwen3Model(Qwen2Model):
     model_arch = gguf.MODEL_ARCH.QWEN3
 
@@ -251,6 +255,7 @@ class Qwen3Model(Qwen2Model):
 
 
 @ModelBase.register("Qwen3MoeForCausalLM")
+@ModelBase.example("Qwen/Qwen3-30B-A3B")
 class Qwen3MoeModel(Qwen2MoeModel):
     model_arch = gguf.MODEL_ARCH.QWEN3MOE
 
@@ -362,6 +367,7 @@ class _QwenMtpMixin:
 
 
 @ModelBase.register("Qwen3NextForCausalLM")
+@ModelBase.example("Qwen/Qwen3-Next-80B-A3B-Instruct")
 class Qwen3NextModel(_QwenMtpMixin, Qwen2MoeModel):
     model_arch = gguf.MODEL_ARCH.QWEN3NEXT
 
@@ -421,6 +427,7 @@ class Qwen3NextModel(_QwenMtpMixin, Qwen2MoeModel):
 
 
 @ModelBase.register("RND1")
+@ModelBase.example("radicalnumerics/RND1-Base-0910")
 class RND1Model(Qwen2MoeModel):
     model_arch = gguf.MODEL_ARCH.RND1
 
@@ -620,16 +627,19 @@ class _Qwen35MRopeMixin:
 
 
 @ModelBase.register("Qwen3_5ForConditionalGeneration", "Qwen3_5ForCausalLM")
+@ModelBase.example("Qwen/Qwen3.5-9B")
 class Qwen3_5TextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
     model_arch = gguf.MODEL_ARCH.QWEN35
 
 
 @ModelBase.register("Qwen3_5MoeForConditionalGeneration", "Qwen3_5MoeForCausalLM")
+@ModelBase.example("Qwen/Qwen3.5-35B-A3B")
 class Qwen3_5MoeTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
     model_arch = gguf.MODEL_ARCH.QWEN35MOE
 
 
 @ModelBase.register("DFlashDraftModel")
+@ModelBase.example("z-lab/Qwen3.5-9B-DFlash")
 class DFlashModel(Qwen3Model):
     model_arch = gguf.MODEL_ARCH.DFLASH
 
@@ -699,6 +709,7 @@ class DFlashModel(Qwen3Model):
 
 
 @ModelBase.register("Qwen3DSparkModel")
+@ModelBase.example("satgeze/Qwen3.6-27B-DSpark")
 class DSparkModel(DFlashModel):
     # DSpark = DFlash + a semi-autoregressive Markov head
     model_arch = gguf.MODEL_ARCH.DFLASH

@@ -77,6 +77,7 @@ def _load_hparams(dir_model: Path) -> dict[str, Any]:
 
 
 @ModelBase.register("PocketTTSModel")
+@ModelBase.example("kyutai/pocket-tts")
 class PocketTTSModel(TextModel):
     model_arch = gguf.MODEL_ARCH.POCKETTTS
 
@@ -174,6 +175,7 @@ class PocketTTSModel(TextModel):
 
 
 @ModelBase.register("PocketTTSModel")
+@ModelBase.example("kyutai/pocket-tts")
 class PocketTTSMmprojModel(MmprojModel):
     has_audio_encoder = True
     has_vision_encoder = False
