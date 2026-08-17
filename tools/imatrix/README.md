@@ -90,7 +90,7 @@ Statistical properties of a single tensor's average activation or activation ene
   - The sum of squares of activations (Energy) for the tensor. Tensors with high "energy" contribute most to the final output. Quantization errors here propagate strongly. These tensors usually need higher precision.
 
 #### Intra-layer
-These statistics compare identical tensor between the current layer $L$ and the previsou layer $L-1$ (e.g., `blk.1.attn_v` vs `blk.0.attn_v`).
+These statistics compare the same tensor between the current layer $L$ and the nearest previous layer that also has it (e.g., `blk.1.attn_v` vs `blk.0.attn_v`). That is usually $L-1$, but a model that does not carry every tensor in every layer can pair across a gap.
 
 * **Gain**: $G = \frac{\sqrt{\sum C_i^2 / N_{curr}}}{\sqrt{\sum P_i^2 / N_{prev}}}$
   - Indicates if a layer acts as an "amplifier" ($G > 1$) or a "dampener" ($G < 1$).
@@ -105,12 +105,14 @@ These statistics compare identical tensor between the current layer $L$ and the 
 Aggregated metrics per block/layer:
 
 * **∑ E[A²]:** Total energy of the layer's concatenated tensors. Indicates the layer's overall contribution amplitude.
-* **Gain**: Indicates if a layer acts as an "amplifier" ($G > 1$) or a "dampener" ($G < 1$).
+* **Gain**: $G_{Layer} = \frac{\sqrt{\sum_{\text{tensors}} \text{Energy}_{curr} / \sum_{\text{tensors}} N_{curr}}}{\sqrt{\sum_{\text{tensors}} \text{Energy}_{prev} / \sum_{\text{tensors}} N_{prev}}}$
+  - Indicates if a layer acts as an "amplifier" ($G > 1$) or a "dampener" ($G < 1$). Only tensors that have a match in a previous layer are counted, and both sides of the ratio use that same set of tensors.
 * **L₂ Distance:** Euclidean Distance of the layer's concatenated tensors from the previous layer’s. Global measure of transformation magnitude.
 * **CosSim**: $\text{CosSim}_{Layer} = \frac{\sum_{\text{tensors}} (\text{Dot Prod})}{\sqrt{\sum_{\text{tensors}} (\text{Norm1}^2)} \sqrt{\sum_{\text{tensors}} (\text{Norm2}^2)}}$
   - Cosine Similarity of the current layer's concatenated tensors with the previous layer.
-* **PCC**: $\text{PCC}_{Layer} = \frac{\sum \text{Covariance}^2}{\sqrt{\sum \text{Var}_{curr}} \sqrt{\sum \text{Var}_{prev}}}$
-  - Average Pearson Correlation of the tensors in the layer.
-* **Cov**: The **unnormalized covariance** between current layer's concatenated tensors and the previous layer.
+* **PCC**: $\text{PCC}_{Layer} = \frac{\sum_{\text{tensors}} (\text{Cov})}{\sqrt{\sum_{\text{tensors}} (\text{Var}_{curr})} \sqrt{\sum_{\text{tensors}} (\text{Var}_{prev})}}$
+  - Pooled Pearson Correlation over the tensors in the layer.
+* **Cov**: $\text{Cov}_{Layer} = \frac{\sum_{\text{tensors}} (\text{Cov})}{\sum_{\text{tensors}} N}$, where $N$ is the number of elements with data in both layers.
+  - The **unnormalized covariance** between the current layer's tensors and the previous layer's.
 
 More information is available in https://github.com/ggml-org/llama.cpp/pull/14891
