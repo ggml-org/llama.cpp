@@ -54,9 +54,9 @@ export const SETTINGS_KEYS = {
 	SHOW_FULL_PATH_IN_MENTIONS: 'showFullPathInMentions',
 	// Display
 	SHOW_MESSAGE_STATS: 'showMessageStats',
+	SHOW_MODEL_ORG_NAME_IN_TRIGGER: 'showModelOrgNameInTrigger',
 	SHOW_MODEL_QUANTIZATION: 'showModelQuantization',
 	SHOW_MODEL_TAGS: 'showModelTags',
-	SHOW_MODEL_ORG_NAME_IN_TRIGGER: 'showModelOrgNameInTrigger',
 	SHOW_RAW_MODEL_NAMES: 'showRawModelNames',
 	SHOW_RAW_OUTPUT_SWITCH: 'showRawOutputSwitch',
 	SHOW_SYSTEM_MESSAGE: 'showSystemMessage',
