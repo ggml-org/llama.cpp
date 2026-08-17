@@ -233,6 +233,9 @@ MTMD_API llama_pos                  mtmd_input_chunk_get_n_pos       (const mtmd
 MTMD_API mtmd_input_chunk * mtmd_input_chunk_copy(const mtmd_input_chunk * chunk);
 MTMD_API void               mtmd_input_chunk_free(mtmd_input_chunk * chunk);
 
+// similar to mtmd_input_chunk_copy, but returns a placeholder chunk
+MTMD_API mtmd_input_chunk * mtmd_input_chunk_get_placeholder(const mtmd_input_chunk * chunk);
+
 // save/load an input chunk to/from a buffer (useful for KV save/load)
 // important: only chunk's metadata will be saved, the actual image/audio data will not be saved
 // the loaded chunk will always be a placeholder, cannot be used for mtmd_encode() or mtmd_batch_encode()

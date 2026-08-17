@@ -3416,7 +3416,8 @@ private:
                         // add the mtmd chunk to cache
                         {
                             const auto & chunk = input_tokens.find_chunk(cur_token_idx);
-                            slot.prompt.tokens.push_back(chunk.get()); // copy
+                            // the chunk is already in the KV cache at this point, so we don't need to keep its data around
+                            slot.prompt.tokens.push_back_placeholder(chunk.get());
                         }
 
                         has_mtmd = true;
