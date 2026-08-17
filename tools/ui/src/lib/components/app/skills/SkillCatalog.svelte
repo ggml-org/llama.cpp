@@ -109,7 +109,7 @@
 		sizes = normalizePaneSizes(persistedPaneSizes.value);
 	});
 
-	// Dismissed catalog diagnostics and budget status; reset on catalog reload.
+	// Reset dismissals when the catalog reloads.
 	let diagnosticsDismissed = $state(false);
 	let budgetDismissed = $state(false);
 
@@ -124,9 +124,7 @@
 	}
 
 	function rememberPaneSize(index: 0 | 1, size: number) {
-		// The pane group layout always sums to 100; derive the sibling instead
-		// of reusing the stale `sizes` entry, or the recomputed default sizes
-		// diverge from the live layout and the group rebuilds from them.
+		// Derive the sibling so persisted sizes match the live layout.
 		const next = index === 0 ? [size, 100 - size] : [100 - size, size];
 		const normalized = normalizePaneSizes(next);
 
@@ -135,7 +133,7 @@
 		if (persistedPaneSizes) persistedPaneSizes.value = normalized;
 	}
 
-	// Clear the selection and dismissed state on CWD change.
+	// Reset selection and dismissals when the CWD changes.
 	$effect(() => {
 		void cwd;
 		selectedEntry = null;
@@ -158,10 +156,10 @@
 		error instanceof Error ? error.message : 'The catalog could not be loaded.'
 	);
 
-	// Full width only for a selected desktop catalog; keep the centered column otherwise.
+	// Expand the workspace for a selected desktop entry.
 	const isDesktopWorkspace = $derived(status === 'ready' && selectedEntry !== null && !mobile);
 
-	// Pack the loaded catalog content; local availability changes do not alter it.
+	// Pack the loaded catalog; availability changes do not affect it.
 	let packed = $state<SkillPackedCatalog | null>(null);
 	let packState = $state<'idle' | 'packing' | 'error'>('idle');
 	let packError = $state<unknown>(null);
@@ -198,7 +196,7 @@
 
 		SkillsPackingService.pack(snapshot, { budget, ...packOptions, signal: controller.signal })
 			.then((result) => {
-				// A superseded pack can settle via the estimate fallback; drop it.
+				// Ignore an aborted pack that finished through estimation.
 				if (controller.signal.aborted) return;
 
 				packed = result;
@@ -214,6 +212,17 @@
 		return () => controller.abort();
 	});
 </script>
+
+{#snippet catalogList(open: boolean)}
+	<SkillCatalogList
+		entries={catalog?.skills ?? []}
+		{selectedId}
+		{open}
+		onSelect={handleSelect}
+		isDisabled={(id) => skillAvailabilityStore.isDisabled(id)}
+		onEnabledChange={(entry, enabled) => skillAvailabilityStore.setEnabled(entry.id, enabled)}
+	/>
+{/snippet}
 
 <StandalonePageShell
 	icon={BookOpen}
@@ -312,10 +321,16 @@
 										<span class="mr-2">Scope: {diagnostic.scope}</span>
 									{/if}
 									{#if diagnostic.provider}
-										<span class="mr-2">Provider: <SkillProviderLabel provider={diagnostic.provider} /></span>
+										<span class="mr-2"
+											>Provider: <SkillProviderLabel provider={diagnostic.provider} /></span
+										>
 									{/if}
 									{#if diagnostic.providers && diagnostic.providers.length > 0}
-										<span class="mr-2">Providers: {#each diagnostic.providers as provider, index (provider)}{#if index > 0}<span>,&#32;</span>{/if}<SkillProviderLabel provider={provider} />{/each}</span>
+										<span class="mr-2"
+											>Providers: {#each diagnostic.providers as provider, index (provider)}{#if index > 0}<span
+														>,&#32;</span
+													>{/if}<SkillProviderLabel {provider} />{/each}</span
+										>
 									{/if}
 									{diagnostic.message}
 								</span>
@@ -336,14 +351,7 @@
 				{#if selectedEntry}
 					<SkillDetail entry={selectedEntry} {cwd} onClose={closeDetail} mobile />
 				{:else}
-					<SkillCatalogList
-						entries={catalog?.skills ?? []}
-						{selectedId}
-						open={selectedEntry !== null}
-						onSelect={handleSelect}
-						isDisabled={(id) => skillAvailabilityStore.isDisabled(id)}
-						onEnabledChange={(entry, enabled) => skillAvailabilityStore.setEnabled(entry.id, enabled)}
-					/>
+					{@render catalogList(selectedEntry !== null)}
 				{/if}
 			{:else}
 				{#if selectedEntry}
@@ -354,15 +362,7 @@
 							onResize={(size) => rememberPaneSize(0, size)}
 						>
 							<div class="h-full" in:fly|global={{ duration: 200, opacity: 1, x: 200 }}>
-								<SkillCatalogList
-									entries={catalog?.skills ?? []}
-									{selectedId}
-									open={true}
-									onSelect={handleSelect}
-									isDisabled={(id) => skillAvailabilityStore.isDisabled(id)}
-									onEnabledChange={(entry, enabled) =>
-										skillAvailabilityStore.setEnabled(entry.id, enabled)}
-								/>
+								{@render catalogList(true)}
 							</div>
 						</Resizable.Pane>
 
@@ -377,14 +377,7 @@
 						</Resizable.Pane>
 					</Resizable.PaneGroup>
 				{:else}
-					<SkillCatalogList
-						entries={catalog?.skills ?? []}
-						{selectedId}
-						open={selectedEntry !== null}
-						onSelect={handleSelect}
-						isDisabled={(id) => skillAvailabilityStore.isDisabled(id)}
-						onEnabledChange={(entry, enabled) => skillAvailabilityStore.setEnabled(entry.id, enabled)}
-					/>
+					{@render catalogList(selectedEntry !== null)}
 				{/if}
 			{/if}
 		{/if}

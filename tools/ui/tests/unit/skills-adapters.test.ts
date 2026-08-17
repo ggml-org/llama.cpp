@@ -117,12 +117,7 @@ function defaultPermission(): PermissionMock {
 	return mock;
 }
 
-/**
- * Minimal durable-store double recording every activation input. Mirrors the
- * real store's contract: a base read with an unactivated identity creates a
- * record and returns the persisted tool result message; everything else
- * dedupes or is session-only.
- */
+/** Minimal durable-store double for activation routing tests. */
 function fakeStore(): SkillActivationStore & {
 	inputs: SkillActivationInput[];
 	activatedIds: Set<string>;
@@ -730,9 +725,7 @@ describe('SkillRunAdapters', () => {
 
 		expect(requestPermission).not.toHaveBeenCalled();
 
-		// The same skill name now resolves to a different opaque id (the
-		// server resolved it under the changed CWD): the durable activation
-		// of A does not authorize B, so B requires its own approval.
+		// A changed CWD resolves a different identity and needs consent.
 		const result = await adaptersB.execute(readCall(SKILL_READ_TOOL), new AbortController().signal);
 
 		expect(requestPermission).toHaveBeenCalledTimes(1);

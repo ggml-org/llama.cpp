@@ -1,13 +1,5 @@
 <script lang="ts" generics="TMeta">
-	// Generic chrome shell shared by every per-tool block under
-	// `ChatMessageToolCall/`. Owns:
-	//   - the collapsible wrapper (defaults to CollapsibleContentBlock;
-	//     `exec_shell_command` swaps in CollapsibleTerminalBlock via the
-	//     `wrapper` prop);
-	//   - the icon, spinner state, and MCP favicon fallback chain;
-	//   - the status subtitle pill.
-	// Components supply only their `meta`, a title snippet, and a body
-	// snippet - everything around them is this single source of truth.
+	// Shared tool-call chrome; child blocks provide metadata and body content.
 
 	import { Loader2, Wrench } from '@lucide/svelte';
 	import { CollapsibleContentBlock } from '$lib/components/app';
@@ -31,37 +23,15 @@
 		section: AgenticSection;
 		open: boolean;
 		isStreaming: boolean;
-		/**
-		 * The per-tool meta, including any `errorMessage` field that the
-		 * shared chrome uses to compute the status pill subtitle.
-		 */
+		/** Tool metadata used for the status subtitle. */
 		meta: ToolCallBlockMetaWithError | null | undefined;
-		/**
-		 * True while the tool's process is actively producing output
-		 * chunks after its args finished streaming (used by
-		 * `exec_shell_command`'s stdout feed).
-		 */
+		/** True while tool output continues after argument streaming. */
 		extraLiveStreaming?: boolean;
-		/**
-		 * Optional renderer-supplied icon. When present it wins over the
-		 * built-in registry icon for the tool, but never over the spinner
-		 * while `spinIconWhenActive && showSpinner` is active.
-		 */
+		/** Renderer icon, overridden by the active spinner when configured. */
 		icon?: Component;
-		/**
-		 * Swap the title-row icon for a spinning `Loader2` while the
-		 * spinner is showing. Only meaningful for tools where "live"
-		 * is interesting (e.g. exec_shell_command showing the in-flight
-		 * process). Other tools leave it off and render the spinner
-		 * inline within the body.
-		 */
+		/** Replace the title-row icon with a spinner while active. */
 		spinIconWhenActive?: boolean;
-		/**
-		 * Wrapper component that renders the title row and the body
-		 * children. Defaults to CollapsibleContentBlock;
-		 * `exec_shell_command` uses CollapsibleTerminalBlock for its
-		 * terminal-style frame.
-		 */
+		/** Wrapper for the title row and body content. */
 		wrapper?: typeof CollapsibleContentBlock;
 		title?: string;
 		titleSnippet?: Snippet;

@@ -1,26 +1,14 @@
-// Guards the startup Skills navigation gate: the sidebar keeps the Skills
-// entry hidden while availability is unknown/loading, shows it after a
-// successful catalog probe, keeps it hidden for a confirmed 404 (disabled),
-// and keeps it visible for every other failure so the route stays reachable
-// with retry. The probe uses the active conversation CWD, then the pending
-// CWD, then no header. Ordinary sidebar actions never reorder.
-//
-// The one-request contract (sidebar probe + route initial load share a single
-// catalog request per CWD, while Retry forces a new one) is guarded in the
-// unit refresh-controller suite, which drives the same store entry.
-//
-// Guards the Skills-only group in the Chat tool settings tab: both
-// model-facing adapters render as independent persisted Enabled toggles from
-// the centralized Skills settings registry; the group is gated on availability
-// (shown for `available`, `loading`, and retryable `error`, hidden only for a
-// confirmed 404 `disabled`); the tab issues no catalog request of its own; and
-// no generic Always allow control appears for Skills rows - Skills consent
-// stays per resolved skill identity during execution. Generic groups keep
-// their existing Enabled/Always allow flow untouched.
+// Guards Skills navigation, availability probing, and settings-tool visibility.
 
 import SidebarNavigationActions from '../../src/lib/components/app/navigation/SidebarNavigation/SidebarNavigationActions.svelte';
 import SettingsChatToolsTab from '../../src/lib/components/app/settings/SettingsChat/SettingsChatToolsTab.svelte';
-import { DISABLED_SKILL_IDS_LOCALSTORAGE_KEY, DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY, SKILL_LIST_TOOL, SKILL_READ_TOOL, SKILL_SERVER_LABEL } from '$lib/constants';
+import {
+	DISABLED_SKILL_IDS_LOCALSTORAGE_KEY,
+	DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY,
+	SKILL_LIST_TOOL,
+	SKILL_READ_TOOL,
+	SKILL_SERVER_LABEL
+} from '$lib/constants';
 import { conversationsStore } from '$lib/stores/conversations.svelte';
 import { SkillAvailabilityStore } from '$lib/stores/skill-availability.svelte';
 import { skillsStore } from '$lib/stores/skills.svelte';
@@ -212,10 +200,7 @@ describe('SkillAvailabilityStore persistence', () => {
 			const store = new SkillAvailabilityStore();
 
 			expect(store.disabledIds.size, `shape ${serialized}`).toBe(0);
-			expect(
-				store.enabledEntries([storeCatalogEntry('entry-a', 'Alpha')]),
-				`shape ${serialized}`
-			).toEqual([storeCatalogEntry('entry-a', 'Alpha')]);
+			expect(store.isDisabled('entry-a'), `shape ${serialized}`).toBe(false);
 		}
 	});
 
@@ -225,16 +210,16 @@ describe('SkillAvailabilityStore persistence', () => {
 		store.setEnabled('opaque-id-1', false);
 
 		expect(store.isDisabled('opaque-id-1')).toBe(true);
-		expect(JSON.parse(storageFixture.state.get(DISABLED_SKILL_IDS_LOCALSTORAGE_KEY) ?? '[]')).toEqual([
-			'opaque-id-1'
-		]);
+		expect(
+			JSON.parse(storageFixture.state.get(DISABLED_SKILL_IDS_LOCALSTORAGE_KEY) ?? '[]')
+		).toEqual(['opaque-id-1']);
 
 		store.setEnabled('opaque-id-1', true);
 
 		expect(store.isDisabled('opaque-id-1')).toBe(false);
-		expect(JSON.parse(storageFixture.state.get(DISABLED_SKILL_IDS_LOCALSTORAGE_KEY) ?? '[]')).toEqual(
-			[]
-		);
+		expect(
+			JSON.parse(storageFixture.state.get(DISABLED_SKILL_IDS_LOCALSTORAGE_KEY) ?? '[]')
+		).toEqual([]);
 	});
 
 	it('keeps same-name entries with different IDs independent', () => {
@@ -246,9 +231,9 @@ describe('SkillAvailabilityStore persistence', () => {
 
 		expect(store.isDisabled('id-shared-a')).toBe(false);
 		expect(store.isDisabled('id-shared-b')).toBe(true);
-		expect(JSON.parse(storageFixture.state.get(DISABLED_SKILL_IDS_LOCALSTORAGE_KEY) ?? '[]')).toEqual([
-			'id-shared-b'
-		]);
+		expect(
+			JSON.parse(storageFixture.state.get(DISABLED_SKILL_IDS_LOCALSTORAGE_KEY) ?? '[]')
+		).toEqual(['id-shared-b']);
 	});
 
 	it('leaves unknown stored IDs harmlessly persisted', () => {
@@ -260,47 +245,14 @@ describe('SkillAvailabilityStore persistence', () => {
 		const store = new SkillAvailabilityStore();
 
 		store.setEnabled('known-id', true);
-		expect(JSON.parse(storageFixture.state.get(DISABLED_SKILL_IDS_LOCALSTORAGE_KEY) ?? '[]')).toEqual([
-			'mystery-id'
-		]);
+		expect(
+			JSON.parse(storageFixture.state.get(DISABLED_SKILL_IDS_LOCALSTORAGE_KEY) ?? '[]')
+		).toEqual(['mystery-id']);
 
 		store.setEnabled('other-id', false);
-		expect(JSON.parse(storageFixture.state.get(DISABLED_SKILL_IDS_LOCALSTORAGE_KEY) ?? '[]')).toEqual([
-			'mystery-id',
-			'other-id'
-		]);
-	});
-});
-
-describe('SkillAvailabilityStore enabledEntries', () => {
-	it('returns the original entries reference when nothing is disabled, preserving server order', () => {
-		const entries: readonly SkillCatalogEntry[] = [
-			storeCatalogEntry('id-z', 'Zulu'),
-			storeCatalogEntry('id-a', 'Alpha'),
-			storeCatalogEntry('id-m', 'Mike')
-		];
-
-		const store = new SkillAvailabilityStore();
-
-		const result = store.enabledEntries(entries);
-
-		expect(result).toBe(entries);
-		expect(result.map((e) => e.id)).toEqual(['id-z', 'id-a', 'id-m']);
-	});
-
-	it('filters disabled entries while preserving server order', () => {
-		const entries: readonly SkillCatalogEntry[] = [
-			storeCatalogEntry('id-z', 'Zulu'),
-			storeCatalogEntry('id-a', 'Alpha'),
-			storeCatalogEntry('id-m', 'Mike')
-		];
-
-		const store = new SkillAvailabilityStore();
-		store.setEnabled('id-a', false);
-
-		const result = store.enabledEntries(entries);
-
-		expect(result.map((e) => e.id)).toEqual(['id-z', 'id-m']);
+		expect(
+			JSON.parse(storageFixture.state.get(DISABLED_SKILL_IDS_LOCALSTORAGE_KEY) ?? '[]')
+		).toEqual(['mystery-id', 'other-id']);
 	});
 });
 

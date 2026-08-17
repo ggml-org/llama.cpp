@@ -235,8 +235,7 @@ describe('skillsStore', () => {
 			skillsStore.invalidate(cwd);
 		}
 
-		// Reset the singleton probe gate so the initial-unknown assertion is
-		// independent of test order. Test-only: no production reset exists.
+		// Reset the probe gate so this test is order-independent.
 		const store = skillsStore as unknown as {
 			_availability: SkillAvailability;
 			_probeGeneration: number;
@@ -327,9 +326,7 @@ describe('skillsStore', () => {
 	it('applies the current disabled set to the freshly fetched catalog snapshot', async () => {
 		vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(makeCatalog('run', 'manual'))));
 
-		// Gate the opaque ID the run's own request resolves; keying by the
-		// freshly fetched catalog proves the snapshot reads the current
-		// disabled set rather than any stale screen slot.
+		// Snapshot filtering uses the freshly fetched catalog IDs.
 		skillAvailabilityStore.setEnabled('opaque-manual', false);
 
 		try {

@@ -18,19 +18,28 @@
 		onSelect: (path: string) => void;
 	}
 
-	let { paths, resourceCount, resourcesTruncated, selectedPath, unavailablePaths, onSelect }: Props = $props();
+	let {
+		paths,
+		resourceCount,
+		resourcesTruncated,
+		selectedPath,
+		unavailablePaths,
+		onSelect
+	}: Props = $props();
 	let open = $state(false);
 	let expandedPaths = $state<ReadonlySet<string>>(new Set());
 	let rowButtons = $state<HTMLButtonElement[]>([]);
 
 	const tree = $derived([createSkillRootNode(), ...buildSkillResourceTree(paths)]);
 	const rows = $derived(flattenSkillResourceTree(tree, expandedPaths));
-	const selectedNode = $derived(rows.find((row) => row.node.path === selectedPath)?.node ?? tree[0]);
+	const selectedNode = $derived(
+		rows.find((row) => row.node.path === selectedPath)?.node ?? tree[0]
+	);
 	const hasResources = $derived(paths.length > 0);
 
 	$effect(() => {
-		void paths;
-		expandedPaths = getInitialExpandedFolderPaths(buildSkillResourceTree(paths));
+		void tree;
+		expandedPaths = getInitialExpandedFolderPaths(tree);
 	});
 
 	function closeAndRestoreFocus() {
@@ -48,7 +57,8 @@
 	}
 
 	function selectFile(node: SkillResourceTreeNode) {
-		if (node.kind !== 'file' || node.format === 'unsupported' || unavailablePaths.has(node.path)) return;
+		if (node.kind !== 'file' || node.format === 'unsupported' || unavailablePaths.has(node.path))
+			return;
 
 		onSelect(node.path);
 		closeAndRestoreFocus();
@@ -106,7 +116,7 @@
 	}
 </script>
 
-<Popover.Root open={open} onOpenChange={(nextOpen) => (open = nextOpen && hasResources)}>
+<Popover.Root {open} onOpenChange={(nextOpen) => (open = nextOpen && hasResources)}>
 	<Popover.Trigger
 		id="skill-resource-picker-trigger"
 		data-testid="skill-resource-picker-trigger"
@@ -119,15 +129,24 @@
 
 	<Popover.Content class="w-80 p-1" align="start">
 		{#if hasResources}
-			<div role="tree" aria-label="Skill resources" data-testid="skill-resource-picker-tree" class="max-h-80 overflow-y-auto py-1">
+			<div
+				role="tree"
+				aria-label="Skill resources"
+				data-testid="skill-resource-picker-tree"
+				class="max-h-80 overflow-y-auto py-1"
+			>
 				{#each rows as row, index (row.node.path)}
-					{@const unavailable = row.node.kind === 'file' && (row.node.format === 'unsupported' || unavailablePaths.has(row.node.path))}
+					{@const unavailable =
+						row.node.kind === 'file' &&
+						(row.node.format === 'unsupported' || unavailablePaths.has(row.node.path))}
 					<button
 						bind:this={rowButtons[index]}
 						type="button"
 						role="treeitem"
 						aria-level={row.depth + 1}
-						aria-expanded={row.node.kind === 'folder' ? expandedPaths.has(row.node.path) : undefined}
+						aria-expanded={row.node.kind === 'folder'
+							? expandedPaths.has(row.node.path)
+							: undefined}
 						aria-disabled={unavailable}
 						tabindex={index === 0 ? 0 : -1}
 						aria-selected={row.node.path === selectedPath}
@@ -135,12 +154,16 @@
 						class="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50"
 						class:bg-accent={row.node.path === selectedPath}
 						disabled={unavailable}
-						onclick={() => row.node.kind === 'folder' ? toggleFolder(row.node.path) : selectFile(row.node)}
+						onclick={() =>
+							row.node.kind === 'folder' ? toggleFolder(row.node.path) : selectFile(row.node)}
 						onkeydown={(event) => handleRowKeydown(event, index, row.node)}
 					>
 						<span style:width={`${row.depth * 1.25}rem`} aria-hidden="true"></span>
 						{#if row.node.kind === 'folder'}
-							<ChevronRight class={`size-3.5 shrink-0 transition-transform ${expandedPaths.has(row.node.path) ? 'rotate-90' : ''}`} aria-hidden="true" />
+							<ChevronRight
+								class={`size-3.5 shrink-0 transition-transform ${expandedPaths.has(row.node.path) ? 'rotate-90' : ''}`}
+								aria-hidden="true"
+							/>
 							{#if expandedPaths.has(row.node.path)}
 								<FolderOpen class="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
 							{:else}

@@ -1,10 +1,4 @@
-// Guards the shared standalone page shell contract: MCP Servers and Skills
-// render one common page shell with their own icon, the visible route title
-// (MCP Servers / Skills), a Close action wired to each route's existing
-// history fallback, and their original body content preserved under the
-// heading. Exact spacing, sticky positioning, and shell height are left to
-// the browser-driven visual gate; this suite asserts the user-visible
-// contract rather than Tailwind implementation details.
+// Guards the shared page shell used by MCP Servers and Skills.
 
 import McpServersPage from '../../src/routes/mcp-servers/+page.svelte';
 import SkillsPage from '../../src/routes/skills/+page.svelte';
@@ -64,9 +58,7 @@ describe('shared standalone page shell', () => {
 			jsonResponse(makeCatalog(makeEntry('demo-skill')))
 		);
 		vi.mocked(goto).mockClear();
-		// A fresh browser page has no navigable history, so the close action
-		// falls back to the start route; the deep-history branch is forced in
-		// the back-navigation cases below.
+		// A fresh page uses the start route for Close.
 		Object.defineProperty(window.history, 'length', { configurable: true, value: 1 });
 	});
 

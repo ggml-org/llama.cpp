@@ -10,11 +10,7 @@
 	import { usePickerNavigation } from '$lib/hooks/use-picker-navigation.svelte';
 	import type { ChatFormCommand } from '$lib/types';
 
-	/**
-	 * Slash-command picker; `query` (typed after `/`) filters the commands.
-	 * The parent owns the "dismissed token, don't act until it changes"
-	 * snapshot, so this picker just renders and reports selection.
-	 */
+	// Parent owns dismissal state; picker filters commands and reports selection.
 	interface Props {
 		class?: string;
 		isOpen: boolean;

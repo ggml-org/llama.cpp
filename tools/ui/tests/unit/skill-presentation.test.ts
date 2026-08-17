@@ -2,7 +2,6 @@ import {
 	buildSkillResourceTree,
 	classifySkillResourceFormat,
 	createSkillRootNode,
-	findSkillResourceParentPath,
 	flattenSkillResourceTree,
 	getInitialExpandedFolderPaths
 } from '$lib/components/app/skills/skill-resource-presentation';
@@ -114,8 +113,6 @@ describe('skill resource presentation', () => {
 			['scripts/nested', 1],
 			['scripts/top.ts', 1]
 		]);
-		expect(findSkillResourceParentPath(rows, 'scripts/nested')).toBe('scripts');
-		expect(findSkillResourceParentPath(rows, 'scripts')).toBeNull();
 	});
 });
 

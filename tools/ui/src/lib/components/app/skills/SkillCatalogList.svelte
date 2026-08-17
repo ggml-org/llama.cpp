@@ -3,6 +3,7 @@
 	import { Badge } from '$lib/components/ui/badge';
 	import { Card, CardContent, CardHeader, CardTitle } from '$lib/components/ui/card';
 	import { Switch } from '$lib/components/ui/switch';
+	import { untrack } from 'svelte';
 	import SkillProviderLabel from './SkillProviderLabel.svelte';
 	import type { SkillCatalogEntry } from '$lib/types';
 	import { normalizeSkillDescription } from '$lib/utils';
@@ -17,7 +18,14 @@
 		onEnabledChange?: (entry: SkillCatalogEntry, enabled: boolean) => void;
 	}
 
-	let { entries, onSelect, open, selectedId, isDisabled = () => false, onEnabledChange }: Props = $props();
+	let {
+		entries,
+		onSelect,
+		open,
+		selectedId,
+		isDisabled = () => false,
+		onEnabledChange
+	}: Props = $props();
 
 	let expandedDescriptions = new SvelteSet();
 	let overflowingDescriptions = new SvelteSet();
@@ -34,35 +42,39 @@
 		else expandedDescriptions.add(id);
 	}
 
-	function measureDescription(node: HTMLElement, params: { id: string; expanded: boolean }) {
-		let current = params;
+	function measureDescription(id: string) {
+		return (node: HTMLElement) => {
+			const observer =
+				typeof ResizeObserver === 'undefined'
+					? null
+					: new ResizeObserver(() => measure(isDescriptionExpanded(id)));
 
-		const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(measure);
+			observer?.observe(node);
 
-		function measure() {
-			if (!observer || current.expanded) return;
+			// Re-measure after clamp changes; skip expanded text until collapse.
+			$effect(() => {
+				const expanded = isDescriptionExpanded(id);
+				untrack(() => measure(expanded));
+			});
 
-			const overflowing = node.scrollHeight > node.clientHeight + 1;
-			const alreadyTracked = overflowingDescriptions.has(current.id);
+			function measure(expanded: boolean) {
+				if (!observer || expanded) return;
 
-			if (alreadyTracked === overflowing) return;
+				const overflowing = node.scrollHeight > node.clientHeight + 1;
+				const alreadyTracked = untrack(() => overflowingDescriptions.has(id));
 
-			if (overflowing) overflowingDescriptions.add(current.id);
-			else overflowingDescriptions.delete(current.id);
-		}
+				if (alreadyTracked === overflowing) return;
 
-		observer?.observe(node);
-		measure();
-
-		return {
-			destroy() {
-				observer?.disconnect();
-				overflowingDescriptions.delete(current.id);
-			},
-			update(next: { id: string; expanded: boolean }) {
-				current = next;
-				measure();
+				untrack(() => {
+					if (overflowing) overflowingDescriptions.add(id);
+					else overflowingDescriptions.delete(id);
+				});
 			}
+
+			return () => {
+				observer?.disconnect();
+				overflowingDescriptions.delete(id);
+			};
 		};
 	}
 
@@ -156,10 +168,7 @@
 						class="text-sm text-muted-foreground {!isDescriptionExpanded(entry.id)
 							? 'line-clamp-3'
 							: ''}"
-						use:measureDescription={{
-							expanded: isDescriptionExpanded(entry.id),
-							id: entry.id
-						}}
+						{@attach measureDescription(entry.id)}
 					>
 						{normalizeSkillDescription(entry.description)}
 					</p>
@@ -187,7 +196,9 @@
 				<div class="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
 					<span class="inline-flex items-center gap-1">
 						<FileText class="h-3 w-3" />
-{entry.instruction.tokens_estimated ? '~' : ''}{entry.instruction.tokens.toLocaleString()} tokens
+						{entry.instruction.tokens_estimated
+							? '~'
+							: ''}{entry.instruction.tokens.toLocaleString()} tokens
 					</span>
 					<span>{entry.instruction.lines.toLocaleString()} lines</span>
 					<span>{entry.instruction.bytes.toLocaleString()} bytes</span>

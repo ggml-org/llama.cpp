@@ -11,11 +11,7 @@ import { ToolSource } from '$lib/enums';
 import type { toolsStore as ToolsStoreValue } from '$lib/stores/tools.svelte';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-// The node unit project has no DOM or localStorage; install a Map-backed
-// Storage and force `browser: true` for this module graph so the constructor
-// path (disabled-tool localStorage restore) is exercised. The viewport store
-// reads window.innerWidth at module scope when browser is true, so it is
-// stubbed, and the /tools fetch is replaced with a deterministic listing.
+// Node setup supplies localStorage, browser globals, and a deterministic /tools response.
 const storageState = vi.hoisted(() => new Map<string, string>());
 const storagePolyfill = vi.hoisted(() => {
 	const storage: Storage = {
@@ -220,13 +216,10 @@ describe('ToolsStore Skills settings group', () => {
 			source: ToolSource.SKILLS
 		});
 
-		// The group reuses the centralized settings definitions unchanged
-		// (deep-equal; `vi.resetModules()` creates a fresh registry instance
-		// per test, so object identity cannot span the boundary).
+		// The group reuses the centralized settings definitions.
 		const expected = new Map(
 			SKILL_TOOL_SETTINGS.map((setting) => [setting.key, setting.definition])
 		);
-
 		for (const tool of group.tools) {
 			expect(tool.definition).toEqual(expected.get(tool.key));
 		}

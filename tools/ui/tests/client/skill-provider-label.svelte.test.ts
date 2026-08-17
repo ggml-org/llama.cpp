@@ -1,10 +1,4 @@
-// Guards the shared visible provider label used by every Skills surface
-// (catalog cards, detail header, diagnostics, slash picker, tool-result
-// detail, and consent card). The API provider value `agents` maps to the
-// display label `generic` and owns the exact provider-agnostic tooltip on
-// hover and keyboard focus; every other provider renders unchanged without
-// a tooltip. This is presentation only - naming, diagnostics, identity,
-// activation metadata, and precedence stay server-authoritative.
+// Guards the shared provider label and generic tooltip across Skills surfaces.
 
 import SkillProviderLabel from '$lib/components/app/skills/SkillProviderLabel.svelte';
 import { GENERIC_SKILL_PROVIDER_TOOLTIP } from '$lib/components/app/skills/skill-provider-presentation';

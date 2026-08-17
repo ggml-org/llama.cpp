@@ -2,34 +2,27 @@ import { BookOpen, List } from '@lucide/svelte';
 import { JsonSchemaType, ToolCallType } from '$lib/enums';
 import type { OpenAIToolDefinition, SkillToolSetting } from '$lib/types';
 
-/** HTTP header carrying the working directory Skills requests resolve under; an absent header means the canonical server process CWD. */
+/** Working-directory header for Skills requests. */
 export const X_SKILL_CWD_HEADER = 'x-skill-cwd';
 
-/** Model-facing tool name for the Skills list adapter. */
+/** Model-facing list tool name. */
 export const SKILL_LIST_TOOL = 'list_skill' as const;
 
-/** Model-facing tool name for the Skills read adapter. */
+/** Model-facing read tool name. */
 export const SKILL_READ_TOOL = 'read_skill' as const;
 
-/** Display label for the Skills tool source in the established consent UI. */
+/** Skills source label used by consent UI. */
 export const SKILL_SERVER_LABEL = 'Skills';
 
-/** Model-facing description of `read_skill`, shared by run definitions and settings rows. */
+/** Model-facing read tool description. */
 export const SKILL_READ_TOOL_DESCRIPTION =
 	'Read the current base content of a skill by name, or one of its resources by a relative path.';
 
-/** Model-facing description of `list_skill`, shared by run definitions and settings rows. */
+/** Model-facing list tool description. */
 export const SKILL_LIST_TOOL_DESCRIPTION =
 	'List the skills available in this run, with their descriptions.';
 
-/**
- * Build the model-facing `read_skill` definition.
- *
- * The optional `names` argument adds the frozen snapshot name `enum` and is
- * used ONLY for run-scoped definitions. The no-argument form is the static
- * settings-only display definition and MUST never carry a static name enum
- * or be sent to a model.
- */
+/** Build the read tool definition, optionally scoped to a name snapshot. */
 export function buildSkillReadToolDefinition(names?: readonly string[]): OpenAIToolDefinition {
 	return {
 		function: {
@@ -48,7 +41,7 @@ export function buildSkillReadToolDefinition(names?: readonly string[]): OpenAIT
 	};
 }
 
-/** Build the no-argument `list_skill` definition. */
+/** Build the list tool definition. */
 export function buildSkillListToolDefinition(): OpenAIToolDefinition {
 	return {
 		function: {
@@ -64,7 +57,7 @@ export function buildSkillListToolDefinition(): OpenAIToolDefinition {
 	};
 }
 
-/** Deep-freeze a Skills tool definition (type, function, and parameters). */
+/** Deep-freeze a Skills tool definition. */
 export function freezeSkillToolDefinition(def: OpenAIToolDefinition): OpenAIToolDefinition {
 	return Object.freeze({
 		...def,
@@ -75,13 +68,7 @@ export function freezeSkillToolDefinition(def: OpenAIToolDefinition): OpenAITool
 	});
 }
 
-/**
- * Settings-only rows for the model-facing Skills adapters, consumed by the
- * Chat tool settings tab. Keys use the stable `skill:<tool>` form, distinct
- * from generic builtin/MCP/custom selection keys. Skills entries are NOT
- * ordinary model tools: they never enter `allTools`, `toolGroups`, or
- * `getEnabledToolsForLLM()`, and their definitions are display-only.
- */
+/** Settings-only rows for the Skills adapters. */
 export const SKILL_TOOL_SETTINGS: readonly SkillToolSetting[] = Object.freeze([
 	{
 		definition: freezeSkillToolDefinition(buildSkillReadToolDefinition()),

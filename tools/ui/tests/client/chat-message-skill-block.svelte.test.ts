@@ -1,14 +1,4 @@
-// Guards the purpose-built Skills result renderer end to end: base
-// activations and resource reads render typed labels (title, provider ·
-// scope · path detail) while the server XML stays opaque plain text, and
-// malformed/unknown records fall back to the generic tool card. Also
-// guards the model-consent card's Skills rendering: when a Skills consent
-// pause carries safe server identity facts (`SkillConsentInfo`), the card
-// shows them (name, scope · provider, optional resource path) without
-// touching the generic label path; without a skill the card renders the
-// established generic text unchanged. The routing decision lives in
-// ChatMessageToolCallBlock, so these cases are exercised through it — the
-// same entry point the chat message renderer uses.
+// Guards typed Skills result rendering, opaque XML display, and generic fallbacks.
 
 import ChatMessageToolCallBlock from '$lib/components/app/chat/ChatMessages/ChatMessage/ChatMessageToolCall/ChatMessageToolCallBlock.svelte';
 import ChatMessageActionCardPermissionRequest from '$lib/components/app/chat/ChatMessages/ChatMessageActions/ChatMessageActionCard/ChatMessageActionCardPermissionRequest.svelte';
@@ -81,8 +71,7 @@ describe('read_skill result rendering', () => {
 		expect(text).toContain('Skill · add-new-model');
 		expect(text).toContain('generic · project');
 		expect(text).not.toContain('agents · project');
-		// The XML is ordinary text content — the entity is preserved as the
-		// literal characters it arrived in, never decoded or re-parsed.
+		// XML remains literal text.
 		expect(text).toContain('<skill_content name="add-new-model">body &amp; more</skill_content>');
 		// The XML is never parsed into DOM markup.
 		expect(container.querySelector('skill_content')).toBeNull();

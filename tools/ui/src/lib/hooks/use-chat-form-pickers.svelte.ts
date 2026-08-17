@@ -11,38 +11,34 @@ import {
 	takeMentionDismissSnapshot
 } from '$lib/utils';
 
-/** Dependencies injected as getters so the hook stays free of store circular imports. */
+	/** Injected getters avoid store circular imports. */
 export interface UseChatFormPickersOptions {
 	getValue: () => string;
-	/** Also fires the form's onChange. */
+	/** Also fires the form change handler. */
 	setValue: (value: string) => void;
-	/** Undefined when unmounted. */
+	/** Undefined after unmount. */
 	getCaretOffset: () => number | undefined;
 	setCaretOffset: (offset: number) => void;
 	focusInput: () => void;
-	/** Gates `/model`. */
+	/** Enables `/model`. */
 	getShowModelSelector: () => boolean;
-	/** Gates `/prompt`. */
+	/** Enables `/prompt`. */
 	hasPrompts: () => boolean;
-	/** Gates `/cwd`. */
+	/** Enables `/cwd`. */
 	hasCwdTools: () => boolean;
-	/** Gates `/skills`. */
+	/** Enables `/skills`. */
 	hasSkills: () => boolean;
-	/** Executes a picked `/skills` command: catalog navigation for no args, server base read + durable activation for a name. */
+	/** Dispatch a selected Skills command. */
 	dispatchSkillsCommand: (args: string) => void;
 	getCwd: () => string | null;
-	/** Mention search fallback scope. */
+	/** Fallback scope for mention search. */
 	getServerHome: () => string | null;
 	openModelSelector: () => void;
-	/** Delegate a keydown to the mounted pickers component, if any. */
+	/** Delegate keydown to the mounted picker component. */
 	getPickersRef: () => { handleKeydown(event: KeyboardEvent): boolean } | undefined;
 }
 
-/**
- * Chat-form picker state and the `/`+`@` routing that drives them.
- * Owns open/query state, dismiss snapshots and slash-command dispatch;
- * textarea/caret/attachment handling stays in the chat form.
- */
+/** Manage picker state and `/`/`@` routing. */
 export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 	let isCommandPickerOpen = $state(false);
 	let commandQuery = $state('');
@@ -54,14 +50,12 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 	let workingDirectoryQuery = $state('');
 	let isSkillPickerOpen = $state(false);
 	let skillQuery = $state('');
-	// Last dismissed `@`-mention token; while intact, the picker does not
-	// reopen, so an escaped `@<query>` stays literal until edited.
+	// Keep dismissed mention tokens literal until edited.
 	let mentionDismissedSnapshot: MentionDismissSnapshot | null = null;
-	// Same dismissal contract for the `/`-command token.
+	// Apply the same dismissal rule to slash commands.
 	let commandDismissedSnapshot: CommandDismissSnapshot | null = null;
 
-	// Fall back to the server home so the picker still finds matches
-	// before a cwd is set.
+	// Use the server home until a CWD is selected.
 	const mentionScopePath = $derived(opts.getCwd() ?? opts.getServerHome() ?? null);
 	const availableCommands = $derived(
 		getChatCommands({

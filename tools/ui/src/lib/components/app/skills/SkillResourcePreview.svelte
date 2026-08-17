@@ -6,6 +6,7 @@
 	import { SkillsService } from '$lib/services/skills.service';
 	import type { SkillBaseReadResult } from '$lib/types';
 	import { ApiError, getLanguageFromFilename } from '$lib/utils';
+	import { classifySkillResourceFormat } from './skill-resource-presentation';
 
 	interface Props {
 		baseResult: SkillBaseReadResult;
@@ -21,11 +22,15 @@
 	let retryToken = $state(0);
 	let generation = 0;
 
-	const format = $derived(selectedPath === 'SKILL.md' ? 'markdown' : resourceFormat(selectedPath));
+	const format = $derived(
+		selectedPath === 'SKILL.md' ? 'markdown' : classifySkillResourceFormat(selectedPath)
+	);
 	const canRenderMarkdown = $derived(format === 'markdown');
 	const canRenderHtml = $derived(format === 'html');
 	let mode = $state<'rendered' | 'raw' | 'preview' | 'source'>('rendered');
-	const iframeSource = $derived(`<!doctype html><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'">${source}`);
+	const iframeSource = $derived(
+		`<!doctype html><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'">${source}`
+	);
 
 	$effect(() => {
 		void retryToken;
@@ -65,7 +70,8 @@
 					onAvailabilityChange(selectedPath, false);
 					errorMessage = 'Preview unavailable';
 				} else {
-					errorMessage = failure instanceof Error ? failure.message : 'The resource could not be read.';
+					errorMessage =
+						failure instanceof Error ? failure.message : 'The resource could not be read.';
 				}
 
 				readState = 'error';
@@ -73,12 +79,6 @@
 
 		return () => controller.abort();
 	});
-
-	function resourceFormat(path: string): 'html' | 'markdown' | 'source' {
-		if (path.toLowerCase().endsWith('.html') || path.toLowerCase().endsWith('.htm')) return 'html';
-		if (path.toLowerCase().endsWith('.md') || path.toLowerCase().endsWith('.markdown')) return 'markdown';
-		return 'source';
-	}
 
 	$effect(() => {
 		mode = canRenderHtml ? 'preview' : canRenderMarkdown ? 'rendered' : 'source';
@@ -88,11 +88,27 @@
 {#if canRenderMarkdown || canRenderHtml}
 	<div class="flex shrink-0 items-center gap-1" data-testid="skill-resource-preview-modes">
 		{#if canRenderMarkdown}
-			<Button variant={mode === 'rendered' ? 'default' : 'ghost'} size="sm" onclick={() => (mode = 'rendered')}>Markdown</Button>
-			<Button variant={mode === 'raw' ? 'default' : 'ghost'} size="sm" onclick={() => (mode = 'raw')}>Raw</Button>
+			<Button
+				variant={mode === 'rendered' ? 'default' : 'ghost'}
+				size="sm"
+				onclick={() => (mode = 'rendered')}>Markdown</Button
+			>
+			<Button
+				variant={mode === 'raw' ? 'default' : 'ghost'}
+				size="sm"
+				onclick={() => (mode = 'raw')}>Raw</Button
+			>
 		{:else}
-			<Button variant={mode === 'preview' ? 'default' : 'ghost'} size="sm" onclick={() => (mode = 'preview')}>Preview</Button>
-			<Button variant={mode === 'source' ? 'default' : 'ghost'} size="sm" onclick={() => (mode = 'source')}>Source</Button>
+			<Button
+				variant={mode === 'preview' ? 'default' : 'ghost'}
+				size="sm"
+				onclick={() => (mode = 'preview')}>Preview</Button
+			>
+			<Button
+				variant={mode === 'source' ? 'default' : 'ghost'}
+				size="sm"
+				onclick={() => (mode = 'source')}>Source</Button
+			>
 		{/if}
 	</div>
 {/if}
@@ -106,14 +122,28 @@
 		<AlertDescription>{errorMessage}</AlertDescription>
 	</Alert>
 	{#if errorMessage !== 'Preview unavailable'}
-		<Button class="mt-4" onclick={() => (retryToken += 1)}><RefreshCw class="size-3" />Retry</Button>
+		<Button class="mt-4" onclick={() => (retryToken += 1)}><RefreshCw class="size-3" />Retry</Button
+		>
 	{/if}
 {:else if canRenderMarkdown && mode === 'rendered'}
-	<div data-testid={selectedPath === 'SKILL.md' ? 'skill-detail-markdown' : 'skill-resource-markdown'}><MarkdownContent content={selectedPath === 'SKILL.md' ? baseResult.body_markdown : source} /></div>
+	<div
+		data-testid={selectedPath === 'SKILL.md' ? 'skill-detail-markdown' : 'skill-resource-markdown'}
+	>
+		<MarkdownContent content={selectedPath === 'SKILL.md' ? baseResult.body_markdown : source} />
+	</div>
 {:else if canRenderHtml && mode === 'preview'}
-	<iframe title={selectedPath} sandbox="" srcdoc={iframeSource} class="h-full min-h-80 w-full rounded-md border bg-white" data-testid="skill-resource-html-preview"></iframe>
+	<iframe
+		title={selectedPath}
+		sandbox=""
+		srcdoc={iframeSource}
+		class="h-full min-h-80 w-full rounded-md border bg-white"
+		data-testid="skill-resource-html-preview"
+	></iframe>
 {:else}
 	<div data-testid={selectedPath === 'SKILL.md' ? 'skill-detail-raw' : undefined}>
-		<SyntaxHighlightedCode code={source} language={getLanguageFromFilename(selectedPath) || 'plaintext'} />
+		<SyntaxHighlightedCode
+			code={source}
+			language={getLanguageFromFilename(selectedPath) || 'plaintext'}
+		/>
 	</div>
 {/if}

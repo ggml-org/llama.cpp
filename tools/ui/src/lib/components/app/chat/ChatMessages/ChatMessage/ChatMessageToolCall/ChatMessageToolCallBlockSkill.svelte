@@ -1,10 +1,5 @@
 <script lang="ts">
-	// Purpose-built renderer for Skills `read_skill` results (base activations
-	// and resource reads). Triggered only when the persisted tool result
-	// carries valid typed SKILL metadata; malformed or unknown historical
-	// records fall back to the generic tool card. Labels come exclusively
-	// from the resolved metadata - the server XML stays opaque text content
-	// and is never rendered as UI markup.
+	// Typed metadata supplies labels; server content stays text.
 
 	import { FileCode2, FileText } from '@lucide/svelte';
 	import ToolCallBlock from './ToolCallBlock.svelte';

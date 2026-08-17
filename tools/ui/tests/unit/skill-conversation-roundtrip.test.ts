@@ -9,9 +9,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 let conversationsStore: typeof import('$lib/stores/conversations.svelte').conversationsStore;
 let ChatService: typeof import('$lib/services/chat.service').ChatService;
 
-// node env unit project has no DOM, install a minimal localStorage backed by a
-// Map before the store modules read it (same pattern as
-// conversation-import.test.ts).
+// Node tests install a localStorage polyfill before importing store modules.
 beforeAll(async () => {
 	const store = new Map<string, string>();
 	const polyfill: Storage = {
@@ -247,8 +245,7 @@ describe('conversation export/import round trip with Skills metadata', () => {
 		);
 		const [extra] = sessions[0].messages.find((m) => m.id === 'tool-result-1')!.extra ?? [];
 
-		// The record survives as opaque data but is not a valid activation:
-		// rendering falls back to the generic tool card.
+		// Invalid metadata remains opaque and uses the generic renderer.
 		expect(isSkillExtra(extra)).toBe(false);
 	});
 });
@@ -367,8 +364,7 @@ describe('visible-path branch filtering preserves Skills metadata', () => {
 			type: MessageType.TEXT
 		};
 		const all = [root, user1, assistant1, toolResult1, user2, assistant2, toolResult2];
-		// The visible-path compaction to branch B's leaf keeps the paired
-		// SKILL tool result on the path and filters out branch A entirely.
+		// Branch B retains its paired SKILL result and drops branch A.
 		const pathB = filterByLeafNodeId(all, 'tool-result-2', false);
 
 		expect(pathB.map((message) => message.id)).toEqual([
@@ -378,8 +374,7 @@ describe('visible-path branch filtering preserves Skills metadata', () => {
 			'assistant-2',
 			'tool-result-2'
 		]);
-		// Same object reference: the filter copies nothing and strips nothing,
-		// so the typed SKILL metadata survives intact.
+		// The original object and typed metadata remain intact.
 		expect(pathB).toContain(toolResult2);
 		expect(pathB).not.toContain(toolResult1);
 
@@ -394,7 +389,7 @@ describe('visible-path branch filtering preserves Skills metadata', () => {
 			skillId: 'opaque-demo'
 		});
 
-		// Navigating to branch A's leaf keeps ITS SKILL record and drops branch B.
+		// Branch A retains its own SKILL record.
 		const pathA = filterByLeafNodeId(all, 'tool-result-1', false);
 
 		expect(pathA.map((message) => message.id)).toEqual(['user-1', 'assistant-1', 'tool-result-1']);

@@ -1,17 +1,6 @@
-// Store-level wake contract: runTurnFromLeaf anchors a real agentic turn at the
-// current leaf after a /skills activation, even when the activation lands while
-// the previous wake's flow is still streaming. Pre-fix the loading guard
-// silently dropped the second wake (pair persisted, no stream, no error); the
-// wake must instead be queued and run once the in-flight flow clears.
-//
-// Uses the REAL chatStore/conversationsStore/skillActivationStore singletons
-// with a mocked DatabaseService (in-memory message tree) and a controllable
-// ChatService.sendMessage stream sink. agenticStore.runAgenticFlow is stubbed
-// to fall through to the sink like a non-agentic stream.
+// Guards queued agentic wakes after Skills activation with real store singletons.
 
-// Form-level wake contract: selecting a skill dispatches the durable
-// activation and a successful outcome wakes the agentic loop through
-// chatStore.runTurnFromLeaf. Not-found and unavailable outcomes never wake.
+// Form-level activation wakes successful flows but not failed or unavailable ones.
 
 import ChatFormTestWrapper from './components/ChatFormTestWrapper.svelte';
 import { MessageRole } from '$lib/enums';
@@ -58,8 +47,7 @@ const db = vi.hoisted(() => {
 	};
 });
 
-// Controllable stream sink: every ChatService.sendMessage call parks its
-// options + payload until the test finishes the stream explicitly.
+// Controllable stream sink for explicit test completion.
 const streams = vi.hoisted(() => {
 	const items: Array<{
 		messages: DatabaseMessage[];
@@ -273,9 +261,7 @@ describe('chatStore.runTurnFromLeaf in an active conversation', () => {
 			role: MessageRole.TOOL
 		});
 
-		// While the first wake is still streaming, the user activates a second
-		// skill exactly like ChatForm does: pair persisted + mirrored, then
-		// runTurnFromLeaf.
+		// A second activation occurs while the first wake streams.
 		const secondActivation = await skillActivationStore.recordActivation({
 			conversationId: CONV_ID,
 			cwd: undefined,
@@ -295,8 +281,7 @@ describe('chatStore.runTurnFromLeaf in an active conversation', () => {
 		await tick();
 		expect(streams.items.length).toBe(1);
 
-		// The first wake's stream completes: loading clears and the queued
-		// wake must fire, anchoring a fresh turn at the pdf pair's leaf.
+		// Completing the first stream releases the queued wake.
 		streams.items[0].finish();
 		await wakeOne;
 		await wakeTwo;

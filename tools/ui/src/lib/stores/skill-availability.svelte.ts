@@ -1,15 +1,9 @@
 import { browser } from '$app/environment';
 import { DISABLED_SKILL_IDS_LOCALSTORAGE_KEY } from '$lib/constants';
-import type { SkillCatalogEntry } from '$lib/types';
 import { SvelteSet } from 'svelte/reactivity';
 import { persisted } from './persisted.svelte';
 
-/**
- * Reactive set of opaque server-owned catalog entry IDs the user has disabled.
- * Only opaque IDs are ever stored — names/scope/provider/path are never used
- * as keys, and no name-based migration exists. Invalid stored shapes fall back
- * to an empty set; unknown stored IDs are preserved without rewriting storage.
- */
+/** Persist disabled Skills by opaque server-owned catalog ID. */
 export class SkillAvailabilityStore {
 	private _disabledIds = $state(new SvelteSet<string>());
 	private _storage = persisted<unknown>(DISABLED_SKILL_IDS_LOCALSTORAGE_KEY, []);
@@ -46,18 +40,10 @@ export class SkillAvailabilityStore {
 		this._storage.value = [...this._disabledIds];
 	}
 
-	enabledEntries(entries: readonly SkillCatalogEntry[]): readonly SkillCatalogEntry[] {
-		if (this._disabledIds.size === 0) {
-			return entries;
-		}
-
-		return entries.filter((entry) => !this._disabledIds.has(entry.id));
-	}
-
 	get disabledIds(): ReadonlySet<string> {
 		return this._disabledIds;
 	}
 }
 
-/** Production singleton, persisted across sessions via the DISABLED_SKILL_IDS key. */
+/** Shared persisted Skills availability store. */
 export const skillAvailabilityStore = new SkillAvailabilityStore();

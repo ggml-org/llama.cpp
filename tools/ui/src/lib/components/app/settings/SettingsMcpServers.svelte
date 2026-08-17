@@ -55,12 +55,7 @@
 		}
 	});
 
-	// Each card decides for itself whether to render based on its own
-	// health-check state, so adding a server only flashes the new card
-	// (not every other already-loaded card) until its health check resolves.
-	// Disabled servers never receive a startup health check, so IDLE only
-	// counts as pending when the server is enabled; otherwise the real card
-	// renders and keeps the enable toggle reachable.
+	// Keep loaded cards visible while new or enabled servers await health checks.
 	function isServerPending(serverId: string, enabled: boolean): boolean {
 		const status = mcpStore.getHealthCheckState(serverId).status;
 

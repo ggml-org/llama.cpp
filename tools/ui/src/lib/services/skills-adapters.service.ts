@@ -39,23 +39,14 @@ export interface SkillAdaptersBuildResult {
 	diagnostics: SkillAdapterDiagnostic[];
 }
 
-/**
- * Input to the shared successful-base-activation operation. Both the
- * model consent path (approved `read_skill` base reads) and the explicit
- * `/skills <name>` path route through it; the durable record is keyed by
- * conversation plus the exact opaque server identity.
- */
+/** Input shared by model-approved and explicit Skills activation paths. */
 export interface SkillActivationInput {
 	conversationId: string;
 	/** Successful server read; only `kind: 'skill'` results persist an activation. */
 	result: SkillReadResult;
 	/** CWD the read resolved under; used only for in-flight metadata, never persisted. */
 	cwd?: string;
-	/**
-	 * Model path: the model's own tool call id. The store anchors the paired
-	 * tool result to the persisted assistant message carrying this call id.
-	 * Absent on the slash path, which creates a synthetic assistant pair.
-	 */
+	/** Model tool-call ID; absent for the explicit slash-command path. */
 	toolCallId?: string;
 }
 
@@ -65,24 +56,11 @@ export interface SkillActivationResult {
 	extra: DatabaseMessageExtraSkill;
 	/** True when this call created a NEW durable record; false on dedupe or session-only resource approval. */
 	created: boolean;
-	/**
-	 * The persisted tool result message when the operation created it (slash
-	 * path, and model path via the store-anchored pair); null otherwise, in
-	 * which case the caller persists the message with `extra` attached.
-	 */
+	/** Persisted tool-result message when a new record is created. */
 	toolResultMessage: DatabaseMessage | null;
 }
 
-/**
- * Durable successful-base-activation boundary.
- *
- * Task 4 replaces the Task 3 in-memory per-run seam with the shared
- * successful-base persistence operation: activations are reconstructed from
- * the conversation's persisted typed SKILL metadata, keyed by the exact
- * opaque server identity, so an approval survives runs and reloads. Only
- * successful base reads persist; denial, failure, and unavailability record
- * nothing, and resource approvals are session-scoped.
- */
+/** Shared durable boundary for successful base activations. */
 export interface SkillActivationStore {
 	/** True when the conversation holds a durable base activation for the exact opaque id. */
 	isActivated(conversationId: string, identityId: string): boolean;
@@ -101,11 +79,7 @@ export interface SkillRunAdaptersOptions {
 	conversationId: string;
 	/** The durable conversation-scoped activation store (Task 4). */
 	activation: SkillActivationStore;
-	/**
-	 * The established consent mechanism: pauses for an explicit allow/deny
-	 * decision and resolves it. `skill` carries only safe server-returned
-	 * identity facts for the consent card.
-	 */
+	/** Consent callback for a safe server-returned skill identity. */
 	requestPermission: (
 		toolName: string,
 		serverLabel: string,
@@ -114,13 +88,7 @@ export interface SkillRunAdaptersOptions {
 	) => Promise<ToolPermissionDecision>;
 }
 
-/**
- * Result of one `SkillRunAdapters.execute` call. Adds the durable-activation
- * hand-off to the generic tool result: when the shared operation created the
- * paired tool result message, `activationRecorded` + `recordedToolResultMessageId`
- * tell the agentic flow to reuse it instead of creating a second message;
- * `extras` carry the typed SKILL metadata for messages the flow persists.
- */
+/** Result of one adapter execution and its durable-activation hand-off. */
 export interface SkillToolExecutionResult extends ToolExecutionResult {
 	/** True when a NEW durable base activation was persisted by the shared store. */
 	activationRecorded?: boolean;
@@ -130,22 +98,7 @@ export interface SkillToolExecutionResult extends ToolExecutionResult {
 	extras?: DatabaseMessageExtra[];
 }
 
-/**
- * Register snapshot-authorized Skills adapters.
- *
- * A zero-budget or empty envelope registers nothing. A complete envelope
- * exposes only `read_skill`; a partial envelope also exposes `list_skill`.
- * `read_skill` carries a dynamic `enum` of frozen snapshot names; existing
- * non-Skills/custom/MCP names win collisions and the colliding adapter is
- * omitted with a safe diagnostic.
- *
- * The optional `enabledNames` set narrows the budget-authorized,
- * collision-checked result to the model-facing adapters the user enabled:
- * an omitted set keeps both names, and a provided set suppresses only
- * disabled definitions after the existing budget rule and collision checks.
- * It can never add an adapter the budget policy did not authorize, and
- * collision diagnostics are preserved exactly.
- */
+/** Register budget- and collision-authorized Skills adapters. */
 export function buildSkillToolDefinitions(
 	snapshot: SkillRunSnapshot,
 	packed: SkillPackedCatalog,
