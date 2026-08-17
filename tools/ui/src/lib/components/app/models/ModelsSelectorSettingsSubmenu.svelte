@@ -51,10 +51,7 @@
 </script>
 
 <DropdownMenu.Sub>
-	<DropdownMenu.SubTrigger
-		class="flex cursor-pointer items-center gap-2"
-		disabled={disabled}
-	>
+	<DropdownMenu.SubTrigger class="flex cursor-pointer items-center gap-2" {disabled}>
 		<section.icon class="h-4 w-4 shrink-0 text-muted-foreground" />
 
 		<span class="text-sm text-muted-foreground">{section.title}</span>
@@ -77,7 +74,9 @@
 					/>
 				</label>
 			{:else if field.type === SettingsFieldType.CHECKBOX}
-				<label class="flex cursor-pointer items-center gap-2 rounded-md px-1 py-1.5 text-sm hover:bg-accent">
+				<label
+					class="flex cursor-pointer items-center gap-2 rounded-md px-1 py-1.5 text-sm hover:bg-accent"
+				>
 					<Checkbox
 						checked={Boolean(settingsStore.config[field.key])}
 						onCheckedChange={(checked) => settingsStore.updateConfig(field.key, Boolean(checked))}
