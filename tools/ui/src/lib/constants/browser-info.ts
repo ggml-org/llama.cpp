@@ -22,7 +22,8 @@ export const BROWSER_INFO_NOTE = `This environment is browser-only, it cannot re
 export function buildBrowserInfoToolDefinition(): OpenAIToolDefinition {
 	return {
 		function: {
-			description: 'Get runtime info (OS name), may call when user asks about local files or shell commands',
+			description:
+				'Get runtime info (OS name), may call when user asks about local files or shell commands',
 			name: BROWSER_INFO_TOOL_NAME,
 			parameters: {
 				properties: {},
