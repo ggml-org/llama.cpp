@@ -3577,11 +3577,11 @@ struct clip_model_loader {
     static void warmup(clip_ctx & ctx_clip) {
         auto batch = get_dummy_batch(ctx_clip);
         warmup(ctx_clip, batch);
-        
+
         // run a real encode so one-time backend inits happen at load, not on first request
         // vision only, as audio dummy batches are not encodable
         if (!ctx_clip.no_alloc && ctx_clip.model.modality == CLIP_MODALITY_VISION &&
-                ctx_clip.backend && ctx_clip.backend != ctx_clip.backend_cpu) {
+                ctx_clip.backend != ctx_clip.backend_cpu) {
             LOG_INF("%s: running warmup encode, please wait ... (--no-warmup to disable)\n", __func__);
             const int64_t t_start_us = ggml_time_us();
             clip_encode_params params;

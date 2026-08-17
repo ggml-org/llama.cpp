@@ -58,6 +58,8 @@ int main(int argc, char ** argv) {
 
     common_init();
 
+    params.warmup = false;
+
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_MTMD, show_additional_info)) {
         return 1;
     }
@@ -87,8 +89,7 @@ int main(int argc, char ** argv) {
         mparams.print_timings    = true;
         mparams.n_threads        = params.cpuparams.n_threads;
         mparams.flash_attn_type  = params.flash_attn_type;
-        // no warmup, so the debug callback only sees the encode requested by the user
-        mparams.warmup           = false;
+        mparams.warmup           = params.warmup;
         mparams.image_min_tokens = params.image_min_tokens;
         mparams.image_max_tokens = params.image_max_tokens;
         {
