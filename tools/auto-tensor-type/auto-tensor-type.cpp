@@ -1754,6 +1754,22 @@ static bool decode_probe(llama_context * ctx, const std::vector<llama_token> & t
 // Probe each role: s_role = logitKLD(perturbed) / eps^2. Runs on the resident fp16 model
 // in Phase-2 scope. Returns {} (and leaves cap in CB_CAPTURE) if the noise-injection
 // self-test fails, so the caller falls back to element-weighting.
+
+// Can we write to this weight? With mmap enabled, llama_model_loader points a CPU-resident
+// tensor's data straight into the model file's PROT_READ mapping (llama-model-loader.cpp,
+// ggml_backend_tensor_alloc(buf_mmap, ...)), so ggml_backend_tensor_set() on it is a write
+// to read-only memory -> SIGSEGV. Offloaded weights live in device buffers and go through a
+// real backend copy, which is why a fully-offloaded model never hit this. main() disables
+// mmap when the calibrator is on; this is the backstop that turns any remaining case into a
+// clean error instead of a crash.
+static bool weight_is_writable(const ggml_tensor * t) {
+    if (!t) return false;
+    const ggml_backend_buffer_t buf = t->view_src ? t->view_src->buffer : t->buffer;
+    if (!buf) return false;
+    const char * name = ggml_backend_buffer_name(buf);
+    return !name || strcmp(name, "CPU_Mapped") != 0;
+}
+
 // Read a weight tensor (F32/F16/BF16) into an F32 vector.
 static bool weight_to_f32(const ggml_tensor * t, std::vector<float> & out) {
     const int64_t n = ggml_nelements(t);
@@ -1862,6 +1878,26 @@ static std::map<std::string, double> measure_arch_sensitivity(
     }
     cap.mode = CB_OFF;
     LOG("arch-calib: collected %zu weight handles\n", cap.weight_handles.size());
+
+    // The probe mutates the weights in place, so every handle must be writable. Bail before
+    // the first ggml_backend_tensor_set rather than segfaulting inside memcpy.
+    {
+        size_t n_ro = 0;
+        std::string first_ro;
+        for (const auto & [name, h] : cap.weight_handles) {
+            if (weight_is_writable(h)) continue;
+            if (n_ro == 0) first_ro = name;
+            n_ro++;
+        }
+        if (n_ro > 0) {
+            LOG_ERR("arch-calib: %zu of %zu probed weights (e.g. '%s') are mapped read-only from the "
+                    "model file, so they cannot be perturbed. Re-run with --no-mmap, or disable the "
+                    "probe with --arch-calib-gamma 0. Skipping arch-calib.\n",
+                    n_ro, cap.weight_handles.size(), first_ro.c_str());
+            cap.mode = CB_CAPTURE; cap.weight_to_role_full = nullptr;
+            return sens;
+        }
+    }
 
     // Noise floor: KLD between two clean decodes detects forward non-determinism, which
     // would bury a small perturbation signal.
@@ -2391,7 +2427,8 @@ static void print_usage(int /*argc*/, char ** argv) {
     LOG("  --no-auto-config         Disable architecture-aware defaults. By default the tool\n");
     LOG("                           detects MoE vs dense from the roles and sets element-gamma\n");
     LOG("                           (MoE 0.25 / dense 1.0), floors the dense quant set at the\n");
-    LOG("                           target's uniform type, and enables arch-calib 0.5 on dense.\n");
+    LOG("                           target's uniform type, and enables arch-calib 0.5 on dense\n");
+    LOG("                           (which in turn forces a no-mmap load; see below).\n");
     LOG("                           Any knob you pass explicitly overrides its auto value.\n");
     LOG("  --element-gamma G        DP objective weight = relative_L2 * n_elements^G\n");
     LOG("                           (bit/BPW cost keeps true n_elements). G=1 (default) is\n");
@@ -2404,6 +2441,9 @@ static void print_usage(int /*argc*/, char ** argv) {
     LOG("                           logit KLD, then multiplies costs by (s/n_elem/geomean)^G.\n");
     LOG("                           G interpolates element-weighting (0) -> measured\n");
     LOG("                           sensitivity (1). Cached to <cost-matrix-cache>.sens.\n");
+    LOG("                           Perturbs the resident weights, so it forces a no-mmap load\n");
+    LOG("                           (mmap'd weights are read-only) — costs RAM for the part of\n");
+    LOG("                           the model that is not offloaded.\n");
     LOG("  --arch-calib-eps E       Injected per-row relative-L2 RMS for the probes (0.05).\n");
     LOG("  --cost-matrix-cache PATH Read/write the Phase-3 cost matrix to PATH. On hit,\n");
     LOG("                           skips Phase 2+3 entirely (~50min savings) when the\n");
@@ -3129,6 +3169,21 @@ int main(int argc, char ** argv) {
 
     params.cb_eval = capture_callback;
     params.cb_eval_user_data = &cap_state;
+
+    // The architecture pre-calibrator perturbs the resident weights in place. With mmap,
+    // every CPU-resident weight is allocated inside the model file's read-only mapping, so
+    // writing to it segfaults; only offloaded weights are writable. Load without mmap so the
+    // CPU-resident weights land in ordinary (writable) buffers. Costs RAM for the
+    // non-offloaded part of the model — --arch-calib-gamma 0 (or --no-auto-config) opts out.
+    if (cfg.arch_calib_gamma > 0.0f &&
+        (params.load_mode == LLAMA_LOAD_MODE_AUTO  ||
+         params.load_mode == LLAMA_LOAD_MODE_MMAP  ||
+         params.load_mode == LLAMA_LOAD_MODE_MMAP_MLOCK)) {
+        params.load_mode = (params.load_mode == LLAMA_LOAD_MODE_MMAP_MLOCK)
+                           ? LLAMA_LOAD_MODE_MLOCK : LLAMA_LOAD_MODE_NONE;
+        LOG("arch-calib is on: loading without mmap (%s) — the probe writes to the weights, and "
+            "mmap'd weights are read-only\n", llama_load_mode_name(params.load_mode));
+    }
 
     ggml_backend_load_all();
     llama_backend_init();
