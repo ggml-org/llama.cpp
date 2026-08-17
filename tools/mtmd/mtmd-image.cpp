@@ -1005,7 +1005,8 @@ bool mtmd_image_preprocessor_lfm2::should_tile(
     const int align_size = hparams.patch_size * hparams.n_merge;
 
     const auto round_by_factor = [align_size](float x) {
-        return static_cast<int>(std::round(x / static_cast<float>(align_size))) * align_size;
+        // see https://github.com/ggml-org/llama.cpp/pull/27057#discussion_r3796264887
+        return static_cast<int>(std::nearbyint(static_cast<double>(x) / align_size)) * align_size;
     };
 
     const int h_bar = std::max(hparams.patch_size, round_by_factor(original_size.height));

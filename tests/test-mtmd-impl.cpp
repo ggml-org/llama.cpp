@@ -49,6 +49,9 @@ MAKE_TEST(test_image_preprocessor_lfm2) {
     // { image size, expected tiling }
     const std::vector<std::pair<clip_image_size, bool>> cases = {
         { {  704, 704 }, false },
+        // 720 / (patch_size * n_merge) is exactly 22.5, so this only matches HF
+        // if round_by_factor rounds half to even (22) instead of away from zero (23)
+        { {  720, 720 }, false },
         { {  736, 736 }, true  },
         { { 1024, 977 }, true  },
         { { 1056, 384 }, false },
