@@ -1,5 +1,5 @@
-import type { ModelOption } from '$lib/types/models';
 import { ModelModality } from '$lib/enums';
+import type { ModelOption } from '$lib/types/models';
 import { SvelteMap } from 'svelte/reactivity';
 
 export interface ModelItem {
