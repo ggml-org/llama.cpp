@@ -1231,6 +1231,11 @@ bool llama_context::resize_recurrent_memory(uint32_t new_n_seq_max, bool expand)
         return true; // no recurrent component — nothing to resize
     }
 
+    const bool resize_needed = expand ? new_n_seq_max > recr->size : new_n_seq_max < recr->size;
+    if (!resize_needed) {
+        return true;
+    }
+
     synchronize();
 
     const bool ok = expand ? recr->expand(new_n_seq_max) : recr->shrink(new_n_seq_max);

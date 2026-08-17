@@ -3337,6 +3337,44 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph *                cgraph,
         }
     }
 
+    std::initializer_list<enum ggml_op> add_rms_norm_mul_ops = { GGML_OP_ADD, GGML_OP_RMS_NORM, GGML_OP_MUL };
+    if (is_equal(add_rms_norm_mul_ops, ops) &&
+            ggml_can_fuse_subgraph(cgraph, node_idx, ops, { node_idx, node_idx + 2 })) {
+        const ggml_tensor * add      = cgraph->nodes[node_idx];
+        const ggml_tensor * rms_norm = cgraph->nodes[node_idx + 1];
+        const ggml_tensor * mul      = cgraph->nodes[node_idx + 2];
+        const ggml_tensor * weight   = mul->src[0] == rms_norm ? mul->src[1] :
+                                       mul->src[1] == rms_norm ? mul->src[0] : nullptr;
+
+        if (rms_norm->src[0] != add || weight == nullptr ||
+                add->type != GGML_TYPE_F32 || add->src[0]->type != GGML_TYPE_F32 ||
+                add->src[1]->type != GGML_TYPE_F32 || rms_norm->type != GGML_TYPE_F32 ||
+                weight->type != GGML_TYPE_F32 || mul->type != GGML_TYPE_F32 ||
+                !ggml_are_same_shape(add->src[0], add->src[1]) ||
+                !ggml_are_same_shape(add->src[0], add) ||
+                !ggml_are_same_shape(add, rms_norm) || !ggml_are_same_shape(rms_norm, mul) ||
+                weight->ne[0] != add->ne[0] || ggml_nelements(weight) != add->ne[0] ||
+                !ggml_is_contiguous(add->src[0]) || !ggml_is_contiguous(add->src[1]) ||
+                !ggml_is_contiguous(add) || !ggml_is_contiguous(weight) || !ggml_is_contiguous(mul) ||
+                add->ne[0] < 1024) {
+            return false;
+        }
+        // The Qwen decode graph reuses two equally sized activation buffers in a
+        // strict ping-pong pattern. The fused kernel reads both inputs and reaches
+        // a block barrier before writing the second output, so exact whole-buffer
+        // aliases in either direction are safe. Reject every other overlap/layout.
+        const bool ping_pong =
+            (add->data == add->src[0]->data && mul->data == add->src[1]->data) ||
+            (add->data == add->src[1]->data && mul->data == add->src[0]->data);
+        const uintptr_t a_begin = reinterpret_cast<uintptr_t>(add->src[0]->data);
+        const uintptr_t b_begin = reinterpret_cast<uintptr_t>(add->src[1]->data);
+        const size_t activation_bytes = ggml_nbytes(add);
+        const bool inputs_disjoint = a_begin + activation_bytes <= b_begin ||
+                                     b_begin + activation_bytes <= a_begin;
+        return ping_pong && inputs_disjoint &&
+               weight->data != add->src[0]->data && weight->data != add->src[1]->data;
+    }
+
     if (!ggml_can_fuse(cgraph, node_idx, ops)) {
         return false;
     }
@@ -3546,6 +3584,23 @@ static bool ggml_cuda_use_gfx1030_q8_1_fusion() {
         const char * fusion = std::getenv("GGML_HIP_GFX1030_Q8_1_FUSION");
         return native != nullptr && std::atoi(native) != 0 &&
                fusion != nullptr && std::atoi(fusion) != 0;
+    }();
+    if (!enabled) {
+        return false;
+    }
+
+    const int device = ggml_cuda_get_device();
+    return GGML_CUDA_CC_IS_RDNA2(ggml_cuda_info().devices[device].cc);
+#else
+    return false;
+#endif
+}
+
+static bool ggml_cuda_use_gfx1030_add_rms_norm_fusion() {
+#if defined(GGML_USE_HIP)
+    static const bool enabled = []() {
+        const char * fusion = std::getenv("GGML_HIP_GFX1030_ADD_RMS_NORM_FUSION");
+        return fusion != nullptr && std::atoi(fusion) != 0;
     }();
     if (!enabled) {
         return false;
@@ -4296,6 +4351,12 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
 
     if (fused_mul_mat_vec) {
         return fused_node_count - 1;
+    }
+
+    if (ggml_cuda_use_gfx1030_add_rms_norm_fusion() &&
+            ggml_cuda_can_fuse(cgraph, i, { GGML_OP_ADD, GGML_OP_RMS_NORM, GGML_OP_MUL }, {})) {
+        ggml_cuda_op_add_rms_norm_fused(*cuda_ctx, node, cgraph->nodes[i + 1], cgraph->nodes[i + 2]);
+        return 2;
     }
 
     if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_RMS_NORM, GGML_OP_MUL, GGML_OP_ROPE, GGML_OP_VIEW, GGML_OP_SET_ROWS }, {})) {

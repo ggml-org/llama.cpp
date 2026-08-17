@@ -778,8 +778,7 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
                 auto * smpl = smpls[seq_id].get();
 
                 common_sampler_sample(smpl, ctx_dft, i_batch, true);
-                // pre-norm hidden state of this position becomes g_embd for the next step
-                const float * prenorm = llama_get_embeddings_nextn_ith(ctx_dft, i_batch);
+                const int this_i_batch = i_batch;
                 ++i_batch;
 
                 const auto * cur_p = common_sampler_get_candidates(smpl, true);
@@ -813,6 +812,9 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
                     n_drafting--;
                     continue;
                 }
+
+                // pre-norm hidden state of this position becomes g_embd for the next step
+                const float * prenorm = llama_get_embeddings_nextn_ith(ctx_dft, this_i_batch);
 
                 common_batch_add(batch, id, pending_pos_last[seq_id] + (i + 1), { seq_id }, true);
                 std::memcpy(batch.embd + (size_t) (batch.n_tokens - 1) * n_embd_dec, prenorm, row_bytes);
