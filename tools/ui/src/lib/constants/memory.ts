@@ -93,7 +93,7 @@ export function buildMemoryToolDefinitions(groups: string[]): OpenAIToolDefiniti
 		},
 		{
 			function: {
-				description: `Write persistent memory. Name is <group>${MEMORY_NAME_SEPARATOR}<slug>: ${memoryGroupsClause(groups)}. old and new replace a unique string, new alone appends, old alone removes it along with the line break that follows it. new takes as many lines as you have to write. Pass description whenever the edit changes what the entry is about, and when creating one. Store what the user stated, not what you concluded. The index line of the entry comes back with the result.`,
+				description: `Write persistent memory. Name is <group>${MEMORY_NAME_SEPARATOR}<slug>: ${memoryGroupsClause(groups)}. old_str and new_str replace a unique string, new_str alone appends, old_str alone removes it along with the line break that follows it. new_str takes as many lines as you have to write. Pass description whenever the edit changes what the entry is about, and when creating one. Store what the user stated, not what you concluded. The index line of the entry comes back with the result.`,
 				name: BuiltInTool.BROWSER_MEMORY_WRITE,
 				parameters: {
 					properties: {
@@ -105,11 +105,11 @@ export function buildMemoryToolDefinitions(groups: string[]): OpenAIToolDefiniti
 							description: `Entry name, <group>${MEMORY_NAME_SEPARATOR}<slug>`,
 							type: JsonSchemaType.STRING
 						},
-						new: {
+						new_str: {
 							description: 'Replacement text, or the lines to append',
 							type: JsonSchemaType.STRING
 						},
-						old: {
+						old_str: {
 							description: 'Text to replace or remove, must appear exactly once in the body',
 							type: JsonSchemaType.STRING
 						}
@@ -123,7 +123,7 @@ export function buildMemoryToolDefinitions(groups: string[]): OpenAIToolDefiniti
 		{
 			function: {
 				description:
-					'Remove a whole entry from persistent memory, only when the user asks to forget that subject. To remove a single fact, use memory_write with old alone.',
+					'Remove a whole entry from persistent memory, only when the user asks to forget that subject. To remove a single fact, use memory_write with old_str alone.',
 				name: BuiltInTool.BROWSER_MEMORY_DROP,
 				parameters: {
 					properties: {
