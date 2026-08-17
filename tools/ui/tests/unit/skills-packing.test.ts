@@ -154,6 +154,68 @@ describe('buildSkillRunSnapshot model-view filtering', () => {
 		expect(snapshot.entries).toEqual([]);
 		expect(snapshot.envelope).toBe('<skills_catalog total="0" included="0"><inst/></skills_catalog>');
 	});
+
+	it('excludes locally disabled opaque IDs from entries, totals, the envelope, and budgeting', () => {
+		const first = makeEntry('first', '<first/>');
+		const second = makeEntry('second', '<second/>');
+		const snapshot = buildSkillRunSnapshot(
+			'/cwd',
+			makeCatalog([first, second], '<inst/>'),
+			new Set(['opaque-second'])
+		);
+
+		expect(snapshot.total).toBe(1);
+		expect(snapshot.entries.map((e) => e.name)).toEqual(['first']);
+		expect(snapshot.envelope).toContain('<first/>');
+		expect(snapshot.envelope).toContain('total="1"');
+		expect(snapshot.envelope).toContain('included="1"');
+		expect(snapshot.envelope).not.toContain('<second/>');
+		// The raw browsing catalog is untouched: disabled cards stay browsable.
+		expect(snapshot.catalog.skills).toHaveLength(2);
+	});
+
+	it('combines locally disabled IDs with author-declared manual-only exclusion once', () => {
+		const manual = { ...makeEntry('manual', '<manual/>'), disable_model_invocation: true };
+		const disabled = makeEntry('disabled', '<disabled/>');
+		const normal = makeEntry('normal', '<normal/>');
+		const snapshot = buildSkillRunSnapshot(
+			'/cwd',
+			makeCatalog([manual, disabled, normal], '<inst/>'),
+			new Set(['opaque-disabled'])
+		);
+
+		expect(snapshot.total).toBe(1);
+		expect(snapshot.entries.map((e) => e.name)).toEqual(['normal']);
+		expect(snapshot.envelope).toContain('<normal/>');
+		expect(snapshot.envelope).not.toContain('<manual/>');
+		expect(snapshot.envelope).not.toContain('<disabled/>');
+	});
+
+	it('leaves existing callers unaffected when no disabled set is passed', () => {
+		// buildSkillRunSnapshot remains source-compatible: existing callers
+		// pass no disabled set and see only manual-only exclusion.
+		const manual = { ...makeEntry('manual', '<manual/>'), disable_model_invocation: true };
+		const normal = makeEntry('normal', '<normal/>');
+		const snapshot = buildSkillRunSnapshot('/cwd', makeCatalog([manual, normal], '<inst/>'));
+
+		expect(snapshot.total).toBe(1);
+		expect(snapshot.entries.map((e) => e.name)).toEqual(['normal']);
+		expect(snapshot.catalog.skills).toHaveLength(2);
+	});
+
+	it('decides disabled exclusion by opaque ID, never by matching name', () => {
+		// Two distinct opaque IDs share the same display name; disabling one
+		// must never hide the other.
+		const a = { ...makeEntry('duplicate', '<a/>'), id: 'opaque-a' };
+		const b = { ...makeEntry('duplicate', '<b/>'), id: 'opaque-b' };
+		const snapshot = buildSkillRunSnapshot(
+			'/cwd',
+			makeCatalog([a, b], '<inst/>'),
+			new Set(['opaque-a'])
+		);
+
+		expect(snapshot.entries.map((e) => e.id)).toEqual(['opaque-b']);
+	});
 });
 
 describe('SkillsPackingService.pack', () => {

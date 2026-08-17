@@ -36,7 +36,7 @@
 		onPromptLoadError?: (placeholderId: string, error: string) => void;
 		isSkillPickerOpen?: boolean;
 		skillQuery?: string;
-		skills?: SkillCatalogEntry[];
+		skills?: readonly SkillCatalogEntry[];
 		onSkillPickerClose?: () => void;
 		onSkillSelect?: (name: string) => void;
 	}

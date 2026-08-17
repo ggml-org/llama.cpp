@@ -6,8 +6,10 @@
 	// from the resolved metadata - the server XML stays opaque text content
 	// and is never rendered as UI markup.
 
+	import { FileCode2, FileText } from '@lucide/svelte';
 	import ToolCallBlock from './ToolCallBlock.svelte';
-	import { classifySkillResourcePath } from '$lib/components/app/skills/skill-resource-presentation';
+	import { classifySkillResourceFormat } from '$lib/components/app/skills/skill-resource-presentation';
+	import SkillProviderLabel from '$lib/components/app/skills/SkillProviderLabel.svelte';
 	import { resolveSkillSectionMeta } from '$lib/services/skills-activation.service';
 	import type { AgenticSection } from '$lib/types';
 
@@ -28,14 +30,12 @@
 				: `Skill · ${meta.name}`
 			: 'Skill result'
 	);
-	const detail = $derived(
-		meta ? [meta.provider, meta.scope, meta.path].filter(Boolean).join(' · ') : ''
-	);
-	// Directory-specific header icon for valid typed resource records only:
-	// the path comes from the persisted typed metadata, never from tool args
-	// or the raw XML, and base reads / untyped records keep the default.
 	const icon = $derived(
-		meta?.kind === 'resource' && meta.path ? classifySkillResourcePath(meta.path).icon : undefined
+		meta?.kind === 'resource' && meta.path
+			? classifySkillResourceFormat(meta.path) === 'source'
+				? FileCode2
+				: FileText
+			: undefined
 	);
 </script>
 
@@ -46,9 +46,11 @@
 				Waiting for result...
 			</div>
 		{:else if section.toolResult}
-			{#if detail}
+			{#if meta}
 				<div class="mb-1.5 flex items-center gap-2 text-xs text-muted-foreground/70">
-					{detail}
+					<SkillProviderLabel provider={meta.provider} />
+					<span>· {meta.scope}</span>
+					{#if meta.path}<span>· {meta.path}</span>{/if}
 				</div>
 			{/if}
 			<div class="overflow-auto">

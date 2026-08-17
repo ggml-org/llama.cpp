@@ -2,6 +2,8 @@
 	import { ChevronDown, Clock, FileText, Layers } from '@lucide/svelte';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Card, CardContent, CardHeader, CardTitle } from '$lib/components/ui/card';
+	import { Switch } from '$lib/components/ui/switch';
+	import SkillProviderLabel from './SkillProviderLabel.svelte';
 	import type { SkillCatalogEntry } from '$lib/types';
 	import { normalizeSkillDescription } from '$lib/utils';
 	import { SvelteSet } from 'svelte/reactivity';
@@ -11,9 +13,11 @@
 		selectedId: string | null;
 		open: boolean;
 		onSelect: (entry: SkillCatalogEntry) => void;
+		isDisabled?: (id: string) => boolean;
+		onEnabledChange?: (entry: SkillCatalogEntry, enabled: boolean) => void;
 	}
 
-	let { entries, onSelect, open, selectedId }: Props = $props();
+	let { entries, onSelect, open, selectedId, isDisabled = () => false, onEnabledChange }: Props = $props();
 
 	let expandedDescriptions = new SvelteSet();
 	let overflowingDescriptions = new SvelteSet();
@@ -70,11 +74,11 @@
 	}
 
 	function formatTimestamp(value: string | null): string {
-		if (!value) return '—';
+		if (!value) return '-';
 
 		const date = new Date(value);
 
-		if (Number.isNaN(date.getTime())) return '—';
+		if (Number.isNaN(date.getTime())) return '-';
 
 		return date.toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' });
 	}
@@ -96,15 +100,14 @@
 			onclick={() => onSelect(entry)}
 			onkeydown={(event) => handleKeydown(event, entry)}
 		>
-			<CardHeader class="flex-row items-start justify-between gap-2 space-y-0">
+			<CardHeader class="flex flex-row items-start justify-between gap-2 space-y-0">
 				<div class="flex flex-col gap-1">
 					<CardTitle class="text-base">{entry.name}</CardTitle>
 
 					<div class="flex flex-wrap items-center gap-1.5">
 						<Badge variant="secondary">{entry.scope}</Badge>
-						<Badge variant="outline">{entry.provider}</Badge>
-						<Badge variant={entry.instruction.tokens_estimated ? 'tertiary' : 'outline'}>
-							{entry.instruction.tokens_estimated ? 'estimated' : 'exact'}
+						<Badge variant="outline">
+							<SkillProviderLabel provider={entry.provider} />
 						</Badge>
 						{#if entry.disable_model_invocation}
 							<Badge
@@ -114,8 +117,36 @@
 								Manual only
 							</Badge>
 						{/if}
+						{#if isDisabled(entry.id)}
+							<Badge
+								variant="secondary"
+								title="Not available to the model until re-enabled from this catalog."
+							>
+								Disabled
+							</Badge>
+						{/if}
 					</div>
 				</div>
+
+				{#if onEnabledChange}
+					<div
+						role="presentation"
+						class="flex shrink-0 items-center gap-2"
+						onclick={(event) => event.stopPropagation()}
+					>
+						<label class="text-xs text-muted-foreground" for="skill-enabled-{entry.id}">
+							{isDisabled(entry.id) ? 'Enable' : 'Disable'}
+						</label>
+						<Switch
+							id="skill-enabled-{entry.id}"
+							checked={!isDisabled(entry.id)}
+							aria-label={`${isDisabled(entry.id) ? 'Enable' : 'Disable'} ${entry.name}`}
+							onclick={(event) => event.stopPropagation()}
+							onkeydown={(event) => event.stopPropagation()}
+							onCheckedChange={(enabled) => onEnabledChange(entry, enabled === true)}
+						/>
+					</div>
+				{/if}
 			</CardHeader>
 
 			<CardContent class="flex flex-col gap-3">
@@ -156,7 +187,7 @@
 				<div class="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
 					<span class="inline-flex items-center gap-1">
 						<FileText class="h-3 w-3" />
-						{entry.instruction.tokens.toLocaleString()} tokens
+{entry.instruction.tokens_estimated ? '~' : ''}{entry.instruction.tokens.toLocaleString()} tokens
 					</span>
 					<span>{entry.instruction.lines.toLocaleString()} lines</span>
 					<span>{entry.instruction.bytes.toLocaleString()} bytes</span>

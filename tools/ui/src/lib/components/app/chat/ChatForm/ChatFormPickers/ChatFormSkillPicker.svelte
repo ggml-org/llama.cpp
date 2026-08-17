@@ -5,6 +5,7 @@
 		ChatFormPickerPopover
 	} from '$lib/components/app/chat';
 	import { usePickerNavigation } from '$lib/hooks/use-picker-navigation.svelte';
+	import SkillProviderLabel from '$lib/components/app/skills/SkillProviderLabel.svelte';
 	import type { SkillCatalogEntry } from '$lib/types';
 	import { normalizeSkillDescription } from '$lib/utils';
 
@@ -20,7 +21,7 @@
 		class?: string;
 		isOpen: boolean;
 		query: string;
-		skills: SkillCatalogEntry[];
+		skills: readonly SkillCatalogEntry[];
 		onClose: () => void;
 		onSelect: (name: string) => void;
 	}
@@ -107,7 +108,7 @@
 						{normalizeSkillDescription(skill.description)}
 					</span>
 					<span class="text-[10px] uppercase tracking-wide text-muted-foreground/70">
-						{skill.scope} · {skill.provider}
+						{skill.scope} · <SkillProviderLabel provider={skill.provider} />
 					</span>
 				</div>
 			</ChatFormPickerListItem>

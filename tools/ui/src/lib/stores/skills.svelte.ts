@@ -4,6 +4,7 @@
  */
 import { SkillsService } from '$lib/services/skills.service';
 import { buildSkillRunSnapshot } from '$lib/services/skills-packing.service';
+import { skillAvailabilityStore } from '$lib/stores/skill-availability.svelte';
 import type { SkillCatalogResponse, SkillRunSnapshot } from '$lib/types';
 import { ApiError } from '$lib/utils/api-fetch';
 import { SvelteMap } from 'svelte/reactivity';
@@ -186,7 +187,7 @@ class SkillsStore {
 	): Promise<SkillRunSnapshot> {
 		const catalog = await SkillsService.list(cwd, signal);
 
-		return buildSkillRunSnapshot(cwd, catalog);
+		return buildSkillRunSnapshot(cwd, catalog, skillAvailabilityStore.disabledIds);
 	}
 
 	/** Invalidate screen state for a CWD; in-flight responses become stale. */

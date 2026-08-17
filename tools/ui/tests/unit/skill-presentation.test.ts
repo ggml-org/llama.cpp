@@ -1,44 +1,121 @@
-import { BookOpenText, FileText, PackageOpen, Terminal } from '@lucide/svelte';
 import {
-	classifySkillResourcePath,
-	groupSkillResourcePaths
+	buildSkillResourceTree,
+	classifySkillResourceFormat,
+	createSkillRootNode,
+	findSkillResourceParentPath,
+	flattenSkillResourceTree,
+	getInitialExpandedFolderPaths
 } from '$lib/components/app/skills/skill-resource-presentation';
 import { normalizeSkillDescription } from '$lib/utils/formatters';
 import { describe, expect, it } from 'vitest';
 
-describe('classifySkillResourcePath / groupSkillResourcePaths', () => {
-	it('classifies only the first path segment', () => {
-		expect(classifySkillResourcePath('scripts/build.py')).toMatchObject({
-			group: 'scripts',
-			icon: Terminal,
-			label: 'Scripts'
-		});
-		expect(classifySkillResourcePath('references/API.md')).toMatchObject({
-			group: 'references',
-			icon: BookOpenText,
-			label: 'References'
-		});
-		expect(classifySkillResourcePath('assets/template.docx')).toMatchObject({
-			group: 'assets',
-			icon: PackageOpen,
-			label: 'Assets'
-		});
-		expect(classifySkillResourcePath('notes/references.md')).toMatchObject({
-			group: 'other',
-			icon: FileText,
-			label: 'Other files'
-		});
+describe('skill resource presentation', () => {
+	it.each([
+		['SKILL.md', 'markdown'],
+		['references/guide.md', 'markdown'],
+		['references/guide.markdown', 'markdown'],
+		['assets/example.html', 'html'],
+		['assets/example.htm', 'html'],
+		['scripts/build.ts', 'source'],
+		['notes/data.json', 'source'],
+		['notes/readme.txt', 'source']
+	] as const)('classifies %s as %s', (path, format) => {
+		expect(classifySkillResourceFormat(path)).toBe(format);
 	});
 
-	it('omits empty groups and keeps the required order', () => {
-		expect(
-			groupSkillResourcePaths(['misc/data.json', 'assets/sample.svg', 'scripts/run.sh'])
-		).toEqual([
-			expect.objectContaining({ group: 'scripts', paths: ['scripts/run.sh'] }),
-			expect.objectContaining({ group: 'assets', paths: ['assets/sample.svg'] }),
-			expect.objectContaining({ group: 'other', paths: ['misc/data.json'] })
+	it.each([
+		'README',
+		'unknown.blob',
+		'document.pdf',
+		'image.png',
+		'image.svg',
+		'audio.mp3',
+		'video.mp4',
+		'archive.zip',
+		'archive.tar.gz',
+		'program.exe'
+	])('keeps unsupported resource %s unavailable', (path) => {
+		expect(classifySkillResourceFormat(path)).toBe('unsupported');
+	});
+
+	it('builds a deduplicated hierarchy without changing relative paths', () => {
+		const tree = buildSkillResourceTree([
+			'references/API.md',
+			'scripts/nested/run.sh',
+			'references/API.md',
+			'asset.bin'
 		]);
-		expect(groupSkillResourcePaths([])).toEqual([]);
+
+		expect(createSkillRootNode()).toEqual({
+			format: 'markdown',
+			kind: 'file',
+			name: 'SKILL.md',
+			path: 'SKILL.md'
+		});
+		expect(tree).toEqual([
+			{
+				children: [
+					{
+						format: 'markdown',
+						kind: 'file',
+						name: 'API.md',
+						path: 'references/API.md'
+					}
+				],
+				kind: 'folder',
+				name: 'references',
+				path: 'references'
+			},
+			{
+				children: [
+					{
+						children: [
+							{
+								format: 'source',
+								kind: 'file',
+								name: 'run.sh',
+								path: 'scripts/nested/run.sh'
+							}
+						],
+						kind: 'folder',
+						name: 'nested',
+						path: 'scripts/nested'
+					}
+				],
+				kind: 'folder',
+				name: 'scripts',
+				path: 'scripts'
+			},
+			{
+				format: 'unsupported',
+				kind: 'file',
+				name: 'asset.bin',
+				path: 'asset.bin'
+			}
+		]);
+	});
+
+	it('expands top-level folders and flattens only visible descendants', () => {
+		const root = createSkillRootNode();
+		const tree = buildSkillResourceTree([
+			'references/API.md',
+			'scripts/nested/run.sh',
+			'scripts/top.ts'
+		]);
+		const expanded = getInitialExpandedFolderPaths(tree);
+		const rows = flattenSkillResourceTree([root, ...tree], expanded);
+
+		expect([...expanded]).toEqual(['references', 'scripts']);
+		expect(rows.map(({ depth, node }) => [node.path, depth])).toEqual([
+			['SKILL.md', 0],
+			['references', 0],
+			['references/API.md', 1],
+			['scripts', 0],
+			['scripts/nested', 1],
+			['scripts/top.ts', 1]
+		]);
+		expect(findSkillResourceParentPath(rows, 'scripts/nested')).toBe('scripts');
+		expect(findSkillResourceParentPath(rows, 'scripts')).toBeNull();
 	});
 });
 

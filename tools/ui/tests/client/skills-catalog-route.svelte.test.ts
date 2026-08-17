@@ -10,14 +10,19 @@ import SkillsPageWrapper from './components/SkillsPageWrapper.svelte';
 import SkillCatalogList from '$lib/components/app/skills/SkillCatalogList.svelte';
 import {
 	CONFIG_LOCALSTORAGE_KEY,
+	DISABLED_SKILL_IDS_LOCALSTORAGE_KEY,
 	SETTINGS_KEYS,
 	SKILLS_PANE_SIZES_LOCALSTORAGE_KEY
 } from '$lib/constants';
-import { serializeSkillCatalogEnvelope } from '$lib/services/skills-packing.service';
+import {
+	buildSkillRunSnapshot,
+	serializeSkillCatalogEnvelope
+} from '$lib/services/skills-packing.service';
 import { isMobile } from '$lib/stores';
 import { conversationsStore } from '$lib/stores/conversations.svelte';
 import { modelsStore } from '$lib/stores/models.svelte';
 import { settingsStore } from '$lib/stores/settings.svelte';
+import { skillAvailabilityStore } from '$lib/stores/skill-availability.svelte';
 import { skillsStore } from '$lib/stores/skills.svelte';
 import type { SkillCatalogEntry, SkillCatalogResponse, SkillReadResult } from '$lib/types';
 import { tick } from 'svelte';
@@ -204,14 +209,16 @@ describe('/skills route presentation', () => {
 		const text = bodyText();
 
 		// Safe fields: name, description, scope, provider, instruction facts,
-		// estimate label, timestamp, resource count / lower bound.
+		// timestamp, resource count / lower bound. The `agents` API provider
+		// renders as the provider-agnostic `generic` label and the card shows
+		// a tilde-prefixed token count instead of an `estimated` chip.
 		expect(text).toContain('demo-skill');
 		expect(text).toContain('A skill that does things.');
 		expect(text).toContain('global');
-		expect(text).toContain('agents');
-		expect(text).toContain('512');
+		expect(text).toContain('generic');
+		expect(text).not.toContain('agents');
+		expect(text).toContain('~512 tokens');
 		expect(text).toContain('42');
-		expect(text).toContain('estimated');
 		expect(text).toContain('2024');
 		// `Resources:` and the count are sibling text nodes, so the browser
 		// serializes the inter-node whitespace into textContent; assert the
@@ -220,7 +227,9 @@ describe('/skills route presentation', () => {
 		expect(text).toMatch(/Resources:\s*3\+/);
 		// A complete resource listing renders the exact count.
 		expect(text).toMatch(/Resources:\s*2\b/);
-		expect(text).toContain('exact');
+		// Exact counts render plainly with no count-mode chip.
+		expect(text).toContain('2 tokens');
+		expect(text).not.toContain('exact');
 	});
 
 	it('never renders opaque catalog XML or host paths', async () => {
@@ -277,7 +286,8 @@ describe('/skills route presentation', () => {
 		expect(text).toContain('Skill: Beta Skill');
 		expect(text).toContain('Scope: global');
 		expect(text).toContain('Scope: project');
-		expect(text).toContain('Provider: agents');
+		expect(text).toContain('Provider: generic');
+		expect(text).not.toContain('Provider: agents');
 		expect(text).toContain('Provider: local');
 
 		// Both messages render; duplicate codes stay two independent rows.
@@ -573,7 +583,13 @@ describe('/skills catalog preview', () => {
 
 	beforeEach(() => {
 		localStorage.removeItem(CONFIG_LOCALSTORAGE_KEY);
+		localStorage.removeItem(DISABLED_SKILL_IDS_LOCALSTORAGE_KEY);
 		localStorage.removeItem(SKILLS_PANE_SIZES_LOCALSTORAGE_KEY);
+		// The availability store is a process-wide singleton; clear any IDs
+		// left by a prior test so each catalog toggle test starts enabled.
+		for (const id of [...skillAvailabilityStore.disabledIds]) {
+			skillAvailabilityStore.setEnabled(id, true);
+		}
 		settingsStore.initialize();
 		skillsStore.invalidate(undefined);
 		modelsStore.selectedModelName = null;
@@ -982,6 +998,201 @@ describe('/skills catalog preview', () => {
 		);
 		expect(screen.getByRole('button', { name: 'Back' }).query()).toBeNull();
 	});
+
+	it('disabling the selected card leaves its detail open and shows a Disabled badge', async () => {
+		await useDesktopViewport();
+		mockCatalogWithReads(makeCatalog(makeEntry('demo-skill'), makeEntry('second-skill')));
+
+		const screen = await render(SkillsPageWrapper);
+
+		await vi.waitFor(() => expect(bodyText()).toContain('demo-skill'));
+		await screen.getByRole('button', { name: /demo-skill/ }).click();
+		await vi.waitFor(() => expect(bodyText()).toContain('Content of demo-skill'));
+
+		// Toggling availability never selects or deselects the card.
+		await screen.getByRole('switch', { name: 'Disable demo-skill' }).click();
+		await vi.waitFor(() => expect(bodyText()).toContain('Disabled'));
+
+		// The detail stays open and the card stays selected.
+		expect(bodyText()).toContain('Content of demo-skill');
+		await expect
+			.element(screen.getByRole('button', { name: /demo-skill/ }))
+			.toHaveAttribute('aria-pressed', 'true');
+	});
+
+	it('keeps the budget preview and does not retokenize when a skill is disabled and re-enabled', async () => {
+		await useDesktopViewport();
+		modelsStore.selectedModelName = 'test-model';
+		const catalog = makePaddedCatalog(
+			[
+				makeEntry('demo-skill', { catalog_xml: '<s/>' }),
+				makeEntry('second-skill', { catalog_xml: '<s/>' })
+			],
+			'<inst/>',
+			120
+		);
+
+		// Catalog GET, per-name read, and a one-token-per-character
+		// tokenizer, so the initial pack measures the complete envelope.
+		vi.mocked(fetch).mockImplementation(async (url, init) => {
+			if (String(url).includes('/tokenize')) {
+				const body = JSON.parse((init as RequestInit).body as string) as { content: string };
+
+				return jsonResponse({ tokens: Array.from({ length: body.content.length }, (_, i) => i) });
+			}
+
+			if (String(url).includes('/skills/read')) {
+				const body = JSON.parse((init as RequestInit).body as string) as { name: string };
+
+				return jsonResponse(previewResult(body.name));
+			}
+
+			return jsonResponse(catalog);
+		});
+		vi.mocked(fetch).mockClear();
+
+		const screen = await render(SkillsPageWrapper);
+
+		const fullSnapshot = buildSkillRunSnapshot(undefined, catalog);
+		const budgetCopy = `The full Skills catalog uses ${fullSnapshot.envelope.length.toLocaleString()} of 2,000 budget tokens`;
+		const tokenizeCalls = () =>
+			vi.mocked(fetch).mock.calls.filter(([url]) => String(url).includes('/tokenize'));
+
+		await vi.waitFor(() => expect(bodyText()).toContain(budgetCopy));
+		// The initial render measured the complete envelope exactly once.
+		expect(tokenizeCalls()).toHaveLength(1);
+
+		// Toggling availability only flips the card's Disabled badge; the
+		// loaded catalog content is unchanged, so the pack/budget preview is
+		// neither aborted nor remeasured.
+		await screen.getByRole('switch', { name: 'Disable demo-skill' }).click();
+		await vi.waitFor(() => expect(bodyText()).toContain('Disabled'));
+		expect(bodyText()).toContain(budgetCopy);
+		expect(tokenizeCalls()).toHaveLength(1);
+
+		await screen.getByRole('switch', { name: 'Enable demo-skill' }).click();
+		await vi.waitFor(() => expect(bodyText()).not.toContain('Disabled'));
+		expect(bodyText()).toContain(budgetCopy);
+		expect(tokenizeCalls()).toHaveLength(1);
+
+		// The card/detail interaction stays usable: selecting the card opens
+		// its detail, and toggling from there keeps the detail open while the
+		// badge appears and disappears, still without a new tokenizer call.
+		await screen.getByRole('button', { name: /demo-skill/ }).click();
+		await vi.waitFor(() => expect(bodyText()).toContain('Content of demo-skill'));
+
+		await screen.getByRole('switch', { name: 'Disable demo-skill' }).click();
+		await vi.waitFor(() => expect(bodyText()).toContain('Disabled'));
+		expect(bodyText()).toContain('Content of demo-skill');
+		expect(tokenizeCalls()).toHaveLength(1);
+
+		await screen.getByRole('switch', { name: 'Enable demo-skill' }).click();
+		await vi.waitFor(() => expect(bodyText()).not.toContain('Disabled'));
+		expect(bodyText()).toContain('Content of demo-skill');
+		expect(tokenizeCalls()).toHaveLength(1);
+	});
+
+	it('labels every card switch with the Enable/Disable action for its state', async () => {
+		mockCatalogWithReads(makeCatalog(makeEntry('demo-skill'), makeEntry('second-skill')));
+
+		const screen = await render(SkillsPageWrapper);
+
+		await vi.waitFor(() => expect(bodyText()).toContain('demo-skill'));
+
+		// Every card exposes a switch whose accessible name names the action
+		// its current state implies.
+		await expect
+			.element(screen.getByRole('switch', { name: 'Disable demo-skill' }))
+			.toBeInTheDocument();
+		await expect
+			.element(screen.getByRole('switch', { name: 'Disable second-skill' }))
+			.toBeInTheDocument();
+
+		// Disabling flips only that card's switch to the re-enable action.
+		await screen.getByRole('switch', { name: 'Disable demo-skill' }).click();
+
+		await vi.waitFor(() => expect(bodyText()).toContain('Disabled'));
+		await expect
+			.element(screen.getByRole('switch', { name: 'Enable demo-skill' }))
+			.toBeInTheDocument();
+		await expect
+			.element(screen.getByRole('switch', { name: 'Disable second-skill' }))
+			.toBeInTheDocument();
+	});
+
+	it('toggling the switch never selects the card', async () => {
+		mockCatalogWithReads(makeCatalog(makeEntry('demo-skill'), makeEntry('second-skill')));
+
+		const screen = await render(SkillsPageWrapper);
+
+		await vi.waitFor(() => expect(bodyText()).toContain('demo-skill'));
+
+		await screen.getByRole('switch', { name: 'Disable demo-skill' }).click();
+		await vi.waitFor(() => expect(bodyText()).toContain('Disabled'));
+
+		// The click stays at the switch boundary: no detail pane opens, no
+		// card gains aria-pressed, and no read request fires.
+		expect(screen.getByTestId('skill-detail').query()).toBeNull();
+		expect(bodyText()).not.toContain('Content of demo-skill');
+		await expect
+			.element(screen.getByRole('button', { name: /demo-skill/ }))
+			.toHaveAttribute('aria-pressed', 'false');
+		expect(
+			vi.mocked(fetch).mock.calls.filter(([url]) => String(url).includes('/skills/read'))
+		).toHaveLength(0);
+	});
+
+	it('Enter and Space on the switch toggle it without selecting the card', async () => {
+		mockCatalogWithReads(makeCatalog(makeEntry('demo-skill'), makeEntry('second-skill')));
+
+		const screen = await render(SkillsPageWrapper);
+
+		await vi.waitFor(() => expect(bodyText()).toContain('demo-skill'));
+
+		const switchElement = screen.getByRole('switch', { name: 'Disable demo-skill' }).element();
+
+		switchElement.focus();
+		switchElement.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Enter' }));
+
+		// The keypress toggles availability, but is stopped at the switch
+		// boundary so the card's own Enter selection handler never fires.
+		await vi.waitFor(() => expect(bodyText()).toContain('Disabled'));
+		expect(screen.getByTestId('skill-detail').query()).toBeNull();
+		expect(bodyText()).not.toContain('Content of demo-skill');
+
+		switchElement.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: ' ' }));
+
+		await vi.waitFor(() => expect(bodyText()).not.toContain('Disabled'));
+		expect(screen.getByTestId('skill-detail').query()).toBeNull();
+		expect(bodyText()).not.toContain('Content of demo-skill');
+	});
+
+	it('clicking the visible action label toggles the switch without selecting the card', async () => {
+		mockCatalogWithReads(makeCatalog(makeEntry('demo-skill'), makeEntry('second-skill')));
+
+		const screen = await render(SkillsPageWrapper);
+
+		await vi.waitFor(() => expect(bodyText()).toContain('demo-skill'));
+
+		// The label's own click must be isolated like the switch's: clicking
+		// the action text toggles availability but never selects the card.
+		const label = document.querySelector<HTMLElement>(
+			'label[for="skill-enabled-opaque-demo-skill"]'
+		);
+
+		expect(label).not.toBeNull();
+		label!.click();
+
+		await vi.waitFor(() => expect(bodyText()).toContain('Disabled'));
+		expect(screen.getByTestId('skill-detail').query()).toBeNull();
+		expect(bodyText()).not.toContain('Content of demo-skill');
+		await expect
+			.element(screen.getByRole('button', { name: /demo-skill/ }))
+			.toHaveAttribute('aria-pressed', 'false');
+		expect(
+			vi.mocked(fetch).mock.calls.filter(([url]) => String(url).includes('/skills/read'))
+		).toHaveLength(0);
+	});
 });
 
 describe('SkillCatalogList manual-only badge', () => {
@@ -1013,5 +1224,32 @@ describe('SkillCatalogList manual-only badge', () => {
 		});
 
 		expect(bodyText()).not.toContain('Manual only');
+	});
+});
+
+describe('SkillCatalogList availability switch', () => {
+	it('shows both Manual only and Disabled badges while keeping the card readable and selectable', async () => {
+		const screen = await render(SkillCatalogList, {
+			props: {
+				entries: [makeEntry('gated', { disable_model_invocation: true })],
+				selectedId: null,
+				open: false,
+				onSelect: vi.fn(),
+				isDisabled: () => true,
+				onEnabledChange: vi.fn()
+			}
+		});
+
+		await expect.element(screen.getByText('Manual only')).toBeInTheDocument();
+		await expect.element(screen.getByText('Disabled')).toBeInTheDocument();
+
+		// Full legibility: description, instruction facts, and the switch all
+		// remain, and the card itself is still selectable.
+		expect(bodyText()).toContain('description of gated');
+		expect(bodyText()).toContain('4 tokens');
+		expect(bodyText()).toContain('1 lines');
+		expect(bodyText()).toContain('16 bytes');
+		await expect.element(screen.getByRole('switch', { name: 'Enable gated' })).toBeInTheDocument();
+		expect(screen.getByRole('button', { name: /gated/ }).query()).not.toBeNull();
 	});
 });

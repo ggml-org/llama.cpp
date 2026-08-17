@@ -399,7 +399,8 @@ static void test_reads_current_base_and_resources() {
 
     // the handlers must re-resolve and re-read on every request
     write_bytes(skill / "SKILL.md", "---\nname: current\ndescription: Use <safe> & sound.\n---\nsecond");
-    write_bytes(resource, "second resource");
+    const std::string resource_source = "second resource";
+    write_bytes(resource, resource_source);
 
     const server_http_res_ptr second = do_post(skills, R"({"name":"current"})");
     CHECK(second != nullptr);
@@ -413,7 +414,8 @@ static void test_reads_current_base_and_resources() {
     const json resource_body = parse_body(resource_response);
     CHECK(resource_body.at("kind") == "resource");
     CHECK(resource_body.at("resource").at("path") == "references/DETAILS.md");
-    CHECK(resource_body.at("content_xml").get<std::string>().find("second resource") != std::string::npos);
+    CHECK(resource_body.at("source") == resource_source);
+    CHECK(resource_body.at("content_xml").get<std::string>().find(resource_source) != std::string::npos);
 }
 
 static void test_read_rejects_unsafe_paths_and_ranks_suggestions() {

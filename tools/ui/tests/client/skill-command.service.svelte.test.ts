@@ -9,6 +9,7 @@ import { AttachmentType } from '$lib/enums';
 import { SkillsService } from '$lib/services/skills.service';
 import { conversationsStore } from '$lib/stores/conversations.svelte';
 import { skillActivationStore } from '$lib/stores/skill-activation.svelte';
+import { skillAvailabilityStore } from '$lib/stores/skill-availability.svelte';
 import type { SkillBaseReadResult } from '$lib/types/skills';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -28,6 +29,9 @@ vi.mock('$lib/stores/skill-activation.svelte', () => ({
 		recordActivation: vi.fn(async () => ({ created: true, extra: {}, toolResultMessage: null }))
 	}
 }));
+vi.mock('$lib/stores/skill-availability.svelte', () => ({
+	skillAvailabilityStore: { isDisabled: vi.fn(() => false) }
+}));
 
 function baseResult(name = 'frontend-design'): SkillBaseReadResult {
 	return {
@@ -46,6 +50,8 @@ beforeEach(() => {
 	vi.mocked(conversationsStore.createConversation).mockClear();
 	vi.mocked(skillActivationStore.loadConversation).mockClear();
 	vi.mocked(skillActivationStore.recordActivation).mockClear();
+	vi.mocked(skillAvailabilityStore.isDisabled).mockReset();
+	vi.mocked(skillAvailabilityStore.isDisabled).mockReturnValue(false);
 	conversationsStore.activeConversation = null;
 	conversationsStore.pendingCwd = null;
 });
@@ -135,6 +141,7 @@ describe('dispatchSkillActivation', () => {
 			diagnostics: [],
 			kind: 'resource',
 			resource: { path: 'x' },
+			source: '',
 			skill: { id: 'opaque-x', name: 'x', provider: 'agents', scope: 'global' }
 		});
 
@@ -142,6 +149,21 @@ describe('dispatchSkillActivation', () => {
 
 		expect(outcome).toEqual({ ok: false, reason: 'not-found' });
 		expect(conversationsStore.createConversation).not.toHaveBeenCalled();
+		expect(skillActivationStore.recordActivation).not.toHaveBeenCalled();
+	});
+
+	it('rejects a resolved disabled identity before creating or persisting', async () => {
+		vi.mocked(SkillsService.read).mockResolvedValue(baseResult());
+		vi.mocked(skillAvailabilityStore.isDisabled).mockImplementation(
+			(id) => id === 'opaque-frontend-design'
+		);
+
+		const outcome = await dispatchSkillActivation('frontend-design');
+
+		expect(SkillsService.read).toHaveBeenCalled();
+		expect(outcome).toEqual({ ok: false, reason: 'disabled' });
+		expect(conversationsStore.createConversation).not.toHaveBeenCalled();
+		expect(skillActivationStore.loadConversation).not.toHaveBeenCalled();
 		expect(skillActivationStore.recordActivation).not.toHaveBeenCalled();
 	});
 

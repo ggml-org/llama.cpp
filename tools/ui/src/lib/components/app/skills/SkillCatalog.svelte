@@ -2,6 +2,7 @@
 	import SkillBudgetStatus from './SkillBudgetStatus.svelte';
 	import SkillCatalogList from './SkillCatalogList.svelte';
 	import SkillDetail from './SkillDetail.svelte';
+	import SkillProviderLabel from './SkillProviderLabel.svelte';
 	import { BookOpen, Circle, CircleSlash, RefreshCw, X } from '@lucide/svelte';
 	import { browser } from '$app/environment';
 	import { goto } from '$app/navigation';
@@ -30,6 +31,7 @@
 	import { persisted } from '$lib/stores/persisted.svelte';
 	import { serverStore } from '$lib/stores/server.svelte';
 	import { settingsStore } from '$lib/stores/settings.svelte';
+	import { skillAvailabilityStore } from '$lib/stores/skill-availability.svelte';
 	import { skillsStore } from '$lib/stores/skills.svelte';
 	import type { SkillCatalogEntry, SkillPackedCatalog } from '$lib/types';
 	import { isAbortError } from '$lib/utils';
@@ -159,8 +161,7 @@
 	// Full width only for a selected desktop catalog; keep the centered column otherwise.
 	const isDesktopWorkspace = $derived(status === 'ready' && selectedEntry !== null && !mobile);
 
-	// Pack exactly as an agent run would; presentation alone never tokenizes,
-	// selects, or loads a model.
+	// Pack the loaded catalog content; local availability changes do not alter it.
 	let packed = $state<SkillPackedCatalog | null>(null);
 	let packState = $state<'idle' | 'packing' | 'error'>('idle');
 	let packError = $state<unknown>(null);
@@ -233,7 +234,7 @@
 				<Skeleton class="h-24 w-full" />
 				<Skeleton class="h-24 w-full" />
 			</div>
-			<p class="text-sm text-muted-foreground">Loading catalog…</p>
+			<p class="text-sm text-muted-foreground">Loading catalog...</p>
 		{:else if status === 'error'}
 			{#if isUnavailable}
 				<Alert>
@@ -311,10 +312,10 @@
 										<span class="mr-2">Scope: {diagnostic.scope}</span>
 									{/if}
 									{#if diagnostic.provider}
-										<span class="mr-2">Provider: {diagnostic.provider}</span>
+										<span class="mr-2">Provider: <SkillProviderLabel provider={diagnostic.provider} /></span>
 									{/if}
 									{#if diagnostic.providers && diagnostic.providers.length > 0}
-										<span class="mr-2">Providers: {diagnostic.providers.join(', ')}</span>
+										<span class="mr-2">Providers: {#each diagnostic.providers as provider, index (provider)}{#if index > 0}<span>,&#32;</span>{/if}<SkillProviderLabel provider={provider} />{/each}</span>
 									{/if}
 									{diagnostic.message}
 								</span>
@@ -340,6 +341,8 @@
 						{selectedId}
 						open={selectedEntry !== null}
 						onSelect={handleSelect}
+						isDisabled={(id) => skillAvailabilityStore.isDisabled(id)}
+						onEnabledChange={(entry, enabled) => skillAvailabilityStore.setEnabled(entry.id, enabled)}
 					/>
 				{/if}
 			{:else}
@@ -356,6 +359,9 @@
 									{selectedId}
 									open={true}
 									onSelect={handleSelect}
+									isDisabled={(id) => skillAvailabilityStore.isDisabled(id)}
+									onEnabledChange={(entry, enabled) =>
+										skillAvailabilityStore.setEnabled(entry.id, enabled)}
 								/>
 							</div>
 						</Resizable.Pane>
@@ -376,6 +382,8 @@
 						{selectedId}
 						open={selectedEntry !== null}
 						onSelect={handleSelect}
+						isDisabled={(id) => skillAvailabilityStore.isDisabled(id)}
+						onEnabledChange={(entry, enabled) => skillAvailabilityStore.setEnabled(entry.id, enabled)}
 					/>
 				{/if}
 			{/if}

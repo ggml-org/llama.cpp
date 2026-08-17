@@ -1183,6 +1183,7 @@ server_skills::server_skills(server_skills_config config, token_count_callback c
                 {"kind", "resource"},
                 {"skill", {{"id", skill.id}, {"name", skill.name}, {"scope", skill.scope}, {"provider", skill.provider}}},
                 {"resource", {{"path", requested_path}}},
+                {"source", content},
                 {"content_xml", "<skill_resource name=\"" + xml_escape(skill.name) + "\" path=\"" + xml_escape(requested_path) + "\">" + xml_escape(content) + "</skill_resource>"},
                 {"diagnostics", diagnostics_json(catalog.diagnostics)},
             });

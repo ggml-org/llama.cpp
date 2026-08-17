@@ -155,6 +155,7 @@ function resourceResult(name: string, path: string): SkillResourceReadResult {
 		diagnostics: [],
 		kind: 'resource',
 		resource: { path },
+		source: 'data',
 		skill: { id: `opaque-${name}`, name, provider: 'agents', scope: 'project' }
 	};
 }

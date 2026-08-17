@@ -1,21 +1,16 @@
 <script lang="ts">
 	import { Circle, RefreshCw, X } from '@lucide/svelte';
-	import { MarkdownContent, SyntaxHighlightedCode } from '$lib/components/app';
+	import SkillResourcePicker from '$lib/components/app/skills/SkillResourcePicker.svelte';
+	import SkillResourcePreview from '$lib/components/app/skills/SkillResourcePreview.svelte';
 	import { ActionIcon } from '$lib/components/app/actions';
-	import { groupSkillResourcePaths } from '$lib/components/app/skills/skill-resource-presentation';
+	import SkillProviderLabel from '$lib/components/app/skills/SkillProviderLabel.svelte';
 	import { Alert, AlertDescription, AlertTitle } from '$lib/components/ui/alert';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
-	import {
-		Collapsible,
-		CollapsibleContent,
-		CollapsibleTrigger
-	} from '$lib/components/ui/collapsible';
 	import { Skeleton } from '$lib/components/ui/skeleton';
-	import { FileTypeText } from '$lib/enums/files.enums';
 	import { SkillsService } from '$lib/services/skills.service';
 	import type { SkillBaseReadResult, SkillCatalogEntry } from '$lib/types';
-	import { fade, fly } from 'svelte/transition';
+	import { fly } from 'svelte/transition';
 
 	interface Props {
 		entry: SkillCatalogEntry;
@@ -33,14 +28,13 @@
 	let retryToken = $state(0);
 	let readGeneration = 0;
 
-	// Each newly selected skill starts in the rendered markdown mode.
-	let mode = $state<'markdown' | 'raw'>('markdown');
-
-	let resourceGroupsOpen = $state<Record<string, boolean>>({});
+	let selectedPath = $state('SKILL.md');
+	let unavailablePaths = $state<ReadonlySet<string>>(new Set());
 
 	$effect(() => {
 		void entry.id;
-		mode = 'markdown';
+		selectedPath = 'SKILL.md';
+		unavailablePaths = new Set();
 	});
 
 	$effect(() => {
@@ -49,7 +43,8 @@
 		const generation = ++readGeneration;
 
 		result = null;
-		resourceGroupsOpen = {};
+		selectedPath = 'SKILL.md';
+		unavailablePaths = new Set();
 		errorMessage = '';
 
 		SkillsService.read({ name: entry.name }, cwd, controller.signal)
@@ -64,9 +59,6 @@
 					return;
 				}
 
-				resourceGroupsOpen = Object.fromEntries(
-					groupSkillResourcePaths(readResult.resources.paths).map((group) => [group.group, false])
-				);
 				result = readResult;
 				readState = 'ready';
 			})
@@ -84,8 +76,14 @@
 		retryToken += 1;
 	}
 
-	// Resource groups derive only from the successful base read.
-	const resourceGroups = $derived(result ? groupSkillResourcePaths(result.resources.paths) : []);
+	function setResourceAvailability(path: string, available: boolean) {
+		const next = new Set(unavailablePaths);
+
+		if (available) next.delete(path);
+		else next.add(path);
+
+		unavailablePaths = next;
+	}
 </script>
 
 <div
@@ -98,7 +96,7 @@
 			<div class="min-w-0">
 				<h2 class="text-base font-semibold">{entry.name}</h2>
 				<p class="text-xs text-muted-foreground">
-					{entry.scope} / {entry.provider}
+					{entry.scope} / <SkillProviderLabel provider={entry.provider} />
 				</p>
 				{#if entry.disable_model_invocation}
 					<Badge
@@ -111,55 +109,18 @@
 				{/if}
 			</div>
 
-			<div class="flex shrink-0 items-center gap-1">
-				<Button
-					variant={mode === 'markdown' ? 'default' : 'ghost'}
-					size="sm"
-					aria-pressed={mode === 'markdown'}
-					onclick={() => (mode = 'markdown')}
-				>
-					Markdown
-				</Button>
-				<Button
-					variant={mode === 'raw' ? 'default' : 'ghost'}
-					size="sm"
-					aria-pressed={mode === 'raw'}
-					onclick={() => (mode = 'raw')}
-				>
-					Raw
-				</Button>
-				<ActionIcon icon={X} tooltip={mobile ? 'Back' : 'Close'} onclick={onClose} />
-			</div>
+			<ActionIcon icon={X} tooltip={mobile ? 'Back' : 'Close'} onclick={onClose} />
 		</div>
 
-		{#if result && resourceGroups.length > 0}
-			<div class="flex flex-col gap-2">
-				{#each resourceGroups as resourceGroup (resourceGroup.group)}
-					{@const ResourceIcon = resourceGroup.icon}
-					<Collapsible
-						bind:open={resourceGroupsOpen[resourceGroup.group]}
-						data-testid="skill-detail-resources-{resourceGroup.group}"
-						class="rounded-md border transition-colors"
-					>
-						<CollapsibleTrigger
-							data-testid="skill-detail-resource-trigger-{resourceGroup.group}"
-							class="flex w-full cursor-pointer items-center gap-2 rounded-md px-3 py-2 text-left text-sm font-medium transition-colors hover:bg-accent/50"
-						>
-							<ResourceIcon class="size-3.5 text-muted-foreground" aria-hidden="true" />
-							{resourceGroup.label} ({resourceGroup.paths.length})
-						</CollapsibleTrigger>
-						<CollapsibleContent
-							class="overflow-hidden px-3 pb-3 data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down"
-						>
-							<div class="flex flex-col gap-3">
-								{#each resourceGroup.paths as path (path)}
-									<div class="pl-5 font-mono text-xs break-all">{path}</div>
-								{/each}
-							</div>
-						</CollapsibleContent>
-					</Collapsible>
-				{/each}
-			</div>
+		{#if result}
+			<SkillResourcePicker
+				paths={result.resources.paths}
+				resourceCount={result.resources.paths.length}
+				resourcesTruncated={result.resources.truncated}
+				{selectedPath}
+				{unavailablePaths}
+				onSelect={(path) => (selectedPath = path)}
+			/>
 		{/if}
 	</div>
 
@@ -190,19 +151,12 @@
 				</Button>
 			</div>
 		{:else if result}
-			{#if mode === 'markdown'}
-				<div data-testid="skill-detail-markdown" class="min-w-0" in:fade={{ duration: 150 }}>
-					<MarkdownContent content={result.body_markdown} />
-				</div>
-			{:else}
-				<div
-					data-testid="skill-detail-raw"
-					class="min-w-0 overflow-y-hidden"
-					in:fade={{ duration: 150 }}
-				>
-					<SyntaxHighlightedCode code={result.source} language={FileTypeText.MARKDOWN} />
-				</div>
-			{/if}
+			<SkillResourcePreview
+				baseResult={result}
+				{cwd}
+				{selectedPath}
+				onAvailabilityChange={setResourceAvailability}
+			/>
 		{/if}
 	</div>
 </div>
