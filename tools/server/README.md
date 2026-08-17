@@ -1102,7 +1102,7 @@ In *router mode* the query param `?model={model_id}` has to be set. This endpoin
 
 ### OpenTelemetry tracing
 
-Start an OpenTelemetry-enabled build with `--otel` (or `LLAMA_ARG_OTEL=1`) to export server request spans over OTLP/HTTP with protobuf encoding:
+Start an OpenTelemetry-enabled build with `--otel` (or `LLAMA_ARG_OTEL=1`) to export server request spans over OTLP/HTTP. Protobuf is the default encoding:
 
 ```bash
 OTEL_SERVICE_NAME=llama-server \
@@ -1110,7 +1110,11 @@ OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 \
 ./build/bin/llama-server --otel -m model.gguf
 ```
 
-`OTEL_EXPORTER_OTLP_ENDPOINT` is treated as a base URL and `/v1/traces` is appended. To provide the complete traces URL instead, set `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`. Completed spans are batched and pushed to that endpoint with HTTP POST; no collector scrape is required. Exporter headers, TLS, timeout, batching, resource attributes, SDK disablement, and sampling use the standard `OTEL_EXPORTER_OTLP_*`, `OTEL_BSP_*`, `OTEL_RESOURCE_ATTRIBUTES`, `OTEL_SDK_DISABLED`, `OTEL_TRACES_SAMPLER`, and `OTEL_TRACES_SAMPLER_ARG` environment variables.
+`OTEL_EXPORTER_OTLP_ENDPOINT` is treated as a base URL and `/v1/traces` is appended. To provide the complete traces URL instead, set `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`. Completed spans are batched and pushed to that endpoint with HTTP POST; no collector scrape is required. Exporter headers, TLS, timeout, batching, resource attributes, and SDK disablement are handled by OpenTelemetry C++ through the standard `OTEL_EXPORTER_OTLP_*`, `OTEL_BSP_*`, `OTEL_RESOURCE_ATTRIBUTES`, `OTEL_SERVICE_NAME`, and `OTEL_SDK_DISABLED` environment variables. Set `OTEL_EXPORTER_OTLP_PROTOCOL` or `OTEL_EXPORTER_OTLP_TRACES_PROTOCOL` to `http/json` to use JSON instead of the default `http/protobuf` encoding.
+
+`OTEL_TRACES_SAMPLER` supports `always_on`, `always_off`, `traceidratio`, `parentbased_always_on`, `parentbased_always_off`, and `parentbased_traceidratio`; ratio-based samplers read `OTEL_TRACES_SAMPLER_ARG`. These variables require a small llama.cpp adapter because OpenTelemetry C++ 1.27 does not apply the flat sampler environment variables when a tracer provider is assembled programmatically.
+
+When `OTEL_SDK_DISABLED=true`, no spans are created or exported, but incoming W3C trace context is still propagated to router and CORS-proxy requests as required by the OpenTelemetry environment-variable specification.
 
 Each request reaching a registered API handler produces a server span using the stable OpenTelemetry HTTP semantic conventions. Router and CORS-proxy requests also produce client spans and propagate W3C `traceparent` context downstream. Streaming spans remain open until the stream completes or the client disconnects.
 

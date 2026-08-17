@@ -2481,11 +2481,14 @@ server_http_proxy::server_http_proxy(
 
     // start the proxy thread
     SRV_DBG("start proxy thread %s %s\n", req.method.c_str(), req.path.c_str());
-    this->thread = std::thread([cli, pipe, req, headers_sent, make_header_msg]() {
+    this->thread = std::thread([cli, pipe, req, headers_sent, make_header_msg, trace_span = this->trace_span]() {
         auto result = cli->send(std::move(req));
         if (result.error() != httplib::Error::Success) {
             auto err_str = httplib::to_string(result.error());
             SRV_ERR("http client error: %s\n", err_str.c_str());
+            if (trace_span) {
+                trace_span->set_error("http_client_error");
+            }
             pipe->write({{}, 500, "", ""}); // header
             pipe->write({{}, 0, "proxy error: " + err_str, ""}); // body
         } else if (!headers_sent->load()) {
