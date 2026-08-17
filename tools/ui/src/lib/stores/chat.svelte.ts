@@ -627,7 +627,7 @@ class ChatStore {
 		return this.processingStates.get(conversationId) || null;
 	}
 
-	private setProcessingState(conversationId: string, state: ApiProcessingState | null): void {
+	setProcessingState(conversationId: string, state: ApiProcessingState | null): void {
 		if (state === null) this.processingStates.delete(conversationId);
 		else this.processingStates.set(conversationId, state);
 
@@ -2321,6 +2321,7 @@ class ChatStore {
 						updateStreamingContent(originalContent + appendedContent);
 						this.setChatReasoning(msg.convId, false);
 					},
+
 					onComplete: async (
 						finalContent?: string,
 						reasoningContent?: string,
@@ -2700,9 +2701,10 @@ class ChatStore {
 			prompt_n: number;
 			prompt_ms?: number;
 			predicted_n: number;
-			predicted_per_second: number;
+			predicted_ms?: number;
 			cache_n: number;
 			prompt_progress?: ChatMessagePromptProgress;
+			predicted_per_second?: number;
 		},
 		conversationId?: string
 	): void {
@@ -2721,12 +2723,19 @@ class ChatStore {
 		}
 	}
 
-	private parseTimingData(timingData: Record<string, unknown>): ApiProcessingState | null {
+	parseTimingData(timingData: Record<string, unknown>): ApiProcessingState | null {
 		const cacheTokens = (timingData.cache_n as number) || 0,
 			predictedTokens = (timingData.predicted_n as number) || 0,
+			rawPredictedMs = (timingData.predicted_ms as number) || undefined,
+			predictedMs =
+				predictedTokens <= 1 && rawPredictedMs !== undefined && rawPredictedMs < 0.01
+					? undefined
+					: rawPredictedMs,
 			promptMs = (timingData.prompt_ms as number) || undefined,
 			promptTokens = (timingData.prompt_n as number) || 0,
-			tokensPerSecond = (timingData.predicted_per_second as number) || 0;
+			tokensPerSecond =
+				(timingData.predicted_per_second as number) ||
+				(predictedMs && predictedTokens ? (predictedTokens / predictedMs) * 1000 : 0);
 		const promptProgress = timingData.prompt_progress as
 			| { total: number; cache: number; processed: number; time_ms: number }
 			| undefined;
@@ -2749,6 +2758,7 @@ class ChatStore {
 			hasNextToken: predictedTokens > 0,
 			outputTokensMax,
 			outputTokensUsed,
+			predictedMs,
 			progressPercent,
 			promptMs,
 			promptProgress,

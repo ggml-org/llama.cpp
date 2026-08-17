@@ -1,5 +1,5 @@
 import { ROUTES } from './routes.constants';
-import { Package, Search, Settings, SquarePen } from '@lucide/svelte';
+import { NotepadText, Package, Search, Settings, SquarePen } from '@lucide/svelte';
 import McpLogo from '$lib/components/app/mcp/McpLogo.svelte';
 import { ToolSource } from '$lib/enums/tools.enums';
 import type { DesktopIconStripItem } from '$lib/types';
@@ -56,6 +56,12 @@ export const MAX_HEIGHT_CODE_BLOCK = '22rem';
 
 export const SIDEBAR_ACTIONS_ITEMS: DesktopIconStripItem[] = [
 	{ icon: SquarePen, keys: ['shift', 'cmd', 'o'], route: ROUTES.NEW_CHAT, tooltip: 'New chat' },
+	{
+		activeRouteId: '/notebook',
+		icon: NotepadText,
+		route: ROUTES.NOTEBOOK,
+		tooltip: 'Notebook'
+	},
 	{ icon: Search, keys: ['cmd', 'k'], tooltip: 'Search' },
 	{
 		activeRouteId: '/mcp-servers',

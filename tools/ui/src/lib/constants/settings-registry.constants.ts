@@ -80,6 +80,7 @@ const TITLE_GENERATION_BASE = {
 	type: SettingsFieldType.RADIO
 } as const;
 const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
+
 	[SETTINGS_SECTION_SLUGS.AGENTIC]: {
 		icon: ListRestart,
 		settings: [

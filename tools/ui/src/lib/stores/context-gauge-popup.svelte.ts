@@ -20,7 +20,10 @@ export const gaugePopup = $state({ bottom: 0, centerX: 0, detailsOpen: false, op
 
 function openFrom(trigger: HTMLElement): void {
 	clearTimeout(closeTimer);
-	const frame = trigger.closest('form');
+	const frame =
+		trigger.closest('form') ??
+		trigger.closest('[data-gauge-container]') ??
+		trigger.closest('.bg-background');
 
 	if (frame) {
 		const frameRect = frame.getBoundingClientRect();

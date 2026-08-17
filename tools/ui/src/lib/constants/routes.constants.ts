@@ -29,6 +29,8 @@ export const ROUTES = {
 	MCP_SERVERS: '#/mcp-servers',
 	/** New chat — root with new chat query param. */
 	NEW_CHAT: `?${URL_PARAMS.NEW_CHAT}=true#/`,
+	/** Notebook page. */
+	NOTEBOOK: '#/notebook',
 	/** Search — mobile-only full-page conversation search. */
 	SEARCH: '#/search',
 	/** Settings base — for dynamic settings URLs use RouterService. */

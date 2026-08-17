@@ -36,6 +36,11 @@
 	import { pwaAssetsHead } from 'virtual:pwa-assets/head';
 
 	let { children } = $props();
+
+	let alwaysShowSidebarOnDesktop = $derived(settingsStore.config.alwaysShowSidebarOnDesktop);
+	let isDesktop = $derived(!isMobile.current);
+	let sidebarOpen = $state(false);
+	let mounted = $state(false);
 	let innerHeight = $state<number | undefined>();
 	let innerWidth = $state(browser ? window.innerWidth : 0);
 
