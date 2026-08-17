@@ -51,8 +51,8 @@
 				</Dialog.Title>
 
 				<Dialog.Description>
-					{conversations.length} conversation{conversations.length === 1 ? '' : 's'} imported.
-					Select one to open it.
+					{conversations.length} conversation{conversations.length === 1 ? '' : 's'} imported. Select
+					one to open it.
 				</Dialog.Description>
 			</Dialog.Header>
 

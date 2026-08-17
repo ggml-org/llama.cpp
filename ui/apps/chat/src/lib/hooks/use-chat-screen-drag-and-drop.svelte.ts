@@ -53,7 +53,10 @@ export function useChatScreenDragAndDrop(options: UseChatScreenDragAndDropOption
 		// Defer import files (conversation/settings exports) to the global
 		// drag-and-drop import handler instead of attaching them to a message.
 		if (files.some(isImportFileByExtension)) {
-			console.log('[chat-drop] deferring import files:', files.map((f) => f.name));
+			console.log(
+				'[chat-drop] deferring import files:',
+				files.map((f) => f.name)
+			);
 
 			return;
 		}
