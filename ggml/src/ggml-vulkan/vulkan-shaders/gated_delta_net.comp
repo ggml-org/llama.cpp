@@ -1,7 +1,9 @@
 #version 450
 
 #extension GL_EXT_control_flow_attributes : require
+#if USE_SUBGROUP_CLUSTERED || USE_SUBGROUP_ADD
 #extension GL_KHR_shader_subgroup_basic : enable
+#endif
 #if USE_SUBGROUP_CLUSTERED
 #extension GL_KHR_shader_subgroup_clustered : enable
 #endif
@@ -47,7 +49,7 @@ shared FLOAT_TYPE temp[SUBGROUP_SIZE];
 
 // This does a reduction across groups of LANES_PER_COLUMN
 FLOAT_TYPE reduce_add_shmem(FLOAT_TYPE partial) {
-    const uint lane = gl_SubgroupInvocationID;
+    const uint lane = gl_LocalInvocationIndex;
     temp[lane] = partial;
     barrier();
     [[unroll]] for (uint s = LANES_PER_COLUMN / 2u; s > 0; s >>= 1u) {
@@ -95,8 +97,8 @@ FLOAT_TYPE reduce_partial(FLOAT_TYPE partial) {
 void main() {
     const uint head_id = gl_WorkGroupID.x;
     const uint seq_id = gl_WorkGroupID.y;
-    const uint lane = gl_SubgroupInvocationID % LANES_PER_COLUMN;
-    const uint col = gl_WorkGroupID.z * COLS_PER_WG + (gl_SubgroupInvocationID / LANES_PER_COLUMN);
+    const uint lane = gl_LocalInvocationIndex % LANES_PER_COLUMN;
+    const uint col = gl_WorkGroupID.z * COLS_PER_WG + (gl_LocalInvocationIndex / LANES_PER_COLUMN);
 
     const uint iq1 = head_id % neq1;
     const uint iq3 = seq_id / rq3;
