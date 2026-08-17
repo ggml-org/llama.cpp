@@ -186,7 +186,7 @@ class ToolsStore {
 
 		if (readMedia) tools.push(readMedia);
 
-		// provide browser's get_info tool is server doesn't provide one
+		// provide browser's get_info tool if server doesn't provide one
 		if (!this.hasBuiltinTool(BuiltInTool.GET_INFO)) {
 			tools.push(buildBrowserInfoToolDefinition());
 		}
