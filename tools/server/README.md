@@ -337,9 +337,17 @@ To use this feature, start the server with `--tools all`. You can also enable on
 
 ### MCP servers
 
-Besides the built-in tools, the server can expose tools coming from MCP servers. Only the stdio transport is supported: such a server is a child process reading JSON-RPC messages on its stdin and writing replies on its stdout, so nothing has to be started or maintained outside `llama-server`.
+Besides the built-in tools, the server can expose tools coming from MCP servers, added in [#26062](https://github.com/ggml-org/llama.cpp/pull/26062). Only the stdio transport is supported: such a server is a child process reading JSON-RPC messages on its stdin and writing replies on its stdout, so nothing has to be started or maintained outside `llama-server`.
 
 Servers are declared in a Cursor-compatible JSON file:
+
+```json
+{
+  "mcpServers": {
+    "example": { "command": "/path/to/server", "args": [] }
+  }
+}
+```
 
 ```sh
 llama-server -m model.gguf --mcp-servers-config mcp.json
@@ -361,49 +369,7 @@ The child process runs with the same privileges as the server, so only declare c
 
 Note: `--ui-mcp-proxy` is unrelated, it only lets the Web UI reach remote MCP servers from the browser.
 
-#### Minimal example
-
-Since the protocol is one JSON-RPC message per line over stdio, a POSIX shell script is enough, with no SDK and no dependency:
-
-```sh
-#!/bin/sh
-# minimal MCP stdio server, one JSON-RPC message per line on stdin/stdout, logs go to stderr
-
-while IFS= read -r line; do
-    id=$(printf '%s' "$line" | sed -En 's/.*"id":([0-9]+).*/\1/p')
-    method=$(printf '%s' "$line" | sed -En 's/.*"method":"([^"]*)".*/\1/p')
-    case "$method" in
-        initialize)
-            printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{}},"serverInfo":{"name":"echo-sh","version":"1.0"}}}\n' "$id"
-            ;;
-        tools/list)
-            printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"echo","description":"Echo the input text back","inputSchema":{"type":"object","properties":{"text":{"type":"string"}},"required":["text"]}}]}}\n' "$id"
-            ;;
-        tools/call)
-            # the value is already JSON-escaped on the wire, so it can be re-embedded as-is
-            text=$(printf '%s' "$line" | sed -En 's/.*"text":"((\\.|[^"\\])*)".*/\1/p')
-            printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"%s"}]}}\n' "$id" "$text"
-            ;;
-        *)
-            # notifications have no id and expect no reply
-            ;;
-    esac
-done
-```
-
-Save it as `mcp-echo.sh`, make it executable, and declare it in `mcp.json`:
-
-```json
-{
-  "mcpServers": {
-    "sh": { "command": "/path/to/mcp-echo.sh" }
-  }
-}
-```
-
-The tool is then registered as `sh_echo` and can be picked from the tools list in the Web UI.
-
-Replacing the echoed value with the output of a local command, `pmset -g batt` for instance, is enough to give the model live battery status without touching any C++ code. The same skeleton wraps any existing program, in any language: the process boundary is the sandbox, and only the tools it declares are visible to the model.
+Any server written against the [MCP specification](https://modelcontextprotocol.io) works as is, whether it uses an official SDK or not: the transport is one JSON-RPC message per line on stdio, so a script wrapping an existing program is a valid server too.
 
 ### CORS
 
