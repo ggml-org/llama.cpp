@@ -26,5 +26,8 @@ else()
 endif()
 set_source_files_properties(${VENDOR_SRCS} PROPERTIES COMPILE_OPTIONS ${NO_WARN_FLAG})
 
+# sha1 lives in a namespace to avoid a clash with boringssl, see scripts/sync_vendor.py
+set_source_files_properties(sha1/sha1.c PROPERTIES LANGUAGE CXX)
+
 # sha256.c includes "rotate-bits/rotate-bits.h", so consumers get this dir too
 target_include_directories(${TARGET} PUBLIC .)

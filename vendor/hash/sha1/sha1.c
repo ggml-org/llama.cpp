@@ -25,6 +25,8 @@ A million repetitions of "a"
 
 #include "sha1.h"
 
+namespace vendor_hash {
+
 
 #define rol(value, bits) (((value) << (bits)) | ((value) >> (32 - (bits))))
 
@@ -292,4 +294,6 @@ void SHA1(
         SHA1Update(&ctx, (const unsigned char*)str + ii, 1);
     SHA1Final((unsigned char *)hash_out, &ctx);
 }
+
+} // namespace vendor_hash
 
