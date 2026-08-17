@@ -1110,7 +1110,7 @@ OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 \
 ./build/bin/llama-server --otel -m model.gguf
 ```
 
-`OTEL_EXPORTER_OTLP_ENDPOINT` is treated as a base URL and `/v1/traces` is appended. To provide the complete traces URL instead, set `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`. Exporter headers, TLS, timeout, batching, resource attributes, SDK disablement, and sampling use the standard `OTEL_EXPORTER_OTLP_*`, `OTEL_BSP_*`, `OTEL_RESOURCE_ATTRIBUTES`, `OTEL_SDK_DISABLED`, `OTEL_TRACES_SAMPLER`, and `OTEL_TRACES_SAMPLER_ARG` environment variables.
+`OTEL_EXPORTER_OTLP_ENDPOINT` is treated as a base URL and `/v1/traces` is appended. To provide the complete traces URL instead, set `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`. Completed spans are batched and pushed to that endpoint with HTTP POST; no collector scrape is required. Exporter headers, TLS, timeout, batching, resource attributes, SDK disablement, and sampling use the standard `OTEL_EXPORTER_OTLP_*`, `OTEL_BSP_*`, `OTEL_RESOURCE_ATTRIBUTES`, `OTEL_SDK_DISABLED`, `OTEL_TRACES_SAMPLER`, and `OTEL_TRACES_SAMPLER_ARG` environment variables.
 
 Each request reaching a registered API handler produces a server span using the stable OpenTelemetry HTTP semantic conventions. Router and CORS-proxy requests also produce client spans and propagate W3C `traceparent` context downstream. Streaming spans remain open until the stream completes or the client disconnects.
 
