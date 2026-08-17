@@ -82,8 +82,7 @@ class GraniteSWAModel(GraniteModel):
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
         name, gen = item
 
-        # Add .weight suffix to sinks tensors (the C++ code expects blk.{bid}.attn_sinks.weight)
-        if "sinks" in name:
+        if name.endswith("sinks"):
             name += ".weight"
 
         return super().filter_tensors((name, gen))
