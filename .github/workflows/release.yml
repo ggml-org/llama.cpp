@@ -1662,6 +1662,16 @@ jobs:
         run: |
           tar -czvf release/llama-${{ steps.tag.outputs.name }}-ui.tar.gz --transform "s,^\.,llama-${{ steps.tag.outputs.name }}," -C ./ui-dist .
 
+      - name: Create and push git tag
+        run: |
+          TAG="${{ steps.tag.outputs.name }}"
+          if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null 2>&1; then
+            echo "Tag ${TAG} already exists, skipping creation"
+          else
+            git tag "${TAG}"
+            git push origin "${TAG}"
+          fi
+
       - name: Create release
         id: create_release
         uses: ggml-org/action-create-release@v1
