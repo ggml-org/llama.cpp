@@ -4,6 +4,7 @@
 // created: false without persisting, and every success routes through the
 // shared recordActivation operation.
 
+import { ChatFormCommandAction } from '$lib/enums';
 import { dispatchSkillActivation } from '$lib/services/skill-command.service';
 import { AttachmentType } from '$lib/enums';
 import { SkillsService } from '$lib/services/skills.service';
@@ -11,6 +12,7 @@ import { conversationsStore } from '$lib/stores/conversations.svelte';
 import { skillActivationStore } from '$lib/stores/skill-activation.svelte';
 import { skillAvailabilityStore } from '$lib/stores/skill-availability.svelte';
 import type { SkillBaseReadResult } from '$lib/types/skills';
+import { getChatCommands } from '$lib/utils';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('$lib/services/skills.service', () => ({
@@ -54,6 +56,34 @@ beforeEach(() => {
 	vi.mocked(skillAvailabilityStore.isDisabled).mockReturnValue(false);
 	conversationsStore.activeConversation = null;
 	conversationsStore.pendingCwd = null;
+});
+
+describe('getChatCommands /skills', () => {
+	it('surfaces the /skills command through the existing command discovery path', () => {
+		const commands = getChatCommands({
+			hasCwdTools: () => true,
+			hasPrompts: () => true,
+			hasSkills: () => true,
+			showModelSelector: true
+		});
+		const skills = commands.find((c) => c.action === ChatFormCommandAction.SKILLS);
+
+		expect(skills).toBeDefined();
+		expect(skills?.name).toBe('skills');
+		expect(skills?.disabled).toBe(false);
+		expect(skills?.description.length).toBeGreaterThan(0);
+	});
+
+	it('disables /skills when the capability is unavailable', () => {
+		const commands = getChatCommands({
+			hasCwdTools: () => true,
+			hasPrompts: () => true,
+			hasSkills: () => false,
+			showModelSelector: true
+		});
+
+		expect(commands.find((c) => c.action === ChatFormCommandAction.SKILLS)?.disabled).toBe(true);
+	});
 });
 
 describe('dispatchSkillActivation', () => {
