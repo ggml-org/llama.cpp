@@ -870,6 +870,19 @@ struct ggml_backend_sched {
     int n_graph_inputs;
     int graph_inputs_capacity;
 
+    // where each graph input's N ring slots live, captured once the allocator has placed them.
+    // rotating on the graph reuse path means re-pointing the tensor by hand, because that path
+    // re-runs neither the split nor the allocator - see ggml_backend_sched_rotate_inputs()
+    struct ggml_backend_sched_input_slots {
+        ggml_backend_buffer_t buffer[GGML_SCHED_MAX_COPIES];
+        void *                data  [GGML_SCHED_MAX_COPIES];
+    } * graph_input_slots; // [graph_inputs_capacity]
+
+    // a compute has been issued and the graph inputs have not been rotated since. set when the
+    // splits are computed, cleared by anything that makes it safe to write the inputs again -
+    // either a rotation or a full synchronization
+    bool needs_rotate;
+
     struct ggml_context * ctx;
 
     ggml_backend_sched_eval_callback callback_eval;
@@ -921,7 +934,42 @@ static void ggml_backend_sched_graph_inputs_grow(ggml_backend_sched_t sched) {
         GGML_ABORT("failed to grow graph inputs container");
     }
     sched->graph_inputs = pnew;
+
+    auto * snew = (struct ggml_backend_sched::ggml_backend_sched_input_slots *) realloc(
+            (void *) sched->graph_input_slots, new_cap * sizeof(sched->graph_input_slots[0]));
+    if (snew == NULL) {
+        GGML_LOG_ERROR("%s: failed to allocate %zu bytes\n", __func__, new_cap * sizeof(sched->graph_input_slots[0]));
+        GGML_ABORT("failed to grow graph input slots container");
+    }
+    sched->graph_input_slots = snew;
+
     sched->graph_inputs_capacity = new_cap;
+}
+
+// the graph input a tensor ultimately refers to, following view chains, or NULL if it is not
+// (a view of) a graph input
+static struct ggml_tensor * ggml_backend_sched_graph_input(struct ggml_tensor * t) {
+    while (t != NULL) {
+        if (t->flags & GGML_TENSOR_FLAG_INPUT) {
+            return t;
+        }
+        t = t->view_src;
+    }
+    return NULL;
+}
+
+// re-derive a view's address from its source, the way ggml_gallocr_init_tensor would have. only
+// needed after an input has been re-pointed by hand: a view's address is baked at allocation
+// time, so moving the tensor it views does not move the view with it
+static void ggml_backend_sched_reinit_view(struct ggml_tensor * t) {
+    if (t->view_src == NULL) {
+        return;
+    }
+
+    ggml_backend_sched_reinit_view(t->view_src);
+
+    t->buffer = t->view_src->buffer;
+    t->data   = (char *) t->view_src->data + t->view_offs;
 }
 
 // returns the priority of the backend, lower id is higher priority
@@ -1432,27 +1480,35 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
                 const int src_backend_id = sched->hv_tensor_backend_ids[src_id];
                 GGML_ASSERT(src_backend_id != -1); // all inputs should be assigned by now
 
-                if (src->flags & GGML_TENSOR_FLAG_INPUT && sched->n_copies > 1) {
-                    if (tensor_id_copy(src_id, src_backend_id, 0) == NULL) {
-                        ggml_backend_t backend = sched->backends[src_backend_id];
+                // an input is not always reached directly - the recurrent state copy, for one, is
+                // only ever read through views of it. the ring has to rotate the input itself, so
+                // resolve through any views here, otherwise it is never registered and never moves
+                struct ggml_tensor * inp = ggml_backend_sched_graph_input(src);
+
+                if (inp != NULL && sched->n_copies > 1) {
+                    const size_t inp_id         = hash_id(inp);
+                    const int    inp_backend_id = sched->hv_tensor_backend_ids[inp_id];
+
+                    if (inp_backend_id != -1 && tensor_id_copy(inp_id, inp_backend_id, 0) == NULL) {
+                        ggml_backend_t backend = sched->backends[inp_backend_id];
                         for (int c = 0; c < sched->n_copies; c++) {
                             struct ggml_tensor * tensor_copy;
                             if (c == sched->cur_copy) {
-                                tensor_copy = src; // use the original tensor as the current copy
+                                tensor_copy = inp; // use the original tensor as the current copy
                             } else {
-                                tensor_copy = ggml_dup_tensor_layout(sched->ctx, src);
-                                ggml_format_name(tensor_copy, "%s#%s#%d", ggml_backend_name(backend), src->name, c);
+                                tensor_copy = ggml_dup_tensor_layout(sched->ctx, inp);
+                                ggml_format_name(tensor_copy, "%s#%s#%d", ggml_backend_name(backend), inp->name, c);
                             }
                             ggml_set_input(tensor_copy);
                             ggml_set_output(tensor_copy); // prevent ggml-alloc from overwriting the tensor
-                            tensor_id_copy(src_id, src_backend_id, c) = tensor_copy;
+                            tensor_id_copy(inp_id, inp_backend_id, c) = tensor_copy;
                             SET_CAUSE(tensor_copy, "4.cpy");
                         }
                         int n_graph_inputs = sched->n_graph_inputs++;
                         if (n_graph_inputs >= sched->graph_inputs_capacity) {
                             ggml_backend_sched_graph_inputs_grow(sched);
                         }
-                        sched->graph_inputs[n_graph_inputs] = src;
+                        sched->graph_inputs[n_graph_inputs] = inp;
                     }
                 }
 
@@ -1912,6 +1968,10 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
 
     ggml_san_split(-1, NULL, 0);
 
+    // the device may still be reading the graph inputs, so they must not be written again until
+    // either the inputs are rotated onto another slot or everything has been waited for
+    sched->needs_rotate = true;
+
     return GGML_STATUS_SUCCESS;
 }
 
@@ -2004,6 +2064,8 @@ ggml_backend_sched_t ggml_backend_sched_new(
 
     sched->graph_inputs_capacity = GGML_SCHED_MAX_SPLIT_INPUTS;
     sched->graph_inputs = (struct ggml_tensor **) calloc(sched->graph_inputs_capacity, sizeof(struct ggml_tensor *));
+    sched->graph_input_slots = (struct ggml_backend_sched::ggml_backend_sched_input_slots *) calloc(
+            sched->graph_inputs_capacity, sizeof(sched->graph_input_slots[0]));
 
     for (int b = 0; b < n_backends; b++) {
         sched->backends[b] = backends[b];
@@ -2042,6 +2104,7 @@ void ggml_backend_sched_free(ggml_backend_sched_t sched) {
     }
     free(sched->splits);
     free(sched->graph_inputs);
+    free(sched->graph_input_slots);
     free(sched->hv_tensor_backend_ids);
     free(sched->hv_tensor_copies);
     free(sched->node_backend_ids);
@@ -2064,6 +2127,8 @@ void ggml_backend_sched_reset(ggml_backend_sched_t sched) {
         sched->is_reset = true;
     }
     sched->is_alloc = false;
+    // deliberately not clearing needs_rotate: resetting only drops bookkeeping, it does not wait
+    // for anything, so a compute issued before this can still be reading the graph inputs
 }
 
 void ggml_backend_sched_reserve_size(ggml_backend_sched_t sched, struct ggml_cgraph * measure_graph, size_t * sizes) {
@@ -2097,19 +2162,144 @@ bool ggml_backend_sched_reserve(ggml_backend_sched_t sched, struct ggml_cgraph *
     return true;
 }
 
+// record where the allocator put each graph input's ring slots. the tensor sitting in slot
+// cur_copy is the user's own tensor (split_graph aliases it there), the rest are placeholders
+// that exist only to reserve distinct, non-overlapping memory for the other slots.
+static void ggml_backend_sched_capture_input_slots(ggml_backend_sched_t sched) {
+    if (sched->n_copies <= 1) {
+        return;
+    }
+
+    for (int i = 0; i < sched->n_graph_inputs; i++) {
+        struct ggml_tensor * input = sched->graph_inputs[i];
+
+        const size_t id         = hash_id(input);
+        const int    backend_id = tensor_backend_id(input);
+
+        for (int c = 0; c < sched->n_copies; c++) {
+            struct ggml_tensor * slot = tensor_id_copy(id, backend_id, c);
+
+            sched->graph_input_slots[i].buffer[c] = slot ? slot->buffer : NULL;
+            sched->graph_input_slots[i].data  [c] = slot ? slot->data   : NULL;
+        }
+
+        if (sched->debug) {
+            GGML_LOG_DEBUG("%s: graph input %d: %s\n", __func__, i, input->name);
+        }
+    }
+}
+
+// step onto the next ring slot, waiting until the device is finished reading it if anything is
+// still in flight. the slot being stepped onto was last read n_copies-1 iterations ago, so this
+// is normally already signalled - that is the entire point of the ring. the writer we are
+// protecting is the host thread, so it has to be a host side wait, not ggml_backend_event_wait().
+static void ggml_backend_sched_advance_copy(ggml_backend_sched_t sched) {
+    sched->cur_copy  = sched->next_copy;
+    sched->next_copy = (sched->next_copy + 1) % sched->n_copies;
+
+    if (sched->n_copies <= 1 || !sched->needs_rotate) {
+        return;
+    }
+
+    for (int b = 0; b < sched->n_backends; b++) {
+        if (sched->events[b][sched->cur_copy] != NULL) {
+            ggml_backend_event_synchronize(sched->events[b][sched->cur_copy]);
+        } else {
+            ggml_backend_synchronize(sched->backends[b]);
+        }
+    }
+
+    if (sched->debug) {
+        GGML_LOG_DEBUG("%s: advanced to copy %d/%d\n", __func__, sched->cur_copy, sched->n_copies);
+    }
+}
+
+// move the graph inputs onto the next ring slot. this is what the graph reuse path needs: it
+// re-runs neither the split nor the allocator, so bumping cur_copy on its own would move nothing.
+static void ggml_backend_sched_rotate_inputs(ggml_backend_sched_t sched) {
+    GGML_ASSERT(sched->n_copies > 1);
+
+    ggml_backend_sched_advance_copy(sched);
+
+    for (int i = 0; i < sched->n_graph_inputs; i++) {
+        struct ggml_tensor * input = sched->graph_inputs[i];
+
+        if (sched->graph_input_slots[i].data[sched->cur_copy] == NULL) {
+            continue;
+        }
+
+        // nodes reference inputs by ggml_tensor *, and split_graph does not rewrite node->src[]
+        // for graph inputs, so re-pointing the tensor is enough to move every reader with it
+        input->buffer = sched->graph_input_slots[i].buffer[sched->cur_copy];
+        input->data   = sched->graph_input_slots[i].data  [sched->cur_copy];
+    }
+
+    // views of the inputs still point into the slot they were allocated against, so bring them
+    // along. only views rooted at a graph input are touched; for anything else this would be
+    // recomputing the address it already has
+    for (int i = 0; i < sched->graph.n_nodes; i++) {
+        struct ggml_tensor * node = sched->graph.nodes[i];
+
+        for (int j = 0; j < GGML_MAX_SRC; j++) {
+            struct ggml_tensor * src = node->src[j];
+            if (src != NULL && src->view_src != NULL && ggml_backend_sched_graph_input(src) != NULL) {
+                ggml_backend_sched_reinit_view(src);
+            }
+        }
+    }
+
+    // [TAG_CUDA_GRAPH_UID] tensor addresses just moved without a re-split, so the uids no longer
+    // stand for "nothing has changed" - a backend holding a captured graph has to recheck
+    for (int i = 0; i < sched->n_splits; i++) {
+        sched->splits[i].graph.uid = ggml_graph_next_uid();
+    }
+
+    if (sched->debug) {
+        GGML_LOG_DEBUG("%s: rotated %d graph inputs onto copy %d\n",
+                __func__, sched->n_graph_inputs, sched->cur_copy);
+    }
+}
+
+void ggml_backend_sched_prepare_inputs(ggml_backend_sched_t sched) {
+    GGML_ASSERT(sched);
+
+    if (!sched->needs_rotate) {
+        // nothing is in flight, the inputs can be written where they are
+        return;
+    }
+
+    if (sched->n_copies > 1) {
+        ggml_backend_sched_rotate_inputs(sched);
+    } else {
+        // no ring to rotate, so the only way to make the inputs safe to write is to wait
+        for (int b = 0; b < sched->n_backends; b++) {
+            ggml_backend_synchronize(sched->backends[b]);
+        }
+    }
+
+    sched->needs_rotate = false;
+}
+
 bool ggml_backend_sched_alloc_graph(ggml_backend_sched_t sched, struct ggml_cgraph * graph) {
     GGML_ASSERT(sched);
     GGML_ASSERT((int)sched->hash_set.size >= graph->n_nodes + graph->n_leafs);
     GGML_ASSERT(!sched->is_alloc);
 
-    sched->cur_copy = sched->next_copy;
-    sched->next_copy = (sched->next_copy + 1) % sched->n_copies;
+    // same wait as the reuse path: rotating onto a slot is only safe once its previous reader
+    // is done, whether the addresses come from re-splitting or from re-pointing by hand
+    ggml_backend_sched_advance_copy(sched);
 
     ggml_backend_sched_split_graph(sched, graph);
 
     if (!ggml_backend_sched_alloc_splits(sched)) {
         return false;
     }
+
+    ggml_backend_sched_capture_input_slots(sched);
+
+    // splitting placed the inputs afresh and re-stamped the split uids, so whatever was in
+    // flight before is no longer a reason to rotate
+    sched->needs_rotate = false;
 
     sched->is_alloc = true;
 
@@ -2142,6 +2332,9 @@ void ggml_backend_sched_synchronize(ggml_backend_sched_t sched) {
     for (int i = 0; i < sched->n_backends; i++) {
         ggml_backend_synchronize(sched->backends[i]);
     }
+
+    // nothing is reading the graph inputs any more
+    sched->needs_rotate = false;
     if (!sched->is_alloc) {
         // if the graph is not already allocated, always use copy 0 after a synchronization
         // this ensures that during generation the same copy is used every time,
