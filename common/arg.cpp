@@ -3634,10 +3634,8 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, const std::string & value) {
             if (is_truthy(value)) {
                 params.enable_reasoning = 1;
-                params.default_template_kwargs["enable_thinking"] = "true";
             } else if (is_falsey(value)) {
                 params.enable_reasoning = 0;
-                params.default_template_kwargs["enable_thinking"] = "false";
             } else if (is_autoy(value)) {
                 params.enable_reasoning = -1;
             } else {

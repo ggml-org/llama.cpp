@@ -1299,6 +1299,7 @@ json oaicompat_chat_params_parse(
             inputs.enable_thinking = false;
             inputs.chat_template_kwargs.erase("reasoning_effort");
         } else if (!reasoning_effort.empty()) {
+            inputs.enable_thinking = true;
             inputs.chat_template_kwargs["reasoning_effort"] = json(reasoning_effort).dump();
         }
     }
