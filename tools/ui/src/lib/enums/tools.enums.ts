@@ -8,13 +8,13 @@ export enum ToolSource {
 export enum ToolPermissionDecision {
 	ALWAYS = 'always',
 	ALWAYS_SERVER = 'always_server',
-	ONCE = 'once',
-	DENY = 'deny'
+	DENY = 'deny',
+	ONCE = 'once'
 }
 
 export enum ToolResponseField {
-	PLAIN_TEXT = 'plain_text_response',
-	ERROR = 'error'
+	ERROR = 'error',
+	PLAIN_TEXT = 'plain_text_response'
 }
 
 /**
@@ -22,9 +22,9 @@ export enum ToolResponseField {
  * Mirrors the server-side validation in server-tools.cpp.
  */
 export enum GlobSearchType {
-	FILE = 'file',
+	ALL = 'all',
 	DIR = 'dir',
-	ALL = 'all'
+	FILE = 'file'
 }
 
 /**
