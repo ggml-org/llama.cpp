@@ -9,6 +9,7 @@
 #include "ngram-map.h"
 #include "ngram-mod.h"
 #include "sampling.h"
+#include "speculative-adaptive.h"
 
 #include "../src/llama-ext.h" // staging API: llama_set_embeddings_nextn / llama_get_embeddings_nextn_ith (used by MTP)
 
@@ -1358,70 +1359,11 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
     std::vector<int>                i_last;
     std::vector<std::vector<float>> chain_h;
 
-    // Adaptive draft depth (draft-mtp-adaptive): hysteresis state machine with two
-    // counters per sequence. The depth N climbs after N_CLIMB(N) consecutive verifies
-    // that accepted every drafted token, where the requirement shrinks with depth:
-    // 5 full accepts below depth 5, 4 at depth 5-6, 3 at depth 7+. Leaving the floor
-    // must really be earned, but sustained acceptance that carried the depth this far
-    // earns the next step cheaply. Any miss adds (N - acceptance) to a drop-pressure
-    // accumulator; when it exceeds ADAPTIVE_DROP_PRESSURE the depth drops one step
-    // and the pressure resets. A near miss (N-1) adds 1, a total miss at depth N adds
-    // N, so high depths fall quickly while low depths hold. The floor is max(1, n_min)
-    // and the ceiling is n_max (--spec-draft-n-max).
+    // Adaptive draft depth (draft-mtp-adaptive), see common_speculative_adaptive
     bool adaptive = false;
-    std::vector<int>                n_cap;   // [n_seq] effective draft cap for the current draft() call
-    std::vector<int>                n_cur;   // [n_seq] current adaptive depth N
-    std::vector<int>                n_last;  // [n_seq] drafts attempted in the most recent draft() call
-    std::vector<int>                n_climb; // [n_seq] consecutive fully-accepted verifies
-    std::vector<int>                n_drop;  // [n_seq] accumulated drop pressure: sum of (N - acceptance)
-
-    static constexpr int ADAPTIVE_DROP_PRESSURE   = 30; // accumulated (N - acceptance) to drop one step
-
-    // consecutive full accepts needed to climb one step from depth N; cheaper the
-    // deeper we are, so predictable content accelerates while prose must earn its
-    // way off the floor
-    static int adaptive_climb_threshold(int depth) {
-        return depth >= 7 ? 3 : (depth >= 5 ? 4 : 5);
-    }
-
-    void adaptive_update(llama_seq_id seq_id, int n_draft, int n_accepted) {
-        if (n_draft <= 0) {
-            return;
-        }
-
-        const int floor = std::max(1, params.n_min);
-        const int n_max = std::max(1, params.n_max);
-
-        int depth = n_cur[seq_id];
-
-        if (n_accepted == depth) {
-            n_drop[seq_id] = 0;
-
-            // full acceptance: reset the drop pressure, accumulate the climb streak
-	    if ((depth < n_max) && (++n_climb[seq_id] >= adaptive_climb_threshold(depth))) {
-                depth++;
-                n_climb[seq_id] = 0;
-	    }
-        } else {
-            n_climb[seq_id] = 0;
-
-	    if (depth > floor) {
-		// any miss adds (N - acceptance) to the drop pressure; drop when the
-		// accumulated pressure exceeds the threshold
-		n_drop[seq_id] += depth - n_accepted;
-		if (n_drop[seq_id] > ADAPTIVE_DROP_PRESSURE) {
-		    depth--;
-		    n_drop[seq_id] = 0;
-		}
-	    }
-	}
-
-        if (depth != n_cur[seq_id]) {
-            SPC_DBG("adaptive draft depth seq %d: %d -> %d (n_draft=%d, n_accepted=%d)\n",
-                    (int) seq_id, n_cur[seq_id], depth, n_draft, n_accepted);
-        }
-        n_cur[seq_id] = depth;
-    }
+    std::vector<int> n_cap;   // [n_seq] effective draft cap for the current draft() call
+    std::vector<int> n_last;  // [n_seq] drafts attempted in the most recent draft() call
+    std::vector<common_speculative_adaptive> adaptive_ctrl; // [n_seq] per-seq adaptive depth controller
 
     common_speculative_impl_draft_mtp(const common_params_speculative & params, uint32_t n_seq, bool adaptive = false)
         : common_speculative_impl(adaptive ? COMMON_SPECULATIVE_TYPE_DRAFT_MTP_ADAPTIVE : COMMON_SPECULATIVE_TYPE_DRAFT_MTP, n_seq, params.draft.n_max)
@@ -1440,18 +1382,6 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         // n_cap/n_last are written by the shared draft loop in both modes
         n_cap.assign(n_seq, 0);
         n_last.assign(n_seq, 0);
-        if (adaptive) {
-            const int n_max = std::max(1, this->params.n_max);
-            n_cur.assign(n_seq, 0);
-            n_climb.assign(n_seq, 0);
-            n_drop.assign(n_seq, 0);
-            for (uint32_t s = 0; s < n_seq; ++s) {
-                // start at a safe depth of 3 (bounded by n_min/n_max); the controller
-                // moves it in [max(1,n_min), n_max] once acceptance feedback arrives
-                n_cur[s] = std::min(std::max(3, std::max(1, this->params.n_min)), n_max);
-            }
-            SPC_TRC("%s", "adaptive draft depth enabled (draft-mtp-adaptive)\n");
-        }
 
         SPC_TRC("%s", "adding speculative implementation 'draft-mtp'\n");
         SPC_TRC("- n_max=%d, n_min=%d, p_min=%.2f, n_embd=%d, backend_sampling=%d\n", this->params.n_max, this->params.n_min, this->params.p_min, n_embd, (int) this->params.backend_sampling);
@@ -1509,6 +1439,23 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
             }
         }
         this->n_max = this->params.n_max;
+
+        // a floor above the ceiling would pin the depth below the floor, so the
+        // configuration is invalid
+        if (this->params.n_min_adaptive < 1 || this->params.n_min_adaptive > this->params.n_max) {
+            GGML_ABORT("%s: invalid adaptive draft range: n_min_adaptive=%d, n_max=%d (n_min_adaptive must be in [1, n_max])",
+                    __func__, this->params.n_min_adaptive, this->params.n_max);
+        }
+
+        if (adaptive) {
+            adaptive_ctrl.assign(n_seq, common_speculative_adaptive());
+            for (uint32_t s = 0; s < n_seq; ++s) {
+                // start at the floor max(1, n_min_adaptive), bounded by n_max;
+                // the controller climbs from there once acceptance feedback arrives
+                adaptive_ctrl[s].reset(this->params.n_max, this->params.n_min_adaptive);
+            }
+            SPC_TRC("%s", "adaptive draft depth enabled (draft-mtp-adaptive)\n");
+        }
 
         pending_h.assign(n_seq, std::vector<float>(n_embd, 0.0f));
 
@@ -1700,7 +1647,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
             // effective draft cap for this step: adaptive depth (or the user n_max),
             // then clamped by the per-call context bound from the server
-            n_cap[seq_id] = adaptive ? n_cur[seq_id] : params.n_max;
+            n_cap[seq_id] = adaptive ? adaptive_ctrl[seq_id].n_cur : params.n_max;
             if (dp.n_max > 0 && dp.n_max < n_cap[seq_id]) {
                 n_cap[seq_id] = dp.n_max;
             }
@@ -1830,19 +1777,28 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
             n_last[seq_id] = (int) dp.result->size();
 
-            if (dp.result->size() < (size_t) params.n_min) {
+            // the adaptive controller decides its own depth, so the generic n_min
+            // draft cutoff does not apply to it
+            if (!adaptive && dp.result->size() < (size_t) params.n_min) {
                 dp.result->clear();
             }
         }
     }
 
-    void accept(llama_seq_id seq_id, uint16_t n_accepted, bool /*is_other*/) override {
+    void accept(llama_seq_id seq_id, uint16_t n_accepted, bool is_other) override {
         if (seq_id < 0 || seq_id >= (llama_seq_id) n_seq) {
             return;
         }
 
-        if (adaptive) {
-            adaptive_update(seq_id, n_last[seq_id], n_accepted);
+        // update the adaptive controller only when this implementation produced the
+        // accepted draft; on is_other the stats belong to a different speculator
+        if (adaptive && !is_other) {
+            const int depth_before = adaptive_ctrl[seq_id].n_cur;
+            adaptive_ctrl[seq_id].update(n_last[seq_id], n_accepted, params.n_max, params.n_min_adaptive);
+            if (adaptive_ctrl[seq_id].n_cur != depth_before) {
+                SPC_DBG("adaptive draft depth seq %d: %d -> %d (n_draft=%d, n_accepted=%d)\n",
+                        (int) seq_id, depth_before, adaptive_ctrl[seq_id].n_cur, n_last[seq_id], n_accepted);
+            }
         }
 
         const int32_t n_rows = verify_h_rows[seq_id];
