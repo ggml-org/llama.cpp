@@ -4,7 +4,14 @@
 	import { goto } from '$app/navigation';
 	import { base } from '$app/paths';
 	import { page } from '$app/state';
-	import { SidebarNavigation } from '$lib/components/app';
+	import {
+		DialogConversationSelection,
+		DialogImportConversationPreview,
+		DialogImportConversationsResult,
+		DialogSettingsImportPreview,
+		DropImportOverlay,
+		SidebarNavigation
+	} from '$lib/components/app';
 	import { PwaMetaTags, PwaRefreshAlert } from '$lib/components/pwa';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import {
@@ -15,6 +22,7 @@
 		SETTINGS_KEYS,
 		TOOLTIP_DELAY_DURATION
 	} from '$lib/constants';
+	import { useDropImport } from '$lib/hooks/use-drop-import.svelte';
 	import { useKeyboardShortcuts } from '$lib/hooks/use-keyboard-shortcuts.svelte';
 	import { usePwa } from '$lib/hooks/use-pwa.svelte';
 	import { RouterService } from '$lib/services/router.service';
@@ -99,6 +107,9 @@
 			goto(ROUTES.NEW_CHAT);
 		}
 	}
+
+	// Global drag-and-drop import (works on any route)
+	const dropImport = useDropImport();
 
 	// Global keyboard shortcuts
 	const { handleKeydown } = useKeyboardShortcuts({
@@ -272,7 +283,13 @@
 </svelte:head>
 
 <svelte:window onkeydown={handleKeydown} bind:innerHeight bind:innerWidth />
-<svelte:document onvisibilitychange={handleVisibilityChange} />
+<svelte:document
+	onvisibilitychange={handleVisibilityChange}
+	ondragenter={dropImport.dragHandlers.dragenter}
+	ondragleave={dropImport.dragHandlers.dragleave}
+	ondragover={dropImport.dragHandlers.dragover}
+	ondrop={dropImport.dragHandlers.drop}
+/>
 
 <Tooltip.Provider delayDuration={TOOLTIP_DELAY_DURATION}>
 	<div class="flex flex-col md:flex-row">
@@ -294,6 +311,42 @@
 	<ModeWatcher />
 
 	<Toaster richColors />
+
+	{#if dropImport.isDragOver}
+		<DropImportOverlay />
+	{/if}
+
+	<DialogConversationSelection
+		bind:open={dropImport.ui.showSelection}
+		conversations={dropImport.ui.availableConversations}
+		messageCountMap={dropImport.ui.selectionMessageCountMap}
+		mode="import"
+		onConfirm={dropImport.handleSelectionConfirm}
+		onCancel={dropImport.cancelSelection}
+	/>
+
+	<DialogSettingsImportPreview
+		bind:open={dropImport.ui.showSettingsPreview}
+		diff={dropImport.ui.settingsDiff}
+		onConfirm={dropImport.confirmSettingsImport}
+		onCancel={dropImport.cancelSettingsImport}
+	/>
+
+	<DialogImportConversationPreview
+		bind:open={dropImport.ui.showPreview}
+		conversationName={dropImport.ui.previewData?.conv.name}
+		messages={dropImport.ui.previewData?.messages}
+		onConfirm={dropImport.confirmImportSingle}
+		onCancel={dropImport.cancelPreview}
+	/>
+
+	<DialogImportConversationsResult
+		bind:open={dropImport.ui.showOpenBulk}
+		conversations={dropImport.ui.importedConversations}
+		messageCountMap={dropImport.ui.bulkMessageCountMap}
+		onOpen={dropImport.openConversation}
+		onClose={dropImport.cancelBulk}
+	/>
 </Tooltip.Provider>
 
 <!-- PWA update prompt + version -->

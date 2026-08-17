@@ -8,6 +8,7 @@
  */
 
 import { chatStore } from '$lib/stores';
+import { isImportFileByExtension } from '$lib/utils/import-file.utils';
 
 interface UseChatScreenDragAndDropOptions {
 	/** Called when the user drops files and no message is being edited. */
@@ -48,6 +49,17 @@ export function useChatScreenDragAndDrop(options: UseChatScreenDragAndDropOption
 		if (!event.dataTransfer?.files) return;
 
 		const files = Array.from(event.dataTransfer.files);
+
+		// Defer import files (conversation/settings exports) to the global
+		// drag-and-drop import handler instead of attaching them to a message.
+		if (files.some(isImportFileByExtension)) {
+			console.log('[chat-drop] deferring import files:', files.map((f) => f.name));
+
+			return;
+		}
+
+		// Stop bubbling so the global import handler ignores this attachment.
+		event.stopPropagation();
 
 		if (chatStore.isEditing()) {
 			const handler = chatStore.getAddFilesHandler();
