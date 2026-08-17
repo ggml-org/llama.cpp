@@ -35,7 +35,7 @@ struct Stats {
 
 struct tensor_statistics {
     std::string tensor;
-    Stats stats;
+    bool legacy = true;
     double sum = 0.0f;
     float mean = 0.0f;
     int64_t elements = 0;
@@ -138,19 +138,17 @@ static void process_tensor_name(const std::string & input, std::string & layer, 
     if (layer.empty()) { layer = "-"; }
 }
 
-static std::vector<float> compute_tensor_averages(const Stats & tstats) {
+static std::vector<float> compute_tensor_averages(const Stats & tstats, bool use_activations) {
     if (tstats.counts.empty()) { return {}; }
 
     const size_t n_mat = tstats.counts.size();
-    const size_t len = !tstats.activations.empty() ? tstats.activations.size() : tstats.values.size();
+    const size_t len = use_activations ? tstats.activations.size() : tstats.values.size();
     if (len == 0 || n_mat == 0 || len % n_mat != 0) { return {}; }
 
     const size_t row = len / n_mat;
     std::vector<float> vec(len, std::numeric_limits<float>::quiet_NaN());
 
     bool has_valid = false;
-    const bool use_activations = !tstats.activations.empty();
-
     for (size_t m = 0; m < n_mat; ++m) {
         const auto c = (float) tstats.counts[m];
         const size_t off = m * row;
@@ -166,12 +164,13 @@ static std::vector<float> compute_tensor_averages(const Stats & tstats) {
     }
 
     if (!has_valid) { return {}; }
+
     return vec;
 }
 
-static bool compute_vector_statistics(std::vector<tensor_statistics> & tstats, const std::string & name, const Stats & e, bool & legacy) {
+static bool compute_vector_statistics(std::vector<tensor_statistics> & tstats, const std::string & name, const Stats & e) {
     constexpr auto fnan = std::numeric_limits<float>::quiet_NaN();
-    legacy = e.activations.empty();
+    const bool legacy = e.activations.empty();
     const size_t n_mat = e.counts.size();
     const size_t len = legacy ? e.values.size() : e.activations.size();
 
@@ -263,7 +262,7 @@ static bool compute_vector_statistics(std::vector<tensor_statistics> & tstats, c
 
     auto & ts = tstats.emplace_back();
     ts.tensor = name;
-    ts.stats = e;
+    ts.legacy = legacy;
     ts.sum = sum;
     ts.mean = (float)mean;
     ts.elements = (int64_t)valid_n;
@@ -280,7 +279,7 @@ static bool compute_vector_statistics(std::vector<tensor_statistics> & tstats, c
     return true;
 }
 
-static void compute_tensor_statistics(std::vector<tensor_statistics> & tstats) {
+static void compute_tensor_statistics(std::vector<tensor_statistics> & tstats, const std::unordered_map<std::string, Stats> & mstats) {
     constexpr auto fnan = std::numeric_limits<float>::quiet_NaN();
     std::unordered_map<std::string, size_t> tensor_map;
     tensor_map.reserve(tstats.size());
@@ -312,8 +311,14 @@ static void compute_tensor_statistics(std::vector<tensor_statistics> & tstats) {
         }
 
         const auto & prev_ts = tstats[it->second];
-        const auto curr_avg = compute_tensor_averages(ts.stats);
-        const auto prev_avg = compute_tensor_averages(prev_ts.stats);
+        const auto curr_e = mstats.find(ts.tensor);
+        const auto prev_e = mstats.find(prev_ts.tensor);
+        if (curr_e == mstats.end() || prev_e == mstats.end()) { continue; }
+
+        // one side may not have no activation sums so compare both on the energy
+        const bool use_activations = !ts.legacy && !prev_ts.legacy;
+        const auto curr_avg = compute_tensor_averages(curr_e->second, use_activations);
+        const auto prev_avg = compute_tensor_averages(prev_e->second, use_activations);
 
         if (curr_avg.empty() || curr_avg.size() != prev_avg.size()) { continue; }
 
@@ -456,7 +461,7 @@ static void compute_layer_statistics(const std::vector<tensor_statistics> & tsta
         entry.n_tensors++;
         if (ts.n_features > 0) { entry.sum_n_features += ts.n_features; }
 
-        // gain needs both sides, so skip tensors with no live match in a previous layer
+        // skip tensors with no match in a previous layer
         if (ts.elements_prev > 0) {
             entry.sum_energy_curr += ts.sum;
             entry.sum_energy_prev += ts.sum_prev;
@@ -876,11 +881,8 @@ void IMatrixCollector::save_imatrix(int32_t n_chunk) const {
     // Compute per-tensor statistics
     std::vector<tensor_statistics> tstats;
     tstats.reserve(m_stats.size());
-    bool legacy;
-    for (const auto & kv : m_stats) {
-        compute_vector_statistics(tstats, kv.first, kv.second, legacy);
-    }
-    if (!tstats.empty()) { compute_tensor_statistics(tstats); }
+    for (const auto & kv : m_stats) { compute_vector_statistics(tstats, kv.first, kv.second); }
+    if (!tstats.empty()) { compute_tensor_statistics(tstats, m_stats); }
 
     // index by tensor name
     std::unordered_map<std::string, const tensor_statistics *> tstat_index;
@@ -1371,8 +1373,7 @@ static bool show_statistics(const common_params & params) {
     if (g_collector.load_imatrix(params.in_files[0].c_str())) {
         ts.reserve(g_collector.get_mstats().size());
         for (const auto & [name, stats] : g_collector.get_mstats()) {
-            bool legacy_imatrix = true;
-            if (!compute_vector_statistics(ts, name, stats, legacy_imatrix)) { continue; }
+            compute_vector_statistics(ts, name, stats);
         }
     } else {
         return false;
@@ -1380,8 +1381,13 @@ static bool show_statistics(const common_params & params) {
 
     if (ts.empty()) { return false; }
 
-    bool legacy = ts.empty() ? true : ts[0].stats.activations.empty();
-    compute_tensor_statistics(ts);
+    const auto n_legacy = (size_t) std::count_if(ts.begin(), ts.end(), [](const tensor_statistics & t) { return t.legacy; });
+    if (n_legacy > 0 && n_legacy < ts.size()) {
+        LOG_WRN("%s: %zu of %zu tensors have no activation data, using the legacy layout\n", __func__, n_legacy, ts.size());
+    }
+
+    const bool legacy = n_legacy > 0;
+    compute_tensor_statistics(ts, g_collector.get_mstats());
 
     // Sorting logic (Layer index -> Tensor Name)
     struct tensor_comparer {
