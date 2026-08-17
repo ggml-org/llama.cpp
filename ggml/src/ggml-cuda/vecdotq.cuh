@@ -360,6 +360,7 @@ static __device__ __forceinline__ float vec_dot_nvfp4_q8_1(
 
     return sum;
 }
+
 #define VDR_Q2_K_Q8_1_MMVQ 1
 #define VDR_Q2_K_Q8_1_MMQ  4
 
