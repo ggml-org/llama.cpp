@@ -19,6 +19,15 @@ GGML_METAL_EMBED_LIBRARY=ON
 GGML_BLAS_DEFAULT=ON
 GGML_OPENMP=OFF
 
+# Max number of concurrent platform builds (the release runner has 3 cores)
+MAX_PARALLEL_BUILDS=3
+
+# Split the available cores between the concurrent builds (min 1)
+JOBS_PER_BUILD=$(( $(sysctl -n hw.logicalcpu) / MAX_PARALLEL_BUILDS ))
+if [[ "$JOBS_PER_BUILD" -lt 1 ]]; then
+    JOBS_PER_BUILD=1
+fi
+
 COMMON_C_FLAGS="-Wno-macro-redefined -Wno-shorten-64-to-32 -Wno-unused-command-line-argument -g"
 COMMON_CXX_FLAGS="-Wno-macro-redefined -Wno-shorten-64-to-32 -Wno-unused-command-line-argument -g"
 
@@ -401,112 +410,173 @@ combine_static_libraries() {
     rm -rf "${temp_dir}"
 }
 
-echo "Building for iOS simulator..."
-cmake -B build-ios-sim -G Xcode \
-    "${COMMON_CMAKE_ARGS[@]}" \
-    -DCMAKE_OSX_DEPLOYMENT_TARGET=${IOS_MIN_OS_VERSION} \
-    -DIOS=ON \
-    -DCMAKE_SYSTEM_NAME=iOS \
-    -DCMAKE_OSX_SYSROOT=iphonesimulator \
-    -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
-    -DCMAKE_XCODE_ATTRIBUTE_SUPPORTED_PLATFORMS=iphonesimulator \
-    -DCMAKE_C_FLAGS="${COMMON_C_FLAGS}" \
-    -DCMAKE_CXX_FLAGS="${COMMON_CXX_FLAGS}" \
-    -DLLAMA_OPENSSL=OFF \
-    -DMTMD_VIDEO=OFF \
-    -S .
-cmake --build build-ios-sim --config Release -j $(sysctl -n hw.logicalcpu) -- -quiet
+build_ios_sim() {
+    echo "Building for iOS simulator..."
+    cmake -B build-ios-sim -G Xcode \
+        "${COMMON_CMAKE_ARGS[@]}" \
+        -DCMAKE_OSX_DEPLOYMENT_TARGET=${IOS_MIN_OS_VERSION} \
+        -DIOS=ON \
+        -DCMAKE_SYSTEM_NAME=iOS \
+        -DCMAKE_OSX_SYSROOT=iphonesimulator \
+        -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
+        -DCMAKE_XCODE_ATTRIBUTE_SUPPORTED_PLATFORMS=iphonesimulator \
+        -DCMAKE_C_FLAGS="${COMMON_C_FLAGS}" \
+        -DCMAKE_CXX_FLAGS="${COMMON_CXX_FLAGS}" \
+        -DLLAMA_OPENSSL=OFF \
+        -DMTMD_VIDEO=OFF \
+        -S .
+    cmake --build build-ios-sim --config Release -j "${JOBS_PER_BUILD}" -- -quiet
+}
 
-echo "Building for iOS devices..."
-cmake -B build-ios-device -G Xcode \
-    "${COMMON_CMAKE_ARGS[@]}" \
-    -DCMAKE_OSX_DEPLOYMENT_TARGET=${IOS_MIN_OS_VERSION} \
-    -DCMAKE_SYSTEM_NAME=iOS \
-    -DCMAKE_OSX_SYSROOT=iphoneos \
-    -DCMAKE_OSX_ARCHITECTURES="arm64" \
-    -DCMAKE_XCODE_ATTRIBUTE_SUPPORTED_PLATFORMS=iphoneos \
-    -DCMAKE_C_FLAGS="${COMMON_C_FLAGS}" \
-    -DCMAKE_CXX_FLAGS="${COMMON_CXX_FLAGS}" \
-    -DLLAMA_OPENSSL=OFF \
-    -DMTMD_VIDEO=OFF \
-    -S .
-cmake --build build-ios-device --config Release -j $(sysctl -n hw.logicalcpu) -- -quiet
+build_ios_device() {
+    echo "Building for iOS devices..."
+    cmake -B build-ios-device -G Xcode \
+        "${COMMON_CMAKE_ARGS[@]}" \
+        -DCMAKE_OSX_DEPLOYMENT_TARGET=${IOS_MIN_OS_VERSION} \
+        -DCMAKE_SYSTEM_NAME=iOS \
+        -DCMAKE_OSX_SYSROOT=iphoneos \
+        -DCMAKE_OSX_ARCHITECTURES="arm64" \
+        -DCMAKE_XCODE_ATTRIBUTE_SUPPORTED_PLATFORMS=iphoneos \
+        -DCMAKE_C_FLAGS="${COMMON_C_FLAGS}" \
+        -DCMAKE_CXX_FLAGS="${COMMON_CXX_FLAGS}" \
+        -DLLAMA_OPENSSL=OFF \
+        -DMTMD_VIDEO=OFF \
+        -S .
+    cmake --build build-ios-device --config Release -j "${JOBS_PER_BUILD}" -- -quiet
+}
 
-echo "Building for macOS..."
-cmake -B build-macos -G Xcode \
-    "${COMMON_CMAKE_ARGS[@]}" \
-    -DCMAKE_OSX_DEPLOYMENT_TARGET=${MACOS_MIN_OS_VERSION} \
-    -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
-    -DCMAKE_C_FLAGS="${COMMON_C_FLAGS}" \
-    -DCMAKE_CXX_FLAGS="${COMMON_CXX_FLAGS}" \
-    -DLLAMA_OPENSSL=OFF \
-    -S .
-cmake --build build-macos --config Release -j $(sysctl -n hw.logicalcpu) -- -quiet
+build_macos() {
+    echo "Building for macOS..."
+    cmake -B build-macos -G Xcode \
+        "${COMMON_CMAKE_ARGS[@]}" \
+        -DCMAKE_OSX_DEPLOYMENT_TARGET=${MACOS_MIN_OS_VERSION} \
+        -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
+        -DCMAKE_C_FLAGS="${COMMON_C_FLAGS}" \
+        -DCMAKE_CXX_FLAGS="${COMMON_CXX_FLAGS}" \
+        -DLLAMA_OPENSSL=OFF \
+        -S .
+    cmake --build build-macos --config Release -j "${JOBS_PER_BUILD}" -- -quiet
+}
 
-echo "Building for visionOS..."
-cmake -B build-visionos -G Xcode \
-    "${COMMON_CMAKE_ARGS[@]}" \
-    -DCMAKE_OSX_DEPLOYMENT_TARGET=${VISIONOS_MIN_OS_VERSION} \
-    -DCMAKE_OSX_ARCHITECTURES="arm64" \
-    -DCMAKE_SYSTEM_NAME=visionOS \
-    -DCMAKE_OSX_SYSROOT=xros \
-    -DCMAKE_XCODE_ATTRIBUTE_SUPPORTED_PLATFORMS=xros \
-    -DCMAKE_C_FLAGS="${COMMON_C_FLAGS}" \
-    -DCMAKE_CXX_FLAGS="${COMMON_CXX_FLAGS}" \
-    -DLLAMA_OPENSSL=OFF \
-    -DLLAMA_BUILD_SERVER=OFF \
-    -DMTMD_VIDEO=OFF \
-    -S .
-cmake --build build-visionos --config Release -j $(sysctl -n hw.logicalcpu) -- -quiet
+build_visionos() {
+    echo "Building for visionOS..."
+    cmake -B build-visionos -G Xcode \
+        "${COMMON_CMAKE_ARGS[@]}" \
+        -DCMAKE_OSX_DEPLOYMENT_TARGET=${VISIONOS_MIN_OS_VERSION} \
+        -DCMAKE_OSX_ARCHITECTURES="arm64" \
+        -DCMAKE_SYSTEM_NAME=visionOS \
+        -DCMAKE_OSX_SYSROOT=xros \
+        -DCMAKE_XCODE_ATTRIBUTE_SUPPORTED_PLATFORMS=xros \
+        -DCMAKE_C_FLAGS="${COMMON_C_FLAGS}" \
+        -DCMAKE_CXX_FLAGS="${COMMON_CXX_FLAGS}" \
+        -DLLAMA_OPENSSL=OFF \
+        -DLLAMA_BUILD_SERVER=OFF \
+        -DMTMD_VIDEO=OFF \
+        -S .
+    cmake --build build-visionos --config Release -j "${JOBS_PER_BUILD}" -- -quiet
+}
 
-echo "Building for visionOS simulator..."
-cmake -B build-visionos-sim -G Xcode \
-    "${COMMON_CMAKE_ARGS[@]}" \
-    -DCMAKE_OSX_DEPLOYMENT_TARGET=${VISIONOS_MIN_OS_VERSION} \
-    -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
-    -DCMAKE_SYSTEM_NAME=visionOS \
-    -DCMAKE_OSX_SYSROOT=xrsimulator \
-    -DCMAKE_XCODE_ATTRIBUTE_SUPPORTED_PLATFORMS=xrsimulator \
-    -DCMAKE_C_FLAGS="${COMMON_C_FLAGS}" \
-    -DCMAKE_CXX_FLAGS="${COMMON_CXX_FLAGS}" \
-    -DLLAMA_OPENSSL=OFF \
-    -DLLAMA_BUILD_SERVER=OFF \
-    -DMTMD_VIDEO=OFF \
-    -S .
-cmake --build build-visionos-sim --config Release -j $(sysctl -n hw.logicalcpu) -- -quiet
+build_visionos_sim() {
+    echo "Building for visionOS simulator..."
+    cmake -B build-visionos-sim -G Xcode \
+        "${COMMON_CMAKE_ARGS[@]}" \
+        -DCMAKE_OSX_DEPLOYMENT_TARGET=${VISIONOS_MIN_OS_VERSION} \
+        -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
+        -DCMAKE_SYSTEM_NAME=visionOS \
+        -DCMAKE_OSX_SYSROOT=xrsimulator \
+        -DCMAKE_XCODE_ATTRIBUTE_SUPPORTED_PLATFORMS=xrsimulator \
+        -DCMAKE_C_FLAGS="${COMMON_C_FLAGS}" \
+        -DCMAKE_CXX_FLAGS="${COMMON_CXX_FLAGS}" \
+        -DLLAMA_OPENSSL=OFF \
+        -DLLAMA_BUILD_SERVER=OFF \
+        -DMTMD_VIDEO=OFF \
+        -S .
+    cmake --build build-visionos-sim --config Release -j "${JOBS_PER_BUILD}" -- -quiet
+}
 
 # Add tvOS builds (might need the same u_int definitions as watchOS and visionOS)
-echo "Building for tvOS simulator..."
-cmake -B build-tvos-sim -G Xcode \
-    "${COMMON_CMAKE_ARGS[@]}" \
-    -DCMAKE_OSX_DEPLOYMENT_TARGET=${TVOS_MIN_OS_VERSION} \
-    -DCMAKE_SYSTEM_NAME=tvOS \
-    -DCMAKE_OSX_SYSROOT=appletvsimulator \
-    -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
-    -DGGML_METAL=ON \
-    -DCMAKE_XCODE_ATTRIBUTE_SUPPORTED_PLATFORMS=appletvsimulator \
-    -DCMAKE_C_FLAGS="${COMMON_C_FLAGS}" \
-    -DCMAKE_CXX_FLAGS="${COMMON_CXX_FLAGS}" \
-    -DLLAMA_OPENSSL=OFF \
-    -DMTMD_VIDEO=OFF \
-    -S .
-cmake --build build-tvos-sim --config Release -j $(sysctl -n hw.logicalcpu) -- -quiet
+build_tvos_sim() {
+    echo "Building for tvOS simulator..."
+    cmake -B build-tvos-sim -G Xcode \
+        "${COMMON_CMAKE_ARGS[@]}" \
+        -DCMAKE_OSX_DEPLOYMENT_TARGET=${TVOS_MIN_OS_VERSION} \
+        -DCMAKE_SYSTEM_NAME=tvOS \
+        -DCMAKE_OSX_SYSROOT=appletvsimulator \
+        -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
+        -DGGML_METAL=ON \
+        -DCMAKE_XCODE_ATTRIBUTE_SUPPORTED_PLATFORMS=appletvsimulator \
+        -DCMAKE_C_FLAGS="${COMMON_C_FLAGS}" \
+        -DCMAKE_CXX_FLAGS="${COMMON_CXX_FLAGS}" \
+        -DLLAMA_OPENSSL=OFF \
+        -DMTMD_VIDEO=OFF \
+        -S .
+    cmake --build build-tvos-sim --config Release -j "${JOBS_PER_BUILD}" -- -quiet
+}
 
-echo "Building for tvOS devices..."
-cmake -B build-tvos-device -G Xcode \
-    "${COMMON_CMAKE_ARGS[@]}" \
-    -DCMAKE_OSX_DEPLOYMENT_TARGET=${TVOS_MIN_OS_VERSION} \
-    -DCMAKE_SYSTEM_NAME=tvOS \
-    -DCMAKE_OSX_SYSROOT=appletvos \
-    -DCMAKE_OSX_ARCHITECTURES="arm64" \
-    -DGGML_METAL=ON \
-    -DCMAKE_XCODE_ATTRIBUTE_SUPPORTED_PLATFORMS=appletvos \
-    -DCMAKE_C_FLAGS="${COMMON_C_FLAGS}" \
-    -DCMAKE_CXX_FLAGS="${COMMON_CXX_FLAGS}" \
-    -DLLAMA_OPENSSL=OFF \
-    -DMTMD_VIDEO=OFF \
-    -S .
-cmake --build build-tvos-device --config Release -j $(sysctl -n hw.logicalcpu) -- -quiet
+build_tvos_device() {
+    echo "Building for tvOS devices..."
+    cmake -B build-tvos-device -G Xcode \
+        "${COMMON_CMAKE_ARGS[@]}" \
+        -DCMAKE_OSX_DEPLOYMENT_TARGET=${TVOS_MIN_OS_VERSION} \
+        -DCMAKE_SYSTEM_NAME=tvOS \
+        -DCMAKE_OSX_SYSROOT=appletvos \
+        -DCMAKE_OSX_ARCHITECTURES="arm64" \
+        -DGGML_METAL=ON \
+        -DCMAKE_XCODE_ATTRIBUTE_SUPPORTED_PLATFORMS=appletvos \
+        -DCMAKE_C_FLAGS="${COMMON_C_FLAGS}" \
+        -DCMAKE_CXX_FLAGS="${COMMON_CXX_FLAGS}" \
+        -DLLAMA_OPENSSL=OFF \
+        -DMTMD_VIDEO=OFF \
+        -S .
+    cmake --build build-tvos-device --config Release -j "${JOBS_PER_BUILD}" -- -quiet
+}
+
+# Run the given build functions in the background, at most MAX_PARALLEL_BUILDS at a time.
+# Each build writes its output to <name>.log; on failure the failing log is dumped and
+# the script exits non-zero (background job failures do not trigger set -e by themselves).
+run_builds_parallel() {
+    local -a pids=()
+    local -a names=()
+    local name i
+    for name in "$@"; do
+        # Wait for the oldest running build to free a slot
+        if [[ "${#pids[@]}" -ge "$MAX_PARALLEL_BUILDS" ]]; then
+            if ! wait "${pids[0]}"; then
+                echo "ERROR: build '${names[0]}' failed, log follows (${names[0]}.log):" >&2
+                kill "${pids[@]}" 2>/dev/null || true
+                cat "${names[0]}.log" >&2
+                exit 1
+            fi
+            pids=("${pids[@]:1}")
+            names=("${names[@]:1}")
+        fi
+        echo "Starting build: $name (log: ${name}.log, -j ${JOBS_PER_BUILD})"
+        "$name" > "${name}.log" 2>&1 &
+        pids+=("$!")
+        names+=("$name")
+    done
+    # Wait for the remaining builds
+    for i in "${!pids[@]}"; do
+        if ! wait "${pids[$i]}"; then
+            echo "ERROR: build '${names[$i]}' failed, log follows (${names[$i]}.log):" >&2
+            kill "${pids[@]}" 2>/dev/null || true
+            cat "${names[$i]}.log" >&2
+            exit 1
+        fi
+    done
+}
+
+# Two-arch builds are listed first so that the slower builds occupy the slots early
+# and the single-arch builds fill in as they finish.
+echo "Building platforms in parallel (max ${MAX_PARALLEL_BUILDS} at a time, -j ${JOBS_PER_BUILD} each)..."
+run_builds_parallel \
+    build_ios_sim \
+    build_macos \
+    build_visionos_sim \
+    build_tvos_sim \
+    build_ios_device \
+    build_visionos \
+    build_tvos_device
 
 # Setup frameworks and copy binaries and headers
 echo "Setting up framework structures..."
