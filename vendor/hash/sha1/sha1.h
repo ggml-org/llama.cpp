@@ -9,9 +9,7 @@
 
 #include "stdint.h"
 
-#if defined(__cplusplus)
-extern "C" {
-#endif
+namespace vendor_hash {
 
 typedef struct
 {
@@ -45,8 +43,6 @@ void SHA1(
     const char *str,
     uint32_t len);
 
-#if defined(__cplusplus)
-}
-#endif
+} // namespace vendor_hash
 
 #endif /* SHA1_H */

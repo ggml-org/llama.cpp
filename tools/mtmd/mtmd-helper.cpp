@@ -12,6 +12,8 @@
 #include "mtmd-helper-common.h"
 #include "llama.h"
 
+#include "hash.h"
+
 #include <algorithm>
 #include <cinttypes>
 #include <vector>
@@ -356,25 +358,14 @@ static bool decode_audio_from_buf(const unsigned char * buf_in, size_t len, int 
 
 } // namespace audio_helpers
 
-// Computes FNV-1a hash of the data
-static std::string fnv_hash(const uint8_t * data, size_t len) {
-    const uint64_t fnv_prime = 0x100000001b3ULL;
-    uint64_t hash = 0xcbf29ce484222325ULL;
-
-    for (size_t i = 0; i < len; ++i) {
-        hash ^= data[i];
-        hash *= fnv_prime;
-    }
-    return std::to_string(hash);
-}
-
 mtmd_helper_bitmap_wrapper mtmd_helper_bitmap_init_from_buf(mtmd_context * ctx, const unsigned char * buf, size_t len, bool placeholder) {
     // calculate the hash if needed
     std::string id;
     mtmd_bitmap * result = nullptr;
 
     if (!placeholder) {
-        id = fnv_hash(buf, len);
+        // use sha256 to prevent cache poisoning
+        id = hash_sha256_hex(buf, len);
     }
 
     if (audio_helpers::is_audio_file((const char *)buf, len)) {

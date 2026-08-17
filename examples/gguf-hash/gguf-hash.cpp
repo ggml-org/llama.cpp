@@ -18,12 +18,15 @@ extern "C" {
 #endif
 
 #include "xxhash/xxhash.h"
-#include "sha1/sha1.h"
 #include "sha256/sha256.h"
 
 #ifdef __cplusplus
 }
 #endif
+
+// sha1 is compiled as C++ and lives in a namespace, see scripts/sync_vendor.py
+#include "sha1/sha1.h"
+using namespace vendor_hash;
 
 
 // uuid.uuid5(uuid.NAMESPACE_URL, 'en.wikipedia.org/wiki/Llama.cpp')

@@ -56,6 +56,44 @@ patches = {
         '    && (defined(_MSC_VER) && (_MSC_VER >= 1000) || !defined(_MSC_VER)) /* >= C11 */\n'
     )],
 
+    # sha1 exports a bare "SHA1" symbol, which clashes with the boringssl one at link time.
+    # we compile it as C++ (see vendor/hash/CMakeLists.txt) and put it in a namespace.
+    "vendor/hash/sha1/sha1.h": [
+        (
+            '#if defined(__cplusplus)\n'
+            'extern "C" {\n'
+            '#endif\n',
+
+            'namespace vendor_hash {\n'
+        ),
+        (
+            '#if defined(__cplusplus)\n'
+            '}\n'
+            '#endif\n',
+
+            '} // namespace vendor_hash\n'
+        ),
+    ],
+
+    "vendor/hash/sha1/sha1.c": [
+        (
+            '#include "sha1.h"\n',
+
+            '#include "sha1.h"\n'
+            '\n'
+            'namespace vendor_hash {\n'
+        ),
+        (
+            '    SHA1Final((unsigned char *)hash_out, &ctx);\n'
+            '}\n',
+
+            '    SHA1Final((unsigned char *)hash_out, &ctx);\n'
+            '}\n'
+            '\n'
+            '} // namespace vendor_hash\n'
+        ),
+    ],
+
     # silence a maybe-uninitialized warning
     "vendor/hash/sha256/sha256.c": [(
         "  uint32_t W[16];\n",
