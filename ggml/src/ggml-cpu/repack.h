@@ -133,6 +133,46 @@ struct block_mxfp4x8 {
 };
 static_assert(sizeof(block_mxfp4x8) == 8 + QK_MXFP4 * 4, "wrong mxfp4x8 block size/padding");
 
+// "Q8 panel": a super-block of the grid based IQ quants (iq2_xxs, iq2_xs, iq2_s, iq3_xxs, iq3_s,
+// iq4_xs, iq1_s, iq1_m) decoded into signed 8 bit values plus *integer* sub-block scales, 8 rows
+// interleaved. The panel is built into a scratch buffer for the duration of one mul_mat, see iqp.h.
+//
+// Every supported type has a sub-block scale of the form (d * 2^-k) * small_int, so the panel
+// splits it: dfac[row] carries the per-row, per-super-block float d * 2^-k and iscales[] the small
+// integer. The decoded weight is exactly (dfac[row] * iscales[sb][row]) * qs[..], i.e. still bit
+// identical to dequantize_row_iq* - d has an 11 bit mantissa, 2^-k is exact, and the integer has at
+// most 6 significant bits, so the product needs at most 17 and rounds not at all.
+//
+// Splitting the scale this way lets the kernel apply the sub-block scales in integer and accumulate
+// the whole super-block exactly in int32, so that only one float operation per (row, super-block)
+// remains. The previous float-per-sub-block form rounded 16 times per super-block, and that extra
+// (zero mean) noise showed up as a one-sided perplexity increase - cross entropy is convex, so
+// noise in the logits never helps on average.
+//
+// The sub-block granularity is 16 rather than 32 because iq2_xs / iq2_s take the scale of a group
+// of 32 from two nibbles, one per half, so a single scale per 32 could not be exact.
+//
+// qs layout, for one super-block of 256 columns x 8 rows:
+//   qs[sb * 128 + g * 32 + row * 4 + k] holds column sb * 16 + g * 4 + k
+// so that a 32 byte load gives 4 columns for each of the 8 rows, ready for _mm256_dpbusd_epi32
+// against a broadcast int32 of the activation.
+//
+// bias[row] = 128 * sum over the super-block of (weight * integer scale of its sub-block). The
+// gemm/gemv kernels feed the activations to dpbusd as unsigned bytes (y + 128) to avoid per-operand
+// sign fixups; bias removes the resulting term with a single int32 subtract per super-block.
+#define IQP_SB_SIZE 16                    // weights per sub-block
+#define IQP_NSB     (QK_K / IQP_SB_SIZE)  // sub-blocks per super-block
+
+struct block_iqp_x8 {
+    float   dfac[8];               // dfac[row]          : f32 super-block scale, d * 2^-k
+    int32_t bias[8];               // bias[row]          : unsigned-activation correction, see above
+    int8_t  iscales[IQP_NSB * 8];  // iscales[sb*8 + row]: integer scale of sub-block sb, in [-32, 31]
+    int8_t  qs[QK_K * 8];          // decoded signed values, interleaved (see above)
+};
+
+static_assert(sizeof(block_iqp_x8) == 8 * sizeof(float) + 8 * sizeof(int32_t) + IQP_NSB * 8 + QK_K * 8,
+              "wrong iqp_x8 block size/padding");
+
 #if defined(__cplusplus)
 extern "C" {
 #endif
@@ -173,6 +213,8 @@ void ggml_gemm_mxfp4_4x4_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const v
 void ggml_gemm_mxfp4_8x8_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc);
 void ggml_gemm_q8_0_4x4_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc);
 void ggml_gemm_q8_0_4x8_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc);
+void ggml_gemv_iqp_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc);
+void ggml_gemm_iqp_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc);
 #if defined __riscv_zvfh
 void ggml_quantize_mat_q8_0_4x1(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k);
 void ggml_quantize_mat_q8_K_4x1(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k);
@@ -225,6 +267,8 @@ void ggml_gemm_mxfp4_4x4_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs,
 void ggml_gemm_mxfp4_8x8_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc);
 void ggml_gemm_q8_0_4x4_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc);
 void ggml_gemm_q8_0_4x8_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc);
+void ggml_gemv_iqp_8x8_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc);
+void ggml_gemm_iqp_8x8_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc);
 #if defined __riscv_zvfh
 void ggml_quantize_mat_q8_0_4x1_generic(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k);
 void ggml_quantize_mat_q8_K_4x1_generic(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k);

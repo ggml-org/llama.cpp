@@ -4,6 +4,7 @@
 #include "ggml-backend-impl.h"
 #include "ggml-backend.h"
 #include "traits.h"
+#include "iqp.h"
 #include "ggml-cpu-impl.h"
 #include "ggml-impl.h"
 #include "quants.h"
@@ -1363,6 +1364,13 @@ UseGgmlGemm1:;
 
     ggml_barrier(params->threadpool);
 
+    // transient "Q8 panel" gemm for the grid based IQ quants (see iqp.h) - must come after the
+    // barrier above, it consumes the q8_K rows of src1 from the work buffer
+    if (ggml_cpu_iqp_supported_mul_mat(dst)) {
+        ggml_compute_forward_mul_mat_iqp(params, dst);
+        return;
+    }
+
 #if GGML_USE_LLAMAFILE
     if (src1->type != vec_dot_type) {
         const void* wdata = (src1->type == vec_dot_type) ? src1->data : params->wdata;
@@ -1580,6 +1588,18 @@ static void ggml_compute_forward_mul_mat_id(
     char (*atomic_current_chunk)[CACHE_LINE_SIZE] = // [n_as]
         incr_ptr_aligned(&wdata_cur, CACHE_LINE_SIZE * n_as, CACHE_LINE_SIZE);
 
+    // transient "Q8 panel" gemm for the grid based IQ quants (see iqp.h). Whether an expert actually
+    // takes it is decided per expert below; the work buffer is reserved for the whole node.
+    const bool iqp = ggml_cpu_iqp_supported_mul_mat_id(dst);
+
+    char * iqp_gathered = NULL;
+    char * iqp_panels   = NULL;
+
+    if (iqp) {
+        iqp_gathered = incr_ptr_aligned(&wdata_cur, ggml_cpu_iqp_id_gather_size(dst), 64);
+        iqp_panels   = incr_ptr_aligned(&wdata_cur, nth * ggml_cpu_iqp_scratch_size(dst), 64);
+    }
+
     GGML_ASSERT(params->wsize >= (size_t)((char *) wdata_cur - (char *) params->wdata));
 
     if (src1->type != vec_dot_type) {
@@ -1644,10 +1664,30 @@ static void ggml_compute_forward_mul_mat_id(
 
     ggml_barrier(params->threadpool);
 
+    if (iqp) {
+        // the panel gemm reads four src1 rows at a fixed stride, so the rows of each gated in expert
+        // are packed into one contiguous run first
+        ggml_cpu_iqp_gather_mul_mat_id(params, dst, matrix_row_counts, (const int32_t *) matrix_rows, iqp_gathered);
+
+        ggml_barrier(params->threadpool);
+    }
+
+    // running offset into the gather area, kept in step with ggml_cpu_iqp_gather_mul_mat_id
+    int64_t iqp_row_off = 0;
+
     for (int cur_a = 0; cur_a < n_as; ++cur_a) {
         const int64_t cne1 = matrix_row_counts[cur_a];
 
         if (cne1 == 0) {
+            continue;
+        }
+
+        if (iqp && cne1 >= GGML_IQP_MIN_BATCH_ID) {
+            ggml_compute_forward_mul_mat_id_iqp(params, dst, cur_a, cne1, (const int32_t *) &MMID_MATRIX_ROW(cur_a, 0),
+                                                iqp_gathered + iqp_row_off * ggml_row_size(vec_dot_type, ne10),
+                                                iqp_panels);
+
+            iqp_row_off += cne1;
             continue;
         }
 
@@ -2857,6 +2897,11 @@ struct ggml_cplan ggml_graph_plan(
                         if (node->src[1]->type != vec_dot_type) {
                             cur = ggml_row_size(vec_dot_type, ggml_nelements(node->src[1]));
                         }
+
+                        // the IQ panel path needs one scratch panel per thread past the q8_K rows
+                        if (ggml_cpu_iqp_supported_mul_mat(node)) {
+                            cur = ggml_cpu_iqp_scratch_offset(node) + n_tasks * ggml_cpu_iqp_scratch_size(node);
+                        }
                     } break;
                 case GGML_OP_MUL_MAT_ID:
                     {
@@ -2876,6 +2921,12 @@ struct ggml_cplan ggml_graph_plan(
                         cur += n_as*ids->ne[0]*ids->ne[1]*sizeof(struct mmid_row_mapping) + sizeof(int64_t);
                         // atomic_current_chunk
                         cur += CACHE_LINE_SIZE*n_as + CACHE_LINE_SIZE;
+                        // the IQ panel path gathers the routed q8_K rows and needs one scratch panel
+                        // per thread on top of that
+                        if (ggml_cpu_iqp_supported_mul_mat_id(node)) {
+                            cur += ggml_cpu_iqp_id_gather_size(node) + 64;
+                            cur += n_tasks * ggml_cpu_iqp_scratch_size(node) + 64;
+                        }
                     } break;
                 case GGML_OP_OUT_PROD:
                     {

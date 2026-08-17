@@ -6405,3 +6405,211 @@ void ggml_gemm_q2_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
 
 #endif
 }
+
+#if defined(__AVX2__)
+
+// "Q8 panel" (block_iqp_x8) dot helpers.
+//
+// With VNNI the activations are fed as unsigned bytes (y + 128) so that no per-operand sign fixup
+// is needed; the resulting 128 * sum(w) term is removed with the per-row bias stored in the panel.
+// Without VNNI the maddubs int16 accumulator would overflow for unsigned operands up to 255, so
+// the classic sign trick is used instead and the bias must not be applied.
+#if (defined(__AVX512VNNI__) && defined(__AVX512VL__)) || defined(__AVXVNNI__)
+#define IQP_USE_BIAS 1
+#else
+#define IQP_USE_BIAS 0
+#endif
+
+// load the 16 activations of one sub-block, ready to be broadcast per group of 4 with
+// _mm256_shuffle_epi32. With VNNI they are pre-offset by 128 so that they can be fed to dpbusd
+// as unsigned bytes.
+static inline __m256i iqp_load_y(const int8_t * GGML_RESTRICT qs) {
+    __m128i y = _mm_loadu_si128((const __m128i *) qs);
+#if IQP_USE_BIAS
+    y = _mm_xor_si128(y, _mm_set1_epi8((char) 0x80));
+#endif
+    return _mm256_broadcastsi128_si256(y);
+}
+
+// xv: 8 rows x 4 signed weights, yb: the matching 4 activation bytes broadcast to all 8 lanes
+static inline __m256i iqp_dot4(const __m256i acc, const __m256i xv, const __m256i yb) {
+#if defined(__AVX512VNNI__) && defined(__AVX512VL__)
+    return _mm256_dpbusd_epi32(acc, yb, xv);
+#elif defined(__AVXVNNI__)
+    return _mm256_dpbusd_avx_epi32(acc, yb, xv);
+#else
+    const __m256i ax = _mm256_sign_epi8(xv, xv);
+    const __m256i sy = _mm256_sign_epi8(yb, xv);
+    return _mm256_add_epi32(acc, _mm256_madd_epi16(_mm256_maddubs_epi16(ax, sy), _mm256_set1_epi16(1)));
+#endif
+}
+
+// the 8 integer scales of one sub-block, sign extended to int32 (one per interleaved row)
+static inline __m256i iqp_load_iscales(const int8_t * GGML_RESTRICT iscales) {
+    return _mm256_cvtepi8_epi32(_mm_loadl_epi64((const __m128i *) iscales));
+}
+
+// accumulate one super-block of 8 interleaved rows against one q8_K row, exactly, in int32: the
+// sub-block scales are integers, so nothing here rounds and only the caller's single
+// (float) sumi * dfac * y.d per super-block touches floating point.
+//
+// int32 bounds, worst case (|weight| <= 127 - iq4_xs is the extreme -, |integer scale| <= 32,
+// unsigned activation <= 255):
+//   sub-block dot     <= 16 * 255 * 127       =     518,160
+//   times the scale   <= 32 * 518,160         =  16,581,120
+//   over IQP_NSB      <= 16 * 16,581,120      = 265,297,920
+//   bias              <= 128 * 256 * 127 * 32 = 133,169,152
+// so the accumulator stays below 4.0e8, well inside int32.
+static inline __m256i iqp_acc_block(const block_iqp_x8 * GGML_RESTRICT b, const block_q8_K * GGML_RESTRICT a) {
+    __m256i sumi = _mm256_setzero_si256();
+
+    for (int sb = 0; sb < IQP_NSB; sb++) {
+        const int8_t * qs = b->qs + sb * 128;
+
+        const __m256i yv = iqp_load_y(a->qs + sb * 16);
+
+        __m256i isum = _mm256_setzero_si256();
+
+        isum = iqp_dot4(isum, _mm256_loadu_si256((const __m256i *) (qs +  0)), _mm256_shuffle_epi32(yv, 0x00));
+        isum = iqp_dot4(isum, _mm256_loadu_si256((const __m256i *) (qs + 32)), _mm256_shuffle_epi32(yv, 0x55));
+        isum = iqp_dot4(isum, _mm256_loadu_si256((const __m256i *) (qs + 64)), _mm256_shuffle_epi32(yv, 0xAA));
+        isum = iqp_dot4(isum, _mm256_loadu_si256((const __m256i *) (qs + 96)), _mm256_shuffle_epi32(yv, 0xFF));
+
+        sumi = _mm256_add_epi32(sumi, _mm256_mullo_epi32(isum, iqp_load_iscales(b->iscales + sb * 8)));
+    }
+
+#if IQP_USE_BIAS
+    sumi = _mm256_sub_epi32(sumi, _mm256_loadu_si256((const __m256i *) b->bias));
+#endif
+
+    return sumi;
+}
+
+#endif  // __AVX2__
+
+void ggml_gemv_iqp_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
+    const int nb                = n / QK_K;
+    const int ncols_interleaved = 8;
+
+    assert (n % QK_K == 0);
+    assert (nc % ncols_interleaved == 0);
+
+    UNUSED(bs);
+    UNUSED(nr);
+    UNUSED(nb);
+    UNUSED(ncols_interleaved);
+
+#if defined(__AVX2__)
+    const block_iqp_x8 * b_ptr_start = (const block_iqp_x8 *) vx;
+    const block_q8_K   * a_ptr       = (const block_q8_K *) vy;
+
+    for (int x = 0; x < nc / ncols_interleaved; x++) {
+        const block_iqp_x8 * b_ptr = b_ptr_start + x * nb;
+
+        __m256 sumf = _mm256_setzero_ps();
+
+        for (int l = 0; l < nb; l++) {
+            const __m256 dv = _mm256_mul_ps(_mm256_loadu_ps(b_ptr[l].dfac), _mm256_set1_ps(a_ptr[l].d));
+
+            sumf = _mm256_fmadd_ps(_mm256_cvtepi32_ps(iqp_acc_block(b_ptr + l, a_ptr + l)), dv, sumf);
+        }
+
+        _mm256_storeu_ps(s + x * ncols_interleaved, sumf);
+    }
+
+    return;
+#endif
+
+    ggml_gemv_iqp_8x8_q8_K_generic(n, s, bs, vx, vy, nr, nc);
+}
+
+void ggml_gemm_iqp_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
+    const int nb                = n / QK_K;
+    const int ncols_interleaved = 8;
+
+    assert (n % QK_K == 0);
+    assert (nr % 4 == 0);
+    assert (nc % ncols_interleaved == 0);
+
+    UNUSED(nb);
+    UNUSED(ncols_interleaved);
+
+#if defined(__AVX2__)
+    const block_iqp_x8 * b_ptr_start = (const block_iqp_x8 *) vx;
+    const block_q8_K   * a_ptr_start = (const block_q8_K *) vy;
+
+    for (int y = 0; y < nr / 4; y++) {
+        const block_q8_K * a_ptr[4];
+        for (int m = 0; m < 4; m++) {
+            a_ptr[m] = a_ptr_start + (y * 4 + m) * nb;
+        }
+
+        for (int x = 0; x < nc / ncols_interleaved; x++) {
+            const block_iqp_x8 * b_ptr = b_ptr_start + x * nb;
+
+            __m256 sumf[4];
+            for (int m = 0; m < 4; m++) {
+                sumf[m] = _mm256_setzero_ps();
+            }
+
+            for (int l = 0; l < nb; l++) {
+                // exact int32 accumulation over the whole super-block, see iqp_acc_block for the
+                // overflow bounds - this is the same math, kept inline for the 4 src1 rows
+                __m256i sumi[4];
+                for (int m = 0; m < 4; m++) {
+                    sumi[m] = _mm256_setzero_si256();
+                }
+
+                for (int sb = 0; sb < IQP_NSB; sb++) {
+                    const int8_t * qs = b_ptr[l].qs + sb * 128;
+
+                    __m256i yv[4];
+                    __m256i isum[4];
+                    for (int m = 0; m < 4; m++) {
+                        yv[m]   = iqp_load_y(a_ptr[m][l].qs + sb * 16);
+                        isum[m] = _mm256_setzero_si256();
+                    }
+
+                    const __m256i xv0 = _mm256_loadu_si256((const __m256i *) (qs +  0));
+                    const __m256i xv1 = _mm256_loadu_si256((const __m256i *) (qs + 32));
+                    const __m256i xv2 = _mm256_loadu_si256((const __m256i *) (qs + 64));
+                    const __m256i xv3 = _mm256_loadu_si256((const __m256i *) (qs + 96));
+
+                    for (int m = 0; m < 4; m++) {
+                        isum[m] = iqp_dot4(isum[m], xv0, _mm256_shuffle_epi32(yv[m], 0x00));
+                        isum[m] = iqp_dot4(isum[m], xv1, _mm256_shuffle_epi32(yv[m], 0x55));
+                        isum[m] = iqp_dot4(isum[m], xv2, _mm256_shuffle_epi32(yv[m], 0xAA));
+                        isum[m] = iqp_dot4(isum[m], xv3, _mm256_shuffle_epi32(yv[m], 0xFF));
+                    }
+
+                    const __m256i isc = iqp_load_iscales(b_ptr[l].iscales + sb * 8);
+                    for (int m = 0; m < 4; m++) {
+                        sumi[m] = _mm256_add_epi32(sumi[m], _mm256_mullo_epi32(isum[m], isc));
+                    }
+                }
+
+#if IQP_USE_BIAS
+                const __m256i bias = _mm256_loadu_si256((const __m256i *) b_ptr[l].bias);
+                for (int m = 0; m < 4; m++) {
+                    sumi[m] = _mm256_sub_epi32(sumi[m], bias);
+                }
+#endif
+
+                const __m256 dfac = _mm256_loadu_ps(b_ptr[l].dfac);
+                for (int m = 0; m < 4; m++) {
+                    sumf[m] = _mm256_fmadd_ps(_mm256_cvtepi32_ps(sumi[m]),
+                                              _mm256_mul_ps(dfac, _mm256_set1_ps(a_ptr[m][l].d)), sumf[m]);
+                }
+            }
+
+            for (int m = 0; m < 4; m++) {
+                _mm256_storeu_ps(s + (y * 4 + m) * bs + x * ncols_interleaved, sumf[m]);
+            }
+        }
+    }
+
+    return;
+#endif
+
+    ggml_gemm_iqp_8x8_q8_K_generic(n, s, bs, vx, vy, nr, nc);
+}
