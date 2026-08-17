@@ -92,9 +92,6 @@ export function useReasoningMenu(): UseReasoningMenuReturn {
 		get thinkingEnabled() {
 			return thinkingEnabled;
 		},
-		get isReasoningActive() {
-			return isReasoningActive;
-		},
 		tokenLabel(level: ReasoningEffortLevel): string | null {
 			if (level.value === ReasoningEffort.DEFAULT) return 'Model default';
 
