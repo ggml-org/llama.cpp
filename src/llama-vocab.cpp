@@ -2428,17 +2428,24 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
     const uint32_t n_tokens = gguf_get_arr_n(ctx, token_idx);
 
     const float * scores = nullptr;
+    const int * iscores = nullptr;
     const int score_idx = gguf_find_key(ctx, kv(LLM_KV_TOKENIZER_SCORES).c_str());
     if (score_idx != -1) {
-        if (gguf_get_kv_type(ctx, score_idx) != GGUF_TYPE_ARRAY ||
-            gguf_get_arr_type(ctx, score_idx) != GGUF_TYPE_FLOAT32) {
+        const gguf_type kv_type = gguf_get_kv_type(ctx, score_idx);
+        const gguf_type arr_type = kv_type == GGUF_TYPE_ARRAY ? gguf_get_arr_type(ctx, score_idx) : GGUF_TYPE_COUNT;
+        if (arr_type != GGUF_TYPE_INT32 &&
+            arr_type != GGUF_TYPE_FLOAT32) {
             throw std::runtime_error(format("invalid gguf type for %s", kv(LLM_KV_TOKENIZER_SCORES).c_str()));
         }
         const uint32_t n_scores = gguf_get_arr_n(ctx, score_idx);
         if (n_scores < n_tokens) {
             throw std::runtime_error("Index out of array bounds for scores (" + std::to_string(n_scores) + " < " + std::to_string(n_tokens) + ")\n");
         }
-        scores = (const float * ) gguf_get_arr_data(ctx, score_idx);
+        if (arr_type == GGUF_TYPE_INT32) {
+            iscores = (const int *) gguf_get_arr_data(ctx, score_idx);
+        } else {
+            scores = (const float * ) gguf_get_arr_data(ctx, score_idx);
+        }
     }
 
     const int * toktypes = nullptr;
@@ -2469,7 +2476,13 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
 
         auto & token_data = id_to_token[i];
         token_data.text  = std::move(word);
-        token_data.score = scores ? scores[i] : 0.0f;
+        if (scores) {
+            token_data.score = scores[i];
+        } else if (iscores) {
+            token_data.score = static_cast<float>(iscores[i]);
+        } else {
+            token_data.score = 0.0f;
+        }
         token_data.attr  = LLAMA_TOKEN_ATTR_NORMAL;
 
         if (toktypes) {  //TODO: remove, required until per token attributes are available from GGUF file
