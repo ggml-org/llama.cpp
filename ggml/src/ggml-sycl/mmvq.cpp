@@ -6,6 +6,24 @@
 #include "quants.hpp"
 #include "vecdotq.hpp"
 
+// Minimum weight-row count at which the Q4_K multi-column MMVQ kernel handles two output rows per
+// subgroup (rows_per_sg == 2) instead of one, when ncols_dst == 2.
+//
+// Pairing rows lets a subgroup load each activation block once and apply it to two rows, at the cost
+// of halving the number of subgroups in the launch. With only two destination columns there is too
+// little work per row to hide that loss of parallelism, so pairing only pays off once there are
+// enough rows to keep the device occupied. This is a measured performance crossover, not a
+// correctness or hardware limit - both variants compute the same result for any nrows.
+//
+// Derived on Intel Arc Pro B70 with `test-backend-ops perf -o MUL_MAT` (Q4_K, ncols_dst == 2),
+// sweeping nrows over 5120..6912 at ncols 17408 and 19968: one row per subgroup was up to 9% faster
+// below the crossover, two rows per subgroup 8-15% faster above it, and the crossover fell inside
+// (6144, 6272] for both ncols with no measurable ncols dependence. A later 32-row granularity sweep
+// narrowed it to (6144, 6176], so 6272 is a conservative gate rather than the exact crossover.
+// ncols_dst >= 3 amortizes the activation loads over more columns and is faster with two rows at
+// every row count, so it does not consult this threshold.
+static constexpr int Q4_K_MMVQ_ROW_PAIR_MIN_NROWS = 6272;
+
 template <typename reorder_vec_dot_q_sycl>
 static void mul_mat_vec_q_reorder(const void * __restrict__ vx, const void * __restrict__ vy, float * __restrict__ dst,
                                   const int ncols, const int nrows, const sycl::nd_item<3> & nd_item) {
@@ -145,8 +163,11 @@ static void mul_mat_vec_q_reorder_ncols(const void * __restrict__ vx, const void
                         const sycl::half2 * q8_1_ds_ptr =
                             (const sycl::half2 *) (vy_j + ncols + iby * sizeof(sycl::half2));
 
-                        partial_sum[j][0] += reorder_vec_dot_q_sycl::dot(wx, q8_1_quant_ptr, q8_1_ds_ptr, iqs);
-                        partial_gate[j][0] += reorder_vec_dot_q_sycl::dot(wg, q8_1_quant_ptr, q8_1_ds_ptr, iqs);
+                        // up and gate share the activation, so load it once and apply it twice
+                        const auto a = reorder_vec_dot_q_sycl::load_activations(q8_1_quant_ptr, q8_1_ds_ptr, iqs);
+
+                        partial_sum[j][0] += reorder_vec_dot_q_sycl::apply(wx, a);
+                        partial_gate[j][0] += reorder_vec_dot_q_sycl::apply(wg, a);
                     }
                 } else {
 #pragma unroll
@@ -1778,7 +1799,7 @@ static void reorder_mul_mat_vec_q4_k_q8_1_sycl_switch_ncols(
     switch (ncols_dst) {
         case 1: reorder_mul_mat_vec_q4_k_q8_1_sycl(vx, vy, dst, ncols, nrows, stream); break;
         case 2:
-            if (nrows >= 6272) {
+            if (nrows >= Q4_K_MMVQ_ROW_PAIR_MIN_NROWS) {
                 reorder_mul_mat_vec_q4_k_q8_1_sycl_ncols_impl<2, 2>(vx, vy, dst, ncols, nrows, stride_col_y_bytes, stride_col_dst, stream);
             } else {
                 reorder_mul_mat_vec_q4_k_q8_1_sycl_ncols_impl<2, 1>(vx, vy, dst, ncols, nrows, stride_col_y_bytes, stride_col_dst, stream);
@@ -2976,7 +2997,7 @@ bool ggml_sycl_mul_mat_vec_q_glu_reorder(enum ggml_type src0_type, enum ggml_glu
                                                          stride_col_dst, glu_op, stream);
             return true;
         case 2:
-            if (nrows >= 6272) {
+            if (nrows >= Q4_K_MMVQ_ROW_PAIR_MIN_NROWS) {
                 launch_mul_mat_vec_q_reorder_glu_impl<vec_dot, 2, 2>(vx, vgate, vy, dst, ncols, nrows, stride_col_y_bytes, stride_col_dst, glu_op, stream);
             } else {
                 launch_mul_mat_vec_q_reorder_glu_impl<vec_dot, 2, 1>(vx, vgate, vy, dst, ncols, nrows, stride_col_y_bytes, stride_col_dst, glu_op, stream);
