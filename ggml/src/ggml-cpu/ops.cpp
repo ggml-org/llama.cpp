@@ -5222,6 +5222,8 @@ static void ggml_compute_forward_get_rows_back_f32_f16(
     for (int i = 0; i < nr; ++i) {
         const int r = ((int32_t *) src1->data)[i];
 
+        GGML_ASSERT(r >= 0 && r < dst->ne[1]);
+
         for (int j = 0; j < nc; ++j) {
             ggml_fp16_t v = ((ggml_fp16_t *) ((char *) src0->data + i*src0->nb[1]))[j];
             ((float *) ((char *) dst->data + r*dst->nb[1]))[j] += GGML_CPU_FP16_TO_FP32(v);
@@ -5254,6 +5256,8 @@ static void ggml_compute_forward_get_rows_back_f32(
 
     for (int i = 0; i < nr; ++i) {
         const int r = ((int32_t *) src1->data)[i];
+
+        GGML_ASSERT(r >= 0 && r < dst->ne[1]);
 
         ggml_vec_add_f32(nc,
                 (float *) ((char *)  dst->data + r*dst->nb[1]),
