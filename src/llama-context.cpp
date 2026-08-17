@@ -36,48 +36,77 @@ struct llm_fused_op_probe {
     llm_fused_op op;
     const char * name;
     uint32_t n_tokens_per_seq;
+
+    // the unfused fallback allocates by full context (see build_lid in deepseek4), so a device
+    // that cannot run the fused op must not disable it - leaving it fused lets the scheduler
+    // place those nodes on a backend that can (the CPU implements all of these), which is slower
+    // but bounded, where the fallback is not
+    bool keep_on_mismatch;
+
+    // whether the graph builder can honour a per-layer decision. false where the op implies
+    // graph-wide properties: flash attention fixes KV padding and mask dtype, and the lightning
+    // indexer selects the indexer mask dtype in build_inp_attn (llama-graph.cpp)
+    bool per_layer;
 };
 
 static const llm_fused_op_probe llm_fused_op_flash_attn_probe = {
     /*.op               =*/ LLM_FUSED_OP_FLASH_ATTN,
     /*.name             =*/ "Flash Attention",
     /*.n_tokens_per_seq =*/ 1,
+    /*.keep_on_mismatch =*/ false,
+    /*.per_layer        =*/ false,
 };
 
 static const llm_fused_op_probe llm_fused_op_gdn_ar_probe = {
     /*.op               =*/ LLM_FUSED_OP_GDN_AR,
     /*.name             =*/ "fused Gated Delta Net (autoregressive)",
     /*.n_tokens_per_seq =*/ 1,
+    /*.keep_on_mismatch =*/ false,
+    /*.per_layer        =*/ true,
 };
 
 static const llm_fused_op_probe llm_fused_op_gdn_ch_probe = {
     /*.op               =*/ LLM_FUSED_OP_GDN_CH,
     /*.name             =*/ "fused Gated Delta Net (chunked)",
     /*.n_tokens_per_seq =*/ 16,
+    /*.keep_on_mismatch =*/ false,
+    /*.per_layer        =*/ true,
 };
 
 static const llm_fused_op_probe llm_fused_op_lid_probe = {
     /*.op               =*/ LLM_FUSED_OP_LIGHTNING_INDEXER,
     /*.name             =*/ "Lightning Indexer",
     /*.n_tokens_per_seq =*/ 1,
+    // off by default: the unfused fallback allocates by full context, but where it fits it is
+    // measurably faster than running the fused op off-device (a reporter measured decode at
+    // 20 t/s unfused vs 14 t/s fused-on-CPU on a Strix Halo + RTX 5090 split). Opt in with
+    // LLAMA_FUSED_KEEP_ON_MISMATCH=1 when the unfused buffer will not allocate.
+    /*.keep_on_mismatch =*/ false,
+    /*.per_layer        =*/ false,
 };
 
 static const llm_fused_op_probe llm_fused_op_dsv4_hc_pre_probe = {
     /*.op               =*/ LLM_FUSED_OP_DSV4_HC_PRE,
     /*.name             =*/ "fused DeepSeek V4 HC pre",
     /*.n_tokens_per_seq =*/ 1,
+    /*.keep_on_mismatch =*/ false,
+    /*.per_layer        =*/ true,
 };
 
 static const llm_fused_op_probe llm_fused_op_dsv4_hc_comb_probe = {
     /*.op               =*/ LLM_FUSED_OP_DSV4_HC_COMB,
     /*.name             =*/ "fused DeepSeek V4 HC comb",
     /*.n_tokens_per_seq =*/ 1,
+    /*.keep_on_mismatch =*/ false,
+    /*.per_layer        =*/ true,
 };
 
 static const llm_fused_op_probe llm_fused_op_dsv4_hc_post_probe = {
     /*.op               =*/ LLM_FUSED_OP_DSV4_HC_POST,
     /*.name             =*/ "fused DeepSeek V4 HC post",
     /*.n_tokens_per_seq =*/ 1,
+    /*.keep_on_mismatch =*/ false,
+    /*.per_layer        =*/ true,
 };
 
 llama_context::llama_context(
@@ -515,7 +544,15 @@ void llama_context::resolve_fused_ops(const llama_memory_context_i * mctx, uint3
             throw std::runtime_error(std::string("failed to reserve graph for ") + probe.name + " check");
         }
 
-        bool device_mismatch = false;
+        // collect every mismatching layer rather than stopping at the first: a single layer on a
+        // device that lacks support must not decide the outcome for layers on devices that have it
+        const uint32_t n_layer = model.hparams.n_layer();
+
+        std::vector<bool> layer_ok(n_layer, true);
+
+        uint32_t n_seen     = 0;
+        uint32_t n_mismatch = 0;
+
         for (const auto & node : get_gf_res_reserve()->get_fused_nodes()) {
             if (node.op != probe.op) {
                 continue;
@@ -530,6 +567,8 @@ void llama_context::resolve_fused_ops(const llama_memory_context_i * mctx, uint3
             // but is still wrong for cases like --no-kv-offload.
             ggml_backend_dev_t device_layer = model.dev_layer(node.il);
 
+            n_seen++;
+
             if (device_fused != device_layer) {
                 LLAMA_LOG_WARN("%s: layer %d is assigned to device %s but %s "
                         "is assigned to device %s (usually due to missing support)\n",
@@ -537,18 +576,52 @@ void llama_context::resolve_fused_ops(const llama_memory_context_i * mctx, uint3
                         device_layer ? ggml_backend_dev_name(device_layer) : "none",
                         probe.name,
                         device_fused ? ggml_backend_dev_name(device_fused) : "none");
-                device_mismatch = true;
-                break;
+
+                n_mismatch++;
+                if ((uint32_t) node.il < n_layer) {
+                    layer_ok[node.il] = false;
+                }
             }
         }
 
-        if (device_mismatch) {
-            enabled = false;
-            LLAMA_LOG_WARN("%s: %s not supported, set to disabled\n", func, probe.name);
-        } else {
+        auto & op_layers = cparams.fused_op_layers;
+        if (op_layers.size() < (size_t) LLM_FUSED_OP_COUNT) {
+            op_layers.resize(LLM_FUSED_OP_COUNT);
+        }
+        op_layers[probe.op].clear();
+
+        if (n_mismatch == 0) {
             enabled = true;
             LLAMA_LOG_INFO("%s: %s enabled\n", func, probe.name);
+            return;
         }
+
+        static const bool keep_on_mismatch_forced = [] {
+            const char * env = getenv("LLAMA_FUSED_KEEP_ON_MISMATCH");
+            return env != nullptr && atoi(env) != 0;
+        }();
+
+        if (probe.keep_on_mismatch || keep_on_mismatch_forced) {
+            // unfusing costs far more than running the fused op off-device, so stay fused and let
+            // the scheduler place the mismatching nodes wherever they are supported
+            enabled = true;
+            LLAMA_LOG_WARN("%s: %s kept enabled on %u of %u layers with a device mismatch; those "
+                    "layers run the fused op off-device, which is slower than fusing on-device but "
+                    "avoids an unfused fallback that allocates by full context\n",
+                    func, probe.name, n_mismatch, n_seen);
+            return;
+        }
+
+        if (probe.per_layer && n_mismatch < n_seen) {
+            enabled = true;
+            op_layers[probe.op] = std::move(layer_ok);
+            LLAMA_LOG_WARN("%s: %s disabled on %u of %u layers, still enabled on the rest\n",
+                    func, probe.name, n_mismatch, n_seen);
+            return;
+        }
+
+        enabled = false;
+        LLAMA_LOG_WARN("%s: %s not supported, set to disabled\n", func, probe.name);
     };
 
     if (cparams.auto_fa) {

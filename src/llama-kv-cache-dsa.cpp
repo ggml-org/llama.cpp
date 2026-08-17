@@ -47,8 +47,11 @@ llama_kv_cache_dsa::llama_kv_cache_dsa(
 
     LLAMA_LOG_INFO("%s: creating indexer KV cache, size = %u cells\n", __func__, kv_size);
 
+    // keep indexer keys f16 regardless of type_k: the fused indexer kernels read
+    // f16 only, and quantizing this small cache (128 dims) saves little while
+    // forcing the much slower decomposed indexer path
     kv_lid = std::make_unique<llama_kv_cache>(
-            model, hparams_lid, type_k, type_v,
+            model, hparams_lid, GGML_TYPE_F16, type_v,
             v_trans, offload, unified, kv_size, n_seq_max, n_pad,
             n_swa, swa_type, nullptr, filter_lid, reuse, nullptr);
 }

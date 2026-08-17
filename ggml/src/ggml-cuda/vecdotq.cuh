@@ -240,7 +240,11 @@ template <int vdr> static __device__ __forceinline__ float vec_dot_q5_1_q8_1_imp
     return sumi*d5d8 + m5s8 / (QI5_1 / vdr);
 }
 
+#if defined(RDNA3_5)
+#define VDR_Q8_0_Q8_1_MMVQ 4
+#else
 #define VDR_Q8_0_Q8_1_MMVQ 2
+#endif
 #define VDR_Q8_0_Q8_1_MMQ 8
 
 template <typename T, int vdr> static __device__ __forceinline__ T vec_dot_q8_0_q8_1_impl(
@@ -620,7 +624,7 @@ static __device__ __forceinline__ float vec_dot_q5_K_q8_1_impl_mmq(
     return dm4f.x*sumf_d - dm4f.y*sumf_m;
 }
 
-#define VDR_Q6_K_Q8_1_MMVQ 1
+#define VDR_Q6_K_Q8_1_MMVQ 2
 #define VDR_Q6_K_Q8_1_MMQ  8
 
 // contiguous v/x values
@@ -641,6 +645,35 @@ static __device__ __forceinline__ float vec_dot_q6_K_q8_1_impl_mmvq(
         const int vi = __vsubss4((vil | vih), 0x20202020); // vi = (vil | vih) - 32
 
         sumf += d8[i] * (ggml_cuda_dp4a(vi, u[i], 0) * sc); // SIMD dot product
+    }
+
+    return d*sumf;
+}
+
+// VDR=2 variant: processes two adjacent 8-element chunks (16 elements).
+// Both chunks share the q8_1 block pair, the two sub-scales and the d8 values,
+// so the loads are amortized over twice the dp4a work of the VDR=1 kernel.
+static __device__ __forceinline__ float vec_dot_q6_K_q8_1_impl_mmvq_vdr2(
+    const int & vl0, const int & vl1, const int & vh0, const int & vh1,
+    const int * __restrict__ u, const int8_t * __restrict__ scales,
+    const float & d, const float * __restrict__ d8) {
+
+    float sumf = 0.0f;
+
+#pragma unroll
+    for (int i = 0; i < 2*QR6_K; ++i) {
+        const int sc = scales[4*(i&1)];
+
+        const int vl = (i < QR6_K) ? vl0 : vl1;
+        const int vh = (i < QR6_K) ? vh0 : vh1;
+
+        const int vil = (vl >> (4*(i&1))) & 0x0F0F0F0F;
+
+        const int vih = ((vh >> (4*(i&1))) << 4) & 0x30303030;
+
+        const int vi = __vsubss4((vil | vih), 0x20202020); // vi = (vil | vih) - 32
+
+        sumf += d8[i&1] * (ggml_cuda_dp4a(vi, u[i], 0) * sc); // SIMD dot product
     }
 
     return d*sumf;
@@ -1023,6 +1056,41 @@ static __device__ __forceinline__ float vec_dot_q6_K_q8_1(
     }
 
     return vec_dot_q6_K_q8_1_impl_mmvq(vl, vh, u, scales, bq6_K->d, d8);
+}
+
+// VDR=2 entry point: iqs must be even (the mmvq kernel strides kqs by VDR).
+// Processes 16 elements per call, splitting the ql/qh/u loads over two chunks.
+static __device__ __forceinline__ float vec_dot_q6_K_q8_1_vdr2(
+    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
+
+    const block_q6_K * bq6_K = (const block_q6_K *) vbq + kbx;
+
+    // both chunks share these offsets: iqs+1 lands in the same (iqs/16, (iqs%16)/8) cell
+    const int bq8_offset = 2 * QR6_K * (iqs / (QI6_K/2)) + (iqs % (QI6_K/2)) / (QI6_K/4);
+    const int scale_offset = (QI6_K/4) * (iqs / (QI6_K/2)) + (iqs % (QI6_K/2)) / (QI6_K/8);
+    const int vh_shift = 2 * ((iqs % (QI6_K/2)) / (QI6_K/4));
+    const int vh_idx = (QI6_K/4) * (iqs / (QI6_K/2)) + iqs % (QI6_K/4);
+
+    const int vl0 = get_int_b4(bq6_K->ql, iqs);
+    const int vl1 = get_int_b4(bq6_K->ql, iqs + 1);
+    const int vh0 = get_int_b2(bq6_K->qh, vh_idx) >> vh_shift;
+    const int vh1 = get_int_b2(bq6_K->qh, vh_idx + 1) >> vh_shift;
+
+    const int8_t * scales = bq6_K->scales + scale_offset;
+
+    int    u[2*QR6_K];
+    float d8[QR6_K];
+
+    // iqs is even, so iqs%QI8_1 and (iqs%QI8_1)+1 are adjacent int32 groups in the block
+    const int i8 = iqs % QI8_1;
+    u[0] = get_int_b4(bq8_1[bq8_offset + 0].qs, i8);
+    u[1] = get_int_b4(bq8_1[bq8_offset + 2].qs, i8);
+    u[2] = get_int_b4(bq8_1[bq8_offset + 0].qs, i8 + 1);
+    u[3] = get_int_b4(bq8_1[bq8_offset + 2].qs, i8 + 1);
+    d8[0] = __low2float(bq8_1[bq8_offset + 0].ds);
+    d8[1] = __low2float(bq8_1[bq8_offset + 2].ds);
+
+    return vec_dot_q6_K_q8_1_impl_mmvq_vdr2(vl0, vl1, vh0, vh1, u, scales, bq6_K->d, d8);
 }
 
 #define VDR_IQ2_XXS_Q8_1_MMVQ 2

@@ -39,7 +39,8 @@ enum llm_graph_type {
     LLM_GRAPH_TYPE_DECODER_MTP,
 };
 
-enum llm_fused_op {
+// fixed underlying type so llama-cparams.h can forward-declare this without including us
+enum llm_fused_op : int {
     LLM_FUSED_OP_FLASH_ATTN,
     LLM_FUSED_OP_GDN_AR,
     LLM_FUSED_OP_GDN_CH,
@@ -47,6 +48,8 @@ enum llm_fused_op {
     LLM_FUSED_OP_DSV4_HC_PRE,
     LLM_FUSED_OP_DSV4_HC_COMB,
     LLM_FUSED_OP_DSV4_HC_POST,
+
+    LLM_FUSED_OP_COUNT,
 };
 
 enum llm_ffn_op_type : int {

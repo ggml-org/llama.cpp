@@ -2,6 +2,7 @@
 #include "lightning-indexer.cuh"
 #include "fattn-common.cuh"
 #include "convert.cuh"
+#include "mma.cuh"
 
 #if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
 #if defined(TURING_MMA_AVAILABLE)
@@ -236,6 +237,107 @@ static __global__ void lightning_indexer_kernel_wmma(
 #endif // defined(TURING_MMA_AVAILABLE)
 #endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
 
+#if defined(GGML_USE_HIP)
+
+template <int64_t N_EMBD, int64_t N_HEAD>
+__launch_bounds__(256, 1)
+static __global__ void lightning_indexer_kernel_wmma_amd(
+        const float * Q, const half * K, const float * W, const half * M, float * dst,
+        int64_t n_stream, int64_t n_batch, int64_t n_kv,
+        size_t nb1, size_t nb2, size_t nb3,
+        size_t nbq1, size_t nbq2, size_t nbq3,
+        size_t nbk1, size_t nbk2, size_t nbk3,
+        size_t nbw1, size_t nbw2, size_t nbw3,
+        size_t nbm1, size_t nbm2, size_t nbm3,
+        int64_t nem3) {
+    using namespace ggml_cuda_mma;
+
+    constexpr int tile_size = 16;
+    constexpr int warps_per_block = 8;
+    constexpr int heads_per_tile = 4;
+    constexpr int stride = N_EMBD/2 + 4;
+
+    const int lane       = threadIdx.x;
+    const int i_warp     = threadIdx.y;
+    const int tid        = i_warp*32 + lane;
+    const int start_kv   = (blockIdx.x * warps_per_block + i_warp) * tile_size;
+    const int start_batch = blockIdx.y * tile_size;
+    const int i_stream   = blockIdx.z;
+
+    __shared__ half2 k_shared[warps_per_block][tile_size][stride];
+    __shared__ half2 q_shared[heads_per_tile][tile_size][stride];
+    __shared__ float w_shared[heads_per_tile][tile_size];
+
+    for (int idx = lane; idx < tile_size*(N_EMBD/2); idx += 32) {
+        const int i_kv = start_kv + idx/(N_EMBD/2);
+        const int i_embd = idx % (N_EMBD/2);
+        k_shared[i_warp][idx/(N_EMBD/2)][i_embd] = i_kv < n_kv ?
+            *(const half2 *) ((const char *) K + i_kv*nbk2 + i_stream*nbk3 + i_embd*sizeof(half2)) :
+            make_half2(0.0f, 0.0f);
+    }
+    __syncthreads();
+
+    using tile_AB = tile<16, 8, half2, get_input_data_layout()>;
+    using tile_C  = tile<16, 16, float, DATA_LAYOUT_J_MAJOR>;
+    float totals[tile_C::ne] = {0.0f};
+
+    for (int i_head_0 = 0; i_head_0 < N_HEAD; i_head_0 += heads_per_tile) {
+        for (int idx = tid; idx < heads_per_tile*tile_size*(N_EMBD/2); idx += 32*warps_per_block) {
+            const int i_head = idx/(tile_size*(N_EMBD/2));
+            const int i_batch_embd = idx % (tile_size*(N_EMBD/2));
+            const int i_batch = start_batch + i_batch_embd/(N_EMBD/2);
+            const int i_embd = i_batch_embd % (N_EMBD/2);
+            if (i_batch < n_batch) {
+                const float2 q = *(const float2 *) ((const char *) Q + i_batch*nbq2 + i_stream*nbq3 + (i_head_0 + i_head)*nbq1 + 2*i_embd*sizeof(float));
+                q_shared[i_head][i_batch_embd/(N_EMBD/2)][i_embd] = __float22half2_rn(q);
+            } else {
+                q_shared[i_head][i_batch_embd/(N_EMBD/2)][i_embd] = make_half2(0.0f, 0.0f);
+            }
+        }
+        if (tid < heads_per_tile*tile_size) {
+            const int i_head = tid/tile_size;
+            const int i_batch = start_batch + tid%tile_size;
+            w_shared[i_head][tid%tile_size] = i_batch < n_batch ?
+                *(const float *) ((const char *) W + i_batch*nbw1 + i_stream*nbw3 + (i_head_0 + i_head)*sizeof(float)) : 0.0f;
+        }
+        __syncthreads();
+
+        #pragma unroll
+        for (int i_head = 0; i_head < heads_per_tile; ++i_head) {
+            tile_C scores;
+#pragma unroll
+            for (int i_embd = 0; i_embd < N_EMBD/2; i_embd += tile_AB::J) {
+                tile_AB k;
+                tile_AB q;
+                load_ldmatrix(k, &k_shared[i_warp][0][i_embd], stride);
+                load_ldmatrix(q, &q_shared[i_head][0][i_embd], stride);
+                mma(scores, k, q);
+            }
+
+#pragma unroll
+            for (int l = 0; l < tile_C::ne; ++l) {
+                totals[l] += fmaxf(scores.x[l], 0.0f) * w_shared[i_head][tile_C::get_j(l)];
+            }
+        }
+        __syncthreads();
+    }
+
+#pragma unroll
+    for (int l = 0; l < tile_C::ne; ++l) {
+        const int i_kv = start_kv + tile_C::get_i(l);
+        const int i_batch = start_batch + tile_C::get_j(l);
+        if (i_kv < n_kv && i_batch < n_batch) {
+            const half * m_base = (const half *) ((const char *) M + i_batch*nbm1 + (i_stream % nem3)*nbm3);
+            float * dst_base = (float *) ((char *) dst + i_batch*nb1 + i_stream*nb3);
+            dst_base[i_kv] = totals[l] + __half2float(m_base[i_kv]);
+        }
+    }
+
+    GGML_UNUSED_VARS(n_stream, nb2, nbq3, nbk1, nbw2, nbm2);
+}
+
+#endif // defined(GGML_USE_HIP)
+
 // TODO there is one ugly assumption used in this kernel - that WARP_SIZE is equal to 32
 // thanks to that one warp operating on float4 processes whole indexer K/Q vectors
 // 32 * 4 = 128 (N_EMBD)
@@ -447,6 +549,24 @@ void ggml_cuda_lightning_indexer(ggml_backend_cuda_context & ctx, ggml_tensor * 
     const int cc     = ggml_cuda_info().devices[device].cc;
 
     if (n_embd == 128 && n_head == 64) {
+#if defined(GGML_USE_HIP)
+        if (amd_wmma_available(cc) && k->type == GGML_TYPE_F16 && n_batch >= 16) {
+            constexpr int tile_size = 16;
+            constexpr int warps_per_block = 8;
+            dim3 block(32, warps_per_block);
+            dim3 grid((n_kv + tile_size*warps_per_block - 1) / (tile_size*warps_per_block), (n_batch + tile_size - 1) / tile_size, n_stream);
+            lightning_indexer_kernel_wmma_amd<128, 64><<<grid, block, 0, ctx.stream()>>>(
+                q_d, (const half *) k_d, w_d, m_d, dst_d,
+                n_stream, n_batch, n_kv,
+                nb1, nb2, nb3,
+                nbq1, nbq2, nbq3,
+                nbk1, nbk2, nbk3,
+                nbw1, nbw2, nbw3,
+                nbm1, nbm2, nbm3,
+                nem3);
+            return;
+        }
+#endif // defined(GGML_USE_HIP)
 #if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
         if (GGML_CUDA_CC_IS_NVIDIA(cc) && turing_mma_available(cc) && k->type != GGML_TYPE_F32 && k->type != GGML_TYPE_BF16) {
             // use wmma kernel
@@ -488,6 +608,24 @@ void ggml_cuda_lightning_indexer(ggml_backend_cuda_context & ctx, ggml_tensor * 
             GGML_ABORT("fatal error");
         }
     } else if (n_embd == 128 && n_head == 32) {
+#if defined(GGML_USE_HIP)
+        if (amd_wmma_available(cc) && k->type == GGML_TYPE_F16 && n_batch >= 16) {
+            constexpr int tile_size = 16;
+            constexpr int warps_per_block = 8;
+            dim3 block(32, warps_per_block);
+            dim3 grid((n_kv + tile_size*warps_per_block - 1) / (tile_size*warps_per_block), (n_batch + tile_size - 1) / tile_size, n_stream);
+            lightning_indexer_kernel_wmma_amd<128, 32><<<grid, block, 0, ctx.stream()>>>(
+                q_d, (const half *) k_d, w_d, m_d, dst_d,
+                n_stream, n_batch, n_kv,
+                nb1, nb2, nb3,
+                nbq1, nbq2, nbq3,
+                nbk1, nbk2, nbk3,
+                nbw1, nbw2, nbw3,
+                nbm1, nbm2, nbm3,
+                nem3);
+            return;
+        }
+#endif // defined(GGML_USE_HIP)
 #if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
         if (GGML_CUDA_CC_IS_NVIDIA(cc) && turing_mma_available(cc) && k->type != GGML_TYPE_F32 && k->type != GGML_TYPE_BF16) {
             // use wmma kernel

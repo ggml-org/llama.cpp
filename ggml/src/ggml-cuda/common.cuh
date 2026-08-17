@@ -107,10 +107,6 @@
 #define GGML_CUDA_CC_IS_QY2(cc)      (cc >= GGML_CUDA_CC_QY2 && cc < GGML_CUDA_CC_PH1)
 #define GGML_CUDA_CC_IS_PH1(cc)      (cc >= GGML_CUDA_CC_PH1)
 
-#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && CUDART_VERSION >= 11070
-#    define GGML_CUDA_USE_CUB
-#endif  // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && CUDART_VERSION >= 11070
-
 // PDL host-side support (cudaLaunchKernelEx) requires CUDART >= 11.8.
 // However, this has been bugged in CTK < 12.3 for MSVC builds, see
 // https://github.com/ggml-org/llama.cpp/pull/22522#discussion_r3302393293
@@ -1228,6 +1224,29 @@ struct ggml_tensor_extra_gpu {
 #define USE_CUDA_GRAPH
 #endif
 
+struct ggml_cuda_mmvq_q8_1_cache_key {
+    const ggml_tensor * src;
+    ggml_type type;
+    size_t size;
+
+    bool operator==(const ggml_cuda_mmvq_q8_1_cache_key & other) const {
+        return src == other.src && type == other.type && size == other.size;
+    }
+};
+
+struct ggml_cuda_mmvq_q8_1_cache_key_hash {
+    size_t operator()(const ggml_cuda_mmvq_q8_1_cache_key & key) const {
+        return std::hash<const ggml_tensor *>{}(key.src) ^ (size_t(key.type) << 1) ^ (key.size << 2);
+    }
+};
+
+struct ggml_cuda_mmvq_q8_1_cache_entry {
+    std::unique_ptr<ggml_cuda_pool_alloc<char>> data;
+};
+
+using ggml_cuda_mmvq_q8_1_cache = std::unordered_map<ggml_cuda_mmvq_q8_1_cache_key,
+    ggml_cuda_mmvq_q8_1_cache_entry, ggml_cuda_mmvq_q8_1_cache_key_hash>;
+
 struct ggml_cuda_graph {
 #ifdef USE_CUDA_GRAPH
     ~ggml_cuda_graph() {
@@ -1479,6 +1498,71 @@ struct ggml_backend_cuda_context {
         name(GGML_CUDA_NAME + std::to_string(device)) {
     }
 
+    // Per-graph cache of quantized Q8_1 matmul inputs.
+    // The decode mmvq launcher quantizes src1 to Q8_1 before every matmul.
+    // Matmuls sharing the same src1 data (e.g. the qkv/z/alpha/beta projections
+    // of one layer, or views of the same tensor) quantize it once and reuse the
+    // result. Entries are keyed by the view root of src1 (the tensor that owns
+    // the data) plus the quantize layout, so strided views never collide. The
+    // cache is valid only within one graph execution: a tensor is written once
+    // and its data is immutable until the next graph. Cleared at graph start;
+    // entries are also keyed by the stream they were quantized on, so forked
+    // streams never read unsynchronized data.
+    struct q8_1_cache_entry {
+        const ggml_tensor * src1 = nullptr;
+        int stream_no = 0;
+        int64_t ne10 = 0;
+        int64_t ne11 = 0;
+        int64_t ne12 = 0;
+        int64_t ne13 = 0;
+        int64_t s11 = 0;
+        int64_t s12 = 0;
+        int64_t s13 = 0;
+        size_t offset = 0;
+        size_t size   = 0;
+    };
+    char * q8_1_arena = nullptr;
+    size_t q8_1_arena_size = 0;
+    std::vector<q8_1_cache_entry> q8_1_cache;
+    size_t q8_1_arena_pos = 0;
+
+    void q8_1_cache_clear() {
+        q8_1_cache.clear();
+        q8_1_arena_pos = 0;
+    }
+
+    // Returns the cached buffer for (src1, stream_no, layout) if present,
+    // otherwise allocates a new one from the arena and records it. The buffer
+    // is valid until the next q8_1_cache_clear().
+    void * q8_1_cache_get(const ggml_tensor * src1, int stream_no, size_t size,
+                          int64_t ne10, int64_t ne11, int64_t ne12, int64_t ne13,
+                          int64_t s11, int64_t s12, int64_t s13, bool & found) {
+        for (const auto & e : q8_1_cache) {
+            if (e.src1 == src1 && e.stream_no == stream_no &&
+                e.ne10 == ne10 && e.ne11 == ne11 && e.ne12 == ne12 && e.ne13 == ne13 &&
+                e.s11 == s11 && e.s12 == s12 && e.s13 == s13) {
+                found = true;
+                return q8_1_arena + e.offset;
+            }
+        }
+        found = false;
+        if (q8_1_arena_pos + size > q8_1_arena_size) {
+            const size_t new_size = std::max(size_t(1) << 25, 2*(q8_1_arena_pos + size)); // 32 MiB min
+            char * new_arena = nullptr;
+            CUDA_CHECK(cudaMalloc(&new_arena, new_size));
+            if (q8_1_arena != nullptr) {
+                CUDA_CHECK(cudaMemcpy(new_arena, q8_1_arena, q8_1_arena_pos, cudaMemcpyDeviceToDevice));
+                CUDA_CHECK(cudaFree(q8_1_arena));
+            }
+            q8_1_arena = new_arena;
+            q8_1_arena_size = new_size;
+        }
+        void * data = q8_1_arena + q8_1_arena_pos;
+        q8_1_cache.push_back({ src1, stream_no, ne10, ne11, ne12, ne13, s11, s12, s13, q8_1_arena_pos, size });
+        q8_1_arena_pos += size;
+        return data;
+    }
+
     ggml_cuda_stream_context concurrent_stream_context;
 
     ~ggml_backend_cuda_context();
@@ -1523,6 +1607,53 @@ struct ggml_backend_cuda_context {
     ggml_cuda_pool & pool() {
         return pool(device);
     }
+
+    ggml_cuda_mmvq_q8_1_cache mmvq_q8_1_cache[GGML_CUDA_MAX_STREAMS];
+    bool mmvq_q8_1_cache_active = false;
+
+    void mmvq_q8_1_cache_begin() {
+        GGML_ASSERT(!mmvq_q8_1_cache_active);
+        mmvq_q8_1_cache_active = true;
+    }
+
+    char * mmvq_q8_1_cache_get(const ggml_tensor * src, ggml_type type, size_t size, bool & created) {
+        if (!mmvq_q8_1_cache_active) {
+            return nullptr;
+        }
+
+        const ggml_tensor * cache_src = src;
+        while (cache_src->view_src && cache_src->view_src->data == src->data &&
+                ggml_are_same_shape(cache_src->view_src, src) && ggml_are_same_stride(cache_src->view_src, src)) {
+            cache_src = cache_src->view_src;
+        }
+
+        auto & cache = mmvq_q8_1_cache[curr_stream_no];
+        const ggml_cuda_mmvq_q8_1_cache_key key{cache_src, type, size};
+        auto it = cache.find(key);
+        if (it != cache.end()) {
+            created = false;
+            return it->second.data->get();
+        }
+
+        static constexpr size_t max_entries = 16;
+        if (cache.size() == max_entries) {
+            cache.clear();
+        }
+
+        auto data = std::make_unique<ggml_cuda_pool_alloc<char>>(pool(), size);
+        char * ptr = data->get();
+        cache.emplace(key, ggml_cuda_mmvq_q8_1_cache_entry{std::move(data)});
+        created = true;
+        return ptr;
+    }
+
+    void mmvq_q8_1_cache_end() {
+        GGML_ASSERT(mmvq_q8_1_cache_active);
+        mmvq_q8_1_cache_active = false;
+        for (auto & cache : mmvq_q8_1_cache) {
+            cache.clear();
+        }
+    }
 };
 
 struct ggml_cuda_mm_fusion_args_host {
@@ -1531,6 +1662,20 @@ struct ggml_cuda_mm_fusion_args_host {
     const ggml_tensor * gate_bias = nullptr;
     const ggml_tensor * x_scale = nullptr;
     const ggml_tensor * gate_scale = nullptr;
+    // when set (with glu_op == GGML_GLU_OP_NONE), the gate result is written
+    // to this separate destination instead of being combined into the main output
+    const ggml_tensor * dst_gate = nullptr;
+    // SSM conv-input fusion: the matmul output is the last row of an
+    // interleaved [conv_kernel_size, channels] conv input. The kernel writes
+    // conv_input[cs*c + cs-1] = result and copies the (cs-1) conv states rows
+    // from conv_states (a contiguous [(cs-1)*channels] GET_ROWS output) into
+    // conv_input[cs*c + k], k < cs-1. The separate CONCAT kernel is skipped.
+    const ggml_tensor * conv_input = nullptr;
+    const ggml_tensor * conv_states = nullptr;
+    int conv_kernel_size = 0;
+    // Index x_scale by the destination channel (token), not the source channel
+    // (expert). Used for the MoE down x topk-weights fusion.
+    bool x_scale_channel_dst = false;
     ggml_glu_op glu_op;
 };
 struct ggml_cuda_mm_fusion_args_device {
@@ -1539,6 +1684,11 @@ struct ggml_cuda_mm_fusion_args_device {
     const void * gate_bias = nullptr;
     const void * x_scale = nullptr;
     const void * gate_scale = nullptr;
+    const void * dst_gate = nullptr;
+    const void * conv_input = nullptr;
+    const void * conv_states = nullptr;
+    int conv_kernel_size = 0;
+    bool x_scale_channel_dst = false;
     ggml_glu_op glu_op;
 };
 
@@ -1666,4 +1816,3 @@ static __inline__ void ggml_cuda_kernel_launch(Kernel kernel, const ggml_cuda_ke
     kernel<<<launch_params.block_nums, launch_params.block_dims, launch_params.shmem, launch_params.stream>>>(std::forward<Args>(args)... );
     CUDA_CHECK(cudaGetLastError());
 }
-

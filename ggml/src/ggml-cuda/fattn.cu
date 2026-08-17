@@ -512,7 +512,10 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
     }
 
     // AMD WMMA is always faster than the tile kernel if the full tile width of 16 can be utilized.
-    if ((amd_wmma_available(cc) && gqa_opt_applies && Q->ne[0] <= 128) && Q->ne[0] != 40 && Q->ne[0] != 72 && Q->ne[1] * gqa_ratio_eff > 8) {
+    // Speculative verify batches (n_q = n_draft+1 <= 8) must stay on the tile
+    // kernel: decode (n_q = 1) never uses WMMA (n_q*gqa_ratio_eff <= 8), so a
+    // WMMA verify batch would produce different logits than decode.
+    if ((amd_wmma_available(cc) && gqa_opt_applies && Q->ne[0] <= 128) && Q->ne[0] != 40 && Q->ne[0] != 72 && Q->ne[1] * gqa_ratio_eff > 8 && Q->ne[1] > 8) {
         return BEST_FATTN_KERNEL_MMA_F16;
     }
 
@@ -525,6 +528,13 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
                 }
             }
         } else {
+            const bool tile_has_kv_type = K->type == V->type &&
+                (K->type == GGML_TYPE_Q8_0 || K->type == GGML_TYPE_Q4_0) &&
+                (K->ne[0] == 64 || K->ne[0] == 128 || K->ne[0] == 256) && V->ne[0] == K->ne[0];
+            const bool tile_reuses_kv = gqa_ratio % 2 == 0;
+            if (gqa_opt_applies && tile_has_kv_type && tile_reuses_kv) {
+                return BEST_FATTN_KERNEL_TILE;
+            }
             if (Q->ne[1] <= 2) {
                 return BEST_FATTN_KERNEL_VEC;
             }
@@ -548,7 +558,14 @@ size_t ggml_cuda_flash_attn_ext_get_alloc_size(int device, const ggml_tensor * d
     bool need_f16_V = false;
 
     switch (kernel) {
-        case BEST_FATTN_KERNEL_TILE:
+        case BEST_FATTN_KERNEL_TILE: {
+            // Dequant-on-load reads the quantized K/V directly, so no f16 scratch is needed.
+            const bool dequant_on_load = K->type == V->type &&
+                (K->type == GGML_TYPE_Q8_0 || K->type == GGML_TYPE_Q4_0) &&
+                (K->ne[0] == 64 || K->ne[0] == 128 || K->ne[0] == 256 || K->ne[0] == 512) && V->ne[0] == K->ne[0];
+            need_f16_K = !dequant_on_load;
+            need_f16_V = !dequant_on_load;
+        } break;
         case BEST_FATTN_KERNEL_MMA_F16:
             need_f16_K = true;
             need_f16_V = true;

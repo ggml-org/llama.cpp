@@ -972,7 +972,8 @@ static __global__ void flash_attn_combine_results(
 template <int DV, int ncols1, int ncols2>
 void launch_fattn(
     ggml_backend_cuda_context & ctx, ggml_tensor * dst, fattn_kernel_t fattn_kernel, const int nwarps, const size_t nbytes_shared,
-    const int nbatch_fa, const bool need_f16_K, const bool need_f16_V, const bool stream_k, const int warp_size = WARP_SIZE
+    const int nbatch_fa, const bool need_f16_K, const bool need_f16_V, const bool stream_k, const int warp_size = WARP_SIZE,
+    const bool stream_k_strided_eligible = false
 ) {
     constexpr int ncols = ncols1 * ncols2;
 
@@ -1117,6 +1118,7 @@ void launch_fattn(
     const int ntiles_KV = (K->ne[1] + nbatch_fa - 1) / nbatch_fa; // Max. number of parallel blocks limited by KV cache length.
 
     dim3 blocks_num;
+    bool stream_k_strided = false;
     if (stream_k) {
         // For short contexts it can be faster to have the SMs work on whole tiles because this lets us skip the fixup.
         const int max_blocks = max_blocks_per_sm*nsm;
@@ -1145,7 +1147,8 @@ void launch_fattn(
             blocks_num.x = nblocks_stream_k;
         }
 
-        if (ntiles_dst % blocks_num.x != 0) { // Fixup is only needed if the SMs work on fractional tiles.
+        stream_k_strided = stream_k_strided_eligible;
+        if (!stream_k_strided && ntiles_dst % blocks_num.x != 0) { // Fixup is only needed if the SMs work on fractional tiles.
             dst_tmp_meta.alloc((size_t(blocks_num.x) * ncols * (2 + DV/2)));
         }
     } else {
@@ -1226,7 +1229,7 @@ void launch_fattn(
     CUDA_CHECK(cudaGetLastError());
 
     if (stream_k) {
-        if ((int)blocks_num.x % ntiles_dst == 0 && (int)blocks_num.x > ntiles_dst) {
+        if (!stream_k_strided && (int)blocks_num.x % ntiles_dst == 0 && (int)blocks_num.x > ntiles_dst) {
             // Optimized fixup: nblocks_stream_k is a multiple of ntiles_dst, launch one block per tile.
             const int nblocks_sk  = (int)blocks_num.x;
             const int bpt         = nblocks_sk / ntiles_dst;
@@ -1243,7 +1246,7 @@ void launch_fattn(
                 (float *) KQV->data, dst_tmp_meta.ptr,
                  Q->ne[1], Q->ne[2], K->ne[2], nblocks_sk,
                  gqa_ratio, bpt, fd0, fd1, fd2);
-        } else if (ntiles_dst % blocks_num.x != 0) {
+        } else if (!stream_k_strided && ntiles_dst % blocks_num.x != 0) {
             // General fixup for the cases where nblocks_stream_k < ntiles_dst.
             const int total_work = ntiles_KV * ntiles_dst;
 

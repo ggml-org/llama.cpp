@@ -115,32 +115,103 @@ static __global__ void __launch_bounds__(CUDA_CONCAT_BLOCK_SIZE)
     const int64_t i3 = blockIdx.z;
     const int64_t i2 = blockIdx.y;
     const int64_t i1 = blockIdx.x;
+    const uint64_t base0  = (uint64_t) i3*nb03 + (uint64_t) i2*nb02 + (uint64_t) i1*nb01;
+    const uint64_t baseD  = (uint64_t) i3*nb3  + (uint64_t) i2*nb2  + (uint64_t) i1*nb1;
+    const uint64_t base13 = (uint64_t) i3*nb13;
+    const uint64_t base12 = base13 + (uint64_t) i2*nb12;
+    const uint64_t base11 = base12 + (uint64_t) i1*nb11;
 
     const T * x;
 
     for (int64_t i0 = threadIdx.x; i0 < ne0; i0 += blockDim.x) {
         if (i0 < ne00 && i1 < ne01 && i2 < ne02 && i3 < ne03) {
-            x = (const T *)(src0 + i3*nb03 + i2*nb02 + i1*nb01 + i0*nb00);
+            x = (const T *)(src0 + base0 + (uint64_t) i0*nb00);
         } else {
             if constexpr (dim == 0) {
-                x = (const T *)(src1 + i3*nb13 + i2*nb12 + i1*nb11 + (i0 - ne00)*nb10);
+                x = (const T *)(src1 + base11 + (uint64_t) (i0 - ne00)*nb10);
             } else if constexpr (dim == 1) {
-                x = (const T *)(src1 + i3*nb13 + i2*nb12 + (i1 - ne01)*nb11 + i0*nb10);
+                x = (const T *)(src1 + base12 + (uint64_t) (i1 - ne01)*nb11 + (uint64_t) i0*nb10);
             } else if constexpr (dim == 2) {
-                x = (const T *)(src1 + i3*nb13 + (i2 - ne02)*nb12 + i1*nb11 + i0*nb10);
+                x = (const T *)(src1 + base13 + (uint64_t) (i2 - ne02)*nb12 + (uint64_t) i1*nb11 + (uint64_t) i0*nb10);
             } else if constexpr (dim == 3) {
-                x = (const T *)(src1 + (i3 - ne03)*nb13 + i2*nb12 + i1*nb11 + i0*nb10);
+                x = (const T *)(src1 + (uint64_t) (i3 - ne03)*nb13 + (uint64_t) i2*nb12 + (uint64_t) i1*nb11 + (uint64_t) i0*nb10);
             }
         }
 
-        T * y = (T *)(dst + i3*nb3 + i2*nb2 + i1*nb1 + i0*nb0);
+        T * y = (T *)(dst + baseD + (uint64_t) i0*nb0);
 
         *y = *x;
     }
 }
 
 template <typename T>
+static __global__ void __launch_bounds__(256)
+    concat_dim0_transposed_src1(
+        const char * src0,
+        const char * src1,
+              char * dst,
+           int64_t   ne00,
+           int64_t   ne10,
+           int64_t   ne11,
+          uint64_t   nb01,
+          uint64_t   nb10,
+          uint64_t   nb11,
+          uint64_t   nb1) {
+    constexpr int tile_dim = 32;
+    constexpr int block_rows = 8;
+    __shared__ T tile[tile_dim][tile_dim + 1];
+
+    const int64_t src1_i1 = blockIdx.x * tile_dim + threadIdx.x;
+
+    ggml_cuda_pdl_sync();
+    if (blockIdx.y == 0 && src1_i1 < ne11) {
+        for (int64_t i0 = threadIdx.y; i0 < ne00; i0 += block_rows) {
+            const T * x = (const T *) (src0 + src1_i1 * nb01 + i0 * sizeof(T));
+            T * y = (T *) (dst + src1_i1 * nb1 + i0 * sizeof(T));
+            *y = *x;
+        }
+    }
+
+#pragma unroll
+    for (int j = 0; j < tile_dim; j += block_rows) {
+        const int64_t src1_i0 = blockIdx.y * tile_dim + threadIdx.y + j;
+        if (src1_i0 < ne10 && src1_i1 < ne11) {
+            tile[threadIdx.y + j][threadIdx.x] =
+                *(const T *) (src1 + src1_i0 * nb10 + src1_i1 * nb11);
+        }
+    }
+
+    __syncthreads();
+
+    const int64_t dst_i0 = blockIdx.y * tile_dim + threadIdx.x;
+#pragma unroll
+    for (int j = 0; j < tile_dim; j += block_rows) {
+        const int64_t dst_i1 = blockIdx.x * tile_dim + threadIdx.y + j;
+        if (dst_i0 < ne10 && dst_i1 < ne11) {
+            *(T *) (dst + dst_i1 * nb1 + (ne00 + dst_i0) * sizeof(T)) =
+                tile[threadIdx.x][threadIdx.y + j];
+        }
+    }
+}
+
+template <typename T>
 static void concat_cuda(const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst, int dim, cudaStream_t stream) {
+    if (dim == 0 && src0->ne[2] == 1 && src0->ne[3] == 1 &&
+            src1->ne[2] == 1 && src1->ne[3] == 1 &&
+            src0->nb[0] == sizeof(T) && src0->nb[1] == src0->ne[0] * sizeof(T) &&
+            src1->nb[1] == sizeof(T) && src1->nb[0] == src1->ne[1] * sizeof(T) &&
+            ggml_is_contiguous(dst)) {
+        constexpr int tile_dim = 32;
+        constexpr int block_rows = 8;
+        const dim3 block_dim(tile_dim, block_rows, 1);
+        const dim3 grid_dim((src1->ne[1] + tile_dim - 1) / tile_dim,
+                            (src1->ne[0] + tile_dim - 1) / tile_dim, 1);
+        concat_dim0_transposed_src1<T><<<grid_dim, block_dim, 0, stream>>>(
+            (const char *) src0->data, (const char *) src1->data, (char *) dst->data,
+            src0->ne[0], src1->ne[0], src1->ne[1], src0->nb[1], src1->nb[0], src1->nb[1], dst->nb[1]);
+        return;
+    }
+
     if (dim != 3 && ggml_is_contiguous_to_3(src0) && ggml_is_contiguous_to_3(src1)) {
         const T * src0_d = (const T *) src0->data;
         const T * src1_d = (const T *) src1->data;

@@ -181,9 +181,9 @@ static __global__ void rope_neox(const T *            x,
     dst[idst + n_dims / 2] = ggml_cuda_cast<D>(x0 * sin_theta + x1 * cos_theta);
 }
 
-template <bool forward, bool has_ff, typename T>
+template <bool forward, bool has_ff, typename T, typename D>
 static __global__ void rope_multi(const T *            x,
-                                  T *                  dst,
+                                  D *                  dst,
                                   const int            ne00,
                                   const int            ne01,
                                   const int            ne02,
@@ -202,7 +202,9 @@ static __global__ void rope_multi(const T *            x,
                                   const float          theta_scale,
                                   const float *        freq_factors,
                                   const mrope_sections sections,
-                                  const bool           is_imrope) {
+                                  const bool           is_imrope,
+                                  const int64_t *      row_indices,
+                                  const int            set_rows_stride) {
     const int i0 = 2 * (blockDim.y * blockIdx.y + threadIdx.y);
 
     if (i0 >= ne00) {
@@ -218,10 +220,17 @@ static __global__ void rope_multi(const T *            x,
     int       idst = i0 / 2 + i1 * s1  + i2 * s2  + i3 * s3;
     const int ix   = i0 / 2 + i1 * s01 + i2 * s02 + i3 * s03;
 
+    // Fusion optimization: ROPE + VIEW + SET_ROWS.
+    // The rope output is viewed as a 1D tensor and offset based on a row index in row_indices.
+    if (set_rows_stride != 0) {
+        idst = i1 * s1 + i0 / 2;
+        idst += row_indices[i2] * set_rows_stride;
+    }
+
     ggml_cuda_pdl_sync();
     if (i0 >= n_dims) {
-        dst[idst + i0/2 + 0] = x[ix + i0/2 + 0];
-        dst[idst + i0/2 + 1] = x[ix + i0/2 + 1];
+        dst[idst + i0/2 + 0] = ggml_cuda_cast<D>(x[ix + i0/2 + 0]);
+        dst[idst + i0/2 + 1] = ggml_cuda_cast<D>(x[ix + i0/2 + 1]);
 
         return;
     }
@@ -263,8 +272,8 @@ static __global__ void rope_multi(const T *            x,
     const float x0 = x[ix + 0];
     const float x1 = x[ix + n_dims/2];
 
-    dst[idst + 0]        = x0*cos_theta - x1*sin_theta;
-    dst[idst + n_dims/2] = x0*sin_theta + x1*cos_theta;
+    dst[idst + 0]        = ggml_cuda_cast<D>(x0*cos_theta - x1*sin_theta);
+    dst[idst + n_dims/2] = ggml_cuda_cast<D>(x0*sin_theta + x1*cos_theta);
 }
 
 template <bool forward, bool has_ff, typename T>
@@ -416,9 +425,9 @@ static void rope_neox_cuda(const T *            x,
     }
 }
 
-template <bool forward, typename T>
+template <bool forward, typename T, typename D>
 static void rope_multi_cuda(const T *            x,
-                            T *                  dst,
+                            D *                  dst,
                             const int            ne00,
                             const int            ne01,
                             const int            ne02,
@@ -439,6 +448,8 @@ static void rope_multi_cuda(const T *            x,
                             const float *        freq_factors,
                             const mrope_sections sections,
                             const bool           is_imrope,
+                            const int64_t *      row_indices,
+                            const int            set_rows_stride,
                             cudaStream_t         stream) {
     GGML_ASSERT(ne00 % 2 == 0);
     const dim3 block_dims(1, CUDA_ROPE_BLOCK_SIZE, 1);
@@ -449,14 +460,14 @@ static void rope_multi_cuda(const T *            x,
 
     if (freq_factors == nullptr) {
         const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(block_nums, block_dims, 0, stream);
-        ggml_cuda_kernel_launch(rope_multi<forward, false, T>, launch_params,
+        ggml_cuda_kernel_launch(rope_multi<forward, false, T, D>, launch_params,
             x, dst, ne00, ne01, ne02, s01, s02, s03, s1, s2, s3, n_dims, pos, freq_scale, ext_factor,
-            attn_factor, corr_dims, theta_scale, freq_factors, sections, is_imrope);
+            attn_factor, corr_dims, theta_scale, freq_factors, sections, is_imrope, row_indices, set_rows_stride);
     } else {
         const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(block_nums, block_dims, 0, stream);
-        ggml_cuda_kernel_launch(rope_multi<forward, true, T>, launch_params,
+        ggml_cuda_kernel_launch(rope_multi<forward, true, T, D>, launch_params,
             x, dst, ne00, ne01, ne02, s01, s02, s03, s1, s2, s3, n_dims, pos, freq_scale, ext_factor,
-            attn_factor, corr_dims, theta_scale, freq_factors, sections, is_imrope);
+            attn_factor, corr_dims, theta_scale, freq_factors, sections, is_imrope, row_indices, set_rows_stride);
     }
 }
 
@@ -531,8 +542,8 @@ void ggml_cuda_op_rope_impl(ggml_backend_cuda_context & ctx,
     GGML_ASSERT(src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16);
     GGML_ASSERT( dst->type == GGML_TYPE_F32 ||  dst->type == GGML_TYPE_F16);
     // When not fused, src0 and dst types must match
-    // When fused (ROPE+VIEW+SET_ROWS), src0 may be F32 and dst may be F16
-    GGML_ASSERT(src0->type == dst->type || (src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F16));
+    // When fused (ROPE+VIEW+SET_ROWS), src0 may be F32 and dst may be F16 or BF16
+    GGML_ASSERT(src0->type == dst->type || (src0->type == GGML_TYPE_F32 && (dst->type == GGML_TYPE_F16 || dst->type == GGML_TYPE_BF16)));
 
     const int64_t ne00 = src0->ne[0]; // head dims
     const int64_t ne01 = src0->ne[1]; // num heads
@@ -614,14 +625,31 @@ void ggml_cuda_op_rope_impl(ggml_backend_cuda_context & ctx,
             GGML_ABORT("fatal error");
         }
     } else if (is_mrope && !is_vision) {
-        if (src0->type == GGML_TYPE_F32) {
-            rope_multi_cuda<forward>((const float *) src0_d, (float *) dst_d, ne00, ne01, ne02, s01, s02, s03, s1,
-                                     s2, s3, n_dims, nr, pos, freq_scale, freq_base, ext_factor, attn_factor,
-                                     corr_dims, freq_factors, sections, is_imrope, stream);
-        } else if (src0->type == GGML_TYPE_F16) {
-            rope_multi_cuda<forward>((const half *) src0_d, (half *) dst_d, ne00, ne01, ne02, s01, s02, s03, s1,
-                                     s2, s3, n_dims, nr, pos, freq_scale, freq_base, ext_factor, attn_factor,
-                                     corr_dims, freq_factors, sections, is_imrope, stream);
+        if (src0->type == GGML_TYPE_F32 && dst_type == GGML_TYPE_F32) {
+            rope_multi_cuda<forward, float, float>((const float *) src0_d, (float *) dst_d, ne00, ne01, ne02, s01, s02,
+                                                   s03, s1, s2, s3, n_dims, nr, pos, freq_scale, freq_base, ext_factor,
+                                                   attn_factor, corr_dims, freq_factors, sections, is_imrope, row_indices,
+                                                   set_rows_stride, stream);
+        } else if (src0->type == GGML_TYPE_F32 && dst_type == GGML_TYPE_F16) {
+            rope_multi_cuda<forward, float, half>((const float *) src0_d, (half *) dst_d, ne00, ne01, ne02, s01, s02,
+                                                  s03, s1, s2, s3, n_dims, nr, pos, freq_scale, freq_base, ext_factor,
+                                                  attn_factor, corr_dims, freq_factors, sections, is_imrope, row_indices,
+                                                  set_rows_stride, stream);
+        } else if (src0->type == GGML_TYPE_F32 && dst_type == GGML_TYPE_BF16) {
+            rope_multi_cuda<forward, float, nv_bfloat16>((const float *) src0_d, (nv_bfloat16 *) dst_d, ne00, ne01, ne02, s01,
+                                                         s02, s03, s1, s2, s3, n_dims, nr, pos, freq_scale, freq_base,
+                                                         ext_factor, attn_factor, corr_dims, freq_factors, sections, is_imrope,
+                                                         row_indices, set_rows_stride, stream);
+        } else if (src0->type == GGML_TYPE_F16 && dst_type == GGML_TYPE_F16) {
+            rope_multi_cuda<forward, half, half>((const half *) src0_d, (half *) dst_d, ne00, ne01, ne02, s01, s02,
+                                                 s03, s1, s2, s3, n_dims, nr, pos, freq_scale, freq_base, ext_factor,
+                                                 attn_factor, corr_dims, freq_factors, sections, is_imrope, row_indices,
+                                                 set_rows_stride, stream);
+        } else if (src0->type == GGML_TYPE_F16 && dst_type == GGML_TYPE_BF16) {
+            rope_multi_cuda<forward, half, nv_bfloat16>((const half *) src0_d, (nv_bfloat16 *) dst_d, ne00, ne01, ne02, s01,
+                                                        s02, s03, s1, s2, s3, n_dims, nr, pos, freq_scale, freq_base,
+                                                        ext_factor, attn_factor, corr_dims, freq_factors, sections, is_imrope,
+                                                        row_indices, set_rows_stride, stream);
         } else {
             GGML_ABORT("fatal error");
         }

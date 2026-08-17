@@ -7,6 +7,8 @@
 
 #define LLAMA_MAX_SEQ 256
 
+enum llm_fused_op : int; // llama-graph.h
+
 struct llama_cparams {
     uint32_t n_ctx;           // context size used during inference
     uint32_t n_ctx_seq;       // context for a single sequence
@@ -55,6 +57,25 @@ struct llama_cparams {
     bool pipeline_parallel;
 
     std::vector<bool> embeddings_layer_inp; // [n_layer()] extract input embeddings for layer
+
+    // [LLM_FUSED_OP_COUNT][n_layer()] per-layer enablement, resolved by resolve_fused_ops().
+    // An empty inner vector means every layer may use the fused form. Lets a device that
+    // cannot run a fused op disable it only for its own layers instead of for the whole graph.
+    // Flash attention and the lightning indexer are deliberately never per-layer: both imply
+    // graph-wide properties (KV padding, mask dtype) that cannot vary between layers.
+    std::vector<std::vector<bool>> fused_op_layers;
+
+    bool use_fused(enum llm_fused_op op, int il) const {
+        const size_t i = (size_t) op;
+        if (i >= fused_op_layers.size()) {
+            return true;
+        }
+        const std::vector<bool> & layers = fused_op_layers[i];
+        if (layers.empty() || il < 0 || (size_t) il >= layers.size()) {
+            return true;
+        }
+        return layers[il];
+    }
 
     enum llama_context_type ctx_type;
     enum llama_pooling_type pooling_type;

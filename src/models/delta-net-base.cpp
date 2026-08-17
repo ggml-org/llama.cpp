@@ -433,13 +433,13 @@ std::pair<ggml_tensor *, ggml_tensor *> llm_build_delta_net_base::build_delta_ne
     const int64_t n_seq_tokens = q->ne[2];
 
     if (n_seq_tokens == 1) {
-        if (cparams.fused_gdn_ar) {
+        if (cparams.fused_gdn_ar && cparams.use_fused(LLM_FUSED_OP_GDN_AR, il)) {
             return build_delta_net_fused(q, k, v, g, b, s, il);
         }
         return build_delta_net_autoregressive(q, k, v, g, b, s, il);
     }
 
-    if (cparams.fused_gdn_ch) {
+    if (cparams.fused_gdn_ch && cparams.use_fused(LLM_FUSED_OP_GDN_CH, il)) {
         return build_delta_net_fused(q, k, v, g, b, s, il);
     }
 

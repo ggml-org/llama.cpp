@@ -161,7 +161,12 @@ static __device__ __forceinline__ void ggml_cuda_mmq_vec_dot_q8_0_q8_1_mma(
     const float * y_df = (const float *) y;
     const half2 * y_ds = (const half2 *) y;
 
-    const int i0 = (threadIdx.y / ntx) * rows_per_warp;
+    constexpr int nwarps_pw = ggml_cuda_mmq_get_nthreads(type, J, fallback) / ggml_cuda_get_physical_warp_size();
+    constexpr int warps_i   = I / (rows_per_warp);
+    constexpr int warps_j   = nwarps_pw / warps_i > 0 ? nwarps_pw / warps_i : 1;
+    const int wg = threadIdx.y / ntx;
+    const int i0 = (wg % warps_i) * (rows_per_warp);
+    const int jg = wg / warps_i;
 
     for (int k01 = 0; k01 < MMQ_TILE_NE_K; k01 += QI8_0) {
         const int k0 = k00 + k01;
@@ -173,7 +178,8 @@ static __device__ __forceinline__ void ggml_cuda_mmq_vec_dot_q8_0_q8_1_mma(
         }
 
 #pragma unroll
-        for (int j0 = 0; j0 < J; j0 += ntx*tile_C::J) {
+        for (int jl = 0; jl < J / (warps_j*ntx*tile_C::J); ++jl) {
+            const int j0 = (jl*warps_j + jg) * (ntx*tile_C::J);
             tile_B B;
             load_ldmatrix(B, y_qs + j0*MMQ_TILE_Y_K + k01, MMQ_TILE_Y_K);
 
@@ -194,7 +200,7 @@ static __device__ __forceinline__ void ggml_cuda_mmq_vec_dot_q8_0_q8_1_mma(
                 for (int l = 0; l < tile_C::ne; ++l) {
                     const int i = i0 + n*tile_A::I + tile_C::get_i(l);
                     const float dA = x_df[i*sram_stride + k0/QI8_0];
-                    sum[(j0/tile_C::J + n)*tile_C::ne + l] += C.x[l]*dA*dB;
+                    sum[(jl*ntx + n)*tile_C::ne + l] += C.x[l]*dA*dB;
                 }
             }
         }
@@ -220,7 +226,12 @@ static __device__ __forceinline__ void ggml_cuda_mmq_vec_dot_q8_0_q8_1_mma(
     tile_A A[ntx][MMQ_TILE_NE_K/QI8_0];
     float dA[ntx][tile_C::ne/2][MMQ_TILE_NE_K/QI8_0];
 
-    const int i0 = (threadIdx.y/ntx)*rows_per_warp;
+    constexpr int nwarps_pw = ggml_cuda_mmq_get_nthreads(type, J, fallback) / ggml_cuda_get_physical_warp_size();
+    constexpr int warps_i   = I / (rows_per_warp);
+    constexpr int warps_j   = nwarps_pw / warps_i > 0 ? nwarps_pw / warps_i : 1;
+    const int wg = threadIdx.y / ntx;
+    const int i0 = (wg % warps_i) * (rows_per_warp);
+    const int jg = wg / warps_i;
 
 #pragma unroll
     for (int n = 0; n < ntx; ++n) {
@@ -245,7 +256,8 @@ static __device__ __forceinline__ void ggml_cuda_mmq_vec_dot_q8_0_q8_1_mma(
     }
 
 #pragma unroll
-    for (int j0 = 0; j0 < J; j0 += ntx*tile_C::J) {
+    for (int jl = 0; jl < J / (warps_j*ntx*tile_C::J); ++jl) {
+        const int j0 = (jl*warps_j + jg) * (ntx*tile_C::J);
 #pragma unroll
         for (int k01 = 0; k01 < MMQ_TILE_NE_K; k01 += QI8_0) {
             tile_B B;
@@ -271,7 +283,7 @@ static __device__ __forceinline__ void ggml_cuda_mmq_vec_dot_q8_0_q8_1_mma(
 
 #pragma unroll
                 for (int l = 0; l < tile_C::ne; ++l) {
-                    sum[(j0/tile_C::J + n)*tile_C::ne + l] += C.x[l]*dA[n][l/2][k01/QI8_0]*dB[l%2];
+                    sum[(jl*ntx + n)*tile_C::ne + l] += C.x[l]*dA[n][l/2][k01/QI8_0]*dB[l%2];
                 }
             }
         }
@@ -332,7 +344,12 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
     const int   * y_qs = (const int   *) y + 4;
     const half2 * y_dm = (const half2 *) y;
 
-    const int i0 = (threadIdx.y / ntx) * rows_per_warp;
+    constexpr int nwarps_pw = ggml_cuda_mmq_get_nthreads(type, J, fallback) / ggml_cuda_get_physical_warp_size();
+    constexpr int warps_i   = I / (rows_per_warp);
+    constexpr int warps_j   = nwarps_pw / warps_i > 0 ? nwarps_pw / warps_i : 1;
+    const int wg = threadIdx.y / ntx;
+    const int i0 = (wg % warps_i) * (rows_per_warp);
+    const int jg = wg / warps_i;
 
     for (int k01 = 0; k01 < MMQ_TILE_NE_K; k01 += QI8_1) {
         const int k0 = k00 + k01;
@@ -344,7 +361,8 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
         }
 
 #pragma unroll
-        for (int j0 = 0; j0 < J; j0 += ntx*tile_C::J) {
+        for (int jl = 0; jl < J / (warps_j*ntx*tile_C::J); ++jl) {
+            const int j0 = (jl*warps_j + jg) * (ntx*tile_C::J);
             tile_B B;
             load_ldmatrix(B, y_qs + j0*MMQ_TILE_Y_K + k01, MMQ_TILE_Y_K);
 
@@ -360,8 +378,8 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
                 for (int l = 0; l < tile_C::ne; ++l) {
                     const int i = i0 + n*tile_A::I + tile_C::get_i(l);
                     float2 dmA = __half22float2(x_dm[i*sram_stride + k0/QI8_1]);
-                    sum[(j0/tile_C::J + n)*tile_C::ne + l] += dmA.x*dsB.x*C.x[l];
-                    sum[(j0/tile_C::J + n)*tile_C::ne + l] += dmA.y*dsB.y;
+                    sum[(jl*ntx + n)*tile_C::ne + l] += dmA.x*dsB.x*C.x[l];
+                    sum[(jl*ntx + n)*tile_C::ne + l] += dmA.y*dsB.y;
                 }
             }
         }
@@ -386,7 +404,12 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
     tile_A   A[ntx][MMQ_TILE_NE_K/QI8_1];
     float2 dmA[ntx][tile_C::ne/2][MMQ_TILE_NE_K/QI8_1];
 
-    const int i0 = (threadIdx.y/ntx)*rows_per_warp;
+    constexpr int nwarps_pw = ggml_cuda_mmq_get_nthreads(type, J, fallback) / ggml_cuda_get_physical_warp_size();
+    constexpr int warps_i   = I / (rows_per_warp);
+    constexpr int warps_j   = nwarps_pw / warps_i > 0 ? nwarps_pw / warps_i : 1;
+    const int wg = threadIdx.y / ntx;
+    const int i0 = (wg % warps_i) * (rows_per_warp);
+    const int jg = wg / warps_i;
 
 #pragma unroll
     for (int n = 0; n < ntx; ++n) {
@@ -411,7 +434,8 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
     }
 
 #pragma unroll
-    for (int j0 = 0; j0 < J; j0 += ntx*tile_C::J) {
+    for (int jl = 0; jl < J / (warps_j*ntx*tile_C::J); ++jl) {
+        const int j0 = (jl*warps_j + jg) * (ntx*tile_C::J);
 #pragma unroll
         for (int k01 = 0; k01 < MMQ_TILE_NE_K; k01 += QI8_1) {
             tile_B   B;
@@ -433,8 +457,8 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
 
 #pragma unroll
                 for (int l = 0; l < tile_C::ne; ++l) {
-                    sum[(j0/tile_C::J + n)*tile_C::ne + l] += dmA[n][l/2][k01/QI8_1].x*dsB[l%2].x*C.x[l];
-                    sum[(j0/tile_C::J + n)*tile_C::ne + l] += dmA[n][l/2][k01/QI8_1].y*dsB[l%2].y;
+                    sum[(jl*ntx + n)*tile_C::ne + l] += dmA[n][l/2][k01/QI8_1].x*dsB[l%2].x*C.x[l];
+                    sum[(jl*ntx + n)*tile_C::ne + l] += dmA[n][l/2][k01/QI8_1].y*dsB[l%2].y;
                 }
             }
         }
@@ -498,7 +522,12 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
     const int   * y_qs = (const int   *) y + 4;
     const float * y_df = (const float *) y;
 
-    const int i0 = (threadIdx.y / ntx) * rows_per_warp;
+    constexpr int nwarps_pw = ggml_cuda_mmq_get_nthreads(type, J, fallback) / ggml_cuda_get_physical_warp_size();
+    constexpr int warps_i   = I / (rows_per_warp);
+    constexpr int warps_j   = nwarps_pw / warps_i > 0 ? nwarps_pw / warps_i : 1;
+    const int wg = threadIdx.y / ntx;
+    const int i0 = (wg % warps_i) * (rows_per_warp);
+    const int jg = wg / warps_i;
 
     for (int k01 = 0; k01 < MMQ_TILE_NE_K; k01 += 4) {
         const int k0 = k00 + k01;
@@ -510,7 +539,8 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
         }
 
 #pragma unroll
-        for (int j0 = 0; j0 < J; j0 += ntx*tile_C::J) {
+        for (int jl = 0; jl < J / (warps_j*ntx*tile_C::J); ++jl) {
+            const int j0 = (jl*warps_j + jg) * (ntx*tile_C::J);
             tile_B B;
             load_ldmatrix(B, y_qs + j0*MMQ_TILE_Y_K + k01, MMQ_TILE_Y_K);
 
@@ -525,7 +555,7 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
 #pragma unroll
                 for (int l = 0; l < tile_C::ne; ++l) {
                     const int i = i0 + n*tile_C::I + tile_C::get_i(l);
-                    sum[(j0/tile_C::J + n)*tile_C::ne + l] += C.x[l] * x_df[i*sram_stride + k0/4] * dB;
+                    sum[(jl*ntx + n)*tile_C::ne + l] += C.x[l] * x_df[i*sram_stride + k0/4] * dB;
                 }
             }
         }
@@ -549,7 +579,12 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
     const int   * y_qs = (const int   *) y + 4;
     const float * y_df = (const float *) y;
 
-    const int i0 = (threadIdx.y / ntx) * (ntx*tile_A::I);
+    constexpr int nwarps_pw = ggml_cuda_mmq_get_nthreads(type, J, fallback) / ggml_cuda_get_physical_warp_size();
+    constexpr int warps_i   = I / (ntx*tile_A::I);
+    constexpr int warps_j   = nwarps_pw / warps_i > 0 ? nwarps_pw / warps_i : 1;
+    const int wg = threadIdx.y / ntx;
+    const int i0 = (wg % warps_i) * (ntx*tile_A::I);
+    const int jg = wg / warps_i;
 
     tile_A  A[ntx][8];
     float  dA[ntx][tile_C::ne/2][8];
@@ -577,7 +612,8 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
     }
 
 #pragma unroll
-    for (int j0 = 0; j0 < J; j0 += ntx*tile_C::J) {
+    for (int jl = 0; jl < J / (warps_j*ntx*tile_C::J); ++jl) {
+        const int j0 = (jl*warps_j + jg) * (ntx*tile_C::J);
 #pragma unroll
         for (int k01 = 0; k01 < MMQ_TILE_NE_K; k01 += QR3_K*VDR_Q3_K_Q8_1_MMQ) {
             tile_B B[2];
@@ -602,7 +638,7 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
 
 #pragma unroll
                 for (int l = 0; l < tile_C::ne; ++l) {
-                    sum[(j0/tile_C::J + n)*tile_C::ne + l] += dB[l%2]*(C[0].x[l]*dA[n][l/2][k01/4 + 0] + C[1].x[l]*dA[n][l/2][k01/4 + 1]);
+                    sum[(jl*ntx + n)*tile_C::ne + l] += dB[l%2]*(C[0].x[l]*dA[n][l/2][k01/4 + 0] + C[1].x[l]*dA[n][l/2][k01/4 + 1]);
                 }
             }
         }
@@ -698,7 +734,12 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
     const int   * y_qs = (const int   *) y + 4;
     const half2 * y_ds = (const half2 *) y;
 
-    const int i0 = (threadIdx.y / ntx) * rows_per_warp;
+    constexpr int nwarps_pw = ggml_cuda_mmq_get_nthreads(type, J, fallback) / ggml_cuda_get_physical_warp_size();
+    constexpr int warps_i   = I / (rows_per_warp);
+    constexpr int warps_j   = nwarps_pw / warps_i > 0 ? nwarps_pw / warps_i : 1;
+    const int wg = threadIdx.y / ntx;
+    const int i0 = (wg % warps_i) * (rows_per_warp);
+    const int jg = wg / warps_i;
 
     for (int k01 = 0; k01 < MMQ_TILE_NE_K; k01 += 4) {
         const int k0 = k00 + k01;
@@ -710,7 +751,8 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
         }
 
 #pragma unroll
-        for (int j0 = 0; j0 < J; j0 += ntx*tile_C::J) {
+        for (int jl = 0; jl < J / (warps_j*ntx*tile_C::J); ++jl) {
+            const int j0 = (jl*warps_j + jg) * (ntx*tile_C::J);
             tile_B B;
             load_ldmatrix(B, y_qs + j0*MMQ_TILE_Y_K + k01, MMQ_TILE_Y_K);
 
@@ -743,8 +785,8 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
                     if (k01 >= MMQ_TILE_NE_K * 3/4) {
                         tmp -= Cm.x[l]*dm.y;
                     }
-                    sum[(j0/tile_C::J + n)*tile_C::ne + l] += tmp*dB;
-                    sum[(j0/tile_C::J + n)*tile_C::ne + l] -= dm.y*sB;
+                    sum[(jl*ntx + n)*tile_C::ne + l] += tmp*dB;
+                    sum[(jl*ntx + n)*tile_C::ne + l] -= dm.y*sB;
                 }
             }
         }
@@ -768,7 +810,12 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
     const int   * y_qs = (const int   *) y + 4;
     const half2 * y_ds = (const half2 *) y;
 
-    const int i0 = (threadIdx.y / ntx) * (ntx*tile_A::I);
+    constexpr int nwarps_pw = ggml_cuda_mmq_get_nthreads(type, J, fallback) / ggml_cuda_get_physical_warp_size();
+    constexpr int warps_i   = I / (ntx*tile_A::I);
+    constexpr int warps_j   = nwarps_pw / warps_i > 0 ? nwarps_pw / warps_i : 1;
+    const int wg = threadIdx.y / ntx;
+    const int i0 = (wg % warps_i) * (ntx*tile_A::I);
+    const int jg = wg / warps_i;
 
     tile_A  A[ntx][8];
     float  dA[ntx][tile_C::ne/2][8];
@@ -803,7 +850,8 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
     }
 
 #pragma unroll
-    for (int j0 = 0; j0 < J; j0 += ntx*tile_C::J) {
+    for (int jl = 0; jl < J / (warps_j*ntx*tile_C::J); ++jl) {
+        const int j0 = (jl*warps_j + jg) * (ntx*tile_C::J);
         float2 dB[tile_C::ne/2];
 
 #pragma unroll
@@ -843,7 +891,7 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
                     if (k01 >= MMQ_TILE_NE_K * 3/4) {
                         tmp -= Cm[0].x[l]*mA[n][l/2][k01/4 + 0] + Cm[1].x[l]*mA[n][l/2][k01/4 + 1];
                     }
-                    sum[(j0/tile_C::J + n)*tile_C::ne + l] += tmp*(k01 < MMQ_TILE_NE_K/2 ? dB[l%2].x : dB[l%2].y);
+                    sum[(jl*ntx + n)*tile_C::ne + l] += tmp*(k01 < MMQ_TILE_NE_K/2 ? dB[l%2].x : dB[l%2].y);
                 }
             }
         }
@@ -863,8 +911,8 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
             for (int n = 0; n < ntx; ++n) {
 #pragma unroll
                 for (int l = 0; l < tile_C::ne; ++l) {
-                    sum[(j0/tile_C::J + n)*tile_C::ne + l] -= mA[n][l/2][k01/4 + 0]*sB[l%2].x;
-                    sum[(j0/tile_C::J + n)*tile_C::ne + l] -= mA[n][l/2][k01/4 + 1]*sB[l%2].y;
+                    sum[(jl*ntx + n)*tile_C::ne + l] -= mA[n][l/2][k01/4 + 0]*sB[l%2].x;
+                    sum[(jl*ntx + n)*tile_C::ne + l] -= mA[n][l/2][k01/4 + 1]*sB[l%2].y;
                 }
             }
         }
@@ -1036,7 +1084,12 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
     const int   * y_qs = (const int   *) y + 4;
     const float * y_df = (const float *) y;
 
-    const int i0 = (threadIdx.y / ntx) * rows_per_warp;
+    constexpr int nwarps_pw = ggml_cuda_mmq_get_nthreads(type, J, fallback) / ggml_cuda_get_physical_warp_size();
+    constexpr int warps_i   = I / (rows_per_warp);
+    constexpr int warps_j   = nwarps_pw / warps_i > 0 ? nwarps_pw / warps_i : 1;
+    const int wg = threadIdx.y / ntx;
+    const int i0 = (wg % warps_i) * (rows_per_warp);
+    const int jg = wg / warps_i;
 
     for (int k01 = 0; k01 < MMQ_TILE_NE_K; k01 += 4) {
         const int k0 = k00 + k01;
@@ -1048,7 +1101,8 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
         }
 
 #pragma unroll
-        for (int j0 = 0; j0 < J; j0 += ntx*tile_C::J) {
+        for (int jl = 0; jl < J / (warps_j*ntx*tile_C::J); ++jl) {
+            const int j0 = (jl*warps_j + jg) * (ntx*tile_C::J);
             tile_B B;
             load_ldmatrix(B, y_qs + j0*MMQ_TILE_Y_K + k01, MMQ_TILE_Y_K);
 
@@ -1064,7 +1118,7 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
                 for (int l = 0; l < tile_C::ne; ++l) {
                     const int i = i0 + n*tile_C::I + tile_C::get_i(l);
                     const int8_t * sc = (const int8_t *) (x_sc + i*sram_stride + k00/16);
-                    sum[(j0/tile_C::J + n)*tile_C::ne + l] += C.x[l] * sc[k01/4] * x_df[i*sram_stride] * dB;
+                    sum[(jl*ntx + n)*tile_C::ne + l] += C.x[l] * sc[k01/4] * x_df[i*sram_stride] * dB;
                 }
             }
         }
@@ -1088,7 +1142,12 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
     const int   * y_qs = (const int   *) y + 4;
     const float * y_df = (const float *) y;
 
-    const int i0 = (threadIdx.y / ntx) * (ntx*tile_A::I);
+    constexpr int nwarps_pw = ggml_cuda_mmq_get_nthreads(type, J, fallback) / ggml_cuda_get_physical_warp_size();
+    constexpr int warps_i   = I / (ntx*tile_A::I);
+    constexpr int warps_j   = nwarps_pw / warps_i > 0 ? nwarps_pw / warps_i : 1;
+    const int wg = threadIdx.y / ntx;
+    const int i0 = (wg % warps_i) * (ntx*tile_A::I);
+    const int jg = wg / warps_i;
 
     tile_A   A[ntx][8];
     int    scA[ntx][tile_C::ne/2][8];
@@ -1131,7 +1190,8 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
     }
 
 #pragma unroll
-    for (int j0 = 0; j0 < J; j0 += ntx*tile_C::J) {
+    for (int jl = 0; jl < J / (warps_j*ntx*tile_C::J); ++jl) {
+        const int j0 = (jl*warps_j + jg) * (ntx*tile_C::J);
         float tmp[ntx][tile_C::ne] = {{0.0f}};
 
 #pragma unroll
@@ -1167,7 +1227,7 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
         for (int n = 0; n < ntx; ++n) {
 #pragma unroll
             for (int l = 0; l < tile_C::ne; ++l) {
-                sum[(j0/tile_C::J + n)*tile_C::ne + l] += tmp[n][l]*dA[n][l/2];
+                sum[(jl*ntx + n)*tile_C::ne + l] += tmp[n][l]*dA[n][l/2];
             }
         }
     }

@@ -481,12 +481,17 @@ static __device__ __forceinline__ void ggml_cuda_mmq_write_back_mma(
     constexpr int rows_per_warp = ggml_cuda_mmq_get_rows_per_warp(type, J, fallback);
     constexpr int ntx           = rows_per_warp/tile_C::I; // Number of x minitiles per warp.
 
-    const int i0 = (threadIdx.y / ntx) * (ntx*tile_C::I);
+    constexpr int warps_i   = I / (ntx*tile_C::I);
+    constexpr int warps_j   = nwarps / warps_i > 0 ? nwarps / warps_i : 1;
+    const int wg = threadIdx.y / ntx;
+    const int i0 = (wg % warps_i) * (ntx*tile_C::I);
+    const int jg = wg / warps_i;
 
     const bool y_scale_used = y_scale != nullptr;
 
 #pragma unroll
-    for (int j0 = 0; j0 < J; j0 += ntx*tile_C::J) {
+    for (int jl = 0; jl < J / (warps_j*ntx*tile_C::J); ++jl) {
+        const int j0 = (jl*warps_j + jg) * (ntx*tile_C::J);
 #pragma unroll
         for (int n = 0; n < ntx; ++n) {
 #pragma unroll
@@ -505,12 +510,12 @@ static __device__ __forceinline__ void ggml_cuda_mmq_write_back_mma(
 
                 if constexpr (type == GGML_TYPE_NVFP4) {
                     if (y_scale_used) {
-                        dst[ids_dst[j]*stride + i] = y_scale[j] * sum[(j0/tile_C::J + n)*tile_C::ne + l];
+                        dst[ids_dst[j]*stride + i] = y_scale[j] * sum[(jl*ntx + n)*tile_C::ne + l];
                     } else {
-                        dst[ids_dst[j]*stride + i] = sum[(j0/tile_C::J + n)*tile_C::ne + l];
+                        dst[ids_dst[j]*stride + i] = sum[(jl*ntx + n)*tile_C::ne + l];
                     }
                 } else {
-                    dst[ids_dst[j]*stride + i] = sum[(j0/tile_C::J + n)*tile_C::ne + l];
+                    dst[ids_dst[j]*stride + i] = sum[(jl*ntx + n)*tile_C::ne + l];
                     GGML_UNUSED(y_scale_used);
                 }
             }
@@ -1475,6 +1480,25 @@ void mul_mat_q_switch_J(ggml_backend_cuda_context & ctx, const mmq_args & args, 
     int J_best        = 0;
     int ntiles_J_best = INT_MAX;
 
+    static const char * mmq_id_j_env = getenv("GGML_CUDA_MMQ_ID_J");
+    int J_forced = args.ids_dst && mmq_id_j_env ? atoi(mmq_id_j_env) : 0;
+    const bool auto_j = args.ids_dst && (!mmq_id_j_env || strcmp(mmq_id_j_env, "auto") == 0) && GGML_CUDA_CC_IS_RDNA3_5(cc);
+    if (auto_j) {
+        if ((type == GGML_TYPE_Q5_K || type == GGML_TYPE_Q6_K) && args.nchannels_y >= 256) {
+            J_forced = 64;
+        } else if (type == GGML_TYPE_Q8_0) {
+            const int ncols_avg = (args.ncols_dst + args.nchannels_y - 1)/args.nchannels_y;
+            J_forced = ncols_avg <= 24 ? 16 : ncols_avg <= 32 ? 32 : ncols_avg <= 48 ? 48 : ncols_avg <= 64 ? 96 : 0;
+        }
+    }
+    if (J_forced > 0) {
+        const ggml_cuda_mmq_config config = ggml_cuda_mmq_get_config(type, J_forced, fallback, cc);
+        if (config.type != GGML_TYPE_COUNT && mmq_get_nbytes_shared(config, cc) <= smpbo) {
+            J_best = J_forced;
+            ntiles_J_best = 1;
+        }
+    }
+
     for (int J = 8; J <= 128 && ntiles_J_best > 1; J += 8) {
         const ggml_cuda_mmq_config config = ggml_cuda_mmq_get_config(type, J, fallback, cc);
         if (config.type == GGML_TYPE_COUNT) {
@@ -1593,5 +1617,7 @@ extern DECL_MMQ_CASE(GGML_TYPE_NVFP4);
 
 void ggml_cuda_mul_mat_q(
         ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * ids, ggml_tensor * dst);
+
+void ggml_cuda_mul_mat_q_pair(ggml_backend_cuda_context & ctx, ggml_tensor * dst0, ggml_tensor * dst1);
 
 bool ggml_cuda_should_use_mmq(enum ggml_type type, int cc, int64_t ne11, int64_t n_experts);

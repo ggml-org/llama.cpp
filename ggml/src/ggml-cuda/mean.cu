@@ -2,7 +2,6 @@
 #include "reduce_rows.cuh"
 
 #ifdef GGML_CUDA_USE_CUB
-#include <cub/cub.cuh>
 using namespace cub;
 #endif  // GGML_CUDA_USE_CUB
 
@@ -47,10 +46,10 @@ void ggml_cuda_op_mean(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
         size_t           tmp_size = 0;
         ggml_cuda_pool & pool     = ctx.pool();
 
-        DeviceReduce::Sum(nullptr, tmp_size, src0_d, dst_d, ncols, stream);
+        CUDA_CHECK(DeviceReduce::Sum(nullptr, tmp_size, src0_d, dst_d, ncols, stream));
 
         ggml_cuda_pool_alloc<uint8_t> tmp_alloc(pool, tmp_size);
-        DeviceReduce::Sum(tmp_alloc.ptr, tmp_size, src0_d, dst_d, ncols, stream);
+        CUDA_CHECK(DeviceReduce::Sum(tmp_alloc.ptr, tmp_size, src0_d, dst_d, ncols, stream));
 
         // Divide by ncols
         divide_by_count<float><<<1, 1, 0, stream>>>(dst_d, ncols);

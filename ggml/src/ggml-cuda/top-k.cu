@@ -2,7 +2,6 @@
 #include "top-k.cuh"
 
 #ifdef GGML_CUDA_USE_CUB
-#    include <cub/cub.cuh>
 #    if (CCCL_MAJOR_VERSION >= 3 && CCCL_MINOR_VERSION >= 2)
 #        define CUB_TOP_K_AVAILABLE
 #        include <cuda/iterator>
@@ -48,6 +47,106 @@ static int next_power_of_2(int x) {
 
 #endif                            // CUB_TOP_K_AVAILABLE
 
+#if defined(GGML_USE_HIP)
+
+// The DeepSeek lightning indexer uses top-k = 512, 1024, or 2048. On RDNA3.5,
+// sorting its small score rows locally avoids a device-wide hipCUB argsort.
+__device__ __forceinline__ static bool top_k_score_better(float av, uint32_t ai, float bv, uint32_t bi) {
+    return av > bv || (av == bv && ai < bi);
+}
+
+template <uint32_t SORT_N, typename index_t>
+__global__ static void top_k_strix_bitonic(
+        int *         dst,
+        const float * src,
+        uint32_t      ncols,
+        uint32_t      nrows,
+        uint32_t      k) {
+    const uint32_t row = blockIdx.x;
+    const uint32_t tid = threadIdx.x;
+    if (row >= nrows) {
+        return;
+    }
+
+    __shared__ float   values[SORT_N];
+    __shared__ index_t indices[SORT_N];
+
+    const float * src_row = src + (uint64_t) row * ncols;
+    for (uint32_t i = tid; i < SORT_N; i += blockDim.x) {
+        if (i < ncols) {
+            values[i] = src_row[i];
+            indices[i] = (index_t) i;
+        } else {
+            values[i] = -INFINITY;
+            indices[i] = (index_t) -1;
+        }
+    }
+    __syncthreads();
+
+    for (uint32_t width = 2; width <= SORT_N; width <<= 1) {
+        for (uint32_t stride = width >> 1; stride > 0; stride >>= 1) {
+            for (uint32_t i = tid; i < SORT_N; i += blockDim.x) {
+                const uint32_t other = i ^ stride;
+                if (other > i && other < SORT_N) {
+                    const float av = values[i];
+                    const float bv = values[other];
+                    const uint32_t ai = indices[i];
+                    const uint32_t bi = indices[other];
+                    const bool descending_half = (i & width) == 0;
+                    const bool swap = descending_half
+                        ? top_k_score_better(bv, bi, av, ai)
+                        : top_k_score_better(av, ai, bv, bi);
+                    if (swap) {
+                        values[i] = bv;
+                        indices[i] = (index_t) bi;
+                        values[other] = av;
+                        indices[other] = (index_t) ai;
+                    }
+                }
+            }
+            __syncthreads();
+        }
+    }
+
+    int * dst_row = dst + (uint64_t) row * k;
+    for (uint32_t i = tid; i < k; i += blockDim.x) {
+        dst_row[i] = indices[i];
+    }
+}
+
+static bool top_k_strix(
+        const float * src,
+        int *         dst,
+        int64_t       ncols,
+        int64_t       nrows,
+        int64_t       k,
+        cudaStream_t  stream) {
+    const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
+    if (!GGML_CUDA_CC_IS_RDNA3_5(cc) || ncols <= 0 || ncols > 8192 || nrows <= 0 ||
+        (k != 512 && k != 1024 && k != 2048) || k > ncols || nrows > UINT32_MAX) {
+        return false;
+    }
+
+    const size_t max_shared_mem = ggml_cuda_info().devices[ggml_cuda_get_device()].smpb;
+    if (ncols <= 4096) {
+        if (sizeof(float) * 4096 + sizeof(uint32_t) * 4096 > max_shared_mem) {
+            return false;
+        }
+        top_k_strix_bitonic<4096, uint32_t><<<nrows, 1024, 0, stream>>>(
+            dst, src, (uint32_t) ncols, (uint32_t) nrows, (uint32_t) k);
+    } else {
+        if (sizeof(float) * 8192 + sizeof(uint16_t) * 8192 > max_shared_mem) {
+            return false;
+        }
+        top_k_strix_bitonic<8192, uint16_t><<<nrows, 1024, 0, stream>>>(
+            dst, src, (uint32_t) ncols, (uint32_t) nrows, (uint32_t) k);
+    }
+    CUDA_CHECK(cudaGetLastError());
+    return true;
+}
+
+#endif  // defined(GGML_USE_HIP)
+
 void ggml_cuda_op_top_k(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * src0   = dst->src[0];
     const float *       src0_d = (const float *) src0->data;
@@ -63,6 +162,11 @@ void ggml_cuda_op_top_k(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const int64_t    nrows = ggml_nrows(src0);
     const int64_t    k     = dst->ne[0];
     ggml_cuda_pool & pool  = ctx.pool();
+#if defined(GGML_USE_HIP)
+    if (top_k_strix(src0_d, dst_d, ncols, nrows, k, stream)) {
+        return;
+    }
+#endif  // defined(GGML_USE_HIP)
 #ifdef CUB_TOP_K_AVAILABLE
     // TODO: Switch to `DeviceSegmentedTopK` for multi-row TopK once implemented
     // https://github.com/NVIDIA/cccl/issues/6391
