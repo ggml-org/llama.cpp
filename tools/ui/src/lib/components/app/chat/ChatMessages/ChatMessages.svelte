@@ -1,22 +1,8 @@
 <script lang="ts">
 	import { ChatMessage, ChatMessageUserPending } from '$lib/components/app';
-	import { setChatActionsContext } from '$lib/contexts';
 	import { MessageRole } from '$lib/enums';
-	import {
-		agenticClearSteeringMessage,
-		agenticInjectSteeringMessage,
-		agenticPendingSteeringMessageContent,
-		agenticPendingSteeringMessageExtras
-	} from '$lib/stores/agentic.svelte';
-	import { chatStore } from '$lib/stores/chat.svelte';
-	import {
-		chatClearPendingMessage,
-		chatInjectPendingMessage,
-		chatPendingMessageContent,
-		chatPendingMessageExtras
-	} from '$lib/stores/chat.svelte';
-	import { activeConversation, conversationsStore } from '$lib/stores/conversations.svelte';
-	import { config } from '$lib/stores/settings.svelte';
+	import { agenticStore, chatStore, conversationsStore, settingsStore } from '$lib/stores';
+	import type { ChatMessageActions } from '$lib/types';
 	import {
 		buildSiblingInfoMap,
 		copyToClipboard,
@@ -34,9 +20,9 @@
 
 	let allConversationMessages = $state<DatabaseMessage[]>([]);
 
-	const currentConfig = config();
+	const currentConfig = settingsStore.config;
 
-	setChatActionsContext({
+	const chatActions: ChatMessageActions = {
 		continueAssistantMessage: async (message: DatabaseMessage) => {
 			onUserAction?.();
 			await chatStore.continueAssistantMessage(message.id);
@@ -105,10 +91,10 @@
 			await chatStore.regenerateMessageWithBranching(message.id, modelOverride);
 			refreshAllMessages();
 		}
-	});
+	};
 
 	function refreshAllMessages() {
-		const conversation = activeConversation();
+		const conversation = conversationsStore.activeConversation;
 
 		if (conversation) {
 			conversationsStore.getConversationMessages(conversation.id).then((messages) => {
@@ -121,7 +107,7 @@
 
 	// Refresh messages whenever the active conversation changes
 	$effect(() => {
-		if (activeConversation()) {
+		if (conversationsStore.activeConversation) {
 			refreshAllMessages();
 		}
 	});
@@ -242,6 +228,7 @@
 	{#each displayMessages as { isLastAssistantMessage, isLastUserMessage, message, nextAssistantMessage, siblingInfo, toolMessages } (message.id)}
 		<ChatMessage
 			class="mx-auto mt-12 w-full max-w-3xl"
+			{chatActions}
 			{message}
 			{toolMessages}
 			{isLastAssistantMessage}
@@ -251,32 +238,33 @@
 		/>
 	{/each}
 
-	{#if activeConversation() && agenticPendingSteeringMessageContent(activeConversation()!.id)}
-		{@const convId = activeConversation()!.id}
-		{@const pendingContent = agenticPendingSteeringMessageContent(convId)}
+	{#if conversationsStore.activeConversation && agenticStore.pendingSteeringMessageContent(conversationsStore.activeConversation!.id)}
+		{@const convId = conversationsStore.activeConversation!.id}
+		{@const pendingContent = agenticStore.pendingSteeringMessageContent(convId)}
 
 		{#if pendingContent}
 			<ChatMessageUserPending
 				class="mx-auto mt-12 w-full max-w-[48rem]"
 				content={pendingContent}
-				extras={agenticPendingSteeringMessageExtras(convId)}
+				extras={agenticStore.pendingSteeringMessageExtras(convId)}
 				onSendImmediately={() => chatStore.abortCurrentFlow(convId)}
-				onEdit={(newContent, extras) => agenticInjectSteeringMessage(convId, newContent, extras)}
-				onDelete={() => agenticClearSteeringMessage(convId)}
+				onEdit={(newContent, extras) =>
+					agenticStore.injectSteeringMessage(convId, newContent, extras)}
+				onDelete={() => agenticStore.clearSteeringMessage(convId)}
 			/>
 		{/if}
-	{:else if activeConversation() && chatPendingMessageContent(activeConversation()!.id)}
-		{@const convId = activeConversation()!.id}
-		{@const pendingContent = chatPendingMessageContent(convId)}
+	{:else if conversationsStore.activeConversation && chatStore.pendingMessageContent(conversationsStore.activeConversation!.id)}
+		{@const convId = conversationsStore.activeConversation!.id}
+		{@const pendingContent = chatStore.pendingMessageContent(convId)}
 
 		{#if pendingContent}
 			<ChatMessageUserPending
 				class="mx-auto mt-12 w-full max-w-[48rem]"
 				content={pendingContent}
-				extras={chatPendingMessageExtras(convId)}
+				extras={chatStore.pendingMessageExtras(convId)}
 				onSendImmediately={() => chatStore.abortCurrentFlow(convId)}
-				onEdit={(newContent, extras) => chatInjectPendingMessage(convId, newContent, extras)}
-				onDelete={() => chatClearPendingMessage(convId)}
+				onEdit={(newContent, extras) => chatStore.injectPendingMessage(convId, newContent, extras)}
+				onDelete={() => chatStore.clearPendingMessage(convId)}
 			/>
 		{/if}
 	{/if}

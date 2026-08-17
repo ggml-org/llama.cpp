@@ -8,7 +8,7 @@ import {
 	SANDBOX_TOOL_NAME,
 	SANDBOX_TRUNCATION_NOTICE
 } from '$lib/constants';
-import { config } from '$lib/stores/settings.svelte';
+import { settingsStore } from '$lib/stores/settings.svelte';
 import type { ToolExecutionResult } from '$lib/types';
 
 /** Cached harnesses keyed by whether nerdamer is included. */
@@ -20,7 +20,7 @@ const harnessCache: Record<string, string> = {};
  * prelude. Cached per variant so toggling the setting is instant.
  */
 async function getHarness(): Promise<string> {
-	const enabled = !!config().symbolicMathEnabled;
+	const enabled = !!settingsStore.config.symbolicMathEnabled;
 	const key = enabled ? 'nerdamer' : 'plain';
 
 	if (!harnessCache[key]) {
@@ -68,7 +68,7 @@ function formatReply(reply: SandboxReply): ToolExecutionResult {
 
 export class SandboxService {
 	/**
-	 * Execute a frontend sandbox tool call and return its output.
+	 * Execute a browser sandbox tool call and return its output.
 	 * One disposable iframe per execution, removed on completion,
 	 * timeout or abort. Removing the iframe terminates the worker
 	 * at the browser level, so runaway code cannot outlive it.
@@ -79,7 +79,7 @@ export class SandboxService {
 		signal?: AbortSignal
 	): Promise<ToolExecutionResult> {
 		if (toolName !== SANDBOX_TOOL_NAME) {
-			return { content: `Unknown frontend tool: ${toolName}`, isError: true };
+			return { content: `Unknown browser tool: ${toolName}`, isError: true };
 		}
 
 		const code = typeof params.code === 'string' ? params.code : '';

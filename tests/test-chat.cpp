@@ -4462,6 +4462,109 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
         }
     }
 
+    // Kimi-K3 tests - custom parser
+    // Unique feature: XTML tags built from <|open|>/<|close|>/<|sep|>, and a
+    // generation prompt that leaves the think section already open.
+    {
+        auto tst = peg_tester("models/templates/Kimi-K3.jinja", detailed_debug);
+
+        // Content only. The response section is explicit even with no reasoning.
+        tst.test("<|open|>response<|sep|>Hello, world!\nWhat's up?<|close|>response<|sep|>"
+                 "<|close|>message<|sep|>")
+            .expect(message_assist)
+            .run();
+
+        // Reasoning with no opening tag - the generation prompt already opened it
+        tst.test("I'm thinking about this<|close|>think<|sep|>"
+                 "<|open|>response<|sep|>Hello, world!\nWhat's up?<|close|>response<|sep|>"
+                 "<|close|>message<|sep|>")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect(simple_assist_msg("Hello, world!\nWhat's up?", "I'm thinking about this"))
+            .run();
+
+        // Prose that mentions the tag names must survive intact.
+        tst.test("<|open|>response<|sep|>Use the response tag, then message the handler."
+                 "<|close|>response<|sep|><|close|>message<|sep|>")
+            .expect(simple_assist_msg("Use the response tag, then message the handler."))
+            .run();
+
+        // Truncated mid-reasoning (hit the token budget): keep the reasoning.
+        tst.test("I was still thinking when the budget ran out")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect_reasoning("I was still thinking when the budget ran out")
+            .run();
+
+        // Single tool call, one argument.
+        tst.test("<|open|>response<|sep|><|close|>response<|sep|>"
+                 "<|open|>tools<|sep|>"
+                 "<|open|>call tool=\"special_function\" index=\"1\"<|sep|>"
+                 "<|open|>argument key=\"arg1\" type=\"number\"<|sep|>1<|close|>argument<|sep|>"
+                 "<|close|>call<|sep|><|close|>tools<|sep|><|close|>message<|sep|>")
+            .tools({ special_function_tool })
+            .expect_tool_calls({
+                { "special_function", R"({"arg1":1})", "" },
+            })
+            .run();
+
+        // Tool call preceded by reasoning (no opening think tag) and content.
+        tst.test("I should call it<|close|>think<|sep|>"
+                 "<|open|>response<|sep|>On it.<|close|>response<|sep|>"
+                 "<|open|>tools<|sep|>"
+                 "<|open|>call tool=\"special_function\" index=\"1\"<|sep|>"
+                 "<|open|>argument key=\"arg1\" type=\"number\"<|sep|>1<|close|>argument<|sep|>"
+                 "<|close|>call<|sep|><|close|>tools<|sep|><|close|>message<|sep|>")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ special_function_tool })
+            .expect(simple_assist_msg("On it.", "I should call it", "special_function",
+                                      R"({"arg1":1})", ""))
+            .run();
+
+        // Multiple typed arguments: values must come back as JSON numbers, not strings
+        tst.test("<|open|>response<|sep|><|close|>response<|sep|>"
+                 "<|open|>tools<|sep|>"
+                 "<|open|>call tool=\"special_function_with_opt\" index=\"1\"<|sep|>"
+                 "<|open|>argument key=\"arg1\" type=\"number\"<|sep|>1<|close|>argument<|sep|>"
+                 "<|open|>argument key=\"arg2\" type=\"number\"<|sep|>2<|close|>argument<|sep|>"
+                 "<|close|>call<|sep|><|close|>tools<|sep|><|close|>message<|sep|>")
+            .tools({ special_function_tool_with_optional_param })
+            .expect_tool_calls({
+                { "special_function_with_opt", R"({"arg1":1,"arg2":2})", "" },
+            })
+            .run();
+
+        // Parallel tool calls in one <|open|>tools<|sep|> section.
+        tst.test("<|open|>response<|sep|><|close|>response<|sep|>"
+                 "<|open|>tools<|sep|>"
+                 "<|open|>call tool=\"special_function\" index=\"1\"<|sep|>"
+                 "<|open|>argument key=\"arg1\" type=\"number\"<|sep|>1<|close|>argument<|sep|>"
+                 "<|close|>call<|sep|>"
+                 "<|open|>call tool=\"special_function_with_opt\" index=\"2\"<|sep|>"
+                 "<|open|>argument key=\"arg1\" type=\"number\"<|sep|>1<|close|>argument<|sep|>"
+                 "<|open|>argument key=\"arg2\" type=\"number\"<|sep|>2<|close|>argument<|sep|>"
+                 "<|close|>call<|sep|><|close|>tools<|sep|><|close|>message<|sep|>")
+            .parallel_tool_calls(true)
+            .tools({ special_function_tool, special_function_tool_with_optional_param })
+            .expect_tool_calls({
+                { "special_function", R"({"arg1":1})", "" },
+                { "special_function_with_opt", R"({"arg1":1,"arg2":2})", "" },
+            })
+            .run();
+
+        // String-typed argument keeps its literal text (no JSON coercion).
+        tst.test("<|open|>response<|sep|><|close|>response<|sep|>"
+                 "<|open|>tools<|sep|>"
+                 "<|open|>call tool=\"python\" index=\"1\"<|sep|>"
+                 "<|open|>argument key=\"code\" type=\"string\"<|sep|>print('hey')"
+                 "<|close|>argument<|sep|>"
+                 "<|close|>call<|sep|><|close|>tools<|sep|><|close|>message<|sep|>")
+            .tools({ python_tool })
+            .expect_tool_calls({
+                // custom delimiter: the payload itself contains )"
+                { "python", R"JSON({"code":"print('hey')"})JSON", "" },
+            })
+            .run();
+    }
+
     // Kimi-K2-Thinking tests - custom parser
     // Unique feature: tool call ID embeds function name as functions.<name>:<counter>
     {
@@ -4618,7 +4721,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
 
         // Real life test - execute_command
         tst.test("<|tool_call_begin|>functions.execute_command:0<|tool_call_argument_begin|>{\"command\": \"ls -lah\""
-            ", \"cwd\": \"/home/jarvis/development/exllamav3\", \"timeout\": 10}")
+            ", \"cwd\": \"/home/user/development/exllamav3\", \"timeout\": 10}")
             .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
             .parallel_tool_calls(true)
             .tools({
@@ -4648,7 +4751,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             expect_tool_calls({
                 {
                     "execute_command",
-                    R"({"command": "ls -lah", "cwd": "/home/jarvis/development/exllamav3", "timeout": 10})",
+                    R"({"command": "ls -lah", "cwd": "/home/user/development/exllamav3", "timeout": 10})",
                     "functions.execute_command:0"
                 }
             })
@@ -6955,6 +7058,24 @@ static void test_reasoning_budget_message_per_request() {
     }
 }
 
+static void test_reasoning_effort_caps() {
+    LOG_DBG("%s\n", __func__);
+
+    auto assert_supports_effort = [](const std::string & path, bool expected) {
+        auto tmpls = read_templates(path);
+        assert_equals(expected, common_chat_templates_get_caps(tmpls.get()).at("supports_reasoning_effort"));
+    };
+
+    assert_supports_effort("models/templates/deepseek-ai-DeepSeek-V4.jinja", true);
+    assert_supports_effort("models/templates/muse-glimmer.jinja", true);
+    assert_supports_effort("models/templates/tencent-Hy3.jinja", true);
+    assert_supports_effort("models/templates/openai-gpt-oss-120b.jinja", true);
+    assert_supports_effort("models/templates/upstage-Solar-Open-100B.jinja", true);
+    assert_supports_effort("models/templates/Cohere2MoE.jinja", true);
+    assert_supports_effort("models/templates/meta-llama-Llama-3.1-8B-Instruct.jinja", false);
+    assert_supports_effort("models/templates/Qwen-Qwen3-0.6B.jinja", false);
+}
+
 static void test_msg_diffs_compute() {
     LOG_DBG("%s\n", __func__);
     {
@@ -7114,6 +7235,7 @@ int main(int argc, char ** argv) {
         test_deepseek_v4_thinking_retention();
         test_deepseek_v4_tool_result_ordering();
         test_template_generation_prompt();
+        test_reasoning_effort_caps();
         test_reasoning_budget_tokens_per_request();
         test_reasoning_budget_message_per_request();
         test_template_output_peg_parsers(detailed_debug);

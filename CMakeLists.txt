@@ -5,7 +5,7 @@ include(CheckIncludeFileCXX)
 ### llama.cpp version
 set(LLAMA_VERSION_MAJOR 0)
 set(LLAMA_VERSION_MINOR 1)
-set(LLAMA_VERSION_PATCH 0)
+set(LLAMA_VERSION_PATCH 1)
 set(LLAMA_VERSION_BASE "${LLAMA_VERSION_MAJOR}.${LLAMA_VERSION_MINOR}.${LLAMA_VERSION_PATCH}")
 
 # whether this is a development/nightly build
@@ -223,6 +223,9 @@ add_subdirectory(src)
 #
 # utils, programs, examples and tests
 #
+
+# mtmd needs this even when common is not built
+add_subdirectory(vendor/hash)
 
 if (LLAMA_BUILD_COMMON)
     add_subdirectory(common)

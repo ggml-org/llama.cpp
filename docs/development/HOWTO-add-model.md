@@ -29,6 +29,7 @@ The required steps to implement for an HF model are:
 
 ```python
 @ModelBase.register("MyModelForCausalLM")
+@ModelBase.example("user/model")
 class MyModel(TextModel):
     model_arch = gguf.MODEL_ARCH.MYMODEL
 ```
@@ -37,9 +38,12 @@ or
 
 ```python
 @ModelBase.register("MyModelForConditionalGeneration")
+@ModelBase.example("user/model")
 class MyModel(MmprojModel):
     model_arch = gguf.MODEL_ARCH.MYMODEL
 ```
+
+The `example` should point to a valid Hugging Face model that will be used for testing. You can add multiple models if necessary. Prefer a non-gated model, or tiny random weights if no such model exists.
 
 2. Define the layout of the GGUF tensors in [constants.py](/gguf-py/gguf/constants.py)
 

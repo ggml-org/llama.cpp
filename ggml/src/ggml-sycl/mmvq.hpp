@@ -57,4 +57,20 @@ bool ggml_sycl_mul_mat_vec_q_id_reorder(
     size_t             src1_row_stride,
     dpct::queue_ptr    stream);
 
+// Fused dense-FFN GEMV: writes glu(gate . y, up . y) instead of the two mat-vec results.
+// vx / vgate must share shape, stride and reorder layout. Returns false if unhandled.
+bool ggml_sycl_mul_mat_vec_q_glu_reorder(
+    enum ggml_type     src0_type,
+    enum ggml_glu_op   glu_op,
+    const void *       vx,
+    const void *       vgate,
+    const void *       vy,
+    float *            dst,
+    int                ncols,                // K, shared by both weights
+    int                nrows,                // output rows, i.e. weight ne[1]
+    int                ncols_dst,            // activation columns, 1..MMVQ_MAX_BATCH_SIZE
+    int                stride_col_y_bytes,   // bytes between activation columns in vy
+    int                stride_col_dst,       // floats between output columns in dst
+    dpct::queue_ptr    stream);
+
 #endif // GGML_SYCL_MMVQ_HPP

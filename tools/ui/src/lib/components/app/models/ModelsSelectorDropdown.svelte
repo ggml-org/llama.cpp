@@ -14,7 +14,7 @@
 	import { MODEL_SELECTOR_ICON } from '$lib/constants';
 	import { KeyboardKey, ServerModelStatus } from '$lib/enums';
 	import { useModelsSelector } from '$lib/hooks/use-models-selector.svelte';
-	import { modelsStore, routerModels } from '$lib/stores/models.svelte';
+	import { modelsStore } from '$lib/stores';
 	import { modelLoadFraction } from '$lib/utils';
 
 	interface Props {
@@ -111,7 +111,7 @@
 			return;
 		}
 
-		const model = routerModels().find((m) => m.id === modelId);
+		const model = modelsStore.routerModels.find((m) => m.id === modelId);
 		const status = model?.status?.value as ServerModelStatus | undefined;
 
 		if (status === ServerModelStatus.LOADING) return;
@@ -169,7 +169,7 @@
 		{@const selectedOption = ms.getDisplayOption()}
 		{@const triggerModel = selectedOption?.model}
 		{@const triggerStatus = triggerModel
-			? routerModels().find((m) => m.id === triggerModel)?.status?.value
+			? modelsStore.routerModels.find((m) => m.id === triggerModel)?.status?.value
 			: undefined}
 		{@const triggerLoading =
 			!!triggerModel &&

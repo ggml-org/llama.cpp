@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { Clock, Loader2 } from '@lucide/svelte';
 	import { AgenticSectionType } from '$lib/enums';
-	import type { AgenticSection } from '$lib/utils';
+	import type { AgenticSection } from '$lib/types';
 
 	interface Props {
 		section: AgenticSection;
@@ -33,7 +33,7 @@
 				if (typeof obj.result === 'string') return { dateString: obj.result.trim() };
 			}
 		} catch {
-			return { dateString: toolResultString.trim() };
+			// not JSON - nothing to show
 		}
 
 		return {};

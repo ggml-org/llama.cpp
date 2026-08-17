@@ -4,13 +4,10 @@
 // can render incrementally as the file path streams in.
 
 import { parseToolArgs } from './_shared';
-import {
-	DEFAULT_LANGUAGE,
-	FILE_PATH_SEPARATOR_REGEX,
-	TEXT_LANGUAGE_PREFIX_REGEX
-} from '$lib/constants';
+import { CODE_BLOCK, FILE_PATH_SEPARATOR_REGEX } from '$lib/constants';
 import { BuiltInTool } from '$lib/enums';
-import { type AgenticSection, getFileTypeByExtension } from '$lib/utils';
+import type { AgenticSection } from '$lib/types';
+import { getFileTypeByExtension } from '$lib/utils';
 
 export type ReadFileMeta = {
 	fileName: string;
@@ -19,7 +16,7 @@ export type ReadFileMeta = {
 };
 
 export function parseReadFileMeta(section: AgenticSection): ReadFileMeta | null {
-	const args = parseToolArgs(BuiltInTool.READ_FILE, section, { partial: true });
+	const args = parseToolArgs(BuiltInTool.SERVER_READ_FILE, section, { partial: true });
 
 	if (!args) return null;
 
@@ -50,7 +47,9 @@ export function parseReadFileMeta(section: AgenticSection): ReadFileMeta | null 
 	}
 
 	const fileType = getFileTypeByExtension(fileName);
-	const language = fileType ? fileType.replace(TEXT_LANGUAGE_PREFIX_REGEX, '') : DEFAULT_LANGUAGE;
+	const language = fileType
+		? fileType.replace(CODE_BLOCK.TEXT_LANGUAGE_PREFIX_REGEX, '')
+		: CODE_BLOCK.DEFAULT_LANGUAGE;
 
 	return { fileName, language, lineRange };
 }

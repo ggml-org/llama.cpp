@@ -5,12 +5,9 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import Label from '$lib/components/ui/label/label.svelte';
-	import { AUTHORIZATION_HEADER, BEARER_PREFIX, SETTINGS_KEYS } from '$lib/constants';
-	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
-	import { ROUTES } from '$lib/constants/routes';
+	import { HEADERS, ICON_CLASS_DEFAULT, ROUTES, SETTINGS_KEYS } from '$lib/constants';
 	import { KeyboardKey } from '$lib/enums';
-	import { serverLoading, serverStore } from '$lib/stores/server.svelte';
-	import { config, settingsStore } from '$lib/stores/settings.svelte';
+	import { serverStore, settingsStore } from '$lib/stores';
 	import { fade, fly, scale } from 'svelte/transition';
 
 	interface Props {
@@ -29,7 +26,7 @@
 		showTroubleshooting = false
 	}: Props = $props();
 
-	let isServerLoading = $derived(serverLoading());
+	let isServerLoading = $derived(serverStore.loading);
 	let isAccessDeniedError = $derived(
 		error.toLowerCase().includes('access denied') ||
 			error.toLowerCase().includes('invalid api key') ||
@@ -54,7 +51,7 @@
 	function handleShowApiKeyInput() {
 		showApiKeyInput = true;
 		// Pre-fill with current API key if it exists
-		const currentConfig = config();
+		const currentConfig = settingsStore.config;
 
 		apiKeyInput = currentConfig.apiKey?.toString() || '';
 	}
@@ -72,8 +69,8 @@
 			// Test the API key by making a real request to the server
 			const response = await fetch(`${base}/props`, {
 				headers: {
-					[AUTHORIZATION_HEADER]: `${BEARER_PREFIX}${apiKeyInput.trim()}`,
-					'Content-Type': 'application/json'
+					'Content-Type': 'application/json',
+					[HEADERS.AUTHORIZATION]: `${HEADERS.BEARER}${apiKeyInput.trim()}`
 				}
 			});
 
@@ -161,6 +158,8 @@
 					<div class="relative">
 						<Input
 							id="api-key-input"
+							type="password"
+							autocomplete="new-password"
 							placeholder="Enter your API key..."
 							bind:value={apiKeyInput}
 							onkeydown={handleApiKeyKeydown}

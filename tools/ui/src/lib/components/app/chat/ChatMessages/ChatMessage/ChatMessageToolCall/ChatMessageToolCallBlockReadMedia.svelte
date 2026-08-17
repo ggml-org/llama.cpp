@@ -1,10 +1,10 @@
 <script lang="ts">
 	import { parseReadMediaMeta } from './parsers/read-media';
 	import ToolCallBlock from './ToolCallBlock.svelte';
-	import { ATTACHMENT_SAVED_REGEX } from '$lib/constants/agentic';
+	import { ATTACHMENT_SAVED_REGEX } from '$lib/constants/agentic.constants';
 	import { AttachmentType, MimeTypeAudio } from '$lib/enums';
 	import type { DatabaseMessageExtraAudioFile, DatabaseMessageExtraImageFile } from '$lib/types';
-	import { type AgenticSection } from '$lib/utils';
+	import type { AgenticSection } from '$lib/types';
 	import { createBase64DataUrl } from '$lib/utils/data-url';
 
 	interface Props {

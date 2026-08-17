@@ -12,13 +12,8 @@
 	import ChatMessageToolCallBlockSearchResults from './ChatMessageToolCallBlockSearchResults.svelte';
 	import ChatMessageToolCallBlockWriteFile from './ChatMessageToolCallBlockWriteFile.svelte';
 	import { BuiltInTool } from '$lib/enums';
-	import type { DatabaseMessageExtra } from '$lib/types';
-	import {
-		type AgenticSection,
-		extractSearchQuery,
-		extractSearchResults,
-		isWebSearchToolName
-	} from '$lib/utils';
+	import type { AgenticSection, DatabaseMessageExtra } from '$lib/types';
+	import { extractSearchQuery, extractSearchResults, isWebSearchToolName } from '$lib/utils';
 
 	interface Props {
 		section: AgenticSection;
@@ -40,19 +35,19 @@
 
 {#if isSearchCall}
 	<ChatMessageToolCallBlockSearchResults {section} {open} {isStreaming} {onToggle} />
-{:else if section.toolName === BuiltInTool.GET_DATETIME}
+{:else if section.toolName === BuiltInTool.BROWSER_GET_DATETIME}
 	<ChatMessageToolCallBlockGetDatetime {section} {isStreaming} />
-{:else if section.toolName === BuiltInTool.GET_INFO}
+{:else if section.toolName === BuiltInTool.SERVER_GET_INFO}
 	<ChatMessageToolCallBlockGetInfo {section} {isStreaming} />
-{:else if section.toolName === BuiltInTool.READ_FILE}
+{:else if section.toolName === BuiltInTool.SERVER_READ_FILE}
 	<ChatMessageToolCallBlockReadFile {section} {open} {isStreaming} {onToggle} />
-{:else if section.toolName === BuiltInTool.READ_MEDIA}
+{:else if section.toolName === BuiltInTool.BROWSER_READ_MEDIA}
 	<ChatMessageToolCallBlockReadMedia {section} {open} {isStreaming} {onToggle} />
-{:else if section.toolName === BuiltInTool.EDIT_FILE}
+{:else if section.toolName === BuiltInTool.SERVER_EDIT_FILE}
 	<ChatMessageToolCallBlockEditFile {section} {open} {isStreaming} {onToggle} />
-{:else if section.toolName === BuiltInTool.WRITE_FILE}
+{:else if section.toolName === BuiltInTool.SERVER_WRITE_FILE}
 	<ChatMessageToolCallBlockWriteFile {section} {open} {isStreaming} {onToggle} />
-{:else if section.toolName === BuiltInTool.EXEC_SHELL_COMMAND}
+{:else if section.toolName === BuiltInTool.SERVER_EXEC_SHELL_COMMAND}
 	<ChatMessageToolCallBlockExecShellCommand
 		{section}
 		{open}
@@ -61,11 +56,11 @@
 		{attachments}
 		{onToggle}
 	/>
-{:else if section.toolName === BuiltInTool.FILE_GLOB_SEARCH}
+{:else if section.toolName === BuiltInTool.SERVER_FILE_GLOB_SEARCH}
 	<ChatMessageToolCallBlockFileGlobSearch {section} {open} {isStreaming} {onToggle} />
-{:else if section.toolName === BuiltInTool.GREP_SEARCH}
+{:else if section.toolName === BuiltInTool.SERVER_GREP_SEARCH}
 	<ChatMessageToolCallBlockGrepSearch {section} {open} {isStreaming} {onToggle} />
-{:else if section.toolName === BuiltInTool.RUN_JAVASCRIPT}
+{:else if section.toolName === BuiltInTool.BROWSER_RUN_JAVASCRIPT}
 	<ChatMessageToolCallBlockRunJavascript {section} {open} {isStreaming} {onToggle} />
 {:else}
 	<ChatMessageToolCallBlockDefault {section} {open} {isStreaming} {attachments} {onToggle} />

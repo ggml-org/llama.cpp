@@ -9,30 +9,16 @@
 	import Input from '$lib/components/ui/input/input.svelte';
 	import Label from '$lib/components/ui/label/label.svelte';
 	import { Switch } from '$lib/components/ui/switch';
+	import { getChatMessageActionsContext, getChatMessageEditContext } from '$lib/contexts';
 	import { MessageRole } from '$lib/enums';
-	import { activeConversation } from '$lib/stores/conversations.svelte';
+	import { conversationsStore } from '$lib/stores';
 
 	interface Props {
 		role: MessageRole.USER | MessageRole.ASSISTANT;
 		justify: 'start' | 'end';
 		actionsPosition: 'left' | 'right';
-		siblingInfo?: ChatMessageSiblingInfo | null;
-		showDeleteDialog: boolean;
-		deletionInfo: {
-			totalCount: number;
-			userMessages: number;
-			assistantMessages: number;
-			messageTypes: string[];
-		} | null;
-		onCopy: () => void;
-		onEdit?: () => void;
 		onRegenerate?: () => void;
 		onContinue?: () => void;
-		onForkConversation?: (options: { name: string; includeAttachments: boolean }) => void;
-		onDelete: () => void;
-		onConfirmDelete: () => void;
-		onNavigateToSibling?: (siblingId: string) => void;
-		onShowDeleteDialogChange: (show: boolean) => void;
 		showRawOutputSwitch?: boolean;
 		rawOutputEnabled?: boolean;
 		onRawOutputToggle?: (enabled: boolean) => void;
@@ -40,36 +26,29 @@
 
 	let {
 		actionsPosition,
-		deletionInfo,
 		justify,
-		onConfirmDelete,
 		onContinue,
-		onCopy,
-		onDelete,
-		onEdit,
-		onForkConversation,
-		onNavigateToSibling,
 		onRawOutputToggle,
 		onRegenerate,
-		onShowDeleteDialogChange,
 		rawOutputEnabled = false,
 		role,
-		showDeleteDialog,
-		showRawOutputSwitch = false,
-		siblingInfo = null
+		showRawOutputSwitch = false
 	}: Props = $props();
+
+	const messageActions = getChatMessageActionsContext();
+	const editCtx = getChatMessageEditContext();
 
 	let showForkDialog = $state(false);
 	let forkName = $state('');
 	let forkIncludeAttachments = $state(true);
 
 	function handleConfirmDelete() {
-		onConfirmDelete();
-		onShowDeleteDialogChange(false);
+		messageActions.confirmDelete();
+		messageActions.setShowDeleteDialog(false);
 	}
 
 	function handleOpenForkDialog() {
-		const conv = activeConversation();
+		const conv = conversationsStore.activeConversation;
 
 		forkName = `Fork of ${conv?.name ?? 'Conversation'}`;
 		forkIncludeAttachments = true;
@@ -77,7 +56,10 @@
 	}
 
 	function handleConfirmFork() {
-		onForkConversation?.({ includeAttachments: forkIncludeAttachments, name: forkName.trim() });
+		messageActions.forkConversation?.({
+			includeAttachments: forkIncludeAttachments,
+			name: forkName.trim()
+		});
 		showForkDialog = false;
 	}
 </script>
@@ -88,18 +70,16 @@
 			? 'left-0'
 			: 'right-0'} flex items-center gap-2 opacity-100 transition-opacity"
 	>
-		{#if siblingInfo && siblingInfo.totalSiblings > 1}
-			<ChatMessageActionIconsBranchingControls {siblingInfo} {onNavigateToSibling} />
+		{#if messageActions.siblingInfo && messageActions.siblingInfo.totalSiblings > 1}
+			<ChatMessageActionIconsBranchingControls />
 		{/if}
 
 		<div
 			class="pointer-events-auto inset-0 flex items-center gap-1 opacity-100 transition-all duration-150"
 		>
-			<ActionIcon icon={Copy} tooltip="Copy" onclick={onCopy} />
+			<ActionIcon icon={Copy} tooltip="Copy" onclick={messageActions.copy} />
 
-			{#if onEdit}
-				<ActionIcon icon={Edit} tooltip="Edit" onclick={onEdit} />
-			{/if}
+			<ActionIcon icon={Edit} tooltip="Edit" onclick={editCtx.startEdit} />
 
 			{#if role === MessageRole.ASSISTANT && onRegenerate}
 				<ActionIcon icon={RefreshCw} tooltip="Regenerate" onclick={() => onRegenerate()} />
@@ -109,11 +89,11 @@
 				<ActionIcon icon={ArrowRight} tooltip="Continue" onclick={onContinue} />
 			{/if}
 
-			{#if onForkConversation}
+			{#if messageActions.forkConversation}
 				<ActionIcon icon={GitBranch} tooltip="Fork conversation" onclick={handleOpenForkDialog} />
 			{/if}
 
-			<ActionIcon icon={Trash2} tooltip="Delete" onclick={onDelete} />
+			<ActionIcon icon={Trash2} tooltip="Delete" onclick={messageActions.requestDelete} />
 		</div>
 	</div>
 
@@ -129,19 +109,19 @@
 </div>
 
 <DialogConfirmation
-	bind:open={showDeleteDialog}
+	open={messageActions.showDeleteDialog}
 	title="Delete Message"
-	description={deletionInfo && deletionInfo.totalCount > 1
-		? `This will delete ${deletionInfo.totalCount} messages including: ${deletionInfo.userMessages} user message${deletionInfo.userMessages > 1 ? 's' : ''} and ${deletionInfo.assistantMessages} assistant response${deletionInfo.assistantMessages > 1 ? 's' : ''}. All messages in this branch and their responses will be permanently removed. This action cannot be undone.`
+	description={messageActions.deletionInfo && messageActions.deletionInfo.totalCount > 1
+		? `This will delete ${messageActions.deletionInfo.totalCount} messages including: ${messageActions.deletionInfo.userMessages} user message${messageActions.deletionInfo.userMessages > 1 ? 's' : ''} and ${messageActions.deletionInfo.assistantMessages} assistant response${messageActions.deletionInfo.assistantMessages > 1 ? 's' : ''}. All messages in this branch and their responses will be permanently removed. This action cannot be undone.`
 		: 'Are you sure you want to delete this message? This action cannot be undone.'}
-	confirmText={deletionInfo && deletionInfo.totalCount > 1
-		? `Delete ${deletionInfo.totalCount} Messages`
+	confirmText={messageActions.deletionInfo && messageActions.deletionInfo.totalCount > 1
+		? `Delete ${messageActions.deletionInfo.totalCount} Messages`
 		: 'Delete'}
 	cancelText="Cancel"
 	variant="destructive"
 	icon={Trash2}
 	onConfirm={handleConfirmDelete}
-	onCancel={() => onShowDeleteDialogChange(false)}
+	onCancel={() => messageActions.setShowDeleteDialog(false)}
 />
 
 <DialogConfirmation

@@ -1,11 +1,11 @@
-import { FILE_PATH_SEPARATOR_REGEX, NEWLINE } from '$lib/constants/code';
+import { FILE_PATH_SEPARATOR_REGEX, NEWLINE } from '$lib/constants';
 import {
 	PREFIX_FILE,
 	PREFIX_MIME,
 	PREFIX_SIZE,
 	READ_MEDIA_SIZE_REGEX
 } from '$lib/constants/read-media';
-import type { AgenticSection } from '$lib/utils';
+import type { AgenticSection } from '$lib/types';
 
 export interface ReadMediaMeta {
 	fileName: string;

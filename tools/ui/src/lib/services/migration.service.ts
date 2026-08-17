@@ -22,13 +22,14 @@ import {
 	DB_APP_NAME_DEPRECATED,
 	IDXDB_STORES,
 	IDXDB_TABLES,
+	LEGACY_AGENTIC_REGEX,
+	LEGACY_REASONING_TAGS,
 	NEW_TO_DEPRECATED_MAP,
+	SETTINGS_KEYS,
 	STORAGE_APP_NAME,
 	STORAGE_APP_NAME_DEPRECATED
 } from '$lib/constants';
-import { LEGACY_AGENTIC_REGEX, LEGACY_REASONING_TAGS } from '$lib/constants/agentic';
-import { SETTINGS_KEYS } from '$lib/constants/settings-keys';
-import { MessageRole } from '$lib/enums';
+import { BooleanString, MessageRole } from '$lib/enums';
 import Dexie from 'dexie';
 
 // Types
@@ -612,10 +613,10 @@ const configTypesMigration: Migration = {
 		// schema rejects them. No config string field holds exactly "true"/"false", so the
 		// match is unambiguous.
 		for (const key of Object.keys(config)) {
-			if (config[key] === 'true') {
+			if (config[key] === BooleanString.TRUE) {
 				config[key] = true;
 				changed = true;
-			} else if (config[key] === 'false') {
+			} else if (config[key] === BooleanString.FALSE) {
 				config[key] = false;
 				changed = true;
 			}

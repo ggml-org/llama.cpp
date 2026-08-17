@@ -1,6 +1,8 @@
+import { browser } from '$app/environment';
 import {
+	buildBrowserInfoToolDefinition,
+	buildGetDatetimeToolDefinition,
 	buildReadMediaToolDefinition,
-	buildSandboxToolDefinition,
 	DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY,
 	HOME_TILDE,
 	TOOL_GROUP_LABELS,
@@ -15,26 +17,31 @@ import {
 	ToolSource
 } from '$lib/enums';
 import { ToolsService } from '$lib/services/tools.service';
+// direct imports between stores, not via the barrel, to avoid circular deps
 import { mcpStore } from '$lib/stores/mcp.svelte';
-import { modelsStore, selectedModelName } from '$lib/stores/models.svelte';
-import { config } from '$lib/stores/settings.svelte';
+import { modelsStore } from '$lib/stores/models.svelte';
+import { settingsStore } from '$lib/stores/settings.svelte';
 import type { OpenAIToolDefinition, ToolEntry, ToolGroup } from '$lib/types';
+import { buildSandboxToolDefinition } from '$lib/utils';
 import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 
 /** Stable selection identity for a tool, shared by the disabled set and the permission store */
 
 class ToolsStore {
-	private _builtinTools = $state<OpenAIToolDefinition[]>([]);
+	private _serverTools = $state<OpenAIToolDefinition[]>([]);
 	private _loading = $state(false);
 	private _error = $state<string | null>(null);
 	private _disabledTools = $state(new SvelteSet<string>());
-	// builtin tools that resolve their paths against the working directory,
+	// server tools that resolve their paths against the working directory,
 	// as declared by the server in its `/tools` listing
 	private _cwdAwareTools = $state(new SvelteSet<string>());
 	private _toolsEndpointUnreachable = $state(false);
 	private _serverHome = $state<string | null | undefined>(undefined);
 
 	constructor() {
+		// browser-only init: skip on SSR to avoid localStorage/fetch side effects
+		if (!browser) return;
+
 		try {
 			const stored = localStorage.getItem(DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY);
 
@@ -51,7 +58,7 @@ class ToolsStore {
 			console.error('[ToolsStore] Failed to load disabled tools from localStorage:', err);
 		}
 
-		this.fetchBuiltinTools();
+		this.fetchServerTools();
 	}
 
 	private persistDisabledTools(): void {
@@ -71,10 +78,10 @@ class ToolsStore {
 				return serverId ? `mcp-${serverId}:${name}` : `mcp:${name}`;
 			case ToolSource.CUSTOM:
 				return `custom:${name}`;
-			case ToolSource.FRONTEND:
-				return `frontend:${name}`;
+			case ToolSource.BROWSER:
+				return `browser:${name}`;
 			default:
-				return `builtin:${name}`;
+				return `server:${name}`;
 		}
 	}
 
@@ -157,8 +164,8 @@ class ToolsStore {
 		};
 	}
 
-	get builtinTools(): OpenAIToolDefinition[] {
-		return this._builtinTools;
+	get serverTools(): OpenAIToolDefinition[] {
+		return this._serverTools;
 	}
 
 	get serverHome(): string | null {
@@ -169,34 +176,39 @@ class ToolsStore {
 		return this.mcpEntries().map((e) => e.definition);
 	}
 
-	get frontendTools(): OpenAIToolDefinition[] {
-		const tools: OpenAIToolDefinition[] = [];
+	get browserTools(): OpenAIToolDefinition[] {
+		const tools: OpenAIToolDefinition[] = [buildGetDatetimeToolDefinition()];
 
-		if (config().jsSandboxEnabled) {
-			tools.push(buildSandboxToolDefinition(!!config().symbolicMathEnabled));
+		if (settingsStore.config.jsSandboxEnabled) {
+			tools.push(buildSandboxToolDefinition(!!settingsStore.config.symbolicMathEnabled));
 		}
 
 		const readMedia = this.readMediaTool();
 
 		if (readMedia) tools.push(readMedia);
 
+		// provide browser's get_info tool if server doesn't provide one
+		if (!this.hasServerTool(BuiltInTool.SERVER_GET_INFO)) {
+			tools.push(buildBrowserInfoToolDefinition());
+		}
+
 		return tools;
 	}
 
+	private hasServerTool(name: BuiltInTool): boolean {
+		return this._serverTools.some((def) => def.function.name === name);
+	}
+
 	/**
-	 * `read_media` runs in the frontend on top of the server's `read_file`, so it
+	 * `read_media` runs in the browser on top of the server's `read_file`, so it
 	 * exists only when that tool is served and the active model can perceive the
 	 * bytes. The server cannot make this call - it does not know which model the
 	 * conversation uses.
 	 */
 	private readMediaTool(): OpenAIToolDefinition | null {
-		const hasReadFile = this._builtinTools.some(
-			(def) => def.function.name === BuiltInTool.READ_FILE
-		);
+		if (!this.hasServerTool(BuiltInTool.SERVER_READ_FILE)) return null;
 
-		if (!hasReadFile) return null;
-
-		const model = selectedModelName() ?? modelsStore.models[0]?.model ?? '';
+		const model = modelsStore.selectedModelName ?? modelsStore.models[0]?.model ?? '';
 
 		if (!model) return null;
 
@@ -209,7 +221,7 @@ class ToolsStore {
 	}
 
 	get customTools(): OpenAIToolDefinition[] {
-		const raw = config().customJson;
+		const raw = settingsStore.config.customJson;
 
 		if (!raw || typeof raw !== 'string') return [];
 
@@ -292,23 +304,23 @@ class ToolsStore {
 			entries.push(entry);
 		};
 
-		for (const def of this._builtinTools) {
+		for (const def of this._serverTools) {
 			const name = def.function.name;
 
 			push({
 				definition: def,
-				key: this.toolKey(ToolSource.BUILTIN, name),
-				source: ToolSource.BUILTIN
+				key: this.toolKey(ToolSource.SERVER, name),
+				source: ToolSource.SERVER
 			});
 		}
 
-		for (const def of this.frontendTools) {
+		for (const def of this.browserTools) {
 			const name = def.function.name;
 
 			push({
 				definition: def,
-				key: this.toolKey(ToolSource.FRONTEND, name),
-				source: ToolSource.FRONTEND
+				key: this.toolKey(ToolSource.BROWSER, name),
+				source: ToolSource.BROWSER
 			});
 		}
 
@@ -372,17 +384,17 @@ class ToolsStore {
 				return entry.serverName ?? '';
 			case ToolSource.CUSTOM:
 				return TOOL_GROUP_LABELS[ToolSource.CUSTOM];
-			case ToolSource.FRONTEND:
-				return TOOL_GROUP_LABELS[ToolSource.FRONTEND];
+			case ToolSource.BROWSER:
+				return TOOL_GROUP_LABELS[ToolSource.BROWSER];
 			default:
-				return TOOL_GROUP_LABELS[ToolSource.BUILTIN];
+				return TOOL_GROUP_LABELS[ToolSource.SERVER];
 		}
 	}
 
 	/**
 	 * Enabled tool definitions for sending to the LLM.
 	 * MCP tool schemas are normalized here so the wire payload is consistent
-	 * across all four sources (built-in, frontend/sandbox, MCP, custom JSON).
+	 * across all four sources (server, browser/sandbox, MCP, custom JSON).
 	 * The API identifies tools by name, so a name is sent at most once.
 	 */
 	getEnabledToolsForLLM(): OpenAIToolDefinition[] {
@@ -405,8 +417,8 @@ class ToolsStore {
 			result.push(def);
 		};
 
-		for (const def of this._builtinTools) take(def);
-		for (const def of this.frontendTools) take(def);
+		for (const def of this._serverTools) take(def);
+		for (const def of this.browserTools) take(def);
 		// mcpEntries() over mcpStore directly so wire shape stays normalized and aligned with the tools UI.
 		for (const entry of this.mcpEntries()) take(entry.definition);
 		for (const def of this.customTools) take(def);
@@ -530,11 +542,11 @@ class ToolsStore {
 
 		if (entry.serverName) return mcpStore.getServerDisplayName(entry.serverName);
 
-		if (entry.source === ToolSource.BUILTIN) return TOOL_SERVER_LABELS[ToolSource.BUILTIN];
+		if (entry.source === ToolSource.SERVER) return TOOL_SERVER_LABELS[ToolSource.SERVER];
 
 		if (entry.source === ToolSource.CUSTOM) return TOOL_SERVER_LABELS[ToolSource.CUSTOM];
 
-		if (entry.source === ToolSource.FRONTEND) return TOOL_SERVER_LABELS[ToolSource.FRONTEND];
+		if (entry.source === ToolSource.BROWSER) return TOOL_SERVER_LABELS[ToolSource.BROWSER];
 
 		return '';
 	}
@@ -544,27 +556,27 @@ class ToolsStore {
 		return this.findEntryByName(toolName)?.key ?? null;
 	}
 
-	/** Check if there are any enabled tools available (builtin, MCP, or custom) */
+	/** Check if there are any enabled tools available (server, MCP, or custom) */
 	get hasEnabledTools(): boolean {
 		return this.getEnabledToolsForLLM().length > 0;
 	}
 
 	/**
-	 * Check if a working directory is worth setting: at least one builtin tool
+	 * Check if a working directory is worth setting: at least one server tool
 	 * that reads it is both served and left enabled by the user.
 	 */
 	get hasEnabledCwdTools(): boolean {
-		return this._builtinTools.some((def) => {
+		return this._serverTools.some((def) => {
 			const name = def.function.name;
 
 			return (
 				this._cwdAwareTools.has(name) &&
-				!this._disabledTools.has(this.toolKey(ToolSource.BUILTIN, name))
+				!this._disabledTools.has(this.toolKey(ToolSource.SERVER, name))
 			);
 		});
 	}
 
-	async fetchBuiltinTools(): Promise<void> {
+	async fetchServerTools(): Promise<void> {
 		if (this._loading) return;
 
 		this._loading = true;
@@ -574,7 +586,7 @@ class ToolsStore {
 		try {
 			const toolInfos = await ToolsService.list();
 
-			this._builtinTools = toolInfos.map((info) => info.definition);
+			this._serverTools = toolInfos.map((info) => info.definition);
 			this._cwdAwareTools = new SvelteSet(
 				toolInfos.filter((info) => info.uses_cwd).map((info) => info.tool)
 			);
@@ -587,9 +599,9 @@ class ToolsStore {
 			// TODO: check status code instead of relying on message
 			if (errorMessage.includes('this feature is disabled')) {
 				this._toolsEndpointUnreachable = true;
-				console.info('[ToolsStore] Built-in tools are disabled on the server');
+				console.info('[ToolsStore] Server tools are disabled on the server');
 			} else {
-				console.error('[ToolsStore] Failed to fetch built-in tools:', err);
+				console.error('[ToolsStore] Failed to fetch server tools:', err);
 			}
 		} finally {
 			this._loading = false;
@@ -606,7 +618,7 @@ class ToolsStore {
 		if (this._serverHome !== undefined) return this._serverHome;
 
 		try {
-			const res = await ToolsService.executeToolRaw(BuiltInTool.FILE_GLOB_SEARCH, {
+			const res = await ToolsService.executeToolRaw(BuiltInTool.SERVER_FILE_GLOB_SEARCH, {
 				limit: 1,
 				max_depth: 1,
 				path: HOME_TILDE,
@@ -624,7 +636,3 @@ class ToolsStore {
 }
 
 export const toolsStore = new ToolsStore();
-
-export const allTools = () => toolsStore.allTools;
-export const allToolDefinitions = () => toolsStore.allToolDefinitions;
-export const toolGroups = () => toolsStore.toolGroups;

@@ -1,10 +1,11 @@
 import { abbreviateHome, lastPathSegment } from './path-display';
-import { DIRECTORY_PATH_SUFFIX, FILE_URI_PREFIX } from '$lib/constants';
 import {
+	DIRECTORY_PATH_SUFFIX,
+	FILE_URI_PREFIX,
 	MENTION_BADGE_FILE_ICON_PATHS,
 	MENTION_BADGE_FOLDER_ICON_PATHS,
 	MENTION_LINK_SCAN_FLAGS
-} from '$lib/constants/mention-badge';
+} from '$lib/constants';
 import { FileMentionEntryType } from '$lib/enums';
 import type { FileMentionEntry } from '$lib/types';
 
@@ -14,7 +15,7 @@ export {
 	MENTION_BADGE_SVG_ATTRIBUTES,
 	MENTION_BADGE_FILE_ICON_PATHS,
 	MENTION_BADGE_FOLDER_ICON_PATHS
-} from '$lib/constants/mention-badge';
+} from '$lib/constants';
 
 // `)` is allowed in a path only when not followed by whitespace or `[`,
 // so macOS paths parse while adjacent badges still terminate the match.

@@ -92,7 +92,7 @@ typedef struct ggml_feats_arch64_runtime {
     int sve_cnt;
 } ggml_feats_arch64_runtime_t;
 
-static inline ggml_feats_arch64_runtime_t ggml_get_aarch64_runtime_features(void) {
+static inline ggml_feats_arch64_runtime_t ggml_feats_get_arch64_runtime(void) {
     ggml_feats_arch64_runtime_t runtime_feat = {};
 
 #if defined(__linux__)

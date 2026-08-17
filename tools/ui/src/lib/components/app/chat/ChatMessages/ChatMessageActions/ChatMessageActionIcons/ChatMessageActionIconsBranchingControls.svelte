@@ -1,14 +1,17 @@
 <script lang="ts">
 	import { ChevronLeft, ChevronRight } from '@lucide/svelte';
 	import { ActionIcon } from '$lib/components/app';
+	import { getChatMessageActionsContext } from '$lib/contexts';
 
 	interface Props {
 		class?: string;
-		siblingInfo: ChatMessageSiblingInfo | null;
-		onNavigateToSibling?: (siblingId: string) => void;
 	}
 
-	let { class: className = '', onNavigateToSibling, siblingInfo }: Props = $props();
+	let { class: className = '' }: Props = $props();
+
+	const messageActions = getChatMessageActionsContext();
+
+	let siblingInfo = $derived(messageActions.siblingInfo);
 
 	let hasPrevious = $derived(siblingInfo && siblingInfo.currentIndex > 0);
 	let hasNext = $derived(siblingInfo && siblingInfo.currentIndex < siblingInfo.totalSiblings - 1);
@@ -31,7 +34,7 @@
 			tooltip="Previous version"
 			disabled={!hasPrevious}
 			class="h-5 w-5 p-0 {!hasPrevious ? '!cursor-not-allowed opacity-30' : ''}"
-			onclick={() => onNavigateToSibling?.(previousSiblingId!)}
+			onclick={() => messageActions.navigateToSibling(previousSiblingId!)}
 		/>
 
 		<span class="px-1 font-mono text-xs">
@@ -43,7 +46,7 @@
 			tooltip="Next version"
 			disabled={!hasNext}
 			class="h-5 w-5 p-0 {!hasNext ? 'opacity-30' : ''}"
-			onclick={() => onNavigateToSibling?.(nextSiblingId!)}
+			onclick={() => messageActions.navigateToSibling(nextSiblingId!)}
 		/>
 	</div>
 {/if}
