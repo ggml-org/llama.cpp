@@ -1346,6 +1346,23 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
             *cur_backend_id = tensor_backend_id(node->view_src);
             SET_CAUSE(node, "4.vsrc");
         }
+
+        // an op that is not a pure view but still aliases its source writes through to it, so it
+        // has to run where that source lives. earlier passes may have moved it elsewhere, and
+        // pass 5 would then substitute a copy for the source - leaving the write in the copy,
+        // which is discarded. the write is silently lost, the graph still computes
+        if (node->view_src != NULL && !ggml_is_view_op(node->op)) {
+            const int view_src_backend_id = tensor_backend_id(node->view_src);
+            if (view_src_backend_id != -1 && *cur_backend_id != view_src_backend_id) {
+                if (sched->debug) {
+                    GGML_LOG_DEBUG("%s: %s (%s) moved to %s to keep it with the tensor it aliases (%s)\n",
+                            __func__, node->name, ggml_op_name(node->op),
+                            ggml_backend_name(sched->backends[view_src_backend_id]), node->view_src->name);
+                }
+                *cur_backend_id = view_src_backend_id;
+                SET_CAUSE(node, "4.alias");
+            }
+        }
         for (int j = 0; j < GGML_MAX_SRC; j++) {
             struct ggml_tensor * src = node->src[j];
             if (src == NULL) {
