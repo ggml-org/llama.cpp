@@ -1613,11 +1613,8 @@ mtmd_image_preproc_out mtmd_image_preprocessor_granite::preprocess(const clip_im
     const int             grid_x       = refined_size.width  / tile_size;
     const int             grid_y       = refined_size.height / tile_size;
 
-    // the stacked image is tile_size * (1 + grid_x*grid_y) tall, it must fit in an int
-    const int64_t stacked_h = (int64_t) tile_size * (1 + (int64_t) grid_x * grid_y);
-    if (grid_x < 0 || grid_y < 0 || stacked_h > std::numeric_limits<int>::max()) {
-        throw std::runtime_error("invalid image grid, check image_grid_pinpoints in the mmproj file");
-    }
+    // the tiles are stacked on the Y axis, a big grid overflows the stacked image height
+    GGML_ASSERT(grid_x >= 0 && grid_x <= 1024 && grid_y >= 0 && grid_y <= 1024);
 
     clip_image_u8 overview;
     img_tool::resize(img, overview, {tile_size, tile_size}, hparams.image_resize_algo_ov,
