@@ -1606,11 +1606,15 @@ mtmd_image_preproc_out mtmd_image_preprocessor_granite::preprocess(const clip_im
 
     const clip_image_size orig_size = img.get_size();
     const int             tile_size = hparams.image_size;
+    GGML_ASSERT(tile_size > 0);
 
     // llava-next always encodes an overview plus a grid of tiles, even for small images
     const clip_image_size refined_size = select_best_resolution(orig_size, hparams.image_res_candidates);
     const int             grid_x       = refined_size.width  / tile_size;
     const int             grid_y       = refined_size.height / tile_size;
+
+    // the tiles are stacked on the Y axis, a big grid overflows the stacked image height
+    GGML_ASSERT(grid_x >= 0 && grid_x <= 1024 && grid_y >= 0 && grid_y <= 1024);
 
     clip_image_u8 overview;
     img_tool::resize(img, overview, {tile_size, tile_size}, hparams.image_resize_algo_ov,
