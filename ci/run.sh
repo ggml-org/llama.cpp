@@ -172,7 +172,7 @@ fi
 
 if [ -n "${GG_BUILD_KLEIDIAI}" ]; then
     echo ">>===== Enabling KleidiAI support"
-    CMAKE_EXTRA="${CMAKE_EXTRA:+$CMAKE_EXTRA } -DGGML_CPU_KLEIDIAI=ON"
+    CMAKE_EXTRA="${CMAKE_EXTRA:+$CMAKE_EXTRA } -DGGML_CPU_KLEIDIAI=ON -DLLAMA_WEIGHT_CACHE=ON"
 fi
 
 if [ ! -z ${GG_BUILD_BLAS} ]; then

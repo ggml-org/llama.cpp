@@ -432,6 +432,23 @@ extern "C" {
     GGML_API ggml_backend_buffer_t      ggml_backend_cpu_buffer_from_ptr(void * ptr, size_t size);
     GGML_API ggml_backend_buffer_type_t ggml_backend_cpu_buffer_type(void);
 
+    struct ggml_backend_weight_cache_info {
+        uint32_t pack_version;
+        uint32_t cpu_features;
+        uint32_t kernel_signature;
+        uint32_t slot_count;
+        size_t   packed_size;
+    };
+
+    struct ggml_backend_weight_cache_i {
+        bool                  (*supports_buft)  (ggml_backend_buffer_type_t buft);
+        int                   (*get_info)       (const struct ggml_tensor * tensor, struct ggml_backend_weight_cache_info * info);
+        int                   (*validate_data)  (const struct ggml_tensor * tensor, const void * data, size_t size);
+        ggml_backend_buffer_t (*buffer_from_ptr)(ggml_backend_buffer_type_t buft, void * ptr, size_t size);
+    };
+
+    typedef const struct ggml_backend_weight_cache_i * (*ggml_backend_weight_cache_get_interface_t)(void);
+
 #ifdef  __cplusplus
 }
 #endif

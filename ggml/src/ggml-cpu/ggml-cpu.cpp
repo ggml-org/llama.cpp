@@ -657,6 +657,12 @@ static void * ggml_backend_cpu_get_proc_address(ggml_backend_reg_t reg, const ch
         ggml_backend_dev_get_extra_bufts_t fct = ggml_backend_cpu_device_get_extra_buffers_type;
         return (void *)fct;
     }
+#ifdef GGML_USE_CPU_KLEIDIAI
+    if (strcmp(name, "ggml_backend_weight_cache_get_interface") == 0) {
+        ggml_backend_weight_cache_get_interface_t fct = ggml_backend_cpu_weight_cache_get_interface;
+        return (void *) fct;
+    }
+#endif
     if (strcmp(name, "ggml_backend_get_features") == 0) {
         return (void *)ggml_backend_cpu_get_features;
     }

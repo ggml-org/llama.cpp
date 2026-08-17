@@ -291,6 +291,11 @@ set_tests_properties(test-state-restore-fragmented PROPERTIES FIXTURES_REQUIRED 
 llama_build_and_test(test-save-load-state.cpp LABEL "model" ARGS -m "${MODEL_DEST}")
 set_tests_properties(test-save-load-state PROPERTIES FIXTURES_REQUIRED test-download-model)
 
+if (LLAMA_WEIGHT_CACHE AND GGML_CPU_KLEIDIAI AND NOT WIN32)
+    llama_build_and_test(test-weight-cache.cpp LABEL "model" ARGS -m "${MODEL_DEST}" -c "${CMAKE_CURRENT_BINARY_DIR}/weight-cache-test")
+    set_tests_properties(test-weight-cache PROPERTIES FIXTURES_REQUIRED test-download-model)
+endif()
+
 if (APPLE)
     llama_build(test-rset-release.cpp)
 endif()

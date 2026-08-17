@@ -5,6 +5,9 @@
 #include "gguf.h"
 #include "llama-hparams.h"
 #include "llama.h"
+#if defined(LLAMA_WEIGHT_CACHE)
+#include "llama-weight-cache.h"
+#endif
 
 #include <algorithm>
 #include <array>
@@ -538,6 +541,10 @@ llama_model_loader::llama_model_loader(
         const llama_model_kv_override * param_overrides_p,
         const llama_model_tensor_buft_override * param_tensor_buft_overrides_p)
         : metadata(meta), set_tensor_data(set_tensor_data), set_tensor_data_ud(set_tensor_data_ud) {
+#if defined(LLAMA_WEIGHT_CACHE)
+    weight_cache.reset(new llama_weight_cache(check_tensors, file != nullptr));
+#endif
+
     int trace = 0;
     if (getenv("LLAMA_TRACE")) {
         trace = atoi(getenv("LLAMA_TRACE"));
@@ -573,6 +580,10 @@ llama_model_loader::llama_model_loader(
 
         files.emplace_back(new llama_file(fname.c_str(), "rb", use_direct_io));
         contexts.emplace_back(ctx);
+
+#if defined(LLAMA_WEIGHT_CACHE)
+        weight_cache->add_source(0, fname, files.back().get());
+#endif
 
         // Save tensors data offset of the main file.
         // For subsidiary files, `meta` tensor data offset must not be used,
@@ -641,6 +652,9 @@ llama_model_loader::llama_model_loader(
 
                 files.emplace_back(new llama_file(fname_split, "rb", use_direct_io));
                 contexts.emplace_back(ctx);
+#if defined(LLAMA_WEIGHT_CACHE)
+                weight_cache->add_source(idx, fname_split, files.back().get());
+#endif
 
                 // Save tensors data offset info of the shard.
                 for (ggml_tensor * cur = ggml_get_first_tensor(ctx); cur; cur = ggml_get_next_tensor(ctx, cur)) {
@@ -823,6 +837,8 @@ llama_model_loader::llama_model_loader(
     this->no_alloc = no_alloc;
     this->load_mtp = load_mtp;
 }
+
+llama_model_loader::~llama_model_loader() = default;
 
 std::string llama_model_loader::get_arch_name() const {
     return arch_name;
@@ -1335,7 +1351,7 @@ void llama_model_loader::done_getting_tensors(bool partial) const {
         if (!partial) {
             throw std::runtime_error(format("%s: wrong number of tensors; expected %d, got %d", __func__, n_tensors, n_created));
         }
-        LLAMA_LOG_INFO("%s: partial load — used %d of %d tensors in the file (rest belong to a sibling model on the same .gguf)\n",
+        LLAMA_LOG_INFO("%s: partial load - used %d of %d tensors in the file (rest belong to a sibling model on the same .gguf)\n",
                 __func__, n_created, n_tensors);
     }
     if (n_tensors_moved > 0) {
@@ -1417,6 +1433,16 @@ void llama_model_loader::load_data_for(struct ggml_tensor * cur) const {
         throw std::runtime_error(format("tensor '%s' has invalid data", ggml_get_name(cur)));
     }
 }
+
+#if defined(LLAMA_WEIGHT_CACHE)
+ggml_backend_buffer_t llama_model_loader::try_mmap_weight_cache(
+        struct ggml_context * ctx,
+        ggml_backend_buffer_type_t buft,
+        bool use_mlock,
+        llama_mlocks * mlocks) {
+    return no_alloc || !use_mmap ? nullptr : weight_cache->load(*this, ctx, buft, use_mlock, mlocks);
+}
+#endif
 
 bool llama_model_loader::load_all_data(
         struct ggml_context * ctx,
@@ -1548,6 +1574,13 @@ bool llama_model_loader::load_all_data(
 
         size_t n_size = ggml_nbytes(cur);
 
+#if defined(LLAMA_WEIGHT_CACHE)
+        if (weight_cache->contains(cur)) {
+            size_done += n_size;
+            continue;
+        }
+#endif
+
         if (use_mmap) {
             const auto & mapping = mappings.at(weight->idx);
             ggml_backend_buffer_t buf_mmap = nullptr;
@@ -1655,6 +1688,14 @@ bool llama_model_loader::load_all_data(
 
         size_done += n_size;
     }
+
+#if defined(LLAMA_WEIGHT_CACHE)
+    if (ggml_tensor * first = ggml_get_first_tensor(ctx)) {
+        if (first->buffer) {
+            weight_cache->save(*this, ctx, ggml_backend_buffer_get_type(first->buffer));
+        }
+    }
+#endif
 
     // free temporary resources used for async uploads
     for (auto * event : events) {
