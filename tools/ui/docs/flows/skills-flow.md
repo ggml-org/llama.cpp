@@ -136,6 +136,20 @@ sequenceDiagram
         Note right of UI: Budget status only; no consent and<br/>no activation persistence
 
     %% =========================================================================
+    Note over UI,toolsStore: CHATFORM TOOLS ACTION POPOVER
+    %% =========================================================================
+
+    UI->>UI: open Add -> Tools
+    UI->>toolsStore: read generic toolGroups and skillToolGroups
+    alt Skills availability is not disabled
+        toolsStore-->>UI: generic groups plus the Skills group
+        UI->>UI: render Read skill and List skills toggles
+    else Skills availability is confirmed disabled
+        toolsStore-->>UI: generic groups only
+    end
+    Note right of UI: Rendering reads registry state only;<br/>it does not fetch the catalog or activate a skill
+
+    %% =========================================================================
     Note over UI,server: EXPLICIT /skills AND /skills name argument
     %% =========================================================================
 
