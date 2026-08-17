@@ -35,6 +35,7 @@ const std::map<std::string, common_speculative_type> common_speculative_type_fro
     {"draft-simple",  COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE},
     {"draft-eagle3",  COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3},
     {"draft-mtp",     COMMON_SPECULATIVE_TYPE_DRAFT_MTP},
+    {"draft-mtp-adaptive", COMMON_SPECULATIVE_TYPE_DRAFT_MTP_ADAPTIVE},
     {"draft-dflash",  COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH},
     {"draft-dspark",  COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK},
     {"ngram-simple",  COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE},
@@ -1357,8 +1358,73 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
     std::vector<int>                i_last;
     std::vector<std::vector<float>> chain_h;
 
-    common_speculative_impl_draft_mtp(const common_params_speculative & params, uint32_t n_seq)
-        : common_speculative_impl(COMMON_SPECULATIVE_TYPE_DRAFT_MTP, n_seq, params.draft.n_max)
+    // Adaptive draft depth (draft-mtp-adaptive): hysteresis state machine with two
+    // counters per sequence. The depth N climbs after N_CLIMB(N) consecutive verifies
+    // that accepted every drafted token, where the requirement shrinks with depth:
+    // 5 full accepts below depth 5, 4 at depth 5-6, 3 at depth 7+. Leaving the floor
+    // must really be earned, but sustained acceptance that carried the depth this far
+    // earns the next step cheaply. Any miss adds (N - acceptance) to a drop-pressure
+    // accumulator; when it exceeds ADAPTIVE_DROP_PRESSURE the depth drops one step
+    // and the pressure resets. A near miss (N-1) adds 1, a total miss at depth N adds
+    // N, so high depths fall quickly while low depths hold. The floor is max(1, n_min)
+    // and the ceiling is n_max (--spec-draft-n-max).
+    bool adaptive = false;
+    std::vector<int>                n_cap;   // [n_seq] effective draft cap for the current draft() call
+    std::vector<int>                n_cur;   // [n_seq] current adaptive depth N
+    std::vector<int>                n_last;  // [n_seq] drafts attempted in the most recent draft() call
+    std::vector<int>                n_climb; // [n_seq] consecutive fully-accepted verifies
+    std::vector<int>                n_drop;  // [n_seq] accumulated drop pressure: sum of (N - acceptance)
+
+    static constexpr int ADAPTIVE_DROP_PRESSURE   = 30; // accumulated (N - acceptance) to drop one step
+
+    // consecutive full accepts needed to climb one step from depth N; cheaper the
+    // deeper we are, so predictable content accelerates while prose must earn its
+    // way off the floor
+    static int adaptive_climb_threshold(int depth) {
+        return depth >= 7 ? 3 : (depth >= 5 ? 4 : 5);
+    }
+
+    void adaptive_update(llama_seq_id seq_id, int n_draft, int n_accepted) {
+        if (n_draft <= 0) {
+            return;
+        }
+
+        const int floor = std::max(1, params.n_min);
+        const int n_max = std::max(1, params.n_max);
+
+        int depth = n_cur[seq_id];
+
+        if (n_accepted == depth) {
+            n_drop[seq_id] = 0;
+
+            // full acceptance: reset the drop pressure, accumulate the climb streak
+	    if ((depth < n_max) && (++n_climb[seq_id] >= adaptive_climb_threshold(depth))) {
+                depth++;
+                n_climb[seq_id] = 0;
+	    }
+        } else {
+            n_climb[seq_id] = 0;
+
+	    if (depth > floor) {
+		// any miss adds (N - acceptance) to the drop pressure; drop when the
+		// accumulated pressure exceeds the threshold
+		n_drop[seq_id] += depth - n_accepted;
+		if (n_drop[seq_id] > ADAPTIVE_DROP_PRESSURE) {
+		    depth--;
+		    n_drop[seq_id] = 0;
+		}
+	    }
+	}
+
+        if (depth != n_cur[seq_id]) {
+            SPC_DBG("adaptive draft depth seq %d: %d -> %d (n_draft=%d, n_accepted=%d)\n",
+                    (int) seq_id, n_cur[seq_id], depth, n_draft, n_accepted);
+        }
+        n_cur[seq_id] = depth;
+    }
+
+    common_speculative_impl_draft_mtp(const common_params_speculative & params, uint32_t n_seq, bool adaptive = false)
+        : common_speculative_impl(adaptive ? COMMON_SPECULATIVE_TYPE_DRAFT_MTP_ADAPTIVE : COMMON_SPECULATIVE_TYPE_DRAFT_MTP, n_seq, params.draft.n_max)
         , params(params.draft)
     {
         auto * ctx_tgt = this->params.ctx_tgt;
@@ -1369,6 +1435,23 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         GGML_ASSERT(n_embd == llama_model_n_embd_out(llama_get_model(ctx_tgt)) &&
                 "MTP input row width must match the target h_nextn width");
         n_mtp_layers = std::max(1, (int) llama_model_n_layer_nextn(llama_get_model(ctx_dft)));
+
+        this->adaptive = adaptive;
+        // n_cap/n_last are written by the shared draft loop in both modes
+        n_cap.assign(n_seq, 0);
+        n_last.assign(n_seq, 0);
+        if (adaptive) {
+            const int n_max = std::max(1, this->params.n_max);
+            n_cur.assign(n_seq, 0);
+            n_climb.assign(n_seq, 0);
+            n_drop.assign(n_seq, 0);
+            for (uint32_t s = 0; s < n_seq; ++s) {
+                // start at a safe depth of 3 (bounded by n_min/n_max); the controller
+                // moves it in [max(1,n_min), n_max] once acceptance feedback arrives
+                n_cur[s] = std::min(std::max(3, std::max(1, this->params.n_min)), n_max);
+            }
+            SPC_TRC("%s", "adaptive draft depth enabled (draft-mtp-adaptive)\n");
+        }
 
         SPC_TRC("%s", "adding speculative implementation 'draft-mtp'\n");
         SPC_TRC("- n_max=%d, n_min=%d, p_min=%.2f, n_embd=%d, backend_sampling=%d\n", this->params.n_max, this->params.n_min, this->params.p_min, n_embd, (int) this->params.backend_sampling);
@@ -1615,6 +1698,13 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
             drafting[seq_id] = true;
             common_sampler_reset(smpls[seq_id].get());
 
+            // effective draft cap for this step: adaptive depth (or the user n_max),
+            // then clamped by the per-call context bound from the server
+            n_cap[seq_id] = adaptive ? n_cur[seq_id] : params.n_max;
+            if (dp.n_max > 0 && dp.n_max < n_cap[seq_id]) {
+                n_cap[seq_id] = dp.n_max;
+            }
+
             common_batch_add(batch, dp.id_last, dp.n_past, { seq_id }, true);
             std::memcpy(batch.embd + (size_t) (batch.n_tokens - 1) * n_embd, pending_h[seq_id].data(), row_bytes);
 
@@ -1691,7 +1781,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
                 result.push_back(id);
 
-                if (params.n_max <= (int) result.size()) {
+                if (n_cap[seq_id] <= (int) result.size()) {
                     drafting[seq_id] = false;
                     n_drafting--;
                     continue;
@@ -1738,6 +1828,8 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                 continue;
             }
 
+            n_last[seq_id] = (int) dp.result->size();
+
             if (dp.result->size() < (size_t) params.n_min) {
                 dp.result->clear();
             }
@@ -1747,6 +1839,10 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
     void accept(llama_seq_id seq_id, uint16_t n_accepted, bool /*is_other*/) override {
         if (seq_id < 0 || seq_id >= (llama_seq_id) n_seq) {
             return;
+        }
+
+        if (adaptive) {
+            adaptive_update(seq_id, n_last[seq_id], n_accepted);
         }
 
         const int32_t n_rows = verify_h_rows[seq_id];
@@ -2243,6 +2339,7 @@ std::string common_speculative_type_to_str(common_speculative_type type) {
         case COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE:  return "draft-simple";
         case COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3:  return "draft-eagle3";
         case COMMON_SPECULATIVE_TYPE_DRAFT_MTP:     return "draft-mtp";
+        case COMMON_SPECULATIVE_TYPE_DRAFT_MTP_ADAPTIVE: return "draft-mtp-adaptive";
         case COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH:  return "draft-dflash";
         case COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK:  return "draft-dspark";
         case COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE:  return "ngram-simple";
@@ -2334,6 +2431,7 @@ int32_t common_speculative_n_max(const common_params_speculative * spec) {
             case COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE:
             case COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3:
             case COMMON_SPECULATIVE_TYPE_DRAFT_MTP:
+            case COMMON_SPECULATIVE_TYPE_DRAFT_MTP_ADAPTIVE:
             case COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH:
             case COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK:
                 n_max = std::max(n_max, std::max(0, spec->draft.n_max));
@@ -2520,7 +2618,10 @@ common_speculative_init_result::common_speculative_init_result(
     const bool has_draft = params.speculative.has_dft();
     const bool spec_mtp = std::find(params.speculative.types.begin(),
                                     params.speculative.types.end(),
-                                    COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params.speculative.types.end();
+                                    COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params.speculative.types.end() ||
+                          std::find(params.speculative.types.begin(),
+                                    params.speculative.types.end(),
+                                    COMMON_SPECULATIVE_TYPE_DRAFT_MTP_ADAPTIVE) != params.speculative.types.end();
 
     auto mparams = common_model_params_to_llama(params);
     auto cparams = common_context_params_to_llama(params);
@@ -2612,7 +2713,7 @@ common_speculative * common_speculative_init(common_params_speculative & params,
         };
 
         // when adding a new type - update here the logic above
-        static_assert(COMMON_SPECULATIVE_TYPE_COUNT == 11);
+        static_assert(COMMON_SPECULATIVE_TYPE_COUNT == 12);
 
         // this list here defines the priority of the speculators
         // the one with highest priority are listed first
@@ -2625,6 +2726,7 @@ common_speculative * common_speculative_init(common_params_speculative & params,
         add_config_if_enabled(COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE);
         add_config_if_enabled(COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3, params.draft.ctx_dft != nullptr);
         add_config_if_enabled(COMMON_SPECULATIVE_TYPE_DRAFT_MTP,    params.draft.ctx_dft != nullptr);
+        add_config_if_enabled(COMMON_SPECULATIVE_TYPE_DRAFT_MTP_ADAPTIVE, params.draft.ctx_dft != nullptr);
         add_config_if_enabled(COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH, params.draft.ctx_dft != nullptr);
         add_config_if_enabled(COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK, params.draft.ctx_dft != nullptr);
     }
@@ -2644,7 +2746,11 @@ common_speculative * common_speculative_init(common_params_speculative & params,
                 break;
             }
             case COMMON_SPECULATIVE_TYPE_DRAFT_MTP: {
-                impls.push_back(std::make_unique<common_speculative_impl_draft_mtp>(config.params, n_seq));
+                impls.push_back(std::make_unique<common_speculative_impl_draft_mtp>(config.params, n_seq, /*adaptive=*/ false));
+                break;
+            }
+            case COMMON_SPECULATIVE_TYPE_DRAFT_MTP_ADAPTIVE: {
+                impls.push_back(std::make_unique<common_speculative_impl_draft_mtp>(config.params, n_seq, /*adaptive=*/ true));
                 break;
             }
             case COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH: {
