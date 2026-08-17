@@ -1,0 +1,46 @@
+{
+	"name": "llama-desktop",
+	"productName": "llama.cpp",
+	"version": "0.0.1",
+	"description": "AI that lives on your computer. Open-source, private and always local.",
+	"author": "The llama.cpp authors",
+	"main": ".vite/build/main.js",
+	"private": true,
+	"scripts": {
+		"start": "electron-forge start",
+		"package": "electron-forge package",
+		"make": "npm run build-native-deps && electron-forge make",
+		"publish": "npm run build-native-deps && electron-forge publish",
+		"only-on": "node -e \"if (process.platform === process.argv[1]) { require('child_process').execSync(process.argv[2], {stdio:'inherit'}) }\" --",
+		"build-native-deps": "npm run only-on -- darwin \"node-gyp rebuild --directory node_modules/macos-alias && node-gyp rebuild --directory node_modules/fs-xattr\" && npm run only-on -- win32 \"npm rebuild electron-winstaller --ignore-scripts=false\"",
+		"format": "eslint --fix . && prettier --write .",
+		"lint": "prettier --check . && eslint ."
+	},
+	"devDependencies": {
+		"@electron-forge/cli": "7.11.2",
+		"@electron-forge/maker-dmg": "7.11.2",
+		"@electron-forge/maker-squirrel": "7.11.2",
+		"@electron-forge/maker-zip": "7.11.2",
+		"@electron-forge/plugin-auto-unpack-natives": "7.11.2",
+		"@electron-forge/plugin-fuses": "7.11.2",
+		"@electron-forge/plugin-vite": "7.11.2",
+		"@electron/fuses": "2.1.3",
+		"@eslint/compat": "1.4.1",
+		"@eslint/js": "9.39.2",
+		"@types/electron-squirrel-startup": "1.0.2",
+		"@types/node": "24.13.3",
+		"electron": "43.4.0",
+		"eslint": "9.39.4",
+		"eslint-config-prettier": "10.1.8",
+		"eslint-plugin-perfectionist": "5.10.1",
+		"eslint-plugin-simple-import-sort": "14.0.0",
+		"get-port": "7.2.0",
+		"prettier": "3.8.3",
+		"typescript": "6.0.3",
+		"typescript-eslint": "8.60.1",
+		"vite": "8.2.1"
+	},
+	"dependencies": {
+		"electron-squirrel-startup": "1.0.1"
+	}
+}
