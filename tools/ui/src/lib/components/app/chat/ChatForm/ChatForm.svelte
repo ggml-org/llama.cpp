@@ -27,6 +27,7 @@
 		SpecialFileType
 	} from '$lib/enums';
 	import { useChatFormPickers } from '$lib/hooks/use-chat-form-pickers.svelte';
+	import { useSkillCatalogRefresh } from '$lib/hooks/use-skill-catalog-refresh.svelte';
 	import { dispatchSkillActivation } from '$lib/services/skill-command.service';
 	import {
 		chatStore,
@@ -148,6 +149,12 @@
 				)
 			: []
 	);
+
+	const skillCatalogRefresh = useSkillCatalogRefresh();
+
+	$effect(() => {
+		skillCatalogRefresh.onCwdChange(cwd ?? undefined);
+	});
 
 	const pickers = useChatFormPickers({
 		dispatchSkillsCommand: handleSkillsCommand,
@@ -274,6 +281,8 @@
 	onMount(() => {
 		recordingSupported = isAudioRecordingSupported();
 		audioRecorder = new AudioRecorder();
+
+		return () => skillCatalogRefresh.dispose();
 	});
 
 	export function focus() {
