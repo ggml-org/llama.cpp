@@ -436,6 +436,18 @@ void ggml_backend_tensor_memset(struct ggml_tensor * tensor, uint8_t value, size
     buf->iface.memset_tensor(buf, tensor, value, offset, size);
 }
 
+void ggml_backend_tensor_set_direct(struct ggml_tensor * tensor, size_t offset, size_t size) {
+    if (ggml_san_level() == 0) {
+        return;
+    }
+
+    GGML_ASSERT(tensor);
+    GGML_ASSERT(tensor->data != NULL && "tensor not allocated");
+    GGML_ASSERT(offset + size <= ggml_nbytes(tensor) && "tensor write out of bounds");
+
+    ggml_san_access(NULL, tensor, offset, size, true, "set_direct");
+}
+
 void ggml_backend_synchronize(ggml_backend_t backend) {
     GGML_ASSERT(backend);
     if (backend->iface.synchronize == NULL) {
