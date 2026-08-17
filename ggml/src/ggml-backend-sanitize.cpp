@@ -44,7 +44,7 @@ struct san_access {
     uint64_t     clock  = 0;
     int          split  = -1;
     const char * what   = ""; // always a string literal
-    char         tensor[GGML_MAX_NAME] = { 0 }; // copied: source tensor is recycled per graph
+    char         tensor[2*GGML_MAX_NAME + 8] = { 0 }; // copied: source tensor is recycled per graph
 };
 
 struct san_entry {
@@ -302,7 +302,17 @@ bool touch(san_state & s, int a, uint64_t c, const ggml_tensor * t,
     info.clock = c;
     info.what  = what;
     info.split = tl_split;
-    snprintf(info.tensor, sizeof(info.tensor), "%s", t->name);
+    // report the tensor that owns the memory, not just the one that was accessed - a view's
+    // name says nothing about which allocation is involved, and the two are easily confused
+    const ggml_tensor * root = t;
+    while (root->view_src != NULL) {
+        root = root->view_src;
+    }
+    if (root != t) {
+        snprintf(info.tensor, sizeof(info.tensor), "%s <- %s", t->name, root->name);
+    } else {
+        snprintf(info.tensor, sizeof(info.tensor), "%s", t->name);
+    }
 
     if (ggml_san_level() >= 2) {
         GGML_LOG_DEBUG("san [split %3d %-10s] %-10s %-5s %s[%zu+%zu] %s (%s)\n",
