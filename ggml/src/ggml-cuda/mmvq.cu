@@ -71,7 +71,7 @@ enum mmvq_parameter_table_id {
     MMVQ_PARAMETERS_RDNA2,
     MMVQ_PARAMETERS_RDNA3_0,
     MMVQ_PARAMETERS_RDNA4,
-    MMVQ_PARAMETERS_DGX_SPARK
+    MMVQ_PARAMETERS_GB10
 };
 
 static constexpr __device__ mmvq_parameter_table_id get_device_table_id() {
@@ -86,7 +86,7 @@ static constexpr __device__ mmvq_parameter_table_id get_device_table_id() {
 #elif defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= GGML_CUDA_CC_TURING && __CUDA_ARCH__ < GGML_CUDA_CC_AMPERE
     return MMVQ_PARAMETERS_TURING;
 #elif defined(__CUDA_ARCH__) && __CUDA_ARCH__ == GGML_CUDA_CC_DGX_SPARK
-    return MMVQ_PARAMETERS_DGX_SPARK;
+    return MMVQ_PARAMETERS_GB10;
 #else
     return MMVQ_PARAMETERS_GENERIC;
 #endif
@@ -109,7 +109,7 @@ static __host__ mmvq_parameter_table_id get_device_table_id(int cc) {
         return MMVQ_PARAMETERS_TURING;
     }
     if (GGML_CUDA_CC_IS_NVIDIA(cc) && ggml_cuda_highest_compiled_arch(cc) == GGML_CUDA_CC_DGX_SPARK) {
-        return MMVQ_PARAMETERS_DGX_SPARK;
+        return MMVQ_PARAMETERS_GB10;
     }
     return MMVQ_PARAMETERS_GENERIC;
 }
@@ -461,7 +461,7 @@ static constexpr __host__ __device__ int calc_nwarps(ggml_type type, int ncols_d
                 return 1;
         }
     }
-    if (table_id == MMVQ_PARAMETERS_DGX_SPARK) {
+    if (table_id == MMVQ_PARAMETERS_GB10) {
         const int generic = calc_nwarps(type, ncols_dst, MMVQ_PARAMETERS_GENERIC);
         // Only worth the wider block when it actually retires the K loop in half the trips (Observation)
         if (ncols_dst == 1 && !small_k && halve_iters) {
@@ -486,7 +486,7 @@ static constexpr __host__ __device__ int calc_nwarps(ggml_type type, int ncols_d
 }
 
 static constexpr __host__ __device__ int calc_rows_per_block(int ncols_dst, int table_id, bool small_k = false, int nwarps = 1) {
-    if (table_id == MMVQ_PARAMETERS_GENERIC || table_id == MMVQ_PARAMETERS_GCN || table_id == MMVQ_PARAMETERS_TURING  || table_id == MMVQ_PARAMETERS_DGX_SPARK) {
+    if (table_id == MMVQ_PARAMETERS_GENERIC || table_id == MMVQ_PARAMETERS_GCN || table_id == MMVQ_PARAMETERS_TURING || table_id == MMVQ_PARAMETERS_GB10) {
         switch (ncols_dst) {
             case 1:
                 return small_k ? nwarps : 1;
@@ -934,7 +934,7 @@ static void mul_mat_vec_q_switch_ncols_dst(
 
     // Whether doubling nwarps pays off on the ncols_dst == 1 path, where K sets the K loop trip count.
     const auto should_halve_iters = [&] {
-        if (table_id != MMVQ_PARAMETERS_DGX_SPARK) {
+        if (table_id != MMVQ_PARAMETERS_GB10) {
             return false;
         }
 
@@ -966,16 +966,17 @@ static void mul_mat_vec_q_switch_ncols_dst(
 
     switch (ncols_dst) {
         case 1: {
-            constexpr int c_ncols_dst = 1;
+            // static, else MSVC lambda capture breaks the constexpr uses below
+            static constexpr int c_ncols_dst = 1;
 
             // Tag types keep the flags compile-time, so __launch_bounds__ matches what is launched.
             const auto launch = [&](auto small_k_tag, auto halve_iters_tag) {
                 constexpr bool c_small_k = decltype(small_k_tag)::value;
                 // Types the table does not promote would compile a second, identical kernel.
                 constexpr bool c_promoted =
-                    calc_nwarps(type, c_ncols_dst, MMVQ_PARAMETERS_DGX_SPARK, false, true) !=
-                    calc_nwarps(type, c_ncols_dst, MMVQ_PARAMETERS_DGX_SPARK, false, false);
-                
+                    calc_nwarps(type, c_ncols_dst, MMVQ_PARAMETERS_GB10, false, true) !=
+                    calc_nwarps(type, c_ncols_dst, MMVQ_PARAMETERS_GB10, false, false);
+
                 constexpr bool c_halve_iters = decltype(halve_iters_tag)::value && c_promoted;
 
                 const std::pair<dim3, dim3> dims = calc_launch_params<type>(c_ncols_dst, nrows_x, nchannels_dst,
