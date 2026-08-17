@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { ChevronDown, ShieldQuestion } from '@lucide/svelte';
 	import { ChatMessageActionCard } from '$lib/components/app';
+	import SkillProviderLabel from '$lib/components/app/skills/SkillProviderLabel.svelte';
 	import { Button, buttonVariants } from '$lib/components/ui/button';
 	import * as ButtonGroup from '$lib/components/ui/button-group';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
@@ -28,8 +29,8 @@
 		{#if skill}
 			<span class="mt-1 block text-sm text-muted-foreground">
 				Skill: <span class="font-semibold text-foreground">{skill.name}</span>
-				({skill.scope} · {skill.provider}){#if skill.path}
-					— resource: {skill.path}{/if}
+				({skill.scope} · <SkillProviderLabel provider={skill.provider} />){#if skill.path}
+					&mdash; resource: {skill.path}{/if}
 			</span>
 		{/if}
 	{/snippet}

@@ -79,7 +79,8 @@ describe('read_skill result rendering', () => {
 		const text = textOf(container);
 
 		expect(text).toContain('Skill · add-new-model');
-		expect(text).toContain('agents · project');
+		expect(text).toContain('generic · project');
+		expect(text).not.toContain('agents · project');
 		// The XML is ordinary text content — the entity is preserved as the
 		// literal characters it arrived in, never decoded or re-parsed.
 		expect(text).toContain('<skill_content name="add-new-model">body &amp; more</skill_content>');
@@ -99,15 +100,16 @@ describe('read_skill result rendering', () => {
 		const text = textOf(container);
 
 		expect(text).toContain('Skill resource · add-new-model');
-		expect(text).toContain('agents · project · refs/DETAILS.md');
+		expect(text).toContain('generic · project · refs/DETAILS.md');
+		expect(text).not.toContain('agents · project · refs/DETAILS.md');
 		expect(text).toContain('<skill_resource>data</skill_resource>');
 		expect(container.querySelector('skill_resource')).toBeNull();
 	});
 
 	it.each([
-		['scripts/run.py', 'lucide-terminal'],
-		['references/API.md', 'lucide-book-open-text']
-	])('uses %s resource icon', async (path, iconClass) => {
+		['scripts/run.py', 'lucide-file-code-corner'],
+		['references/API.md', 'lucide-file-text']
+	])('uses the format-specific icon for %s', async (path, iconClass) => {
 		const container = await renderBlock(
 			section({
 				toolResultExtras: [skillExtra({ kind: 'resource', metadata: undefined, path })]
@@ -167,7 +169,8 @@ describe('permission request card skill identity', () => {
 		const text = textOf(container);
 
 		expect(text).toContain('Allow use of read_skill from llama-server?');
-		expect(text).toContain('Skill: add-new-model (project · agents)');
+		expect(text).toContain('Skill: add-new-model (project · generic)');
+		expect(text).not.toContain('(project · agents)');
 		expect(text).not.toContain('resource:');
 	});
 
@@ -180,7 +183,7 @@ describe('permission request card skill identity', () => {
 		});
 
 		expect(textOf(container)).toContain(
-			'Skill: add-new-model (project · agents)— resource: refs/DETAILS.md'
+			'Skill: add-new-model (project · generic)— resource: refs/DETAILS.md'
 		);
 	});
 

@@ -61,6 +61,7 @@ function resourceResult(name = 'demo-skill'): SkillResourceReadResult {
 		diagnostics: [],
 		kind: 'resource',
 		resource: { path: 'refs/DETAILS.md' },
+		source: 'data',
 		skill: { id: `opaque-${name}`, name, provider: 'agents', scope: 'project' }
 	};
 }
@@ -114,6 +115,9 @@ describe('SkillDetail preview', () => {
 
 		await vi.waitFor(() => expect(bodyText()).toContain('Rendered heading'));
 
+		// The detail header maps the `agents` provider value to `generic`.
+		expect(bodyText()).toContain('project / generic');
+
 		expect(screen.getByRole('button', { name: 'Markdown' })).toBeTruthy();
 		expect(screen.getByRole('button', { name: 'Raw' })).toBeTruthy();
 
@@ -146,7 +150,7 @@ describe('SkillDetail preview', () => {
 		expect(screen.getByRole('button', { name: 'Markdown' })).toBeTruthy();
 	});
 
-	it('keeps each resource group in the detail header outside the scrolling body', async () => {
+	it('places the resource picker in the detail header', async () => {
 		mockRead(() =>
 			jsonResponse(
 				baseResult({
@@ -166,21 +170,12 @@ describe('SkillDetail preview', () => {
 
 		const header = screen.getByTestId('skill-detail-header').element();
 		const body = screen.getByTestId('skill-detail-body').element();
-		const separator = screen.getByTestId('skill-detail-separator').element();
+		const picker = screen.getByTestId('skill-resource-picker-trigger').element();
 
-		for (const group of ['assets', 'references', 'scripts', 'other']) {
-			const resourceGroup = screen.getByTestId(`skill-detail-resources-${group}`).element();
-
-			expect(header.contains(resourceGroup)).toBe(true);
-			expect(body.contains(resourceGroup)).toBe(false);
-		}
-
-		expect(screen.getByTestId('skill-detail-metadata').query()).toBeNull();
-		expect(header.contains(screen.getByRole('button', { name: 'Markdown' }).element())).toBe(true);
-		expect(header.contains(screen.getByRole('button', { name: 'Raw' }).element())).toBe(true);
-		expect(body.contains(screen.getByTestId('skill-detail-markdown').element())).toBe(true);
-		expect(separator.classList.contains('border-t')).toBe(true);
-		expect(body.classList.contains('overflow-y-auto')).toBe(true);
+		expect(header.contains(picker)).toBe(true);
+		expect(body.contains(picker)).toBe(false);
+		expect(picker.textContent).toContain('SKILL.md');
+		expect(picker.textContent).toContain('(4)');
 	});
 
 	it('sends exactly { name } with the selected CWD header and never a path', async () => {
@@ -449,21 +444,23 @@ describe('SkillDetail preview', () => {
 		expect(bodyText()).not.toContain('MIT');
 	});
 
-	it('renders each populated resource group closed without a chevron', async () => {
+	it('opens a resource tree and previews the selected supported resource', async () => {
 		const readCalls: RequestInit[] = [];
-		const createBranch = vi.spyOn(DatabaseService, 'createMessageBranch');
-		const createBranchPair = vi.spyOn(DatabaseService, 'createMessageBranchPair');
-		const recordActivation = vi.spyOn(skillActivationStore, 'recordActivation');
-
 		mockRead((init) => {
 			readCalls.push(init);
+			const request = JSON.parse(init.body as string) as { path?: string };
+
+			if (request.path === 'references/guide.md') {
+				return jsonResponse({
+					...resourceResult(),
+					resource: { path: 'references/guide.md' },
+					source: '# Guide\n\nResource body.'
+				});
+			}
 
 			return jsonResponse(
 				baseResult({
-					resources: {
-						paths: ['assets/template.txt', 'references/guide.md', 'scripts/check.py', 'notes.txt'],
-						truncated: false
-					}
+					resources: { paths: ['references/guide.md', 'scripts/check.py'], truncated: false }
 				})
 			);
 		});
@@ -473,98 +470,19 @@ describe('SkillDetail preview', () => {
 		});
 
 		await vi.waitFor(() => expect(bodyText()).toContain('Rendered heading'));
+		await screen.getByTestId('skill-resource-picker-trigger').click();
+		await vi.waitFor(() => expect(bodyText()).toContain('references'));
+		await screen.getByRole('treeitem', { name: /guide\.md/i }).click();
+		await vi.waitFor(() => expect(bodyText()).toContain('Resource body.'));
 
-		for (const group of ['assets', 'references', 'scripts', 'other']) {
-			const resourceGroup = screen.getByTestId(`skill-detail-resources-${group}`).element();
-			const trigger = screen.getByTestId(`skill-detail-resource-trigger-${group}`).element();
-
-			expect(resourceGroup.getAttribute('data-state')).toBe('closed');
-			expect(trigger.getAttribute('aria-expanded')).toBe('false');
-		}
-
-		expect(screen.baseElement.querySelector('svg.lucide-chevron-down')).toBeNull();
-		expect(screen.baseElement.querySelector('[data-testid="skill-detail-resources"]')).toBeNull();
-		expect(readCalls).toHaveLength(1);
-		expect(JSON.parse(readCalls[0].body as string)).toEqual({ name: 'demo-skill' });
-		expect(createBranch).not.toHaveBeenCalled();
-		expect(createBranchPair).not.toHaveBeenCalled();
-		expect(recordActivation).not.toHaveBeenCalled();
+		expect(readCalls).toHaveLength(2);
+		expect(JSON.parse(readCalls[1].body as string)).toEqual({
+			name: 'demo-skill',
+			path: 'references/guide.md'
+		});
 	});
 
-	it('opens resource groups independently', async () => {
-		mockRead(() =>
-			jsonResponse(
-				baseResult({
-					resources: {
-						paths: ['assets/template.txt', 'references/guide.md', 'scripts/check.py', 'notes.txt'],
-						truncated: false
-					}
-				})
-			)
-		);
-
-		const screen = await render(SkillDetail, {
-			props: { cwd: CWD, entry: makeEntry(), mobile: false, onClose: vi.fn() }
-		});
-
-		await vi.waitFor(() => expect(bodyText()).toContain('Rendered heading'));
-
-		const state = (group: string) =>
-			screen.getByTestId(`skill-detail-resources-${group}`).element().getAttribute('data-state');
-
-		await screen.getByTestId('skill-detail-resource-trigger-references').click();
-		await vi.waitFor(() => expect(state('references')).toBe('open'));
-		expect(state('assets')).toBe('closed');
-		expect(state('scripts')).toBe('closed');
-		expect(state('other')).toBe('closed');
-
-		await screen.getByTestId('skill-detail-resource-trigger-scripts').click();
-		await vi.waitFor(() => expect(state('scripts')).toBe('open'));
-		expect(state('references')).toBe('open');
-		expect(state('assets')).toBe('closed');
-		expect(state('other')).toBe('closed');
-	});
-
-	it('resets resource groups when the selected skill changes', async () => {
-		mockRead(() =>
-			jsonResponse(
-				baseResult({
-					resources: {
-						paths: ['references/guide.md', 'scripts/check.py'],
-						truncated: false
-					}
-				})
-			)
-		);
-
-		const screen = await render(SkillDetail, {
-			props: { cwd: CWD, entry: makeEntry('skill-a'), mobile: false, onClose: vi.fn() }
-		});
-
-		await vi.waitFor(() => expect(bodyText()).toContain('Rendered heading'));
-		await screen.getByTestId('skill-detail-resource-trigger-references').click();
-		await vi.waitFor(() =>
-			expect(
-				screen.getByTestId('skill-detail-resources-references').element().getAttribute('data-state')
-			).toBe('open')
-		);
-
-		await screen.rerender({
-			cwd: CWD,
-			entry: makeEntry('skill-b'),
-			mobile: false,
-			onClose: vi.fn()
-		});
-
-		await vi.waitFor(() => expect(bodyText()).toContain('skill-b'));
-		await vi.waitFor(() =>
-			expect(
-				screen.getByTestId('skill-detail-resources-references').element().getAttribute('data-state')
-			).toBe('closed')
-		);
-	});
-
-	it('omits resource discovery entirely for a SKILL.md-only result', async () => {
+	it('keeps the picker closed when the skill exposes no resources', async () => {
 		mockRead(() => jsonResponse(baseResult({ resources: { paths: [], truncated: false } })));
 
 		const screen = await render(SkillDetail, {
@@ -572,7 +490,8 @@ describe('SkillDetail preview', () => {
 		});
 
 		await vi.waitFor(() => expect(bodyText()).toContain('Rendered heading'));
+		await screen.getByTestId('skill-resource-picker-trigger').click();
 
-		expect(screen.baseElement.querySelector('[data-testid="skill-detail-resources"]')).toBeNull();
+		expect(screen.getByTestId('skill-resource-picker-tree').query()).toBeNull();
 	});
 });

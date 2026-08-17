@@ -6,6 +6,7 @@ import ChatFormTestWrapper from './components/ChatFormTestWrapper.svelte';
 import { dispatchSkillActivation } from '$lib/services/skill-command.service';
 import { chatStore } from '$lib/stores';
 import { skillsStore } from '$lib/stores/skills.svelte';
+import { skillAvailabilityStore } from '$lib/stores/skill-availability.svelte';
 import type { SkillCatalogEntry } from '$lib/types';
 import type { SkillCatalogSlot } from '$lib/stores/skills.svelte';
 import { tick } from 'svelte';
@@ -56,6 +57,10 @@ async function selectSkill(name: string) {
 }
 
 beforeEach(() => {
+	skillAvailabilityStore.setEnabled('opaque-frontend-design', true);
+	skillAvailabilityStore.setEnabled('opaque-disabled', true);
+	skillAvailabilityStore.setEnabled('opaque-enabled-a', true);
+	skillAvailabilityStore.setEnabled('opaque-enabled-b', true);
 	vi.mocked(skillsStore.slotFor).mockReturnValue(readySlot([skill('frontend-design')]));
 	vi.mocked(dispatchSkillActivation).mockReset();
 	vi.mocked(dispatchSkillActivation).mockResolvedValue({ ok: true, created: true });
@@ -77,7 +82,34 @@ describe('/skills <name> wake', () => {
 		await vi.waitFor(() => expect(runTurn).toHaveBeenCalledTimes(1));
 	});
 
-	it.each(['not-found', 'unavailable', 'persistence-failed'] as const)(
+	it('omits disabled picker entries and preserves enabled server order', async () => {
+		vi.mocked(skillsStore.slotFor).mockReturnValue(
+			readySlot([skill('disabled'), skill('enabled-b'), skill('enabled-a')])
+		);
+		skillAvailabilityStore.setEnabled('opaque-disabled', false);
+
+		const { container } = render(ChatFormTestWrapper);
+		await tick();
+
+		const textarea = container.querySelector('textarea');
+
+		if (!(textarea instanceof HTMLTextAreaElement)) throw new Error('textarea not rendered');
+
+		await userEvent.click(textarea);
+		await userEvent.keyboard('/skills ');
+		await tick();
+
+		const rowText = Array.from(document.querySelectorAll<HTMLElement>('[data-picker-index]')).map(
+			(row) => row.textContent ?? ''
+		);
+
+		expect(rowText).toHaveLength(2);
+		expect(rowText[0]).toContain('enabled-b');
+		expect(rowText[1]).toContain('enabled-a');
+		expect(rowText.join(' ')).not.toContain('disabled');
+	});
+
+	it.each(['disabled', 'not-found', 'unavailable', 'persistence-failed'] as const)(
 		'does not wake when the activation %s',
 		async (reason) => {
 			const runTurn = vi.spyOn(chatStore, 'runTurnFromLeaf').mockResolvedValue();

@@ -89,6 +89,7 @@ function resourceResult(overrides: Partial<SkillResourceReadResult> = {}): Skill
 		diagnostics: [],
 		kind: 'resource',
 		resource: { path: 'refs/DETAILS.md' },
+		source: 'data',
 		skill: { id: 'opaque-id-1', name: 'demo-skill', provider: 'agents', scope: 'project' },
 		...overrides
 	};

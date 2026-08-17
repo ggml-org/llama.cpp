@@ -119,6 +119,8 @@ export interface SkillResourceReadResult {
 	kind: 'resource';
 	skill: SkillIdentity;
 	resource: { path: string };
+	/** Exact validated UTF-8 resource content for browsing-only preview. */
+	source: string;
 	content_xml: string;
 	diagnostics: SkillDiagnostic[];
 }

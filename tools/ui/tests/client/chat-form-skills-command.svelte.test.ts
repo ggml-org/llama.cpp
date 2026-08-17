@@ -304,6 +304,10 @@ describe('ChatFormSkillPicker', () => {
 		expect(bodyText).not.toContain('opaque-alpha');
 		expect(bodyText).not.toContain('opaque-format-alpha');
 		expect(bodyText).not.toContain('<skill />');
+
+		// The `agents` API provider renders as `generic` in the row facts.
+		expect(bodyText).toContain('global · generic');
+		expect(bodyText).not.toContain('global · agents');
 	});
 
 	it('selects the exact name with ArrowDown + Enter and closes', async () => {

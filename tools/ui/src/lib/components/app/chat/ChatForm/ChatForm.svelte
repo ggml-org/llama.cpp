@@ -38,6 +38,7 @@
 		settingsStore,
 		toolsStore
 	} from '$lib/stores';
+	import { skillAvailabilityStore } from '$lib/stores/skill-availability.svelte';
 	import { skillsStore } from '$lib/stores/skills.svelte';
 	import type {
 		FileMentionEntry,
@@ -149,12 +150,16 @@
 	// Skills picker candidates come only from the active CWD's current
 	// successful catalog slot: no catalog request is issued from here (the
 	// store's probe/route load owns fetching), and any non-ready slot yields
-	// no suggestions. The store's canonical no-CWD key is `undefined`; the
-	// form's `cwd` is `null` with no selection, so every Skills lookup
+	// no suggestions. The response is filtered to enabled entries so the
+	// boolean picker omits locally disabled skills while the raw catalog
+	// route stays browsable. The store's canonical no-CWD key is `undefined`;
+	// the form's `cwd` is `null` with no selection, so every Skills lookup
 	// canonicalizes with `?? undefined`.
 	const skillCatalogSlot = $derived(skillsStore.slotFor(cwd ?? undefined));
 	const skillSuggestions = $derived(
-		skillCatalogSlot?.status === 'ready' ? (skillCatalogSlot.catalog?.skills ?? []) : []
+		skillCatalogSlot?.status === 'ready'
+			? skillAvailabilityStore.enabledEntries(skillCatalogSlot.catalog?.skills ?? [])
+			: []
 	);
 
 	const pickers = useChatFormPickers({
@@ -197,6 +202,10 @@
 			if (!outcome.ok) {
 				if (outcome.reason === 'not-found') {
 					toast.error(`Skill "${args}" was not found`);
+				} else if (outcome.reason === 'disabled') {
+					// A disabled resolved skill shows a specific local error
+					// and never wakes the agent.
+					toast.error(`Skill "${args}" is disabled`);
 				} else if (outcome.reason === 'persistence-failed') {
 					toast.error(`Skill "${args}" could not be saved`);
 				} else {

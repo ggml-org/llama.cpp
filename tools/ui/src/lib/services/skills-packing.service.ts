@@ -59,12 +59,16 @@ export function serializeSkillCatalogEnvelope(catalog: SkillCatalogResponse): st
  */
 export function buildSkillRunSnapshot(
 	cwd: string | undefined,
-	catalog: SkillCatalogResponse
+	catalog: SkillCatalogResponse,
+	disabledIds?: ReadonlySet<string>
 ): SkillRunSnapshot {
-	// The model-facing view excludes manual-only skills from the entries,
-	// the envelope, and the budget count; the raw catalog stays available
-	// for the UI listing and the explicit /skills picker.
-	const modelEntries = catalog.skills.filter((entry) => !entry.disable_model_invocation);
+	// The model-facing view excludes manual-only skills and any locally
+	// disabled opaque IDs from the entries, the envelope, and the budget
+	// count; the raw catalog stays available for the UI listing and the
+	// explicit /skills picker.
+	const modelEntries = catalog.skills.filter(
+		(entry) => !entry.disable_model_invocation && !disabledIds?.has(entry.id)
+	);
 	const entries = Object.freeze(modelEntries.map(freezeEntry));
 
 	return {

@@ -1,5 +1,6 @@
 import { useSkillCatalogRefresh } from '$lib/hooks/use-skill-catalog-refresh.svelte';
 import { SkillsService } from '$lib/services/skills.service';
+import { skillAvailabilityStore } from '$lib/stores/skill-availability.svelte';
 import { type SkillAvailability, skillsStore } from '$lib/stores/skills.svelte';
 import type { SkillCatalogEntry, SkillCatalogResponse, SkillReadResult } from '$lib/types';
 import { afterEach, describe, expect, it, type Mock, vi } from 'vitest';
@@ -53,6 +54,25 @@ function makeBaseReadResult(): SkillReadResult {
 			scope: 'project'
 		},
 		source: BASE_SKILL_SOURCE
+	};
+}
+
+const RESOURCE_SOURCE = '# Resource\n\nExact bytes as stored.\n';
+
+function makeResourceReadResult(): SkillReadResult {
+	return {
+		content_xml:
+			'<skill_resource name="example-skill" path="references/DETAILS.md"># Resource\n\nExact bytes as stored.\n</skill_resource>',
+		diagnostics: [],
+		kind: 'resource',
+		resource: { path: 'references/DETAILS.md' },
+		skill: {
+			id: 'opaque-resolved-skill-identity',
+			name: 'example-skill',
+			provider: 'agents',
+			scope: 'project'
+		},
+		source: RESOURCE_SOURCE
 	};
 }
 
@@ -163,11 +183,14 @@ describe('SkillsService', () => {
 		});
 
 		it('POSTs the optional path and nothing else', async () => {
-			const fetchMock = vi.fn().mockResolvedValue(jsonResponse(makeBaseReadResult()));
+			const fetchMock = vi.fn().mockResolvedValue(jsonResponse(makeResourceReadResult()));
 
 			vi.stubGlobal('fetch', fetchMock);
 
-			await SkillsService.read({ name: 'example-skill', path: 'references/DETAILS.md' }, '/w');
+			const result = await SkillsService.read(
+				{ name: 'example-skill', path: 'references/DETAILS.md' },
+				'/w'
+			);
 
 			const [, init] = fetchMock.mock.calls[0];
 			const body = JSON.parse(init.body as string) as Record<string, unknown>;
@@ -175,6 +198,7 @@ describe('SkillsService', () => {
 			expect(body).toEqual({ name: 'example-skill', path: 'references/DETAILS.md' });
 			expect(Object.keys(body).sort()).toEqual(['name', 'path']);
 			expect((init.headers as Record<string, string>)['x-skill-cwd']).toBe('/w');
+			expect(result.source).toBe(RESOURCE_SOURCE);
 		});
 
 		it('never forwards client identity or origin fields', async () => {
@@ -298,6 +322,27 @@ describe('skillsStore', () => {
 		expect(snapshot.envelope).not.toContain('<skill><name>screen</name></skill>');
 		// The screen slot is untouched by the run's own request.
 		expect(skillsStore.slotFor('/a')?.catalog?.skills.map((s) => s.name)).toEqual(['screen']);
+	});
+
+	it('applies the current disabled set to the freshly fetched catalog snapshot', async () => {
+		vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(makeCatalog('run', 'manual'))));
+
+		// Gate the opaque ID the run's own request resolves; keying by the
+		// freshly fetched catalog proves the snapshot reads the current
+		// disabled set rather than any stale screen slot.
+		skillAvailabilityStore.setEnabled('opaque-manual', false);
+
+		try {
+			const snapshot = await skillsStore.createRunSnapshot('/a');
+
+			expect(snapshot.entries.map((e) => e.name)).toEqual(['run']);
+			expect(snapshot.envelope).toContain('<skill><name>run</name></skill>');
+			expect(snapshot.envelope).not.toContain('<skill><name>manual</name></skill>');
+			// The raw browsing catalog still carries the disabled entry.
+			expect(snapshot.catalog.skills.map((s) => s.name)).toEqual(['run', 'manual']);
+		} finally {
+			skillAvailabilityStore.setEnabled('opaque-manual', true);
+		}
 	});
 
 	it('keeps a frozen snapshot stable across later store refreshes', async () => {

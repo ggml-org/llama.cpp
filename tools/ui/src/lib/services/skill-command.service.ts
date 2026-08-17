@@ -11,6 +11,7 @@
 import { SkillsService } from '$lib/services/skills.service';
 import { conversationsStore } from '$lib/stores/conversations.svelte';
 import { skillActivationStore } from '$lib/stores/skill-activation.svelte';
+import { skillAvailabilityStore } from '$lib/stores/skill-availability.svelte';
 import type { SkillReadResult } from '$lib/types/skills';
 
 /** Outcome of an explicit `/skills <name>` activation. */
@@ -20,10 +21,11 @@ export interface SkillCommandOutcome {
 	created?: boolean;
 	/**
 	 * 'unavailable' = the Skills service failed; 'not-found' = the read did
-	 * not resolve a base skill; 'persistence-failed' = the read succeeded but
-	 * the durable activation could not be persisted.
+	 * not resolve a base skill; 'disabled' = the resolved skill is disabled
+	 * locally; 'persistence-failed' = the read succeeded but the durable
+	 * activation could not be persisted.
 	 */
-	reason?: 'unavailable' | 'not-found' | 'persistence-failed';
+	reason?: 'unavailable' | 'not-found' | 'disabled' | 'persistence-failed';
 }
 
 export async function dispatchSkillActivation(
@@ -46,6 +48,13 @@ export async function dispatchSkillActivation(
 
 	if (result.kind !== 'skill') {
 		return { ok: false, reason: 'not-found' };
+	}
+
+	// The read already resolved a base skill; gate on the resolved opaque ID
+	// before any conversation creation, persistence, or wake, so a disabled
+	// skill never activates even when another skill shares its display name.
+	if (skillAvailabilityStore.isDisabled(result.skill.id)) {
+		return { ok: false, reason: 'disabled' };
 	}
 
 	let conversationId = conversationsStore.activeConversation?.id;

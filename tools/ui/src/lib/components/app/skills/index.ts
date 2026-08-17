@@ -21,8 +21,19 @@ export { default as SkillBudgetStatus } from './SkillBudgetStatus.svelte';
 export { default as SkillCatalogList } from './SkillCatalogList.svelte';
 
 /**
+ * Shared visible provider label: maps the API value `agents` to `generic`
+ * with the exact provider-agnostic tooltip on hover and keyboard focus;
+ * every other provider renders unchanged without a tooltip. Presentation
+ * only - the server value and identity stay unchanged.
+ */
+export { default as SkillProviderLabel } from './SkillProviderLabel.svelte';
+
+/**
  * Route-local read preview of one selected skill: rendered body vs raw source
  * with Markdown/Raw modes and stale-read suppression. Never creates messages
  * or activation records.
  */
 export { default as SkillDetail } from './SkillDetail.svelte';
+
+export { default as SkillResourcePicker } from './SkillResourcePicker.svelte';
+export { default as SkillResourcePreview } from './SkillResourcePreview.svelte';
