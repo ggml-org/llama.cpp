@@ -68,6 +68,7 @@ def test_skills_enabled_catalog_and_reads(tmp_path):
     assert base.body["source"] == source
     assert base.body["body_markdown"] == "# Demo\n\nUse **carefully**.\n"
     assert base.body["content_xml"].startswith("<skill_content name=\"demo\">")
+    assert "<skill_resources>" not in base.body["content_xml"]
     assert str(project) not in base.body["source"]
     assert str(tmp_path) not in base.body["source"]
     assert str(project) not in base.body["body_markdown"]

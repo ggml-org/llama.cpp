@@ -1132,11 +1132,15 @@ server_skills::server_skills(server_skills_config config, token_count_callback c
                 if (!current.compatibility.empty()) metadata["compatibility"] = current.compatibility;
                 if (!current.allowed_tools.empty()) metadata["allowed_tools"] = current.allowed_tools;
                 if (!current.metadata.empty()) metadata["metadata"] = current.metadata;
-                std::string content_xml = "<skill_content name=\"" + xml_escape(skill.name) + "\">" + xml_escape(current.body) + "<skill_resources>";
-                for (const std::string & path : resources.paths) {
-                    content_xml += "<file>" + xml_escape(path) + "</file>";
+                std::string content_xml = "<skill_content name=\"" + xml_escape(skill.name) + "\">" + xml_escape(current.body);
+                if (!resources.paths.empty()) {
+                    content_xml += "<skill_resources>";
+                    for (const std::string & path : resources.paths) {
+                        content_xml += "<file>" + xml_escape(path) + "</file>";
+                    }
+                    content_xml += "</skill_resources>";
                 }
-                content_xml += "</skill_resources></skill_content>";
+                content_xml += "</skill_content>";
                 auto response = std::make_unique<server_http_res>();
                 response->data = safe_json_to_str({
                     {"kind", "skill"},
