@@ -29,25 +29,25 @@ vendor = {
 
     "https://raw.githubusercontent.com/sheredom/subprocess.h/9ce0d701b6fb10f8f8c4445edd31e7c60a1237e3/subprocess.h": "vendor/sheredom/subprocess.h",
 
-    f"https://raw.githubusercontent.com/Cyan4973/xxHash/{XXHASH_COMMIT}/xxhash.c":      "vendor/xxhash/xxhash.c",
-    f"https://raw.githubusercontent.com/Cyan4973/xxHash/{XXHASH_COMMIT}/xxhash.h":      "vendor/xxhash/xxhash.h",
-    f"https://raw.githubusercontent.com/Cyan4973/xxHash/{XXHASH_COMMIT}/LICENSE":       "vendor/xxhash/LICENSE",
+    f"https://raw.githubusercontent.com/Cyan4973/xxHash/{XXHASH_COMMIT}/xxhash.c":      "vendor/hash/xxhash/xxhash.c",
+    f"https://raw.githubusercontent.com/Cyan4973/xxHash/{XXHASH_COMMIT}/xxhash.h":      "vendor/hash/xxhash/xxhash.h",
+    f"https://raw.githubusercontent.com/Cyan4973/xxHash/{XXHASH_COMMIT}/LICENSE":       "vendor/hash/xxhash/LICENSE",
 
     # clibs/sha1 ships no license file, the source header says public domain
-    f"https://raw.githubusercontent.com/clibs/sha1/{SHA1_COMMIT}/sha1.c": "vendor/sha1/sha1.c",
-    f"https://raw.githubusercontent.com/clibs/sha1/{SHA1_COMMIT}/sha1.h": "vendor/sha1/sha1.h",
+    f"https://raw.githubusercontent.com/clibs/sha1/{SHA1_COMMIT}/sha1.c": "vendor/hash/sha1/sha1.c",
+    f"https://raw.githubusercontent.com/clibs/sha1/{SHA1_COMMIT}/sha1.h": "vendor/hash/sha1/sha1.h",
 
-    f"https://raw.githubusercontent.com/jb55/sha256.c/{SHA256_COMMIT}/sha256.c": "vendor/sha256/sha256.c",
-    f"https://raw.githubusercontent.com/jb55/sha256.c/{SHA256_COMMIT}/sha256.h": "vendor/sha256/sha256.h",
-    f"https://raw.githubusercontent.com/jb55/sha256.c/{SHA256_COMMIT}/LICENSE":  "vendor/sha256/LICENSE",
+    f"https://raw.githubusercontent.com/jb55/sha256.c/{SHA256_COMMIT}/sha256.c": "vendor/hash/sha256/sha256.c",
+    f"https://raw.githubusercontent.com/jb55/sha256.c/{SHA256_COMMIT}/sha256.h": "vendor/hash/sha256/sha256.h",
+    f"https://raw.githubusercontent.com/jb55/sha256.c/{SHA256_COMMIT}/LICENSE":  "vendor/hash/sha256/LICENSE",
 
-    f"https://raw.githubusercontent.com/jb55/rotate-bits.h/{ROTATE_BITS_COMMIT}/rotate-bits.h": "vendor/rotate-bits/rotate-bits.h",
-    f"https://raw.githubusercontent.com/jb55/rotate-bits.h/{ROTATE_BITS_COMMIT}/LICENSE.md":   "vendor/rotate-bits/LICENSE.md",
+    f"https://raw.githubusercontent.com/jb55/rotate-bits.h/{ROTATE_BITS_COMMIT}/rotate-bits.h": "vendor/hash/rotate-bits/rotate-bits.h",
+    f"https://raw.githubusercontent.com/jb55/rotate-bits.h/{ROTATE_BITS_COMMIT}/LICENSE.md":   "vendor/hash/rotate-bits/LICENSE.md",
 }
 
 # local changes kept on top of the upstream sources
 patches = {
-    "vendor/xxhash/xxhash.h": [(
+    "vendor/hash/xxhash/xxhash.h": [(
         '#if defined(__STDC_VERSION__) && (__STDC_VERSION__ >= 201112L) /* >= C11 */\n',
         '/* Windows SDK under 10.0.22000 is missing stdalign.h so we add a check\n'
         '   before allowing the windows compiler to use the C11 form.\n'
@@ -57,7 +57,7 @@ patches = {
     )],
 
     # silence a maybe-uninitialized warning
-    "vendor/sha256/sha256.c": [(
+    "vendor/hash/sha256/sha256.c": [(
         "  uint32_t W[16];\n",
         "  uint32_t W[16] = {0};\n"
     )],
