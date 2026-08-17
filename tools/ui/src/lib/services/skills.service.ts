@@ -12,7 +12,7 @@ import { apiFetch } from '$lib/utils';
 
 /** Stateless transport and catalog packing for the llama-server Skills API. */
 export class SkillsService {
-/** Fetch the deterministic catalog for an effective CWD. */
+	/** Fetch the deterministic catalog for an effective CWD. */
 	static async list(cwd?: string, signal?: AbortSignal): Promise<SkillCatalogResponse> {
 		return apiFetch<SkillCatalogResponse>(API_SKILLS.LIST, {
 			headers: skillCwdHeaders(cwd),
@@ -38,7 +38,7 @@ export class SkillsService {
 	}
 }
 
-/** Map an effective CWD to the Skills request header. */
+/** Response shape of the POST /tokenize request used for direct-mode counting. */
 interface SkillTokenizeResponse {
 	tokens: number[];
 }
@@ -220,6 +220,8 @@ function serializeEnvelope(
 		.map((entry) => entry.catalog_xml)
 		.join('')}</${SKILL_CATALOG_TAG}>`;
 }
+
+/** Map an effective CWD to the Skills request header. */
 function skillCwdHeaders(cwd: string | undefined): Record<string, string> | undefined {
 	if (cwd === undefined || cwd.trim().length === 0) {
 		return undefined;

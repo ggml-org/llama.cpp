@@ -27,7 +27,9 @@
 	);
 	const canRenderMarkdown = $derived(format === 'markdown');
 	const canRenderHtml = $derived(format === 'html');
-	let mode = $state<'rendered' | 'raw' | 'preview' | 'source'>('rendered');
+	let mode = $derived<'rendered' | 'raw' | 'preview' | 'source'>(
+		canRenderHtml ? 'preview' : canRenderMarkdown ? 'rendered' : 'source'
+	);
 	const iframeSource = $derived(
 		`<!doctype html><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'">${source}`
 	);
@@ -78,10 +80,6 @@
 			});
 
 		return () => controller.abort();
-	});
-
-	$effect(() => {
-		mode = canRenderHtml ? 'preview' : canRenderMarkdown ? 'rendered' : 'source';
 	});
 </script>
 
