@@ -145,6 +145,7 @@ struct mtmd_image_preprocessor_lfm2 : mtmd_image_preprocessor_llava_uhd {
     static constexpr int   tile_size            = 512;
 
     using mtmd_image_preprocessor_llava_uhd::mtmd_image_preprocessor_llava_uhd;
+    mtmd_image_preproc_out preprocess(const clip_image_u8 & img) override;
     slice_instructions get_slice_instructions(const clip_image_size & original_size) override;
 
 private:

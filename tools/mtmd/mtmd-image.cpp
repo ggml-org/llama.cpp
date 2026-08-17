@@ -999,6 +999,20 @@ mtmd_image_preprocessor_llava_uhd::slice_instructions mtmd_image_preprocessor_mi
 // mtmd_image_preprocessor_lfm2
 //
 
+mtmd_image_preproc_out mtmd_image_preprocessor_lfm2::preprocess(const clip_image_u8 & img) {
+    auto const inst = get_slice_instructions(img.get_size());
+    if (!inst.slices.empty()) {
+        return mtmd_image_preprocessor_llava_uhd::preprocess(img);
+    }
+
+    // single tile: no thumbnail
+    // note: not using output.overview here because it will emit <|img_thumbnail|> token, which we don't want in this case
+    auto sliced = slice_image(img, inst);
+    mtmd_image_preproc_out output;
+    output.append(hparams, sliced.overview, true);
+    return output;
+}
+
 mtmd_image_preprocessor_llava_uhd::slice_instructions mtmd_image_preprocessor_lfm2::get_slice_instructions(const clip_image_size & original_size) {
     mtmd_image_preprocessor_llava_uhd::slice_instructions inst;
     const int align_size = hparams.patch_size * hparams.n_merge;
