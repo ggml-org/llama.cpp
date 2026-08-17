@@ -1643,6 +1643,10 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
     }
 
     // set ids for all splits
+    // [TAG_CUDA_GRAPH_UID] a backend may take an unchanged uid as a promise that the split's
+    // tensor addresses have not moved, and skip re-checking them. this is only true because
+    // splitting always precedes (re-)allocation, so anything that re-points tensors without
+    // re-splitting has to re-stamp these itself.
     for (int i = 0; i < sched->n_splits; ++i) {
         sched->splits[i].graph.uid = ggml_graph_next_uid();
     }
