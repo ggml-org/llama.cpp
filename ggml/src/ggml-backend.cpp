@@ -1153,6 +1153,7 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
     // reset splits
     sched->n_splits = 0;
     sched->n_graph_inputs = 0;
+    ggml_gallocr_clear_pins(sched->galloc);
     sched->is_reset = false;
 
     struct ggml_init_params params = {
@@ -1495,6 +1496,35 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
                             ggml_backend_sched_graph_inputs_grow(sched);
                         }
                         sched->graph_inputs[n_graph_inputs] = inp;
+                    }
+                }
+
+                // this split may read src in place out of a buffer another backend owns. graph
+                // order says the memory dies at its last consumer, but an asynchronous reader is
+                // still reading past that point, so it must not be handed to a later split. the
+                // memory belongs to the view root, and the root is what the allocator frees
+                {
+                    struct ggml_tensor * root = src;
+                    while (root->view_src != NULL) {
+                        root = root->view_src;
+                    }
+
+                    const int root_backend_id = sched->hv_tensor_backend_ids[hash_id(root)];
+
+                    static const bool pin_async_reads = []() {
+                        const char * env = getenv("GGML_SCHED_PIN_ASYNC_READS");
+                        return env ? atoi(env) != 0 : true;
+                    }();
+
+                    if (pin_async_reads &&
+                        root_backend_id != -1 && root_backend_id != cur_backend_id &&
+                        sched->backends[cur_backend_id]->iface.synchronize != NULL &&
+                        ggml_backend_sched_buffer_supported(sched, root, cur_backend_id)) {
+                        ggml_gallocr_pin_tensor(sched->galloc, root);
+                        if (sched->debug) {
+                            GGML_LOG_DEBUG("%s: pinned %s, read in place by %s\n", __func__,
+                                    root->name, ggml_backend_name(sched->backends[cur_backend_id]));
+                        }
                     }
                 }
 
