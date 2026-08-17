@@ -755,16 +755,12 @@ class DSparkModel(DFlashModel):
 
     @classmethod
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
-        name = item[0]
-        if name == "t2d":  # not used at runtime
+        if item[0] == "t2d":  # not used at runtime
             return None
-        if name == "d2t" or name.startswith("lm_head."):
-            # keep un-prefixed: d2t is consumed in prepare_tensors, lm_head maps to output
-            return TextModel.filter_tensors(item)
         return super().filter_tensors(item)
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        if name == "d2t":
+        if name == "model.d2t":
             self._d2t = data_torch
             return
 
