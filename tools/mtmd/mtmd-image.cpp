@@ -1006,6 +1006,7 @@ mtmd_image_preproc_out mtmd_image_preprocessor_lfm2::preprocess(const clip_image
     }
 
     // single tile: no thumbnail
+    // note: not using output.overview here because it will emit <|img_thumbnail|> token, which we don't want in this case
     auto sliced = slice_image(img, inst);
     mtmd_image_preproc_out output;
     output.append(hparams, sliced.overview, true);
