@@ -1,21 +1,21 @@
 <script lang="ts">
+	import ContextGaugePopup from './ChatFormContextGauge/ContextGaugePopup.svelte';
 	import {
 		ChatAttachmentsList,
 		ChatFormActions,
-		ChatFormContenteditable,
-		ChatFormFileInputInvisible,
+		ChatFormCurrentWorkingDirectory,
+		ChatFormInput,
+		ChatFormInputFileInputInvisible,
 		ChatFormMcpResourcesList,
 		ChatFormPickers,
-		ChatFormTextarea,
-		ChatFormWorkingDirectory,
 		DialogMcpResourcesBrowser
 	} from '$lib/components/app';
 	import {
 		CLIPBOARD_CONTENT_QUOTE_PREFIX,
-		INPUT_CLASSES,
-		SETTING_CONFIG_DEFAULT,
 		INITIAL_FILE_SIZE,
-		PROMPT_CONTENT_SEPARATOR
+		INPUT_CLASSES,
+		PROMPT_CONTENT_SEPARATOR,
+		SETTING_CONFIG_DEFAULT
 	} from '$lib/constants';
 	import {
 		ContentPartType,
@@ -24,20 +24,17 @@
 		MimeTypeText,
 		SpecialFileType
 	} from '$lib/enums';
-	import { config } from '$lib/stores/settings.svelte';
-	import ContextGaugePopup from './ChatFormContextGauge/ContextGaugePopup.svelte';
-	import { modelOptions, selectedModelId } from '$lib/stores/models.svelte';
-	import { isRouterMode } from '$lib/stores/server.svelte';
-	import { chatStore } from '$lib/stores/chat.svelte';
-	import { mcpStore } from '$lib/stores/mcp.svelte';
-	import { mcpHasResourceAttachments } from '$lib/stores/mcp-resources.svelte';
-	import { toolsStore } from '$lib/stores/tools.svelte';
+	import { useChatFormPickers } from '$lib/hooks/use-chat-form-pickers.svelte';
 	import {
+		chatStore,
 		conversationsStore,
-		activeMessages,
-		activeConversation,
-		pendingCwd
-	} from '$lib/stores/conversations.svelte';
+		mcpResourceStore,
+		mcpStore,
+		modelsStore,
+		serverStore,
+		settingsStore,
+		toolsStore
+	} from '$lib/stores';
 	import type {
 		FileMentionEntry,
 		GetPromptResult,
@@ -56,7 +53,6 @@
 		parseClipboardContent,
 		uuid
 	} from '$lib/utils';
-	import { useChatFormPickers } from '$lib/hooks/use-chat-form-pickers.svelte';
 	import {
 		AudioRecorder,
 		convertToWav,
@@ -96,12 +92,6 @@
 		class: className = '',
 		disabled = false,
 		isLoading = false,
-		placeholder = 'Type a message...',
-		showMcpPromptButton = false,
-		showAddButton = true,
-		showModelSelector = true,
-		uploadedFiles = $bindable([]),
-		value = $bindable(''),
 		onAttachmentRemove,
 		onFilesAdd,
 		onStop,
@@ -109,11 +99,17 @@
 		onSystemPromptClick,
 		onUploadedFileRemove,
 		onUploadedFilesChange,
-		onValueChange
+		onValueChange,
+		placeholder = 'Type a message...',
+		showAddButton = true,
+		showMcpPromptButton = false,
+		showModelSelector = true,
+		uploadedFiles = $bindable([]),
+		value = $bindable('')
 	}: Props = $props();
 
 	// Component References
-	// Shared handle of the two input renderers (textarea + contenteditable).
+	// Shared handle of the two input renderers (plain textarea + rich chat form input).
 	type ChatInputHandle = {
 		focus(): void;
 		resetHeight(): void;
@@ -124,16 +120,16 @@
 
 	let audioRecorder: AudioRecorder | undefined;
 	let chatFormActionsRef: ChatFormActions | undefined = $state(undefined);
-	let fileInputRef: ChatFormFileInputInvisible | undefined = $state(undefined);
+	let fileInputRef: ChatFormInputFileInputInvisible | undefined = $state(undefined);
 	let pickersRef: { handleKeydown: (event: KeyboardEvent) => boolean } | undefined =
 		$state(undefined);
 	let inputRef: ChatInputHandle | undefined = $state(undefined);
 
-	// Render-mode gate: the plain textarea by default, the contenteditable
+	// Render-mode gate: the plain textarea by default, the rich chat form input
 	// while the buffer carries a `file://` mention link or a complete code
 	// span (badges and code chips need a DOM the textarea cannot provide).
 	// Demotes back once neither remains.
-	let useContenteditable = $state(false);
+	let useRichInput = $state(false);
 
 	// Audio Recording State
 	let isRecording = $state(false);
@@ -143,35 +139,38 @@
 	// float above the box.
 	let mentionAnchor: HTMLDivElement | null = $state(null);
 
-	let cwd = $derived(activeConversation()?.cwd ?? pendingCwd());
+	let cwd = $derived(conversationsStore.activeConversation?.cwd ?? conversationsStore.pendingCwd);
 
 	const pickers = useChatFormPickers({
+		focusInput: refocusInput,
+		getCaretOffset: () => inputRef?.getCaretOffset(),
+		getCwd: () => cwd,
+		getPickersRef: () => pickersRef,
+		getServerHome: () => toolsStore.serverHome ?? null,
+		getShowModelSelector: () => showModelSelector,
 		getValue: () => value,
+		hasCwdTools: () => toolsStore.hasEnabledCwdTools,
+		hasPrompts: () => mcpStore.hasPromptsCapability(conversationsStore.getAllMcpServerOverrides()),
+		openModelSelector: () => chatFormActionsRef?.openModelSelector(),
+		setCaretOffset: (offset) => inputRef?.setCaretOffset(offset),
 		setValue: (v) => {
 			value = v;
 			onValueChange?.(v);
-		},
-		getCaretOffset: () => inputRef?.getCaretOffset(),
-		setCaretOffset: (offset) => inputRef?.setCaretOffset(offset),
-		focusInput: refocusInput,
-		getShowModelSelector: () => showModelSelector,
-		hasPrompts: () => mcpStore.hasPromptsCapability(conversationsStore.getAllMcpServerOverrides()),
-		hasCwdTools: () => toolsStore.hasEnabledCwdTools,
-		getCwd: () => cwd,
-		getServerHome: () => toolsStore.serverHome ?? null,
-		openModelSelector: () => chatFormActionsRef?.openModelSelector(),
-		getPickersRef: () => pickersRef
+		}
 	});
 
 	async function handleWorkingDirectoryChange(newDir: string | null) {
 		// Committing a directory consumes the `/cwd` token; the chip's
 		// clear-X path has no token to consume.
 		const token = findCommandToken(value);
+
 		if (token && token.name === 'cwd') {
 			value = '';
 			onValueChange?.('');
 		}
+
 		await conversationsStore.setCwd(newDir);
+
 		if (conversationsStore.activeConversation) {
 			await chatStore.recordCwdChange(newDir?.trim() || null);
 		}
@@ -181,39 +180,45 @@
 	let isResourceDialogOpen = $state(false);
 	let preSelectedResourceUri = $state<string | undefined>(undefined);
 
-	let currentConfig = $derived(config());
+	let currentConfig = $derived(settingsStore.config);
 
 	let pasteLongTextToFileLength = $derived.by(() => {
 		const n = Number(currentConfig.pasteLongTextToFileLen);
+
 		return Number.isNaN(n) ? Number(SETTING_CONFIG_DEFAULT.pasteLongTextToFileLen) : n;
 	});
 
-	let isRouter = $derived(isRouterMode());
+	let isRouter = $derived(serverStore.isRouterMode);
 	let conversationModel = $derived(
-		chatStore.getConversationModel(activeMessages() as DatabaseMessage[])
+		chatStore.getConversationModel(conversationsStore.activeMessages as DatabaseMessage[])
 	);
 	let activeModelId = $derived.by(() => {
-		const options = modelOptions();
+		const options = modelsStore.models;
 
 		if (!isRouter) {
 			return options.length > 0 ? options[0].model : null;
 		}
 
-		const selectedId = selectedModelId();
+		const selectedId = modelsStore.selectedModelId;
+
 		if (selectedId) {
 			const model = options.find((m) => m.id === selectedId);
+
 			if (model) return model.model;
 		}
 
 		if (conversationModel) {
 			const model = options.find((m) => m.model === conversationModel);
+
 			if (model) return model.model;
 		}
 
 		return null;
 	});
 
-	let hasModelSelected = $derived(!isRouter || !!conversationModel || !!selectedModelId());
+	let hasModelSelected = $derived(
+		!isRouter || !!conversationModel || !!modelsStore.selectedModelId
+	);
 	let hasLoadingAttachments = $derived(uploadedFiles.some((f) => f.isLoading));
 	let hasAttachments = $derived(
 		(attachments && attachments.length > 0) || (uploadedFiles && uploadedFiles.length > 0)
@@ -236,15 +241,15 @@
 	}
 
 	$effect(() => {
-		const wantContenteditable =
-			containsFileMentionLink(value ?? '') || containsCodeSpan(value ?? '');
-		if (useContenteditable === wantContenteditable) return;
+		const wantRichInput = containsFileMentionLink(value ?? '') || containsCodeSpan(value ?? '');
+
+		if (useRichInput === wantRichInput) return;
 
 		if (!caretOffsetPinned) {
 			pendingCaretOffset = inputRef?.getCaretOffset() ?? (value ?? '').length;
 		}
 
-		useContenteditable = wantContenteditable;
+		useRichInput = wantRichInput;
 		queueCaretRestore();
 	});
 
@@ -268,8 +273,10 @@
 	export function checkModelSelected(): boolean {
 		if (!hasModelSelected) {
 			chatFormActionsRef?.openModelSelector();
+
 			return false;
 		}
+
 		return true;
 	}
 
@@ -284,6 +291,7 @@
 	function handleFileRemove(fileId: string) {
 		if (fileId.startsWith('attachment-')) {
 			const index = parseInt(fileId.replace('attachment-', ''), 10);
+
 			if (!isNaN(index) && index >= 0 && index < attachments.length) {
 				onAttachmentRemove?.(index);
 			}
@@ -305,7 +313,7 @@
 
 			// Caret inside a fenced code block (closed, or still open
 			// while being typed): Enter adds a line, never submits. The
-			// contenteditable consumes this case locally; this gate
+			// rich chat form input consumes this case locally; this gate
 			// covers the plain textarea, where skipping submit lets the
 			// native newline through.
 			if (!isModifier && isOffsetInCodeBlock(value ?? '', inputRef?.getCaretOffset() ?? 0)) {
@@ -333,6 +341,7 @@
 		if (files.length > 0) {
 			event.preventDefault();
 			onFilesAdd?.(files);
+
 			return;
 		}
 
@@ -354,26 +363,27 @@
 								type: MimeTypeText.PLAIN
 							})
 					);
+
 					onFilesAdd?.(attachmentFiles);
 				}
 
 				// Handle MCP prompt attachments as ChatUploadedFile with mcpPrompt data
 				if (parsed.mcpPromptAttachments.length > 0) {
 					const mcpPromptFiles: ChatUploadedFile[] = parsed.mcpPromptAttachments.map((att) => ({
-						id: uuid(),
-						name: att.name,
-						size: att.content.length,
-						type: SpecialFileType.MCP_PROMPT,
 						file: new File([att.content], `${att.name}${FileExtensionText.TXT}`, {
 							type: MimeTypeText.PLAIN
 						}),
+						id: uuid(),
 						isLoading: false,
-						textContent: att.content,
 						mcpPrompt: {
-							serverName: att.serverName,
+							arguments: att.arguments,
 							promptName: att.promptName,
-							arguments: att.arguments
-						}
+							serverName: att.serverName
+						},
+						name: att.name,
+						size: att.content.length,
+						textContent: att.content,
+						type: SpecialFileType.MCP_PROMPT
 					}));
 
 					uploadedFiles = [...uploadedFiles, ...mcpPromptFiles];
@@ -412,17 +422,17 @@
 
 		const promptName = promptInfo.title || promptInfo.name;
 		const placeholder: ChatUploadedFile = {
-			id: placeholderId,
-			name: promptName,
-			size: INITIAL_FILE_SIZE,
-			type: SpecialFileType.MCP_PROMPT,
 			file: new File([], 'loading'),
+			id: placeholderId,
 			isLoading: true,
 			mcpPrompt: {
-				serverName: promptInfo.serverName,
+				arguments: args ? { ...args } : undefined,
 				promptName: promptInfo.name,
-				arguments: args ? { ...args } : undefined
-			}
+				serverName: promptInfo.serverName
+			},
+			name: promptName,
+			size: INITIAL_FILE_SIZE,
+			type: SpecialFileType.MCP_PROMPT
 		};
 
 		uploadedFiles = [...uploadedFiles, placeholder];
@@ -450,12 +460,12 @@
 			f.id === placeholderId
 				? {
 						...f,
-						isLoading: false,
-						textContent: promptText,
-						size: promptText.length,
 						file: new File([promptText], `${f.name}${FileExtensionText.TXT}`, {
 							type: MimeTypeText.PLAIN
-						})
+						}),
+						isLoading: false,
+						size: promptText.length,
+						textContent: promptText
 					}
 				: f
 		);
@@ -480,9 +490,11 @@
 	function handleMentionSelect(entry: FileMentionEntry) {
 		const cursor = inputRef?.getCaretOffset() ?? value.length;
 		const token = findMentionToken(value, cursor);
+
 		if (!token) return;
 
 		const built = buildMentionInsertion(entry, value, token);
+
 		if (!built) return;
 
 		// Pin the post-insertion caret BEFORE the swap effect runs;
@@ -494,9 +506,9 @@
 		value = built.newValue;
 		onValueChange?.(built.newValue);
 
-		// Already in contenteditable mode: no renderer flip, so the swap
+		// Already in rich chat form input mode: no renderer flip, so the swap
 		// effect's caret restore never runs.
-		if (useContenteditable) {
+		if (useRichInput) {
 			queueCaretRestore();
 		}
 	}
@@ -504,6 +516,7 @@
 	async function handleMicClick() {
 		if (!audioRecorder || !recordingSupported) {
 			console.warn('Audio recording not supported');
+
 			return;
 		}
 
@@ -529,7 +542,7 @@
 	}
 </script>
 
-<ChatFormFileInputInvisible bind:this={fileInputRef} onFileSelect={handleFileSelect} />
+<ChatFormInputFileInputInvisible bind:this={fileInputRef} onFileSelect={handleFileSelect} />
 
 <form
 	class="relative grid {className}"
@@ -588,37 +601,22 @@
 		<div
 			class="flex-column relative min-h-12 items-center rounded-4xl md:rounded-3xl py-2 pb-2.25 shadow-sm transition-all focus-within:shadow-md md:py-3!"
 		>
-			{#if useContenteditable}
-				<ChatFormContenteditable
-					class="px-5 py-1.5 md:pt-0 mb-0.5"
-					bind:this={inputRef}
-					bind:value
-					onKeydown={handleKeydown}
-					onInput={() => {
-						pickers.handleInput();
-						onValueChange?.(value);
-					}}
-					onPaste={handlePaste}
-					{disabled}
-					{placeholder}
-				/>
-			{:else}
-				<ChatFormTextarea
-					class="px-5 py-1.5 md:pt-0"
-					bind:this={inputRef}
-					bind:value
-					onKeydown={handleKeydown}
-					onInput={() => {
-						pickers.handleInput();
-						onValueChange?.(value);
-					}}
-					onPaste={handlePaste}
-					{disabled}
-					{placeholder}
-				/>
-			{/if}
+			<ChatFormInput
+				class="px-5 py-1.5 md:pt-0"
+				bind:this={inputRef}
+				bind:value
+				onKeydown={handleKeydown}
+				onInput={() => {
+					pickers.handleInput();
+					onValueChange?.(value);
+				}}
+				onPaste={handlePaste}
+				{disabled}
+				{placeholder}
+				{useRichInput}
+			/>
 
-			{#if mcpHasResourceAttachments()}
+			{#if mcpResourceStore.hasAttachments}
 				<ChatFormMcpResourcesList
 					class="mb-3"
 					onResourceClick={(uri) => {
@@ -642,7 +640,7 @@
 				onFileUpload={handleFileUpload}
 				onMicClick={handleMicClick}
 				{onStop}
-				onSystemPromptClick={() => onSystemPromptClick?.({ message: value, files: uploadedFiles })}
+				onSystemPromptClick={() => onSystemPromptClick?.({ files: uploadedFiles, message: value })}
 				onMcpPromptClick={showMcpPromptButton ? () => pickers.openPromptPicker() : undefined}
 				onMcpResourcesClick={() => (isResourceDialogOpen = true)}
 			/>
@@ -652,7 +650,7 @@
 	<ContextGaugePopup />
 
 	{#if toolsStore.hasEnabledCwdTools}
-		<ChatFormWorkingDirectory
+		<ChatFormCurrentWorkingDirectory
 			directory={cwd}
 			isOpen={pickers.isWorkingDirectoryPickerOpen}
 			bind:query={pickers.workingDirectoryQuery}

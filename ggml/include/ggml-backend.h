@@ -1,6 +1,6 @@
 // TurboPrefill by Trykhlieb
-// Port target: ggml-org/llama.cpp b10335, commit 74ce15741b420b8d6f12e720398458b576c51c2c
-// TurboPrefill_b10335_v2.0.0.0.5
+// Port target: ggml-org/llama.cpp b10451, commit 10bf611e533d81f739128304991c5e133c6aebd8
+// TurboPrefill_b10451_v2.1.3
 #pragma once
 
 #include "ggml.h"
@@ -157,6 +157,8 @@ extern "C" {
         bool buffer_from_host_ptr;
         // event synchronization
         bool events;
+        // mmap is supported for loading
+        bool mmap_support;
     };
 
     // all the device properties
@@ -346,6 +348,13 @@ extern "C" {
     GGML_API enum ggml_status     ggml_backend_sched_graph_compute_async(ggml_backend_sched_t sched, struct ggml_cgraph * graph);
     // TurboPrefill computes a graph while marking the current ubatch replay stage.
     GGML_API enum ggml_status     ggml_backend_sched_graph_compute_async_turboprefill(ggml_backend_sched_t sched, struct ggml_cgraph * graph, int turboprefill_stage);
+    // Repeats a tensor read after the deferred TurboPrefill ubatch has actually computed it.
+    GGML_API bool                 ggml_backend_sched_turboprefill_register_tensor_get(
+            ggml_backend_sched_t sched,
+            const struct ggml_tensor * tensor,
+            void * data,
+            size_t offset,
+            size_t size);
     GGML_API void                 ggml_backend_sched_synchronize(ggml_backend_sched_t sched);
 
     // Reset all assignments and allocators - must be called before changing the node backends or allocating a new graph.

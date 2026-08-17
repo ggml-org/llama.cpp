@@ -1,6 +1,6 @@
 // TurboPrefill by Trykhlieb
-// Port target: ggml-org/llama.cpp b10335, commit 74ce15741b420b8d6f12e720398458b576c51c2c
-// TurboPrefill_b10335_v2.0.0.0.5.1
+// Port target: ggml-org/llama.cpp b10451, commit 10bf611e533d81f739128304991c5e133c6aebd8
+// TurboPrefill_b10451_v2.1.3
 // Pinned arena keeps one reusable block sized to 1.5x the observed series peak.
 
 #ifdef _WIN32
@@ -882,6 +882,14 @@ struct ggml_backend_sched_tp_saved_ub {
     std::vector<std::vector<ggml_backend_sched_tp_tensor_meta>> split_metas;
     std::vector<std::unordered_map<const struct ggml_tensor *, size_t>> split_meta_index;
     std::vector<ggml_backend_sched_tp_tensor_meta> metas;
+    struct deferred_tensor_get {
+        const struct ggml_tensor * tensor;
+        void * data;
+        size_t offset;
+        size_t size;
+        int producer_split_id;
+    };
+    std::vector<deferred_tensor_get> deferred_tensor_gets;
 };
 
 enum ggml_backend_sched_tp_phase {
@@ -2070,7 +2078,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
     std::vector<ggml_bitset_t> used_ids;
 
     static constexpr const char * GGML_BACKEND_SCHED_TP_FILE_VERSION =
-            "TurboPrefill_b10335_v2.0.0.0.5.1";
+            "TurboPrefill_b10451_v2.1.3";
     static ggml_backend_sched_t tp_timing_sched = nullptr;
     static int64_t tp_series_begin_us = -1;
     static int64_t tp_capture_done_us = -1;
@@ -3112,6 +3120,25 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                 }
             }
 
+            for (const auto & deferred_get : saved.deferred_tensor_gets) {
+                if (deferred_get.producer_split_id != split_id) {
+                    continue;
+                }
+
+                ggml_backend_t src_backend = ggml_backend_sched_get_tensor_backend(
+                        sched, const_cast<struct ggml_tensor *>(deferred_get.tensor));
+                if (src_backend == nullptr || src_backend != split_backend) {
+                    return GGML_STATUS_FAILED;
+                }
+
+                ggml_backend_tensor_get_async(
+                        src_backend,
+                        deferred_get.tensor,
+                        deferred_get.data,
+                        deferred_get.offset,
+                        deferred_get.size);
+            }
+
             if (d2h_done_events[split_id] != nullptr) {
                 ggml_backend_event_record(d2h_done_events[split_id], split_backend);
             }
@@ -3315,6 +3342,53 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
     }
 
     return GGML_STATUS_SUCCESS;
+}
+
+bool ggml_backend_sched_turboprefill_register_tensor_get(
+        ggml_backend_sched_t sched,
+        const struct ggml_tensor * tensor,
+        void * data,
+        size_t offset,
+        size_t size) {
+
+    if (sched == nullptr || tensor == nullptr || data == nullptr || size == 0 ||
+            tensor->data == nullptr || offset > ggml_nbytes(tensor) || size > ggml_nbytes(tensor) - offset) {
+        return false;
+    }
+
+    auto & saved_ubs = ggml_backend_sched_tp_saved_ubs(sched);
+    if (saved_ubs.empty()) {
+        return false;
+    }
+
+    auto & saved = saved_ubs.back();
+    int producer_split_id = -1;
+    for (int split_id = 0; split_id < (int) saved.split_graphs.size(); ++split_id) {
+        const auto & split_graph = saved.split_graphs[split_id];
+        if (std::find(split_graph.nodes.begin(), split_graph.nodes.end(), tensor) != split_graph.nodes.end()) {
+            producer_split_id = split_id;
+            break;
+        }
+    }
+    if (producer_split_id < 0) {
+        return false;
+    }
+
+    // Split 0 has already completed and synchronized before the caller performs
+    // its original read, so no deferred overwrite is needed for that case.
+    if (producer_split_id == 0) {
+        return true;
+    }
+
+    saved.deferred_tensor_gets.push_back({
+        /*.tensor            =*/ tensor,
+        /*.data              =*/ data,
+        /*.offset            =*/ offset,
+        /*.size              =*/ size,
+        /*.producer_split_id =*/ producer_split_id,
+    });
+
+    return true;
 }
 
 ggml_backend_sched_t ggml_backend_sched_new(
