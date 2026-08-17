@@ -85,7 +85,7 @@ def _wait_for_model_status(model_id: str, desired: set[str], timeout: int = 60) 
         last_status = _get_model_status(model_id)
         if last_status in desired:
             return last_status
-        time.sleep(1)
+        time.sleep(0.01)
     raise AssertionError(
         f"Timed out waiting for {model_id} to reach {desired}, last status: {last_status}"
     )
@@ -143,6 +143,156 @@ def test_router_models_max_evicts_lru():
     # Verify eviction: third is loaded, first was evicted
     assert _get_model_status(third) == "loaded"
     assert _get_model_status(first) == "unloaded"
+
+
+# server_lru_sched tests (relying on LLAMA_SERVER_DEBUG_FAKE_TIMING)
+
+MODEL_A = "ggml-org/tinygemma3-GGUF:Q8_0"
+MODEL_B = "ggml-org/test-model-stories260K:F32"
+MODEL_C = "ggml-org/test-model-stories260K-infill:F32"
+
+
+def _tokenize(model_id: str, timeout: float | None = DEFAULT_REQUEST_TIMEOUT) -> ServerResponse:
+    return server.make_request(
+        "POST", "/tokenize", data={"model": model_id, "content": "hello world"}, timeout=timeout
+    )
+
+
+class _Bg:
+    """runs one request in a thread, keeps its result, error and finish time"""
+
+    def __init__(self, fn):
+        self.result = None
+        self.error: Exception | None = None
+        self.done_at: float = 0.0
+        self._thread = threading.Thread(target=self._run, args=(fn,), daemon=True)
+
+    def _run(self, fn):
+        try:
+            self.result = fn()
+        except Exception as e:
+            self.error = e
+        self.done_at = time.time()
+
+    def start(self):
+        self._thread.start()
+        return self
+
+    def join(self, timeout: int = 180):
+        self._thread.join(timeout)
+        assert not self._thread.is_alive(), "background request did not finish in time"
+        return self
+
+    def assert_ok(self, what: str):
+        assert self.error is None, f"{what} raised {self.error!r}"
+        assert self.result is not None and self.result.status_code == 200, \
+            f"{what} failed: {self.result.status_code if self.result else None} {self.result.body if self.result else None}"
+
+
+def test_router_queue_does_not_evict_busy_model():
+    """a request that finds no free slot waits, and the model serving a request survives it"""
+    global server
+    server.models_max = 1
+    server.start()
+
+    _load_model_and_wait(MODEL_A, timeout=120)
+
+    busy = _Bg(lambda: _tokenize(MODEL_A)).start()
+    time.sleep(0.5)  # let the request reach the child and take the only slot
+
+    # no slot free and MODEL_A is busy, so this queues instead of evicting mid-request
+    queued = _Bg(lambda: _tokenize(MODEL_B)).start()
+
+    busy.join()
+    queued.join()
+
+    # had MODEL_A been evicted while serving, its own request would have died
+    busy.assert_ok("request against the busy model")
+    queued.assert_ok("queued request")
+
+    _wait_for_model_status(MODEL_B, {"loaded"}, timeout=120)
+    assert _get_model_status(MODEL_A) == "unloaded"
+
+
+def test_router_queue_coalesces_requests_for_same_model():
+    """many requests for one missing model share a slot, so only one model is given up"""
+    global server
+    server.models_max = 2
+    server.start()
+
+    _load_model_and_wait(MODEL_A, timeout=120)
+    _load_model_and_wait(MODEL_B, timeout=120)
+
+    # keep MODEL_A busy so MODEL_B is the only model that can be given up
+    busy = _Bg(lambda: _tokenize(MODEL_A)).start()
+    time.sleep(0.5)
+
+    waiters = [_Bg(lambda: _tokenize(MODEL_C)).start() for _ in range(3)]
+
+    busy.join()
+    for w in waiters:
+        w.join()
+
+    busy.assert_ok("request against the busy model")
+    for i, w in enumerate(waiters):
+        w.assert_ok(f"queued request {i}")
+
+    _wait_for_model_status(MODEL_C, {"loaded"}, timeout=120)
+    # one entry for 3 requests means one eviction: MODEL_B goes, MODEL_A is left alone.
+    # without coalescing the leftover entries still ask for a slot,
+    # and MODEL_A is taken too as soon as it goes idle
+    assert _get_model_status(MODEL_A) == "loaded"
+    assert _get_model_status(MODEL_B) == "unloaded"
+
+
+def test_router_queue_client_disconnect_keeps_model():
+    """a client that leaves while queued must not cost a running model its slot"""
+    global server
+    server.models_max = 1
+    server.start()
+
+    _load_model_and_wait(MODEL_A, timeout=120)
+
+    busy = _Bg(lambda: _tokenize(MODEL_A)).start()
+    time.sleep(0.5)
+
+    # queues behind MODEL_A, then gives up long before MODEL_A goes idle
+    with pytest.raises(requests.exceptions.RequestException):
+        _tokenize(MODEL_B, timeout=1)
+
+    busy.join()
+    busy.assert_ok("request against the busy model")
+
+    # nobody is waiting anymore, so MODEL_A keeps its slot
+    time.sleep(3)
+    assert _get_model_status(MODEL_A) == "loaded"
+    assert _get_model_status(MODEL_B) == "unloaded"
+
+
+def test_router_queue_is_fifo():
+    """the queue is served in arrival order"""
+    global server
+    server.models_max = 1
+    server.start()
+
+    _load_model_and_wait(MODEL_A, timeout=120)
+
+    busy = _Bg(lambda: _tokenize(MODEL_A)).start()
+    time.sleep(0.5)
+
+    first = _Bg(lambda: _tokenize(MODEL_B)).start()
+    time.sleep(1)  # keep the arrival order unambiguous
+    second = _Bg(lambda: _tokenize(MODEL_C)).start()
+
+    busy.join()
+    first.join()
+    second.join()
+
+    busy.assert_ok("request against the busy model")
+    first.assert_ok("first queued request")
+    second.assert_ok("second queued request")
+
+    assert first.done_at < second.done_at, "queue was not served in arrival order"
 
 
 def test_router_no_models_autoload():
@@ -310,7 +460,7 @@ def _wait_for_sse_event(collected: list, event_type: str, model: str, timeout: i
     while time.time() < deadline:
         if any(e.get("event") == event_type and e.get("model") == model for e in collected):
             return True
-        time.sleep(0.5)
+        time.sleep(0.01)
     return False
 
 

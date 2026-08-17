@@ -1,11 +1,9 @@
 <script lang="ts">
-	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
-	import * as Tooltip from '$lib/components/ui/tooltip';
-	import { conversationsStore } from '$lib/stores/conversations.svelte';
-	import { mcpStore } from '$lib/stores/mcp.svelte';
-	import { HealthCheckStatus } from '$lib/enums';
-	import { MAX_DISPLAYED_MCP_AVATARS } from '$lib/constants';
 	import McpLogo from './McpLogo.svelte';
+	import * as Tooltip from '$lib/components/ui/tooltip';
+	import { ICON_CLASS_DEFAULT, MAX_DISPLAYED_MCP_AVATARS } from '$lib/constants';
+	import { HealthCheckStatus } from '$lib/enums';
+	import { conversationsStore, mcpStore } from '$lib/stores';
 
 	interface Props {
 		class?: string;
@@ -21,6 +19,7 @@
 	let healthyEnabledMcpServers = $derived(
 		enabledMcpServersForChat.filter((s) => {
 			const healthState = mcpStore.getHealthCheckState(s.id);
+
 			return healthState.status !== HealthCheckStatus.ERROR;
 		})
 	);

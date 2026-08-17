@@ -11,7 +11,7 @@ export const perfState = $state<{
 	toolMessages: DatabaseMessage[];
 	isStreaming: boolean;
 }>({
+	isStreaming: true,
 	message: null,
-	toolMessages: [],
-	isStreaming: true
+	toolMessages: []
 });

@@ -4,15 +4,17 @@ import json
 
 from typing import Any, Callable, Iterable, TYPE_CHECKING
 
+import numpy as np
 import torch
 
 if TYPE_CHECKING:
     from torch import Tensor
 
-from .base import ModelBase, TextModel, gguf, logger
+from .base import LazyTorchTensor, ModelBase, TextModel, gguf, logger
 
 
 @ModelBase.register("QWenLMHeadModel")
+@ModelBase.example("Qwen/Qwen-7B")
 class QwenModel(TextModel):
     model_arch = gguf.MODEL_ARCH.QWEN
 
@@ -51,6 +53,7 @@ class QwenModel(TextModel):
     "AudioFlamingo3ForConditionalGeneration",
     "DotsOCRForCausalLM",
 )
+@ModelBase.example("Qwen/Qwen2.5-7B-Instruct")
 class Qwen2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.QWEN2
 
@@ -71,6 +74,7 @@ class Qwen2Model(TextModel):
 
 
 @ModelBase.register("Qwen2MoeForCausalLM")
+@ModelBase.example("Qwen/Qwen1.5-MoE-A2.7B")
 class Qwen2MoeModel(TextModel):
     model_arch = gguf.MODEL_ARCH.QWEN2MOE
 
@@ -153,6 +157,7 @@ class Qwen2MoeModel(TextModel):
 
 
 @ModelBase.register("Qwen3ForCausalLM", "Qwen3Model")
+@ModelBase.example("Qwen/Qwen3-8B")
 class Qwen3Model(Qwen2Model):
     model_arch = gguf.MODEL_ARCH.QWEN3
 
@@ -251,6 +256,7 @@ class Qwen3Model(Qwen2Model):
 
 
 @ModelBase.register("Qwen3MoeForCausalLM")
+@ModelBase.example("Qwen/Qwen3-30B-A3B")
 class Qwen3MoeModel(Qwen2MoeModel):
     model_arch = gguf.MODEL_ARCH.QWEN3MOE
 
@@ -362,6 +368,7 @@ class _QwenMtpMixin:
 
 
 @ModelBase.register("Qwen3NextForCausalLM")
+@ModelBase.example("Qwen/Qwen3-Next-80B-A3B-Instruct")
 class Qwen3NextModel(_QwenMtpMixin, Qwen2MoeModel):
     model_arch = gguf.MODEL_ARCH.QWEN3NEXT
 
@@ -421,6 +428,7 @@ class Qwen3NextModel(_QwenMtpMixin, Qwen2MoeModel):
 
 
 @ModelBase.register("RND1")
+@ModelBase.example("radicalnumerics/RND1-Base-0910")
 class RND1Model(Qwen2MoeModel):
     model_arch = gguf.MODEL_ARCH.RND1
 
@@ -620,16 +628,19 @@ class _Qwen35MRopeMixin:
 
 
 @ModelBase.register("Qwen3_5ForConditionalGeneration", "Qwen3_5ForCausalLM")
+@ModelBase.example("Qwen/Qwen3.5-9B")
 class Qwen3_5TextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
     model_arch = gguf.MODEL_ARCH.QWEN35
 
 
 @ModelBase.register("Qwen3_5MoeForConditionalGeneration", "Qwen3_5MoeForCausalLM")
+@ModelBase.example("Qwen/Qwen3.5-35B-A3B")
 class Qwen3_5MoeTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
     model_arch = gguf.MODEL_ARCH.QWEN35MOE
 
 
 @ModelBase.register("DFlashDraftModel")
+@ModelBase.example("z-lab/Qwen3.5-9B-DFlash")
 class DFlashModel(Qwen3Model):
     model_arch = gguf.MODEL_ARCH.DFLASH
 
@@ -647,10 +658,13 @@ class DFlashModel(Qwen3Model):
         # own tokenizer logic, not the Qwen default).
         from . import get_model_class
         with open(self.target_model_dir / "config.json", "r", encoding="utf-8") as f:
-            target_arch = json.load(f)["architectures"][0]
+            target_hparams = json.load(f)
+            target_arch = target_hparams["architectures"][0]
         target_cls = get_model_class(target_arch)
 
         if target_cls is not type(self):
+            if target_arch == "NemotronHForCausalLM":
+                setattr(self, "is_moe", "num_experts_per_tok" in target_hparams)
             target_cls.set_vocab(self)  # ty: ignore[unresolved-attribute]
         else:
             super().set_vocab()
@@ -688,22 +702,89 @@ class DFlashModel(Qwen3Model):
             name = "model." + name
         return super().filter_tensors((name, gen))
 
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if name == "model.embed_tokens.weight" and not self.hparams.get("has_embed_tokens", True):
+            return
 
-@ModelBase.register("Qwen3DSparkModel")
+        yield from super().modify_tensors(data_torch, name, bid)
+
+
+@ModelBase.register("Qwen3DSparkModel", "DSparkDraftModel", "DSparkSpeculator")
+@ModelBase.example("satgeze/Qwen3.6-27B-DSpark")
 class DSparkModel(DFlashModel):
-    # DSpark = DFlash + a semi-autoregressive Markov head
+    # DSpark = DFlash + a semi-autoregressive Markov head.
     model_arch = gguf.MODEL_ARCH.DFLASH
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        # normalize the flat DeepSpec schema to DFlash's nested dflash_config
-        self.hparams.setdefault("dflash_config", {
-            k: self.hparams[k] for k in ("target_layer_ids", "mask_token_id") if k in self.hparams
-        })
+    def __init__(self, dir_model, *args, **kwargs):
+        hparams = kwargs.pop("hparams", None)
+        if hparams is None:
+            hparams = ModelBase.load_hparams(dir_model, False)
+
+        # EAGLE3-style exports use the 1+N bonus-anchor block, DFlash-lineage exports sample from the anchor
+        self._sample_from_anchor = hparams.get(
+            "sample_from_anchor",
+            "transformer_layer_config" not in hparams and "aux_hidden_state_layer_ids" not in hparams)
+        if "transformer_layer_config" in hparams:
+            hparams = {**hparams, **hparams["transformer_layer_config"]}
+
+        super().__init__(dir_model, *args, hparams=hparams, **kwargs)
+
+        # normalize both schemas to DFlash's nested dflash_config
+        if "aux_hidden_state_layer_ids" in self.hparams:
+            self.hparams.setdefault("dflash_config", {
+                "mask_token_id": self.hparams.get("mask_token_id"),
+                "target_layer_ids": [i - 1 for i in self.hparams["aux_hidden_state_layer_ids"]],
+            })
+        else:
+            self.hparams.setdefault("dflash_config", {
+                k: self.hparams[k] for k in ("target_layer_ids", "mask_token_id") if k in self.hparams
+            })
+
+        if (markov_head_type := self.hparams.get("markov_head_type", "vanilla")) != "vanilla":
+            raise ValueError(f"unsupported markov_head_type {markov_head_type!r} (only 'vanilla' is supported)")
+
+        n_vocab = self.hparams["vocab_size"]
+        self._n_vocab_draft = self.hparams.get("draft_vocab_size") or n_vocab
+        if self._n_vocab_draft > n_vocab:
+            raise ValueError(f"draft_vocab_size {self._n_vocab_draft} exceeds vocab_size {n_vocab}")
+        self._d2t: Tensor | None = None
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        self.gguf_writer.add_sample_from_anchor(self._sample_from_anchor)
 
     @classmethod
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
-        name, gen = item
-        if name.endswith(("embed_tokens.weight", "lm_head.weight")):
+        if item[0] == "t2d":  # not used at runtime
             return None
-        return super().filter_tensors((name, gen))
+        return super().filter_tensors(item)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if name == "model.d2t":
+            self._d2t = data_torch
+            return
+
+        if self._n_vocab_draft == self.hparams["vocab_size"] and name.endswith(("embed_tokens.weight", "lm_head.weight")):
+            return
+
+        yield from super().modify_tensors(data_torch, name, bid)
+
+    def prepare_tensors(self):
+        super().prepare_tensors()
+
+        n_vocab = self.hparams["vocab_size"]
+        if self._n_vocab_draft < n_vocab and self._d2t is None:
+            raise ValueError(f"draft_vocab_size {self._n_vocab_draft} < vocab_size {n_vocab} but no d2t table found")
+
+        # write d2t as absolute target token ids
+        if self._d2t is not None:
+            data = LazyTorchTensor.to_eager(self._d2t).to(torch.int64).cpu().numpy().reshape(-1)
+            if data.size != self._n_vocab_draft:
+                raise ValueError(f"d2t size {data.size} does not match draft_vocab_size {self._n_vocab_draft}")
+            data = data + np.arange(data.size, dtype=np.int64)
+            if np.any((data < 0) | (data >= n_vocab)):
+                raise ValueError(f"d2t target ids out of range for target vocab size {n_vocab}")
+            if np.unique(data).size != data.size:
+                raise ValueError("d2t contains duplicate target ids")
+            logger.info(f"{'d2t,':<30} --> I64, shape = {{{data.size}}}")
+            self.gguf_writer.add_tensor("d2t", data, raw_dtype=gguf.GGMLQuantizationType.I64)

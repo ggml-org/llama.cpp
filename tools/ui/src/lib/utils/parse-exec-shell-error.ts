@@ -2,8 +2,10 @@ export function parseExecShellCommandError(
 	toolResultString: string | undefined
 ): string | undefined {
 	if (!toolResultString) return undefined;
+
 	try {
 		const parsed: unknown = JSON.parse(toolResultString);
+
 		if (
 			parsed &&
 			typeof parsed === 'object' &&
@@ -15,5 +17,6 @@ export function parseExecShellCommandError(
 	} catch {
 		// Plain-text result = stdout/stderr, no structured error to surface.
 	}
+
 	return undefined;
 }
