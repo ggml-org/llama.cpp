@@ -56,11 +56,6 @@ struct ggml_cuda_default_vendor_policy {
     static constexpr bool supports_mmvq = true;
     static constexpr bool supports_mmvq_fusion = true;
     static constexpr bool supports_transposed_mmvf = true;
-
-    static constexpr __host__ __device__ int mmvq_warp_size(int warp_size) {
-        return warp_size;
-    }
-
 };
 
 #define GGML_CUDA_VENDOR_POLICY ggml_cuda_default_vendor_policy
@@ -409,7 +404,7 @@ static bool ggml_cuda_is_aligned(const ggml_tensor * tensor, const size_t alignm
            tensor->nb[3] % alignment == 0;
 }
 
-static constexpr __host__ __device__ int ggml_cuda_get_physical_warp_size() {
+static constexpr __device__ int ggml_cuda_get_physical_warp_size() {
 #if defined(GGML_USE_HIP) && (defined(__GFX9__) || defined(__GFX8__))
     return 64;
 #else
@@ -768,9 +763,7 @@ static __device__ __forceinline__ int ggml_cuda_dp4a(const int a, const int b, i
 
 #else // defined(GGML_USE_HIP)
 
-#if defined(GGML_CUDA_VENDOR_DP4A)
-    return GGML_CUDA_VENDOR_DP4A(a, b, c);
-#elif __CUDA_ARCH__ >= GGML_CUDA_CC_DP4A || defined(GGML_USE_MUSA)
+#if __CUDA_ARCH__ >= GGML_CUDA_CC_DP4A || defined(GGML_USE_MUSA)
     return __dp4a(a, b, c);
 #else // __CUDA_ARCH__ >= GGML_CUDA_CC_DP4A || defined(GGML_USE_MUSA)
     const int8_t * a8 = (const int8_t *) &a;

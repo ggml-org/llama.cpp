@@ -16,10 +16,8 @@ The initial implementation uses these matrix multiplication routes:
 | Workload | Route |
 | --- | --- |
 | F16/F32 matrix multiplication | CUDA-compatible path backed by mcBLAS |
-| Quantized prefill | dequantization followed by mcBLAS |
-| Q8_0 single-token decode | logical-warp32 MMVQ with MACA `sdot4` |
-| Q4_0 single-token decode | shared MMVQ compatibility path |
-| Unvalidated fused or indexed quantized operations | conservative fallback |
+| Quantized matrix multiplication, including prefill and decode | dequantization followed by mcBLAS |
+| Unvalidated fused or indexed operations | conservative fallback |
 
 ## Requirements
 
@@ -158,10 +156,11 @@ coverage disabled or on conservative fallbacks:
 - NCCL is disabled.
 - virtual memory management is disabled.
 - peer copy is disabled.
-- quantized fusion and MMVQ `MUL_MAT_ID` use fallback paths.
+- MMVQ, quantized fusion, and optimized `MUL_MAT_ID` paths are disabled;
+  quantized matrix multiplication uses the dequantization plus mcBLAS fallback.
 - graph capture and replay are experimental and disabled by default; set
   `MACA_GRAPHS=ON` when using the helper build, or configure CMake with
   `-DGGML_MACA_GRAPHS=ON`, for targeted testing.
 
-Q8_0 decode includes MACA-specific tuning. Other quantization formats use the
-shared compatibility paths and remain candidates for follow-up optimization.
+Dedicated MMVQ and integer dot-product kernels remain candidates for follow-up
+optimization after targeted correctness and performance validation.
