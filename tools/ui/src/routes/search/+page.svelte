@@ -3,7 +3,6 @@
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { SearchInput, SidebarNavigationSearchResults } from '$lib/components/app';
-	import { ROUTES } from '$lib/constants';
 	import { RouterService } from '$lib/services/router.service';
 	import { chatStore, conversationsStore, deviceStore } from '$lib/stores';
 
@@ -21,10 +20,10 @@
 	});
 
 	// Search page is intended for mobile; on desktop the sidebar already exposes
-	// in-place search, so bounce back to a chat.
+	// in-place search, so bounce back to a new-chat tab.
 	$effect(() => {
 		if (browser && !deviceStore.isMobile) {
-			goto(ROUTES.NEW_CHAT, { replaceState: true });
+			conversationsStore.openNewChatTab();
 		}
 	});
 
@@ -66,7 +65,7 @@
 		if (history.length > 1) {
 			history.back();
 		} else {
-			goto(ROUTES.NEW_CHAT);
+			conversationsStore.openNewChatTab();
 		}
 	}
 </script>
