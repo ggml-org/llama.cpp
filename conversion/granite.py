@@ -15,6 +15,7 @@ from .mamba import Mamba2Model
 
 
 @ModelBase.register("GraniteForCausalLM")
+@ModelBase.example("ibm-granite/granite-3.3-2b-instruct")
 class GraniteModel(LlamaModel):
     """Conversion for IBM's GraniteForCausalLM"""
     model_arch = gguf.MODEL_ARCH.GRANITE
@@ -74,6 +75,7 @@ class GraniteModel(LlamaModel):
 
 
 @ModelBase.register("GraniteMoeForCausalLM", "GraniteMoeSharedForCausalLM")
+@ModelBase.example("ibm-granite/granite-3.1-3b-a800m-instruct")
 class GraniteMoeModel(GraniteModel):
     """Conversion for IBM's GraniteMoeForCausalLM"""
     model_arch = gguf.MODEL_ARCH.GRANITE_MOE
@@ -124,6 +126,7 @@ class GraniteMoeModel(GraniteModel):
 
 
 @ModelBase.register("GraniteSwitchForCausalLM")
+@ModelBase.example("ibm-granite/granite-switch-4.1-3b-preview")
 class GraniteSwitchModel(GraniteMoeModel):
     """Dense, all-attention Granite with N per-token embedded LoRA adapters, stacked
     over the adapter dim with a zero adapter at slot 0 (N = num_adapters + 1)."""
@@ -284,6 +287,7 @@ class GraniteSwitchModel(GraniteMoeModel):
 
 
 @ModelBase.register("GraniteMoeHybridForCausalLM", "BambaForCausalLM")
+@ModelBase.example("ibm-granite/granite-4.0-h-tiny", "ibm-ai-platform/Bamba-9B-v2")
 class GraniteHybridModel(Mamba2Model, GraniteMoeModel):
     """GraniteHybrid is a hybrid SSM + Attention model that uses Mamba2 SSM
     layers and optionally uses MoE w/ a shared expert"""
@@ -426,6 +430,7 @@ class GraniteHybridModel(Mamba2Model, GraniteMoeModel):
 
 
 @ModelBase.register("GraniteSpeechForConditionalGeneration")
+@ModelBase.example("ibm-granite/granite-speech-3.3-2b", "ibm-granite/granite-4.0-1b-speech")
 class GraniteSpeechMmprojModel(MmprojModel):
     has_vision_encoder = False
     has_audio_encoder = True
@@ -509,6 +514,7 @@ class GraniteSpeechMmprojModel(MmprojModel):
 
 
 @ModelBase.register("GraniteSpeechPlusForConditionalGeneration")
+@ModelBase.example("ibm-granite/granite-speech-4.1-2b-plus")
 class GraniteSpeechPlusMmprojModel(GraniteSpeechMmprojModel):
     """Conversion for GraniteSpeechPlus - extends GraniteSpeech with feature layer concatenation"""
     has_vision_encoder = False
@@ -537,6 +543,7 @@ class GraniteSpeechPlusMmprojModel(GraniteSpeechMmprojModel):
 
 
 @ModelBase.register("Granite4VisionForConditionalGeneration")
+@ModelBase.example("ibm-granite/granite-4.0-3b-vision")
 class Granite4VisionMmprojModel(MmprojModel):
     has_vision_encoder = True
     has_audio_encoder = False

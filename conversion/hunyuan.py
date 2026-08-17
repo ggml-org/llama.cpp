@@ -17,6 +17,7 @@ from .qwen import QwenModel
 
 
 @ModelBase.register("HunYuanMoEV1ForCausalLM")
+@ModelBase.example("tencent/Hunyuan-A13B-Instruct")
 class HunYuanMoEModel(TextModel):
     model_arch = gguf.MODEL_ARCH.HUNYUAN_MOE
 
@@ -154,6 +155,7 @@ class HunYuanMoEModel(TextModel):
 
 
 @ModelBase.register("HunYuanDenseV1ForCausalLM")
+@ModelBase.example("tencent/Hunyuan-4B-Instruct")
 class HunYuanModel(TextModel):
     model_arch = gguf.MODEL_ARCH.HUNYUAN_DENSE
 
@@ -290,6 +292,7 @@ class HunYuanModel(TextModel):
 
 
 @ModelBase.register("HunYuanVLForConditionalGeneration")
+@ModelBase.example("tencent/HunyuanOCR")
 class HunyuanVLVisionModel(MmprojModel):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -333,6 +336,7 @@ class HunyuanVLVisionModel(MmprojModel):
 
 
 @ModelBase.register("HunYuanVLForConditionalGeneration")
+@ModelBase.example("tencent/HunyuanOCR")
 class HunyuanVLTextModel(HunYuanModel):
     model_arch = gguf.MODEL_ARCH.HUNYUAN_VL
 
@@ -365,6 +369,7 @@ class HunyuanVLTextModel(HunYuanModel):
 
 
 @ModelBase.register("HYV3ForCausalLM")
+@ModelBase.example("tencent/Hy3")
 class HYV3Model(TextModel):
     model_arch = gguf.MODEL_ARCH.HY_V3
     supports_mtp_export = True

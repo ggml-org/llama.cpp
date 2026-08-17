@@ -14,6 +14,7 @@ from .base import ModelBase, TextModel, gguf, logger
 
 
 @ModelBase.register("MambaForCausalLM", "MambaLMHeadModel", "FalconMambaForCausalLM")
+@ModelBase.example("state-spaces/mamba-130m-hf", "tiiuae/falcon-mamba-7b")
 class MambaModel(TextModel):
     model_arch = gguf.MODEL_ARCH.MAMBA
 
@@ -100,6 +101,7 @@ class MambaModel(TextModel):
 
 
 @ModelBase.register("Mamba2ForCausalLM")
+@ModelBase.example("mistralai/Mamba-Codestral-7B-v0.1")
 class Mamba2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.MAMBA2
 

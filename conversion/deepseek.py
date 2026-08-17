@@ -18,6 +18,7 @@ from .qwen import QwenModel
 
 
 @ModelBase.register("DeepseekOCRForCausalLM")
+@ModelBase.example("deepseek-ai/DeepSeek-OCR")
 class DeepseekOCRVisionModel(MmprojModel):
     # HF dynamic_preprocess() max_num, which differs per model
     preproc_max_tiles = 9
@@ -100,11 +101,13 @@ class DeepseekOCRVisionModel(MmprojModel):
 
 
 @ModelBase.register("UnlimitedOCRForCausalLM")
+@ModelBase.example("baidu/Unlimited-OCR")
 class UnlimitedOCRVisionModel(DeepseekOCRVisionModel):
     preproc_max_tiles = 32
 
 
 @ModelBase.register("DeepseekOCR2ForCausalLM")
+@ModelBase.example("deepseek-ai/DeepSeek-OCR-2")
 class DeepseekOCR2VisionModel(DeepseekOCRVisionModel):
     preproc_max_tiles = 6
 
@@ -134,6 +137,7 @@ class DeepseekOCR2VisionModel(DeepseekOCRVisionModel):
 
 
 @ModelBase.register("DeepseekForCausalLM")
+@ModelBase.example("deepseek-ai/deepseek-moe-16b-chat")
 class DeepseekModel(TextModel):
     model_arch = gguf.MODEL_ARCH.DEEPSEEK
 
@@ -228,6 +232,7 @@ class DeepseekModel(TextModel):
     "YoutuForCausalLM",
     "YoutuVLForConditionalGeneration",
 )
+@ModelBase.example("deepseek-ai/DeepSeek-V2-Lite", "deepseek-ai/DeepSeek-V3")
 class DeepseekV2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.DEEPSEEK2
 
@@ -457,6 +462,7 @@ class DeepseekV2Model(TextModel):
 
 
 @ModelBase.register("DeepseekV32ForCausalLM")
+@ModelBase.example("deepseek-ai/DeepSeek-V3.2-Exp")
 class DeepseekV32Model(DeepseekV2Model):
     model_arch = gguf.MODEL_ARCH.DEEPSEEK32
     skip_mtp = False
@@ -517,6 +523,7 @@ class DeepseekV32Model(DeepseekV2Model):
 
 
 @ModelBase.register("DeepseekV4ForCausalLM")
+@ModelBase.example("deepseek-ai/DeepSeek-V4-Flash-Base")
 class DeepseekV4Model(TextModel):
     model_arch = gguf.MODEL_ARCH.DEEPSEEK4
     supports_mtp_export = True
@@ -911,6 +918,7 @@ class DeepseekV4Model(TextModel):
 
 
 @ModelBase.register("DeepseekV4DSparkModel")
+@ModelBase.example("deepseek-ai/DeepSeek-V4-Flash-DSpark")
 class DeepseekV4DSparkModel(DeepseekV4Model):
     model_arch = gguf.MODEL_ARCH.DFLASH
 

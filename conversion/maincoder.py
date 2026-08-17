@@ -4,6 +4,7 @@ from .base import ModelBase, TextModel, gguf
 
 
 @ModelBase.register("MaincoderForCausalLM")
+@ModelBase.example("Maincode/Maincoder-1B")
 class MaincoderModel(TextModel):
     model_arch = gguf.MODEL_ARCH.MAINCODER
 

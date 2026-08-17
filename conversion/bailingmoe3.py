@@ -13,6 +13,7 @@ from .base import ModelBase, TextModel, gguf
 
 
 @ModelBase.register("BailingMoeV3ForCausalLM")
+@ModelBase.example("inclusionAI/Ling-3.0-tiny", "inclusionAI/Ling-3.0-flash")
 class BailingMoeV3Model(TextModel):
     model_arch = gguf.MODEL_ARCH.BAILINGMOE3
     supports_mtp_export = True

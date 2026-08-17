@@ -11,6 +11,7 @@ from .base import ModelBase, TextModel, gguf
 
 
 @ModelBase.register("BailingMoeForCausalLM")
+@ModelBase.example("inclusionAI/Ling-lite")
 class BailingMoeModel(TextModel):
     model_arch = gguf.MODEL_ARCH.BAILINGMOE
 
@@ -108,6 +109,7 @@ class BailingMoeModel(TextModel):
 
 
 @ModelBase.register("BailingMoeV2ForCausalLM")
+@ModelBase.example("inclusionAI/Ling-mini-2.0")
 class BailingMoeV2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.BAILINGMOE2
 
@@ -189,6 +191,7 @@ class BailingMoeV2Model(TextModel):
 
 
 @ModelBase.register("SarvamMoEForCausalLM", "modeling_sarvam_moe.SarvamMoEForCausalLM")
+@ModelBase.example("sarvamai/sarvam-30b")
 class SarvamMoEModel(BailingMoeV2Model):
     model_arch = gguf.MODEL_ARCH.BAILINGMOE2
     # Sarvam-MoE shares the BailingMoeV2 architecture; only differences:

@@ -12,6 +12,7 @@ from .base import ModelBase, TextModel, MmprojModel, gguf, logger
 
 @ModelBase.register("MiniMaxText01ForCausalLM")
 @ModelBase.register("MiniMaxM1ForCausalLM")
+@ModelBase.example("MiniMaxAI/MiniMax-Text-01", "MiniMaxAI/MiniMax-M1-40k")
 class MiniMaxText01Model(TextModel):
     model_arch = gguf.MODEL_ARCH.MINIMAX01
 
@@ -119,6 +120,7 @@ class MiniMaxText01Model(TextModel):
 
 
 @ModelBase.register("MiniMaxM2ForCausalLM")
+@ModelBase.example("MiniMaxAI/MiniMax-M2")
 class MiniMaxM2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.MINIMAXM2
     _experts_cache: dict[int, dict[str, Tensor]] = {}
@@ -163,6 +165,7 @@ class MiniMaxM2Model(TextModel):
 
 
 @ModelBase.register("MiniMaxM3SparseForCausalLM", "MiniMaxM3SparseForConditionalGeneration")
+@ModelBase.example("MiniMaxAI/MiniMax-M3")
 class MiniMaxM3Model(MiniMaxM2Model):
     model_arch = gguf.MODEL_ARCH.MINIMAXM3
 
@@ -203,6 +206,7 @@ class MiniMaxM3Model(MiniMaxM2Model):
 
 
 @ModelBase.register("MiniMaxM3SparseForConditionalGeneration", "MiniMaxM3VLForConditionalGeneration")
+@ModelBase.example("MiniMaxAI/MiniMax-M3")
 class MiniMaxM3VisionModel(MmprojModel):
     @classmethod
     def filter_tensors(cls, item):

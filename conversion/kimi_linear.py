@@ -13,6 +13,7 @@ from .qwen import QwenModel
 
 
 @ModelBase.register("KimiLinearModel", "KimiLinearForCausalLM")
+@ModelBase.example("moonshotai/Kimi-Linear-48B-A3B-Instruct")
 class KimiLinearModel(TextModel):
     """Kimi-Linear model with hybrid MLA+KDA architecture"""
     model_arch = gguf.MODEL_ARCH.KIMI_LINEAR

@@ -11,6 +11,8 @@ from .base import ModelBase, TextModel, gguf
 
 
 @ModelBase.register("Jais2ForCausalLM")
+# [TAG_HF_EXAMPLE_GATED] inceptionai/Jais-2-8B-Chat is gated
+# [TAG_HF_EXAMPLE_MISSING]
 class Jais2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.JAIS2
 
@@ -22,6 +24,7 @@ class Jais2Model(TextModel):
 
 
 @ModelBase.register("JAISLMHeadModel")
+@ModelBase.example("inceptionai/jais-family-590m")
 class JaisModel(TextModel):
     model_arch = gguf.MODEL_ARCH.JAIS
 

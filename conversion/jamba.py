@@ -11,6 +11,7 @@ from .base import ModelBase, TextModel, gguf, logger
 
 
 @ModelBase.register("JambaForCausalLM")
+@ModelBase.example("ai21labs/Jamba-v0.1")
 class JambaModel(TextModel):
     model_arch = gguf.MODEL_ARCH.JAMBA
 
