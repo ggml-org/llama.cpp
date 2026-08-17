@@ -326,8 +326,8 @@ class AgenticStore {
 		const maxTurns = Number(settings.agenticMaxTurns) || DEFAULT_AGENTIC_CONFIG.maxTurns;
 		const hasTools =
 			mcpStore.hasEnabledServers(perChatOverrides) ||
-			toolsStore.builtinTools.length > 0 ||
-			toolsStore.frontendTools.length > 0 ||
+			toolsStore.serverTools.length > 0 ||
+			toolsStore.browserTools.length > 0 ||
 			toolsStore.customTools.length > 0;
 
 		return {
@@ -455,9 +455,9 @@ class AgenticStore {
 		this._continueResolvers.delete(conversationId);
 		this._steeringMessages.delete(conversationId);
 
-		// Ensure built-in tools are fetched before checking if agentic is enabled
-		if (toolsStore.builtinTools.length === 0 && !toolsStore.loading) {
-			await toolsStore.fetchBuiltinTools();
+		// Ensure server tools are fetched before checking if agentic is enabled
+		if (toolsStore.serverTools.length === 0 && !toolsStore.loading) {
+			await toolsStore.fetchServerTools();
 		}
 
 		const agenticConfig = this.getConfig(settingsStore.config, perChatOverrides);
@@ -906,8 +906,8 @@ class AgenticStore {
 				} else {
 					try {
 						if (
-							toolSource === ToolSource.BUILTIN &&
-							toolName === BuiltInTool.EXEC_SHELL_COMMAND &&
+							toolSource === ToolSource.SERVER &&
+							toolName === BuiltInTool.SERVER_EXEC_SHELL_COMMAND &&
 							createToolResultMessage &&
 							updateToolResultMessage
 						) {
@@ -938,7 +938,7 @@ class AgenticStore {
 								}
 							}
 							result = accumulated;
-						} else if (toolSource === ToolSource.BUILTIN) {
+						} else if (toolSource === ToolSource.SERVER) {
 							const args = this.parseToolArguments(toolCall.function.arguments);
 							const cwd = conversationsStore.activeConversation?.cwd;
 							const executionResult = await ToolsService.executeTool(toolName, args, signal, cwd);
@@ -946,16 +946,16 @@ class AgenticStore {
 							result = executionResult.content;
 
 							if (executionResult.isError) toolSuccess = false;
-						} else if (toolSource === ToolSource.FRONTEND) {
+						} else if (toolSource === ToolSource.BROWSER) {
 							const args = this.parseToolArguments(toolCall.function.arguments);
 
 							let executionResult: ToolExecutionResult;
 
-							if (toolName === BuiltInTool.GET_DATETIME) {
+							if (toolName === BuiltInTool.BROWSER_GET_DATETIME) {
 								executionResult = executeGetDatetimeTool();
-							} else if (toolName === BuiltInTool.GET_INFO) {
+							} else if (toolName === BuiltInTool.SERVER_GET_INFO) {
 								executionResult = executeBrowserInfoTool();
-							} else if (toolName === BuiltInTool.READ_MEDIA) {
+							} else if (toolName === BuiltInTool.BROWSER_READ_MEDIA) {
 								executionResult = await ReadMediaService.executeTool(
 									args,
 									{
