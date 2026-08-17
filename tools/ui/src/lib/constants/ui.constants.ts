@@ -55,7 +55,7 @@ export const ICON_STRIP_TRANSITION_DELAY_MULTIPLIER = 50;
 export const MAX_HEIGHT_CODE_BLOCK = '22rem';
 
 export const SIDEBAR_ACTIONS_ITEMS: DesktopIconStripItem[] = [
-	{ icon: SquarePen, keys: ['shift', 'cmd', 'o'], route: ROUTES.NEW_CHAT, tooltip: 'New chat' },
+	{ action: 'new-chat', icon: SquarePen, keys: ['shift', 'cmd', 'o'], tooltip: 'New chat' },
 	{ icon: Search, keys: ['cmd', 'k'], tooltip: 'Search' },
 	{
 		activeRouteId: '/mcp-servers',
