@@ -121,6 +121,7 @@ void llama_model_saver::add_kv(const enum llm_kv key, const Container & value, c
 }
 // instantiate for external usage:
 template void llama_model_saver::add_kv<std::vector<uint32_t>>(const enum llm_kv, const std::vector<uint32_t> &, const bool);
+template void llama_model_saver::add_kv<std::vector<float>>(const enum llm_kv, const std::vector<float> &, const bool);
 
 void llama_model_saver::add_kv(const enum llm_kv key, const std::vector<std::string> & value) {
     std::vector<const char *> tmp(value.size());
@@ -216,8 +217,10 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_EXPERT_LATENT_LENGTH,              hparams.n_expert_latent);
     add_kv(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, hparams.n_ff_shexp);
     add_kv(LLM_KV_EXPERT_CHUNK_FEED_FORWARD_LENGTH,  hparams.n_ff_chexp);
-    add_kv(LLM_KV_SWIGLU_CLAMP_EXP,                  hparams.swiglu_clamp_exp);
-    add_kv(LLM_KV_SWIGLU_CLAMP_SHEXP,                hparams.swiglu_clamp_shexp);
+    add_kv(LLM_KV_SWIGLU_CLAMP_EXP, std::vector<float>(
+            hparams.swiglu_clamp_exp.begin(), hparams.swiglu_clamp_exp.begin() + hparams.n_layer_all));
+    add_kv(LLM_KV_SWIGLU_CLAMP_SHEXP, std::vector<float>(
+            hparams.swiglu_clamp_shexp.begin(), hparams.swiglu_clamp_shexp.begin() + hparams.n_layer_all));
     add_kv(LLM_KV_USE_PARALLEL_RESIDUAL,             hparams.use_par_res);
     // add_kv(LLM_KV_TENSOR_DATA_LAYOUT,                ???);
     add_kv(LLM_KV_EXPERT_COUNT,                      hparams.n_expert);
@@ -320,6 +323,7 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_SSM_DT_B_C_RMS,                    hparams.ssm_dt_b_c_rms);
 
     add_kv(LLM_KV_KDA_HEAD_DIM,                      hparams.n_embd_head_kda);
+    add_kv(LLM_KV_KDA_SAFE_GATE,                     hparams.kda_safe_gate);
     add_kv(LLM_KV_KDA_GATE_LOWER_BOUND,              hparams.kda_gate_lower_bound);
 
     add_kv(LLM_KV_WKV_HEAD_SIZE,                     hparams.wkv_head_size);

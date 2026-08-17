@@ -90,6 +90,7 @@ static void test_normalize_quotes_with_embedded_quotes(testing & t);
 
 // TAG_WITH_TAGGED argument parsing tests
 static void test_tagged_args_with_embedded_quotes(testing & t);
+static void test_bailing_v3_tool_format(testing & t);
 
 static void test_role_markers_all_templates(testing & t);
 
@@ -118,6 +119,7 @@ int main(int argc, char * argv[]) {
     t.test("standard_json_tools", test_standard_json_tools_formats);
     t.test("normalize_quotes_to_json", test_normalize_quotes_to_json);
     t.test("tagged_args_embedded_quotes", test_tagged_args_with_embedded_quotes);
+    t.test("bailing_v3", test_bailing_v3_tool_format);
     t.test("role_markers_all_templates", test_role_markers_all_templates);
 
     return t.summary();
@@ -2081,6 +2083,68 @@ static void test_role_markers_all_templates(testing & t) {
     }
 }
 
+static void test_bailing_v3_tool_format(testing & t) {
+    const std::string template_source = R"JINJA(
+{# Bailing V3 chat template #}
+{%- if tools %}{{ tools | tojson }}{%- endif %}
+{%- for message in messages %}
+    {%- if message.role == "user" %}
+        {{- '<role>HUMAN</role>' + message.content + '<|role_end|>' }}
+    {%- elif message.role == "assistant" %}
+        {{- '<role>ASSISTANT</role>' }}
+        {%- if message.tool_calls %}
+            {%- for tool_call in message.tool_calls %}
+                {%- set tc = tool_call.function %}
+                {{- '<tool_call>' + tc.name }}
+                {%- for k, v in tc.arguments.items() %}
+                    {{- '<arg_key>' + k + '</arg_key>' }}
+                    {{- '\n<arg_value>' + v + '</arg_value>' }}
+                {%- endfor %}
+                {{- '\n</tool_call>' }}
+            {%- endfor %}
+        {%- endif %}
+        {{- '<|role_end|>' }}
+    {%- endif %}
+{%- endfor %}
+{%- if add_generation_prompt %}{{- '<role>ASSISTANT</role>' }}{%- endif %}
+)JINJA";
+
+    common_chat_template tmpl(template_source, "", "");
+    struct autoparser analysis;
+    analysis.analyze_template(tmpl);
+
+    t.assert_equal("arg_value_suffix", "</arg_value>", analysis.tools.arguments.value_suffix);
+    t.assert_true("intertag whitespace", analysis.tools.arguments.tolerate_intertag_whitespace);
+
+    generation_params inputs;
+    inputs.tools = json::array({
+        {
+            { "type", "function" },
+            { "function", {
+                { "name", "test_function_name" },
+                { "parameters", {
+                    { "type", "object" },
+                    { "properties", {
+                        { "param1", { { "type", "string" } } },
+                        { "param2", { { "type", "string" } } },
+                    } },
+                } },
+            } },
+        },
+    });
+    inputs.reasoning_format = COMMON_REASONING_FORMAT_NONE;
+    auto parser = analysis.build_parser(inputs, "");
+    const std::string output =
+        "<tool_call>test_function_name\n"
+        "<arg_key>param1</arg_key>\n"
+        "<arg_value>value1</arg_value>"
+        "<arg_key>param2</arg_key>\n"
+        "<arg_value>value2</arg_value>\n"
+        "</tool_call>";
+    common_peg_parse_context ctx(output, COMMON_PEG_PARSE_FLAG_LENIENT);
+    t.assert_true("multi-argument tool call", parser.parse(ctx).success());
+}
+
 // Test that reproduces the Seed-OSS template issue with embedded quotes
 static void test_tagged_args_with_embedded_quotes(testing & t) {
     json tools = build_edit_tool();
@@ -2198,4 +2262,3 @@ static void test_tagged_args_with_embedded_quotes(testing & t) {
         }
     }
 }
-

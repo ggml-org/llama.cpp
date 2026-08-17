@@ -193,6 +193,14 @@ static std::vector<std::function<void(const common_chat_template & tmpl, autopar
               LOG_DBG(ANSI_ORANGE "[Patch: Laguna]\n" ANSI_RESET);
           }
       },
+      // Bailing V3
+      [](const common_chat_template & tmpl, autoparser & analysis) -> void {
+          if (tmpl.src.find("Bailing V3 chat template") != std::string::npos) {
+              analysis.tools.arguments.value_suffix = trim_whitespace(analysis.tools.arguments.value_suffix);
+              analysis.tools.arguments.tolerate_intertag_whitespace = true;
+              LOG_DBG(ANSI_ORANGE "[Patch: Bailing V3]\n" ANSI_RESET);
+          }
+      },
 
     });
 
