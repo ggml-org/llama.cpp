@@ -272,8 +272,7 @@ bool server_telemetry_init(bool enabled, const std::string & service_version, st
         auto processor = otel_sdk::BatchSpanProcessorFactory::Create(std::move(exporter), processor_options);
 
         otel_res::ResourceAttributes attributes = {
-            { "service.name",    std::string("llama-server") },
-            { "service.version", service_version             },
+            { "service.version", service_version },
         };
         auto                                      resource = otel_res::Resource::Create(attributes);
         auto                                      sampler  = make_sampler();
