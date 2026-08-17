@@ -1,12 +1,11 @@
-// The tests below define the scheduler and backend behavior for every combination of asynchronous backends
-// On a machine with CPU and CUDA backends only, that means CPU->CPU, CPU->CUDA, CUDA->CPU and CUDA->CUDA
+// Test suite for scheduler and backend behavior
 
-// Formalized scheduling behavior:
+// Towards formalized scheduling behavior:
 // - a single inference pass can run on several backends. The subset of nodes running on a single backend is a split
 // - synchronous backends:
 //      - explicit synchronization (ggml_backend_synchronize()) is required between each operation
 // - asynchronous backends:
-//      - between splits, activations are copied asynchronously (output of split N -> input of split N+1)
+//      - Activations from one split can be copied asynchronously to the next (output of split N -> input of split N+1)
 //      - Several scheduling patterns must be supported by async backends. The scheduler may:
 //          - not explicitly synchronize between CPU->backend memcpy and graph execution on backend
 //          - dispatch several parallel memcpys to the same backend at once
@@ -23,8 +22,8 @@
 #include <string>
 #include <vector>
 
-#include <nvtx3/nvtx3.hpp>
 
+// global counters for pass/fail
 static int n_ok   = 0;
 static int n_test = 0;
 
@@ -238,10 +237,6 @@ struct backend_consts {
 
 // stress test: a tensor is incremented and sent back and forth between a backend and CPU in a ping-pong pattern
 static bool stress_test_linked_list_cpu_device(ggml_backend_t backend_gpu, ggml_backend_t backend_cpu, int n_nodes, int64_t tensor_len, bool use_device_host_buft) {
-    nvtx3::scoped_range sc_4{nvtx3::event_attributes{nvtx3::rgb{0, 0, 255}, // blue
-        ("stress_test_linked_list_cpu_device " + std::string(ggml_backend_name(backend_gpu)) + " + " + ggml_backend_name(backend_cpu) +
-         " n_nodes=" + std::to_string(n_nodes) + " ne=" + std::to_string(tensor_len) +
-         (use_device_host_buft ? " device_host" : " pageable")).c_str()}};
 
     const std::vector<ggml_backend_t> backends = { backend_gpu, backend_cpu };
 
@@ -308,10 +303,6 @@ static bool stress_test_linked_list_cpu_device(ggml_backend_t backend_gpu, ggml_
 //  - splits taking one activation per lane from the previous split, one of them from an older split instead
 static bool stress_test_dag(const std::vector<ggml_backend_t> & backends, int n_lanes, int n_rounds,
         int64_t tensor_len, bool use_device_host_buft) {
-    nvtx3::scoped_range sc_5{nvtx3::event_attributes{nvtx3::rgb{255, 165, 0}, // orange
-        ("stress_test_dag n_lanes=" + std::to_string(n_lanes) +
-         " n_rounds=" + std::to_string(n_rounds) + " ne=" + std::to_string(tensor_len) +
-         (use_device_host_buft ? " device_host" : " pageable")).c_str()}};
 
     const int n_backends = (int) backends.size();
 
@@ -443,12 +434,8 @@ static bool stress_test_dag(const std::vector<ggml_backend_t> & backends, int n_
 //   CPU: produce {66}
 //   GPU: increment both {99} and {66} -> {100} and {67}
 //   Correct result is thus {100}, incorrect output is {111} when {55} was overwritten by {66} before the copy started.
-// Note: currently only reproducible on async H2D copy (pinned memory in CUDA).
+// Note: currently only reproducible on async H2D copy (=pinned memory).
 static bool test_inputless_splits_scheduling(ggml_backend_t backend_gpu, ggml_backend_t backend_cpu, int64_t tensor_len, int32_t sleep_us, bool use_device_host_buft) {
-    nvtx3::scoped_range sc_6{nvtx3::event_attributes{nvtx3::rgb{255, 0, 0}, // red
-        ("test_inputless_splits_scheduling " + std::string(ggml_backend_name(backend_gpu)) + " + " + ggml_backend_name(backend_cpu) +
-         " sleep_us=" + std::to_string(sleep_us) + " ne=" + std::to_string(tensor_len) +
-         (use_device_host_buft ? " device_host" : " pageable")).c_str()}};
 
     const int GPU = 0;
     const int CPU = 1;
@@ -560,9 +547,6 @@ static bool test_inputless_splits_scheduling(ggml_backend_t backend_gpu, ggml_ba
 
 // Test that all async backends transmit their activations to the following async backend correctly. No user inputs tested.
 static bool test_chain_all_backends(const std::vector<ggml_backend_t> & backends, int64_t tensor_len, bool use_device_host_buft) {
-    nvtx3::scoped_range sc_7{nvtx3::event_attributes{nvtx3::rgb{0, 255, 0}, // green
-        ("test_chain_all_backends ne=" + std::to_string(tensor_len) +
-         (use_device_host_buft ? " device_host" : " pageable")).c_str()}};
 
     const int n_backends = (int) backends.size();
 
@@ -620,11 +604,6 @@ static bool test_chain_all_backends(const std::vector<ggml_backend_t> & backends
 static bool test_pair_user_inputs(const std::vector<ggml_backend_t> & backends, int b_send, int b_recv, int64_t tensor_len,
         int n_inputs, bool inputs_on_sender, bool parallel, bool use_device_host_buft) {
 
-    nvtx3::scoped_range sc_8{nvtx3::event_attributes{nvtx3::rgb{255, 215, 0}, // gold
-        ("test_pair_user_inputs " + std::string(ggml_backend_name(backends[b_send])) + " -> " + ggml_backend_name(backends[b_recv]) +
-         (inputs_on_sender ? " inputs on sender" : " inputs on receiver") +
-         " parallel=" + std::to_string(parallel) + " ne=" + std::to_string(tensor_len) +
-         (use_device_host_buft ? " device_host" : " pageable")).c_str()}};
 
     const size_t graph_size = 64;
 
@@ -704,10 +683,6 @@ static bool test_pair_user_inputs(const std::vector<ggml_backend_t> & backends, 
 static bool test_y_shaped_graph(const std::vector<ggml_backend_t> & backends, int backend_a, int backend_b, int64_t tensor_len,
         bool use_device_host_buft) {
 
-    nvtx3::scoped_range sc_9{nvtx3::event_attributes{nvtx3::rgb{238, 130, 238}, // violet
-        ("test_y_shaped_graph " + std::string(ggml_backend_name(backends[backend_a])) + " -> " + ggml_backend_name(backends[backend_b]) +
-         " ne=" + std::to_string(tensor_len) +
-         (use_device_host_buft ? " device_host" : " pageable")).c_str()}};
 
     const size_t graph_size = 64;
 
@@ -845,8 +820,8 @@ int main() {
         printf("\n");
 
         if (have_sleep) {
-            for (int32_t sleep_us : { 100000}) {
-                for (int tensor_len : { 2, 4096 }) {
+            for (int32_t sleep_us : {50, 60, 70, 80,  400, 500, 600, 700, 1000, 10000}) {
+                for (int tensor_len : { 2, 2048, 4096, 8192, 1600}) {
                     case_begin("test_inputless_splits_scheduling      sleep_us = %6d, tensor_len = %4d", sleep_us, tensor_len);
                     case_end(test_inputless_splits_scheduling(backend_gpu, backend_cpu, tensor_len, sleep_us, use_device_host_buft));
                 }
