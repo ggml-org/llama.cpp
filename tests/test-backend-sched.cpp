@@ -757,7 +757,6 @@ static bool initialize_gpu_backends(std::vector<ggml_backend_t> & backends, bool
     // todo rework this, only selects a single GPU
     // create struct incorporating have_device_host_buft and have_sleep flags
     ggml_backend_t backend_gpu = backends[0];
-    ggml_backend_t backend_cpu = backends.back();
 
     for (ggml_backend_t backend : backends) {
         ggml_backend_dev_t dev = ggml_backend_get_device(backend);
