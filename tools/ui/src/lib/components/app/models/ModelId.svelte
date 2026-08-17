@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { TruncatedText } from '$lib/components/app';
 	import { Image, Lightbulb, Mic, Video } from '@lucide/svelte';
+	import { TruncatedText } from '$lib/components/app';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { ModelsService } from '$lib/services/models.service';
 	import { settingsStore } from '$lib/stores';
