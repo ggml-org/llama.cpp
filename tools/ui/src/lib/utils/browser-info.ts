@@ -1,10 +1,12 @@
-// Browser fallback for the server's `get_info` tool, offered only when the
-// server does not serve one (i.e. llama-server runs without --agent). It tells
-// the model which OS the browser runs on and that there is no local file or
-// shell access, so it does not plan around tools that are not there.
-//
-// @see server_tool_get_info in tools/server/server-tools.cpp - the served variant
-// @see buildBrowserInfoToolDefinition in constants/browser-info.ts - tool schema sent to the LLM
+/**
+ * Browser fallback for the server's `get_info` tool, offered only when the
+ * server does not serve one (llama-server without --agent). It tells the model
+ * which OS the browser runs on and that there is no local file or shell access,
+ * so it does not plan around tools that are not there.
+ *
+ * @see server_tool_get_info in tools/server/server-tools.cpp - the served variant
+ * @see buildBrowserInfoToolDefinition in constants/browser-info.ts - tool schema sent to the LLM
+ */
 
 import { browser } from '$app/environment';
 import {
