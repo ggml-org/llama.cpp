@@ -748,6 +748,10 @@ struct llm_graph_params {
     ggml_backend_sched_t sched;
     ggml_backend_t backend_cpu;
 
+    // per-layer: cast the KV cache to F16 before flash attention
+    // (set for layers whose device does not support the cache type in flash attention)
+    const std::vector<bool> * fa_kv_f16 = nullptr;
+
     const llama_adapter_cvec     * cvec;
     const llama_adapter_loras    * loras;
     const llama_memory_context_i * mctx;
@@ -987,6 +991,10 @@ struct llm_graph_context {
     ggml_backend_sched_t sched;
 
     ggml_backend_t backend_cpu; // TODO: needed by build_attn_mha, figure out a way to remove?
+
+    // per-layer: cast the KV cache to F16 before flash attention
+    // (set for layers whose device does not support the cache type in flash attention)
+    const std::vector<bool> * fa_kv_f16 = nullptr;
 
     const llama_adapter_cvec     * cvec;
     const llama_adapter_loras    * loras;

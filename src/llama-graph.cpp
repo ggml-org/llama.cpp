@@ -1458,6 +1458,7 @@ llm_graph_context::llm_graph_context(const llm_graph_params & params) :
     rope_type        (hparams.rope_type),
     sched            (params.sched),
     backend_cpu      (params.backend_cpu),
+    fa_kv_f16        (params.fa_kv_f16),
     cvec             (params.cvec),
     loras            (params.loras),
     mctx             (params.mctx),
@@ -2552,6 +2553,20 @@ ggml_tensor * llm_graph_context::build_attn_mha(
 
         if (v->type == GGML_TYPE_F32) {
             v = ggml_cast(ctx0, v, GGML_TYPE_F16);
+        }
+
+        // the KV cache types unsupported by the FA kernels on the layer device would fall back to
+        // the CPU, which breaks the split state consistency in tensor-parallel graphs
+        if (fa_kv_f16 != nullptr && il >= 0 && il < (int) fa_kv_f16->size() && (*fa_kv_f16)[il]) {
+            const bool v_is_k = (v == k);
+            if (k->type != GGML_TYPE_F16) {
+                k = ggml_cast(ctx0, k, GGML_TYPE_F16);
+            }
+            if (v_is_k) {
+                v = k;
+            } else if (v->type != GGML_TYPE_F16) {
+                v = ggml_cast(ctx0, v, GGML_TYPE_F16);
+            }
         }
 
         cur = ggml_flash_attn_ext(ctx0, q, k, v, kq_mask, kq_scale, hparams.f_max_alibi_bias,
