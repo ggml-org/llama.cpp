@@ -571,7 +571,7 @@ static void process_handler_response(server_http_req_ptr && request, server_http
                 sink.done();
                 SRV_DBG("%s", "http: stream ended\n");
             }
-            return has_next;
+            return true;
         };
         const auto on_complete = [request = q_ptr, response = r_ptr](bool success) mutable {
             response->on_complete();
