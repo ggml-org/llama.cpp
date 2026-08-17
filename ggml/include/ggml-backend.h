@@ -95,6 +95,12 @@ extern "C" {
     GGML_API void ggml_backend_tensor_get_2d(const struct ggml_tensor * tensor,       void * data, size_t offset, size_t size, size_t n_copies, size_t stride_tensor, size_t stride_data);
     GGML_API void ggml_backend_tensor_memset(      struct ggml_tensor * tensor,     uint8_t value, size_t offset, size_t size);
 
+    // declare an imminent direct write to tensor->data, bypassing ggml_backend_tensor_set.
+    // callers that write host-visible tensors in place must announce it here, otherwise the
+    // scheduler sanitizer cannot see the write and will not detect races against it.
+    // no-op unless GGML_SCHED_SANITIZE is set.
+    GGML_API void ggml_backend_tensor_set_direct(struct ggml_tensor * tensor, size_t offset, size_t size);
+
     GGML_API void ggml_backend_synchronize(ggml_backend_t backend);
 
     GGML_API ggml_backend_graph_plan_t ggml_backend_graph_plan_create(ggml_backend_t backend, struct ggml_cgraph * cgraph);
