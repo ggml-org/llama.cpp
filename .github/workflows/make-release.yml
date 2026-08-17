@@ -3,6 +3,11 @@ name: Make Release
 on:
   workflow_dispatch:
     inputs:
+      commit:
+        description: 'Commit SHA to release (empty = branch HEAD)'
+        required: false
+        default: ''
+        type: string
       dry_run:
         description: 'Dry run - validate without creating the tag'
         required: true
@@ -22,12 +27,17 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          ssh-key: ${{ secrets.DEPLOY_KEY_RELEASE }}
+          ref: ${{ inputs.commit != '' && inputs.commit || github.ref_name }}
+          fetch-depth: 0
 
       - name: Run release checks
         id: checks
         run: bash scripts/make-release-checks.sh ${{ github.event.inputs.dry_run == 'true' && '--dry-run' || '' }}
         env:
           GITHUB_REPOSITORY: ${{ github.repository }}
+          RELEASE_BRANCH: ${{ github.ref_name }}
 
       - name: Create release tag
         if: ${{ github.event.inputs.dry_run == 'false' }}
