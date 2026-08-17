@@ -1879,7 +1879,45 @@ ggml_backend_sched_t ggml_backend_sched_new(
     sched->debug_realloc = GGML_SCHED_DEBUG_REALLOC ? atoi(GGML_SCHED_DEBUG_REALLOC) : sched->debug_realloc;
 
     sched->n_backends = n_backends;
-    sched->n_copies = parallel ? GGML_SCHED_MAX_COPIES : 1;
+
+    // graph inputs are pinned to the last (CPU) backend, and the caller may hand us a device
+    // host buffer type for that slot. if a compute backend also accepts that buffer type, then
+    // ggml_backend_sched_buffer_supported() is true for graph inputs, no split input copy is
+    // made, and the device reads the very memory the host thread writes - so the host cannot
+    // write the next set of inputs until the device is done reading the previous one.
+    //
+    // detect that here so the inputs can be ring buffered instead of synchronized. this tests
+    // the exact condition that elides the copy rather than guessing at "is this an APU".
+    // note: sched->bufts[] is not populated until below, so resolve the buffer type directly.
+    bool is_uma = false;
+    if (!parallel && n_backends >= 2) {
+        ggml_backend_buffer_type_t cpu_buft = bufts ? bufts[n_backends - 1]
+            : ggml_backend_get_default_buffer_type(backends[n_backends - 1]);
+
+        if (cpu_buft && ggml_backend_buft_is_host(cpu_buft)) {
+            for (int b = 0; b < n_backends - 1; b++) {
+                if (ggml_backend_supports_buft(backends[b], cpu_buft)) {
+                    is_uma = true;
+                    GGML_LOG_DEBUG("%s: %s computes directly on %s, ring buffering graph inputs\n",
+                            __func__, ggml_backend_name(backends[b]), ggml_backend_buft_name(cpu_buft));
+                    break;
+                }
+            }
+        }
+    }
+
+    // a ring of 2 removes the steady state synchronization just as well as a longer one, at half
+    // the extra input memory - which on a unified memory device comes out of system RAM
+    int n_copies_uma = is_uma ? 2 : 1;
+
+    // GGML_SCHED_UMA_RING overrides the detection above: 0 or 1 forces it off, a larger value
+    // sets the ring depth. the extra input buffers are not free, so keep an escape hatch.
+    const char * GGML_SCHED_UMA_RING = getenv("GGML_SCHED_UMA_RING");
+    if (GGML_SCHED_UMA_RING) {
+        n_copies_uma = std::min(std::max(atoi(GGML_SCHED_UMA_RING), 1), GGML_SCHED_MAX_COPIES);
+    }
+
+    sched->n_copies = parallel ? GGML_SCHED_MAX_COPIES : n_copies_uma;
 
     // initialize hash table
     // FIXME: needs to be size*2 to account for leafs (do it in graph_split instead)
