@@ -16,6 +16,7 @@ import { conversationsStore } from '#lib/stores/conversations/index.svelte.ts';
 import { settingsStore } from '#lib/stores/settings/index.svelte.ts';
 import { createMessageCountMap } from '#lib/utils/index.ts';
 import { strFromU8 } from 'fflate';
+import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 import { toast } from 'svelte-sonner';
 
 import type { SettingsDiffEntry } from '#lib/components/app/dialogs/DialogSettingsImportPreview.svelte';
@@ -54,7 +55,7 @@ export function computeSettingsDiff(
 	current: SettingsConfigType,
 	imported: SettingsConfigType
 ): SettingsDiffEntry[] {
-	const labels = new Map<string, string>();
+	const labels = new SvelteMap<string, string>();
 
 	for (const section of SETTINGS_REGISTRY) {
 		for (const setting of section.settings) {
@@ -62,7 +63,7 @@ export function computeSettingsDiff(
 		}
 	}
 
-	const keys = new Set([...Object.keys(current), ...Object.keys(imported)]);
+	const keys = new SvelteSet([...Object.keys(current), ...Object.keys(imported)]);
 	const diff: SettingsDiffEntry[] = [];
 
 	for (const key of keys) {
@@ -70,7 +71,7 @@ export function computeSettingsDiff(
 		const to = imported[key];
 
 		if (from !== to) {
-			diff.push({ key, label: labels.get(key) ?? key, from, to });
+			diff.push({ from, key, label: labels.get(key) ?? key, to });
 		}
 	}
 
@@ -84,22 +85,22 @@ export function useDropImport() {
 	// All dialog state lives in one reactive object so it stays reactive when
 	// exposed through the hook and bound from the layout.
 	const ui = $state({
-		// Settings import preview dialog (review diff before applying).
-		showSettingsPreview: false,
+		availableConversations: [] as DatabaseConversation[],
+		bulkMessageCountMap: new SvelteMap() as SvelteMap<string, number>,
+		fullImportData: [] as ExportedConversation[],
+		importedConversations: [] as DatabaseConversation[],
+		previewData: null as ExportedConversation | null,
+		selectionMessageCountMap: new SvelteMap() as SvelteMap<string, number>,
 		settingsData: null as SettingsExportType | null,
 		settingsDiff: [] as SettingsDiffEntry[],
-		// Single conversation preview dialog (confirm before importing).
-		showPreview: false,
-		previewData: null as ExportedConversation | null,
 		// Bulk result dialog: pick one of the imported conversations to open.
 		showOpenBulk: false,
-		importedConversations: [] as DatabaseConversation[],
-		bulkMessageCountMap: new Map() as Map<string, number>,
+		// Single conversation preview dialog (confirm before importing).
+		showPreview: false,
 		// Selection dialog (the existing import flow) for multiple conversations.
 		showSelection: false,
-		availableConversations: [] as DatabaseConversation[],
-		selectionMessageCountMap: new Map() as Map<string, number>,
-		fullImportData: [] as ExportedConversation[]
+		// Settings import preview dialog (review diff before applying).
+		showSettingsPreview: false
 	});
 
 	function handleDragEnter(event: DragEvent) {
@@ -182,7 +183,7 @@ export function useDropImport() {
 		} else {
 			ui.fullImportData = allConversations;
 			ui.availableConversations = allConversations.map((item) => item.conv);
-			ui.selectionMessageCountMap = createMessageCountMap(allConversations);
+			ui.selectionMessageCountMap = new SvelteMap(createMessageCountMap(allConversations));
 			ui.showSelection = true;
 		}
 	}
@@ -224,7 +225,7 @@ export function useDropImport() {
 
 	async function handleSelectionConfirm(selectedConversations: DatabaseConversation[]) {
 		try {
-			const selectedIds = new Set(selectedConversations.map((c) => c.id));
+			const selectedIds = new SvelteSet(selectedConversations.map((c) => c.id));
 			const selectedData = ($state.snapshot(ui.fullImportData) as ExportedConversation[]).filter(
 				(item) => selectedIds.has(item.conv.id)
 			);
@@ -232,7 +233,7 @@ export function useDropImport() {
 			await conversationsStore.importConversationsData(selectedData);
 
 			ui.importedConversations = selectedConversations;
-			ui.bulkMessageCountMap = createMessageCountMap(selectedData);
+			ui.bulkMessageCountMap = new SvelteMap(createMessageCountMap(selectedData));
 			ui.showSelection = false;
 			ui.showOpenBulk = true;
 		} catch (err) {
@@ -259,23 +260,23 @@ export function useDropImport() {
 	}
 
 	return {
+		cancelBulk,
+		cancelPreview,
+		cancelSelection,
+		cancelSettingsImport,
+		confirmImportSingle,
+		confirmSettingsImport,
 		dragHandlers: {
 			dragenter: handleDragEnter,
 			dragleave: handleDragLeave,
 			dragover: handleDragOver,
 			drop: handleDrop
 		},
+		handleSelectionConfirm,
 		get isDragOver() {
 			return isDragOver;
 		},
-		ui,
-		confirmSettingsImport,
-		cancelSettingsImport,
-		confirmImportSingle,
-		cancelPreview,
 		openConversation,
-		cancelBulk,
-		cancelSelection,
-		handleSelectionConfirm
+		ui
 	};
 }
