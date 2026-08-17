@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 #
+# usage: ./build-xcframework.sh [BUILD ...] (default: all builds)
+# builds: ios-sim ios-device macos visionos visionos-sim tvos-sim tvos-device
+#
 # Options
 IOS_MIN_OS_VERSION=16.4
 MACOS_MIN_OS_VERSION=13.3
@@ -27,6 +30,34 @@ JOBS_PER_BUILD=$(( $(sysctl -n hw.logicalcpu) / MAX_PARALLEL_BUILDS ))
 if [[ "$JOBS_PER_BUILD" -lt 1 ]]; then
     JOBS_PER_BUILD=1
 fi
+
+# echo "build_fn build_dir release_dir platform is_simulator min_os" for a build name
+build_spec() {
+    case "$1" in
+        ios-sim)      echo "build_ios_sim build-ios-sim Release-iphonesimulator ios true ${IOS_MIN_OS_VERSION}" ;;
+        ios-device)   echo "build_ios_device build-ios-device Release-iphoneos ios false ${IOS_MIN_OS_VERSION}" ;;
+        macos)        echo "build_macos build-macos Release macos false ${MACOS_MIN_OS_VERSION}" ;;
+        visionos)     echo "build_visionos build-visionos Release-xros visionos false ${VISIONOS_MIN_OS_VERSION}" ;;
+        visionos-sim) echo "build_visionos_sim build-visionos-sim Release-xrsimulator visionos true ${VISIONOS_MIN_OS_VERSION}" ;;
+        tvos-sim)     echo "build_tvos_sim build-tvos-sim Release-appletvsimulator tvos true ${TVOS_MIN_OS_VERSION}" ;;
+        tvos-device)  echo "build_tvos_device build-tvos-device Release-appletvos tvos false ${TVOS_MIN_OS_VERSION}" ;;
+        *)            return 1 ;;
+    esac
+}
+
+# Default: build everything
+if [[ $# -eq 0 ]]; then
+    BUILDS=(ios-sim ios-device macos visionos visionos-sim tvos-sim tvos-device)
+else
+    BUILDS=("$@")
+fi
+for b in "${BUILDS[@]}"; do
+    if ! build_spec "$b" >/dev/null; then
+        echo "Error: unknown build '$b'" >&2
+        echo "Valid builds: ios-sim ios-device macos visionos visionos-sim tvos-sim tvos-device" >&2
+        exit 1
+    fi
+done
 
 COMMON_C_FLAGS="-Wno-macro-redefined -Wno-shorten-64-to-32 -Wno-unused-command-line-argument -g"
 COMMON_CXX_FLAGS="-Wno-macro-redefined -Wno-shorten-64-to-32 -Wno-unused-command-line-argument -g"
@@ -563,52 +594,36 @@ run_builds_parallel() {
     done
 }
 
-echo "Building platforms in parallel (max ${MAX_PARALLEL_BUILDS} at a time, -j ${JOBS_PER_BUILD} each)..."
-run_builds_parallel \
-    build_macos \
-    build_ios_device
-# note: disabled due to long build time (https://github.com/ggml-org/llama.cpp/pull/27252)
-#    build_ios_sim \
-#    build_visionos_sim \
-#    build_tvos_sim \
-#    build_visionos \
-#    build_tvos_device
+BUILD_FNS=()
+for b in "${BUILDS[@]}"; do
+    read -r fn _ < <(build_spec "$b")
+    BUILD_FNS+=("$fn")
+done
+echo "Building: ${BUILDS[*]} (max ${MAX_PARALLEL_BUILDS} at a time, -j ${JOBS_PER_BUILD} each)..."
+run_builds_parallel "${BUILD_FNS[@]}"
 
 # Setup frameworks and copy binaries and headers
 echo "Setting up framework structures..."
-setup_framework_structure "build-macos" ${MACOS_MIN_OS_VERSION} "macos"
-setup_framework_structure "build-ios-device" ${IOS_MIN_OS_VERSION} "ios"
-#setup_framework_structure "build-ios-sim" ${IOS_MIN_OS_VERSION} "ios"
-#setup_framework_structure "build-visionos" ${VISIONOS_MIN_OS_VERSION} "visionos"
-#setup_framework_structure "build-visionos-sim" ${VISIONOS_MIN_OS_VERSION} "visionos"
-#setup_framework_structure "build-tvos-sim" ${TVOS_MIN_OS_VERSION} "tvos"
-#setup_framework_structure "build-tvos-device" ${TVOS_MIN_OS_VERSION} "tvos"
+for b in "${BUILDS[@]}"; do
+    read -r _ bdir _ platform _ min_os < <(build_spec "$b")
+    setup_framework_structure "$bdir" "$min_os" "$platform"
+done
 
 # Create dynamic libraries from static libraries
 echo "Creating dynamic libraries from static libraries..."
-combine_static_libraries "build-macos" "Release" "macos" "false"
-combine_static_libraries "build-ios-device" "Release-iphoneos" "ios" "false"
-#combine_static_libraries "build-ios-sim" "Release-iphonesimulator" "ios" "true"
-#combine_static_libraries "build-visionos" "Release-xros" "visionos" "false"
-#combine_static_libraries "build-visionos-sim" "Release-xrsimulator" "visionos" "true"
-#combine_static_libraries "build-tvos-sim" "Release-appletvsimulator" "tvos" "true"
-#combine_static_libraries "build-tvos-device" "Release-appletvos" "tvos" "false"
+for b in "${BUILDS[@]}"; do
+    read -r _ bdir rdir platform is_sim _ < <(build_spec "$b")
+    combine_static_libraries "$bdir" "$rdir" "$platform" "$is_sim"
+done
 
 # Create XCFramework with correct debug symbols paths
 echo "Creating XCFramework..."
+XCFW_ARGS=()
+for b in "${BUILDS[@]}"; do
+    read -r _ bdir _ _ _ _ < <(build_spec "$b")
+    XCFW_ARGS+=(-framework "$(pwd)/${bdir}/framework/llama.framework")
+    XCFW_ARGS+=(-debug-symbols "$(pwd)/${bdir}/dSYMs/llama.dSYM")
+done
 xcrun xcodebuild -create-xcframework \
-    -framework $(pwd)/build-ios-device/framework/llama.framework \
-    -debug-symbols $(pwd)/build-ios-device/dSYMs/llama.dSYM \
-    -framework $(pwd)/build-macos/framework/llama.framework \
-    -debug-symbols $(pwd)/build-macos/dSYMs/llama.dSYM
-#    -framework $(pwd)/build-ios-sim/framework/llama.framework \
-#    -debug-symbols $(pwd)/build-ios-sim/dSYMs/llama.dSYM \
-#    -framework $(pwd)/build-visionos/framework/llama.framework \
-#    -debug-symbols $(pwd)/build-visionos/dSYMs/llama.dSYM \
-#    -framework $(pwd)/build-visionos-sim/framework/llama.framework \
-#    -debug-symbols $(pwd)/build-visionos-sim/dSYMs/llama.dSYM \
-#    -framework $(pwd)/build-tvos-device/framework/llama.framework \
-#    -debug-symbols $(pwd)/build-tvos-device/dSYMs/llama.dSYM \
-#    -framework $(pwd)/build-tvos-sim/framework/llama.framework \
-#    -debug-symbols $(pwd)/build-tvos-sim/dSYMs/llama.dSYM \
-#    -output $(pwd)/build-apple/llama.xcframework
+    "${XCFW_ARGS[@]}" \
+    -output "$(pwd)/build-apple/llama.xcframework"
