@@ -12,7 +12,7 @@
 		SIDEBAR_ACTIONS_ITEMS
 	} from '$lib/constants';
 	import { TooltipSide } from '$lib/enums';
-	import { deviceStore } from '$lib/stores';
+	import { conversationsStore, deviceStore } from '$lib/stores';
 	import type { Component } from 'svelte';
 	import { onMount } from 'svelte';
 	import { circIn } from 'svelte/easing';
@@ -109,14 +109,20 @@
 			{@const isActive = isItemActive(item)}
 			{@const isSearchOnMobile = item.icon === Search && deviceStore.isMobile}
 			{@const itemHref = isSearchOnMobile ? ROUTES.SEARCH : item.route}
-			{@const itemOnClick = item.route
-				? () => {
-						onNewChat?.();
-						goto(item.route!);
-					}
-				: isSearchOnMobile
-					? undefined
-					: onSearchClick}
+			{@const itemOnClick =
+				item.action === 'new-chat'
+					? () => {
+							onNewChat?.();
+							conversationsStore.openNewChatTab();
+						}
+					: item.route
+						? () => {
+								onNewChat?.();
+								goto(item.route!);
+							}
+						: isSearchOnMobile
+							? undefined
+							: onSearchClick}
 			{@const itemTransition = {
 				delay: !initialized ? i * ICON_STRIP_TRANSITION_DELAY_MULTIPLIER : 0,
 				duration: ICON_STRIP_TRANSITION_DURATION,
@@ -157,14 +163,20 @@
 		{#each SIDEBAR_ACTIONS_ITEMS as item, i (item.tooltip)}
 			{@const isActive = isItemActive(item)}
 			{@const isSearchOnMobile = item.icon === Search && deviceStore.isMobile}
-			{@const itemOnClick = item.route
-				? () => {
-						onNewChat?.();
-						goto(item.route!);
-					}
-				: isSearchOnMobile
-					? undefined
-					: onSearchClick}
+			{@const itemOnClick =
+				item.action === 'new-chat'
+					? () => {
+							onNewChat?.();
+							conversationsStore.openNewChatTab();
+						}
+					: item.route
+						? () => {
+								onNewChat?.();
+								goto(item.route!);
+							}
+						: isSearchOnMobile
+							? undefined
+							: onSearchClick}
 			{@const itemTransition = {
 				delay: !initialized ? i * ICON_STRIP_TRANSITION_DELAY_MULTIPLIER : 0,
 				duration: ICON_STRIP_TRANSITION_DURATION,
