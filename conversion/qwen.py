@@ -4,12 +4,13 @@ import json
 
 from typing import Any, Callable, Iterable, TYPE_CHECKING
 
+import numpy as np
 import torch
 
 if TYPE_CHECKING:
     from torch import Tensor
 
-from .base import ModelBase, TextModel, gguf, logger
+from .base import LazyTorchTensor, ModelBase, TextModel, gguf, logger
 
 
 @ModelBase.register("QWenLMHeadModel")
@@ -708,22 +709,82 @@ class DFlashModel(Qwen3Model):
         yield from super().modify_tensors(data_torch, name, bid)
 
 
-@ModelBase.register("Qwen3DSparkModel")
+@ModelBase.register("Qwen3DSparkModel", "DSparkDraftModel", "DSparkSpeculator")
 @ModelBase.example("satgeze/Qwen3.6-27B-DSpark")
 class DSparkModel(DFlashModel):
-    # DSpark = DFlash + a semi-autoregressive Markov head
+    # DSpark = DFlash + a semi-autoregressive Markov head.
     model_arch = gguf.MODEL_ARCH.DFLASH
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        # normalize the flat DeepSpec schema to DFlash's nested dflash_config
-        self.hparams.setdefault("dflash_config", {
-            k: self.hparams[k] for k in ("target_layer_ids", "mask_token_id") if k in self.hparams
-        })
+    def __init__(self, dir_model, *args, **kwargs):
+        hparams = kwargs.pop("hparams", None)
+        if hparams is None:
+            hparams = ModelBase.load_hparams(dir_model, False)
+
+        # EAGLE3-style exports use the 1+N bonus-anchor block, DFlash-lineage exports sample from the anchor
+        self._sample_from_anchor = hparams.get(
+            "sample_from_anchor",
+            "transformer_layer_config" not in hparams and "aux_hidden_state_layer_ids" not in hparams)
+        if "transformer_layer_config" in hparams:
+            hparams = {**hparams, **hparams["transformer_layer_config"]}
+
+        super().__init__(dir_model, *args, hparams=hparams, **kwargs)
+
+        # normalize both schemas to DFlash's nested dflash_config
+        if "aux_hidden_state_layer_ids" in self.hparams:
+            self.hparams.setdefault("dflash_config", {
+                "mask_token_id": self.hparams.get("mask_token_id"),
+                "target_layer_ids": [i - 1 for i in self.hparams["aux_hidden_state_layer_ids"]],
+            })
+        else:
+            self.hparams.setdefault("dflash_config", {
+                k: self.hparams[k] for k in ("target_layer_ids", "mask_token_id") if k in self.hparams
+            })
+
+        if (markov_head_type := self.hparams.get("markov_head_type", "vanilla")) != "vanilla":
+            raise ValueError(f"unsupported markov_head_type {markov_head_type!r} (only 'vanilla' is supported)")
+
+        n_vocab = self.hparams["vocab_size"]
+        self._n_vocab_draft = self.hparams.get("draft_vocab_size") or n_vocab
+        if self._n_vocab_draft > n_vocab:
+            raise ValueError(f"draft_vocab_size {self._n_vocab_draft} exceeds vocab_size {n_vocab}")
+        self._d2t: Tensor | None = None
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        self.gguf_writer.add_sample_from_anchor(self._sample_from_anchor)
 
     @classmethod
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
-        name, gen = item
-        if name.endswith(("embed_tokens.weight", "lm_head.weight")):
+        if item[0] == "t2d":  # not used at runtime
             return None
-        return super().filter_tensors((name, gen))
+        return super().filter_tensors(item)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if name == "model.d2t":
+            self._d2t = data_torch
+            return
+
+        if self._n_vocab_draft == self.hparams["vocab_size"] and name.endswith(("embed_tokens.weight", "lm_head.weight")):
+            return
+
+        yield from super().modify_tensors(data_torch, name, bid)
+
+    def prepare_tensors(self):
+        super().prepare_tensors()
+
+        n_vocab = self.hparams["vocab_size"]
+        if self._n_vocab_draft < n_vocab and self._d2t is None:
+            raise ValueError(f"draft_vocab_size {self._n_vocab_draft} < vocab_size {n_vocab} but no d2t table found")
+
+        # write d2t as absolute target token ids
+        if self._d2t is not None:
+            data = LazyTorchTensor.to_eager(self._d2t).to(torch.int64).cpu().numpy().reshape(-1)
+            if data.size != self._n_vocab_draft:
+                raise ValueError(f"d2t size {data.size} does not match draft_vocab_size {self._n_vocab_draft}")
+            data = data + np.arange(data.size, dtype=np.int64)
+            if np.any((data < 0) | (data >= n_vocab)):
+                raise ValueError(f"d2t target ids out of range for target vocab size {n_vocab}")
+            if np.unique(data).size != data.size:
+                raise ValueError("d2t contains duplicate target ids")
+            logger.info(f"{'d2t,':<30} --> I64, shape = {{{data.size}}}")
+            self.gguf_writer.add_tensor("d2t", data, raw_dtype=gguf.GGMLQuantizationType.I64)
