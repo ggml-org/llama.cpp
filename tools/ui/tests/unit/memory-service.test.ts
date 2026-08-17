@@ -78,7 +78,7 @@ describe('MemoryService', () => {
 		const result = await write({
 			description: TEST_DESCRIPTION,
 			name: TEST_ENTRY,
-			new: FIRST_LINE
+			new_str: FIRST_LINE
 		});
 
 		expect(result.isError).toBe(false);
@@ -88,43 +88,43 @@ describe('MemoryService', () => {
 	});
 
 	it('refuses creating without a description', async () => {
-		const result = await write({ name: TEST_ENTRY, new: FIRST_LINE });
+		const result = await write({ name: TEST_ENTRY, new_str: FIRST_LINE });
 
 		expect(result.isError).toBe(true);
 		expect(result.content).toContain('needs a description');
 	});
 
 	it('appends on its own line', async () => {
-		await write({ description: TEST_DESCRIPTION, name: TEST_ENTRY, new: FIRST_LINE });
-		await write({ name: TEST_ENTRY, new: SECOND_LINE });
+		await write({ description: TEST_DESCRIPTION, name: TEST_ENTRY, new_str: FIRST_LINE });
+		await write({ name: TEST_ENTRY, new_str: SECOND_LINE });
 
 		expect(storedEntry(TEST_ENTRY).body).toBe(`${FIRST_LINE}${NEWLINE}${SECOND_LINE}${NEWLINE}`);
 	});
 
 	it('removes a string along with the line break that follows it', async () => {
-		await write({ description: TEST_DESCRIPTION, name: TEST_ENTRY, new: FIRST_LINE });
-		await write({ name: TEST_ENTRY, new: SECOND_LINE });
+		await write({ description: TEST_DESCRIPTION, name: TEST_ENTRY, new_str: FIRST_LINE });
+		await write({ name: TEST_ENTRY, new_str: SECOND_LINE });
 
-		const result = await write({ name: TEST_ENTRY, old: FIRST_LINE });
+		const result = await write({ name: TEST_ENTRY, old_str: FIRST_LINE });
 
 		expect(result.isError).toBe(false);
 		expect(storedEntry(TEST_ENTRY).body).toBe(`${SECOND_LINE}${NEWLINE}`);
 	});
 
 	it('splices dollar patterns verbatim', async () => {
-		await write({ description: TEST_DESCRIPTION, name: TEST_ENTRY, new: FIRST_LINE });
+		await write({ description: TEST_DESCRIPTION, name: TEST_ENTRY, new_str: FIRST_LINE });
 
-		const result = await write({ name: TEST_ENTRY, new: DOLLAR_PATTERNS, old: FIRST_LINE });
+		const result = await write({ name: TEST_ENTRY, new_str: DOLLAR_PATTERNS, old_str: FIRST_LINE });
 
 		expect(result.isError).toBe(false);
 		expect(storedEntry(TEST_ENTRY).body).toBe(`${DOLLAR_PATTERNS}${NEWLINE}`);
 	});
 
 	it('refuses a duplicate string with its count', async () => {
-		await write({ description: TEST_DESCRIPTION, name: TEST_ENTRY, new: FIRST_LINE });
-		await write({ name: TEST_ENTRY, new: FIRST_LINE });
+		await write({ description: TEST_DESCRIPTION, name: TEST_ENTRY, new_str: FIRST_LINE });
+		await write({ name: TEST_ENTRY, new_str: FIRST_LINE });
 
-		const result = await write({ name: TEST_ENTRY, new: SECOND_LINE, old: FIRST_LINE });
+		const result = await write({ name: TEST_ENTRY, new_str: SECOND_LINE, old_str: FIRST_LINE });
 
 		expect(result.isError).toBe(true);
 		expect(result.content).toContain('2 times');
@@ -132,14 +132,14 @@ describe('MemoryService', () => {
 	});
 
 	it('refuses replacing in a missing entry', async () => {
-		const result = await write({ name: TEST_ENTRY, new: SECOND_LINE, old: FIRST_LINE });
+		const result = await write({ name: TEST_ENTRY, new_str: SECOND_LINE, old_str: FIRST_LINE });
 
 		expect(result.isError).toBe(true);
 		expect(result.content).toContain('nothing to replace');
 	});
 
 	it('reports nothing to do on an empty edit', async () => {
-		await write({ description: TEST_DESCRIPTION, name: TEST_ENTRY, new: FIRST_LINE });
+		await write({ description: TEST_DESCRIPTION, name: TEST_ENTRY, new_str: FIRST_LINE });
 
 		const result = await write({ name: TEST_ENTRY });
 
@@ -148,7 +148,7 @@ describe('MemoryService', () => {
 	});
 
 	it('reports a description refresh, and only a real one', async () => {
-		await write({ description: TEST_DESCRIPTION, name: TEST_ENTRY, new: FIRST_LINE });
+		await write({ description: TEST_DESCRIPTION, name: TEST_ENTRY, new_str: FIRST_LINE });
 
 		const refreshed = await write({ description: OTHER_DESCRIPTION, name: TEST_ENTRY });
 
@@ -162,7 +162,7 @@ describe('MemoryService', () => {
 	});
 
 	it('folds a description onto one line', async () => {
-		await write({ description: RAW_DESCRIPTION, name: TEST_ENTRY, new: FIRST_LINE });
+		await write({ description: RAW_DESCRIPTION, name: TEST_ENTRY, new_str: FIRST_LINE });
 
 		expect(storedEntry(TEST_ENTRY).description).toBe(FOLDED_DESCRIPTION);
 	});
@@ -171,17 +171,17 @@ describe('MemoryService', () => {
 		const badGroup = await write({
 			description: TEST_DESCRIPTION,
 			name: BAD_GROUP_ENTRY,
-			new: FIRST_LINE
+			new_str: FIRST_LINE
 		});
 		const badSlug = await write({
 			description: TEST_DESCRIPTION,
 			name: BAD_SLUG_ENTRY,
-			new: FIRST_LINE
+			new_str: FIRST_LINE
 		});
 		const traversal = await write({
 			description: TEST_DESCRIPTION,
 			name: TRAVERSAL_ENTRY,
-			new: FIRST_LINE
+			new_str: FIRST_LINE
 		});
 
 		expect(badGroup.isError).toBe(true);
@@ -191,10 +191,10 @@ describe('MemoryService', () => {
 	});
 
 	it('refuses a write past the size cap and keeps the previous content', async () => {
-		await write({ description: TEST_DESCRIPTION, name: TEST_ENTRY, new: FIRST_LINE });
+		await write({ description: TEST_DESCRIPTION, name: TEST_ENTRY, new_str: FIRST_LINE });
 
 		const oversized = 'x'.repeat(TEST_LIMIT_BYTES);
-		const result = await write({ name: TEST_ENTRY, new: oversized });
+		const result = await write({ name: TEST_ENTRY, new_str: oversized });
 
 		expect(result.isError).toBe(true);
 		expect(result.content).toContain(`over the ${TEST_LIMIT_BYTES} limit`);
@@ -204,8 +204,8 @@ describe('MemoryService', () => {
 	it('renders the index and the empty message', async () => {
 		expect((await open()).content).toBe(MEMORY_EMPTY_INDEX);
 
-		await write({ description: TEST_DESCRIPTION, name: TEST_ENTRY, new: FIRST_LINE });
-		await write({ description: OTHER_DESCRIPTION, name: OTHER_ENTRY, new: SECOND_LINE });
+		await write({ description: TEST_DESCRIPTION, name: TEST_ENTRY, new_str: FIRST_LINE });
+		await write({ description: OTHER_DESCRIPTION, name: OTHER_ENTRY, new_str: SECOND_LINE });
 
 		const index = (await open()).content;
 
@@ -215,7 +215,7 @@ describe('MemoryService', () => {
 	});
 
 	it('opens named entries and flags a fully failed open', async () => {
-		await write({ description: TEST_DESCRIPTION, name: TEST_ENTRY, new: FIRST_LINE });
+		await write({ description: TEST_DESCRIPTION, name: TEST_ENTRY, new_str: FIRST_LINE });
 
 		const mixed = await open([TEST_ENTRY, ABSENT_ENTRY]);
 
@@ -229,7 +229,7 @@ describe('MemoryService', () => {
 	});
 
 	it('drops an entry once', async () => {
-		await write({ description: TEST_DESCRIPTION, name: TEST_ENTRY, new: FIRST_LINE });
+		await write({ description: TEST_DESCRIPTION, name: TEST_ENTRY, new_str: FIRST_LINE });
 
 		const first = await drop(TEST_ENTRY);
 		const second = await drop(TEST_ENTRY);
@@ -245,7 +245,7 @@ describe('MemoryService', () => {
 
 		expect(memoryByteLength(serialized)).toBeGreaterThan(serialized.length);
 
-		await write({ description: TEST_DESCRIPTION, name: TEST_ENTRY, new: utf8Body });
+		await write({ description: TEST_DESCRIPTION, name: TEST_ENTRY, new_str: utf8Body });
 
 		const result = await open([TEST_ENTRY]);
 
@@ -255,8 +255,8 @@ describe('MemoryService', () => {
 	});
 
 	it('exports every entry and reimports them untouched', async () => {
-		await write({ description: TEST_DESCRIPTION, name: TEST_ENTRY, new: FIRST_LINE });
-		await write({ description: OTHER_DESCRIPTION, name: OTHER_ENTRY, new: SECOND_LINE });
+		await write({ description: TEST_DESCRIPTION, name: TEST_ENTRY, new_str: FIRST_LINE });
+		await write({ description: OTHER_DESCRIPTION, name: OTHER_ENTRY, new_str: SECOND_LINE });
 
 		const exported = await MemoryService.exportEntries();
 
@@ -271,11 +271,11 @@ describe('MemoryService', () => {
 	});
 
 	it('leaves an existing entry untouched on import', async () => {
-		await write({ description: TEST_DESCRIPTION, name: TEST_ENTRY, new: FIRST_LINE });
+		await write({ description: TEST_DESCRIPTION, name: TEST_ENTRY, new_str: FIRST_LINE });
 
 		const exported = await MemoryService.exportEntries();
 
-		await write({ name: TEST_ENTRY, new: SECOND_LINE });
+		await write({ name: TEST_ENTRY, new_str: SECOND_LINE });
 
 		const result = await MemoryService.importEntries(exported);
 
@@ -315,7 +315,7 @@ describe('MemoryService', () => {
 		expect(opened.isError).toBe(false);
 		expect(opened.content).toContain(FIRST_LINE);
 
-		const written = await write({ name: UNCONFIGURED_ENTRY, new: SECOND_LINE });
+		const written = await write({ name: UNCONFIGURED_ENTRY, new_str: SECOND_LINE });
 
 		expect(written.isError).toBe(true);
 		expect(written.content).toContain('Unknown group');
@@ -329,8 +329,8 @@ describe('MemoryService', () => {
 	});
 
 	it('deletes one entry by name and clears them all', async () => {
-		await write({ description: TEST_DESCRIPTION, name: TEST_ENTRY, new: FIRST_LINE });
-		await write({ description: OTHER_DESCRIPTION, name: OTHER_ENTRY, new: SECOND_LINE });
+		await write({ description: TEST_DESCRIPTION, name: TEST_ENTRY, new_str: FIRST_LINE });
+		await write({ description: OTHER_DESCRIPTION, name: OTHER_ENTRY, new_str: SECOND_LINE });
 
 		expect(await MemoryService.deleteEntry(TEST_ENTRY)).toBe(true);
 		expect(await MemoryService.deleteEntry(TEST_ENTRY)).toBe(false);

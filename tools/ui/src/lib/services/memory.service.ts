@@ -50,6 +50,7 @@ export function memoryStamp(epochMs: number): string {
 	);
 }
 
+const MEMORY_WRITE_KEYS = ['name', 'description', 'old_str', 'new_str'];
 const textEncoder = new TextEncoder();
 
 /**
@@ -235,8 +236,19 @@ export class MemoryService {
 
 		if (invalid) return textResult(invalid, true);
 
-		const oldStr = args.old == null ? null : String(args.old);
-		const newStr = args.new == null ? null : String(args.new);
+		// An unknown key carries the text when its name is wrong, and the call
+		// then removes old_str or does nothing at all
+		const unknown = Object.keys(args).filter((key) => !MEMORY_WRITE_KEYS.includes(key));
+
+		if (unknown.length > 0) {
+			return textResult(
+				`Unknown argument ${unknown.join(LIST_SEPARATOR)}, the text goes in old_str and new_str`,
+				true
+			);
+		}
+
+		const oldStr = args.old_str == null ? null : String(args.old_str);
+		const newStr = args.new_str == null ? null : String(args.new_str);
 		const folded =
 			args.description == null ? null : foldMemoryDescription(String(args.description));
 		const entry = await DatabaseService.getMemoryEntry(name);
