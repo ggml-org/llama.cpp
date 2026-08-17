@@ -5,6 +5,7 @@ import ChatFormPickersHarness from './components/ChatFormPickersHarness.svelte';
 import ChatFormSkillPickerHarness from './components/ChatFormSkillPickerHarness.svelte';
 import ChatFormTestWrapper from './components/ChatFormTestWrapper.svelte';
 import { SkillsService } from '$lib/services/skills.service';
+import { conversationsStore } from '$lib/stores/conversations.svelte';
 import { skillsStore } from '$lib/stores/skills.svelte';
 import type { ChatFormCommand, SkillCatalogEntry, SkillCatalogResponse } from '$lib/types';
 import { tick } from 'svelte';
@@ -421,5 +422,36 @@ describe('ChatForm no-CWD ready catalog slot', () => {
 		expect(candidateRows).toHaveLength(2);
 		expect(candidateRows[0].textContent).toContain('frontend-design');
 		expect(candidateRows[1].textContent).toContain('format-frontend-design');
+	});
+});
+
+describe('ChatForm CWD catalog refresh', () => {
+	afterEach(() => {
+		conversationsStore.activeConversation = null;
+		conversationsStore.pendingCwd = null;
+		skillsStore.invalidate('/chat-cwd-a');
+		skillsStore.invalidate('/chat-cwd-b');
+		vi.restoreAllMocks();
+	});
+
+	it('loads a catalog for the ChatForm CWD and reloads it after a change', async () => {
+		const list = vi.spyOn(SkillsService, 'list').mockResolvedValue({
+			catalog_instruction_xml: '',
+			diagnostics: [],
+			skills: []
+		});
+
+		conversationsStore.pendingCwd = '/chat-cwd-a';
+		render(ChatFormTestWrapper);
+
+		await vi.waitFor(() =>
+			expect(list).toHaveBeenCalledWith('/chat-cwd-a', expect.any(AbortSignal))
+		);
+
+		conversationsStore.pendingCwd = '/chat-cwd-b';
+
+		await vi.waitFor(() =>
+			expect(list).toHaveBeenCalledWith('/chat-cwd-b', expect.any(AbortSignal))
+		);
 	});
 });
