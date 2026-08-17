@@ -1950,6 +1950,10 @@ static server_tool & find_tool(std::vector<std::unique_ptr<server_tool>> & tools
 //
 
 static std::vector<std::unique_ptr<server_tool>> build_tools() {
+    // IMPORTANT: for contributors, please keep this array of tools as minimal as possible
+    //            we only accept minimal i/o and shell command tools here
+    //            for example, do not add: web search, get date time, etc.
+    //            high-level functionality should be added either via MCP or web UI
     std::vector<std::unique_ptr<server_tool>> tools;
     tools.push_back(std::make_unique<server_tool_read_file>());
     tools.push_back(std::make_unique<server_tool_file_glob_search>());
