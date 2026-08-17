@@ -313,6 +313,9 @@
 									{#if diagnostic.provider}
 										<span class="mr-2">Provider: {diagnostic.provider}</span>
 									{/if}
+									{#if diagnostic.providers && diagnostic.providers.length > 0}
+										<span class="mr-2">Providers: {diagnostic.providers.join(', ')}</span>
+									{/if}
 									{diagnostic.message}
 								</span>
 							</div>

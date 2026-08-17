@@ -43,6 +43,7 @@ struct skill_diagnostic {
     std::string name;
     std::string scope;
     std::string provider;
+    std::vector<std::string> providers;
     std::string message;
 };
 
@@ -490,7 +491,14 @@ static bool is_cosmetic_name(const std::string & name) {
 
 static skill_diagnostic diagnostic(std::string severity, std::string code, std::string message,
                                    std::string name = "", std::string scope = "", std::string provider = "") {
-    return {std::move(severity), std::move(code), std::move(name), std::move(scope), std::move(provider), std::move(message)};
+    skill_diagnostic result;
+    result.severity = std::move(severity);
+    result.code = std::move(code);
+    result.name = std::move(name);
+    result.scope = std::move(scope);
+    result.provider = std::move(provider);
+    result.message = std::move(message);
+    return result;
 }
 
 static json diagnostics_json(const std::vector<skill_diagnostic> & diagnostics) {
@@ -504,6 +512,8 @@ static json diagnostics_json(const std::vector<skill_diagnostic> & diagnostics) 
         if (!item.name.empty()) value["name"] = item.name;
         if (!item.scope.empty()) value["scope"] = item.scope;
         if (!item.provider.empty()) value["provider"] = item.provider;
+        // collapsed skill_shadowed diagnostics list every losing provider
+        if (item.providers.size() > 1) value["providers"] = item.providers;
         out.push_back(std::move(value));
     }
     return out;
@@ -804,7 +814,18 @@ static void add_root_skills(const fs::path & candidate_root, const fs::path & ba
             return entry.name == name;
         });
         if (existing != catalog.skills.end()) {
-            catalog.diagnostics.push_back(diagnostic("warning", "skill_shadowed", "Skill is shadowed by a higher-precedence entry", name, scope, provider));
+            // Collapse per name: later shadowed records of the same name join
+            // the existing diagnostic; scope/provider stay the first entry's.
+            const auto shadow = std::find_if(catalog.diagnostics.begin(), catalog.diagnostics.end(), [&](const skill_diagnostic & entry) {
+                return entry.code == "skill_shadowed" && entry.name == name;
+            });
+            if (shadow == catalog.diagnostics.end()) {
+                skill_diagnostic record = diagnostic("warning", "skill_shadowed", "Skill is shadowed by a higher-precedence entry", name, scope, provider);
+                record.providers.push_back(provider);
+                catalog.diagnostics.push_back(std::move(record));
+            } else {
+                shadow->providers.push_back(provider);
+            }
             continue;
         }
 
