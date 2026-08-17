@@ -266,8 +266,6 @@ static inline raw_buffer base64_decode(const std::string & encoded_string) {
 
 namespace {
 
-constexpr uint32_t SERVER_TOKENS_STATE_VERSION = 1;
-
 uint32_t server_tokens_state_u32(size_t value) {
     if (value > std::numeric_limits<uint32_t>::max()) {
         throw std::runtime_error("Server tokens state is too large");

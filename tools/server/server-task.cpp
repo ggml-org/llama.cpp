@@ -1750,6 +1750,8 @@ server_prompt_cache_state * server_prompt_cache::alloc(const server_prompt & pro
             SRV_WRN(" - making room for prompt cache entry, removing oldest entry (size = %.3f MiB)\n",
                     states.front().size() / (1024.0 * 1024.0));
 
+            spill_front();
+
             states.pop_front();
         }
     }
@@ -1787,7 +1789,7 @@ server_prompt_cache_state * server_prompt_cache::alloc(const server_prompt & pro
     return &states.back();
 }
 
-bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tokens_new, llama_context * ctx_tgt, llama_context * ctx_dft, int32_t id_slot) {
+bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tokens_new, llama_context * ctx_tgt, llama_context * ctx_dft, int32_t id_slot, int32_t n_ctx_slot) {
     const int lcp_best = prompt.tokens.get_common_prefix(tokens_new);
 
     float f_keep_best = prompt.tokens.size() > 0 ? float(lcp_best) / prompt.tokens.size() : -1.0f; // empty slot: any cache entry wins
@@ -1796,6 +1798,8 @@ bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tok
     SRV_TRC(" - looking for better prompt, base f_keep = %.3f, f_sim = %.3f\n", f_keep_best, f_sim_best);
 
     auto it_best = states.end();
+
+    int lcp_it_best = 0;
 
     // find the most similar cached prompt, that would also preserve the most context
     for (auto it = states.begin(); it != states.end(); ++it) {
@@ -1815,7 +1819,41 @@ bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tok
             f_keep_best = f_keep_cur;
             f_sim_best  = f_sim_cur;
 
-            it_best = it;
+            it_best     = it;
+            lcp_it_best = lcp_cur;
+        }
+    }
+
+    // check the disk tier for an exact-prefix match longer than what RAM (or the slot itself) offers
+    if (disk) {
+        const int lcp_sel = std::max(lcp_best, lcp_it_best);
+
+        const size_t n_max = std::min<size_t>(tokens_new.size(), std::max(0, n_ctx_slot));
+
+        const auto * file = disk->lookup(tokens_new, n_max);
+
+        if (file && (int64_t) file->n_tokens > (int64_t) lcp_sel) {
+            server_tokens tokens_disk;
+
+            const auto status = disk->load(*file, tokens_new, ctx_tgt, id_slot, tokens_disk);
+
+            if (status == server_prompt_cache_disk::LOAD_OK) {
+                // disk entries carry no draft state - clear the draft sequence so it re-prefills
+                if (ctx_dft) {
+                    llama_memory_seq_rm(llama_get_memory(ctx_dft), id_slot, -1, -1);
+                }
+
+                prompt.tokens = std::move(tokens_disk);
+                prompt.checkpoints.clear();
+
+                return true;
+            }
+
+            if (status == server_prompt_cache_disk::LOAD_FAIL_SEQ_DIRTY && it_best == states.end()) {
+                // the slot's sequence was cleared during the failed restore and there is no RAM
+                // candidate to restore over it - the caller has to clear the slot
+                return false;
+            }
         }
     }
 
@@ -1869,6 +1907,8 @@ void server_prompt_cache::update() {
         while (!states.empty() && size() > limit_size) {
             SRV_WRN(" - cache size limit reached, removing oldest entry (size = %.3f MiB)\n", states.front().size() / (1024.0 * 1024.0));
 
+            spill_front();
+
             states.pop_front();
         }
     }
@@ -1884,6 +1924,8 @@ void server_prompt_cache::update() {
             SRV_WRN(" - cache token limit (%zu, est: %zu) reached, removing oldest entry (size = %.3f MiB)\n",
                     limit_tokens, limit_tokens_cur, states.front().size() / (1024.0 * 1024.0));
 
+            spill_front();
+
             states.pop_front();
         }
     }
@@ -1895,4 +1937,40 @@ void server_prompt_cache::update() {
         SRV_TRC("   - prompt %p: %7d tokens, checkpoints: %2zu, %9.3f MiB\n",
                 (const void *)&state, state.prompt.n_tokens(), state.prompt.checkpoints.size(), state.size() / (1024.0 * 1024.0));
     }
+}
+
+void server_prompt_cache::disk_store(const server_prompt_cache_state & state) const {
+    if (!disk || state.data.main.empty()) {
+        return;
+    }
+
+    disk->store(state.prompt.tokens, state.data.main);
+}
+
+void server_prompt_cache::disk_store_write_through(const server_prompt_cache_state & state) const {
+    if (!disk || !disk->write_through) {
+        return;
+    }
+
+    disk_store(state);
+}
+
+void server_prompt_cache::disk_flush() const {
+    if (!disk) {
+        return;
+    }
+
+    SRV_INF("flushing %zu prompt cache entries to disk\n", states.size());
+
+    for (const auto & state : states) {
+        disk_store(state);
+    }
+}
+
+void server_prompt_cache::spill_front() const {
+    if (!disk || states.empty()) {
+        return;
+    }
+
+    disk_store(states.front());
 }

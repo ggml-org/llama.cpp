@@ -164,6 +164,9 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `-ctxcp, --ctx-checkpoints, --swa-checkpoints N` | max number of context checkpoints to create per slot (default: 32)[(more info)](https://github.com/ggml-org/llama.cpp/pull/15293)<br/>(env: LLAMA_ARG_CTX_CHECKPOINTS) |
 | `-cms, --checkpoint-min-step N` | minimum spacing between context checkpoints in tokens (default: 8192, 0 = no minimum)<br/>(env: LLAMA_ARG_CHECKPOINT_MIN_SPACING_NT) |
 | `-cram, --cache-ram N` | set the maximum cache size in MiB (default: 8192, -1 - no limit, 0 - disable)[(more info)](https://github.com/ggml-org/llama.cpp/pull/16391)<br/>(env: LLAMA_ARG_CACHE_RAM) |
+| `-cdisk, --cache-disk PATH` | directory for the disk prompt cache; prompts evicted from the RAM cache are saved here and restored on later requests, including across restarts (default: disabled, requires cache-ram)<br/>(env: LLAMA_ARG_CACHE_DISK) |
+| `--cache-disk-limit N` | total size budget of the disk prompt cache directory in MiB; oldest entries are deleted when exceeded (default: -1, -1 - no limit)<br/>(env: LLAMA_ARG_CACHE_DISK_LIMIT) |
+| `--cache-disk-write-through, --no-cache-disk-write-through` | write prompts to the disk cache every time they are saved to the RAM cache, instead of only when evicted from it (default: disabled)<br/>(env: LLAMA_ARG_CACHE_DISK_WRITE_THROUGH) |
 | `-kvu, --kv-unified, -no-kvu, --no-kv-unified` | use single unified KV buffer shared across all sequences (default: enabled if number of slots is auto)<br/>(env: LLAMA_ARG_KV_UNIFIED) |
 | `--cache-idle-slots, --no-cache-idle-slots` | save idle slots to the prompt cache on new task, and clear them when using unified KV (default: enabled, requires cache-ram)<br/>(env: LLAMA_ARG_CACHE_IDLE_SLOTS) |
 | `--context-shift, --no-context-shift` | whether to use context shift on infinite text generation (default: disabled)<br/>(env: LLAMA_ARG_CONTEXT_SHIFT) |
@@ -326,6 +329,22 @@ services:
       LLAMA_ARG_ENDPOINT_METRICS: 1
       LLAMA_ARG_PORT: 8080
 ```
+
+### Prompt disk cache
+
+The server keeps recently used prompts (their processed KV cache state) in RAM, controlled by `--cache-ram`. With `--cache-disk PATH`, a disk tier is added below the RAM cache: entries evicted from RAM are written to the given directory, and all RAM entries are flushed there on graceful shutdown. On later requests - including after a server restart - the longest cached prefix of the incoming prompt is restored from disk instead of being re-processed.
+
+```sh
+llama-server -m model.gguf --cache-disk /path/to/cache --cache-disk-limit 32768
+```
+
+Details:
+
+- Files are named `{compat_hash}-{n_tokens}-{chain_hash}.kvc`, where the hashes identify the server configuration and the exact token prefix the file contains. Lookup is a single directory scan at startup plus one hash pass per prompt - no database is used.
+- The cache is invalidated automatically when the model file, mmproj, LoRA adapters, KV cache types, or rope parameters change (stale files are ignored, and deleted once the size budget is exceeded).
+- `--cache-disk-limit` bounds the total size of the directory in MiB; the oldest files (by modification time) are deleted first, including files left over from other models or configurations. The same directory can be shared by multiple servers.
+- By default, files are only written when an entry is evicted from the RAM cache (or on shutdown). With `--cache-disk-write-through`, every prompt saved to the RAM cache is also written to disk immediately, which is more crash-resilient at the cost of extra I/O.
+- Note that KV cache states can be large (potentially multiple GiB per prompt, depending on the model and prompt length), so make sure the disk budget is sized accordingly.
 
 ### Multimodal support
 

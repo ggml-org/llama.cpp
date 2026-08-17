@@ -156,6 +156,9 @@ private: // disallow accessing these members directly, risking out-of-sync
     // map_idx_to_media will contain: {5, img0}, {8, img1}
 
 public:
+    // version of the serialize()/deserialize() format below
+    static constexpr uint32_t SERVER_TOKENS_STATE_VERSION = 1;
+
     server_tokens() = default;
     ~server_tokens() = default;
 

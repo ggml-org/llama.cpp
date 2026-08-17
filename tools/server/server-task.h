@@ -7,8 +7,10 @@
 #include <unordered_set>
 #include <list>
 #include <map>
+#include <memory>
 
 // TODO: prevent including the whole server-common.h as we only use server_tokens
+#include "server-cache-disk.h"
 #include "server-common.h"
 
 using json = nlohmann::ordered_json;
@@ -612,6 +614,10 @@ struct server_prompt_cache {
 
     std::list<server_prompt_cache_state> states;
 
+    // optional cold tier - entries evicted from RAM are spilled here and can be restored later,
+    // including across server restarts
+    std::unique_ptr<server_prompt_cache_disk> disk;
+
     // in bytes, 0 = no limit
     size_t limit_size = 0;
 
@@ -624,9 +630,22 @@ struct server_prompt_cache {
 
     server_prompt_cache_state * alloc(const server_prompt & prompt, size_t state_size_main, size_t state_size_drft);
 
-    bool load(server_prompt & prompt, const server_tokens & tokens_new, llama_context * ctx_tgt, llama_context * ctx_dft, int32_t id_slot);
+    bool load(server_prompt & prompt, const server_tokens & tokens_new, llama_context * ctx_tgt, llama_context * ctx_dft, int32_t id_slot, int32_t n_ctx_slot);
 
     void update();
+
+    // write one RAM cache entry to the disk tier (no-op when the disk tier is disabled)
+    void disk_store(const server_prompt_cache_state & state) const;
+
+    // disk_store, but only when write-through mode is enabled
+    void disk_store_write_through(const server_prompt_cache_state & state) const;
+
+    // spill all RAM entries to the disk tier (e.g. on graceful shutdown)
+    void disk_flush() const;
+
+private:
+    // spill the entry that is about to be evicted
+    void spill_front() const;
 };
 
 // used exclusively by router mode

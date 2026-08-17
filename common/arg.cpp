@@ -1711,6 +1711,38 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_CACHE_RAM").set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
     add_opt(common_arg(
+        {"-cdisk", "--cache-disk"}, "PATH",
+        "directory for the disk prompt cache; prompts evicted from the RAM cache are saved here and restored on later requests, including across restarts (default: disabled, requires cache-ram)",
+        [](common_params & params, const std::string & value) {
+            params.cache_disk_path = value;
+            if (!fs_is_directory(params.cache_disk_path)) {
+                throw std::invalid_argument("not a directory: " + value);
+            }
+            // if doesn't end with DIRECTORY_SEPARATOR, add it
+            if (params.cache_disk_path[params.cache_disk_path.size() - 1] != DIRECTORY_SEPARATOR) {
+                params.cache_disk_path += DIRECTORY_SEPARATOR;
+            }
+        }
+    ).set_env("LLAMA_ARG_CACHE_DISK").set_examples({LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
+        {"--cache-disk-limit"}, "N",
+        string_format("total size budget of the disk prompt cache directory in MiB; oldest entries are deleted when exceeded (default: %d, -1 - no limit)", params.cache_disk_limit_mib),
+        [](common_params & params, int value) {
+            if (value == 0 || value < -1) {
+                throw std::invalid_argument("cache-disk-limit must be positive or -1 (no limit)");
+            }
+            params.cache_disk_limit_mib = value;
+        }
+    ).set_env("LLAMA_ARG_CACHE_DISK_LIMIT").set_examples({LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
+        {"--cache-disk-write-through"},
+        {"--no-cache-disk-write-through"},
+        "write prompts to the disk cache every time they are saved to the RAM cache, instead of only when evicted from it (default: disabled)",
+        [](common_params & params, bool value) {
+            params.cache_disk_write_through = value;
+        }
+    ).set_env("LLAMA_ARG_CACHE_DISK_WRITE_THROUGH").set_examples({LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
         {"-kvu", "--kv-unified"},
         {"-no-kvu", "--no-kv-unified"},
         "use single unified KV buffer shared across all sequences (default: enabled if number of slots is auto)",

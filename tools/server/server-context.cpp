@@ -275,11 +275,13 @@ struct server_slot {
             llama_state_seq_get_data_ext(ctx_dft, cur->data.drft.data(), cur_size_dft, id, LLAMA_STATE_SEQ_FLAGS_NONE);
         }
 
+        prompt_cache.disk_store_write_through(*cur);
+
         return true;
     }
 
     bool prompt_load(server_prompt_cache & prompt_cache, const server_tokens & tokens) {
-        bool res = prompt_cache.load(prompt, tokens, ctx_tgt, ctx_dft, id);
+        bool res = prompt_cache.load(prompt, tokens, ctx_tgt, ctx_dft, id, n_ctx);
         if (!res) {
             SLT_WRN(*this, "%s", "failed to load prompt from cache\n");
         }
@@ -1308,7 +1310,26 @@ private:
             SRV_TRC("%s", "use `--cache-ram 0` to disable the prompt cache\n");
 
             prompt_cache = std::make_unique<server_prompt_cache>(params_base.cache_ram_mib, n_ctx);
+
+            if (!params_base.cache_disk_path.empty()) {
+                const uint64_t compat_hash = server_cache_disk_compat_hash(params_base);
+
+                SRV_INF("disk prompt cache is enabled, dir: '%s', compat hash: %08x\n",
+                        params_base.cache_disk_path.c_str(), (uint32_t) compat_hash);
+
+                prompt_cache->disk = std::make_unique<server_prompt_cache_disk>(
+                        params_base.cache_disk_path,
+                        compat_hash,
+                        mctx != nullptr,
+                        params_base.cache_disk_limit_mib,
+                        params_base.cache_disk_write_through);
+            }
         } else {
+            if (!params_base.cache_disk_path.empty()) {
+                SRV_ERR("%s", "--cache-disk requires the RAM prompt cache - remove `--cache-ram 0`\n");
+                return false;
+            }
+
             SRV_TRC("%s", "prompt cache is disabled - use `--cache-ram N` to enable it\n");
         }
         SRV_TRC("%s", "for more info see https://github.com/ggml-org/llama.cpp/pull/16391\n");
@@ -4058,6 +4079,11 @@ bool server_context::load_model(common_params & params) {
 void server_context::start_loop() {
     auto & params = impl->params_base;
     impl->queue_tasks.start_loop(params.sleep_idle_seconds * 1000);
+
+    // on graceful shutdown, give the RAM prompt cache entries a chance to survive the restart
+    if (impl->prompt_cache) {
+        impl->prompt_cache->disk_flush();
+    }
 }
 
 void server_context::terminate() {
