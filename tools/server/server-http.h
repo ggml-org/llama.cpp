@@ -27,6 +27,26 @@ struct server_http_res {
     std::map<std::string, std::string> headers;
 
     std::function<bool(std::string &)> next = nullptr;
+
+    // Attributes collected by request handlers and applied to the HTTP server span
+    // when the response completes. Keeping these values transport-neutral avoids an
+    // OpenTelemetry dependency in server-context.
+    std::map<std::string, std::string> trace_string_attributes;
+    std::map<std::string, int64_t>     trace_int_attributes;
+    std::map<std::string, double>      trace_double_attributes;
+
+    void set_trace_attribute(const std::string & name, const std::string & value) {
+        trace_string_attributes[name] = value;
+    }
+
+    void set_trace_attribute(const std::string & name, int64_t value) {
+        trace_int_attributes[name] = value;
+    }
+
+    void set_trace_attribute(const std::string & name, double value) {
+        trace_double_attributes[name] = value;
+    }
+
     bool is_stream() const {
         return next != nullptr;
     }

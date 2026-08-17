@@ -11,6 +11,9 @@ class server_telemetry_span {
   public:
     ~server_telemetry_span();
 
+    void set_attribute(const std::string & name, const std::string & value);
+    void set_attribute(const std::string & name, int64_t value);
+    void set_attribute(const std::string & name, double value);
     void set_http_status(int status_code);
     void set_error(const std::string & error_type);
     void end();

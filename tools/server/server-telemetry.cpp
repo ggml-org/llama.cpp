@@ -206,6 +206,42 @@ server_telemetry_span::~server_telemetry_span() {
     end();
 }
 
+void server_telemetry_span::set_attribute(const std::string & name, const std::string & value) {
+#ifdef LLAMA_SERVER_OPEN_TELEMETRY
+    if (!pimpl || pimpl->ended.load() || !pimpl->span) {
+        return;
+    }
+    pimpl->span->SetAttribute(name, value);
+#else
+    (void) name;
+    (void) value;
+#endif
+}
+
+void server_telemetry_span::set_attribute(const std::string & name, int64_t value) {
+#ifdef LLAMA_SERVER_OPEN_TELEMETRY
+    if (!pimpl || pimpl->ended.load() || !pimpl->span) {
+        return;
+    }
+    pimpl->span->SetAttribute(name, value);
+#else
+    (void) name;
+    (void) value;
+#endif
+}
+
+void server_telemetry_span::set_attribute(const std::string & name, double value) {
+#ifdef LLAMA_SERVER_OPEN_TELEMETRY
+    if (!pimpl || pimpl->ended.load() || !pimpl->span) {
+        return;
+    }
+    pimpl->span->SetAttribute(name, value);
+#else
+    (void) name;
+    (void) value;
+#endif
+}
+
 void server_telemetry_span::set_http_status(int status_code) {
 #ifdef LLAMA_SERVER_OPEN_TELEMETRY
     if (!pimpl || pimpl->ended.load() || !pimpl->span) {

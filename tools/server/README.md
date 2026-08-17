@@ -1118,6 +1118,26 @@ When `OTEL_SDK_DISABLED=true`, no spans are created or exported, but incoming W3
 
 Each request reaching a registered API handler produces a server span using the stable OpenTelemetry HTTP semantic conventions. Router and CORS-proxy requests also produce client spans and propagate W3C `traceparent` context downstream. Streaming spans remain open until the stream completes or the client disconnects.
 
+Completed text and chat inference spans include token usage and performance attributes. Standard `gen_ai.*` attributes describe the operation, model, total input and output tokens, and prompt-cache reads. The following llama.cpp-specific attributes provide the internal phase breakdown:
+
+| Attribute | Description |
+| --- | --- |
+| `llama.completion.count` | Number of completions represented by the request. |
+| `llama.completion.input_tokens.processed` | Input tokens evaluated rather than served from the prompt cache. |
+| `llama.completion.cache.hit_ratio` | Cached input tokens divided by total input tokens. |
+| `llama.completion.queue.duration_ms` | Time from entering the inference queue until prompt evaluation starts. |
+| `llama.completion.prompt.duration_ms` | Prompt evaluation duration. |
+| `llama.completion.generation.duration_ms` | Token generation duration. |
+| `llama.completion.time_to_first_token_ms` | Queue plus prompt evaluation duration. |
+| `llama.completion.inference.duration_ms` | Queue, prompt evaluation, and generation duration. |
+| `llama.completion.prompt.tokens_per_second` | Evaluated prompt-token throughput. |
+| `llama.completion.generation.tokens_per_second` | Generated-token throughput, excluding the first token produced by prompt evaluation. |
+| `llama.completion.speculative.draft_tokens` | Draft tokens proposed by speculative decoding. |
+| `llama.completion.speculative.accepted_tokens` | Draft tokens accepted by the target model. |
+| `llama.completion.speculative.acceptance_ratio` | Accepted draft tokens divided by proposed draft tokens. |
+
+For requests containing multiple completions, token counts are summed and duration attributes report the longest completion. These attributes contain no prompt or completion content.
+
 Request and response bodies, prompts, completions, API keys, and arbitrary HTTP headers are never added to spans. Routes are recorded using their registered templates to avoid high-cardinality path parameters.
 
 ### POST `/slots/{id_slot}?action=save`: Save the prompt cache of the specified slot to a file.

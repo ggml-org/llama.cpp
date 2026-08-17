@@ -544,6 +544,21 @@ static std::string build_query_string(const httplib::Request & req) {
 // using unique_ptr for request to allow safe capturing in lambdas
 using server_http_req_ptr = std::unique_ptr<server_http_req>;
 
+static void apply_trace_attributes(const server_telemetry_span_ptr & span, const server_http_res & response) {
+    if (!span) {
+        return;
+    }
+    for (const auto & attribute : response.trace_string_attributes) {
+        span->set_attribute(attribute.first, attribute.second);
+    }
+    for (const auto & attribute : response.trace_int_attributes) {
+        span->set_attribute(attribute.first, attribute.second);
+    }
+    for (const auto & attribute : response.trace_double_attributes) {
+        span->set_attribute(attribute.first, attribute.second);
+    }
+}
+
 static void process_handler_response(server_http_req_ptr && request, server_http_res_ptr & response, httplib::Response & res) {
     if (request->trace_span) {
         request->trace_span->set_http_status(response->status);
@@ -576,6 +591,7 @@ static void process_handler_response(server_http_req_ptr && request, server_http
         const auto on_complete = [request = q_ptr, response = r_ptr](bool success) mutable {
             response->on_complete();
             if (request->trace_span) {
+                apply_trace_attributes(request->trace_span, *response);
                 if (!success) {
                     request->trace_span->set_error("client_disconnect");
                 }
@@ -591,6 +607,7 @@ static void process_handler_response(server_http_req_ptr && request, server_http
         res.set_content(response->data, response->content_type);
         response->on_complete();
         if (request->trace_span) {
+            apply_trace_attributes(request->trace_span, *response);
             request->trace_span->end();
         }
     }
