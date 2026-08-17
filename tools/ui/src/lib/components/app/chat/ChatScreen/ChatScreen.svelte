@@ -40,11 +40,10 @@
 	let initialMessage = $state('');
 	let showDeleteDialog = $state(false);
 	let showEmptyFileDialog = $state(false);
+	// a new-chat tab is an unsaved (temporary) conversation, so the empty
+	// greeting shows whenever the route is a new-chat tab with no messages
 	let isEmpty = $derived(
-		showCenteredEmpty &&
-			!conversationsStore.activeConversation &&
-			conversationsStore.activeMessages.length === 0 &&
-			!chatStore.isLoading
+		showCenteredEmpty && conversationsStore.activeMessages.length === 0 && !chatStore.isLoading
 	);
 	let activeErrorDialog = $derived(chatStore.errorDialogState);
 	let isServerLoading = $derived(serverStore.loading);
@@ -76,8 +75,15 @@
 	});
 	const { handleKeydown } = useKeyboardShortcuts({
 		deleteActiveConversation: () => {
-			if (conversationsStore.activeConversation) {
-				showDeleteDialog = true;
+			const conversation = conversationsStore.activeConversation;
+
+			if (conversation) {
+				// an empty new-chat tab is unsaved, so drop it without confirmation
+				if (conversationsStore.isTemporaryConversation(conversation.id)) {
+					conversationsStore.deleteConversation(conversation.id);
+				} else {
+					showDeleteDialog = true;
+				}
 			}
 		}
 	});
@@ -297,7 +303,7 @@
 	<ServerLoadingSplash />
 {:else}
 	<div
-		class="chat-screen flex grow flex-col min-h-[calc(100dvh-1rem)] md:min-h-full px-4 md:py-0 pt-12 pb-48 md:pb-4"
+		class="chat-screen flex grow flex-col min-h-[calc(100dvh-1rem)] md:min-h-[calc(100dvh-1rem-var(--chat-tabs-height,0px))] px-4 md:py-0 pt-12 pb-48 md:pb-4"
 		style:--chat-form-bottom-position={chatFormBottomPosition}
 		ondragenter={dragAndDrop.dragHandlers.dragenter}
 		ondragleave={dragAndDrop.dragHandlers.dragleave}

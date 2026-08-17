@@ -147,6 +147,23 @@ export class DatabaseService {
 	}
 
 	/**
+	 * Persist a conversation with a caller-supplied id. Used to save an
+	 * unsaved new-chat tab (which already carries a temporary id) on its
+	 * first message.
+	 */
+	static async createConversationWithId(conversation: DatabaseConversation): Promise<void> {
+		await db[IDXDB_TABLES.conversations].add(conversation);
+	}
+
+	/**
+	 *
+	 *
+	 * Messages
+	 *
+	 *
+	 */
+
+	/**
 	 * Creates a new message branch by adding a message and updating parent/child relationships.
 	 * Also updates the conversation's currNode to point to the new message.
 	 *
