@@ -75,7 +75,7 @@ echo "Checking release.yml status for commit ${SHA}..."
 if [[ -z "${GITHUB_REPOSITORY:-}" ]]; then
     echo "Warning: GITHUB_REPOSITORY not set - skipping CI check (local run)"
 else
-    RUNS=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/release.yml/runs" \
+    RUNS=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/release.yml/runs?per_page=100" \
         --jq "[.workflow_runs[] | select(.head_sha == \"${SHA}\" and .conclusion == \"success\")] | length")
     if [[ "$RUNS" -eq 0 ]]; then
         if [[ "$DRY_RUN" == "true" ]]; then
