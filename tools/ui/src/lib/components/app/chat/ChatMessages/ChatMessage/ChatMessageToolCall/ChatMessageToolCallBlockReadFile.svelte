@@ -2,8 +2,8 @@
 	import { parseReadFileMeta } from './parsers/read-file';
 	import ToolCallBlock from './ToolCallBlock.svelte';
 	import { SyntaxHighlightedCode } from '$lib/components/app';
-	import { DEFAULT_LANGUAGE, MAX_HEIGHT_CODE_BLOCK } from '$lib/constants';
-	import { type AgenticSection } from '$lib/utils';
+	import { CODE_BLOCK, MAX_HEIGHT_CODE_BLOCK } from '$lib/constants';
+	import type { AgenticSection } from '$lib/types';
 
 	interface Props {
 		section: AgenticSection;
@@ -32,7 +32,7 @@
 		{#if section.toolResult}
 			<SyntaxHighlightedCode
 				code={section.toolResult}
-				language={readFileMeta?.language ?? DEFAULT_LANGUAGE}
+				language={readFileMeta?.language ?? CODE_BLOCK.DEFAULT_LANGUAGE}
 				maxHeight={MAX_HEIGHT_CODE_BLOCK}
 			/>
 		{:else}

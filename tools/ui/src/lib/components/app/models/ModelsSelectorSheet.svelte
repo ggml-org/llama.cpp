@@ -10,7 +10,7 @@
 	import * as Sheet from '$lib/components/ui/sheet';
 	import { ServerModelStatus } from '$lib/enums';
 	import { useModelsSelector } from '$lib/hooks/use-models-selector.svelte';
-	import { modelsStore, routerModels } from '$lib/stores/models.svelte';
+	import { modelsStore } from '$lib/stores';
 	import { modelLoadFraction } from '$lib/utils';
 
 	interface Props {
@@ -67,7 +67,7 @@
 		{@const selectedOption = ms.getDisplayOption()}
 		{@const triggerModel = selectedOption?.model}
 		{@const triggerStatus = triggerModel
-			? routerModels().find((m) => m.id === triggerModel)?.status?.value
+			? modelsStore.routerModels.find((m) => m.id === triggerModel)?.status?.value
 			: undefined}
 		{@const triggerLoading =
 			!!triggerModel &&

@@ -114,6 +114,10 @@ bool llama_supports_rpc(void) {
     return ggml_backend_reg_by_name("RPC") != nullptr;
 }
 
+const char * llama_version(void) {
+    return LLAMA_VERSION;
+}
+
 void llama_backend_init(void) {
     ggml_time_init();
 
@@ -253,7 +257,11 @@ static bool llama_prepare_model_devices(const llama_model_params & params, llama
                     }
 
                     case GGML_BACKEND_DEVICE_TYPE_IGPU:
-                        if (igpus.empty()) {
+                        // igpus.empty() - workaround for integrated devices seen by multiple backends
+                        // ref: https://github.com/ggml-org/llama.cpp/pull/23897
+                        // ggml_backend_dev_backend_reg - allow devices of the same backend regardless if integrated
+                        // ref: https://github.com/ggml-org/llama.cpp/pull/23897#issuecomment-5264222997
+                        if (igpus.empty() || ggml_backend_dev_backend_reg(dev) == ggml_backend_dev_backend_reg(igpus.back().dev)) {
                             igpus.push_back({false, dev});
                         }
                         break;

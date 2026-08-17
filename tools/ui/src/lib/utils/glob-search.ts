@@ -5,21 +5,18 @@
  */
 
 import { lastPathSegment } from './path-display';
-import {
-	buildGlobSearchArgs,
-	type GlobEntry,
-	type GlobSearchArgs,
-	joinPath,
-	rankEntries
-} from './working-directory';
-import {
-	GLOB_WILDCARD,
-	PATH_NAV_MAX_DEPTH,
-	PATH_SEPARATOR,
-	WINDOWS_SEPARATOR
-} from '$lib/constants';
+import { buildGlobSearchArgs, joinPath, rankEntries } from './working-directory';
+import { GLOB, PATH_SEPARATOR, SEARCH } from '$lib/constants';
 import { BuiltInTool, GlobSearchType } from '$lib/enums';
 import { ToolsService } from '$lib/services/tools.service';
+import type {
+	GlobEntry,
+	GlobEntryResult,
+	GlobSearchArgs,
+	GlobSearchChildOptions,
+	GlobSearchChildResult,
+	GlobSearchResult
+} from '$lib/types/glob';
 
 const SEARCH_CACHE_TTL_MS = 2000;
 
@@ -30,12 +27,6 @@ interface CacheEntry {
 }
 
 const searchCache = new Map<string, CacheEntry>();
-
-export interface GlobSearchResult {
-	base: string;
-	entries: GlobEntry[];
-	error?: string;
-}
 
 export async function runGlobSearch(
 	args: GlobSearchArgs,
@@ -71,30 +62,6 @@ export async function runGlobSearch(
 	return { base, entries };
 }
 
-export interface GlobEntryResult {
-	path: string;
-	name: string;
-	type: string;
-}
-
-export interface GlobSearchChildOptions {
-	type?: GlobSearchType;
-	/** Descend only on a trailing path separator (mention picker); off for
-	 * the WD picker, which descends on any exact match. */
-	descendOnTrailingSeparator?: boolean;
-	childMaxDepth?: number;
-}
-
-export interface GlobSearchChildResult {
-	base: string;
-	args: GlobSearchArgs;
-	/** Outer ranked entries plus the walked directory's children (absolute). */
-	entries: GlobEntryResult[];
-	/** Absolute path of the directory whose children were appended. */
-	exactDir?: string;
-	error?: string;
-}
-
 function toEntryResult(e: GlobEntry, base: string): GlobEntryResult {
 	return { name: lastPathSegment(e.path), path: joinPath(base, e.path), type: e.type };
 }
@@ -113,7 +80,7 @@ export async function runGlobSearchWithChildren(
 	options: GlobSearchChildOptions = {}
 ): Promise<GlobSearchChildResult> {
 	const {
-		childMaxDepth = PATH_NAV_MAX_DEPTH,
+		childMaxDepth = SEARCH.PATH_NAV_MAX_DEPTH,
 		descendOnTrailingSeparator = false,
 		type = GlobSearchType.ALL
 	} = options;
@@ -128,7 +95,7 @@ export async function runGlobSearchWithChildren(
 
 	if (last) {
 		const wantsDescend = descendOnTrailingSeparator
-			? query.endsWith(PATH_SEPARATOR) || query.endsWith(WINDOWS_SEPARATOR)
+			? query.endsWith(PATH_SEPARATOR) || query.endsWith(GLOB.WINDOWS_SEPARATOR)
 			: true;
 		const exact = ranked.find(
 			(e) => e.type === 'dir' && lastPathSegment(e.path).toLowerCase() === last.toLowerCase()
@@ -137,7 +104,7 @@ export async function runGlobSearchWithChildren(
 		if (wantsDescend && exact) {
 			const exactDir = joinPath(res.base, exact.path);
 			const childRes = await runGlobSearch(
-				{ include: GLOB_WILDCARD, maxDepth: childMaxDepth, path: exactDir, rankQuery: '' },
+				{ include: GLOB.WILDCARD, maxDepth: childMaxDepth, path: exactDir, rankQuery: '' },
 				type,
 				limit,
 				signal

@@ -14,6 +14,7 @@ from .base import MmprojModel, ModelBase, TextModel, gguf
 
 
 @ModelBase.register("MiMoV2FlashForCausalLM", "MiMoV2ForCausalLM")
+@ModelBase.example("XiaomiMiMo/MiMo-V2.5")
 class MimoV2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.MIMO2
 
@@ -230,6 +231,7 @@ class MimoV2Model(TextModel):
 
 
 @ModelBase.register("MiMoV2ForCausalLM")
+@ModelBase.example("XiaomiMiMo/MiMo-V2.5")
 class MiMoV2VisionAudioModel(MmprojModel):
     has_audio_encoder = True
 

@@ -1,4 +1,4 @@
-import { CORS_PROXY_HEADER_PREFIX } from '$lib/constants';
+import { CORS_PROXY } from '$lib/constants';
 import { sanitizeHeaders } from '$lib/utils/api-headers';
 import { describe, expect, it } from 'vitest';
 
@@ -61,9 +61,9 @@ describe('sanitizeHeaders', () => {
 	});
 
 	it('redacts proxied sensitive and custom target headers', () => {
-		const proxiedAuthorization = `${CORS_PROXY_HEADER_PREFIX}authorization`;
-		const proxiedSessionId = `${CORS_PROXY_HEADER_PREFIX}mcp-session-id`;
-		const proxiedVendorKey = `${CORS_PROXY_HEADER_PREFIX}x-vendor-key`;
+		const proxiedAuthorization = `${CORS_PROXY.HEADER_PREFIX}authorization`;
+		const proxiedSessionId = `${CORS_PROXY.HEADER_PREFIX}mcp-session-id`;
+		const proxiedVendorKey = `${CORS_PROXY.HEADER_PREFIX}x-vendor-key`;
 		const headers = new Headers({
 			[proxiedAuthorization]: 'Bearer secret',
 			[proxiedSessionId]: 'session-12345',

@@ -31,6 +31,7 @@ export interface SettingsEntry {
 	radioOptions?: Array<{ value: string; label: string; key: string; isExperimental?: boolean }>;
 	isExperimental?: boolean;
 	isPositiveInteger?: boolean;
+	isPrivate?: boolean;
 	placeholder?: string;
 	min?: number;
 	max?: number;
@@ -55,6 +56,7 @@ export interface SettingsFieldConfig {
 	type: SettingsFieldType;
 	isExperimental?: boolean;
 	isPositiveInteger?: boolean;
+	isPrivate?: boolean;
 	placeholder?: string;
 	min?: number;
 	max?: number;

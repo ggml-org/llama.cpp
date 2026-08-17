@@ -10,21 +10,18 @@
 	import ToolCallBlock from './ToolCallBlock.svelte';
 	import { AlertTriangle, Check, Loader2, XCircle } from '@lucide/svelte';
 	import { CollapsibleTerminalBlock } from '$lib/components/app';
-	import { SETTINGS_KEYS } from '$lib/constants';
-	import { TOOL_RUNTIME_SCROLL_AT_BOTTOM_THRESHOLD_PX } from '$lib/constants/auto-scroll';
-	import { config } from '$lib/stores/settings.svelte';
-	import { toolsStore } from '$lib/stores/tools.svelte';
-	import type { DatabaseMessageExtra } from '$lib/types';
+	import { SETTINGS_KEYS, TOOL_RUNTIME_SCROLL_AT_BOTTOM_THRESHOLD_PX } from '$lib/constants';
+	import { AttachmentType } from '$lib/enums';
+	import { settingsStore, toolsStore } from '$lib/stores';
+	import type { AgenticSection, DatabaseMessageExtra, ToolResultLine } from '$lib/types';
 	import {
 		abbreviateHome,
-		type AgenticSection,
 		type ExecShellExitStatus,
 		highlightCode,
 		isExitCodeSummaryLine,
 		parseExecShellCommandError,
 		parseExecShellCommandExitStatus,
-		parseToolResultWithImages,
-		type ToolResultLine
+		parseToolResultWithMedia
 	} from '$lib/utils';
 
 	interface Props {
@@ -53,7 +50,7 @@
 	);
 
 	const parsedLines: ToolResultLine[] = $derived(
-		section.toolResult ? parseToolResultWithImages(section.toolResult, attachments) : []
+		section.toolResult ? parseToolResultWithMedia(section.toolResult, attachments) : []
 	);
 
 	// Drop the trailing "[exit code: N]" line - rendered as a colored
@@ -94,7 +91,7 @@
 	);
 
 	const useFullHeightCodeBlocks = $derived(
-		Boolean(config()[SETTINGS_KEYS.FULL_HEIGHT_CODE_BLOCKS])
+		Boolean(settingsStore.config[SETTINGS_KEYS.FULL_HEIGHT_CODE_BLOCKS])
 	);
 
 	const autoScroll = $derived(isLive && !useFullHeightCodeBlocks);
@@ -223,10 +220,10 @@
 			>
 				{#each outputLines as line, i (i)}
 					<div class="font-mono text-[11px] leading-relaxed whitespace-pre-wrap">{line.text}</div>
-					{#if line.image}
+					{#if line.media?.type === AttachmentType.IMAGE}
 						<img
-							src={line.image.base64Url}
-							alt={line.image.name}
+							src={line.media.base64Url}
+							alt={line.media.name}
 							class="mt-2 mb-2 h-auto max-w-full rounded-lg"
 							loading="lazy"
 						/>

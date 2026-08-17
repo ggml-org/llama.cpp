@@ -121,6 +121,10 @@ Drafts with a Qwen3 backbone and drafts with a DeepSeek-V4 backbone (MLA + MoE +
 hyper-connections, as used by DeepSeek-V4-Flash-DSpark) are supported; support for other
 backbones (e.g. Gemma4) is planned.
 
+DSpark drafts exported in the [speculators](https://github.com/vllm-project/speculators) format
+(for example [`RedHatAI/gemma-4-31B-it-speculator.dspark`](https://huggingface.co/RedHatAI/gemma-4-31B-it-speculator.dspark))
+convert the same way.
+
 See:
 
 - #25173

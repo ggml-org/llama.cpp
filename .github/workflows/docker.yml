@@ -44,6 +44,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
+          ssh-key: ${{ secrets.DEPLOY_KEY_RELEASE }}
 
       - name: Determine source tag name
         id: srctag

@@ -4929,8 +4929,13 @@ static bool ggml_opencl_ensure_fa_variant(ggml_backend_opencl_context * backend_
         const int x = (e && e[0]) ? atoi(e) : 0;
         return (x == 8 || x == 16 || x == 32) ? x : 0;   // 0 = per-gen default
     }();
+    // X2E needs 16 to keep per-lane o_acc at 128B (the compiler spills the
+    // kernel-default width); X1E does not spill, but C=16 is still a measured
+    // +28-30% DK128-GQA4 decode win there (X1-85, kv 4096/8192), neutral on
+    // DK64 / GQA1 / quant-KV.
     const int fa_cl_c_gqa4 = fa_cl_c_env ? fa_cl_c_env
-        : (backend_ctx->adreno_gen == ADRENO_GPU_GEN::X2E ? 16 : 0);
+        : (backend_ctx->adreno_gen == ADRENO_GPU_GEN::X2E ||
+           backend_ctx->adreno_gen == ADRENO_GPU_GEN::X1E ? 16 : 0);
     const std::string opts_cl_c_gqa4 = fa_cl_c_gqa4
         ? " -D FA_CL_C=" + std::to_string(fa_cl_c_gqa4) : std::string();
     const std::string fa_cl_c_g8_val = std::to_string(fa_cl_c_gqa4 ? fa_cl_c_gqa4 * 2 : 16);
@@ -7074,6 +7079,19 @@ inline bool enable_adreno_trans_weight(const ggml_backend_opencl_context *backen
                           (tensor->ne[2] == 1) && (tensor->ne[3] == 1);
 
     return ((elem_num < 128 * 1024 * 1024) && adreno_kernel && shape_ok);  // max element num: 2**27
+}
+
+inline bool enable_adreno_trans_weight_q5_K(const ggml_backend_opencl_context *backend_ctx, const ggml_tensor *tensor) {
+    if (!use_adreno_kernels(backend_ctx, tensor)) {
+        return false;
+    }
+
+    const size_t elem_num = ggml_nelements(tensor);
+    const size_t q_img_width = elem_num / 8;
+    const size_t qh_img_width = elem_num / 16;
+
+    return q_img_width <= backend_ctx->image_max_buffer_size &&
+           qh_img_width <= backend_ctx->image_max_buffer_size;
 }
 
 static inline bool use_flat_gemv_for_large_m_q4_K(const ggml_tensor *tensor) {
@@ -9255,7 +9273,7 @@ static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, 
 
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
         cl_kernel kernel = backend_ctx->kernel_convert_block_q5_K;
-        if (use_adreno_kernels(backend_ctx, tensor)) {
+        if (enable_adreno_trans_weight_q5_K(backend_ctx, tensor)) {
             kernel = backend_ctx->kernel_convert_block_q5_K_noshuffle;
         }
 #else
@@ -9290,7 +9308,7 @@ static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, 
 
         tensor->extra = extra;
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
-        if (use_adreno_kernels(backend_ctx, tensor)) {
+        if (enable_adreno_trans_weight_q5_K(backend_ctx, tensor)) {
 
             int M = tensor->ne[1];
             int K = tensor->ne[0];
@@ -10388,7 +10406,7 @@ static void ggml_backend_opencl_buffer_get_tensor(ggml_backend_buffer_t buffer, 
             CL_CHECK(clReleaseMemObject(data_device));
             return;
         }
-        if (use_adreno_kernels(backend_ctx, tensor)) {
+        if (enable_adreno_trans_weight_q5_K(backend_ctx, tensor)) {
             int M = tensor->ne[1];
             int K = tensor->ne[0];
 
@@ -18928,7 +18946,8 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
         }
 
         // q5_K x fp32
-        if (src0t == GGML_TYPE_Q5_K && src1t == GGML_TYPE_F32) {
+        if (src0t == GGML_TYPE_Q5_K && src1t == GGML_TYPE_F32 &&
+            enable_adreno_trans_weight_q5_K(backend_ctx, src0)) {
             ggml_cl_mul_mat_q5_K_f32_adreno(backend, src0, src1, dst);
             return;
         }

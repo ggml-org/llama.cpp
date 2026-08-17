@@ -106,6 +106,7 @@ The `llama.cpp` project is build on top of the [ggml](https://github.com/ggml-or
 - [XCFramework](docs/xcframework.md)
 - [Completions](docs/completions.md)
 - [Models](docs/models.md)
+- [Release process](docs/release.md)
 
 ## Contributing
 

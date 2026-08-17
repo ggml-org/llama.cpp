@@ -3,7 +3,7 @@
 	import { Card } from '$lib/components/ui/card';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { McpPromptVariant } from '$lib/enums';
-	import { mcpStore } from '$lib/stores/mcp.svelte';
+	import { mcpStore } from '$lib/stores';
 	import type { DatabaseMessageExtraMcpPrompt } from '$lib/types';
 	import { SvelteMap } from 'svelte/reactivity';
 
