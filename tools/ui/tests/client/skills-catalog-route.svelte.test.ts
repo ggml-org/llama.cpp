@@ -288,6 +288,36 @@ describe('/skills route presentation', () => {
 		expect(text.match(/Provider:/g)).toHaveLength(2);
 	});
 
+	it('renders the collapsed shadowed providers list of one skill_shadowed diagnostic', async () => {
+		const catalog: SkillCatalogResponse = {
+			...makeCatalog(makeEntry('demo-skill')),
+			diagnostics: [
+				{
+					code: 'skill_shadowed',
+					message: 'Skill is shadowed by a higher-precedence entry',
+					name: 'demo-skill',
+					provider: 'claude',
+					providers: ['claude', 'gemini', 'opencode'],
+					scope: 'project',
+					severity: 'warning'
+				}
+			]
+		};
+
+		mockFetchOnce(catalog);
+		render(SkillsPage);
+
+		await vi.waitFor(() => expect(bodyText()).toContain('skill_shadowed'));
+
+		const text = bodyText();
+
+		// The singular first provider and the full collapsed list both render.
+		expect(text).toContain('Provider: claude');
+		expect(text).toContain('Providers: claude, gemini, opencode');
+		expect(text.match(/Providers:/g)).toHaveLength(1);
+		expect(text.match(/skill_shadowed/g)).toHaveLength(1);
+	});
+
 	it('shows a distinct empty state for a server-empty catalog', async () => {
 		mockFetchOnce(makeCatalog());
 		render(SkillsPage);

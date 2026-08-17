@@ -174,6 +174,50 @@ static void test_catalog_precedence_and_cwd_identity() {
     CHECK(shadows[0].at("scope") == "global");
     CHECK(shadows[0].at("provider") == "agents");
     CHECK(shadows[0].at("message") == "Skill is shadowed by a higher-precedence entry");
+    // a single shadow keeps the singular shape, no providers list
+    CHECK(!shadows[0].contains("providers"));
+}
+
+static void test_catalog_shadow_collapse() {
+    const fs::path tmp = make_temp_dir();
+    const fs::path home = tmp / "home";
+    const fs::path project = tmp / "project";
+    fs::create_directories(home);
+    fs::create_directories(project);
+    // three providers share one name: the .agents winner stays, and the two
+    // losers collapse into a single skill_shadowed diagnostic
+    write_skill(project, "agents", "shared", "project body");
+    write_skill(project, "claude", "shared", "claude body");
+    write_skill(project, "gemini", "shared", "gemini body");
+    write_skill(project, "opencode", "shared", "opencode body");
+
+    server_skills skills = make_skills(home, project, /* trust_project_skills */ true, {"claude", "gemini", "opencode"});
+
+    const server_http_res_ptr catalog = do_get(skills);
+    CHECK(catalog != nullptr);
+    CHECK(catalog->status == 200);
+    const json body = parse_body(catalog);
+    CHECK(body.at("skills").size() == 1);
+    CHECK(body.at("skills")[0].at("name") == "shared");
+    CHECK(body.at("skills")[0].at("provider") == "agents");
+    const json shadows = body.at("diagnostics");
+    CHECK(shadows.size() == 1);
+    CHECK(shadows[0].at("severity") == "warning");
+    CHECK(shadows[0].at("code") == "skill_shadowed");
+    CHECK(shadows[0].at("name") == "shared");
+    CHECK(shadows[0].at("scope") == "project");
+    CHECK(shadows[0].at("provider") == "claude");
+    CHECK(shadows[0].at("providers") == json::array({"claude", "gemini", "opencode"}));
+    CHECK(shadows[0].at("message") == "Skill is shadowed by a higher-precedence entry");
+
+    // the read path surfaces the same collapsed diagnostic
+    const server_http_res_ptr read = do_post(skills, R"({"name":"shared"})");
+    CHECK(read != nullptr);
+    CHECK(read->status == 200);
+    const json read_body = parse_body(read);
+    CHECK(read_body.at("diagnostics").size() == 1);
+    CHECK(read_body.at("diagnostics")[0].at("code") == "skill_shadowed");
+    CHECK(read_body.at("diagnostics")[0].at("providers") == json::array({"claude", "gemini", "opencode"}));
 }
 
 // disable-model-invocation is parsed and exposed per catalog entry, and the
@@ -1181,6 +1225,7 @@ int main() {
 
         test_catalog_global_only();
         test_catalog_precedence_and_cwd_identity();
+        test_catalog_shadow_collapse();
         test_manual_only_catalog_flag();
         test_catalog_rejects_invalid_cwd_and_escapes_xml();
         test_catalog_diagnoses_invalid_candidates();
