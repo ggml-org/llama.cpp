@@ -14,10 +14,7 @@ import {
 	SETTINGS_KEYS,
 	SKILLS_PANE_SIZES_LOCALSTORAGE_KEY
 } from '$lib/constants';
-import {
-	buildSkillRunSnapshot,
-	serializeSkillCatalogEnvelope
-} from '$lib/services/skills-packing.service';
+import { buildSkillRunSnapshot, serializeSkillCatalogEnvelope } from '$lib/services/skills.service';
 import { isMobile } from '$lib/stores';
 import { conversationsStore } from '$lib/stores/conversations.svelte';
 import { modelsStore } from '$lib/stores/models.svelte';

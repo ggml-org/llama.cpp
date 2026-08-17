@@ -2,8 +2,7 @@
  * skillsStore - CWD-keyed catalog screen state, per-run snapshots, and the
  * startup Skills navigation availability probe.
  */
-import { SkillsService } from '$lib/services/skills.service';
-import { buildSkillRunSnapshot } from '$lib/services/skills-packing.service';
+import { SkillsService, buildSkillRunSnapshot } from '$lib/services/skills.service';
 import { skillAvailabilityStore } from '$lib/stores/skill-availability.svelte';
 import type { SkillCatalogResponse, SkillRunSnapshot } from '$lib/types';
 import { ApiError } from '$lib/utils/api-fetch';

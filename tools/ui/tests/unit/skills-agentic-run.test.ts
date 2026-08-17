@@ -4,7 +4,7 @@ import { ChatService } from '$lib/services';
 import { SkillsService } from '$lib/services/skills.service';
 import { skillActivationExtra, skillResourceExtra } from '$lib/services/skills-activation.service';
 import { skillDenialResult } from '$lib/services/skills-adapters.service';
-import { buildSkillRunSnapshot, serializeSkillCatalogEnvelope } from '$lib/services/skills-packing.service';
+import { buildSkillRunSnapshot, serializeSkillCatalogEnvelope } from '$lib/services/skills.service';
 import { agenticStore } from '$lib/stores/agentic.svelte';
 import { settingsStore } from '$lib/stores/settings.svelte';
 import { skillsStore } from '$lib/stores/skills.svelte';
@@ -15,13 +15,18 @@ import type {
 	SkillCatalogResponse,
 	SkillResourceReadResult
 } from '$lib/types';
+import * as SkillsServiceModule from '$lib/services/skills.service';
 import type { AgenticFlowCallbacks } from '$lib/types/agentic';
 import type { Mock } from 'vitest';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+vi.mock('$lib/services/skills.service', async (importOriginal) => {
+	const actual = await importOriginal<typeof SkillsServiceModule>();
 
-vi.mock('$lib/services/skills.service', () => ({
-	SkillsService: { list: vi.fn(), read: vi.fn() }
-}));
+	return {
+		...actual,
+		SkillsService: { list: vi.fn(), read: vi.fn() }
+	};
+});
 vi.mock('$lib/stores/skills.svelte', () => ({
 	skillsStore: { createRunSnapshot: vi.fn() }
 }));

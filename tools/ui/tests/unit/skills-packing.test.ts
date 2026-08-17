@@ -13,7 +13,7 @@ import {
 	resolveSkillPackOptions,
 	serializeSkillCatalogEnvelope,
 	SkillsPackingService
-} from '$lib/services/skills-packing.service';
+} from '$lib/services/skills.service';
 import type { SkillCatalogEntry, SkillCatalogResponse, SkillRunSnapshot } from '$lib/types';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
