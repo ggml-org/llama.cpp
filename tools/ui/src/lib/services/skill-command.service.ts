@@ -1,13 +1,4 @@
-/**
- * Explicit `/skills <name>` activation entry point (slash-command path).
- *
- * Reads first (stateless): a failed read creates no conversation and never
- * wakes. A successful read with no active conversation starts a new
- * `Skill: <name>` conversation carrying the pending CWD. The successful
- * result then routes through the shared durable activation operation - the
- * same path a model-approved read takes. A persistence failure after the
- * read reports an error outcome and never wakes.
- */
+/** Explicit `/skills <name>` read-then-activate flow. */
 import { SkillsService } from '$lib/services/skills.service';
 import { conversationsStore } from '$lib/stores/conversations.svelte';
 import { skillActivationStore } from '$lib/stores/skill-activation.svelte';
@@ -17,14 +8,8 @@ import type { SkillReadResult } from '$lib/types/skills';
 /** Outcome of an explicit `/skills <name>` activation. */
 export interface SkillCommandOutcome {
 	ok: boolean;
-	/** True when a NEW durable base activation was persisted. */
 	created?: boolean;
-	/**
-	 * 'unavailable' = the Skills service failed; 'not-found' = the read did
-	 * not resolve a base skill; 'disabled' = the resolved skill is disabled
-	 * locally; 'persistence-failed' = the read succeeded but the durable
-	 * activation could not be persisted.
-	 */
+	/** True when a NEW durable base activation was persisted. */
 	reason?: 'unavailable' | 'not-found' | 'disabled' | 'persistence-failed';
 }
 
@@ -50,9 +35,7 @@ export async function dispatchSkillActivation(
 		return { ok: false, reason: 'not-found' };
 	}
 
-	// The read already resolved a base skill; gate on the resolved opaque ID
-	// before any conversation creation, persistence, or wake, so a disabled
-	// skill never activates even when another skill shares its display name.
+	// Check the resolved opaque ID before creating, persisting, or waking.
 	if (skillAvailabilityStore.isDisabled(result.skill.id)) {
 		return { ok: false, reason: 'disabled' };
 	}
@@ -64,10 +47,7 @@ export async function dispatchSkillActivation(
 			conversationId = await conversationsStore.createConversation(`Skill: ${name}`);
 		}
 
-		// Reconstruct the conversation's durable activations from persisted
-		// messages before recording, so a repeated `/skills <name>` after a
-		// reload reports "already activated" instead of persisting a duplicate
-		// synthetic pair.
+		// Rebuild persisted activations so repeated commands deduplicate.
 		await skillActivationStore.loadConversation(conversationId);
 
 		const record = await skillActivationStore.recordActivation({

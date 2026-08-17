@@ -1,8 +1,4 @@
-// Orchestration contract for `/skills <name>`: read-first ordering (a
-// failed read creates no conversation), a fresh state creates a
-// `Skill: <name>` conversation carrying the pending CWD, dedupe reports
-// created: false without persisting, and every success routes through the
-// shared recordActivation operation.
+// Guards read-first `/skills <name>` activation, creation, deduplication, and errors.
 
 import { ChatFormCommandAction } from '$lib/enums';
 import { dispatchSkillActivation } from '$lib/services/skill-command.service';

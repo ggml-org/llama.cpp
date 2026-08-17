@@ -1,16 +1,4 @@
-/**
- * Durable Skills activation store — Task 4's replacement for the Task 3
- * in-memory `SkillActivationStore` seam.
- *
- * The single shared successful-base-activation operation: both the model
- * consent path (approved `read_skill` base reads) and the explicit
- * `/skills <name>` path route through `recordActivation`. Activations are
- * reconstructed from the conversation's persisted typed SKILL metadata,
- * keyed by the exact opaque server identity, so an approval survives runs
- * and reloads. Only successful base reads persist; denial, failure, and
- * unavailability record nothing; resource approvals are session-scoped
- * (they authorize the remainder of the run but are never durable).
- */
+/** Durable Skills activation state shared by model and slash-command paths. */
 import { MessageRole, MessageType } from '$lib/enums';
 import { DatabaseService } from '$lib/services/database.service';
 import {
@@ -49,11 +37,7 @@ export class DurableSkillActivationStore implements SkillActivationStore {
 		return this._activatedByConversation.get(conversationId)?.has(identityId) ?? false;
 	}
 
-	/**
-	 * Rebuild the conversation's activation cache from its persisted messages.
-	 * Only valid `kind: 'base'` records count; resource records and malformed
-	 * extras are ignored, so historical bad data degrades to re-consent.
-	 */
+	/** Rebuild the activation cache from valid persisted base records. */
 	async loadConversation(conversationId: string): Promise<void> {
 		const messages = await conversationsStore.getConversationMessages(conversationId);
 		const activated = new SvelteSet<string>();
@@ -69,19 +53,7 @@ export class DurableSkillActivationStore implements SkillActivationStore {
 		this._activatedByConversation.set(conversationId, activated);
 	}
 
-	/**
-	 * The shared successful-base-activation operation.
-	 *
-	 * - Already-activated identity: dedupe no-op (created: false).
-	 * - Resource result: session-only — authorizes this run, never persisted.
-	 * - Base result with a model `toolCallId`: anchors the paired tool result
-	 *   to the persisted assistant message carrying that call id.
-	 * - Base result without a call id (slash path): persists the synthetic
-	 *   assistant tool-call + paired tool-result pair atomically.
-	 *
-	 * Returns the created tool result message when the operation persisted
-	 * it, otherwise the caller persists the tool result with `extra` attached.
-	 */
+	/** Persist or deduplicate a successful base activation. */
 	async recordActivation(input: SkillActivationInput): Promise<SkillActivationResult> {
 		const identityId = input.result.skill.id;
 
@@ -94,9 +66,7 @@ export class DurableSkillActivationStore implements SkillActivationStore {
 		}
 
 		if (input.result.kind === 'resource') {
-			// Session-scoped approval: authorizes the rest of this run but
-			// persists no durable record (resource authorization derives
-			// from a successful base activation after reload).
+			// Resource approval is session-scoped and not persisted.
 			this.remember(input.conversationId, identityId);
 
 			return {
@@ -106,10 +76,7 @@ export class DurableSkillActivationStore implements SkillActivationStore {
 			};
 		}
 
-		// Single in-flight durable transaction per (conversation, opaque id):
-		// a concurrent slash or model activation of the same identity waits
-		// for the first persistence instead of passing the pre-check and
-		// duplicating the synthetic pair / anchored tool result.
+		// Serialize one activation per conversation and opaque identity.
 		const key = DurableSkillActivationStore.activationKey(input.conversationId, identityId);
 		const inFlight = this._inFlight.get(key);
 
@@ -123,9 +90,7 @@ export class DurableSkillActivationStore implements SkillActivationStore {
 			};
 		}
 
-		// After the resource early-return above, `input.result` is narrowed to
-		// a base read; carry that narrowing into the persistence helpers so
-		// they build from the concrete base result shape.
+		// The resource branch narrows the remaining result to a base read.
 		const baseInput: SkillBaseActivationInput = { ...input, result: input.result };
 		const transaction =
 			input.toolCallId !== undefined
@@ -145,8 +110,7 @@ export class DurableSkillActivationStore implements SkillActivationStore {
 				toolResultMessage
 			};
 		} finally {
-			// Never sticky: a failed persistence clears the slot so a later
-			// activation can retry, and nothing was remembered on failure.
+			// Clear failures so later activation attempts can retry.
 			this._inFlight.delete(key);
 		}
 	}

@@ -46,7 +46,7 @@
 
 	const isOnMobile = $derived(isMobile.current);
 
-	/** Canonical static order, filtered in rendering so the Skills entry follows the startup probe. */
+	// Preserve static order while filtering unavailable entries.
 	const visibleItems = $derived(
 		SIDEBAR_ACTIONS_ITEMS.filter(
 			(item) => item.route !== ROUTES.SKILLS || skillsStore.showInNavigation
@@ -66,7 +66,7 @@
 			initialized = true;
 		}, ICON_STRIP_TRANSITION_DELAY_MULTIPLIER * visibleItems.length);
 
-		// One-time startup probe; the subscriber aborts when the sidebar unmounts.
+		// Probe once; abort when the sidebar unmounts.
 		const probe = new AbortController();
 
 		void skillsStore

@@ -14,7 +14,7 @@
 	interface Props {
 		toolName: string;
 		serverLabel: string;
-		/** Safe server-returned identity shown for Skills consent pauses. */
+		/** Validated identity shown during Skills consent. */
 		skill?: SkillConsentInfo;
 		onDecision: (decision: ToolPermissionDecision) => void;
 	}

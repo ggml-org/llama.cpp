@@ -24,10 +24,7 @@ export enum ToolResponseField {
 	PLAIN_TEXT = 'plain_text_response'
 }
 
-/**
- * Entry types accepted by the `file_glob_search` tool's `type` parameter.
- * Mirrors the server-side validation in server-tools.cpp.
- */
+/** Valid `file_glob_search` type values. */
 export enum GlobSearchType {
 	ALL = 'all',
 	DIR = 'dir',

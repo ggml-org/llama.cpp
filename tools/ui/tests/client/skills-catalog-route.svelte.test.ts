@@ -1,9 +1,4 @@
-// Guards the read-only /skills route presentation: distinct loading / error /
-// unavailable / empty / success states, safe catalog fields only (no host
-// paths, opaque XML never rendered), estimate labels, truncated resource
-// lower bounds, the zero-budget note (distinct from a server-empty catalog),
-// retry wiring, and persisted maxSkillBudget validation through the settings
-// store.
+// Guards read-only `/skills` states, safe fields, packing, retry, and settings.
 
 import SkillsPage from '../../src/routes/skills/+page.svelte';
 import SkillsPageWrapper from './components/SkillsPageWrapper.svelte';
@@ -36,8 +31,7 @@ function jsonResponse(body: unknown, status = 200): Response {
 
 function makeEntry(name: string, overrides: Partial<SkillCatalogEntry> = {}): SkillCatalogEntry {
 	return {
-		// Server-owned opaque XML; the UI must never render it (it may hold
-		// host paths the catalog presentation is forbidden from showing).
+		// Catalog XML is opaque and must not reach the UI.
 		catalog_xml: `<skill><name>${name}</name></skill>`,
 		description: `description of ${name}`,
 		id: `opaque-${name}`,
@@ -189,10 +183,7 @@ describe('/skills route presentation', () => {
 
 		const text = bodyText();
 
-		// Safe fields: name, description, scope, provider, instruction facts,
-		// timestamp, resource count / lower bound. The `agents` API provider
-		// renders as the provider-agnostic `generic` label and the card shows
-		// a tilde-prefixed token count instead of an `estimated` chip.
+		// Assert safe fields, provider mapping, and estimated-token presentation.
 		expect(text).toContain('demo-skill');
 		expect(text).toContain('A skill that does things.');
 		expect(text).toContain('global');
@@ -201,10 +192,7 @@ describe('/skills route presentation', () => {
 		expect(text).toContain('~512 tokens');
 		expect(text).toContain('42');
 		expect(text).toContain('2024');
-		// `Resources:` and the count are sibling text nodes, so the browser
-		// serializes the inter-node whitespace into textContent; assert the
-		// label/count contract tolerantly of that whitespace.
-		// Truncated resource listing renders as a lower bound.
+		// Resource counts distinguish truncated lower bounds from exact totals.
 		expect(text).toMatch(/Resources:\s*3\+/);
 		// A complete resource listing renders the exact count.
 		expect(text).toMatch(/Resources:\s*2\b/);

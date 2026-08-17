@@ -35,7 +35,7 @@ export function classifySkillResourceFormat(path: string): SkillResourceFormat {
 		return 'html';
 	}
 
-	// FileExtensionText currently contains ZIP for upload handling. A skill archive is not text.
+	// ZIP archives are not previewable text.
 	if (lowerPath.endsWith('.zip')) {
 		return 'unsupported';
 	}
@@ -93,7 +93,9 @@ export function getInitialExpandedFolderPaths(
 	tree: readonly SkillResourceTreeNode[]
 ): ReadonlySet<string> {
 	return new Set(
-		tree.filter((node): node is SkillResourceFolderNode => node.kind === 'folder').map((node) => node.path)
+		tree
+			.filter((node): node is SkillResourceFolderNode => node.kind === 'folder')
+			.map((node) => node.path)
 	);
 }
 
@@ -120,11 +122,4 @@ export function flattenSkillResourceTree(
 	append(tree, 0, null);
 
 	return rows;
-}
-
-export function findSkillResourceParentPath(
-	rows: readonly SkillResourceTreeRow[],
-	path: string
-): string | null {
-	return rows.find((row) => row.node.path === path)?.parentPath ?? null;
 }

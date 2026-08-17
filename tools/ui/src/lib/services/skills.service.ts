@@ -10,23 +10,9 @@ import type {
 } from '$lib/types';
 import { apiFetch } from '$lib/utils';
 
-/**
- * SkillsService - stateless transport and catalog packing for the dedicated
- * llama-server Skills API.
- *
- * The server owns host-filesystem discovery, resolution, identity,
- * containment, parsing, and XML. This service sends only the supported
- * name/path inputs, keeps CWD handling consistent, and applies the shared
- * catalog snapshot and budget policy.
- */
+/** Stateless transport and catalog packing for the llama-server Skills API. */
 export class SkillsService {
-	/**
-	 * Fetch the deterministic catalog for an effective CWD.
-	 *
-	 * An absent `cwd` means the canonical server process CWD; a selected
-	 * non-whitespace CWD is sent as `X-Skill-Cwd`. Whitespace-only values are
-	 * treated as absent before transport.
-	 */
+/** Fetch the deterministic catalog for an effective CWD. */
 	static async list(cwd?: string, signal?: AbortSignal): Promise<SkillCatalogResponse> {
 		return apiFetch<SkillCatalogResponse>(API_SKILLS.LIST, {
 			headers: skillCwdHeaders(cwd),
@@ -34,13 +20,6 @@ export class SkillsService {
 		});
 	}
 
-	/**
-	 * Read a skill's current base content or a resource.
-	 *
-	 * Sends exactly `{ name }` or `{ name, path }` — never identity, scope,
-	 * provider, root, or absolute path. The server re-resolves the name for the
-	 * effective CWD on every request.
-	 */
 	static async read(
 		request: SkillReadRequest,
 		cwd?: string,
@@ -59,10 +38,7 @@ export class SkillsService {
 	}
 }
 
-/**
- * Map a selected CWD to the Skills request header, or absent when no
- * non-whitespace CWD is selected (the server then uses the process CWD).
- */
+/** Map an effective CWD to the Skills request header. */
 interface SkillTokenizeResponse {
 	tokens: number[];
 }
@@ -71,20 +47,12 @@ const SKILL_CATALOG_TAG = 'skills_catalog';
 const SKILL_CATALOG_TOTAL_ATTR = 'total';
 const SKILL_CATALOG_INCLUDED_ATTR = 'included';
 
-/**
- * Documented deterministic estimate policy shared with the server: the integer
- * ceiling of UTF-8 bytes / 4. Used in estimated mode and as the labeled
- * fallback when the direct tokenizer is unavailable.
- */
+/** Estimate tokens as the UTF-8 byte count divided by four, rounded up. */
 export function estimateSkillTokens(text: string): number {
 	return Math.ceil(new TextEncoder().encode(text).length / 4);
 }
 
-/**
- * Shared direct/estimated pack-option resolution used by agentic runs and the
- * catalog presentation, so both present the same budget policy. Direct mode
- * requires a non-empty effective model and, in router mode, a loaded model.
- */
+/** Resolve direct versus estimated packing with the shared budget policy. */
 export function resolveSkillPackOptions(
 	effectiveModel: string,
 	routerMode: boolean,
@@ -95,31 +63,20 @@ export function resolveSkillPackOptions(
 	return directOk ? { mode: 'direct', model: effectiveModel } : { mode: 'estimated' };
 }
 
-/**
- * Serialize the complete `<skills_catalog total="..." included="...">`
- * envelope: the server's `catalog_instruction_xml` fragment verbatim first,
- * then each entry's `catalog_xml` fragment in server order, never re-escaped.
- */
+/** Serialize the server-provided catalog fragments into one envelope. */
 export function serializeSkillCatalogEnvelope(catalog: SkillCatalogResponse): string {
 	const { catalog_instruction_xml, skills } = catalog;
 
 	return serializeEnvelope(catalog_instruction_xml, skills, skills.length, skills.length);
 }
 
-/**
- * Build an immutable per-run snapshot from a run's own successful catalog
- * response. Entries are deep-copied and frozen, so no later store refresh or
- * CWD change can reach the snapshot.
- */
+/** Build an immutable per-run snapshot from one successful catalog response. */
 export function buildSkillRunSnapshot(
 	cwd: string | undefined,
 	catalog: SkillCatalogResponse,
 	disabledIds?: ReadonlySet<string>
 ): SkillRunSnapshot {
-	// The model-facing view excludes manual-only skills and any locally
-	// disabled opaque IDs from the entries, the envelope, and the budget
-	// count; the raw catalog stays available for the UI listing and the
-	// explicit /skills picker.
+	// Exclude manual-only and disabled IDs from the model view only.
 	const modelEntries = catalog.skills.filter(
 		(entry) => !entry.disable_model_invocation && !disabledIds?.has(entry.id)
 	);

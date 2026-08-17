@@ -1,18 +1,4 @@
-// Guards the `/skills` slash command contract: the command is listed only
-// when the Skills service is available (per-CWD catalog slot not in error),
-// and a trailing space after the `/skills` token opens the skill picker
-// directly, with the typed name doubling as the fuzzy search field. A bare
-// `/skills` stays on the command list, where Enter navigates to the catalog.
-// Selecting a skill dispatches the trimmed name exactly once (server base
-// read + durable activation); mid-typing never dispatches.
-//
-// The picker itself guards the safe catalog-name contract: candidates are
-// ordered prefix-first then substring in source catalog order, rows expose
-// only the safe display facts (name, description, scope, provider) - never
-// the opaque id, instruction facts, resources, or raw catalog XML - and
-// keyboard / pointer selection reports the exact skill name. The picker
-// receives everything via props; it must never fetch, call SkillsService,
-// resolve names, or render XML itself.
+// Guards `/skills` listing, picker filtering, selection, and dispatch behavior.
 
 import ChatFormSkillPicker from '$lib/components/app/chat/ChatForm/ChatFormPickers/ChatFormSkillPicker.svelte';
 import ChatFormPickersHarness from './components/ChatFormPickersHarness.svelte';
@@ -103,8 +89,7 @@ describe('/skills command', () => {
 			false
 		);
 
-		// Explicit selection of the listed command consumes the token and
-		// dispatches the no-args catalog navigation.
+		// Explicit command selection navigates to the catalog.
 		pickers.handleCommandSelect(skillsCommand(pickers));
 		await tick();
 
@@ -131,8 +116,7 @@ describe('/skills command', () => {
 			false
 		);
 
-		// The token doubles as the search field: typing further narrows the
-		// query and never re-dispatches or reopens the command picker.
+		// Further typing filters the picker without dispatching.
 		screen.component.type('/skills frontend');
 		await tick();
 
@@ -195,15 +179,14 @@ describe('/skills command', () => {
 			false
 		);
 
-		// Typing the same token again reopens nothing: the dismissed token
-		// stays literal.
+		// A repeated dismissed token stays literal.
 		screen.component.type('/skills frontend-design');
 		await tick();
 
 		expect(pickers.isCommandPickerOpen).toBe(false);
 		expect(pickers.isSkillPickerOpen).toBe(false);
 
-		// Once the token changes, the dismissal breaks and the picker reopens.
+		// A changed token reopens the picker.
 		screen.component.type('/skills other');
 		await tick();
 
@@ -224,9 +207,7 @@ describe('/skills command', () => {
 
 		expect(pickers.isSkillPickerOpen).toBe(true);
 
-		// Editing the command token away from `/skills` closes the picker and
-		// clears its query; the buffer itself is untouched and nothing
-		// dispatches.
+		// Replacing the command closes the picker without dispatch.
 		screen.component.type('/cwd foo');
 		await tick();
 
@@ -243,7 +224,7 @@ describe('/skills command', () => {
 
 		await tick();
 
-		// Escape `/skills foo`: the live token is snapshotted as dismissed.
+		// Escape records the current token as dismissed.
 		screen.component.type('/skills foo');
 		await tick();
 
@@ -267,9 +248,7 @@ describe('/skills command', () => {
 		expect(screen.component.getValue()).toBe('');
 		expect(pickers.isSkillPickerOpen).toBe(false);
 
-		// Typing `/skills foo` again must not be treated as sticky-dismissed:
-		// the successful activation cleared the stale snapshot, so the picker
-		// reopens for the fresh query.
+		// Successful activation clears the dismissed-token snapshot.
 		screen.component.type('/skills foo');
 		await tick();
 

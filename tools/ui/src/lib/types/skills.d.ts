@@ -1,10 +1,4 @@
-/**
- * Agent Skills API types (llama-server `--skills`).
- *
- * The server owns discovery, resolution, identity, containment, parsing, and
- * XML serialization. These types carry no host paths, roots, or
- * client-constructible identities; `id` is an opaque comparison key.
- */
+/** Server-owned Agent Skills API types; IDs remain opaque to the client. */
 
 /** Safe, path-free diagnostic emitted by the Skills API. */
 export interface SkillDiagnostic {
@@ -13,11 +7,7 @@ export interface SkillDiagnostic {
 	name?: string;
 	scope?: string;
 	provider?: string;
-	/**
-	 * Every losing provider of a collapsed `skill_shadowed` diagnostic, in
-	 * scan order. Present only when two or more entries share the shadowed
-	 * name; a single shadow keeps only the singular `provider` field.
-	 */
+	/** Losing providers listed in scan order for a shadowed name. */
 	providers?: string[];
 	message: string;
 }

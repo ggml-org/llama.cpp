@@ -3,11 +3,7 @@
 	import { useSkillCatalogRefresh } from '$lib/hooks/use-skill-catalog-refresh.svelte';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 
-	// The route owns the CWD derivation and the abortable refresh lifecycle.
-	// `cwd` reacts to the active conversation's working directory (buffered
-	// via pendingCwd before the first chat exists); the refresh controller
-	// invalidates the previous route slot on change and aborts on unmount.
-	// Frozen agent run snapshots are never altered.
+	// Route-owned CWD refresh; stale responses are invalidated and snapshots stay immutable.
 	const refresh = useSkillCatalogRefresh();
 
 	const cwd = $derived(

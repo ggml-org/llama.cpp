@@ -230,9 +230,7 @@ async function waitForPermission(convId: string) {
 }
 
 function mockToolCallTurn(toolCallJson: string): void {
-	// Counter-based base implementation (no once-queues, so nothing leaks
-	// between tests): the first LLM turn emits the tool call, later turns
-	// resolve with no calls and end the loop.
+	// The first mock turn emits a tool call; later turns end the loop.
 	let callIndex = 0;
 
 	mockSendMessage.mockImplementation(async (_messages, options) => {
@@ -290,8 +288,7 @@ describe('agenticStore.runAgenticFlow Skills integration', () => {
 
 		expect(names).toEqual(['test_tool', SKILL_READ_TOOL]);
 
-		// The run's own snapshot decorates the first-request messages with the
-		// byte-preserved envelope (prepended system message).
+		// The run snapshot prepends the byte-preserved envelope.
 		const firstMessages = mockSendMessage.mock.calls[0][0] as { role: string; content: string }[];
 
 		expect(firstMessages[0].role).toBe(MessageRole.SYSTEM);
@@ -384,8 +381,7 @@ describe('agenticStore.runAgenticFlow Skills integration', () => {
 		const runPromise = agenticStore.runAgenticFlow(runParams('conv-1', callbacks));
 		const pending = await waitForPermission('conv-1');
 
-		// The disabled adapter is not registered for this run, so the call is
-		// a generic tool call: no skill identity metadata, no Skills consent.
+		// Disabled adapters fall back to generic tool handling.
 		expect(pending).toEqual({ serverLabel: '', toolName: SKILL_READ_TOOL });
 		expect('skill' in pending).toBe(false);
 
@@ -477,9 +473,7 @@ describe('agenticStore.runAgenticFlow Skills integration', () => {
 				toolCallId: 'call_1'
 			})
 		);
-		// The shared operation already created the paired tool result message:
-		// the flow must not create a second one, and must update its own
-		// parent pointer so the next turn anchors to the new leaf.
+		// Reuse the shared tool result and advance the flow leaf.
 		expect(createToolResultMessage).not.toHaveBeenCalled();
 		expect(onToolResultMessageCreated).toHaveBeenCalledWith('recorded-tool-result');
 	});

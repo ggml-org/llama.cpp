@@ -5,13 +5,13 @@ export const API_MODELS = {
 	UNLOAD: '/models/unload'
 };
 
-// chat completion routes, the control route drives realtime inference (e.g. end reasoning)
+// Chat completion and control routes.
 export const API_CHAT = {
 	COMPLETIONS: './v1/chat/completions',
 	CONTROL: './v1/chat/completions/control'
 };
 
-// slot introspection, requires the --slots flag on the server
+// Slot introspection; requires the server `--slots` flag.
 export const API_SLOTS = {
 	LIST: './slots'
 };
@@ -26,12 +26,10 @@ export const API_SKILLS = {
 	READ: '/skills/read'
 };
 
-/** Direct-mode tokenizer route used by Skills catalog packing with the audited no-special-token flags. */
+/** Tokenizer route used by Skills catalog packing. */
 export const API_TOKENIZE = '/tokenize';
 
-// resumable stream routes, the conv::model identity travels as the conv_id query param
-// because model names can contain slashes that a path segment cannot carry
-// resume retry cadence while the owning model is still loading (server answers 503)
+// Resumable stream routes and retry delay while the model loads.
 export const STREAM_RESUME_RETRY_MS = 2000;
 
 export const API_STREAM = {
@@ -39,5 +37,5 @@ export const API_STREAM = {
 	LOOKUP: './v1/streams/lookup'
 };
 
-/** CORS proxy endpoint path */
+/** CORS proxy route. */
 export const CORS_PROXY_ENDPOINT = '/cors-proxy';

@@ -5,11 +5,8 @@
 	import type { SkillPackedCatalog } from '$lib/types';
 
 	interface Props {
-		/** Packing result of the current ready catalog; see SkillsPackingService.pack. */
 		packed: SkillPackedCatalog;
-		/** Normalized maxSkillBudget (non-negative integer). */
 		budget: number;
-		/** Dismiss handler; when set the status renders with a close action. */
 		onDismiss?: () => void;
 	}
 
@@ -17,10 +14,7 @@
 
 	const disabled = $derived(budget === 0 || packed.fullTokens === null);
 	const complete = $derived(!disabled && packed.included === packed.total);
-	// The template cannot narrow `packed.fullTokens` through the derived
-	// booleans above, so format it through a nullable-safe derived. It is
-	// non-empty in the complete and partial branches, which only render when
-	// `fullTokens` is not null.
+	// Keep the label nullable-safe for template branches.
 	const fullTokensLabel = $derived(packed.fullTokens?.toLocaleString() ?? '');
 	const measureLabel = $derived(packed.estimated ? 'estimated' : 'exact');
 </script>

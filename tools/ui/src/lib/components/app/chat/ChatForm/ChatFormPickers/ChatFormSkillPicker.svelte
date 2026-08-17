@@ -9,14 +9,7 @@
 	import type { SkillCatalogEntry } from '$lib/types';
 	import { normalizeSkillDescription } from '$lib/utils';
 
-	/**
-	 * Catalog-name picker for `/skills <name>`: the composer is the sole
-	 * query control, so there is no search input. Rows expose only the safe
-	 * display facts (`name`, `description`, `scope`, `provider`) and both
-	 * pointer and keyboard selection report the exact `skill.name`. This
-	 * component is data-only: it never fetches, calls `SkillsService`,
-	 * resolves names, or renders raw catalog XML.
-	 */
+	// Parent-owned picker; selection only reports the chosen skill.
 	interface Props {
 		class?: string;
 		isOpen: boolean;

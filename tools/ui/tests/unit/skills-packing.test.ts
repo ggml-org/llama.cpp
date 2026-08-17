@@ -476,10 +476,7 @@ describe('resolveSkillPackOptions', () => {
 	});
 });
 
-// Guards the persisted Skills catalog budget contract: a non-negative
-// integer defaulting to 2000, zero valid (it disables prompt packing, it
-// does NOT mean the server catalog is empty), wired through the established
-// numeric-control pattern (min 0 + integer rounding + load-time sanitize).
+// Guards the persisted maxSkillBudget contract, including zero and sanitization.
 describe('maxSkillBudget registry', () => {
 	it('defaults to 2000 in the persisted config defaults', () => {
 		expect(SETTING_CONFIG_DEFAULT[SETTINGS_KEYS.MAX_SKILL_BUDGET]).toBe(2000);

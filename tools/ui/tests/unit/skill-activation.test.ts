@@ -526,10 +526,7 @@ describe('DurableSkillActivationStore (Task 4 durable seam)', () => {
 
 			mockGetConversationMessages.mockResolvedValue([assistantToolCallMessage(convId)]);
 
-			// Both calls are issued before either awaits a microtask, so without
-			// the in-flight transaction both would pass the pre-activation check
-			// and persist a duplicate durable record. The first-issued path
-			// registers the in-flight transaction.
+			// Concurrent calls must share one in-flight persistence transaction.
 			const firstCall =
 				order === 'slash-first'
 					? skillActivationStore.recordActivation({
@@ -554,9 +551,7 @@ describe('DurableSkillActivationStore (Task 4 durable seam)', () => {
 						});
 			const [firstRecord, secondRecord] = await Promise.all([firstCall, secondCall]);
 
-			// The first-issued activation persists; the joining one waited for
-			// the in-flight transaction instead of persisting its own record,
-			// so exactly one durable record exists.
+			// The joining call reuses the first persisted activation.
 			expect(firstRecord.created).toBe(true);
 			expect(secondRecord.created).toBe(false);
 			expect(secondRecord.toolResultMessage).toBeNull();
@@ -661,8 +656,7 @@ describe('Catalog preview reads are inert (Task 5)', () => {
 		const result = await SkillsService.read({ name: 'demo-skill' }, '/srv/project');
 
 		expect(result.kind).toBe('skill');
-		// The preview transport is inert: no durable record, no session
-		// activation, and no synthetic message pair for the slash path.
+		// Preview is non-durable and does not activate the session.
 		expect(skillActivationStore.isActivated('conv-preview', 'opaque-id-1')).toBe(false);
 		expect(mockCreateMessageBranch).not.toHaveBeenCalled();
 		expect(mockCreateMessageBranchPair).not.toHaveBeenCalled();

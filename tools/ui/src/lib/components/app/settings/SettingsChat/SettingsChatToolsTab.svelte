@@ -12,14 +12,8 @@
 
 	let expandedGroups = new SvelteSet<string>();
 
-	/**
-	 * Settings-only Skills group visibility. The group renders for `available`,
-	 * `loading`, and retryable `error` availability states (and the pre-probe
-	 * `unknown` state), and is hidden only when the startup probe confirmed the
-	 * server exposes no Skills endpoint (`disabled`). This tab only reads the
-	 * settled availability -- the sidebar startup probe owns the catalog
-	 * request, so no request is issued from here.
-	 */
+	// Hide Skills only after the server confirms the endpoint is disabled.
+	// The sidebar probe owns availability requests.
 	let skillsVisible = $derived(skillsStore.availability !== 'disabled');
 
 	let groups = $derived(
@@ -28,7 +22,6 @@
 			: toolsStore.toolGroups
 	);
 
-	/** Centralized Skills settings metadata, keyed by stable `skill:<tool>` key. */
 	const skillSettingByKey = new Map(SKILL_TOOL_SETTINGS.map((setting) => [setting.key, setting]));
 
 	function toggleExpanded(key: string) {

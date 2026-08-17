@@ -71,7 +71,6 @@
 	let mentionPickerRef: ChatFormPickerMention | undefined = $state(undefined);
 	let skillPickerRef: ChatFormSkillPicker | undefined = $state(undefined);
 
-	/** Delegate keyboard events to the active picker child; true if handled. */
 	export function handleKeydown(event: KeyboardEvent): boolean {
 		if (isCommandPickerOpen && commandPickerRef?.handleKeydown(event)) {
 			return true;

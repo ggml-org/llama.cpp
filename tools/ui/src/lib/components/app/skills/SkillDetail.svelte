@@ -11,6 +11,7 @@
 	import { SkillsService } from '$lib/services/skills.service';
 	import type { SkillBaseReadResult, SkillCatalogEntry } from '$lib/types';
 	import { fly } from 'svelte/transition';
+	import { SvelteSet } from 'svelte/reactivity';
 
 	interface Props {
 		entry: SkillCatalogEntry;
@@ -21,7 +22,7 @@
 
 	let { cwd, entry, mobile, onClose }: Props = $props();
 
-	// Accept a response only while it is the current generation and un-aborted.
+	// Ignore stale or aborted responses.
 	let readState = $state<'loading' | 'ready' | 'error'>('loading');
 	let result = $state<SkillBaseReadResult | null>(null);
 	let errorMessage = $state('');
@@ -29,29 +30,25 @@
 	let readGeneration = 0;
 
 	let selectedPath = $state('SKILL.md');
-	let unavailablePaths = $state<ReadonlySet<string>>(new Set());
+	let unavailablePaths = new SvelteSet<string>();
 
+	// Reload when the entry or retry token changes.
 	$effect(() => {
 		void entry.id;
-		selectedPath = 'SKILL.md';
-		unavailablePaths = new Set();
-	});
-
-	$effect(() => {
 		void retryToken;
 		const controller = new AbortController();
 		const generation = ++readGeneration;
 
 		result = null;
 		selectedPath = 'SKILL.md';
-		unavailablePaths = new Set();
+		unavailablePaths.clear();
 		errorMessage = '';
 
 		SkillsService.read({ name: entry.name }, cwd, controller.signal)
 			.then((readResult) => {
 				if (generation !== readGeneration || controller.signal.aborted) return;
 
-				// Preview accepts base results only; a resource result is an error.
+				// Preview accepts only base skill responses.
 				if (readResult.kind !== 'skill') {
 					errorMessage = 'The server returned a resource instead of the skill base content.';
 					readState = 'error';
@@ -77,12 +74,8 @@
 	}
 
 	function setResourceAvailability(path: string, available: boolean) {
-		const next = new Set(unavailablePaths);
-
-		if (available) next.delete(path);
-		else next.add(path);
-
-		unavailablePaths = next;
+		if (available) unavailablePaths.delete(path);
+		else unavailablePaths.add(path);
 	}
 </script>
 
