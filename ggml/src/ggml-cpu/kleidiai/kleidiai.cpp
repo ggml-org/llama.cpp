@@ -657,7 +657,23 @@ struct ggml_kleidiai_cache_info {
     uint32_t kernel_signature;
     uint32_t slot_count;
     size_t   packed_size;
+    size_t   offsets[GGML_KLEIDIAI_MAX_KERNEL_SLOTS];
+    size_t   sizes[GGML_KLEIDIAI_MAX_KERNEL_SLOTS];
 };
+
+static bool kleidiai_cache_add_size(size_t lhs, size_t rhs, size_t & result) {
+    if (rhs > SIZE_MAX - lhs) {
+        return false;
+    }
+    result = lhs + rhs;
+    return true;
+}
+
+static bool kleidiai_cache_align_size(size_t value, size_t & result) {
+    const size_t remainder = value % GGML_KLEIDIAI_PACK_ALIGN;
+    const size_t padding = remainder == 0 ? 0 : GGML_KLEIDIAI_PACK_ALIGN - remainder;
+    return kleidiai_cache_add_size(value, padding, result);
+}
 
 static int kleidiai_get_cache_info_impl(const struct ggml_tensor * tensor, struct ggml_kleidiai_cache_info * info) {
     if (!tensor || !info) {
@@ -671,7 +687,9 @@ static int kleidiai_get_cache_info_impl(const struct ggml_tensor * tensor, struc
     const size_t k = tensor->ne[0];
 
     size_t cursor = sizeof(kleidiai_weight_header);
-    cursor = align_up(cursor, GGML_KLEIDIAI_PACK_ALIGN);
+    if (!kleidiai_cache_align_size(cursor, cursor)) {
+        return -1;
+    }
 
     std::array<ggml_kleidiai_kernels *, GGML_KLEIDIAI_MAX_KERNEL_SLOTS> kernel_chain;
     const bool want_q8 = tensor->type == GGML_TYPE_Q8_0;
@@ -702,8 +720,19 @@ static int kleidiai_get_cache_info_impl(const struct ggml_tensor * tensor, struc
             continue;
         }
 
-        cursor = align_up(cursor, GGML_KLEIDIAI_PACK_ALIGN);
-        cursor += rhs_info->packed_size_ex(n, k, kernel->get_nr(), kernel->get_kr(), block_len);
+        if (slot_count >= GGML_KLEIDIAI_MAX_KERNEL_SLOTS) {
+            return -1;
+        }
+        size_t aligned_cursor;
+        if (!kleidiai_cache_align_size(cursor, aligned_cursor)) {
+            return -1;
+        }
+        const size_t packed_size = rhs_info->packed_size_ex(n, k, kernel->get_nr(), kernel->get_kr(), block_len);
+        if (!kleidiai_cache_add_size(aligned_cursor, packed_size, cursor)) {
+            return -1;
+        }
+        info->offsets[slot_count] = aligned_cursor;
+        info->sizes[slot_count]   = packed_size;
         signature = kleidiai_hash_u32(signature, kleidiai_kernel_signature(kernels));
         ++slot_count;
     }
@@ -1817,6 +1846,8 @@ static ggml_backend_buffer_t ggml_backend_cpu_kleidiai_buffer_type_alloc_buffer(
         return nullptr;
     }
 
+    ggml_backend_buffer_clear(buffer, 0);
+
     buffer->buft              = buft;
     buffer->iface.init_tensor = ggml_backend_cpu_kleidiai_buffer_init_tensor;
     buffer->iface.set_tensor  = ggml_backend_cpu_kleidiai_buffer_set_tensor;
@@ -2003,10 +2034,7 @@ static int kleidiai_weight_cache_validate_data(const struct ggml_tensor * tensor
     }
 
     for (uint32_t slot = 0; slot < header->slot_count; ++slot) {
-        if (header->offsets[slot] >= size || header->sizes[slot] > size - header->offsets[slot]) {
-            return -1;
-        }
-        if ((header->offsets[slot] % GGML_KLEIDIAI_PACK_ALIGN) != 0) {
+        if (header->offsets[slot] != info.offsets[slot] || header->sizes[slot] != info.sizes[slot]) {
             return -1;
         }
     }

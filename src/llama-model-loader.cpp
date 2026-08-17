@@ -1440,7 +1440,7 @@ ggml_backend_buffer_t llama_model_loader::try_mmap_weight_cache(
         ggml_backend_buffer_type_t buft,
         bool use_mlock,
         llama_mlocks * mlocks) {
-    return no_alloc ? nullptr : weight_cache->load(*this, ctx, buft, use_mlock, mlocks);
+    return no_alloc || !use_mmap ? nullptr : weight_cache->load(*this, ctx, buft, use_mlock, mlocks);
 }
 #endif
 

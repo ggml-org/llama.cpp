@@ -3,9 +3,9 @@ add_executable(${TARGET} gguf-hash.cpp)
 install(TARGETS ${TARGET} RUNTIME)
 
 # clibs dependencies
-include_directories(deps/)
+include_directories(deps/ ../../vendor/)
 
-add_library(xxhash OBJECT deps/xxhash/xxhash.c deps/xxhash/xxhash.h)
+add_library(xxhash OBJECT ../../vendor/xxhash/xxhash.c ../../vendor/xxhash/xxhash.h)
 target_link_libraries(${TARGET} PRIVATE xxhash)
 
 add_library(sha1 OBJECT deps/sha1/sha1.c deps/sha1/sha1.h)

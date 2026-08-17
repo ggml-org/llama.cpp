@@ -9,7 +9,11 @@
 
 #include "ggml.h"
 
+#define XXH_INLINE_ALL
+#include "xxhash.h"
+
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
@@ -23,13 +27,20 @@
 #include <vector>
 
 #if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <fcntl.h>
+#include <io.h>
 #include <process.h>
+#include <windows.h>
 #else
 #include <unistd.h>
 #endif
 
 static constexpr uint32_t LLAMA_WEIGHT_CACHE_MAGIC      = 0x31435747; // "GWC1"
-static constexpr uint32_t LLAMA_WEIGHT_CACHE_VERSION    = 1;
+static constexpr uint32_t LLAMA_WEIGHT_CACHE_VERSION    = 2;
 static constexpr uint32_t LLAMA_WEIGHT_CACHE_ENDIANNESS = 0x01020304;
 
 struct llama_weight_cache_header {
@@ -40,6 +51,7 @@ struct llama_weight_cache_header {
     uint64_t source_size;
     int64_t  source_mtime_sec;
     int64_t  source_mtime_nsec;
+    uint64_t source_hash;
     uint64_t layout_hash_a;
     uint64_t layout_hash_b;
     uint64_t payload_offset;
@@ -51,6 +63,8 @@ struct llama_weight_cache_source {
     size_t size = 0;
     int64_t mtime_sec = 0;
     int64_t mtime_nsec = 0;
+    uint64_t hash = 0;
+    bool hash_valid = false;
 };
 
 struct llama_weight_cache_context {
@@ -64,6 +78,7 @@ struct llama_weight_cache_context {
     std::vector<entry> tensors;
     const llama_weight_cache_source * source = nullptr;
     size_t payload_size = 0;
+    uint64_t source_hash = 0;
     uint64_t layout_hash_a = 1469598103934665603ULL;
     uint64_t layout_hash_b = 1099511628211ULL;
 };
@@ -124,18 +139,17 @@ static bool llama_weight_cache_validate_tensor(const ggml_tensor * tensor, const
 }
 
 static uint32_t llama_weight_cache_crc32(const void * data, size_t size) {
-    static uint32_t table[256];
-    static bool initialized = false;
-    if (!initialized) {
+    static const std::array<uint32_t, 256> table = []() {
+        std::array<uint32_t, 256> result;
         for (uint32_t i = 0; i < 256; ++i) {
             uint32_t c = i;
             for (int j = 0; j < 8; ++j) {
                 c = (c & 1) ? (0xedb88320u ^ (c >> 1)) : (c >> 1);
             }
-            table[i] = c;
+            result[i] = c;
         }
-        initialized = true;
-    }
+        return result;
+    }();
 
     uint32_t c = 0xffffffffu;
     const uint8_t * p = (const uint8_t *) data;
@@ -146,14 +160,13 @@ static uint32_t llama_weight_cache_crc32(const void * data, size_t size) {
 }
 
 template <typename T>
-static bool llama_weight_cache_read(std::istream & in, T & value) {
-    in.read((char *) &value, sizeof(value));
-    return (bool) in;
+static void llama_weight_cache_read(llama_file & file, T & value) {
+    file.read_raw(&value, sizeof(value));
 }
 
 template <typename T>
-static void llama_weight_cache_write(std::ostream & out, const T & value) {
-    out.write((const char *) &value, sizeof(value));
+static bool llama_weight_cache_write(FILE * out, const T & value) {
+    return fwrite(&value, 1, sizeof(value), out) == sizeof(value);
 }
 
 static int64_t llama_weight_cache_mtime_nsec(const struct stat & st) {
@@ -175,59 +188,74 @@ static std::string llama_weight_cache_basename(const std::string & path) {
 static std::string llama_weight_cache_path(const std::string & source_path) {
     const char * cache_dir = getenv("GGML_WEIGHT_CACHE_DIR");
     if (!cache_dir || cache_dir[0] == '\0') {
-        return source_path + ".ggml-weight-cache-v1";
+        return source_path + ".ggml-weight-cache-v2";
     }
 
+    std::error_code ec;
+    const std::filesystem::path canonical_path = std::filesystem::weakly_canonical(
+            std::filesystem::u8path(source_path), ec);
+    const std::string identity_path = ec ? source_path : canonical_path.u8string();
     char hash[16];
-    snprintf(hash, sizeof(hash), "%08x", llama_weight_cache_crc32(source_path.data(), source_path.size()));
+    snprintf(hash, sizeof(hash), "%08x", llama_weight_cache_crc32(identity_path.data(), identity_path.size()));
     return (std::filesystem::path(cache_dir) /
-            (llama_weight_cache_basename(source_path) + "." + hash + ".ggml-weight-cache-v1")).string();
+            (llama_weight_cache_basename(identity_path) + "." + hash + ".ggml-weight-cache-v2")).string();
 }
 
+#if defined(_WIN32)
 static std::string llama_weight_cache_tmp_path(const std::string & path) {
     static std::atomic<uint64_t> sequence = 0;
-#if defined(_WIN32)
     const int process_id = _getpid();
-#else
-    const int process_id = getpid();
-#endif
     return path + ".tmp." + std::to_string(process_id) + "." +
            std::to_string(sequence.fetch_add(1, std::memory_order_relaxed));
+}
+#endif
+
+static bool llama_weight_cache_replace_file(const std::string & source, const std::string & destination) {
+#if defined(_WIN32)
+    const std::filesystem::path source_path = std::filesystem::u8path(source);
+    const std::filesystem::path destination_path = std::filesystem::u8path(destination);
+    return MoveFileExW(source_path.c_str(), destination_path.c_str(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0;
+#else
+    return std::rename(source.c_str(), destination.c_str()) == 0;
+#endif
 }
 
 static size_t llama_weight_cache_pad(size_t value, size_t alignment) {
     return alignment == 0 ? value : ((value + alignment - 1) / alignment) * alignment;
 }
 
-static bool llama_weight_cache_read_header(std::istream & in, llama_weight_cache_header & header) {
-    return llama_weight_cache_read(in, header.magic) &&
-           llama_weight_cache_read(in, header.version) &&
-           llama_weight_cache_read(in, header.endianness) &&
-           llama_weight_cache_read(in, header.tensor_count) &&
-           llama_weight_cache_read(in, header.source_size) &&
-           llama_weight_cache_read(in, header.source_mtime_sec) &&
-           llama_weight_cache_read(in, header.source_mtime_nsec) &&
-           llama_weight_cache_read(in, header.layout_hash_a) &&
-           llama_weight_cache_read(in, header.layout_hash_b) &&
-           llama_weight_cache_read(in, header.payload_offset) &&
-           llama_weight_cache_read(in, header.payload_size) &&
-           header.magic == LLAMA_WEIGHT_CACHE_MAGIC &&
+static bool llama_weight_cache_read_header(llama_file & file, llama_weight_cache_header & header) {
+    llama_weight_cache_read(file, header.magic);
+    llama_weight_cache_read(file, header.version);
+    llama_weight_cache_read(file, header.endianness);
+    llama_weight_cache_read(file, header.tensor_count);
+    llama_weight_cache_read(file, header.source_size);
+    llama_weight_cache_read(file, header.source_mtime_sec);
+    llama_weight_cache_read(file, header.source_mtime_nsec);
+    llama_weight_cache_read(file, header.source_hash);
+    llama_weight_cache_read(file, header.layout_hash_a);
+    llama_weight_cache_read(file, header.layout_hash_b);
+    llama_weight_cache_read(file, header.payload_offset);
+    llama_weight_cache_read(file, header.payload_size);
+    return header.magic == LLAMA_WEIGHT_CACHE_MAGIC &&
            header.version == LLAMA_WEIGHT_CACHE_VERSION &&
            header.endianness == LLAMA_WEIGHT_CACHE_ENDIANNESS;
 }
 
-static void llama_weight_cache_write_header(std::ostream & out, const llama_weight_cache_header & header) {
-    llama_weight_cache_write(out, header.magic);
-    llama_weight_cache_write(out, header.version);
-    llama_weight_cache_write(out, header.endianness);
-    llama_weight_cache_write(out, header.tensor_count);
-    llama_weight_cache_write(out, header.source_size);
-    llama_weight_cache_write(out, header.source_mtime_sec);
-    llama_weight_cache_write(out, header.source_mtime_nsec);
-    llama_weight_cache_write(out, header.layout_hash_a);
-    llama_weight_cache_write(out, header.layout_hash_b);
-    llama_weight_cache_write(out, header.payload_offset);
-    llama_weight_cache_write(out, header.payload_size);
+static bool llama_weight_cache_write_header(FILE * out, const llama_weight_cache_header & header) {
+    return llama_weight_cache_write(out, header.magic) &&
+           llama_weight_cache_write(out, header.version) &&
+           llama_weight_cache_write(out, header.endianness) &&
+           llama_weight_cache_write(out, header.tensor_count) &&
+           llama_weight_cache_write(out, header.source_size) &&
+           llama_weight_cache_write(out, header.source_mtime_sec) &&
+           llama_weight_cache_write(out, header.source_mtime_nsec) &&
+           llama_weight_cache_write(out, header.source_hash) &&
+           llama_weight_cache_write(out, header.layout_hash_a) &&
+           llama_weight_cache_write(out, header.layout_hash_b) &&
+           llama_weight_cache_write(out, header.payload_offset) &&
+           llama_weight_cache_write(out, header.payload_size);
 }
 
 static uint64_t llama_weight_cache_hash(uint64_t hash, const void * data, size_t size) {
@@ -245,7 +273,7 @@ static void llama_weight_cache_hash_value(llama_weight_cache_context & cache_ctx
 }
 
 static bool llama_weight_cache_collect(
-        const llama_weight_cache::impl & state,
+        llama_weight_cache::impl & state,
         const llama_model_loader & loader,
         ggml_context * ctx,
         ggml_backend_buffer_type_t buft,
@@ -294,7 +322,18 @@ static bool llama_weight_cache_collect(
 
         cache_ctx.payload_size += llama_weight_cache_pad(info.packed_size, alignment);
     }
-    return !cache_ctx.tensors.empty() && cache_ctx.source && !cache_ctx.source->path.empty();
+    if (cache_ctx.tensors.empty() || !cache_ctx.source || cache_ctx.source->path.empty() ||
+            source_idx >= loader.mappings.size() || !loader.mappings[source_idx] ||
+            loader.mappings[source_idx]->size() != cache_ctx.source->size) {
+        return false;
+    }
+    llama_weight_cache_source & source = state.sources[source_idx];
+    if (!source.hash_valid) {
+        source.hash = XXH3_64bits(loader.mappings[source_idx]->addr(), loader.mappings[source_idx]->size());
+        source.hash_valid = true;
+    }
+    cache_ctx.source_hash = source.hash;
+    return true;
 }
 
 llama_weight_cache::llama_weight_cache(bool check_tensors, bool from_file_ptr) : pimpl(new impl()) {
@@ -332,6 +371,13 @@ llama_weight_cache::~llama_weight_cache() {
 }
 
 void llama_weight_cache::add_source(uint16_t idx, const std::string & path, const llama_file * file) {
+    if (idx > 0 && pimpl->mode_value != impl::MODE_DISABLED) {
+        static std::atomic_flag warning_emitted = ATOMIC_FLAG_INIT;
+        if (!warning_emitted.test_and_set(std::memory_order_relaxed)) {
+            LLAMA_LOG_INFO("backend weight cache: split GGUF models are not supported, cache disabled\n");
+        }
+        pimpl->mode_value = impl::MODE_DISABLED;
+    }
     if (pimpl->sources.size() <= idx) {
         pimpl->sources.resize((size_t) idx + 1);
     }
@@ -370,37 +416,51 @@ ggml_backend_buffer_t llama_weight_cache::load(
     };
 
     const std::string path = llama_weight_cache_path(cache_ctx.source->path);
-    std::ifstream in(path, std::ios::binary);
     llama_weight_cache_header header = {};
-    if (!in || !llama_weight_cache_read_header(in, header) ||
-            header.source_size != cache_ctx.source->size ||
-            header.source_mtime_sec != cache_ctx.source->mtime_sec ||
-            header.source_mtime_nsec != cache_ctx.source->mtime_nsec ||
-            header.tensor_count != cache_ctx.tensors.size() ||
-            header.payload_size != cache_ctx.payload_size ||
-            header.layout_hash_a != cache_ctx.layout_hash_a ||
-            header.layout_hash_b != cache_ctx.layout_hash_b ||
-            header.payload_offset < sizeof(llama_weight_cache_header)) {
-        return miss();
-    }
+    const size_t expected_payload_offset = llama_weight_cache_pad(sizeof(llama_weight_cache_header),
+            ggml_backend_buft_get_alignment(buft));
 
+    bool header_validated = false;
     try {
         pimpl->files.emplace_back(new llama_file(path.c_str(), "rb", false));
-        if (header.payload_offset > pimpl->files.back()->size() ||
-                header.payload_size > pimpl->files.back()->size() - header.payload_offset) {
+        llama_file & file = *pimpl->files.back();
+        if (!llama_weight_cache_read_header(file, header) ||
+                header.source_size != cache_ctx.source->size ||
+                header.source_mtime_sec != cache_ctx.source->mtime_sec ||
+                header.source_mtime_nsec != cache_ctx.source->mtime_nsec ||
+                header.source_hash != cache_ctx.source_hash ||
+                header.tensor_count != cache_ctx.tensors.size() ||
+                header.payload_size != cache_ctx.payload_size ||
+                header.layout_hash_a != cache_ctx.layout_hash_a ||
+                header.layout_hash_b != cache_ctx.layout_hash_b ||
+                header.payload_offset != expected_payload_offset ||
+                header.payload_offset > file.size() ||
+                header.payload_size > file.size() - header.payload_offset) {
             pimpl->files.pop_back();
             return miss();
         }
-        pimpl->mappings.emplace_back(new llama_mmap(pimpl->files.back().get(), 0, false));
+        header_validated = true;
+        pimpl->mappings.emplace_back(new llama_mmap(&file, 0, false));
     } catch (const std::exception & ex) {
         if (pimpl->files.size() > pimpl->mappings.size()) {
             pimpl->files.pop_back();
         }
-        LLAMA_LOG_WARN("backend weight cache: failed to mmap '%s': %s\n", path.c_str(), ex.what());
+        if (header_validated) {
+            LLAMA_LOG_WARN("backend weight cache: failed to mmap '%s': %s\n", path.c_str(), ex.what());
+        }
         return miss();
     }
 
     uint8_t * payload = (uint8_t *) pimpl->mappings.back()->addr() + header.payload_offset;
+    for (const auto & entry : cache_ctx.tensors) {
+        if (!llama_weight_cache_validate_tensor(entry.tensor,
+                    payload + entry.packed_offset, entry.info.packed_size)) {
+            pimpl->mappings.pop_back();
+            pimpl->files.pop_back();
+            return miss();
+        }
+    }
+
     const auto * iface = llama_weight_cache_get_interface();
     ggml_backend_buffer_t buffer = iface && iface->buffer_from_ptr ?
         iface->buffer_from_ptr(buft, payload, header.payload_size) : nullptr;
@@ -408,18 +468,6 @@ ggml_backend_buffer_t llama_weight_cache::load(
         pimpl->mappings.pop_back();
         pimpl->files.pop_back();
         return miss();
-    }
-
-    if (getenv("GGML_WEIGHT_CACHE_VALIDATE")) {
-        for (const auto & entry : cache_ctx.tensors) {
-            if (!llama_weight_cache_validate_tensor(entry.tensor,
-                        payload + entry.packed_offset, entry.info.packed_size)) {
-                ggml_backend_buffer_free(buffer);
-                pimpl->mappings.pop_back();
-                pimpl->files.pop_back();
-                return miss();
-            }
-        }
     }
 
     for (const auto & entry : cache_ctx.tensors) {
@@ -484,6 +532,7 @@ void llama_weight_cache::save(
     header.source_size = cache_ctx.source->size;
     header.source_mtime_sec = cache_ctx.source->mtime_sec;
     header.source_mtime_nsec = cache_ctx.source->mtime_nsec;
+    header.source_hash = cache_ctx.source_hash;
     header.layout_hash_a = cache_ctx.layout_hash_a;
     header.layout_hash_b = cache_ctx.layout_hash_b;
     header.payload_offset = llama_weight_cache_pad(sizeof(llama_weight_cache_header),
@@ -491,39 +540,102 @@ void llama_weight_cache::save(
     header.payload_size = cache_ctx.payload_size;
 
     const std::string path = llama_weight_cache_path(cache_ctx.source->path);
-    const std::string tmp_path = llama_weight_cache_tmp_path(path);
     std::error_code ec;
     const std::filesystem::path parent = std::filesystem::path(path).parent_path();
     if (!parent.empty() && !std::filesystem::create_directories(parent, ec) && ec) {
         LLAMA_LOG_WARN("backend weight cache: failed to create directory for '%s'\n", path.c_str());
         return;
     }
-    std::ofstream out(tmp_path, std::ios::binary | std::ios::trunc);
-    if (!out) {
-        LLAMA_LOG_WARN("backend weight cache: failed to open '%s' for writing\n", tmp_path.c_str());
+#if defined(_WIN32)
+    const std::string tmp_path = llama_weight_cache_tmp_path(path);
+    const std::filesystem::path tmp_path_w = std::filesystem::u8path(tmp_path);
+    HANDLE handle = CreateFileW(tmp_path_w.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW,
+            FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+    if (handle == INVALID_HANDLE_VALUE) {
+        LLAMA_LOG_WARN("backend weight cache: failed to create temporary cache for '%s'\n", path.c_str());
         return;
     }
     auto remove_tmp = [&]() {
         std::error_code remove_ec;
         std::filesystem::remove(tmp_path, remove_ec);
     };
-    llama_weight_cache_write_header(out, header);
-    const std::streamoff pos = out.tellp();
-    if (pos < 0 || (uint64_t) pos > header.payload_offset) {
-        out.close();
+
+    const int fd = _open_osfhandle((intptr_t) handle, _O_WRONLY | _O_BINARY);
+    if (fd == -1) {
+        CloseHandle(handle);
         remove_tmp();
+        LLAMA_LOG_WARN("backend weight cache: failed to open '%s' for writing\n", tmp_path.c_str());
         return;
     }
-    std::vector<char> padding((size_t) (header.payload_offset - (uint64_t) pos), 0);
-    out.write(padding.data(), padding.size());
-    out.write((const char *) base, (std::streamsize) buffer_size);
-    out.close();
+    FILE * out = _fdopen(fd, "wb");
     if (!out) {
+        _close(fd);
+        remove_tmp();
+        LLAMA_LOG_WARN("backend weight cache: failed to open '%s' for writing\n", tmp_path.c_str());
+        return;
+    }
+
+    bool ok = llama_weight_cache_write_header(out, header);
+    const __int64 pos = _ftelli64(out);
+    if (pos < 0 || (uint64_t) pos > header.payload_offset) {
+        ok = false;
+    }
+    if (ok) {
+        std::vector<char> padding((size_t) (header.payload_offset - (uint64_t) pos), 0);
+        ok = fwrite(padding.data(), 1, padding.size(), out) == padding.size() &&
+             fwrite(base, 1, buffer_size, out) == buffer_size;
+    }
+    if (fclose(out) != 0) {
+        ok = false;
+    }
+    if (!ok) {
         LLAMA_LOG_WARN("backend weight cache: failed to write '%s'\n", tmp_path.c_str());
         remove_tmp();
         return;
     }
-    if (std::rename(tmp_path.c_str(), path.c_str()) != 0) {
+#else
+    const std::string pattern = path + ".tmp.XXXXXX";
+    std::vector<char> tmp_name(pattern.begin(), pattern.end());
+    tmp_name.push_back('\0');
+
+    const int fd = mkstemp(tmp_name.data());
+    if (fd == -1) {
+        LLAMA_LOG_WARN("backend weight cache: failed to create temporary cache for '%s'\n", path.c_str());
+        return;
+    }
+
+    const std::string tmp_path(tmp_name.data());
+    auto remove_tmp = [&]() {
+        unlink(tmp_path.c_str());
+    };
+    FILE * out = fdopen(fd, "wb");
+    if (!out) {
+        close(fd);
+        remove_tmp();
+        LLAMA_LOG_WARN("backend weight cache: failed to open '%s' for writing\n", tmp_path.c_str());
+        return;
+    }
+
+    bool ok = llama_weight_cache_write_header(out, header);
+    const off_t pos = ftello(out);
+    if (pos < 0 || (uint64_t) pos > header.payload_offset) {
+        ok = false;
+    }
+    if (ok) {
+        std::vector<char> padding((size_t) (header.payload_offset - (uint64_t) pos), 0);
+        ok = fwrite(padding.data(), 1, padding.size(), out) == padding.size() &&
+             fwrite(base, 1, buffer_size, out) == buffer_size;
+    }
+    if (fclose(out) != 0) {
+        ok = false;
+    }
+    if (!ok) {
+        LLAMA_LOG_WARN("backend weight cache: failed to write '%s'\n", tmp_path.c_str());
+        remove_tmp();
+        return;
+    }
+#endif
+    if (!llama_weight_cache_replace_file(tmp_path, path)) {
         LLAMA_LOG_WARN("backend weight cache: failed to rename '%s' to '%s'\n", tmp_path.c_str(), path.c_str());
         remove_tmp();
         return;
