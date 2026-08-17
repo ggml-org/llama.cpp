@@ -492,6 +492,9 @@ struct ggml_gallocr {
 
     struct leaf_alloc * leaf_allocs; // [n_leafs]
     int n_leafs;
+
+    struct ggml_hash_set pinned;
+    bool has_pinned;
 };
 
 ggml_gallocr_t ggml_gallocr_new_n(ggml_backend_buffer_type_t * bufts, int n_bufs) {
@@ -569,6 +572,9 @@ void ggml_gallocr_free(ggml_gallocr_t galloc) {
     }
 
     ggml_hash_set_free(&galloc->hash_set);
+    if (galloc->pinned.size > 0) {
+        ggml_hash_set_free(&galloc->pinned);
+    }
     free(galloc->hash_values);
     free(galloc->bufts);
     free(galloc->buffers);
@@ -687,10 +693,34 @@ static void ggml_gallocr_allocate_node(ggml_gallocr_t galloc, struct ggml_tensor
     }
 }
 
+void ggml_gallocr_pin_tensor(ggml_gallocr_t galloc, struct ggml_tensor * t) {
+    GGML_ASSERT(galloc);
+    if (galloc->pinned.size == 0) {
+        galloc->pinned = ggml_hash_set_new(GGML_DEFAULT_GRAPH_SIZE);
+    }
+    if (ggml_hash_insert(&galloc->pinned, t) == GGML_HASHSET_FULL) {
+        GGML_ABORT("%s: pinned tensor set is full\n", __func__);
+    }
+    galloc->has_pinned = true;
+}
+
+void ggml_gallocr_clear_pins(ggml_gallocr_t galloc) {
+    GGML_ASSERT(galloc);
+    if (galloc->pinned.size > 0) {
+        ggml_hash_set_reset(&galloc->pinned);
+    }
+    galloc->has_pinned = false;
+}
+
 static void ggml_gallocr_free_node(ggml_gallocr_t galloc, struct ggml_tensor * node) {
     // graph outputs are never freed
     if (node->flags & GGML_TENSOR_FLAG_OUTPUT) {
         AT_PRINTF("not freeing output %s\n", node->name);
+        return;
+    }
+
+    if (galloc->has_pinned && ggml_hash_contains(&galloc->pinned, node)) {
+        AT_PRINTF("not freeing pinned %s\n", node->name);
         return;
     }
 
