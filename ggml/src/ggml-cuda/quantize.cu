@@ -399,10 +399,11 @@ static __global__ void quantize_mmq_mxfp4(const float * __restrict__ x,
             float err[2];
 #pragma unroll
             for (int t = 0; t < 2; ++t) {
-                const float   s_t  = ggml_cuda_e8m0_to_fp32(e - t);
-                const uint8_t q    = ggml_cuda_float_to_fp4_e2m1(xi, __frcp_rn(s_t));
-                const float   diff = fabsf(xi) - 0.5f*fabsf((float) kvalues_fp4[q & 0x7])*s_t;
-                err[t] = diff*diff;
+                const float test_scale = ggml_cuda_e8m0_to_fp32(e - t);
+                const float test_inv_scale = __frcp_rn(test_scale);
+                const uint8_t q = ggml_cuda_float_to_fp4_e2m1(xi, test_inv_scale);
+                const float err_diff = fabsf(xi) - 0.5f*fabsf((float) kvalues_fp4[q & 0x7])*test_scale;
+                err[t] = err_diff*err_diff;
             }
 #pragma unroll
             for (int mask = 16; mask > 0; mask >>= 1) {
