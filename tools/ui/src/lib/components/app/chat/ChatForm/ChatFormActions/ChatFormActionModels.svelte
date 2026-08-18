@@ -1,12 +1,6 @@
 <script lang="ts">
 	import { ModelsSelectorDropdown, ModelsSelectorSheet } from '$lib/components/app';
-	import {
-		chatStore,
-		conversationsStore,
-		deviceStore,
-		modelsStore,
-		serverStore
-	} from '$lib/stores';
+	import { conversationsStore, deviceStore, modelsStore, serverStore } from '$lib/stores';
 	import { getConversationModel } from '$lib/utils';
 
 	interface Props {

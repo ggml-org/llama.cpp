@@ -13,6 +13,7 @@ import {
 	SSE_DATA_PREFIX,
 	SSE_DONE_MARKER,
 	SSE_LINE_SEPARATOR,
+	STREAM_QUERY_PARAMS,
 	STREAM_RESUME_LOCALSTORAGE_KEY_PREFIX,
 	STREAM_VISIBILITY_KICK_MS
 } from '$lib/constants';
@@ -530,7 +531,7 @@ export class ChatService {
 		try {
 			const id = streamIdentity(conversationId, model);
 
-			await fetch(`${API_STREAM.BASE}?conv_id=${encodeURIComponent(id)}`, {
+			await fetch(ChatService.buildStreamUrl(id), {
 				headers: getAuthHeaders(),
 				method: 'DELETE'
 			});
@@ -568,7 +569,7 @@ export class ChatService {
 	 * caller can pipe it through the SSE parser like a fresh stream.
 	 */
 	static async fetchStreamReplay(streamId: string): Promise<Response> {
-		const resp = await fetch(`${API_STREAM.BASE}?conv_id=${encodeURIComponent(streamId)}&from=0`, {
+		const resp = await fetch(ChatService.buildStreamUrl(streamId, 0), {
 			headers: getAuthHeaders()
 		});
 
@@ -670,6 +671,15 @@ export class ChatService {
 		return streamIdentity(conversationId, model);
 	}
 
+	// build the replay route url for a stream identity, from is the resume byte offset, omitted
+	// for the cancel route
+	private static buildStreamUrl(streamId: string, from?: number): string {
+		const query = `${STREAM_QUERY_PARAMS.CONV_ID}=${encodeURIComponent(streamId)}`;
+		const offset = from === undefined ? '' : `&${STREAM_QUERY_PARAMS.FROM}=${from}`;
+
+		return `${API_STREAM.BASE}?${query}${offset}`;
+	}
+
 	/**
 	 * Reconnect to an interrupted stream for this conversation. Returns the fetch Response so the
 	 * existing SSE parser drains it like a fresh stream. The server returns 200 on success, 404 if
@@ -683,13 +693,10 @@ export class ChatService {
 		const ac = new AbortController();
 
 		try {
-			const resp = await fetch(
-				`${API_STREAM.BASE}?conv_id=${encodeURIComponent(streamId)}&from=0`,
-				{
-					headers: getAuthHeaders(),
-					signal: ac.signal
-				}
-			);
+			const resp = await fetch(ChatService.buildStreamUrl(streamId, 0), {
+				headers: getAuthHeaders(),
+				signal: ac.signal
+			});
 
 			ac.abort();
 
@@ -709,7 +716,7 @@ export class ChatService {
 		const state = ChatService.getStreamState(conversationId);
 		const from = state?.bytesReceived ?? 0;
 		const id = streamIdentity(conversationId, model);
-		const url = `${API_STREAM.BASE}?conv_id=${encodeURIComponent(id)}&from=${from}`;
+		const url = ChatService.buildStreamUrl(id, from);
 
 		return await fetch(url, { headers: getAuthHeaders(), method: 'GET', signal });
 	}
