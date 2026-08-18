@@ -167,7 +167,7 @@ so a single run enumerates a whole workload; a count is printed at exit.
 |---|---|
 | `GGML_SCHED_DEBUG` | `1` prints assignments and scheduler decisions, `2` adds per-node detail |
 | `GGML_SCHED_DEBUG_REALLOC` | report, or abort on, unexpected graph reallocations |
-| `GGML_SCHED_UMA_RING` | override ring detection: `0`/`1` disables, larger sets the depth |
+| `GGML_SCHED_UMA_RING` | when the ring is in use: `0`/`1` disables it, larger sets the depth. cannot enable it where it was not detected |
 | `GGML_SCHED_PIN_ASYNC_READS` | `0` disables pinning of memory read in place by another backend |
 | `GGML_SCHED_SANITIZE` | `1` enables the sanitizer, `2` also traces synchronization edges |
 | `GGML_SCHED_SANITIZE_NONFATAL` | `1` reports every race instead of aborting on the first |

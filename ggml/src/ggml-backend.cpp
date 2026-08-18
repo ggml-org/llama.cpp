@@ -1493,7 +1493,7 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
                         ggml_backend_t backend = sched->backends[inp_backend_id];
                         for (int c = 0; c < sched->n_copies; c++) {
                             struct ggml_tensor * tensor_copy;
-                            if (c == sched->cur_copy) {
+                            if (c == 0) {
                                 tensor_copy = inp; // use the original tensor as the current copy
                             } else {
                                 tensor_copy = ggml_dup_tensor_layout(sched->ctx, inp);
@@ -2026,6 +2026,9 @@ ggml_backend_sched_t ggml_backend_sched_new(
 
         if (cpu_buft && ggml_backend_buft_is_host(cpu_buft)) {
             for (int b = 0; b < n_backends - 1; b++) {
+                if (ggml_backend_dev_type(ggml_backend_get_device(backends[b])) == GGML_BACKEND_DEVICE_TYPE_CPU) {
+                    continue;
+                }
                 if (ggml_backend_supports_buft(backends[b], cpu_buft)) {
                     is_uma = true;
                     GGML_LOG_DEBUG("%s: %s computes directly on %s, ring buffering graph inputs\n",
@@ -2039,7 +2042,7 @@ ggml_backend_sched_t ggml_backend_sched_new(
     int n_copies_uma = is_uma ? 2 : 1;
 
     const char * GGML_SCHED_UMA_RING = getenv("GGML_SCHED_UMA_RING");
-    if (GGML_SCHED_UMA_RING) {
+    if (GGML_SCHED_UMA_RING && is_uma) {
         n_copies_uma = std::min(std::max(atoi(GGML_SCHED_UMA_RING), 1), GGML_SCHED_MAX_COPIES);
     }
 
@@ -2211,11 +2214,7 @@ static void ggml_backend_sched_advance_copy(ggml_backend_sched_t sched) {
     }
 }
 
-static void ggml_backend_sched_rotate_inputs(ggml_backend_sched_t sched) {
-    GGML_ASSERT(sched->n_copies > 1);
-
-    ggml_backend_sched_advance_copy(sched);
-
+static void ggml_backend_sched_point_inputs(ggml_backend_sched_t sched) {
     for (int i = 0; i < sched->n_graph_inputs; i++) {
         struct ggml_tensor * input = sched->graph_inputs[i];
 
@@ -2246,6 +2245,13 @@ static void ggml_backend_sched_rotate_inputs(ggml_backend_sched_t sched) {
         GGML_LOG_DEBUG("%s: rotated %d graph inputs onto copy %d\n",
                 __func__, sched->n_graph_inputs, sched->cur_copy);
     }
+}
+
+static void ggml_backend_sched_rotate_inputs(ggml_backend_sched_t sched) {
+    GGML_ASSERT(sched->n_copies > 1);
+
+    ggml_backend_sched_advance_copy(sched);
+    ggml_backend_sched_point_inputs(sched);
 }
 
 void ggml_backend_sched_prepare_inputs(ggml_backend_sched_t sched) {
@@ -2280,6 +2286,10 @@ bool ggml_backend_sched_alloc_graph(ggml_backend_sched_t sched, struct ggml_cgra
     }
 
     ggml_backend_sched_capture_input_slots(sched);
+
+    if (sched->n_copies > 1) {
+        ggml_backend_sched_point_inputs(sched);
+    }
 
     sched->needs_rotate = false;
 
