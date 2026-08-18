@@ -554,6 +554,9 @@ public:
         chunk_idx = 0;
         n_voice_pos = 0;
         chunk_budget = 0;
+        stream = false;
+        pcm_sent = 0;
+        wav_header_sent = false;
     }
 
     int32_t set_input(const mtmd_helper_gen_audio_inp * inp) override {
@@ -623,6 +626,7 @@ public:
 
         seed     = inp->seed;
         out_type = inp->out_type;
+        stream   = inp->stream;
 
         return 0;
     }
@@ -711,26 +715,51 @@ public:
     }
 
     int32_t get_output(int32_t * out_sample_rate, const char ** out_data, size_t * out_data_len, int64_t * out_n_samples) override {
-        if (!flush_gen_wav()) {
-            return 1;
+        *out_sample_rate = info.sample_rate;
+
+        if (!stream) {
+            // one-shot call: force out whatever's left, regardless of window_frames
+            if (!flush_gen_wav()) {
+                return 1;
+            }
+            if (out_n_samples) {
+                *out_n_samples = (int64_t) audio_pcm.size();
+            }
+            if (out_type == MTMD_HELPER_GEN_AUDIO_OUTTYPE_PCM) {
+                *out_data     = (const char *) audio_pcm.data();
+                *out_data_len = audio_pcm.size() * sizeof(float);
+                return 0;
+            }
+            out_buf.clear();
+            if (!write_wav16(out_buf, audio_pcm, info.sample_rate)) {
+                LOG_ERR("mtmd_helper_gen_audio: output too large for WAV\n");
+                return 1;
+            }
+            *out_data     = out_buf.data();
+            *out_data_len = out_buf.size();
+            return 0;
         }
 
-        *out_sample_rate = info.sample_rate;
+        // streaming: only return audio produced since the previous call
+        const size_t n_new = audio_pcm.size() - pcm_sent;
         if (out_n_samples) {
-            *out_n_samples = (int64_t) audio_pcm.size();
+            *out_n_samples = (int64_t) n_new;
         }
 
         if (out_type == MTMD_HELPER_GEN_AUDIO_OUTTYPE_PCM) {
-            *out_data     = (const char *) audio_pcm.data();
-            *out_data_len = audio_pcm.size() * sizeof(float);
+            *out_data     = (const char *) (audio_pcm.data() + pcm_sent);
+            *out_data_len = n_new * sizeof(float);
+            pcm_sent = audio_pcm.size();
             return 0;
         }
 
         out_buf.clear();
-        if (!write_wav16(out_buf, audio_pcm, info.sample_rate)) {
-            LOG_ERR("mtmd_helper_gen_audio: output too large for WAV\n");
-            return 1;
+        if (!wav_header_sent) {
+            write_wav16_header(out_buf, UINT32_MAX, info.sample_rate);
+            wav_header_sent = true;
         }
+        append_wav16_pcm(out_buf, audio_pcm.data() + pcm_sent, n_new);
+        pcm_sent = audio_pcm.size();
         *out_data     = out_buf.data();
         *out_data_len = out_buf.size();
         return 0;
@@ -960,7 +989,7 @@ private:
             LOG_ERR("mtmd_helper_gen_audio: mmproj has no voice encoder\n");
             return false;
         }
-        const std::string  marker = mtmd_default_marker();
+        const std::string  marker = mtmd_get_marker(mctx);
         mtmd_input_text     text{ marker.c_str(), marker.size(), false, true };
         mtmd_input_chunks * chunks = mtmd_input_chunks_init();
         const mtmd_bitmap * bptr = bitmap;
@@ -1042,6 +1071,9 @@ private:
     std::vector<float>   h_state_buf;
     mtmd_helper_gen_audio_outtype out_type = MTMD_HELPER_GEN_AUDIO_OUTTYPE_WAV;
     std::vector<char> out_buf;
+    bool   stream          = false;
+    size_t pcm_sent        = 0; // samples already returned by get_output()
+    bool   wav_header_sent = false;
 };
 
 static std::unique_ptr<mtmd_gen_audio_pipeline> make_pipeline(llama_context * lctx, mtmd_context * mctx) {
