@@ -31,5 +31,8 @@ set_source_files_properties(${VENDOR_SRCS} PROPERTIES COMPILE_OPTIONS ${NO_WARN_
 # sha1 lives in a namespace to avoid a clash with boringssl, see scripts/sync_vendor.py
 set_source_files_properties(sha1/sha1.c PROPERTIES LANGUAGE CXX)
 
-# sha256.c includes "rotate-bits/rotate-bits.h", so consumers get this dir too
-target_include_directories(${TARGET} PUBLIC .)
+# expose the vendor/ root so consumers can include via "hash/hash.h"
+target_include_directories(${TARGET} PUBLIC ..)
+
+# internal includes of the vendored sources, e.g. sha256.c -> "rotate-bits/rotate-bits.h"
+target_include_directories(${TARGET} PRIVATE .)

@@ -224,12 +224,10 @@ add_subdirectory(src)
 # utils, programs, examples and tests
 #
 
-# mtmd needs this even when common is not built
-add_subdirectory(vendor/hash)
+add_subdirectory(vendor)
 
 if (LLAMA_BUILD_COMMON)
     add_subdirectory(common)
-    add_subdirectory(vendor/cpp-httplib)
 endif()
 
 if (LLAMA_BUILD_COMMON AND LLAMA_BUILD_TESTS AND NOT CMAKE_JS_VERSION)
