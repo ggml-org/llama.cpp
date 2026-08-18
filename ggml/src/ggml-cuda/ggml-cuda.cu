@@ -4408,10 +4408,8 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph *                cgraph,
 static bool ggml_cuda_use_gfx1030_q8_cache() {
 #if defined(GGML_USE_HIP)
     static const bool enabled = []() {
-        const char * native = std::getenv("GGML_HIP_GFX1030_NATIVE");
-        const char * cache = std::getenv("GGML_HIP_GFX1030_Q8_CACHE");
-        return native != nullptr && std::atoi(native) != 0 &&
-               cache != nullptr && std::atoi(cache) != 0;
+        return ggml_cuda_rdna2_native_profile_enabled() &&
+               ggml_cuda_rdna2_feature_enabled("GGML_HIP_GFX1030_Q8_CACHE");
     }();
     if (!enabled) {
         return false;
@@ -4427,9 +4425,8 @@ static bool ggml_cuda_use_gfx1030_q8_cache() {
 static bool ggml_cuda_use_gfx1030_q8_cache_telemetry() {
 #if defined(GGML_USE_HIP)
     static const bool enabled = []() {
-        const char * native = std::getenv("GGML_HIP_GFX1030_NATIVE");
         const char * telemetry = std::getenv("GGML_HIP_GFX1030_Q8_CACHE_TELEMETRY");
-        return native != nullptr && std::atoi(native) != 0 &&
+        return ggml_cuda_rdna2_native_profile_enabled() &&
                telemetry != nullptr && std::atoi(telemetry) != 0;
     }();
     if (!enabled) {
@@ -4448,10 +4445,8 @@ static bool ggml_cuda_use_gfx1030_q8_1_fusion() {
     // Environment configuration is immutable after backend initialization;
     // avoid repeated getenv/atoi work while traversing every graph.
     static const bool enabled = []() {
-        const char * native = std::getenv("GGML_HIP_GFX1030_NATIVE");
-        const char * fusion = std::getenv("GGML_HIP_GFX1030_Q8_1_FUSION");
-        return native != nullptr && std::atoi(native) != 0 &&
-               fusion != nullptr && std::atoi(fusion) != 0;
+        return ggml_cuda_rdna2_native_profile_enabled() &&
+               ggml_cuda_rdna2_feature_enabled("GGML_HIP_GFX1030_Q8_1_FUSION");
     }();
     if (!enabled) {
         return false;
@@ -4467,8 +4462,7 @@ static bool ggml_cuda_use_gfx1030_q8_1_fusion() {
 static bool ggml_cuda_use_gfx1030_add_rms_norm_fusion() {
 #if defined(GGML_USE_HIP)
     static const bool enabled = []() {
-        const char * fusion = std::getenv("GGML_HIP_GFX1030_ADD_RMS_NORM_FUSION");
-        return fusion != nullptr && std::atoi(fusion) != 0;
+        return ggml_cuda_rdna2_feature_enabled("GGML_HIP_GFX1030_ADD_RMS_NORM_FUSION");
     }();
     if (!enabled) {
         return false;

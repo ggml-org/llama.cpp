@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <memory>
 #include <mutex>
 
@@ -65,6 +66,36 @@ static_assert(sizeof(block_q8_1_sum_hi) == 2, "Unexpected q8_1 sum_hi sidecar si
 
 #define STRINGIZE_IMPL(...) #__VA_ARGS__
 #define STRINGIZE(...) STRINGIZE_IMPL(__VA_ARGS__)
+
+// HSA_OVERRIDE_GFX_VERSION is the single opt-in for the tested RDNA2/gfx1030
+// profile. Explicit feature variables remain available as per-feature
+// overrides, but ordinary V620 launches need only HSA_OVERRIDE_GFX_VERSION.
+static inline bool ggml_cuda_rdna2_native_profile_enabled() {
+#if defined(GGML_USE_HIP)
+    static const bool enabled = []() {
+        if (const char * native = std::getenv("GGML_HIP_GFX1030_NATIVE")) {
+            return std::atoi(native) != 0;
+        }
+        const char * override_gfx = std::getenv("HSA_OVERRIDE_GFX_VERSION");
+        return override_gfx != nullptr && std::strcmp(override_gfx, "10.3.0") == 0;
+    }();
+    return enabled;
+#else
+    return false;
+#endif
+}
+
+static inline bool ggml_cuda_rdna2_feature_enabled(const char * name) {
+#if defined(GGML_USE_HIP)
+    if (const char * value = std::getenv(name)) {
+        return std::atoi(value) != 0;
+    }
+    return ggml_cuda_rdna2_native_profile_enabled();
+#else
+    GGML_UNUSED(name);
+    return false;
+#endif
+}
 
 #define WARP_SIZE 32
 #define CUDART_HMAX   11070 // CUDA 11.7, min. ver. for which __hmax and __hmax2 are known to work (may be higher than needed)

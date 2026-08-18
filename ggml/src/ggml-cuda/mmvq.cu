@@ -296,11 +296,7 @@ static constexpr __host__ __device__ int get_mmvq_mmid_max_batch_rdna4(ggml_type
 static bool mmvq_use_gfx1030_native(int cc) {
 #if defined(GGML_USE_HIP)
     GGML_UNUSED(cc); // this branch targets RDNA2/gfx1030 exclusively
-    static const bool enabled = [] {
-        const char * env = std::getenv("GGML_HIP_GFX1030_NATIVE");
-        return env != nullptr && std::atoi(env) != 0;
-    }();
-    return enabled;
+    return ggml_cuda_rdna2_native_profile_enabled();
 #else
     GGML_UNUSED(cc);
     return false;
@@ -1482,11 +1478,8 @@ static bool mmvq_use_gfx1030_native() {
 
 static bool mmvq_use_gfx1030_q8_cache() {
 #if defined(GGML_USE_HIP)
-    static const bool enabled = [] {
-        const char * cache = std::getenv("GGML_HIP_GFX1030_Q8_CACHE");
-        return cache != nullptr && std::atoi(cache) != 0;
-    }();
-    return enabled && mmvq_use_gfx1030_native();
+    return ggml_cuda_rdna2_feature_enabled("GGML_HIP_GFX1030_Q8_CACHE") &&
+           mmvq_use_gfx1030_native();
 #else
     return false;
 #endif

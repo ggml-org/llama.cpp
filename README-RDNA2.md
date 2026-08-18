@@ -57,6 +57,12 @@ export HSA_OVERRIDE_GFX_VERSION=10.3.0
 export HSA_NO_SCRATCH_RECLAIM=1
 ```
 
+`HSA_OVERRIDE_GFX_VERSION=10.3.0` is also the umbrella switch for the
+certified V620/gfx1030 profile. It automatically enables native MMVQ/attention/
+GDN, Q8 activation caching, Q8_1 fusion, ADD/RMS_NORM fusion, and GDN sibling
+fusion. The individual `GGML_HIP_GFX1030_*` variables remain available as
+explicit overrides; setting one to `0` disables that feature.
+
 ### Runtime environment quick reference
 
 These are the settings used by this branch's tested ROCm path, not an exhaustive
@@ -68,7 +74,7 @@ list of upstream debugging variables.
 | `GGML_CUDA_ALLREDUCE=internal` | Uses the experimental internal collective when supported. | Mainly useful for two-device testing; not compatible with vocabulary-parallel output. |
 | `GGML_CUDA_ALLREDUCE=none` | Disables the backend collective and lets the meta backend use its generic butterfly fallback. | Debug/A-B option; slower here and not compatible with vocabulary-parallel output. |
 | `GGML_HIP_GRAPHS=1` as a shell variable | No runtime effect in the current implementation. | Harmless but redundant in older command examples; use the CMake option instead. |
-| `HSA_OVERRIDE_GFX_VERSION=10.3.0` | Presents the V620 as the tested `gfx1030` target. | Retained for reproducibility; it may be unnecessary on a native `gfx1030` runtime. |
+| `HSA_OVERRIDE_GFX_VERSION=10.3.0` | Presents the V620 as the tested `gfx1030` target and enables the certified RDNA2 optimization profile. | The only runtime switch needed for the profile; `HSA_NO_SCRATCH_RECLAIM=1` remains optional stability tuning. |
 | `HSA_NO_SCRATCH_RECLAIM=1` | Keeps HIP scratch allocations instead of reclaiming them between work. | Improves stability/consistency at the cost of retaining more GPU memory. |
 | `GGML_TP_SHARDED_OUTPUT=auto|0|1` | Splits validated output heads along the embedding dimension, then FP32-all-reduces full logits. | Defaults to `auto` for Qwen35 27B; use `1` for other validated Qwen 35B/122B paths or `0` to disable. Do not combine with `GGML_TP_VOCAB_OUTPUT`. |
 | `GGML_TP_VOCAB_OUTPUT=1` | Splits an eligible output head along vocabulary, selects local candidates, and exchanges only compact TOP_K results. | Raw decode only for now; requires RCCL, CPU sampling, finite `top_k <= 256`, and at most one output row. Do not combine with `GGML_TP_SHARDED_OUTPUT`. |
@@ -174,7 +180,6 @@ four-GPU RCCL tensor split, flash attention, full GPU offload, F16 KV, batch
 2048, and microbatch 256.
 
 ```bash
-GGML_CUDA_ALLREDUCE=nccl \
 HSA_OVERRIDE_GFX_VERSION=10.3.0 \
 HSA_NO_SCRATCH_RECLAIM=1 \
 ./build/bin/llama-bench \

@@ -43,8 +43,7 @@ typedef void (* fattn_kernel_t)(
 
 static inline bool ggml_cuda_fattn_use_gfx1030_native() {
 #if defined(GGML_USE_HIP)
-    const char * env = std::getenv("GGML_HIP_GFX1030_NATIVE");
-    if (env == nullptr || std::atoi(env) == 0) {
+    if (!ggml_cuda_rdna2_native_profile_enabled()) {
         return false;
     }
     const int device = ggml_cuda_get_device();

@@ -9,9 +9,9 @@ cmake -S . -B build -DGGML_HIP=ON -DGGML_HIP_RCCL=ON -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
 ```
 
-Launch `llama-server` normally. Native gfx1030 kernel flags remain independent.
+Launch `llama-server` normally. On V620/gfx1030, setting `HSA_OVERRIDE_GFX_VERSION=10.3.0` is the umbrella switch for the certified RDNA2 profile: native MMVQ/attention/GDN, Q8 activation cache, Q8_1 fusion, ADD/RMS_NORM fusion, and GDN sibling fusion. Explicit per-feature variables remain available and take precedence; setting one to `0` disables that feature.
 
-## Automatic policy
+## Automatic RDNA2 profile and policy
 
 Policy is selected from collective and hardware properties rather than model identity:
 
@@ -51,6 +51,15 @@ User settings are preserved. The following disable automatic behavior or select 
 
 ```text
 GGML_HIP_RCCL_TUNE=off|auto|force
+HSA_OVERRIDE_GFX_VERSION=10.3.0
+
+# Optional per-feature overrides; unset means the HSA umbrella default.
+GGML_HIP_GFX1030_NATIVE=0|1
+GGML_HIP_GFX1030_ADD_RMS_NORM_FUSION=0|1
+GGML_HIP_GFX1030_Q8_CACHE=0|1
+GGML_HIP_GFX1030_Q8_1_FUSION=0|1
+GGML_HIP_GFX1030_GDN_SIBLING_FUSION=0|1
+
 GGML_HIP_GFX1030_P2P_ALLREDUCE=off|auto|host|host-fused|host-mtp
 GGML_MTP_DEFER_CATCHUP=0|auto|1
 GGML_TP_SHARDED_OUTPUT=0|auto|1

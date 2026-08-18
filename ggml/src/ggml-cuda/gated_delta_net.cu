@@ -8,8 +8,7 @@ static bool ggml_cuda_gdn_use_gfx1030_chunked(const int64_t n_tokens) {
     if (n_tokens <= 1) {
         return false;
     }
-    const char * env = std::getenv("GGML_HIP_GFX1030_NATIVE");
-    if (env == nullptr || std::atoi(env) == 0) {
+    if (!ggml_cuda_rdna2_native_profile_enabled()) {
         return false;
     }
     const int device = ggml_cuda_get_device();

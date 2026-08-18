@@ -39,14 +39,22 @@
 #include <string>
 #include <vector>
 
-static bool llama_model_use_gfx1030_gdn_sibling_fusion() {
+static bool llama_model_rdna2_native_profile_enabled() {
     static const bool enabled = []() {
-        const char * native = std::getenv("GGML_HIP_GFX1030_NATIVE");
-        const char * fusion = std::getenv("GGML_HIP_GFX1030_GDN_SIBLING_FUSION");
-        return native != nullptr && std::atoi(native) != 0 &&
-               fusion != nullptr && std::atoi(fusion) != 0;
+        if (const char * native = std::getenv("GGML_HIP_GFX1030_NATIVE")) {
+            return std::atoi(native) != 0;
+        }
+        const char * override_gfx = std::getenv("HSA_OVERRIDE_GFX_VERSION");
+        return override_gfx != nullptr && std::strcmp(override_gfx, "10.3.0") == 0;
     }();
     return enabled;
+}
+
+static bool llama_model_use_gfx1030_gdn_sibling_fusion() {
+    if (const char * fusion = std::getenv("GGML_HIP_GFX1030_GDN_SIBLING_FUSION")) {
+        return std::atoi(fusion) != 0 && llama_model_rdna2_native_profile_enabled();
+    }
+    return llama_model_rdna2_native_profile_enabled();
 }
 
 static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params & params) {
