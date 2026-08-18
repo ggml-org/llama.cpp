@@ -91,6 +91,39 @@ static std::pair<std::vector<uint32_t>, llama_partial_utf8> decode_utf8(
     return std::make_pair(std::move(code_points), llama_partial_utf8{ value, n_remain });
 }
 
+static void encode_utf8(uint32_t cp, std::string & out) {
+    if (cp < 0x80) {
+        out.push_back(static_cast<char>(cp));
+    } else if (cp < 0x800) {
+        out.push_back(static_cast<char>(0xC0 | (cp >> 6)));
+        out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+    } else if (cp < 0x10000) {
+        out.push_back(static_cast<char>(0xE0 | (cp >> 12)));
+        out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+        out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+    } else {
+        out.push_back(static_cast<char>(0xF0 | (cp >> 18)));
+        out.push_back(static_cast<char>(0x80 | ((cp >> 12) & 0x3F)));
+        out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+        out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+    }
+}
+
+// Tokenize `text` (length `text_len`) and require exactly 1 token. The
+// `src_slice` / `src_slice_len` pair is only used to format the error
+// message so the grammar author sees the original source form.
+static llama_token tokenize_exactly_one(
+        const llama_vocab * vocab,
+        const char * text, size_t text_len,
+        const char * src_slice, size_t src_slice_len) {
+    llama_token tokens[2];
+    int32_t n_tokens = vocab->tokenize(text, static_cast<int32_t>(text_len), tokens, 2, false, true);
+    if (n_tokens != 1) {
+        throw std::runtime_error("invalid token '" + std::string(src_slice, src_slice_len) + "'");
+    }
+    return tokens[0];
+}
+
 static bool is_digit_char(char c) {
     return '0' <= c && c <= '9';
 }
@@ -172,6 +205,7 @@ static std::pair<uint32_t, const char *> parse_char(const char * src) {
             case '"':
             case '[':
             case ']':
+            case '}':
                       return std::make_pair(src[1], src + 2);
             default:
                       throw std::runtime_error(std::string("unknown escape at ") + src);
@@ -206,6 +240,30 @@ static std::pair<uint32_t, const char *> parse_token(const llama_vocab * vocab, 
         return std::make_pair(token_id, pos);
     }
 
+    // Parse <{TEXT}> — tokenize TEXT (no brackets); require exactly 1 token.
+    if (*pos == '{') {
+        pos++;
+        std::string buf;
+        while (*pos != 0 && *pos != '}') {
+            auto [cp, next] = parse_char(pos);
+            encode_utf8(cp, buf);
+            pos = next;
+        }
+        if (*pos != '}') {
+            throw std::runtime_error(std::string("expecting '}' at ") + pos);
+        }
+        pos++;
+        if (*pos != '>') {
+            throw std::runtime_error(std::string("expecting '>' at ") + pos);
+        }
+        pos++;
+
+        if (vocab == nullptr) {
+            throw std::runtime_error(std::string("no vocab to parse token at ") + src);
+        }
+        return std::make_pair(tokenize_exactly_one(vocab, buf.data(), buf.size(), src, pos - src), pos);
+    }
+
     if (vocab == nullptr) {
         throw std::runtime_error(std::string("no vocab to parse token at ") + src);
     }
@@ -219,13 +277,7 @@ static std::pair<uint32_t, const char *> parse_token(const llama_vocab * vocab, 
     }
     pos++;
 
-    llama_token tokens[2];
-    int32_t n_tokens = vocab->tokenize(src, static_cast<int32_t>(pos - src), tokens, 2, false, true);
-    if (n_tokens != 1) {
-        // must tokenize to exactly 1 token
-        throw std::runtime_error("invalid token '" + std::string(src, pos - src) + "'");
-    }
-    return std::make_pair(tokens[0], pos);
+    return std::make_pair(tokenize_exactly_one(vocab, src, pos - src, src, pos - src), pos);
 }
 
 static void print_grammar_char(FILE * file, uint32_t c) {
