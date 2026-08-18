@@ -4744,7 +4744,6 @@ void ggml_gemm_q6_K_8x8_q8_K(int                        n,
     switch(svcntb() * 8){
         case 256:{
             const svbool_t pg8    = svptrue_b8();
-            const svbool_t pg16_8 = svptrue_pat_b16(SV_VL8);
             const svbool_t pg32   = svptrue_b32();
 
             const svuint8_t low_nibble = svdup_n_u8(0x0f);
