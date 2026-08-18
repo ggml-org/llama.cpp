@@ -57,6 +57,19 @@ static bool origin_is_localhost(const std::string & origin) {
     }
 }
 
+// returns true if the Origin header value is one of the allowed origins
+static bool origin_is_allowed(const std::vector<std::string> & allowed, const std::string & origin) {
+    if (origin.empty()) {
+        return false;
+    }
+    for (const std::string & o : allowed) {
+        if (o == origin) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // For Google Cloud Platform deployment compatibility
 struct gcp_params {
     bool enabled;
@@ -289,7 +302,17 @@ bool server_http_context::init(const common_params & params) {
                 SRV_WRN("(CORS) skip non-localhost origin: %s\n", origin.c_str());
             }
         } else {
-            res.set_header("Access-Control-Allow-Origin", params.cors_origins);
+            // Access-Control-Allow-Origin holds a single origin, so send back the one that matches
+            // ref: https://github.com/ggml-org/llama.cpp/issues/26988
+            const std::vector<std::string> allowed = string_split<std::string>(params.cors_origins, ',');
+            const std::string origin = req.get_header_value("Origin");
+            if (allowed.size() == 1) {
+                res.set_header("Access-Control-Allow-Origin", allowed[0]);
+            } else if (origin_is_allowed(allowed, origin)) {
+                res.set_header("Access-Control-Allow-Origin", origin);
+            } else if (!origin.empty()) {
+                SRV_WRN("(CORS) skip origin not in --cors-origins: %s\n", origin.c_str());
+            }
         }
         // If this is OPTIONS request, skip validation because browsers don't include Authorization header
         if (req.method == "OPTIONS") {

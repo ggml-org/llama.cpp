@@ -149,6 +149,61 @@ def test_cors_origins_localhost_rejects(origin: str):
     assert "Access-Control-Allow-Origin" not in res.headers
 
 
+CORS_ORIGINS_LIST = "http://web.mydomain.fr,http://localhost:8042,moz-extension://f745c4ad-86bf-4062-b715-e26739741e4d"
+
+
+@pytest.mark.parametrize("origin", [
+    "http://web.mydomain.fr",
+    "http://localhost:8042",
+    "moz-extension://f745c4ad-86bf-4062-b715-e26739741e4d",
+])
+def test_cors_origins_list_reflects(origin: str):
+    global server
+    server = ServerPreset.router()
+    server.cors_origins = CORS_ORIGINS_LIST
+    server.start()
+    res = server.make_request("OPTIONS", "/completions", headers={
+        "Origin": origin,
+        "Access-Control-Request-Method": "POST",
+        "Access-Control-Request-Headers": "Authorization",
+    })
+    assert res.status_code == 200
+    assert res.headers["Access-Control-Allow-Origin"] == origin
+
+
+@pytest.mark.parametrize("origin", [
+    "http://evil.com",
+    "http://web.mydomain.fr.evil.com",
+    "http://localhost:8080",
+])
+def test_cors_origins_list_rejects(origin: str):
+    global server
+    server = ServerPreset.router()
+    server.cors_origins = CORS_ORIGINS_LIST
+    server.start()
+    res = server.make_request("OPTIONS", "/completions", headers={
+        "Origin": origin,
+        "Access-Control-Request-Method": "POST",
+        "Access-Control-Request-Headers": "Authorization",
+    })
+    assert res.status_code == 200
+    assert "Access-Control-Allow-Origin" not in res.headers
+
+
+def test_cors_origins_single_is_sent_as_is():
+    global server
+    server = ServerPreset.router()
+    server.cors_origins = "http://web.mydomain.fr"
+    server.start()
+    res = server.make_request("OPTIONS", "/completions", headers={
+        "Origin": "http://web.mydomain.fr",
+        "Access-Control-Request-Method": "POST",
+        "Access-Control-Request-Headers": "Authorization",
+    })
+    assert res.status_code == 200
+    assert res.headers["Access-Control-Allow-Origin"] == "http://web.mydomain.fr"
+
+
 def test_cors_origins_defaults_to_localhost_with_tools_enabled():
     global server
     server = ServerPreset.router()
