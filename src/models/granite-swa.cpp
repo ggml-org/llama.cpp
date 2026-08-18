@@ -199,12 +199,12 @@ llama_model_granite_swa::graph::graph(
 }
 
 ggml_tensor * llama_model_granite_swa::graph::build_attention_layer(
-          ggml_tensor                    * cur,
-          ggml_tensor                    * inp_pos,
+          ggml_tensor                  * cur,
+          ggml_tensor                  * inp_pos,
           llm_graph_input_attn_kv_iswa * inp_attn,
-      const llama_model                     & model,
-      const int64_t                         n_embd_head,
-      const int                             il) {
+    const llama_model                  & model,
+    const int64_t                        n_embd_head,
+    const int                            il) {
 
     auto [Qcur, Kcur, Vcur] = build_qkv(model.layers[il], cur,
             n_embd_head, hparams.n_head(il), hparams.n_head_kv(il), il);
@@ -240,10 +240,10 @@ ggml_tensor * llama_model_granite_swa::graph::build_attention_layer(
 }
 
 ggml_tensor * llama_model_granite_swa::graph::build_layer_ffn(
-          ggml_tensor       * cur,
-          ggml_tensor       * inpSA,
-      const llama_model       & model,
-      const int                 il) {
+          ggml_tensor * cur,
+          ggml_tensor * inpSA,
+    const llama_model & model,
+    const int           il) {
 
     // For Granite architectures - scale residual
     if (hparams.f_residual_scale) {

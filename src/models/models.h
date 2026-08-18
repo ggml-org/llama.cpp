@@ -1729,18 +1729,18 @@ struct llama_model_granite_swa : public llama_model_base {
 
     private:
         ggml_tensor * build_attention_layer(
-                  ggml_tensor                    * cur,
-                  ggml_tensor                    * inp_pos,
+                  ggml_tensor                  * cur,
+                  ggml_tensor                  * inp_pos,
                   llm_graph_input_attn_kv_iswa * inp_attn,
-              const llama_model                     & model,
-              const int64_t                         n_embd_head,
-              const int                             il);
+            const llama_model                  & model,
+            const int64_t                        n_embd_head,
+            const int                            il);
 
         ggml_tensor * build_layer_ffn(
-                  ggml_tensor       * cur,
-                  ggml_tensor       * inpSA,
-              const llama_model       & model,
-              const int                 il);
+                  ggml_tensor * cur,
+                  ggml_tensor * inpSA,
+            const llama_model & model,
+            const int           il);
     };
 
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
