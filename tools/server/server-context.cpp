@@ -2928,7 +2928,7 @@ private:
                 return;
             }
 
-            const int32_t n_predict = slot.task->params.n_predict > 0 ? slot.task->params.n_predict : 512;
+            const int32_t n_predict = slot.n_predict_max > 0 ? slot.n_predict_max : 512;
             if (slot.tts.stop || slot.tts.n_decoded >= n_predict) {
                 int32_t      sample_rate = 0;
                 const char * data        = nullptr;
@@ -5244,7 +5244,25 @@ void server_routes::init_routes() {
 
         const auto info = mtmd_gen_audio_get_info(ctx_server.mctx);
 
-        const json body = json::parse(req.body);
+        json body = json::parse(req.body);
+
+        // multipart form fields arrive as strings, correct the types of the typed params
+        for (const char * k : { "top_k", "n_predict" }) {
+            if (body.contains(k) && body[k].is_string()) {
+                body[k] = std::stoi(body[k].get<std::string>());
+            }
+        }
+        for (const char * k : { "top_p", "repeat_penalty" }) {
+            if (body.contains(k) && body[k].is_string()) {
+                body[k] = std::stof(body[k].get<std::string>());
+            }
+        }
+        if (body.contains("seed") && body["seed"].is_string()) {
+            body["seed"] = (int64_t) std::stoll(body["seed"].get<std::string>());
+        }
+        if (body.contains("stream") && body["stream"].is_string()) {
+            body["stream"] = body["stream"] == "true";
+        }
 
         std::string prompt = json_value(body, "input", json_value(body, "prompt", std::string()));
         if (prompt.empty()) {
@@ -5291,7 +5309,12 @@ void server_routes::init_routes() {
         } else {
             std::string speaker_ref_b64 = json_value(body, "speaker_ref_b64", std::string());
             if (!speaker_ref_b64.empty()) {
-                speaker_ref_b64_decoded = base64::decode(speaker_ref_b64);
+                try {
+                    speaker_ref_b64_decoded = base64::decode(speaker_ref_b64);
+                } catch (const std::exception &) {
+                    res->error(format_error_response("\"speaker_ref_b64\" is not valid base64", ERROR_TYPE_INVALID_REQUEST));
+                    return res;
+                }
                 speaker_ref_data = (const unsigned char *) speaker_ref_b64_decoded.data();
                 speaker_ref_len  = speaker_ref_b64_decoded.size();
             }
