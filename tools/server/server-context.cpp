@@ -5246,8 +5246,8 @@ void server_routes::init_routes() {
 
         json body = json::parse(req.body);
 
-        // multipart form fields arrive as strings, correct the types of the typed params
-        for (const char * k : { "top_k", "n_predict" }) {
+        // multipart form fields arrive as strings, correct the types of the numeric params
+        for (const char * k : { "top_k", "n_predict", "max_tokens" }) {
             if (body.contains(k) && body[k].is_string()) {
                 body[k] = std::stoi(body[k].get<std::string>());
             }
@@ -5257,12 +5257,6 @@ void server_routes::init_routes() {
                 body[k] = std::stof(body[k].get<std::string>());
             }
         }
-        if (body.contains("seed") && body["seed"].is_string()) {
-            body["seed"] = (int64_t) std::stoll(body["seed"].get<std::string>());
-        }
-        if (body.contains("stream") && body["stream"].is_string()) {
-            body["stream"] = body["stream"] == "true";
-        }
 
         std::string prompt = json_value(body, "input", json_value(body, "prompt", std::string()));
         if (prompt.empty()) {
@@ -5271,25 +5265,19 @@ void server_routes::init_routes() {
         }
 
         const std::string response_format = json_value(body, "response_format", std::string("wav"));
-        const bool stream = json_value(body, "stream", false);
 
         server_task task(SERVER_TASK_TYPE_TTS);
+        server_schema::eval_tts_schema(params, task, body);
+        const bool stream = task.params.stream;
         task.tts_inp.set_prompt(prompt);
         task.tts_inp.set_lang(json_value(body, "lang", std::string()));
-        task.tts_inp.data.top_k     = json_value(body, "top_k", 0);
-        task.tts_inp.data.top_p     = json_value(body, "top_p", 0.0f);
         task.tts_inp.data.stream    = stream;
         task.tts_inp.data.out_type  = response_format == "pcm"
             ? MTMD_HELPER_GEN_AUDIO_OUTTYPE_PCM
             : MTMD_HELPER_GEN_AUDIO_OUTTYPE_WAV;
-        task.params.stream    = stream;
-        task.params.n_predict = json_value(body, "n_predict", -1);
-        task.params.sampling  = params.sampling; // baseline defaults, then apply overrides below
-        task.params.sampling.penalty_repeat  = json_value(body, "repeat_penalty", 1.05f);
         // note: -1 is clamped to 0 by the sampler, it will disable the penalty
-        task.params.sampling.penalty_last_n  = task.params.n_predict > 0 ? task.params.n_predict : 512;
-        task.params.sampling.seed = json_value(body, "seed", params.sampling.seed);
-        task.tts_inp.data.seed    = task.params.sampling.seed; // same seed for the codec/vocoder RNG
+        task.params.sampling.penalty_last_n = task.params.n_predict > 0 ? task.params.n_predict : 512;
+        task.params.sampling.seed = task.tts_inp.data.seed; // same seed for the codec/vocoder RNG
         if (task.tts_inp.data.top_k > 0) {
             task.params.sampling.top_k = task.tts_inp.data.top_k;
         }
