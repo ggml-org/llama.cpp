@@ -4430,6 +4430,8 @@ size_t ggml_cpu_iqp_id_gather_size(const struct ggml_tensor * dst) {
     return ids->ne[0] * ids->ne[1] * ggml_row_size(GGML_TYPE_Q8_K, dst->src[1]->ne[0]);
 }
 
+// the gemm kernels read src1 rows at a fixed stride, so each expert's rows - scattered all over
+// the q8_K conversion area - are first copied into one contiguous run
 void ggml_cpu_iqp_gather_mul_mat_id(const struct ggml_compute_params * params,
                                     const struct ggml_tensor *         dst,
                                     const int64_t *                    matrix_row_counts,

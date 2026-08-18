@@ -22,9 +22,8 @@ extern "C" {
 // vec_dot path is N = 20..32 depending on type, 32 is conservative for all of them.
 #define GGML_IQP_MIN_BATCH 32
 
-// same idea for MUL_MAT_ID, but the batch that matters is per expert: the routed row count of one
-// expert, not the token count of the node. Must be >= 1 - experts with no routed rows are skipped
-// before the test, and the work buffer layout below relies on that.
+// same idea for MUL_MAT_ID, but per expert: the routed row count of one expert, not the token
+// count of the node. Must be >= 1 - the gather layout relies on zero-row experts being skipped.
 #define GGML_IQP_MIN_BATCH_ID 16
 
 // is one expert worth the panel path? the gather in repack.cpp and the per expert dispatch in
@@ -54,14 +53,13 @@ size_t ggml_cpu_iqp_scratch_size(const struct ggml_tensor * dst);
 // synchronized on it
 void ggml_compute_forward_mul_mat_iqp(const struct ggml_compute_params * params, struct ggml_tensor * dst);
 
-// MUL_MAT_ID. The gemm reads four src1 rows at a fixed stride, but the rows routed to one expert are
-// scattered all over the q8_K conversion area, so they are first copied into one contiguous run per
-// expert. Worst case every routed (expert, token) pair is gathered, i.e. ids->ne[0]*ids->ne[1] rows.
+// bytes of the MUL_MAT_ID gather area, where the q8_K rows routed to each eligible expert are
+// copied into one contiguous run: worst case every routed pair, i.e. ids->ne[0]*ids->ne[1] rows
 size_t ggml_cpu_iqp_id_gather_size(const struct ggml_tensor * dst);
 
-// copy the q8_K rows of every expert that clears GGML_IQP_MIN_BATCH_ID into `gathered`, experts in
-// ascending order, packed. Call after the row grouping and the q8_K conversion, and synchronize the
-// threads on it before the first ggml_compute_forward_mul_mat_id_iqp.
+// copy the q8_K rows of every eligible expert into `gathered`, experts in ascending order, packed.
+// Call after the row grouping and the q8_K conversion, and synchronize the threads on it before
+// the first ggml_compute_forward_mul_mat_id_iqp.
 // matrix_rows is the [n_as][ids->ne[0]*ids->ne[1]] table of (i1, i2) int32 pairs built by the caller.
 void ggml_cpu_iqp_gather_mul_mat_id(const struct ggml_compute_params * params,
                                     const struct ggml_tensor *         dst,

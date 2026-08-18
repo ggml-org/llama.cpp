@@ -138,14 +138,12 @@ static_assert(sizeof(block_mxfp4x8) == 8 + QK_MXFP4 * 4, "wrong mxfp4x8 block si
 // interleaved. The panel is built into a scratch buffer for the duration of one mul_mat, see iqp.h.
 //
 // Every supported type has a sub-block scale of the form (d * 2^-k) * small_int, so the panel
-// splits it: dfac[row] carries the per-row, per-super-block float d * 2^-k and iscales[] the small
-// integer. The decoded weight is exactly (dfac[row] * iscales[sb][row]) * qs[..], i.e. still bit
-// identical to dequantize_row_iq* - d has an 11 bit mantissa, 2^-k is exact, and the integer has at
-// most 6 significant bits, so the product needs at most 17 and rounds not at all.
-//
-// Splitting the scale this way lets the kernel apply the sub-block scales in integer and accumulate
-// the whole super-block exactly in int32, so that only one float operation per (row, super-block)
-// remains.
+// splits it: dfac[row] carries the float d * 2^-k and iscales[] the small integer, and the decoded
+// weight is exactly (dfac[row] * iscales[sb][row]) * qs[..] - bit identical to dequantize_row_iq*,
+// since d has an 11 bit mantissa, 2^-k is exact, and the integer has at most 6 significant bits,
+// so the product needs at most 17 and rounds not at all. The split lets the kernel apply sub-block
+// scales in integer and accumulate the whole super-block exactly in int32, leaving one float
+// operation per (row, super-block).
 //
 // The sub-block granularity is 16 rather than 32 because iq2_xs / iq2_s take the scale of a group
 // of 32 from two nibbles, one per half, so a single scale per 32 could not be exact.
