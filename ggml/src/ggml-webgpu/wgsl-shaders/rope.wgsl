@@ -168,14 +168,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let i_dst_row = params.offset_dst + i3 * params.stride_dst3 + i2 * params.stride_dst2 + i1 * params.stride_dst1;
 
     if ((i0 < params.n_offs || i0 >= params.n_offs + params.n_dims) && !is_vision) {
-#ifdef INPLACE
-        return;
-#else
         let i_src = i_src_row + i0;
         let i_dst = i_dst_row + i0;
         rotate(i_dst, i_dst + 1, f32(src0[i_src]), f32(src0[i_src + 1]));
         return;
-#endif
     }
 
     let iw = i0 - params.n_offs; // relative idx

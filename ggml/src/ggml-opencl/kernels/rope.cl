@@ -76,8 +76,7 @@ kernel void kernel_rope_norm_f32(
         float attn_factor,
         float beta_fast,
         float beta_slow,
-        int n_offs,
-        int inplace
+        int n_offs
 ) {
     src0 = (global void*)((global char*)src0 + offset0);
     src1 = (global int*)((global char*)src1 + offset1);
@@ -115,9 +114,6 @@ kernel void kernel_rope_norm_f32(
             dst_data[0] = x0*cos_sin_theta.s0 - x1*cos_sin_theta.s1;
             dst_data[1] = x0*cos_sin_theta.s1 + x1*cos_sin_theta.s0;
         } else {
-            if (inplace) {
-                continue;
-            }
             global float * src      = (global float *)((global char *) src0 + i3*nb03 + i2*nb02 + i1*nb01 + i0*nb00);
             global float * dst_data = (global float *)((global char *)  dst + i3*nb3  + i2*nb2  + i1*nb1  + i0*nb0);
 
@@ -161,8 +157,7 @@ kernel void kernel_rope_norm_f16(
         float attn_factor,
         float beta_fast,
         float beta_slow,
-        int n_offs,
-        int inplace
+        int n_offs
 ) {
     src0 = (global void*)((global char*)src0 + offset0);
     src1 = (global int*)((global char*)src1 + offset1);
@@ -200,9 +195,6 @@ kernel void kernel_rope_norm_f16(
             dst_data[0] = x0*cos_sin_theta.s0 - x1*cos_sin_theta.s1;
             dst_data[1] = x0*cos_sin_theta.s1 + x1*cos_sin_theta.s0;
         } else {
-            if (inplace) {
-                continue;
-            }
             global half * src      = (global half *)((global char *) src0 + i3*nb03 + i2*nb02 + i1*nb01 + i0*nb00);
             global half * dst_data = (global half *)((global char *)  dst + i3*nb3  + i2*nb2  + i1*nb1  + i0*nb0);
 
@@ -246,8 +238,7 @@ kernel void kernel_rope_neox_f32(
         float attn_factor,
         float beta_fast,
         float beta_slow,
-        int n_offs,
-        int inplace
+        int n_offs
 ) {
     src0 = (global void*)((global char*)src0 + offset0);
     src1 = (global int*)((global char*)src1 + offset1);
@@ -285,9 +276,6 @@ kernel void kernel_rope_neox_f32(
             dst_data[0]        = x0*cos_sin_theta.s0 - x1*cos_sin_theta.s1;
             dst_data[n_dims/2] = x0*cos_sin_theta.s1 + x1*cos_sin_theta.s0;
         } else {
-            if (inplace) {
-                continue;
-            }
             global float * const src = (global float *)((global char *) src0 + i3*nb03 + i2*nb02 + i1*nb01 + i0*nb00);
             global float * dst_data  = (global float *)((global char *)  dst + i3*nb3  + i2*nb2  + i1*nb1  + i0*nb0);
 
@@ -331,8 +319,7 @@ kernel void kernel_rope_neox_f16(
         float attn_factor,
         float beta_fast,
         float beta_slow,
-        int n_offs,
-        int inplace
+        int n_offs
 ) {
     src0 = (global void*)((global char*)src0 + offset0);
     src1 = (global int*)((global char*)src1 + offset1);
@@ -370,9 +357,6 @@ kernel void kernel_rope_neox_f16(
             dst_data[0]        = x0*cos_sin_theta.s0 - x1*cos_sin_theta.s1;
             dst_data[n_dims/2] = x0*cos_sin_theta.s1 + x1*cos_sin_theta.s0;
         } else {
-            if (inplace) {
-                continue;
-            }
             global half * const src = (global half *)((global char *) src0 + i3*nb03 + i2*nb02 + i1*nb01 + i0*nb00);
             global half * dst_data  = (global half *)((global char *)  dst + i3*nb3  + i2*nb2  + i1*nb1  + i0*nb0);
 
@@ -418,8 +402,7 @@ kernel void kernel_rope_multi_f32(
         float beta_slow,
         int4 sections,
         int  is_imrope,
-        int n_offs,
-        int inplace
+        int n_offs
 ) {
     src0 = (global void*)((global char*)src0 + offset0);
     src1 = (global int*)((global char*)src1 + offset1);
@@ -487,9 +470,6 @@ kernel void kernel_rope_multi_f32(
             dst_data[0]        = x0*cos_sin_theta.s0 - x1*cos_sin_theta.s1;
             dst_data[n_dims/2] = x0*cos_sin_theta.s1 + x1*cos_sin_theta.s0;
         } else {
-            if (inplace) {
-                continue;
-            }
             global float * const src = (global float *)((global char *) src0 + i3*nb03 + i2*nb02 + i1*nb01 + i0*nb00);
             global float * dst_data  = (global float *)((global char *)  dst + i3*nb3  + i2*nb2  + i1*nb1  + i0*nb0);
 
@@ -535,8 +515,7 @@ kernel void kernel_rope_multi_f16(
         float beta_slow,
         int4 sections,
         int  is_imrope,
-        int n_offs,
-        int inplace
+        int n_offs
 ) {
     src0 = (global void*)((global char*)src0 + offset0);
     src1 = (global int*)((global char*)src1 + offset1);
@@ -604,9 +583,6 @@ kernel void kernel_rope_multi_f16(
             dst_data[0]        = x0*cos_sin_theta.s0 - x1*cos_sin_theta.s1;
             dst_data[n_dims/2] = x0*cos_sin_theta.s1 + x1*cos_sin_theta.s0;
         } else {
-            if (inplace) {
-                continue;
-            }
             global half * const src = (global half *)((global char *) src0 + i3*nb03 + i2*nb02 + i1*nb01 + i0*nb00);
             global half * dst_data  = (global half *)((global char *)  dst + i3*nb3  + i2*nb2  + i1*nb1  + i0*nb0);
 

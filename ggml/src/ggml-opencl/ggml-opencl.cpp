@@ -23705,9 +23705,6 @@ static void ggml_cl_rope(ggml_backend_t backend, const ggml_tensor * src0, const
     const int n_ctx_orig = ((int32_t *) dst->op_params)[4];
     const int n_offs     = ((int32_t *) dst->op_params)[15];
 
-    // when dst aliases src0, the channels outside the rotated window already hold the correct data
-    const int inplace = extrad->data_device == extra0->data_device && offsetd == offset0;
-
     float freq_base;
     float freq_scale;
     float ext_factor;
@@ -23827,13 +23824,11 @@ static void ggml_cl_rope(ggml_backend_t backend, const ggml_tensor * src0, const
     if (is_mrope && !is_vision) {
         CL_CHECK(clSetKernelArg(kernel, 34, sizeof(int), &is_imrope));
     }
-    // norm and neox have n_offs and inplace after beta_slow, mrope has them after is_imrope
+    // norm and neox have n_offs after beta_slow, mrope has it after is_imrope
     if (!is_mrope && !is_vision) {
         CL_CHECK(clSetKernelArg(kernel, 33, sizeof(int), &n_offs));
-        CL_CHECK(clSetKernelArg(kernel, 34, sizeof(int), &inplace));
     } else if (is_mrope && !is_vision) {
         CL_CHECK(clSetKernelArg(kernel, 35, sizeof(int), &n_offs));
-        CL_CHECK(clSetKernelArg(kernel, 36, sizeof(int), &inplace));
     }
 
     size_t global_work_size[] = {(size_t)ne01*nth, (size_t)ne02, (size_t)ne03};
