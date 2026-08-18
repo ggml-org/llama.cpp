@@ -2,9 +2,10 @@
  * ChatStreamManager - Server-side stream sessions for conversations
  *
  * Owns the attach lifecycle for streams that live on the server: discovery,
- * replay from byte 0, resume retry while the owning model loads, and the
- * remote-running snapshot that feeds the sidebar spinners. Created and owned
- * by chatStore; the host exposes the per-conversation state setters.
+ * replay from byte 0, and resume retry while the owning model loads. The
+ * remote-running snapshot it produces feeds the chat activity ledger
+ * (chatStore.activity), which owns the actual running-conv state. Created
+ * and owned by chatStore; the host exposes the per-conversation state setters.
  */
 
 import { CONVERSATION_ID_SEPARATOR, STREAM_RESUME_RETRY_MS } from '$lib/constants';
@@ -20,14 +21,6 @@ import { streamIdentity } from '$lib/utils';
 import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 
 export class ChatStreamManager {
-	// convs that the backend reports as having a running session, populated by the global sync
-	// at app mount and on visibilitychange. it does not overlap with chatLoadingStates which
-	// tracks inferences driven by this browser, both are unioned to feed the sidebar spinners
-	private remoteRunningConvs = new SvelteSet<string>();
-	// per conv attach lifecycle, used to derive the global streaming flag without flipping it
-	// off when one conv finishes while another is still streaming. mirrors chatLoadingStates
-	// in scope but tracks the attach + tee replay path specifically
-	private attachingConvs = new SvelteSet<string>();
 	// pending resume retry timers while an owning model loads, one per conv
 	private resumeRetryTimers = new SvelteMap<string, ReturnType<typeof setTimeout>>();
 	// convs whose resume waits on a model load: their loading state belongs to the retry loop,
@@ -37,16 +30,6 @@ export class ChatStreamManager {
 	private discoveringConvs = new SvelteSet<string>();
 
 	constructor(private host: typeof chatStore) {}
-
-	/** Convs the backend reports as running, unioned into the sidebar spinners. */
-	get remoteRunning(): SvelteSet<string> {
-		return this.remoteRunningConvs;
-	}
-
-	/** Drop the remote-running hint for a conv whose local pipe ended. */
-	clearRemoteRunning(convId: string): void {
-		this.remoteRunningConvs.delete(convId);
-	}
 
 	/** Kill a pending resume retry, e.g. on explicit stop. */
 	cancelResumeRetry(convId: string): void {
@@ -100,12 +83,8 @@ export class ChatStreamManager {
 
 		if (this.host.chatStreamingStates.has(convId)) return;
 
-		// flip the spinner immediately, the user sees activity as soon as the conv becomes active.
-		// the global isStreamingActive flag is derived from attachingConvs.size, so adding here
-		// turns it on, and removing in unlock only turns it off when this is the last attach
+		// flip the spinner immediately, the user sees activity as soon as the conv becomes active
 		this.host.setChatLoading(convId, true);
-		this.attachingConvs.add(convId);
-		this.host.setStreamingActive(true);
 
 		// only set the active processing conv if we are looking at it, otherwise a background
 		// attach would steal the indicator from the conv the user is currently viewing
@@ -114,13 +93,6 @@ export class ChatStreamManager {
 		}
 
 		const unlock = () => {
-			this.attachingConvs.delete(convId);
-
-			// flip the global flag off only when no other conv is still attaching
-			if (this.attachingConvs.size === 0) {
-				this.host.setStreamingActive(false);
-			}
-
 			this.host.setChatLoading(convId, false);
 			this.host.clearChatStreaming(convId);
 		};
@@ -333,7 +305,7 @@ export class ChatStreamManager {
 
 		if (this.host.chatStreamingStates.has(convId)) return;
 
-		if (this.host.chatLoadingStates.get(convId) && !this.resumePendingConvs.has(convId)) return;
+		if (this.host.activity.isLocal(convId) && !this.resumePendingConvs.has(convId)) return;
 
 		// concurrency guard: another discover may already be running for this conv (typical race
 		// between mount and visibilitychange on tab switch). a second concurrent fetch on the same
@@ -413,7 +385,7 @@ export class ChatStreamManager {
 			await this.attachServerStream(convId, streamId);
 
 			// if attachServerStream failed (session gone, TTL expired), clear the local state to avoid retrying forever
-			if (!this.host.chatStreamingStates.has(convId) && !this.host.chatLoadingStates.get(convId)) {
+			if (!this.host.chatStreamingStates.has(convId) && !this.host.activity.isLocal(convId)) {
 				ChatService.clearStreamState(convId);
 			}
 		} finally {
@@ -438,9 +410,9 @@ export class ChatStreamManager {
 	}
 
 	/**
-	 * Resync the remote running convs set from the backend. Called by the layout at mount and on
-	 * visibilitychange, no polling. A snapshot semantic: the set is replaced wholesale, stale entries
-	 * for sessions that finalized while the browser was elsewhere are dropped naturally.
+	 * Resync the activity ledger's remote set from the backend. Called by the layout at mount and
+	 * on visibilitychange, no polling. A snapshot semantic: stale entries for sessions that
+	 * finalized while the browser was elsewhere are dropped naturally.
 	 */
 	async syncRemoteRunningStreams(): Promise<void> {
 		// the conversations store loads from IndexedDB asynchronously, the +layout onMount caller
@@ -461,9 +433,7 @@ export class ChatStreamManager {
 
 		// only ask about conv ids the user already owns
 		if (ids.length === 0) {
-			for (const id of Array.from(this.remoteRunningConvs)) {
-				this.remoteRunningConvs.delete(id);
-			}
+			this.host.activity.applyRemoteSnapshot([]);
 
 			return;
 		}
@@ -494,13 +464,6 @@ export class ChatStreamManager {
 				running.add(bareId);
 			}
 		}
-		for (const id of Array.from(this.remoteRunningConvs)) {
-			if (!running.has(id)) {
-				this.remoteRunningConvs.delete(id);
-			}
-		}
-		for (const id of running) {
-			this.remoteRunningConvs.add(id);
-		}
+		this.host.activity.applyRemoteSnapshot(running);
 	}
 }

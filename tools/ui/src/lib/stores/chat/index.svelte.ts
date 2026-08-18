@@ -7,6 +7,7 @@
  * - **ChatService**: Stateless API layer (sendMessage, streaming)
  * - **chatStore** (this): Reactive state + business logic
  * - **chatProcessingStore**: Per-conversation processing state, composed as {@link ChatStore.processing}
+ * - **chatActivityStore**: Local/remote conv activity (spinner sources), composed as {@link ChatStore.activity}
  * - **conversationsStore**: Conversation persistence and navigation
  *
  * @see ChatService in services/chat.service.ts for API operations
@@ -29,6 +30,7 @@ import { ChatService } from '$lib/services/chat.service';
 import { DatabaseService } from '$lib/services/database.service';
 // direct imports between stores, not via the barrel, to avoid circular deps
 import { agenticStore } from '$lib/stores/agentic/index.svelte';
+import { chatActivityStore } from '$lib/stores/chat/activity.svelte';
 import { ChatMessageFlows } from '$lib/stores/chat/flows.svelte';
 import { chatProcessingStore } from '$lib/stores/chat/processing.svelte';
 import { ChatStreamManager } from '$lib/stores/chat/streams.svelte';
@@ -55,7 +57,7 @@ import {
 	isAbortError,
 	normalizeModelName
 } from '$lib/utils';
-import { SvelteMap, SvelteSet } from 'svelte/reactivity';
+import { SvelteMap } from 'svelte/reactivity';
 
 interface ConversationStateEntry {
 	lastAccessed: number;
@@ -64,18 +66,22 @@ interface ConversationStateEntry {
 class ChatStore {
 	currentResponse = $state('');
 	errorDialogState = $state<ErrorDialogState | null>(null);
-	isLoading = $state(false);
-	// true while the active conversation streams reasoning content but no visible content yet
-	isReasoning = $state(false);
 	// resumable stream connection state for the active conversation
 	// streaming -> bytes flowing normally, resuming -> waiting on /v1/stream reconnect, lost -> unrecoverable
 	streamConnectionState = $state<StreamConnectionState>(StreamConnectionState.STREAMING);
-	chatLoadingStates = new SvelteMap<string, boolean>();
 	chatReasoningStates = new SvelteMap<string, boolean>();
 	chatStreamingStates = new SvelteMap<
 		string,
 		{ response: string; messageId: string; model?: string | null }
 	>();
+	// true while the active conversation has a local pipe (send, attach or resume-wait)
+	isLoading = $derived(
+		this.activity.isLocal(conversationsStore.activeConversation?.id ?? '')
+	);
+	// true while the active conversation streams reasoning content but no visible content yet
+	isReasoning = $derived(
+		this.chatReasoningStates.get(conversationsStore.activeConversation?.id ?? '') ?? false
+	);
 	// server-side stream sessions: discovery, attach/replay, resume retry, remote sync
 	private streams = new ChatStreamManager(this);
 	// message flows: edit, regenerate, continue, delete
@@ -83,7 +89,6 @@ class ChatStore {
 	private abortControllers = new SvelteMap<string, AbortController>();
 	private preEncodeAbortController: AbortController | null = null;
 	private conversationStateTimestamps = new SvelteMap<string, ConversationStateEntry>();
-	private isStreamingActive = $state(false);
 	private isEditModeActive = $state(false);
 	private addFilesHandler: ((files: File[]) => void) | null = $state(null);
 	pendingEditMessageId = $state<string | null>(null);
@@ -101,37 +106,25 @@ class ChatStore {
 		return chatProcessingStore;
 	}
 
+	/** Conv activity (local pipe / remote session), composed here. */
+	get activity() {
+		return chatActivityStore;
+	}
+
 	setChatLoading(convId: string, loading: boolean): void {
 		this.touchConversationState(convId);
 
 		if (loading) {
-			this.chatLoadingStates.set(convId, true);
-
-			if (convId === conversationsStore.activeConversation?.id) this.isLoading = true;
+			this.activity.markLocal(convId);
 		} else {
-			this.chatLoadingStates.delete(convId);
-
-			if (convId === conversationsStore.activeConversation?.id) this.isLoading = false;
-
+			this.activity.localEnded(convId);
 			this.setChatReasoning(convId, false);
-			// the local pipe is the authoritative observer of session end: when it finishes (clean
-			// onComplete or explicit Stop), the backend session is finalized too, so we drop the
-			// sidebar hint for this conv right away instead of waiting for the next visibilitychange
-			// snapshot. without this the spinner ghosts until the user toggles the tab
-			this.streams.clearRemoteRunning(convId);
 		}
 	}
 
 	setChatReasoning(convId: string, reasoning: boolean): void {
-		if (reasoning) {
-			this.chatReasoningStates.set(convId, true);
-
-			if (convId === conversationsStore.activeConversation?.id) this.isReasoning = true;
-		} else {
-			this.chatReasoningStates.delete(convId);
-
-			if (convId === conversationsStore.activeConversation?.id) this.isReasoning = false;
-		}
+		if (reasoning) this.chatReasoningStates.set(convId, true);
+		else this.chatReasoningStates.delete(convId);
 	}
 	setChatStreaming(
 		convId: string,
@@ -167,12 +160,9 @@ class ChatStore {
 		return this.chatStreamingStates.get(convId);
 	}
 	syncLoadingStateForChat(convId: string): void {
-		this.isLoading = this.chatLoadingStates.get(convId) || false;
-		this.isReasoning = this.chatReasoningStates.get(convId) || false;
 		const s = this.chatStreamingStates.get(convId);
 
 		this.currentResponse = s?.response || '';
-		this.isStreamingActive = s !== undefined;
 		this.processing.setActiveConversation(convId);
 
 		// Sync streaming content to activeMessages so UI displays current content
@@ -184,18 +174,14 @@ class ChatStore {
 			}
 		}
 	}
+	/** Reset per-view state when (re)mounting the empty chat screen. */
 	clearUIState(): void {
-		this.isLoading = false;
 		this.currentResponse = '';
-		this.isStreamingActive = false;
 	}
 
-	setStreamingActive(active: boolean): void {
-		this.isStreamingActive = active;
-	}
-
+	/** True while the active conversation has a live streaming pipe. */
 	isStreaming(): boolean {
-		return this.isStreamingActive;
+		return this.chatStreamingStates.has(conversationsStore.activeConversation?.id ?? '');
 	}
 
 	getOrCreateAbortController(convId: string): AbortController {
@@ -293,20 +279,9 @@ class ChatStore {
 		return Boolean(this._pendingDraftMessage) || this._pendingDraftFiles.length > 0;
 	}
 
+	/** Convs with any activity (local pipe or remote session), sidebar spinners. */
 	getAllLoadingChats(): string[] {
-		// union of local (this browser is piping) and remote (backend reports a running session
-		// for this conv but no local pipe yet) sources. the sidebar shows one spinner per entry
-		const out = new SvelteSet<string>(this.chatLoadingStates.keys());
-
-		for (const id of this.streams.remoteRunning) {
-			out.add(id);
-		}
-
-		return Array.from(out);
-	}
-
-	getAllStreamingChats(): string[] {
-		return Array.from(this.chatStreamingStates.keys());
+		return this.activity.loadingConvs;
 	}
 
 	/**
@@ -330,11 +305,11 @@ class ChatStore {
 	}
 
 	isChatLoading(convId: string): boolean {
-		return this.chatLoadingStates.get(convId) || false;
+		return this.activity.isLocal(convId);
 	}
 
 	isChatLoadingInternal(convId: string): boolean {
-		return this.chatLoadingStates.has(convId) || this.chatStreamingStates.has(convId);
+		return this.activity.isLocal(convId) || this.chatStreamingStates.has(convId);
 	}
 
 	hasPendingMessage(convId: string): boolean {
@@ -381,7 +356,7 @@ class ChatStore {
 			: activeIdsList;
 		const allConvIds = [
 			...new Set([
-				...this.chatLoadingStates.keys(),
+				...this.activity.loadingConvs,
 				...this.chatStreamingStates.keys(),
 				...this.abortControllers.keys(),
 				...this.processing.getConversationIds(),
@@ -393,7 +368,7 @@ class ChatStore {
 		for (const convId of allConvIds) {
 			if (preserveIds.includes(convId)) continue;
 
-			if (this.chatLoadingStates.get(convId)) continue;
+			if (this.activity.isLocal(convId)) continue;
 
 			if (this.chatStreamingStates.has(convId)) continue;
 
@@ -421,7 +396,8 @@ class ChatStore {
 
 		if (c && !c.signal.aborted) c.abort();
 
-		this.chatLoadingStates.delete(convId);
+		// convs that are still locally active or streaming are skipped above, so no
+		// activity-ledger cleanup is needed here
 		this.chatStreamingStates.delete(convId);
 		this.abortControllers.delete(convId);
 		this.processing.setState(convId, null);
@@ -861,13 +837,11 @@ class ChatStore {
 			conversationsStore.updateMessageAtIndex(idx, { content: streamedContent });
 		};
 		const cleanupStreamingState = () => {
-			this.setStreamingActive(false);
 			this.setChatLoading(convId, false);
 			this.clearChatStreaming(convId, currentMessageId);
 			this.processing.setState(convId, null);
 		};
 
-		this.setStreamingActive(true);
 		this.processing.setActiveConversation(convId);
 		const abortController = this.getOrCreateAbortController(convId);
 		const streamCallbacks: ChatStreamCallbacks = {
@@ -992,8 +966,6 @@ class ChatStore {
 			},
 			onCompletionId: (id: string) => recordCompletionId(id),
 			onError: async (error: Error) => {
-				this.setStreamingActive(false);
-
 				if (isAbortError(error)) {
 					cleanupStreamingState();
 					// If aborted with a pending message (e.g. "Send immediately"), re-send it
@@ -1237,7 +1209,6 @@ class ChatStore {
 	}
 	async stopGenerationForChat(convId: string): Promise<void> {
 		await this.savePartialResponseIfNeeded(convId);
-		this.setStreamingActive(false);
 		// tell the server to stop the generation, not just drop the HTTP socket. without this the
 		// detached drain keeps producing tokens until eos or max_tokens. use the frozen identity
 		// captured when the session started, not the live dropdown
