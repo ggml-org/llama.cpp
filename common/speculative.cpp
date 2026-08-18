@@ -1430,6 +1430,9 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         is_mem_shared = llama_get_ctx_other(ctx_dft) == ctx_tgt;
         chain_heads   = n_mtp_layers > 1 && !is_mem_shared;
 
+        // remember the user n_max: chain_heads caps it at the model MTP layer
+        // count, and the adaptive range abort below must explain the cap
+        const int32_t n_max_user = this->params.n_max;
         if (chain_heads) {
             this->params.n_max = std::min(this->params.n_max, n_mtp_layers);
 
@@ -1440,14 +1443,19 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         }
         this->n_max = this->params.n_max;
 
-        // a floor above the ceiling would pin the depth below the floor, so the
-        // configuration is invalid
-        if (this->params.n_min_adaptive < 1 || this->params.n_min_adaptive > this->params.n_max) {
-            GGML_ABORT("%s: invalid adaptive draft range: n_min_adaptive=%d, n_max=%d (n_min_adaptive must be in [1, n_max])",
-                    __func__, this->params.n_min_adaptive, this->params.n_max);
-        }
-
         if (adaptive) {
+            // a floor above the ceiling would pin the depth below the floor, so the
+            // configuration is invalid
+            if (this->params.n_min_adaptive < 1 || this->params.n_min_adaptive > this->params.n_max) {
+                if (n_max_user > this->params.n_max) {
+                    // n_max was capped by the MTP layer count, not by the user
+                    GGML_ABORT("%s: invalid adaptive draft range: n_min_adaptive=%d, n_max=%d (n_max is capped by the model MTP layer count %d; set --spec-draft-n-min-adaptive to at most %d)",
+                            __func__, this->params.n_min_adaptive, this->params.n_max, n_mtp_layers, n_mtp_layers);
+                }
+                GGML_ABORT("%s: invalid adaptive draft range: n_min_adaptive=%d, n_max=%d (n_min_adaptive must be in [1, n_max])",
+                        __func__, this->params.n_min_adaptive, this->params.n_max);
+            }
+
             adaptive_ctrl.assign(n_seq, common_speculative_adaptive());
             for (uint32_t s = 0; s < n_seq; ++s) {
                 // start at the floor max(1, n_min_adaptive), bounded by n_max;
