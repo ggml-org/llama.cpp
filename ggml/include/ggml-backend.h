@@ -95,7 +95,6 @@ extern "C" {
     GGML_API void ggml_backend_tensor_get_2d(const struct ggml_tensor * tensor,       void * data, size_t offset, size_t size, size_t n_copies, size_t stride_tensor, size_t stride_data);
     GGML_API void ggml_backend_tensor_memset(      struct ggml_tensor * tensor,     uint8_t value, size_t offset, size_t size);
 
-    // announce a direct write to tensor->data that bypasses ggml_backend_tensor_set
     GGML_API void ggml_backend_tensor_set_direct(struct ggml_tensor * tensor, size_t offset, size_t size);
 
     GGML_API void ggml_backend_synchronize(ggml_backend_t backend);
@@ -266,86 +265,7 @@ extern "C" {
     // Backend scheduler
     //
 
-    // The backend scheduler allows for multiple backend devices to be used together
-    // Handles compute buffer allocation, assignment of tensors to backends, and copying of tensors between backends
-    // The backends are selected based on:
-    // - the backend that supports the operation
-    // - the location of the pre-allocated tensors (e.g. the weights)
-    /*
-      Example usage:
-
-        // operations that use tensors allocated in a buffer with USAGE_WEIGHTS will be assigned
-        // preferably to run on the same backend as the buffer
-        ggml_backend_buffer_set_usage(buf_weights, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
-
-        sched = ggml_backend_sched_new({backend_gpu, backend_gpu2, backend_cpu}, NULL, num_backends, GGML_DEFAULT_GRAPH_SIZE, false, true);
-
-        // initialize buffers from a max size graph (optional)
-        reserve_graph = build_graph(sched, max_batch_size);
-
-        // manually assign nodes to a backend (optional, should not be needed in most cases)
-        struct ggml_tensor * node = ggml_mul_mat(ctx, ...);
-        ggml_backend_sched_set_tensor_backend(sched, node, backend_gpu);
-
-        ggml_backend_sched_reserve(sched, reserve_graph);
-
-        // compute
-        graph = build_graph(sched); // the graph and its tensors are single-use in terms of allocation, multi-use in terms of computation
-        for (int i = 0; i < 10; ++i) {
-            ggml_backend_sched_graph_compute(sched, graph); // on the first iteration the graph is allocated automatically
-        }
-
-        // if there are graph inputs:
-        graph = build_graph(sched); // get a new graph that is not allocated (the metadata for the old graph is freed once ggml_free is called)
-        ggml_backend_sched_reset(sched); // clear the allocation of the previous graph
-        ggml_backend_sched_alloc_graph(sched, graph); // explicitly allocate the new graph but do not execute it
-        ggml_backend_tensor_set(input_tensor, ...); // copy data to the newly allocated graph tensors
-        ggml_backend_sched_graph_compute(sched, graph); // execute the graph
-
-        // as an alternative to the above it is also possible to assign the inputs to a dedicated context and
-        // allocate them statically via ggml_backend_alloc_ctx_tensors
-    }
-    */
-
-    //
-    // Graph input ring buffer
-    //
-    // Graph inputs are assigned to the last backend, which is assumed to be the CPU. The caller may
-    // pass a device host buffer type for that slot, and some devices - integrated GPUs in
-    // particular - accept that buffer type for compute. When that happens no input copy is created
-    // and the device reads exactly the memory the host thread writes. The host must then not write
-    // the next iteration's inputs while the device is still reading the previous ones.
-    //
-    // The scheduler detects this in ggml_backend_sched_new() by testing the condition that elides
-    // the copy - a host buffer type in the last slot that some other backend accepts - rather than
-    // by identifying particular devices. Backends that deliberately refuse to compute on pinned
-    // host memory are therefore unaffected. When it holds, each graph input is given a ring of
-    // buffers instead of one, and the scheduler moves the inputs onto the next slot rather than
-    // waiting for the device. GGML_SCHED_UMA_RING overrides the detection: 0 or 1 disables it, a
-    // larger value sets the ring depth.
-    //
-    // The extra buffers are not free. The cost is one additional copy of every graph input per
-    // extra slot, which for attention masks scales with the context and batch size, so the default
-    // depth is 2 - enough to remove the wait, at the smallest cost that does.
-    //
-    // Inputs are only rotated when a compute may still be in flight. Anything that waits for the
-    // backends clears that state, so a caller that synchronizes between iterations - reading logits
-    // in a sampling loop, say - keeps its inputs at fixed addresses and does not pay for the ring.
-    // Callers that issue several computes without synchronizing rotate between them.
-    //
-    // Two obligations come with this:
-    //
-    // - Callers must call ggml_backend_sched_prepare_inputs() before writing the inputs of a graph
-    //   that is being reused, since that path allocates nothing and so cannot rotate on its own.
-    //   After ggml_backend_sched_alloc_graph() it is a no-op; allocating already rotated.
-    //
-    // - Rotating moves tensor addresses without re-splitting the graph. A backend that caches work
-    //   against a graph, such as the CUDA graph cache, may treat an unchanged ggml_cgraph::uid as a
-    //   promise that nothing it captured has moved, and skip re-reading the addresses. The
-    //   scheduler re-stamps the split uids whenever it re-points inputs; a backend keeping such a
-    //   cache must key it on the uid or re-check the addresses itself. Violating this does not
-    //   degrade gracefully - the cached work replays against stale addresses.
-    //
+    // see docs/development/backend-scheduler.md
 
     typedef struct ggml_backend_sched * ggml_backend_sched_t;
 
@@ -384,7 +304,6 @@ extern "C" {
 
     // Allocate and compute graph on the backend scheduler
     GGML_API bool                 ggml_backend_sched_alloc_graph(ggml_backend_sched_t sched, struct ggml_cgraph * graph); // returns success
-    // make the graph inputs safe to write again, see "Graph input ring buffer" above
     GGML_API void                 ggml_backend_sched_prepare_inputs(ggml_backend_sched_t sched);
     GGML_API enum ggml_status     ggml_backend_sched_graph_compute(ggml_backend_sched_t sched, struct ggml_cgraph * graph);
     GGML_API enum ggml_status     ggml_backend_sched_graph_compute_async(ggml_backend_sched_t sched, struct ggml_cgraph * graph);

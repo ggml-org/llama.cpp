@@ -94,9 +94,7 @@ struct buffer_view {
     }
 };
 
-// announce that the whole of `t` is about to be written in place via t->data, bypassing
-// ggml_backend_tensor_set. every direct write to a graph input must go through this, or the
-// scheduler sanitizer cannot see the write and will silently miss races against it.
+// see docs/development/backend-scheduler.md
 static inline void llama_host_write(struct ggml_tensor * t) {
     GGML_ASSERT(ggml_backend_buffer_is_host(t->buffer));
     ggml_backend_tensor_set_direct(t, 0, ggml_nbytes(t));

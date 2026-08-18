@@ -21,9 +21,6 @@ int ggml_san_level(void) {
     return level;
 }
 
-// GGML_SCHED_SANITIZE_NONFATAL=1 reports every distinct race and keeps going, instead of
-// aborting on the first one. the shadow state is updated after a report, so a reported
-// range does not keep firing - this lets a single run enumerate all races in a workload.
 static int ggml_san_nonfatal(void) {
     static const int nonfatal = []() {
         const char * env = getenv("GGML_SCHED_SANITIZE_NONFATAL");
@@ -302,8 +299,6 @@ bool touch(san_state & s, int a, uint64_t c, const ggml_tensor * t,
     info.clock = c;
     info.what  = what;
     info.split = tl_split;
-    // report the tensor that owns the memory, not just the one that was accessed - a view's
-    // name says nothing about which allocation is involved, and the two are easily confused
     const ggml_tensor * root = t;
     while (root->view_src != NULL) {
         root = root->view_src;

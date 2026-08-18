@@ -73,10 +73,6 @@ GGML_API bool ggml_gallocr_alloc_graph(ggml_gallocr_t galloc, struct ggml_cgraph
 
 GGML_API size_t ggml_gallocr_get_buffer_size(ggml_gallocr_t galloc, int buffer_id);
 
-// keep a tensor's memory reserved for the whole graph instead of reusing it once its last
-// consumer in graph order has run. required when a backend may still be reading the tensor
-// asynchronously at that point, which graph order does not express. pins must be re-applied
-// after ggml_gallocr_clear_pins() and before reserving.
 GGML_API void ggml_gallocr_pin_tensor(ggml_gallocr_t galloc, struct ggml_tensor * t);
 GGML_API void ggml_gallocr_clear_pins(ggml_gallocr_t galloc);
 
