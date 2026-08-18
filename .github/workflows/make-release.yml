@@ -54,7 +54,6 @@ jobs:
         run: bash scripts/make-release-desc.sh "${{ steps.checks.outputs.version }}"
         env:
           GITHUB_REPOSITORY: ${{ github.repository }}
-          RELEASE_BRANCH: ${{ github.ref_name }}
 
       - name: Create release
         if: ${{ github.event.inputs.dry_run == 'false' }}

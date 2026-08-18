@@ -9,14 +9,12 @@
 # strictly below <version>. The change log lists all commits between the
 # previous version tag and HEAD, one line per commit.
 #
-# The nightly release is resolved the same way as the get-tag-name action in
-# release.yml (b<commit-count> on master, <branch>-b<commit-count>-<hash7>
-# otherwise); the link is only generated when that release tag exists.
+# The nightly release is the b* tag pointing to HEAD (release.yml tags the
+# same commit); the link is only generated when that tag exists.
 #
 # Env (when running in GitHub Actions):
 #   GITHUB_OUTPUT: previous_tag, changelog_title, changelog and nightly are written here
 #   GITHUB_REPOSITORY: owner/repo, used to build the nightly release URL (skipped when unset)
-#   RELEASE_BRANCH: branch the release commit belongs to (defaults to master)
 set -euo pipefail
 
 if [[ $# -ne 1 ]]; then
@@ -43,24 +41,18 @@ else
     CHANGELOG_TITLE="Change log"
 fi
 
-# Nightly release corresponding to HEAD
-BRANCH="${RELEASE_BRANCH:-master}"
-BUILD_NUMBER="$(git rev-list --count HEAD)"
-SHORT_HASH="$(git rev-parse --short=7 HEAD)"
-if [[ "${BRANCH}" == "master" ]]; then
-    NIGHTLY_TAG="b${BUILD_NUMBER}"
-else
-    SAFE_NAME="$(echo "${BRANCH}" | tr '/' '-')"
-    NIGHTLY_TAG="${SAFE_NAME}-b${BUILD_NUMBER}-${SHORT_HASH}"
-fi
+# Nightly release: the b* tag pointing to HEAD (|| true: no match is not an error)
+NIGHTLY_TAG="$(git tag --points-at HEAD | grep -E '(^|-)b[0-9]+(-[0-9a-f]{7})?$' | head -n 1 || true)"
 
 NIGHTLY=""
-if [[ -n "${GITHUB_REPOSITORY:-}" ]] && git rev-parse -q --verify "refs/tags/${NIGHTLY_TAG}" >/dev/null 2>&1; then
-    NIGHTLY_URL="https://github.com/${GITHUB_REPOSITORY}/releases/tag/${NIGHTLY_TAG}"
-    NIGHTLY="**Nightly build:** [${NIGHTLY_TAG}](${NIGHTLY_URL})"
-    echo "Nightly release: ${NIGHTLY_URL}"
+if [[ -n "${NIGHTLY_TAG}" ]]; then
+    if [[ -n "${GITHUB_REPOSITORY:-}" ]]; then
+        NIGHTLY_URL="https://github.com/${GITHUB_REPOSITORY}/releases/tag/${NIGHTLY_TAG}"
+        NIGHTLY="**Nightly build:** [${NIGHTLY_TAG}](${NIGHTLY_URL})"
+        echo "Nightly release: ${NIGHTLY_URL}"
+    fi
 else
-    echo "No nightly release found for tag ${NIGHTLY_TAG}"
+    echo "No nightly release found for HEAD"
 fi
 
 echo "Previous version: ${PREV:-none}"
