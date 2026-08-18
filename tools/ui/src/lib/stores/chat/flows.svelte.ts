@@ -16,7 +16,7 @@ import {
 } from '$lib/enums';
 import { ChatService } from '$lib/services/chat.service';
 import { DatabaseService } from '$lib/services/database.service';
-import type { chatStore } from '$lib/stores/chat/index.svelte';
+import type { ChatProcessingStore } from '$lib/stores/chat/processing.svelte';
 // direct imports between stores, not via the barrel, to avoid circular deps
 import { conversationsStore } from '$lib/stores/conversations/index.svelte';
 import { settingsStore } from '$lib/stores/settings/index.svelte';
@@ -24,7 +24,8 @@ import type {
 	ChatMessagePromptProgress,
 	ChatMessageTimings,
 	DatabaseMessage,
-	DatabaseMessageExtra
+	DatabaseMessageExtra,
+	ErrorDialogState
 } from '$lib/types';
 import {
 	classifyContinueIntent,
@@ -36,8 +37,42 @@ import {
 	isAbortError
 } from '$lib/utils';
 
+/**
+ * The slice of chatStore the flows drive. Kept narrow on purpose so the flows
+ * cannot reach around the host's full surface; chatStore implements this
+ * structurally.
+ */
+export interface ChatFlowsHost {
+	processing: ChatProcessingStore;
+	streamConnectionState: StreamConnectionState;
+	cancelPreEncode(): void;
+	clearChatStreaming(convId: string, messageId?: string): void;
+	createAssistantMessage(parentId?: string): Promise<DatabaseMessage>;
+	getApiOptions(): Record<string, unknown>;
+	getOrCreateAbortController(convId: string): AbortController;
+	isChatLoadingInternal(convId: string): boolean;
+	setChatLoading(convId: string, loading: boolean): void;
+	setChatReasoning(convId: string, reasoning: boolean): void;
+	setChatStreaming(
+		convId: string,
+		response: string,
+		messageId: string,
+		model?: string | null
+	): void;
+	showErrorDialog(state: ErrorDialogState | null): void;
+	stopGeneration(): Promise<void>;
+	streamChatCompletion(
+		allMessages: DatabaseMessage[],
+		assistantMessage: DatabaseMessage,
+		onComplete?: (content: string) => Promise<void>,
+		onError?: (error: Error) => void,
+		modelOverride?: string | null,
+		firstUserMessageContent?: string
+	): Promise<void>;
+}
+
 export class ChatMessageFlows {
-	constructor(private host: typeof chatStore) {}
+	constructor(private host: ChatFlowsHost) {}
 
 	private getMessageByIdWithRole(
 		messageId: string,

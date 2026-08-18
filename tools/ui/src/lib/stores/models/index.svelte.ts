@@ -3,8 +3,8 @@ import { ServerModelStatus } from '$lib/enums';
 import { ModelsService } from '$lib/services/models.service';
 // direct imports between stores, not via the barrel, to avoid circular deps
 import { conversationsStore } from '$lib/stores/conversations/index.svelte';
-import { ModelPropsManager } from '$lib/stores/models/props.svelte';
-import { ModelStatusManager } from '$lib/stores/models/status.svelte';
+import { type ModelPropsHost, ModelPropsManager } from '$lib/stores/models/props.svelte';
+import { type ModelStatusHost, ModelStatusManager } from '$lib/stores/models/status.svelte';
 import { serverStore } from '$lib/stores/server.svelte';
 import { getConversationModel } from '$lib/utils/conversation-utils';
 import { SvelteSet } from 'svelte/reactivity';
@@ -20,7 +20,7 @@ import { toast } from 'svelte-sonner';
  * - **ModelStatusManager**: Load/unload + /models/sse status feed - composed as {@link ModelsStore.status}
  * - **conversationsStore**: Tracks which conversations use which models
  */
-class ModelsStore {
+class ModelsStore implements ModelPropsHost, ModelStatusHost {
 	/**
 	 *
 	 *

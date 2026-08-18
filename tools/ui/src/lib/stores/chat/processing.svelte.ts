@@ -25,7 +25,7 @@ interface ProcessingTimingData {
 	prompt_progress?: ChatMessagePromptProgress;
 }
 
-class ChatProcessingStore {
+export class ChatProcessingStore {
 	private states = new SvelteMap<string, ApiProcessingState>();
 	private _activeConversationId = $state<string | null>(null);
 

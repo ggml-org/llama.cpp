@@ -9,11 +9,26 @@
 
 import { ServerModelsSseEventType, ServerModelStatus } from '$lib/enums';
 import { ModelsService } from '$lib/services/models.service';
-import type { modelsStore } from '$lib/stores/models/index.svelte';
+import type { ModelPropsManager } from '$lib/stores/models/props.svelte';
 // direct imports between stores, not via the barrel, to avoid circular deps
 import { serverStore } from '$lib/stores/server.svelte';
 import { SvelteMap } from 'svelte/reactivity';
 import { toast } from 'svelte-sonner';
+
+/**
+ * The slice of modelsStore the manager drives. Kept narrow on purpose so it
+ * cannot reach around the host's full surface; modelsStore implements this
+ * structurally.
+ */
+export interface ModelStatusHost {
+	error: string | null;
+	readonly props: ModelPropsManager;
+	/** Router model rows the status feed updates. */
+	routerModels: ApiModelDataEntry[];
+	fetchRouterModels(): Promise<void>;
+	isModelLoaded(modelId: string): boolean;
+	toDisplayName(id: string): string;
+}
 
 export class ModelStatusManager {
 	// /models/sse feed state, the single source of truth for status and load progress
@@ -26,7 +41,7 @@ export class ModelStatusManager {
 	>();
 	private loadingStates = new SvelteMap<string, boolean>();
 
-	constructor(private host: typeof modelsStore) {}
+	constructor(private host: ModelStatusHost) {}
 
 	/**
 	 * Open the /models/sse feed and keep it live with auto reconnect.

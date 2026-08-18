@@ -29,7 +29,7 @@ import { CACHE, DEFAULT_MCP_CONFIG, MCP_RECONNECT, MCP_SERVER_ID_PREFIX } from '
 import { ColorMode, HealthCheckStatus, MCPConnectionPhase, MCPRefType } from '$lib/enums';
 import { MCPService } from '$lib/services/mcp.service';
 // direct imports between stores, not via the barrel, to avoid circular deps
-import { MCPHealthCheckManager } from '$lib/stores/mcp/health.svelte';
+import { MCPHealthCheckManager, type McpHealthHost } from '$lib/stores/mcp/health.svelte';
 import { mcpResourceStore } from '$lib/stores/mcp/resources.svelte';
 import { serverStore } from '$lib/stores/server.svelte';
 import { settingsStore } from '$lib/stores/settings/index.svelte';
@@ -62,7 +62,7 @@ import {
 } from '$lib/utils';
 import { mode } from 'mode-watcher';
 
-class MCPStore {
+class MCPStore implements McpHealthHost {
 	private _isInitializing = $state(false);
 	private _error = $state<string | null>(null);
 	private _toolCount = $state(0);

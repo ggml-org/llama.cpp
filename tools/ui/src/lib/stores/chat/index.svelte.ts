@@ -31,9 +31,9 @@ import { DatabaseService } from '$lib/services/database.service';
 // direct imports between stores, not via the barrel, to avoid circular deps
 import { agenticStore } from '$lib/stores/agentic/index.svelte';
 import { chatActivityStore } from '$lib/stores/chat/activity.svelte';
-import { ChatMessageFlows } from '$lib/stores/chat/flows.svelte';
+import { type ChatFlowsHost, ChatMessageFlows } from '$lib/stores/chat/flows.svelte';
 import { chatProcessingStore } from '$lib/stores/chat/processing.svelte';
-import { ChatStreamManager } from '$lib/stores/chat/streams.svelte';
+import { type ChatStreamHost, ChatStreamManager } from '$lib/stores/chat/streams.svelte';
 import { conversationsStore } from '$lib/stores/conversations/index.svelte';
 import { mcpStore } from '$lib/stores/mcp/index.svelte';
 import { modelsStore } from '$lib/stores/models/index.svelte';
@@ -63,7 +63,7 @@ interface ConversationStateEntry {
 	lastAccessed: number;
 }
 
-class ChatStore {
+class ChatStore implements ChatStreamHost, ChatFlowsHost {
 	currentResponse = $state('');
 	errorDialogState = $state<ErrorDialogState | null>(null);
 	// resumable stream connection state for the active conversation
@@ -75,9 +75,7 @@ class ChatStore {
 		{ response: string; messageId: string; model?: string | null }
 	>();
 	// true while the active conversation has a local pipe (send, attach or resume-wait)
-	isLoading = $derived(
-		this.activity.isLocal(conversationsStore.activeConversation?.id ?? '')
-	);
+	isLoading = $derived(this.activity.isLocal(conversationsStore.activeConversation?.id ?? ''));
 	// true while the active conversation streams reasoning content but no visible content yet
 	isReasoning = $derived(
 		this.chatReasoningStates.get(conversationsStore.activeConversation?.id ?? '') ?? false

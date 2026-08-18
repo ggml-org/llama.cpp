@@ -12,13 +12,38 @@ import { CONVERSATION_ID_SEPARATOR, STREAM_RESUME_RETRY_MS } from '$lib/constant
 import { MessageRole, MessageType, StreamConnectionState } from '$lib/enums';
 import { ChatService } from '$lib/services/chat.service';
 import { DatabaseService } from '$lib/services/database.service';
-import type { chatStore } from '$lib/stores/chat/index.svelte';
+import type { ChatActivityStore } from '$lib/stores/chat/activity.svelte';
+import type { ChatProcessingStore } from '$lib/stores/chat/processing.svelte';
 // direct imports between stores, not via the barrel, to avoid circular deps
 import { conversationsStore } from '$lib/stores/conversations/index.svelte';
 import { modelsStore } from '$lib/stores/models/index.svelte';
 import type { ApiStreamSession, ChatMessageTimings, DatabaseMessage } from '$lib/types';
 import { streamIdentity } from '$lib/utils';
 import { SvelteMap, SvelteSet } from 'svelte/reactivity';
+
+/**
+ * The slice of chatStore the manager drives. Kept narrow on purpose so the
+ * manager cannot reach around the host's full surface; chatStore implements
+ * this structurally.
+ */
+export interface ChatStreamHost {
+	activity: ChatActivityStore;
+	processing: ChatProcessingStore;
+	chatStreamingStates: SvelteMap<
+		string,
+		{ response: string; messageId: string; model?: string | null }
+	>;
+	streamConnectionState: StreamConnectionState;
+	getOrCreateAbortController(convId: string): AbortController;
+	setChatLoading(convId: string, loading: boolean): void;
+	setChatStreaming(
+		convId: string,
+		response: string,
+		messageId: string,
+		model?: string | null
+	): void;
+	clearChatStreaming(convId: string, messageId?: string): void;
+}
 
 export class ChatStreamManager {
 	// pending resume retry timers while an owning model loads, one per conv
@@ -29,7 +54,7 @@ export class ChatStreamManager {
 	// in-flight discoverActiveStream guard, keyed by conv id
 	private discoveringConvs = new SvelteSet<string>();
 
-	constructor(private host: typeof chatStore) {}
+	constructor(private host: ChatStreamHost) {}
 
 	/** Kill a pending resume retry, e.g. on explicit stop. */
 	cancelResumeRetry(convId: string): void {

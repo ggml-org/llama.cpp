@@ -13,7 +13,6 @@
 import { MODEL_PROPS_CACHE } from '$lib/constants';
 import { FileTypeCategory, ModelModality } from '$lib/enums';
 import { PropsService } from '$lib/services/props.service';
-import type { modelsStore } from '$lib/stores/models/index.svelte';
 // direct imports between stores, not via the barrel, to avoid circular deps
 import { serverStore } from '$lib/stores/server.svelte';
 // deep imports, not the '$lib/utils' barrel: it re-exports modules that reach back
@@ -21,6 +20,19 @@ import { serverStore } from '$lib/stores/server.svelte';
 import { TTLCache } from '$lib/utils/cache-ttl';
 import { detectThinkingSupport } from '$lib/utils/chat-template-thinking-detector';
 import { SvelteSet } from 'svelte/reactivity';
+
+/**
+ * The slice of modelsStore the manager reads. Kept narrow on purpose so it
+ * cannot reach around the host's full surface; modelsStore implements this
+ * structurally.
+ */
+export interface ModelPropsHost {
+	/** Model rows the manager mirrors fetched modalities onto. */
+	models: ModelOption[];
+	readonly selectedModelName: string | null;
+	readonly loadedModelIds: string[];
+	isModelLoaded(modelId: string): boolean;
+}
 
 export class ModelPropsManager {
 	/**
@@ -36,7 +48,7 @@ export class ModelPropsManager {
 	/** Version counter for the cache - bumped on writes so $derived consumers recompute. */
 	cacheVersion = $state(0);
 
-	constructor(private host: typeof modelsStore) {}
+	constructor(private host: ModelPropsHost) {}
 
 	getModelModalities(modelId: string): ModelModalities | null {
 		if (!serverStore.isRouterMode && serverStore.props?.modalities) {

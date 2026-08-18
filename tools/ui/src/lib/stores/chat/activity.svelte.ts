@@ -27,7 +27,7 @@ export class ChatActivityStore {
 
 	/** Convs with any activity, the union the sidebar spinners render. */
 	loadingConvs = $derived.by(() => {
-		const out = new Set<string>(this.local);
+		const out = new SvelteSet<string>(this.local);
 
 		for (const id of this.remote) out.add(id);
 
@@ -62,7 +62,7 @@ export class ChatActivityStore {
 	 * Diffed so unchanged entries do not re-trigger reactivity.
 	 */
 	applyRemoteSnapshot(running: Iterable<string>): void {
-		const next = new Set<string>(running);
+		const next = new SvelteSet<string>(running);
 
 		for (const id of Array.from(this.remote)) {
 			if (!next.has(id)) this.remote.delete(id);

@@ -10,12 +10,12 @@
 import { DEFAULT_MCP_CONFIG } from '$lib/constants';
 import { HealthCheckStatus, MCPConnectionPhase, MCPLogLevel } from '$lib/enums';
 import { MCPService } from '$lib/services/mcp.service';
-import type { mcpStore } from '$lib/stores/mcp/index.svelte';
 import type {
 	ClientCapabilities,
 	HealthCheckParams,
 	HealthCheckState,
 	MCPCapabilitiesInfo,
+	MCPConnection,
 	MCPConnectionLog,
 	MCPServerConfig,
 	ServerCapabilities
@@ -32,10 +32,24 @@ function createConnectionErrorLog(message: string): MCPConnectionLog {
 	};
 }
 
+/**
+ * The slice of mcpStore the probes drive. Kept narrow on purpose so the
+ * probes cannot reach around the host's full surface; mcpStore implements
+ * this structurally.
+ */
+export interface McpHealthHost {
+	autoReconnect(serverName: string): Promise<void>;
+	getExistingConnection(serverId: string): MCPConnection | undefined;
+	getRequestTimeoutMs(): number;
+	promoteHealthCheckToConnection(serverId: string, connection: MCPConnection): void;
+	registerServerConfig(name: string, config: MCPServerConfig): void;
+	removeConnection(serverId: string): void;
+}
+
 export class MCPHealthCheckManager {
 	private _checks = $state<Record<string, HealthCheckState>>({});
 
-	constructor(private host: typeof mcpStore) {}
+	constructor(private host: McpHealthHost) {}
 
 	/** Raw per-server check states, for host-side capability scans. */
 	get checks(): Record<string, HealthCheckState> {

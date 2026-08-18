@@ -29,13 +29,16 @@ import { DatabaseService } from '$lib/services/database.service';
 import { MigrationService } from '$lib/services/migration.service';
 import { RouterService } from '$lib/services/router.service';
 // direct imports between stores, not via the barrel, to avoid circular deps
-import { ConversationPreferences } from '$lib/stores/conversations/preferences.svelte';
+import {
+	ConversationPreferences,
+	type ConversationsPreferencesHost
+} from '$lib/stores/conversations/preferences.svelte';
 import { settingsStore } from '$lib/stores/settings/index.svelte';
 import { filterByLeafNodeId, findLeafNode, generateConversationTitle } from '$lib/utils';
 import { SvelteSet } from 'svelte/reactivity';
 import { toast } from 'svelte-sonner';
 
-class ConversationsStore {
+class ConversationsStore implements ConversationsPreferencesHost {
 	/**
 	 *
 	 *

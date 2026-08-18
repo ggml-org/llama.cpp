@@ -13,7 +13,6 @@
 import { REASONING_EFFORT_DEFAULT_LOCALSTORAGE_KEY } from '$lib/constants';
 import { ReasoningEffort } from '$lib/enums';
 import { DatabaseService } from '$lib/services/database.service';
-import type { conversationsStore } from '$lib/stores/conversations/index.svelte';
 // direct imports between stores, not via the barrel, to avoid circular deps
 import { mcpStore } from '$lib/stores/mcp/index.svelte';
 import type { McpServerOverride } from '$lib/types/database';
@@ -38,6 +37,16 @@ function saveReasoningEffortDefault(effort: ReasoningEffort): void {
 	localStorage.setItem(REASONING_EFFORT_DEFAULT_LOCALSTORAGE_KEY, effort);
 }
 
+/**
+ * The slice of conversationsStore the preferences read and write. Kept narrow
+ * on purpose so they cannot reach around the host's full surface;
+ * conversationsStore implements this structurally.
+ */
+export interface ConversationsPreferencesHost {
+	activeConversation: DatabaseConversation | null;
+	conversations: DatabaseConversation[];
+}
+
 export class ConversationPreferences {
 	/** Global (non-conversation-specific) reasoning effort default */
 	pendingReasoningEffort = $state<ReasoningEffort>(loadReasoningEffortDefault());
@@ -51,7 +60,7 @@ export class ConversationPreferences {
 	 */
 	pendingCwd = $state<string | null>(null);
 
-	constructor(private host: typeof conversationsStore) {}
+	constructor(private host: ConversationsPreferencesHost) {}
 
 	/** Reload persisted defaults, e.g. when the active conversation is cleared. */
 	resetPending(): void {
