@@ -100,14 +100,6 @@ class ConversationsStore {
 		localStorage.setItem(REASONING_EFFORT_DEFAULT_LOCALSTORAGE_KEY, this.pendingReasoningEffort);
 	}
 
-	/**
-	 * Callback for updating message content in chatStore.
-	 * Registered by chatStore to enable cross-store updates without circular dependency.
-	 */
-	private messageUpdateCallback:
-		| ((messageId: string, updates: Partial<DatabaseMessage>) => void)
-		| null = null;
-
 	/** In-flight init run; shared by concurrent callers, reset on failure to allow retry */
 	private initPromise: Promise<void> | null = null;
 
@@ -141,23 +133,6 @@ class ConversationsStore {
 		})();
 
 		return this.initPromise;
-	}
-
-	/**
-	 * Alias for init() for backward compatibility.
-	 */
-	async initialize(): Promise<void> {
-		return this.init();
-	}
-
-	/**
-	 * Register a callback for message updates from other stores.
-	 * Called by chatStore during initialization.
-	 */
-	registerMessageUpdateCallback(
-		callback: (messageId: string, updates: Partial<DatabaseMessage>) => void
-	): void {
-		this.messageUpdateCallback = callback;
 	}
 
 	/**

@@ -5,7 +5,7 @@
 	import { SearchInput, SidebarNavigationSearchResults } from '$lib/components/app';
 	import { ROUTES } from '$lib/constants';
 	import { RouterService } from '$lib/services/router.service';
-	import { chatStore, conversationsStore, isMobile } from '$lib/stores';
+	import { chatStore, conversationsStore, deviceStore } from '$lib/stores';
 
 	let searchQuery = $state('');
 	let searchInputRef = $state<HTMLInputElement | null>(null);
@@ -23,7 +23,7 @@
 	// Search page is intended for mobile; on desktop the sidebar already exposes
 	// in-place search, so bounce back to a chat.
 	$effect(() => {
-		if (browser && !isMobile.current) {
+		if (browser && !deviceStore.isMobile) {
 			goto(ROUTES.NEW_CHAT, { replaceState: true });
 		}
 	});

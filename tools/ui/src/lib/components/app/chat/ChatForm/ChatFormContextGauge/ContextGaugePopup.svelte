@@ -2,8 +2,13 @@
 	import { colorLevelBgClass, colorLevelTextClass } from './context-gauge';
 	import ContextGaugeDetails from './ContextGaugeDetails.svelte';
 	import ContextGaugeLoadModel from './ContextGaugeLoadModel.svelte';
+	import {
+		gaugeCardEnter,
+		gaugeCardLeave,
+		gaugePopup,
+		gaugePopupClose
+	} from './gauge-popup.svelte';
 	import { useContextGauge } from '$lib/hooks/use-context-gauge.svelte';
-	import { gaugeCardEnter, gaugeCardLeave, gaugePopup, gaugePopupClose } from '$lib/stores';
 	import { formatParameters } from '$lib/utils/formatters';
 
 	const gauge = useContextGauge();

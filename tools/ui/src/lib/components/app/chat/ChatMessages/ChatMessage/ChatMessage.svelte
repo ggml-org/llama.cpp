@@ -11,7 +11,7 @@
 	import { setChatMessageActionsContext, setChatMessageEditContext } from '$lib/contexts';
 	import { AgenticSectionType, AttachmentType, MessageRole } from '$lib/enums';
 	import { DatabaseService } from '$lib/services/database.service';
-	import { chatStore, conversationsStore, isMobile } from '$lib/stores';
+	import { chatStore, conversationsStore, deviceStore } from '$lib/stores';
 	import type {
 		ChatMessageActions,
 		ChatMessageDeletionInfo,
@@ -304,7 +304,7 @@
 
 	// After the system message flow ends, hand focus to the main chat form
 	function focusMainChatForm() {
-		if (isMobile.current) return;
+		if (deviceStore.isMobile) return;
 
 		document.querySelector<HTMLTextAreaElement>('.chat-screen-form-wrapper textarea')?.focus();
 	}
