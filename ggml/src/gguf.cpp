@@ -365,10 +365,6 @@ struct gguf_reader {
         return data_offset;
     }
 
-    uint64_t remain() const {
-        return nbytes_remain;
-    }
-
     bool seek(uint64_t absolute_offset) const {
         const uint64_t end_offset = uint64_t(data_offset) + nbytes_remain;
         if (absolute_offset > end_offset) {
@@ -796,14 +792,6 @@ static struct gguf_context * gguf_init_from_reader(const struct gguf_reader & gr
             }
             ctx->size += padded_size;
         }
-    }
-
-    // check that the data section fits within the remaining file
-    if (n_tensors > 0 && ctx->size > gr.remain()) {
-        GGML_LOG_ERROR("%s: tensor data section size %zu exceeds remaining file size %" PRIu64 "\n",
-            __func__, ctx->size, gr.remain());
-        gguf_free(ctx);
-        return nullptr;
     }
 
     // load the tensor data only if requested
