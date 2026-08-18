@@ -16,13 +16,16 @@
  */
 
 import {
+	MEMORY_ARGS,
 	MEMORY_DONE,
 	MEMORY_EMPTY_INDEX,
 	MEMORY_ENTRY_LIMIT_BYTES_DEFAULT,
 	MEMORY_NAME_PATTERN,
 	MEMORY_NAME_SEPARATOR,
+	MEMORY_WRITE_ARGS,
 	NEWLINE,
-	parseMemoryGroups
+	parseMemoryGroups,
+	SPACE
 } from '$lib/constants';
 import { BuiltInTool } from '$lib/enums';
 import { DatabaseService } from '$lib/services/database.service';
@@ -30,12 +33,13 @@ import { settingsStore } from '$lib/stores/settings/index.svelte';
 import type { DatabaseMemoryEntry, ExportedMemory, ToolExecutionResult } from '$lib/types';
 
 const BLOCK_SEPARATOR = `${NEWLINE}${NEWLINE}`;
-const COLUMN_GAP = '  ';
+const COLUMN_GAP = SPACE.repeat(2);
 const LIST_SEPARATOR = ', ';
 const WHITESPACE_RUN = /\s+/g;
-const SPACE = ' ';
 const STAMP_PAD_LENGTH = 2;
 const STAMP_PAD_CHAR = '0';
+const FRONTMATTER_FENCE = '---';
+const FRONTMATTER_DESCRIPTION = 'description: ';
 
 /**
  * Format an epoch timestamp as YYYY-MM-DD HH:MM:SS in local time.
@@ -50,7 +54,6 @@ export function memoryStamp(epochMs: number): string {
 	);
 }
 
-const MEMORY_WRITE_KEYS = ['name', 'description', 'old_str', 'new_str'];
 const textEncoder = new TextEncoder();
 
 /**
@@ -64,7 +67,7 @@ export function memoryByteLength(text: string): number {
  * Close a body on a line break, the shape every stored body keeps so an
  * append always lands on its own line.
  */
-export function closeMemoryBody(body: string): string {
+function closeMemoryBody(body: string): string {
 	return body.length > 0 && !body.endsWith(NEWLINE) ? `${body}${NEWLINE}` : body;
 }
 
@@ -73,14 +76,17 @@ export function closeMemoryBody(body: string): string {
  * counts are those of this form, so they match such a store byte for byte.
  */
 export function serializeMemoryEntry(description: string, body: string): string {
-	return `---${NEWLINE}description: ${description}${NEWLINE}---${NEWLINE}${NEWLINE}${closeMemoryBody(body)}`;
+	return (
+		`${FRONTMATTER_FENCE}${NEWLINE}${FRONTMATTER_DESCRIPTION}${description}${NEWLINE}` +
+		`${FRONTMATTER_FENCE}${BLOCK_SEPARATOR}${closeMemoryBody(body)}`
+	);
 }
 
 /**
  * Fold a description onto one line, every whitespace run replaced by a
  * single space, so it occupies one row of the index.
  */
-export function foldMemoryDescription(description: string): string {
+function foldMemoryDescription(description: string): string {
 	return description.replace(WHITESPACE_RUN, SPACE).trim();
 }
 
@@ -89,7 +95,7 @@ export function foldMemoryDescription(description: string): string {
  * the shape is valid. The shape alone gates a read and a drop, so an entry
  * whose group left the configuration stays readable and removable.
  */
-export function checkMemoryNameShape(name: string): string | null {
+function checkMemoryNameShape(name: string): string | null {
 	const [group, slug, ...rest] = name.split(MEMORY_NAME_SEPARATOR);
 
 	if (
@@ -108,7 +114,7 @@ export function checkMemoryNameShape(name: string): string | null {
  * configured group, null when the name is valid. Writes land under a
  * configured group only.
  */
-export function checkMemoryName(name: string, groups: string[]): string | null {
+function checkMemoryName(name: string, groups: string[]): string | null {
 	const shape = checkMemoryNameShape(name);
 
 	if (shape) return shape;
@@ -122,22 +128,33 @@ export function checkMemoryName(name: string, groups: string[]): string | null {
 	return null;
 }
 
+/** One rendered line of the index: entry name, serialized size, description */
+interface MemoryIndexRow {
+	bytes: string;
+	description: string;
+	name: string;
+}
+
 function entryBytes(entry: DatabaseMemoryEntry): number {
 	return memoryByteLength(serializeMemoryEntry(entry.description, entry.body));
 }
 
-function indexRow(entry: DatabaseMemoryEntry): string[] {
-	return [entry.name, String(entryBytes(entry)), entry.description];
+function indexRow(entry: DatabaseMemoryEntry): MemoryIndexRow {
+	return { bytes: String(entryBytes(entry)), description: entry.description, name: entry.name };
 }
 
-function columns(rows: string[][]): string {
-	const nameWidth = Math.max(...rows.map((row) => row[0].length));
-	const bytesWidth = Math.max(...rows.map((row) => row[1].length));
+/**
+ * Lay the rows out in three columns, the name padded right and the byte count
+ * padded left so the descriptions start on the same offset.
+ */
+function columns(rows: MemoryIndexRow[]): string {
+	const nameWidth = Math.max(...rows.map((row) => row.name.length));
+	const bytesWidth = Math.max(...rows.map((row) => row.bytes.length));
 
 	return rows
 		.map(
 			(row) =>
-				`${row[0].padEnd(nameWidth)}${COLUMN_GAP}${row[1].padStart(bytesWidth)}${COLUMN_GAP}${row[2]}`
+				`${row.name.padEnd(nameWidth)}${COLUMN_GAP}${row.bytes.padStart(bytesWidth)}${COLUMN_GAP}${row.description}`
 		)
 		.join(NEWLINE);
 }
@@ -248,7 +265,7 @@ export class MemoryService {
 	 * Remove an entry.
 	 */
 	private static async drop(args: Record<string, unknown>): Promise<ToolExecutionResult> {
-		const name = String(args.name ?? '');
+		const name = String(args[MEMORY_ARGS.NAME] ?? '');
 		const invalid = checkMemoryNameShape(name);
 
 		if (invalid) return textResult(invalid, true);
@@ -276,7 +293,8 @@ export class MemoryService {
 	 * Read the index, or the full body of the named entries.
 	 */
 	private static async open(args: Record<string, unknown>): Promise<ToolExecutionResult> {
-		const names = Array.isArray(args.names) ? args.names.map(String) : [];
+		const requested = args[MEMORY_ARGS.NAMES];
+		const names = Array.isArray(requested) ? requested.map(String) : [];
 
 		if (names.length === 0) {
 			const entries = await DatabaseService.getMemoryEntries();
@@ -356,26 +374,28 @@ export class MemoryService {
 	 * Create an entry, edit its body, refresh its description.
 	 */
 	private static async write(args: Record<string, unknown>): Promise<ToolExecutionResult> {
-		const name = String(args.name ?? '');
+		const name = String(args[MEMORY_ARGS.NAME] ?? '');
 		const invalid = checkMemoryName(name, MemoryService.groups());
 
 		if (invalid) return textResult(invalid, true);
 
 		// An unknown key carries the text when its name is wrong, and the call
 		// then removes old_str or does nothing at all
-		const unknown = Object.keys(args).filter((key) => !MEMORY_WRITE_KEYS.includes(key));
+		const unknown = Object.keys(args).filter((key) => !MEMORY_WRITE_ARGS.has(key));
 
 		if (unknown.length > 0) {
 			return textResult(
-				`Unknown argument ${unknown.join(LIST_SEPARATOR)}, the text goes in old_str and new_str`,
+				`Unknown argument ${unknown.join(LIST_SEPARATOR)}, the text goes in ${MEMORY_ARGS.OLD_STR} and ${MEMORY_ARGS.NEW_STR}`,
 				true
 			);
 		}
 
-		const oldStr = args.old_str == null ? null : String(args.old_str);
-		const newStr = args.new_str == null ? null : String(args.new_str);
-		const folded =
-			args.description == null ? null : foldMemoryDescription(String(args.description));
+		const oldValue = args[MEMORY_ARGS.OLD_STR];
+		const newValue = args[MEMORY_ARGS.NEW_STR];
+		const describedAs = args[MEMORY_ARGS.DESCRIPTION];
+		const oldStr = oldValue == null ? null : String(oldValue);
+		const newStr = newValue == null ? null : String(newValue);
+		const folded = describedAs == null ? null : foldMemoryDescription(String(describedAs));
 		const entry = await DatabaseService.getMemoryEntry(name);
 
 		if (!entry) {

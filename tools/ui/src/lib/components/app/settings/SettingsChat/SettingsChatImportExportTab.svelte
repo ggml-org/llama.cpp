@@ -8,11 +8,16 @@
 	} from '$lib/components/app';
 	import SettingsGroup from '$lib/components/app/settings/SettingsGroup.svelte';
 	import { MEMORY_EXPORT_FILENAME_PREFIX } from '$lib/constants';
-	import { ConversationSelectionMode, FileExtensionText, HtmlInputType } from '$lib/enums';
+	import {
+		ConversationSelectionMode,
+		FileExtensionText,
+		HtmlInputType,
+		MimeTypeApplication
+	} from '$lib/enums';
 	import { ConversationTransferService } from '$lib/services';
 	import { MemoryService } from '$lib/services/memory.service';
 	import { conversationsStore, settingsStore } from '$lib/stores';
-	import { createMessageCountMap } from '$lib/utils';
+	import { createMessageCountMap, downloadResourceContent } from '$lib/utils';
 	import { fade } from 'svelte/transition';
 	import { toast } from 'svelte-sonner';
 
@@ -87,16 +92,11 @@
 				return;
 			}
 
-			const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-			const url = URL.createObjectURL(blob);
-			const a = document.createElement('a');
-
-			a.href = url;
-			a.download = `${MEMORY_EXPORT_FILENAME_PREFIX}${new Date().toISOString().split('T')[0]}.json`;
-			document.body.appendChild(a);
-			a.click();
-			document.body.removeChild(a);
-			URL.revokeObjectURL(url);
+			downloadResourceContent(
+				JSON.stringify(data, null, 2),
+				MimeTypeApplication.JSON,
+				`${MEMORY_EXPORT_FILENAME_PREFIX}${new Date().toISOString().split('T')[0]}.json`
+			);
 
 			toast.success(
 				`Exported ${data.entries.length} memory ${memoryEntryNoun(data.entries.length)}`
