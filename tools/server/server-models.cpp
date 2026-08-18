@@ -1025,10 +1025,13 @@ void server_models::load(const std::string & name, const load_options & opts) {
             char * buffer = vec_buf.data();
             if (stdout_file) {
                 while (fgets(buffer, vec_buf.size(), stdout_file) != nullptr) {
-                    LOG("[%5d] %s", port, buffer);
                     std::string str(buffer);
                     if (string_starts_with(buffer, CMD_CHILD_TO_ROUTER_STATE)) {
+                        LOG_DBG("[%5d] %s", port, buffer); // prevent spamming the log
                         this->handle_child_state(name, str);
+                    } else {
+                        // forward log
+                        LOG("[%5d] %s", port, buffer);
                     }
                 }
             } else {
