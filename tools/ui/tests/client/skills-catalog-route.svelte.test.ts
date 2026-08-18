@@ -514,10 +514,13 @@ describe('/skills catalog preview', () => {
 			}
 		);
 	}
+
 	async function renderCatalogWithReads(catalog: SkillCatalogResponse) {
 		mockCatalogWithReads(catalog);
 		const screen = await render(SkillsPageWrapper);
+
 		await vi.waitFor(() => expect(bodyText()).toContain('demo-skill'));
+
 		return screen;
 	}
 
@@ -581,6 +584,7 @@ describe('/skills catalog preview', () => {
 		await useDesktopViewport();
 		localStorage.setItem(SKILLS_PANE_SIZES_LOCALSTORAGE_KEY, JSON.stringify([40, 60]));
 		const screen = await renderCatalogWithReads(makeCatalog(makeEntry('demo-skill')));
+
 		await screen.getByRole('button', { name: /demo-skill/ }).click();
 		await vi.waitFor(() => expect(panes()).toHaveLength(2));
 		await vi.waitFor(() => {
@@ -593,6 +597,7 @@ describe('/skills catalog preview', () => {
 		await useDesktopViewport();
 		localStorage.setItem(SKILLS_PANE_SIZES_LOCALSTORAGE_KEY, JSON.stringify([40, 40]));
 		const first = await renderCatalogWithReads(makeCatalog(makeEntry('demo-skill')));
+
 		await first.getByRole('button', { name: /demo-skill/ }).click();
 		await vi.waitFor(() => expect(panes()).toHaveLength(2));
 		await vi.waitFor(() => expect(parseFloat(panes()[0].style.flexGrow)).toBeCloseTo(50, 0));
@@ -600,6 +605,7 @@ describe('/skills catalog preview', () => {
 
 		localStorage.setItem(SKILLS_PANE_SIZES_LOCALSTORAGE_KEY, JSON.stringify([10, 90]));
 		const second = await renderCatalogWithReads(makeCatalog(makeEntry('demo-skill')));
+
 		await second.getByRole('button', { name: /demo-skill/ }).click();
 		await vi.waitFor(() => expect(panes()).toHaveLength(2));
 		await vi.waitFor(() => expect(parseFloat(panes()[0].style.flexGrow)).toBeCloseTo(35, 0));
@@ -607,6 +613,7 @@ describe('/skills catalog preview', () => {
 
 		localStorage.setItem(SKILLS_PANE_SIZES_LOCALSTORAGE_KEY, JSON.stringify({ left: 40 }));
 		const third = await renderCatalogWithReads(makeCatalog(makeEntry('demo-skill')));
+
 		await third.getByRole('button', { name: /demo-skill/ }).click();
 		await vi.waitFor(() => expect(panes()).toHaveLength(2));
 		await vi.waitFor(() => expect(parseFloat(panes()[0].style.flexGrow)).toBeCloseTo(55, 0));
@@ -615,10 +622,12 @@ describe('/skills catalog preview', () => {
 	it('persists normalized sizes after resizing the desktop split', async () => {
 		await useDesktopViewport();
 		const screen = await renderCatalogWithReads(makeCatalog(makeEntry('demo-skill')));
+
 		await screen.getByRole('button', { name: /demo-skill/ }).click();
 		await vi.waitFor(() => expect(panes()).toHaveLength(2));
 
 		const handle = document.querySelector<HTMLElement>('[data-pane-resizer]')!;
+
 		handle.focus();
 		handle.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'ArrowLeft' }));
 
@@ -641,7 +650,6 @@ describe('/skills catalog preview', () => {
 		const screen = await renderCatalogWithReads(
 			makeCatalog(makeEntry('demo-skill'), makeEntry('second-skill'))
 		);
-
 		const card = screen.getByRole('button', { name: /demo-skill/ });
 		const element = card.element();
 
@@ -982,7 +990,6 @@ describe('/skills catalog preview', () => {
 		vi.mocked(fetch).mockClear();
 
 		const screen = await render(SkillsPageWrapper);
-
 		const fullSnapshot = buildSkillRunSnapshot(undefined, catalog);
 		const budgetCopy = `The full Skills catalog uses ${fullSnapshot.envelope.length.toLocaleString()} of 2,000 budget tokens`;
 		const tokenizeCalls = () =>
@@ -1107,9 +1114,9 @@ describe('SkillCatalogList manual-only badge', () => {
 		const screen = await render(SkillCatalogList, {
 			props: {
 				entries: [makeEntry('manual', { disable_model_invocation: true })],
-				selectedId: null,
+				onSelect: vi.fn(),
 				open: false,
-				onSelect: vi.fn()
+				selectedId: null
 			}
 		});
 
@@ -1124,9 +1131,9 @@ describe('SkillCatalogList manual-only badge', () => {
 					makeEntry('legacy', { disable_model_invocation: false }),
 					makeEntry('older', { disable_model_invocation: undefined })
 				],
-				selectedId: null,
+				onSelect: vi.fn(),
 				open: false,
-				onSelect: vi.fn()
+				selectedId: null
 			}
 		});
 
@@ -1139,11 +1146,11 @@ describe('SkillCatalogList availability switch', () => {
 		const screen = await render(SkillCatalogList, {
 			props: {
 				entries: [makeEntry('gated', { disable_model_invocation: true })],
-				selectedId: null,
-				open: false,
-				onSelect: vi.fn(),
 				isDisabled: () => true,
-				onEnabledChange: vi.fn()
+				onEnabledChange: vi.fn(),
+				onSelect: vi.fn(),
+				open: false,
+				selectedId: null
 			}
 		});
 

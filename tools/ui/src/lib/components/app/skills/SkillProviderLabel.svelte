@@ -1,9 +1,9 @@
 <script lang="ts">
-	import * as Tooltip from '$lib/components/ui/tooltip';
 	import {
 		GENERIC_SKILL_PROVIDER_TOOLTIP,
 		skillProviderLabel
 	} from './skill-provider-presentation';
+	import * as Tooltip from '$lib/components/ui/tooltip';
 
 	interface Props {
 		provider: string;
@@ -16,9 +16,14 @@
 </script>
 
 {#if isGenericProvider}
-	<Tooltip.Provider><Tooltip.Root><Tooltip.Trigger>
-		{#snippet child({ props })}<span {...props}>{label}</span>{/snippet}
-	</Tooltip.Trigger><Tooltip.Content><p>{GENERIC_SKILL_PROVIDER_TOOLTIP}</p></Tooltip.Content></Tooltip.Root></Tooltip.Provider>
+	<Tooltip.Provider
+		><Tooltip.Root
+			><Tooltip.Trigger>
+				{#snippet child({ props })}<span {...props}>{label}</span>{/snippet}
+			</Tooltip.Trigger><Tooltip.Content><p>{GENERIC_SKILL_PROVIDER_TOOLTIP}</p></Tooltip.Content
+			></Tooltip.Root
+		></Tooltip.Provider
+	>
 {:else}
 	<span>{label}</span>
 {/if}

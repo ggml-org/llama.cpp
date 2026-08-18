@@ -201,7 +201,7 @@ export { default as ChatFormActionModels } from './ChatForm/ChatFormActions/Chat
 /**
  * Dropdown submenu for managing tool permissions in the chat form.
  *
- * Displays a collapsible list of available tools organized by group (Built-in / JSON Schema).
+ * Displays a collapsible list of available tools organized by group (Server / JSON Schema).
  * Each group can be expanded to show individual tools with checkboxes for enabling/disabling.
  * Provides bulk enable/disable controls per group and shows enabled/total tool counts.
  * Opens the tools panel on the server when the menu opens.

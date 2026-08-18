@@ -18,7 +18,10 @@ function jsonResponse(body: unknown, status = 200): Response {
 	});
 }
 
-function makeEntry(name = 'demo-skill', overrides: Partial<SkillCatalogEntry> = {}): SkillCatalogEntry {
+function makeEntry(
+	name = 'demo-skill',
+	overrides: Partial<SkillCatalogEntry> = {}
+): SkillCatalogEntry {
 	return {
 		catalog_xml: `<skill><name>${name}</name></skill>`,
 		description: `description of ${name}`,
@@ -61,8 +64,8 @@ function resourceResult(name = 'demo-skill'): SkillResourceReadResult {
 		diagnostics: [],
 		kind: 'resource',
 		resource: { path: 'refs/DETAILS.md' },
-		source: 'data',
-		skill: { id: `opaque-${name}`, name, provider: 'agents', scope: 'project' }
+		skill: { id: `opaque-${name}`, name, provider: 'agents', scope: 'project' },
+		source: 'data'
 	};
 }
 
@@ -446,6 +449,7 @@ describe('SkillDetail preview', () => {
 
 	it('opens a resource tree and previews the selected supported resource', async () => {
 		const readCalls: RequestInit[] = [];
+
 		mockRead((init) => {
 			readCalls.push(init);
 			const request = JSON.parse(init.body as string) as { path?: string };

@@ -1,7 +1,7 @@
+import { persisted } from './persisted.svelte';
 import { browser } from '$app/environment';
 import { DISABLED_SKILL_IDS_LOCALSTORAGE_KEY } from '$lib/constants';
 import { SvelteSet } from 'svelte/reactivity';
-import { persisted } from './persisted.svelte';
 
 /** Persist disabled Skills by opaque server-owned catalog ID. */
 export class SkillAvailabilityStore {
@@ -29,11 +29,13 @@ export class SkillAvailabilityStore {
 			if (!this._disabledIds.has(id)) {
 				return;
 			}
+
 			this._disabledIds.delete(id);
 		} else {
 			if (this._disabledIds.has(id)) {
 				return;
 			}
+
 			this._disabledIds.add(id);
 		}
 

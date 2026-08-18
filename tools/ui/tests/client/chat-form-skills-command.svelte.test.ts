@@ -1,9 +1,9 @@
 // Guards `/skills` listing, picker filtering, selection, and dispatch behavior.
 
-import ChatFormSkillPicker from '$lib/components/app/chat/ChatForm/ChatFormPickers/ChatFormSkillPicker.svelte';
 import ChatFormPickersHarness from './components/ChatFormPickersHarness.svelte';
 import ChatFormSkillPickerHarness from './components/ChatFormSkillPickerHarness.svelte';
 import ChatFormTestWrapper from './components/ChatFormTestWrapper.svelte';
+import ChatFormSkillPicker from '$lib/components/app/chat/ChatForm/ChatFormPickers/ChatFormSkillPicker.svelte';
 import { SkillsService } from '$lib/services/skills.service';
 import { conversationsStore } from '$lib/stores/conversations.svelte';
 import { skillsStore } from '$lib/stores/skills.svelte';

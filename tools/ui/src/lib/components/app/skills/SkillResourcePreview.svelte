@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { classifySkillResourceFormat } from './skill-resource-presentation';
 	import { Circle, RefreshCw } from '@lucide/svelte';
 	import { MarkdownContent, SyntaxHighlightedCode } from '$lib/components/app';
 	import { Alert, AlertDescription, AlertTitle } from '$lib/components/ui/alert';
@@ -6,7 +7,6 @@
 	import { SkillsService } from '$lib/services/skills.service';
 	import type { SkillBaseReadResult } from '$lib/types';
 	import { ApiError, getLanguageFromFilename } from '$lib/utils';
-	import { classifySkillResourceFormat } from './skill-resource-presentation';
 
 	interface Props {
 		baseResult: SkillBaseReadResult;
@@ -15,7 +15,7 @@
 		onAvailabilityChange: (path: string, available: boolean) => void;
 	}
 
-	let { baseResult, cwd, selectedPath, onAvailabilityChange }: Props = $props();
+	let { baseResult, cwd, onAvailabilityChange, selectedPath }: Props = $props();
 	let readState = $state<'loading' | 'ready' | 'error'>('ready');
 	let source = $state('');
 	let errorMessage = $state('');
@@ -38,11 +38,13 @@
 		void retryToken;
 		const controller = new AbortController();
 		const currentGeneration = ++generation;
+
 		errorMessage = '';
 
 		if (selectedPath === 'SKILL.md') {
 			source = baseResult.source;
 			readState = 'ready';
+
 			return () => controller.abort();
 		}
 
@@ -59,6 +61,7 @@
 				) {
 					errorMessage = 'The server returned content for a different resource.';
 					readState = 'error';
+
 					return;
 				}
 

@@ -1,5 +1,5 @@
 /** CWD-keyed Skills catalog state and startup navigation availability. */
-import { SkillsService, buildSkillRunSnapshot } from '$lib/services/skills.service';
+import { buildSkillRunSnapshot, SkillsService } from '$lib/services/skills.service';
 import { skillAvailabilityStore } from '$lib/stores/skill-availability.svelte';
 import type { SkillCatalogResponse, SkillRunSnapshot } from '$lib/types';
 import { ApiError } from '$lib/utils/api-fetch';

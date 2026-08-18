@@ -152,7 +152,9 @@ describe('buildSkillRunSnapshot model-view filtering', () => {
 
 		expect(snapshot.total).toBe(0);
 		expect(snapshot.entries).toEqual([]);
-		expect(snapshot.envelope).toBe('<skills_catalog total="0" included="0"><inst/></skills_catalog>');
+		expect(snapshot.envelope).toBe(
+			'<skills_catalog total="0" included="0"><inst/></skills_catalog>'
+		);
 	});
 
 	it('excludes locally disabled opaque IDs from entries, totals, the envelope, and budgeting', () => {
