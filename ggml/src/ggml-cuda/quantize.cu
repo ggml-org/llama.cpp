@@ -410,12 +410,12 @@ static __global__ void quantize_mmq_mxfp4(const float * __restrict__ x,
                 const float err_diff = fabsf(xi) - 0.5f * fabsf(kvalues_fp4[q & 0x7]) * test_scale;
                 err[i] = err_diff*err_diff;
             }
+            float err_delta = err[1] - err[0];
 #pragma unroll
             for (int mask = 16; mask > 0; mask >>= 1) {
-                err[0] += __shfl_xor_sync(0xFFFFFFFF, err[0], mask, WARP_SIZE);
-                err[1] += __shfl_xor_sync(0xFFFFFFFF, err[1], mask, WARP_SIZE);
+                err_delta += __shfl_xor_sync(0xFFFFFFFF, err_delta, mask, WARP_SIZE);
             }
-            if (err[1] < err[0]) {
+            if (err_delta < 0.0f) {
                 e -= 1;
             }
         }
