@@ -179,6 +179,7 @@ constexpr env_var env_vars[] = {
     {"GGML_OPENVINO_RELEASE_WEIGHTS", env_type::BOOL},
     {"GGML_OPENVINO_REDUCE_COMPILE_MEM", env_type::BOOL},
     {"GGML_OPENVINO_LOG_UNSUPPORTED_OPS", env_type::BOOL},
+    {"GGML_OPENVINO_LOG_SUPPORTS_OP", env_type::INT},
     {"GGML_OPENVINO_ROPE_F32_ANGLE", env_type::BOOL},
     {"GGML_OPENVINO_LOG_SWA_LAYERS", env_type::BOOL},
     {"GGML_OPENVINO_NATIVE_SOFTPLUS", env_type::BOOL},
