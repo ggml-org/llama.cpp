@@ -327,6 +327,25 @@ services:
       LLAMA_ARG_PORT: 8080
 ```
 
+### Always-on / low-idle deployments
+
+By default the server waits for backend work with polling enabled at level 50
+(`--poll 50`; `0 - no polling, 100 - mostly polling` per the scale in
+`common.h`). At the default level the CPU threads busy-poll for a substantial
+fraction of their wait time, which on a host with the model fully offloaded to
+the GPU typically keeps about one core busy even while the server is idle. For
+always-on boxes that is wasted idle power, and on small chassis it keeps the
+fans spinning.
+
+For such deployments run with `--poll 0`. The poll flags cascade:
+`--poll-batch` and `--spec-draft-poll` default to the value of `--poll`, and
+`--spec-draft-poll-batch` defaults to `--spec-draft-poll` (see the tables
+above), so the single `--poll 0` covers all four flags and repeating it per
+flag is redundant. Observed on one always-on ROCm mini-PC serving a fully
+offloaded model: idle CPU use dropped from ~1.4 cores to under 0.1 core, with
+negligible latency impact (see discussion
+[#22238](https://github.com/ggml-org/llama.cpp/discussions/22238)).
+
 ### Multimodal support
 
 Multimodal support was added in [#12898](https://github.com/ggml-org/llama.cpp/pull/12898) and is currently an experimental feature.
