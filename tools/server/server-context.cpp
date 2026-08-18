@@ -5265,7 +5265,8 @@ void server_routes::init_routes() {
         task.params.n_predict = json_value(body, "n_predict", -1);
         task.params.sampling  = params.sampling; // baseline defaults, then apply overrides below
         task.params.sampling.penalty_repeat  = json_value(body, "repeat_penalty", 1.05f);
-        task.params.sampling.penalty_last_n  = -1;
+        // note: -1 is clamped to 0 by the sampler, it will disable the penalty
+        task.params.sampling.penalty_last_n  = task.params.n_predict > 0 ? task.params.n_predict : 512;
         task.params.sampling.seed = json_value(body, "seed", params.sampling.seed);
         task.tts_inp.data.seed    = task.params.sampling.seed; // same seed for the codec/vocoder RNG
         if (task.tts_inp.data.top_k > 0) {
@@ -5348,16 +5349,17 @@ void server_routes::init_routes() {
             bool is_done       = first_tts_res->final;
 
             res->set_next([res_this = res.get(), is_done](std::string & output) mutable -> bool {
+                // flush buffered audio before is_done - the first result can already be final
+                if (!res_this->data.empty()) {
+                    output = std::move(res_this->data);
+                    res_this->data.clear();
+                    return true;
+                }
                 if (is_done) {
                     return false;
                 }
                 if (res_this->should_stop()) {
                     return false;
-                }
-                if (!res_this->data.empty()) {
-                    output = std::move(res_this->data);
-                    res_this->data.clear();
-                    return true;
                 }
 
                 server_response_reader & rd = res_this->rd;
