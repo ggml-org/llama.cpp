@@ -15,6 +15,6 @@ runs:
       id: setup
       uses: ./.github/actions/unarchive-tar
       with:
-        url: https://archive.spacemit.com/toolchain/spacemit-toolchain-linux-glibc-x86_64-v${{ inputs.version }}.tar.xz
+        url: https://github.com/spacemit-com/toolchain/releases/download/v${{ inputs.version }}/spacemit-toolchain-linux-glibc-x86_64-v${{ inputs.version }}.tar.xz
         path: ${{ inputs.path }}
         strip: 1

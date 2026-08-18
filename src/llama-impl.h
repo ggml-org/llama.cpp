@@ -3,6 +3,7 @@
 #include "ggml.h" // for ggml_log_level
 
 #include <string>
+#include <type_traits>
 #include <vector>
 
 #ifdef __GNUC__
@@ -40,6 +41,39 @@ struct no_init {
     no_init() = default;
 };
 
+template <typename dst_t, typename src_t>
+static inline dst_t llama_cast(src_t v) {
+    if constexpr (std::is_same_v<src_t, dst_t>) {
+        return v;
+    } else if constexpr (std::is_same_v<src_t, ggml_fp16_t> && std::is_same_v<dst_t, float>) {
+        return ggml_fp16_to_fp32(v);
+    } else if constexpr (std::is_same_v<src_t, float> && std::is_same_v<dst_t, ggml_fp16_t>) {
+        return ggml_fp32_to_fp16(v);
+    } else {
+        static_assert(std::is_same_v<dst_t, void>, "unsupported type combination");
+    }
+}
+
+static inline ggml_tensor * llama_mul_mat_hadamard(
+        ggml_context * ctx,
+        ggml_tensor * cur,
+        ggml_tensor * rot) {
+    const auto n = rot->ne[0];
+
+    ggml_tensor * res;
+
+    if (!ggml_is_contiguous(cur)) {
+        res = ggml_cont_2d(ctx, cur, n, ggml_nelements(cur)/n);
+    } else {
+        res = ggml_reshape_2d(ctx, cur, n, ggml_nelements(cur)/n);
+    }
+    res = ggml_mul_mat(ctx, rot, res);
+    ggml_mul_mat_set_hint(res, GGML_HINT_SRC0_IS_HADAMARD);
+    res = ggml_reshape_4d(ctx, res, cur->ne[0], cur->ne[1], cur->ne[2], cur->ne[3]);
+
+    return res;
+}
+
 struct time_meas {
     time_meas(int64_t & t_acc, bool disable = false);
     ~time_meas();
@@ -69,7 +103,3 @@ std::string llama_format_tensor_shape(const std::vector<int64_t> & ne);
 std::string llama_format_tensor_shape(const struct ggml_tensor * t);
 
 std::string gguf_kv_to_str(const struct gguf_context * ctx_gguf, int i);
-
-#define LLAMA_TENSOR_NAME_FATTN   "__fattn__"
-#define LLAMA_TENSOR_NAME_FGDN_AR "__fgdn_ar__"
-#define LLAMA_TENSOR_NAME_FGDN_CH "__fgdn_ch__"

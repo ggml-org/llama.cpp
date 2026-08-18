@@ -1,7 +1,10 @@
 #include "arg.h"
 #include "common.h"
 #include "download.h"
+#include "llama.h"
+#include "speculative.h"
 
+#include <limits>
 #include <string>
 #include <vector>
 #include <sstream>
@@ -10,8 +13,36 @@
 #undef NDEBUG
 #include <cassert>
 
-int main(void) {
+static void test(void) {
     common_params params;
+
+    auto assert_output_limits = [](int32_t n_batch, int32_t n_parallel, int32_t n_draft,
+                                   int32_t total, int32_t per_seq) {
+        const auto limits = common_speculative_get_output_limits(n_batch, n_parallel, n_draft);
+        assert(limits.total == total);
+        assert(limits.per_seq == per_seq);
+    };
+
+    assert_output_limits(16, 2,  3, 8, 4);
+    assert_output_limits(16, 2, -1, 2, 1);
+    assert_output_limits( 6, 2,  3, 6, 4);
+    assert_output_limits( 2, 1,  3, 2, 2);
+    assert_output_limits(
+            std::numeric_limits<int32_t>::max(),
+            std::numeric_limits<int32_t>::max(),
+            std::numeric_limits<int32_t>::max(),
+            std::numeric_limits<int32_t>::max(),
+            std::numeric_limits<int32_t>::max());
+
+    {
+        common_params base;
+        base.n_parallel = 4;
+        base.n_outputs_max_per_seq = 8;
+
+        const auto draft = common_base_params_to_speculative(base);
+        assert(draft.n_outputs_max == 4);
+        assert(draft.n_outputs_max_per_seq == 1);
+    }
 
     printf("test-arg-parser: make sure there is no duplicated arguments in any examples\n\n");
     for (int ex = 0; ex < LLAMA_EXAMPLE_COUNT; ex++) {
@@ -98,14 +129,48 @@ int main(void) {
     argv = {"binary_name", "-sm", "hello"};
     assert(false == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
 
+    {
+        common_params penalty_params;
+        assert(penalty_params.sampling.penalty_last_n == 64);
+        assert(penalty_params.sampling.dry_penalty_last_n == 64);
+
+        argv = {"binary_name", "--repeat-last-n", "-1"};
+        assert(false == common_params_parse(argv.size(), list_str_to_char(argv).data(), penalty_params, LLAMA_EXAMPLE_COMMON));
+
+        argv = {"binary_name", "--dry-penalty-last-n", "-1"};
+        assert(false == common_params_parse(argv.size(), list_str_to_char(argv).data(), penalty_params, LLAMA_EXAMPLE_COMMON));
+
+        argv = {"binary_name", "--repeat-penalty", "0"};
+        assert(false == common_params_parse(argv.size(), list_str_to_char(argv).data(), penalty_params, LLAMA_EXAMPLE_COMMON));
+
+        argv = {"binary_name", "--repeat-penalty", "-1"};
+        assert(false == common_params_parse(argv.size(), list_str_to_char(argv).data(), penalty_params, LLAMA_EXAMPLE_COMMON));
+
+        argv = {"binary_name", "--repeat-penalty", "nan"};
+        assert(false == common_params_parse(argv.size(), list_str_to_char(argv).data(), penalty_params, LLAMA_EXAMPLE_COMMON));
+
+        argv = {"binary_name", "--repeat-penalty", "inf"};
+        assert(false == common_params_parse(argv.size(), list_str_to_char(argv).data(), penalty_params, LLAMA_EXAMPLE_COMMON));
+
+        argv = {"binary_name", "--repeat-penalty", "-inf"};
+        assert(false == common_params_parse(argv.size(), list_str_to_char(argv).data(), penalty_params, LLAMA_EXAMPLE_COMMON));
+
+        const char * penalty_options[] = {"--frequency-penalty", "--presence-penalty"};
+        const char * nonfinite_values[] = {"nan", "inf", "-inf"};
+        for (const char * option : penalty_options) {
+            for (const char * value : nonfinite_values) {
+                argv = {"binary_name", option, value};
+                assert(false == common_params_parse(argv.size(), list_str_to_char(argv).data(), penalty_params, LLAMA_EXAMPLE_COMMON));
+            }
+        }
+    }
+
     // non-existence arg in specific example (--draft cannot be used outside llama-speculative)
     argv = {"binary_name", "--draft", "123"};
     assert(false == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_EMBEDDING));
 
-    // negated arg
-    argv = {"binary_name", "--no-mmap"};
+    argv = {"binary_name", "-lm", "hello"};
     assert(false == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
-
 
     printf("test-arg-parser: test valid usage\n\n");
 
@@ -131,6 +196,26 @@ int main(void) {
     argv = {"binary_name", "--spec-draft-n-max", "123"};
     assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_SPECULATIVE));
     assert(params.speculative.draft.n_max == 123);
+
+    argv = {"binary_name", "-lm", "none"};
+    assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
+    assert(params.load_mode == LLAMA_LOAD_MODE_NONE);
+
+    argv = {"binary_name", "-lm", "mmap"};
+    assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
+    assert(params.load_mode == LLAMA_LOAD_MODE_MMAP);
+
+    argv = {"binary_name", "-lm", "mlock"};
+    assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
+    assert(params.load_mode == LLAMA_LOAD_MODE_MLOCK);
+
+    argv = {"binary_name", "-lm", "mmap+mlock"};
+    assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
+    assert(params.load_mode == LLAMA_LOAD_MODE_MMAP_MLOCK);
+
+    argv = {"binary_name", "-lm", "dio"};
+    assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
+    assert(params.load_mode == LLAMA_LOAD_MODE_DIRECT_IO);
 
     // multi-value args (CSV)
     argv = {"binary_name", "--lora", "file1.gguf,\"file2,2.gguf\",\"file3\"\"3\"\".gguf\",file4\".gguf"};
@@ -158,13 +243,37 @@ int main(void) {
     assert(params.model.path == "blah.gguf");
     assert(params.cpuparams.n_threads == 1010);
 
+    setenv("LLAMA_ARG_LOAD_MODE", "blah", true);
+    argv = {"binary_name"};
+    assert(false == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
+
+    setenv("LLAMA_ARG_LOAD_MODE", "mmap", true);
+    argv = {"binary_name"};
+    assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
+    assert(params.load_mode == LLAMA_LOAD_MODE_MMAP);
+
+    setenv("LLAMA_ARG_LOAD_MODE", "mlock", true);
+    argv = {"binary_name"};
+    assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
+    assert(params.load_mode == LLAMA_LOAD_MODE_MLOCK);
+
+    setenv("LLAMA_ARG_LOAD_MODE", "mmap+mlock", true);
+    argv = {"binary_name"};
+    assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
+    assert(params.load_mode == LLAMA_LOAD_MODE_MMAP_MLOCK);
+
+    setenv("LLAMA_ARG_LOAD_MODE", "dio", true);
+    argv = {"binary_name"};
+    assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
+    assert(params.load_mode == LLAMA_LOAD_MODE_DIRECT_IO);
+
     printf("test-arg-parser: test negated environment variables\n\n");
 
-    setenv("LLAMA_ARG_MMAP", "0", true);
+    setenv("LLAMA_ARG_LOAD_MODE", "none", true);
     setenv("LLAMA_ARG_NO_PERF", "1", true); // legacy format
     argv = {"binary_name"};
     assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
-    assert(params.use_mmap == false);
+    assert(params.load_mode == LLAMA_LOAD_MODE_NONE);
     assert(params.no_perf == true);
 
     printf("test-arg-parser: test environment variables being overwritten\n\n");
@@ -209,4 +318,14 @@ int main(void) {
     }
 
     printf("test-arg-parser: all tests OK\n\n");
+}
+
+int main(void) {
+    try {
+        test();
+    } catch (std::exception & e) {
+        fprintf(stderr, "test-arg-parser: exception: %s\n", e.what());
+        return 1;
+    }
+    return 0;
 }

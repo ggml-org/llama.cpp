@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import json
 import re
 
-from typing import Callable, TYPE_CHECKING
+from typing import Any, Callable, Iterable, TYPE_CHECKING
 
 import torch
 
@@ -154,7 +155,7 @@ class MimoV2Model(TextModel):
         self.gguf_writer.add_expert_count(self.hparams["n_routed_experts"])
         self.gguf_writer.add_expert_feed_forward_length(self.hparams["moe_intermediate_size"])
 
-        rope_dim = int(self.hparams["head_dim"] * self.hparams["partial_rotary_factor"])
+        rope_dim = int(self.hparams["head_dim"] * self.rope_parameters["partial_rotary_factor"])
         self.gguf_writer.add_rope_dimension_count(rope_dim)
 
         self.gguf_writer.add_layer_norm_rms_eps(self.hparams.get("layernorm_epsilon", 1e-5))
@@ -229,7 +230,13 @@ class MimoV2Model(TextModel):
 
 
 @ModelBase.register("MiMoV2ForCausalLM")
-class MiMoV2VisionModel(MmprojModel):
+class MiMoV2VisionAudioModel(MmprojModel):
+    has_audio_encoder = True
+
+    _audio_tok_hparams: dict[str, Any] | None = None
+    _rvq_codebook_sizes: list[int] | None = None
+    _code_embd: dict[int, Tensor] | None = None
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         assert self.hparams_vision is not None
@@ -253,10 +260,22 @@ class MiMoV2VisionModel(MmprojModel):
         self.visual_token_window_size = int(hp.get("visual_token_window_size", -1))
         self.use_sink = bool(hp.get("use_sink", False))
 
+    def get_audio_config(self) -> dict[str, Any] | None:
+        if self._audio_tok_hparams is None:
+            path = self.dir_model / "audio_tokenizer" / "config.json"
+            with open(path, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+            # aliases so MmprojModel.find_aparam() / n_block_keys can resolve them
+            cfg["hidden_size"] = cfg["d_model"]
+            cfg["intermediate_size"] = cfg["encoder_ffn_dim"]
+            cfg["num_attention_heads"] = cfg["encoder_attention_heads"]
+            self._audio_tok_hparams = cfg
+        return self._audio_tok_hparams
+
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
 
-        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.MIMOVL)
+        self.gguf_writer.add_clip_vision_projector_type(gguf.VisionProjectorType.MIMOVL)
         self.gguf_writer.add_vision_use_silu(True)
         self.gguf_writer.add_vision_head_count_kv(self.num_kv_heads)
         self.gguf_writer.add_vision_spatial_merge_size(self.spatial_merge_size)
@@ -266,19 +285,45 @@ class MiMoV2VisionModel(MmprojModel):
         self.gguf_writer.add_vision_min_pixels(int(self.preprocessor_config["min_pixels"]))
         self.gguf_writer.add_vision_max_pixels(int(self.preprocessor_config["max_pixels"]))
 
+        assert self.hparams_audio is not None
+        self.gguf_writer.add_clip_audio_projector_type(gguf.VisionProjectorType.MIMO_AUDIO)
+        self.gguf_writer.add_audio_num_mel_bins(self.hparams_audio["n_mels"])
+        self.gguf_writer.add_audio_attention_layernorm_eps(self.hparams_audio.get("layer_norm_eps", 1e-5))
+
+        assert self._rvq_codebook_sizes is not None
+        self.gguf_writer.add_audio_rvq_num_quantizers(len(self._rvq_codebook_sizes))
+        self.gguf_writer.add_audio_rvq_codebook_size(self._rvq_codebook_sizes)
+
+        n_layer = self.hparams_audio["encoder_layers"]
+        swa_per_block = self.hparams_audio.get("swa_per_block", 1)
+        if self.hparams_audio.get("hybrid_attention") and swa_per_block > 1:
+            wa_pattern = [0 if i % swa_per_block < swa_per_block - 1 else -1 for i in range(n_layer)]
+        else:
+            wa_pattern = [-1] * n_layer
+        self.gguf_writer.add_audio_wa_pattern_mode(wa_pattern)
+        self.gguf_writer.add_audio_window_size(int(self.hparams_audio["encoder_attn_window_size"][0]))
+
+        audio_cfg = self.global_config["audio_config"]
+        self.gguf_writer.add_audio_local_block_count(int(audio_cfg["input_local_layers"]))
+        self.gguf_writer.add_audio_local_group_size(int(audio_cfg["group_size"]))
+
     def tensor_force_quant(self, name, new_name, bid, n_dims):
-        # Sinks must be F32: any sink-style softmax/mask add in ggml requires
-        # F32, and we fold sinks into a host-built F32 mask at encode time.
-        if new_name.endswith(".attn_sinks"):
+        # for audio encoder: keep codebook in F32
+        if new_name in (
+            gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.A_ENC_RVQ_CODEBOOK] + ".weight",
+            gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.A_MM_CODE_EMBD] + ".weight",
+        ):
+            return gguf.GGMLQuantizationType.F32
+        if ("encoder.conv" in name or "encoder.down_sample_layer" in name) and name.endswith(".weight"):
             return gguf.GGMLQuantizationType.F32
         return super().tensor_force_quant(name, new_name, bid, n_dims)
 
     @classmethod
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
         name, _ = item
-        if not name.startswith("visual."):
-            return None
-        return super().filter_tensors(item)
+        if name.startswith("visual.") or name.startswith("speech_embeddings.") or name.startswith("audio_encoder."):
+            return super().filter_tensors(item)
+        return None
 
     def modify_tensors(self, data_torch, name, bid):
         # Conv3D patch embed: split along the temporal axis (kt=2) into two Conv2D
@@ -292,4 +337,64 @@ class MiMoV2VisionModel(MmprojModel):
             yield (embd_name + ".weight.1", data_torch[:, :, 1, ...])
             return
 
+        if m := re.match(r"^speech_embeddings\.(\d+)\.weight$", name):
+            if self._code_embd is None:
+                self._code_embd = {}
+            self._code_embd[int(m.group(1))] = data_torch
+
+            n_channels = int(self.global_config["audio_config"]["audio_channels"])
+            if len(self._code_embd) < n_channels:
+                return
+            merged = torch.stack([self._code_embd.pop(i) for i in range(n_channels)], dim=0)
+            yield (self.format_tensor_name(gguf.MODEL_TENSOR.A_MM_CODE_EMBD), merged)
+            return
+
+        if "conv1.bias" in name or "conv2.bias" in name:
+            # transpose conv1/conv2 bias so it broadcasts against [n_frames, C_out, 1]
+            data_torch = data_torch.unsqueeze(-1)
+
+        if name == "audio_encoder.projection.mlp.0.weight":
+            yield (self.format_tensor_name(gguf.MODEL_TENSOR.A_MMPROJ, 1), data_torch)
+            return
+        if name == "audio_encoder.projection.mlp.2.weight":
+            yield (self.format_tensor_name(gguf.MODEL_TENSOR.A_MMPROJ, 2), data_torch)
+            return
+
         yield from super().modify_tensors(data_torch, name, bid)
+
+    def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
+        # note: audio encoder is in its own subdir "audio_tokenizer"
+        from safetensors.torch import load_file
+
+        tok_dir = self.dir_model / "audio_tokenizer"
+        state_dict = load_file(tok_dir / "model.safetensors")
+
+        codebook_re = re.compile(r"^encoder\.quantizer\.vq\.layers\.(\d+)\._codebook\.embed$")
+        codebooks: dict[int, Tensor] = {}
+
+        # EMA/training-only RVQ buffers - not needed for inference (nearest-codebook
+        # lookup only reads "_codebook.embed")
+        skip_suffixes = (
+            "_codebook.cluster_size",
+            "_codebook.embed_avg",
+            "_codebook.inited",
+        )
+        for name, tensor in state_dict.items():
+            if name.endswith(skip_suffixes):
+                continue
+            if m := codebook_re.match(name):
+                codebooks[int(m.group(1))] = tensor
+                continue
+            yield name, tensor
+
+        # gather codebooks and merge into 3D tensor, similar to MoE MLP tensors
+        n_q = len(codebooks)
+        ordered = [codebooks[i] for i in range(n_q)]
+        self._rvq_codebook_sizes = [int(cb.shape[0]) for cb in ordered]
+        max_bins = max(self._rvq_codebook_sizes)
+        dim = ordered[0].shape[1]
+        merged = ordered[0].new_zeros(n_q, max_bins, dim)
+        for i, cb in enumerate(ordered):
+            merged[i, : cb.shape[0], :] = cb
+
+        yield (self.format_tensor_name(gguf.MODEL_TENSOR.A_ENC_RVQ_CODEBOOK), merged)

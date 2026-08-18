@@ -163,3 +163,95 @@ __kernel void kernel_gemv_moe_mxfp4_f32_ns(
     }
 
 }
+
+__attribute__((qcom_reqd_sub_group_size("half")))
+__kernel void kernel_gemv_moe_mxfp4_f32_ns_wimg(
+    __read_only image1d_buffer_t src0_q,
+    __global uchar * src0_e,
+    __read_only image1d_buffer_t src1,
+    __global uint * src2,
+    __global float * dst,
+    ulong         offsetd,
+    int           ne00,
+    int           ne01,
+    int           ne11
+) {
+    uint i01  = get_global_id(0);
+    uint i20  = get_global_id(2);
+    uint sgid = get_local_id(1);
+    uint slid = get_sub_group_local_id();
+
+    if (i01 >= ne01) {
+        return;
+    }
+
+    uint i11 = i20 % ne11;
+
+    uint expert_id = src2[i20];
+    uint expert_offset = expert_id * ne00 * ne01 / 32;
+
+    __private float sum = 0.0f;
+
+    for (uint ib00 = sgid; ib00 < (ne00 / QK_MXFP4); ib00 += N_SIMDGROUP) {
+
+        uint4 regQ;
+        uint block_offset = expert_offset * 4 + ib00 * ne01 * 4 + i01;
+
+        regQ.s0 = read_imageui(src0_q, (int)(block_offset)).x;
+        regQ.s1 = read_imageui(src0_q, (int)(block_offset + ne01)).x;
+        regQ.s2 = read_imageui(src0_q, (int)(block_offset + ne01 * 2)).x;
+        regQ.s3 = read_imageui(src0_q, (int)(block_offset + ne01 * 3)).x;
+
+        uint offset = i11 * ne00 / 4 + ib00 * 8;
+
+        half8 fp16x8 = mxfp4_to_fp16_packed8(as_ushort2(regQ.s0));
+
+        float4 shared_y4;
+        shared_y4 = read_imagef(src1, (offset + 0));
+        float4 acc = shared_y4 * convert_float4(fp16x8.lo);
+
+        shared_y4 = read_imagef(src1, (offset + 1));
+        acc += shared_y4 * convert_float4(fp16x8.hi);
+
+        fp16x8 = mxfp4_to_fp16_packed8(as_ushort2(regQ.s1));
+
+        shared_y4 = read_imagef(src1, (offset + 2));
+        acc += shared_y4 * convert_float4(fp16x8.lo);
+
+        shared_y4 = read_imagef(src1, (offset + 3));
+        acc += shared_y4 * convert_float4(fp16x8.hi);
+
+        fp16x8 = mxfp4_to_fp16_packed8(as_ushort2(regQ.s2));
+
+        shared_y4 = read_imagef(src1, (offset + 4));
+        acc += shared_y4 * convert_float4(fp16x8.lo);
+
+        shared_y4 = read_imagef(src1, (offset + 5));
+        acc += shared_y4 * convert_float4(fp16x8.hi);
+
+        fp16x8 = mxfp4_to_fp16_packed8(as_ushort2(regQ.s3));
+
+        shared_y4 = read_imagef(src1, (offset + 6));
+        acc += shared_y4 * convert_float4(fp16x8.lo);
+
+        shared_y4 = read_imagef(src1, (offset + 7));
+        acc += shared_y4 * convert_float4(fp16x8.hi);
+
+        uchar regE = src0_e[ib00 * ne01 + i01 + expert_offset];
+        sum += e8m0_to_fp32(regE) * ((acc.s0 + acc.s1) + (acc.s2 + acc.s3));
+    }
+
+    __local float reduceLM[SIMDGROUP_WIDTH * (N_SIMDGROUP - 1)];
+    if (sgid == 1) reduceLM[SIMDGROUP_WIDTH * 0 + slid] = sum;
+    if (sgid == 2) reduceLM[SIMDGROUP_WIDTH * 1 + slid] = sum;
+    if (sgid == 3) reduceLM[SIMDGROUP_WIDTH * 2 + slid] = sum;
+    barrier(CLK_LOCAL_MEM_FENCE);
+    if (sgid == 0) sum += reduceLM[SIMDGROUP_WIDTH * 0 + slid];
+    if (sgid == 0) sum += reduceLM[SIMDGROUP_WIDTH * 1 + slid];
+    if (sgid == 0) sum += reduceLM[SIMDGROUP_WIDTH * 2 + slid];
+
+    if (sgid == 0) {
+        dst = dst + (offsetd >> 2);
+        dst[i01 + i20 * ne01] = sum;
+    }
+}

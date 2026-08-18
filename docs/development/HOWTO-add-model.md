@@ -25,7 +25,7 @@ The convert script reads the model configuration, tokenizer, tensor names+data a
 
 The required steps to implement for an HF model are:
 
-1. Define the model `ModelBase.register` annotation in a new `TextModel` or `MmprojModel` subclass, example:
+1. Define the model `ModelBase.register` annotation in a new `TextModel` or `MmprojModel` subclass in the [conversion](/conversion) folder, example:
 
 ```python
 @ModelBase.register("MyModelForCausalLM")
@@ -44,6 +44,8 @@ class MyModel(MmprojModel):
 2. Define the layout of the GGUF tensors in [constants.py](/gguf-py/gguf/constants.py)
 
 Add an enum entry in `MODEL_ARCH`, the model human friendly name in `MODEL_ARCH_NAMES` and the GGUF tensor names in `MODEL_TENSORS`.
+
+NOTE: Pick the GGUF arch string (and the matching `src/models/<name>.cpp` filename, see section 3) carefully up front, following existing naming conventions. Once GGUF files are published under a given arch string, renaming it later breaks the community's existing files, so this is not something to leave for cleanup in a follow-up PR.
 
 Example for `falcon` model:
 ```python
@@ -98,18 +100,20 @@ The model params and tensors layout must be defined in `llama.cpp` source files:
 1. Define a new `llm_arch` enum value in `src/llama-arch.h`.
 2. In `src/llama-arch.cpp`:
     - Add the architecture name to the `LLM_ARCH_NAMES` map.
-    - Add the list of model tensors to `llm_get_tensor_names` (you may also need to update `LLM_TENSOR_NAMES`)
+    - You may also need to update `LLM_KV_NAMES`, `LLM_TENSOR_NAMES` and `LLM_TENSOR_INFOS`
 3. Add any non-standard metadata loading in the `llama_model_loader` constructor in `src/llama-model-loader.cpp`.
 4. If the model has a RoPE operation, add a case for the architecture in `llama_model_rope_type` function in `src/llama-model.cpp`.
+5. Check for other places that switch/iterate over every `llm_arch` value, e.g. `src/llama-model-saver.cpp` and any mandatory-hparam lists (such as which archs require MoE metadata). Grep for `LLM_ARCH_` usages to find them. Missing one of these is a common cause of CI test failures (e.g. `test-llama-archs`) after adding a new arch.
 
 NOTE: The dimensions in `ggml` are typically in the reverse order of the `pytorch` dimensions.
 
 ### 3. Build the GGML graph implementation
 
-This is the funniest part, you have to provide the inference graph implementation of the new model architecture in `src/llama-model.cpp`.
-Create a new struct that inherits from `llm_graph_context` and implement the graph-building logic in its constructor.
-Have a look at existing implementations like `llm_build_llama`, `llm_build_dbrx` or `llm_build_bert`.
-Then, in the `llama_model::build_graph` method, add a case for your architecture to instantiate your new graph-building struct.
+This is the funniest part, you have to provide the inference graph implementation of the new model architecture in `src/llama-model.cpp`:
+1. Create a new struct that inherits from `llama_model_base`.
+2. Implement the graph-building logic in its `build_arch_graph` method.
+3. The `build_arch_graph` method should return a constructed graph (inherited from `llm_graph_context`). Have a look at existing implementations like `llama_model_llama`, `llama_model_dbrx` or `llama_model_bert`.
+4. Then, in the `llama_model_mapping` function, add a case for your architecture to instantiate your new graph-building struct.
 
 Some `ggml` backends do not support all operations. Backend implementations can be added in a separate PR.
 
@@ -129,8 +133,19 @@ Note:
 - To debug the multimodal preprocessor and encoder, you can use [llama-mtmd-debug](tools/mtmd/debug/mtmd-debug.cpp).
 - Adding a model-specific API or CLI is an anti-pattern in `libmtmd`. The goal of `libmtmd` is to provide an easy-to-use, model-agnostic library for multimodal pipeline.
 - In most cases, `llama-mtmd-cli` should not be modified. If a model requires a specific prompt, either let the user provide it or bake it into the Jinja chat template.
+- For audio generation models, see `tools/mtmd/README-dev.md`
 
 ## Tips and tricks
+
+### Prefer conversion-time tensor modifications over graph-time ones
+
+If the model contains constant modifications of tensors in the graph (for example, `norm(1 + weight)`) or performs tensor permutations/chunking, perform the modifications during conversion rather than in the graph code. This keeps the inference graph simpler and avoids extra runtime ops.
+
+Examples:
+- Gemma 3 folds the `1 +` of its `norm(1 + weight)` normalization into the weights at conversion time, so the graph just does a plain RMS norm.
+- Qwen3-Next applies its tensor permutation during conversion (in `modify_tensors`), so the graph can consume the already-permuted weights directly.
+
+Exception: a plain `weight * scale` with a constant scale is usually better left to inference time rather than folded into the weight at conversion. The scale conceptually applies to the activation, not the weight, so folding it into the weight can hurt numerical stability, and it shifts the weight's value range in a way that can make quantization worse. In this case, write the scale to GGUF as its own metadata key (e.g. `%s.attention.output_scale`, `%s.attention.value_scale`, `%s.embedding_scale`) and apply it in the graph, instead of pre-multiplying the weight tensor during conversion.
 
 ### Working with ggml_rope_ext
 

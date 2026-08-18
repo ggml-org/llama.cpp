@@ -16,22 +16,12 @@ Pull requests (PRs):
 - New branch names are prefixed with "gg/"
 - Before opening a pull request, ask the user to confirm the description
 - When creating a pull request, look for the repository's PR template and follow it
-- For the AI usage disclosure section, write "YES. llama.cpp + pi + [MODEL]"
+- For the AI usage disclosure section, write "YES. pi:llama.cpp/[MODEL]"
 - Ask the user to tell you what model was used and write it in place of [MODEL]
 - Always create the pull requests in draft mode
 
 Commits:
-- On every commit that you make, include a "Assisted-by: llama.cpp:local pi" tag
+- On every commit that you make, include a "Assisted-by: pi:llama.cpp/[MODEL]" tag
 - Do not explicitly set the git author in commits - rely on the default git config
 - Always use `--no-gpg-sign` when committing
 - Never `git push` without explicit confirmation from the user
-
-Resources (read on demand):
-- [CONTRIBUTING.md](CONTRIBUTING.md)
-- [Build documentation](docs/build.md)
-- [Server usage documentation](tools/server/README.md)
-- [Server development documentation](tools/server/README-dev.md)
-- [PEG parser](docs/development/parsing.md)
-- [Auto parser](docs/autoparser.md)
-- [Jinja engine](common/jinja/README.md)
-- [PR template](.github/pull_request_template.md)

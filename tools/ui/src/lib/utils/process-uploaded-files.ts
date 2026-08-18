@@ -1,12 +1,13 @@
+import { heicFileToJpegDataURL, isHeicMimeType } from './heic-to-jpeg';
+import { convertPDFToText } from './pdf-processing';
 import { isSvgMimeType, svgBase64UrlToPngDataURL } from './svg-to-png';
 import { isWebpMimeType, webpBase64UrlToPngDataURL } from './webp-to-png';
-import { FileTypeCategory } from '$lib/enums';
 import { SETTINGS_KEYS } from '$lib/constants';
+import { FileTypeCategory } from '$lib/enums';
 import { modelsStore } from '$lib/stores/models.svelte';
 import { settingsStore } from '$lib/stores/settings.svelte';
-import { toast } from 'svelte-sonner';
 import { getFileTypeCategory } from '$lib/utils';
-import { convertPDFToText } from './pdf-processing';
+import { toast } from 'svelte-sonner';
 
 /**
  * Read a file as a data URL (base64 encoded)
@@ -16,6 +17,7 @@ import { convertPDFToText } from './pdf-processing';
 function readFileAsDataURL(file: File): Promise<string> {
 	return new Promise((resolve, reject) => {
 		const reader = new FileReader();
+
 		reader.onload = () => resolve(reader.result as string);
 		reader.onerror = () => reject(reader.error);
 		reader.readAsDataURL(file);
@@ -30,6 +32,7 @@ function readFileAsDataURL(file: File): Promise<string> {
 function readFileAsUTF8(file: File): Promise<string> {
 	return new Promise((resolve, reject) => {
 		const reader = new FileReader();
+
 		reader.onload = () => resolve(reader.result as string);
 		reader.onerror = () => reject(reader.error);
 		reader.readAsText(file);
@@ -57,18 +60,18 @@ export async function processFilesToChatUploaded(
 	for (const file of files) {
 		const id = Date.now().toString() + Math.random().toString(36).substr(2, 9);
 		const base: ChatUploadedFile = {
+			file,
 			id,
 			name: file.name,
 			size: file.size,
-			type: file.type,
-			file
+			type: file.type
 		};
 
 		try {
 			if (getFileTypeCategory(file.type) === FileTypeCategory.IMAGE) {
 				let preview = await readFileAsDataURL(file);
 
-				// Normalize SVG and WebP to PNG in previews
+				// Normalize SVG and WebP to PNG, and HEIC to compressed JPEG, in previews
 				if (isSvgMimeType(file.type)) {
 					try {
 						preview = await svgBase64UrlToPngDataURL(preview);
@@ -81,6 +84,14 @@ export async function processFilesToChatUploaded(
 					} catch (err) {
 						console.error('Failed to convert WebP to PNG:', err);
 					}
+				} else if (isHeicMimeType(file.type)) {
+					try {
+						preview = await heicFileToJpegDataURL(file);
+					} catch (err) {
+						console.error('Failed to convert HEIC to PNG:', err);
+
+						continue;
+					}
 				}
 
 				results.push({ ...base, preview });
@@ -88,6 +99,7 @@ export async function processFilesToChatUploaded(
 				// Extract text content from PDF for preview
 				try {
 					const textContent = await convertPDFToText(file);
+
 					results.push({ ...base, textContent });
 				} catch (err) {
 					console.warn('Failed to extract text from PDF, adding without content:', err);
@@ -99,9 +111,9 @@ export async function processFilesToChatUploaded(
 					? modelsStore.modelSupportsVision(activeModelId)
 					: false;
 				const currentConfig = settingsStore.config;
+
 				if (hasVisionSupport && !currentConfig.pdfAsImage) {
 					toast.info(`You can enable parsing PDF as images with vision models.`, {
-						duration: 8000,
 						action: {
 							label: 'Enable PDF as Images',
 							onClick: () => {
@@ -110,21 +122,25 @@ export async function processFilesToChatUploaded(
 									duration: 3000
 								});
 							}
-						}
+						},
+						duration: 8000
 					});
 				}
 			} else if (getFileTypeCategory(file.type) === FileTypeCategory.AUDIO) {
 				// Generate preview URL for audio files
 				const preview = await readFileAsDataURL(file);
+
 				results.push({ ...base, preview });
 			} else if (getFileTypeCategory(file.type) === FileTypeCategory.VIDEO) {
 				// Generate preview URL for video files
 				const preview = await readFileAsDataURL(file);
+
 				results.push({ ...base, preview });
 			} else {
 				// Fallback: treat unknown files as text
 				try {
 					const textContent = await readFileAsUTF8(file);
+
 					results.push({ ...base, textContent });
 				} catch (err) {
 					console.warn('Failed to read file as text, adding without content:', err);

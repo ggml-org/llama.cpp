@@ -11,7 +11,7 @@
 		tooltipLabel?: string;
 	}
 
-	let { class: className = '', icon: IconComponent, value, tooltipLabel }: Props = $props();
+	let { class: className = '', icon: IconComponent, tooltipLabel, value }: Props = $props();
 
 	function handleClick() {
 		void copyToClipboard(String(value));
@@ -21,13 +21,16 @@
 {#if tooltipLabel}
 	<Tooltip.Root>
 		<Tooltip.Trigger>
-			<BadgeInfo class={className} onclick={handleClick}>
-				{#snippet icon()}
-					<IconComponent class="h-3 w-3" />
-				{/snippet}
+			<!-- prevent another nested button element -->
+			{#snippet child({ props })}
+				<BadgeInfo {...props} class={className} onclick={handleClick}>
+					{#snippet icon()}
+						<IconComponent class="h-3 w-3" />
+					{/snippet}
 
-				{value}
-			</BadgeInfo>
+					{value}
+				</BadgeInfo>
+			{/snippet}
 		</Tooltip.Trigger>
 		<Tooltip.Content>
 			<p>{tooltipLabel}</p>

@@ -3,6 +3,7 @@
   glibc,
   config,
   stdenv,
+  stdenvNoCC,
   runCommand,
   cmake,
   ninja,
@@ -19,6 +20,8 @@
   openssl,
   shaderc,
   spirv-headers,
+  nodejs,
+  importNpmLock,
   useBlas ?
     builtins.all (x: !x) [
       useCuda
@@ -130,7 +133,31 @@ effectiveStdenv.mkDerivation (finalAttrs: {
     src = lib.cleanSource ../../.;
   };
 
-  postPatch = ''
+  # Builds the webui locally, taking care not to require updating any sha256 hash.
+  webui = stdenvNoCC.mkDerivation {
+    pname = "webui";
+    version = llamaVersion;
+    src = lib.cleanSource ../../tools/ui;
+
+    nativeBuildInputs = [
+      nodejs
+      importNpmLock.linkNodeModulesHook
+    ];
+
+    # no sha256 required when using buildNodeModules
+    npmDeps = importNpmLock.buildNodeModules {
+      npmRoot = ../../tools/ui;
+      inherit nodejs;
+    };
+
+    installPhase = ''
+      LLAMA_UI_OUT_DIR=$out npm run build --offline
+    '';
+  };
+
+  postPatch = lib.optionalString useWebUi ''
+    cp -r ${finalAttrs.webui} tools/ui/dist
+    chmod -R u+w tools/ui/dist
   '';
 
   # With PR#6015 https://github.com/ggml-org/llama.cpp/pull/6015,

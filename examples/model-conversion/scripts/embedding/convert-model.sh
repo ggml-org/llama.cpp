@@ -31,6 +31,7 @@ python ../../convert_hf_to_gguf.py --verbose \
     ${EMBEDDING_MODEL_PATH} \
     --outfile ${CONVERTED_MODEL} \
     --outtype ${TYPE} \
+    --model-name ${MODEL_NAME} \
     ${SENTENCE_TRANSFORMERS}
 
 echo ""

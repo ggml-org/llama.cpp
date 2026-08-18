@@ -1,7 +1,7 @@
-import { normalizeFloatingPoint } from '$lib/utils';
 import { SETTINGS_KEYS, SYNCABLE_PARAMETERS } from '$lib/constants';
-import type { ParameterRecord, ParameterInfo, ParameterValue } from '$lib/types';
-import { SyncableParameterType, ParameterSource } from '$lib/enums';
+import { ParameterSource, SyncableParameterType } from '$lib/enums';
+import type { ParameterInfo, ParameterRecord, ParameterValue } from '$lib/types';
+import { normalizeFloatingPoint } from '$lib/utils';
 
 export class ParameterSyncService {
 	/**
@@ -29,12 +29,10 @@ export class ParameterSyncService {
 	 * Converts samplers array to semicolon-delimited string for UI display.
 	 *
 	 * @param serverParams - Raw generation settings from server `/props` endpoint
-	 * @param uiSettings - Optional UI-specific settings from server
 	 * @returns Record of extracted parameter key-value pairs with normalized precision
 	 */
 	static extractServerDefaults(
-		serverParams: ApiLlamaCppServerProps['default_generation_settings']['params'] | null,
-		uiSettings?: Record<string, string | number | boolean>
+		serverParams: ApiLlamaCppServerProps['default_generation_settings']['params'] | null
 	): ParameterRecord {
 		const extracted: ParameterRecord = {};
 
@@ -44,6 +42,7 @@ export class ParameterSyncService {
 					const value = (serverParams as unknown as Record<string, ParameterValue>)[
 						param.serverKey
 					];
+
 					if (value !== undefined) {
 						// Apply precision rounding to avoid JavaScript floating-point issues
 						extracted[param.key] = this.roundFloatingPoint(value);
@@ -54,18 +53,6 @@ export class ParameterSyncService {
 			// Handle samplers array conversion to string
 			if (serverParams.samplers && Array.isArray(serverParams.samplers)) {
 				extracted[SETTINGS_KEYS.SAMPLERS] = serverParams.samplers.join(';');
-			}
-		}
-
-		if (uiSettings) {
-			for (const param of SYNCABLE_PARAMETERS) {
-				if (param.canSync && param.serverKey in uiSettings) {
-					const value = uiSettings[param.serverKey];
-
-					if (value !== undefined) {
-						extracted[param.key] = this.roundFloatingPoint(value);
-					}
-				}
 			}
 		}
 
@@ -134,15 +121,14 @@ export class ParameterSyncService {
 	): ParameterInfo {
 		const hasPropsDefault = propsDefaults[key] !== undefined;
 		const isUserOverride = userOverrides.has(key);
-
 		// Simple logic: either using default (from props) or custom (user override)
 		const source = isUserOverride ? ParameterSource.CUSTOM : ParameterSource.DEFAULT;
 
 		return {
-			value: currentValue,
-			source,
 			serverDefault: hasPropsDefault ? propsDefaults[key] : undefined, // Keep same field name for compatibility
-			userOverride: isUserOverride ? currentValue : undefined
+			source,
+			userOverride: isUserOverride ? currentValue : undefined,
+			value: currentValue
 		};
 	}
 
@@ -174,6 +160,7 @@ export class ParameterSyncService {
 	 */
 	static validateServerParameter(key: string, value: ParameterValue): boolean {
 		const param = SYNCABLE_PARAMETERS.find((p) => p.key === key);
+
 		if (!param) return false;
 
 		switch (param.type) {
@@ -221,8 +208,8 @@ export class ParameterSyncService {
 			if (serverValue !== undefined) {
 				diff[key] = {
 					current: currentValue,
-					server: serverValue,
-					differs: currentValue !== serverValue
+					differs: currentValue !== serverValue,
+					server: serverValue
 				};
 			}
 		}

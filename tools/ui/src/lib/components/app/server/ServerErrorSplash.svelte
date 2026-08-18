@@ -1,16 +1,14 @@
 <script lang="ts">
-	import { base } from '$app/paths';
-	import { AlertTriangle, RefreshCw, Key, CheckCircle, XCircle } from '@lucide/svelte';
+	import { AlertTriangle, CheckCircle, Key, RefreshCw, XCircle } from '@lucide/svelte';
 	import { goto } from '$app/navigation';
+	import { base } from '$app/paths';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import Label from '$lib/components/ui/label/label.svelte';
-	import { serverStore, serverLoading } from '$lib/stores/server.svelte';
-	import { config, settingsStore } from '$lib/stores/settings.svelte';
-	import { SETTINGS_KEYS } from '$lib/constants';
-	import { ROUTES } from '$lib/constants/routes';
-	import { fade, fly, scale } from 'svelte/transition';
+	import { HEADERS, ICON_CLASS_DEFAULT, ROUTES, SETTINGS_KEYS } from '$lib/constants';
 	import { KeyboardKey } from '$lib/enums';
+	import { serverStore, settingsStore } from '$lib/stores';
+	import { fade, fly, scale } from 'svelte/transition';
 
 	interface Props {
 		class?: string;
@@ -28,7 +26,7 @@
 		showTroubleshooting = false
 	}: Props = $props();
 
-	let isServerLoading = $derived(serverLoading());
+	let isServerLoading = $derived(serverStore.loading);
 	let isAccessDeniedError = $derived(
 		error.toLowerCase().includes('access denied') ||
 			error.toLowerCase().includes('invalid api key') ||
@@ -53,7 +51,8 @@
 	function handleShowApiKeyInput() {
 		showApiKeyInput = true;
 		// Pre-fill with current API key if it exists
-		const currentConfig = config();
+		const currentConfig = settingsStore.config;
+
 		apiKeyInput = currentConfig.apiKey?.toString() || '';
 	}
 
@@ -71,7 +70,7 @@
 			const response = await fetch(`${base}/props`, {
 				headers: {
 					'Content-Type': 'application/json',
-					Authorization: `Bearer ${apiKeyInput.trim()}`
+					[HEADERS.AUTHORIZATION]: `${HEADERS.BEARER}${apiKeyInput.trim()}`
 				}
 			});
 
@@ -143,22 +142,24 @@
 		</div>
 
 		{#if isAccessDeniedError && !showApiKeyInput}
-			<div in:fly={{ y: 10, duration: 300, delay: 200 }} class="mb-4">
+			<div in:fly={{ delay: 200, duration: 300, y: 10 }} class="mb-4">
 				<Button onclick={handleShowApiKeyInput} variant="outline" class="w-full">
-					<Key class="h-4 w-4" />
+					<Key class={ICON_CLASS_DEFAULT} />
 					Enter API Key
 				</Button>
 			</div>
 		{/if}
 
 		{#if showApiKeyInput}
-			<div in:fly={{ y: 10, duration: 300, delay: 200 }} class="mb-4 space-y-3 text-left">
+			<div in:fly={{ delay: 200, duration: 300, y: 10 }} class="mb-4 space-y-3 text-left">
 				<div class="space-y-2">
 					<Label for="api-key-input" class="text-sm font-medium">API Key</Label>
 
 					<div class="relative">
 						<Input
 							id="api-key-input"
+							type="password"
+							autocomplete="new-password"
 							placeholder="Enter your API key..."
 							bind:value={apiKeyInput}
 							onkeydown={handleApiKeyKeydown}
@@ -171,31 +172,31 @@
 						/>
 						{#if apiKeyState === 'validating'}
 							<div class="absolute top-1/2 right-3 -translate-y-1/2">
-								<RefreshCw class="h-4 w-4 animate-spin text-muted-foreground" />
+								<RefreshCw class="{ICON_CLASS_DEFAULT} animate-spin text-muted-foreground" />
 							</div>
 						{:else if apiKeyState === 'success'}
 							<div
 								class="absolute top-1/2 right-3 -translate-y-1/2"
 								in:scale={{ duration: 200, start: 0.8 }}
 							>
-								<CheckCircle class="h-4 w-4 text-green-500" />
+								<CheckCircle class="{ICON_CLASS_DEFAULT} text-green-500" />
 							</div>
 						{:else if apiKeyState === 'error'}
 							<div
 								class="absolute top-1/2 right-3 -translate-y-1/2"
 								in:scale={{ duration: 200, start: 0.8 }}
 							>
-								<XCircle class="h-4 w-4 text-destructive" />
+								<XCircle class="{ICON_CLASS_DEFAULT} text-destructive" />
 							</div>
 						{/if}
 					</div>
 					{#if apiKeyError}
-						<p class="text-sm text-destructive" in:fly={{ y: -10, duration: 200 }}>
+						<p class="text-sm text-destructive" in:fly={{ duration: 200, y: -10 }}>
 							{apiKeyError}
 						</p>
 					{/if}
 					{#if apiKeyState === 'success'}
-						<p class="text-sm text-green-600" in:fly={{ y: -10, duration: 200 }}>
+						<p class="text-sm text-green-600" in:fly={{ duration: 200, y: -10 }}>
 							✓ API key validated successfully! Connecting...
 						</p>
 					{/if}
@@ -209,7 +210,7 @@
 						class="flex-1"
 					>
 						{#if apiKeyState === 'validating'}
-							<RefreshCw class="h-4 w-4 animate-spin" />
+							<RefreshCw class="{ICON_CLASS_DEFAULT} animate-spin" />
 							Validating...
 						{:else if apiKeyState === 'success'}
 							Success!
@@ -234,14 +235,14 @@
 		{/if}
 
 		{#if showRetry}
-			<div in:fly={{ y: 10, duration: 300, delay: 200 }}>
+			<div in:fly={{ delay: 200, duration: 300, y: 10 }}>
 				<Button onclick={handleRetryConnection} disabled={isServerLoading} class="w-full">
 					{#if isServerLoading}
-						<RefreshCw class="h-4 w-4 animate-spin" />
+						<RefreshCw class="{ICON_CLASS_DEFAULT} animate-spin" />
 
 						Connecting...
 					{:else}
-						<RefreshCw class="h-4 w-4" />
+						<RefreshCw class={ICON_CLASS_DEFAULT} />
 
 						Retry Connection
 					{/if}
@@ -250,7 +251,7 @@
 		{/if}
 
 		{#if showTroubleshooting}
-			<div class="mt-4 text-left" in:fly={{ y: 10, duration: 300, delay: 400 }}>
+			<div class="mt-4 text-left" in:fly={{ delay: 400, duration: 300, y: 10 }}>
 				<details class="text-sm">
 					<summary class="cursor-pointer text-muted-foreground hover:text-foreground">
 						Troubleshooting

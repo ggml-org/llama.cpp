@@ -4,7 +4,7 @@
 #include <cstdlib>
 
 #include <nlohmann/json.hpp>
-#include <sheredom/subprocess.h>
+#include "subproc.h"
 
 #include "jinja/runtime.h"
 #include "jinja/parser.h"
@@ -33,6 +33,7 @@ static void test_array_methods(testing & t);
 static void test_object_methods(testing & t);
 static void test_hasher(testing & t);
 static void test_stats(testing & t);
+static void test_string_parts(testing & t);
 static void test_fuzzing(testing & t);
 
 static bool g_python_mode = false;
@@ -72,6 +73,7 @@ int main(int argc, char *argv[]) {
     if (!g_python_mode) {
         t.test("hasher", test_hasher);
         t.test("stats", test_stats);
+        t.test("string parts", test_string_parts);
         t.test("fuzzing", test_fuzzing);
     }
 
@@ -435,6 +437,24 @@ static void test_expressions(testing & t) {
         "('c', 'b', 'a')"
     );
 
+    test_template(t, "string slice negative step",
+        "{{ 'abcdef'[::-2] }}",
+        json::object(),
+        "fdb"
+    );
+
+    test_template(t, "string slice negative start and step",
+        "{{ 'abcdef'[-1:1:-1] }}",
+        json::object(),
+        "fedc"
+    );
+
+    test_template(t, "string slice negative start, stop and step",
+        "{{ 'abcdef'[-1:-5:-1] }}",
+        json::object(),
+        "fedc"
+    );
+
     test_template(t, "arithmetic",
         "{{ (a + b) * c }}",
         {{"a", 2}, {"b", 3}, {"c", 4}},
@@ -583,8 +603,8 @@ static void test_filters(testing & t) {
         "hello jinja"
     );
 
-    test_template(t, "length list",
-        "{{ items|length }}",
+    test_template(t, "length (count alias) list",
+        "{{ items|count }}",
         {{"items", json::array({1, 2, 3})}},
         "3"
     );
@@ -693,8 +713,8 @@ static void test_filters(testing & t) {
         "fallback"
     );
 
-    test_template(t, "default with falsy value",
-        "{{ ''|default('fallback', true) }}",
+    test_template(t, "default (d alias) with falsy value",
+        "{{ ''|d('fallback', true) }}",
         json::object(),
         "fallback"
     );
@@ -976,6 +996,32 @@ static void test_macros(testing & t) {
         "{% macro greet(first, last, greeting='Hello') %}{{ greeting }}, {{ first }} {{ last }}{% endmacro %}{{ greet(last='Smith', first='John') }},{{ greet(last='Doe', greeting='Hi', first='Jane') }}",
         json::object(),
         "Hello, John Smith,Hi, Jane Doe"
+    );
+
+    test_template(t, "macro with caller",
+        "\
+{%- macro nest_dict(o, i, ff='') %}\n\
+  {{- caller(ff) }}\n\
+  {%- for k, v in o|items %}\n\
+    {{- i + k + ': ' }}\n\
+    {%- if v is mapping %}\n\
+      {{- '{' }}\n\
+      {% call(f) nest_dict(v, i + '    ') %}\n\
+        {{- 'fail' if ff is undefined }}\n\
+      {%- endcall %}\n\
+      {{- i + '}' }}\n\
+    {% else %}\n\
+      {{- v|string }}\n\
+    {% endif %}\n\
+  {%- endfor %}\n\
+{%- endmacro %}\n\
+{%- call(f) nest_dict({'root1': 1, 'root2': {'nest1': 1, 'nest2': {'nest3': 2}}}, '    ', 'Dict') %}\n\
+  {{- 'fail' if ff is defined }}\n\
+  {{- f + ' {' }}\n\
+{% endcall %}\n\
+{{- '}' }}",
+        json::object(),
+        "Dict {\n    root1: 1\n    root2: {\n        nest1: 1\n        nest2: {\n            nest3: 2\n        }\n    }\n}"
     );
 }
 
@@ -1320,10 +1366,46 @@ static void test_string_methods(testing & t) {
         "hello jinja"
     );
 
+    test_template(t, "string.replace() empty",
+        "{{ s.replace('', '.') }}",
+        {{"s", "hello world"}},
+        ".h.e.l.l.o. .w.o.r.l.d."
+    );
+
     test_template(t, "string.replace() with count",
         "{{ s.replace('a', 'X', 2) }}",
         {{"s", "banana"}},
         "bXnXna"
+    );
+
+    test_template(t, "string.format() auto numbering",
+        "{{ '<{}|{}>'.format(s, 42) }}",
+        {{"s", "hello"}},
+        "<hello|42>"
+    );
+
+    test_template(t, "string.format() manual numbering",
+        "{{ '{1}-{0}-{1}'.format('a', 'b') }}",
+        json::object(),
+        "b-a-b"
+    );
+
+    test_template(t, "string.format() named fields",
+        "{{ '{name} is {age}'.format(name='Bob', age=7) }}",
+        json::object(),
+        "Bob is 7"
+    );
+
+    test_template(t, "string.format() escaped braces",
+        "{{ '{{}} {} {{x}}'.format('mid') }}",
+        json::object(),
+        "{} mid {x}"
+    );
+
+    test_template(t, "string.format() no fields",
+        "{{ 'plain'.format() }}",
+        json::object(),
+        "plain"
     );
 
     test_template(t, "undefined|capitalize",
@@ -1532,6 +1614,36 @@ static void test_array_methods(testing & t) {
         "{{ arr|map('int')|sum }}",
         {{"arr", json::array({"1", "2", "3"})}},
         "6"
+    );
+
+    test_template(t, "array|min",
+        "{{ [tool_calls_count, tool_sep_count]|min }}",
+        {{"tool_calls_count", 2}, {"tool_sep_count", 1}},
+        "1"
+    );
+
+    test_template(t, "array|max",
+        "{{ [tool_calls_count, tool_sep_count]|max }}",
+        {{"tool_calls_count", 2}, {"tool_sep_count", 1}},
+        "2"
+    );
+
+    test_template(t, "array|min attribute",
+        "{{ items|min(attribute='x') }}",
+        {{"items", json::array({
+            json({{"x", 2}}),
+            json({{"x", 1}}),
+        })}},
+        "{'x': 1}"
+    );
+
+    test_template(t, "array|max attribute",
+        "{{ items|max(attribute='x') }}",
+        {{"items", json::array({
+            json({{"x", 2}}),
+            json({{"x", 1}}),
+        })}},
+        "{'x': 2}"
     );
 
     // not used by any chat templates
@@ -1947,6 +2059,36 @@ static void test_stats(testing & t) {
     });
 }
 
+static void test_string_parts(testing & t) {
+    static auto render = [](const std::string & tmpl, const json & vars) -> jinja::string {
+        jinja::lexer lexer;
+        auto lexer_res = lexer.tokenize(tmpl);
+
+        jinja::program ast = jinja::parse_from_tokens(lexer_res);
+
+        jinja::context ctx(tmpl);
+        jinja::global_from_json(ctx, vars, true);
+
+        jinja::runtime runtime(ctx);
+        return runtime.gather_string_parts(runtime.execute(ast))->as_string();
+    };
+
+    t.test("merge joins only the neighbours with the same type", [](testing & t) {
+        // "AB" comes from the input and merges, "-" comes from the template and must not
+        jinja::string res = render("{{ val.a }}{{ val.b }}-{{ val.c }}",
+                                   json{{"val", json{{"a", "A"}, {"b", "B"}, {"c", "C"}}}});
+
+        if (t.assert_true("3 parts after the merge", res.parts.size() == 3)) {
+            t.assert_true("part 0 is the merged input", res.parts[0].val == "AB" && res.parts[0].is_input);
+            t.assert_true("part 1 is from the template", res.parts[1].val == "-" && !res.parts[1].is_input);
+            t.assert_true("part 2 is input",             res.parts[2].val == "C" && res.parts[2].is_input);
+        } else {
+            t.log("parts: " + std::to_string(res.parts.size()) + ", rendered: " + json(res.str()).dump());
+        }
+    });
+
+}
+
 static void test_template_cpp(testing & t, const std::string & name, const std::string & tmpl, const json & vars, const std::string & expect) {
     t.test(name, [&tmpl, &vars, &expect](testing & t) {
         jinja::lexer lexer;
@@ -2025,21 +2167,20 @@ static void test_template_py(testing & t, const std::string & name, const std::s
         const char * python_executable = "python3";
 #endif
 
-        const char * command_line[] = {python_executable, "-c", py_script.c_str(), NULL};
+        std::vector<std::string> args = {python_executable, "-c", py_script, };
 
-        struct subprocess_s subprocess;
+        common_subproc subprocess;
         int options = subprocess_option_combined_stdout_stderr
                     | subprocess_option_no_window
                     | subprocess_option_inherit_environment
                     | subprocess_option_search_user_path;
-        int result = subprocess_create(command_line, options, &subprocess);
 
-        if (result != 0) {
-            t.log("Failed to create subprocess, error code: " + std::to_string(result));
+        if (!subprocess.create(args, options)) {
+            t.log("Failed to create subprocess");
             t.assert_true("subprocess creation", false);
             return;
         }
-        FILE * p_stdin = subprocess_stdin(&subprocess);
+        FILE * p_stdin = subprocess.stdin_file();
 
         // Write input
         std::string input = merged.dump();
@@ -2047,24 +2188,22 @@ static void test_template_py(testing & t, const std::string & name, const std::s
         if (written != input.size()) {
             t.log("Failed to write complete input to subprocess stdin");
             t.assert_true("subprocess stdin write", false);
-            subprocess_destroy(&subprocess);
+            subprocess.close_stdin();
+            subprocess.join();
             return;
         }
         fflush(p_stdin);
-        fclose(p_stdin); // Close stdin to signal EOF to the Python process
-        subprocess.stdin_file = nullptr;
+        subprocess.close_stdin(); // Close stdin to signal EOF to the Python process
 
         // Read output
         std::string output;
         char buffer[1024];
-        FILE * p_stdout = subprocess_stdout(&subprocess);
+        FILE * p_stdout = subprocess.stdout_file();
         while (fgets(buffer, sizeof(buffer), p_stdout)) {
             output += buffer;
         }
 
-        int process_return;
-        subprocess_join(&subprocess, &process_return);
-        subprocess_destroy(&subprocess);
+        int process_return = subprocess.join();
 
         if (process_return != 0) {
             t.log("Python script failed with exit code: " + std::to_string(process_return));

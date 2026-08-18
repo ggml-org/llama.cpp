@@ -5,7 +5,7 @@ void llama_model_minimax_m2::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,   hparams.n_ff_exp);
     ml.get_key(LLM_KV_EXPERT_GATING_FUNC,           hparams.expert_gating_func, false);
 
-    switch (hparams.n_layer) {
+    switch (hparams.n_layer()) {
         case 62: type = LLM_TYPE_230B_A10B; break;
         default: type = LLM_TYPE_UNKNOWN;
     }
@@ -60,6 +60,8 @@ llama_model_minimax_m2::graph::graph(const llama_model & model, const llm_graph_
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
     for (int il = 0; il < n_layer; ++il) {
+        res->t_layer_inp[il] = inpL;
+
         ggml_tensor * inpSA = inpL;
 
         cur = inpL;

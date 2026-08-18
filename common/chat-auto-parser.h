@@ -181,6 +181,7 @@ struct tool_format_analysis {
 
     bool fun_name_is_key = false;       // In JSON format function name is JSON key, i.e. { "<funname>": { ... arguments ... } }
     bool tools_array_wrapped = false;   // Tool calls wrapped in JSON array [...]
+    bool openai_wrapper_trigger = false;  // model emits the OpenAI function wrapper, trigger on it
 
     std::string              function_field = "function";
     std::string              name_field     = "name";
@@ -191,9 +192,10 @@ struct tool_format_analysis {
 };
 
 struct tool_function_analysis {
-    std::string name_prefix;  // e.g., "<function=", "\"name\": \"", "functions."
-    std::string name_suffix;  // e.g., ">", "\"", ":0"
-    std::string close;        // e.g., "</function>", "" (for tag-based)
+    std::string name_prefix;     // e.g., "<function=", "\"name\": \"", "functions."
+    std::string name_suffix;     // e.g., ">", "\"", ":0"
+    std::string args_separator;  // e.g., "<tool_sep>" (marker between function name and arguments)
+    std::string close;           // e.g., "</function>", "" (for tag-based)
 };
 
 struct tool_arguments_analysis {
@@ -204,6 +206,7 @@ struct tool_arguments_analysis {
     std::string value_prefix;  // e.g., "", "<arg_value>", ""
     std::string value_suffix;  // e.g., "</param>", "</arg_value>", ""
     std::string separator;     // e.g., "", "\n", ","
+    bool tolerate_intertag_whitespace = false; // Laguna: accept optional whitespace between arg tags
 };
 
 struct tool_id_analysis {
@@ -377,6 +380,8 @@ struct analyze_tools : analyze_base {
 
 struct autoparser {
     jinja::caps          jinja_caps;
+    std::string          user_start;
+    std::string          assistant_start;
     analyze_reasoning    reasoning;
     analyze_content      content;
     analyze_tools        tools;
@@ -384,8 +389,13 @@ struct autoparser {
 
     // Preserved tokens for tokenizer (union of all non-empty markers)
     std::vector<std::string> preserved_tokens;
+    std::vector<std::string> additional_stops;  // literal stop strings (e.g. Laguna </assistant>) caught however tokenized
 
     autoparser() = default;
+
+    // Find the starting marker for the user message and assistant message
+    std::string detect_user_start_marker(const common_chat_template & tmpl);
+    std::string detect_assistant_start_marker(const common_chat_template & tmpl);
 
     // Run full differential analysis on a template
     void analyze_template(const common_chat_template & tmpl);
