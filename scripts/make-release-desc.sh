@@ -39,7 +39,6 @@ if ! git fetch --tags origin 2>/dev/null; then
 fi
 
 # Release commit: the commit <version> points at when the tag exists, HEAD otherwise.
-# Resolve to a SHA: --points-at does not peel annotated tags.
 if ! RELEASE_COMMIT="$(git rev-parse -q --verify "refs/tags/${VERSION}^{commit}" 2>/dev/null)"; then
     RELEASE_COMMIT="$(git rev-parse HEAD)"
 fi
