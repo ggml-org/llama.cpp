@@ -12,7 +12,7 @@
 #include "mtmd-helper-common.h"
 #include "llama.h"
 
-#include "hash.h"
+#include "hash/hash.h"
 
 #include <algorithm>
 #include <cinttypes>
