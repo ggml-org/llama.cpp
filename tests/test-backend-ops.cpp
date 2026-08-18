@@ -4494,22 +4494,30 @@ struct test_rwkv7_output : public test_case {
     }
 
     bool run_whole_graph() override { return true; }
+    bool use_weight_context() override { return true; }
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
+        GGML_ASSERT(!use_weight_context());
+        return build_graph(ctx, nullptr);
+    }
+
+    ggml_tensor * build_graph(ggml_context * ctx, ggml_context * ctx_weights) override {
+        GGML_ASSERT(ctx_weights != nullptr);
+
         const int64_t C   = head_count * head_size;
         ggml_tensor * x   = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, head_size, head_count, n_tokens);
         ggml_tensor * k   = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, head_size, head_count, n_tokens);
         ggml_tensor * r   = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, head_size, head_count, n_tokens);
-        ggml_tensor * r_k = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, C);
+        ggml_tensor * r_k = ggml_new_tensor_1d(ctx_weights, GGML_TYPE_F32, C);
         ggml_tensor * v   = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, head_size, head_count, n_tokens);
 
         ggml_tensor * cur         = ggml_norm(ctx, x, 64e-5f);
         ggml_tensor * norm_weight = internal_norm_weight ?
                                         cur :
-                                        (broadcast_affine ? ggml_new_tensor_2d(ctx, GGML_TYPE_F32, C / 2, 2) :
-                                                            ggml_new_tensor_1d(ctx, GGML_TYPE_F32, C));
-        ggml_tensor * norm_bias   = broadcast_affine ? ggml_new_tensor_2d(ctx, GGML_TYPE_F32, C / 2, 2) :
-                                                       ggml_new_tensor_1d(ctx, GGML_TYPE_F32, C);
+                                        (broadcast_affine ? ggml_new_tensor_2d(ctx_weights, GGML_TYPE_F32, C / 2, 2) :
+                                                            ggml_new_tensor_1d(ctx_weights, GGML_TYPE_F32, C));
+        ggml_tensor * norm_bias   = broadcast_affine ? ggml_new_tensor_2d(ctx_weights, GGML_TYPE_F32, C / 2, 2) :
+                                                       ggml_new_tensor_1d(ctx_weights, GGML_TYPE_F32, C);
         cur                       = ggml_reshape_2d(ctx, cur, C, n_tokens);
         cur                       = ggml_add(ctx, ggml_mul(ctx, cur, norm_weight), norm_bias);
 

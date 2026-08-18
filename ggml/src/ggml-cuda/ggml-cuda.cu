@@ -2848,29 +2848,10 @@ static int ggml_cuda_try_rwkv7_output_fusion(
     }
 
     const int matched_count = node_count + (has_gate ? 1 : 0);
-    const int out_idx       = node_idx + matched_count - 1;
-    for (int i = 0; i < matched_count; ++i) {
-        const ggml_tensor * matched = cgraph->nodes[node_idx + i];
-        if (matched->op != matched_ops[i] || (matched->flags & GGML_TENSOR_FLAG_COMPUTE) == 0) {
-            return 0;
-        }
-        if (node_idx + i == out_idx) {
-            continue;
-        }
-        if (matched->flags & GGML_TENSOR_FLAG_OUTPUT) {
-            return 0;
-        }
-
-        int internal_uses = 0;
-        for (int j = i + 1; j < matched_count; ++j) {
-            const ggml_tensor * user = cgraph->nodes[node_idx + j];
-            for (int src_idx = 0; src_idx < GGML_MAX_SRC; ++src_idx) {
-                internal_uses += user->src[src_idx] == matched;
-            }
-        }
-        if (internal_uses != ggml_node_get_use_count(cgraph, node_idx + i)) {
-            return 0;
-        }
+    const int output_idx    = node_idx + matched_count - 1;
+    if (!ggml_can_fuse_subgraph(
+            cgraph, node_idx, matched_count, matched_ops.data(), &output_idx, 1)) {
+        return 0;
     }
 
     const ggml_tensor * norm         = cgraph->nodes[node_idx + 0];
