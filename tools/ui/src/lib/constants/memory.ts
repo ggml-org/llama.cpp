@@ -14,10 +14,8 @@ import type { OpenAIToolDefinition } from '$lib/types';
 
 export const MEMORY_ENTRY_LIMIT_BYTES_DEFAULT = 49152;
 
-export const MEMORY_GROUPS_DEFAULT_LIST = ['areas', 'people', 'topics'];
-
-export const MEMORY_GROUPS_SEPARATOR = ',';
-
+const MEMORY_GROUPS_DEFAULT_LIST = ['areas', 'people', 'topics'];
+const MEMORY_GROUPS_SEPARATOR = ',';
 const MEMORY_GROUPS_JOIN = ', ';
 
 export const MEMORY_GROUPS_DEFAULT = MEMORY_GROUPS_DEFAULT_LIST.join(MEMORY_GROUPS_JOIN);
@@ -32,9 +30,26 @@ export const MEMORY_EMPTY_INDEX = 'Memory is empty';
 export const MEMORY_EXPORT_FILENAME_PREFIX = 'llama_memory_';
 
 export const MEMORY_TOOL_NAMES: ReadonlySet<string> = new Set([
+	BuiltInTool.BROWSER_MEMORY_DROP,
 	BuiltInTool.BROWSER_MEMORY_OPEN,
-	BuiltInTool.BROWSER_MEMORY_WRITE,
-	BuiltInTool.BROWSER_MEMORY_DROP
+	BuiltInTool.BROWSER_MEMORY_WRITE
+]);
+
+/** Argument keys of the memory tools, the schemas and the executor reading the same names */
+export const MEMORY_ARGS = {
+	DESCRIPTION: 'description',
+	NAME: 'name',
+	NAMES: 'names',
+	NEW_STR: 'new_str',
+	OLD_STR: 'old_str'
+} as const;
+
+/** Every argument memory_write accepts, a key outside this set carrying text to the wrong place */
+export const MEMORY_WRITE_ARGS: ReadonlySet<string> = new Set([
+	MEMORY_ARGS.DESCRIPTION,
+	MEMORY_ARGS.NAME,
+	MEMORY_ARGS.NEW_STR,
+	MEMORY_ARGS.OLD_STR
 ]);
 
 /** Mutation labels a memory_write reports, joined into the result line */
@@ -79,7 +94,7 @@ export function buildMemoryToolDefinitions(groups: string[]): OpenAIToolDefiniti
 				name: BuiltInTool.BROWSER_MEMORY_OPEN,
 				parameters: {
 					properties: {
-						names: {
+						[MEMORY_ARGS.NAMES]: {
 							description: `Entries to open, for instance ["${groups[0]}${MEMORY_NAME_SEPARATOR}my-project"]. Omit for the index alone.`,
 							items: { type: JsonSchemaType.STRING },
 							type: JsonSchemaType.ARRAY
@@ -97,24 +112,24 @@ export function buildMemoryToolDefinitions(groups: string[]): OpenAIToolDefiniti
 				name: BuiltInTool.BROWSER_MEMORY_WRITE,
 				parameters: {
 					properties: {
-						description: {
+						[MEMORY_ARGS.DESCRIPTION]: {
 							description: 'One line on what this entry covers, shown in the index',
 							type: JsonSchemaType.STRING
 						},
-						name: {
+						[MEMORY_ARGS.NAME]: {
 							description: `Entry name, <group>${MEMORY_NAME_SEPARATOR}<slug>`,
 							type: JsonSchemaType.STRING
 						},
-						new_str: {
+						[MEMORY_ARGS.NEW_STR]: {
 							description: 'Replacement text, or the lines to append',
 							type: JsonSchemaType.STRING
 						},
-						old_str: {
+						[MEMORY_ARGS.OLD_STR]: {
 							description: 'Text to replace or remove, must appear exactly once in the body',
 							type: JsonSchemaType.STRING
 						}
 					},
-					required: ['name'],
+					required: [MEMORY_ARGS.NAME],
 					type: JsonSchemaType.OBJECT
 				}
 			},
@@ -127,12 +142,12 @@ export function buildMemoryToolDefinitions(groups: string[]): OpenAIToolDefiniti
 				name: BuiltInTool.BROWSER_MEMORY_DROP,
 				parameters: {
 					properties: {
-						name: {
+						[MEMORY_ARGS.NAME]: {
 							description: `Entry name, <group>${MEMORY_NAME_SEPARATOR}<slug>`,
 							type: JsonSchemaType.STRING
 						}
 					},
-					required: ['name'],
+					required: [MEMORY_ARGS.NAME],
 					type: JsonSchemaType.OBJECT
 				}
 			},
