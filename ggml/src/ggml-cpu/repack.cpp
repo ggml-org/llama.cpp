@@ -4336,13 +4336,18 @@ static bool iqp_type_supported(enum ggml_type type) {
     }
 }
 
-bool ggml_cpu_iqp_supported_mul_mat(const struct ggml_tensor * dst) {
+// the checks MUL_MAT and MUL_MAT_ID have in common; each caller adds its own batch size test and
+// its own src0 shape test on top
+static bool iqp_supported_common(const struct ggml_tensor * dst) {
     const struct ggml_tensor * src0 = dst->src[0];
     const struct ggml_tensor * src1 = dst->src[1];
 
     if (!iqp_type_supported(src0->type)) {
         return false;
     }
+
+    // the whole path (gather offsets included) assumes the src1 conversion is q8_K
+    GGML_ASSERT(ggml_get_type_traits_cpu(src0->type)->vec_dot_type == GGML_TYPE_Q8_K);
 
     // escape hatch to A/B the panel against the plain vec_dot path without rebuilding, read once
     // (this path is not a repack buffer, so --no-repack does not cover it, and llama-bench has no
@@ -4356,8 +4361,7 @@ bool ggml_cpu_iqp_supported_mul_mat(const struct ggml_tensor * dst) {
         return false;
     }
 
-    // small batches stay on the vec_dot path - the decode would not pay for itself
-    if (src1->type != GGML_TYPE_F32 || src1->ne[1] < GGML_IQP_MIN_BATCH) {
+    if (src1->type != GGML_TYPE_F32) {
         return false;
     }
 
@@ -4365,8 +4369,7 @@ bool ggml_cpu_iqp_supported_mul_mat(const struct ggml_tensor * dst) {
         return false;
     }
 
-    // plain 2D weight matmuls only (src1 may still be batched over ne12)
-    if (src0->ne[2] != 1 || src0->ne[3] != 1 || src1->ne[3] != 1 || !ggml_is_contiguous(src0)) {
+    if (src0->ne[3] != 1 || src1->ne[3] != 1 || !ggml_is_contiguous(src0)) {
         return false;
     }
 
@@ -4377,48 +4380,48 @@ bool ggml_cpu_iqp_supported_mul_mat(const struct ggml_tensor * dst) {
     return true;
 }
 
-bool ggml_cpu_iqp_supported_mul_mat_id(const struct ggml_tensor * dst) {
+bool ggml_cpu_iqp_supported_mul_mat(const struct ggml_tensor * dst) {
     const struct ggml_tensor * src0 = dst->src[0];
     const struct ggml_tensor * src1 = dst->src[1];
-    const struct ggml_tensor * ids  = dst->src[2];
 
-    if (!iqp_type_supported(src0->type)) {
+    if (!iqp_supported_common(dst)) {
         return false;
     }
 
-    static const bool disabled = getenv("GGML_NO_IQ_PANEL") != nullptr;
-    if (disabled) {
+    // small batches stay on the vec_dot path - the decode would not pay for itself
+    if (src1->ne[1] < GGML_IQP_MIN_BATCH) {
         return false;
     }
 
-    if (!ggml_cpu_has_avx2()) {
+    // plain 2D weight matmuls only (src1 may still be batched over ne12)
+    if (src0->ne[2] != 1) {
         return false;
     }
 
-    if (src1->type != GGML_TYPE_F32) {
+    return true;
+}
+
+bool ggml_cpu_iqp_supported_mul_mat_id(const struct ggml_tensor * dst) {
+    // src0 is the 3D expert stack here, one matrix per expert, so ne[2] is not constrained
+    const struct ggml_tensor * ids = dst->src[2];
+
+    if (!iqp_supported_common(dst)) {
         return false;
     }
 
     // no expert can clear the per expert threshold if the whole node routes fewer rows than that.
     // Checking it here keeps token generation off the path entirely, work buffer included.
-    if (ids->ne[0] * ids->ne[1] < GGML_IQP_MIN_BATCH_ID) {
-        return false;
-    }
-
-    if (src0->ne[0] % QK_K != 0 || src0->ne[1] % IQP_NB_ROWS != 0) {
-        return false;
-    }
-
-    // src0 is the 3D expert stack, one matrix per expert; src1 must be the plain non batched form
-    if (src0->ne[3] != 1 || src1->ne[3] != 1 || !ggml_is_contiguous(src0)) {
-        return false;
-    }
-
-    if (dst->type != GGML_TYPE_F32 || dst->nb[0] != sizeof(float)) {
+    if (!ggml_cpu_iqp_expert_eligible(ids->ne[0] * ids->ne[1])) {
         return false;
     }
 
     return true;
+}
+
+size_t ggml_cpu_iqp_src1_conv_size(const struct ggml_tensor * dst) {
+    const enum ggml_type vec_dot_type = ggml_get_type_traits_cpu(dst->src[0]->type)->vec_dot_type;
+
+    return ggml_row_size(vec_dot_type, ggml_nelements(dst->src[1]));
 }
 
 size_t ggml_cpu_iqp_id_gather_size(const struct ggml_tensor * dst) {
@@ -4453,7 +4456,7 @@ void ggml_cpu_iqp_gather_mul_mat_id(const struct ggml_compute_params * params,
     for (int64_t cur_a = 0; cur_a < n_as; cur_a++) {
         const int64_t cne1 = matrix_row_counts[cur_a];
 
-        if (cne1 < GGML_IQP_MIN_BATCH_ID) {
+        if (!ggml_cpu_iqp_expert_eligible(cne1)) {
             continue;
         }
 
@@ -4540,7 +4543,7 @@ void ggml_compute_forward_mul_mat_id_iqp(const struct ggml_compute_params * para
 // sizes the buffer with these two helpers and the compute pass addresses it with them, so the two
 // cannot drift.
 size_t ggml_cpu_iqp_scratch_offset(const struct ggml_tensor * dst) {
-    return GGML_PAD(ggml_row_size(GGML_TYPE_Q8_K, ggml_nelements(dst->src[1])), 64);
+    return GGML_PAD(ggml_cpu_iqp_src1_conv_size(dst), 64);
 }
 
 size_t ggml_cpu_iqp_scratch_size(const struct ggml_tensor * dst) {
@@ -4578,34 +4581,33 @@ void ggml_compute_forward_mul_mat_iqp(const struct ggml_compute_params * params,
     // aim for 4 chunks per thread; the caller has already reset the chunk counter to nth and
     // synchronized the threads
     const int64_t groups_per_chunk = MAX(1, (ngroups + nth * 4 - 1) / (nth * 4));
-    const int64_t nchunk0          = (ngroups + groups_per_chunk - 1) / groups_per_chunk;
-    const int64_t nchunk           = nchunk0 * ne12;
+    const int64_t nchunk           = (ngroups + groups_per_chunk - 1) / groups_per_chunk;
 
     int current_chunk = ith;
 
     while (current_chunk < nchunk) {
-        const int64_t ic0 = current_chunk % nchunk0;
-        const int64_t i12 = current_chunk / nchunk0;
-
-        const int64_t g0 = ic0 * groups_per_chunk;
+        const int64_t g0 = current_chunk * groups_per_chunk;
         const int64_t g1 = MIN(g0 + groups_per_chunk, ngroups);
-
-        const char * src1_ptr = (const char *) params->wdata + i12 * nbw2;
-        char *       dst_ptr  = (char *) dst->data + i12 * nb2;
 
         for (int64_t g = g0; g < g1; g++) {
             const int64_t r = g * IQP_NB_ROWS;
 
+            // src0 is 2D here, so one decode of the row group serves every src1 batch
             iqp_decode_panel_8(src0->type, (const char *) src0->data + r * nb01, nb01, nblocks, panel);
 
-            // If there are more than three rows in src1, use gemm; otherwise, use gemv.
-            if (nrows > 3) {
-                ggml_gemm_iqp_8x8_q8_K(ne00, (float *) dst_ptr + r, nb1 / nb0, panel, src1_ptr, nrows - (nrows % 4),
-                                       IQP_NB_ROWS);
-            }
-            for (int64_t iter = nrows - (nrows % 4); iter < nrows; iter++) {
-                ggml_gemv_iqp_8x8_q8_K(ne00, (float *) (dst_ptr + iter * nb1) + r, ne01, panel, src1_ptr + nbw1 * iter,
-                                       1 /* nrows */, IQP_NB_ROWS);
+            for (int64_t i12 = 0; i12 < ne12; i12++) {
+                const char * src1_ptr = (const char *) params->wdata + i12 * nbw2;
+                char *       dst_ptr  = (char *) dst->data + i12 * nb2;
+
+                // If there are more than three rows in src1, use gemm; otherwise, use gemv.
+                if (nrows > 3) {
+                    ggml_gemm_iqp_8x8_q8_K(ne00, (float *) dst_ptr + r, nb1 / nb0, panel, src1_ptr, nrows - (nrows % 4),
+                                           IQP_NB_ROWS);
+                }
+                for (int64_t iter = nrows - (nrows % 4); iter < nrows; iter++) {
+                    ggml_gemv_iqp_8x8_q8_K(ne00, (float *) (dst_ptr + iter * nb1) + r, ne01, panel,
+                                           src1_ptr + nbw1 * iter, 1 /* nrows */, IQP_NB_ROWS);
+                }
             }
         }
 

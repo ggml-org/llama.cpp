@@ -145,9 +145,7 @@ static_assert(sizeof(block_mxfp4x8) == 8 + QK_MXFP4 * 4, "wrong mxfp4x8 block si
 //
 // Splitting the scale this way lets the kernel apply the sub-block scales in integer and accumulate
 // the whole super-block exactly in int32, so that only one float operation per (row, super-block)
-// remains. The previous float-per-sub-block form rounded 16 times per super-block, and that extra
-// (zero mean) noise showed up as a one-sided perplexity increase - cross entropy is convex, so
-// noise in the logits never helps on average.
+// remains.
 //
 // The sub-block granularity is 16 rather than 32 because iq2_xs / iq2_s take the scale of a group
 // of 32 from two nibbles, one per half, so a single scale per 32 could not be exact.

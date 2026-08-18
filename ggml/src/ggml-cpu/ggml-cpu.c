@@ -1366,7 +1366,7 @@ UseGgmlGemm1:;
 
     // transient "Q8 panel" gemm for the grid based IQ quants (see iqp.h) - must come after the
     // barrier above, it consumes the q8_K rows of src1 from the work buffer
-    if (ggml_cpu_iqp_supported_mul_mat(dst)) {
+    if (ggml_cpu_iqp_supported_mul_mat(dst) && !params->use_ref) {
         ggml_compute_forward_mul_mat_iqp(params, dst);
         return;
     }
@@ -1590,7 +1590,8 @@ static void ggml_compute_forward_mul_mat_id(
 
     // transient "Q8 panel" gemm for the grid based IQ quants (see iqp.h). Whether an expert actually
     // takes it is decided per expert below; the work buffer is reserved for the whole node.
-    const bool iqp = ggml_cpu_iqp_supported_mul_mat_id(dst);
+    // ggml_graph_plan sizes the buffer without params, so use_ref only skips the dispatch.
+    const bool iqp = ggml_cpu_iqp_supported_mul_mat_id(dst) && !params->use_ref;
 
     char * iqp_gathered = NULL;
     char * iqp_panels   = NULL;
@@ -1664,7 +1665,20 @@ static void ggml_compute_forward_mul_mat_id(
 
     ggml_barrier(params->threadpool);
 
+    // matrix_row_counts is final at this point, so every thread reaches the same verdict: if no
+    // expert clears the threshold the gather would copy nothing and its barrier is pure overhead
+    bool iqp_any = false;
+
     if (iqp) {
+        for (int cur_a = 0; cur_a < n_as; ++cur_a) {
+            if (ggml_cpu_iqp_expert_eligible(matrix_row_counts[cur_a])) {
+                iqp_any = true;
+                break;
+            }
+        }
+    }
+
+    if (iqp_any) {
         // the panel gemm reads four src1 rows at a fixed stride, so the rows of each gated in expert
         // are packed into one contiguous run first
         ggml_cpu_iqp_gather_mul_mat_id(params, dst, matrix_row_counts, (const int32_t *) matrix_rows, iqp_gathered);
@@ -1682,7 +1696,7 @@ static void ggml_compute_forward_mul_mat_id(
             continue;
         }
 
-        if (iqp && cne1 >= GGML_IQP_MIN_BATCH_ID) {
+        if (iqp_any && ggml_cpu_iqp_expert_eligible(cne1)) {
             ggml_compute_forward_mul_mat_id_iqp(params, dst, cur_a, cne1, (const int32_t *) &MMID_MATRIX_ROW(cur_a, 0),
                                                 iqp_gathered + iqp_row_off * ggml_row_size(vec_dot_type, ne10),
                                                 iqp_panels);

@@ -5,12 +5,12 @@
 
 // GGML internal header
 
-// Transient "Q8 panel" path for the grid based IQ quants (iq2_xxs, iq2_xs, iq2_s, iq3_xxs, iq3_s,
-// iq4_xs). During a large batch MUL_MAT each thread decodes 8 src0 rows at a time into a small
-// per-thread scratch panel (block_iqp_x8, see repack.h) and runs an integer gemm over it against
-// all src1 columns, instead of re-running the grid table decode inside ggml_vec_dot_iq*_q8_K once
-// per (row, column). The weights stay compressed in the model buffer, so there is no resident
-// memory overhead and small batches keep using the ordinary vec_dot path.
+// Transient "Q8 panel" path for the grid based IQ quants (iq1_s, iq1_m, iq2_xxs, iq2_xs, iq2_s,
+// iq3_xxs, iq3_s, iq4_xs). During a large batch MUL_MAT each thread decodes 8 src0 rows at a time
+// into a small per-thread scratch panel (block_iqp_x8, see repack.h) and runs an integer gemm over
+// it against all src1 columns, instead of re-running the grid table decode inside
+// ggml_vec_dot_iq*_q8_K once per (row, column). The weights stay compressed in the model buffer, so
+// there is no resident memory overhead and small batches keep using the ordinary vec_dot path.
 //
 // Implemented in repack.cpp (next to the panel decode and the gemm kernels).
 
@@ -18,11 +18,8 @@
 extern "C" {
 #endif
 
-// Smallest src1 batch for which the per-mul_mat decode pays for itself. Measured on Qwen3.8-27B
-// (24 threads, Zen4) by sweeping llama-bench -p N -n 0 against GGML_NO_IQ_PANEL=1: iq2_xs crosses
-// over around N = 20, iq4_xs - whose vec_dot is the cheapest of the six - only around N = 32. 32 is
-// the conservative single threshold: no type regresses below it, and both are at or above the
-// vec_dot path at it.
+// Smallest src1 batch for which the per-mul_mat decode pays for itself: the crossover vs the
+// vec_dot path is N = 20..32 depending on type, 32 is conservative for all of them.
 #define GGML_IQP_MIN_BATCH 32
 
 // same idea for MUL_MAT_ID, but the batch that matters is per expert: the routed row count of one
@@ -30,12 +27,22 @@ extern "C" {
 // before the test, and the work buffer layout below relies on that.
 #define GGML_IQP_MIN_BATCH_ID 16
 
+// is one expert worth the panel path? the gather in repack.cpp and the per expert dispatch in
+// ggml-cpu.c must agree on this, the packed gather layout depends on it
+static inline bool ggml_cpu_iqp_expert_eligible(int64_t cne1) {
+    return cne1 >= GGML_IQP_MIN_BATCH_ID;
+}
+
 // is the panel path eligible for this MUL_MAT node?
 bool ggml_cpu_iqp_supported_mul_mat(const struct ggml_tensor * dst);
 
 // is the panel path eligible for this MUL_MAT_ID node? this is the node level test only - whether an
 // individual expert is worth it is decided per expert with GGML_IQP_MIN_BATCH_ID
 bool ggml_cpu_iqp_supported_mul_mat_id(const struct ggml_tensor * dst);
+
+// bytes of src1 converted to the vec_dot type, i.e. the live part of the work buffer the panel
+// scratch has to start behind. Same formula ggml_graph_plan and the conversion writer use.
+size_t ggml_cpu_iqp_src1_conv_size(const struct ggml_tensor * dst);
 
 // offset of the panel scratch area inside the work buffer (past the q8_K conversion of src1)
 size_t ggml_cpu_iqp_scratch_offset(const struct ggml_tensor * dst);
