@@ -90,6 +90,9 @@ if (BUILD_SHARED_LIBS)
     set_target_properties     (mtmd PROPERTIES POSITION_INDEPENDENT_CODE ON)
     target_compile_definitions(mtmd PRIVATE LLAMA_BUILD)
     target_compile_definitions(mtmd PUBLIC  LLAMA_SHARED)
+
+    # export all symbols so that internal components can be tested by test-mtmd-impl
+    set_target_properties     (mtmd PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
 endif()
 
 set(MTMD_PUBLIC_HEADERS
