@@ -3,7 +3,7 @@
 # change log and the link to the nightly release corresponding to the commit being released.
 #
 # Usage: make-release-desc.sh <version>
-#   <version>: current release version (e.g. v0.1.1)
+#   <version>: current release version (v<maj>.<min>.<pat>, the leading v is optional)
 #
 # The previous version is the highest plain semver tag (v<maj>.<min>.<pat>)
 # strictly below <version>. The change log lists all commits between the
@@ -24,6 +24,14 @@ if [[ $# -ne 1 ]]; then
     exit 1
 fi
 VERSION="$1"
+
+# Accept the version with or without the leading v, reject anything else
+if [[ "${VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    VERSION="v${VERSION}"
+elif [[ ! "${VERSION}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "Error: invalid version '${VERSION}' (expected v<maj>.<min>.<pat>)"
+    exit 1
+fi
 
 # Make sure all remote tags are available locally (skipped on local runs without origin)
 if ! git fetch --tags origin 2>/dev/null; then
