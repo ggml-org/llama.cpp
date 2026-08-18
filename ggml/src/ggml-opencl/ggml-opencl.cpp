@@ -14613,29 +14613,29 @@ static ggml_cl_adreno_xmem_attn_schedule ggml_cl_adreno_xmem_attn_select_schedul
     const bool big_h = heads_total >= 8;
     ggml_cl_adreno_xmem_attn_schedule sched;
 
-    if (n_q >= 512) sched.qk_lws0 = 512;
-    else if (n_q >= 256) sched.qk_lws0 = 128;
-    else sched.qk_lws0 = 64;
+    if (n_q >= 512) { sched.qk_lws0 = 512; }
+    else if (n_q >= 256) { sched.qk_lws0 = 128; }
+    else { sched.qk_lws0 = 64; }
     sched.qk_lws2 = (big_h && n_q >= 512) ? 2 : 1;
 
-    if (n_kv >= 2048) sched.softmax_reduce_lws0 = 1024;
-    else if (n_kv >= 512) sched.softmax_reduce_lws0 = big_h ? 256 : 512;
-    else sched.softmax_reduce_lws0 = 256;
+    if (n_kv >= 2048) { sched.softmax_reduce_lws0 = 1024; }
+    else if (n_kv >= 512) { sched.softmax_reduce_lws0 = big_h ? 256 : 512; }
+    else { sched.softmax_reduce_lws0 = 256; }
 
-    if (n_kv < 256) sched.softmax_apply_lws0 = 64;
-    else sched.softmax_apply_lws0 = big_h ? 128 : 64;
+    if (n_kv < 256) { sched.softmax_apply_lws0 = 64; }
+    else { sched.softmax_apply_lws0 = big_h ? 128 : 64; }
     sched.softmax_apply_lws2 = n_kv >= 512 ? 8 : 4;
 
-    if (n_q < 256) sched.pv_lws0 = 64;
-    else sched.pv_lws0 = big_h ? 128 : 64;
+    if (n_q < 256) { sched.pv_lws0 = 64; }
+    else { sched.pv_lws0 = big_h ? 128 : 64; }
     sched.pv_lws2 = big_h ? 8 : (n_q <= 256 ? 8 : 4);
 
     const int max_wg = (int) backend_ctx->max_workgroup_size;
     auto fix = [&](int & l0, int & l2) {
         while (l0 * l2 > max_wg) {
-            if (l2 > 1) l2 /= 2;
-            else if (l0 > 32) l0 /= 2;
-            else break;
+            if (l2 > 1) { l2 /= 2; }
+            else if (l0 > 32) { l0 /= 2; }
+            else { break; }
         }
     };
     fix(sched.qk_lws0, sched.qk_lws2);
