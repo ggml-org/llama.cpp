@@ -1361,13 +1361,19 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
         if (node->view_src != NULL && !ggml_is_view_op(node->op)) {
             const int view_src_backend_id = tensor_backend_id(node->view_src);
             if (view_src_backend_id != -1 && *cur_backend_id != view_src_backend_id) {
-                if (sched->debug) {
-                    GGML_LOG_DEBUG("%s: %s (%s) moved to %s to keep it with the tensor it aliases (%s)\n",
-                            __func__, node->name, ggml_op_name(node->op),
-                            ggml_backend_name(sched->backends[view_src_backend_id]), node->view_src->name);
+                if (ggml_backend_supports_op(sched->backends[view_src_backend_id], node)) {
+                    if (sched->debug) {
+                        GGML_LOG_DEBUG("%s: %s (%s) moved to %s to keep it with the tensor it aliases (%s)\n",
+                                __func__, node->name, ggml_op_name(node->op),
+                                ggml_backend_name(sched->backends[view_src_backend_id]), node->view_src->name);
+                    }
+                    *cur_backend_id = view_src_backend_id;
+                    SET_CAUSE(node, "4.alias");
+                } else if (sched->debug) {
+                    GGML_LOG_DEBUG("%s: %s (%s) aliases %s on %s, which cannot run it - the write will be lost\n",
+                            __func__, node->name, ggml_op_name(node->op), node->view_src->name,
+                            ggml_backend_name(sched->backends[view_src_backend_id]));
                 }
-                *cur_backend_id = view_src_backend_id;
-                SET_CAUSE(node, "4.alias");
             }
         }
         for (int j = 0; j < GGML_MAX_SRC; j++) {
