@@ -1306,7 +1306,7 @@ common_peg_parser common_peg_parser_builder::python_dict() {
 common_peg_parser common_peg_parser_builder::python_array() {
     return rule("python-array", [this]() {
         auto ws = space();
-        auto elements = sequence({python_value(), zero_or_more(sequence({literal(","), ws, python_value()}))});
+        auto elements = sequence({python_value(), zero_or_more(sequence({ws, literal(","), ws, python_value()}))});
         return sequence({
             literal("["),
             ws,
