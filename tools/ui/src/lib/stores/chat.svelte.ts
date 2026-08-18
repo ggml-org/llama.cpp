@@ -1187,23 +1187,37 @@ class ChatStore {
 		);
 	}
 
-	async sendMessage(content: string, extras?: DatabaseMessageExtra[]): Promise<void> {
-		if (!content.trim() && (!extras || extras.length === 0)) return;
+	/** Returns false only when a mid-generation inject failed, so the caller can restore the input. */
+	async sendMessage(content: string, extras?: DatabaseMessageExtra[]): Promise<boolean> {
+		if (!content.trim() && (!extras || extras.length === 0)) return true;
 
 		const activeConv = conversationsStore.activeConversation;
 
+		// text only for now: messages with attachments always take the steering/queue path
+		const preferDirectInject =
+			Boolean(settingsStore.config.allowInjectUserMessageMidGeneration) &&
+			(!extras || extras.length === 0);
+
 		// If agentic loop is running, inject as a steering message instead of starting a new flow
 		if (activeConv && agenticStore.isRunning(activeConv.id)) {
+			if (preferDirectInject) {
+				return await this.injectIntoActiveCompletion(content);
+			}
+
 			agenticStore.injectSteeringMessage(activeConv.id, content, extras);
 
-			return;
+			return true;
 		}
 
 		// If non-agentic streaming is active, queue as a pending message to send after completion
 		if (activeConv && this.isChatLoadingInternal(activeConv.id)) {
+			if (preferDirectInject) {
+				return await this.injectIntoActiveCompletion(content);
+			}
+
 			this.injectPendingMessage(activeConv.id, content, extras);
 
-			return;
+			return true;
 		}
 
 		// Cancel any in-flight pre-encode request
@@ -1222,7 +1236,7 @@ class ChatStore {
 
 		const currentConv = conversationsStore.activeConversation;
 
-		if (!currentConv) return;
+		if (!currentConv) return true;
 
 		this.showErrorDialog(null);
 		this.setChatLoading(currentConv.id, true);
@@ -1300,7 +1314,7 @@ class ChatStore {
 			if (isAbortError(error)) {
 				this.setChatLoading(currentConv.id, false);
 
-				return;
+				return true;
 			}
 
 			console.error('Failed to send message:', error);
@@ -1319,6 +1333,37 @@ class ChatStore {
 				type: dialogType
 			});
 		}
+
+		return true;
+	}
+
+	/**
+	 * Sends the text into the running completion of the active conversation via the
+	 * control endpoint. The injected text is streamed back as part of the assistant
+	 * response, so no message is added to the conversation.
+	 */
+	private async injectIntoActiveCompletion(content: string): Promise<boolean> {
+		const messages = conversationsStore.activeMessages;
+		const activeMessage = messages[messages.length - 1];
+
+		if (!activeMessage?.completionId) return false;
+
+		const template = String(settingsStore.config.injectionTemplate ?? '');
+
+		let rendered = content;
+
+		if (template.includes('{message}')) {
+			rendered = template.replaceAll('{message}', content);
+		} else if (template) {
+			rendered = `${template}\n${content}`;
+		}
+
+		// surround with newlines so the text does not glue to the tokens around it
+		return await ChatService.injectText(
+			activeMessage.completionId,
+			`\n${rendered}\n`,
+			activeMessage.model
+		);
 	}
 
 	private async streamChatCompletion(

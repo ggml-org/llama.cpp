@@ -509,6 +509,58 @@ export class ChatService {
 	}
 
 	/**
+	 * Injects text into a running completion, targeted by its chat completion id.
+	 * The server appends the tokens to the generated output as if the model
+	 * produced them and streams them back. Returns true on success.
+	 */
+	static async injectText(
+		completionId: string,
+		text: string,
+		model?: string | null
+	): Promise<boolean> {
+		if (!completionId) {
+			console.error(
+				'injectText: no completion id for the active message, cannot target the running completion'
+			);
+
+			return false;
+		}
+
+		const body: Record<string, unknown> = {
+			action: CONTROL_ACTION.INJECT,
+			id: completionId,
+			text
+		};
+
+		if (model) body.model = model;
+
+		try {
+			const res = await fetch(API_CHAT.CONTROL, {
+				body: JSON.stringify(body),
+				headers: getJsonHeaders(),
+				method: 'POST'
+			});
+			const data = await res.json().catch(() => null);
+
+			if (!res.ok || data?.success !== true) {
+				console.error('injectText: control request failed', {
+					completionId,
+					response: data,
+					status: res.status
+				});
+
+				return false;
+			}
+
+			return true;
+		} catch (error) {
+			console.error('injectText: control request threw', { completionId, error });
+
+			return false;
+		}
+	}
+
+	/**
 	 * Sends a fire-and-forget request to pre-encode the conversation in the server's KV cache.
 	 * After a response completes, this re-submits the full conversation
 	 * using n_predict=0 and stream=false so the server processes the prompt without generating tokens.
