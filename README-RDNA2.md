@@ -61,7 +61,13 @@ export HSA_NO_SCRATCH_RECLAIM=1
 certified V620/gfx1030 profile. It automatically enables native MMVQ/attention/
 GDN, Q8 activation caching, Q8_1 fusion, ADD/RMS_NORM fusion, and GDN sibling
 fusion. The individual `GGML_HIP_GFX1030_*` variables remain available as
-explicit overrides; setting one to `0` disables that feature.
+explicit overrides; setting one to `0` disables that feature. To disable the
+entire native RDNA2 profile, topology tuner, host-snapshot reduction, deferred
+MTP catch-up, and automatic output sharding with one setting, use:
+
+```bash
+export GGML_HIP_RDNA2_AUTO=0
+```
 
 ### Runtime environment quick reference
 
@@ -76,6 +82,7 @@ list of upstream debugging variables.
 | `GGML_HIP_GRAPHS=1` as a shell variable | No runtime effect in the current implementation. | Harmless but redundant in older command examples; use the CMake option instead. |
 | `HSA_OVERRIDE_GFX_VERSION=10.3.0` | Presents the V620 as the tested `gfx1030` target and enables the certified RDNA2 optimization profile. | The only runtime switch needed for the profile; `HSA_NO_SCRATCH_RECLAIM=1` remains optional stability tuning. |
 | `HSA_NO_SCRATCH_RECLAIM=1` | Keeps HIP scratch allocations instead of reclaiming them between work. | Improves stability/consistency at the cost of retaining more GPU memory. |
+| `GGML_HIP_RDNA2_AUTO=0` | Disables all native RDNA2/Qwen automatic paths with one switch. | Optional emergency/debug fallback; unset by default. |
 | `GGML_TP_SHARDED_OUTPUT=auto|0|1` | Splits validated output heads along the embedding dimension, then FP32-all-reduces full logits. | Defaults to `auto` for Qwen35 27B; use `1` for other validated Qwen 35B/122B paths or `0` to disable. Do not combine with `GGML_TP_VOCAB_OUTPUT`. |
 | `GGML_TP_VOCAB_OUTPUT=1` | Splits an eligible output head along vocabulary, selects local candidates, and exchanges only compact TOP_K results. | Raw decode only for now; requires RCCL, CPU sampling, finite `top_k <= 256`, and at most one output row. Do not combine with `GGML_TP_SHARDED_OUTPUT`. |
 

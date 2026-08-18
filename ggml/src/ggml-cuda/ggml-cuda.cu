@@ -1022,6 +1022,9 @@ enum ggml_cuda_rdna2_p2p_host_mode {
 
 static int ggml_cuda_rdna2_p2p_host_allreduce_mode() {
     static const int mode = []() {
+        if (!ggml_cuda_rdna2_auto_enabled()) {
+            return GGML_CUDA_RDNA2_P2P_HOST_OFF;
+        }
         const char * value = std::getenv("GGML_HIP_GFX1030_P2P_ALLREDUCE");
         if (value == nullptr || std::strcmp(value, "auto") == 0) return GGML_CUDA_RDNA2_P2P_HOST_AUTO;
         if (std::strcmp(value, "host") == 0) return GGML_CUDA_RDNA2_P2P_HOST_SIMPLE;
@@ -1953,6 +1956,10 @@ static bool ggml_cuda_env_is_set(const char * name) {
 
 static void ggml_cuda_prepare_native_rccl_policy(ggml_backend_cuda_comm_context * comm_ctx) {
 #if defined(GGML_USE_HIP) && defined(GGML_USE_NCCL) && defined(__linux__)
+    if (!ggml_cuda_rdna2_auto_enabled()) {
+        GGML_LOG_INFO("native RDNA2 Auto disabled by GGML_HIP_RDNA2_AUTO\n");
+        return;
+    }
     const char * mode_env = std::getenv("GGML_HIP_RCCL_TUNE");
     const bool force = mode_env != nullptr && std::strcmp(mode_env, "force") == 0;
     const bool automatic = mode_env == nullptr || std::strcmp(mode_env, "auto") == 0;

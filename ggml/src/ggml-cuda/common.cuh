@@ -67,11 +67,24 @@ static_assert(sizeof(block_q8_1_sum_hi) == 2, "Unexpected q8_1 sum_hi sidecar si
 #define STRINGIZE_IMPL(...) #__VA_ARGS__
 #define STRINGIZE(...) STRINGIZE_IMPL(__VA_ARGS__)
 
-// HSA_OVERRIDE_GFX_VERSION is the single opt-in for the tested RDNA2/gfx1030
-// profile. Explicit feature variables remain available as per-feature
-// overrides, but ordinary V620 launches need only HSA_OVERRIDE_GFX_VERSION.
+// GGML_HIP_RDNA2_AUTO is the single kill switch for the automatic RDNA2
+// profile, topology policy, and model-specific paths. HSA_OVERRIDE_GFX_VERSION
+// remains the single opt-in for the tested RDNA2/gfx1030 kernel profile.
+static inline bool ggml_cuda_rdna2_auto_enabled() {
+    const char * value = std::getenv("GGML_HIP_RDNA2_AUTO");
+    return value == nullptr ||
+           (std::strcmp(value, "0") != 0 &&
+            std::strcmp(value, "off") != 0 &&
+            std::strcmp(value, "false") != 0);
+}
+
+// Explicit feature variables remain available as per-feature overrides, but
+// ordinary V620 launches need only HSA_OVERRIDE_GFX_VERSION.
 static inline bool ggml_cuda_rdna2_native_profile_enabled() {
 #if defined(GGML_USE_HIP)
+    if (!ggml_cuda_rdna2_auto_enabled()) {
+        return false;
+    }
     static const bool enabled = []() {
         if (const char * native = std::getenv("GGML_HIP_GFX1030_NATIVE")) {
             return std::atoi(native) != 0;
@@ -87,6 +100,9 @@ static inline bool ggml_cuda_rdna2_native_profile_enabled() {
 
 static inline bool ggml_cuda_rdna2_feature_enabled(const char * name) {
 #if defined(GGML_USE_HIP)
+    if (!ggml_cuda_rdna2_auto_enabled()) {
+        return false;
+    }
     if (const char * value = std::getenv(name)) {
         return std::atoi(value) != 0;
     }

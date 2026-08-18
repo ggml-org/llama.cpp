@@ -9,7 +9,7 @@ cmake -S . -B build -DGGML_HIP=ON -DGGML_HIP_RCCL=ON -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
 ```
 
-Launch `llama-server` normally. On V620/gfx1030, setting `HSA_OVERRIDE_GFX_VERSION=10.3.0` is the umbrella switch for the certified RDNA2 profile: native MMVQ/attention/GDN, Q8 activation cache, Q8_1 fusion, ADD/RMS_NORM fusion, and GDN sibling fusion. Explicit per-feature variables remain available and take precedence; setting one to `0` disables that feature.
+Launch `llama-server` normally. On V620/gfx1030, setting `HSA_OVERRIDE_GFX_VERSION=10.3.0` is the umbrella switch for the certified RDNA2 profile: native MMVQ/attention/GDN, Q8 activation cache, Q8_1 fusion, ADD/RMS_NORM fusion, and GDN sibling fusion. Set `GGML_HIP_RDNA2_AUTO=0` to disable the entire native RDNA2 profile, topology tuner, host-snapshot reduction, deferred catch-up, and automatic output sharding with one switch. Explicit per-feature variables remain available when the global switch is enabled.
 
 ## Automatic RDNA2 profile and policy
 
@@ -47,7 +47,15 @@ Only graph transformations remain model-specific:
 
 ## Overrides
 
-User settings are preserved. The following disable automatic behavior or select an explicit policy:
+The single global disable switch is:
+
+```text
+GGML_HIP_RDNA2_AUTO=0
+```
+
+It disables all native RDNA2/Qwen automatic paths while leaving ordinary RCCL
+operation available. With the switch unset (the default), user settings are
+preserved. The following are optional per-feature controls:
 
 ```text
 GGML_HIP_RCCL_TUNE=off|auto|force

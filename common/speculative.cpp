@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <iomanip>
 #include <map>
@@ -26,6 +27,14 @@
 #define SPC_WRN(fmt, ...) LOG_WRN("spec %12.*s: " fmt, 12, __func__, __VA_ARGS__)
 #define SPC_ERR(fmt, ...) LOG_ERR("spec %12.*s: " fmt, 12, __func__, __VA_ARGS__)
 #define SPC_CNT(fmt, ...) LOG_CNT(""              fmt,               __VA_ARGS__)
+
+static bool common_speculative_rdna2_auto_enabled() {
+    const char * value = std::getenv("GGML_HIP_RDNA2_AUTO");
+    return value == nullptr ||
+           (std::strcmp(value, "0") != 0 &&
+            std::strcmp(value, "off") != 0 &&
+            std::strcmp(value, "false") != 0);
+}
 
 #define SPEC_VOCAB_MAX_SIZE_DIFFERENCE  128
 #define SPEC_VOCAB_CHECK_START_TOKEN_ID 5
@@ -1397,7 +1406,8 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         char target_arch[32] = {};
         const int32_t arch_len = llama_model_meta_val_str(
             llama_get_model(ctx_tgt), "general.architecture", target_arch, sizeof(target_arch));
-        deferred_auto_model = arch_len >= 0 && std::strcmp(target_arch, "qwen35") == 0 && n_embd == 5120;
+        deferred_auto_model = common_speculative_rdna2_auto_enabled() &&
+                arch_len >= 0 && std::strcmp(target_arch, "qwen35") == 0 && n_embd == 5120;
 
         SPC_TRC("%s", "adding speculative implementation 'draft-mtp'\n");
         SPC_TRC("- n_max=%d, n_min=%d, p_min=%.2f, n_embd=%d, backend_sampling=%d\n", this->params.n_max, this->params.n_min, this->params.p_min, n_embd, (int) this->params.backend_sampling);
@@ -1555,7 +1565,8 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         const char * defer_env = std::getenv("GGML_MTP_DEFER_CATCHUP");
         const bool defer_force = defer_env != nullptr && std::strcmp(defer_env, "1") == 0;
         const bool defer_auto = defer_env == nullptr || std::strcmp(defer_env, "auto") == 0;
-        const bool defer_requested = defer_force || (defer_auto && deferred_auto_model);
+        const bool defer_requested = common_speculative_rdna2_auto_enabled() &&
+                (defer_force || (defer_auto && deferred_auto_model));
         bool all_logits = batch_in.logits != nullptr;
         for (int32_t k = 0; all_logits && k < n_tokens; ++k) {
             all_logits = batch_in.logits[k] != 0;

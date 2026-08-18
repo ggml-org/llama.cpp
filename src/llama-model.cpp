@@ -39,7 +39,18 @@
 #include <string>
 #include <vector>
 
+static bool llama_model_rdna2_auto_enabled() {
+    const char * value = std::getenv("GGML_HIP_RDNA2_AUTO");
+    return value == nullptr ||
+           (std::strcmp(value, "0") != 0 &&
+            std::strcmp(value, "off") != 0 &&
+            std::strcmp(value, "false") != 0);
+}
+
 static bool llama_model_rdna2_native_profile_enabled() {
+    if (!llama_model_rdna2_auto_enabled()) {
+        return false;
+    }
     static const bool enabled = []() {
         if (const char * native = std::getenv("GGML_HIP_GFX1030_NATIVE")) {
             return std::atoi(native) != 0;
@@ -1981,7 +1992,8 @@ bool llama_model::is_tensor_parallel_output_head(const ggml_tensor * tensor) con
             vocab_sharded != nullptr && strcmp(vocab_sharded, "1") == 0;
         const bool requested = enabled != nullptr && strcmp(enabled, "1") == 0;
         const bool automatic = enabled == nullptr || strcmp(enabled, "auto") == 0;
-        const bool use_sharded_output = requested || (automatic && auto_qwen27);
+        const bool use_sharded_output = llama_model_rdna2_auto_enabled() &&
+            (requested || (automatic && auto_qwen27));
         if (use_sharded_output && params.no_tp_output_head_sharding && supported_arch) {
             LLAMA_LOG_WARN("%s: keeping the output head mirrored because an external draft model shares it\n", __func__);
         } else if (use_sharded_output && params.split_mode == LLAMA_SPLIT_MODE_TENSOR && supported_arch) {
