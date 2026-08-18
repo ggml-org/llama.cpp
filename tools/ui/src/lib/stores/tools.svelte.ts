@@ -18,9 +18,9 @@ import {
 } from '$lib/enums';
 import { ToolsService } from '$lib/services/tools.service';
 // direct imports between stores, not via the barrel, to avoid circular deps
-import { mcpStore } from '$lib/stores/mcp.svelte';
-import { modelsStore } from '$lib/stores/models.svelte';
-import { settingsStore } from '$lib/stores/settings.svelte';
+import { mcpStore } from '$lib/stores/mcp/index.svelte';
+import { modelsStore } from '$lib/stores/models/index.svelte';
+import { settingsStore } from '$lib/stores/settings/index.svelte';
 import type { OpenAIToolDefinition, ToolEntry, ToolGroup } from '$lib/types';
 import { buildSandboxToolDefinition } from '$lib/utils';
 import { SvelteMap, SvelteSet } from 'svelte/reactivity';
@@ -216,8 +216,8 @@ class ToolsStore {
 
 		if (!model) return null;
 
-		const vision = modelsStore.modelSupportsVision(model);
-		const audio = modelsStore.modelSupportsAudio(model);
+		const vision = modelsStore.props.modelSupportsVision(model);
+		const audio = modelsStore.props.modelSupportsAudio(model);
 
 		if (!vision && !audio) return null;
 

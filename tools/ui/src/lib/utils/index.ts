@@ -150,7 +150,10 @@ export {
 	getResourceIcon,
 	getResourceTextContent,
 	getResourceBlobContent,
-	downloadResourceContent
+	downloadResourceContent,
+	getMcpIconUrl,
+	getMcpServerFaviconFallback,
+	getMcpServerLabel
 } from './mcp';
 
 // URI Template utilities

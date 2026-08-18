@@ -21,7 +21,10 @@ export class AgenticGates {
 		{ toolName: string; serverLabel: string } | null
 	>();
 	/** Resolve functions for pending permission Promises; nothing derives from this map */
-	private _permissionResolvers = new SvelteMap<string, (decision: ToolPermissionDecision) => void>();
+	private _permissionResolvers = new SvelteMap<
+		string,
+		(decision: ToolPermissionDecision) => void
+	>();
 
 	/** Dedicated reactive state for pending continue requests (turn limit reached) */
 	private _pendingContinueRequests = new SvelteMap<string, boolean>();

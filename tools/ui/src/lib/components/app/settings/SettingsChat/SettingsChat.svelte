@@ -52,7 +52,7 @@
 			void modelsStore
 				.fetch()
 				.then(() => modelsStore.fetchRouterModels())
-				.then(() => modelsStore.fetchModalitiesForLoadedModels())
+				.then(() => modelsStore.props.fetchModalitiesForLoadedModels())
 				.then(() => modelsStore.ensureFirstModelSelected());
 		}
 	});

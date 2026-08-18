@@ -16,7 +16,7 @@
 	$effect(() => {
 		const conv = conversationsStore.activeConversation;
 
-		untrack(() => chatStore.setActiveProcessingConversation(conv?.id ?? null));
+		untrack(() => chatStore.processing.setActiveConversation(conv?.id ?? null));
 	});
 
 	$effect(() => {
@@ -28,12 +28,12 @@
 		if (chatStore.isLoading || chatStore.isStreaming()) return;
 
 		if (messages.length === 0) {
-			untrack(() => chatStore.clearProcessingState(conv.id));
+			untrack(() => chatStore.processing.setState(conv.id, null));
 
 			return;
 		}
 
-		untrack(() => chatStore.restoreProcessingStateFromMessages(messages, conv.id));
+		untrack(() => chatStore.processing.restoreFromMessages(messages, conv.id));
 	});
 
 	$effect(() => {

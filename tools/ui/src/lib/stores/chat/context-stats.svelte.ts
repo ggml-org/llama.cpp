@@ -8,10 +8,10 @@
 
 import { MessageRole } from '$lib/enums';
 // direct imports between stores, not via the barrel, to avoid circular deps
-import { agenticStore } from '$lib/stores/agentic.svelte';
-import { chatStore } from '$lib/stores/chat.svelte';
-import { conversationsStore } from '$lib/stores/conversations.svelte';
-import { modelsStore } from '$lib/stores/models.svelte';
+import { agenticStore } from '$lib/stores/agentic/index.svelte';
+import { chatStore } from '$lib/stores/chat/index.svelte';
+import { conversationsStore } from '$lib/stores/conversations/index.svelte';
+import { modelsStore } from '$lib/stores/models/index.svelte';
 import { serverStore } from '$lib/stores/server.svelte';
 import type { ApiProcessingState, ChatMessageTimings, DatabaseMessage } from '$lib/types';
 
@@ -58,16 +58,16 @@ class ContextStatsStore {
 	);
 
 	isActiveModelLoading = $derived(
-		this.activeModelId !== null && modelsStore.isModelOperationInProgress(this.activeModelId)
+		this.activeModelId !== null && modelsStore.status.isOperationInProgress(this.activeModelId)
 	);
 
 	contextTotal = $derived.by(() => {
-		void modelsStore.propsCacheVersion;
+		void modelsStore.props.cacheVersion;
 
-		return this.activeModelId ? modelsStore.getModelContextSize(this.activeModelId) : null;
+		return this.activeModelId ? modelsStore.props.getModelContextSize(this.activeModelId) : null;
 	});
 
-	private liveStats = $derived(deriveLiveStats(chatStore.activeProcessingState));
+	private liveStats = $derived(deriveLiveStats(chatStore.processing.activeState));
 
 	currentRead = $derived.by(() => {
 		const timings = lastAssistantTimings(conversationsStore.activeMessages as DatabaseMessage[]);

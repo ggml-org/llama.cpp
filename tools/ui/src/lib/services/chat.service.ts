@@ -1,4 +1,3 @@
-import { settingsStore } from '../stores/settings.svelte';
 import { getAudioInputFormat } from '../utils/audio-format';
 import { capImageDataURLSize } from '../utils/cap-img-size';
 import {
@@ -25,7 +24,8 @@ import {
 	ReasoningFormat,
 	StreamConnectionState
 } from '$lib/enums';
-import { modelsStore } from '$lib/stores/models.svelte';
+import { modelsStore } from '$lib/stores/models/index.svelte';
+import { settingsStore } from '$lib/stores/settings/index.svelte';
 import type { DatabaseMessageExtraMcpPrompt, DatabaseMessageExtraMcpResource } from '$lib/types';
 import type {
 	ApiChatCompletionToolCall,
@@ -193,7 +193,7 @@ export class ChatService {
 		});
 
 		// Filter out image attachments if the model doesn't support vision
-		if (options.model && !modelsStore.modelSupportsVision(options.model)) {
+		if (options.model && !modelsStore.props.modelSupportsVision(options.model)) {
 			normalizedMessages.forEach((msg) => {
 				if (Array.isArray(msg.content)) {
 					msg.content = msg.content.filter((part: ApiChatMessageContentPart) => {
