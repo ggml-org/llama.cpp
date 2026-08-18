@@ -62,7 +62,7 @@
 	// it, the picker still opens for manual entry but explains why search is
 	// unavailable instead of firing searches that would only fail. Browse is
 	// hidden too: it resolves the picked folder name through the same tool.
-	const fileSearchKey = $derived(toolsStore.getPermissionKey(BuiltInTool.FILE_GLOB_SEARCH));
+	const fileSearchKey = $derived(toolsStore.getPermissionKey(BuiltInTool.SERVER_FILE_GLOB_SEARCH));
 	const fileSearchEnabled = $derived(
 		fileSearchKey !== null && toolsStore.isToolEnabled(fileSearchKey)
 	);
@@ -212,7 +212,7 @@
 	// so the caller fails visibly instead of committing a bare leaf name.
 	async function resolveNativeName(name: string): Promise<string | null> {
 		try {
-			const res = await ToolsService.executeToolRaw(BuiltInTool.FILE_GLOB_SEARCH, {
+			const res = await ToolsService.executeToolRaw(BuiltInTool.SERVER_FILE_GLOB_SEARCH, {
 				include: buildCaseInsensitiveGlob(name),
 				limit: SEARCH.NATIVE_LIMIT,
 				max_depth: SEARCH.NATIVE_MAX_DEPTH,

@@ -17,6 +17,7 @@ from .base import MmprojModel, ModelBase, TextModel, gguf
     "Qwen2_5_VLForConditionalGeneration",
     "Qwen2_5OmniModel",
 )
+@ModelBase.example("Qwen/Qwen2-VL-2B-Instruct", "Qwen/Qwen2.5-VL-3B-Instruct")
 class Qwen2VLModel(TextModel):
     model_arch = gguf.MODEL_ARCH.QWEN2VL
 
@@ -40,6 +41,7 @@ class Qwen2VLModel(TextModel):
 
 
 @ModelBase.register("Qwen2VLModel", "Qwen2VLForConditionalGeneration", "Qwen2_5_VLForConditionalGeneration")
+@ModelBase.example("Qwen/Qwen2-VL-2B-Instruct", "Qwen/Qwen2.5-VL-3B-Instruct")
 class Qwen2VLVisionModel(MmprojModel):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -161,6 +163,7 @@ class Qwen25AudioModel(MmprojModel):
 
 
 @ModelBase.register("Qwen2_5OmniModel")
+@ModelBase.example("Qwen/Qwen2.5-Omni-3B")
 class Qwen25OmniModel(Qwen2VLVisionModel, Qwen25AudioModel):
     has_audio_encoder = True
     has_vision_encoder = True

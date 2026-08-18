@@ -195,6 +195,10 @@ public:
     // will create a copy of the chunk if it contains non-text data
     void push_back(const mtmd_input_chunk * chunk);
 
+    // same as push_back, but media chunks are stored as placeholders (no image/audio data)
+    // only use this if the chunk will never be encoded again (e.g. it is already in the KV cache)
+    void push_back_placeholder(const mtmd_input_chunk * chunk);
+
     // appends server tokens, updates the media map. copies media chunks.
     void push_back(server_tokens & tokens);
 

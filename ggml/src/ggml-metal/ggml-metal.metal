@@ -2429,6 +2429,8 @@ kernel void kernel_ssm_scan_f32(
     const int32_t nh  = args.n_head;
     const int32_t ng  = args.n_group;
     const int32_t n_t = args.n_seq_tokens;
+    const int32_t n_s = args.n_seqs;
+    const int32_t K   = args.K;
 
     const int32_t s_off = args.s_off;
 
@@ -2486,6 +2488,12 @@ kernel void kernel_ssm_scan_f32(
 
             // recurse
             s0 = s;
+
+            const int32_t slot = n_t - 1 - (i2 + t);
+            if (slot > 0 && slot < K) {
+                device float * s_snapshot = (device float *) ((device char *) s_buff + (int64_t) slot*n_s*args.nb03);
+                s_snapshot[i] = s;
+            }
 
             B  += args.ns42;
             C  += args.ns52;

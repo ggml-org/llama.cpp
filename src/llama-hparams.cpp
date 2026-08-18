@@ -217,6 +217,13 @@ uint32_t llama_hparams::n_embd_s() const {
         return n_embd_head_kda * n_embd_head_kda * n_head();  // 128 * 128 * 32 = 524288
     }
 
+    if (n_embd_head_la != 0) {
+        // for MiniMax-Text-01 linear attention layers
+        // Full recurrent state: head_dim * head_dim * n_head
+        // tensor shape for linear attention: [head_dim, head_dim, n_head]
+        return n_embd_head_la * n_embd_head_la * n_head();  // 128 * 128 * 64 = 1048576
+    }
+
     // corresponds to Mamba's ssm_states size
     return ssm_d_state * ssm_d_inner;
 }

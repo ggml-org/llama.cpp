@@ -127,7 +127,7 @@ export { sanitizeKeyValuePairKey, sanitizeKeyValuePairValue } from './sanitize';
 // Image error fallback utilities
 export { getImageErrorFallbackHtml } from './image-error-fallback';
 
-// SSE-with-JSON stream iterator (used by built-in tool streaming, decoupled
+// SSE-with-JSON stream iterator (used by server tool streaming, decoupled
 // from chat.service.ts which embeds its own SSE parser for resume support)
 export { parseSseJsonStream } from './sse';
 
@@ -310,7 +310,7 @@ export {
 	withAbortSignal
 } from './abort';
 
-// Tool-call meta utilities. Parsers for each built-in tool live next to
+// Tool-call meta utilities. Parsers for each server tool live next to
 // their renderer family under
 // `src/lib/components/app/chat/ChatMessages/ChatMessage/ChatMessageToolCall/parsers/`.
 // This module only carries the helpers that genuinely cross tool
@@ -321,7 +321,7 @@ export { tryParseToolResultObject } from './tool-call-meta';
 // Per-tool UI metadata (label + icon) used by the tool-call chrome.
 // Re-exported through $lib/utils so renderer components can read the
 // label without depending on $lib/constants directly.
-export { getBuiltinToolUi } from './built-in-tools';
+export { getToolUi } from './tool-ui';
 
 // Chat command picker
 
@@ -330,6 +330,12 @@ export { getChatCommands } from './chat-commands';
 // Sandbox tool definition
 // SANDBOX_TOOL_DEFINITION is deprecated; kept for backward compatibility.
 export { buildSandboxToolDefinition, SANDBOX_TOOL_DEFINITION } from './sandbox-tool';
+
+// Browser `get_datetime` executor (the browser clock, not the server's)
+export { executeGetDatetimeTool } from './get-datetime';
+
+// Browser fallback for the server's get_info tool
+export { executeBrowserInfoTool } from './browser-info';
 
 // Cryptography utilities
 
