@@ -150,28 +150,30 @@
 
 			<ChatFormActionAddToolsSubmenu />
 
-			{#if chatFormActions.hasMcpPromptsSupport}
+			{#if chatFormActions.hasMcpPromptsSupport || chatFormActions.hasMcpResourcesSupport}
 				<DropdownMenu.Separator />
 
-				<DropdownMenu.Item
-					class="flex cursor-pointer items-center gap-2"
-					onclick={chatFormActions.onMcpPromptClick}
-				>
-					<Zap class={ICON_CLASS_DEFAULT} />
+				{#if chatFormActions.hasMcpPromptsSupport}
+					<DropdownMenu.Item
+						class="flex cursor-pointer items-center gap-2"
+						onclick={chatFormActions.onMcpPromptClick}
+					>
+						<Zap class={ICON_CLASS_DEFAULT} />
 
-					<span>MCP Prompts</span>
-				</DropdownMenu.Item>
-			{/if}
+						<span>MCP Prompts</span>
+					</DropdownMenu.Item>
+				{/if}
 
-			{#if chatFormActions.hasMcpResourcesSupport}
-				<DropdownMenu.Item
-					class="flex cursor-pointer items-center gap-2"
-					onclick={chatFormActions.onMcpResourcesClick}
-				>
-					<FolderOpen class={ICON_CLASS_DEFAULT} />
+				{#if chatFormActions.hasMcpResourcesSupport}
+					<DropdownMenu.Item
+						class="flex cursor-pointer items-center gap-2"
+						onclick={chatFormActions.onMcpResourcesClick}
+					>
+						<FolderOpen class={ICON_CLASS_DEFAULT} />
 
-					<span>MCP Resources</span>
-				</DropdownMenu.Item>
+						<span>MCP Resources</span>
+					</DropdownMenu.Item>
+				{/if}
 			{/if}
 		</DropdownMenu.Content>
 	</DropdownMenu.Root>

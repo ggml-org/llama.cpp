@@ -1,6 +1,5 @@
 <script lang="ts">
 	import { Check, ChevronDown, ChevronRight, Info, Loader2, PencilRuler } from '@lucide/svelte';
-	import { McpLogo } from '$lib/components/app';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import * as Collapsible from '$lib/components/ui/collapsible';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
@@ -68,29 +67,9 @@
 					{@render groupRow(group)}
 				{/each}
 
-				{#if toolsPanel.mcpGroups.length > 0}
-					<div class="flex items-center gap-1">
-						<span class="flex min-w-0 flex-1 items-center gap-2 rounded px-2 py-1.5 text-sm">
-							<span class="inline-flex min-w-0 items-center gap-1.5 font-medium">
-								<McpLogo class="{ICON_CLASS_DEFAULT} shrink-0" />
-
-								<span class="truncate">MCP Tools</span>
-							</span>
-						</span>
-
-						<Checkbox
-							checked={toolsPanel.mcpCategoryEnabled}
-							onCheckedChange={() => toolsPanel.toggleMcpCategory()}
-							class="mr-2 {ICON_CLASS_DEFAULT} shrink-0"
-						/>
-					</div>
-
-					<div class="ml-4 border-l border-border/50 pl-2">
-						{#each toolsPanel.mcpGroups as group (group.key)}
-							{@render groupRow(group)}
-						{/each}
-					</div>
-				{/if}
+				{#each toolsPanel.mcpGroups as group (group.key)}
+					{@render groupRow(group)}
+				{/each}
 			</div>
 		{/if}
 	</DropdownMenu.SubContent>
