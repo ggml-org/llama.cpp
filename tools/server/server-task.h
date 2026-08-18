@@ -497,6 +497,9 @@ struct server_task_result_metrics : server_task_result {
 
     server_metrics metrics;
 
+    std::string              model_name;
+    std::set<std::string>    model_aliases;
+
     // while we can also use std::vector<server_slot> this requires copying the slot object which can be quite messy
     // therefore, we use json to temporarily store the slot.to_json() result
     json slots_data = json::array();
