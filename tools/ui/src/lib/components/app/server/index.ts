@@ -78,3 +78,22 @@ export { default as ServerErrorSplash } from './ServerErrorSplash.svelte';
  * ```
  */
 export { default as ServerLoadingSplash } from './ServerLoadingSplash.svelte';
+
+/**
+ * **ServerRemoteCodeSplash** - Full-screen access code prompt
+ *
+ * Shown in web-only builds (LLAMA_UI_WEB_ONLY) while no remote session is
+ * stored. The page it is served from has no llama-server, so the app stays
+ * blocked until the user pastes the 40-character code of a llama-connect
+ * instance.
+ *
+ * **Features:**
+ * - Access code input with validation
+ * - Joins the WebRTC tunnel through webrtcStore, then reloads
+ *
+ * @example
+ * ```svelte
+ * <ServerRemoteCodeSplash />
+ * ```
+ */
+export { default as ServerRemoteCodeSplash } from './ServerRemoteCodeSplash.svelte';

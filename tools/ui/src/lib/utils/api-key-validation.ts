@@ -4,13 +4,15 @@ import { base } from '$app/paths';
 import { HEADERS } from '$lib/constants';
 import { MimeTypeApplication } from '$lib/enums';
 import { settingsStore } from '$lib/stores/settings.svelte';
+import { webrtcStore } from '$lib/stores/webrtc.svelte';
 
 /**
  * Validates API key by making a request to the server props endpoint
  * Throws SvelteKit errors for authentication failures or server issues
  */
 export async function validateApiKey(fetch: typeof globalThis.fetch): Promise<void> {
-	if (!browser) {
+	// A web-only build has no server to probe until the tunnel code is entered
+	if (!browser || webrtcStore.needsCode) {
 		return;
 	}
 

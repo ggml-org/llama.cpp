@@ -8,7 +8,8 @@
 		SettingsChatImportExportTab,
 		SettingsChatMobileHeader,
 		SettingsChatToolsTab,
-		SettingsFooter
+		SettingsFooter,
+		SettingsRemoteAccess
 	} from '$lib/components/app/settings';
 	import { Button } from '$lib/components/ui/button';
 	import {
@@ -152,6 +153,8 @@
 						<SettingsChatToolsTab />
 					{:else if currentSection.title === SETTINGS_SECTION_TITLES.IMPORT_EXPORT}
 						<SettingsChatImportExportTab />
+					{:else if currentSection.title === SETTINGS_SECTION_TITLES.REMOTE_ACCESS}
+						<SettingsRemoteAccess />
 					{:else if currentSection.fields}
 						<div class="space-y-6">
 							<SettingsChatFields

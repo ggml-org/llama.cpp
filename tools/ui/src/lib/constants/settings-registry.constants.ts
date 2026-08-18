@@ -13,6 +13,7 @@ import {
 	Monitor,
 	Moon,
 	PencilRuler,
+	Radio,
 	Sliders,
 	Sun
 } from '@lucide/svelte';
@@ -36,6 +37,7 @@ export const SETTINGS_SECTION_TITLES = {
 	GENERAL: 'General',
 	IMPORT_EXPORT: 'Import/Export',
 	PENALTIES: 'Penalties',
+	REMOTE_ACCESS: 'Remote Access',
 	SAMPLING: 'Sampling',
 	TOOLS: 'Tools'
 } as const;
@@ -46,6 +48,11 @@ const STANDALONE_SECTIONS: { title: SettingsSectionTitle; slug: string; icon: Co
 		icon: Database,
 		slug: SETTINGS_SECTION_SLUGS.IMPORT_EXPORT,
 		title: SETTINGS_SECTION_TITLES.IMPORT_EXPORT
+	},
+	{
+		icon: Radio,
+		slug: SETTINGS_SECTION_SLUGS.REMOTE_ACCESS,
+		title: SETTINGS_SECTION_TITLES.REMOTE_ACCESS
 	}
 ];
 const COLOR_MODE_OPTIONS: Array<{ value: string; label: string; icon: Component }> = [

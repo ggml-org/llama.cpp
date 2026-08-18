@@ -136,6 +136,9 @@ declare global {
 }
 
 declare global {
+	/** Set by vite from the LLAMA_UI_WEB_ONLY build env var. */
+	const __WEB_ONLY__: boolean;
+
 	interface Window {
 		idxThemeStyle?: number;
 		idxCodeBlock?: number;
