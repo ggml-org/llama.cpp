@@ -673,8 +673,13 @@ void GgmlOvDecoder::add_extra_inputs() {
     //     see llama_kv_cache_unified::get_n_kv and llama_kv_cache_unified::get_padding.
     // 2. `n_seq_active` and `seq_active_start`, used in FLASH_ATTN_EXT to indicate the active sequences in the batch
 
+    // n_seq_active/seq_active_start/seq_active_end can only ever equal one known value when n_seq == 1
+    // (true for every llama-bench/llama-cli/llama-server -np 1 run), so folding them to Constants in
+    // that case is always safe -- confirmed via utils.cpp: the tensor-feeding loop drives itself from
+    // the compiled model's actual Parameter list, so anything that becomes a Constant is automatically
+    // excluded, no special-casing needed.
     auto create_1d_input = [this](const std::string & name, int64_t value) {
-        if (m_is_static) {
+        if (m_is_static || m_model_params.n_seq == 1) {
             auto constant =
                 std::make_shared<ov::op::v0::Constant>(ov::element::i64, ov::Shape{1}, std::vector<int64_t>{value});
             constant->set_friendly_name(name);
@@ -691,11 +696,38 @@ void GgmlOvDecoder::add_extra_inputs() {
         }
     };
 
-    if (m_compute_params.attention_size != -1) {
+    // attention_size (non-SWA) tracks the growing KV length, so it must NOT be folded to a Constant
+    // like n_seq_active above -- the compiled graph is cached and reused across calls (graph_key in
+    // utils.h keys on node topology, not shape), and a Constant would freeze whatever depth was live
+    // at the first compile forever. Static (NPU) mode is unaffected -- ctx_per_seq is a real per-model
+    // constant there. For dynamic (GPU) mode we don't need this as a graph input at all: utils.cpp's
+    // try_make_kv_sliced_tensor() already binds the K/V cache INPUT tensor pre-sliced to the real
+    // current n_kv for non-SWA, single-active-seq layers (every call, always fresh, host-side) -- so
+    // permute.cpp's op_case 3/5 (K/V, non-SWA) can just use that tensor directly, no further graph-level
+    // Slice needed. See ggml_gpu_sdpa_dispatch.md memory for the investigation that found this.
+    if (m_is_static && m_compute_params.attention_size != -1) {
         create_1d_input("attention_size", m_compute_params.attention_size);
     }
+    // attention_size_swa has no equivalent host-side pre-slice (try_make_kv_sliced_tensor excludes SWA
+    // layers -- their KV cache is a ring buffer, so "first N rows are the live prefix" doesn't hold
+    // once it wraps), so permute.cpp's op_case 4/6 still needs a real per-call value here. Fold to a
+    // Constant only for static mode; dynamic mode gets a genuine fresh-per-call Parameter.
     if (m_compute_params.attention_size_swa != -1) {
-        create_1d_input("attention_size_swa", m_compute_params.attention_size_swa);
+        if (m_is_static) {
+            auto constant = std::make_shared<ov::op::v0::Constant>(ov::element::i64, ov::Shape{1},
+                                                                    std::vector<int64_t>{m_compute_params.attention_size_swa});
+            constant->set_friendly_name("attention_size_swa");
+            m_model_extra_inputs["attention_size_swa"] = constant;
+        } else {
+            auto param_node = std::make_shared<ov::op::v0::Parameter>(ov::element::i64, ov::Shape{1});
+            param_node->set_friendly_name("attention_size_swa");
+            param_node->output(0).get_tensor().set_names({"attention_size_swa"});
+            m_model_extra_inputs["attention_size_swa"] = param_node;
+
+            auto tensor = std::make_shared<ov::Tensor>(ov::element::i64, ov::Shape{1});
+            *tensor->data<int64_t>() = m_compute_params.attention_size_swa;
+            m_model_extra_input_values["attention_size_swa"] = tensor;
+        }
     }
     create_1d_input("n_seq_active", m_compute_params.n_seq_active);
     create_1d_input("seq_active_start", m_compute_params.seq_active_start);

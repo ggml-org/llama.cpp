@@ -79,13 +79,24 @@ OutputVector translate_permute(const NodeContext & context) {
         int64_t ctx_per_seq = cache_shape[2].is_static() ? cache_shape[2].get_length() : -1;
         int64_t n_seq = cache_shape[1].get_length();
 
+        // Non-SWA (op_case 3/5) has no "attention_size" input in dynamic (GPU) mode: the K/V cache
+        // Slice below would be a no-op there anyway, since utils.cpp's try_make_kv_sliced_tensor()
+        // already binds the host input tensor pre-sliced to the real current n_kv for these layers
+        // (single active sequence, not SWA) -- so skip the graph-level Slice entirely rather than
+        // slicing to a value that would go stale once the compiled graph is reused at greater depth
+        // (see ggml_gpu_sdpa_dispatch.md memory). Static (NPU) mode still provides "attention_size" as
+        // a Constant and needs the Slice as before. SWA (op_case 4/6) has no host pre-slice (ring
+        // buffer), so it always needs the Slice, fed a real per-call value via "attention_size_swa".
+        const bool need_kv_size_slice = (op_case == 4 || op_case == 6) || context.has_input("attention_size");
         Output<Node> attention_size;
-        if (!context.has_input("attention_size")) {
-            attention_size = ov::op::v0::Constant::create(ov::element::i64, {1}, {output_shape[2]});
-        } else if (op_case == 3 || op_case == 5) {
-            attention_size = context.get_input("attention_size");
-        } else {
-            attention_size = context.get_input("attention_size_swa");
+        if (need_kv_size_slice) {
+            if (op_case == 3 || op_case == 5) {
+                attention_size = context.get_input("attention_size");
+            } else if (context.has_input("attention_size_swa")) {
+                attention_size = context.get_input("attention_size_swa");
+            } else {
+                attention_size = ov::op::v0::Constant::create(ov::element::i64, {1}, {output_shape[2]});
+            }
         }
 
         Output<Node> seq_active_start;
@@ -120,8 +131,11 @@ OutputVector translate_permute(const NodeContext & context) {
                 after_seq_slice =
                     std::make_shared<ov::op::v8::Slice>(src_reshaped, seq_active_start, seq_active_end, one, zero);
             }
-            auto slice2 = std::make_shared<ov::op::v8::Slice>(after_seq_slice, zero, attention_size, one, one);
-            res = std::make_shared<ov::op::v1::Transpose>(slice2, perm);
+            ov::Output<ov::Node> pre_transpose = after_seq_slice;
+            if (need_kv_size_slice) {
+                pre_transpose = std::make_shared<ov::op::v8::Slice>(after_seq_slice, zero, attention_size, one, one);
+            }
+            res = std::make_shared<ov::op::v1::Transpose>(pre_transpose, perm);
         } else {
             auto three = ov::op::v0::Constant::create(ov::element::i64, {1}, {3});
             auto src_reshaped = std::make_shared<ov::op::v1::Reshape>(
@@ -134,8 +148,10 @@ OutputVector translate_permute(const NodeContext & context) {
                 after_seq_slice =
                     std::make_shared<ov::op::v8::Slice>(src_reshaped, seq_active_start, seq_active_end, one, zero);
             }
-            auto slice2 = std::make_shared<ov::op::v8::Slice>(after_seq_slice, zero, attention_size, one, three);
-            res = slice2;
+            res = after_seq_slice;
+            if (need_kv_size_slice) {
+                res = std::make_shared<ov::op::v8::Slice>(after_seq_slice, zero, attention_size, one, three);
+            }
         }
     }
     return rename_outputs_with_suffix({res}, context.get_name());
