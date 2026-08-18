@@ -1347,10 +1347,6 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
             SET_CAUSE(node, "4.vsrc");
         }
 
-        // an op that is not a pure view but still aliases its source writes through to it, so it
-        // has to run where that source lives. earlier passes may have moved it elsewhere, and
-        // pass 5 would then substitute a copy for the source - leaving the write in the copy,
-        // which is discarded. the write is silently lost, the graph still computes
         if (node->view_src != NULL && !ggml_is_view_op(node->op)) {
             const int view_src_backend_id = tensor_backend_id(node->view_src);
             if (view_src_backend_id != -1 && *cur_backend_id != view_src_backend_id) {
@@ -1505,10 +1501,6 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
                     }
                 }
 
-                // this split may read src in place out of a buffer another backend owns. graph
-                // order says the memory dies at its last consumer, but an asynchronous reader is
-                // still reading past that point, so it must not be handed to a later split. the
-                // memory belongs to the view root, and the root is what the allocator frees
                 {
                     struct ggml_tensor * root = src;
                     while (root->view_src != NULL) {
@@ -1967,7 +1959,6 @@ ggml_backend_sched_t ggml_backend_sched_new(
 
     sched->n_backends = n_backends;
 
-    // sched->bufts[] is not populated yet, resolve the buffer type directly
     bool is_uma = false;
     if (!parallel && n_backends >= 2) {
         ggml_backend_buffer_type_t cpu_buft = bufts ? bufts[n_backends - 1]

@@ -2604,8 +2604,7 @@ static bool ggml_cuda_graph_verify_uid() {
     return verify;
 }
 
-// an unchanged cgraph->uid promises the caller has not moved anything this graph baked in.
-// see "Graph input ring buffer" in ggml-backend.h - breaking it replays stale addresses silently
+// see docs/development/backend-scheduler.md
 static bool ggml_cuda_graph_update_required(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph) {
     bool res = false;
 
