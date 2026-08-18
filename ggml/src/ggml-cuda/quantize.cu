@@ -393,7 +393,28 @@ static __global__ void quantize_mmq_mxfp4(const float * __restrict__ x,
             amax = fmaxf(amax, __shfl_xor_sync(0xFFFFFFFF, amax, mask, WARP_SIZE));
         }
 
-        const uint8_t e = compute_e8m0_scale(amax);
+        uint8_t e = compute_e8m0_scale(amax);
+
+        if (amax > 0.0f && e > 0) {
+            float err[2];
+#pragma unroll
+            for (int t = 0; t < 2; ++t) {
+                const float test_scale = ggml_cuda_e8m0_to_fp32(e - t);
+                const float test_inv_scale = __frcp_rn(test_scale);
+                const uint8_t q = ggml_cuda_float_to_fp4_e2m1(xi, test_inv_scale);
+                const float err_diff = fabsf(xi) - 0.5f*fabsf((float) kvalues_fp4[q & 0x7])*test_scale;
+                err[t] = err_diff*err_diff;
+            }
+#pragma unroll
+            for (int mask = 16; mask > 0; mask >>= 1) {
+                err[0] += __shfl_xor_sync(0xFFFFFFFF, err[0], mask, WARP_SIZE);
+                err[1] += __shfl_xor_sync(0xFFFFFFFF, err[1], mask, WARP_SIZE);
+            }
+            if (err[1] < err[0]) {
+                e -= 1;
+            }
+        }
+
         scales[b] = e;
         const float inv_s = (amax == 0.0f) ? 0.0f : __frcp_rn(ggml_cuda_e8m0_to_fp32(e));
 
