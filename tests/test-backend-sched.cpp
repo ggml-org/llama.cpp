@@ -19,6 +19,7 @@
 #include <cinttypes>
 #include <cstdarg>
 #include <cstdio>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -27,19 +28,41 @@
 static int n_ok   = 0;
 static int n_test = 0;
 
+// default silent on success; --verbose / -v prints progress
+static bool print_log = false;
+
+GGML_ATTRIBUTE_FORMAT(1, 2)
+static void log_maybe(const char * fmt, ...) {
+    if (!print_log) {
+        return;
+    }
+
+    va_list args;
+    va_start(args, fmt);
+    vprintf(fmt, args);
+    va_end(args);
+}
+
 // pretty-print helpers start
+static constexpr int status_column = 82; // for ok/fail column alignment
 static int  case_len = 0;
-static char case_label[256];
+static char case_label[256]; // max length of a case label
 
 static void case_end(bool ok) {
+    n_ok += ok;
+    n_test++;
+
+    if (ok && !print_log) {
+        case_len = 0;
+        return;
+    }
+
     if (case_len == 0) {
         case_len = printf("  %s", case_label);
     }
 
-    printf("%*s%s\n", std::max(1, 82 - case_len), "", ok ? "OK" : "FAIL");
-
-    n_ok += ok;
-    n_test++;
+    printf("%*s%s\n", std::max(1, status_column - case_len), "", ok ? "OK" : "FAIL");
+    case_len = 0;
 }
 
 static void vnote(const char * fmt, va_list args) {
@@ -55,6 +78,10 @@ static void vnote(const char * fmt, va_list args) {
 
 GGML_ATTRIBUTE_FORMAT(1, 2)
 static void note(const char * fmt, ...) {
+    if (!print_log) {
+        return;
+    }
+
     va_list args;
     va_start(args, fmt);
     vnote(fmt, args);
@@ -63,6 +90,10 @@ static void note(const char * fmt, ...) {
 
 GGML_ATTRIBUTE_FORMAT(1, 2)
 static bool fail(const char * fmt, ...) {
+    if (case_len == 0) {
+        case_len = printf("  %s", case_label);
+    }
+
     va_list args;
     va_start(args, fmt);
     vnote(fmt, args);
@@ -78,9 +109,12 @@ static void case_begin(const char * fmt, ...) {
     vsnprintf(case_label, sizeof(case_label), fmt, args);
     va_end(args);
 
-    case_len = printf("  %s", case_label);
-
-    fflush(stdout);
+    if (print_log) {
+        case_len = printf("  %s", case_label);
+        fflush(stdout);
+    } else {
+        case_len = 0;
+    }
 }
 // pretty-print helpers end
 
@@ -604,7 +638,6 @@ static bool test_chain_all_backends(const std::vector<ggml_backend_t> & backends
 static bool test_pair_user_inputs(const std::vector<ggml_backend_t> & backends, int b_send, int b_recv, int64_t tensor_len,
         int n_inputs, bool inputs_on_sender, bool parallel, bool use_device_host_buft) {
 
-
     const size_t graph_size = 64;
 
     backend_consts consts(backends, tensor_len);
@@ -760,24 +793,37 @@ static bool initialize_gpu_backends(std::vector<ggml_backend_t> & backends, bool
 
     for (ggml_backend_t backend : backends) {
         ggml_backend_dev_t dev = ggml_backend_get_device(backend);
-        printf("backend: %-10s (%s)\n", ggml_backend_name(backend), ggml_backend_dev_description(dev));
+        log_maybe("backend: %-10s (%s)\n", ggml_backend_name(backend), ggml_backend_dev_description(dev));
     }
 
     have_device_host_buft = ggml_backend_dev_host_buffer_type(ggml_backend_get_device(backend_gpu)) != nullptr;
     if (!have_device_host_buft) {
-        printf("GPU has no host buffer type, the device_host cases are skipped\n");
+        log_maybe("GPU has no host buffer type, the device_host cases are skipped\n");
     }
 
     have_sleep = backend_supports(backend_gpu, [](ggml_context * ctx, ggml_tensor * a) { return ggml_sleep(ctx, a, 0); });
     if (!have_sleep) {
-        printf("GPU does not support GGML_OP_SLEEP, some tests are skipped\n");
+        log_maybe("GPU does not support GGML_OP_SLEEP, some tests are skipped\n");
     }
-    printf("\n");
+    log_maybe("\n");
     return 1;
 }
 
 
-int main() {
+int main(int argc, char ** argv) {
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "--verbose") == 0) {
+            print_log = true;
+        } else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
+            printf("Usage: %s [-v|--verbose]\n", argv[0]);
+            return 0;
+        } else {
+            fprintf(stderr, "unknown argument: %s\n", argv[i]);
+            fprintf(stderr, "Usage: %s [-v|--verbose]\n", argv[0]);
+            return 1;
+        }
+    }
+
     ggml_backend_load_all();
 
     std::vector<ggml_backend_t> backends; // TODO merge into single struct
@@ -796,8 +842,7 @@ int main() {
             continue;
         }
 
-        printf("=== CPU sched buft: %s ===\n\n", use_device_host_buft ? "device_host" : "pageable");
-
+        log_maybe("=== CPU sched buft: %s ===\n\n", use_device_host_buft ? "device_host" : "pageable");
         for (int n_nodes : { 2, 5, 128, 1024 }) {
             for (int tensor_len : { 2, 4096 }) {
                 case_begin("test_linked_list       n_nodes  = %4d, tensor_len = %4d", n_nodes, tensor_len);
@@ -805,7 +850,8 @@ int main() {
             }
         }
 
-        printf("\n");
+        log_maybe("\n");
+
 
         for (int n_lanes : { 8, 16 }) {
             for (int n_rounds : { 5, 13, 64 }) {
@@ -816,7 +862,7 @@ int main() {
             }
         }
 
-        printf("\n");
+        log_maybe("\n");
 
         if (have_sleep) {
             for (int32_t sleep_us : {50, 60, 70, 80,  400, 500, 600, 700, 1000, 10000}) {
@@ -826,7 +872,7 @@ int main() {
                 }
             }
 
-            printf("\n");
+            log_maybe("\n");
         }
 
         for (int tensor_len : { 2, 4096 }) {
@@ -834,7 +880,7 @@ int main() {
             case_end(test_chain_all_backends(backends, tensor_len, use_device_host_buft));
         }
 
-        printf("\n");
+        log_maybe("\n");
 
         // every ordered pair of backends is the sender and the receiver of a copy
         for (size_t b_send = 0; b_send < backends.size(); b_send++) {
@@ -865,14 +911,16 @@ int main() {
             }
         }
 
-        printf("\n");
+        log_maybe("\n");
     }
 
     for (ggml_backend_t backend : backends) {
         ggml_backend_free(backend);
     }
 
-    printf("%d/%d tests passed\n", n_ok, n_test);
+    if (print_log || n_ok != n_test) {
+        printf("%d/%d tests passed\n", n_ok, n_test);
+    }
 
     return n_ok == n_test ? 0 : 1;
 }
