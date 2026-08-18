@@ -1780,6 +1780,24 @@ static bool ggml_cuda_should_fuse_mul_mat_vec_f(const ggml_tensor * tensor) {
     return use_mul_mat_vec_f;
 }
 
+// Counterpart of ggml_cuda_should_fuse_mul_mat_vec_q for the prefill path
+static bool ggml_cuda_should_fuse_mul_mat_q(const ggml_tensor * tensor) {
+    const ggml_tensor * src0 = tensor->src[0];
+    const ggml_tensor * src1 = tensor->src[1];
+    const ggml_tensor * dst  = tensor;
+
+    const bool bad_padding_clear = ggml_backend_buffer_get_usage(src0->buffer) == GGML_BACKEND_BUFFER_USAGE_COMPUTE &&
+                                   ggml_nbytes(src0) != ggml_backend_buffer_get_alloc_size(src0->buffer, src0) &&
+                                   src0->view_src;
+
+    const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
+
+    return ggml_is_quantized(src0->type) && !bad_padding_clear &&
+           src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32 &&
+           !ggml_cuda_should_use_mmvq(src0->type, cc, src1->ne[1]) &&
+           ggml_cuda_should_use_mmq(src0->type, cc, src1->ne[1], /*n_experts =*/ 0);
+}
+
 static bool ggml_cuda_should_fuse_mul_mat_vec_q(const ggml_tensor * tensor) {
     ggml_tensor *       src0 = tensor->src[0];
     ggml_tensor *       src1 = tensor->src[1];
@@ -3786,6 +3804,27 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
                 fused_mul_mat_vec = true;
                 fused_node_count  = 3;
                 break;
+            }
+
+            // Run the up matmul normally, then fuse the GLU into the gate matmul's epilogue,
+            // which reads the already-written up output
+            {
+                const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
+                const ggml_glu_op glu_op = ggml_get_glu_op(glu);
+                const bool glu_ok = (glu_op == GGML_GLU_OP_SWIGLU || glu_op == GGML_GLU_OP_GEGLU);
+
+                // Each matmul is dispatched separately, so both have to be eligible.
+                if (op == GGML_OP_MUL_MAT && glu->ne[1] > 1 && glu_ok &&
+                        ggml_cuda_should_fuse_mul_mat_q(gate) && ggml_cuda_should_fuse_mul_mat_q(up) &&
+                        ggml_cuda_mmq_can_fuse_glu(gate->src[0]->type, cc)) {
+                    ggml_cuda_mm_fusion_args_host fusion_data{};
+                    fusion_data.glu_up = up;
+                    fusion_data.glu_op = glu_op;
+
+                    ggml_cuda_mul_mat_q(*cuda_ctx, up->src[0],   up->src[1],   up->src[2],   up);
+                    ggml_cuda_mul_mat_q(*cuda_ctx, gate->src[0], gate->src[1], gate->src[2], glu, &fusion_data);
+                    return 2; // skip next 2 as 3 nodes are handled
+                }
             }
         }
     }
