@@ -19,14 +19,11 @@ import {
 	createWrapper,
 	generateBlockId
 } from './code-block-utils';
-
 import {
 	CODE_BLOCK,
 	CODE_BLOCK_CLASS,
-	MARKDOWN_DATA_ATTRS,
-	CODE_BLOCK_TEXT
-} from '$lib/constants';
-
+	CODE_BLOCK_TEXT,
+	MARKDOWN_DATA_ATTRS} from '$lib/constants';
 import type { Element, ElementContent, Root } from 'hast';
 import type { Plugin } from 'unified';
 import { visit } from 'unist-util-visit';
@@ -76,11 +73,13 @@ function extractLanguage(codeElement: Element): string {
  */
 function extractFilenameFromInfo(node: Element, codeElement: Element): string | undefined {
 	const meta = node.properties?.[MARKDOWN_DATA_ATTRS.META_DATA] ?? codeElement.properties?.[MARKDOWN_DATA_ATTRS.META_DATA];
+
 	if (typeof meta !== 'string') return undefined;
 
 	// Matches a file extension and name, optionally preceded by a key like name=, file=, or title=
 	const regex = CODE_BLOCK.FILE_NAME_REGEX;
 	const match = meta.match(regex);
+
 	return match ? match[1] : undefined;
 }
 

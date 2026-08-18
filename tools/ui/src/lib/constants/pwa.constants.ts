@@ -287,7 +287,10 @@ export const PWA_KIT_OPTIONS = {} as const;
 export const APPLE_META_TAGS = {
 	MOBILE_WEB_APP_CAPABLE: { content: 'yes', name: 'apple-mobile-web-app-capable' },
 	MOBILE_WEB_APP_TITLE: { name: 'apple-mobile-web-app-title' },
-	STATUS_BAR_STYLE: { content: 'black-translucent', name: 'apple-mobile-web-app-status-bar-style' }
+	STATUS_BAR_STYLE: {
+		content: 'black-translucent',
+		name: 'apple-mobile-web-app-status-bar-style'
+	}
 } as const;
 
 // Splash screen HTML link tag prefix used by generateSplashScreenLinks

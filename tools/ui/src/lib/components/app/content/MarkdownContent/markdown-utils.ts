@@ -2,7 +2,8 @@
  * Utility functions for markdown processing in MarkdownContent component.
  */
 
-import { MARKDOWN_DATA_ATTRS } from '$lib/constants';
+import { CODE_BLOCK, MARKDOWN_DATA_ATTRS } from '$lib/constants';
+import type { RootContent as HastRootContent } from 'hast';
 
 /**
  * Generates a unique identifier for a HAST node based on its position.
@@ -12,13 +13,13 @@ import { MARKDOWN_DATA_ATTRS } from '$lib/constants';
  * @returns Unique string identifier for the node
  */
 export function getHastNodeId(node: HastRootContent, indexFallback: number): string {
-	const position = node.position;
+    const position = node.position;
 
-	if (position?.start?.offset != null && position?.end?.offset != null) {
-		return `hast-${position.start.offset}-${position.end.offset}`;
-	}
+    if (position?.start?.offset != null && position?.end?.offset != null) {
+        return `hast-${position.start.offset}-${position.end.offset}`;
+    }
 
-	return `${node.type}-${indexFallback}`;
+    return `${node.type}-${indexFallback}`;
 }
 
 /**
@@ -83,3 +84,147 @@ export function getCodeInfoFromTarget(target: HTMLElement): CodeInfo | null {
 
 	return { language, rawCode };
 }
+
+/**
+ * Extracts the filename from the text above a code block. Use heuristics to select the most likely filename.
+ * @param text - The text to search
+ * @param extension - The expected file extension or empty
+ * @returns The extracted filename, or null if it could not reliable extracted
+ */
+export function extractFilenameFromText(text: string, extension: string | null): string | null {
+	if (!text) return null;
+
+	const targetExt = extension ? extension.replace(/^\./, '').toLowerCase() : null;
+
+	interface Candidate {
+		name: string;
+		isQuoted: boolean;
+		index: number;
+	}
+
+	const candidates: Candidate[] = [];
+
+	let match: RegExpExecArray | null;
+
+	while ((match = CODE_BLOCK.FILE_NAME_BOUNDARY_REGEX.exec(text)) !== null) {
+		const raw = match[0];
+		const startIndex = match.index;
+		// Detect if candidate is explicitly styled/quoted
+		const isQuoted = /^(`+.*`+|\*{1,2}.*\*{1,2}|["'].*["'])$/.test(raw);
+		// 1. Strip surrounding quotes, markdown markers, brackets, colons, and line numbers
+		const cleaned = raw
+		.replace(/^[`*'"([{]+|[`*'")]}:]+$/g, '')
+		.replace(/:\d+(-\d+)?$/, '')
+		.replace(/:$/, '');
+		// 2. Strip virtual paths (basename only)
+		const basename = cleaned.split(/[/\\]/).pop() || '';
+
+		// Reject if missing, no extension, contains double dots (traversal), or illegal OS chars
+		if (
+			!basename ||
+			!basename.includes('.') ||
+			basename.includes('..') ||
+			CODE_BLOCK.FILE_NAME_ILLEGAL_CHARS_REGEX.test(basename)
+		) continue;
+
+		const parts = basename.split('.');
+		const candExt = parts.pop()?.toLowerCase();
+		const nameWithoutExt = parts.join('.');
+
+		// Validate that the base name and extension only contain valid alphanumeric/dash/underscore chars
+		if (!nameWithoutExt || !candExt || !CODE_BLOCK.FILE_NAME_VALID_REGEX.test(nameWithoutExt)) {
+			continue;
+		}
+
+		// Constraint Check: Target extension matching vs strict quoting
+		if (targetExt) {
+			if (candExt !== targetExt) continue;
+		} else {
+			if (!isQuoted) continue;
+		}
+
+		candidates.push({
+			index: startIndex,
+			isQuoted,
+			name: basename,
+		});
+	}
+
+	if (candidates.length === 0) {
+		return null;
+	}
+
+	// Sort: Quoted first, then highest text index (closest to code block)
+	candidates.sort((a, b) => {
+		if (a.isQuoted !== b.isQuoted) {
+			return a.isQuoted ? -1 : 1;
+		}
+
+		return b.index - a.index;
+	});
+	
+	return candidates[0].name;
+}
+
+
+/*
+export function extractFilenameFromText(text: string, extension: string): string | null {
+	if (!text) return null;
+
+	// Strictly validates a base filename (no paths, no spaces, safe characters)
+	const isValid = (basename: string) => {
+		if (!basename || !basename.includes('.')) return false;
+		if (basename.includes('..')) return false; // block directory traversal
+		if (basename.endsWith('.')) return false;
+		if (extension && basename.toLowerCase() === extension.toLowerCase()) return false; // ignore bare extension
+		if (!/^[-a-zA-Z0-9_.]+$/.test(basename)) return false; // strictly valid chars only
+
+		return true;
+	};
+
+	// 1. Quoted filenames: text wrapped in backticks, double, or single quotes
+	const quoteRegex = /[`"']([^`"'\s]+)[`"']/g;
+	const quotedMatches: string[] = [];
+	let match;
+
+	while ((match = quoteRegex.exec(text)) !== null) {
+		const basename = match[1].split(/[/\\]/).pop() || '';
+
+		if (isValid(basename)) {
+			// If extension is provided, it must match. Otherwise, we trust the quote.
+			if (!extension || basename.toLowerCase().endsWith(extension.toLowerCase())) {
+				quotedMatches.push(basename);
+			}
+		}
+	}
+
+	// Return the last (closest to code block) valid quoted match
+	if (quotedMatches.length > 0) {
+		return quotedMatches[quotedMatches.length - 1];
+	}
+
+	// 2. Unquoted filenames: only searched if we have a strict extension to verify against
+	if (extension) {
+		const unquotedMatches: string[] = [];
+		// Match any sequence of allowed path/file chars ending with the exact extension
+		// This naturally ignores surrounding characters like * ( [ : because they aren't in the allowed set.
+		const extEscaped = extension.replace(/\./g, '\\.');
+		const unquotedRegex = new RegExp(`([-a-zA-Z0-9_/\\\\]+${extEscaped})`, 'gi');
+
+		while ((match = unquotedRegex.exec(text)) !== null) {
+			const basename = match[1].split(/[/\\]/).pop() || '';
+
+			if (isValid(basename)) {
+				unquotedMatches.push(basename);
+			}
+		}
+
+		// Return the last valid unquoted match
+		if (unquotedMatches.length > 0) {
+			return unquotedMatches[unquotedMatches.length - 1];
+		}
+	}
+
+	return null;
+}
+*/

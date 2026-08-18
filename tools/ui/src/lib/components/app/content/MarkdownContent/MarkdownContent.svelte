@@ -1,6 +1,7 @@
 <script lang="ts">
 	import '$lib/styles/katex-custom.scss';
 	import {
+		extractFilenameFromText,
 		getCodeInfoFromTarget,
 		getHastNodeId,
 		getMdastNodeHash,
@@ -25,7 +26,6 @@
 		DialogMermaidPreview
 	} from '$lib/components/app';
 	import {
-		CODE_BLOCK,
 		CODE_BLOCK_CLASS,
 		CODE_BLOCK_TYPE_TO_EXTENSION_MAP,
 		DIAGRAM_VIEW_MODE_ATTR,
@@ -243,9 +243,6 @@
 
 	/**
 	 * Transforms a single MDAST node to HTML string with caching.
-
-	/**
-	 * Transforms a single MDAST node to HTML string with caching.
 	 * Runs the full remark/rehype plugin pipeline (GFM, math, syntax highlighting, etc.)
 	 * on an isolated single-node tree, then stringifies the resulting HAST to HTML.
 	 * Results are cached by node position hash for streaming performance.
@@ -285,9 +282,11 @@
 		event.stopPropagation();
 
 		const target = event.currentTarget as HTMLButtonElement | null;
+
 		if (!target) return;
 
 		const info = getCodeInfoFromTarget(target);
+
 		if (!info) return;
 
 		const rawCode = info.rawCode;
@@ -297,8 +296,10 @@
 
 		// Determine extension from md code block
 		let extension = CODE_BLOCK_TYPE_TO_EXTENSION_MAP[language.toLowerCase()] || '';
+
 		if (!extension) {
 			const alphanumeric = language.replace(/[^a-z0-9]/gi, '').toLowerCase();
+
 			extension = alphanumeric ? `.${alphanumeric}` : '.md';
 		}
 
@@ -326,6 +327,7 @@
 					) break;
 
 					const text = curr.textContent?.trim();
+
 					if (text) {
 						prevTexts.push(text);
 					}
@@ -336,52 +338,23 @@
 
 			// Iterate over the closest text blocks first
 			for (const text of prevTexts) {
-				let candidate: string | null = null;
+				const extracted = extractFilenameFromText(text, extension);
 
-				// First try if file name is within backticks, quotes, parens, bold
-				const boundaryRegex = CODE_BLOCK.FILE_NAME_BOUNDARY_REGEX;
-				let match;
+				if (extracted) {
+					filename = extracted;
 
-				while ((match = boundaryRegex.exec(text)) !== null) {
-					// Extract matched string from whatever capture group matched
-					const innerText = match[1] || match[2] || match[3] || match[4] || match[5];
-
-					if (!innerText || !innerText.includes('.')) continue;
-
-					// If we found an extension mapped to the code block type, the boundary string MUST end with it
-					if (extension && !innerText.toLowerCase().endsWith(extension.toLowerCase())) continue;
-
-					candidate = innerText;
-				}
-
-				if (candidate) {
-					filename = candidate;
-					break;
-				}
-
-				// Alternatively, look for an unquoted filename that must match the expected extension (optionally followed by a colon)
-				if (extension) {
-					const extEscaped = extension.replace(/\./g, '\\.');
-					// Matches a non-whitespace string ending in our extension, optionally followed by a colon
-					const wordRegex = new RegExp(`([^\\s"'\`()*]+${extEscaped}):?`, 'gi');
-					let wordMatch;
-
-					while ((wordMatch = wordRegex.exec(text)) !== null) {
-						candidate = wordMatch[1]; // Get string without colon
-					}
-
-					if (candidate) {
-						filename = candidate;
 						break;
-					}
 				}
 			}
 		}
 
-		// Strip virtual directory paths (e.g. app/src/main.js -> main.js)
+		// Sanitize and strip virtual directory paths (e.g. app/src/main.js -> main.js)
 		if (filename) {
 			const parts = filename.split(/[/\\]/);
-			filename = parts[parts.length - 1];
+
+			filename = parts[parts.length - 1].replace(/[/\\?%*:|"<>]/g, '').trim();
+
+			if (!filename) filename = null;
 		}
 
 		// Default filename fallback with timestamp
@@ -394,6 +367,7 @@
 			const mm = String(now.getMinutes()).padStart(2, '0');
 			const ss = String(now.getSeconds()).padStart(2, '0');
 			const ts = `${y}${m}${d}_${hh}${mm}${ss}`;
+
 			filename = `llama_${ts}${extension}`;
 		} else if (!filename.includes('.')) {
 			filename += extension;
@@ -402,10 +376,16 @@
 		const blob = new Blob([rawCode], { type: 'text/plain' });
 		const url = URL.createObjectURL(blob);
 		const a = document.createElement('a');
+
 		a.href = url;
 		a.download = filename;
+		a.style.display = 'none';
+		document.body.appendChild(a);
 		a.click();
-		URL.revokeObjectURL(url);
+		document.body.removeChild(a);
+
+		// Delay revocation for iOS Safari
+		setTimeout(() => URL.revokeObjectURL(url), 1000);
 	}
 
 	/**
