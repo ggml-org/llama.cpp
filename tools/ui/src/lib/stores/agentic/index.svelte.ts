@@ -17,7 +17,7 @@
  * - **agenticStore** (this): Reactive state + business logic
  *
  * @see ChatService in services/chat.service.ts for API operations
- * @see mcpStore in stores/mcp.svelte.ts for MCP operations
+ * @see mcpStore in stores/mcp/index.svelte.ts for MCP operations
  */
 
 import { DEFAULT_AGENTIC_CONFIG, NEWLINE } from '$lib/constants';
@@ -43,11 +43,11 @@ import { ReadMediaService } from '$lib/services/read-media.service';
 import { SandboxService } from '$lib/services/sandbox.service';
 import { ToolsService } from '$lib/services/tools.service';
 // direct imports between stores, not via the barrel, to avoid circular deps
-import { AgenticGates } from '$lib/stores/agentic-gates.svelte';
-import { conversationsStore } from '$lib/stores/conversations.svelte';
-import { mcpStore } from '$lib/stores/mcp.svelte';
-import { modelsStore } from '$lib/stores/models.svelte';
-import { settingsStore } from '$lib/stores/settings.svelte';
+import { AgenticGates } from '$lib/stores/agentic/gates.svelte';
+import { conversationsStore } from '$lib/stores/conversations/index.svelte';
+import { mcpStore } from '$lib/stores/mcp/index.svelte';
+import { modelsStore } from '$lib/stores/models/index.svelte';
+import { settingsStore } from '$lib/stores/settings/index.svelte';
 import { toolsStore } from '$lib/stores/tools.svelte';
 import type {
 	AgenticConfig,
@@ -835,8 +835,8 @@ class AgenticStore {
 								executionResult = await ReadMediaService.executeTool(
 									args,
 									{
-										audio: modelsStore.modelSupportsAudio(effectiveModel),
-										vision: modelsStore.modelSupportsVision(effectiveModel)
+										audio: modelsStore.props.modelSupportsAudio(effectiveModel),
+										vision: modelsStore.props.modelSupportsVision(effectiveModel)
 									},
 									signal,
 									conversationsStore.activeConversation?.cwd
@@ -934,7 +934,7 @@ class AgenticStore {
 
 				for (const attachment of attachments) {
 					if (attachment.type === AttachmentType.AUDIO) {
-						if (modelsStore.modelSupportsAudio(effectiveModel)) {
+						if (modelsStore.props.modelSupportsAudio(effectiveModel)) {
 							contentParts.push({
 								input_audio: {
 									data: (attachment as DatabaseMessageExtraAudioFile).base64Data,
@@ -946,7 +946,7 @@ class AgenticStore {
 							});
 						}
 					} else if (attachment.type === AttachmentType.IMAGE) {
-						if (modelsStore.modelSupportsVision(effectiveModel)) {
+						if (modelsStore.props.modelSupportsVision(effectiveModel)) {
 							contentParts.push({
 								image_url: {
 									url: (attachment as DatabaseMessageExtraImageFile).base64Url

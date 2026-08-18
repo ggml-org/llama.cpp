@@ -8,7 +8,7 @@ import {
 	SANDBOX_TOOL_NAME,
 	SANDBOX_TRUNCATION_NOTICE
 } from '$lib/constants';
-import { settingsStore } from '$lib/stores/settings.svelte';
+import { settingsStore } from '$lib/stores/settings/index.svelte';
 import type { ToolExecutionResult } from '$lib/types';
 
 /** Cached harnesses keyed by whether nerdamer is included. */

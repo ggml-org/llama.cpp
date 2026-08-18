@@ -40,7 +40,7 @@ function fileExtension(path: string): string {
  * actually use the result - the server has no idea which model is selected.
  *
  * @see buildReadMediaToolDefinition in constants/read-media.ts - tool schema sent to the LLM
- * @see agenticStore in stores/agentic.svelte.ts - tool dispatch and attachment extraction
+ * @see agenticStore in stores/agentic/index.svelte.ts - tool dispatch and attachment extraction
  */
 export class ReadMediaService {
 	static async executeTool(

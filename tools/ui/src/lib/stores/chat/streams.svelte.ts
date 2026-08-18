@@ -11,10 +11,10 @@ import { CONVERSATION_ID_SEPARATOR, STREAM_RESUME_RETRY_MS } from '$lib/constant
 import { MessageRole, MessageType, StreamConnectionState } from '$lib/enums';
 import { ChatService } from '$lib/services/chat.service';
 import { DatabaseService } from '$lib/services/database.service';
-import type { chatStore } from '$lib/stores/chat.svelte';
+import type { chatStore } from '$lib/stores/chat/index.svelte';
 // direct imports between stores, not via the barrel, to avoid circular deps
-import { conversationsStore } from '$lib/stores/conversations.svelte';
-import { modelsStore } from '$lib/stores/models.svelte';
+import { conversationsStore } from '$lib/stores/conversations/index.svelte';
+import { modelsStore } from '$lib/stores/models/index.svelte';
 import type { ApiStreamSession, ChatMessageTimings, DatabaseMessage } from '$lib/types';
 import { streamIdentity } from '$lib/utils';
 import { SvelteMap, SvelteSet } from 'svelte/reactivity';
@@ -109,7 +109,7 @@ export class ChatStreamManager {
 		// only set the active processing conv if we are looking at it, otherwise a background
 		// attach would steal the indicator from the conv the user is currently viewing
 		if (convId === conversationsStore.activeConversation?.id) {
-			this.host.setActiveProcessingConversation(convId);
+			this.host.processing.setActiveConversation(convId);
 		}
 
 		const unlock = () => {
@@ -248,7 +248,7 @@ export class ChatStreamManager {
 
 		const cleanup = () => {
 			unlock();
-			this.host.setProcessingState(convId, null);
+			this.host.processing.setState(convId, null);
 		};
 
 		try {

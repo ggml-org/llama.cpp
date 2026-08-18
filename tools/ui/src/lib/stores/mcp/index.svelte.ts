@@ -7,13 +7,13 @@
  * **Architecture & Relationships:**
  * - **MCPService**: Stateless protocol layer (transport, connect, callTool)
  * - **mcpStore** (this): Reactive state + business logic
+ * - **MCPHealthCheckManager**: Health checks, owned helper exposed via delegates
  *
  * **Key Responsibilities:**
  * - Lifecycle management (initialize, shutdown)
  * - Multi-server coordination
  * - Tool name conflict detection and resolution
  * - Automatic tool-to-server routing
- * - Health checks
  *
  * MCP connection state and raw `Tool[]` per server are owned here; the
  * OpenAI-compatible wire format for those tools is built in `toolsStore`
@@ -25,45 +25,27 @@
 import type { ListChangedHandlers } from '@modelcontextprotocol/sdk/types.js';
 import { browser } from '$app/environment';
 import { SETTINGS_KEYS } from '$lib/constants';
-import {
-	CACHE,
-	DEFAULT_MCP_CONFIG,
-	EXPECTED_THEMED_ICON_PAIR_COUNT,
-	MCP_ALLOWED_ICON_MIME_TYPES,
-	MCP_RECONNECT,
-	MCP_SERVER_ID_PREFIX
-} from '$lib/constants';
-import {
-	ColorMode,
-	HealthCheckStatus,
-	MCPConnectionPhase,
-	MCPLogLevel,
-	MCPRefType,
-	UrlProtocol
-} from '$lib/enums';
+import { CACHE, DEFAULT_MCP_CONFIG, MCP_RECONNECT, MCP_SERVER_ID_PREFIX } from '$lib/constants';
+import { ColorMode, HealthCheckStatus, MCPConnectionPhase, MCPRefType } from '$lib/enums';
 import { MCPService } from '$lib/services/mcp.service';
 // direct imports between stores, not via the barrel, to avoid circular deps
-import { mcpResourceStore } from '$lib/stores/mcp-resources.svelte';
+import { MCPHealthCheckManager } from '$lib/stores/mcp/health.svelte';
+import { mcpResourceStore } from '$lib/stores/mcp/resources.svelte';
 import { serverStore } from '$lib/stores/server.svelte';
-import { settingsStore } from '$lib/stores/settings.svelte';
+import { settingsStore } from '$lib/stores/settings/index.svelte';
 import type {
-	ClientCapabilities,
 	GetPromptResult,
 	HealthCheckParams,
 	HealthCheckState,
-	MCPCapabilitiesInfo,
 	MCPClientConfig,
 	MCPConnection,
-	MCPConnectionLog,
 	MCPPromptInfo,
 	MCPResourceAttachment,
 	MCPResourceContent,
-	MCPResourceIcon,
 	MCPServerConfig,
 	MCPServerDisplayInfo,
 	MCPServerSettingsEntry,
 	MCPToolCall,
-	ServerCapabilities,
 	ServerStatus,
 	Tool,
 	ToolExecutionResult
@@ -72,7 +54,9 @@ import type { DatabaseMessageExtraMcpResource, McpServerOverride } from '$lib/ty
 import type { SettingsConfigType } from '$lib/types/settings';
 import {
 	detectMcpTransportFromUrl,
-	extractRootDomain,
+	getMcpIconUrl,
+	getMcpServerFaviconFallback,
+	getMcpServerLabel,
 	parseMcpServerSettings,
 	uuid
 } from '$lib/utils';
@@ -83,11 +67,12 @@ class MCPStore {
 	private _error = $state<string | null>(null);
 	private _toolCount = $state(0);
 	private _connectedServers = $state<string[]>([]);
-	private _healthChecks = $state<Record<string, HealthCheckState>>({});
 
 	private connections = new Map<string, MCPConnection>();
 	private toolsIndex = new Map<string, string>();
 	private serverConfigs = new Map<string, MCPServerConfig>(); // Store configs for reconnection
+	// health checks: per-server connectivity probes with optional promotion to active connections
+	private health = new MCPHealthCheckManager(this);
 	private reconnectingServers = new Set<string>(); // Guard against concurrent reconnections
 	private configSignature: string | null = null;
 	private initPromise: Promise<boolean> | null = null;
@@ -165,7 +150,7 @@ class MCPStore {
 	 * Request timeout in milliseconds, read live from the global setting
 	 * so a change in Settings applies to every server immediately.
 	 */
-	#requestTimeoutMs(): number {
+	getRequestTimeoutMs(): number {
 		const seconds =
 			Number(settingsStore.config.mcpRequestTimeoutSeconds) ||
 			DEFAULT_MCP_CONFIG.requestTimeoutSeconds;
@@ -200,7 +185,7 @@ class MCPStore {
 		return {
 			handshakeTimeoutMs: connectionTimeoutMs,
 			headers,
-			requestTimeoutMs: this.#requestTimeoutMs(),
+			requestTimeoutMs: this.getRequestTimeoutMs(),
 			transport: detectMcpTransportFromUrl(entry.url),
 			url: entry.url,
 			useProxy: entry.useProxy
@@ -216,9 +201,6 @@ class MCPStore {
 		server: MCPServerSettingsEntry,
 		perChatOverrides?: McpServerOverride[]
 	): boolean {
-		// Per-chat overrides win when present; missing entries inherit the
-		// server's own `enabled` flag so partial override lists are not all
-		// treated as disabled.
 		const override = perChatOverrides?.find((o) => o.serverId === server.id);
 
 		return override?.enabled ?? server.enabled;
@@ -255,40 +237,8 @@ class MCPStore {
 			capabilities: DEFAULT_MCP_CONFIG.capabilities,
 			clientInfo: DEFAULT_MCP_CONFIG.clientInfo,
 			protocolVersion: DEFAULT_MCP_CONFIG.protocolVersion,
-			requestTimeoutMs: this.#requestTimeoutMs(),
+			requestTimeoutMs: this.getRequestTimeoutMs(),
 			servers
-		};
-	}
-
-	/**
-	 * Builds capabilities info from server and client capabilities.
-	 */
-	#buildCapabilitiesInfo(
-		serverCaps?: ServerCapabilities,
-		clientCaps?: ClientCapabilities
-	): MCPCapabilitiesInfo {
-		return {
-			client: {
-				elicitation: clientCaps?.elicitation
-					? { form: !!clientCaps.elicitation.form, url: !!clientCaps.elicitation.url }
-					: undefined,
-				roots: clientCaps?.roots ? { listChanged: clientCaps.roots.listChanged } : undefined,
-				sampling: !!clientCaps?.sampling,
-				tasks: !!clientCaps?.tasks
-			},
-			server: {
-				completions: !!serverCaps?.completions,
-				logging: !!serverCaps?.logging,
-				prompts: serverCaps?.prompts ? { listChanged: serverCaps.prompts.listChanged } : undefined,
-				resources: serverCaps?.resources
-					? {
-							listChanged: serverCaps.resources.listChanged,
-							subscribe: serverCaps.resources.subscribe
-						}
-					: undefined,
-				tasks: !!serverCaps?.tasks,
-				tools: serverCaps?.tools ? { listChanged: serverCaps.tools.listChanged } : undefined
-			}
 		};
 	}
 
@@ -351,29 +301,16 @@ class MCPStore {
 		}
 	}
 
-	updateHealthCheck(serverId: string, state: HealthCheckState): void {
-		this._healthChecks = { ...this._healthChecks, [serverId]: state };
-	}
-
+	/**
+	 * Health checks live in MCPHealthCheckManager; these delegate so
+	 * consumers keep a single entry point.
+	 */
 	getHealthCheckState(serverId: string): HealthCheckState {
-		return this._healthChecks[serverId] ?? { status: HealthCheckStatus.IDLE };
-	}
-
-	hasHealthCheck(serverId: string): boolean {
-		return (
-			serverId in this._healthChecks &&
-			this._healthChecks[serverId].status !== HealthCheckStatus.IDLE
-		);
+		return this.health.getState(serverId);
 	}
 
 	clearHealthCheck(serverId: string): void {
-		const { [serverId]: _removed, ...rest } = this._healthChecks;
-
-		this._healthChecks = rest;
-	}
-
-	clearAllHealthChecks(): void {
-		this._healthChecks = {};
+		this.health.clear(serverId);
 	}
 
 	clearError(): void {
@@ -392,39 +329,8 @@ class MCPStore {
 		return this.connections;
 	}
 
-	/**
-	 * Resolves the raw label for a server: user-defined display name first,
-	 * then server-reported title or name when the health check succeeded,
-	 * then the configured name (admin baseline or legacy data), then URL.
-	 */
-	#serverBaseLabel(server: MCPServerDisplayInfo): string {
-		if (server.displayName) return server.displayName;
-
-		const healthState = this.getHealthCheckState(server.id);
-
-		if (healthState?.status === HealthCheckStatus.SUCCESS)
-			return (
-				healthState.serverInfo?.title || healthState.serverInfo?.name || server.name || server.url
-			);
-
-		return server.name || server.url;
-	}
-
-	/**
-	 * Returns the display label for a server, suffixed with a positional
-	 * counter when several configured servers resolve to the same base label
-	 * (e.g. two endpoints of the same host reporting an identical name).
-	 * Numbering follows config order, so it is stable across renders.
-	 */
 	getServerLabel(server: MCPServerDisplayInfo): string {
-		const label = this.#serverBaseLabel(server);
-		const twins = this.getServers().filter((s) => this.#serverBaseLabel(s) === label);
-
-		if (twins.length < 2) return label;
-
-		const position = twins.findIndex((s) => s.id === server.id);
-
-		return position < 0 ? label : `${label} (${position + 1})`;
+		return getMcpServerLabel(server, this.getServers(), this.health.checks);
 	}
 
 	getServerById(serverId: string): MCPServerSettingsEntry | undefined {
@@ -442,67 +348,6 @@ class MCPStore {
 	}
 
 	/**
-	 * Validates that an icon URI uses a safe scheme (https: or data:).
-	 */
-	#isValidIconUri(src: string): boolean {
-		try {
-			if (src.startsWith(UrlProtocol.DATA)) return true;
-
-			const url = new URL(src);
-
-			return url.protocol === UrlProtocol.HTTPS;
-		} catch {
-			return false;
-		}
-	}
-
-	/**
-	 * Selects the best icon URL from an MCP icons array.
-	 * Follows security guidelines from the MCP specification:
-	 * - Only allows https: and data: URIs
-	 * - Filters to supported MIME types
-	 *
-	 * Selection priority:
-	 * 1. Icon matching the current color scheme (dark/light)
-	 * 2. Universal icon (no theme specified); if exactly 2, assumes [0]=light, [1]=dark
-	 * 3. First valid icon as last resort
-	 */
-	#getMcpIconUrl(icons: MCPResourceIcon[] | undefined, isDark = false): string | null {
-		if (!icons?.length) return null;
-
-		const validIcons = icons.filter((icon) => {
-			if (!icon.src || !this.#isValidIconUri(icon.src)) return false;
-
-			if (icon.mimeType && !MCP_ALLOWED_ICON_MIME_TYPES.has(icon.mimeType)) return false;
-
-			return true;
-		});
-
-		if (validIcons.length === 0) return null;
-
-		const preferredTheme = isDark ? ColorMode.DARK : ColorMode.LIGHT;
-		// 1. Prefer icon explicitly matching the current color scheme
-		const themedIcon = validIcons.find((icon) => icon.theme === preferredTheme);
-
-		if (themedIcon) return themedIcon.src;
-
-		// 2. Handle universal icons (no theme specified)
-		const universalIcons = validIcons.filter((icon) => !icon.theme);
-
-		if (universalIcons.length === EXPECTED_THEMED_ICON_PAIR_COUNT) {
-			// Heuristic: two theme-less icons → assume [0] = light, [1] = dark
-			return universalIcons[isDark ? 1 : 0].src;
-		}
-
-		if (universalIcons.length > 0) {
-			return universalIcons[0].src;
-		}
-
-		// 3. Last resort: use opposite-theme icon
-		return validIcons[0].src;
-	}
-
-	/**
 	 * Get icon URL for an MCP server by its ID.
 	 * Returns the best icon from the MCP server's `icons` array
 	 * (see MCP spec: spec.modelcontextprotocol.io).
@@ -516,45 +361,17 @@ class MCPStore {
 		}
 
 		const isDark = mode.current === ColorMode.DARK;
-		const healthState = this.getHealthCheckState(serverId);
+		const healthState = this.health.getState(serverId);
 
 		if (healthState.status === HealthCheckStatus.SUCCESS && healthState.serverInfo?.icons) {
-			const mcpIconUrl = this.#getMcpIconUrl(healthState.serverInfo.icons, isDark);
+			const mcpIconUrl = getMcpIconUrl(healthState.serverInfo.icons, isDark);
 
 			if (mcpIconUrl) {
 				return mcpIconUrl;
 			}
 		}
 
-		return this.#getServerFaviconFallback(server.url);
-	}
-
-	/**
-	 * Construct a fallback favicon URL from the MCP server URL.
-	 * e.g. https://mcp.example.com/sse -> https://example.com/favicon.ico
-	 */
-	#getServerFaviconFallback(serverUrl: string): string | null {
-		try {
-			const url = new URL(serverUrl);
-			const rootDomain = extractRootDomain(url);
-
-			if (!rootDomain) return null;
-
-			const origin = `${url.protocol}//${rootDomain}`;
-			const candidates = ['favicon.ico', 'favicon.png'];
-
-			for (const path of candidates) {
-				const faviconUrl = `${origin}/${path}`;
-
-				if (this.#isValidIconUri(faviconUrl)) {
-					return faviconUrl;
-				}
-			}
-		} catch {
-			// Invalid URL, return null
-		}
-
-		return null;
+		return getMcpServerFaviconFallback(server.url);
 	}
 
 	addServer(
@@ -906,7 +723,7 @@ class MCPStore {
 	 * set inside the phase callback and honoured in the `finally` block after
 	 * the guard entry has been removed.
 	 */
-	private async autoReconnect(serverName: string): Promise<void> {
+	async autoReconnect(serverName: string): Promise<void> {
 		// Guard against concurrent reconnections
 		if (this.reconnectingServers.has(serverName)) {
 			console.log(`[MCPStore][${serverName}] Reconnection already in progress, skipping`);
@@ -1028,7 +845,7 @@ class MCPStore {
 		if (fromIndex) return fromIndex;
 
 		for (const server of this.getServers()) {
-			const health = this._healthChecks[server.id];
+			const health = this.health.checks[server.id];
 
 			if (!health || health.status !== HealthCheckStatus.SUCCESS) continue;
 
@@ -1070,9 +887,6 @@ class MCPStore {
 	 * Check if any enabled server with successful health check supports prompts.
 	 * Uses health check state since servers may not have active connections until
 	 * the user actually sends a message or uses prompts.
-	 * @param perChatOverrides - Per-chat server overrides to filter by enabled servers.
-	 *                          If provided (even empty array), only checks enabled servers.
-	 *                          If undefined, falls back to each server's own `enabled` flag.
 	 */
 	hasPromptsCapability(perChatOverrides?: McpServerOverride[]): boolean {
 		let enabledServerIds: Set<string>;
@@ -1091,7 +905,7 @@ class MCPStore {
 			return false;
 		}
 
-		for (const [serverId, state] of Object.entries(this._healthChecks)) {
+		for (const [serverId, state] of Object.entries(this.health.checks)) {
 			if (!enabledServerIds.has(serverId)) continue;
 
 			if (
@@ -1318,21 +1132,25 @@ class MCPStore {
 		}
 	}
 
-	private parseHeaders(headersJson?: string): Record<string, string> | undefined {
-		if (!headersJson?.trim()) {
-			return undefined;
-		}
+	/**
+	 * Check if a server already has an active connection that can be reused.
+	 * Returns the existing connection if available.
+	 */
+	getExistingConnection(serverId: string): MCPConnection | undefined {
+		return this.connections.get(serverId);
+	}
 
-		try {
-			const parsed = JSON.parse(headersJson);
+	/**
+	 * Drop a connection without disconnecting, e.g. when a health check finds
+	 * it stale and recreates it.
+	 */
+	removeConnection(serverId: string): void {
+		this.connections.delete(serverId);
+	}
 
-			if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed))
-				return parsed as Record<string, string>;
-		} catch {
-			console.warn('[MCPStore] Failed to parse custom headers JSON:', headersJson);
-		}
-
-		return undefined;
+	/** Store a server config so auto-reconnect can rebuild the session. */
+	registerServerConfig(name: string, config: MCPServerConfig): void {
+		this.serverConfigs.set(name, config);
 	}
 
 	async runHealthChecksForServers(
@@ -1345,191 +1163,18 @@ class MCPStore {
 		skipIfChecked = true,
 		promoteToActive = false
 	): Promise<void> {
-		const serversToCheck = skipIfChecked
-			? servers.filter((s) => !this.hasHealthCheck(s.id) && s.url.trim())
-			: servers.filter((s) => s.url.trim());
-
-		if (serversToCheck.length === 0) {
-			return;
-		}
-
-		const BATCH_SIZE = 5;
-
-		for (let i = 0; i < serversToCheck.length; i += BATCH_SIZE) {
-			const batch = serversToCheck.slice(i, i + BATCH_SIZE);
-
-			await Promise.allSettled(batch.map((server) => this.runHealthCheck(server, promoteToActive)));
-		}
+		return this.health.runForServers(servers, skipIfChecked, promoteToActive);
 	}
 
-	/**
-	 * Check if a server already has an active connection that can be reused.
-	 * Returns the existing connection if available.
-	 */
-	getExistingConnection(serverId: string): MCPConnection | undefined {
-		return this.connections.get(serverId);
-	}
-
-	/**
-	 * Run a health check for a server.
-	 * If the server already has an active connection, reuses it instead of creating a new one.
-	 * If promoteToActive is true and server is enabled, the connection will be kept
-	 * and promoted to an active connection instead of being disconnected.
-	 */
 	async runHealthCheck(server: HealthCheckParams, promoteToActive = false): Promise<void> {
-		// Check if we already have an active connection for this server
-		const existingConnection = this.connections.get(server.id);
-
-		if (existingConnection) {
-			// Reuse existing connection - just refresh tools list
-			try {
-				const tools = await MCPService.listTools(existingConnection);
-				const capabilities = this.#buildCapabilitiesInfo(
-					existingConnection.serverCapabilities,
-					existingConnection.clientCapabilities
-				);
-
-				this.updateHealthCheck(server.id, {
-					capabilities,
-					connectionTimeMs: existingConnection.connectionTimeMs,
-					instructions: existingConnection.instructions,
-					logs: [],
-					protocolVersion: existingConnection.protocolVersion,
-					serverInfo: existingConnection.serverInfo,
-					status: HealthCheckStatus.SUCCESS,
-					tools: tools.map((tool) => ({
-						description: tool.description,
-						name: tool.name,
-						title: tool.title
-					})),
-					transportType: existingConnection.transportType
-				});
-
-				return;
-			} catch (error) {
-				console.warn(
-					`[MCPStore] Failed to reuse connection for ${server.id}, creating new one:`,
-					error
-				);
-				// Connection may be stale, remove it and create new one
-				this.connections.delete(server.id);
-			}
-		}
-
-		const trimmedUrl = server.url.trim();
-		const logs: MCPConnectionLog[] = [];
-
-		let currentPhase: MCPConnectionPhase = MCPConnectionPhase.IDLE;
-
-		if (!trimmedUrl) {
-			this.updateHealthCheck(server.id, {
-				logs: [],
-				message: 'Please enter a server URL first.',
-				status: HealthCheckStatus.ERROR
-			});
-
-			return;
-		}
-
-		this.updateHealthCheck(server.id, {
-			logs: [],
-			phase: MCPConnectionPhase.TRANSPORT_CREATING,
-			status: HealthCheckStatus.CONNECTING
-		});
-
-		const timeoutMs = this.#requestTimeoutMs();
-		const headers = this.parseHeaders(server.headers);
-
-		try {
-			const serverConfig: MCPServerConfig = {
-				handshakeTimeoutMs: DEFAULT_MCP_CONFIG.connectionTimeoutMs,
-				headers,
-				requestTimeoutMs: timeoutMs,
-				transport: detectMcpTransportFromUrl(trimmedUrl),
-				url: trimmedUrl,
-				useProxy: server.useProxy
-			};
-
-			// Store config for reconnection
-			this.serverConfigs.set(server.id, serverConfig);
-
-			const connection = await MCPService.connect(
-				server.id,
-				serverConfig,
-				DEFAULT_MCP_CONFIG.clientInfo,
-				DEFAULT_MCP_CONFIG.capabilities,
-				(phase, log) => {
-					currentPhase = phase;
-					logs.push(log);
-					this.updateHealthCheck(server.id, {
-						logs: [...logs],
-						phase,
-						status: HealthCheckStatus.CONNECTING
-					});
-
-					// Handle WebSocket disconnection
-					if (phase === MCPConnectionPhase.DISCONNECTED && promoteToActive) {
-						console.log(
-							`[MCPStore][${server.id}] Connection lost during health check, starting auto-reconnect`
-						);
-						this.autoReconnect(server.id);
-					}
-				}
-			);
-			const tools = connection.tools.map((tool) => ({
-				description: tool.description,
-				name: tool.name,
-				title: tool.title
-			}));
-			const capabilities = this.#buildCapabilitiesInfo(
-				connection.serverCapabilities,
-				connection.clientCapabilities
-			);
-
-			this.updateHealthCheck(server.id, {
-				capabilities,
-				connectionTimeMs: connection.connectionTimeMs,
-				instructions: connection.instructions,
-				logs,
-				protocolVersion: connection.protocolVersion,
-				serverInfo: connection.serverInfo,
-				status: HealthCheckStatus.SUCCESS,
-				tools,
-				transportType: connection.transportType
-			});
-
-			// Promote to active connection or disconnect
-			if (promoteToActive && server.enabled) {
-				this.promoteHealthCheckToConnection(server.id, connection);
-			} else {
-				await MCPService.disconnect(connection);
-			}
-		} catch (error) {
-			const message = error instanceof Error ? error.message : 'Unknown error occurred';
-
-			if (logs.at(-1)?.phase !== MCPConnectionPhase.ERROR) {
-				logs.push({
-					level: MCPLogLevel.ERROR,
-					message: `Connection failed: ${message}`,
-					phase: MCPConnectionPhase.ERROR,
-					timestamp: new Date()
-				});
-			}
-
-			this.updateHealthCheck(server.id, {
-				logs,
-				message,
-				phase: currentPhase,
-				status: HealthCheckStatus.ERROR
-			});
-		}
+		return this.health.run(server, promoteToActive);
 	}
 
 	/**
 	 * Promote a health check connection to an active connection.
 	 * This avoids the need to reconnect when the server is needed for agentic flows.
 	 */
-	private promoteHealthCheckToConnection(serverId: string, connection: MCPConnection): void {
+	promoteHealthCheckToConnection(serverId: string, connection: MCPConnection): void {
 		// Register tools from the connection
 		for (const tool of connection.tools) {
 			if (this.toolsIndex.has(tool.name)) {
@@ -1601,7 +1246,7 @@ class MCPStore {
 	}> {
 		const results: Array<{ serverId: string; serverTitle?: string; instructions: string }> = [];
 
-		for (const [serverId, state] of Object.entries(this._healthChecks)) {
+		for (const [serverId, state] of Object.entries(this.health.checks)) {
 			if (state.status === HealthCheckStatus.SUCCESS && state.instructions) {
 				results.push({
 					instructions: state.instructions,
@@ -1639,9 +1284,6 @@ class MCPStore {
 	 * Check if any enabled server with successful health check supports resources.
 	 * Uses health check state since servers may not have active connections until
 	 * the user actually sends a message or uses prompts.
-	 * @param perChatOverrides - Per-chat server overrides to filter by enabled servers.
-	 *                          If provided (even empty array), only checks enabled servers.
-	 *                          If undefined, falls back to each server's own `enabled` flag.
 	 */
 	hasResourcesCapability(perChatOverrides?: McpServerOverride[]): boolean {
 		let enabledServerIds: Set<string>;
@@ -1660,7 +1302,7 @@ class MCPStore {
 			return false;
 		}
 
-		for (const [serverId, state] of Object.entries(this._healthChecks)) {
+		for (const [serverId, state] of Object.entries(this.health.checks)) {
 			if (!enabledServerIds.has(serverId)) continue;
 
 			if (
@@ -1704,7 +1346,7 @@ class MCPStore {
 		}
 
 		// Also check health check states for servers not yet connected
-		for (const [serverId, state] of Object.entries(this._healthChecks)) {
+		for (const [serverId, state] of Object.entries(this.health.checks)) {
 			if (!enabledServerIds.has(serverId)) continue;
 
 			if (

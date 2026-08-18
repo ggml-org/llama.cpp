@@ -11,25 +11,26 @@
  * **Key Responsibilities:**
  * - Conversation CRUD (create, load, delete)
  * - Message management and tree navigation
- * - MCP server per-chat overrides
  * - Import/Export functionality
  * - Title management with confirmation
+ *
+ * Per-chat options (MCP overrides, reasoning effort, cwd) live in
+ * ConversationPreferences, composed as {@link ConversationsStore.preferences}.
  *
  * @see DatabaseService in services/database.ts for IndexedDB operations
  */
 
 import { browser } from '$app/environment';
 import { goto } from '$app/navigation';
-import { REASONING_EFFORT_DEFAULT_LOCALSTORAGE_KEY, ROUTES } from '$lib/constants';
-import { MessageRole, ReasoningEffort } from '$lib/enums';
+import { ROUTES } from '$lib/constants';
+import { MessageRole } from '$lib/enums';
 import { ConversationTransferService } from '$lib/services/conversation-transfer.service';
 import { DatabaseService } from '$lib/services/database.service';
 import { MigrationService } from '$lib/services/migration.service';
 import { RouterService } from '$lib/services/router.service';
 // direct imports between stores, not via the barrel, to avoid circular deps
-import { mcpStore } from '$lib/stores/mcp.svelte';
-import { settingsStore } from '$lib/stores/settings.svelte';
-import type { McpServerOverride } from '$lib/types/database';
+import { ConversationPreferences } from '$lib/stores/conversations/preferences.svelte';
+import { settingsStore } from '$lib/stores/settings/index.svelte';
 import { filterByLeafNodeId, findLeafNode, generateConversationTitle } from '$lib/utils';
 import { SvelteSet } from 'svelte/reactivity';
 import { toast } from 'svelte-sonner';
@@ -55,36 +56,11 @@ class ConversationsStore {
 	/** Whether the store has been initialized */
 	isInitialized = $state(false);
 
-	/** Global (non-conversation-specific) reasoning effort default */
-	pendingReasoningEffort = $state<ReasoningEffort>(ConversationsStore.loadReasoningEffortDefault());
+	/** Per-chat options (MCP overrides, reasoning effort, cwd), composed here. */
+	private _preferences = new ConversationPreferences(this);
 
-	/**
-	 * Working directory picked on the empty new-chat screen, before any
-	 * conversation exists. Consumed by `chatStore.sendMessage()`, which
-	 * records it into chat history as a synthetic message on first send.
-	 * Cleared by `loadConversation` and `clearActiveConversation` so a
-	 * stale pick can't bleed onto an unrelated chat.
-	 */
-	pendingCwd = $state<string | null>(null);
-
-	/** Load reasoning effort default from localStorage, DEFAULT defers to the server */
-	private static loadReasoningEffortDefault(): ReasoningEffort {
-		if (typeof globalThis.localStorage === 'undefined') return ReasoningEffort.DEFAULT;
-
-		try {
-			const raw = localStorage.getItem(REASONING_EFFORT_DEFAULT_LOCALSTORAGE_KEY);
-
-			return (raw as ReasoningEffort) || ReasoningEffort.DEFAULT;
-		} catch {
-			return ReasoningEffort.DEFAULT;
-		}
-	}
-
-	/** Persist reasoning effort default to localStorage */
-	private saveReasoningEffortDefaults(): void {
-		if (typeof globalThis.localStorage === 'undefined') return;
-
-		localStorage.setItem(REASONING_EFFORT_DEFAULT_LOCALSTORAGE_KEY, this.pendingReasoningEffort);
+	get preferences() {
+		return this._preferences;
 	}
 
 	/** In-flight init run; shared by concurrent callers, reset on failure to allow retry */
@@ -208,17 +184,15 @@ class ConversationsStore {
 	 */
 	async createConversation(name?: string): Promise<string> {
 		const conversationName = name || `Chat ${new Date().toLocaleString()}`;
-		// No MCP override list is seeded: getAllMcpServerOverrides resolves
-		// servers without a per-conversation override to `mcpServers[i].enabled`,
-		// and only explicit toggles are stored on the conversation.
-		// Working directory picked on the new-chat screen gets threaded in
-		// here too, then cleared so it doesn't bleed onto subsequent new chats.
+		// Working directory and reasoning effort picked on the new-chat screen
+		// get threaded into the new conversation here, then cleared so they
+		// don't bleed onto subsequent new chats.
 		const conversation = await DatabaseService.createConversation(conversationName, {
-			cwd: this.pendingCwd ?? undefined,
-			reasoningEffort: this.pendingReasoningEffort
+			cwd: this.preferences.pendingCwd ?? undefined,
+			reasoningEffort: this.preferences.pendingReasoningEffort
 		});
 
-		this.pendingCwd = null;
+		this.preferences.pendingCwd = null;
 
 		this.conversations = [conversation, ...this.conversations];
 		this.activeConversation = conversation;
@@ -244,7 +218,7 @@ class ConversationsStore {
 
 			// Drop any cwd the user drafted on the empty new-chat screen -
 			// it doesn't belong to this conversation.
-			this.pendingCwd = null;
+			this.preferences.pendingCwd = null;
 
 			this.activeConversation = conversation;
 
@@ -278,8 +252,7 @@ class ConversationsStore {
 		this.activeConversation = null;
 		this.activeMessages = [];
 		// reload defaults so new chats inherit persisted state
-		this.pendingReasoningEffort = ConversationsStore.loadReasoningEffortDefault();
-		this.pendingCwd = null;
+		this.preferences.resetPending();
 	}
 
 	/**
@@ -664,234 +637,6 @@ class ConversationsStore {
 				);
 			}
 		}
-	}
-
-	/**
-	 *
-	 *
-	 * MCP Server Overrides
-	 *
-	 *
-	 */
-
-	/**
-	 * Resolve the default enabled value for a server: its own `enabled`
-	 * flag in `mcpServers`, so the global on/off state lives in one place.
-	 */
-	#getDefaultOverride(serverId: string): McpServerOverride | undefined {
-		const server = mcpStore.getServers().find((s) => s.id === serverId);
-
-		if (!server) return undefined;
-
-		return { enabled: server.enabled, serverId };
-	}
-
-	/**
-	 * Gets the effective MCP server override for a specific server.
-	 * A per-conversation override wins when present; a server without one
-	 * resolves to its `mcpServers[i].enabled` default.
-	 * @param serverId - The server ID to check
-	 * @returns The effective override, undefined if no matching server
-	 */
-	getMcpServerOverride(serverId: string): McpServerOverride | undefined {
-		const override = this.activeConversation?.mcpServerOverrides?.find(
-			(o: McpServerOverride) => o.serverId === serverId
-		);
-
-		if (override) return override;
-
-		return this.#getDefaultOverride(serverId);
-	}
-
-	/**
-	 * Gets the effective override list for the current conversation:
-	 * one entry per configured server, resolved per server. The stored
-	 * per-conversation list is sparse and only holds explicit toggles.
-	 */
-	getAllMcpServerOverrides(): McpServerOverride[] {
-		const overrides = this.activeConversation?.mcpServerOverrides;
-
-		return mcpStore.getServers().map((s) => {
-			const override = overrides?.find((o: McpServerOverride) => o.serverId === s.id);
-
-			return { enabled: override?.enabled ?? s.enabled, serverId: s.id };
-		});
-	}
-
-	/**
-	 * Checks if an MCP server is enabled for the active conversation.
-	 * @param serverId - The server ID to check
-	 * @returns True if server is enabled for this conversation
-	 */
-	isMcpServerEnabledForChat(serverId: string): boolean {
-		const override = this.getMcpServerOverride(serverId);
-
-		return override?.enabled ?? false;
-	}
-
-	/**
-	 * Sets or removes MCP server override for the active conversation.
-	 * If no conversation exists, persists `enabled` onto `mcpServers[i].enabled`
-	 * (the single source of truth for new-chat defaults).
-	 * @param serverId - The server ID to override
-	 * @param enabled - The enabled state, or undefined to remove per-conversation override
-	 */
-	async setMcpServerOverride(serverId: string, enabled: boolean | undefined): Promise<void> {
-		if (!this.activeConversation) {
-			if (enabled !== undefined) {
-				mcpStore.updateServer(serverId, { enabled });
-			}
-
-			return;
-		}
-
-		// Clone to plain objects to avoid Proxy serialization issues with IndexedDB
-		const currentOverrides = (this.activeConversation.mcpServerOverrides || []).map(
-			(o: McpServerOverride) => ({
-				enabled: o.enabled,
-				serverId: o.serverId
-			})
-		);
-
-		let newOverrides: McpServerOverride[];
-
-		if (enabled === undefined) {
-			newOverrides = currentOverrides.filter((o: McpServerOverride) => o.serverId !== serverId);
-		} else {
-			const existingIndex = currentOverrides.findIndex(
-				(o: McpServerOverride) => o.serverId === serverId
-			);
-
-			if (existingIndex >= 0) {
-				newOverrides = [...currentOverrides];
-				newOverrides[existingIndex] = { enabled, serverId };
-			} else {
-				newOverrides = [...currentOverrides, { enabled, serverId }];
-			}
-		}
-
-		await DatabaseService.updateConversation(this.activeConversation.id, {
-			mcpServerOverrides: newOverrides.length > 0 ? newOverrides : undefined
-		});
-
-		this.activeConversation = {
-			...this.activeConversation,
-			mcpServerOverrides: newOverrides.length > 0 ? newOverrides : undefined
-		};
-
-		const convIndex = this.conversations.findIndex((c) => c.id === this.activeConversation!.id);
-
-		if (convIndex !== -1) {
-			this.conversations[convIndex].mcpServerOverrides =
-				newOverrides.length > 0 ? newOverrides : undefined;
-		}
-	}
-
-	/**
-	 * Toggles MCP server enabled state for the active conversation.
-	 * @param serverId - The server ID to toggle
-	 */
-	async toggleMcpServerForChat(serverId: string): Promise<void> {
-		const currentEnabled = this.isMcpServerEnabledForChat(serverId);
-
-		await this.setMcpServerOverride(serverId, !currentEnabled);
-	}
-
-	/**
-	 * Removes MCP server override for the active conversation.
-	 * @param serverId - The server ID to remove override for
-	 */
-	async removeMcpServerOverride(serverId: string): Promise<void> {
-		await this.setMcpServerOverride(serverId, undefined);
-	}
-
-	/**
-	 * Gets the effective reasoning effort for the active conversation.
-	 * Returns the conversation override if set, otherwise the global default.
-	 * DEFAULT means no override is sent and the server decides.
-	 */
-	getReasoningEffort(): ReasoningEffort {
-		if (this.activeConversation) {
-			if (this.activeConversation.reasoningEffort !== undefined) {
-				return this.activeConversation.reasoningEffort;
-			}
-
-			// conversations created before the tri-state store an explicit
-			// opt-out only as thinkingEnabled = false
-			if (this.activeConversation.thinkingEnabled === false) {
-				return ReasoningEffort.OFF;
-			}
-		}
-
-		return this.pendingReasoningEffort;
-	}
-
-	/**
-	 * Sets the reasoning effort for the active conversation.
-	 * If no conversation exists, stores the global default.
-	 * @param effort - The effort level ('default' | 'off' | 'low' | 'medium' | 'high' | 'max')
-	 */
-	async setReasoningEffort(effort: ReasoningEffort): Promise<void> {
-		if (!this.activeConversation) {
-			this.pendingReasoningEffort = effort;
-			this.saveReasoningEffortDefaults();
-
-			return;
-		}
-
-		this.activeConversation = {
-			...this.activeConversation,
-			reasoningEffort: effort
-		};
-
-		await DatabaseService.updateConversation(this.activeConversation.id, {
-			reasoningEffort: effort
-		});
-
-		const convIndex = this.conversations.findIndex((c) => c.id === this.activeConversation!.id);
-
-		if (convIndex !== -1) {
-			this.conversations[convIndex].reasoningEffort = effort;
-		}
-	}
-
-	/**
-	 * Sets the working directory for the active conversation. Pass `null` or
-	 * an empty string to clear it, which restores the picker's empty state.
-	 *
-	 * On the empty new-chat screen (no active conversation yet), the value
-	 * is buffered into `pendingCwd` so the user can pick before
-	 * sending the first message; `createConversation()` consumes it.
-	 *
-	 * @param value - Absolute server-side path to the working directory, or null to clear
-	 */
-	async setCwd(value: string | null): Promise<void> {
-		const trimmed = value?.trim() || undefined;
-
-		// No chat yet - buffer for the first chat the user creates.
-		if (!this.activeConversation) {
-			this.pendingCwd = trimmed ?? null;
-
-			return;
-		}
-
-		this.activeConversation = {
-			...this.activeConversation,
-			cwd: trimmed
-		};
-
-		await DatabaseService.updateConversation(this.activeConversation.id, {
-			cwd: trimmed
-		});
-
-		const convIndex = this.conversations.findIndex((c) => c.id === this.activeConversation!.id);
-
-		if (convIndex !== -1) {
-			this.conversations[convIndex].cwd = trimmed;
-			this.conversations = [...this.conversations];
-		}
-
-		this.pendingCwd = null;
 	}
 
 	/**
