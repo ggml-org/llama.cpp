@@ -402,7 +402,11 @@ static __global__ void quantize_mmq_mxfp4(const float * __restrict__ x,
             for (int i = 0; i < 2; ++i) {
                 const float test_scale = ggml_cuda_e8m0_to_fp32(e + test_offsets[i]);
                 const float test_inv_scale = __frcp_rn(test_scale);
+#if CUDART_VERSION >= 12080
+                const uint8_t q = __nv_fp4_e2m1(xi * test_inv_scale).__x;
+#else
                 const uint8_t q = ggml_cuda_float_to_fp4_e2m1(xi, test_inv_scale);
+#endif // CUDART_VERSION >= 12080
                 const float err_diff = fabsf(xi) - 0.5f * fabsf(kvalues_fp4[q & 0x7]) * test_scale;
                 err[i] = err_diff*err_diff;
             }
