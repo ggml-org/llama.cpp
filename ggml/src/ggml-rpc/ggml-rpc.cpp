@@ -511,22 +511,14 @@ static void ggml_backend_rpc_buffer_set_tensor(ggml_backend_buffer_t buffer, ggm
 
         // Input format:
         // | rpc_tensor | offset (8 bytes) | data (size bytes) |
-        const size_t input_size =
-            sizeof(rpc_tensor) + sizeof(uint64_t) + size;
+        const size_t input_size = sizeof(rpc_tensor) + sizeof(uint64_t) + size;
 
         std::vector<uint8_t> input(input_size, 0);
         memcpy(input.data(), &rpc_tensor, sizeof(rpc_tensor));
         memcpy(input.data() + sizeof(rpc_tensor), &offset, sizeof(offset));
-        memcpy(
-            input.data() + sizeof(rpc_tensor) + sizeof(offset),
-            data,
-            size);
+        memcpy(input.data() + sizeof(rpc_tensor) + sizeof(offset), data, size);
 
-        status = send_rpc_cmd(
-            ctx->sock,
-            RPC_CMD_SET_TENSOR,
-            input.data(),
-            input.size());
+        status = send_rpc_cmd(ctx->sock, RPC_CMD_SET_TENSOR, input.data(), input.size());
 
         RPC_STATUS_ASSERT(status);
         return;
