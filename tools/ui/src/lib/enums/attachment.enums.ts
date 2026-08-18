@@ -8,6 +8,8 @@ export enum AttachmentType {
 	MCP_PROMPT = 'MCP_PROMPT',
 	MCP_RESOURCE = 'MCP_RESOURCE',
 	PDF = 'PDF',
+	/** Durable Skills tool-result metadata (activation records and resource results). */
+	SKILL = 'SKILL',
 	TEXT = 'TEXT',
 	VIDEO = 'VIDEO'
 }

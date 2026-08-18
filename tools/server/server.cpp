@@ -4,6 +4,7 @@
 #include "server-cors-proxy.h"
 #include "server-stream.h"
 #include "server-tools.h"
+#include "server-skills.h"
 
 #include "arg.h"
 #include "build-info.h"
@@ -167,6 +168,20 @@ int llama_server(common_params & params, int argc, char ** argv) {
 
     // struct that contains llama context and inference
     server_context ctx_server;
+
+    std::optional<server_skills> skills;
+    if (params.skills) {
+        skills.emplace(server_skills_config{
+            params.skills,
+            params.trust_project_skills,
+            params.skill_providers,
+        }, [&ctx_server](const std::string & text) {
+            // lifetime-safe direct-tokenizer snapshot; nullopt in router /
+            // unloaded / sleeping states makes the catalog estimate instead.
+            // Never posts tasks, wakes the model, or touches router children.
+            return ctx_server.token_count_snapshot(text);
+        });
+    }
 
     server_http_context ctx_http;
     if (!ctx_http.init(params)) {
@@ -357,6 +372,14 @@ int llama_server(common_params & params, int argc, char ** argv) {
     } else {
         ctx_http.get ("/tools",           ex_wrapper(res_403));
         ctx_http.post("/tools",           ex_wrapper(res_403));
+    }
+
+    // Skills: bind only when enabled; when disabled the routes stay ordinary
+    // missing routes (404), never a fallback 403.
+    if (params.skills) {
+        ctx_http.get ("/skills",      ex_wrapper(skills->handle_get));
+        ctx_http.post("/skills/read", ex_wrapper(skills->handle_post));
+        warn_names.push_back("skills");
     }
 
     if (warn_names.size() > 0) {

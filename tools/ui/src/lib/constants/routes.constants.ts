@@ -33,6 +33,8 @@ export const ROUTES = {
 	SEARCH: '#/search',
 	/** Settings base — for dynamic settings URLs use RouterService. */
 	SETTINGS: '#/settings',
+	/** Skills — read-only catalog of the server's discovered skills. */
+	SKILLS: '#/skills',
 	/** Root — start of the app. */
 	START: '#/'
 } as const;

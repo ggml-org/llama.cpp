@@ -5,6 +5,8 @@ import {
 	buildReadMediaToolDefinition,
 	DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY,
 	HOME_TILDE,
+	SKILL_SERVER_LABEL,
+	SKILL_TOOL_SETTINGS,
 	TOOL_GROUP_LABELS,
 	TOOL_SERVER_LABELS
 } from '$lib/constants';
@@ -392,6 +394,52 @@ class ToolsStore {
 	}
 
 	/**
+	 * Settings-only Skills group, derived solely from the centralized
+	 * `SKILL_TOOL_SETTINGS` registry. Skills are NOT ordinary model tools:
+	 * this group feeds only the Chat tool settings tab and must never enter
+	 * `allTools`, `toolGroups`, or `getEnabledToolsForLLM()`.
+	 */
+	get skillToolGroups(): ToolGroup[] {
+		const tools: ToolEntry[] = SKILL_TOOL_SETTINGS.map((setting) => ({
+			definition: setting.definition,
+			key: setting.key,
+			source: ToolSource.SKILLS
+		}));
+
+		return [
+			{
+				key: ToolSource.SKILLS,
+				label: SKILL_SERVER_LABEL,
+				source: ToolSource.SKILLS,
+				tools
+			}
+		];
+	}
+
+	/**
+	 * Model-facing Skill tool names (`read_skill` / `list_skill`) whose local
+	 * setting is enabled. Defaults to both; the persisted disabled-tool set
+	 * drives removal. The settings key is a local selection key, never a
+	 * generic permission/consent key.
+	 */
+	getEnabledSkillToolNames(): ReadonlySet<string> {
+		const enabled = new SvelteSet<string>();
+
+		for (const setting of SKILL_TOOL_SETTINGS) {
+			if (!this._disabledTools.has(setting.key)) {
+				enabled.add(setting.toolName);
+			}
+		}
+
+		return enabled;
+	}
+
+	/** True when `key` is a stable `skill:<tool>` settings key. */
+	isSkillToolKey(key: string): boolean {
+		return SKILL_TOOL_SETTINGS.some((setting) => setting.key === key);
+	}
+
+	/**
 	 * Enabled tool definitions for sending to the LLM.
 	 * MCP tool schemas are normalized here so the wire payload is consistent
 	 * across all four sources (server, browser/sandbox, MCP, custom JSON).
@@ -466,6 +514,8 @@ class ToolsStore {
 		} else {
 			this._disabledTools.add(key);
 		}
+
+		this.persistDisabledTools();
 	}
 
 	/** Enable all tools belonging to a specific MCP server */

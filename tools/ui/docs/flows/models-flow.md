@@ -1,7 +1,7 @@
 ```mermaid
 sequenceDiagram
     participant UI as 🧩 ModelsSelector
-    participant Hooks as 🪝 useModelChangeValidation
+    participant Hooks as 🪝 useModelsSelector
     participant modelsStore as 🗄️ modelsStore
     participant serverStore as 🗄️ serverStore
     participant convStore as 🗄️ conversationsStore
@@ -75,42 +75,34 @@ sequenceDiagram
     Note over UI,API: 🔄 MODEL SELECTION (ROUTER mode)
     %% ═══════════════════════════════════════════════════════════════════════════
 
-    UI->>Hooks: useModelChangeValidation({getRequiredModalities, onSuccess?, onValidationFailure?})
-    Note over Hooks: Hook configured per-component:<br/>ChatForm: getRequiredModalities = usedModalities<br/>ChatMessage: getRequiredModalities = getModalitiesUpToMessage(msgId)
+    Note over Hooks: useModelsSelector shared by ModelsSelectorDropdown and<br/>ModelsSelectorSheet. Callers configure it:<br/>- ChatForm (no onModelChange): plain select + auto-load<br/>- ChatMessageAssistant (onModelChange): load then regenerate
 
-    UI->>Hooks: handleModelChange(modelId, modelName)
+    UI->>Hooks: useModelsSelector({currentModel, onModelChange?, onOpenChange})
+    Note over Hooks: Reactive state: options, activeId, isRouter,<br/>isLoadingModel, searchTerm, showModelDialog
+
+    UI->>Hooks: handleSelect(modelId)
     activate Hooks
-    Hooks->>Hooks: previousSelectedModelId = modelsStore.selectedModelId
-    Hooks->>modelsStore: isModelLoaded(modelName)?
+    Hooks->>Hooks: find option by id
 
-    alt model NOT loaded
-        Hooks->>modelsStore: loadModel(modelName)
-        Note over modelsStore: → see LOAD MODEL section below
-    end
-
-    Note over Hooks: Always fetch props (from cache or API)
-    Hooks->>modelsStore: fetchModelProps(modelName)
-    modelsStore-->>Hooks: props
-
-    Hooks->>convStore: getRequiredModalities()
-    convStore-->>Hooks: {vision, audio}
-
-    Hooks->>Hooks: Validate: model.modalities ⊇ required?
-
-    alt validation PASSED
+    alt onModelChange provided
+        Hooks->>UI: await onModelChange(modelId, modelName)
+        Note over UI: Caller owns the change. Returning false<br/>keeps the menu open (e.g. validation failure)
+        UI-->>Hooks: true | false
+        alt result === false
+            Hooks->>Hooks: keep menu open, no selection
+        end
+    else no onModelChange
         Hooks->>modelsStore: selectModelById(modelId)
-        Hooks-->>UI: return true
-    else validation FAILED
-        Hooks->>UI: toast.error("Model doesn't support required modalities")
-        alt model was just loaded
-            Hooks->>modelsStore: unloadModel(modelName)
+        alt isRouter and model NOT loaded
+            Hooks->>modelsStore: loadModel(modelName)
+            Note over modelsStore: → see LOAD MODEL section below
         end
-        alt onValidationFailure provided
-            Hooks->>modelsStore: selectModelById(previousSelectedModelId)
-        end
-        Hooks-->>UI: return false
     end
+
+    Hooks->>Hooks: close menu, refocus chat input
     deactivate Hooks
+
+    Note over Hooks: handleOpenChange (router mode):<br/>fetchRouterModels() then fetchModalitiesForLoadedModels()
 
     %% ═══════════════════════════════════════════════════════════════════════════
     Note over UI,API: ⬆️ LOAD MODEL (ROUTER mode)

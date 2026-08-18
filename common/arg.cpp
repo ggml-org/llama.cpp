@@ -760,6 +760,32 @@ static void common_params_apply_system_config(common_params & params, llama_exam
     }
 }
 
+static void common_params_normalize_skill_providers(common_params & params) {
+    std::vector<std::string> providers;
+    std::set<std::string> seen;
+
+    for (auto provider : params.skill_providers) {
+        if (!provider.empty() && provider.front() == '.') {
+            provider.erase(0, 1);
+        }
+
+        if (provider.empty() || provider == "." || provider == ".." ||
+            provider.find('/') != std::string::npos || provider.find('\\') != std::string::npos) {
+            throw std::invalid_argument("invalid skill provider: " + provider);
+        }
+
+        if (seen.insert(provider).second) {
+            providers.push_back(std::move(provider));
+        }
+    }
+
+    if (providers.empty()) {
+        throw std::invalid_argument("at least one skill provider is required");
+    }
+
+    params.skill_providers = std::move(providers);
+}
+
 static bool common_params_parse_ex(int argc, char ** argv, common_params_context & ctx_arg) {
     common_params & params = ctx_arg.params;
 
@@ -887,7 +913,9 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
     };
 
     // parse all CLI args now, so that -hf is available below for remote preset resolution
+
     parse_cli_args();
+    common_params_normalize_skill_providers(params);
 
     postprocess_cpu_params(params.cpuparams,       nullptr);
     postprocess_cpu_params(params.cpuparams_batch, &params.cpuparams);
@@ -938,8 +966,9 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
     }
 
     const bool mcp_enabled = !params.mcp_servers_config.empty() || !params.mcp_servers_json.empty();
-    if ((!params.server_tools.empty() || mcp_enabled) && !params.cors_origins_explicit) {
-        LOG_WRN("server tools or MCP servers are enabled, using localhost as default CORS origin (change via --cors-origins)\n");
+    const bool skills_enabled = params.skills;
+    if ((!params.server_tools.empty() || mcp_enabled || skills_enabled) && !params.cors_origins_explicit) {
+        LOG_WRN("server tools, MCP servers, or Skills are enabled, using localhost as default CORS origin (change via --cors-origins)\n");
         params.cors_origins = "localhost";
     }
 
@@ -3363,6 +3392,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         "experimental: whether to enable built-in tools for AI agents - do not enable in untrusted environments (default: no tools)\n"
         "specify \"all\" to enable all tools\n"
         "available tools: read_file, file_glob_search, grep_search, exec_shell_command, write_file, edit_file, get_info\n"
+        "Skills tools (read_skill, list_skill) are controlled separately by --skills and the UI Skills settings\n"
         "note: for security reasons, this will limit --cors-origins to localhost by default",
         [](common_params & params, const std::string & value) {
             params.server_tools = parse_csv_row(value);
@@ -3552,6 +3582,29 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.endpoint_slots = value;
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_ENDPOINT_SLOTS"));
+    add_opt(common_arg(
+        {"--skills"},
+        {"--no-skills"},
+        string_format("enable project Skills discovery (default: %s)", params.skills ? "enabled" : "disabled"),
+        [](common_params & params, bool value) {
+            params.skills = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_SKILLS"));
+    add_opt(common_arg(
+        {"--trust-project-skills"},
+        {"--no-trust-project-skills"},
+        string_format("trust Skills found in the project (default: %s)", params.trust_project_skills ? "enabled" : "disabled"),
+        [](common_params & params, bool value) {
+            params.trust_project_skills = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_TRUST_PROJECT_SKILLS"));
+    add_opt(common_arg(
+        {"--skill-providers"}, "LIST",
+        "comma-separated Skills provider directories",
+        [](common_params & params, const std::string & value) {
+            params.skill_providers = string_split<std::string>(value, ',');
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_SKILL_PROVIDERS"));
     add_opt(common_arg(
         {"--slot-save-path"}, "PATH",
         "path to save slot kv cache (default: disabled)",

@@ -81,6 +81,7 @@ export type {
 	DatabaseMessageExtraMcpResource,
 	DatabaseMessageExtraPdfFile,
 	DatabaseMessageExtraTextFile,
+	DatabaseMessageExtraSkill,
 	DatabaseMessageExtra,
 	DatabaseMessage,
 	ExportedConversation,
@@ -194,6 +195,7 @@ export type {
 	AgenticToolCallList,
 	AgenticChatCompletionRequest,
 	AgenticSession,
+	AgenticPermissionRequest,
 	AgenticFlowCallbacks,
 	AgenticFlowOptions,
 	AgenticFlowParams,
@@ -208,7 +210,28 @@ export type {
 export type { DesktopIconStripItem } from './navigation';
 
 // Tools types
-export type { ToolEntry, ToolGroup, ToolUiEntry } from './tools';
+export type { ToolEntry, ToolGroup, ToolUiEntry, SkillToolSetting } from './tools';
+
+// Skills types
+export type {
+	SkillBaseReadResult,
+	SkillCatalogEntry,
+	SkillCatalogResponse,
+	SkillConsentInfo,
+	SkillDiagnostic,
+	SkillErrorResponse,
+	SkillIdentity,
+	SkillInstructionFacts,
+	SkillMetadata,
+	SkillPackOptions,
+	SkillPackedCatalog,
+	SkillPackingMode,
+	SkillReadRequest,
+	SkillReadResult,
+	SkillResourceReadResult,
+	SkillResourceSummary,
+	SkillRunSnapshot
+} from './skills';
 
 // Reasoning
 export type { ReasoningEffortLevel } from './reasoning';

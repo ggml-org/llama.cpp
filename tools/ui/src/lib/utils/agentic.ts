@@ -457,6 +457,22 @@ export function hasAgenticContent(
 	return toolMessages.length > 0;
 }
 
+/** Resume route for waking a turn after a command-only activation. */
+export type LeafResumeKind = 'continue-assistant' | 'fresh-turn' | 'no-op';
+
+/**
+ * Pick the wake-up route for the current leaf. Assistant leaves continue
+ * through the existing continuation machinery; tool result and user leaves
+ * open a fresh assistant turn; an empty conversation has nothing to wake.
+ */
+export function classifyLeafResume(role: MessageRole | undefined): LeafResumeKind {
+	if (role === undefined) return 'no-op';
+
+	if (role === MessageRole.ASSISTANT) return 'continue-assistant';
+
+	return 'fresh-turn';
+}
+
 /**
  * Decide how a Continue click on messages[idx] should resume generation.
  * Pure function over the persisted history snapshot.

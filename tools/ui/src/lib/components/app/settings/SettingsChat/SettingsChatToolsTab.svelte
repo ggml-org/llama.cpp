@@ -3,14 +3,26 @@
 	import { McpServerIdentity, TruncatedText } from '$lib/components/app';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import * as Collapsible from '$lib/components/ui/collapsible';
-	import { ICON_CLASS_DEFAULT } from '$lib/constants';
+	import { ICON_CLASS_DEFAULT, SKILL_TOOL_SETTINGS } from '$lib/constants';
 	import { ToolSource } from '$lib/enums/tools.enums';
 	import { mcpStore, permissionsStore, toolsStore } from '$lib/stores';
+	import { skillsStore } from '$lib/stores/skills.svelte';
 	import { getToolUi } from '$lib/utils';
 	import { SvelteSet } from 'svelte/reactivity';
 
 	let expandedGroups = new SvelteSet<string>();
-	let groups = $derived(toolsStore.toolGroups);
+
+	// Hide Skills only after the server confirms the endpoint is disabled.
+	// The sidebar probe owns availability requests.
+	let skillsVisible = $derived(skillsStore.availability !== 'disabled');
+
+	let groups = $derived(
+		skillsVisible
+			? [...toolsStore.toolGroups, ...toolsStore.skillToolGroups]
+			: toolsStore.toolGroups
+	);
+
+	const skillSettingByKey = new Map(SKILL_TOOL_SETTINGS.map((setting) => [setting.key, setting]));
 
 	function toggleExpanded(key: string) {
 		if (expandedGroups.has(key)) {
@@ -69,44 +81,72 @@
 
 						{#each group.tools as entry (entry.key)}
 							{@const toolName = entry.definition.function.name}
+							{@const isSkill = toolsStore.isSkillToolKey(entry.key)}
+							{@const skillSetting = isSkill ? skillSettingByKey.get(entry.key) : null}
 							{@const toolUi =
 								entry.source === ToolSource.SERVER || entry.source === ToolSource.BROWSER
 									? getToolUi(toolName)
 									: null}
-							{@const displayLabel = toolUi?.label ?? toolName}
-							{@const IconComponent = toolUi?.icon ?? null}
+							{@const displayLabel = skillSetting?.label ?? toolUi?.label ?? toolName}
+							{@const IconComponent = skillSetting?.icon ?? toolUi?.icon ?? null}
 							{@const isEnabled = toolsStore.isToolEnabled(entry.key)}
 							{@const permissionKey = entry.key}
-							{@const isAlwaysAllowed = permissionsStore.hasTool(permissionKey)}
+							{@const isAlwaysAllowed = !isSkill && permissionsStore.hasTool(permissionKey)}
 
 							<div class="flex items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-muted/50">
 								<span class="flex min-w-0 flex-1 items-center gap-1.5">
 									{#if IconComponent}
 										<IconComponent class={ICON_CLASS_DEFAULT} />
 									{/if}
-									<TruncatedText text={displayLabel} class="min-w-0" showTooltip={true} />
+									{#if skillSetting}
+										<span class="block min-w-0 truncate" title={skillSetting.description}
+											>{skillSetting.label}</span
+										>
+									{:else}
+										<TruncatedText text={displayLabel} class="min-w-0" showTooltip={true} />
+									{/if}
 								</span>
 
 								<div class="flex w-16 shrink-0 justify-center">
-									<Checkbox
-										checked={isEnabled}
-										onCheckedChange={() => toolsStore.toggleTool(entry.key)}
-										class={ICON_CLASS_DEFAULT}
-									/>
+									{#if isSkill}
+										<Checkbox
+											checked={isEnabled}
+											aria-label={`Enable ${skillSetting?.label ?? toolName}`}
+											onCheckedChange={(checked) => toolsStore.setToolEnabled(entry.key, checked)}
+											class={ICON_CLASS_DEFAULT}
+										/>
+									{:else}
+										<Checkbox
+											checked={isEnabled}
+											onCheckedChange={() => toolsStore.toggleTool(entry.key)}
+											class={ICON_CLASS_DEFAULT}
+										/>
+									{/if}
 								</div>
 
 								<div class="flex w-20 shrink-0 justify-center">
-									<Checkbox
-										checked={isAlwaysAllowed}
-										onCheckedChange={() => {
-											if (isAlwaysAllowed) {
-												permissionsStore.revokeTool(permissionKey);
-											} else {
-												permissionsStore.allowTool(permissionKey);
-											}
-										}}
-										class={ICON_CLASS_DEFAULT}
-									/>
+									{#if isSkill}
+										<!-- No generic Always allow control: Skills consent is approved per
+										     resolved skill identity during execution. -->
+										<span
+											class="text-xs text-muted-foreground"
+											title="Skills access is approved per resolved skill identity during execution"
+										>
+											Per-skill
+										</span>
+									{:else}
+										<Checkbox
+											checked={isAlwaysAllowed}
+											onCheckedChange={() => {
+												if (isAlwaysAllowed) {
+													permissionsStore.revokeTool(permissionKey);
+												} else {
+													permissionsStore.allowTool(permissionKey);
+												}
+											}}
+											class={ICON_CLASS_DEFAULT}
+										/>
+									{/if}
 								</div>
 							</div>
 						{/each}

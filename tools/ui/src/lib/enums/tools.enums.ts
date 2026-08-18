@@ -2,7 +2,14 @@ export enum ToolSource {
 	BROWSER = 'browser',
 	CUSTOM = 'custom',
 	MCP = 'mcp',
-	SERVER = 'server'
+	SERVER = 'server',
+	/**
+	 * Settings-only source for the model-facing Skills adapters
+	 * (`read_skill` / `list_skill`). Skills entries are rendered from the
+	 * centralized Skills settings registry and never enter ordinary tool
+	 * collections (`allTools`, `toolGroups`, `getEnabledToolsForLLM()`).
+	 */
+	SKILLS = 'skills'
 }
 
 export enum ToolPermissionDecision {
@@ -17,10 +24,7 @@ export enum ToolResponseField {
 	PLAIN_TEXT = 'plain_text_response'
 }
 
-/**
- * Entry types accepted by the `file_glob_search` tool's `type` parameter.
- * Mirrors the server-side validation in server-tools.cpp.
- */
+/** Valid `file_glob_search` type values. */
 export enum GlobSearchType {
 	ALL = 'all',
 	DIR = 'dir',

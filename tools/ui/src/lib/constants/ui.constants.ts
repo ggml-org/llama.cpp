@@ -1,5 +1,5 @@
 import { ROUTES } from './routes.constants';
-import { Package, Search, Settings, SquarePen } from '@lucide/svelte';
+import { BookOpen, Package, Search, Settings, SquarePen } from '@lucide/svelte';
 import McpLogo from '$lib/components/app/mcp/McpLogo.svelte';
 import { ToolSource } from '$lib/enums/tools.enums';
 import type { DesktopIconStripItem } from '$lib/types';
@@ -62,6 +62,12 @@ export const SIDEBAR_ACTIONS_ITEMS: DesktopIconStripItem[] = [
 		icon: McpLogo,
 		route: ROUTES.MCP_SERVERS,
 		tooltip: 'MCP Servers'
+	},
+	{
+		activeRouteId: '/skills',
+		icon: BookOpen,
+		route: ROUTES.SKILLS,
+		tooltip: 'Skills'
 	},
 	{
 		activeUrlIncludes: '#/settings',

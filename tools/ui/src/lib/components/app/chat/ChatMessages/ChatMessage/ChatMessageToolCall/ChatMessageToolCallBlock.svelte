@@ -10,8 +10,10 @@
 	import ChatMessageToolCallBlockReadMedia from './ChatMessageToolCallBlockReadMedia.svelte';
 	import ChatMessageToolCallBlockRunJavascript from './ChatMessageToolCallBlockRunJavascript.svelte';
 	import ChatMessageToolCallBlockSearchResults from './ChatMessageToolCallBlockSearchResults.svelte';
+	import ChatMessageToolCallBlockSkill from './ChatMessageToolCallBlockSkill.svelte';
 	import ChatMessageToolCallBlockWriteFile from './ChatMessageToolCallBlockWriteFile.svelte';
 	import { BuiltInTool } from '$lib/enums';
+	import { isSkillToolSection } from '$lib/services/skills-activation.service';
 	import type { AgenticSection, DatabaseMessageExtra } from '$lib/types';
 	import { extractSearchQuery, extractSearchResults, isWebSearchToolName } from '$lib/utils';
 
@@ -62,6 +64,8 @@
 	<ChatMessageToolCallBlockGrepSearch {section} {open} {isStreaming} {onToggle} />
 {:else if section.toolName === BuiltInTool.BROWSER_RUN_JAVASCRIPT}
 	<ChatMessageToolCallBlockRunJavascript {section} {open} {isStreaming} {onToggle} />
+{:else if isSkillToolSection(section)}
+	<ChatMessageToolCallBlockSkill {section} {open} {isStreaming} {onToggle} />
 {:else}
 	<ChatMessageToolCallBlockDefault {section} {open} {isStreaming} {attachments} {onToggle} />
 {/if}

@@ -40,6 +40,22 @@ export const SETTINGS_SECTION_TITLES = {
 	TOOLS: 'Tools'
 } as const;
 
+/** Factory default for the Skills catalog prompt budget (non-negative integer). */
+export const SKILL_BUDGET_DEFAULT = 2000;
+
+/**
+ * Normalize an arbitrary persisted `maxSkillBudget` value to a non-negative
+ * integer. Zero is valid (it disables prompt packing); only non-numeric or
+ * non-finite values fall back to the factory default.
+ */
+export function normalizeSkillBudget(value: unknown): number {
+	if (typeof value !== 'number' || !Number.isFinite(value)) {
+		return SKILL_BUDGET_DEFAULT;
+	}
+
+	return Math.max(0, Math.round(value));
+}
+
 const STANDALONE_SECTIONS: { title: SettingsSectionTitle; slug: string; icon: Component }[] = [
 	{ icon: PencilRuler, slug: SETTINGS_SECTION_SLUGS.TOOLS, title: SETTINGS_SECTION_TITLES.TOOLS },
 	{
@@ -110,6 +126,16 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				max: FILE_GLOB_SEARCH_PICKERS.MAX_SEARCH_DEPTH,
 				min: 1,
 				placeholder: `${FILE_GLOB_SEARCH_PICKERS.DEFAULT_SEARCH_DEPTH}`,
+				section: SETTINGS_SECTION_SLUGS.AGENTIC,
+				type: SettingsFieldType.INPUT
+			},
+			{
+				defaultValue: SKILL_BUDGET_DEFAULT,
+				help: 'Maximum tokens the Skills catalog may contribute to an agentic prompt. A value of 0 keeps the catalog listed here but packs no Skills prompt envelope and registers no Skills tools.',
+				isPositiveInteger: true,
+				key: SETTINGS_KEYS.MAX_SKILL_BUDGET,
+				label: 'Skills catalog budget',
+				min: 0,
 				section: SETTINGS_SECTION_SLUGS.AGENTIC,
 				type: SettingsFieldType.INPUT
 			}

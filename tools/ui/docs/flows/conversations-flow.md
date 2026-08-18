@@ -6,7 +6,7 @@ sequenceDiagram
     participant DbSvc as ⚙️ DatabaseService
     participant IDB as 💾 IndexedDB
 
-    Note over convStore: State:<br/>conversations: DatabaseConversation[]<br/>activeConversation: DatabaseConversation | null<br/>activeMessages: DatabaseMessage[]<br/>isInitialized: boolean<br/>pendingMcpServerOverrides: Map&lt;string, McpServerOverride&gt;
+    Note over convStore: State:<br/>conversations: DatabaseConversation[]<br/>activeConversation: DatabaseConversation | null<br/>activeMessages: DatabaseMessage[]<br/>isInitialized: boolean<br/>pendingMcpServerOverrides: Map<string, McpServerOverride>
 
     %% ═══════════════════════════════════════════════════════════════════════════
     Note over UI,IDB: 🚀 INITIALIZATION

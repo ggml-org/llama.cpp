@@ -6,6 +6,12 @@ sequenceDiagram
     participant convStore as 🗄️ conversationsStore
     participant settingsStore as 🗄️ settingsStore
     participant mcpStore as 🗄️ mcpStore
+    participant toolsStore as 🗄️ toolsStore
+    participant skillsStore as 🗄️ skillsStore
+    participant activationStore as 🗄️ skillActivationStore
+    participant SkillsSvc as ⚙️ SkillsService
+    participant PackingSvc as ⚙️ SkillsPackingService
+    participant ToolsSvc as ⚙️ Tool services
     participant ChatSvc as ⚙️ ChatService
     participant DbSvc as ⚙️ DatabaseService
     participant API as 🌐 /v1/chat/completions
@@ -57,9 +63,15 @@ sequenceDiagram
     chatStore->>chatStore: getApiOptions()
     Note right of chatStore: Merge from settingsStore.config:<br/>temperature, max_tokens, top_p, etc.
 
-    alt agenticConfig.enabled && mcpStore has connected servers
+    alt agenticConfig.enabled (MCP optional, Skills prepared separately)
         chatStore->>agenticStore: runAgenticFlow(convId, messages, assistantMsg, options, signal)
-        Note over agenticStore: Multi-turn agentic loop:<br/>1. Call ChatService.sendMessage()<br/>2. If response has tool_calls → execute via mcpStore<br/>3. Append tool results as messages<br/>4. Loop until no more tool_calls or maxTurns<br/>→ see agentic flow details below
+        Note over agenticStore: Before the tool loop, prepare one immutable Skills snapshot,<br/>apply maxSkillBudget, filter settings-disabled adapters,<br/>and append registered Skills definitions to the request
+        alt MCP servers are enabled
+            agenticStore->>mcpStore: ensureInitialized(perChatOverrides)
+            mcpStore-->>agenticStore: initialized or unavailable
+        else no MCP servers
+            Note over agenticStore: Continue with built-in, frontend, custom,<br/>and/or Skills adapters
+        end
         agenticStore-->>chatStore: final response with timings
     else standard (non-agentic) flow
         chatStore->>ChatSvc: sendMessage(messages, options, signal)
@@ -188,11 +200,21 @@ sequenceDiagram
     chatStore->>DbSvc: deleteMessage(failedMsgId)
 
     %% ═══════════════════════════════════════════════════════════════════════════
-    Note over UI,API: 🤖 AGENTIC LOOP (when agenticConfig.enabled)
-    %% ═══════════════════════════════════════════════════════════════════════════
+    Note over UI,API: AGENTIC LOOP (when agenticConfig.enabled)
 
     Note over agenticStore: agenticStore.runAgenticFlow(convId, messages, assistantMsg, options, signal)
     activate agenticStore
+    agenticStore->>activationStore: loadConversation(convId)
+    activationStore-->>agenticStore: durable base activation identities
+    agenticStore->>skillsStore: createRunSnapshot(activeCwd)
+    skillsStore->>SkillsSvc: list(activeCwd)
+    SkillsSvc-->>skillsStore: SkillCatalogResponse
+    agenticStore->>PackingSvc: pack(snapshot, {budget, ...packOptions, signal})
+    PackingSvc-->>agenticStore: complete or partial envelope
+    agenticStore->>toolsStore: getEnabledSkillToolNames()
+    toolsStore-->>agenticStore: settings-enabled Skills adapters
+    agenticStore->>agenticStore: buildSkillToolDefinitions() -> SkillRunAdapters
+    Note right of agenticStore: Collision check: existing custom, builtin,<br/>and MCP tool names win
     agenticStore->>agenticStore: getSession(convId) or create new
     agenticStore->>agenticStore: updateSession(turn: 0, running: true)
 
@@ -206,9 +228,23 @@ sequenceDiagram
         alt response has tool_calls
             agenticStore->>agenticStore: normalizeToolCalls(toolCalls)
             loop for each tool_call
-                agenticStore->>agenticStore: updateSession(streamingToolCall)
-                agenticStore->>mcpStore: executeTool(mcpCall, signal)
-                mcpStore-->>agenticStore: tool result
+                alt registered Skills adapter
+                    agenticStore->>SkillsSvc: read({name, path?}, snapshot.cwd)
+                    SkillsSvc-->>agenticStore: base/resource result or structured failure
+                    agenticStore->>agenticStore: request consent for unactivated identity
+                    alt user allows
+                        agenticStore->>activationStore: recordActivation(result)
+                        activationStore-->>agenticStore: typed metadata and persistence outcome
+                    else user denies or request aborts
+                        agenticStore->>agenticStore: return structured denial with no content
+                    end
+                else built-in, frontend, or custom tool
+                    agenticStore->>ToolsSvc: executeTool(toolCall, signal, cwd)
+                    ToolsSvc-->>agenticStore: tool result
+                else MCP tool
+                    agenticStore->>mcpStore: executeTool(toolCall, signal)
+                    mcpStore-->>agenticStore: tool result
+                end
                 agenticStore->>agenticStore: extractBase64Attachments(result)
                 agenticStore->>agenticStore: emitToolCallResult(convId, ...)
                 agenticStore->>convStore: addMessageToActive(toolResultMsg)

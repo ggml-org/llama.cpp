@@ -74,6 +74,23 @@ public:
         return sleeping;
     }
 
+    // Run `fn` while holding the task mutex when it can be acquired without
+    // blocking; returns false (without running `fn`) when the mutex is
+    // contended. The sleeping lifecycle (destroy and reload of the direct
+    // model and tokenizer) runs under this mutex, so a caller that acquires it
+    // can safely observe and use tokenizer state, while a contended mutex
+    // means a load/sleep transition is in progress and the tokenizer must not
+    // be touched.
+    template <typename Fn>
+    bool try_with_task_lock(Fn && fn) {
+        std::unique_lock<std::mutex> lock(mutex_tasks, std::defer_lock);
+        if (!lock.try_lock()) {
+            return false;
+        }
+        fn();
+        return true;
+    }
+
     // end the start_loop routine
     void terminate();
 

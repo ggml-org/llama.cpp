@@ -7,8 +7,11 @@
 #include <nlohmann/json_fwd.hpp>
 
 #include <cstddef>
+#include <cstdint>
 #include <memory>
+#include <optional>
 #include <set>
+#include <string>
 
 struct server_context_impl; // private implementation
 
@@ -80,6 +83,17 @@ static server_state server_state_from_str(const std::string & str) {
 
 using server_state_callback_t = std::function<void(server_state, json /* payload */)>;
 
+// Lifetime-safe tokenizer snapshot: the token count produced by the direct
+// model tokenizer for an instruction text, plus the generation of the
+// tokenizer epoch it was measured against. The generation advances whenever
+// the direct tokenizer/model is invalidated or replaced during the load/sleep
+// lifecycle; the catalog cache keys entries by it so a changed tokenizer
+// never reuses stale counts.
+struct server_token_count_snapshot {
+    size_t count = 0;
+    uint64_t generation = 0;
+};
+
 struct server_context {
     std::unique_ptr<server_context_impl> impl;
 
@@ -106,6 +120,16 @@ struct server_context {
     // get server metadata (read-only), can only be called after load_model()
     // not thread-safe, should only be used from the main thread
     server_context_meta get_meta() const;
+
+    // Tokenize `text` with the direct model tokenizer using the audited
+    // no-special-token flags (add_special=false, parse_special=true), returning
+    // the token count and the current tokenizer generation. Returns nullopt
+    // when the direct tokenizer is unavailable (router mode, model unloaded,
+    // sleeping, or a load/sleep transition in progress); never wakes the model
+    // or alters loading state. Synchronized with the model thread's
+    // destroy/reload transitions through the server queue task mutex, so it is
+    // safe to call from any thread.
+    std::optional<server_token_count_snapshot> token_count_snapshot(const std::string & text) const;
 
     // note: must be set before load_model() is called
     void set_state_callback(server_state_callback_t callback);

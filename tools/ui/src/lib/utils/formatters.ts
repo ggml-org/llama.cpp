@@ -153,3 +153,8 @@ export function formatAttachmentText(
 
 	return `\n\n--- ${label}: ${header} ---\n${content}`;
 }
+
+/** Collapses all whitespace in a skill description into single spaces. */
+export function normalizeSkillDescription(description: string): string {
+	return description.trim().replace(/\s+/g, ' ');
+}

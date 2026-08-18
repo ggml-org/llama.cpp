@@ -5,8 +5,10 @@ sequenceDiagram
     participant serverStore as 🗄️ serverStore
     participant ParamSvc as ⚙️ ParameterSyncService
     participant LS as 💾 LocalStorage
+    participant toolsStore as 🗄️ toolsStore
+    participant skillsStore as 🗄️ skillsStore
 
-    Note over settingsStore: State:<br/>config: SettingsConfigType<br/>theme: string ("auto" | "light" | "dark")<br/>isInitialized: boolean<br/>userOverrides: Set&lt;string&gt;
+    Note over settingsStore: State:<br/>config: SettingsConfigType<br/>theme: string ("auto" | "light" | "dark")<br/>isInitialized: boolean<br/>userOverrides: Set<string>
 
     %% ═══════════════════════════════════════════════════════════════════════════
     Note over UI,LS: 🚀 INITIALIZATION
@@ -153,4 +155,21 @@ sequenceDiagram
     rect rgb(255, 240, 240)
         Note over settingsStore: systemMessage, custom (JSON)<br/>showStatistics, enableContinueGeneration<br/>autoMicOnEmpty, disableAutoScroll<br/>apiKey, pdfAsImage, disableReasoningParsing, showRawOutputSwitch
     end
+    %% =========================================================================
+    Note over UI,toolsStore: SKILLS TOOL SETTINGS
+    %% =========================================================================
+
+    UI->>skillsStore: read availability
+    alt availability is disabled
+        skillsStore-->>UI: hide the Skills tool group
+    else availability is unknown, loading, available, or error
+        skillsStore-->>UI: show the Skills tool group
+        Note right of UI: The Tools tab reads settled availability,<br/>it does not issue a catalog request
+        UI->>toolsStore: read skillToolGroups
+        toolsStore-->>UI: list_skill and read_skill settings rows
+        UI->>toolsStore: setToolEnabled(skill:<tool>, checked)
+        toolsStore->>toolsStore: persist the disabled-tool set
+    end
+
+    Note over settingsStore: maxSkillBudget is stored in config.<br/>Zero disables the Skills prompt envelope and adapters.
 ```

@@ -1,6 +1,3 @@
-// Central constants export file
-// All constants should be imported from '$lib/constants'
-
 export * from './agentic.constants';
 export * from './api-endpoints.constants';
 export * from './app.constants';
@@ -49,6 +46,7 @@ export * from './routes.constants';
 export * from './sandbox.constants';
 export * from './settings-keys.constants';
 export * from './settings-registry.constants';
+export * from './skills';
 export * from './special-characters.constants';
 export * from './stream.constants';
 export * from './supported-file-types.constants';

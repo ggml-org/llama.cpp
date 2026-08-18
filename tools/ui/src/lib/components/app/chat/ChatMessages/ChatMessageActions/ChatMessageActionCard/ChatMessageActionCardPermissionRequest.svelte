@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { ChevronDown, ShieldQuestion } from '@lucide/svelte';
 	import { ChatMessageActionCard } from '$lib/components/app';
+	import SkillProviderLabel from '$lib/components/app/skills/SkillProviderLabel.svelte';
 	import { Button, buttonVariants } from '$lib/components/ui/button';
 	import * as ButtonGroup from '$lib/components/ui/button-group';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
@@ -8,20 +9,30 @@
 	import { TOOL_SERVER_LABELS } from '$lib/constants';
 	import { ToolPermissionDecision, ToolSource } from '$lib/enums';
 	import { toolsStore } from '$lib/stores';
+	import type { SkillConsentInfo } from '$lib/types';
 
 	interface Props {
 		toolName: string;
 		serverLabel: string;
+		/** Validated identity shown during Skills consent. */
+		skill?: SkillConsentInfo;
 		onDecision: (decision: ToolPermissionDecision) => void;
 	}
 
-	let { onDecision, serverLabel, toolName }: Props = $props();
+	let { onDecision, serverLabel, skill, toolName }: Props = $props();
 </script>
 
 <ChatMessageActionCard icon={ShieldQuestion}>
 	{#snippet message()}
 		Allow use of <span class="font-semibold">{toolName}</span>{#if serverLabel}
 			&nbsp;from <span class="font-semibold">{serverLabel}</span>{/if}?
+		{#if skill}
+			<span class="mt-1 block text-sm text-muted-foreground">
+				Skill: <span class="font-semibold text-foreground">{skill.name}</span>
+				({skill.scope} · <SkillProviderLabel provider={skill.provider} />){#if skill.path}
+					&mdash; resource: {skill.path}{/if}
+			</span>
+		{/if}
 	{/snippet}
 
 	{#snippet actions()}
