@@ -1,12 +1,12 @@
 <script lang="ts">
+	import SkillProviderLabel from './SkillProviderLabel.svelte';
 	import { ChevronDown, Clock, FileText, Layers } from '@lucide/svelte';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Card, CardContent, CardHeader, CardTitle } from '$lib/components/ui/card';
 	import { Switch } from '$lib/components/ui/switch';
-	import { untrack } from 'svelte';
-	import SkillProviderLabel from './SkillProviderLabel.svelte';
 	import type { SkillCatalogEntry } from '$lib/types';
 	import { normalizeSkillDescription } from '$lib/utils';
+	import { untrack } from 'svelte';
 	import { SvelteSet } from 'svelte/reactivity';
 
 	interface Props {
@@ -20,11 +20,11 @@
 
 	let {
 		entries,
+		isDisabled = () => false,
+		onEnabledChange,
 		onSelect,
 		open,
-		selectedId,
-		isDisabled = () => false,
-		onEnabledChange
+		selectedId
 	}: Props = $props();
 
 	let expandedDescriptions = new SvelteSet();
@@ -54,11 +54,18 @@
 			// Re-measure after clamp changes; skip expanded text until collapse.
 			$effect(() => {
 				const expanded = isDescriptionExpanded(id);
+
 				untrack(() => measure(expanded));
 			});
 
 			function measure(expanded: boolean) {
-				if (!observer || expanded) return;
+				if (!observer) return;
+
+				if (expanded) {
+					overflowingDescriptions.add(id);
+
+					return;
+				}
 
 				const overflowing = node.scrollHeight > node.clientHeight + 1;
 				const alreadyTracked = untrack(() => overflowingDescriptions.has(id));

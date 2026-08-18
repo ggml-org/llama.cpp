@@ -191,7 +191,6 @@ describe('SkillsService', () => {
 				{ name: 'example-skill', path: 'references/DETAILS.md' },
 				'/w'
 			);
-
 			const [, init] = fetchMock.mock.calls[0];
 			const body = JSON.parse(init.body as string) as Record<string, unknown>;
 
@@ -448,7 +447,10 @@ describe('skillsStore', () => {
 	});
 
 	it('does not change availability when the probing caller aborts', async () => {
-		vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {})));
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(() => new Promise(() => {}))
+		);
 
 		const controller = new AbortController();
 		const probe = skillsStore.probeAvailability(undefined, controller.signal);

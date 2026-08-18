@@ -1,6 +1,4 @@
 <script lang="ts">
-	import { ChevronRight, FileCode2, FileText, Folder, FolderOpen } from '@lucide/svelte';
-	import * as Popover from '$lib/components/ui/popover';
 	import {
 		buildSkillResourceTree,
 		createSkillRootNode,
@@ -8,7 +6,9 @@
 		getInitialExpandedFolderPaths,
 		type SkillResourceTreeNode
 	} from './skill-resource-presentation';
-
+	import { ChevronRight, FileCode2, FileText, Folder, FolderOpen } from '@lucide/svelte';
+	import * as Popover from '$lib/components/ui/popover';
+	import { SvelteSet } from 'svelte/reactivity';
 	interface Props {
 		paths: readonly string[];
 		resourceCount: number;
@@ -19,12 +19,12 @@
 	}
 
 	let {
+		onSelect,
 		paths,
 		resourceCount,
 		resourcesTruncated,
 		selectedPath,
-		unavailablePaths,
-		onSelect
+		unavailablePaths
 	}: Props = $props();
 	let open = $state(false);
 	let expandedPaths = $state<ReadonlySet<string>>(new Set());
@@ -48,7 +48,7 @@
 	}
 
 	function toggleFolder(path: string) {
-		const next = new Set(expandedPaths);
+		const next = new SvelteSet(expandedPaths);
 
 		if (next.has(path)) next.delete(path);
 		else next.add(path);
@@ -72,40 +72,48 @@
 		if (event.key === 'ArrowDown') {
 			event.preventDefault();
 			moveFocus(Math.min(index + 1, rows.length - 1));
+
 			return;
 		}
 
 		if (event.key === 'ArrowUp') {
 			event.preventDefault();
 			moveFocus(Math.max(index - 1, 0));
+
 			return;
 		}
 
 		if (event.key === 'Home' || event.key === 'End') {
 			event.preventDefault();
 			moveFocus(event.key === 'Home' ? 0 : rows.length - 1);
+
 			return;
 		}
 
 		if (event.key === 'ArrowRight' && node.kind === 'folder') {
 			event.preventDefault();
+
 			if (!expandedPaths.has(node.path)) toggleFolder(node.path);
 			else moveFocus(index + 1);
+
 			return;
 		}
 
 		if (event.key === 'ArrowLeft' && node.kind === 'folder' && expandedPaths.has(node.path)) {
 			event.preventDefault();
 			toggleFolder(node.path);
+
 			return;
 		}
 
 		if (event.key === 'ArrowLeft') {
 			const parentIndex = rows.findIndex((row) => row.node.path === rows[index].parentPath);
+
 			if (parentIndex >= 0) {
 				event.preventDefault();
 				moveFocus(parentIndex);
 			}
+
 			return;
 		}
 

@@ -1,8 +1,8 @@
 <script lang="ts">
 	// Typed metadata supplies labels; server content stays text.
 
-	import { FileCode2, FileText } from '@lucide/svelte';
 	import ToolCallBlock from './ToolCallBlock.svelte';
+	import { FileCode2, FileText } from '@lucide/svelte';
 	import { classifySkillResourceFormat } from '$lib/components/app/skills/skill-resource-presentation';
 	import SkillProviderLabel from '$lib/components/app/skills/SkillProviderLabel.svelte';
 	import { resolveSkillSectionMeta } from '$lib/services/skills-activation.service';

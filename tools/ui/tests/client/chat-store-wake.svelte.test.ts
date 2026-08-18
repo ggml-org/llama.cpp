@@ -5,18 +5,17 @@
 import ChatFormTestWrapper from './components/ChatFormTestWrapper.svelte';
 import { MessageRole } from '$lib/enums';
 import { ChatService } from '$lib/services/chat.service';
-import { DatabaseService } from '$lib/services/database.service';
 import { dispatchSkillActivation } from '$lib/services/skill-command.service';
 import { agenticStore } from '$lib/stores/agentic.svelte';
 import { chatStore } from '$lib/stores/chat.svelte';
 import { conversationsStore } from '$lib/stores/conversations.svelte';
 import { skillActivationStore } from '$lib/stores/skill-activation.svelte';
-import { skillsStore } from '$lib/stores/skills.svelte';
 import { skillAvailabilityStore } from '$lib/stores/skill-availability.svelte';
+import type { SkillCatalogSlot } from '$lib/stores/skills.svelte';
+import { skillsStore } from '$lib/stores/skills.svelte';
+import type { SkillCatalogEntry } from '$lib/types';
 import type { DatabaseConversation, DatabaseMessage } from '$lib/types/database';
 import type { SkillBaseReadResult } from '$lib/types/skills';
-import type { SkillCatalogEntry } from '$lib/types';
-import type { SkillCatalogSlot } from '$lib/stores/skills.svelte';
 import { classifyLeafResume } from '$lib/utils';
 import { tick } from 'svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -28,10 +27,6 @@ const db = vi.hoisted(() => {
 	const messages: DatabaseMessage[] = [];
 
 	return {
-		messages,
-		seed(message: DatabaseMessage): void {
-			messages.push(message);
-		},
 		add(message: DatabaseMessage): void {
 			messages.push(message);
 
@@ -41,12 +36,15 @@ const db = vi.hoisted(() => {
 				if (parent) parent.children = [...parent.children, message.id];
 			}
 		},
+		messages,
 		reset(): void {
 			messages.length = 0;
+		},
+		seed(message: DatabaseMessage): void {
+			messages.push(message);
 		}
 	};
 });
-
 // Controllable stream sink for explicit test completion.
 const streams = vi.hoisted(() => {
 	const items: Array<{
@@ -60,18 +58,20 @@ const streams = vi.hoisted(() => {
 
 vi.mock('$lib/services/database.service', () => ({
 	DatabaseService: {
-		createMessageBranch: vi.fn(async (message: Omit<DatabaseMessage, 'id'>, parentId: string | null) => {
-			const created: DatabaseMessage = {
-				...message,
-				children: [],
-				id: `db-msg-${db.messages.length + 1}`,
-				parent: parentId
-			};
+		createMessageBranch: vi.fn(
+			async (message: Omit<DatabaseMessage, 'id'>, parentId: string | null) => {
+				const created: DatabaseMessage = {
+					...message,
+					children: [],
+					id: `db-msg-${db.messages.length + 1}`,
+					parent: parentId
+				};
 
-			db.add(created);
+				db.add(created);
 
-			return created;
-		}),
+				return created;
+			}
+		),
 		createMessageBranchPair: vi.fn(
 			async (
 				assistant: Omit<DatabaseMessage, 'id'>,
@@ -104,29 +104,32 @@ vi.mock('$lib/services/database.service', () => ({
 				.filter((message) => message.convId === convId)
 				.sort((a, b) => a.timestamp - b.timestamp)
 		),
-		updateCurrentNode: vi.fn(async () => undefined),
 		updateConversation: vi.fn(async () => undefined),
+		updateCurrentNode: vi.fn(async () => undefined),
 		updateMessage: vi.fn(async () => undefined)
 	}
 }));
 
 vi.mock('$lib/services/chat.service', () => ({
 	ChatService: {
+		selectActiveStream: vi.fn(() => null),
 		sendMessage: vi.fn(
-			(messages: unknown, options: Record<string, unknown> & { onComplete?: (content: string) => void }) => {
+			(
+				messages: unknown,
+				options: Record<string, unknown> & { onComplete?: (content: string) => void }
+			) => {
 				return new Promise<void>((resolve) => {
 					streams.items.push({
-						messages: messages as DatabaseMessage[],
-						options,
 						finish: () => {
 							resolve();
 							options.onComplete?.('queued wake answer');
-						}
+						},
+						messages: messages as DatabaseMessage[],
+						options
 					});
 				});
 			}
-		),
-		selectActiveStream: vi.fn(() => null)
+		)
 	}
 }));
 
@@ -134,13 +137,9 @@ vi.mock('$lib/services/skill-command.service', () => ({ dispatchSkillActivation:
 vi.mock('$lib/stores/skills.svelte', () => ({ skillsStore: { slotFor: vi.fn() } }));
 
 const mockSendMessage = vi.mocked(ChatService.sendMessage);
-
 const CONV_ID = 'conv-wake-1';
 
-function baseResult(
-	skill: { id: string; name: string },
-	contentXml: string
-): SkillBaseReadResult {
+function baseResult(skill: { id: string; name: string }, contentXml: string): SkillBaseReadResult {
 	return {
 		body_markdown: `# ${skill.name}\nbody`,
 		content_xml: contentXml,
@@ -228,7 +227,7 @@ beforeEach(async () => {
 	skillAvailabilityStore.setEnabled('opaque-enabled-b', true);
 	vi.mocked(skillsStore.slotFor).mockReturnValue(readySlot([formSkill('frontend-design')]));
 	vi.mocked(dispatchSkillActivation).mockReset();
-	vi.mocked(dispatchSkillActivation).mockResolvedValue({ ok: true, created: true });
+	vi.mocked(dispatchSkillActivation).mockResolvedValue({ created: true, ok: true });
 });
 
 afterEach(() => {
@@ -345,6 +344,7 @@ describe('/skills <name> wake', () => {
 		skillAvailabilityStore.setEnabled('opaque-disabled', false);
 
 		const { container } = render(ChatFormTestWrapper);
+
 		await tick();
 
 		const textarea = container.querySelector('textarea');

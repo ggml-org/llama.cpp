@@ -1,8 +1,8 @@
 // Guards read-first `/skills <name>` activation, creation, deduplication, and errors.
 
 import { ChatFormCommandAction } from '$lib/enums';
-import { dispatchSkillActivation } from '$lib/services/skill-command.service';
 import { AttachmentType } from '$lib/enums';
+import { dispatchSkillActivation } from '$lib/services/skill-command.service';
 import { SkillsService } from '$lib/services/skills.service';
 import { conversationsStore } from '$lib/stores/conversations.svelte';
 import { skillActivationStore } from '$lib/stores/skill-activation.svelte';
@@ -167,8 +167,8 @@ describe('dispatchSkillActivation', () => {
 			diagnostics: [],
 			kind: 'resource',
 			resource: { path: 'x' },
-			source: '',
-			skill: { id: 'opaque-x', name: 'x', provider: 'agents', scope: 'global' }
+			skill: { id: 'opaque-x', name: 'x', provider: 'agents', scope: 'global' },
+			source: ''
 		});
 
 		const outcome = await dispatchSkillActivation('frontend-design');

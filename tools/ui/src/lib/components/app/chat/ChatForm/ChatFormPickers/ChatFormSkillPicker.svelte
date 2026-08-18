@@ -4,8 +4,8 @@
 		ChatFormPickerListItem,
 		ChatFormPickerPopover
 	} from '$lib/components/app/chat';
-	import { usePickerNavigation } from '$lib/hooks/use-picker-navigation.svelte';
 	import SkillProviderLabel from '$lib/components/app/skills/SkillProviderLabel.svelte';
+	import { usePickerNavigation } from '$lib/hooks/use-picker-navigation.svelte';
 	import type { SkillCatalogEntry } from '$lib/types';
 	import { normalizeSkillDescription } from '$lib/utils';
 

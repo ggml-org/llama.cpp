@@ -1,6 +1,8 @@
 import { SKILL_LIST_TOOL, SKILL_READ_TOOL, SKILL_SERVER_LABEL } from '$lib/constants';
 import { MessageRole, ToolCallType, ToolPermissionDecision } from '$lib/enums';
+import * as SkillsServiceModule from '$lib/services/skills.service';
 import { SkillsService } from '$lib/services/skills.service';
+import { buildSkillRunSnapshot } from '$lib/services/skills.service';
 import { skillActivationExtra, skillResourceExtra } from '$lib/services/skills-activation.service';
 import type {
 	SkillActivationInput,
@@ -15,8 +17,6 @@ import {
 	skillErrorResult,
 	SkillRunAdapters
 } from '$lib/services/skills-adapters.service';
-import { buildSkillRunSnapshot } from '$lib/services/skills.service';
-import * as SkillsServiceModule from '$lib/services/skills.service';
 import type {
 	SkillBaseReadResult,
 	SkillCatalogEntry,
@@ -104,8 +104,8 @@ function resourceResult(name: string, path: string): SkillResourceReadResult {
 		diagnostics: [],
 		kind: 'resource',
 		resource: { path },
-		source: 'data',
-		skill: { id: `opaque-${name}`, name, provider: 'agents', scope: 'project' }
+		skill: { id: `opaque-${name}`, name, provider: 'agents', scope: 'project' },
+		source: 'data'
 	};
 }
 

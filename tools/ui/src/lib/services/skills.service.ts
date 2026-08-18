@@ -2,8 +2,8 @@ import { API_SKILLS, API_TOKENIZE, X_SKILL_CWD_HEADER } from '$lib/constants';
 import type {
 	SkillCatalogEntry,
 	SkillCatalogResponse,
-	SkillPackOptions,
 	SkillPackedCatalog,
+	SkillPackOptions,
 	SkillReadRequest,
 	SkillReadResult,
 	SkillRunSnapshot

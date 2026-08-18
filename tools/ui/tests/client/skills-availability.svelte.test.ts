@@ -21,7 +21,6 @@ import { render } from 'vitest-browser-svelte';
 const storageFixture = vi.hoisted(() => {
 	const state = new Map<string, string>();
 	const writes = { count: 0 };
-
 	const polyfill: Storage = {
 		clear: () => state.clear(),
 		getItem: (key) => state.get(key) ?? null,
@@ -38,32 +37,14 @@ const storageFixture = vi.hoisted(() => {
 		}
 	};
 
-	return { state, writes, polyfill };
+	return { polyfill, state, writes };
 });
 
 vi.mock('$app/environment', () => ({ browser: true }));
 
 const nodeGlobal = globalThis as unknown as { localStorage: Storage };
-nodeGlobal.localStorage = storageFixture.polyfill;
 
-function storeCatalogEntry(id: string, name: string): SkillCatalogEntry {
-	return {
-		id,
-		name,
-		description: `description for ${name}`,
-		scope: 'global',
-		provider: 'test-provider',
-		instruction: {
-			bytes: 10,
-			lines: 1,
-			tokens: 4,
-			tokens_estimated: false,
-			modified_at: null
-		},
-		resources: { count: 0, truncated: false },
-		catalog_xml: `<skills_catalog><skill name="${name}"/></skills_catalog>`
-	};
-}
+nodeGlobal.localStorage = storageFixture.polyfill;
 
 function jsonResponse(body: unknown, status = 200): Response {
 	return new Response(JSON.stringify(body), {
@@ -103,7 +84,7 @@ function visibleItemOrder(): string[] {
 
 const BASE_ACTIONS = ['New chat', 'Search', 'MCP Servers', 'Settings'] as const;
 
-/** Built-in listing shape consumed by `ToolsService.list`. */
+/** Server listing shape consumed by `ToolsService.list`. */
 function makeReadFileListing() {
 	return [
 		{
@@ -546,13 +527,13 @@ describe('SettingsChatToolsTab Skills group', () => {
 			skills: () => jsonResponse(makeCatalog()),
 			tools: () => jsonResponse(makeReadFileListing())
 		});
-		await toolsStore.fetchBuiltinTools();
+		await toolsStore.fetchServerTools();
 		await skillsStore.probeAvailability(undefined);
 
 		const screen = await render(SettingsChatToolsTab);
 
-		// Both groups present: generic Built-in first, Skills appended after.
-		await screen.getByRole('button', { name: /Built-in/ }).click();
+		// Both groups present: generic Server first, Skills appended after.
+		await screen.getByRole('button', { name: /Server/ }).click();
 		await screen.getByRole('button', { name: /Skills/ }).click();
 		await vi.waitFor(() => expect(screen.getByText('Read file').query()).toBeTruthy());
 
@@ -572,6 +553,6 @@ describe('SettingsChatToolsTab Skills group', () => {
 		expect(skillCheckboxes).toHaveLength(2);
 
 		// The generic permission flow still resolves read_file.
-		expect(toolsStore.getPermissionKey('read_file')).toBe('builtin:read_file');
+		expect(toolsStore.getPermissionKey('read_file')).toBe('server:read_file');
 	});
 });

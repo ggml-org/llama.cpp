@@ -11,7 +11,7 @@ import {
 	takeMentionDismissSnapshot
 } from '$lib/utils';
 
-	/** Injected getters avoid store circular imports. */
+/** Injected getters avoid store circular imports. */
 export interface UseChatFormPickersOptions {
 	getValue: () => string;
 	/** Also fires the form change handler. */

@@ -1,17 +1,17 @@
 <script lang="ts">
 	import { Circle, RefreshCw, X } from '@lucide/svelte';
-	import SkillResourcePicker from '$lib/components/app/skills/SkillResourcePicker.svelte';
-	import SkillResourcePreview from '$lib/components/app/skills/SkillResourcePreview.svelte';
 	import { ActionIcon } from '$lib/components/app/actions';
 	import SkillProviderLabel from '$lib/components/app/skills/SkillProviderLabel.svelte';
+	import SkillResourcePicker from '$lib/components/app/skills/SkillResourcePicker.svelte';
+	import SkillResourcePreview from '$lib/components/app/skills/SkillResourcePreview.svelte';
 	import { Alert, AlertDescription, AlertTitle } from '$lib/components/ui/alert';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import { SkillsService } from '$lib/services/skills.service';
 	import type { SkillBaseReadResult, SkillCatalogEntry } from '$lib/types';
-	import { fly } from 'svelte/transition';
 	import { SvelteSet } from 'svelte/reactivity';
+	import { fly } from 'svelte/transition';
 
 	interface Props {
 		entry: SkillCatalogEntry;

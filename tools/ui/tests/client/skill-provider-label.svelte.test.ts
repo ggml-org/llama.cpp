@@ -1,7 +1,7 @@
 // Guards the shared provider label and generic tooltip across Skills surfaces.
 
-import SkillProviderLabel from '$lib/components/app/skills/SkillProviderLabel.svelte';
 import { GENERIC_SKILL_PROVIDER_TOOLTIP } from '$lib/components/app/skills/skill-provider-presentation';
+import SkillProviderLabel from '$lib/components/app/skills/SkillProviderLabel.svelte';
 import { describe, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-svelte';
 
@@ -15,7 +15,6 @@ describe('SkillProviderLabel', () => {
 
 	it('exposes the exact provider-agnostic tooltip on keyboard focus', async () => {
 		const { container } = render(SkillProviderLabel, { props: { provider: 'agents' } });
-
 		const trigger = container.querySelector('[data-slot="tooltip-trigger"]');
 
 		expect(trigger).not.toBeNull();
@@ -36,6 +35,7 @@ describe('SkillProviderLabel', () => {
 
 		// No hidden tooltip is wired for non-agents providers.
 		const bodyBefore = document.body.textContent ?? '';
+
 		expect(bodyBefore).not.toContain(GENERIC_SKILL_PROVIDER_TOOLTIP);
 	});
 });

@@ -1,10 +1,11 @@
 import { SKILL_LIST_TOOL, SKILL_READ_TOOL } from '$lib/constants';
 import { MessageRole, ToolPermissionDecision } from '$lib/enums';
 import { ChatService } from '$lib/services';
+import * as SkillsServiceModule from '$lib/services/skills.service';
 import { SkillsService } from '$lib/services/skills.service';
+import { buildSkillRunSnapshot, serializeSkillCatalogEnvelope } from '$lib/services/skills.service';
 import { skillActivationExtra, skillResourceExtra } from '$lib/services/skills-activation.service';
 import { skillDenialResult } from '$lib/services/skills-adapters.service';
-import { buildSkillRunSnapshot, serializeSkillCatalogEnvelope } from '$lib/services/skills.service';
 import { agenticStore } from '$lib/stores/agentic.svelte';
 import { settingsStore } from '$lib/stores/settings.svelte';
 import { skillsStore } from '$lib/stores/skills.svelte';
@@ -15,7 +16,6 @@ import type {
 	SkillCatalogResponse,
 	SkillResourceReadResult
 } from '$lib/types';
-import * as SkillsServiceModule from '$lib/services/skills.service';
 import type { AgenticFlowCallbacks } from '$lib/types/agentic';
 import type { Mock } from 'vitest';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -65,21 +65,21 @@ vi.mock('$lib/stores/tools.svelte', () => ({
 		get allTools() {
 			return toolsMockState.allTools;
 		},
-		builtinTools: [
-			{
-				function: { name: 'test_tool', parameters: { properties: {}, type: 'object' } },
-				type: 'function'
-			}
-		],
+		browserTools: [],
 		customTools: [],
-		fetchBuiltinTools: vi.fn(),
-		frontendTools: [],
+		fetchServerTools: vi.fn(),
 		getEnabledSkillToolNames: vi.fn(),
 		getEnabledToolsForLLM: vi.fn(),
 		getPermissionKey: vi.fn(() => null),
 		getToolServerLabel: vi.fn(() => ''),
 		getToolSource: vi.fn(() => null),
-		loading: false
+		loading: false,
+		serverTools: [
+			{
+				function: { name: 'test_tool', parameters: { properties: {}, type: 'object' } },
+				type: 'function'
+			}
+		]
 	}
 }));
 vi.mock('$lib/stores/mcp.svelte', () => ({
@@ -160,8 +160,8 @@ function resourceResult(name: string, path: string): SkillResourceReadResult {
 		diagnostics: [],
 		kind: 'resource',
 		resource: { path },
-		source: 'data',
-		skill: { id: `opaque-${name}`, name, provider: 'agents', scope: 'project' }
+		skill: { id: `opaque-${name}`, name, provider: 'agents', scope: 'project' },
+		source: 'data'
 	};
 }
 
@@ -257,7 +257,7 @@ beforeEach(() => {
 	mockSettingsStore.config = { agenticMaxTurns: 100, maxSkillBudget: 2000 };
 	mockGetEnabledToolsForLLM.mockReturnValue([dummyTool()]);
 	mockGetEnabledSkillToolNames.mockReturnValue(new Set([SKILL_READ_TOOL, SKILL_LIST_TOOL]));
-	toolsMockState.allTools = [{ definition: dummyTool(), key: 'builtin:test_tool' }];
+	toolsMockState.allTools = [{ definition: dummyTool(), key: 'server:test_tool' }];
 	mockRecordActivation.mockResolvedValue({
 		created: true,
 		extra: skillActivationExtra(baseResult('demo-skill')),

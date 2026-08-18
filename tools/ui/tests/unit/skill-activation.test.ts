@@ -57,7 +57,6 @@ const mockCreateMessageBranch = vi.mocked(DatabaseService.createMessageBranch);
 const mockCreateMessageBranchPair = vi.mocked(DatabaseService.createMessageBranchPair);
 const mockGetConversationMessages = vi.mocked(conversationsStore.getConversationMessages);
 const mockAddMessageToActive = vi.mocked(conversationsStore.addMessageToActive);
-
 const METADATA: SkillMetadata = {
 	description: 'A demo skill',
 	license: 'MIT',
@@ -89,8 +88,8 @@ function resourceResult(overrides: Partial<SkillResourceReadResult> = {}): Skill
 		diagnostics: [],
 		kind: 'resource',
 		resource: { path: 'refs/DETAILS.md' },
-		source: 'data',
 		skill: { id: 'opaque-id-1', name: 'demo-skill', provider: 'agents', scope: 'project' },
+		source: 'data',
 		...overrides
 	};
 }
@@ -445,17 +444,15 @@ describe('DurableSkillActivationStore (Task 4 durable seam)', () => {
 
 	it('loadConversation ignores malformed and unrelated extras', async () => {
 		mockGetConversationMessages.mockResolvedValue([
-			toolMessage(
-				{
-					kind: 'base',
-					name: 'demo-skill',
-					provider: 'agents',
-					scope: 'project',
-					skillId: undefined,
-					state: 'approved',
-					type: 'SKILL'
-				} as unknown as DatabaseMessageExtraSkill
-			)
+			toolMessage({
+				kind: 'base',
+				name: 'demo-skill',
+				provider: 'agents',
+				scope: 'project',
+				skillId: undefined,
+				state: 'approved',
+				type: 'SKILL'
+			} as unknown as DatabaseMessageExtraSkill)
 		]);
 
 		await skillActivationStore.loadConversation('conv-malformed');
@@ -556,6 +553,7 @@ describe('DurableSkillActivationStore (Task 4 durable seam)', () => {
 			expect(secondRecord.created).toBe(false);
 			expect(secondRecord.toolResultMessage).toBeNull();
 			expect(secondRecord.extra.skillId).toBe('opaque-id-1');
+
 			if (order === 'slash-first') {
 				expect(mockCreateMessageBranch).not.toHaveBeenCalled();
 				expect(mockCreateMessageBranchPair).toHaveBeenCalledTimes(1);
@@ -563,6 +561,7 @@ describe('DurableSkillActivationStore (Task 4 durable seam)', () => {
 				expect(mockCreateMessageBranchPair).not.toHaveBeenCalled();
 				expect(mockCreateMessageBranch).toHaveBeenCalledTimes(1);
 			}
+
 			expect(skillActivationStore.isActivated(convId, 'opaque-id-1')).toBe(true);
 		}
 	);

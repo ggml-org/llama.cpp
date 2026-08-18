@@ -52,7 +52,7 @@ vi.mock('$lib/services/tools.service', () => ({
 				display_name: 'Read File',
 				permissions: { write: false },
 				tool: 'read_file',
-				type: ToolSource.BUILTIN,
+				type: ToolSource.SERVER,
 				uses_cwd: false
 			}
 		])
@@ -83,7 +83,7 @@ describe('Skills tool registry', () => {
 		});
 	});
 
-	it('keeps settings keys distinct from generic builtin/MCP/custom selection keys', () => {
+	it('keeps settings keys distinct from generic server/MCP/custom selection keys', () => {
 		for (const setting of SKILL_TOOL_SETTINGS) {
 			expect(setting.key.startsWith('skill:')).toBe(true);
 			expect(setting.key.endsWith(setting.toolName)).toBe(true);
@@ -220,6 +220,7 @@ describe('ToolsStore Skills settings group', () => {
 		const expected = new Map(
 			SKILL_TOOL_SETTINGS.map((setting) => [setting.key, setting.definition])
 		);
+
 		for (const tool of group.tools) {
 			expect(tool.definition).toEqual(expected.get(tool.key));
 		}
@@ -239,13 +240,13 @@ describe('ToolsStore Skills settings group', () => {
 	it('keeps old generic disabled settings compatible with Skill keys', async () => {
 		storageState.set(
 			DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY,
-			JSON.stringify(['builtin:read_file', 'skill:read_skill'])
+			JSON.stringify(['server:read_file', 'skill:read_skill'])
 		);
 
 		vi.resetModules();
 		({ toolsStore } = await import('$lib/stores/tools.svelte'));
 
-		expect(toolsStore.isToolEnabled('builtin:read_file')).toBe(false);
+		expect(toolsStore.isToolEnabled('server:read_file')).toBe(false);
 		expect(toolsStore.isToolEnabled('skill:read_skill')).toBe(false);
 		expect(toolsStore.isToolEnabled('skill:list_skill')).toBe(true);
 	});
@@ -271,18 +272,18 @@ describe('ToolsStore Skills settings group', () => {
 	it('isSkillToolKey recognizes only the stable skill: settings keys', () => {
 		expect(toolsStore.isSkillToolKey('skill:read_skill')).toBe(true);
 		expect(toolsStore.isSkillToolKey('skill:list_skill')).toBe(true);
-		expect(toolsStore.isSkillToolKey('builtin:read_file')).toBe(false);
+		expect(toolsStore.isSkillToolKey('server:read_file')).toBe(false);
 		expect(toolsStore.isSkillToolKey('mcp-abc:read_file')).toBe(false);
 		expect(toolsStore.isSkillToolKey('custom:read_skill')).toBe(false);
-		expect(toolsStore.isSkillToolKey('frontend:run_javascript')).toBe(false);
+		expect(toolsStore.isSkillToolKey('browser:run_javascript')).toBe(false);
 		expect(toolsStore.isSkillToolKey('skill:unknown')).toBe(false);
 	});
 
 	it('keeps Skills out of the generic tool collections and LLM tool assembly', () => {
-		// A generic builtin is served so the collections are non-empty.
-		expect(toolsStore.allTools.map((entry) => entry.definition.function.name)).toEqual([
-			'read_file'
-		]);
+		// A generic server tool is served so the collections are non-empty.
+		expect(toolsStore.allTools.map((entry) => entry.definition.function.name)).toEqual(
+			expect.arrayContaining(['read_file', 'get_datetime', 'get_info'])
+		);
 		expect(toolsStore.allTools.some((entry) => toolsStore.isSkillToolKey(entry.key))).toBe(false);
 		expect(toolsStore.allTools.map((entry) => entry.key)).not.toContain('skill:read_skill');
 		expect(toolsStore.allTools.map((entry) => entry.definition.function.name)).not.toContain(
@@ -292,8 +293,9 @@ describe('ToolsStore Skills settings group', () => {
 			SKILL_LIST_TOOL
 		);
 
-		expect(toolsStore.toolGroups).toHaveLength(1);
-		expect(toolsStore.toolGroups[0].source).toBe(ToolSource.BUILTIN);
+		expect(toolsStore.toolGroups.map((group) => group.source)).toEqual(
+			expect.arrayContaining([ToolSource.SERVER, ToolSource.BROWSER])
+		);
 		expect(toolsStore.toolGroups.some((group) => group.source === ToolSource.SKILLS)).toBe(false);
 		expect(
 			toolsStore.toolGroups.flatMap((group) => group.tools.map((tool) => tool.key))
@@ -301,7 +303,7 @@ describe('ToolsStore Skills settings group', () => {
 
 		const llmNames = toolsStore.getEnabledToolsForLLM().map((def) => def.function.name);
 
-		expect(llmNames).toEqual(['read_file']);
+		expect(llmNames).toEqual(expect.arrayContaining(['read_file', 'get_datetime', 'get_info']));
 		expect(llmNames).not.toContain(SKILL_READ_TOOL);
 		expect(llmNames).not.toContain(SKILL_LIST_TOOL);
 		expect(toolsStore.allToolDefinitions.map((def) => def.function.name)).not.toContain(

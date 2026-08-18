@@ -69,6 +69,7 @@ export function buildSkillResourceTree(paths: readonly string[]): SkillResourceT
 
 		for (const segment of segments.slice(0, -1)) {
 			const folderPath = parentPath ? `${parentPath}/${segment}` : segment;
+
 			let folder = folders.get(folderPath);
 
 			if (!folder) {
@@ -82,6 +83,7 @@ export function buildSkillResourceTree(paths: readonly string[]): SkillResourceT
 		}
 
 		const name = segments[segments.length - 1];
+
 		children.push({ format: classifySkillResourceFormat(path), kind: 'file', name, path });
 		files.add(path);
 	}
