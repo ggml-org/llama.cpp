@@ -561,7 +561,7 @@ static ggml_backend_buffer_t ggml_backend_meta_buffer_simple_buffer(ggml_backend
     return buf_ctx->bufs[index].get();
 }
 
-static enum ggml_status ggml_backend_meta_buffer_init_tensor_impl(ggml_backend_meta_simple_tensor_container & stc, ggml_tensor * tensor);
+static enum ggml_status ggml_backend_meta_buffer_init_tensor_impl(ggml_backend_meta_simple_tensor_container & stc, const ggml_tensor * tensor);
 
 static struct ggml_tensor * ggml_backend_meta_buffer_simple_tensor(const struct ggml_tensor * tensor, size_t index) {
     if (!ggml_backend_buffer_is_meta(tensor->buffer)) {
@@ -602,7 +602,7 @@ static struct ggml_tensor * ggml_backend_meta_buffer_simple_tensor(const struct 
         it = stc->simple_tensors.end();
     }
     if (it == stc->simple_tensors.end()) {
-        if (ggml_backend_meta_buffer_init_tensor_impl(*stc, (ggml_tensor *) tensor) != GGML_STATUS_SUCCESS) {
+        if (ggml_backend_meta_buffer_init_tensor_impl(*stc, tensor) != GGML_STATUS_SUCCESS) {
             return nullptr;
         }
         it = stc->simple_tensors.find(tensor);
@@ -1276,7 +1276,7 @@ static void * ggml_backend_meta_buffer_get_base(ggml_backend_buffer_t buffer) {
     return (void *) 0x1000000000000000; // FIXME
 }
 
-static enum ggml_status ggml_backend_meta_buffer_init_tensor_impl(ggml_backend_meta_simple_tensor_container & stc, ggml_tensor * tensor) {
+static enum ggml_status ggml_backend_meta_buffer_init_tensor_impl(ggml_backend_meta_simple_tensor_container & stc, const ggml_tensor * tensor) {
     GGML_ASSERT(ggml_backend_buffer_is_meta(tensor->buffer));
     ggml_backend_meta_buffer_context * buf_ctx = (ggml_backend_meta_buffer_context *) tensor->buffer->context;
     const size_t n_simple_bufs = ggml_backend_meta_buffer_n_bufs(tensor->buffer);

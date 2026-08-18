@@ -1250,8 +1250,10 @@ bool llama_context::set_sampler(llama_seq_id seq_id, llama_sampler * sampler) {
     // holds full logits and the sampler graph runs replicated on all of them.
     if (sampler && model.split_mode() == LLAMA_SPLIT_MODE_TENSOR) {
         const ggml_tensor * out_w = model.output ? model.output : model.tok_embd;
+        // the ggml callback signature takes a mutable userdata pointer, but the callback only reads it
+        auto * split_state_ud = const_cast<llama_meta_device_get_split_state_userdata *>(&model.get_split_state_ud);
         const bool mirrored = out_w != nullptr &&
-            llama_meta_device_get_split_state(out_w, (void *) &model.get_split_state_ud).axis == GGML_BACKEND_SPLIT_AXIS_MIRRORED;
+            llama_meta_device_get_split_state(out_w, split_state_ud).axis == GGML_BACKEND_SPLIT_AXIS_MIRRORED;
         if (!mirrored) {
             static bool warned = false;
             if (!warned) {
