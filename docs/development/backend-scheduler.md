@@ -132,6 +132,14 @@ repeated token.
 The scheduler therefore assigns any node that aliases its source, and is not a pure view op, to
 the backend of the tensor it aliases.
 
+That move is only made when the target backend supports the op. Support can be conditional on
+the tensor types - CUDA runs `GGML_OP_SET` only for F32 and I32 - so the backend owning the
+aliased memory is not guaranteed to be able to run the op writing into it. There is no correct
+placement in that case: the scheduler copies operands into a split, never results out of one, so
+whichever backend runs the op, the write cannot reach the aliased memory. The node is left where
+the earlier passes put it, which is what the scheduler did before this rule existed, and the
+reason is logged under `GGML_SCHED_DEBUG`.
+
 ## The scheduler sanitizer
 
 The above are ordering rules, and ordering bugs do not announce themselves - they produce wrong
