@@ -5216,6 +5216,8 @@ void server_routes::init_routes() {
             return res;
         }
 
+        const auto info = mtmd_gen_audio_get_info(ctx_server.mctx);
+
         const json body = json::parse(req.body);
 
         std::string prompt = json_value(body, "input", json_value(body, "prompt", std::string()));
@@ -5283,7 +5285,10 @@ void server_routes::init_routes() {
         task.id = rd.get_new_id();
         rd.post_task(std::move(task));
 
-        const std::string content_type = response_format == "pcm" ? "audio/L16" : "audio/wav";
+        // raw float32 LE mono samples; audio/L16 would imply 16-bit big-endian (RFC 2586)
+        const std::string content_type = response_format == "pcm"
+            ? "audio/pcm;rate=" + std::to_string(info.sample_rate) + ";encoding=float;bits=32"
+            : "audio/wav";
 
         if (!stream) {
             auto result = rd.next(req.should_stop);
