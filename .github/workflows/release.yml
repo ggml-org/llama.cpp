@@ -702,12 +702,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Cache LLVM OpenMP runtime
-        uses: actions/cache@v5
-        with:
-          path: ${{ runner.temp }}/llvm-openmp
-          key: llvm-openmp-${{ runner.os }}-${{ matrix.arch }}-${{ hashFiles('ggml/src/CMakeLists.txt') }}
-
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
@@ -736,7 +730,6 @@ jobs:
             -DGGML_CPU_ALL_VARIANTS=${{ matrix.arch == 'x64' && 'ON' || 'OFF' }} ^
             -DGGML_OPENMP=ON ^
             -DGGML_OPENMP_FETCH=ON ^
-            -DGGML_OPENMP_FETCH_CACHE_DIR="%RUNNER_TEMP%/llvm-openmp" ^
             ${{ env.CMAKE_ARGS }}
           cmake --build build --config Release
 
