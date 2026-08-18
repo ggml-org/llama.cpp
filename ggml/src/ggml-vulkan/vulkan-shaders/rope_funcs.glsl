@@ -51,16 +51,13 @@ void rope_norm(const uint i0, const uint i1, const uint i2, const uint i3, rope_
     idst += p.d_offset;
 
     if (i0 < p.n_offs || i0 >= p.n_offs + p.n_dims) {
-        if (p.inplace != 0) {
-            return;
-        }
         rope_data_d[idst + 0] = ROPE_D_TYPE(rope_data_a[ix + 0]);
         rope_data_d[idst + 1] = ROPE_D_TYPE(rope_data_a[ix + 1]);
 
         return;
     }
 
-    const uint iw = i0 - p.n_offs; // channel index relative to the rotated window
+    const uint iw = i0 - p.n_offs; // relative idx
 
     const float theta_base = rope_data_pos[i2] * pow(p.theta_scale, iw/2.0f);
 
@@ -93,16 +90,13 @@ void rope_neox(const uint i0, const uint i1, const uint i2, const uint i3, rope_
     idst += p.d_offset;
 
     if (i0 < p.n_offs || i0 >= p.n_offs + p.n_dims) {
-        if (p.inplace != 0) {
-            return;
-        }
         rope_data_d[idst + i0/2 + 0] = ROPE_D_TYPE(rope_data_a[ix + i0/2 + 0]);
         rope_data_d[idst + i0/2 + 1] = ROPE_D_TYPE(rope_data_a[ix + i0/2 + 1]);
 
         return;
     }
 
-    const uint iw = i0 - p.n_offs; // channel index relative to the rotated window
+    const uint iw = i0 - p.n_offs; // relative idx
 
     const float theta_base = rope_data_pos[i2] * pow(p.theta_scale, iw/2.0f);
 
@@ -137,16 +131,13 @@ void rope_multi(const uint i0, const uint i1, const uint i2, const uint i3, rope
     idst += p.d_offset;
 
     if (i0 < p.n_offs || i0 >= p.n_offs + p.n_dims) {
-        if (p.inplace != 0) {
-            return;
-        }
         rope_data_d[idst + i0/2 + 0] = ROPE_D_TYPE(rope_data_a[ix + i0/2 + 0]);
         rope_data_d[idst + i0/2 + 1] = ROPE_D_TYPE(rope_data_a[ix + i0/2 + 1]);
 
         return;
     }
 
-    const uint iw = i0 - p.n_offs; // channel index relative to the rotated window
+    const uint iw = i0 - p.n_offs; // relative idx
 
     const int sect_dims = p.sections[0] + p.sections[1] + p.sections[2] + p.sections[3];
     const int sec_w = p.sections[1] + p.sections[0];
