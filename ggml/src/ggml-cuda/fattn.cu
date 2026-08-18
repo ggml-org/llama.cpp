@@ -355,6 +355,38 @@ static bool ggml_cuda_fattn_kv_type_supported(ggml_type type) {
     }
 }
 
+// The MMA kernel is the only one that reads src[5], so both call sites must agree on this.
+bool ggml_cuda_flash_attn_ext_banded_use_mma(const int device, const ggml_tensor * dst) {
+    if (dst->op != GGML_OP_FLASH_ATTN_EXT_BANDED) {
+        return false;
+    }
+
+    const ggml_tensor * Q   = dst->src[0];
+    const ggml_tensor * K   = dst->src[1];
+    const ggml_tensor * V   = dst->src[2];
+    const ggml_tensor * rel = dst->src[5];
+
+    if (!Q || !K || !V || !rel) {
+        return false;
+    }
+
+    // the MMA ABI indexes rel linearly and by Q's batch
+    if (rel->type != GGML_TYPE_F32 || !ggml_is_contiguous(rel) ||
+        rel->ne[3] != Q->ne[3] || rel->ne[0] > (1 << 20)) {
+        return false;
+    }
+
+    if (K->type == GGML_TYPE_F32 || V->type == GGML_TYPE_F32) {
+        return false;
+    }
+
+    if ((Q->ne[0] != 64 && Q->ne[0] != 128) || V->ne[0] != Q->ne[0]) {
+        return false;
+    }
+
+    return turing_mma_available(ggml_cuda_info().devices[device].cc);
+}
+
 static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const ggml_tensor * dst) {
 #ifndef FLASH_ATTN_AVAILABLE
     GGML_UNUSED(device); GGML_UNUSED(dst);
@@ -389,6 +421,10 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
     }
 
     const int cc = ggml_cuda_info().devices[device].cc;
+
+    if (ggml_cuda_flash_attn_ext_banded_use_mma(device, dst)) {
+        return BEST_FATTN_KERNEL_MMA_F16;
+    }
 
     switch (K->ne[0]) {
         case  40:
@@ -534,7 +570,7 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
 }
 
 size_t ggml_cuda_flash_attn_ext_get_alloc_size(int device, const ggml_tensor * dst) {
-    GGML_ASSERT(dst->op == GGML_OP_FLASH_ATTN_EXT);
+    GGML_ASSERT(dst->op == GGML_OP_FLASH_ATTN_EXT || dst->op == GGML_OP_FLASH_ATTN_EXT_BANDED);
 
     const ggml_tensor * K = dst->src[1];
     const ggml_tensor * V = dst->src[2];

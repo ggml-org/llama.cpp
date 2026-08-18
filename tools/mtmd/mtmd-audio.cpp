@@ -283,6 +283,7 @@ struct filter_params {
     bool    norm_per_feature = false;
     bool    use_magnitude   = false;  // |X| instead of |X|^2
     float   mel_floor       = 5.960464477539063e-08f;
+    float   power_floor     = 0.0f;   // clamp |X|^2 to this before sqrt (0 = disabled)
 };
 
 static void log_mel_spectrogram_worker_thread(int                        ith,
@@ -327,6 +328,7 @@ static void log_mel_spectrogram_worker_thread(int                        ith,
         // Calculate modulus^2 (power) or modulus (magnitude)
         for (int j = 0; j < n_fft_bins; j++) {
             float power = (fft_out[2 * j + 0] * fft_out[2 * j + 0] + fft_out[2 * j + 1] * fft_out[2 * j + 1]);
+            power = std::max(power, params.power_floor);
             fft_out[j] = params.use_magnitude ? sqrtf(power) : power;
         }
 
@@ -534,6 +536,75 @@ static bool log_mel_spectrogram(
         outFile.close();
     }
 
+    return true;
+}
+
+void mtmd_audio_preprocessor_inkling::initialize() {
+    GGML_ASSERT(hparams.n_mel_bins == 80);
+    GGML_ASSERT(hparams.audio_n_fft == 1600);
+    cache.fill_sin_cos_table(hparams.audio_n_fft);
+    cache.fill_hann_window(hparams.audio_window_len, true);
+    cache.fill_mel_filterbank_matrix(
+        hparams.n_mel_bins, hparams.audio_n_fft, hparams.audio_sample_rate,
+        0.0f, -1.0f, true, 1.0f, false);
+}
+
+bool mtmd_audio_preprocessor_inkling::preprocess(
+        const float * samples,
+        size_t n_samples,
+        std::vector<mtmd_audio_mel> & output) {
+    if (n_samples == 0) {
+        return false;
+    }
+    GGML_ASSERT(hparams.audio_hop_len == 800);
+    GGML_ASSERT(hparams.audio_window_len == 1600);
+    GGML_ASSERT(!cache.filters.data.empty());
+
+    // Reference behavior: left pad by n_fft-hop, then right pad to a whole hop.
+    const size_t left_pad = static_cast<size_t>(hparams.audio_n_fft - hparams.audio_hop_len);
+    const size_t right_pad =
+        (static_cast<size_t>(hparams.audio_hop_len) - n_samples % hparams.audio_hop_len)
+        % hparams.audio_hop_len;
+    std::vector<float> padded(left_pad + n_samples + right_pad, 0.0f);
+    std::copy(samples, samples + n_samples, padded.begin() + left_pad);
+
+    filter_params params;
+    params.n_mel            = hparams.n_mel_bins;
+    params.n_fft_bins       = 1 + hparams.audio_n_fft / 2;
+    params.hann_window_size = hparams.audio_window_len;
+    params.hop_length       = hparams.audio_hop_len;
+    params.sample_rate      = hparams.audio_sample_rate;
+    params.no_padding       = true;
+    params.use_natural_log  = false;
+    params.use_magnitude    = true;
+    params.mel_floor        = 1e-10f;
+    params.power_floor      = 1e-10f; // reference clamps |X|^2 before sqrt
+
+    mtmd_audio_mel dmel;
+    if (!log_mel_spectrogram(
+            padded.data(), static_cast<int>(padded.size()), 4,
+            params, cache, dmel)) {
+        return false;
+    }
+    dmel.n_len_org = static_cast<int64_t>(n_samples);
+
+    // nearest of 16 float64 centers over [-7,2]; strict '<' keeps the lower bin on midpoints (torch.argmin)
+    for (float & value_f32 : dmel.data) {
+        const double value = std::max(-7.0, std::min(2.0, static_cast<double>(value_f32)));
+        int best = 0;
+        double best_dist = INFINITY;
+        for (int bin = 0; bin < 16; ++bin) {
+            const double center = -7.0 + 9.0 * static_cast<double>(bin) / 15.0;
+            const double dist = std::abs(value - center);
+            if (dist < best_dist) {
+                best = bin;
+                best_dist = dist;
+            }
+        }
+        value_f32 = static_cast<float>(best);
+    }
+
+    output.push_back(std::move(dmel));
     return true;
 }
 

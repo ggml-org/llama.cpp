@@ -329,6 +329,15 @@ static bool tensor_allows_quantization(const llama_model_quantize_params * param
     // do not quantize MiniMax's indexer projection weights, they are tiny
     quantize &= name.find("indexer.k_proj.weight") == std::string::npos;
     quantize &= name.find("indexer.q_proj.weight") == std::string::npos;
+    // keep Inkling's shortconv kernels and rel-proj table unquantized; arch-gated so the
+    // name substrings cannot hit another architecture
+    if (arch == LLM_ARCH_INKLING) {
+        quantize &= name.find("shortconv_k.weight")    == std::string::npos;
+        quantize &= name.find("shortconv_v.weight")    == std::string::npos;
+        quantize &= name.find("shortconv_attn.weight") == std::string::npos;
+        quantize &= name.find("shortconv_mlp.weight")  == std::string::npos;
+        quantize &= name.find("attn_rel_proj.weight")  == std::string::npos;
+    }
 
     // do not quantize RWKV's small yet 2D weights
     quantize &= name.find("time_mix_first.weight") == std::string::npos;
