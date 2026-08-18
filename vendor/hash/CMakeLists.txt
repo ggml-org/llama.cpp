@@ -16,6 +16,8 @@ add_library(${TARGET} STATIC
     ${VENDOR_SRCS}
 )
 
+add_library(vendor::hash ALIAS ${TARGET})
+
 target_compile_features(${TARGET} PRIVATE cxx_std_17)
 
 # disable warnings in 3rd party code, but keep them for hash.cpp
