@@ -830,12 +830,14 @@ int main(int argc, char ** argv) {
     bool have_device_host_buft = false;
     bool have_sleep = false;
     bool gpu_initialized = initialize_gpu_backends(backends, have_device_host_buft, have_sleep);
-    ggml_backend_t backend_gpu = backends[0];
-    ggml_backend_t backend_cpu = backends.back();
 
-    if (!gpu_initialized) {
+    // nothing to test with synchronous CPU backend only
+    if (!gpu_initialized || backends.size() < 2) {
         return 0;
     }
+
+    ggml_backend_t backend_gpu = backends[0];
+    ggml_backend_t backend_cpu = backends.back();
 
     for (bool use_device_host_buft : { false, true }) {
         if (use_device_host_buft && !have_device_host_buft) {
