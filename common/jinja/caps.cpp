@@ -16,21 +16,40 @@ using json = nlohmann::ordered_json;
 namespace jinja {
 
 using caps_json_fn = std::function<json()>;
-using caps_analyze_fn = std::function<void(bool, value &, value &)>;
+using caps_ctx_fn = std::function<void(context &)>;
+using caps_analyze_fn = std::function<void(context &, bool, value &, value &, const std::string &)>;
+
+void caps_apply_preserve_reasoning(jinja::context & ctx, bool enabled) {
+    ctx.set_val("preserve_thinking",         mk_val<value_bool>(enabled));
+    ctx.set_val("clear_thinking",            mk_val<value_bool>(!enabled));
+    ctx.set_val("truncate_history_thinking", mk_val<value_bool>(!enabled));
+    ctx.set_val("drop_thinking",            mk_val<value_bool>(!enabled));
+}
+
+void caps_apply_reasoning_effort(jinja::context & ctx, const std::string & effort) {
+    value var = mk_val<value_string>(effort); // bind to the same value for stats
+    ctx.set_val("reasoning_effort",   var);
+    ctx.set_val("reasoning_strength", var);
+}
 
 static void caps_try_execute(jinja::program & prog,
                              const caps_json_fn & messages_fn,
+                             const caps_ctx_fn & ctx_fn,
                              const caps_json_fn & tools_fn,
                              const caps_analyze_fn & analyze_fn) {
     context ctx;
     ctx.is_get_stats = true;
     jinja::global_from_json(ctx, json{
         {"messages", messages_fn()},
-        {"tools", tools_fn()},
+        {"tools", tools_fn ? tools_fn() : json::array()},
         {"bos_token", ""},
         {"eos_token", ""},
         {"add_generation_prompt", true}
     }, true);
+
+    if (ctx_fn) {
+        ctx_fn(ctx);
+    }
 
     auto messages = ctx.get_val("messages");
     auto tools = ctx.get_val("tools");
@@ -49,7 +68,7 @@ static void caps_try_execute(jinja::program & prog,
         // ignore exceptions during capability analysis
     }
 
-    analyze_fn(success, messages, tools);
+    analyze_fn(ctx, success, messages, tools, result);
 }
 
 // for debugging only
@@ -74,6 +93,7 @@ std::map<std::string, bool> caps::to_map() const {
         {"supports_parallel_tool_calls", supports_parallel_tool_calls},
         {"supports_system_role", supports_system_role},
         {"supports_preserve_reasoning", supports_preserve_reasoning},
+        {"supports_reasoning_effort", supports_reasoning_effort},
         {"supports_object_arguments", supports_object_arguments},
     };
 }
@@ -109,11 +129,9 @@ caps caps_get(jinja::program & prog) {
                 }
             });
         },
-        [&]() {
-            // tools
-            return json{nullptr};
-        },
-        [&](bool success, value & messages, value &) {
+        nullptr, // ctx_fn
+        nullptr, // tools_fn
+        [&](context &, bool success, value & messages, value &, const std::string &) {
             auto & content = messages->at(0)->at("content");
             caps_print_stats(content, "messages[0].content");
             if (has_op(content, "selectattr") || has_op(content, "array_access")) {
@@ -145,11 +163,9 @@ caps caps_get(jinja::program & prog) {
                 },
             });
         },
-        [&]() {
-            // tools
-            return json::array();
-        },
-        [&](bool, value & messages, value &) {
+        nullptr, // ctx_fn
+        nullptr, // tools_fn
+        [&](context &, bool, value & messages, value &, const std::string &) {
             auto & content = messages->at(0)->at("content");
             caps_print_stats(content, "messages[0].content");
             if (!content->stats.used) {
@@ -201,6 +217,7 @@ caps caps_get(jinja::program & prog) {
                 },
             });
         },
+        nullptr, // ctx_fn
         [&]() {
             // tools
             return json::array({
@@ -224,7 +241,7 @@ caps caps_get(jinja::program & prog) {
                 },
             });
         },
-        [&](bool success, value & messages, value & tools) {
+        [&](context &, bool success, value & messages, value & tools, const std::string &) {
             if (!success) {
                 return; // Nothing can be inferred
             }
@@ -293,6 +310,7 @@ caps caps_get(jinja::program & prog) {
                     },
                 });
             },
+            nullptr, // ctx_fn
             [&]() {
                 // tools
                 return json::array({
@@ -316,7 +334,7 @@ caps caps_get(jinja::program & prog) {
                     },
                 });
             },
-            [&](bool success, value & messages, value & tools) {
+            [&](context &, bool success, value & messages, value & tools, const std::string &) {
                 if (!success) {
                     result.supports_tool_calls = false;
                     result.supports_tools = false;
@@ -394,6 +412,7 @@ caps caps_get(jinja::program & prog) {
                 },
             });
         },
+        nullptr, // ctx_fn
         [&]() {
             // tools
             return json::array({
@@ -417,7 +436,7 @@ caps caps_get(jinja::program & prog) {
                 },
             });
         },
-        [&](bool success, value & messages, value & /*tools*/) {
+        [&](context &, bool success, value & messages, value &, const std::string &) {
             if (!success) {
                 result.supports_parallel_tool_calls = false;
                 return;
@@ -438,11 +457,22 @@ caps caps_get(jinja::program & prog) {
     JJ_DEBUG("%s\n", ">>> Running capability check: preserve reasoning");
 
     // case: preserve reasoning content in chat history
+    const std::string reasoning_placeholder = "<REASONING_CONTENT_PLACEHOLDER>";
     caps_try_execute(
         prog,
         [&]() {
             // messages
             return json::array({
+                {
+                    {"role", "user"},
+                    {"content", "User message"}
+                },
+                {
+                    {"role", "assistant"},
+                    {"content", "Assistant message"},
+                    // check of reasoning_content deeper in the history, not just the last assistant message
+                    {"reasoning_content", reasoning_placeholder}
+                },
                 {
                     {"role", "user"},
                     {"content", "User message"}
@@ -458,16 +488,42 @@ caps caps_get(jinja::program & prog) {
                 },
             });
         },
-        [&]() {
-            // tools
-            return json::array();
+        [&](context & ctx) {
+            ctx.set_val("enable_thinking", mk_val<value_bool>(true));
+            caps_apply_preserve_reasoning(ctx, true);
         },
-        [&](bool, value & messages, value &) {
-            auto & content = messages->at(1)->at("reasoning_content");
-            caps_print_stats(content, "messages[1].reasoning_content");
-            if (content->stats.used) {
+        nullptr, // tools_fn
+        [&](context &, bool, value &, value &, const std::string & output) {
+            // note: we cannot use stats here because the reasoning_content may be used for "if" condition test, but not actually outputted in the final result
+            if (output.find(reasoning_placeholder) != std::string::npos) {
                 result.supports_preserve_reasoning = true;
             }
+        }
+    );
+
+    JJ_DEBUG("%s\n", ">>> Running capability check: reasoning effort");
+
+    // case: reasoning effort level
+    caps_try_execute(
+        prog,
+        [&]() {
+            // messages
+            return json::array({
+                {
+                    {"role", "user"},
+                    {"content", "User message"}
+                },
+            });
+        },
+        [&](context & ctx) {
+            ctx.set_val("enable_thinking", mk_val<value_bool>(true));
+            caps_apply_reasoning_effort(ctx, "low");
+        },
+        nullptr, // tools_fn
+        [&](context & ctx, bool, value &, value &, const std::string &) {
+            value effort = ctx.get_val("reasoning_effort");
+            caps_print_stats(effort, "reasoning_effort");
+            result.supports_reasoning_effort = effort->stats.used;
         }
     );
 

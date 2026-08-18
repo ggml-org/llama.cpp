@@ -12,7 +12,7 @@ void llama_model_ernie4_5::load_arch_hparams(llama_model_loader & ml) {
         ml.get_key(LLM_KV_LEADING_DENSE_BLOCK_COUNT,         hparams.n_layer_dense_lead, false);
     }
 
-    switch (hparams.n_layer) {
+    switch (hparams.n_layer()) {
         case 18: type = LLM_TYPE_0_3B; break;
         case 28: type = LLM_TYPE_21B_A3B; break;
         case 54: type = LLM_TYPE_300B_A47B; break;

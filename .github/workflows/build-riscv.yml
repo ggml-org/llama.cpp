@@ -29,9 +29,9 @@ concurrency:
 env:
   GGML_NLOOP: 3
   GGML_N_THREADS: 1
-  LLAMA_LOG_COLORS: 1
-  LLAMA_LOG_PREFIX: 1
-  LLAMA_LOG_TIMESTAMPS: 1
+  LLAMA_ARG_LOG_COLORS: 1
+  LLAMA_ARG_LOG_PREFIX: 1
+  LLAMA_ARG_LOG_TIMESTAMPS: 1
 
 jobs:
   ubuntu-cpu-riscv64-native:
@@ -58,17 +58,20 @@ jobs:
           ldd --version
           cmake --version
           rustc --version
+          env
+          echo "nproc=$(nproc)"
 
       - name: Clone
         id: checkout
         uses: actions/checkout@v6
 
-      - name: ccache
-        uses: ggml-org/ccache-action@afde29e5b5422e5da23cb1f639e8baecadeadfc3 # https://github.com/ggml-org/ccache-action/pull/1
-        with:
-          key: ubuntu-cpu-riscv64-native
-          evict-old-files: 1d
-          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+      # note: sparing some ccache since these jobs run on dedicated runners that are not part of the organitzation
+      #- name: ccache
+      #  uses: ggml-org/ccache-action@afde29e5b5422e5da23cb1f639e8baecadeadfc3 # https://github.com/ggml-org/ccache-action/pull/1
+      #  with:
+      #    key: riscv-ubuntu-native
+      #    evict-old-files: 1d
+      #    save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Build
         id: cmake_build
@@ -132,12 +135,13 @@ jobs:
         id: checkout
         uses: actions/checkout@v6
 
-      - name: ccache
-        uses: ggml-org/ccache-action@afde29e5b5422e5da23cb1f639e8baecadeadfc3 # https://github.com/ggml-org/ccache-action/pull/1
-        with:
-          key: ubuntu-riscv64-native-sanitizer-${{ matrix.sanitizer }}-${{ matrix.build_type }}
-          evict-old-files: 1d
-          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+      # note: sparing some ccache since these jobs run on dedicated runners that are not part of the organitzation
+      #- name: ccache
+      #  uses: ggml-org/ccache-action@afde29e5b5422e5da23cb1f639e8baecadeadfc3 # https://github.com/ggml-org/ccache-action/pull/1
+      #  with:
+      #    key: riscv-ubuntu-native-sanitizer-${{ matrix.sanitizer }}-${{ matrix.build_type }}
+      #    evict-old-files: 1d
+      #    save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Build
         id: cmake_build

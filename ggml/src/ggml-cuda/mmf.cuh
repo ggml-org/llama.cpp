@@ -91,7 +91,7 @@ static __global__ void mul_mat_f(
     const int row0        = blockIdx.x * rows_per_block;
 
     int expert_idx = 0;
-    int col_base = 0;
+    [[maybe_unused]] int col_base = 0;
 
     const int channel_dst = has_ids ? 0 : blockIdx.y;
 
@@ -122,12 +122,12 @@ static __global__ void mul_mat_f(
         ids += col_offset * stride_row_id;
     }
 
-    const float2 * y2 = (const float2 *) y;
+    [[maybe_unused]] const float2 * y2 = (const float2 *) y;
 
     extern __shared__ char data_mmv[];
 
     char * shmem_base = data_mmv;
-    int  * slot_map   = (int *) shmem_base;
+    [[maybe_unused]] int * slot_map = (int *) shmem_base;
     char * compute_base = has_ids ? (shmem_base + GGML_PAD(cols_per_block, 16) * sizeof(int)) : shmem_base;
 
     tile_C C[ntA][ntB];

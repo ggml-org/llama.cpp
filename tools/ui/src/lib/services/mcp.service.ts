@@ -1,61 +1,64 @@
 import { Client } from '@modelcontextprotocol/sdk/client';
+import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import {
 	StreamableHTTPClientTransport,
 	StreamableHTTPError
 } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import { WebSocketClientTransport } from '@modelcontextprotocol/sdk/client/websocket.js';
-import type {
-	Tool,
-	Prompt,
-	GetPromptResult,
-	ListChangedHandlers
-} from '@modelcontextprotocol/sdk/types.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
+import type {
+	GetPromptResult,
+	ListChangedHandlers,
+	Prompt,
+	Tool
+} from '@modelcontextprotocol/sdk/types.js';
 import {
-	DEFAULT_MCP_CONFIG,
+	CORS_PROXY,
+	CORS_PROXY_ENDPOINT,
 	DEFAULT_CLIENT_VERSION,
 	DEFAULT_IMAGE_MIME_TYPE,
-	MCP_PARTIAL_REDACT_HEADERS
+	DEFAULT_MCP_CONFIG,
+	HEADERS,
+	NEWLINE
 } from '$lib/constants';
 import {
 	MCPConnectionPhase,
-	MCPLogLevel,
-	MCPTransportType,
 	MCPContentType,
-	MCPRefType
+	MCPLogLevel,
+	MCPRefType,
+	MCPTransportType
 } from '$lib/enums';
 import type {
-	MCPServerConfig,
-	MCPResourceIcon,
-	ToolCallParams,
-	ToolExecutionResult,
-	Implementation,
 	ClientCapabilities,
+	Implementation,
 	MCPConnection,
-	MCPPhaseCallback,
 	MCPConnectionLog,
-	MCPServerInfo,
+	MCPPhaseCallback,
+	MCPReadResourceResult,
 	MCPResource,
-	MCPResourceTemplate,
 	MCPResourceContent,
-	MCPReadResourceResult
+	MCPResourceIcon,
+	MCPResourceTemplate,
+	MCPServerConfig,
+	MCPServerInfo,
+	ToolCallParams,
+	ToolExecutionResult
 } from '$lib/types';
 import {
-	buildProxiedUrl,
 	buildProxiedHeaders,
-	getAuthHeaders,
-	sanitizeHeaders,
-	throwIfAborted,
-	isAbortError,
+	buildProxiedUrl,
 	createBase64DataUrl,
-	getRequestUrl,
-	getRequestMethod,
-	getRequestBody,
-	summarizeRequestBody,
-	formatDiagnosticErrorMessage,
 	extractJsonRpcMethods,
-	type RequestBodySummary
+	formatDiagnosticErrorMessage,
+	getAuthHeaders,
+	getRequestBody,
+	getRequestMethod,
+	getRequestUrl,
+	isAbortError,
+	type RequestBodySummary,
+	sanitizeHeaders,
+	summarizeRequestBody,
+	throwIfAborted
 } from '$lib/utils';
 
 interface ToolResultContentItem {
@@ -68,6 +71,7 @@ interface ToolResultContentItem {
 
 interface ToolCallResult {
 	content?: ToolResultContentItem[];
+	structuredContent?: Record<string, unknown>;
 	isError?: boolean;
 	_meta?: Record<string, unknown>;
 }
@@ -99,11 +103,11 @@ export class MCPService {
 		details?: unknown
 	): MCPConnectionLog {
 		return {
-			timestamp: new Date(),
-			phase,
-			message,
+			details,
 			level,
-			details
+			message,
+			phase,
+			timestamp: new Date()
 		};
 	}
 
@@ -116,12 +120,12 @@ export class MCPService {
 	): DiagnosticRequestDetails {
 		const body = getRequestBody(input, init);
 		const details: DiagnosticRequestDetails = {
-			url: getRequestUrl(input),
-			method: getRequestMethod(input, init, baseInit).toUpperCase(),
+			body: summarizeRequestBody(body),
 			credentials: init?.credentials ?? baseInit.credentials,
+			headers: sanitizeHeaders(requestHeaders, extraRedactedHeaders, HEADERS.PARTIAL_REDACT),
+			method: getRequestMethod(input, init, baseInit).toUpperCase(),
 			mode: init?.mode ?? baseInit.mode,
-			headers: sanitizeHeaders(requestHeaders, extraRedactedHeaders, MCP_PARTIAL_REDACT_HEADERS),
-			body: summarizeRequestBody(body)
+			url: getRequestUrl(input)
 		};
 		const jsonRpcMethods = extractJsonRpcMethods(body);
 
@@ -132,15 +136,30 @@ export class MCPService {
 		return details;
 	}
 
+	private static addRequestHeaders(
+		requestHeaders: Headers,
+		headers: HeadersInit,
+		useProxy: boolean
+	) {
+		for (const [key, value] of new Headers(headers).entries()) {
+			const proxiedKey =
+				useProxy && !key.toLowerCase().startsWith(CORS_PROXY.HEADER_PREFIX)
+					? `${CORS_PROXY.HEADER_PREFIX}${key}`
+					: key;
+
+			requestHeaders.set(proxiedKey, value);
+		}
+	}
+
 	private static summarizeError(error: unknown): Record<string, unknown> {
 		if (error instanceof Error) {
 			return {
-				name: error.name,
-				message: error.message,
 				cause:
 					error.cause instanceof Error
-						? { name: error.cause.name, message: error.cause.message }
+						? { message: error.cause.message, name: error.cause.name }
 						: error.cause,
+				message: error.message,
+				name: error.name,
 				stack: error.stack?.split('\n').slice(0, 6).join('\n')
 			};
 		}
@@ -157,13 +176,13 @@ export class MCPService {
 		}
 
 		return {
+			isSecureContext: window.isSecureContext,
 			location: window.location.href,
 			origin: window.location.origin,
 			protocol: window.location.protocol,
-			isSecureContext: window.isSecureContext,
+			sameOrigin: window.location.origin === targetUrl.origin,
 			targetOrigin: targetUrl.origin,
 			targetProtocol: targetUrl.protocol,
-			sameOrigin: window.location.origin === targetUrl.origin,
 			useProxy
 		};
 	}
@@ -228,6 +247,7 @@ export class MCPService {
 		disable: () => void;
 	} {
 		let enabled = true;
+
 		const logIfEnabled = (log: MCPConnectionLog) => {
 			if (enabled) {
 				onLog?.(log);
@@ -235,20 +255,51 @@ export class MCPService {
 		};
 
 		return {
+			disable: () => {
+				enabled = false;
+			},
 			fetch: async (input, init) => {
+				if (useProxy && typeof window !== 'undefined') {
+					let requestUrlStr = '';
+
+					if (typeof input === 'string') {
+						requestUrlStr = input;
+					} else if (input instanceof URL) {
+						requestUrlStr = input.href;
+					}
+
+					if (requestUrlStr) {
+						const parsedRequestUrl = new URL(requestUrlStr, window.location.origin);
+
+						if (
+							parsedRequestUrl.origin === window.location.origin &&
+							!parsedRequestUrl.pathname.includes(CORS_PROXY_ENDPOINT)
+						) {
+							const originalConfigUrl = new URL(config.url);
+							const realTargetUrl = new URL(
+								parsedRequestUrl.pathname + parsedRequestUrl.search,
+								originalConfigUrl.origin
+							);
+							const proxiedUrl = buildProxiedUrl(realTargetUrl.href);
+
+							if (typeof input === 'string') {
+								input = proxiedUrl.href;
+							} else if (input instanceof URL) {
+								input = proxiedUrl;
+							}
+						}
+					}
+				}
+
 				const startedAt = performance.now();
 				const requestHeaders = new Headers(baseInit.headers);
 
 				if (typeof Request !== 'undefined' && input instanceof Request) {
-					for (const [key, value] of input.headers.entries()) {
-						requestHeaders.set(key, value);
-					}
+					this.addRequestHeaders(requestHeaders, input.headers, useProxy);
 				}
 
 				if (init?.headers) {
-					for (const [key, value] of new Headers(init.headers).entries()) {
-						requestHeaders.set(key, value);
-					}
+					this.addRequestHeaders(requestHeaders, init.headers, useProxy);
 				}
 
 				const request = this.createDiagnosticRequestDetails(
@@ -266,11 +317,35 @@ export class MCPService {
 						`HTTP ${method} ${url}`,
 						MCPLogLevel.INFO,
 						{
-							serverName,
-							request
+							request,
+							serverName
 						}
 					)
 				);
+
+				if (method === 'DELETE' && url.includes(CORS_PROXY_ENDPOINT)) {
+					const response = new Response(null, { status: 200, statusText: 'OK' });
+
+					logIfEnabled(
+						this.createLog(
+							MCPConnectionPhase.INITIALIZING,
+							`HTTP 200 ${method} ${url} (fake response)`,
+							MCPLogLevel.INFO,
+							{
+								response: {
+									durationMs: 0,
+									isFake: true,
+									status: response.status,
+									statusText: response.statusText,
+									url
+								}
+							}
+						)
+					);
+
+					// fake response, bypass real fetch()
+					return response;
+				}
 
 				try {
 					const response = await fetch(input, {
@@ -287,11 +362,11 @@ export class MCPService {
 							response.ok ? MCPLogLevel.INFO : MCPLogLevel.WARN,
 							{
 								response: {
-									url,
+									durationMs,
+									headers: sanitizeHeaders(response.headers, undefined, HEADERS.PARTIAL_REDACT),
 									status: response.status,
 									statusText: response.statusText,
-									headers: sanitizeHeaders(response.headers, undefined, MCP_PARTIAL_REDACT_HEADERS),
-									durationMs
+									url
 								}
 							}
 						)
@@ -307,21 +382,18 @@ export class MCPService {
 							`HTTP ${method} ${url} failed: ${formatDiagnosticErrorMessage(error)}`,
 							MCPLogLevel.ERROR,
 							{
-								serverName,
-								request,
-								error: this.summarizeError(error),
 								browser: this.getBrowserContext(targetUrl, useProxy),
+								durationMs,
+								error: this.summarizeError(error),
 								hints: this.getConnectionHints(targetUrl, config, error),
-								durationMs
+								request,
+								serverName
 							}
 						)
 					);
 
 					throw error;
 				}
-			},
-			disable: () => {
-				enabled = false;
 			}
 		};
 	}
@@ -397,14 +469,40 @@ export class MCPService {
 			}
 
 			return {
+				stopPhaseLogging: () => {},
 				transport: new WebSocketClientTransport(url),
-				type: MCPTransportType.WEBSOCKET,
-				stopPhaseLogging: () => {}
+				type: MCPTransportType.WEBSOCKET
+			};
+		}
+
+		if (config.transport === MCPTransportType.SSE) {
+			const url = useProxy ? buildProxiedUrl(config.url) : new URL(config.url);
+			const { disable: stopPhaseLogging, fetch: diagnosticFetch } = this.createDiagnosticFetch(
+				serverName,
+				config,
+				requestInit,
+				url,
+				useProxy,
+				onLog
+			);
+
+			if (import.meta.env.DEV && import.meta.env.VITE_DEBUG) {
+				console.log(`[MCPService] Creating SSE transport for ${url.href}`);
+			}
+
+			return {
+				stopPhaseLogging,
+				transport: new SSEClientTransport(url, {
+					eventSourceInit: { fetch: diagnosticFetch },
+					fetch: diagnosticFetch,
+					requestInit
+				}),
+				type: MCPTransportType.SSE
 			};
 		}
 
 		const url = useProxy ? buildProxiedUrl(config.url) : new URL(config.url);
-		const { fetch: diagnosticFetch, disable: stopPhaseLogging } = this.createDiagnosticFetch(
+		const { disable: stopPhaseLogging, fetch: diagnosticFetch } = this.createDiagnosticFetch(
 			serverName,
 			config,
 			requestInit,
@@ -423,25 +521,25 @@ export class MCPService {
 			}
 
 			return {
+				stopPhaseLogging,
 				transport: new StreamableHTTPClientTransport(url, {
-					requestInit,
-					fetch: diagnosticFetch
+					fetch: diagnosticFetch,
+					requestInit
 				}),
-				type: MCPTransportType.STREAMABLE_HTTP,
-				stopPhaseLogging
+				type: MCPTransportType.STREAMABLE_HTTP
 			};
 		} catch (httpError) {
 			console.warn(`[MCPService] StreamableHTTP failed, trying SSE transport...`, httpError);
 
 			try {
 				return {
+					stopPhaseLogging,
 					transport: new SSEClientTransport(url, {
-						requestInit,
+						eventSourceInit: { fetch: diagnosticFetch },
 						fetch: diagnosticFetch,
-						eventSourceInit: { fetch: diagnosticFetch }
+						requestInit
 					}),
-					type: MCPTransportType.SSE,
-					stopPhaseLogging
+					type: MCPTransportType.SSE
 				};
 			} catch (sseError) {
 				const httpMsg = httpError instanceof Error ? httpError.message : String(httpError);
@@ -465,17 +563,17 @@ export class MCPService {
 		}
 
 		return {
-			name: impl.name,
-			version: impl.version,
-			title: impl.title,
 			description: impl.description,
-			websiteUrl: impl.websiteUrl,
 			icons: impl.icons?.map((icon: MCPResourceIcon) => ({
-				src: icon.src,
 				mimeType: icon.mimeType,
 				sizes: icon.sizes,
+				src: icon.src,
 				theme: icon.theme
-			}))
+			})),
+			name: impl.name,
+			title: impl.title,
+			version: impl.version,
+			websiteUrl: impl.websiteUrl
 		};
 	}
 
@@ -525,9 +623,9 @@ export class MCPService {
 		}
 
 		const {
+			stopPhaseLogging,
 			transport,
-			type: transportType,
-			stopPhaseLogging
+			type: transportType
 		} = this.createTransport(serverName, serverConfig, (log) => onPhase?.(log.phase, log));
 
 		// Setup WebSocket reconnection handler
@@ -558,24 +656,27 @@ export class MCPService {
 				listChanged: listChangedHandlers
 			}
 		);
-
 		const runtimeErrorHandler = (error: Error) => {
-			// Ignore errors that are expected when the SDK's transport is closed,
-			// or when connecting to servers that don't support SSE (stateless-only
-			// endpoints returning 405). The SDK wraps the original AbortError in
-			// a new Error with the message "SSE stream disconnected: AbortError",
-			// and also produces "Cannot cancel a stream locked by a reader".
-			// DOMException is thrown by the browser when aborting fetch requests.
-			const msg = error.message || String(error);
+			// the SDK reports any post initialize error here, including the abort we trigger
+			// ourselves on the next health check cycle, on tab unload, or on server teardown.
+			// these are lifecycle aborts, not actionable errors, so we keep them out of the red console.
+			// the SDK wraps the original AbortError in a generic Error like
+			//   "SSE stream disconnected: AbortError: The operation was aborted."
+			// which isAbortError cannot recognize by name alone, so we also pattern match on the message
+			if (isAbortError(error)) {
+				return;
+			}
+
+			const msg = error?.message ?? '';
+
 			if (
-				error.name === 'AbortError' ||
-				error instanceof DOMException ||
-				msg.includes('SSE stream disconnected') ||
-				msg.includes('stream locked by a reader') ||
-				msg.includes('The operation was aborted')
+				/SSE stream disconnected:.*AbortError/i.test(msg) ||
+				/AbortError: .*aborted/i.test(msg) ||
+				/stream locked by a reader/i.test(msg)
 			) {
 				return;
 			}
+
 			console.error(`[MCPService][${serverName}] Protocol error after initialize:`, error);
 		};
 
@@ -599,8 +700,32 @@ export class MCPService {
 			this.createLog(MCPConnectionPhase.INITIALIZING, 'Sending initialize request...')
 		);
 
+		// The SDK timeout only covers the initialize request, not transport.start(),
+		// which can hang forever on an unreachable host (SSE endpoint wait, WebSocket
+		// handshake, proxied fetch). This race bounds the whole handshake and closes
+		// the transport on expiry so the underlying fetch or socket is aborted.
+		const handshakeTimeoutMs =
+			serverConfig.handshakeTimeoutMs ?? DEFAULT_MCP_CONFIG.connectionTimeoutMs;
+
 		try {
-			await client.connect(transport);
+			let handshakeTimer: ReturnType<typeof setTimeout> | undefined;
+
+			const handshakeDeadline = new Promise<never>((_, reject) => {
+				handshakeTimer = setTimeout(() => {
+					void transport.close().catch(() => {});
+					reject(new Error(`Connection timed out after ${Math.round(handshakeTimeoutMs / 1000)}s`));
+				}, handshakeTimeoutMs);
+			});
+
+			try {
+				await Promise.race([
+					client.connect(transport, { timeout: handshakeTimeoutMs }),
+					handshakeDeadline
+				]);
+			} finally {
+				clearTimeout(handshakeTimer);
+			}
+
 			// Transport diagnostics are only for the initial handshake, not long-lived traffic.
 			stopPhaseLogging();
 			client.onerror = runtimeErrorHandler;
@@ -620,21 +745,21 @@ export class MCPService {
 					}`,
 					MCPLogLevel.ERROR,
 					{
-						error: this.summarizeError(error),
+						browser: this.getBrowserContext(url, serverConfig.useProxy ?? false),
 						config: {
-							serverName,
 							configuredUrl: serverConfig.url,
+							credentials: serverConfig.credentials,
 							effectiveUrl: url.href,
-							transportType,
-							useProxy: serverConfig.useProxy ?? false,
 							headers: sanitizeHeaders(
 								serverConfig.headers,
 								Object.keys(serverConfig.headers ?? {}),
-								MCP_PARTIAL_REDACT_HEADERS
+								HEADERS.PARTIAL_REDACT
 							),
-							credentials: serverConfig.credentials
+							serverName,
+							transportType,
+							useProxy: serverConfig.useProxy ?? false
 						},
-						browser: this.getBrowserContext(url, serverConfig.useProxy ?? false),
+						error: this.summarizeError(error),
 						hints: this.getConnectionHints(url, serverConfig, error)
 					}
 				)
@@ -661,10 +786,10 @@ export class MCPService {
 				}
 			),
 			{
-				serverInfo,
-				serverCapabilities,
 				clientCapabilities: effectiveCapabilities,
-				instructions
+				instructions,
+				serverCapabilities,
+				serverInfo
 			}
 		);
 
@@ -680,15 +805,14 @@ export class MCPService {
 
 		const tools = await this.listTools({
 			client,
-			transport,
-			tools: [],
-			serverName,
-			transportType,
 			connectionTimeMs: 0,
 			requestTimeoutMs:
-				serverConfig.requestTimeoutMs ?? DEFAULT_MCP_CONFIG.requestTimeoutSeconds * 1000
+				serverConfig.requestTimeoutMs ?? DEFAULT_MCP_CONFIG.requestTimeoutSeconds * 1000,
+			serverName,
+			tools: [],
+			transport,
+			transportType
 		});
-
 		const connectionTimeMs = Math.round(performance.now() - startTime);
 
 		// Phase: Connected
@@ -699,6 +823,7 @@ export class MCPService {
 				`Connection established with ${tools.length} tools (${connectionTimeMs}ms)`
 			)
 		);
+
 		if (import.meta.env.DEV && import.meta.env.VITE_DEBUG) {
 			console.log(
 				`[MCPService][${serverName}] Initialization complete with ${tools.length} tools in ${connectionTimeMs}ms`
@@ -707,18 +832,18 @@ export class MCPService {
 
 		return {
 			client,
-			transport,
-			tools,
-			serverName,
-			transportType,
-			serverInfo,
-			serverCapabilities,
 			clientCapabilities: effectiveCapabilities,
-			protocolVersion: DEFAULT_MCP_CONFIG.protocolVersion,
-			instructions,
 			connectionTimeMs,
+			instructions,
+			protocolVersion: DEFAULT_MCP_CONFIG.protocolVersion,
 			requestTimeoutMs:
-				serverConfig.requestTimeoutMs ?? DEFAULT_MCP_CONFIG.requestTimeoutSeconds * 1000
+				serverConfig.requestTimeoutMs ?? DEFAULT_MCP_CONFIG.requestTimeoutSeconds * 1000,
+			serverCapabilities,
+			serverInfo,
+			serverName,
+			tools,
+			transport,
+			transportType
 		};
 	}
 
@@ -745,6 +870,7 @@ export class MCPService {
 			// by not setting onerror, but since we use it for protocol logging,
 			// we must clear it before disconnect.
 			connection.client.onerror = undefined;
+
 			if (connection.transport.onclose) {
 				connection.transport.onclose = undefined;
 			}
@@ -820,7 +946,7 @@ export class MCPService {
 		args?: Record<string, string>
 	): Promise<GetPromptResult> {
 		try {
-			return await connection.client.getPrompt({ name, arguments: args });
+			return await connection.client.getPrompt({ arguments: args, name });
 		} catch (error) {
 			console.error(`[MCPService][${connection.serverName}] Failed to get prompt:`, error);
 
@@ -848,7 +974,7 @@ export class MCPService {
 
 		try {
 			const result = await connection.client.callTool(
-				{ name: params.name, arguments: params.arguments },
+				{ arguments: params.arguments, name: params.name },
 				undefined,
 				{ signal, timeout: connection.requestTimeoutMs }
 			);
@@ -885,12 +1011,23 @@ export class MCPService {
 	 */
 	private static formatToolResult(result: ToolCallResult): string {
 		const content = result.content;
+
 		if (!Array.isArray(content)) return '';
 
-		return content
+		const formatted = content
 			.map((item) => this.formatSingleContent(item))
 			.filter(Boolean)
-			.join('\n');
+			.join(NEWLINE);
+
+		if (formatted !== '') {
+			return formatted;
+		}
+
+		if (result.structuredContent && typeof result.structuredContent === 'object') {
+			return JSON.stringify(result.structuredContent);
+		}
+
+		return '';
 	}
 
 	private static formatSingleContent(content: ToolResultContentItem): string {
@@ -906,6 +1043,7 @@ export class MCPService {
 			const resource = content.resource;
 
 			if (resource.text) return resource.text;
+
 			if (resource.blob) return resource.blob;
 
 			return JSON.stringify(resource);
@@ -942,8 +1080,8 @@ export class MCPService {
 	): Promise<{ values: string[]; total?: number; hasMore?: boolean } | null> {
 		try {
 			const result = await connection.client.complete({
-				ref,
-				argument
+				argument,
+				ref
 			});
 
 			return result.completion;
@@ -976,8 +1114,8 @@ export class MCPService {
 			const result = await connection.client.listResources(cursor ? { cursor } : undefined);
 
 			return {
-				resources: (result.resources ?? []) as MCPResource[],
-				nextCursor: result.nextCursor
+				nextCursor: result.nextCursor,
+				resources: (result.resources ?? []) as MCPResource[]
 			};
 		} catch (error) {
 			if (this.isSessionExpiredError(error)) {
@@ -997,10 +1135,12 @@ export class MCPService {
 	 */
 	static async listAllResources(connection: MCPConnection): Promise<MCPResource[]> {
 		const allResources: MCPResource[] = [];
+
 		let cursor: string | undefined;
 
 		do {
 			const result = await this.listResources(connection, cursor);
+
 			allResources.push(...result.resources);
 			cursor = result.nextCursor;
 		} while (cursor);
@@ -1022,8 +1162,8 @@ export class MCPService {
 			const result = await connection.client.listResourceTemplates(cursor ? { cursor } : undefined);
 
 			return {
-				resourceTemplates: (result.resourceTemplates ?? []) as MCPResourceTemplate[],
-				nextCursor: result.nextCursor
+				nextCursor: result.nextCursor,
+				resourceTemplates: (result.resourceTemplates ?? []) as MCPResourceTemplate[]
 			};
 		} catch (error) {
 			if (this.isSessionExpiredError(error)) {
@@ -1046,10 +1186,12 @@ export class MCPService {
 	 */
 	static async listAllResourceTemplates(connection: MCPConnection): Promise<MCPResourceTemplate[]> {
 		const allTemplates: MCPResourceTemplate[] = [];
+
 		let cursor: string | undefined;
 
 		do {
 			const result = await this.listResourceTemplates(connection, cursor);
+
 			allTemplates.push(...result.resourceTemplates);
 			cursor = result.nextCursor;
 		} while (cursor);
@@ -1071,8 +1213,8 @@ export class MCPService {
 			const result = await connection.client.readResource({ uri });
 
 			return {
-				contents: (result.contents ?? []) as MCPResourceContent[],
-				_meta: result._meta
+				_meta: result._meta,
+				contents: (result.contents ?? []) as MCPResourceContent[]
 			};
 		} catch (error) {
 			console.error(`[MCPService][${connection.serverName}] Failed to read resource:`, error);

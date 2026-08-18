@@ -91,61 +91,67 @@ fn main(
     let dst_idx_base = params.offset_dst + dst3_idx * dst3_stride + dst2_idx * dst2_stride + row_base;
 
 #ifdef MMVQ
-    let src1q_idx_base = (src13_idx * params.bs02 * params.broadcast2 + src12_idx) * (params.k / 32u);
+    let src1q_idx_base = (src13_idx * params.bs02 * params.broadcast2 + src12_idx) * params.n * (params.k / 32u);
     let acc = accumulate_vec_q_dot(thread_id, row_base, src0_batch_offset, src1q_idx_base);
 #else
     let src1_idx_base = params.offset_src1 + src13_idx * params.stride_13 + src12_idx * params.stride_12;
     let acc = accumulate_vec_dot(thread_id, row_base, src0_batch_offset, src1_idx_base);
 #endif
 
+    for (var col = 0u;col < NUM_COLS;col += 1) {
+
 #ifdef USE_SUBGROUP_REDUCTION
-    for (var row = 0u; row < OUTPUTS_PER_WG; row++) {
-        let subgroup_total = subgroupAdd(acc[row]);
-        if (subgroup_invocation_id == 0u) {
-            partial_sums[partial_index(row, subgroup_id)] = subgroup_total;
-        }
-    }
+            for (var row = 0u; row < OUTPUTS_PER_WG; row++) {
+                let subgroup_total = subgroupAdd(acc[col][row]);
+                if (subgroup_invocation_id == 0u) {
+                    partial_sums[partial_index(row, subgroup_id)] = subgroup_total;
+                }
+            }
 
-    workgroupBarrier();
+            workgroupBarrier();
 
-    for (var row = subgroup_id; (row < OUTPUTS_PER_WG) && (row_base + row < params.m); row += num_subgroups) {
-        let output_row = row_base + row;
-        var row_acc = 0.0f;
-        for (var k = subgroup_invocation_id; k < num_subgroups; k += subgroup_size) {
-            row_acc += partial_sums[partial_index(row, k)];
-        }
-        let row_total = subgroupAdd(row_acc);
-        if (subgroup_invocation_id == 0) {
-            dst[dst_idx_base + row] = row_total;
-        }
-    }
+            for (var row = subgroup_id; (row < OUTPUTS_PER_WG) && (row_base + row < params.m); row += num_subgroups) {
+                let output_row = row_base + row;
+                var row_acc = 0.0f;
+                for (var k = subgroup_invocation_id; k < num_subgroups; k += subgroup_size) {
+                    row_acc += partial_sums[partial_index(row, k)];
+                }
+                let row_total = subgroupAdd(row_acc);
+                if (subgroup_invocation_id == 0) {
+                    dst[dst_idx_base + col * params.m + row] = row_total;
+                }
+            }
 #endif
 
 #ifdef USE_WORKGROUP_REDUCTION
-    for (var row = 0u; row < OUTPUTS_PER_WG; row++) {
-        partial_sums[partial_index(row, thread_id)] = acc[row];
-    }
+            for (var row = 0u; row < OUTPUTS_PER_WG; row++) {
+                partial_sums[partial_index(row, thread_id)] = acc[col][row];
+            }
+
+            workgroupBarrier();
+
+            var stride = WG_SIZE / 2u;
+
+            while (stride > 0) {
+                if (thread_id < stride) {
+                    for (var row = 0u; row < OUTPUTS_PER_WG; row++) {
+                        partial_sums[partial_index(row, thread_id)] += partial_sums[partial_index(row, thread_id + stride)];
+                    }
+                }
+
+                workgroupBarrier();
+                stride = stride / 2;
+            }
+
+            if (thread_id < OUTPUTS_PER_WG) {
+                let output_row = row_base + thread_id;
+                if (output_row < params.m) {
+                    dst[dst_idx_base + col * params.m + thread_id] = partial_sums[partial_index(thread_id, 0)];
+                }
+            }
+#endif
 
     workgroupBarrier();
 
-    var stride = WG_SIZE / 2u;
-
-    while (stride > 0) {
-        if (thread_id < stride) {
-            for (var row = 0u; row < OUTPUTS_PER_WG; row++) {
-                partial_sums[partial_index(row, thread_id)] += partial_sums[partial_index(row, thread_id + stride)];
-            }
-        }
-
-        workgroupBarrier();
-        stride = stride / 2;
     }
-
-    if (thread_id < OUTPUTS_PER_WG) {
-        let output_row = row_base + thread_id;
-        if (output_row < params.m) {
-            dst[dst_idx_base + thread_id] = partial_sums[partial_index(thread_id, 0)];
-        }
-    }
-#endif
 }

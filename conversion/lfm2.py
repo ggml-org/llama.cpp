@@ -64,10 +64,16 @@ class LFM2Model(TextModel):
         yield from super().modify_tensors(data_torch, name, bid)
 
 
-@ModelBase.register("Lfm2Model")
+@ModelBase.register("Lfm2Model", "Lfm2BidirectionalModel")
 class LFM2ColBertModel(LFM2Model):
     model_arch = gguf.MODEL_ARCH.LFM2
     dense_tensor_name = "dense_2"
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        if self.hf_arch == "Lfm2BidirectionalModel":
+            self.gguf_writer.add_causal_attention(False)
+        self._try_set_pooling_type()
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         if not name.startswith(self.dense_tensor_name):
@@ -76,10 +82,11 @@ class LFM2ColBertModel(LFM2Model):
         yield from super().modify_tensors(data_torch, name, bid)
 
     def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
-        # dense tensor is stored in a separate safetensors file
+        # optional dense tensor is stored in a separate safetensors file
         from safetensors.torch import load_file
         tensors_file = self.dir_model / "1_Dense" / "model.safetensors"
-        assert tensors_file.is_file()
+        if not tensors_file.is_file():
+            return
         tensor = load_file(tensors_file)["linear.weight"]
         self.gguf_writer.add_embedding_length_out(tensor.shape[0])
         yield f"{self.dense_tensor_name}.weight", tensor.clone()

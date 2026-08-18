@@ -98,6 +98,25 @@ def test_vision_chat_completion(prompt, image_url, success, re_content):
         assert res.status_code != 200
 
 
+def test_vision_chat_completion_token_count():
+    global server
+    server.start()
+    res = server.make_request("POST", "/chat/completions/input_tokens", data={
+        "temperature": 0.0,
+        "top_k": 1,
+        "messages": [
+            {"role": "user", "content": [
+                {"type": "text", "text": "What is this:"},
+                {"type": "image_url", "image_url": {
+                    "url": get_img_url("IMG_URL_0"),
+                }},
+            ]},
+        ],
+    })
+    assert res.status_code == 200
+    assert res.body["input_tokens"] > 10
+
+
 @pytest.mark.parametrize(
     "prompt, image_data, success, re_content",
     [

@@ -459,7 +459,7 @@ Each returned parser is wrapped by `wrap_for_generation_prompt()`, which prepend
 
 - Usage: `./bin/llama-template-analysis path/to/template.jinja`
 
-**Debug Logging**: Enable with `LLAMA_LOG_VERBOSITY=2`
+**Debug Logging**: Enable with `LLAMA_ARG_LOG_VERBOSITY=2`
 
 - Shows detailed analysis steps, pattern extraction results, and generated parser structure
 

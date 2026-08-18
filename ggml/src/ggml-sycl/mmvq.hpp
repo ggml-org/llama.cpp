@@ -40,4 +40,37 @@ bool ggml_sycl_mul_mat_vec_q_id(
     size_t             src1_row_stride,      // 0 = shared src1, else per-expert stride in bytes
     dpct::queue_ptr    stream);
 
+// Reorder (SoA) variant of the fused MoE expert GEMV.
+// vx_base: each expert slice (stride expert_weight_stride == src0->nb[2]) is a self-contained reorder/SoA layout.
+// vy: src1 quantized with quantize_and_reorder_q8_1_soa (per-row SoA). Returns false if src0_type isn't handled.
+bool ggml_sycl_mul_mat_vec_q_id_reorder(
+    enum ggml_type     src0_type,
+    const void *       vx_base,
+    const void *       vy,
+    const int32_t *    ids_dev,
+    float *            dst_base,
+    int                ncols,
+    int                nrows,
+    int                n_experts_used,
+    size_t             expert_weight_stride,
+    size_t             dst_row_stride,
+    size_t             src1_row_stride,
+    dpct::queue_ptr    stream);
+
+// Fused dense-FFN GEMV: writes glu(gate . y, up . y) instead of the two mat-vec results.
+// vx / vgate must share shape, stride and reorder layout. Returns false if unhandled.
+bool ggml_sycl_mul_mat_vec_q_glu_reorder(
+    enum ggml_type     src0_type,
+    enum ggml_glu_op   glu_op,
+    const void *       vx,
+    const void *       vgate,
+    const void *       vy,
+    float *            dst,
+    int                ncols,                // K, shared by both weights
+    int                nrows,                // output rows, i.e. weight ne[1]
+    int                ncols_dst,            // activation columns, 1..MMVQ_MAX_BATCH_SIZE
+    int                stride_col_y_bytes,   // bytes between activation columns in vy
+    int                stride_col_dst,       // floats between output columns in dst
+    dpct::queue_ptr    stream);
+
 #endif // GGML_SYCL_MMVQ_HPP

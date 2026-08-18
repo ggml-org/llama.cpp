@@ -1,12 +1,11 @@
 <script lang="ts">
-	import { SettingsChat } from '$lib/components/app/settings';
+	import { afterNavigate, replaceState } from '$app/navigation';
 	import { page } from '$app/state';
-	import { replaceState } from '$app/navigation';
-	import { RouterService } from '$lib/services';
+	import { SettingsChat } from '$lib/components/app/settings';
 	import { SETTINGS_SECTION_SLUGS } from '$lib/constants';
-	import { onMount } from 'svelte';
+	import { RouterService } from '$lib/services';
 
-	onMount(() => {
+	afterNavigate(() => {
 		if (!page.params.section) {
 			replaceState(RouterService.settings(SETTINGS_SECTION_SLUGS.GENERAL), {});
 		}

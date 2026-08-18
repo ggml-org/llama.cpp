@@ -8,14 +8,15 @@ void llama_model_llama4::load_arch_hparams(llama_model_loader & ml) {
     const bool found_swa = ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa, false);
     if (found_swa && hparams.n_swa == 0) {
         hparams.swa_type             = LLAMA_SWA_TYPE_NONE;
-        hparams.n_no_rope_layer_step = hparams.n_layer; // always use rope
+        hparams.n_no_rope_layer_step = hparams.n_layer(); // always use rope
     } else {
         hparams.swa_type                = LLAMA_SWA_TYPE_CHUNKED;
         hparams.n_swa                   = 8192;
         hparams.n_attn_temp_floor_scale = 8192;
         hparams.f_attn_temp_scale       = 0.1f;
         hparams.f_attn_temp_offset      = 1.0f;
-        uint32_t swa_period             = 4; // pattern: 3 chunked - 1 full
+
+        uint32_t swa_period = 4; // pattern: 3 chunked - 1 full
         ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, swa_period, false);
         hparams.set_swa_pattern(swa_period);
 

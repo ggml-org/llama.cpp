@@ -29,14 +29,13 @@ concurrency:
 env:
   GGML_NLOOP: 3
   GGML_N_THREADS: 1
-  LLAMA_LOG_COLORS: 1
-  LLAMA_LOG_PREFIX: 1
-  LLAMA_LOG_TIMESTAMPS: 1
+  LLAMA_ARG_LOG_COLORS: 1
+  LLAMA_ARG_LOG_PREFIX: 1
+  LLAMA_ARG_LOG_TIMESTAMPS: 1
 
 jobs:
-
-  ubuntu-latest-rpc:
-    runs-on: ubuntu-latest
+  ubuntu-24-rpc:
+    runs-on: ${{ 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
 
     continue-on-error: true
 

@@ -1,5 +1,7 @@
 #include "models.h"
 
+#include <sstream>
+
 void llama_model_granite::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
     ml.get_key(LLM_KV_LOGIT_SCALE,                 hparams.f_logit_scale);
@@ -7,12 +9,33 @@ void llama_model_granite::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_EMBEDDING_SCALE,             hparams.f_embedding_scale, false);
     ml.get_key(LLM_KV_ATTENTION_SCALE,             hparams.f_attention_scale, false);
 
+    // Granite4 Vision uses array deepstack_mapping
+    ml.get_arr(LLM_KV_DEEPSTACK_MAPPING, hparams.deepstack_mapping_arr, false);
+
+    // Count the unique deepstack input indices
+    std::unordered_set<uint32_t> unique_deepstack_idxs;
+    for (const auto val : hparams.deepstack_mapping_arr) {
+        if (val >= 0) {
+            unique_deepstack_idxs.insert(val);
+        }
+    }
+    hparams.n_deepstack_layers = unique_deepstack_idxs.size();
+
+    // Ensure all values are valid (avoid overflow attacks)
+    for (const auto val : unique_deepstack_idxs) {
+        if (val > hparams.n_deepstack_layers) {
+            std::stringstream ss;
+            ss << "Invalid deepstack index: " << val << " > " << hparams.n_deepstack_layers;
+            throw std::runtime_error(ss.str());
+        }
+    }
+
     // Granite uses rope_finetuned as a switch for rope, so default to true
     bool rope_finetuned = true;
     ml.get_key(LLM_KV_ROPE_SCALING_FINETUNED, rope_finetuned, false);
     hparams.rope_finetuned = rope_finetuned;
 
-    switch (hparams.n_layer) {
+    switch (hparams.n_layer()) {
         case 32: type = LLM_TYPE_3B; break;
         case 40: type = LLM_TYPE_3B; break;
         // Add additional layer/vocab/etc checks here for other model sizes
@@ -112,6 +135,20 @@ llama_model_granite::graph::graph(
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
     for (int il = 0; il < n_layer; ++il) {
+
+        // Granite Vision 4.1 deepstack: inject the projector stream that
+        // targets decoder layer `il` before the decoder runs.
+        // NOTE: skip the first deepstack layer since that's inpL
+        const auto & deepstack_emb_idx = hparams.deepstack_mapping_arr[il];
+        if (il > 0 && deepstack_emb_idx >= 0) {
+            ggml_tensor * ds = ggml_view_2d(ctx0,
+                res->t_inp_embd, n_embd, n_tokens,
+                res->t_inp_embd->nb[1],
+                deepstack_emb_idx * n_embd * sizeof(float));
+            inpL = ggml_add(ctx0, inpL, ds);
+            cb(inpL, "deepstack_in", il);
+        }
+
         ggml_tensor * inpSA = inpL;
 
         // norm

@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { ActionIcon } from '$lib/components/app';
 	import { X } from '@lucide/svelte';
+	import { ActionIcon } from '$lib/components/app';
 
 	interface Props {
 		class?: string;
@@ -20,9 +20,9 @@
 		height = 'h-16',
 		id,
 		imageClass = '',
+		name,
 		onclick,
 		onRemove,
-		name,
 		preview,
 		readonly = false,
 		width = 'w-auto'
@@ -51,7 +51,7 @@
 
 	{#if !readonly}
 		<div
-			class="absolute top-1 right-1 flex items-center justify-center opacity-0 transition-opacity group-hover:opacity-100"
+			class="absolute top-1 right-1 flex items-center justify-center opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100"
 		>
 			<ActionIcon
 				class="text-white"

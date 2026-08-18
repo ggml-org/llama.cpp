@@ -5,7 +5,7 @@ void llama_model_minicpm3::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_Q_LORA_RANK,       hparams.n_lora_q);
     ml.get_key(LLM_KV_ATTENTION_KV_LORA_RANK,      hparams.n_lora_kv);
 
-    switch (hparams.n_layer) {
+    switch (hparams.n_layer()) {
         case 62: type = LLM_TYPE_4B; break;
         default: type = LLM_TYPE_UNKNOWN;
     }

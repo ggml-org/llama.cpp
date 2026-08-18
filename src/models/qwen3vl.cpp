@@ -4,7 +4,8 @@ void llama_model_qwen3vl::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_NUM_DEEPSTACK_LAYERS, hparams.n_deepstack_layers, false);
     ml.get_key_or_arr(LLM_KV_ROPE_DIMENSION_SECTIONS, hparams.rope_sections, 4, true);
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
-    switch (hparams.n_layer) {
+
+    switch (hparams.n_layer()) {
         case 28: type = LLM_TYPE_1_7B; break;
         case 36: type = hparams.n_embd == 2560 ? LLM_TYPE_4B : LLM_TYPE_8B; break;
         case 64: type = LLM_TYPE_32B; break;
@@ -15,11 +16,16 @@ void llama_model_qwen3vl::load_arch_hparams(llama_model_loader & ml) {
 void llama_model_qwen3vl::load_arch_tensors(llama_model_loader &) {
     LLAMA_LOAD_LOCALS;
 
+    int64_t n_vocab_out = n_vocab;
+    if (arch == LLM_ARCH_QWEN3TTS) {
+        n_vocab_out = 3072;
+    }
+
     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
 
     // output
     output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
-    output      = create_tensor(tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, TENSOR_NOT_REQUIRED);
+    output      = create_tensor(tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab_out}, TENSOR_NOT_REQUIRED);
     // if output is NULL, init from the input tok embed
     if (output == NULL) {
         output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, TENSOR_DUPLICATED);
@@ -164,6 +170,24 @@ llama_model_qwen3vl::graph::graph(const llama_model & model, const llm_graph_par
 
     // lm_head
     cur = build_lora_mm(model.output, cur, model.output_s);
+
+    int64_t n_vocab_in  = model.tok_embd->ne[1];
+    int64_t n_vocab_out = model.output->ne[1];
+    if (n_vocab_in > n_vocab_out) {
+        // case: Qwen3TTS model with codec_head as output
+        GGML_ASSERT(model.output_norm);
+        int64_t pad = n_vocab_in - n_vocab_out;
+
+        // using this trick to get a scalar -inf tensor to pad the output
+        ggml_tensor * neg_inf = ggml_scale_bias(ctx0,
+                ggml_view_1d(ctx0, model.output_norm, 1, 0),
+                0.0f, -INFINITY);
+        neg_inf = ggml_repeat_4d(ctx0, neg_inf, pad, cur->ne[1], 1, 1);
+        cur = ggml_concat(ctx0, neg_inf, cur, 0); // [padded .. n_vocab_out, n_stream]
+
+    } else if (n_vocab_in < n_vocab_out) {
+        GGML_ABORT("invalid case");
+    }
 
     cb(cur, "result_output", -1);
     res->t_logits = cur;

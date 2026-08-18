@@ -4,7 +4,7 @@ void llama_model_olmo::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_EPS, hparams.f_norm_eps);
     ml.get_key(LLM_KV_ATTENTION_CLAMP_KQV,     hparams.f_clamp_kqv, false);
 
-    switch (hparams.n_layer) {
+    switch (hparams.n_layer()) {
         case 22: type = LLM_TYPE_1B; break;
         case 32: type = LLM_TYPE_7B; break;
         case 80: type = LLM_TYPE_70B; break;
