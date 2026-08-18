@@ -149,7 +149,7 @@ def test_cors_origins_localhost_rejects(origin: str):
     assert "Access-Control-Allow-Origin" not in res.headers
 
 
-CORS_ORIGINS_LIST = "http://web.mydomain.fr,http://localhost:8042,moz-extension://f745c4ad-86bf-4062-b715-e26739741e4d"
+CORS_ORIGINS_LIST = "http://web.mydomain.fr, http://localhost:8042, moz-extension://f745c4ad-86bf-4062-b715-e26739741e4d"
 
 
 @pytest.mark.parametrize("origin", [
