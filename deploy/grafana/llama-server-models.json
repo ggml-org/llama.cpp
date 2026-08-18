@@ -403,7 +403,7 @@
       },
       "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi" } },
       "targets": [
-        { "refId": "A", "expr": "sum by (model) (rate(llamacpp:draft_tokens_accepted_total{host=\"$host\"}[$__rate_interval])) / clamp_min(sum by (model) (rate(llamacpp:draft_tokens_total{host=\"$host\"}[$__rate_interval])), 1)", "legendFormat": "{{model}}" }
+        { "refId": "A", "expr": "sum by (model) (rate(llamacpp:spec_decode_num_accepted_tokens_total{host=\"$host\"}[$__rate_interval])) / clamp_min(sum by (model) (rate(llamacpp:spec_decode_num_draft_tokens_total{host=\"$host\"}[$__rate_interval])), 1e-9)", "legendFormat": "{{model}}" }
       ]
     },
     {

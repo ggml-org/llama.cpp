@@ -89,7 +89,9 @@ un-pinned queries. Stale series age out of Mimir on their own (~5 min for `up`).
   `nvidia_smi_temperature_gpu`; power `nvidia_smi_power_draw_watts`.
 - Prompt-size p95: `histogram_quantile(0.95, sum by (le,model) (rate(llamacpp:prompt_tokens_size_bucket[$__rate_interval])))`
 - TTFT p95: same over `llamacpp:time_to_first_token_seconds_bucket`.
-- Spec-decode accept rate: `rate(llamacpp:draft_tokens_accepted_total[$__rate_interval]) / rate(llamacpp:draft_tokens_total[$__rate_interval])`
+- Spec-decode accept rate: `rate(llamacpp:spec_decode_num_accepted_tokens_total[$__rate_interval]) / clamp_min(rate(llamacpp:spec_decode_num_draft_tokens_total[$__rate_interval]), 1e-9)`
+  (the `clamp_min` only guards the 0/0 case when spec-decode is off; do not clamp
+  to `1`, that understates the ratio whenever the draft rate is below 1 token/s)
 - Context-shift rate: `rate(llamacpp:n_ctx_shift_total[$__rate_interval])`
 - Host CPU busy: hostmetrics emits `system_cpu_time_seconds_total` (counter),
   memory `system_memory_usage_bytes{state="used"}`, load `system_cpu_load_average_1m`.

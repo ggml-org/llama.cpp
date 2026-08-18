@@ -444,7 +444,7 @@
       },
       "options": { "legend": { "showLegend": true, "placement": "bottom" }, "tooltip": { "mode": "single" } },
       "targets": [
-        { "refId": "A", "expr": "rate(llamacpp:draft_tokens_accepted_total{host=\"$host\",model=\"$model\"}[$__rate_interval]) / clamp_min(rate(llamacpp:draft_tokens_total{host=\"$host\",model=\"$model\"}[$__rate_interval]), 1)", "legendFormat": "accept rate" }
+        { "refId": "A", "expr": "rate(llamacpp:spec_decode_num_accepted_tokens_total{host=\"$host\",model=\"$model\"}[$__rate_interval]) / clamp_min(rate(llamacpp:spec_decode_num_draft_tokens_total{host=\"$host\",model=\"$model\"}[$__rate_interval]), 1e-9)", "legendFormat": "accept rate" }
       ]
     },
     {
