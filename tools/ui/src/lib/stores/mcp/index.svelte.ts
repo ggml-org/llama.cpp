@@ -50,7 +50,7 @@ import type {
 	Tool,
 	ToolExecutionResult
 } from '$lib/types';
-import type { DatabaseMessageExtraMcpResource, McpServerOverride } from '$lib/types/database';
+import type { DatabaseMessageExtraMcpResource } from '$lib/types/database';
 import type { SettingsConfigType } from '$lib/types/settings';
 import {
 	detectMcpTransportFromUrl,
@@ -193,26 +193,10 @@ class MCPStore {
 	}
 
 	/**
-	 * Checks if a server is enabled for a given chat.
-	 * A per-chat override wins when present; a server without one resolves
-	 * to its own `enabled` flag in `mcpServers`.
-	 */
-	#checkServerEnabled(
-		server: MCPServerSettingsEntry,
-		perChatOverrides?: McpServerOverride[]
-	): boolean {
-		const override = perChatOverrides?.find((o) => o.serverId === server.id);
-
-		return override?.enabled ?? server.enabled;
-	}
-
-	/**
 	 * Builds MCP client configuration from settings.
+	 * Server enabled state is global only: the `enabled` flag in `mcpServers`.
 	 */
-	#buildMcpClientConfig(
-		cfg: SettingsConfigType,
-		perChatOverrides?: McpServerOverride[]
-	): MCPClientConfig | undefined {
+	#buildMcpClientConfig(cfg: SettingsConfigType): MCPClientConfig | undefined {
 		const rawServers = this.#parseServerSettings(cfg.mcpServers);
 
 		if (!rawServers.length) {
@@ -222,7 +206,7 @@ class MCPStore {
 		const servers: Record<string, MCPServerConfig> = {};
 
 		for (const [index, entry] of rawServers.entries()) {
-			if (!this.#checkServerEnabled(entry, perChatOverrides)) continue;
+			if (!entry.enabled) continue;
 
 			const normalized = this.#buildServerConfig(entry);
 
@@ -419,24 +403,16 @@ class MCPStore {
 			(s) => s.enabled && s.url.trim()
 		);
 	}
-	hasEnabledServers(perChatOverrides?: McpServerOverride[]): boolean {
-		return Boolean(this.#buildMcpClientConfig(settingsStore.config, perChatOverrides));
+	hasEnabledServers(): boolean {
+		return Boolean(this.#buildMcpClientConfig(settingsStore.config));
 	}
 
-	getEnabledServersForConversation(
-		perChatOverrides?: McpServerOverride[]
-	): MCPServerSettingsEntry[] {
-		return this.getServers().filter((server) => {
-			return this.#checkServerEnabled(server, perChatOverrides);
-		});
-	}
-
-	async ensureInitialized(perChatOverrides?: McpServerOverride[]): Promise<boolean> {
+	async ensureInitialized(): Promise<boolean> {
 		if (!browser) {
 			return false;
 		}
 
-		const mcpConfig = this.#buildMcpClientConfig(settingsStore.config, perChatOverrides);
+		const mcpConfig = this.#buildMcpClientConfig(settingsStore.config);
 		const signature = mcpConfig ? JSON.stringify(mcpConfig) : null;
 
 		if (!signature) {
@@ -888,18 +864,12 @@ class MCPStore {
 	 * Uses health check state since servers may not have active connections until
 	 * the user actually sends a message or uses prompts.
 	 */
-	hasPromptsCapability(perChatOverrides?: McpServerOverride[]): boolean {
-		let enabledServerIds: Set<string>;
-
-		if (perChatOverrides !== undefined) {
-			enabledServerIds = new Set(perChatOverrides.filter((o) => o.enabled).map((o) => o.serverId));
-		} else {
-			enabledServerIds = new Set(
-				this.getServers()
-					.filter((s) => s.enabled)
-					.map((s) => s.id)
-			);
-		}
+	hasPromptsCapability(): boolean {
+		const enabledServerIds = new Set(
+			this.getServers()
+				.filter((s) => s.enabled)
+				.map((s) => s.id)
+		);
 
 		if (enabledServerIds.size === 0) {
 			return false;
@@ -1285,18 +1255,12 @@ class MCPStore {
 	 * Uses health check state since servers may not have active connections until
 	 * the user actually sends a message or uses prompts.
 	 */
-	hasResourcesCapability(perChatOverrides?: McpServerOverride[]): boolean {
-		let enabledServerIds: Set<string>;
-
-		if (perChatOverrides !== undefined) {
-			enabledServerIds = new Set(perChatOverrides.filter((o) => o.enabled).map((o) => o.serverId));
-		} else {
-			enabledServerIds = new Set(
-				this.getServers()
-					.filter((s) => s.enabled)
-					.map((s) => s.id)
-			);
-		}
+	hasResourcesCapability(): boolean {
+		const enabledServerIds = new Set(
+			this.getServers()
+				.filter((s) => s.enabled)
+				.map((s) => s.id)
+		);
 
 		if (enabledServerIds.size === 0) {
 			return false;

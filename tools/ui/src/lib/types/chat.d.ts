@@ -342,5 +342,4 @@ export interface ChatFormActionsContext {
 	onSystemPromptClick?: () => void;
 	onMcpPromptClick?: () => void;
 	onMcpResourcesClick?: () => void;
-	onMcpSettingsClick?: () => void;
 }

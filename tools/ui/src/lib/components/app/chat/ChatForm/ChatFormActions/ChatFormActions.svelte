@@ -1,6 +1,5 @@
 <script lang="ts">
 	import { SkipForward, Square } from '@lucide/svelte';
-	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import {
 		ChatFormActionModels,
@@ -10,7 +9,7 @@
 		ChatFormContextGauge
 	} from '$lib/components/app';
 	import { Button } from '$lib/components/ui/button';
-	import { ICON_CLASS_DEFAULT, ROUTES } from '$lib/constants';
+	import { ICON_CLASS_DEFAULT } from '$lib/constants';
 	import { setChatFormActionsContext } from '$lib/contexts';
 	import { FileTypeCategory, MessageRole } from '$lib/enums';
 	import { ChatService } from '$lib/services';
@@ -57,17 +56,9 @@
 
 	let currentConfig = $derived(settingsStore.config);
 
-	let hasMcpPromptsSupport = $derived.by(() => {
-		const perChatOverrides = conversationsStore.preferences.getAllMcpServerOverrides();
+	let hasMcpPromptsSupport = $derived(mcpStore.hasPromptsCapability());
 
-		return mcpStore.hasPromptsCapability(perChatOverrides);
-	});
-
-	let hasMcpResourcesSupport = $derived.by(() => {
-		const perChatOverrides = conversationsStore.preferences.getAllMcpServerOverrides();
-
-		return mcpStore.hasResourcesCapability(perChatOverrides);
-	});
+	let hasMcpResourcesSupport = $derived(mcpStore.hasResourcesCapability());
 
 	let hasAudioModality = $state(false);
 	let hasVideoModality = $state(false);
@@ -161,9 +152,6 @@
 		},
 		get onMcpResourcesClick() {
 			return onMcpResourcesClick;
-		},
-		get onMcpSettingsClick() {
-			return () => goto(ROUTES.MCP_SERVERS);
 		},
 		get onSystemPromptClick() {
 			return onSystemPromptClick;

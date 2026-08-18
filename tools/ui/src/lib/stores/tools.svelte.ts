@@ -3,6 +3,7 @@ import {
 	buildBrowserInfoToolDefinition,
 	buildGetDatetimeToolDefinition,
 	buildReadMediaToolDefinition,
+	DISABLED_TOOL_CATEGORIES_LOCALSTORAGE_KEY,
 	DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY,
 	HOME_TILDE,
 	TOOL_GROUP_LABELS,
@@ -31,7 +32,10 @@ class ToolsStore {
 	private _serverTools = $state<OpenAIToolDefinition[]>([]);
 	private _loading = $state(false);
 	private _error = $state<string | null>(null);
+	// default disabled tool keys, seeded into newly created conversations;
+	// the per-conversation policy lives on the conversation row
 	private _disabledTools = $state(new SvelteSet<string>());
+	private _disabledToolCategories = $state(new SvelteSet<ToolSource>());
 	// server tools that resolve their paths against the working directory,
 	// as declared by the server in its `/tools` listing
 	private _cwdAwareTools = $state(new SvelteSet<string>());
@@ -62,6 +66,24 @@ class ToolsStore {
 			console.error('[ToolsStore] Failed to load disabled tools from localStorage:', err);
 		}
 
+		try {
+			const stored = localStorage.getItem(DISABLED_TOOL_CATEGORIES_LOCALSTORAGE_KEY);
+
+			if (stored) {
+				const parsed = JSON.parse(stored);
+
+				if (Array.isArray(parsed)) {
+					for (const key of parsed) {
+						if (Object.values(ToolSource).includes(key)) {
+							this._disabledToolCategories.add(key as ToolSource);
+						}
+					}
+				}
+			}
+		} catch (err) {
+			console.error('[ToolsStore] Failed to load disabled tool categories from localStorage:', err);
+		}
+
 		this.fetchServerTools();
 	}
 
@@ -70,6 +92,17 @@ class ToolsStore {
 			localStorage.setItem(
 				DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY,
 				JSON.stringify([...this._disabledTools])
+			);
+		} catch {
+			// ignore storage errors
+		}
+	}
+
+	private persistDisabledToolCategories(): void {
+		try {
+			localStorage.setItem(
+				DISABLED_TOOL_CATEGORIES_LOCALSTORAGE_KEY,
+				JSON.stringify([...this._disabledToolCategories])
 			);
 		} catch {
 			// ignore storage errors
@@ -401,11 +434,40 @@ class ToolsStore {
 	 * across all four sources (server, browser/sandbox, MCP, custom JSON).
 	 * The API identifies tools by name, so a name is sent at most once.
 	 */
-	getEnabledToolsForLLM(): OpenAIToolDefinition[] {
+	/**
+	 * The single enable rule for a tool entry: its category must be on, its
+	 * own key must not be disabled, and for MCP tools the server-scoped group
+	 * key must not be disabled either.
+	 */
+	isEntryEnabled(
+		entry: ToolEntry,
+		disabledTools: ReadonlySet<string>,
+		disabledCategories: ReadonlySet<ToolSource>
+	): boolean {
+		if (disabledCategories.has(entry.source)) return false;
+
+		if (disabledTools.has(entry.key)) return false;
+
+		if (entry.source === ToolSource.MCP && entry.serverId) {
+			return !disabledTools.has(this.getMcpServerToolsKey(entry.serverId));
+		}
+
+		return true;
+	}
+
+	/** Server-scoped tool key: disabling it disables all of that server's tools. */
+	getMcpServerToolsKey(serverId: string): string {
+		return `mcp:${serverId}`;
+	}
+
+	getEnabledToolsForLLM(
+		disabledTools: ReadonlySet<string> = this._disabledTools,
+		disabledCategories: ReadonlySet<ToolSource> = this._disabledToolCategories
+	): OpenAIToolDefinition[] {
 		const enabledNames = new SvelteSet<string>();
 
 		for (const entry of this.allTools) {
-			if (!this._disabledTools.has(entry.key)) {
+			if (this.isEntryEnabled(entry, disabledTools, disabledCategories)) {
 				enabledNames.add(entry.definition.function.name);
 			}
 		}
@@ -472,6 +534,28 @@ class ToolsStore {
 		}
 	}
 
+	get disabledToolCategories(): ReadonlySet<ToolSource> {
+		return this._disabledToolCategories;
+	}
+
+	isCategoryEnabled(source: ToolSource): boolean {
+		return !this._disabledToolCategories.has(source);
+	}
+
+	setCategoryEnabled(source: ToolSource, enabled: boolean): void {
+		if (enabled) {
+			this._disabledToolCategories.delete(source);
+		} else {
+			this._disabledToolCategories.add(source);
+		}
+
+		this.persistDisabledToolCategories();
+	}
+
+	toggleCategory(source: ToolSource): void {
+		this.setCategoryEnabled(source, !this.isCategoryEnabled(source));
+	}
+
 	/** Enable all tools belonging to a specific MCP server */
 	enableAllToolsForServer(serverId: string): void {
 		const connection = mcpStore.getConnections().get(serverId);
@@ -482,21 +566,6 @@ class ToolsStore {
 			this._disabledTools.delete(this.toolKey(ToolSource.MCP, tool.name, serverId));
 		}
 		this.persistDisabledTools();
-	}
-
-	toggleGroup(group: ToolGroup): void {
-		const allEnabled = group.tools.every((t) => this.isToolEnabled(t.key));
-		const target = !allEnabled;
-
-		for (const tool of group.tools) {
-			if (target) this._disabledTools.delete(tool.key);
-			else this._disabledTools.add(tool.key);
-		}
-		this.persistDisabledTools();
-	}
-
-	isGroupFullyEnabled(group: ToolGroup): boolean {
-		return group.tools.length > 0 && group.tools.every((t) => this.isToolEnabled(t.key));
 	}
 
 	/** Get MCP tools from health check data, used when live connections aren't established yet */
@@ -560,22 +629,22 @@ class ToolsStore {
 		return this.findEntryByName(toolName)?.key ?? null;
 	}
 
-	/** Check if there are any enabled tools available (server, MCP, or custom) */
-	get hasEnabledTools(): boolean {
-		return this.getEnabledToolsForLLM().length > 0;
-	}
-
 	/**
 	 * Check if a working directory is worth setting: at least one server tool
-	 * that reads it is both served and left enabled by the user.
+	 * that reads it is both served and left enabled by the given policy
+	 * (defaults to the global defaults).
 	 */
-	get hasEnabledCwdTools(): boolean {
+	hasEnabledCwdTools(
+		disabledTools: ReadonlySet<string> = this._disabledTools,
+		disabledCategories: ReadonlySet<ToolSource> = this._disabledToolCategories
+	): boolean {
+		if (disabledCategories.has(ToolSource.SERVER)) return false;
+
 		return this._serverTools.some((def) => {
 			const name = def.function.name;
 
 			return (
-				this._cwdAwareTools.has(name) &&
-				!this._disabledTools.has(this.toolKey(ToolSource.SERVER, name))
+				this._cwdAwareTools.has(name) && !disabledTools.has(this.toolKey(ToolSource.SERVER, name))
 			);
 		});
 	}

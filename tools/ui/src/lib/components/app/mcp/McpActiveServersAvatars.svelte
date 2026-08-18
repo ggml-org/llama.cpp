@@ -3,7 +3,7 @@
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { ICON_CLASS_DEFAULT, MAX_DISPLAYED_MCP_AVATARS } from '$lib/constants';
 	import { HealthCheckStatus } from '$lib/enums';
-	import { conversationsStore, mcpStore } from '$lib/stores';
+	import { mcpStore } from '$lib/stores';
 
 	interface Props {
 		class?: string;
@@ -13,19 +13,15 @@
 	let { class: className = '', onclick }: Props = $props();
 
 	let mcpServers = $derived(mcpStore.getServers().filter((s) => s.enabled));
-	let enabledMcpServersForChat = $derived(
-		mcpServers.filter(
-			(s) => conversationsStore.preferences.isMcpServerEnabledForChat(s.id) && s.url.trim()
-		)
-	);
+	let enabledMcpServers = $derived(mcpServers.filter((s) => s.url.trim()));
 	let healthyEnabledMcpServers = $derived(
-		enabledMcpServersForChat.filter((s) => {
+		enabledMcpServers.filter((s) => {
 			const healthState = mcpStore.getHealthCheckState(s.id);
 
 			return healthState.status !== HealthCheckStatus.ERROR;
 		})
 	);
-	let hasEnabledMcpServers = $derived(enabledMcpServersForChat.length > 0);
+	let hasEnabledMcpServers = $derived(enabledMcpServers.length > 0);
 	let extraServersCount = $derived(
 		Math.max(0, healthyEnabledMcpServers.length - MAX_DISPLAYED_MCP_AVATARS)
 	);

@@ -1,22 +1,23 @@
 /**
  * ConversationPreferences - Per-chat options with global fallback
  *
- * Owns the options that resolve per conversation: MCP server overrides,
- * reasoning effort, and the working directory. Cwd and reasoning effort are
- * buffered as pending state and threaded into the next created conversation
- * by the host; MCP server overrides edit the sparse `mcpServerOverrides`
- * list on the active row (new-chat toggles edit the server's global flag).
+ * Owns the options that resolve per conversation: the tool policy (disabled
+ * categories and tool keys), reasoning effort, and the working directory.
+ * Tool picks made on the empty new-chat screen edit the global defaults
+ * directly (they seed every newly created conversation); cwd and reasoning
+ * effort are buffered as pending state and threaded into the next created
+ * conversation by the host.
  * Created and owned by conversationsStore; the host owns the conversation
  * rows these options persist onto.
  */
 
 import { REASONING_EFFORT_DEFAULT_LOCALSTORAGE_KEY } from '$lib/constants';
-import { ReasoningEffort } from '$lib/enums';
+import { ReasoningEffort, ToolSource } from '$lib/enums';
 import { DatabaseService } from '$lib/services/database.service';
 import type { conversationsStore } from '$lib/stores/conversations/index.svelte';
 // direct imports between stores, not via the barrel, to avoid circular deps
-import { mcpStore } from '$lib/stores/mcp/index.svelte';
-import type { McpServerOverride } from '$lib/types/database';
+import { toolsStore } from '$lib/stores/tools.svelte';
+import type { DatabaseConversation, ToolEntry, ToolGroup } from '$lib/types';
 
 /** Load reasoning effort default from localStorage, DEFAULT defers to the server */
 function loadReasoningEffortDefault(): ReasoningEffort {
@@ -36,6 +37,18 @@ function saveReasoningEffortDefault(effort: ReasoningEffort): void {
 	if (typeof globalThis.localStorage === 'undefined') return;
 
 	localStorage.setItem(REASONING_EFFORT_DEFAULT_LOCALSTORAGE_KEY, effort);
+}
+
+/** Effective disabled tool keys: conversation row, falling back to defaults. */
+function buildDisabledTools(conv: DatabaseConversation | null): Set<string> {
+	return new Set(conv ? (conv.disabledTools ?? []) : [...toolsStore.disabledTools]);
+}
+
+/** Effective disabled tool categories: conversation row, falling back to defaults. */
+function buildDisabledToolCategories(conv: DatabaseConversation | null): Set<ToolSource> {
+	return new Set(
+		conv ? (conv.disabledToolCategories ?? []) : [...toolsStore.disabledToolCategories]
+	);
 }
 
 export class ConversationPreferences {
@@ -62,128 +75,164 @@ export class ConversationPreferences {
 	/**
 	 *
 	 *
-	 * MCP Server Overrides
+	 * Tool Policy
 	 *
 	 *
 	 */
 
-	/**
-	 * Resolve the default enabled value for a server: its own `enabled`
-	 * flag in `mcpServers`, so the global on/off state lives in one place.
-	 */
-	#getDefaultOverride(serverId: string): McpServerOverride | undefined {
-		const server = mcpStore.getServers().find((s) => s.id === serverId);
-
-		if (!server) return undefined;
-
-		return { enabled: server.enabled, serverId };
+	// getters, not $derived fields: lazy evaluation keeps them off the class
+	// field initialization order (host is assigned by the constructor), and
+	// reads of the underlying $state stay tracked in reactive contexts
+	private get _disabledTools(): Set<string> {
+		return buildDisabledTools(this.host.activeConversation);
 	}
 
-	/**
-	 * Gets the effective MCP server override for a specific server.
-	 * A per-conversation override wins when present; a server without one
-	 * resolves to its `mcpServers[i].enabled` default.
-	 */
-	getMcpServerOverride(serverId: string): McpServerOverride | undefined {
-		const override = this.host.activeConversation?.mcpServerOverrides?.find(
-			(o: McpServerOverride) => o.serverId === serverId
+	private get _disabledToolCategories(): Set<ToolSource> {
+		return buildDisabledToolCategories(this.host.activeConversation);
+	}
+
+	/** Effective disabled tool keys for the current context, captured at flow start. */
+	getDisabledTools(): string[] {
+		return [...this._disabledTools];
+	}
+
+	/** Effective disabled tool categories for the current context, captured at flow start. */
+	getDisabledToolCategories(): ToolSource[] {
+		return [...this._disabledToolCategories];
+	}
+
+	/** Defaults snapshot for seeding a newly created conversation. */
+	getToolPolicySnapshot(): { disabledTools?: string[]; disabledToolCategories?: ToolSource[] } {
+		const disabledTools = [...toolsStore.disabledTools];
+		const disabledToolCategories = [...toolsStore.disabledToolCategories];
+
+		return {
+			disabledToolCategories: disabledToolCategories.length ? disabledToolCategories : undefined,
+			disabledTools: disabledTools.length ? disabledTools : undefined
+		};
+	}
+
+	/** Own-level state: the tool key itself, ignoring category and server group. */
+	isToolEnabled(key: string): boolean {
+		return !this._disabledTools.has(key);
+	}
+
+	/** Effective state: own key, MCP server group key, and category all on. */
+	isToolActive(entry: ToolEntry): boolean {
+		return toolsStore.isEntryEnabled(entry, this._disabledTools, this._disabledToolCategories);
+	}
+
+	/** True when a parent level (category or MCP server group) disables this entry. */
+	isToolParentDisabled(entry: ToolEntry): boolean {
+		if (!this.isCategoryEnabled(entry.source)) return true;
+
+		return (
+			entry.source === ToolSource.MCP &&
+			!!entry.serverId &&
+			!this.isServerToolsEnabled(entry.serverId)
 		);
-
-		if (override) return override;
-
-		return this.#getDefaultOverride(serverId);
 	}
 
-	/**
-	 * Gets the effective override list for the current conversation:
-	 * one entry per configured server, resolved per server. The stored
-	 * per-conversation list is sparse and only holds explicit toggles.
-	 */
-	getAllMcpServerOverrides(): McpServerOverride[] {
-		const overrides = this.host.activeConversation?.mcpServerOverrides;
+	async toggleTool(key: string): Promise<void> {
+		const conv: DatabaseConversation | null = this.host.activeConversation;
 
-		return mcpStore.getServers().map((s) => {
-			const override = overrides?.find((o: McpServerOverride) => o.serverId === s.id);
-
-			return { enabled: override?.enabled ?? s.enabled, serverId: s.id };
-		});
-	}
-
-	/** Checks if an MCP server is enabled for the active conversation. */
-	isMcpServerEnabledForChat(serverId: string): boolean {
-		const override = this.getMcpServerOverride(serverId);
-
-		return override?.enabled ?? false;
-	}
-
-	/**
-	 * Sets or removes MCP server override for the active conversation.
-	 * If no conversation exists, persists `enabled` onto `mcpServers[i].enabled`
-	 * (the single source of truth for new-chat defaults).
-	 */
-	async setMcpServerOverride(serverId: string, enabled: boolean | undefined): Promise<void> {
-		if (!this.host.activeConversation) {
-			if (enabled !== undefined) {
-				mcpStore.updateServer(serverId, { enabled });
-			}
+		if (!conv) {
+			toolsStore.toggleTool(key);
 
 			return;
 		}
 
-		// Clone to plain objects to avoid Proxy serialization issues with IndexedDB
-		const currentOverrides = (this.host.activeConversation.mcpServerOverrides || []).map(
-			(o: McpServerOverride) => ({
-				enabled: o.enabled,
-				serverId: o.serverId
-			})
-		);
+		const next = buildDisabledTools(conv);
 
-		let newOverrides: McpServerOverride[];
+		if (next.has(key)) next.delete(key);
+		else next.add(key);
 
-		if (enabled === undefined) {
-			newOverrides = currentOverrides.filter((o: McpServerOverride) => o.serverId !== serverId);
-		} else {
-			const existingIndex = currentOverrides.findIndex(
-				(o: McpServerOverride) => o.serverId === serverId
-			);
+		await this.persistDisabledTools(next);
+	}
 
-			if (existingIndex >= 0) {
-				newOverrides = [...currentOverrides];
-				newOverrides[existingIndex] = { enabled, serverId };
-			} else {
-				newOverrides = [...currentOverrides, { enabled, serverId }];
-			}
+	isCategoryEnabled(source: ToolSource): boolean {
+		return !this._disabledToolCategories.has(source);
+	}
+
+	async toggleCategory(source: ToolSource): Promise<void> {
+		const conv: DatabaseConversation | null = this.host.activeConversation;
+
+		if (!conv) {
+			toolsStore.toggleCategory(source);
+
+			return;
 		}
 
-		await DatabaseService.updateConversation(this.host.activeConversation.id, {
-			mcpServerOverrides: newOverrides.length > 0 ? newOverrides : undefined
-		});
+		const next = buildDisabledToolCategories(conv);
 
-		this.host.activeConversation = {
-			...this.host.activeConversation,
-			mcpServerOverrides: newOverrides.length > 0 ? newOverrides : undefined
-		};
+		if (next.has(source)) next.delete(source);
+		else next.add(source);
 
-		const convIndex = this.host.conversations.findIndex(
-			(c) => c.id === this.host.activeConversation!.id
-		);
+		await this.persistDisabledToolCategories(next);
+	}
+
+	/** Server-scoped MCP group state: one key disables all of that server's tools. */
+	isServerToolsEnabled(serverId: string): boolean {
+		return this.isToolEnabled(toolsStore.getMcpServerToolsKey(serverId));
+	}
+
+	async toggleServerTools(serverId: string): Promise<void> {
+		await this.toggleTool(toolsStore.getMcpServerToolsKey(serverId));
+	}
+
+	/** Group checkbox state: the category flag, or the server key for MCP groups. */
+	isGroupChecked(group: ToolGroup): boolean {
+		return group.source === ToolSource.MCP && group.serverId
+			? this.isServerToolsEnabled(group.serverId)
+			: this.isCategoryEnabled(group.source);
+	}
+
+	async toggleGroup(group: ToolGroup): Promise<void> {
+		if (group.source === ToolSource.MCP && group.serverId) {
+			await this.toggleServerTools(group.serverId);
+		} else {
+			await this.toggleCategory(group.source);
+		}
+	}
+
+	hasEnabledCwdTools(): boolean {
+		return toolsStore.hasEnabledCwdTools(this._disabledTools, this._disabledToolCategories);
+	}
+
+	private async persistDisabledTools(disabled: Set<string>): Promise<void> {
+		const conv = this.host.activeConversation;
+
+		if (!conv) return;
+
+		const disabledTools = disabled.size ? [...disabled] : undefined;
+
+		await DatabaseService.updateConversation(conv.id, { disabledTools });
+
+		this.host.activeConversation = { ...conv, disabledTools };
+
+		const convIndex = this.host.conversations.findIndex((c) => c.id === conv.id);
 
 		if (convIndex !== -1) {
-			this.host.conversations[convIndex].mcpServerOverrides =
-				newOverrides.length > 0 ? newOverrides : undefined;
+			this.host.conversations[convIndex].disabledTools = disabledTools;
 		}
 	}
 
-	/** Toggles MCP server enabled state for the active conversation. */
-	async toggleMcpServerForChat(serverId: string): Promise<void> {
-		const currentEnabled = this.isMcpServerEnabledForChat(serverId);
+	private async persistDisabledToolCategories(disabled: Set<ToolSource>): Promise<void> {
+		const conv = this.host.activeConversation;
 
-		await this.setMcpServerOverride(serverId, !currentEnabled);
-	}
+		if (!conv) return;
 
-	/** Removes MCP server override for the active conversation. */
-	async removeMcpServerOverride(serverId: string): Promise<void> {
-		await this.setMcpServerOverride(serverId, undefined);
+		const disabledToolCategories = disabled.size ? [...disabled] : undefined;
+
+		await DatabaseService.updateConversation(conv.id, { disabledToolCategories });
+
+		this.host.activeConversation = { ...conv, disabledToolCategories };
+
+		const convIndex = this.host.conversations.findIndex((c) => c.id === conv.id);
+
+		if (convIndex !== -1) {
+			this.host.conversations[convIndex].disabledToolCategories = disabledToolCategories;
+		}
 	}
 
 	/**
