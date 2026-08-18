@@ -2251,8 +2251,9 @@ struct ggml_backend_meta_context {
     int stc_index = 0;
 
     void *                               comm_ctx       = nullptr;
-    ggml_backend_comm_allreduce_tensor_t comm_allreduce = nullptr;
-    bool                                 logged_generic_allreduce = false;
+    ggml_backend_comm_allreduce_tensor_t     comm_allreduce = nullptr;
+    ggml_backend_comm_allreduce_fused_prefix_t comm_allreduce_fused_prefix = nullptr;
+    bool                                     logged_generic_allreduce = false;
 
     ggml_backend_meta_context(ggml_backend_dev_t meta_dev, const char * params) {
         const size_t n_devs = ggml_backend_meta_dev_n_devs(meta_dev);
@@ -2293,6 +2294,9 @@ struct ggml_backend_meta_context {
                 ggml_backend_reg_get_proc_address(ggml_backend_dev_backend_reg(
                     ggml_backend_get_device(simple_backends[0])), "ggml_backend_comm_allreduce_tensor");
             GGML_ASSERT(comm_allreduce != nullptr);
+            comm_allreduce_fused_prefix = (ggml_backend_comm_allreduce_fused_prefix_t)
+                ggml_backend_reg_get_proc_address(ggml_backend_dev_backend_reg(
+                    ggml_backend_get_device(simple_backends[0])), "ggml_backend_comm_allreduce_fused_prefix");
         }
     }
 
@@ -2937,10 +2941,22 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
     };
 
 
+    size_t next_subgraph_skip = 0;
     for (size_t i = 0; i < backend_ctx->n_subgraphs; i++) {
+        const size_t this_subgraph_skip = next_subgraph_skip;
+        next_subgraph_skip = 0;
         for (size_t j = 0; j < n_backends; j++) {
             auto & bcj = backend_ctx->backend_configs[j];
-            const ggml_status status = ggml_backend_graph_compute_async(bcj.backend, bcj.cgraphs[i].cgraph_main);
+            ggml_cgraph * submit_graph = bcj.cgraphs[i].cgraph_main;
+            ggml_cgraph trimmed_graph;
+            if (this_subgraph_skip != 0) {
+                GGML_ASSERT(this_subgraph_skip < size_t(submit_graph->n_nodes));
+                trimmed_graph = *submit_graph;
+                trimmed_graph.nodes += this_subgraph_skip;
+                trimmed_graph.n_nodes -= int(this_subgraph_skip);
+                submit_graph = &trimmed_graph;
+            }
+            const ggml_status status = ggml_backend_graph_compute_async(bcj.backend, submit_graph);
             if (status != GGML_STATUS_SUCCESS) {
                 return status;
             }
@@ -2949,14 +2965,57 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
         if (n_backends > 1 && i < backend_ctx->n_subgraphs - 1) {
             bool backend_allreduce_success = false;
             if (backend_ctx->comm_ctx) {
-                std::vector<ggml_tensor *> nodes;
-                nodes.reserve(n_backends);
+                const bool try_fused_prefix = backend_ctx->comm_allreduce_fused_prefix != nullptr;
+                // One allocation for all pointer arrays instead of five allocations at
+                // each hot TP boundary. Ordinary backends retain the original n-element size.
+                std::vector<ggml_tensor *> comm_args(n_backends * (try_fused_prefix ? 5 : 1));
+                ggml_tensor ** nodes     = comm_args.data();
+                ggml_tensor ** reshapes  = try_fused_prefix ? nodes +     n_backends : nullptr;
+                ggml_tensor ** adds      = try_fused_prefix ? nodes + 2 * n_backends : nullptr;
+                ggml_tensor ** rms_norms = try_fused_prefix ? nodes + 3 * n_backends : nullptr;
+                ggml_tensor ** muls      = try_fused_prefix ? nodes + 4 * n_backends : nullptr;
                 for (size_t j = 0; j < n_backends; j++) {
                     auto & bcj = backend_ctx->backend_configs[j];
                     ggml_cgraph * cgraph_ij = bcj.cgraphs[i].cgraph_main;
-                    nodes.push_back(cgraph_ij->nodes[cgraph_ij->n_nodes-1]);
+                    nodes[j] = cgraph_ij->nodes[cgraph_ij->n_nodes-1];
                 }
-                backend_allreduce_success = backend_ctx->comm_allreduce(backend_ctx->comm_ctx, nodes.data());
+                if (try_fused_prefix) {
+                    bool prefix_available = true;
+                    for (size_t j = 0; j < n_backends; ++j) {
+                        ggml_cgraph * next = backend_ctx->backend_configs[j].cgraphs[i + 1].cgraph_main;
+                        if (next->n_nodes < 5) {
+                            prefix_available = false;
+                            break;
+                        }
+                        reshapes[j]  = next->nodes[0];
+                        adds[j]      = next->nodes[1];
+                        rms_norms[j] = next->nodes[2];
+                        muls[j]      = next->nodes[3];
+                        // The extension does not materialize the skipped view or RMS output.
+                        // Reject trimming if either has another retained direct consumer.
+                        for (int k = 4; prefix_available && k < next->n_nodes; ++k) {
+                            for (int src = 0; src < GGML_MAX_SRC; ++src) {
+                                if (next->nodes[k]->src[src] == reshapes[j] || next->nodes[k]->src[src] == rms_norms[j]) {
+                                    prefix_available = false;
+                                    break;
+                                }
+                            }
+                        }
+                        if (!prefix_available) {
+                            break;
+                        }
+                    }
+                    if (prefix_available) {
+                        backend_allreduce_success = backend_ctx->comm_allreduce_fused_prefix(
+                            backend_ctx->comm_ctx, nodes, reshapes, adds, rms_norms, muls);
+                        if (backend_allreduce_success) {
+                            next_subgraph_skip = 4;
+                        }
+                    }
+                }
+                if (!backend_allreduce_success) {
+                    backend_allreduce_success = backend_ctx->comm_allreduce(backend_ctx->comm_ctx, nodes);
+                }
             }
 
             if (!backend_allreduce_success) {

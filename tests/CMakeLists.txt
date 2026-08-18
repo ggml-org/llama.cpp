@@ -282,6 +282,10 @@ llama_build_and_test(test-backend-ops.cpp)
 llama_build_and_test(test-cuda-allreduce-precision.cpp)
 target_include_directories(test-cuda-allreduce-precision PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../ggml/src)
 
+# Topology/rank policy contract for the packaged RCCL tuner.
+llama_build_and_test(test-rdna2-rccl-policy.cpp)
+target_include_directories(test-rdna2-rccl-policy PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../ggml/src/ggml-hip)
+
 # Pure host-side selector contract for the bounded gfx1030 routed MMVQ six-row path.
 llama_build_and_test(test-mmvq-batch6-config.cpp)
 target_include_directories(test-mmvq-batch6-config PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../ggml/src/ggml-cuda)

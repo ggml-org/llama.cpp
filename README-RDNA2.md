@@ -53,7 +53,6 @@ Important build options used by the helper:
 The benchmark environment was:
 
 ```bash
-export GGML_CUDA_ALLREDUCE=nccl
 export HSA_OVERRIDE_GFX_VERSION=10.3.0
 export HSA_NO_SCRATCH_RECLAIM=1
 ```
@@ -65,26 +64,31 @@ list of upstream debugging variables.
 
 | Setting | What it does | Guidance |
 |---|---|---|
-| `GGML_CUDA_ALLREDUCE=nccl` | Uses RCCL/NCCL for tensor-parallel collectives. | Recommended for four V620s and **required** by `GGML_TP_VOCAB_OUTPUT`. |
+| `GGML_CUDA_ALLREDUCE=nccl` | Uses RCCL/NCCL for tensor-parallel collectives. | Optional on Linux, where RCCL/NCCL is already the default; still **required** by `GGML_TP_VOCAB_OUTPUT`. |
 | `GGML_CUDA_ALLREDUCE=internal` | Uses the experimental internal collective when supported. | Mainly useful for two-device testing; not compatible with vocabulary-parallel output. |
 | `GGML_CUDA_ALLREDUCE=none` | Disables the backend collective and lets the meta backend use its generic butterfly fallback. | Debug/A-B option; slower here and not compatible with vocabulary-parallel output. |
 | `GGML_HIP_GRAPHS=1` as a shell variable | No runtime effect in the current implementation. | Harmless but redundant in older command examples; use the CMake option instead. |
 | `HSA_OVERRIDE_GFX_VERSION=10.3.0` | Presents the V620 as the tested `gfx1030` target. | Retained for reproducibility; it may be unnecessary on a native `gfx1030` runtime. |
 | `HSA_NO_SCRATCH_RECLAIM=1` | Keeps HIP scratch allocations instead of reclaiming them between work. | Improves stability/consistency at the cost of retaining more GPU memory. |
-| `GGML_TP_SHARDED_OUTPUT=1` | Splits validated Qwen 35B/122B output heads along the embedding dimension, then FP32-all-reduces full logits. | Supports raw and MTP paths. Do not combine with `GGML_TP_VOCAB_OUTPUT`. |
+| `GGML_TP_SHARDED_OUTPUT=auto|0|1` | Splits validated output heads along the embedding dimension, then FP32-all-reduces full logits. | Defaults to `auto` for Qwen35 27B; use `1` for other validated Qwen 35B/122B paths or `0` to disable. Do not combine with `GGML_TP_VOCAB_OUTPUT`. |
 | `GGML_TP_VOCAB_OUTPUT=1` | Splits an eligible output head along vocabulary, selects local candidates, and exchanges only compact TOP_K results. | Raw decode only for now; requires RCCL, CPU sampling, finite `top_k <= 256`, and at most one output row. Do not combine with `GGML_TP_SHARDED_OUTPUT`. |
 
-`GGML_CUDA_ALLREDUCE` may be left unset, in which case Linux currently tries
-RCCL first. Set it explicitly to `nccl` for reproducible runs and because the
-vocabulary-parallel eligibility check requires that exact selection.
-Unrecognized values behave like `none` after a warning.
+`GGML_CUDA_ALLREDUCE` may be left unset, in which case Linux tries RCCL first.
+A HIP/RCCL build also packages a topology-aware tuner and discovers it without
+a user path. Certified tuples receive their measured policy; unknown rank,
+GPU, link, message-size, or RCCL tuples stay on RCCL Auto. The custom P2P
+schedules additionally byte-compare themselves with the installed RCCL before
+activation. See [Native RDNA2 RCCL and P2P coordination](docs/rdna2-native-coordination.md).
+Set `GGML_CUDA_ALLREDUCE` explicitly only to override this behavior or because
+the vocabulary-parallel eligibility check requires `nccl`. Unrecognized values
+behave like `none` after a warning.
 
 ### Output-head modes and compatibility
 
 | Output mode | Environment | What happens | Raw decode | MTP / parallel slots |
 |---|---|---|---:|---|
-| Mirrored (default) | Leave both TP output flags unset | Every rank computes the complete output head; no logits collective is needed. | Baseline | Supported |
-| Embedding-sharded | `GGML_TP_SHARDED_OUTPUT=1` | Every rank computes a partial contribution for the full vocabulary; FP32 all-reduce produces complete mirrored logits. | Moderate model-dependent gain | Supported on the validated Qwen 35B/122B paths |
+| Mirrored | `GGML_TP_SHARDED_OUTPUT=0` | Every rank computes the complete output head; no logits collective is needed. | Baseline | Supported |
+| Embedding-sharded | `GGML_TP_SHARDED_OUTPUT=auto|1` | Every rank computes a partial contribution for the full vocabulary; FP32 all-reduce produces complete mirrored logits. Qwen35 27B selects this automatically. | Moderate model-dependent gain | Supported on the validated Qwen paths |
 | Vocabulary-sharded | `GGML_TP_VOCAB_OUTPUT=1` and `GGML_CUDA_ALLREDUCE=nccl` | Every rank computes complete logits for its vocabulary slice; deterministic local TOP_K results are exchanged and merged. | **About 15% over mirrored** on the tested 27B model | MTP and multi-output/parallel-slot batching are not yet supported |
 
 The two sharding flags are alternatives, not layers. They split different axes

@@ -1367,6 +1367,21 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
     std::vector<int>                i_last;
     std::vector<std::vector<float>> chain_h;
 
+    std::vector<llama_token> deferred_tokens;
+    std::vector<llama_pos> deferred_pos;
+    std::vector<float> deferred_embd;
+    bool deferred_catchup_ready = false;
+    bool deferred_catchup_logged = false;
+    bool deferred_auto_model = false;
+    bool deferred_replay_logged = false;
+
+    void clear_deferred_catchup() {
+        deferred_tokens.clear();
+        deferred_pos.clear();
+        deferred_embd.clear();
+        deferred_catchup_ready = false;
+    }
+
     common_speculative_impl_draft_mtp(const common_params_speculative & params, uint32_t n_seq)
         : common_speculative_impl(COMMON_SPECULATIVE_TYPE_DRAFT_MTP, n_seq)
         , params(params.draft)
@@ -1379,6 +1394,10 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         GGML_ASSERT(n_embd == llama_model_n_embd_out(llama_get_model(ctx_tgt)) &&
                 "MTP input row width must match the target h_nextn width");
         n_mtp_layers = std::max(1, (int) llama_model_n_layer_nextn(llama_get_model(ctx_dft)));
+        char target_arch[32] = {};
+        const int32_t arch_len = llama_model_meta_val_str(
+            llama_get_model(ctx_tgt), "general.architecture", target_arch, sizeof(target_arch));
+        deferred_auto_model = arch_len >= 0 && std::strcmp(target_arch, "qwen35") == 0 && n_embd == 5120;
 
         SPC_TRC("%s", "adding speculative implementation 'draft-mtp'\n");
         SPC_TRC("- n_max=%d, n_min=%d, p_min=%.2f, n_embd=%d, backend_sampling=%d\n", this->params.n_max, this->params.n_min, this->params.p_min, n_embd, (int) this->params.backend_sampling);
@@ -1485,6 +1504,17 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
     }
 
     bool process(const llama_batch & batch_in) override {
+        // If accept() did not consume a captured batch, the server took its
+        // checkpoint/replay branch and restored the draft context. Do not let
+        // that stale capture leak into the replay or the next request.
+        if (deferred_catchup_ready) {
+            if (!deferred_replay_logged) {
+                SPC_INF("%s", "discarding deferred MTP catch-up after checkpoint/replay restore\n");
+                deferred_replay_logged = true;
+            }
+            clear_deferred_catchup();
+        }
+
         if (batch_in.n_tokens <= 0) {
             return true;
         }
@@ -1518,6 +1548,22 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
         const size_t row_bytes = (size_t) n_embd * sizeof(float);
 
+        // Opt-in Qwen MTP path: preserve the exact full-width verification
+        // batch but schedule draft-context catch-up after target acceptance.
+        // Requiring logits on all rows distinguishes verification from an
+        // unrelated five-token prompt/prefill batch.
+        const char * defer_env = std::getenv("GGML_MTP_DEFER_CATCHUP");
+        const bool defer_force = defer_env != nullptr && std::strcmp(defer_env, "1") == 0;
+        const bool defer_auto = defer_env == nullptr || std::strcmp(defer_env, "auto") == 0;
+        const bool defer_requested = defer_force || (defer_auto && deferred_auto_model);
+        bool all_logits = batch_in.logits != nullptr;
+        for (int32_t k = 0; all_logits && k < n_tokens; ++k) {
+            all_logits = batch_in.logits[k] != 0;
+        }
+        const bool defer_catchup = defer_requested &&
+                n_seq == 1 && n_mtp_layers == 1 && !chain_heads && !is_mem_shared &&
+                this->params.n_max == 4 && n_tokens == 5 && all_logits;
+
         // if kv is shared with target (e.g Gemma4), then we can skip this catch-up decode
         if (!is_mem_shared) {
             common_batch_clear(batch);
@@ -1549,35 +1595,46 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                 set_h(i_batch_beg[seq_id], pending_h[seq_id].data());
             }
 
-            auto * mem_dft = llama_get_memory(ctx_dft);
+            if (defer_catchup) {
+                deferred_tokens.assign(batch.token, batch.token + batch.n_tokens);
+                deferred_pos.assign(batch.pos, batch.pos + batch.n_tokens);
+                deferred_embd.assign(batch.embd, batch.embd + (size_t) batch.n_tokens * n_embd);
+                deferred_catchup_ready = true;
+                if (!deferred_catchup_logged) {
+                    SPC_INF("%s", "using deferred full-width MTP draft-context catch-up scheduling\n");
+                    deferred_catchup_logged = true;
+                }
+            } else {
+                auto * mem_dft = llama_get_memory(ctx_dft);
 
-            bool ok = true;
-            for (int head = 0; head < n_mtp_layers; ++head) {
-                if (chain_heads) {
-                    // ref: https://github.com/ggml-org/llama.cpp/pull/24340/changes#r3413498544
-                    for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
-                        if (i_batch_beg[seq_id] < 0) {
-                            continue;
+                bool ok = true;
+                for (int head = 0; head < n_mtp_layers; ++head) {
+                    if (chain_heads) {
+                        // ref: https://github.com/ggml-org/llama.cpp/pull/24340/changes#r3413498544
+                        for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
+                            if (i_batch_beg[seq_id] < 0) {
+                                continue;
+                            }
+                            llama_memory_seq_rm(mem_dft, seq_id, batch_in.pos[i_batch_beg[seq_id]], -1);
                         }
-                        llama_memory_seq_rm(mem_dft, seq_id, batch_in.pos[i_batch_beg[seq_id]], -1);
+                        llama_set_nextn_layer_offset(ctx_dft, head);
                     }
-                    llama_set_nextn_layer_offset(ctx_dft, head);
+
+                    const int32_t rc = llama_decode(ctx_dft, batch);
+                    if (rc != 0) {
+                        SPC_ERR("llama_decode(ctx_dft) head=%d failed rc=%d (pos=%d)\n",
+                                head, (int) rc, (int) batch_in.pos[0]);
+                        ok = false;
+                        break;
+                    }
                 }
 
-                const int32_t rc = llama_decode(ctx_dft, batch);
-                if (rc != 0) {
-                    SPC_ERR("llama_decode(ctx_dft) head=%d failed rc=%d (pos=%d)\n",
-                            head, (int) rc, (int) batch_in.pos[0]);
-                    ok = false;
-                    break;
+                if (chain_heads) {
+                    llama_set_nextn_layer_offset(ctx_dft, 0); // restore default for non-draft decodes
                 }
-            }
-
-            if (chain_heads) {
-                llama_set_nextn_layer_offset(ctx_dft, 0); // restore default for non-draft decodes
-            }
-            if (!ok) {
-                return false;
+                if (!ok) {
+                    return false;
+                }
             }
         }
 
@@ -1761,6 +1818,27 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         const int32_t n_rows = verify_h_rows[seq_id];
         if (n_rows <= 0) {
             return;
+        }
+
+        if (deferred_catchup_ready) {
+            if (seq_id != 0 || deferred_tokens.size() != 5 || deferred_pos.size() != 5 ||
+                    deferred_embd.size() != (size_t) 5 * n_embd) {
+                SPC_ERR("%s", "discarding malformed deferred MTP catch-up batch\n");
+                clear_deferred_catchup();
+                return;
+            }
+            common_batch_clear(batch);
+            for (int32_t i = 0; i < 5; ++i) {
+                common_batch_add(batch, deferred_tokens[i], deferred_pos[i], { seq_id }, 0);
+                std::memcpy(batch.embd + (size_t) i * n_embd,
+                        deferred_embd.data() + (size_t) i * n_embd, (size_t) n_embd * sizeof(float));
+            }
+            const int32_t rc = llama_decode(params.ctx_dft, batch);
+            clear_deferred_catchup();
+            if (rc != 0) {
+                SPC_ERR("llama_decode(ctx_dft) failed for deferred MTP catch-up rc=%d\n", (int) rc);
+                return;
+            }
         }
 
         const int32_t i_h = std::min<int32_t>(n_accepted, n_rows - 1);
