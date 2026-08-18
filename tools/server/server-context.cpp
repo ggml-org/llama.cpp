@@ -42,8 +42,11 @@ constexpr int HTTP_POLLING_SECONDS = 1;
 
 static common_speculative_output_limits server_output_limits(const common_params & params) {
     if (!params.mmproj.path.empty()) {
-        // gen-audio (TTS) capability isn't known until the mmproj loads, size generously
-        return { params.n_batch, params.n_batch };
+        const auto mcaps = mtmd_get_cap_from_file(params.mmproj.path.c_str());
+        if (mcaps.gen_audio) {
+            // some TTS models decode with embeddings output for the whole batch
+            return { params.n_batch, params.n_batch };
+        }
     }
 
     if (params.embedding ||

@@ -337,6 +337,7 @@ MTMD_API void mtmd_log_set(ggml_log_callback log_callback, void * user_data);
 struct mtmd_caps {
     bool inp_vision;
     bool inp_audio;
+    bool gen_audio;
 };
 MTMD_API struct mtmd_caps mtmd_get_cap_from_file(const char * mmproj_fname);
 

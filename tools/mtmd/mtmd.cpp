@@ -2510,10 +2510,11 @@ struct mtmd_caps mtmd_get_cap_from_file(const char * fname) {
         mtmd_caps cap;
         cap.inp_audio  = tmp.has_audio;
         cap.inp_vision = tmp.has_vision;
+        cap.gen_audio  = tmp.has_gen_audio;
         return cap;
     } catch (const std::exception & e) {
         LOG_ERR("%s: failed to get capabilities from file '%s': %s\n", __func__, fname, e.what());
-        return mtmd_caps{ false, false };
+        return mtmd_caps{ false, false, false };
     }
 }
 
