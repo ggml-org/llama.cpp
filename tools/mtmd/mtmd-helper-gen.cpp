@@ -1070,7 +1070,7 @@ void mtmd_helper_gen_audio_free(mtmd_helper_gen_audio * ctx) {
 }
 
 void mtmd_helper_gen_audio_reset(mtmd_helper_gen_audio * ctx) {
-    if (ctx->pipeline) {
+    if (ctx && ctx->pipeline) {
         ctx->pipeline->reset();
     }
 }

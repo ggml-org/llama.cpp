@@ -213,17 +213,21 @@ struct server_slot {
 
     struct tts_ctx {
         mtmd_helper::gen_audio ctx;
+        std::vector<float> h_state_prompt; // the first h_state after step_prompt done
         const float * h_state;
         llama_token   sampled;
         int32_t       n_decoded;
+        bool          stop;
         bool is_supported() const {
             return ctx.valid();
         }
         void reset() {
             ctx.reset();
+            h_state_prompt.clear();
             h_state   = nullptr;
             sampled   = LLAMA_TOKEN_NULL;
             n_decoded = 0;
+            stop      = false;
         }
     };
     tts_ctx tts;
@@ -534,6 +538,11 @@ struct server_slot {
 
             // do not keep context of the child slots - the parent's context is enough
             if (task->is_child()) {
+                prompt_clear();
+            }
+
+            // mtmd_helper always re-eval the whole prompt
+            if (task->type == SERVER_TASK_TYPE_TTS) {
                 prompt_clear();
             }
 
@@ -1759,6 +1768,8 @@ private:
             if (!slot.tts.is_supported()) {
                 slot.tts.ctx.init(ctx_tgt, slot.mctx);
             }
+            // mtmd_helper always re-eval the whole prompt
+            slot.prompt_clear();
             task.tts_inp.data.seq_id = slot.id;
             if (slot.tts.ctx.set_input(task.tts_inp.get()) != 0) {
                 send_error(task, "failed to process TTS prompt", ERROR_TYPE_SERVER);
@@ -2903,16 +2914,19 @@ private:
                     send_error(slot, "TTS prompt processing failed", ERROR_TYPE_SERVER);
                     slot.release();
                 } else if (ret == 0) {
+                    // done prompt, do sample and save h_state_prompt
                     slot.tts.sampled = common_sampler_sample(slot.smpl.get(), ctx_tgt, -1);
                     common_sampler_accept(slot.smpl.get(), slot.tts.sampled, true);
-                    slot.tts.h_state = llama_get_embeddings_ith(ctx_tgt, -1);
+                    const float * h_embd = llama_get_embeddings_ith(ctx_tgt, -1);
+                    slot.tts.h_state_prompt.assign(h_embd, h_embd + llama_model_n_embd(model_tgt));
+                    slot.tts.h_state = slot.tts.h_state_prompt.data();
                     slot.state = SLOT_STATE_GENERATING;
                 }
                 return;
             }
 
             const int32_t n_predict = slot.task->params.n_predict > 0 ? slot.task->params.n_predict : 512;
-            if (slot.tts.n_decoded >= n_predict || llama_vocab_is_eog(vocab, slot.tts.sampled)) {
+            if (slot.tts.stop || slot.tts.n_decoded >= n_predict) {
                 int32_t      sample_rate = 0;
                 const char * data        = nullptr;
                 size_t       data_len    = 0;
@@ -2927,16 +2941,25 @@ private:
             }
 
             const float * h_state_next = nullptr;
-            if (slot.tts.ctx.step_gen(slot.tts.sampled, slot.tts.h_state, &h_state_next) != 0) {
+            bool          stop         = false;
+            if (slot.tts.ctx.step_gen(slot.tts.sampled, slot.tts.h_state, &h_state_next, &stop) != 0) {
                 send_error(slot, "TTS generation failed", ERROR_TYPE_SERVER);
                 slot.release();
                 return;
             }
+            if (h_state_next == nullptr) {
+                // end-of-speech without a new frame (e.g. pocket-tts eos head)
+                slot.tts.stop = true;
+                return;
+            }
             slot.tts.h_state = h_state_next;
             slot.tts.n_decoded++;
+            slot.tts.stop = stop;
 
-            slot.tts.sampled = common_sampler_sample(slot.smpl.get(), ctx_tgt, -1);
-            common_sampler_accept(slot.smpl.get(), slot.tts.sampled, true);
+            if (!stop) {
+                slot.tts.sampled = common_sampler_sample(slot.smpl.get(), ctx_tgt, -1);
+                common_sampler_accept(slot.smpl.get(), slot.tts.sampled, true);
+            }
 
             if (slot.task->params.stream) {
                 int32_t      sample_rate = 0;
