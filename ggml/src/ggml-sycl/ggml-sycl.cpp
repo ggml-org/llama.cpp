@@ -5973,10 +5973,6 @@ static bool do_ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, cons
                     return false;
                 }
 
-                if (a->ne[3] != b->ne[3]) {
-                    return false;
-                }
-
                 ggml_type src0_type = op->src[0]->type;
 
                 // TODO: The configuration below needs more work to be supported with oneDNN
