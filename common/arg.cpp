@@ -3758,6 +3758,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
+        {"--sleep-exit-worker"},
+        {"--no-sleep-exit-worker"},
+        string_format("in router mode, whether to exit workers when they enter sleep (default: %s)", params.sleep_exit_worker ? "enabled" : "disabled"),
+        [](common_params & params, bool value) {
+            params.sleep_exit_worker = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_SLEEP_EXIT_WORKER"));
+    add_opt(common_arg(
         {"--simple-io"},
         "use basic IO for better compatibility in subprocesses and limited consoles",
         [](common_params & params) {

@@ -237,6 +237,7 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `-sps, --slot-prompt-similarity SIMILARITY` | how much the prompt of a request must match the prompt of a slot in order to use that slot (default: 0.10, 0.0 = disabled) |
 | `--lora-init-without-apply` | load LoRA adapters without applying them (apply later via POST /lora-adapters) (default: disabled) |
 | `--sleep-idle-seconds SECONDS` | number of seconds of idleness after which the server will sleep (default: -1; -1 = disabled) |
+| `--sleep-exit-worker, --no-sleep-exit-worker` | in router mode, whether to exit workers when they enter sleep (default: disabled)<br/>(env: LLAMA_ARG_SLEEP_EXIT_WORKER) |
 | `--log-prompts-dir PATH` | Log prompts to directory (auto-created if not present; only used for debugging, default: disabled) |
 | `--spec-draft-hf, -hfd, -hfrd, --hf-repo-draft <user>/<model>[:quant]` | Same as --hf-repo, but for the draft model (default: unused)<br/>(env: LLAMA_ARG_SPEC_DRAFT_HF_REPO) |
 | `--spec-draft-threads, -td, --threads-draft N` | number of threads to use during generation (default: same as --threads) |
@@ -1857,6 +1858,13 @@ The `status` object can be:
 }
 ```
 
+```json
+"status": {
+  "value": "unloading",
+  "args": ["llama-server", "-ctx", "4096"]
+}
+```
+
 Note: for "downloading" state, there can be multiple files be downloading in parallel
 
 ```json
@@ -2063,6 +2071,10 @@ Example of an error:
 The server supports an automatic sleep mode that activates after a specified period of inactivity (no incoming tasks). This feature, introduced in [PR #18228](https://github.com/ggml-org/llama.cpp/pull/18228), can be enabled using the `--sleep-idle-seconds` command-line argument. It works seamlessly in both single-model and multi-model configurations.
 
 When the server enters sleep mode, the model and its associated memory (including the KV cache) are unloaded from RAM to conserve resources. Any new incoming task will automatically trigger the model to reload.
+
+In router mode, `--sleep-exit-worker` also terminates the worker process after it enters sleep. This releases backend contexts held by the process. With model autoload enabled, the next request starts a new worker and reloads the model. With `--no-models-autoload`, the model must be loaded explicitly before it can serve another request.
+
+The option can also be set per model in a preset with `sleep-exit-worker = true`. The command-line and preset precedence rules described in [Model presets](#model-presets) apply.
 
 The sleeping status can be retrieved from the `GET /props` endpoint (or `/props?model=(model_name)` in router mode).
 

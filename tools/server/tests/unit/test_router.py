@@ -158,6 +158,96 @@ def _tokenize(model_id: str, timeout: float | None = DEFAULT_REQUEST_TIMEOUT) ->
     )
 
 
+def test_router_sleep_keeps_worker_by_default():
+    global server
+    server.sleep_idle_seconds = 1
+    server.start()
+
+    first = _tokenize(MODEL_A, timeout=120)
+    assert first.status_code == 200
+    _wait_for_model_status(MODEL_A, {"sleeping"}, timeout=30)
+
+    second = _tokenize(MODEL_A, timeout=120)
+    assert second.status_code == 200
+    _wait_for_model_status(MODEL_A, {"loaded"}, timeout=30)
+
+
+def test_router_sleep_exit_worker():
+    global server
+    server.sleep_idle_seconds = 1
+    server.sleep_exit_worker = True
+    server.start()
+
+    first = _tokenize(MODEL_A, timeout=120)
+    assert first.status_code == 200
+    _wait_for_model_status(MODEL_A, {"unloaded"}, timeout=30)
+
+    second = _tokenize(MODEL_A, timeout=120)
+    assert second.status_code == 200
+    _wait_for_model_status(MODEL_A, {"loaded"}, timeout=30)
+
+
+def test_router_request_during_sleep_unload():
+    global server
+    server.sleep_idle_seconds = 1
+    server.sleep_exit_worker = True
+    server.start()
+
+    first = _tokenize(MODEL_A, timeout=120)
+    assert first.status_code == 200
+    _wait_for_model_status(MODEL_A, {"unloading"}, timeout=30)
+
+    during_unload = _tokenize(MODEL_A, timeout=120)
+    assert during_unload.status_code == 200
+    _wait_for_model_status(MODEL_A, {"loaded"}, timeout=30)
+
+
+def test_router_sleep_exit_worker_without_autoload():
+    global server
+    server.no_models_autoload = True
+    server.sleep_idle_seconds = 1
+    server.sleep_exit_worker = True
+    server.start()
+
+    _load_model_and_wait(MODEL_A, timeout=120)
+    first = _tokenize(MODEL_A, timeout=120)
+    assert first.status_code == 200
+    _wait_for_model_status(MODEL_A, {"unloaded"}, timeout=30)
+
+    unloaded = _tokenize(MODEL_A)
+    assert unloaded.status_code == 400
+    _load_model_and_wait(MODEL_A, timeout=120)
+    loaded = _tokenize(MODEL_A)
+    assert loaded.status_code == 200
+
+
+def test_router_sleep_exit_worker_from_preset():
+    global server
+    model_id = "sleep-exit-model"
+    preset_path = os.path.join(TMP_DIR, "test_sleep_exit_worker.ini")
+    with open(preset_path, "w") as f:
+        f.write(
+            f"[{model_id}]\n"
+            "hf-repo = ggml-org/test-model-stories260K\n"
+            "sleep-idle-seconds = 1\n"
+            "sleep-exit-worker = true\n"
+        )
+
+    try:
+        server.models_preset = preset_path
+        server.start()
+
+        first = _tokenize(model_id, timeout=120)
+        assert first.status_code == 200
+        _wait_for_model_status(model_id, {"unloaded"}, timeout=30)
+
+        second = _tokenize(model_id, timeout=120)
+        assert second.status_code == 200
+        _wait_for_model_status(model_id, {"loaded"}, timeout=30)
+    finally:
+        os.remove(preset_path)
+
+
 class _Bg:
     """runs one request in a thread, keeps its result, error and finish time"""
 

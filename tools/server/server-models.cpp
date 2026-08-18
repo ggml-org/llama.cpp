@@ -1182,6 +1182,9 @@ void server_models::update_status(const std::string & name, const update_status_
     auto it = mapping.find(name);
     if (it != mapping.end()) {
         auto & meta = it->second.meta;
+        if (meta.status == SERVER_MODEL_STATUS_UNLOADING && args.status != SERVER_MODEL_STATUS_UNLOADED) {
+            return;
+        }
         meta.status      = args.status;
         meta.exit_code   = args.exit_code;
         if (!args.loaded_info.is_null()) {
@@ -1209,6 +1212,37 @@ void server_models::update_status(const std::string & name, const update_status_
         notify_sse("status_change", name, data);
     }
     cv.notify_all();
+}
+
+void server_models::update_sleeping_status(const std::string & name) {
+    server_model_status status = SERVER_MODEL_STATUS_SLEEPING;
+    bool stop_worker = false;
+    {
+        std::unique_lock<std::mutex> lk(mutex);
+        auto it = mapping.find(name);
+        if (it == mapping.end() || it->second.meta.status == SERVER_MODEL_STATUS_UNLOADING) {
+            return;
+        }
+
+        std::string value;
+        bool exit_worker = it->second.meta.preset.get_option("LLAMA_ARG_SLEEP_EXIT_WORKER", value)
+            && common_arg_utils::is_truthy(value);
+        if (exit_worker && it->second.req_count == 0) {
+            status = SERVER_MODEL_STATUS_UNLOADING;
+            stopping_models.insert(name);
+            stop_worker = true;
+        }
+        it->second.meta.status = status;
+        it->second.meta.exit_code = 0;
+    }
+
+    notify_sse("status_change", name, {
+        {"status", server_model_status_to_string(status)},
+    });
+    cv.notify_all();
+    if (stop_worker) {
+        cv_stop.notify_all();
+    }
 }
 
 void server_models::update_download_progress(const std::string & name, const common_download_progress & progress, bool done, bool ok) {
@@ -1333,6 +1367,21 @@ bool server_models::ensure_model_ready(const std::string & name, const std::func
     if (meta->status == SERVER_MODEL_STATUS_SLEEPING) {
         return false; // child is sleeping but still running; new request will wake it up
     }
+    if (meta->status == SERVER_MODEL_STATUS_UNLOADING) {
+        std::unique_lock<std::mutex> lk(mutex);
+        while (true) {
+            auto it = mapping.find(name);
+            if (it == mapping.end() || it->second.meta.status != SERVER_MODEL_STATUS_UNLOADING) {
+                break;
+            }
+            if (should_stop && should_stop()) {
+                throw std::runtime_error("request cancelled while waiting for model name=" + name);
+            }
+            cv.wait_for(lk, std::chrono::milliseconds(200));
+        }
+        lk.unlock();
+        return ensure_model_ready(name, should_stop);
+    }
 
     bool queued   = false;
     bool did_load = false;
@@ -1444,25 +1493,30 @@ bool server_models::ensure_model_ready(const std::string & name, const std::func
 }
 
 server_http_res_ptr server_models::proxy_request(const server_http_req & req, const std::string & method, const std::string & name, bool update_last_used, bool detached) {
-    auto meta = get_meta(name);
-    if (!meta.has_value()) {
-        throw std::runtime_error("model name=" + name + " is not found");
-    }
-    if (!meta->is_running()) {
-        throw std::invalid_argument("model name=" + name + " is not running");
-    }
+    server_model_meta meta;
     {
         std::unique_lock<std::mutex> lk(mutex);
-        if (update_last_used) {
-            mapping[name].meta.last_used = ggml_time_ms();
+        auto it = mapping.find(name);
+        if (it == mapping.end()) {
+            throw std::runtime_error("model name=" + name + " is not found");
         }
-        mapping[name].req_count++;
+        if (it->second.meta.status == SERVER_MODEL_STATUS_UNLOADING || it->second.meta.status == SERVER_MODEL_STATUS_UNLOADED) {
+            return nullptr;
+        }
+        if (!it->second.meta.is_ready_or_sleep()) {
+            throw std::invalid_argument("model name=" + name + " is not ready");
+        }
+        if (update_last_used) {
+            it->second.meta.last_used = ggml_time_ms();
+        }
+        it->second.req_count++;
+        meta = it->second.meta;
     }
     if (debug_fake_timing) {
         // sleep after req_count++, so the model counts as busy while we wait here
         std::this_thread::sleep_for(std::chrono::seconds(2));
     }
-    SRV_INF("proxying request to model %s on port %d\n", name.c_str(), meta->port);
+    SRV_INF("proxying request to model %s on port %d\n", name.c_str(), meta.port);
     std::string proxy_path = req.path;
     if (!req.query_string.empty()) {
         proxy_path += '?' + req.query_string;
@@ -1471,7 +1525,7 @@ server_http_res_ptr server_models::proxy_request(const server_http_req & req, co
             method,
             "http",
             CHILD_ADDR,
-            meta->port,
+            meta.port,
             proxy_path,
             req.headers,
             req.body,
@@ -1562,7 +1616,7 @@ void server_models::handle_child_state(const std::string & name, const std::stri
             } break;
         case SERVER_STATE_SLEEPING:
             {
-                update_status(name, { SERVER_MODEL_STATUS_SLEEPING });
+                update_sleeping_status(name);
             } break;
         default:
             // should never happen, but just in case
@@ -1861,10 +1915,18 @@ void server_models_routes::init_routes() {
         if (!router_validate_model(name, models, autoload, error_res)) {
             return error_res;
         }
-        if (autoload) {
-            models.ensure_model_ready(name, req.should_stop);
+        while (true) {
+            if (autoload) {
+                models.ensure_model_ready(name, req.should_stop);
+            }
+            auto proxy = models.proxy_request(req, method, name, false);
+            if (proxy) {
+                return proxy;
+            }
+            if (!autoload) {
+                throw std::invalid_argument("model name=" + name + " is not ready");
+            }
         }
-        return models.proxy_request(req, method, name, false);
     };
 
     this->proxy_post = [this](const server_http_req & req) {
@@ -1884,18 +1946,27 @@ void server_models_routes::init_routes() {
         uint64_t ticket = models.conv_models.remember(conv_id, name);
         // a dead socket must not cancel a session request, only a stop does (checked right below)
         auto should_stop = ticket == 0 ? req.should_stop : nullptr;
-        bool waited = autoload && models.ensure_model_ready(name, should_stop);
-        if (ticket != 0 && !models.conv_models.alive(conv_id, ticket)) {
-            SRV_INF("request for conv_id=%s cancelled while model name=%s was loading\n",
-                    conv_id.c_str(), name.c_str());
-            res_err(error_res, format_error_response(
-                    "request cancelled by a stop while the model was loading", ERROR_TYPE_INVALID_REQUEST));
-            return error_res;
+        bool waited = false;
+        while (true) {
+            if (autoload) {
+                waited = models.ensure_model_ready(name, should_stop) || waited;
+            }
+            if (ticket != 0 && !models.conv_models.alive(conv_id, ticket)) {
+                SRV_INF("request for conv_id=%s cancelled while model name=%s was loading\n",
+                        conv_id.c_str(), name.c_str());
+                res_err(error_res, format_error_response(
+                        "request cancelled by a stop while the model was loading", ERROR_TYPE_INVALID_REQUEST));
+                return error_res;
+            }
+            // A session request that waited for a load must survive a client reconnect.
+            auto proxy = models.proxy_request(req, method, name, true, waited && ticket != 0);
+            if (proxy) {
+                return proxy;
+            }
+            if (!autoload) {
+                throw std::invalid_argument("model name=" + name + " is not ready");
+            }
         }
-        // a session request that waited for a load detaches from the client socket: the
-        // client may have dropped during the wait (page reload) and the session buffer must
-        // still receive the generation for a later resume
-        return models.proxy_request(req, method, name, true, waited && ticket != 0); // update last usage for POST request only
     };
 
     this->post_router_models_load = [this](const server_http_req & req) {
@@ -2104,7 +2175,8 @@ void server_models_routes::init_routes() {
             auto meta = tracked.has_value() ? models.get_meta(*tracked) : std::nullopt;
             bool transient = meta.has_value() && (meta->status == SERVER_MODEL_STATUS_LOADING ||
                                                   meta->status == SERVER_MODEL_STATUS_DOWNLOADING ||
-                                                  meta->status == SERVER_MODEL_STATUS_DOWNLOADED);
+                                                  meta->status == SERVER_MODEL_STATUS_DOWNLOADED ||
+                                                  meta->status == SERVER_MODEL_STATUS_UNLOADING);
             if (transient) {
                 res_err(res, format_error_response("Stream owner model is loading, retry later", ERROR_TYPE_UNAVAILABLE));
             } else {

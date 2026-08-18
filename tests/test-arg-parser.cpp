@@ -186,6 +186,17 @@ static void test(void) {
     assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
     assert(params.verbosity > 1);
 
+    {
+        common_params server_params;
+        argv = {"binary_name", "--sleep-exit-worker"};
+        assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), server_params, LLAMA_EXAMPLE_SERVER));
+        assert(server_params.sleep_exit_worker);
+
+        argv = {"binary_name", "--no-sleep-exit-worker"};
+        assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), server_params, LLAMA_EXAMPLE_SERVER));
+        assert(!server_params.sleep_exit_worker);
+    }
+
     argv = {"binary_name", "-m", "abc.gguf", "--predict", "6789", "--batch-size", "9090"};
     assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
     assert(params.model.path == "abc.gguf");
@@ -242,6 +253,12 @@ static void test(void) {
     assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
     assert(params.model.path == "blah.gguf");
     assert(params.cpuparams.n_threads == 1010);
+
+    setenv("LLAMA_ARG_SLEEP_EXIT_WORKER", "1", true);
+    common_params server_params;
+    assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), server_params, LLAMA_EXAMPLE_SERVER));
+    assert(server_params.sleep_exit_worker);
+    unsetenv("LLAMA_ARG_SLEEP_EXIT_WORKER");
 
     setenv("LLAMA_ARG_LOAD_MODE", "blah", true);
     argv = {"binary_name"};

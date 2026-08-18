@@ -19,13 +19,15 @@
 /**
  * state diagram:
  *
- * DOWNLOADING ──► DOWNLOADED ──► (replaced by new instance)
+ * DOWNLOADING --> DOWNLOADED --> (replaced by new instance)
  *
- * UNLOADED ──► LOADING ──► LOADED ◄──── SLEEPING
- *  ▲            │            │               ▲
- *  └───failed───┘            │               │
- *  ▲                         └──sleeping─────┘
- *  └────────unloaded─────────┘
+ * UNLOADED --> LOADING --> LOADED <---- SLEEPING
+ *  ^            |            |               ^
+ *  +---failed---+            |               |
+ *  ^                         +---sleeping-----+
+ *  +--------unloaded---------+
+ *  ^                         |               |
+ *  +------UNLOADING <--------+---------------+
  */
 enum server_model_status {
     // TODO: also add downloading state when the logic is added
@@ -34,7 +36,8 @@ enum server_model_status {
     SERVER_MODEL_STATUS_UNLOADED,
     SERVER_MODEL_STATUS_LOADING,
     SERVER_MODEL_STATUS_LOADED,
-    SERVER_MODEL_STATUS_SLEEPING
+    SERVER_MODEL_STATUS_SLEEPING,
+    SERVER_MODEL_STATUS_UNLOADING
 };
 
 enum server_model_source {
@@ -56,6 +59,7 @@ static std::string server_model_status_to_string(server_model_status status) {
         case SERVER_MODEL_STATUS_LOADING:     return "loading";
         case SERVER_MODEL_STATUS_LOADED:      return "loaded";
         case SERVER_MODEL_STATUS_SLEEPING:    return "sleeping";
+        case SERVER_MODEL_STATUS_UNLOADING:   return "unloading";
         default:                              return "unknown";
     }
 }
@@ -90,7 +94,7 @@ struct server_model_meta {
     }
 
     bool is_running() const {
-        return status == SERVER_MODEL_STATUS_LOADED || status == SERVER_MODEL_STATUS_LOADING || status == SERVER_MODEL_STATUS_SLEEPING;
+        return status == SERVER_MODEL_STATUS_LOADED || status == SERVER_MODEL_STATUS_LOADING || status == SERVER_MODEL_STATUS_SLEEPING || status == SERVER_MODEL_STATUS_UNLOADING;
     }
 
     bool is_ready_or_sleep() const {
@@ -213,6 +217,9 @@ private:
 
     // notify SSE clients
     void notify_sse(const std::string & event, const std::string & model_id, const json & data = nullptr);
+
+    // update sleeping status and optionally begin graceful worker shutdown
+    void update_sleeping_status(const std::string & name);
 
 public:
     // conv_id -> model tracker for the resumable stream routes, owns its lock
