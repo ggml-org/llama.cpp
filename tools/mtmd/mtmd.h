@@ -154,7 +154,8 @@ MTMD_API const char * mtmd_get_marker(const mtmd_context * ctx);
 //     length of data must be nx * ny * 3
 //     the data is in RGBRGBRGB... format
 //     note: some video-capable models (i.e. qwen-vl) can merge consecutive bitmaps
-//           into one chunk, mtmd_tokenize() will automatically handle this
+//           into one chunk; mtmd_tokenize() handles this, but remember to set
+//           mtmd_bitmap_set_mergeable(true) for every frame
 // if bitmap is audio:
 //     length of data must be n_samples * sizeof(float)
 //     the data is in float format (PCM F32)
@@ -175,6 +176,8 @@ MTMD_API void                  mtmd_bitmap_free       (mtmd_bitmap * bitmap);
 // these getters/setters are dedicated functions, so you can for example calculate the hash of the image based on mtmd_bitmap_get_data()
 MTMD_API const char * mtmd_bitmap_get_id(const mtmd_bitmap * bitmap);
 MTMD_API void         mtmd_bitmap_set_id(mtmd_bitmap * bitmap, const char * id);
+// if true, this bitmap can be merged (temporal merge) with an adjacent mergeable bitmap by certain video input models
+MTMD_API void         mtmd_bitmap_set_mergeable(mtmd_bitmap * bitmap, bool mergeable);
 
 // mtmd_bitmap lazy
 //
