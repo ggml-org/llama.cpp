@@ -185,6 +185,13 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
             ms.add_kv(LLM_KV_ATTENTION_KEY_LENGTH_MLA_SWA,   uint32_t(192));
             ms.add_kv(LLM_KV_ATTENTION_VALUE_LENGTH_MLA_SWA, uint32_t(128));
             ms.add_kv(LLM_KV_ROPE_FREQ_BASE_SWA,             10000.0f);
+            // indexer on the full-attention layers (inverse of the swa pattern)
+            std::vector<uint32_t> indexer_types;
+            indexer_types.reserve(n_layer);
+            for (uint32_t il = 0; il < n_layer; il++) {
+                indexer_types.push_back(il % 2 ? 0 : 1);
+            }
+            ms.add_kv(LLM_KV_ATTENTION_INDEXER_TYPES, indexer_types);
         }
     } else if (arch == LLM_ARCH_MINIMAX_M3) {
         // partial rotary: n_rot must not exceed the indexer key length (64)

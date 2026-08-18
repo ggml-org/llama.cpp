@@ -37,19 +37,16 @@ void llama_model_dots3note::load_arch_hparams(llama_model_loader & ml) {
     hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
     ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa);
     ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA,       hparams.rope_freq_base_train_swa);
-    ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.is_swa_impl, hparams.n_layer());
+    ml.get_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.is_swa_impl);
 
-    // DSA parameters - by default the indexer exists exactly on the full-attention layers
+    // DSA parameters
     ml.get_key(LLM_KV_ATTENTION_INDEXER_HEAD_COUNT, hparams.indexer_n_head);
     ml.get_key(LLM_KV_ATTENTION_INDEXER_KEY_LENGTH, hparams.indexer_head_size);
     ml.get_key(LLM_KV_ATTENTION_INDEXER_TOP_K,      hparams.indexer_top_k);
-    for (uint32_t il = 0; il < hparams.n_layer(); ++il) {
-        hparams.is_indexer_full_impl[il] = hparams.is_swa(il) ? 0 : 1;
-    }
-    ml.get_key_or_arr(LLM_KV_ATTENTION_INDEXER_TYPES, hparams.is_indexer_full_impl, hparams.n_layer(), false);
+    ml.get_arr(LLM_KV_ATTENTION_INDEXER_TYPES, hparams.is_indexer_full_impl);
 
     switch (hparams.n_layer()) {
-        case 46: type = LLM_TYPE_UNKNOWN; break; // 288B-A19B
+        case 46: type = LLM_TYPE_288B_A19B; break;
         default: type = LLM_TYPE_UNKNOWN;
     }
 }
