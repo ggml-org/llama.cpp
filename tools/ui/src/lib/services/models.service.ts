@@ -1,7 +1,15 @@
-import { API_MODELS, MODEL_ID } from '$lib/constants';
+import { base } from '$app/paths';
+import {
+	API_MODELS,
+	MODEL_ID,
+	SSE_DATA_PREFIX,
+	SSE_LINE_SEPARATOR,
+	SSE_RECORD_SEPARATOR
+} from '$lib/constants';
 import { ServerModelStatus } from '$lib/enums';
 import type { ParsedModelId } from '$lib/types/models';
 import { apiFetch, apiPost, normalizeModelName } from '$lib/utils';
+import { getAuthHeaders } from '$lib/utils/api-headers';
 
 export class ModelsService {
 	/**
@@ -98,6 +106,89 @@ export class ModelsService {
 	 */
 	static isModelLoading(model: ApiModelDataEntry): boolean {
 		return model.status.value === ServerModelStatus.LOADING;
+	}
+
+	/**
+	 *
+	 *
+	 * Status Feed
+	 *
+	 *
+	 */
+
+	private static readonly SSE_RECONNECT_MS = 1000;
+
+	/**
+	 * Read the /models/sse feed and invoke onEvent for each parsed envelope.
+	 * Reconnects on network drops until the signal aborts. Splits the byte
+	 * stream into SSE records on the blank line boundary; the payload rides in
+	 * the data lines as a JSON envelope with its own model, event and data fields.
+	 */
+	static async watchModelEvents(
+		signal: AbortSignal,
+		onEvent: (event: ApiModelsSseEvent) => void
+	): Promise<void> {
+		const decoder = new TextDecoder();
+
+		while (!signal.aborted) {
+			try {
+				const response = await fetch(`${base}${API_MODELS.SSE}`, {
+					headers: getAuthHeaders(),
+					signal
+				});
+
+				if (response.ok && response.body) {
+					const reader = response.body.getReader();
+
+					let buffer = '';
+
+					while (!signal.aborted) {
+						const { done, value } = await reader.read();
+
+						if (done) break;
+
+						buffer += decoder.decode(value, { stream: true });
+
+						let boundary = buffer.indexOf(SSE_RECORD_SEPARATOR);
+
+						while (boundary !== -1) {
+							const event = ModelsService.parseStatusRecord(buffer.slice(0, boundary));
+
+							if (event) onEvent(event);
+
+							buffer = buffer.slice(boundary + SSE_RECORD_SEPARATOR.length);
+							boundary = buffer.indexOf(SSE_RECORD_SEPARATOR);
+						}
+					}
+				}
+			} catch {
+				// network drop or abort falls through to the reconnect delay
+			}
+
+			if (signal.aborted) return;
+
+			await new Promise((resolve) => setTimeout(resolve, ModelsService.SSE_RECONNECT_MS));
+		}
+	}
+
+	/**
+	 * Parse one SSE record into its JSON envelope, or null when the record
+	 * carries no data payload or malformed JSON.
+	 */
+	private static parseStatusRecord(record: string): ApiModelsSseEvent | null {
+		const payload = record
+			.split(SSE_LINE_SEPARATOR)
+			.filter((line) => line.startsWith(SSE_DATA_PREFIX))
+			.map((line) => line.slice(SSE_DATA_PREFIX.length).trim())
+			.join(SSE_LINE_SEPARATOR);
+
+		if (payload.length === 0) return null;
+
+		try {
+			return JSON.parse(payload) as ApiModelsSseEvent;
+		} catch {
+			return null;
+		}
 	}
 
 	/**

@@ -1,12 +1,7 @@
 <script lang="ts">
 	import { ModelsSelectorDropdown, ModelsSelectorSheet } from '$lib/components/app';
-	import {
-		chatStore,
-		conversationsStore,
-		deviceStore,
-		modelsStore,
-		serverStore
-	} from '$lib/stores';
+	import { conversationsStore, deviceStore, modelsStore, serverStore } from '$lib/stores';
+	import { getConversationModel } from '$lib/utils';
 
 	interface Props {
 		disabled?: boolean;
@@ -36,7 +31,7 @@
 	let isOffline = $derived(!!serverStore.error);
 
 	let conversationModel = $derived(
-		chatStore.getConversationModel(conversationsStore.activeMessages as DatabaseMessage[])
+		getConversationModel(conversationsStore.activeMessages as DatabaseMessage[])
 	);
 
 	let lastSyncedConversationModel: string | null = null;
@@ -80,29 +75,7 @@
 		}
 	});
 
-	let activeModelId = $derived.by(() => {
-		const options = modelsStore.models;
-
-		if (!isRouter) {
-			return options.length > 0 ? options[0].model : null;
-		}
-
-		const selectedId = modelsStore.selectedModelId;
-
-		if (selectedId) {
-			const model = options.find((m) => m.id === selectedId);
-
-			if (model) return model.model;
-		}
-
-		if (conversationModel) {
-			const model = options.find((m) => m.model === conversationModel);
-
-			if (model) return model.model;
-		}
-
-		return null;
-	});
+	let activeModelId = $derived(modelsStore.activeModelId);
 
 	let modelPropsVersion = $state(0); // Used to trigger reactivity after fetch
 

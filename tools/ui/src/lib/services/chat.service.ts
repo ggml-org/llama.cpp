@@ -13,6 +13,7 @@ import {
 	SSE_DATA_PREFIX,
 	SSE_DONE_MARKER,
 	SSE_LINE_SEPARATOR,
+	STREAM_QUERY_PARAMS,
 	STREAM_RESUME_LOCALSTORAGE_KEY_PREFIX,
 	STREAM_VISIBILITY_KICK_MS
 } from '$lib/constants';
@@ -33,6 +34,7 @@ import type {
 	ApiStreamSession
 } from '$lib/types/api';
 import { isAbortError } from '$lib/utils/abort';
+import { ApiError } from '$lib/utils/api-fetch';
 import { getAuthHeaders, getJsonHeaders } from '$lib/utils/api-headers';
 import { formatAttachmentText } from '$lib/utils/formatters';
 import { streamIdentity } from '$lib/utils/stream-identity';
@@ -529,13 +531,53 @@ export class ChatService {
 		try {
 			const id = streamIdentity(conversationId, model);
 
-			await fetch(`${API_STREAM.BASE}?conv_id=${encodeURIComponent(id)}`, {
+			await fetch(ChatService.buildStreamUrl(id), {
 				headers: getAuthHeaders(),
 				method: 'DELETE'
 			});
 		} catch (e) {
 			console.warn('cancelServerStream failed:', e);
 		}
+	}
+
+	/**
+	 * Look up server-side stream sessions for the given conversation ids. Ids carry the frozen
+	 * conv::model identity when a model was bound at POST time.
+	 */
+	static async lookupStreamSessions(conversationIds: string[]): Promise<ApiStreamSession[]> {
+		const resp = await fetch(API_STREAM.LOOKUP, {
+			body: JSON.stringify({ conversation_ids: conversationIds }),
+			headers: getJsonHeaders(),
+			method: 'POST'
+		});
+
+		if (!resp.ok) {
+			throw new ApiError(`Stream lookup failed with HTTP ${resp.status}`, resp.status);
+		}
+
+		const body = (await resp.json()) as unknown;
+
+		if (!Array.isArray(body)) {
+			throw new Error('Stream lookup returned a non-array response');
+		}
+
+		return body as ApiStreamSession[];
+	}
+
+	/**
+	 * Fetch the full replay of a server-side stream from byte 0. Returns the raw Response so the
+	 * caller can pipe it through the SSE parser like a fresh stream.
+	 */
+	static async fetchStreamReplay(streamId: string): Promise<Response> {
+		const resp = await fetch(ChatService.buildStreamUrl(streamId, 0), {
+			headers: getAuthHeaders()
+		});
+
+		if (!resp.ok) {
+			throw new ApiError(`Stream replay failed with HTTP ${resp.status}`, resp.status);
+		}
+
+		return resp;
 	}
 
 	/**
@@ -629,6 +671,15 @@ export class ChatService {
 		return streamIdentity(conversationId, model);
 	}
 
+	// build the replay route url for a stream identity, from is the resume byte offset, omitted
+	// for the cancel route
+	private static buildStreamUrl(streamId: string, from?: number): string {
+		const query = `${STREAM_QUERY_PARAMS.CONV_ID}=${encodeURIComponent(streamId)}`;
+		const offset = from === undefined ? '' : `&${STREAM_QUERY_PARAMS.FROM}=${from}`;
+
+		return `${API_STREAM.BASE}?${query}${offset}`;
+	}
+
 	/**
 	 * Reconnect to an interrupted stream for this conversation. Returns the fetch Response so the
 	 * existing SSE parser drains it like a fresh stream. The server returns 200 on success, 404 if
@@ -642,13 +693,10 @@ export class ChatService {
 		const ac = new AbortController();
 
 		try {
-			const resp = await fetch(
-				`${API_STREAM.BASE}?conv_id=${encodeURIComponent(streamId)}&from=0`,
-				{
-					headers: getAuthHeaders(),
-					signal: ac.signal
-				}
-			);
+			const resp = await fetch(ChatService.buildStreamUrl(streamId, 0), {
+				headers: getAuthHeaders(),
+				signal: ac.signal
+			});
 
 			ac.abort();
 
@@ -668,7 +716,7 @@ export class ChatService {
 		const state = ChatService.getStreamState(conversationId);
 		const from = state?.bytesReceived ?? 0;
 		const id = streamIdentity(conversationId, model);
-		const url = `${API_STREAM.BASE}?conv_id=${encodeURIComponent(id)}&from=${from}`;
+		const url = ChatService.buildStreamUrl(id, from);
 
 		return await fetch(url, { headers: getAuthHeaders(), method: 'GET', signal });
 	}

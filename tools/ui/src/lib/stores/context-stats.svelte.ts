@@ -49,23 +49,8 @@ function deriveLiveStats(state: ApiProcessingState | null): LiveStats | null {
 }
 
 class ContextStatsStore {
-	// Resolve the model the stats report context for: explicit selection >
-	// last assistant model > single-model mode (mirrors useChatScreenActiveModel).
-	activeModelId = $derived.by(() => {
-		if (!serverStore.isRouterMode) {
-			return modelsStore.singleModelName;
-		}
-
-		const selectedId = modelsStore.selectedModelId;
-
-		if (selectedId) {
-			const model = modelsStore.models.find((m) => m.id === selectedId);
-
-			if (model) return model.model;
-		}
-
-		return chatStore.getConversationModel(conversationsStore.activeMessages as DatabaseMessage[]);
-	});
+	// The canonical resolution lives in modelsStore.activeModelId.
+	activeModelId = $derived(modelsStore.activeModelId);
 
 	isActiveModelLoaded = $derived(
 		this.activeModelId !== null &&

@@ -1,7 +1,22 @@
 /**
  * Utility functions for conversation data manipulation
  */
+import { MessageRole } from '$lib/enums';
 import type { DatabaseMessage } from '$lib/types';
+
+/**
+ * Model that generated the conversation's latest assistant message, or null
+ * when no assistant message carries one.
+ */
+export function getConversationModel(messages: readonly DatabaseMessage[]): string | null {
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const message = messages[i];
+
+		if (message.role === MessageRole.ASSISTANT && message.model) return message.model;
+	}
+
+	return null;
+}
 
 /**
  * Creates a map of conversation IDs to their message counts from exported conversation data

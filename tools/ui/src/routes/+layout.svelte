@@ -28,6 +28,7 @@
 		settingsStore,
 		versionStore
 	} from '$lib/stores';
+	import { initStores } from '$lib/stores/init';
 	import { ModeWatcher } from 'mode-watcher';
 	import { untrack } from 'svelte';
 	import { onMount } from 'svelte';
@@ -35,6 +36,10 @@
 	import { pwaAssetsHead } from 'virtual:pwa-assets/head';
 
 	let { children } = $props();
+
+	// migrations and store startup, ordered explicitly instead of import side effects
+	void initStores();
+
 	let innerHeight = $state<number | undefined>();
 	let innerWidth = $state(browser ? window.innerWidth : 0);
 

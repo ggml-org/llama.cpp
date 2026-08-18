@@ -5,7 +5,11 @@ import { SvelteSet } from 'svelte/reactivity';
 class PermissionsStore {
 	private _tools = $state(new SvelteSet<string>());
 
-	constructor() {
+	/**
+	 * Load persisted permissions. Called by initStores() after migrations
+	 * have run.
+	 */
+	initialize(): void {
 		// browser-only init: skip on SSR to avoid localStorage side effects
 		if (!browser) return;
 

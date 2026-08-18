@@ -18,7 +18,11 @@ class VersionStore {
 	build = $state<string>('');
 	frontend = $state<string>('');
 
-	constructor() {
+	/**
+	 * Fetch the version files. Called by initStores(); order-independent,
+	 * so it runs in the background.
+	 */
+	initialize(): void {
 		if (!browser) return;
 
 		if (import.meta.env.DEV) {

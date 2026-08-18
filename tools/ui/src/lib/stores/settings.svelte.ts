@@ -85,12 +85,6 @@ class SettingsStore {
 		return ParameterSyncService.extractServerDefaults(serverStore.defaultParams);
 	}
 
-	constructor() {
-		if (browser) {
-			this.initialize();
-		}
-	}
-
 	/**
 	 *
 	 *
@@ -100,9 +94,12 @@ class SettingsStore {
 	 */
 
 	/**
-	 * Initialize the settings store by loading from localStorage
+	 * Initialize the settings store by loading from localStorage.
+	 * Called by initStores() after migrations have run.
 	 */
 	initialize() {
+		if (!browser) return;
+
 		try {
 			this.loadConfig();
 			this.migrateLegacyTheme();
