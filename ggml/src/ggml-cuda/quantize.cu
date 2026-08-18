@@ -394,14 +394,16 @@ static __global__ void quantize_mmq_mxfp4(const float * __restrict__ x,
         }
 
         uint8_t e = compute_e8m0_scale(amax);
+        const float scale = ggml_cuda_e8m0_to_fp32(e);
+        float inv_s = amax == 0.0f ? 0.0f : __frcp_rn(scale);
 
         if (amax > 0.0f && e > 0) {
             static constexpr int test_offsets[2] = { 0, -1 };
             float err[2];
 #pragma unroll
             for (int i = 0; i < 2; ++i) {
-                const float test_scale = ggml_cuda_e8m0_to_fp32(e + test_offsets[i]);
-                const float test_inv_scale = __frcp_rn(test_scale);
+                const float test_scale = i == 0 ? scale : 0.5f * scale;
+                const float test_inv_scale = i == 0 ? inv_s : 2.0f * inv_s;
 #if CUDART_VERSION >= 12080
                 const uint8_t q = __nv_fp4_e2m1(xi * test_inv_scale).__x;
 #else
@@ -416,12 +418,12 @@ static __global__ void quantize_mmq_mxfp4(const float * __restrict__ x,
                 err_delta += __shfl_xor_sync(0xFFFFFFFF, err_delta, mask, WARP_SIZE);
             }
             if (err_delta < 0.0f) {
-                e -= 1;
+                e += test_offsets[1];
+                inv_s *= 2.0f;
             }
         }
 
         scales[b] = e;
-        const float inv_s = (amax == 0.0f) ? 0.0f : __frcp_rn(ggml_cuda_e8m0_to_fp32(e));
 
 #if CUDART_VERSION >= 12080
         const float scaled_val = xi * inv_s;
