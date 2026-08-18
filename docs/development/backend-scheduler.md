@@ -73,8 +73,10 @@ against an in-flight `ggml_backend_graph_compute_async`.
 
 The scheduler detects this in `ggml_backend_sched_new()` by testing the condition that elides the
 copy - a host buffer type in the last slot that some other backend accepts - rather than by
-identifying particular devices. Backends that deliberately refuse to compute on pinned host memory
-are unaffected.
+identifying particular devices, and requiring that backend to be asynchronous. Backends that
+deliberately refuse to compute on pinned host memory are unaffected, and so are synchronous ones
+such as BLAS - their work is finished before `graph_compute` returns, so nothing of theirs can
+still be reading.
 
 When it holds, each graph input gets a **ring of buffers** instead of one, and the scheduler moves
 the inputs onto the next slot rather than waiting for the device. The slot being stepped onto was

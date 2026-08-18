@@ -2026,7 +2026,9 @@ ggml_backend_sched_t ggml_backend_sched_new(
 
         if (cpu_buft && ggml_backend_buft_is_host(cpu_buft)) {
             for (int b = 0; b < n_backends - 1; b++) {
-                if (ggml_backend_dev_type(ggml_backend_get_device(backends[b])) == GGML_BACKEND_DEVICE_TYPE_CPU) {
+                ggml_backend_dev_props props;
+                ggml_backend_dev_get_props(ggml_backend_get_device(backends[b]), &props);
+                if (!props.caps.async) {
                     continue;
                 }
                 if (ggml_backend_supports_buft(backends[b], cpu_buft)) {
