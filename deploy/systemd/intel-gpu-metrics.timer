@@ -1,0 +1,16 @@
+[Unit]
+Description=Refresh Intel GPU engine counters for the node_exporter textfile collector
+
+[Timer]
+OnBootSec=15s
+# Deliberately faster than the collector's 15s scrape_interval. The values are
+# counters read instantaneously (~50ms, no sampling window), so the only cost of
+# running often is a procfs walk -- and if the file were older than the scrape
+# interval, a scrape would see an unchanged counter and rate() would dip then
+# spike. node_textfile_mtime_seconds exposes the file's age if you want to alert.
+OnUnitActiveSec=5s
+AccuracySec=1s
+Unit=intel-gpu-metrics.service
+
+[Install]
+WantedBy=timers.target

@@ -119,8 +119,8 @@
       },
       "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
       "targets": [
-        { "refId": "A", "expr": "nvidia_smi_memory_used_bytes{host=\"$host\"}", "legendFormat": "Used" },
-        { "refId": "B", "expr": "nvidia_smi_memory_total_bytes{host=\"$host\"} - nvidia_smi_memory_used_bytes{host=\"$host\"}", "legendFormat": "Free" }
+        { "refId": "A", "expr": "sum by (host) (max by (host, device) (llamacpp:vram_total_bytes{host=\"$host\"}) - max by (host, device) (llamacpp:vram_free_bytes{host=\"$host\"}))", "legendFormat": "Used" },
+        { "refId": "B", "expr": "sum by (host) (max by (host, device) (llamacpp:vram_free_bytes{host=\"$host\"}))", "legendFormat": "Free" }
       ]
     },
     {
@@ -141,7 +141,7 @@
         "overrides": []
       },
       "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "value", "colorMode": "value", "graphMode": "area" },
-      "targets": [ { "refId": "A", "expr": "nvidia_smi_memory_used_bytes{host=\"$host\"}" } ]
+      "targets": [ { "refId": "A", "expr": "sum by (host) (max by (host, device) (llamacpp:vram_total_bytes{host=\"$host\"}) - max by (host, device) (llamacpp:vram_free_bytes{host=\"$host\"}))" } ]
     },
     {
       "id": 22,
@@ -166,12 +166,13 @@
         "overrides": []
       },
       "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "showThresholdMarkers": true },
-      "targets": [ { "refId": "A", "expr": "100 * nvidia_smi_memory_used_bytes{host=\"$host\"} / nvidia_smi_memory_total_bytes{host=\"$host\"}" } ]
+      "targets": [ { "refId": "A", "expr": "100 * (1 - sum by (host) (max by (host, device) (llamacpp:vram_free_bytes{host=\"$host\"})) / sum by (host) (max by (host, device) (llamacpp:vram_total_bytes{host=\"$host\"})))" } ]
     },
     {
       "id": 23,
       "type": "timeseries",
-      "title": "GPU utilisation",
+      "title": "GPU engine utilisation",
+      "description": "Per-engine busy fraction, from DRM fdinfo via the node_exporter textfile collector. Busy and elapsed are cumulative counters, so the ratio of their rates averages over the whole interval. Host-level, not per-model: this counts whichever process holds the GPU, and it resets when router mode swaps the child. Empty here plus intel_gpu_scrape_success == 0 means the bridge is broken, not that the GPU is idle.",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "gridPos": { "h": 4, "w": 12, "x": 12, "y": 18 },
       "fieldConfig": {
@@ -180,47 +181,51 @@
           "min": 0,
           "max": 1,
           "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 12, "showPoints": "never" },
-          "color": { "mode": "fixed", "fixedColor": "#2a78d6" }
+          "color": { "mode": "palette-classic" }
         },
         "overrides": []
       },
-      "options": { "legend": { "showLegend": true, "placement": "bottom" }, "tooltip": { "mode": "single" } },
-      "targets": [ { "refId": "A", "expr": "nvidia_smi_utilization_gpu_ratio{host=\"$host\"}", "legendFormat": "GPU util" } ]
+      "options": { "legend": { "showLegend": true, "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [ { "refId": "A", "expr": "rate(intel_gpu_engine_busy_total{host=\"$host\"}[$__rate_interval]) / rate(intel_gpu_engine_elapsed_total{host=\"$host\"}[$__rate_interval])", "legendFormat": "{{engine}}" } ]
     },
     {
       "id": 24,
       "type": "timeseries",
       "title": "GPU temperature",
-      "description": "Two different scales (temp vs power) are intentionally split into two panels — never a dual y-axis.",
+      "description": "GPU temperature sensors, read straight from the card's hwmon by the bridge. The 16 per-channel vram_ch_N series are excluded by default so the panel stays readable — pkg, vram (tracks the hottest channel), mctrl and pcie are the ones that matter. Drop the sensor!~ matcher to see every channel. Temperature and power are two different scales, so they are intentionally split into two panels — never a dual y-axis.",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "gridPos": { "h": 6, "w": 6, "x": 0, "y": 22 },
       "fieldConfig": {
         "defaults": {
           "unit": "celsius",
           "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 8, "showPoints": "never" },
-          "color": { "mode": "fixed", "fixedColor": "#eb6834" }
+          "color": { "mode": "palette-classic" }
         },
         "overrides": []
       },
-      "options": { "legend": { "showLegend": true, "placement": "bottom" }, "tooltip": { "mode": "single" } },
-      "targets": [ { "refId": "A", "expr": "nvidia_smi_temperature_gpu{host=\"$host\"}", "legendFormat": "Temp" } ]
+      "options": { "legend": { "showLegend": true, "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [ { "refId": "A", "expr": "intel_gpu_temp_celsius{host=\"$host\", sensor!~\"vram_ch_.*\"}", "legendFormat": "{{sensor}}" } ]
     },
     {
       "id": 25,
       "type": "timeseries",
       "title": "GPU power draw",
+      "description": "Power derived as rate() over the GPU's cumulative energy counter: the xe driver exposes no instantaneous power1_average, only energy1_input. The dashed cap series is the configured power limit (power1_cap), not a reading.",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "gridPos": { "h": 6, "w": 6, "x": 6, "y": 22 },
       "fieldConfig": {
         "defaults": {
           "unit": "watt",
           "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 8, "showPoints": "never" },
-          "color": { "mode": "fixed", "fixedColor": "#1baf7a" }
+          "color": { "mode": "palette-classic" }
         },
         "overrides": []
       },
-      "options": { "legend": { "showLegend": true, "placement": "bottom" }, "tooltip": { "mode": "single" } },
-      "targets": [ { "refId": "A", "expr": "nvidia_smi_power_draw_watts{host=\"$host\"}", "legendFormat": "Power" } ]
+      "options": { "legend": { "showLegend": true, "placement": "bottom" }, "tooltip": { "mode": "multi" } },
+      "targets": [
+        { "refId": "A", "expr": "rate(intel_gpu_energy_joules_total{host=\"$host\"}[$__rate_interval])", "legendFormat": "{{domain}}" },
+        { "refId": "B", "expr": "intel_gpu_power_cap_watts{host=\"$host\"}", "legendFormat": "cap {{domain}}" }
+      ]
     },
     {
       "id": 26,
