@@ -74,8 +74,9 @@ export class ChatStreamManager {
 	 * discoverActiveStream(convId) -> probe + attach in one call. Used by callers that do not need
 	 *   to overlap the probe with other async work.
 	 *
-	 * The mount of the chat page in +page.svelte calls probeServerStream in parallel with
-	 * loadConversation, then attachServerStream once both have settled. This gives the earliest
+	 * The chat page in +page.svelte calls discoverActiveStream once the conversation is active
+	 * (immediately if it already is, after loadConversation settles otherwise), and re-runs it on
+	 * visibilitychange. Attaching only after the conversation is loaded gives the earliest
 	 * possible time to spinner and avoids racing against an empty activeMessages array.
 	 */
 	private async probeServerStream(convId: string): Promise<ApiStreamSession | null> {

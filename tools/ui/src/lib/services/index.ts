@@ -241,7 +241,7 @@ export { ParameterSyncService } from './parameter-sync.service';
  *   - Manages connection lifecycle, health checks, reconnection
  *   - Handles tool name conflict resolution and server coordination
  *
- * - **mcpResourceStore**: Reactive resource state
+ * - **mcpResourceStore** (composed as mcpStore.resources): Reactive resource state
  *   - Receives resource data fetched via MCPService
  *   - Manages resource caching, subscriptions, and attachments
  *
@@ -264,7 +264,7 @@ export { ParameterSyncService } from './parameter-sync.service';
  * 3. **SSE** — legacy fallback, supports CORS proxy
  *
  * @see mcpStore in stores/mcp/index.svelte.ts — reactive business logic facade on top of MCPService
- * @see mcpResourceStore in stores/mcp/resources.svelte.ts — reactive resource state management
+ * @see mcpStore.resources in stores/mcp/resources.svelte.ts — reactive resource state management
  * @see agenticStore in stores/agentic/index.svelte.ts — uses MCPService (via mcpStore) for tool execution
  * @see MCP Protocol Specification: https://modelcontextprotocol.io/specification/2025-06-18
  */
