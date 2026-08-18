@@ -802,6 +802,8 @@ Returns raw audio bytes (`audio/wav` by default) rather than JSON. For more info
 
 `repeat_penalty`: Repetition penalty applied to the backbone sampler over the whole generation (default `1.05`). Without this, the backbone can loop and re-generate the same utterance.
 
+`seed`: RNG seed for both the backbone sampler and the codec/vocoder (`-1` = random, the default). Set to a fixed value for reproducible output.
+
 `n_predict`: Max number of audio frames to generate. Defaults to `512`; generation normally stops earlier once the model emits an end-of-speech token.
 
 `response_format`: `wav` (default) or `pcm` (raw `float32` samples, no header).

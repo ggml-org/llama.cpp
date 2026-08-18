@@ -5241,6 +5241,8 @@ void server_routes::init_routes() {
         task.params.sampling  = params.sampling; // baseline defaults, then apply overrides below
         task.params.sampling.penalty_repeat  = json_value(body, "repeat_penalty", 1.05f);
         task.params.sampling.penalty_last_n  = -1;
+        task.params.sampling.seed = json_value(body, "seed", params.sampling.seed);
+        task.tts_inp.data.seed    = task.params.sampling.seed; // same seed for the codec/vocoder RNG
         if (task.tts_inp.data.top_k > 0) {
             task.params.sampling.top_k = task.tts_inp.data.top_k;
         }
