@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <openvino/core/type/element_type.hpp>
@@ -1308,7 +1309,7 @@ static bool is_op_unsupported_case(const ggml_tensor * op) {
     return false;
 }
 
-static bool ggml_backend_openvino_device_supports_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
+static bool ggml_backend_openvino_device_supports_op_impl(ggml_backend_dev_t dev, const ggml_tensor * op) {
     GGML_ASSERT(dev->reg != nullptr);
 
     static std::unordered_set<ggml_type> supported_types{
@@ -1421,6 +1422,109 @@ static bool ggml_backend_openvino_device_supports_op(ggml_backend_dev_t dev, con
         return false;
     }
     return true;
+}
+
+// Report what supports_op() accepts and rejects, so a graph that silently falls back to another
+// backend can be diagnosed. Every op rejected here becomes a graph split; if nothing is rejected,
+// the whole graph runs on OpenVINO.
+//
+// Gated by GGML_OPENVINO_LOG_SUPPORTS_OP:
+//   1  one summary at exit listing every distinct op kind and verdict -- start here
+//   2  additionally log every individual call, with the tensor name and shape
+//
+// This wraps the decision function instead of instrumenting it, so all of its return paths are
+// covered -- including the several that reject without logging a reason of their own, and any
+// added later.
+//
+// The summary is reported at exit rather than on each op's first occurrence, because the earliest
+// calls happen before the log handler emits anything: with level 2 the first line to actually
+// appear already reads "call 1244". A first-occurrence line would therefore be silently dropped
+// for exactly the ops that are only ever seen early. Counting is unaffected, so the summary is the
+// reliable view; treat the level-2 stream as a sample, not a complete trace.
+namespace {
+
+struct supports_op_tally {
+    std::mutex mutex;
+    // key: "<op>:ok" / "<op>:no" -> number of calls
+    std::map<std::string, size_t> counts;
+
+    // Report totals once, at exit. Registered lazily so a run with the knob off costs nothing.
+    // atexit runs while the ggml log callback is still valid, which static destruction does not
+    // guarantee.
+    void arm_summary() {
+        static std::once_flag armed;
+        std::call_once(armed, [] {
+            std::atexit([] {
+                auto & self = instance();
+                std::lock_guard<std::mutex> lock(self.mutex);
+
+                size_t n_accept_kinds = 0;
+                size_t n_reject_kinds = 0;
+                GGML_LOG_WARN("ov-supports-op: ---- summary (distinct op kinds, with call counts) ----\n");
+                for (const auto & [key, count] : self.counts) {
+                    const bool ok = key.size() > 3 && key.compare(key.size() - 3, 3, ":ok") == 0;
+                    ok ? ++n_accept_kinds : ++n_reject_kinds;
+                    GGML_LOG_WARN("ov-supports-op:   %-8s %-24s %zu call(s)\n", ok ? "ACCEPT" : "REJECT",
+                                  key.substr(0, key.size() - 3).c_str(), count);
+                }
+                if (n_reject_kinds == 0) {
+                    GGML_LOG_WARN("ov-supports-op: %zu op kind(s) accepted, 0 rejected"
+                                  " -- every op was supported, so no split originated here\n",
+                                  n_accept_kinds);
+                } else {
+                    GGML_LOG_WARN("ov-supports-op: %zu op kind(s) accepted, %zu REJECTED"
+                                  " -- each rejected kind forces a graph split\n",
+                                  n_accept_kinds, n_reject_kinds);
+                }
+            });
+        });
+    }
+
+    static supports_op_tally & instance() {
+        static supports_op_tally tally;
+        return tally;
+    }
+};
+
+}  // namespace
+
+static bool ggml_backend_openvino_device_supports_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
+    static const int log_level = ggml_openvino_getenv_int("GGML_OPENVINO_LOG_SUPPORTS_OP");
+
+    const bool supported = ggml_backend_openvino_device_supports_op_impl(dev, op);
+
+    if (log_level <= 0) {
+        return supported;
+    }
+
+    // Name the op the way ggml does: UNARY and GLU carry their real identity in a sub-enum, so
+    // logging only "UNARY" would merge SILU with everything else.
+    std::string op_desc = ggml_op_name(op->op);
+    if (op->op == GGML_OP_UNARY) {
+        op_desc += std::string("/") + ggml_unary_op_name(ggml_get_unary_op(op));
+    } else if (op->op == GGML_OP_GLU) {
+        op_desc += std::string("/") + ggml_glu_op_name(ggml_get_glu_op(op));
+    }
+
+    // The scheduler calls supports_op() on every graph build and may do so from several threads,
+    // so the tally needs a lock. Keyed on op identity *and* verdict, because the same op can be
+    // accepted at one shape and rejected at another (e.g. a quantized 3-D src).
+    auto & tally = supports_op_tally::instance();
+    tally.arm_summary();
+
+    size_t count;
+    {
+        std::lock_guard<std::mutex> lock(tally.mutex);
+        count = ++tally.counts[op_desc + (supported ? ":ok" : ":no")];
+    }
+
+    if (log_level >= 2) {
+        GGML_LOG_WARN("ov-supports-op: %-6s %-22s name='%s' type=%s ne=[%ld,%ld,%ld,%ld] (call %zu)\n",
+                      supported ? "ACCEPT" : "REJECT", op_desc.c_str(), op->name, ggml_type_name(op->type),
+                      (long) op->ne[0], (long) op->ne[1], (long) op->ne[2], (long) op->ne[3], count);
+    }
+
+    return supported;
 }
 
 static bool ggml_backend_openvino_device_supports_buft(ggml_backend_dev_t dev, ggml_backend_buffer_type_t buft) {
