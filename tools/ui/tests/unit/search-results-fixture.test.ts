@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { extractSearchResults, extractSearchQuery } from '$lib/utils/search-results';
+import { extractSearchQuery, extractSearchResults } from '$lib/utils/search-results';
+import { describe, expect, it } from 'vitest';
 
 const SAMPLE = `Title: World Cup 2026 | Match schedule, fixtures, results & stadiums
 URL: https://www.fifa.com/en/tournaments/mens/worldcup/canadamexicousa2026/articles/match-schedule-fixtures-results-teams-stadiums
@@ -23,12 +23,12 @@ Highlights:
 Something
 # World Cup
 ...`;
-
 const QUERY_ARGS = '{"query":"FIFA World Cup 2026 schedule"}';
 
 describe('real-world Exa fixture', () => {
 	it('extracts every search result and preserves rich highlights', () => {
 		const results = extractSearchResults(SAMPLE);
+
 		expect(results.length).toBe(3);
 		expect(results[0].title).toContain('World Cup 2026 | Match schedule');
 		expect(results[0].url).toContain('fifa.com');

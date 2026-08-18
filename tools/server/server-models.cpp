@@ -70,6 +70,188 @@ struct server_subproc {
     }
 };
 
+struct server_lru_sched {
+    server_lru_sched(server_models & models) : models(models) {}
+
+    bool has_capacity(std::unique_lock<std::mutex> & lk) {
+        check_lock(lk);
+        return models.base_params.models_max <= 0
+            || count_running() < (size_t) models.base_params.models_max;
+    }
+
+    // returns "" if no model can be given up
+    std::string pick_victim(std::unique_lock<std::mutex> & lk, const std::string & exclude) {
+        check_lock(lk);
+        std::string victim;
+        int64_t victim_last_used = 0;
+        for (const auto & m : models.mapping) {
+            if (m.first == exclude) {
+                continue;
+            }
+            // a busy model is mid-request, one still coming up has no request to finish
+            if (m.second.req_count != 0 || !m.second.meta.is_ready_or_sleep()) {
+                continue;
+            }
+            if (victim.empty() || m.second.meta.last_used < victim_last_used) {
+                victim           = m.first;
+                victim_last_used = m.second.meta.last_used;
+            }
+        }
+        return victim;
+    }
+
+    // requests wanting the same model share one entry, so they all need only one slot
+    // and all get unblocked by the single load that entry performs
+    void join(std::unique_lock<std::mutex> & lk, const std::string & model_id) {
+        check_lock(lk);
+        if (entry_t * e = find(model_id)) {
+            e->n_waiters++;
+            SRV_INF("request for name=%s joined the queue, %d waiting\n", model_id.c_str(), e->n_waiters);
+            return;
+        }
+        queue.push_back({ model_id, 1, false, false });
+        SRV_INF("models_max reached, request for name=%s queued at position %zu\n",
+                model_id.c_str(), queue.size());
+    }
+
+    void leave(std::unique_lock<std::mutex> & lk, const std::string & model_id) {
+        check_lock(lk);
+        for (auto it = queue.begin(); it != queue.end(); ++it) {
+            if (it->model_id == model_id) {
+                if (--it->n_waiters <= 0) {
+                    queue.erase(it); // last one waiting for this model went away
+                }
+                return;
+            }
+        }
+    }
+
+    bool queue_empty(std::unique_lock<std::mutex> & lk) {
+        check_lock(lk);
+        return queue.empty();
+    }
+
+    // true if it is this model's turn to load, and nobody is loading it yet
+    bool try_claim(std::unique_lock<std::mutex> & lk, const std::string & model_id) {
+        check_lock(lk);
+        if (queue.empty() || queue.front().model_id != model_id || queue.front().loading) {
+            return false;
+        }
+        if (!has_capacity(lk)) {
+            return false;
+        }
+        queue.front().loading = true;
+        return true;
+    }
+
+    // ok means the model is up: drop the entry, the other waiters just watch its status now
+    void claim_done(std::unique_lock<std::mutex> & lk, const std::string & model_id, bool ok) {
+        check_lock(lk);
+        for (auto it = queue.begin(); it != queue.end(); ++it) {
+            if (it->model_id == model_id) {
+                if (ok) {
+                    queue.erase(it);
+                } else {
+                    it->loading = false;
+                }
+                return;
+            }
+        }
+    }
+
+    // a model is on its way out for this entry, so other requests do not also give up one
+    void mark_slot_pending(std::unique_lock<std::mutex> & lk, const std::string & model_id) {
+        check_lock(lk);
+        if (entry_t * e = find(model_id)) {
+            e->slot_pending = true;
+        }
+    }
+
+    // model_id went idle: give up its slot if a queued request needs one
+    // thread-safe, caller must NOT hold models.mutex
+    void on_model_idle(const std::string & model_id) {
+        if (models.base_params.models_max <= 0) {
+            return; // no limit, nothing is ever queued
+        }
+        {
+            std::unique_lock<std::mutex> lk(models.mutex);
+            if (queue.empty()) {
+                return;
+            }
+            size_t promised     = 0;
+            bool   has_unserved = false;
+            for (const auto & e : queue) {
+                if (e.needs_slot()) {
+                    has_unserved = true;
+                } else {
+                    promised++;
+                }
+            }
+            if (!has_unserved) {
+                return;
+            }
+            if ((int) count_running() - (int) promised < models.base_params.models_max) {
+                return; // a slot is already on its way
+            }
+            // never give up a model that a queued request wants
+            for (const auto & e : queue) {
+                if (e.model_id == model_id) {
+                    return;
+                }
+            }
+            auto it = models.mapping.find(model_id);
+            if (it == models.mapping.end() || it->second.req_count != 0 || !it->second.meta.is_ready_or_sleep()) {
+                return;
+            }
+            for (auto & e : queue) {
+                if (!e.slot_pending) {
+                    e.slot_pending = true;
+                    break;
+                }
+            }
+        }
+        SRV_INF("model name=%s went idle, giving up its slot to a queued request\n", model_id.c_str());
+        models.unload(model_id);
+    }
+
+  private:
+    struct entry_t {
+        std::string model_id;
+        int  n_waiters;    // requests waiting for this model
+        bool slot_pending; // a model is already being evicted for this entry
+        bool loading;      // one of the waiters is doing the load right now
+
+        // a slot is already coming, or already taken by the load in flight
+        bool needs_slot() const { return !slot_pending && !loading; }
+    };
+
+    entry_t * find(const std::string & model_id) {
+        for (auto & e : queue) {
+            if (e.model_id == model_id) {
+                return &e;
+            }
+        }
+        return nullptr;
+    }
+
+    void check_lock(std::unique_lock<std::mutex> & lk) {
+        GGML_ASSERT(lk.owns_lock() && lk.mutex() == &models.mutex);
+    }
+
+    size_t count_running() {
+        size_t count = 0;
+        for (const auto & m : models.mapping) {
+            if (m.second.meta.is_running()) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    server_models & models;
+    std::deque<entry_t> queue;
+};
+
 // short loopback budget for the resumable stream router to child JSON calls (probe, lookup,
 // delete). distinct from params.timeout_read/write which only applies to the generation proxy
 static constexpr int STREAM_LOOKUP_TIMEOUT_MS = 250;
@@ -229,7 +411,8 @@ server_models::server_models(
             : ctx_preset(LLAMA_EXAMPLE_SERVER),
               base_params(params),
               base_env(get_environment()),
-              base_preset(ctx_preset.load_from_args(argc, argv)) {
+              base_preset(ctx_preset.load_from_args(argc, argv)),
+              sched(std::make_unique<server_lru_sched>(*this)) {
     // clean up base preset
     unset_reserved_args(base_preset, true);
     // set binary path
@@ -241,7 +424,10 @@ server_models::server_models(
         LOG_WRN("using original argv[0] as fallback: %s\n", argv[0]);
     }
     load_models();
+    debug_fake_timing = !common_get_env("LLAMA_SERVER_DEBUG_FAKE_TIMING").empty();
 }
+
+server_models::~server_models() = default;
 
 void server_models::add_model(server_model_meta && meta) {
     if (mapping.find(meta.name) != mapping.end()) {
@@ -713,22 +899,15 @@ void server_models::unload_lru() {
         return; // no limit
     }
     // remove one of the servers if we passed the models_max (least recently used - LRU)
-    std::string lru_model_name = "";
-    int64_t lru_last_used = ggml_time_ms();
-    size_t count_active = 0;
+    std::string lru_model_name;
     {
         std::unique_lock<std::mutex> lk(mutex);
-        for (const auto & m : mapping) {
-            if (m.second.meta.is_running()) {
-                count_active++;
-                if (m.second.meta.last_used < lru_last_used) {
-                    lru_model_name = m.first;
-                    lru_last_used = m.second.meta.last_used;
-                }
-            }
+        if (sched->has_capacity(lk)) {
+            return;
         }
+        lru_model_name = sched->pick_victim(lk, "");
     }
-    if (!lru_model_name.empty() && count_active >= (size_t)base_params.models_max) {
+    if (!lru_model_name.empty()) {
         SRV_INF("models_max limit reached, removing LRU name=%s\n", lru_model_name.c_str());
         unload(lru_model_name);
         // wait for unload to complete
@@ -746,6 +925,11 @@ void server_models::load(const std::string & name) {
 }
 
 void server_models::load(const std::string & name, const load_options & opts) {
+    if (debug_fake_timing) {
+        // do not hold the mutex here, other requests must keep making progress
+        std::this_thread::sleep_for(std::chrono::seconds(2));
+    }
+
     if (!opts.custom_meta.has_value()) {
         if (!has_model(name)) {
             throw std::runtime_error("model name=" + name + " is not found");
@@ -1138,7 +1322,7 @@ void server_models::wait(std::unique_lock<std::mutex> & lk, const std::string & 
     });
 }
 
-bool server_models::ensure_model_ready(const std::string & name) {
+bool server_models::ensure_model_ready(const std::string & name, const std::function<bool()> & should_stop) {
     auto meta = get_meta(name);
     if (!meta.has_value()) {
         throw std::runtime_error("model name=" + name + " is not found");
@@ -1149,25 +1333,112 @@ bool server_models::ensure_model_ready(const std::string & name) {
     if (meta->status == SERVER_MODEL_STATUS_SLEEPING) {
         return false; // child is sleeping but still running; new request will wake it up
     }
-    if (meta->status == SERVER_MODEL_STATUS_UNLOADED) {
-        SRV_INF("model name=%s is not loaded, loading...\n", name.c_str());
-        load(name);
-    }
 
-    // wait for loading to complete
-    SRV_INF("waiting until model name=%s is fully loaded...\n", name.c_str());
-    wait(name, [&meta](const server_model_meta & new_meta) {
-        if (new_meta.status != SERVER_MODEL_STATUS_LOADING) {
-            meta = new_meta; // update meta for final check after wait
-            return true;
+    bool queued   = false;
+    bool did_load = false;
+    std::string victim;
+    {
+        std::unique_lock<std::mutex> lk(mutex);
+        auto it = mapping.find(name);
+        if (it != mapping.end() && it->second.meta.status == SERVER_MODEL_STATUS_UNLOADED) {
+            bool has_capacity = sched->has_capacity(lk);
+            if (has_capacity && sched->queue_empty(lk)) {
+                lk.unlock();
+                SRV_INF("model name=%s is not loaded, loading...\n", name.c_str());
+                load(name);
+                did_load = true;
+            } else {
+                // also queue when a slot looks free but others wait already, else they starve
+                sched->join(lk, name);
+                queued = true;
+                if (!has_capacity) {
+                    // an idle model may sit here right now, do not wait for a request to end
+                    victim = sched->pick_victim(lk, name);
+                    if (!victim.empty()) {
+                        sched->mark_slot_pending(lk, name);
+                    }
+                }
+            }
         }
-        return false;
-    });
-
-    // check final status
-    if (!meta.has_value() || meta->is_failed()) {
-        throw std::runtime_error("model name=" + name + " failed to load");
     }
+    if (!victim.empty()) {
+        SRV_INF("evicting idle LRU name=%s to make room for name=%s\n", victim.c_str(), name.c_str());
+        unload(victim);
+    }
+
+    // while queued, this is also where the load happens: the head of the queue does it
+    SRV_INF("waiting until model name=%s is fully loaded...\n", name.c_str());
+    std::unique_lock<std::mutex> lk(mutex);
+    auto leave_queue = [this, &queued, &lk, &name]() {
+        if (queued) {
+            sched->leave(lk, name);
+            queued = false;
+        }
+    };
+
+    try {
+        bool saw_loading = false;
+        while (true) {
+            auto it = mapping.find(name);
+            if (it == mapping.end()) {
+                break; // removed by another code path, nothing to wait for
+            }
+            const server_model_status status = it->second.meta.status;
+
+            if (status == SERVER_MODEL_STATUS_LOADED || status == SERVER_MODEL_STATUS_SLEEPING) {
+                break;
+            }
+            if (status == SERVER_MODEL_STATUS_DOWNLOADING || status == SERVER_MODEL_STATUS_DOWNLOADED) {
+                break; // do not wait on a download child
+            }
+            if (status == SERVER_MODEL_STATUS_LOADING) {
+                saw_loading = true;
+            } else if (status == SERVER_MODEL_STATUS_UNLOADED) {
+                if (did_load || saw_loading) {
+                    // a spawn happened and the instance came back down
+                    if (it->second.meta.is_failed()) {
+                        throw std::runtime_error("model name=" + name + " failed to load");
+                    }
+                    break; // unloaded by another code path, caller reports "not running"
+                }
+                if (!queued) {
+                    break; // not queued, and the load someone else started fell over
+                }
+            }
+
+            if (should_stop && should_stop()) {
+                // if a model was evicted for us, the free slot goes to the next waiter
+                throw std::runtime_error("request cancelled while waiting for model name=" + name);
+            }
+
+            // our turn: our model is at the head, and a slot really did free up
+            if (status == SERVER_MODEL_STATUS_UNLOADED && sched->try_claim(lk, name)) {
+                lk.unlock();
+                bool ok = true;
+                try {
+                    SRV_INF("slot available, loading queued model name=%s\n", name.c_str());
+                    load(name);
+                    did_load = true;
+                } catch (const std::exception & e) {
+                    // lost a race for the slot, stay in line and retry
+                    SRV_WRN("queued load of name=%s did not go through: %s\n", name.c_str(), e.what());
+                    ok = false;
+                }
+                lk.lock();
+                sched->claim_done(lk, name, ok);
+                if (ok) {
+                    queued = false; // entry is gone, the other waiters watch the status now
+                }
+                continue;
+            }
+
+            cv.wait_for(lk, std::chrono::milliseconds(200));
+        }
+    } catch (...) {
+        leave_queue();
+        throw;
+    }
+    leave_queue();
 
     return true;
 }
@@ -1180,9 +1451,16 @@ server_http_res_ptr server_models::proxy_request(const server_http_req & req, co
     if (!meta->is_running()) {
         throw std::invalid_argument("model name=" + name + " is not running");
     }
-    if (update_last_used) {
+    {
         std::unique_lock<std::mutex> lk(mutex);
-        mapping[name].meta.last_used = ggml_time_ms();
+        if (update_last_used) {
+            mapping[name].meta.last_used = ggml_time_ms();
+        }
+        mapping[name].req_count++;
+    }
+    if (debug_fake_timing) {
+        // sleep after req_count++, so the model counts as busy while we wait here
+        std::this_thread::sleep_for(std::chrono::seconds(2));
     }
     SRV_INF("proxying request to model %s on port %d\n", name.c_str(), meta->port);
     std::string proxy_path = req.path;
@@ -1198,13 +1476,29 @@ server_http_res_ptr server_models::proxy_request(const server_http_req & req, co
             req.headers,
             req.body,
             req.files,
-            // a detached request belongs to a replay session that outlives the client socket:
-            // it reaches the child even when the downstream died during the load wait, the
-            // session buffer is the recipient and DELETE remains the stop
-            detached ? std::function<bool()>([]() { return false; }) : req.should_stop,
+            // a detached request belongs to a replay session
+            detached
+                ? std::function<bool()>([]() { return false; })
+                : req.should_stop,
             base_params.timeout_read,
             base_params.timeout_write
             );
+
+    proxy->cleanup = [this, name]() {
+        bool went_idle = false;
+        {
+            std::unique_lock<std::mutex> lk(mutex);
+            auto it = mapping.find(name);
+            if (it != mapping.end() && it->second.req_count > 0) {
+                it->second.req_count--;
+                went_idle = it->second.req_count == 0;
+            }
+        }
+        if (went_idle) {
+            sched->on_model_idle(name);
+        }
+    };
+
     return proxy;
 }
 
@@ -1568,7 +1862,7 @@ void server_models_routes::init_routes() {
             return error_res;
         }
         if (autoload) {
-            models.ensure_model_ready(name);
+            models.ensure_model_ready(name, req.should_stop);
         }
         return models.proxy_request(req, method, name, false);
     };
@@ -1588,7 +1882,9 @@ void server_models_routes::init_routes() {
         // this request instead of leaving an orphan generation
         std::string conv_id = server_stream_conv_id_from_headers(req.headers);
         uint64_t ticket = models.conv_models.remember(conv_id, name);
-        bool waited = autoload && models.ensure_model_ready(name);
+        // a dead socket must not cancel a session request, only a stop does (checked right below)
+        auto should_stop = ticket == 0 ? req.should_stop : nullptr;
+        bool waited = autoload && models.ensure_model_ready(name, should_stop);
         if (ticket != 0 && !models.conv_models.alive(conv_id, ticket)) {
             SRV_INF("request for conv_id=%s cancelled while model name=%s was loading\n",
                     conv_id.c_str(), name.c_str());
@@ -2064,7 +2360,7 @@ server_http_proxy::server_http_proxy(
     cli->set_write_timeout(timeout_read, 0); // reversed for cli (client) vs srv (server)
     cli->set_read_timeout(timeout_write, 0);
     this->status = 500; // to be overwritten upon response
-    this->cleanup = [pipe]() {
+    this->cleanup_pipes = [pipe]() {
         pipe->close_read();
         pipe->close_write();
     };
