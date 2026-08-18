@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { isMobile } from '$lib/stores';
+	import { deviceStore } from '$lib/stores';
 	import { autoResizeTextarea } from '$lib/utils';
 	import { onMount } from 'svelte';
 
@@ -37,7 +37,7 @@
 	}
 
 	export function focus() {
-		if (isMobile.current) return;
+		if (deviceStore.isMobile) return;
 
 		textareaElement?.focus({ preventScroll: true });
 	}

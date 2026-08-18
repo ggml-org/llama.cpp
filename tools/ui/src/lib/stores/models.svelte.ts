@@ -1,12 +1,4 @@
-import { base } from '$app/paths';
-import {
-	API_MODELS,
-	FAVORITE_MODELS_LOCALSTORAGE_KEY,
-	MODEL_PROPS_CACHE,
-	SSE_DATA_PREFIX,
-	SSE_LINE_SEPARATOR,
-	SSE_RECORD_SEPARATOR
-} from '$lib/constants';
+import { FAVORITE_MODELS_LOCALSTORAGE_KEY, MODEL_PROPS_CACHE } from '$lib/constants';
 import {
 	FileTypeCategory,
 	ModelModality,
@@ -20,12 +12,12 @@ import { conversationsStore } from '$lib/stores/conversations.svelte';
 import { serverStore } from '$lib/stores/server.svelte';
 // deep imports, not the '$lib/utils' barrel: it re-exports modules that reach back
 // into the stores, and going through it here would read a half-built module
-import { getAuthHeaders } from '$lib/utils/api-headers';
 import { TTLCache } from '$lib/utils/cache-ttl';
 import {
 	detectThinkingSupport,
 	detectThinkingSupportWithReason
 } from '$lib/utils/chat-template-thinking-detector';
+import { getConversationModel } from '$lib/utils/conversation-utils';
 import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 import { toast } from 'svelte-sonner';
 
@@ -139,6 +131,33 @@ class ModelsStore {
 		if (!props?.model_path) return null;
 
 		return props.model_path.split(/(\\|\/)/).pop() || null;
+	}
+
+	/**
+	 * Model the active conversation view resolves to. Router mode: the user's
+	 * selection first, then the conversation's own model. Otherwise the single
+	 * served model, from the models list or the server props as a fallback.
+	 */
+	get activeModelId(): string | null {
+		if (!serverStore.isRouterMode) {
+			return this.models.length > 0 ? this.models[0].model : this.singleModelName;
+		}
+
+		if (this.selectedModelId) {
+			const selected = this.models.find((m) => m.id === this.selectedModelId);
+
+			if (selected) return selected.model;
+		}
+
+		const conversationModel = getConversationModel(conversationsStore.activeMessages);
+
+		if (conversationModel) {
+			const model = this.models.find((m) => m.model === conversationModel);
+
+			if (model) return model.model;
+		}
+
+		return null;
 	}
 
 	get selectedModelContextSize(): number | null {
@@ -717,8 +736,6 @@ class ModelsStore {
 	 */
 
 	// reconnect delay after the feed drops or the server is not ready yet
-	private static readonly SSE_RECONNECT_MS = 1000;
-
 	/**
 	 * Open the /models/sse feed and keep it live with auto reconnect.
 	 * Idempotent and router mode only. The feed drives status and progress,
@@ -752,72 +769,10 @@ class ModelsStore {
 	}
 
 	/**
-	 * Read the feed and reconnect until unsubscribed. Splits the byte stream
-	 * into SSE records on the blank line boundary.
+	 * Read the feed and reconnect until unsubscribed.
 	 */
 	private async runStatusReader(signal: AbortSignal): Promise<void> {
-		const decoder = new TextDecoder();
-
-		while (!signal.aborted) {
-			try {
-				const response = await fetch(`${base}${API_MODELS.SSE}`, {
-					headers: getAuthHeaders(),
-					signal
-				});
-
-				if (response.ok && response.body) {
-					const reader = response.body.getReader();
-
-					let buffer = '';
-
-					while (!signal.aborted) {
-						const { done, value } = await reader.read();
-
-						if (done) break;
-
-						buffer += decoder.decode(value, { stream: true });
-
-						let boundary = buffer.indexOf(SSE_RECORD_SEPARATOR);
-
-						while (boundary !== -1) {
-							this.handleStatusRecord(buffer.slice(0, boundary));
-							buffer = buffer.slice(boundary + SSE_RECORD_SEPARATOR.length);
-							boundary = buffer.indexOf(SSE_RECORD_SEPARATOR);
-						}
-					}
-				}
-			} catch {
-				// network drop or abort falls through to the reconnect delay
-			}
-
-			if (signal.aborted) return;
-
-			await new Promise((resolve) => setTimeout(resolve, ModelsStore.SSE_RECONNECT_MS));
-		}
-	}
-
-	/**
-	 * Parse one SSE record. The payload rides in the data lines as a JSON
-	 * envelope that carries its own model, event and data fields.
-	 */
-	private handleStatusRecord(record: string): void {
-		const payload = record
-			.split(SSE_LINE_SEPARATOR)
-			.filter((line) => line.startsWith(SSE_DATA_PREFIX))
-			.map((line) => line.slice(SSE_DATA_PREFIX.length).trim())
-			.join(SSE_LINE_SEPARATOR);
-
-		if (payload.length === 0) return;
-
-		let envelope: ApiModelsSseEvent;
-
-		try {
-			envelope = JSON.parse(payload);
-		} catch {
-			return;
-		}
-
-		this.applyStatusEvent(envelope);
+		await ModelsService.watchModelEvents(signal, (event) => this.applyStatusEvent(event));
 	}
 
 	/**

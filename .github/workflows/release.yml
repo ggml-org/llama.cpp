@@ -446,8 +446,8 @@ jobs:
 
     env:
       # Sync versions in build-openvino.yml, build-self-hosted.yml, release.yml, build-cache.yml, .devops/openvino.Dockerfile
-      OPENVINO_VERSION_MAJOR: "2026.2.1"
-      OPENVINO_VERSION_FULL: "2026.2.1.21919.ede283a88e3"
+      OPENVINO_VERSION_MAJOR: "2026.3"
+      OPENVINO_VERSION_FULL: "2026.3.0.22451.bd8d6542e3c"
 
     steps:
       - name: Set OpenVINO version output
@@ -562,8 +562,8 @@ jobs:
 
     env:
       # Sync versions in build-openvino.yml, build-self-hosted.yml, release.yml, build-cache.yml, .devops/openvino.Dockerfile
-      OPENVINO_VERSION_MAJOR: "2026.2.1"
-      OPENVINO_VERSION_FULL: "2026.2.1.21919.ede283a88e3"
+      OPENVINO_VERSION_MAJOR: "2026.3"
+      OPENVINO_VERSION_FULL: "2026.3.0.22451.bd8d6542e3c"
 
     steps:
       - name: Set OpenVINO version output
@@ -1439,7 +1439,9 @@ jobs:
       - name: xcodebuild for swift package
         id: xcodebuild
         run: |
-          ./build-xcframework.sh
+          # note: only macos and ios-device due to long build time
+          # ref: https://github.com/ggml-org/llama.cpp/pull/27252
+          ./build-xcframework.sh macos ios-device
 
       - name: Build Xcode project
         run: xcodebuild -project examples/llama.swiftui/llama.swiftui.xcodeproj -scheme llama.swiftui -sdk iphoneos CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= -destination 'generic/platform=iOS' FRAMEWORK_FOLDER_PATH=./build-ios build
@@ -1598,6 +1600,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
+          ssh-key: ${{ secrets.DEPLOY_KEY_RELEASE }}
 
       - name: Determine tag name
         id: tag
@@ -1658,6 +1661,16 @@ jobs:
         id: package_ui
         run: |
           tar -czvf release/llama-${{ steps.tag.outputs.name }}-ui.tar.gz --transform "s,^\.,llama-${{ steps.tag.outputs.name }}," -C ./ui-dist .
+
+      - name: Create and push git tag
+        run: |
+          TAG="${{ steps.tag.outputs.name }}"
+          if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null 2>&1; then
+            echo "Tag ${TAG} already exists, skipping creation"
+          else
+            git tag "${TAG}"
+            git push origin "${TAG}"
+          fi
 
       - name: Create release
         id: create_release

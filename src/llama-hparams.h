@@ -170,6 +170,7 @@ struct llama_hparams {
 
     // for Kimi Linear KDA
     uint32_t n_embd_head_kda = 0;
+    bool     kda_safe_gate = false;
 
     // kimi-k3
     uint32_t n_expert_latent      = 0;      // routed_expert_hidden_size (0 = experts run at n_embd)

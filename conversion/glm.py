@@ -15,6 +15,7 @@ from .deepseek import DeepseekV2Model
 
 
 @ModelBase.register("Glm4ForCausalLM", "Glm4vForConditionalGeneration")
+@ModelBase.example("zai-org/GLM-4-9B-0414")
 class Glm4Model(TextModel):
     model_arch = gguf.MODEL_ARCH.GLM4
     use_mrope = False
@@ -86,6 +87,7 @@ class Glm4Model(TextModel):
 
 
 @ModelBase.register("GlmOcrForConditionalGeneration")
+@ModelBase.example("zai-org/GLM-OCR")
 class GlmOCRModel(Glm4Model):
     model_arch = gguf.MODEL_ARCH.GLM4
     use_mrope = False
@@ -107,6 +109,7 @@ class GlmOCRModel(Glm4Model):
 
 
 @ModelBase.register("Glm4MoeForCausalLM", "Glm4vMoeForConditionalGeneration")
+@ModelBase.example("zai-org/GLM-4.5-Air")
 class Glm4MoeModel(TextModel):
     model_arch = gguf.MODEL_ARCH.GLM4_MOE
 
@@ -204,6 +207,7 @@ class Glm4MoeModel(TextModel):
 
 
 @ModelBase.register("Glm4MoeLiteForCausalLM")
+@ModelBase.example("zai-org/GLM-4.7-Flash")
 class Glm4MoeLiteModel(DeepseekV2Model):
     model_arch = gguf.MODEL_ARCH.DEEPSEEK2
     skip_mtp = False
@@ -272,6 +276,7 @@ class Glm4MoeLiteModel(DeepseekV2Model):
 
 
 @ModelBase.register("GlmMoeDsaForCausalLM")
+@ModelBase.example("zai-org/GLM-5.2")
 class GlmMoeDsaModel(DeepseekV2Model):
     model_arch = gguf.MODEL_ARCH.GLM_DSA
     skip_mtp = False
@@ -340,6 +345,7 @@ class GlmMoeDsaModel(DeepseekV2Model):
 
 
 @ModelBase.register("SolarOpenForCausalLM")
+@ModelBase.example("upstage/Solar-Open-100B")
 class SolarOpenModel(Glm4MoeModel):
     model_arch = gguf.MODEL_ARCH.GLM4_MOE
 
