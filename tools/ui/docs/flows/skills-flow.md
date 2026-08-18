@@ -133,7 +133,7 @@ sequenceDiagram
         Note right of PackingSvc: Same tokenizer/estimate policy as the<br/>agentic run path below
     PackingSvc-->>UI: SkillPackedCatalog | pack error
     UI->>UI: render dismissible SkillBudgetStatus banner
-        Note right of UI: Budget status only; no consent and<br/>no activation persistence
+        Note right of UI: Budget status only, no consent and<br/>no activation persistence
 
     %% =========================================================================
     Note over UI,toolsStore: CHATFORM TOOLS ACTION POPOVER
@@ -147,7 +147,7 @@ sequenceDiagram
     else Skills availability is confirmed disabled
         toolsStore-->>UI: generic groups only
     end
-    Note right of UI: Rendering reads registry state only;<br/>it does not fetch the catalog or activate a skill
+    Note right of UI: Rendering reads registry state only,<br/>it does not fetch the catalog or activate a skill
 
     %% =========================================================================
     Note over UI,server: EXPLICIT /skills AND /skills name argument
