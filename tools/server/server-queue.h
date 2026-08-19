@@ -131,6 +131,7 @@ public:
     // for example: register order cb0, cb1, cb2
     // entering sleep: queue.sleeping = true --> cb0(true) --> cb1(true) --> cb2(true)
     // leaving sleep: cb2(false) --> cb1(false) --> cb0(false) --> queue.sleeping = false
+    // note: caller will hold mutex_tasks while calling the callbacks
     void on_sleeping_state(std::function<void(bool)> callback) {
         callback_sleeping_state.push_back(std::move(callback));
     }

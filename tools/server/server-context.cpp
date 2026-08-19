@@ -806,8 +806,6 @@ public:
 
     server_state_callback_t callback_state = [](server_state, json) -> void {};
 
-    server_metrics metrics;
-
     server_context_impl() {
         mtmd_helper_log_set(common_log_default_callback, nullptr);
     }
@@ -818,6 +816,10 @@ public:
             // we don't call it again here to avoid double free
             destroy();
         }
+    }
+
+    server_metrics get_metrics() const {
+        return metrics;
     }
 
 private:
@@ -859,6 +861,8 @@ private:
     int n_empty_consecutive = 0;
 
     std::unique_ptr<server_prompt_cache> prompt_cache;
+
+    server_metrics metrics;
 
     // queued prompt stats - llama_decode() is async, so the timing is only valid after a sync
     // note: kept out of server_metrics, which is copied as-is into the task result
@@ -4568,10 +4572,12 @@ void server_routes::init_routes() {
         res->status = 200;
 
         if (queue_tasks.is_sleeping()) {
+            std::unique_lock<std::mutex> lock(mutex_cache);
             res->headers["Process-Start-Time-Unix"] = std::to_string(cached_metrics.t_start);
             // render response using cached_metrics
             server_task_result_metrics tmp;
             tmp.metrics = cached_metrics;
+            tmp.n_idle_slots = params.n_parallel;
             res->data = tmp.to_metrics();
 
         } else {
@@ -4685,9 +4691,12 @@ void server_routes::init_routes() {
     this->get_props = [this](const server_http_req &) {
         auto res = create_response(true);
         // note: do NOT use ctx_server here, this endpoint must be accessible during sleep
-        res->ok(queue_tasks.is_sleeping()
-            ? cached_props
-            : get_res_props(*meta, params, false));
+        if (queue_tasks.is_sleeping()) {
+            std::unique_lock<std::mutex> lock(mutex_cache);
+            res->ok(cached_props);
+        } else {
+            res->ok(get_res_props(*meta, params, false));
+        }
         return res;
     };
 
@@ -4950,9 +4959,12 @@ void server_routes::init_routes() {
     this->get_models = [this](const server_http_req &) {
         auto res = create_response(true);
         // note: do NOT use ctx_server here, this endpoint must be accessible during sleep
-        res->ok(queue_tasks.is_sleeping()
-            ? cached_models
-            : get_res_models(*meta));
+        if (queue_tasks.is_sleeping()) {
+            std::unique_lock<std::mutex> lock(mutex_cache);
+            res->ok(cached_models);
+        } else {
+            res->ok(get_res_models(*meta));
+        }
         return res;
     };
 
@@ -5411,13 +5423,15 @@ std::unique_ptr<server_res_generator> server_routes::handle_count_tokens(const l
     return res;
 }
 
-void server_routes::update_cached_responses(bool enabled) {
-    if (enabled) {
+void server_routes::update_cached_responses(bool is_sleeping) {
+    if (is_sleeping) {
+        std::unique_lock<std::mutex> lock(mutex_cache);
+
         cached_models  = get_res_models(*meta);
         cached_props   = get_res_props(*meta, params, true);
 
         // caller is task_queue, so we don't need to hold locks here
-        cached_metrics = ctx_server.metrics;
+        cached_metrics = ctx_server.get_metrics();
 
         SRV_DBG("%s\n", "cached responses updated");
     }

@@ -8,6 +8,7 @@
 
 #include <cstddef>
 #include <memory>
+#include <mutex>
 #include <set>
 
 struct server_context_impl; // private implementation
@@ -181,9 +182,10 @@ private:
     std::unique_ptr<server_res_generator> create_response(bool bypass_sleep = false);
 
     // cached responses, to be used during sleep
+    std::mutex     mutex_cache;
     json           cached_models  = nullptr;
     json           cached_props   = nullptr;
     server_metrics cached_metrics;
     // call right before sleep to update the cached responses
-    void update_cached_responses(bool enabled);
+    void update_cached_responses(bool is_sleeping);
 };
