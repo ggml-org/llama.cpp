@@ -2,15 +2,15 @@
  * chatActivityStore - Conversation activity ledger
  *
  * Single owner of the "is this conversation doing something" state:
- * - `local`  — this browser is piping a stream (send, server-stream attach,
+ * - `local`  - this browser is piping a stream (send, server-stream attach,
  *              or resume-wait while the owning model loads)
- * - `remote` — the backend reports a running session, no local pipe yet
+ * - `remote` - the backend reports a running session, no local pipe yet
  *              (global snapshot on mount / visibilitychange)
  *
  * The union of both drives the sidebar spinners (`loadingConvs`); `local`
  * drives the per-conversation loading flags. When a local pipe ends it is
  * the authoritative observer of session end, so it also drops the stale
- * remote hint in the same call — no cross-owner cleanup, no ghosted
+ * remote hint in the same call - no cross-owner cleanup, no ghosted
  * spinners waiting for the next visibilitychange snapshot.
  *
  * Composed under chatStore.activity; not exported from the stores barrel.

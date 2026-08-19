@@ -13,12 +13,7 @@
  * @see ChatService in services/chat.service.ts for API operations
  */
 
-import {
-	CWD_CLEARED_TEXT,
-	INACTIVE_CONVERSATION,
-	SYSTEM_MESSAGE_PLACEHOLDER,
-	TITLE_GENERATION
-} from '$lib/constants';
+import { CWD_CLEARED_TEXT, SYSTEM_MESSAGE_PLACEHOLDER, TITLE_GENERATION } from '$lib/constants';
 import {
 	ErrorDialogType,
 	MessageRole,
@@ -59,10 +54,6 @@ import {
 } from '$lib/utils';
 import { SvelteMap } from 'svelte/reactivity';
 
-interface ConversationStateEntry {
-	lastAccessed: number;
-}
-
 class ChatStore implements ChatStreamHost, ChatFlowsHost {
 	currentResponse = $state('');
 	errorDialogState = $state<ErrorDialogState | null>(null);
@@ -86,7 +77,6 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 	private flows = new ChatMessageFlows(this);
 	private abortControllers = new SvelteMap<string, AbortController>();
 	private preEncodeAbortController: AbortController | null = null;
-	private conversationStateTimestamps = new SvelteMap<string, ConversationStateEntry>();
 	private isEditModeActive = $state(false);
 	private addFilesHandler: ((files: File[]) => void) | null = $state(null);
 	pendingEditMessageId = $state<string | null>(null);
@@ -110,8 +100,6 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 	}
 
 	setChatLoading(convId: string, loading: boolean): void {
-		this.touchConversationState(convId);
-
 		if (loading) {
 			this.activity.markLocal(convId);
 		} else {
@@ -130,7 +118,6 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 		messageId: string,
 		model?: string | null
 	): void {
-		this.touchConversationState(convId);
 		this.chatStreamingStates.set(convId, {
 			messageId,
 			model: model ?? this.chatStreamingStates.get(convId)?.model,
@@ -340,66 +327,6 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 		this._pendingMessages.delete(convId);
 
 		return msg;
-	}
-
-	private touchConversationState(convId: string): void {
-		this.conversationStateTimestamps.set(convId, { lastAccessed: Date.now() });
-	}
-
-	cleanupOldConversationStates(activeConversationIds?: string[]): number {
-		const now = Date.now();
-		const activeIdsList = activeConversationIds ?? [];
-		const preserveIds = this.processing.activeConversationId
-			? [...activeIdsList, this.processing.activeConversationId]
-			: activeIdsList;
-		const allConvIds = [
-			...new Set([
-				...this.activity.loadingConvs,
-				...this.chatStreamingStates.keys(),
-				...this.abortControllers.keys(),
-				...this.processing.getConversationIds(),
-				...this.conversationStateTimestamps.keys()
-			])
-		];
-		const cleanupCandidates: Array<{ convId: string; lastAccessed: number }> = [];
-
-		for (const convId of allConvIds) {
-			if (preserveIds.includes(convId)) continue;
-
-			if (this.activity.isLocal(convId)) continue;
-
-			if (this.chatStreamingStates.has(convId)) continue;
-
-			const ts = this.conversationStateTimestamps.get(convId);
-
-			cleanupCandidates.push({ convId, lastAccessed: ts?.lastAccessed ?? 0 });
-		}
-		cleanupCandidates.sort((a, b) => a.lastAccessed - b.lastAccessed);
-		let cleanedUp = 0;
-
-		for (const { convId, lastAccessed } of cleanupCandidates) {
-			if (
-				cleanupCandidates.length - cleanedUp > INACTIVE_CONVERSATION.MAX_STATES ||
-				now - lastAccessed > INACTIVE_CONVERSATION.MAX_AGE_MS
-			) {
-				this.cleanupConversationState(convId);
-				cleanedUp++;
-			}
-		}
-
-		return cleanedUp;
-	}
-	private cleanupConversationState(convId: string): void {
-		const c = this.abortControllers.get(convId);
-
-		if (c && !c.signal.aborted) c.abort();
-
-		// convs that are still locally active or streaming are skipped above, so no
-		// activity-ledger cleanup is needed here
-		this.chatStreamingStates.delete(convId);
-		this.abortControllers.delete(convId);
-		this.processing.setState(convId, null);
-		this.conversationStateTimestamps.delete(convId);
 	}
 
 	async addMessage(

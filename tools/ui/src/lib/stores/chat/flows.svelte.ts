@@ -738,7 +738,7 @@ export class ChatMessageFlows {
 			const hasChildren = dbMsg ? dbMsg.children.length > 0 : msg.children.length > 0;
 
 			if (!hasChildren) {
-				// No responses after this message — update in place instead of branching
+				// No responses after this message - update in place instead of branching
 				const updates: Partial<DatabaseMessage> = {
 					content: newContent,
 					extra: extrasToUse,
@@ -749,7 +749,7 @@ export class ChatMessageFlows {
 				conversationsStore.updateMessageAtIndex(idx, updates);
 				messageIdForResponse = msg.id;
 			} else {
-				// Has children — create a new branch as sibling
+				// Has children - create a new branch as sibling
 				const parentId = msg.parent || rootMessage?.id;
 
 				if (!parentId) return;
