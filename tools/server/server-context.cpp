@@ -214,6 +214,7 @@ struct server_slot {
     std::vector<int32_t> spec_i_batch;
     common_prompt_checkpoint spec_ckpt;
     bool spec_is_replay = false;
+    bool spec_grammar_fallback_logged = false;
 
     // TODO: move members that belong to the task (such as `generated_text`, `has_new_line`) to task_results_state
     //       see https://github.com/ggml-org/llama.cpp/pull/18283#issuecomment-3710175837
@@ -327,6 +328,7 @@ struct server_slot {
         SLT_DBG(*this, "%s", "\n");
 
         spec_is_replay = false;
+        spec_grammar_fallback_logged = false;
 
         last_nl_pos    = 0;
         generated_text = "";
@@ -3927,8 +3929,21 @@ private:
                 const bool can_rollback =
                     ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_PART ||
                     (ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_RS && n_draft <= llama_n_rs_seq(ctx_tgt));
-                auto accepted = can_rollback && slot.task->params.sampling.temp > 0.0f &&
-                                slot.spec_dists.size() == slot.spec_draft.size()
+                const bool can_use_residual = can_rollback && slot.task->params.sampling.temp > 0.0f &&
+                                              slot.spec_dists.size() == slot.spec_draft.size();
+                const bool grammar_active = common_sampler_grammar_should_apply(slot.smpl.get());
+
+                // Distribution-aware speculative verification applies grammar_first to every target
+                // row. For large tool grammars this scans the full vocabulary up to n_draft times and
+                // leaves the GPUs idle. Equality verification is still target-distribution-correct and
+                // uses the inexpensive rejection-sampling grammar path, matching native MTP behavior.
+                const bool use_residual = can_use_residual && !grammar_active;
+                if (can_use_residual && grammar_active && !slot.spec_grammar_fallback_logged) {
+                    SLT_INF(slot, "%s", "using equality speculative verification while grammar constraints are active\n");
+                    slot.spec_grammar_fallback_logged = true;
+                }
+
+                auto accepted = use_residual
                     ? common_sampler_sample_and_accept_n(slot.smpl.get(), slot.ctx_tgt, slot.spec_i_batch, slot.spec_draft, slot.spec_dists)
                     : common_sampler_sample_and_accept_n(slot.smpl.get(), slot.ctx_tgt, slot.spec_i_batch, slot.spec_draft);
                 slot.spec_i_batch.clear();

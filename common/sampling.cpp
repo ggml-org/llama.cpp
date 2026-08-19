@@ -459,8 +459,8 @@ void common_sampler_free(struct common_sampler * gsmpl) {
     delete gsmpl;
 }
 
-static bool grammar_should_apply(struct common_sampler * gsmpl) {
-    if (!gsmpl->grmr) {
+bool common_sampler_grammar_should_apply(const struct common_sampler * gsmpl) {
+    if (!gsmpl || !gsmpl->grmr) {
         return false;
     }
     if (!gsmpl->rbudget) {
@@ -481,8 +481,8 @@ void common_sampler_accept(struct common_sampler * gsmpl, llama_token token, boo
 
     const auto tm = gsmpl->tm();
 
-    // grammar_should_apply() checks the reasoning budget state, so calculate this before we accept
-    const auto accept_grammar = is_generated && grammar_should_apply(gsmpl);
+    // common_sampler_grammar_should_apply() checks the reasoning budget state, so calculate this before we accept
+    const auto accept_grammar = is_generated && common_sampler_grammar_should_apply(gsmpl);
 
     if (gsmpl->rbudget && is_generated) {
         llama_sampler_accept(gsmpl->rbudget, token);
@@ -645,7 +645,7 @@ llama_token common_sampler_sample(struct common_sampler * gsmpl, struct llama_co
     // apply reasoning budget first
     llama_sampler_apply(rbudget, &cur_p);
 
-    if (grammar_first && grammar_should_apply(gsmpl)) {
+    if (grammar_first && common_sampler_grammar_should_apply(gsmpl)) {
         llama_sampler_apply(grmr, &cur_p);
     }
 
@@ -653,7 +653,7 @@ llama_token common_sampler_sample(struct common_sampler * gsmpl, struct llama_co
 
     id = cur_p.data[cur_p.selected].id;
 
-    if (grammar_first || !grammar_should_apply(gsmpl)) {
+    if (grammar_first || !common_sampler_grammar_should_apply(gsmpl)) {
         return id;
     }
 
@@ -676,7 +676,7 @@ llama_token common_sampler_sample(struct common_sampler * gsmpl, struct llama_co
 
     llama_sampler_apply(rbudget,  &cur_p);
 
-    if (grammar_should_apply(gsmpl)) {
+    if (common_sampler_grammar_should_apply(gsmpl)) {
         llama_sampler_apply(grmr,  &cur_p);
     }
 

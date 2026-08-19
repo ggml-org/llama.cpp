@@ -56,6 +56,10 @@ void common_perf_print(const struct llama_context * ctx, const struct common_sam
 // get the underlying llama_sampler_chain
 struct llama_sampler * common_sampler_get(const struct common_sampler * gsmpl);
 
+// Returns true when grammar constraints should be applied at the current reasoning state.
+// Lazy tool grammars return false while the model is reasoning and true after reasoning ends.
+bool common_sampler_grammar_should_apply(const struct common_sampler * gsmpl);
+
 // extended sampling implementation:
 //
 // - set logits
