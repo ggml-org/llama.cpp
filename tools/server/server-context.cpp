@@ -798,6 +798,15 @@ public:
     mtmd_context * mctx = nullptr;
     const llama_vocab * vocab = nullptr;
 
+    server_sleep_rst sleep_rst;
+
+    server_metrics metrics;
+
+    // called each time the model is loaded, used by server_routes to refresh its metadata
+    void on_model_loaded(std::function<void()> callback) {
+        callback_model_loaded = std::move(callback);
+    }
+
     server_queue    queue_tasks;
     server_response queue_results;
 
@@ -816,14 +825,6 @@ public:
             // we don't call it again here to avoid double free
             destroy();
         }
-    }
-
-    server_metrics get_metrics() const {
-        return metrics;
-    }
-
-    void reset_metrics_bucket() {
-        metrics.reset_bucket();
     }
 
 private:
@@ -866,8 +867,6 @@ private:
 
     std::unique_ptr<server_prompt_cache> prompt_cache;
 
-    server_metrics metrics;
-
     // queued prompt stats - llama_decode() is async, so the timing is only valid after a sync
     // note: kept out of server_metrics, which is copied as-is into the task result
     int64_t  t_decode_start  = 0; // start of the last submitted decode
@@ -884,6 +883,13 @@ private:
     std::set<std::string> model_tags;    // informational tags
 
     bool sleeping = false;
+
+    // set once init() has run, which requires a loaded model
+    bool initialized = false;
+
+    bool queue_initialized = false;
+
+    std::function<void()> callback_model_loaded;
 
     int64_t t_last_load_progress_ms = 0;
 
@@ -912,11 +918,15 @@ private:
             }
             SRV_INF("%s", "server is entering sleeping state\n");
             destroy();
-        } else {
-            SRV_INF("%s", "server is exiting sleeping state\n");
-            if (!load_model(params_base)) {
-                GGML_ABORT("failed to reload model after sleeping");
-            }
+            sleeping = new_state;
+            // everything is released, the process can now restart itself
+            sleep_rst.restart();
+            return;
+        }
+
+        SRV_INF("%s", "server is exiting sleeping state\n");
+        if (!load_model(params_base)) {
+            GGML_ABORT("failed to reload model after sleeping");
         }
         sleeping = new_state;
     }
@@ -956,6 +966,15 @@ private:
     // load the model and initialize llama_context
     // this may also be called to resume from sleeping state
     bool load_model(common_params & params) {
+        if (!initialized && !sleeping) {
+            sleep_rst.enable(params);
+
+            if (sleep_rst.is_boot_to_sleep()) {
+                init_sleeping(params);
+                return true;
+            }
+        }
+
         load_progress_data load_progress_text  (this, "text_model");
         load_progress_data load_progress_mmproj(this, "mmproj_model");
         load_progress_data load_progress_spec  (this, "spec_model");
@@ -1349,25 +1368,34 @@ private:
         // propagate new defaults back to caller
         params = params_base;
 
-        if (!is_resume) {
-            return init();
+        // a process restarted into sleeping state loads the model here for the first time
+        if (!initialized) {
+            initialized = true;
+            if (!init()) {
+                return false;
+            }
         }
 
-        if (callback_state) {
+        SRV_INF("%s", "model loaded\n");
+
+        if (callback_model_loaded) {
+            callback_model_loaded();
+        }
+
+        if (is_resume && callback_state) {
             callback_state(SERVER_STATE_READY, {});
         }
 
         return true;
     }
 
-    // unlike load_model(), this is only called once during initialization
-    bool init() {
-        GGML_ASSERT(ctx_tgt   != nullptr);
-        GGML_ASSERT(model_tgt != nullptr);
+    // wiring up server queues, must be done once before start_loop()
+    void init_queue() {
+        if (queue_initialized) {
+            return; // already done by init_sleeping()
+        }
+        queue_initialized = true;
 
-        GGML_ASSERT(!sleeping);
-
-        // wiring up server queues
         queue_tasks.on_new_task([this](server_task && task, bool is_yielding) {
             return process_single_task(std::move(task), is_yielding);
         });
@@ -1379,6 +1407,28 @@ private:
         });
 
         metrics.init();
+    }
+
+    // enter sleeping state without a model, the model is loaded upon leaving that state
+    void init_sleeping(common_params & params) {
+        GGML_ASSERT(!initialized);
+
+        params_base = params;
+
+        init_queue();
+
+        sleeping = true;
+        queue_tasks.init_sleeping();
+
+        SRV_INF("%s", "restarted in sleeping state, the model will be loaded upon the first request\n");
+    }
+
+    // unlike load_model(), this is only called once during initialization
+    bool init() {
+        GGML_ASSERT(ctx_tgt   != nullptr);
+        GGML_ASSERT(model_tgt != nullptr);
+
+        init_queue();
 
         if (params_base.cache_idle_slots) {
             if (params_base.cache_ram_mib == 0) {
@@ -4074,6 +4124,10 @@ private:
 server_context::server_context() : impl(new server_context_impl()) {}
 server_context::~server_context() = default;
 
+void server_context::init(int argc, char ** argv) {
+    impl->sleep_rst.init(argc, argv);
+}
+
 bool server_context::load_model(common_params & params) {
     return impl->load_model(params);
 }
@@ -4454,6 +4508,21 @@ server_routes::server_routes(const common_params & params, server_context & ctx_
     queue_tasks.on_sleeping_state([this](bool is_sleeping) {
         update_cached_responses(is_sleeping);
     });
+
+    // meta is only available once the model is loaded, which may happen upon leaving sleeping state
+    this->ctx_server.on_model_loaded([this, &ctx_server]() {
+        update_meta(ctx_server);
+    });
+
+    // set the hook to allow sleep_rst to capture the state BEFORE resetting the process
+    this->ctx_server.sleep_rst.set_state_provider([this]() {
+        return cache_to_json();
+    });
+
+    // reverse of above: if we just booted AFTER sleep_rst reset the process, we restore it
+    if (this->ctx_server.sleep_rst.is_boot_to_sleep()) {
+        cache_from_json(this->ctx_server.sleep_rst.get_boot_state());
+    }
 }
 
 static json get_res_model_info(const server_context_meta & meta) {
@@ -5459,7 +5528,7 @@ void server_routes::update_cached_responses(bool is_sleeping) {
     if (is_sleeping) {
         cached_models  = get_res_models(*meta);
         cached_props   = get_res_props(*meta, params, true);
-        cached_metrics = ctx_server.get_metrics();
+        cached_metrics = ctx_server.metrics;
 
         should_reset_buckets = false;
 
@@ -5467,7 +5536,7 @@ void server_routes::update_cached_responses(bool is_sleeping) {
 
     } else if (should_reset_buckets) {
         // a scrape during sleep already reported these buckets
-        ctx_server.reset_metrics_bucket();
+        ctx_server.metrics.reset_bucket();
 
         should_reset_buckets = false;
     }
@@ -5495,5 +5564,9 @@ bool server_routes::cache_from_json(const json & data) {
         return false;
     }
 
+    // keep counting from where the previous process stopped
+    ctx_server.metrics = cached_metrics;
+
     return true;
 }
+

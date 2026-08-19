@@ -167,6 +167,7 @@ int llama_server(common_params & params, int argc, char ** argv) {
 
     // struct that contains llama context and inference
     server_context ctx_server;
+    ctx_server.init(argc, argv);
 
     server_http_context ctx_http;
     if (!ctx_http.init(params)) {
@@ -458,10 +459,7 @@ int llama_server(common_params & params, int argc, char ** argv) {
             return 1;
         }
 
-        routes.update_meta(ctx_server);
         ctx_http.is_ready.store(true);
-
-        SRV_INF("%s", "model loaded\n");
 
         shutdown_handler = [&](int) {
             mcp_mgr.shutdown();
@@ -513,7 +511,10 @@ int llama_server(common_params & params, int argc, char ** argv) {
         std::thread monitor_thread;
         if (child.is_child()) {
             monitor_thread = child.setup(shutdown_handler);
-            child.notify_to_router(server_state_to_str(SERVER_STATE_READY), routes.get_model_info());
+            // if no model is loaded, the process restarted into sleeping state and the router knows it
+            if (ctx_server.get_llama_context() != nullptr) {
+                child.notify_to_router(server_state_to_str(SERVER_STATE_READY), routes.get_model_info());
+            }
         }
 
         // this call blocks the main thread until queue_tasks.terminate() is called
