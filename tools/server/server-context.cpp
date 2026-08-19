@@ -4575,14 +4575,18 @@ void server_routes::init_routes() {
         res->content_type = "text/plain; version=0.0.4";
         res->status = 200;
 
-        if (queue_tasks.is_sleeping()) {
+        // render response using cached_metrics
+        auto use_cached_metrics = [&]() {
             std::unique_lock<std::mutex> lock(mutex_cache);
             res->headers["Process-Start-Time-Unix"] = std::to_string(cached_metrics.t_start);
-            // render response using cached_metrics
             server_task_result_metrics tmp;
             tmp.metrics = cached_metrics;
             tmp.n_idle_slots = params.n_parallel;
             res->data = tmp.to_metrics();
+        };
+
+        if (queue_tasks.is_sleeping()) {
+            use_cached_metrics();
 
         } else {
             // request slots data using task queue
@@ -4594,11 +4598,14 @@ void server_routes::init_routes() {
                 res->rd.post_task(std::move(task), true); // high-priority task
             }
 
-            // get the result
-            auto result = res->rd.next(req.should_stop);
+            // a task posted right before sleeping is never processed, do not wait for it
+            auto result = res->rd.next([&]{
+                return req.should_stop() || queue_tasks.is_sleeping();
+            });
             if (!result) {
-                // connection was closed
-                GGML_ASSERT(req.should_stop());
+                if (!req.should_stop()) {
+                    use_cached_metrics();
+                }
                 return res;
             }
 
