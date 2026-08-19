@@ -806,6 +806,8 @@ public:
 
     server_state_callback_t callback_state = [](server_state, json) -> void {};
 
+    server_metrics metrics;
+
     server_context_impl() {
         mtmd_helper_log_set(common_log_default_callback, nullptr);
     }
@@ -857,8 +859,6 @@ private:
     int n_empty_consecutive = 0;
 
     std::unique_ptr<server_prompt_cache> prompt_cache;
-
-    server_metrics metrics;
 
     // queued prompt stats - llama_decode() is async, so the timing is only valid after a sync
     // note: kept out of server_metrics, which is copied as-is into the task result
@@ -4429,6 +4429,12 @@ server_routes::server_routes(const common_params & params, server_context & ctx_
           queue_tasks(ctx_server.impl->queue_tasks),
           queue_results(ctx_server.impl->queue_results) {
     init_routes();
+
+    // note: this must be registered before load_model()
+    //       so that on sleep phase, the callback is called before ctx is destroyed
+    queue_tasks.on_sleeping_state([this](bool is_sleeping) {
+        update_cached_responses(is_sleeping);
+    });
 }
 
 static json get_res_models(const server_context_meta & meta) {
@@ -4552,41 +4558,52 @@ void server_routes::init_routes() {
     };
 
     this->get_metrics = [this](const server_http_req & req) {
-        auto res = create_response();
+        auto res = create_response(true);
         if (!params.endpoint_metrics) {
             res->error(format_error_response("This server does not support metrics endpoint. Start it with `--metrics`", ERROR_TYPE_NOT_SUPPORTED));
             return res;
         }
 
-        // request slots data using task queue
-        {
-            server_task task(SERVER_TASK_TYPE_METRICS);
-            task.id = res->rd.get_new_id();
-            // the gauges are averaged over the window between two scrapes
-            task.metrics_reset_bucket = true;
-            res->rd.post_task(std::move(task), true); // high-priority task
-        }
-
-        // get the result
-        auto result = res->rd.next(req.should_stop);
-        if (!result) {
-            // connection was closed
-            GGML_ASSERT(req.should_stop());
-            return res;
-        }
-
-        if (result->is_error()) {
-            res->error(result->to_json());
-            return res;
-        }
-
-        auto res_task = dynamic_cast<server_task_result_metrics*>(result.get());
-        GGML_ASSERT(res_task != nullptr);
-
-        res->headers["Process-Start-Time-Unix"] = std::to_string(res_task->metrics.t_start);
         res->content_type = "text/plain; version=0.0.4";
         res->status = 200;
-        res->data = res_task->to_metrics();
+
+        if (queue_tasks.is_sleeping()) {
+            res->headers["Process-Start-Time-Unix"] = std::to_string(cached_metrics.t_start);
+            // render response using cached_metrics
+            server_task_result_metrics tmp;
+            tmp.metrics = cached_metrics;
+            res->data = tmp.to_metrics();
+
+        } else {
+            // request slots data using task queue
+            {
+                server_task task(SERVER_TASK_TYPE_METRICS);
+                task.id = res->rd.get_new_id();
+                // the gauges are averaged over the window between two scrapes
+                task.metrics_reset_bucket = true;
+                res->rd.post_task(std::move(task), true); // high-priority task
+            }
+
+            // get the result
+            auto result = res->rd.next(req.should_stop);
+            if (!result) {
+                // connection was closed
+                GGML_ASSERT(req.should_stop());
+                return res;
+            }
+
+            if (result->is_error()) {
+                res->error(result->to_json());
+                return res;
+            }
+
+            auto res_task = dynamic_cast<server_task_result_metrics*>(result.get());
+            GGML_ASSERT(res_task != nullptr);
+
+            res->headers["Process-Start-Time-Unix"] = std::to_string(res_task->metrics.t_start);
+            res->data = res_task->to_metrics();
+        }
+
         return res;
     };
 
@@ -4668,9 +4685,9 @@ void server_routes::init_routes() {
     this->get_props = [this](const server_http_req &) {
         auto res = create_response(true);
         // note: do NOT use ctx_server here, this endpoint must be accessible during sleep
-        res->ok(!cached_props.is_null()
+        res->ok(queue_tasks.is_sleeping()
             ? cached_props
-            : get_res_props(*meta, params, queue_tasks.is_sleeping()));
+            : get_res_props(*meta, params, false));
         return res;
     };
 
@@ -4933,7 +4950,7 @@ void server_routes::init_routes() {
     this->get_models = [this](const server_http_req &) {
         auto res = create_response(true);
         // note: do NOT use ctx_server here, this endpoint must be accessible during sleep
-        res->ok(!cached_models.is_null()
+        res->ok(queue_tasks.is_sleeping()
             ? cached_models
             : get_res_models(*meta));
         return res;
@@ -5397,11 +5414,11 @@ std::unique_ptr<server_res_generator> server_routes::handle_count_tokens(const l
 void server_routes::update_cached_responses(bool enabled) {
     if (enabled) {
         cached_models  = get_res_models(*meta);
-        cached_props   = get_res_props(*meta, params, queue_tasks.is_sleeping());
-        cached_metrics = "TODO";
-    } else {
-        cached_models  = nullptr;
-        cached_props   = nullptr;
-        cached_metrics = "";
+        cached_props   = get_res_props(*meta, params, true);
+
+        // caller is task_queue, so we don't need to hold locks here
+        cached_metrics = ctx_server.metrics;
+
+        SRV_DBG("%s\n", "cached responses updated");
     }
 }
