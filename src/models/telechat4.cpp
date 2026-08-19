@@ -463,6 +463,12 @@ ggml_tensor * llama_model_telechat4::graph::build_hc_pre(
     const int64_t hc = hparams.tc4_hc_mult;
     const int64_t nt = x->ne[2];
 
+    if (cparams.fused_tc4_hc_pre && il >= 0) {
+        ggml_tensor * result = ggml_tc4_hc_pre(ctx0, x, weights);
+        res->add_fused_node({LLM_FUSED_OP_TC4_HC_PRE, result, il});
+        return result;
+    }
+
     ggml_tensor * result = nullptr;
     for (int64_t ih = 0; ih < hc; ++ih) {
         ggml_tensor * xh = ggml_view_2d(ctx0, x, n_embd, nt, x->nb[2], ih*x->nb[1]);
@@ -479,11 +485,18 @@ ggml_tensor * llama_model_telechat4::graph::build_hc_sinkhorn(
         int           il) const {
     GGML_UNUSED(il);
 
-    // comb is [src_hc, dst_hc, n_tokens] (ne0 = src). Matches the reference
+    // comb is [src_hc, dst_hc, n_tokens] (ne0 = src). Mirrors the reference
     // mhc_pre_big_fuse_with_clamp_tilelang kernel: softmax over src, then
     // sinkhorn_iterations x (col-norm over src, row-norm over dst); eps is only
     // added to the normalization denominators, never to the values.
     // ggml_soft_max also performs the reference's first column normalization.
+    //
+    // NOTE: this decomposed fallback (only used when fused_tc4_hc_comb is off)
+    // cannot add eps to the first src-normalization because ggml_soft_max
+    // divides by the raw sum. The fused ggml_tc4_hc_comb path replicates
+    // with_clamp bit-exactly (exp(-max), then all eps-normalizations in the
+    // loop); this path differs from it by ~1e-6 (eps missing in the very first
+    // src normalization).
     comb = ggml_soft_max(ctx0, comb);
 
     ggml_tensor * eps = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, 1);
@@ -553,15 +566,21 @@ ggml_tensor * llama_model_telechat4::graph::build_hc_pre(
     *post = ggml_scale(ctx0, *post, 2.0f);
     cb(*post, "hc_post", il);
 
-    ggml_tensor * scale_comb = tc4_view_1d(ctx0, hc_scale, 1, 2);
-    ggml_tensor * base_comb  = tc4_view_1d(ctx0, hc_base, hc*hc, 2*hc);
+    if (cparams.fused_tc4_hc_comb) {
+        *comb = ggml_tc4_hc_comb(ctx0, mixes, hc_scale, hc_base, hparams.tc4_hc_eps,
+                (int32_t) hparams.tc4_hc_sinkhorn_iters);
+        res->add_fused_node({LLM_FUSED_OP_TC4_HC_COMB, *comb, il});
+    } else {
+        ggml_tensor * scale_comb = tc4_view_1d(ctx0, hc_scale, 1, 2);
+        ggml_tensor * base_comb  = tc4_view_1d(ctx0, hc_base, hc*hc, 2*hc);
 
-    *comb = tc4_view_2d(ctx0, mixes, hc*hc, nt, 2*hc);
-    *comb = tc4_hc_affine(ctx0, *comb, scale_comb, base_comb);
-    // the reference MHC kernel clamps the raw comb logits before Sinkhorn
-    *comb = ggml_clamp(ctx0, *comb, -30.0f, 30.0f);
-    *comb = ggml_reshape_3d(ctx0, *comb, hc, hc, nt);
-    *comb = build_hc_sinkhorn(*comb, il);
+        *comb = tc4_view_2d(ctx0, mixes, hc*hc, nt, 2*hc);
+        *comb = tc4_hc_affine(ctx0, *comb, scale_comb, base_comb);
+        // the reference MHC kernel clamps the raw comb logits before Sinkhorn
+        *comb = ggml_clamp(ctx0, *comb, -30.0f, 30.0f);
+        *comb = ggml_reshape_3d(ctx0, *comb, hc, hc, nt);
+        *comb = build_hc_sinkhorn(*comb, il);
+    }
     cb(*comb, "hc_comb", il);
 
     ggml_tensor * result = build_hc_pre(x, pre, il);
@@ -578,6 +597,12 @@ ggml_tensor * llama_model_telechat4::graph::build_hc_post(
 
     GGML_ASSERT(x->ne[0] == n_embd);
     GGML_ASSERT(residual->ne[1] == hparams.tc4_hc_mult);
+
+    if (cparams.fused_tc4_hc_post) {
+        ggml_tensor * result = ggml_tc4_hc_post(ctx0, x, residual, post, comb);
+        res->add_fused_node({LLM_FUSED_OP_TC4_HC_POST, result, il});
+        return result;
+    }
 
     const int64_t hc = hparams.tc4_hc_mult;
     const int64_t nt = x->ne[1];
