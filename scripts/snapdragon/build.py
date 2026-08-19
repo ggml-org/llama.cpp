@@ -199,14 +199,25 @@ def main():
         target_dir = args.target_dir
         if not target_dir:
             target_dir = "/data/local/tmp/llama.cpp" if target_type == "android" else "~/llama.cpp"
+        target_dir = target_dir.rstrip("/")
+
+        sub_items = [item for item in os.listdir(src_path) if not item.startswith(".")]
 
         if target_type == "android":
             logger.info("\nPushing built artifacts to Android device via ADB...")
             adb_cmd = ["adb"]
             if target_val: # serial
                 adb_cmd += ["-s", target_val]
+
+            # Clean stale package files on device
+            if sub_items:
+                clean_paths = " ".join(f"{target_dir}/{item}" for item in sub_items)
+                clean_cmd = adb_cmd + ["shell", f"rm -rf {clean_paths}"]
+                logger.info(f"+ {' '.join(clean_cmd)}")
+                subprocess.run(clean_cmd)
+
             # Android destination directory is target_dir
-            push_cmd = adb_cmd + ["push", src_path, target_dir]
+            push_cmd = adb_cmd + ["push", os.path.join(src_path, "."), target_dir]
             logger.info(f"+ {' '.join(push_cmd)}")
             res = subprocess.run(push_cmd)
             if res.returncode != 0:
@@ -220,8 +231,16 @@ def main():
                 logger.error("Error: SSH host not specified in target (e.g. use linux:user@host, lnx:user@host, or ubuntu:user@host). Cannot deploy.")
                 sys.exit(1)
             logger.info(f"\nDeploying built artifacts to Linux device {ssh_host} via SSH/SCP...")
+
+            # Clean stale package files on remote host
+            if sub_items:
+                clean_paths = " ".join(f"{target_dir}/{item}" for item in sub_items)
+                clean_cmd = ["ssh", ssh_host, f"rm -rf {clean_paths}"]
+                logger.info(f"+ {' '.join(clean_cmd)}")
+                subprocess.run(clean_cmd)
+
             # Deploy to target_dir
-            deploy_cmd = ["scp", "-r", src_path, f"{ssh_host}:{target_dir}"]
+            deploy_cmd = ["scp", "-r", os.path.join(src_path, "."), f"{ssh_host}:{target_dir}"]
             logger.info(f"+ {' '.join(deploy_cmd)}")
             res = subprocess.run(deploy_cmd)
             if res.returncode != 0:
