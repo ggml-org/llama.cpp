@@ -3382,7 +3382,6 @@ static void ggml_vk_queue_command_pools_cleanup(vk_device& device) {
     // Arbitrary frequency to cleanup/reuse command buffers
     static constexpr uint32_t cleanup_frequency = 10;
 
-    // Guard against null queue pointers.
     if (device->compute_queue && device->compute_queue->cmd_pool.buffers_in_use() >= cleanup_frequency) {
         ggml_vk_command_pool_cleanup(device, device->compute_queue->cmd_pool);
     }
@@ -3390,7 +3389,6 @@ static void ggml_vk_queue_command_pools_cleanup(vk_device& device) {
         ggml_vk_command_pool_cleanup(device, device->transfer_queue->cmd_pool);
     }
 }
-
 
 static std::vector<uint32_t> ggml_vk_find_memory_properties(const vk::PhysicalDeviceMemoryProperties* mem_props, vk::MemoryRequirements* mem_req, vk::MemoryPropertyFlags flags) {
     std::vector<uint32_t> indices;
