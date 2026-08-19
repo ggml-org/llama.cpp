@@ -45,6 +45,7 @@ function saveReasoningEffortDefault(effort: ReasoningEffort): void {
 export interface ConversationsPreferencesHost {
 	activeConversation: DatabaseConversation | null;
 	conversations: DatabaseConversation[];
+	applyConversationUpdate(id: string, updates: Partial<DatabaseConversation>): void;
 }
 
 export class ConversationPreferences {
@@ -168,19 +169,9 @@ export class ConversationPreferences {
 			mcpServerOverrides: newOverrides.length > 0 ? newOverrides : undefined
 		});
 
-		this.host.activeConversation = {
-			...this.host.activeConversation,
+		this.host.applyConversationUpdate(this.host.activeConversation.id, {
 			mcpServerOverrides: newOverrides.length > 0 ? newOverrides : undefined
-		};
-
-		const convIndex = this.host.conversations.findIndex(
-			(c) => c.id === this.host.activeConversation!.id
-		);
-
-		if (convIndex !== -1) {
-			this.host.conversations[convIndex].mcpServerOverrides =
-				newOverrides.length > 0 ? newOverrides : undefined;
-		}
+		});
 	}
 
 	/** Toggles MCP server enabled state for the active conversation. */
@@ -237,22 +228,13 @@ export class ConversationPreferences {
 			return;
 		}
 
-		this.host.activeConversation = {
-			...this.host.activeConversation,
+		this.host.applyConversationUpdate(this.host.activeConversation.id, {
 			reasoningEffort: effort
-		};
+		});
 
 		await DatabaseService.updateConversation(this.host.activeConversation.id, {
 			reasoningEffort: effort
 		});
-
-		const convIndex = this.host.conversations.findIndex(
-			(c) => c.id === this.host.activeConversation!.id
-		);
-
-		if (convIndex !== -1) {
-			this.host.conversations[convIndex].reasoningEffort = effort;
-		}
 	}
 
 	/**
@@ -283,23 +265,13 @@ export class ConversationPreferences {
 			return;
 		}
 
-		this.host.activeConversation = {
-			...this.host.activeConversation,
+		this.host.applyConversationUpdate(this.host.activeConversation.id, {
 			cwd: trimmed
-		};
+		});
 
 		await DatabaseService.updateConversation(this.host.activeConversation.id, {
 			cwd: trimmed
 		});
-
-		const convIndex = this.host.conversations.findIndex(
-			(c) => c.id === this.host.activeConversation!.id
-		);
-
-		if (convIndex !== -1) {
-			this.host.conversations[convIndex].cwd = trimmed;
-			this.host.conversations = [...this.host.conversations];
-		}
 
 		this.pendingCwd = null;
 	}

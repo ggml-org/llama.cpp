@@ -575,17 +575,31 @@ class ConversationsStore implements ConversationsPreferencesHost {
 		try {
 			await DatabaseService.updateConversation(convId, { name });
 
-			const convIndex = this.conversations.findIndex((c) => c.id === convId);
-
-			if (convIndex !== -1) {
-				this.conversations[convIndex].name = name;
-			}
-
-			if (this.activeConversation?.id === convId) {
-				this.activeConversation = { ...this.activeConversation, name };
-			}
+			this.applyConversationUpdate(convId, { name });
 		} catch (error) {
 			console.error('Failed to update conversation name:', error);
+		}
+	}
+
+	/**
+	 * Applies a field update to a conversation row, mirroring it into both the
+	 * conversations list and the active conversation when it is the target.
+	 * Shared by the rename/pin/preferences flows so no caller can forget to
+	 * mirror one side.
+	 */
+	applyConversationUpdate(id: string, updates: Partial<DatabaseConversation>): void {
+		const convIndex = this.conversations.findIndex((c) => c.id === id);
+
+		if (convIndex !== -1) {
+			const target = this.conversations[convIndex] as unknown as Record<string, unknown>;
+
+			for (const [key, value] of Object.entries(updates)) {
+				if (target[key] !== value) target[key] = value;
+			}
+		}
+
+		if (this.activeConversation?.id === id) {
+			this.activeConversation = { ...this.activeConversation, ...updates };
 		}
 	}
 
@@ -609,15 +623,8 @@ class ConversationsStore implements ConversationsPreferencesHost {
 	async toggleConversationPin(convId: string): Promise<boolean> {
 		try {
 			const newPinnedState = await DatabaseService.toggleConversationPin(convId);
-			const convIndex = this.conversations.findIndex((c) => c.id === convId);
 
-			if (convIndex !== -1) {
-				this.conversations[convIndex].pinned = newPinnedState;
-			}
-
-			if (this.activeConversation?.id === convId) {
-				this.activeConversation = { ...this.activeConversation, pinned: newPinnedState };
-			}
+			this.applyConversationUpdate(convId, { pinned: newPinnedState });
 
 			return newPinnedState;
 		} catch (error) {
