@@ -159,6 +159,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
     "Mamba2ForCausalLM": "mamba",
     "MambaForCausalLM": "mamba",
     "MambaLMHeadModel": "mamba",
+    "MapleForCausalLM": "maple",
     "MellumForCausalLM": "mellum",
     "MiMoV2FlashForCausalLM": "mimo",
     "MiMoV2ForCausalLM": "mimo",
