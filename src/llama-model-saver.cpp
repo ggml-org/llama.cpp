@@ -292,6 +292,7 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_ATTENTION_KEY_LENGTH_MLA_SWA,      hparams.n_embd_head_k_mla_swa);
     add_kv(LLM_KV_ATTENTION_VALUE_LENGTH_MLA_SWA,    hparams.n_embd_head_v_mla_swa);
     add_kv(LLM_KV_ATTENTION_KV_LORA_RANK_SWA,        hparams.n_lora_kv_swa);
+    add_kv(LLM_KV_GATED_NORM_RANK,                   hparams.gated_norm_rank);
     add_kv(LLM_KV_ATTENTION_INDEXER_HEAD_COUNT,      hparams.indexer_n_head);
     add_kv(LLM_KV_ATTENTION_INDEXER_KEY_LENGTH,      hparams.indexer_head_size);
     add_kv(LLM_KV_ATTENTION_INDEXER_TOP_K,           hparams.indexer_top_k);
