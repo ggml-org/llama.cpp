@@ -106,9 +106,6 @@ int llama_server(int argc, char ** argv) {
         return 1;
     }
 
-    llama_backend_init();
-    llama_numa_init(params.numa);
-
     return llama_server(params, argc, argv);
 }
 

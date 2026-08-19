@@ -975,6 +975,9 @@ private:
             }
         }
 
+        llama_backend_init();
+        llama_numa_init(params.numa);
+
         load_progress_data load_progress_text  (this, "text_model");
         load_progress_data load_progress_mmproj(this, "mmproj_model");
         load_progress_data load_progress_spec  (this, "spec_model");
