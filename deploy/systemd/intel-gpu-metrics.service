@@ -1,0 +1,25 @@
+[Unit]
+Description=Export Intel GPU engine counters for the node_exporter textfile collector
+Documentation=https://github.com/ggml-org/llama.cpp/blob/master/deploy/README-metrics.md
+# no After=node_exporter.service on purpose: the .prom file is read on scrape,
+# so the two are independent and either can restart without the other
+
+[Service]
+Type=oneshot
+# root is needed only to read /proc/<pid>/fdinfo of processes owned by other
+# users (llama-server runs as `llama`). No CAP_PERFMON and no perf events are
+# involved -- that was the intel_gpu_top approach, which cannot see xe at all.
+User=root
+ExecStart=/usr/local/bin/intel-gpu-textfile.py /var/lib/node_exporter/textfile_collector/intel_gpu.prom
+TimeoutStartSec=10
+Nice=10
+
+# hardening: this reads procfs only, so /dev can be hidden. Do NOT set
+# ProtectProc= or ProcSubset= -- both hide other processes' fdinfo, which is
+# precisely what we came for, and the result is a silent zero rather than an error.
+PrivateDevices=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=full
+ProtectKernelModules=yes
+ReadWritePaths=/var/lib/node_exporter/textfile_collector

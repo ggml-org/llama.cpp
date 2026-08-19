@@ -209,6 +209,7 @@ struct server_slot {
     common_speculative * spec;
 
     llama_tokens spec_draft;
+    std::vector<common_speculative_token_dist> spec_dists;
     llama_tokens spec_prompt;
     std::vector<int32_t> spec_i_batch;
     common_prompt_checkpoint spec_ckpt;
@@ -337,6 +338,7 @@ struct server_slot {
 
         if (can_speculate()) {
             spec_draft.clear();
+            spec_dists.clear();
             spec_i_batch.clear();
             spec_ckpt.clear();
         }
@@ -2422,6 +2424,8 @@ private:
                     int n_idle_slots       = 0;
                     int n_processing_slots = 0;
 
+                    uint64_t kv_cache_tokens = 0;
+
                     for (server_slot & slot : slots) {
                         json slot_data = slot.to_json(slots_debug == 0);
 
@@ -2430,6 +2434,8 @@ private:
                         } else {
                             n_idle_slots++;
                         }
+
+                        kv_cache_tokens += (uint64_t) slot.prompt.n_tokens();
 
                         slots_data.push_back(slot_data);
                     }
@@ -2442,6 +2448,31 @@ private:
                     res->n_processing_slots  = n_processing_slots;
                     res->n_tasks_deferred    = queue_tasks.queue_tasks_deferred_size();
                     res->metrics             = metrics;
+                    res->model_name          = model_name;
+
+                    res->kv_cache_tokens = kv_cache_tokens;
+                    res->kv_cache_cells  = (uint64_t) n_ctx;
+
+                    {
+                        size_t k_bytes = 0;
+                        size_t v_bytes = 0;
+                        llama_memory_kv_size_bytes(llama_get_memory(ctx_tgt), &k_bytes, &v_bytes);
+                        res->kv_cache_k_bytes = (uint64_t) k_bytes;
+                        res->kv_cache_v_bytes = (uint64_t) v_bytes;
+                    }
+                    res->kv_cache_type_k = ggml_type_name(params_base.cache_type_k);
+                    res->kv_cache_type_v = ggml_type_name(params_base.cache_type_v);
+
+                    for (size_t i = 0; i < ggml_backend_dev_count(); i++) {
+                        ggml_backend_dev_t dev = ggml_backend_dev_get(i);
+                        if (ggml_backend_dev_type(dev) != GGML_BACKEND_DEVICE_TYPE_GPU) {
+                            continue;
+                        }
+                        size_t free_b = 0, total_b = 0;
+                        ggml_backend_dev_memory(dev, &free_b, &total_b);
+                        res->vram_devices.emplace_back(ggml_backend_dev_name(dev),
+                                                       (uint64_t) free_b, (uint64_t) total_b);
+                    }
 
                     if (task.metrics_reset_bucket) {
                         metrics.reset_bucket();
@@ -2854,6 +2885,8 @@ private:
 
                 SLT_WRN(slot, "slot context shift, n_keep = %d, n_left = %d, n_discard = %d\n", n_keep, n_left, n_discard);
 
+                metrics.n_ctx_shift++;
+
                 slot.mem.seq_rm (slot.id, n_keep            , n_keep + n_discard);
                 slot.mem.seq_add(slot.id, n_keep + n_discard, slot.prompt.tokens.pos_next(), -n_discard);
 
@@ -2938,6 +2971,9 @@ private:
                             /* .id_last  = */ slot.sampled,
                             /* .prompt   = */ &slot.spec_prompt,
                             /* .result   = */ &slot.spec_draft,
+                            /* .dists    = */ &slot.spec_dists,
+                            /* .temperature = */ slot.task->params.sampling.temp,
+                            /* .seed     = */ common_sampler_get_seed(slot.smpl.get()),
                         };
 
                         drafting.push_back(&slot);
@@ -3817,7 +3853,13 @@ private:
                 common_sampler_ptr smpl_save(common_sampler_clone(slot.smpl.get()));
 
                 GGML_ASSERT(slot.spec_i_batch.size() == n_draft + 1);
-                auto accepted = common_sampler_sample_and_accept_n(slot.smpl.get(), slot.ctx_tgt, slot.spec_i_batch, slot.spec_draft);
+                const bool can_rollback =
+                    ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_PART ||
+                    (ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_RS && n_draft <= llama_n_rs_seq(ctx_tgt));
+                auto accepted = can_rollback && slot.task->params.sampling.temp > 0.0f &&
+                                slot.spec_dists.size() == slot.spec_draft.size()
+                    ? common_sampler_sample_and_accept_n(slot.smpl.get(), slot.ctx_tgt, slot.spec_i_batch, slot.spec_draft, slot.spec_dists)
+                    : common_sampler_sample_and_accept_n(slot.smpl.get(), slot.ctx_tgt, slot.spec_i_batch, slot.spec_draft);
                 slot.spec_i_batch.clear();
 
                 GGML_ASSERT(accepted.size() >= 1);
@@ -3838,6 +3880,7 @@ private:
                         // partial acceptance is not supported by the context -> truncate the draft and restore the state
                         slot.spec_is_replay = true;
                         slot.spec_draft = std::move(accepted);
+                        slot.spec_dists.clear();
 
                         const auto & ckpt = slot.spec_ckpt;
 
@@ -3865,6 +3908,7 @@ private:
                 common_speculative_accept(spec.get(), slot.id, accepted.size() - 1);
 
                 slot.spec_draft = std::move(accepted);
+                slot.spec_dists.clear();
             }
 
             const auto ids = std::move(slot.spec_draft);
@@ -4041,6 +4085,12 @@ private:
         for (size_t i = 0; i < src.size(); i++) {
             dst[i] += src[i];
         }
+
+        // distributions: one observation per completed generation request
+        metrics.hist_prompt_tokens      .observe((double) slot.stats.n_prompt_processed);
+        metrics.hist_context_tokens     .observe((double) slot.prompt.n_tokens());
+        metrics.hist_ttft_seconds       .observe(slot.stats.t_prompt_ms() / 1.e3);
+        metrics.hist_gen_latency_seconds.observe(slot.stats.t_gen_ms()    / 1.e3);
     }
 };
 

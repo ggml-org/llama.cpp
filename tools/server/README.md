@@ -1116,7 +1116,9 @@ If query param `?fail_on_no_slot=1` is set, this endpoint will respond with stat
 
 This endpoint is only accessible if `--metrics` is set.
 
-In *router mode* the query param `?model={model_id}` has to be set. This endpoint will respond with status code 400 `model name is missing from the request` if not set.
+In *router mode* the query param `?model={model_id}` selects the model to scrape. If it is omitted and exactly one model is running, that model is scraped, so a scrape config needs only a single target. If no model is running, or more than one is, the endpoint responds with status code 400.
+
+Every series is labelled with `model="{model_id}"`.
 
 #### Available metrics
 
@@ -1128,9 +1130,22 @@ In *router mode* the query param `?model={model_id}` has to be set. This endpoin
 | `llamacpp:tokens_predicted_total` | Counter | Number of generation tokens processed. |
 | `llamacpp:tokens_predicted_seconds_total` | Counter | Predict process time in seconds. |
 | `llamacpp:predicted_tokens_seconds` | Gauge | Average generation throughput in tokens/s. |
+| `llamacpp:prompt_tokens_cached_total` | Counter | Number of prompt tokens reused from the KV cache (i.e. not re-evaluated). |
+| `llamacpp:n_ctx_shift_total` | Counter | Total number of context shifts (oldest tokens discarded to make room). |
 | `llamacpp:requests_processing` | Gauge | Number of requests processing. |
 | `llamacpp:requests_deferred` | Gauge | Number of requests deferred. |
 | `llamacpp:n_tokens_max` | Counter | High watermark of the context size observed. |
+| `llamacpp:kv_cache_tokens` | Gauge | Current number of tokens held in the KV cache across all slots. |
+| `llamacpp:kv_cache_cells` | Gauge | Total KV cache capacity in tokens (n_ctx). |
+| `llamacpp:kv_cache_k_bytes` | Gauge | Bytes allocated for the K cache across all layers. |
+| `llamacpp:kv_cache_v_bytes` | Gauge | Bytes allocated for the V cache across all layers. |
+| `llamacpp:kv_cache_type` | Gauge | Live KV cache quantization type (labelled `cache="k"\|"v"` and `type="f16"`, …; the value is always 1). |
+| `llamacpp:prompt_tokens_size` | Histogram | Distribution of prompt tokens processed (excludes cache hits). |
+| `llamacpp:context_used_tokens` | Histogram | Distribution of context used in tokens. |
+| `llamacpp:time_to_first_token_seconds` | Histogram | Distribution of prompt-eval (TTFT) latency in seconds. |
+| `llamacpp:generation_latency_seconds` | Histogram | Distribution of generation latency in seconds. |
+| `llamacpp:vram_free_bytes` | Gauge | Free VRAM on the device (labelled `device="N"`; absent when no GPU backend is present). |
+| `llamacpp:vram_total_bytes` | Gauge | Total VRAM on the device (labelled `device="N"`; absent when no GPU backend is present). |
 | `llamacpp:n_decode_total` | Counter | Total Number of llama_decode() calls. |
 | `llamacpp:n_busy_slots_per_decode` | Gauge | Average number of busy slots per llama_decode() call. |
 | `llamacpp:spec_decode_num_draft_tokens_total` | Counter | Total draft tokens generated (0 when spec-decode is off). |

@@ -66,7 +66,8 @@ int main(int argc, char ** argv) {
     llama_context * ctx_dft = params.speculative.draft.ctx_dft;
 
     // check if the context supports partial sequence removal
-    const bool use_ckpt_tgt = common_context_can_seq_rm(ctx_tgt) == COMMON_CONTEXT_SEQ_RM_TYPE_FULL;
+    const auto ctx_tgt_seq_rm_type = common_context_can_seq_rm(ctx_tgt);
+    const bool use_ckpt_tgt = ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL;
     const bool use_ckpt_dft = common_context_can_seq_rm(ctx_dft) == COMMON_CONTEXT_SEQ_RM_TYPE_FULL;
 
     if (use_ckpt_tgt) {
@@ -152,6 +153,7 @@ int main(int argc, char ** argv) {
     llama_batch batch_tgt = llama_batch_init(llama_n_batch(ctx_tgt), 0, 1);
 
     llama_tokens draft;
+    std::vector<common_speculative_token_dist> dists;
 
     common_prompt_checkpoint ckpt;
 
@@ -192,6 +194,9 @@ int main(int argc, char ** argv) {
                 /* .id_last    = */ id_last,
                 /* .prompt     = */ &prompt_tgt,
                 /* .result     = */ &draft, // output
+                /* .dists      = */ &dists,
+                /* .temperature = */ params.sampling.temp,
+                /* .seed       = */ common_sampler_get_seed(smpl.get()),
             };
             common_speculative_draft(spec);
 
@@ -255,7 +260,12 @@ int main(int argc, char ** argv) {
         // available logits from the batch and sample the next token until we run out of logits or the sampler
         // disagrees with the draft
         //
-        auto ids = common_sampler_sample_and_accept_n(smpl.get(), ctx_tgt, draft);
+        const bool can_rollback =
+            ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_PART ||
+            (ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_RS && draft.size() <= llama_n_rs_seq(ctx_tgt));
+        auto ids = can_rollback && params.sampling.temp > 0.0f && dists.size() == draft.size()
+            ? common_sampler_sample_and_accept_n(smpl.get(), ctx_tgt, draft, dists)
+            : common_sampler_sample_and_accept_n(smpl.get(), ctx_tgt, draft);
 
         //LOG_DBG("ids: %s\n", string_from(ctx_tgt, ids).c_str());
 
@@ -268,6 +278,7 @@ int main(int argc, char ** argv) {
             LOG_DBG("partial acceptance: %zu < %zu, restoring checkpoint\n", ids.size() - 1, n_draft);
 
             draft = std::move(ids);
+            dists.clear();
 
             {
                 ckpt.load_tgt(ctx_tgt, seq_id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
@@ -325,6 +336,7 @@ int main(int argc, char ** argv) {
 
         // clear the draft since it has been consumed
         draft.clear();
+        dists.clear();
 
         {
             LOG_DBG("clear kv cache from any extra tokens, n_past = %d\n", n_past);

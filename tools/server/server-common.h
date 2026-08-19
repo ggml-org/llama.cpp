@@ -429,6 +429,28 @@ struct server_slot_stats {
     json to_json() const;
 };
 
+// minimal cumulative histogram: bounds are fixed upper edges; observe() bumps
+// every bucket whose bound >= value (cumulative form Prometheus expects)
+struct metric_histogram {
+    std::vector<double>   bounds;
+    std::vector<uint64_t> buckets; // cumulative counts, same length as bounds
+    uint64_t              count = 0;
+    double                sum   = 0.0;
+
+    explicit metric_histogram(std::vector<double> b)
+        : bounds(std::move(b)), buckets(bounds.size(), 0) {}
+
+    void observe(double value) {
+        count++;
+        sum += value;
+        for (size_t i = 0; i < bounds.size(); ++i) {
+            if (value <= bounds[i]) {
+                buckets[i]++;
+            }
+        }
+    }
+};
+
 // shared between server_context_impl and server_task_result_*
 // unlike server_slot_stats, server_metrics is server-global and cumulative, not tied to a slot
 struct server_metrics {
@@ -472,6 +494,19 @@ struct server_metrics {
     uint64_t n_draft_accepted    = 0; // Draft tokens actually accepted
     uint64_t n_draft_verif_steps = 0; // Total draft token verification steps by the target model
     std::vector<uint64_t> n_accepted_per_pos; // Accepted tokens per draft position
+
+    // number of times the oldest tokens of a slot were discarded to make room
+    uint64_t n_ctx_shift = 0;
+
+    // distributions, observed once per completed generation request
+    metric_histogram hist_prompt_tokens {
+        {512,1024,2048,4096,6144,8192,12288,16384,24576,32768,49152,65536,98304,131072,196608,262144}};
+    metric_histogram hist_context_tokens {
+        {512,1024,2048,4096,6144,8192,12288,16384,24576,32768,49152,65536,98304,131072,196608,262144}};
+    metric_histogram hist_ttft_seconds {
+        {0.05,0.1,0.25,0.5,1,2,4,8,16,32,64}};
+    metric_histogram hist_gen_latency_seconds {
+        {0.1,0.25,0.5,1,2,5,10,20,40,80}};
 
     void init() {
         t_start = ggml_time_us();

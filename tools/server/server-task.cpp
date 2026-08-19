@@ -1516,6 +1516,52 @@ json server_task_result_metrics::to_json() {
     return slots_data;
 }
 
+// escape a label value per the Prometheus exposition format
+static std::string metrics_escape_label(const std::string & value) {
+    std::string out;
+    for (char c : value) {
+        switch (c) {
+            case '\\': out += "\\\\"; break;
+            case '"':  out += "\\\""; break;
+            case '\n': out += "\\n";  break;
+            default:   out += c;      break;
+        }
+    }
+    return out;
+}
+
+// render a label set as {name="value",...}, always starting with the model label
+static std::string metrics_labels(
+        const std::string & model_name,
+        const std::vector<std::pair<std::string, std::string>> & extra = {}) {
+    std::string out = "{model=\"" + metrics_escape_label(model_name) + "\"";
+    for (const auto & [name, value] : extra) {
+        out += "," + name + "=\"" + metrics_escape_label(value) + "\"";
+    }
+    out += "}";
+    return out;
+}
+
+static void metrics_add_histogram(
+        std::stringstream & out,
+        const std::string & name,
+        const std::string & help,
+        const std::string & model_name,
+        const metric_histogram & hist) {
+    out << "# HELP llamacpp:" << name << " " << help << "\n"
+        << "# TYPE llamacpp:" << name << " histogram\n";
+
+    for (size_t i = 0; i < hist.bounds.size(); ++i) {
+        std::ostringstream le;
+        le << hist.bounds[i];
+        out << "llamacpp:" << name << "_bucket" << metrics_labels(model_name, {{"le", le.str()}})
+            << " " << hist.buckets[i] << "\n";
+    }
+    out << "llamacpp:" << name << "_bucket" << metrics_labels(model_name, {{"le", "+Inf"}}) << " " << hist.count << "\n";
+    out << "llamacpp:" << name << "_sum"    << metrics_labels(model_name) << " " << hist.sum   << "\n";
+    out << "llamacpp:" << name << "_count"  << metrics_labels(model_name) << " " << hist.count << "\n";
+}
+
 // metrics definition: https://prometheus.io/docs/practices/naming/#metric-names
 std::string server_task_result_metrics::to_metrics() {
     const std::vector<metric_item> counters = {
@@ -1559,6 +1605,10 @@ std::string server_task_result_metrics::to_metrics() {
             "spec_decode_num_drafts_total",
             "Speculative: Total speculative decoding verification steps",
             (double) metrics.n_draft_verif_steps
+        }, {
+            "n_ctx_shift_total",
+            "Total number of context shifts (oldest tokens discarded to make room)",
+            (double) metrics.n_ctx_shift
         },
     };
 
@@ -1583,16 +1633,36 @@ std::string server_task_result_metrics::to_metrics() {
             "n_busy_slots_per_decode",
             "Average number of busy slots per llama_decode() call",
             (double) metrics.n_busy_slots / std::max((double) metrics.n_decode, 1.0)
+        }, {
+            "kv_cache_tokens",
+            "Current number of tokens held in the KV cache across all slots",
+            (double) kv_cache_tokens
+        }, {
+            "kv_cache_cells",
+            "Total KV cache capacity in tokens (n_ctx)",
+            (double) kv_cache_cells
+        }, {
+            "kv_cache_k_bytes",
+            "Bytes allocated for the K cache across all layers",
+            (double) kv_cache_k_bytes
+        }, {
+            "kv_cache_v_bytes",
+            "Bytes allocated for the V cache across all layers",
+            (double) kv_cache_v_bytes
         },
     };
 
     std::stringstream prometheus;
 
-    auto add_items = [&prometheus](const char * type, const std::vector<metric_item> & items) {
+    // every series is labelled with the loaded model so scrapers can distinguish
+    // instances (in router mode each child process serves exactly one model)
+    const std::string model_label = metrics_labels(model_name);
+
+    auto add_items = [&prometheus, &model_label](const char * type, const std::vector<metric_item> & items) {
         for (const auto & item : items) {
             prometheus << "# HELP llamacpp:" << item.name << " " << item.description << "\n"
                        << "# TYPE llamacpp:" << item.name << " " << type             << "\n"
-                       << "llamacpp:"        << item.name << " " << item.value       << "\n";
+                       << "llamacpp:"        << item.name << model_label << " " << item.value << "\n";
         }
     };
 
@@ -1605,8 +1675,45 @@ std::string server_task_result_metrics::to_metrics() {
                       " Accepted tokens per draft position\n"
                    << "# TYPE llamacpp:spec_decode_num_accepted_tokens_per_pos_total counter\n";
         for (size_t i = 0; i < metrics.n_accepted_per_pos.size(); i++) {
-            prometheus << "llamacpp:spec_decode_num_accepted_tokens_per_pos_total{position=\""
-                       << i << "\"} " << metrics.n_accepted_per_pos[i] << "\n";
+            prometheus << "llamacpp:spec_decode_num_accepted_tokens_per_pos_total"
+                       << metrics_labels(model_name, {{"position", std::to_string(i)}})
+                       << " " << metrics.n_accepted_per_pos[i] << "\n";
+        }
+    }
+
+    // cache-type series: the value is always 1, the type is carried as a label so
+    // Grafana can display which quantization is live per model
+    prometheus << "# HELP llamacpp:kv_cache_type Live KV cache quantization type (value is always 1)\n"
+               << "# TYPE llamacpp:kv_cache_type gauge\n"
+               << "llamacpp:kv_cache_type" << metrics_labels(model_name, {{"cache", "k"}, {"type", kv_cache_type_k}}) << " 1\n"
+               << "llamacpp:kv_cache_type" << metrics_labels(model_name, {{"cache", "v"}, {"type", kv_cache_type_v}}) << " 1\n";
+
+    metrics_add_histogram(prometheus, "prompt_tokens_size",
+        "Distribution of prompt tokens processed (excludes cache hits)",
+        model_name, metrics.hist_prompt_tokens);
+    metrics_add_histogram(prometheus, "context_used_tokens",
+        "Distribution of context used in tokens",
+        model_name, metrics.hist_context_tokens);
+    metrics_add_histogram(prometheus, "time_to_first_token_seconds",
+        "Distribution of prompt-eval (TTFT) latency in seconds",
+        model_name, metrics.hist_ttft_seconds);
+    metrics_add_histogram(prometheus, "generation_latency_seconds",
+        "Distribution of generation latency in seconds",
+        model_name, metrics.hist_gen_latency_seconds);
+
+    // per-device VRAM gauges
+    if (!vram_devices.empty()) {
+        prometheus << "# HELP llamacpp:vram_free_bytes Free VRAM on the device\n"
+                   << "# TYPE llamacpp:vram_free_bytes gauge\n";
+        for (const auto & dev : vram_devices) {
+            prometheus << "llamacpp:vram_free_bytes" << metrics_labels(model_name, {{"device", std::get<0>(dev)}})
+                       << " " << std::get<1>(dev) << "\n";
+        }
+        prometheus << "# HELP llamacpp:vram_total_bytes Total VRAM on the device\n"
+                   << "# TYPE llamacpp:vram_total_bytes gauge\n";
+        for (const auto & dev : vram_devices) {
+            prometheus << "llamacpp:vram_total_bytes" << metrics_labels(model_name, {{"device", std::get<0>(dev)}})
+                       << " " << std::get<2>(dev) << "\n";
         }
     }
 
