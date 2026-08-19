@@ -1512,8 +1512,13 @@ json server_task_result_error::to_json() {
 //
 // server_task_result_metrics
 //
-json server_task_result_metrics::to_json() {
+json server_task_result_slots::to_json() {
     return slots_data;
+}
+
+json server_task_result_metrics::to_json() {
+    // not used, /metrics renders prometheus text via to_metrics()
+    return json{};
 }
 
 // metrics definition: https://prometheus.io/docs/practices/naming/#metric-names

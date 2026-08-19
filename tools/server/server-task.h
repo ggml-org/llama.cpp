@@ -22,6 +22,7 @@ enum server_task_type {
     SERVER_TASK_TYPE_CONTROL,
     SERVER_TASK_TYPE_NEXT_RESPONSE,
     SERVER_TASK_TYPE_METRICS,
+    SERVER_TASK_TYPE_SLOT_GET,
     SERVER_TASK_TYPE_SLOT_SAVE,
     SERVER_TASK_TYPE_SLOT_RESTORE,
     SERVER_TASK_TYPE_SLOT_ERASE,
@@ -489,28 +490,33 @@ struct server_task_result_error : server_task_result {
     virtual json to_json() override;
 };
 
+// used by /metrics API
 struct server_task_result_metrics : server_task_result {
     // these are immediate stats, not accumulated (server_metrics is cumulative)
-    int n_idle_slots;
-    int n_processing_slots;
-    int n_tasks_deferred;
+    int n_processing_slots = 0;
+    int n_tasks_deferred = 0;
 
     server_metrics metrics;
 
-    // while we can also use std::vector<server_slot> this requires copying the slot object which can be quite messy
-    // therefore, we use json to temporarily store the slot.to_json() result
-    json slots_data = json::array();
-
-    // used by /slots API
     virtual json to_json() override;
 
-    // used by /metrics API
     struct metric_item {
         std::string name;
         std::string description;
         double value; // prometheus values are always float64
     };
     std::string to_metrics();
+};
+
+// used by /slots API
+struct server_task_result_slots : server_task_result {
+    int n_idle_slots = 0;
+
+    // while we can also use std::vector<server_slot> this requires copying the slot object which can be quite messy
+    // therefore, we use json to temporarily store the slot.to_json() result
+    json slots_data = json::array();
+
+    virtual json to_json() override;
 };
 
 struct server_task_result_slot_save_load : server_task_result {

@@ -8,6 +8,7 @@
 
 #include <cstddef>
 #include <memory>
+#include <mutex>
 #include <set>
 
 struct server_context_impl; // private implementation
@@ -174,9 +175,19 @@ private:
     std::unique_ptr<const server_context_meta> meta;
 
     const common_params & params;
-    const server_context_impl & ctx_server;
+    server_context_impl & ctx_server;
 
     server_queue & queue_tasks;
     server_response & queue_results;
     std::unique_ptr<server_res_generator> create_response(bool bypass_sleep = false);
+
+    // cached responses, to be used during sleep
+    std::mutex     mutex_cache;
+    json           cached_models  = nullptr;
+    json           cached_props   = nullptr;
+    server_metrics cached_metrics;
+    // set when a scrape during sleep already reported the throughput buckets
+    bool           should_reset_buckets = false;
+    // call right before sleep to update the cached responses
+    void update_cached_responses(bool is_sleeping);
 };
