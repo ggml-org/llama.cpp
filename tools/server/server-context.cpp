@@ -4433,6 +4433,109 @@ server_routes::server_routes(const common_params & params, server_context & ctx_
     init_routes();
 }
 
+static json get_res_models(const server_context_meta & meta) {
+    // note: do NOT use ctx_server here, otherwise it's not possible to use this during sleep
+
+    json model_info = {
+        {"id",       meta.model_name},
+        {"aliases",  meta.model_aliases},
+        {"tags",     meta.model_tags},
+        {"object",   "model"},
+        {"created",  std::time(0)},
+        {"owned_by", "llamacpp"},
+        {"meta",     {
+            {"vocab_type",  meta.model_vocab_type},
+            {"n_vocab",     meta.model_vocab_n_tokens},
+            {"n_ctx",       meta.slot_n_ctx},
+            {"n_ctx_train", meta.model_n_ctx_train},
+            {"n_embd",      meta.model_n_embd_inp},
+            {"n_params",    meta.model_n_params},
+            {"size",        meta.model_size},
+            {"ftype",       meta.model_ftype},
+        }},
+    };
+
+    return {
+        {"models", {
+            {
+                {"name",  meta.model_name},
+                {"model", meta.model_name},
+                {"modified_at", ""},
+                {"size", ""},
+                {"digest", ""}, // dummy value, llama.cpp does not support managing model file's hash
+                {"type", "model"},
+                {"description", ""},
+                {"tags", {""}},
+                {"capabilities", meta.has_mtmd ? json({"completion","multimodal"}) : json({"completion"})},
+                {"parameters", ""},
+                {"details", {
+                    {"parent_model", ""},
+                    {"format", "gguf"},
+                    {"family", ""},
+                    {"families", {""}},
+                    {"parameter_size", ""},
+                    {"quantization_level", ""}
+                }}
+            }
+        }},
+        {"object", "list"},
+        {"data", {
+            model_info,
+        }}
+    };
+}
+
+static json get_res_props(const server_context_meta & meta, const common_params & params, bool is_sleeping) {
+    // note: do NOT use ctx_server here, otherwise it's not possible to use this during sleep
+
+    task_params tparams;
+    tparams.sampling = params.sampling;
+    json default_generation_settings_for_props = json {
+        { "params", tparams.to_json(true) },
+        { "n_ctx",  meta.slot_n_ctx },
+    };
+
+    std::string tmpl_default = common_chat_templates_source(meta.chat_params.tmpls.get(), "");
+    std::string tmpl_tools   = common_chat_templates_source(meta.chat_params.tmpls.get(), "tool_use");
+
+    json props = {
+        { "default_generation_settings", default_generation_settings_for_props },
+        { "total_slots",                 params.n_parallel },
+        { "model_alias",                 meta.model_name },
+        { "model_ftype",                 meta.model_ftype },
+        { "model_path",                  meta.model_path },
+        { "modalities",                  json {
+            {"vision", meta.has_inp_image},
+            {"video",  meta.has_inp_video},
+            {"audio",  meta.has_inp_audio},
+        } },
+        { "media_marker",                get_media_marker() },
+        { "endpoint_slots",              params.endpoint_slots },
+        { "endpoint_props",              params.endpoint_props },
+        { "endpoint_metrics",            params.endpoint_metrics },
+        { "ui",                          params.ui },
+        { "ui_settings",                 meta.json_ui_settings },
+        { "chat_template",               tmpl_default },
+        { "chat_template_caps",          meta.chat_template_caps },
+        { "bos_token",                   meta.bos_token_str },
+        { "eos_token",                   meta.eos_token_str },
+        { "build_info",                  meta.build_info },
+        { "is_sleeping",                 is_sleeping },
+        { "cors_proxy_enabled",          params.ui_mcp_proxy },
+    };
+    if (params.use_jinja) {
+        if (!tmpl_tools.empty()) {
+            props["chat_template_tool_use"] = tmpl_tools;
+        }
+    }
+
+    return props;
+}
+
+json server_routes::get_model_info() const {
+    return get_res_models(*meta).at("data");
+}
+
 void server_routes::init_routes() {
     // IMPORTANT: all lambda functions must start with create_response()
     // this is to ensure that the server_res_generator can handle sleeping case correctly
@@ -4566,53 +4669,10 @@ void server_routes::init_routes() {
 
     this->get_props = [this](const server_http_req &) {
         auto res = create_response(true);
-
-        // this endpoint can be accessed during sleeping
-        // the next LOC is to avoid someone accidentally use ctx_server
-        bool ctx_server; // do NOT delete this line
-        GGML_UNUSED(ctx_server);
-
-        task_params tparams;
-        tparams.sampling = params.sampling;
-        json default_generation_settings_for_props = json {
-            { "params", tparams.to_json(true) },
-            { "n_ctx",  meta->slot_n_ctx },
-        };
-
-        std::string tmpl_default = common_chat_templates_source(meta->chat_params.tmpls.get(), "");
-        std::string tmpl_tools   = common_chat_templates_source(meta->chat_params.tmpls.get(), "tool_use");
-
-        json props = {
-            { "default_generation_settings", default_generation_settings_for_props },
-            { "total_slots",                 params.n_parallel },
-            { "model_alias",                 meta->model_name },
-            { "model_ftype",                 meta->model_ftype },
-            { "model_path",                  meta->model_path },
-            { "modalities",                  json {
-                {"vision", meta->has_inp_image},
-                {"video",  meta->has_inp_video},
-                {"audio",  meta->has_inp_audio},
-            } },
-            { "media_marker",                get_media_marker() },
-            { "endpoint_slots",              params.endpoint_slots },
-            { "endpoint_props",              params.endpoint_props },
-            { "endpoint_metrics",            params.endpoint_metrics },
-            { "ui",                          params.ui },
-            { "ui_settings",                 meta->json_ui_settings },
-            { "chat_template",               tmpl_default },
-            { "chat_template_caps",          meta->chat_template_caps },
-            { "bos_token",                   meta->bos_token_str },
-            { "eos_token",                   meta->eos_token_str },
-            { "build_info",                  meta->build_info },
-            { "is_sleeping",                 queue_tasks.is_sleeping() },
-            { "cors_proxy_enabled",          params.ui_mcp_proxy },
-        };
-        if (params.use_jinja) {
-            if (!tmpl_tools.empty()) {
-                props["chat_template_tool_use"] = tmpl_tools;
-            }
-        }
-        res->ok(props);
+        // note: do NOT use ctx_server here, this endpoint must be accessible during sleep
+        res->ok(!cached_props.is_null()
+            ? cached_props
+            : get_res_props(*meta, params, queue_tasks.is_sleeping()));
         return res;
     };
 
@@ -4874,42 +4934,10 @@ void server_routes::init_routes() {
 
     this->get_models = [this](const server_http_req &) {
         auto res = create_response(true);
-
-        // this endpoint can be accessed during sleeping
-        // the next LOC is to avoid someone accidentally use ctx_server
-        bool ctx_server; // do NOT delete this line
-        GGML_UNUSED(ctx_server);
-
-        json models = {
-            {"models", {
-                {
-                    {"name",  meta->model_name},
-                    {"model", meta->model_name},
-                    {"modified_at", ""},
-                    {"size", ""},
-                    {"digest", ""}, // dummy value, llama.cpp does not support managing model file's hash
-                    {"type", "model"},
-                    {"description", ""},
-                    {"tags", {""}},
-                    {"capabilities", meta->has_mtmd ? json({"completion","multimodal"}) : json({"completion"})},
-                    {"parameters", ""},
-                    {"details", {
-                        {"parent_model", ""},
-                        {"format", "gguf"},
-                        {"family", ""},
-                        {"families", {""}},
-                        {"parameter_size", ""},
-                        {"quantization_level", ""}
-                    }}
-                }
-            }},
-            {"object", "list"},
-            {"data", {
-                get_model_info(),
-            }}
-        };
-
-        res->ok(models);
+        // note: do NOT use ctx_server here, this endpoint must be accessible during sleep
+        res->ok(!cached_models.is_null()
+            ? cached_models
+            : get_res_models(*meta));
         return res;
     };
 
@@ -5116,27 +5144,6 @@ void server_routes::init_routes() {
         GGML_ASSERT(dynamic_cast<server_task_result_apply_lora*>(result.get()) != nullptr);
         res->ok(result->to_json());
         return res;
-    };
-}
-
-json server_routes::get_model_info() const {
-    return json {
-        {"id",       meta->model_name},
-        {"aliases",  meta->model_aliases},
-        {"tags",     meta->model_tags},
-        {"object",   "model"},
-        {"created",  std::time(0)},
-        {"owned_by", "llamacpp"},
-        {"meta",     {
-            {"vocab_type",  meta->model_vocab_type},
-            {"n_vocab",     meta->model_vocab_n_tokens},
-            {"n_ctx",       meta->slot_n_ctx},
-            {"n_ctx_train", meta->model_n_ctx_train},
-            {"n_embd",      meta->model_n_embd_inp},
-            {"n_params",    meta->model_n_params},
-            {"size",        meta->model_size},
-            {"ftype",       meta->model_ftype},
-        }},
     };
 }
 
@@ -5387,4 +5394,16 @@ std::unique_ptr<server_res_generator> server_routes::handle_count_tokens(const l
     }
     res->ok(response);
     return res;
+}
+
+void server_routes::update_cached_responses(bool enabled) {
+    if (enabled) {
+        cached_models  = get_res_models(*meta);
+        cached_props   = get_res_props(*meta, params, queue_tasks.is_sleeping());
+        cached_metrics = "TODO";
+    } else {
+        cached_models  = nullptr;
+        cached_props   = nullptr;
+        cached_metrics = "";
+    }
 }

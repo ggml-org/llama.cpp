@@ -179,4 +179,11 @@ private:
     server_queue & queue_tasks;
     server_response & queue_results;
     std::unique_ptr<server_res_generator> create_response(bool bypass_sleep = false);
+
+    // cached responses, to be used during sleep
+    json        cached_models  = nullptr;
+    json        cached_props   = nullptr;
+    std::string cached_metrics = "";
+    // call right before sleep to update the cached responses
+    void update_cached_responses(bool enabled);
 };
