@@ -312,7 +312,10 @@ void server_queue::start_loop(int64_t idle_sleep_ms) {
             if (should_sleep()) {
                 QUE_INF("%s", "entering sleeping state\n");
                 sleeping = true;
-                callback_sleeping_state(true);
+                // Call order cb0 -> cb1 -> cb{N}
+                for (auto & cb : callback_sleeping_state) {
+                    cb(true);
+                }
                 req_stop_sleeping = false;
                 // wait until we are requested to exit sleeping state
                 condition_tasks.wait(lock, [&]{
@@ -323,7 +326,10 @@ void server_queue::start_loop(int64_t idle_sleep_ms) {
                 }
                 QUE_INF("%s", "exiting sleeping state\n");
                 req_stop_sleeping = false;
-                callback_sleeping_state(false);
+                // Call order cb{N} -> cb1 -> cb0
+                for (size_t i = callback_sleeping_state.size(); i > 0; i--) {
+                    callback_sleeping_state[i - 1](false);
+                }
                 sleeping = false;
                 time_last_task = ggml_time_ms();
                 condition_tasks.notify_all(); // notify wait_until_no_sleep()

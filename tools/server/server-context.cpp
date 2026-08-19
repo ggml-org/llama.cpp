@@ -898,6 +898,10 @@ private:
     void handle_sleeping_state(bool new_state) {
         GGML_ASSERT(sleeping != new_state);
         if (new_state) {
+            if (callback_state) {
+                callback_state(SERVER_STATE_SLEEPING, {});
+                // note: for sleeping == false, event is emitted by load_model()
+            }
             SRV_INF("%s", "server is entering sleeping state\n");
             destroy();
         } else {
@@ -4142,12 +4146,6 @@ struct server_res_generator : server_res_spipe {
 
 void server_context::set_state_callback(server_state_callback_t callback) {
     impl->callback_state = std::move(callback);
-    impl->queue_tasks.on_sleeping_state([this](bool sleeping) {
-        if (sleeping) {
-            impl->callback_state(SERVER_STATE_SLEEPING, {});
-        }
-        // for sleeping == false, event is emitted by load_model()
-    });
 }
 
 //
