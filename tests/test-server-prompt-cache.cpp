@@ -124,6 +124,32 @@ int main() {
                     "an empty resident prompt must not count as cached");
     }
 
+    // Incomplete serializations must be removed transactionally and must not
+    // poison contains() or future match probes.
+    {
+        server_prompt_cache cache(0, 0);
+        cache_prompt(cache, { 1, 2, 3 });
+        const auto * state = &cache.states.front();
+        ok &= check(cache.discard(state),
+                    "an allocated incomplete state should be discardable");
+        ok &= check(cache.states.empty(),
+                    "discarding an incomplete state should remove it from the cache");
+        ok &= check(!cache.discard(nullptr),
+                    "discarding a null state should fail safely");
+    }
+    {
+        server_prompt_cache cache(0, 0);
+        cache_prompt(cache, { 1, 2, 3 });
+        server_prompt_cache_state unrelated {
+            prompt({ 9, 8, 7 }),
+            {},
+        };
+        ok &= check(!cache.discard(&unrelated),
+                    "discarding a state owned by another cache must fail safely");
+        ok &= check(cache.states.size() == 1,
+                    "a failed discard must leave valid cache entries intact");
+    }
+
     // The non-destructive probe must use exactly the same two-score policy as
     // load(): a candidate has to improve both retained fraction and similarity.
     {
@@ -187,6 +213,6 @@ int main() {
         return 1;
     }
 
-    std::puts("prompt cache in-place policy: PASS");
+    std::puts("prompt cache policy: PASS");
     return 0;
 }

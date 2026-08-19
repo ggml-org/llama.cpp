@@ -272,9 +272,28 @@ struct server_slot {
             return false;
         }
 
-        llama_state_seq_get_data_ext(ctx_tgt, cur->data.main.data(), cur_size_tgt, id, LLAMA_STATE_SEQ_FLAGS_NONE);
+        const size_t n_tgt = llama_state_seq_get_data_ext(
+            ctx_tgt, cur->data.main.data(), cur_size_tgt, id, LLAMA_STATE_SEQ_FLAGS_NONE);
+        if (n_tgt != cur_size_tgt) {
+            SLT_WRN(*this, "failed to save target prompt state: expected %zu bytes, got %zu\n",
+                    cur_size_tgt, n_tgt);
+            if (!prompt_cache.discard(cur)) {
+                SLT_ERR(*this, "%s", "failed to discard incomplete target prompt state\n");
+            }
+            return false;
+        }
+
         if (ctx_dft) {
-            llama_state_seq_get_data_ext(ctx_dft, cur->data.drft.data(), cur_size_dft, id, LLAMA_STATE_SEQ_FLAGS_NONE);
+            const size_t n_dft = llama_state_seq_get_data_ext(
+                ctx_dft, cur->data.drft.data(), cur_size_dft, id, LLAMA_STATE_SEQ_FLAGS_NONE);
+            if (n_dft != cur_size_dft) {
+                SLT_WRN(*this, "failed to save draft prompt state: expected %zu bytes, got %zu\n",
+                        cur_size_dft, n_dft);
+                if (!prompt_cache.discard(cur)) {
+                    SLT_ERR(*this, "%s", "failed to discard incomplete draft prompt state\n");
+                }
+                return false;
+            }
         }
 
         return true;
@@ -1669,14 +1688,20 @@ private:
             // two exact-semantics cases: the incoming prompt extends the resident
             // state, or the normal slot policy has no branch to preserve and the
             // host cache has no better state to load. Keep multi-slot, multimedia,
-            // explicit cache bypasses, and actual branch switches on the proven
-            // shrink/save/load/expand path.
+            // adapter-backed state, explicit cache bypasses, and actual branch
+            // switches on the proven shrink/save/load/expand path.
+            const bool has_adapter_state =
+                !params_base.lora_adapters.empty() ||
+                !ret->lora.empty() ||
+                !task.params.lora.empty();
+
             const bool can_probe_recurrent_cache =
                 needs_reeval &&
                 n_parallel_user == 1 &&
                 prompt_cache &&
                 task.type == SERVER_TASK_TYPE_COMPLETION &&
                 task.params.cache_prompt &&
+                !has_adapter_state &&
                 !ret->prompt.tokens.empty() &&
                 !ret->prompt.tokens.has_mtmd &&
                 !task.tokens.has_mtmd;

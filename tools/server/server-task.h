@@ -643,6 +643,9 @@ struct server_prompt_cache {
     // True when a cached state already contains every token in prompt.
     bool contains(const server_prompt & prompt) const;
 
+    // Remove an allocated cache state whose serialization did not complete.
+    bool discard(const server_prompt_cache_state * state);
+
     server_prompt_cache_state * alloc(const server_prompt & prompt, size_t state_size_main, size_t state_size_drft);
 
     // Non-destructively checks whether load() would prefer a cached state over

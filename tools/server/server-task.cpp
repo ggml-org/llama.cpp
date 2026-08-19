@@ -1746,6 +1746,22 @@ bool server_prompt_cache::contains(const server_prompt & prompt) const {
     return false;
 }
 
+bool server_prompt_cache::discard(const server_prompt_cache_state * state) {
+    if (state == nullptr) {
+        return false;
+    }
+
+    const auto it = std::find_if(states.begin(), states.end(), [state](const server_prompt_cache_state & current) {
+        return &current == state;
+    });
+    if (it == states.end()) {
+        return false;
+    }
+
+    states.erase(it);
+    return true;
+}
+
 server_prompt_cache_state * server_prompt_cache::alloc(const server_prompt & prompt, size_t state_size_tgt, size_t state_size_dft) {
     // First check if the current state is contained fully in the cache.
     if (contains(prompt)) {
@@ -1892,7 +1908,8 @@ bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tok
             const size_t size = data.size();
             const size_t n = llama_state_seq_set_data_ext(ctx_tgt, data.data(), size, id_slot, 0);
             if (n != size) {
-                SRV_ERR("failed to restore state with size %zu\n", size);
+                SRV_ERR("failed to restore target state: expected %zu bytes, got %zu\n", size, n);
+                states.erase(it_best);
 
                 return false;
             }
@@ -1910,7 +1927,8 @@ bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tok
                 const size_t size = data.size();
                 const size_t n = llama_state_seq_set_data_ext(ctx_dft, data.data(), size, id_slot, 0);
                 if (n != size) {
-                    SRV_WRN("failed to restore state with size %zu\n", size);
+                    SRV_WRN("failed to restore draft state: expected %zu bytes, got %zu\n", size, n);
+                    states.erase(it_best);
 
                     return false;
                 }
