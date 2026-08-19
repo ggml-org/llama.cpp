@@ -63,14 +63,16 @@ def test_router_chat_completion_stream(model: str, success: bool):
         assert content == ""
 
 
-def _get_model_ids(is_reload: bool) -> set[str]:
-    res = server.make_request("GET", "/models" + ("?reload=1" if is_reload else ""))
+def _get_model_ids(is_reload: bool, headers: dict | None = None) -> set[str]:
+    res = server.make_request(
+        "GET", "/models" + ("?reload=1" if is_reload else ""), headers=headers
+    )
     assert res.status_code == 200
     return {item["id"] for item in res.body.get("data", [])}
 
 
-def _get_model_status(model_id: str) -> str:
-    res = server.make_request("GET", "/models")
+def _get_model_status(model_id: str, headers: dict | None = None) -> str:
+    res = server.make_request("GET", "/models", headers=headers)
     assert res.status_code == 200
     for item in res.body.get("data", []):
         if item.get("id") == model_id or item.get("model") == model_id:
@@ -78,11 +80,11 @@ def _get_model_status(model_id: str) -> str:
     raise AssertionError(f"Model {model_id} not found in /models response")
 
 
-def _wait_for_model_status(model_id: str, desired: set[str], timeout: int = 60) -> str:
+def _wait_for_model_status(model_id: str, desired: set[str], timeout: int = 60, headers: dict | None = None) -> str:
     deadline = time.time() + timeout
     last_status = None
     while time.time() < deadline:
-        last_status = _get_model_status(model_id)
+        last_status = _get_model_status(model_id, headers=headers)
         if last_status in desired:
             return last_status
         time.sleep(0.01)
@@ -100,7 +102,7 @@ def _load_model_and_wait(
     assert load_res.status_code == 200
     assert isinstance(load_res.body, dict)
     assert load_res.body.get("success") is True
-    _wait_for_model_status(model_id, {"loaded"}, timeout=timeout)
+    _wait_for_model_status(model_id, {"loaded"}, timeout=timeout, headers=headers)
 
 
 def test_router_unload_model():
