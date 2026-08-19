@@ -5,7 +5,9 @@
 #include "unary.cuh"
 #include "vecdotq.cuh"
 
+#include <atomic>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 
 typedef float (*vec_dot_q_cuda_t)(const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs);
@@ -701,7 +703,7 @@ static constexpr __host__ __device__ int mmvq_calc_nwarps(
 template <
     ggml_type type, int ncols_dst, bool has_fusion, bool small_k = false,
     int q8_1_layout_block_size = MMVQ_Q8_1_BLOCK_SIZE_STANDARD, bool use_q4_0_dot8 = false,
-    bool use_gfx1030_native = false, int nwarps_override = 0>
+    bool use_gfx1030_native = false, int nwarps_override = 0, int rows_per_block_override = 0>
 __launch_bounds__((mmvq_calc_nwarps<type, q8_1_layout_block_size, nwarps_override>(ncols_dst, get_device_table_id())*ggml_cuda_get_physical_warp_size()), 1)
 static __global__ void mul_mat_vec_q(
         const void * vx_ptr, const void * vy_ptr, const block_q8_1_sum_hi * sum_hi_ptr,
@@ -729,7 +731,9 @@ static __global__ void mul_mat_vec_q(
     constexpr int qk  = ggml_cuda_type_traits<type>::qk;
     constexpr mmvq_parameter_table_id table_id = get_device_table_id();
     constexpr int nwarps = mmvq_calc_nwarps<type, q8_1_layout_block_size, nwarps_override>(ncols_dst, table_id);
-    constexpr int rows_per_cuda_block = layout_policy::rows_per_block(ncols_dst, table_id, small_k, nwarps);
+    static_assert(rows_per_block_override == 0 || rows_per_block_override == 2);
+    constexpr int rows_per_cuda_block = rows_per_block_override != 0 ? rows_per_block_override :
+        layout_policy::rows_per_block(ncols_dst, table_id, small_k, nwarps);
     constexpr int warp_size = ggml_cuda_get_physical_warp_size();
 
     constexpr bool use_dot8 = use_gfx1030_native && type == GGML_TYPE_Q4_0 && ncols_dst == 1;
@@ -1035,7 +1039,7 @@ static __global__ void mul_mat_vec_q_moe(
 }
 
 template<ggml_type type, int q8_1_layout_block_size = MMVQ_Q8_1_BLOCK_SIZE_STANDARD,
-         bool use_gfx1030_native = false>
+         bool use_gfx1030_native = false, int rows_per_block_override = 0>
 static std::pair<dim3, dim3> calc_launch_params(
         const int ncols_dst, const int nrows_x, const int nchannels_dst, const int nsamples_or_ntokens,
         const int warp_size, const mmvq_parameter_table_id table_id, const bool small_k = false) {
@@ -1049,7 +1053,9 @@ static std::pair<dim3, dim3> calc_launch_params(
     }
 
     const int nwarps = layout_policy::nwarps(ncols_dst, table_id);
-    const int rpb = layout_policy::rows_per_block(ncols_dst, table_id, small_k, nwarps);
+    static_assert(rows_per_block_override == 0 || rows_per_block_override == 2);
+    const int rpb = rows_per_block_override != 0 ? rows_per_block_override :
+        layout_policy::rows_per_block(ncols_dst, table_id, small_k, nwarps);
     const int64_t nblocks = (nrows_x + rpb - 1) / rpb;
     const dim3 block_nums(nblocks, nchannels_dst, nsamples_or_ntokens);
     const dim3 block_dims(warp_size, nwarps, 1);
@@ -1059,7 +1065,7 @@ static std::pair<dim3, dim3> calc_launch_params(
 template <
     ggml_type type, int c_ncols_dst, bool small_k = false,
     int q8_1_layout_block_size = MMVQ_Q8_1_BLOCK_SIZE_STANDARD, bool use_q4_0_dot8 = false,
-    bool use_gfx1030_native = false, int nwarps_override = 0>
+    bool use_gfx1030_native = false, int nwarps_override = 0, int rows_per_block_override = 0>
 static void mul_mat_vec_q_switch_fusion(
         const void * vx, const void * vy, const block_q8_1_sum_hi * sum_hi, const int32_t * ids,
         const ggml_cuda_mm_fusion_args_device fusion, float * dst,
@@ -1073,7 +1079,7 @@ static void mul_mat_vec_q_switch_fusion(
                             fusion.x_scale != nullptr || fusion.gate_scale != nullptr;
     if constexpr (c_ncols_dst == 1) {
         if (has_fusion) {
-            mul_mat_vec_q<type, c_ncols_dst, true, small_k, q8_1_layout_block_size, use_q4_0_dot8, use_gfx1030_native, nwarps_override><<<block_nums, block_dims, nbytes_shared, stream>>>
+            mul_mat_vec_q<type, c_ncols_dst, true, small_k, q8_1_layout_block_size, use_q4_0_dot8, use_gfx1030_native, nwarps_override, rows_per_block_override><<<block_nums, block_dims, nbytes_shared, stream>>>
                 (vx, vy, sum_hi, ids, fusion, dst, ncols_x, nchannels_y, stride_row_x, stride_col_y, stride_col_dst,
                  channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
                  sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst, ids_stride);
@@ -1083,7 +1089,7 @@ static void mul_mat_vec_q_switch_fusion(
 
     GGML_ASSERT(!has_fusion && "fusion only supported for ncols_dst=1");
 
-    mul_mat_vec_q<type, c_ncols_dst, false, small_k, q8_1_layout_block_size, use_q4_0_dot8, use_gfx1030_native, nwarps_override><<<block_nums, block_dims, nbytes_shared, stream>>>
+    mul_mat_vec_q<type, c_ncols_dst, false, small_k, q8_1_layout_block_size, use_q4_0_dot8, use_gfx1030_native, nwarps_override, rows_per_block_override><<<block_nums, block_dims, nbytes_shared, stream>>>
         (vx, vy, sum_hi, ids, fusion, dst, ncols_x, nchannels_y, stride_row_x, stride_col_y, stride_col_dst,
         channel_ratio, stride_channel_x, stride_channel_y, stride_channel_dst,
         sample_ratio, stride_sample_x, stride_sample_y, stride_sample_dst, ids_stride);
@@ -1271,11 +1277,52 @@ static void mul_mat_vec_q_switch_ncols_dst(
         } break;
         case 8: {
             constexpr int c_ncols_dst = 8;
-            std::pair<dim3, dim3> dims = calc_launch_params<type, MMVQ_Q8_1_BLOCK_SIZE_STANDARD, use_gfx1030_native>(c_ncols_dst, nrows_x, nchannels_dst, nsamples_dst, warp_size, table_id);
-            mul_mat_vec_q_switch_fusion<type, c_ncols_dst, false, MMVQ_Q8_1_BLOCK_SIZE_STANDARD, false, use_gfx1030_native>(vx, vy, sum_hi, ids, fusion, dst, ncols_x, nchannels_y_fd, stride_row_x, stride_col_y, stride_col_dst,
-                 channel_ratio_fd, stride_channel_x, stride_channel_y, stride_channel_dst,
-                 sample_ratio_fd, stride_sample_x, stride_sample_y, stride_sample_dst,
-                 dims.first, dims.second, 0, ids_stride, stream);
+            constexpr ggml_cuda_mmvq_rdna2_type policy_type =
+                type == GGML_TYPE_Q4_0 ? ggml_cuda_mmvq_rdna2_type::q4_0 :
+                type == GGML_TYPE_Q4_K ? ggml_cuda_mmvq_rdna2_type::q4_k :
+                type == GGML_TYPE_Q6_K ? ggml_cuda_mmvq_rdna2_type::q6_k :
+                                         ggml_cuda_mmvq_rdna2_type::other;
+            const ggml_cuda_mmvq_rdna2_w8_rows2_input rows2_input = {
+                policy_type,
+                use_gfx1030_native &&
+                    ggml_cuda_rdna2_feature_enabled("GGML_HIP_GFX1030_MMVQ_W8_ROWS2"),
+                has_ids,
+                true,
+                ncols_x,
+                nrows_x,
+                ncols_dst,
+            };
+            if (ggml_cuda_mmvq_use_rdna2_w8_rows2(rows2_input)) {
+                constexpr int rows_per_block = 2;
+                std::pair<dim3, dim3> dims = calc_launch_params<type,
+                    MMVQ_Q8_1_BLOCK_SIZE_STANDARD, use_gfx1030_native, rows_per_block>(
+                        c_ncols_dst, nrows_x, nchannels_dst, nsamples_dst, warp_size, table_id);
+                mul_mat_vec_q_switch_fusion<type, c_ncols_dst, false,
+                    MMVQ_Q8_1_BLOCK_SIZE_STANDARD, false, use_gfx1030_native, 0, rows_per_block>(
+                        vx, vy, sum_hi, ids, fusion, dst, ncols_x, nchannels_y_fd,
+                        stride_row_x, stride_col_y, stride_col_dst, channel_ratio_fd,
+                        stride_channel_x, stride_channel_y, stride_channel_dst,
+                        sample_ratio_fd, stride_sample_x, stride_sample_y, stride_sample_dst,
+                        dims.first, dims.second, 0, ids_stride, stream);
+                static std::atomic<bool> logged{false};
+                if (!logged.exchange(true, std::memory_order_relaxed)) {
+                    std::fprintf(stderr,
+                        "using RDNA2 width-eight MMVQ rows/block=2 type=%d ncols=%d nrows=%d\n",
+                        (int) type, ncols_x, nrows_x);
+                }
+                break;
+            }
+
+            std::pair<dim3, dim3> dims = calc_launch_params<type,
+                MMVQ_Q8_1_BLOCK_SIZE_STANDARD, use_gfx1030_native>(
+                    c_ncols_dst, nrows_x, nchannels_dst, nsamples_dst, warp_size, table_id);
+            mul_mat_vec_q_switch_fusion<type, c_ncols_dst, false,
+                MMVQ_Q8_1_BLOCK_SIZE_STANDARD, false, use_gfx1030_native>(
+                    vx, vy, sum_hi, ids, fusion, dst, ncols_x, nchannels_y_fd,
+                    stride_row_x, stride_col_y, stride_col_dst, channel_ratio_fd,
+                    stride_channel_x, stride_channel_y, stride_channel_dst,
+                    sample_ratio_fd, stride_sample_x, stride_sample_y, stride_sample_dst,
+                    dims.first, dims.second, 0, ids_stride, stream);
         } break;
         default:
             GGML_ABORT("fatal error");

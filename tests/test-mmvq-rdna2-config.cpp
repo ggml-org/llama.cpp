@@ -65,6 +65,94 @@ void test_type_guard() {
     check(!ggml_cuda_mmvq_use_rdna2_q8_w8(input), "non-Q8_0 type accepted");
 }
 
+struct rows2_shape {
+    int64_t k;
+    int64_t n;
+};
+
+ggml_cuda_mmvq_rdna2_w8_rows2_input rows2_input(
+        ggml_cuda_mmvq_rdna2_type type, int64_t k, int64_t n) {
+    return {
+        type,
+        true,
+        false,
+        true,
+        k,
+        n,
+        8,
+    };
+}
+
+void test_w8_rows2_validated_shapes() {
+    const rows2_shape q4_0_shapes[] = {
+        { 1536, 5120 }, { 4352, 5120 }, { 5120, 12 },   { 5120, 256 },
+        { 5120, 1536 }, { 5120, 2560 }, { 5120, 3072 }, { 5120, 4352 },
+    };
+    for (const auto & shape : q4_0_shapes) {
+        check(ggml_cuda_mmvq_use_rdna2_w8_rows2(
+                rows2_input(ggml_cuda_mmvq_rdna2_type::q4_0, shape.k, shape.n)),
+                "validated Q4_0 width-eight shape rejected");
+    }
+
+    const rows2_shape q4_k_shapes[] = {
+        { 4096, 5120 },  { 5120, 256 },   { 5120, 1024 }, { 5120, 1280 },
+        { 5120, 4096 },  { 5120, 17408 }, { 17408, 5120 }, { 25600, 5120 },
+    };
+    for (const auto & shape : q4_k_shapes) {
+        check(ggml_cuda_mmvq_use_rdna2_w8_rows2(
+                rows2_input(ggml_cuda_mmvq_rdna2_type::q4_k, shape.k, shape.n)),
+                "validated Q4_K width-eight shape rejected");
+    }
+
+    const rows2_shape q6_k_shapes[] = {
+        { 5120, 1024 }, { 5120, 248320 }, { 17408, 5120 },
+    };
+    for (const auto & shape : q6_k_shapes) {
+        check(ggml_cuda_mmvq_use_rdna2_w8_rows2(
+                rows2_input(ggml_cuda_mmvq_rdna2_type::q6_k, shape.k, shape.n)),
+                "validated Q6_K width-eight shape rejected");
+    }
+}
+
+void test_w8_rows2_fallback_guards() {
+    auto input = rows2_input(ggml_cuda_mmvq_rdna2_type::q4_0, 5120, 4352);
+    input.enabled = false;
+    check(!ggml_cuda_mmvq_use_rdna2_w8_rows2(input), "disabled rows2 policy accepted");
+
+    input = rows2_input(ggml_cuda_mmvq_rdna2_type::q4_0, 5120, 4352);
+    input.has_ids = true;
+    check(!ggml_cuda_mmvq_use_rdna2_w8_rows2(input), "routed rows2 MMVQ accepted");
+
+    input = rows2_input(ggml_cuda_mmvq_rdna2_type::q4_0, 5120, 4352);
+    input.standard_q8_1_layout = false;
+    check(!ggml_cuda_mmvq_use_rdna2_w8_rows2(input), "packed rows2 MMVQ accepted");
+
+    input = rows2_input(ggml_cuda_mmvq_rdna2_type::q4_0, 5120, 4352);
+    input.ncols_dst = 7;
+    check(!ggml_cuda_mmvq_use_rdna2_w8_rows2(input), "non-width-eight MMVQ accepted");
+
+    input = rows2_input(ggml_cuda_mmvq_rdna2_type::q4_0, 5119, 4352);
+    check(!ggml_cuda_mmvq_use_rdna2_w8_rows2(input), "unaligned K accepted");
+
+    input = rows2_input(ggml_cuda_mmvq_rdna2_type::q4_0, 5088, 4352);
+    check(!ggml_cuda_mmvq_use_rdna2_w8_rows2(input), "unknown aligned K accepted");
+
+    input = rows2_input(ggml_cuda_mmvq_rdna2_type::q4_0, 1536, 4352);
+    check(!ggml_cuda_mmvq_use_rdna2_w8_rows2(input), "unvalidated Q4_0 K/N pairing accepted");
+
+    input = rows2_input(ggml_cuda_mmvq_rdna2_type::q4_0, 5120, 4096);
+    check(!ggml_cuda_mmvq_use_rdna2_w8_rows2(input), "unknown Q4_0 output shape accepted");
+
+    input = rows2_input(ggml_cuda_mmvq_rdna2_type::q4_k, 4096, 4096);
+    check(!ggml_cuda_mmvq_use_rdna2_w8_rows2(input), "unvalidated Q4_K K/N pairing accepted");
+
+    input = rows2_input(ggml_cuda_mmvq_rdna2_type::q6_k, 17408, 1024);
+    check(!ggml_cuda_mmvq_use_rdna2_w8_rows2(input), "unvalidated Q6_K K/N pairing accepted");
+
+    input = rows2_input(ggml_cuda_mmvq_rdna2_type::q8_0, 5120, 5120);
+    check(!ggml_cuda_mmvq_use_rdna2_w8_rows2(input), "unvalidated quantization type accepted");
+}
+
 } // namespace
 
 int main() {
@@ -72,6 +160,8 @@ int main() {
     test_shape_guards();
     test_layout_and_routing_guards();
     test_type_guard();
-    std::puts("RDNA2 Q8_0 MMVQ warp policy tests: PASS");
+    test_w8_rows2_validated_shapes();
+    test_w8_rows2_fallback_guards();
+    std::puts("RDNA2 MMVQ policy tests: PASS");
     return 0;
 }
