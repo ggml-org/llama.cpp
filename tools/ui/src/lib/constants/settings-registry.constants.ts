@@ -1,4 +1,5 @@
 import { CLI_FLAGS } from './cli-flags.constants';
+import { COMPACTION } from './compaction.constants';
 import { DEFAULT_MCP_CONFIG } from './mcp.constants';
 import { ROUTES, SETTINGS_SECTION_SLUGS } from './routes.constants';
 import { SETTINGS_KEYS } from './settings-keys.constants';
@@ -385,6 +386,14 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				help: 'Optional template for the title generation prompt. Use {{USER}} for the user message and {{ASSISTANT}} for the assistant message.',
 				key: SETTINGS_KEYS.TITLE_GENERATION_PROMPT,
 				label: 'LLM title generation prompt',
+				section: SETTINGS_SECTION_SLUGS.GENERAL,
+				type: SettingsFieldType.TEXTAREA
+			},
+			{
+				defaultValue: COMPACTION.DEFAULT_PROMPT,
+				help: 'Optional override for the instruction sent to the model when compacting a conversation.',
+				key: SETTINGS_KEYS.COMPACTION_PROMPT,
+				label: 'Compaction prompt',
 				section: SETTINGS_SECTION_SLUGS.GENERAL,
 				type: SettingsFieldType.TEXTAREA
 			},
