@@ -56,6 +56,9 @@ static server_http_context::handler_t ex_wrapper(server_http_context::handler_t 
         std::string message;
         error_type error;
         try {
+            if (json_body_exceeds_max_depth(req.body, JSON_MAX_NESTING_DEPTH)) {
+                throw std::invalid_argument("request body exceeds maximum JSON nesting depth of " + std::to_string(JSON_MAX_NESTING_DEPTH));
+            }
             return func(req);
         } catch (const std::invalid_argument & e) {
             // treat invalid_argument as invalid request (400)

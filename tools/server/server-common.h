@@ -37,6 +37,51 @@ using json = nlohmann::ordered_json;
 
 using raw_buffer = std::vector<uint8_t>;
 
+// nlohmann::json's copy constructor and dump() recurse once per nesting level
+// with no depth limit, so deeply nested input can crash the process; keep this
+// well above realistic use and well below where that recursion turns dangerous
+static constexpr size_t JSON_MAX_NESTING_DEPTH = 64;
+
+// scans raw JSON text for nesting depth without parsing or recursing, so it's
+// safe to call on untrusted input before json::parse
+static bool json_body_exceeds_max_depth(const std::string & body, size_t max_depth) {
+    size_t depth = 0;
+    bool in_string = false;
+    bool escaped = false;
+    for (const char c : body) {
+        if (in_string) {
+            if (escaped) {
+                escaped = false;
+            } else if (c == '\\') {
+                escaped = true;
+            } else if (c == '"') {
+                in_string = false;
+            }
+            continue;
+        }
+        switch (c) {
+            case '"':
+                in_string = true;
+                break;
+            case '{':
+            case '[':
+                if (++depth > max_depth) {
+                    return true;
+                }
+                break;
+            case '}':
+            case ']':
+                if (depth > 0) {
+                    depth--;
+                }
+                break;
+            default:
+                break;
+        }
+    }
+    return false;
+}
+
 template <typename T>
 static T json_value(const json & body, const std::string & key, const T & default_value) {
     // Fallback null to default value

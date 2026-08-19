@@ -1,4 +1,5 @@
 import pytest
+import requests
 from openai import OpenAI
 from utils import *
 import threading
@@ -243,3 +244,23 @@ def test_local_media_file(media_path, image_url, success,):
         assert res.status_code == 200
     else:
         assert res.status_code == 400
+
+
+def test_rejects_excessive_json_nesting_depth():
+    """Deeply nested JSON must be rejected, not crash the server (CWE-674)"""
+    global server
+    server = ServerPreset.tinyllama2()
+    server.start()
+    base_url = f"http://{server.server_host}:{server.server_port}"
+
+    depth = 3000
+    body = '{"model":"test","tools":' + ('[' * depth) + (']' * depth) + '}'
+    res = requests.post(
+        f"{base_url}/v1/chat/completions",
+        data=body,
+        headers={"Content-Type": "application/json"},
+    )
+    assert res.status_code == 400
+
+    health = requests.get(f"{base_url}/health")
+    assert health.status_code == 200
