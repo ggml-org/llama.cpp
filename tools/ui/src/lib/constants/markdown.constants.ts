@@ -6,10 +6,10 @@ export const MARKDOWN_DATA_ATTRS = {
 	CODE_ID: 'data-code-id',
 	ERROR_BOUND: 'data-error-bound',
 	ERROR_HANDLED: 'data-error-handled',
+	FILE_NAME: 'data-filename',
 	LISTENER_BOUND: 'data-listener-bound',
-	ORIGINAL_SRC: 'data-original-src',
 	META_DATA: 'data-meta',
-	FILE_NAME: 'data-filename'
+	ORIGINAL_SRC: 'data-original-src'
 } as const;
 
 /** Markdown structural markers used by `looksLikeMarkdown`. Inline / line-level. */

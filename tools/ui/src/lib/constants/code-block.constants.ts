@@ -9,12 +9,14 @@ export const CODE_BLOCK = {
 	FENCE_PATTERN: /^```|\n```/g,
 
 	// filter file name from just above MD code block, like here is **script.py**: ```python...
-	FILE_NAME_BOUNDARY_REGEX: /(`+[^`\n]+`+|\*{1,2}[^*]+?\*{1,2}|["'][^"'\n]+["']|(?<![\w/\\.])[a-zA-Z0-9_\-./\\]+\.[a-zA-Z0-9]+(?::\d+)?(?=[\s:;,!?)]|$))/g,
+	FILE_NAME_BOUNDARY_REGEX:
+		/(`+[^`\n]+`+|\*{1,2}[^*]+?\*{1,2}|["'][^"'\n]+["']|(?<![\w/\\.])[a-zA-Z0-9_\-./\\]+\.[a-zA-Z0-9]+(?::\d+)?(?=[\s:;,!?)]|$))/g,
 
 	// Illegal OS characters: < > : " / \ | ? *
 	FILE_NAME_ILLEGAL_CHARS_REGEX: /[<>:"/\\|?*]/,
 	// filter file name from MD code block, like ```python title="script.py"
-	FILE_NAME_REGEX: /(?:^|\s)(?:[a-zA-Z0-9_-]+=)?["'`]?([^"'`\s]+\.[a-zA-Z][a-zA-Z0-9]{0,6})["'`]?(?:\s|$)/i,
+	FILE_NAME_REGEX:
+		/(?:^|\s)(?:[a-zA-Z0-9_-]+=)?["'`]?([^"'`\s]+\.[a-zA-Z][a-zA-Z0-9]{0,6})["'`]?(?:\s|$)/i,
 
 	FILE_NAME_VALID_REGEX: /^[a-zA-Z0-9_-]+$/,
 
@@ -68,7 +70,7 @@ export const CODE_BLOCK_TEXT = {
 
 /** Markdown code block type name to file extension mapping */
 export const CODE_BLOCK_TYPE_TO_EXTENSION_MAP: Record<string, string> = {
-    // A
+	// A
 	actionscript: '.as',
 	ada: '.adb',
 	antlr4: '.g4',
@@ -96,9 +98,9 @@ export const CODE_BLOCK_TYPE_TO_EXTENSION_MAP: Record<string, string> = {
 	brightscript: '.brs',
 
 	// C
-    'c#': '.cs',
-    'c++': '.cpp',
-    cbl: '.cob',
+	'c#': '.cs',
+	'c++': '.cpp',
+	cbl: '.cob',
 	cc: '.cpp',
 	cfscript: '.cfc',
 	chaiscript: '.chai',
@@ -115,7 +117,7 @@ export const CODE_BLOCK_TYPE_TO_EXTENSION_MAP: Record<string, string> = {
 	cxx: '.cpp',
 	cypher: '.cql',
 
-    // D
+	// D
 	dataweave: '.dwl',
 	django: '.jinja',
 	docker: '.dockerfile',
@@ -123,7 +125,7 @@ export const CODE_BLOCK_TYPE_TO_EXTENSION_MAP: Record<string, string> = {
 	dos: '.bat',
 	dot: '.gv',
 
-    // E
+	// E
 	eiffel: '.e',
 	elisp: '.el',
 	elixir: '.ex',
@@ -131,15 +133,15 @@ export const CODE_BLOCK_TYPE_TO_EXTENSION_MAP: Record<string, string> = {
 	erlang: '.erl',
 	'excel-formula': '.xlsx',
 
-    // F
-    'f#': '.fs',
-    faust: '.dsp',
+	// F
+	'f#': '.fs',
+	faust: '.dsp',
 	flow: '.js',
 	fortran: '.f90',
 	freemarker: '.ftl',
 	fsharp: '.fs',
 
-    // G
+	// G
 	gawk: '.awk',
 	gdscript: '.gd',
 	gedcom: '.ged',
@@ -149,20 +151,20 @@ export const CODE_BLOCK_TYPE_TO_EXTENSION_MAP: Record<string, string> = {
 	gql: '.graphql',
 	gvy: '.groovy',
 
-    // H
+	// H
 	handlebars: '.hbs',
 	haskell: '.hs',
 	haxe: '.hx',
 	hcl: '.tf',
 
-    // I
+	// I
 	ichigojam: '.bas',
 	icon: '.icn',
 	idris: '.idr',
 	iecst: '.st',
 	inform7: '.ni',
 
-    // J
+	// J
 	j: '.ijs',
 	jade: '.pug',
 	javadoc: '.java',
@@ -173,20 +175,20 @@ export const CODE_BLOCK_TYPE_TO_EXTENSION_MAP: Record<string, string> = {
 	jsonp: '.js',
 	julia: '.jl',
 
-    // K
+	// K
 	keepalived: '.conf',
 	keyman: '.kmn',
 	kotlin: '.kt',
 	kusto: '.kql',
 
-    // L
+	// L
 	latex: '.tex',
 	lilypond: '.ly',
 	livescript: '.ls',
 	llvm: '.ll',
 	lolcode: '.lol',
 
-    // M
+	// M
 	make: '.mk',
 	makefile: '.mk',
 	markdown: '.md',
@@ -200,15 +202,15 @@ export const CODE_BLOCK_TYPE_TO_EXTENSION_MAP: Record<string, string> = {
 	moonscript: '.moon',
 	mustache: '.hbs',
 
-    // N
+	// N
 	nasm: '.asm',
 	nginx: '.conf',
 	node: '.js',
 	nsis: '.nsi',
 
-    // O
+	// O
+	'obj-c': '.m',
 	objc: '.m',
-    'obj-c': '.m',
 	'objective-c': '.m',
 	'objective-cpp': '.mm',
 	objectivec: '.m',

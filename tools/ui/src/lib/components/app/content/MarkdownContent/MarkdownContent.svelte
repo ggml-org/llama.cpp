@@ -7,7 +7,10 @@
 		getMdastNodeHash,
 		isAppendMode
 	} from './markdown-utils';
-	import { rehypeEnhanceCodeBlocks, remarkPreserveCodeMeta } from './plugins/rehype/enhance-code-blocks';
+	import {
+		rehypeEnhanceCodeBlocks,
+		remarkPreserveCodeMeta
+	} from './plugins/rehype/enhance-code-blocks';
 	import { rehypeEnhanceLinks } from './plugins/rehype/enhance-links';
 	import { rehypeEnhanceMermaidBlocks } from './plugins/rehype/enhance-mermaid-blocks';
 	import { rehypeEnhanceSvgBlocks } from './plugins/rehype/enhance-svg-blocks';
@@ -100,7 +103,10 @@
 
 		if (block.language === SVG.LANGUAGE) return block.code;
 
-		if (block.language === SVG.XML_LANGUAGE && block.code.trimStart().startsWith(SVG.TAG_PREFIX))
+		if (
+			block.language === SVG.XML_LANGUAGE &&
+			block.code.trimStart().startsWith(SVG.TAG_PREFIX)
+		)
 			return block.code;
 
 		return null;
@@ -130,7 +136,8 @@
 
 	// Mount the streaming svg into its shadow host on every chunk so it renders live
 	$effect(() => {
-		if (streamingSvgHost) mountSvgShadow(streamingSvgHost, liveSvgHtml, SVG.INLINE_SHADOW_STYLE);
+		if (streamingSvgHost)
+			mountSvgShadow(streamingSvgHost, liveSvgHtml, SVG.INLINE_SHADOW_STYLE);
 	});
 
 	let streamingCodeScrollContainer = $state<HTMLDivElement>();
@@ -192,9 +199,15 @@
 	function cleanupEventListeners() {
 		if (!containerRef) return;
 
-		const copyButtons = containerRef.querySelectorAll<HTMLButtonElement>(`.${CODE_BLOCK_CLASS.COPY_BTN}`);
-		const downloadButtons = containerRef.querySelectorAll<HTMLButtonElement>(`.${CODE_BLOCK_CLASS.DOWNLOAD_BTN}`);
-		const previewButtons = containerRef.querySelectorAll<HTMLButtonElement>(`.${CODE_BLOCK_CLASS.PREVIEW_BTN}`);
+		const copyButtons = containerRef.querySelectorAll<HTMLButtonElement>(
+			`.${CODE_BLOCK_CLASS.COPY_BTN}`
+		);
+		const downloadButtons = containerRef.querySelectorAll<HTMLButtonElement>(
+			`.${CODE_BLOCK_CLASS.DOWNLOAD_BTN}`
+		);
+		const previewButtons = containerRef.querySelectorAll<HTMLButtonElement>(
+			`.${CODE_BLOCK_CLASS.PREVIEW_BTN}`
+		);
 
 		for (const button of copyButtons) {
 			button.removeEventListener('click', handleCopyClick);
@@ -264,7 +277,9 @@
 		}
 
 		const singleNodeRoot = { children: [node], type: 'root' };
-		const transformedRoot = (await processorInstance.run(singleNodeRoot as MdastRoot)) as HastRoot;
+		const transformedRoot = (await processorInstance.run(
+			singleNodeRoot as MdastRoot
+		)) as HastRoot;
 		const html = processorInstance.stringify(transformedRoot);
 
 		transformCache.set(hash, html);
@@ -324,7 +339,8 @@
 						curr.classList.contains('code-block-wrapper') ||
 						curr.querySelector('.code-block-wrapper') ||
 						curr.tagName === 'PRE'
-					) break;
+					)
+						break;
 
 					const text = curr.textContent?.trim();
 
@@ -343,7 +359,7 @@
 				if (extracted) {
 					filename = extracted;
 
-						break;
+					break;
 				}
 			}
 		}
@@ -515,7 +531,11 @@
 					}
 
 					// Transform this block (with caching)
-					const { hash, html } = await transformMdastNode(processorInstance, child, index);
+					const { hash, html } = await transformMdastNode(
+						processorInstance,
+						child,
+						index
+					);
 					const id = getHastNodeId(
 						{ position: (child as { position?: unknown }).position } as HastRootContent,
 						index
@@ -602,9 +622,15 @@
 		const wrappers = containerRef.querySelectorAll<HTMLElement>('.code-block-wrapper');
 
 		for (const wrapper of wrappers) {
-			const copyButton = wrapper.querySelector<HTMLButtonElement>(`.${CODE_BLOCK_CLASS.COPY_BTN}`);
-			const downloadButton = wrapper.querySelector<HTMLButtonElement>(`.${CODE_BLOCK_CLASS.DOWNLOAD_BTN}`);
-			const previewButton = wrapper.querySelector<HTMLButtonElement>(`.${CODE_BLOCK_CLASS.PREVIEW_BTN}`);
+			const copyButton = wrapper.querySelector<HTMLButtonElement>(
+				`.${CODE_BLOCK_CLASS.COPY_BTN}`
+			);
+			const downloadButton = wrapper.querySelector<HTMLButtonElement>(
+				`.${CODE_BLOCK_CLASS.DOWNLOAD_BTN}`
+			);
+			const previewButton = wrapper.querySelector<HTMLButtonElement>(
+				`.${CODE_BLOCK_CLASS.PREVIEW_BTN}`
+			);
 
 			if (downloadButton && downloadButton.dataset.listenerBound !== 'true') {
 				downloadButton.dataset.listenerBound = 'true';
@@ -621,7 +647,8 @@
 
 			if (
 				previewButton &&
-				previewButton.getAttribute(MARKDOWN_DATA_ATTRS.LISTENER_BOUND) !== BooleanString.TRUE
+				previewButton.getAttribute(MARKDOWN_DATA_ATTRS.LISTENER_BOUND) !==
+					BooleanString.TRUE
 			) {
 				previewButton.setAttribute(MARKDOWN_DATA_ATTRS.LISTENER_BOUND, BooleanString.TRUE);
 				previewButton.addEventListener('click', handlePreviewClick);
@@ -636,7 +663,9 @@
 	function setupImageErrorHandlers() {
 		if (!containerRef) return;
 
-		const images = containerRef.querySelectorAll<HTMLImageElement>(IMAGE_NOT_ERROR_BOUND_SELECTOR);
+		const images = containerRef.querySelectorAll<HTMLImageElement>(
+			IMAGE_NOT_ERROR_BOUND_SELECTOR
+		);
 
 		for (const img of images) {
 			img.setAttribute(MARKDOWN_DATA_ATTRS.ERROR_BOUND, BooleanString.TRUE);
@@ -674,7 +703,9 @@
 
 		// Check if clicking on copy or preview button in mermaid block
 		const copyBtn = target.closest(`.${MERMAID_WRAPPER_CLASS} .${CODE_BLOCK_CLASS.COPY_BTN}`);
-		const previewBtn = target.closest(`.${MERMAID_WRAPPER_CLASS} .${CODE_BLOCK_CLASS.PREVIEW_BTN}`);
+		const previewBtn = target.closest(
+			`.${MERMAID_WRAPPER_CLASS} .${CODE_BLOCK_CLASS.PREVIEW_BTN}`
+		);
 
 		if (copyBtn || previewBtn) {
 			const wrapper = target.closest(`.${MERMAID_WRAPPER_CLASS}`);
@@ -718,7 +749,9 @@
 
 		// Check if clicking on copy or preview button in svg block
 		const svgCopyBtn = target.closest(`.${SVG.WRAPPER_CLASS} .${CODE_BLOCK_CLASS.COPY_BTN}`);
-		const svgPreviewBtn = target.closest(`.${SVG.WRAPPER_CLASS} .${CODE_BLOCK_CLASS.PREVIEW_BTN}`);
+		const svgPreviewBtn = target.closest(
+			`.${SVG.WRAPPER_CLASS} .${CODE_BLOCK_CLASS.PREVIEW_BTN}`
+		);
 
 		if (svgCopyBtn || svgPreviewBtn) {
 			const wrapper = target.closest(`.${SVG.WRAPPER_CLASS}`);

@@ -13,13 +13,13 @@ import type { RootContent as HastRootContent } from 'hast';
  * @returns Unique string identifier for the node
  */
 export function getHastNodeId(node: HastRootContent, indexFallback: number): string {
-    const position = node.position;
+	const position = node.position;
 
-    if (position?.start?.offset != null && position?.end?.offset != null) {
-        return `hast-${position.start.offset}-${position.end.offset}`;
-    }
+	if (position?.start?.offset != null && position?.end?.offset != null) {
+		return `hast-${position.start.offset}-${position.end.offset}`;
+	}
 
-    return `${node.type}-${indexFallback}`;
+	return `${node.type}-${indexFallback}`;
 }
 
 /**
@@ -86,9 +86,10 @@ export function getCodeInfoFromTarget(target: HTMLElement): CodeInfo | null {
 }
 
 /**
- * Extracts the filename from the text above a code block. Use heuristics to select the most likely filename.
+ * Extracts filename from the text above a code block. Use heuristics to select the most likely filename.
+ * Quoted names have higest priority, unquoted names only when code block has a type and matches the .ext
  * @param text - The text to search
- * @param extension - The expected file extension or empty
+ * @param extension - The expected file extension (from code block type) or empty
  * @returns The extracted filename, or null if it could not reliable extracted
  */
 export function extractFilenameFromText(text: string, extension: string | null): string | null {
@@ -104,6 +105,9 @@ export function extractFilenameFromText(text: string, extension: string | null):
 
 	const candidates: Candidate[] = [];
 
+	// Reset state on shared global regex
+	CODE_BLOCK.FILE_NAME_BOUNDARY_REGEX.lastIndex = 0;
+
 	let match: RegExpExecArray | null;
 
 	while ((match = CODE_BLOCK.FILE_NAME_BOUNDARY_REGEX.exec(text)) !== null) {
@@ -112,10 +116,12 @@ export function extractFilenameFromText(text: string, extension: string | null):
 		// Detect if candidate is explicitly styled/quoted
 		const isQuoted = /^(`+.*`+|\*{1,2}.*\*{1,2}|["'].*["'])$/.test(raw);
 		// 1. Strip surrounding quotes, markdown markers, brackets, colons, and line numbers
+		// Applied twice to handle nested styling like **`filename`**
 		const cleaned = raw
-		.replace(/^[`*'"([{]+|[`*'")]}:]+$/g, '')
-		.replace(/:\d+(-\d+)?$/, '')
-		.replace(/:$/, '');
+			.replace(/^[`*'"([{]+|[`*'"\])}:]+$/g, '')
+			.replace(/^[`*'"([{]+|[`*'"\])}:]+$/g, '')
+			.replace(/:\d+(-\d+)?$/, '')
+			.replace(/:$/, '');
 		// 2. Strip virtual paths (basename only)
 		const basename = cleaned.split(/[/\\]/).pop() || '';
 
@@ -125,7 +131,9 @@ export function extractFilenameFromText(text: string, extension: string | null):
 			!basename.includes('.') ||
 			basename.includes('..') ||
 			CODE_BLOCK.FILE_NAME_ILLEGAL_CHARS_REGEX.test(basename)
-		) continue;
+		) {
+			continue;
+		}
 
 		const parts = basename.split('.');
 		const candExt = parts.pop()?.toLowerCase();
@@ -146,7 +154,7 @@ export function extractFilenameFromText(text: string, extension: string | null):
 		candidates.push({
 			index: startIndex,
 			isQuoted,
-			name: basename,
+			name: basename
 		});
 	}
 
@@ -162,69 +170,6 @@ export function extractFilenameFromText(text: string, extension: string | null):
 
 		return b.index - a.index;
 	});
-	
+
 	return candidates[0].name;
 }
-
-
-/*
-export function extractFilenameFromText(text: string, extension: string): string | null {
-	if (!text) return null;
-
-	// Strictly validates a base filename (no paths, no spaces, safe characters)
-	const isValid = (basename: string) => {
-		if (!basename || !basename.includes('.')) return false;
-		if (basename.includes('..')) return false; // block directory traversal
-		if (basename.endsWith('.')) return false;
-		if (extension && basename.toLowerCase() === extension.toLowerCase()) return false; // ignore bare extension
-		if (!/^[-a-zA-Z0-9_.]+$/.test(basename)) return false; // strictly valid chars only
-
-		return true;
-	};
-
-	// 1. Quoted filenames: text wrapped in backticks, double, or single quotes
-	const quoteRegex = /[`"']([^`"'\s]+)[`"']/g;
-	const quotedMatches: string[] = [];
-	let match;
-
-	while ((match = quoteRegex.exec(text)) !== null) {
-		const basename = match[1].split(/[/\\]/).pop() || '';
-
-		if (isValid(basename)) {
-			// If extension is provided, it must match. Otherwise, we trust the quote.
-			if (!extension || basename.toLowerCase().endsWith(extension.toLowerCase())) {
-				quotedMatches.push(basename);
-			}
-		}
-	}
-
-	// Return the last (closest to code block) valid quoted match
-	if (quotedMatches.length > 0) {
-		return quotedMatches[quotedMatches.length - 1];
-	}
-
-	// 2. Unquoted filenames: only searched if we have a strict extension to verify against
-	if (extension) {
-		const unquotedMatches: string[] = [];
-		// Match any sequence of allowed path/file chars ending with the exact extension
-		// This naturally ignores surrounding characters like * ( [ : because they aren't in the allowed set.
-		const extEscaped = extension.replace(/\./g, '\\.');
-		const unquotedRegex = new RegExp(`([-a-zA-Z0-9_/\\\\]+${extEscaped})`, 'gi');
-
-		while ((match = unquotedRegex.exec(text)) !== null) {
-			const basename = match[1].split(/[/\\]/).pop() || '';
-
-			if (isValid(basename)) {
-				unquotedMatches.push(basename);
-			}
-		}
-
-		// Return the last valid unquoted match
-		if (unquotedMatches.length > 0) {
-			return unquotedMatches[unquotedMatches.length - 1];
-		}
-	}
-
-	return null;
-}
-*/

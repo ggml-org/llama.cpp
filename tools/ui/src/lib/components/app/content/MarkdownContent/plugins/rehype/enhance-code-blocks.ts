@@ -19,11 +19,7 @@ import {
 	createWrapper,
 	generateBlockId
 } from './code-block-utils';
-import {
-	CODE_BLOCK,
-	CODE_BLOCK_CLASS,
-	CODE_BLOCK_TEXT,
-	MARKDOWN_DATA_ATTRS} from '$lib/constants';
+import { CODE_BLOCK, CODE_BLOCK_CLASS, CODE_BLOCK_TEXT, MARKDOWN_DATA_ATTRS } from '$lib/constants';
 import type { Element, ElementContent, Root } from 'hast';
 import type { Plugin } from 'unified';
 import { visit } from 'unist-util-visit';
@@ -72,7 +68,9 @@ function extractLanguage(codeElement: Element): string {
  * Matches patterns like title="app.js", file=app.js, "app.js", `app.js`, or just app.js
  */
 function extractFilenameFromInfo(node: Element, codeElement: Element): string | undefined {
-	const meta = node.properties?.[MARKDOWN_DATA_ATTRS.META_DATA] ?? codeElement.properties?.[MARKDOWN_DATA_ATTRS.META_DATA];
+	const meta =
+		node.properties?.[MARKDOWN_DATA_ATTRS.META_DATA] ??
+		codeElement.properties?.[MARKDOWN_DATA_ATTRS.META_DATA];
 
 	if (typeof meta !== 'string') return undefined;
 
@@ -111,22 +109,41 @@ export const rehypeEnhanceCodeBlocks: Plugin<[], Root> = () => {
 			};
 
 			const actions: Element[] = [
-				createDownloadButton(codeId, MARKDOWN_DATA_ATTRS.CODE_ID, CODE_BLOCK_TEXT.DOWNLOAD_BTN_TITLE),
-				createCopyButton(codeId, MARKDOWN_DATA_ATTRS.CODE_ID, CODE_BLOCK_TEXT.COPY_BTN_TITLE)
+				createDownloadButton(
+					codeId,
+					MARKDOWN_DATA_ATTRS.CODE_ID,
+					CODE_BLOCK_TEXT.DOWNLOAD_BTN_TITLE
+				),
+				createCopyButton(
+					codeId,
+					MARKDOWN_DATA_ATTRS.CODE_ID,
+					CODE_BLOCK_TEXT.COPY_BTN_TITLE
+				)
 			];
 
 			if (language.toLowerCase() === 'html') {
-				actions.push(createPreviewButton(codeId, MARKDOWN_DATA_ATTRS.CODE_ID, CODE_BLOCK_TEXT.PREVIEW_TITLE));
+				actions.push(
+					createPreviewButton(
+						codeId,
+						MARKDOWN_DATA_ATTRS.CODE_ID,
+						CODE_BLOCK_TEXT.PREVIEW_TITLE
+					)
+				);
 			}
 
-			const header = createBlockHeader(language, codeId, MARKDOWN_DATA_ATTRS.CODE_ID, actions);
+			const header = createBlockHeader(
+				language,
+				codeId,
+				MARKDOWN_DATA_ATTRS.CODE_ID,
+				actions
+			);
 			const wrapper = createWrapper(
 				header,
 				node,
 				CODE_BLOCK_CLASS.WRAPPER,
 				CODE_BLOCK_CLASS.SCROLL_CONTAINER,
 				{
-					...(filename ? { [MARKDOWN_DATA_ATTRS.FILE_NAME] : filename } : {})
+					...(filename ? { [MARKDOWN_DATA_ATTRS.FILE_NAME]: filename } : {})
 				}
 			);
 
