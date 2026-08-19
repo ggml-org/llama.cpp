@@ -594,3 +594,28 @@ def test_router_delete_model():
     # Model should no longer appear in GET /models
     ids = _get_model_ids(is_reload=False)
     assert MODEL_DOWNLOAD_ID not in ids, f"{MODEL_DOWNLOAD_ID} still present after deletion"
+
+def test_router_unknown_tool_load_on_startup_does_not_abort():
+    """unknown --tools plus load-on-startup must not abort the parent (issue 27384)"""
+    global server
+    preset_path = os.path.join(TMP_DIR, "test_unknown_tool_startup.ini")
+    with open(preset_path, "w") as f:
+        f.write(
+            "[tiny]\n"
+            "load-on-startup = true\n"
+            "hf-repo = ggml-org/test-model-stories260K\n"
+        )
+    server.models_preset = preset_path
+    server.server_tools = "get_datetime"
+    try:
+        try:
+            server.start(timeout_seconds=30)
+            assert server.process is not None
+            assert server.process.poll() is None
+        except Exception:
+            if server.process is not None:
+                rc = server.process.returncode
+                assert rc not in (-6, 134), f"parent aborted with {rc}"
+    finally:
+        if os.path.exists(preset_path):
+            os.remove(preset_path)
