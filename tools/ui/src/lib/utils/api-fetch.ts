@@ -117,28 +117,7 @@ export async function apiFetchWithParams<T>(
 		}
 	}
 
-	const { authOnly = false, headers: customHeaders, ...fetchOptions } = options;
-	const baseHeaders = authOnly ? getAuthHeaders() : getJsonHeaders();
-	const headers = { ...baseHeaders, ...customHeaders };
-
-	let response;
-
-	try {
-		response = await fetch(url.toString(), {
-			...fetchOptions,
-			headers
-		});
-	} catch (e) {
-		throw new Error(beautifyNetworkError(e));
-	}
-
-	if (!response.ok) {
-		const errorMessage = await parseErrorMessage(response);
-
-		throw new ApiError(errorMessage, response.status);
-	}
-
-	return response.json() as Promise<T>;
+	return apiFetch<T>(url.toString(), options);
 }
 
 /**
