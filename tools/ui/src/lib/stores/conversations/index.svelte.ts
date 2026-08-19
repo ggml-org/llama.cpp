@@ -70,6 +70,13 @@ class ConversationsStore implements ConversationsPreferencesHost {
 	private initPromise: Promise<void> | null = null;
 
 	/**
+	 * Memo of the last findMessageIndex() lookup. Streaming calls it once per
+	 * chunk for the same message, so a validated cache hit keeps that O(1)
+	 * instead of a linear scan of activeMessages on every token.
+	 */
+	private lastMessageIndex: { id: string; index: number } | null = null;
+
+	/**
 	 *
 	 *
 	 * Lifecycle
@@ -139,10 +146,34 @@ class ConversationsStore implements ConversationsPreferencesHost {
 	}
 
 	/**
-	 * Finds the index of a message in active messages
+	 * Finds the index of a message in active messages.
+	 *
+	 * The last lookup is memoized and reused when it still validates against
+	 * the current array (same id at the same position), which covers the
+	 * streaming hot path where the same message is looked up on every chunk
+	 * while the array itself only mutates by field. Any structural change
+	 * (splice, reassignment, reordering) fails validation and falls back to a
+	 * full scan.
 	 */
 	findMessageIndex(messageId: string): number {
-		return this.activeMessages.findIndex((m) => m.id === messageId);
+		const last = this.lastMessageIndex;
+		const messages = this.activeMessages;
+
+		if (
+			last &&
+			last.id === messageId &&
+			last.index >= 0 &&
+			last.index < messages.length &&
+			messages[last.index]?.id === messageId
+		) {
+			return last.index;
+		}
+
+		const index = messages.findIndex((m) => m.id === messageId);
+
+		this.lastMessageIndex = { id: messageId, index };
+
+		return index;
 	}
 
 	/**
