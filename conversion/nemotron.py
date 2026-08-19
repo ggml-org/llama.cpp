@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from typing import Any, Callable, Iterable, TYPE_CHECKING
 
 import torch
@@ -207,7 +209,11 @@ class NemotronHModel(GraniteHybridModel):
         # calling the parent __init__. This is because the parent constructor
         # uses self.model_arch to build the tensor name map, and all MoE-specific
         # mappings would be missed if it were called with the default non-MoE arch.
-        hparams = ModelBase.load_hparams(args[0], self.is_mistral_format)
+        # LoRA conversion passes AutoConfig-derived hparams, which may omit required
+        # fields such as num_hidden_layers. Load complete config.json directly.
+        with open(args[0] / "config.json", "r", encoding="utf-8") as f:
+            hparams = json.load(f)
+        kwargs["hparams"] = hparams
         has_moe_params = (
             "num_experts_per_tok" in hparams
             or (isinstance(hparams.get("llm_config"), dict) and "num_experts_per_tok" in hparams["llm_config"])
@@ -293,6 +299,10 @@ class NemotronHModel(GraniteHybridModel):
             )
             if not keep:
                 return None
+        # PEFT names adapter tensors using model.layers.*, while Nemotron-H checkpoints
+        # and the GGUF tensor map use backbone.layers.*
+        if name.startswith("model.layers.") and ".mixer." in name:
+            name = name.replace("model.layers.", "backbone.layers.", 1)
         return super().filter_tensors((name, gen))
 
     def prepare_metadata(self, vocab_only: bool):
