@@ -822,6 +822,10 @@ public:
         return metrics;
     }
 
+    void reset_metrics_bucket() {
+        metrics.reset_bucket();
+    }
+
 private:
     // note: accessing these fields outside of this class is not thread-safe
     // use server_context methods instead
@@ -4583,16 +4587,18 @@ void server_routes::init_routes() {
             return res;
         }
 
-        res->content_type = "text/plain; version=0.0.4";
-        res->status = 200;
-
         // render response using cached_metrics
         auto use_cached_metrics = [&]() {
             std::unique_lock<std::mutex> lock(mutex_cache);
             res->headers["Process-Start-Time-Unix"] = std::to_string(cached_metrics.t_start);
             server_task_result_metrics tmp;
             tmp.metrics = cached_metrics;
+            res->content_type = "text/plain; version=0.0.4";
+            res->status = 200;
             res->data = tmp.to_metrics();
+            // the gauges are averaged over the window between two scrapes
+            cached_metrics.reset_bucket();
+            should_reset_buckets = true;
         };
 
         if (queue_tasks.is_sleeping()) {
@@ -4628,6 +4634,8 @@ void server_routes::init_routes() {
             GGML_ASSERT(res_task != nullptr);
 
             res->headers["Process-Start-Time-Unix"] = std::to_string(res_task->metrics.t_start);
+            res->content_type = "text/plain; version=0.0.4";
+            res->status = 200;
             res->data = res_task->to_metrics();
         }
 
@@ -5445,15 +5453,22 @@ std::unique_ptr<server_res_generator> server_routes::handle_count_tokens(const l
 }
 
 void server_routes::update_cached_responses(bool is_sleeping) {
-    if (is_sleeping) {
-        std::unique_lock<std::mutex> lock(mutex_cache);
+    // caller is task_queue, so ctx_server can be accessed without holding locks
+    std::unique_lock<std::mutex> lock(mutex_cache);
 
+    if (is_sleeping) {
         cached_models  = get_res_models(*meta);
         cached_props   = get_res_props(*meta, params, true);
-
-        // caller is task_queue, so we don't need to hold locks here
         cached_metrics = ctx_server.get_metrics();
 
+        should_reset_buckets = false;
+
         SRV_DBG("%s\n", "cached responses updated");
+
+    } else if (should_reset_buckets) {
+        // a scrape during sleep already reported these buckets
+        ctx_server.reset_metrics_bucket();
+
+        should_reset_buckets = false;
     }
 }

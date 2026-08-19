@@ -97,3 +97,31 @@ def test_server_sleep_read_only_endpoints():
 
     # scraping /metrics must not wake the server up
     assert is_sleeping(server)
+
+
+def test_server_sleep_metrics_buckets():
+    global server
+    server.sleep_idle_seconds = 1
+    server.server_metrics = True
+    server.start()
+
+    res = server.make_request("POST", "/completion", data={
+        "n_predict": 8,
+        "prompt": "Hello",
+    })
+    assert res.status_code == 200
+
+    wait_for_sleep(server)
+
+    # the first scrape reports the throughput of the last generation
+    assert get_metric(fetch_metrics(server), "predicted_tokens_seconds") > 0
+
+    # nothing runs while sleeping, so the next scrapes report an empty window
+    assert get_metric(fetch_metrics(server), "predicted_tokens_seconds") == 0
+    assert is_sleeping(server)
+
+    # waking up must not report the buckets again
+    res = server.make_request("POST", "/tokenize", data={"content": "Hello"})
+    assert res.status_code == 200
+    assert is_sleeping(server) == False
+    assert get_metric(fetch_metrics(server), "predicted_tokens_seconds") == 0
