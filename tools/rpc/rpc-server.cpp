@@ -172,6 +172,7 @@ static std::string fs_get_cache_directory() {
 struct rpc_server_params {
     std::string              host        = "127.0.0.1";
     int                      port        = 50052;
+    int                      comm_port   = 0; // 0 = default (port + 1000)
     bool                     use_cache   = false;
     int                      n_threads   = std::max(1U, std::thread::hardware_concurrency()/2);
     std::vector<std::string> devices;
@@ -185,6 +186,8 @@ static void print_usage(int /*argc*/, char ** argv, rpc_server_params params) {
     fprintf(stderr, "  -d, --device <dev1,dev2,...>     comma-separated list of devices\n");
     fprintf(stderr, "  -H, --host HOST                  host to bind to (default: %s)\n", params.host.c_str());
     fprintf(stderr, "  -p, --port PORT                  port to bind to (default: %d)\n", params.port);
+    fprintf(stderr, "  -C, --comm-port PORT             port for direct server-to-server communication,\n");
+    fprintf(stderr, "                                   used for tensor parallelism (default: PORT + 1000)\n");
     fprintf(stderr, "  -c, --cache                      enable local file cache\n");
     fprintf(stderr, "\n");
 }
@@ -229,6 +232,14 @@ static bool rpc_server_params_parse(int argc, char ** argv, rpc_server_params & 
             }
             params.port = std::stoi(argv[i]);
             if (params.port <= 0 || params.port > 65535) {
+                return false;
+            }
+        } else if (arg == "-C" || arg == "--comm-port") {
+            if (++i >= argc) {
+                return false;
+            }
+            params.comm_port = std::stoi(argv[i]);
+            if (params.comm_port <= 0 || params.comm_port > 65535) {
                 return false;
             }
         } else if (arg == "-c" || arg == "--cache") {
@@ -313,6 +324,17 @@ int main(int argc, char * argv[]) {
         fprintf(stderr, "No devices found\n");
         return 1;
     }
+    if (params.comm_port == 0) {
+        params.comm_port = params.port + 1000;
+        if (params.comm_port > 65535) {
+            fprintf(stderr, "error: default comm port (%d) is out of range, specify one with --comm-port\n", params.comm_port);
+            return 1;
+        }
+    }
+    if (params.comm_port == params.port) {
+        fprintf(stderr, "error: comm port must be different from the main port\n");
+        return 1;
+    }
     std::string endpoint = params.host + ":" + std::to_string(params.port);
     const char * cache_dir = nullptr;
     std::string cache_dir_str;
@@ -337,6 +359,7 @@ int main(int argc, char * argv[]) {
         return 1;
     }
 
-    start_server_fn(endpoint.c_str(), cache_dir, params.n_threads, devices.size(), devices.data());
+    start_server_fn(endpoint.c_str(), cache_dir, params.n_threads, devices.size(), devices.data(),
+                    (uint16_t) params.comm_port);
     return 0;
 }
