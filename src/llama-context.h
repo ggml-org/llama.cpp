@@ -82,6 +82,10 @@ struct llama_context {
     float * get_logits();
     float * get_logits_ith(int32_t i);
 
+    // number of valid output rows produced by the last encode()/decode() call - see
+    // llama_n_outputs() for why this can differ from the input token/batch count
+    int32_t get_n_outputs() const;
+
     float * get_embeddings();
     float * get_embeddings_ith(int32_t i);
     float * get_embeddings_seq(llama_seq_id seq_id);

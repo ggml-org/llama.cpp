@@ -248,6 +248,12 @@ llama_context::llama_context(
     cparams.n_ubatch = std::min(cparams.n_batch, params.n_ubatch == 0 ? params.n_batch : params.n_ubatch);
 
     cparams.n_outputs_max = params.n_outputs_max == 0 || llama_model_has_encoder(&model) ? cparams.n_batch : params.n_outputs_max;
+
+    // an encoder pass (real encoder-decoder hybrids, or a decoder-less architecture whose only
+    // pass *is* an encode(), e.g. CTC transcription) can produce up to n_batch output rows in one
+    // shot - size for that instead of the (possibly much smaller) generation-oriented default
+    cparams.n_outputs_max = params.n_outputs_max == 0 || llama_model_has_encoder(&model) || !llama_model_has_decoder(&model)
+        ? cparams.n_batch : params.n_outputs_max;
     cparams.n_outputs_max_per_seq = params.n_outputs_max_per_seq == 0 ?
             cparams.n_outputs_max : std::min(params.n_outputs_max_per_seq, cparams.n_outputs_max);
 
@@ -959,6 +965,10 @@ float * llama_context::get_logits_ith(int32_t i) {
         return nullptr;
 #endif
     }
+}
+
+int32_t llama_context::get_n_outputs() const {
+    return n_outputs;
 }
 
 float * llama_context::get_embeddings() {
@@ -3928,6 +3938,10 @@ void llama_set_warmup(llama_context * ctx, bool warmup) {
 
 void llama_synchronize(llama_context * ctx) {
     ctx->synchronize();
+}
+
+int32_t llama_n_outputs(const llama_context * ctx) {
+    return ctx->get_n_outputs();
 }
 
 float * llama_get_logits(llama_context * ctx) {

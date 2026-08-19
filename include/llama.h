@@ -1124,6 +1124,12 @@ extern "C" {
     // and is not necessary to call it explicitly in most cases
     LLAMA_API void llama_synchronize(struct llama_context * ctx);
 
+    // Number of valid output rows (logits/embeddings) produced by the last llama_encode()/
+    // llama_decode() call. Usually equals the number of tokens with llama_batch.logits[i] != 0,
+    // but an encoder-only architecture may reduce the sequence length internally (e.g. time
+    // subsampling) - use this instead of assuming the row count matches the input token count.
+    LLAMA_API int32_t llama_n_outputs(const struct llama_context * ctx);
+
     // Token logits obtained from the last call to llama_decode()
     // The logits for which llama_batch.logits[i] != 0 are stored contiguously
     // in the order they have appeared in the batch.
