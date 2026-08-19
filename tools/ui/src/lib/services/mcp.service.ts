@@ -1129,23 +1129,38 @@ export class MCPService {
 	}
 
 	/**
+	 * Walk a cursor-paginated MCP list endpoint, collecting every page.
+	 */
+	private static async paginate<T, R extends { nextCursor?: string }>(
+		connection: MCPConnection,
+		fetchPage: (cursor?: string) => Promise<R>,
+		extract: (result: R) => T[]
+	): Promise<T[]> {
+		const all: T[] = [];
+
+		let cursor: string | undefined;
+
+		do {
+			const result = await fetchPage(cursor);
+
+			all.push(...extract(result));
+			cursor = result.nextCursor;
+		} while (cursor);
+
+		return all;
+	}
+
+	/**
 	 * List all resources from a connection (handles pagination automatically).
 	 * @param connection - The MCP connection to use
 	 * @returns Array of all available resources
 	 */
 	static async listAllResources(connection: MCPConnection): Promise<MCPResource[]> {
-		const allResources: MCPResource[] = [];
-
-		let cursor: string | undefined;
-
-		do {
-			const result = await this.listResources(connection, cursor);
-
-			allResources.push(...result.resources);
-			cursor = result.nextCursor;
-		} while (cursor);
-
-		return allResources;
+		return this.paginate(
+			connection,
+			(cursor) => this.listResources(connection, cursor),
+			(result) => result.resources
+		);
 	}
 
 	/**
@@ -1185,18 +1200,11 @@ export class MCPService {
 	 * @returns Array of all available resource templates
 	 */
 	static async listAllResourceTemplates(connection: MCPConnection): Promise<MCPResourceTemplate[]> {
-		const allTemplates: MCPResourceTemplate[] = [];
-
-		let cursor: string | undefined;
-
-		do {
-			const result = await this.listResourceTemplates(connection, cursor);
-
-			allTemplates.push(...result.resourceTemplates);
-			cursor = result.nextCursor;
-		} while (cursor);
-
-		return allTemplates;
+		return this.paginate(
+			connection,
+			(cursor) => this.listResourceTemplates(connection, cursor),
+			(result) => result.resourceTemplates
+		);
 	}
 
 	/**

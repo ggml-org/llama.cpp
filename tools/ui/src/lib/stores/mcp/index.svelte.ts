@@ -1123,15 +1123,7 @@ class MCPStore implements McpHealthHost {
 	 */
 	promoteHealthCheckToConnection(serverId: string, connection: MCPConnection): void {
 		// Register tools from the connection
-		for (const tool of connection.tools) {
-			if (this.toolsIndex.has(tool.name)) {
-				console.warn(
-					`[MCPStore] Tool name conflict during promotion: "${tool.name}" exists in "${this.toolsIndex.get(tool.name)}" and "${serverId}". Using tool from "${serverId}".`
-				);
-			}
-
-			this.toolsIndex.set(tool.name, serverId);
-		}
+		this.indexServerTools(serverId, connection.tools);
 
 		// Add to active connections
 		this.connections.set(serverId, connection);
