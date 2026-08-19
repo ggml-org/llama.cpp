@@ -29,13 +29,15 @@ extern "C" {
 // FP16 to FP32 conversion
 
 // 16-bit float
-// on Arm, we use __fp16
+// on Arm, we use __fp16, which requires the IEEE fp16 format: implied on
+// AArch64, selected by -mfp16-format=ieee on 32 bit Arm, where the compiler
+// may otherwise reject the type
 // on x86, we use uint16_t
 //
 // for old CUDA compilers (<= 11), we use uint16_t: ref https://github.com/ggml-org/llama.cpp/pull/10616
 // for     MUSA compilers        , we use uint16_t: ref https://github.com/ggml-org/llama.cpp/pull/11843
 //
-#if defined(__ARM_NEON) && !(defined(__CUDACC__) && __CUDACC_VER_MAJOR__ <= 11) && !defined(__MUSACC__)
+#if defined(__ARM_NEON) && defined(__ARM_FP16_FORMAT_IEEE) && !(defined(__CUDACC__) && __CUDACC_VER_MAJOR__ <= 11) && !defined(__MUSACC__)
     #define GGML_CPU_COMPUTE_FP16_TO_FP32(x) neon_compute_fp16_to_fp32(x)
     #define GGML_CPU_COMPUTE_FP32_TO_FP16(x) neon_compute_fp32_to_fp16(x)
 
@@ -326,7 +328,7 @@ inline static float ggml_lookup_fp16_to_fp32(ggml_fp16_t f) {
     #define GGML_F16_VEC_REDUCE         GGML_F32Cx4_REDUCE
 #endif
 
-#elif defined(__ARM_NEON) && defined(__ARM_FEATURE_FMA)
+#elif defined(__ARM_NEON) && defined(__ARM_FEATURE_FMA) && defined(__ARM_FP16_FORMAT_IEEE)
 
 #define GGML_SIMD
 
