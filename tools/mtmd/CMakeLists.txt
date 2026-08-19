@@ -20,6 +20,7 @@ add_library(mtmd
             mtmd-helper.cpp
             mtmd-helper-gen.cpp
             mtmd-helper-common.h
+            mtmd-tokenize-impl.h
             mtmd-helper.h
             clip.cpp
             clip.h

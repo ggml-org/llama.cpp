@@ -3,6 +3,7 @@
 #include "mtmd.h"
 #include "mtmd-audio.h"
 #include "mtmd-image.h"
+#include "mtmd-tokenize-impl.h"
 #include "debug/mtmd-debug.h"
 
 #include "llama.h"
@@ -1114,27 +1115,18 @@ struct mtmd_tokenizer {
         input_text.assign(text->text, text->text_len);
 
         std::vector<const mtmd_bitmap *> bitmaps(bmps, bmps + n_bitmaps);
-        auto parts_str = split_text(input_text, ctx->media_marker);
-        size_t i_bm = 0;
-        for (const auto & part : parts_str) {
-            if (part == ctx->media_marker) {
-                if (i_bm >= bitmaps.size()) {
-                    throw std::runtime_error(string_format("number of media markers in text (%zu) exceeds number of bitmaps (%zu)", i_bm + 1, bitmaps.size()));
-                }
-                parts.push_back({"", bitmaps[i_bm++]});
+        std::vector<mtmd_marker_part> bound;
+        if (!mtmd_bind_media_markers(input_text, ctx->media_marker, bitmaps.size(), bound)) {
+            throw std::runtime_error(string_format(
+                "number of media markers in text does not match number of bitmaps (%zu)",
+                bitmaps.size()));
+        }
+        for (auto & b : bound) {
+            if (b.bitmap_i >= 0) {
+                parts.push_back({"", bitmaps[b.bitmap_i]});
             } else {
-                parts.push_back({std::move(part), nullptr});
+                parts.push_back({std::move(b.text), nullptr});
             }
-        }
-
-        size_t n_markers = 0;
-        for (const auto & part : parts) {
-            if (part.bitmap != nullptr) {
-                n_markers++;
-            }
-        }
-        if (n_markers != bitmaps.size()) {
-            throw std::runtime_error(string_format("number of media markers in text (%zu) does not match number of bitmaps (%zu)", n_markers, bitmaps.size()));
         }
 
         expand_lazy_bitmaps();
@@ -1641,27 +1633,6 @@ struct mtmd_tokenizer {
         }
 
         return chunks;
-    }
-
-    // for example: "a <__media__> b <__media__> c" --> "a", "<__media__>", "b", "<__media__>", "c"
-    static std::vector<std::string> split_text(const std::string & input, const std::string & delimiter) {
-        std::vector<std::string> result;
-        if (input.empty()) {
-            return result;
-        }
-        size_t start = 0;
-        size_t pos = 0;
-        while ((pos = input.find(delimiter, start)) != std::string::npos) {
-            if (pos > start) {
-                result.push_back(input.substr(start, pos - start));
-            }
-            result.push_back(delimiter);
-            start = pos + delimiter.length();
-        }
-        if (start < input.length()) {
-            result.push_back(input.substr(start));
-        }
-        return result;
     }
 
     // copied from common_tokenize

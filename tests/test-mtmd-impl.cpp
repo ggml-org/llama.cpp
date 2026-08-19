@@ -1,6 +1,7 @@
 #include "testing.h"
 
 #include "mtmd-image.h"
+#include "mtmd-tokenize-impl.h"
 
 #include <iostream>
 #include <string>
@@ -65,6 +66,54 @@ MAKE_TEST(test_image_preprocessor_lfm2) {
             std::string(expected ? "tiled" : "single"),
             std::string(actual   ? "tiled" : "single"));
     }
+}
+
+static std::string dump_marker_parts(const std::vector<mtmd_marker_part> & parts) {
+    std::string s;
+    for (size_t i = 0; i < parts.size(); ++i) {
+        if (i != 0) {
+            s += "|";
+        }
+        if (parts[i].bitmap_i >= 0) {
+            s += "BM" + std::to_string(parts[i].bitmap_i);
+        } else {
+            s += parts[i].text;
+        }
+    }
+    return s;
+}
+
+MAKE_TEST(test_bind_media_markers_surplus_as_text) {
+    const std::string marker = "<__media_abc__>";
+    std::vector<mtmd_marker_part> parts;
+
+    // quoted marker with 0 images stays text (the /props leak case)
+    t.assert_true(mtmd_bind_media_markers("props said: " + marker + " ok?", marker, 0, parts));
+    t.assert_equal(
+        "0 bmp quoted marker",
+        std::string("props said: |<__media_abc__>| ok?"),
+        dump_marker_parts(parts));
+
+    // first marker binds the image; leftover quoted marker stays text
+    t.assert_true(mtmd_bind_media_markers(
+        "see " + marker + " then quote " + marker, marker, 1, parts));
+    t.assert_equal(
+        "1 bmp + extra marker",
+        std::string("see |BM0| then quote |<__media_abc__>"),
+        dump_marker_parts(parts));
+
+    // exact count still binds every marker
+    t.assert_true(mtmd_bind_media_markers(
+        "a " + marker + " b " + marker + " c", marker, 2, parts));
+    t.assert_equal(
+        "2 bmp exact",
+        std::string("a |BM0| b |BM1| c"),
+        dump_marker_parts(parts));
+
+    t.assert_true("too few markers", !mtmd_bind_media_markers("no marker here", marker, 1, parts));
+
+    t.assert_true(mtmd_bind_media_markers("plain text", marker, 0, parts));
+    t.assert_equal("plain", std::string("plain text"), dump_marker_parts(parts));
 }
 
 //
