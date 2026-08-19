@@ -7,11 +7,6 @@ void llama_model_granite_moe::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_EMBEDDING_SCALE,             hparams.f_embedding_scale, false);
     ml.get_key(LLM_KV_ATTENTION_SCALE,             hparams.f_attention_scale, false);
 
-    // Granite uses rope_finetuned as a switch for rope, so default to true
-    bool rope_finetuned = true;
-    ml.get_key(LLM_KV_ROPE_SCALING_FINETUNED, rope_finetuned, false);
-    hparams.rope_finetuned = rope_finetuned;
-
     switch (hparams.n_layer()) {
         case 32: type = LLM_TYPE_3B; break;
         case 40: type = LLM_TYPE_3B; break;
