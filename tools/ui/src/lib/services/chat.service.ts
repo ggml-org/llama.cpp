@@ -169,28 +169,8 @@ export class ChatService {
 			xtc_probability,
 			xtc_threshold
 		} = options;
-		const normalizedMessages: ApiChatMessageData[] = (
-			await Promise.all(
-				messages.map((msg) => {
-					if ('id' in msg && 'convId' in msg && 'timestamp' in msg) {
-						const dbMsg = msg as DatabaseMessage & { extra?: DatabaseMessageExtra[] };
-
-						return ChatService.convertDbMessageToApiChatMessageData(dbMsg);
-					} else {
-						return msg as ApiChatMessageData;
-					}
-				})
-			)
-		).filter((msg: { role: ChatRole; content: string | ApiChatMessageContentPart[] }) => {
-			// Filter out empty system messages
-			if (msg.role === MessageRole.SYSTEM) {
-				const content = typeof msg.content === 'string' ? msg.content : '';
-
-				return content.trim().length > 0;
-			}
-
-			return true;
-		});
+		const normalizedMessages: ApiChatMessageData[] =
+			await ChatService.normalizeMessagesForApi(messages);
 
 		// Filter out image attachments if the model doesn't support vision
 		if (options.model && !modelsStore.props.modelSupportsVision(options.model)) {
@@ -806,27 +786,8 @@ export class ChatService {
 		excludeReasoning?: boolean,
 		signal?: AbortSignal
 	): Promise<void> {
-		const normalizedMessages: ApiChatMessageData[] = (
-			await Promise.all(
-				messages.map((msg) => {
-					if ('id' in msg && 'convId' in msg && 'timestamp' in msg) {
-						return ChatService.convertDbMessageToApiChatMessageData(
-							msg as DatabaseMessage & { extra?: DatabaseMessageExtra[] }
-						);
-					}
-
-					return msg as ApiChatMessageData;
-				})
-			)
-		).filter((msg: { role: ChatRole; content: string | ApiChatMessageContentPart[] }) => {
-			if (msg.role === MessageRole.SYSTEM) {
-				const content = typeof msg.content === 'string' ? msg.content : '';
-
-				return content.trim().length > 0;
-			}
-
-			return true;
-		});
+		const normalizedMessages: ApiChatMessageData[] =
+			await ChatService.normalizeMessagesForApi(messages);
 		const requestBody: Record<string, unknown> = {
 			messages: normalizedMessages.map((msg: ApiChatMessageData) => {
 				const mapped: Record<string, unknown> = {
@@ -1385,6 +1346,38 @@ export class ChatService {
 	 * @returns {ApiChatMessageData} object formatted for the chat completion API
 	 * @static
 	 */
+	/**
+	 * Normalizes an array of messages (database or already-API-shaped) into
+	 * API chat message data, converting DB messages and dropping empty system
+	 * messages. Shared by sendMessage, preEncode and the agentic flow.
+	 */
+	static async normalizeMessagesForApi(
+		messages: ApiChatMessageData[] | (DatabaseMessage & { extra?: DatabaseMessageExtra[] })[]
+	): Promise<ApiChatMessageData[]> {
+		return (
+			await Promise.all(
+				messages.map((msg) => {
+					if ('id' in msg && 'convId' in msg && 'timestamp' in msg) {
+						return ChatService.convertDbMessageToApiChatMessageData(
+							msg as DatabaseMessage & { extra?: DatabaseMessageExtra[] }
+						);
+					}
+
+					return msg as ApiChatMessageData;
+				})
+			)
+		).filter((msg: { role: ChatRole; content: string | ApiChatMessageContentPart[] }) => {
+			// Filter out empty system messages
+			if (msg.role === MessageRole.SYSTEM) {
+				const content = typeof msg.content === 'string' ? msg.content : '';
+
+				return content.trim().length > 0;
+			}
+
+			return true;
+		});
+	}
+
 	static async convertDbMessageToApiChatMessageData(
 		message: DatabaseMessage & { extra?: DatabaseMessageExtra[] }
 	): Promise<ApiChatMessageData> {
