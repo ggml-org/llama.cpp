@@ -156,54 +156,54 @@ describe('extractFilenameFromText', () => {
 		const text = `These are files to test the download button.
 		### 1. Ignore (**\`wrongname.html\`**) and take nearest quoted (**\`correctname.html\`**) not the unquoted wrongname.html
 		The download should save as the correct name .html`;
-		
+
 		expect(extractFilenameFromText(text, '.html')).toBe('correctname.html');
 	});
 
 	it('falls back to the last unquoted filename matching the target extension', () => {
 		const text = `### 2. Unquoted filename wrongname.js wrongext.txt correctname.js wrongext.md
 		This should fallback to the correct name as it requires to have the same extension as to the code block type.`;
-		
+
 		expect(extractFilenameFromText(text, '.js')).toBe('correctname.js');
 	});
 
 	it('strips virtual paths and trailing colons from unquoted matches', () => {
 		const text = `### 3: Strip virtual path and colon suffix not from wrongpath/wrongname.md: but from wrongpath/correctname.md:`;
-		
+
 		expect(extractFilenameFromText(text, '.md')).toBe('correctname.md');
 	});
-	
+
 	it('type not specified in code block, accept quoted file name', () => {
 		const text = `### 4. Code block type not specified. Here is \`wrongname.js\` sorry i mean \`correctname.js\`:
 		When quotes, trust the name and extension`;
-		
+
 		expect(extractFilenameFromText(text, null)).toBe('correctname.js');
 	});
-	
+
 	it('type not specified in code block, do not accept unquoted file name', () => {
 		const text = `### 5. Code block type not specified so dont accept a wrongname.ext
 		Not reliable enough than wrongname.ext is the correct name as it is not quoted`;
-		
+
 		expect(extractFilenameFromText(text, '')).toBeNull();
 	});
-	
+
 	it('returns null when no file matches the extension (fallback triggered downstream)', () => {
 		const text = `### 6: Fallback to default (timestamp and .md) and ignore 'wrongext.txt'
 		This should save as llama_yyyymmdd_hhmmss .md`;
-		
+
 		expect(extractFilenameFromText(text, '.md')).toBeNull();
 	});
 
 	it('rejects unquoted filenames with spaces around the extension dot', () => {
 		const text = `### 7: Here is my  file . ext
 		and also file .ext and another file. ext which are invalid.`;
-		
+
 		expect(extractFilenameFromText(text, '.ext')).toBeNull();
 	});
 
 	it('rejects filenames with illegal OS characters', () => {
 		const text = `### 8: Look at **"bad?name.txt"** and **"worse|name.txt"** or even attack..traversal.txt`;
-		
+
 		expect(extractFilenameFromText(text, '.txt')).toBeNull();
 	});
 });
