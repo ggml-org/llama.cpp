@@ -71,6 +71,7 @@ class MCPStore implements McpHealthHost {
 	private connections = new Map<string, MCPConnection>();
 	private toolsIndex = new Map<string, string>();
 	private serverConfigs = new Map<string, MCPServerConfig>(); // Store configs for reconnection
+	private serversCache: { raw: unknown; servers: MCPServerSettingsEntry[] } | null = null;
 	// health checks: per-server connectivity probes with optional promotion to active connections
 	private health = new MCPHealthCheckManager(this);
 	private reconnectingServers = new Set<string>(); // Guard against concurrent reconnections
@@ -96,54 +97,6 @@ class MCPStore implements McpHealthHost {
 		}
 
 		return `${MCP_SERVER_ID_PREFIX}-${index + 1}`;
-	}
-
-	/**
-	 * Parses raw server settings from config into MCPServerSettingsEntry array.
-	 */
-	#parseServerSettings(rawServers: unknown): MCPServerSettingsEntry[] {
-		if (!rawServers) {
-			return [];
-		}
-
-		let parsed: unknown;
-
-		if (typeof rawServers === 'string') {
-			const trimmed = rawServers.trim();
-
-			if (!trimmed) {
-				return [];
-			}
-
-			try {
-				parsed = JSON.parse(trimmed);
-			} catch (error) {
-				console.warn('[MCP] Failed to parse mcpServers JSON:', error);
-
-				return [];
-			}
-		} else {
-			parsed = rawServers;
-		}
-
-		if (!Array.isArray(parsed)) {
-			return [];
-		}
-
-		return parsed.map((entry, index) => {
-			const url = typeof entry?.url === 'string' ? entry.url.trim() : '';
-			const headers = typeof entry?.headers === 'string' ? entry.headers.trim() : undefined;
-
-			return {
-				displayName: (entry as { displayName?: string })?.displayName,
-				enabled: Boolean((entry as { enabled?: unknown })?.enabled),
-				headers: headers || undefined,
-				id: this.#generateServerId((entry as { id?: unknown })?.id, index),
-				name: (entry as { name?: string })?.name,
-				url,
-				useProxy: Boolean((entry as { useProxy?: unknown })?.useProxy)
-			} satisfies MCPServerSettingsEntry;
-		});
 	}
 
 	/**
@@ -213,7 +166,7 @@ class MCPStore implements McpHealthHost {
 		cfg: SettingsConfigType,
 		perChatOverrides?: McpServerOverride[]
 	): MCPClientConfig | undefined {
-		const rawServers = this.#parseServerSettings(cfg.mcpServers);
+		const rawServers = parseMcpServerSettings(cfg.mcpServers);
 
 		if (!rawServers.length) {
 			return undefined;
@@ -318,7 +271,19 @@ class MCPStore implements McpHealthHost {
 	}
 
 	getServers(): MCPServerSettingsEntry[] {
-		return parseMcpServerSettings(settingsStore.config.mcpServers);
+		const raw = settingsStore.config.mcpServers;
+
+		// cache the parse: the config string rarely changes and getServers is
+		// called from hot paths (per-tool display lookups, capability checks)
+		if (this.serversCache && this.serversCache.raw === raw) {
+			return this.serversCache.servers;
+		}
+
+		const servers = parseMcpServerSettings(raw);
+
+		this.serversCache = { raw, servers };
+
+		return servers;
 	}
 
 	/**
@@ -522,14 +487,7 @@ class MCPStore implements McpHealthHost {
 
 				this.connections.set(name, connection);
 
-				for (const tool of connection.tools) {
-					if (this.toolsIndex.has(tool.name))
-						console.warn(
-							`[MCPStore] Tool name conflict: "${tool.name}" exists in "${this.toolsIndex.get(tool.name)}" and "${name}". Using tool from "${name}".`
-						);
-
-					this.toolsIndex.set(tool.name, name);
-				}
+				this.indexServerTools(name, connection.tools);
 			} else {
 				console.error(`[MCPStore] Failed to connect:`, result.reason);
 			}
@@ -583,6 +541,21 @@ class MCPStore implements McpHealthHost {
 				}
 			}
 		};
+	}
+
+	/**
+	 * Registers the tools exposed by a server into the global name->server index,
+	 * warning on conflicts. Shared by connect, reconnect and auto-reconnect.
+	 */
+	private indexServerTools(serverName: string, tools: Tool[]): void {
+		for (const tool of tools) {
+			if (this.toolsIndex.has(tool.name))
+				console.warn(
+					`[MCPStore] Tool name conflict: "${tool.name}" exists in "${this.toolsIndex.get(tool.name)}" and "${serverName}". Using tool from "${serverName}".`
+				);
+
+			this.toolsIndex.set(tool.name, serverName);
+		}
 	}
 
 	private handleToolsListChanged(serverName: string, tools: Tool[]): void {
@@ -703,9 +676,7 @@ class MCPStore implements McpHealthHost {
 
 		// Replace connection and rebuild tool index for this server
 		this.connections.set(serverName, connection);
-		for (const tool of connection.tools) {
-			this.toolsIndex.set(tool.name, serverName);
-		}
+		this.indexServerTools(serverName, connection.tools);
 
 		console.log(`[MCPStore][${serverName}] Session recovered successfully`);
 	}
@@ -794,9 +765,7 @@ class MCPStore implements McpHealthHost {
 					this.connections.set(serverName, connection);
 
 					// Rebuild tool index for this server
-					for (const tool of connection.tools) {
-						this.toolsIndex.set(tool.name, serverName);
-					}
+					this.indexServerTools(serverName, connection.tools);
 
 					console.log(`[MCPStore][${serverName}] Reconnected successfully`);
 
@@ -966,33 +935,11 @@ class MCPStore implements McpHealthHost {
 	}
 
 	async executeTool(toolCall: MCPToolCall, signal?: AbortSignal): Promise<ToolExecutionResult> {
-		const toolName = toolCall.function.name;
-		const serverName = this.toolsIndex.get(toolName);
-
-		if (!serverName) throw new Error(`Unknown tool: ${toolName}`);
-
-		const connection = this.connections.get(serverName);
-
-		if (!connection) throw new Error(`Server "${serverName}" is not connected`);
-
-		const args = this.parseToolArguments(toolCall.function.arguments);
-
-		try {
-			return await MCPService.callTool(connection, { arguments: args, name: toolName }, signal);
-		} catch (error) {
-			// Session expired (server restarted) - reconnect and retry once
-			if (MCPService.isSessionExpiredError(error)) {
-				await this.reconnectServer(serverName);
-
-				const newConnection = this.connections.get(serverName);
-
-				if (!newConnection) throw new Error(`Failed to reconnect to "${serverName}"`);
-
-				return MCPService.callTool(newConnection, { arguments: args, name: toolName }, signal);
-			}
-
-			throw error;
-		}
+		return this.executeToolByName(
+			toolCall.function.name,
+			this.parseToolArguments(toolCall.function.arguments),
+			signal
+		);
 	}
 
 	async executeToolByName(
