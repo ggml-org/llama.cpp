@@ -132,8 +132,10 @@ int llama_server(common_params & params, int argc, char ** argv) {
     const bool is_router_server = params.model.path.empty()
                                && params.model.hf_repo.empty();
 
-    // skip device enumeration so the CUDA primary context stays uncreated
-    common_params_print_info(params, !is_router_server);
+    // may skip device enumeration so the CUDA primary context stays uncreated
+    if (!server_sleep_rst::is_boot_to_sleep()) {
+        common_params_print_info(params, !is_router_server);
+    }
 
     if (!is_router_server) {
         // validate batch size for embeddings

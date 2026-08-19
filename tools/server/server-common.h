@@ -619,16 +619,16 @@ struct server_pipe {
 //
 
 struct server_sleep_rst {
+    // true if the process was restarted by a previous instance
+    // in this case, the model is only loaded upon the first request
+    static bool is_boot_to_sleep();
+
     // remember argv and read the state left by the previous process
     // must be called once at startup, before spawning any thread or child process
     void init(int argc, char ** argv);
 
     // enable the restart upon sleeping, warns and falls back to --sleep-mode free if not possible
     void enable(common_params & params);
-
-    // true if the process was restarted by a previous instance
-    // in this case, the model is only loaded upon the first request
-    bool is_boot_to_sleep() const { return !boot_state.is_null(); }
 
     // state left by the previous process, only valid if is_boot_to_sleep()
     const json & get_boot_state() const { return boot_state; }

@@ -1948,7 +1948,7 @@ static void server_proc_restart(char ** argv, const char * env_name, const std::
         return;
     }
 
-    setenv(env_name, env_value.c_str(), 1);
+    common_set_env(env_name, env_value);
 
     const std::string exe = server_proc_exe_path(argv);
     SRV_INF("restarting the process, exe = '%s'\n", exe.c_str());
@@ -1974,8 +1974,8 @@ void server_sleep_rst::init(int argc, char ** argv) {
 
     this->argv = argv;
 
-    const char * state = std::getenv(SLEEP_STATE_ENV);
-    if (state == nullptr) {
+    const std::string state = common_get_env(SLEEP_STATE_ENV);
+    if (state.empty()) {
         return;
     }
 
@@ -1985,12 +1985,8 @@ void server_sleep_rst::init(int argc, char ** argv) {
         SRV_ERR("failed to read the state left by the previous process: %s\n", e.what());
     }
 
-#if defined(_WIN32)
-    _putenv_s(SLEEP_STATE_ENV, "");
-#else
     // clear it now, so that child processes do not inherit it
-    unsetenv(SLEEP_STATE_ENV);
-#endif
+    common_set_env(SLEEP_STATE_ENV, "");
 }
 
 void server_sleep_rst::enable(common_params & params) {
@@ -2012,6 +2008,10 @@ void server_sleep_rst::enable(common_params & params) {
     }
 
     enabled = true;
+}
+
+bool server_sleep_rst::is_boot_to_sleep() {
+    return !common_get_env(SLEEP_STATE_ENV).empty();
 }
 
 void server_sleep_rst::restart() const {
