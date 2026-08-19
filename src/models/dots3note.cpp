@@ -173,7 +173,7 @@ llama_model_dots3note::graph::graph(const llama_model & model, const llm_graph_p
 
     ggml_tensor * inp_pos = build_inp_pos();
 
-    llm_graph_input_attn_k_dsa * inp_attn_dsa = build_attn_inp_k_dsa();
+    llm_graph_input_attn_k_dsa_iswa * inp_attn = build_attn_inp_k_dsa_iswa();
 
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
@@ -234,14 +234,14 @@ llama_model_dots3note::graph::graph(const llama_model & model, const llm_graph_p
                 cb(indexer_k, "indexer_k", il);
 
                 // perform Hadamard transform on indexer q and k
-                indexer_q = ggml_mul_mat(ctx0, inp_attn_dsa->self_k_rot_lid, indexer_q);
+                indexer_q = ggml_mul_mat(ctx0, inp_attn->get_dsa()->self_k_rot_lid, indexer_q);
                 cb(indexer_q, "indexer_q", il);
-                indexer_k = ggml_mul_mat(ctx0, inp_attn_dsa->self_k_rot_lid, indexer_k);
+                indexer_k = ggml_mul_mat(ctx0, inp_attn->get_dsa()->self_k_rot_lid, indexer_k);
                 cb(indexer_k, "indexer_k", il);
 
                 // store indexer keys to KV cache
-                const auto * mctx_lid = inp_attn_dsa->mctx->get_lid();
-                const auto & k_idxs_lid = inp_attn_dsa->get_k_idxs_lid();
+                const auto * mctx_lid = inp_attn->get_dsa()->mctx->get_lid();
+                const auto & k_idxs_lid = inp_attn->get_dsa()->get_k_idxs_lid();
                 ggml_build_forward_expand(gf, mctx_lid->cpy_k(ctx0, indexer_k, k_idxs_lid, il));
 
                 ggml_tensor * indexer_weights = ggml_mul_mat(ctx0, model.layers[il].indexer_proj, cur);
@@ -260,7 +260,7 @@ llama_model_dots3note::graph::graph(const llama_model & model, const llm_graph_p
 
                 ggml_tensor * indexer_score = nullptr;
                 if (cparams.fused_lid) {
-                    indexer_score = ggml_lightning_indexer(ctx0, indexer_q, indexer_k, indexer_weights, inp_attn_dsa->get_kq_mask_lid());
+                    indexer_score = ggml_lightning_indexer(ctx0, indexer_q, indexer_k, indexer_weights, inp_attn->get_dsa()->get_kq_mask_lid());
                     cb(indexer_score, "indexer_score", il);
                     res->add_fused_node({LLM_FUSED_OP_LIGHTNING_INDEXER, indexer_score, il});
                 } else {
@@ -290,7 +290,7 @@ llama_model_dots3note::graph::graph(const llama_model & model, const llm_graph_p
                     indexer_score = ggml_cont(ctx0, ggml_permute(ctx0, indexer_score, 2, 1, 0, 3));
                     cb(indexer_score, "indexer_score", il);
 
-                    ggml_tensor * indexer_kq_mask = inp_attn_dsa->get_kq_mask_lid();
+                    ggml_tensor * indexer_kq_mask = inp_attn->get_dsa()->get_kq_mask_lid();
                     indexer_score = ggml_add(ctx0, indexer_score, indexer_kq_mask);
                     cb(indexer_score, "indexer_score", il);
                 }
@@ -377,9 +377,15 @@ llama_model_dots3note::graph::graph(const llama_model & model, const llm_graph_p
                 cb(Vcur, "Vcur", il);
 
                 // apply the head-wise output gate before o_proj, so wo stays out of build_attn
-                cur = build_attn(inp_attn_dsa,
-                        nullptr, nullptr, nullptr,
-                        Qcur, Kcur, Vcur, nullptr, nullptr, model.layers[il].wv_b, top_k, kq_scale, il);
+                if (is_swa) {
+                    cur = build_attn(inp_attn->get_swa(),
+                            nullptr, nullptr, nullptr,
+                            Qcur, Kcur, Vcur, nullptr, nullptr, model.layers[il].wv_b, kq_scale, il);
+                } else {
+                    cur = build_attn(inp_attn->get_dsa(),
+                            nullptr, nullptr, nullptr,
+                            Qcur, Kcur, Vcur, nullptr, nullptr, model.layers[il].wv_b, top_k, kq_scale, il);
+                }
                 cb(cur, "attn_out", il);
 
                 ggml_tensor * gate = build_lora_mm(model.layers[il].wqkv_gate, attn_inp);
