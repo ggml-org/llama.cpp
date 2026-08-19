@@ -85,6 +85,7 @@ class ServerProcess:
     server_embeddings: bool | None = False
     server_reranking: bool | None = False
     server_metrics: bool | None = False
+    server_memory: bool | None = False
     kv_unified: bool | None = False
     swa_full: bool | None = False
     server_slots: bool | None = False
@@ -198,6 +199,8 @@ class ServerProcess:
             server_args.append("--reranking")
         if self.server_metrics:
             server_args.append("--metrics")
+        if self.server_memory:
+            server_args.append("--memory")
         if self.kv_unified:
             server_args.append("--kv-unified")
         if self.swa_full:

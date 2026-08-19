@@ -3,6 +3,7 @@
 #include "ggml.h"
 #include "llama.h"
 
+#include <string>
 #include <vector>
 
 enum common_params_fit_status {
@@ -43,6 +44,19 @@ struct common_device_memory_data {
 };
 
 using common_device_memory_data_vec = std::vector<common_device_memory_data>;
+
+// one line of the memory breakdown: a device the model is using, the host, or a buffer type belonging to neither
+struct common_memory_breakdown_row {
+    std::string name;        // ggml_backend_dev_name, "Host", or ggml_backend_buft_name
+    std::string description; // device description, empty on the other rows
+    bool        is_device = false; // total and free are only meaningful when true
+
+    common_device_memory_data mem = {};
+};
+
+// memory ctx has allocated, in the rows common_memory_breakdown_print renders
+// note: the measured counterpart of common_get_device_memory_data below, which projects the same figures from a no_alloc load
+std::vector<common_memory_breakdown_row> common_memory_breakdown_get(const llama_context * ctx);
 
 // Load a model + context with no_alloc and return the per-device memory breakdown.
 common_device_memory_data_vec common_get_device_memory_data(

@@ -171,6 +171,8 @@ struct server_task {
 
     // used by SERVER_TASK_TYPE_METRICS
     bool metrics_reset_bucket = false;
+    // querying the devices is only worth it for /metrics and /memory, /slots discards it
+    bool metrics_memory = false;
 
     // used by SERVER_TASK_TYPE_SET_LORA
     std::map<int, float> set_lora; // mapping adapter ID -> scale
@@ -500,6 +502,9 @@ struct server_task_result_metrics : server_task_result {
     // while we can also use std::vector<server_slot> this requires copying the slot object which can be quite messy
     // therefore, we use json to temporarily store the slot.to_json() result
     json slots_data = json::array();
+
+    // one entry per common_memory_breakdown_row, empty unless the task asked for it
+    json memory_data = json::array();
 
     // used by /slots API
     virtual json to_json() override;
