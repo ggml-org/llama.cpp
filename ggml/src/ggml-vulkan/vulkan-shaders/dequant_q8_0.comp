@@ -18,7 +18,18 @@ void main() {
         return;
     }
 
+#ifdef DEQUANT_TRANSPOSE
+    // read [HS, NH, KV, NS], write [HS, KV, NH, NS]
+    const uint HS = p.M, NH = p.K, KVn = p.stride_a;
+    const uint e0 = ib * 32;
+    const uint b_idx = (e0 % HS)
+                     + ((e0 / (HS * NH)) % KVn) * HS
+                     + ((e0 / HS) % NH) * (HS * KVn)
+                     + (e0 / (HS * NH * KVn)) * (HS * KVn * NH)
+                     + 16 * il;
+#else
     const uint b_idx = 1024*i + 32*ir + 16*il;
+#endif
 
     const float d = float(data_a[ib].d);
 
