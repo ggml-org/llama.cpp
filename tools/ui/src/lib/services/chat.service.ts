@@ -606,15 +606,26 @@ export class ChatService {
 		return running.reduce((best, cur) => (cur.started_at > best.started_at ? cur : best));
 	}
 
-	// persist the running byte count and the frozen model for a conversation, a later visit
-	// resumes the SSE replay at the right offset under the same conv::model identity
-	static saveStreamState(
+	// Per-chunk localStorage writes are throttled to at most one per
+	// conversation per interval (saveStreamStateThrottled). The resume offset
+	// only needs to be roughly current: on resume the server retransmits from
+	// a line boundary and the client discards its partial line. Guaranteed
+	// immediate writes happen at stream start, at resume boundaries and when
+	// the page goes hidden or away (pagehide/visibilitychange), so a reload
+	// always finds a usable offset.
+	private static readonly STREAM_STATE_SAVE_INTERVAL_MS = 500;
+
+	private static streamStateSaveTrackers = new Map<
+		string,
+		{ lastSavedAt: number; model: string | null; pendingBytes: number | null }
+	>();
+
+	// write the resume state straight to localStorage, bypassing the throttle
+	private static writeStreamState(
 		conversationId: string,
 		bytesReceived: number,
 		model?: string | null
 	): void {
-		if (!conversationId) return;
-
 		try {
 			const state: ResumableStreamState = {
 				bytesReceived,
@@ -626,6 +637,72 @@ export class ChatService {
 		} catch {
 			// localStorage may be full or disabled, silently ignore
 		}
+	}
+
+	// persist the running byte count and the frozen model for a conversation, a later visit
+	// resumes the SSE replay at the right offset under the same conv::model
+	// identity. Writes immediately; the per-chunk read loop uses the throttled
+	// variant instead.
+	static saveStreamState(
+		conversationId: string,
+		bytesReceived: number,
+		model?: string | null
+	): void {
+		if (!conversationId) return;
+
+		ChatService.writeStreamState(conversationId, bytesReceived, model);
+		// record the write so a throttled save landing inside the interval
+		// holds its value pending instead of re-writing
+		ChatService.streamStateSaveTrackers.set(conversationId, {
+			lastSavedAt: Date.now(),
+			model: model ?? null,
+			pendingBytes: null
+		});
+	}
+
+	// throttled variant for the per-chunk read loop: writes at most once per
+	// conversation per STREAM_STATE_SAVE_INTERVAL_MS, holding the latest value
+	// pending until the interval elapses or flushStreamState() forces it out
+	static saveStreamStateThrottled(
+		conversationId: string,
+		bytesReceived: number,
+		model?: string | null
+	): void {
+		if (!conversationId) return;
+
+		const tracker = ChatService.streamStateSaveTrackers.get(conversationId) ?? {
+			lastSavedAt: 0,
+			model: null,
+			pendingBytes: null
+		};
+
+		tracker.model = model ?? null;
+
+		if (Date.now() - tracker.lastSavedAt >= ChatService.STREAM_STATE_SAVE_INTERVAL_MS) {
+			tracker.lastSavedAt = Date.now();
+			tracker.pendingBytes = null;
+			ChatService.writeStreamState(conversationId, bytesReceived, model);
+		} else {
+			tracker.pendingBytes = bytesReceived;
+		}
+
+		ChatService.streamStateSaveTrackers.set(conversationId, tracker);
+	}
+
+	// write a throttled-but-not-yet-persisted offset immediately; used at
+	// resume boundaries and on pagehide/visibilitychange so the persisted
+	// offset is the freshest one when it matters
+	static flushStreamState(conversationId: string): void {
+		const tracker = ChatService.streamStateSaveTrackers.get(conversationId);
+
+		if (!tracker || tracker.pendingBytes === null) return;
+
+		const { model, pendingBytes } = tracker;
+
+		tracker.lastSavedAt = Date.now();
+		tracker.pendingBytes = null;
+
+		ChatService.writeStreamState(conversationId, pendingBytes, model);
 	}
 
 	static getStreamState(conversationId: string): ResumableStreamState | null {
@@ -648,6 +725,8 @@ export class ChatService {
 
 	static clearStreamState(conversationId: string): void {
 		if (!conversationId) return;
+
+		ChatService.streamStateSaveTrackers.delete(conversationId);
 
 		try {
 			localStorage.removeItem(streamStorageKey(conversationId));
@@ -903,7 +982,13 @@ export class ChatService {
 		const onVisibilityChange = () => {
 			if (typeof document === 'undefined') return;
 
-			if (document.visibilityState !== 'visible') return;
+			if (document.visibilityState === 'hidden') {
+				// the tab is going to the background and the OS may throttle or
+				// drop the socket shortly; persist the freshest resume offset now
+				if (conversationId) ChatService.flushStreamState(conversationId);
+
+				return;
+			}
 
 			if (streamFinished) return;
 
@@ -915,9 +1000,15 @@ export class ChatService {
 				reader!.cancel().catch(() => {});
 			}
 		};
+		const onPageHide = () => {
+			// a reload or navigation is about to happen; make sure the resume
+			// offset that getStreamState() will read is not a stale throttled one
+			if (conversationId) ChatService.flushStreamState(conversationId);
+		};
 
 		if (typeof document !== 'undefined') {
 			document.addEventListener('visibilitychange', onVisibilityChange);
+			document.addEventListener('pagehide', onPageHide);
 		}
 
 		try {
@@ -974,7 +1065,7 @@ export class ChatService {
 						const tailBytes = encoder.encode(chunk).byteLength;
 
 						bytesParsed = segmentStartOffset + segmentBytesRead - tailBytes;
-						ChatService.saveStreamState(conversationId, bytesParsed, streamModel);
+						ChatService.saveStreamStateThrottled(conversationId, bytesParsed, streamModel);
 					}
 
 					for (const line of lines) {
@@ -1068,6 +1159,9 @@ export class ChatService {
 				// the server resends starting at bytesParsed, discard any partial line we held, it
 				// will be retransmitted from a clean line boundary. reuse the frozen model, not the
 				// live dropdown
+				// resumeStream reads the offset from localStorage, so persist the
+				// freshest bytesParsed before asking the server to replay from it
+				ChatService.flushStreamState(conversationId);
 				const resumeResp = await ChatService.resumeStream(
 					conversationId,
 					abortSignal,
@@ -1129,6 +1223,7 @@ export class ChatService {
 		} finally {
 			if (typeof document !== 'undefined') {
 				document.removeEventListener('visibilitychange', onVisibilityChange);
+				document.removeEventListener('pagehide', onPageHide);
 			}
 
 			try {
