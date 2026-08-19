@@ -2362,6 +2362,14 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
            op->src[0]->type == GGML_TYPE_Q6_K ||
            op->src[0]->type == GGML_TYPE_Q2_K ||
            op->src[0]->type == GGML_TYPE_Q3_K ||
+           op->src[0]->type == GGML_TYPE_IQ2_XXS ||
+           op->src[0]->type == GGML_TYPE_IQ2_XS  ||
+           op->src[0]->type == GGML_TYPE_IQ2_S   ||
+           op->src[0]->type == GGML_TYPE_IQ3_XXS ||
+           op->src[0]->type == GGML_TYPE_IQ3_S   ||
+           op->src[0]->type == GGML_TYPE_IQ1_S   ||
+           op->src[0]->type == GGML_TYPE_IQ1_M   ||
+           op->src[0]->type == GGML_TYPE_IQ4_XS  ||
            false) && (ne11 >= 4 && ne11 <= 8)
          )
         )
