@@ -156,6 +156,16 @@ class AgenticStore {
 	// permission, continue and steering gates the loop waits on between turns
 	private gates = new AgenticGates();
 
+	constructor() {
+		// drop per-conversation session state when the conversation is deleted,
+		// otherwise every conversation that ever ran a flow leaks a session here
+		conversationsStore.onConversationsDeleted((convIds) => {
+			for (const convId of convIds) {
+				this._sessions.delete(convId);
+			}
+		});
+	}
+
 	get isReady(): boolean {
 		return true;
 	}

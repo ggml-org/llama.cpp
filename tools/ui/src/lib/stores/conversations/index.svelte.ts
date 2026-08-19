@@ -70,6 +70,13 @@ class ConversationsStore implements ConversationsPreferencesHost {
 	private initPromise: Promise<void> | null = null;
 
 	/**
+	 * Listeners notified with the ids of conversations that were deleted.
+	 * Lets dependent stores (e.g. agenticStore) drop per-conversation state
+	 * without introducing a circular import back into this store.
+	 */
+	private conversationDeletionListeners = new Set<(convIds: string[]) => void>();
+
+	/**
 	 * Memo of the last findMessageIndex() lookup. Streaming calls it once per
 	 * chunk for the same message, so a validated cache hit keeps that O(1)
 	 * instead of a linear scan of activeMessages on every token.
@@ -290,6 +297,24 @@ class ConversationsStore implements ConversationsPreferencesHost {
 	}
 
 	/**
+	 * Registers a listener invoked with the ids of deleted conversations.
+	 * Returns an unsubscribe function.
+	 */
+	onConversationsDeleted(listener: (convIds: string[]) => void): () => void {
+		this.conversationDeletionListeners.add(listener);
+
+		return () => this.conversationDeletionListeners.delete(listener);
+	}
+
+	private notifyConversationsDeleted(convIds: string[]): void {
+		if (convIds.length === 0) return;
+
+		for (const listener of this.conversationDeletionListeners) {
+			listener(convIds);
+		}
+	}
+
+	/**
 	 * Deletes a conversation and all its messages
 	 * @param convId - The conversation ID to delete
 	 */
@@ -318,6 +343,8 @@ class ConversationsStore implements ConversationsPreferencesHost {
 					this.clearActiveConversation();
 					await goto(ROUTES.NEW_CHAT);
 				}
+
+				this.notifyConversationsDeleted([...idsToRemove]);
 			} else {
 				// Reparent direct children to deleted conv's parent (or promote to top-level)
 				const deletedConv = this.conversations.find((c) => c.id === convId);
@@ -335,6 +362,8 @@ class ConversationsStore implements ConversationsPreferencesHost {
 					this.clearActiveConversation();
 					await goto(ROUTES.NEW_CHAT);
 				}
+
+				this.notifyConversationsDeleted([convId]);
 			}
 		} catch (error) {
 			console.error('Failed to delete conversation:', error);
@@ -348,10 +377,13 @@ class ConversationsStore implements ConversationsPreferencesHost {
 		try {
 			const allConversations = await DatabaseService.getAllConversations();
 
-			await DatabaseService.bulkDeleteConversations(allConversations.map((c) => c.id));
+			const allIds = allConversations.map((c) => c.id);
+
+			await DatabaseService.bulkDeleteConversations(allIds);
 
 			this.clearActiveConversation();
 			this.conversations = [];
+			this.notifyConversationsDeleted(allIds);
 
 			toast.success('All conversations deleted');
 
@@ -394,6 +426,7 @@ class ConversationsStore implements ConversationsPreferencesHost {
 			await DatabaseService.bulkDeleteConversations([...idsToRemove]);
 
 			this.conversations = this.conversations.filter((c) => !idsToRemove.has(c.id));
+			this.notifyConversationsDeleted([...idsToRemove]);
 
 			if (activeWasDeleted) {
 				this.clearActiveConversation();
