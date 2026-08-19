@@ -94,6 +94,12 @@ struct llama_context {
     // (zero-copy embd_dev path); null when not in use
     ggml_tensor * get_embd_layer_inp_fused() { return embd_layer_inp_fused; }
 
+    // event recorded after each compute that writes the fused tensor; null when disabled
+    ggml_backend_event_t get_embd_layer_inp_fused_event() { return embd_layer_inp_fused_event; }
+
+    // persistent device tensor holding the encoder output (t_h_nextn); null when disabled
+    ggml_tensor * get_embd_nextn_persist() { return embd_nextn_persist; }
+
     llama_token * get_sampled_tokens() const;
     llama_token   get_sampled_token_ith(int32_t idx);
 
@@ -244,6 +250,10 @@ private:
     // layer-input extraction is enabled (host path).
     ggml_tensor * ensure_embd_layer_inp_fused();
 
+    // lazily allocate the persistent device buffer that receives the encoder output
+    // (t_h_nextn) so the decoder KV-injection can alias it (zero-copy nextn path).
+    ggml_tensor * ensure_embd_nextn_persist();
+
     //
     // graph
     //
@@ -386,6 +396,17 @@ private:
     ggml_tensor * embd_layer_inp_fused = nullptr;
     ggml_context * embd_layer_inp_fused_ctx = nullptr;
     ggml_backend_buffer_ptr embd_layer_inp_fused_buf;
+
+    // recorded after each compute that writes embd_layer_inp_fused; lets a foreign
+    // context (the speculative draft) wait on the GPU stream instead of host-syncing
+    ggml_backend_event_t embd_layer_inp_fused_event = nullptr;
+
+    // persistent device buffer holding the encoder output (t_h_nextn) of the previous
+    // compute call, so the DFlash decoder KV-injection can alias it via a view instead
+    // of a host read + H2D copy. lazily allocated on first use; null when disabled.
+    ggml_tensor * embd_nextn_persist = nullptr;
+    ggml_context * embd_nextn_persist_ctx = nullptr;
+    ggml_backend_buffer_ptr embd_nextn_persist_buf;
 
     // keep copies of the per-sequence memory on the device
     std::map<llama_seq_id, llama_memory_buffers> mem_storage;

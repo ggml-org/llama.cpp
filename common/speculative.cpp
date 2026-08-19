@@ -1131,6 +1131,11 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
                         fused = nullptr;
                     }
                 }
+                if (fused) {
+                    // event-based cross-stream sync: the draft backends wait on the GPU
+                    // stream for the fused write to complete (no host block).
+                    llama_embd_layer_inp_wait(ctx_tgt, ctx_dft);
+                }
                 static bool fused_logged = false;
                 if (!fused_logged) {
                     fused_logged = true;
@@ -1179,12 +1184,24 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
                     return false;
                 }
 
-                const float * inp_g = llama_get_embeddings_nextn(ctx_dft);
-                GGML_ASSERT(inp_g && "DFlash encoder produced no output.");
+                // zero-copy nextn path: the encoder wrote its output (t_h_nextn) into a
+                // persistent device buffer; alias it for the decoder KV-injection instead
+                // of a host read + H2D copy. same context/stream, so ordering is guaranteed.
+                const ggml_tensor * nextn_persist = llama_get_embeddings_nextn_tensor(ctx_dft);
+                if (nextn_persist) {
+                    batch_inject.embd     = nullptr;
+                    batch_inject.embd_dev = (ggml_tensor *) nextn_persist;
+                } else {
+                    const float * inp_g = llama_get_embeddings_nextn(ctx_dft);
+                    GGML_ASSERT(inp_g && "DFlash encoder produced no output.");
+
+                    batch_inject.embd_dev = nullptr;
+                    std::memcpy(batch_inject.embd, inp_g, (size_t) n_chunk * n_embd_dec * sizeof(float));
+                }
 
                 // inject the DFlash decoder K/V cache at the tokens' target positions
                 batch_inject.n_tokens = n_chunk;
-                std::memcpy(batch_inject.embd, inp_g, (size_t) n_chunk * n_embd_dec * sizeof(float));
+                batch_inject.embd_dev_off = 0;
 
                 for (int32_t i = 0; i < n_chunk; ++i) {
                     batch_inject.pos[i]       = batch_in.pos[i_batch_beg[seq_id] + offset + i];

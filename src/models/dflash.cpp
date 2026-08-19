@@ -386,8 +386,19 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
     if (ubatch.embd || ubatch.embd_dev) {
         auto inp = std::make_unique<llm_graph_input_embd>(n_embd);
 
-        inp->embd = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd, n_tokens);
-        ggml_set_input(inp->embd);
+        if (ubatch.embd_dev) {
+            // zero-copy path: alias the persistent encoder-output tensor via a view
+            GGML_ASSERT(n_embd == ubatch.embd_dev->ne[0]);
+            GGML_ASSERT(ubatch.embd_dev_off + ubatch.n_tokens <= ubatch.embd_dev->ne[1]);
+
+            inp->embd = ggml_view_2d(ctx0, ubatch.embd_dev, n_embd, ubatch.n_tokens,
+                                     ubatch.embd_dev->nb[1], (size_t) ubatch.embd_dev_off * ubatch.embd_dev->nb[1]);
+            inp->embd_dev_ptr = ubatch.embd_dev;
+            // NOTE: no ggml_set_input - the tensor is already resident on the backend
+        } else {
+            inp->embd = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd, n_tokens);
+            ggml_set_input(inp->embd);
+        }
 
         ggml_tensor * inp_g = inp->embd;
         cb(inp_g, "inp_g_embeddings", -1);

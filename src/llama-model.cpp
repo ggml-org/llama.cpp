@@ -2500,6 +2500,27 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
         }
     }
 
+    // zero-copy nextn path: copy the encoder output (t_h_nextn) into a persistent
+    // device buffer so the DFlash decoder KV-injection can alias it via a view,
+    // avoiding the host read + H2D copy in the speculative loop.
+    if (params.gtype == LLM_GRAPH_TYPE_ENCODER && params.embd_nextn_persist) {
+        ggml_tensor * h_nextn = llm->res->get_h_nextn();
+        if (h_nextn) {
+            // the encoder output is always consumed by the decoder KV-injection with
+            // embd_dev_off = 0, so the persist write must land at column 0. encode runs
+            // as a single ubatch with token_offset == 0; assert that invariant.
+            GGML_ASSERT(params.token_offset == 0 && "encoder nextn persist requires token_offset == 0");
+            GGML_ASSERT(h_nextn->ne[0] == params.embd_nextn_persist->ne[0]);
+            ggml_tensor * nextn_dst = ggml_view_2d(
+                    llm->ctx0, params.embd_nextn_persist,
+                    params.embd_nextn_persist->ne[0], params.ubatch.n_tokens,
+                    params.embd_nextn_persist->nb[1],
+                    (size_t) params.token_offset * params.embd_nextn_persist->nb[1]);
+            ggml_tensor * dst = ggml_cpy(llm->ctx0, h_nextn, nextn_dst);
+            ggml_build_forward_expand(llm->res->get_gf(), dst);
+        }
+    }
+
     return llm->res->get_gf();
 }
 

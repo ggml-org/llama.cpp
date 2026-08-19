@@ -769,6 +769,10 @@ struct llm_graph_params {
     // null when zero-copy is not in use.
     ggml_tensor * embd_layer_inp_fused = nullptr;
 
+    // persistent device buffer that receives the encoder output (t_h_nextn) so the
+    // DFlash decoder KV-injection can alias it (zero-copy nextn path). null when disabled.
+    ggml_tensor * embd_nextn_persist = nullptr;
+
     std::map<llama_seq_id, llama_sampler *> samplers;
 
     static bool samplers_equal(
