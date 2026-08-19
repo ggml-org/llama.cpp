@@ -1687,6 +1687,21 @@ json server_task_result_apply_lora::to_json() {
 //
 // server_prompt_cache
 //
+
+bool server_prompt_cache_can_reuse_in_place(
+        const server_tokens & resident,
+        const server_tokens & incoming,
+        bool cache_prompt) {
+    // Keep multimedia prompts and explicit cache bypasses on the established
+    // save/load path. Text-only exact-prefix reuse is the narrow case where the
+    // resident target/draft states already represent every cached input token.
+    return cache_prompt &&
+           !resident.empty() &&
+           !resident.has_mtmd &&
+           !incoming.has_mtmd &&
+           resident.get_common_prefix(incoming) == resident.size();
+}
+
 size_t server_prompt_cache::size() const {
     size_t res = 0;
 

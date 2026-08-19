@@ -605,6 +605,14 @@ struct server_prompt_cache_state {
     }
 };
 
+// Returns true when the incoming prompt extends the resident text-only prompt
+// exactly. In this case, saving and restoring the resident state through the
+// host prompt cache is redundant; the state can be reused in place.
+bool server_prompt_cache_can_reuse_in_place(
+        const server_tokens & resident,
+        const server_tokens & incoming,
+        bool cache_prompt);
+
 struct server_prompt_cache {
     server_prompt_cache(int32_t limit_size_mib, size_t limit_tokens) {
         this->limit_size   = 1024ull*1024ull*(limit_size_mib < 0 ? 0 : limit_size_mib);

@@ -1665,9 +1665,27 @@ private:
         }
 
         if (ret) {
-            // Force prompt cache update for recurrent models to shrink/restore
-            // the recurrent state and avoid forced re-processing (issue #22746).
-            if (needs_reeval && prompt_cache) {
+            // A single-slot recurrent context whose resident text prompt is an
+            // exact prefix of the incoming prompt can continue in place. Saving
+            // hundreds of MiB to the host cache and immediately keeping the same
+            // resident state is redundant. Keep every other route on the proven
+            // shrink/save/load/expand path, including multi-slot and multimedia.
+            const bool reuse_recurrent_in_place =
+                needs_reeval &&
+                n_parallel_user == 1 &&
+                prompt_cache &&
+                task.type == SERVER_TASK_TYPE_COMPLETION &&
+                server_prompt_cache_can_reuse_in_place(
+                    ret->prompt.tokens, task.tokens, task.params.cache_prompt);
+
+            if (reuse_recurrent_in_place) {
+                update_cache = false;
+                SRV_TRC("reusing recurrent prompt in place; skipping host prompt-cache update "
+                        "(resident = %zu tokens, incoming = %zu tokens)\n",
+                        ret->prompt.tokens.size(), task.tokens.size());
+            } else if (needs_reeval && prompt_cache) {
+                // Recurrent models need shrink/restore when switching prompt
+                // states to avoid forced full re-processing (issue #22746).
                 update_cache = true;
             }
 
@@ -1678,20 +1696,36 @@ private:
 
             if (update_cache) {
                 SRV_TRC("%s", "updating prompt cache\n");
-                recurrent_shrink_for_prompt_cache();
 
                 const int64_t t_start = ggml_time_us();
+                const bool shrink_ok = recurrent_shrink_for_prompt_cache();
+                const int64_t t_shrink = ggml_time_us();
 
-                ret->prompt_save(*prompt_cache);
+                const bool saved = ret->prompt_save(*prompt_cache);
+                const int64_t t_save = ggml_time_us();
 
-                if (!ret->prompt_load(*prompt_cache, task.tokens)) {
+                const bool load_ok = ret->prompt_load(*prompt_cache, task.tokens);
+                const int64_t t_load = ggml_time_us();
+                if (!load_ok) {
                     ret->prompt_clear();
                 }
 
                 prompt_cache->update();
-                recurrent_expand_after_prompt_cache();
+                const int64_t t_update = ggml_time_us();
 
-                SRV_TRC("prompt cache update took %.2f ms\n", (ggml_time_us() - t_start) / 1000.0);
+                recurrent_expand_after_prompt_cache();
+                const int64_t t_end = ggml_time_us();
+
+                SRV_TRC("prompt cache update took %.2f ms "
+                        "(shrink %.2f, save %.2f, load %.2f, update %.2f, expand %.2f; "
+                        "shrink_ok = %d, saved = %d, load_ok = %d)\n",
+                        (t_end    - t_start)  / 1000.0,
+                        (t_shrink - t_start)  / 1000.0,
+                        (t_save   - t_shrink) / 1000.0,
+                        (t_load   - t_save)   / 1000.0,
+                        (t_update - t_load)   / 1000.0,
+                        (t_end    - t_update) / 1000.0,
+                        shrink_ok, saved, load_ok);
             }
         }
 
