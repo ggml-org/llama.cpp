@@ -1579,14 +1579,14 @@ jobs:
       - windows
       - windows-cpu
       - windows-cuda
-      #- windows-sycl
+      - windows-sycl
       - windows-rocm
       - windows-openvino
       #- ubuntu-22-rocm
       - ubuntu-cpu
       - ubuntu-vulkan
       - ubuntu-24-openvino
-      #- ubuntu-24-sycl
+      - ubuntu-24-sycl
       - android-arm64
       - macos-cpu
       - ios-xcode
