@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+# /// script
+# dependencies = [
+#   "GitPython",
+#   "tabulate",
+# ]
+# ///
 
 import argparse
 import csv
