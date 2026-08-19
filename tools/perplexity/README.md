@@ -10,6 +10,9 @@ The convention among contributors is to use the Wikitext-2 test set for testing 
 When numbers are listed all command line arguments and compilation options are left at their defaults unless noted otherwise.
 llama.cpp numbers are **not** directly comparable to those of other projects because the exact values depend strongly on the implementation details.
 
+By default the input text is tokenized as plain text: special tokens (e.g. `<|im_start|>`) that appear in the corpus are tokenized as literal text.
+Pass `--parse-special` to tokenize them as special tokens instead, e.g. when measuring perplexity over chat-formatted transcripts rendered with a model's chat template.
+
 By default only the mean perplexity value and the corresponding uncertainty is calculated.
 The uncertainty is determined empirically by assuming a Gaussian distribution of the "correct" logits per and then applying error propagation.
 
