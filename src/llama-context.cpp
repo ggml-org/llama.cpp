@@ -2999,6 +2999,39 @@ size_t llama_context::state_seq_get_data(llama_seq_id seq_id, uint8_t * dst, siz
 }
 
 size_t llama_context::state_seq_set_data(llama_seq_id seq_id, const uint8_t * src, size_t size, llama_state_seq_flags flags) {
+    // MI210_PIN_STATE: pin the host state buffer for the duration of the
+    // restore. With 2+ devices in one process, ROCm's on-the-fly mapping of
+    // pageable memory for async H2D copies can be torn down mid-transfer and
+    // the SDMA engine faults inside the copy's source range (ROCm/rocm-systems
+    // #4817). Registering the range as portable pinned memory keeps the
+    // mapping stable. Declared before `io` so unregistration runs only after
+    // the deferred copies in ~llama_io_read_host have flushed.
+    struct pin_guard_t {
+        void * ptr = nullptr;
+        void (* unreg)(void *) = nullptr;
+        ~pin_guard_t() { if (ptr && unreg) { unreg(ptr); } }
+    } pin_guard;
+    if (!(flags & LLAMA_STATE_SEQ_FLAGS_ON_DEVICE) && size >= 1u << 20) {
+        for (auto & backend : backends) {
+            ggml_backend_dev_t dev = ggml_backend_get_device(backend.get());
+            ggml_backend_reg_t reg = dev ? ggml_backend_dev_backend_reg(dev) : nullptr;
+            if (!reg) {
+                continue;
+            }
+            auto * reg_fn   = (bool (*)(void *, size_t)) ggml_backend_reg_get_proc_address(reg, "ggml_backend_register_host_buffer");
+            auto * unreg_fn = (void (*)(void *))         ggml_backend_reg_get_proc_address(reg, "ggml_backend_unregister_host_buffer");
+            if (reg_fn && unreg_fn) {
+                if (reg_fn(const_cast<uint8_t *>(src), size)) {
+                    pin_guard.ptr   = const_cast<uint8_t *>(src);
+                    pin_guard.unreg = unreg_fn;
+                    LLAMA_LOG_WARN("%s: pinned state buffer (%zu bytes) for restore\n", __func__, size);
+                } else {
+                    LLAMA_LOG_WARN("%s: could not pin state buffer (%zu bytes), restoring unpinned\n", __func__, size);
+                }
+                break;
+            }
+        }
+    }
     std::unique_ptr<llama_io_read_i> io;
     if (flags & LLAMA_STATE_SEQ_FLAGS_ON_DEVICE) {
         // create a temporary io to read the magic and the src seq_id
