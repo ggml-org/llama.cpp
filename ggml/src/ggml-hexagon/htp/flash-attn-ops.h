@@ -109,7 +109,7 @@ struct hmx_fa_vtcm_layout {
     size_t off_v_tiles[2];
     size_t off_s_tiles[2];
     size_t off_p_tiles[2];
-    size_t off_d_tiles;
+    size_t off_d_tiles[2];
     size_t off_d_inv_l;
     size_t off_m_vec;
     size_t off_l_vec;
@@ -125,7 +125,7 @@ struct hmx_fa_vtcm_layout {
     size_t q_tile_bytes;
     size_t o_tile_bytes;
     size_t s_tile_bytes;       // S and P tiles (same size)
-    size_t d_tile_bytes;
+    size_t d_tile_bytes;       // d_tiles[0..1] + d_inv_l, allocated back to back
     size_t m_line_bytes;       // one mask row
     size_t m_buf_slot_bytes;   // one dma_cache slot = align_up(Br * m_line_bytes, 4096)
     size_t col_vec_bytes;
@@ -149,7 +149,12 @@ static inline void hmx_fa_vtcm_layout_build(struct hmx_fa_vtcm_layout * L,
     const size_t k_tile_size  = hex_align_up(Bc   * DK   * sizeof(__fp16), HTP_FA_HMX_TILE_SIZE);
     const size_t v_tile_size  = hex_align_up(Bc   * DV   * sizeof(__fp16), HTP_FA_HMX_TILE_SIZE);
     const size_t s_tile_size  = hex_align_up(g_br * Bc   * sizeof(__fp16), HTP_FA_HMX_TILE_SIZE);
-    const size_t d_tile_size  = hex_align_up(g_br * g_br * sizeof(__fp16), HTP_FA_HMX_TILE_SIZE);
+
+    // The rescale matrices are diagonal: the HMX kernels only ever load the g_br/32
+    // tiles that sit on the diagonal, so store just those, packed back to back with
+    // a stride of one tile.  The old [g_br, g_br] square layout allocated g_br/32
+    // times more than it used, which is also why a second D buffer was unaffordable.
+    const size_t d_tile_size = (g_br / HMX_FP16_TILE_N_ROWS) * HTP_FA_HMX_TILE_SIZE;
 
     const size_t q_dma_size   = hex_align_up(g_br * DK * (is_q_fp32 ? sizeof(float) : sizeof(__fp16)), 128);
     const size_t k_dma_size   = hex_align_up(Bc * hex_round_up(DK * sizeof(__fp16), 128), 128);
@@ -167,7 +172,8 @@ static inline void hmx_fa_vtcm_layout_build(struct hmx_fa_vtcm_layout * L,
     VTCM_LAYOUT_ALLOC(off, off_q_tiles,       q_tile_size);
     VTCM_LAYOUT_ALLOC(off, off_o_tiles[0],    o_tile_size);
     VTCM_LAYOUT_ALLOC(off, off_o_tiles[1],    o_tile_size);
-    VTCM_LAYOUT_ALLOC(off, off_d_tiles,       d_tile_size);
+    VTCM_LAYOUT_ALLOC(off, off_d_tiles[0],    d_tile_size);
+    VTCM_LAYOUT_ALLOC_OPTIONAL(off, off_d_tiles[1], d_tile_size, pipeline);
     VTCM_LAYOUT_ALLOC(off, off_d_inv_l,       d_tile_size);
 
     // Group B & C share start offset (Group B tiles must be 2KB aligned)
@@ -213,7 +219,10 @@ static inline void hmx_fa_vtcm_layout_build(struct hmx_fa_vtcm_layout * L,
     L->o_tile_bytes        = o_tile_size;
     L->col_vec_bytes       = col_vec_size;
     L->s_tile_bytes        = s_tile_size;
-    L->d_tile_bytes        = d_tile_size;
+    // Measured from the actual offsets rather than assumed to be N * d_tile_size, so
+    // that inserting a region between them (or adding padding to VTCM_LAYOUT_ALLOC)
+    // cannot silently leave the tail of the run unzeroed.
+    L->d_tile_bytes        = (L->off_d_inv_l + d_tile_size) - L->off_d_tiles[0];
     L->m_line_bytes        = m_line_size;
     L->m_buf_slot_bytes    = m_buf_slot;
     L->row_buf_stride      = row_vec_size / 128;
