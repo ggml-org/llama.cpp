@@ -606,9 +606,9 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
 
         # Fetch KleidiAI sources:
         include(FetchContent)
-        set(KLEIDIAI_COMMIT_TAG "v1.24.0")
+        set(KLEIDIAI_COMMIT_TAG "v1.31.0")
         set(KLEIDIAI_DOWNLOAD_URL "https://github.com/ARM-software/kleidiai/releases/download/${KLEIDIAI_COMMIT_TAG}/kleidiai-${KLEIDIAI_COMMIT_TAG}-src.tar.gz")
-        set(KLEIDIAI_RELEASE_ARCHIVE_MD5  "2f02ebe29573d45813e671eb304f2a00")
+        set(KLEIDIAI_RELEASE_ARCHIVE_MD5  "930495f3aeb16b25dc18a2bde45924f4")
 
         set(KLEIDIAI_FETCH_ARGS
             URL ${KLEIDIAI_DOWNLOAD_URL}
