@@ -7591,6 +7591,7 @@ struct input_tensor {
     ggml_type type;
     std::array<int64_t, 4> ne;
     std::array<size_t, 4> nb; // strides (0 = use default contiguous strides)
+    size_t view_offs = 0;
 };
 
 static bool is_non_contiguous(const input_tensor & src) {
@@ -7615,6 +7616,9 @@ static std::string var_to_str(const std::vector<input_tensor>& sources) {
         oss << ggml_type_name(src.type) << "[" << src.ne[0] << "," << src.ne[1] << "," << src.ne[2] << "," << src.ne[3] << "]";
         if (is_non_contiguous(src)) {
             oss << "nb[" << src.nb[0] << "," << src.nb[1] << "," << src.nb[2] << "," << src.nb[3] << "]";
+        }
+        if (src.view_offs != 0) {
+            oss << "offs[" << src.view_offs << "]";
         }
         first = false;
     }
@@ -7680,6 +7684,7 @@ struct test_generic_op : public test_case {
                         total_size += (src.ne[d] - 1) * src.nb[d];
                     }
                 }
+                total_size += src.view_offs;
 
                 // Convert bytes to elements, padded to block size for quantized types
                 const size_t type_size = ggml_type_size(src.type);
@@ -7688,7 +7693,7 @@ struct test_generic_op : public test_case {
                 ggml_tensor * backing = ggml_new_tensor_1d(ctx, src.type, backing_elements);
                 source_tensors[i] = ggml_view_4d(ctx, backing,
                     src.ne[0], src.ne[1], src.ne[2], src.ne[3],
-                    src.nb[1], src.nb[2], src.nb[3], 0);
+                    src.nb[1], src.nb[2], src.nb[3], src.view_offs);
                 // nb[0] does not get set by view_4d, so set it manually
                 source_tensors[i]->nb[0] = src.nb[0];
             } else {
@@ -7734,6 +7739,7 @@ struct test_generic_op : public test_case {
         case GGML_OP_CPY:
             return 5e-4;
         case GGML_OP_SOFT_MAX:
+        case GGML_OP_LIGHTNING_INDEXER:
             return 1e-6;
         case GGML_OP_RWKV_WKV7:
             return 5e-3;
@@ -7758,6 +7764,37 @@ struct test_generic_op : public test_case {
             ggml_tensor * t = out->src[i];
             if (!t) {
                 break;
+            }
+
+            if (op == GGML_OP_LIGHTNING_INDEXER && t->view_src != nullptr) {
+                std::vector<uint8_t> data(ggml_nbytes(t), 0);
+                std::vector<float> row(t->ne[0]);
+                std::vector<float> imatrix(t->ne[0], 1.0f);
+
+                for (int64_t i3 = 0; i3 < t->ne[3]; ++i3) {
+                    for (int64_t i2 = 0; i2 < t->ne[2]; ++i2) {
+                        for (int64_t i1 = 0; i1 < t->ne[1]; ++i1) {
+                            const size_t offset = i3*t->nb[3] + i2*t->nb[2] + i1*t->nb[1];
+                            const int64_t row_index = (i3*t->ne[2] + i2)*t->ne[1] + i1;
+                            for (int64_t i0 = 0; i0 < t->ne[0]; ++i0) {
+                                row[i0] = ((int) ((row_index*t->ne[0] + i0) % 31) - 15) / 16.0f;
+                            }
+
+                            if (t->type == GGML_TYPE_F32) {
+                                memcpy(data.data() + offset, row.data(), ggml_row_size(t->type, t->ne[0]));
+                            } else if (t->type == GGML_TYPE_F16) {
+                                ggml_fp32_to_fp16_row(row.data(), (ggml_fp16_t *) (data.data() + offset), t->ne[0]);
+                            } else if (t->type == GGML_TYPE_BF16) {
+                                ggml_fp32_to_bf16_row(row.data(), (ggml_bf16_t *) (data.data() + offset), t->ne[0]);
+                            } else {
+                                GGML_ASSERT(ggml_is_quantized(t->type));
+                                ggml_quantize_chunk(t->type, row.data(), data.data() + offset, 0, 1, t->ne[0], imatrix.data());
+                            }
+                        }
+                    }
+                }
+                ggml_backend_tensor_set(t, data.data(), 0, data.size());
+                continue;
             }
 
             // FLASH_ATTN_EXT: src[3] is the KQ mask
@@ -10018,10 +10055,73 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     }
 
     for (int kv : { 1, 7, 8, 63, 64, 65 }) {
-        for (ggml_type type_K : {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_BF16, GGML_TYPE_Q8_0, GGML_TYPE_Q5_1, GGML_TYPE_Q5_0, GGML_TYPE_Q4_1, GGML_TYPE_Q4_0}) {
+        for (ggml_type type_K : {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_BF16, GGML_TYPE_Q8_0, GGML_TYPE_Q5_1, GGML_TYPE_Q5_0, GGML_TYPE_Q4_1, GGML_TYPE_Q4_0, GGML_TYPE_IQ4_NL}) {
             test_cases.emplace_back(new test_lightning_indexer(128, 64, kv, 32, 4, 1, type_K));
         }
     }
+    test_cases.emplace_back(new test_generic_op(
+        GGML_OP_LIGHTNING_INDEXER, GGML_TYPE_F32, { 64, 3, 1, 4 }, {}, {
+            { GGML_TYPE_F32, { 128, 32, 3, 4 }, { 4, 528, 16928, 50848 }, 256 },
+            { GGML_TYPE_F16, { 128,  1, 64, 4 }, { 2, 272,   288, 18464 }, 256 },
+            { GGML_TYPE_F32, {  32,  3,  1, 4 }, { 4, 144,   448,   480 }, 256 },
+            { GGML_TYPE_F16, {  64,  3,  1, 1 }, { 2, 144,   448,   480 }, 256 },
+        }, "padded_f16_k_mask_broadcast"));
+    test_cases.emplace_back(new test_generic_op(
+        GGML_OP_LIGHTNING_INDEXER, GGML_TYPE_F32, { 64, 3, 1, 4 }, {}, {
+            { GGML_TYPE_F32, { 128, 32, 3, 4 }, { 4, 528, 16928, 50848 }, 256 },
+            { GGML_TYPE_F32, { 128,  1, 64, 4 }, { 4, 528,   544, 34880 }, 256 },
+            { GGML_TYPE_F32, {  32,  3,  1, 4 }, { 4, 144,   448,   480 }, 256 },
+            { GGML_TYPE_F16, {  64,  3,  1, 4 }, { 2, 144,   448,   480 }, 256 },
+        }, "padded_f32_k_per_stream_mask"));
+    test_cases.emplace_back(new test_generic_op(
+        GGML_OP_LIGHTNING_INDEXER, GGML_TYPE_F32, { 64, 3, 1, 4 }, {}, {
+            { GGML_TYPE_F32,  { 128, 32, 3, 4 }, {  4, 528, 16928, 50848 }, 256 },
+            { GGML_TYPE_BF16, { 128,  1, 64, 4 }, {  2, 274,   290, 18562 }, 256 },
+            { GGML_TYPE_F32,  {  32,  3,  1, 4 }, {  4, 144,   448,   480 }, 256 },
+            { GGML_TYPE_F16,  {  64,  3,  1, 1 }, {  2, 144,   448,   480 }, 256 },
+        }, "padded_bf16_k"));
+    test_cases.emplace_back(new test_generic_op(
+        GGML_OP_LIGHTNING_INDEXER, GGML_TYPE_F32, { 64, 3, 1, 4 }, {}, {
+            { GGML_TYPE_F32, { 128, 32, 3, 4 }, {  4, 528, 16928, 50848 }, 256 },
+            { GGML_TYPE_Q8_0, { 128, 1, 64, 4 }, { 34, 170,   204, 13158 }, 256 },
+            { GGML_TYPE_F32, {  32,  3, 1, 4 }, {  4, 144,   448,   480 }, 256 },
+            { GGML_TYPE_F16, {  64,  3, 1, 1 }, {  2, 144,   448,   480 }, 256 },
+        }, "padded_q8_0_k"));
+    test_cases.emplace_back(new test_generic_op(
+        GGML_OP_LIGHTNING_INDEXER, GGML_TYPE_F32, { 64, 3, 1, 4 }, {}, {
+            { GGML_TYPE_F32, { 128, 32, 3, 4 }, {  4, 528, 16928, 50848 }, 256 },
+            { GGML_TYPE_Q5_1, { 128, 1, 64, 4 }, { 24, 120,   144,  9336 }, 256 },
+            { GGML_TYPE_F32, {  32,  3, 1, 4 }, {  4, 144,   448,   480 }, 256 },
+            { GGML_TYPE_F16, {  64,  3, 1, 1 }, {  2, 144,   448,   480 }, 256 },
+        }, "padded_q5_1_k"));
+    test_cases.emplace_back(new test_generic_op(
+        GGML_OP_LIGHTNING_INDEXER, GGML_TYPE_F32, { 64, 3, 1, 4 }, {}, {
+            { GGML_TYPE_F32, { 128, 32, 3, 4 }, {  4, 528, 16928, 50848 }, 256 },
+            { GGML_TYPE_Q5_0, { 128, 1, 64, 4 }, { 22, 110,   132,  8558 }, 256 },
+            { GGML_TYPE_F32, {  32,  3, 1, 4 }, {  4, 144,   448,   480 }, 256 },
+            { GGML_TYPE_F16, {  64,  3, 1, 1 }, {  2, 144,   448,   480 }, 256 },
+        }, "padded_q5_0_k"));
+    test_cases.emplace_back(new test_generic_op(
+        GGML_OP_LIGHTNING_INDEXER, GGML_TYPE_F32, { 64, 3, 1, 4 }, {}, {
+            { GGML_TYPE_F32, { 128, 32, 3, 4 }, {  4, 528, 16928, 50848 }, 256 },
+            { GGML_TYPE_Q4_1, { 128, 1, 64, 4 }, { 20, 100,   120,  7780 }, 256 },
+            { GGML_TYPE_F32, {  32,  3, 1, 4 }, {  4, 144,   448,   480 }, 256 },
+            { GGML_TYPE_F16, {  64,  3, 1, 1 }, {  2, 144,   448,   480 }, 256 },
+        }, "padded_q4_1_k"));
+    test_cases.emplace_back(new test_generic_op(
+        GGML_OP_LIGHTNING_INDEXER, GGML_TYPE_F32, { 64, 3, 1, 4 }, {}, {
+            { GGML_TYPE_F32, { 128, 32, 3, 4 }, {  4, 528, 16928, 50848 }, 256 },
+            { GGML_TYPE_Q4_0, { 128, 1, 64, 4 }, { 18,  90,   108,  7002 }, 256 },
+            { GGML_TYPE_F32, {  32,  3, 1, 4 }, {  4, 144,   448,   480 }, 256 },
+            { GGML_TYPE_F16, {  64,  3, 1, 1 }, {  2, 144,   448,   480 }, 256 },
+        }, "padded_q4_0_k"));
+    test_cases.emplace_back(new test_generic_op(
+        GGML_OP_LIGHTNING_INDEXER, GGML_TYPE_F32, { 64, 3, 1, 4 }, {}, {
+            { GGML_TYPE_F32,   { 128, 32, 3, 4 }, {  4, 528, 16928, 50848 }, 256 },
+            { GGML_TYPE_IQ4_NL, { 128, 1, 64, 4 }, { 18,  90,   108,  7002 }, 256 },
+            { GGML_TYPE_F32,   {  32,  3, 1, 4 }, {  4, 144,   448,   480 }, 256 },
+            { GGML_TYPE_F16,   {  64,  3, 1, 1 }, {  2, 144,   448,   480 }, 256 },
+        }, "padded_iq4_nl_k"));
 
     return test_cases;
 }

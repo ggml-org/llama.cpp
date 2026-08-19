@@ -1,0 +1,116 @@
+#version 450
+
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+
+#define DATA_A_IQ4_NL
+#define FLOAT_TYPE float
+#define FLOAT_TYPEV4 vec4
+#define FA_K_ONLY
+#define BINDING_IDX_K 0u
+
+#include "types.glsl"
+#include "fa_types.glsl"
+
+layout(constant_id = 0) const uint K_TYPE = FA_TYPE_F32;
+layout(constant_id = 1) const uint K_BLOCK_BYTES = 4;
+
+#define FaTypeK K_TYPE
+#include "flash_attn_dequant.glsl"
+
+layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
+
+layout(binding = 0) readonly buffer QBuf { float q[]; };
+layout(binding = 1) readonly buffer KBufF16 { float16_t k_f16[]; };
+layout(binding = 1) readonly buffer KBufF32 { float k_f32[]; };
+layout(binding = 1) readonly buffer KBufBF16 { uint16_t k_bf16[]; };
+layout(binding = 2) readonly buffer WBuf { float weights[]; };
+layout(binding = 3) readonly buffer MBuf { float16_t mask[]; };
+layout(binding = 4) writeonly buffer DstBuf { float dst[]; };
+
+layout(push_constant) uniform PushConstants {
+    uint n_kv;
+    uint n_heads;
+    uint n_tokens;
+    uint n_streams;
+    uint n_masks;
+    uint dispatch_x;
+    uint q_nb1;
+    uint q_nb2;
+    uint q_nb3;
+    uint k_nb2;
+    uint k_nb3;
+    uint w_nb1;
+    uint w_nb3;
+    uint m_nb1;
+    uint m_nb3;
+    uint d_nb1;
+    uint d_nb3;
+};
+
+shared float k_row[128];
+shared float partials[128];
+
+void main() {
+    const uint tid = gl_LocalInvocationID.x;
+    const uint output_idx = gl_WorkGroupID.y * dispatch_x + gl_WorkGroupID.x;
+    const uint n_outputs = n_kv * n_tokens * n_streams;
+
+    if (fa_type_needs_shmem(K_TYPE)) {
+        init_iq_shmem(gl_WorkGroupSize);
+    }
+
+    if (output_idx >= n_outputs) {
+        return;
+    }
+
+    const uint ik = output_idx % n_kv;
+    const uint ts = output_idx / n_kv;
+    const uint t = ts % n_tokens;
+    const uint s = ts / n_tokens;
+    const uint k_offset = ik * k_nb2 + s * k_nb3;
+
+    if (K_TYPE == FA_TYPE_F16) {
+        k_row[tid] = float(k_f16[k_offset / 2 + tid]);
+    } else if (K_TYPE == FA_TYPE_F32) {
+        k_row[tid] = k_f32[k_offset / 4 + tid];
+    } else if (K_TYPE == FA_TYPE_BF16) {
+        k_row[tid] = bf16_to_fp32(uint(k_bf16[k_offset / 2 + tid]));
+    } else if (tid < 32) {
+        const uint coord = 4 * tid;
+        const uint block_size = 32u;
+        const uint ib = coord / block_size;
+        const uint iqs = coord % block_size;
+        const vec4 values = dequantize4(ib, iqs, k_offset / K_BLOCK_BYTES, BINDING_IDX_K);
+        k_row[coord + 0] = values.x;
+        k_row[coord + 1] = values.y;
+        k_row[coord + 2] = values.z;
+        k_row[coord + 3] = values.w;
+    }
+    barrier();
+
+    float score = 0.0;
+    for (uint h = 0; h < n_heads; ++h) {
+        partials[tid] = q[h * q_nb1 + t * q_nb2 + s * q_nb3 + tid] * k_row[tid];
+        barrier();
+
+        for (uint stride = 64; stride > 0; stride >>= 1) {
+            if (tid < stride) {
+                partials[tid] += partials[tid + stride];
+            }
+            barrier();
+        }
+
+        if (tid == 0) {
+            score += max(partials[0], 0.0) * weights[h + t * w_nb1 + s * w_nb3];
+        }
+        // the read of partials[0] above must complete before the next iteration
+        // overwrites partials[tid]
+        barrier();
+    }
+
+    if (tid == 0) {
+        const uint mask_offset = ik + t * m_nb1 + (s % n_masks) * m_nb3;
+        dst[ik + t * d_nb1 + s * d_nb3] = score + float(mask[mask_offset]);
+    }
+}
