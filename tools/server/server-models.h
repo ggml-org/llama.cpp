@@ -369,7 +369,8 @@ struct server_http_proxy : server_http_res {
                       const std::map<std::string, uploaded_file> & files,
                       const std::function<bool()> should_stop,
                       int32_t timeout_read,
-                      int32_t timeout_write
+                      int32_t timeout_write,
+                      const server_telemetry_span_ptr & parent_span
                       );
     ~server_http_proxy() {
         if (cleanup_pipes) {
@@ -378,9 +379,13 @@ struct server_http_proxy : server_http_res {
         if (cleanup) {
             cleanup();
         }
+        if (trace_span) {
+            trace_span->end();
+        }
     }
 private:
     std::function<void()> cleanup_pipes = nullptr;
+    server_telemetry_span_ptr trace_span;
     std::thread thread;
     struct msg_t {
         std::map<std::string, std::string> headers;

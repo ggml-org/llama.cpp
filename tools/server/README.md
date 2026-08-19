@@ -215,6 +215,7 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `--cache-prompt, --no-cache-prompt` | whether to enable prompt caching (default: enabled)<br/>(env: LLAMA_ARG_CACHE_PROMPT) |
 | `--cache-reuse N` | min chunk size to attempt reusing from the cache via KV shifting, requires prompt caching to be enabled (default: 0)<br/>[(card)](https://ggml.ai/f0.png)<br/>(env: LLAMA_ARG_CACHE_REUSE) |
 | `--metrics` | enable prometheus compatible metrics endpoint (default: disabled)<br/>(env: LLAMA_ARG_ENDPOINT_METRICS) |
+| `--otel` | enable OpenTelemetry tracing (default: disabled)<br/>(env: LLAMA_ARG_OTEL) |
 | `--props` | enable changing global properties via POST /props (default: disabled)<br/>(env: LLAMA_ARG_ENDPOINT_PROPS) |
 | `--slots, --no-slots` | expose slots monitoring endpoint (default: enabled)<br/>(env: LLAMA_ARG_ENDPOINT_SLOTS) |
 | `--slot-save-path PATH` | path to save slot kv cache (default: disabled) |
@@ -418,6 +419,19 @@ Related flags: `--cors-origins`, `--cors-methods`, `--cors-headers`, `--cors-cre
   cmake -B build -DLLAMA_OPENSSL=ON
   cmake --build build --config Release -t llama-server
   ```
+
+## Build with OpenTelemetry tracing
+
+OTLP tracing is optional and requires OpenTelemetry C++ 1.27 or newer, built with the OTLP HTTP exporter. Point CMake at its installation prefix when configuring:
+
+```bash
+cmake -B build \
+  -DLLAMA_SERVER_OPEN_TELEMETRY=ON \
+  -DCMAKE_PREFIX_PATH=/path/to/opentelemetry-cpp/install
+cmake --build build --config Release -t llama-server
+```
+
+The default build does not link OpenTelemetry. Starting that build with `--otel` reports how to enable the dependency.
 
 ## Quick Start
 
@@ -1137,6 +1151,46 @@ In *router mode* the query param `?model={model_id}` has to be set. This endpoin
 | `llamacpp:spec_decode_num_accepted_tokens_total` | Counter | Total draft tokens accepted by the target model (0 when spec-decode is off). |
 | `llamacpp:spec_decode_num_drafts_total` | Counter | Total speculative decoding verification steps (0 when spec-decode is off). |
 | `llamacpp:spec_decode_num_accepted_tokens_per_pos_total` | Counter | Accepted tokens per draft position (labeled `position="N"`; absent when spec-decode is off or before the first completed speculative request). |
+
+### OpenTelemetry tracing
+
+Start an OpenTelemetry-enabled build with `--otel` (or `LLAMA_ARG_OTEL=1`) to export server request spans over OTLP/HTTP. Protobuf is the default encoding:
+
+```bash
+OTEL_SERVICE_NAME=llama-server \
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 \
+./build/bin/llama-server --otel -m model.gguf
+```
+
+`OTEL_EXPORTER_OTLP_ENDPOINT` is treated as a base URL and `/v1/traces` is appended. To provide the complete traces URL instead, set `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`. Completed spans are batched and pushed to that endpoint with HTTP POST; no collector scrape is required. Exporter headers, TLS, timeout, batching, resource attributes, and SDK disablement are handled by OpenTelemetry C++ through the standard `OTEL_EXPORTER_OTLP_*`, `OTEL_BSP_*`, `OTEL_RESOURCE_ATTRIBUTES`, `OTEL_SERVICE_NAME`, and `OTEL_SDK_DISABLED` environment variables. Set `OTEL_EXPORTER_OTLP_PROTOCOL` or `OTEL_EXPORTER_OTLP_TRACES_PROTOCOL` to `http/json` to use JSON instead of the default `http/protobuf` encoding.
+
+`OTEL_TRACES_SAMPLER` supports `always_on`, `always_off`, `traceidratio`, `parentbased_always_on`, `parentbased_always_off`, and `parentbased_traceidratio`; ratio-based samplers read `OTEL_TRACES_SAMPLER_ARG`. These variables require a small llama.cpp adapter because OpenTelemetry C++ 1.27 does not apply the flat sampler environment variables when a tracer provider is assembled programmatically.
+
+When `OTEL_SDK_DISABLED=true`, no spans are created or exported, but incoming W3C trace context is still propagated to router and CORS-proxy requests as required by the OpenTelemetry environment-variable specification.
+
+Each request reaching a registered API handler produces a server span using the stable OpenTelemetry HTTP semantic conventions. Router and CORS-proxy requests also produce client spans and propagate W3C `traceparent` context downstream. Streaming spans remain open until the stream completes or the client disconnects.
+
+Completed text and chat inference spans include token usage and performance attributes. Standard `gen_ai.*` attributes describe the operation, model, total input and output tokens, and prompt-cache reads. The following llama.cpp-specific attributes provide the internal phase breakdown:
+
+| Attribute | Description |
+| --- | --- |
+| `llama.completion.count` | Number of completions represented by the request. |
+| `llama.completion.input_tokens.processed` | Input tokens evaluated rather than served from the prompt cache. |
+| `llama.completion.cache.hit_ratio` | Cached input tokens divided by total input tokens. |
+| `llama.completion.queue.duration_ms` | Time from entering the inference queue until prompt evaluation starts. |
+| `llama.completion.prompt.duration_ms` | Prompt evaluation duration. |
+| `llama.completion.generation.duration_ms` | Token generation duration. |
+| `llama.completion.time_to_first_token_ms` | Queue plus prompt evaluation duration. |
+| `llama.completion.inference.duration_ms` | Queue, prompt evaluation, and generation duration. |
+| `llama.completion.prompt.tokens_per_second` | Evaluated prompt-token throughput. |
+| `llama.completion.generation.tokens_per_second` | Generated-token throughput, excluding the first token produced by prompt evaluation. |
+| `llama.completion.speculative.draft_tokens` | Draft tokens proposed by speculative decoding. |
+| `llama.completion.speculative.accepted_tokens` | Draft tokens accepted by the target model. |
+| `llama.completion.speculative.acceptance_ratio` | Accepted draft tokens divided by proposed draft tokens. |
+
+For requests containing multiple completions, token counts are summed and duration attributes report the longest completion. These attributes contain no prompt or completion content.
+
+Request and response bodies, prompts, completions, API keys, and arbitrary HTTP headers are never added to spans. Routes are recorded using their registered templates to avoid high-cardinality path parameters.
 
 ### POST `/slots/{id_slot}?action=save`: Save the prompt cache of the specified slot to a file.
 

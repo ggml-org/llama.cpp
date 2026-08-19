@@ -360,10 +360,16 @@ struct server_slot_stats {
     int64_t t_prompt_last = 0;
     int64_t t_gen_last    = 0;
 
+    // duration from entering the task queue until prompt processing starts (in us)
+    int64_t t_queue = 0;
+
     // can only move one direction: start -> prompt -> gen
-    void update_prompt_start() {
+    void update_prompt_start(int64_t t_queued_us = 0) {
         GGML_ASSERT(t_start == 0);
         t_start = ggml_time_us();
+        if (t_queued_us > 0) {
+            t_queue = std::max<int64_t>(0, t_start - t_queued_us);
+        }
     }
     void set_prompt_last(int64_t t_us) {
         GGML_ASSERT(t_start > 0);
@@ -386,6 +392,9 @@ struct server_slot_stats {
             return 0.0; // the prompt is not processed yet
         }
         return (t_prompt_last - t_start) / 1000.0;
+    }
+    double t_queue_ms() const {
+        return t_queue / 1000.0;
     }
     int64_t t_gen_us() const {
         if (t_gen_last == 0) {

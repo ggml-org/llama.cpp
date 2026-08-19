@@ -3046,7 +3046,7 @@ private:
 
                     // TODO: maybe move branch to outside of this loop in the future
                     if (slot.state == SLOT_STATE_STARTED) {
-                        slot.stats.update_prompt_start();
+                        slot.stats.update_prompt_start(slot.task->t_queued_us);
 
                         slot.state = SLOT_STATE_PROCESSING_PROMPT;
 
@@ -4118,6 +4118,114 @@ server_context_meta server_context::get_meta() const {
     };
 }
 
+struct server_completion_trace_data {
+    uint64_t count                   = 0;
+    uint64_t input_tokens            = 0;
+    uint64_t input_tokens_cached     = 0;
+    uint64_t input_tokens_processed  = 0;
+    uint64_t output_tokens           = 0;
+    uint64_t generation_steps        = 0;
+    uint64_t draft_tokens            = 0;
+    uint64_t draft_tokens_accepted   = 0;
+    double   queue_ms                = 0.0;
+    double   prompt_ms               = 0.0;
+    double   generation_ms           = 0.0;
+    double   time_to_first_token_ms  = 0.0;
+    double   inference_ms            = 0.0;
+    std::string model;
+
+    void add(const server_task_result_cmpl_final & result) {
+        count++;
+        input_tokens           += result.n_prompt_tokens;
+        input_tokens_cached    += result.n_prompt_tokens_cache;
+        input_tokens_processed += result.stats.n_prompt_processed;
+        output_tokens          += result.n_decoded;
+        generation_steps       += result.stats.n_gen_steps();
+        draft_tokens           += result.stats.n_draft_tokens;
+        draft_tokens_accepted  += result.stats.n_draft_accepted;
+
+        const double result_queue_ms      = result.stats.t_queue_ms();
+        const double result_prompt_ms     = result.stats.t_prompt_ms();
+        const double result_generation_ms = result.stats.t_gen_ms();
+        queue_ms               = std::max(queue_ms, result_queue_ms);
+        prompt_ms              = std::max(prompt_ms, result_prompt_ms);
+        generation_ms          = std::max(generation_ms, result_generation_ms);
+        time_to_first_token_ms = std::max(time_to_first_token_ms, result_queue_ms + result_prompt_ms);
+        inference_ms           = std::max(inference_ms, result_queue_ms + result_prompt_ms + result_generation_ms);
+
+        if (model.empty()) {
+            model = result.oaicompat_model;
+        }
+    }
+
+    void apply(server_http_res & response, task_response_type res_type) const {
+        if (count == 0) {
+            return;
+        }
+
+        const char * operation = nullptr;
+        switch (res_type) {
+            case TASK_RESPONSE_TYPE_OAI_CHAT:
+            case TASK_RESPONSE_TYPE_ANTHROPIC:
+                operation = "chat";
+                break;
+            case TASK_RESPONSE_TYPE_NONE:
+            case TASK_RESPONSE_TYPE_OAI_CMPL:
+                operation = "text_completion";
+                break;
+            case TASK_RESPONSE_TYPE_OAI_RESP:
+                operation = "generate_content";
+                break;
+            default:
+                break;
+        }
+
+        if (operation != nullptr) {
+            response.set_trace_attribute("gen_ai.operation.name", std::string(operation));
+        }
+        response.set_trace_attribute("gen_ai.provider.name", std::string("llama.cpp"));
+        if (!model.empty()) {
+            response.set_trace_attribute("gen_ai.request.model", model);
+            response.set_trace_attribute("gen_ai.response.model", model);
+        }
+        response.set_trace_attribute("gen_ai.usage.input_tokens", static_cast<int64_t>(input_tokens));
+        response.set_trace_attribute("gen_ai.usage.output_tokens", static_cast<int64_t>(output_tokens));
+        response.set_trace_attribute(
+            "gen_ai.usage.cache_read.input_tokens", static_cast<int64_t>(input_tokens_cached));
+
+        response.set_trace_attribute("llama.completion.count", static_cast<int64_t>(count));
+        response.set_trace_attribute(
+            "llama.completion.input_tokens.processed", static_cast<int64_t>(input_tokens_processed));
+        response.set_trace_attribute("llama.completion.queue.duration_ms", queue_ms);
+        response.set_trace_attribute("llama.completion.prompt.duration_ms", prompt_ms);
+        response.set_trace_attribute("llama.completion.generation.duration_ms", generation_ms);
+        response.set_trace_attribute("llama.completion.time_to_first_token_ms", time_to_first_token_ms);
+        response.set_trace_attribute("llama.completion.inference.duration_ms", inference_ms);
+
+        if (input_tokens > 0) {
+            response.set_trace_attribute(
+                "llama.completion.cache.hit_ratio", static_cast<double>(input_tokens_cached) / input_tokens);
+        }
+        if (prompt_ms > 0.0) {
+            response.set_trace_attribute(
+                "llama.completion.prompt.tokens_per_second", input_tokens_processed * 1000.0 / prompt_ms);
+        }
+        if (generation_ms > 0.0) {
+            response.set_trace_attribute(
+                "llama.completion.generation.tokens_per_second", generation_steps * 1000.0 / generation_ms);
+        }
+        if (draft_tokens > 0) {
+            response.set_trace_attribute(
+                "llama.completion.speculative.draft_tokens", static_cast<int64_t>(draft_tokens));
+            response.set_trace_attribute(
+                "llama.completion.speculative.accepted_tokens", static_cast<int64_t>(draft_tokens_accepted));
+            response.set_trace_attribute(
+                "llama.completion.speculative.acceptance_ratio",
+                static_cast<double>(draft_tokens_accepted) / draft_tokens);
+        }
+    }
+};
+
 // generator-like API for HTTP response generation
 // may have bypass_sleep = true if the task does not use ctx_server
 struct server_res_generator : server_res_spipe {
@@ -4245,6 +4353,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
     }
 
     bool stream = json_value(data, "stream", false);
+    auto trace_data = std::make_shared<server_completion_trace_data>();
 
     if (!stream) {
         // non-stream, wait for the results
@@ -4256,9 +4365,11 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
             return res;
         } else {
             json arr = json::array();
-            for (auto & res : all_results.results) {
-                GGML_ASSERT(dynamic_cast<server_task_result_cmpl_final*>(res.get()) != nullptr);
-                arr.push_back(res->to_json());
+            for (auto & result : all_results.results) {
+                auto * final_result = dynamic_cast<server_task_result_cmpl_final *>(result.get());
+                GGML_ASSERT(final_result != nullptr);
+                trace_data->add(*final_result);
+                arr.push_back(result->to_json());
             }
             GGML_ASSERT(!arr.empty() && "empty results");
             if (arr.size() == 1) {
@@ -4275,6 +4386,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
                 // multi-results, non-OAI compat
                 res->ok(arr);
             }
+            trace_data->apply(*res, res_type);
         }
     } else {
         // in streaming mode, the first error must be treated as non-stream response
@@ -4295,6 +4407,9 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
             dynamic_cast<server_task_result_cmpl_partial*>(first_result.get()) != nullptr ||
             dynamic_cast<server_task_result_cmpl_final*>  (first_result.get()) != nullptr
         );
+        if (auto * final_result = dynamic_cast<server_task_result_cmpl_final *>(first_result.get())) {
+            trace_data->add(*final_result);
+        }
 
         // next responses are streamed
         // to be sent immediately
@@ -4310,7 +4425,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
         }
         res->status = 200;
         res->content_type = "text/event-stream";
-        res->set_next([res_this = res.get(), res_type, sse_ping_interval](std::string & output) -> bool {
+        res->set_next([res_this = res.get(), res_type, sse_ping_interval, trace_data](std::string & output) -> bool {
             static auto format_error = [](task_response_type res_type, const json & res_json) {
                 if (res_type == TASK_RESPONSE_TYPE_ANTHROPIC) {
                     return format_anthropic_sse({
@@ -4343,6 +4458,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
 
                 // check if there is more data
                 if (!rd.has_next()) {
+                    trace_data->apply(*res_this, res_type);
                     switch (res_type) {
                         case TASK_RESPONSE_TYPE_NONE:
                         case TASK_RESPONSE_TYPE_OAI_RESP:
@@ -4395,6 +4511,9 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
                         dynamic_cast<server_task_result_cmpl_partial*>(result.get()) != nullptr
                         || dynamic_cast<server_task_result_cmpl_final*>(result.get()) != nullptr
                     );
+                    if (auto * final_result = dynamic_cast<server_task_result_cmpl_final *>(result.get())) {
+                        trace_data->add(*final_result);
+                    }
                     json res_json = result->to_json();
                     if (res_type == TASK_RESPONSE_TYPE_ANTHROPIC) {
                         output = format_anthropic_sse(res_json);

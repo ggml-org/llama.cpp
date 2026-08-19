@@ -544,7 +544,25 @@ static std::string build_query_string(const httplib::Request & req) {
 // using unique_ptr for request to allow safe capturing in lambdas
 using server_http_req_ptr = std::unique_ptr<server_http_req>;
 
+static void apply_trace_attributes(const server_telemetry_span_ptr & span, const server_http_res & response) {
+    if (!span) {
+        return;
+    }
+    for (const auto & attribute : response.trace_string_attributes) {
+        span->set_attribute(attribute.first, attribute.second);
+    }
+    for (const auto & attribute : response.trace_int_attributes) {
+        span->set_attribute(attribute.first, attribute.second);
+    }
+    for (const auto & attribute : response.trace_double_attributes) {
+        span->set_attribute(attribute.first, attribute.second);
+    }
+}
+
 static void process_handler_response(server_http_req_ptr && request, server_http_res_ptr & response, httplib::Response & res) {
+    if (request->trace_span) {
+        request->trace_span->set_http_status(response->status);
+    }
     if (response->is_stream()) {
         res.status = response->status;
         // Tell Nginx to not buffer any streamed response
@@ -568,10 +586,17 @@ static void process_handler_response(server_http_req_ptr && request, server_http
                 sink.done();
                 SRV_DBG("%s", "http: stream ended\n");
             }
-            return has_next;
+            return true;
         };
-        const auto on_complete = [request = q_ptr, response = r_ptr](bool) mutable {
+        const auto on_complete = [request = q_ptr, response = r_ptr](bool success) mutable {
             response->on_complete();
+            if (request->trace_span) {
+                apply_trace_attributes(request->trace_span, *response);
+                if (!success) {
+                    request->trace_span->set_error("client_disconnect");
+                }
+                request->trace_span->end();
+            }
             response.reset();
             request.reset();
         };
@@ -581,20 +606,27 @@ static void process_handler_response(server_http_req_ptr && request, server_http
         set_headers(res, response->headers);
         res.set_content(response->data, response->content_type);
         response->on_complete();
+        if (request->trace_span) {
+            apply_trace_attributes(request->trace_span, *response);
+            request->trace_span->end();
+        }
     }
 }
 
 void server_http_context::get(const std::string & path, const server_http_context::handler_t & handler) const {
     handlers.emplace(path, handler);
-    pimpl->srv->Get(path_prefix + path, [handler](const httplib::Request & req, httplib::Response & res) {
+    pimpl->srv->Get(path_prefix + path, [this, handler, path](const httplib::Request & req, httplib::Response & res) {
+        auto headers = get_headers(req);
         server_http_req_ptr request = std::make_unique<server_http_req>(server_http_req{
             get_params(req),
-            get_headers(req),
+            headers,
             req.path,
             build_query_string(req),
             req.body,
             {},
-            req.is_connection_closed
+            req.is_connection_closed,
+            server_telemetry_start_server_span(
+                "GET", path_prefix + path, req.path, is_ssl ? "https" : "http", hostname, port, req.remote_addr, headers),
         });
         server_http_res_ptr response = handler(*request);
         process_handler_response(std::move(request), response, res);
@@ -603,9 +635,10 @@ void server_http_context::get(const std::string & path, const server_http_contex
 
 void server_http_context::post(const std::string & path, const server_http_context::handler_t & handler) const {
     handlers.emplace(path, handler);
-    pimpl->srv->Post(path_prefix + path, [handler](const httplib::Request & req, httplib::Response & res) {
+    pimpl->srv->Post(path_prefix + path, [this, handler, path](const httplib::Request & req, httplib::Response & res) {
         std::string body = req.body;
         std::map<std::string, uploaded_file> files;
+        auto headers = get_headers(req);
 
         if (req.is_multipart_form_data()) {
             // translate text fields to a JSON object and use it as the body
@@ -636,12 +669,14 @@ void server_http_context::post(const std::string & path, const server_http_conte
 
         server_http_req_ptr request = std::make_unique<server_http_req>(server_http_req{
             get_params(req),
-            get_headers(req),
+            headers,
             req.path,
             build_query_string(req),
             body,
             std::move(files),
-            req.is_connection_closed
+            req.is_connection_closed,
+            server_telemetry_start_server_span(
+                "POST", path_prefix + path, req.path, is_ssl ? "https" : "http", hostname, port, req.remote_addr, headers),
         });
         server_http_res_ptr response = handler(*request);
         process_handler_response(std::move(request), response, res);
@@ -650,15 +685,18 @@ void server_http_context::post(const std::string & path, const server_http_conte
 
 void server_http_context::del(const std::string & path, const server_http_context::handler_t & handler) const {
     handlers.emplace(path, handler);
-    pimpl->srv->Delete(path_prefix + path, [handler](const httplib::Request & req, httplib::Response & res) {
+    pimpl->srv->Delete(path_prefix + path, [this, handler, path](const httplib::Request & req, httplib::Response & res) {
+        auto headers = get_headers(req);
         server_http_req_ptr request = std::make_unique<server_http_req>(server_http_req{
             get_params(req),
-            get_headers(req),
+            headers,
             req.path,
             build_query_string(req),
             req.body,
             {},
-            req.is_connection_closed
+            req.is_connection_closed,
+            server_telemetry_start_server_span(
+                "DELETE", path_prefix + path, req.path, is_ssl ? "https" : "http", hostname, port, req.remote_addr, headers),
         });
         server_http_res_ptr response = handler(*request);
         process_handler_response(std::move(request), response, res);
@@ -814,6 +852,7 @@ void server_http_context::register_gcp_compat() const {
                         payload.dump(),
                         {},
                         req.should_stop,
+                        req.trace_span,
                     };
 
                     server_http_res_ptr internal_res = handlers.at(dispatch_path)(internal_req);

@@ -1525,7 +1525,8 @@ server_http_res_ptr server_models::proxy_request(const server_http_req & req, co
                 ? std::function<bool()>([]() { return false; })
                 : req.should_stop,
             base_params.timeout_read,
-            base_params.timeout_write
+            base_params.timeout_write,
+            req.trace_span
             );
 
     proxy->cleanup = [this, name]() {
@@ -2177,7 +2178,8 @@ void server_models_routes::init_routes() {
                 req.files,
                 req.should_stop,
                 params.timeout_read,
-                params.timeout_write);
+                params.timeout_write,
+                req.trace_span);
         return std::unique_ptr<server_http_res>(std::move(proxy));
     };
 
@@ -2387,8 +2389,11 @@ server_http_proxy::server_http_proxy(
         const std::map<std::string, uploaded_file> & files,
         const std::function<bool()> should_stop,
         int32_t timeout_read,
-        int32_t timeout_write
+        int32_t timeout_write,
+        const server_telemetry_span_ptr & parent_span
         ) {
+    this->trace_span = server_telemetry_start_client_span(method, scheme, host, port, path, parent_span);
+
     // shared between reader and writer threads
     auto cli  = std::make_shared<httplib::ClientImpl>(host, port);
     auto pipe = std::make_shared<server_pipe<msg_t>>();
@@ -2475,9 +2480,11 @@ server_http_proxy::server_http_proxy(
     // prepare the request to destination server
     httplib::Request req;
     {
+        auto forwarded_headers = headers;
+        server_telemetry_inject(forwarded_headers, this->trace_span);
         req.method = method;
         req.path = path;
-        for (const auto & [key, value] : headers) {
+        for (const auto & [key, value] : forwarded_headers) {
             const auto lowered = to_lower_copy(key);
             if (lowered == "accept-encoding") {
                 // disable Accept-Encoding to avoid compressed responses
@@ -2521,11 +2528,14 @@ server_http_proxy::server_http_proxy(
 
     // start the proxy thread
     SRV_DBG("start proxy thread %s %s\n", req.method.c_str(), req.path.c_str());
-    this->thread = std::thread([cli, pipe, req, headers_sent, make_header_msg]() {
+    this->thread = std::thread([cli, pipe, req, headers_sent, make_header_msg, trace_span = this->trace_span]() {
         auto result = cli->send(std::move(req));
         if (result.error() != httplib::Error::Success) {
             auto err_str = httplib::to_string(result.error());
             SRV_ERR("http client error: %s\n", err_str.c_str());
+            if (trace_span) {
+                trace_span->set_error("http_client_error");
+            }
             pipe->write({{}, 500, "", ""}); // header
             pipe->write({{}, 0, "proxy error: " + err_str, ""}); // body
         } else if (!headers_sent->load()) {
@@ -2547,8 +2557,14 @@ server_http_proxy::server_http_proxy(
             if (!header.content_type.empty()) {
                 this->content_type = std::move(header.content_type);
             }
+            if (this->trace_span) {
+                this->trace_span->set_http_status(this->status);
+            }
         } else {
             SRV_DBG("%s", "no response headers received (request cancelled?)\n");
+            if (this->trace_span) {
+                this->trace_span->set_error("request_cancelled");
+            }
         }
     }
 }

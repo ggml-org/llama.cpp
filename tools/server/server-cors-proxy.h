@@ -68,7 +68,8 @@ static server_http_res_ptr proxy_request(const server_http_req & req, std::strin
             req.files,
             req.should_stop,
             600, // timeout_read (default to 10 minutes)
-            600  // timeout_write (default to 10 minutes)
+            600, // timeout_write (default to 10 minutes)
+            req.trace_span
             );
 
     return proxy;
