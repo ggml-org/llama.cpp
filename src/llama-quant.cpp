@@ -317,6 +317,16 @@ static bool tensor_allows_quantization(const llama_model_quantize_params * param
     // these are not too big so keep them as it is
     quantize &= name.find("per_layer_model_proj") == std::string::npos;
 
+    // keep the same tensors out of quantization that the released A.X-K2 weights keep out of FP8
+    // (its quantization_config lists modules_to_not_convert: lm_head, W_up, W_down, weights_proj)
+    if (arch == LLM_ARCH_AXK2) {
+        quantize &= name != "output.weight";
+        quantize &= name != "token_embd.weight";
+        quantize &= name.find("norm_gate_a.weight")    == std::string::npos;
+        quantize &= name.find("norm_gate_b.weight")    == std::string::npos;
+        quantize &= name.find("indexer.proj.weight")   == std::string::npos;
+    }
+
     // do not quantize positional embeddings and token types (BERT)
     quantize &= name != LLM_TN(arch)(LLM_TENSOR_POS_EMBD,    "weight");
     quantize &= name != LLM_TN(arch)(LLM_TENSOR_TOKEN_TYPES, "weight");

@@ -324,7 +324,8 @@ llama_kv_cache::llama_kv_cache(
 
         // always create Hadamard rotation tensors for DeepSeek lightning indexers
         if ((model.arch == LLM_ARCH_DEEPSEEK32 || model.arch == LLM_ARCH_DEEPSEEK4 ||
-                model.arch == LLM_ARCH_GLM_DSA || model.arch == LLM_ARCH_DOTS3NOTE) &&
+                model.arch == LLM_ARCH_GLM_DSA || model.arch == LLM_ARCH_DOTS3NOTE ||
+                model.arch == LLM_ARCH_AXK2) &&
                 hparams.n_embd_head_k_full == hparams.indexer_head_size) {
             attn_rot_k = true;
         }
