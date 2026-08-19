@@ -13,7 +13,12 @@ import { chatStore } from '$lib/stores/chat/index.svelte';
 import { conversationsStore } from '$lib/stores/conversations/index.svelte';
 import { modelsStore } from '$lib/stores/models/index.svelte';
 import { serverStore } from '$lib/stores/server.svelte';
-import type { ApiProcessingState, ChatMessageTimings, DatabaseMessage } from '$lib/types';
+import type {
+	ApiProcessingState,
+	ChatMessageAgenticTimings,
+	ChatMessageTimings,
+	DatabaseMessage
+} from '$lib/types';
 
 interface LiveStats {
 	freshTokens: number;
@@ -22,14 +27,46 @@ interface LiveStats {
 	outputTokens: number;
 }
 
-function lastAssistantTimings(messages: DatabaseMessage[]): ChatMessageTimings | undefined {
-	for (let i = messages.length - 1; i >= 0; i--) {
-		const m = messages[i];
+interface AssistantTimingsSummary {
+	lastAgenticLlm: ChatMessageAgenticTimings['llm'] | undefined;
+	lastTimings: ChatMessageTimings | undefined;
+	cacheTotal: number;
+	output: number;
+	outputMs: number;
+	read: number;
+}
 
-		if (m.role === MessageRole.ASSISTANT && m.timings) return m.timings;
+/**
+ * One forward pass over the messages computing everything the deriveds
+ * below need: the last assistant timings (per-turn gauges), the last
+ * agentic llm totals (cumulative gauge) and the cumulative sums. During
+ * streaming activeMessages churns every chunk, and each of these used to be
+ * its own O(n) scan re-run per chunk.
+ */
+function summarizeAssistantTimings(messages: DatabaseMessage[]): AssistantTimingsSummary {
+	let lastAgenticLlm: ChatMessageAgenticTimings['llm'] | undefined;
+	let lastTimings: ChatMessageTimings | undefined;
+	let read = 0;
+	let cacheTotal = 0;
+	let output = 0;
+	let outputMs = 0;
+
+	for (const m of messages) {
+		if (m.role !== MessageRole.ASSISTANT || !m.timings) continue;
+
+		lastTimings = m.timings;
+
+		if (m.timings.agentic?.llm?.predicted_n != null) {
+			lastAgenticLlm = m.timings.agentic.llm;
+		}
+
+		read += m.timings.prompt_n ?? 0;
+		cacheTotal += m.timings.cache_n ?? 0;
+		output += m.timings.predicted_n ?? 0;
+		outputMs += m.timings.predicted_ms ?? 0;
 	}
 
-	return undefined;
+	return { cacheTotal, lastAgenticLlm, lastTimings, output, outputMs, read };
 }
 
 function deriveLiveStats(state: ApiProcessingState | null): LiveStats | null {
@@ -69,8 +106,15 @@ class ContextStatsStore {
 
 	private liveStats = $derived(deriveLiveStats(chatStore.processing.activeState));
 
+	// shared by currentRead/Fresh/Cache/Output and cumulative so a per-chunk
+	// churn of activeMessages triggers exactly one scan instead of one per
+	// derived
+	private assistantTimings = $derived.by(() =>
+		summarizeAssistantTimings(conversationsStore.activeMessages as DatabaseMessage[])
+	);
+
 	currentRead = $derived.by(() => {
-		const timings = lastAssistantTimings(conversationsStore.activeMessages as DatabaseMessage[]);
+		const timings = this.assistantTimings.lastTimings;
 
 		let read = 0;
 
@@ -88,15 +132,13 @@ class ContextStatsStore {
 	});
 
 	currentFresh = $derived.by(() => {
-		const timings = lastAssistantTimings(conversationsStore.activeMessages as DatabaseMessage[]);
-		const fresh = timings?.prompt_n ?? 0;
+		const fresh = this.assistantTimings.lastTimings?.prompt_n ?? 0;
 
 		return Math.max(fresh, this.liveStats?.freshTokens ?? 0);
 	});
 
 	currentCache = $derived.by(() => {
-		const timings = lastAssistantTimings(conversationsStore.activeMessages as DatabaseMessage[]);
-		const cached = timings?.cache_n ?? 0;
+		const cached = this.assistantTimings.lastTimings?.cache_n ?? 0;
 
 		if (this.liveStats && this.liveStats.promptTokens > 0) {
 			return Math.max(cached, this.liveStats.cacheTokens);
@@ -108,9 +150,7 @@ class ContextStatsStore {
 	currentOutput = $derived.by(() => {
 		if (this.liveStats && this.liveStats.outputTokens > 0) return this.liveStats.outputTokens;
 
-		const timings = lastAssistantTimings(conversationsStore.activeMessages as DatabaseMessage[]);
-
-		return timings?.predicted_n ?? 0;
+		return this.assistantTimings.lastTimings?.predicted_n ?? 0;
 	});
 
 	kvTotal = $derived(this.currentRead + this.currentOutput);
@@ -128,7 +168,6 @@ class ContextStatsStore {
 	});
 
 	private cumulative = $derived.by(() => {
-		const messages = conversationsStore.activeMessages as DatabaseMessage[];
 		const convId = conversationsStore.activeConversation?.id;
 		// A running agentic flow stamps llm totals on messages only when it
 		// exits, so read its live session totals instead.
@@ -147,39 +186,24 @@ class ContextStatsStore {
 			};
 		}
 
+		const { cacheTotal, lastAgenticLlm, output, outputMs, read } = this.assistantTimings;
+
 		// Agentic sessions stamp the same agentic.llm totals onto every
 		// assistant message; cache_n is never per-turn so cache_total stays 0.
-		const agenticMessages = messages.filter(
-			(m) => m.role === MessageRole.ASSISTANT && m.timings?.agentic?.llm?.predicted_n != null
-		);
-
-		if (agenticMessages.length > 0) {
-			const llm = agenticMessages[agenticMessages.length - 1].timings!.agentic!.llm;
-			const output = llm.predicted_n ?? 0;
-			const outputMs = llm.predicted_ms ?? 0;
-			const averageTokensPerSecond = outputMs > 0 && output > 0 ? (output / outputMs) * 1000 : null;
+		if (lastAgenticLlm) {
+			const averageTokensPerSecond =
+				lastAgenticLlm.predicted_ms > 0 && lastAgenticLlm.predicted_n > 0
+					? (lastAgenticLlm.predicted_n / lastAgenticLlm.predicted_ms) * 1000
+					: null;
 
 			return {
 				averageTokensPerSecond,
 				cacheTotal: 0,
-				output,
-				read: llm.prompt_n ?? 0
+				output: lastAgenticLlm.predicted_n ?? 0,
+				read: lastAgenticLlm.prompt_n ?? 0
 			};
 		}
 
-		let read = 0;
-		let output = 0;
-		let outputMs = 0;
-		let cacheTotal = 0;
-
-		for (const m of messages) {
-			if (m.role !== MessageRole.ASSISTANT || !m.timings) continue;
-
-			read += m.timings.prompt_n ?? 0;
-			cacheTotal += m.timings.cache_n ?? 0;
-			output += m.timings.predicted_n ?? 0;
-			outputMs += m.timings.predicted_ms ?? 0;
-		}
 		const averageTokensPerSecond = outputMs > 0 && output > 0 ? (output / outputMs) * 1000 : null;
 
 		return { averageTokensPerSecond, cacheTotal, output, read };
