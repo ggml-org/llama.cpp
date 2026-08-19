@@ -1900,17 +1900,22 @@ static void ggml_compute_forward_concat_any(
     const ggml_tensor * src0 = dst->src[0];
     const ggml_tensor * src1 = dst->src[1];
 
-    const size_t len = ggml_type_size(src0->type);
     const int ith = params->ith;
     const int nth = params->nth;
 
     GGML_TENSOR_BINARY_OP_LOCALS
 
     const int32_t dim = ggml_get_op_params_i32(dst, 0);
+
     GGML_ASSERT(dim >= 0 && dim < 4);
 
     int64_t o[4] = {0, 0, 0, 0};
-    o[dim] = src0->ne[dim];
+
+    if (dim == 0) {
+        o[dim] = src0->ne[dim]/ggml_blck_size(src0->type);
+    } else {
+        o[dim] = src0->ne[dim];
+    }
 
     // Region 1: copy rows from src0
     for (int i3 = 0; i3 < ne03; i3++) {
@@ -1918,7 +1923,7 @@ static void ggml_compute_forward_concat_any(
             for (int i1 = 0; i1 < ne01; i1++) {
                 const char * x = (const char *) src0->data + i1*nb01 + i2*nb02 + i3*nb03;
                       char * y = (      char *) dst->data  + i1*nb1  + i2*nb2  + i3*nb3;
-                memcpy(y, x, ne00 * len);
+                memcpy(y, x, ggml_row_size(src0->type, ne00));
             }
         }
     }
@@ -1927,9 +1932,9 @@ static void ggml_compute_forward_concat_any(
     for (int i3 = 0; i3 < ne13; i3++) {
         for (int i2 = ith; i2 < ne12; i2 += nth) {
             for (int i1 = 0; i1 < ne11; i1++) {
-                const char * x = (const char *) src1->data + i1*nb11             + i2*nb12       + i3*nb13;
-                      char * y = (      char *) dst->data  + i1*nb1  + o[0]*nb0  + (i2+o[2])*nb2 + i3*nb3;
-                memcpy(y, x, ne10 * len);
+                const char * x = (const char *) src1->data + i1*nb11         + i2*nb12         + i3*nb13;
+                      char * y = (      char *)  dst->data + (i1 + o[1])*nb1 + (i2 + o[2])*nb2 + (i3 + o[3])*nb3 + o[0]*nb0;
+                memcpy(y, x, ggml_row_size(src1->type, ne10));
             }
         }
     }
