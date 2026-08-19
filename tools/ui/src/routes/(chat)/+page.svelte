@@ -77,7 +77,7 @@
 
 	onMount(async () => {
 		if (!conversationsStore.isInitialized) {
-			await conversationsStore.initialize();
+			await conversationsStore.init();
 		}
 
 		conversationsStore.clearActiveConversation();

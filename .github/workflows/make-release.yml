@@ -49,6 +49,33 @@ jobs:
           git push origin "${VERSION}"
           echo "Created and pushed tag ${VERSION}"
 
+      - name: Generate release description
+        id: desc
+        run: bash scripts/make-release-desc.sh "${{ steps.checks.outputs.version }}"
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+
+      - name: Create release
+        if: ${{ github.event.inputs.dry_run == 'false' }}
+        uses: ggml-org/action-create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        with:
+          tag_name: ${{ steps.checks.outputs.version }}
+          # TODO: remove the prerelease flag once the semantic versioning workflow is ready
+          # ref: https://github.com/ggml-org/ggml/discussions/1579
+          prerelease: true
+          body: |
+            > [!NOTE]
+            > Semantic versioning is still work in progress.
+            > More info can be found in https://github.com/ggml-org/ggml/discussions/1579
+
+            ${{ steps.desc.outputs.nightly }}
+
+            ## ${{ steps.desc.outputs.changelog_title }}
+
+            ${{ steps.desc.outputs.changelog }}
+
       - name: Dry run summary
         if: ${{ github.event.inputs.dry_run == 'true' }}
         run: |

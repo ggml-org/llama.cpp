@@ -58,7 +58,7 @@ export function usePwa() {
 		// PWA pages update via the service worker path; the storage check is the non-PWA fallback only
 		if (navigator.serviceWorker?.controller) return;
 
-		const currentVersion = versionStore.value;
+		const currentVersion = versionStore.frontend;
 
 		if (!currentVersion) return;
 

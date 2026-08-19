@@ -19,16 +19,16 @@
 	import { usePwa } from '$lib/hooks/use-pwa.svelte';
 	import { RouterService } from '$lib/services/router.service';
 	import {
-		buildInfoStore,
 		chatStore,
 		conversationsStore,
-		isMobile,
+		deviceStore,
 		mcpStore,
 		modelsStore,
 		serverStore,
 		settingsStore,
-		theme
+		versionStore
 	} from '$lib/stores';
+	import { initStores } from '$lib/stores/init';
 	import { ModeWatcher } from 'mode-watcher';
 	import { untrack } from 'svelte';
 	import { onMount } from 'svelte';
@@ -36,6 +36,10 @@
 	import { pwaAssetsHead } from 'virtual:pwa-assets/head';
 
 	let { children } = $props();
+
+	// migrations and store startup, ordered explicitly instead of import side effects
+	void initStores();
+
 	let innerHeight = $state<number | undefined>();
 	let innerWidth = $state(browser ? window.innerWidth : 0);
 
@@ -55,7 +59,7 @@
 	const { needRefresh, updateServiceWorker } = pwa;
 
 	function updateFavicon() {
-		const dark = theme.isSystemDark;
+		const dark = deviceStore.systemTheme.isDark;
 
 		let icoLink = document.querySelector(FAVICON_SELECTORS.ICO_48X48) as HTMLLinkElement | null;
 
@@ -153,7 +157,7 @@
 	}
 
 	$effect(() => {
-		void theme.isSystemDark;
+		void deviceStore.systemTheme.isDark;
 
 		updateFavicon();
 	});
@@ -274,7 +278,7 @@
 	<div class="flex flex-col md:flex-row">
 		<SidebarNavigation
 			onSearchClick={() => {
-				if (isMobile.current) {
+				if (deviceStore.isMobile) {
 					goto(ROUTES.SEARCH);
 				} else if (chatSidebar?.activateSearchMode) {
 					chatSidebar.activateSearchMode();
@@ -294,8 +298,8 @@
 
 <!-- PWA update prompt + version -->
 <div class="fixed right-4 bottom-4 z-9999 flex flex-col items-end gap-1">
-	{#if showBuildVersion && buildInfoStore.value}
-		<span class="text-[10px] tabular-nums text-muted-foreground">{buildInfoStore.value}</span>
+	{#if showBuildVersion && versionStore.build}
+		<span class="text-[10px] tabular-nums text-muted-foreground">{versionStore.build}</span>
 	{/if}
 
 	<PwaRefreshAlert

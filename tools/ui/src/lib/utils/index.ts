@@ -54,6 +54,7 @@ export { modelLoadFraction, modelLoadProgressText } from './progress';
 export {
 	createMessageCountMap,
 	getMessageCount,
+	getConversationModel,
 	buildConversationTree,
 	type ConversationTreeItem
 } from './conversation-utils';

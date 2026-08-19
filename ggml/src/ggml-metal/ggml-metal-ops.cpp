@@ -3884,6 +3884,11 @@ int ggml_metal_op_rope(ggml_metal_op_t ctx, int idx) {
     const int sect_2 = ((const int32_t *) op->op_params)[13];
     const int sect_3 = ((const int32_t *) op->op_params)[14];
 
+    const int n_offs = ((const int32_t *) op->op_params)[15];
+
+    // when dst aliases src0, the channels outside the rotated window already hold the correct data
+    const bool inplace = op->data == op->src[0]->data;
+
     ggml_metal_kargs_rope args = {
         /*.ne00        =*/ ne00,
         /*.ne01        =*/ ne01,
@@ -3903,6 +3908,7 @@ int ggml_metal_op_rope(ggml_metal_op_t ctx, int idx) {
         /*.nb3         =*/ nb3,
         /*.n_past      =*/ n_past,
         /*.n_dims      =*/ n_dims,
+        /*.n_offs      =*/ n_offs,
         /*.n_ctx_orig  =*/ n_ctx_orig,
         /*.freq_base   =*/ freq_base,
         /*.freq_scale  =*/ freq_scale,
@@ -3915,6 +3921,7 @@ int ggml_metal_op_rope(ggml_metal_op_t ctx, int idx) {
         /* sect_2      =*/ sect_2,
         /* sect_3      =*/ sect_3,
         /* src2        =*/ op->src[2] != nullptr,
+        /* inplace     =*/ inplace,
     };
 
     auto pipeline = ggml_metal_library_get_pipeline_rope(lib, op);

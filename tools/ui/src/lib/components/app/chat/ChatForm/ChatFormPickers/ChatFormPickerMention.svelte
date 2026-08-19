@@ -8,7 +8,7 @@
 	import { BuiltInTool, FileMentionEntryType, GlobSearchType, KeyboardKey } from '$lib/enums';
 	import { useDebouncedSearch } from '$lib/hooks/use-debounced-search.svelte';
 	import { usePickerNavigation } from '$lib/hooks/use-picker-navigation.svelte';
-	import { isMobile, settingsStore, toolsStore } from '$lib/stores';
+	import { deviceStore, settingsStore, toolsStore } from '$lib/stores';
 	import type { FileMentionEntry, GlobEntryResult } from '$lib/types';
 	import { abbreviateHome, runGlobSearchWithChildren } from '$lib/utils';
 
@@ -130,7 +130,7 @@
 		return searchError ? `Search failed - ${searchError}` : 'No matching files or folders';
 	});
 
-	const showTooltip = $derived(!isMobile.current);
+	const showTooltip = $derived(!deviceStore.isMobile);
 
 	$effect(() => {
 		if (typeof window === 'undefined') return;
