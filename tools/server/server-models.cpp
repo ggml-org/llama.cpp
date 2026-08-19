@@ -555,6 +555,40 @@ void server_models::load_models() {
         return source_map.count(name) ? source_map.at(name) : SERVER_MODEL_SOURCE_PRESET;
     };
 
+    // hide cache models whose resolved file is already used by a preset with dedup-cache-models enabled
+    std::set<std::string> hidden_models;
+    {
+        std::set<std::string> preset_paths;
+        for (const auto & [name, preset] : custom_presets) {
+            std::string val;
+            if (!preset.get_option(COMMON_ARG_PRESET_DEDUP_CACHE_MODELS, val) || !common_arg_utils::is_truthy(val)) {
+                continue;
+            }
+            std::string hf_repo;
+            if (!preset.get_option("LLAMA_ARG_HF_REPO", hf_repo) || hf_repo.empty()) {
+                continue;
+            }
+            std::string hf_file;
+            preset.get_option("LLAMA_ARG_HF_FILE", hf_file);
+            std::string path = common_download_resolve_path(hf_repo, hf_file);
+            if (!path.empty()) {
+                preset_paths.insert(path);
+            }
+        }
+        if (!preset_paths.empty()) {
+            for (const auto & [name, preset] : cached_models) {
+                if (get_source(name) != SERVER_MODEL_SOURCE_CACHE) {
+                    continue; // merged with another source, not a pure cache entry
+                }
+                std::string path = common_download_resolve_path(name);
+                if (!path.empty() && preset_paths.count(path)) {
+                    SRV_INF("hiding cache model name=%s (deduplicated by a preset)\n", name.c_str());
+                    hidden_models.insert(name);
+                }
+            }
+        }
+    }
+
     // Helpers that read `mapping` - must be called while holding the lock.
     std::unordered_set<std::string> custom_names;
     for (const auto & [name, preset] : custom_presets) custom_names.insert(name);
@@ -588,6 +622,11 @@ void server_models::load_models() {
                     inst.meta.stop_timeout = DEFAULT_STOP_TIMEOUT;
                 }
             }
+        }
+    };
+    auto apply_hidden = [&]() {
+        for (auto & [name, inst] : mapping) {
+            inst.meta.hidden = hidden_models.count(name) > 0;
         }
     };
     // update_args() injects HOST/PORT/ALIAS, so strip them before comparing presets
@@ -630,6 +669,7 @@ void server_models::load_models() {
             add_model(std::move(meta));
         }
         apply_stop_timeout();
+        apply_hidden();
         log_available_models();
 
         std::vector<std::string> models_to_load;
@@ -806,6 +846,7 @@ void server_models::load_models() {
         }
 
         apply_stop_timeout();
+        apply_hidden();
 
         // clear reload flag before unlocking for autoload - load() blocks on !is_reloading,
         // so clearing it here (while still locked) prevents a deadlock in the autoload calls below
@@ -1929,6 +1970,9 @@ void server_models_routes::init_routes() {
         auto all_models = models.get_all_meta();
         std::time_t t = std::time(0);
         for (const auto & meta : all_models) {
+            if (meta.hidden) {
+                continue; // cache model deduplicated by a preset
+            }
             json status {
                 {"value",  server_model_status_to_string(meta.status)},
                 {"args",   meta.args},
