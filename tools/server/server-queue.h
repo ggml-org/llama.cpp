@@ -86,6 +86,7 @@ public:
      *
      * Sleeping procedure (disabled if idle_sleep_ms < 0):
      * - If there is no task after idle_sleep_ms, enter sleeping state
+     *   note: metrics tasks are processed as usual, but do not reset the idle timer
      * - Call callback_sleeping_state(true)
      * - Wait until req_stop_sleeping is set to true
      * - Call callback_sleeping_state(false)
