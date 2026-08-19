@@ -214,6 +214,8 @@ export interface FileMentionEntry {
  * MCP server exposes prompts): visible but greyed out and not selectable.
  */
 export interface ChatCommandsOptions {
+	/** Gates `/compact`. */
+	canCompact: () => boolean;
 	/** Gates `/model`. */
 	showModelSelector: boolean;
 	/** Gates `/prompt`. */

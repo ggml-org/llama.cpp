@@ -9,7 +9,12 @@
  * Uses ChatService for the API layer and conversationsStore for persistence.
  */
 
-import { CWD_CLEARED_TEXT, SYSTEM_MESSAGE_PLACEHOLDER, TITLE_GENERATION } from '$lib/constants';
+import {
+	COMPACTION,
+	CWD_CLEARED_TEXT,
+	SYSTEM_MESSAGE_PLACEHOLDER,
+	TITLE_GENERATION
+} from '$lib/constants';
 import {
 	ErrorDialogType,
 	MessageRole,
@@ -41,11 +46,13 @@ import type {
 	ErrorDialogState
 } from '$lib/types';
 import {
+	canCompactMessages,
 	findMessageById,
 	formatCwdMessage,
 	getConversationModel,
 	isAbortError,
-	normalizeModelName
+	normalizeModelName,
+	sliceAtLastCompaction
 } from '$lib/utils';
 import { SvelteMap } from 'svelte/reactivity';
 
@@ -275,6 +282,114 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 	/** Reset per-view state when (re)mounting the empty chat screen. */
 	clearUIState(): void {
 		this.currentResponse = '';
+	}
+
+	/**
+	 * Compacts the active branch: the model summarizes every turn since the
+	 * last compaction boundary and the summary is stored in a new compaction
+	 * node appended to the branch. Later requests slice the branch at that
+	 * node, so the full history stays visible and navigable while the model
+	 * context restarts from the summary.
+	 */
+	async compactConversation(): Promise<void> {
+		const activeConv = conversationsStore.activeConversation;
+
+		if (!activeConv) return;
+
+		const convId = activeConv.id;
+
+		if (this.isChatLoadingInternal(convId) || agenticStore.isRunning(convId)) return;
+
+		const source = sliceAtLastCompaction(conversationsStore.activeMessages);
+
+		if (!canCompactMessages(source)) return;
+
+		this.showErrorDialog(null);
+		this.setChatLoading(convId, true);
+		const node = await this.addMessage(
+			MessageRole.USER,
+			'',
+			MessageType.COMPACTION,
+			'-1',
+			undefined,
+			true
+		);
+		const rollbackNode = async () => {
+			const idx = conversationsStore.findMessageIndex(node.id);
+
+			if (idx >= 0) conversationsStore.removeMessageAtIndex(idx);
+
+			await DatabaseService.deleteMessage(node.id);
+
+			if (node.parent) await conversationsStore.updateCurrentNode(node.parent);
+		};
+		const abortController = this.getOrCreateAbortController(convId);
+
+		let summary = '';
+
+		try {
+			const apiMessages: ApiChatMessageData[] = await Promise.all(
+				source.map((m) => ChatService.convertDbMessageToApiChatMessageData(m))
+			);
+			const configValue = settingsStore.config;
+			const compactionPrompt =
+				typeof configValue.compactionPrompt === 'string' && configValue.compactionPrompt.trim()
+					? configValue.compactionPrompt
+					: COMPACTION.DEFAULT_PROMPT;
+
+			apiMessages.push({ content: compactionPrompt, role: MessageRole.USER });
+			const effectiveModel =
+				serverStore.isRouterMode && modelsStore.selectedModelName
+					? modelsStore.selectedModelName
+					: undefined;
+
+			await ChatService.sendMessage(
+				apiMessages,
+				{
+					custom: { chat_template_kwargs: { enable_thinking: false } },
+					model: effectiveModel,
+					onChunk: (chunk: string) => {
+						summary += chunk;
+
+						if (conversationsStore.activeConversation?.id === convId) {
+							const idx = conversationsStore.findMessageIndex(node.id);
+
+							if (idx >= 0) conversationsStore.updateMessageAtIndex(idx, { content: summary });
+						}
+					},
+					stream: true
+				},
+				// The summary request is a one-shot outside the SSE replay
+				// machinery: a reload must never reattach it as a chat turn.
+				undefined,
+				abortController.signal
+			);
+
+			if (!summary.trim()) {
+				await rollbackNode();
+
+				return;
+			}
+
+			await DatabaseService.updateMessage(node.id, { content: summary });
+		} catch (error) {
+			await rollbackNode();
+
+			if (!isAbortError(error)) {
+				console.error('Failed to compact conversation:', error);
+				this.showErrorDialog({
+					message: error instanceof Error ? error.message : 'Unknown error',
+					type: ErrorDialogType.SERVER
+				});
+			}
+		} finally {
+			this.abortControllers.delete(convId);
+			this.setChatLoading(convId, false);
+		}
+
+		const pending = this.consumePendingMessage(convId);
+
+		if (pending) await this.sendMessage(pending.content, pending.extras);
 	}
 
 	consumePendingDraft(): { message: string; files: ChatUploadedFile[] } | null {
@@ -829,6 +944,11 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 			if (!modelsStore.props.getModelProps(effectiveModel))
 				await modelsStore.props.fetchModelProps(effectiveModel);
 		}
+
+		// Every request path funnels through here, so the compaction boundary
+		// applied once covers the plain send, the agentic flow, and the
+		// pre-encode that reuses this list from the closure.
+		allMessages = sliceAtLastCompaction(allMessages);
 
 		// Mutable state for the current message being streamed
 		let currentMessageId = assistantMessage.id;
