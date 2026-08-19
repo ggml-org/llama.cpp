@@ -105,10 +105,9 @@ void llama_model_granite_swa::load_arch_tensors(llama_model_loader &) {
             layer.ffn_down_exps = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), {  n_ff, n_embd, n_expert}, 0);
             create_tensor_gate_up_exps(layer, i, n_embd, n_ff, n_expert, 0);
 
-            // For Granite MoE Shared
+            // For Granite MoE Shared - gate+up kept fused in ffn_up_shexp (see LLM_FFN_SWIGLU below)
             if (hparams.n_ff_shexp > 0) {
-                layer.ffn_gate_shexp = create_tensor(tn(LLM_TENSOR_FFN_GATE_SHEXP, "weight", i), {n_embd, hparams.n_ff_shexp}, 0);
-                layer.ffn_up_shexp   = create_tensor(tn(LLM_TENSOR_FFN_UP_SHEXP,   "weight", i), {n_embd, hparams.n_ff_shexp}, 0);
+                layer.ffn_up_shexp   = create_tensor(tn(LLM_TENSOR_FFN_UP_SHEXP,   "weight", i), {n_embd, 2*hparams.n_ff_shexp}, 0);
                 layer.ffn_down_shexp = create_tensor(tn(LLM_TENSOR_FFN_DOWN_SHEXP, "weight", i), {hparams.n_ff_shexp, n_embd}, 0);
             }
         }
@@ -289,14 +288,14 @@ ggml_tensor * llama_model_granite_swa::graph::build_layer_ffn(
                 nullptr, model.layers[il].ffn_gate_up_exps);
         cb(moe_out, "ffn_moe_out", il);
 
-        // For Granite MoE Shared
+        // For Granite MoE Shared - gate+up kept fused in ffn_up_shexp
         if (hparams.n_ff_shexp > 0) {
             ggml_tensor * ffn_shexp = build_ffn(cur,
                 model.layers[il].ffn_up_shexp,   NULL, NULL,
-                model.layers[il].ffn_gate_shexp, NULL, NULL,
+                NULL,                            NULL, NULL,
                 model.layers[il].ffn_down_shexp, NULL, NULL,
                 NULL,
-                LLM_FFN_SILU, LLM_FFN_PAR, il);
+                LLM_FFN_SWIGLU, LLM_FFN_SEQ, il);
             cb(ffn_shexp, "ffn_shexp", il);
 
             cur = ggml_add(ctx0, moe_out, ffn_shexp);

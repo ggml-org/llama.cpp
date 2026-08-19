@@ -158,13 +158,13 @@ class GraniteMoeSWAModel(GraniteSWAModel):
             yield from ModelBase.modify_tensors(self, data_torch, self.format_tensor_name(gguf.MODEL_TENSOR.FFN_GATE_UP_EXP, bid), bid)
             return
 
-        # Handle shared expert FFN tensors (if present)
+        # Handle shared expert FFN tensors (if present) - kept fused since
+        # inference (build_ffn) supports a single ffn_up_shexp tensor with
+        # LLM_FFN_SWIGLU for the shared expert.
         if name.endswith("shared_mlp.input_linear.weight"):
             ffn_dim = self.hparams.get("shared_intermediate_size", self.hparams["intermediate_size"])
             assert data_torch.shape[-2] == 2 * ffn_dim, "Merged FFN tensor size must be 2 * shared_intermediate_size"
-            gate, up = data_torch.split(ffn_dim, dim=-2)
-            yield from ModelBase.modify_tensors(self, gate, self.format_tensor_name(gguf.MODEL_TENSOR.FFN_GATE_SHEXP, bid), bid)
-            yield from ModelBase.modify_tensors(self, up, self.format_tensor_name(gguf.MODEL_TENSOR.FFN_UP_SHEXP, bid), bid)
+            yield from ModelBase.modify_tensors(self, data_torch, self.format_tensor_name(gguf.MODEL_TENSOR.FFN_UP_SHEXP, bid), bid)
             return
 
         # Handle shared expert output (if present)
