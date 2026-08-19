@@ -136,6 +136,9 @@ private:
     // if true, the next get_meta() will trigger a reload of model list
     bool need_reload = false;
 
+    // models marked with load-on-startup
+    std::vector<std::string> startup_models;
+
     // conv_id -> model name that currently serves its stream session, lets the resumable stream
     // routes go straight to the owning child instead of polling every one. populated when
     // proxy_request forwards a POST carrying an X-Conversation-Id. best effort: a stale entry just
@@ -230,6 +233,9 @@ public:
     //   - if a model is running but updated or removed from the source, it will be unloaded
     //   - if a model is not running, it will be added or updated according to the source
     void load_models();
+
+    // lazy-load startup_models, to be called after main() setup phase
+    void load_startup_models();
 
     // check if a model instance exists (thread-safe)
     bool has_model(const std::string & name);

@@ -685,11 +685,10 @@ void server_models::load_models() {
                 models_to_load.size(), base_params.models_max));
         }
 
+        // to be lazy-loaded after main() setup phase is completed
+        startup_models = std::move(models_to_load);
+
         lk.unlock();
-        for (const auto & name : models_to_load) {
-            SRV_INF("(startup) loading model %s\n", name.c_str());
-            load(name);
-        }
     } else {
         // RELOAD: diff the new preset list against the current mapping and reconcile
         is_reloading = true;
@@ -874,6 +873,19 @@ void server_models::load_models() {
         }
 
         notify_sse("models_reload", "*");
+    }
+}
+
+void server_models::load_startup_models() {
+    std::vector<std::string> to_load;
+    {
+        std::lock_guard<std::mutex> lk(mutex);
+        to_load = std::move(startup_models);
+        startup_models.clear();
+    }
+    for (const auto & name : to_load) {
+        SRV_INF("(startup) loading model %s\n", name.c_str());
+        load(name);
     }
 }
 
