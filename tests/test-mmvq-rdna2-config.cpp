@@ -112,6 +112,16 @@ void test_w8_rows2_validated_shapes() {
                 rows2_input(ggml_cuda_mmvq_rdna2_type::q6_k, shape.k, shape.n)),
                 "validated Q6_K width-eight shape rejected");
     }
+
+    const rows2_shape mxfp4_shapes[] = {
+        { 5120, 256 }, { 5120, 3072 }, { 5120, 4352 },
+        { 1536, 5120 }, { 4352, 5120 },
+    };
+    for (const auto & shape : mxfp4_shapes) {
+        check(ggml_cuda_mmvq_use_rdna2_w8_rows2(
+                rows2_input(ggml_cuda_mmvq_rdna2_type::mxfp4, shape.k, shape.n)),
+                "validated MXFP4 width-eight shape rejected");
+    }
 }
 
 void test_w8_rows2_fallback_guards() {
@@ -151,6 +161,10 @@ void test_w8_rows2_fallback_guards() {
 
     input = rows2_input(ggml_cuda_mmvq_rdna2_type::q8_0, 5120, 5120);
     check(!ggml_cuda_mmvq_use_rdna2_w8_rows2(input), "unvalidated quantization type accepted");
+
+    input = rows2_input(ggml_cuda_mmvq_rdna2_type::mxfp4, 5120, 4352);
+    input.nrows_x = 12288;
+    check(!ggml_cuda_mmvq_use_rdna2_w8_rows2(input), "unvalidated MXFP4 output shape accepted");
 }
 
 } // namespace

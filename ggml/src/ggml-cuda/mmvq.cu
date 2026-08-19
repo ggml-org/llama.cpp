@@ -1281,6 +1281,7 @@ static void mul_mat_vec_q_switch_ncols_dst(
                 type == GGML_TYPE_Q4_0 ? ggml_cuda_mmvq_rdna2_type::q4_0 :
                 type == GGML_TYPE_Q4_K ? ggml_cuda_mmvq_rdna2_type::q4_k :
                 type == GGML_TYPE_Q6_K ? ggml_cuda_mmvq_rdna2_type::q6_k :
+                type == GGML_TYPE_MXFP4 ? ggml_cuda_mmvq_rdna2_type::mxfp4 :
                                          ggml_cuda_mmvq_rdna2_type::other;
             const ggml_cuda_mmvq_rdna2_w8_rows2_input rows2_input = {
                 policy_type,

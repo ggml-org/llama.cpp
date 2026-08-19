@@ -7,6 +7,7 @@ enum class ggml_cuda_mmvq_rdna2_type {
     q4_0,
     q4_k,
     q6_k,
+    mxfp4,
     q8_0,
 };
 
@@ -58,6 +59,11 @@ inline bool ggml_cuda_mmvq_use_rdna2_w8_rows2(const ggml_cuda_mmvq_rdna2_w8_rows
             return (input.ncols_x == 5120 &&
                        (input.nrows_x == 1024 || input.nrows_x == 248320)) ||
                    (input.ncols_x == 17408 && input.nrows_x == 5120);
+        case ggml_cuda_mmvq_rdna2_type::mxfp4:
+            return (input.ncols_x == 5120 &&
+                       (input.nrows_x == 256 || input.nrows_x == 3072 || input.nrows_x == 4352)) ||
+                   (input.nrows_x == 5120 &&
+                       (input.ncols_x == 1536 || input.ncols_x == 4352));
         default:
             return false;
     }
