@@ -1037,6 +1037,27 @@ static __device__ __forceinline__ float ggml_cuda_ue4m3_to_fp32(uint8_t x) {
 #endif // defined(GGML_USE_HIP) && defined(CDNA3) && defined(FP8_AVAILABLE) && HIP_VERSION >= 60200000
 }
 
+// Bit-exact software decode for the RDNA2 NVFP4 MMVQ path. UE4M3's
+// normal values map directly onto an FP32 exponent/mantissa field, while its
+// seven subnormal values are exact integer multiples of 2^-10. Keeping the
+// subnormal multiply explicit avoids the much more expensive v_ldexp_f32
+// sequence emitted for the generic implementation on gfx1030.
+static __device__ __forceinline__ float ggml_cuda_ue4m3_to_fp32_rdna2_exact(uint8_t x) {
+    const uint32_t code = x & 0x7FU;
+
+    if (code < 8) {
+        return float(code) * 0x1.0p-10f;
+    }
+    if (x == 0x7F) { // Preserve the generic software decoder's NaN handling.
+        return 0.0f;
+    }
+
+    const uint32_t bits = 0x3B800000U + (code << 20);
+    float result;
+    memcpy(&result, &bits, sizeof(float));
+    return result;
+}
+
 static __device__ __forceinline__ uint8_t ggml_cuda_fp32_to_ue4m3(float x) {
 #if defined(BLACKWELL_MMA_AVAILABLE) // This is used for NVFP4 subblock scale quantizations only
     if (!(x > 0.0f)) {

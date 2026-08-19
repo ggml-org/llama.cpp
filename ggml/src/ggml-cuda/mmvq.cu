@@ -40,7 +40,7 @@ static constexpr __host__ __device__ bool mmvq_uses_q8_1_layout() {
 template <ggml_type type, int q8_1_layout_block_size>
 static constexpr __host__ __device__ bool mmvq_type_supports_q8_1_layout();
 
-template <bool use_q4_0_dot8>
+template <bool use_gfx1030_native>
 static constexpr __device__ vec_dot_q_cuda_t get_vec_dot_q_cuda(ggml_type type) {
     switch (type) {
         case GGML_TYPE_Q1_0:    return vec_dot_q1_0_q8_1;
@@ -51,7 +51,11 @@ static constexpr __device__ vec_dot_q_cuda_t get_vec_dot_q_cuda(ggml_type type) 
         case GGML_TYPE_Q5_1:    return vec_dot_q5_1_q8_1;
         case GGML_TYPE_Q8_0:    return vec_dot_q8_0_q8_1;
         case GGML_TYPE_MXFP4:   return vec_dot_mxfp4_q8_1;
-        case GGML_TYPE_NVFP4:   return vec_dot_nvfp4_q8_1;
+        case GGML_TYPE_NVFP4:
+            if constexpr (use_gfx1030_native) {
+                return vec_dot_nvfp4_q8_1_rdna2;
+            }
+            return vec_dot_nvfp4_q8_1;
         case GGML_TYPE_Q2_K:    return vec_dot_q2_K_q8_1;
         case GGML_TYPE_Q3_K:    return vec_dot_q3_K_q8_1;
         case GGML_TYPE_Q4_K:    return vec_dot_q4_K_q8_1;
@@ -1524,6 +1528,23 @@ static bool mmvq_use_gfx1030_native() {
     return mmvq_use_gfx1030_native(ggml_cuda_info().devices[device].cc);
 }
 
+static bool mmvq_use_gfx1030_native_for_type(ggml_type type) {
+    const bool gfx1030_native = mmvq_use_gfx1030_native();
+    if (type != GGML_TYPE_NVFP4) {
+        return gfx1030_native;
+    }
+
+#if defined(GGML_USE_HIP)
+    return ggml_cuda_mmvq_use_rdna2_nvfp4_scale_decode({
+        gfx1030_native,
+        true,
+        ggml_cuda_rdna2_feature_enabled("GGML_HIP_GFX1030_NVFP4_FAST_SCALE"),
+    });
+#else
+    return false;
+#endif
+}
+
 static bool mmvq_use_gfx1030_q8_cache() {
 #if defined(GGML_USE_HIP)
     return ggml_cuda_rdna2_feature_enabled("GGML_HIP_GFX1030_Q8_CACHE") &&
@@ -1630,8 +1651,14 @@ void ggml_cuda_mul_mat_vec_q(
     const int64_t nchannels_dst = ids ? ne1  : ne2;
     const int q8_1_layout_block_size = mmvq_select_q8_1_layout_block_size(src0->type, ncols_dst);
     const bool use_q8_1_layout = q8_1_layout_block_size != MMVQ_Q8_1_BLOCK_SIZE_STANDARD;
-    const bool use_gfx1030_native = mmvq_use_gfx1030_native();
+    const bool use_gfx1030_native = mmvq_use_gfx1030_native_for_type(src0->type);
     const bool use_q4_0_dot8 = use_gfx1030_native && src0->type == GGML_TYPE_Q4_0 && ncols_dst == 1;
+    if (use_gfx1030_native && src0->type == GGML_TYPE_NVFP4) {
+        static std::atomic<bool> logged{false};
+        if (!logged.exchange(true, std::memory_order_relaxed)) {
+            std::fprintf(stderr, "using RDNA2 bit-exact NVFP4 UE4M3 scale decode\n");
+        }
+    }
     GGML_ASSERT(!use_q4_0_dot8 || !use_q8_1_layout);
     const int64_t nblocks_src1_q8_1 = ne13*ne12 * ne11*ne10_padded / QK8_1;
     const size_t nbytes_src1_q8_1 = nblocks_src1_q8_1 * sizeof(block_q8_1);
@@ -1745,7 +1772,7 @@ void ggml_cuda_op_mul_mat_vec_q(
     const int stride_col_y = src1_padded_row_size / QK8_1;
 
     ggml_cuda_mm_fusion_args_device fusion_local{};
-    if (mmvq_use_gfx1030_native()) {
+    if (mmvq_use_gfx1030_native_for_type(src0->type)) {
         mul_mat_vec_q_switch_type<false, true>(
             src0_dd_i, src0->type, src1_ddq_i, nullptr, nullptr, fusion_local, dst_dd_i, ne00, row_diff, src1_ncols, stride_row_x, stride_col_y, nrows_dst,
             1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, stream);

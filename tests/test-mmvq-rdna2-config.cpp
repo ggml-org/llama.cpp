@@ -65,6 +65,24 @@ void test_type_guard() {
     check(!ggml_cuda_mmvq_use_rdna2_q8_w8(input), "non-Q8_0 type accepted");
 }
 
+void test_nvfp4_scale_decode_policy() {
+    ggml_cuda_mmvq_rdna2_nvfp4_scale_input input = { true, true, true };
+    check(ggml_cuda_mmvq_use_rdna2_nvfp4_scale_decode(input),
+            "enabled gfx1030 NVFP4 scale decoder rejected");
+
+    input.gfx1030_native = false;
+    check(!ggml_cuda_mmvq_use_rdna2_nvfp4_scale_decode(input),
+            "NVFP4 scale decoder accepted an unknown device or disabled RDNA2 profile");
+
+    input = { true, false, true };
+    check(!ggml_cuda_mmvq_use_rdna2_nvfp4_scale_decode(input),
+            "NVFP4 scale decoder accepted another quantization type");
+
+    input = { true, true, false };
+    check(!ggml_cuda_mmvq_use_rdna2_nvfp4_scale_decode(input),
+            "explicitly disabled NVFP4 scale decoder accepted");
+}
+
 struct rows2_shape {
     int64_t k;
     int64_t n;
@@ -162,6 +180,9 @@ void test_w8_rows2_fallback_guards() {
     input = rows2_input(ggml_cuda_mmvq_rdna2_type::q8_0, 5120, 5120);
     check(!ggml_cuda_mmvq_use_rdna2_w8_rows2(input), "unvalidated quantization type accepted");
 
+    input = rows2_input(ggml_cuda_mmvq_rdna2_type::other, 5120, 17408);
+    check(!ggml_cuda_mmvq_use_rdna2_w8_rows2(input), "NVFP4-like shape aliased to another rows2 policy");
+
     input = rows2_input(ggml_cuda_mmvq_rdna2_type::mxfp4, 5120, 4352);
     input.nrows_x = 12288;
     check(!ggml_cuda_mmvq_use_rdna2_w8_rows2(input), "unvalidated MXFP4 output shape accepted");
@@ -174,6 +195,7 @@ int main() {
     test_shape_guards();
     test_layout_and_routing_guards();
     test_type_guard();
+    test_nvfp4_scale_decode_policy();
     test_w8_rows2_validated_shapes();
     test_w8_rows2_fallback_guards();
     std::puts("RDNA2 MMVQ policy tests: PASS");

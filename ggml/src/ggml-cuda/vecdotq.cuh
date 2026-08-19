@@ -364,7 +364,8 @@ static __device__ __forceinline__ float vec_dot_mxfp4_q8_1(
 #define VDR_NVFP4_Q8_1_MMVQ 4
 #define VDR_NVFP4_Q8_1_MMQ  8
 
-static __device__ __forceinline__ float vec_dot_nvfp4_q8_1(
+template <bool use_rdna2_scale_decode>
+static __device__ __forceinline__ float vec_dot_nvfp4_q8_1_impl(
                                         const void * __restrict__ vbq,
                                         const block_q8_1 * __restrict__ bq8_1,
                                         const int32_t & kbx,
@@ -387,11 +388,26 @@ static __device__ __forceinline__ float vec_dot_nvfp4_q8_1(
         sumi = ggml_cuda_dp4a(v1.x, get_int_b4(bq8->qs, i8 + 1), sumi);
         sumi = ggml_cuda_dp4a(v1.y, get_int_b4(bq8->qs, i8 + 3), sumi);
 
-        const float d = ggml_cuda_ue4m3_to_fp32(bq4->d[is]) * __low2float(bq8->ds);
+        const float scale = use_rdna2_scale_decode
+            ? ggml_cuda_ue4m3_to_fp32_rdna2_exact(bq4->d[is])
+            : ggml_cuda_ue4m3_to_fp32(bq4->d[is]);
+        const float d = scale * __low2float(bq8->ds);
         sum += d * float(sumi);
     }
 
     return sum;
+}
+
+static __device__ __forceinline__ float vec_dot_nvfp4_q8_1(
+        const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1,
+        const int32_t & kbx, const int32_t & iqs) {
+    return vec_dot_nvfp4_q8_1_impl<false>(vbq, bq8_1, kbx, iqs);
+}
+
+static __device__ __forceinline__ float vec_dot_nvfp4_q8_1_rdna2(
+        const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1,
+        const int32_t & kbx, const int32_t & iqs) {
+    return vec_dot_nvfp4_q8_1_impl<true>(vbq, bq8_1, kbx, iqs);
 }
 #define VDR_Q2_K_Q8_1_MMVQ 1
 #define VDR_Q2_K_Q8_1_MMQ  4

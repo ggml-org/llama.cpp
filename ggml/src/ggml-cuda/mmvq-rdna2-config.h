@@ -11,6 +11,17 @@ enum class ggml_cuda_mmvq_rdna2_type {
     q8_0,
 };
 
+struct ggml_cuda_mmvq_rdna2_nvfp4_scale_input {
+    bool gfx1030_native;
+    bool is_nvfp4;
+    bool feature_enabled;
+};
+
+inline bool ggml_cuda_mmvq_use_rdna2_nvfp4_scale_decode(
+        const ggml_cuda_mmvq_rdna2_nvfp4_scale_input & input) {
+    return input.gfx1030_native && input.is_nvfp4 && input.feature_enabled;
+}
+
 struct ggml_cuda_mmvq_rdna2_q8_w8_input {
     ggml_cuda_mmvq_rdna2_type type;
     bool has_ids;
