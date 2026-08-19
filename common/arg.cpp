@@ -312,6 +312,7 @@ const std::vector<ggml_type> kv_cache_types = {
     GGML_TYPE_IQ4_NL,
     GGML_TYPE_Q5_0,
     GGML_TYPE_Q5_1,
+    GGML_TYPE_Q3_K,   // q3 KV (per-channel/asym K-quant, ~3.4 bit) - VRAM taupymui
 };
 
 static ggml_type kv_cache_type_from_str(const std::string & s) {

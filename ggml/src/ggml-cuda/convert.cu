@@ -282,6 +282,39 @@ static void dequantize_row_q3_K_cuda(const void * vx, dst_t * y, const int64_t k
     dequantize_block_q3_K<<<nb, 64, 0, stream>>>(vx, y);
 }
 
+// q3_K non-contiguous dequant (KV cache view): super-block'ai contiguous eilutej, row-stride s0x (block-units)
+template<typename dst_t>
+static __global__ void dequantize_block_q3_K_nc(
+        const void * __restrict__ vx, dst_t * __restrict__ y,
+        const int64_t ne00, const int64_t ne01, const int64_t ne02, const int64_t ne0203,
+        const int64_t s01, const int64_t s02, const int64_t s03) {
+    const int64_t nblk_row = ne00 / QK_K;
+    const int64_t cb = blockIdx.x;
+    if (cb >= nblk_row) return;
+    for (int64_t i0203 = blockIdx.z; i0203 < ne0203; i0203 += gridDim.z) {
+        const int64_t i02 = i0203 % ne02;
+        const int64_t i03 = i0203 / ne02;
+        for (int64_t i01 = blockIdx.y; i01 < ne01; i01 += gridDim.y) {
+            const int64_t src_ib  = i03*s03 + i02*s02 + i01*s01 + cb;   // block index (ts-units)
+            const int64_t dst_off = (i0203*ne01 + i01)*ne00 + cb*QK_K;  // contiguous f16 offset
+            dequantize_q3_K(vx, src_ib, y + dst_off, threadIdx.x);
+        }
+    }
+}
+
+template<typename dst_t>
+static void dequantize_row_q3_K_nc_cuda(
+        const void * vx, dst_t * y,
+        const int64_t ne00, const int64_t ne01, const int64_t ne02, const int64_t ne03,
+        const int64_t s01, const int64_t s02, const int64_t s03, cudaStream_t stream) {
+    const int64_t ne0203 = ne02*ne03;
+    const int64_t nblk_row = ne00 / QK_K;
+    const dim3 grid((unsigned) nblk_row,
+                    (unsigned) std::min(ne01,   (int64_t) 65535),
+                    (unsigned) std::min(ne0203, (int64_t) 65535));
+    dequantize_block_q3_K_nc<<<grid, 64, 0, stream>>>(vx, y, ne00, ne01, ne02, ne0203, s01, s02, s03);
+}
+
 template<typename dst_t>
 static void dequantize_row_q4_0_cuda(const void * vx, dst_t * y, const int64_t k, cudaStream_t stream) {
     const int nb32 = k / 32;
@@ -647,6 +680,8 @@ to_fp16_nc_cuda_t ggml_get_to_fp16_nc_cuda(ggml_type type) {
             return dequantize_block_cuda<QK5_1, QR5_1, dequantize_q5_1>;
         case GGML_TYPE_Q8_0:
             return dequantize_block_cuda<QK8_0, QR8_0, dequantize_q8_0>;
+        case GGML_TYPE_Q3_K:
+            return dequantize_row_q3_K_nc_cuda;
         case GGML_TYPE_BF16:
             return convert_unary_cuda<nv_bfloat16>;
         default:
