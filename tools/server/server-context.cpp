@@ -4441,10 +4441,10 @@ server_routes::server_routes(const common_params & params, server_context & ctx_
     });
 }
 
-static json get_res_models(const server_context_meta & meta) {
+static json get_res_model_info(const server_context_meta & meta) {
     // note: do NOT use ctx_server here, otherwise it's not possible to use this during sleep
 
-    json model_info = {
+    return {
         {"id",       meta.model_name},
         {"aliases",  meta.model_aliases},
         {"tags",     meta.model_tags},
@@ -4462,6 +4462,10 @@ static json get_res_models(const server_context_meta & meta) {
             {"ftype",       meta.model_ftype},
         }},
     };
+}
+
+static json get_res_models(const server_context_meta & meta) {
+    // note: do NOT use ctx_server here, otherwise it's not possible to use this during sleep
 
     return {
         {"models", {
@@ -4488,7 +4492,7 @@ static json get_res_models(const server_context_meta & meta) {
         }},
         {"object", "list"},
         {"data", {
-            model_info,
+            get_res_model_info(meta),
         }}
     };
 }
@@ -4541,7 +4545,7 @@ static json get_res_props(const server_context_meta & meta, const common_params 
 }
 
 json server_routes::get_model_info() const {
-    return get_res_models(*meta).at("data");
+    return get_res_model_info(*meta);
 }
 
 void server_routes::init_routes() {
