@@ -32,7 +32,8 @@ import {
 	findDescendantMessages,
 	findLeafNode,
 	findMessageById,
-	isAbortError
+	isAbortError,
+	sliceAtLastCompaction
 } from '$lib/utils';
 
 /**
@@ -117,7 +118,9 @@ export class ChatMessageFlows {
 			// internal converter preserves tool_calls and extras when present.
 			// Reconstructing a bare {role, content} here would drop those fields
 			// and break continue_final_message for messages with tool calls.
-			const contextWithContinue = conversationsStore.activeMessages.slice(0, idx + 1);
+			const contextWithContinue = sliceAtLastCompaction(
+				conversationsStore.activeMessages.slice(0, idx + 1)
+			);
 
 			let appendedContent = '';
 			let appendedReasoning = '';

@@ -1,4 +1,5 @@
 import { CLI_FLAGS } from './cli-flags.constants';
+import { COMPACTION } from './compaction.constants';
 import { DEFAULT_MCP_CONFIG } from './mcp.constants';
 import { SETTINGS_KEYS } from './settings-keys.constants';
 import { TITLE_GENERATION } from './title-generation.constants';
@@ -160,6 +161,13 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 				label: 'Generate title with LLM',
 				standaloneField: false,
 				type: SettingsFieldType.CHECKBOX
+			},
+			{
+				defaultValue: COMPACTION.DEFAULT_PROMPT,
+				help: 'Optional override for the instruction sent to the model when compacting a conversation.',
+				key: SETTINGS_KEYS.COMPACTION_PROMPT,
+				label: 'Compaction prompt',
+				type: SettingsFieldType.TEXTAREA
 			},
 			{
 				defaultValue: false,
