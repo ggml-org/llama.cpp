@@ -1501,6 +1501,12 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
             return;
         }
 
+        // new generation: the depth learned for the previous content is stale,
+        // so the controller starts from the floor again
+        if (adaptive) {
+            adaptive_ctrl[seq_id].reset(this->params.n_max, this->params.n_min_adaptive);
+        }
+
         auto * ctx_dft = this->params.ctx_dft;
         const llama_pos pos_max = llama_memory_seq_pos_max(llama_get_memory(ctx_dft), seq_id);
 
