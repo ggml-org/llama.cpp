@@ -1275,7 +1275,7 @@ struct common_init_result::impl {
 
     // note: the order in which model, context, etc. are declared matters because their destructors will be called bottom-to-top
 
-    common_threadpools threadpools;
+    std::shared_ptr<common_threadpools> threadpools;
 
     llama_model_ptr   model;
     llama_context_ptr context;
@@ -1381,7 +1381,13 @@ common_init_result::common_init_result(common_params & params, bool model_only) 
 
     set_process_priority(params.cpuparams.priority);
 
-    pimpl->threadpools.init(lctx, params);
+    if (params.threadpools) {
+        pimpl->threadpools = params.threadpools;
+    } else {
+        pimpl->threadpools = std::make_shared<common_threadpools>();
+        pimpl->threadpools->init(params.cpuparams, params.cpuparams_batch);
+    }
+    pimpl->threadpools->attach(lctx);
 }
 
 llama_model * common_init_result::model() {
@@ -1734,6 +1740,8 @@ struct llama_context_params common_context_params_to_llama(const common_params &
 // Threadpool utils
 //
 
+namespace {
+
 struct ggml_threadpool_params ggml_threadpool_params_from_cpu_params(const common_cpu_params & params) {
     struct ggml_threadpool_params tpp;
 
@@ -1749,8 +1757,6 @@ struct ggml_threadpool_params ggml_threadpool_params_from_cpu_params(const commo
 
     return tpp;
 }
-
-namespace {
 
 bool can_share_threadpool(const ggml_threadpool_params & tpp1, const ggml_threadpool_params & tpp2) {
     // n_threads does not matter -> we'll use what's larger
@@ -1770,11 +1776,11 @@ common_threadpools::~common_threadpools() {
     free_fn(threadpool_batch);
 }
 
-void common_threadpools::init(llama_context * ctx, const common_params & params) {
+void common_threadpools::init(const common_cpu_params & cpu_params, const common_cpu_params & cpu_params_batch) {
     GGML_ASSERT(!threadpool);
     GGML_ASSERT(!threadpool_batch);
 
-    COM_INF("llama threadpool init, n_threads = %d\n", (int) params.cpuparams.n_threads);
+    COM_INF("llama threadpool init, n_threads = %d\n", (int) cpu_params.n_threads);
 
     auto * cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
     if (!cpu_dev) {
@@ -1786,9 +1792,9 @@ void common_threadpools::init(llama_context * ctx, const common_params & params)
     free_fn = (decltype(ggml_threadpool_free) *) ggml_backend_reg_get_proc_address(reg, "ggml_threadpool_free");
 
     struct ggml_threadpool_params tpp_batch =
-            ggml_threadpool_params_from_cpu_params(params.cpuparams_batch);
+            ggml_threadpool_params_from_cpu_params(cpu_params_batch);
     struct ggml_threadpool_params tpp =
-            ggml_threadpool_params_from_cpu_params(params.cpuparams);
+            ggml_threadpool_params_from_cpu_params(cpu_params);
 
     if (can_share_threadpool(tpp, tpp_batch)) {
         tpp.n_threads = std::max(tpp.n_threads, tpp_batch.n_threads);
@@ -1810,7 +1816,9 @@ void common_threadpools::init(llama_context * ctx, const common_params & params)
         threadpool_batch = nullptr;
         return;
     }
+}
 
+void common_threadpools::attach(llama_context * ctx) {
     llama_attach_threadpool(ctx, threadpool, threadpool_batch);
 }
 

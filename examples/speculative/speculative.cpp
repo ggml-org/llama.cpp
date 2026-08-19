@@ -79,6 +79,15 @@ int main(int argc, char ** argv) {
     llama_context * ctx_tgt = NULL;
     llama_context * ctx_dft = NULL;
 
+    // create threadpools
+    common_cpu_params cpu_params_threadpool = params.cpuparams;
+    cpu_params_threadpool.n_threads = std::max(params.cpuparams.n_threads, params.speculative.draft.cpuparams.n_threads);
+    common_cpu_params cpu_params_threadpool_batch = params.cpuparams_batch;
+    cpu_params_threadpool_batch.n_threads = std::max(params.cpuparams_batch.n_threads, params.speculative.draft.cpuparams_batch.n_threads);
+
+    params.threadpools = std::make_shared<common_threadpools>();
+    params.threadpools->init(cpu_params_threadpool, cpu_params_threadpool_batch);
+
     // load the target model
     auto llama_init_tgt = common_init_from_params(params);
 
