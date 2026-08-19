@@ -335,6 +335,17 @@ bool ggml_cuda_should_use_mmq(enum ggml_type type, int cc, int64_t ne11, int64_t
         if (n_experts > 64 || ne11 <= 128) {
             return true;
         }
+        // IQ4_XS is the superblock sibling of IQ4_NL: the same 4-bit non-linear
+        // codebook, packed 256 values per superblock behind 6-bit sub-scales.
+        // In MMQ it uses the same traits as IQ4_NL (ggml_cuda_mmq_load_tiles_iq4_xs
+        // feeding ggml_cuda_mmq_vec_dot_q8_0_q8_1_mma with MMQ_Q8_1_DS_LAYOUT_D4),
+        // so the reason change set 14 prefers MMQ for IQ4_NL on CDNA2 applies
+        // unchanged. Placement note: every clause between here and the closing
+        // "return false" can only return true, so this block is order-independent
+        // with respect to them.
+        if (type == GGML_TYPE_IQ4_XS) {
+            return true;
+        }
         if (type == GGML_TYPE_Q4_0 || type == GGML_TYPE_Q4_1 || type == GGML_TYPE_Q5_0 || type == GGML_TYPE_Q5_1 ||
             type == GGML_TYPE_IQ4_NL) {
             return true;
