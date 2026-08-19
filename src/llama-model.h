@@ -118,6 +118,7 @@ enum llm_type {
     LLM_TYPE_A13B,
     LLM_TYPE_7B_A1B,
     LLM_TYPE_8B_A1B, // lfm2moe
+    LLM_TYPE_7_9B_A1_3B, // Ling-3.0-tiny
     LLM_TYPE_12B_A2_5B,
     LLM_TYPE_16B_A1B,
     LLM_TYPE_21B_A3B, // Ernie MoE small
@@ -134,6 +135,7 @@ enum llm_type {
     LLM_TYPE_118B_A8B,  // Laguna-S-2
     LLM_TYPE_120B_A12B, // Nemotron 3 Super
     LLM_TYPE_122B_A10B, // Qwen3.5
+    LLM_TYPE_124B_A5_1B, // Ling-3.0-flash
     LLM_TYPE_196B_A11B, // Step3.5-Flash
     LLM_TYPE_230B_A10B, // Minimax M2
     LLM_TYPE_428B_A23B, // Minimax M3
@@ -144,6 +146,7 @@ enum llm_type {
     LLM_TYPE_397B_A17B, // Qwen3.5
     LLM_TYPE_685B_A37B, // DeepSeek V3.2
     LLM_TYPE_744B_A40B, // GLM-5
+    LLM_TYPE_2_8T_A50B, // Kimi-K3
     LLM_TYPE_E2B,
     LLM_TYPE_E4B,
 };
@@ -530,6 +533,14 @@ struct llama_layer {
     struct ggml_tensor * ssm_g_b    = nullptr;
     struct ggml_tensor * ssm_o_norm = nullptr;
 
+    // kimi-k3
+    struct ggml_tensor * ssm_g           = nullptr; // full-rank KDA gate (replaces ssm_g_a/ssm_g_b)
+    struct ggml_tensor * attn_res_score  = nullptr; // fused res_norm*res_proj, pre-attention
+    struct ggml_tensor * ffn_res_score   = nullptr; // fused res_norm*res_proj, pre-FFN
+    struct ggml_tensor * ffn_routed_down = nullptr; // latent MoE: n_embd -> n_expert_latent
+    struct ggml_tensor * ffn_routed_up   = nullptr; // latent MoE: n_expert_latent -> n_embd
+    struct ggml_tensor * ffn_routed_norm = nullptr;
+
     // DSA (deepseek sparse attention)
     struct ggml_tensor * indexer_k_norm   = nullptr;
     struct ggml_tensor * indexer_k_norm_b = nullptr;
@@ -589,6 +600,7 @@ struct llama_model {
     struct ggml_tensor * tok_norm_b = nullptr;
 
     struct ggml_tensor * output_norm     = nullptr;
+    struct ggml_tensor * output_res_score = nullptr; // kimi-k3: final cross-layer residual mix
     struct ggml_tensor * output_norm_b   = nullptr;
     struct ggml_tensor * output          = nullptr;
     struct ggml_tensor * output_b        = nullptr;

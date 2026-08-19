@@ -14,7 +14,6 @@
 import {
 	CONVERSATION_ID_SEPARATOR,
 	CWD_CLEARED_TEXT,
-	HEADERS,
 	INACTIVE_CONVERSATION,
 	STREAM_RESUME_RETRY_MS,
 	SYSTEM_MESSAGE_PLACEHOLDER,
@@ -25,7 +24,6 @@ import {
 	ErrorDialogType,
 	MessageRole,
 	MessageType,
-	MimeTypeApplication,
 	ReasoningEffort,
 	StreamConnectionState
 } from '$lib/enums';
@@ -58,7 +56,7 @@ import {
 	findMessageById,
 	formatCwdMessage,
 	generateConversationTitle,
-	getAuthHeaders,
+	getConversationModel,
 	isAbortError,
 	normalizeModelName,
 	streamIdentity
@@ -109,9 +107,6 @@ class ChatStore {
 	private isEditModeActive = $state(false);
 	private addFilesHandler: ((files: File[]) => void) | null = $state(null);
 	pendingEditMessageId = $state<string | null>(null);
-	private messageUpdateCallback:
-		| ((messageId: string, updates: Partial<DatabaseMessage>) => void)
-		| null = null;
 	private _pendingDraftMessage = $state<string>('');
 	private _pendingDraftFiles = $state<ChatUploadedFile[]>([]);
 
@@ -225,33 +220,12 @@ class ChatStore {
 	async probeServerStream(convId: string): Promise<ApiStreamSession | null> {
 		if (!convId) return null;
 
-		let listResp: Response;
-
-		try {
-			// POST the one conv id we are probing
-			listResp = await fetch(`./v1/streams/lookup`, {
-				body: JSON.stringify({ conversation_ids: [convId] }),
-				headers: { ...getAuthHeaders(), [HEADERS.CONTENT_TYPE]: MimeTypeApplication.JSON },
-				method: 'POST'
-			});
-		} catch (e) {
-			console.warn('probeServerStream fetch failed:', e);
-
-			return null;
-		}
-
-		if (!listResp.ok) {
-			console.warn(`probeServerStream got HTTP ${listResp.status} for conv ${convId}`);
-
-			return null;
-		}
-
 		let sessions: ApiStreamSession[];
 
 		try {
-			sessions = (await listResp.json()) as ApiStreamSession[];
+			sessions = await ChatService.lookupStreamSessions([convId]);
 		} catch (e) {
-			console.warn('probeServerStream JSON parse failed:', e);
+			console.warn(`probeServerStream failed for conv ${convId}:`, e);
 
 			return null;
 		}
@@ -296,18 +270,9 @@ class ChatStore {
 		let response: Response;
 
 		try {
-			response = await fetch(`./v1/stream?conv_id=${encodeURIComponent(id)}&from=0`, {
-				headers: getAuthHeaders()
-			});
+			response = await ChatService.fetchStreamReplay(id);
 		} catch (e) {
-			console.error('attachServerStream replay fetch failed:', e);
-			unlock();
-
-			return;
-		}
-
-		if (!response.ok) {
-			console.warn(`attachServerStream replay got HTTP ${response.status} for conv ${convId}`);
+			console.error(`attachServerStream replay failed for conv ${convId}:`, e);
 			unlock();
 
 			return;
@@ -807,21 +772,9 @@ class ChatStore {
 		let sessions: ApiStreamSession[];
 
 		try {
-			const resp = await fetch('./v1/streams/lookup', {
-				body: JSON.stringify({ conversation_ids: lookupIds }),
-				headers: { ...getAuthHeaders(), [HEADERS.CONTENT_TYPE]: MimeTypeApplication.JSON },
-				method: 'POST'
-			});
-
-			if (!resp.ok) return;
-
-			const body = (await resp.json()) as unknown;
-
-			if (!Array.isArray(body)) return;
-
-			sessions = body as ApiStreamSession[];
+			sessions = await ChatService.lookupStreamSessions(lookupIds);
 		} catch (e) {
-			console.warn('syncRemoteRunningStreams fetch failed:', e);
+			console.warn('syncRemoteRunningStreams lookup failed:', e);
 
 			return;
 		}
@@ -1335,7 +1288,7 @@ class ChatStore {
 		let effectiveModel: string | null | undefined = undefined;
 
 		if (serverStore.isRouterMode) {
-			const conversationModel = this.getConversationModel(allMessages);
+			const conversationModel = getConversationModel(allMessages);
 
 			effectiveModel = modelOverride || modelsStore.selectedModelName || conversationModel;
 		}
@@ -2786,16 +2739,6 @@ class ChatStore {
 				}
 			}
 		}
-	}
-
-	getConversationModel(messages: DatabaseMessage[]): string | null {
-		for (let i = messages.length - 1; i >= 0; i--) {
-			const message = messages[i];
-
-			if (message.role === MessageRole.ASSISTANT && message.model) return message.model;
-		}
-
-		return null;
 	}
 
 	private getApiOptions(): Record<string, unknown> {

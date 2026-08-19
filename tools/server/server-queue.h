@@ -33,11 +33,11 @@ private:
     // used by yield_to_queue, all fields are guarded by mutex_tasks
     struct worker_t {
         std::thread             thread;
-        std::condition_variable cv;   // the worker sleeps on this until there is work
-        std::function<void()>   work; // pending work, picked up by the thread
-        std::exception_ptr      exception; // exception thrown by work(), if any
-        bool stop = false;
-        bool busy = false;
+        std::condition_variable cv;        // the worker sleeps on this until a yield starts
+        std::exception_ptr      exception; // exception thrown while processing tasks, if any
+        bool stop     = false;
+        bool busy     = false; // set by yield_to_queue(), cleared by the worker once it is done processing tasks
+        bool yielding = false; // work() is still running on the start_loop() thread
     };
     worker_t worker;
 
@@ -93,7 +93,7 @@ public:
      */
     void start_loop(int64_t idle_sleep_ms = -1);
 
-    // run work() on a separate thread, while the current thread calls process_new_tasks
+    // while waiting for work() to finish, run process_new_tasks on the worker thread
     // returns once work() is done (may throw exceptions)
     // must be called from start_loop() thread (ideally inside callback_update_slots)
     // use case: return metrics while encode/decode is running
@@ -116,6 +116,7 @@ public:
     // the second argument tells whether the queue is currently yielding (see yield_to_queue)
     // only then may the callback return false to decline the task, and it must leave it
     // untouched, so that it can be put back in the queue later
+    // note: while yielding, the callback runs on worker thread, not main thread
     void on_new_task(std::function<bool(server_task &&, bool)> callback) {
         callback_new_task = std::move(callback);
     }

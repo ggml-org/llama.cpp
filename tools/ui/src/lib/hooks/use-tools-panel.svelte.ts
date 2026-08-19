@@ -46,13 +46,13 @@ export function useToolsPanel(): UseToolsPanelReturn {
 
 		// Tools endpoint is unreachable (404) — server started without --tools
 		if (toolsStore.isToolsEndpointUnreachable) {
-			return `To enable Built-In Tools you need to run llama-server with ${CLI_FLAGS.TOOLS} all or ${CLI_FLAGS.TOOLS} <name> flag. To see MCP Tools you need to add / enable MCP Server(s).`;
+			return `To enable Server Tools you need to run llama-server with ${CLI_FLAGS.TOOLS} all or ${CLI_FLAGS.TOOLS} <name> flag. To see MCP Tools you need to add / enable MCP Server(s).`;
 		}
 
 		// Other errors — return null so UI shows "Failed to load tools"
 		if (toolsStore.error) return null;
 
-		return `To enable Built-In Tools you need to run llama-server with ${CLI_FLAGS.TOOLS} all or ${CLI_FLAGS.TOOLS} <name> flag. To see MCP Tools you need to add / enable MCP Server(s).`;
+		return `To enable Server Tools you need to run llama-server with ${CLI_FLAGS.TOOLS} all or ${CLI_FLAGS.TOOLS} <name> flag. To see MCP Tools you need to add / enable MCP Server(s).`;
 	});
 
 	function isGroupChecked(group: ToolGroup): boolean {
@@ -95,8 +95,8 @@ export function useToolsPanel(): UseToolsPanelReturn {
 	}
 
 	function handleOpen(): void {
-		if (toolsStore.builtinTools.length === 0 && !toolsStore.loading) {
-			toolsStore.fetchBuiltinTools();
+		if (toolsStore.serverTools.length === 0 && !toolsStore.loading) {
+			toolsStore.fetchServerTools();
 		}
 
 		mcpStore.runHealthChecksForServers(mcpStore.getServers().filter((s) => s.enabled));

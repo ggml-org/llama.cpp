@@ -2947,8 +2947,10 @@ private:
         });
 
         // generate the actual drafts (if any)
-        {
-            common_speculative_draft(spec.get());
+        if (!drafting.empty()) {
+            queue_tasks.yield_to_queue([&]() {
+                common_speculative_draft(spec.get());
+            });
         }
 
         // make checkpoints if needed
@@ -3414,7 +3416,8 @@ private:
                         // add the mtmd chunk to cache
                         {
                             const auto & chunk = input_tokens.find_chunk(cur_token_idx);
-                            slot.prompt.tokens.push_back(chunk.get()); // copy
+                            // the chunk is already in the KV cache at this point, so we don't need to keep its data around
+                            slot.prompt.tokens.push_back_placeholder(chunk.get());
                         }
 
                         has_mtmd = true;
@@ -3578,8 +3581,8 @@ private:
             has_output |= batch.tokens[i].output;
         }
 
-        // decode on the worker thread, so we can still handle metrics tasks while waiting
-        // note: the sync is done here too, so that the wait also happens off the main thread
+        // yield to the queue, so we can still handle metrics tasks while decoding
+        // note: the sync is done here too, so that the wait is also covered by the yield
         int ret = 0;
         queue_tasks.yield_to_queue([&]() {
             ret = llama_decode(ctx_tgt, batch_view);
@@ -3644,11 +3647,18 @@ private:
         // TODO: avoid restoring the draft context and re-evaluating the drafted tokens when not needed [TAG_SPEC_AVOID_DRAFT_REEVAL]
         //       for now, always re-evaluate for simplicity
         //       ref: https://github.com/ggml-org/llama.cpp/pull/22728#issuecomment-4400925384
-        if (!common_speculative_process(spec.get(), batch_view)) {
-            SRV_ERR("%s", "failed to process speculative batch\n");
+        if (spec) {
+            bool ok = true;
+            queue_tasks.yield_to_queue([&]() {
+                ok = common_speculative_process(spec.get(), batch_view);
+            });
 
-            // TODO: handle error
-            throw std::runtime_error("failed to process speculative batch");
+            if (!ok) {
+                SRV_ERR("%s", "failed to process speculative batch\n");
+
+                // TODO: handle error
+                throw std::runtime_error("failed to process speculative batch");
+            }
         }
 
         // handle `n_cmpl > 1` tasks - when the main prompt is processed, activate all child tasks too

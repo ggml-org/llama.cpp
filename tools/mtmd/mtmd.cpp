@@ -2322,28 +2322,46 @@ void mtmd_input_chunk_free(mtmd_input_chunk * chunk) {
     }
 }
 
-int32_t mtmd_input_chunk_save(const mtmd_input_chunk * chunk, char * out_buf, size_t out_len, size_t * expected_out_len) {
+// returns 0 on success
+static int32_t mtmd_input_chunk_save_impl(const mtmd_input_chunk * chunk, std::vector<char> & out_buf) {
     try {
         mtmd_serialization ser(MTMD_SERIALIZATION_VERSION);
         chunk->serialize(ser);
-
-        if (expected_out_len) {
-            *expected_out_len = ser.data.size();
-        }
-        if (!out_buf) {
-            // caller is only querying the required size
-            return 0;
-        }
-        if (out_len < ser.data.size()) {
-            LOG_ERR("%s: out_buf is too small, need %zu bytes, got %zu\n", __func__, ser.data.size(), out_len);
-            return -1;
-        }
-        std::memcpy(out_buf, ser.data.data(), ser.data.size());
+        out_buf = std::move(ser.data);
         return 0;
     } catch (const std::exception & e) {
         LOG_ERR("%s: %s\n", __func__, e.what());
         return -1;
     }
+}
+
+mtmd_input_chunk * mtmd_input_chunk_get_placeholder(const mtmd_input_chunk * chunk) {
+    // this is hacky, but still faster than copy the whole batch data
+    std::vector<char> buf;
+    if (mtmd_input_chunk_save_impl(chunk, buf) != 0) {
+        return nullptr;
+    }
+    return mtmd_input_chunk_load(buf.data(), buf.size());
+}
+
+int32_t mtmd_input_chunk_save(const mtmd_input_chunk * chunk, char * out_buf, size_t out_len, size_t * expected_out_len) {
+    std::vector<char> buf;
+    if (mtmd_input_chunk_save_impl(chunk, buf) != 0) {
+        return -1;
+    }
+    if (expected_out_len) {
+        *expected_out_len = buf.size();
+    }
+    if (!out_buf) {
+        // caller is only querying the required size
+        return 0;
+    }
+    if (out_len < buf.size()) {
+        LOG_ERR("%s: out_buf is too small, need %zu bytes, got %zu\n", __func__, buf.size(), out_len);
+        return -1;
+    }
+    std::memcpy(out_buf, buf.data(), buf.size());
+    return 0;
 }
 
 mtmd_input_chunk * mtmd_input_chunk_load(const char * buf, size_t len) {
