@@ -96,13 +96,7 @@ export class DatabaseService {
 
 				// Update parent's children array if parent exists
 				if (parentId !== null) {
-					const parentMessage = await db[IDXDB_TABLES.messages].get(parentId);
-
-					if (parentMessage) {
-						await db[IDXDB_TABLES.messages].update(parentId, {
-							children: [...parentMessage.children, newMessage.id]
-						});
-					}
+					await this.addChildToParent(parentId, newMessage.id);
 				}
 
 				await this.updateConversation(message.convId, {
@@ -178,9 +172,7 @@ export class DatabaseService {
 			};
 
 			await db[IDXDB_TABLES.messages].add(systemMessage);
-			await db[IDXDB_TABLES.messages].update(parentId, {
-				children: [...parentMessage.children, systemMessage.id]
-			});
+			await this.addChildToParent(parentId, systemMessage.id);
 
 			return systemMessage;
 		});
@@ -346,6 +338,35 @@ export class DatabaseService {
 	}
 
 	/**
+	 * Appends a child id to a parent message's children array.
+	 */
+	private static async addChildToParent(parentId: string, childId: string): Promise<void> {
+		const parent = await db[IDXDB_TABLES.messages].get(parentId);
+
+		if (!parent) return;
+
+		await db[IDXDB_TABLES.messages].update(parentId, {
+			children: [...parent.children, childId]
+		});
+	}
+
+	/**
+	 * Removes a child id from its parent message's children array.
+	 */
+	private static async removeChildFromParent(messageId: string): Promise<void> {
+		const message = await db[IDXDB_TABLES.messages].get(messageId);
+
+		if (!message?.parent) return;
+
+		const parent = await db[IDXDB_TABLES.messages].get(message.parent);
+
+		if (!parent) return;
+
+		parent.children = parent.children.filter((childId: string) => childId !== messageId);
+		await db[IDXDB_TABLES.messages].put(parent);
+	}
+
+	/**
 	 * Deletes a message and removes it from its parent's children array.
 	 *
 	 * @param messageId - ID of the message to delete
@@ -356,15 +377,7 @@ export class DatabaseService {
 
 			if (!message) return;
 
-			// Remove this message from its parent's children array
-			if (message.parent) {
-				const parent = await db[IDXDB_TABLES.messages].get(message.parent);
-
-				if (parent) {
-					parent.children = parent.children.filter((childId: string) => childId !== messageId);
-					await db[IDXDB_TABLES.messages].put(parent);
-				}
-			}
+			await this.removeChildFromParent(messageId);
 
 			// Delete the message
 			await db[IDXDB_TABLES.messages].delete(messageId);
@@ -392,17 +405,8 @@ export class DatabaseService {
 			// Find all descendant messages
 			const descendants = findDescendantMessages(allMessages, messageId);
 			const allToDelete = [messageId, ...descendants];
-			// Get the message to delete for parent cleanup
-			const message = await db[IDXDB_TABLES.messages].get(messageId);
 
-			if (message && message.parent) {
-				const parent = await db[IDXDB_TABLES.messages].get(message.parent);
-
-				if (parent) {
-					parent.children = parent.children.filter((childId: string) => childId !== messageId);
-					await db[IDXDB_TABLES.messages].put(parent);
-				}
-			}
+			await this.removeChildFromParent(messageId);
 
 			// Delete all messages in the branch
 			await db[IDXDB_TABLES.messages].bulkDelete(allToDelete);
@@ -726,10 +730,7 @@ export class DatabaseService {
 				};
 
 				await db[IDXDB_TABLES.conversations].add(newConv);
-
-				for (const msg of clonedMessages) {
-					await db[IDXDB_TABLES.messages].add(msg);
-				}
+				await db[IDXDB_TABLES.messages].bulkAdd(clonedMessages);
 
 				return newConv;
 			}
