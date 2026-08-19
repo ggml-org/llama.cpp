@@ -427,7 +427,10 @@ server_models::server_models(
     debug_fake_timing = !common_get_env("LLAMA_SERVER_DEBUG_FAKE_TIMING").empty();
 }
 
-server_models::~server_models() = default;
+server_models::~server_models() {
+    // join monitor threads before the map destroys them
+    unload_all();
+}
 
 void server_models::add_model(server_model_meta && meta) {
     if (mapping.find(meta.name) != mapping.end()) {
