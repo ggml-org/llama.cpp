@@ -358,17 +358,24 @@ class SettingsStore {
 		// UI settings are the admin's defaults for new users: applied once on
 		// the first visit, never on later loads, so the user's config can
 		// diverge. "Reset to Default" is the explicit way back to the baseline.
+		// A first visit config carries factory values only, so a key that
+		// already diverges here was set by the user before the baseline could
+		// be reached, through the API key splash, and stays theirs.
 		if (uiSettings && this.isFirstVisit) {
 			this.isFirstVisit = false;
 
 			for (const [key, value] of Object.entries(uiSettings)) {
-				if (!this.userOverrides.has(key) && value !== undefined) {
-					setConfigValue(this.config, key, value);
+				if (value === undefined || this.userOverrides.has(key)) continue;
 
-					// theme lives in mode-watcher, not just in config -> propagate
-					if (key === SETTINGS_KEYS.THEME) {
-						setMode(value as ColorMode);
-					}
+				if (getConfigValue(this.config, key) !== getConfigValue(SETTING_CONFIG_DEFAULT, key)) {
+					continue;
+				}
+
+				setConfigValue(this.config, key, value);
+
+				// theme lives in mode-watcher, not just in config -> propagate
+				if (key === SETTINGS_KEYS.THEME) {
+					setMode(value as ColorMode);
 				}
 			}
 		}

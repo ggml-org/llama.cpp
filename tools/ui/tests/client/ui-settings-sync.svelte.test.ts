@@ -47,6 +47,19 @@ describe('server ui_settings application semantics', () => {
 		expect(stored.apiKey).toBe('sk-user-key');
 	});
 
+	it('keeps a value the user sets before the baseline is reachable', () => {
+		settingsStore.initialize();
+		// the splash is the only way in when the server runs with --api-key,
+		// so the first user write lands before the first successful /props
+		settingsStore.updateConfig('apiKey', 'sk-user-key');
+		mockProps({ apiKey: 'admin-placeholder', theme: 'dark' });
+
+		settingsStore.syncWithServerDefaults();
+
+		expect(settingsStore.config.apiKey).toBe('sk-user-key');
+		expect(settingsStore.config.theme).toBe('dark');
+	});
+
 	it('Reset to Default reapplies the full baseline, api key included', () => {
 		settingsStore.initialize();
 		settingsStore.updateConfig('theme', 'light');
