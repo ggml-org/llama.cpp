@@ -20,13 +20,13 @@
 extern "C" {
 #endif
 
-// Smallest src1 batch for which the per-mul_mat decode pays for itself: the crossover vs the
-// vec_dot path is N = 20..32 depending on type, 32 is conservative for all of them.
-#define GGML_IQP_MIN_BATCH 32
+// Smallest src1 batch for which the per-mul_mat decode pays for itself. 8 is the first size
+// at which no type regresses.
+#define GGML_IQP_MIN_BATCH 8
 
 // same idea for MUL_MAT_ID, but per expert: the routed row count of one expert, not the token
 // count of the node. Must be >= 1 - the gather layout relies on zero-row experts being skipped.
-#define GGML_IQP_MIN_BATCH_ID 16
+#define GGML_IQP_MIN_BATCH_ID 8
 
 // is one expert worth the panel path? the gather in repack.cpp and the per expert dispatch in
 // ggml-cpu.c must agree on this, the packed gather layout depends on it

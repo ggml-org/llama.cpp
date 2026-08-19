@@ -22,6 +22,212 @@
 // src0 rows interleaved per panel
 #define IQP_NB_ROWS 8
 
+// ---------------------------------------------------------------------------------------------
+// decode primitives
+//
+// All the grid based types share one inner shape: gather 8 byte (or two 4 byte) grid entries and
+// negate the bytes selected by a sign byte. The helpers below do that 32 values at a time; the
+// scalar bodies are the original per byte loops and are what non x86 builds compile.
+// ---------------------------------------------------------------------------------------------
+
+// the low 7 bits of v are the first 7 signs and the 8th is their parity - which is all the 128 entry
+// ksigns_iq2xs table stores, so it can be computed instead of loaded (cf. unpack_ksigns in the CUDA
+// backend). Folding the parity with shifts keeps this portable and off the popcount feature macros.
+static inline uint8_t iqp_unpack_ksigns(uint32_t v) {
+    uint32_t p = v ^ (v >> 4);
+
+    p ^= p >> 2;
+    p ^= p >> 1;
+
+    return (uint8_t) (v ^ ((p & 1) << 7));
+}
+
+#if defined(__AVX2__)
+
+// 0xFF in every byte whose sign bit is set. sv must hold each sign byte broadcast over the 8 bytes
+// it governs; the selector is kmask_iq2xs, one vector wide.
+static inline __m256i iqp_sign_mask(__m256i sv) {
+    const __m256i sel = _mm256_set1_epi64x((int64_t) 0x8040201008040201ULL);
+
+#    if defined(__GFNI__)
+    // gf2p8affine gives bit j of result byte i as parity(sel.byte[i] & sv.byte[j]); with sv.byte[j]
+    // constant over the qword every bit of byte i comes out as bit i of the sign byte, i.e. 0 or
+    // 0xFF - the whole and + compare in one instruction
+    return _mm256_gf2p8affine_epi64_epi8(sel, sv, 0);
+#    else
+    return _mm256_cmpeq_epi8(_mm256_and_si256(sv, sel), sel);
+#    endif
+}
+
+// signs holds four sign bytes, byte l governing values 8*l .. 8*l+7 - spread each over its 8 lanes
+static inline __m256i iqp_sign_bytes(uint32_t signs) {
+    const __m256i bcast = _mm256_setr_epi8(0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1,  //
+                                           2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3);
+
+    return _mm256_shuffle_epi8(_mm256_set1_epi32((int32_t) signs), bcast);
+}
+
+// x ^ m - m negates the lanes of x whose mask byte m is 0xFF and leaves the others alone
+static inline __m256i iqp_apply_signs(__m256i x, __m256i m) {
+    return _mm256_sub_epi8(_mm256_xor_si256(x, m), m);
+}
+
+#endif
+
+// 32 values from four 8 byte grid entries, sign byte l of signs applied to group l
+static inline void iqp_store_signed_x8(int8_t * GGML_RESTRICT dst,
+                                       uint64_t               g0,
+                                       uint64_t               g1,
+                                       uint64_t               g2,
+                                       uint64_t               g3,
+                                       uint32_t               signs) {
+#if defined(__AVX2__)
+    const __m256i g = _mm256_set_epi64x((int64_t) g3, (int64_t) g2, (int64_t) g1, (int64_t) g0);
+    const __m256i m = iqp_sign_mask(iqp_sign_bytes(signs));
+
+    _mm256_storeu_si256((__m256i *) dst, iqp_apply_signs(g, m));
+#else
+    const uint64_t g[4] = { g0, g1, g2, g3 };
+
+    for (int l = 0; l < 4; ++l) {
+        const uint8_t * grid = (const uint8_t *) &g[l];
+        const uint8_t   s    = (uint8_t) (signs >> 8 * l);
+
+        for (int j = 0; j < 8; ++j) {
+            dst[8 * l + j] = s & kmask_iq2xs[j] ? -grid[j] : grid[j];
+        }
+    }
+#endif
+}
+
+// same, but the eight values of group l come from two 4 byte grid entries
+static inline void iqp_store_signed_x4(int8_t * GGML_RESTRICT dst,
+                                       uint32_t               g0a,
+                                       uint32_t               g0b,
+                                       uint32_t               g1a,
+                                       uint32_t               g1b,
+                                       uint32_t               g2a,
+                                       uint32_t               g2b,
+                                       uint32_t               g3a,
+                                       uint32_t               g3b,
+                                       uint32_t               signs) {
+#if defined(__AVX2__)
+    const __m256i g = _mm256_setr_epi32((int32_t) g0a, (int32_t) g0b, (int32_t) g1a, (int32_t) g1b, (int32_t) g2a,
+                                        (int32_t) g2b, (int32_t) g3a, (int32_t) g3b);
+    const __m256i m = iqp_sign_mask(iqp_sign_bytes(signs));
+
+    _mm256_storeu_si256((__m256i *) dst, iqp_apply_signs(g, m));
+#else
+    const uint32_t ga[4] = { g0a, g1a, g2a, g3a };
+    const uint32_t gb[4] = { g0b, g1b, g2b, g3b };
+
+    for (int l = 0; l < 4; ++l) {
+        const uint8_t * grid1 = (const uint8_t *) &ga[l];
+        const uint8_t * grid2 = (const uint8_t *) &gb[l];
+        const uint8_t   s     = (uint8_t) (signs >> 8 * l);
+
+        for (int j = 0; j < 4; ++j) {
+            dst[8 * l + j + 0] = s & kmask_iq2xs[j + 0] ? -grid1[j] : grid1[j];
+            dst[8 * l + j + 4] = s & kmask_iq2xs[j + 4] ? -grid2[j] : grid2[j];
+        }
+    }
+#endif
+}
+
+// 32 values of 8 * grid + delta from four 8 byte grid entries (grid bytes are in {-1, 0, 1}), byte l
+// of deltas applying to group l
+static inline void iqp_store_iq1_x8(int8_t * GGML_RESTRICT dst,
+                                    uint64_t               g0,
+                                    uint64_t               g1,
+                                    uint64_t               g2,
+                                    uint64_t               g3,
+                                    uint32_t               deltas) {
+#if defined(__AVX2__)
+    __m256i g = _mm256_set_epi64x((int64_t) g3, (int64_t) g2, (int64_t) g1, (int64_t) g0);
+
+    // no byte shift on AVX2, and the grid bytes are tiny, so three doublings are the cheap way
+    g = _mm256_add_epi8(g, g);
+    g = _mm256_add_epi8(g, g);
+    g = _mm256_add_epi8(g, g);
+
+    _mm256_storeu_si256((__m256i *) dst, _mm256_add_epi8(g, iqp_sign_bytes(deltas)));
+#else
+    const uint64_t g[4] = { g0, g1, g2, g3 };
+
+    for (int l = 0; l < 4; ++l) {
+        const int8_t * grid  = (const int8_t *) &g[l];
+        const int8_t   delta = (int8_t) (deltas >> 8 * l);
+
+        for (int j = 0; j < 8; ++j) {
+            dst[8 * l + j] = 8 * grid[j] + delta;
+        }
+    }
+#endif
+}
+
+// 32 values from 16 packed nibbles through the kvalues_iq4nl lookup: low nibbles first, then high
+static inline void iqp_store_iq4_x32(int8_t * GGML_RESTRICT dst, const uint8_t * GGML_RESTRICT qs) {
+#if defined(__AVX2__)
+    const __m128i q   = _mm_loadu_si128((const __m128i *) qs);
+    const __m128i lut = _mm_loadu_si128((const __m128i *) kvalues_iq4nl);
+    const __m128i m4  = _mm_set1_epi8(0xf);
+
+    _mm_storeu_si128((__m128i *) (dst + 0), _mm_shuffle_epi8(lut, _mm_and_si128(q, m4)));
+    _mm_storeu_si128((__m128i *) (dst + 16), _mm_shuffle_epi8(lut, _mm_and_si128(_mm_srli_epi16(q, 4), m4)));
+#else
+    for (int j = 0; j < 16; ++j) {
+        dst[j + 0]  = kvalues_iq4nl[qs[j] & 0xf];
+        dst[j + 16] = kvalues_iq4nl[qs[j] >> 4];
+    }
+#endif
+}
+
+// sum of weight * integer sub-block scale over one decoded super-block. Bounded by
+// 256 * 127 * 32 = 1.04e6, and 128 times that is 1.33e8, so the int32 result cannot overflow the
+// kernel accumulator (see the bounds in ggml_gemm_iqp_8x8_q8_K).
+static inline int32_t iqp_weighted_sum(const int8_t * GGML_RESTRICT vals, const int8_t * GGML_RESTRICT iscales) {
+#if defined(__AVX2__)
+    static_assert(IQP_SB_SIZE == 16, "the vector path folds two sub-blocks per 32 byte load");
+
+    const __m256i ones8  = _mm256_set1_epi8(1);
+    const __m256i ones16 = _mm256_set1_epi16(1);
+
+    __m256i acc = _mm256_setzero_si256();
+
+    for (int i = 0; i < QK_K / 32; ++i) {
+        // maddubs against ones sums byte pairs, madd against ones sums those in fours: eight int32,
+        // the low four covering sub-block 2*i and the high four sub-block 2*i + 1
+        const __m256i v = _mm256_loadu_si256((const __m256i *) (vals + 32 * i));
+        const __m256i p = _mm256_madd_epi16(_mm256_maddubs_epi16(ones8, v), ones16);
+
+        const __m256i s = _mm256_set_m128i(_mm_set1_epi32(iscales[2 * i + 1]), _mm_set1_epi32(iscales[2 * i + 0]));
+
+        acc = _mm256_add_epi32(acc, _mm256_mullo_epi32(p, s));
+    }
+
+    __m128i sum = _mm_add_epi32(_mm256_castsi256_si128(acc), _mm256_extracti128_si256(acc, 1));
+
+    sum = _mm_add_epi32(sum, _mm_shuffle_epi32(sum, _MM_SHUFFLE(1, 0, 3, 2)));
+    sum = _mm_add_epi32(sum, _mm_shuffle_epi32(sum, _MM_SHUFFLE(2, 3, 0, 1)));
+
+    return _mm_cvtsi128_si32(sum);
+#else
+    int32_t wsum = 0;
+
+    for (int sb = 0; sb < IQP_NSB; ++sb) {
+        int32_t vsum = 0;
+
+        for (int k = 0; k < IQP_SB_SIZE; ++k) {
+            vsum += vals[sb * IQP_SB_SIZE + k];
+        }
+
+        wsum += iscales[sb] * vsum;
+    }
+
+    return wsum;
+#endif
+}
+
 // decode one super-block into QK_K signed values, IQP_NSB integer sub-block scales and the one
 // float factor they share. The expressions mirror dequantize_row_iq* from ggml-quants.c, split so
 // that (*dfac * iscales[sb]) * value is bit identical to the reference dequantized weight - see
@@ -49,13 +255,13 @@ static bool iqp_decode_superblock(enum ggml_type             type,
                     iscales[2 * ib32 + 0] = ls;
                     iscales[2 * ib32 + 1] = ls;
 
-                    for (int l = 0; l < 4; ++l) {
-                        const uint8_t * grid  = (const uint8_t *) (iq2xxs_grid + aux8[l]);
-                        const uint8_t   signs = ksigns_iq2xs[(aux32[1] >> 7 * l) & 127];
-                        for (int j = 0; j < 8; ++j) {
-                            vals[32 * ib32 + 8 * l + j] = signs & kmask_iq2xs[j] ? -grid[j] : grid[j];
-                        }
-                    }
+                    const uint32_t signs = (uint32_t) iqp_unpack_ksigns((aux32[1] >> 0) & 127) |
+                                           (uint32_t) iqp_unpack_ksigns((aux32[1] >> 7) & 127) << 8 |
+                                           (uint32_t) iqp_unpack_ksigns((aux32[1] >> 14) & 127) << 16 |
+                                           (uint32_t) iqp_unpack_ksigns((aux32[1] >> 21) & 127) << 24;
+
+                    iqp_store_signed_x8(vals + 32 * ib32, iq2xxs_grid[aux8[0]], iq2xxs_grid[aux8[1]],
+                                        iq2xxs_grid[aux8[2]], iq2xxs_grid[aux8[3]], signs);
                 }
             }
             break;
@@ -69,13 +275,15 @@ static bool iqp_decode_superblock(enum ggml_type             type,
                     iscales[2 * ib32 + 0] = (int8_t) (2 * (x->scales[ib32] & 0xf) + 1);
                     iscales[2 * ib32 + 1] = (int8_t) (2 * (x->scales[ib32] >> 4) + 1);
 
-                    for (int l = 0; l < 4; ++l) {
-                        const uint8_t * grid  = (const uint8_t *) (iq2xs_grid + (x->qs[4 * ib32 + l] & 511));
-                        const uint8_t   signs = ksigns_iq2xs[x->qs[4 * ib32 + l] >> 9];
-                        for (int j = 0; j < 8; ++j) {
-                            vals[32 * ib32 + 8 * l + j] = signs & kmask_iq2xs[j] ? -grid[j] : grid[j];
-                        }
-                    }
+                    const uint16_t * q = x->qs + 4 * ib32;
+
+                    const uint32_t signs = (uint32_t) iqp_unpack_ksigns(q[0] >> 9) |
+                                           (uint32_t) iqp_unpack_ksigns(q[1] >> 9) << 8 |
+                                           (uint32_t) iqp_unpack_ksigns(q[2] >> 9) << 16 |
+                                           (uint32_t) iqp_unpack_ksigns(q[3] >> 9) << 24;
+
+                    iqp_store_signed_x8(vals + 32 * ib32, iq2xs_grid[q[0] & 511], iq2xs_grid[q[1] & 511],
+                                        iq2xs_grid[q[2] & 511], iq2xs_grid[q[3] & 511], signs);
                 }
             }
             break;
@@ -93,13 +301,14 @@ static bool iqp_decode_superblock(enum ggml_type             type,
                     iscales[2 * ib32 + 0] = (int8_t) (2 * (x->scales[ib32] & 0xf) + 1);
                     iscales[2 * ib32 + 1] = (int8_t) (2 * (x->scales[ib32] >> 4) + 1);
 
-                    for (int l = 0; l < 4; ++l) {
-                        const uint8_t * grid =
-                            (const uint8_t *) (iq2s_grid + (qs[l] | (qh[ib32] << (8 - 2 * l) & 0x300)));
-                        for (int j = 0; j < 8; ++j) {
-                            vals[32 * ib32 + 8 * l + j] = signs[l] & kmask_iq2xs[j] ? -grid[j] : grid[j];
-                        }
-                    }
+                    // the sign bytes are stored whole here, so there is no parity to recover
+                    const uint32_t sbits = (uint32_t) signs[0] | (uint32_t) signs[1] << 8 |
+                                           (uint32_t) signs[2] << 16 | (uint32_t) signs[3] << 24;
+
+                    iqp_store_signed_x8(vals + 32 * ib32, iq2s_grid[qs[0] | (qh[ib32] << 8 & 0x300)],
+                                        iq2s_grid[qs[1] | (qh[ib32] << 6 & 0x300)],
+                                        iq2s_grid[qs[2] | (qh[ib32] << 4 & 0x300)],
+                                        iq2s_grid[qs[3] | (qh[ib32] << 2 & 0x300)], sbits);
                     qs += 4;
                     signs += 4;
                 }
@@ -124,15 +333,14 @@ static bool iqp_decode_superblock(enum ggml_type             type,
                     iscales[2 * ib32 + 0] = ls;
                     iscales[2 * ib32 + 1] = ls;
 
-                    for (int l = 0; l < 4; ++l) {
-                        const uint8_t   signs = ksigns_iq2xs[(aux32 >> 7 * l) & 127];
-                        const uint8_t * grid1 = (const uint8_t *) (iq3xxs_grid + qs[2 * l + 0]);
-                        const uint8_t * grid2 = (const uint8_t *) (iq3xxs_grid + qs[2 * l + 1]);
-                        for (int j = 0; j < 4; ++j) {
-                            vals[32 * ib32 + 8 * l + j + 0] = signs & kmask_iq2xs[j + 0] ? -grid1[j] : grid1[j];
-                            vals[32 * ib32 + 8 * l + j + 4] = signs & kmask_iq2xs[j + 4] ? -grid2[j] : grid2[j];
-                        }
-                    }
+                    const uint32_t signs = (uint32_t) iqp_unpack_ksigns((aux32 >> 0) & 127) |
+                                           (uint32_t) iqp_unpack_ksigns((aux32 >> 7) & 127) << 8 |
+                                           (uint32_t) iqp_unpack_ksigns((aux32 >> 14) & 127) << 16 |
+                                           (uint32_t) iqp_unpack_ksigns((aux32 >> 21) & 127) << 24;
+
+                    iqp_store_signed_x4(vals + 32 * ib32, iq3xxs_grid[qs[0]], iq3xxs_grid[qs[1]], iq3xxs_grid[qs[2]],
+                                        iq3xxs_grid[qs[3]], iq3xxs_grid[qs[4]], iq3xxs_grid[qs[5]],
+                                        iq3xxs_grid[qs[6]], iq3xxs_grid[qs[7]], signs);
                     qs += 8;
                 }
             }
@@ -159,34 +367,26 @@ static bool iqp_decode_superblock(enum ggml_type             type,
                     iscales[2 * ib32 + 2] = db2;
                     iscales[2 * ib32 + 3] = db2;
 
-                    for (int l = 0; l < 4; ++l) {
-                        const uint8_t * grid1 =
-                            (const uint8_t *) (iq3s_grid + (qs[2 * l + 0] | ((qh[0] << (8 - 2 * l)) & 256)));
-                        const uint8_t * grid2 =
-                            (const uint8_t *) (iq3s_grid + (qs[2 * l + 1] | ((qh[0] << (7 - 2 * l)) & 256)));
-                        for (int j = 0; j < 4; ++j) {
-                            vals[k + j + 0] = signs[l] & kmask_iq2xs[j + 0] ? -grid1[j] : grid1[j];
-                            vals[k + j + 4] = signs[l] & kmask_iq2xs[j + 4] ? -grid2[j] : grid2[j];
-                        }
-                        k += 8;
-                    }
-                    qs += 8;
-                    signs += 4;
+                    // the two halves of the 64 weights differ only in which qh byte supplies the
+                    // 9th bit of each grid index
+                    for (int h = 0; h < 2; ++h) {
+                        const uint32_t sbits = (uint32_t) signs[0] | (uint32_t) signs[1] << 8 |
+                                               (uint32_t) signs[2] << 16 | (uint32_t) signs[3] << 24;
 
-                    for (int l = 0; l < 4; ++l) {
-                        const uint8_t * grid1 =
-                            (const uint8_t *) (iq3s_grid + (qs[2 * l + 0] | ((qh[1] << (8 - 2 * l)) & 256)));
-                        const uint8_t * grid2 =
-                            (const uint8_t *) (iq3s_grid + (qs[2 * l + 1] | ((qh[1] << (7 - 2 * l)) & 256)));
-                        for (int j = 0; j < 4; ++j) {
-                            vals[k + j + 0] = signs[l] & kmask_iq2xs[j + 0] ? -grid1[j] : grid1[j];
-                            vals[k + j + 4] = signs[l] & kmask_iq2xs[j + 4] ? -grid2[j] : grid2[j];
-                        }
-                        k += 8;
+                        iqp_store_signed_x4(vals + k, iq3s_grid[qs[0] | ((qh[h] << 8) & 256)],
+                                            iq3s_grid[qs[1] | ((qh[h] << 7) & 256)],
+                                            iq3s_grid[qs[2] | ((qh[h] << 6) & 256)],
+                                            iq3s_grid[qs[3] | ((qh[h] << 5) & 256)],
+                                            iq3s_grid[qs[4] | ((qh[h] << 4) & 256)],
+                                            iq3s_grid[qs[5] | ((qh[h] << 3) & 256)],
+                                            iq3s_grid[qs[6] | ((qh[h] << 2) & 256)],
+                                            iq3s_grid[qs[7] | ((qh[h] << 1) & 256)], sbits);
+
+                        k += 32;
+                        qs += 8;
+                        signs += 4;
                     }
                     qh += 2;
-                    qs += 8;
-                    signs += 4;
                 }
             }
             break;
@@ -218,12 +418,11 @@ static bool iqp_decode_superblock(enum ggml_type             type,
                     iscales[2 * ib + 0] = dl;
                     iscales[2 * ib + 1] = dl;
 
-                    for (int l = 0; l < 4; ++l) {
-                        const int8_t * grid = (const int8_t *) (iq1s_grid + (qs[l] | (((qh[ib] >> 3 * l) & 7) << 8)));
-                        for (int j = 0; j < 8; ++j) {
-                            vals[32 * ib + 8 * l + j] = 8 * grid[j] + delta;
-                        }
-                    }
+                    iqp_store_iq1_x8(vals + 32 * ib, iq1s_grid[qs[0] | (((qh[ib] >> 0) & 7) << 8)],
+                                     iq1s_grid[qs[1] | (((qh[ib] >> 3) & 7) << 8)],
+                                     iq1s_grid[qs[2] | (((qh[ib] >> 6) & 7) << 8)],
+                                     iq1s_grid[qs[3] | (((qh[ib] >> 9) & 7) << 8)],
+                                     ((uint8_t) delta) * 0x01010101u);
                     qs += 4;
                 }
             }
@@ -256,19 +455,13 @@ static bool iqp_decode_superblock(enum ggml_type             type,
                         (uint16_t) (qs[2] | ((qh[1] << 8) & 0x700)),
                         (uint16_t) (qs[3] | ((qh[1] << 4) & 0x700)),
                     };
-                    const int8_t delta[4] = {
-                        (int8_t) (qh[0] & 0x08 ? -1 : 1),
-                        (int8_t) (qh[0] & 0x80 ? -1 : 1),
-                        (int8_t) (qh[1] & 0x08 ? -1 : 1),
-                        (int8_t) (qh[1] & 0x80 ? -1 : 1),
-                    };
+                    const uint32_t deltas = (uint32_t) (qh[0] & 0x08 ? 0xff : 0x01) |
+                                            (uint32_t) (qh[0] & 0x80 ? 0xff : 0x01) << 8 |
+                                            (uint32_t) (qh[1] & 0x08 ? 0xff : 0x01) << 16 |
+                                            (uint32_t) (qh[1] & 0x80 ? 0xff : 0x01) << 24;
 
-                    for (int l = 0; l < 4; ++l) {
-                        const int8_t * grid = (const int8_t *) (iq1s_grid + idx[l]);
-                        for (int j = 0; j < 8; ++j) {
-                            vals[32 * ib + 8 * l + j] = 8 * grid[j] + delta[l];
-                        }
-                    }
+                    iqp_store_iq1_x8(vals + 32 * ib, iq1s_grid[idx[0]], iq1s_grid[idx[1]], iq1s_grid[idx[2]],
+                                     iq1s_grid[idx[3]], deltas);
                     qs += 4;
                     qh += 2;
                 }
@@ -290,10 +483,7 @@ static bool iqp_decode_superblock(enum ggml_type             type,
                     iscales[2 * ib + 0] = dl;
                     iscales[2 * ib + 1] = dl;
 
-                    for (int j = 0; j < 16; ++j) {
-                        vals[32 * ib + j + 0]  = kvalues_iq4nl[qs[j] & 0xf];
-                        vals[32 * ib + j + 16] = kvalues_iq4nl[qs[j] >> 4];
-                    }
+                    iqp_store_iq4_x32(vals + 32 * ib, qs);
                     qs += 16;
                 }
             }
@@ -339,24 +529,14 @@ static void iqp_decode_panel_8(enum ggml_type               type,
         for (int r = 0; r < IQP_NB_ROWS; r++) {
             dst->dfac[r] = dfac[r];
 
-            // sum of weight * integer sub-block scale over the super-block. Bounded by
-            // 256 * 127 * 32 = 1.04e6, and 128 times that is 1.33e8, so the int32 below cannot
-            // overflow (see the kernel bounds in ggml_gemm_iqp_8x8_q8_K).
-            int32_t wsum = 0;
+            const int32_t wsum = iqp_weighted_sum(vals[r], iscales[r]);
 
             for (int sb = 0; sb < IQP_NSB; sb++) {
                 dst->iscales[sb * IQP_NB_ROWS + r] = iscales[r][sb];
 
-                int32_t vsum = 0;
-                for (int k = 0; k < IQP_SB_SIZE; k++) {
-                    vsum += vals[r][sb * IQP_SB_SIZE + k];
-                }
-                wsum += iscales[r][sb] * vsum;
-
+                // both sides are contiguous over k, so the interleave is a run of dword copies
                 for (int g = 0; g < IQP_SB_SIZE / 4; g++) {
-                    for (int k = 0; k < 4; k++) {
-                        dst->qs[sb * 128 + g * 32 + r * 4 + k] = vals[r][sb * IQP_SB_SIZE + g * 4 + k];
-                    }
+                    memcpy(dst->qs + sb * 128 + g * 32 + r * 4, vals[r] + sb * IQP_SB_SIZE + g * 4, 4);
                 }
             }
 
