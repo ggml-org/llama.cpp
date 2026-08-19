@@ -2723,6 +2723,12 @@ static bool ggml_cuda_should_fuse_rms_norm_mul_rope(const ggml_tensor * rms_norm
         return false;
     }
 
+    // ggml_rope_set_offset is not yet supported in the fused kernel
+    const int n_offs = ((const int32_t *) rope->op_params)[15];
+    if (n_offs != 0) {
+        return false;
+    }
+
     return true;
 }
 
