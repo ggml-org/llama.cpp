@@ -96,11 +96,13 @@ struct rpc_msg_hello_req {
 };
 
 struct rpc_msg_hello_rsp {
-    uint8_t major;
-    uint8_t minor;
-    uint8_t patch;
-    uint8_t padding;
-    uint8_t conn_caps[RPC_CONN_CAPS_SIZE];
+    uint8_t  major;
+    uint8_t  minor;
+    uint8_t  patch;
+    uint8_t  padding;
+    // port this server uses for direct server-to-server communication (collectives)
+    uint16_t comm_port;
+    uint8_t  conn_caps[RPC_CONN_CAPS_SIZE];
 };
 
 struct rpc_msg_device_count_rsp {
@@ -222,7 +224,7 @@ struct rpc_msg_comm_init_req {
     uint32_t device;
     uint32_t rank;
     uint32_t world;
-    uint32_t port;      // rank 0: port to listen on; rank > 0: rank 0's comm port
+    uint32_t port;      // rank > 0: rank 0's comm port (rank 0 listens on its own configured comm port)
     char     host[64];  // rank > 0: rank 0's host
 };
 
@@ -377,7 +379,7 @@ static bool send_rpc_cmd(socket_ptr sock, enum rpc_cmd cmd, const void * input, 
 // Performs HELLO handshake with transport auto-negotiation.
 // Advertises local capabilities via conn_caps; if the server responds with
 // matching capabilities, the socket is upgraded transparently.
-static bool negotiate_hello(const std::shared_ptr<socket_t> & sock, uint8_t * minor = nullptr) {
+static bool negotiate_hello(const std::shared_ptr<socket_t> & sock, uint16_t * comm_port = nullptr) {
     rpc_msg_hello_req request = {};
     rpc_msg_hello_rsp response = {};
 
@@ -392,21 +394,21 @@ static bool negotiate_hello(const std::shared_ptr<socket_t> & sock, uint8_t * mi
         return false;
     }
 
-    if (minor != nullptr) {
-        *minor = response.minor;
+    if (comm_port != nullptr) {
+        *comm_port = response.comm_port;
     }
     sock->update_caps(response.conn_caps);
     return true;
 }
 
-// minor protocol version of each connected server, used to gate newer commands (comm collectives)
-static std::mutex server_minor_mutex;
-static std::unordered_map<std::string, uint8_t> server_minor_versions;
+// comm port advertised by each server in its HELLO response, used for server-to-server collectives
+static std::mutex server_comm_port_mutex;
+static std::unordered_map<std::string, uint16_t> server_comm_ports;
 
-static uint8_t rpc_server_minor_version(const std::string & endpoint) {
-    std::lock_guard<std::mutex> lock(server_minor_mutex);
-    auto it = server_minor_versions.find(endpoint);
-    return it != server_minor_versions.end() ? it->second : 0;
+static uint16_t rpc_server_comm_port(const std::string & endpoint) {
+    std::lock_guard<std::mutex> lock(server_comm_port_mutex);
+    auto it = server_comm_ports.find(endpoint);
+    return it != server_comm_ports.end() ? it->second : 0;
 }
 
 static std::shared_ptr<socket_t> get_socket(const std::string & endpoint) {
@@ -434,13 +436,13 @@ static std::shared_ptr<socket_t> get_socket(const std::string & endpoint) {
     if (sock == nullptr) {
         return nullptr;
     }
-    uint8_t minor = 0;
-    if (!negotiate_hello(sock, &minor)) {
+    uint16_t comm_port = 0;
+    if (!negotiate_hello(sock, &comm_port)) {
         return nullptr;
     }
     {
-        std::lock_guard<std::mutex> minor_lock(server_minor_mutex);
-        server_minor_versions[endpoint] = minor;
+        std::lock_guard<std::mutex> comm_port_lock(server_comm_port_mutex);
+        server_comm_ports[endpoint] = comm_port;
     }
     LOG_DBG("[%s] connected to %s\n", __func__, endpoint.c_str());
     sockets[endpoint] = sock;
@@ -962,8 +964,10 @@ void ggml_backend_rpc_get_device_memory(const char * endpoint, uint32_t device, 
 
 class rpc_server {
 public:
-    rpc_server(std::vector<ggml_backend_t> all_backends, const char * cache_dir)
-        : backends(std::move(all_backends)), cache_dir(cache_dir) {
+    rpc_server(std::vector<ggml_backend_t> all_backends, const char * cache_dir,
+               std::string comm_host, uint16_t comm_port)
+        : backends(std::move(all_backends)), cache_dir(cache_dir),
+          comm_host(std::move(comm_host)), comm_port(comm_port) {
         stored_graphs.resize(backends.size());
         comm_states.resize(backends.size());
     }
@@ -1020,6 +1024,9 @@ private:
 
     std::vector<ggml_backend_t> backends;
     const char * cache_dir;
+    // host and port this server binds for direct server-to-server communication (collectives)
+    std::string comm_host;
+    uint16_t    comm_port;
     std::unordered_set<ggml_backend_buffer_t> buffers;
     // computed graphs cached per backend, keyed by uid
     std::vector<std::unordered_map<uint64_t, stored_graph>> stored_graphs;
@@ -1027,9 +1034,10 @@ private:
 };
 
 void rpc_server::hello(rpc_msg_hello_rsp & response) {
-    response.major = RPC_PROTO_MAJOR_VERSION;
-    response.minor = RPC_PROTO_MINOR_VERSION;
-    response.patch = RPC_PROTO_PATCH_VERSION;
+    response.major     = RPC_PROTO_MAJOR_VERSION;
+    response.minor     = RPC_PROTO_MINOR_VERSION;
+    response.patch     = RPC_PROTO_PATCH_VERSION;
+    response.comm_port = comm_port;
     LOG_DBG("[%s] version: %d.%d.%d\n", __func__, response.major, response.minor, response.patch);
 }
 
@@ -1773,9 +1781,10 @@ bool rpc_server::comm_init(const rpc_msg_comm_init_req & request, rpc_msg_comm_i
     uint8_t local_caps[RPC_CONN_CAPS_SIZE] = {};
     uint8_t remote_caps[RPC_CONN_CAPS_SIZE] = {};
     if (request.rank == 0) {
-        socket_ptr srv = socket_t::create_server("0.0.0.0", request.port);
+        // listen on the same host the server was bound to, on the configured comm port
+        socket_ptr srv = socket_t::create_server(comm_host.c_str(), comm_port);
         if (srv == nullptr) {
-            GGML_LOG_ERROR("[%s] failed to listen on comm port %u\n", __func__, request.port);
+            GGML_LOG_ERROR("[%s] failed to listen on comm port %u\n", __func__, comm_port);
             return true;
         }
         state.peer = srv->accept();
@@ -1970,8 +1979,8 @@ rpc_server::~rpc_server() {
 }
 
 static void rpc_serve_client(const std::vector<ggml_backend_t> & backends, const char * cache_dir,
-                             socket_ptr sock) {
-    rpc_server server(backends, cache_dir);
+                             const std::string & comm_host, uint16_t comm_port, socket_ptr sock) {
+    rpc_server server(backends, cache_dir, comm_host, comm_port);
     uint8_t cmd;
     if (!sock->recv_data(&cmd, 1)) {
         return;
@@ -2308,7 +2317,8 @@ static void rpc_serve_client(const std::vector<ggml_backend_t> & backends, const
 }
 
 void ggml_backend_rpc_start_server(const char * endpoint, const char * cache_dir,
-                                   size_t n_threads, size_t n_devices, ggml_backend_dev_t * devices) {
+                                   size_t n_threads, size_t n_devices, ggml_backend_dev_t * devices,
+                                   uint16_t comm_port) {
     if (n_devices == 0 || devices == nullptr) {
         fprintf(stderr, "Invalid arguments to ggml_backend_rpc_start_server\n");
         return;
@@ -2319,6 +2329,7 @@ void ggml_backend_rpc_start_server(const char * endpoint, const char * cache_dir
         RPC_PROTO_MINOR_VERSION,
         RPC_PROTO_PATCH_VERSION);
     printf("  endpoint       : %s\n", endpoint);
+    printf("  comm port      : %u\n", comm_port);
     printf("  local cache    : %s\n", cache_dir ? cache_dir : "n/a");
     printf("Devices:\n");
     for (size_t i = 0; i < n_devices; i++) {
@@ -2370,7 +2381,7 @@ void ggml_backend_rpc_start_server(const char * endpoint, const char * cache_dir
         }
         printf("Accepted client connection\n");
         fflush(stdout);
-        rpc_serve_client(backends, cache_dir, client_socket);
+        rpc_serve_client(backends, cache_dir, host, comm_port, client_socket);
         printf("Client connection closed\n");
         fflush(stdout);
     }
@@ -2523,6 +2534,8 @@ static void ggml_backend_rpc_comm_free(void * comm_ctx_v) {
 }
 
 static void * ggml_backend_rpc_comm_init(ggml_backend_t * backends, size_t n_backends) {
+    // only the pairwise (world size 2) case is implemented; other configurations fall back
+    // to the generic allreduce which routes tensor data through the client
     if (n_backends != 2 || std::getenv("GGML_RPC_NO_COMM") != nullptr) {
         return nullptr;
     }
@@ -2534,28 +2547,31 @@ static void * ggml_backend_rpc_comm_init(ggml_backend_t * backends, size_t n_bac
         }
         ggml_backend_rpc_context * rpc_ctx = (ggml_backend_rpc_context *) backends[i]->context;
         // one rank per endpoint: a server processes its socket sequentially, so a second
-        // COMM_INIT on the same connection would deadlock behind the first
+        // COMM_INIT on the same connection would deadlock behind the first;
+        // to use two devices on the same host, start one rpc-server per device
         for (const auto & rank : ranks) {
             if (rank.endpoint == rpc_ctx->endpoint) {
-                GGML_LOG_WARN("%s: multiple ranks on endpoint %s are not supported\n", __func__, rpc_ctx->endpoint.c_str());
+                GGML_LOG_WARN("%s: multiple ranks on endpoint %s are not supported, start one rpc-server per device\n",
+                              __func__, rpc_ctx->endpoint.c_str());
                 return nullptr;
             }
-        }
-        if (rpc_server_minor_version(rpc_ctx->endpoint) < 1) {
-            GGML_LOG_WARN("%s: server %s does not support collectives\n", __func__, rpc_ctx->endpoint.c_str());
-            return nullptr;
         }
         ranks.push_back({rpc_ctx->endpoint, rpc_ctx->device});
     }
 
-    // rank 1 connects to rank 0 on its serving host; endpoints must be mutually reachable
-    // (e.g. do not bind the servers to 127.0.0.1 when they run on different machines)
+    // rank 1 connects to rank 0's serving host on the comm port advertised in rank 0's HELLO
+    // response; the servers must be reachable from each other (binding to 127.0.0.1 is fine
+    // as long as all servers run on the same machine)
     std::string host0;
     int port0;
     if (!parse_endpoint(ranks[0].endpoint, host0, port0)) {
         return nullptr;
     }
-    const uint32_t comm_port = (uint32_t) port0 + 1000;
+    const uint16_t comm_port = rpc_server_comm_port(ranks[0].endpoint);
+    if (comm_port == 0) {
+        GGML_LOG_WARN("%s: server %s does not advertise a comm port\n", __func__, ranks[0].endpoint.c_str());
+        return nullptr;
+    }
     if (host0.size() >= 64) {
         return nullptr;
     }
