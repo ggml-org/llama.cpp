@@ -6303,8 +6303,8 @@ template [[host_name("kernel_fwht_f32_128")]] kernel kernel_fwht_t kernel_fwht_f
 template [[host_name("kernel_fwht_f32_256")]] kernel kernel_fwht_t kernel_fwht_f32<256>;
 template [[host_name("kernel_fwht_f32_512")]] kernel kernel_fwht_t kernel_fwht_f32<512>;
 
-// dequantize the quantized KV cache to contiguous F16 before running the F16 flash attention kernels
-// - one thread per block; the first args.nblocks1 threads dequantize K, the next args.nblocks2 dequantize V
+// dequantize a quantized KV cache tensor to contiguous F16 before running the F16 flash attention kernels
+// - one thread per block; dispatched separately for K and V
 // - ref: https://github.com/ggml-org/llama.cpp/pull/25556
 template <
     typename block_t,
@@ -6312,40 +6312,25 @@ template <
     void (*deq_t4x4)(device const block_t *, short, thread float4x4 &)>
 kernel void kernel_flash_attn_ext_dequant_to_f16(
         constant ggml_metal_kargs_flash_attn_ext_dequant_to_f16 & args,
-        device const char * k,
-        device const char * v,
-        device       half * k_dst,
-        device       half * v_dst,
+        device const char * x,
+        device       half * x_dst,
         uint gid [[thread_position_in_grid]]) {
-    if (gid >= (uint) args.nblocks1 + (uint) args.nblocks2) {
+    if (gid >= (uint) args.nblocks) {
         return;
     }
 
-    const bool is_v = gid >= (uint) args.nblocks1;
-    const uint idst = is_v ? gid - (uint) args.nblocks1 : gid;
-    uint ib         = idst;
+    const uint nb = args.ne0/QK;
+    const uint i0 = gid%nb;
+    uint ib       = gid/nb;
+    const uint i1 = ib%args.ne1;
+    ib /= args.ne1;
+    const uint i2 = ib%args.ne2;
+    const uint i3 = ib/args.ne2;
 
-    const int32_t ne1 = is_v ? args.ne20 : args.ne10;
-    const int32_t ne2 = is_v ? args.ne21 : args.ne11;
-    const int32_t ne3 = is_v ? args.ne22 : args.ne12;
+    const uint64_t offs = i0*args.nb0 + i1*args.nb1 + i2*args.nb2 + i3*args.nb3;
 
-    const uint64_t nb1 = is_v ? args.nb20 : args.nb10;
-    const uint64_t nb2 = is_v ? args.nb21 : args.nb11;
-    const uint64_t nb3 = is_v ? args.nb22 : args.nb12;
-    const uint64_t nb4 = is_v ? args.nb23 : args.nb13;
-
-    const uint nb = ne1/QK;
-    const uint i0 = ib%nb;
-    ib /= nb;
-    const uint i1 = ib%ne2;
-    ib /= ne2;
-    const uint i2 = ib%ne3;
-    const uint i3 = ib/ne3;
-
-    const uint64_t offs = i0*nb1 + i1*nb2 + i2*nb3 + i3*nb4;
-
-    device const block_t * src = (device const block_t *) ((is_v ? v : k) + offs);
-    device half4 * dst = (device half4 *) (is_v ? v_dst : k_dst) + (QK/4)*idst;
+    device const block_t * src = (device const block_t *) (x + offs);
+    device half4 * dst = (device half4 *) x_dst + (QK/4)*gid;
 
     for (short i = 0; i < QK/16; ++i) {
         float4x4 reg;

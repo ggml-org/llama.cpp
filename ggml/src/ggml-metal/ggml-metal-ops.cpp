@@ -3054,45 +3054,56 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
 
         const int64_t nblocks1_64 = (ne10/ggml_blck_size(op->src[1]->type))*(int64_t) ne11*ne12*ne13;
         const int64_t nblocks2_64 = (ne20/ggml_blck_size(op->src[2]->type))*(int64_t) ne21*ne22*ne23;
-        GGML_ASSERT(nblocks1_64 + nblocks2_64 <= INT32_MAX/2);
+        GGML_ASSERT(nblocks1_64 <= INT32_MAX);
+        GGML_ASSERT(nblocks2_64 <= INT32_MAX);
         const int32_t nblocks1 = nblocks1_64;
         const int32_t nblocks2 = nblocks2_64;
 
         ggml_metal_buffer_id bid_v_f16 = bid_dequant_f16;
         bid_v_f16.offs += ggml_metal_op_flash_attn_ext_dequant_f16_k_size(op);
 
-        ggml_metal_kargs_flash_attn_ext_dequant_to_f16 args0 = {
-            /*.ne10     =*/ ne10,
-            /*.ne11     =*/ ne11,
-            /*.ne12     =*/ ne12,
-            /*.ne13     =*/ ne13,
-            /*.ne20     =*/ ne20,
-            /*.ne21     =*/ ne21,
-            /*.ne22     =*/ ne22,
-            /*.ne23     =*/ ne23,
-            /*.nb10     =*/ nb10,
-            /*.nb11     =*/ nb11,
-            /*.nb12     =*/ nb12,
-            /*.nb13     =*/ nb13,
-            /*.nb20     =*/ nb20,
-            /*.nb21     =*/ nb21,
-            /*.nb22     =*/ nb22,
-            /*.nb23     =*/ nb23,
-            /*.nblocks1 =*/ nblocks1,
-            /*.nblocks2 =*/ nblocks2,
-        };
-
         auto pipeline0 = ggml_metal_library_get_pipeline_flash_attn_ext_dequant_to_f16(lib, op);
         const int nth = std::min(ggml_metal_pipeline_max_theads_per_threadgroup(pipeline0), 256);
 
-        ggml_metal_encoder_set_pipeline(enc, pipeline0);
-        ggml_metal_encoder_set_bytes   (enc, &args0, sizeof(args0), 0);
-        ggml_metal_encoder_set_buffer  (enc, bid_src1,        1);
-        ggml_metal_encoder_set_buffer  (enc, bid_src2,        2);
-        ggml_metal_encoder_set_buffer  (enc, bid_dequant_f16, 3);
-        ggml_metal_encoder_set_buffer  (enc, bid_v_f16,       4);
+        // K
+        ggml_metal_kargs_flash_attn_ext_dequant_to_f16 args_k = {
+            /*.ne0    =*/ ne10,
+            /*.ne1    =*/ ne11,
+            /*.ne2    =*/ ne12,
+            /*.ne3    =*/ ne13,
+            /*.nb0    =*/ nb10,
+            /*.nb1    =*/ nb11,
+            /*.nb2    =*/ nb12,
+            /*.nb3    =*/ nb13,
+            /*.nblocks =*/ nblocks1,
+        };
 
-        ggml_metal_encoder_dispatch_threadgroups(enc, (nblocks1 + nblocks2 + nth - 1)/nth, 1, 1, nth, 1, 1);
+        ggml_metal_encoder_set_pipeline(enc, pipeline0);
+        ggml_metal_encoder_set_bytes   (enc, &args_k, sizeof(args_k), 0);
+        ggml_metal_encoder_set_buffer  (enc, bid_src1,        1);
+        ggml_metal_encoder_set_buffer  (enc, bid_dequant_f16, 2);
+
+        ggml_metal_encoder_dispatch_threadgroups(enc, (nblocks1 + nth - 1)/nth, 1, 1, nth, 1, 1);
+
+        // V
+        ggml_metal_kargs_flash_attn_ext_dequant_to_f16 args_v = {
+            /*.ne0    =*/ ne20,
+            /*.ne1    =*/ ne21,
+            /*.ne2    =*/ ne22,
+            /*.ne3    =*/ ne23,
+            /*.nb0    =*/ nb20,
+            /*.nb1    =*/ nb21,
+            /*.nb2    =*/ nb22,
+            /*.nb3    =*/ nb23,
+            /*.nblocks =*/ nblocks2,
+        };
+
+        ggml_metal_encoder_set_pipeline(enc, pipeline0);
+        ggml_metal_encoder_set_bytes   (enc, &args_v, sizeof(args_v), 0);
+        ggml_metal_encoder_set_buffer  (enc, bid_src2,        1);
+        ggml_metal_encoder_set_buffer  (enc, bid_v_f16,       2);
+
+        ggml_metal_encoder_dispatch_threadgroups(enc, (nblocks2 + nth - 1)/nth, 1, 1, nth, 1, 1);
 
         // the pad and attention kernels read the dequantized KV
         ggml_metal_op_concurrency_reset(ctx);
