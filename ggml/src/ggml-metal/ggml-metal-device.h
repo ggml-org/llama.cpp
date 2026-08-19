@@ -176,7 +176,7 @@ struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_att
         bool    has_mask,
         int32_t ncpsg);
 
-struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext_dequant_to_f16(
+struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext_kv_f16(
         ggml_metal_library_t lib,
         const struct ggml_tensor * op);
 
@@ -195,7 +195,7 @@ struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_att
         bool    has_scap,
         bool    has_kvpad,
         int32_t nsg,
-        bool    use_f16_kv,
+        bool    use_kv_f16,
         int32_t ns10, // actual row width of K in elements, as seen by the kernel
         int32_t ns20); // actual row width of V in elements, as seen by the kernel
 
@@ -209,7 +209,7 @@ struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_att
         bool    has_kvpad,
         int32_t nsg,
         int32_t nwg,
-        bool    use_f16_kv,
+        bool    use_kv_f16,
         int32_t ns10, // actual row width of K in elements, as seen by the kernel
         int32_t ns20); // actual row width of V in elements, as seen by the kernel
 
