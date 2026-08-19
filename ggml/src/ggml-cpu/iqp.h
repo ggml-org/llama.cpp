@@ -12,7 +12,9 @@
 // ggml_vec_dot_iq*_q8_K once per (row, column). The weights stay compressed in the model buffer, so
 // there is no resident memory overhead and small batches keep using the ordinary vec_dot path.
 //
-// Implemented in repack.cpp (next to the panel decode and the gemm kernels).
+// Implemented in iqp.cpp. The panel layout (block_iqp_x8) and the gemv/gemm kernels it runs
+// belong to the repack interleaved block machinery - see repack.h, repack.cpp and
+// arch/<arch>/repack.cpp.
 
 #ifdef __cplusplus
 extern "C" {
