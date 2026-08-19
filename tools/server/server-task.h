@@ -613,6 +613,15 @@ bool server_prompt_cache_can_reuse_in_place(
         const server_tokens & incoming,
         bool cache_prompt);
 
+// Pure policy helper for the recurrent host-cache fast path. An ineligible
+// route, a resident branch that must be preserved, or a better cached state
+// always keeps the established update path.
+bool server_prompt_cache_can_skip_recurrent_update(
+        bool eligible,
+        bool update_required,
+        bool reuse_in_place,
+        bool has_better_cached_prompt);
+
 struct server_prompt_cache {
     server_prompt_cache(int32_t limit_size_mib, size_t limit_tokens) {
         this->limit_size   = 1024ull*1024ull*(limit_size_mib < 0 ? 0 : limit_size_mib);
@@ -631,7 +640,15 @@ struct server_prompt_cache {
 
     size_t n_tokens() const;
 
+    // True when a cached state already contains every token in prompt.
+    bool contains(const server_prompt & prompt) const;
+
     server_prompt_cache_state * alloc(const server_prompt & prompt, size_t state_size_main, size_t state_size_drft);
+
+    // Non-destructively checks whether load() would prefer a cached state over
+    // the resident prompt. This allows callers to avoid serializing a resident
+    // state when there is neither a branch to preserve nor a better state to load.
+    bool has_better_match(const server_prompt & prompt, const server_tokens & tokens_new) const;
 
     bool load(server_prompt & prompt, const server_tokens & tokens_new, llama_context * ctx_tgt, llama_context * ctx_dft, int32_t id_slot);
 

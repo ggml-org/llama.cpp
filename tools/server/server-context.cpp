@@ -255,7 +255,7 @@ struct server_slot {
     server_prompt prompt;
 
     bool prompt_save(server_prompt_cache & prompt_cache) const {
-        if (prompt.tokens.size() == 0) {
+        if (prompt.tokens.size() == 0 || prompt_cache.contains(prompt)) {
             return false;
         }
 
@@ -1665,24 +1665,51 @@ private:
         }
 
         if (ret) {
-            // A single-slot recurrent context whose resident text prompt is an
-            // exact prefix of the incoming prompt can continue in place. Saving
-            // hundreds of MiB to the host cache and immediately keeping the same
-            // resident state is redundant. Keep every other route on the proven
-            // shrink/save/load/expand path, including multi-slot and multimedia.
-            const bool reuse_recurrent_in_place =
+            // Single-slot text recurrent contexts can avoid a host round-trip in
+            // two exact-semantics cases: the incoming prompt extends the resident
+            // state, or the normal slot policy has no branch to preserve and the
+            // host cache has no better state to load. Keep multi-slot, multimedia,
+            // explicit cache bypasses, and actual branch switches on the proven
+            // shrink/save/load/expand path.
+            const bool can_probe_recurrent_cache =
                 needs_reeval &&
                 n_parallel_user == 1 &&
                 prompt_cache &&
                 task.type == SERVER_TASK_TYPE_COMPLETION &&
+                task.params.cache_prompt &&
+                !ret->prompt.tokens.empty() &&
+                !ret->prompt.tokens.has_mtmd &&
+                !task.tokens.has_mtmd;
+
+            const bool reuse_recurrent_in_place =
+                can_probe_recurrent_cache &&
                 server_prompt_cache_can_reuse_in_place(
                     ret->prompt.tokens, task.tokens, task.params.cache_prompt);
 
-            if (reuse_recurrent_in_place) {
+            const bool has_better_cached_prompt =
+                can_probe_recurrent_cache &&
+                !reuse_recurrent_in_place &&
+                !update_cache &&
+                prompt_cache->has_better_match(ret->prompt, task.tokens);
+
+            const bool skip_redundant_recurrent_update =
+                server_prompt_cache_can_skip_recurrent_update(
+                    can_probe_recurrent_cache,
+                    update_cache,
+                    reuse_recurrent_in_place,
+                    has_better_cached_prompt);
+
+            if (skip_redundant_recurrent_update) {
                 update_cache = false;
-                SRV_TRC("reusing recurrent prompt in place; skipping host prompt-cache update "
-                        "(resident = %zu tokens, incoming = %zu tokens)\n",
-                        ret->prompt.tokens.size(), task.tokens.size());
+                if (reuse_recurrent_in_place) {
+                    SRV_TRC("reusing recurrent prompt in place; skipping host prompt-cache update "
+                            "(resident = %zu tokens, incoming = %zu tokens)\n",
+                            ret->prompt.tokens.size(), task.tokens.size());
+                } else {
+                    SRV_TRC("keeping resident recurrent prompt; no branch save or better host-cache "
+                            "state is needed (resident = %zu tokens, incoming = %zu tokens)\n",
+                            ret->prompt.tokens.size(), task.tokens.size());
+                }
             } else if (needs_reeval && prompt_cache) {
                 // Recurrent models need shrink/restore when switching prompt
                 // states to avoid forced full re-processing (issue #22746).
