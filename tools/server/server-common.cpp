@@ -1979,19 +1979,24 @@ void server_sleep_rst::init(int argc, char ** argv) {
         return;
     }
 
+    // note: the env var is kept, is_boot_to_sleep() reads it during the whole process lifetime
     try {
         boot_state = json::parse(state);
     } catch (const std::exception & e) {
         SRV_ERR("failed to read the state left by the previous process: %s\n", e.what());
+        common_set_env(SLEEP_STATE_ENV, ""); // unusable, boot normally instead
     }
-
-    // clear it now, so that child processes do not inherit it
-    common_set_env(SLEEP_STATE_ENV, "");
 }
 
 void server_sleep_rst::enable(common_params & params) {
-    if (params.sleep_mode != COMMON_SLEEP_MODE_RST) {
+    // the state left by the previous process is unusable without the restart, drop it
+    auto disable = [this]() {
         boot_state = json();
+        common_set_env(SLEEP_STATE_ENV, "");
+    };
+
+    if (params.sleep_mode != COMMON_SLEEP_MODE_RST) {
+        disable();
         return;
     }
 
@@ -1999,7 +2004,7 @@ void server_sleep_rst::enable(common_params & params) {
         // exec() can only restart a standalone process
         SRV_WRN("%s", "--sleep-mode rst is not supported in this mode, using --sleep-mode free\n");
         params.sleep_mode = COMMON_SLEEP_MODE_FREE;
-        boot_state = json();
+        disable();
         return;
     }
 
