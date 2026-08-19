@@ -158,6 +158,11 @@ struct server_routes {
     // to be used in router mode
     json get_model_info() const;
 
+    // save / restore the cached responses across a process restart, see --sleep-mode all
+    // only valid while sleeping, as the cache is only updated upon entering that state
+    json cache_to_json();
+    bool cache_from_json(const json & data);
+
 private:
     std::unique_ptr<server_res_generator> handle_completions_impl(
             const server_http_req & req,

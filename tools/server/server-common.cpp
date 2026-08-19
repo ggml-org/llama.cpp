@@ -88,6 +88,64 @@ json server_slot_stats::to_json() const {
 }
 
 //
+// server_metrics
+//
+
+json server_metrics::bucket::to_json() const {
+    return json {
+        {"count", count},
+        {"steps", steps},
+        {"time",  time },
+    };
+}
+
+void server_metrics::bucket::from_json(const json & data) {
+    count = data.at("count");
+    steps = data.at("steps");
+    time  = data.at("time");
+}
+
+json server_metrics::to_json() const {
+    return json {
+        {"t_start",             t_start},
+
+        {"prompt_bucket",       prompt_bucket .to_json()},
+        {"predict_bucket",      predict_bucket.to_json()},
+        {"prompt",              prompt        .to_json()},
+        {"predict",             predict       .to_json()},
+
+        {"n_prompt_cached",     n_prompt_cached},
+        {"n_tokens_max",        n_tokens_max},
+        {"n_decode",            n_decode},
+        {"n_busy_slots",        n_busy_slots},
+
+        {"n_draft_tokens",      n_draft_tokens},
+        {"n_draft_accepted",    n_draft_accepted},
+        {"n_draft_verif_steps", n_draft_verif_steps},
+        {"n_accepted_per_pos",  n_accepted_per_pos},
+    };
+}
+
+void server_metrics::from_json(const json & data) {
+    t_start = data.at("t_start");
+
+    prompt_bucket .from_json(data.at("prompt_bucket"));
+    predict_bucket.from_json(data.at("predict_bucket"));
+    prompt        .from_json(data.at("prompt"));
+    predict       .from_json(data.at("predict"));
+
+    n_prompt_cached = data.at("n_prompt_cached");
+    n_tokens_max    = data.at("n_tokens_max");
+    n_decode        = data.at("n_decode");
+    n_busy_slots    = data.at("n_busy_slots");
+
+    n_draft_tokens      = data.at("n_draft_tokens");
+    n_draft_accepted    = data.at("n_draft_accepted");
+    n_draft_verif_steps = data.at("n_draft_verif_steps");
+    n_accepted_per_pos  = data.at("n_accepted_per_pos").get<std::vector<uint64_t>>();
+}
+
+//
 // random string / id
 //
 

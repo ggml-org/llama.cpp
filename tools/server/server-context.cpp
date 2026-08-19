@@ -5472,3 +5472,28 @@ void server_routes::update_cached_responses(bool is_sleeping) {
         should_reset_buckets = false;
     }
 }
+
+json server_routes::cache_to_json() {
+    std::unique_lock<std::mutex> lock(mutex_cache);
+
+    return json {
+        {"models",  cached_models},
+        {"props",   cached_props},
+        {"metrics", cached_metrics.to_json()},
+    };
+}
+
+bool server_routes::cache_from_json(const json & data) {
+    std::unique_lock<std::mutex> lock(mutex_cache);
+
+    try {
+        cached_models = data.at("models");
+        cached_props  = data.at("props");
+        cached_metrics.from_json(data.at("metrics"));
+    } catch (const std::exception & e) {
+        SRV_ERR("failed to restore cached responses: %s\n", e.what());
+        return false;
+    }
+
+    return true;
+}

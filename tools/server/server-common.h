@@ -450,6 +450,9 @@ struct server_metrics {
             steps += n_steps;
             time  += t_us;
         }
+
+        json to_json() const;
+        void from_json(const json & data);
     };
 
     // these are reset by reset_bucket(), only the rate is read from them
@@ -490,6 +493,10 @@ struct server_metrics {
     void add_prompt_cached(uint64_t n_tokens) {
         n_prompt_cached += n_tokens;
     }
+
+    // used to keep the metrics across a process restart, see --sleep-mode all
+    json to_json() const;
+    void from_json(const json & data);
 };
 
 //
