@@ -376,7 +376,6 @@ class ConversationsStore implements ConversationsPreferencesHost {
 	async deleteAll(): Promise<void> {
 		try {
 			const allConversations = await DatabaseService.getAllConversations();
-
 			const allIds = allConversations.map((c) => c.id);
 
 			await DatabaseService.bulkDeleteConversations(allIds);

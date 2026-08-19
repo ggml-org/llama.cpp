@@ -19,7 +19,6 @@ import { DatabaseService } from '$lib/services/database.service';
 import type { ChatProcessingStore } from '$lib/stores/chat/processing.svelte';
 // direct imports between stores, not via the barrel, to avoid circular deps
 import { conversationsStore } from '$lib/stores/conversations/index.svelte';
-import { settingsStore } from '$lib/stores/settings/index.svelte';
 import type {
 	ChatMessagePromptProgress,
 	ChatMessageTimings,
