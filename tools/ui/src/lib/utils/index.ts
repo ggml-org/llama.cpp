@@ -130,7 +130,7 @@ export { getImageErrorFallbackHtml } from './image-error-fallback';
 
 // SSE-with-JSON stream iterator (used by server tool streaming, decoupled
 // from chat.service.ts which embeds its own SSE parser for resume support)
-export { parseSseJsonStream } from './sse';
+export { extractSseDataPayload, parseSseJsonStream, splitSseRecords } from './sse';
 
 // Stream session identity (conversation-id based)
 export { streamIdentity } from './stream-identity';

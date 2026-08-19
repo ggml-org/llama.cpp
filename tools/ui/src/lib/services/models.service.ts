@@ -1,14 +1,14 @@
 import { base } from '$app/paths';
-import {
-	API_MODELS,
-	MODEL_ID,
-	SSE_DATA_PREFIX,
-	SSE_LINE_SEPARATOR,
-	SSE_RECORD_SEPARATOR
-} from '$lib/constants';
+import { API_MODELS, MODEL_ID } from '$lib/constants';
 import { ServerModelStatus } from '$lib/enums';
 import type { ParsedModelId } from '$lib/types/models';
-import { apiFetch, apiPost, normalizeModelName } from '$lib/utils';
+import {
+	apiFetch,
+	apiPost,
+	extractSseDataPayload,
+	normalizeModelName,
+	splitSseRecords
+} from '$lib/utils';
 import { getAuthHeaders } from '$lib/utils/api-headers';
 
 export class ModelsService {
@@ -149,15 +149,14 @@ export class ModelsService {
 
 						buffer += decoder.decode(value, { stream: true });
 
-						let boundary = buffer.indexOf(SSE_RECORD_SEPARATOR);
+						const { records, rest } = splitSseRecords(buffer);
 
-						while (boundary !== -1) {
-							const event = ModelsService.parseStatusRecord(buffer.slice(0, boundary));
+						buffer = rest;
+
+						for (const record of records) {
+							const event = ModelsService.parseStatusRecord(record);
 
 							if (event) onEvent(event);
-
-							buffer = buffer.slice(boundary + SSE_RECORD_SEPARATOR.length);
-							boundary = buffer.indexOf(SSE_RECORD_SEPARATOR);
 						}
 					}
 				}
@@ -176,11 +175,7 @@ export class ModelsService {
 	 * carries no data payload or malformed JSON.
 	 */
 	private static parseStatusRecord(record: string): ApiModelsSseEvent | null {
-		const payload = record
-			.split(SSE_LINE_SEPARATOR)
-			.filter((line) => line.startsWith(SSE_DATA_PREFIX))
-			.map((line) => line.slice(SSE_DATA_PREFIX.length).trim())
-			.join(SSE_LINE_SEPARATOR);
+		const payload = extractSseDataPayload(record);
 
 		if (payload.length === 0) return null;
 
