@@ -27,14 +27,9 @@ constexpr size_t SKILL_MAX_BYTES = 1024 * 1024;
 constexpr size_t RESOURCE_MAX_BYTES = 10 * 1024 * 1024;
 constexpr size_t RESOURCE_LIST_MAX = 256;
 constexpr int RESOURCE_LIST_MAX_DEPTH = 4;
-// Bounded path-free LRU catalog cache: entries are keyed by canonical
-// effective CWD plus tokenizer generation, promoted on hit, and capped here.
+// Path-free LRU cache keyed by canonical CWD plus tokenizer generation.
 constexpr size_t CATALOG_CACHE_MAX = 32;
-// Client-supplied resource paths are capped before the missing-resource
-// suggestion ranker runs: listing candidates are bounded by the depth-four
-// enumeration (each component is filesystem-name limited, at most 255 bytes on
-// POSIX), so this cap keeps the Damerau-Levenshtein matrix allocation bounded
-// while staying far above any path the listing can produce.
+// Bounds the Damerau-Levenshtein allocation in the missing-resource ranker.
 constexpr size_t RESOURCE_PATH_MAX_BYTES = 4096;
 
 struct skill_diagnostic {
@@ -82,10 +77,7 @@ struct resource_listing {
     bool truncated = false;
 };
 
-// One cached skill: safe parsed/serialized values, observable file state
-// sufficient to detect an in-place mutation, and the measured instruction
-// tokens. Deliberately path-free: no raw roots, resource paths, or
-// authorization state.
+// Path-free cached skill: safe parsed values, file state, and measured tokens.
 struct cached_skill {
     std::string id;
     parsed_skill parsed;
@@ -94,9 +86,7 @@ struct cached_skill {
     bool tokens_estimated = true;
 };
 
-// One catalog cache entry, keyed by canonical effective CWD plus tokenizer
-// generation. The key string is the canonical CWD (never a stored root or
-// resource path).
+// One cache entry, keyed by canonical CWD plus tokenizer generation.
 struct catalog_cache_entry {
     std::string cwd;
     uint64_t generation = 0;
@@ -237,10 +227,7 @@ static bool parse_scalar(const std::string & source, std::string & value) {
     return !value.empty() && value.front() != '[' && value.front() != '{' && value.front() != '&' && value.front() != '*';
 }
 
-// A block-scalar header value: a `|` (literal) or `>` (folded) indicator with
-// an optional chomping sign (`-` strips trailing line breaks, `+` keeps all of
-// them). Returns false for anything else so callers fall back to scalar
-// parsing.
+// A `|`/`>` block-scalar header with an optional `-`/`+` chomping sign.
 static bool parse_block_indicator(const std::string & value, char & style, char & chomp) {
     if (value.empty()) {
         return false;
@@ -260,15 +247,9 @@ static bool parse_block_indicator(const std::string & value, char & style, char 
     return false;
 }
 
-// Consumes the indented continuation lines of a `|`/`>` block scalar whose
-// header line was already read, starting at *position. Blank lines and lines
-// indented at or beyond the content indent (the indent of the first non-blank
-// line) are content; the block ends at the first non-blank line indented less
-// than the content indent, which is the next frontmatter field or the closing
-// delimiter. The common content indentation is removed. Literal style keeps
-// source line breaks; folded style folds single line breaks to spaces and
-// turns blank lines into paragraph breaks. The chomping sign controls the
-// trailing line breaks. *position is left at the terminator line.
+// Consume indented continuation lines of a `|`/`>` block scalar. Remove the
+// common indentation, apply style/chomping, and leave *position at the
+// terminating line.
 static std::string parse_block_scalar(const std::string & source, size_t & position, char style, char chomp) {
     std::vector<std::string> lines;
     std::vector<bool> more_indented;
@@ -397,13 +378,11 @@ static bool parse_skill(const std::string & source, parsed_skill & skill) {
                     char style = '\0';
                     char chomp = '\0';
                     if (parse_block_indicator(trim(line.substr(colon + 1)), style, chomp)) {
-                        // continuation starts after this header line; the
-                        // block parser leaves it at the terminator line.
+                        // continuation starts after this header line
                         position = end == std::string::npos ? source.size() : end + 1;
                         skill.description = parse_block_scalar(source, position, style, chomp);
-                        // position already advanced past the block content to
-                        // the terminator line; the shared advance below would
-                        // move it back, so continue the loop directly.
+                        // position is already at the terminator line; skip the
+                        // shared advance below
                         continue;
                     }
                     if (parse_scalar(line.substr(colon + 1), value)) {
@@ -470,10 +449,7 @@ static bool is_safe_name(const std::string & name) {
            name != "." && name != "..";
 }
 
-// Documented cosmetic public-name grammar: lowercase ASCII letters, digits,
-// and hyphens (no leading or trailing hyphen), at most 64 characters. Enforced
-// as a cosmetic defect (the safe public name is retained with a warning), not
-// as a safety boundary.
+// Cosmetic (not safety) public-name grammar; defects warn but keep the name.
 static bool is_cosmetic_name(const std::string & name) {
     if (name.empty() || name.size() > 64) {
         return false;
@@ -539,11 +515,8 @@ static std::string modified_at(const fs::path & file) {
     return out.str();
 }
 
-// Observable file state (modification time plus size) sufficient to detect an
-// in-place mutation of a skill file. The catalog cache stores this instead of
-// raw file contents so it can decide whether a cached parse is still current.
-// Returns an empty string when the state cannot be observed, which forces a
-// re-read instead of risking a stale cached parse.
+// File mtime+size used by the cache to detect an in-place mutation. Empty on
+// failure, which forces a re-read.
 static std::string observable_file_state(const fs::path & file) {
     std::error_code ec;
     const fs::file_time_type time = fs::last_write_time(file, ec);
@@ -698,10 +671,7 @@ struct ranked_path {
     std::string path;
 };
 
-// Bounded top-three suggestion selection. Preserves the ordering of the full
-// (normalized Damerau-Levenshtein, then lexical) sort while retaining only the
-// three best candidates, so the missing-resource path never ranks or stores
-// every entry of the (already capped) listing.
+// Retain the top three candidates in full sort order without ranking all entries.
 static void keep_best_three(std::vector<ranked_path> & best, ranked_path candidate) {
     auto position = best.end();
     for (auto it = best.begin(); it != best.end(); ++it) {
@@ -719,21 +689,9 @@ static void keep_best_three(std::vector<ranked_path> & best, ranked_path candida
     }
 }
 
-// Shared discovery pass over one configured root: enumerate immediate child
-// directories in lexical order, validate each candidate (canonical containment
-// under the root, exact SKILL.md, bounded UTF-8 frontmatter), warn on cosmetic
-// public-name grammar defects while retaining the safe frontmatter name, reject
-// only unsafe names, and retain only the first (highest-precedence) entry per
-// name. `base` is the canonical HOME or effective CWD the configured root must
-// stay beneath: a root whose canonical target escapes that base is rejected
-// with skill_root_invalid.
-//
-// When `cache_entry` is non-null, discovery consults the path-free catalog
-// cache entry: an unchanged observable file state reuses the cached parse and
-// instruction measurement without re-reading the file; otherwise the file is
-// re-read and re-measured. `count_tokens` (when non-null) supplies exact
-// direct-tokenizer counts; on absence or an unavailable tokenizer the
-// instruction is estimated as ceil(bytes / 4).
+// Discovery pass over one root: validate canonical containment under base,
+// keep the first (highest-precedence) entry per name, and reuse cached parses
+// when observable file state is unchanged.
 static void add_root_skills(const fs::path & candidate_root, const fs::path & base, const std::string & scope,
                             const std::string & provider, skill_catalog & catalog,
                             catalog_cache_entry * cache_entry, const token_count_callback * count_tokens) {
@@ -757,9 +715,7 @@ static void add_root_skills(const fs::path & candidate_root, const fs::path & ba
         return path_to_utf8(left.filename()) < path_to_utf8(right.filename());
     });
     for (const fs::path & child : children) {
-        // Diagnostic identity for rejected candidates comes from the candidate
-        // directory basename, derived before any file parsing. Unsafe basenames
-        // are not echoed: the name stays empty.
+        // Diagnostic name is the basename; unsafe basenames are not echoed.
         const std::string candidate_name = path_to_utf8(child.filename());
         const std::string candidate_diagnostic_name = is_safe_name(candidate_name) ? candidate_name : "";
         fs::path directory;
@@ -798,24 +754,19 @@ static void add_root_skills(const fs::path & candidate_root, const fs::path & ba
         }
         std::string name = parsed.name;
         if (!is_safe_name(name)) {
-            // Only unsafe names (empty, separator- or traversal-bearing) are
-            // rejected. The diagnostic carries no name because echoing an
-            // unsafe name could reflect unvalidated input.
+            // Reject unsafe names; omit the name to avoid echoing unvalidated input.
             catalog.diagnostics.push_back(diagnostic("warning", "skill_name_invalid", "Skill name is invalid", "", scope, provider));
             continue;
         }
         if (!is_cosmetic_name(name)) {
-            // Cosmetic grammar defects warn but load: the safe public
-            // frontmatter name is retained, never replaced by the directory
-            // name, so selection identity is preserved.
+            // Cosmetic defects warn but load; the safe frontmatter name is kept.
             catalog.diagnostics.push_back(diagnostic("warning", "skill_name_invalid", "Skill name is invalid", name, scope, provider));
         }
         const auto existing = std::find_if(catalog.skills.begin(), catalog.skills.end(), [&](const skill_entry & entry) {
             return entry.name == name;
         });
         if (existing != catalog.skills.end()) {
-            // Collapse per name: later shadowed records of the same name join
-            // the existing diagnostic; scope/provider stay the first entry's.
+            // Shadowed records of one name share the first entry's diagnostic.
             const auto shadow = std::find_if(catalog.diagnostics.begin(), catalog.diagnostics.end(), [&](const skill_diagnostic & entry) {
                 return entry.code == "skill_shadowed" && entry.name == name;
             });
@@ -829,9 +780,7 @@ static void add_root_skills(const fs::path & candidate_root, const fs::path & ba
             continue;
         }
 
-        // Instruction measurement: reuse cached counts on an unchanged file,
-        // otherwise measure exactly (direct tokenizer available) or estimate
-        // the integer ceiling of bytes / 4.
+        // Reuse cached counts on an unchanged file, else measure or estimate.
         size_t tokens = (parsed.body.size() + 3) / 4;
         bool tokens_estimated = true;
         if (reuse) {
@@ -863,26 +812,15 @@ static void add_root_skills(const fs::path & candidate_root, const fs::path & ba
 
 } // namespace
 
-// Path-free bounded LRU catalog cache (declared in server-skills.h). Entries
-// are keyed by canonical effective CWD plus tokenizer generation, promoted on
-// hit, and capped at CATALOG_CACHE_MAX. Entries hold only safe
-// parsed/serialized values, observable file state, and measured instruction
-// tokens -- never raw roots, resource paths, or authorization state.
-//
-// The cache is shared by concurrent HTTP worker threads, so every access is
-// serialized by `mutex` and no raw pointer into the internal lists ever
-// escapes: `lookup` returns a copy of the entry (promoting on hit), the
-// caller mutates and measures the copy while doing file I/O, and `store`
-// writes it back under the lock. A concurrent store/eviction can therefore
-// never invalidate an entry a handler is still using.
+// Path-free LRU cache keyed by canonical CWD plus tokenizer generation
+// (declared in server-skills.h). Access is serialized by `mutex`; lookup and
+// store hand copies in and out so no raw pointer escapes the lock.
 struct skill_catalog_cache {
     std::mutex mutex;
     std::list<catalog_cache_entry> entries; // front = most recently used
     std::map<std::pair<std::string, uint64_t>, std::list<catalog_cache_entry>::iterator> index;
 
-    // Find the entry for (cwd, generation) under the cache lock, promote it to
-    // most-recently-used on a hit, and return a copy of it; returns nullopt on
-    // a miss. The copy keeps the caller free of any pointer into the cache.
+    // Find (cwd, generation) under lock, promote on hit, return a copy.
     std::optional<catalog_cache_entry> lookup(const std::string & cwd, uint64_t generation) {
         std::lock_guard<std::mutex> lock(mutex);
         const auto key = std::make_pair(cwd, generation);
@@ -894,10 +832,7 @@ struct skill_catalog_cache {
         return *found->second; // copy
     }
 
-    // Insert or replace the entry for its (cwd, generation) key under the
-    // cache lock, evicting the least-recently-used entry when the cap is
-    // exceeded. Replacing an existing entry keeps the size unchanged, so
-    // eviction only ever happens on a genuine insert.
+    // Insert or replace (cwd, generation) under lock, evicting LRU on overflow.
     void store(catalog_cache_entry entry) {
         std::lock_guard<std::mutex> lock(mutex);
         const auto key = std::make_pair(entry.cwd, entry.generation);
@@ -920,9 +855,7 @@ server_skills::server_skills(server_skills_config config, token_count_callback c
       count_tokens(std::move(count_tokens)),
       process_cwd(std::filesystem::canonical(std::filesystem::current_path())),
       catalog_cache(std::make_unique<skill_catalog_cache>()) {
-    // Follow the server-tools.cpp home_dir() convention: wide environment
-    // lookup on Windows (the narrow getenv returns the profile path in the
-    // active code page), plain narrow lookup on POSIX.
+    // Wide env lookup on Windows, narrow on POSIX (see server-tools home_dir()).
     std::string home;
 #if defined(_WIN32)
     const wchar_t * wide_home = _wgetenv(L"HOME");
@@ -959,11 +892,8 @@ server_skills::server_skills(server_skills_config config, token_count_callback c
                 }
             }
 
-            // Tokenizer generation for cache keying: an empty-text probe
-            // returns the current generation, or nullopt when the direct
-            // tokenizer is unavailable (router/unloaded/sleeping), in which
-            // case catalogs are measured by estimation and keyed at
-            // generation 0.
+            // Probe the current tokenizer generation; nullopt means the direct
+            // tokenizer is unavailable, so estimate and key at generation 0.
             uint64_t generation = 0;
             if (this->count_tokens) {
                 try {
@@ -974,9 +904,7 @@ server_skills::server_skills(server_skills_config config, token_count_callback c
                 }
             }
             const std::string cwd_key = path_to_utf8(cwd);
-            // lookup returns a copy of the entry (or nullopt on a miss); the
-            // working entry is a request-local value, so a concurrent store or
-            // eviction can never invalidate it while file I/O runs below.
+            // lookup returns a copy, so concurrent store/eviction cannot touch it.
             std::optional<catalog_cache_entry> cached_entry = this->catalog_cache->lookup(cwd_key, generation);
             catalog_cache_entry entry;
             if (cached_entry.has_value()) {
