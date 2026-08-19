@@ -1478,7 +1478,9 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext(
         bool    has_scap,
         bool    has_kvpad,
         int32_t nsg,
-        bool    use_f16_kv) {
+        bool    use_f16_kv,
+        int32_t ns10, // actual row width of K in elements, as seen by the kernel
+        int32_t ns20) { // actual row width of V in elements, as seen by the kernel
     assert(op->op == GGML_OP_FLASH_ATTN_EXT);
 
     char base[256];
@@ -1486,9 +1488,6 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext(
 
     const int32_t dk = (int32_t) op->src[1]->ne[0];
     const int32_t dv = (int32_t) op->src[2]->ne[0];
-
-    const int32_t ns10 = use_f16_kv ? dk : op->src[1]->nb[1]/op->src[1]->nb[0];
-    const int32_t ns20 = use_f16_kv ? dv : op->src[2]->nb[1]/op->src[2]->nb[0];
 
     const char * type = use_f16_kv ? "f16" : ggml_type_name(op->src[1]->type);
 
@@ -1547,7 +1546,9 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext_v
         bool    has_kvpad,
         int32_t nsg,
         int32_t nwg,
-        bool    use_f16_kv) {
+        bool    use_f16_kv,
+        int32_t ns10, // actual row width of K in elements, as seen by the kernel
+        int32_t ns20) { // actual row width of V in elements, as seen by the kernel
     assert(op->op == GGML_OP_FLASH_ATTN_EXT);
 
     char base[256];
@@ -1555,9 +1556,6 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext_v
 
     const int32_t dk = (int32_t) op->src[1]->ne[0];
     const int32_t dv = (int32_t) op->src[2]->ne[0];
-
-    const int32_t ns10 = use_f16_kv ? dk : op->src[1]->nb[1]/op->src[1]->nb[0];
-    const int32_t ns20 = use_f16_kv ? dv : op->src[2]->nb[1]/op->src[2]->nb[0];
 
     const char * type = use_f16_kv ? "f16" : ggml_type_name(op->src[1]->type);
 
