@@ -2468,6 +2468,38 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
 
     llm->res->set_outputs(params);
 
+    // zero-copy embd_dev path: concat the enabled layer-input tensors into a
+    // persistent device buffer so a foreign context (e.g. the speculative draft)
+    // can alias it via a view on the next compute call.
+    if (params.embd_layer_inp_fused) {
+        const auto & enabled = params.cparams.embeddings_layer_inp;
+
+        ggml_tensor * fused = nullptr;
+        for (size_t il = 0; il < enabled.size(); ++il) {
+            if (!enabled[il]) {
+                continue;
+            }
+            ggml_tensor * layer_inp = llm->res->get_layer_inp((int) il);
+            if (!layer_inp) {
+                GGML_ABORT("layer input tensor not found for embd_layer_inp_fused");
+            }
+            fused = fused ? ggml_concat(llm->ctx0, fused, layer_inp, 0) : layer_inp;
+        }
+
+        if (fused) {
+            GGML_ASSERT(fused->ne[0] == params.embd_layer_inp_fused->ne[0]);
+            // copy only the columns for this ubatch (n_tokens <= n_batch) into a view
+            // of the persistent buffer at the correct offset; the rest is untouched.
+            ggml_tensor * fused_dst = ggml_view_2d(
+                    llm->ctx0, params.embd_layer_inp_fused,
+                    params.embd_layer_inp_fused->ne[0], params.ubatch.n_tokens,
+                    params.embd_layer_inp_fused->nb[1],
+                    (size_t) params.token_offset * params.embd_layer_inp_fused->nb[1]);
+            ggml_tensor * dst = ggml_cpy(llm->ctx0, fused, fused_dst);
+            ggml_build_forward_expand(llm->res->get_gf(), dst);
+        }
+    }
+
     return llm->res->get_gf();
 }
 

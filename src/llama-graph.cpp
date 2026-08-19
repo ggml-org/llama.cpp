@@ -72,6 +72,12 @@ void llm_graph_input_embd::set_input(const llama_ubatch * ubatch) {
         ggml_backend_tensor_set(tokens, ubatch->token, 0, n_tokens*ggml_element_size(tokens));
     }
 
+    if (ubatch->embd_dev) {
+        // zero-copy path: the input is a view of an external device tensor
+        // (already on the backend), nothing to upload
+        return;
+    }
+
     if (ubatch->embd) {
         GGML_ASSERT(n_embd == embd->ne[0]);
 
@@ -86,12 +92,20 @@ bool llm_graph_input_embd::can_reuse(const llm_graph_params & params) {
 
     res &= (!params.ubatch.token) || (tokens && tokens->ne[0] == params.ubatch.n_tokens);
     res &= (!params.ubatch.embd)  || (embd   &&   embd->ne[1] == params.ubatch.n_tokens);
+    // zero-copy path: the graph embeds a view of the external device tensor, so
+    // the tensor must be identical (pointer identity) for the graph to be reused
+    res &= (!params.ubatch.embd_dev) || (embd_dev_ptr == params.ubatch.embd_dev);
 
     return res;
 }
 
 void llm_graph_input_embd_h::set_input(const llama_ubatch * ubatch) {
     const int64_t n_tokens = ubatch->n_tokens;
+
+    if (ubatch->embd_dev) {
+        // zero-copy path: inputs are views of external device tensors, nothing to upload
+        return;
+    }
 
     if (ubatch->token) {
         ggml_backend_tensor_set(tokens, ubatch->token, 0, n_tokens*ggml_element_size(tokens));
@@ -119,6 +133,8 @@ bool llm_graph_input_embd_h::can_reuse(const llm_graph_params & params) {
     res &= (!params.ubatch.token) || (tokens && tokens->ne[0] == params.ubatch.n_tokens);
     res &= (!params.ubatch.embd)  || (embd   && embd->ne[1]   == params.ubatch.n_tokens);
     res &= (!params.ubatch.embd)  || (h      && h->ne[1]      == params.ubatch.n_tokens);
+    // zero-copy path: the graph embeds views of the external device tensor(s)
+    res &= (!params.ubatch.embd_dev) || (embd_dev_ptr == params.ubatch.embd_dev);
 
     return res;
 }
@@ -2294,9 +2310,23 @@ ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd) const {
     ggml_set_input(inp->tokens);
     res->t_inp_tokens = inp->tokens;
 
-    inp->embd = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd_inp, ubatch.n_tokens);
-    cb(inp->embd, "inp_embd", -1);
-    ggml_set_input(inp->embd);
+    if (ubatch.embd_dev) {
+        // zero-copy path: alias the external device tensor via a view (no allocation,
+        // no upload). the tensor is [n_embd, n_tokens] (contiguous) - view a column
+        // range starting at embd_dev_off.
+        GGML_ASSERT(n_embd_inp == ubatch.embd_dev->ne[0]);
+        GGML_ASSERT(ubatch.embd_dev_off + ubatch.n_tokens <= ubatch.embd_dev->ne[1]);
+
+        inp->embd = ggml_view_2d(ctx0, ubatch.embd_dev, n_embd_inp, ubatch.n_tokens,
+                                 ubatch.embd_dev->nb[1], (size_t) ubatch.embd_dev_off * ubatch.embd_dev->nb[1]);
+        inp->embd_dev_ptr = ubatch.embd_dev;
+        // NOTE: no ggml_set_input - the tensor is already resident on the backend;
+        //       flagging it as INPUT would make the scheduler copy it in.
+    } else {
+        inp->embd = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd_inp, ubatch.n_tokens);
+        cb(inp->embd, "inp_embd", -1);
+        ggml_set_input(inp->embd);
+    }
 
     // select one of the 2 inputs, based on the batch contents
     // ref: https://github.com/ggml-org/llama.cpp/pull/18550

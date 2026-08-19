@@ -1103,29 +1103,73 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
             for (int32_t offset = 0; offset < n_rows; offset += n_ubatch) {
                 const int32_t n_chunk = std::min(n_ubatch, n_rows - offset);
 
-                // gather this chunk's target features, interleaved by extract layer
-                features_buf.resize((size_t) n_chunk * n_embd_enc);
-                for (uint32_t k = 0; k < target_layer_ids_n; ++k) {
-                    const float * layer = llama_get_embeddings_layer_inp(ctx_tgt, (uint32_t) target_layer_ids[k]);
-                    if (!layer) {
-                        GGML_ABORT("DFlash: target layer %d input not extracted.", target_layer_ids[k]);
+                // fuse extracted features through DFlash encoder.
+                //
+                // zero-copy path (preferred): the target context concatenates the enabled
+                // layer-input tensors into a persistent device buffer (embd_layer_inp_fused)
+                // each compute call; we alias it via embd_dev (a view, no host copy).
+                // falls back to the host gather below when the device/buffer types are not
+                // compatible (e.g. target and draft on different GPUs).
+                // zero-copy requires the fused tensor to live on a backend that the draft
+                // encoder can consume directly (same device, compatible buffer type).
+                // otherwise fall back to the host path.
+                //
+                // when no explicit devices are configured, the draft and target share the
+                // default devices (single-GPU case) - assume compatible.
+                const ggml_tensor * fused = llama_get_embeddings_layer_inp_tensor(ctx_tgt);
+                if (fused && fused->buffer && !this->params.devices.empty()) {
+                    const ggml_backend_dev_t fused_dev = ggml_backend_buft_get_device(
+                            ggml_backend_buffer_get_type(fused->buffer));
+                    bool compatible = false;
+                    for (const auto & dev : this->params.devices) {
+                        if (dev == fused_dev) {
+                            compatible = true;
+                            break;
+                        }
                     }
-                    for (int32_t i = 0; i < n_chunk; ++i) {
-                        float       * dst = features_buf.data() + (size_t) i * n_embd_enc + k * (size_t) n_embd_tgt;
-                        const float * src = layer + (size_t) (i_batch_beg[seq_id] + offset + i) * n_embd_tgt;
-                        std::memcpy(dst, src, (size_t) n_embd_tgt * sizeof(float));
+                    if (!compatible) {
+                        fused = nullptr;
+                    }
+                }
+                static bool fused_logged = false;
+                if (!fused_logged) {
+                    fused_logged = true;
+                    if (fused) {
+                        LOG_INF("%s: DFlash zero-copy embd path active (fused tensor %s)\n",
+                                __func__, fused->name ? fused->name : "?");
+                    } else {
+                        LOG_INF("%s: DFlash host embd path active (no fused tensor)\n", __func__);
+                    }
+                }
+                // NOTE: the fused buffer is overwritten by the next llama_decode(ctx_tgt).
+                //       the speculative loop guarantees the draft consumes it before then:
+                //       draft() -> llama_decode(ctx_tgt) -> process() -> verify -> repeat.
+                if (!fused) {
+                    // host path: gather this chunk's target features, interleaved by extract layer
+                    features_buf.resize((size_t) n_chunk * n_embd_enc);
+                    for (uint32_t k = 0; k < target_layer_ids_n; ++k) {
+                        const float * layer = llama_get_embeddings_layer_inp(ctx_tgt, (uint32_t) target_layer_ids[k]);
+                        if (!layer) {
+                            GGML_ABORT("DFlash: target layer %d input not extracted.", target_layer_ids[k]);
+                        }
+                        for (int32_t i = 0; i < n_chunk; ++i) {
+                            float       * dst = features_buf.data() + (size_t) i * n_embd_enc + k * (size_t) n_embd_tgt;
+                            const float * src = layer + (size_t) (i_batch_beg[seq_id] + offset + i) * n_embd_tgt;
+                            std::memcpy(dst, src, (size_t) n_embd_tgt * sizeof(float));
+                        }
                     }
                 }
 
-                // fuse extracted features through DFlash encoder
                 llama_batch enc_batch = {
                     /*.n_tokens =*/ n_chunk,
                     /*.token    =*/ nullptr,
-                    /*.embd     =*/ features_buf.data(),
+                    /*.embd     =*/ fused ? nullptr : features_buf.data(),
                     /*.pos      =*/ nullptr,
                     /*.n_seq_id =*/ nullptr,
                     /*.seq_id   =*/ nullptr,
                     /*.logits   =*/ nullptr,
+                    /*.embd_dev =*/ (ggml_tensor *) fused,
+                    /*.embd_dev_off =*/ (int64_t) i_batch_beg[seq_id] + offset,
                 };
 
                 int32_t rc = llama_encode(ctx_dft, enc_batch);

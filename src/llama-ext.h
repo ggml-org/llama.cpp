@@ -114,6 +114,13 @@ LLAMA_API void llama_set_embeddings_layer_inp(struct llama_context * ctx, uint32
 // LLAMA_API float * llama_get_embeddings(struct llama_context * ctx);
 LLAMA_API float * llama_get_embeddings_layer_inp(struct llama_context * ctx, uint32_t lid);
 
+// returns the persistent device tensor holding the concat of the enabled layer-input
+// tensors (zero-copy embd_dev path). the tensor is [K*n_embd, n_batch] where K is the
+// number of enabled embeddings_layer_inp layers. its contents are overwritten by the
+// next llama_encode/llama_decode on the same context. returns null when zero-copy is
+// not in use.
+LLAMA_API const struct ggml_tensor * llama_get_embeddings_layer_inp_tensor(struct llama_context * ctx);
+
 LLAMA_API llama_context * llama_get_ctx_other(struct llama_context * ctx);
 
 //

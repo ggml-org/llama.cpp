@@ -1322,7 +1322,7 @@ bool llama_context::set_adapter_cvec(
     return res;
 }
 
-llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, llm_graph_type gtype, llama_memory_context_i * mctx, ggml_status & ret) {
+llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, llm_graph_type gtype, llama_memory_context_i * mctx, ggml_status & ret, int64_t token_offset) {
     if (mctx && !mctx->apply()) {
         LLAMA_LOG_ERROR("%s: failed to apply memory context\n", __func__);
         ret = GGML_STATUS_FAILED;
@@ -1332,9 +1332,13 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
     auto * res = gf_res_prev.get();
     auto * gf  = res->get_gf();
 
+    // ensure the persistent fused layer-input device buffer exists (zero-copy path),
+    // so that graph_params can hand it to the graph builder
+    ensure_embd_layer_inp_fused();
+
     // the new graph parameters
     // in order to correctly reuse a graph, it's full topology has to be uniquely determined by these parameters
-    const auto gparams = graph_params(res, ubatch, mctx, gtype);
+    const auto gparams = graph_params(res, ubatch, mctx, gtype, token_offset);
 
     if (!graph_reuse_disable && res->can_reuse(gparams)) {
         //LLAMA_LOG_DEBUG("%s: reusing previous graph\n", __func__);
@@ -1397,7 +1401,7 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
 int llama_context::encode(const llama_batch & batch_inp) {
     // MTP hook batches carry both token (next-token id) and embd (h_nextn row),
     // so accept either present rather than requiring exactly one.
-    GGML_ASSERT(batch_inp.token || batch_inp.embd);
+    GGML_ASSERT(batch_inp.token || batch_inp.embd || batch_inp.embd_dev);
 
     if (batch_inp.n_tokens == 0) {
         LLAMA_LOG_ERROR("%s: n_tokens == 0\n", __func__);
@@ -1635,7 +1639,7 @@ static bool needs_raw_logits(const llama_ubatch & ubatch, const std::map<llama_s
 int llama_context::decode(const llama_batch & batch_inp) {
     // MTP hook batches carry both token (next-token id) and embd (h_nextn row),
     // so accept either present rather than requiring exactly one.
-    GGML_ASSERT(batch_inp.token || batch_inp.embd);
+    GGML_ASSERT(batch_inp.token || batch_inp.embd || batch_inp.embd_dev);
 
     if (!memory) {
         LLAMA_LOG_DEBUG("%s: cannot decode batches with this context (calling encode() instead)\n", __func__);
@@ -1813,7 +1817,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
 
         ggml_status status;
 
-        const auto * res = process_ubatch(ubatch, ctx_type_to_graph_type(cparams.ctx_type), mctx.get(), status);
+        const auto * res = process_ubatch(ubatch, ctx_type_to_graph_type(cparams.ctx_type), mctx.get(), status, n_tokens_prev);
 
         if (!res) {
             // the last ubatch failed or was aborted -> remove all positions of that ubatch from the memory module
@@ -2219,6 +2223,56 @@ void llama_context::extract_layer_inputs(const llm_graph_result * res, size_t to
     }
 }
 
+ggml_tensor * llama_context::ensure_embd_layer_inp_fused() {
+    // count enabled layer-input extractions; without any, the zero-copy path is disabled
+    uint32_t n_extract = 0;
+    for (bool enabled : cparams.embeddings_layer_inp) {
+        if (enabled) {
+            ++n_extract;
+        }
+    }
+    if (n_extract == 0) {
+        return nullptr;
+    }
+
+    if (embd_layer_inp_fused) {
+        return embd_layer_inp_fused;
+    }
+
+    const uint32_t n_embd  = model.hparams.n_embd;
+    const uint32_t n_batch = cparams.n_batch;
+
+    auto * dev = model.dev_output();
+    if (dev == nullptr) {
+        return nullptr;
+    }
+    auto * buft = ggml_backend_dev_buffer_type(dev);
+
+    ggml_init_params iparams = {
+        /*.mem_size   =*/ ggml_tensor_overhead() + ggml_graph_overhead_custom(0, false),
+        /*.mem_buffer =*/ nullptr,
+        /*.no_alloc   =*/ true,
+    };
+    embd_layer_inp_fused_ctx = ggml_init(iparams);
+    if (!embd_layer_inp_fused_ctx) {
+        return nullptr;
+    }
+
+    embd_layer_inp_fused = ggml_new_tensor_2d(embd_layer_inp_fused_ctx, GGML_TYPE_F32,
+                                              (int64_t) n_extract * n_embd, n_batch);
+    ggml_set_name(embd_layer_inp_fused, "embd_layer_inp_fused");
+
+    embd_layer_inp_fused_buf.reset(ggml_backend_alloc_ctx_tensors_from_buft(embd_layer_inp_fused_ctx, buft));
+    if (!embd_layer_inp_fused_buf) {
+        embd_layer_inp_fused_ctx = nullptr;
+        embd_layer_inp_fused     = nullptr;
+        return nullptr;
+    }
+    ggml_backend_buffer_set_usage(embd_layer_inp_fused_buf.get(), GGML_BACKEND_BUFFER_USAGE_COMPUTE);
+
+    return embd_layer_inp_fused;
+}
+
 void llama_context::output_reorder() {
     const uint64_t n_vocab     = model.vocab.n_tokens();
     const uint64_t n_embd      = model.hparams.n_embd;
@@ -2452,7 +2506,8 @@ llm_graph_params llama_context::graph_params(
                         llm_graph_result * res,
                       const llama_ubatch & ubatch,
             const llama_memory_context_i * mctx,
-                          llm_graph_type   gtype) const {
+                          llm_graph_type   gtype,
+                               int64_t      token_offset) const {
     return {
         /*.arch        =*/ model.arch,
         /*.hparams     =*/ model.hparams,
@@ -2465,6 +2520,8 @@ llm_graph_params llama_context::graph_params(
         /*.loras       =*/ loras.get(),
         /*.mctx        =*/ mctx,
         /*.cross       =*/ &cross,
+        /*.token_offset =*/ token_offset,
+        /*.embd_layer_inp_fused =*/ embd_layer_inp_fused,
         /*.samplers    =*/ sampling.samplers,
         /*.n_outputs   =*/ n_outputs,
         /*.cb          =*/ graph_get_cb(),
@@ -3810,6 +3867,12 @@ float * llama_get_embeddings_layer_inp(llama_context * ctx, uint32_t lid) {
     ctx->synchronize();
 
     return ctx->get_embeddings_layer_inp(lid);
+}
+
+const ggml_tensor * llama_get_embeddings_layer_inp_tensor(llama_context * ctx) {
+    ctx->synchronize();
+
+    return ctx->get_embd_layer_inp_fused();
 }
 
 bool llama_set_sampler(llama_context * ctx, llama_seq_id seq_id, llama_sampler * smpl) {

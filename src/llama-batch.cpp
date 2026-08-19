@@ -218,6 +218,8 @@ bool llama_batch_allocr::init(
             /*.n_pos        =*/ n_pos_per_embd,
             /*.token        =*/ batch.token,
             /*.embd         =*/ batch.embd,
+            /*.embd_dev     =*/ batch.embd_dev,
+            /*.embd_dev_off =*/ batch.embd_dev_off,
             /*.pos          =*/ batch.pos,
             /*.n_seq_id     =*/ batch.n_seq_id,
             /*.seq_id       =*/ batch.seq_id,
@@ -424,6 +426,8 @@ llama_ubatch llama_batch_allocr::ubatch_reserve(uint32_t n_seq_tokens, uint32_t 
 
         /*.token        =*/ udata->token.data(),
         /*.embd         =*/ nullptr,
+        /*.embd_dev     =*/ nullptr,
+        /*.embd_dev_off =*/ 0,
         /*.pos          =*/ udata->pos.data(),
         /*.n_seq_id     =*/ udata->n_seq_id.data(),
         /*.seq_id       =*/ udata->seq_id.data(),
@@ -753,8 +757,10 @@ llama_ubatch llama_batch_allocr::ubatch_add(const std::vector<int32_t> & idxs, u
 
     auto udata = std::make_shared<llama_ubatch::data_t>();
 
-    const int64_t n_embd_all = batch.embd ? (int64_t) n_tokens*n_embd : 0;
-    const int64_t n_pos_all  =              (int64_t) n_tokens*n_pos_per_embd;
+    // host embedding buffer is needed only for the host path (embd set, no device alias)
+    const bool has_embd_host = batch.embd && !batch.embd_dev;
+    const int64_t n_embd_all = has_embd_host ? (int64_t) n_tokens*n_embd : 0;
+    const int64_t n_pos_all  =                 (int64_t) n_tokens*n_pos_per_embd;
 
     udata->token     .resize(n_tokens);
     udata->pos       .resize(n_pos_all);
@@ -765,11 +771,20 @@ llama_ubatch llama_batch_allocr::ubatch_add(const std::vector<int32_t> & idxs, u
     udata->output    .resize(n_tokens);
 
     udata->seq_id_data.reserve(n_tokens);
-    if (batch.embd) {
+    if (has_embd_host) {
         udata->embd.clear();
         udata->embd.reserve(n_embd_all);
     } else {
         udata->embd.resize(n_embd_all); // fill all size..new_size elems by 0.0f
+    }
+
+    if (batch.embd_dev) {
+        // zero-copy device alias: the external tensor is a single contiguous
+        // [n_embd, n_tokens] block; we can only alias a contiguous run of indices
+        // (the current callers - e.g. the dflash encoder ubatch - provide one)
+        for (size_t i = 0; i < idxs.size(); ++i) {
+            GGML_ASSERT(idxs[i] == idxs[0] + (int32_t) i);
+        }
     }
 
     seq_set_t seq_set_unq;
@@ -779,8 +794,8 @@ llama_ubatch llama_batch_allocr::ubatch_add(const std::vector<int32_t> & idxs, u
             udata->token[i] = batch.token[idxs[i]];
         }
 
-        if (batch.embd) {
-            auto src = batch.embd + (int64_t) idxs[1] * n_embd;
+        if (has_embd_host) {
+            auto src = batch.embd + (int64_t) idxs[i] * n_embd;
             // use safe method for auto increase size
             // next improvements - write own vector without automatic filling float)
             udata->embd.insert(udata->embd.end(), src, src + n_embd);
@@ -832,7 +847,9 @@ llama_ubatch llama_batch_allocr::ubatch_add(const std::vector<int32_t> & idxs, u
         /*.n_pos        =*/ n_pos_per_embd,
 
         /*.token        =*/ batch.token ? udata->token.data() : nullptr,
-        /*.embd         =*/ batch.embd ? udata->embd.data() : nullptr,
+        /*.embd         =*/ (batch.embd && !batch.embd_dev) ? udata->embd.data() : nullptr,
+        /*.embd_dev     =*/ batch.embd_dev,
+        /*.embd_dev_off =*/ batch.embd_dev_off + idxs[0],
         /*.pos          =*/ udata->pos.data(),
         /*.n_seq_id     =*/ udata->n_seq_id.data(),
         /*.seq_id       =*/ udata->seq_id.data(),
@@ -882,6 +899,7 @@ void llama_batch_allocr::ubatch_print(const llama_ubatch & ubatch, int debug) {
 
         LLAMA_LOG_DEBUG("%s:   token      = %p\n", __func__, (void *) ubatch.token);
         LLAMA_LOG_DEBUG("%s:   embd       = %p\n", __func__, (void *) ubatch.embd);
+        LLAMA_LOG_DEBUG("%s:   embd_dev   = %p (off = %ld)\n", __func__, (void *) ubatch.embd_dev, (long) ubatch.embd_dev_off);
         LLAMA_LOG_DEBUG("%s:   pos        = %p\n", __func__, (void *) ubatch.pos);
         LLAMA_LOG_DEBUG("%s:   n_seq_id   = %p\n", __func__, (void *) ubatch.n_seq_id);
         LLAMA_LOG_DEBUG("%s:   seq_id     = %p\n", __func__, (void *) ubatch.seq_id);
@@ -947,6 +965,8 @@ struct llama_batch llama_batch_get_one(
         /*n_seq_id =*/ nullptr,
         /*seq_id   =*/ nullptr,
         /*logits   =*/ nullptr,
+        /*embd_dev =*/ nullptr,
+        /*embd_dev_off =*/ 0,
     };
 }
 
@@ -959,6 +979,8 @@ struct llama_batch llama_batch_init(int32_t n_tokens_alloc, int32_t embd, int32_
         /*n_seq_id =*/ nullptr,
         /*seq_id   =*/ nullptr,
         /*logits   =*/ nullptr,
+        /*embd_dev =*/ nullptr,
+        /*embd_dev_off =*/ 0,
     };
 
     if (embd) {

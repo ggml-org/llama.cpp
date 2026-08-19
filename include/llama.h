@@ -262,6 +262,13 @@ extern "C" {
         int32_t      *  n_seq_id;
         llama_seq_id ** seq_id;
         int8_t       *  logits;   // TODO: rename this to "output"
+
+        // device-side embedding input (zero-copy path)
+        // when set, `embd` is ignored: the graph consumes a view of this tensor
+        // (owned by another context, e.g. the speculative target) starting at
+        // row `embd_dev_off`. both fields are optional and ignored by the host path.
+        struct ggml_tensor * embd_dev;
+        int64_t              embd_dev_off;
     } llama_batch;
 
     enum llama_model_kv_override_type {
