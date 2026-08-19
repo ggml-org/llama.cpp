@@ -8,9 +8,12 @@
 		gaugePopup,
 		gaugePopupClose
 	} from './gauge-popup.svelte';
+	import { FoldVertical } from '@lucide/svelte';
+	import { Button } from '$lib/components/ui/button';
 	import * as Drawer from '$lib/components/ui/drawer';
 	import { useContextGauge } from '$lib/hooks/use-context-gauge.svelte';
-	import { deviceStore } from '$lib/stores';
+	import { agenticStore, chatStore, conversationsStore, deviceStore } from '$lib/stores';
+	import { canCompactMessages } from '$lib/utils';
 	import { formatParameters } from '$lib/utils/formatters';
 
 	const gauge = useContextGauge();
@@ -53,6 +56,21 @@
 			gauge.contextTotal > 0 &&
 			(gauge.activeModelId !== null || gauge.isActiveModelLoaded)
 	);
+
+	const showCompactButton = $derived(canCompactMessages(conversationsStore.activeMessages));
+
+	const isCompactDisabled = $derived.by(() => {
+		const convId = conversationsStore.activeConversation?.id;
+
+		if (!convId) return true;
+
+		return chatStore.isChatLoading(convId) || agenticStore.isRunning(convId);
+	});
+
+	function handleCompact() {
+		gaugePopupClose();
+		chatStore.compactConversation();
+	}
 </script>
 
 {#snippet usage()}
@@ -90,6 +108,19 @@
 		</div>
 	{:else}
 		<div class="text-xs text-muted-foreground">No context info available</div>
+	{/if}
+
+	{#if showCompactButton}
+		<Button
+			class="w-full gap-1.5"
+			disabled={isCompactDisabled}
+			onclick={handleCompact}
+			size="sm"
+			variant="outline"
+		>
+			<FoldVertical class="h-3.5 w-3.5" />
+			Compact conversation
+		</Button>
 	{/if}
 
 	{#if gauge.hasAnyUsage}
