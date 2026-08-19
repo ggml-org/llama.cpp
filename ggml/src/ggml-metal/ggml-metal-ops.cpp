@@ -2807,9 +2807,12 @@ static bool ggml_metal_op_flash_attn_ext_use_dequant_f16(const ggml_tensor * op)
     assert(op->op == GGML_OP_FLASH_ATTN_EXT);
 
     switch (op->src[1]->type) {
+        case GGML_TYPE_Q4_0:
+        case GGML_TYPE_Q4_1:
+        case GGML_TYPE_Q5_0:
+        case GGML_TYPE_Q5_1:
         case GGML_TYPE_Q8_0:
             return true;
-        // extend to the other quantized KV types (q4_0, q4_1, q5_0, q5_1) as dequant kernels are added
         default:
             return false;
     }

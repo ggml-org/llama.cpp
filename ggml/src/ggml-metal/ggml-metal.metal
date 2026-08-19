@@ -6344,6 +6344,10 @@ kernel void kernel_flash_attn_ext_dequant_to_f16(
 
 typedef decltype(kernel_flash_attn_ext_dequant_to_f16<block_q8_0, 32, dequantize_q8_0>) kernel_flash_attn_ext_dequant_to_f16_t;
 
+template [[host_name("kernel_flash_attn_ext_dequant_q4_0_to_f16")]] kernel kernel_flash_attn_ext_dequant_to_f16_t kernel_flash_attn_ext_dequant_to_f16<block_q4_0, 32, dequantize_q4_0>;
+template [[host_name("kernel_flash_attn_ext_dequant_q4_1_to_f16")]] kernel kernel_flash_attn_ext_dequant_to_f16_t kernel_flash_attn_ext_dequant_to_f16<block_q4_1, 32, dequantize_q4_1>;
+template [[host_name("kernel_flash_attn_ext_dequant_q5_0_to_f16")]] kernel kernel_flash_attn_ext_dequant_to_f16_t kernel_flash_attn_ext_dequant_to_f16<block_q5_0, 32, dequantize_q5_0>;
+template [[host_name("kernel_flash_attn_ext_dequant_q5_1_to_f16")]] kernel kernel_flash_attn_ext_dequant_to_f16_t kernel_flash_attn_ext_dequant_to_f16<block_q5_1, 32, dequantize_q5_1>;
 template [[host_name("kernel_flash_attn_ext_dequant_q8_0_to_f16")]] kernel kernel_flash_attn_ext_dequant_to_f16_t kernel_flash_attn_ext_dequant_to_f16<block_q8_0, 32, dequantize_q8_0>;
 
 constant bool FC_flash_attn_ext_pad_has_mask [[function_constant(FC_FLASH_ATTN_EXT_PAD + 0)]];
