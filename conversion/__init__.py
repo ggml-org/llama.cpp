@@ -17,6 +17,7 @@ __all__ = [
 
 
 TEXT_MODEL_MAP: dict[str, str] = {
+    "AXK2ForCausalLM": "axk2",
     "AfmoeForCausalLM": "afmoe",
     "LagunaForCausalLM": "laguna",
     "ApertusForCausalLM": "llama",
