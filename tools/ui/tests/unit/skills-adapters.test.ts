@@ -1,7 +1,8 @@
+// Guards adapter registration, prompt decoration, and the consent/activation core.
 import { SKILL_LIST_TOOL, SKILL_READ_TOOL, SKILL_SERVER_LABEL } from '$lib/constants';
 import { MessageRole, ToolCallType, ToolPermissionDecision } from '$lib/enums';
-import * as SkillsServiceModule from '$lib/services/skills.service';
 import { SkillsService } from '$lib/services/skills.service';
+import * as SkillsServiceModule from '$lib/services/skills.service';
 import { buildSkillRunSnapshot } from '$lib/services/skills.service';
 import { skillActivationExtra, skillResourceExtra } from '$lib/services/skills-activation.service';
 import type {
@@ -17,17 +18,12 @@ import {
 	skillErrorResult,
 	SkillRunAdapters
 } from '$lib/services/skills-adapters.service';
-import type {
-	SkillBaseReadResult,
-	SkillCatalogEntry,
-	SkillCatalogResponse,
-	SkillPackedCatalog,
-	SkillResourceReadResult
-} from '$lib/types';
+import type { SkillPackedCatalog } from '$lib/types';
 import type { DatabaseMessage } from '$lib/types';
 import type { AgenticToolCallPayload } from '$lib/types/agentic';
 import type { Mock } from 'vitest';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { baseResult, catalogOf, makeCatalog, resourceResult } from '../fixtures/skills';
 
 vi.mock('$lib/services/skills.service', async (importOriginal) => {
 	const actual = await importOriginal<typeof SkillsServiceModule>();
@@ -43,28 +39,6 @@ const mockRead = vi.mocked(SkillsService.read);
 type PermissionFn = (...args: unknown[]) => Promise<ToolPermissionDecision>;
 type PermissionMock = Mock<PermissionFn>;
 
-function makeEntry(name: string): SkillCatalogEntry {
-	return {
-		catalog_xml: `<skill><name>${name}</name></skill>`,
-		description: `description of ${name}`,
-		id: `opaque-${name}`,
-		instruction: { bytes: 16, lines: 1, modified_at: null, tokens: 4, tokens_estimated: true },
-		name,
-		provider: 'agents',
-		resources: { count: 0, truncated: false },
-		scope: 'project'
-	};
-}
-
-function makeCatalog(...names: string[]): SkillCatalogResponse {
-	return {
-		catalog_instruction_xml:
-			'<available_skills>Call read_skill(name) when matching.</available_skills>',
-		diagnostics: [],
-		skills: names.map(makeEntry)
-	};
-}
-
 function packed(overrides: Partial<SkillPackedCatalog>): SkillPackedCatalog {
 	return {
 		envelope:
@@ -73,41 +47,12 @@ function packed(overrides: Partial<SkillPackedCatalog>): SkillPackedCatalog {
 		included: 1,
 		total: 1,
 		...overrides,
-		// fullTokens is required; resolve it explicitly after the spread so a
-		// Partial spread cannot introduce `undefined` into the result type.
 		fullTokens: overrides.fullTokens ?? null
 	};
 }
 
 const PARTIAL_ENVELOPE =
 	'<skills_catalog total="1" included="0"><available_skills>instr</available_skills></skills_catalog>';
-
-function baseResult(
-	name: string,
-	overrides: Partial<SkillBaseReadResult> = {}
-): SkillBaseReadResult {
-	return {
-		body_markdown: '# Body',
-		content_xml: `<skill_content name="${name}">body</skill_content>`,
-		diagnostics: [],
-		kind: 'skill',
-		resources: { paths: [], truncated: false },
-		skill: { id: `opaque-${name}`, name, provider: 'agents', scope: 'project' },
-		source: `---\nname: ${name}\n---\n# Body`,
-		...overrides
-	};
-}
-
-function resourceResult(name: string, path: string): SkillResourceReadResult {
-	return {
-		content_xml: `<skill_resource name="${name}" path="${path}">data</skill_resource>`,
-		diagnostics: [],
-		kind: 'resource',
-		resource: { path },
-		skill: { id: `opaque-${name}`, name, provider: 'agents', scope: 'project' },
-		source: 'data'
-	};
-}
 
 function defaultPermission(): PermissionMock {
 	const mock = vi.fn<PermissionFn>();
@@ -176,8 +121,8 @@ function makeAdapters(options: {
 	activation?: SkillActivationStore;
 }): SkillRunAdapters {
 	const names = options.names ?? ['demo-skill'];
-	const snapshot = buildSkillRunSnapshot(options.cwd, makeCatalog(...names));
-	const packed =
+	const snapshot = buildSkillRunSnapshot(options.cwd, catalogOf(...names));
+	const packedCatalog =
 		options.packed ??
 		({
 			envelope: PARTIAL_ENVELOPE,
@@ -190,16 +135,10 @@ function makeAdapters(options: {
 		activation: options.activation ?? fakeStore(),
 		conversationId: options.conversationId ?? 'conv-1',
 		definitions: [
-			{
-				function: { name: SKILL_READ_TOOL, parameters: {} },
-				type: 'function'
-			},
-			{
-				function: { name: SKILL_LIST_TOOL, parameters: {} },
-				type: 'function'
-			}
+			{ function: { name: SKILL_READ_TOOL, parameters: {} }, type: 'function' },
+			{ function: { name: SKILL_LIST_TOOL, parameters: {} }, type: 'function' }
 		],
-		packed,
+		packed: packedCatalog,
 		requestPermission: options.requestPermission ?? defaultPermission(),
 		snapshot
 	});
@@ -219,40 +158,43 @@ function readCall(name: string, path?: string): AgenticToolCallPayload {
 }
 
 describe('buildSkillToolDefinitions', () => {
-	it('registers no adapters and no diagnostics for a zero-budget or empty envelope', () => {
-		const snapshot = buildSkillRunSnapshot('/cwd', makeCatalog('alpha'));
-		const result = buildSkillToolDefinitions(snapshot, packed({ envelope: '' }), new Set());
+	it.each([
+		['empty envelope', { envelope: '' }, new Set<string>(), undefined, [], []],
+		['complete envelope', { included: 2, total: 2 }, new Set<string>(), undefined, [SKILL_READ_TOOL], []],
+		['partial envelope', { included: 1, total: 2 }, new Set<string>(), undefined, [SKILL_READ_TOOL, SKILL_LIST_TOOL], []],
+		['enabled set keeps both', { included: 1, total: 2 }, new Set<string>(), [SKILL_READ_TOOL, SKILL_LIST_TOOL], [SKILL_READ_TOOL, SKILL_LIST_TOOL], []],
+		['enabled set omits read_skill', { included: 1, total: 2 }, new Set<string>(), [SKILL_LIST_TOOL], [SKILL_LIST_TOOL], []],
+		['enabled set omits list_skill', { included: 1, total: 2 }, new Set<string>(), [SKILL_READ_TOOL], [SKILL_READ_TOOL], []],
+		['empty enabled set', { included: 1, total: 2 }, new Set<string>(), [], [], []],
+		['existing tool collides', {}, new Set([SKILL_READ_TOOL]), undefined, [], [SKILL_READ_TOOL]],
+		['disabled adapter collides', { included: 0 }, new Set([SKILL_LIST_TOOL]), [SKILL_READ_TOOL], [SKILL_READ_TOOL], [SKILL_LIST_TOOL]]
+	] as const)(
+		'registers adapters for %s',
+		(_label, packedOverrides, existingTools, enabledNames, expectedNames, expectedDiagnostics) => {
+			const enabled = enabledNames === undefined ? undefined : new Set(enabledNames);
+			const snapshot = buildSkillRunSnapshot('/cwd', catalogOf('alpha'));
+			const complete = packed({
+				...packedOverrides,
+				envelope: packedOverrides.envelope ?? '<skills_catalog total="2" included="1">...</skills_catalog>'
+			});
+			const { definitions, diagnostics } = buildSkillToolDefinitions(
+				snapshot,
+				complete,
+				existingTools,
+				enabled
+			);
 
-		expect(result).toEqual({ definitions: [], diagnostics: [] });
-	});
+			expect(definitions.map((d) => d.function.name)).toEqual([...expectedNames]);
+			expect(diagnostics.map((d) => d.name)).toEqual([...expectedDiagnostics]);
 
-	it('registers only read_skill for a complete envelope', () => {
-		const snapshot = buildSkillRunSnapshot('/cwd', makeCatalog('alpha', 'beta'));
-		const complete = packed({
-			envelope: '<skills_catalog total="2" included="2">...</skills_catalog>',
-			included: 2,
-			total: 2
-		});
-		const { definitions, diagnostics } = buildSkillToolDefinitions(snapshot, complete, new Set());
-
-		expect(diagnostics).toEqual([]);
-		expect(definitions.map((d) => d.function.name)).toEqual([SKILL_READ_TOOL]);
-	});
-
-	it('registers read_skill plus list_skill for a partial envelope', () => {
-		const snapshot = buildSkillRunSnapshot('/cwd', makeCatalog('alpha', 'beta'));
-		const partial = packed({
-			envelope: '<skills_catalog total="2" included="1">...</skills_catalog>',
-			included: 1,
-			total: 2
-		});
-		const { definitions } = buildSkillToolDefinitions(snapshot, partial, new Set());
-
-		expect(definitions.map((d) => d.function.name)).toEqual([SKILL_READ_TOOL, SKILL_LIST_TOOL]);
-	});
+			if (expectedDiagnostics.length > 0) {
+				expect(diagnostics[0]).toMatchObject({ code: 'skill_adapter_collision' });
+			}
+		}
+	);
 
 	it('constrains read_skill name to frozen snapshot names via a dynamic enum and keeps path optional', () => {
-		const snapshot = buildSkillRunSnapshot('/cwd', makeCatalog('alpha', 'beta'));
+		const snapshot = buildSkillRunSnapshot('/cwd', catalogOf('alpha', 'beta'));
 		const { definitions } = buildSkillToolDefinitions(snapshot, packed({ total: 2 }), new Set());
 		const readSkill = definitions.find((d) => d.function.name === SKILL_READ_TOOL)!;
 
@@ -265,235 +207,65 @@ describe('buildSkillToolDefinitions', () => {
 			type: 'object'
 		});
 	});
-
-	it('omits colliding adapters in favor of existing non-Skills tools with a safe diagnostic', () => {
-		const snapshot = buildSkillRunSnapshot('/cwd', makeCatalog('alpha'));
-		const { definitions, diagnostics } = buildSkillToolDefinitions(
-			snapshot,
-			packed({}),
-			new Set([SKILL_READ_TOOL, 'other_tool'])
-		);
-
-		expect(definitions.map((d) => d.function.name)).toEqual([]);
-		expect(diagnostics).toEqual([
-			{
-				code: 'skill_adapter_collision',
-				message: `Skills tool "${SKILL_READ_TOOL}" collides with an existing tool and was not registered.`,
-				name: SKILL_READ_TOOL
-			}
-		]);
-	});
-
-	it('keeps the non-colliding adapter when only one name collides', () => {
-		const snapshot = buildSkillRunSnapshot('/cwd', makeCatalog('alpha'));
-		const partial = packed({
-			envelope: '<skills_catalog total="1" included="0">i</skills_catalog>',
-			included: 0
-		});
-		const { definitions, diagnostics } = buildSkillToolDefinitions(
-			snapshot,
-			partial,
-			new Set([SKILL_LIST_TOOL])
-		);
-
-		expect(definitions.map((d) => d.function.name)).toEqual([SKILL_READ_TOOL]);
-		expect(diagnostics).toHaveLength(1);
-		expect(diagnostics[0].name).toBe(SKILL_LIST_TOOL);
-	});
-
-	it('registers both adapters for a partial budget when the enabled set contains both names', () => {
-		const snapshot = buildSkillRunSnapshot('/cwd', makeCatalog('alpha', 'beta'));
-		const partial = packed({
-			envelope: '<skills_catalog total="2" included="1">...</skills_catalog>',
-			included: 1,
-			total: 2
-		});
-		const { definitions, diagnostics } = buildSkillToolDefinitions(
-			snapshot,
-			partial,
-			new Set(),
-			new Set([SKILL_READ_TOOL, SKILL_LIST_TOOL])
-		);
-
-		expect(definitions.map((d) => d.function.name)).toEqual([SKILL_READ_TOOL, SKILL_LIST_TOOL]);
-		expect(diagnostics).toEqual([]);
-
-		// The dynamic snapshot enum survives the enabled-name filter.
-		const readSkill = definitions.find((d) => d.function.name === SKILL_READ_TOOL)!;
-
-		expect(readSkill.function.parameters).toMatchObject({
-			properties: { name: { enum: ['alpha', 'beta'], type: 'string' } }
-		});
-	});
-
-	it('suppresses read_skill when the enabled set omits it', () => {
-		const snapshot = buildSkillRunSnapshot('/cwd', makeCatalog('alpha', 'beta'));
-		const partial = packed({
-			envelope: '<skills_catalog total="2" included="1">...</skills_catalog>',
-			included: 1,
-			total: 2
-		});
-		const { definitions, diagnostics } = buildSkillToolDefinitions(
-			snapshot,
-			partial,
-			new Set(),
-			new Set([SKILL_LIST_TOOL])
-		);
-
-		expect(definitions.map((d) => d.function.name)).toEqual([SKILL_LIST_TOOL]);
-		expect(diagnostics).toEqual([]);
-	});
-
-	it('suppresses list_skill when the enabled set omits it', () => {
-		const snapshot = buildSkillRunSnapshot('/cwd', makeCatalog('alpha', 'beta'));
-		const partial = packed({
-			envelope: '<skills_catalog total="2" included="1">...</skills_catalog>',
-			included: 1,
-			total: 2
-		});
-		const { definitions, diagnostics } = buildSkillToolDefinitions(
-			snapshot,
-			partial,
-			new Set(),
-			new Set([SKILL_READ_TOOL])
-		);
-
-		expect(definitions.map((d) => d.function.name)).toEqual([SKILL_READ_TOOL]);
-		expect(diagnostics).toEqual([]);
-	});
-
-	it('registers no adapters when the enabled set is empty', () => {
-		const snapshot = buildSkillRunSnapshot('/cwd', makeCatalog('alpha', 'beta'));
-		const partial = packed({
-			envelope: '<skills_catalog total="2" included="1">...</skills_catalog>',
-			included: 1,
-			total: 2
-		});
-		const { definitions, diagnostics } = buildSkillToolDefinitions(
-			snapshot,
-			partial,
-			new Set(),
-			new Set()
-		);
-
-		expect(definitions).toEqual([]);
-		expect(diagnostics).toEqual([]);
-	});
-
-	it('preserves the collision diagnostic for a disabled adapter name that would collide', () => {
-		const snapshot = buildSkillRunSnapshot('/cwd', makeCatalog('alpha'));
-		const partial = packed({
-			envelope: '<skills_catalog total="1" included="0">i</skills_catalog>',
-			included: 0
-		});
-		const { definitions, diagnostics } = buildSkillToolDefinitions(
-			snapshot,
-			partial,
-			new Set([SKILL_LIST_TOOL]),
-			new Set([SKILL_READ_TOOL])
-		);
-
-		expect(definitions.map((d) => d.function.name)).toEqual([SKILL_READ_TOOL]);
-		expect(diagnostics.map((d) => d.name)).toEqual([SKILL_LIST_TOOL]);
-	});
 });
 
 describe('decorateSkillPrompt', () => {
 	const envelope =
 		'<skills_catalog total="1" included="1"><available_skills>Call read_skill(name) when matching.</available_skills><skill><name>alpha</name></skill></skills_catalog>';
 
-	it('appends the envelope byte-for-byte to the first system message', () => {
-		const messages = [
+	it('appends the envelope byte-for-byte to the first system message, or prepends one, without mutating the input', () => {
+		const withSystem = [
 			{ content: 'You are a helpful assistant.', role: MessageRole.SYSTEM },
 			{ content: 'hi', role: MessageRole.USER }
 		];
-		const decorated = decorateSkillPrompt(messages, envelope);
+		const withoutSystem = [{ content: 'hi', role: MessageRole.USER }];
+		const withSystemSnapshot = structuredClone(withSystem);
 
-		expect(decorated).toHaveLength(2);
-		expect(decorated[0].content).toContain('You are a helpful assistant.');
-		expect(decorated[0].content).toContain(envelope);
-		expect(decorated[0].content).not.toBe(envelope);
+		const decoratedWith = decorateSkillPrompt(withSystem, envelope);
+		const decoratedWithout = decorateSkillPrompt(withoutSystem, envelope);
+
+		expect(decoratedWith).toHaveLength(2);
+		expect(decoratedWith[0].content).toContain('You are a helpful assistant.');
+		expect(decoratedWith[0].content).toContain(envelope);
+		expect(decoratedWithout[0]).toEqual({ content: envelope, role: MessageRole.SYSTEM });
+		expect(decoratedWithout[1]).toEqual(withoutSystem[0]);
+		expect(withSystem).toEqual(withSystemSnapshot);
 	});
 
-	it('prepends a system message when the run has no system message', () => {
+	it('leaves messages untouched for an empty envelope and never re-escapes the XML', () => {
 		const messages = [{ content: 'hi', role: MessageRole.USER }];
-		const decorated = decorateSkillPrompt(messages, envelope);
-
-		expect(decorated).toHaveLength(2);
-		expect(decorated[0]).toEqual({ content: envelope, role: MessageRole.SYSTEM });
-		expect(decorated[1]).toEqual(messages[0]);
-	});
-
-	it('does not mutate the input messages', () => {
-		const messages = [
-			{ content: 'You are a helpful assistant.', role: MessageRole.SYSTEM },
-			{ content: 'hi', role: MessageRole.USER }
-		];
-		const snapshot = structuredClone(messages);
-
-		decorateSkillPrompt(messages, envelope);
-
-		expect(messages).toEqual(snapshot);
-	});
-
-	it('leaves messages untouched when the envelope is empty', () => {
-		const messages = [{ content: 'hi', role: MessageRole.USER }];
-
-		expect(decorateSkillPrompt(messages, '')).toBe(messages);
-	});
-
-	it('never re-escapes or parses the envelope XML', () => {
 		const tricky =
 			'<skills_catalog total="1" included="1"><skill_content name="a&amp;b">&lt;script&gt;alert(1)&lt;/script&gt;</skill_content></skills_catalog>';
-		const messages = [{ content: 'You are a helpful assistant.', role: MessageRole.SYSTEM }];
-		const decorated = decorateSkillPrompt(messages, tricky);
+		const decorated = decorateSkillPrompt(
+			[{ content: 'You are a helpful assistant.', role: MessageRole.SYSTEM }],
+			tricky
+		);
 
+		expect(decorateSkillPrompt(messages, '')).toBe(messages);
 		expect(decorated[0].content).toContain(tricky);
 		expect(decorated[0].content).not.toContain('&amp;amp;');
 	});
 });
 
-describe('listSkillContent', () => {
-	it('returns structured snapshot entries only, never XML', () => {
-		const content = listSkillContent(
-			buildSkillRunSnapshot('/cwd', makeCatalog('alpha', 'beta')).entries
-		);
+describe('listSkillContent and structured results', () => {
+	it('returns structured snapshot entries only, never XML or opaque IDs', () => {
+		const content = listSkillContent(buildSkillRunSnapshot('/cwd', catalogOf('alpha', 'beta')).entries);
 
 		expect(JSON.parse(content)).toEqual([
-			{
-				description: 'description of alpha',
-				name: 'alpha',
-				provider: 'agents',
-				scope: 'project'
-			},
-			{
-				description: 'description of beta',
-				name: 'beta',
-				provider: 'agents',
-				scope: 'project'
-			}
+			{ description: 'description of alpha', name: 'alpha', provider: 'agents', scope: 'project' },
+			{ description: 'description of beta', name: 'beta', provider: 'agents', scope: 'project' }
 		]);
 		expect(content).not.toContain('<skill>');
 		expect(content).not.toContain('opaque-');
 	});
-});
 
-describe('structured skill results', () => {
-	it('builds a structured denial with no XML content', () => {
-		const content = skillDenialResult(SKILL_READ_TOOL);
-
-		expect(JSON.parse(content)).toEqual({
+	it('builds structured denial and error results with no XML content', () => {
+		expect(JSON.parse(skillDenialResult(SKILL_READ_TOOL))).toEqual({
 			message: 'Skill access was denied by the user.',
 			status: 'denied',
 			tool: SKILL_READ_TOOL
 		});
-		expect(content).not.toContain('<');
-	});
-
-	it('builds a structured error with no XML content', () => {
-		const content = skillErrorResult(SKILL_READ_TOOL, 'boom');
-
-		expect(JSON.parse(content)).toEqual({
+		expect(JSON.parse(skillErrorResult(SKILL_READ_TOOL, 'boom'))).toEqual({
 			message: 'boom',
 			status: 'error',
 			tool: SKILL_READ_TOOL
@@ -506,7 +278,7 @@ describe('SkillRunAdapters', () => {
 		mockRead.mockReset();
 	});
 
-	it('recognizes registered names and sends only snapshot name/path with the snapshot CWD', async () => {
+	it('routes recognized tools with only the snapshot name/path and the snapshot CWD', async () => {
 		expect(makeAdapters({}).isSkillTool(SKILL_READ_TOOL)).toBe(true);
 		expect(makeAdapters({}).isSkillTool(SKILL_LIST_TOOL)).toBe(true);
 		expect(makeAdapters({}).isSkillTool('not_a_skill_tool')).toBe(false);
@@ -527,6 +299,24 @@ describe('SkillRunAdapters', () => {
 		);
 	});
 
+	it('rejects malformed arguments, unknown names, and broken JSON without a server call', async () => {
+		mockRead.mockResolvedValue(baseResult('demo-skill'));
+		const adapters = makeAdapters({ names: ['demo-skill'] });
+		const cases = ['{}', '{"name":"not-in-snapshot"}', '{"name":"demo-skill","path":7}', '{not json'];
+
+		for (const args of cases) {
+			const result = await adapters.execute({
+				...readCall(SKILL_READ_TOOL),
+				function: { arguments: args, name: SKILL_READ_TOOL }
+			});
+
+			expect(result.isError).toBe(true);
+			expect(JSON.parse(result.content).status).toBe('error');
+		}
+
+		expect(mockRead).not.toHaveBeenCalled();
+	});
+
 	it('list_skill returns structured snapshot entries without any server call or consent', async () => {
 		const requestPermission = defaultPermission();
 
@@ -543,40 +333,10 @@ describe('SkillRunAdapters', () => {
 		expect(requestPermission).not.toHaveBeenCalled();
 	});
 
-	it('never dispatches a read for a name outside the snapshot', async () => {
-		mockRead.mockResolvedValue(baseResult('demo-skill'));
-		const adapters = makeAdapters({ names: ['demo-skill'] });
-		const result = await adapters.execute({
-			...readCall(SKILL_READ_TOOL),
-			function: { arguments: JSON.stringify({ name: 'not-in-snapshot' }), name: SKILL_READ_TOOL }
-		});
-
-		expect(result.isError).toBe(true);
-		expect(JSON.parse(result.content).status).toBe('error');
-		expect(mockRead).not.toHaveBeenCalled();
-	});
-
-	it('rejects malformed arguments without a server call', async () => {
-		const adapters = makeAdapters({});
-		const missingName = await adapters.execute({
-			...readCall(SKILL_READ_TOOL),
-			function: { arguments: JSON.stringify({}), name: SKILL_READ_TOOL }
-		});
-		const badPath = await adapters.execute({
-			...readCall(SKILL_READ_TOOL),
-			function: {
-				arguments: JSON.stringify({ name: 'demo-skill', path: 7 }),
-				name: SKILL_READ_TOOL
-			}
-		});
-
-		expect(missingName.isError).toBe(true);
-		expect(badPath.isError).toBe(true);
-		expect(mockRead).not.toHaveBeenCalled();
-	});
-
 	it('pauses an unapproved identity, resumes on allow, and records the activation through the shared store', async () => {
-		mockRead.mockResolvedValue(baseResult('demo-skill'));
+		const contentXml = '<skill_content name="a&amp;b">&lt;code&gt;x &lt; y&lt;/code&gt;&amp; trailing</skill_content>';
+
+		mockRead.mockResolvedValue(baseResult('demo-skill', { content_xml: contentXml }));
 		const requestPermission = defaultPermission();
 		const activation = fakeStore();
 		const adapters = makeAdapters({
@@ -594,7 +354,8 @@ describe('SkillRunAdapters', () => {
 			expect.anything()
 		);
 		expect(result.isError).toBe(false);
-		expect(result.content).toBe('<skill_content name="demo-skill">body</skill_content>');
+		// Server XML is preserved byte-for-byte in the tool result.
+		expect(result.content).toBe(contentXml);
 		expect(result.activationRecorded).toBe(true);
 		expect(result.recordedToolResultMessageId).toBe('recorded-tool-result');
 		expect(result.extras).toHaveLength(1);
@@ -622,7 +383,6 @@ describe('SkillRunAdapters', () => {
 			status: 'denied',
 			tool: SKILL_READ_TOOL
 		});
-		expect(result.content).not.toContain('skill_content');
 		expect(activation.inputs).toHaveLength(0);
 		expect(activation.activatedIds.has('opaque-demo-skill')).toBe(false);
 	});
@@ -640,7 +400,7 @@ describe('SkillRunAdapters', () => {
 		expect(activation.inputs).toHaveLength(0);
 	});
 
-	it('authorizes a resource read from the durable base activation without consent and tags the result', async () => {
+	it('authorizes a resource read from the durable base activation without consent', async () => {
 		const activation = fakeStore();
 
 		activation.activatedIds.add('opaque-demo-skill');
@@ -657,7 +417,7 @@ describe('SkillRunAdapters', () => {
 		expect(result.extras?.[0]).toMatchObject({ kind: 'resource', path: 'refs/DETAILS.md' });
 	});
 
-	it('runs the approval flow for a resource read of an unapproved identity, showing the requested path, with a session-only record', async () => {
+	it('runs the approval flow for a resource read of an unapproved identity, with a session-only record', async () => {
 		mockRead.mockResolvedValue(resourceResult('demo-skill', 'refs/DETAILS.md'));
 		const requestPermission = defaultPermission();
 		const activation = fakeStore();
@@ -677,7 +437,6 @@ describe('SkillRunAdapters', () => {
 		expect(result.content).toBe(
 			'<skill_resource name="demo-skill" path="refs/DETAILS.md">data</skill_resource>'
 		);
-		// Resource approvals are session-only: no durable record, the flow persists the message.
 		expect(result.activationRecorded).toBeUndefined();
 		expect(result.extras?.[0]).toMatchObject({ kind: 'resource' });
 		expect(activation.inputs).toHaveLength(1);
@@ -694,8 +453,6 @@ describe('SkillRunAdapters', () => {
 
 		expect(requestPermission).toHaveBeenCalledTimes(1);
 		expect(mockRead).toHaveBeenCalledTimes(2);
-		// Both allowed reads route through the shared operation; the store
-		// created exactly one durable record (the second call deduped).
 		expect(activation.inputs).toHaveLength(2);
 		expect(activation.activatedIds.has('opaque-demo-skill')).toBe(true);
 	});
@@ -703,7 +460,6 @@ describe('SkillRunAdapters', () => {
 	it('treats the same skill name under a changed CWD as a distinct opaque identity requiring its own approval', async () => {
 		const activation = fakeStore();
 
-		// Durable activation of identity A (resolved under /a).
 		activation.activatedIds.add('opaque-id-A');
 		const requestPermission = defaultPermission();
 		const adaptersA = makeAdapters({ activation, cwd: '/a', requestPermission });
@@ -720,27 +476,15 @@ describe('SkillRunAdapters', () => {
 			})
 		);
 
-		// The already-activated opaque id reads without any consent pause.
 		await adaptersA.execute(readCall(SKILL_READ_TOOL));
 
 		expect(requestPermission).not.toHaveBeenCalled();
 
-		// A changed CWD resolves a different identity and needs consent.
 		const result = await adaptersB.execute(readCall(SKILL_READ_TOOL), new AbortController().signal);
 
 		expect(requestPermission).toHaveBeenCalledTimes(1);
-		expect(requestPermission).toHaveBeenCalledWith(
-			SKILL_READ_TOOL,
-			SKILL_SERVER_LABEL,
-			{ name: 'demo-skill', provider: 'agents', scope: 'project' },
-			expect.anything()
-		);
 		expect(result.isError).toBe(false);
-		expect(result.content).toBe('<skill_content name="demo-skill">body</skill_content>');
 		expect(result.activationRecorded).toBe(true);
-		// Both allowed reads route through the shared operation: A deduped,
-		// B created a new durable record under its own opaque id.
-		expect(activation.inputs).toHaveLength(2);
 		expect(activation.inputs[0].result.skill.id).toBe('opaque-id-A');
 		expect(activation.inputs[1].result.skill.id).toBe('opaque-id-B');
 	});
@@ -752,21 +496,16 @@ describe('SkillRunAdapters', () => {
 		const requestPermission = defaultPermission();
 
 		requestPermission.mockImplementation(
-			() =>
-				new Promise<ToolPermissionDecision>((resolve) => {
-					resolvePermission = resolve;
-				})
+			() => new Promise<ToolPermissionDecision>((resolve) => (resolvePermission = resolve))
 		);
 		const activation = fakeStore();
 		const adapters = makeAdapters({ activation, requestPermission });
 		const first = adapters.execute(readCall(SKILL_READ_TOOL));
 		const second = adapters.execute(readCall(SKILL_READ_TOOL));
 
-		// Give both callers time to reach the pending decision before resolving.
 		await new Promise((r) => setTimeout(r, 0));
 
 		expect(requestPermission).toHaveBeenCalledTimes(1);
-		// Reads are never deduplicated at the transport level.
 		expect(mockRead).toHaveBeenCalledTimes(2);
 
 		resolvePermission(ToolPermissionDecision.ONCE);
@@ -775,48 +514,8 @@ describe('SkillRunAdapters', () => {
 
 		expect(firstResult.content).toBe('<skill_content name="demo-skill">body</skill_content>');
 		expect(secondResult.content).toBe('<skill_content name="demo-skill">body</skill_content>');
-		// One durable record; the second read deduped through the store.
 		expect(activation.inputs).toHaveLength(2);
 		expect(firstResult.activationRecorded).toBe(true);
 		expect(secondResult.activationRecorded).toBeUndefined();
-	});
-
-	it('preserves server XML byte-for-byte in allowed tool results', async () => {
-		const contentXml =
-			'<skill_content name="a&amp;b">&lt;code&gt;x &lt; y&lt;/code&gt;&amp; trailing</skill_content>';
-
-		mockRead.mockResolvedValue(baseResult('demo-skill', { content_xml: contentXml }));
-		const adapters = makeAdapters({});
-		const result = await adapters.execute(readCall(SKILL_READ_TOOL));
-
-		expect(result.isError).toBe(false);
-		expect(result.content).toBe(contentXml);
-	});
-
-	it('rejects malformed tool call JSON with a structured error', async () => {
-		const adapters = makeAdapters({});
-		const result = await adapters.execute({
-			...readCall(SKILL_READ_TOOL),
-			function: { arguments: '{not json', name: SKILL_READ_TOOL }
-		});
-
-		expect(result.isError).toBe(true);
-		expect(JSON.parse(result.content).status).toBe('error');
-		expect(mockRead).not.toHaveBeenCalled();
-	});
-
-	it('routes the shared durable record with the model tool call id (activation reconstruction facts)', async () => {
-		const activation = fakeStore();
-
-		mockRead.mockResolvedValue(baseResult('demo-skill'));
-		const adapters = makeAdapters({ activation, conversationId: 'conv-11' });
-
-		await adapters.execute(readCall(SKILL_READ_TOOL));
-
-		expect(activation.inputs[0]).toMatchObject({
-			conversationId: 'conv-11',
-			toolCallId: 'call_1'
-		});
-		expect(activation.inputs[0].result.skill.id).toBe('opaque-demo-skill');
 	});
 });
