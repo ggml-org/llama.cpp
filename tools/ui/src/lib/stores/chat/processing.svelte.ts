@@ -13,7 +13,12 @@ import { MessageRole } from '$lib/enums';
 import { modelsStore } from '$lib/stores/models/index.svelte';
 import { serverStore } from '$lib/stores/server.svelte';
 import { settingsStore } from '$lib/stores/settings/index.svelte';
-import type { ApiProcessingState, ChatMessagePromptProgress, DatabaseMessage } from '$lib/types';
+import type {
+	ApiProcessingState,
+	ChatMessagePromptProgress,
+	ChatMessageTimings,
+	DatabaseMessage
+} from '$lib/types';
 import { SvelteMap } from 'svelte/reactivity';
 
 interface ProcessingTimingData {
@@ -62,6 +67,33 @@ export class ChatProcessingStore {
 		if (targetId) {
 			this.setState(targetId, this.parseTimingData(timingData));
 		}
+	}
+
+	/**
+	 * Applies a stream timings event (tokens/sec + token counts) to the given
+	 * conversation's processing state. Shared by the chat and continue flows.
+	 */
+	applyStreamTimings(
+		timings?: ChatMessageTimings,
+		promptProgress?: ChatMessagePromptProgress,
+		conversationId?: string
+	): void {
+		const tokensPerSecond =
+			timings?.predicted_ms && timings?.predicted_n
+				? (timings.predicted_n / timings.predicted_ms) * 1000
+				: 0;
+
+		this.updateFromTimings(
+			{
+				cache_n: timings?.cache_n || 0,
+				predicted_n: timings?.predicted_n || 0,
+				predicted_per_second: tokensPerSecond,
+				prompt_ms: timings?.prompt_ms,
+				prompt_n: timings?.prompt_n || 0,
+				prompt_progress: promptProgress
+			},
+			conversationId
+		);
 	}
 
 	restoreFromMessages(messages: DatabaseMessage[], conversationId: string): void {

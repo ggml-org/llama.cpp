@@ -47,7 +47,6 @@ import type {
 import {
 	findMessageById,
 	formatCwdMessage,
-	generateConversationTitle,
 	getConversationModel,
 	isAbortError,
 	normalizeModelName
@@ -138,6 +137,16 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 		this.chatStreamingStates.delete(convId);
 
 		if (convId === conversationsStore.activeConversation?.id) this.currentResponse = '';
+	}
+
+	/**
+	 * Resets the loading, streaming and processing state for a conversation
+	 * after a generation ends or errors. Shared by the flows' exit paths.
+	 */
+	cleanupStreaming(convId: string): void {
+		this.setChatLoading(convId, false);
+		this.clearChatStreaming(convId);
+		this.processing.setState(convId, null);
 	}
 	private getChatStreamingState(
 		convId: string
@@ -634,13 +643,7 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 			);
 
 			if (isNewConversation && content)
-				await conversationsStore.updateConversationName(
-					currentConv.id,
-					generateConversationTitle(
-						content,
-						Boolean(settingsStore.config.titleGenerationUseFirstLine)
-					)
-				);
+				await conversationsStore.applyTitleFromContent(currentConv.id, content);
 
 			const assistantMessage = await this.createAssistantMessage(userMessage.id);
 
@@ -961,22 +964,7 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 				this.setChatReasoning(convId, true);
 			},
 			onTimings: (timings?: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => {
-				const tokensPerSecond =
-					timings?.predicted_ms && timings?.predicted_n
-						? (timings.predicted_n / timings.predicted_ms) * 1000
-						: 0;
-
-				this.processing.updateFromTimings(
-					{
-						cache_n: timings?.cache_n || 0,
-						predicted_n: timings?.predicted_n || 0,
-						predicted_per_second: tokensPerSecond,
-						prompt_ms: timings?.prompt_ms,
-						prompt_n: timings?.prompt_n || 0,
-						prompt_progress: promptProgress
-					},
-					convId
-				);
+				this.processing.applyStreamTimings(timings, promptProgress, convId);
 			},
 			onToolCallsStreaming: (toolCalls) => {
 				const idx = conversationsStore.findMessageIndex(currentMessageId);

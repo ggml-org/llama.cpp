@@ -33,7 +33,6 @@ import {
 	findDescendantMessages,
 	findLeafNode,
 	findMessageById,
-	generateConversationTitle,
 	isAbortError
 } from '$lib/utils';
 
@@ -47,6 +46,7 @@ export interface ChatFlowsHost {
 	streamConnectionState: StreamConnectionState;
 	cancelPreEncode(): void;
 	clearChatStreaming(convId: string, messageId?: string): void;
+	cleanupStreaming(convId: string): void;
 	createAssistantMessage(parentId?: string): Promise<DatabaseMessage>;
 	getApiOptions(): Record<string, unknown>;
 	getOrCreateAbortController(convId: string): AbortController;
@@ -112,13 +112,7 @@ export class ChatMessageFlows {
 			await DatabaseService.updateMessage(messageId, { content: newContent });
 
 			if (isFirstUserMessage && newContent.trim())
-				await conversationsStore.updateConversationName(
-					activeConv.id,
-					generateConversationTitle(
-						newContent,
-						Boolean(settingsStore.config.titleGenerationUseFirstLine)
-					)
-				);
+				await conversationsStore.applyTitleFromContent(activeConv.id, newContent);
 
 			const messagesToRemove = conversationsStore.activeMessages.slice(messageIndex + 1);
 
@@ -510,9 +504,7 @@ export class ChatMessageFlows {
 
 						conversationsStore.updateConversationTimestamp(msg.convId);
 
-						this.host.setChatLoading(msg.convId, false);
-						this.host.clearChatStreaming(msg.convId);
-						this.host.processing.setState(msg.convId, null);
+						this.host.cleanupStreaming(msg.convId);
 					},
 					onCompletionId: (id: string) => {
 						if (!id) return;
@@ -547,9 +539,7 @@ export class ChatMessageFlows {
 								);
 							}
 
-							this.host.setChatLoading(msg.convId, false);
-							this.host.clearChatStreaming(msg.convId);
-							this.host.processing.setState(msg.convId, null);
+							this.host.cleanupStreaming(msg.convId);
 
 							return;
 						}
@@ -567,9 +557,7 @@ export class ChatMessageFlows {
 							timestamp: Date.now()
 						});
 
-						this.host.setChatLoading(msg.convId, false);
-						this.host.clearChatStreaming(msg.convId);
-						this.host.processing.setState(msg.convId, null);
+						this.host.cleanupStreaming(msg.convId);
 						this.host.showErrorDialog({
 							message: error.message,
 							type: error.name === 'TimeoutError' ? ErrorDialogType.TIMEOUT : ErrorDialogType.SERVER
@@ -586,22 +574,7 @@ export class ChatMessageFlows {
 						this.host.setChatReasoning(msg.convId, true);
 					},
 					onTimings: (timings?: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => {
-						const tokensPerSecond =
-							timings?.predicted_ms && timings?.predicted_n
-								? (timings.predicted_n / timings.predicted_ms) * 1000
-								: 0;
-
-						this.host.processing.updateFromTimings(
-							{
-								cache_n: timings?.cache_n || 0,
-								predicted_n: timings?.predicted_n || 0,
-								predicted_per_second: tokensPerSecond,
-								prompt_ms: timings?.prompt_ms,
-								prompt_n: timings?.prompt_n || 0,
-								prompt_progress: promptProgress
-							},
-							msg.convId
-						);
+						this.host.processing.applyStreamTimings(timings, promptProgress, msg.convId);
 					}
 				},
 
@@ -688,13 +661,7 @@ export class ChatMessageFlows {
 			const rootMessage = allMessages.find((m) => m.type === 'root' && m.parent === null);
 
 			if (rootMessage && msg.parent === rootMessage.id && newContent.trim()) {
-				await conversationsStore.updateConversationName(
-					activeConv.id,
-					generateConversationTitle(
-						newContent,
-						Boolean(settingsStore.config.titleGenerationUseFirstLine)
-					)
-				);
+				await conversationsStore.applyTitleFromContent(activeConv.id, newContent);
 			}
 
 			conversationsStore.updateConversationTimestamp();
@@ -776,13 +743,7 @@ export class ChatMessageFlows {
 			conversationsStore.updateConversationTimestamp();
 
 			if (isFirstUserMessage && newContent.trim())
-				await conversationsStore.updateConversationName(
-					activeConv.id,
-					generateConversationTitle(
-						newContent,
-						Boolean(settingsStore.config.titleGenerationUseFirstLine)
-					)
-				);
+				await conversationsStore.applyTitleFromContent(activeConv.id, newContent);
 
 			await conversationsStore.refreshActiveMessages();
 

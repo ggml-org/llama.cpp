@@ -590,6 +590,18 @@ class ConversationsStore implements ConversationsPreferencesHost {
 	}
 
 	/**
+	 * Derives a conversation title from its first message content and applies
+	 * it, honoring the title-generation setting. Shared by every flow that
+	 * edits or creates the first user message.
+	 */
+	async applyTitleFromContent(convId: string, content: string): Promise<void> {
+		await this.updateConversationName(
+			convId,
+			generateConversationTitle(content, Boolean(settingsStore.config.titleGenerationUseFirstLine))
+		);
+	}
+
+	/**
 	 * Toggles the pinned status of a conversation.
 	 * @param convId - The conversation ID to toggle
 	 * @returns The new pinned status
@@ -695,13 +707,7 @@ class ConversationsStore implements ConversationsPreferencesHost {
 					newFirstUserMessage.id !== currentFirstUserMessage.id ||
 					newFirstUserMessage.content.trim() !== currentFirstUserMessage.content.trim())
 			) {
-				await this.updateConversationName(
-					this.activeConversation.id,
-					generateConversationTitle(
-						newFirstUserMessage.content,
-						Boolean(settingsStore.config.titleGenerationUseFirstLine)
-					)
-				);
+				await this.applyTitleFromContent(this.activeConversation.id, newFirstUserMessage.content);
 			}
 		}
 	}
