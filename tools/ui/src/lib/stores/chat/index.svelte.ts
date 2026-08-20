@@ -47,6 +47,7 @@ import type {
 } from '$lib/types';
 import {
 	canCompactMessages,
+	filterByLeafNodeId,
 	findMessageById,
 	formatCwdMessage,
 	getConversationModel,
@@ -300,7 +301,9 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 
 		if (this.isChatLoadingInternal(convId) || agenticStore.isRunning(convId)) return;
 
-		const source = sliceAtLastCompaction(conversationsStore.activeMessages);
+		// Snapshot of the reactive branch: the compaction node created below
+		// must not leak into the summarization request.
+		const source = sliceAtLastCompaction([...conversationsStore.activeMessages]);
 
 		if (!canCompactMessages(source)) return;
 
@@ -324,6 +327,13 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 			if (node.parent) await conversationsStore.updateCurrentNode(node.parent);
 		};
 		const abortController = this.getOrCreateAbortController(convId);
+		const compactionStreamId = COMPACTION.STREAM_ID_PREFIX + convId;
+		// Model resolution mirrors the request funnel: the selected model
+		// first, then the model the branch was generated with, so router
+		// mode targets the child that owns this conversation's KV cache.
+		const effectiveModel = serverStore.isRouterMode
+			? modelsStore.selectedModelName || getConversationModel(source)
+			: undefined;
 
 		let summary = '';
 
@@ -338,10 +348,6 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 					: COMPACTION.DEFAULT_PROMPT;
 
 			apiMessages.push({ content: compactionPrompt, role: MessageRole.USER });
-			const effectiveModel =
-				serverStore.isRouterMode && modelsStore.selectedModelName
-					? modelsStore.selectedModelName
-					: undefined;
 
 			await ChatService.sendMessage(
 				apiMessages,
@@ -359,9 +365,11 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 					},
 					stream: true
 				},
-				// The summary request is a one-shot outside the SSE replay
-				// machinery: a reload must never reattach it as a chat turn.
-				undefined,
+				// Registered under the prefixed identity: the visibility kick
+				// and byte-offset resume protect the summary through tab
+				// switches, while the reload probe for the bare conversation
+				// id never reattaches it as a chat turn.
+				compactionStreamId,
 				abortController.signal
 			);
 
@@ -372,10 +380,19 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 			}
 
 			await DatabaseService.updateMessage(node.id, { content: summary });
+
+			// Re-encoding the reduced prefix is part of the compaction
+			// itself: it rebuilds the server KV cache on the summary and
+			// stamps the true context size on the node for the gauge,
+			// independently of the per-turn pre-fill setting.
+			void this.triggerCompactionPreEncode(convId, node.id, effectiveModel);
 		} catch (error) {
 			await rollbackNode();
 
-			if (!isAbortError(error)) {
+			if (isAbortError(error)) {
+				// The server keeps generating a detached summary otherwise.
+				void ChatService.cancelServerStream(compactionStreamId, effectiveModel);
+			} else {
 				console.error('Failed to compact conversation:', error);
 				this.showErrorDialog({
 					message: error instanceof Error ? error.message : 'Unknown error',
@@ -1527,6 +1544,65 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 			lastMessage.content = partialContent;
 			lastMessage.toolCalls = '';
 			console.error('Failed to save partial response:', error);
+		}
+	}
+
+	/**
+	 * Pre-encodes the compacted branch and stamps the returned prompt
+	 * timings on the compaction node, so the context gauge reflects the
+	 * reduced context as soon as the compaction finishes instead of after
+	 * the next turn.
+	 */
+	private async triggerCompactionPreEncode(
+		convId: string,
+		nodeId: string,
+		model?: string | null
+	): Promise<void> {
+		this.cancelPreEncode();
+		this.preEncodeAbortController = new AbortController();
+
+		const signal = this.preEncodeAbortController.signal;
+
+		try {
+			const allIdle = await ChatService.areAllSlotsIdle(model, signal);
+
+			if (!allIdle || signal.aborted) {
+				if (!signal.aborted) {
+					console.warn('[ChatStore] Compaction pre-encode skipped: slots busy');
+				}
+
+				return;
+			}
+
+			const allMessages = await conversationsStore.getConversationMessages(convId);
+			const branchPath = [...filterByLeafNodeId(allMessages, nodeId, false)];
+			const messages = sliceAtLastCompaction(branchPath);
+			const timings = await ChatService.preEncode(messages, model, undefined, signal);
+
+			if (!timings || signal.aborted) {
+				if (!signal.aborted) {
+					console.warn('[ChatStore] Compaction pre-encode returned no timings');
+				}
+
+				return;
+			}
+
+			await DatabaseService.updateMessage(nodeId, { timings });
+
+			if (conversationsStore.activeConversation?.id === convId) {
+				const idx = conversationsStore.findMessageIndex(nodeId);
+
+				if (idx >= 0) conversationsStore.updateMessageAtIndex(idx, { timings });
+			}
+
+			// Nothing is inferring anymore: clearing the live processing
+			// state hands the gauge over to the stamped node, which any
+			// later restore also picks as the context truth.
+			this.processing.setState(convId, null);
+		} catch (err) {
+			if (!isAbortError(err)) {
+				console.warn('[ChatStore] Compaction pre-encode failed:', err);
+			}
 		}
 	}
 

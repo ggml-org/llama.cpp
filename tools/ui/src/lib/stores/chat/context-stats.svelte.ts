@@ -6,7 +6,7 @@
  * and live processing state while streaming (chatStore).
  */
 
-import { MessageRole } from '$lib/enums';
+import { MessageRole, MessageType } from '$lib/enums';
 // direct imports between stores, not via the barrel, to avoid circular deps
 import { agenticStore } from '$lib/stores/agentic/index.svelte';
 import { chatStore } from '$lib/stores/chat/index.svelte';
@@ -38,7 +38,7 @@ interface AssistantTimingsSummary {
 
 /**
  * One forward pass over the messages computing everything the deriveds
- * below need: the last assistant timings (per-turn gauges), the last
+ * below need: the last context bearing timings (per-turn gauges), the last
  * agentic llm totals (cumulative gauge) and the cumulative sums. During
  * streaming activeMessages churns every chunk, and each of these used to be
  * its own O(n) scan re-run per chunk.
@@ -52,6 +52,15 @@ function summarizeAssistantTimings(messages: DatabaseMessage[]): AssistantTiming
 	let outputMs = 0;
 
 	for (const m of messages) {
+		// A stamped compaction node carries the prompt timings of the reduced
+		// context, so it supersedes earlier assistant turns as the current
+		// context size while staying out of the cumulative sums.
+		if (m.type === MessageType.COMPACTION && m.timings) {
+			lastTimings = m.timings;
+
+			continue;
+		}
+
 		if (m.role !== MessageRole.ASSISTANT || !m.timings) continue;
 
 		lastTimings = m.timings;
