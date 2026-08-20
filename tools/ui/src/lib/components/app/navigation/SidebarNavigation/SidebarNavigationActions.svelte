@@ -113,7 +113,7 @@
 				item.action === 'new-chat'
 					? () => {
 							onNewChat?.();
-							conversationsStore.openNewChatTab();
+							conversationsStore.openNewChat();
 						}
 					: item.route
 						? () => {
@@ -167,7 +167,7 @@
 				item.action === 'new-chat'
 					? () => {
 							onNewChat?.();
-							conversationsStore.openNewChatTab();
+							conversationsStore.openNewChat();
 						}
 					: item.route
 						? () => {

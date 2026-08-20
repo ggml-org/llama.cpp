@@ -46,8 +46,6 @@ export interface ConversationsPreferencesHost {
 	activeConversation: DatabaseConversation | null;
 	conversations: DatabaseConversation[];
 	applyConversationUpdate(id: string, updates: Partial<DatabaseConversation>): void;
-	isTemporaryConversation(id: string): boolean;
-	updateTemporaryConversation(id: string, updates: Partial<DatabaseConversation>): void;
 }
 
 export class ConversationPreferences {
@@ -160,14 +158,6 @@ export class ConversationPreferences {
 			cwd: trimmed
 		});
 
-		// unsaved new-chat tab: keep the pick in memory until it is persisted
-		if (this.host.isTemporaryConversation(id)) {
-			this.host.updateTemporaryConversation(id, { cwd: trimmed });
-			this.pendingCwd = null;
-
-			return;
-		}
-
 		await DatabaseService.updateConversation(id, {
 			cwd: trimmed
 		});
@@ -221,13 +211,6 @@ export class ConversationPreferences {
 			mcpServerOverrides: overrides
 		});
 
-		// unsaved new-chat tab: keep the override in memory until it is persisted
-		if (this.host.isTemporaryConversation(id)) {
-			this.host.updateTemporaryConversation(id, { mcpServerOverrides: overrides });
-
-			return;
-		}
-
 		await DatabaseService.updateConversation(id, {
 			mcpServerOverrides: overrides
 		});
@@ -251,13 +234,6 @@ export class ConversationPreferences {
 		this.host.applyConversationUpdate(id, {
 			reasoningEffort: effort
 		});
-
-		// unsaved new-chat tab: keep the effort in memory until it is persisted
-		if (this.host.isTemporaryConversation(id)) {
-			this.host.updateTemporaryConversation(id, { reasoningEffort: effort });
-
-			return;
-		}
 
 		await DatabaseService.updateConversation(id, {
 			reasoningEffort: effort
