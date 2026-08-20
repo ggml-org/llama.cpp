@@ -818,6 +818,14 @@ public:
         }
     }
 
+    server_metrics get_metrics() const {
+        return metrics;
+    }
+
+    void reset_metrics_bucket() {
+        metrics.reset_bucket();
+    }
+
 private:
     // note: accessing these fields outside of this class is not thread-safe
     // use server_context methods instead
@@ -898,6 +906,10 @@ private:
     void handle_sleeping_state(bool new_state) {
         GGML_ASSERT(sleeping != new_state);
         if (new_state) {
+            if (callback_state) {
+                callback_state(SERVER_STATE_SLEEPING, {});
+                // note: for sleeping == false, event is emitted by load_model()
+            }
             SRV_INF("%s", "server is entering sleeping state\n");
             destroy();
         } else {
@@ -2290,8 +2302,8 @@ private:
 
     // returns false to decline the task, it is offered again after the decode is done
     bool process_single_task(server_task && task, bool is_yielding) {
-        // while yielding, an encode / decode is running and only accessing metrics is safe
-        if (is_yielding && task.type != SERVER_TASK_TYPE_METRICS) {
+        // while yielding, an encode / decode is running and only reading the server state is safe
+        if (is_yielding && task.type != SERVER_TASK_TYPE_METRICS && task.type != SERVER_TASK_TYPE_SLOT_GET) {
             SRV_DBG("decoding, decline task, id_task = %d\n", task.id);
             return false;
         }
@@ -2417,28 +2429,17 @@ private:
                 } break;
             case SERVER_TASK_TYPE_METRICS:
                 {
-                    json slots_data = json::array();
-
-                    int n_idle_slots       = 0;
                     int n_processing_slots = 0;
 
                     for (server_slot & slot : slots) {
-                        json slot_data = slot.to_json(slots_debug == 0);
-
                         if (slot.is_processing()) {
                             n_processing_slots++;
-                        } else {
-                            n_idle_slots++;
                         }
-
-                        slots_data.push_back(slot_data);
                     }
-                    SRV_DBG("n_idle_slots = %d, n_processing_slots = %d\n", n_idle_slots, n_processing_slots);
+                    SRV_DBG("n_processing_slots = %d\n", n_processing_slots);
 
                     auto res = std::make_unique<server_task_result_metrics>();
                     res->id                  = task.id;
-                    res->slots_data          = std::move(slots_data);
-                    res->n_idle_slots        = n_idle_slots;
                     res->n_processing_slots  = n_processing_slots;
                     res->n_tasks_deferred    = queue_tasks.queue_tasks_deferred_size();
                     res->metrics             = metrics;
@@ -2446,6 +2447,28 @@ private:
                     if (task.metrics_reset_bucket) {
                         metrics.reset_bucket();
                     }
+                    queue_results.send(std::move(res));
+                } break;
+            case SERVER_TASK_TYPE_SLOT_GET:
+                {
+                    json slots_data = json::array();
+
+                    int n_idle_slots = 0;
+
+                    for (server_slot & slot : slots) {
+                        if (!slot.is_processing()) {
+                            n_idle_slots++;
+                        }
+
+                        slots_data.push_back(slot.to_json(slots_debug == 0));
+                    }
+                    SRV_DBG("n_idle_slots = %d\n", n_idle_slots);
+
+                    auto res = std::make_unique<server_task_result_slots>();
+                    res->id           = task.id;
+                    res->slots_data   = std::move(slots_data);
+                    res->n_idle_slots = n_idle_slots;
+
                     queue_results.send(std::move(res));
                 } break;
             case SERVER_TASK_TYPE_SLOT_SAVE:
@@ -4142,12 +4165,6 @@ struct server_res_generator : server_res_spipe {
 
 void server_context::set_state_callback(server_state_callback_t callback) {
     impl->callback_state = std::move(callback);
-    impl->queue_tasks.on_sleeping_state([this](bool sleeping) {
-        if (sleeping) {
-            impl->callback_state(SERVER_STATE_SLEEPING, {});
-        }
-        // for sleeping == false, event is emitted by load_model()
-    });
 }
 
 //
@@ -4431,6 +4448,119 @@ server_routes::server_routes(const common_params & params, server_context & ctx_
           queue_tasks(ctx_server.impl->queue_tasks),
           queue_results(ctx_server.impl->queue_results) {
     init_routes();
+
+    // note: this must be registered before load_model()
+    //       so that on sleep phase, the callback is called before ctx is destroyed
+    queue_tasks.on_sleeping_state([this](bool is_sleeping) {
+        update_cached_responses(is_sleeping);
+    });
+}
+
+static json get_res_model_info(const server_context_meta & meta) {
+    // note: do NOT use ctx_server here, otherwise it's not possible to use this during sleep
+
+    return {
+        {"id",       meta.model_name},
+        {"aliases",  meta.model_aliases},
+        {"tags",     meta.model_tags},
+        {"object",   "model"},
+        {"created",  std::time(0)},
+        {"owned_by", "llamacpp"},
+        {"meta",     {
+            {"vocab_type",  meta.model_vocab_type},
+            {"n_vocab",     meta.model_vocab_n_tokens},
+            {"n_ctx",       meta.slot_n_ctx},
+            {"n_ctx_train", meta.model_n_ctx_train},
+            {"n_embd",      meta.model_n_embd_inp},
+            {"n_params",    meta.model_n_params},
+            {"size",        meta.model_size},
+            {"ftype",       meta.model_ftype},
+        }},
+    };
+}
+
+static json get_res_models(const server_context_meta & meta) {
+    // note: do NOT use ctx_server here, otherwise it's not possible to use this during sleep
+
+    return {
+        {"models", {
+            {
+                {"name",  meta.model_name},
+                {"model", meta.model_name},
+                {"modified_at", ""},
+                {"size", ""},
+                {"digest", ""}, // dummy value, llama.cpp does not support managing model file's hash
+                {"type", "model"},
+                {"description", ""},
+                {"tags", {""}},
+                {"capabilities", meta.has_mtmd ? json({"completion","multimodal"}) : json({"completion"})},
+                {"parameters", ""},
+                {"details", {
+                    {"parent_model", ""},
+                    {"format", "gguf"},
+                    {"family", ""},
+                    {"families", {""}},
+                    {"parameter_size", ""},
+                    {"quantization_level", ""}
+                }}
+            }
+        }},
+        {"object", "list"},
+        {"data", {
+            get_res_model_info(meta),
+        }}
+    };
+}
+
+static json get_res_props(const server_context_meta & meta, const common_params & params, bool is_sleeping) {
+    // note: do NOT use ctx_server here, otherwise it's not possible to use this during sleep
+
+    task_params tparams;
+    tparams.sampling = params.sampling;
+    json default_generation_settings_for_props = json {
+        { "params", tparams.to_json(true) },
+        { "n_ctx",  meta.slot_n_ctx },
+    };
+
+    std::string tmpl_default = common_chat_templates_source(meta.chat_params.tmpls.get(), "");
+    std::string tmpl_tools   = common_chat_templates_source(meta.chat_params.tmpls.get(), "tool_use");
+
+    json props = {
+        { "default_generation_settings", default_generation_settings_for_props },
+        { "total_slots",                 params.n_parallel },
+        { "model_alias",                 meta.model_name },
+        { "model_ftype",                 meta.model_ftype },
+        { "model_path",                  meta.model_path },
+        { "modalities",                  json {
+            {"vision", meta.has_inp_image},
+            {"video",  meta.has_inp_video},
+            {"audio",  meta.has_inp_audio},
+        } },
+        { "media_marker",                get_media_marker() },
+        { "endpoint_slots",              params.endpoint_slots },
+        { "endpoint_props",              params.endpoint_props },
+        { "endpoint_metrics",            params.endpoint_metrics },
+        { "ui",                          params.ui },
+        { "ui_settings",                 meta.json_ui_settings },
+        { "chat_template",               tmpl_default },
+        { "chat_template_caps",          meta.chat_template_caps },
+        { "bos_token",                   meta.bos_token_str },
+        { "eos_token",                   meta.eos_token_str },
+        { "build_info",                  meta.build_info },
+        { "is_sleeping",                 is_sleeping },
+        { "cors_proxy_enabled",          params.ui_mcp_proxy },
+    };
+    if (params.use_jinja) {
+        if (!tmpl_tools.empty()) {
+            props["chat_template_tool_use"] = tmpl_tools;
+        }
+    }
+
+    return props;
+}
+
+json server_routes::get_model_info() const {
+    return get_res_model_info(*meta);
 }
 
 void server_routes::init_routes() {
@@ -4451,41 +4581,64 @@ void server_routes::init_routes() {
     };
 
     this->get_metrics = [this](const server_http_req & req) {
-        auto res = create_response();
+        auto res = create_response(true);
         if (!params.endpoint_metrics) {
             res->error(format_error_response("This server does not support metrics endpoint. Start it with `--metrics`", ERROR_TYPE_NOT_SUPPORTED));
             return res;
         }
 
-        // request slots data using task queue
-        {
-            server_task task(SERVER_TASK_TYPE_METRICS);
-            task.id = res->rd.get_new_id();
+        // render response using cached_metrics
+        auto use_cached_metrics = [&]() {
+            std::unique_lock<std::mutex> lock(mutex_cache);
+            res->headers["Process-Start-Time-Unix"] = std::to_string(cached_metrics.t_start);
+            server_task_result_metrics tmp;
+            tmp.metrics = cached_metrics;
+            res->content_type = "text/plain; version=0.0.4";
+            res->status = 200;
+            res->data = tmp.to_metrics();
             // the gauges are averaged over the window between two scrapes
-            task.metrics_reset_bucket = true;
-            res->rd.post_task(std::move(task), true); // high-priority task
+            cached_metrics.reset_bucket();
+            should_reset_buckets = true;
+        };
+
+        if (queue_tasks.is_sleeping()) {
+            use_cached_metrics();
+
+        } else {
+            // request slots data using task queue
+            {
+                server_task task(SERVER_TASK_TYPE_METRICS);
+                task.id = res->rd.get_new_id();
+                // the gauges are averaged over the window between two scrapes
+                task.metrics_reset_bucket = true;
+                res->rd.post_task(std::move(task), true); // high-priority task
+            }
+
+            // a task posted right before sleeping is never processed, do not wait for it
+            auto result = res->rd.next([&]{
+                return req.should_stop() || queue_tasks.is_sleeping();
+            });
+            if (!result) {
+                if (!req.should_stop()) {
+                    use_cached_metrics();
+                }
+                return res;
+            }
+
+            if (result->is_error()) {
+                res->error(result->to_json());
+                return res;
+            }
+
+            auto res_task = dynamic_cast<server_task_result_metrics*>(result.get());
+            GGML_ASSERT(res_task != nullptr);
+
+            res->headers["Process-Start-Time-Unix"] = std::to_string(res_task->metrics.t_start);
+            res->content_type = "text/plain; version=0.0.4";
+            res->status = 200;
+            res->data = res_task->to_metrics();
         }
 
-        // get the result
-        auto result = res->rd.next(req.should_stop);
-        if (!result) {
-            // connection was closed
-            GGML_ASSERT(req.should_stop());
-            return res;
-        }
-
-        if (result->is_error()) {
-            res->error(result->to_json());
-            return res;
-        }
-
-        auto res_task = dynamic_cast<server_task_result_metrics*>(result.get());
-        GGML_ASSERT(res_task != nullptr);
-
-        res->headers["Process-Start-Time-Unix"] = std::to_string(res_task->metrics.t_start);
-        res->content_type = "text/plain; version=0.0.4";
-        res->status = 200;
-        res->data = res_task->to_metrics();
         return res;
     };
 
@@ -4498,7 +4651,7 @@ void server_routes::init_routes() {
 
         // request slots data using task queue
         {
-            server_task task(SERVER_TASK_TYPE_METRICS);
+            server_task task(SERVER_TASK_TYPE_SLOT_GET);
             task.id = res->rd.get_new_id();
             res->rd.post_task(std::move(task), true); // high-priority task
         }
@@ -4516,7 +4669,7 @@ void server_routes::init_routes() {
             return res;
         }
 
-        auto * res_task = dynamic_cast<server_task_result_metrics*>(result.get());
+        auto * res_task = dynamic_cast<server_task_result_slots*>(result.get());
         GGML_ASSERT(res_task != nullptr);
 
         // optionally return "fail_on_no_slot" error
@@ -4566,53 +4719,13 @@ void server_routes::init_routes() {
 
     this->get_props = [this](const server_http_req &) {
         auto res = create_response(true);
-
-        // this endpoint can be accessed during sleeping
-        // the next LOC is to avoid someone accidentally use ctx_server
-        bool ctx_server; // do NOT delete this line
-        GGML_UNUSED(ctx_server);
-
-        task_params tparams;
-        tparams.sampling = params.sampling;
-        json default_generation_settings_for_props = json {
-            { "params", tparams.to_json(true) },
-            { "n_ctx",  meta->slot_n_ctx },
-        };
-
-        std::string tmpl_default = common_chat_templates_source(meta->chat_params.tmpls.get(), "");
-        std::string tmpl_tools   = common_chat_templates_source(meta->chat_params.tmpls.get(), "tool_use");
-
-        json props = {
-            { "default_generation_settings", default_generation_settings_for_props },
-            { "total_slots",                 params.n_parallel },
-            { "model_alias",                 meta->model_name },
-            { "model_ftype",                 meta->model_ftype },
-            { "model_path",                  meta->model_path },
-            { "modalities",                  json {
-                {"vision", meta->has_inp_image},
-                {"video",  meta->has_inp_video},
-                {"audio",  meta->has_inp_audio},
-            } },
-            { "media_marker",                get_media_marker() },
-            { "endpoint_slots",              params.endpoint_slots },
-            { "endpoint_props",              params.endpoint_props },
-            { "endpoint_metrics",            params.endpoint_metrics },
-            { "ui",                          params.ui },
-            { "ui_settings",                 meta->json_ui_settings },
-            { "chat_template",               tmpl_default },
-            { "chat_template_caps",          meta->chat_template_caps },
-            { "bos_token",                   meta->bos_token_str },
-            { "eos_token",                   meta->eos_token_str },
-            { "build_info",                  meta->build_info },
-            { "is_sleeping",                 queue_tasks.is_sleeping() },
-            { "cors_proxy_enabled",          params.ui_mcp_proxy },
-        };
-        if (params.use_jinja) {
-            if (!tmpl_tools.empty()) {
-                props["chat_template_tool_use"] = tmpl_tools;
-            }
+        // note: do NOT use ctx_server here, this endpoint must be accessible during sleep
+        if (queue_tasks.is_sleeping()) {
+            std::unique_lock<std::mutex> lock(mutex_cache);
+            res->ok(cached_props);
+        } else {
+            res->ok(get_res_props(*meta, params, false));
         }
-        res->ok(props);
         return res;
     };
 
@@ -4874,42 +4987,13 @@ void server_routes::init_routes() {
 
     this->get_models = [this](const server_http_req &) {
         auto res = create_response(true);
-
-        // this endpoint can be accessed during sleeping
-        // the next LOC is to avoid someone accidentally use ctx_server
-        bool ctx_server; // do NOT delete this line
-        GGML_UNUSED(ctx_server);
-
-        json models = {
-            {"models", {
-                {
-                    {"name",  meta->model_name},
-                    {"model", meta->model_name},
-                    {"modified_at", ""},
-                    {"size", ""},
-                    {"digest", ""}, // dummy value, llama.cpp does not support managing model file's hash
-                    {"type", "model"},
-                    {"description", ""},
-                    {"tags", {""}},
-                    {"capabilities", meta->has_mtmd ? json({"completion","multimodal"}) : json({"completion"})},
-                    {"parameters", ""},
-                    {"details", {
-                        {"parent_model", ""},
-                        {"format", "gguf"},
-                        {"family", ""},
-                        {"families", {""}},
-                        {"parameter_size", ""},
-                        {"quantization_level", ""}
-                    }}
-                }
-            }},
-            {"object", "list"},
-            {"data", {
-                get_model_info(),
-            }}
-        };
-
-        res->ok(models);
+        // note: do NOT use ctx_server here, this endpoint must be accessible during sleep
+        if (queue_tasks.is_sleeping()) {
+            std::unique_lock<std::mutex> lock(mutex_cache);
+            res->ok(cached_models);
+        } else {
+            res->ok(get_res_models(*meta));
+        }
         return res;
     };
 
@@ -5116,27 +5200,6 @@ void server_routes::init_routes() {
         GGML_ASSERT(dynamic_cast<server_task_result_apply_lora*>(result.get()) != nullptr);
         res->ok(result->to_json());
         return res;
-    };
-}
-
-json server_routes::get_model_info() const {
-    return json {
-        {"id",       meta->model_name},
-        {"aliases",  meta->model_aliases},
-        {"tags",     meta->model_tags},
-        {"object",   "model"},
-        {"created",  std::time(0)},
-        {"owned_by", "llamacpp"},
-        {"meta",     {
-            {"vocab_type",  meta->model_vocab_type},
-            {"n_vocab",     meta->model_vocab_n_tokens},
-            {"n_ctx",       meta->slot_n_ctx},
-            {"n_ctx_train", meta->model_n_ctx_train},
-            {"n_embd",      meta->model_n_embd_inp},
-            {"n_params",    meta->model_n_params},
-            {"size",        meta->model_size},
-            {"ftype",       meta->model_ftype},
-        }},
     };
 }
 
@@ -5387,4 +5450,25 @@ std::unique_ptr<server_res_generator> server_routes::handle_count_tokens(const l
     }
     res->ok(response);
     return res;
+}
+
+void server_routes::update_cached_responses(bool is_sleeping) {
+    // caller is task_queue, so ctx_server can be accessed without holding locks
+    std::unique_lock<std::mutex> lock(mutex_cache);
+
+    if (is_sleeping) {
+        cached_models  = get_res_models(*meta);
+        cached_props   = get_res_props(*meta, params, true);
+        cached_metrics = ctx_server.get_metrics();
+
+        should_reset_buckets = false;
+
+        SRV_DBG("%s\n", "cached responses updated");
+
+    } else if (should_reset_buckets) {
+        // a scrape during sleep already reported these buckets
+        ctx_server.reset_metrics_bucket();
+
+        should_reset_buckets = false;
+    }
 }

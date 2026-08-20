@@ -2,12 +2,21 @@
 
 #include <sstream>
 
-void llama_model_granite::load_arch_hparams(llama_model_loader & ml) {
+void llama_model_granite_swa::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
     ml.get_key(LLM_KV_LOGIT_SCALE,                 hparams.f_logit_scale);
     ml.get_key(LLM_KV_RESIDUAL_SCALE,              hparams.f_residual_scale, false);
     ml.get_key(LLM_KV_EMBEDDING_SCALE,             hparams.f_embedding_scale, false);
     ml.get_key(LLM_KV_ATTENTION_SCALE,             hparams.f_attention_scale, false);
+
+    // MoE expert configuration
+    ml.get_key(LLM_KV_EXPERT_COUNT,                hparams.n_expert, false);
+    ml.get_key(LLM_KV_EXPERT_USED_COUNT,           hparams.n_expert_used, false);
+
+     // iSWA configuration
+    ml.get_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.is_swa_impl);
+    ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa);
+    hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
 
     // Granite4 Vision uses array deepstack_mapping
     ml.get_arr(LLM_KV_DEEPSTACK_MAPPING, hparams.deepstack_mapping_arr, false);
@@ -30,11 +39,8 @@ void llama_model_granite::load_arch_hparams(llama_model_loader & ml) {
         }
     }
 
-    // Granite uses rope_finetuned as a switch for rope, so default to true
-    bool rope_finetuned = true;
-    ml.get_key(LLM_KV_ROPE_SCALING_FINETUNED, rope_finetuned, false);
-    hparams.rope_finetuned = rope_finetuned; // needed for round trip save
-    std::fill(hparams.rope_pattern.begin(), hparams.rope_pattern.end(), rope_finetuned);
+    // Per-layer RoPE pattern (optional)
+    ml.get_arr(LLM_KV_ATTENTION_ROPE_PATTERN, hparams.rope_pattern, false);
 
     switch (hparams.n_layer()) {
         case 32: type = LLM_TYPE_3B; break;
@@ -47,7 +53,7 @@ void llama_model_granite::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, hparams.n_ff_shexp, /* required */ false);
 }
 
-void llama_model_granite::load_arch_tensors(llama_model_loader &) {
+void llama_model_granite_swa::load_arch_tensors(llama_model_loader &) {
     LLAMA_LOAD_LOCALS;
 
     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
@@ -72,6 +78,9 @@ void llama_model_granite::load_arch_tensors(llama_model_loader &) {
         // optional bias tensors
         layer.wo_b = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "bias", i), {n_embd}, TENSOR_NOT_REQUIRED);
 
+        // Per-layer attention sinks for iSWA
+        layer.attn_sinks = create_tensor(tn(LLM_TENSOR_ATTN_SINKS, "weight", i), {n_head}, 0);
+
         layer.ffn_norm = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, 0);
 
         if (hparams.rope_scaling_type_train == LLAMA_ROPE_SCALING_TYPE_LONGROPE) {
@@ -93,25 +102,23 @@ void llama_model_granite::load_arch_tensors(llama_model_loader &) {
             layer.ffn_up_b   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "bias", i), {n_ff}, TENSOR_NOT_REQUIRED);
         } else {
             layer.ffn_gate_inp  = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP,  "weight", i), {n_embd, n_expert}, 0);
-            layer.ffn_gate_exps = create_tensor(tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), {n_embd,   n_ff, n_expert}, TENSOR_NOT_REQUIRED);
             layer.ffn_down_exps = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), {  n_ff, n_embd, n_expert}, 0);
-            layer.ffn_up_exps   = create_tensor(tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", i), {n_embd,   n_ff, n_expert}, 0);
+            create_tensor_gate_up_exps(layer, i, n_embd, n_ff, n_expert, 0);
 
-            // For Granite MoE Shared
+            // For Granite MoE Shared - gate+up kept fused in ffn_up_shexp (see LLM_FFN_SWIGLU below)
             if (hparams.n_ff_shexp > 0) {
-                layer.ffn_gate_shexp = create_tensor(tn(LLM_TENSOR_FFN_GATE_SHEXP, "weight", i), {n_embd, hparams.n_ff_shexp}, 0);
-                layer.ffn_up_shexp   = create_tensor(tn(LLM_TENSOR_FFN_UP_SHEXP,   "weight", i), {n_embd, hparams.n_ff_shexp}, 0);
+                layer.ffn_up_shexp   = create_tensor(tn(LLM_TENSOR_FFN_UP_SHEXP,   "weight", i), {n_embd, 2*hparams.n_ff_shexp}, 0);
                 layer.ffn_down_shexp = create_tensor(tn(LLM_TENSOR_FFN_DOWN_SHEXP, "weight", i), {hparams.n_ff_shexp, n_embd}, 0);
             }
         }
     }
 }
 
-std::unique_ptr<llm_graph_context> llama_model_granite::build_arch_graph(const llm_graph_params & params) const {
+std::unique_ptr<llm_graph_context> llama_model_granite_swa::build_arch_graph(const llm_graph_params & params) const {
     return std::make_unique<graph>(*this, params);
 }
 
-llama_model_granite::graph::graph(
+llama_model_granite_swa::graph::graph(
     const llama_model & model,
     const llm_graph_params & params)
     : llm_graph_context(params) {
@@ -127,11 +134,8 @@ llama_model_granite::graph::graph(
     inpL = build_inp_embd(model.tok_embd);
 
     // inp_pos - built only if rope enabled
-    ggml_tensor * inp_pos = nullptr;
-    if (hparams.has_rope(0)) {
-        inp_pos = build_inp_pos();
-    }
-    auto * inp_attn = build_attn_inp_kv();
+    ggml_tensor * inp_pos = build_inp_pos();
+    auto * inp_attn = build_attn_inp_kv_iswa();
 
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
@@ -193,18 +197,19 @@ llama_model_granite::graph::graph(
     ggml_build_forward_expand(gf, cur);
 }
 
-ggml_tensor * llama_model_granite::graph::build_attention_layer(
-          ggml_tensor             * cur,
-          ggml_tensor             * inp_pos,
-          llm_graph_input_attn_kv * inp_attn,
-    const llama_model             & model,
-    const int64_t                 n_embd_head,
-    const int                     il) {
+ggml_tensor * llama_model_granite_swa::graph::build_attention_layer(
+          ggml_tensor                  * cur,
+          ggml_tensor                  * inp_pos,
+          llm_graph_input_attn_kv_iswa * inp_attn,
+    const llama_model                  & model,
+    const int64_t                        n_embd_head,
+    const int                            il) {
 
     auto [Qcur, Kcur, Vcur] = build_qkv(model.layers[il], cur,
             n_embd_head, hparams.n_head(il), hparams.n_head_kv(il), il);
 
-    if (hparams.has_rope(il)) {
+    const bool use_rope = hparams.has_rope(il);
+    if (use_rope) {
         ggml_tensor * rope_factors = model.get_rope_factors(cparams, il);
         Qcur = ggml_rope_ext(
                 ctx0, Qcur, inp_pos, rope_factors,
@@ -224,18 +229,20 @@ ggml_tensor * llama_model_granite::graph::build_attention_layer(
     cb(Vcur, "Vcur", il);
 
     const float kq_scale = hparams.f_attention_scale == 0.0f ? 1.0f/sqrtf(float(n_embd_head)) : hparams.f_attention_scale;
+
+    // Pass layer.attn_sinks to build_attn for sink-based attention modulation
     cur = build_attn(inp_attn,
             model.layers[il].wo, model.layers[il].wo_b, model.layers[il].wo_s,
-            Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
-            cb(cur, "attn_out", il);
+            Qcur, Kcur, Vcur, nullptr, model.layers[il].attn_sinks, nullptr, kq_scale, il);
+    cb(cur, "attn_out", il);
     return cur;
 }
 
-ggml_tensor * llama_model_granite::graph::build_layer_ffn(
-          ggml_tensor       * cur,
-          ggml_tensor       * inpSA,
-    const llama_model       & model,
-    const int                 il) {
+ggml_tensor * llama_model_granite_swa::graph::build_layer_ffn(
+          ggml_tensor * cur,
+          ggml_tensor * inpSA,
+    const llama_model & model,
+    const int           il) {
 
     // For Granite architectures - scale residual
     if (hparams.f_residual_scale) {
@@ -250,7 +257,7 @@ ggml_tensor * llama_model_granite::graph::build_layer_ffn(
         cur = build_norm(ffn_inp,
                 model.layers[il].ffn_norm, NULL,
                 LLM_NORM_RMS, il);
-                cb(cur, "ffn_norm", il);
+        cb(cur, "ffn_norm", il);
 
         cur = build_ffn(cur,
                 model.layers[il].ffn_up,   model.layers[il].ffn_up_b,   NULL,
@@ -258,14 +265,14 @@ ggml_tensor * llama_model_granite::graph::build_layer_ffn(
                 model.layers[il].ffn_down, model.layers[il].ffn_down_b, NULL,
                 NULL,
                 LLM_FFN_SILU, LLM_FFN_PAR, il);
-                cb(cur, "ffn_out", il);
+        cb(cur, "ffn_out", il);
 
     } else {
         // MoE branch
         cur = build_norm(ffn_inp,
                 model.layers[il].ffn_norm, NULL,
                 LLM_NORM_RMS, il);
-                cb(cur, "ffn_norm", il);
+        cb(cur, "ffn_norm", il);
 
         ggml_tensor * moe_out = build_moe_ffn(cur,
                 model.layers[il].ffn_gate_inp,
@@ -277,17 +284,18 @@ ggml_tensor * llama_model_granite::graph::build_layer_ffn(
                 LLM_FFN_SILU, true,
                 hparams.expert_weights_scale,
                 LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX,
-                il);
+                il,
+                nullptr, model.layers[il].ffn_gate_up_exps);
         cb(moe_out, "ffn_moe_out", il);
 
-        // For Granite MoE Shared
+        // For Granite MoE Shared - gate+up kept fused in ffn_up_shexp
         if (hparams.n_ff_shexp > 0) {
             ggml_tensor * ffn_shexp = build_ffn(cur,
                 model.layers[il].ffn_up_shexp,   NULL, NULL,
-                model.layers[il].ffn_gate_shexp, NULL, NULL,
+                NULL,                            NULL, NULL,
                 model.layers[il].ffn_down_shexp, NULL, NULL,
                 NULL,
-                LLM_FFN_SILU, LLM_FFN_PAR, il);
+                LLM_FFN_SWIGLU, LLM_FFN_SEQ, il);
             cb(ffn_shexp, "ffn_shexp", il);
 
             cur = ggml_add(ctx0, moe_out, ffn_shexp);

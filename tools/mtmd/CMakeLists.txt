@@ -17,6 +17,7 @@ add_library(mtmd
             mtmd-audio.cpp
             mtmd-image.cpp
             mtmd.h
+            mtmd-internal.h
             mtmd-helper.cpp
             mtmd-helper-gen.cpp
             mtmd-helper-common.h

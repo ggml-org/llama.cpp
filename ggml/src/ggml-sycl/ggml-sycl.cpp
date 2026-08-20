@@ -109,7 +109,14 @@ int g_ggml_sycl_enable_host_pinned_mem = 1;
 static ggml_sycl_device_info ggml_sycl_init() {
     ggml_sycl_device_info info = {};
 
-    info.device_count = dpct::dev_mgr::instance().device_count();
+    // Do not hard crash when there exists no SYCL devices.
+    // We want to allow the user to use non-SYCL tools when SYCL is compiled (such as llama-quantize)
+    try {
+        info.device_count = dpct::dev_mgr::instance().device_count();
+    } catch (sycl::exception const &exc) {
+        GGML_LOG_INFO("%s: no SYCL device available: %s\n", __func__, exc.what());
+        info.device_count = 0;
+    }
     if (info.device_count == 0) {
         GGML_LOG_ERROR("%s: failed to initialize: %s\n", GGML_SYCL_NAME, __func__);
         return info;
@@ -6235,6 +6242,8 @@ static bool do_ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, cons
         }
         case GGML_OP_ROPE:
         case GGML_OP_ROPE_BACK:
+            // FIXME: support ggml_rope_set_offset
+            return ((const int32_t *) op->op_params)[15] == 0;
         case GGML_OP_IM2COL:
         case GGML_OP_IM2COL_3D:
         case GGML_OP_UPSCALE:
