@@ -79,6 +79,16 @@ describe('sliceAtLastCompaction', () => {
 
 		expect(sliced.map((m) => m.id)).toEqual(['c2', 'u2']);
 	});
+
+	it('ignores an empty node left by an interrupted compaction', () => {
+		const messages = [
+			makeMessage('u1', MessageRole.USER, 'question'),
+			makeMessage('a1', MessageRole.ASSISTANT, 'answer'),
+			makeCompactionNode('c1', '')
+		];
+
+		expect(sliceAtLastCompaction(messages)).toBe(messages);
+	});
 });
 
 describe('canCompactMessages', () => {
@@ -119,6 +129,16 @@ describe('canCompactMessages', () => {
 			makeCompactionNode('c1', 'summary'),
 			makeMessage('u1', MessageRole.USER, 'next'),
 			makeMessage('a1', MessageRole.ASSISTANT, 'reply')
+		];
+
+		expect(canCompactMessages(messages)).toBe(true);
+	});
+
+	it('accepts a branch whose trailing compaction node is empty', () => {
+		const messages = [
+			makeMessage('u1', MessageRole.USER, 'hi'),
+			makeMessage('a1', MessageRole.ASSISTANT, 'hello'),
+			makeCompactionNode('c1', '')
 		];
 
 		expect(canCompactMessages(messages)).toBe(true);
