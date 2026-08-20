@@ -329,6 +329,7 @@ typedef struct {
     uint64_t nb3;
     int32_t  n_past;
     int32_t  n_dims;
+    int32_t  n_offs;
     int32_t  n_ctx_orig;
     float    freq_base;
     float    freq_scale;
@@ -341,6 +342,7 @@ typedef struct {
     int32_t  sect_2;
     int32_t  sect_3;
     bool     src2;
+    bool     inplace;
 } ggml_metal_kargs_rope;
 
 typedef struct {

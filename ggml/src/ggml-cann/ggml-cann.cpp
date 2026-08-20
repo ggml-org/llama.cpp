@@ -2534,6 +2534,9 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
             }
         case GGML_OP_ROPE:
             {
+                if (((const int32_t *) op->op_params)[15] != 0) {
+                    return false; // FIXME: support ggml_rope_set_offset
+                }
                 if (op->src[0]->ne[0] > 896) {
                     return false;
                 }

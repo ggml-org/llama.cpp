@@ -9,6 +9,8 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 add_library(${TARGET} STATIC httplib.cpp httplib.h)
 
+add_library(vendor::cpp-httplib ALIAS ${TARGET})
+
 # disable warnings in 3rd party code
 if (CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
     target_compile_options(${TARGET} PRIVATE /w)

@@ -6,8 +6,7 @@ inputs:
     required: true
   cuda_arch:
     description: "CUDA target architecture"
-    required: false
-    default: "x64"
+    required: true
 
 runs:
   using: "composite"

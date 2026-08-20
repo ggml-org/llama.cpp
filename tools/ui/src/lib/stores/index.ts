@@ -53,26 +53,6 @@ export { permissionsStore } from './permissions.svelte';
 export { toolsStore } from './tools.svelte';
 
 // ENVIRONMENT / META
-export { buildInfoStore } from './build-info.svelte';
-
 export { versionStore } from './version.svelte';
 
-export { device } from './device.svelte';
-
-export { viewport, isMobile } from './viewport.svelte';
-
-export { theme } from './theme.svelte';
-
-export {
-	gaugePopup,
-	gaugePopupClose,
-	gaugeTriggerPointerDown,
-	gaugeTriggerClick,
-	gaugeTriggerKeydown,
-	gaugeTriggerEnter,
-	gaugeTriggerLeave,
-	gaugeCardEnter,
-	gaugeCardLeave
-} from './context-gauge-popup.svelte';
-
-export { persisted } from './persisted.svelte';
+export { deviceStore } from './device.svelte';
