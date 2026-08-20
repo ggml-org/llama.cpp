@@ -6306,7 +6306,6 @@ template [[host_name("kernel_fwht_f32_512")]] kernel kernel_fwht_t kernel_fwht_f
 // dequantize a quantized KV cache tensor to contiguous F16 before running the F16 flash attention kernels
 // - one thread per block; dispatched separately for K and V
 // - ref: https://github.com/ggml-org/llama.cpp/pull/27390
-// TODO: try to dispatch more threadgroups - one for each 16 elements, to see if perf improves
 template <
     typename block_t,
     short QK,
