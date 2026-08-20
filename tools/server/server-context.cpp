@@ -209,10 +209,12 @@ struct server_slot {
     common_speculative * spec;
 
     llama_tokens spec_draft;
+    std::vector<common_speculative_token_dist> spec_dists;
     llama_tokens spec_prompt;
     std::vector<int32_t> spec_i_batch;
     common_prompt_checkpoint spec_ckpt;
     bool spec_is_replay = false;
+    bool spec_grammar_fallback_logged = false;
 
     // TODO: move members that belong to the task (such as `generated_text`, `has_new_line`) to task_results_state
     //       see https://github.com/ggml-org/llama.cpp/pull/18283#issuecomment-3710175837
@@ -253,7 +255,7 @@ struct server_slot {
     server_prompt prompt;
 
     bool prompt_save(server_prompt_cache & prompt_cache) const {
-        if (prompt.tokens.size() == 0) {
+        if (prompt.tokens.size() == 0 || prompt_cache.contains(prompt)) {
             return false;
         }
 
@@ -270,9 +272,28 @@ struct server_slot {
             return false;
         }
 
-        llama_state_seq_get_data_ext(ctx_tgt, cur->data.main.data(), cur_size_tgt, id, LLAMA_STATE_SEQ_FLAGS_NONE);
+        const size_t n_tgt = llama_state_seq_get_data_ext(
+            ctx_tgt, cur->data.main.data(), cur_size_tgt, id, LLAMA_STATE_SEQ_FLAGS_NONE);
+        if (n_tgt != cur_size_tgt) {
+            SLT_WRN(*this, "failed to save target prompt state: expected %zu bytes, got %zu\n",
+                    cur_size_tgt, n_tgt);
+            if (!prompt_cache.discard(cur)) {
+                SLT_ERR(*this, "%s", "failed to discard incomplete target prompt state\n");
+            }
+            return false;
+        }
+
         if (ctx_dft) {
-            llama_state_seq_get_data_ext(ctx_dft, cur->data.drft.data(), cur_size_dft, id, LLAMA_STATE_SEQ_FLAGS_NONE);
+            const size_t n_dft = llama_state_seq_get_data_ext(
+                ctx_dft, cur->data.drft.data(), cur_size_dft, id, LLAMA_STATE_SEQ_FLAGS_NONE);
+            if (n_dft != cur_size_dft) {
+                SLT_WRN(*this, "failed to save draft prompt state: expected %zu bytes, got %zu\n",
+                        cur_size_dft, n_dft);
+                if (!prompt_cache.discard(cur)) {
+                    SLT_ERR(*this, "%s", "failed to discard incomplete draft prompt state\n");
+                }
+                return false;
+            }
         }
 
         return true;
@@ -326,6 +347,7 @@ struct server_slot {
         SLT_DBG(*this, "%s", "\n");
 
         spec_is_replay = false;
+        spec_grammar_fallback_logged = false;
 
         last_nl_pos    = 0;
         generated_text = "";
@@ -337,6 +359,7 @@ struct server_slot {
 
         if (can_speculate()) {
             spec_draft.clear();
+            spec_dists.clear();
             spec_i_batch.clear();
             spec_ckpt.clear();
         }
@@ -1661,9 +1684,60 @@ private:
         }
 
         if (ret) {
-            // Force prompt cache update for recurrent models to shrink/restore
-            // the recurrent state and avoid forced re-processing (issue #22746).
-            if (needs_reeval && prompt_cache) {
+            // Single-slot text recurrent contexts can avoid a host round-trip in
+            // two exact-semantics cases: the incoming prompt extends the resident
+            // state, or the normal slot policy has no branch to preserve and the
+            // host cache has no better state to load. Keep multi-slot, multimedia,
+            // adapter-backed state, explicit cache bypasses, and actual branch
+            // switches on the proven shrink/save/load/expand path.
+            const bool has_adapter_state =
+                !params_base.lora_adapters.empty() ||
+                !ret->lora.empty() ||
+                !task.params.lora.empty();
+
+            const bool can_probe_recurrent_cache =
+                needs_reeval &&
+                n_parallel_user == 1 &&
+                prompt_cache &&
+                task.type == SERVER_TASK_TYPE_COMPLETION &&
+                task.params.cache_prompt &&
+                !has_adapter_state &&
+                !ret->prompt.tokens.empty() &&
+                !ret->prompt.tokens.has_mtmd &&
+                !task.tokens.has_mtmd;
+
+            const bool reuse_recurrent_in_place =
+                can_probe_recurrent_cache &&
+                server_prompt_cache_can_reuse_in_place(
+                    ret->prompt.tokens, task.tokens, task.params.cache_prompt);
+
+            const bool has_better_cached_prompt =
+                can_probe_recurrent_cache &&
+                !reuse_recurrent_in_place &&
+                !update_cache &&
+                prompt_cache->has_better_match(ret->prompt, task.tokens);
+
+            const bool skip_redundant_recurrent_update =
+                server_prompt_cache_can_skip_recurrent_update(
+                    can_probe_recurrent_cache,
+                    update_cache,
+                    reuse_recurrent_in_place,
+                    has_better_cached_prompt);
+
+            if (skip_redundant_recurrent_update) {
+                update_cache = false;
+                if (reuse_recurrent_in_place) {
+                    SRV_TRC("reusing recurrent prompt in place; skipping host prompt-cache update "
+                            "(resident = %zu tokens, incoming = %zu tokens)\n",
+                            ret->prompt.tokens.size(), task.tokens.size());
+                } else {
+                    SRV_TRC("keeping resident recurrent prompt; no branch save or better host-cache "
+                            "state is needed (resident = %zu tokens, incoming = %zu tokens)\n",
+                            ret->prompt.tokens.size(), task.tokens.size());
+                }
+            } else if (needs_reeval && prompt_cache) {
+                // Recurrent models need shrink/restore when switching prompt
+                // states to avoid forced full re-processing (issue #22746).
                 update_cache = true;
             }
 
@@ -1674,20 +1748,36 @@ private:
 
             if (update_cache) {
                 SRV_TRC("%s", "updating prompt cache\n");
-                recurrent_shrink_for_prompt_cache();
 
                 const int64_t t_start = ggml_time_us();
+                const bool shrink_ok = recurrent_shrink_for_prompt_cache();
+                const int64_t t_shrink = ggml_time_us();
 
-                ret->prompt_save(*prompt_cache);
+                const bool saved = ret->prompt_save(*prompt_cache);
+                const int64_t t_save = ggml_time_us();
 
-                if (!ret->prompt_load(*prompt_cache, task.tokens)) {
+                const bool load_ok = ret->prompt_load(*prompt_cache, task.tokens);
+                const int64_t t_load = ggml_time_us();
+                if (!load_ok) {
                     ret->prompt_clear();
                 }
 
                 prompt_cache->update();
-                recurrent_expand_after_prompt_cache();
+                const int64_t t_update = ggml_time_us();
 
-                SRV_TRC("prompt cache update took %.2f ms\n", (ggml_time_us() - t_start) / 1000.0);
+                recurrent_expand_after_prompt_cache();
+                const int64_t t_end = ggml_time_us();
+
+                SRV_TRC("prompt cache update took %.2f ms "
+                        "(shrink %.2f, save %.2f, load %.2f, update %.2f, expand %.2f; "
+                        "shrink_ok = %d, saved = %d, load_ok = %d)\n",
+                        (t_end    - t_start)  / 1000.0,
+                        (t_shrink - t_start)  / 1000.0,
+                        (t_save   - t_shrink) / 1000.0,
+                        (t_load   - t_save)   / 1000.0,
+                        (t_update - t_load)   / 1000.0,
+                        (t_end    - t_update) / 1000.0,
+                        shrink_ok, saved, load_ok);
             }
         }
 
@@ -3033,6 +3123,9 @@ private:
                             /* .id_last  = */ slot.sampled,
                             /* .prompt   = */ &slot.spec_prompt,
                             /* .result   = */ &slot.spec_draft,
+                            /* .dists    = */ &slot.spec_dists,
+                            /* .temperature = */ slot.task->params.sampling.temp,
+                            /* .seed     = */ common_sampler_get_seed(slot.smpl.get()),
                         };
 
                         drafting.push_back(&slot);
@@ -3919,7 +4012,26 @@ private:
                 common_sampler_ptr smpl_save(common_sampler_clone(slot.smpl.get()));
 
                 GGML_ASSERT(slot.spec_i_batch.size() == n_draft + 1);
-                auto accepted = common_sampler_sample_and_accept_n(slot.smpl.get(), slot.ctx_tgt, slot.spec_i_batch, slot.spec_draft);
+                const bool can_rollback =
+                    ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_PART ||
+                    (ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_RS && n_draft <= llama_n_rs_seq(ctx_tgt));
+                const bool can_use_residual = can_rollback && slot.task->params.sampling.temp > 0.0f &&
+                                              slot.spec_dists.size() == slot.spec_draft.size();
+                const bool grammar_active = common_sampler_grammar_should_apply(slot.smpl.get());
+
+                // Distribution-aware speculative verification applies grammar_first to every target
+                // row. For large tool grammars this scans the full vocabulary up to n_draft times and
+                // leaves the GPUs idle. Equality verification is still target-distribution-correct and
+                // uses the inexpensive rejection-sampling grammar path, matching native MTP behavior.
+                const bool use_residual = can_use_residual && !grammar_active;
+                if (can_use_residual && grammar_active && !slot.spec_grammar_fallback_logged) {
+                    SLT_INF(slot, "%s", "using equality speculative verification while grammar constraints are active\n");
+                    slot.spec_grammar_fallback_logged = true;
+                }
+
+                auto accepted = use_residual
+                    ? common_sampler_sample_and_accept_n(slot.smpl.get(), slot.ctx_tgt, slot.spec_i_batch, slot.spec_draft, slot.spec_dists)
+                    : common_sampler_sample_and_accept_n(slot.smpl.get(), slot.ctx_tgt, slot.spec_i_batch, slot.spec_draft);
                 slot.spec_i_batch.clear();
 
                 GGML_ASSERT(accepted.size() >= 1);
@@ -3940,6 +4052,7 @@ private:
                         // partial acceptance is not supported by the context -> truncate the draft and restore the state
                         slot.spec_is_replay = true;
                         slot.spec_draft = std::move(accepted);
+                        slot.spec_dists.clear();
 
                         const auto & ckpt = slot.spec_ckpt;
 
@@ -3967,6 +4080,7 @@ private:
                 common_speculative_accept(spec.get(), slot.id, accepted.size() - 1);
 
                 slot.spec_draft = std::move(accepted);
+                slot.spec_dists.clear();
             }
 
             const auto ids = std::move(slot.spec_draft);

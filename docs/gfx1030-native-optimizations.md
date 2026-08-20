@@ -1,24 +1,25 @@
-# Opt-in gfx1030 native optimizations
+# Automatic gfx1030 native optimizations
 
-This branch contains experimental HIP paths tuned and validated on AMD RDNA2/gfx1030 (four Radeon Pro V620 GPUs). All behavior remains stock unless the master switch is enabled:
+This branch contains HIP paths tuned and validated on AMD RDNA2/gfx1030 (four Radeon Pro V620 GPUs). On the tested V620 launch, `HSA_OVERRIDE_GFX_VERSION=10.3.0` automatically selects the validated RDNA2 profile and its structural feature paths. Set the global kill switch to return to stock behavior:
 
 ```bash
-export GGML_HIP_GFX1030_NATIVE=1
+export HSA_OVERRIDE_GFX_VERSION=10.3.0
+export GGML_HIP_RDNA2_AUTO=0
 ```
 
-Model-specific fusions and graph-scoped Q8_1 reuse require additional switches. Setting a secondary switch without `GGML_HIP_GFX1030_NATIVE=1` has no effect.
+`GGML_HIP_GFX1030_NATIVE=0|1` remains an explicit native-profile override. Per-feature variables also remain explicit overrides: when unset they inherit the HSA umbrella default, and `0` disables that feature. Unsupported models, formats, shapes, layouts, and topologies retain their stock fallback.
 
 ## Environment variables
 
 | Variable | Default | Effect |
 |---|---:|---|
-| `GGML_HIP_GFX1030_NATIVE` | unset / `0` | Master opt-in for validated gfx1030 kernel specializations. Enables the Q4_0 DOT8 MMVQ path, the exact-shape Muse Q8_0 eight-warp MMVQ path, bounded six-row Q4_K/Q6_K routed MMVQ dispatch, native tiled-FlashAttention arithmetic/reductions, and chunked GDN prefill loads. |
-| `GGML_HIP_GFX1030_Q8_1_FUSION` | unset / `0` | In combination with the master switch, fuses routed SwiGLU evaluation into Q8_1 activation staging for eligible prompt-processing `MUL_MAT_ID` down projections. |
-| `GGML_HIP_GFX1030_GDN_SIBLING_FUSION` | unset / `0` | In combination with the master switch, creates and uses fused Qwen3.5/Qwen3.6 DeltaNet sibling projection weights. |
-| `GGML_HIP_GFX1030_Q8_CACHE` | unset / `0` | In combination with the master switch, enables graph-owned reuse of exact standard Q8_1 TG activations and the eligible dual RMSNorm F32/Q8_1 producer. |
-| `GGML_HIP_GFX1030_Q8_CACHE_TELEMETRY` | unset / `0` | Reports eligible standard-MMVQ Q8_1 sources, safe reuses, cache hits, and storage. It does not enable reuse unless `GGML_HIP_GFX1030_Q8_CACHE=1` is also set. |
+| `GGML_HIP_GFX1030_NATIVE` | unset: inherit HSA umbrella; explicit `0|1` override | Selects or disables the validated gfx1030 kernel specializations: Q4_0 DOT8 MMVQ, exact-shape Muse Q8_0 eight-warp MMVQ, bounded six-row Q4_K/Q6_K routed MMVQ, native tiled-FlashAttention arithmetic/reductions, and chunked GDN prefill loads. |
+| `GGML_HIP_GFX1030_Q8_1_FUSION` | unset: inherit HSA umbrella; explicit `0|1` override | Fuses routed SwiGLU evaluation into Q8_1 activation staging for eligible prompt-processing `MUL_MAT_ID` down projections. |
+| `GGML_HIP_GFX1030_GDN_SIBLING_FUSION` | unset: inherit HSA umbrella; explicit `0|1` override | Creates and uses fused Qwen3.5/Qwen3.6 DeltaNet sibling projection weights for their structural loader/graph gates. |
+| `GGML_HIP_GFX1030_Q8_CACHE` | unset: inherit HSA umbrella; explicit `0|1` override | Enables graph-owned reuse of exact standard Q8_1 TG activations and the eligible dual RMSNorm F32/Q8_1 producer. Q4_0 `sum_hi`, packed layouts, MMQ, and routed operations remain outside this cache contract. |
+| `GGML_HIP_GFX1030_Q8_CACHE_TELEMETRY` | unset / `0` | Reports eligible standard-MMVQ Q8_1 sources, safe reuses, cache hits, and storage. Telemetry does not allocate or reuse entries by itself. |
 
-The selectors are read once during backend or model initialization. Set them before starting `llama-cli`, `llama-server`, `llama-bench`, or a test binary.
+The selectors are read once during backend or model initialization. Set them before starting `llama-cli`, `llama-server`, `llama-bench`, or a test binary. Explicit `0` values are useful for A/B and fallback verification; an unset feature follows the automatic HSA profile when `HSA_OVERRIDE_GFX_VERSION=10.3.0` is active.
 
 Example with every accepted path enabled:
 
@@ -44,13 +45,13 @@ unset GGML_HIP_GFX1030_Q8_CACHE_TELEMETRY
 
 Multi-GPU ROCm state save/restore stability has a separate opt-in, `GGML_HIP_SAFE_STATE_IO=1`. It does not require the gfx1030 master switch and does not change inference kernels. See [the multi-GPU ROCm state-I/O workaround](rocm-multi-gpu-state-io.md).
 
-## Master-switch paths
+## Automatically selected native paths
 
 ### Q4_0 DOT8 MMVQ
 
 For Q4_0 decode with one destination column, the native MMVQ specialization preserves the ordinary Q4_0 weights and Q8_1 activation bytes. A two-byte `sum_hi` sidecar per Q8_1 block supplies the exact high-nibble correction needed by gfx1030 `UDOT8`/`SDOT8`; no model conversion or persistent layout change is required. Other quantization types remain on their normal vector-dot implementations.
 
-The path is exact and opt-in, but the measured Qwen end-to-end result was neutral to approximately 0.7% slower. It is retained as a validated native arithmetic experiment rather than advertised as a default speedup. See [the Q4_0 DOT8 experiment](rdna2-v620-q4-0-dot8-experiment.md).
+The path is exact and automatically eligible under the tested HSA profile, but the measured Qwen end-to-end result was neutral to approximately 0.7% slower. It is retained as a validated native arithmetic path rather than advertised as a speedup. See [the Q4_0 DOT8 experiment](rdna2-v620-q4-0-dot8-experiment.md).
 
 ### Muse Q8_0 eight-warp MMVQ
 
@@ -68,7 +69,7 @@ On RDNA2, stock Q4_K and Q6_K `MUL_MAT_ID` dispatch changes from MMVQ to MMQ abo
 
 The top-k bound is intentionally conservative. Across 48 Q4_K/Q6_K cases with top-k 2 or 4, K from 256 to 8192, N from 256 to 4096, 8 to 256 experts, and both uniform and concentrated routing, six-row MMVQ reduced operation latency by 15.9% to 61.2%. Top-k 6 regressed in one tested Q6_K case, while concentrated top-k 8 routing regressed in 12 of 16 grid cases by as much as 54.5%; those cases therefore retain stock dispatch.
 
-The exact Qwen3.6 35B four-GPU layer-split configuration currently carries an advisory tensor flag that permits its validated top-k 8 MTP path to use six-row MMVQ. The flag is generic: another model loader may set it on validated Q4_K/Q6_K routed weights after equivalent testing. It is inert unless `GGML_HIP_GFX1030_NATIVE=1`, so native-off execution remains stock. Without the hint, every model automatically receives the validated top-k 1--4 path; higher top-k routing remains on stock dispatch until separately validated.
+The exact Qwen3.6 35B four-GPU layer-split configuration currently carries an advisory tensor flag that permits its validated top-k 8 MTP path to use six-row MMVQ. The flag is generic: another model loader may set it on validated Q4_K/Q6_K routed weights after equivalent testing. It is inert when the native profile is disabled, so an explicit `GGML_HIP_GFX1030_NATIVE=0` or global `GGML_HIP_RDNA2_AUTO=0` keeps execution stock. Without the hint, every model automatically receives the validated top-k 1--4 path; higher top-k routing remains on stock dispatch until separately validated.
 
 MMQ and MMVQ accumulate floating-point products in different orders and are not generally byte-identical. The validation sweep measured NMSE from `4.23e-10` to `9.15e-9`, compared with the backend `MUL_MAT_ID` allowance of `5e-4`; MMVQ graph and non-graph outputs were byte-identical. This path does not alter quantized weights or Q8_1 activation encoding.
 
@@ -88,7 +89,7 @@ Direct GDN measurements improved by about 7.9% at 256 tokens and 17.7% at 512 to
 
 ### Graph-scoped standard Q8_1 reuse
 
-With both the master switch and `GGML_HIP_GFX1030_Q8_CACHE=1`, eligible TG matrix multiplications can share an exact standard Q8_1 activation instead of independently staging the same F32 source. The initial contract is deliberately narrow:
+With the native profile enabled and `GGML_HIP_GFX1030_Q8_CACHE` not explicitly disabled, eligible TG matrix multiplications can share an exact standard Q8_1 activation instead of independently staging the same F32 source. An explicit `GGML_HIP_GFX1030_Q8_CACHE=1` is still a useful self-documenting enable. The initial contract is deliberately narrow:
 
 - a single-token, non-routed `MUL_MAT` using Q8_0 weights and MMVQ;
 - standard `block_q8_1` activation layout only;
@@ -105,9 +106,17 @@ Temporary verification compared every cached Q8_1 byte, scale, and sum with a fr
 
 Set `GGML_HIP_GFX1030_Q8_CACHE_TELEMETRY=1` to print per-device source/hit summaries during graph warmup. Telemetry alone only reports opportunities; it does not allocate or reuse cache entries.
 
+### TP4 consumer-fused host-snapshot boundaries
+
+With the automatic `GGML_HIP_GFX1030_P2P_ALLREDUCE=auto-expanded` policy, structurally eligible ordinary TP4 boundaries named `linear_attn_out-*`, `ffn_out-*`, and `attn_output-*` with contiguous F32 shape `[5120,1,1,1]` may use the existing exact consumer-fused host-snapshot kernel. It performs the validated mapped-host reduction and the dependent residual add/RMSNorm/mul in one kernel while preserving the F32 materialization and graph-prefix fallback contract.
+
+The gate is structural and model-independent: it requires the existing four-rank RDNA2 topology/self-test, exact boundary shape/name, contiguous tensors, and an unshared `RESHAPE -> ADD -> RMS_NORM -> MUL` graph prefix. Any miss uses the ordinary host reduction or RCCL fallback. MTP width five (`ne[1]=5`) and external DFlash graphs do not activate this ordinary-only path.
+
+The isolated integrated candidate was byte/content exact across deterministic, prompt-cache, grammar, long/stateful, Flash Attention, graph-reuse, and fallback validation. A clean production-control versus integrated-candidate ABBA measured `53.4202 -> 53.8177 tok/s` (**+0.744%** mean; **+0.742%** median). This is a small measured gain, not a general communication redesign; the existing `auto` control policy remains available.
+
 ### Routed SwiGLU to Q8_1 staging
 
-With both the master switch and `GGML_HIP_GFX1030_Q8_1_FUSION=1`, graph fusion can replace:
+With the native profile enabled and `GGML_HIP_GFX1030_Q8_1_FUSION` not explicitly disabled, graph fusion can replace:
 
 ```text
 F32 gate + F32 up -> SwiGLU F32 tensor -> Q8_1 staging -> routed down projection
@@ -126,7 +135,7 @@ Unsafe-math can otherwise reassociate arithmetic after removing the materialized
 
 ### DeltaNet sibling projections
 
-With both the master switch and `GGML_HIP_GFX1030_GDN_SIBLING_FUSION=1`, model loading creates two persistent row-concatenated weights for recurrent Qwen35MoE 35B layers:
+With the native profile enabled and `GGML_HIP_GFX1030_GDN_SIBLING_FUSION` not explicitly disabled, model loading creates two persistent row-concatenated weights for recurrent Qwen35MoE 35B layers:
 
 ```text
 Q8_0 [wqkv | z]       : [2048, 8192] + [2048, 4096] -> [2048, 12288]

@@ -39,14 +39,33 @@
 #include <string>
 #include <vector>
 
-static bool llama_model_use_gfx1030_gdn_sibling_fusion() {
+static bool llama_model_rdna2_auto_enabled() {
+    const char * value = std::getenv("GGML_HIP_RDNA2_AUTO");
+    return value == nullptr ||
+           (std::strcmp(value, "0") != 0 &&
+            std::strcmp(value, "off") != 0 &&
+            std::strcmp(value, "false") != 0);
+}
+
+static bool llama_model_rdna2_native_profile_enabled() {
+    if (!llama_model_rdna2_auto_enabled()) {
+        return false;
+    }
     static const bool enabled = []() {
-        const char * native = std::getenv("GGML_HIP_GFX1030_NATIVE");
-        const char * fusion = std::getenv("GGML_HIP_GFX1030_GDN_SIBLING_FUSION");
-        return native != nullptr && std::atoi(native) != 0 &&
-               fusion != nullptr && std::atoi(fusion) != 0;
+        if (const char * native = std::getenv("GGML_HIP_GFX1030_NATIVE")) {
+            return std::atoi(native) != 0;
+        }
+        const char * override_gfx = std::getenv("HSA_OVERRIDE_GFX_VERSION");
+        return override_gfx != nullptr && std::strcmp(override_gfx, "10.3.0") == 0;
     }();
     return enabled;
+}
+
+static bool llama_model_use_gfx1030_gdn_sibling_fusion() {
+    if (const char * fusion = std::getenv("GGML_HIP_GFX1030_GDN_SIBLING_FUSION")) {
+        return std::atoi(fusion) != 0 && llama_model_rdna2_native_profile_enabled();
+    }
+    return llama_model_rdna2_native_profile_enabled();
 }
 
 static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params & params) {
@@ -1962,8 +1981,9 @@ bool llama_model::is_tensor_parallel_output_head(const ggml_tensor * tensor) con
     if (!tp_sharded_output_initialized) {
         tp_sharded_output_initialized = true;
         const char * enabled = getenv("GGML_TP_SHARDED_OUTPUT");
+        const bool auto_qwen27 = arch == LLM_ARCH_QWEN35 && type == LLM_TYPE_27B;
         const bool supported_qwen =
-            (arch == LLM_ARCH_QWEN35 && type == LLM_TYPE_27B) ||
+            auto_qwen27 ||
             ((arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_QWEN35MOE) &&
                 (type == LLM_TYPE_35B_A3B || type == LLM_TYPE_122B_A10B));
         const bool supported_arch = supported_qwen || arch == LLM_ARCH_DEEPSEEK4;
@@ -1971,9 +1991,12 @@ bool llama_model::is_tensor_parallel_output_head(const ggml_tensor * tensor) con
         const bool vocab_sharded_output = arch == LLM_ARCH_DEEPSEEK4 &&
             vocab_sharded != nullptr && strcmp(vocab_sharded, "1") == 0;
         const bool requested = enabled != nullptr && strcmp(enabled, "1") == 0;
-        if (requested && params.no_tp_output_head_sharding && supported_arch) {
+        const bool automatic = enabled == nullptr || strcmp(enabled, "auto") == 0;
+        const bool use_sharded_output = llama_model_rdna2_auto_enabled() &&
+            (requested || (automatic && auto_qwen27));
+        if (use_sharded_output && params.no_tp_output_head_sharding && supported_arch) {
             LLAMA_LOG_WARN("%s: keeping the output head mirrored because an external draft model shares it\n", __func__);
-        } else if (requested && params.split_mode == LLAMA_SPLIT_MODE_TENSOR && supported_arch) {
+        } else if (use_sharded_output && params.split_mode == LLAMA_SPLIT_MODE_TENSOR && supported_arch) {
             const size_t ndev = get_split_state_ud.n_devices;
             auto valid_split = [&](const ggml_tensor * head, size_t rotation) {
                 if (head == nullptr || head == tok_embd || ggml_n_dims(head) != 2 ||
@@ -2719,6 +2742,7 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
 
     // add backend sampling layers (if any)
     llm->build_sampling();
+    llm->build_post_sampling();
 
     // if the gguf model was converted with --sentence-transformers-dense-modules
     // there will be two additional dense projection layers

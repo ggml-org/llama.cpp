@@ -161,6 +161,30 @@ endif()
 
 if (GGML_HIP_RCCL)
     target_link_libraries(ggml-hip PRIVATE ggml-base roc::rccl)
+
+    # RCCL loads its versioned tuner ABI as a shared object. Build the guarded
+    # policy beside libggml-hip so the backend can discover it before
+    # ncclCommInitAll without a user-provided path or launch wrapper.
+    add_library(ggml-rccl-tuner-rdna2-v620 MODULE
+        rccl-tuner-v620.cpp
+        rccl-tuner-v6.h
+        rccl-tuner-policy.h
+    )
+    target_include_directories(ggml-rccl-tuner-rdna2-v620 PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_compile_features(ggml-rccl-tuner-rdna2-v620 PRIVATE cxx_std_17)
+    target_link_libraries(ggml-rccl-tuner-rdna2-v620 PRIVATE hip::host)
+    add_dependencies(ggml-hip ggml-rccl-tuner-rdna2-v620)
+    set_target_properties(ggml-rccl-tuner-rdna2-v620 PROPERTIES
+        PREFIX "lib"
+        OUTPUT_NAME "nccl-tuner-rdna2-v620"
+        LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+        POSITION_INDEPENDENT_CODE ON
+    )
+    install(TARGETS ggml-rccl-tuner-rdna2-v620
+        LIBRARY DESTINATION lib
+        RUNTIME DESTINATION bin
+    )
 endif()
 
-target_link_libraries(ggml-hip PRIVATE ggml-base hip::host roc::rocblas roc::hipblas)
+target_link_libraries(ggml-hip PRIVATE ggml-base hip::host roc::rocblas roc::hipblas ${CMAKE_DL_LIBS})

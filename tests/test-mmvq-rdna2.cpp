@@ -65,7 +65,7 @@ struct output_stats {
 void usage(const char * program) {
     std::printf("Synthetic quantized MMVQ benchmark using the normal HIP GGML backend graph.\n\n");
     std::printf("usage: %s [options]\n\n", program);
-    std::printf("  --type TYPE             q4_0, q4_1, q5_0, q5_1, q8_0, q2_k, q3_k, q4_k, q5_k, q6_k (q4_0)\n");
+    std::printf("  --type TYPE             q4_0, q4_1, q5_0, q5_1, q8_0, q2_k, q3_k, q4_k, q5_k, q6_k, mxfp4, nvfp4 (q4_0)\n");
     std::printf("  --k N                   input width; must satisfy the quant block size (4096)\n");
     std::printf("  --n N                   output rows (4096)\n");
     std::printf("  --batch N               activation columns, 1..256; 1..8 normally use MMVQ (1)\n");
@@ -97,6 +97,8 @@ bool parse_type(const char * value, ggml_type & type) {
         { "q4_k", GGML_TYPE_Q4_K },
         { "q5_k", GGML_TYPE_Q5_K },
         { "q6_k", GGML_TYPE_Q6_K },
+        { "mxfp4", GGML_TYPE_MXFP4 },
+        { "nvfp4", GGML_TYPE_NVFP4 },
     };
 
     for (const type_name & candidate : supported) {
