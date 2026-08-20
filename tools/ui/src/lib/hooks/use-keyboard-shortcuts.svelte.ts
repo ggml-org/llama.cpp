@@ -1,5 +1,6 @@
+import { page } from '$app/state';
 import { KeyboardKey } from '$lib/enums';
-import { conversationsStore } from '$lib/stores';
+import { conversationsStore, NEW_CHAT_TAB_ID, settingsStore, tabsStore } from '$lib/stores';
 
 interface KeyboardShortcutsCallbacks {
 	activateSearchMode?: () => void;
@@ -39,6 +40,28 @@ export function useKeyboardShortcuts(callbacks: KeyboardShortcutsCallbacks) {
 		if (event.shiftKey && isCmdOrCtrl && event.key === KeyboardKey.E_UPPER) {
 			event.preventDefault();
 			callbacks.editActiveConversation?.();
+		}
+
+		if (
+			event.shiftKey &&
+			isCmdOrCtrl &&
+			(event.key === KeyboardKey.X_LOWER || event.key === KeyboardKey.X_UPPER)
+		) {
+			// several components register this shortcut; only let the first handler
+			// act so the synchronous navigation does not cascade-close every tab
+			if (event.defaultPrevented) return;
+
+			event.preventDefault();
+
+			// close-tab only makes sense with conversation tabs enabled
+			if (!settingsStore.config.conversationTabs) return;
+
+			const activeId =
+				page.params.id ?? (page.route.id === '/(chat)' ? NEW_CHAT_TAB_ID : undefined);
+
+			if (activeId) {
+				void tabsStore.close(activeId, activeId);
+			}
 		}
 
 		if (
