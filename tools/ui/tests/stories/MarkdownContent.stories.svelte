@@ -1,59 +1,60 @@
 <script module lang="ts">
-	import { defineMeta } from '@storybook/addon-svelte-csf';
-	import { expect } from 'storybook/test';
-	import { MarkdownContent } from '$lib/components/app';
 	import { AI_TUTORIAL_MD } from './fixtures/ai-tutorial.js';
 	import { API_DOCS_MD } from './fixtures/api-docs.js';
 	import { BLOG_POST_MD } from './fixtures/blog-post.js';
 	import { DATA_ANALYSIS_MD } from './fixtures/data-analysis.js';
-	import { README_MD } from './fixtures/readme.js';
-	import { MATH_FORMULAS_MD } from './fixtures/math-formulas.js';
 	import { EMPTY_MD } from './fixtures/empty.js';
+	import { MATH_FORMULAS_MD } from './fixtures/math-formulas.js';
+	import { README_MD } from './fixtures/readme.js';
+	import { defineMeta } from '@storybook/addon-svelte-csf';
+	import { MarkdownContent } from '$lib/components/app';
+	import { expect } from 'storybook/test';
 
 	const { Story } = defineMeta({
-		title: 'Components/MarkdownContent',
 		component: MarkdownContent,
 		parameters: {
 			layout: 'centered'
-		}
+		},
+		title: 'Components/MarkdownContent'
 	});
 </script>
 
-<Story name="Empty" args={{ content: EMPTY_MD, class: 'max-w-[56rem] w-[calc(100vw-2rem)]' }} />
+<Story name="Empty" args={{ class: 'max-w-[56rem] w-[calc(100vw-2rem)]', content: EMPTY_MD }} />
 
 <Story
 	name="AI Tutorial"
-	args={{ content: AI_TUTORIAL_MD, class: 'max-w-[56rem] w-[calc(100vw-2rem)]' }}
+	args={{ class: 'max-w-[56rem] w-[calc(100vw-2rem)]', content: AI_TUTORIAL_MD }}
 />
 
 <Story
 	name="API Documentation"
-	args={{ content: API_DOCS_MD, class: 'max-w-[56rem] w-[calc(100vw-2rem)]' }}
+	args={{ class: 'max-w-[56rem] w-[calc(100vw-2rem)]', content: API_DOCS_MD }}
 />
 
 <Story
 	name="Technical Blog"
-	args={{ content: BLOG_POST_MD, class: 'max-w-[56rem] w-[calc(100vw-2rem)]' }}
+	args={{ class: 'max-w-[56rem] w-[calc(100vw-2rem)]', content: BLOG_POST_MD }}
 />
 
 <Story
 	name="Data Analysis"
-	args={{ content: DATA_ANALYSIS_MD, class: 'max-w-[56rem] w-[calc(100vw-2rem)]' }}
+	args={{ class: 'max-w-[56rem] w-[calc(100vw-2rem)]', content: DATA_ANALYSIS_MD }}
 />
 
 <Story
 	name="README file"
-	args={{ content: README_MD, class: 'max-w-[56rem] w-[calc(100vw-2rem)]' }}
+	args={{ class: 'max-w-[56rem] w-[calc(100vw-2rem)]', content: README_MD }}
 />
 
 <Story
 	name="Math Formulas"
-	args={{ content: MATH_FORMULAS_MD, class: 'max-w-[56rem] w-[calc(100vw-2rem)]' }}
+	args={{ class: 'max-w-[56rem] w-[calc(100vw-2rem)]', content: MATH_FORMULAS_MD }}
 />
 
 <Story
 	name="URL Links"
 	args={{
+		class: 'max-w-[56rem] w-[calc(100vw-2rem)]',
 		content: `# URL Links Test
 
 Here are some example URLs that should open in new tabs:
@@ -65,11 +66,11 @@ Here are some example URLs that should open in new tabs:
 
 You can also test inline links like https://example.com or https://docs.python.org.
 
-All links should have \`target="_blank"\` and \`rel="noopener noreferrer"\` attributes for security.`,
-		class: 'max-w-[56rem] w-[calc(100vw-2rem)]'
+All links should have \`target="_blank"\` and \`rel="noopener noreferrer"\` attributes for security.`
 	}}
 	play={async (context) => {
 		const { canvasElement } = context;
+
 		// Wait for component to render
 		await new Promise((resolve) => setTimeout(resolve, 100));
 
@@ -97,22 +98,26 @@ All links should have \`target="_blank"\` and \`rel="noopener noreferrer"\` attr
 		const hugginFaceLink = linkList.find(
 			(link) => link.getAttribute('href') === 'https://huggingface.co'
 		);
+
 		expect(hugginFaceLink).toBeTruthy();
 		expect(hugginFaceLink?.textContent).toBe('Hugging Face Homepage');
 
 		const githubLink = linkList.find(
 			(link) => link.getAttribute('href') === 'https://github.com/ggml-org/llama.cpp'
 		);
+
 		expect(githubLink).toBeTruthy();
 		expect(githubLink?.textContent).toBe('GitHub Repository');
 
 		const openaiLink = linkList.find((link) => link.getAttribute('href') === 'https://openai.com');
+
 		expect(openaiLink).toBeTruthy();
 		expect(openaiLink?.textContent).toBe('OpenAI Website');
 
 		const googleLink = linkList.find(
 			(link) => link.getAttribute('href') === 'https://www.google.com'
 		);
+
 		expect(googleLink).toBeTruthy();
 		expect(googleLink?.textContent).toBe('Google Search');
 
@@ -120,11 +125,13 @@ All links should have \`target="_blank"\` and \`rel="noopener noreferrer"\` attr
 		const exampleLink = linkList.find(
 			(link) => link.getAttribute('href') === 'https://example.com'
 		);
+
 		expect(exampleLink).toBeTruthy();
 
 		const pythonDocsLink = linkList.find(
 			(link) => link.getAttribute('href') === 'https://docs.python.org'
 		);
+
 		expect(pythonDocsLink).toBeTruthy();
 
 		console.log(`✅ URL Links test passed - Found ${links.length} links with proper attributes`);

@@ -15,7 +15,7 @@ def create_server():
     server.api_key = TEST_API_KEY
 
 
-@pytest.mark.parametrize("endpoint", ["/health", "/models"])
+@pytest.mark.parametrize("endpoint", ["/health"])
 def test_access_public_endpoint(endpoint: str):
     global server
     server.start()

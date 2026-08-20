@@ -1,16 +1,16 @@
-import { describe, expect, it } from 'vitest';
+import { FileMentionEntryType } from '$lib/enums';
 import {
-	MENTION_BADGE_FILE_ICON_PATHS,
-	MENTION_BADGE_FOLDER_ICON_PATHS,
 	buildMentionInsertion,
 	containsFileMentionLink,
 	decodeFileLinkPath,
 	encodeFileLinkPath,
 	fileMentionLinkRe,
 	getMentionBadgeIconPaths,
-	getMentionBadgeLabel
+	getMentionBadgeLabel,
+	MENTION_BADGE_FILE_ICON_PATHS,
+	MENTION_BADGE_FOLDER_ICON_PATHS
 } from '$lib/utils';
-import { FileMentionEntryType } from '$lib/enums';
+import { describe, expect, it } from 'vitest';
 
 describe('encodeFileLinkPath', () => {
 	it('leaves a clean path unchanged', () => {
@@ -47,6 +47,7 @@ describe('fileMentionLinkRe', () => {
 		const match = fileMentionLinkRe().exec(
 			'[Screenshot (1).png](file:///Users/foo/Screenshot (1).png)'
 		);
+
 		expect(match).not.toBeNull();
 		expect(match?.[1]).toBe('Screenshot (1).png');
 		expect(match?.[2]).toBe('/Users/foo/Screenshot (1).png');
@@ -121,24 +122,26 @@ describe('decodeFileLinkPath', () => {
 
 describe('buildMentionInsertion', () => {
 	const file = (path: string, name: string) => ({
-		path,
 		name,
+		path,
 		type: FileMentionEntryType.FILE
 	});
 	const dir = (path: string, name: string) => ({
-		path,
 		name,
+		path,
 		type: FileMentionEntryType.DIRECTORY
 	});
 
 	it('splices a root-anchored file link in place of the token', () => {
 		const value = 'hello @repo';
 		const result = buildMentionInsertion(file('/Users/foo/myRepo', 'myRepo'), value, {
-			start: 6,
-			end: 11
+			end: 11,
+			start: 6
 		});
+
 		expect(result).not.toBeNull();
-		const { newValue, caretOffset } = result!;
+		const { caretOffset, newValue } = result!;
+
 		expect(newValue).toBe('hello [myRepo](file:///Users/foo/myRepo) ');
 		expect(caretOffset).toBe(6 + '[myRepo](file:///Users/foo/myRepo) '.length);
 	});
@@ -146,9 +149,10 @@ describe('buildMentionInsertion', () => {
 	it('keeps the trailing slash on the directory marker', () => {
 		const value = 'see @src';
 		const { newValue } = buildMentionInsertion(dir('/Users/foo/myRepo/src/', 'src'), value, {
-			start: 4,
-			end: 8
+			end: 8,
+			start: 4
 		})!;
+
 		expect(newValue).toBe('see [src](file:///Users/foo/myRepo/src/) ');
 	});
 
@@ -157,18 +161,20 @@ describe('buildMentionInsertion', () => {
 		const { newValue } = buildMentionInsertion(
 			file('/Users/foo/Desktop/Pic (1).png', 'Pic (1).png'),
 			value,
-			{ start: 0, end: 4 }
+			{ end: 4, start: 0 }
 		)!;
+
 		expect(newValue).toBe('[Pic (1).png](file:///Users/foo/Desktop/Pic%20(1).png) ');
 	});
 
 	it('re-adds the directory marker when the cleaned path empties', () => {
-		const { newValue } = buildMentionInsertion(dir('/', 'root'), '/', { start: 0, end: 1 })!;
+		const { newValue } = buildMentionInsertion(dir('/', 'root'), '/', { end: 1, start: 0 })!;
+
 		expect(newValue).toBe('[root](file:///) ');
 	});
 
 	it('returns null for an out-of-range token', () => {
-		expect(buildMentionInsertion(file('/a/b.txt', 'b.txt'), 'x', { start: 0, end: 5 })).toBeNull();
-		expect(buildMentionInsertion(file('/a/b.txt', 'b.txt'), 'x', { start: 2, end: 1 })).toBeNull();
+		expect(buildMentionInsertion(file('/a/b.txt', 'b.txt'), 'x', { end: 5, start: 0 })).toBeNull();
+		expect(buildMentionInsertion(file('/a/b.txt', 'b.txt'), 'x', { end: 1, start: 2 })).toBeNull();
 	});
 });

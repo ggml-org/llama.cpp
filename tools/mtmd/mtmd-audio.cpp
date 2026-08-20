@@ -1423,3 +1423,41 @@ std::vector<float> mtmd_audio_streaming_istft::flush() {
 
     return output;
 }
+
+//
+// mtmd_audio_preprocessor_pockettts
+//
+// mimi takes the raw 24kHz waveform, there is no mel front-end
+// the samples are handed over as a single-row "mel", to reuse the normal chunk path
+//
+
+bool mtmd_audio_preprocessor_pockettts::preprocess(const float *                 samples,
+                                                   size_t                        n_samples,
+                                                   std::vector<mtmd_audio_mel> & output) {
+    // the encoder needs whole frames, see pad_for_conv1d() in the reference
+    const int64_t frame_size = (int64_t) hparams.mimi_downsample * 120;
+    if (n_samples == 0 || frame_size <= 0) {
+        return false;
+    }
+
+    // the mimi transformer mask is dense, so cost is quadratic in the reference length
+    const int64_t max_samples = (int64_t) clip_hparams::pockettts_max_spk_seconds * hparams.audio_sample_rate;
+    if ((int64_t) n_samples > max_samples) {
+        LOG_WRN("%s: speaker reference is %.1f s, truncating to the first %d s\n", __func__,
+                (double) n_samples / hparams.audio_sample_rate, clip_hparams::pockettts_max_spk_seconds);
+        n_samples = (size_t) max_samples;
+    }
+
+    const int64_t n_frames  = (int64_t) (n_samples + frame_size - 1) / frame_size;
+    const int64_t n_padded  = n_frames * frame_size;
+
+    mtmd_audio_mel out;
+    out.n_mel     = 1;
+    out.n_len     = n_padded;
+    out.n_len_org = (int64_t) n_samples;
+    out.data.assign((size_t) n_padded, 0.0f);
+    std::copy(samples, samples + n_samples, out.data.begin());
+
+    output.push_back(std::move(out));
+    return true;
+}

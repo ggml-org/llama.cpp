@@ -1,18 +1,9 @@
+import { REASONING_EFFORT_LEVELS, REASONING_EFFORT_TOKENS } from '$lib/constants';
 import { ReasoningEffort } from '$lib/enums';
-import { REASONING_EFFORT_LEVELS } from '$lib/constants/reasoning-effort';
-import { REASONING_EFFORT_TOKENS } from '$lib/constants/reasoning-effort-tokens';
+import { conversationsStore, modelsStore, serverStore } from '$lib/stores';
 import type { ReasoningEffortLevel } from '$lib/types';
 import type { DatabaseMessage } from '$lib/types/database';
-import {
-	modelsStore,
-	checkModelSupportsThinking,
-	supportsThinking,
-	propsCacheVersion,
-	loadedModelIds
-} from '$lib/stores/models.svelte';
-import { chatStore } from '$lib/stores/chat.svelte';
-import { conversationsStore, activeMessages } from '$lib/stores/conversations.svelte';
-import { isRouterMode } from '$lib/stores/server.svelte';
+import { getConversationModel } from '$lib/utils';
 
 export interface UseReasoningMenuReturn {
 	readonly modelSupportsThinking: boolean;
@@ -34,64 +25,71 @@ export interface UseReasoningMenuReturn {
  */
 export function useReasoningMenu(): UseReasoningMenuReturn {
 	const conversationModel = $derived(
-		chatStore.getConversationModel(activeMessages() as DatabaseMessage[])
+		getConversationModel(conversationsStore.activeMessages as DatabaseMessage[])
 	);
-
 	// a router chat can carry reasoning from an earlier turn before the props
 	// cache is primed, so a model that already produced thinking still qualifies
 	const modelSupportsThinkingFromMessages = $derived.by(() => {
-		const modelId = isRouterMode() ? modelsStore.selectedModelName || conversationModel : null;
+		const modelId = serverStore.isRouterMode
+			? modelsStore.selectedModelName || conversationModel
+			: null;
+
 		if (!modelId) return false;
 
 		return conversationsStore.activeMessages.some(
 			(m) => m.role === 'assistant' && m.model === modelId && !!m.reasoningContent
 		);
 	});
-
 	const modelSupportsThinking = $derived.by(() => {
-		loadedModelIds();
-		propsCacheVersion();
+		void modelsStore.loadedModelIds;
+		void modelsStore.props.cacheVersion;
 
-		if (isRouterMode()) {
+		if (serverStore.isRouterMode) {
 			const modelId = modelsStore.selectedModelName || conversationModel;
-			return checkModelSupportsThinking(modelId ?? '') || modelSupportsThinkingFromMessages;
+
+			return (
+				modelsStore.props.checkModelSupportsThinking(modelId ?? '') ||
+				modelSupportsThinkingFromMessages
+			);
 		}
 
-		return supportsThinking() || modelSupportsThinkingFromMessages;
+		return modelsStore.props.supportsThinking || modelSupportsThinkingFromMessages;
 	});
-
-	const currentEffort = $derived(conversationsStore.getReasoningEffort());
+	const currentEffort = $derived(conversationsStore.preferences.getReasoningEffort());
 	const thinkingEnabled = $derived(
 		currentEffort !== ReasoningEffort.OFF && currentEffort !== ReasoningEffort.DEFAULT
 	);
 
 	return {
-		get modelSupportsThinking() {
-			return modelSupportsThinking;
-		},
-		get thinkingEnabled() {
-			return thinkingEnabled;
+		get currentEffort() {
+			return currentEffort;
 		},
 		get isOff() {
 			return currentEffort === ReasoningEffort.OFF;
 		},
-		get currentEffort() {
-			return currentEffort;
+		isSelected(level: ReasoningEffortLevel): boolean {
+			return currentEffort === level.value;
 		},
 		get levels() {
 			return REASONING_EFFORT_LEVELS;
 		},
-		isSelected(level: ReasoningEffortLevel): boolean {
-			return currentEffort === level.value;
+		get modelSupportsThinking() {
+			return modelSupportsThinking;
+		},
+		select(level: ReasoningEffortLevel): void {
+			conversationsStore.preferences.setReasoningEffort(level.value as ReasoningEffort);
+		},
+		get thinkingEnabled() {
+			return thinkingEnabled;
 		},
 		tokenLabel(level: ReasoningEffortLevel): string | null {
 			if (level.value === ReasoningEffort.DEFAULT) return 'Model default';
+
 			const tokens = REASONING_EFFORT_TOKENS[level.value];
+
 			if (tokens === undefined) return null;
+
 			return tokens === -1 ? 'Unlimited' : `Max ${tokens.toLocaleString()} tokens`;
-		},
-		select(level: ReasoningEffortLevel): void {
-			conversationsStore.setReasoningEffort(level.value as ReasoningEffort);
 		}
 	};
 }

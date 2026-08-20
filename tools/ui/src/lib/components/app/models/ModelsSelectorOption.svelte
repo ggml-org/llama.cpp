@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
+	import ModelLoadHighlight from './ModelLoadHighlight.svelte';
 	import {
 		CircleAlert,
 		Heart,
@@ -11,10 +11,10 @@
 		RotateCw
 	} from '@lucide/svelte';
 	import { ActionIcon, ModelId } from '$lib/components/app';
-	import ModelLoadHighlight from './ModelLoadHighlight.svelte';
-	import type { ModelOption } from '$lib/types/models';
+	import { ICON_CLASS_DEFAULT } from '$lib/constants';
 	import { ServerModelStatus } from '$lib/enums';
-	import { modelsStore, routerModels } from '$lib/stores/models.svelte';
+	import { modelsStore } from '$lib/stores';
+	import type { ModelOption } from '$lib/types/models';
 	import { modelLoadFraction, modelLoadProgressText } from '$lib/utils';
 
 	interface Props {
@@ -30,23 +30,24 @@
 	}
 
 	let {
-		option,
-		isSelected,
-		isHighlighted,
-		isFav,
 		hideOrgName = false,
-		onSelect,
-		onMouseEnter,
+		isFav,
+		isHighlighted,
+		isSelected,
+		onInfoClick,
 		onKeyDown,
-		onInfoClick
+		onMouseEnter,
+		onSelect,
+		option
 	}: Props = $props();
 
-	let currentRouterModels = $derived(routerModels());
+	let currentRouterModels = $derived(modelsStore.routerModels);
 	let serverStatus = $derived.by(() => {
 		const model = currentRouterModels.find((m) => m.id === option.model);
+
 		return (model?.status?.value as ServerModelStatus) ?? null;
 	});
-	let isOperationInProgress = $derived(modelsStore.isModelOperationInProgress(option.model));
+	let isOperationInProgress = $derived(modelsStore.status.isOperationInProgress(option.model));
 	let isFailed = $derived(serverStatus === ServerModelStatus.FAILED);
 	let isSleeping = $derived(serverStatus === ServerModelStatus.SLEEPING);
 	let isLoaded = $derived(
@@ -54,7 +55,7 @@
 	);
 	let isLoading = $derived(serverStatus === ServerModelStatus.LOADING || isOperationInProgress);
 
-	let loadProgress = $derived(isLoading ? modelsStore.getLoadProgress(option.model) : null);
+	let loadProgress = $derived(isLoading ? modelsStore.status.getLoadProgress(option.model) : null);
 	let loadPercent = $derived(Math.round(modelLoadFraction(loadProgress) * 100));
 	let loadTitle = $derived(modelLoadProgressText(loadProgress));
 </script>
@@ -137,7 +138,7 @@
 						icon={RotateCw}
 						tooltip="Retry loading model"
 						class="h-3 w-3 text-red-500 hover:text-foreground"
-						onclick={() => modelsStore.loadModel(option.model)}
+						onclick={() => modelsStore.status.load(option.model)}
 						stopPropagationOnClick
 					/>
 				</div>
@@ -156,7 +157,7 @@
 						class="h-3 w-3 text-red-500 hover:text-red-600 [@media(pointer:coarse)]:text-amber-500 [@media(pointer:coarse)]:hover:text-amber-600"
 						onclick={(e) => {
 							e?.stopPropagation();
-							modelsStore.unloadModel(option.model);
+							modelsStore.status.unload(option.model);
 						}}
 					/>
 				</div>
@@ -173,7 +174,7 @@
 						icon={PowerOff}
 						tooltip="Unload model"
 						class="h-3 w-3 text-red-500 hover:text-red-600 [@media(pointer:coarse)]:text-green-500 [@media(pointer:coarse)]:hover:text-green-600"
-						onclick={() => modelsStore.unloadModel(option.model)}
+						onclick={() => modelsStore.status.unload(option.model)}
 						stopPropagationOnClick
 					/>
 				</div>
@@ -190,7 +191,7 @@
 						icon={Power}
 						tooltip="Load model"
 						class="h-3 w-3 [@media(pointer:coarse)]:text-muted-foreground"
-						onclick={() => modelsStore.loadModel(option.model)}
+						onclick={() => modelsStore.status.load(option.model)}
 						stopPropagationOnClick
 					/>
 				</div>

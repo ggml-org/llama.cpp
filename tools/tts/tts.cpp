@@ -86,6 +86,7 @@ int main(int argc, char ** argv) {
 
     mtmd_context_params mtmd_params = mtmd_context_params_default();
     mtmd_params.use_gpu = params.mmproj_use_gpu;
+    mtmd_params.device  = params.mmproj_device;
     mtmd::context_ptr mctx(mtmd_init_from_file(params.mmproj.path.c_str(), model, mtmd_params));
     if (!mctx) {
         LOG_ERR("failed to load mmproj %s\n", params.mmproj.path.c_str());
@@ -119,6 +120,7 @@ int main(int argc, char ** argv) {
     inp.lang        = params.tts_lang.c_str();
     inp.top_k       = params.sampling.top_k;
     inp.top_p       = params.sampling.top_p;
+    inp.seed        = params.sampling.seed;
     inp.out_type    = MTMD_HELPER_GEN_AUDIO_OUTTYPE_WAV;
 
     //
@@ -143,8 +145,7 @@ int main(int argc, char ** argv) {
         }
     }
 
-    const llama_vocab * vocab = llama_model_get_vocab(model);
-
+    // note: some pipelines ignore this token and use the hidden state instead
     auto sample_semantic_code = [&]() -> llama_token {
         llama_token t = common_sampler_sample(smpl, lctx, -1);
         common_sampler_accept(smpl, t, true);
@@ -159,19 +160,24 @@ int main(int argc, char ** argv) {
     tts_timings timings;
     const int64_t t_gen_start_us = ggml_time_us();
 
-    for (; n_frames < max_new && !llama_vocab_is_eog(vocab, sampled); n_frames++) {
+    bool stop = false;
+    while (!stop && n_frames < max_new) {
         const float * h_next = nullptr;
 
         // stage 2+3: semantic --> acoustic details --> audio waveform
         //            step_gen() runs both stages and returns new h_state for next step
-        if (gen.step_gen(sampled, h_state, &h_next) != 0) {
+        if (gen.step_gen(sampled, h_state, &h_next, &stop) != 0) {
             LOG_ERR("step_gen failed at frame %d\n", n_frames);
             return 1;
         }
+        if (!h_next) {
+            break; // stopped without generating a frame
+        }
 
+        n_frames++;
         h_state = h_next;
         sampled = sample_semantic_code();
-        timings.report(n_frames + 1);
+        timings.report(n_frames);
     }
     const double t_gen_s = (ggml_time_us() - t_gen_start_us) / 1e6;
 

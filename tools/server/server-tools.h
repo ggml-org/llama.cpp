@@ -18,7 +18,7 @@ struct server_tool {
 
     virtual ~server_tool() = default;
     virtual json get_definition() const = 0;
-    virtual std::string type() const { return "builtin"; }
+    virtual std::string type() const { return "server"; }
 
     struct stream {
         server_response & qr;
@@ -31,7 +31,7 @@ struct server_tool {
     json to_json() const;
 };
 
-struct server_tools_docker_runtime; // impl detail, defined in server-tools.cpp
+struct server_tools_runtime; // impl detail, defined in server-tools.cpp
 
 struct server_tools {
     std::vector<std::unique_ptr<server_tool>> tools;
@@ -40,8 +40,8 @@ struct server_tools {
     server_response queue_res;
     std::atomic<int> res_id{0};
 
-    // set when --tools-runtime is configured; owns the docker container used to run tools, if any
-    std::unique_ptr<server_tools_docker_runtime> docker_runtime;
+    // set when --tools-runtime is configured; routes every tool call through an isolate
+    std::unique_ptr<server_tools_runtime> runtime;
 
     void setup(const std::vector<std::string> & enabled_tools,
                server_mcp & mcp_mgr,
