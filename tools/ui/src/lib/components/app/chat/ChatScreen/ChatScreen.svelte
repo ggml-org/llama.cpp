@@ -78,12 +78,7 @@
 			const conversation = conversationsStore.activeConversation;
 
 			if (conversation) {
-				// an empty new-chat tab is unsaved, so drop it without confirmation
-				if (conversationsStore.isTemporaryConversation(conversation.id)) {
-					conversationsStore.deleteConversation(conversation.id);
-				} else {
-					showDeleteDialog = true;
-				}
+				showDeleteDialog = true;
 			}
 		}
 	});
