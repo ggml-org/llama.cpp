@@ -12830,7 +12830,10 @@ static void ggml_cl_norm(ggml_backend_t backend, const ggml_tensor * src0, const
     GGML_TENSOR_LOCALS(int,      ne0, src0, ne);
     GGML_TENSOR_LOCALS(cl_ulong, nb0, src0, nb);
 
-    const int nth = MIN(64, ne00);
+    int nth = 1;
+    while (nth < ne00 && nth < 64) {
+        nth *= 2;
+    }
 
     cl_kernel kernel = backend_ctx->kernel_norm;
 
