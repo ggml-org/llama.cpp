@@ -1686,9 +1686,6 @@ static void ggml_compute_forward_mul_mat_id(
         ggml_barrier(params->threadpool);
     }
 
-    // running offset into the gather area, kept in step with ggml_cpu_iqp_gather_mul_mat_id
-    int64_t iqp_row_off = 0;
-
     for (int cur_a = 0; cur_a < n_as; ++cur_a) {
         const int64_t cne1 = matrix_row_counts[cur_a];
 
@@ -1697,11 +1694,12 @@ static void ggml_compute_forward_mul_mat_id(
         }
 
         if (iqp_any && ggml_cpu_iqp_expert_eligible(cne1)) {
-            ggml_compute_forward_mul_mat_id_iqp(params, dst, cur_a, cne1, (const int32_t *) &MMID_MATRIX_ROW(cur_a, 0),
-                                                iqp_gathered + iqp_row_off * ggml_row_size(vec_dot_type, ne10),
-                                                iqp_panels);
+            // where this expert's rows landed in the gather area, same rule the gather itself uses
+            const int64_t iqp_row_off = ggml_cpu_iqp_gather_row_off(matrix_row_counts, cur_a);
 
-            iqp_row_off += cne1;
+            ggml_compute_forward_mul_mat_id_iqp(params, dst, cur_a, cne1, (const int32_t *) &MMID_MATRIX_ROW(cur_a, 0),
+                                                iqp_gathered + iqp_row_off * ggml_cpu_iqp_row_size(dst), iqp_panels);
+
             continue;
         }
 

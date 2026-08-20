@@ -169,6 +169,18 @@ struct block_iqp_x8 {
 static_assert(sizeof(block_iqp_x8) == 8 * sizeof(float) + 8 * sizeof(int32_t) + IQP_NSB * 8 + QK_K * 8,
               "wrong iqp_x8 block size/padding");
 
+// does this build read bias[]? With VNNI the activations are fed as unsigned bytes (y + 128) so
+// that no per-operand sign fixup is needed, and the resulting 128 * sum(w) term is removed with the
+// per-row bias. Without VNNI the maddubs int16 accumulator would overflow for unsigned operands up
+// to 255, so the kernels use the classic sign trick instead and the bias must not be applied - the
+// decode then skips filling it. The decode (iqp.cpp) and the kernels (arch/x86/repack.cpp) are
+// compiled into the same ggml-cpu variant with the same arch flags, so they always agree here.
+#if defined(__AVX2__) && ((defined(__AVX512VNNI__) && defined(__AVX512VL__)) || defined(__AVXVNNI__))
+#define GGML_IQP_USE_BIAS 1
+#else
+#define GGML_IQP_USE_BIAS 0
+#endif
+
 #if defined(__cplusplus)
 extern "C" {
 #endif

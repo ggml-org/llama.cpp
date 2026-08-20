@@ -6408,39 +6408,27 @@ void ggml_gemm_q2_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
 
 #if defined(__AVX2__)
 
-// "Q8 panel" (block_iqp_x8) dot helpers.
-//
-// With VNNI the activations are fed as unsigned bytes (y + 128) so that no per-operand sign fixup
-// is needed; the resulting 128 * sum(w) term is removed with the per-row bias stored in the panel.
-// Without VNNI the maddubs int16 accumulator would overflow for unsigned operands up to 255, so
-// the classic sign trick is used instead and the bias must not be applied.
-#if (defined(__AVX512VNNI__) && defined(__AVX512VL__)) || defined(__AVXVNNI__)
-#define IQP_USE_BIAS 1
-#else
-#define IQP_USE_BIAS 0
-#endif
+// "Q8 panel" (block_iqp_x8) dot helpers. Whether the activations go in as unsigned bytes and the
+// per-row bias is applied is decided by GGML_IQP_USE_BIAS, see repack.h.
 
 // load the 16 activations of one sub-block, ready to be broadcast per group of 4 with
 // _mm256_shuffle_epi32. With VNNI they are pre-offset by 128 so that they can be fed to dpbusd
 // as unsigned bytes.
 static inline __m256i iqp_load_y(const int8_t * GGML_RESTRICT qs) {
     __m128i y = _mm_loadu_si128((const __m128i *) qs);
-#if IQP_USE_BIAS
+#if GGML_IQP_USE_BIAS
     y = _mm_xor_si128(y, _mm_set1_epi8((char) 0x80));
 #endif
     return _mm256_broadcastsi128_si256(y);
 }
 
-// xv: 8 rows x 4 signed weights, yb: the matching 4 activation bytes broadcast to all 8 lanes
+// xv: 8 rows x 4 signed weights, yb: the matching 4 activation bytes broadcast to all 8 lanes.
+// With the bias the activations are the unsigned operand, without it the signed sign trick applies
 static inline __m256i iqp_dot4(const __m256i acc, const __m256i xv, const __m256i yb) {
-#if defined(__AVX512VNNI__) && defined(__AVX512VL__)
-    return _mm256_dpbusd_epi32(acc, yb, xv);
-#elif defined(__AVXVNNI__)
-    return _mm256_dpbusd_avx_epi32(acc, yb, xv);
+#if GGML_IQP_USE_BIAS
+    return mul_sum_us8_pairs_acc_int32x8(acc, yb, xv);
 #else
-    const __m256i ax = _mm256_sign_epi8(xv, xv);
-    const __m256i sy = _mm256_sign_epi8(yb, xv);
-    return _mm256_add_epi32(acc, _mm256_madd_epi16(_mm256_maddubs_epi16(ax, sy), _mm256_set1_epi16(1)));
+    return mul_sum_i8_pairs_acc_int32x8(acc, xv, yb);
 #endif
 }
 
@@ -6478,7 +6466,7 @@ static inline __m256i iqp_acc_block(const block_iqp_x8 * GGML_RESTRICT b, const 
         sumi = _mm256_add_epi32(sumi, _mm256_mullo_epi32(isum, iqp_load_iscales(b->iscales + sb * 8)));
     }
 
-#if IQP_USE_BIAS
+#if GGML_IQP_USE_BIAS
     sumi = _mm256_sub_epi32(sumi, _mm256_loadu_si256((const __m256i *) b->bias));
 #endif
 
@@ -6588,7 +6576,7 @@ void ggml_gemm_iqp_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
                     }
                 }
 
-#if IQP_USE_BIAS
+#if GGML_IQP_USE_BIAS
                 const __m256i bias = _mm256_loadu_si256((const __m256i *) b_ptr[l].bias);
                 for (int m = 0; m < 4; m++) {
                     sumi[m] = _mm256_sub_epi32(sumi[m], bias);

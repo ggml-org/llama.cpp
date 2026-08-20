@@ -28,10 +28,32 @@ extern "C" {
 // count of the node. Must be >= 1 - the gather layout relies on zero-row experts being skipped.
 #define GGML_IQP_MIN_BATCH_ID 8
 
-// is one expert worth the panel path? the gather in repack.cpp and the per expert dispatch in
+// is one expert worth the panel path? the gather in iqp.cpp and the per expert dispatch in
 // ggml-cpu.c must agree on this, the packed gather layout depends on it
 static inline bool ggml_cpu_iqp_expert_eligible(int64_t cne1) {
     return cne1 >= GGML_IQP_MIN_BATCH_ID;
+}
+
+// the packed MUL_MAT_ID gather layout, in one place: an expert's rows start at the packed prefix
+// over the eligible experts before it, in ascending expert order. Both the gather in iqp.cpp and
+// the per expert dispatch in ggml-cpu.c derive their offsets from this, nothing else defines it.
+// The rescan is O(n_as) of one compare and add per expert, which is noise next to the gemm.
+static inline int64_t ggml_cpu_iqp_gather_row_off(const int64_t * matrix_row_counts, int64_t cur_a) {
+    int64_t off = 0;
+
+    for (int64_t a = 0; a < cur_a; a++) {
+        if (ggml_cpu_iqp_expert_eligible(matrix_row_counts[a])) {
+            off += matrix_row_counts[a];
+        }
+    }
+
+    return off;
+}
+
+// stride of one src1 row after the conversion, both in the work buffer and in the gather area.
+// The whole path asserts the vec_dot type is q8_K (see iqp_supported_common)
+static inline size_t ggml_cpu_iqp_row_size(const struct ggml_tensor * dst) {
+    return ggml_row_size(GGML_TYPE_Q8_K, dst->src[1]->ne[0]);
 }
 
 // is the panel path eligible for this MUL_MAT node?

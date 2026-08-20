@@ -182,6 +182,8 @@ static inline void iqp_store_iq4_x32(int8_t * GGML_RESTRICT dst, const uint8_t *
 #endif
 }
 
+#if GGML_IQP_USE_BIAS
+
 // sum of weight * integer sub-block scale over one decoded super-block. Bounded by
 // 256 * 127 * 32 = 1.04e6, and 128 times that is 1.33e8, so the int32 result cannot overflow the
 // kernel accumulator (see the bounds in ggml_gemm_iqp_8x8_q8_K).
@@ -227,6 +229,8 @@ static inline int32_t iqp_weighted_sum(const int8_t * GGML_RESTRICT vals, const 
     return wsum;
 #endif
 }
+
+#endif  // GGML_IQP_USE_BIAS
 
 // decode one super-block into QK_K signed values, IQP_NSB integer sub-block scales and the one
 // float factor they share. The expressions mirror dequantize_row_iq* from ggml-quants.c, split so
@@ -495,6 +499,51 @@ static bool iqp_decode_superblock(enum ggml_type             type,
     return true;
 }
 
+#if defined(__AVX2__)
+
+// interleave the 32 column group starting at column off of the IQP_NB_ROWS staged rows. Seen as
+// int32 that group is 8 dwords per row, and the panel wants dword i of row r at dst[i * 32 + r * 4],
+// i.e. an 8x8 int32 transpose whose rows are eight contiguous 32 byte stores
+static inline void iqp_interleave_x8(int8_t * GGML_RESTRICT dst, const int8_t (*vals)[QK_K], int off) {
+    static_assert(IQP_NB_ROWS == 8, "the transpose is 8x8");
+
+    __m256i v[IQP_NB_ROWS];
+
+    for (int r = 0; r < IQP_NB_ROWS; ++r) {
+        v[r] = _mm256_loadu_si256((const __m256i *) (vals[r] + off));
+    }
+
+    // pair rows into dword couples, then into qword quadruples, then swap the 128 bit lanes
+    const __m256i a0 = _mm256_unpacklo_epi32(v[0], v[1]);
+    const __m256i a1 = _mm256_unpackhi_epi32(v[0], v[1]);
+    const __m256i a2 = _mm256_unpacklo_epi32(v[2], v[3]);
+    const __m256i a3 = _mm256_unpackhi_epi32(v[2], v[3]);
+    const __m256i a4 = _mm256_unpacklo_epi32(v[4], v[5]);
+    const __m256i a5 = _mm256_unpackhi_epi32(v[4], v[5]);
+    const __m256i a6 = _mm256_unpacklo_epi32(v[6], v[7]);
+    const __m256i a7 = _mm256_unpackhi_epi32(v[6], v[7]);
+
+    const __m256i b0 = _mm256_unpacklo_epi64(a0, a2);
+    const __m256i b1 = _mm256_unpackhi_epi64(a0, a2);
+    const __m256i b2 = _mm256_unpacklo_epi64(a1, a3);
+    const __m256i b3 = _mm256_unpackhi_epi64(a1, a3);
+    const __m256i b4 = _mm256_unpacklo_epi64(a4, a6);
+    const __m256i b5 = _mm256_unpackhi_epi64(a4, a6);
+    const __m256i b6 = _mm256_unpacklo_epi64(a5, a7);
+    const __m256i b7 = _mm256_unpackhi_epi64(a5, a7);
+
+    _mm256_storeu_si256((__m256i *) (dst + 0 * 32), _mm256_permute2x128_si256(b0, b4, 0x20));
+    _mm256_storeu_si256((__m256i *) (dst + 1 * 32), _mm256_permute2x128_si256(b1, b5, 0x20));
+    _mm256_storeu_si256((__m256i *) (dst + 2 * 32), _mm256_permute2x128_si256(b2, b6, 0x20));
+    _mm256_storeu_si256((__m256i *) (dst + 3 * 32), _mm256_permute2x128_si256(b3, b7, 0x20));
+    _mm256_storeu_si256((__m256i *) (dst + 4 * 32), _mm256_permute2x128_si256(b0, b4, 0x31));
+    _mm256_storeu_si256((__m256i *) (dst + 5 * 32), _mm256_permute2x128_si256(b1, b5, 0x31));
+    _mm256_storeu_si256((__m256i *) (dst + 6 * 32), _mm256_permute2x128_si256(b2, b6, 0x31));
+    _mm256_storeu_si256((__m256i *) (dst + 7 * 32), _mm256_permute2x128_si256(b3, b7, 0x31));
+}
+
+#endif
+
 // decode IQP_NB_ROWS consecutive source rows (starting at src, row stride nb01) into a panel of
 // nblocks block_iqp_x8
 static void iqp_decode_panel_8(enum ggml_type               type,
@@ -529,20 +578,32 @@ static void iqp_decode_panel_8(enum ggml_type               type,
         for (int r = 0; r < IQP_NB_ROWS; r++) {
             dst->dfac[r] = dfac[r];
 
-            const int32_t wsum = iqp_weighted_sum(vals[r], iscales[r]);
-
             for (int sb = 0; sb < IQP_NSB; sb++) {
                 dst->iscales[sb * IQP_NB_ROWS + r] = iscales[r][sb];
+            }
 
-                // both sides are contiguous over k, so the interleave is a run of dword copies
+#if GGML_IQP_USE_BIAS
+            // the gemm feeds the activations as unsigned bytes, see block_iqp_x8. Builds whose
+            // kernels never read bias[] skip the sweep and leave the field uninitialized
+            dst->bias[r] = 128 * iqp_weighted_sum(vals[r], iscales[r]);
+#endif
+        }
+
+        // the values interleave as an 8x8 int32 transpose per group of 32 columns: both sides are
+        // contiguous over k, so a source row is 8 dwords and a transposed row is one 32 byte store
+#if defined(__AVX2__)
+        for (int grp = 0; grp < QK_K / 32; grp++) {
+            iqp_interleave_x8(dst->qs + grp * 256, vals, grp * 32);
+        }
+#else
+        for (int r = 0; r < IQP_NB_ROWS; r++) {
+            for (int sb = 0; sb < IQP_NSB; sb++) {
                 for (int g = 0; g < IQP_SB_SIZE / 4; g++) {
                     memcpy(dst->qs + sb * 128 + g * 32 + r * 4, vals[r] + sb * IQP_SB_SIZE + g * 4, 4);
                 }
             }
-
-            // the gemm feeds the activations as unsigned bytes, see block_iqp_x8
-            dst->bias[r] = 128 * wsum;
         }
+#endif
 
         dst++;
     }
@@ -655,7 +716,7 @@ size_t ggml_cpu_iqp_src1_conv_size(const struct ggml_tensor * dst) {
 size_t ggml_cpu_iqp_id_gather_size(const struct ggml_tensor * dst) {
     const struct ggml_tensor * ids = dst->src[2];
 
-    return ids->ne[0] * ids->ne[1] * ggml_row_size(GGML_TYPE_Q8_K, dst->src[1]->ne[0]);
+    return ids->ne[0] * ids->ne[1] * ggml_cpu_iqp_row_size(dst);
 }
 
 // the gemm kernels read src1 rows at a fixed stride, so each expert's rows - scattered all over
@@ -675,13 +736,9 @@ void ggml_cpu_iqp_gather_mul_mat_id(const struct ggml_compute_params * params,
     const int64_t n_rows_total = ids->ne[0] * ids->ne[1];
     const int64_t ne11         = src1->ne[1];
 
-    const size_t nbw1 = ggml_row_size(GGML_TYPE_Q8_K, src1->ne[0]);
+    const size_t nbw1 = ggml_cpu_iqp_row_size(dst);
 
     const char * wdata = (const char *) params->wdata;
-
-    // the destination run of an expert is the packed prefix over the experts that are gated in, in
-    // ascending order - exactly the order the caller walks them in, so it never needs a prefix sum
-    int64_t off = 0;
 
     for (int64_t cur_a = 0; cur_a < n_as; cur_a++) {
         const int64_t cne1 = matrix_row_counts[cur_a];
@@ -689,6 +746,9 @@ void ggml_cpu_iqp_gather_mul_mat_id(const struct ggml_compute_params * params,
         if (!ggml_cpu_iqp_expert_eligible(cne1)) {
             continue;
         }
+
+        // where this expert's run starts, see ggml_cpu_iqp_gather_row_off
+        const int64_t off = ggml_cpu_iqp_gather_row_off(matrix_row_counts, cur_a);
 
         const int32_t * expert_rows = matrix_rows + 2 * cur_a * n_rows_total;
 
@@ -703,8 +763,6 @@ void ggml_cpu_iqp_gather_mul_mat_id(const struct ggml_compute_params * params,
 
             memcpy((char *) gathered + (off + k) * nbw1, wdata + (i11 + i12 * ne11) * nbw1, nbw1);
         }
-
-        off += cne1;
     }
 }
 
@@ -725,7 +783,7 @@ void ggml_compute_forward_mul_mat_id_iqp(const struct ggml_compute_params * para
 
     const int64_t nblocks = ne00 / QK_K;
 
-    const size_t nbw1 = ggml_row_size(GGML_TYPE_Q8_K, ne10);
+    const size_t nbw1 = ggml_cpu_iqp_row_size(dst);
 
     block_iqp_x8 * panel = (block_iqp_x8 *) ((char *) panels + (size_t) ith * ggml_cpu_iqp_scratch_size(dst));
 
