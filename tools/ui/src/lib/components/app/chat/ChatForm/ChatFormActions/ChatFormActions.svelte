@@ -1,28 +1,21 @@
 <script lang="ts">
-	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
-	import { Square, SkipForward } from '@lucide/svelte';
-	import { Button } from '$lib/components/ui/button';
-	import { ChatService } from '$lib/services';
+	import { SkipForward, Square } from '@lucide/svelte';
+	import { goto } from '$app/navigation';
+	import { page } from '$app/state';
 	import {
-		ChatFormActionsAdd,
 		ChatFormActionModels,
 		ChatFormActionRecord,
+		ChatFormActionsAdd,
 		ChatFormActionSubmit,
 		ChatFormContextGauge
 	} from '$lib/components/app';
+	import { Button } from '$lib/components/ui/button';
+	import { ICON_CLASS_DEFAULT, ROUTES } from '$lib/constants';
+	import { setChatFormActionsContext } from '$lib/contexts';
 	import { FileTypeCategory, MessageRole } from '$lib/enums';
-	import { mcpStore } from '$lib/stores/mcp.svelte';
-	import { config } from '$lib/stores/settings.svelte';
-	import { activeMessages, conversationsStore } from '$lib/stores/conversations.svelte';
-	import {
-		activeProcessingState,
-		isChatStreaming,
-		isLoading as chatIsLoading
-	} from '$lib/stores/chat.svelte';
+	import { ChatService } from '$lib/services';
+	import { chatStore, conversationsStore, mcpStore, settingsStore } from '$lib/stores';
 	import { getFileTypeCategory } from '$lib/utils';
-	import { goto } from '$app/navigation';
-	import { page } from '$app/state';
-	import { ROUTES } from '$lib/constants/routes';
 
 	interface Props {
 		canSend?: boolean;
@@ -51,18 +44,18 @@
 		isLoading = false,
 		isReasoning = false,
 		isRecording = false,
-		showAddButton = true,
-		showModelSelector = true,
-		uploadedFiles = [],
 		onFileUpload,
+		onMcpPromptClick,
+		onMcpResourcesClick,
 		onMicClick,
 		onStop,
 		onSystemPromptClick,
-		onMcpPromptClick,
-		onMcpResourcesClick
+		showAddButton = true,
+		showModelSelector = true,
+		uploadedFiles = []
 	}: Props = $props();
 
-	let currentConfig = $derived(config());
+	let currentConfig = $derived(settingsStore.config);
 
 	let hasMcpPromptsSupport = $derived.by(() => {
 		const perChatOverrides = conversationsStore.getAllMcpServerOverrides();
@@ -104,31 +97,77 @@
 	let hasProcessedTokens = $derived.by(() => {
 		if (!page.params.id) return false;
 
-		const messages = activeMessages() as DatabaseMessage[];
+		const messages = conversationsStore.activeMessages as DatabaseMessage[];
+
 		let totalHistoricalTokens = 0;
+
 		for (const m of messages) {
 			if (m.role !== MessageRole.ASSISTANT) continue;
+
 			const timings = m.timings;
+
 			if (!timings) continue;
+
 			const agenticLlm = timings.agentic?.llm;
+
 			if (agenticLlm?.prompt_n != null || agenticLlm?.predicted_n != null) {
 				totalHistoricalTokens += (agenticLlm?.prompt_n ?? 0) + (agenticLlm?.predicted_n ?? 0);
 			} else {
 				totalHistoricalTokens += (timings.prompt_n ?? 0) + (timings.predicted_n ?? 0);
 			}
 		}
+
 		if (totalHistoricalTokens > 0) return true;
 
-		if (!chatIsLoading() && !isChatStreaming()) return false;
+		if (!chatStore.isLoading && !chatStore.isStreaming()) return false;
 
-		const processingState = activeProcessingState();
+		const processingState = chatStore.activeProcessingState;
+
 		if (!processingState) return false;
+
 		const livePromptTokens = Math.max(
 			processingState.promptTokens ?? 0,
 			processingState.promptProgress?.processed ?? 0
 		);
 		const liveOutputTokens = processingState.outputTokensUsed ?? 0;
+
 		return livePromptTokens > 0 || liveOutputTokens > 0;
+	});
+
+	setChatFormActionsContext({
+		get disabled() {
+			return disabled;
+		},
+		get hasAudioModality() {
+			return hasAudioModality;
+		},
+		get hasMcpPromptsSupport() {
+			return hasMcpPromptsSupport;
+		},
+		get hasMcpResourcesSupport() {
+			return hasMcpResourcesSupport;
+		},
+		get hasVideoModality() {
+			return hasVideoModality;
+		},
+		get hasVisionModality() {
+			return hasVisionModality;
+		},
+		get onFileUpload() {
+			return onFileUpload;
+		},
+		get onMcpPromptClick() {
+			return onMcpPromptClick;
+		},
+		get onMcpResourcesClick() {
+			return onMcpResourcesClick;
+		},
+		get onMcpSettingsClick() {
+			return () => goto(ROUTES.MCP_SERVERS);
+		},
+		get onSystemPromptClick() {
+			return onSystemPromptClick;
+		}
 	});
 </script>
 
@@ -138,19 +177,7 @@
 >
 	{#if showAddButton}
 		<div class="mr-auto flex items-center gap-2">
-			<ChatFormActionsAdd
-				{disabled}
-				{hasAudioModality}
-				{hasVideoModality}
-				{hasVisionModality}
-				{hasMcpPromptsSupport}
-				{hasMcpResourcesSupport}
-				{onFileUpload}
-				{onSystemPromptClick}
-				{onMcpPromptClick}
-				{onMcpResourcesClick}
-				onMcpSettingsClick={() => goto(ROUTES.MCP_SERVERS)}
-			/>
+			<ChatFormActionsAdd />
 		</div>
 	{/if}
 

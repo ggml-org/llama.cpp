@@ -1,7 +1,7 @@
 <script lang="ts">
-	import { parseCwdMessage } from '$lib/utils';
-	import type { DatabaseMessage } from '$lib/types';
 	import ChatMessageCwdChange from './ChatMessageCwdChange.svelte';
+	import type { DatabaseMessage } from '$lib/types';
+	import { parseCwdMessage } from '$lib/utils';
 
 	interface Props {
 		class?: string;

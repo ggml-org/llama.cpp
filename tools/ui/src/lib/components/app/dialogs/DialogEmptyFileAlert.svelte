@@ -1,6 +1,6 @@
 <script lang="ts">
-	import * as AlertDialog from '$lib/components/ui/alert-dialog';
 	import { FileX } from '@lucide/svelte';
+	import * as AlertDialog from '$lib/components/ui/alert-dialog';
 
 	interface Props {
 		open: boolean;
@@ -8,7 +8,7 @@
 		onOpenChange?: (open: boolean) => void;
 	}
 
-	let { open = $bindable(), emptyFiles, onOpenChange }: Props = $props();
+	let { emptyFiles, onOpenChange, open = $bindable() }: Props = $props();
 
 	function handleOpenChange(newOpen: boolean) {
 		open = newOpen;

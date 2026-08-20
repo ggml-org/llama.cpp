@@ -49,7 +49,7 @@ MTMD_API struct mtmd_helper_bitmap_wrapper mtmd_helper_bitmap_init_from_file(mtm
 // note:
 //   - for now, video input is only supported via C++ helper functions
 //   - audio files will be auto-detected based on magic bytes
-//   - output bitmap will have FNV hash as the ID
+//   - output bitmap will have SHA-256 hash (hex string) as the ID
 // returns nullptr on failure
 // this function is thread-safe
 MTMD_API struct mtmd_helper_bitmap_wrapper mtmd_helper_bitmap_init_from_buf(mtmd_context * ctx, const unsigned char * buf, size_t len, bool placeholder);
@@ -183,8 +183,9 @@ struct mtmd_helper_gen_audio_inp {
     mtmd_bitmap * speaker_ref; // optional, can be NULL
     const char * lang; // optional, can be NULL
 
-    int32_t top_k;
-    float   top_p;
+    int32_t  top_k;
+    float    top_p;
+    uint32_t seed; // UINT32_MAX for random (default: random)
 
     enum mtmd_helper_gen_audio_outtype out_type;
 };
@@ -208,12 +209,15 @@ MTMD_API int32_t mtmd_helper_gen_audio_step_prompt(
                         int32_t n_batch);
 
 // generates one frame; must only be called after step_prompt() has returned 0
-// h_state_out is valid until next step_gen() or reset() call
+// sampled can be LLAMA_TOKEN_NULL for pipelines with no discrete backbone token
+// out_stop (optional) is set on end-of-speech, the caller must then stop the loop
+// h_state_out is valid until next step_gen() or reset() call, null if no frame is generated
 MTMD_API int32_t mtmd_helper_gen_audio_step_gen(
                         mtmd_helper_gen_audio * ctx,
                         llama_token sampled,
                         const float *  h_state_in,
-                        const float ** h_state_out);
+                        const float ** h_state_out,
+                        bool * out_stop);
 
 // out_data valid until next get_output() or reset() call
 // out_n_samples (optional, can be NULL) receives the number of generated PCM samples
@@ -261,8 +265,8 @@ struct gen_audio {
     int32_t step_prompt(int32_t n_batch) {
         return mtmd_helper_gen_audio_step_prompt(ctx.get(), n_batch);
     }
-    int32_t step_gen(llama_token sampled, const float * h_state, const float ** h_state_out) {
-        return mtmd_helper_gen_audio_step_gen(ctx.get(), sampled, h_state, h_state_out);
+    int32_t step_gen(llama_token sampled, const float * h_state, const float ** h_state_out, bool * out_stop = nullptr) {
+        return mtmd_helper_gen_audio_step_gen(ctx.get(), sampled, h_state, h_state_out, out_stop);
     }
     int32_t get_output(int32_t * out_sample_rate, const char ** out_data, size_t * out_data_len, int64_t * out_n_samples = nullptr) {
         return mtmd_helper_gen_audio_get_output(ctx.get(), out_sample_rate, out_data, out_data_len, out_n_samples);

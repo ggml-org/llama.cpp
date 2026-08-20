@@ -195,7 +195,7 @@ static const std::vector<std::string> dspark_dflash = {
 
 struct plan_case {
     const char * name;
-    const std::vector<std::string> & files;
+    const std::vector<std::string> files;
     const char * hf_repo;
     const char * hf_file;
     bool sidecars;        // request mmproj + mtp + dflash + eagle3 + dspark

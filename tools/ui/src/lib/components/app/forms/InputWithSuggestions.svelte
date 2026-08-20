@@ -1,7 +1,7 @@
 <script lang="ts">
-	import { fly } from 'svelte/transition';
 	import { Input } from '$lib/components/ui/input';
 	import { Label } from '$lib/components/ui/label';
+	import { fly } from 'svelte/transition';
 
 	interface Props {
 		name: string;
@@ -18,17 +18,17 @@
 	}
 
 	let {
-		name,
-		value = '',
-		suggestions = [],
-		isLoadingSuggestions = false,
-		isAutocompleteActive = false,
 		autocompleteIndex = 0,
-		onInput,
-		onKeydown,
+		isAutocompleteActive = false,
+		isLoadingSuggestions = false,
+		name,
 		onBlur,
 		onFocus,
-		onSelectSuggestion
+		onInput,
+		onKeydown,
+		onSelectSuggestion,
+		suggestions = [],
+		value = ''
 	}: Props = $props();
 </script>
 
@@ -60,7 +60,7 @@
 	{#if isAutocompleteActive && suggestions.length > 0}
 		<div
 			class="absolute top-full right-0 left-0 z-10 mt-1 max-h-32 overflow-y-auto rounded-lg border border-border/50 bg-background shadow-lg"
-			transition:fly={{ y: -5, duration: 100 }}
+			transition:fly={{ duration: 100, y: -5 }}
 		>
 			{#each suggestions as suggestion, i (suggestion)}
 				<button

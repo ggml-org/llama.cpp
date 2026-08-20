@@ -1,8 +1,8 @@
 <script lang="ts">
-	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
-	import { RefreshCw, Loader2 } from '@lucide/svelte';
-	import { Button } from '$lib/components/ui/button';
+	import { Loader2, RefreshCw } from '@lucide/svelte';
 	import { SearchInput } from '$lib/components/app/forms';
+	import { Button } from '$lib/components/ui/button';
+	import { ICON_CLASS_DEFAULT } from '$lib/constants';
 
 	interface Props {
 		isLoading: boolean;
