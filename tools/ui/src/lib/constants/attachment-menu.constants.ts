@@ -74,7 +74,7 @@ export const ATTACHMENT_PROMPT_ITEMS: AttachmentMenuItem[] = [
 		enabledWhen: AttachmentItemEnabledWhen.ALWAYS,
 		icon: Zap,
 		id: AttachmentMenuItemId.MCP_PROMPT,
-		label: 'MCP Prompt',
+		label: 'MCP Prompts',
 		visibleWhen: AttachmentItemVisibleWhen.HAS_MCP_PROMPTS_SUPPORT
 	}
 ];

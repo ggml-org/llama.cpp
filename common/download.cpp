@@ -989,6 +989,26 @@ std::vector<common_cached_model_info> common_list_cached_models() {
     return result;
 }
 
+std::string common_download_resolve_path(const std::string & hf_repo_with_tag, const std::string & hf_file) {
+    auto [repo, tag] = common_download_split_repo_tag(hf_repo_with_tag);
+
+    auto files = hf_cache::get_cached_files(repo);
+    if (files.empty()) {
+        return "";
+    }
+
+    if (!hf_file.empty()) {
+        for (const auto & f : files) {
+            if (f.path == hf_file) {
+                return f.local_path;
+            }
+        }
+        return "";
+    }
+
+    return find_best_model(files, tag).local_path;
+}
+
 bool common_download_remove(const std::string & hf_repo_with_tag) {
     namespace fs = std::filesystem;
 
