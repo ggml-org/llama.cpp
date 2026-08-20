@@ -16,7 +16,9 @@ export function sliceAtLastCompaction(messages: DatabaseMessage[]): DatabaseMess
 	let boundary = -1;
 
 	for (let i = messages.length - 1; i >= 0; i--) {
-		if (messages[i].type === MessageType.COMPACTION) {
+		// An empty compaction node is an interrupted compaction and carries
+		// no summary, so it never acts as a boundary.
+		if (messages[i].type === MessageType.COMPACTION && messages[i].content.trim().length > 0) {
 			boundary = i;
 
 			break;
@@ -49,10 +51,30 @@ export function canCompactMessages(messages: DatabaseMessage[]): boolean {
 	for (let i = messages.length - 1; i >= 0; i--) {
 		const m = messages[i];
 
-		if (m.type === MessageType.COMPACTION) return false;
+		if (m.type === MessageType.COMPACTION && m.content.trim().length > 0) return false;
 
 		if (m.role === MessageRole.ASSISTANT && m.content.trim().length > 0) return true;
 	}
 
 	return false;
+}
+
+/**
+ * Returns the message carrying the current context size of the branch: the
+ * latest assistant turn or compaction node holding timings. A compaction
+ * node is stamped with the prompt timings of the reduced context by the
+ * post-compaction pre-encode, so it supersedes earlier assistant turns.
+ */
+export function lastContextBearingMessage(
+	messages: DatabaseMessage[]
+): DatabaseMessage | undefined {
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const m = messages[i];
+
+		if (m.role === MessageRole.ASSISTANT && m.timings) return m;
+
+		if (m.type === MessageType.COMPACTION && m.timings) return m;
+	}
+
+	return undefined;
 }
