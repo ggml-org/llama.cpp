@@ -178,6 +178,62 @@ ACC_TYPE mmq_dot_product(const uint ib_a) {
 }
 #endif
 
+#if defined(DATA_A_ROCMFP4) || defined(DATA_A_ROCMFP4_FAST)
+// 1-byte loads for ROCmFP4 blocks (18 / 17 bytes). Low nibbles are the first
+// half of the block, high nibbles the second half.
+void block_a_to_shmem(const uint buf_ib, const uint ib, const uint iqs) {
+    const uint32_t qs = pack32(u8vec4(data_a[ib].qs[iqs * 4    ],
+                                      data_a[ib].qs[iqs * 4 + 1],
+                                      data_a[ib].qs[iqs * 4 + 2],
+                                      data_a[ib].qs[iqs * 4 + 3]));
+
+    const u8vec4 i_a0 = unpack8( qs       & 0x0F0F0F0F);
+    const u8vec4 i_a1 = unpack8((qs >> 4) & 0x0F0F0F0F);
+
+    buf_a[buf_ib].qs[iqs    ] = pack32(i8vec4(kvalues_rocmfp4[i_a0.x], kvalues_rocmfp4[i_a0.y], kvalues_rocmfp4[i_a0.z], kvalues_rocmfp4[i_a0.w]));
+    buf_a[buf_ib].qs[iqs + 4] = pack32(i8vec4(kvalues_rocmfp4[i_a1.x], kvalues_rocmfp4[i_a1.y], kvalues_rocmfp4[i_a1.z], kvalues_rocmfp4[i_a1.w]));
+
+    if (iqs == 0) {
+#if defined(DATA_A_ROCMFP4)
+        buf_a[buf_ib].d = FLOAT_TYPEV2(ue4m3_to_fp32(data_a[ib].e[0]),
+                                       ue4m3_to_fp32(data_a[ib].e[1]));
+#else
+        buf_a[buf_ib].d = FLOAT_TYPE(ue4m3_to_fp32(data_a[ib].e));
+#endif
+    }
+}
+
+void block_a_to_registers(const uint reg_ib, const uint buf_ib) {
+    cache_a[reg_ib].d = buf_a[buf_ib].d;
+
+    [[unroll]] for (uint iqs = 0; iqs < 8; iqs++) {
+        cache_a[reg_ib].qs[iqs] = buf_a[buf_ib].qs[iqs];
+    }
+}
+
+ACC_TYPE mmq_dot_product(const uint ib_a) {
+#if defined(DATA_A_ROCMFP4)
+    // the halves carry different scales, so they need separate accumulators
+    int32_t q_sum0 = 0;
+    int32_t q_sum1 = 0;
+    [[unroll]] for (uint iqs = 0; iqs < 4; iqs++) {
+        q_sum0 += dotPacked4x8EXT(cache_a[ib_a].qs[iqs],     cache_b.qs[iqs]);
+        q_sum1 += dotPacked4x8EXT(cache_a[ib_a].qs[iqs + 4], cache_b.qs[iqs + 4]);
+    }
+
+    return ACC_TYPE((float(q_sum0) * float(cache_a[ib_a].d.x) +
+                     float(q_sum1) * float(cache_a[ib_a].d.y)) * float(cache_b.ds.x));
+#else
+    int32_t q_sum = 0;
+    [[unroll]] for (uint iqs = 0; iqs < 8; iqs++) {
+        q_sum += dotPacked4x8EXT(cache_a[ib_a].qs[iqs], cache_b.qs[iqs]);
+    }
+
+    return ACC_TYPE(float(q_sum) * float(cache_a[ib_a].d) * float(cache_b.ds.x));
+#endif
+}
+#endif
+
 #if defined(DATA_A_MXFP4)
 // 1-byte loads for mxfp4 blocks (17 bytes)
 void block_a_to_shmem(const uint buf_ib, const uint ib, const uint iqs) {
