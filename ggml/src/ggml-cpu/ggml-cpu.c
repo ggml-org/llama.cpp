@@ -1593,12 +1593,10 @@ static void ggml_compute_forward_mul_mat_id(
     // ggml_graph_plan sizes the buffer without params, so use_ref only skips the dispatch.
     const bool iqp = ggml_cpu_iqp_supported_mul_mat_id(dst) && !params->use_ref;
 
-    char * iqp_gathered = NULL;
-    char * iqp_panels   = NULL;
+    char * iqp_panels = NULL;
 
     if (iqp) {
-        iqp_gathered = incr_ptr_aligned(&wdata_cur, ggml_cpu_iqp_id_gather_size(dst), 64);
-        iqp_panels   = incr_ptr_aligned(&wdata_cur, nth * ggml_cpu_iqp_scratch_size(dst), 64);
+        iqp_panels = incr_ptr_aligned(&wdata_cur, nth * ggml_cpu_iqp_scratch_size(dst), 64);
     }
 
     GGML_ASSERT(params->wsize >= (size_t)((char *) wdata_cur - (char *) params->wdata));
@@ -1665,27 +1663,6 @@ static void ggml_compute_forward_mul_mat_id(
 
     ggml_barrier(params->threadpool);
 
-    // matrix_row_counts is final at this point, so every thread reaches the same verdict: if no
-    // expert clears the threshold the gather would copy nothing and its barrier is pure overhead
-    bool iqp_any = false;
-
-    if (iqp) {
-        for (int cur_a = 0; cur_a < n_as; ++cur_a) {
-            if (ggml_cpu_iqp_expert_eligible(matrix_row_counts[cur_a])) {
-                iqp_any = true;
-                break;
-            }
-        }
-    }
-
-    if (iqp_any) {
-        // the panel gemm reads four src1 rows at a fixed stride, so the rows of each gated in expert
-        // are packed into one contiguous run first
-        ggml_cpu_iqp_gather_mul_mat_id(params, dst, matrix_row_counts, (const int32_t *) matrix_rows, iqp_gathered);
-
-        ggml_barrier(params->threadpool);
-    }
-
     for (int cur_a = 0; cur_a < n_as; ++cur_a) {
         const int64_t cne1 = matrix_row_counts[cur_a];
 
@@ -1693,12 +1670,11 @@ static void ggml_compute_forward_mul_mat_id(
             continue;
         }
 
-        if (iqp_any && ggml_cpu_iqp_expert_eligible(cne1)) {
-            // where this expert's rows landed in the gather area, same rule the gather itself uses
-            const int64_t iqp_row_off = ggml_cpu_iqp_gather_row_off(matrix_row_counts, cur_a);
-
+        if (iqp && ggml_cpu_iqp_expert_eligible(cne1)) {
+            // the panel gemm reads this expert's routed q8_K rows straight out of the conversion area
+            // through the mmid row table, no packing pass in between
             ggml_compute_forward_mul_mat_id_iqp(params, dst, cur_a, cne1, (const int32_t *) &MMID_MATRIX_ROW(cur_a, 0),
-                                                iqp_gathered + iqp_row_off * ggml_cpu_iqp_row_size(dst), iqp_panels);
+                                                iqp_panels);
 
             continue;
         }
@@ -2912,7 +2888,8 @@ struct ggml_cplan ggml_graph_plan(
 
                         // the IQ panel path needs one scratch panel per thread past the q8_K rows
                         if (ggml_cpu_iqp_supported_mul_mat(node)) {
-                            cur = ggml_cpu_iqp_scratch_offset(node) + n_tasks * ggml_cpu_iqp_scratch_size(node);
+                            cur =
+                                MAX(cur, ggml_cpu_iqp_scratch_offset(node) + n_tasks * ggml_cpu_iqp_scratch_size(node));
                         }
                     } break;
                 case GGML_OP_MUL_MAT_ID:
@@ -2933,10 +2910,8 @@ struct ggml_cplan ggml_graph_plan(
                         cur += n_as*ids->ne[0]*ids->ne[1]*sizeof(struct mmid_row_mapping) + sizeof(int64_t);
                         // atomic_current_chunk
                         cur += CACHE_LINE_SIZE*n_as + CACHE_LINE_SIZE;
-                        // the IQ panel path gathers the routed q8_K rows and needs one scratch panel
-                        // per thread on top of that
+                        // the IQ panel path needs one scratch panel per thread on top of that
                         if (ggml_cpu_iqp_supported_mul_mat_id(node)) {
-                            cur += ggml_cpu_iqp_id_gather_size(node) + 64;
                             cur += n_tasks * ggml_cpu_iqp_scratch_size(node) + 64;
                         }
                     } break;

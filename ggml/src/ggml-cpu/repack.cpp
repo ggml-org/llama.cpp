@@ -2771,64 +2771,87 @@ void ggml_gemv_iqp_8x8_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, c
     }
 }
 
-void ggml_gemm_iqp_8x8_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
-    const int nb                = n / QK_K;
+// one 4 row x nc column tile: the four activation rows are independent, so this is the whole gemm body for any four rows, however they were addressed. s points at the first of the four output rows, which are bs floats apart
+static void iqp_gemm_tile_4_generic(int nb, float * GGML_RESTRICT s, size_t bs, const block_iqp_x8 * GGML_RESTRICT b_ptr_start, const block_q8_K * const a_ptr[4], int nc) {
     const int ncols_interleaved = 8;
+
+    for (int x = 0; x < nc / ncols_interleaved; x++) {
+        const block_iqp_x8 * b_ptr = b_ptr_start + x * nb;
+
+        float sumf[4][8];
+        for (int m = 0; m < 4; m++) {
+            for (int j = 0; j < ncols_interleaved; j++) {
+                sumf[m][j] = 0.0f;
+            }
+        }
+
+        for (int l = 0; l < nb; l++) {
+            for (int m = 0; m < 4; m++) {
+                int32_t sumi[8] = { 0 };
+
+                for (int sb = 0; sb < IQP_NSB; sb++) {
+                    int32_t isum[8] = { 0 };
+
+                    for (int g = 0; g < 4; g++) {
+                        for (int j = 0; j < ncols_interleaved; j++) {
+                            for (int k = 0; k < 4; k++) {
+                                isum[j] +=
+                                    b_ptr[l].qs[sb * 128 + g * 32 + j * 4 + k] * a_ptr[m][l].qs[sb * 16 + g * 4 + k];
+                            }
+                        }
+                    }
+
+                    for (int j = 0; j < ncols_interleaved; j++) {
+                        sumi[j] += isum[j] * b_ptr[l].iscales[sb * 8 + j];
+                    }
+                }
+
+                for (int j = 0; j < ncols_interleaved; j++) {
+                    sumf[m][j] += (float) sumi[j] * (b_ptr[l].dfac[j] * a_ptr[m][l].d);
+                }
+            }
+        }
+
+        for (int m = 0; m < 4; m++) {
+            for (int j = 0; j < ncols_interleaved; j++) {
+                s[m * bs + x * ncols_interleaved + j] = sumf[m][j];
+            }
+        }
+    }
+}
+
+void ggml_gemm_iqp_8x8_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
+    const int nb = n / QK_K;
 
     assert (n % QK_K == 0);
     assert (nr % 4 == 0);
-    assert (nc % ncols_interleaved == 0);
+    assert (nc % 8 == 0);
 
     const block_iqp_x8 * b_ptr_start = (const block_iqp_x8 *) vx;
     const block_q8_K   * a_ptr_start = (const block_q8_K *) vy;
 
     for (int y = 0; y < nr / 4; y++) {
-        for (int x = 0; x < nc / ncols_interleaved; x++) {
-            const block_iqp_x8 * b_ptr = b_ptr_start + x * nb;
-
-            float sumf[4][8];
-            for (int m = 0; m < 4; m++) {
-                for (int j = 0; j < ncols_interleaved; j++) {
-                    sumf[m][j] = 0.0f;
-                }
-            }
-
-            for (int l = 0; l < nb; l++) {
-                for (int m = 0; m < 4; m++) {
-                    const block_q8_K * a_ptr = a_ptr_start + (y * 4 + m) * nb;
-
-                    int32_t sumi[8] = { 0 };
-
-                    for (int sb = 0; sb < IQP_NSB; sb++) {
-                        int32_t isum[8] = { 0 };
-
-                        for (int g = 0; g < 4; g++) {
-                            for (int j = 0; j < ncols_interleaved; j++) {
-                                for (int k = 0; k < 4; k++) {
-                                    isum[j] +=
-                                        b_ptr[l].qs[sb * 128 + g * 32 + j * 4 + k] * a_ptr[l].qs[sb * 16 + g * 4 + k];
-                                }
-                            }
-                        }
-
-                        for (int j = 0; j < ncols_interleaved; j++) {
-                            sumi[j] += isum[j] * b_ptr[l].iscales[sb * 8 + j];
-                        }
-                    }
-
-                    for (int j = 0; j < ncols_interleaved; j++) {
-                        sumf[m][j] += (float) sumi[j] * (b_ptr[l].dfac[j] * a_ptr[l].d);
-                    }
-                }
-            }
-
-            for (int m = 0; m < 4; m++) {
-                for (int j = 0; j < ncols_interleaved; j++) {
-                    s[(y * 4 + m) * bs + x * ncols_interleaved + j] = sumf[m][j];
-                }
-            }
+        const block_q8_K * a_ptr[4];
+        for (int m = 0; m < 4; m++) {
+            a_ptr[m] = a_ptr_start + (y * 4 + m) * nb;
         }
+
+        iqp_gemm_tile_4_generic(nb, s + y * 4 * bs, bs, b_ptr_start, a_ptr, nc);
     }
+}
+
+void ggml_gemm_iqp_8x8_q8_K_p4_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * const * GGML_RESTRICT vy, int nc) {
+    const int nb = n / QK_K;
+
+    assert (n % QK_K == 0);
+    assert (nc % 8 == 0);
+
+    const block_q8_K * a_ptr[4];
+    for (int m = 0; m < 4; m++) {
+        a_ptr[m] = (const block_q8_K *) vy[m];
+    }
+
+    iqp_gemm_tile_4_generic(nb, s, bs, (const block_iqp_x8 *) vx, a_ptr, nc);
 }
 
 } // extern "C"

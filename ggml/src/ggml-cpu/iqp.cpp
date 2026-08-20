@@ -22,17 +22,11 @@
 // src0 rows interleaved per panel
 #define IQP_NB_ROWS 8
 
-// ---------------------------------------------------------------------------------------------
-// decode primitives
-//
-// All the grid based types share one inner shape: gather 8 byte (or two 4 byte) grid entries and
-// negate the bytes selected by a sign byte. The helpers below do that 32 values at a time; the
-// scalar bodies are the original per byte loops and are what non x86 builds compile.
-// ---------------------------------------------------------------------------------------------
+// decode primitives: all the grid based types share one inner shape, gather grid entries and negate the bytes selected by a sign byte, 32 values at a time.
+// The scalar bodies are the reference and what non x86 builds compile.
 
-// the low 7 bits of v are the first 7 signs and the 8th is their parity - which is all the 128 entry
-// ksigns_iq2xs table stores, so it can be computed instead of loaded (cf. unpack_ksigns in the CUDA
-// backend). Folding the parity with shifts keeps this portable and off the popcount feature macros.
+// the low 7 bits of v are the first 7 signs and the 8th is their parity - which is all the 128 entry ksigns_iq2xs table stores, so it can be computed instead of loaded (cf. unpack_ksigns in the CUDA backend).
+// Folding the parity with shifts keeps this portable and off the popcount feature macros.
 static inline uint8_t iqp_unpack_ksigns(uint32_t v) {
     uint32_t p = v ^ (v >> 4);
 
@@ -44,15 +38,12 @@ static inline uint8_t iqp_unpack_ksigns(uint32_t v) {
 
 #if defined(__AVX2__)
 
-// 0xFF in every byte whose sign bit is set. sv must hold each sign byte broadcast over the 8 bytes
-// it governs; the selector is kmask_iq2xs, one vector wide.
+// 0xFF in every byte whose sign bit is set. sv must hold each sign byte broadcast over the 8 bytes it governs; the selector is kmask_iq2xs, one vector wide.
 static inline __m256i iqp_sign_mask(__m256i sv) {
     const __m256i sel = _mm256_set1_epi64x((int64_t) 0x8040201008040201ULL);
 
 #    if defined(__GFNI__)
-    // gf2p8affine gives bit j of result byte i as parity(sel.byte[i] & sv.byte[j]); with sv.byte[j]
-    // constant over the qword every bit of byte i comes out as bit i of the sign byte, i.e. 0 or
-    // 0xFF - the whole and + compare in one instruction
+    // gf2p8affine gives bit j of result byte i as parity(sel.byte[i] & sv.byte[j]); with sv.byte[j] constant over the qword every bit of byte i comes out as bit i of the sign byte, i.e. 0 or 0xFF - the whole and + compare in one instruction
     return _mm256_gf2p8affine_epi64_epi8(sel, sv, 0);
 #    else
     return _mm256_cmpeq_epi8(_mm256_and_si256(sv, sel), sel);
@@ -134,8 +125,7 @@ static inline void iqp_store_signed_x4(int8_t * GGML_RESTRICT dst,
 #endif
 }
 
-// 32 values of 8 * grid + delta from four 8 byte grid entries (grid bytes are in {-1, 0, 1}), byte l
-// of deltas applying to group l
+// 32 values of 8 * grid + delta from four 8 byte grid entries (grid bytes are in {-1, 0, 1}), byte l of deltas applying to group l
 static inline void iqp_store_iq1_x8(int8_t * GGML_RESTRICT dst,
                                     uint64_t               g0,
                                     uint64_t               g1,
@@ -184,9 +174,7 @@ static inline void iqp_store_iq4_x32(int8_t * GGML_RESTRICT dst, const uint8_t *
 
 #if GGML_IQP_USE_BIAS
 
-// sum of weight * integer sub-block scale over one decoded super-block. Bounded by
-// 256 * 127 * 32 = 1.04e6, and 128 times that is 1.33e8, so the int32 result cannot overflow the
-// kernel accumulator (see the bounds in ggml_gemm_iqp_8x8_q8_K).
+// sum of weight * integer sub-block scale over one decoded super-block. Bounded by 256 * 127 * 32 = 1.04e6, and 128 times that is 1.33e8, so the int32 result cannot overflow the kernel accumulator (see the bounds in iqp_acc_block).
 static inline int32_t iqp_weighted_sum(const int8_t * GGML_RESTRICT vals, const int8_t * GGML_RESTRICT iscales) {
 #if defined(__AVX2__)
     static_assert(IQP_SB_SIZE == 16, "the vector path folds two sub-blocks per 32 byte load");
@@ -197,8 +185,7 @@ static inline int32_t iqp_weighted_sum(const int8_t * GGML_RESTRICT vals, const 
     __m256i acc = _mm256_setzero_si256();
 
     for (int i = 0; i < QK_K / 32; ++i) {
-        // maddubs against ones sums byte pairs, madd against ones sums those in fours: eight int32,
-        // the low four covering sub-block 2*i and the high four sub-block 2*i + 1
+        // maddubs against ones sums byte pairs, madd against ones sums those in fours: eight int32, the low four covering sub-block 2*i and the high four sub-block 2*i + 1
         const __m256i v = _mm256_loadu_si256((const __m256i *) (vals + 32 * i));
         const __m256i p = _mm256_madd_epi16(_mm256_maddubs_epi16(ones8, v), ones16);
 
@@ -232,278 +219,286 @@ static inline int32_t iqp_weighted_sum(const int8_t * GGML_RESTRICT vals, const 
 
 #endif  // GGML_IQP_USE_BIAS
 
-// decode one super-block into QK_K signed values, IQP_NSB integer sub-block scales and the one
-// float factor they share. The expressions mirror dequantize_row_iq* from ggml-quants.c, split so
-// that (*dfac * iscales[sb]) * value is bit identical to the reference dequantized weight - see
-// block_iqp_x8 in repack.h for why the split is exact.
+static void iqp_decode_iq2_xxs(const void * GGML_RESTRICT vx,
+                               int8_t * GGML_RESTRICT     vals,
+                               int8_t * GGML_RESTRICT     iscales,
+                               float * GGML_RESTRICT      dfac) {
+    const block_iq2_xxs * x = (const block_iq2_xxs *) vx;
+
+    // db = d * (0.5 + ls) * 0.25 = (d / 8) * (2 * ls + 1), ls 4 bit
+    *dfac = GGML_CPU_FP16_TO_FP32(x->d) * 0.125f;
+
+    uint32_t        aux32[2];
+    const uint8_t * aux8 = (const uint8_t *) aux32;
+
+    for (int ib32 = 0; ib32 < QK_K / 32; ++ib32) {
+        memcpy(aux32, x->qs + 4 * ib32, 2 * sizeof(uint32_t));
+        const int8_t ls = (int8_t) (2 * (aux32[1] >> 28) + 1);
+
+        iscales[2 * ib32 + 0] = ls;
+        iscales[2 * ib32 + 1] = ls;
+
+        const uint32_t signs = (uint32_t) iqp_unpack_ksigns((aux32[1] >> 0) & 127) |
+                               (uint32_t) iqp_unpack_ksigns((aux32[1] >> 7) & 127) << 8 |
+                               (uint32_t) iqp_unpack_ksigns((aux32[1] >> 14) & 127) << 16 |
+                               (uint32_t) iqp_unpack_ksigns((aux32[1] >> 21) & 127) << 24;
+
+        iqp_store_signed_x8(vals + 32 * ib32, iq2xxs_grid[aux8[0]], iq2xxs_grid[aux8[1]], iq2xxs_grid[aux8[2]],
+                            iq2xxs_grid[aux8[3]], signs);
+    }
+}
+
+static void iqp_decode_iq2_xs(const void * GGML_RESTRICT vx,
+                              int8_t * GGML_RESTRICT     vals,
+                              int8_t * GGML_RESTRICT     iscales,
+                              float * GGML_RESTRICT      dfac) {
+    const block_iq2_xs * x = (const block_iq2_xs *) vx;
+
+    *dfac = GGML_CPU_FP16_TO_FP32(x->d) * 0.125f;
+
+    for (int ib32 = 0; ib32 < QK_K / 32; ++ib32) {
+        iscales[2 * ib32 + 0] = (int8_t) (2 * (x->scales[ib32] & 0xf) + 1);
+        iscales[2 * ib32 + 1] = (int8_t) (2 * (x->scales[ib32] >> 4) + 1);
+
+        const uint16_t * q = x->qs + 4 * ib32;
+
+        const uint32_t signs = (uint32_t) iqp_unpack_ksigns(q[0] >> 9) | (uint32_t) iqp_unpack_ksigns(q[1] >> 9) << 8 |
+                               (uint32_t) iqp_unpack_ksigns(q[2] >> 9) << 16 |
+                               (uint32_t) iqp_unpack_ksigns(q[3] >> 9) << 24;
+
+        iqp_store_signed_x8(vals + 32 * ib32, iq2xs_grid[q[0] & 511], iq2xs_grid[q[1] & 511], iq2xs_grid[q[2] & 511],
+                            iq2xs_grid[q[3] & 511], signs);
+    }
+}
+
+static void iqp_decode_iq2_s(const void * GGML_RESTRICT vx,
+                             int8_t * GGML_RESTRICT     vals,
+                             int8_t * GGML_RESTRICT     iscales,
+                             float * GGML_RESTRICT      dfac) {
+    const block_iq2_s * x = (const block_iq2_s *) vx;
+
+    const uint8_t * qs    = x->qs;
+    const uint8_t * qh    = x->qh;
+    const uint8_t * signs = qs + QK_K / 8;
+
+    *dfac = GGML_CPU_FP16_TO_FP32(x->d) * 0.125f;
+
+    for (int ib32 = 0; ib32 < QK_K / 32; ++ib32) {
+        iscales[2 * ib32 + 0] = (int8_t) (2 * (x->scales[ib32] & 0xf) + 1);
+        iscales[2 * ib32 + 1] = (int8_t) (2 * (x->scales[ib32] >> 4) + 1);
+
+        // the sign bytes are stored whole here, so there is no parity to recover
+        const uint32_t sbits =
+            (uint32_t) signs[0] | (uint32_t) signs[1] << 8 | (uint32_t) signs[2] << 16 | (uint32_t) signs[3] << 24;
+
+        iqp_store_signed_x8(vals + 32 * ib32, iq2s_grid[qs[0] | (qh[ib32] << 8 & 0x300)],
+                            iq2s_grid[qs[1] | (qh[ib32] << 6 & 0x300)], iq2s_grid[qs[2] | (qh[ib32] << 4 & 0x300)],
+                            iq2s_grid[qs[3] | (qh[ib32] << 2 & 0x300)], sbits);
+        qs += 4;
+        signs += 4;
+    }
+}
+
+static void iqp_decode_iq3_xxs(const void * GGML_RESTRICT vx,
+                               int8_t * GGML_RESTRICT     vals,
+                               int8_t * GGML_RESTRICT     iscales,
+                               float * GGML_RESTRICT      dfac) {
+    const block_iq3_xxs * x = (const block_iq3_xxs *) vx;
+
+    const uint8_t * qs               = x->qs;
+    const uint8_t * scales_and_signs = qs + QK_K / 4;
+
+    // db = d * (0.5 + ls) * 0.5 = (d / 4) * (2 * ls + 1), ls 4 bit
+    *dfac = GGML_CPU_FP16_TO_FP32(x->d) * 0.25f;
+
+    uint32_t aux32;
+
+    for (int ib32 = 0; ib32 < QK_K / 32; ++ib32) {
+        memcpy(&aux32, scales_and_signs + 4 * ib32, sizeof(uint32_t));
+        const int8_t ls = (int8_t) (2 * (aux32 >> 28) + 1);
+
+        iscales[2 * ib32 + 0] = ls;
+        iscales[2 * ib32 + 1] = ls;
+
+        const uint32_t signs = (uint32_t) iqp_unpack_ksigns((aux32 >> 0) & 127) |
+                               (uint32_t) iqp_unpack_ksigns((aux32 >> 7) & 127) << 8 |
+                               (uint32_t) iqp_unpack_ksigns((aux32 >> 14) & 127) << 16 |
+                               (uint32_t) iqp_unpack_ksigns((aux32 >> 21) & 127) << 24;
+
+        iqp_store_signed_x4(vals + 32 * ib32, iq3xxs_grid[qs[0]], iq3xxs_grid[qs[1]], iq3xxs_grid[qs[2]],
+                            iq3xxs_grid[qs[3]], iq3xxs_grid[qs[4]], iq3xxs_grid[qs[5]], iq3xxs_grid[qs[6]],
+                            iq3xxs_grid[qs[7]], signs);
+        qs += 8;
+    }
+}
+
+static void iqp_decode_iq3_s(const void * GGML_RESTRICT vx,
+                             int8_t * GGML_RESTRICT     vals,
+                             int8_t * GGML_RESTRICT     iscales,
+                             float * GGML_RESTRICT      dfac) {
+    const block_iq3_s * x = (const block_iq3_s *) vx;
+
+    const uint8_t * qs    = x->qs;
+    const uint8_t * qh    = x->qh;
+    const uint8_t * signs = x->signs;
+
+    // db = d * (1 + 2 * ls), ls 4 bit
+    *dfac = GGML_CPU_FP16_TO_FP32(x->d);
+
+    int k = 0;
+
+    for (int ib32 = 0; ib32 < QK_K / 32; ib32 += 2) {
+        const int8_t db1 = (int8_t) (1 + 2 * (x->scales[ib32 / 2] & 0xf));
+        const int8_t db2 = (int8_t) (1 + 2 * (x->scales[ib32 / 2] >> 4));
+
+        iscales[2 * ib32 + 0] = db1;
+        iscales[2 * ib32 + 1] = db1;
+        iscales[2 * ib32 + 2] = db2;
+        iscales[2 * ib32 + 3] = db2;
+
+        // the two halves of the 64 weights differ only in which qh byte supplies the 9th bit of each grid index
+        for (int h = 0; h < 2; ++h) {
+            const uint32_t sbits =
+                (uint32_t) signs[0] | (uint32_t) signs[1] << 8 | (uint32_t) signs[2] << 16 | (uint32_t) signs[3] << 24;
+
+            iqp_store_signed_x4(vals + k, iq3s_grid[qs[0] | ((qh[h] << 8) & 256)],
+                                iq3s_grid[qs[1] | ((qh[h] << 7) & 256)], iq3s_grid[qs[2] | ((qh[h] << 6) & 256)],
+                                iq3s_grid[qs[3] | ((qh[h] << 5) & 256)], iq3s_grid[qs[4] | ((qh[h] << 4) & 256)],
+                                iq3s_grid[qs[5] | ((qh[h] << 3) & 256)], iq3s_grid[qs[6] | ((qh[h] << 2) & 256)],
+                                iq3s_grid[qs[7] | ((qh[h] << 1) & 256)], sbits);
+
+            k += 32;
+            qs += 8;
+            signs += 4;
+        }
+        qh += 2;
+    }
+}
+
+// the two iq1 types do not dequantize as scale * value: dequantize_row_iq1_* computes y = dl * (grid[j] + delta) with grid[j] in {-1, 0, 1} and delta = +-1/8, so scaling dl down by 8 gives y = (dl / 8) * (8 * grid[j] +- 1), which fits int8.
+// This is bit identical and not merely close: dl is d (fp16) times a small odd integer, so the product is exact in f32, and dividing it by the power of two 8 stays exact.
+static void iqp_decode_iq1_s(const void * GGML_RESTRICT vx,
+                             int8_t * GGML_RESTRICT     vals,
+                             int8_t * GGML_RESTRICT     iscales,
+                             float * GGML_RESTRICT      dfac) {
+    const block_iq1_s * x = (const block_iq1_s *) vx;
+
+    const uint8_t *  qs = x->qs;
+    const uint16_t * qh = x->qh;
+
+    // dl = d * (2 * ls + 1) * 0.125, ls 3 bit - the /8 of the delta trick is the 2^-k
+    *dfac = GGML_CPU_FP16_TO_FP32(x->d) * 0.125f;
+
+    for (int ib = 0; ib < QK_K / 32; ++ib) {
+        // one scale and one delta sign per 32 weights, so both sub-blocks share them
+        const int8_t dl    = (int8_t) (2 * ((qh[ib] >> 12) & 7) + 1);
+        const int8_t delta = qh[ib] & 0x8000 ? -1 : 1;
+
+        iscales[2 * ib + 0] = dl;
+        iscales[2 * ib + 1] = dl;
+
+        iqp_store_iq1_x8(vals + 32 * ib, iq1s_grid[qs[0] | (((qh[ib] >> 0) & 7) << 8)],
+                         iq1s_grid[qs[1] | (((qh[ib] >> 3) & 7) << 8)], iq1s_grid[qs[2] | (((qh[ib] >> 6) & 7) << 8)],
+                         iq1s_grid[qs[3] | (((qh[ib] >> 9) & 7) << 8)], ((uint8_t) delta) * 0x01010101u);
+        qs += 4;
+    }
+}
+
+static void iqp_decode_iq1_m(const void * GGML_RESTRICT vx,
+                             int8_t * GGML_RESTRICT     vals,
+                             int8_t * GGML_RESTRICT     iscales,
+                             float * GGML_RESTRICT      dfac) {
+    const block_iq1_m * x = (const block_iq1_m *) vx;
+
+    // block_iq1_m has no d field - the fp16 super-block scale is spread over the top nibbles of the four scale words
+    const uint16_t * sc = (const uint16_t *) x->scales;
+
+    iq1m_scale_t scale;
+    scale.u16 = (sc[0] >> 12) | ((sc[1] >> 8) & 0x00f0) | ((sc[2] >> 4) & 0x0f00) | (sc[3] & 0xf000);
+
+    *dfac = GGML_CPU_FP16_TO_FP32(scale.f16) * 0.125f;
+
+    const uint8_t * qs = x->qs;
+    const uint8_t * qh = x->qh;
+
+    for (int ib = 0; ib < QK_K / 32; ++ib) {
+        // 3 bit scales are per 16 weights here, i.e. one per sub-block, and the delta signs are per group of 8 - the +-1 is folded per value, so that is free
+        iscales[2 * ib + 0] = (int8_t) (2 * ((sc[ib / 2] >> (6 * (ib % 2) + 0)) & 0x7) + 1);
+        iscales[2 * ib + 1] = (int8_t) (2 * ((sc[ib / 2] >> (6 * (ib % 2) + 3)) & 0x7) + 1);
+
+        const uint16_t idx[4] = {
+            (uint16_t) (qs[0] | ((qh[0] << 8) & 0x700)),
+            (uint16_t) (qs[1] | ((qh[0] << 4) & 0x700)),
+            (uint16_t) (qs[2] | ((qh[1] << 8) & 0x700)),
+            (uint16_t) (qs[3] | ((qh[1] << 4) & 0x700)),
+        };
+        const uint32_t deltas = (uint32_t) (qh[0] & 0x08 ? 0xff : 0x01) | (uint32_t) (qh[0] & 0x80 ? 0xff : 0x01) << 8 |
+                                (uint32_t) (qh[1] & 0x08 ? 0xff : 0x01) << 16 |
+                                (uint32_t) (qh[1] & 0x80 ? 0xff : 0x01) << 24;
+
+        iqp_store_iq1_x8(vals + 32 * ib, iq1s_grid[idx[0]], iq1s_grid[idx[1]], iq1s_grid[idx[2]], iq1s_grid[idx[3]],
+                         deltas);
+        qs += 4;
+        qh += 2;
+    }
+}
+
+static void iqp_decode_iq4_xs(const void * GGML_RESTRICT vx,
+                              int8_t * GGML_RESTRICT     vals,
+                              int8_t * GGML_RESTRICT     iscales,
+                              float * GGML_RESTRICT      dfac) {
+    const block_iq4_xs * x = (const block_iq4_xs *) vx;
+
+    const uint8_t * qs = x->qs;
+
+    // dl = d * (ls - 32), ls 6 bit, so the integer scale is in [-32, 31]
+    *dfac = GGML_CPU_FP16_TO_FP32(x->d);
+
+    for (int ib = 0; ib < QK_K / 32; ++ib) {
+        const int    ls = ((x->scales_l[ib / 2] >> 4 * (ib % 2)) & 0xf) | (((x->scales_h >> 2 * ib) & 3) << 4);
+        const int8_t dl = (int8_t) (ls - 32);
+
+        iscales[2 * ib + 0] = dl;
+        iscales[2 * ib + 1] = dl;
+
+        iqp_store_iq4_x32(vals + 32 * ib, qs);
+        qs += 16;
+    }
+}
+
+// every supported grid type in one place: the eligibility test and the decode dispatch both expand this list, so a type cannot be enabled without a decoder
+#define IQP_TYPE_LIST(T) \
+    T(IQ2_XXS, iq2_xxs)  \
+    T(IQ2_XS, iq2_xs)    \
+    T(IQ2_S, iq2_s)      \
+    T(IQ3_XXS, iq3_xxs)  \
+    T(IQ3_S, iq3_s)      \
+    T(IQ1_S, iq1_s)      \
+    T(IQ1_M, iq1_m)      \
+    T(IQ4_XS, iq4_xs)
+
+// decode one super-block into QK_K signed values, IQP_NSB integer sub-block scales and the one float factor they share.
+// The expressions mirror dequantize_row_iq* from ggml-quants.c, split so that (*dfac * iscales[sb]) * value is bit identical to the reference dequantized weight - see block_iqp_x8 in repack.h for why the split is exact.
 static bool iqp_decode_superblock(enum ggml_type             type,
                                   const void * GGML_RESTRICT vx,
                                   int8_t * GGML_RESTRICT     vals,
                                   int8_t * GGML_RESTRICT     iscales,
                                   float * GGML_RESTRICT      dfac) {
     switch (type) {
-        case GGML_TYPE_IQ2_XXS:
-            {
-                const block_iq2_xxs * x = (const block_iq2_xxs *) vx;
-
-                // db = d * (0.5 + ls) * 0.25 = (d / 8) * (2 * ls + 1), ls 4 bit
-                *dfac = GGML_CPU_FP16_TO_FP32(x->d) * 0.125f;
-
-                uint32_t        aux32[2];
-                const uint8_t * aux8 = (const uint8_t *) aux32;
-
-                for (int ib32 = 0; ib32 < QK_K / 32; ++ib32) {
-                    memcpy(aux32, x->qs + 4 * ib32, 2 * sizeof(uint32_t));
-                    const int8_t ls = (int8_t) (2 * (aux32[1] >> 28) + 1);
-
-                    iscales[2 * ib32 + 0] = ls;
-                    iscales[2 * ib32 + 1] = ls;
-
-                    const uint32_t signs = (uint32_t) iqp_unpack_ksigns((aux32[1] >> 0) & 127) |
-                                           (uint32_t) iqp_unpack_ksigns((aux32[1] >> 7) & 127) << 8 |
-                                           (uint32_t) iqp_unpack_ksigns((aux32[1] >> 14) & 127) << 16 |
-                                           (uint32_t) iqp_unpack_ksigns((aux32[1] >> 21) & 127) << 24;
-
-                    iqp_store_signed_x8(vals + 32 * ib32, iq2xxs_grid[aux8[0]], iq2xxs_grid[aux8[1]],
-                                        iq2xxs_grid[aux8[2]], iq2xxs_grid[aux8[3]], signs);
-                }
-            }
-            break;
-        case GGML_TYPE_IQ2_XS:
-            {
-                const block_iq2_xs * x = (const block_iq2_xs *) vx;
-
-                *dfac = GGML_CPU_FP16_TO_FP32(x->d) * 0.125f;
-
-                for (int ib32 = 0; ib32 < QK_K / 32; ++ib32) {
-                    iscales[2 * ib32 + 0] = (int8_t) (2 * (x->scales[ib32] & 0xf) + 1);
-                    iscales[2 * ib32 + 1] = (int8_t) (2 * (x->scales[ib32] >> 4) + 1);
-
-                    const uint16_t * q = x->qs + 4 * ib32;
-
-                    const uint32_t signs = (uint32_t) iqp_unpack_ksigns(q[0] >> 9) |
-                                           (uint32_t) iqp_unpack_ksigns(q[1] >> 9) << 8 |
-                                           (uint32_t) iqp_unpack_ksigns(q[2] >> 9) << 16 |
-                                           (uint32_t) iqp_unpack_ksigns(q[3] >> 9) << 24;
-
-                    iqp_store_signed_x8(vals + 32 * ib32, iq2xs_grid[q[0] & 511], iq2xs_grid[q[1] & 511],
-                                        iq2xs_grid[q[2] & 511], iq2xs_grid[q[3] & 511], signs);
-                }
-            }
-            break;
-        case GGML_TYPE_IQ2_S:
-            {
-                const block_iq2_s * x = (const block_iq2_s *) vx;
-
-                const uint8_t * qs    = x->qs;
-                const uint8_t * qh    = x->qh;
-                const uint8_t * signs = qs + QK_K / 8;
-
-                *dfac = GGML_CPU_FP16_TO_FP32(x->d) * 0.125f;
-
-                for (int ib32 = 0; ib32 < QK_K / 32; ++ib32) {
-                    iscales[2 * ib32 + 0] = (int8_t) (2 * (x->scales[ib32] & 0xf) + 1);
-                    iscales[2 * ib32 + 1] = (int8_t) (2 * (x->scales[ib32] >> 4) + 1);
-
-                    // the sign bytes are stored whole here, so there is no parity to recover
-                    const uint32_t sbits = (uint32_t) signs[0] | (uint32_t) signs[1] << 8 |
-                                           (uint32_t) signs[2] << 16 | (uint32_t) signs[3] << 24;
-
-                    iqp_store_signed_x8(vals + 32 * ib32, iq2s_grid[qs[0] | (qh[ib32] << 8 & 0x300)],
-                                        iq2s_grid[qs[1] | (qh[ib32] << 6 & 0x300)],
-                                        iq2s_grid[qs[2] | (qh[ib32] << 4 & 0x300)],
-                                        iq2s_grid[qs[3] | (qh[ib32] << 2 & 0x300)], sbits);
-                    qs += 4;
-                    signs += 4;
-                }
-            }
-            break;
-        case GGML_TYPE_IQ3_XXS:
-            {
-                const block_iq3_xxs * x = (const block_iq3_xxs *) vx;
-
-                const uint8_t * qs               = x->qs;
-                const uint8_t * scales_and_signs = qs + QK_K / 4;
-
-                // db = d * (0.5 + ls) * 0.5 = (d / 4) * (2 * ls + 1), ls 4 bit
-                *dfac = GGML_CPU_FP16_TO_FP32(x->d) * 0.25f;
-
-                uint32_t aux32;
-
-                for (int ib32 = 0; ib32 < QK_K / 32; ++ib32) {
-                    memcpy(&aux32, scales_and_signs + 4 * ib32, sizeof(uint32_t));
-                    const int8_t ls = (int8_t) (2 * (aux32 >> 28) + 1);
-
-                    iscales[2 * ib32 + 0] = ls;
-                    iscales[2 * ib32 + 1] = ls;
-
-                    const uint32_t signs = (uint32_t) iqp_unpack_ksigns((aux32 >> 0) & 127) |
-                                           (uint32_t) iqp_unpack_ksigns((aux32 >> 7) & 127) << 8 |
-                                           (uint32_t) iqp_unpack_ksigns((aux32 >> 14) & 127) << 16 |
-                                           (uint32_t) iqp_unpack_ksigns((aux32 >> 21) & 127) << 24;
-
-                    iqp_store_signed_x4(vals + 32 * ib32, iq3xxs_grid[qs[0]], iq3xxs_grid[qs[1]], iq3xxs_grid[qs[2]],
-                                        iq3xxs_grid[qs[3]], iq3xxs_grid[qs[4]], iq3xxs_grid[qs[5]],
-                                        iq3xxs_grid[qs[6]], iq3xxs_grid[qs[7]], signs);
-                    qs += 8;
-                }
-            }
-            break;
-        case GGML_TYPE_IQ3_S:
-            {
-                const block_iq3_s * x = (const block_iq3_s *) vx;
-
-                const uint8_t * qs    = x->qs;
-                const uint8_t * qh    = x->qh;
-                const uint8_t * signs = x->signs;
-
-                // db = d * (1 + 2 * ls), ls 4 bit
-                *dfac = GGML_CPU_FP16_TO_FP32(x->d);
-
-                int k = 0;
-
-                for (int ib32 = 0; ib32 < QK_K / 32; ib32 += 2) {
-                    const int8_t db1 = (int8_t) (1 + 2 * (x->scales[ib32 / 2] & 0xf));
-                    const int8_t db2 = (int8_t) (1 + 2 * (x->scales[ib32 / 2] >> 4));
-
-                    iscales[2 * ib32 + 0] = db1;
-                    iscales[2 * ib32 + 1] = db1;
-                    iscales[2 * ib32 + 2] = db2;
-                    iscales[2 * ib32 + 3] = db2;
-
-                    // the two halves of the 64 weights differ only in which qh byte supplies the
-                    // 9th bit of each grid index
-                    for (int h = 0; h < 2; ++h) {
-                        const uint32_t sbits = (uint32_t) signs[0] | (uint32_t) signs[1] << 8 |
-                                               (uint32_t) signs[2] << 16 | (uint32_t) signs[3] << 24;
-
-                        iqp_store_signed_x4(vals + k, iq3s_grid[qs[0] | ((qh[h] << 8) & 256)],
-                                            iq3s_grid[qs[1] | ((qh[h] << 7) & 256)],
-                                            iq3s_grid[qs[2] | ((qh[h] << 6) & 256)],
-                                            iq3s_grid[qs[3] | ((qh[h] << 5) & 256)],
-                                            iq3s_grid[qs[4] | ((qh[h] << 4) & 256)],
-                                            iq3s_grid[qs[5] | ((qh[h] << 3) & 256)],
-                                            iq3s_grid[qs[6] | ((qh[h] << 2) & 256)],
-                                            iq3s_grid[qs[7] | ((qh[h] << 1) & 256)], sbits);
-
-                        k += 32;
-                        qs += 8;
-                        signs += 4;
-                    }
-                    qh += 2;
-                }
-            }
-            break;
-        // the two iq1 types do not dequantize as scale * value: dequantize_row_iq1_* computes
-        // y = dl * (grid[j] + delta) with grid[j] in {-1, 0, 1} and delta = +-1/8. Scaling the
-        // sub-block scale down by 8 absorbs the delta:
-        //
-        //     y = (dl / 8) * (8 * grid[j] +- 1),   8 * grid[j] +- 1 in {-9, -7, -1, 1, 7, 9}
-        //
-        // which fits int8. This is bit identical to the reference and not merely close: dl is
-        // d (fp16, 11 bit mantissa) times a small odd integer (at most 15), so the product is
-        // exact in f32 and dividing it by the power of two 8 stays exact; grid[j] +- 1/8 is exact
-        // too. Both expressions therefore round the same real number exactly once.
-        case GGML_TYPE_IQ1_S:
-            {
-                const block_iq1_s * x = (const block_iq1_s *) vx;
-
-                const uint8_t *  qs = x->qs;
-                const uint16_t * qh = x->qh;
-
-                // dl = d * (2 * ls + 1) * 0.125, ls 3 bit - the /8 of the delta trick is the 2^-k
-                *dfac = GGML_CPU_FP16_TO_FP32(x->d) * 0.125f;
-
-                for (int ib = 0; ib < QK_K / 32; ++ib) {
-                    // one scale and one delta sign per 32 weights, so both sub-blocks share them
-                    const int8_t dl    = (int8_t) (2 * ((qh[ib] >> 12) & 7) + 1);
-                    const int8_t delta = qh[ib] & 0x8000 ? -1 : 1;
-
-                    iscales[2 * ib + 0] = dl;
-                    iscales[2 * ib + 1] = dl;
-
-                    iqp_store_iq1_x8(vals + 32 * ib, iq1s_grid[qs[0] | (((qh[ib] >> 0) & 7) << 8)],
-                                     iq1s_grid[qs[1] | (((qh[ib] >> 3) & 7) << 8)],
-                                     iq1s_grid[qs[2] | (((qh[ib] >> 6) & 7) << 8)],
-                                     iq1s_grid[qs[3] | (((qh[ib] >> 9) & 7) << 8)],
-                                     ((uint8_t) delta) * 0x01010101u);
-                    qs += 4;
-                }
-            }
-            break;
-        case GGML_TYPE_IQ1_M:
-            {
-                const block_iq1_m * x = (const block_iq1_m *) vx;
-
-                // block_iq1_m has no d field - the fp16 super-block scale is spread over the top
-                // nibbles of the four scale words
-                const uint16_t * sc = (const uint16_t *) x->scales;
-
-                iq1m_scale_t scale;
-                scale.u16 = (sc[0] >> 12) | ((sc[1] >> 8) & 0x00f0) | ((sc[2] >> 4) & 0x0f00) | (sc[3] & 0xf000);
-
-                *dfac = GGML_CPU_FP16_TO_FP32(scale.f16) * 0.125f;
-
-                const uint8_t * qs = x->qs;
-                const uint8_t * qh = x->qh;
-
-                for (int ib = 0; ib < QK_K / 32; ++ib) {
-                    // 3 bit scales are per 16 weights here, i.e. one per sub-block, and the delta
-                    // signs are per group of 8 - the +-1 is folded per value, so that is free
-                    iscales[2 * ib + 0] = (int8_t) (2 * ((sc[ib / 2] >> (6 * (ib % 2) + 0)) & 0x7) + 1);
-                    iscales[2 * ib + 1] = (int8_t) (2 * ((sc[ib / 2] >> (6 * (ib % 2) + 3)) & 0x7) + 1);
-
-                    const uint16_t idx[4] = {
-                        (uint16_t) (qs[0] | ((qh[0] << 8) & 0x700)),
-                        (uint16_t) (qs[1] | ((qh[0] << 4) & 0x700)),
-                        (uint16_t) (qs[2] | ((qh[1] << 8) & 0x700)),
-                        (uint16_t) (qs[3] | ((qh[1] << 4) & 0x700)),
-                    };
-                    const uint32_t deltas = (uint32_t) (qh[0] & 0x08 ? 0xff : 0x01) |
-                                            (uint32_t) (qh[0] & 0x80 ? 0xff : 0x01) << 8 |
-                                            (uint32_t) (qh[1] & 0x08 ? 0xff : 0x01) << 16 |
-                                            (uint32_t) (qh[1] & 0x80 ? 0xff : 0x01) << 24;
-
-                    iqp_store_iq1_x8(vals + 32 * ib, iq1s_grid[idx[0]], iq1s_grid[idx[1]], iq1s_grid[idx[2]],
-                                     iq1s_grid[idx[3]], deltas);
-                    qs += 4;
-                    qh += 2;
-                }
-            }
-            break;
-        case GGML_TYPE_IQ4_XS:
-            {
-                const block_iq4_xs * x = (const block_iq4_xs *) vx;
-
-                const uint8_t * qs = x->qs;
-
-                // dl = d * (ls - 32), ls 6 bit, so the integer scale is in [-32, 31]
-                *dfac = GGML_CPU_FP16_TO_FP32(x->d);
-
-                for (int ib = 0; ib < QK_K / 32; ++ib) {
-                    const int ls = ((x->scales_l[ib / 2] >> 4 * (ib % 2)) & 0xf) | (((x->scales_h >> 2 * ib) & 3) << 4);
-                    const int8_t dl = (int8_t) (ls - 32);
-
-                    iscales[2 * ib + 0] = dl;
-                    iscales[2 * ib + 1] = dl;
-
-                    iqp_store_iq4_x32(vals + 32 * ib, qs);
-                    qs += 16;
-                }
-            }
-            break;
+#define IQP_CASE(E, name)                           \
+    case GGML_TYPE_##E:                             \
+        iqp_decode_##name(vx, vals, iscales, dfac); \
+        return true;
+        IQP_TYPE_LIST(IQP_CASE)
+#undef IQP_CASE
         default:
             return false;
     }
-
-    return true;
 }
 
 #if defined(__AVX2__)
 
-// interleave the 32 column group starting at column off of the IQP_NB_ROWS staged rows. Seen as
-// int32 that group is 8 dwords per row, and the panel wants dword i of row r at dst[i * 32 + r * 4],
-// i.e. an 8x8 int32 transpose whose rows are eight contiguous 32 byte stores
+// interleave the 32 column group starting at column off of the IQP_NB_ROWS staged rows. Seen as int32 that group is 8 dwords per row, and the panel wants dword i of row r at dst[i * 32 + r * 4], i.e. an 8x8 int32 transpose whose rows are eight contiguous 32 byte stores
 static inline void iqp_interleave_x8(int8_t * GGML_RESTRICT dst, const int8_t (*vals)[QK_K], int off) {
     static_assert(IQP_NB_ROWS == 8, "the transpose is 8x8");
 
@@ -544,8 +539,7 @@ static inline void iqp_interleave_x8(int8_t * GGML_RESTRICT dst, const int8_t (*
 
 #endif
 
-// decode IQP_NB_ROWS consecutive source rows (starting at src, row stride nb01) into a panel of
-// nblocks block_iqp_x8
+// decode IQP_NB_ROWS consecutive source rows (starting at src, row stride nb01) into a panel of nblocks block_iqp_x8
 static void iqp_decode_panel_8(enum ggml_type               type,
                                const char * GGML_RESTRICT   src,
                                size_t                       nb01,
@@ -583,14 +577,12 @@ static void iqp_decode_panel_8(enum ggml_type               type,
             }
 
 #if GGML_IQP_USE_BIAS
-            // the gemm feeds the activations as unsigned bytes, see block_iqp_x8. Builds whose
-            // kernels never read bias[] skip the sweep and leave the field uninitialized
+            // the gemm feeds the activations as unsigned bytes, see block_iqp_x8. Builds whose kernels never read bias[] skip the sweep and leave the field uninitialized
             dst->bias[r] = 128 * iqp_weighted_sum(vals[r], iscales[r]);
 #endif
         }
 
-        // the values interleave as an 8x8 int32 transpose per group of 32 columns: both sides are
-        // contiguous over k, so a source row is 8 dwords and a transposed row is one 32 byte store
+        // the values interleave as an 8x8 int32 transpose per group of 32 columns: both sides are contiguous over k, so a source row is 8 dwords and a transposed row is one 32 byte store
 #if defined(__AVX2__)
         for (int grp = 0; grp < QK_K / 32; grp++) {
             iqp_interleave_x8(dst->qs + grp * 256, vals, grp * 32);
@@ -611,22 +603,16 @@ static void iqp_decode_panel_8(enum ggml_type               type,
 
 static bool iqp_type_supported(enum ggml_type type) {
     switch (type) {
-        case GGML_TYPE_IQ2_XXS:
-        case GGML_TYPE_IQ2_XS:
-        case GGML_TYPE_IQ2_S:
-        case GGML_TYPE_IQ3_XXS:
-        case GGML_TYPE_IQ3_S:
-        case GGML_TYPE_IQ1_S:
-        case GGML_TYPE_IQ1_M:
-        case GGML_TYPE_IQ4_XS:
-            return true;
+#define IQP_CASE(E, name) case GGML_TYPE_##E:
+        IQP_TYPE_LIST(IQP_CASE)
+#undef IQP_CASE
+        return true;
         default:
             return false;
     }
 }
 
-// the checks MUL_MAT and MUL_MAT_ID have in common; each caller adds its own batch size test and
-// its own src0 shape test on top
+// the checks MUL_MAT and MUL_MAT_ID have in common; each caller adds its own batch size test and its own src0 shape test on top
 static bool iqp_supported_common(const struct ggml_tensor * dst) {
     const struct ggml_tensor * src0 = dst->src[0];
     const struct ggml_tensor * src1 = dst->src[1];
@@ -635,12 +621,10 @@ static bool iqp_supported_common(const struct ggml_tensor * dst) {
         return false;
     }
 
-    // the whole path (gather offsets included) assumes the src1 conversion is q8_K
+    // the whole path (the routed row addressing included) assumes the src1 conversion is q8_K
     GGML_ASSERT(ggml_get_type_traits_cpu(src0->type)->vec_dot_type == GGML_TYPE_Q8_K);
 
-    // escape hatch to A/B the panel against the plain vec_dot path without rebuilding, read once
-    // (this path is not a repack buffer, so --no-repack does not cover it, and llama-bench has no
-    // equivalent flag at all)
+    // escape hatch to A/B the panel against the plain vec_dot path without rebuilding, read once (this path is not a repack buffer, so --no-repack does not cover it, and llama-bench has no equivalent flag at all)
     static const bool disabled = getenv("GGML_NO_IQ_PANEL") != nullptr;
     if (disabled) {
         return false;
@@ -698,8 +682,7 @@ bool ggml_cpu_iqp_supported_mul_mat_id(const struct ggml_tensor * dst) {
         return false;
     }
 
-    // no expert can clear the per expert threshold if the whole node routes fewer rows than that.
-    // Checking it here keeps token generation off the path entirely, work buffer included.
+    // no expert can clear the per expert threshold if the whole node routes fewer rows than that, and checking it here keeps token generation off the path entirely, work buffer included
     if (!ggml_cpu_iqp_expert_eligible(ids->ne[0] * ids->ne[1])) {
         return false;
     }
@@ -713,65 +696,11 @@ size_t ggml_cpu_iqp_src1_conv_size(const struct ggml_tensor * dst) {
     return ggml_row_size(vec_dot_type, ggml_nelements(dst->src[1]));
 }
 
-size_t ggml_cpu_iqp_id_gather_size(const struct ggml_tensor * dst) {
-    const struct ggml_tensor * ids = dst->src[2];
-
-    return ids->ne[0] * ids->ne[1] * ggml_cpu_iqp_row_size(dst);
-}
-
-// the gemm kernels read src1 rows at a fixed stride, so each expert's rows - scattered all over
-// the q8_K conversion area - are first copied into one contiguous run
-void ggml_cpu_iqp_gather_mul_mat_id(const struct ggml_compute_params * params,
-                                    const struct ggml_tensor *         dst,
-                                    const int64_t *                    matrix_row_counts,
-                                    const int32_t *                    matrix_rows,
-                                    void *                             gathered) {
-    const struct ggml_tensor * src1 = dst->src[1];
-    const struct ggml_tensor * ids  = dst->src[2];
-
-    const int ith = params->ith;
-    const int nth = params->nth;
-
-    const int64_t n_as         = dst->src[0]->ne[2];
-    const int64_t n_rows_total = ids->ne[0] * ids->ne[1];
-    const int64_t ne11         = src1->ne[1];
-
-    const size_t nbw1 = ggml_cpu_iqp_row_size(dst);
-
-    const char * wdata = (const char *) params->wdata;
-
-    for (int64_t cur_a = 0; cur_a < n_as; cur_a++) {
-        const int64_t cne1 = matrix_row_counts[cur_a];
-
-        if (!ggml_cpu_iqp_expert_eligible(cne1)) {
-            continue;
-        }
-
-        // where this expert's run starts, see ggml_cpu_iqp_gather_row_off
-        const int64_t off = ggml_cpu_iqp_gather_row_off(matrix_row_counts, cur_a);
-
-        const int32_t * expert_rows = matrix_rows + 2 * cur_a * n_rows_total;
-
-        // spread over the flat row index so that experts smaller than nth still keep every thread busy
-        for (int64_t k = 0; k < cne1; k++) {
-            if ((off + k) % nth != ith) {
-                continue;
-            }
-
-            const int64_t i11 = expert_rows[2 * k + 0] % ne11;
-            const int64_t i12 = expert_rows[2 * k + 1];
-
-            memcpy((char *) gathered + (off + k) * nbw1, wdata + (i11 + i12 * ne11) * nbw1, nbw1);
-        }
-    }
-}
-
 void ggml_compute_forward_mul_mat_id_iqp(const struct ggml_compute_params * params,
                                          struct ggml_tensor *               dst,
                                          int64_t                            cur_a,
                                          int64_t                            cne1,
                                          const int32_t *                    expert_rows,
-                                         const void *                       gathered,
                                          void *                             panels) {
     const struct ggml_tensor * src0 = dst->src[0];
     const struct ggml_tensor * src1 = dst->src[1];
@@ -789,8 +718,7 @@ void ggml_compute_forward_mul_mat_id_iqp(const struct ggml_compute_params * para
 
     const char * src0_cur = (const char *) src0->data + cur_a * nb02;
 
-    // static split: every 8 row group is multiplied against all of this expert's routed rows, so the
-    // result does not depend on how the groups are handed out
+    // static split: every 8 row group is multiplied against all of this expert's routed rows, so the result does not depend on how the groups are handed out
     const int64_t ngroups = ne01 / IQP_NB_ROWS;
 
     const int64_t g0 = (ngroups * ith) / nth;
@@ -801,35 +729,34 @@ void ggml_compute_forward_mul_mat_id_iqp(const struct ggml_compute_params * para
 
         iqp_decode_panel_8(src0->type, src0_cur + r * nb01, nb01, nblocks, panel);
 
-        // the dst columns of the routed rows are scattered (one per (expert slot, token) pair), so
-        // the kernels write a small contiguous tile that is then copied out
+        // the dst columns of the routed rows are scattered (one per (expert slot, token) pair), so the gemm writes its 4 row tile here and it is copied out row by row
         float tmp[4 * IQP_NB_ROWS];
 
-        int64_t k = 0;
+        for (int64_t k = 0; k < cne1; k += 4) {
+            const int64_t nrows = MIN(4, cne1 - k);
 
-        for (; k + 4 <= cne1; k += 4) {
-            ggml_gemm_iqp_8x8_q8_K(ne00, tmp, IQP_NB_ROWS, panel, (const char *) gathered + k * nbw1, 4, IQP_NB_ROWS);
+            // a short tail tile duplicates its last real row into the unused slots: the four rows accumulate independently, so the padding just recomputes that row and is never copied out
+            const void * rows[4];
 
             for (int64_t m = 0; m < 4; m++) {
+                const int64_t kk = k + MIN(m, nrows - 1);
+
+                rows[m] = (const char *) params->wdata +
+                          ((expert_rows[2 * kk + 0] % ne11) + expert_rows[2 * kk + 1] * ne11) * nbw1;
+            }
+
+            ggml_gemm_iqp_8x8_q8_K_p4(ne00, tmp, IQP_NB_ROWS, panel, rows, IQP_NB_ROWS);
+
+            for (int64_t m = 0; m < nrows; m++) {
                 float * dst_col = (float *) ((char *) dst->data + expert_rows[2 * (k + m) + 0] * nb1 +
                                              expert_rows[2 * (k + m) + 1] * nb2);
                 memcpy(dst_col + r, tmp + m * IQP_NB_ROWS, IQP_NB_ROWS * sizeof(float));
             }
         }
-
-        for (; k < cne1; k++) {
-            ggml_gemv_iqp_8x8_q8_K(ne00, tmp, IQP_NB_ROWS, panel, (const char *) gathered + k * nbw1, 1, IQP_NB_ROWS);
-
-            float * dst_col =
-                (float *) ((char *) dst->data + expert_rows[2 * k + 0] * nb1 + expert_rows[2 * k + 1] * nb2);
-            memcpy(dst_col + r, tmp, IQP_NB_ROWS * sizeof(float));
-        }
     }
 }
 
-// the panel scratch lives past the q8_K conversion of src1 in the work buffer. ggml_graph_plan
-// sizes the buffer with these two helpers and the compute pass addresses it with them, so the two
-// cannot drift.
+// the panel scratch lives past the q8_K conversion of src1 in the work buffer, and ggml_graph_plan sizes the buffer with these two helpers while the compute pass addresses it with them, so the two cannot drift
 size_t ggml_cpu_iqp_scratch_offset(const struct ggml_tensor * dst) {
     return GGML_PAD(ggml_cpu_iqp_src1_conv_size(dst), 64);
 }
@@ -860,14 +787,12 @@ void ggml_compute_forward_mul_mat_iqp(const struct ggml_compute_params * params,
     block_iqp_x8 * panel =
         (block_iqp_x8 *) ((char *) params->wdata + ggml_cpu_iqp_scratch_offset(dst) + (size_t) ith * scratch_size);
 
-    // every row group is multiplied against the whole src1 batch, so the gemm / gemv split - and
-    // with it the per output element operation sequence - does not depend on the chunking
+    // every row group is multiplied against the whole src1 batch, so the gemm / gemv split - and with it the per output element operation sequence - does not depend on the chunking
     const int64_t nrows = ne11;
 
     const int64_t ngroups = ne01 / IQP_NB_ROWS;
 
-    // aim for 4 chunks per thread; the caller has already reset the chunk counter to nth and
-    // synchronized the threads
+    // aim for 4 chunks per thread; the caller has already reset the chunk counter to nth and synchronized the threads
     const int64_t groups_per_chunk = MAX(1, (ngroups + nth * 4 - 1) / (nth * 4));
     const int64_t nchunk           = (ngroups + groups_per_chunk - 1) / groups_per_chunk;
 
