@@ -16,7 +16,8 @@ void llama_model_granite_hybrid::load_arch_hparams(llama_model_loader & ml) {
     // Granite uses rope_finetuned as a switch for rope, so default to true
     bool rope_finetuned = true;
     ml.get_key(LLM_KV_ROPE_SCALING_FINETUNED, rope_finetuned, false);
-    hparams.rope_finetuned = rope_finetuned;
+    hparams.rope_finetuned = rope_finetuned; // needed for round trip save
+    std::fill(hparams.rope_pattern.begin(), hparams.rope_pattern.end(), rope_finetuned);
 
     // A layer is recurrent IFF the n_head_kv value is set to 0
     for (uint32_t i = 0; i < hparams.n_layer(); ++i) {
@@ -147,7 +148,7 @@ llama_model_granite_hybrid::graph::graph(const llama_model & model, const llm_gr
 
     // Positional embeddings populated if rope enabled
     ggml_tensor * inp_pos = nullptr;
-    if (hparams.rope_finetuned) {
+    if (hparams.has_rope(0)) {
         inp_pos = build_inp_pos();
     }
 
@@ -206,8 +207,7 @@ ggml_tensor * llama_model_granite_hybrid::graph::build_attention_layer(ggml_tens
                                                               const int                 il) {
     auto [Qcur, Kcur, Vcur] = build_qkv(model.layers[il], cur, n_embd_head, hparams.n_head(il), hparams.n_head_kv(il), il);
 
-    const bool use_rope = hparams.rope_finetuned;
-    if (use_rope) {
+    if (hparams.has_rope(il)) {
         ggml_tensor * rope_factors = model.get_rope_factors(cparams, il);
         Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, rope_factors, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
                              ext_factor, attn_factor, beta_fast, beta_slow);

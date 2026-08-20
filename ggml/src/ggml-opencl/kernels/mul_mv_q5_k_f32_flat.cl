@@ -159,18 +159,59 @@ kernel void kernel_mul_mv_q5_K_f32_flat(
 
             global ushort * q2 = q1 + 32;
 
-            float4 acc1 = {0.f, 0.f, 0.f, 0.f};
-            float4 acc2 = {0.f, 0.f, 0.f, 0.f};
-            for (int i = 0; i < 8; i += 2) {
-                acc1.s0 += yl[i+0] * ((q1[i/2] & 0x000F) + (qh[i+0] & u1_lo ? 16.f       : 0.f));
-                acc1.s1 += yl[i+1] * ((q1[i/2] & 0x0F00) + (qh[i+1] & u1_lo ? 16.f*256.f : 0.f));
-                acc1.s2 += yl[i+8] * ((q1[i/2] & 0x00F0) + (qh[i+0] & u2_lo ? 16.f*16.f  : 0.f));
-                acc1.s3 += yl[i+9] * ((q1[i/2] & 0xF000) + (qh[i+1] & u2_lo ? 16.f*4096.f: 0.f));
-                acc2.s0 += yh[i+0] * ((q2[i/2] & 0x000F) + (qh[i+0] & u1_hi ? 16.f       : 0.f));
-                acc2.s1 += yh[i+1] * ((q2[i/2] & 0x0F00) + (qh[i+1] & u1_hi ? 16.f*256.f : 0.f));
-                acc2.s2 += yh[i+8] * ((q2[i/2] & 0x00F0) + (qh[i+0] & u2_hi ? 16.f*16.f  : 0.f));
-                acc2.s3 += yh[i+9] * ((q2[i/2] & 0xF000) + (qh[i+1] & u2_hi ? 16.f*4096.f: 0.f));
-            }
+            // Load the 4 q1 / 4 q2 quant ushorts as 2 uints each. 16-bit integer ops are
+            // disproportionately slow on the A7X (E031.41) compiler; keeping the dequant
+            // operands in 32-bit registers avoids the ushort path (same fix as q4_K flat).
+            // q1/q2 are 4-byte aligned; w & 0x0F00 on the low/high half of a uint equals the
+            // original ushort mask value, so the math is unchanged. The qh high-bit term is
+            // byte-indexed (qh[0..7]) and left as-is.
+            global uint * q1u = (global uint *)q1;
+            global uint * q2u = (global uint *)q2;
+            uint a0 = q1u[0], a1 = q1u[1], b0 = q2u[0], b1 = q2u[1];
+            uint w0 = a0 & 0xFFFF, w1 = a0 >> 16, w2 = a1 & 0xFFFF, w3 = a1 >> 16;
+            uint v0 = b0 & 0xFFFF, v1 = b0 >> 16, v2 = b1 & 0xFFFF, v3 = b1 >> 16;
+
+            float4 acc1, acc2;
+            acc1.s0 =
+                yl[0]*((w0&0x000F)+(qh[0]&u1_lo?16.f:0.f)) +
+                yl[2]*((w1&0x000F)+(qh[2]&u1_lo?16.f:0.f)) +
+                yl[4]*((w2&0x000F)+(qh[4]&u1_lo?16.f:0.f)) +
+                yl[6]*((w3&0x000F)+(qh[6]&u1_lo?16.f:0.f));
+            acc1.s1 =
+                yl[1]*((w0&0x0F00)+(qh[1]&u1_lo?16.f*256.f:0.f)) +
+                yl[3]*((w1&0x0F00)+(qh[3]&u1_lo?16.f*256.f:0.f)) +
+                yl[5]*((w2&0x0F00)+(qh[5]&u1_lo?16.f*256.f:0.f)) +
+                yl[7]*((w3&0x0F00)+(qh[7]&u1_lo?16.f*256.f:0.f));
+            acc1.s2 =
+                yl[ 8]*((w0&0x00F0)+(qh[0]&u2_lo?16.f*16.f:0.f)) +
+                yl[10]*((w1&0x00F0)+(qh[2]&u2_lo?16.f*16.f:0.f)) +
+                yl[12]*((w2&0x00F0)+(qh[4]&u2_lo?16.f*16.f:0.f)) +
+                yl[14]*((w3&0x00F0)+(qh[6]&u2_lo?16.f*16.f:0.f));
+            acc1.s3 =
+                yl[ 9]*((w0&0xF000)+(qh[1]&u2_lo?16.f*4096.f:0.f)) +
+                yl[11]*((w1&0xF000)+(qh[3]&u2_lo?16.f*4096.f:0.f)) +
+                yl[13]*((w2&0xF000)+(qh[5]&u2_lo?16.f*4096.f:0.f)) +
+                yl[15]*((w3&0xF000)+(qh[7]&u2_lo?16.f*4096.f:0.f));
+            acc2.s0 =
+                yh[0]*((v0&0x000F)+(qh[0]&u1_hi?16.f:0.f)) +
+                yh[2]*((v1&0x000F)+(qh[2]&u1_hi?16.f:0.f)) +
+                yh[4]*((v2&0x000F)+(qh[4]&u1_hi?16.f:0.f)) +
+                yh[6]*((v3&0x000F)+(qh[6]&u1_hi?16.f:0.f));
+            acc2.s1 =
+                yh[1]*((v0&0x0F00)+(qh[1]&u1_hi?16.f*256.f:0.f)) +
+                yh[3]*((v1&0x0F00)+(qh[3]&u1_hi?16.f*256.f:0.f)) +
+                yh[5]*((v2&0x0F00)+(qh[5]&u1_hi?16.f*256.f:0.f)) +
+                yh[7]*((v3&0x0F00)+(qh[7]&u1_hi?16.f*256.f:0.f));
+            acc2.s2 =
+                yh[ 8]*((v0&0x00F0)+(qh[0]&u2_hi?16.f*16.f:0.f)) +
+                yh[10]*((v1&0x00F0)+(qh[2]&u2_hi?16.f*16.f:0.f)) +
+                yh[12]*((v2&0x00F0)+(qh[4]&u2_hi?16.f*16.f:0.f)) +
+                yh[14]*((v3&0x00F0)+(qh[6]&u2_hi?16.f*16.f:0.f));
+            acc2.s3 =
+                yh[ 9]*((v0&0xF000)+(qh[1]&u2_hi?16.f*4096.f:0.f)) +
+                yh[11]*((v1&0xF000)+(qh[3]&u2_hi?16.f*4096.f:0.f)) +
+                yh[13]*((v2&0xF000)+(qh[5]&u2_hi?16.f*4096.f:0.f)) +
+                yh[15]*((v3&0xF000)+(qh[7]&u2_hi?16.f*4096.f:0.f));
 
             float dall = *d;
             float dmin = *dm;

@@ -10,9 +10,11 @@
 #define QK_K 256
 #define K_SCALE_SIZE 12
 
+// scales are transposed: consecutive codes of a row are `stride` apart
 inline void get_scale_min_k4(
     int j,
     global const uchar * q,
+    uint stride,
     uchar * d,
     uchar * m,
     uchar mask_d6,
@@ -20,11 +22,11 @@ inline void get_scale_min_k4(
     uchar mask_hi2
 ) {
     if (j < 4) {
-        *d = q[j]   & mask_d6;
-        *m = q[j+4] & mask_d6;
+        *d = q[j*stride]     & mask_d6;
+        *m = q[(j+4)*stride] & mask_d6;
     } else {
-        *d = (q[j+4] & mask_d4) | ((q[j-4] & mask_hi2) >> 2);
-        *m = ((q[j+4] >> 4) & mask_d4) | ((q[j]   & mask_hi2) >> 2);
+        *d = (q[(j+4)*stride] & mask_d4) | ((q[(j-4)*stride] & mask_hi2) >> 2);
+        *m = ((q[(j+4)*stride] >> 4) & mask_d4) | ((q[j*stride] & mask_hi2) >> 2);
     }
 }
 
@@ -79,7 +81,6 @@ kernel void kernel_gemm_noshuffle_q4_k_q8_1_dp4a(
     const bool row_valid = row < (uint)m;
     const uint rrow     = row_valid ? row : 0;  // clamp OOB rows; their writes are masked
 
-    const uint num_superblocks = (uint)k / QK_K;
     const uint k_u = (uint)k >> 2;   // K in uint (int8x4) units
     const uint k_b = (uint)k >> 5;   // blocks-of-32 along K
 
@@ -101,9 +102,9 @@ kernel void kernel_gemm_noshuffle_q4_k_q8_1_dp4a(
         // weight scale/min for this WI's row, this subblock
         const float dd  = (float)src0_d [rrow + sb_idx * m];
         const float dmm = (float)src0_dm[rrow + sb_idx * m];
-        global const uchar * sc = src0_s + rrow * num_superblocks * K_SCALE_SIZE + sb_idx * K_SCALE_SIZE;
+        global const uchar * sc = src0_s + sb_idx * K_SCALE_SIZE * (uint)m + rrow;
         uchar sv, mn;
-        get_scale_min_k4(sub_idx, sc, &sv, &mn, mask_d6, mask_d4, mask_hi2);
+        get_scale_min_k4(sub_idx, sc, (uint)m, &sv, &mn, mask_d6, mask_d4, mask_hi2);
         const float scale = dd  * (float)sv;
         const float minv  = dmm * (float)mn;
 
@@ -202,7 +203,6 @@ kernel void kernel_gemm_noshuffle_q4_k_q8_1_dp4a_wimg(
 
     const uint k_u = (uint)k >> 2;   // K in uint (int8x4) units
     const uint k_b = (uint)k >> 5;   // blocks-of-32 along K
-    const uint num_superblocks = (uint)k / QK_K;
 
     __local uint sh_qa[TILESIZE_N][8];
     __local half sh_d[TILESIZE_N];
@@ -220,9 +220,9 @@ kernel void kernel_gemm_noshuffle_q4_k_q8_1_dp4a_wimg(
 
         const float dd  = (float)src0_d [rrow + sb_idx * m];
         const float dmm = (float)src0_dm[rrow + sb_idx * m];
-        global const uchar * sc = src0_s + rrow * num_superblocks * K_SCALE_SIZE + sb_idx * K_SCALE_SIZE;
+        global const uchar * sc = src0_s + sb_idx * K_SCALE_SIZE * (uint)m + rrow;
         uchar sv, mn;
-        get_scale_min_k4(sub_idx, sc, &sv, &mn, mask_d6, mask_d4, mask_hi2);
+        get_scale_min_k4(sub_idx, sc, (uint)m, &sv, &mn, mask_d6, mask_d4, mask_hi2);
         const float scale = dd  * (float)sv;
         const float minv  = dmm * (float)mn;
 

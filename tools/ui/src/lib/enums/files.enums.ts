@@ -5,11 +5,11 @@
 
 // File type category enum
 export enum FileTypeCategory {
-	IMAGE = 'image',
 	AUDIO = 'audio',
-	VIDEO = 'video',
+	IMAGE = 'image',
 	PDF = 'pdf',
-	TEXT = 'text'
+	TEXT = 'text',
+	VIDEO = 'video'
 }
 
 /**
@@ -21,13 +21,13 @@ export enum SpecialFileType {
 
 // Specific file type enums for each category
 export enum FileTypeImage {
+	GIF = 'gif',
+	HEIC = 'heic',
+	HEIF = 'heif',
 	JPEG = 'jpeg',
 	PNG = 'png',
-	GIF = 'gif',
-	WEBP = 'webp',
 	SVG = 'svg',
-	HEIC = 'heic',
-	HEIF = 'heif'
+	WEBP = 'webp'
 }
 
 export enum FileTypeAudio {
@@ -46,55 +46,55 @@ export enum FileTypePdf {
 }
 
 export enum FileTypeText {
-	PLAIN_TEXT = 'plainText',
-	MARKDOWN = 'md',
 	ASCIIDOC = 'asciidoc',
-	JAVASCRIPT = 'js',
-	TYPESCRIPT = 'ts',
-	JSX = 'jsx',
-	TSX = 'tsx',
-	CSS = 'css',
-	HTML = 'html',
-	JSON = 'json',
-	XML = 'xml',
-	YAML = 'yaml',
-	CSV = 'csv',
-	LOG = 'log',
-	PYTHON = 'python',
-	JAVA = 'java',
+	BIBTEX = 'bibtex',
 	CPP = 'cpp',
-	PHP = 'php',
-	RUBY = 'ruby',
+	CSHARP = 'csharp',
+	CSS = 'css',
+	CSV = 'csv',
+	CUDA = 'cuda',
+	DART = 'dart',
 	GO = 'go',
+	HASKELL = 'haskell',
+	HTML = 'html',
+	JAVA = 'java',
+	JAVASCRIPT = 'js',
+	JSON = 'json',
+	JSX = 'jsx',
+	KOTLIN = 'kotlin',
+	LATEX = 'latex',
+	LOG = 'log',
+	MARKDOWN = 'md',
+	PHP = 'php',
+	PLAIN_TEXT = 'plainText',
+	PROPERTIES = 'properties',
+	PYTHON = 'python',
+	R = 'r',
+	RUBY = 'ruby',
 	RUST = 'rust',
+	SCALA = 'scala',
 	SHELL = 'shell',
 	SQL = 'sql',
-	R = 'r',
-	SCALA = 'scala',
-	KOTLIN = 'kotlin',
-	SWIFT = 'swift',
-	DART = 'dart',
-	VUE = 'vue',
 	SVELTE = 'svelte',
-	LATEX = 'latex',
-	BIBTEX = 'bibtex',
-	CUDA = 'cuda',
+	SWIFT = 'swift',
+	TSX = 'tsx',
+	TYPESCRIPT = 'ts',
+	VUE = 'vue',
 	VULKAN = 'vulkan',
-	HASKELL = 'haskell',
-	CSHARP = 'csharp',
-	PROPERTIES = 'properties'
+	XML = 'xml',
+	YAML = 'yaml'
 }
 
 // File extension enums
 export enum FileExtensionImage {
-	JPG = '.jpg',
-	JPEG = '.jpeg',
-	PNG = '.png',
 	GIF = '.gif',
-	WEBP = '.webp',
-	SVG = '.svg',
 	HEIC = '.heic',
-	HEIF = '.heif'
+	HEIF = '.heif',
+	JPEG = '.jpeg',
+	JPG = '.jpg',
+	PNG = '.png',
+	SVG = '.svg',
+	WEBP = '.webp'
 }
 
 export enum FileExtensionAudio {
@@ -112,63 +112,64 @@ export enum FileExtensionPdf {
 }
 
 export enum FileExtensionText {
-	TXT = '.txt',
-	MD = '.md',
 	ADOC = '.adoc',
-	JS = '.js',
-	TS = '.ts',
-	JSX = '.jsx',
-	TSX = '.tsx',
+	BAT = '.bat',
+	BIB = '.bib',
+	C = '.c',
+	COMP = '.comp',
+	CPP = '.cpp',
+	CS = '.cs',
 	CSS = '.css',
-	HTML = '.html',
+	CSV = '.csv',
+	CU = '.cu',
+	CUH = '.cuh',
+	DART = '.dart',
+	GO = '.go',
+	H = '.h',
+	HPP = '.hpp',
+	HS = '.hs',
 	HTM = '.htm',
+	HTML = '.html',
+	JAVA = '.java',
+	JS = '.js',
 	JSON = '.json',
 	JSONL = '.jsonl',
-	ZIP = '.zip',
+	JSX = '.jsx',
+	KT = '.kt',
+	LOG = '.log',
+	MD = '.md',
+	PHP = '.php',
+	PROPERTIES = '.properties',
+	PY = '.py',
+	R = '.r',
+	RB = '.rb',
+	RS = '.rs',
+	SCALA = '.scala',
+	SH = '.sh',
+	SQL = '.sql',
+	SVELTE = '.svelte',
+	SWIFT = '.swift',
+	TEX = '.tex',
+	TS = '.ts',
+	TSX = '.tsx',
+	TXT = '.txt',
+	VUE = '.vue',
 	XML = '.xml',
 	YAML = '.yaml',
 	YML = '.yml',
-	CSV = '.csv',
-	LOG = '.log',
-	PY = '.py',
-	JAVA = '.java',
-	CPP = '.cpp',
-	C = '.c',
-	H = '.h',
-	PHP = '.php',
-	RB = '.rb',
-	GO = '.go',
-	RS = '.rs',
-	SH = '.sh',
-	BAT = '.bat',
-	SQL = '.sql',
-	R = '.r',
-	SCALA = '.scala',
-	KT = '.kt',
-	SWIFT = '.swift',
-	DART = '.dart',
-	VUE = '.vue',
-	SVELTE = '.svelte',
-	TEX = '.tex',
-	BIB = '.bib',
-	CU = '.cu',
-	CUH = '.cuh',
-	COMP = '.comp',
-	HPP = '.hpp',
-	HS = '.hs',
-	PROPERTIES = '.properties',
-	CS = '.cs'
+	ZIP = '.zip'
 }
 
 // MIME type prefixes and includes for content detection
 export enum MimeTypePrefix {
+	AUDIO = 'audio/',
 	IMAGE = 'image/',
 	TEXT = 'text'
 }
 
 export enum MimeTypeIncludes {
-	JSON = 'json',
 	JAVASCRIPT = 'javascript',
+	JSON = 'json',
 	TYPESCRIPT = 'typescript'
 }
 
@@ -180,23 +181,24 @@ export enum UriPattern {
 
 // MIME type enums
 export enum MimeTypeApplication {
-	PDF = 'application/pdf',
+	JSON = 'application/json',
 	OCTET_STREAM = 'application/octet-stream',
+	PDF = 'application/pdf',
 	ZIP = 'application/zip'
 }
 
 export enum MimeTypeAudio {
-	MP3_MPEG = 'audio/mpeg',
 	MP3 = 'audio/mp3',
+	MP3_MPEG = 'audio/mpeg',
 	MP4 = 'audio/mp4',
+	VND_WAVE = 'audio/vnd.wave',
 	WAV = 'audio/wav',
 	WAVE = 'audio/wave',
-	X_WAV = 'audio/x-wav',
-	X_WAVE = 'audio/x-wave',
-	VND_WAVE = 'audio/vnd.wave',
-	X_PN_WAV = 'audio/x-pn-wav',
 	WEBM = 'audio/webm',
-	WEBM_OPUS = 'audio/webm;codecs=opus'
+	WEBM_OPUS = 'audio/webm;codecs=opus',
+	X_PN_WAV = 'audio/x-pn-wav',
+	X_WAV = 'audio/x-wav',
+	X_WAVE = 'audio/x-wave'
 }
 
 export enum MimeTypeVideo {
@@ -205,62 +207,62 @@ export enum MimeTypeVideo {
 }
 
 export enum MimeTypeImage {
+	GIF = 'image/gif',
+	HEIC = 'image/heic',
+	HEIF = 'image/heif',
+	ICO = 'image/x-icon',
+	ICO_MICROSOFT = 'image/vnd.microsoft.icon',
 	JPEG = 'image/jpeg',
 	JPG = 'image/jpg',
 	PNG = 'image/png',
-	GIF = 'image/gif',
-	WEBP = 'image/webp',
 	SVG = 'image/svg+xml',
-	ICO = 'image/x-icon',
-	ICO_MICROSOFT = 'image/vnd.microsoft.icon',
-	HEIC = 'image/heic',
-	HEIF = 'image/heif'
+	WEBP = 'image/webp'
 }
 
 export enum MimeTypeText {
-	PLAIN = 'text/plain',
-	MARKDOWN = 'text/markdown',
 	ASCIIDOC = 'text/asciidoc',
-	JAVASCRIPT = 'text/javascript',
-	JAVASCRIPT_APP = 'application/javascript',
-	TYPESCRIPT = 'text/typescript',
-	JSX = 'text/jsx',
-	TSX = 'text/tsx',
-	CSS = 'text/css',
-	HTML = 'text/html',
-	JSON = 'application/json',
-	JSONL = 'application/jsonl',
-	XML_TEXT = 'text/xml',
-	XML_APP = 'application/xml',
-	YAML_TEXT = 'text/yaml',
-	YAML_APP = 'application/yaml',
-	CSV = 'text/csv',
-	PYTHON = 'text/x-python',
-	JAVA = 'text/x-java-source',
+	BAT = 'application/x-bat',
+	BIBTEX = 'text/x-bibtex',
+	C_HDR = 'text/x-chdr',
+	C_SRC = 'text/x-csrc',
 	CPP_HDR = 'text/x-c++hdr',
 	CPP_SRC = 'text/x-c++src',
 	CSHARP = 'text/x-csharp',
-	HASKELL = 'text/x-haskell',
-	C_SRC = 'text/x-csrc',
-	C_HDR = 'text/x-chdr',
-	PHP = 'text/x-php',
-	RUBY = 'text/x-ruby',
-	GO = 'text/x-go',
-	RUST = 'text/x-rust',
-	SHELL = 'text/x-shellscript',
-	BAT = 'application/x-bat',
-	SQL = 'text/x-sql',
-	R = 'text/x-r',
-	SCALA = 'text/x-scala',
-	KOTLIN = 'text/x-kotlin',
-	SWIFT = 'text/x-swift',
+	CSS = 'text/css',
+	CSV = 'text/csv',
+	CUDA = 'text/x-cuda',
 	DART = 'text/x-dart',
-	VUE = 'text/x-vue',
+	GO = 'text/x-go',
+	HASKELL = 'text/x-haskell',
+	HTML = 'text/html',
+	JAVA = 'text/x-java-source',
+	JAVASCRIPT = 'text/javascript',
+	JAVASCRIPT_APP = 'application/javascript',
+	JSON = 'application/json',
+	JSONL = 'application/jsonl',
+	JSX = 'text/jsx',
+	KOTLIN = 'text/x-kotlin',
+	LATEX = 'application/x-latex',
+	MARKDOWN = 'text/markdown',
+	PHP = 'text/x-php',
+	PLAIN = 'text/plain',
+	PROPERTIES = 'text/properties',
+	PYTHON = 'text/x-python',
+	R = 'text/x-r',
+	RUBY = 'text/x-ruby',
+	RUST = 'text/x-rust',
+	SCALA = 'text/x-scala',
+	SHELL = 'text/x-shellscript',
+	SQL = 'text/x-sql',
 	SVELTE = 'text/x-svelte',
+	SWIFT = 'text/x-swift',
 	TEX = 'text/x-tex',
 	TEX_APP = 'application/x-tex',
-	LATEX = 'application/x-latex',
-	BIBTEX = 'text/x-bibtex',
-	CUDA = 'text/x-cuda',
-	PROPERTIES = 'text/properties'
+	TSX = 'text/tsx',
+	TYPESCRIPT = 'text/typescript',
+	VUE = 'text/x-vue',
+	XML_APP = 'application/xml',
+	XML_TEXT = 'text/xml',
+	YAML_APP = 'application/yaml',
+	YAML_TEXT = 'text/yaml'
 }

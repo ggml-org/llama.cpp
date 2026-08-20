@@ -4,7 +4,7 @@
 		showBadge?: boolean;
 	}
 
-	let { titleWidth = 'w-48', showBadge = false }: Props = $props();
+	let { showBadge = false, titleWidth = 'w-48' }: Props = $props();
 </script>
 
 <div class="flex w-full items-start gap-3 rounded-lg px-3 py-2">

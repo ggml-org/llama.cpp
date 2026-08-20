@@ -208,6 +208,36 @@ void quantize(uint dst_idx, uint src_idx)
 }
 #endif
 
+#if defined(DATA_A_Q2_0)
+uint quantize_q2_0(float x)
+{
+    const int q = int(x >= 0.0f ? floor(x + 0.5f) : ceil(x - 0.5f)) + 1;
+    return uint(clamp(q, 0, 3));
+}
+
+void quantize(uint dst_idx, uint src_idx)
+{
+    float amax = 0.0f;
+
+    [[unroll]] for (int j = 0; j < QUANT_K_Q2_0; ++j) {
+        amax = max(amax, abs(float(data_s[src_idx + j])));
+    }
+
+    const float d = amax;
+    const float id = d != 0.0f ? 1.0f / d : 0.0f;
+
+    data_q[dst_idx].d = float16_t(d);
+
+    [[unroll]] for (int j = 0; j < QUANT_K_Q2_0 / 4; ++j) {
+        const uint q0 = quantize_q2_0(float(data_s[src_idx + 4*j    ]) * id);
+        const uint q1 = quantize_q2_0(float(data_s[src_idx + 4*j + 1]) * id);
+        const uint q2 = quantize_q2_0(float(data_s[src_idx + 4*j + 2]) * id);
+        const uint q3 = quantize_q2_0(float(data_s[src_idx + 4*j + 3]) * id);
+        data_q[dst_idx].qs[j] = uint8_t(q0 | (q1 << 2u) | (q2 << 4u) | (q3 << 6u));
+    }
+}
+#endif
+
 #if defined(DATA_A_IQ4_NL)
 uint best_index(float x) {
     if (x <= kvalues_iq4nl[0]) return 0;

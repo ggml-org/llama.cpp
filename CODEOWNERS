@@ -60,7 +60,6 @@
 /ggml/src/ggml-cpu/spacemit/            @alex-spacemit
 /ggml/src/ggml-cuda/                    @ggml-org/ggml-cuda
 /ggml/src/ggml-cuda/vendors/hip.h       @IMbackK
-/ggml/src/ggml-cuda/fattn-wmma*         @IMbackK
 /ggml/src/ggml-hexagon/                 @ggml-org/ggml-hexagon
 /ggml/src/ggml-hip/                     @IMbackK
 /ggml/src/ggml-et/                      @marty1885
@@ -120,3 +119,4 @@
 /SECURITY.md                            @ggerganov
 /build-xcframework.sh                   @danbev
 requirements*.txt                       @CISC
+/skills                                 @ngxson

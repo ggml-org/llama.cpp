@@ -206,7 +206,7 @@ cmake -B build/ReleaseOV -G Ninja -DCMAKE_BUILD_TYPE=Release -DGGML_OPENVINO=ON
 cmake --build build/ReleaseOV --parallel
 ```
 
-- **Windows:** Open a **Developer Command Prompt for VS 2022** (so the MSVC toolchain is on `PATH`), then run:
+- **Windows:** Open **x64 Native Tools Command Prompt for VS** (so the MSVC toolchain is on `PATH`), then run:
 
 ```cmd
 C:\Intel\openvino\setupvars.bat
@@ -237,8 +237,8 @@ chmod +x ubuntu-llamacpp-ov-install.sh
 # ============================================
 set -euo pipefail
 
-OPENVINO_VERSION_MAJOR="2026.2.1"
-OPENVINO_VERSION_FULL="2026.2.1.21919.ede283a88e3"
+OPENVINO_VERSION_MAJOR="2026.3"
+OPENVINO_VERSION_FULL="2026.3.0.22451.bd8d6542e3c"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OPENVINO_INSTALL_DIR="/opt/intel/openvino_${OPENVINO_VERSION_MAJOR}"
@@ -334,7 +334,7 @@ echo "  ./build/ReleaseOV/bin/llama-cli -m model.gguf"
 ```
 
 > [!NOTE]
-> The script pins OpenVINO `2026.2.1` via the `OPENVINO_VERSION_MAJOR` / `OPENVINO_VERSION_FULL` variables at the top — edit them to track a different release.
+> The script pins OpenVINO `2026.3` via the `OPENVINO_VERSION_MAJOR` / `OPENVINO_VERSION_FULL` variables at the top — edit them to track a different release.
 
 </details>
 
@@ -364,8 +364,8 @@ REM ============================================
 REM llama.cpp OpenVINO Build Script (Ninja)
 REM ============================================
 
-set "OPENVINO_VERSION_MAJOR=2026.2.1"
-set "OPENVINO_VERSION_FULL=2026.2.1.21919.ede283a88e3"
+set "OPENVINO_VERSION_MAJOR=2026.3"
+set "OPENVINO_VERSION_FULL=2026.3.0.22451.bd8d6542e3c"
 
 set "SCRIPT_DIR=%~dp0"
 set "VCPKG_DIR=C:\vcpkg"
@@ -547,7 +547,7 @@ endlocal
 ```
 
 > [!NOTE]
-> The script pins OpenVINO `2026.2.1` via the `OPENVINO_VERSION_MAJOR` / `OPENVINO_VERSION_FULL` variables at the top — edit them to track a different release. From any new shell, source the matching `setupvars` script via the junction — `call "C:\Intel\openvino\setupvars.bat"` from `cmd`, or `& "C:\Intel\openvino\setupvars.ps1"` from PowerShell. If `winget` cannot register Visual Studio Build Tools on first run, install them once manually and re-run the script from an elevated **Developer Command Prompt for VS 2022**.
+> The script pins OpenVINO `2026.3` via the `OPENVINO_VERSION_MAJOR` / `OPENVINO_VERSION_FULL` variables at the top — edit them to track a different release. From any new shell, source the matching `setupvars` script via the junction — `call "C:\Intel\openvino\setupvars.bat"` from `cmd`, or `& "C:\Intel\openvino\setupvars.ps1"` from PowerShell. If `winget` cannot register Visual Studio Build Tools on first run, install them once manually and re-run the script from an elevated **Developer Command Prompt for VS 2022**.
 
 </details>
 
@@ -710,11 +710,15 @@ Boolean flags follow a uniform convention: set to a **positive integer** (e.g. `
 |-----------------------------------|-----------|------------|-------------------------------------------------------------------------------------------------------------|
 | `GGML_OPENVINO_DEVICE`            | String    | `CPU`      | Specify the target device (CPU, GPU, NPU). On systems with multiple GPUs, use `GPU.0` or `GPU.1` to explicitly target specific GPU. See [OpenVINO GPU Device](https://docs.openvino.ai/2026/openvino-workflow/running-inference/inference-devices-and-modes/gpu-device.html). When set to **NPU**, static compilation mode is enabled for optimal performance. |
 | `GGML_OPENVINO_CACHE_DIR`         | String    | `not set`  | Directory for OpenVINO model caching (recommended: `/tmp/ov_cache`). Enables model caching when set. **Not supported on NPU devices.** |
+| `GGML_OPENVINO_COMPILED_MODEL_CACHE_DIR` | String | `not set` | Directory for the frontend compiled-model cache. When set, OpenVINO compiled models are exported as blobs and imported on later runs to skip weight requantization, graph conversion, and compilation for matching single-graph models. |
 | `GGML_OPENVINO_PREFILL_CHUNK_SIZE`| Integer   | `256`      | Token chunk size for **NPU** prefill (NPU-only; ignored on CPU/GPU). Must be a positive integer; otherwise the default is used. |
 | `GGML_OPENVINO_STATEFUL_EXECUTION`| Boolean   | `0`        | Enable stateful KV cache for better performance. Recommended on CPU, GPU.                                   |
 | `GGML_OPENVINO_DISABLE_CACHE`     | Boolean   | `0`        | Disable the in-process compiled-model / decoder cache (cache is on by default). Set to `1` to disable.      |
 | `GGML_OPENVINO_DISABLE_KV_SLICE`  | Boolean   | `0`        | Disable the KV-cache input-tensor slicing optimization (slicing is on by default on CPU/GPU). Set to `1` to disable. |
 | `GGML_OPENVINO_MANUAL_GQA_ATTN`   | Boolean   | device-based | Tri-state. When **unset**, manual GQA attention is enabled by default on `GPU` and disabled on other devices. Set to a positive integer to force-enable, or `0` to force-disable. |
+| `GGML_OPENVINO_MEMORY_OPTIMIZE`   | Boolean   | `0`        | Umbrella switch for compile-time memory reductions. Enables `GGML_OPENVINO_REDUCE_COMPILE_MEM` and, on GPU, `GGML_OPENVINO_RELEASE_WEIGHTS` unless those fine-grained variables are explicitly set. |
+| `GGML_OPENVINO_REDUCE_COMPILE_MEM`| Boolean   | inherits from `GGML_OPENVINO_MEMORY_OPTIMIZE` | Reduce compile-time host memory use by streaming weight requantization and avoiding extra weight-node materialization where possible. Set explicitly to override the umbrella switch. |
+| `GGML_OPENVINO_RELEASE_WEIGHTS`   | Boolean   | inherits from `GGML_OPENVINO_MEMORY_OPTIMIZE` on GPU | GPU-only. Release host weight buffers after the compiled model cache can reuse the device/plugin copy. Requires stable graph shapes; dynamic workloads that need recompilation should leave this disabled. |
 | `GGML_OPENVINO_PROFILING`         | Boolean   | `0`        | Enable execution-time profiling.                                                                            |
 | `GGML_OPENVINO_DUMP_CGRAPH`       | Boolean   | `0`        | Dump the GGML compute graph to `cgraph_ov.txt`.                                                             |
 | `GGML_OPENVINO_DUMP_IR`           | Boolean   | `0`        | Serialize OpenVINO IR files with timestamps.                                                                |
