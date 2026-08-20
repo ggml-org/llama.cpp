@@ -214,6 +214,17 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_repeat(ggml_meta
     return res;
 }
 
+ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_repeat_back(ggml_metal_library_t lib) {
+    const char * base = "kernel_repeat_back_f32";
+
+    ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, base);
+    if (!res.pipeline) {
+        res = ggml_metal_library_compile_pipeline(lib, base, base, nullptr);
+    }
+
+    return res;
+}
+
 ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_concat(ggml_metal_library_t lib, ggml_type tsrc) {
     char base[256];
     char name[256];
