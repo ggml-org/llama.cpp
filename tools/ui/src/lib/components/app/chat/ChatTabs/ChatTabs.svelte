@@ -3,19 +3,23 @@
 	import { page } from '$app/state';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { cn } from '$lib/components/ui/utils';
-	import { chatStore, conversationsStore, tabsStore } from '$lib/stores';
+	import { chatStore, conversationsStore, NEW_CHAT_TAB_ID, tabsStore } from '$lib/stores';
 
-	let activeId = $derived(page.params.id);
+	let activeId = $derived(page.params.id ?? NEW_CHAT_TAB_ID);
 
 	let tabs = $derived(
 		tabsStore.openTabs.map((id) => ({
 			id,
-			isNewChat: conversationsStore.isTemporaryConversation(id),
+			isNewChat: id === NEW_CHAT_TAB_ID,
 			name:
-				conversationsStore.conversations.find((c) => c.id === id)?.name ??
-				(conversationsStore.isTemporaryConversation(id) ? 'New chat' : 'Chat')
+				id === NEW_CHAT_TAB_ID
+					? 'New chat'
+					: (conversationsStore.conversations.find((c) => c.id === id)?.name ?? 'Chat')
 		}))
 	);
+
+	// hide the New chat button when the new-chat tab is the only one open
+	let showNewChatButton = $derived(tabsStore.openTabs.some((id) => id !== NEW_CHAT_TAB_ID));
 
 	let loadingIds = $derived(new Set(chatStore.getAllLoadingChats()));
 
@@ -87,23 +91,25 @@
 			</div>
 		{/each}
 
-		<Tooltip.Root>
-			<Tooltip.Trigger>
-				{#snippet child({ props })}
-					<button
-						{...props}
-						class="backdrop-blur-lg flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-foreground/5 hover:text-foreground"
-						onclick={() => conversationsStore.openNewChatTab()}
-						aria-label="New chat"
-					>
-						<Plus class="h-4 w-4" />
-					</button>
-				{/snippet}
-			</Tooltip.Trigger>
+		{#if showNewChatButton}
+			<Tooltip.Root>
+				<Tooltip.Trigger>
+					{#snippet child({ props })}
+						<button
+							{...props}
+							class="backdrop-blur-lg flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-foreground/5 hover:text-foreground"
+							onclick={() => conversationsStore.openNewChat()}
+							aria-label="New chat"
+						>
+							<Plus class="h-4 w-4" />
+						</button>
+					{/snippet}
+				</Tooltip.Trigger>
 
-			<Tooltip.Content>
-				<p>New chat</p>
-			</Tooltip.Content>
-		</Tooltip.Root>
+				<Tooltip.Content>
+					<p>New chat</p>
+				</Tooltip.Content>
+			</Tooltip.Root>
+		{/if}
 	</div>
 </nav>

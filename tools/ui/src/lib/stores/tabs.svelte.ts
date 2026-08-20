@@ -1,11 +1,10 @@
 /**
  * tabsStore - Reactive State Store for Browser-Style Conversation Tabs
  *
- * Tracks which conversations and new-chat screens are open as tabs in the
- * chat layout, in order. Every tab - real conversation or unsaved new-chat
- * tab - is a `#/chat/<id>` route; new-chat tabs simply carry a temporary
- * conversation id that is only persisted to the database once a message is
- * sent (see conversationsStore.temporaryConversations).
+ * Tracks which conversations and the new-chat screen are open as tabs in
+ * the chat layout, in order. Real conversation tabs are `#/chat/<id>`
+ * routes; the new-chat tab is the bare `#/` route, represented here by the
+ * `NEW_CHAT_TAB_ID` sentinel (see {@link NEW_CHAT_TAB_ID}).
  *
  * **Architecture & Relationships:**
  * - **conversationsStore**: owns conversation data; calls `removeTabs()` /
@@ -13,8 +12,8 @@
  *   so there is no circular dependency - tab names are resolved by the
  *   ChatTabs component from conversationsStore.
  * - Tab order persists to localStorage and is pruned against the loaded
- *   conversation list on init. Unsaved new-chat tabs are dropped on reload
- *   (they are not in the database), which matches browser behavior.
+ *   conversation list on init. The new-chat tab is dropped on reload (it is
+ *   not a conversation), which matches browser behavior.
  */
 
 import { browser } from '$app/environment';
@@ -23,16 +22,19 @@ import { CHAT_TABS_LOCALSTORAGE_KEY, ROUTES } from '$lib/constants';
 import { RouterService } from '$lib/services/router.service';
 import { untrack } from 'svelte';
 
+/** Sentinel tab id for the bare `#/` new-chat screen */
+export const NEW_CHAT_TAB_ID = 'new-chat';
+
 class TabsStore {
-	/** Ordered tab ids: conversation ids and temporary new-chat ids */
+	/** Ordered tab ids: conversation ids and the `NEW_CHAT_TAB_ID` sentinel */
 	openTabs = $state<string[]>([]);
 
 	/** False until init() has read the persisted tabs; save() is a no-op before that */
 	private initialized = false;
 
-	/** Navigate to a tab */
+	/** Navigate to a tab (the new-chat sentinel maps to the bare `#/` route) */
 	async activate(id: string): Promise<void> {
-		await goto(RouterService.chat(id));
+		await goto(id === NEW_CHAT_TAB_ID ? ROUTES.START : RouterService.chat(id));
 	}
 
 	/** Remove all tabs (e.g. after deleting all conversations) */
@@ -61,7 +63,7 @@ class TabsStore {
 		const target = (idx > 0 ? this.openTabs[idx - 1] : this.openTabs[0]) ?? null;
 
 		if (target) {
-			await goto(RouterService.chat(target));
+			await goto(target === NEW_CHAT_TAB_ID ? ROUTES.START : RouterService.chat(target));
 		} else {
 			await goto(ROUTES.START);
 		}
