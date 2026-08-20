@@ -2343,7 +2343,10 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
     const bool mv_ext_src0_float = op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_F16 || op->src[0]->type == GGML_TYPE_BF16;
     // measured crossover on M3 Max: skinny+split-K mm beats the ext kernels from ne11=4 (quants)
     // and ne11=6 (floats); ext keeps the remainder (2..mm_min)
-    const int  mm_min_default = mv_ext_src0_float ? 5 : 3;
+    // keep the stock mv-ext/mm break-even by default: on M4 Max the skinny mm tiles win the
+    // 8 < ne11 <= 32 range from the stock threshold, while the retuned (M3-measured) lower
+    // crossovers measured slightly worse; the envs below allow per-device tuning
+    const int  mm_min_default = 8;
     static const int ne11_mm_min_env = getenv("GGML_METAL_MM_MIN") ? atoi(getenv("GGML_METAL_MM_MIN")) : -1;
     const int ne11_mm_min = ne11_mm_min_env >= 0 ? ne11_mm_min_env : mm_min_default;
 
