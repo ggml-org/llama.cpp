@@ -822,7 +822,6 @@ void server_models::load_models() {
         }
 
         // add models that are new in this reload
-        std::vector<std::string> newly_added;
         for (const auto & [name, preset] : final_presets) {
             if (mapping.find(name) == mapping.end()) {
                 server_model_meta meta{
@@ -843,37 +842,20 @@ void server_models::load_models() {
                     // /* need_download */ false,
                 };
                 add_model(std::move(meta));
-                newly_added.push_back(name);
             }
         }
 
         apply_stop_timeout();
         apply_hidden();
 
-        // clear reload flag before unlocking for autoload - load() blocks on !is_reloading,
-        // so clearing it here (while still locked) prevents a deadlock in the autoload calls below
+        // clear reload flag before unlocking - load() blocks on !is_reloading
         is_reloading = false;
         cv.notify_all();
 
         log_available_models();
 
-        // collect autoload candidates while still under the lock
-        std::vector<std::string> to_autoload;
-        for (const auto & name : newly_added) {
-            auto it = mapping.find(name);
-            if (it != mapping.end()) {
-                std::string val;
-                if (it->second.meta.preset.get_option(COMMON_ARG_PRESET_LOAD_ON_STARTUP, val) && common_arg_utils::is_truthy(val)) {
-                    to_autoload.push_back(name);
-                }
-            }
-        }
-
+        // note: load-on-startup is not honored here, a reload never spawns an instance
         lk.unlock();
-        for (const auto & name : to_autoload) {
-            SRV_INF("(reload) loading new model %s\n", name.c_str());
-            load(name);
-        }
 
         notify_sse("models_reload", "*");
     }

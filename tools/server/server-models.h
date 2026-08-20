@@ -137,7 +137,7 @@ private:
     bool need_reload = false;
 
     // models marked with load-on-startup, unset once load_startup_models() drains it
-    // using std::optional to make sure it's only called once after is_first_load, load_startup_models will unset it
+    // no value means the startup phase is over, so a reload must not queue anything
     std::optional<std::vector<std::string>> startup_models{std::in_place};
 
     // conv_id -> model name that currently serves its stream session, lets the resumable stream
