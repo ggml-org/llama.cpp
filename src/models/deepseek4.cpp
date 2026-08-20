@@ -1225,7 +1225,7 @@ ggml_tensor * llama_model_deepseek4::graph::build_attention_impl(
     if (inp_mtp) {
         out = build_attn(inp_mtp,
                 nullptr, nullptr, nullptr,
-                q, kv, nullptr,
+                q, kv, kv,
                 nullptr, layer.attn_sinks, nullptr,
                 1.0f/sqrtf(float(n_embd_head)), il);
         cb(out, "attn_raw", il);

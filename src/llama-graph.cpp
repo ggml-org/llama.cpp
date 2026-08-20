@@ -3099,8 +3099,6 @@ ggml_tensor * llm_graph_context::build_attn(
             int       il) const {
     const bool is_swa = hparams.is_swa(il);
 
-    GGML_UNUSED(v_cur);
-
     auto * k_rot = is_swa ? inp->self_k_rot_swa : inp->self_k_rot;
 
     if (k_rot) {
@@ -3133,7 +3131,7 @@ ggml_tensor * llm_graph_context::build_attn(
     // MLA-style attention: the cached K is used as V
     ggml_tensor * q = q_cur;
     ggml_tensor * k = mctx_cur->get_k(ctx0, il);
-    ggml_tensor * v = k;
+    ggml_tensor * v = ggml_view_4d(ctx0, k, v_cur->ne[0], k->ne[1], k->ne[2], k->ne[3], k->nb[1], k->nb[2], k->nb[3], 0);
 
     ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, kq_scale, il);
     cb(cur, "kqv_out", il);
