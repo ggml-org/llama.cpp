@@ -595,6 +595,16 @@ static bool ggml_gallocr_is_own(ggml_gallocr_t galloc, struct ggml_tensor * t) {
     return ggml_gallocr_hash_get(galloc, t)->allocated;
 }
 
+static bool ggml_gallocr_is_pinned(ggml_gallocr_t galloc, struct ggml_tensor * t) {
+    if (!galloc->has_pinned) {
+        return false;
+    }
+    while (t->view_src != NULL) {
+        t = t->view_src;
+    }
+    return ggml_hash_contains(&galloc->pinned, t);
+}
+
 static bool ggml_gallocr_is_allocated(ggml_gallocr_t galloc, struct ggml_tensor * t) {
     return t->data != NULL // tensor data already set externally
         || t->buffer // tensor on external buffer (but not yet allocated)
@@ -644,6 +654,11 @@ static void ggml_gallocr_allocate_node(ggml_gallocr_t galloc, struct ggml_tensor
                 // if the node's data is external, then we cannot re-use it
                 if (!ggml_gallocr_is_own(galloc, parent)) {
                     AT_PRINTF("not reusing parent %s for %s as %p is external\n", parent->name, node->name, parent->data);
+                    continue;
+                }
+
+                if (ggml_gallocr_is_pinned(galloc, parent)) {
+                    AT_PRINTF("not reusing parent %s for %s as it is pinned\n", parent->name, node->name);
                     continue;
                 }
 
@@ -719,7 +734,7 @@ static void ggml_gallocr_free_node(ggml_gallocr_t galloc, struct ggml_tensor * n
         return;
     }
 
-    if (galloc->has_pinned && ggml_hash_contains(&galloc->pinned, node)) {
+    if (ggml_gallocr_is_pinned(galloc, node)) {
         AT_PRINTF("not freeing pinned %s\n", node->name);
         return;
     }

@@ -20,21 +20,16 @@ contracts it places on callers and on backends.
 
 ## Assigning nodes to backends
 
-Backends are passed in priority order, highest first, and the last one must be the CPU. A node is
-assigned by, in order:
+The caller defines backend priority by the order of the array passed to `ggml_backend_sched_new()`: lower indices have higher priority, and the last backend must be the CPU. In llama.cpp this array contains the selected model devices in their configured order, then accelerator backends such as BLAS, then the CPU.
 
-1. **Where its data already is.** A node whose tensor is already allocated, or which is a view of
-   an allocated tensor, must run on the backend owning that buffer - it cannot be moved.
-2. **Op support and operand location.** Otherwise the highest priority backend that supports the
-   op is used, preferring the backend holding the operands. Ops reading tensors in a buffer marked
-   `GGML_BACKEND_BUFFER_USAGE_WEIGHTS` prefer that buffer's backend, so that weights are not
-   copied.
-3. **Expansion.** Assignments are then expanded along the graph, so that runs of adjacent nodes
-   end up on the same backend rather than alternating and forcing a copy at every step.
-4. **Graph inputs** (`GGML_TENSOR_FLAG_INPUT`) are assigned to the last backend, which is the CPU.
-   The caller writes them, so they have to live somewhere the host can write directly.
+Placement combines that order with hard constraints and locality heuristics:
 
-`ggml_backend_sched_set_tensor_backend()` overrides the choice for a specific tensor.
+1. An assignment made with `ggml_backend_sched_set_tensor_backend()` is retained.
+2. A preallocated tensor or view must use a backend that supports both its existing buffer type and its operation. The first compatible backend in caller order is selected; the allocation itself cannot move.
+3. An unallocated graph input (`GGML_TENSOR_FLAG_INPUT`) is assigned to the last backend so that the caller can write it through the CPU slot.
+4. Operations using weights prefer the first backend that can use the weight buffer and run the operation, avoiding a weight copy. Selected operations may instead be offloaded to an earlier backend when `op_offload` requests it.
+5. Existing non-CPU assignments are expanded forward and backward through adjacent supported operations. Remaining assignments are expanded after that so contiguous runs stay together instead of alternating backends.
+6. An unassigned operation is placed on the backend supporting the largest number of its assigned inputs. Caller order breaks ties. An assigned operation may be upgraded to an earlier backend when both use the same buffer type and that backend supports the operation and every source buffer.
 
 ## Splits
 
@@ -93,9 +88,7 @@ issue several computes without synchronizing rotate between them.
 
 Two obligations come with this:
 
-- **Callers** must call `ggml_backend_sched_prepare_inputs()` before writing the inputs of a graph
-  that is being reused. That path allocates nothing and so cannot rotate on its own. After
-  `ggml_backend_sched_alloc_graph()` it is a no-op - allocating already rotated.
+- **Callers** must call `ggml_backend_sched_prepare_inputs()` before writing the inputs of a graph that is being reused. That path allocates nothing and so cannot rotate on its own. The function has an effect only when the scheduler has multiple copies and a compute may still be in flight; it is a no-op for single-copy schedulers, after `ggml_backend_sched_alloc_graph()`, and after synchronization.
 
 - **Backends** that cache work against a graph, such as the CUDA graph cache, may treat an
   unchanged `ggml_cgraph::uid` as a promise that nothing the cached work captured has moved, and
@@ -112,10 +105,9 @@ backend owns, the reading split is asynchronous and may still be reading well af
 says the memory is dead - so a later split on the owning backend can be given the same memory and
 overwrite it.
 
-Such tensors are pinned for the lifetime of the graph with `ggml_gallocr_pin_tensor()`, keeping
-them out of the reuse pool. The pin is keyed on the **view root**, since that is the tensor that
-owns the memory and the one the allocator frees; keying it on the accessed tensor would miss every
-access that goes through a view.
+Such tensors are pinned for the lifetime of the graph with `ggml_gallocr_pin_tensor()`, preventing both ordinary reuse after their last graph-order consumer and in-place reuse by a child operation. The pin is keyed on the **view root**, since that is the tensor that owns the memory; the allocator resolves candidate in-place parents to the same root. Keying the pin on the accessed tensor would miss every access through a view.
+
+Pins are recomputed when the scheduler splits a graph and are encoded in the resulting allocation, so graph reuse preserves the protected addresses without rerunning the allocator. They are separate from `GGML_TENSOR_FLAG_OUTPUT`: marking a tensor as an output would also extend its allocator lifetime, but it changes tensor semantics and can disable backend optimizations unrelated to the cross-backend read.
 
 ## Ops that alias their source
 
