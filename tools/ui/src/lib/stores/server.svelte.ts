@@ -1,53 +1,25 @@
+/**
+ * serverStore - Server connection state, configuration and role detection
+ *
+ * Owns the connection state and properties fetched from /props, plus MODEL
+ * vs ROUTER role detection and server-wide generation defaults. Uses
+ * PropsService for the /props fetch.
+ */
+
 import { ServerRole } from '$lib/enums';
 import { PropsService } from '$lib/services/props.service';
 import { ApiError } from '$lib/utils';
 
 const LOADING_RETRY_INTERVAL_MS = 1000;
 
-/**
- * serverStore - Server connection state, configuration, and role detection
- *
- * This store manages the server connection state and properties fetched from `/props`.
- * It provides reactive state for server configuration and role detection.
- *
- * **Architecture & Relationships:**
- * - **PropsService**: Stateless service for fetching `/props` data
- * - **serverStore** (this class): Reactive store for server state
- * - **modelsStore**: Independent store for model management (uses PropsService directly)
- *
- * **Key Features:**
- * - **Server State**: Connection status, loading, error handling
- * - **Role Detection**: MODEL (single model) vs ROUTER (multi-model)
- * - **Default Params**: Server-wide generation defaults
- */
 class ServerStore {
-	/**
-	 *
-	 *
-	 * State
-	 *
-	 *
-	 */
-
-	props = $state<ApiLlamaCppServerProps | null>(null);
-	loading = $state(false);
 	error = $state<string | null>(null);
-	status = $state<number | null>(null);
+	loading = $state(false);
+	props = $state<ApiLlamaCppServerProps | null>(null);
 	role = $state<ServerRole | null>(null);
+	status = $state<number | null>(null);
 	private fetchPromise: Promise<void> | null = null;
 	private retryTimer: ReturnType<typeof setTimeout> | null = null;
-
-	/**
-	 *
-	 *
-	 * Getters
-	 *
-	 *
-	 */
-
-	get defaultParams(): ApiLlamaCppServerProps['default_generation_settings']['params'] | null {
-		return this.props?.default_generation_settings?.params || null;
-	}
 
 	get contextSize(): number | null {
 		const nCtx = this.props?.default_generation_settings?.n_ctx;
@@ -55,25 +27,31 @@ class ServerStore {
 		return typeof nCtx === 'number' ? nCtx : null;
 	}
 
-	get uiSettings(): Record<string, string | number | boolean> | undefined {
-		return this.props?.ui_settings ?? this.props?.webui_settings;
-	}
-
-	get isRouterMode(): boolean {
-		return this.role === ServerRole.ROUTER;
+	get defaultParams(): ApiLlamaCppServerProps['default_generation_settings']['params'] | null {
+		return this.props?.default_generation_settings?.params || null;
 	}
 
 	get isModelMode(): boolean {
 		return this.role === ServerRole.MODEL;
 	}
 
-	/**
-	 *
-	 *
-	 * Data Handling
-	 *
-	 *
-	 */
+	get isRouterMode(): boolean {
+		return this.role === ServerRole.ROUTER;
+	}
+
+	get uiSettings(): Record<string, string | number | boolean> | undefined {
+		return this.props?.ui_settings ?? this.props?.webui_settings;
+	}
+
+	clear(): void {
+		this.clearRetryTimer();
+		this.props = null;
+		this.error = null;
+		this.status = null;
+		this.loading = false;
+		this.role = null;
+		this.fetchPromise = null;
+	}
 
 	/**
 	 * @param background - Set by the automatic "still loading" poll. Skips the
@@ -124,14 +102,20 @@ class ServerStore {
 		await fetchPromise;
 	}
 
-	clear(): void {
-		this.clearRetryTimer();
-		this.props = null;
-		this.error = null;
-		this.status = null;
-		this.loading = false;
-		this.role = null;
-		this.fetchPromise = null;
+	private clearRetryTimer(): void {
+		if (this.retryTimer) {
+			clearTimeout(this.retryTimer);
+			this.retryTimer = null;
+		}
+	}
+
+	private detectRole(props: ApiLlamaCppServerProps): void {
+		const newRole = props?.role === ServerRole.ROUTER ? ServerRole.ROUTER : ServerRole.MODEL;
+
+		if (this.role !== newRole) {
+			this.role = newRole;
+			console.info(`Server running in ${newRole === ServerRole.ROUTER ? 'ROUTER' : 'MODEL'} mode`);
+		}
 	}
 
 	private scheduleRetry(): void {
@@ -141,30 +125,6 @@ class ServerStore {
 			this.retryTimer = null;
 			this.fetch({ background: true });
 		}, LOADING_RETRY_INTERVAL_MS);
-	}
-
-	private clearRetryTimer(): void {
-		if (this.retryTimer) {
-			clearTimeout(this.retryTimer);
-			this.retryTimer = null;
-		}
-	}
-
-	/**
-	 *
-	 *
-	 * Utilities
-	 *
-	 *
-	 */
-
-	private detectRole(props: ApiLlamaCppServerProps): void {
-		const newRole = props?.role === ServerRole.ROUTER ? ServerRole.ROUTER : ServerRole.MODEL;
-
-		if (this.role !== newRole) {
-			this.role = newRole;
-			console.info(`Server running in ${newRole === ServerRole.ROUTER ? 'ROUTER' : 'MODEL'} mode`);
-		}
 	}
 }
 

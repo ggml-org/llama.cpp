@@ -6318,6 +6318,53 @@ template [[host_name("kernel_fwht_f32_128")]] kernel kernel_fwht_t kernel_fwht_f
 template [[host_name("kernel_fwht_f32_256")]] kernel kernel_fwht_t kernel_fwht_f32<256>;
 template [[host_name("kernel_fwht_f32_512")]] kernel kernel_fwht_t kernel_fwht_f32<512>;
 
+// dequantize a quantized KV cache tensor to contiguous F16 before running the F16 flash attention kernels
+// - one thread per block; dispatched separately for K and V
+// - ref: https://github.com/ggml-org/llama.cpp/pull/27390
+template <
+    typename block_t,
+    short QK,
+    void (*deq_t4x4)(device const block_t *, short, thread float4x4 &)>
+kernel void kernel_flash_attn_ext_kv_f16(
+        constant ggml_metal_kargs_flash_attn_ext_kv_f16 & args,
+        device const char * x,
+        device       half * x_dst,
+        uint gid [[thread_position_in_grid]]) {
+    if (gid >= (uint) args.nblocks) {
+        return;
+    }
+
+    const uint nb = args.ne0/QK;
+    const uint i0 = gid%nb;
+    uint ib       = gid/nb;
+    const uint i1 = ib%args.ne1;
+    ib /= args.ne1;
+    const uint i2 = ib%args.ne2;
+    const uint i3 = ib/args.ne2;
+
+    const uint64_t offs = i0*args.nb0 + i1*args.nb1 + i2*args.nb2 + i3*args.nb3;
+
+    device const block_t * src = (device const block_t *) (x + offs);
+    device half4 * dst = (device half4 *) x_dst + (QK/4)*gid;
+
+    for (short i = 0; i < QK/16; ++i) {
+        float4x4 reg;
+        deq_t4x4(src, i, reg);
+        dst[4*i + 0] = (half4) reg[0];
+        dst[4*i + 1] = (half4) reg[1];
+        dst[4*i + 2] = (half4) reg[2];
+        dst[4*i + 3] = (half4) reg[3];
+    }
+}
+
+typedef decltype(kernel_flash_attn_ext_kv_f16<block_q8_0, 32, dequantize_q8_0>) kernel_flash_attn_ext_kv_f16_t;
+
+template [[host_name("kernel_flash_attn_ext_kv_q4_0_f16")]] kernel kernel_flash_attn_ext_kv_f16_t kernel_flash_attn_ext_kv_f16<block_q4_0, 32, dequantize_q4_0>;
+template [[host_name("kernel_flash_attn_ext_kv_q4_1_f16")]] kernel kernel_flash_attn_ext_kv_f16_t kernel_flash_attn_ext_kv_f16<block_q4_1, 32, dequantize_q4_1>;
+template [[host_name("kernel_flash_attn_ext_kv_q5_0_f16")]] kernel kernel_flash_attn_ext_kv_f16_t kernel_flash_attn_ext_kv_f16<block_q5_0, 32, dequantize_q5_0>;
+template [[host_name("kernel_flash_attn_ext_kv_q5_1_f16")]] kernel kernel_flash_attn_ext_kv_f16_t kernel_flash_attn_ext_kv_f16<block_q5_1, 32, dequantize_q5_1>;
+template [[host_name("kernel_flash_attn_ext_kv_q8_0_f16")]] kernel kernel_flash_attn_ext_kv_f16_t kernel_flash_attn_ext_kv_f16<block_q8_0, 32, dequantize_q8_0>;
+
 constant bool FC_flash_attn_ext_pad_has_mask [[function_constant(FC_FLASH_ATTN_EXT_PAD + 0)]];
 
 constant int32_t FC_flash_attn_ext_pad_ncpsg [[function_constant(FC_FLASH_ATTN_EXT_PAD + 25)]];
@@ -10318,9 +10365,12 @@ kernel void kernel_mul_mm(
     auto tB = tensor(ptrB, dextents<int32_t, 2>(K, N), array<int, 2>({1, strideB}));
 
     // Configure matmul operation
+    // note: K is dynamic_extent (clamped to the valid range in PHASE 2), since a static
+    //       N_MM_NK_TOTAL K tile would read src1 out of bounds when K % N_MM_NK_TOTAL != 0
+    // ref: https://github.com/ggml-org/llama.cpp/pull/27064
     mpp::tensor_ops::matmul2d<
         mpp::tensor_ops::matmul2d_descriptor(
-            NRB, NRA, N_MM_NK_TOTAL, false, true, true,
+            NRB, NRA, static_cast<int>(dynamic_extent), false, true, true,
             mpp::tensor_ops::matmul2d_descriptor::mode::multiply_accumulate),
         execution_simdgroups<N_MM_SIMD_GROUP_X * N_MM_SIMD_GROUP_Y>> mm;
 
@@ -10372,10 +10422,14 @@ kernel void kernel_mul_mm(
         threadgroup_barrier(mem_flags::mem_threadgroup);
 
         // === PHASE 2: Tensor matmul ===
-        auto mA = tA.slice(0, 0);
-        auto mB = tB.slice(loop_k, rb);
+        // Clamp the K extent of both operand tensors to the remaining valid K range so
+        // the dynamic-K op never reads past the K extent of src1 (or the staged A tile).
+        const int kExt = min(N_MM_NK_TOTAL, K - loop_k);
 
-        mm.run(mB, mA, cT);
+        auto tAv = tensor(sa, dextents<int32_t, 2>(kExt, NRA), array<int, 2>({1, N_MM_NK_TOTAL}));
+        auto tBv = tensor(ptrB + loop_k + rb * strideB, dextents<int32_t, 2>(kExt, N - rb), array<int, 2>({1, strideB}));
+
+        mm.run(tBv, tAv, cT);
 
         threadgroup_barrier(mem_flags::mem_threadgroup);
     }

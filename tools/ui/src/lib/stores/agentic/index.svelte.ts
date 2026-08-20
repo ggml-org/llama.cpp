@@ -1,23 +1,13 @@
 /**
- * agenticStore - Reactive State Store for Agentic Loop Orchestration
+ * AgenticStore - Multi-turn agentic loop orchestration
  *
- * Manages multi-turn agentic loop with MCP tools:
- * - LLM streaming with tool call detection
- * - Tool execution via mcpStore
- * - Session state management
- * - Turn limit enforcement
+ * Drives the agentic loop over MCP tools: streams each LLM turn, detects
+ * tool calls, executes them via mcpStore, and enforces the turn limit. Each
+ * turn produces one assistant message (with tool_calls) and one tool result
+ * message per executed call, persisted as separate DB rows.
  *
- * Each agentic turn produces separate DB messages:
- * - One assistant message per LLM turn (with tool_calls if any)
- * - One tool result message per tool call execution
- *
- * **Architecture & Relationships:**
- * - **ChatService**: Stateless API layer (sendMessage, streaming)
- * - **mcpStore**: MCP connection management and tool execution
- * - **agenticStore** (this): Reactive state + business logic
- *
- * @see ChatService in services/chat.service.ts for API operations
- * @see mcpStore in stores/mcp.svelte.ts for MCP operations
+ * Uses ChatService for streaming and mcpStore for tool execution; waits on
+ * the permission/continue/steering gates owned by {@link AgenticGates}.
  */
 
 import { DEFAULT_AGENTIC_CONFIG, NEWLINE } from '$lib/constants';
@@ -43,11 +33,11 @@ import { ReadMediaService } from '$lib/services/read-media.service';
 import { SandboxService } from '$lib/services/sandbox.service';
 import { ToolsService } from '$lib/services/tools.service';
 // direct imports between stores, not via the barrel, to avoid circular deps
-import { conversationsStore } from '$lib/stores/conversations.svelte';
-import { mcpStore } from '$lib/stores/mcp.svelte';
-import { modelsStore } from '$lib/stores/models.svelte';
-import { permissionsStore } from '$lib/stores/permissions.svelte';
-import { settingsStore } from '$lib/stores/settings.svelte';
+import { AgenticGates } from '$lib/stores/agentic/gates.svelte';
+import { conversationsStore } from '$lib/stores/conversations/index.svelte';
+import { mcpStore } from '$lib/stores/mcp/index.svelte';
+import { modelsStore } from '$lib/stores/models/index.svelte';
+import { settingsStore } from '$lib/stores/settings/index.svelte';
 import { toolsStore } from '$lib/stores/tools.svelte';
 import type {
 	AgenticConfig,
@@ -152,160 +142,45 @@ function toAgenticMessages(messages: ApiChatMessageData[]): AgenticMessage[] {
 }
 
 class AgenticStore {
-	private _sessions = new SvelteMap<string, AgenticSession>();
-	/** Dedicated reactive state for pending permission requests (ensures immediate UI updates) */
-	private _pendingPermissions = new SvelteMap<
-		string,
-		{ toolName: string; serverLabel: string } | null
-	>();
-	/** Non-reactive: stores resolve functions for pending permission Promises */
-	private _permissionResolvers = new Map<string, (decision: ToolPermissionDecision) => void>();
+	// permission, continue and steering gates the loop waits on between turns
+	private gates = new AgenticGates();
+	private sessions = new SvelteMap<string, AgenticSession>();
 
-	/** Dedicated reactive state for pending continue requests (turn limit reached) */
-	private _pendingContinueRequests = new SvelteMap<string, boolean>();
-	/** Non-reactive: stores resolve functions for pending continue Promises */
-	private _continueResolvers = new Map<string, (shouldContinue: boolean) => void>();
-
-	/** Reactive: queued steering messages to inject between turns */
-	private _steeringMessages = new SvelteMap<string, SteeringMessage>();
-
-	get isReady(): boolean {
-		return true;
-	}
 	get isAnyRunning(): boolean {
-		for (const session of this._sessions.values()) {
+		for (const session of this.sessions.values()) {
 			if (session.isRunning) return true;
 		}
 
 		return false;
 	}
 
-	getSession(conversationId: string): AgenticSession {
-		let session = this._sessions.get(conversationId);
-
-		if (!session) {
-			session = createDefaultSession();
-			this._sessions.set(conversationId, session);
-		}
-
-		return session;
-	}
-
-	private updateSession(conversationId: string, update: Partial<AgenticSession>): void {
-		const session = this.getSession(conversationId);
-
-		this._sessions.set(conversationId, { ...session, ...update });
-	}
-
-	clearSession(conversationId: string): void {
-		this._sessions.delete(conversationId);
-	}
-
-	getActiveSessions(): Array<{ conversationId: string; session: AgenticSession }> {
-		const active: Array<{ conversationId: string; session: AgenticSession }> = [];
-
-		for (const [conversationId, session] of this._sessions.entries()) {
-			if (session.isRunning) active.push({ conversationId, session });
-		}
-
-		return active;
-	}
-
-	isRunning(conversationId: string): boolean {
-		return this._sessions.get(conversationId)?.isRunning ?? false;
-	}
-
-	// read-only: safe to call from derivations, unlike getSession
-	getLiveLlmTotals(conversationId: string): AgenticSession['liveLlm'] {
-		return this._sessions.get(conversationId)?.liveLlm ?? null;
-	}
-
-	// read-only: safe to call from derivations, unlike getSession
-	getFlowRootMessageId(conversationId: string): string | null {
-		return this._sessions.get(conversationId)?.flowRootMessageId ?? null;
-	}
-
-	currentTurn(conversationId: string): number {
-		return this._sessions.get(conversationId)?.currentTurn ?? 0;
-	}
-
-	totalToolCalls(conversationId: string): number {
-		return this._sessions.get(conversationId)?.totalToolCalls ?? 0;
-	}
-
-	lastError(conversationId: string): Error | null {
-		return this._sessions.get(conversationId)?.lastError ?? null;
-	}
-
-	streamingToolCall(conversationId: string): { name: string; arguments: string } | null {
-		return this._sessions.get(conversationId)?.streamingToolCall ?? null;
-	}
-
-	executingToolCallId(conversationId: string): string | null {
-		return this._sessions.get(conversationId)?.executingToolCallId ?? null;
-	}
-
-	pendingPermissionRequest(
-		conversationId: string
-	): { toolName: string; serverLabel: string } | null {
-		return this._pendingPermissions.get(conversationId) ?? null;
-	}
-
-	pendingContinueRequest(conversationId: string): boolean {
-		return this._pendingContinueRequests.get(conversationId) ?? false;
-	}
-
-	resolveContinue(conversationId: string, shouldContinue: boolean): void {
-		const resolver = this._continueResolvers.get(conversationId);
-
-		if (resolver) {
-			this._continueResolvers.delete(conversationId);
-			resolver(shouldContinue);
-		}
-	}
-
-	resolvePermission(conversationId: string, decision: ToolPermissionDecision): void {
-		const resolver = this._permissionResolvers.get(conversationId);
-
-		if (resolver) {
-			this._permissionResolvers.delete(conversationId);
-			resolver(decision);
-		}
+	get isReady(): boolean {
+		return true;
 	}
 
 	clearError(conversationId: string): void {
 		this.updateSession(conversationId, { lastError: null });
 	}
 
-	hasPendingSteeringMessage(conversationId: string): boolean {
-		return this._steeringMessages.has(conversationId);
-	}
-
-	pendingSteeringMessageContent(conversationId: string): string | null {
-		return this._steeringMessages.get(conversationId)?.content ?? null;
-	}
-
-	pendingSteeringMessageExtras(conversationId: string): DatabaseMessageExtra[] | undefined {
-		return this._steeringMessages.get(conversationId)?.extras;
-	}
-
-	/**
-	 * Queue a steering message. When the current agentic turn completes,
-	 * the flow exits and the caller re-sends the message as a normal chat message.
-	 */
-	injectSteeringMessage(
-		conversationId: string,
-		content: string,
-		extras?: DatabaseMessageExtra[]
-	): void {
-		this._steeringMessages.set(conversationId, { content, extras });
+	clearSession(conversationId: string): void {
+		this.sessions.delete(conversationId);
 	}
 
 	/**
 	 * Clear the pending steering message without consuming it.
 	 */
 	clearSteeringMessage(conversationId: string): void {
-		this._steeringMessages.delete(conversationId);
+		this.gates.clearSteeringMessage(conversationId);
+	}
+
+	constructor() {
+		// drop per-conversation session state when the conversation is deleted,
+		// otherwise every conversation that ever ran a flow leaks a session here
+		conversationsStore.onConversationsDeleted((convIds) => {
+			for (const convId of convIds) {
+				this.sessions.delete(convId);
+			}
+		});
 	}
 
 	/**
@@ -313,13 +188,17 @@ class AgenticStore {
 	 * Called by chatStore after the agentic flow exits.
 	 */
 	consumePendingSteeringMessage(conversationId: string): SteeringMessage | null {
-		const msg = this._steeringMessages.get(conversationId);
+		return this.gates.consumePendingSteeringMessage(conversationId);
+	}
 
-		if (!msg) return null;
+	getActiveSessions(): Array<{ conversationId: string; session: AgenticSession }> {
+		const active: Array<{ conversationId: string; session: AgenticSession }> = [];
 
-		this._steeringMessages.delete(conversationId);
+		for (const [conversationId, session] of this.sessions.entries()) {
+			if (session.isRunning) active.push({ conversationId, session });
+		}
 
-		return msg;
+		return active;
 	}
 
 	getConfig(settings: SettingsConfigType, perChatOverrides?: McpServerOverride[]): AgenticConfig {
@@ -336,105 +215,91 @@ class AgenticStore {
 		};
 	}
 
-	private parseToolArguments(args: string | Record<string, unknown>): Record<string, unknown> {
-		if (typeof args === 'object') return args;
-
-		const trimmed = args.trim();
-
-		if (trimmed === '') return {};
-
-		return JSON.parse(trimmed) as Record<string, unknown>;
+	getCurrentTurn(conversationId: string): number {
+		return this.sessions.get(conversationId)?.currentTurn ?? 0;
 	}
 
-	private async requestPermission(
-		conversationId: string,
-		toolName: string,
-		serverLabel: string,
-		signal?: AbortSignal
-	): Promise<ToolPermissionDecision> {
-		const permissionKey = toolsStore.getPermissionKey(toolName);
+	getExecutingToolCallId(conversationId: string): string | null {
+		return this.sessions.get(conversationId)?.executingToolCallId ?? null;
+	}
 
-		if (permissionKey && permissionsStore.hasTool(permissionKey)) {
-			return ToolPermissionDecision.ONCE;
+	// read-only: safe to call from derivations, unlike getSession
+	getFlowRootMessageId(conversationId: string): string | null {
+		return this.sessions.get(conversationId)?.flowRootMessageId ?? null;
+	}
+
+	getLastError(conversationId: string): Error | null {
+		return this.sessions.get(conversationId)?.lastError ?? null;
+	}
+
+	// read-only: safe to call from derivations, unlike getSession
+	getLiveLlmTotals(conversationId: string): AgenticSession['liveLlm'] {
+		return this.sessions.get(conversationId)?.liveLlm ?? null;
+	}
+
+	getPendingContinueRequest(conversationId: string): boolean {
+		return this.gates.getPendingContinueRequest(conversationId);
+	}
+
+	getPendingPermissionRequest(
+		conversationId: string
+	): { toolName: string; serverLabel: string } | null {
+		return this.gates.getPendingPermissionRequest(conversationId);
+	}
+
+	getPendingSteeringMessageContent(conversationId: string): string | null {
+		return this.gates.getPendingSteeringMessageContent(conversationId);
+	}
+
+	getPendingSteeringMessageExtras(conversationId: string): DatabaseMessageExtra[] | undefined {
+		return this.gates.getPendingSteeringMessageExtras(conversationId);
+	}
+
+	getSession(conversationId: string): AgenticSession {
+		let session = this.sessions.get(conversationId);
+
+		if (!session) {
+			session = createDefaultSession();
+			this.sessions.set(conversationId, session);
 		}
 
-		this._pendingPermissions.set(conversationId, { serverLabel, toolName });
-
-		return new Promise<ToolPermissionDecision>((resolve) => {
-			if (signal?.aborted) {
-				this._pendingPermissions.set(conversationId, null);
-				resolve(ToolPermissionDecision.DENY);
-
-				return;
-			}
-
-			this._permissionResolvers.set(conversationId, (decision) => {
-				this._pendingPermissions.set(conversationId, null);
-
-				if (decision === ToolPermissionDecision.ALWAYS && permissionKey) {
-					permissionsStore.allowTool(permissionKey);
-				} else if (decision === ToolPermissionDecision.ALWAYS_SERVER) {
-					const serverToolKeys = toolsStore.allTools
-						.filter((t) =>
-							t.serverName
-								? t.serverName === serverLabel
-								: toolsStore.getToolServerLabel(t.definition.function.name) === serverLabel
-						)
-						.map((t) => toolsStore.getPermissionKey(t.definition.function.name)!)
-						.filter((k): k is string => k !== null);
-
-					permissionsStore.allowTools(serverToolKeys);
-				}
-
-				resolve(decision);
-			});
-
-			signal?.addEventListener(
-				'abort',
-				() => {
-					const resolver = this._permissionResolvers.get(conversationId);
-
-					if (resolver) {
-						this._permissionResolvers.delete(conversationId);
-						this._pendingPermissions.set(conversationId, null);
-						resolve(ToolPermissionDecision.DENY);
-					}
-				},
-				{ once: true }
-			);
-		});
+		return session;
 	}
 
-	private async requestContinue(conversationId: string, signal?: AbortSignal): Promise<boolean> {
-		this._pendingContinueRequests.set(conversationId, true);
+	getStreamingToolCall(conversationId: string): { name: string; arguments: string } | null {
+		return this.sessions.get(conversationId)?.streamingToolCall ?? null;
+	}
 
-		return new Promise<boolean>((resolve) => {
-			if (signal?.aborted) {
-				this._pendingContinueRequests.set(conversationId, false);
-				resolve(false);
+	getTotalToolCalls(conversationId: string): number {
+		return this.sessions.get(conversationId)?.totalToolCalls ?? 0;
+	}
 
-				return;
-			}
+	hasPendingSteeringMessage(conversationId: string): boolean {
+		return this.gates.hasPendingSteeringMessage(conversationId);
+	}
 
-			this._continueResolvers.set(conversationId, (shouldContinue) => {
-				this._pendingContinueRequests.set(conversationId, false);
-				resolve(shouldContinue);
-			});
+	/**
+	 * Queue a steering message. When the current agentic turn completes,
+	 * the flow exits and the caller re-sends the message as a normal chat message.
+	 */
+	injectSteeringMessage(
+		conversationId: string,
+		content: string,
+		extras?: DatabaseMessageExtra[]
+	): void {
+		this.gates.injectSteeringMessage(conversationId, content, extras);
+	}
 
-			signal?.addEventListener(
-				'abort',
-				() => {
-					const resolver = this._continueResolvers.get(conversationId);
+	isRunning(conversationId: string): boolean {
+		return this.sessions.get(conversationId)?.isRunning ?? false;
+	}
 
-					if (resolver) {
-						this._continueResolvers.delete(conversationId);
-						this._pendingContinueRequests.set(conversationId, false);
-						resolve(false);
-					}
-				},
-				{ once: true }
-			);
-		});
+	resolveContinue(conversationId: string, shouldContinue: boolean): void {
+		this.gates.resolveContinue(conversationId, shouldContinue);
+	}
+
+	resolvePermission(conversationId: string, decision: ToolPermissionDecision): void {
+		this.gates.resolvePermission(conversationId, decision);
 	}
 
 	async runAgenticFlow(params: AgenticFlowParams): Promise<AgenticFlowResult> {
@@ -449,11 +314,7 @@ class AgenticStore {
 		} = params;
 
 		// Clear any pending permissions/continue requests for this conversation when starting a new flow
-		this._pendingPermissions.set(conversationId, null);
-		this._permissionResolvers.delete(conversationId);
-		this._pendingContinueRequests.set(conversationId, false);
-		this._continueResolvers.delete(conversationId);
-		this._steeringMessages.delete(conversationId);
+		this.gates.clear(conversationId);
 
 		// Ensure server tools are fetched before checking if agentic is enabled
 		if (toolsStore.serverTools.length === 0 && !toolsStore.loading) {
@@ -482,26 +343,8 @@ class AgenticStore {
 
 		console.log(`[AgenticStore] Starting agentic flow with ${tools.length} tools`);
 
-		const normalizedMessages: ApiChatMessageData[] = (
-			await Promise.all(
-				messages.map((msg) => {
-					if ('id' in msg && 'convId' in msg && 'timestamp' in msg)
-						return ChatService.convertDbMessageToApiChatMessageData(
-							msg as DatabaseMessage & { extra?: DatabaseMessageExtra[] }
-						);
-
-					return msg as ApiChatMessageData;
-				})
-			)
-		).filter((msg: { role: ChatRole; content: string | ApiChatMessageContentPart[] }) => {
-			if (msg.role === MessageRole.SYSTEM) {
-				const content = typeof msg.content === 'string' ? msg.content : '';
-
-				return content.trim().length > 0;
-			}
-
-			return true;
-		});
+		const normalizedMessages: ApiChatMessageData[] =
+			await ChatService.normalizeMessagesForApi(messages);
 
 		this.updateSession(conversationId, {
 			currentTurn: 0,
@@ -550,6 +393,30 @@ class AgenticStore {
 		}
 	}
 
+	private buildAttachmentName(mimeType: string, index: number): string {
+		const extension = mimeType.startsWith(MimeTypePrefix.AUDIO)
+			? (AUDIO_MIME_TO_EXTENSION[mimeType] ?? DEFAULT_AUDIO_EXTENSION)
+			: (IMAGE_MIME_TO_EXTENSION[mimeType] ?? DEFAULT_IMAGE_EXTENSION);
+
+		return `${MCP_ATTACHMENT_NAME_PREFIX}-${Date.now()}-${index}.${extension}`;
+	}
+
+	private buildFinalTimings(
+		capturedTimings: ChatMessageTimings | undefined,
+		agenticTimings: ChatMessageAgenticTimings
+	): ChatMessageTimings | undefined {
+		if (agenticTimings.toolCallsCount === 0) return capturedTimings;
+
+		return {
+			agentic: agenticTimings,
+			cache_n: capturedTimings?.cache_n,
+			predicted_ms: capturedTimings?.predicted_ms,
+			predicted_n: capturedTimings?.predicted_n,
+			prompt_ms: capturedTimings?.prompt_ms,
+			prompt_n: capturedTimings?.prompt_n
+		};
+	}
+
 	private async executeAgenticLoop(params: {
 		conversationId: string;
 		messages: ApiChatMessageData[];
@@ -596,7 +463,7 @@ class AgenticStore {
 		while (true) {
 			if (turn >= maxTurns) {
 				// Turn limit reached - ask user whether to continue
-				const shouldContinue = await this.requestContinue(conversationId, signal);
+				const shouldContinue = await this.gates.requestContinue(conversationId, signal);
 
 				// Yield to allow Svelte to flush the UI update
 				await new Promise((r) => setTimeout(r, 0));
@@ -769,7 +636,7 @@ class AgenticStore {
 
 			// === Steering check: if a user message was queued during this turn, exit the flow.
 			// The caller (chatStore) will consume the pending message and re-send it normally.
-			if (this._steeringMessages.has(conversationId)) {
+			if (this.gates.hasPendingSteeringMessage(conversationId)) {
 				console.log('[AgenticStore] Steering message detected after turn, exiting agentic flow');
 				await onAssistantTurnComplete?.(
 					turnContent,
@@ -847,7 +714,7 @@ class AgenticStore {
 				}
 
 				// Check for pending steering message - skip remaining tool calls
-				if (this._steeringMessages.has(conversationId)) {
+				if (this.gates.hasPendingSteeringMessage(conversationId)) {
 					console.log(
 						`[AgenticStore] Steering message detected, skipping ${normalizedCalls.length - i} remaining tool call(s)`
 					);
@@ -872,7 +739,7 @@ class AgenticStore {
 				const toolName = toolCall.function.name;
 				const serverLabel = toolsStore.getToolServerLabel(toolName);
 				// Ask for permission before executing the tool
-				const permission = await this.requestPermission(
+				const permission = await this.gates.requestPermission(
 					conversationId,
 					toolName,
 					serverLabel,
@@ -959,8 +826,8 @@ class AgenticStore {
 								executionResult = await ReadMediaService.executeTool(
 									args,
 									{
-										audio: modelsStore.modelSupportsAudio(effectiveModel),
-										vision: modelsStore.modelSupportsVision(effectiveModel)
+										audio: modelsStore.props.modelSupportsAudio(effectiveModel),
+										vision: modelsStore.props.modelSupportsVision(effectiveModel)
 									},
 									signal,
 									conversationsStore.activeConversation?.cwd
@@ -1058,7 +925,7 @@ class AgenticStore {
 
 				for (const attachment of attachments) {
 					if (attachment.type === AttachmentType.AUDIO) {
-						if (modelsStore.modelSupportsAudio(effectiveModel)) {
+						if (modelsStore.props.modelSupportsAudio(effectiveModel)) {
 							contentParts.push({
 								input_audio: {
 									data: (attachment as DatabaseMessageExtraAudioFile).base64Data,
@@ -1070,7 +937,7 @@ class AgenticStore {
 							});
 						}
 					} else if (attachment.type === AttachmentType.IMAGE) {
-						if (modelsStore.modelSupportsVision(effectiveModel)) {
+						if (modelsStore.props.modelSupportsVision(effectiveModel)) {
 							contentParts.push({
 								image_url: {
 									url: (attachment as DatabaseMessageExtraImageFile).base64Url
@@ -1101,7 +968,7 @@ class AgenticStore {
 			}
 
 			// If tools were interrupted by a steering message, exit now instead of starting another LLM turn
-			if (this._steeringMessages.has(conversationId)) {
+			if (this.gates.hasPendingSteeringMessage(conversationId)) {
 				console.log(
 					'[AgenticStore] Steering message detected after tool execution, exiting agentic flow'
 				);
@@ -1112,35 +979,6 @@ class AgenticStore {
 
 			turn++;
 		}
-	}
-
-	private buildFinalTimings(
-		capturedTimings: ChatMessageTimings | undefined,
-		agenticTimings: ChatMessageAgenticTimings
-	): ChatMessageTimings | undefined {
-		if (agenticTimings.toolCallsCount === 0) return capturedTimings;
-
-		return {
-			agentic: agenticTimings,
-			cache_n: capturedTimings?.cache_n,
-			predicted_ms: capturedTimings?.predicted_ms,
-			predicted_n: capturedTimings?.predicted_n,
-			prompt_ms: capturedTimings?.prompt_ms,
-			prompt_n: capturedTimings?.prompt_n
-		};
-	}
-
-	private normalizeToolCalls(toolCalls: ApiChatCompletionToolCall[]): AgenticToolCallList {
-		if (!toolCalls) return [];
-
-		return toolCalls.map((call, index) => ({
-			function: {
-				arguments: call?.function?.arguments ?? '',
-				name: call?.function?.name ?? ''
-			},
-			id: call?.id ?? `tool_${index}`,
-			type: (call?.type as ToolCallType.FUNCTION) ?? ToolCallType.FUNCTION
-		}));
 	}
 
 	private extractBase64Attachments(result: string): {
@@ -1198,12 +1036,33 @@ class AgenticStore {
 		return { attachments, cleanedResult: cleanedLines.join(NEWLINE) };
 	}
 
-	private buildAttachmentName(mimeType: string, index: number): string {
-		const extension = mimeType.startsWith(MimeTypePrefix.AUDIO)
-			? (AUDIO_MIME_TO_EXTENSION[mimeType] ?? DEFAULT_AUDIO_EXTENSION)
-			: (IMAGE_MIME_TO_EXTENSION[mimeType] ?? DEFAULT_IMAGE_EXTENSION);
+	private normalizeToolCalls(toolCalls: ApiChatCompletionToolCall[]): AgenticToolCallList {
+		if (!toolCalls) return [];
 
-		return `${MCP_ATTACHMENT_NAME_PREFIX}-${Date.now()}-${index}.${extension}`;
+		return toolCalls.map((call, index) => ({
+			function: {
+				arguments: call?.function?.arguments ?? '',
+				name: call?.function?.name ?? ''
+			},
+			id: call?.id ?? `tool_${index}`,
+			type: (call?.type as ToolCallType.FUNCTION) ?? ToolCallType.FUNCTION
+		}));
+	}
+
+	private parseToolArguments(args: string | Record<string, unknown>): Record<string, unknown> {
+		if (typeof args === 'object') return args;
+
+		const trimmed = args.trim();
+
+		if (trimmed === '') return {};
+
+		return JSON.parse(trimmed) as Record<string, unknown>;
+	}
+
+	private updateSession(conversationId: string, update: Partial<AgenticSession>): void {
+		const session = this.getSession(conversationId);
+
+		this.sessions.set(conversationId, { ...session, ...update });
 	}
 }
 

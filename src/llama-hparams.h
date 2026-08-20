@@ -144,6 +144,10 @@ struct llama_hparams {
 
     std::array<int, 4> rope_sections;
 
+    // Per-layer RoPE enable flags (1 = use RoPE, 0 = NoPE)
+    // by default, all layers use RoPE (controlled by rope_finetuned)
+    std::array<uint32_t, LLAMA_MAX_LAYERS> rope_pattern;
+
     // Sliding Window Attention (SWA)
     llama_swa_type swa_type = LLAMA_SWA_TYPE_NONE;
     // the size of the sliding window (0 - no SWA)

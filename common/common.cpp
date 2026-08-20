@@ -1750,18 +1750,6 @@ struct ggml_threadpool_params ggml_threadpool_params_from_cpu_params(const commo
     return tpp;
 }
 
-namespace {
-
-bool can_share_threadpool(const ggml_threadpool_params & tpp1, const ggml_threadpool_params & tpp2) {
-    // n_threads does not matter -> we'll use what's larger
-    ggml_threadpool_params tpp_comparison = tpp1;
-    tpp_comparison.n_threads = tpp2.n_threads;
-
-    return ggml_threadpool_params_match(&tpp_comparison, &tpp2);
-}
-
-}  // namespace
-
 common_threadpools::~common_threadpools() {
     if (!free_fn) {
         return;
@@ -1790,9 +1778,9 @@ void common_threadpools::init(llama_context * ctx, const common_params & params)
     struct ggml_threadpool_params tpp =
             ggml_threadpool_params_from_cpu_params(params.cpuparams);
 
-    if (can_share_threadpool(tpp, tpp_batch)) {
-        tpp.n_threads = std::max(tpp.n_threads, tpp_batch.n_threads);
-    } else {
+    // each pool needs to match the respective n_threads exactly
+    // see: https://github.com/ggml-org/llama.cpp/pull/27138#issuecomment-5332307332
+    if (!ggml_threadpool_params_match(&tpp, &tpp_batch)) {
         threadpool_batch = ggml_threadpool_new_fn(&tpp_batch);
         if (!threadpool_batch) {
             COM_WRN("batch threadpool create failed : n_threads %d\n", tpp_batch.n_threads);

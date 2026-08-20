@@ -1,3 +1,12 @@
+/**
+ * toolsStore - Tool registry and enablement
+ *
+ * Owns the server tool listing (with working-directory resolution), built-in
+ * browser tools, MCP tools and per-tool enablement, exposed as a unified
+ * tool set for the LLM and the tools UI. Consumed by the agentic loop and
+ * the chat flows.
+ */
+
 import { browser } from '$app/environment';
 import {
 	buildBrowserInfoToolDefinition,
@@ -18,9 +27,9 @@ import {
 } from '$lib/enums';
 import { ToolsService } from '$lib/services/tools.service';
 // direct imports between stores, not via the barrel, to avoid circular deps
-import { mcpStore } from '$lib/stores/mcp.svelte';
-import { modelsStore } from '$lib/stores/models.svelte';
-import { settingsStore } from '$lib/stores/settings.svelte';
+import { mcpStore } from '$lib/stores/mcp/index.svelte';
+import { modelsStore } from '$lib/stores/models/index.svelte';
+import { settingsStore } from '$lib/stores/settings/index.svelte';
 import type { OpenAIToolDefinition, ToolEntry, ToolGroup } from '$lib/types';
 import { buildSandboxToolDefinition } from '$lib/utils';
 import { SvelteMap, SvelteSet } from 'svelte/reactivity';
@@ -28,273 +37,18 @@ import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 /** Stable selection identity for a tool, shared by the disabled set and the permission store */
 
 class ToolsStore {
-	private _serverTools = $state<OpenAIToolDefinition[]>([]);
-	private _loading = $state(false);
-	private _error = $state<string | null>(null);
 	private _disabledTools = $state(new SvelteSet<string>());
+	private _error = $state<string | null>(null);
+	private _loading = $state(false);
+	private _serverHome = $state<string | null | undefined>(undefined);
+	private _serverTools = $state<OpenAIToolDefinition[]>([]);
+	private _toolsEndpointUnreachable = $state(false);
 	// server tools that resolve their paths against the working directory,
 	// as declared by the server in its `/tools` listing
-	private _cwdAwareTools = $state(new SvelteSet<string>());
-	private _toolsEndpointUnreachable = $state(false);
-	private _serverHome = $state<string | null | undefined>(undefined);
+	private cwdAwareTools = $state(new SvelteSet<string>());
 
-	/**
-	 * Load persisted disabled tools and fetch the builtin tool list.
-	 * Called by initStores() after migrations have run.
-	 */
-	initialize(): void {
-		// browser-only init: skip on SSR to avoid localStorage/fetch side effects
-		if (!browser) return;
-
-		try {
-			const stored = localStorage.getItem(DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY);
-
-			if (stored) {
-				const parsed = JSON.parse(stored);
-
-				if (Array.isArray(parsed)) {
-					for (const key of parsed) {
-						if (typeof key === 'string') this._disabledTools.add(key);
-					}
-				}
-			}
-		} catch (err) {
-			console.error('[ToolsStore] Failed to load disabled tools from localStorage:', err);
-		}
-
-		this.fetchServerTools();
-	}
-
-	private persistDisabledTools(): void {
-		try {
-			localStorage.setItem(
-				DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY,
-				JSON.stringify([...this._disabledTools])
-			);
-		} catch {
-			// ignore storage errors
-		}
-	}
-
-	private toolKey(source: ToolSource, name: string, serverId?: string): string {
-		switch (source) {
-			case ToolSource.MCP:
-				return serverId ? `mcp-${serverId}:${name}` : `mcp:${name}`;
-			case ToolSource.CUSTOM:
-				return `custom:${name}`;
-			case ToolSource.BROWSER:
-				return `browser:${name}`;
-			default:
-				return `server:${name}`;
-		}
-	}
-
-	private inferTypeFromDefault(value: unknown): string | undefined {
-		if (typeof value === 'string') return 'string';
-
-		if (typeof value === 'boolean') return 'boolean';
-
-		if (typeof value === 'number') return Number.isInteger(value) ? 'integer' : 'number';
-
-		if (Array.isArray(value)) return 'array';
-
-		if (value !== null && typeof value === 'object') return 'object';
-
-		return undefined;
-	}
-
-	/**
-	 * Recursively normalize a JSON Schema object: infers `type` from `default`
-	 * for properties / items that omit it, and descends into nested `properties`
-	 * and `items`. Returns a new object -- does not mutate the input.
-	 */
-	private normalizeJsonSchema(schema: Record<string, unknown>): Record<string, unknown> {
-		if (!schema || typeof schema !== 'object') return schema;
-
-		const normalized: Record<string, unknown> = { ...schema };
-
-		if (normalized.properties && typeof normalized.properties === 'object') {
-			const props = normalized.properties as Record<string, Record<string, unknown>>;
-			const normalizedProps: Record<string, Record<string, unknown>> = {};
-
-			for (const [key, prop] of Object.entries(props)) {
-				if (!prop || typeof prop !== 'object') {
-					normalizedProps[key] = prop;
-
-					continue;
-				}
-
-				const normalizedProp: Record<string, unknown> = { ...prop };
-
-				if (!normalizedProp.type && normalizedProp.default !== undefined) {
-					const inferred = this.inferTypeFromDefault(normalizedProp.default);
-
-					if (inferred) normalizedProp.type = inferred;
-				}
-
-				if (normalizedProp.properties) {
-					Object.assign(
-						normalizedProp,
-						this.normalizeJsonSchema(normalizedProp as Record<string, unknown>)
-					);
-				}
-
-				if (normalizedProp.items && typeof normalizedProp.items === 'object') {
-					normalizedProp.items = this.normalizeJsonSchema(
-						normalizedProp.items as Record<string, unknown>
-					);
-				}
-
-				normalizedProps[key] = normalizedProp;
-			}
-			normalized.properties = normalizedProps;
-		}
-
-		return normalized;
-	}
-
-	private mcpDefinition(
-		name: string,
-		description: string | undefined,
-		schema?: Record<string, unknown>
-	): OpenAIToolDefinition {
-		return {
-			function: {
-				description,
-				name,
-				parameters: schema ?? { properties: {}, required: [], type: JsonSchemaType.OBJECT }
-			},
-			type: ToolCallType.FUNCTION
-		};
-	}
-
-	get serverTools(): OpenAIToolDefinition[] {
-		return this._serverTools;
-	}
-
-	get serverHome(): string | null {
-		return this._serverHome ?? null;
-	}
-
-	get mcpTools(): OpenAIToolDefinition[] {
-		return this.mcpEntries().map((e) => e.definition);
-	}
-
-	get browserTools(): OpenAIToolDefinition[] {
-		const tools: OpenAIToolDefinition[] = [buildGetDatetimeToolDefinition()];
-
-		if (settingsStore.config.jsSandboxEnabled) {
-			tools.push(buildSandboxToolDefinition(!!settingsStore.config.symbolicMathEnabled));
-		}
-
-		const readMedia = this.readMediaTool();
-
-		if (readMedia) tools.push(readMedia);
-
-		// provide browser's get_info tool if server doesn't provide one
-		if (!this.hasServerTool(BuiltInTool.SERVER_GET_INFO)) {
-			tools.push(buildBrowserInfoToolDefinition());
-		}
-
-		return tools;
-	}
-
-	private hasServerTool(name: BuiltInTool): boolean {
-		return this._serverTools.some((def) => def.function.name === name);
-	}
-
-	/**
-	 * `read_media` runs in the browser on top of the server's `read_file`, so it
-	 * exists only when that tool is served and the active model can perceive the
-	 * bytes. The server cannot make this call - it does not know which model the
-	 * conversation uses.
-	 */
-	private readMediaTool(): OpenAIToolDefinition | null {
-		if (!this.hasServerTool(BuiltInTool.SERVER_READ_FILE)) return null;
-
-		const model = modelsStore.selectedModelName ?? modelsStore.models[0]?.model ?? '';
-
-		if (!model) return null;
-
-		const vision = modelsStore.modelSupportsVision(model);
-		const audio = modelsStore.modelSupportsAudio(model);
-
-		if (!vision && !audio) return null;
-
-		return buildReadMediaToolDefinition(vision, audio);
-	}
-
-	get customTools(): OpenAIToolDefinition[] {
-		const raw = settingsStore.config.customJson;
-
-		if (!raw || typeof raw !== 'string') return [];
-
-		try {
-			const parsed = JSON.parse(raw);
-
-			if (!Array.isArray(parsed)) return [];
-
-			return parsed.filter(
-				(t: unknown): t is OpenAIToolDefinition =>
-					typeof t === 'object' &&
-					t !== null &&
-					'type' in t &&
-					(t as OpenAIToolDefinition).type === 'function' &&
-					'function' in t &&
-					typeof (t as OpenAIToolDefinition).function?.name === 'string'
-			);
-		} catch {
-			return [];
-		}
-	}
-
-	/** Normalize MCP tools from live connections when available, fall back to health check data */
-	private mcpEntries(): {
-		serverId: string;
-		serverName: string;
-		definition: OpenAIToolDefinition;
-	}[] {
-		const out: { serverId: string; serverName: string; definition: OpenAIToolDefinition }[] = [];
-		const connections = mcpStore.getConnections();
-
-		if (connections.size > 0) {
-			for (const [serverId, connection] of connections) {
-				const serverName = mcpStore.getServerDisplayName(serverId);
-
-				for (const tool of connection.tools) {
-					const rawSchema = (tool.inputSchema as Record<string, unknown>) ?? {
-						properties: {},
-						required: [],
-						type: JsonSchemaType.OBJECT
-					};
-
-					out.push({
-						definition: {
-							function: {
-								description: tool.description,
-								name: tool.name,
-								parameters: this.normalizeJsonSchema(rawSchema)
-							},
-							type: ToolCallType.FUNCTION
-						},
-						serverId,
-						serverName
-					});
-				}
-			}
-		} else {
-			for (const { serverId, serverName, tools } of this.getMcpToolsFromHealthChecks()) {
-				for (const tool of tools) {
-					out.push({
-						definition: this.mcpDefinition(tool.name, tool.description),
-						serverId,
-						serverName
-					});
-				}
-			}
-		}
-
-		return out;
+	get allToolDefinitions(): OpenAIToolDefinition[] {
+		return this.allTools.map((t) => t.definition);
 	}
 
 	/** Canonical flat list of tool entries with source metadata and stable keys, deduped by key */
@@ -353,6 +107,97 @@ class ToolsStore {
 		return entries;
 	}
 
+	get browserTools(): OpenAIToolDefinition[] {
+		const tools: OpenAIToolDefinition[] = [buildGetDatetimeToolDefinition()];
+
+		if (settingsStore.config.jsSandboxEnabled) {
+			tools.push(buildSandboxToolDefinition(!!settingsStore.config.symbolicMathEnabled));
+		}
+
+		const readMedia = this.readMediaTool();
+
+		if (readMedia) tools.push(readMedia);
+
+		// provide browser's get_info tool if server doesn't provide one
+		if (!this.hasServerTool(BuiltInTool.SERVER_GET_INFO)) {
+			tools.push(buildBrowserInfoToolDefinition());
+		}
+
+		return tools;
+	}
+
+	get customTools(): OpenAIToolDefinition[] {
+		const raw = settingsStore.config.customJson;
+
+		if (!raw || typeof raw !== 'string') return [];
+
+		try {
+			const parsed = JSON.parse(raw);
+
+			if (!Array.isArray(parsed)) return [];
+
+			return parsed.filter(
+				(t: unknown): t is OpenAIToolDefinition =>
+					typeof t === 'object' &&
+					t !== null &&
+					'type' in t &&
+					(t as OpenAIToolDefinition).type === 'function' &&
+					'function' in t &&
+					typeof (t as OpenAIToolDefinition).function?.name === 'string'
+			);
+		} catch {
+			return [];
+		}
+	}
+
+	get disabledTools(): SvelteSet<string> {
+		return this._disabledTools;
+	}
+
+	get error(): string | null {
+		return this._error;
+	}
+
+	/**
+	 * Check if a working directory is worth setting: at least one server tool
+	 * that reads it is both served and left enabled by the user.
+	 */
+	get hasEnabledCwdTools(): boolean {
+		return this._serverTools.some((def) => {
+			const name = def.function.name;
+
+			return (
+				this.cwdAwareTools.has(name) &&
+				!this._disabledTools.has(this.toolKey(ToolSource.SERVER, name))
+			);
+		});
+	}
+
+	/** Check if there are any enabled tools available (server, MCP, or custom) */
+	get hasEnabledTools(): boolean {
+		return this.getEnabledToolsForLLM().length > 0;
+	}
+
+	get isToolsEndpointUnreachable(): boolean {
+		return this._toolsEndpointUnreachable;
+	}
+
+	get loading(): boolean {
+		return this._loading;
+	}
+
+	get mcpTools(): OpenAIToolDefinition[] {
+		return this.mcpEntries().map((e) => e.definition);
+	}
+
+	get serverHome(): string | null {
+		return this._serverHome ?? null;
+	}
+
+	get serverTools(): OpenAIToolDefinition[] {
+		return this._serverTools;
+	}
+
 	/** Tools grouped by category for tree display, derived from the canonical entries */
 	get toolGroups(): ToolGroup[] {
 		const groups: ToolGroup[] = [];
@@ -382,16 +227,47 @@ class ToolsStore {
 		return groups;
 	}
 
-	private groupLabel(entry: ToolEntry): string {
-		switch (entry.source) {
-			case ToolSource.MCP:
-				return entry.serverName ?? '';
-			case ToolSource.CUSTOM:
-				return TOOL_GROUP_LABELS[ToolSource.CUSTOM];
-			case ToolSource.BROWSER:
-				return TOOL_GROUP_LABELS[ToolSource.BROWSER];
-			default:
-				return TOOL_GROUP_LABELS[ToolSource.SERVER];
+	/** Enable all tools belonging to a specific MCP server */
+	enableAllToolsForServer(serverId: string): void {
+		const connection = mcpStore.getConnections().get(serverId);
+
+		if (!connection) return;
+
+		for (const tool of connection.tools) {
+			this._disabledTools.delete(this.toolKey(ToolSource.MCP, tool.name, serverId));
+		}
+		this.persistDisabledTools();
+	}
+
+	async fetchServerTools(): Promise<void> {
+		if (this._loading) return;
+
+		this._loading = true;
+		this._error = null;
+		this._toolsEndpointUnreachable = false;
+
+		try {
+			const toolInfos = await ToolsService.list();
+
+			this._serverTools = toolInfos.map((info) => info.definition);
+			this.cwdAwareTools = new SvelteSet(
+				toolInfos.filter((info) => info.uses_cwd).map((info) => info.tool)
+			);
+		} catch (err) {
+			const errorMessage = err instanceof Error ? err.message : String(err);
+
+			this._error = errorMessage;
+
+			// 403 from /tools means the server was started without --tools
+			// TODO: check status code instead of relying on message
+			if (errorMessage.includes('this feature is disabled')) {
+				this._toolsEndpointUnreachable = true;
+				console.info('[ToolsStore] Server tools are disabled on the server');
+			} else {
+				console.error('[ToolsStore] Failed to fetch server tools:', err);
+			}
+		} finally {
+			this._loading = false;
 		}
 	}
 
@@ -430,38 +306,92 @@ class ToolsStore {
 		return result;
 	}
 
-	get allToolDefinitions(): OpenAIToolDefinition[] {
-		return this.allTools.map((t) => t.definition);
+	/** Permission key for a tool name, identical to the selection key */
+	getPermissionKey(toolName: string): string | null {
+		return this.findEntryByName(toolName)?.key ?? null;
 	}
 
-	get loading(): boolean {
-		return this._loading;
+	/** Get the display label for the server that owns a given tool */
+	getToolServerLabel(toolName: string): string {
+		const entry = this.findEntryByName(toolName);
+
+		if (!entry) return '';
+
+		if (entry.serverName) return mcpStore.getServerDisplayName(entry.serverName);
+
+		if (entry.source === ToolSource.SERVER) return TOOL_SERVER_LABELS[ToolSource.SERVER];
+
+		if (entry.source === ToolSource.CUSTOM) return TOOL_SERVER_LABELS[ToolSource.CUSTOM];
+
+		if (entry.source === ToolSource.BROWSER) return TOOL_SERVER_LABELS[ToolSource.BROWSER];
+
+		return '';
 	}
 
-	get error(): string | null {
-		return this._error;
+	/** Determine the source of a tool by its name */
+	getToolSource(toolName: string): ToolSource | null {
+		return this.findEntryByName(toolName)?.source ?? null;
 	}
 
-	get isToolsEndpointUnreachable(): boolean {
-		return this._toolsEndpointUnreachable;
+	/**
+	 * Load persisted disabled tools and fetch the builtin tool list.
+	 * Called by initStores() after migrations have run.
+	 */
+	initialize(): void {
+		// browser-only init: skip on SSR to avoid localStorage/fetch side effects
+		if (!browser) return;
+
+		try {
+			const stored = localStorage.getItem(DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY);
+
+			if (stored) {
+				const parsed = JSON.parse(stored);
+
+				if (Array.isArray(parsed)) {
+					for (const key of parsed) {
+						if (typeof key === 'string') this._disabledTools.add(key);
+					}
+				}
+			}
+		} catch (err) {
+			console.error('[ToolsStore] Failed to load disabled tools from localStorage:', err);
+		}
+
+		this.fetchServerTools();
 	}
 
-	get disabledTools(): SvelteSet<string> {
-		return this._disabledTools;
+	isGroupFullyEnabled(group: ToolGroup): boolean {
+		return group.tools.length > 0 && group.tools.every((t) => this.isToolEnabled(t.key));
 	}
 
 	isToolEnabled(key: string): boolean {
 		return !this._disabledTools.has(key);
 	}
 
-	toggleTool(key: string): void {
-		if (this._disabledTools.has(key)) {
-			this._disabledTools.delete(key);
-		} else {
-			this._disabledTools.add(key);
+	/**
+	 * Absolute home directory on the server, resolved once per session via
+	 * file_glob_search's `base` field (the server expands `~`). Anchors the
+	 * directory picker's search scope and the `~` abbreviation of cwd
+	 * displays. Returns null when tools are unavailable.
+	 */
+	async resolveServerHome(): Promise<string | null> {
+		if (this._serverHome !== undefined) return this._serverHome;
+
+		try {
+			const res = await ToolsService.executeToolRaw(BuiltInTool.SERVER_FILE_GLOB_SEARCH, {
+				limit: 1,
+				max_depth: 1,
+				path: HOME_TILDE,
+				type: GlobSearchType.DIR
+			});
+
+			this._serverHome = typeof res.base === 'string' ? res.base : null;
+		} catch {
+			// searches still work via a literal `~`, only `~` abbreviation degrades
+			this._serverHome = null;
 		}
 
-		this.persistDisabledTools();
+		return this._serverHome;
 	}
 
 	setToolEnabled(key: string, enabled: boolean): void {
@@ -470,18 +400,6 @@ class ToolsStore {
 		} else {
 			this._disabledTools.add(key);
 		}
-	}
-
-	/** Enable all tools belonging to a specific MCP server */
-	enableAllToolsForServer(serverId: string): void {
-		const connection = mcpStore.getConnections().get(serverId);
-
-		if (!connection) return;
-
-		for (const tool of connection.tools) {
-			this._disabledTools.delete(this.toolKey(ToolSource.MCP, tool.name, serverId));
-		}
-		this.persistDisabledTools();
 	}
 
 	toggleGroup(group: ToolGroup): void {
@@ -495,8 +413,23 @@ class ToolsStore {
 		this.persistDisabledTools();
 	}
 
-	isGroupFullyEnabled(group: ToolGroup): boolean {
-		return group.tools.length > 0 && group.tools.every((t) => this.isToolEnabled(t.key));
+	toggleTool(key: string): void {
+		if (this._disabledTools.has(key)) {
+			this._disabledTools.delete(key);
+		} else {
+			this._disabledTools.add(key);
+		}
+
+		this.persistDisabledTools();
+	}
+
+	/** First canonical entry matching a tool name, runtime tool calls resolve by name */
+	private findEntryByName(toolName: string): ToolEntry | null {
+		for (const entry of this.allTools) {
+			if (entry.definition.function.name === toolName) return entry;
+		}
+
+		return null;
 	}
 
 	/** Get MCP tools from health check data, used when live connections aren't established yet */
@@ -524,118 +457,194 @@ class ToolsStore {
 		return result;
 	}
 
-	/** First canonical entry matching a tool name, runtime tool calls resolve by name */
-	private findEntryByName(toolName: string): ToolEntry | null {
-		for (const entry of this.allTools) {
-			if (entry.definition.function.name === toolName) return entry;
+	private groupLabel(entry: ToolEntry): string {
+		switch (entry.source) {
+			case ToolSource.MCP:
+				return entry.serverName ?? '';
+			case ToolSource.CUSTOM:
+				return TOOL_GROUP_LABELS[ToolSource.CUSTOM];
+			case ToolSource.BROWSER:
+				return TOOL_GROUP_LABELS[ToolSource.BROWSER];
+			default:
+				return TOOL_GROUP_LABELS[ToolSource.SERVER];
 		}
-
-		return null;
 	}
 
-	/** Determine the source of a tool by its name */
-	getToolSource(toolName: string): ToolSource | null {
-		return this.findEntryByName(toolName)?.source ?? null;
+	private hasServerTool(name: BuiltInTool): boolean {
+		return this._serverTools.some((def) => def.function.name === name);
 	}
 
-	/** Get the display label for the server that owns a given tool */
-	getToolServerLabel(toolName: string): string {
-		const entry = this.findEntryByName(toolName);
+	private inferTypeFromDefault(value: unknown): string | undefined {
+		if (typeof value === 'string') return 'string';
 
-		if (!entry) return '';
+		if (typeof value === 'boolean') return 'boolean';
 
-		if (entry.serverName) return mcpStore.getServerDisplayName(entry.serverName);
+		if (typeof value === 'number') return Number.isInteger(value) ? 'integer' : 'number';
 
-		if (entry.source === ToolSource.SERVER) return TOOL_SERVER_LABELS[ToolSource.SERVER];
+		if (Array.isArray(value)) return 'array';
 
-		if (entry.source === ToolSource.CUSTOM) return TOOL_SERVER_LABELS[ToolSource.CUSTOM];
+		if (value !== null && typeof value === 'object') return 'object';
 
-		if (entry.source === ToolSource.BROWSER) return TOOL_SERVER_LABELS[ToolSource.BROWSER];
-
-		return '';
+		return undefined;
 	}
 
-	/** Permission key for a tool name, identical to the selection key */
-	getPermissionKey(toolName: string): string | null {
-		return this.findEntryByName(toolName)?.key ?? null;
+	private mcpDefinition(
+		name: string,
+		description: string | undefined,
+		schema?: Record<string, unknown>
+	): OpenAIToolDefinition {
+		return {
+			function: {
+				description,
+				name,
+				parameters: schema ?? { properties: {}, required: [], type: JsonSchemaType.OBJECT }
+			},
+			type: ToolCallType.FUNCTION
+		};
 	}
 
-	/** Check if there are any enabled tools available (server, MCP, or custom) */
-	get hasEnabledTools(): boolean {
-		return this.getEnabledToolsForLLM().length > 0;
-	}
+	/** Normalize MCP tools from live connections when available, fall back to health check data */
+	private mcpEntries(): {
+		serverId: string;
+		serverName: string;
+		definition: OpenAIToolDefinition;
+	}[] {
+		const out: { serverId: string; serverName: string; definition: OpenAIToolDefinition }[] = [];
+		const connections = mcpStore.getConnections();
 
-	/**
-	 * Check if a working directory is worth setting: at least one server tool
-	 * that reads it is both served and left enabled by the user.
-	 */
-	get hasEnabledCwdTools(): boolean {
-		return this._serverTools.some((def) => {
-			const name = def.function.name;
+		if (connections.size > 0) {
+			for (const [serverId, connection] of connections) {
+				const serverName = mcpStore.getServerDisplayName(serverId);
 
-			return (
-				this._cwdAwareTools.has(name) &&
-				!this._disabledTools.has(this.toolKey(ToolSource.SERVER, name))
-			);
-		});
-	}
+				for (const tool of connection.tools) {
+					const rawSchema = (tool.inputSchema as Record<string, unknown>) ?? {
+						properties: {},
+						required: [],
+						type: JsonSchemaType.OBJECT
+					};
 
-	async fetchServerTools(): Promise<void> {
-		if (this._loading) return;
-
-		this._loading = true;
-		this._error = null;
-		this._toolsEndpointUnreachable = false;
-
-		try {
-			const toolInfos = await ToolsService.list();
-
-			this._serverTools = toolInfos.map((info) => info.definition);
-			this._cwdAwareTools = new SvelteSet(
-				toolInfos.filter((info) => info.uses_cwd).map((info) => info.tool)
-			);
-		} catch (err) {
-			const errorMessage = err instanceof Error ? err.message : String(err);
-
-			this._error = errorMessage;
-
-			// 403 from /tools means the server was started without --tools
-			// TODO: check status code instead of relying on message
-			if (errorMessage.includes('this feature is disabled')) {
-				this._toolsEndpointUnreachable = true;
-				console.info('[ToolsStore] Server tools are disabled on the server');
-			} else {
-				console.error('[ToolsStore] Failed to fetch server tools:', err);
+					out.push({
+						definition: {
+							function: {
+								description: tool.description,
+								name: tool.name,
+								parameters: this.normalizeJsonSchema(rawSchema)
+							},
+							type: ToolCallType.FUNCTION
+						},
+						serverId,
+						serverName
+					});
+				}
 			}
-		} finally {
-			this._loading = false;
+		} else {
+			for (const { serverId, serverName, tools } of this.getMcpToolsFromHealthChecks()) {
+				for (const tool of tools) {
+					out.push({
+						definition: this.mcpDefinition(tool.name, tool.description),
+						serverId,
+						serverName
+					});
+				}
+			}
+		}
+
+		return out;
+	}
+
+	/**
+	 * Recursively normalize a JSON Schema object: infers `type` from `default`
+	 * for properties / items that omit it, and descends into nested `properties`
+	 * and `items`. Returns a new object -- does not mutate the input.
+	 */
+	private normalizeJsonSchema(schema: Record<string, unknown>): Record<string, unknown> {
+		if (!schema || typeof schema !== 'object') return schema;
+
+		const normalized: Record<string, unknown> = { ...schema };
+
+		if (normalized.properties && typeof normalized.properties === 'object') {
+			const props = normalized.properties as Record<string, Record<string, unknown>>;
+			const normalizedProps: Record<string, Record<string, unknown>> = {};
+
+			for (const [key, prop] of Object.entries(props)) {
+				if (!prop || typeof prop !== 'object') {
+					normalizedProps[key] = prop;
+
+					continue;
+				}
+
+				const normalizedProp: Record<string, unknown> = { ...prop };
+
+				if (!normalizedProp.type && normalizedProp.default !== undefined) {
+					const inferred = this.inferTypeFromDefault(normalizedProp.default);
+
+					if (inferred) normalizedProp.type = inferred;
+				}
+
+				if (normalizedProp.properties) {
+					Object.assign(
+						normalizedProp,
+						this.normalizeJsonSchema(normalizedProp as Record<string, unknown>)
+					);
+				}
+
+				if (normalizedProp.items && typeof normalizedProp.items === 'object') {
+					normalizedProp.items = this.normalizeJsonSchema(
+						normalizedProp.items as Record<string, unknown>
+					);
+				}
+
+				normalizedProps[key] = normalizedProp;
+			}
+			normalized.properties = normalizedProps;
+		}
+
+		return normalized;
+	}
+
+	private persistDisabledTools(): void {
+		try {
+			localStorage.setItem(
+				DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY,
+				JSON.stringify([...this._disabledTools])
+			);
+		} catch {
+			// ignore storage errors
 		}
 	}
 
 	/**
-	 * Absolute home directory on the server, resolved once per session via
-	 * file_glob_search's `base` field (the server expands `~`). Anchors the
-	 * directory picker's search scope and the `~` abbreviation of cwd
-	 * displays. Returns null when tools are unavailable.
+	 * `read_media` runs in the browser on top of the server's `read_file`, so it
+	 * exists only when that tool is served and the active model can perceive the
+	 * bytes. The server cannot make this call - it does not know which model the
+	 * conversation uses.
 	 */
-	async resolveServerHome(): Promise<string | null> {
-		if (this._serverHome !== undefined) return this._serverHome;
+	private readMediaTool(): OpenAIToolDefinition | null {
+		if (!this.hasServerTool(BuiltInTool.SERVER_READ_FILE)) return null;
 
-		try {
-			const res = await ToolsService.executeToolRaw(BuiltInTool.SERVER_FILE_GLOB_SEARCH, {
-				limit: 1,
-				max_depth: 1,
-				path: HOME_TILDE,
-				type: GlobSearchType.DIR
-			});
+		const model = modelsStore.selectedModelName ?? modelsStore.models[0]?.model ?? '';
 
-			this._serverHome = typeof res.base === 'string' ? res.base : null;
-		} catch {
-			// searches still work via a literal `~`, only `~` abbreviation degrades
-			this._serverHome = null;
+		if (!model) return null;
+
+		const vision = modelsStore.props.modelSupportsVision(model);
+		const audio = modelsStore.props.modelSupportsAudio(model);
+
+		if (!vision && !audio) return null;
+
+		return buildReadMediaToolDefinition(vision, audio);
+	}
+
+	private toolKey(source: ToolSource, name: string, serverId?: string): string {
+		switch (source) {
+			case ToolSource.MCP:
+				return serverId ? `mcp-${serverId}:${name}` : `mcp:${name}`;
+			case ToolSource.CUSTOM:
+				return `custom:${name}`;
+			case ToolSource.BROWSER:
+				return `browser:${name}`;
+			default:
+				return `server:${name}`;
 		}
-
-		return this._serverHome;
 	}
 }
 
