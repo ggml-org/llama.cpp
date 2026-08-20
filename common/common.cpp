@@ -2265,9 +2265,9 @@ void common_prompt_checkpoint::update_tgt(
 
     const size_t ckpt_size = llama_state_seq_get_size_ext(ctx, seq_id, flags);
 
-    data_tgt.resize(ckpt_size);
+    uint8_t * data = data_tgt.reset(ckpt_size);
 
-    const size_t n = llama_state_seq_get_data_ext(ctx, data_tgt.data(), ckpt_size, seq_id, flags);
+    const size_t n = llama_state_seq_get_data_ext(ctx, data, ckpt_size, seq_id, flags);
     if (n != ckpt_size) {
         GGML_ABORT("checkpoint size mismatch: expected %zu, got %zu\n", ckpt_size, n);
     }
@@ -2283,9 +2283,9 @@ void common_prompt_checkpoint::update_dft(
 
     const size_t ckpt_size = llama_state_seq_get_size_ext(ctx, seq_id, flags);
 
-    data_dft.resize(ckpt_size);
+    uint8_t * data = data_dft.reset(ckpt_size);
 
-    const size_t n = llama_state_seq_get_data_ext(ctx, data_dft.data(), ckpt_size, seq_id, flags);
+    const size_t n = llama_state_seq_get_data_ext(ctx, data, ckpt_size, seq_id, flags);
     if (n != ckpt_size) {
         GGML_ABORT("checkpoint size mismatch: expected %zu, got %zu\n", ckpt_size, n);
     }
