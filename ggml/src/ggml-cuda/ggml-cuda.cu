@@ -2598,14 +2598,12 @@ static ggml_cuda_graph::node_properties ggml_cuda_graph_node_props(const ggml_te
 }
 
 static bool ggml_cuda_graph_verify_uid() {
-    static const bool verify = []() {
 #ifndef NDEBUG
-        return true;
+    return true;
 #else
-        return getenv("GGML_CUDA_GRAPH_VERIFY_UID") != nullptr;
-#endif
-    }();
+    static const bool verify = getenv("GGML_CUDA_GRAPH_VERIFY_UID") != nullptr;
     return verify;
+#endif
 }
 
 // see docs/development/backend-scheduler.md
