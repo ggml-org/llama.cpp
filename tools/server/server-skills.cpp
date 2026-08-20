@@ -8,7 +8,6 @@
 #include <cctype>
 #include <cstdint>
 #include <ctime>
-#include <cstdlib>
 #include <fstream>
 #include <iomanip>
 #include <list>
@@ -119,15 +118,10 @@ enum class read_result {
     failed,
 };
 
-static fs::path path_from_utf8(const std::string & value) {
-    return fs::u8path(value);
-}
-
-static std::string path_to_utf8(const fs::path & value) {
-    return value.generic_u8string();
-}
-
-static bool is_valid_utf8(const std::string & value) {
+// Stricter than the shared server-common is_valid_utf8(): also rejects
+// overlong encodings, surrogate codepoints, and codepoints above 0x10FFFF.
+// Used for security-sensitive skill name/path validation.
+static bool is_strict_valid_utf8(const std::string & value) {
     for (size_t i = 0; i < value.size();) {
         const unsigned char lead = static_cast<unsigned char>(value[i]);
         if (lead <= 0x7f) {
@@ -186,7 +180,7 @@ static read_result read_utf8_file(const fs::path & path, size_t max_bytes, std::
     if (!stream.eof() && stream.fail()) {
         return read_result::failed;
     }
-    if (!is_valid_utf8(out)) {
+    if (!is_strict_valid_utf8(out)) {
         return read_result::invalid_utf8;
     }
     return read_result::ok;
@@ -445,7 +439,7 @@ static std::string stable_id(const fs::path & origin, const std::string & scope,
 }
 
 static bool is_safe_name(const std::string & name) {
-    return !name.empty() && is_valid_utf8(name) && name.find('/') == std::string::npos && name.find('\\') == std::string::npos &&
+    return !name.empty() && is_strict_valid_utf8(name) && name.find('/') == std::string::npos && name.find('\\') == std::string::npos &&
            name != "." && name != "..";
 }
 
@@ -533,7 +527,7 @@ static std::string observable_file_state(const fs::path & file) {
 }
 
 static bool safe_relative_path(const std::string & source, std::string & normalized) {
-    if (source.empty() || source.find('\\') != std::string::npos || !is_valid_utf8(source)) {
+    if (source.empty() || source.find('\\') != std::string::npos || !is_strict_valid_utf8(source)) {
         return false;
     }
     const fs::path path = path_from_utf8(source);
@@ -630,6 +624,8 @@ static server_http_res_ptr error_response(int status, const std::string & messag
     return response;
 }
 
+// TODO: damerau_levenshtein allocates O(rows*columns) non-contiguous memory per candidate, run up to 256 times per 404
+// refactor to skip the DP entirely when abs(len(a) - len(b)) already guarantees a normalized score worse than the current 3rd-best in best 
 static int damerau_levenshtein(const std::string & left, const std::string & right) {
     const int rows = static_cast<int>(left.size());
     const int columns = static_cast<int>(right.size());
@@ -810,6 +806,32 @@ static void add_root_skills(const fs::path & candidate_root, const fs::path & ba
     }
 }
 
+// Root-scanning sequence shared by GET /skills and POST /skills/read: the
+// project .agents root plus each configured provider, then the same for the global HOME
+// roots. `cache_entry`/`count_tokens` are null for POST, which always reads
+// fresh rather than participating in the catalog cache.
+static void discover_catalog(const fs::path & cwd, const fs::path & process_home, const server_skills_config & config,
+                             skill_catalog & catalog, catalog_cache_entry * cache_entry, const token_count_callback * count_tokens) {
+    if (config.trust_project_skills) {
+        add_root_skills(cwd / ".agents" / "skills", cwd, "project", "agents", catalog, cache_entry, count_tokens);
+        for (const std::string & provider : config.providers) {
+            if (provider == "agents") {
+                continue; // built-in agents root already scanned above
+            }
+            add_root_skills(cwd / ("." + provider) / "skills", cwd, "project", provider, catalog, cache_entry, count_tokens);
+        }
+    }
+    if (!process_home.empty()) {
+        add_root_skills(process_home / ".agents" / "skills", process_home, "global", "agents", catalog, cache_entry, count_tokens);
+        for (const std::string & provider : config.providers) {
+            if (provider == "agents") {
+                continue; // built-in agents root already scanned above
+            }
+            add_root_skills(process_home / ("." + provider) / "skills", process_home, "global", provider, catalog, cache_entry, count_tokens);
+        }
+    }
+}
+
 } // namespace
 
 // Path-free LRU cache keyed by canonical CWD plus tokenizer generation
@@ -855,22 +877,12 @@ server_skills::server_skills(server_skills_config config, token_count_callback c
       count_tokens(std::move(count_tokens)),
       process_cwd(std::filesystem::canonical(std::filesystem::current_path())),
       catalog_cache(std::make_unique<skill_catalog_cache>()) {
-    // Wide env lookup on Windows, narrow on POSIX (see server-tools home_dir()).
-    std::string home;
-#if defined(_WIN32)
-    const wchar_t * wide_home = _wgetenv(L"HOME");
-    if (wide_home == nullptr || *wide_home == L'\0') {
-        wide_home = _wgetenv(L"USERPROFILE");
-    }
-    if (wide_home != nullptr && *wide_home != L'\0') {
-        home = path_to_utf8(fs::path(wide_home));
-    }
-#else
-    const char * posix_home = std::getenv("HOME");
-    if (posix_home != nullptr && *posix_home != '\0') {
-        home = posix_home;
-    }
-#endif
+    // Resolve HOME/USERPROFILE via the shared, uncached raw_home_env(): each
+    // server_skills construction must observe the current environment (the
+    // memoized home_dir() would pin the first HOME seen by the process), then
+    // canonicalize here since the trusted global skills root needs an
+    // existing, absolute directory.
+    const std::string home = raw_home_env();
     if (!home.empty()) {
         std::error_code ec;
         const fs::path value = fs::canonical(path_from_utf8(home), ec);
@@ -917,24 +929,7 @@ server_skills::server_skills(server_skills_config config, token_count_callback c
 
             skill_catalog catalog;
             const token_count_callback * count_tokens = this->count_tokens ? &this->count_tokens : nullptr;
-            if (this->config.trust_project_skills) {
-                add_root_skills(cwd / ".agents" / "skills", cwd, "project", "agents", catalog, cache, count_tokens);
-                for (const std::string & provider : this->config.providers) {
-                    if (provider == "agents") {
-                        continue; // built-in agents root already scanned above
-                    }
-                    add_root_skills(cwd / ("." + provider) / "skills", cwd, "project", provider, catalog, cache, count_tokens);
-                }
-            }
-            if (!process_home.empty()) {
-                add_root_skills(process_home / ".agents" / "skills", process_home, "global", "agents", catalog, cache, count_tokens);
-                for (const std::string & provider : this->config.providers) {
-                    if (provider == "agents") {
-                        continue; // built-in agents root already scanned above
-                    }
-                    add_root_skills(process_home / ("." + provider) / "skills", process_home, "global", provider, catalog, cache, count_tokens);
-                }
-            }
+            discover_catalog(cwd, process_home, this->config, catalog, cache, count_tokens);
             // write the working entry back under the cache lock (replace on a
             // hit, insert with LRU eviction on a miss)
             this->catalog_cache->store(std::move(entry));
@@ -1015,24 +1010,7 @@ server_skills::server_skills(server_skills_config config, token_count_callback c
             }
 
             skill_catalog catalog;
-            if (this->config.trust_project_skills) {
-                add_root_skills(cwd / ".agents" / "skills", cwd, "project", "agents", catalog, nullptr, nullptr);
-                for (const std::string & provider : this->config.providers) {
-                    if (provider == "agents") {
-                        continue; // built-in agents root already scanned above
-                    }
-                    add_root_skills(cwd / ("." + provider) / "skills", cwd, "project", provider, catalog, nullptr, nullptr);
-                }
-            }
-            if (!process_home.empty()) {
-                add_root_skills(process_home / ".agents" / "skills", process_home, "global", "agents", catalog, nullptr, nullptr);
-                for (const std::string & provider : this->config.providers) {
-                    if (provider == "agents") {
-                        continue; // built-in agents root already scanned above
-                    }
-                    add_root_skills(process_home / ("." + provider) / "skills", process_home, "global", provider, catalog, nullptr, nullptr);
-                }
-            }
+            discover_catalog(cwd, process_home, this->config, catalog, nullptr, nullptr);
             const auto found = std::find_if(catalog.skills.begin(), catalog.skills.end(), [&](const skill_entry & skill) {
                 return skill.name == wanted_name;
             });
