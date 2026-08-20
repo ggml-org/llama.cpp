@@ -116,6 +116,9 @@ static void ggml_metal_compile_options_set_lang(MTLCompileOptions * options, boo
     options.languageVersion = (MTLLanguageVersion) MTLLanguageVersion4_0_GGML;
 }
 
+// note: defined below, after struct ggml_metal_device
+static void ggml_metal_device_disable_tensor(ggml_metal_device_t dev);
+
 ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
     id<MTLLibrary> library = nil;
     id<MTLDevice> device = ggml_metal_device_get_obj(dev);
@@ -191,6 +194,13 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
             if (error) {
                 GGML_LOG_ERROR("%s: error: %s\n", __func__, [[error description] UTF8String]);
                 return nil;
+            }
+
+            // the pre-compiled library is built without GGML_METAL_HAS_TENSOR
+            if (ggml_metal_device_get_props(dev)->has_tensor) {
+                GGML_LOG_INFO("%s: pre-compiled library has no tensor API kernels - disabling the tensor API\n", __func__);
+
+                ggml_metal_device_disable_tensor(dev);
             }
         } else {
             GGML_LOG_INFO("%s: default.metallib not found, loading from source\n", __func__);
@@ -1505,6 +1515,10 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
 
 const struct ggml_metal_device_props * ggml_metal_device_get_props(ggml_metal_device_t dev) {
     return &dev->props;
+}
+
+static void ggml_metal_device_disable_tensor(ggml_metal_device_t dev) {
+    dev->props.has_tensor = false;
 }
 
 //
