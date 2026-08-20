@@ -111,6 +111,38 @@ export default ts.config(
 				{ blankLine: 'always', next: ['return', 'throw', 'break', 'continue'], prev: '*' }
 			],
 
+			// Class member order: public fields -> private fields -> constructor -> getters
+			// -> setters -> public methods -> private methods, alphabetical within each.
+			// Svelte $derived fields must stay in dependency order (forward references are
+			// rejected), so the two stores that rely on that are exempted below.
+			'perfectionist/sort-classes': [
+				'error',
+				{
+					customGroups: [
+						{ groupName: 'public-field', modifiers: ['public'], selector: 'property' },
+						{ groupName: 'private-field', modifiers: ['private'], selector: 'property' },
+						{ groupName: 'get-method', selector: 'get-method' },
+						{ groupName: 'set-method', selector: 'set-method' },
+						{ groupName: 'public-method', modifiers: ['public'], selector: 'method' },
+						{ groupName: 'private-method', modifiers: ['private'], selector: 'method' }
+					],
+					groups: [
+						'public-field',
+						'private-field',
+						'constructor',
+						'get-method',
+						'set-method',
+						'public-method',
+						'private-method',
+						'unknown'
+					],
+					type: 'natural',
+					// Keep members in dependency order (Svelte rejects forward references in
+					// $derived fields), while still sorting the rest alphabetically.
+					useExperimentalDependencyDetection: true
+				}
+			],
+
 			// Alphabetical order for enum members
 			'perfectionist/sort-enums': ['error', { type: 'natural' }],
 
