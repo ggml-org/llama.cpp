@@ -1479,8 +1479,8 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext(
         bool    has_kvpad,
         int32_t nsg,
         bool    use_kv_f16,
-        int32_t ns10, // actual row width of K in elements, as seen by the kernel
-        int32_t ns20) { // actual row width of V in elements, as seen by the kernel
+        int32_t ns10,
+        int32_t ns20) {
     assert(op->op == GGML_OP_FLASH_ATTN_EXT);
 
     char base[256];
@@ -1547,8 +1547,8 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext_v
         int32_t nsg,
         int32_t nwg,
         bool    use_kv_f16,
-        int32_t ns10, // actual row width of K in elements, as seen by the kernel
-        int32_t ns20) { // actual row width of V in elements, as seen by the kernel
+        int32_t ns10,
+        int32_t ns20) {
     assert(op->op == GGML_OP_FLASH_ATTN_EXT);
 
     char base[256];

@@ -196,8 +196,8 @@ struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_att
         bool    has_kvpad,
         int32_t nsg,
         bool    use_kv_f16,
-        int32_t ns10, // actual row width of K in elements, as seen by the kernel
-        int32_t ns20); // actual row width of V in elements, as seen by the kernel
+        int32_t ns10,
+        int32_t ns20);
 
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext_vec(
         ggml_metal_library_t lib,
@@ -210,8 +210,8 @@ struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_att
         int32_t nsg,
         int32_t nwg,
         bool    use_kv_f16,
-        int32_t ns10, // actual row width of K in elements, as seen by the kernel
-        int32_t ns20); // actual row width of V in elements, as seen by the kernel
+        int32_t ns10,
+        int32_t ns20);
 
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext_vec_reduce(
         ggml_metal_library_t lib,

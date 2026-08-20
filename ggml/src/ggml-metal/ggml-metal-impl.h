@@ -352,7 +352,7 @@ typedef struct {
     uint64_t nb1;
     uint64_t nb2;
     uint64_t nb3;
-    int32_t  nblocks; // number of blocks in the tensor
+    int32_t  nblocks;
 } ggml_metal_kargs_flash_attn_ext_kv_f16;
 
 typedef struct {
