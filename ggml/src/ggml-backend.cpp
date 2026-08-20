@@ -1995,7 +1995,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
 
     ggml_san_split(-1, NULL, 0);
 
-    sched->needs_rotate = true;
+    sched->needs_rotate = sched->n_copies > 1;
 
     return GGML_STATUS_SUCCESS;
 }
@@ -2265,18 +2265,11 @@ static void ggml_backend_sched_rotate_inputs(ggml_backend_sched_t sched) {
 void ggml_backend_sched_prepare_inputs(ggml_backend_sched_t sched) {
     GGML_ASSERT(sched);
 
-    if (!sched->needs_rotate) {
+    if (sched->n_copies <= 1 || !sched->needs_rotate) {
         return;
     }
 
-    if (sched->n_copies > 1) {
-        ggml_backend_sched_rotate_inputs(sched);
-    } else {
-        for (int b = 0; b < sched->n_backends; b++) {
-            ggml_backend_synchronize(sched->backends[b]);
-        }
-    }
-
+    ggml_backend_sched_rotate_inputs(sched);
     sched->needs_rotate = false;
 }
 
