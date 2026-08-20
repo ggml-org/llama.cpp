@@ -12,6 +12,49 @@ import { fileURLToPath } from 'node:url';
 import ts from 'typescript-eslint';
 
 const gitignorePath = fileURLToPath(new URL('./.gitignore', import.meta.url));
+// Require a blank line between consecutive class accessors (get/set). The core
+// `padding-line-between-statements` rule only handles statements, not class
+// members, so this is enforced with a small custom rule.
+const blankLineBetweenAccessors = {
+	create(context) {
+		return {
+			MethodDefinition(node) {
+				if (node.kind !== 'get' && node.kind !== 'set') return;
+
+				const body = node.parent;
+
+				if (!body || body.type !== 'ClassBody') return;
+
+				const index = body.body.indexOf(node);
+
+				if (index <= 0) return;
+
+				const prev = body.body[index - 1];
+
+				if (prev.type !== 'MethodDefinition' || (prev.kind !== 'get' && prev.kind !== 'set'))
+					return;
+
+				if (node.loc.start.line - prev.loc.end.line <= 1) {
+					context.report({
+						fix(fixer) {
+							// Insert after the previous accessor's closing brace so the blank
+							// line keeps the current accessor's indentation.
+							return fixer.insertTextAfter(prev, '\n');
+						},
+						message: 'Expected a blank line between class accessors (get/set).',
+						node
+					});
+				}
+			}
+		};
+	},
+	meta: {
+		docs: { description: 'Require a blank line between consecutive class accessors (get/set).' },
+		fixable: 'whitespace',
+		schema: [],
+		type: 'layout'
+	}
+};
 
 export default ts.config(
 	includeIgnoreFile(gitignorePath),
@@ -22,7 +65,11 @@ export default ts.config(
 	...svelte.configs.prettier,
 	{
 		languageOptions: { globals: { ...globals.browser, ...globals.node } },
-		plugins: { perfectionist, 'simple-import-sort': simpleImportSort },
+		plugins: {
+			local: { rules: { 'blank-line-between-accessors': blankLineBetweenAccessors } },
+			perfectionist,
+			'simple-import-sort': simpleImportSort
+		},
 		rules: {
 			// Snippet bodies often ignore one or more of the parent's params
 			// (e.g. `{#snippet children(_meta, ctx)}` when only ctx is read).
@@ -30,8 +77,11 @@ export default ts.config(
 				'error',
 				{ argsIgnorePattern: '^_', varsIgnorePattern: '^_' }
 			],
+
 			// Enforce empty line at end of file
 			'eol-last': 'error',
+			// Enforce a blank line between consecutive get/set accessors
+			'local/blank-line-between-accessors': 'error',
 			// typescript-eslint strongly recommend that you do not use the no-undef lint rule on TypeScript projects.
 			// see: https://typescript-eslint.io/troubleshooting/faqs/eslint/#i-get-errors-from-the-no-undef-rule-about-global-variables-not-being-defined-even-though-there-are-no-typescript-errors
 			'no-undef': 'off',
