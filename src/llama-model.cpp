@@ -706,7 +706,9 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
                 }
                 if (std::regex_match(tensor_name, pattern_attn_out_b_weight)) {
                     GGML_ASSERT(segments.size() == 1);
-                    return {std::lcm<int64_t>(hparams.dsv4_o_lora_rank, blck_size)};
+                    // the boundaries must align with wo_a's per-group split, so quant blocks must not straddle groups
+                    GGML_ASSERT(hparams.dsv4_o_lora_rank % blck_size == 0);
+                    return {hparams.dsv4_o_lora_rank};
                 }
             }
             if (std::regex_match(tensor_name, pattern_q_weight) || std::regex_match(tensor_name, pattern_q_bias)) {
