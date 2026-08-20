@@ -33,9 +33,9 @@ static const char* RESULT_STR[] = {"ok", "FAILED"};
 
 
 // Generate synthetic data
-static void generate_data(float offset, size_t n, float * dst) {
+static void generate_data(float offset, size_t n, float * dst, float amplitude = 2.0f) {
     for (size_t i = 0; i < n; i++) {
-        dst[i] = 0.1 + 2*cosf(i + offset);
+        dst[i] = 0.1 + amplitude*cosf(i + offset);
     }
 }
 
@@ -164,8 +164,8 @@ static int test_vec_dot_q(bool verbose) {
 
     generate_data(0.0, test_data.size(), test_data.data());
     generate_data(1.0, test_data2.size(), test_data2.data());
-    generate_data(2.0, test_data3.size(), test_data3.data());
-    generate_data(3.0, test_data4.size(), test_data4.data());
+    generate_data(3.0, test_data3.size(), test_data3.data(), 1.0f);
+    generate_data(4.0, test_data4.size(), test_data4.data(), 1.5f);
 
     for (int i = 0; i < GGML_TYPE_COUNT; i++) {
         ggml_type type = (ggml_type) i;
