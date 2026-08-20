@@ -9,6 +9,7 @@ General:
 
 Coding:
 - When in doubt, always refer to the CONTRIBUTING.md file of the project
+- In `test-backend-ops.cpp`, do not mention specific backends (e.g. Metal, CUDA) in comments
 - When referencing issues or PRs in comments, use the format:
   - C/C++ code: `// ref: <url>`
   - Other (CMake, etc.): `# ref: <url>`
