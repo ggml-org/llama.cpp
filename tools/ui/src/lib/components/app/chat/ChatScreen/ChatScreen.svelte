@@ -128,9 +128,8 @@
 
 		handleSendLikeScroll();
 
-		await chatStore.sendMessage(message, result?.extras);
-
-		return true;
+		// false means a mid-generation inject failed; the form restores the input
+		return await chatStore.sendMessage(message, result?.extras);
 	}
 
 	let lastScrolledConversationId: string | null = null;

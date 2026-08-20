@@ -305,6 +305,9 @@ struct server_slot {
 
     llama_token sampled; // in speculative mode, this is the last accepted token
 
+    // tokens queued by the control endpoint "inject" action, consumed instead of sampling
+    llama_tokens inject_tokens;
+
     // for TTS models, this is the embd generated from prev step, decode this to generate next hidden state
     // corresponding to one token position (size = n_embd)
     std::vector<float> inp_embd;
@@ -342,6 +345,7 @@ struct server_slot {
         }
         generated_tokens.clear();
         generated_token_probs.clear();
+        inject_tokens.clear();
         json_schema = json();
 
         task_prev = std::move(task);
@@ -440,6 +444,11 @@ struct server_slot {
         GGML_ASSERT(task);
 
         if (!can_speculate()) {
+            return 0;
+        }
+
+        // do not draft while injected tokens are pending
+        if (!inject_tokens.empty()) {
             return 0;
         }
 
@@ -2416,6 +2425,24 @@ private:
                         // act on the live slot mid generation, never defer
                         common_sampler_reasoning_budget_force(slot->smpl.get());
                         res->success = true;
+                    } else if (task.params.control_action == "inject") {
+                        if (slot->state != SLOT_STATE_GENERATING) {
+                            res->success = false;
+                            res->message = "completion is still processing the prompt";
+                        } else if (!slot->task->params.sampling.grammar.empty() && !slot->task->params.sampling.grammar_lazy) {
+                            // a lazy grammar (tool calls with auto choice) is fine as long as the injected text does not trigger it
+                            res->success = false;
+                            res->message = "cannot inject into a completion constrained by a grammar";
+                        } else {
+                            const llama_tokens tokens = common_tokenize(vocab, task.params.control_text, false, true);
+                            if (tokens.empty()) {
+                                res->success = false;
+                                res->message = "text produced no tokens";
+                            } else {
+                                slot->inject_tokens.insert(slot->inject_tokens.end(), tokens.begin(), tokens.end());
+                                res->success = true;
+                            }
+                        }
                     } else {
                         res->success = false;
                         res->message = "unknown control action";
@@ -3780,14 +3807,31 @@ private:
             const int tok_idx = slot.i_batch - off;
 
             llama_token id;
-            {
+            const bool injected = !slot.inject_tokens.empty();
+            if (injected) {
+                // consume an injected token instead of sampling
+                id = slot.inject_tokens.front();
+                slot.inject_tokens.erase(slot.inject_tokens.begin());
+            } else {
                 scoped_timer timer(t_sampl, n_sampl);
                 id = common_sampler_sample(slot.smpl.get(), slot.ctx_tgt, tok_idx);
             }
 
             slot.i_batch = -1;
 
-            common_sampler_accept(slot.smpl.get(), id, true);
+            if (injected) {
+                // an injected token can violate a lazy grammar; fail only this slot instead of aborting all slots
+                try {
+                    common_sampler_accept(slot.smpl.get(), id, true);
+                } catch (const std::exception & e) {
+                    SLT_ERR(slot, "injected token rejected by grammar: %s\n", e.what());
+                    send_error(slot, "injected text conflicts with the active grammar", ERROR_TYPE_INVALID_REQUEST);
+                    slot.release();
+                    return;
+                }
+            } else {
+                common_sampler_accept(slot.smpl.get(), id, true);
+            }
 
             // here we have synchronized the llama_context (due to the sampling above), so we can do time measurement
             const int64_t t_now = ggml_time_us();
@@ -4869,12 +4913,17 @@ void server_routes::init_routes() {
 
         const std::string cmpl_id = json_value(body, "id", std::string());
         const std::string action  = json_value(body, "action", std::string());
+        const std::string text    = json_value(body, "text", std::string());
         if (cmpl_id.empty()) {
             res->error(format_error_response("missing completion id", ERROR_TYPE_INVALID_REQUEST));
             return res;
         }
-        if (action != "reasoning_end") {
+        if (action != "reasoning_end" && action != "inject") {
             res->error(format_error_response("unknown control action", ERROR_TYPE_INVALID_REQUEST));
+            return res;
+        }
+        if (action == "inject" && text.empty()) {
+            res->error(format_error_response("missing text for inject action", ERROR_TYPE_INVALID_REQUEST));
             return res;
         }
 
@@ -4884,6 +4933,7 @@ void server_routes::init_routes() {
             task.id              = rd.get_new_id();
             task.params.control_cmpl_id = cmpl_id;
             task.params.control_action  = action;
+            task.params.control_text    = text;
             rd.post_task(std::move(task));
         }
 

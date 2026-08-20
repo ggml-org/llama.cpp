@@ -1443,7 +1443,11 @@ Acts on an in-flight completion identified by its `id` (the `id` field streamed 
 
 `id`: (Required) The chat completion id to act on. A completion that has already finished matches nothing and the call is a no-op.
 
-`action`: (Required) The control action to perform. Currently the only supported value is `reasoning_end`, which forces the end of the current reasoning block so the model moves on to the final answer. Requires `reasoning_control: true` on the original completion request.
+`action`: (Required) The control action to perform. Supported values:
+- `reasoning_end`: forces the end of the current reasoning block so the model moves on to the final answer. Requires `reasoning_control: true` on the original completion request.
+- `inject`: appends the given `text` to the generated output as if the model produced it, then generation continues from there. Useful to steer the model mid reasoning by injecting a thought. Fails if the completion is still processing the prompt, or if it is constrained by a grammar / JSON schema. Injected tokens are streamed back like sampled tokens and count towards `max_tokens`.
+
+`text`: (Required for `inject`) The text to inject.
 
 `model`: (Required in router mode) The model name, used to route the request to the right instance. Ignored in single model mode.
 

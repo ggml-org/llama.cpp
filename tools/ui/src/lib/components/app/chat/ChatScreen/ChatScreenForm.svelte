@@ -84,6 +84,7 @@
 
 		if (!chatFormRef?.checkModelSelected()) return;
 
+		const originalMessage = message;
 		const messageToSend = message.trim();
 		const filesToSend = [...uploadedFiles];
 
@@ -96,7 +97,7 @@
 		const success = await onSend?.(messageToSend, filesToSend);
 
 		if (!success) {
-			message = messageToSend;
+			message = originalMessage;
 			uploadedFiles = filesToSend;
 		}
 	}

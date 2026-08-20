@@ -88,6 +88,7 @@ struct task_params {
     // realtime control (SERVER_TASK_TYPE_CONTROL)
     std::string        control_action;
     std::string        control_cmpl_id;
+    std::string        control_text; // for "inject" action
 
     // per-request parameters for chat parsing
     common_chat_parser_params chat_parser_params;

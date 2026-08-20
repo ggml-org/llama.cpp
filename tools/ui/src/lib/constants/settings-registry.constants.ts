@@ -138,6 +138,24 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 			},
 			{
 				defaultValue: false,
+				help: 'Send a message typed during a streaming response straight into the model output via the control endpoint, instead of queueing it until the response finishes. Text only; messages with attachments are still queued. The injected text appears inside the assistant response.',
+				key: SETTINGS_KEYS.ALLOW_INJECT_USER_MESSAGE_MID_GENERATION,
+				label: 'Allow inject user message mid-generation',
+				section: SETTINGS_SECTION_SLUGS.DEVELOPER,
+				type: SettingsFieldType.CHECKBOX
+			},
+			{
+				defaultValue:
+					'<system_message>\nUser wants interrupt without stopping this session. Therefore, you are seeing this as part of your reasoning process:\n{message}\n</system_message>',
+				dependsOn: SETTINGS_KEYS.ALLOW_INJECT_USER_MESSAGE_MID_GENERATION,
+				help: 'Template applied to a message injected mid-generation. {message} is replaced with the typed text.',
+				key: SETTINGS_KEYS.INJECTION_TEMPLATE,
+				label: 'Injection template',
+				section: SETTINGS_SECTION_SLUGS.DEVELOPER,
+				type: SettingsFieldType.TEXTAREA
+			},
+			{
+				defaultValue: false,
 				help: 'Strip thinking from previous messages before sending. When off, thinking is sent back via the reasoning_content field so the model sees its own chain-of-thought across turns.',
 				key: SETTINGS_KEYS.EXCLUDE_REASONING_FROM_CONTEXT,
 				label: 'Exclude reasoning from context',
