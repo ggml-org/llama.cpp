@@ -1757,7 +1757,7 @@ The precedence rule for preset options is as follows:
 3. **Global options** defined in the preset file (`[*]`)
 
 We also offer additional options that are exclusive to presets (these aren't treated as command-line arguments):
-- `load-on-startup` (boolean): Controls whether the model loads automatically when the server starts
+- `load-on-startup` (boolean): Controls whether the model loads automatically when the server starts. Only applies at startup: if the model list is reloaded later (for example after editing the preset file), a newly added model is listed but not loaded
 - `stop-timeout` (int, seconds): After requested unload, wait for this many seconds before forcing termination (default: 10)
 - `dedup-cache-models` (boolean): When the preset uses `hf-repo` pointing to a model that is already downloaded, hide the corresponding cached model entry from `GET /models` (the preset entry remains visible). Set it in the `[*]` section to apply to all presets.
 

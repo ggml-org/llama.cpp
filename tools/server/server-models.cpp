@@ -672,24 +672,26 @@ void server_models::load_models() {
         apply_hidden();
         log_available_models();
 
-        std::vector<std::string> models_to_load;
-        for (const auto & [name, inst] : mapping) {
-            std::string val;
-            if (inst.meta.preset.get_option(COMMON_ARG_PRESET_LOAD_ON_STARTUP, val) && common_arg_utils::is_truthy(val)) {
-                models_to_load.push_back(name);
+        // skipped on reload, see startup_models
+        if (startup_models.has_value()) {
+            std::vector<std::string> models_to_load;
+            for (const auto & [name, inst] : mapping) {
+                std::string val;
+                if (inst.meta.preset.get_option(COMMON_ARG_PRESET_LOAD_ON_STARTUP, val) && common_arg_utils::is_truthy(val)) {
+                    models_to_load.push_back(name);
+                }
             }
-        }
-        if ((int)models_to_load.size() > base_params.models_max) {
-            throw std::runtime_error(string_format(
-                "number of models to load on startup (%zu) exceeds models_max (%d)",
-                models_to_load.size(), base_params.models_max));
+            if ((int)models_to_load.size() > base_params.models_max) {
+                throw std::runtime_error(string_format(
+                    "number of models to load on startup (%zu) exceeds models_max (%d)",
+                    models_to_load.size(), base_params.models_max));
+            }
+
+            // to be lazy-loaded after main() setup phase is completed
+            startup_models = std::move(models_to_load);
         }
 
         lk.unlock();
-        for (const auto & name : models_to_load) {
-            SRV_INF("(startup) loading model %s\n", name.c_str());
-            load(name);
-        }
     } else {
         // RELOAD: diff the new preset list against the current mapping and reconcile
         is_reloading = true;
@@ -819,8 +821,8 @@ void server_models::load_models() {
             inst.meta.update_caps();
         }
 
-        // add models that are new in this reload
-        std::vector<std::string> newly_added;
+        // add models that are new in this reload, load-on-startup is not honored here since a
+        // reload never spawns an instance
         for (const auto & [name, preset] : final_presets) {
             if (mapping.find(name) == mapping.end()) {
                 server_model_meta meta{
@@ -841,39 +843,37 @@ void server_models::load_models() {
                     // /* need_download */ false,
                 };
                 add_model(std::move(meta));
-                newly_added.push_back(name);
             }
         }
 
         apply_stop_timeout();
         apply_hidden();
 
-        // clear reload flag before unlocking for autoload - load() blocks on !is_reloading,
-        // so clearing it here (while still locked) prevents a deadlock in the autoload calls below
+        // clear reload flag under the lock, this releases the load() calls waiting on !is_reloading
         is_reloading = false;
         cv.notify_all();
 
         log_available_models();
 
-        // collect autoload candidates while still under the lock
-        std::vector<std::string> to_autoload;
-        for (const auto & name : newly_added) {
-            auto it = mapping.find(name);
-            if (it != mapping.end()) {
-                std::string val;
-                if (it->second.meta.preset.get_option(COMMON_ARG_PRESET_LOAD_ON_STARTUP, val) && common_arg_utils::is_truthy(val)) {
-                    to_autoload.push_back(name);
-                }
-            }
-        }
-
         lk.unlock();
-        for (const auto & name : to_autoload) {
-            SRV_INF("(reload) loading new model %s\n", name.c_str());
-            load(name);
-        }
 
         notify_sse("models_reload", "*");
+    }
+}
+
+void server_models::load_startup_models() {
+    std::vector<std::string> to_load;
+    {
+        std::lock_guard<std::mutex> lk(mutex);
+        if (!startup_models.has_value()) {
+            return; // already drained
+        }
+        to_load = std::move(*startup_models);
+        startup_models.reset();
+    }
+    for (const auto & name : to_load) {
+        SRV_INF("(startup) loading model %s\n", name.c_str());
+        load(name);
     }
 }
 
