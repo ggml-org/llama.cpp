@@ -1,0 +1,160 @@
+[[docs:funcstructs:llama.cpp]]
+== llama.cpp
+
+
+[[docs:funcstructs:llama.cpp:llama_model_load]]
+=== llama_model_load
+
+Signature:
+[.codebit]#`static int llama_model_load(const std::string & fname, std::vector<std::string> & splits, llama_model & model, llama_model_params & params)`#
+
+Loads the model data from the given file using a [.codebit]#`llama_model_loader`#. Called by [.codebit]#`llama_model_load_from_file_impl(...)`#.
+
+
+[[docs:funcstructs:llama.cpp:struct-llm_build_context]]
+=== struct llm_build_context
+
+This structure's purpose is to help build the computation graphs ([.codebit]#`struct ggml_cgraph`#) for various model architectures through its special builder methods: [.codebit]#`build_llama()`#, [.codebit]#`build_deci()`#, [.codebit]#`build_baichuan()`#, [.codebit]#`build_bert()`#, etc. Its constructor has the following signature:
+
+[.codebit]#`llm_build_context(llama_context  & lctx, const llama_ubatch & ubatch, const llm_build_cb & cb, bool worst_case)`#.
+
+Note that its [.codebit]#`init()`# method must be called before using any of the builder methods.
+
+
+[[docs:funcstructs:llama.cpp:struct-llm_build_context.init]]
+=== struct llm_build_context.init
+
+Signature:
+[.codebit]#`void init()`#
+
+Through a call to [.codebit]#`ggml_init(...)`#, it generates a [.codebit]#`ggml_context`# that uses the [.codebit]#`buf_compute_meta`# member of the [.codebit]#`llama_context`# the object was constructed with as a buffer.
+
+
+[[docs:funcstructs:llama.cpp:struct-llm_build_context.build_llama]]
+=== struct llm_build_context.build_llama
+
+Signature:
+[.codebit]#`struct ggml_cgraph * build_llama()`#
+
+One of [.codebit]#`llm_build_context`#'s graph builder methods. Like all the others, it begins with a call to [.codebit]#`ggml_new_graph_custom(...)`#, follows with a section that creates and ties the tensor operations and finishes with a call to [.codebit]#`ggml_build_forward_expand(...)`#, which links the tensors to the graph.
+
+NOTE: Builder methods [.codebit]#`build_bert(...)`#, [.codebit]#`build_t5_dec(...)`#, [.codebit]#`build_rwkv6(...)`# and [.codebit]#`build_rwkv6qwen2(...)`# have additional calls to [.codebit]#`ggml_build_forward_expand(...)`# in the tensor building section.
+
+
+[[docs:funcstructs:llama.cpp:llama_build_graph]]
+=== llama_build_graph
+
+Signature:
+[.codebit]#`static struct ggml_cgraph * llama_build_graph(llama_context & lctx, const llama_ubatch & ubatch, bool worst_case)`#
+
+Builds the computation graph ([.codebit]#`struct ggml_cgraph`#).
+
+First, it creates a lambda function with the following signature: [.codebit]#`(struct ggml_tensor * cur, const char * name, int il)->void`#, where [.codebit]#`il`# is the index of the tensor's layer. This function will be passed to [.codebit]#`llm_build_context`#'s constructor and used as a callback in the builder functions. It first sets the tensor's name to \{name}-\{il} (as long as its length doesn't exceed [.codebit]#`GGML_MAX_NAME`# (currently 64), in which case it is truncated, see [.codebit]#`ggml_tensor_format_name(...)`#) if [.codebit]#`il>=0`# and to \{name} otherwise, then it attempts to offload as many normalization tensors as possible from the cpu backend to the backends of the devices indicated by [.codebit]#`struct llama_model.dev_layer(il)`#, if certain parameters require this:
+
+[source,C++]
+----
+const bool full_offload = lctx.model.params.n_gpu_layers > (int) lctx.model.hparams.n_layer;
+if (ubatch.n_tokens < 32 || full_offload) {
+    if (il != -1 && strcmp(name, "norm") == 0) {
+        const auto & dev_layer = lctx.model.dev_layer(il);
+        for (auto & backend : lctx.backends) {
+            if (ggml_backend_get_device(backend.get()) == dev_layer) {
+                if (ggml_backend_supports_op(backend.get(), cur)) {
+                    ggml_backend_sched_set_tensor_backend(lctx.sched.get(), cur, backend.get());
+                }
+            }
+        }
+    }
+}
+----
+
+NOTE: Normalization tensors are created by calls to [.codebit]#`llm_build_norm(...)`# from [.codebit]#`llm_build_context`#'s builder functions. Through a call to the callback described earlier, [.codebit]#`llm_build_norm(...)`# sets the tensor's name to "`norm`" (or "`norm_w`", which won't have the same effect), then this tensor is potentially moved to the desired backend in the callback. However, most of the time, after [.codebit]#`llm_build_norm(...)`# creates a normalization tensor, the caller builder function invokes the callback again to change its name to something more specific, like "`attn_norm`" or "`ffn_norm`". This results in most normalization tensors remaining on the specified backends while having names other than "`norm`".
+
+Secondly, [.codebit]#`llm_build_context`# is instantiated and initialized:
+
+[source,C++]
+----
+struct llm_build_context llm(lctx, ubatch, cb, worst_case);
+
+llm.init();
+----
+
+Lastly, the proper builder function is called based on [.codebit]#`llama_model`#'s [.codebit]#`arch`# member and the result is returned.
+
+
+[[docs:funcstructs:llama.cpp:llama_graph_compute]]
+=== llama_graph_compute
+
+Signature:
+[.codebit]#`static enum ggml_status llama_graph_compute(llama_context & lctx, ggml_cgraph * gf, int n_threads, ggml_threadpool * threadpool)`#
+
+As its name implies, this function computes a [.codebit]#`ggml_cgraph`# in a given [.codebit]#`llama_context`#. First it performs some threadpool management which was not well analyzed, then it calls [.codebit]#`ggml_backend_sched_graph_compute_async(...)`# for the actual graph computation, after which it logs any failures and returns a [.codebit]#`ggml_status`#.
+
+
+[[docs:funcstructs:llama.cpp:llama_decode_impl]]
+=== llama_decode_impl
+
+Signature:
+[.codebit]#`static int llama_decode_impl(llama_context & lctx, llama_batch inp_batch)`#
+
+This function handles the inference process. It has the following structure:
+
+* input batch processing
+* inference loop (until the input batch is emptied):
+    ** batch preparation
+    ** [.codebit]#`ggml_backend_sched_reset(...)`#
+    ** [.codebit]#`ggml_backend_sched_set_eval_callback(...)`#: this sets the scheduler's callback function to the user-provided one (if any)
+    ** [.codebit]#`llama_build_graph(...)`#
+    ** setting pointers to the output tensors. There are 2 types of outputs: logits, which are always extracted from the last tensor in the computation graph, and embeddings, which are extracted from the first tensor named "`result_embd_pooled`" (if at all)
+    ** [.codebit]#`ggml_backend_sched_alloc_graph`#: this will also called indirectly by [.codebit]#`llama_graph_compute(...)`#, so I believe this call is redundant
+    ** [.codebit]#`llama_set_inputs(...)`#
+    ** [.codebit]#`llama_graph_compute(...)`#
+    ** output extraction
+* output processing
+* kv cache defragmentation (if needed)
+* [.codebit]#`ggml_backend_sched_reset(...)`#
+
+
+[[docs:funcstructs:llama.cpp:llama_backend_init]]
+=== llama_backend_init
+
+Signature:
+[.codebit]#`void llama_backend_init(void)`#
+
+Calls [.codebit]#`ggml_time_init()`#, then [.codebit]#`ggml_init(...)`# and [.codebit]#`ggml_free(...)`# to initialize the f16 tables.
+
+
+[[docs:funcstructs:llama.cpp:llama_model_load_from_file_impl]]
+=== llama_model_load_from_file_impl
+
+Signature:
+[.codebit]#`static struct llama_model * llama_model_load_from_file_impl(const std::string & path_model std::vector<std::string> & splits, struct llama_model_params params)`#
+
+Constructs a [.codebit]#`struct llama_model`# and sets its devices (using calls to [.codebit]#`ggml_backend_dev_count()`# and [.codebit]#`ggml_backend_dev_get(...)`#), logs information on their memory, calls [.codebit]#`llama_model_load(...)`# and logs possible errors before returning.
+
+
+[[docs:funcstructs:llama.cpp:llama_model_load_from_file]]
+=== llama_model_load_from_file
+
+Signature:
+[.codebit]#`struct llama_model * llama_model_load_from_file(const char * path_model, struct llama_model_params params)`#
+
+Wrapper for [.codebit]#`llama_model_load_from_file_impl`# (calls it with and empty [.codebit]#`splits`# parameter).
+
+
+[[docs:funcstructs:llama.cpp:llama_init_from_model]]
+=== llama_init_from_model
+
+Signature:
+[.codebit]#`struct llama_context * llama_init_from_model(struct llama_model * model, struct llama_context_params params)`#
+
+Constructs a [.codebit]#`llama_context`# object, sets up its members according to the [.codebit]#`params`# argument, then initializes (by calls to [.codebit]#`ggml_backend_dev_init(...)`#) the backends of the devices set in [.codebit]#`model`# and adds them to [.codebit]#`llama_context.backends`#. The rest is undocumented.
+
+
+[[docs:funcstructs:llama.cpp:llama_decode]]
+=== llama_decode
+
+Signature:
+[.codebit]#`int32_t llama_decode(struct llama_context * ctx, struct llama_batch batch)`#
+
+Wrapper for [.codebit]#`llama_decode_impl(...)`#.
