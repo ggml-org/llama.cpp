@@ -49,12 +49,18 @@ point.
 
 ### 3. Launch
 
-For a four-GPU tensor split, this is the minimal agnostic server shape:
+`HSA_OVERRIDE_GFX_VERSION=10.3.0` is required for the tested V620/`gfx1030`
+native profile. Do not force it on another GPU architecture. Use these
+recommended runtime environments:
+
+**TP2 and higher** (the example uses four GPUs):
 
 ```bash
 HSA_OVERRIDE_GFX_VERSION=10.3.0 \
 HSA_NO_SCRATCH_RECLAIM=1 \
-GGML_CUDA_ALLREDUCE=nccl \
+GGML_HIP_RDNA2_AUTO=1 \
+GGML_HIP_SAFE_STATE_IO=1 \
+GGML_TP_SHARDED_OUTPUT=1 \
 ./build/bin/llama-server \
   -m /path/to/main.gguf \
   -ngl all \
@@ -65,19 +71,27 @@ GGML_CUDA_ALLREDUCE=nccl \
   --port 8080
 ```
 
-`HSA_OVERRIDE_GFX_VERSION=10.3.0` is for V620/`gfx1030`; do not force it on
-another GPU architecture. `HSA_NO_SCRATCH_RECLAIM=1` is optional stability and
-repeatability tuning. `GGML_CUDA_ALLREDUCE=nccl` is explicit here for
-reproducibility; Linux normally selects RCCL automatically after an RCCL build.
-Add `--device` only when the backend should use a specific device list, for
-example `--device ROCm0,ROCm1,ROCm2,ROCm3`.
-
-For a recurrent model, prompt-cache restore, or context-checkpoint workload,
-add the independent ROCm state-I/O workaround:
+Use one tensor-split value per device; for TP2 use `--tensor-split 1,1`.
+For TP1, omit tensor splitting and the output-sharding variable:
 
 ```bash
-export GGML_HIP_SAFE_STATE_IO=1
+HSA_OVERRIDE_GFX_VERSION=10.3.0 \
+HSA_NO_SCRATCH_RECLAIM=1 \
+GGML_HIP_SAFE_STATE_IO=1 \
+./build/bin/llama-server \
+  -m /path/to/main.gguf \
+  -ngl all \
+  --flash-attn on \
+  --host 0.0.0.0 \
+  --port 8080
 ```
+
+Linux normally selects RCCL automatically after an RCCL build. Set
+`GGML_CUDA_ALLREDUCE=nccl` only when an explicit collective selection is
+needed. Add `--device` only when the backend should use a specific device list,
+for example `--device ROCm0,ROCm1,ROCm2,ROCm3`. Unsupported models retain the
+mirrored output-head fallback even when `GGML_TP_SHARDED_OUTPUT=1` is set; an
+external DFlash shared head also intentionally remains mirrored.
 
 For the validated four-V620 ordinary TP4 host-snapshot expansion, the optional
 new-branch mode is:
