@@ -14,7 +14,7 @@
 	import { useKeyboardShortcuts } from '$lib/hooks/use-keyboard-shortcuts.svelte';
 	import { useMarqueeSelection } from '$lib/hooks/use-marquee-selection.svelte';
 	import { RouterService } from '$lib/services/router.service';
-	import { chatStore, conversationsStore, deviceStore, settingsStore } from '$lib/stores';
+	import { chatStore, conversationsStore, deviceStore, settingsStore, uiStore } from '$lib/stores';
 	import { buildConversationTree } from '$lib/utils';
 	import { circIn } from 'svelte/easing';
 	import { SvelteSet } from 'svelte/reactivity';
@@ -31,30 +31,29 @@
 		toggleSidebar: () => toggleExpandedMode()
 	});
 
-	let isExpandedMode = $state(false);
 	let hoveredTooltip = $state<string | null>(null);
 	let logoHovered = $state(false);
 
-	const isStripExpanded = $derived(isExpandedMode || hoveredTooltip !== null);
+	const isStripExpanded = $derived(uiStore.isSidebarExpanded || hoveredTooltip !== null);
 	const isOnMobile = $derived(deviceStore.isMobile);
 	const alwaysShowOnDesktop = $derived(settingsStore.config.alwaysShowSidebarOnDesktop as boolean);
 
 	$effect(() => {
 		if (alwaysShowOnDesktop && !isOnMobile) {
-			isExpandedMode = true;
+			uiStore.isSidebarExpanded = true;
 		}
 	});
 
 	function toggleExpandedMode() {
-		isExpandedMode = !isExpandedMode;
+		uiStore.isSidebarExpanded = !uiStore.isSidebarExpanded;
 
-		if (!isExpandedMode) {
+		if (!uiStore.isSidebarExpanded) {
 			hoveredTooltip = null;
 		}
 	}
 
 	$effect(() => {
-		if (!isExpandedMode) {
+		if (!uiStore.isSidebarExpanded) {
 			isSearchModeActive = false;
 			searchQuery = '';
 
@@ -66,7 +65,7 @@
 
 	$effect(() => {
 		if (deviceStore.isMobile && page.url.hash.includes(ROUTES.SEARCH)) {
-			isExpandedMode = false;
+			uiStore.isSidebarExpanded = false;
 		}
 	});
 
@@ -294,7 +293,7 @@
 		}
 
 		pendingCollapse = setTimeout(() => {
-			isExpandedMode = false;
+			uiStore.isSidebarExpanded = false;
 			pendingCollapse = null;
 		}, 100);
 	}
@@ -314,7 +313,7 @@
 		class={[
 			'fixed md:sticky top-2 left-2 md:left-0 md:ml-2 md:mt-2 pt-2 z-10 w-[calc(100dvw-1rem)]',
 			'md:h-[calc(100dvh-1.125rem)]',
-			isExpandedMode &&
+			uiStore.isSidebarExpanded &&
 				(deviceStore.isStandalone
 					? 'h-[calc(100dvh-2rem)]'
 					: deviceStore.isIOSDevice
@@ -323,9 +322,9 @@
 			'rounded-3xl md:rounded-2xl',
 			'flex flex-col justify-between',
 			'md:transition-[width,padding] duration-200 ease-out',
-			isStripExpanded && 'md:w-72 md:bg-muted/60 md:backdrop-blur-xl border-border shadow-md',
+			isStripExpanded && 'md:w-72 md:bg-muted/60 md:backdrop-blur-xl shadow-md',
 			!isStripExpanded && 'md:w-12',
-			isExpandedMode && 'is-expanded'
+			uiStore.isSidebarExpanded && 'is-expanded'
 		]}
 	>
 		<div class="px-2 flex items-center justify-between">
@@ -337,24 +336,26 @@
 				onmouseleave={() => (logoHovered = false)}
 			>
 				<ActionIcon
-					icon={!isExpandedMode && logoHovered && innerWidth > 768 ? PanelLeftOpen : Logo}
+					icon={!uiStore.isSidebarExpanded && logoHovered && innerWidth > 768
+						? PanelLeftOpen
+						: Logo}
 					size="lg"
 					iconSize="h-4.5 w-4.5 md:h-4 md:w-4"
-					class="{isExpandedMode
+					class="{uiStore.isSidebarExpanded
 						? 'bg-muted! md:bg-foreground/5!'
-						: 'bg-transparent!'} md:h-9 md:w-9 h-10 w-10 rounded-full md:hover:bg-foreground/10! pointer-events-auto"
-					href={isExpandedMode ? ROUTES.START : undefined}
-					onclick={isExpandedMode ? undefined : toggleExpandedMode}
-					tooltip={isExpandedMode ? undefined : 'Open Sidebar'}
+						: 'bg-transparent'} md:h-9 md:w-9 h-10 w-10 rounded-full md:hover:bg-foreground/10! pointer-events-auto"
+					href={uiStore.isSidebarExpanded ? ROUTES.START : undefined}
+					onclick={uiStore.isSidebarExpanded ? undefined : toggleExpandedMode}
+					tooltip={uiStore.isSidebarExpanded ? undefined : 'Open Sidebar'}
 					tooltipSide={TooltipSide.RIGHT}
-					ariaLabel={isExpandedMode ? 'Go to start' : 'Expand navigation'}
+					ariaLabel={uiStore.isSidebarExpanded ? 'Go to start' : 'Expand navigation'}
 				/>
 			</div>
 
-			{#if isOnMobile || (isExpandedMode && !alwaysShowOnDesktop)}
+			{#if isOnMobile || (uiStore.isSidebarExpanded && !alwaysShowOnDesktop)}
 				<div
 					class="flex items-center transition-all duration-150 ease-out {deviceStore.isMobile &&
-					!isExpandedMode
+					!uiStore.isSidebarExpanded
 						? 'opacity-0 h-0!'
 						: ''}"
 					in:fade={{ delay: 50, duration: 150, easing: circIn }}
@@ -377,12 +378,12 @@
 		<div
 			class="mt-2 flex min-h-0 flex-1 flex-col gap-4 md:gap-1 {deviceStore.isMobile
 				? 'transition-[opacity,height] duration-200 ease-out'
-				: ''} {deviceStore.isMobile && !isExpandedMode ? 'opacity-0 !h-0' : ''}"
+				: ''} {deviceStore.isMobile && !uiStore.isSidebarExpanded ? 'opacity-0 !h-0' : ''}"
 			in:fade={{ duration: 200 }}
 			out:fade={{ duration: 200 }}
 		>
 			<SidebarNavigationActions
-				isExpandedMode={innerWidth > 768 ? isExpandedMode : true}
+				isExpandedMode={innerWidth > 768 ? uiStore.isSidebarExpanded : true}
 				class="px-2"
 				bind:isSearchModeActive
 				bind:searchQuery
@@ -391,7 +392,7 @@
 					searchQuery = '';
 				}}
 				onSearchClick={() => {
-					isExpandedMode = true;
+					uiStore.isSidebarExpanded = true;
 					isSearchModeActive = true;
 				}}
 				onNewChat={() => {
@@ -401,7 +402,7 @@
 				}}
 			/>
 
-			{#if isExpandedMode || isOnMobile}
+			{#if uiStore.isSidebarExpanded || isOnMobile}
 				<div class="flex min-h-0 flex-1 flex-col overflow-y-auto">
 					<SidebarNavigationConversationList
 						class="px-2"

@@ -43,6 +43,9 @@ export { modelsStore } from './models/index.svelte';
 // SERVER
 export { serverStore } from './server.svelte';
 
+// UI / LAYOUT
+export { uiStore } from './ui.svelte';
+
 // SETTINGS / UI PREFERENCES
 export { settingsStore } from './settings/index.svelte';
 
