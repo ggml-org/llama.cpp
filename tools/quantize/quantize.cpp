@@ -35,6 +35,24 @@ static const std::vector<quant_option> QUANT_OPTIONS = {
     { "Q1_0",     LLAMA_FTYPE_MOSTLY_Q1_0,     " 1.125 bpw quantization",           },
     { "Q2_0",     LLAMA_FTYPE_MOSTLY_Q2_0,     " 2.25 bpw quantization (group 64)",  },
     { "Q4_0",     LLAMA_FTYPE_MOSTLY_Q4_0,     " 4.34G, +0.4685 ppl @ Llama-3-8B",  },
+    { "Q4_0_ROCMFP4",          LLAMA_FTYPE_MOSTLY_Q4_0_ROCMFP4,          " 4.50 bpw ROCmFP4 UE4M3-scale experimental", },
+    { "Q4_0_ROCMFP4_EVEN",     LLAMA_FTYPE_MOSTLY_Q4_0_ROCMFP4,          " 4.50 bpw ROCmFP4 even tensor conversion; implies --pure", },
+    { "Q4_0_ROCMFP4_LEAN",     LLAMA_FTYPE_MOSTLY_Q4_0_ROCMFP4_LEAN,     " 4.60 bpw ROCmFP4 + Q5_K token embeddings",   },
+    { "Q4_0_ROCMFP4_COHERENT", LLAMA_FTYPE_MOSTLY_Q4_0_ROCMFP4_COHERENT, " 4.70 bpw ROCmFP4 + Q6_K token embeddings",   },
+    { "Q4_0_ROCMFP4_FAST",     LLAMA_FTYPE_MOSTLY_Q4_0_ROCMFP4_FAST,     " 4.25 bpw ROCmFP4 single-scale speed layout",  },
+    { "Q4_0_ROCMFP4_FAST_EVEN", LLAMA_FTYPE_MOSTLY_Q4_0_ROCMFP4_FAST,    " 4.25 bpw ROCmFP4 fast even tensor conversion; implies --pure", },
+    { "Q4_0_ROCMFP4_FAST_COHERENT", LLAMA_FTYPE_MOSTLY_Q4_0_ROCMFP4_FAST_COHERENT, " ~4.45 bpw ROCmFP4 fast + Q6_K token embeddings", },
+    { "Q4_0_ROCMFP4_STRIX",    LLAMA_FTYPE_MOSTLY_Q4_0_ROCMFP4_STRIX,    " ~4.49 bpw ROCmFP4 Strix Halo attn-K/V quality recipe", },
+    { "Q4_0_ROCMFP4_STRIX_LEAN", LLAMA_FTYPE_MOSTLY_Q4_0_ROCMFP4_STRIX_LEAN, " ~4.38 bpw ROCmFP4 Strix K/V + Q5_K token embeddings", },
+    { "Q3_0_ROCMFPX",          LLAMA_FTYPE_MOSTLY_Q3_0_ROCMFPX,          " 3.50 bpw ROCmFPx experimental, ROCm/Vulkan staging", },
+    { "Q2_0_ROCMFPX",          LLAMA_FTYPE_MOSTLY_Q2_0_ROCMFPX,          " 2.50 bpw ROCmFPx S40 codebook + dual UE4M3 scales", },
+    { "Q6_0_ROCMFPX",          LLAMA_FTYPE_MOSTLY_Q6_0_ROCMFPX,          " 6.50 bpw ROCmFPx experimental, ROCm/Vulkan staging", },
+    { "Q8_0_ROCMFPX",          LLAMA_FTYPE_MOSTLY_Q8_0_ROCMFPX,          " 8.25 bpw ROCmFPx experimental, ROCm/Vulkan staging", },
+    { "Q3_0_ROCMFPX_AGENT",    LLAMA_FTYPE_MOSTLY_Q3_0_ROCMFPX_AGENT,    " agent/tool-call coherent ROCmFPx Q3 routing", },
+    { "Q6_0_ROCMFPX_AGENT",    LLAMA_FTYPE_MOSTLY_Q6_0_ROCMFPX_AGENT,    " agent/tool-call coherent ROCmFPx Q6 routing", },
+    { "Q8_0_ROCMFPX_AGENT",    LLAMA_FTYPE_MOSTLY_Q8_0_ROCMFPX_AGENT,    " agent/tool-call coherent ROCmFPx Q8 routing", },
+    { "Q6_0_ROCMFPX_LEAN",     LLAMA_FTYPE_MOSTLY_Q6_0_ROCMFPX_LEAN,     " size/speed-biased ROCmFPx Q6 routing", },
+    { "Q6_0_ROCMFPX_AGENT_LEAN", LLAMA_FTYPE_MOSTLY_Q6_0_ROCMFPX_AGENT_LEAN, " agent ROCmFPx Q6 routing without Q8-heavy boosts", },
     { "Q4_1",     LLAMA_FTYPE_MOSTLY_Q4_1,     " 4.78G, +0.4511 ppl @ Llama-3-8B",  },
     { "MXFP4_MOE",LLAMA_FTYPE_MOSTLY_MXFP4_MOE," MXFP4 MoE",  },
     { "Q5_0",     LLAMA_FTYPE_MOSTLY_Q5_0,     " 5.21G, +0.1316 ppl @ Llama-3-8B",  },
@@ -571,6 +589,9 @@ int llama_quantize(int argc, char ** argv) {
         if (ftype_str == "COPY") {
             params.only_copy = true;
         }
+        if (ftype_str == "Q4_0_ROCMFP4_EVEN" || ftype_str == "Q4_0_ROCMFP4_FAST_EVEN") {
+            params.pure = true;
+        }
     } else {
         // argv[arg_idx] is not a valid ftype, so treat it as output path: <input> <output> <ftype>
         fname_out = argv[arg_idx];
@@ -589,6 +610,9 @@ int llama_quantize(int argc, char ** argv) {
         }
         if (ftype_str == "COPY") {
            params.only_copy = true;
+        }
+        if (ftype_str == "Q4_0_ROCMFP4_EVEN" || ftype_str == "Q4_0_ROCMFP4_FAST_EVEN") {
+            params.pure = true;
         }
         arg_idx++;
     }

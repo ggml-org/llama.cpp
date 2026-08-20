@@ -2439,6 +2439,14 @@ struct test_set_rows : public test_case {
     }
 
     double max_nmse_err() override {
+        if ((type_dst == GGML_TYPE_Q4_0_ROCMFP4 || type_dst == GGML_TYPE_Q4_0_ROCMFP4_FAST ||
+             type_dst == GGML_TYPE_Q3_0_ROCMFPX || type_dst == GGML_TYPE_Q6_0_ROCMFPX || type_dst == GGML_TYPE_Q8_0_ROCMFPX) &&
+            (type_src == GGML_TYPE_F16 || type_src == GGML_TYPE_BF16)) {
+            // The ROCmFPx encoders run an exhaustive UE4M3 scale search. It is
+            // the same search as the CPU path, but a half/bfloat source can tie
+            // differently and select a neighbouring scale/code pair.
+            return 5e-4;
+        }
         if (type_dst == GGML_TYPE_Q2_0 || type_dst == GGML_TYPE_Q4_0 || type_dst == GGML_TYPE_Q4_1 ||
             type_dst == GGML_TYPE_IQ4_NL ||
             type_dst == GGML_TYPE_Q5_0 || type_dst == GGML_TYPE_Q5_1 || type_dst == GGML_TYPE_Q8_0) {
@@ -2967,6 +2975,14 @@ struct test_cpy : public test_case {
     double max_nmse_err() override {
         if (type_src == type_dst) {
             return 0.0;
+        }
+        if ((type_dst == GGML_TYPE_Q4_0_ROCMFP4 || type_dst == GGML_TYPE_Q4_0_ROCMFP4_FAST ||
+             type_dst == GGML_TYPE_Q3_0_ROCMFPX || type_dst == GGML_TYPE_Q6_0_ROCMFPX || type_dst == GGML_TYPE_Q8_0_ROCMFPX) &&
+            (type_src == GGML_TYPE_F16 || type_src == GGML_TYPE_BF16)) {
+            // Vulkan quantizes half/bfloat sources directly on device. The
+            // exhaustive ROCmFP4 scale search matches the CPU path, but source
+            // precision and tie points can pick a nearby scale/code pair.
+            return 5e-4;
         }
         if (type_dst == GGML_TYPE_Q4_0 || type_dst == GGML_TYPE_Q4_1 || type_dst == GGML_TYPE_IQ4_NL ||
             type_dst == GGML_TYPE_Q5_0 || type_dst == GGML_TYPE_Q5_1 || type_dst == GGML_TYPE_Q8_0) {
@@ -8248,7 +8264,8 @@ static const ggml_type all_types[] = {
     GGML_TYPE_Q8_0,
     GGML_TYPE_Q1_0,
     GGML_TYPE_Q2_0,
-    GGML_TYPE_MXFP4, GGML_TYPE_NVFP4,
+    GGML_TYPE_MXFP4, GGML_TYPE_Q4_0_ROCMFP4, GGML_TYPE_Q4_0_ROCMFP4_FAST, GGML_TYPE_NVFP4,
+    GGML_TYPE_Q2_0_ROCMFPX, GGML_TYPE_Q3_0_ROCMFPX, GGML_TYPE_Q6_0_ROCMFPX, GGML_TYPE_Q8_0_ROCMFPX,
     GGML_TYPE_Q2_K, GGML_TYPE_Q3_K,
     GGML_TYPE_Q4_K, GGML_TYPE_Q5_K,
     GGML_TYPE_Q6_K,
@@ -8267,7 +8284,8 @@ static const ggml_type base_types[] = {
     GGML_TYPE_Q4_0,
     GGML_TYPE_Q4_1, // for I8MM tests
     GGML_TYPE_Q4_K,
-    GGML_TYPE_MXFP4, GGML_TYPE_NVFP4, // TODO: or "other"
+    GGML_TYPE_MXFP4, GGML_TYPE_Q4_0_ROCMFP4, GGML_TYPE_Q4_0_ROCMFP4_FAST, GGML_TYPE_NVFP4, // TODO: or "other"
+    GGML_TYPE_Q2_0_ROCMFPX, GGML_TYPE_Q3_0_ROCMFPX, GGML_TYPE_Q6_0_ROCMFPX, GGML_TYPE_Q8_0_ROCMFPX,
     GGML_TYPE_IQ2_XXS
 };
 

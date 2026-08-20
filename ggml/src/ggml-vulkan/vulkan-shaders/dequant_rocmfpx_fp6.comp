@@ -1,0 +1,44 @@
+#version 450
+
+#include "dequant_head.glsl"
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout (binding = 0) readonly buffer A {block_rocmfpx_fp6 data_a[];};
+layout (binding = 1) writeonly buffer D {D_TYPE data_b[];};
+
+uint rocmfpx_fp6_get_bits(uint ib, uint idx) {
+    const uint bit_pos  = idx * 6u;
+    const uint byte_pos = bit_pos >> 3u;
+    const uint sh       = bit_pos & 7u;
+    uint bits = uint(data_a[ib].qs[byte_pos]);
+    if (sh > 2u) {
+        bits |= uint(data_a[ib].qs[byte_pos + 1u]) << 8;
+    }
+    return (bits >> sh) & 0x3Fu;
+}
+
+void main() {
+    const uint i = gl_WorkGroupID.x * 4 + gl_LocalInvocationID.x / 64;
+
+#ifdef NEEDS_INIT_IQ_SHMEM
+    init_iq_shmem(gl_WorkGroupSize);
+#endif
+
+    const uint tid = gl_LocalInvocationID.x % 64;
+    const uint il  = tid/32;
+    const uint ir  = tid%32;
+    const uint ib = 32*i + ir;
+    if (ib >= p.nel / 32) {
+        return;
+    }
+
+    const uint b_idx = 1024*i + 32*ir + 16*il;
+    const uint q_idx = 16*il;
+    const float d = ue4m3_to_fp32(data_a[ib].e[il]);
+
+    [[unroll]] for (uint l = 0; l < 16; ++l) {
+        const uint idx = q_idx + l;
+        data_b[b_idx + l] = D_TYPE(d * float(rocmfpx_fp6_decode_code(rocmfpx_fp6_get_bits(ib, idx))));
+    }
+}

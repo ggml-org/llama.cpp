@@ -157,6 +157,24 @@ extern "C" {
         LLAMA_FTYPE_MOSTLY_Q1_0          = 40, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_Q2_0          = 41, // except 1d tensors
 
+        // ROCmFPx experimental AMD-native recipes (high ID range, see ggml_ftype)
+        LLAMA_FTYPE_MOSTLY_Q4_0_ROCMFP4          = 100, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_Q4_0_ROCMFP4_LEAN     = 101, // ROCmFP4 with Q5_K token embeddings
+        LLAMA_FTYPE_MOSTLY_Q4_0_ROCMFP4_COHERENT = 102, // ROCmFP4 with Q6_K token embeddings
+        LLAMA_FTYPE_MOSTLY_Q4_0_ROCMFP4_FAST     = 103, // ROCmFP4 single-scale speed layout
+        LLAMA_FTYPE_MOSTLY_Q4_0_ROCMFP4_FAST_COHERENT = 104, // ROCmFP4 fast with Q6_K token embeddings
+        LLAMA_FTYPE_MOSTLY_Q4_0_ROCMFP4_STRIX    = 105, // ROCmFP4 Strix Halo quality/speed recipe
+        LLAMA_FTYPE_MOSTLY_Q4_0_ROCMFP4_STRIX_LEAN = 106, // ROCmFP4 Strix Halo size-biased K/V recipe
+        LLAMA_FTYPE_MOSTLY_Q6_0_ROCMFPX          = 110, // ROCmFPx experimental 6-bit reference layout
+        LLAMA_FTYPE_MOSTLY_Q8_0_ROCMFPX          = 111, // ROCmFPx experimental 8-bit reference layout
+        LLAMA_FTYPE_MOSTLY_Q3_0_ROCMFPX          = 112, // ROCmFPx experimental 3-bit reference layout
+        LLAMA_FTYPE_MOSTLY_Q3_0_ROCMFPX_AGENT    = 113, // ROCmFPx 3-bit agent/tool-call coherent routing
+        LLAMA_FTYPE_MOSTLY_Q6_0_ROCMFPX_AGENT    = 114, // ROCmFPx 6-bit agent/tool-call coherent routing
+        LLAMA_FTYPE_MOSTLY_Q8_0_ROCMFPX_AGENT    = 115, // ROCmFPx 8-bit agent/tool-call coherent routing
+        LLAMA_FTYPE_MOSTLY_Q6_0_ROCMFPX_LEAN     = 116, // ROCmFPx 6-bit size/speed-biased routing
+        LLAMA_FTYPE_MOSTLY_Q6_0_ROCMFPX_AGENT_LEAN = 117, // ROCmFPx 6-bit agent routing without Q8-heavy boosts
+        LLAMA_FTYPE_MOSTLY_Q2_0_ROCMFPX          = 119, // ROCmFPx 2-bit S40 codebook + dual UE4M3 scales
+
         LLAMA_FTYPE_GUESSED = 1024, // not specified in the model file
     };
 

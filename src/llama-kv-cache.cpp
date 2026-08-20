@@ -316,8 +316,18 @@ llama_kv_cache::llama_kv_cache(
             LLAMA_LOG_WARN("%s: attention rotation force disabled (LLAMA_ATTN_ROT_DISABLE)\n", __func__);
         }
 
+        // fp3 ROCmFPX carries its own scale layout and is incompatible with
+        // the shared attention rotation path.
+        const bool attn_rot_k_rocmfpx_fp3 = type_k == GGML_TYPE_Q3_0_ROCMFPX;
+        const bool attn_rot_v_rocmfpx_fp3 = type_v == GGML_TYPE_Q3_0_ROCMFPX;
+        if (attn_rot_k_rocmfpx_fp3 || attn_rot_v_rocmfpx_fp3) {
+            LLAMA_LOG_WARN("%s: attention rotation disabled for fp3 ROCmFPX KV cache (K=%s, V=%s)\n", __func__,
+                    ggml_type_name(type_k), ggml_type_name(type_v));
+        }
+
         attn_rot_k =
             !attn_rot_disable &&
+            !attn_rot_k_rocmfpx_fp3 &&
             n_embd_head_k_all > 0 &&
             ggml_is_quantized(type_k) &&
             hparams.n_embd_head_k() % 64 == 0;
@@ -330,6 +340,7 @@ llama_kv_cache::llama_kv_cache(
 
         attn_rot_v =
             !attn_rot_disable &&
+            !attn_rot_v_rocmfpx_fp3 &&
             n_embd_head_v_all > 0 &&
             ggml_is_quantized(type_v) &&
             hparams.n_embd_head_v() % 64 == 0;

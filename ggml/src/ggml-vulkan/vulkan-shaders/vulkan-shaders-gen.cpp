@@ -71,6 +71,11 @@ const std::vector<std::string> type_names = {
     "iq4_xs",
     "iq4_nl",
     "mxfp4",
+    "rocmfp4",
+    "rocmfp4_fast",
+    "rocmfpx_fp3",
+    "rocmfpx_fp6",
+    "rocmfpx_fp8",
     "nvfp4",
     "tq2_0",
     "bf16",
@@ -585,7 +590,9 @@ void matmul_shaders(bool fp16, MatMulIdType matmul_id_type, bool coopmat, bool c
         std::string load_vec_quant = "2";
         if ((tname == "q1_0") || (tname == "q4_0") || (tname == "q4_1") || (tname == "q5_1") || (tname == "iq1_s") || (tname == "iq1_m") || (tname == "iq2_xxs") || (tname == "iq2_xs") || (tname == "iq2_s"))
             load_vec_quant = "8";
-        else if ((tname == "q2_0") || (tname == "q5_0") || (tname == "q8_0") || (tname == "q2_k") || (tname == "q4_k") || (tname == "q5_k") || (tname == "iq3_xxs") || (tname == "iq3_s") || (tname == "iq4_xs") || (tname == "iq4_nl") || (tname == "mxfp4") || (tname == "nvfp4"))
+        else if ((tname == "q2_0") || (tname == "q5_0") || (tname == "q8_0") || (tname == "q2_k") || (tname == "q4_k") || (tname == "q5_k") || (tname == "iq3_xxs") || (tname == "iq3_s") || (tname == "iq4_xs") || (tname == "iq4_nl") || (tname == "mxfp4") || (tname == "nvfp4") ||
+                 (tname == "rocmfp4") || (tname == "rocmfp4_fast") ||
+                 (tname == "rocmfpx_fp3") || (tname == "rocmfpx_fp6") || (tname == "rocmfpx_fp8"))
             load_vec_quant = "4";
 
         if (tname == "bf16") {
@@ -833,13 +840,21 @@ void process_shaders() {
     string_to_spv("cpy_transpose_02_16", "copy_transpose_02.comp", {{"A_TYPE", "uint16_t"}, {"D_TYPE", "uint16_t"}});
     string_to_spv("cpy_transpose_02_32", "copy_transpose_02.comp", {{"A_TYPE", "uint"}, {"D_TYPE", "uint"}});
 
-    for (std::string t : {"q1_0", "q2_0", "q4_0", "q4_1", "q5_0", "q5_1", "q8_0", "iq4_nl"}) {
+    string_to_spv("cpy_rocmfp4_rocmfp4", "copy_quant_same.comp", {{"A_TYPE", "uint8_t"}, {"D_TYPE", "uint8_t"}, {"QUANT_K", "32"}, {"BLOCK_BYTES", "18"}});
+    string_to_spv("cpy_rocmfp4_fast_rocmfp4_fast", "copy_quant_same.comp", {{"A_TYPE", "uint8_t"}, {"D_TYPE", "uint8_t"}, {"QUANT_K", "32"}, {"BLOCK_BYTES", "17"}});
+    string_to_spv("cpy_rocmfpx_fp3_rocmfpx_fp3", "copy_quant_same.comp", {{"A_TYPE", "uint8_t"}, {"D_TYPE", "uint8_t"}, {"QUANT_K", "32"}, {"BLOCK_BYTES", "14"}});
+    string_to_spv("cpy_rocmfpx_fp6_rocmfpx_fp6", "copy_quant_same.comp", {{"A_TYPE", "uint8_t"}, {"D_TYPE", "uint8_t"}, {"QUANT_K", "32"}, {"BLOCK_BYTES", "26"}});
+    string_to_spv("cpy_rocmfpx_fp8_rocmfpx_fp8", "copy_quant_same.comp", {{"A_TYPE", "uint8_t"}, {"D_TYPE", "uint8_t"}, {"QUANT_K", "32"}, {"BLOCK_BYTES", "33"}});
+
+    for (std::string t : {"q1_0", "q2_0", "q4_0", "q4_1", "q5_0", "q5_1", "q8_0", "iq4_nl",
+                          "rocmfp4", "rocmfp4_fast", "rocmfpx_fp3", "rocmfpx_fp6", "rocmfpx_fp8"}) {
         string_to_spv("cpy_f32_" + t, "copy_to_quant.comp", {{"DATA_A_" + to_uppercase(t), "1"}, {"S_TYPE", "float"}, {"D_TYPE", "float"}, {"FLOAT_TYPE", "float"}});
         string_to_spv("cpy_" + t + "_f32", "copy_from_quant.comp", {{"DATA_A_" + to_uppercase(t), "1"}, {"D_TYPE", "float"}, {"FLOAT_TYPE", "float"}});
     }
 
     for (auto src : {std::pair{"f32", "float"}, std::pair{"f16", "float16_t"}}) {
-        for (std::string dst : {"f32", "f16", "bf16", "q1_0", "q2_0", "q4_0", "q4_1", "q5_0", "q5_1", "q8_0", "iq4_nl"}) {
+        for (std::string dst : {"f32", "f16", "bf16", "q1_0", "q2_0", "q4_0", "q4_1", "q5_0", "q5_1", "q8_0", "iq4_nl",
+                                "rocmfp4", "rocmfp4_fast", "rocmfpx_fp3", "rocmfpx_fp6", "rocmfpx_fp8"}) {
             string_to_spv("set_rows_" + std::string(src.first) + "_" + dst + "_i32", "copy_to_quant.comp", {{"SET_ROWS", "1"}, {"DATA_A_" + to_uppercase(dst), "1"}, {"B_TYPE", "uint"}, {"B_SIZE", "32"}, {"S_TYPE", src.second}, {"D_TYPE", "float"}, {"FLOAT_TYPE", "float"}});
             string_to_spv("set_rows_" + std::string(src.first) + "_" + dst + "_i64", "copy_to_quant.comp", {{"SET_ROWS", "1"}, {"DATA_A_" + to_uppercase(dst), "1"}, {"B_TYPE", "uvec2"}, {"B_SIZE", "64"}, {"S_TYPE", src.second}, {"D_TYPE", "float"}, {"FLOAT_TYPE", "float"}});
         }
