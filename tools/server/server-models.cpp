@@ -821,7 +821,8 @@ void server_models::load_models() {
             inst.meta.update_caps();
         }
 
-        // add models that are new in this reload
+        // add models that are new in this reload, load-on-startup is not honored here since a
+        // reload never spawns an instance
         for (const auto & [name, preset] : final_presets) {
             if (mapping.find(name) == mapping.end()) {
                 server_model_meta meta{
@@ -848,13 +849,12 @@ void server_models::load_models() {
         apply_stop_timeout();
         apply_hidden();
 
-        // clear reload flag before unlocking - load() blocks on !is_reloading
+        // clear reload flag under the lock, this releases the load() calls waiting on !is_reloading
         is_reloading = false;
         cv.notify_all();
 
         log_available_models();
 
-        // note: load-on-startup is not honored here, a reload never spawns an instance
         lk.unlock();
 
         notify_sse("models_reload", "*");
