@@ -2,6 +2,8 @@
 #include "../llama-memory-hybrid-iswa.h"
 #include "../llama-memory-hybrid.h"
 
+#include <algorithm>
+
 void llama_model_lfm2::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_SHORTCONV_L_CACHE,           hparams.n_shortconv_l_cache);
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
@@ -202,15 +204,20 @@ llama_model_lfm2::graph<iswa>::graph(const llama_model & model, const llm_graph_
         }
         GGML_ASSERT(bx->ne[0] > conv->ne[0]);
 
-        // last d_conv columns is a new conv state
-        auto * new_conv = ggml_view_3d(ctx0, bx, conv->ne[0], bx->ne[1], bx->ne[2], bx->nb[1], bx->nb[2],
-                                       (bx->ne[0] - conv->ne[0]) * ggml_element_size(bx));
-        GGML_ASSERT(ggml_are_same_shape(conv, new_conv));
+        // write conv states: slot 0 = the final state, slot s = the state s tokens back (partial rollback)
+        const int64_t K         = hparams.causal_attn && cparams.n_rs_seq > 0 ? (int64_t) cparams.n_rs_seq + 1 : 1;
+        const int64_t n_written = std::min<int64_t>(n_seq_tokens, K);
+        const auto    mem_size  = mctx_cur->get_size();
+        const size_t  row_size  = ggml_row_size(conv_state->type, (int64_t) d_conv * n_embd);
 
-        // write new conv conv state
-        ggml_build_forward_expand(gf, ggml_cpy(ctx0, new_conv,
-                                               ggml_view_1d(ctx0, conv_state, ggml_nelements(new_conv),
-                                                            kv_head * d_conv * n_embd * ggml_element_size(new_conv))));
+        for (int64_t slot = 0; slot < n_written; ++slot) {
+            auto * conv_snap = ggml_view_3d(ctx0, bx, d_conv, bx->ne[1], bx->ne[2], bx->nb[1], bx->nb[2],
+                                            (bx->ne[0] - d_conv - slot) * ggml_element_size(bx));
+            ggml_build_forward_expand(gf, ggml_cpy(ctx0, conv_snap,
+                                                   ggml_view_2d(ctx0, conv_state, (int64_t) d_conv * n_embd, n_seqs,
+                                                                conv_state->nb[1],
+                                                                ((size_t) slot * mem_size + kv_head) * row_size)));
+        }
 
         auto * conv_kernel = model.layers[il].shortconv.conv;
         auto * conv_out    = ggml_ssm_conv(ctx0, bx, conv_kernel);
@@ -242,6 +249,8 @@ llama_model_lfm2::graph<iswa>::graph(const llama_model & model, const llm_graph_
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
     for (int il = 0; il < n_layer; ++il) {
+        res->t_layer_inp[il] = cur;
+
         const bool is_moe_layer = il >= static_cast<int>(hparams.n_layer_dense_lead);
 
         auto * prev_cur = cur;
