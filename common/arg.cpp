@@ -2597,8 +2597,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_examples(mmproj_examples).set_env("LLAMA_ARG_MMPROJ_OFFLOAD"));
     add_opt(common_arg(
         {"-mmdev", "--mmproj-device"}, "DEVICE",
-        "device to use for multimodal projector when GPU offloading is enabled (default: auto)",
+        "device to use for multimodal projector (none = don't offload, default: auto)\n"
+        "use --list-devices to see a list of available devices",
         [](common_params & params, const std::string & value) {
+            if (value == "none") {
+                params.mmproj_use_gpu = false;
+                params.mmproj_device  = nullptr;
+                return;
+            }
             auto devices = parse_device_list(value);
             // parse_device_list pushes nullptr at back so devices is length 2 for single device.
             if (devices.size() > 2) {
@@ -2606,7 +2612,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             }
             params.mmproj_device = devices.front();
         }
-    ).set_examples(mmproj_examples).set_env("MTMD_BACKEND_DEVICE"));
+    ).set_examples(mmproj_examples).set_env("MTMD_BACKEND_DEVICE")); // no LLAMA_ARG_ prefix for backward compatibility reason
     add_opt(common_arg(
         {"--image", "--audio", "--video"}, "FILE",
         "path to an image, audio, or video file. use with multimodal models, use comma-separated values for multiple files\n",

@@ -189,11 +189,10 @@ struct clip_ctx {
             if (ctx_params.device != nullptr) {
                 backend = ggml_backend_dev_init(ctx_params.device, nullptr);
                 if (!backend) {
-                    LOG_WRN("%s: Warning: Failed to initialize \"%s\" backend, falling back to default GPU backend\n",
-                            __func__, ggml_backend_dev_name(ctx_params.device));
+                    throw std::runtime_error(string_format("%s: failed to initialize \"%s\" backend\n",
+                                                           __func__, ggml_backend_dev_name(ctx_params.device)));
                 }
-            }
-            if (!backend) {
+            } else {
                 backend = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_GPU, nullptr);
                 backend = backend ? backend : ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_IGPU, nullptr);
             }
