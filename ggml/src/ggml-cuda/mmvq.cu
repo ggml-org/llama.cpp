@@ -606,6 +606,317 @@ static constexpr __host__ __device__ int calc_rows_per_block(int ncols_dst, int 
     return 1;
 }
 
+#ifdef GGML_CUDA_CUTLASS
+
+struct __builtin_align__(32) nvfp4_repacked_f32x8 {
+    float x;
+    float y;
+    float z;
+    float w;
+    float p;
+    float q;
+    float r;
+    float s;
+};
+
+struct nvfp4_repacked_f32_subblock {
+    nvfp4_repacked_f32x8 values0;
+    nvfp4_repacked_f32x8 values1;
+};
+
+static __device__ __forceinline__ nvfp4_repacked_f32_subblock load_nvfp4_repacked_f32_subblock(
+        const float * y, int lane) {
+    const int group = lane >> 2;
+    const int sub   = lane & 3;
+    const float4 * src = (const float4 *) (y + group * QK_NVFP4 + sub * QK_NVFP4_SUB);
+    return {
+        *((const nvfp4_repacked_f32x8 *) &src[0]),
+        *((const nvfp4_repacked_f32x8 *) &src[2]),
+    };
+}
+
+static __device__ __forceinline__ float vec_dot_nvfp4_repacked_f32_subblock(
+        const uint8_t * values,
+        const uint8_t * scales,
+        const nvfp4_repacked_f32_subblock & y,
+        int row,
+        int k_block,
+        int lane,
+        int values_row_stride,
+        int scales_row_stride) {
+    const int group = lane >> 2;
+    const int sub   = lane & 3;
+    const int block = k_block + group;
+
+    const uint8_t * qs = values + (int64_t) row * values_row_stride + block * (QK_NVFP4 / 2) +
+        sub * (QK_NVFP4_SUB / 2);
+    const uint8_t scale = scales[(int64_t) row * scales_row_stride + block *
+        (QK_NVFP4 / QK_NVFP4_SUB) + sub];
+
+    uint64_t qs_u64;
+    ggml_cuda_memcpy_1<8>(&qs_u64, qs);
+    const uint8_t * qs_bytes = (const uint8_t *) &qs_u64;
+    const nvfp4_repacked_f32x8 & y0 = y.values0;
+    const nvfp4_repacked_f32x8 & y1 = y.values1;
+    half2 sum = __float2half2_rn(0.0f);
+
+    sum = __hfma2(static_cast<half2>(__nv_cvt_fp4x2_to_halfraw2(
+        static_cast<__nv_fp4x2_storage_t>(qs_bytes[0]), __NV_E2M1)), __floats2half2_rn(y0.x, y0.y), sum);
+    sum = __hfma2(static_cast<half2>(__nv_cvt_fp4x2_to_halfraw2(
+        static_cast<__nv_fp4x2_storage_t>(qs_bytes[1]), __NV_E2M1)), __floats2half2_rn(y0.z, y0.w), sum);
+    sum = __hfma2(static_cast<half2>(__nv_cvt_fp4x2_to_halfraw2(
+        static_cast<__nv_fp4x2_storage_t>(qs_bytes[2]), __NV_E2M1)), __floats2half2_rn(y0.p, y0.q), sum);
+    sum = __hfma2(static_cast<half2>(__nv_cvt_fp4x2_to_halfraw2(
+        static_cast<__nv_fp4x2_storage_t>(qs_bytes[3]), __NV_E2M1)), __floats2half2_rn(y0.r, y0.s), sum);
+    sum = __hfma2(static_cast<half2>(__nv_cvt_fp4x2_to_halfraw2(
+        static_cast<__nv_fp4x2_storage_t>(qs_bytes[4]), __NV_E2M1)), __floats2half2_rn(y1.x, y1.y), sum);
+    sum = __hfma2(static_cast<half2>(__nv_cvt_fp4x2_to_halfraw2(
+        static_cast<__nv_fp4x2_storage_t>(qs_bytes[5]), __NV_E2M1)), __floats2half2_rn(y1.z, y1.w), sum);
+    sum = __hfma2(static_cast<half2>(__nv_cvt_fp4x2_to_halfraw2(
+        static_cast<__nv_fp4x2_storage_t>(qs_bytes[6]), __NV_E2M1)), __floats2half2_rn(y1.p, y1.q), sum);
+    sum = __hfma2(static_cast<half2>(__nv_cvt_fp4x2_to_halfraw2(
+        static_cast<__nv_fp4x2_storage_t>(qs_bytes[7]), __NV_E2M1)), __floats2half2_rn(y1.r, y1.s), sum);
+
+    const float2 sum_f32 = __half22float2(sum);
+    return 2.0f * ggml_cuda_ue4m3_to_fp32(scale) * (sum_f32.x + sum_f32.y);
+}
+
+static __device__ __forceinline__ float vec_dot_nvfp4_repacked_f32(
+        const uint8_t * values,
+        const uint8_t * scales,
+        const float * y,
+        int row,
+        int k_block,
+        int lane,
+        int values_row_stride,
+        int scales_row_stride) {
+    return vec_dot_nvfp4_repacked_f32_subblock(
+        values, scales, load_nvfp4_repacked_f32_subblock(y, lane), row, k_block, lane,
+        values_row_stride, scales_row_stride);
+}
+
+static __device__ __forceinline__ float vec_dot_nvfp4_repacked_f32_tail(
+        const uint8_t * values,
+        const uint8_t * scales,
+        const float * y,
+        int row,
+        int k_block,
+        int lane,
+        int values_row_stride,
+        int scales_row_stride,
+        int blocks_remaining) {
+    if ((lane >> 2) >= blocks_remaining) {
+        return 0.0f;
+    }
+    return vec_dot_nvfp4_repacked_f32(
+        values, scales, y, row, k_block, lane, values_row_stride, scales_row_stride);
+}
+
+template <bool has_fusion, int rows_per_block>
+__launch_bounds__(rows_per_block * ggml_cuda_get_physical_warp_size(), 1)
+static __global__ void mul_mat_vec_nvfp4_repacked_f32(
+        const uint8_t * values,
+        const uint8_t * scales,
+        const float * y,
+        ggml_cuda_mm_fusion_args_device fusion,
+        float * dst,
+        int ncols,
+        int nrows,
+        int values_row_stride,
+        int scales_row_stride) {
+    constexpr int warp_size = ggml_cuda_get_physical_warp_size();
+    const int row = rows_per_block * blockIdx.x + threadIdx.y;
+    if (row >= nrows) {
+        return;
+    }
+
+    ggml_cuda_pdl_sync();
+
+    const bool use_gate       = has_fusion && fusion.gate != nullptr;
+    const bool use_bias       = has_fusion && fusion.x_bias != nullptr;
+    const bool use_gate_bias  = use_gate && fusion.gate_bias != nullptr;
+    const bool use_scale      = has_fusion && fusion.x_scale != nullptr;
+    const bool use_gate_scale = use_gate && fusion.gate_scale != nullptr;
+    const uint8_t * gate_values = (const uint8_t *) fusion.gate;
+    const uint8_t * gate_scales = (const uint8_t *) fusion.gate_scales_linear;
+
+    float sum      = 0.0f;
+    float gate_sum = 0.0f;
+    const int blocks_per_row = ncols / QK_NVFP4;
+    int k_block = 0;
+    for (; k_block + 8 <= blocks_per_row; k_block += 8) {
+        const float * y_block = y + k_block * QK_NVFP4;
+        sum += vec_dot_nvfp4_repacked_f32(
+            values, scales, y_block, row, k_block, threadIdx.x, values_row_stride, scales_row_stride);
+        if (use_gate) {
+            gate_sum += vec_dot_nvfp4_repacked_f32(
+                gate_values, gate_scales, y_block, row, k_block, threadIdx.x,
+                values_row_stride, scales_row_stride);
+        }
+    }
+    if (k_block < blocks_per_row) {
+        const int blocks_remaining = blocks_per_row - k_block;
+        const float * y_block = y + k_block * QK_NVFP4;
+        sum += vec_dot_nvfp4_repacked_f32_tail(
+            values, scales, y_block, row, k_block, threadIdx.x, values_row_stride,
+            scales_row_stride, blocks_remaining);
+        if (use_gate) {
+            gate_sum += vec_dot_nvfp4_repacked_f32_tail(
+                gate_values, gate_scales, y_block, row, k_block, threadIdx.x,
+                values_row_stride, scales_row_stride, blocks_remaining);
+        }
+    }
+
+    ggml_cuda_pdl_lc();
+    sum = warp_reduce_sum<warp_size>(sum);
+    if (use_gate) {
+        gate_sum = warp_reduce_sum<warp_size>(gate_sum);
+    }
+    if (threadIdx.x != 0) {
+        return;
+    }
+
+    if constexpr (has_fusion) {
+        if (use_scale) {
+            sum *= ((const float *) fusion.x_scale)[0];
+        }
+        if (use_bias) {
+            sum += ((const float *) fusion.x_bias)[row];
+        }
+        if (use_gate) {
+            if (use_gate_scale) {
+                gate_sum *= ((const float *) fusion.gate_scale)[0];
+            }
+            if (use_gate_bias) {
+                gate_sum += ((const float *) fusion.gate_bias)[row];
+            }
+            switch (fusion.glu_op) {
+                case GGML_GLU_OP_SWIGLU:
+                    sum *= ggml_cuda_op_silu_single(gate_sum);
+                    break;
+                case GGML_GLU_OP_GEGLU:
+                    sum *= ggml_cuda_op_gelu_single(gate_sum);
+                    break;
+                case GGML_GLU_OP_SWIGLU_OAI:
+                    sum = ggml_cuda_op_swiglu_oai_single(gate_sum, sum);
+                    break;
+                default:
+                    sum *= gate_sum;
+                    break;
+            }
+        }
+    }
+    dst[row] = sum;
+}
+
+template <int warps_per_block, int rows_per_warp>
+__launch_bounds__(warps_per_block * ggml_cuda_get_physical_warp_size(), 1)
+static __global__ void mul_mat_vec_nvfp4_repacked_f32_y_reuse(
+        const uint8_t * values,
+        const uint8_t * scales,
+        const float * y,
+        float * dst,
+        int ncols,
+        int nrows,
+        int values_row_stride,
+        int scales_row_stride) {
+    constexpr int warp_size = ggml_cuda_get_physical_warp_size();
+    const int row0 = (warps_per_block * blockIdx.x + threadIdx.y) * rows_per_warp;
+    if (row0 >= nrows) {
+        return;
+    }
+
+    ggml_cuda_pdl_sync();
+
+    float sum[rows_per_warp] = {};
+    const int blocks_per_row = ncols / QK_NVFP4;
+    int k_block = 0;
+    for (; k_block + 8 <= blocks_per_row; k_block += 8) {
+        const nvfp4_repacked_f32_subblock y_block = load_nvfp4_repacked_f32_subblock(
+            y + k_block * QK_NVFP4, threadIdx.x);
+#pragma unroll
+        for (int r = 0; r < rows_per_warp; ++r) {
+            const int row = row0 + r;
+            const int valid_row = row < nrows ? row : row0;
+            const float row_mask = row < nrows ? 1.0f : 0.0f;
+            sum[r] += row_mask * vec_dot_nvfp4_repacked_f32_subblock(
+                values, scales, y_block, valid_row, k_block, threadIdx.x,
+                values_row_stride, scales_row_stride);
+        }
+    }
+    if (k_block < blocks_per_row) {
+        const int blocks_remaining = blocks_per_row - k_block;
+        const bool valid_group = (threadIdx.x >> 2) < blocks_remaining;
+        if (valid_group) {
+            const nvfp4_repacked_f32_subblock y_block = load_nvfp4_repacked_f32_subblock(
+                y + k_block * QK_NVFP4, threadIdx.x);
+#pragma unroll
+            for (int r = 0; r < rows_per_warp; ++r) {
+                const int row = row0 + r;
+                const int valid_row = row < nrows ? row : row0;
+                const float row_mask = row < nrows ? 1.0f : 0.0f;
+                sum[r] += row_mask * vec_dot_nvfp4_repacked_f32_subblock(
+                    values, scales, y_block, valid_row, k_block, threadIdx.x,
+                    values_row_stride, scales_row_stride);
+            }
+        }
+    }
+
+    ggml_cuda_pdl_lc();
+#pragma unroll
+    for (int r = 0; r < rows_per_warp; ++r) {
+        sum[r] = warp_reduce_sum<warp_size>(sum[r]);
+    }
+    if (threadIdx.x != 0) {
+        return;
+    }
+#pragma unroll
+    for (int r = 0; r < rows_per_warp; ++r) {
+        const int row = row0 + r;
+        if (row < nrows) {
+            dst[row] = sum[r];
+        }
+    }
+}
+
+static void launch_mul_mat_vec_nvfp4_repacked_f32(
+        const ggml_cuda_cutlass_weight & weight,
+        const float * y,
+        ggml_cuda_mm_fusion_args_device fusion,
+        float * dst,
+        int ncols,
+        int nrows,
+        cudaStream_t stream) {
+    const int values_row_stride = weight.k / 2;
+    const int scales_row_stride = ncols / QK_NVFP4_SUB;
+    const bool has_fusion = fusion.gate != nullptr || fusion.x_bias != nullptr ||
+        fusion.gate_bias != nullptr || fusion.x_scale != nullptr || fusion.gate_scale != nullptr;
+
+    if (has_fusion) {
+        constexpr int rows_per_block = 4;
+        const ggml_cuda_kernel_launch_params launch_params(
+            dim3((nrows + rows_per_block - 1) / rows_per_block),
+            dim3(WARP_SIZE, rows_per_block), 0, stream);
+        ggml_cuda_kernel_launch(mul_mat_vec_nvfp4_repacked_f32<true, rows_per_block>, launch_params,
+            (const uint8_t *) weight.values, weight.scales_linear, y, fusion, dst, ncols, nrows,
+            values_row_stride, scales_row_stride);
+        return;
+    }
+
+    constexpr int warps_per_block = 4;
+    constexpr int rows_per_warp   = 8;
+    const int rows_per_block = warps_per_block * rows_per_warp;
+    const ggml_cuda_kernel_launch_params launch_params(
+        dim3((nrows + rows_per_block - 1) / rows_per_block),
+        dim3(WARP_SIZE, warps_per_block), 0, stream);
+    ggml_cuda_kernel_launch(
+        mul_mat_vec_nvfp4_repacked_f32_y_reuse<warps_per_block, rows_per_warp>, launch_params,
+        (const uint8_t *) weight.values, weight.scales_linear, y, dst, ncols, nrows,
+        values_row_stride, scales_row_stride);
+}
+
+#endif
+
 template <ggml_type type, int ncols_dst, bool has_fusion, bool small_k = false, bool halve_iters = false,
           bool cutlass_layout = false>
 __launch_bounds__(calc_nwarps(type, ncols_dst, get_device_table_id(), small_k, halve_iters)*ggml_cuda_get_physical_warp_size(), 1)
@@ -1450,6 +1761,20 @@ void ggml_cuda_mul_mat_vec_q(
         }
         fusion_local.glu_op = fusion->glu_op;
     }
+
+#ifdef GGML_CUDA_CUTLASS
+    const bool use_nvfp4_w4a32 = cutlass_layout && src0->type == GGML_TYPE_NVFP4 && ids == nullptr &&
+        ne11 == 1 && ne12 == 1 && ne13 == 1 && ne2 == 1 && ne3 == 1 &&
+        ggml_is_contiguous(src1) && ggml_is_contiguous(dst) && ggml_cuda_is_aligned(src1, 32) &&
+        (!fusion || ((!fusion->x_bias || ggml_is_contiguous(fusion->x_bias)) &&
+                     (!fusion->gate_bias || ggml_is_contiguous(fusion->gate_bias))));
+    if (use_nvfp4_w4a32) {
+        GGML_ASSERT(cutlass_weight.scales_linear != nullptr);
+        launch_mul_mat_vec_nvfp4_repacked_f32(
+            cutlass_weight, src1_d, fusion_local, dst_d, (int) ne10, (int) ne01, stream);
+        return;
+    }
+#endif
 
     // If src0 is a temporary compute buffer, clear any potential padding.
     if (ggml_backend_buffer_get_usage(src0->buffer) == GGML_BACKEND_BUFFER_USAGE_COMPUTE &&

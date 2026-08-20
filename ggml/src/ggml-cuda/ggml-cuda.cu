@@ -993,8 +993,20 @@ static const char * ggml_backend_cuda_repacked_buffer_type_get_name(ggml_backend
 
 static ggml_status ggml_backend_cuda_repacked_buffer_init_tensor(
         ggml_backend_buffer_t buffer, ggml_tensor * tensor) {
+    if (tensor->view_src != nullptr) {
+        const ggml_tensor * src = tensor->view_src;
+        if (tensor->view_offs != 0 || tensor->type != src->type ||
+            !ggml_are_same_shape(tensor, src) || !ggml_are_same_stride(tensor, src) ||
+            src->buffer == nullptr || ggml_backend_buffer_get_type(src->buffer) != buffer->buft ||
+            !ggml_cuda_repack_is_cutlass_blockscaled(src)) {
+            GGML_ABORT("invalid tensor %s for CUDA repacked buffer", tensor->name);
+        }
+        tensor->extra = src->extra;
+        return GGML_STATUS_SUCCESS;
+    }
+
     ggml_cuda_cutlass_weight_layout layout;
-    if (tensor->view_src != nullptr || !ggml_cuda_cutlass_get_weight_layout(tensor, layout)) {
+    if (!ggml_cuda_cutlass_get_weight_layout(tensor, layout)) {
         GGML_ABORT("invalid tensor %s for CUDA repacked buffer", tensor->name);
     }
     tensor->extra = &ggml_cuda_cutlass_blockscaled_metadata;

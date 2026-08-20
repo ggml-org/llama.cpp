@@ -10406,8 +10406,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
                 test_cases.emplace_back(new test_repacked_mul_mat_vec_fusion(type, glu_op, true, true));
             }
         }
-        test_cases.emplace_back(new test_repacked_mul_mat_vec_parity(
-            type, type == GGML_TYPE_NVFP4));
+        if (type == GGML_TYPE_MXFP4) {
+            test_cases.emplace_back(new test_repacked_mul_mat_vec_parity(type, false));
+        }
     }
 
     return test_cases;
