@@ -26,6 +26,9 @@
 static const NSInteger MTLGPUFamilyMetal3_GGML = 5001;
 static const NSInteger MTLGPUFamilyMetal4_GGML = 5002;
 
+// MTLLanguageVersion4_0 is not present in older SDKs
+static const NSUInteger MTLLanguageVersion4_0_GGML = 4 << 16;
+
 #if !GGML_METAL_EMBED_LIBRARY
 // Here to assist with NSBundle Path Hack
 @interface GGMLMetalClass : NSObject
@@ -173,6 +176,15 @@ static void ggml_metal_library_build_index(ggml_metal_library_t lib) {
     }
 }
 
+// the tensor API headers are exposed to the shader compiler only at Metal language version 4.0
+static void ggml_metal_compile_options_set_lang(MTLCompileOptions * options, bool has_tensor) {
+    if (!has_tensor) {
+        return;
+    }
+
+    options.languageVersion = (MTLLanguageVersion) MTLLanguageVersion4_0_GGML;
+}
+
 // Parse a `#include "name"` line. Returns the quoted name in *include_name on
 // success. Whitespace-tolerant; ignores `#include <...>` (system headers).
 static bool ggml_metal_library_parse_quoted_include(NSString * line, NSString ** include_name) {
@@ -312,6 +324,7 @@ static bool ggml_metal_library_compile_all(
             @autoreleasepool {
                 MTLCompileOptions * options = [MTLCompileOptions new];
                 options.preprocessorMacros = prep;
+                ggml_metal_compile_options_set_lang(options, ggml_metal_device_get_props(res->dev)->has_tensor);
 
                 lib = [device newLibraryWithSource:src options:options error:&error];
 
@@ -556,6 +569,7 @@ ggml_metal_library_t ggml_metal_library_init_from_source(ggml_metal_device_t dev
 
         MTLCompileOptions * options = [MTLCompileOptions new];
         options.preprocessorMacros = prep;
+        ggml_metal_compile_options_set_lang(options, ggml_metal_device_get_props(dev)->has_tensor);
 
         library = [device newLibraryWithSource:src options:options error:&error];
         if (error) {
