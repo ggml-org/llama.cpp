@@ -1502,7 +1502,10 @@ static bool ggml_backend_cuda_comm_allreduce_rdna2_p2p_host_fused_prefix(
         struct ggml_tensor ** rms_norms, struct ggml_tensor ** muls) {
     constexpr const char * op_prefix = "linear_attn_out-";
     constexpr size_t op_prefix_len = sizeof("linear_attn_out-") - 1;
-    if ((ggml_cuda_rdna2_p2p_host_allreduce_mode() != 2 && ggml_cuda_rdna2_p2p_host_allreduce_mode() != 3) ||
+    const int mode = ggml_cuda_rdna2_p2p_host_allreduce_mode();
+    if ((mode != GGML_CUDA_RDNA2_P2P_HOST_FUSED &&
+         mode != GGML_CUDA_RDNA2_P2P_HOST_MTP &&
+         mode != GGML_CUDA_RDNA2_P2P_HOST_AUTO_EXPANDED) ||
             !comm_ctx->p2p_host_initialized || !comm_ctx->p2p_host_exact_5120 ||
             !comm_ctx->rdna2_bf16_hidden_topology || comm_ctx->backends.size() != 4) {
         return false;
@@ -1518,11 +1521,17 @@ static bool ggml_backend_cuda_comm_allreduce_rdna2_p2p_host_fused_prefix(
         ggml_tensor * add = adds[rank];
         ggml_tensor * rms = rms_norms[rank];
         ggml_tensor * mul = muls[rank];
+        const bool linear_name = tensor != nullptr &&
+            std::strncmp(tensor->name, op_prefix, op_prefix_len) == 0;
+        const bool expanded_name = tensor != nullptr && mode == GGML_CUDA_RDNA2_P2P_HOST_AUTO_EXPANDED &&
+            (std::strncmp(tensor->name, "ffn_out-", sizeof("ffn_out-") - 1) == 0 ||
+             std::strncmp(tensor->name, "attn_output-", sizeof("attn_output-") - 1) == 0);
+        const bool name_ok = linear_name || expanded_name;
         if (tensor == nullptr || reshape == nullptr || add == nullptr || rms == nullptr || mul == nullptr ||
                 tensor->data == nullptr || tensor->type != GGML_TYPE_F32 ||
                 tensor->ne[0] != 5120 || tensor->ne[1] != 1 || tensor->ne[2] != 1 || tensor->ne[3] != 1 ||
                 (tensor->flags & GGML_TENSOR_FLAG_COMPUTE) == 0 ||
-                std::strncmp(tensor->name, op_prefix, op_prefix_len) != 0 || !ggml_is_contiguously_allocated(tensor) ||
+                !name_ok || !ggml_is_contiguously_allocated(tensor) ||
                 reshape->op != GGML_OP_RESHAPE || reshape->src[0] != tensor ||
                 add->op != GGML_OP_ADD || add->src[0] != reshape || add->src[1] == nullptr ||
                 rms->op != GGML_OP_RMS_NORM || rms->src[0] != add ||
@@ -6829,7 +6838,9 @@ static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, con
         return (void *)ggml_backend_cuda_comm_allreduce_tensor;
     }
     if (strcmp(name, "ggml_backend_comm_allreduce_fused_prefix") == 0) {
-        return ggml_cuda_rdna2_p2p_host_allreduce_mode() == 2 ?
+        const int mode = ggml_cuda_rdna2_p2p_host_allreduce_mode();
+        return (mode == GGML_CUDA_RDNA2_P2P_HOST_FUSED ||
+                mode == GGML_CUDA_RDNA2_P2P_HOST_AUTO_EXPANDED) ?
             (void *)ggml_backend_cuda_comm_allreduce_fused_prefix : nullptr;
     }
     if (strcmp(name, "ggml_backend_register_host_buffer") == 0) {
