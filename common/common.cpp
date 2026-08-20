@@ -1726,6 +1726,10 @@ struct llama_context_params common_context_params_to_llama(const common_params &
 
     cparams.type_k = params.cache_type_k;
     cparams.type_v = params.cache_type_v;
+    if (cparams.type_k == GGML_TYPE_Q3_0_ROCMFPX) {
+        LOG_WRN("%s: q3_0_rocmfpx K cache is below the coherency floor; using q6_0_rocmfpx for K\n", __func__);
+        cparams.type_k = GGML_TYPE_Q6_0_ROCMFPX;
+    }
 
     return cparams;
 }

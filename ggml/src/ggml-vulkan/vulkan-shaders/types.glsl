@@ -1804,6 +1804,87 @@ struct block_nvfp4_packed32
 #define A_TYPE_PACKED32 block_nvfp4_packed32
 #endif
 
+#define QUANT_K_ROCMFP4 32
+#define QUANT_R_ROCMFP4 2
+
+struct block_rocmfp4
+{
+    uint8_t qs[QUANT_K_ROCMFP4/2];
+    uint8_t e[2];
+};
+
+struct block_rocmfp4_fast
+{
+    uint8_t qs[QUANT_K_ROCMFP4/2];
+    uint8_t e;
+};
+
+#if defined(DATA_A_ROCMFP4)
+#define QUANT_K QUANT_K_ROCMFP4
+#define QUANT_R QUANT_R_ROCMFP4
+#define QUANT_AUXF 1
+#define A_TYPE block_rocmfp4
+#endif
+
+#if defined(DATA_A_ROCMFP4_FAST)
+#define QUANT_K QUANT_K_ROCMFP4
+#define QUANT_R QUANT_R_ROCMFP4
+#define QUANT_AUXF 1
+#define A_TYPE block_rocmfp4_fast
+#endif
+
+#define QUANT_K_ROCMFPX_FP8 32
+#define QUANT_R_ROCMFPX_FP8 1
+
+struct block_rocmfpx_fp3
+{
+    uint8_t qs[12];
+    uint8_t e[2];
+};
+
+// 32 codes of 6 bits, little-endian packed into 24 bytes, plus two UE4M3
+// half-block scales. Matches block_rocmfp6 in ggml/rocmfpx/rocmfpx.h.
+struct block_rocmfpx_fp6
+{
+    uint8_t qs[24];
+    uint8_t e[2];
+};
+
+struct block_rocmfpx_fp8
+{
+    int8_t qs[QUANT_K_ROCMFPX_FP8];
+    uint8_t e;
+};
+
+#if defined(DATA_A_ROCMFPX_FP3)
+#define QUANT_K QUANT_K_ROCMFPX_FP8
+#define QUANT_R QUANT_R_ROCMFPX_FP8
+#define QUANT_AUXF 1
+#define A_TYPE block_rocmfpx_fp3
+#endif
+
+#if defined(DATA_A_ROCMFPX_FP6)
+#define QUANT_K QUANT_K_ROCMFPX_FP8
+#define QUANT_R QUANT_R_ROCMFPX_FP8
+#define QUANT_AUXF 1
+#define A_TYPE block_rocmfpx_fp6
+#endif
+
+#if defined(DATA_A_ROCMFPX_FP8)
+#define QUANT_K QUANT_K_ROCMFPX_FP8
+#define QUANT_R QUANT_R_ROCMFPX_FP8
+#define QUANT_AUXF 1
+#define A_TYPE block_rocmfpx_fp8
+#endif
+
+#if defined(DATA_A_ROCMFPX_FP3) || defined(DATA_A_ROCMFPX_FP6) || defined(DATA_A_ROCMFPX_FP8)
+#define DATA_A_ROCMFPX_FAMILY
+#endif
+
+#if defined(DATA_A_ROCMFP4) || defined(DATA_A_ROCMFP4_FAST) || defined(DATA_A_ROCMFPX_FAMILY)
+#define DATA_A_ROCMFP_ANY
+#endif
+
 #if defined(DATA_A_IQ4_NL) || defined(DATA_A_IQ4_XS)
 const int8_t kvalues_iq4nl_const[16] = {
     int8_t(-127), int8_t(-104), int8_t(-83), int8_t(-65), int8_t(-49), int8_t(-35), int8_t(-22), int8_t(-10),
@@ -1818,6 +1899,71 @@ void init_iq_shmem(uvec3 wgsize)
     // copy the table into shared memory and sync
     for (uint i = gl_LocalInvocationIndex.x; i < kvalues_iq4nl.length(); i += wgsize.x) {
         kvalues_iq4nl[i] = FLOAT_TYPE(kvalues_iq4nl_const[i]);
+    }
+    barrier();
+}
+#endif
+
+#if defined(DATA_A_ROCMFP_ANY) || defined(FA_ROCMFPX_FAMILY)
+// The ROCm FP formats share one UE4M3 scale encoding. It differs from the
+// NVFP4 encoding: the exponent bias is one lower and subnormals are scaled by
+// 1/1024, which keeps the halved ROCmFP4 codebook multiply-free at call sites.
+shared float rocmfp_ue4m3_fp32_lut[128];
+
+float rocmfp_ue4m3_to_fp32_build(uint u) {
+    if (u == 0u || u == 127u) {
+        return 0.0;
+    }
+    const uint exp = (u >> 3) & 15u;
+    const uint man = u & 7u;
+    if (exp == 0u) {
+        return float(man) * (1.0 / 1024.0);
+    }
+    const uint bits = (exp + 119u) << 23 | (man << 20);
+    return uintBitsToFloat(bits);
+}
+
+float ue4m3_to_fp32(uint8_t x) {
+    return rocmfp_ue4m3_fp32_lut[min(uint(x), 127u)];
+}
+#endif
+
+#if defined(DATA_A_ROCMFP4) || defined(DATA_A_ROCMFP4_FAST)
+// E2M1-derived codebook with the top level retuned from 12 to 10.
+const int8_t kvalues_rocmfp4_const[16] = {
+    int8_t(0), int8_t(1), int8_t(2), int8_t(3), int8_t(4), int8_t(6), int8_t(8), int8_t(10),
+    int8_t(0), int8_t(-1), int8_t(-2), int8_t(-3), int8_t(-4), int8_t(-6), int8_t(-8), int8_t(-10),
+};
+
+shared int8_t kvalues_rocmfp4[16];
+#endif
+
+#if defined(DATA_A_ROCMFPX_FP6)
+int rocmfpx_fp6_decode_code(uint code) {
+    const int mag = int(code & 31u);
+    return (code & 32u) != 0u ? -(mag == 0 ? 32 : mag) : mag;
+}
+#endif
+
+#if defined(DATA_A_ROCMFPX_FAMILY)
+const int8_t kvalues_rocmfpx_fp3_const[8] = {
+    int8_t(0), int8_t(1), int8_t(2), int8_t(4),
+    int8_t(0), int8_t(-1), int8_t(-2), int8_t(-4)
+};
+#endif
+
+#if defined(DATA_A_ROCMFP_ANY)
+#define NEEDS_INIT_IQ_SHMEM
+void init_iq_shmem(uvec3 wgsize)
+{
+    // copy the tables into shared memory and sync
+#if defined(DATA_A_ROCMFP4) || defined(DATA_A_ROCMFP4_FAST)
+    for (uint i = gl_LocalInvocationIndex.x; i < kvalues_rocmfp4.length(); i += wgsize.x) {
+        kvalues_rocmfp4[i] = kvalues_rocmfp4_const[i];
+    }
+#endif
+    for (uint i = gl_LocalInvocationIndex.x; i < rocmfp_ue4m3_fp32_lut.length(); i += wgsize.x) {
+        rocmfp_ue4m3_fp32_lut[i] = rocmfp_ue4m3_to_fp32_build(i);
     }
     barrier();
 }
