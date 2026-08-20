@@ -291,11 +291,11 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 		return this.pendingMessages.has(convId);
 	}
 
-	pendingMessageContent(convId: string): string | null {
+	getPendingMessageContent(convId: string): string | null {
 		return this.pendingMessages.get(convId)?.content ?? null;
 	}
 
-	pendingMessageExtras(convId: string): DatabaseMessageExtra[] | undefined {
+	getPendingMessageExtras(convId: string): DatabaseMessageExtra[] | undefined {
 		return this.pendingMessages.get(convId)?.extras;
 	}
 

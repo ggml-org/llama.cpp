@@ -31,13 +31,13 @@ export class AgenticGates {
 	/** Reactive: queued steering messages to inject between turns */
 	private steeringMessages = new SvelteMap<string, SteeringMessage>();
 
-	pendingPermissionRequest(
+	getPendingPermissionRequest(
 		conversationId: string
 	): { toolName: string; serverLabel: string } | null {
 		return this.pendingPermissions.get(conversationId) ?? null;
 	}
 
-	pendingContinueRequest(conversationId: string): boolean {
+	getPendingContinueRequest(conversationId: string): boolean {
 		return this.pendingContinueRequests.get(conversationId) ?? false;
 	}
 
@@ -63,11 +63,11 @@ export class AgenticGates {
 		return this.steeringMessages.has(conversationId);
 	}
 
-	pendingSteeringMessageContent(conversationId: string): string | null {
+	getPendingSteeringMessageContent(conversationId: string): string | null {
 		return this.steeringMessages.get(conversationId)?.content ?? null;
 	}
 
-	pendingSteeringMessageExtras(conversationId: string): DatabaseMessageExtra[] | undefined {
+	getPendingSteeringMessageExtras(conversationId: string): DatabaseMessageExtra[] | undefined {
 		return this.steeringMessages.get(conversationId)?.extras;
 	}
 

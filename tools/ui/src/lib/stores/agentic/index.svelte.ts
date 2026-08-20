@@ -217,34 +217,34 @@ class AgenticStore {
 		return this.sessions.get(conversationId)?.flowRootMessageId ?? null;
 	}
 
-	currentTurn(conversationId: string): number {
+	getCurrentTurn(conversationId: string): number {
 		return this.sessions.get(conversationId)?.currentTurn ?? 0;
 	}
 
-	totalToolCalls(conversationId: string): number {
+	getTotalToolCalls(conversationId: string): number {
 		return this.sessions.get(conversationId)?.totalToolCalls ?? 0;
 	}
 
-	lastError(conversationId: string): Error | null {
+	getLastError(conversationId: string): Error | null {
 		return this.sessions.get(conversationId)?.lastError ?? null;
 	}
 
-	streamingToolCall(conversationId: string): { name: string; arguments: string } | null {
+	getStreamingToolCall(conversationId: string): { name: string; arguments: string } | null {
 		return this.sessions.get(conversationId)?.streamingToolCall ?? null;
 	}
 
-	executingToolCallId(conversationId: string): string | null {
+	getExecutingToolCallId(conversationId: string): string | null {
 		return this.sessions.get(conversationId)?.executingToolCallId ?? null;
 	}
 
-	pendingPermissionRequest(
+	getPendingPermissionRequest(
 		conversationId: string
 	): { toolName: string; serverLabel: string } | null {
-		return this.gates.pendingPermissionRequest(conversationId);
+		return this.gates.getPendingPermissionRequest(conversationId);
 	}
 
-	pendingContinueRequest(conversationId: string): boolean {
-		return this.gates.pendingContinueRequest(conversationId);
+	getPendingContinueRequest(conversationId: string): boolean {
+		return this.gates.getPendingContinueRequest(conversationId);
 	}
 
 	resolveContinue(conversationId: string, shouldContinue: boolean): void {
@@ -263,12 +263,12 @@ class AgenticStore {
 		return this.gates.hasPendingSteeringMessage(conversationId);
 	}
 
-	pendingSteeringMessageContent(conversationId: string): string | null {
-		return this.gates.pendingSteeringMessageContent(conversationId);
+	getPendingSteeringMessageContent(conversationId: string): string | null {
+		return this.gates.getPendingSteeringMessageContent(conversationId);
 	}
 
-	pendingSteeringMessageExtras(conversationId: string): DatabaseMessageExtra[] | undefined {
-		return this.gates.pendingSteeringMessageExtras(conversationId);
+	getPendingSteeringMessageExtras(conversationId: string): DatabaseMessageExtra[] | undefined {
+		return this.gates.getPendingSteeringMessageExtras(conversationId);
 	}
 
 	/**
