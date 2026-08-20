@@ -583,13 +583,13 @@ kernel void kernel_mul_mm_id(
 
     const short lb1 = (short) tiitg/NL1; // 0 .. NR1-1, this thread's row of the B tile
 
-#ifndef GGML_METAL_HAS_TENSOR
-    S0_8x8 ma[4];
-    S1_8x8 mb[2];
-
     // power-of-two rescaling
     const float s1_inv   = ((device const float *) amax)[0];
     const float s1_scale = ((device const float *) amax)[1];
+
+#ifndef GGML_METAL_HAS_TENSOR
+    S0_8x8 ma[4];
+    S1_8x8 mb[2];
 
     simdgroup_float8x8 mc[8];
 
