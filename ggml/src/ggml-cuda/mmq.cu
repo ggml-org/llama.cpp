@@ -82,8 +82,44 @@ static void ggml_cuda_mul_mat_q_switch_type(ggml_backend_cuda_context & ctx, con
     }
 }
 
+static mmq_epilogue_args ggml_cuda_mmq_get_epilogue_args(
+        const ggml_cuda_mm_fusion_args_host * fusion, const bool mul_mat_id,
+        const int64_t nrows_x, const int64_t nchannels_y) {
+    if (!fusion) {
+        return {};
+    }
+
+    GGML_ASSERT(!fusion->gate);
+    GGML_ASSERT(!fusion->gate_bias);
+    GGML_ASSERT(!fusion->gate_scale);
+
+    mmq_epilogue_args epilogue;
+    if (fusion->x_scale) {
+        GGML_ASSERT(fusion->x_scale->type == GGML_TYPE_F32);
+        GGML_ASSERT(ggml_is_contiguous(fusion->x_scale));
+        GGML_ASSERT(ggml_nelements(fusion->x_scale) == (mul_mat_id ? nchannels_y : 1));
+        epilogue.scale = (const float *) fusion->x_scale->data;
+    }
+
+    if (fusion->x_bias) {
+        GGML_ASSERT(mul_mat_id);
+        GGML_ASSERT(fusion->x_bias->type == GGML_TYPE_F32);
+        GGML_ASSERT(fusion->x_bias->nb[0] == sizeof(float));
+        GGML_ASSERT(fusion->x_bias->nb[1] % sizeof(float) == 0);
+        GGML_ASSERT(fusion->x_bias->ne[0] == nrows_x);
+        GGML_ASSERT(fusion->x_bias->ne[1] == nchannels_y);
+        GGML_ASSERT(fusion->x_bias->ne[2] == 1);
+        GGML_ASSERT(fusion->x_bias->ne[3] == 1);
+        epilogue.bias = (const float *) fusion->x_bias->data;
+        epilogue.bias_stride = fusion->x_bias->nb[1] / sizeof(float);
+    }
+
+    return epilogue;
+}
+
 void ggml_cuda_mul_mat_q(
-        ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * ids, ggml_tensor * dst) {
+        ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * ids, ggml_tensor * dst,
+        const ggml_cuda_mm_fusion_args_host * fusion) {
     GGML_ASSERT(        src1->type == GGML_TYPE_F32);
     GGML_ASSERT(        dst->type  == GGML_TYPE_F32);
     GGML_ASSERT(!ids || ids->type  == GGML_TYPE_I32); // Optional, used for batched GGML_MUL_MAT_ID.
@@ -127,6 +163,7 @@ void ggml_cuda_mul_mat_q(
     const int64_t s3  =  dst->nb[3] / ts_dst;
 
     const bool fallback = ne01 % 128 != 0;
+    const mmq_epilogue_args epilogue = ggml_cuda_mmq_get_epilogue_args(fusion, ids != nullptr, ne01, ids ? ne02 : ne12);
 
     const bool use_native_fp4 = blackwell_mma_available(cc) && (src0->type == GGML_TYPE_MXFP4 || src0->type == GGML_TYPE_NVFP4);
     const size_t y_block_size       = use_native_fp4 ? sizeof(block_fp4_mmq) : sizeof(block_q8_1_mmq);
@@ -171,7 +208,7 @@ void ggml_cuda_mul_mat_q(
             ne00, ne01, ne1, s01, ne11, s1,
             ne02, ne12, s02, s12, s2,
             ne03, ne13, s03, s13, s3,
-            ne1};
+            ne1, epilogue};
         ggml_cuda_mul_mat_q_switch_type(ctx, args, stream);
         return;
     }
@@ -251,7 +288,7 @@ void ggml_cuda_mul_mat_q(
         ne00, ne01, ne_get_rows, s01, ne_get_rows, s1,
         ne02, ne02, s02, s12, s2,
         ne03, ne13, s03, s13, s3,
-        ne12};
+        ne12, epilogue};
 
     ggml_cuda_mul_mat_q_switch_type(ctx, args, stream);
 }
