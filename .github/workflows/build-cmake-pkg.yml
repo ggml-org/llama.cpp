@@ -30,17 +30,17 @@ jobs:
           build_commit=$(git rev-parse --short HEAD | xargs)
           build_number=$(git rev-list --count HEAD | xargs)
 
-          major=$(grep -oP 'set\(LLAMA_VERSION_MAJOR\s+\K\d+' CMakeLists.txt)
-          minor=$(grep -oP 'set\(LLAMA_VERSION_MINOR\s+\K\d+' CMakeLists.txt)
-          patch=$(grep -oP 'set\(LLAMA_VERSION_PATCH\s+\K\d+' CMakeLists.txt)
+          major=$(grep -oE "set\(LLAMA_VERSION_MAJOR[[:space:]]+[0-9]+" CMakeLists.txt | grep -oE "[0-9]+$")
+          minor=$(grep -oE "set\(LLAMA_VERSION_MINOR[[:space:]]+[0-9]+" CMakeLists.txt | grep -oE "[0-9]+$")
+          patch=$(grep -oE "set\(LLAMA_VERSION_PATCH[[:space:]]+[0-9]+" CMakeLists.txt | grep -oE "[0-9]+$")
           build_version="$major.$minor.$patch"
 
-          checks=("set\(LLAMA_VERSION     \s+$build_version\)"
-                  "set\(LLAMA_BUILD_COMMIT\s+$build_commit\)"
-                  "set\(LLAMA_BUILD_NUMBER\s+$build_number\)")
+          checks=("set\(LLAMA_VERSION[[:space:]]+$build_version\)"
+                  "set\(LLAMA_BUILD_COMMIT[[:space:]]+$build_commit\)"
+                  "set\(LLAMA_BUILD_NUMBER[[:space:]]+$build_number\)")
 
           for check in "${checks[@]}"; do
-              if ! grep -qP "$check" "$LLAMA_CONFIG"; then
+              if ! grep -qE "$check" "$LLAMA_CONFIG"; then
                   echo "Checking llama-config.cmake version... \"$check\" failed!"
                   exit 1
               fi
