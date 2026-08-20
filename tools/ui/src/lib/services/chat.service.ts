@@ -726,7 +726,7 @@ export class ChatService {
 		model?: string | null,
 		excludeReasoning?: boolean,
 		signal?: AbortSignal
-	): Promise<void> {
+	): Promise<ChatMessageTimings | null> {
 		const normalizedMessages: ApiChatMessageData[] = (
 			await Promise.all(
 				messages.map((msg) => {
@@ -772,17 +772,38 @@ export class ChatService {
 		}
 
 		try {
-			await fetch(API_CHAT.COMPLETIONS, {
+			const response = await fetch(API_CHAT.COMPLETIONS, {
 				body: JSON.stringify(requestBody),
 				headers: getJsonHeaders(),
 				method: 'POST',
 				signal
 			});
+
+			if (!response.ok) return null;
+
+			const data = await response.json();
+
+			// llama.cpp attaches a timings object with the exact fresh and
+			// cached prompt token split; usage.prompt_tokens is the
+			// OpenAI-compatible total, kept as fallback.
+			if (typeof data?.timings?.prompt_n === 'number') {
+				return {
+					cache_n: data.timings.cache_n ?? 0,
+					predicted_n: 0,
+					prompt_n: data.timings.prompt_n
+				};
+			}
+
+			if (typeof data?.usage?.prompt_tokens === 'number') {
+				return { cache_n: 0, predicted_n: 0, prompt_n: data.usage.prompt_tokens };
+			}
 		} catch (error) {
 			if (!isAbortError(error)) {
 				console.warn('[ChatService] Pre-encode request failed:', error);
 			}
 		}
+
+		return null;
 	}
 
 	/**

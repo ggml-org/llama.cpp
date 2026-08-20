@@ -14,6 +14,7 @@ import { conversationsStore } from '$lib/stores/conversations.svelte';
 import { modelsStore } from '$lib/stores/models.svelte';
 import { serverStore } from '$lib/stores/server.svelte';
 import type { ApiProcessingState, ChatMessageTimings, DatabaseMessage } from '$lib/types';
+import { lastContextBearingMessage } from '$lib/utils/compaction';
 
 interface LiveStats {
 	freshTokens: number;
@@ -22,14 +23,8 @@ interface LiveStats {
 	outputTokens: number;
 }
 
-function lastAssistantTimings(messages: DatabaseMessage[]): ChatMessageTimings | undefined {
-	for (let i = messages.length - 1; i >= 0; i--) {
-		const m = messages[i];
-
-		if (m.role === MessageRole.ASSISTANT && m.timings) return m.timings;
-	}
-
-	return undefined;
+function lastContextTimings(messages: DatabaseMessage[]): ChatMessageTimings | undefined {
+	return lastContextBearingMessage(messages)?.timings;
 }
 
 function deriveLiveStats(state: ApiProcessingState | null): LiveStats | null {
@@ -70,7 +65,7 @@ class ContextStatsStore {
 	private liveStats = $derived(deriveLiveStats(chatStore.activeProcessingState));
 
 	currentRead = $derived.by(() => {
-		const timings = lastAssistantTimings(conversationsStore.activeMessages as DatabaseMessage[]);
+		const timings = lastContextTimings(conversationsStore.activeMessages as DatabaseMessage[]);
 
 		let read = 0;
 
@@ -88,14 +83,14 @@ class ContextStatsStore {
 	});
 
 	currentFresh = $derived.by(() => {
-		const timings = lastAssistantTimings(conversationsStore.activeMessages as DatabaseMessage[]);
+		const timings = lastContextTimings(conversationsStore.activeMessages as DatabaseMessage[]);
 		const fresh = timings?.prompt_n ?? 0;
 
 		return Math.max(fresh, this.liveStats?.freshTokens ?? 0);
 	});
 
 	currentCache = $derived.by(() => {
-		const timings = lastAssistantTimings(conversationsStore.activeMessages as DatabaseMessage[]);
+		const timings = lastContextTimings(conversationsStore.activeMessages as DatabaseMessage[]);
 		const cached = timings?.cache_n ?? 0;
 
 		if (this.liveStats && this.liveStats.promptTokens > 0) {
@@ -108,7 +103,7 @@ class ContextStatsStore {
 	currentOutput = $derived.by(() => {
 		if (this.liveStats && this.liveStats.outputTokens > 0) return this.liveStats.outputTokens;
 
-		const timings = lastAssistantTimings(conversationsStore.activeMessages as DatabaseMessage[]);
+		const timings = lastContextTimings(conversationsStore.activeMessages as DatabaseMessage[]);
 
 		return timings?.predicted_n ?? 0;
 	});
