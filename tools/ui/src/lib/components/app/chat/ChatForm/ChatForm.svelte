@@ -48,6 +48,7 @@
 		containsFileMentionLink,
 		findCommandToken,
 		findMentionToken,
+		getConversationModel,
 		isIMEComposing,
 		isOffsetInCodeBlock,
 		parseClipboardContent,
@@ -190,31 +191,9 @@
 
 	let isRouter = $derived(serverStore.isRouterMode);
 	let conversationModel = $derived(
-		chatStore.getConversationModel(conversationsStore.activeMessages as DatabaseMessage[])
+		getConversationModel(conversationsStore.activeMessages as DatabaseMessage[])
 	);
-	let activeModelId = $derived.by(() => {
-		const options = modelsStore.models;
-
-		if (!isRouter) {
-			return options.length > 0 ? options[0].model : null;
-		}
-
-		const selectedId = modelsStore.selectedModelId;
-
-		if (selectedId) {
-			const model = options.find((m) => m.id === selectedId);
-
-			if (model) return model.model;
-		}
-
-		if (conversationModel) {
-			const model = options.find((m) => m.model === conversationModel);
-
-			if (model) return model.model;
-		}
-
-		return null;
-	});
+	let activeModelId = $derived(modelsStore.activeModelId);
 
 	let hasModelSelected = $derived(
 		!isRouter || !!conversationModel || !!modelsStore.selectedModelId

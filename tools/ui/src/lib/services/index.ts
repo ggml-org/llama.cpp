@@ -104,6 +104,15 @@ export { ChatService } from './chat.service';
 export { DatabaseService } from './database.service';
 
 /**
+ * **ConversationTransferService** - Conversation import/export format layer
+ *
+ * Owns the JSONL session format (SESSION header + MESSAGE records), ZIP
+ * archiving and browser downloads. Stateless; DB access and store refreshes
+ * stay in conversationsStore.
+ */
+export { ConversationTransferService } from './conversation-transfer.service';
+
+/**
  * **ModelsService** - Model management API communication
  *
  * Handles communication with model-related endpoints for both MODEL (single model)
@@ -262,9 +271,9 @@ export { ParameterSyncService } from './parameter-sync.service';
 export { MCPService } from './mcp.service';
 
 /**
- * **SandboxService** - Frontend JavaScript execution in a browser sandbox
+ * **SandboxService** - Browser JavaScript execution in a browser sandbox
  *
- * Stateless executor for the run_javascript frontend tool. Model generated
+ * Stateless executor for the run_javascript browser tool. Model generated
  * code runs in a Web Worker spawned inside a sandboxed iframe with an opaque
  * origin: no access to the app origin, its storage or its API, and outgoing
  * requests carry a null origin. The code never touches a main thread, so the
@@ -274,7 +283,7 @@ export { MCPService } from './mcp.service';
  * **Architecture & Relationships:**
  * - **SandboxService** (this class): Stateless sandbox execution
  * - **toolsStore**: Exposes the tool definition when the sandbox is enabled
- * - **agenticStore**: Dispatches ToolSource.FRONTEND calls here
+ * - **agenticStore**: Dispatches ToolSource.BROWSER calls here
  *
  * @see buildSandboxToolDefinition in utils/sandbox-tool - tool schema sent to the LLM
  * @see agenticStore in stores/agentic.svelte.ts - tool dispatch

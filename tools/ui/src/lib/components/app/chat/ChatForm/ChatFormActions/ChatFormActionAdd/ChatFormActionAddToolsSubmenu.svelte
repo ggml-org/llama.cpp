@@ -35,7 +35,7 @@
 						<span>
 							Run llama-server with <code>{CLI_FLAGS.TOOLS}</code> flag to enable
 
-							<strong>Built-in Tools</strong>.
+							<strong>Server Tools</strong>.
 						</span>
 					</span>
 

@@ -68,7 +68,7 @@ function formatReply(reply: SandboxReply): ToolExecutionResult {
 
 export class SandboxService {
 	/**
-	 * Execute a frontend sandbox tool call and return its output.
+	 * Execute a browser sandbox tool call and return its output.
 	 * One disposable iframe per execution, removed on completion,
 	 * timeout or abort. Removing the iframe terminates the worker
 	 * at the browser level, so runaway code cannot outlive it.
@@ -79,7 +79,7 @@ export class SandboxService {
 		signal?: AbortSignal
 	): Promise<ToolExecutionResult> {
 		if (toolName !== SANDBOX_TOOL_NAME) {
-			return { content: `Unknown frontend tool: ${toolName}`, isError: true };
+			return { content: `Unknown browser tool: ${toolName}`, isError: true };
 		}
 
 		const code = typeof params.code === 'string' ? params.code : '';
