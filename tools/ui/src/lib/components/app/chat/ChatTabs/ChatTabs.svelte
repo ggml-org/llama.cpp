@@ -50,8 +50,8 @@
 </script>
 
 <nav
-	class="sticky pl-1 top-0 z-10 hidden md:block transition-[padding] duration-200 ease-in-out pt-3.25 {uiStore.isSidebarExpanded
-		? 'pt-1.5 max-w-[calc(100vw-19.5rem)]'
+	class="group sticky pl-1 top-0 z-10 hidden md:block chat-tabs-fade transition-[padding] duration-200 ease-in-out pt-3.25 {uiStore.isSidebarExpanded
+		? 'max-w-[calc(100vw-19.5rem)]'
 		: 'max-w-[calc(100vw-4.5rem)]'}"
 	aria-label="Open conversations"
 >
@@ -75,14 +75,15 @@
 				{#each tabs as tab (tab.id)}
 					{@const isActive = tab.id === activeId}
 					{@const isLoading = loadingIds.has(tab.id)}
+					{@const contentOpacity = isActive ? '' : 'opacity-40 group-hover:opacity-100'}
 
 					<div
 						data-active-tab={isActive ? 'true' : undefined}
 						class={cn(
-							'group flex h-8 max-w-52 min-w-0 shrink-0 items-center gap-1 rounded-lg pr-1 pl-3 text-sm whitespace-nowrap transition-colors hover:bg-foreground/10 border backdrop-blur-xl first:ml-2',
+							'flex h-8 max-w-52 min-w-0 shrink-0 items-center gap-1 rounded-lg pr-1 pl-3 text-sm whitespace-nowrap transition-[background-color,border-color,box-shadow] hover:bg-foreground/10 border backdrop-blur-xl first:ml-2',
 							isActive
 								? 'bg-muted/60 border-border/10 shadow-sm text-accent-foreground hover:bg-primary/15'
-								: 'text-muted-foreground hover:text-foreground border-transparent hover:bg-primary/10 hover:border-border/10 hover:shadow-sm'
+								: 'border-transparent hover:bg-primary/10 hover:border-border/10 hover:shadow-sm'
 						)}
 					>
 						<button
@@ -92,12 +93,14 @@
 							aria-current={isActive ? 'page' : undefined}
 						>
 							{#if isLoading}
-								<Loader2 class="h-3.5 w-3.5 shrink-0 animate-spin" />
+								<Loader2
+									class="h-3.5 w-3.5 shrink-0 animate-spin transition-opacity {contentOpacity}"
+								/>
 							{:else if tab.isNewChat}
-								<SquarePen class="h-3.5 w-3.5 shrink-0" />
+								<SquarePen class="h-3.5 w-3.5 shrink-0 transition-opacity {contentOpacity}" />
 							{/if}
 
-							<span class="truncate">{tab.name}</span>
+							<span class="truncate transition-opacity {contentOpacity}">{tab.name}</span>
 						</button>
 
 						<Tooltip.Root>
@@ -129,11 +132,11 @@
 							{#snippet child({ props })}
 								<button
 									{...props}
-									class="backdrop-blur-lg flex h-8 w-8 mr-4 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-foreground/5 hover:text-foreground"
+									class="backdrop-blur-lg flex h-8 w-8 mr-4 shrink-0 cursor-pointer items-center justify-center rounded-md transition-colors hover:bg-foreground/5"
 									onclick={() => conversationsStore.openNewChat()}
 									aria-label="New chat"
 								>
-									<Plus class="h-4 w-4" />
+									<Plus class="h-4 w-4 opacity-40 transition-opacity group-hover:opacity-100" />
 								</button>
 							{/snippet}
 						</Tooltip.Trigger>
@@ -157,3 +160,16 @@
 		</button>
 	</div>
 </nav>
+
+<style>
+	.chat-tabs-fade {
+		background: linear-gradient(
+			to bottom,
+			var(--background) 0%,
+			var(--background) 35%,
+			color-mix(in srgb, var(--background) 70%, transparent) 55%,
+			color-mix(in srgb, var(--background) 40%, transparent) 75%,
+			transparent 100%
+		);
+	}
+</style>
