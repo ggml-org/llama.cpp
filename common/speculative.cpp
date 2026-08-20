@@ -1854,10 +1854,6 @@ struct common_speculative_impl_ngram_suffix : public common_speculative_impl {
     void accept(llama_seq_id /*seq_id*/, uint16_t /*n_accepted*/, bool /*is_other*/) override {
         // noop
     }
-
-    bool need_embd() const override {
-        return false;
-    }
 };
 
 struct common_speculative_impl_ngram_map_k : public common_speculative_impl {
