@@ -137,6 +137,64 @@ FLOAT_TYPE mul_q8_1(const int32_t q_sum, const float da, const vec2 dsb, const i
 }
 #endif
 
+#if defined(DATA_A_ROCMFP4)
+// dual UE4M3 scales: e[0] covers elements 0-15, e[1] covers 16-31
+FLOAT_TYPEV2 get_dm2(uint ib) {
+    return FLOAT_TYPEV2(ue4m3_to_fp32(data_a[ib].e[0]), ue4m3_to_fp32(data_a[ib].e[1]));
+}
+#endif
+
+#if defined(DATA_A_ROCMFP4_FAST)
+FLOAT_TYPEV2 get_dm2(uint ib) {
+    const FLOAT_TYPE d = FLOAT_TYPE(ue4m3_to_fp32(data_a[ib].e));
+    return FLOAT_TYPEV2(d, d);
+}
+#endif
+
+#if defined(DATA_A_ROCMFP4) || defined(DATA_A_ROCMFP4_FAST)
+// 1-byte quant loads for ROCmFP4 blocks (18 / 17 bytes). Low nibbles are the
+// first half of the block, high nibbles the second half.
+i32vec2 repack(uint ib, uint iqs) {
+    const uint32_t qs = pack32(u8vec4(data_a[ib].qs[iqs * 4    ],
+                                      data_a[ib].qs[iqs * 4 + 1],
+                                      data_a[ib].qs[iqs * 4 + 2],
+                                      data_a[ib].qs[iqs * 4 + 3]));
+
+    const u8vec4 i_a0 = unpack8( qs       & 0x0F0F0F0F);
+    const u8vec4 i_a1 = unpack8((qs >> 4) & 0x0F0F0F0F);
+
+    return i32vec2(pack32(i8vec4(kvalues_rocmfp4[i_a0.x], kvalues_rocmfp4[i_a0.y], kvalues_rocmfp4[i_a0.z], kvalues_rocmfp4[i_a0.w])),
+                   pack32(i8vec4(kvalues_rocmfp4[i_a1.x], kvalues_rocmfp4[i_a1.y], kvalues_rocmfp4[i_a1.z], kvalues_rocmfp4[i_a1.w])));
+}
+
+FLOAT_TYPE mmvq_dot_product(const uint ib_a, const uint iqs) {
+    const i32vec2 data_a_qs = repack(ib_a, iqs);
+
+    // the two halves carry different scales, so they cannot share an accumulator
+    const int32_t q_sum0 = dotPacked4x8EXT(data_a_qs.x, cache_b_qs[0]);
+    const int32_t q_sum1 = dotPacked4x8EXT(data_a_qs.y, cache_b_qs[1]);
+
+    const FLOAT_TYPEV2 d = get_dm2(ib_a);
+    return FLOAT_TYPE(cache_b_ds.x * (float(q_sum0) * float(d.x) + float(q_sum1) * float(d.y)));
+}
+#endif
+
+#if defined(DATA_A_ROCMFPX_FP8)
+// int8 values with one UE4M3 scale per 32-element block
+FLOAT_TYPE mmvq_dot_product(const uint ib_a, const uint iqs) {
+    const int32_t qs0 = pack32(i8vec4(data_a[ib_a].qs[iqs * 8    ], data_a[ib_a].qs[iqs * 8 + 1],
+                                      data_a[ib_a].qs[iqs * 8 + 2], data_a[ib_a].qs[iqs * 8 + 3]));
+    const int32_t qs1 = pack32(i8vec4(data_a[ib_a].qs[iqs * 8 + 4], data_a[ib_a].qs[iqs * 8 + 5],
+                                      data_a[ib_a].qs[iqs * 8 + 6], data_a[ib_a].qs[iqs * 8 + 7]));
+
+    const int32_t q_sum = dotPacked4x8EXT(qs0, cache_b_qs[0]) +
+                          dotPacked4x8EXT(qs1, cache_b_qs[1]);
+
+    const FLOAT_TYPE d = FLOAT_TYPE(ue4m3_to_fp32(data_a[ib_a].e));
+    return FLOAT_TYPE(cache_b_ds.x * float(d) * float(q_sum));
+}
+#endif
+
 #if defined(DATA_A_MXFP4)
 // 1-byte loads for mxfp4 blocks (17 bytes)
 i32vec2 repack(uint ib, uint iqs) {
