@@ -234,7 +234,7 @@
 			useProxy: newServerUseProxy
 		});
 
-		conversationsStore.setMcpServerOverride(newServerId, true);
+		conversationsStore.preferences.setMcpServerOverride(newServerId, true);
 
 		handleOpenChange(false);
 	}

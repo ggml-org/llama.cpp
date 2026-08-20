@@ -14,7 +14,9 @@
 
 	let mcpServers = $derived(mcpStore.getServers().filter((s) => s.enabled));
 	let enabledMcpServersForChat = $derived(
-		mcpServers.filter((s) => conversationsStore.isMcpServerEnabledForChat(s.id) && s.url.trim())
+		mcpServers.filter(
+			(s) => conversationsStore.preferences.isMcpServerEnabledForChat(s.id) && s.url.trim()
+		)
 	);
 	let healthyEnabledMcpServers = $derived(
 		enabledMcpServersForChat.filter((s) => {

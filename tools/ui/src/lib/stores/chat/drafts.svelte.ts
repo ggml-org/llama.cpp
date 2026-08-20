@@ -1,3 +1,11 @@
+/**
+ * DraftMessagesStore - Per-conversation input drafts
+ *
+ * Keeps in-memory drafts (message text + files) keyed by conversation id,
+ * plus a dedicated key for the new-chat screen, so the input box restores
+ * its content when switching conversations.
+ */
+
 import { NEW_CHAT_DRAFT_KEY } from '$lib/constants';
 
 interface DraftMessage {
@@ -7,6 +15,12 @@ interface DraftMessage {
 
 class DraftMessagesStore {
 	private drafts = new Map<string, DraftMessage>();
+
+	clearDraftMessage(chatId: string | undefined): void {
+		const key = chatId ?? NEW_CHAT_DRAFT_KEY;
+
+		this.drafts.delete(key);
+	}
 
 	getDraftMessage(chatId: string | undefined): DraftMessage {
 		const key = chatId ?? NEW_CHAT_DRAFT_KEY;
@@ -22,12 +36,6 @@ class DraftMessagesStore {
 		} else {
 			this.drafts.delete(key);
 		}
-	}
-
-	clearDraftMessage(chatId: string | undefined): void {
-		const key = chatId ?? NEW_CHAT_DRAFT_KEY;
-
-		this.drafts.delete(key);
 	}
 }
 

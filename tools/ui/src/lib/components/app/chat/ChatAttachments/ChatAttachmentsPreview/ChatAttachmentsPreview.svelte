@@ -139,7 +139,7 @@
 	let fileSize = $derived(currentItem?.size ? formatFileSize(currentItem.size) : '');
 
 	let hasVisionModality = $derived(
-		currentItem && activeModelId ? modelsStore.modelSupportsVision(activeModelId) : false
+		currentItem && activeModelId ? modelsStore.props.modelSupportsVision(activeModelId) : false
 	);
 
 	let audioSrc = $derived(

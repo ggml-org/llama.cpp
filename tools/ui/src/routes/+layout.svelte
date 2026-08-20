@@ -216,11 +216,11 @@
 		if (!serverStore.isRouterMode) return;
 
 		untrack(() => {
-			modelsStore.subscribeStatus();
+			modelsStore.status.subscribe();
 		});
 
 		return () => {
-			modelsStore.unsubscribeStatus();
+			modelsStore.status.unsubscribe();
 		};
 	});
 

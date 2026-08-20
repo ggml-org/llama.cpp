@@ -46,7 +46,7 @@ describe('conversationsStore MCP override resolution', () => {
 		// The settings store constructor bails in node env (no `browser`),
 		// so seed the config directly. The shape mirrors what `loadConfig`
 		// would build from localStorage.
-		const { settingsStore } = await import('$lib/stores/settings.svelte');
+		const { settingsStore } = await import('$lib/stores/settings/index.svelte');
 		const raw = localStorage.getItem(CONFIG_LOCALSTORAGE_KEY) ?? '{}';
 		const saved = JSON.parse(raw) as Record<string, unknown>;
 
@@ -73,77 +73,77 @@ describe('conversationsStore MCP override resolution', () => {
 	}
 
 	it('inherits server.enabled when no conversation is active', async () => {
-		const { conversationsStore } = await import('$lib/stores/conversations.svelte');
+		const { conversationsStore } = await import('$lib/stores/conversations/index.svelte');
 
 		conversationsStore.activeConversation = null;
 
-		expect(conversationsStore.isMcpServerEnabledForChat('alpha')).toBe(false);
-		expect(conversationsStore.isMcpServerEnabledForChat('bravo')).toBe(true);
+		expect(conversationsStore.preferences.isMcpServerEnabledForChat('alpha')).toBe(false);
+		expect(conversationsStore.preferences.isMcpServerEnabledForChat('bravo')).toBe(true);
 	});
 
 	it('inherits server.enabled on a newly created chat with no overrides', async () => {
-		const { conversationsStore } = await import('$lib/stores/conversations.svelte');
+		const { conversationsStore } = await import('$lib/stores/conversations/index.svelte');
 
 		conversationsStore.activeConversation = makeConversation();
 
 		// Empty override list: must fall back to global server.enabled, not all-off.
-		expect(conversationsStore.isMcpServerEnabledForChat('alpha')).toBe(false);
-		expect(conversationsStore.isMcpServerEnabledForChat('bravo')).toBe(true);
+		expect(conversationsStore.preferences.isMcpServerEnabledForChat('alpha')).toBe(false);
+		expect(conversationsStore.preferences.isMcpServerEnabledForChat('bravo')).toBe(true);
 	});
 
 	it('inherits server.enabled on a newly created chat when overrides is undefined', async () => {
-		const { conversationsStore } = await import('$lib/stores/conversations.svelte');
+		const { conversationsStore } = await import('$lib/stores/conversations/index.svelte');
 
 		conversationsStore.activeConversation = makeConversation(undefined);
 
-		expect(conversationsStore.isMcpServerEnabledForChat('alpha')).toBe(false);
-		expect(conversationsStore.isMcpServerEnabledForChat('bravo')).toBe(true);
+		expect(conversationsStore.preferences.isMcpServerEnabledForChat('alpha')).toBe(false);
+		expect(conversationsStore.preferences.isMcpServerEnabledForChat('bravo')).toBe(true);
 	});
 
 	it('uses explicit per-chat overrides, with defaults for non-overridden servers', async () => {
-		const { conversationsStore } = await import('$lib/stores/conversations.svelte');
+		const { conversationsStore } = await import('$lib/stores/conversations/index.svelte');
 
 		// Override flips bravo off for this chat, alpha keeps its global default.
 		conversationsStore.activeConversation = makeConversation([
 			{ enabled: false, serverId: 'bravo' }
 		]);
 
-		expect(conversationsStore.isMcpServerEnabledForChat('alpha')).toBe(false);
-		expect(conversationsStore.isMcpServerEnabledForChat('bravo')).toBe(false);
+		expect(conversationsStore.preferences.isMcpServerEnabledForChat('alpha')).toBe(false);
+		expect(conversationsStore.preferences.isMcpServerEnabledForChat('bravo')).toBe(false);
 	});
 
 	it('getAllMcpServerOverrides returns a complete list merged from defaults', async () => {
-		const { conversationsStore } = await import('$lib/stores/conversations.svelte');
+		const { conversationsStore } = await import('$lib/stores/conversations/index.svelte');
 
 		conversationsStore.activeConversation = makeConversation([
 			{ enabled: true, serverId: 'alpha' }
 		]);
 
-		expect(conversationsStore.getAllMcpServerOverrides()).toEqual([
+		expect(conversationsStore.preferences.getAllMcpServerOverrides()).toEqual([
 			{ enabled: true, serverId: 'alpha' },
 			{ enabled: true, serverId: 'bravo' }
 		]);
 	});
 
 	it('getAllMcpServerOverrides falls back to defaults when there are no explicit overrides', async () => {
-		const { conversationsStore } = await import('$lib/stores/conversations.svelte');
+		const { conversationsStore } = await import('$lib/stores/conversations/index.svelte');
 
 		conversationsStore.activeConversation = makeConversation();
 
-		expect(conversationsStore.getAllMcpServerOverrides()).toEqual([
+		expect(conversationsStore.preferences.getAllMcpServerOverrides()).toEqual([
 			{ enabled: false, serverId: 'alpha' },
 			{ enabled: true, serverId: 'bravo' }
 		]);
 	});
 
 	it('getMcpServerOverride returns the global default when the server has no explicit override', async () => {
-		const { conversationsStore } = await import('$lib/stores/conversations.svelte');
+		const { conversationsStore } = await import('$lib/stores/conversations/index.svelte');
 
 		conversationsStore.activeConversation = makeConversation([
 			{ enabled: true, serverId: 'alpha' }
 		]);
 
-		expect(conversationsStore.getMcpServerOverride('bravo')).toEqual({
+		expect(conversationsStore.preferences.getMcpServerOverride('bravo')).toEqual({
 			enabled: true,
 			serverId: 'bravo'
 		});

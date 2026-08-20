@@ -3,7 +3,7 @@ import { browser } from '$app/environment';
 import { base } from '$app/paths';
 import { HEADERS } from '$lib/constants';
 import { MimeTypeApplication } from '$lib/enums';
-import { settingsStore } from '$lib/stores/settings.svelte';
+import { settingsStore } from '$lib/stores/settings/index.svelte';
 
 /**
  * Validates API key by making a request to the server props endpoint

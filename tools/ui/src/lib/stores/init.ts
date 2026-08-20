@@ -13,9 +13,9 @@
  */
 
 // direct imports, not via the barrel, to avoid circular deps
-import { conversationsStore } from './conversations.svelte';
+import { conversationsStore } from './conversations/index.svelte';
 import { permissionsStore } from './permissions.svelte';
-import { settingsStore } from './settings.svelte';
+import { settingsStore } from './settings/index.svelte';
 import { toolsStore } from './tools.svelte';
 import { versionStore } from './version.svelte';
 import { browser } from '$app/environment';
@@ -33,7 +33,7 @@ export function initStores(): Promise<void> {
 		permissionsStore.initialize();
 		toolsStore.initialize();
 		void versionStore.initialize();
-		void conversationsStore.init();
+		void conversationsStore.initialize();
 	})();
 
 	return startup;

@@ -22,10 +22,10 @@ export function useChatScreenActiveModel() {
 
 	$effect(() => {
 		if (activeModelId) {
-			const cached = modelsStore.getModelProps(activeModelId);
+			const cached = modelsStore.props.getModelProps(activeModelId);
 
 			if (!cached) {
-				modelsStore.fetchModelProps(activeModelId).then(() => {
+				modelsStore.props.fetchModelProps(activeModelId).then(() => {
 					modelPropsVersion++;
 				});
 			}
@@ -36,7 +36,7 @@ export function useChatScreenActiveModel() {
 		if (activeModelId) {
 			void modelPropsVersion;
 
-			return modelsStore.modelSupportsAudio(activeModelId);
+			return modelsStore.props.modelSupportsAudio(activeModelId);
 		}
 
 		return false;
@@ -45,7 +45,7 @@ export function useChatScreenActiveModel() {
 		if (activeModelId) {
 			void modelPropsVersion;
 
-			return modelsStore.modelSupportsVideo(activeModelId);
+			return modelsStore.props.modelSupportsVideo(activeModelId);
 		}
 
 		return false;
@@ -54,7 +54,7 @@ export function useChatScreenActiveModel() {
 		if (activeModelId) {
 			void modelPropsVersion;
 
-			return modelsStore.modelSupportsVision(activeModelId);
+			return modelsStore.props.modelSupportsVision(activeModelId);
 		}
 
 		return false;

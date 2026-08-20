@@ -72,9 +72,9 @@
 		{@const triggerLoading =
 			!!triggerModel &&
 			(triggerStatus === ServerModelStatus.LOADING ||
-				modelsStore.isModelOperationInProgress(triggerModel))}
+				modelsStore.status.isOperationInProgress(triggerModel))}
 		{@const triggerLoadPercent = triggerLoading
-			? Math.round(modelLoadFraction(modelsStore.getLoadProgress(triggerModel)) * 100)
+			? Math.round(modelLoadFraction(modelsStore.status.getLoadProgress(triggerModel)) * 100)
 			: 0}
 
 		{#if ms.isRouter}

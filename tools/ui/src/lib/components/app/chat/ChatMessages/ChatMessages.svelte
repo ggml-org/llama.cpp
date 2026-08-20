@@ -238,30 +238,30 @@
 		/>
 	{/each}
 
-	{#if conversationsStore.activeConversation && agenticStore.pendingSteeringMessageContent(conversationsStore.activeConversation!.id)}
+	{#if conversationsStore.activeConversation && agenticStore.getPendingSteeringMessageContent(conversationsStore.activeConversation!.id)}
 		{@const convId = conversationsStore.activeConversation!.id}
-		{@const pendingContent = agenticStore.pendingSteeringMessageContent(convId)}
+		{@const pendingContent = agenticStore.getPendingSteeringMessageContent(convId)}
 
 		{#if pendingContent}
 			<ChatMessageUserPending
 				class="mx-auto mt-12 w-full max-w-[48rem]"
 				content={pendingContent}
-				extras={agenticStore.pendingSteeringMessageExtras(convId)}
+				extras={agenticStore.getPendingSteeringMessageExtras(convId)}
 				onSendImmediately={() => chatStore.abortCurrentFlow(convId)}
 				onEdit={(newContent, extras) =>
 					agenticStore.injectSteeringMessage(convId, newContent, extras)}
 				onDelete={() => agenticStore.clearSteeringMessage(convId)}
 			/>
 		{/if}
-	{:else if conversationsStore.activeConversation && chatStore.pendingMessageContent(conversationsStore.activeConversation!.id)}
+	{:else if conversationsStore.activeConversation && chatStore.getPendingMessageContent(conversationsStore.activeConversation!.id)}
 		{@const convId = conversationsStore.activeConversation!.id}
-		{@const pendingContent = chatStore.pendingMessageContent(convId)}
+		{@const pendingContent = chatStore.getPendingMessageContent(convId)}
 
 		{#if pendingContent}
 			<ChatMessageUserPending
 				class="mx-auto mt-12 w-full max-w-[48rem]"
 				content={pendingContent}
-				extras={chatStore.pendingMessageExtras(convId)}
+				extras={chatStore.getPendingMessageExtras(convId)}
 				onSendImmediately={() => chatStore.abortCurrentFlow(convId)}
 				onEdit={(newContent, extras) => chatStore.injectPendingMessage(convId, newContent, extras)}
 				onDelete={() => chatStore.clearPendingMessage(convId)}

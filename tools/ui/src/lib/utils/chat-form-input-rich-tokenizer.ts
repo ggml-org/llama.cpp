@@ -38,7 +38,7 @@ import {
 	SETTINGS_KEYS
 } from '$lib/constants';
 import { BooleanString, ChatFormInputRichTokenKind } from '$lib/enums';
-import { settingsStore } from '$lib/stores/settings.svelte';
+import { settingsStore } from '$lib/stores/settings/index.svelte';
 import { toolsStore } from '$lib/stores/tools.svelte';
 import type { ChatFormInputRichToken } from '$lib/types/chat-form-input-rich';
 

@@ -42,7 +42,7 @@
 	let modalities = $derived.by(() => {
 		if (!firstModel?.id) return [];
 
-		return modelsStore.getModelModalitiesArray(firstModel.id);
+		return modelsStore.props.getModelModalitiesArray(firstModel.id);
 	});
 
 	// Ensure models are fetched when dialog opens
@@ -56,7 +56,7 @@
 	$effect(() => {
 		if (open && isRouter && modelId) {
 			isLoadingRouterProps = true;
-			modelsStore
+			modelsStore.props
 				.fetchModelProps(modelId)
 				.then((props) => {
 					routerModelProps = props;

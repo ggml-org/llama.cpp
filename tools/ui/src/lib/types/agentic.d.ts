@@ -205,7 +205,7 @@ export interface AgenticSection {
 	/** ID of the model-side tool call (matches tool_calls[i].id). Lets
 	 *  downstream consumers correlate a section with the agentic loop's
 	 *  currently-executing tool, e.g. to drive live-streaming UI state
-	 *  by matching against agenticStore.executingToolCallId. */
+	 *  by matching against agenticStore.getExecutingToolCallId. */
 	toolCallId?: string;
 	wasInterrupted?: boolean;
 }

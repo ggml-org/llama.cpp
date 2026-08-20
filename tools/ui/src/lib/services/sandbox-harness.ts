@@ -1,3 +1,10 @@
+/**
+ * Sandbox harness - builds the srcdoc document for the sandboxed iframe
+ *
+ * Produces the HTML/CSP/worker shim that runs untrusted model code in an
+ * opaque origin. Consumed by sandbox.service.
+ */
+
 import WORKER_SHIM from './sandbox-worker.js?raw';
 import { NEWLINE } from '$lib/constants';
 

@@ -59,7 +59,7 @@
 		message.model ?? chatStore.getResumeModel(message.convId) ?? modelsStore.selectedModelName
 	);
 	let modelLoadProgress = $derived(
-		isRouter && loadTargetModel ? modelsStore.getLoadProgress(loadTargetModel) : null
+		isRouter && loadTargetModel ? modelsStore.status.getLoadProgress(loadTargetModel) : null
 	);
 	let modelLoadingText = $derived(modelLoadProgressText(modelLoadProgress));
 

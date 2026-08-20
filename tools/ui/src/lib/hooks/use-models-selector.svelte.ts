@@ -47,7 +47,7 @@ export interface UseModelsSelectorReturn {
 export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSelectorReturn {
 	const options = $derived(
 		modelsStore.models.filter((option) => {
-			const modelProps = modelsStore.getModelProps(option.model);
+			const modelProps = modelsStore.props.getModelProps(option.model);
 
 			return modelProps?.ui !== false;
 		})
@@ -103,7 +103,7 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 
 			if (open) {
 				modelsStore.fetchRouterModels().then(() => {
-					modelsStore.fetchModalitiesForLoadedModels();
+					modelsStore.props.fetchModalitiesForLoadedModels();
 				});
 			}
 
@@ -143,8 +143,8 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 		if (!onModelChange && isRouter && !modelsStore.isModelLoaded(option.model)) {
 			isLoadingModel = true;
 
-			modelsStore
-				.loadModel(option.model)
+			modelsStore.status
+				.load(option.model)
 				.catch((error) => console.error('Failed to load model:', error))
 				.finally(() => (isLoadingModel = false));
 		}

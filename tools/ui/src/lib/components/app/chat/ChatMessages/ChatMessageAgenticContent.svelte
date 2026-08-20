@@ -43,14 +43,14 @@
 	);
 
 	const hasReasoningError = $derived(
-		isLastAssistantMessage ? !!agenticStore.lastError(message.convId) : false
+		isLastAssistantMessage ? !!agenticStore.getLastError(message.convId) : false
 	);
 
 	let permissionDismissed = $state(false);
 
 	const pendingPermission = $derived(
 		isStreaming && isLastAssistantMessage
-			? agenticStore.pendingPermissionRequest(message.convId)
+			? agenticStore.getPendingPermissionRequest(message.convId)
 			: null
 	);
 
@@ -74,7 +74,7 @@
 
 	const pendingContinue = $derived(
 		isStreaming && isLastAssistantMessage
-			? agenticStore.pendingContinueRequest(message.convId)
+			? agenticStore.getPendingContinueRequest(message.convId)
 			: false
 	);
 
@@ -97,7 +97,7 @@
 	const sections = $derived(deriveAgenticSections(message, toolMessages, [], isStreaming));
 
 	const currentlyExecutingToolCallId = $derived(
-		isStreaming ? agenticStore.executingToolCallId(message.convId) : null
+		isStreaming ? agenticStore.getExecutingToolCallId(message.convId) : null
 	);
 
 	type TurnGroup = {

@@ -58,13 +58,13 @@
 	let currentConfig = $derived(settingsStore.config);
 
 	let hasMcpPromptsSupport = $derived.by(() => {
-		const perChatOverrides = conversationsStore.getAllMcpServerOverrides();
+		const perChatOverrides = conversationsStore.preferences.getAllMcpServerOverrides();
 
 		return mcpStore.hasPromptsCapability(perChatOverrides);
 	});
 
 	let hasMcpResourcesSupport = $derived.by(() => {
-		const perChatOverrides = conversationsStore.getAllMcpServerOverrides();
+		const perChatOverrides = conversationsStore.preferences.getAllMcpServerOverrides();
 
 		return mcpStore.hasResourcesCapability(perChatOverrides);
 	});
@@ -121,7 +121,7 @@
 
 		if (!chatStore.isLoading && !chatStore.isStreaming()) return false;
 
-		const processingState = chatStore.activeProcessingState;
+		const processingState = chatStore.processing.activeState;
 
 		if (!processingState) return false;
 

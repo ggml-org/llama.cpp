@@ -42,19 +42,20 @@ export function useReasoningMenu(): UseReasoningMenuReturn {
 	});
 	const modelSupportsThinking = $derived.by(() => {
 		void modelsStore.loadedModelIds;
-		void modelsStore.propsCacheVersion;
+		void modelsStore.props.cacheVersion;
 
 		if (serverStore.isRouterMode) {
 			const modelId = modelsStore.selectedModelName || conversationModel;
 
 			return (
-				modelsStore.checkModelSupportsThinking(modelId ?? '') || modelSupportsThinkingFromMessages
+				modelsStore.props.checkModelSupportsThinking(modelId ?? '') ||
+				modelSupportsThinkingFromMessages
 			);
 		}
 
-		return modelsStore.supportsThinking || modelSupportsThinkingFromMessages;
+		return modelsStore.props.supportsThinking || modelSupportsThinkingFromMessages;
 	});
-	const currentEffort = $derived(conversationsStore.getReasoningEffort());
+	const currentEffort = $derived(conversationsStore.preferences.getReasoningEffort());
 	const thinkingEnabled = $derived(
 		currentEffort !== ReasoningEffort.OFF && currentEffort !== ReasoningEffort.DEFAULT
 	);
@@ -76,7 +77,7 @@ export function useReasoningMenu(): UseReasoningMenuReturn {
 			return modelSupportsThinking;
 		},
 		select(level: ReasoningEffortLevel): void {
-			conversationsStore.setReasoningEffort(level.value as ReasoningEffort);
+			conversationsStore.preferences.setReasoningEffort(level.value as ReasoningEffort);
 		},
 		get thinkingEnabled() {
 			return thinkingEnabled;

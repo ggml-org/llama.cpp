@@ -1,5 +1,5 @@
 import { CONFIG_LOCALSTORAGE_KEY } from '$lib/constants';
-import { settingsStore } from '$lib/stores/settings.svelte';
+import { settingsStore } from '$lib/stores/settings/index.svelte';
 import { validateApiKey } from '$lib/utils/api-key-validation';
 import { beforeEach, describe, expect, it } from 'vitest';
 

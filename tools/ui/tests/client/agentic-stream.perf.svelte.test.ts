@@ -14,7 +14,7 @@ import { perfState } from './components/agentic-perf-state.svelte';
 import AgenticPerfWrapper from './components/AgenticPerfWrapper.svelte';
 import ChatMessagesPerfWrapper from './components/ChatMessagesPerfWrapper.svelte';
 import { MessageRole } from '$lib/enums';
-import { conversationsStore } from '$lib/stores/conversations.svelte';
+import { conversationsStore } from '$lib/stores/conversations/index.svelte';
 import type { DatabaseMessage } from '$lib/types';
 import { tick } from 'svelte';
 import { describe, it } from 'vitest';

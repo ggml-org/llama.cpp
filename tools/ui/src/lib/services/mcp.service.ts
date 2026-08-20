@@ -1,3 +1,11 @@
+/**
+ * MCPService - Stateless MCP protocol layer
+ *
+ * Implements the client side of the MCP spec over WebSocket, StreamableHTTP
+ * and SSE transports: connect, tool/prompt/resource operations and result
+ * formatting. No reactive state; consumed by mcpStore and its managers.
+ */
+
 import { Client } from '@modelcontextprotocol/sdk/client';
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import {
@@ -88,493 +96,79 @@ interface DiagnosticRequestDetails {
 
 export class MCPService {
 	/**
-	 * Create a connection log entry for phase tracking.
+	 * Execute a tool call on a connection.
+	 * Supports abort signal for cancellable operations (e.g., when user stops generation).
+	 * Formats the raw tool result into a string representation.
 	 *
-	 * @param phase - The connection phase this log belongs to
-	 * @param message - Human-readable log message
-	 * @param level - Log severity level (default: INFO)
-	 * @param details - Optional structured details for debugging
-	 * @returns Formatted connection log entry
+	 * @param connection - The MCP connection to execute against
+	 * @param params - Tool name and arguments to execute
+	 * @param signal - Optional AbortSignal for cancellation support
+	 * @returns Formatted tool execution result with content string and error flag
+	 * @throws {Error} If tool execution fails or is aborted
 	 */
-	private static createLog(
-		phase: MCPConnectionPhase,
-		message: string,
-		level: MCPLogLevel = MCPLogLevel.INFO,
-		details?: unknown
-	): MCPConnectionLog {
-		return {
-			details,
-			level,
-			message,
-			phase,
-			timestamp: new Date()
-		};
-	}
-
-	private static createDiagnosticRequestDetails(
-		input: RequestInfo | URL,
-		init: RequestInit | undefined,
-		baseInit: RequestInit,
-		requestHeaders: Headers,
-		extraRedactedHeaders?: Iterable<string>
-	): DiagnosticRequestDetails {
-		const body = getRequestBody(input, init);
-		const details: DiagnosticRequestDetails = {
-			body: summarizeRequestBody(body),
-			credentials: init?.credentials ?? baseInit.credentials,
-			headers: sanitizeHeaders(requestHeaders, extraRedactedHeaders, HEADERS.PARTIAL_REDACT),
-			method: getRequestMethod(input, init, baseInit).toUpperCase(),
-			mode: init?.mode ?? baseInit.mode,
-			url: getRequestUrl(input)
-		};
-		const jsonRpcMethods = extractJsonRpcMethods(body);
-
-		if (jsonRpcMethods) {
-			details.jsonRpcMethods = jsonRpcMethods;
-		}
-
-		return details;
-	}
-
-	private static addRequestHeaders(
-		requestHeaders: Headers,
-		headers: HeadersInit,
-		useProxy: boolean
-	) {
-		for (const [key, value] of new Headers(headers).entries()) {
-			const proxiedKey =
-				useProxy && !key.toLowerCase().startsWith(CORS_PROXY.HEADER_PREFIX)
-					? `${CORS_PROXY.HEADER_PREFIX}${key}`
-					: key;
-
-			requestHeaders.set(proxiedKey, value);
-		}
-	}
-
-	private static summarizeError(error: unknown): Record<string, unknown> {
-		if (error instanceof Error) {
-			return {
-				cause:
-					error.cause instanceof Error
-						? { message: error.cause.message, name: error.cause.name }
-						: error.cause,
-				message: error.message,
-				name: error.name,
-				stack: error.stack?.split('\n').slice(0, 6).join('\n')
-			};
-		}
-
-		return { value: String(error) };
-	}
-
-	private static getBrowserContext(
-		targetUrl: URL,
-		useProxy: boolean
-	): Record<string, unknown> | undefined {
-		if (typeof window === 'undefined') {
-			return undefined;
-		}
-
-		return {
-			isSecureContext: window.isSecureContext,
-			location: window.location.href,
-			origin: window.location.origin,
-			protocol: window.location.protocol,
-			sameOrigin: window.location.origin === targetUrl.origin,
-			targetOrigin: targetUrl.origin,
-			targetProtocol: targetUrl.protocol,
-			useProxy
-		};
-	}
-
-	private static getConnectionHints(
-		targetUrl: URL,
-		config: MCPServerConfig,
-		error: unknown
-	): string[] {
-		const hints: string[] = [];
-		const message = error instanceof Error ? error.message : String(error);
-		const headerNames = Object.keys(config.headers ?? {});
-
-		if (typeof window !== 'undefined') {
-			if (
-				window.location.protocol === 'https:' &&
-				targetUrl.protocol === 'http:' &&
-				!config.useProxy
-			) {
-				hints.push(
-					'The page is running over HTTPS but the MCP server is HTTP. Browsers often block this as mixed content; enable the proxy or use HTTPS/WSS for the MCP server.'
-				);
-			}
-
-			if (window.location.origin !== targetUrl.origin && !config.useProxy) {
-				hints.push(
-					'This is a cross-origin browser request. If the server is reachable from curl or Node but not from the browser, missing CORS headers are the most likely cause.'
-				);
-			}
-		}
-
-		if (headerNames.length > 0) {
-			hints.push(
-				`Custom request headers are configured (${headerNames.join(', ')}). That triggers a CORS preflight, so the server must allow OPTIONS and include the matching Access-Control-Allow-Headers response.`
-			);
-		}
-
-		if (config.credentials && config.credentials !== 'omit') {
-			hints.push(
-				'Credentials are enabled for this connection. Cross-origin credentialed requests need Access-Control-Allow-Credentials: true and cannot use a wildcard Access-Control-Allow-Origin.'
-			);
-		}
-
-		if (message.includes('Failed to fetch')) {
-			hints.push(
-				'"Failed to fetch" is a browser-level network failure. Common causes are CORS rejection, mixed-content blocking, certificate/TLS errors, DNS failures, or nothing listening on the target port.'
-			);
-		}
-
-		return hints;
-	}
-
-	private static createDiagnosticFetch(
-		serverName: string,
-		config: MCPServerConfig,
-		baseInit: RequestInit,
-		targetUrl: URL,
-		useProxy: boolean,
-		onLog?: (log: MCPConnectionLog) => void
-	): {
-		fetch: typeof fetch;
-		disable: () => void;
-	} {
-		let enabled = true;
-
-		const logIfEnabled = (log: MCPConnectionLog) => {
-			if (enabled) {
-				onLog?.(log);
-			}
-		};
-
-		return {
-			disable: () => {
-				enabled = false;
-			},
-			fetch: async (input, init) => {
-				if (useProxy && typeof window !== 'undefined') {
-					let requestUrlStr = '';
-
-					if (typeof input === 'string') {
-						requestUrlStr = input;
-					} else if (input instanceof URL) {
-						requestUrlStr = input.href;
-					}
-
-					if (requestUrlStr) {
-						const parsedRequestUrl = new URL(requestUrlStr, window.location.origin);
-
-						if (
-							parsedRequestUrl.origin === window.location.origin &&
-							!parsedRequestUrl.pathname.includes(CORS_PROXY_ENDPOINT)
-						) {
-							const originalConfigUrl = new URL(config.url);
-							const realTargetUrl = new URL(
-								parsedRequestUrl.pathname + parsedRequestUrl.search,
-								originalConfigUrl.origin
-							);
-							const proxiedUrl = buildProxiedUrl(realTargetUrl.href);
-
-							if (typeof input === 'string') {
-								input = proxiedUrl.href;
-							} else if (input instanceof URL) {
-								input = proxiedUrl;
-							}
-						}
-					}
-				}
-
-				const startedAt = performance.now();
-				const requestHeaders = new Headers(baseInit.headers);
-
-				if (typeof Request !== 'undefined' && input instanceof Request) {
-					this.addRequestHeaders(requestHeaders, input.headers, useProxy);
-				}
-
-				if (init?.headers) {
-					this.addRequestHeaders(requestHeaders, init.headers, useProxy);
-				}
-
-				const request = this.createDiagnosticRequestDetails(
-					input,
-					init,
-					baseInit,
-					requestHeaders,
-					Object.keys(config.headers ?? {})
-				);
-				const { method, url } = request;
-
-				logIfEnabled(
-					this.createLog(
-						MCPConnectionPhase.INITIALIZING,
-						`HTTP ${method} ${url}`,
-						MCPLogLevel.INFO,
-						{
-							request,
-							serverName
-						}
-					)
-				);
-
-				if (method === 'DELETE' && url.includes(CORS_PROXY_ENDPOINT)) {
-					const response = new Response(null, { status: 200, statusText: 'OK' });
-
-					logIfEnabled(
-						this.createLog(
-							MCPConnectionPhase.INITIALIZING,
-							`HTTP 200 ${method} ${url} (fake response)`,
-							MCPLogLevel.INFO,
-							{
-								response: {
-									durationMs: 0,
-									isFake: true,
-									status: response.status,
-									statusText: response.statusText,
-									url
-								}
-							}
-						)
-					);
-
-					// fake response, bypass real fetch()
-					return response;
-				}
-
-				try {
-					const response = await fetch(input, {
-						...baseInit,
-						...init,
-						headers: requestHeaders
-					});
-					const durationMs = Math.round(performance.now() - startedAt);
-
-					logIfEnabled(
-						this.createLog(
-							MCPConnectionPhase.INITIALIZING,
-							`HTTP ${response.status} ${method} ${url} (${durationMs}ms)`,
-							response.ok ? MCPLogLevel.INFO : MCPLogLevel.WARN,
-							{
-								response: {
-									durationMs,
-									headers: sanitizeHeaders(response.headers, undefined, HEADERS.PARTIAL_REDACT),
-									status: response.status,
-									statusText: response.statusText,
-									url
-								}
-							}
-						)
-					);
-
-					return response;
-				} catch (error) {
-					const durationMs = Math.round(performance.now() - startedAt);
-
-					logIfEnabled(
-						this.createLog(
-							MCPConnectionPhase.ERROR,
-							`HTTP ${method} ${url} failed: ${formatDiagnosticErrorMessage(error)}`,
-							MCPLogLevel.ERROR,
-							{
-								browser: this.getBrowserContext(targetUrl, useProxy),
-								durationMs,
-								error: this.summarizeError(error),
-								hints: this.getConnectionHints(targetUrl, config, error),
-								request,
-								serverName
-							}
-						)
-					);
-
-					throw error;
-				}
-			}
-		};
-	}
-
-	/**
-	 * Detect if an error indicates an expired/invalidated MCP session.
-	 * Per MCP spec 2025-11-25: HTTP 404 means session invalidated, client MUST
-	 * discard its session ID and start a new session with a fresh initialize request.
-	 *
-	 * @param error - The caught error to inspect
-	 * @returns true if the error is a StreamableHTTP 404 (session not found)
-	 */
-	static isSessionExpiredError(error: unknown): boolean {
-		return error instanceof StreamableHTTPError && error.code === 404;
-	}
-
-	/**
-	 * Create transport based on server configuration.
-	 * Supports WebSocket, StreamableHTTP (modern), and SSE (legacy) transports.
-	 * When `useProxy` is enabled, routes HTTP requests through llama-server's CORS proxy.
-	 *
-	 * **Fallback Order:**
-	 * 1. WebSocket — if explicitly configured (no CORS proxy support)
-	 * 2. StreamableHTTP — default for HTTP connections
-	 * 3. SSE — automatic fallback if StreamableHTTP fails
-	 *
-	 * @param config - Server configuration with url, transport type, proxy, and auth settings
-	 * @returns Object containing the created transport and the transport type used
-	 * @throws {Error} If url is missing, WebSocket + proxy combination, or all transports fail
-	 */
-	static createTransport(
-		serverName: string,
-		config: MCPServerConfig,
-		onLog?: (log: MCPConnectionLog) => void
-	): {
-		transport: Transport;
-		type: MCPTransportType;
-		stopPhaseLogging: () => void;
-	} {
-		if (!config.url) {
-			throw new Error('MCP server configuration is missing url');
-		}
-
-		const useProxy = config.useProxy ?? false;
-		const requestInit: RequestInit = {};
-
-		if (config.headers) {
-			requestInit.headers = config.useProxy ? buildProxiedHeaders(config.headers) : config.headers;
-		}
-
-		if (useProxy) {
-			requestInit.headers = {
-				...getAuthHeaders(),
-				...(requestInit.headers as Record<string, string>)
-			};
-		}
-
-		if (config.credentials) {
-			requestInit.credentials = config.credentials;
-		}
-
-		if (config.transport === MCPTransportType.WEBSOCKET) {
-			if (useProxy) {
-				throw new Error(
-					'WebSocket transport is not supported when using CORS proxy. Use HTTP transport instead.'
-				);
-			}
-
-			const url = new URL(config.url);
-
-			if (import.meta.env.DEV && import.meta.env.VITE_DEBUG) {
-				console.log(`[MCPService] Creating WebSocket transport for ${url.href}`);
-			}
-
-			return {
-				stopPhaseLogging: () => {},
-				transport: new WebSocketClientTransport(url),
-				type: MCPTransportType.WEBSOCKET
-			};
-		}
-
-		if (config.transport === MCPTransportType.SSE) {
-			const url = useProxy ? buildProxiedUrl(config.url) : new URL(config.url);
-			const { disable: stopPhaseLogging, fetch: diagnosticFetch } = this.createDiagnosticFetch(
-				serverName,
-				config,
-				requestInit,
-				url,
-				useProxy,
-				onLog
-			);
-
-			if (import.meta.env.DEV && import.meta.env.VITE_DEBUG) {
-				console.log(`[MCPService] Creating SSE transport for ${url.href}`);
-			}
-
-			return {
-				stopPhaseLogging,
-				transport: new SSEClientTransport(url, {
-					eventSourceInit: { fetch: diagnosticFetch },
-					fetch: diagnosticFetch,
-					requestInit
-				}),
-				type: MCPTransportType.SSE
-			};
-		}
-
-		const url = useProxy ? buildProxiedUrl(config.url) : new URL(config.url);
-		const { disable: stopPhaseLogging, fetch: diagnosticFetch } = this.createDiagnosticFetch(
-			serverName,
-			config,
-			requestInit,
-			url,
-			useProxy,
-			onLog
-		);
-
-		if (useProxy && import.meta.env.DEV && import.meta.env.VITE_DEBUG) {
-			console.log(`[MCPService] Using CORS proxy for ${config.url} -> ${url.href}`);
-		}
+	static async callTool(
+		connection: MCPConnection,
+		params: ToolCallParams,
+		signal?: AbortSignal
+	): Promise<ToolExecutionResult> {
+		throwIfAborted(signal);
 
 		try {
-			if (import.meta.env.DEV && import.meta.env.VITE_DEBUG) {
-				console.log(`[MCPService] Creating StreamableHTTP transport for ${url.href}`);
-			}
+			const result = await connection.client.callTool(
+				{ arguments: params.arguments, name: params.name },
+				undefined,
+				{ signal, timeout: connection.requestTimeoutMs }
+			);
 
 			return {
-				stopPhaseLogging,
-				transport: new StreamableHTTPClientTransport(url, {
-					fetch: diagnosticFetch,
-					requestInit
-				}),
-				type: MCPTransportType.STREAMABLE_HTTP
+				content: this.formatToolResult(result as ToolCallResult),
+				isError: (result as ToolCallResult).isError ?? false
 			};
-		} catch (httpError) {
-			console.warn(`[MCPService] StreamableHTTP failed, trying SSE transport...`, httpError);
-
-			try {
-				return {
-					stopPhaseLogging,
-					transport: new SSEClientTransport(url, {
-						eventSourceInit: { fetch: diagnosticFetch },
-						fetch: diagnosticFetch,
-						requestInit
-					}),
-					type: MCPTransportType.SSE
-				};
-			} catch (sseError) {
-				const httpMsg = httpError instanceof Error ? httpError.message : String(httpError);
-				const sseMsg = sseError instanceof Error ? sseError.message : String(sseError);
-
-				throw new Error(`Failed to create transport. StreamableHTTP: ${httpMsg}; SSE: ${sseMsg}`);
+		} catch (error) {
+			if (isAbortError(error)) {
+				throw error;
 			}
+
+			// Let session-expired errors propagate unwrapped for reconnection handling
+			if (this.isSessionExpiredError(error)) {
+				throw error;
+			}
+
+			const message = error instanceof Error ? error.message : String(error);
+
+			throw new Error(
+				`Tool "${params.name}" execution failed on server "${connection.serverName}": ${message}`,
+				{ cause: error instanceof Error ? error : undefined }
+			);
 		}
 	}
 
 	/**
-	 * Extract server info from SDK Implementation type.
-	 * Normalizes the SDK's server version response into our MCPServerInfo type.
+	 * Request completion suggestions from a server.
+	 * Used for autocompleting prompt arguments or resource URI templates.
 	 *
-	 * @param impl - Raw Implementation object from MCP SDK
-	 * @returns Normalized server info or undefined if input is empty
+	 * @param connection - The MCP connection to use
+	 * @param ref - Reference to the prompt or resource template
+	 * @param argument - The argument being completed (name and current value)
+	 * @returns Completion result with suggested values
 	 */
-	private static extractServerInfo(impl: Implementation | undefined): MCPServerInfo | undefined {
-		if (!impl) {
-			return undefined;
-		}
+	static async complete(
+		connection: MCPConnection,
+		ref: { type: MCPRefType.PROMPT; name: string } | { type: MCPRefType.RESOURCE; uri: string },
+		argument: { name: string; value: string }
+	): Promise<{ values: string[]; total?: number; hasMore?: boolean } | null> {
+		try {
+			const result = await connection.client.complete({
+				argument,
+				ref
+			});
 
-		return {
-			description: impl.description,
-			icons: impl.icons?.map((icon: MCPResourceIcon) => ({
-				mimeType: icon.mimeType,
-				sizes: icon.sizes,
-				src: icon.src,
-				theme: icon.theme
-			})),
-			name: impl.name,
-			title: impl.title,
-			version: impl.version,
-			websiteUrl: impl.websiteUrl
-		};
+			return result.completion;
+		} catch (error) {
+			console.error(`[MCPService] Failed to get completions:`, error);
+
+			return null;
+		}
 	}
 
 	/**
@@ -848,6 +442,146 @@ export class MCPService {
 	}
 
 	/**
+	 * Create transport based on server configuration.
+	 * Supports WebSocket, StreamableHTTP (modern), and SSE (legacy) transports.
+	 * When `useProxy` is enabled, routes HTTP requests through llama-server's CORS proxy.
+	 *
+	 * **Fallback Order:**
+	 * 1. WebSocket — if explicitly configured (no CORS proxy support)
+	 * 2. StreamableHTTP — default for HTTP connections
+	 * 3. SSE — automatic fallback if StreamableHTTP fails
+	 *
+	 * @param config - Server configuration with url, transport type, proxy, and auth settings
+	 * @returns Object containing the created transport and the transport type used
+	 * @throws {Error} If url is missing, WebSocket + proxy combination, or all transports fail
+	 */
+	static createTransport(
+		serverName: string,
+		config: MCPServerConfig,
+		onLog?: (log: MCPConnectionLog) => void
+	): {
+		transport: Transport;
+		type: MCPTransportType;
+		stopPhaseLogging: () => void;
+	} {
+		if (!config.url) {
+			throw new Error('MCP server configuration is missing url');
+		}
+
+		const useProxy = config.useProxy ?? false;
+		const requestInit: RequestInit = {};
+
+		if (config.headers) {
+			requestInit.headers = config.useProxy ? buildProxiedHeaders(config.headers) : config.headers;
+		}
+
+		if (useProxy) {
+			requestInit.headers = {
+				...getAuthHeaders(),
+				...(requestInit.headers as Record<string, string>)
+			};
+		}
+
+		if (config.credentials) {
+			requestInit.credentials = config.credentials;
+		}
+
+		if (config.transport === MCPTransportType.WEBSOCKET) {
+			if (useProxy) {
+				throw new Error(
+					'WebSocket transport is not supported when using CORS proxy. Use HTTP transport instead.'
+				);
+			}
+
+			const url = new URL(config.url);
+
+			if (import.meta.env.DEV && import.meta.env.VITE_DEBUG) {
+				console.log(`[MCPService] Creating WebSocket transport for ${url.href}`);
+			}
+
+			return {
+				stopPhaseLogging: () => {},
+				transport: new WebSocketClientTransport(url),
+				type: MCPTransportType.WEBSOCKET
+			};
+		}
+
+		if (config.transport === MCPTransportType.SSE) {
+			const url = useProxy ? buildProxiedUrl(config.url) : new URL(config.url);
+			const { disable: stopPhaseLogging, fetch: diagnosticFetch } = this.createDiagnosticFetch(
+				serverName,
+				config,
+				requestInit,
+				url,
+				useProxy,
+				onLog
+			);
+
+			if (import.meta.env.DEV && import.meta.env.VITE_DEBUG) {
+				console.log(`[MCPService] Creating SSE transport for ${url.href}`);
+			}
+
+			return {
+				stopPhaseLogging,
+				transport: new SSEClientTransport(url, {
+					eventSourceInit: { fetch: diagnosticFetch },
+					fetch: diagnosticFetch,
+					requestInit
+				}),
+				type: MCPTransportType.SSE
+			};
+		}
+
+		const url = useProxy ? buildProxiedUrl(config.url) : new URL(config.url);
+		const { disable: stopPhaseLogging, fetch: diagnosticFetch } = this.createDiagnosticFetch(
+			serverName,
+			config,
+			requestInit,
+			url,
+			useProxy,
+			onLog
+		);
+
+		if (useProxy && import.meta.env.DEV && import.meta.env.VITE_DEBUG) {
+			console.log(`[MCPService] Using CORS proxy for ${config.url} -> ${url.href}`);
+		}
+
+		try {
+			if (import.meta.env.DEV && import.meta.env.VITE_DEBUG) {
+				console.log(`[MCPService] Creating StreamableHTTP transport for ${url.href}`);
+			}
+
+			return {
+				stopPhaseLogging,
+				transport: new StreamableHTTPClientTransport(url, {
+					fetch: diagnosticFetch,
+					requestInit
+				}),
+				type: MCPTransportType.STREAMABLE_HTTP
+			};
+		} catch (httpError) {
+			console.warn(`[MCPService] StreamableHTTP failed, trying SSE transport...`, httpError);
+
+			try {
+				return {
+					stopPhaseLogging,
+					transport: new SSEClientTransport(url, {
+						eventSourceInit: { fetch: diagnosticFetch },
+						fetch: diagnosticFetch,
+						requestInit
+					}),
+					type: MCPTransportType.SSE
+				};
+			} catch (sseError) {
+				const httpMsg = httpError instanceof Error ? httpError.message : String(httpError);
+				const sseMsg = sseError instanceof Error ? sseError.message : String(sseError);
+
+				throw new Error(`Failed to create transport. StreamableHTTP: ${httpMsg}; SSE: ${sseMsg}`);
+			}
+		}
+	}
+
+	/**
 	 * Disconnect from a server.
 	 * Clears the `onclose` handler to prevent reconnection attempts on voluntary disconnect.
 	 *
@@ -882,27 +616,66 @@ export class MCPService {
 	}
 
 	/**
-	 * List tools from a connection.
-	 * Silently returns empty array on failure (logged as warning).
+	 * Get a specific prompt with arguments.
+	 * Unlike list operations, this throws on failure since the caller explicitly
+	 * requested a specific prompt and needs to handle the error.
 	 *
-	 * @param connection - The MCP connection to query
-	 * @returns Array of available tools, or empty array on error
+	 * @param connection - The MCP connection to use
+	 * @param name - The prompt name to retrieve
+	 * @param args - Optional key-value arguments to pass to the prompt
+	 * @returns The prompt result with messages and metadata
+	 * @throws {Error} If the prompt retrieval fails
 	 */
-	static async listTools(connection: MCPConnection): Promise<Tool[]> {
+	static async getPrompt(
+		connection: MCPConnection,
+		name: string,
+		args?: Record<string, string>
+	): Promise<GetPromptResult> {
 		try {
-			const result = await connection.client.listTools();
-
-			return result.tools ?? [];
+			return await connection.client.getPrompt({ arguments: args, name });
 		} catch (error) {
-			// Let session-expired errors propagate for reconnection handling
-			if (this.isSessionExpiredError(error)) {
-				throw error;
-			}
+			console.error(`[MCPService][${connection.serverName}] Failed to get prompt:`, error);
 
-			console.warn(`[MCPService][${connection.serverName}] Failed to list tools:`, error);
-
-			return [];
+			throw error;
 		}
+	}
+
+	/**
+	 * Detect if an error indicates an expired/invalidated MCP session.
+	 * Per MCP spec 2025-11-25: HTTP 404 means session invalidated, client MUST
+	 * discard its session ID and start a new session with a fresh initialize request.
+	 *
+	 * @param error - The caught error to inspect
+	 * @returns true if the error is a StreamableHTTP 404 (session not found)
+	 */
+	static isSessionExpiredError(error: unknown): boolean {
+		return error instanceof StreamableHTTPError && error.code === 404;
+	}
+
+	/**
+	 * List all resources from a connection (handles pagination automatically).
+	 * @param connection - The MCP connection to use
+	 * @returns Array of all available resources
+	 */
+	static async listAllResources(connection: MCPConnection): Promise<MCPResource[]> {
+		return this.paginate(
+			connection,
+			(cursor) => this.listResources(connection, cursor),
+			(result) => result.resources
+		);
+	}
+
+	/**
+	 * List all resource templates from a connection (handles pagination automatically).
+	 * @param connection - The MCP connection to use
+	 * @returns Array of all available resource templates
+	 */
+	static async listAllResourceTemplates(connection: MCPConnection): Promise<MCPResourceTemplate[]> {
+		return this.paginate(
+			connection,
+			(cursor) => this.listResourceTemplates(connection, cursor),
+			(result) => result.resourceTemplates
+		);
 	}
 
 	/**
@@ -930,177 +703,6 @@ export class MCPService {
 	}
 
 	/**
-	 * Get a specific prompt with arguments.
-	 * Unlike list operations, this throws on failure since the caller explicitly
-	 * requested a specific prompt and needs to handle the error.
-	 *
-	 * @param connection - The MCP connection to use
-	 * @param name - The prompt name to retrieve
-	 * @param args - Optional key-value arguments to pass to the prompt
-	 * @returns The prompt result with messages and metadata
-	 * @throws {Error} If the prompt retrieval fails
-	 */
-	static async getPrompt(
-		connection: MCPConnection,
-		name: string,
-		args?: Record<string, string>
-	): Promise<GetPromptResult> {
-		try {
-			return await connection.client.getPrompt({ arguments: args, name });
-		} catch (error) {
-			console.error(`[MCPService][${connection.serverName}] Failed to get prompt:`, error);
-
-			throw error;
-		}
-	}
-
-	/**
-	 * Execute a tool call on a connection.
-	 * Supports abort signal for cancellable operations (e.g., when user stops generation).
-	 * Formats the raw tool result into a string representation.
-	 *
-	 * @param connection - The MCP connection to execute against
-	 * @param params - Tool name and arguments to execute
-	 * @param signal - Optional AbortSignal for cancellation support
-	 * @returns Formatted tool execution result with content string and error flag
-	 * @throws {Error} If tool execution fails or is aborted
-	 */
-	static async callTool(
-		connection: MCPConnection,
-		params: ToolCallParams,
-		signal?: AbortSignal
-	): Promise<ToolExecutionResult> {
-		throwIfAborted(signal);
-
-		try {
-			const result = await connection.client.callTool(
-				{ arguments: params.arguments, name: params.name },
-				undefined,
-				{ signal, timeout: connection.requestTimeoutMs }
-			);
-
-			return {
-				content: this.formatToolResult(result as ToolCallResult),
-				isError: (result as ToolCallResult).isError ?? false
-			};
-		} catch (error) {
-			if (isAbortError(error)) {
-				throw error;
-			}
-
-			// Let session-expired errors propagate unwrapped for reconnection handling
-			if (this.isSessionExpiredError(error)) {
-				throw error;
-			}
-
-			const message = error instanceof Error ? error.message : String(error);
-
-			throw new Error(
-				`Tool "${params.name}" execution failed on server "${connection.serverName}": ${message}`,
-				{ cause: error instanceof Error ? error : undefined }
-			);
-		}
-	}
-
-	/**
-	 * Format tool result content items to a single string.
-	 * Handles text, image (base64 data URL), and embedded resource content types.
-	 *
-	 * @param result - Raw tool call result from MCP SDK
-	 * @returns Concatenated string representation of all content items
-	 */
-	private static formatToolResult(result: ToolCallResult): string {
-		const content = result.content;
-
-		if (!Array.isArray(content)) return '';
-
-		const formatted = content
-			.map((item) => this.formatSingleContent(item))
-			.filter(Boolean)
-			.join(NEWLINE);
-
-		if (formatted !== '') {
-			return formatted;
-		}
-
-		if (result.structuredContent && typeof result.structuredContent === 'object') {
-			return JSON.stringify(result.structuredContent);
-		}
-
-		return '';
-	}
-
-	private static formatSingleContent(content: ToolResultContentItem): string {
-		if (content.type === MCPContentType.TEXT && content.text) {
-			return content.text;
-		}
-
-		if (content.type === MCPContentType.IMAGE && content.data) {
-			return createBase64DataUrl(content.mimeType ?? DEFAULT_IMAGE_MIME_TYPE, content.data);
-		}
-
-		if (content.type === MCPContentType.RESOURCE && content.resource) {
-			const resource = content.resource;
-
-			if (resource.text) return resource.text;
-
-			if (resource.blob) return resource.blob;
-
-			return JSON.stringify(resource);
-		}
-
-		if (content.data && content.mimeType) {
-			return createBase64DataUrl(content.mimeType, content.data);
-		}
-
-		return JSON.stringify(content);
-	}
-
-	/**
-	 *
-	 *
-	 * Completions Operations
-	 *
-	 *
-	 */
-
-	/**
-	 * Request completion suggestions from a server.
-	 * Used for autocompleting prompt arguments or resource URI templates.
-	 *
-	 * @param connection - The MCP connection to use
-	 * @param ref - Reference to the prompt or resource template
-	 * @param argument - The argument being completed (name and current value)
-	 * @returns Completion result with suggested values
-	 */
-	static async complete(
-		connection: MCPConnection,
-		ref: { type: MCPRefType.PROMPT; name: string } | { type: MCPRefType.RESOURCE; uri: string },
-		argument: { name: string; value: string }
-	): Promise<{ values: string[]; total?: number; hasMore?: boolean } | null> {
-		try {
-			const result = await connection.client.complete({
-				argument,
-				ref
-			});
-
-			return result.completion;
-		} catch (error) {
-			console.error(`[MCPService] Failed to get completions:`, error);
-
-			return null;
-		}
-	}
-
-	/**
-	 *
-	 *
-	 * Resources Operations
-	 *
-	 *
-	 */
-
-	/**
 	 * List resources from a connection.
 	 * @param connection - The MCP connection to use
 	 * @param cursor - Optional pagination cursor
@@ -1126,26 +728,6 @@ export class MCPService {
 
 			return { resources: [] };
 		}
-	}
-
-	/**
-	 * List all resources from a connection (handles pagination automatically).
-	 * @param connection - The MCP connection to use
-	 * @returns Array of all available resources
-	 */
-	static async listAllResources(connection: MCPConnection): Promise<MCPResource[]> {
-		const allResources: MCPResource[] = [];
-
-		let cursor: string | undefined;
-
-		do {
-			const result = await this.listResources(connection, cursor);
-
-			allResources.push(...result.resources);
-			cursor = result.nextCursor;
-		} while (cursor);
-
-		return allResources;
 	}
 
 	/**
@@ -1180,23 +762,27 @@ export class MCPService {
 	}
 
 	/**
-	 * List all resource templates from a connection (handles pagination automatically).
-	 * @param connection - The MCP connection to use
-	 * @returns Array of all available resource templates
+	 * List tools from a connection.
+	 * Silently returns empty array on failure (logged as warning).
+	 *
+	 * @param connection - The MCP connection to query
+	 * @returns Array of available tools, or empty array on error
 	 */
-	static async listAllResourceTemplates(connection: MCPConnection): Promise<MCPResourceTemplate[]> {
-		const allTemplates: MCPResourceTemplate[] = [];
+	static async listTools(connection: MCPConnection): Promise<Tool[]> {
+		try {
+			const result = await connection.client.listTools();
 
-		let cursor: string | undefined;
+			return result.tools ?? [];
+		} catch (error) {
+			// Let session-expired errors propagate for reconnection handling
+			if (this.isSessionExpiredError(error)) {
+				throw error;
+			}
 
-		do {
-			const result = await this.listResourceTemplates(connection, cursor);
+			console.warn(`[MCPService][${connection.serverName}] Failed to list tools:`, error);
 
-			allTemplates.push(...result.resourceTemplates);
-			cursor = result.nextCursor;
-		} while (cursor);
-
-		return allTemplates;
+			return [];
+		}
 	}
 
 	/**
@@ -1245,6 +831,29 @@ export class MCPService {
 	}
 
 	/**
+	 * Check if a connection supports resources.
+	 * Per MCP spec: presence of the `resources` key (even as empty object `{}`) indicates support.
+	 * Empty object means resources are supported but no sub-features (subscribe, listChanged).
+	 *
+	 * @param connection - The MCP connection to check
+	 * @returns Whether the server declares the resources capability
+	 */
+	static supportsResources(connection: MCPConnection): boolean {
+		// Per MCP spec: "Servers that support resources MUST declare the resources capability"
+		// The presence of the key indicates support, even if it's an empty object
+		return connection.serverCapabilities?.resources !== undefined;
+	}
+
+	/**
+	 * Check if a connection supports resource subscriptions.
+	 * @param connection - The MCP connection to check
+	 * @returns Whether the server supports resource subscriptions
+	 */
+	static supportsResourceSubscriptions(connection: MCPConnection): boolean {
+		return !!connection.serverCapabilities?.resources?.subscribe;
+	}
+
+	/**
 	 * Unsubscribe from updates for a resource.
 	 * @param connection - The MCP connection to use
 	 * @param uri - The URI of the resource to unsubscribe from
@@ -1266,26 +875,417 @@ export class MCPService {
 		}
 	}
 
-	/**
-	 * Check if a connection supports resources.
-	 * Per MCP spec: presence of the `resources` key (even as empty object `{}`) indicates support.
-	 * Empty object means resources are supported but no sub-features (subscribe, listChanged).
-	 *
-	 * @param connection - The MCP connection to check
-	 * @returns Whether the server declares the resources capability
-	 */
-	static supportsResources(connection: MCPConnection): boolean {
-		// Per MCP spec: "Servers that support resources MUST declare the resources capability"
-		// The presence of the key indicates support, even if it's an empty object
-		return connection.serverCapabilities?.resources !== undefined;
+	private static addRequestHeaders(
+		requestHeaders: Headers,
+		headers: HeadersInit,
+		useProxy: boolean
+	) {
+		for (const [key, value] of new Headers(headers).entries()) {
+			const proxiedKey =
+				useProxy && !key.toLowerCase().startsWith(CORS_PROXY.HEADER_PREFIX)
+					? `${CORS_PROXY.HEADER_PREFIX}${key}`
+					: key;
+
+			requestHeaders.set(proxiedKey, value);
+		}
+	}
+
+	private static createDiagnosticFetch(
+		serverName: string,
+		config: MCPServerConfig,
+		baseInit: RequestInit,
+		targetUrl: URL,
+		useProxy: boolean,
+		onLog?: (log: MCPConnectionLog) => void
+	): {
+		fetch: typeof fetch;
+		disable: () => void;
+	} {
+		let enabled = true;
+
+		const logIfEnabled = (log: MCPConnectionLog) => {
+			if (enabled) {
+				onLog?.(log);
+			}
+		};
+
+		return {
+			disable: () => {
+				enabled = false;
+			},
+			fetch: async (input, init) => {
+				if (useProxy && typeof window !== 'undefined') {
+					let requestUrlStr = '';
+
+					if (typeof input === 'string') {
+						requestUrlStr = input;
+					} else if (input instanceof URL) {
+						requestUrlStr = input.href;
+					}
+
+					if (requestUrlStr) {
+						const parsedRequestUrl = new URL(requestUrlStr, window.location.origin);
+
+						if (
+							parsedRequestUrl.origin === window.location.origin &&
+							!parsedRequestUrl.pathname.includes(CORS_PROXY_ENDPOINT)
+						) {
+							const originalConfigUrl = new URL(config.url);
+							const realTargetUrl = new URL(
+								parsedRequestUrl.pathname + parsedRequestUrl.search,
+								originalConfigUrl.origin
+							);
+							const proxiedUrl = buildProxiedUrl(realTargetUrl.href);
+
+							if (typeof input === 'string') {
+								input = proxiedUrl.href;
+							} else if (input instanceof URL) {
+								input = proxiedUrl;
+							}
+						}
+					}
+				}
+
+				const startedAt = performance.now();
+				const requestHeaders = new Headers(baseInit.headers);
+
+				if (typeof Request !== 'undefined' && input instanceof Request) {
+					this.addRequestHeaders(requestHeaders, input.headers, useProxy);
+				}
+
+				if (init?.headers) {
+					this.addRequestHeaders(requestHeaders, init.headers, useProxy);
+				}
+
+				const request = this.createDiagnosticRequestDetails(
+					input,
+					init,
+					baseInit,
+					requestHeaders,
+					Object.keys(config.headers ?? {})
+				);
+				const { method, url } = request;
+
+				logIfEnabled(
+					this.createLog(
+						MCPConnectionPhase.INITIALIZING,
+						`HTTP ${method} ${url}`,
+						MCPLogLevel.INFO,
+						{
+							request,
+							serverName
+						}
+					)
+				);
+
+				if (method === 'DELETE' && url.includes(CORS_PROXY_ENDPOINT)) {
+					const response = new Response(null, { status: 200, statusText: 'OK' });
+
+					logIfEnabled(
+						this.createLog(
+							MCPConnectionPhase.INITIALIZING,
+							`HTTP 200 ${method} ${url} (fake response)`,
+							MCPLogLevel.INFO,
+							{
+								response: {
+									durationMs: 0,
+									isFake: true,
+									status: response.status,
+									statusText: response.statusText,
+									url
+								}
+							}
+						)
+					);
+
+					// fake response, bypass real fetch()
+					return response;
+				}
+
+				try {
+					const response = await fetch(input, {
+						...baseInit,
+						...init,
+						headers: requestHeaders
+					});
+					const durationMs = Math.round(performance.now() - startedAt);
+
+					logIfEnabled(
+						this.createLog(
+							MCPConnectionPhase.INITIALIZING,
+							`HTTP ${response.status} ${method} ${url} (${durationMs}ms)`,
+							response.ok ? MCPLogLevel.INFO : MCPLogLevel.WARN,
+							{
+								response: {
+									durationMs,
+									headers: sanitizeHeaders(response.headers, undefined, HEADERS.PARTIAL_REDACT),
+									status: response.status,
+									statusText: response.statusText,
+									url
+								}
+							}
+						)
+					);
+
+					return response;
+				} catch (error) {
+					const durationMs = Math.round(performance.now() - startedAt);
+
+					logIfEnabled(
+						this.createLog(
+							MCPConnectionPhase.ERROR,
+							`HTTP ${method} ${url} failed: ${formatDiagnosticErrorMessage(error)}`,
+							MCPLogLevel.ERROR,
+							{
+								browser: this.getBrowserContext(targetUrl, useProxy),
+								durationMs,
+								error: this.summarizeError(error),
+								hints: this.getConnectionHints(targetUrl, config, error),
+								request,
+								serverName
+							}
+						)
+					);
+
+					throw error;
+				}
+			}
+		};
+	}
+
+	private static createDiagnosticRequestDetails(
+		input: RequestInfo | URL,
+		init: RequestInit | undefined,
+		baseInit: RequestInit,
+		requestHeaders: Headers,
+		extraRedactedHeaders?: Iterable<string>
+	): DiagnosticRequestDetails {
+		const body = getRequestBody(input, init);
+		const details: DiagnosticRequestDetails = {
+			body: summarizeRequestBody(body),
+			credentials: init?.credentials ?? baseInit.credentials,
+			headers: sanitizeHeaders(requestHeaders, extraRedactedHeaders, HEADERS.PARTIAL_REDACT),
+			method: getRequestMethod(input, init, baseInit).toUpperCase(),
+			mode: init?.mode ?? baseInit.mode,
+			url: getRequestUrl(input)
+		};
+		const jsonRpcMethods = extractJsonRpcMethods(body);
+
+		if (jsonRpcMethods) {
+			details.jsonRpcMethods = jsonRpcMethods;
+		}
+
+		return details;
 	}
 
 	/**
-	 * Check if a connection supports resource subscriptions.
-	 * @param connection - The MCP connection to check
-	 * @returns Whether the server supports resource subscriptions
+	 * Create a connection log entry for phase tracking.
+	 *
+	 * @param phase - The connection phase this log belongs to
+	 * @param message - Human-readable log message
+	 * @param level - Log severity level (default: INFO)
+	 * @param details - Optional structured details for debugging
+	 * @returns Formatted connection log entry
 	 */
-	static supportsResourceSubscriptions(connection: MCPConnection): boolean {
-		return !!connection.serverCapabilities?.resources?.subscribe;
+	private static createLog(
+		phase: MCPConnectionPhase,
+		message: string,
+		level: MCPLogLevel = MCPLogLevel.INFO,
+		details?: unknown
+	): MCPConnectionLog {
+		return {
+			details,
+			level,
+			message,
+			phase,
+			timestamp: new Date()
+		};
+	}
+
+	/**
+	 * Extract server info from SDK Implementation type.
+	 * Normalizes the SDK's server version response into our MCPServerInfo type.
+	 *
+	 * @param impl - Raw Implementation object from MCP SDK
+	 * @returns Normalized server info or undefined if input is empty
+	 */
+	private static extractServerInfo(impl: Implementation | undefined): MCPServerInfo | undefined {
+		if (!impl) {
+			return undefined;
+		}
+
+		return {
+			description: impl.description,
+			icons: impl.icons?.map((icon: MCPResourceIcon) => ({
+				mimeType: icon.mimeType,
+				sizes: icon.sizes,
+				src: icon.src,
+				theme: icon.theme
+			})),
+			name: impl.name,
+			title: impl.title,
+			version: impl.version,
+			websiteUrl: impl.websiteUrl
+		};
+	}
+
+	private static formatSingleContent(content: ToolResultContentItem): string {
+		if (content.type === MCPContentType.TEXT && content.text) {
+			return content.text;
+		}
+
+		if (content.type === MCPContentType.IMAGE && content.data) {
+			return createBase64DataUrl(content.mimeType ?? DEFAULT_IMAGE_MIME_TYPE, content.data);
+		}
+
+		if (content.type === MCPContentType.RESOURCE && content.resource) {
+			const resource = content.resource;
+
+			if (resource.text) return resource.text;
+
+			if (resource.blob) return resource.blob;
+
+			return JSON.stringify(resource);
+		}
+
+		if (content.data && content.mimeType) {
+			return createBase64DataUrl(content.mimeType, content.data);
+		}
+
+		return JSON.stringify(content);
+	}
+
+	/**
+	 * Format tool result content items to a single string.
+	 * Handles text, image (base64 data URL), and embedded resource content types.
+	 *
+	 * @param result - Raw tool call result from MCP SDK
+	 * @returns Concatenated string representation of all content items
+	 */
+	private static formatToolResult(result: ToolCallResult): string {
+		const content = result.content;
+
+		if (!Array.isArray(content)) return '';
+
+		const formatted = content
+			.map((item) => this.formatSingleContent(item))
+			.filter(Boolean)
+			.join(NEWLINE);
+
+		if (formatted !== '') {
+			return formatted;
+		}
+
+		if (result.structuredContent && typeof result.structuredContent === 'object') {
+			return JSON.stringify(result.structuredContent);
+		}
+
+		return '';
+	}
+
+	private static getBrowserContext(
+		targetUrl: URL,
+		useProxy: boolean
+	): Record<string, unknown> | undefined {
+		if (typeof window === 'undefined') {
+			return undefined;
+		}
+
+		return {
+			isSecureContext: window.isSecureContext,
+			location: window.location.href,
+			origin: window.location.origin,
+			protocol: window.location.protocol,
+			sameOrigin: window.location.origin === targetUrl.origin,
+			targetOrigin: targetUrl.origin,
+			targetProtocol: targetUrl.protocol,
+			useProxy
+		};
+	}
+
+	private static getConnectionHints(
+		targetUrl: URL,
+		config: MCPServerConfig,
+		error: unknown
+	): string[] {
+		const hints: string[] = [];
+		const message = error instanceof Error ? error.message : String(error);
+		const headerNames = Object.keys(config.headers ?? {});
+
+		if (typeof window !== 'undefined') {
+			if (
+				window.location.protocol === 'https:' &&
+				targetUrl.protocol === 'http:' &&
+				!config.useProxy
+			) {
+				hints.push(
+					'The page is running over HTTPS but the MCP server is HTTP. Browsers often block this as mixed content; enable the proxy or use HTTPS/WSS for the MCP server.'
+				);
+			}
+
+			if (window.location.origin !== targetUrl.origin && !config.useProxy) {
+				hints.push(
+					'This is a cross-origin browser request. If the server is reachable from curl or Node but not from the browser, missing CORS headers are the most likely cause.'
+				);
+			}
+		}
+
+		if (headerNames.length > 0) {
+			hints.push(
+				`Custom request headers are configured (${headerNames.join(', ')}). That triggers a CORS preflight, so the server must allow OPTIONS and include the matching Access-Control-Allow-Headers response.`
+			);
+		}
+
+		if (config.credentials && config.credentials !== 'omit') {
+			hints.push(
+				'Credentials are enabled for this connection. Cross-origin credentialed requests need Access-Control-Allow-Credentials: true and cannot use a wildcard Access-Control-Allow-Origin.'
+			);
+		}
+
+		if (message.includes('Failed to fetch')) {
+			hints.push(
+				'"Failed to fetch" is a browser-level network failure. Common causes are CORS rejection, mixed-content blocking, certificate/TLS errors, DNS failures, or nothing listening on the target port.'
+			);
+		}
+
+		return hints;
+	}
+
+	/**
+	 * Walk a cursor-paginated MCP list endpoint, collecting every page.
+	 */
+	private static async paginate<T, R extends { nextCursor?: string }>(
+		connection: MCPConnection,
+		fetchPage: (cursor?: string) => Promise<R>,
+		extract: (result: R) => T[]
+	): Promise<T[]> {
+		const all: T[] = [];
+
+		let cursor: string | undefined;
+
+		do {
+			const result = await fetchPage(cursor);
+
+			all.push(...extract(result));
+			cursor = result.nextCursor;
+		} while (cursor);
+
+		return all;
+	}
+
+	private static summarizeError(error: unknown): Record<string, unknown> {
+		if (error instanceof Error) {
+			return {
+				cause:
+					error.cause instanceof Error
+						? { message: error.cause.message, name: error.cause.name }
+						: error.cause,
+				message: error.message,
+				name: error.name,
+				stack: error.stack?.split('\n').slice(0, 6).join('\n')
+			};
+		}
+
+		return { value: String(error) };
 	}
 }

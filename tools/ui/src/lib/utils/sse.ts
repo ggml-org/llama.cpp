@@ -25,6 +25,30 @@ export interface SseJsonEvent<T = unknown> {
 	data: T;
 }
 
+/**
+ * Splits a raw SSE byte buffer into complete records on the blank-line
+ * boundary, returning the leftover partial record separately. Shared by the
+ * record-based consumers (parseSseJsonStream, models.service).
+ */
+export function splitSseRecords(buffer: string): { records: string[]; rest: string } {
+	const parts = buffer.split(SSE_RECORD_SEPARATOR);
+
+	return { records: parts.slice(0, -1), rest: parts[parts.length - 1] ?? '' };
+}
+
+/**
+ * Extracts the joined `data:` payload from one SSE record (the data lines
+ * concatenated with a newline), or an empty string when the record carries
+ * no data lines. Used by models.service to parse status envelopes.
+ */
+export function extractSseDataPayload(record: string): string {
+	return record
+		.split(SSE_LINE_SEPARATOR)
+		.filter((line) => line.startsWith(SSE_DATA_PREFIX))
+		.map((line) => line.slice(SSE_DATA_PREFIX.length).trim())
+		.join(SSE_LINE_SEPARATOR);
+}
+
 export async function* parseSseJsonStream<T = unknown>(
 	response: Response,
 	signal?: AbortSignal
@@ -46,9 +70,9 @@ export async function* parseSseJsonStream<T = unknown>(
 			if (done) break;
 
 			buffer += decoder.decode(value, { stream: true });
-			const records = buffer.split(SSE_RECORD_SEPARATOR);
+			const { records, rest } = splitSseRecords(buffer);
 
-			buffer = records.pop() ?? '';
+			buffer = rest;
 
 			for (const record of records) {
 				if (!record) continue;

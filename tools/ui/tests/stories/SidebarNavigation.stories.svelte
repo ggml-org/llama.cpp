@@ -53,7 +53,7 @@
 	asChild
 	name="Default"
 	play={async () => {
-		const { conversationsStore } = await import('$lib/stores/conversations.svelte');
+		const { conversationsStore } = await import('$lib/stores/conversations/index.svelte');
 
 		waitFor(() =>
 			setTimeout(() => {
@@ -71,7 +71,7 @@
 	asChild
 	name="SearchActive"
 	play={async ({ userEvent }) => {
-		const { conversationsStore } = await import('$lib/stores/conversations.svelte');
+		const { conversationsStore } = await import('$lib/stores/conversations/index.svelte');
 
 		waitFor(() =>
 			setTimeout(() => {
@@ -98,7 +98,7 @@
 	name="Empty"
 	play={async () => {
 		// Mock empty conversations store
-		const { conversationsStore } = await import('$lib/stores/conversations.svelte');
+		const { conversationsStore } = await import('$lib/stores/conversations/index.svelte');
 
 		conversationsStore.conversations = [];
 	}}
