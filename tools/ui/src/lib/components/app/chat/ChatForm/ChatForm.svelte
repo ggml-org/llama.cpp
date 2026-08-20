@@ -28,7 +28,6 @@
 	import {
 		chatStore,
 		conversationsStore,
-		mcpResourceStore,
 		mcpStore,
 		modelsStore,
 		serverStore,
@@ -140,7 +139,9 @@
 	// float above the box.
 	let mentionAnchor: HTMLDivElement | null = $state(null);
 
-	let cwd = $derived(conversationsStore.activeConversation?.cwd ?? conversationsStore.pendingCwd);
+	let cwd = $derived(
+		conversationsStore.activeConversation?.cwd ?? conversationsStore.preferences.pendingCwd
+	);
 
 	const pickers = useChatFormPickers({
 		focusInput: refocusInput,
@@ -151,7 +152,8 @@
 		getShowModelSelector: () => showModelSelector,
 		getValue: () => value,
 		hasCwdTools: () => toolsStore.hasEnabledCwdTools,
-		hasPrompts: () => mcpStore.hasPromptsCapability(conversationsStore.getAllMcpServerOverrides()),
+		hasPrompts: () =>
+			mcpStore.hasPromptsCapability(conversationsStore.preferences.getAllMcpServerOverrides()),
 		openModelSelector: () => chatFormActionsRef?.openModelSelector(),
 		setCaretOffset: (offset) => inputRef?.setCaretOffset(offset),
 		setValue: (v) => {
@@ -170,7 +172,7 @@
 			onValueChange?.('');
 		}
 
-		await conversationsStore.setCwd(newDir);
+		await conversationsStore.preferences.setCwd(newDir);
 
 		if (conversationsStore.activeConversation) {
 			await chatStore.recordCwdChange(newDir?.trim() || null);
@@ -595,7 +597,7 @@
 				{useRichInput}
 			/>
 
-			{#if mcpResourceStore.hasAttachments}
+			{#if mcpStore.resources.hasAttachments}
 				<ChatFormMcpResourcesList
 					class="mb-3"
 					onResourceClick={(uri) => {
