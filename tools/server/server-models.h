@@ -136,8 +136,9 @@ private:
     // if true, the next get_meta() will trigger a reload of model list
     bool need_reload = false;
 
-    // models marked with load-on-startup
-    std::vector<std::string> startup_models;
+    // models marked with load-on-startup, unset once load_startup_models() drains it
+    // using std::optional to make sure it's only called once after is_first_load, load_startup_models will unset it
+    std::optional<std::vector<std::string>> startup_models{std::in_place};
 
     // conv_id -> model name that currently serves its stream session, lets the resumable stream
     // routes go straight to the owning child instead of polling every one. populated when
