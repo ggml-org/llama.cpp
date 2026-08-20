@@ -7434,9 +7434,6 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
         case GGML_OP_DIAG_MASK_INF:
             return op->ne[3] == 1;
         case GGML_OP_ROPE: {
-            if (((const int32_t *) op->op_params)[15] != 0) {
-                return false; // FIXME: support ggml_rope_set_offset
-            }
             const int mode = ((const int32_t *) op->op_params)[2];
             const bool is_mrope = mode & GGML_ROPE_TYPE_MROPE;
             const bool is_vision = mode == GGML_ROPE_TYPE_VISION;
@@ -23910,6 +23907,7 @@ static void ggml_cl_rope(ggml_backend_t backend, const ggml_tensor * src0, const
     const int n_dims     = ((int *) dst->op_params)[1];
     const int mode       = ((int *) dst->op_params)[2];
     const int n_ctx_orig = ((int32_t *) dst->op_params)[4];
+    const int n_offs     = ((int32_t *) dst->op_params)[15];
 
     float freq_base;
     float freq_scale;
@@ -23938,6 +23936,7 @@ static void ggml_cl_rope(ggml_backend_t backend, const ggml_tensor * src0, const
 
     if (is_vision) {
         GGML_ASSERT(n_dims == ne00/2);
+        GGML_ASSERT(n_offs == 0); // offset not supported for vision, as the rotated pairs span the whole row
     }
 
     cl_kernel kernel;
@@ -24028,6 +24027,12 @@ static void ggml_cl_rope(ggml_backend_t backend, const ggml_tensor * src0, const
     // only mrope has is_imrope
     if (is_mrope && !is_vision) {
         CL_CHECK(clSetKernelArg(kernel, 34, sizeof(int), &is_imrope));
+    }
+    // norm and neox have n_offs after beta_slow, mrope has it after is_imrope
+    if (!is_mrope && !is_vision) {
+        CL_CHECK(clSetKernelArg(kernel, 33, sizeof(int), &n_offs));
+    } else if (is_mrope && !is_vision) {
+        CL_CHECK(clSetKernelArg(kernel, 35, sizeof(int), &n_offs));
     }
 
     size_t global_work_size[] = {(size_t)ne01*nth, (size_t)ne02, (size_t)ne03};
