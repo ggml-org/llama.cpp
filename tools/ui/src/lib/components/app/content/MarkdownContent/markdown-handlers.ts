@@ -51,9 +51,7 @@ export function createHandleCopyClick() {
 
 		if (!wrapper) return;
 
-		const codeElement = wrapper.querySelector<HTMLElement>(
-			`code[${MARKDOWN_DATA_ATTRS.CODE_ID}]`
-		);
+		const codeElement = wrapper.querySelector<HTMLElement>(`code[${MARKDOWN_DATA_ATTRS.CODE_ID}]`);
 
 		if (!codeElement) return;
 
@@ -99,9 +97,7 @@ export function createHandlePreviewClick(previewState: PreviewState) {
 
 		if (!wrapper) return;
 
-		const codeElement = wrapper.querySelector<HTMLElement>(
-			`code[${MARKDOWN_DATA_ATTRS.CODE_ID}]`
-		);
+		const codeElement = wrapper.querySelector<HTMLElement>(`code[${MARKDOWN_DATA_ATTRS.CODE_ID}]`);
 
 		if (!codeElement) return;
 
@@ -124,9 +120,7 @@ export function createHandleMermaidClick(mermaidState: MermaidPreviewState) {
 		const target = event.target as HTMLElement;
 		// Check if clicking on copy or preview button in mermaid block
 		const copyBtn = target.closest(`.${MERMAID_WRAPPER_CLASS} .${CODE_BLOCK_CLASS.COPY_BTN}`);
-		const previewBtn = target.closest(
-			`.${MERMAID_WRAPPER_CLASS} .${CODE_BLOCK_CLASS.PREVIEW_BTN}`
-		);
+		const previewBtn = target.closest(`.${MERMAID_WRAPPER_CLASS} .${CODE_BLOCK_CLASS.PREVIEW_BTN}`);
 
 		if (copyBtn || previewBtn) {
 			const wrapper = target.closest(`.${MERMAID_WRAPPER_CLASS}`);
@@ -264,9 +258,7 @@ export function createSetupCodeBlockActions(
 		const wrappers = containerRef.querySelectorAll<HTMLElement>(`.${CODE_BLOCK_CLASS.WRAPPER}`);
 
 		for (const wrapper of wrappers) {
-			const copyButton = wrapper.querySelector<HTMLButtonElement>(
-				`.${CODE_BLOCK_CLASS.COPY_BTN}`
-			);
+			const copyButton = wrapper.querySelector<HTMLButtonElement>(`.${CODE_BLOCK_CLASS.COPY_BTN}`);
 			const previewButton = wrapper.querySelector<HTMLButtonElement>(
 				`.${CODE_BLOCK_CLASS.PREVIEW_BTN}`
 			);
@@ -281,8 +273,7 @@ export function createSetupCodeBlockActions(
 
 			if (
 				previewButton &&
-				previewButton.getAttribute(MARKDOWN_DATA_ATTRS.LISTENER_BOUND) !==
-					BooleanString.TRUE
+				previewButton.getAttribute(MARKDOWN_DATA_ATTRS.LISTENER_BOUND) !== BooleanString.TRUE
 			) {
 				previewButton.setAttribute(MARKDOWN_DATA_ATTRS.LISTENER_BOUND, BooleanString.TRUE);
 				previewButton.addEventListener('click', handlePreviewClick);
@@ -304,9 +295,7 @@ export function createSetupImageErrorHandlers(
 	return function setupImageErrorHandlers(containerRef: HTMLElement | null) {
 		if (!containerRef) return;
 
-		const images = containerRef.querySelectorAll<HTMLImageElement>(
-			IMAGE_NOT_ERROR_BOUND_SELECTOR
-		);
+		const images = containerRef.querySelectorAll<HTMLImageElement>(IMAGE_NOT_ERROR_BOUND_SELECTOR);
 
 		for (const img of images) {
 			img.setAttribute(errorBoundAttr, booleanString);

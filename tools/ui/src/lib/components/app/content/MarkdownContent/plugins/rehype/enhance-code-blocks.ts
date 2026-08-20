@@ -20,7 +20,8 @@ import {
 	generateBlockId
 } from './code-block-utils';
 import { CODE_BLOCK, CODE_BLOCK_CLASS, CODE_BLOCK_TEXT, MARKDOWN_DATA_ATTRS } from '$lib/constants';
-import type { Element, ElementContent, Root } from 'hast';
+import type { Element, ElementContent, Properties, Root } from 'hast';
+import type { Code, Root as MdastRoot } from 'mdast';
 import type { Plugin } from 'unified';
 import { visit } from 'unist-util-visit';
 
@@ -35,14 +36,12 @@ declare global {
  * remark-rehype drops the meta string by default, so we save it to data-meta
  * to access it later in rehypeEnhanceCodeBlocks.
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export const remarkPreserveCodeMeta: Plugin<[], any> = () => {
-	return (tree) => {
-		// eslint-disable-next-line @typescript-eslint/no-explicit-any
-		visit(tree, 'code', (node: any) => {
+export const remarkPreserveCodeMeta: Plugin<[], MdastRoot> = () => {
+	return (tree: MdastRoot) => {
+		visit(tree, 'code', (node: Code) => {
 			if (node.meta) {
 				node.data = node.data || {};
-				node.data.hProperties = node.data.hProperties || {};
+				node.data.hProperties = (node.data.hProperties || {}) as Properties;
 				node.data.hProperties[MARKDOWN_DATA_ATTRS.META_DATA] = node.meta;
 			}
 		});
@@ -52,7 +51,7 @@ export const remarkPreserveCodeMeta: Plugin<[], any> = () => {
 function extractLanguage(codeElement: Element): string {
 	const className = codeElement.properties?.className;
 
-	if (!Array.isArray(className)) return 'text';
+	if (!Array.isArray(className)) return CODE_BLOCK.DEFAULT_LANGUAGE;
 
 	for (const cls of className) {
 		if (typeof cls === 'string' && cls.startsWith('language-')) {
@@ -60,7 +59,7 @@ function extractLanguage(codeElement: Element): string {
 		}
 	}
 
-	return 'text';
+	return CODE_BLOCK.DEFAULT_LANGUAGE;
 }
 
 /**
@@ -75,7 +74,7 @@ function extractFilenameFromInfo(node: Element, codeElement: Element): string | 
 	if (typeof meta !== 'string') return undefined;
 
 	// Matches a file extension and name, optionally preceded by a key like name=, file=, or title=
-	const regex = CODE_BLOCK.FILE_NAME_REGEX;
+	const regex = CODE_BLOCK.FILE_NAME_HEADER_REGEX;
 	const match = meta.match(regex);
 
 	return match ? match[1] : undefined;
@@ -101,7 +100,8 @@ export const rehypeEnhanceCodeBlocks: Plugin<[], Root> = () => {
 
 			const language = extractLanguage(codeElement);
 			const filename = extractFilenameFromInfo(node, codeElement);
-			const codeId = generateBlockId('code', 'idxCodeBlock');
+			const rawPos = node.position?.start?.offset;
+			const codeId = generateBlockId(CODE_BLOCK.ID_PREFIX, 'idxCodeBlock');
 
 			codeElement.properties = {
 				...codeElement.properties,
@@ -114,36 +114,24 @@ export const rehypeEnhanceCodeBlocks: Plugin<[], Root> = () => {
 					MARKDOWN_DATA_ATTRS.CODE_ID,
 					CODE_BLOCK_TEXT.DOWNLOAD_BTN_TITLE
 				),
-				createCopyButton(
-					codeId,
-					MARKDOWN_DATA_ATTRS.CODE_ID,
-					CODE_BLOCK_TEXT.COPY_BTN_TITLE
-				)
+				createCopyButton(codeId, MARKDOWN_DATA_ATTRS.CODE_ID, CODE_BLOCK_TEXT.COPY_BTN_TITLE)
 			];
 
 			if (language.toLowerCase() === 'html') {
 				actions.push(
-					createPreviewButton(
-						codeId,
-						MARKDOWN_DATA_ATTRS.CODE_ID,
-						CODE_BLOCK_TEXT.PREVIEW_TITLE
-					)
+					createPreviewButton(codeId, MARKDOWN_DATA_ATTRS.CODE_ID, CODE_BLOCK_TEXT.PREVIEW_TITLE)
 				);
 			}
 
-			const header = createBlockHeader(
-				language,
-				codeId,
-				MARKDOWN_DATA_ATTRS.CODE_ID,
-				actions
-			);
+			const header = createBlockHeader(language, codeId, MARKDOWN_DATA_ATTRS.CODE_ID, actions);
 			const wrapper = createWrapper(
 				header,
 				node,
 				CODE_BLOCK_CLASS.WRAPPER,
 				CODE_BLOCK_CLASS.SCROLL_CONTAINER,
 				{
-					...(filename ? { [MARKDOWN_DATA_ATTRS.FILE_NAME]: filename } : {})
+					...(filename ? { [MARKDOWN_DATA_ATTRS.FILE_NAME]: filename } : {}),
+					...(rawPos !== undefined ? { [MARKDOWN_DATA_ATTRS.CODE_RAW_POS]: String(rawPos) } : {})
 				}
 			);
 

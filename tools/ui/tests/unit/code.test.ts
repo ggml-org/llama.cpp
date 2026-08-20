@@ -153,57 +153,76 @@ describe('splitGluedClosingCodeFences', () => {
 
 describe('extractFilenameFromText', () => {
 	it('ignores unquoted wrongname and takes nearest quoted correct name', () => {
-		const text = `These are files to test the download button.
-		### 1. Ignore (**\`wrongname.html\`**) and take nearest quoted (**\`correctname.html\`**) not the unquoted wrongname.html
-		The download should save as the correct name .html`;
+		const text =
+			'These are the files to test the download button.\r\n' +
+			'### 1. Ignore (**`wrongname.html`**) and take nearest quoted (**`correctname.html`**) not the unquoted wrongname.html\r\n' +
+			'The download should save as the correct name .html\r\n' +
+			'```';
 
-		expect(extractFilenameFromText(text, '.html')).toBe('correctname.html');
+		expect(extractFilenameFromText(text, text.lastIndexOf('```'), '.html')).toBe(
+			'correctname.html'
+		);
 	});
 
 	it('falls back to the last unquoted filename matching the target extension', () => {
-		const text = `### 2. Unquoted filename wrongname.js wrongext.txt correctname.js wrongext.md
-		This should fallback to the correct name as it requires to have the same extension as to the code block type.`;
+		const text =
+			'### 2. Unquoted filename wrongname.js wrongext.txt correct.name.js wrongext.md\r\n\r\n\r\n\r\n\r\n\r\n\r\n' +
+			'This should fallback to the correct name as it requires to have the same extension as to the code block type.';
 
-		expect(extractFilenameFromText(text, '.js')).toBe('correctname.js');
+		expect(extractFilenameFromText(text, text.length, '.js')).toBe('correct.name.js');
 	});
 
 	it('strips virtual paths and trailing colons from unquoted matches', () => {
-		const text = `### 3: Strip virtual path and colon suffix not from wrongpath/wrongname.md: but from wrongpath/correctname.md:`;
+		const text =
+			'### 3: Strip virtual path and colon suffix not from wrongpath/wrongname.md: but from wrongpath/correctname.md:\n' +
+			'line2\nline3\n```markdown\n\n\n\n';
 
-		expect(extractFilenameFromText(text, '.md')).toBe('correctname.md');
+		expect(extractFilenameFromText(text, text.lastIndexOf('```'), '.md')).toBe('correctname.md');
 	});
 
 	it('type not specified in code block, accept quoted file name', () => {
-		const text = `### 4. Code block type not specified. Here is \`wrongname.js\` sorry i mean \`correctname.js\`:
-		When quotes, trust the name and extension`;
+		const text =
+			'x'.repeat(5000) +
+			'### 4. Code block type not specified. Here is **wrongname.js** sorry i mean (correct.name.js)\n' +
+			'When quotes, trust the name and extension\n```\n';
 
-		expect(extractFilenameFromText(text, null)).toBe('correctname.js');
+		expect(extractFilenameFromText(text, text.lastIndexOf('```'), null)).toBe('correct.name.js');
 	});
 
 	it('type not specified in code block, do not accept unquoted file name', () => {
-		const text = `### 5. Code block type not specified so dont accept a wrongname.ext
-		Not reliable enough than wrongname.ext is the correct name as it is not quoted`;
+		const text =
+			'this *wrongname.md* is too many lines behind\nx\nx\nx\nx\nx\n' +
+			"### 5. Code block type not specified so don't accept a wrongname.ext\n" +
+			'Not reliable enough that wrongname.txt or wrongname.md is the correct name as it is not quoted\n' +
+			'```\n';
 
-		expect(extractFilenameFromText(text, '')).toBeNull();
+		expect(extractFilenameFromText(text, text.lastIndexOf('```'), '')).toBeNull();
 	});
 
-	it('returns null when no file matches the extension (fallback triggered downstream)', () => {
-		const text = `### 6: Fallback to default (timestamp and .md) and ignore 'wrongext.txt'
-		This should save as llama_yyyymmdd_hhmmss .md`;
+	it('returns null when no file matches the extension', () => {
+		const text =
+			'this *wrongname.md* is too far away ' +
+			'x'.repeat(5000) +
+			"### 6: Fallback to default (timestamp and .md) and ignore 'wrongext.txt' or 'wrongname .md'\n" +
+			'This should save as llama_yyyymmdd_hhmmss .md';
 
-		expect(extractFilenameFromText(text, '.md')).toBeNull();
+		expect(extractFilenameFromText(text, text.length, '.md')).toBeNull();
 	});
 
 	it('rejects unquoted filenames with spaces around the extension dot', () => {
-		const text = `### 7: Here is my  file . ext
-		and also file .ext and another file. ext which are invalid.`;
+		const text =
+			'// end of previous fence wrongname.ext\n```\n' +
+			'### 7: Here is my  file . ext and also file .ext and another file. ext which are invalid.\n```';
 
-		expect(extractFilenameFromText(text, '.ext')).toBeNull();
+		expect(extractFilenameFromText(text, text.lastIndexOf('```'), '.ext')).toBeNull();
 	});
 
 	it('rejects filenames with illegal OS characters', () => {
-		const text = `### 8: Look at **"bad?name.txt"** and **"worse|name.txt"** or even attack..traversal.txt`;
+		const text =
+			'### 8: Do take * correct name.txt *\n' +
+			"and ignore **b@dname.txt** and 'worsename.123' or even **attack..traversal.txt**\n" +
+			'also *-bad.x* *bad .x* *bad. x* *.nohidden.x* and look up to 3 lines back\n```text\n';
 
-		expect(extractFilenameFromText(text, '.txt')).toBeNull();
+		expect(extractFilenameFromText(text, text.lastIndexOf('```'), '.txt')).toBe('correct name.txt');
 	});
 });

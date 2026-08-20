@@ -5,22 +5,29 @@ export const CODE_BLOCK = {
 	AMPERSAND_REGEX: /&/g,
 	/** Language fallback used when no language is specified. */
 	DEFAULT_LANGUAGE: 'text',
+	/** Default when file name cannot be retrieved from code block or text above */
+	DOWNLOAD_NAME_DEFAULT_PREFIX: 'llama_',
+	DOWNLOAD_NAME_SCAN_BYTES_BACK: 500,
+	/** If a code block has no file name, scan the text above for a valid file name */
+	DOWNLOAD_NAME_SCAN_LINES_BACK: 3,
+	/* valid break characters before and after a file name, like here is droppath/script.sh: */
+	DOWNLOAD_NAME_STOP_MARKS: ':;,!?/\\',
+	/* prioritized wrapping chars around file name. like save as **script.js** and run in node.js */
+	DOWNLOAD_NAME_WRAP_MARKS: '`"\'‘’*()[]{}«»',
+
 	/** Matches opening/closing markdown code fences. */
 	FENCE_PATTERN: /^```|\n```/g,
 
-	// filter file name from just above MD code block, like here is **script.py**: ```python...
-	FILE_NAME_BOUNDARY_REGEX:
-		/(`+[^`\n]+`+|\*{1,2}[^*]+?\*{1,2}|["'][^"'\n]+["']|(?<![\w/\\.])[a-zA-Z0-9_\-./\\]+\.[a-zA-Z0-9]+(?::\d+)?(?=[\s:;,!?)]|$))/g,
-
-	// Illegal OS characters: < > : " / \ | ? *
-	FILE_NAME_ILLEGAL_CHARS_REGEX: /[<>:"/\\|?*]/,
-	// filter file name from MD code block, like ```python title="script.py"
-	FILE_NAME_REGEX:
-		/(?:^|\s)(?:[a-zA-Z0-9_-]+=)?["'`]?([^"'`\s]+\.[a-zA-Z][a-zA-Z0-9]{0,6})["'`]?(?:\s|$)/i,
-
-	FILE_NAME_VALID_REGEX: /^[a-zA-Z0-9_-]+$/,
-
+	FILE_EXT_VALID_CHAR_REGEX: /^[a-zA-Z0-9]+$/,
+	// filter file name from MD code block header, like ```python title="script.py"
+	FILE_NAME_HEADER_REGEX:
+		/(?:^|\s)(?:[a-zA-Z0-9_-]+=)?["'`]?([^"'`\s]+\.[a-zA-Z][a-zA-Z0-9]{0,9})["'`]?(?:\s|$)/i,
+	FILE_NAME_MAX_EXT_LENGTH: 10,
+	FILE_NAME_MAX_LENGTH: 40,
+	// allowed characters for a file name (stick to POSIX portable filenames char set)
+	FILE_NAME_VALID_CHAR_REGEX: /^[a-zA-Z0-9._ -]+$/,
 	GT_REGEX: />/g,
+	ID_PREFIX: 'code',
 	/** Matches the language specifier at the start of a code fence. */
 	LANG_PATTERN: /^(\w*)\n?/,
 	LT_REGEX: /</g,

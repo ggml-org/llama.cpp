@@ -66,11 +66,7 @@ export function createCopyButton(id: string, idAttribute: string, title: string 
 /**
  * Creates a download button element.
  */
-export function createDownloadButton(
-	id: string,
-	idAttribute: string,
-	title: string = 'Download'
-): Element {
+export function createDownloadButton(id: string, idAttribute: string, title: string): Element {
 	return createButton(CODE_BLOCK_CLASS.DOWNLOAD_BTN, title, DOWNLOAD_ICON_SVG, id, idAttribute);
 }
 
@@ -189,11 +185,7 @@ export function createWrapper(
 	extraChildren: Element[] = []
 ): Element {
 	return {
-		children: [
-			header,
-			createScrollContainer(preElement, scrollContainerClass),
-			...extraChildren
-		],
+		children: [header, createScrollContainer(preElement, scrollContainerClass), ...extraChildren],
 		properties: {
 			className: [wrapperClass, CODE_BLOCK_CLASS.RELATIVE],
 			...additionalAttributes

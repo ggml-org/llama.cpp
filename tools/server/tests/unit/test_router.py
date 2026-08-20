@@ -406,6 +406,59 @@ def test_router_reload_models():
         os.remove(preset_path)
 
 
+def test_router_dedup_cache_models():
+    """dedup-cache-models hides the cache entry backing a preset from GET /models"""
+    global server
+
+    preset_path = os.path.join(TMP_DIR, "test_dedup.ini")
+    cache_id = "ggml-org/test-model-stories260K:F32"
+
+    with open(preset_path, "w") as f:
+        f.write(
+            "[model-dedup]\n"
+            "hf-repo = ggml-org/test-model-stories260K\n"
+            "dedup-cache-models = 1\n"
+        )
+
+    server.models_preset = preset_path
+    server.start()
+
+    try:
+        ids = _get_model_ids(is_reload=False)
+        assert "model-dedup" in ids
+        assert cache_id not in ids, "cache model should be hidden by dedup"
+        # other cache models are unaffected
+        assert "ggml-org/tinygemma3-GGUF:Q8_0" in ids
+
+        # the hidden model is only hidden from the listing, it can still be used
+        res = server.make_request("POST", "/tokenize", data={"model": cache_id, "content": "hello"})
+        assert res.status_code == 200
+
+        # disabling the flag brings the cache entry back on reload
+        with open(preset_path, "w") as f:
+            f.write(
+                "[model-dedup]\n"
+                "hf-repo = ggml-org/test-model-stories260K\n"
+            )
+        ids = _get_model_ids(is_reload=True)
+        assert cache_id in ids
+
+        # the flag also works from the global section
+        with open(preset_path, "w") as f:
+            f.write(
+                "[*]\n"
+                "dedup-cache-models = 1\n"
+                "\n"
+                "[model-dedup]\n"
+                "hf-repo = ggml-org/test-model-stories260K\n"
+            )
+        ids = _get_model_ids(is_reload=True)
+        assert "model-dedup" in ids
+        assert cache_id not in ids, "cache model should be hidden by global dedup"
+    finally:
+        os.remove(preset_path)
+
+
 def test_router_remote_preset():
     global server
     server.model_hf_repo = "ggml-org/test-preset-ci"

@@ -5,7 +5,8 @@
 		getCodeInfoFromTarget,
 		getHastNodeId,
 		getMdastNodeHash,
-		isAppendMode
+		isAppendMode,
+		isValidCodeblockFilename
 	} from './markdown-utils';
 	import {
 		rehypeEnhanceCodeBlocks,
@@ -29,6 +30,7 @@
 		DialogMermaidPreview
 	} from '$lib/components/app';
 	import {
+		CODE_BLOCK,
 		CODE_BLOCK_CLASS,
 		CODE_BLOCK_TYPE_TO_EXTENSION_MAP,
 		DIAGRAM_VIEW_MODE_ATTR,
@@ -103,10 +105,7 @@
 
 		if (block.language === SVG.LANGUAGE) return block.code;
 
-		if (
-			block.language === SVG.XML_LANGUAGE &&
-			block.code.trimStart().startsWith(SVG.TAG_PREFIX)
-		)
+		if (block.language === SVG.XML_LANGUAGE && block.code.trimStart().startsWith(SVG.TAG_PREFIX))
 			return block.code;
 
 		return null;
@@ -136,8 +135,7 @@
 
 	// Mount the streaming svg into its shadow host on every chunk so it renders live
 	$effect(() => {
-		if (streamingSvgHost)
-			mountSvgShadow(streamingSvgHost, liveSvgHtml, SVG.INLINE_SHADOW_STYLE);
+		if (streamingSvgHost) mountSvgShadow(streamingSvgHost, liveSvgHtml, SVG.INLINE_SHADOW_STYLE);
 	});
 
 	let streamingCodeScrollContainer = $state<HTMLDivElement>();
@@ -277,9 +275,7 @@
 		}
 
 		const singleNodeRoot = { children: [node], type: 'root' };
-		const transformedRoot = (await processorInstance.run(
-			singleNodeRoot as MdastRoot
-		)) as HastRoot;
+		const transformedRoot = (await processorInstance.run(singleNodeRoot as MdastRoot)) as HastRoot;
 		const html = processorInstance.stringify(transformedRoot);
 
 		transformCache.set(hash, html);
@@ -304,73 +300,50 @@
 
 		if (!info) return;
 
-		const rawCode = info.rawCode;
-		const wrapper = target.closest('.code-block-wrapper');
-		const languageLabel = wrapper?.querySelector<HTMLElement>('.code-language');
-		const language = languageLabel?.textContent?.trim() || 'text';
+		const wrapper = target.closest(`.${CODE_BLOCK_CLASS.WRAPPER}`);
 
-		// Determine extension from md code block
-		let extension = CODE_BLOCK_TYPE_TO_EXTENSION_MAP[language.toLowerCase()] || '';
+		// Determine extension from code block language name
+		let extension: string | null = null;
 
-		if (!extension) {
-			const alphanumeric = language.replace(/[^a-z0-9]/gi, '').toLowerCase();
+		if (info.language != CODE_BLOCK.DEFAULT_LANGUAGE) {
+			extension = CODE_BLOCK_TYPE_TO_EXTENSION_MAP[info.language.toLowerCase()] || null;
 
-			extension = alphanumeric ? `.${alphanumeric}` : '.md';
+			// take language itself as extension if not found
+			if (
+				!extension &&
+				info.language.length <= CODE_BLOCK.FILE_NAME_MAX_EXT_LENGTH &&
+				CODE_BLOCK.FILE_EXT_VALID_CHAR_REGEX.test(info.language)
+			) {
+				extension = `.${info.language.toLowerCase()}`;
+			}
 		}
 
 		// Extract filename
-		let filename: string | null = null;
 
 		// Priority 1: From data-filename attribute (extracted from code block info string)
+		let filename: string | null = null;
+
 		filename = wrapper?.getAttribute(MARKDOWN_DATA_ATTRS.FILE_NAME) || null;
 
-		// Priority 2: Scan preceding elements for potential filenames, climbing the DOM
-		if (!filename && wrapper) {
-			let prevTexts: string[] = [];
-			let curr: HTMLElement | null = wrapper as HTMLElement;
-
-			// Climb out of wrapper up to the highest markdown blocks before containerRef
-			while (curr && curr !== containerRef && prevTexts.length < 3) {
-				if (curr.previousElementSibling) {
-					curr = curr.previousElementSibling as HTMLElement;
-
-					// Break immediately if we encounter a preceding code block
-					if (
-						curr.classList.contains('code-block-wrapper') ||
-						curr.querySelector('.code-block-wrapper') ||
-						curr.tagName === 'PRE'
-					)
-						break;
-
-					const text = curr.textContent?.trim();
-
-					if (text) {
-						prevTexts.push(text);
-					}
-				} else {
-					curr = curr.parentElement;
-				}
-			}
-
-			// Iterate over the closest text blocks first
-			for (const text of prevTexts) {
-				const extracted = extractFilenameFromText(text, extension);
-
-				if (extracted) {
-					filename = extracted;
-
-					break;
-				}
-			}
-		}
-
-		// Sanitize and strip virtual directory paths (e.g. app/src/main.js -> main.js)
 		if (filename) {
+			// strip virtual directory paths (e.g. app/src/main.js -> main.js)
 			const parts = filename.split(/[/\\]/);
 
-			filename = parts[parts.length - 1].replace(/[/\\?%*:|"<>]/g, '').trim();
+			filename = parts[parts.length - 1].trim();
 
-			if (!filename) filename = null;
+			if (!isValidCodeblockFilename(filename))
+				// skip if invalid name, don't try to sanitize
+				filename = null;
+		}
+
+		// Priority 2: Scan preceding text for potential filenames
+		if (!filename && wrapper) {
+			// Get position of code block within raw MD data
+			const rawPos = parseInt(wrapper.getAttribute(MARKDOWN_DATA_ATTRS.CODE_RAW_POS) ?? '');
+
+			if (!isNaN(rawPos)) {
+				filename = extractFilenameFromText(content, rawPos, extension);
+			}
 		}
 
 		// Default filename fallback with timestamp
@@ -384,12 +357,12 @@
 			const ss = String(now.getSeconds()).padStart(2, '0');
 			const ts = `${y}${m}${d}_${hh}${mm}${ss}`;
 
-			filename = `llama_${ts}${extension}`;
-		} else if (!filename.includes('.')) {
-			filename += extension;
+			extension =
+				extension || CODE_BLOCK_TYPE_TO_EXTENSION_MAP[CODE_BLOCK.DEFAULT_LANGUAGE] || '.txt';
+			filename = `${CODE_BLOCK.DOWNLOAD_NAME_DEFAULT_PREFIX}${ts}${extension}`;
 		}
 
-		const blob = new Blob([rawCode], { type: 'text/plain' });
+		const blob = new Blob([info.rawCode], { type: 'text/plain' });
 		const url = URL.createObjectURL(blob);
 		const a = document.createElement('a');
 
@@ -531,11 +504,7 @@
 					}
 
 					// Transform this block (with caching)
-					const { hash, html } = await transformMdastNode(
-						processorInstance,
-						child,
-						index
-					);
+					const { hash, html } = await transformMdastNode(processorInstance, child, index);
 					const id = getHastNodeId(
 						{ position: (child as { position?: unknown }).position } as HastRootContent,
 						index
@@ -619,12 +588,10 @@
 	function setupCodeBlockActions() {
 		if (!containerRef) return;
 
-		const wrappers = containerRef.querySelectorAll<HTMLElement>('.code-block-wrapper');
+		const wrappers = containerRef.querySelectorAll<HTMLElement>(`.${CODE_BLOCK_CLASS.WRAPPER}`);
 
 		for (const wrapper of wrappers) {
-			const copyButton = wrapper.querySelector<HTMLButtonElement>(
-				`.${CODE_BLOCK_CLASS.COPY_BTN}`
-			);
+			const copyButton = wrapper.querySelector<HTMLButtonElement>(`.${CODE_BLOCK_CLASS.COPY_BTN}`);
 			const downloadButton = wrapper.querySelector<HTMLButtonElement>(
 				`.${CODE_BLOCK_CLASS.DOWNLOAD_BTN}`
 			);
@@ -632,8 +599,11 @@
 				`.${CODE_BLOCK_CLASS.PREVIEW_BTN}`
 			);
 
-			if (downloadButton && downloadButton.dataset.listenerBound !== 'true') {
-				downloadButton.dataset.listenerBound = 'true';
+			if (
+				downloadButton &&
+				downloadButton.getAttribute(MARKDOWN_DATA_ATTRS.LISTENER_BOUND) !== BooleanString.TRUE
+			) {
+				downloadButton.setAttribute(MARKDOWN_DATA_ATTRS.LISTENER_BOUND, BooleanString.TRUE);
 				downloadButton.addEventListener('click', handleDownloadClick);
 			}
 
@@ -647,8 +617,7 @@
 
 			if (
 				previewButton &&
-				previewButton.getAttribute(MARKDOWN_DATA_ATTRS.LISTENER_BOUND) !==
-					BooleanString.TRUE
+				previewButton.getAttribute(MARKDOWN_DATA_ATTRS.LISTENER_BOUND) !== BooleanString.TRUE
 			) {
 				previewButton.setAttribute(MARKDOWN_DATA_ATTRS.LISTENER_BOUND, BooleanString.TRUE);
 				previewButton.addEventListener('click', handlePreviewClick);
@@ -663,9 +632,7 @@
 	function setupImageErrorHandlers() {
 		if (!containerRef) return;
 
-		const images = containerRef.querySelectorAll<HTMLImageElement>(
-			IMAGE_NOT_ERROR_BOUND_SELECTOR
-		);
+		const images = containerRef.querySelectorAll<HTMLImageElement>(IMAGE_NOT_ERROR_BOUND_SELECTOR);
 
 		for (const img of images) {
 			img.setAttribute(MARKDOWN_DATA_ATTRS.ERROR_BOUND, BooleanString.TRUE);
@@ -703,9 +670,7 @@
 
 		// Check if clicking on copy or preview button in mermaid block
 		const copyBtn = target.closest(`.${MERMAID_WRAPPER_CLASS} .${CODE_BLOCK_CLASS.COPY_BTN}`);
-		const previewBtn = target.closest(
-			`.${MERMAID_WRAPPER_CLASS} .${CODE_BLOCK_CLASS.PREVIEW_BTN}`
-		);
+		const previewBtn = target.closest(`.${MERMAID_WRAPPER_CLASS} .${CODE_BLOCK_CLASS.PREVIEW_BTN}`);
 
 		if (copyBtn || previewBtn) {
 			const wrapper = target.closest(`.${MERMAID_WRAPPER_CLASS}`);
@@ -749,9 +714,7 @@
 
 		// Check if clicking on copy or preview button in svg block
 		const svgCopyBtn = target.closest(`.${SVG.WRAPPER_CLASS} .${CODE_BLOCK_CLASS.COPY_BTN}`);
-		const svgPreviewBtn = target.closest(
-			`.${SVG.WRAPPER_CLASS} .${CODE_BLOCK_CLASS.PREVIEW_BTN}`
-		);
+		const svgPreviewBtn = target.closest(`.${SVG.WRAPPER_CLASS} .${CODE_BLOCK_CLASS.PREVIEW_BTN}`);
 
 		if (svgCopyBtn || svgPreviewBtn) {
 			const wrapper = target.closest(`.${SVG.WRAPPER_CLASS}`);
