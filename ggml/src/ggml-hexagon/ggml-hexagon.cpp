@@ -3180,6 +3180,10 @@ static bool ggml_hexagon_supported_argsort(const struct ggml_hexagon_session * s
 static bool ggml_hexagon_supported_rope(const struct ggml_hexagon_session * sess, const struct ggml_tensor * op) {
     const int32_t * op_params = &op->op_params[0];
 
+    if (op_params[15] != 0) {
+        return false; // FIXME: support ggml_rope_set_offset
+    }
+
     int mode = op_params[2];
 
     // n_dims == ne0/2, so the rotation spans the full row
@@ -3930,6 +3934,7 @@ static void ggml_backend_hexagon_device_get_props(ggml_backend_dev_t dev, struct
         /* .host_buffer           = */ (bool) opt_hostbuf,
         /* .buffer_from_host_ptr  = */ false,
         /* .events                = */ false,
+        /* .mmap_support          = */ false,
     };
 }
 

@@ -59,6 +59,7 @@ struct common_download_opts {
     bool download_mtp     = false;
     bool download_eagle3  = false;
     bool download_dflash  = false;
+    bool download_dspark  = false;
     common_download_callback * callback = nullptr;
 };
 
@@ -83,6 +84,10 @@ std::vector<std::string> common_download_get_all_parts(const std::string & url);
 
 // returns list of cached models
 std::vector<common_cached_model_info> common_list_cached_models();
+
+// resolve the local cached file path for a HF repo without network access (hf_file, if given, must match exactly)
+// returns an empty string if the model is not present in the cache
+std::string common_download_resolve_path(const std::string & hf_repo_with_tag, const std::string & hf_file = "");
 
 // download single file from url to local path
 // returns status code or -1 on error
@@ -110,6 +115,7 @@ struct common_download_hf_plan {
     hf_cache::hf_file mtp;
     hf_cache::hf_file eagle3;
     hf_cache::hf_file dflash;
+    hf_cache::hf_file dspark;
     hf_cache::hf_file preset; // if set, only this file is downloaded
 };
 common_download_hf_plan common_download_get_hf_plan(const common_params_model & model, const common_download_opts & opts);

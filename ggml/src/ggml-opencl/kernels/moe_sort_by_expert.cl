@@ -68,6 +68,79 @@ __kernel void kernel_moe_scatter(
     emap[tile_idx] = val;
 }
 
+// Deterministic replacement for kernel_moe_scatter.
+//
+// kernel_moe_scatter takes each token's slot from atomic_inc(slot_counter[expert]),
+// so the token -> slot packing inside an expert depends on which work-item wins the
+// atomic and changes from run to run. The ragged prefill GEMM path is sensitive to
+// that packing (the non-ragged path is not, since its padded slots alias slot 0 and
+// are overwritten last), which makes MoE prompt processing non-reproducible: the same
+// binary on the same prompt returns one of several outputs.
+//
+// Here the slot is the token's rank in flat (n, k) order among the tokens routed to
+// the same expert - a fixed function of the routing input. One workgroup per expert
+// walks the flat routing list in blocks of 64 and ranks its own tokens with a
+// workgroup scan, carrying a running count between blocks. Cost is one pass over the
+// routing list per expert; the list is a few KiB and stays in cache.
+__kernel void kernel_moe_scatter_stable(
+    __global const int * input,
+    __global int * post_router,
+    __global ushort * emap,
+    __global const int * tile_offset,
+    int N,
+    int topK,
+    uint n_experts
+) {
+    const int e   = get_group_id(1);
+    const int lid = get_local_id(0);
+    const int M   = N * topK;
+
+    __local int scan[64];
+    __local int running;
+
+    if (lid == 0) {
+        running = 0;
+    }
+    barrier(CLK_LOCAL_MEM_FENCE);
+
+    for (int base = 0; base < M; base += 64) {
+        const int j = base + lid;
+
+        int pred = 0;
+        if (j < M) {
+            const int n = j / topK;
+            const int k = j - n * topK;
+            pred = (input[n * (int)n_experts + k] == e) ? 1 : 0;
+        }
+
+        scan[lid] = pred;
+        barrier(CLK_LOCAL_MEM_FENCE);
+
+        // Hillis-Steele inclusive scan over the 64 lanes
+        for (int off = 1; off < 64; off <<= 1) {
+            int add = (lid >= off) ? scan[lid - off] : 0;
+            barrier(CLK_LOCAL_MEM_FENCE);
+            scan[lid] += add;
+            barrier(CLK_LOCAL_MEM_FENCE);
+        }
+
+        if (pred) {
+            const int local_slot = running + (scan[lid] - 1);   // exclusive rank
+            const int tile_idx   = tile_offset[e] + (local_slot >> 5);
+            const int lane       = local_slot & 31;
+
+            post_router[tile_idx * 32 + lane] = j;
+            emap[tile_idx] = (ushort)e;
+        }
+
+        barrier(CLK_LOCAL_MEM_FENCE);
+        if (lid == 63) {
+            running += scan[63];
+        }
+        barrier(CLK_LOCAL_MEM_FENCE);
+    }
+}
+
 __kernel void kernel_moe_fill(
     __global int * post_router,
     __global int * total_tiles,

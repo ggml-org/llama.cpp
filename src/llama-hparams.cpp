@@ -180,16 +180,6 @@ uint32_t llama_hparams::n_embd_v_gqa_max() const {
     return val;
 }
 
-uint32_t llama_hparams::n_embd_k_idx(uint32_t il) const {
-    if (!indexer_kv || indexer_head_size == 0) {
-        return 0; // arch without a MSA indexer
-    }
-    if (il < n_layer_dense_lead) {
-        return 0; // leading dense layers carry no indexer
-    }
-    return indexer_head_size; // 128
-}
-
 uint32_t llama_hparams::n_embd_r() const {
     if (wkv_head_size != 0) {
         // for RWKV models
@@ -225,6 +215,13 @@ uint32_t llama_hparams::n_embd_s() const {
         // Full recurrent state: head_dim * head_dim * n_head
         // h tensor shape for delta attention: [head_dim, head_dim, n_head]
         return n_embd_head_kda * n_embd_head_kda * n_head();  // 128 * 128 * 32 = 524288
+    }
+
+    if (n_embd_head_la != 0) {
+        // for MiniMax-Text-01 linear attention layers
+        // Full recurrent state: head_dim * head_dim * n_head
+        // tensor shape for linear attention: [head_dim, head_dim, n_head]
+        return n_embd_head_la * n_embd_head_la * n_head();  // 128 * 128 * 64 = 1048576
     }
 
     // corresponds to Mamba's ssm_states size
@@ -285,6 +282,20 @@ bool llama_hparams::has_kv(uint32_t il) const {
 
     // by default, all layers have kv
     return true;
+}
+
+bool llama_hparams::has_rope(uint32_t il) const {
+    // the router layer stores adapter routing signal, not positional info,
+    // so it must not be RoPE-shifted
+    if (router_layer >= 0 && (int32_t) il == router_layer) {
+        return false;
+    }
+
+    if (il < n_layer_all) {
+        return rope_pattern[il] != 0;
+    }
+
+    GGML_ABORT("%s: il (%u) out of bounds (n_layer_all: %u)\n", __func__, il, n_layer_all);
 }
 
 uint32_t llama_hparams::n_layer() const {

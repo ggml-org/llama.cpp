@@ -6,6 +6,7 @@
 
 #include <array>
 #include <climits>
+#include <cmath>
 #include <cstdarg>
 #include <cinttypes>
 #include <string>
@@ -32,6 +33,7 @@
 #define KEY_PROJ_TYPE           "clip.projector_type"
 #define KEY_HAS_AUDIO_ENC       "clip.has_audio_encoder"
 #define KEY_HAS_VISION_ENC      "clip.has_vision_encoder"
+#define KEY_HAS_GEN_AUDIO_ENC   "clip.has_gen_audio_encoder"
 #define KEY_USE_GELU            "clip.use_gelu"
 #define KEY_USE_SILU            "clip.use_silu"
 
@@ -89,7 +91,11 @@
 #define KEY_A_ATTN_WINDOW_SIZE     "clip.audio.window_size"          // mimo-audio-tokenizer: sliding-window radius
 #define KEY_A_LOCAL_BLOCK_COUNT    "clip.audio.local_block_count"    // mimo-v2.5: input_local_transformer layer count
 #define KEY_A_LOCAL_GROUP_SIZE     "clip.audio.local_group_size"     // mimo-v2.5: input_local_transformer grouping size
-#define KEY_AUDIO_SUBSAMPLING_FACTOR "clip.audio.subsampling_factor"
+// audio generation (gen-audio)-specific
+#define KEY_GEN_AUDIO_PROJ_TYPE    "clip.gen.audio.projector_type" // for models with mixed modalities
+// name of the weight variant, for settings that are not in the checkpoint
+#define KEY_GEN_AUDIO_VARIANT      "clip.gen.audio.model_variant"
+#define KEY_AUDIO_SUBSMPL_FACTOR   "clip.audio.subsampling_factor"
 
 //
 // tensor name constants
@@ -200,6 +206,80 @@
 #define TN_MM_A_LOCAL_LN1      "mm.a.local_blk.%d.ln1.%s"
 #define TN_MM_A_LOCAL_LN2      "mm.a.local_blk.%d.ln2.%s"
 #define TN_MM_A_LOCAL_NORM     "mm.a.local_norm.%s"
+
+// qwen3tts speaker encoder (ECAPA-TDNN)
+#define TN_A_SE_CONV1  "a.blk.%d.se_conv1.%s"
+#define TN_A_SE_CONV2  "a.blk.%d.se_conv2.%s"
+#define TN_A_CONV_RES2 "a.blk.%d.res2.%d.%s"
+#define TN_A_ASP_ATTN  "a.asp_attn.%s"
+#define TN_A_ASP_TDNN  "a.asp_tdnn.%s"
+
+// qwen3tts code_predictor
+#define TN_A_GEN_CODE_PROJ_IN  "a.gen.code.proj_in.%s"
+#define TN_A_GEN_CODE_EMBD     "a.gen.code.embd.%s"
+#define TN_A_GEN_CODE_HEAD     "a.gen.code.head.%s"
+#define TN_A_GEN_CODE_OUT_EMBD "a.gen.code.out_embd.%s"
+#define TN_A_GEN_CODE_NORM     "a.gen.code.output_norm.%s"
+
+// qwen3tts code2wav (RVQ codes -> raw PCM)
+// pre_transformer layers use the generic TN_ATTN_*/TN_FFN_*/TN_LN_*/TN_LS_* macros, prefix "a.gen.wav.tfm"
+#define TN_A_GEN_WAV_QUANT_FIRST_IN  "a.gen.wav.quant.first.in_proj.%s"
+#define TN_A_GEN_WAV_QUANT_FIRST_OUT "a.gen.wav.quant.first.out_proj.%s"
+#define TN_A_GEN_WAV_QUANT_FIRST_CB  "a.gen.wav.quant.first.codebook.%s"
+#define TN_A_GEN_WAV_QUANT_REST_IN   "a.gen.wav.quant.rest.in_proj.%s"
+#define TN_A_GEN_WAV_QUANT_REST_OUT  "a.gen.wav.quant.rest.out_proj.%s"
+#define TN_A_GEN_WAV_QUANT_REST_CB   "a.gen.wav.quant.rest.codebook.%s"
+#define TN_A_GEN_WAV_PRE_CONV        "a.gen.wav.pre_conv.%s"
+#define TN_A_GEN_WAV_TFM_IN_PROJ     "a.gen.wav.tfm.in_proj.%s"
+#define TN_A_GEN_WAV_TFM_OUT_PROJ    "a.gen.wav.tfm.out_proj.%s"
+#define TN_A_GEN_WAV_TFM_OUT_NORM    "a.gen.wav.tfm.output_norm.%s"
+#define TN_A_GEN_WAV_UP_CONV         "a.gen.wav.up.blk.%d.conv.%s"
+#define TN_A_GEN_WAV_UP_DWCONV       "a.gen.wav.up.blk.%d.dwconv.%s"
+#define TN_A_GEN_WAV_UP_NORM         "a.gen.wav.up.blk.%d.norm.%s"
+#define TN_A_GEN_WAV_UP_PW1          "a.gen.wav.up.blk.%d.pw1.%s"
+#define TN_A_GEN_WAV_UP_PW2          "a.gen.wav.up.blk.%d.pw2.%s"
+#define TN_A_GEN_WAV_UP_GAMMA        "a.gen.wav.up.blk.%d.gamma"
+#define TN_A_GEN_WAV_DAC_ENTRY       "a.gen.wav.dac.entry.%s"
+#define TN_A_GEN_WAV_DAC_SNAKE       "a.gen.wav.dac.blk.%d.snake.%s"
+#define TN_A_GEN_WAV_DAC_CONV        "a.gen.wav.dac.blk.%d.conv.%s"
+#define TN_A_GEN_WAV_DAC_RES_ACT1    "a.gen.wav.dac.blk.%d.res.%d.act1.%s"
+#define TN_A_GEN_WAV_DAC_RES_CONV1   "a.gen.wav.dac.blk.%d.res.%d.conv1.%s"
+#define TN_A_GEN_WAV_DAC_RES_ACT2    "a.gen.wav.dac.blk.%d.res.%d.act2.%s"
+#define TN_A_GEN_WAV_DAC_RES_CONV2   "a.gen.wav.dac.blk.%d.res.%d.conv2.%s"
+#define TN_A_GEN_WAV_DAC_POST_SNAKE  "a.gen.wav.dac.post_snake.%s"
+#define TN_A_GEN_WAV_DAC_POST_CONV   "a.gen.wav.dac.post_conv.%s"
+
+// pocket-tts
+#define TN_A_SEANET_CONV_IN      "a.seanet.conv_in.%s"
+#define TN_A_SEANET_CONV_OUT     "a.seanet.conv_out.%s"
+#define TN_A_SEANET_RES_CONV1    "a.seanet.blk.%d.res_conv1.%s"
+#define TN_A_SEANET_RES_CONV2    "a.seanet.blk.%d.res_conv2.%s"
+#define TN_A_SEANET_SCALE_CONV   "a.seanet.blk.%d.scale_conv.%s"
+#define TN_A_SPEAKER_PROJ        "a.speaker_proj.%s"
+#define TN_A_DOWNSAMPLE_CONV     "a.downsample.conv.%s"
+#define TN_A_GEN_FLOW_INPUT_PROJ "a.gen.flow.input_proj.%s"
+#define TN_A_GEN_FLOW_COND_EMBD  "a.gen.flow.cond_embd.%s"
+#define TN_A_GEN_FLOW_TIME_FREQS "a.gen.flow.time.%d.freqs"
+#define TN_A_GEN_FLOW_TIME_UP    "a.gen.flow.time.%d.up.%s"
+#define TN_A_GEN_FLOW_TIME_DOWN  "a.gen.flow.time.%d.down.%s"
+#define TN_A_GEN_FLOW_TIME_NORM  "a.gen.flow.time.%d.norm"
+#define TN_A_GEN_FLOW_BLK_NORM   "a.gen.flow.blk.%d.norm.%s"
+#define TN_A_GEN_FLOW_BLK_UP     "a.gen.flow.blk.%d.up.%s"
+#define TN_A_GEN_FLOW_BLK_DOWN   "a.gen.flow.blk.%d.down.%s"
+#define TN_A_GEN_FLOW_BLK_ADA    "a.gen.flow.blk.%d.ada.%s"
+#define TN_A_GEN_FLOW_FINAL_ADA  "a.gen.flow.final.ada.%s"
+#define TN_A_GEN_FLOW_FINAL_PROJ "a.gen.flow.final.proj.%s"
+#define TN_A_GEN_OUT_EOS         "a.gen.out_eos.%s"
+#define TN_A_GEN_INPUT_LINEAR    "a.gen.input_linear.%s"
+#define TN_A_GEN_EMB_MEAN        "a.gen.emb_mean"
+#define TN_A_GEN_EMB_STD         "a.gen.emb_std"
+#define TN_A_GEN_WAV_QUANT_OUT   "a.gen.wav.quant_out.%s"
+#define TN_A_GEN_WAV_UPSAMPLE    "a.gen.wav.upsample.%s"
+#define TN_A_GEN_WAV_SEANET_CONV_IN    "a.gen.wav.seanet.conv_in.%s"
+#define TN_A_GEN_WAV_SEANET_CONV_OUT   "a.gen.wav.seanet.conv_out.%s"
+#define TN_A_GEN_WAV_SEANET_RES_CONV1  "a.gen.wav.seanet.blk.%d.res_conv1.%s"
+#define TN_A_GEN_WAV_SEANET_RES_CONV2  "a.gen.wav.seanet.blk.%d.res_conv2.%s"
+#define TN_A_GEN_WAV_SEANET_SCALE_CONV "a.gen.wav.seanet.blk.%d.scale_conv.%s"
 
 // cogvlm
 #define TN_MM_POST_FC_NORM "mm.post_fc_norm.%s"
@@ -408,6 +488,11 @@ enum projector_type {
     PROJECTOR_TYPE_MINIMAX_M3,
     PROJECTOR_TYPE_GRANITE4_VISION,
     PROJECTOR_TYPE_MIMO_AUDIO,
+    PROJECTOR_TYPE_QWEN3TTS_SPKENC,
+    PROJECTOR_TYPE_QWEN3TTS_GEN,
+    PROJECTOR_TYPE_POCKETTTS_SPKENC,
+    PROJECTOR_TYPE_POCKETTTS_GEN,
+    PROJECTOR_TYPE_MUSE_GLIMMER,
     PROJECTOR_TYPE_UNKNOWN,
 };
 
@@ -465,6 +550,11 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_GRANITE4_VISION,   "granite4_vision"},
     { PROJECTOR_TYPE_MIMO_AUDIO,        "mimo_audio"},
     { PROJECTOR_TYPE_PARAKEET,          "parakeet"},
+    { PROJECTOR_TYPE_QWEN3TTS_SPKENC,   "qwen3tts_spkenc"},
+    { PROJECTOR_TYPE_QWEN3TTS_GEN,      "qwen3tts_gen"},
+    { PROJECTOR_TYPE_POCKETTTS_SPKENC,  "pockettts_spkenc"},
+    { PROJECTOR_TYPE_POCKETTTS_GEN,     "pockettts_gen"},
+    { PROJECTOR_TYPE_MUSE_GLIMMER,      "muse-glimmer"},
 };
 
 static projector_type clip_projector_type_from_string(const std::string & str) {
@@ -514,7 +604,7 @@ struct clip_image_u8 {
             // return a dummy value, so that legacy code can still process image without errors
             return { 0, 0, 0 };
         }
-        int idx = (y * nx + x) * 3;
+        size_t idx = ((size_t) y * (size_t) nx + (size_t) x) * 3;
         return { buf[idx], buf[idx + 1], buf[idx + 2] };
     }
 
@@ -522,8 +612,8 @@ struct clip_image_u8 {
         if (is_placeholder()) {
             return; // no-op
         }
-        int idx = (y * nx + x) * 3;
-        buf[idx] = rgb[0];
+        size_t idx = ((size_t) y * (size_t) nx + (size_t) x) * 3;
+        buf[idx]     = rgb[0];
         buf[idx + 1] = rgb[1];
         buf[idx + 2] = rgb[2];
     }
@@ -542,6 +632,8 @@ struct clip_image_u8 {
     }
 };
 
+struct mtmd_serialization; // forward declaration
+
 // For images, buf.size() == nx*ny*3
 //     Memory layout: RGBRGBRGB...
 // For seq, buf.size() == nx*ny*3*nt
@@ -551,8 +643,24 @@ struct clip_image_u8 {
 struct clip_image_f32 {
     // marks the global view in e.g., DeepSeek-OCR Models
     bool add_viewsep = false;
-    // whether a learned newline (or EOI) token should be appended after the image (eg Granite4 Vision)
+    // appends a learned newline (or EOI) token after the image
+    // no model uses it now (Granite4 Vision moved to anyres), kept for future models
     bool add_newline = false;
+
+    // llava-next "anyres" tiling, used by Granite4 Vision
+    // the whole grid is encoded and assembled in a single graph
+    // NOTE: excluded from serialized: a deserialized image is always a placeholder, which is never encoded
+    struct anyres_info {
+        int grid_x = 0; // tiles per row, 0 means the image is not tiled
+        int grid_y = 0; // tiles per column
+        int orig_nx = 0; // size of the source image, used to drop the padding tokens
+        int orig_ny = 0;
+
+        bool is_tiled() const {
+            return grid_x > 0 && grid_y > 0;
+        }
+    };
+    anyres_info anyres;
 
     clip_image_size get_size() const {
         return { nx_, ny_ };
@@ -622,6 +730,9 @@ struct clip_image_f32 {
         return buf.empty();
     }
 
+    void serialize(struct mtmd_serialization & ser) const;
+    void deserialize(struct mtmd_serialization & ser);
+
   private:
     std::vector<float> buf;
     int nx_ = 0;
@@ -631,6 +742,25 @@ struct clip_image_f32 {
         return (size_t) nx_ * (size_t) ny_;
     }
 };
+
+// token area kept after removing the padding added by the anyres resize
+// ref: https://github.com/huggingface/transformers/blob/v5.0.0/src/transformers/models/llava_next/modeling_llava_next.py#L109
+static inline void clip_anyres_unpad(int cur_w, int cur_h, int orig_w, int orig_h,
+                                     int & off_x, int & off_y, int & out_w, int & out_h) {
+    off_x = 0;
+    off_y = 0;
+    out_w = cur_w;
+    out_h = cur_h;
+    if ((float) orig_w / orig_h > (float) cur_w / cur_h) {
+        const int new_h = (int) std::floor((double) orig_h * cur_w / orig_w + 1e-7);
+        off_y = (cur_h - new_h) / 2;
+        out_h = cur_h - 2 * off_y;
+    } else {
+        const int new_w = (int) std::floor((double) orig_w * cur_h / orig_h + 1e-7);
+        off_x = (cur_w - new_w) / 2;
+        out_w = cur_w - 2 * off_x;
+    }
+}
 
 //
 // logging
@@ -703,6 +833,9 @@ struct clip_image_f32_batch {
         }
         return new_batch;
     }
+
+    void serialize(struct mtmd_serialization & ser) const;
+    void deserialize(struct mtmd_serialization & ser);
 };
 
 //
@@ -725,6 +858,9 @@ static std::ifstream open_ifstream_binary(const std::string & fname) {
 }
 #endif
 
+// in test-mtmd-impl, we include woth common.h and this file, and these functions are duplicated
+// this is a quick fix to avoid compilation errors
+#ifndef DIRECTORY_SEPARATOR
 static std::string string_format(const char * fmt, ...) {
     va_list ap;
     va_list ap2;
@@ -782,6 +918,7 @@ inline bool string_ends_with(std::string_view str, std::string_view suffix) {
     return str.size() >= suffix.size() &&
            str.compare(str.size() - suffix.size(), suffix.size(), suffix) == 0;
 }
+#endif
 
 //
 // gguf utils

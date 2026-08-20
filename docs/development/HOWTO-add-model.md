@@ -29,6 +29,7 @@ The required steps to implement for an HF model are:
 
 ```python
 @ModelBase.register("MyModelForCausalLM")
+@ModelBase.example("user/model")
 class MyModel(TextModel):
     model_arch = gguf.MODEL_ARCH.MYMODEL
 ```
@@ -37,9 +38,12 @@ or
 
 ```python
 @ModelBase.register("MyModelForConditionalGeneration")
+@ModelBase.example("user/model")
 class MyModel(MmprojModel):
     model_arch = gguf.MODEL_ARCH.MYMODEL
 ```
+
+The `example` should point to a valid Hugging Face model that will be used for testing. You can add multiple models if necessary. Prefer a non-gated model, or tiny random weights if no such model exists.
 
 2. Define the layout of the GGUF tensors in [constants.py](/gguf-py/gguf/constants.py)
 
@@ -133,6 +137,7 @@ Note:
 - To debug the multimodal preprocessor and encoder, you can use [llama-mtmd-debug](tools/mtmd/debug/mtmd-debug.cpp).
 - Adding a model-specific API or CLI is an anti-pattern in `libmtmd`. The goal of `libmtmd` is to provide an easy-to-use, model-agnostic library for multimodal pipeline.
 - In most cases, `llama-mtmd-cli` should not be modified. If a model requires a specific prompt, either let the user provide it or bake it into the Jinja chat template.
+- For audio generation models, see `tools/mtmd/README-dev.md`
 
 ## Tips and tricks
 

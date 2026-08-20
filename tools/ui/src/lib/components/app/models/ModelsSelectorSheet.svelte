@@ -1,16 +1,16 @@
 <script lang="ts">
+	import ModelLoadHighlight from './ModelLoadHighlight.svelte';
 	import { ChevronDown, Loader2, Package } from '@lucide/svelte';
-	import * as Sheet from '$lib/components/ui/sheet';
-	import { useModelsSelector } from '$lib/hooks/use-models-selector.svelte';
 	import {
 		DialogModelInformation,
 		ModelId,
 		ModelsSelectorList,
 		SearchInput
 	} from '$lib/components/app';
-	import ModelLoadHighlight from './ModelLoadHighlight.svelte';
+	import * as Sheet from '$lib/components/ui/sheet';
 	import { ServerModelStatus } from '$lib/enums';
-	import { modelsStore, routerModels } from '$lib/stores/models.svelte';
+	import { useModelsSelector } from '$lib/hooks/use-models-selector.svelte';
+	import { modelsStore } from '$lib/stores';
 	import { modelLoadFraction } from '$lib/utils';
 
 	interface Props {
@@ -27,9 +27,9 @@
 	let {
 		class: className = '',
 		currentModel = null,
-		onModelChange,
 		disabled = false,
 		forceForegroundText = false,
+		onModelChange,
 		useGlobalSelection = false
 	}: Props = $props();
 
@@ -37,11 +37,11 @@
 
 	const ms = useModelsSelector({
 		currentModel: () => currentModel,
-		useGlobalSelection: () => useGlobalSelection,
 		onModelChange: () => onModelChange,
 		onOpenChange: (open) => {
 			sheetOpen = open;
-		}
+		},
+		useGlobalSelection: () => useGlobalSelection
 	});
 
 	export function open() {
@@ -67,7 +67,7 @@
 		{@const selectedOption = ms.getDisplayOption()}
 		{@const triggerModel = selectedOption?.model}
 		{@const triggerStatus = triggerModel
-			? routerModels().find((m) => m.id === triggerModel)?.status?.value
+			? modelsStore.routerModels.find((m) => m.id === triggerModel)?.status?.value
 			: undefined}
 		{@const triggerLoading =
 			!!triggerModel &&

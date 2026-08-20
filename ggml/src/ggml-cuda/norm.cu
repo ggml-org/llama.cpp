@@ -64,7 +64,7 @@ static __global__ void group_norm_f32(const float * x, float * dst, const int gr
         tmp += xi * xi;
     }
 
-    tmp = block_reduce<block_reduce_method::SUM, block_size>(tmp, s_sum);
+    tmp = block_reduce<block_reduce_method::SUM, block_size>(tmp, s_sum + 32);
 
     const float variance = tmp / group_size;
     const float scale = rsqrtf(variance + eps);
@@ -297,7 +297,7 @@ static void group_norm_f32_cuda(
         group_norm_f32<WARP_SIZE><<<num_groups, block_dims, 0, stream>>>(x, dst, group_size, ne_elements, eps);
     } else {
         const dim3 block_dims(1024, 1, 1);
-        group_norm_f32<1024><<<num_groups, block_dims, block_dims.x > WARP_SIZE ? 32 * sizeof(float): 0, stream>>>(x, dst, group_size, ne_elements, eps);
+        group_norm_f32<1024><<<num_groups, block_dims, block_dims.x > WARP_SIZE ? 2 * 32 * sizeof(float): 0, stream>>>(x, dst, group_size, ne_elements, eps);
     }
 }
 

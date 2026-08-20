@@ -47,7 +47,7 @@ struct rpc_tensor {
     uint64_t data;
     char name[GGML_MAX_NAME];
 
-    char padding[4];
+    int32_t use_count;
 };
 
 static_assert(sizeof(rpc_tensor) % 8 == 0, "rpc_tensor size must be multiple of 8");
@@ -447,7 +447,7 @@ static rpc_tensor serialize_tensor(const ggml_tensor * tensor) {
 
     // Avoid sending uninitialized data over the wire
     memset(result.name, 0, sizeof(result.name));
-    memset(result.padding, 0, sizeof(result.padding));
+    result.use_count = 0;
 
     snprintf(result.name, GGML_MAX_NAME, "%s", tensor->name);
     return result;
@@ -675,7 +675,7 @@ static void ggml_backend_rpc_synchronize(ggml_backend_t backend) {
     // this is no-op because we don't have any async operations
 }
 
-static void add_tensor(ggml_tensor * tensor, std::vector<rpc_tensor> & tensors, std::unordered_set<ggml_tensor*> & visited) {
+static void add_tensor(ggml_tensor * tensor, const ggml_cgraph * cgraph, std::vector<rpc_tensor> & tensors, std::unordered_set<ggml_tensor*> & visited) {
     if (tensor == nullptr) {
         return;
     }
@@ -684,10 +684,15 @@ static void add_tensor(ggml_tensor * tensor, std::vector<rpc_tensor> & tensors, 
     }
     visited.insert(tensor);
     for (int i = 0; i < GGML_MAX_SRC; i++) {
-        add_tensor(tensor->src[i], tensors, visited);
+        add_tensor(tensor->src[i], cgraph, tensors, visited);
     }
-    add_tensor(tensor->view_src, tensors, visited);
-    tensors.push_back(serialize_tensor(tensor));
+    add_tensor(tensor->view_src, cgraph, tensors, visited);
+    rpc_tensor result = serialize_tensor(tensor);
+    const size_t hash_pos = ggml_hash_find(&cgraph->visited_hash_set, tensor);
+    if (hash_pos != GGML_HASHSET_FULL && ggml_bitset_get(cgraph->visited_hash_set.used, hash_pos)) {
+        result.use_count = cgraph->use_counts[hash_pos];
+    }
+    tensors.push_back(result);
 }
 
 static void serialize_graph(uint32_t device, const ggml_cgraph * cgraph, std::vector<uint8_t> & output) {
@@ -695,7 +700,7 @@ static void serialize_graph(uint32_t device, const ggml_cgraph * cgraph, std::ve
     std::vector<rpc_tensor> tensors;
     std::unordered_set<ggml_tensor*> visited;
     for (uint32_t i = 0; i < n_nodes; i++) {
-        add_tensor(cgraph->nodes[i], tensors, visited);
+        add_tensor(cgraph->nodes[i], cgraph, tensors, visited);
     }
     // serialization format:
     // | device (4 bytes) | n_nodes (4 bytes) | nodes (n_nodes * sizeof(uint64_t) | n_tensors (4 bytes) | tensors (n_tensors * sizeof(rpc_tensor)) |
@@ -1451,6 +1456,10 @@ bool rpc_server::graph_compute(const std::vector<uint8_t> & input) {
             GGML_LOG_ERROR("[%s] failed to create graph node %d (id=%" PRId64 ")\n", __func__, i, id);
             return false;
         }
+        if (graph->nodes[i] != nullptr) {
+            const size_t hash_pos = ggml_hash_insert(&graph->visited_hash_set, graph->nodes[i]);
+            graph->use_counts[hash_pos] = tensor_ptrs.at(id)->use_count;
+        }
     }
     ggml_status status = ggml_backend_graph_compute(backends[device], graph);
     GGML_ASSERT(status == GGML_STATUS_SUCCESS && "Unsuccessful graph computations are not supported with RPC");
@@ -1881,6 +1890,7 @@ static void ggml_backend_rpc_device_get_props(ggml_backend_dev_t dev, struct ggm
         /* .host_buffer           = */ false,
         /* .buffer_from_host_ptr  = */ false,
         /* .events                = */ false,
+        /* .mmap_support          = */ true,
     };
 }
 

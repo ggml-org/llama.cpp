@@ -1,18 +1,18 @@
 <script lang="ts">
-	import { Download, Upload, Trash2 } from '@lucide/svelte';
+	import SettingsChatImportExportSection from './SettingsChatImportExportSection.svelte';
+	import { Download, Trash2, Upload } from '@lucide/svelte';
 	import {
-		DialogConversationSelection,
 		DialogConfirmation,
+		DialogConversationSelection,
 		DialogExportSettings
 	} from '$lib/components/app';
-	import { createMessageCountMap } from '$lib/utils';
-	import { settingsStore } from '$lib/stores/settings.svelte';
-	import { conversationsStore, conversations } from '$lib/stores/conversations.svelte';
-	import { toast } from 'svelte-sonner';
-	import { fade } from 'svelte/transition';
-	import { ConversationSelectionMode, HtmlInputType, FileExtensionText } from '$lib/enums';
-	import SettingsChatImportExportSection from './SettingsChatImportExportSection.svelte';
 	import SettingsGroup from '$lib/components/app/settings/SettingsGroup.svelte';
+	import { ConversationSelectionMode, FileExtensionText, HtmlInputType } from '$lib/enums';
+	import { ConversationTransferService } from '$lib/services';
+	import { conversationsStore, settingsStore } from '$lib/stores';
+	import { createMessageCountMap } from '$lib/utils';
+	import { fade } from 'svelte/transition';
+	import { toast } from 'svelte-sonner';
 
 	let exportedConversations = $state<DatabaseConversation[]>([]);
 	let importedConversations = $state<DatabaseConversation[]>([]);
@@ -49,6 +49,7 @@
 			const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
 			const url = URL.createObjectURL(blob);
 			const a = document.createElement('a');
+
 			a.href = url;
 			a.download = `llama_settings_${new Date().toISOString().split('T')[0]}.json`;
 			document.body.appendChild(a);
@@ -72,11 +73,13 @@
 	function handleSettingsImport() {
 		try {
 			const input = document.createElement('input');
+
 			input.type = HtmlInputType.FILE;
 			input.accept = FileExtensionText.JSON;
 
 			input.onchange = async (e) => {
 				const file = (e.target as HTMLInputElement)?.files?.[0];
+
 				if (!file) return;
 
 				try {
@@ -85,6 +88,7 @@
 
 					if (!data || typeof data !== 'object' || !data.config) {
 						toast.error('Invalid settings file: missing config');
+
 						return;
 					}
 
@@ -108,15 +112,18 @@
 
 	async function handleExportClick() {
 		try {
-			const allConversations = conversations();
+			const allConversations = conversationsStore.conversations;
+
 			if (allConversations.length === 0) {
 				toast.info('No conversations to export');
+
 				return;
 			}
 
 			const conversationsWithMessages = await Promise.all(
 				allConversations.map(async (conv: DatabaseConversation) => {
 					const messages = await conversationsStore.getConversationMessages(conv.id);
+
 					return { conv, messages };
 				})
 			);
@@ -135,14 +142,15 @@
 			const allData: ExportedConversation[] = await Promise.all(
 				selectedConversations.map(async (conv) => {
 					const messages = await conversationsStore.getConversationMessages(conv.id);
+
 					return { conv: $state.snapshot(conv), messages: $state.snapshot(messages) };
 				})
 			);
 
 			if (allData.length === 1) {
-				conversationsStore.downloadConversationFile(allData[0]);
+				ConversationTransferService.downloadConversationFile(allData[0]);
 			} else {
-				conversationsStore.downloadConversationsArchive(allData);
+				ConversationTransferService.downloadConversationsArchive(allData);
 			}
 
 			exportedConversations = selectedConversations;
@@ -166,10 +174,11 @@
 
 			input.onchange = async (e) => {
 				const file = (e.target as HTMLInputElement)?.files?.[0];
+
 				if (!file) return;
 
 				try {
-					const importedData = await conversationsStore.parseImportFile(file);
+					const importedData = await ConversationTransferService.parseImportFile(file);
 
 					if (importedData.length === 0) {
 						throw new Error('No conversations found in file');
@@ -200,7 +209,6 @@
 			const selectedData = $state
 				.snapshot(fullImportData)
 				.filter((item) => selectedIds.has(item.conv.id));
-
 			const { imported, skipped } = await conversationsStore.importConversationsData(selectedData);
 
 			// A conversation already in the database is left untouched, so the summary
@@ -223,10 +231,11 @@
 
 	async function handleDeleteAllClick() {
 		try {
-			const allConversations = conversations();
+			const allConversations = conversationsStore.conversations;
 
 			if (allConversations.length === 0) {
 				toast.info('No conversations to delete');
+
 				return;
 			}
 
@@ -260,7 +269,7 @@
 			IconComponent={Download}
 			buttonText="Export conversations"
 			onclick={handleExportClick}
-			summary={{ show: showExportSummary, verb: 'Exported', items: exportedConversations }}
+			summary={{ items: exportedConversations, show: showExportSummary, verb: 'Exported' }}
 		/>
 
 		<SettingsChatImportExportSection
@@ -269,7 +278,7 @@
 			IconComponent={Upload}
 			buttonText="Import conversations"
 			onclick={handleImportClick}
-			summary={{ show: showImportSummary, verb: 'Imported', items: importedConversations }}
+			summary={{ items: importedConversations, show: showImportSummary, verb: 'Imported' }}
 		/>
 
 		<SettingsChatImportExportSection
@@ -291,7 +300,7 @@
 			IconComponent={Download}
 			buttonText="Export settings"
 			onclick={handleSettingsExport}
-			summary={{ show: showSettingsExportSummary, verb: 'Exported', items: [] }}
+			summary={{ items: [], show: showSettingsExportSummary, verb: 'Exported' }}
 		/>
 
 		<SettingsChatImportExportSection
@@ -300,7 +309,7 @@
 			IconComponent={Upload}
 			buttonText="Import settings"
 			onclick={handleSettingsImport}
-			summary={{ show: showSettingsImportSummary, verb: 'Imported', items: [] }}
+			summary={{ items: [], show: showSettingsImportSummary, verb: 'Imported' }}
 		/>
 	</SettingsGroup>
 </div>

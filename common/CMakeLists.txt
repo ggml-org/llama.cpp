@@ -121,12 +121,13 @@ add_library(${TARGET}
     )
 
 set_target_properties(${TARGET} PROPERTIES
-    VERSION ${LLAMA_INSTALL_VERSION}
-    SOVERSION 0
+    VERSION ${LLAMA_VERSION_BASE}
+    SOVERSION ${LLAMA_VERSION_MAJOR}
     MACHO_CURRENT_VERSION 0 # keep macOS linker from seeing oversized version number
 )
 
-target_include_directories(${TARGET} PUBLIC . ../vendor)
+target_include_directories(${TARGET} PUBLIC .)
+target_link_libraries     (${TARGET} PUBLIC vendor::nlohmann vendor::sheredom)
 target_compile_features   (${TARGET} PUBLIC cxx_std_17)
 
 if (LLAMA_SUBPROCESS)
