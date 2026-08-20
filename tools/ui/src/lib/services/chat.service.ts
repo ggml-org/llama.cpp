@@ -969,7 +969,7 @@ export class ChatService {
 
 		if (typeof document !== 'undefined') {
 			document.addEventListener('visibilitychange', onVisibilityChange);
-			document.addEventListener('pagehide', onPageHide);
+			window.addEventListener('pagehide', onPageHide);
 		}
 
 		try {
@@ -1184,7 +1184,7 @@ export class ChatService {
 		} finally {
 			if (typeof document !== 'undefined') {
 				document.removeEventListener('visibilitychange', onVisibilityChange);
-				document.removeEventListener('pagehide', onPageHide);
+				window.removeEventListener('pagehide', onPageHide);
 			}
 
 			try {
@@ -1335,18 +1335,6 @@ export class ChatService {
 	 */
 
 	/**
-	 * Converts a database message with attachments to API chat message format.
-	 * Processes various attachment types (images, text files, PDFs) and formats them
-	 * as content parts suitable for the chat completion API.
-	 *
-	 * @param message - Database message object with optional extra attachments
-	 * @param message.content - The text content of the message
-	 * @param message.role - The role of the message sender (user, assistant, system)
-	 * @param message.extra - Optional array of message attachments (images, files, etc.)
-	 * @returns {ApiChatMessageData} object formatted for the chat completion API
-	 * @static
-	 */
-	/**
 	 * Normalizes an array of messages (database or already-API-shaped) into
 	 * API chat message data, converting DB messages and dropping empty system
 	 * messages. Shared by sendMessage, preEncode and the agentic flow.
@@ -1378,6 +1366,18 @@ export class ChatService {
 		});
 	}
 
+	/**
+	 * Converts a database message with attachments to API chat message format.
+	 * Processes various attachment types (images, text files, PDFs) and formats them
+	 * as content parts suitable for the chat completion API.
+	 *
+	 * @param message - Database message object with optional extra attachments
+	 * @param message.content - The text content of the message
+	 * @param message.role - The role of the message sender (user, assistant, system)
+	 * @param message.extra - Optional array of message attachments (images, files, etc.)
+	 * @returns {ApiChatMessageData} object formatted for the chat completion API
+	 * @static
+	 */
 	static async convertDbMessageToApiChatMessageData(
 		message: DatabaseMessage & { extra?: DatabaseMessageExtra[] }
 	): Promise<ApiChatMessageData> {
