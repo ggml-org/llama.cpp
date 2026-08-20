@@ -3,8 +3,13 @@
 // switches on FaTypeK / FaTypeV. After spec-constant specialization the driver
 // folds away every path except the one matching the K/V type for this pipeline.
 //
-// Included by flash_attn.comp and flash_attn_cm1.comp. Not included by
-// flash_attn_cm2.comp, which has its own buffer_reference-based decode path.
+// Included by flash_attn.comp, flash_attn_cm1.comp and lightning_indexer.comp.
+// Not included by flash_attn_cm2.comp, which has its own buffer_reference-based
+// decode path.
+//
+// Define FA_K_ONLY before including to drop the V views and the FaTypeV switch.
+// Shaders that only read K do not declare FaTypeV, and binding 2 is theirs to
+// use for something else.
 //
 // We use macros (rather than per-quant decode functions taking a struct) on
 // purpose: the FA shaders don't enable GL_EXT_shader_explicit_arithmetic_types_float16
@@ -15,37 +20,22 @@
 // F32 is fed as a vec4 "block" (4 floats), matching what dequant_funcs_cm2.glsl
 // does for F32 in the cm2 shader. FaBlockBytesK/V == 16 for F32.
 layout (binding = 1) readonly buffer K_PACKED_F32  { vec4 data[]; }                k_packed_f32;
+layout (binding = 1) readonly buffer K_PACKED_Q4_0 { block_q4_0_packed16 data[]; } k_packed_q4_0;
+layout (binding = 1) readonly buffer K_PACKED_Q4_1 { block_q4_1_packed16 data[]; } k_packed_q4_1;
+layout (binding = 1) readonly buffer K_PACKED_Q5_0 { block_q5_0_packed16 data[]; } k_packed_q5_0;
+layout (binding = 1) readonly buffer K_PACKED_Q5_1 { block_q5_1_packed16 data[]; } k_packed_q5_1;
+layout (binding = 1) readonly buffer K_PACKED_Q8_0 { block_q8_0_packed16 data[]; } k_packed_q8_0;
+layout (binding = 1) readonly buffer K_PACKED_IQ4_NL { block_iq4_nl_packed16 data[]; } k_packed_iq4_nl;
+layout (binding = 1) readonly buffer K_PACKED_BF16 { u16vec4 data[]; } k_packed_bf16;
+
 #ifndef FA_K_ONLY
 layout (binding = 2) readonly buffer V_PACKED_F32  { vec4 data[]; }                v_packed_f32;
-#endif
-
-layout (binding = 1) readonly buffer K_PACKED_Q4_0 { block_q4_0_packed16 data[]; } k_packed_q4_0;
-#ifndef FA_K_ONLY
 layout (binding = 2) readonly buffer V_PACKED_Q4_0 { block_q4_0_packed16 data[]; } v_packed_q4_0;
-#endif
-layout (binding = 1) readonly buffer K_PACKED_Q4_1 { block_q4_1_packed16 data[]; } k_packed_q4_1;
-#ifndef FA_K_ONLY
 layout (binding = 2) readonly buffer V_PACKED_Q4_1 { block_q4_1_packed16 data[]; } v_packed_q4_1;
-#endif
-layout (binding = 1) readonly buffer K_PACKED_Q5_0 { block_q5_0_packed16 data[]; } k_packed_q5_0;
-#ifndef FA_K_ONLY
 layout (binding = 2) readonly buffer V_PACKED_Q5_0 { block_q5_0_packed16 data[]; } v_packed_q5_0;
-#endif
-layout (binding = 1) readonly buffer K_PACKED_Q5_1 { block_q5_1_packed16 data[]; } k_packed_q5_1;
-#ifndef FA_K_ONLY
 layout (binding = 2) readonly buffer V_PACKED_Q5_1 { block_q5_1_packed16 data[]; } v_packed_q5_1;
-#endif
-layout (binding = 1) readonly buffer K_PACKED_Q8_0 { block_q8_0_packed16 data[]; } k_packed_q8_0;
-#ifndef FA_K_ONLY
 layout (binding = 2) readonly buffer V_PACKED_Q8_0 { block_q8_0_packed16 data[]; } v_packed_q8_0;
-#endif
-layout (binding = 1) readonly buffer K_PACKED_IQ4_NL { block_iq4_nl_packed16 data[]; } k_packed_iq4_nl;
-#ifndef FA_K_ONLY
 layout (binding = 2) readonly buffer V_PACKED_IQ4_NL { block_iq4_nl_packed16 data[]; } v_packed_iq4_nl;
-#endif
-
-layout (binding = 1) readonly buffer K_PACKED_BF16 { u16vec4 data[]; } k_packed_bf16;
-#ifndef FA_K_ONLY
 layout (binding = 2) readonly buffer V_PACKED_BF16 { u16vec4 data[]; } v_packed_bf16;
 #endif
 

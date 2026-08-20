@@ -3937,11 +3937,16 @@ static vk_fa_pipeline_state get_fa_pipeline_state(const vk_device& device, const
     return vk_fa_pipeline_state{hsk, hsv, params.block_rows, params.block_cols, params.d_split, params.row_split, params.shmem_staging, params.path, params.workgroup_size, subgroup_size, aligned, f32acc, flags, params.limit_occupancy_shmem, k_type, v_type};
 }
 
+// Bytes per buffer block for the FaBlockBytesK/V spec constants. F32 is fed as
+// a vec4 "block" of 4 floats, everything else uses its ggml block size.
+static uint32_t fa_block_bytes(ggml_type t) {
+    if (t == GGML_TYPE_F32) {
+        return 16u;
+    }
+    return (uint32_t) ggml_type_size(t);
+}
+
 static std::vector<uint32_t> get_fa_spec_constants(const vk_fa_pipeline_state& state) {
-    const auto fa_block_bytes = [](ggml_type t) -> uint32_t {
-        if (t == GGML_TYPE_F32) return 16u;
-        return (uint32_t) ggml_type_size(t);
-    };
     return {
         /* 0 WorkGroupSize   */ state.workgroup_size,
         /* 1 Br              */ state.Br,
@@ -5869,10 +5874,15 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
 
     ggml_vk_create_pipeline(device, device->pipeline_gated_linear_attn_f32, "gated_linear_attn_f32", gated_linear_attn_f32_len, gated_linear_attn_f32_data, "main", 6, sizeof(vk_op_gated_linear_attn_push_constants), {1, 1, 1}, {}, 1);
 
-    for (ggml_type k_type : lightning_indexer_k_types) {
-        const std::string name = "lightning_indexer_" + std::string(ggml_type_name(k_type)) + "_k_f32";
-        const uint32_t block_bytes = k_type == GGML_TYPE_F32 ? 4 * sizeof(float) : (uint32_t)ggml_type_size(k_type);
-        ggml_vk_create_pipeline(device, device->pipeline_lightning_indexer_f32[k_type], name.c_str(), lightning_indexer_f32_len, lightning_indexer_f32_data, "main", 5, sizeof(vk_op_lightning_indexer_push_constants), {1, 1, 1}, {(uint32_t)k_type, block_bytes}, 1);
+    {
+        const bool li_subgroup = device->subgroup_arithmetic && device->subgroup_require_full_support;
+        const size_t li_len   = li_subgroup ? lightning_indexer_subgroup_f32_len  : lightning_indexer_f32_len;
+        const void * li_data  = li_subgroup ? (const void *)lightning_indexer_subgroup_f32_data : (const void *)lightning_indexer_f32_data;
+
+        for (ggml_type k_type : lightning_indexer_k_types) {
+            const std::string name = "lightning_indexer_" + std::string(ggml_type_name(k_type)) + "_k_f32";
+            ggml_vk_create_pipeline(device, device->pipeline_lightning_indexer_f32[k_type], name.c_str(), li_len, li_data, "main", 5, sizeof(vk_op_lightning_indexer_push_constants), {1, 1, 1}, {(uint32_t)k_type, fa_block_bytes(k_type), device->subgroup_size}, 1, false, li_subgroup);
+        }
     }
 
     {
@@ -11710,10 +11720,9 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
         }
         return nullptr;
     case GGML_OP_LIGHTNING_INDEXER:
-        if (src0->type == GGML_TYPE_F32 && src2->type == GGML_TYPE_F32 && dst->src[3]->type == GGML_TYPE_F16 && dst->type == GGML_TYPE_F32) {
-            if (ggml_vk_lightning_indexer_k_type_supported(src1->type)) {
-                return ctx->device->pipeline_lightning_indexer_f32[src1->type];
-            }
+        // only the k type selects a pipeline, the other types are fixed by ggml_lightning_indexer()
+        if (ggml_vk_lightning_indexer_k_type_supported(src1->type)) {
+            return ctx->device->pipeline_lightning_indexer_f32[src1->type];
         }
         return nullptr;
     case GGML_OP_GATED_DELTA_NET:
@@ -18621,9 +18630,6 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                 const ggml_tensor * k = op->src[1];
                 const ggml_tensor * w = op->src[2];
                 const ggml_tensor * m = op->src[3];
-                if (!q || !k || !w || !m) {
-                    return false;
-                }
 
                 // the q/w/m types and the shape relationships between q, k, w, m and dst
                 // are already asserted in ggml_lightning_indexer()
@@ -18632,7 +18638,7 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                 }
 
                 // the shader block size is hardcoded to head size 128
-                if (q->ne[0] != 128 || k->ne[0] != 128) {
+                if (q->ne[0] != 128) {
                     return false;
                 }
 
@@ -18642,6 +18648,12 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                     if (t->nb[0] != ggml_type_size(t->type) ||
                         (vk_tensor_offset(t) + t->view_offs) % device->properties.limits.minStorageBufferOffsetAlignment != 0) {
                         return false;
+                    }
+                    // the strides get scaled down from bytes, so the division must be exact
+                    for (int i = 1; i < GGML_MAX_DIMS; ++i) {
+                        if (t->nb[i] % ggml_type_size(t->type) != 0) {
+                            return false;
+                        }
                     }
                 }
                 return true;

@@ -186,7 +186,24 @@ static void init_tensor_kq_mask(ggml_tensor * tensor, float min = -1.0f, float m
 
     ggml_fp32_to_fp16_row(data_f32.data(), data_f16.data(), ne0*ne1*ne2*ne3);
 
-    ggml_backend_tensor_set(tensor, data_f16.data(), 0, data_f16.size()*sizeof(ggml_fp16_t));
+    if (ggml_is_contiguous(tensor)) {
+        ggml_backend_tensor_set(tensor, data_f16.data(), 0, data_f16.size()*sizeof(ggml_fp16_t));
+        return;
+    }
+
+    // scatter the rows to their strides, leaving any padding zeroed
+    GGML_TENSOR_LOCALS(size_t, nb, tensor, nb);
+
+    std::vector<uint8_t> data(ggml_nbytes(tensor), 0);
+    for (int32_t i3 = 0; i3 < ne3; ++i3) {
+        for (int32_t i2 = 0; i2 < ne2; ++i2) {
+            for (int32_t i1 = 0; i1 < ne1; ++i1) {
+                const size_t src = ((size_t)(i3*ne2 + i2)*ne1 + i1)*ne0;
+                memcpy(data.data() + i3*nb3 + i2*nb2 + i1*nb1, &data_f16[src], ne0*sizeof(ggml_fp16_t));
+            }
+        }
+    }
+    ggml_backend_tensor_set(tensor, data.data(), 0, data.size());
 }
 
 // generate a lower triangular matrix
@@ -7625,18 +7642,25 @@ struct input_tensor {
     size_t view_offs = 0;
 };
 
+static std::array<size_t, 4> default_strides(const input_tensor & src) {
+    std::array<size_t, 4> nb;
+    nb[0] = ggml_type_size(src.type);
+    nb[1] = nb[0] * (src.ne[0] / ggml_blck_size(src.type));
+    nb[2] = nb[1] * src.ne[1];
+    nb[3] = nb[2] * src.ne[2];
+    return nb;
+}
+
+// strides to build the tensor with, resolving nb[0] == 0 to the contiguous defaults
+static std::array<size_t, 4> effective_strides(const input_tensor & src) {
+    return src.nb[0] == 0 ? default_strides(src) : src.nb;
+}
+
 static bool is_non_contiguous(const input_tensor & src) {
     if (src.nb[0] == 0) {
         return false;
     }
-    const size_t default_nb0 = ggml_type_size(src.type);
-    const size_t default_nb1 = default_nb0 * (src.ne[0] / ggml_blck_size(src.type));
-    const size_t default_nb2 = default_nb1 * src.ne[1];
-    const size_t default_nb3 = default_nb2 * src.ne[2];
-    return src.nb[0] != default_nb0 ||
-           src.nb[1] != default_nb1 ||
-           src.nb[2] != default_nb2 ||
-           src.nb[3] != default_nb3;
+    return src.nb != default_strides(src);
 }
 
 static std::string var_to_str(const std::vector<input_tensor>& sources) {
@@ -7701,18 +7725,20 @@ struct test_generic_op : public test_case {
         for (size_t i = 0; i < source_count; ++i) {
             const input_tensor& src = sources[i];
 
-            if (is_non_contiguous(src)) {
+            if (is_non_contiguous(src) || src.view_offs != 0) {
+                const std::array<size_t, 4> nb = effective_strides(src);
+
                 size_t total_size;
                 const size_t blck_size = ggml_blck_size(src.type);
                 if (blck_size == 1) {
                     total_size = ggml_type_size(src.type);
                     for (int d = 0; d < 4; d++) {
-                        total_size += (src.ne[d] - 1) * src.nb[d];
+                        total_size += (src.ne[d] - 1) * nb[d];
                     }
                 } else {
-                    total_size = src.ne[0] * src.nb[0] / blck_size;
+                    total_size = src.ne[0] * nb[0] / blck_size;
                     for (int d = 1; d < 4; d++) {
-                        total_size += (src.ne[d] - 1) * src.nb[d];
+                        total_size += (src.ne[d] - 1) * nb[d];
                     }
                 }
                 total_size += src.view_offs;
@@ -7724,9 +7750,9 @@ struct test_generic_op : public test_case {
                 ggml_tensor * backing = ggml_new_tensor_1d(ctx, src.type, backing_elements);
                 source_tensors[i] = ggml_view_4d(ctx, backing,
                     src.ne[0], src.ne[1], src.ne[2], src.ne[3],
-                    src.nb[1], src.nb[2], src.nb[3], src.view_offs);
+                    nb[1], nb[2], nb[3], src.view_offs);
                 // nb[0] does not get set by view_4d, so set it manually
-                source_tensors[i]->nb[0] = src.nb[0];
+                source_tensors[i]->nb[0] = nb[0];
             } else {
                 source_tensors[i] = ggml_new_tensor_4d(ctx, src.type, src.ne[0], src.ne[1], src.ne[2], src.ne[3]);
             }
@@ -7797,7 +7823,16 @@ struct test_generic_op : public test_case {
                 break;
             }
 
-            if (op == GGML_OP_LIGHTNING_INDEXER && t->view_src != nullptr) {
+            // LIGHTNING_INDEXER: src[3] is the KQ mask
+            if (op == GGML_OP_LIGHTNING_INDEXER && i == 3) {
+                init_tensor_kq_mask(t);
+                continue;
+            }
+
+            // init_tensor_uniform writes the elements contiguously, which does not
+            // reach the whole extent of the padded views these cases use. Fill the
+            // rows at their strides instead and leave the padding zeroed.
+            if (op == GGML_OP_LIGHTNING_INDEXER) {
                 std::vector<uint8_t> data(ggml_nbytes(t), 0);
                 std::vector<float> row(t->ne[0]);
                 std::vector<float> imatrix(t->ne[0], 1.0f);
@@ -10139,69 +10174,27 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             test_cases.emplace_back(new test_lightning_indexer(128, 64, kv, 32, 4, 1, type_K));
         }
     }
-    test_cases.emplace_back(new test_generic_op(
-        GGML_OP_LIGHTNING_INDEXER, GGML_TYPE_F32, { 64, 3, 1, 4 }, {}, {
-            { GGML_TYPE_F32, { 128, 32, 3, 4 }, { 4, 528, 16928, 50848 }, 256 },
-            { GGML_TYPE_F16, { 128,  1, 64, 4 }, { 2, 272,   288, 18464 }, 256 },
-            { GGML_TYPE_F32, {  32,  3,  1, 4 }, { 4, 144,   448,   480 }, 256 },
-            { GGML_TYPE_F16, {  64,  3,  1, 1 }, { 2, 144,   448,   480 }, 256 },
-        }, "padded_f16_k_mask_broadcast"));
-    test_cases.emplace_back(new test_generic_op(
-        GGML_OP_LIGHTNING_INDEXER, GGML_TYPE_F32, { 64, 3, 1, 4 }, {}, {
-            { GGML_TYPE_F32, { 128, 32, 3, 4 }, { 4, 528, 16928, 50848 }, 256 },
-            { GGML_TYPE_F32, { 128,  1, 64, 4 }, { 4, 528,   544, 34880 }, 256 },
-            { GGML_TYPE_F32, {  32,  3,  1, 4 }, { 4, 144,   448,   480 }, 256 },
-            { GGML_TYPE_F16, {  64,  3,  1, 4 }, { 2, 144,   448,   480 }, 256 },
-        }, "padded_f32_k_per_stream_mask"));
-    test_cases.emplace_back(new test_generic_op(
-        GGML_OP_LIGHTNING_INDEXER, GGML_TYPE_F32, { 64, 3, 1, 4 }, {}, {
-            { GGML_TYPE_F32,  { 128, 32, 3, 4 }, {  4, 528, 16928, 50848 }, 256 },
-            { GGML_TYPE_BF16, { 128,  1, 64, 4 }, {  2, 274,   290, 18562 }, 256 },
-            { GGML_TYPE_F32,  {  32,  3,  1, 4 }, {  4, 144,   448,   480 }, 256 },
-            { GGML_TYPE_F16,  {  64,  3,  1, 1 }, {  2, 144,   448,   480 }, 256 },
-        }, "padded_bf16_k"));
-    test_cases.emplace_back(new test_generic_op(
-        GGML_OP_LIGHTNING_INDEXER, GGML_TYPE_F32, { 64, 3, 1, 4 }, {}, {
-            { GGML_TYPE_F32, { 128, 32, 3, 4 }, {  4, 528, 16928, 50848 }, 256 },
-            { GGML_TYPE_Q8_0, { 128, 1, 64, 4 }, { 34, 170,   204, 13158 }, 256 },
-            { GGML_TYPE_F32, {  32,  3, 1, 4 }, {  4, 144,   448,   480 }, 256 },
-            { GGML_TYPE_F16, {  64,  3, 1, 1 }, {  2, 144,   448,   480 }, 256 },
-        }, "padded_q8_0_k"));
-    test_cases.emplace_back(new test_generic_op(
-        GGML_OP_LIGHTNING_INDEXER, GGML_TYPE_F32, { 64, 3, 1, 4 }, {}, {
-            { GGML_TYPE_F32, { 128, 32, 3, 4 }, {  4, 528, 16928, 50848 }, 256 },
-            { GGML_TYPE_Q5_1, { 128, 1, 64, 4 }, { 24, 120,   144,  9336 }, 256 },
-            { GGML_TYPE_F32, {  32,  3, 1, 4 }, {  4, 144,   448,   480 }, 256 },
-            { GGML_TYPE_F16, {  64,  3, 1, 1 }, {  2, 144,   448,   480 }, 256 },
-        }, "padded_q5_1_k"));
-    test_cases.emplace_back(new test_generic_op(
-        GGML_OP_LIGHTNING_INDEXER, GGML_TYPE_F32, { 64, 3, 1, 4 }, {}, {
-            { GGML_TYPE_F32, { 128, 32, 3, 4 }, {  4, 528, 16928, 50848 }, 256 },
-            { GGML_TYPE_Q5_0, { 128, 1, 64, 4 }, { 22, 110,   132,  8558 }, 256 },
-            { GGML_TYPE_F32, {  32,  3, 1, 4 }, {  4, 144,   448,   480 }, 256 },
-            { GGML_TYPE_F16, {  64,  3, 1, 1 }, {  2, 144,   448,   480 }, 256 },
-        }, "padded_q5_0_k"));
-    test_cases.emplace_back(new test_generic_op(
-        GGML_OP_LIGHTNING_INDEXER, GGML_TYPE_F32, { 64, 3, 1, 4 }, {}, {
-            { GGML_TYPE_F32, { 128, 32, 3, 4 }, {  4, 528, 16928, 50848 }, 256 },
-            { GGML_TYPE_Q4_1, { 128, 1, 64, 4 }, { 20, 100,   120,  7780 }, 256 },
-            { GGML_TYPE_F32, {  32,  3, 1, 4 }, {  4, 144,   448,   480 }, 256 },
-            { GGML_TYPE_F16, {  64,  3, 1, 1 }, {  2, 144,   448,   480 }, 256 },
-        }, "padded_q4_1_k"));
-    test_cases.emplace_back(new test_generic_op(
-        GGML_OP_LIGHTNING_INDEXER, GGML_TYPE_F32, { 64, 3, 1, 4 }, {}, {
-            { GGML_TYPE_F32, { 128, 32, 3, 4 }, {  4, 528, 16928, 50848 }, 256 },
-            { GGML_TYPE_Q4_0, { 128, 1, 64, 4 }, { 18,  90,   108,  7002 }, 256 },
-            { GGML_TYPE_F32, {  32,  3, 1, 4 }, {  4, 144,   448,   480 }, 256 },
-            { GGML_TYPE_F16, {  64,  3, 1, 1 }, {  2, 144,   448,   480 }, 256 },
-        }, "padded_q4_0_k"));
-    test_cases.emplace_back(new test_generic_op(
-        GGML_OP_LIGHTNING_INDEXER, GGML_TYPE_F32, { 64, 3, 1, 4 }, {}, {
-            { GGML_TYPE_F32,   { 128, 32, 3, 4 }, {  4, 528, 16928, 50848 }, 256 },
-            { GGML_TYPE_IQ4_NL, { 128, 1, 64, 4 }, { 18,  90,   108,  7002 }, 256 },
-            { GGML_TYPE_F32,   {  32,  3, 1, 4 }, {  4, 144,   448,   480 }, 256 },
-            { GGML_TYPE_F16,   {  64,  3, 1, 1 }, {  2, 144,   448,   480 }, 256 },
-        }, "padded_iq4_nl_k"));
+    // padded strides and a nonzero view offset on every source, for each K type
+    // and both mask layouts (broadcast over streams, and one mask per stream)
+    auto padded_k = [](ggml_type type_K) {
+        const size_t ts  = ggml_type_size(type_K);
+        const size_t row = ts * (128 / ggml_blck_size(type_K));
+        const size_t nb1 = row + ts;
+        const size_t nb2 = nb1 + ts;
+        return input_tensor{ type_K, { 128, 1, 64, 4 }, { ts, nb1, nb2, 64*nb2 + nb1 }, 256 };
+    };
+
+    for (ggml_type type_K : {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_BF16, GGML_TYPE_Q8_0, GGML_TYPE_Q5_1, GGML_TYPE_Q5_0, GGML_TYPE_Q4_1, GGML_TYPE_Q4_0, GGML_TYPE_IQ4_NL}) {
+        for (int64_t nm : { 1, 4 }) {
+            test_cases.emplace_back(new test_generic_op(
+                GGML_OP_LIGHTNING_INDEXER, GGML_TYPE_F32, { 64, 3, 1, 4 }, {}, {
+                    { GGML_TYPE_F32, { 128, 32, 3, 4 }, { 4, 528, 16928, 50848 }, 256 },
+                    padded_k(type_K),
+                    { GGML_TYPE_F32, {  32,  3, 1,  4 }, { 4, 144,   448,   480 }, 256 },
+                    { GGML_TYPE_F16, {  64,  3, 1, nm }, { 2, 144,   448,   480 }, 256 },
+                }, std::string("padded_") + ggml_type_name(type_K) + "_k_nm" + std::to_string(nm)));
+        }
+    }
 
     return test_cases;
 }

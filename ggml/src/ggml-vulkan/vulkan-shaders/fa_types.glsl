@@ -1,3 +1,6 @@
+#if !defined(GGML_FA_TYPES_COMP)
+#define GGML_FA_TYPES_COMP
+
 // FaTypeK / FaTypeV spec constant values. These mirror enum ggml_type so the
 // host can pass the type directly. Keep in sync with ggml.h.
 #define FA_TYPE_F32   0u
@@ -48,3 +51,5 @@ bool fa_type_needs_shmem(uint ty) {
         default:             return false;
     }
 }
+
+#endif // !defined(GGML_FA_TYPES_COMP)
