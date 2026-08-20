@@ -73,21 +73,6 @@ export interface ChatFlowsHost {
 export class ChatMessageFlows {
 	constructor(private host: ChatFlowsHost) {}
 
-	private getMessageByIdWithRole(
-		messageId: string,
-		expectedRole?: MessageRole
-	): { message: DatabaseMessage; index: number } | null {
-		const index = conversationsStore.findMessageIndex(messageId);
-
-		if (index === -1) return null;
-
-		const message = conversationsStore.activeMessages[index];
-
-		if (expectedRole && message.role !== expectedRole) return null;
-
-		return { index, message };
-	}
-
 	async updateMessage(messageId: string, newContent: string): Promise<void> {
 		const activeConv = conversationsStore.activeConversation;
 
@@ -340,67 +325,6 @@ export class ChatMessageFlows {
 			conversationsStore.updateConversationTimestamp();
 		} catch (error) {
 			console.error('Failed to delete message:', error);
-		}
-	}
-
-	/**
-	 * Open a fresh assistant turn anchored at the last tool result of a resolved
-	 * agentic round and let streamChatCompletion route through runAgenticFlow.
-	 * Used by continueAssistantMessage when classifyContinueIntent returns
-	 * next_turn, meaning the target assistant already has its tool_calls paired
-	 * with trailing tool results and the next thing to generate is a brand new
-	 * turn rather than a token level continuation.
-	 */
-	private async continueAsNextAgenticTurn(anchorIndex: number): Promise<void> {
-		const activeConv = conversationsStore.activeConversation;
-
-		if (!activeConv) return;
-
-		const anchor = conversationsStore.activeMessages[anchorIndex];
-
-		if (!anchor) return;
-
-		this.host.cancelPreEncode();
-		this.host.setChatLoading(activeConv.id, true);
-		this.host.clearChatStreaming(activeConv.id);
-		try {
-			const allMessages = await conversationsStore.getConversationMessages(activeConv.id);
-			const anchorMessage = findMessageById(allMessages, anchor.id);
-
-			if (!anchorMessage) {
-				this.host.setChatLoading(activeConv.id, false);
-
-				return;
-			}
-
-			const newAssistantMessage = await DatabaseService.createMessageBranch(
-				{
-					children: [],
-					content: '',
-					convId: activeConv.id,
-					model: null,
-					role: MessageRole.ASSISTANT,
-					timestamp: Date.now(),
-					toolCalls: '',
-					type: MessageType.TEXT
-				},
-				anchorMessage.id
-			);
-
-			await conversationsStore.updateCurrentNode(newAssistantMessage.id);
-			conversationsStore.updateConversationTimestamp();
-			await conversationsStore.refreshActiveMessages();
-			const conversationPath = filterByLeafNodeId(
-				allMessages,
-				anchorMessage.id,
-				false
-			) as DatabaseMessage[];
-
-			await this.host.streamChatCompletion(conversationPath, newAssistantMessage);
-		} catch (error) {
-			if (!isAbortError(error)) console.error('Failed to continue agentic turn:', error);
-
-			this.host.setChatLoading(activeConv.id, false);
 		}
 	}
 
@@ -750,6 +674,82 @@ export class ChatMessageFlows {
 				await this.generateResponseForMessage(messageIdForResponse);
 		} catch (error) {
 			console.error('Failed to edit message with branching:', error);
+		}
+	}
+
+	private getMessageByIdWithRole(
+		messageId: string,
+		expectedRole?: MessageRole
+	): { message: DatabaseMessage; index: number } | null {
+		const index = conversationsStore.findMessageIndex(messageId);
+
+		if (index === -1) return null;
+
+		const message = conversationsStore.activeMessages[index];
+
+		if (expectedRole && message.role !== expectedRole) return null;
+
+		return { index, message };
+	}
+
+	/**
+	 * Open a fresh assistant turn anchored at the last tool result of a resolved
+	 * agentic round and let streamChatCompletion route through runAgenticFlow.
+	 * Used by continueAssistantMessage when classifyContinueIntent returns
+	 * next_turn, meaning the target assistant already has its tool_calls paired
+	 * with trailing tool results and the next thing to generate is a brand new
+	 * turn rather than a token level continuation.
+	 */
+	private async continueAsNextAgenticTurn(anchorIndex: number): Promise<void> {
+		const activeConv = conversationsStore.activeConversation;
+
+		if (!activeConv) return;
+
+		const anchor = conversationsStore.activeMessages[anchorIndex];
+
+		if (!anchor) return;
+
+		this.host.cancelPreEncode();
+		this.host.setChatLoading(activeConv.id, true);
+		this.host.clearChatStreaming(activeConv.id);
+		try {
+			const allMessages = await conversationsStore.getConversationMessages(activeConv.id);
+			const anchorMessage = findMessageById(allMessages, anchor.id);
+
+			if (!anchorMessage) {
+				this.host.setChatLoading(activeConv.id, false);
+
+				return;
+			}
+
+			const newAssistantMessage = await DatabaseService.createMessageBranch(
+				{
+					children: [],
+					content: '',
+					convId: activeConv.id,
+					model: null,
+					role: MessageRole.ASSISTANT,
+					timestamp: Date.now(),
+					toolCalls: '',
+					type: MessageType.TEXT
+				},
+				anchorMessage.id
+			);
+
+			await conversationsStore.updateCurrentNode(newAssistantMessage.id);
+			conversationsStore.updateConversationTimestamp();
+			await conversationsStore.refreshActiveMessages();
+			const conversationPath = filterByLeafNodeId(
+				allMessages,
+				anchorMessage.id,
+				false
+			) as DatabaseMessage[];
+
+			await this.host.streamChatCompletion(conversationPath, newAssistantMessage);
+		} catch (error) {
+			if (!isAbortError(error)) console.error('Failed to continue agentic turn:', error);
+
+			this.host.setChatLoading(activeConv.id, false);
 		}
 	}
 

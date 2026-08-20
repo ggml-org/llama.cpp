@@ -72,22 +72,6 @@ class SettingsStore {
 	/**
 	 *
 	 *
-	 * Utilities (private helpers)
-	 *
-	 *
-	 */
-
-	/**
-	 * Helper method to get server defaults with null safety
-	 * Centralizes the pattern of getting and extracting server defaults
-	 */
-	private getServerDefaults(): Record<string, string | number | boolean> {
-		return ParameterSyncService.extractServerDefaults(serverStore.defaultParams);
-	}
-
-	/**
-	 *
-	 *
 	 * Lifecycle
 	 *
 	 *
@@ -108,67 +92,6 @@ class SettingsStore {
 			this.isInitialized = true;
 		} catch (error) {
 			console.error('Failed to initialize settings store:', error);
-		}
-	}
-
-	/**
-	 * Load configuration from localStorage
-	 * Returns default values for missing keys to prevent breaking changes
-	 */
-	private loadConfig() {
-		if (!browser) return;
-
-		try {
-			const storedConfigRaw = localStorage.getItem(CONFIG_LOCALSTORAGE_KEY);
-
-			// First visit: no stored config yet. Server ui_settings apply once in
-			// this state, then the user's config diverges freely.
-			this.isFirstVisit = storedConfigRaw === null;
-
-			const savedVal = JSON.parse(storedConfigRaw || '{}');
-
-			// Merge with defaults to prevent breaking changes
-			this.config = {
-				...SETTING_CONFIG_DEFAULT,
-				...savedVal
-			};
-
-			// Default sendOnEnter to false on mobile when the user has no saved preference
-			if (!(SETTINGS_KEYS.SEND_ON_ENTER in savedVal)) {
-				if (deviceStore.isMobile) {
-					this.config[SETTINGS_KEYS.SEND_ON_ENTER] = false;
-				}
-			}
-
-			// Load user overrides
-			const savedOverrides = JSON.parse(
-				localStorage.getItem(USER_OVERRIDES_LOCALSTORAGE_KEY) || '[]'
-			);
-
-			this.userOverrides = new Set(savedOverrides);
-		} catch (error) {
-			console.warn('Failed to parse config from localStorage, using defaults:', error);
-			this.config = { ...SETTING_CONFIG_DEFAULT };
-			this.userOverrides = new Set();
-		}
-	}
-
-	/**
-	 * Migrate the legacy un-namespaced "theme" localStorage key into config.
-	 * Previously theme was stored separately in localStorage("theme") — now it lives
-	 * inside the config object alongside all other settings.
-	 * After migration the legacy key is removed.
-	 */
-	private migrateLegacyTheme() {
-		if (!browser) return;
-
-		const legacyTheme = localStorage.getItem('theme');
-
-		if (legacyTheme) {
-			this.config[SETTINGS_KEYS.THEME] = legacyTheme;
-			localStorage.removeItem('theme');
-			this.saveConfig();
-			setMode(legacyTheme as ColorMode);
 		}
 	}
 	/**
@@ -233,24 +156,6 @@ class SettingsStore {
 		}
 
 		this.saveConfig();
-	}
-
-	/**
-	 * Save the current configuration to localStorage
-	 */
-	private saveConfig() {
-		if (!browser) return;
-
-		try {
-			localStorage.setItem(CONFIG_LOCALSTORAGE_KEY, JSON.stringify(this.config));
-
-			localStorage.setItem(
-				USER_OVERRIDES_LOCALSTORAGE_KEY,
-				JSON.stringify(Array.from(this.userOverrides))
-			);
-		} catch (error) {
-			console.error('Failed to save config to localStorage:', error);
-		}
 	}
 
 	/**
@@ -576,6 +481,101 @@ class SettingsStore {
 		setMode(this.config[SETTINGS_KEYS.THEME] as ColorMode);
 
 		console.log('Settings imported successfully');
+	}
+
+	/**
+	 *
+	 *
+	 * Utilities (private helpers)
+	 *
+	 *
+	 */
+
+	/**
+	 * Helper method to get server defaults with null safety
+	 * Centralizes the pattern of getting and extracting server defaults
+	 */
+	private getServerDefaults(): Record<string, string | number | boolean> {
+		return ParameterSyncService.extractServerDefaults(serverStore.defaultParams);
+	}
+
+	/**
+	 * Load configuration from localStorage
+	 * Returns default values for missing keys to prevent breaking changes
+	 */
+	private loadConfig() {
+		if (!browser) return;
+
+		try {
+			const storedConfigRaw = localStorage.getItem(CONFIG_LOCALSTORAGE_KEY);
+
+			// First visit: no stored config yet. Server ui_settings apply once in
+			// this state, then the user's config diverges freely.
+			this.isFirstVisit = storedConfigRaw === null;
+
+			const savedVal = JSON.parse(storedConfigRaw || '{}');
+
+			// Merge with defaults to prevent breaking changes
+			this.config = {
+				...SETTING_CONFIG_DEFAULT,
+				...savedVal
+			};
+
+			// Default sendOnEnter to false on mobile when the user has no saved preference
+			if (!(SETTINGS_KEYS.SEND_ON_ENTER in savedVal)) {
+				if (deviceStore.isMobile) {
+					this.config[SETTINGS_KEYS.SEND_ON_ENTER] = false;
+				}
+			}
+
+			// Load user overrides
+			const savedOverrides = JSON.parse(
+				localStorage.getItem(USER_OVERRIDES_LOCALSTORAGE_KEY) || '[]'
+			);
+
+			this.userOverrides = new Set(savedOverrides);
+		} catch (error) {
+			console.warn('Failed to parse config from localStorage, using defaults:', error);
+			this.config = { ...SETTING_CONFIG_DEFAULT };
+			this.userOverrides = new Set();
+		}
+	}
+
+	/**
+	 * Migrate the legacy un-namespaced "theme" localStorage key into config.
+	 * Previously theme was stored separately in localStorage("theme") — now it lives
+	 * inside the config object alongside all other settings.
+	 * After migration the legacy key is removed.
+	 */
+	private migrateLegacyTheme() {
+		if (!browser) return;
+
+		const legacyTheme = localStorage.getItem('theme');
+
+		if (legacyTheme) {
+			this.config[SETTINGS_KEYS.THEME] = legacyTheme;
+			localStorage.removeItem('theme');
+			this.saveConfig();
+			setMode(legacyTheme as ColorMode);
+		}
+	}
+
+	/**
+	 * Save the current configuration to localStorage
+	 */
+	private saveConfig() {
+		if (!browser) return;
+
+		try {
+			localStorage.setItem(CONFIG_LOCALSTORAGE_KEY, JSON.stringify(this.config));
+
+			localStorage.setItem(
+				USER_OVERRIDES_LOCALSTORAGE_KEY,
+				JSON.stringify(Array.from(this.userOverrides))
+			);
+		} catch (error) {
+			console.error('Failed to save config to localStorage:', error);
+		}
 	}
 }
 

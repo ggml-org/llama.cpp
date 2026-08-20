@@ -37,6 +37,8 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 	selectedModelId = $state<string | null>(null);
 	selectedModelName = $state<string | null>(null);
 
+	favoriteModelIds = $state<Set<string>>(this.loadFavoritesFromStorage());
+
 	// Dedup concurrent fetch() callers — all awaiters share the same inflight promise.
 	// Without this, ?model=<name> URL handler races an in-progress fetch and sees an empty list.
 	private inflightFetch: Promise<void> | null = null;
@@ -54,8 +56,6 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 	get status() {
 		return this._status;
 	}
-
-	favoriteModelIds = $state<Set<string>>(this.loadFavoritesFromStorage());
 
 	/**
 	 *
@@ -179,81 +179,6 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 		}
 	}
 
-	private async runFetch(): Promise<void> {
-		this.loading = true;
-		this.error = null;
-
-		try {
-			if (!serverStore.props) {
-				await serverStore.fetch();
-			}
-
-			const router = serverStore.isRouterMode;
-
-			if (router) {
-				const response = await ModelsService.listRouter();
-
-				this.routerModels = response.data;
-				this.models = this.buildModelOptions(response);
-
-				await this.props.fetchModalitiesForLoadedModels();
-
-				const visible = this.getVisibleModels();
-
-				if (visible.length === 1 && this.isModelLoaded(visible[0].model)) {
-					this.selectModelById(visible[0].id);
-				}
-			} else {
-				this.models = await this.fetchModelModeInternal();
-			}
-		} catch (error) {
-			this.models = [];
-			this.error = error instanceof Error ? error.message : 'Failed to load models';
-
-			throw error;
-		} finally {
-			this.loading = false;
-		}
-	}
-
-	/** Fetch models in MODEL mode (single model, standard OpenAI-compatible). */
-	private async fetchModelModeInternal(): Promise<ModelOption[]> {
-		const response = await ModelsService.list();
-
-		return this.buildModelOptions(response);
-	}
-
-	/**
-	 * Build ModelOption[] from an API response.
-	 * Both MODEL and ROUTER modes share the same mapping logic;
-	 * they differ only in which endpoint is called.
-	 */
-	private buildModelOptions(
-		response: ApiModelListResponse | ApiRouterModelsListResponse
-	): ModelOption[] {
-		return response.data.map((item: ApiModelDataEntry, index: number) => {
-			const details = response.models?.[index];
-			const rawCapabilities = Array.isArray(details?.capabilities) ? details?.capabilities : [];
-			const displayNameSource =
-				details?.name && details.name.trim().length > 0 ? details.name : item.id;
-			const modelId = details?.model || item.id;
-
-			return {
-				aliases: item.aliases ?? [],
-				capabilities: rawCapabilities.filter((value: unknown): value is string => Boolean(value)),
-				description: details?.description,
-				details: details?.details,
-				id: item.id,
-				meta: item.meta ?? null,
-				modalities: this.props.buildArchitectureModalities(item.architecture),
-				model: modelId,
-				name: this.toDisplayName(displayNameSource),
-				parsedId: ModelsService.parseModelId(modelId),
-				tags: item.tags ?? []
-			};
-		});
-	}
-
 	/**
 	 * Fetch router models with full metadata (ROUTER mode only).
 	 * No-op in router mode — fetch() already calls listRouter() internally.
@@ -277,13 +202,6 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 			console.warn('Failed to fetch router models:', error);
 			this.routerModels = [];
 		}
-	}
-
-	/**
-	 * Filter to models visible in the UI (ui !== false).
-	 */
-	private getVisibleModels(): ModelOption[] {
-		return this.models.filter((option) => this.props.getModelProps(option.model)?.ui !== false);
 	}
 
 	/**
@@ -477,18 +395,6 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 		}
 	}
 
-	private loadFavoritesFromStorage(): Set<string> {
-		try {
-			const raw = localStorage.getItem(FAVORITE_MODELS_LOCALSTORAGE_KEY);
-
-			return raw ? new Set(JSON.parse(raw) as string[]) : new Set();
-		} catch {
-			toast.error('Failed to load favorite models from local storage');
-
-			return new Set();
-		}
-	}
-
 	/**
 	 *
 	 *
@@ -502,6 +408,100 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 		const candidate = segments.pop();
 
 		return candidate && candidate.trim().length > 0 ? candidate : id;
+	}
+
+	private async runFetch(): Promise<void> {
+		this.loading = true;
+		this.error = null;
+
+		try {
+			if (!serverStore.props) {
+				await serverStore.fetch();
+			}
+
+			const router = serverStore.isRouterMode;
+
+			if (router) {
+				const response = await ModelsService.listRouter();
+
+				this.routerModels = response.data;
+				this.models = this.buildModelOptions(response);
+
+				await this.props.fetchModalitiesForLoadedModels();
+
+				const visible = this.getVisibleModels();
+
+				if (visible.length === 1 && this.isModelLoaded(visible[0].model)) {
+					this.selectModelById(visible[0].id);
+				}
+			} else {
+				this.models = await this.fetchModelModeInternal();
+			}
+		} catch (error) {
+			this.models = [];
+			this.error = error instanceof Error ? error.message : 'Failed to load models';
+
+			throw error;
+		} finally {
+			this.loading = false;
+		}
+	}
+
+	/** Fetch models in MODEL mode (single model, standard OpenAI-compatible). */
+	private async fetchModelModeInternal(): Promise<ModelOption[]> {
+		const response = await ModelsService.list();
+
+		return this.buildModelOptions(response);
+	}
+
+	/**
+	 * Build ModelOption[] from an API response.
+	 * Both MODEL and ROUTER modes share the same mapping logic;
+	 * they differ only in which endpoint is called.
+	 */
+	private buildModelOptions(
+		response: ApiModelListResponse | ApiRouterModelsListResponse
+	): ModelOption[] {
+		return response.data.map((item: ApiModelDataEntry, index: number) => {
+			const details = response.models?.[index];
+			const rawCapabilities = Array.isArray(details?.capabilities) ? details?.capabilities : [];
+			const displayNameSource =
+				details?.name && details.name.trim().length > 0 ? details.name : item.id;
+			const modelId = details?.model || item.id;
+
+			return {
+				aliases: item.aliases ?? [],
+				capabilities: rawCapabilities.filter((value: unknown): value is string => Boolean(value)),
+				description: details?.description,
+				details: details?.details,
+				id: item.id,
+				meta: item.meta ?? null,
+				modalities: this.props.buildArchitectureModalities(item.architecture),
+				model: modelId,
+				name: this.toDisplayName(displayNameSource),
+				parsedId: ModelsService.parseModelId(modelId),
+				tags: item.tags ?? []
+			};
+		});
+	}
+
+	/**
+	 * Filter to models visible in the UI (ui !== false).
+	 */
+	private getVisibleModels(): ModelOption[] {
+		return this.models.filter((option) => this.props.getModelProps(option.model)?.ui !== false);
+	}
+
+	private loadFavoritesFromStorage(): Set<string> {
+		try {
+			const raw = localStorage.getItem(FAVORITE_MODELS_LOCALSTORAGE_KEY);
+
+			return raw ? new Set(JSON.parse(raw) as string[]) : new Set();
+		} catch {
+			toast.error('Failed to load favorite models from local storage');
+
+			return new Set();
+		}
 	}
 }
 

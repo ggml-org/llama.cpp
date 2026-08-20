@@ -44,10 +44,6 @@ class DeviceStore {
 
 	private mobile = new MediaQuery(`max-width: ${DEFAULT_MOBILE_BREAKPOINT - 1}px`);
 
-	get isMobile(): boolean {
-		return this.mobile.current;
-	}
-
 	constructor() {
 		if (!browser) return;
 
@@ -82,6 +78,10 @@ class DeviceStore {
 		darkMql.addEventListener('change', (e) => {
 			this.systemTheme.isDark = e.matches;
 		});
+	}
+
+	get isMobile(): boolean {
+		return this.mobile.current;
 	}
 }
 

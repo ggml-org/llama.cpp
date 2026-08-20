@@ -69,6 +69,166 @@ export class ChatStreamManager {
 	}
 
 	/**
+	 * Model frozen at send time for a stream awaiting resume, from the persisted stream state.
+	 * The load progress indicator targets it after a reload, when the message row has no model
+	 * yet and the dropdown selection may not be restored.
+	 */
+	getResumeModel(convId: string): string | null {
+		return ChatService.getStreamState(convId)?.model ?? null;
+	}
+
+	async discoverActiveStream(convId: string): Promise<void> {
+		if (!convId) return;
+
+		if (this.host.chatStreamingStates.has(convId)) return;
+
+		if (this.host.activity.isLocal(convId) && !this.resumePendingConvs.has(convId)) return;
+
+		// concurrency guard: another discover may already be running for this conv (typical race
+		// between mount and visibilitychange on tab switch). a second concurrent fetch on the same
+		// /v1/stream would duplicate every byte into the DB message, this guard bounces it
+		if (this.discoveringConvs.has(convId)) return;
+
+		this.discoveringConvs.add(convId);
+
+		try {
+			// the model is frozen at POST time, rebuild the exact conv::model identity from the
+			// persisted state so the lookup key matches what the server stored. null means a single
+			// model conv with no ::suffix, only guess from the dropdown with no persisted state
+			const localState = ChatService.getStreamState(convId);
+			const streamId = ChatService.resumeStreamIdentity(
+				convId,
+				localState,
+				modelsStore.selectedModelName
+			);
+			// primary path: ask the server which sessions exist for this identity
+			const serverTarget = await this.probeServerStream(streamId);
+
+			if (serverTarget) {
+				// pass the full server side identity (may carry a ::model suffix) so the GET routes
+				// straight to the owning session, no probe or fan out
+				await this.attachServerStream(convId, serverTarget.conversation_id);
+
+				return;
+			}
+
+			// fallback: local state remembers an interrupted byte offset for this conv, the server may
+			// still have a live session matching that identity (we just lost the bytes mid stream). retry
+			// with the frozen identity, the server probe inside attachServerStream tells us if it exists
+			if (!localState) {
+				return;
+			}
+
+			// quiet status probe first: a full attach flips the loading UI on every try, probing
+			// keeps the retry loop invisible while the owning model is still loading (503)
+			const status = await ChatService.probeResumeStatus(streamId);
+
+			if (status === 503) {
+				// make the wait visible: the empty assistant row persisted at send time renders
+				// the processing info, whose model load percentage flows from the models feed
+				this.resumePendingConvs.add(convId);
+				this.host.setChatLoading(convId, true);
+
+				if (!this.resumeRetryTimers.has(convId)) {
+					this.resumeRetryTimers.set(
+						convId,
+						setTimeout(() => {
+							this.resumeRetryTimers.delete(convId);
+							void this.discoverActiveStream(convId);
+						}, STREAM_RESUME_RETRY_MS)
+					);
+				}
+
+				return;
+			}
+
+			if (this.resumePendingConvs.delete(convId) && status !== 200) {
+				// the wait is over without a session to attach, drop the visible loading state
+				this.host.setChatLoading(convId, false);
+			}
+
+			if (status === 0) {
+				// transient network failure, the next mount or visibility change retries
+				return;
+			}
+
+			if (status !== 200) {
+				// the session is gone (stopped, TTL expired), nothing to resume anymore
+				ChatService.clearStreamState(convId);
+
+				return;
+			}
+
+			await this.attachServerStream(convId, streamId);
+
+			// if attachServerStream failed (session gone, TTL expired), clear the local state to avoid retrying forever
+			if (!this.host.chatStreamingStates.has(convId) && !this.host.activity.isLocal(convId)) {
+				ChatService.clearStreamState(convId);
+			}
+		} finally {
+			this.discoveringConvs.delete(convId);
+		}
+	}
+
+	/**
+	 * Resync the activity ledger's remote set from the backend. Called by the layout at mount and
+	 * on visibilitychange, no polling. A snapshot semantic: stale entries for sessions that
+	 * finalized while the browser was elsewhere are dropped naturally.
+	 */
+	async syncRemoteRunningStreams(): Promise<void> {
+		// the conversations store loads from IndexedDB asynchronously, the +layout onMount caller
+		// fires before that finishes. read ids straight from the DB so the result does not depend
+		// on the store init race, and the sidebar spinners light up at first paint for every conv
+		// the user owns even if it has not been hydrated into the store yet
+		let ids: string[];
+
+		try {
+			const all = await DatabaseService.getAllConversations();
+
+			ids = all.map((c) => c.id).filter((id) => !!id);
+		} catch (e) {
+			console.warn('syncRemoteRunningStreams DB read failed:', e);
+
+			return;
+		}
+
+		// only ask about conv ids the user already owns
+		if (ids.length === 0) {
+			this.host.activity.applyRemoteSnapshot([]);
+
+			return;
+		}
+
+		// rebuild the frozen conv::model identity per conv so a session started with a model still
+		// matches. the server response is mapped back to the bare id below for the sidebar set
+		const lookupIds = ids.map((id) =>
+			ChatService.resumeStreamIdentity(id, ChatService.getStreamState(id), null)
+		);
+
+		let sessions: ApiStreamSession[];
+
+		try {
+			sessions = await ChatService.lookupStreamSessions(lookupIds);
+		} catch (e) {
+			console.warn('syncRemoteRunningStreams lookup failed:', e);
+
+			return;
+		}
+		const running = new SvelteSet<string>();
+
+		for (const s of sessions) {
+			if (s && !s.is_done && typeof s.conversation_id === 'string' && s.conversation_id) {
+				// strip the optional ::model suffix, the sidebar set is keyed by the bare conv id
+				const sepIdx = s.conversation_id.indexOf(CONVERSATION_ID_SEPARATOR);
+				const bareId = sepIdx === -1 ? s.conversation_id : s.conversation_id.slice(0, sepIdx);
+
+				running.add(bareId);
+			}
+		}
+		this.host.activity.applyRemoteSnapshot(running);
+	}
+
+	/**
 	 * Server side stream discovery, split in three pieces:
 	 *
 	 * probeServerStream(convId) -> hits POST /v1/streams/lookup with the conv id, returns the session to attach
@@ -316,108 +476,6 @@ export class ChatStreamManager {
 		}
 	}
 
-	/**
-	 * Model frozen at send time for a stream awaiting resume, from the persisted stream state.
-	 * The load progress indicator targets it after a reload, when the message row has no model
-	 * yet and the dropdown selection may not be restored.
-	 */
-	getResumeModel(convId: string): string | null {
-		return ChatService.getStreamState(convId)?.model ?? null;
-	}
-
-	async discoverActiveStream(convId: string): Promise<void> {
-		if (!convId) return;
-
-		if (this.host.chatStreamingStates.has(convId)) return;
-
-		if (this.host.activity.isLocal(convId) && !this.resumePendingConvs.has(convId)) return;
-
-		// concurrency guard: another discover may already be running for this conv (typical race
-		// between mount and visibilitychange on tab switch). a second concurrent fetch on the same
-		// /v1/stream would duplicate every byte into the DB message, this guard bounces it
-		if (this.discoveringConvs.has(convId)) return;
-
-		this.discoveringConvs.add(convId);
-
-		try {
-			// the model is frozen at POST time, rebuild the exact conv::model identity from the
-			// persisted state so the lookup key matches what the server stored. null means a single
-			// model conv with no ::suffix, only guess from the dropdown with no persisted state
-			const localState = ChatService.getStreamState(convId);
-			const streamId = ChatService.resumeStreamIdentity(
-				convId,
-				localState,
-				modelsStore.selectedModelName
-			);
-			// primary path: ask the server which sessions exist for this identity
-			const serverTarget = await this.probeServerStream(streamId);
-
-			if (serverTarget) {
-				// pass the full server side identity (may carry a ::model suffix) so the GET routes
-				// straight to the owning session, no probe or fan out
-				await this.attachServerStream(convId, serverTarget.conversation_id);
-
-				return;
-			}
-
-			// fallback: local state remembers an interrupted byte offset for this conv, the server may
-			// still have a live session matching that identity (we just lost the bytes mid stream). retry
-			// with the frozen identity, the server probe inside attachServerStream tells us if it exists
-			if (!localState) {
-				return;
-			}
-
-			// quiet status probe first: a full attach flips the loading UI on every try, probing
-			// keeps the retry loop invisible while the owning model is still loading (503)
-			const status = await ChatService.probeResumeStatus(streamId);
-
-			if (status === 503) {
-				// make the wait visible: the empty assistant row persisted at send time renders
-				// the processing info, whose model load percentage flows from the models feed
-				this.resumePendingConvs.add(convId);
-				this.host.setChatLoading(convId, true);
-
-				if (!this.resumeRetryTimers.has(convId)) {
-					this.resumeRetryTimers.set(
-						convId,
-						setTimeout(() => {
-							this.resumeRetryTimers.delete(convId);
-							void this.discoverActiveStream(convId);
-						}, STREAM_RESUME_RETRY_MS)
-					);
-				}
-
-				return;
-			}
-
-			if (this.resumePendingConvs.delete(convId) && status !== 200) {
-				// the wait is over without a session to attach, drop the visible loading state
-				this.host.setChatLoading(convId, false);
-			}
-
-			if (status === 0) {
-				// transient network failure, the next mount or visibility change retries
-				return;
-			}
-
-			if (status !== 200) {
-				// the session is gone (stopped, TTL expired), nothing to resume anymore
-				ChatService.clearStreamState(convId);
-
-				return;
-			}
-
-			await this.attachServerStream(convId, streamId);
-
-			// if attachServerStream failed (session gone, TTL expired), clear the local state to avoid retrying forever
-			if (!this.host.chatStreamingStates.has(convId) && !this.host.activity.isLocal(convId)) {
-				ChatService.clearStreamState(convId);
-			}
-		} finally {
-			this.discoveringConvs.delete(convId);
-		}
-	}
-
 	private findLastAssistantIdx(messages: DatabaseMessage[]): number {
 		for (let i = messages.length - 1; i >= 0; i--) {
 			if (messages[i].role === MessageRole.ASSISTANT) return i;
@@ -432,63 +490,5 @@ export class ChatStreamManager {
 		}
 
 		return -1;
-	}
-
-	/**
-	 * Resync the activity ledger's remote set from the backend. Called by the layout at mount and
-	 * on visibilitychange, no polling. A snapshot semantic: stale entries for sessions that
-	 * finalized while the browser was elsewhere are dropped naturally.
-	 */
-	async syncRemoteRunningStreams(): Promise<void> {
-		// the conversations store loads from IndexedDB asynchronously, the +layout onMount caller
-		// fires before that finishes. read ids straight from the DB so the result does not depend
-		// on the store init race, and the sidebar spinners light up at first paint for every conv
-		// the user owns even if it has not been hydrated into the store yet
-		let ids: string[];
-
-		try {
-			const all = await DatabaseService.getAllConversations();
-
-			ids = all.map((c) => c.id).filter((id) => !!id);
-		} catch (e) {
-			console.warn('syncRemoteRunningStreams DB read failed:', e);
-
-			return;
-		}
-
-		// only ask about conv ids the user already owns
-		if (ids.length === 0) {
-			this.host.activity.applyRemoteSnapshot([]);
-
-			return;
-		}
-
-		// rebuild the frozen conv::model identity per conv so a session started with a model still
-		// matches. the server response is mapped back to the bare id below for the sidebar set
-		const lookupIds = ids.map((id) =>
-			ChatService.resumeStreamIdentity(id, ChatService.getStreamState(id), null)
-		);
-
-		let sessions: ApiStreamSession[];
-
-		try {
-			sessions = await ChatService.lookupStreamSessions(lookupIds);
-		} catch (e) {
-			console.warn('syncRemoteRunningStreams lookup failed:', e);
-
-			return;
-		}
-		const running = new SvelteSet<string>();
-
-		for (const s of sessions) {
-			if (s && !s.is_done && typeof s.conversation_id === 'string' && s.conversation_id) {
-				// strip the optional ::model suffix, the sidebar set is keyed by the bare conv id
-				const sepIdx = s.conversation_id.indexOf(CONVERSATION_ID_SEPARATOR);
-				const bareId = sepIdx === -1 ? s.conversation_id : s.conversation_id.slice(0, sepIdx);
-
-				running.add(bareId);
-			}
-		}
-		this.host.activity.applyRemoteSnapshot(running);
 	}
 }

@@ -70,10 +70,6 @@ export class MCPHealthCheckManager {
 		this._checks = rest;
 	}
 
-	private setState(serverId: string, state: HealthCheckState): void {
-		this._checks = { ...this._checks, [serverId]: state };
-	}
-
 	async runForServers(
 		servers: {
 			id: string;
@@ -249,6 +245,10 @@ export class MCPHealthCheckManager {
 				status: HealthCheckStatus.ERROR
 			});
 		}
+	}
+
+	private setState(serverId: string, state: HealthCheckState): void {
+		this._checks = { ...this._checks, [serverId]: state };
 	}
 
 	/**

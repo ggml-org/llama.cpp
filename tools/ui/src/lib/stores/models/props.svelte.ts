@@ -35,6 +35,8 @@ export interface ModelPropsHost {
 }
 
 export class ModelPropsManager {
+	/** Version counter for the cache - bumped on writes so $derived consumers recompute. */
+	cacheVersion = $state(0);
 	/**
 	 * Model-specific props cache with TTL.
 	 * Key: modelId, Value: props data including modalities.
@@ -45,10 +47,34 @@ export class ModelPropsManager {
 	});
 	private fetching = new SvelteSet<string>();
 
-	/** Version counter for the cache - bumped on writes so $derived consumers recompute. */
-	cacheVersion = $state(0);
-
 	constructor(private host: ModelPropsHost) {}
+
+	/**
+	 * Whether the selected model's chat template supports thinking/reasoning.
+	 * Uses heuristic detection on the model's chat_template from /props.
+	 *
+	 * - MODEL mode: the global /props already describes the single loaded model,
+	 *   so its chat_template is used directly and no per-model cache is involved
+	 * - ROUTER mode: fetches /props?model=<id> for the selected model (cached),
+	 *   triggering an async fetch if not yet cached
+	 */
+	get supportsThinking(): boolean {
+		if (!serverStore.isRouterMode) {
+			return detectThinkingSupport(serverStore.props?.chat_template ?? '');
+		}
+
+		const modelId = this.host.selectedModelName;
+
+		if (!modelId) return false;
+
+		if (!this.cache.get(modelId)) {
+			this.fetchModelProps(modelId);
+		}
+
+		const props = this.getModelProps(modelId);
+
+		return detectThinkingSupport(props?.chat_template ?? '');
+	}
 
 	getModelModalities(modelId: string): ModelModalities | null {
 		if (!serverStore.isRouterMode && serverStore.props?.modalities) {
@@ -111,33 +137,6 @@ export class ModelPropsManager {
 
 	isModelPropsFetching(modelId: string): boolean {
 		return this.fetching.has(modelId);
-	}
-
-	/**
-	 * Whether the selected model's chat template supports thinking/reasoning.
-	 * Uses heuristic detection on the model's chat_template from /props.
-	 *
-	 * - MODEL mode: the global /props already describes the single loaded model,
-	 *   so its chat_template is used directly and no per-model cache is involved
-	 * - ROUTER mode: fetches /props?model=<id> for the selected model (cached),
-	 *   triggering an async fetch if not yet cached
-	 */
-	get supportsThinking(): boolean {
-		if (!serverStore.isRouterMode) {
-			return detectThinkingSupport(serverStore.props?.chat_template ?? '');
-		}
-
-		const modelId = this.host.selectedModelName;
-
-		if (!modelId) return false;
-
-		if (!this.cache.get(modelId)) {
-			this.fetchModelProps(modelId);
-		}
-
-		const props = this.getModelProps(modelId);
-
-		return detectThinkingSupport(props?.chat_template ?? '');
 	}
 
 	/**
@@ -247,16 +246,6 @@ export class ModelPropsManager {
 		this.cacheVersion++;
 	}
 
-	private buildModalities(
-		modalities: NonNullable<ApiLlamaCppServerProps['modalities']>
-	): ModelModalities {
-		return {
-			audio: modalities.audio ?? false,
-			video: modalities.video ?? false,
-			vision: modalities.vision ?? false
-		};
-	}
-
 	/** Map the router modalities, the only source available while a model is not loaded. */
 	buildArchitectureModalities(
 		architecture: ApiModelDataEntry['architecture']
@@ -269,6 +258,16 @@ export class ModelPropsManager {
 			audio: inputs.includes(FileTypeCategory.AUDIO),
 			video: inputs.includes(FileTypeCategory.VIDEO),
 			vision: inputs.includes(FileTypeCategory.IMAGE)
+		};
+	}
+
+	private buildModalities(
+		modalities: NonNullable<ApiLlamaCppServerProps['modalities']>
+	): ModelModalities {
+		return {
+			audio: modalities.audio ?? false,
+			video: modalities.video ?? false,
+			vision: modalities.vision ?? false
 		};
 	}
 }

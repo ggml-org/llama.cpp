@@ -70,6 +70,7 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 	isReasoning = $derived(
 		this.chatReasoningStates.get(conversationsStore.activeConversation?.id ?? '') ?? false
 	);
+	pendingEditMessageId = $state<string | null>(null);
 	// server-side stream sessions: discovery, attach/replay, resume retry, remote sync
 	private streams = new ChatStreamManager(this);
 	// message flows: edit, regenerate, continue, delete
@@ -78,12 +79,11 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 	private preEncodeAbortController: AbortController | null = null;
 	private isEditModeActive = $state(false);
 	private addFilesHandler: ((files: File[]) => void) | null = $state(null);
-	pendingEditMessageId = $state<string | null>(null);
-	private _pendingDraftMessage = $state<string>('');
-	private _pendingDraftFiles = $state<ChatUploadedFile[]>([]);
+	private pendingDraftMessage = $state<string>('');
+	private pendingDraftFiles = $state<ChatUploadedFile[]>([]);
 
 	/** Reactive: queued pending messages for non-agentic streaming */
-	private _pendingMessages = new SvelteMap<
+	private pendingMessages = new SvelteMap<
 		string,
 		{ content: string; extras?: DatabaseMessageExtra[] }
 	>();
@@ -148,11 +148,6 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 		this.clearChatStreaming(convId);
 		this.processing.setState(convId, null);
 	}
-	private getChatStreamingState(
-		convId: string
-	): { response: string; messageId: string } | undefined {
-		return this.chatStreamingStates.get(convId);
-	}
 	syncLoadingStateForChat(convId: string): void {
 		const s = this.chatStreamingStates.get(convId);
 
@@ -187,20 +182,6 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 		}
 
 		return c;
-	}
-
-	private abortRequest(convId?: string): void {
-		if (convId) {
-			const c = this.abortControllers.get(convId);
-
-			if (c) {
-				c.abort();
-				this.abortControllers.delete(convId);
-			}
-		} else {
-			for (const c of this.abortControllers.values()) c.abort();
-			this.abortControllers.clear();
-		}
 	}
 
 	/**
@@ -254,23 +235,23 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 	}
 
 	savePendingDraft(message: string, files: ChatUploadedFile[]): void {
-		this._pendingDraftMessage = message;
-		this._pendingDraftFiles = [...files];
+		this.pendingDraftMessage = message;
+		this.pendingDraftFiles = [...files];
 	}
 
 	consumePendingDraft(): { message: string; files: ChatUploadedFile[] } | null {
-		if (!this._pendingDraftMessage && this._pendingDraftFiles.length === 0) return null;
+		if (!this.pendingDraftMessage && this.pendingDraftFiles.length === 0) return null;
 
-		const d = { files: [...this._pendingDraftFiles], message: this._pendingDraftMessage };
+		const d = { files: [...this.pendingDraftFiles], message: this.pendingDraftMessage };
 
-		this._pendingDraftMessage = '';
-		this._pendingDraftFiles = [];
+		this.pendingDraftMessage = '';
+		this.pendingDraftFiles = [];
 
 		return d;
 	}
 
 	hasPendingDraft(): boolean {
-		return Boolean(this._pendingDraftMessage) || this._pendingDraftFiles.length > 0;
+		return Boolean(this.pendingDraftMessage) || this.pendingDraftFiles.length > 0;
 	}
 
 	/** Convs with any activity (local pipe or remote session), sidebar spinners. */
@@ -307,33 +288,33 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 	}
 
 	hasPendingMessage(convId: string): boolean {
-		return this._pendingMessages.has(convId);
+		return this.pendingMessages.has(convId);
 	}
 
 	pendingMessageContent(convId: string): string | null {
-		return this._pendingMessages.get(convId)?.content ?? null;
+		return this.pendingMessages.get(convId)?.content ?? null;
 	}
 
 	pendingMessageExtras(convId: string): DatabaseMessageExtra[] | undefined {
-		return this._pendingMessages.get(convId)?.extras;
+		return this.pendingMessages.get(convId)?.extras;
 	}
 
 	injectPendingMessage(convId: string, content: string, extras?: DatabaseMessageExtra[]): void {
-		this._pendingMessages.set(convId, { content, extras });
+		this.pendingMessages.set(convId, { content, extras });
 	}
 
 	clearPendingMessage(convId: string): void {
-		this._pendingMessages.delete(convId);
+		this.pendingMessages.delete(convId);
 	}
 
 	consumePendingMessage(
 		convId: string
 	): { content: string; extras?: DatabaseMessageExtra[] } | null {
-		const msg = this._pendingMessages.get(convId);
+		const msg = this.pendingMessages.get(convId);
 
 		if (!msg) return null;
 
-		this._pendingMessages.delete(convId);
+		this.pendingMessages.delete(convId);
 
 		return msg;
 	}
@@ -1139,128 +1120,6 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 		this.clearPendingMessage(convId);
 	}
 
-	private async generateTitleWithLLM(
-		userContent: string,
-		assistantContent: string,
-		convId: string
-	): Promise<void> {
-		const effectiveModel =
-			serverStore.isRouterMode && modelsStore.selectedModelName
-				? modelsStore.selectedModelName
-				: undefined;
-		const configValue = settingsStore.config;
-		const titlePromptTemplate =
-			typeof configValue.titleGenerationPrompt === 'string' &&
-			configValue.titleGenerationPrompt.trim()
-				? configValue.titleGenerationPrompt
-				: TITLE_GENERATION.DEFAULT_PROMPT;
-		const titlePrompt = titlePromptTemplate
-			.replace('{{USER}}', String(userContent || ''))
-			.replace('{{ASSISTANT}}', String(assistantContent || ''));
-		const titleMessage: ApiChatMessageData = {
-			content: titlePrompt,
-			role: MessageRole.USER
-		};
-		const titleResponse = await ChatService.generateTitle(titleMessage, effectiveModel);
-
-		if (!titleResponse) {
-			return;
-		}
-
-		let cleanTitle = titleResponse.trim();
-
-		cleanTitle = cleanTitle
-			.replace(TITLE_GENERATION.PREFIX_PATTERN, '')
-			.replace(TITLE_GENERATION.QUOTE_PATTERN, '')
-			.trim();
-
-		if (!cleanTitle || cleanTitle.length < TITLE_GENERATION.MIN_LENGTH) {
-			const firstLine = userContent.split('\n').find((l) => l.trim().length > 0);
-
-			cleanTitle = firstLine ? firstLine.trim() : TITLE_GENERATION.FALLBACK;
-		}
-
-		if (cleanTitle && cleanTitle.length >= TITLE_GENERATION.MIN_LENGTH) {
-			await conversationsStore.updateConversationName(convId, cleanTitle);
-		}
-	}
-
-	private async savePartialResponseIfNeeded(convId?: string): Promise<void> {
-		const conversationId = convId || conversationsStore.activeConversation?.id;
-
-		if (!conversationId) return;
-
-		const streamingState = this.getChatStreamingState(conversationId);
-
-		if (!streamingState) return;
-
-		const messages =
-			conversationId === conversationsStore.activeConversation?.id
-				? conversationsStore.activeMessages
-				: await conversationsStore.getConversationMessages(conversationId);
-
-		if (!messages.length) return;
-
-		const lastMessage = messages[messages.length - 1];
-
-		if (lastMessage?.role !== MessageRole.ASSISTANT) return;
-
-		const partialContent = streamingState.response;
-		const partialReasoning = lastMessage.reasoningContent || '';
-		// snapshot the streamed tool calls before clearing so we still know whether
-		// anything was captured when deciding to skip the DB write below
-		const hadPartialToolCalls = !!lastMessage.toolCalls?.trim();
-
-		// nothing to persist when content, reasoning, and streamed tool calls are all empty
-		// (e.g. stop before any token). otherwise drop the partial tool call and write whatever
-		// was streamed: incomplete arguments (truncated JSON, missing closing quote) would
-		// otherwise be re-sent to the server on the next turn and rejected.
-		if (!partialContent.trim() && !partialReasoning.trim() && !hadPartialToolCalls) return;
-
-		try {
-			const updateData: {
-				content?: string;
-				reasoningContent?: string;
-				toolCalls?: string;
-				timings?: ChatMessageTimings;
-			} = {
-				toolCalls: ''
-			};
-
-			if (partialContent.trim()) updateData.content = partialContent;
-
-			if (partialReasoning.trim()) updateData.reasoningContent = partialReasoning;
-
-			const lastKnownState = this.processing.getState(conversationId);
-
-			if (lastKnownState) {
-				updateData.timings = {
-					cache_n: lastKnownState.cacheTokens || 0,
-					predicted_ms:
-						lastKnownState.tokensPerSecond && lastKnownState.tokensDecoded
-							? (lastKnownState.tokensDecoded / lastKnownState.tokensPerSecond) * 1000
-							: undefined,
-					predicted_n: lastKnownState.tokensDecoded || 0,
-					prompt_ms: lastKnownState.promptMs,
-					prompt_n: lastKnownState.promptTokens || 0
-				};
-			}
-
-			await DatabaseService.updateMessage(lastMessage.id, updateData);
-			lastMessage.content = partialContent;
-			// mirror the drop into the in-memory message so the next request sent via
-			// sendMessage (queued pending, Send immediately, or manual follow-up) reads
-			// the cleared value, not whatever the streaming widget had been showing
-			lastMessage.toolCalls = '';
-
-			if (updateData.timings) lastMessage.timings = updateData.timings;
-		} catch (error) {
-			lastMessage.content = partialContent;
-			lastMessage.toolCalls = '';
-			console.error('Failed to save partial response:', error);
-		}
-	}
-
 	/**
 	 * Message flows (edit / regenerate / continue / delete) live in
 	 * ChatMessageFlows; these delegate so consumers keep a single entry point.
@@ -1408,6 +1267,147 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 		if (this.preEncodeAbortController) {
 			this.preEncodeAbortController.abort();
 			this.preEncodeAbortController = null;
+		}
+	}
+	private getChatStreamingState(
+		convId: string
+	): { response: string; messageId: string } | undefined {
+		return this.chatStreamingStates.get(convId);
+	}
+
+	private abortRequest(convId?: string): void {
+		if (convId) {
+			const c = this.abortControllers.get(convId);
+
+			if (c) {
+				c.abort();
+				this.abortControllers.delete(convId);
+			}
+		} else {
+			for (const c of this.abortControllers.values()) c.abort();
+			this.abortControllers.clear();
+		}
+	}
+
+	private async generateTitleWithLLM(
+		userContent: string,
+		assistantContent: string,
+		convId: string
+	): Promise<void> {
+		const effectiveModel =
+			serverStore.isRouterMode && modelsStore.selectedModelName
+				? modelsStore.selectedModelName
+				: undefined;
+		const configValue = settingsStore.config;
+		const titlePromptTemplate =
+			typeof configValue.titleGenerationPrompt === 'string' &&
+			configValue.titleGenerationPrompt.trim()
+				? configValue.titleGenerationPrompt
+				: TITLE_GENERATION.DEFAULT_PROMPT;
+		const titlePrompt = titlePromptTemplate
+			.replace('{{USER}}', String(userContent || ''))
+			.replace('{{ASSISTANT}}', String(assistantContent || ''));
+		const titleMessage: ApiChatMessageData = {
+			content: titlePrompt,
+			role: MessageRole.USER
+		};
+		const titleResponse = await ChatService.generateTitle(titleMessage, effectiveModel);
+
+		if (!titleResponse) {
+			return;
+		}
+
+		let cleanTitle = titleResponse.trim();
+
+		cleanTitle = cleanTitle
+			.replace(TITLE_GENERATION.PREFIX_PATTERN, '')
+			.replace(TITLE_GENERATION.QUOTE_PATTERN, '')
+			.trim();
+
+		if (!cleanTitle || cleanTitle.length < TITLE_GENERATION.MIN_LENGTH) {
+			const firstLine = userContent.split('\n').find((l) => l.trim().length > 0);
+
+			cleanTitle = firstLine ? firstLine.trim() : TITLE_GENERATION.FALLBACK;
+		}
+
+		if (cleanTitle && cleanTitle.length >= TITLE_GENERATION.MIN_LENGTH) {
+			await conversationsStore.updateConversationName(convId, cleanTitle);
+		}
+	}
+
+	private async savePartialResponseIfNeeded(convId?: string): Promise<void> {
+		const conversationId = convId || conversationsStore.activeConversation?.id;
+
+		if (!conversationId) return;
+
+		const streamingState = this.getChatStreamingState(conversationId);
+
+		if (!streamingState) return;
+
+		const messages =
+			conversationId === conversationsStore.activeConversation?.id
+				? conversationsStore.activeMessages
+				: await conversationsStore.getConversationMessages(conversationId);
+
+		if (!messages.length) return;
+
+		const lastMessage = messages[messages.length - 1];
+
+		if (lastMessage?.role !== MessageRole.ASSISTANT) return;
+
+		const partialContent = streamingState.response;
+		const partialReasoning = lastMessage.reasoningContent || '';
+		// snapshot the streamed tool calls before clearing so we still know whether
+		// anything was captured when deciding to skip the DB write below
+		const hadPartialToolCalls = !!lastMessage.toolCalls?.trim();
+
+		// nothing to persist when content, reasoning, and streamed tool calls are all empty
+		// (e.g. stop before any token). otherwise drop the partial tool call and write whatever
+		// was streamed: incomplete arguments (truncated JSON, missing closing quote) would
+		// otherwise be re-sent to the server on the next turn and rejected.
+		if (!partialContent.trim() && !partialReasoning.trim() && !hadPartialToolCalls) return;
+
+		try {
+			const updateData: {
+				content?: string;
+				reasoningContent?: string;
+				toolCalls?: string;
+				timings?: ChatMessageTimings;
+			} = {
+				toolCalls: ''
+			};
+
+			if (partialContent.trim()) updateData.content = partialContent;
+
+			if (partialReasoning.trim()) updateData.reasoningContent = partialReasoning;
+
+			const lastKnownState = this.processing.getState(conversationId);
+
+			if (lastKnownState) {
+				updateData.timings = {
+					cache_n: lastKnownState.cacheTokens || 0,
+					predicted_ms:
+						lastKnownState.tokensPerSecond && lastKnownState.tokensDecoded
+							? (lastKnownState.tokensDecoded / lastKnownState.tokensPerSecond) * 1000
+							: undefined,
+					predicted_n: lastKnownState.tokensDecoded || 0,
+					prompt_ms: lastKnownState.promptMs,
+					prompt_n: lastKnownState.promptTokens || 0
+				};
+			}
+
+			await DatabaseService.updateMessage(lastMessage.id, updateData);
+			lastMessage.content = partialContent;
+			// mirror the drop into the in-memory message so the next request sent via
+			// sendMessage (queued pending, Send immediately, or manual follow-up) reads
+			// the cleared value, not whatever the streaming widget had been showing
+			lastMessage.toolCalls = '';
+
+			if (updateData.timings) lastMessage.timings = updateData.timings;
+		} catch (error) {
+			lastMessage.content = partialContent;
+			lastMessage.toolCalls = '';
+			console.error('Failed to save partial response:', error);
 		}
 	}
 

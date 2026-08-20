@@ -5,6 +5,10 @@ import { SvelteSet } from 'svelte/reactivity';
 class PermissionsStore {
 	private _tools = $state(new SvelteSet<string>());
 
+	get tools(): ReadonlySet<string> {
+		return this._tools;
+	}
+
 	/**
 	 * Load persisted permissions. Called by initStores() after migrations
 	 * have run.
@@ -29,30 +33,26 @@ class PermissionsStore {
 		}
 	}
 
-	get tools(): ReadonlySet<string> {
-		return this._tools;
-	}
-
 	hasTool(key: string): boolean {
 		return this._tools.has(key);
 	}
 
 	allowTool(key: string): void {
 		this._tools.add(key);
-		this._persist();
+		this.persist();
 	}
 
 	allowTools(keys: string[]): void {
 		for (const key of keys) this._tools.add(key);
-		this._persist();
+		this.persist();
 	}
 
 	revokeTool(key: string): void {
 		this._tools.delete(key);
-		this._persist();
+		this.persist();
 	}
 
-	private _persist(): void {
+	private persist(): void {
 		try {
 			localStorage.setItem(ALWAYS_ALLOWED_TOOLS_LOCALSTORAGE_KEY, JSON.stringify([...this._tools]));
 		} catch (err) {

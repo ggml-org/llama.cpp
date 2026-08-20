@@ -70,26 +70,6 @@ export class ConversationPreferences {
 	}
 
 	/**
-	 *
-	 *
-	 * MCP Server Overrides
-	 *
-	 *
-	 */
-
-	/**
-	 * Resolve the default enabled value for a server: its own `enabled`
-	 * flag in `mcpServers`, so the global on/off state lives in one place.
-	 */
-	#getDefaultOverride(serverId: string): McpServerOverride | undefined {
-		const server = mcpStore.getServers().find((s) => s.id === serverId);
-
-		if (!server) return undefined;
-
-		return { enabled: server.enabled, serverId };
-	}
-
-	/**
 	 * Gets the effective MCP server override for a specific server.
 	 * A per-conversation override wins when present; a server without one
 	 * resolves to its `mcpServers[i].enabled` default.
@@ -101,7 +81,7 @@ export class ConversationPreferences {
 
 		if (override) return override;
 
-		return this.#getDefaultOverride(serverId);
+		return this.getDefaultOverride(serverId);
 	}
 
 	/**
@@ -274,5 +254,25 @@ export class ConversationPreferences {
 		});
 
 		this.pendingCwd = null;
+	}
+
+	/**
+	 *
+	 *
+	 * MCP Server Overrides
+	 *
+	 *
+	 */
+
+	/**
+	 * Resolve the default enabled value for a server: its own `enabled`
+	 * flag in `mcpServers`, so the global on/off state lives in one place.
+	 */
+	private getDefaultOverride(serverId: string): McpServerOverride | undefined {
+		const server = mcpStore.getServers().find((s) => s.id === serverId);
+
+		if (!server) return undefined;
+
+		return { enabled: server.enabled, serverId };
 	}
 }

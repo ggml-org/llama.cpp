@@ -152,7 +152,7 @@ function toAgenticMessages(messages: ApiChatMessageData[]): AgenticMessage[] {
 }
 
 class AgenticStore {
-	private _sessions = new SvelteMap<string, AgenticSession>();
+	private sessions = new SvelteMap<string, AgenticSession>();
 	// permission, continue and steering gates the loop waits on between turns
 	private gates = new AgenticGates();
 
@@ -161,7 +161,7 @@ class AgenticStore {
 		// otherwise every conversation that ever ran a flow leaks a session here
 		conversationsStore.onConversationsDeleted((convIds) => {
 			for (const convId of convIds) {
-				this._sessions.delete(convId);
+				this.sessions.delete(convId);
 			}
 		});
 	}
@@ -169,8 +169,9 @@ class AgenticStore {
 	get isReady(): boolean {
 		return true;
 	}
+
 	get isAnyRunning(): boolean {
-		for (const session of this._sessions.values()) {
+		for (const session of this.sessions.values()) {
 			if (session.isRunning) return true;
 		}
 
@@ -178,30 +179,24 @@ class AgenticStore {
 	}
 
 	getSession(conversationId: string): AgenticSession {
-		let session = this._sessions.get(conversationId);
+		let session = this.sessions.get(conversationId);
 
 		if (!session) {
 			session = createDefaultSession();
-			this._sessions.set(conversationId, session);
+			this.sessions.set(conversationId, session);
 		}
 
 		return session;
 	}
 
-	private updateSession(conversationId: string, update: Partial<AgenticSession>): void {
-		const session = this.getSession(conversationId);
-
-		this._sessions.set(conversationId, { ...session, ...update });
-	}
-
 	clearSession(conversationId: string): void {
-		this._sessions.delete(conversationId);
+		this.sessions.delete(conversationId);
 	}
 
 	getActiveSessions(): Array<{ conversationId: string; session: AgenticSession }> {
 		const active: Array<{ conversationId: string; session: AgenticSession }> = [];
 
-		for (const [conversationId, session] of this._sessions.entries()) {
+		for (const [conversationId, session] of this.sessions.entries()) {
 			if (session.isRunning) active.push({ conversationId, session });
 		}
 
@@ -209,37 +204,37 @@ class AgenticStore {
 	}
 
 	isRunning(conversationId: string): boolean {
-		return this._sessions.get(conversationId)?.isRunning ?? false;
+		return this.sessions.get(conversationId)?.isRunning ?? false;
 	}
 
 	// read-only: safe to call from derivations, unlike getSession
 	getLiveLlmTotals(conversationId: string): AgenticSession['liveLlm'] {
-		return this._sessions.get(conversationId)?.liveLlm ?? null;
+		return this.sessions.get(conversationId)?.liveLlm ?? null;
 	}
 
 	// read-only: safe to call from derivations, unlike getSession
 	getFlowRootMessageId(conversationId: string): string | null {
-		return this._sessions.get(conversationId)?.flowRootMessageId ?? null;
+		return this.sessions.get(conversationId)?.flowRootMessageId ?? null;
 	}
 
 	currentTurn(conversationId: string): number {
-		return this._sessions.get(conversationId)?.currentTurn ?? 0;
+		return this.sessions.get(conversationId)?.currentTurn ?? 0;
 	}
 
 	totalToolCalls(conversationId: string): number {
-		return this._sessions.get(conversationId)?.totalToolCalls ?? 0;
+		return this.sessions.get(conversationId)?.totalToolCalls ?? 0;
 	}
 
 	lastError(conversationId: string): Error | null {
-		return this._sessions.get(conversationId)?.lastError ?? null;
+		return this.sessions.get(conversationId)?.lastError ?? null;
 	}
 
 	streamingToolCall(conversationId: string): { name: string; arguments: string } | null {
-		return this._sessions.get(conversationId)?.streamingToolCall ?? null;
+		return this.sessions.get(conversationId)?.streamingToolCall ?? null;
 	}
 
 	executingToolCallId(conversationId: string): string | null {
-		return this._sessions.get(conversationId)?.executingToolCallId ?? null;
+		return this.sessions.get(conversationId)?.executingToolCallId ?? null;
 	}
 
 	pendingPermissionRequest(
@@ -315,16 +310,6 @@ class AgenticStore {
 			enabled: hasTools && DEFAULT_AGENTIC_CONFIG.enabled,
 			maxTurns
 		};
-	}
-
-	private parseToolArguments(args: string | Record<string, unknown>): Record<string, unknown> {
-		if (typeof args === 'object') return args;
-
-		const trimmed = args.trim();
-
-		if (trimmed === '') return {};
-
-		return JSON.parse(trimmed) as Record<string, unknown>;
 	}
 
 	async runAgenticFlow(params: AgenticFlowParams): Promise<AgenticFlowResult> {
@@ -416,6 +401,22 @@ class AgenticStore {
 					);
 			}
 		}
+	}
+
+	private updateSession(conversationId: string, update: Partial<AgenticSession>): void {
+		const session = this.getSession(conversationId);
+
+		this.sessions.set(conversationId, { ...session, ...update });
+	}
+
+	private parseToolArguments(args: string | Record<string, unknown>): Record<string, unknown> {
+		if (typeof args === 'object') return args;
+
+		const trimmed = args.trim();
+
+		if (trimmed === '') return {};
+
+		return JSON.parse(trimmed) as Record<string, unknown>;
 	}
 
 	private async executeAgenticLoop(params: {

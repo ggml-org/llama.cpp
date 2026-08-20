@@ -62,10 +62,6 @@ class ConversationsStore implements ConversationsPreferencesHost {
 	/** Per-chat options (MCP overrides, reasoning effort, cwd), composed here. */
 	private _preferences = new ConversationPreferences(this);
 
-	get preferences() {
-		return this._preferences;
-	}
-
 	/** In-flight init run; shared by concurrent callers, reset on failure to allow retry */
 	private initPromise: Promise<void> | null = null;
 
@@ -83,6 +79,10 @@ class ConversationsStore implements ConversationsPreferencesHost {
 	 */
 	private lastMessageIndex: { id: string; index: number } | null = null;
 
+	get preferences() {
+		return this._preferences;
+	}
+
 	/**
 	 *
 	 *
@@ -96,7 +96,7 @@ class ConversationsStore implements ConversationsPreferencesHost {
 	 * Safe to call multiple times: concurrent callers share a single run,
 	 * and a failed run can be retried by calling again.
 	 */
-	init(): Promise<void> {
+	initialize(): Promise<void> {
 		if (!browser) return Promise.resolve();
 
 		if (this.initPromise) return this.initPromise;
@@ -304,14 +304,6 @@ class ConversationsStore implements ConversationsPreferencesHost {
 		this.conversationDeletionListeners.add(listener);
 
 		return () => this.conversationDeletionListeners.delete(listener);
-	}
-
-	private notifyConversationsDeleted(convIds: string[]): void {
-		if (convIds.length === 0) return;
-
-		for (const listener of this.conversationDeletionListeners) {
-			listener(convIds);
-		}
 	}
 
 	/**
@@ -792,6 +784,14 @@ class ConversationsStore implements ConversationsPreferencesHost {
 		await this.loadConversations();
 
 		return result;
+	}
+
+	private notifyConversationsDeleted(convIds: string[]): void {
+		if (convIds.length === 0) return;
+
+		for (const listener of this.conversationDeletionListeners) {
+			listener(convIds);
+		}
 	}
 }
 

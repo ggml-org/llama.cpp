@@ -33,7 +33,7 @@ export function initStores(): Promise<void> {
 		permissionsStore.initialize();
 		toolsStore.initialize();
 		void versionStore.initialize();
-		void conversationsStore.init();
+		void conversationsStore.initialize();
 	})();
 
 	return startup;
