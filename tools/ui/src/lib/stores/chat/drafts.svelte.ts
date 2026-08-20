@@ -1,3 +1,11 @@
+/**
+ * DraftMessagesStore - Per-conversation input drafts
+ *
+ * Keeps in-memory drafts (message text + files) keyed by conversation id,
+ * plus a dedicated key for the new-chat screen, so the input box restores
+ * its content when switching conversations.
+ */
+
 import { NEW_CHAT_DRAFT_KEY } from '$lib/constants';
 
 interface DraftMessage {

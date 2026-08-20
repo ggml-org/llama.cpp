@@ -167,14 +167,6 @@ export class ConversationPreferences {
 	}
 
 	/**
-	 *
-	 *
-	 * Reasoning Effort
-	 *
-	 *
-	 */
-
-	/**
 	 * Gets the effective reasoning effort for the active conversation.
 	 * Returns the conversation override if set, otherwise the global default.
 	 * DEFAULT means no override is sent and the server decides.
@@ -218,14 +210,6 @@ export class ConversationPreferences {
 	}
 
 	/**
-	 *
-	 *
-	 * Working Directory
-	 *
-	 *
-	 */
-
-	/**
 	 * Sets the working directory for the active conversation. Pass `null` or
 	 * an empty string to clear it, which restores the picker's empty state.
 	 *
@@ -255,14 +239,6 @@ export class ConversationPreferences {
 
 		this.pendingCwd = null;
 	}
-
-	/**
-	 *
-	 *
-	 * MCP Server Overrides
-	 *
-	 *
-	 */
 
 	/**
 	 * Resolve the default enabled value for a server: its own `enabled`

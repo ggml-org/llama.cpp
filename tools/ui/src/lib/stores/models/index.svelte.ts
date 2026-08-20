@@ -1,3 +1,12 @@
+/**
+ * modelsStore - Model management for MODEL and ROUTER modes
+ *
+ * Owns model lists, selection, favorites and load/unload state. Composes the
+ * per-model props cache (modalities, thinking detection) as
+ * {@link ModelsStore.props} and the /models/sse status feed as
+ * {@link ModelsStore.status}; tracks which conversations use which models.
+ */
+
 import { FAVORITE_MODELS_LOCALSTORAGE_KEY } from '$lib/constants';
 import { ServerModelStatus } from '$lib/enums';
 import { ModelsService } from '$lib/services/models.service';
@@ -10,25 +19,7 @@ import { getConversationModel } from '$lib/utils/conversation-utils';
 import { SvelteSet } from 'svelte/reactivity';
 import { toast } from 'svelte-sonner';
 
-/**
- * modelsStore - Reactive store for model management in both MODEL and ROUTER modes.
- *
- * **Architecture & Relationships:**
- * - **ModelsService**: Stateless service for model API communication
- * - **modelsStore** (this class): Reactive store for model state
- * - **ModelPropsManager**: Props cache, modalities, thinking detection - composed as {@link ModelsStore.props}
- * - **ModelStatusManager**: Load/unload + /models/sse status feed - composed as {@link ModelsStore.status}
- * - **conversationsStore**: Tracks which conversations use which models
- */
 class ModelsStore implements ModelPropsHost, ModelStatusHost {
-	/**
-	 *
-	 *
-	 * State
-	 *
-	 *
-	 */
-
 	models = $state<ModelOption[]>([]);
 	routerModels = $state<ApiModelDataEntry[]>([]);
 	loading = $state(false);
@@ -56,14 +47,6 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 	get status() {
 		return this._status;
 	}
-
-	/**
-	 *
-	 *
-	 * Computed Getters
-	 *
-	 *
-	 */
 
 	get selectedModel(): ModelOption | null {
 		if (!this.selectedModelId) return null;
@@ -131,14 +114,6 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 		return this.props.getModelContextSize(this.selectedModelName);
 	}
 
-	/**
-	 *
-	 *
-	 * Status Queries
-	 *
-	 *
-	 */
-
 	isModelLoaded(modelId: string): boolean {
 		const model = this.routerModels.find((m) => m.id === modelId);
 
@@ -153,14 +128,6 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 
 		return model?.status.value ?? null;
 	}
-
-	/**
-	 *
-	 *
-	 * Data Fetching
-	 *
-	 *
-	 */
 
 	/**
 	 * Fetch list of models from server and detect server role.
@@ -303,14 +270,6 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 		await this.selectModelById(availableModels[0].id);
 	}
 
-	/**
-	 *
-	 *
-	 * Model Selection
-	 *
-	 *
-	 */
-
 	async selectModelById(modelId: string): Promise<void> {
 		if (!modelId || this.updating) return;
 
@@ -365,14 +324,6 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 		return this.models.some((model) => model.model === modelName);
 	}
 
-	/**
-	 *
-	 *
-	 * Favorites
-	 *
-	 *
-	 */
-
 	isFavorite(modelId: string): boolean {
 		return this.favoriteModelIds.has(modelId);
 	}
@@ -394,14 +345,6 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 			toast.error('Failed to save favorite models to local storage');
 		}
 	}
-
-	/**
-	 *
-	 *
-	 * Utilities
-	 *
-	 *
-	 */
 
 	toDisplayName(id: string): string {
 		const segments = id.split(/\\|\//);

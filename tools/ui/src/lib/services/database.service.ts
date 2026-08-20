@@ -1,3 +1,11 @@
+/**
+ * DatabaseService - IndexedDB persistence for conversations and messages
+ *
+ * Thin Dexie layer over the conversations/messages tables: CRUD, tree
+ * navigation (descendants, reparenting) and cascading deletes. No reactive
+ * state; consumed by conversationsStore and the chat flows.
+ */
+
 import { IDXDB_STORES, IDXDB_TABLES, STORAGE_APP_NAME } from '$lib/constants';
 import { MessageRole } from '$lib/enums';
 import type { McpServerOverride } from '$lib/types/database';
@@ -19,14 +27,6 @@ class LlamaUiDatabase extends Dexie {
 const db = new LlamaUiDatabase();
 
 export class DatabaseService {
-	/**
-	 *
-	 *
-	 * Conversations
-	 *
-	 *
-	 */
-
 	/**
 	 * Creates a new conversation.
 	 *
@@ -50,14 +50,6 @@ export class DatabaseService {
 
 		return conversation;
 	}
-
-	/**
-	 *
-	 *
-	 * Messages
-	 *
-	 *
-	 */
 
 	/**
 	 * Creates a new message branch by adding a message and updating parent/child relationships.
@@ -379,7 +371,6 @@ export class DatabaseService {
 
 			await this.removeChildFromParent(messageId);
 
-			// Delete the message
 			await db[IDXDB_TABLES.messages].delete(messageId);
 		});
 	}
@@ -402,7 +393,6 @@ export class DatabaseService {
 				.where('convId')
 				.equals(conversationId)
 				.toArray();
-			// Find all descendant messages
 			const descendants = findDescendantMessages(allMessages, messageId);
 			const allToDelete = [messageId, ...descendants];
 
@@ -503,14 +493,6 @@ export class DatabaseService {
 	}
 
 	/**
-	 *
-	 *
-	 * Navigation
-	 *
-	 *
-	 */
-
-	/**
 	 * Toggles the pinned status of a conversation.
 	 *
 	 * @param id - Conversation ID
@@ -597,14 +579,6 @@ export class DatabaseService {
 	}
 
 	/**
-	 *
-	 *
-	 * Import
-	 *
-	 *
-	 */
-
-	/**
 	 * Imports multiple conversations and their messages.
 	 * Skips conversations that already exist.
 	 *
@@ -643,14 +617,6 @@ export class DatabaseService {
 			}
 		);
 	}
-
-	/**
-	 *
-	 *
-	 * Forking
-	 *
-	 *
-	 */
 
 	/**
 	 * Forks a conversation at a specific message, creating a new conversation

@@ -1,25 +1,12 @@
 /**
- * mcpStore - Reactive State Store for MCP Operations
+ * mcpStore - MCP host: server connections and tool operations
  *
- * Implements the "Host" role in MCP architecture, coordinating multiple server
- * connections and providing a unified interface for tool operations.
- *
- * **Architecture & Relationships:**
- * - **MCPService**: Stateless protocol layer (transport, connect, callTool)
- * - **mcpStore** (this): Reactive state + business logic
- * - **MCPHealthCheckManager**: Health checks, owned helper exposed via delegates
- *
- * **Key Responsibilities:**
- * - Lifecycle management (initialize, shutdown)
- * - Multi-server coordination
- * - Tool name conflict detection and resolution
- * - Automatic tool-to-server routing
- *
- * MCP connection state and raw `Tool[]` per server are owned here; the
- * OpenAI-compatible wire format for those tools is built in `toolsStore`
- * (see {@link toolsStore.mcpEntries} / {@link toolsStore.getEnabledToolsForLLM}).
- *
- * @see MCPService in services/mcp.service.ts for protocol operations
+ * Implements the MCP "Host" role, coordinating multiple server connections
+ * and exposing a unified tool interface: lifecycle, name-conflict detection
+ * and automatic tool-to-server routing. Owns connection state and raw
+ * `Tool[]` per server; the OpenAI-compatible wire format is built in
+ * toolsStore. Composes the health-check manager; uses MCPService for the
+ * protocol layer.
  */
 
 import type { ListChangedHandlers } from '@modelcontextprotocol/sdk/types.js';
@@ -436,7 +423,6 @@ class MCPStore implements McpHealthHost {
 					);
 					const connection = await Promise.race([connectPromise, timeoutPromise]);
 
-					// Replace old connection with new one
 					this.connections.set(serverName, connection);
 
 					// Rebuild tool index for this server
@@ -768,13 +754,10 @@ class MCPStore implements McpHealthHost {
 	 * This avoids the need to reconnect when the server is needed for agentic flows.
 	 */
 	promoteHealthCheckToConnection(serverId: string, connection: MCPConnection): void {
-		// Register tools from the connection
 		this.indexServerTools(serverId, connection.tools);
 
-		// Add to active connections
 		this.connections.set(serverId, connection);
 
-		// Update state
 		this.updateState({
 			connectedServers: Array.from(this.connections.keys()),
 			toolCount: this.toolsIndex.size
@@ -858,14 +841,6 @@ class MCPStore implements McpHealthHost {
 	}
 
 	/**
-	 *
-	 *
-	 * Resources Operations
-	 *
-	 *
-	 */
-
-	/**
 	 * Check if any enabled server with successful health check supports resources.
 	 * Uses health check state since servers may not have active connections until
 	 * the user actually sends a message or uses prompts.
@@ -921,7 +896,6 @@ class MCPStore implements McpHealthHost {
 		);
 		const servers: string[] = [];
 
-		// Check active connections
 		for (const [name, connection] of this.connections) {
 			if (!enabledServerIds.has(name)) continue;
 
@@ -1030,7 +1004,6 @@ class MCPStore implements McpHealthHost {
 	 * Caches the result in mcpResourceStore.
 	 */
 	async readResource(uri: string): Promise<MCPResourceContent[] | null> {
-		// Check cache first
 		const cached = mcpResourceStore.getCachedContent(uri);
 
 		if (cached) {
@@ -1151,15 +1124,12 @@ class MCPStore implements McpHealthHost {
 			return null;
 		}
 
-		// Check if already attached
 		if (mcpResourceStore.isAttached(uri)) {
 			return null;
 		}
 
-		// Add attachment (initially loading)
 		const attachment = mcpResourceStore.addAttachment(resourceInfo);
 
-		// Fetch content
 		try {
 			const content = await this.readResource(uri);
 
@@ -1356,7 +1326,6 @@ class MCPStore implements McpHealthHost {
 		const capabilities = mcpConfig.capabilities ?? DEFAULT_MCP_CONFIG.capabilities;
 		const results = await Promise.allSettled(
 			serverEntries.map(async ([name, serverConfig]) => {
-				// Store config for reconnection
 				this.serverConfigs.set(name, serverConfig);
 
 				const listChangedHandlers = this.createListChangedHandlers(name);
@@ -1366,7 +1335,6 @@ class MCPStore implements McpHealthHost {
 					clientInfo,
 					capabilities,
 					(phase) => {
-						// Handle WebSocket disconnection
 						if (phase === MCPConnectionPhase.DISCONNECTED) {
 							console.log(`[MCPStore][${name}] Connection lost, starting auto-reconnect`);
 							this.autoReconnect(name);
@@ -1530,7 +1498,6 @@ class MCPStore implements McpHealthHost {
 			listChangedHandlers
 		);
 
-		// Replace connection and rebuild tool index for this server
 		this.connections.set(serverName, connection);
 		this.indexServerTools(serverName, connection.tools);
 

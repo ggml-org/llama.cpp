@@ -1,23 +1,13 @@
 /**
- * agenticStore - Reactive State Store for Agentic Loop Orchestration
+ * AgenticStore - Multi-turn agentic loop orchestration
  *
- * Manages multi-turn agentic loop with MCP tools:
- * - LLM streaming with tool call detection
- * - Tool execution via mcpStore
- * - Session state management
- * - Turn limit enforcement
+ * Drives the agentic loop over MCP tools: streams each LLM turn, detects
+ * tool calls, executes them via mcpStore, and enforces the turn limit. Each
+ * turn produces one assistant message (with tool_calls) and one tool result
+ * message per executed call, persisted as separate DB rows.
  *
- * Each agentic turn produces separate DB messages:
- * - One assistant message per LLM turn (with tool_calls if any)
- * - One tool result message per tool call execution
- *
- * **Architecture & Relationships:**
- * - **ChatService**: Stateless API layer (sendMessage, streaming)
- * - **mcpStore**: MCP connection management and tool execution
- * - **agenticStore** (this): Reactive state + business logic
- *
- * @see ChatService in services/chat.service.ts for API operations
- * @see mcpStore in stores/mcp/index.svelte.ts for MCP operations
+ * Uses ChatService for streaming and mcpStore for tool execution; waits on
+ * the permission/continue/steering gates owned by {@link AgenticGates}.
  */
 
 import { DEFAULT_AGENTIC_CONFIG, NEWLINE } from '$lib/constants';

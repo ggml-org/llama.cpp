@@ -1,3 +1,11 @@
+/**
+ * ChatService - Stateless chat completion and streaming API layer
+ *
+ * Wraps the /chat/completions and /stream endpoints: request building, SSE
+ * parsing, streaming callbacks, resume/probe logic and pre-encode KV-cache
+ * warming. No reactive state; consumed by chatStore and its managers.
+ */
+
 import { getAudioInputFormat } from '../utils/audio-format';
 import { capImageDataURLSize } from '../utils/cap-img-size';
 import {
@@ -54,14 +62,6 @@ function streamStorageKey(conversationId: string): string {
 
 export class ChatService {
 	/**
-	 *
-	 *
-	 * Title Generation
-	 *
-	 *
-	 */
-
-	/**
 	 * Sends a streaming chat completion request for generating a chat title.
 	 * Delegates to `sendMessage` for fetch, SSE parsing, and error handling.
 	 *
@@ -98,14 +98,6 @@ export class ChatService {
 
 		return titleResponse;
 	}
-
-	/**
-	 *
-	 *
-	 * Messaging
-	 *
-	 *
-	 */
 
 	/**
 	 * Sends a chat completion request to the llama-server.
@@ -491,19 +483,7 @@ export class ChatService {
 	}
 
 	/**
-	 * Sends a fire-and-forget request to pre-encode the conversation in the server's KV cache.
-	 * After a response completes, this re-submits the full conversation
-	 * using n_predict=0 and stream=false so the server processes the prompt without generating tokens.
-	 * This warms the cache for the next turn, making it faster.
-	 *
-	 * When excludeReasoningFromContext is true, reasoning content is stripped from the messages
-	 * to match what sendMessage would send on the next turn (avoiding cache misses).
-	 * When false, reasoning_content is preserved so the cached prompt matches the next request.
-	 *
-	 * @param messages - The full conversation including the latest assistant response
-	 * @param model - Optional model name (required in ROUTER mode)
-	 * @param excludeReasoning - Whether to strip reasoning content (should match excludeReasoningFromContext setting)
-	 * @param signal - Optional AbortSignal to cancel the pre-encode request
+	 * Cancels the server-side replay buffer for a conversation, freeing its slot.
 	 */
 	static async cancelServerStream(conversationId: string, model?: string | null): Promise<void> {
 		if (!conversationId) return;
@@ -739,11 +719,6 @@ export class ChatService {
 		return `${API_STREAM.BASE}?${query}${offset}`;
 	}
 
-	/**
-	 * Reconnect to an interrupted stream for this conversation. Returns the fetch Response so the
-	 * existing SSE parser drains it like a fresh stream. The server returns 200 on success, 404 if
-	 * no session exists for the conv_id, and 400 if the offset is below the dropped prefix.
-	 */
 	// probe the resume route status without consuming the stream: the SSE route has no HEAD,
 	// so issue the GET and abort it right after the status line. 0 on network error
 	static async probeResumeStatus(streamId: string): Promise<number> {
@@ -780,6 +755,11 @@ export class ChatService {
 		return await fetch(url, { headers: getAuthHeaders(), method: 'GET', signal });
 	}
 
+	/**
+	 * Fire-and-forget request to pre-encode the conversation in the server's KV cache.
+	 * Re-submits the full conversation with n_predict=0 so the server processes the prompt
+	 * without generating tokens, warming the cache for the next turn.
+	 */
 	static async preEncode(
 		messages: ApiChatMessageData[] | (DatabaseMessage & { extra?: DatabaseMessageExtra[] })[],
 		model?: string | null,
@@ -826,23 +806,7 @@ export class ChatService {
 	}
 
 	/**
-	 *
-	 *
-	 * Streaming
-	 *
-	 *
-	 */
-
-	/**
-	 * Handles streaming response from the chat completion API
-	 * @param response - The Response object from the fetch request
-	 * @param onChunk - Optional callback invoked for each content chunk received
-	 * @param onComplete - Optional callback invoked when the stream is complete with full response
-	 * @param onError - Optional callback invoked if an error occurs during streaming
-	 * @param onReasoningChunk - Optional callback invoked for each reasoning content chunk
-	 * @param conversationId - Optional conversation ID for per-conversation state tracking
-	 * @returns {Promise<void>} Promise that resolves when streaming is complete
-	 * @throws {Error} if the stream cannot be read or parsed
+	 * Handles streaming response from the chat completion API.
 	 */
 	static async handleStreamResponse(
 		response: Response,
@@ -1327,14 +1291,6 @@ export class ChatService {
 	}
 
 	/**
-	 *
-	 *
-	 * Conversion
-	 *
-	 *
-	 */
-
-	/**
 	 * Normalizes an array of messages (database or already-API-shaped) into
 	 * API chat message data, converting DB messages and dropping empty system
 	 * messages. Shared by sendMessage, preEncode and the agentic flow.
@@ -1370,13 +1326,6 @@ export class ChatService {
 	 * Converts a database message with attachments to API chat message format.
 	 * Processes various attachment types (images, text files, PDFs) and formats them
 	 * as content parts suitable for the chat completion API.
-	 *
-	 * @param message - Database message object with optional extra attachments
-	 * @param message.content - The text content of the message
-	 * @param message.role - The role of the message sender (user, assistant, system)
-	 * @param message.extra - Optional array of message attachments (images, files, etc.)
-	 * @returns {ApiChatMessageData} object formatted for the chat completion API
-	 * @static
 	 */
 	static async convertDbMessageToApiChatMessageData(
 		message: DatabaseMessage & { extra?: DatabaseMessageExtra[] }
@@ -1576,14 +1525,6 @@ export class ChatService {
 
 		return result;
 	}
-
-	/**
-	 *
-	 *
-	 * Utilities
-	 *
-	 *
-	 */
 
 	/**
 	 * Strips legacy inline reasoning content tags from message content.

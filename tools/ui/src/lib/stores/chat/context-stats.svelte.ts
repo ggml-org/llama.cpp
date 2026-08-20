@@ -1,5 +1,5 @@
 /**
- * contextStatsStore - Context window usage stats for the active conversation
+ * ContextStatsStore - Context window usage stats for the active conversation
  *
  * Combines token usage persisted in message timings metadata with
  * server-originating data: model context size from /props (modelsStore)

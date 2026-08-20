@@ -1,5 +1,5 @@
 /**
- * chatActivityStore - Conversation activity ledger
+ * ChatActivityStore - Conversation activity ledger
  *
  * Single owner of the "is this conversation doing something" state:
  * - `local`  - this browser is piping a stream (send, server-stream attach,

@@ -1,3 +1,11 @@
+/**
+ * permissionsStore - Allowed tool permissions
+ *
+ * Owns the set of tools the user has permanently allowed, persisted to
+ * localStorage. The agentic loop's permission gates consult it to run a
+ * tool without prompting.
+ */
+
 import { browser } from '$app/environment';
 import { ALWAYS_ALLOWED_TOOLS_LOCALSTORAGE_KEY } from '$lib/constants';
 import { SvelteSet } from 'svelte/reactivity';

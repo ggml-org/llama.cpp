@@ -1,3 +1,10 @@
+/**
+ * ToolsService - Stateless server tools API layer
+ *
+ * Fetches the server's /tools listing and streams tool execution results.
+ * No reactive state; consumed by toolsStore.
+ */
+
 import { base } from '$app/paths';
 import { API_TOOLS, HEADERS } from '$lib/constants';
 import { ToolResponseField } from '$lib/enums';

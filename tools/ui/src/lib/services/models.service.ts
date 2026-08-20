@@ -1,3 +1,11 @@
+/**
+ * ModelsService - Stateless model management API layer
+ *
+ * Wraps the /models endpoints (list, load, unload) and the /models/sse
+ * status feed in MODEL and ROUTER modes. No reactive state; consumed by
+ * modelsStore and its status manager.
+ */
+
 import { base } from '$app/paths';
 import { API_MODELS, MODEL_ID } from '$lib/constants';
 import { ServerModelStatus } from '$lib/enums';
@@ -12,14 +20,6 @@ import {
 import { getAuthHeaders } from '$lib/utils/api-headers';
 
 export class ModelsService {
-	/**
-	 *
-	 *
-	 * Listing
-	 *
-	 *
-	 */
-
 	/**
 	 * Fetch list of models from OpenAI-compatible endpoint.
 	 * Works in both MODEL and ROUTER modes.
@@ -81,14 +81,6 @@ export class ModelsService {
 	}
 
 	/**
-	 *
-	 *
-	 * Status
-	 *
-	 *
-	 */
-
-	/**
 	 * Check if a model is loaded based on its metadata.
 	 *
 	 * @param model - Model data entry from the API response
@@ -107,14 +99,6 @@ export class ModelsService {
 	static isModelLoading(model: ApiModelDataEntry): boolean {
 		return model.status.value === ServerModelStatus.LOADING;
 	}
-
-	/**
-	 *
-	 *
-	 * Status Feed
-	 *
-	 *
-	 */
 
 	private static readonly SSE_RECONNECT_MS = 1000;
 
@@ -185,14 +169,6 @@ export class ModelsService {
 			return null;
 		}
 	}
-
-	/**
-	 *
-	 *
-	 * Parsing
-	 *
-	 *
-	 */
 
 	/**
 	 * Parse a model ID string into its structured components.

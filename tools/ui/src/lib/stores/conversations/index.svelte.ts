@@ -1,23 +1,10 @@
 /**
- * conversationsStore - Reactive State Store for Conversations
+ * conversationsStore - Conversation lifecycle, persistence and navigation
  *
- * Manages conversation lifecycle, persistence, navigation, and MCP server overrides.
- *
- * **Architecture & Relationships:**
- * - **DatabaseService**: Stateless IndexedDB layer
- * - **conversationsStore** (this): Reactive state + business logic
- * - **chatStore**: Chat-specific state (streaming, loading)
- *
- * **Key Responsibilities:**
- * - Conversation CRUD (create, load, delete)
- * - Message management and tree navigation
- * - Import/Export functionality
- * - Title management with confirmation
- *
- * Per-chat options (MCP overrides, reasoning effort, cwd) live in
- * ConversationPreferences, composed as {@link ConversationsStore.preferences}.
- *
- * @see DatabaseService in services/database.ts for IndexedDB operations
+ * Owns conversation CRUD, message tree navigation, import/export and title
+ * management, persisted through DatabaseService. Per-chat options (MCP
+ * overrides, reasoning effort, cwd) live in ConversationPreferences,
+ * composed as {@link ConversationsStore.preferences}.
  */
 
 import { browser } from '$app/environment';
@@ -39,14 +26,6 @@ import { SvelteSet } from 'svelte/reactivity';
 import { toast } from 'svelte-sonner';
 
 class ConversationsStore implements ConversationsPreferencesHost {
-	/**
-	 *
-	 *
-	 * State
-	 *
-	 *
-	 */
-
 	/** List of all conversations */
 	conversations = $state<DatabaseConversation[]>([]);
 
@@ -84,14 +63,6 @@ class ConversationsStore implements ConversationsPreferencesHost {
 	}
 
 	/**
-	 *
-	 *
-	 * Lifecycle
-	 *
-	 *
-	 */
-
-	/**
 	 * Initialize the store by loading conversations from database.
 	 * Safe to call multiple times: concurrent callers share a single run,
 	 * and a failed run can be retried by calling again.
@@ -114,14 +85,6 @@ class ConversationsStore implements ConversationsPreferencesHost {
 
 		return this.initPromise;
 	}
-
-	/**
-	 *
-	 *
-	 * Message Array Operations
-	 *
-	 *
-	 */
 
 	/**
 	 * Adds a message to the active messages array
@@ -200,14 +163,6 @@ class ConversationsStore implements ConversationsPreferencesHost {
 
 		return undefined;
 	}
-
-	/**
-	 *
-	 *
-	 * Conversation CRUD
-	 *
-	 *
-	 */
 
 	/**
 	 * Loads all conversations from the database
@@ -511,14 +466,6 @@ class ConversationsStore implements ConversationsPreferencesHost {
 	}
 
 	/**
-	 *
-	 *
-	 * Message Management
-	 *
-	 *
-	 */
-
-	/**
 	 * Refreshes active messages based on currNode after branch navigation.
 	 */
 	async refreshActiveMessages(): Promise<void> {
@@ -548,14 +495,6 @@ class ConversationsStore implements ConversationsPreferencesHost {
 	async getConversationMessages(convId: string): Promise<DatabaseMessage[]> {
 		return await DatabaseService.getConversationMessages(convId);
 	}
-
-	/**
-	 *
-	 *
-	 * Title Management
-	 *
-	 *
-	 */
 
 	/**
 	 * Updates the name of a conversation.
@@ -666,14 +605,6 @@ class ConversationsStore implements ConversationsPreferencesHost {
 		await DatabaseService.updateCurrentNode(this.activeConversation.id, nodeId);
 		this.activeConversation = { ...this.activeConversation, currNode: nodeId };
 	}
-
-	/**
-	 *
-	 *
-	 * Branch Navigation
-	 *
-	 *
-	 */
 
 	/**
 	 * Navigates to a specific sibling branch by updating currNode and refreshing messages.

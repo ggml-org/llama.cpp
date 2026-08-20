@@ -1,3 +1,11 @@
+/**
+ * SandboxService - Runs untrusted code in a sandboxed worker
+ *
+ * Executes model-generated code inside a CSP-restricted, opaque-origin
+ * iframe worker with output and timeout limits. No reactive state; consumed
+ * by toolsStore for code-execution tools.
+ */
+
 import { buildSandboxHarness } from './sandbox-harness';
 import {
 	NEWLINE,

@@ -93,14 +93,6 @@ class MCPResourceStore {
 	}
 
 	/**
-	 *
-	 *
-	 * Server Resources Management
-	 *
-	 *
-	 */
-
-	/**
 	 * Set resources for a server (called after listResources)
 	 */
 	setServerResources(
@@ -220,14 +212,12 @@ class MCPResourceStore {
 	clearServerResources(serverName: string): void {
 		this._serverResources.delete(serverName);
 
-		// Also clear cached content for this server's resources
 		for (const [uri, cached] of this._cachedResources) {
 			if (cached.resource.serverName === serverName) {
 				this._cachedResources.delete(uri);
 			}
 		}
 
-		// Clear subscriptions for this server
 		for (const [uri, sub] of this._subscriptions) {
 			if (sub.serverName === serverName) {
 				this._subscriptions.delete(uri);
@@ -238,20 +228,11 @@ class MCPResourceStore {
 	}
 
 	/**
-	 *
-	 *
-	 * Resource Content Caching
-	 *
-	 *
-	 */
-
-	/**
 	 * Cache resource content after reading
 	 */
 	cacheResourceContent(resource: MCPResourceInfo, content: MCPResourceContent[]): void {
 		// Enforce cache size limit
 		if (this._cachedResources.size >= MCP_RESOURCE_CACHE.MAX_ENTRIES) {
-			// Remove oldest entry
 			const oldestKey = this._cachedResources.keys().next().value;
 
 			if (oldestKey) {
@@ -276,7 +257,6 @@ class MCPResourceStore {
 
 		if (!cached) return undefined;
 
-		// Check if cache is still valid
 		const age = Date.now() - cached.fetchedAt.getTime();
 
 		if (age > MCP_RESOURCE_CACHE.TTL_MS && !cached.subscribed) {
@@ -306,14 +286,6 @@ class MCPResourceStore {
 	}
 
 	/**
-	 *
-	 *
-	 * Subscriptions
-	 *
-	 *
-	 */
-
-	/**
 	 * Register a subscription for a resource
 	 */
 	addSubscription(uri: string, serverName: string): void {
@@ -323,7 +295,6 @@ class MCPResourceStore {
 			uri
 		});
 
-		// Update cached resource if exists
 		const cached = this._cachedResources.get(uri);
 
 		if (cached) {
@@ -339,7 +310,6 @@ class MCPResourceStore {
 	removeSubscription(uri: string): void {
 		this._subscriptions.delete(uri);
 
-		// Update cached resource if exists
 		const cached = this._cachedResources.get(uri);
 
 		if (cached) {
@@ -363,7 +333,6 @@ class MCPResourceStore {
 		// Invalidate cache so next read gets fresh content
 		this.invalidateCache(uri);
 
-		// Update subscription last update time
 		const sub = this._subscriptions.get(uri);
 
 		if (sub) {
@@ -377,13 +346,12 @@ class MCPResourceStore {
 	 * Handle resources list changed notification
 	 */
 	handleResourcesListChanged(serverName: string): void {
-		// Mark server resources as needing refresh
 		const existing = this._serverResources.get(serverName);
 
 		if (existing) {
 			this._serverResources.set(serverName, {
 				...existing,
-				lastFetched: undefined // Mark as stale
+				lastFetched: undefined
 			});
 		}
 
@@ -465,14 +433,6 @@ class MCPResourceStore {
 			(att) => att.resource.uri === uri || normalizeResourceUri(att.resource.uri) === normalizedUri
 		);
 	}
-
-	/**
-	 *
-	 *
-	 * Utility Methods
-	 *
-	 *
-	 */
 
 	/**
 	 * Set global loading state

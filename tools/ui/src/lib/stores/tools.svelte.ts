@@ -1,3 +1,12 @@
+/**
+ * toolsStore - Tool registry and enablement
+ *
+ * Owns the server tool listing (with working-directory resolution), built-in
+ * browser tools, MCP tools and per-tool enablement, exposed as a unified
+ * tool set for the LLM and the tools UI. Consumed by the agentic loop and
+ * the chat flows.
+ */
+
 import { browser } from '$app/environment';
 import {
 	buildBrowserInfoToolDefinition,

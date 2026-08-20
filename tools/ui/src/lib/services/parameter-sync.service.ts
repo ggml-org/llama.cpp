@@ -1,17 +1,17 @@
+/**
+ * ParameterSyncService - Syncs sampling parameters with the server
+ *
+ * Decides for each sampling parameter whether the user's setting is an
+ * override of the server default, and normalizes floating-point values.
+ * No reactive state; consumed by settingsStore.
+ */
+
 import { SETTINGS_KEYS, SYNCABLE_PARAMETERS } from '$lib/constants';
 import { ParameterSource, SyncableParameterType } from '$lib/enums';
 import type { ParameterInfo, ParameterRecord, ParameterValue } from '$lib/types';
 import { normalizeFloatingPoint } from '$lib/utils';
 
 export class ParameterSyncService {
-	/**
-	 *
-	 *
-	 * Extraction
-	 *
-	 *
-	 */
-
 	/**
 	 * Round floating-point numbers to avoid JavaScript precision issues.
 	 * E.g., 0.1 + 0.2 = 0.30000000000000004 → 0.3
@@ -60,14 +60,6 @@ export class ParameterSyncService {
 	}
 
 	/**
-	 *
-	 *
-	 * Merging
-	 *
-	 *
-	 */
-
-	/**
 	 * Merge server defaults with current user settings.
 	 * User overrides always take priority — only parameters not in `userOverrides`
 	 * set will be updated from server defaults.
@@ -93,14 +85,6 @@ export class ParameterSyncService {
 
 		return merged;
 	}
-
-	/**
-	 *
-	 *
-	 * Info
-	 *
-	 *
-	 */
 
 	/**
 	 * Get parameter information including source and values.
@@ -174,14 +158,6 @@ export class ParameterSyncService {
 				return false;
 		}
 	}
-
-	/**
-	 *
-	 *
-	 * Diff
-	 *
-	 *
-	 */
 
 	/**
 	 * Create a diff between current settings and server defaults.

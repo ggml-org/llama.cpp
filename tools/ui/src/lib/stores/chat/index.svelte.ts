@@ -1,16 +1,12 @@
 /**
- * chatStore - Reactive State Store for Chat Operations
+ * chatStore - Chat lifecycle, streaming and message operations
  *
- * Manages chat lifecycle, streaming, and message operations.
+ * Owns the active conversation's chat state: sending messages, streaming
+ * responses, editing/regeneration flows and per-conversation processing
+ * activity. Composes the stream manager, message flows, activity ledger and
+ * processing snapshot; persists through conversationsStore.
  *
- * **Architecture & Relationships:**
- * - **ChatService**: Stateless API layer (sendMessage, streaming)
- * - **chatStore** (this): Reactive state + business logic
- * - **chatProcessingStore**: Per-conversation processing state, composed as {@link ChatStore.processing}
- * - **chatActivityStore**: Local/remote conv activity (spinner sources), composed as {@link ChatStore.activity}
- * - **conversationsStore**: Conversation persistence and navigation
- *
- * @see ChatService in services/chat.service.ts for API operations
+ * Uses ChatService for the API layer and conversationsStore for persistence.
  */
 
 import { CWD_CLEARED_TEXT, SYSTEM_MESSAGE_PLACEHOLDER, TITLE_GENERATION } from '$lib/constants';

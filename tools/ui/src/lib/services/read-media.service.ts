@@ -1,3 +1,10 @@
+/**
+ * ReadMediaService - Reads local media files for the read_media tool
+ *
+ * Encodes image and audio files as base64 data URLs with the metadata the
+ * model needs. No reactive state; consumed by toolsStore.
+ */
+
 import { ToolsService } from './tools.service';
 import {
 	FILE_EXTENSION_SEPARATOR,

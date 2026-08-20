@@ -17,14 +17,6 @@ import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
 
 export class ConversationTransferService {
 	/**
-	 *
-	 *
-	 * JSONL Session Format
-	 *
-	 *
-	 */
-
-	/**
 	 * Serializes a session (a conversation with its messages) as JSONL.
 	 * The first line is the session header (a `SessionRecordType.SESSION` record
 	 * carrying the conversation properties); each subsequent line is a single message.
@@ -160,14 +152,6 @@ export class ConversationTransferService {
 			'Invalid file format: expected array of conversations or single conversation object'
 		);
 	}
-
-	/**
-	 *
-	 *
-	 * Downloads
-	 *
-	 *
-	 */
 
 	/**
 	 * Generates a sanitized filename for a conversation export

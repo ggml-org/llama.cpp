@@ -1,3 +1,11 @@
+/**
+ * MCPService - Stateless MCP protocol layer
+ *
+ * Implements the client side of the MCP spec over WebSocket, StreamableHTTP
+ * and SSE transports: connect, tool/prompt/resource operations and result
+ * formatting. No reactive state; consumed by mcpStore and its managers.
+ */
+
 import { Client } from '@modelcontextprotocol/sdk/client';
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import {
@@ -1057,14 +1065,6 @@ export class MCPService {
 	}
 
 	/**
-	 *
-	 *
-	 * Completions Operations
-	 *
-	 *
-	 */
-
-	/**
 	 * Request completion suggestions from a server.
 	 * Used for autocompleting prompt arguments or resource URI templates.
 	 *
@@ -1091,14 +1091,6 @@ export class MCPService {
 			return null;
 		}
 	}
-
-	/**
-	 *
-	 *
-	 * Resources Operations
-	 *
-	 *
-	 */
 
 	/**
 	 * List resources from a connection.

@@ -104,7 +104,6 @@ export class MCPHealthCheckManager {
 	 * and promoted to an active connection instead of being disconnected.
 	 */
 	async run(server: HealthCheckParams, promoteToActive = false): Promise<void> {
-		// Check if we already have an active connection for this server
 		const existingConnection = this.host.getExistingConnection(server.id);
 
 		if (existingConnection) {
@@ -177,7 +176,6 @@ export class MCPHealthCheckManager {
 				useProxy: server.useProxy
 			};
 
-			// Store config for reconnection
 			this.host.registerServerConfig(server.id, serverConfig);
 
 			const connection = await MCPService.connect(
@@ -194,7 +192,6 @@ export class MCPHealthCheckManager {
 						status: HealthCheckStatus.CONNECTING
 					});
 
-					// Handle WebSocket disconnection
 					if (phase === MCPConnectionPhase.DISCONNECTED && promoteToActive) {
 						console.log(
 							`[MCPStore][${server.id}] Connection lost during health check, starting auto-reconnect`
@@ -225,7 +222,6 @@ export class MCPHealthCheckManager {
 				transportType: connection.transportType
 			});
 
-			// Promote to active connection or disconnect
 			if (promoteToActive && server.enabled) {
 				this.host.promoteHealthCheckToConnection(server.id, connection);
 			} else {

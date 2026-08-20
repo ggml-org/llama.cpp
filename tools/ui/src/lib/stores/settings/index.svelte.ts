@@ -1,34 +1,10 @@
 /**
  * settingsStore - Application configuration and theme management
  *
- * This store manages all application settings including AI model parameters, UI preferences,
- * and theme configuration. It provides persistent storage through localStorage with reactive
- * state management using Svelte 5 runes.
- *
- * **Architecture & Relationships:**
- * - **settingsStore** (this class): Configuration state management
- *   - Manages AI model parameters (temperature, max tokens, etc.)
- *   - Handles theme switching and persistence
- *   - Provides localStorage synchronization
- *   - Offers reactive configuration access
- *
- * - **ChatService**: Reads model parameters for API requests
- * - **UI Components**: Subscribe to theme and configuration changes
- *
- * **Key Features:**
- * - **Model Parameters**: Temperature, max tokens, top-p, top-k, repeat penalty
- * - **Theme Management**: Auto, light, dark theme switching
- * - **Persistence**: Automatic localStorage synchronization
- * - **Reactive State**: Svelte 5 runes for automatic UI updates
- * - **Default Handling**: Graceful fallback to defaults for missing settings
- * - **Batch Updates**: Efficient multi-setting updates
- * - **Reset Functionality**: Restore defaults for individual or all settings
- *
- * **Configuration Categories:**
- * - Generation parameters (temperature, tokens, sampling)
- * - UI preferences (theme, display options)
- * - System settings (model selection, prompts)
- * - Advanced options (seed, penalties, context handling)
+ * Owns generation parameters, UI preferences and theme, persisted to
+ * localStorage with Svelte 5 runes. Applies the admin's server ui_settings
+ * as defaults on first visit; sampling parameters sync with the server via
+ * ParameterSyncService.
  */
 
 import { browser } from '$app/environment';
@@ -53,14 +29,6 @@ import {
 import { setMode } from 'mode-watcher';
 
 class SettingsStore {
-	/**
-	 *
-	 *
-	 * State
-	 *
-	 *
-	 */
-
 	config = $state<SettingsConfigType>({ ...SETTING_CONFIG_DEFAULT });
 	isInitialized = $state(false);
 	userOverrides = $state<Set<string>>(new Set());
@@ -68,14 +36,6 @@ class SettingsStore {
 	// True until a config exists in localStorage; gates the one-time
 	// application of server ui_settings defaults for new users.
 	private isFirstVisit = false;
-
-	/**
-	 *
-	 *
-	 * Lifecycle
-	 *
-	 *
-	 */
 
 	/**
 	 * Initialize the settings store by loading from localStorage.
@@ -94,14 +54,6 @@ class SettingsStore {
 			console.error('Failed to initialize settings store:', error);
 		}
 	}
-	/**
-	 *
-	 *
-	 * Config Updates
-	 *
-	 *
-	 */
-
 	/**
 	 * Update a specific configuration setting
 	 * @param key - The configuration key to update
@@ -169,14 +121,6 @@ class SettingsStore {
 	}
 
 	/**
-	 *
-	 *
-	 * Reset
-	 *
-	 *
-	 */
-
-	/**
 	 * Reset configuration to defaults
 	 */
 	resetConfig() {
@@ -224,14 +168,6 @@ class SettingsStore {
 		this.userOverrides.delete(key);
 		this.saveConfig();
 	}
-
-	/**
-	 *
-	 *
-	 * Server Sync
-	 *
-	 *
-	 */
 
 	/**
 	 * Initialize settings with props defaults when server properties are first loaded
@@ -335,14 +271,6 @@ class SettingsStore {
 
 		this.saveConfig();
 	}
-
-	/**
-	 *
-	 *
-	 * Utilities
-	 *
-	 *
-	 */
 
 	/**
 	 * Get a specific configuration value
