@@ -74,7 +74,7 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
 
     if (GGML_OPENMP_ENABLED)
         target_compile_definitions(${GGML_CPU_NAME} PRIVATE GGML_USE_OPENMP)
-        target_link_libraries(${GGML_CPU_NAME} PRIVATE OpenMP::OpenMP_C OpenMP::OpenMP_CXX)
+        target_link_libraries(${GGML_CPU_NAME} PRIVATE ${GGML_OPENMP_TARGET_C} ${GGML_OPENMP_TARGET_CXX})
     endif()
 
     if (GGML_LLAMAFILE)
