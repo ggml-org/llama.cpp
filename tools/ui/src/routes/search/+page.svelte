@@ -23,7 +23,7 @@
 	// in-place search, so bounce back to a new-chat tab.
 	$effect(() => {
 		if (browser && !deviceStore.isMobile) {
-			conversationsStore.openNewChatTab();
+			conversationsStore.openNewChat();
 		}
 	});
 
@@ -65,7 +65,7 @@
 		if (history.length > 1) {
 			history.back();
 		} else {
-			conversationsStore.openNewChatTab();
+			conversationsStore.openNewChat();
 		}
 	}
 </script>

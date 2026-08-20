@@ -17,10 +17,10 @@
 
 		await modelsStore.fetch();
 
-		// a prompt/model deep-link routes to a new-chat tab, which sends it;
-		// otherwise `#/` is a plain new-chat view with no tabs
+		// a prompt/model deep-link opens a new chat (tab or plain view, per the
+		// Conversation tabs setting); otherwise `#/` is a plain new-chat view
 		if (qParam !== null || modelParam !== null) {
-			await conversationsStore.openNewChatTab();
+			await conversationsStore.openNewChat();
 		}
 
 		await modelsStore.ensureFirstModelSelected();

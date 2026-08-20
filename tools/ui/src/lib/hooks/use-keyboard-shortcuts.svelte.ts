@@ -33,7 +33,7 @@ export function useKeyboardShortcuts(callbacks: KeyboardShortcutsCallbacks) {
 		) {
 			event.preventDefault();
 
-			conversationsStore.openNewChatTab();
+			conversationsStore.openNewChat();
 		}
 
 		if (event.shiftKey && isCmdOrCtrl && event.key === KeyboardKey.E_UPPER) {

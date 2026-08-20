@@ -23,7 +23,7 @@ export { chatStore } from './chat/index.svelte';
 export { draftMessagesStore } from './chat/drafts.svelte';
 
 // CONVERSATION TABS
-export { tabsStore } from './tabs.svelte';
+export { NEW_CHAT_TAB_ID, tabsStore } from './tabs.svelte';
 
 // CONTEXT STATS (active conversation context window usage)
 export { contextStatsStore } from './chat/context-stats.svelte';

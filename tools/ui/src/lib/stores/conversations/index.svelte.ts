@@ -21,8 +21,8 @@ import {
 	type ConversationsPreferencesHost
 } from '$lib/stores/conversations/preferences.svelte';
 import { settingsStore } from '$lib/stores/settings/index.svelte';
-import { tabsStore } from '$lib/stores/tabs.svelte';
-import { filterByLeafNodeId, findLeafNode, generateConversationTitle, uuid } from '$lib/utils';
+import { NEW_CHAT_TAB_ID, tabsStore } from '$lib/stores/tabs.svelte';
+import { filterByLeafNodeId, findLeafNode, generateConversationTitle } from '$lib/utils';
 import { SvelteSet } from 'svelte/reactivity';
 import { toast } from 'svelte-sonner';
 
@@ -38,13 +38,6 @@ class ConversationsStore implements ConversationsPreferencesHost {
 
 	/** Whether the store has been initialized */
 	isInitialized = $state(false);
-
-	/**
-	 * Unsaved new-chat tabs. Each carries a temporary id used directly as the
-	 * route (`#/chat/<id>`); it is persisted to the database - and moved to
-	 * `conversations` - only when the first message is sent.
-	 */
-	temporaryConversations = $state<DatabaseConversation[]>([]);
 
 	/** Per-chat options (MCP overrides, reasoning effort, cwd), composed here. */
 	private _preferences = new ConversationPreferences(this);
@@ -289,7 +282,6 @@ class ConversationsStore implements ConversationsPreferencesHost {
 
 			this.clearActiveConversation();
 			this.conversations = [];
-			this.temporaryConversations = [];
 			tabsStore.clear();
 			this.notifyConversationsDeleted(allIds);
 
@@ -307,20 +299,6 @@ class ConversationsStore implements ConversationsPreferencesHost {
 	 * @param convId - The conversation ID to delete
 	 */
 	async deleteConversation(convId: string, options?: { deleteWithForks?: boolean }): Promise<void> {
-		// an unsaved new-chat tab is not in the DB; just drop it and close its tab
-		if (this.isTemporaryConversation(convId)) {
-			this.temporaryConversations = this.temporaryConversations.filter((c) => c.id !== convId);
-
-			if (this.activeConversation?.id === convId) {
-				this.clearActiveConversation();
-				await tabsStore.close(convId, convId);
-			} else {
-				tabsStore.removeTabs([convId]);
-			}
-
-			return;
-		}
-
 		try {
 			await DatabaseService.deleteConversation(convId, options);
 
@@ -394,17 +372,6 @@ class ConversationsStore implements ConversationsPreferencesHost {
 		const messages = await DatabaseService.getConversationMessages(convId);
 
 		ConversationTransferService.downloadConversationFile({ conv: conversation, messages });
-	}
-
-	/**
-	 * Persist the active conversation if it is an unsaved new-chat tab.
-	 */
-	async ensureActiveConversationPersisted(): Promise<void> {
-		const active = this.activeConversation;
-
-		if (active && this.isTemporaryConversation(active.id)) {
-			await this.persistTemporaryConversation(active.id);
-		}
 	}
 
 	/**
@@ -522,11 +489,6 @@ class ConversationsStore implements ConversationsPreferencesHost {
 		return this.initPromise;
 	}
 
-	/** True if the id refers to an unsaved new-chat tab */
-	isTemporaryConversation(id: string): boolean {
-		return this.temporaryConversations.some((c) => c.id === id);
-	}
-
 	/**
 	 * Loads a specific conversation and its messages
 	 * @param convId - The conversation ID to load
@@ -534,17 +496,6 @@ class ConversationsStore implements ConversationsPreferencesHost {
 	 */
 	async loadConversation(convId: string): Promise<boolean> {
 		try {
-			// unsaved new-chat tab: present in memory only
-			const temp = this.temporaryConversations.find((c) => c.id === convId);
-
-			if (temp) {
-				this.preferences.pendingCwd = null;
-				this.activeConversation = temp;
-				this.activeMessages = [];
-
-				return true;
-			}
-
 			const conversation = await DatabaseService.getConversation(convId);
 
 			if (!conversation) {
@@ -635,36 +586,14 @@ class ConversationsStore implements ConversationsPreferencesHost {
 	}
 
 	/**
-	 * Open a fresh new-chat tab (an unsaved conversation) and navigate to it.
-	 * Used by the "New chat" actions (sidebar, keyboard, tab bar, search) and
-	 * prompt/model deep-links.
+	 * Start a fresh chat by navigating to the bare `#/` new-chat screen. The
+	 * chat layout opens a new-chat tab for it when Conversation tabs are on.
 	 */
-	async openNewChatTab(): Promise<string> {
-		const conversation = this.createTemporaryConversation();
+	async openNewChat(): Promise<string> {
+		this.clearActiveConversation();
+		await goto(ROUTES.START);
 
-		await goto(RouterService.chat(conversation.id));
-
-		return conversation.id;
-	}
-
-	/**
-	 * Persist an unsaved new-chat tab to the database, keeping its id so the
-	 * route and tab stay stable. Called on the first message of a new chat.
-	 * @param convId - The temporary conversation id to persist
-	 */
-	async persistTemporaryConversation(convId: string): Promise<void> {
-		const temp = this.temporaryConversations.find((c) => c.id === convId);
-
-		if (!temp) return;
-
-		// clone out of the $state proxy so IndexedDB serializes plain data
-		const conversation = { ...temp };
-
-		await DatabaseService.createConversationWithId(conversation);
-
-		this.temporaryConversations = this.temporaryConversations.filter((c) => c.id !== convId);
-		this.conversations = [conversation, ...this.conversations];
-		this.activeConversation = conversation;
+		return NEW_CHAT_TAB_ID;
 	}
 
 	/**
@@ -812,30 +741,6 @@ class ConversationsStore implements ConversationsPreferencesHost {
 	 *
 	 *
 	 */
-
-	/** Update an unsaved new-chat tab in place (not persisted to the DB) */
-	updateTemporaryConversation(id: string, updates: Partial<DatabaseConversation>): void {
-		this.temporaryConversations = this.temporaryConversations.map((c) =>
-			c.id === id ? { ...c, ...updates } : c
-		);
-	}
-
-	/** Build an unsaved new-chat conversation, baking in the pending cwd/effort */
-	private createTemporaryConversation(): DatabaseConversation {
-		const conversation: DatabaseConversation = {
-			currNode: '',
-			cwd: this.preferences.pendingCwd ?? undefined,
-			id: uuid(),
-			lastModified: Date.now(),
-			name: 'New chat',
-			reasoningEffort: this.preferences.pendingReasoningEffort
-		};
-
-		this.preferences.pendingCwd = null;
-		this.temporaryConversations = [...this.temporaryConversations, conversation];
-
-		return conversation;
-	}
 
 	private notifyConversationsDeleted(convIds: string[]): void {
 		if (convIds.length === 0) return;
