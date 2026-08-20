@@ -31,7 +31,7 @@ Status vocabulary:
 
 | Area | Finding | Why it was rejected |
 |---|---|---|
-| QPN/C2 permanent Q4_0 layout | Exact C2 readers and PF2/PF4 policy; `0/979,740` raw-float differences and no occupancy loss | Q4 subgraph projections were large (`+10.386%` external DFlash, `+3.337%` native MTP) but optimistic end-to-end ceilings were only `+1.764%` request wall and `+0.581%` respectively. Consumer-complete loader/prefill/dequant/copy integration was not worth it. Archived NO-GO at `pocs/gfx1030-qpn-q4/`. |
+| QPN/C2 permanent Q4_0 layout | Exact C2 readers and PF2/PF4 policy; `0/979,740` raw-float differences and no occupancy loss | Q4 subgraph projections were large (`+10.386%` external DFlash, `+3.337%` native MTP) but optimistic end-to-end ceilings were only `+1.764%` request wall and `+0.581%` respectively. Consumer-complete loader/prefill/dequant/copy integration was not worth it. **Production integration: NO-GO.** The raw POC archive was later removed; this decision index is the durable record. |
 | QPN activation prepack B | Exact but hot-kernel M5/M8 regressed (`+5.26%` / `+15.42%`) | Setup did not compensate for register/load schedule; retained only as evidence. |
 | QPN broad prefetch variants | M2/PF2 `-0.315%`, M3/PF3 `-0.835%`, M6 about `-4%`; PF8 reached 75 VGPR | Width-specific register pressure; only narrow isolated readers were proven, and the production integration was rejected. |
 | Native gfx1030 MMVQ nwarps policy | Initial native nwarps source path and simple/K sweeps | Removed at user request; Q4_0/Q8_0 synthetic end-to-end was slower and packed K layouts had no uniform winner. Default `calc_nwarps()` restored. |
@@ -40,6 +40,7 @@ Status vocabulary:
 | Qwen27 dense MMVQ `rpb2` | Exact kernel and model tokens, but | Kernel shape reduction `7.561%`; TG128 only `+0.066%`, TG512 `+0.207%`, MTP `+0.613%`; failed required model-level gain. `w2v8` diverged token 2. Removed. |
 | Qwen27 MTP five-block/per-column collective | Byte-exact controls | Reduction-only grid-five regressed integrated throughput `1.545%`; other publication/accepted-prefix/catch-up shortcuts were unsafe or incomplete. Frozen winner retained, candidates rejected. |
 | Direct P2P / mapped-host / device-barrier shortcuts | Some exact microbench controls, no valid production publication or slower path | Cross-root synchronization, fences, or host staging erased the theoretical gain; no unsafe publication shortcut retained. |
+| TP4 persistent communication / barrier redesign | Isolated no-op/barrier-noop ceiling and current exact host-snapshot path | Ordinary TP4 server is `+21.46%` over TP2; existing host-snapshot contributes `+2.78–2.95%` over RCCL-only; profiling no-op removes most block reductions but invalidates outputs and yields `+10.06%` target ceiling, while host barriers regress `13.76–13.83%`. Residual TP-sharded LM-head reduction remains mandatory. **Persistent worker: DEFERRED/NO-GO pending a different exact consumer-preserving design.** No production dispatch changed. |
 | `hipExtLaunchMultiKernelMultiDevice` P2P path | Exact microbench | Regressed to about `79.40 us`; removed. |
 | TP2×PP2 replacing TP4 | Functionally valid hybrid topology | Generation stayed `9.98%` behind TP4 with backend sampling; optimistic lower bound still `8.49%` behind. Prompt concurrency can improve, but no decode win. Experimental only. |
 | TP1×PP4 / graph-overlap / internal-allreduce TP alternatives | No generation crossover | TP1×PP4 about `16.1 TG t/s`; graph/internal-allreduce and boundary sweeps were flat/slower. Not retained. |
@@ -69,7 +70,7 @@ Status vocabulary:
 Keep these canonical records:
 
 - `/home/edwin/llama.cpp-rdna2/pocs/OPTIMIZATION-STATUS.md` — this concise decision index.
-- QPN/C2 raw archive — deleted at the user's request after its findings were condensed here; no production code depended on it.
+- QPN/C2 raw archive — deleted at the user's request after its findings were condensed here; no production code depended on it. The absent archive is not a verification artifact and must not be reconstructed without explicit authorization.
 - `/home/edwin/.ralph/*.md` — execution ledgers; retain until the project is formally closed.
 - `/home/edwin/models/*-runs/`, `/home/edwin/hybrid-tp-pp-evidence/`, and named final-package directories — raw evidence referenced by this list.
 - Accepted source/report worktrees and their final verifiers, especially the gfx1030 native paths and vocabulary-sharding work.
