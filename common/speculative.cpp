@@ -2649,6 +2649,10 @@ void common_speculative_draft(common_speculative * spec) {
         for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) dparams.size(); ++seq_id) {
             auto & dp = dparams[seq_id];
 
+            if (!dp.drafting) {
+                continue;
+            }
+
             auto & result = *dp.result;
 
             // a new draft has been sampled
