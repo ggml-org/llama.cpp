@@ -26,6 +26,7 @@ Status vocabulary:
 | Recurrent state/checkpoint handling | Safe transactional state I/O, rollback, exact-prefix reuse | Checkpoint stress `155/155`, restore `152`; full state path retained. Sequence-only restore is not retained (see rejected list). |
 | DSV4 TOP_K large-ncols | Upstream bitonic/hipCUB portability fix isolated on a branch | Compile-reviewed for normal and forced non-CUB builds. On the production hipCUB build the new gate is effectively inert; keep only if supporting non-hipCUB environments. |
 | RCCL/topology policy | Narrow automatic RCCL selection and fallback policy | Retained from prior Q4/MTP work; forced protocol/peer shortcuts are not retained. |
+| TP4 ordinary 5120-FP32 host-snapshot expansion | `GGML_HIP_GFX1030_P2P_ALLREDUCE=auto-expanded` extends the existing exact host-snapshot AllReduce to ordinary `ffn_out-*` and `attn_output-*` with exact `[5120,1,1,1]` F32 guards; unset/`auto` is unchanged | Fresh unified verifier: `50.645675 -> 53.552075 tok/s` (`+5.7387%`); ordinary output/grammar/cache matrix, external DFlash, and native MTP output/acceptance exact. Ordinary-only; DFlash throughput is neutral because this `ne[1]=1` gate does not activate in that graph. Evidence: `/home/edwin/.ralph/tp4-scaling-wall/expand-host-poc/FINAL-REPORT.md`. |
 
 ## Rejected / removed
 
@@ -64,6 +65,8 @@ Status vocabulary:
 - DSV4 expert ownership, two-exchange/layer redesign, candidate-row global top-k merge, and communication fusion. These are scheduler/protocol projects, not safe local kernel substitutions.
 - Generic RCCL graph capture for the current single-process multi-device scheduler.
 - Hidden-axis output sharding, unvalidated on-device vocabulary-parallel sampling, and any optimization that changes reduction order without a raw-logit gate.
+
+- FFN/attention activation-residency fusion across the `ffn_out` → next projection boundary. The measured hidden partial is 20,480 bytes while candidate packed next QKV/GDN outputs are approximately 57,344–65,536 bytes before synchronization/extra computation; the initial ceiling did not justify changing activation ownership or reduction order. Defer unless a new packed-layout proof beats the exact narrow host-snapshot path.
 
 ## Canonical evidence and cleanup
 

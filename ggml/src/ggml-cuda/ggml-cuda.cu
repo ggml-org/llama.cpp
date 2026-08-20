@@ -1018,6 +1018,7 @@ enum ggml_cuda_rdna2_p2p_host_mode {
     GGML_CUDA_RDNA2_P2P_HOST_FUSED     = 2,
     GGML_CUDA_RDNA2_P2P_HOST_MTP       = 3,
     GGML_CUDA_RDNA2_P2P_HOST_AUTO      = 4,
+    GGML_CUDA_RDNA2_P2P_HOST_AUTO_EXPANDED = 5,
 };
 
 static int ggml_cuda_rdna2_p2p_host_allreduce_mode() {
@@ -1027,6 +1028,7 @@ static int ggml_cuda_rdna2_p2p_host_allreduce_mode() {
         }
         const char * value = std::getenv("GGML_HIP_GFX1030_P2P_ALLREDUCE");
         if (value == nullptr || std::strcmp(value, "auto") == 0) return GGML_CUDA_RDNA2_P2P_HOST_AUTO;
+        if (std::strcmp(value, "auto-expanded") == 0) return GGML_CUDA_RDNA2_P2P_HOST_AUTO_EXPANDED;
         if (std::strcmp(value, "host") == 0) return GGML_CUDA_RDNA2_P2P_HOST_SIMPLE;
         if (std::strcmp(value, "host-fused") == 0) return GGML_CUDA_RDNA2_P2P_HOST_FUSED;
         if (std::strcmp(value, "host-mtp") == 0) return GGML_CUDA_RDNA2_P2P_HOST_MTP;
@@ -1041,7 +1043,8 @@ static bool ggml_cuda_rdna2_p2p_host_allreduce_enabled() {
 
 static bool ggml_cuda_rdna2_p2p_host_allreduce_mtp_enabled() {
     const int mode = ggml_cuda_rdna2_p2p_host_allreduce_mode();
-    return mode == GGML_CUDA_RDNA2_P2P_HOST_MTP || mode == GGML_CUDA_RDNA2_P2P_HOST_AUTO;
+    return mode == GGML_CUDA_RDNA2_P2P_HOST_MTP || mode == GGML_CUDA_RDNA2_P2P_HOST_AUTO ||
+        mode == GGML_CUDA_RDNA2_P2P_HOST_AUTO_EXPANDED;
 }
 
 static __device__ __forceinline__ void ggml_cuda_rdna2_p2p_host_barrier4(
@@ -1595,11 +1598,15 @@ static bool ggml_backend_cuda_comm_allreduce_rdna2_p2p_host(
         if (tensors[rank] == nullptr || tensors[rank]->data == nullptr) {
             return false;
         }
+        const bool expanded_ordinary = !mtp5 &&
+            ggml_cuda_rdna2_p2p_host_allreduce_mode() == GGML_CUDA_RDNA2_P2P_HOST_AUTO_EXPANDED;
         const bool name_ok = mtp5
             ? (std::strncmp(tensors[rank]->name, "linear_attn_out-", 16) == 0 ||
                std::strncmp(tensors[rank]->name, "ffn_out-", 8) == 0 ||
                std::strncmp(tensors[rank]->name, "attn_output-", 12) == 0)
-            : std::strncmp(tensors[rank]->name, linear_prefix, linear_prefix_len) == 0;
+            : (std::strncmp(tensors[rank]->name, linear_prefix, linear_prefix_len) == 0 ||
+               (expanded_ordinary && (std::strncmp(tensors[rank]->name, "ffn_out-", 8) == 0 ||
+                                       std::strncmp(tensors[rank]->name, "attn_output-", 12) == 0)));
         if (tensors[rank]->type != GGML_TYPE_F32 ||
                 tensors[rank]->type != GGML_TYPE_F32 ||
                 tensors[rank]->ne[0] != 5120 || tensors[rank]->ne[1] != (mtp5 ? 5 : 1) ||
@@ -2211,8 +2218,10 @@ static void ggml_backend_cuda_comm_init_nccl(ggml_backend_cuda_comm_context * re
                     GGML_LOG_INFO("RDNA2 P2P host-snapshot schedules did not match installed RCCL; using RCCL\n");
                 } else {
                     ret->p2p_host_initialized = true;
+                    const int p2p_mode = ggml_cuda_rdna2_p2p_host_allreduce_mode();
                     std::fprintf(stderr, "armed RDNA2 P2P %s host-snapshot AllReduce after installed-RCCL self-test (n1=%d n5=%d)\n",
-                            ggml_cuda_rdna2_p2p_host_allreduce_mode() == GGML_CUDA_RDNA2_P2P_HOST_FUSED ? "consumer-fused" :
+                            p2p_mode == GGML_CUDA_RDNA2_P2P_HOST_FUSED ? "consumer-fused" :
+                            p2p_mode == GGML_CUDA_RDNA2_P2P_HOST_AUTO_EXPANDED ? "MTP-width5-auto-expanded" :
                             ggml_cuda_rdna2_p2p_host_allreduce_mtp_enabled() ? "MTP-width5-auto" : "double-buffered",
                             ret->p2p_host_exact_5120 ? 1 : 0, ret->p2p_host_exact_25600 ? 1 : 0);
                 }
