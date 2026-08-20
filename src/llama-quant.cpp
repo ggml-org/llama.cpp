@@ -321,10 +321,12 @@ static bool tensor_allows_quantization(const llama_model_quantize_params * param
     quantize &= name != LLM_TN(arch)(LLM_TENSOR_POS_EMBD,    "weight");
     quantize &= name != LLM_TN(arch)(LLM_TENSOR_TOKEN_TYPES, "weight");
 
-    // do not quantize Mamba/Kimi's small conv1d weights
+    // do not quantize small depthwise conv weights
     // NOTE: can't use LLM_TN here because the layer number is not known
     quantize &= name.find("ssm_conv1d") == std::string::npos;
     quantize &= name.find("shortconv.conv.weight") == std::string::npos;
+    quantize &= name.find("mix_key_conv.weight") == std::string::npos;
+    quantize &= name.find("mix_value_conv.weight") == std::string::npos;
 
     // do not quantize MiniMax's indexer projection weights, they are tiny
     quantize &= name.find("indexer.k_proj.weight") == std::string::npos;
