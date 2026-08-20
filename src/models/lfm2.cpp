@@ -13,6 +13,7 @@ void llama_model_lfm2::load_arch_hparams(llama_model_loader & ml) {
     hparams.n_layer_dense_lead = hparams.n_layer();
 
     switch (hparams.n_ff()) {
+        case  2560: type = LLM_TYPE_230M; break;
         case  4608: type = LLM_TYPE_350M; break;
         case  6912: type = LLM_TYPE_700M; break;
         case  8192: type = LLM_TYPE_1_2B; break;
@@ -190,7 +191,15 @@ llama_model_lfm2::graph<iswa>::graph(const llama_model & model, const llm_graph_
         auto * conv_rs    = build_rs(inp_recr, conv_state, hparams.n_embd_r(), n_seqs);
         auto * conv       = ggml_reshape_3d(ctx0, conv_rs, d_conv, hparams.n_embd, n_seqs);
 
-        bx = ggml_concat(ctx0, conv, bx, 0);
+        // causal prepends the state, non-causal pads symmetrically for a centered window
+        if (hparams.causal_attn) {
+            bx = ggml_concat(ctx0, conv, bx, 0);
+        } else {
+            const int64_t pad = (hparams.n_shortconv_l_cache - 1) / 2;
+            auto * left = ggml_cont(ctx0,
+                ggml_view_3d(ctx0, conv, pad, hparams.n_embd, n_seqs, conv->nb[1], conv->nb[2], (d_conv - pad) * conv->nb[0]));
+            bx = ggml_pad_ext(ctx0, ggml_concat(ctx0, left, bx, 0), 0, pad, 0, 0, 0, 0, 0, 0);
+        }
         GGML_ASSERT(bx->ne[0] > conv->ne[0]);
 
         // last d_conv columns is a new conv state
@@ -266,10 +275,12 @@ llama_model_lfm2::graph<iswa>::graph(const llama_model & model, const llm_graph_
     cb(cur, "result_norm", -1);
     res->t_embd = cur;
 
-    cur = build_lora_mm(model.output, cur, model.output_s);
-    cb(cur, "result_output", -1);
+    if (!cparams.embeddings) {
+        cur = build_lora_mm(model.output, cur, model.output_s);
+        cb(cur, "result_output", -1);
 
-    res->t_logits = cur;
+        res->t_logits = cur;
+    }
 
     ggml_build_forward_expand(gf, cur);
 }

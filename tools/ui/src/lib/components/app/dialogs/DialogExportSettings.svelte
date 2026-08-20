@@ -1,14 +1,14 @@
 <script lang="ts">
+	import { Shield, ShieldOff } from '@lucide/svelte';
 	import * as AlertDialog from '$lib/components/ui/alert-dialog';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import Label from '$lib/components/ui/label/label.svelte';
-	import { Shield, ShieldOff } from '@lucide/svelte';
 
 	let {
-		open = $bindable(),
 		includeSensitiveData = $bindable(false),
 		onCancel,
-		onConfirm
+		onConfirm,
+		open = $bindable()
 	}: {
 		open: boolean;
 		includeSensitiveData: boolean;
@@ -68,6 +68,7 @@
 
 		<AlertDialog.Footer>
 			<AlertDialog.Cancel onclick={onCancel}>Cancel</AlertDialog.Cancel>
+
 			<AlertDialog.Action
 				onclick={onConfirm}
 				class="bg-destructive text-white hover:bg-destructive/80"

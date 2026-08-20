@@ -27,6 +27,8 @@
 #define QR5_1                   2
 #define QK8_0                   32
 #define QR8_0                   1
+#define QK1_0                   128
+#define QR1_0                   1
 #define QK_K                    256
 #define K_SCALE_SIZE            (3 * QK_K / 64)
 #define K_QUANTS_PER_ITERATION  2
@@ -37,6 +39,14 @@ typedef short int16_t;
 typedef ushort uint16_t;
 typedef int int32_t;
 typedef uint uint32_t;
+
+//------------------------------------------------------------------------------
+// block_q1_0
+//------------------------------------------------------------------------------
+typedef struct {
+    half d;             // delta
+    uchar qs[QK1_0/8];  // 1-bit signs (16 bytes)
+} block_q1_0;
 
 //------------------------------------------------------------------------------
 // block_q4_0
@@ -156,6 +166,42 @@ kernel void kernel_convert_f16_to_bf16(
     } else {
         uint rounded = bits + 0x7fffu + ((bits >> 16) & 1u);
         dst[i] = (ushort)(rounded >> 16);
+    }
+}
+
+//------------------------------------------------------------------------------
+// kernel_convert_block_q1_0
+// Convert block_q1_0 (AOS) to 2 separate arrays (SOA): quant bytes + scales.
+// q1_0 bits are stored in natural order (bit j of byte i -> weight 8*i + j)
+//------------------------------------------------------------------------------
+kernel void kernel_convert_block_q1_0(
+    global block_q1_0 * src0,
+    global uchar * dst_q,
+    global half  * dst_d
+) {
+    global block_q1_0 * b = (global block_q1_0 *) src0 + get_global_id(0);
+    global uchar      * q = (global uchar *) dst_q + (QK1_0/8)*get_global_id(0);
+    global half       * d = (global half *) dst_d + get_global_id(0);
+
+    *d = b->d;
+
+    for (int i = 0; i < QK1_0/8; ++i) {
+        q[i] = b->qs[i];
+    }
+}
+
+kernel void kernel_restore_block_q1_0(
+    global uchar * src_q,
+    global half  * src_d,
+    global block_q1_0 * dst
+) {
+    global block_q1_0 * b = (global block_q1_0 *) dst + get_global_id(0);
+    global uchar      * q = (global uchar *) src_q + (QK1_0/8)*get_global_id(0);
+    global half       * d = (global half *) src_d + get_global_id(0);
+
+    b->d = *d;
+    for (int i = 0; i < QK1_0/8; ++i) {
+        b->qs[i] = q[i];
     }
 }
 
@@ -1582,6 +1628,158 @@ kernel void kernel_restore_block_q8_0(
     }
 }
 
+// View-aware AoS q8_0 -> f32 dequant (f32/f32 FA path).
+kernel void kernel_dequant_q8_0_f32_view_aos(
+    global char * src,
+    ulong         src_offset,
+    ulong         src_nb1,
+    ulong         src_nb2,
+    ulong         src_nb3,
+    int           nblk0,
+    int           ne1,
+    int           ne2,
+    int           ne3,
+    global float * dst
+) {
+    int blk_i0 = get_global_id(0);
+    int i1     = get_global_id(1);
+    int batch  = get_global_id(2);
+
+    if (blk_i0 >= nblk0) return;
+    if (i1     >= ne1)   return;
+
+    int i2 = batch % ne2;
+    int i3 = batch / ne2;
+    if (i3 >= ne3) return;
+
+    global char * block = src + src_offset + (ulong)i3*src_nb3 + (ulong)i2*src_nb2 + (ulong)i1*src_nb1 + (ulong)blk_i0 * (2 + QK8_0);
+    float d = vload_half(0, (global half *)block);
+    global char * qs = block + 2;
+
+    ulong dst_row_base = ((ulong)i3 * ne2 * ne1 + (ulong)i2 * ne1 + (ulong)i1) * nblk0;
+    global float * out = dst + (dst_row_base + blk_i0) * QK8_0;
+
+    for (int i = 0; i < QK8_0; ++i) {
+        out[i] = d * (float)qs[i];
+    }
+}
+
+// View-aware AoS q8_0 -> f16 dequant. Rows tight, batch strides may be gapped.
+kernel void kernel_dequant_q8_0_f16_view_aos(
+    global char * src,
+    ulong         src_offset,
+    ulong         src_nb1,
+    ulong         src_nb2,
+    ulong         src_nb3,
+    int           nblk0,
+    int           ne1,
+    int           ne2,
+    int           ne3,
+    global half * dst
+) {
+    int blk_i0 = get_global_id(0);
+    int i1     = get_global_id(1);
+    int batch  = get_global_id(2);
+
+    if (blk_i0 >= nblk0) return;
+    if (i1     >= ne1)   return;
+
+    int i2 = batch % ne2;
+    int i3 = batch / ne2;
+    if (i3 >= ne3) return;
+
+    global char * block = src + src_offset + (ulong)i3*src_nb3 + (ulong)i2*src_nb2 + (ulong)i1*src_nb1 + (ulong)blk_i0 * (2 + QK8_0);
+    float d = vload_half(0, (global half *)block);
+    global char * qs = block + 2;
+
+    ulong dst_row_base = ((ulong)i3 * ne2 * ne1 + (ulong)i2 * ne1 + (ulong)i1) * nblk0;
+    global half * out = dst + (dst_row_base + blk_i0) * QK8_0;
+
+    for (int i = 0; i < QK8_0; ++i) {
+        out[i] = (half)(d * (float)qs[i]);
+    }
+}
+
+// View-aware AoS q4_0 -> f32 dequant (mirrors the q8_0 view variant).
+kernel void kernel_dequant_q4_0_f32_view_aos(
+    global char * src,
+    ulong         src_offset,
+    ulong         src_nb1,
+    ulong         src_nb2,
+    ulong         src_nb3,
+    int           nblk0,
+    int           ne1,
+    int           ne2,
+    int           ne3,
+    global float * dst
+) {
+    int blk_i0 = get_global_id(0);
+    int i1     = get_global_id(1);
+    int batch  = get_global_id(2);
+
+    if (blk_i0 >= nblk0) return;
+    if (i1     >= ne1)   return;
+
+    int i2 = batch % ne2;
+    int i3 = batch / ne2;
+    if (i3 >= ne3) return;
+
+    global char * block = src + src_offset + (ulong)i3*src_nb3 + (ulong)i2*src_nb2 + (ulong)i1*src_nb1 + (ulong)blk_i0 * (2 + QK4_0/2);
+    float d = vload_half(0, (global half *)block);
+    global uchar * qs = (global uchar *)(block + 2);
+
+    ulong dst_row_base = ((ulong)i3 * ne2 * ne1 + (ulong)i2 * ne1 + (ulong)i1) * nblk0;
+    global float * out = dst + (dst_row_base + blk_i0) * QK4_0;
+
+    for (int i = 0; i < QK4_0/2; ++i) {
+        uchar byte = qs[i];
+        int q0 = (int)(byte & 0x0F) - 8;
+        int q1 = (int)(byte >> 4)   - 8;
+        out[i]            = d * (float)q0;
+        out[i + QK4_0/2]  = d * (float)q1;
+    }
+}
+
+// View-aware AoS q4_0 -> f16 dequant (mirrors the q8_0 view variant).
+kernel void kernel_dequant_q4_0_f16_view_aos(
+    global char * src,
+    ulong         src_offset,
+    ulong         src_nb1,
+    ulong         src_nb2,
+    ulong         src_nb3,
+    int           nblk0,
+    int           ne1,
+    int           ne2,
+    int           ne3,
+    global half * dst
+) {
+    int blk_i0 = get_global_id(0);
+    int i1     = get_global_id(1);
+    int batch  = get_global_id(2);
+
+    if (blk_i0 >= nblk0) return;
+    if (i1     >= ne1)   return;
+
+    int i2 = batch % ne2;
+    int i3 = batch / ne2;
+    if (i3 >= ne3) return;
+
+    global char * block = src + src_offset + (ulong)i3*src_nb3 + (ulong)i2*src_nb2 + (ulong)i1*src_nb1 + (ulong)blk_i0 * (2 + QK4_0/2);
+    float d = vload_half(0, (global half *)block);
+    global uchar * qs = (global uchar *)(block + 2);
+
+    ulong dst_row_base = ((ulong)i3 * ne2 * ne1 + (ulong)i2 * ne1 + (ulong)i1) * nblk0;
+    global half * out = dst + (dst_row_base + blk_i0) * QK4_0;
+
+    for (int i = 0; i < QK4_0/2; ++i) {
+        uchar byte = qs[i];
+        int q0 = (int)(byte & 0x0F) - 8;
+        int q1 = (int)(byte >> 4)   - 8;
+        out[i]          = (half)(d * (float)q0);
+        out[i + QK4_0/2] = (half)(d * (float)q1);
+    }
+}
+
 kernel void kernel_restore_block_q8_0_trans(
     global uchar * src_q,
     global half  * src_d,
@@ -2172,5 +2370,123 @@ kernel void kernel_restore_block_iq4_nl_noshuffle(
 
         b->qs[2*i + 0] = convert_uchar((x0 & mask_0F) | ((x1 & mask_0F) << 4));
         b->qs[2*i + 1] = convert_uchar(((x0 & mask_F0) >> 4) | (x1 & mask_F0));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// kernel_moe_expand_scale_q8_0
+//
+// Expand the q8_0 per-32-block scale d (one half/block, [expert][row][block]) into
+// the UNIFORM scale[16] format the generic dp4a MoE GEMM (kernel_gemm_moe_q8_1_dp4a,
+// MOE_QT=80) consumes: 16 f16 per 256-superblock (per-16-element segment), where the
+// two segments of each 32-block share the block's d. q8_0 is symmetric -> no min
+// buffer (the GEMM runs with has_min=0). The int8 weight codes are reused verbatim
+// from the existing flat q8_0 weight buffer (extra0_q8_0->q), so only the scale is
+// rebuilt here. One work-item per (row, superblock, expert).
+// ---------------------------------------------------------------------------
+kernel void kernel_moe_expand_scale_q8_0(
+    global const half * src_d,      // [expert][row][block], one scale per 32-block
+    global       half * dst_scale,  // [expert][row][block][2] (FLAT per-32-block)
+    int ne00,
+    int ne01
+) {
+    int row = get_global_id(0);
+    int blk = get_global_id(1);   // 32-block index along K
+    int e   = get_global_id(2);
+    if (row >= ne01) { return; }
+
+    long nb = ne00 / 32;          // 32-blocks per row (K only needs % 32 == 0)
+    half d  = src_d[((long)e*ne01 + row)*nb + blk];
+    long b  = (((long)e*ne01 + row)*nb + blk) * 2;
+    dst_scale[b + 0] = d;
+    dst_scale[b + 1] = d;
+}
+
+// ---------------------------------------------------------------------------
+// kernel_moe_expand_scale_q5_0
+//
+// q5_0 = symmetric, value = d*(code-16), code = nibble | (hi<<4) in 0..31. The
+// generic dp4a MoE GEMM keeps the unsigned code and centers via the min term:
+//   scale*dp4a(code,a) - min*sum(a),  scale = d,  min = d*16.
+// Reads the existing q5_0 d ([expert][block][row], one half/32-block, from the
+// trans4 convert) and writes the FLAT per-32-block uniform scale[2]/min[1] in
+// [expert][row][block] order (a transpose). One work-item per (row, block, expert).
+// ---------------------------------------------------------------------------
+kernel void kernel_moe_expand_scale_q5_0(
+    global const half * src_d,      // [expert][block][row]
+    global       half * dst_scale,  // [expert][row][block][2]
+    global       half * dst_min,    // [expert][row][block]
+    int ne00,
+    int ne01
+) {
+    int row = get_global_id(0);
+    int blk = get_global_id(1);
+    int e   = get_global_id(2);
+    if (row >= ne01) { return; }
+
+    long nb = ne00 / 32;
+    half d  = src_d[(long)e*nb*ne01 + (long)blk*ne01 + row];   // [expert][block][row]
+    long sb = (((long)e*ne01 + row)*nb + blk) * 2;
+    long mb = ((long)e*ne01 + row)*nb + blk;
+    dst_scale[sb + 0] = d;
+    dst_scale[sb + 1] = d;
+    dst_min[mb] = (half)((float)d * 16.0f);
+}
+
+// ---------------------------------------------------------------------------
+// kernel_moe_expand_scale_q5_K
+//
+// q5_K value = d*sv*code + (-dm*mn), with the 6-bit packed per-sub-block scale sv
+// and min mn (8 sub-blocks of 32 per 256-superblock, decoded by get_scale_min_k4
+// from the 12-byte s[]). The generic dp4a MoE GEMM (kernel_gemm_moe_q8_1_dp4a,
+// MOE_QT=5) keeps the unsigned 5-bit code and applies scale/min via the uniform
+// per-32-block buffers:
+//   acc += sc0*a_d*raw1 + sc1*a_d*raw2 - mn_u*a_s,
+//   sc0 = sc1 = d*sv (both per-16 segments of a 32-block share the sub-block scale),
+//   mn_u = dm*mn (positive; the GEMM subtracts it -> the -dm*mn min term).
+// q5_K's q_img (low nibbles) + qh (hi-bit plane) are already in the layout the GEMM
+// reads (same trans4_ns convert that feeds gemm_moe_q5_k_f32_ns), so only the scale
+// is rebuilt here.
+//
+// One work-item per (row, superblock, expert); each emits 8 sub-blocks.
+// ---------------------------------------------------------------------------
+kernel void kernel_moe_expand_scale_q5_K(
+    global const uchar * src_s,     // [expert][row][superblock][12]
+    global const half  * src_d,     // [expert][superblock][row]
+    global const half  * src_dm,    // [expert][superblock][row]
+    global       half  * dst_scale, // [expert][row][32block][2]
+    global       half  * dst_min,   // [expert][row][32block]
+    int ne00,
+    int ne01
+) {
+    int row = get_global_id(0);
+    int sb  = get_global_id(1);   // superblock index along K
+    int e   = get_global_id(2);
+    if (row >= ne01) { return; }
+
+    long nsb    = ne00 / 256;     // superblocks per row
+    long nblk32 = ne00 / 32;      // 32-blocks per row
+
+    float d  = (float)src_d [((long)e*nsb + sb)*ne01 + row];
+    float dm = (float)src_dm[((long)e*nsb + sb)*ne01 + row];
+
+    __global const uchar * sc = src_s + ((long)e*ne01 + row)*nsb*12 + (long)sb*12;
+
+    for (int j = 0; j < 8; ++j) {
+        uchar sv, mn;
+        // get_scale_min_k4 (6-bit packed scale/min for sub-block j of 8)
+        if (j < 4) {
+            sv = sc[j]   & 63;
+            mn = sc[j+4] & 63;
+        } else {
+            sv = (sc[j+4] & 0x0F) | ((sc[j-4] & 0xC0) >> 2);
+            mn = ((sc[j+4] >> 4) & 0x0F) | ((sc[j]   & 0xC0) >> 2);
+        }
+        long sub   = (long)sb*8 + j;
+        long sbase = (((long)e*ne01 + row)*nblk32 + sub) * 2;
+        half s_val = (half)(d  * (float)sv);
+        dst_scale[sbase + 0] = s_val;
+        dst_scale[sbase + 1] = s_val;
+        dst_min[((long)e*ne01 + row)*nblk32 + sub] = (half)(dm * (float)mn);
     }
 }

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import ModelLoadHighlight from './ModelLoadHighlight.svelte';
 	import {
 		CircleAlert,
 		Heart,
@@ -10,9 +11,11 @@
 		RotateCw
 	} from '@lucide/svelte';
 	import { ActionIcon, ModelId } from '$lib/components/app';
-	import type { ModelOption } from '$lib/types/models';
+	import { ICON_CLASS_DEFAULT } from '$lib/constants';
 	import { ServerModelStatus } from '$lib/enums';
-	import { modelsStore, routerModels } from '$lib/stores/models.svelte';
+	import { modelsStore } from '$lib/stores';
+	import type { ModelOption } from '$lib/types/models';
+	import { modelLoadFraction, modelLoadProgressText } from '$lib/utils';
 
 	interface Props {
 		option: ModelOption;
@@ -27,20 +30,21 @@
 	}
 
 	let {
-		option,
-		isSelected,
-		isHighlighted,
-		isFav,
 		hideOrgName = false,
-		onSelect,
-		onMouseEnter,
+		isFav,
+		isHighlighted,
+		isSelected,
+		onInfoClick,
 		onKeyDown,
-		onInfoClick
+		onMouseEnter,
+		onSelect,
+		option
 	}: Props = $props();
 
-	let currentRouterModels = $derived(routerModels());
+	let currentRouterModels = $derived(modelsStore.routerModels);
 	let serverStatus = $derived.by(() => {
 		const model = currentRouterModels.find((m) => m.id === option.model);
+
 		return (model?.status?.value as ServerModelStatus) ?? null;
 	});
 	let isOperationInProgress = $derived(modelsStore.isModelOperationInProgress(option.model));
@@ -50,18 +54,24 @@
 		(serverStatus === ServerModelStatus.LOADED || isSleeping) && !isOperationInProgress
 	);
 	let isLoading = $derived(serverStatus === ServerModelStatus.LOADING || isOperationInProgress);
+
+	let loadProgress = $derived(isLoading ? modelsStore.getLoadProgress(option.model) : null);
+	let loadPercent = $derived(Math.round(modelLoadFraction(loadProgress) * 100));
+	let loadTitle = $derived(modelLoadProgressText(loadProgress));
 </script>
 
 <div
 	class={[
-		'group flex w-full items-center gap-2 rounded-sm p-2 text-left text-sm transition focus:outline-none',
-		'cursor-pointer hover:bg-muted focus:bg-muted',
-		(isSelected || isHighlighted) && 'bg-accent text-accent-foreground',
-		!(isSelected || isHighlighted) && 'hover:bg-accent hover:text-accent-foreground',
+		'group relative flex w-full items-center gap-2 rounded-sm p-2 text-left text-sm transition focus:outline-none',
+		'cursor-pointer',
+		isSelected && 'bg-accent/50 text-accent-foreground',
+		isHighlighted && 'bg-accent',
+		!isSelected && !isHighlighted && 'hover:bg-muted',
 		isLoaded ? 'text-popover-foreground' : 'text-muted-foreground'
 	]}
 	role="option"
 	aria-selected={isSelected || isHighlighted}
+	title={loadTitle}
 	tabindex="0"
 	onclick={() => onSelect(option.id)}
 	onmouseenter={onMouseEnter}
@@ -113,11 +123,11 @@
 		</div>
 
 		{#if isLoading}
-			<div class="flex w-4 [@media(pointer:coarse)]:w-5 items-center justify-center">
-				<Loader2 class="h-4 w-4 animate-spin text-muted-foreground" />
+			<div class="flex w-4 items-center justify-center [@media(pointer:coarse)]:w-5">
+				<Loader2 class="{ICON_CLASS_DEFAULT} animate-spin text-muted-foreground" />
 			</div>
 		{:else if isFailed}
-			<div class="flex w-4 [@media(pointer:coarse)]:w-auto items-center justify-center">
+			<div class="flex w-4 items-center justify-center [@media(pointer:coarse)]:w-auto">
 				<CircleAlert
 					class="h-3.5 w-3.5 text-red-500 group-hover:hidden [@media(pointer:coarse)]:hidden"
 				/>
@@ -134,7 +144,7 @@
 				</div>
 			</div>
 		{:else if isSleeping}
-			<div class="flex w-4 [@media(pointer:coarse)]:w-auto items-center justify-center">
+			<div class="flex w-4 items-center justify-center [@media(pointer:coarse)]:w-auto">
 				<span
 					class="h-2 w-2 rounded-full bg-orange-400 group-hover:hidden [@media(pointer:coarse)]:hidden"
 				></span>
@@ -153,7 +163,7 @@
 				</div>
 			</div>
 		{:else if isLoaded}
-			<div class="flex w-4 [@media(pointer:coarse)]:w-auto items-center justify-center">
+			<div class="flex w-4 items-center justify-center [@media(pointer:coarse)]:w-auto">
 				<span
 					class="h-2 w-2 rounded-full bg-green-500 group-hover:hidden [@media(pointer:coarse)]:hidden"
 				></span>
@@ -170,7 +180,7 @@
 				</div>
 			</div>
 		{:else}
-			<div class="flex w-4 [@media(pointer:coarse)]:w-auto items-center justify-center">
+			<div class="flex w-4 items-center justify-center [@media(pointer:coarse)]:w-auto">
 				<span
 					class="h-2 w-2 rounded-full bg-muted-foreground/50 group-hover:hidden [@media(pointer:coarse)]:hidden"
 				></span>
@@ -188,4 +198,8 @@
 			</div>
 		{/if}
 	</div>
+
+	{#if isLoading}
+		<ModelLoadHighlight percent={loadPercent} />
+	{/if}
 </div>

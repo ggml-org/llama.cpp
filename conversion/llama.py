@@ -23,10 +23,13 @@ from .base import ModelBase, TextModel, gguf, logger
     "LlavaForConditionalGeneration",
     "VoxtralForConditionalGeneration",
     "LlamaForCausalLMEagle3",
+    "Eagle3LlamaForCausalLM",
     "Eagle3Speculator",
     "Eagle3DraftModel",
     "IQuestCoderForCausalLM",
     "LlamaModel")
+# [TAG_HF_EXAMPLE_GATED] meta-llama/Llama-3.2-1B-Instruct is gated
+@ModelBase.example("unsloth/Llama-3.2-1B-Instruct", "mistralai/Mistral-7B-Instruct-v0.3", "mistralai/Mixtral-8x7B-Instruct-v0.1")
 class LlamaModel(TextModel):
     model_arch = gguf.MODEL_ARCH.LLAMA
     undo_permute = True
@@ -68,11 +71,16 @@ class LlamaModel(TextModel):
                 target_config = {**target_config, **target_config["text_config"]}
             self.target_vocab_size = target_config["vocab_size"]
 
-            # target_layers: derived from target model layer count (low/mid/high)
+            # target_layers: use the eagle3 config's explicit aux hidden-state layer ids
+            # if present, else derive from the target layer count.
             target_num_layers = target_config["num_hidden_layers"]
-            target_layers = [2, target_num_layers // 2, target_num_layers - 3]
+            aux_layer_ids = eagle3_raw_config.get("eagle_aux_hidden_state_layer_ids")
+            if aux_layer_ids:
+                target_layers = aux_layer_ids
+            else:
+                target_layers = [2, target_num_layers // 2, target_num_layers - 3]
             logger.info(f"EAGLE-3: target_layers = {target_layers} (target model has {target_num_layers} layers)")
-            self.gguf_writer.add_array(f"{self.gguf_writer.arch}.target_layers", target_layers)
+            self.gguf_writer.add_target_layers(target_layers)
 
             # target_hidden_size: prefer eagle3 config, fallback to target config
             if eagle3_raw_config.get("target_hidden_size") is not None:
@@ -82,12 +90,18 @@ class LlamaModel(TextModel):
                 target_hidden_size = target_config["hidden_size"]
                 src = "target model config"
             logger.info(f"EAGLE-3: target_hidden_size = {target_hidden_size} (from {src})")
-            self.gguf_writer.add_uint32(f"{self.gguf_writer.arch}.target_hidden_size", target_hidden_size)
+            self.gguf_writer.add_target_hidden_size(target_hidden_size)
 
             # norm_before_residual (RedHat-style eagle3 specific)
             norm_before_residual = eagle3_raw_config.get("norm_before_residual", False)
             logger.info(f"EAGLE-3: norm_before_residual = {norm_before_residual}")
-            self.gguf_writer.add_bool(f"{self.gguf_writer.arch}.norm_before_residual", norm_before_residual)
+            self.gguf_writer.add_norm_before_residual(norm_before_residual)
+
+            # norm_before_fc: RMSNorm applied to the fused target features before the
+            # fc projection (e.g. nvidia/gpt-oss-120b-Eagle3-v3)
+            norm_before_fc = eagle3_raw_config.get("norm_before_fc", False)
+            logger.info(f"EAGLE-3: norm_before_fc = {norm_before_fc}")
+            self.gguf_writer.add_norm_before_fc(norm_before_fc)
 
     def set_vocab(self):
         # eagle3: use tokenizer from target model if provided
@@ -107,7 +121,7 @@ class LlamaModel(TextModel):
         path_tekken_json = self.dir_model / "tekken.json"
         path_tokenizer_json = self.dir_model / "tokenizer.json"
         if path_tekken_json.is_file() and not path_tokenizer_json.is_file():
-            self._set_vocab_mistral()
+            return self._set_vocab_mistral()
 
         tokenizer_config_file = self.dir_model / 'tokenizer_config.json'
         if tokenizer_config_file.is_file():
@@ -221,6 +235,9 @@ class LlamaModel(TextModel):
             if name == "fc.weight":
                 yield (name, data_torch)
                 return
+            if name == "input_norm.weight":
+                yield (self.format_tensor_name(gguf.MODEL_TENSOR.ENC_OUTPUT_NORM), data_torch)
+                return
             if name == "d2t":
                 # store for manual int64 handling in prepare_tensors (avoid F32 conversion)
                 if not hasattr(self, '_eagle3_int_tensors'):
@@ -289,7 +306,7 @@ class LlamaModel(TextModel):
                 factor = rope_params.get("factor", 8.0)
                 low_freq_factor = rope_params.get("low_freq_factor", 1.0)
                 high_freq_factor = rope_params.get("high_freq_factor", 4.0)
-                old_context_len = self.hparams.get("original_max_position_embeddings", 8192)
+                old_context_len = rope_params.get("original_max_position_embeddings", 8192)
 
                 low_freq_wavelen = old_context_len / low_freq_factor
                 high_freq_wavelen = old_context_len / high_freq_factor
@@ -344,6 +361,7 @@ class LlamaModel(TextModel):
 
 
 @ModelBase.register("ArceeForCausalLM")
+@ModelBase.example("arcee-ai/AFM-4.5B")
 class ArceeModel(LlamaModel):
     model_arch = gguf.MODEL_ARCH.ARCEE
 
@@ -356,6 +374,8 @@ class ArceeModel(LlamaModel):
     "Llama4ForConditionalGeneration",
     "Llama4ForCausalLM",
 )
+# [TAG_HF_EXAMPLE_GATED] meta-llama/Llama-4-Scout-17B-16E-Instruct is gated
+@ModelBase.example("unsloth/Llama-4-Scout-17B-16E-Instruct")
 class Llama4Model(LlamaModel):
     model_arch = gguf.MODEL_ARCH.LLAMA4
     undo_permute = False
@@ -397,16 +417,19 @@ class Llama4Model(LlamaModel):
 
 
 @ModelBase.register("LlamaBidirectionalModel")
+@ModelBase.example("nvidia/llama-embed-nemotron-8b")
 class LlamaEmbedNemotronModel(LlamaModel):
     model_arch = gguf.MODEL_ARCH.LLAMA_EMBED
 
 
 @ModelBase.register("SmolLM3ForCausalLM")
+@ModelBase.example("HuggingFaceTB/SmolLM3-3B")
 class SmolLM3Model(LlamaModel):
     model_arch = gguf.MODEL_ARCH.SMOLLM3
 
 
 @ModelBase.register("ApertusForCausalLM")
+@ModelBase.example("swiss-ai/Apertus-8B-Instruct-2509")
 class ApertusModel(LlamaModel):
     model_arch = gguf.MODEL_ARCH.APERTUS
     undo_permute = False

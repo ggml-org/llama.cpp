@@ -1,19 +1,19 @@
-import type { MCPConnectionPhase, MCPLogLevel, HealthCheckStatus } from '$lib/enums/mcp.enums';
-import type { ToolSource } from '$lib/enums/tools.enums';
+import type { MimeTypeUnion } from './common';
 import type {
+	CallToolResult,
 	Client,
 	ClientCapabilities as SDKClientCapabilities,
-	ServerCapabilities as SDKServerCapabilities,
-	Implementation as SDKImplementation,
-	Tool,
-	CallToolResult,
-	Prompt,
 	GetPromptResult,
+	Implementation as SDKImplementation,
+	Prompt,
 	PromptMessage,
+	ServerCapabilities as SDKServerCapabilities,
+	Tool,
 	Transport
 } from '@modelcontextprotocol/sdk';
-import type { MimeTypeUnion } from './common';
 import type { ColorMode } from '$lib/enums';
+import type { HealthCheckStatus, MCPConnectionPhase, MCPLogLevel } from '$lib/enums/mcp.enums';
+import type { ToolSource } from '$lib/enums/tools.enums';
 
 export type { Tool, CallToolResult, Prompt, GetPromptResult, PromptMessage };
 export type ClientCapabilities = SDKClientCapabilities;
@@ -174,7 +174,6 @@ export interface HealthCheckParams {
 	id: string;
 	enabled: boolean;
 	url: string;
-	requestTimeoutSeconds: number;
 	headers?: string;
 	useProxy?: boolean;
 }
@@ -209,16 +208,43 @@ export type MCPToolCall = {
 	};
 };
 
-export type MCPServerSettingsEntry = {
+/**
+ * Minimum fields needed to display or identify an MCP server.
+ */
+export interface MCPServerDisplayInfo {
 	id: string;
-	enabled: boolean;
-	url: string;
-	requestTimeoutSeconds: number;
-	headers?: string;
 	name?: string;
+	/** User-defined display name, takes precedence over every automatic label. */
+	displayName?: string;
+	url: string;
+}
+
+export type MCPServerSettingsEntry = MCPServerDisplayInfo & {
+	enabled: boolean;
+	headers?: string;
 	iconUrl?: string;
 	useProxy?: boolean;
 };
+
+/**
+ * Pre-defined recommended MCP server shown to the user in picker UIs.
+ * Intentionally minimal: rendering must never trigger a network call to
+ * the upstream server until the user explicitly adds it.
+ */
+export interface RecommendedMCPServer {
+	id: string;
+	name: string;
+	description: string;
+	url: string;
+	/** Local asset path (e.g. "/recommended-mcp/exa.ico") for the card favicon. Used regardless of theme. */
+	iconUrl?: string;
+	/** Light-theme favicon (e.g. "/recommended-mcp/github-light.png"). Preferred over `iconUrl` when paired with `iconUrlDark`. */
+	iconUrlLight?: string;
+	/** Dark-theme favicon (e.g. "/recommended-mcp/github-dark.png"). Preferred over `iconUrl` when paired with `iconUrlLight`. */
+	iconUrlDark?: string;
+	/** When true, picking this recommendation also flips the form's "Authorization" switch on so the user can paste a Bearer token right away. */
+	needsAuthorization?: boolean;
+}
 
 export interface MCPHostManagerConfig {
 	servers: MCPClientConfig['servers'];
@@ -259,13 +285,14 @@ export interface ToolExecutionResult {
 	isError: boolean;
 }
 
-export interface ServerBuiltinToolInfo {
+export interface ServerToolInfo {
 	display_name: string;
 	tool: string;
-	type: ToolSource.BUILTIN;
+	type: ToolSource.SERVER;
 	permissions: {
 		write: boolean;
 	};
+	uses_cwd: boolean;
 	definition: OpenAIToolDefinition;
 }
 

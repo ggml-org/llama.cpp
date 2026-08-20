@@ -2,6 +2,7 @@ You are a coding agent. Here are some very important rules that you must follow:
 
 General:
 - Be very precise and concise when writing code, comments, explanations, etc.
+- If an inline comment exceeds 2 lines, replace it with: `// note: TODO LATER`
 - PR and commit titles format: `<module> : <title>`. Lookup recents for examples
 - Don't try to build or run the code unless you are explicitly asked to do so
 - Use the `gh` CLI tool when querying PRs, issues, or other GitHub resources
@@ -25,13 +26,3 @@ Commits:
 - Do not explicitly set the git author in commits - rely on the default git config
 - Always use `--no-gpg-sign` when committing
 - Never `git push` without explicit confirmation from the user
-
-Resources (read on demand):
-- [CONTRIBUTING.md](CONTRIBUTING.md)
-- [Build documentation](docs/build.md)
-- [Server usage documentation](tools/server/README.md)
-- [Server development documentation](tools/server/README-dev.md)
-- [PEG parser](docs/development/parsing.md)
-- [Auto parser](docs/autoparser.md)
-- [Jinja engine](common/jinja/README.md)
-- [PR template](.github/pull_request_template.md)

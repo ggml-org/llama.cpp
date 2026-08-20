@@ -1,18 +1,18 @@
-ARG OPENVINO_VERSION_MAJOR=2026.2
-ARG OPENVINO_VERSION_FULL=2026.2.0.21903.52ddc073857
+ARG OPENVINO_VERSION_MAJOR=2026.3
+ARG OPENVINO_VERSION_FULL=2026.3.0.22451.bd8d6542e3c
 ARG UBUNTU_VERSION=24.04
 
 # Intel GPU driver versions. https://github.com/intel/compute-runtime/releases
-ARG IGC_VERSION=v2.34.4
-ARG IGC_VERSION_FULL=2_2.34.4+21428
-ARG COMPUTE_RUNTIME_VERSION=26.18.38308.1
-ARG COMPUTE_RUNTIME_VERSION_FULL=26.18.38308.1-0
+ARG IGC_VERSION=v2.38.2
+ARG IGC_VERSION_FULL=2_2.38.2+22051
+ARG COMPUTE_RUNTIME_VERSION=26.27.39122.11
+ARG COMPUTE_RUNTIME_VERSION_FULL=26.27.39122.11-0
 ARG IGDGMM_VERSION=22.10.0
 
 # Intel NPU driver versions. https://github.com/intel/linux-npu-driver/releases
-ARG NPU_DRIVER_VERSION=v1.33.0
-ARG NPU_DRIVER_FULL=v1.33.0.20260529-26625960453
-ARG LIBZE1_VERSION=1.27.0-1~24.04~ppa2
+ARG NPU_DRIVER_VERSION=v1.35.0
+ARG NPU_DRIVER_FULL=v1.35.0.20260722-29947505341
+ARG LIBZE1_VERSION=1.28.2-1~24.04~ppa1
 
 # Optional proxy build arguments
 ARG http_proxy=
@@ -21,6 +21,20 @@ ARG https_proxy=
 ARG BUILD_DATE=N/A
 ARG APP_VERSION=N/A
 ARG APP_REVISION=N/A
+
+ARG NODE_VERSION=24
+
+FROM docker.io/node:$NODE_VERSION AS web
+
+ARG APP_VERSION
+
+WORKDIR /app/tools/ui
+
+COPY tools/ui/package.json tools/ui/package-lock.json ./
+RUN npm ci
+
+COPY tools/ui/ ./
+RUN LLAMA_BUILD_NUMBER="$APP_VERSION" npm run build
 
 ## Build Image
 FROM docker.io/ubuntu:${UBUNTU_VERSION} AS build
@@ -68,6 +82,8 @@ ENV OpenVINO_DIR=/opt/intel/openvino
 WORKDIR /app
 
 COPY . .
+
+COPY --from=web /app/tools/ui/dist tools/ui/dist
 
 # Build Stage
 RUN bash -c "source ${OpenVINO_DIR}/setupvars.sh && \
@@ -154,7 +170,7 @@ RUN --mount=type=cache,target=/var/cache/intel-npu,sharing=locked \
     fi; \
     DEB=/var/cache/intel-npu/libze1_${LIBZE1_VERSION}_amd64.deb; \
     if [ ! -f "$DEB" ]; then \
-        wget -q -O "$DEB" https://snapshot.ppa.launchpadcontent.net/kobuk-team/intel-graphics/ubuntu/20260324T100000Z/pool/main/l/level-zero-loader/libze1_${LIBZE1_VERSION}_amd64.deb; \
+        wget -q -O "$DEB" https://snapshot.ppa.launchpadcontent.net/kobuk-team/intel-graphics/ubuntu/20260606T100000Z/pool/main/l/level-zero-loader/libze1_${LIBZE1_VERSION}_amd64.deb; \
     fi; \
     mkdir /tmp/npu/ && cd /tmp/npu/ && tar -xf "$TGZ" && cp "$DEB" .; \
     apt-get update; \
@@ -198,7 +214,7 @@ ENTRYPOINT ["/app/tools.sh"]
 ### Light, CLI only
 FROM base AS light
 
-COPY --from=build /app/full/llama-cli /app/full/llama-completion /app/
+COPY --from=build /app/full/llama /app/full/llama-cli /app/full/llama-completion /app/
 
 WORKDIR /app
 
@@ -209,7 +225,7 @@ FROM base AS server
 
 ENV LLAMA_ARG_HOST=0.0.0.0
 
-COPY --from=build /app/full/llama-server /app/
+COPY --from=build /app/full/llama /app/full/llama-server /app/
 
 WORKDIR /app
 

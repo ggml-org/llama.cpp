@@ -14,6 +14,9 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
         fields.emplace_back(f);
     };
 
+    add((new field_bool("verbose", params.verbose))
+        ->set_desc("Include __verbose field in the response with additional debug information"));
+
     add((new field_bool("timings_per_token", params.timings_per_token))
         ->set_desc("Include prompt processing and text generation speed information in each response"));
 
@@ -33,6 +36,10 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
 
     add((new field_bool("return_progress", params.return_progress))
         ->set_desc("Include prompt processing progress events in stream mode"));
+
+    add((new field_num("sse_ping_interval", params.sse_ping_interval))
+        ->set_hard_limits(-1, INT32_MAX)
+        ->set_desc("Interval in seconds between SSE comment pings emitted while the stream stays silent, -1 disables pings"));
 
     add((new field_num("n_predict", params.n_predict))
         ->set_hard_limits(-1, INT32_MAX)
@@ -117,8 +124,8 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
         ->set_desc("Dynamic temperature exponent, controls how entropy maps to temperature"));
 
     add((new field_num("repeat_last_n", params.sampling.penalty_last_n))
-        ->set_hard_limits(-1, INT32_MAX)
-        ->set_desc("Last n tokens to consider for penalizing repetition (0 = disabled, -1 = ctx-size)"));
+        ->set_hard_limits(0, INT32_MAX)
+        ->set_desc("Last n tokens to consider for penalizing repetition (0 = disabled)"));
 
     add((new field_num("repeat_penalty", params.sampling.penalty_repeat))
         ->set_desc("Control the repetition of token sequences in the generated text (1.0 = disabled)"));
@@ -144,8 +151,8 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
         ->set_desc("Tokens that extend repetition beyond this length receive exponentially increasing penalty: multiplier * base ^ (sequence_length - allowed_length)"));
 
     add((new field_num("dry_penalty_last_n", params.sampling.dry_penalty_last_n))
-        ->set_hard_limits(-1, INT32_MAX)
-        ->set_desc("How many tokens to scan for repetitions (0 = disabled, -1 = context size)"));
+        ->set_hard_limits(0, INT32_MAX)
+        ->set_desc("How many tokens to scan for repetitions (0 = disabled)"));
 
     add((new field_num("mirostat", params.sampling.mirostat))
         ->set_limits(0, 2)
@@ -201,6 +208,7 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
     add((new field_num("speculative.p_min", params.speculative.draft.p_min))
         ->set_hard_limits(0.0f, 1.0f)
         ->set_desc("Minimum speculative decoding probability for draft tokens (0 = greedy)"));
+
 
     add((new field_str("speculative.type"))
         ->set_desc("Speculative decoding method (for debugging and research purposes)")
@@ -284,7 +292,7 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
         ->set_desc("Chat format used internally by the server")
         ->set_handler([&](field_eval_context & ctx, const json & data) {
             ctx.params.chat_parser_params.format = static_cast<common_chat_format>(data.at("chat_format").get<int>());
-            SRV_INF("Chat format: %s\n", common_chat_format_name(ctx.params.chat_parser_params.format));
+            SRV_TRC("chat format: %s\n", common_chat_format_name(ctx.params.chat_parser_params.format));
         }));
 
     add((new field_str("reasoning_format"))
@@ -383,21 +391,40 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
             ctx.params.sampling.reasoning_budget_start = common_tokenize(ctx.vocab, data.at("reasoning_budget_start_tag").get<std::string>(), false, true);
         }));
 
-    add((new field_str("reasoning_budget_end_tag"))
-        ->set_desc("Token string marking the end of the reasoning budget section")
+    add((new field_json("reasoning_budget_end_tags"))
+        ->add_alias("reasoning_budget_end_tag")
+        ->set_desc("Token strings marking the end of the reasoning budget section; the first is forced when the budget expires")
         ->set_handler([&](field_eval_context & ctx, const json & data) {
             GGML_ASSERT(ctx.vocab != nullptr);
-            std::string end_tag = data.at("reasoning_budget_end_tag").get<std::string>();
-            ctx.params.sampling.reasoning_budget_end = common_tokenize(ctx.vocab, end_tag, false, true);
+            ctx.params.sampling.reasoning_budget_end.clear();
+            if (data.contains("reasoning_budget_end_tags")) {
+                for (const auto & t : data.at("reasoning_budget_end_tags")) {
+                    std::string tag = t.get<std::string>();
+                    if (!tag.empty()) {
+                        ctx.params.sampling.reasoning_budget_end.push_back(common_tokenize(ctx.vocab, tag, false, true));
+                    }
+                }
+            } else if (data.contains("reasoning_budget_end_tag")) {
+                std::string tag = data.at("reasoning_budget_end_tag").get<std::string>();
+                if (!tag.empty()) {
+                    ctx.params.sampling.reasoning_budget_end.push_back(common_tokenize(ctx.vocab, tag, false, true));
+                }
+            }
         }));
 
     add((new field_str("reasoning_budget_message"))
         ->set_desc("Message to prepend to the reasoning budget end tag when forcing it")
         ->set_handler([&](field_eval_context & ctx, const json & data) {
             GGML_ASSERT(ctx.vocab != nullptr);
-            std::string end_tag = json_value(data, "reasoning_budget_end_tag", std::string());
-            std::string message = data.at("reasoning_budget_message").get<std::string>();
-            ctx.params.sampling.reasoning_budget_forced = common_tokenize(ctx.vocab, message + end_tag, false, true);
+            if (!ctx.params.sampling.reasoning_budget_end.empty()) {
+                llama_tokens end_tag = ctx.params.sampling.reasoning_budget_end.front();
+                std::string message = json_value(data, "reasoning_budget_message", std::string());
+                if (!message.empty()) {
+                    llama_tokens message_tokens = common_tokenize(ctx.vocab, message, false, true);
+                    end_tag.insert(end_tag.begin(), message_tokens.begin(), message_tokens.end());
+                }
+                ctx.params.sampling.reasoning_budget_forced = std::move(end_tag);
+            }
         }));
 
     add((new field_json("logit_bias"))
@@ -488,12 +515,11 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
 task_params eval_llama_cmpl_schema(
                 const llama_vocab * vocab,
                 const common_params & params_base,
-                const int n_ctx_slot,
                 const std::vector<llama_logit_bias> & logit_bias_eog,
                 const json & data) {
     task_params params;
 
-    // Sampling parameter defaults are loaded from the global server context (but individual requests can still them)
+    // Sampling parameter defaults are loaded from the global server context (but individual requests can still override them)
     params.sampling      = params_base.sampling;
     params.speculative   = params_base.speculative;
     params.n_keep        = params_base.n_keep;
@@ -501,6 +527,7 @@ task_params eval_llama_cmpl_schema(
     params.n_cache_reuse = params_base.n_cache_reuse;
     params.cache_prompt  = params_base.cache_prompt;
     params.antiprompt    = params_base.antiprompt;
+    params.sse_ping_interval = params_base.sse_ping_interval;
 
     // enabling this will output extra debug information in the HTTP responses from the server
     params.verbose       = params_base.verbosity > 9;
@@ -521,15 +548,6 @@ task_params eval_llama_cmpl_schema(
 
     // post-processing
     {
-        if (params.sampling.penalty_last_n == -1) {
-            // note: should be the slot's context and not the full context, but it's ok
-            params.sampling.penalty_last_n = n_ctx_slot;
-        }
-
-        if (params.sampling.dry_penalty_last_n == -1) {
-            params.sampling.dry_penalty_last_n = n_ctx_slot;
-        }
-
         // if "reasoning_format" is not provided, its handler will not be called, we will need to handle it here
         auto reasoning_format = params.chat_parser_params.reasoning_format;
         params.chat_parser_params.reasoning_in_content = params.stream && (reasoning_format == COMMON_REASONING_FORMAT_DEEPSEEK_LEGACY);
@@ -538,7 +556,7 @@ task_params eval_llama_cmpl_schema(
     // debugging
     {
         auto budget = params.sampling.reasoning_budget_tokens;
-        SRV_DBG("reasoning budget: tokens=%d, generation_prompt='%s', start=%zu toks, end=%zu toks, forced=%zu toks\n",
+        SRV_DBG("reasoning budget: tokens=%d, generation_prompt='%s', start=%zu toks, end=%zu seqs, forced=%zu toks\n",
                 budget, params.sampling.generation_prompt.c_str(),
                 params.sampling.reasoning_budget_start.size(),
                 params.sampling.reasoning_budget_end.size(),
@@ -560,10 +578,16 @@ static void handle_with_catch(const char * name, std::function<void()> func) {
     }
 }
 
+// treat a null value as absent so clients can send null to request the server default
+static bool has_value(const json & data, const char * n) {
+    auto it = data.find(n);
+    return it != data.end() && !it->is_null();
+}
+
 template <typename T>
 void field_num<T>::eval(field_eval_context & ctx, const json & data) {
     for (const auto & n : name) {
-        if (data.contains(n)) {
+        if (has_value(data, n)) {
             handle_with_catch(n, [&]() {
                 if (custom_handler) {
                 custom_handler(ctx, data);
@@ -585,7 +609,7 @@ void field_num<T>::eval(field_eval_context & ctx, const json & data) {
 void field_str::eval(field_eval_context & ctx, const json & data) {
     GGML_ASSERT(custom_handler);
     for (const auto & n : name) {
-        if (data.contains(n)) {
+        if (has_value(data, n)) {
             handle_with_catch(n, [&]() {
                 custom_handler(ctx, data);
             });
@@ -596,7 +620,7 @@ void field_str::eval(field_eval_context & ctx, const json & data) {
 
 void field_bool::eval(field_eval_context & ctx, const json & data) {
     for (const auto & n : name) {
-        if (data.contains(n)) {
+        if (has_value(data, n)) {
             handle_with_catch(n, [&]() {
                 if (custom_handler) {
                     custom_handler(ctx, data);
@@ -612,7 +636,7 @@ void field_bool::eval(field_eval_context & ctx, const json & data) {
 void field_json::eval(field_eval_context & ctx, const json & data) {
     GGML_ASSERT(custom_handler);
     for (const auto & n : name) {
-        if (data.contains(n)) {
+        if (has_value(data, n)) {
             handle_with_catch(n, [&]() {
                 custom_handler(ctx, data);
             });

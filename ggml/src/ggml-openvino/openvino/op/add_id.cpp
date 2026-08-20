@@ -17,6 +17,22 @@ namespace frontend {
 namespace ggml {
 namespace op {
 
+static ov::Output<ov::Node> reshape_add_id_input_to_2d(const ov::Output<ov::Node> & input,
+                                                       const ov::PartialShape & input_shape,
+                                                       const std::vector<int> & dims) {
+    const auto actual_shape = input.get_partial_shape();
+    if (actual_shape.rank().is_static() && actual_shape.rank().get_length() == 2) {
+        return input;
+    }
+
+    if (input_shape.rank().is_static() && input_shape.rank().get_length() == 2) {
+        return input;
+    }
+
+    auto shape = std::make_shared<ov::op::v3::ShapeOf>(input, ov::element::i64);
+    return std::make_shared<ov::op::v1::Reshape>(input, get_dimensions(shape, dims), false);
+}
+
 OutputVector translate_add_id(const NodeContext & context) {
     num_inputs_check(context, 3, 3);
 
@@ -28,11 +44,9 @@ OutputVector translate_add_id(const NodeContext & context) {
     //   input: [1, n_token, n_used, n_embd]
     //   bias:  [1, 1, n_expert, n_embd]
     //   ids:   [1, 1, n_token, n_used]
-    auto bias_shape_4d = std::make_shared<ov::op::v3::ShapeOf>(bias, ov::element::i64);
-    auto ids_shape_4d = std::make_shared<ov::op::v3::ShapeOf>(ids, ov::element::i64);
-
-    bias = std::make_shared<ov::op::v1::Reshape>(bias, get_dimensions(bias_shape_4d, {2, 3}), false);
-    ids = std::make_shared<ov::op::v1::Reshape>(ids, get_dimensions(ids_shape_4d, {2, 3}), false);
+    // Model bias constants may already be stored as [n_expert, n_embd].
+    bias = reshape_add_id_input_to_2d(bias, context.get_input_shape(1), {2, 3});
+    ids = reshape_add_id_input_to_2d(ids, context.get_input_shape(2), {2, 3});
 
     if (ids.get_element_type() != ov::element::i32 && ids.get_element_type() != ov::element::i64) {
         ids = std::make_shared<ov::op::v0::Convert>(ids, ov::element::i32);

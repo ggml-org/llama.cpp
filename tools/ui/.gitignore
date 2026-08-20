@@ -28,12 +28,15 @@ vite.config.ts.timestamp-*
 # PWA Artifacts
 apple-splash-*.png
 apple-touch-icon-*.png
-favicon.ico
-favicon-dark.ico
 maskable-icon-*.png
 pwa-*.png
+static/favicon*
 
 # Storybook
 *storybook.log
 storybook-static
 *.code-workspace
+
+# Vitest browser mode failure artifacts
+.vitest-attachments/
+tests/**/__screenshots__/

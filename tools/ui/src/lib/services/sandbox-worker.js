@@ -21,7 +21,9 @@ self.onmessage = async (event) => {
 	const reply = { logs, result: null, error: null };
 	try {
 		const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
-		const value = await new AsyncFunction(event.data.code)();
+		// The prelude bundled ahead of this shim defines self.nerdamer,
+		// passed into the execution scope as the `nerdamer` parameter.
+		const value = await new AsyncFunction('nerdamer', event.data.code)(self.nerdamer);
 		if (value !== undefined) reply.result = fmt(value);
 	} catch (err) {
 		reply.error = err instanceof Error ? err.stack || err.message : String(err);

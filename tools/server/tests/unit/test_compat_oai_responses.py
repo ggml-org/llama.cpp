@@ -71,3 +71,44 @@ def test_responses_stream_with_openai_library():
             assert r.response.output[0].id.startswith("msg_")
             assert gathered_text == r.response.output_text
             assert match_regex("(Suddenly)+", r.response.output_text)
+
+
+def test_responses_stream_with_llama_telemetry():
+    global server
+    server.n_ctx = 256
+    server.n_batch = 32
+    server.n_slots = 1
+    server.start()
+
+    saw_progress = False
+    saw_delta_timings = False
+    completed = None
+
+    res = server.make_stream_request("POST", "/responses", data={
+        "input": "This is a test" * 10,
+        "max_output_tokens": 8,
+        "temperature": 0.8,
+        "stream": True,
+        "timings_per_token": True,
+        "return_progress": True,
+    })
+
+    for data in res:
+        if "prompt_progress" in data:
+            assert data["type"] == "response.in_progress"
+            assert data["prompt_progress"]["total"] > 0
+            assert data["prompt_progress"]["processed"] >= data["prompt_progress"]["cache"]
+            saw_progress = True
+        if "timings" in data:
+            assert "prompt_per_second" in data["timings"]
+            assert "predicted_per_second" in data["timings"]
+            if data["type"] == "response.output_text.delta":
+                saw_delta_timings = True
+        if data["type"] == "response.completed":
+            completed = data
+
+    assert saw_progress
+    assert saw_delta_timings
+    assert completed is not None
+    assert "usage" in completed["response"]
+    assert "timings" in completed

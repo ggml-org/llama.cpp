@@ -1,13 +1,9 @@
 import {
-	MS_PER_SECOND,
-	SECONDS_PER_MINUTE,
-	SECONDS_PER_HOUR,
-	SHORT_DURATION_THRESHOLD,
 	MEDIUM_DURATION_THRESHOLD,
-	MAX_PREVIEW_LENGTH,
-	STRIP_MARKDOWN_INLINE_REGEX,
-	STRIP_MARKDOWN_CAPTURE_PATTERNS,
-	NEWLINE_SEPARATOR
+	MS_PER_SECOND,
+	SECONDS_PER_HOUR,
+	SECONDS_PER_MINUTE,
+	SHORT_DURATION_THRESHOLD
 } from '$lib/constants';
 
 /**
@@ -19,6 +15,7 @@ import {
  */
 export function formatFileSize(bytes: number | unknown): string {
 	if (typeof bytes !== 'number') return 'Unknown';
+
 	if (bytes === 0) return '0 Bytes';
 
 	const k = 1024;
@@ -74,6 +71,7 @@ export function formatNumber(num: number | unknown): string {
 export function formatJsonPretty(jsonString: string): string {
 	try {
 		const parsed = JSON.parse(jsonString);
+
 		return JSON.stringify(parsed, null, 2);
 	} catch {
 		return jsonString;
@@ -88,8 +86,8 @@ export function formatJsonPretty(jsonString: string): string {
  */
 export function formatTime(date: Date): string {
 	return date.toLocaleTimeString('en-US', {
-		hour12: false,
 		hour: '2-digit',
+		hour12: false,
 		minute: '2-digit',
 		second: '2-digit'
 	});
@@ -118,7 +116,6 @@ export function formatPerformanceTime(ms: number): string {
 	const hours = Math.floor(totalSeconds / SECONDS_PER_HOUR);
 	const minutes = Math.floor((totalSeconds % SECONDS_PER_HOUR) / SECONDS_PER_MINUTE);
 	const seconds = Math.floor(totalSeconds % SECONDS_PER_MINUTE);
-
 	const parts: string[] = [];
 
 	if (hours > 0) {
@@ -153,35 +150,6 @@ export function formatAttachmentText(
 	extra?: string
 ): string {
 	const header = extra ? `${name} (${extra})` : name;
+
 	return `\n\n--- ${label}: ${header} ---\n${content}`;
-}
-
-export function formatReasoningPreview(content: string): { preview: string; overflow: number } {
-	if (!content) return { preview: '', overflow: 0 };
-
-	const lines = content.split(NEWLINE_SEPARATOR);
-	let lastLine = '';
-
-	for (let i = lines.length - 1; i >= 0; i--) {
-		let cleaned = lines[i].trim();
-		if (!cleaned) continue;
-
-		cleaned = cleaned.replace(STRIP_MARKDOWN_INLINE_REGEX, '');
-		for (const [pattern, replacement] of STRIP_MARKDOWN_CAPTURE_PATTERNS) {
-			cleaned = cleaned.replace(pattern, replacement);
-		}
-
-		if (cleaned.length > 0) {
-			lastLine = cleaned;
-			break;
-		}
-	}
-
-	const fullLength = lastLine.length;
-	const overflow = Math.max(0, fullLength - MAX_PREVIEW_LENGTH);
-	if (fullLength > MAX_PREVIEW_LENGTH) {
-		lastLine = lastLine.slice(0, MAX_PREVIEW_LENGTH) + '...';
-	}
-
-	return { preview: lastLine, overflow };
 }

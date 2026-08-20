@@ -25,7 +25,7 @@ using json = nlohmann::ordered_json;
 static int main_automated_tests(void);
 
 static void run_multiple(const std::string& dir_path, bool stop_on_first_failure, const json& input, bool use_common = false);
-static void run_single(const std::string& contents, json input, bool use_common = false, const std::string & output_path = "");
+static void run_single(const std::string& contents, json input, bool use_common = false, bool dump_prog = false, const std::string & output_path = "");
 
 static std::string HELP = R"(
 Usage: test-chat-template [OPTIONS] PATH_TO_TEMPLATE
@@ -35,6 +35,7 @@ Options:
   --json <path>            Path to the JSON input file.
   --stop-on-first-fail     Stop testing on the first failure (default: false).
   --no-common              Use direct Jinja engine instead of common chat templates (default: use common).
+  --dump-prog              Dump the parsed program for debugging (only for single template runs).
   --output <path>          Path to output results (only for single template runs).
 If PATH_TO_TEMPLATE is a file, runs that single template.
 If PATH_TO_TEMPLATE is a directory, runs all .jinja files in that directory.
@@ -118,6 +119,7 @@ int main(int argc, char ** argv) {
     std::string & json_to_use = DEFAULT_JSON;
     bool stop_on_first_fail = false;
     bool use_common = true;
+    bool dump_prog = false;
 
     for (size_t i = 1; i < args.size(); i++) {
         if (args[i] == "--help" || args[i] == "-h") {
@@ -135,7 +137,9 @@ int main(int argc, char ** argv) {
             output_path = args[i + 1];
             i++;
         } else if (args[i] == "--no-common") {
-            use_common = true;
+            use_common = false;
+        } else if (args[i] == "--dump-prog") {
+            dump_prog = true;
         } else if (tmpl_path.empty()) {
             tmpl_path = args[i];
         } else {
@@ -172,7 +176,7 @@ int main(int argc, char ** argv) {
         std::string contents = std::string(
             std::istreambuf_iterator<char>(infile),
             std::istreambuf_iterator<char>());
-        run_single(contents, input_json, use_common, output_path);
+        run_single(contents, input_json, use_common, dump_prog, output_path);
     } else {
         std::cerr << "Error: PATH_TO_TEMPLATE is not a valid file or directory: " << tmpl_path << "\n";
         return 1;
@@ -276,10 +280,20 @@ static jinja::value_string format_using_direct_engine(
 }
 
 
-void run_single(const std::string& contents, json input, bool use_common, const std::string & output_path) {
+void run_single(const std::string& contents, json input, bool use_common, bool dump_prog, const std::string & output_path) {
     jinja::enable_debug(true);
 
     jinja::value_string output_parts;
+
+    if (dump_prog) {
+        jinja::lexer lexer;
+        auto lexer_res = lexer.tokenize(contents);
+        jinja::program ast = jinja::parse_from_tokens(lexer_res);
+        std::string prog_dump = jinja::runtime::debug_dump_program(ast, contents);
+        std::cout << "\n=== DUMPED PROGRAM ===\n";
+        std::cout << prog_dump << "\n";
+        return;
+    }
 
     if (use_common) {
         std::string bos_token = "<s>";

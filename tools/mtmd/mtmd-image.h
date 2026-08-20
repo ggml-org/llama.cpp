@@ -74,7 +74,6 @@ struct mtmd_image_preprocessor_llava_uhd : mtmd_image_preprocessor {
         std::vector<slice_coordinates> slices;
     };
 
-    // LFM2 override this function to implement its custom slicing logic
     virtual slice_instructions get_slice_instructions(const clip_image_size & original_size);
 
     struct slice_output {
@@ -83,10 +82,8 @@ struct mtmd_image_preprocessor_llava_uhd : mtmd_image_preprocessor {
     };
     slice_output slice_image(const clip_image_u8 & img, const slice_instructions & inst);
 
-private:
+protected:
     clip_image_size get_best_resize(const clip_image_size & original_size, int scale_resolution, int patch_size, bool allow_upscale = false);
-
-    clip_image_size resize_maintain_aspect_ratio(const clip_image_size & orig, const clip_image_size & target_max);
 
     /**
      * Selects the best resolution from a list of possible resolutions based on the original size.
@@ -104,6 +101,9 @@ private:
      * @return The best fit resolution
      */
     clip_image_size select_best_resolution(const clip_image_size & original_size, const std::vector<clip_image_size> & possible_resolutions);
+
+private:
+    clip_image_size resize_maintain_aspect_ratio(const clip_image_size & orig, const clip_image_size & target_max);
     int ensure_divide(int length, int patch_size);
     clip_image_size get_refine_size(const clip_image_size & original_size, const clip_image_size & grid, int scale_resolution, int patch_size, bool allow_upscale = false);
     clip_image_size get_best_grid(const int max_slice_nums, const int multiple, const float log_ratio);
@@ -129,6 +129,12 @@ struct mtmd_image_preprocessor_longest_edge : mtmd_image_preprocessor {
     mtmd_image_preproc_out preprocess(const clip_image_u8 & img) override;
 };
 
+// custom llava-uhd slicing logic for MiniCPM-V
+struct mtmd_image_preprocessor_minicpmv : mtmd_image_preprocessor_llava_uhd {
+    using mtmd_image_preprocessor_llava_uhd::mtmd_image_preprocessor_llava_uhd;
+    slice_instructions get_slice_instructions(const clip_image_size & original_size) override;
+};
+
 // custom llava-uhd slicing logic for LFM2
 // ref: https://github.com/huggingface/transformers/blob/v5.1.0/src/transformers/models/lfm2_vl/image_processing_lfm2_vl_fast.py
 struct mtmd_image_preprocessor_lfm2 : mtmd_image_preprocessor_llava_uhd {
@@ -139,7 +145,10 @@ struct mtmd_image_preprocessor_lfm2 : mtmd_image_preprocessor_llava_uhd {
     static constexpr int   tile_size            = 512;
 
     using mtmd_image_preprocessor_llava_uhd::mtmd_image_preprocessor_llava_uhd;
+    mtmd_image_preproc_out preprocess(const clip_image_u8 & img) override;
     slice_instructions get_slice_instructions(const clip_image_size & original_size) override;
+
+    static bool should_tile(const clip_hparams & hparams, const clip_image_size & original_size);
 
 private:
     clip_image_size find_closest_aspect_ratio(
@@ -160,29 +169,29 @@ struct mtmd_image_preprocessor_internvl : mtmd_image_preprocessor_llava_uhd {
     mtmd_image_preproc_out preprocess(const clip_image_u8 & img) override;
 };
 
+// DeepSeek-OCR (v1/v2) global view + optional local tile grid
 struct mtmd_image_preprocessor_deepseekocr : mtmd_image_preprocessor {
-    mtmd_image_preprocessor_deepseekocr(const clip_ctx * ctx) : mtmd_image_preprocessor(ctx) {}
-    mtmd_image_preproc_out preprocess(const clip_image_u8 & img) override;
-};
-
-// DeepSeek-OCR-2: a 1024x1024 global view, plus InternVL-style 768x768 local
-// tiles when the image is larger than a tile in either dimension.
-struct mtmd_image_preprocessor_deepseekocr2 : mtmd_image_preprocessor {
-    static constexpr int base_size = 1024; // global view
-    static constexpr int tile_size = 768;  // local tile
-    static constexpr int min_tiles = 2;
-    static constexpr int max_tiles = 6;
-
-    mtmd_image_preprocessor_deepseekocr2(const clip_ctx * ctx) : mtmd_image_preprocessor(ctx) {}
+    mtmd_image_preprocessor_deepseekocr(const clip_ctx * ctx)
+        : mtmd_image_preprocessor(ctx),
+            fuse_row(clip_get_projector_type(ctx) == PROJECTOR_TYPE_DEEPSEEKOCR),
+          base_size(hparams.image_size),
+          tile_size(hparams.preproc_tile_size),
+          min_tiles(hparams.preproc_min_tiles),
+          max_tiles(hparams.preproc_max_tiles) {}
     mtmd_image_preproc_out preprocess(const clip_image_u8 & img) override;
 
 private:
-    static std::vector<clip_image_size> get_target_ratios();
-    static clip_image_size              find_closest_aspect_ratio(
-        float                                aspect_ratio,
-        const std::vector<clip_image_size> & target_ratios,
-        int                                  width,
-        int                                  height);
+    bool fuse_row; // v1 fuses a tile-row into one image; v2 keeps tiles separate
+    int base_size; // global view
+    int tile_size; // each tile
+    int min_tiles;
+    int max_tiles;
+
+    std::vector<clip_image_size> get_target_ratios() const;
+    clip_image_size find_closest_aspect_ratio(
+            float aspect_ratio,
+            const std::vector<clip_image_size> & target_ratios,
+            int width, int height) const;
 };
 
 // custom image preprocessing for Step3VL
@@ -219,8 +228,14 @@ struct mtmd_image_preprocessor_youtuvl : mtmd_image_preprocessor {
     mtmd_image_preproc_out preprocess(const clip_image_u8 & img) override;
 };
 
-// similar to llava_uhd, but has add_newline
+// llava-next "anyres": stacks the overview and all tiles into one image, assembled by clip in a single graph
 struct mtmd_image_preprocessor_granite : mtmd_image_preprocessor_llava_uhd {
     mtmd_image_preprocessor_granite(const clip_ctx * ctx) : mtmd_image_preprocessor_llava_uhd(ctx) {}
+    mtmd_image_preproc_out preprocess(const clip_image_u8 & img) override;
+};
+
+// pick the patch grid closest to the input aspect ratio under the per-image token cap, stretch-resize.
+struct mtmd_image_preprocessor_muse_glimmer : mtmd_image_preprocessor {
+    mtmd_image_preprocessor_muse_glimmer(const clip_ctx * ctx) : mtmd_image_preprocessor(ctx) {}
     mtmd_image_preproc_out preprocess(const clip_image_u8 & img) override;
 };
