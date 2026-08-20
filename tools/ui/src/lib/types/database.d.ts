@@ -19,6 +19,13 @@ export interface DatabaseConversation {
 	pinned?: boolean;
 }
 
+export interface DatabaseMemoryEntry {
+	name: string;
+	description: string;
+	body: string;
+	updated: number;
+}
+
 export interface DatabaseMessageExtraAudioFile {
 	type: AttachmentType.AUDIO;
 	name: string;
@@ -136,3 +143,7 @@ export type ExportedConversation = {
 };
 
 export type ExportedConversations = ExportedConversation | ExportedConversation[];
+
+export interface ExportedMemory {
+	entries: DatabaseMemoryEntry[];
+}

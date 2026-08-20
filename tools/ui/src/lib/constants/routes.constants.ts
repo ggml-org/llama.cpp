@@ -17,6 +17,7 @@ export const SETTINGS_SECTION_SLUGS = {
 	DISPLAY: 'display',
 	GENERAL: 'general',
 	IMPORT_EXPORT: 'import-export',
+	MEMORY: 'memory',
 	PENALTIES: 'penalties',
 	SAMPLING: 'sampling',
 	TOOLS: 'tools'

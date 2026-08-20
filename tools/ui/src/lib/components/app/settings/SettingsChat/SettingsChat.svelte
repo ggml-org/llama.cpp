@@ -6,6 +6,7 @@
 		SettingsChatDesktopSidebar,
 		SettingsChatFields,
 		SettingsChatImportExportTab,
+		SettingsChatMemoryEntries,
 		SettingsChatMobileHeader,
 		SettingsChatToolsTab,
 		SettingsFooter
@@ -168,6 +169,10 @@
 										Reload app
 									</Button>
 								</div>
+							{/if}
+
+							{#if currentSection.title === SETTINGS_SECTION_TITLES.MEMORY}
+								<SettingsChatMemoryEntries />
 							{/if}
 						</div>
 					{/if}

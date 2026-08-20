@@ -1,18 +1,20 @@
-import { IDXDB_STORES, IDXDB_TABLES, STORAGE_APP_NAME } from '$lib/constants';
+import { IDXDB_STORES, IDXDB_STORES_MEMORY, IDXDB_TABLES, STORAGE_APP_NAME } from '$lib/constants';
 import { MessageRole } from '$lib/enums';
-import type { McpServerOverride } from '$lib/types/database';
+import type { DatabaseMemoryEntry, McpServerOverride } from '$lib/types/database';
 import type { ExportedConversation } from '$lib/types/database';
 import { filterByLeafNodeId, findDescendantMessages, uuid } from '$lib/utils';
 import Dexie, { type EntityTable } from 'dexie';
 
 class LlamaUiDatabase extends Dexie {
 	[IDXDB_TABLES.conversations]!: EntityTable<DatabaseConversation, string>;
+	[IDXDB_TABLES.memoryEntries]!: EntityTable<DatabaseMemoryEntry, 'name'>;
 	[IDXDB_TABLES.messages]!: EntityTable<DatabaseMessage, string>;
 
 	constructor() {
 		super(STORAGE_APP_NAME);
 
 		this.version(1).stores(IDXDB_STORES);
+		this.version(2).stores(IDXDB_STORES_MEMORY);
 	}
 }
 
@@ -734,5 +736,64 @@ export class DatabaseService {
 				return newConv;
 			}
 		);
+	}
+
+	/**
+	 *
+	 *
+	 * Memory entries
+	 *
+	 *
+	 */
+
+	/**
+	 * Returns every memory entry, sorted by name.
+	 */
+	static async getMemoryEntries(): Promise<DatabaseMemoryEntry[]> {
+		return db[IDXDB_TABLES.memoryEntries].orderBy('name').toArray();
+	}
+
+	/**
+	 * Returns one memory entry, or undefined when it does not exist.
+	 */
+	static async getMemoryEntry(name: string): Promise<DatabaseMemoryEntry | undefined> {
+		return db[IDXDB_TABLES.memoryEntries].get(name);
+	}
+
+	/**
+	 * Creates or replaces one memory entry.
+	 */
+	static async putMemoryEntry(entry: DatabaseMemoryEntry): Promise<void> {
+		await db[IDXDB_TABLES.memoryEntries].put(entry);
+	}
+
+	/**
+	 * Removes one memory entry.
+	 *
+	 * @returns False when the entry did not exist
+	 */
+	static async deleteMemoryEntry(name: string): Promise<boolean> {
+		const entry = await db[IDXDB_TABLES.memoryEntries].get(name);
+
+		if (!entry) return false;
+
+		await db[IDXDB_TABLES.memoryEntries].delete(name);
+
+		return true;
+	}
+
+	/**
+	 * Removes every memory entry.
+	 */
+	static async clearMemoryEntries(): Promise<void> {
+		await db[IDXDB_TABLES.memoryEntries].clear();
+	}
+
+	/**
+	 * Runs a scope in a read-write transaction on the memory entries table,
+	 * keeping a read-modify-write atomic under parallel tool calls.
+	 */
+	static async memoryTransaction<T>(scope: () => Promise<T>): Promise<T> {
+		return db.transaction('rw', db[IDXDB_TABLES.memoryEntries], scope);
 	}
 }
