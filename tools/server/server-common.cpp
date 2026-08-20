@@ -13,6 +13,7 @@
 #include <sstream>
 #include <fstream>
 #include <limits>
+#include <cstdlib>
 #include <cstring>
 #include <type_traits>
 
@@ -1672,6 +1673,32 @@ bool is_valid_utf8(const std::string & str) {
     }
 
     return true;
+}
+
+std::filesystem::path path_from_utf8(const std::string & s) {
+    return std::filesystem::u8path(s);
+}
+
+std::string path_to_utf8(const std::filesystem::path & p) {
+    const auto s = p.generic_u8string();
+    return std::string(s.begin(), s.end());
+}
+
+std::string raw_home_env() {
+#ifdef _WIN32
+    // the narrow getenv would return the profile path in the active code page
+    const wchar_t * w = _wgetenv(L"HOME");
+    if (w == nullptr) w = _wgetenv(L"USERPROFILE");
+    return w ? path_to_utf8(std::filesystem::path(w)) : std::string();
+#else
+    const char * h = getenv("HOME");
+    return h ? std::string(h) : std::string();
+#endif
+}
+
+const std::string & home_dir() {
+    static const std::string home = raw_home_env();
+    return home;
 }
 
 llama_tokens format_prompt_infill(

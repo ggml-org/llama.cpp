@@ -96,34 +96,6 @@ enum class list_kind {
     all,   // both
 };
 
-// a narrow path uses the active code page on Windows, so every crossing between
-// a std::string (always UTF-8 here) and fs::path is converted explicitly
-static fs::path path_from_utf8(const std::string & s) {
-    return fs::u8path(s);
-}
-
-// '/' separators on every platform: Windows accepts them, the web UI needs them
-static std::string path_to_utf8(const fs::path & p) {
-    const auto s = p.generic_u8string();
-    return std::string(s.begin(), s.end());
-}
-
-// home directory, read once at first use (getenv is not thread safe against setenv)
-static const std::string & home_dir() {
-    static const std::string home = [] {
-#ifdef _WIN32
-        // the narrow getenv would return the profile path in the active code page
-        const wchar_t * w = _wgetenv(L"HOME");
-        if (w == nullptr) w = _wgetenv(L"USERPROFILE");
-        return w ? path_to_utf8(fs::path(w)) : std::string();
-#else
-        const char * h = getenv("HOME");
-        return h ? std::string(h) : std::string();
-#endif
-    }();
-    return home;
-}
-
 static std::string expand_home(const std::string & path) {
     if (path.empty() || path[0] != '~') return path;
     if (path.size() > 1 && path[1] != '/' && path[1] != '\\') return path;
