@@ -50,16 +50,13 @@ import {
 import { SvelteMap } from 'svelte/reactivity';
 
 class ChatStore implements ChatStreamHost, ChatFlowsHost {
-	currentResponse = $state('');
-	errorDialogState = $state<ErrorDialogState | null>(null);
-	// resumable stream connection state for the active conversation
-	// streaming -> bytes flowing normally, resuming -> waiting on /v1/stream reconnect, lost -> unrecoverable
-	streamConnectionState = $state<StreamConnectionState>(StreamConnectionState.STREAMING);
 	chatReasoningStates = new SvelteMap<string, boolean>();
 	chatStreamingStates = new SvelteMap<
 		string,
 		{ response: string; messageId: string; model?: string | null }
 	>();
+	currentResponse = $state('');
+	errorDialogState = $state<ErrorDialogState | null>(null);
 	// true while the active conversation has a local pipe (send, attach or resume-wait)
 	isLoading = $derived(this.activity.isLocal(conversationsStore.activeConversation?.id ?? ''));
 	// true while the active conversation streams reasoning content but no visible content yet
@@ -67,117 +64,34 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 		this.chatReasoningStates.get(conversationsStore.activeConversation?.id ?? '') ?? false
 	);
 	pendingEditMessageId = $state<string | null>(null);
-	// server-side stream sessions: discovery, attach/replay, resume retry, remote sync
-	private streams = new ChatStreamManager(this);
+	// resumable stream connection state for the active conversation
+	// streaming -> bytes flowing normally, resuming -> waiting on /v1/stream reconnect, lost -> unrecoverable
+	streamConnectionState = $state<StreamConnectionState>(StreamConnectionState.STREAMING);
+	private abortControllers = new SvelteMap<string, AbortController>();
+	private addFilesHandler: ((files: File[]) => void) | null = $state(null);
 	// message flows: edit, regenerate, continue, delete
 	private flows = new ChatMessageFlows(this);
-	private abortControllers = new SvelteMap<string, AbortController>();
-	private preEncodeAbortController: AbortController | null = null;
 	private isEditModeActive = $state(false);
-	private addFilesHandler: ((files: File[]) => void) | null = $state(null);
-	private pendingDraftMessage = $state<string>('');
 	private pendingDraftFiles = $state<ChatUploadedFile[]>([]);
-
+	private pendingDraftMessage = $state<string>('');
 	/** Reactive: queued pending messages for non-agentic streaming */
 	private pendingMessages = new SvelteMap<
 		string,
 		{ content: string; extras?: DatabaseMessageExtra[] }
 	>();
+	private preEncodeAbortController: AbortController | null = null;
 
-	/** Processing state, composed here so consumers have a single chat scope. */
-	get processing() {
-		return chatProcessingStore;
-	}
+	// server-side stream sessions: discovery, attach/replay, resume retry, remote sync
+	private streams = new ChatStreamManager(this);
 
 	/** Conv activity (local pipe / remote session), composed here. */
 	get activity() {
 		return chatActivityStore;
 	}
 
-	setChatLoading(convId: string, loading: boolean): void {
-		if (loading) {
-			this.activity.markLocal(convId);
-		} else {
-			this.activity.localEnded(convId);
-			this.setChatReasoning(convId, false);
-		}
-	}
-
-	setChatReasoning(convId: string, reasoning: boolean): void {
-		if (reasoning) this.chatReasoningStates.set(convId, true);
-		else this.chatReasoningStates.delete(convId);
-	}
-	setChatStreaming(
-		convId: string,
-		response: string,
-		messageId: string,
-		model?: string | null
-	): void {
-		this.chatStreamingStates.set(convId, {
-			messageId,
-			model: model ?? this.chatStreamingStates.get(convId)?.model,
-			response
-		});
-
-		if (convId === conversationsStore.activeConversation?.id) this.currentResponse = response;
-	}
-	clearChatStreaming(convId: string, messageId?: string): void {
-		// session aware: a stale generation must not wipe a newer one's streaming state on the
-		// same conversation, that would drop the frozen stop identity and stop the wrong session
-		if (messageId !== undefined) {
-			const cur = this.chatStreamingStates.get(convId);
-
-			if (cur && cur.messageId !== messageId) return;
-		}
-
-		this.chatStreamingStates.delete(convId);
-
-		if (convId === conversationsStore.activeConversation?.id) this.currentResponse = '';
-	}
-
-	/**
-	 * Resets the loading, streaming and processing state for a conversation
-	 * after a generation ends or errors. Shared by the flows' exit paths.
-	 */
-	cleanupStreaming(convId: string): void {
-		this.setChatLoading(convId, false);
-		this.clearChatStreaming(convId);
-		this.processing.setState(convId, null);
-	}
-	syncLoadingStateForChat(convId: string): void {
-		const s = this.chatStreamingStates.get(convId);
-
-		this.currentResponse = s?.response || '';
-		this.processing.setActiveConversation(convId);
-
-		// Sync streaming content to activeMessages so UI displays current content
-		if (s?.response && s?.messageId) {
-			const idx = conversationsStore.findMessageIndex(s.messageId);
-
-			if (idx !== -1) {
-				conversationsStore.updateMessageAtIndex(idx, { content: s.response });
-			}
-		}
-	}
-	/** Reset per-view state when (re)mounting the empty chat screen. */
-	clearUIState(): void {
-		this.currentResponse = '';
-	}
-
-	/** True while the active conversation has a live streaming pipe. */
-	isStreaming(): boolean {
-		return this.chatStreamingStates.has(conversationsStore.activeConversation?.id ?? '');
-	}
-
-	getOrCreateAbortController(convId: string): AbortController {
-		let c = this.abortControllers.get(convId);
-
-		if (!c || c.signal.aborted) {
-			c = new AbortController();
-			this.abortControllers.set(convId, c);
-		}
-
-		return c;
+	/** Processing state, composed here so consumers have a single chat scope. */
+	get processing() {
+		return chatProcessingStore;
 	}
 
 	/**
@@ -198,121 +112,6 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 			c.abort();
 			this.abortControllers.delete(convId);
 		}
-	}
-
-	showErrorDialog(state: ErrorDialogState | null): void {
-		this.errorDialogState = state;
-	}
-
-	dismissErrorDialog(): void {
-		this.errorDialogState = null;
-	}
-
-	clearEditMode(): void {
-		this.isEditModeActive = false;
-		this.addFilesHandler = null;
-	}
-
-	isEditing(): boolean {
-		return this.isEditModeActive;
-	}
-
-	setEditModeActive(handler: (files: File[]) => void): void {
-		this.isEditModeActive = true;
-		this.addFilesHandler = handler;
-	}
-
-	getAddFilesHandler(): ((files: File[]) => void) | null {
-		return this.addFilesHandler;
-	}
-
-	clearPendingEditMessageId(): void {
-		this.pendingEditMessageId = null;
-	}
-
-	savePendingDraft(message: string, files: ChatUploadedFile[]): void {
-		this.pendingDraftMessage = message;
-		this.pendingDraftFiles = [...files];
-	}
-
-	consumePendingDraft(): { message: string; files: ChatUploadedFile[] } | null {
-		if (!this.pendingDraftMessage && this.pendingDraftFiles.length === 0) return null;
-
-		const d = { files: [...this.pendingDraftFiles], message: this.pendingDraftMessage };
-
-		this.pendingDraftMessage = '';
-		this.pendingDraftFiles = [];
-
-		return d;
-	}
-
-	hasPendingDraft(): boolean {
-		return Boolean(this.pendingDraftMessage) || this.pendingDraftFiles.length > 0;
-	}
-
-	/** Convs with any activity (local pipe or remote session), sidebar spinners. */
-	getAllLoadingChats(): string[] {
-		return this.activity.loadingConvs;
-	}
-
-	/**
-	 * Server-side stream sessions (discovery, attach/replay, resume retry,
-	 * remote-running snapshot) live in ChatStreamManager.
-	 */
-	async discoverActiveStream(convId: string): Promise<void> {
-		return this.streams.discoverActiveStream(convId);
-	}
-
-	async syncRemoteRunningStreams(): Promise<void> {
-		return this.streams.syncRemoteRunningStreams();
-	}
-
-	getResumeModel(convId: string): string | null {
-		return this.streams.getResumeModel(convId);
-	}
-
-	getChatStreaming(convId: string): { response: string; messageId: string } | undefined {
-		return this.getChatStreamingState(convId);
-	}
-
-	isChatLoading(convId: string): boolean {
-		return this.activity.isLocal(convId);
-	}
-
-	isChatLoadingInternal(convId: string): boolean {
-		return this.activity.isLocal(convId) || this.chatStreamingStates.has(convId);
-	}
-
-	hasPendingMessage(convId: string): boolean {
-		return this.pendingMessages.has(convId);
-	}
-
-	getPendingMessageContent(convId: string): string | null {
-		return this.pendingMessages.get(convId)?.content ?? null;
-	}
-
-	getPendingMessageExtras(convId: string): DatabaseMessageExtra[] | undefined {
-		return this.pendingMessages.get(convId)?.extras;
-	}
-
-	injectPendingMessage(convId: string, content: string, extras?: DatabaseMessageExtra[]): void {
-		this.pendingMessages.set(convId, { content, extras });
-	}
-
-	clearPendingMessage(convId: string): void {
-		this.pendingMessages.delete(convId);
-	}
-
-	consumePendingMessage(
-		convId: string
-	): { content: string; extras?: DatabaseMessageExtra[] } | null {
-		const msg = this.pendingMessages.get(convId);
-
-		if (!msg) return null;
-
-		this.pendingMessages.delete(convId);
-
-		return msg;
 	}
 
 	async addMessage(
@@ -362,35 +161,6 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 
 		return message;
 	}
-
-	/**
-	 * Record a working-directory change into chat history as a synthetic
-	 * user message, so the model sees it on its next turn (the client
-	 * sends the cwd itself via the x-tool-cwd header on tool calls).
-	 * A plain user message is used because some chat templates reject
-	 * tool messages without a preceding tool call.
-	 */
-	async recordCwdChange(cwd: string | null): Promise<void> {
-		const content = cwd
-			? formatCwdMessage(cwd, await toolsStore.resolveServerHome())
-			: CWD_CLEARED_TEXT;
-		// Reuse the trailing cwd row when it is already the last message, so
-		// repeated picks update it in place instead of stacking another row.
-		const last = conversationsStore.activeMessages[conversationsStore.activeMessages.length - 1];
-
-		if (last && last.role === MessageRole.USER && last.isSynthetic === true) {
-			await DatabaseService.updateMessage(last.id, { content, isSynthetic: true });
-			conversationsStore.updateMessageAtIndex(conversationsStore.activeMessages.length - 1, {
-				content,
-				isSynthetic: true
-			});
-
-			return;
-		}
-
-		await this.addMessage(MessageRole.USER, content, MessageType.TEXT, '-1', undefined, true);
-	}
-
 	async addSystemPrompt(): Promise<void> {
 		let activeConv = conversationsStore.activeConversation;
 
@@ -460,6 +230,335 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 			console.error('Failed to add system prompt:', error);
 		}
 	}
+	cancelPreEncode(): void {
+		if (this.preEncodeAbortController) {
+			this.preEncodeAbortController.abort();
+			this.preEncodeAbortController = null;
+		}
+	}
+
+	/**
+	 * Resets the loading, streaming and processing state for a conversation
+	 * after a generation ends or errors. Shared by the flows' exit paths.
+	 */
+	cleanupStreaming(convId: string): void {
+		this.setChatLoading(convId, false);
+		this.clearChatStreaming(convId);
+		this.processing.setState(convId, null);
+	}
+	clearChatStreaming(convId: string, messageId?: string): void {
+		// session aware: a stale generation must not wipe a newer one's streaming state on the
+		// same conversation, that would drop the frozen stop identity and stop the wrong session
+		if (messageId !== undefined) {
+			const cur = this.chatStreamingStates.get(convId);
+
+			if (cur && cur.messageId !== messageId) return;
+		}
+
+		this.chatStreamingStates.delete(convId);
+
+		if (convId === conversationsStore.activeConversation?.id) this.currentResponse = '';
+	}
+	clearEditMode(): void {
+		this.isEditModeActive = false;
+		this.addFilesHandler = null;
+	}
+
+	clearPendingEditMessageId(): void {
+		this.pendingEditMessageId = null;
+	}
+
+	clearPendingMessage(convId: string): void {
+		this.pendingMessages.delete(convId);
+	}
+
+	/** Reset per-view state when (re)mounting the empty chat screen. */
+	clearUIState(): void {
+		this.currentResponse = '';
+	}
+
+	consumePendingDraft(): { message: string; files: ChatUploadedFile[] } | null {
+		if (!this.pendingDraftMessage && this.pendingDraftFiles.length === 0) return null;
+
+		const d = { files: [...this.pendingDraftFiles], message: this.pendingDraftMessage };
+
+		this.pendingDraftMessage = '';
+		this.pendingDraftFiles = [];
+
+		return d;
+	}
+
+	consumePendingMessage(
+		convId: string
+	): { content: string; extras?: DatabaseMessageExtra[] } | null {
+		const msg = this.pendingMessages.get(convId);
+
+		if (!msg) return null;
+
+		this.pendingMessages.delete(convId);
+
+		return msg;
+	}
+
+	async continueAssistantMessage(messageId: string): Promise<void> {
+		return this.flows.continueAssistantMessage(messageId);
+	}
+
+	async createAssistantMessage(parentId?: string): Promise<DatabaseMessage> {
+		const activeConv = conversationsStore.activeConversation;
+
+		if (!activeConv) throw new Error('No active conversation');
+
+		return await DatabaseService.createMessageBranch(
+			{
+				children: [],
+				content: '',
+				convId: activeConv.id,
+				model: null,
+				role: MessageRole.ASSISTANT,
+				timestamp: Date.now(),
+				toolCalls: '',
+				type: MessageType.TEXT
+			},
+			parentId || null
+		);
+	}
+
+	async deleteMessage(messageId: string): Promise<void> {
+		return this.flows.deleteMessage(messageId);
+	}
+
+	/**
+	 * Server-side stream sessions (discovery, attach/replay, resume retry,
+	 * remote-running snapshot) live in ChatStreamManager.
+	 */
+	async discoverActiveStream(convId: string): Promise<void> {
+		return this.streams.discoverActiveStream(convId);
+	}
+
+	dismissErrorDialog(): void {
+		this.errorDialogState = null;
+	}
+
+	async editAssistantMessage(
+		messageId: string,
+		newContent: string,
+		shouldBranch: boolean
+	): Promise<void> {
+		return this.flows.editAssistantMessage(messageId, newContent, shouldBranch);
+	}
+
+	async editMessageWithBranching(
+		messageId: string,
+		newContent: string,
+		newExtras?: DatabaseMessageExtra[]
+	): Promise<void> {
+		return this.flows.editMessageWithBranching(messageId, newContent, newExtras);
+	}
+
+	async editUserMessagePreserveResponses(
+		messageId: string,
+		newContent: string,
+		newExtras?: DatabaseMessageExtra[]
+	): Promise<void> {
+		return this.flows.editUserMessagePreserveResponses(messageId, newContent, newExtras);
+	}
+
+	getAddFilesHandler(): ((files: File[]) => void) | null {
+		return this.addFilesHandler;
+	}
+
+	/** Convs with any activity (local pipe or remote session), sidebar spinners. */
+	getAllLoadingChats(): string[] {
+		return this.activity.loadingConvs;
+	}
+
+	getApiOptions(): Record<string, unknown> {
+		const currentConfig = settingsStore.config;
+		const hasValue = (value: unknown): boolean =>
+			value !== undefined && value !== null && value !== '';
+		const apiOptions: Record<string, unknown> = { stream: true, timings_per_token: true };
+
+		if (serverStore.isRouterMode) {
+			const modelName = modelsStore.selectedModelName;
+
+			if (modelName) apiOptions.model = modelName;
+		}
+
+		if (currentConfig.systemMessage) apiOptions.systemMessage = currentConfig.systemMessage;
+
+		if (currentConfig.disableReasoningParsing) apiOptions.disableReasoningParsing = true;
+
+		if (currentConfig.excludeReasoningFromContext) apiOptions.excludeReasoningFromContext = true;
+
+		// an explicit reasoning choice overrides the server default, DEFAULT sends nothing
+		const effort = conversationsStore.preferences.getReasoningEffort();
+
+		if (effort !== ReasoningEffort.DEFAULT) {
+			apiOptions.enableThinking = effort !== ReasoningEffort.OFF;
+
+			if (effort !== ReasoningEffort.OFF) apiOptions.reasoningEffort = effort;
+		}
+
+		if (hasValue(currentConfig.temperature))
+			apiOptions.temperature = Number(currentConfig.temperature);
+
+		if (hasValue(currentConfig.max_tokens))
+			apiOptions.max_tokens = Number(currentConfig.max_tokens);
+
+		if (hasValue(currentConfig.dynatemp_range))
+			apiOptions.dynatemp_range = Number(currentConfig.dynatemp_range);
+
+		if (hasValue(currentConfig.dynatemp_exponent))
+			apiOptions.dynatemp_exponent = Number(currentConfig.dynatemp_exponent);
+
+		if (hasValue(currentConfig.top_k)) apiOptions.top_k = Number(currentConfig.top_k);
+
+		if (hasValue(currentConfig.top_p)) apiOptions.top_p = Number(currentConfig.top_p);
+
+		if (hasValue(currentConfig.min_p)) apiOptions.min_p = Number(currentConfig.min_p);
+
+		if (hasValue(currentConfig.xtc_probability))
+			apiOptions.xtc_probability = Number(currentConfig.xtc_probability);
+
+		if (hasValue(currentConfig.xtc_threshold))
+			apiOptions.xtc_threshold = Number(currentConfig.xtc_threshold);
+
+		if (hasValue(currentConfig.typ_p)) apiOptions.typ_p = Number(currentConfig.typ_p);
+
+		if (hasValue(currentConfig.repeat_last_n))
+			apiOptions.repeat_last_n = Number(currentConfig.repeat_last_n);
+
+		if (hasValue(currentConfig.repeat_penalty))
+			apiOptions.repeat_penalty = Number(currentConfig.repeat_penalty);
+
+		if (hasValue(currentConfig.presence_penalty))
+			apiOptions.presence_penalty = Number(currentConfig.presence_penalty);
+
+		if (hasValue(currentConfig.frequency_penalty))
+			apiOptions.frequency_penalty = Number(currentConfig.frequency_penalty);
+
+		if (hasValue(currentConfig.dry_multiplier))
+			apiOptions.dry_multiplier = Number(currentConfig.dry_multiplier);
+
+		if (hasValue(currentConfig.dry_base)) apiOptions.dry_base = Number(currentConfig.dry_base);
+
+		if (hasValue(currentConfig.dry_allowed_length))
+			apiOptions.dry_allowed_length = Number(currentConfig.dry_allowed_length);
+
+		if (hasValue(currentConfig.dry_penalty_last_n))
+			apiOptions.dry_penalty_last_n = Number(currentConfig.dry_penalty_last_n);
+
+		if (currentConfig.samplers) apiOptions.samplers = currentConfig.samplers;
+
+		if (hasValue(currentConfig.backend_sampling))
+			apiOptions.backend_sampling = currentConfig.backend_sampling;
+
+		if (currentConfig.customJson) apiOptions.custom = currentConfig.customJson;
+
+		return apiOptions;
+	}
+
+	getChatStreaming(convId: string): { response: string; messageId: string } | undefined {
+		return this.getChatStreamingState(convId);
+	}
+
+	async getDeletionInfo(messageId: string): Promise<{
+		totalCount: number;
+		userMessages: number;
+		assistantMessages: number;
+		messageTypes: string[];
+	}> {
+		return this.flows.getDeletionInfo(messageId);
+	}
+
+	getOrCreateAbortController(convId: string): AbortController {
+		let c = this.abortControllers.get(convId);
+
+		if (!c || c.signal.aborted) {
+			c = new AbortController();
+			this.abortControllers.set(convId, c);
+		}
+
+		return c;
+	}
+
+	getPendingMessageContent(convId: string): string | null {
+		return this.pendingMessages.get(convId)?.content ?? null;
+	}
+
+	getPendingMessageExtras(convId: string): DatabaseMessageExtra[] | undefined {
+		return this.pendingMessages.get(convId)?.extras;
+	}
+
+	getResumeModel(convId: string): string | null {
+		return this.streams.getResumeModel(convId);
+	}
+
+	hasPendingDraft(): boolean {
+		return Boolean(this.pendingDraftMessage) || this.pendingDraftFiles.length > 0;
+	}
+
+	hasPendingMessage(convId: string): boolean {
+		return this.pendingMessages.has(convId);
+	}
+
+	injectPendingMessage(convId: string, content: string, extras?: DatabaseMessageExtra[]): void {
+		this.pendingMessages.set(convId, { content, extras });
+	}
+
+	isChatLoading(convId: string): boolean {
+		return this.activity.isLocal(convId);
+	}
+
+	isChatLoadingInternal(convId: string): boolean {
+		return this.activity.isLocal(convId) || this.chatStreamingStates.has(convId);
+	}
+
+	isEditing(): boolean {
+		return this.isEditModeActive;
+	}
+
+	/** True while the active conversation has a live streaming pipe. */
+	isStreaming(): boolean {
+		return this.chatStreamingStates.has(conversationsStore.activeConversation?.id ?? '');
+	}
+
+	/**
+	 * Record a working-directory change into chat history as a synthetic
+	 * user message, so the model sees it on its next turn (the client
+	 * sends the cwd itself via the x-tool-cwd header on tool calls).
+	 * A plain user message is used because some chat templates reject
+	 * tool messages without a preceding tool call.
+	 */
+	async recordCwdChange(cwd: string | null): Promise<void> {
+		const content = cwd
+			? formatCwdMessage(cwd, await toolsStore.resolveServerHome())
+			: CWD_CLEARED_TEXT;
+		// Reuse the trailing cwd row when it is already the last message, so
+		// repeated picks update it in place instead of stacking another row.
+		const last = conversationsStore.activeMessages[conversationsStore.activeMessages.length - 1];
+
+		if (last && last.role === MessageRole.USER && last.isSynthetic === true) {
+			await DatabaseService.updateMessage(last.id, { content, isSynthetic: true });
+			conversationsStore.updateMessageAtIndex(conversationsStore.activeMessages.length - 1, {
+				content,
+				isSynthetic: true
+			});
+
+			return;
+		}
+
+		await this.addMessage(MessageRole.USER, content, MessageType.TEXT, '-1', undefined, true);
+	}
+
+	async regenerateMessage(messageId: string): Promise<void> {
+		return this.flows.regenerateMessage(messageId);
+	}
+
+	async regenerateMessageWithBranching(messageId: string, modelOverride?: string): Promise<void> {
+		return this.flows.regenerateMessageWithBranching(messageId, modelOverride);
+	}
 
 	async removeSystemPromptPlaceholder(messageId: string): Promise<boolean> {
 		const activeConv = conversationsStore.activeConversation;
@@ -510,26 +609,10 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 		}
 	}
 
-	async createAssistantMessage(parentId?: string): Promise<DatabaseMessage> {
-		const activeConv = conversationsStore.activeConversation;
-
-		if (!activeConv) throw new Error('No active conversation');
-
-		return await DatabaseService.createMessageBranch(
-			{
-				children: [],
-				content: '',
-				convId: activeConv.id,
-				model: null,
-				role: MessageRole.ASSISTANT,
-				timestamp: Date.now(),
-				toolCalls: '',
-				type: MessageType.TEXT
-			},
-			parentId || null
-		);
+	savePendingDraft(message: string, files: ChatUploadedFile[]): void {
+		this.pendingDraftMessage = message;
+		this.pendingDraftFiles = [...files];
 	}
-
 	async sendMessage(content: string, extras?: DatabaseMessageExtra[]): Promise<void> {
 		if (!content.trim() && (!extras || extras.length === 0)) return;
 
@@ -656,6 +739,71 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 				type: dialogType
 			});
 		}
+	}
+
+	setChatLoading(convId: string, loading: boolean): void {
+		if (loading) {
+			this.activity.markLocal(convId);
+		} else {
+			this.activity.localEnded(convId);
+			this.setChatReasoning(convId, false);
+		}
+	}
+
+	setChatReasoning(convId: string, reasoning: boolean): void {
+		if (reasoning) this.chatReasoningStates.set(convId, true);
+		else this.chatReasoningStates.delete(convId);
+	}
+
+	setChatStreaming(
+		convId: string,
+		response: string,
+		messageId: string,
+		model?: string | null
+	): void {
+		this.chatStreamingStates.set(convId, {
+			messageId,
+			model: model ?? this.chatStreamingStates.get(convId)?.model,
+			response
+		});
+
+		if (convId === conversationsStore.activeConversation?.id) this.currentResponse = response;
+	}
+
+	setEditModeActive(handler: (files: File[]) => void): void {
+		this.isEditModeActive = true;
+		this.addFilesHandler = handler;
+	}
+
+	showErrorDialog(state: ErrorDialogState | null): void {
+		this.errorDialogState = state;
+	}
+
+	async stopGeneration(): Promise<void> {
+		const activeConv = conversationsStore.activeConversation;
+
+		if (!activeConv) return;
+
+		await this.stopGenerationForChat(activeConv.id);
+	}
+
+	async stopGenerationForChat(convId: string): Promise<void> {
+		await this.savePartialResponseIfNeeded(convId);
+		// tell the server to stop the generation, not just drop the HTTP socket. without this the
+		// detached drain keeps producing tokens until eos or max_tokens. use the frozen identity
+		// captured when the session started, not the live dropdown
+		const streamStateForStop = this.chatStreamingStates.get(convId);
+		const modelForStop = streamStateForStop?.model ?? ChatService.getStreamState(convId)?.model;
+
+		void ChatService.cancelServerStream(convId, modelForStop);
+		// an explicit stop leaves nothing to resume and kills a pending resume retry
+		ChatService.clearStreamState(convId);
+		this.streams.cancelResumeRetry(convId);
+		this.abortRequest(convId);
+		this.setChatLoading(convId, false);
+		this.clearChatStreaming(convId);
+		this.processing.setState(convId, null);
+		this.clearPendingMessage(convId);
 	}
 
 	async streamChatCompletion(
@@ -1090,30 +1238,24 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 		);
 	}
 
-	async stopGeneration(): Promise<void> {
-		const activeConv = conversationsStore.activeConversation;
+	syncLoadingStateForChat(convId: string): void {
+		const s = this.chatStreamingStates.get(convId);
 
-		if (!activeConv) return;
+		this.currentResponse = s?.response || '';
+		this.processing.setActiveConversation(convId);
 
-		await this.stopGenerationForChat(activeConv.id);
+		// Sync streaming content to activeMessages so UI displays current content
+		if (s?.response && s?.messageId) {
+			const idx = conversationsStore.findMessageIndex(s.messageId);
+
+			if (idx !== -1) {
+				conversationsStore.updateMessageAtIndex(idx, { content: s.response });
+			}
+		}
 	}
-	async stopGenerationForChat(convId: string): Promise<void> {
-		await this.savePartialResponseIfNeeded(convId);
-		// tell the server to stop the generation, not just drop the HTTP socket. without this the
-		// detached drain keeps producing tokens until eos or max_tokens. use the frozen identity
-		// captured when the session started, not the live dropdown
-		const streamStateForStop = this.chatStreamingStates.get(convId);
-		const modelForStop = streamStateForStop?.model ?? ChatService.getStreamState(convId)?.model;
 
-		void ChatService.cancelServerStream(convId, modelForStop);
-		// an explicit stop leaves nothing to resume and kills a pending resume retry
-		ChatService.clearStreamState(convId);
-		this.streams.cancelResumeRetry(convId);
-		this.abortRequest(convId);
-		this.setChatLoading(convId, false);
-		this.clearChatStreaming(convId);
-		this.processing.setState(convId, null);
-		this.clearPendingMessage(convId);
+	async syncRemoteRunningStreams(): Promise<void> {
+		return this.streams.syncRemoteRunningStreams();
 	}
 
 	/**
@@ -1123,154 +1265,6 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 	async updateMessage(messageId: string, newContent: string): Promise<void> {
 		return this.flows.updateMessage(messageId, newContent);
 	}
-
-	async regenerateMessage(messageId: string): Promise<void> {
-		return this.flows.regenerateMessage(messageId);
-	}
-
-	async regenerateMessageWithBranching(messageId: string, modelOverride?: string): Promise<void> {
-		return this.flows.regenerateMessageWithBranching(messageId, modelOverride);
-	}
-
-	async getDeletionInfo(messageId: string): Promise<{
-		totalCount: number;
-		userMessages: number;
-		assistantMessages: number;
-		messageTypes: string[];
-	}> {
-		return this.flows.getDeletionInfo(messageId);
-	}
-
-	async deleteMessage(messageId: string): Promise<void> {
-		return this.flows.deleteMessage(messageId);
-	}
-
-	async continueAssistantMessage(messageId: string): Promise<void> {
-		return this.flows.continueAssistantMessage(messageId);
-	}
-
-	async editAssistantMessage(
-		messageId: string,
-		newContent: string,
-		shouldBranch: boolean
-	): Promise<void> {
-		return this.flows.editAssistantMessage(messageId, newContent, shouldBranch);
-	}
-
-	async editUserMessagePreserveResponses(
-		messageId: string,
-		newContent: string,
-		newExtras?: DatabaseMessageExtra[]
-	): Promise<void> {
-		return this.flows.editUserMessagePreserveResponses(messageId, newContent, newExtras);
-	}
-
-	async editMessageWithBranching(
-		messageId: string,
-		newContent: string,
-		newExtras?: DatabaseMessageExtra[]
-	): Promise<void> {
-		return this.flows.editMessageWithBranching(messageId, newContent, newExtras);
-	}
-
-	getApiOptions(): Record<string, unknown> {
-		const currentConfig = settingsStore.config;
-		const hasValue = (value: unknown): boolean =>
-			value !== undefined && value !== null && value !== '';
-		const apiOptions: Record<string, unknown> = { stream: true, timings_per_token: true };
-
-		if (serverStore.isRouterMode) {
-			const modelName = modelsStore.selectedModelName;
-
-			if (modelName) apiOptions.model = modelName;
-		}
-
-		if (currentConfig.systemMessage) apiOptions.systemMessage = currentConfig.systemMessage;
-
-		if (currentConfig.disableReasoningParsing) apiOptions.disableReasoningParsing = true;
-
-		if (currentConfig.excludeReasoningFromContext) apiOptions.excludeReasoningFromContext = true;
-
-		// an explicit reasoning choice overrides the server default, DEFAULT sends nothing
-		const effort = conversationsStore.preferences.getReasoningEffort();
-
-		if (effort !== ReasoningEffort.DEFAULT) {
-			apiOptions.enableThinking = effort !== ReasoningEffort.OFF;
-
-			if (effort !== ReasoningEffort.OFF) apiOptions.reasoningEffort = effort;
-		}
-
-		if (hasValue(currentConfig.temperature))
-			apiOptions.temperature = Number(currentConfig.temperature);
-
-		if (hasValue(currentConfig.max_tokens))
-			apiOptions.max_tokens = Number(currentConfig.max_tokens);
-
-		if (hasValue(currentConfig.dynatemp_range))
-			apiOptions.dynatemp_range = Number(currentConfig.dynatemp_range);
-
-		if (hasValue(currentConfig.dynatemp_exponent))
-			apiOptions.dynatemp_exponent = Number(currentConfig.dynatemp_exponent);
-
-		if (hasValue(currentConfig.top_k)) apiOptions.top_k = Number(currentConfig.top_k);
-
-		if (hasValue(currentConfig.top_p)) apiOptions.top_p = Number(currentConfig.top_p);
-
-		if (hasValue(currentConfig.min_p)) apiOptions.min_p = Number(currentConfig.min_p);
-
-		if (hasValue(currentConfig.xtc_probability))
-			apiOptions.xtc_probability = Number(currentConfig.xtc_probability);
-
-		if (hasValue(currentConfig.xtc_threshold))
-			apiOptions.xtc_threshold = Number(currentConfig.xtc_threshold);
-
-		if (hasValue(currentConfig.typ_p)) apiOptions.typ_p = Number(currentConfig.typ_p);
-
-		if (hasValue(currentConfig.repeat_last_n))
-			apiOptions.repeat_last_n = Number(currentConfig.repeat_last_n);
-
-		if (hasValue(currentConfig.repeat_penalty))
-			apiOptions.repeat_penalty = Number(currentConfig.repeat_penalty);
-
-		if (hasValue(currentConfig.presence_penalty))
-			apiOptions.presence_penalty = Number(currentConfig.presence_penalty);
-
-		if (hasValue(currentConfig.frequency_penalty))
-			apiOptions.frequency_penalty = Number(currentConfig.frequency_penalty);
-
-		if (hasValue(currentConfig.dry_multiplier))
-			apiOptions.dry_multiplier = Number(currentConfig.dry_multiplier);
-
-		if (hasValue(currentConfig.dry_base)) apiOptions.dry_base = Number(currentConfig.dry_base);
-
-		if (hasValue(currentConfig.dry_allowed_length))
-			apiOptions.dry_allowed_length = Number(currentConfig.dry_allowed_length);
-
-		if (hasValue(currentConfig.dry_penalty_last_n))
-			apiOptions.dry_penalty_last_n = Number(currentConfig.dry_penalty_last_n);
-
-		if (currentConfig.samplers) apiOptions.samplers = currentConfig.samplers;
-
-		if (hasValue(currentConfig.backend_sampling))
-			apiOptions.backend_sampling = currentConfig.backend_sampling;
-
-		if (currentConfig.customJson) apiOptions.custom = currentConfig.customJson;
-
-		return apiOptions;
-	}
-
-	cancelPreEncode(): void {
-		if (this.preEncodeAbortController) {
-			this.preEncodeAbortController.abort();
-			this.preEncodeAbortController = null;
-		}
-	}
-	private getChatStreamingState(
-		convId: string
-	): { response: string; messageId: string } | undefined {
-		return this.chatStreamingStates.get(convId);
-	}
-
 	private abortRequest(convId?: string): void {
 		if (convId) {
 			const c = this.abortControllers.get(convId);
@@ -1329,6 +1323,12 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 		if (cleanTitle && cleanTitle.length >= TITLE_GENERATION.MIN_LENGTH) {
 			await conversationsStore.updateConversationName(convId, cleanTitle);
 		}
+	}
+
+	private getChatStreamingState(
+		convId: string
+	): { response: string; messageId: string } | undefined {
+		return this.chatStreamingStates.get(convId);
 	}
 
 	private async savePartialResponseIfNeeded(convId?: string): Promise<void> {

@@ -31,8 +31,8 @@ interface ProcessingTimingData {
 }
 
 export class ChatProcessingStore {
-	private states = new SvelteMap<string, ApiProcessingState>();
 	private _activeConversationId = $state<string | null>(null);
+	private states = new SvelteMap<string, ApiProcessingState>();
 
 	/** Processing state of the conversation currently shown in the UI. */
 	activeState = $derived(
@@ -41,32 +41,6 @@ export class ChatProcessingStore {
 
 	get activeConversationId(): string | null {
 		return this._activeConversationId;
-	}
-
-	setActiveConversation(conversationId: string | null): void {
-		this._activeConversationId = conversationId;
-	}
-
-	getState(conversationId: string): ApiProcessingState | null {
-		return this.states.get(conversationId) ?? null;
-	}
-
-	/** Passing null clears the state for the conversation. */
-	setState(conversationId: string, state: ApiProcessingState | null): void {
-		if (state === null) this.states.delete(conversationId);
-		else this.states.set(conversationId, state);
-	}
-
-	getConversationIds(): string[] {
-		return Array.from(this.states.keys());
-	}
-
-	updateFromTimings(timingData: ProcessingTimingData, conversationId?: string): void {
-		const targetId = conversationId || this._activeConversationId;
-
-		if (targetId) {
-			this.setState(targetId, this.parseTimingData(timingData));
-		}
 	}
 
 	/**
@@ -96,6 +70,14 @@ export class ChatProcessingStore {
 		);
 	}
 
+	getConversationIds(): string[] {
+		return Array.from(this.states.keys());
+	}
+
+	getState(conversationId: string): ApiProcessingState | null {
+		return this.states.get(conversationId) ?? null;
+	}
+
 	restoreFromMessages(messages: DatabaseMessage[], conversationId: string): void {
 		for (let i = messages.length - 1; i >= 0; i--) {
 			const message = messages[i];
@@ -117,6 +99,24 @@ export class ChatProcessingStore {
 
 				return;
 			}
+		}
+	}
+
+	setActiveConversation(conversationId: string | null): void {
+		this._activeConversationId = conversationId;
+	}
+
+	/** Passing null clears the state for the conversation. */
+	setState(conversationId: string, state: ApiProcessingState | null): void {
+		if (state === null) this.states.delete(conversationId);
+		else this.states.set(conversationId, state);
+	}
+
+	updateFromTimings(timingData: ProcessingTimingData, conversationId?: string): void {
+		const targetId = conversationId || this._activeConversationId;
+
+		if (targetId) {
+			this.setState(targetId, this.parseTimingData(timingData));
 		}
 	}
 

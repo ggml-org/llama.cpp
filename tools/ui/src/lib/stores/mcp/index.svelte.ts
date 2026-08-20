@@ -50,45 +50,24 @@ import {
 import { mode } from 'mode-watcher';
 
 class MCPStore implements McpHealthHost {
-	private _isInitializing = $state(false);
 	private _error = $state<string | null>(null);
+	private _isInitializing = $state(false);
 	private _toolCount = $state(0);
-	private connectedServers = $state<string[]>([]);
-
-	private connections = new Map<string, MCPConnection>();
-	private toolsIndex = new Map<string, string>();
-	private serverConfigs = new Map<string, MCPServerConfig>(); // Store configs for reconnection
-	private serversCache: { raw: unknown; servers: MCPServerSettingsEntry[] } | null = null;
-	// health checks: per-server connectivity probes with optional promotion to active connections
-	private health = new MCPHealthCheckManager(this);
-	private reconnectingServers = new Set<string>(); // Guard against concurrent reconnections
-	private configSignature: string | null = null;
-	private initPromise: Promise<boolean> | null = null;
 	private activeFlowCount = 0;
 
-	get isProxyAvailable(): boolean {
-		return serverStore.props?.cors_proxy_enabled ?? false;
-	}
+	private configSignature: string | null = null;
+	private connectedServers = $state<string[]>([]);
+	private connections = new Map<string, MCPConnection>();
+	// health checks: per-server connectivity probes with optional promotion to active connections
+	private health = new MCPHealthCheckManager(this);
+	private initPromise: Promise<boolean> | null = null;
+	private reconnectingServers = new Set<string>(); // Guard against concurrent reconnections
+	private serverConfigs = new Map<string, MCPServerConfig>(); // Store configs for reconnection
+	private serversCache: { raw: unknown; servers: MCPServerSettingsEntry[] } | null = null;
+	private toolsIndex = new Map<string, string>();
 
-	/** Resource state, composed here so consumers have a single MCP scope. */
-	get resources() {
-		return mcpResourceStore;
-	}
-
-	get isInitializing(): boolean {
-		return this._isInitializing;
-	}
-
-	get isInitialized(): boolean {
-		return this.connections.size > 0;
-	}
-
-	get error(): string | null {
-		return this._error;
-	}
-
-	get toolCount(): number {
-		return this._toolCount;
+	get availableTools(): string[] {
+		return Array.from(this.toolsIndex.keys());
 	}
 
 	get connectedServerCount(): number {
@@ -99,6 +78,10 @@ class MCPStore implements McpHealthHost {
 		return this.connectedServers;
 	}
 
+	get error(): string | null {
+		return this._error;
+	}
+
 	get isEnabled(): boolean {
 		const mcpConfig = this.buildMcpClientConfig(settingsStore.config);
 
@@ -107,105 +90,29 @@ class MCPStore implements McpHealthHost {
 		);
 	}
 
-	get availableTools(): string[] {
-		return Array.from(this.toolsIndex.keys());
+	get isInitialized(): boolean {
+		return this.connections.size > 0;
 	}
 
-	/**
-	 * Request timeout in milliseconds, read live from the global setting
-	 * so a change in Settings applies to every server immediately.
-	 */
-	getRequestTimeoutMs(): number {
-		const seconds =
-			Number(settingsStore.config.mcpRequestTimeoutSeconds) ||
-			DEFAULT_MCP_CONFIG.requestTimeoutSeconds;
-
-		return Math.round(seconds * 1000);
+	get isInitializing(): boolean {
+		return this._isInitializing;
 	}
 
-	/**
-	 * Health checks live in MCPHealthCheckManager; these delegate so
-	 * consumers keep a single entry point.
-	 */
-	getHealthCheckState(serverId: string): HealthCheckState {
-		return this.health.getState(serverId);
+	get isProxyAvailable(): boolean {
+		return serverStore.props?.cors_proxy_enabled ?? false;
 	}
 
-	clearHealthCheck(serverId: string): void {
-		this.health.clear(serverId);
+	/** Resource state, composed here so consumers have a single MCP scope. */
+	get resources() {
+		return mcpResourceStore;
 	}
 
-	clearError(): void {
-		this._error = null;
+	get toolCount(): number {
+		return this._toolCount;
 	}
 
-	getServers(): MCPServerSettingsEntry[] {
-		const raw = settingsStore.config.mcpServers;
-
-		// cache the parse: the config string rarely changes and getServers is
-		// called from hot paths (per-tool display lookups, capability checks)
-		if (this.serversCache && this.serversCache.raw === raw) {
-			return this.serversCache.servers;
-		}
-
-		const servers = parseMcpServerSettings(raw);
-
-		this.serversCache = { raw, servers };
-
-		return servers;
-	}
-
-	/**
-	 * Get all active MCP connections.
-	 * @returns Map of server names to connections
-	 */
-	getConnections(): Map<string, MCPConnection> {
-		return this.connections;
-	}
-
-	getServerLabel(server: MCPServerDisplayInfo): string {
-		return getMcpServerLabel(server, this.getServers(), this.health.checks);
-	}
-
-	getServerById(serverId: string): MCPServerSettingsEntry | undefined {
-		return this.getServers().find((s) => s.id === serverId);
-	}
-
-	/**
-	 * Get display name for an MCP server by its ID.
-	 * Falls back to the server ID if server is not found.
-	 */
-	getServerDisplayName(serverId: string): string {
-		const server = this.getServerById(serverId);
-
-		return server ? this.getServerLabel(server) : serverId;
-	}
-
-	/**
-	 * Get icon URL for an MCP server by its ID.
-	 * Returns the best icon from the MCP server's `icons` array
-	 * (see MCP spec: spec.modelcontextprotocol.io).
-	 * Returns null if no icon is available.
-	 */
-	getServerFavicon(serverId: string): string | null {
-		const server = this.getServerById(serverId);
-
-		if (!server) {
-			return null;
-		}
-
-		const isDark = mode.current === ColorMode.DARK;
-		const healthState = this.health.getState(serverId);
-
-		if (healthState.status === HealthCheckStatus.SUCCESS && healthState.serverInfo?.icons) {
-			const mcpIconUrl = getMcpIconUrl(healthState.serverInfo.icons, isDark);
-
-			if (mcpIconUrl) {
-				return mcpIconUrl;
-			}
-		}
-
-		return getMcpServerFaviconFallback(server.url);
+	acquireConnection(): void {
+		this.activeFlowCount++;
 	}
 
 	addServer(
@@ -227,120 +134,40 @@ class MCPStore implements McpHealthHost {
 		return newServer;
 	}
 
-	updateServer(id: string, updates: Partial<MCPServerSettingsEntry>): void {
-		const servers = this.getServers();
-
-		settingsStore.updateConfig(
-			SETTINGS_KEYS.MCP_SERVERS,
-			JSON.stringify(
-				servers.map((server) => (server.id === id ? { ...server, ...updates } : server))
-			)
-		);
-	}
-
-	removeServer(id: string): void {
-		const servers = this.getServers();
-
-		settingsStore.updateConfig(
-			SETTINGS_KEYS.MCP_SERVERS,
-			JSON.stringify(servers.filter((s) => s.id !== id))
-		);
-		this.clearHealthCheck(id);
-	}
-
-	hasAvailableServers(): boolean {
-		return parseMcpServerSettings(settingsStore.config.mcpServers).some(
-			(s) => s.enabled && s.url.trim()
-		);
-	}
-	hasEnabledServers(perChatOverrides?: McpServerOverride[]): boolean {
-		return Boolean(this.buildMcpClientConfig(settingsStore.config, perChatOverrides));
-	}
-
-	getEnabledServersForConversation(
-		perChatOverrides?: McpServerOverride[]
-	): MCPServerSettingsEntry[] {
-		return this.getServers().filter((server) => {
-			return this.checkServerEnabled(server, perChatOverrides);
-		});
-	}
-
-	async ensureInitialized(perChatOverrides?: McpServerOverride[]): Promise<boolean> {
-		if (!browser) {
-			return false;
-		}
-
-		const mcpConfig = this.buildMcpClientConfig(settingsStore.config, perChatOverrides);
-		const signature = mcpConfig ? JSON.stringify(mcpConfig) : null;
-
-		if (!signature) {
-			await this.shutdown();
-
-			return false;
-		}
-
-		if (this.isInitialized && this.configSignature === signature) {
-			return true;
-		}
-
-		if (this.initPromise && this.configSignature === signature) {
-			return this.initPromise;
-		}
-
-		if (this.connections.size > 0 || this.initPromise) await this.shutdown();
-
-		return this.initialize(signature, mcpConfig!);
-	}
-
-	acquireConnection(): void {
-		this.activeFlowCount++;
-	}
-
 	/**
-	 * Release a connection reference.
-	 * By default, keeps connections alive for reuse (shutdownIfUnused=false).
-	 * MCP spec encourages long-lived sessions to avoid reconnection overhead.
+	 * Add a resource as attachment to chat context.
+	 * Automatically fetches content if not cached.
 	 */
-	async releaseConnection(shutdownIfUnused = false): Promise<void> {
-		this.activeFlowCount = Math.max(0, this.activeFlowCount - 1);
+	async attachResource(uri: string): Promise<MCPResourceAttachment | null> {
+		const resourceInfo = mcpResourceStore.findResourceByUri(uri);
 
-		if (shutdownIfUnused && this.activeFlowCount === 0) {
-			await this.shutdown();
-		}
-	}
+		if (!resourceInfo) {
+			console.error(`[MCPStore] Resource not found: ${uri}`);
 
-	getActiveFlowCount(): number {
-		return this.activeFlowCount;
-	}
-
-	async shutdown(): Promise<void> {
-		if (this.initPromise) {
-			await this.initPromise.catch(() => {});
-			this.initPromise = null;
+			return null;
 		}
 
-		if (this.connections.size === 0) {
-			return;
+		if (mcpResourceStore.isAttached(uri)) {
+			return null;
 		}
 
-		await Promise.all(
-			Array.from(this.connections.values()).map((conn) =>
-				MCPService.disconnect(conn).catch((error) =>
-					console.warn(`[MCPStore] Error disconnecting ${conn.serverName}:`, error)
-				)
-			)
-		);
+		const attachment = mcpResourceStore.addAttachment(resourceInfo);
 
-		this.connections.clear();
-		this.toolsIndex.clear();
-		this.serverConfigs.clear();
-		this.configSignature = null;
-		this.updateState({
-			connectedServers: [],
-			error: null,
-			isInitializing: false,
-			toolCount: 0
-		});
+		try {
+			const content = await this.readResource(uri);
+
+			if (content) {
+				mcpResourceStore.updateAttachmentContent(attachment.id, content);
+			} else {
+				mcpResourceStore.updateAttachmentError(attachment.id, 'Failed to read resource');
+			}
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+
+			mcpResourceStore.updateAttachmentError(attachment.id, message);
+		}
+
+		return mcpResourceStore.getAttachment(attachment.id) ?? null;
 	}
 
 	/**
@@ -450,149 +277,60 @@ class MCPStore implements McpHealthHost {
 		}
 	}
 
-	getToolNames(): string[] {
-		return Array.from(this.toolsIndex.keys());
+	clearError(): void {
+		this._error = null;
 	}
 
-	hasTool(toolName: string): boolean {
-		return this.toolsIndex.has(toolName);
-	}
-
-	getToolServer(toolName: string): string | undefined {
-		return this.toolsIndex.get(toolName);
+	clearHealthCheck(serverId: string): void {
+		this.health.clear(serverId);
 	}
 
 	/**
-	 * Resolve which configured MCP server owns a given tool name. Looks at
-	 * active connections first (fast path), then falls back to per-server
-	 * health-check data so server-side MCP proxies (where llama-server
-	 * executes MCP tools but the browser does not hold a direct connection)
-	 * still resolve tool names to their owning server.
+	 * Clear all resource attachments.
 	 */
-	findServerForTool(toolName: string): string | undefined {
-		const fromIndex = this.toolsIndex.get(toolName);
-
-		if (fromIndex) return fromIndex;
-
-		for (const server of this.getServers()) {
-			const health = this.health.checks[server.id];
-
-			if (!health || health.status !== HealthCheckStatus.SUCCESS) continue;
-
-			if (health.tools.some((tool) => tool.name === toolName)) {
-				return server.id;
-			}
-		}
-
-		return undefined;
+	clearResourceAttachments(): void {
+		mcpResourceStore.clearAttachments();
 	}
 
 	/**
-	 * Resolve the favicon URL for an MCP server by one of its tool names.
-	 * Returns `null` if the tool is not provided by any configured MCP server,
-	 * or if the owning server has no icon to show.
-	 * Pair with {@link getServerFavicon} for direct server-id lookup.
+	 * Convert current resource attachments to DatabaseMessageExtra[] and clear them.
+	 * Called during message send to persist resources with the user message.
 	 */
-	getServerFaviconForTool(toolName: string | undefined): string | null {
-		if (!toolName) return null;
+	consumeResourceAttachmentsAsExtras(): DatabaseMessageExtraMcpResource[] {
+		const extras = mcpResourceStore.toMessageExtras();
 
-		const serverId = this.findServerForTool(toolName);
-
-		if (!serverId) return null;
-
-		return this.getServerFavicon(serverId);
-	}
-
-	hasPromptsSupport(): boolean {
-		for (const connection of this.connections.values()) {
-			if (connection.serverCapabilities?.prompts) {
-				return true;
-			}
+		if (extras.length > 0) {
+			mcpResourceStore.clearAttachments();
 		}
 
-		return false;
+		return extras;
 	}
 
-	/**
-	 * Check if any enabled server with successful health check supports prompts.
-	 * Uses health check state since servers may not have active connections until
-	 * the user actually sends a message or uses prompts.
-	 */
-	hasPromptsCapability(perChatOverrides?: McpServerOverride[]): boolean {
-		let enabledServerIds: Set<string>;
-
-		if (perChatOverrides !== undefined) {
-			enabledServerIds = new Set(perChatOverrides.filter((o) => o.enabled).map((o) => o.serverId));
-		} else {
-			enabledServerIds = new Set(
-				this.getServers()
-					.filter((s) => s.enabled)
-					.map((s) => s.id)
-			);
-		}
-
-		if (enabledServerIds.size === 0) {
+	async ensureInitialized(perChatOverrides?: McpServerOverride[]): Promise<boolean> {
+		if (!browser) {
 			return false;
 		}
 
-		for (const [serverId, state] of Object.entries(this.health.checks)) {
-			if (!enabledServerIds.has(serverId)) continue;
+		const mcpConfig = this.buildMcpClientConfig(settingsStore.config, perChatOverrides);
+		const signature = mcpConfig ? JSON.stringify(mcpConfig) : null;
 
-			if (
-				state.status === HealthCheckStatus.SUCCESS &&
-				state.capabilities?.server?.prompts !== undefined
-			) {
-				return true;
-			}
+		if (!signature) {
+			await this.shutdown();
+
+			return false;
 		}
 
-		for (const [serverName, connection] of this.connections) {
-			if (!enabledServerIds.has(serverName)) continue;
-
-			if (connection.serverCapabilities?.prompts) {
-				return true;
-			}
+		if (this.isInitialized && this.configSignature === signature) {
+			return true;
 		}
 
-		return false;
-	}
-
-	async getAllPrompts(): Promise<MCPPromptInfo[]> {
-		const results: MCPPromptInfo[] = [];
-
-		for (const [serverName, connection] of this.connections) {
-			if (!connection.serverCapabilities?.prompts) continue;
-
-			const prompts = await MCPService.listPrompts(connection);
-
-			for (const prompt of prompts) {
-				results.push({
-					arguments: prompt.arguments?.map((arg) => ({
-						description: arg.description,
-						name: arg.name,
-						required: arg.required
-					})),
-					description: prompt.description,
-					name: prompt.name,
-					serverName,
-					title: prompt.title
-				});
-			}
+		if (this.initPromise && this.configSignature === signature) {
+			return this.initPromise;
 		}
 
-		return results;
-	}
+		if (this.connections.size > 0 || this.initPromise) await this.shutdown();
 
-	async getPrompt(
-		serverName: string,
-		promptName: string,
-		args?: Record<string, string>
-	): Promise<GetPromptResult> {
-		const connection = this.connections.get(serverName);
-
-		if (!connection) throw new Error(`Server "${serverName}" not found for prompt "${promptName}"`);
-
-		return MCPService.getPrompt(connection, promptName, args);
+		return this.initialize(signature, mcpConfig!);
 	}
 
 	async executeTool(toolCall: MCPToolCall, signal?: AbortSignal): Promise<ToolExecutionResult> {
@@ -631,293 +369,6 @@ class MCPStore implements McpHealthHost {
 
 			throw error;
 		}
-	}
-
-	async getPromptCompletions(
-		serverName: string,
-		promptName: string,
-		argumentName: string,
-		argumentValue: string
-	): Promise<{ values: string[]; total?: number; hasMore?: boolean } | null> {
-		const connection = this.connections.get(serverName);
-
-		if (!connection) {
-			console.warn(`[MCPStore] Server "${serverName}" is not connected`);
-
-			return null;
-		}
-
-		if (!connection.serverCapabilities?.completions) {
-			return null;
-		}
-
-		return MCPService.complete(
-			connection,
-			{ name: promptName, type: MCPRefType.PROMPT },
-			{ name: argumentName, value: argumentValue }
-		);
-	}
-
-	/**
-	 * Get completions for a resource template argument.
-	 * Uses the MCP Completion API with ref/resource.
-	 */
-	async getResourceCompletions(
-		serverName: string,
-		uriTemplate: string,
-		argumentName: string,
-		argumentValue: string
-	): Promise<{ values: string[]; total?: number; hasMore?: boolean } | null> {
-		const connection = this.connections.get(serverName);
-
-		if (!connection) {
-			console.warn(`[MCPStore] Server "${serverName}" is not connected`);
-
-			return null;
-		}
-
-		if (!connection.serverCapabilities?.completions) {
-			return null;
-		}
-
-		return MCPService.complete(
-			connection,
-			{ type: MCPRefType.RESOURCE, uri: uriTemplate },
-			{ name: argumentName, value: argumentValue }
-		);
-	}
-
-	/**
-	 * Read a resource by an arbitrary URI (e.g., one expanded from a template).
-	 * Unlike readResource(), this does not require the URI to be in the resources list.
-	 */
-	async readResourceByUri(serverName: string, uri: string): Promise<MCPResourceContent[] | null> {
-		const connection = this.connections.get(serverName);
-
-		if (!connection) {
-			console.error(`[MCPStore] No connection found for server: ${serverName}`);
-
-			return null;
-		}
-
-		try {
-			const result = await MCPService.readResource(connection, uri);
-
-			return result.contents;
-		} catch (error) {
-			console.error(`[MCPStore] Failed to read resource ${uri}:`, error);
-
-			return null;
-		}
-	}
-
-	/**
-	 * Check if a server already has an active connection that can be reused.
-	 * Returns the existing connection if available.
-	 */
-	getExistingConnection(serverId: string): MCPConnection | undefined {
-		return this.connections.get(serverId);
-	}
-
-	/**
-	 * Drop a connection without disconnecting, e.g. when a health check finds
-	 * it stale and recreates it.
-	 */
-	removeConnection(serverId: string): void {
-		this.connections.delete(serverId);
-	}
-
-	/** Store a server config so auto-reconnect can rebuild the session. */
-	registerServerConfig(name: string, config: MCPServerConfig): void {
-		this.serverConfigs.set(name, config);
-	}
-
-	async runHealthChecksForServers(
-		servers: {
-			id: string;
-			enabled: boolean;
-			url: string;
-			headers?: string;
-		}[],
-		skipIfChecked = true,
-		promoteToActive = false
-	): Promise<void> {
-		return this.health.runForServers(servers, skipIfChecked, promoteToActive);
-	}
-
-	async runHealthCheck(server: HealthCheckParams, promoteToActive = false): Promise<void> {
-		return this.health.run(server, promoteToActive);
-	}
-
-	/**
-	 * Promote a health check connection to an active connection.
-	 * This avoids the need to reconnect when the server is needed for agentic flows.
-	 */
-	promoteHealthCheckToConnection(serverId: string, connection: MCPConnection): void {
-		this.indexServerTools(serverId, connection.tools);
-
-		this.connections.set(serverId, connection);
-
-		this.updateState({
-			connectedServers: Array.from(this.connections.keys()),
-			toolCount: this.toolsIndex.size
-		});
-	}
-
-	getServersStatus(): ServerStatus[] {
-		const statuses: ServerStatus[] = [];
-
-		for (const [name, connection] of this.connections) {
-			statuses.push({
-				error: undefined,
-				isConnected: true,
-				name,
-				toolCount: connection.tools.length
-			});
-		}
-
-		return statuses;
-	}
-
-	/**
-	 * Get aggregated server instructions from all connected servers.
-	 * Returns an array of { serverName, serverTitle, instructions } objects.
-	 */
-	getServerInstructions(): Array<{
-		serverName: string;
-		serverTitle?: string;
-		instructions: string;
-	}> {
-		const results: Array<{ serverName: string; serverTitle?: string; instructions: string }> = [];
-
-		for (const [serverName, connection] of this.connections) {
-			if (connection.instructions) {
-				results.push({
-					instructions: connection.instructions,
-					serverName,
-					serverTitle: connection.serverInfo?.title || connection.serverInfo?.name
-				});
-			}
-		}
-
-		return results;
-	}
-
-	/**
-	 * Get server instructions from health check results (for display before active connection).
-	 * Useful for showing instructions in settings UI.
-	 */
-	getHealthCheckInstructions(): Array<{
-		serverId: string;
-		serverTitle?: string;
-		instructions: string;
-	}> {
-		const results: Array<{ serverId: string; serverTitle?: string; instructions: string }> = [];
-
-		for (const [serverId, state] of Object.entries(this.health.checks)) {
-			if (state.status === HealthCheckStatus.SUCCESS && state.instructions) {
-				results.push({
-					instructions: state.instructions,
-					serverId,
-					serverTitle: state.serverInfo?.title || state.serverInfo?.name
-				});
-			}
-		}
-
-		return results;
-	}
-
-	/**
-	 * Check if any connected server has instructions.
-	 */
-	hasServerInstructions(): boolean {
-		for (const connection of this.connections.values()) {
-			if (connection.instructions) {
-				return true;
-			}
-		}
-
-		return false;
-	}
-
-	/**
-	 * Check if any enabled server with successful health check supports resources.
-	 * Uses health check state since servers may not have active connections until
-	 * the user actually sends a message or uses prompts.
-	 */
-	hasResourcesCapability(perChatOverrides?: McpServerOverride[]): boolean {
-		let enabledServerIds: Set<string>;
-
-		if (perChatOverrides !== undefined) {
-			enabledServerIds = new Set(perChatOverrides.filter((o) => o.enabled).map((o) => o.serverId));
-		} else {
-			enabledServerIds = new Set(
-				this.getServers()
-					.filter((s) => s.enabled)
-					.map((s) => s.id)
-			);
-		}
-
-		if (enabledServerIds.size === 0) {
-			return false;
-		}
-
-		for (const [serverId, state] of Object.entries(this.health.checks)) {
-			if (!enabledServerIds.has(serverId)) continue;
-
-			if (
-				state.status === HealthCheckStatus.SUCCESS &&
-				state.capabilities?.server?.resources !== undefined
-			) {
-				return true;
-			}
-		}
-
-		for (const [serverName, connection] of this.connections) {
-			if (!enabledServerIds.has(serverName)) continue;
-
-			if (MCPService.supportsResources(connection)) {
-				return true;
-			}
-		}
-
-		return false;
-	}
-
-	/**
-	 * Get list of enabled servers that support resources.
-	 * Checks active connections first, then health check state as fallback.
-	 */
-	getServersWithResources(): string[] {
-		const enabledServerIds = new Set(
-			this.getServers()
-				.filter((s) => s.enabled)
-				.map((s) => s.id)
-		);
-		const servers: string[] = [];
-
-		for (const [name, connection] of this.connections) {
-			if (!enabledServerIds.has(name)) continue;
-
-			if (MCPService.supportsResources(connection) && !servers.includes(name)) {
-				servers.push(name);
-			}
-		}
-
-		// Also check health check states for servers not yet connected
-		for (const [serverId, state] of Object.entries(this.health.checks)) {
-			if (!enabledServerIds.has(serverId)) continue;
-
-			if (
-				!servers.includes(serverId) &&
-				state.status === HealthCheckStatus.SUCCESS &&
-				state.capabilities?.server?.resources !== undefined
-			) {
-				servers.push(serverId);
-			}
-		}
-
-		return servers;
 	}
 
 	/**
@@ -1000,6 +451,501 @@ class MCPStore implements McpHealthHost {
 	}
 
 	/**
+	 * Resolve which configured MCP server owns a given tool name. Looks at
+	 * active connections first (fast path), then falls back to per-server
+	 * health-check data so server-side MCP proxies (where llama-server
+	 * executes MCP tools but the browser does not hold a direct connection)
+	 * still resolve tool names to their owning server.
+	 */
+	findServerForTool(toolName: string): string | undefined {
+		const fromIndex = this.toolsIndex.get(toolName);
+
+		if (fromIndex) return fromIndex;
+
+		for (const server of this.getServers()) {
+			const health = this.health.checks[server.id];
+
+			if (!health || health.status !== HealthCheckStatus.SUCCESS) continue;
+
+			if (health.tools.some((tool) => tool.name === toolName)) {
+				return server.id;
+			}
+		}
+
+		return undefined;
+	}
+	getActiveFlowCount(): number {
+		return this.activeFlowCount;
+	}
+
+	async getAllPrompts(): Promise<MCPPromptInfo[]> {
+		const results: MCPPromptInfo[] = [];
+
+		for (const [serverName, connection] of this.connections) {
+			if (!connection.serverCapabilities?.prompts) continue;
+
+			const prompts = await MCPService.listPrompts(connection);
+
+			for (const prompt of prompts) {
+				results.push({
+					arguments: prompt.arguments?.map((arg) => ({
+						description: arg.description,
+						name: arg.name,
+						required: arg.required
+					})),
+					description: prompt.description,
+					name: prompt.name,
+					serverName,
+					title: prompt.title
+				});
+			}
+		}
+
+		return results;
+	}
+
+	/**
+	 * Get all active MCP connections.
+	 * @returns Map of server names to connections
+	 */
+	getConnections(): Map<string, MCPConnection> {
+		return this.connections;
+	}
+
+	getEnabledServersForConversation(
+		perChatOverrides?: McpServerOverride[]
+	): MCPServerSettingsEntry[] {
+		return this.getServers().filter((server) => {
+			return this.checkServerEnabled(server, perChatOverrides);
+		});
+	}
+
+	/**
+	 * Check if a server already has an active connection that can be reused.
+	 * Returns the existing connection if available.
+	 */
+	getExistingConnection(serverId: string): MCPConnection | undefined {
+		return this.connections.get(serverId);
+	}
+
+	/**
+	 * Get server instructions from health check results (for display before active connection).
+	 * Useful for showing instructions in settings UI.
+	 */
+	getHealthCheckInstructions(): Array<{
+		serverId: string;
+		serverTitle?: string;
+		instructions: string;
+	}> {
+		const results: Array<{ serverId: string; serverTitle?: string; instructions: string }> = [];
+
+		for (const [serverId, state] of Object.entries(this.health.checks)) {
+			if (state.status === HealthCheckStatus.SUCCESS && state.instructions) {
+				results.push({
+					instructions: state.instructions,
+					serverId,
+					serverTitle: state.serverInfo?.title || state.serverInfo?.name
+				});
+			}
+		}
+
+		return results;
+	}
+
+	/**
+	 * Health checks live in MCPHealthCheckManager; these delegate so
+	 * consumers keep a single entry point.
+	 */
+	getHealthCheckState(serverId: string): HealthCheckState {
+		return this.health.getState(serverId);
+	}
+
+	async getPrompt(
+		serverName: string,
+		promptName: string,
+		args?: Record<string, string>
+	): Promise<GetPromptResult> {
+		const connection = this.connections.get(serverName);
+
+		if (!connection) throw new Error(`Server "${serverName}" not found for prompt "${promptName}"`);
+
+		return MCPService.getPrompt(connection, promptName, args);
+	}
+
+	async getPromptCompletions(
+		serverName: string,
+		promptName: string,
+		argumentName: string,
+		argumentValue: string
+	): Promise<{ values: string[]; total?: number; hasMore?: boolean } | null> {
+		const connection = this.connections.get(serverName);
+
+		if (!connection) {
+			console.warn(`[MCPStore] Server "${serverName}" is not connected`);
+
+			return null;
+		}
+
+		if (!connection.serverCapabilities?.completions) {
+			return null;
+		}
+
+		return MCPService.complete(
+			connection,
+			{ name: promptName, type: MCPRefType.PROMPT },
+			{ name: argumentName, value: argumentValue }
+		);
+	}
+
+	/**
+	 * Request timeout in milliseconds, read live from the global setting
+	 * so a change in Settings applies to every server immediately.
+	 */
+	getRequestTimeoutMs(): number {
+		const seconds =
+			Number(settingsStore.config.mcpRequestTimeoutSeconds) ||
+			DEFAULT_MCP_CONFIG.requestTimeoutSeconds;
+
+		return Math.round(seconds * 1000);
+	}
+
+	/**
+	 * Get completions for a resource template argument.
+	 * Uses the MCP Completion API with ref/resource.
+	 */
+	async getResourceCompletions(
+		serverName: string,
+		uriTemplate: string,
+		argumentName: string,
+		argumentValue: string
+	): Promise<{ values: string[]; total?: number; hasMore?: boolean } | null> {
+		const connection = this.connections.get(serverName);
+
+		if (!connection) {
+			console.warn(`[MCPStore] Server "${serverName}" is not connected`);
+
+			return null;
+		}
+
+		if (!connection.serverCapabilities?.completions) {
+			return null;
+		}
+
+		return MCPService.complete(
+			connection,
+			{ type: MCPRefType.RESOURCE, uri: uriTemplate },
+			{ name: argumentName, value: argumentValue }
+		);
+	}
+
+	/**
+	 * Get formatted resource context for chat.
+	 */
+	getResourceContextForChat(): string {
+		return mcpResourceStore.formatAttachmentsForContext();
+	}
+
+	getServerById(serverId: string): MCPServerSettingsEntry | undefined {
+		return this.getServers().find((s) => s.id === serverId);
+	}
+
+	/**
+	 * Get display name for an MCP server by its ID.
+	 * Falls back to the server ID if server is not found.
+	 */
+	getServerDisplayName(serverId: string): string {
+		const server = this.getServerById(serverId);
+
+		return server ? this.getServerLabel(server) : serverId;
+	}
+
+	/**
+	 * Get icon URL for an MCP server by its ID.
+	 * Returns the best icon from the MCP server's `icons` array
+	 * (see MCP spec: spec.modelcontextprotocol.io).
+	 * Returns null if no icon is available.
+	 */
+	getServerFavicon(serverId: string): string | null {
+		const server = this.getServerById(serverId);
+
+		if (!server) {
+			return null;
+		}
+
+		const isDark = mode.current === ColorMode.DARK;
+		const healthState = this.health.getState(serverId);
+
+		if (healthState.status === HealthCheckStatus.SUCCESS && healthState.serverInfo?.icons) {
+			const mcpIconUrl = getMcpIconUrl(healthState.serverInfo.icons, isDark);
+
+			if (mcpIconUrl) {
+				return mcpIconUrl;
+			}
+		}
+
+		return getMcpServerFaviconFallback(server.url);
+	}
+
+	/**
+	 * Resolve the favicon URL for an MCP server by one of its tool names.
+	 * Returns `null` if the tool is not provided by any configured MCP server,
+	 * or if the owning server has no icon to show.
+	 * Pair with {@link getServerFavicon} for direct server-id lookup.
+	 */
+	getServerFaviconForTool(toolName: string | undefined): string | null {
+		if (!toolName) return null;
+
+		const serverId = this.findServerForTool(toolName);
+
+		if (!serverId) return null;
+
+		return this.getServerFavicon(serverId);
+	}
+
+	/**
+	 * Get aggregated server instructions from all connected servers.
+	 * Returns an array of { serverName, serverTitle, instructions } objects.
+	 */
+	getServerInstructions(): Array<{
+		serverName: string;
+		serverTitle?: string;
+		instructions: string;
+	}> {
+		const results: Array<{ serverName: string; serverTitle?: string; instructions: string }> = [];
+
+		for (const [serverName, connection] of this.connections) {
+			if (connection.instructions) {
+				results.push({
+					instructions: connection.instructions,
+					serverName,
+					serverTitle: connection.serverInfo?.title || connection.serverInfo?.name
+				});
+			}
+		}
+
+		return results;
+	}
+
+	getServerLabel(server: MCPServerDisplayInfo): string {
+		return getMcpServerLabel(server, this.getServers(), this.health.checks);
+	}
+
+	getServers(): MCPServerSettingsEntry[] {
+		const raw = settingsStore.config.mcpServers;
+
+		// cache the parse: the config string rarely changes and getServers is
+		// called from hot paths (per-tool display lookups, capability checks)
+		if (this.serversCache && this.serversCache.raw === raw) {
+			return this.serversCache.servers;
+		}
+
+		const servers = parseMcpServerSettings(raw);
+
+		this.serversCache = { raw, servers };
+
+		return servers;
+	}
+
+	getServersStatus(): ServerStatus[] {
+		const statuses: ServerStatus[] = [];
+
+		for (const [name, connection] of this.connections) {
+			statuses.push({
+				error: undefined,
+				isConnected: true,
+				name,
+				toolCount: connection.tools.length
+			});
+		}
+
+		return statuses;
+	}
+
+	/**
+	 * Get list of enabled servers that support resources.
+	 * Checks active connections first, then health check state as fallback.
+	 */
+	getServersWithResources(): string[] {
+		const enabledServerIds = new Set(
+			this.getServers()
+				.filter((s) => s.enabled)
+				.map((s) => s.id)
+		);
+		const servers: string[] = [];
+
+		for (const [name, connection] of this.connections) {
+			if (!enabledServerIds.has(name)) continue;
+
+			if (MCPService.supportsResources(connection) && !servers.includes(name)) {
+				servers.push(name);
+			}
+		}
+
+		// Also check health check states for servers not yet connected
+		for (const [serverId, state] of Object.entries(this.health.checks)) {
+			if (!enabledServerIds.has(serverId)) continue;
+
+			if (
+				!servers.includes(serverId) &&
+				state.status === HealthCheckStatus.SUCCESS &&
+				state.capabilities?.server?.resources !== undefined
+			) {
+				servers.push(serverId);
+			}
+		}
+
+		return servers;
+	}
+
+	getToolNames(): string[] {
+		return Array.from(this.toolsIndex.keys());
+	}
+
+	getToolServer(toolName: string): string | undefined {
+		return this.toolsIndex.get(toolName);
+	}
+
+	hasAvailableServers(): boolean {
+		return parseMcpServerSettings(settingsStore.config.mcpServers).some(
+			(s) => s.enabled && s.url.trim()
+		);
+	}
+
+	hasEnabledServers(perChatOverrides?: McpServerOverride[]): boolean {
+		return Boolean(this.buildMcpClientConfig(settingsStore.config, perChatOverrides));
+	}
+
+	/**
+	 * Check if any enabled server with successful health check supports prompts.
+	 * Uses health check state since servers may not have active connections until
+	 * the user actually sends a message or uses prompts.
+	 */
+	hasPromptsCapability(perChatOverrides?: McpServerOverride[]): boolean {
+		let enabledServerIds: Set<string>;
+
+		if (perChatOverrides !== undefined) {
+			enabledServerIds = new Set(perChatOverrides.filter((o) => o.enabled).map((o) => o.serverId));
+		} else {
+			enabledServerIds = new Set(
+				this.getServers()
+					.filter((s) => s.enabled)
+					.map((s) => s.id)
+			);
+		}
+
+		if (enabledServerIds.size === 0) {
+			return false;
+		}
+
+		for (const [serverId, state] of Object.entries(this.health.checks)) {
+			if (!enabledServerIds.has(serverId)) continue;
+
+			if (
+				state.status === HealthCheckStatus.SUCCESS &&
+				state.capabilities?.server?.prompts !== undefined
+			) {
+				return true;
+			}
+		}
+
+		for (const [serverName, connection] of this.connections) {
+			if (!enabledServerIds.has(serverName)) continue;
+
+			if (connection.serverCapabilities?.prompts) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	hasPromptsSupport(): boolean {
+		for (const connection of this.connections.values()) {
+			if (connection.serverCapabilities?.prompts) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	/**
+	 * Check if any enabled server with successful health check supports resources.
+	 * Uses health check state since servers may not have active connections until
+	 * the user actually sends a message or uses prompts.
+	 */
+	hasResourcesCapability(perChatOverrides?: McpServerOverride[]): boolean {
+		let enabledServerIds: Set<string>;
+
+		if (perChatOverrides !== undefined) {
+			enabledServerIds = new Set(perChatOverrides.filter((o) => o.enabled).map((o) => o.serverId));
+		} else {
+			enabledServerIds = new Set(
+				this.getServers()
+					.filter((s) => s.enabled)
+					.map((s) => s.id)
+			);
+		}
+
+		if (enabledServerIds.size === 0) {
+			return false;
+		}
+
+		for (const [serverId, state] of Object.entries(this.health.checks)) {
+			if (!enabledServerIds.has(serverId)) continue;
+
+			if (
+				state.status === HealthCheckStatus.SUCCESS &&
+				state.capabilities?.server?.resources !== undefined
+			) {
+				return true;
+			}
+		}
+
+		for (const [serverName, connection] of this.connections) {
+			if (!enabledServerIds.has(serverName)) continue;
+
+			if (MCPService.supportsResources(connection)) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	/**
+	 * Check if any connected server has instructions.
+	 */
+	hasServerInstructions(): boolean {
+		for (const connection of this.connections.values()) {
+			if (connection.instructions) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	hasTool(toolName: string): boolean {
+		return this.toolsIndex.has(toolName);
+	}
+
+	/**
+	 * Promote a health check connection to an active connection.
+	 * This avoids the need to reconnect when the server is needed for agentic flows.
+	 */
+	promoteHealthCheckToConnection(serverId: string, connection: MCPConnection): void {
+		this.indexServerTools(serverId, connection.tools);
+
+		this.connections.set(serverId, connection);
+
+		this.updateState({
+			connectedServers: Array.from(this.connections.keys()),
+			toolCount: this.toolsIndex.size
+		});
+	}
+
+	/**
 	 * Read resource content from a server.
 	 * Caches the result in mcpResourceStore.
 	 */
@@ -1041,6 +987,120 @@ class MCPStore implements McpHealthHost {
 
 			return null;
 		}
+	}
+
+	/**
+	 * Read a resource by an arbitrary URI (e.g., one expanded from a template).
+	 * Unlike readResource(), this does not require the URI to be in the resources list.
+	 */
+	async readResourceByUri(serverName: string, uri: string): Promise<MCPResourceContent[] | null> {
+		const connection = this.connections.get(serverName);
+
+		if (!connection) {
+			console.error(`[MCPStore] No connection found for server: ${serverName}`);
+
+			return null;
+		}
+
+		try {
+			const result = await MCPService.readResource(connection, uri);
+
+			return result.contents;
+		} catch (error) {
+			console.error(`[MCPStore] Failed to read resource ${uri}:`, error);
+
+			return null;
+		}
+	}
+
+	/** Store a server config so auto-reconnect can rebuild the session. */
+	registerServerConfig(name: string, config: MCPServerConfig): void {
+		this.serverConfigs.set(name, config);
+	}
+
+	/**
+	 * Release a connection reference.
+	 * By default, keeps connections alive for reuse (shutdownIfUnused=false).
+	 * MCP spec encourages long-lived sessions to avoid reconnection overhead.
+	 */
+	async releaseConnection(shutdownIfUnused = false): Promise<void> {
+		this.activeFlowCount = Math.max(0, this.activeFlowCount - 1);
+
+		if (shutdownIfUnused && this.activeFlowCount === 0) {
+			await this.shutdown();
+		}
+	}
+
+	/**
+	 * Drop a connection without disconnecting, e.g. when a health check finds
+	 * it stale and recreates it.
+	 */
+	removeConnection(serverId: string): void {
+		this.connections.delete(serverId);
+	}
+
+	/**
+	 * Remove a resource attachment from chat context.
+	 */
+	removeResourceAttachment(attachmentId: string): void {
+		mcpResourceStore.removeAttachment(attachmentId);
+	}
+
+	removeServer(id: string): void {
+		const servers = this.getServers();
+
+		settingsStore.updateConfig(
+			SETTINGS_KEYS.MCP_SERVERS,
+			JSON.stringify(servers.filter((s) => s.id !== id))
+		);
+		this.clearHealthCheck(id);
+	}
+
+	async runHealthCheck(server: HealthCheckParams, promoteToActive = false): Promise<void> {
+		return this.health.run(server, promoteToActive);
+	}
+
+	async runHealthChecksForServers(
+		servers: {
+			id: string;
+			enabled: boolean;
+			url: string;
+			headers?: string;
+		}[],
+		skipIfChecked = true,
+		promoteToActive = false
+	): Promise<void> {
+		return this.health.runForServers(servers, skipIfChecked, promoteToActive);
+	}
+
+	async shutdown(): Promise<void> {
+		if (this.initPromise) {
+			await this.initPromise.catch(() => {});
+			this.initPromise = null;
+		}
+
+		if (this.connections.size === 0) {
+			return;
+		}
+
+		await Promise.all(
+			Array.from(this.connections.values()).map((conn) =>
+				MCPService.disconnect(conn).catch((error) =>
+					console.warn(`[MCPStore] Error disconnecting ${conn.serverName}:`, error)
+				)
+			)
+		);
+
+		this.connections.clear();
+		this.toolsIndex.clear();
+		this.serverConfigs.clear();
+		this.configSignature = null;
+		this.updateState({
+			connectedServers: [],
+			error: null,
+			isInitializing: false,
+			toolCount: 0
+		});
 	}
 
 	/**
@@ -1111,86 +1171,51 @@ class MCPStore implements McpHealthHost {
 		}
 	}
 
-	/**
-	 * Add a resource as attachment to chat context.
-	 * Automatically fetches content if not cached.
-	 */
-	async attachResource(uri: string): Promise<MCPResourceAttachment | null> {
-		const resourceInfo = mcpResourceStore.findResourceByUri(uri);
+	updateServer(id: string, updates: Partial<MCPServerSettingsEntry>): void {
+		const servers = this.getServers();
 
-		if (!resourceInfo) {
-			console.error(`[MCPStore] Resource not found: ${uri}`);
-
-			return null;
-		}
-
-		if (mcpResourceStore.isAttached(uri)) {
-			return null;
-		}
-
-		const attachment = mcpResourceStore.addAttachment(resourceInfo);
-
-		try {
-			const content = await this.readResource(uri);
-
-			if (content) {
-				mcpResourceStore.updateAttachmentContent(attachment.id, content);
-			} else {
-				mcpResourceStore.updateAttachmentError(attachment.id, 'Failed to read resource');
-			}
-		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
-
-			mcpResourceStore.updateAttachmentError(attachment.id, message);
-		}
-
-		return mcpResourceStore.getAttachment(attachment.id) ?? null;
+		settingsStore.updateConfig(
+			SETTINGS_KEYS.MCP_SERVERS,
+			JSON.stringify(
+				servers.map((server) => (server.id === id ? { ...server, ...updates } : server))
+			)
+		);
 	}
 
 	/**
-	 * Remove a resource attachment from chat context.
+	 * Builds MCP client configuration from settings.
 	 */
-	removeResourceAttachment(attachmentId: string): void {
-		mcpResourceStore.removeAttachment(attachmentId);
-	}
+	private buildMcpClientConfig(
+		cfg: SettingsConfigType,
+		perChatOverrides?: McpServerOverride[]
+	): MCPClientConfig | undefined {
+		const rawServers = parseMcpServerSettings(cfg.mcpServers);
 
-	/**
-	 * Clear all resource attachments.
-	 */
-	clearResourceAttachments(): void {
-		mcpResourceStore.clearAttachments();
-	}
-
-	/**
-	 * Get formatted resource context for chat.
-	 */
-	getResourceContextForChat(): string {
-		return mcpResourceStore.formatAttachmentsForContext();
-	}
-
-	/**
-	 * Convert current resource attachments to DatabaseMessageExtra[] and clear them.
-	 * Called during message send to persist resources with the user message.
-	 */
-	consumeResourceAttachmentsAsExtras(): DatabaseMessageExtraMcpResource[] {
-		const extras = mcpResourceStore.toMessageExtras();
-
-		if (extras.length > 0) {
-			mcpResourceStore.clearAttachments();
+		if (!rawServers.length) {
+			return undefined;
 		}
 
-		return extras;
-	}
+		const servers: Record<string, MCPServerConfig> = {};
 
-	/**
-	 * Generates a unique server ID from an optional ID string or index.
-	 */
-	private generateServerId(id: unknown, index: number): string {
-		if (typeof id === 'string' && id.trim()) {
-			return id.trim();
+		for (const [index, entry] of rawServers.entries()) {
+			if (!this.checkServerEnabled(entry, perChatOverrides)) continue;
+
+			const normalized = this.buildServerConfig(entry);
+
+			if (normalized) servers[this.generateServerId(entry.id, index)] = normalized;
 		}
 
-		return `${MCP_SERVER_ID_PREFIX}-${index + 1}`;
+		if (Object.keys(servers).length === 0) {
+			return undefined;
+		}
+
+		return {
+			capabilities: DEFAULT_MCP_CONFIG.capabilities,
+			clientInfo: DEFAULT_MCP_CONFIG.clientInfo,
+			protocolVersion: DEFAULT_MCP_CONFIG.protocolVersion,
+			requestTimeoutMs: this.getRequestTimeoutMs(),
+			servers
+		};
 	}
 
 	/**
@@ -1241,80 +1266,29 @@ class MCPStore implements McpHealthHost {
 		return override?.enabled ?? server.enabled;
 	}
 
-	/**
-	 * Builds MCP client configuration from settings.
-	 */
-	private buildMcpClientConfig(
-		cfg: SettingsConfigType,
-		perChatOverrides?: McpServerOverride[]
-	): MCPClientConfig | undefined {
-		const rawServers = parseMcpServerSettings(cfg.mcpServers);
-
-		if (!rawServers.length) {
-			return undefined;
-		}
-
-		const servers: Record<string, MCPServerConfig> = {};
-
-		for (const [index, entry] of rawServers.entries()) {
-			if (!this.checkServerEnabled(entry, perChatOverrides)) continue;
-
-			const normalized = this.buildServerConfig(entry);
-
-			if (normalized) servers[this.generateServerId(entry.id, index)] = normalized;
-		}
-
-		if (Object.keys(servers).length === 0) {
-			return undefined;
-		}
-
+	private createListChangedHandlers(serverName: string): ListChangedHandlers {
 		return {
-			capabilities: DEFAULT_MCP_CONFIG.capabilities,
-			clientInfo: DEFAULT_MCP_CONFIG.clientInfo,
-			protocolVersion: DEFAULT_MCP_CONFIG.protocolVersion,
-			requestTimeoutMs: this.getRequestTimeoutMs(),
-			servers
+			prompts: {
+				onChanged: (error: Error | null) => {
+					if (error) {
+						console.warn(`[MCPStore][${serverName}] Prompts list changed error:`, error);
+
+						return;
+					}
+				}
+			},
+			tools: {
+				onChanged: (error: Error | null, tools: Tool[] | null) => {
+					if (error) {
+						console.warn(`[MCPStore][${serverName}] Tools list changed error:`, error);
+
+						return;
+					}
+
+					this.handleToolsListChanged(serverName, tools ?? []);
+				}
+			}
 		};
-	}
-
-	private updateState(state: {
-		isInitializing?: boolean;
-		error?: string | null;
-		toolCount?: number;
-		connectedServers?: string[];
-	}): void {
-		if (state.isInitializing !== undefined) {
-			this._isInitializing = state.isInitializing;
-		}
-
-		if (state.error !== undefined) {
-			this._error = state.error;
-		}
-
-		if (state.toolCount !== undefined) {
-			this._toolCount = state.toolCount;
-		}
-
-		if (state.connectedServers !== undefined) {
-			this.connectedServers = state.connectedServers;
-		}
-	}
-
-	private async initialize(signature: string, mcpConfig: MCPClientConfig): Promise<boolean> {
-		this.updateState({ error: null, isInitializing: true });
-		this.configSignature = signature;
-
-		const serverEntries = Object.entries(mcpConfig.servers);
-
-		if (serverEntries.length === 0) {
-			this.updateState({ connectedServers: [], isInitializing: false, toolCount: 0 });
-
-			return false;
-		}
-
-		this.initPromise = this.doInitialize(signature, mcpConfig, serverEntries);
-
-		return this.initPromise;
 	}
 
 	private async doInitialize(
@@ -1393,44 +1367,15 @@ class MCPStore implements McpHealthHost {
 		return true;
 	}
 
-	private createListChangedHandlers(serverName: string): ListChangedHandlers {
-		return {
-			prompts: {
-				onChanged: (error: Error | null) => {
-					if (error) {
-						console.warn(`[MCPStore][${serverName}] Prompts list changed error:`, error);
-
-						return;
-					}
-				}
-			},
-			tools: {
-				onChanged: (error: Error | null, tools: Tool[] | null) => {
-					if (error) {
-						console.warn(`[MCPStore][${serverName}] Tools list changed error:`, error);
-
-						return;
-					}
-
-					this.handleToolsListChanged(serverName, tools ?? []);
-				}
-			}
-		};
-	}
-
 	/**
-	 * Registers the tools exposed by a server into the global name->server index,
-	 * warning on conflicts. Shared by connect, reconnect and auto-reconnect.
+	 * Generates a unique server ID from an optional ID string or index.
 	 */
-	private indexServerTools(serverName: string, tools: Tool[]): void {
-		for (const tool of tools) {
-			if (this.toolsIndex.has(tool.name))
-				console.warn(
-					`[MCPStore] Tool name conflict: "${tool.name}" exists in "${this.toolsIndex.get(tool.name)}" and "${serverName}". Using tool from "${serverName}".`
-				);
-
-			this.toolsIndex.set(tool.name, serverName);
+	private generateServerId(id: unknown, index: number): string {
+		if (typeof id === 'string' && id.trim()) {
+			return id.trim();
 		}
+
+		return `${MCP_SERVER_ID_PREFIX}-${index + 1}`;
 	}
 
 	private handleToolsListChanged(serverName: string, tools: Tool[]): void {
@@ -1455,6 +1400,67 @@ class MCPStore implements McpHealthHost {
 			this.toolsIndex.set(tool.name, serverName);
 		}
 		this.updateState({ toolCount: this.toolsIndex.size });
+	}
+
+	/**
+	 * Registers the tools exposed by a server into the global name->server index,
+	 * warning on conflicts. Shared by connect, reconnect and auto-reconnect.
+	 */
+	private indexServerTools(serverName: string, tools: Tool[]): void {
+		for (const tool of tools) {
+			if (this.toolsIndex.has(tool.name))
+				console.warn(
+					`[MCPStore] Tool name conflict: "${tool.name}" exists in "${this.toolsIndex.get(tool.name)}" and "${serverName}". Using tool from "${serverName}".`
+				);
+
+			this.toolsIndex.set(tool.name, serverName);
+		}
+	}
+
+	private async initialize(signature: string, mcpConfig: MCPClientConfig): Promise<boolean> {
+		this.updateState({ error: null, isInitializing: true });
+		this.configSignature = signature;
+
+		const serverEntries = Object.entries(mcpConfig.servers);
+
+		if (serverEntries.length === 0) {
+			this.updateState({ connectedServers: [], isInitializing: false, toolCount: 0 });
+
+			return false;
+		}
+
+		this.initPromise = this.doInitialize(signature, mcpConfig, serverEntries);
+
+		return this.initPromise;
+	}
+
+	private parseToolArguments(args: string | Record<string, unknown>): Record<string, unknown> {
+		if (typeof args === 'string') {
+			const trimmed = args.trim();
+
+			if (trimmed === '') {
+				return {};
+			}
+
+			try {
+				const parsed = JSON.parse(trimmed);
+
+				if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed))
+					throw new Error(
+						`Tool arguments must be an object, got ${Array.isArray(parsed) ? 'array' : typeof parsed}`
+					);
+
+				return parsed as Record<string, unknown>;
+			} catch (error) {
+				throw new Error(`Failed to parse tool arguments as JSON: ${(error as Error).message}`);
+			}
+		}
+
+		if (typeof args === 'object' && args !== null && !Array.isArray(args)) {
+			return args;
+		}
+
+		throw new Error(`Invalid tool arguments type: ${typeof args}`);
 	}
 
 	/**
@@ -1504,33 +1510,27 @@ class MCPStore implements McpHealthHost {
 		console.log(`[MCPStore][${serverName}] Session recovered successfully`);
 	}
 
-	private parseToolArguments(args: string | Record<string, unknown>): Record<string, unknown> {
-		if (typeof args === 'string') {
-			const trimmed = args.trim();
-
-			if (trimmed === '') {
-				return {};
-			}
-
-			try {
-				const parsed = JSON.parse(trimmed);
-
-				if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed))
-					throw new Error(
-						`Tool arguments must be an object, got ${Array.isArray(parsed) ? 'array' : typeof parsed}`
-					);
-
-				return parsed as Record<string, unknown>;
-			} catch (error) {
-				throw new Error(`Failed to parse tool arguments as JSON: ${(error as Error).message}`);
-			}
+	private updateState(state: {
+		isInitializing?: boolean;
+		error?: string | null;
+		toolCount?: number;
+		connectedServers?: string[];
+	}): void {
+		if (state.isInitializing !== undefined) {
+			this._isInitializing = state.isInitializing;
 		}
 
-		if (typeof args === 'object' && args !== null && !Array.isArray(args)) {
-			return args;
+		if (state.error !== undefined) {
+			this._error = state.error;
 		}
 
-		throw new Error(`Invalid tool arguments type: ${typeof args}`);
+		if (state.toolCount !== undefined) {
+			this._toolCount = state.toolCount;
+		}
+
+		if (state.connectedServers !== undefined) {
+			this.connectedServers = state.connectedServers;
+		}
 	}
 }
 

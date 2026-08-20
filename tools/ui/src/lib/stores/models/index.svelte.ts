@@ -20,19 +20,15 @@ import { SvelteSet } from 'svelte/reactivity';
 import { toast } from 'svelte-sonner';
 
 class ModelsStore implements ModelPropsHost, ModelStatusHost {
+	error = $state<string | null>(null);
+	favoriteModelIds = $state<Set<string>>(this.loadFavoritesFromStorage());
+	loading = $state(false);
 	models = $state<ModelOption[]>([]);
 	routerModels = $state<ApiModelDataEntry[]>([]);
-	loading = $state(false);
-	updating = $state(false);
-	error = $state<string | null>(null);
 	selectedModelId = $state<string | null>(null);
 	selectedModelName = $state<string | null>(null);
 
-	favoriteModelIds = $state<Set<string>>(this.loadFavoritesFromStorage());
-
-	// Dedup concurrent fetch() callers — all awaiters share the same inflight promise.
-	// Without this, ?model=<name> URL handler races an in-progress fetch and sees an empty list.
-	private inflightFetch: Promise<void> | null = null;
+	updating = $state(false);
 
 	/** Per-model props cache, modalities and thinking detection, composed here. */
 	private _props = new ModelPropsManager(this);
@@ -40,46 +36,9 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 	/** Load/unload operations and the /models/sse status feed, composed here. */
 	private _status = new ModelStatusManager(this);
 
-	get props() {
-		return this._props;
-	}
-
-	get status() {
-		return this._status;
-	}
-
-	get selectedModel(): ModelOption | null {
-		if (!this.selectedModelId) return null;
-
-		return this.models.find((m) => m.id === this.selectedModelId) ?? null;
-	}
-
-	get loadedModelIds(): string[] {
-		return this.routerModels
-			.filter(
-				(m) =>
-					m.status.value === ServerModelStatus.LOADED ||
-					m.status.value === ServerModelStatus.SLEEPING
-			)
-			.map((m) => m.id);
-	}
-
-	/**
-	 * Get model name in MODEL mode (single model).
-	 * Extracts from model_path or model_alias from server props.
-	 * In ROUTER mode, returns null (model is per-conversation).
-	 */
-	get singleModelName(): string | null {
-		if (serverStore.isRouterMode) return null;
-
-		const props = serverStore.props;
-
-		if (props?.model_alias) return props.model_alias;
-
-		if (!props?.model_path) return null;
-
-		return props.model_path.split(/(\\|\/)/).pop() || null;
-	}
+	// Dedup concurrent fetch() callers — all awaiters share the same inflight promise.
+	// Without this, ?model=<name> URL handler races an in-progress fetch and sees an empty list.
+	private inflightFetch: Promise<void> | null = null;
 
 	/**
 	 * Model the active conversation view resolves to. Router mode: the user's
@@ -108,110 +67,56 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 		return null;
 	}
 
+	get loadedModelIds(): string[] {
+		return this.routerModels
+			.filter(
+				(m) =>
+					m.status.value === ServerModelStatus.LOADED ||
+					m.status.value === ServerModelStatus.SLEEPING
+			)
+			.map((m) => m.id);
+	}
+
+	get props() {
+		return this._props;
+	}
+
+	get selectedModel(): ModelOption | null {
+		if (!this.selectedModelId) return null;
+
+		return this.models.find((m) => m.id === this.selectedModelId) ?? null;
+	}
+
 	get selectedModelContextSize(): number | null {
 		if (!this.selectedModelName) return null;
 
 		return this.props.getModelContextSize(this.selectedModelName);
 	}
 
-	isModelLoaded(modelId: string): boolean {
-		const model = this.routerModels.find((m) => m.id === modelId);
-
-		return (
-			model?.status.value === ServerModelStatus.LOADED ||
-			model?.status.value === ServerModelStatus.SLEEPING
-		);
-	}
-
-	getModelStatus(modelId: string): ServerModelStatus | null {
-		const model = this.routerModels.find((m) => m.id === modelId);
-
-		return model?.status.value ?? null;
-	}
-
 	/**
-	 * Fetch list of models from server and detect server role.
-	 * Also fetches modalities for MODEL mode (single model).
+	 * Get model name in MODEL mode (single model).
+	 * Extracts from model_path or model_alias from server props.
+	 * In ROUTER mode, returns null (model is per-conversation).
 	 */
-	async fetch(force = false): Promise<void> {
-		if (this.inflightFetch) return this.inflightFetch;
+	get singleModelName(): string | null {
+		if (serverStore.isRouterMode) return null;
 
-		if (this.models.length > 0 && !force) return;
+		const props = serverStore.props;
 
-		this.inflightFetch = this.runFetch();
-		try {
-			await this.inflightFetch;
-		} finally {
-			this.inflightFetch = null;
-		}
+		if (props?.model_alias) return props.model_alias;
+
+		if (!props?.model_path) return null;
+
+		return props.model_path.split(/(\\|\/)/).pop() || null;
 	}
 
-	/**
-	 * Fetch router models with full metadata (ROUTER mode only).
-	 * No-op in router mode — fetch() already calls listRouter() internally.
-	 * Kept for API compatibility (e.g. handleOpenChange dropdown open handler).
-	 */
-	async fetchRouterModels(): Promise<void> {
-		if (!serverStore.isRouterMode) return;
-
-		try {
-			const response = await ModelsService.listRouter();
-
-			this.routerModels = response.data;
-			await this.props.fetchModalitiesForLoadedModels();
-
-			const visible = this.getVisibleModels();
-
-			if (visible.length === 1 && this.isModelLoaded(visible[0].model)) {
-				this.selectModelById(visible[0].id);
-			}
-		} catch (error) {
-			console.warn('Failed to fetch router models:', error);
-			this.routerModels = [];
-		}
+	get status() {
+		return this._status;
 	}
 
-	/**
-	 * Gets the model name from the last assistant message in the active conversation.
-	 * Used by both the chat page and settings page to maintain model consistency.
-	 */
-	getModelFromLastAssistantResponse(): string | null {
-		const messages = conversationsStore.activeMessages;
-
-		if (!messages || messages.length === 0) return null;
-
-		for (let i = messages.length - 1; i >= 0; i--) {
-			if (messages[i].model) {
-				return messages[i].model;
-			}
-		}
-
-		return null;
-	}
-
-	/**
-	 * Auto-selects the model from the last assistant response if available and loaded.
-	 * Returns true if a model was selected, false otherwise.
-	 */
-	async selectModelFromLastAssistantResponse(): Promise<boolean> {
-		const lastModel = this.getModelFromLastAssistantResponse();
-
-		if (!lastModel || this.selectedModelName === lastModel) return false;
-
-		const matchingModel = this.models.find((option) => option.model === lastModel);
-
-		if (!matchingModel || !this.isModelLoaded(lastModel)) return false;
-
-		try {
-			await this.selectModelById(matchingModel.id);
-			console.log(`[modelsStore] Automatically selected model: ${lastModel} from last message`);
-
-			return true;
-		} catch (error) {
-			console.warn('[modelsStore] Failed to automatically select model from last message:', error);
-
-			return false;
-		}
+	clearSelection(): void {
+		this.selectedModelId = null;
+		this.selectedModelName = null;
 	}
 
 	/**
@@ -270,6 +175,102 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 		await this.selectModelById(availableModels[0].id);
 	}
 
+	/**
+	 * Fetch list of models from server and detect server role.
+	 * Also fetches modalities for MODEL mode (single model).
+	 */
+	async fetch(force = false): Promise<void> {
+		if (this.inflightFetch) return this.inflightFetch;
+
+		if (this.models.length > 0 && !force) return;
+
+		this.inflightFetch = this.runFetch();
+		try {
+			await this.inflightFetch;
+		} finally {
+			this.inflightFetch = null;
+		}
+	}
+
+	/**
+	 * Fetch router models with full metadata (ROUTER mode only).
+	 * No-op in router mode — fetch() already calls listRouter() internally.
+	 * Kept for API compatibility (e.g. handleOpenChange dropdown open handler).
+	 */
+	async fetchRouterModels(): Promise<void> {
+		if (!serverStore.isRouterMode) return;
+
+		try {
+			const response = await ModelsService.listRouter();
+
+			this.routerModels = response.data;
+			await this.props.fetchModalitiesForLoadedModels();
+
+			const visible = this.getVisibleModels();
+
+			if (visible.length === 1 && this.isModelLoaded(visible[0].model)) {
+				this.selectModelById(visible[0].id);
+			}
+		} catch (error) {
+			console.warn('Failed to fetch router models:', error);
+			this.routerModels = [];
+		}
+	}
+
+	findModelById(modelId: string): ModelOption | null {
+		return this.models.find((model) => model.id === modelId) ?? null;
+	}
+
+	findModelByName(modelName: string): ModelOption | null {
+		return (
+			this.models.find(
+				(model) =>
+					model.model === modelName || model.id === modelName || model.aliases?.includes(modelName)
+			) ?? null
+		);
+	}
+
+	/**
+	 * Gets the model name from the last assistant message in the active conversation.
+	 * Used by both the chat page and settings page to maintain model consistency.
+	 */
+	getModelFromLastAssistantResponse(): string | null {
+		const messages = conversationsStore.activeMessages;
+
+		if (!messages || messages.length === 0) return null;
+
+		for (let i = messages.length - 1; i >= 0; i--) {
+			if (messages[i].model) {
+				return messages[i].model;
+			}
+		}
+
+		return null;
+	}
+
+	getModelStatus(modelId: string): ServerModelStatus | null {
+		const model = this.routerModels.find((m) => m.id === modelId);
+
+		return model?.status.value ?? null;
+	}
+
+	hasModel(modelName: string): boolean {
+		return this.models.some((model) => model.model === modelName);
+	}
+
+	isFavorite(modelId: string): boolean {
+		return this.favoriteModelIds.has(modelId);
+	}
+
+	isModelLoaded(modelId: string): boolean {
+		const model = this.routerModels.find((m) => m.id === modelId);
+
+		return (
+			model?.status.value === ServerModelStatus.LOADED ||
+			model?.status.value === ServerModelStatus.SLEEPING
+		);
+	}
+
 	async selectModelById(modelId: string): Promise<void> {
 		if (!modelId || this.updating) return;
 
@@ -302,30 +303,36 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 		}
 	}
 
-	clearSelection(): void {
-		this.selectedModelId = null;
-		this.selectedModelName = null;
+	/**
+	 * Auto-selects the model from the last assistant response if available and loaded.
+	 * Returns true if a model was selected, false otherwise.
+	 */
+	async selectModelFromLastAssistantResponse(): Promise<boolean> {
+		const lastModel = this.getModelFromLastAssistantResponse();
+
+		if (!lastModel || this.selectedModelName === lastModel) return false;
+
+		const matchingModel = this.models.find((option) => option.model === lastModel);
+
+		if (!matchingModel || !this.isModelLoaded(lastModel)) return false;
+
+		try {
+			await this.selectModelById(matchingModel.id);
+			console.log(`[modelsStore] Automatically selected model: ${lastModel} from last message`);
+
+			return true;
+		} catch (error) {
+			console.warn('[modelsStore] Failed to automatically select model from last message:', error);
+
+			return false;
+		}
 	}
 
-	findModelByName(modelName: string): ModelOption | null {
-		return (
-			this.models.find(
-				(model) =>
-					model.model === modelName || model.id === modelName || model.aliases?.includes(modelName)
-			) ?? null
-		);
-	}
+	toDisplayName(id: string): string {
+		const segments = id.split(/\\|\//);
+		const candidate = segments.pop();
 
-	findModelById(modelId: string): ModelOption | null {
-		return this.models.find((model) => model.id === modelId) ?? null;
-	}
-
-	hasModel(modelName: string): boolean {
-		return this.models.some((model) => model.model === modelName);
-	}
-
-	isFavorite(modelId: string): boolean {
-		return this.favoriteModelIds.has(modelId);
+		return candidate && candidate.trim().length > 0 ? candidate : id;
 	}
 
 	toggleFavorite(modelId: string): void {
@@ -346,11 +353,61 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 		}
 	}
 
-	toDisplayName(id: string): string {
-		const segments = id.split(/\\|\//);
-		const candidate = segments.pop();
+	/**
+	 * Build ModelOption[] from an API response.
+	 * Both MODEL and ROUTER modes share the same mapping logic;
+	 * they differ only in which endpoint is called.
+	 */
+	private buildModelOptions(
+		response: ApiModelListResponse | ApiRouterModelsListResponse
+	): ModelOption[] {
+		return response.data.map((item: ApiModelDataEntry, index: number) => {
+			const details = response.models?.[index];
+			const rawCapabilities = Array.isArray(details?.capabilities) ? details?.capabilities : [];
+			const displayNameSource =
+				details?.name && details.name.trim().length > 0 ? details.name : item.id;
+			const modelId = details?.model || item.id;
 
-		return candidate && candidate.trim().length > 0 ? candidate : id;
+			return {
+				aliases: item.aliases ?? [],
+				capabilities: rawCapabilities.filter((value: unknown): value is string => Boolean(value)),
+				description: details?.description,
+				details: details?.details,
+				id: item.id,
+				meta: item.meta ?? null,
+				modalities: this.props.buildArchitectureModalities(item.architecture),
+				model: modelId,
+				name: this.toDisplayName(displayNameSource),
+				parsedId: ModelsService.parseModelId(modelId),
+				tags: item.tags ?? []
+			};
+		});
+	}
+
+	/** Fetch models in MODEL mode (single model, standard OpenAI-compatible). */
+	private async fetchModelModeInternal(): Promise<ModelOption[]> {
+		const response = await ModelsService.list();
+
+		return this.buildModelOptions(response);
+	}
+
+	/**
+	 * Filter to models visible in the UI (ui !== false).
+	 */
+	private getVisibleModels(): ModelOption[] {
+		return this.models.filter((option) => this.props.getModelProps(option.model)?.ui !== false);
+	}
+
+	private loadFavoritesFromStorage(): Set<string> {
+		try {
+			const raw = localStorage.getItem(FAVORITE_MODELS_LOCALSTORAGE_KEY);
+
+			return raw ? new Set(JSON.parse(raw) as string[]) : new Set();
+		} catch {
+			toast.error('Failed to load favorite models from local storage');
+
+			return new Set();
+		}
 	}
 
 	private async runFetch(): Promise<void> {
@@ -387,63 +444,6 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 			throw error;
 		} finally {
 			this.loading = false;
-		}
-	}
-
-	/** Fetch models in MODEL mode (single model, standard OpenAI-compatible). */
-	private async fetchModelModeInternal(): Promise<ModelOption[]> {
-		const response = await ModelsService.list();
-
-		return this.buildModelOptions(response);
-	}
-
-	/**
-	 * Build ModelOption[] from an API response.
-	 * Both MODEL and ROUTER modes share the same mapping logic;
-	 * they differ only in which endpoint is called.
-	 */
-	private buildModelOptions(
-		response: ApiModelListResponse | ApiRouterModelsListResponse
-	): ModelOption[] {
-		return response.data.map((item: ApiModelDataEntry, index: number) => {
-			const details = response.models?.[index];
-			const rawCapabilities = Array.isArray(details?.capabilities) ? details?.capabilities : [];
-			const displayNameSource =
-				details?.name && details.name.trim().length > 0 ? details.name : item.id;
-			const modelId = details?.model || item.id;
-
-			return {
-				aliases: item.aliases ?? [],
-				capabilities: rawCapabilities.filter((value: unknown): value is string => Boolean(value)),
-				description: details?.description,
-				details: details?.details,
-				id: item.id,
-				meta: item.meta ?? null,
-				modalities: this.props.buildArchitectureModalities(item.architecture),
-				model: modelId,
-				name: this.toDisplayName(displayNameSource),
-				parsedId: ModelsService.parseModelId(modelId),
-				tags: item.tags ?? []
-			};
-		});
-	}
-
-	/**
-	 * Filter to models visible in the UI (ui !== false).
-	 */
-	private getVisibleModels(): ModelOption[] {
-		return this.models.filter((option) => this.props.getModelProps(option.model)?.ui !== false);
-	}
-
-	private loadFavoritesFromStorage(): Set<string> {
-		try {
-			const raw = localStorage.getItem(FAVORITE_MODELS_LOCALSTORAGE_KEY);
-
-			return raw ? new Set(JSON.parse(raw) as string[]) : new Set();
-		} catch {
-			toast.error('Failed to load favorite models from local storage');
-
-			return new Set();
 		}
 	}
 }

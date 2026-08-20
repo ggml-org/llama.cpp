@@ -38,30 +38,38 @@ function generateAttachmentId(): string {
 }
 
 class MCPResourceStore {
-	private _serverResources = $state<SvelteMap<string, MCPServerResources>>(new SvelteMap());
-	private _cachedResources = $state<SvelteMap<string, MCPCachedResource>>(new SvelteMap());
-	private _subscriptions = $state<SvelteMap<string, MCPResourceSubscription>>(new SvelteMap());
 	private _attachments = $state<MCPResourceAttachment[]>([]);
+	private _cachedResources = $state<SvelteMap<string, MCPCachedResource>>(new SvelteMap());
 	private _isLoading = $state(false);
+	private _serverResources = $state<SvelteMap<string, MCPServerResources>>(new SvelteMap());
+	private _subscriptions = $state<SvelteMap<string, MCPResourceSubscription>>(new SvelteMap());
 
-	get serverResources(): Map<string, MCPServerResources> {
-		return this._serverResources;
-	}
-
-	get cachedResources(): Map<string, MCPCachedResource> {
-		return this._cachedResources;
-	}
-
-	get subscriptions(): Map<string, MCPResourceSubscription> {
-		return this._subscriptions;
+	get attachmentCount(): number {
+		return this._attachments.length;
 	}
 
 	get attachments(): MCPResourceAttachment[] {
 		return this._attachments;
 	}
 
+	get cachedResources(): Map<string, MCPCachedResource> {
+		return this._cachedResources;
+	}
+
+	get hasAttachments(): boolean {
+		return this._attachments.length > 0;
+	}
+
 	get isLoading(): boolean {
 		return this._isLoading;
+	}
+
+	get serverResources(): Map<string, MCPServerResources> {
+		return this._serverResources;
+	}
+
+	get subscriptions(): Map<string, MCPResourceSubscription> {
+		return this._subscriptions;
 	}
 
 	get totalResourceCount(): number {
@@ -84,78 +92,183 @@ class MCPResourceStore {
 		return count;
 	}
 
-	get attachmentCount(): number {
-		return this._attachments.length;
-	}
+	/**
+	 * Add a resource attachment to the current chat context
+	 */
+	addAttachment(resource: MCPResourceInfo): MCPResourceAttachment {
+		const attachment: MCPResourceAttachment = {
+			id: generateAttachmentId(),
+			loading: true,
+			resource
+		};
 
-	get hasAttachments(): boolean {
-		return this._attachments.length > 0;
+		this._attachments = [...this._attachments, attachment];
+		console.log(`[MCPResources] Added attachment: ${resource.uri}`);
+
+		return attachment;
 	}
 
 	/**
-	 * Set resources for a server (called after listResources)
+	 * Register a subscription for a resource
 	 */
-	setServerResources(
-		serverName: string,
-		resources: MCPResource[],
-		templates: MCPResourceTemplate[]
-	): void {
-		this._serverResources.set(serverName, {
-			error: undefined,
-			lastFetched: new Date(),
-			loading: false,
-			resources,
+	addSubscription(uri: string, serverName: string): void {
+		this._subscriptions.set(uri, {
 			serverName,
-			templates
+			subscribedAt: new Date(),
+			uri
 		});
-		console.log(
-			`[MCPResources][${serverName}] Set ${resources.length} resources, ${templates.length} templates`
-		);
-	}
 
-	/**
-	 * Set loading state for a server's resources
-	 */
-	setServerLoading(serverName: string, loading: boolean): void {
-		const existing = this._serverResources.get(serverName);
+		const cached = this._cachedResources.get(uri);
 
-		if (existing) {
-			this._serverResources.set(serverName, { ...existing, loading });
-		} else {
-			this._serverResources.set(serverName, {
-				error: undefined,
-				loading,
-				resources: [],
-				serverName,
-				templates: []
-			});
+		if (cached) {
+			this._cachedResources.set(uri, { ...cached, subscribed: true });
 		}
+
+		console.log(`[MCPResources] Added subscription: ${uri}`);
 	}
 
 	/**
-	 * Set error state for a server's resources
+	 * Cache resource content after reading
 	 */
-	setServerError(serverName: string, error: string): void {
-		const existing = this._serverResources.get(serverName);
+	cacheResourceContent(resource: MCPResourceInfo, content: MCPResourceContent[]): void {
+		// Enforce cache size limit
+		if (this._cachedResources.size >= MCP_RESOURCE_CACHE.MAX_ENTRIES) {
+			const oldestKey = this._cachedResources.keys().next().value;
 
-		if (existing) {
-			this._serverResources.set(serverName, { ...existing, error, loading: false });
-		} else {
-			this._serverResources.set(serverName, {
-				error,
-				loading: false,
-				resources: [],
-				serverName,
-				templates: []
-			});
+			if (oldestKey) {
+				this._cachedResources.delete(oldestKey);
+			}
 		}
+
+		this._cachedResources.set(resource.uri, {
+			content,
+			fetchedAt: new Date(),
+			resource,
+			subscribed: this._subscriptions.has(resource.uri)
+		});
+		console.log(`[MCPResources] Cached content for: ${resource.uri}`);
 	}
 
 	/**
-	 * Get resources for a specific server
+	 * Clear all state (e.g., on full reset)
 	 */
-	getServerResources(serverName: string): MCPServerResources | undefined {
-		return this._serverResources.get(serverName);
+	clear(): void {
+		this._serverResources.clear();
+		this._cachedResources.clear();
+		this._subscriptions.clear();
+		this._attachments = [];
+		this._isLoading = false;
+		console.log(`[MCPResources] Cleared all state`);
+	}
+
+	/**
+	 * Clear all attachments
+	 */
+	clearAttachments(): void {
+		this._attachments = [];
+		console.log(`[MCPResources] Cleared all attachments`);
+	}
+
+	/**
+	 * Clear all cached content
+	 */
+	clearCache(): void {
+		this._cachedResources.clear();
+		console.log(`[MCPResources] Cleared all cached content`);
+	}
+
+	/**
+	 * Clear resources for a server (e.g., when disconnected)
+	 */
+	clearServerResources(serverName: string): void {
+		this._serverResources.delete(serverName);
+
+		for (const [uri, cached] of this._cachedResources) {
+			if (cached.resource.serverName === serverName) {
+				this._cachedResources.delete(uri);
+			}
+		}
+
+		for (const [uri, sub] of this._subscriptions) {
+			if (sub.serverName === serverName) {
+				this._subscriptions.delete(uri);
+			}
+		}
+
+		console.log(`[MCPResources][${serverName}] Cleared all resources`);
+	}
+
+	/**
+	 * Find resource info by URI across all servers
+	 */
+	findResourceByUri(uri: string): MCPResourceInfo | undefined {
+		const normalizedUri = normalizeResourceUri(uri);
+
+		for (const [serverName, serverRes] of this._serverResources) {
+			const resource =
+				serverRes.resources.find((r) => r.uri === uri) ??
+				serverRes.resources.find((r) => normalizeResourceUri(r.uri) === normalizedUri);
+
+			if (resource) {
+				return {
+					annotations: resource.annotations,
+					description: resource.description,
+					icons: resource.icons,
+					mimeType: resource.mimeType,
+					name: resource.name,
+					serverName,
+					title: resource.title,
+					uri: resource.uri
+				};
+			}
+		}
+
+		return undefined;
+	}
+
+	/**
+	 * Find server name for a resource URI
+	 */
+	findServerForUri(uri: string): string | undefined {
+		for (const [serverName, serverRes] of this._serverResources) {
+			if (serverRes.resources.some((r) => r.uri === uri)) {
+				return serverName;
+			}
+		}
+
+		return undefined;
+	}
+
+	/**
+	 * Get resource content as text for chat context
+	 * Formats content for inclusion in LLM prompts
+	 */
+	formatAttachmentsForContext(): string {
+		if (this._attachments.length === 0) return '';
+
+		const parts: string[] = [];
+
+		for (const attachment of this._attachments) {
+			if (attachment.error) continue;
+
+			if (!attachment.content || attachment.content.length === 0) continue;
+
+			const resourceName = attachment.resource.title || attachment.resource.name;
+			const serverName = attachment.resource.serverName;
+
+			for (const content of attachment.content) {
+				if ('text' in content && content.text) {
+					parts.push(`\n\n--- Resource: ${resourceName} (from ${serverName}) ---\n${content.text}`);
+				} else if ('blob' in content && content.blob) {
+					// For binary content, just note it exists
+					parts.push(
+						`\n\n--- Resource: ${resourceName} (from ${serverName}) ---\n[${BINARY_CONTENT_LABEL}: ${content.mimeType || RESOURCE_UNKNOWN_TYPE}]`
+					);
+				}
+			}
+		}
+
+		return parts.join('');
 	}
 
 	/**
@@ -207,46 +320,10 @@ class MCPResourceStore {
 	}
 
 	/**
-	 * Clear resources for a server (e.g., when disconnected)
+	 * Get attachment by ID
 	 */
-	clearServerResources(serverName: string): void {
-		this._serverResources.delete(serverName);
-
-		for (const [uri, cached] of this._cachedResources) {
-			if (cached.resource.serverName === serverName) {
-				this._cachedResources.delete(uri);
-			}
-		}
-
-		for (const [uri, sub] of this._subscriptions) {
-			if (sub.serverName === serverName) {
-				this._subscriptions.delete(uri);
-			}
-		}
-
-		console.log(`[MCPResources][${serverName}] Cleared all resources`);
-	}
-
-	/**
-	 * Cache resource content after reading
-	 */
-	cacheResourceContent(resource: MCPResourceInfo, content: MCPResourceContent[]): void {
-		// Enforce cache size limit
-		if (this._cachedResources.size >= MCP_RESOURCE_CACHE.MAX_ENTRIES) {
-			const oldestKey = this._cachedResources.keys().next().value;
-
-			if (oldestKey) {
-				this._cachedResources.delete(oldestKey);
-			}
-		}
-
-		this._cachedResources.set(resource.uri, {
-			content,
-			fetchedAt: new Date(),
-			resource,
-			subscribed: this._subscriptions.has(resource.uri)
-		});
-		console.log(`[MCPResources] Cached content for: ${resource.uri}`);
+	getAttachment(attachmentId: string): MCPResourceAttachment | undefined {
+		return this._attachments.find((att) => att.id === attachmentId);
 	}
 
 	/**
@@ -270,76 +347,10 @@ class MCPResourceStore {
 	}
 
 	/**
-	 * Invalidate cached content for a resource (e.g., on update notification)
+	 * Get resources for a specific server
 	 */
-	invalidateCache(uri: string): void {
-		this._cachedResources.delete(uri);
-		console.log(`[MCPResources] Invalidated cache for: ${uri}`);
-	}
-
-	/**
-	 * Clear all cached content
-	 */
-	clearCache(): void {
-		this._cachedResources.clear();
-		console.log(`[MCPResources] Cleared all cached content`);
-	}
-
-	/**
-	 * Register a subscription for a resource
-	 */
-	addSubscription(uri: string, serverName: string): void {
-		this._subscriptions.set(uri, {
-			serverName,
-			subscribedAt: new Date(),
-			uri
-		});
-
-		const cached = this._cachedResources.get(uri);
-
-		if (cached) {
-			this._cachedResources.set(uri, { ...cached, subscribed: true });
-		}
-
-		console.log(`[MCPResources] Added subscription: ${uri}`);
-	}
-
-	/**
-	 * Remove a subscription for a resource
-	 */
-	removeSubscription(uri: string): void {
-		this._subscriptions.delete(uri);
-
-		const cached = this._cachedResources.get(uri);
-
-		if (cached) {
-			this._cachedResources.set(uri, { ...cached, subscribed: false });
-		}
-
-		console.log(`[MCPResources] Removed subscription: ${uri}`);
-	}
-
-	/**
-	 * Check if a resource is subscribed
-	 */
-	isSubscribed(uri: string): boolean {
-		return this._subscriptions.has(uri);
-	}
-
-	/**
-	 * Handle resource update notification
-	 */
-	handleResourceUpdate(uri: string): void {
-		// Invalidate cache so next read gets fresh content
-		this.invalidateCache(uri);
-
-		const sub = this._subscriptions.get(uri);
-
-		if (sub) {
-			this._subscriptions.set(uri, { ...sub, lastUpdate: new Date() });
-		}
-
-		console.log(`[MCPResources] Resource updated: ${uri}`);
+	getServerResources(serverName: string): MCPServerResources | undefined {
+		return this._serverResources.get(serverName);
 	}
 
 	/**
@@ -367,60 +378,27 @@ class MCPResourceStore {
 	 */
 
 	/**
-	 * Add a resource attachment to the current chat context
+	 * Handle resource update notification
 	 */
-	addAttachment(resource: MCPResourceInfo): MCPResourceAttachment {
-		const attachment: MCPResourceAttachment = {
-			id: generateAttachmentId(),
-			loading: true,
-			resource
-		};
+	handleResourceUpdate(uri: string): void {
+		// Invalidate cache so next read gets fresh content
+		this.invalidateCache(uri);
 
-		this._attachments = [...this._attachments, attachment];
-		console.log(`[MCPResources] Added attachment: ${resource.uri}`);
+		const sub = this._subscriptions.get(uri);
 
-		return attachment;
+		if (sub) {
+			this._subscriptions.set(uri, { ...sub, lastUpdate: new Date() });
+		}
+
+		console.log(`[MCPResources] Resource updated: ${uri}`);
 	}
 
 	/**
-	 * Update attachment with fetched content
+	 * Invalidate cached content for a resource (e.g., on update notification)
 	 */
-	updateAttachmentContent(attachmentId: string, content: MCPResourceContent[]): void {
-		this._attachments = this._attachments.map((att) =>
-			att.id === attachmentId ? { ...att, content, error: undefined, loading: false } : att
-		);
-	}
-
-	/**
-	 * Update attachment with error
-	 */
-	updateAttachmentError(attachmentId: string, error: string): void {
-		this._attachments = this._attachments.map((att) =>
-			att.id === attachmentId ? { ...att, error, loading: false } : att
-		);
-	}
-
-	/**
-	 * Remove an attachment
-	 */
-	removeAttachment(attachmentId: string): void {
-		this._attachments = this._attachments.filter((att) => att.id !== attachmentId);
-		console.log(`[MCPResources] Removed attachment: ${attachmentId}`);
-	}
-
-	/**
-	 * Clear all attachments
-	 */
-	clearAttachments(): void {
-		this._attachments = [];
-		console.log(`[MCPResources] Cleared all attachments`);
-	}
-
-	/**
-	 * Get attachment by ID
-	 */
-	getAttachment(attachmentId: string): MCPResourceAttachment | undefined {
-		return this._attachments.find((att) => att.id === attachmentId);
+	invalidateCache(uri: string): void {
+		this._cachedResources.delete(uri);
+		console.log(`[MCPResources] Invalidated cache for: ${uri}`);
 	}
 
 	/**
@@ -435,6 +413,36 @@ class MCPResourceStore {
 	}
 
 	/**
+	 * Check if a resource is subscribed
+	 */
+	isSubscribed(uri: string): boolean {
+		return this._subscriptions.has(uri);
+	}
+
+	/**
+	 * Remove an attachment
+	 */
+	removeAttachment(attachmentId: string): void {
+		this._attachments = this._attachments.filter((att) => att.id !== attachmentId);
+		console.log(`[MCPResources] Removed attachment: ${attachmentId}`);
+	}
+
+	/**
+	 * Remove a subscription for a resource
+	 */
+	removeSubscription(uri: string): void {
+		this._subscriptions.delete(uri);
+
+		const cached = this._cachedResources.get(uri);
+
+		if (cached) {
+			this._cachedResources.set(uri, { ...cached, subscribed: false });
+		}
+
+		console.log(`[MCPResources] Removed subscription: ${uri}`);
+	}
+
+	/**
 	 * Set global loading state
 	 */
 	setLoading(loading: boolean): void {
@@ -442,88 +450,62 @@ class MCPResourceStore {
 	}
 
 	/**
-	 * Find resource info by URI across all servers
+	 * Set error state for a server's resources
 	 */
-	findResourceByUri(uri: string): MCPResourceInfo | undefined {
-		const normalizedUri = normalizeResourceUri(uri);
+	setServerError(serverName: string, error: string): void {
+		const existing = this._serverResources.get(serverName);
 
-		for (const [serverName, serverRes] of this._serverResources) {
-			const resource =
-				serverRes.resources.find((r) => r.uri === uri) ??
-				serverRes.resources.find((r) => normalizeResourceUri(r.uri) === normalizedUri);
-
-			if (resource) {
-				return {
-					annotations: resource.annotations,
-					description: resource.description,
-					icons: resource.icons,
-					mimeType: resource.mimeType,
-					name: resource.name,
-					serverName,
-					title: resource.title,
-					uri: resource.uri
-				};
-			}
+		if (existing) {
+			this._serverResources.set(serverName, { ...existing, error, loading: false });
+		} else {
+			this._serverResources.set(serverName, {
+				error,
+				loading: false,
+				resources: [],
+				serverName,
+				templates: []
+			});
 		}
-
-		return undefined;
 	}
 
 	/**
-	 * Find server name for a resource URI
+	 * Set loading state for a server's resources
 	 */
-	findServerForUri(uri: string): string | undefined {
-		for (const [serverName, serverRes] of this._serverResources) {
-			if (serverRes.resources.some((r) => r.uri === uri)) {
-				return serverName;
-			}
-		}
+	setServerLoading(serverName: string, loading: boolean): void {
+		const existing = this._serverResources.get(serverName);
 
-		return undefined;
+		if (existing) {
+			this._serverResources.set(serverName, { ...existing, loading });
+		} else {
+			this._serverResources.set(serverName, {
+				error: undefined,
+				loading,
+				resources: [],
+				serverName,
+				templates: []
+			});
+		}
 	}
 
 	/**
-	 * Clear all state (e.g., on full reset)
+	 * Set resources for a server (called after listResources)
 	 */
-	clear(): void {
-		this._serverResources.clear();
-		this._cachedResources.clear();
-		this._subscriptions.clear();
-		this._attachments = [];
-		this._isLoading = false;
-		console.log(`[MCPResources] Cleared all state`);
-	}
-
-	/**
-	 * Get resource content as text for chat context
-	 * Formats content for inclusion in LLM prompts
-	 */
-	formatAttachmentsForContext(): string {
-		if (this._attachments.length === 0) return '';
-
-		const parts: string[] = [];
-
-		for (const attachment of this._attachments) {
-			if (attachment.error) continue;
-
-			if (!attachment.content || attachment.content.length === 0) continue;
-
-			const resourceName = attachment.resource.title || attachment.resource.name;
-			const serverName = attachment.resource.serverName;
-
-			for (const content of attachment.content) {
-				if ('text' in content && content.text) {
-					parts.push(`\n\n--- Resource: ${resourceName} (from ${serverName}) ---\n${content.text}`);
-				} else if ('blob' in content && content.blob) {
-					// For binary content, just note it exists
-					parts.push(
-						`\n\n--- Resource: ${resourceName} (from ${serverName}) ---\n[${BINARY_CONTENT_LABEL}: ${content.mimeType || RESOURCE_UNKNOWN_TYPE}]`
-					);
-				}
-			}
-		}
-
-		return parts.join('');
+	setServerResources(
+		serverName: string,
+		resources: MCPResource[],
+		templates: MCPResourceTemplate[]
+	): void {
+		this._serverResources.set(serverName, {
+			error: undefined,
+			lastFetched: new Date(),
+			loading: false,
+			resources,
+			serverName,
+			templates
+		});
+		console.log(
+			`[MCPResources][${serverName}] Set ${resources.length} resources, ${templates.length} templates`
+		);
 	}
 
 	/**
@@ -564,6 +546,24 @@ class MCPResourceStore {
 		}
 
 		return extras;
+	}
+
+	/**
+	 * Update attachment with fetched content
+	 */
+	updateAttachmentContent(attachmentId: string, content: MCPResourceContent[]): void {
+		this._attachments = this._attachments.map((att) =>
+			att.id === attachmentId ? { ...att, content, error: undefined, loading: false } : att
+		);
+	}
+
+	/**
+	 * Update attachment with error
+	 */
+	updateAttachmentError(attachmentId: string, error: string): void {
+		this._attachments = this._attachments.map((att) =>
+			att.id === attachmentId ? { ...att, error, loading: false } : att
+		);
 	}
 }
 

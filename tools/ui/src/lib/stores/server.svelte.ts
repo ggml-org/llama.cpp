@@ -13,17 +13,13 @@ import { ApiError } from '$lib/utils';
 const LOADING_RETRY_INTERVAL_MS = 1000;
 
 class ServerStore {
-	props = $state<ApiLlamaCppServerProps | null>(null);
-	loading = $state(false);
 	error = $state<string | null>(null);
-	status = $state<number | null>(null);
+	loading = $state(false);
+	props = $state<ApiLlamaCppServerProps | null>(null);
 	role = $state<ServerRole | null>(null);
+	status = $state<number | null>(null);
 	private fetchPromise: Promise<void> | null = null;
 	private retryTimer: ReturnType<typeof setTimeout> | null = null;
-
-	get defaultParams(): ApiLlamaCppServerProps['default_generation_settings']['params'] | null {
-		return this.props?.default_generation_settings?.params || null;
-	}
 
 	get contextSize(): number | null {
 		const nCtx = this.props?.default_generation_settings?.n_ctx;
@@ -31,16 +27,30 @@ class ServerStore {
 		return typeof nCtx === 'number' ? nCtx : null;
 	}
 
-	get uiSettings(): Record<string, string | number | boolean> | undefined {
-		return this.props?.ui_settings ?? this.props?.webui_settings;
+	get defaultParams(): ApiLlamaCppServerProps['default_generation_settings']['params'] | null {
+		return this.props?.default_generation_settings?.params || null;
+	}
+
+	get isModelMode(): boolean {
+		return this.role === ServerRole.MODEL;
 	}
 
 	get isRouterMode(): boolean {
 		return this.role === ServerRole.ROUTER;
 	}
 
-	get isModelMode(): boolean {
-		return this.role === ServerRole.MODEL;
+	get uiSettings(): Record<string, string | number | boolean> | undefined {
+		return this.props?.ui_settings ?? this.props?.webui_settings;
+	}
+
+	clear(): void {
+		this.clearRetryTimer();
+		this.props = null;
+		this.error = null;
+		this.status = null;
+		this.loading = false;
+		this.role = null;
+		this.fetchPromise = null;
 	}
 
 	/**
@@ -92,25 +102,6 @@ class ServerStore {
 		await fetchPromise;
 	}
 
-	clear(): void {
-		this.clearRetryTimer();
-		this.props = null;
-		this.error = null;
-		this.status = null;
-		this.loading = false;
-		this.role = null;
-		this.fetchPromise = null;
-	}
-
-	private scheduleRetry(): void {
-		if (this.retryTimer) return;
-
-		this.retryTimer = setTimeout(() => {
-			this.retryTimer = null;
-			this.fetch({ background: true });
-		}, LOADING_RETRY_INTERVAL_MS);
-	}
-
 	private clearRetryTimer(): void {
 		if (this.retryTimer) {
 			clearTimeout(this.retryTimer);
@@ -125,6 +116,15 @@ class ServerStore {
 			this.role = newRole;
 			console.info(`Server running in ${newRole === ServerRole.ROUTER ? 'ROUTER' : 'MODEL'} mode`);
 		}
+	}
+
+	private scheduleRetry(): void {
+		if (this.retryTimer) return;
+
+		this.retryTimer = setTimeout(() => {
+			this.retryTimer = null;
+			this.fetch({ background: true });
+		}, LOADING_RETRY_INTERVAL_MS);
 	}
 }
 

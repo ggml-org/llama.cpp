@@ -15,15 +15,6 @@ import { parseSseJsonStream, type SseJsonEvent } from '$lib/utils/sse';
 
 export class ToolsService {
 	/**
-	 * Fetch the list of server tools from the server.
-	 *
-	 * @returns Array of tool definitions in OpenAI-compatible format
-	 */
-	static async list(): Promise<ServerToolInfo[]> {
-		return apiFetch<ServerToolInfo[]>(API_TOOLS.LIST);
-	}
-
-	/**
 	 * Execute a server tool on the server.
 	 *
 	 * @param cwd - Working directory for the tool call, sent as the
@@ -81,6 +72,15 @@ export class ToolsService {
 			method: 'POST',
 			signal
 		});
+	}
+
+	/**
+	 * Fetch the list of server tools from the server.
+	 *
+	 * @returns Array of tool definitions in OpenAI-compatible format
+	 */
+	static async list(): Promise<ServerToolInfo[]> {
+		return apiFetch<ServerToolInfo[]>(API_TOOLS.LIST);
 	}
 
 	/**

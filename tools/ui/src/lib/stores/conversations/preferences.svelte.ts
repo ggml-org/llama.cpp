@@ -49,9 +49,6 @@ export interface ConversationsPreferencesHost {
 }
 
 export class ConversationPreferences {
-	/** Global (non-conversation-specific) reasoning effort default */
-	pendingReasoningEffort = $state<ReasoningEffort>(loadReasoningEffortDefault());
-
 	/**
 	 * Working directory picked on the empty new-chat screen, before any
 	 * conversation exists. Consumed by `chatStore.sendMessage()`, which
@@ -61,12 +58,24 @@ export class ConversationPreferences {
 	 */
 	pendingCwd = $state<string | null>(null);
 
+	/** Global (non-conversation-specific) reasoning effort default */
+	pendingReasoningEffort = $state<ReasoningEffort>(loadReasoningEffortDefault());
+
 	constructor(private host: ConversationsPreferencesHost) {}
 
-	/** Reload persisted defaults, e.g. when the active conversation is cleared. */
-	resetPending(): void {
-		this.pendingReasoningEffort = loadReasoningEffortDefault();
-		this.pendingCwd = null;
+	/**
+	 * Gets the effective override list for the current conversation:
+	 * one entry per configured server, resolved per server. The stored
+	 * per-conversation list is sparse and only holds explicit toggles.
+	 */
+	getAllMcpServerOverrides(): McpServerOverride[] {
+		const overrides = this.host.activeConversation?.mcpServerOverrides;
+
+		return mcpStore.getServers().map((s) => {
+			const override = overrides?.find((o: McpServerOverride) => o.serverId === s.id);
+
+			return { enabled: override?.enabled ?? s.enabled, serverId: s.id };
+		});
 	}
 
 	/**
@@ -85,18 +94,24 @@ export class ConversationPreferences {
 	}
 
 	/**
-	 * Gets the effective override list for the current conversation:
-	 * one entry per configured server, resolved per server. The stored
-	 * per-conversation list is sparse and only holds explicit toggles.
+	 * Gets the effective reasoning effort for the active conversation.
+	 * Returns the conversation override if set, otherwise the global default.
+	 * DEFAULT means no override is sent and the server decides.
 	 */
-	getAllMcpServerOverrides(): McpServerOverride[] {
-		const overrides = this.host.activeConversation?.mcpServerOverrides;
+	getReasoningEffort(): ReasoningEffort {
+		if (this.host.activeConversation) {
+			if (this.host.activeConversation.reasoningEffort !== undefined) {
+				return this.host.activeConversation.reasoningEffort;
+			}
 
-		return mcpStore.getServers().map((s) => {
-			const override = overrides?.find((o: McpServerOverride) => o.serverId === s.id);
+			// conversations created before the tri-state store an explicit
+			// opt-out only as thinkingEnabled = false
+			if (this.host.activeConversation.thinkingEnabled === false) {
+				return ReasoningEffort.OFF;
+			}
+		}
 
-			return { enabled: override?.enabled ?? s.enabled, serverId: s.id };
-		});
+		return this.pendingReasoningEffort;
 	}
 
 	/** Checks if an MCP server is enabled for the active conversation. */
@@ -104,6 +119,48 @@ export class ConversationPreferences {
 		const override = this.getMcpServerOverride(serverId);
 
 		return override?.enabled ?? false;
+	}
+
+	/** Removes MCP server override for the active conversation. */
+	async removeMcpServerOverride(serverId: string): Promise<void> {
+		await this.setMcpServerOverride(serverId, undefined);
+	}
+
+	/** Reload persisted defaults, e.g. when the active conversation is cleared. */
+	resetPending(): void {
+		this.pendingReasoningEffort = loadReasoningEffortDefault();
+		this.pendingCwd = null;
+	}
+
+	/**
+	 * Sets the working directory for the active conversation. Pass `null` or
+	 * an empty string to clear it, which restores the picker's empty state.
+	 *
+	 * On the empty new-chat screen (no active conversation yet), the value
+	 * is buffered into `pendingCwd` so the user can pick before
+	 * sending the first message; `createConversation()` consumes it.
+	 *
+	 * @param value - Absolute server-side path to the working directory, or null to clear
+	 */
+	async setCwd(value: string | null): Promise<void> {
+		const trimmed = value?.trim() || undefined;
+
+		// No chat yet - buffer for the first chat the user creates.
+		if (!this.host.activeConversation) {
+			this.pendingCwd = trimmed ?? null;
+
+			return;
+		}
+
+		this.host.applyConversationUpdate(this.host.activeConversation.id, {
+			cwd: trimmed
+		});
+
+		await DatabaseService.updateConversation(this.host.activeConversation.id, {
+			cwd: trimmed
+		});
+
+		this.pendingCwd = null;
 	}
 
 	/**
@@ -154,39 +211,6 @@ export class ConversationPreferences {
 		});
 	}
 
-	/** Toggles MCP server enabled state for the active conversation. */
-	async toggleMcpServerForChat(serverId: string): Promise<void> {
-		const currentEnabled = this.isMcpServerEnabledForChat(serverId);
-
-		await this.setMcpServerOverride(serverId, !currentEnabled);
-	}
-
-	/** Removes MCP server override for the active conversation. */
-	async removeMcpServerOverride(serverId: string): Promise<void> {
-		await this.setMcpServerOverride(serverId, undefined);
-	}
-
-	/**
-	 * Gets the effective reasoning effort for the active conversation.
-	 * Returns the conversation override if set, otherwise the global default.
-	 * DEFAULT means no override is sent and the server decides.
-	 */
-	getReasoningEffort(): ReasoningEffort {
-		if (this.host.activeConversation) {
-			if (this.host.activeConversation.reasoningEffort !== undefined) {
-				return this.host.activeConversation.reasoningEffort;
-			}
-
-			// conversations created before the tri-state store an explicit
-			// opt-out only as thinkingEnabled = false
-			if (this.host.activeConversation.thinkingEnabled === false) {
-				return ReasoningEffort.OFF;
-			}
-		}
-
-		return this.pendingReasoningEffort;
-	}
-
 	/**
 	 * Sets the reasoning effort for the active conversation.
 	 * If no conversation exists, stores the global default.
@@ -209,35 +233,11 @@ export class ConversationPreferences {
 		});
 	}
 
-	/**
-	 * Sets the working directory for the active conversation. Pass `null` or
-	 * an empty string to clear it, which restores the picker's empty state.
-	 *
-	 * On the empty new-chat screen (no active conversation yet), the value
-	 * is buffered into `pendingCwd` so the user can pick before
-	 * sending the first message; `createConversation()` consumes it.
-	 *
-	 * @param value - Absolute server-side path to the working directory, or null to clear
-	 */
-	async setCwd(value: string | null): Promise<void> {
-		const trimmed = value?.trim() || undefined;
+	/** Toggles MCP server enabled state for the active conversation. */
+	async toggleMcpServerForChat(serverId: string): Promise<void> {
+		const currentEnabled = this.isMcpServerEnabledForChat(serverId);
 
-		// No chat yet - buffer for the first chat the user creates.
-		if (!this.host.activeConversation) {
-			this.pendingCwd = trimmed ?? null;
-
-			return;
-		}
-
-		this.host.applyConversationUpdate(this.host.activeConversation.id, {
-			cwd: trimmed
-		});
-
-		await DatabaseService.updateConversation(this.host.activeConversation.id, {
-			cwd: trimmed
-		});
-
-		this.pendingCwd = null;
+		await this.setMcpServerOverride(serverId, !currentEnabled);
 	}
 
 	/**

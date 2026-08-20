@@ -17,6 +17,20 @@ class PermissionsStore {
 		return this._tools;
 	}
 
+	allowTool(key: string): void {
+		this._tools.add(key);
+		this.persist();
+	}
+
+	allowTools(keys: string[]): void {
+		for (const key of keys) this._tools.add(key);
+		this.persist();
+	}
+
+	hasTool(key: string): boolean {
+		return this._tools.has(key);
+	}
+
 	/**
 	 * Load persisted permissions. Called by initStores() after migrations
 	 * have run.
@@ -39,20 +53,6 @@ class PermissionsStore {
 				err
 			);
 		}
-	}
-
-	hasTool(key: string): boolean {
-		return this._tools.has(key);
-	}
-
-	allowTool(key: string): void {
-		this._tools.add(key);
-		this.persist();
-	}
-
-	allowTools(keys: string[]): void {
-		for (const key of keys) this._tools.add(key);
-		this.persist();
 	}
 
 	revokeTool(key: string): void {

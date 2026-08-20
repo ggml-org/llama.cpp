@@ -49,19 +49,9 @@ export interface McpHealthHost {
 export class MCPHealthCheckManager {
 	private _checks = $state<Record<string, HealthCheckState>>({});
 
-	constructor(private host: McpHealthHost) {}
-
 	/** Raw per-server check states, for host-side capability scans. */
 	get checks(): Record<string, HealthCheckState> {
 		return this._checks;
-	}
-
-	getState(serverId: string): HealthCheckState {
-		return this._checks[serverId] ?? { status: HealthCheckStatus.IDLE };
-	}
-
-	hasState(serverId: string): boolean {
-		return serverId in this._checks && this._checks[serverId].status !== HealthCheckStatus.IDLE;
 	}
 
 	clear(serverId: string): void {
@@ -70,31 +60,14 @@ export class MCPHealthCheckManager {
 		this._checks = rest;
 	}
 
-	async runForServers(
-		servers: {
-			id: string;
-			enabled: boolean;
-			url: string;
-			headers?: string;
-		}[],
-		skipIfChecked = true,
-		promoteToActive = false
-	): Promise<void> {
-		const serversToCheck = skipIfChecked
-			? servers.filter((s) => !this.hasState(s.id) && s.url.trim())
-			: servers.filter((s) => s.url.trim());
+	constructor(private host: McpHealthHost) {}
 
-		if (serversToCheck.length === 0) {
-			return;
-		}
+	getState(serverId: string): HealthCheckState {
+		return this._checks[serverId] ?? { status: HealthCheckStatus.IDLE };
+	}
 
-		const BATCH_SIZE = 5;
-
-		for (let i = 0; i < serversToCheck.length; i += BATCH_SIZE) {
-			const batch = serversToCheck.slice(i, i + BATCH_SIZE);
-
-			await Promise.allSettled(batch.map((server) => this.run(server, promoteToActive)));
-		}
+	hasState(serverId: string): boolean {
+		return serverId in this._checks && this._checks[serverId].status !== HealthCheckStatus.IDLE;
 	}
 
 	/**
@@ -243,8 +216,31 @@ export class MCPHealthCheckManager {
 		}
 	}
 
-	private setState(serverId: string, state: HealthCheckState): void {
-		this._checks = { ...this._checks, [serverId]: state };
+	async runForServers(
+		servers: {
+			id: string;
+			enabled: boolean;
+			url: string;
+			headers?: string;
+		}[],
+		skipIfChecked = true,
+		promoteToActive = false
+	): Promise<void> {
+		const serversToCheck = skipIfChecked
+			? servers.filter((s) => !this.hasState(s.id) && s.url.trim())
+			: servers.filter((s) => s.url.trim());
+
+		if (serversToCheck.length === 0) {
+			return;
+		}
+
+		const BATCH_SIZE = 5;
+
+		for (let i = 0; i < serversToCheck.length; i += BATCH_SIZE) {
+			const batch = serversToCheck.slice(i, i + BATCH_SIZE);
+
+			await Promise.allSettled(batch.map((server) => this.run(server, promoteToActive)));
+		}
 	}
 
 	/**
@@ -294,5 +290,9 @@ export class MCPHealthCheckManager {
 		}
 
 		return undefined;
+	}
+
+	private setState(serverId: string, state: HealthCheckState): void {
+		this._checks = { ...this._checks, [serverId]: state };
 	}
 }

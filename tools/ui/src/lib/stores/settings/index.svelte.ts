@@ -37,6 +37,183 @@ class SettingsStore {
 	// application of server ui_settings defaults for new users.
 	private isFirstVisit = false;
 
+	canSyncParameter(key: string): boolean {
+		return ParameterSyncService.canSyncParameter(key);
+	}
+	/**
+	 * Clear all user overrides (for debugging)
+	 */
+	clearAllUserOverrides(): void {
+		this.userOverrides.clear();
+		this.saveConfig();
+		console.log('Cleared all user overrides');
+	}
+
+	/**
+	 * Export all settings as a versioned JSON-compatible object.
+	 * The export captures the full config (excluding sensitive values like API key)
+	 * and user overrides. Sensitive fields are filtered out for security by default.
+	 * @param includeSensitiveData - If true, include sensitive fields (apiKey, MCP server headers) in export
+	 */
+	exportSettings(includeSensitiveData: boolean = false): SettingsExportType {
+		// Build config excluding sensitive data unless user opts in
+		const configToExport: Record<string, string | number | boolean | undefined> =
+			includeSensitiveData
+				? { ...this.config }
+				: Object.fromEntries(Object.entries(this.config).filter(([key]) => key !== 'apiKey'));
+
+		// Handle MCP servers: exclude custom headers unless user opts in
+		if ('mcpServers' in configToExport && !includeSensitiveData) {
+			try {
+				const mcpServers = JSON.parse(configToExport.mcpServers as string) as Array<
+					Record<string, unknown>
+				>;
+				const safeServers = mcpServers.map((server) => {
+					delete server.headers;
+
+					return server;
+				});
+
+				configToExport.mcpServers = JSON.stringify(safeServers);
+			} catch {
+				// If parsing fails, just exclude the entire mcpServers field
+				delete (configToExport as Record<string, unknown>).mcpServers;
+			}
+		}
+
+		return {
+			config: configToExport,
+			timestamp: Date.now(),
+			userOverrides: Array.from(this.userOverrides),
+			version: 1
+		};
+	}
+
+	/**
+	 * Reset all parameters to their default values (from props)
+	 * This is used by the "Reset to Default" functionality
+	 * Prioritizes Server defaults from /props, falls back to UI defaults
+	 */
+	forceSyncWithServerDefaults(): void {
+		const propsDefaults = this.getServerDefaults();
+		const uiSettings = serverStore.uiSettings;
+
+		for (const key of ParameterSyncService.getSyncableParameterKeys()) {
+			if (uiSettings && key in uiSettings) {
+				// UI setting from admin config: write actual value
+				setConfigValue(this.config, key, uiSettings[key]);
+			} else if (propsDefaults[key] !== undefined) {
+				// sampling param: clear it, let server decide
+				setConfigValue(this.config, key, '');
+			} else if (key in SETTING_CONFIG_DEFAULT) {
+				setConfigValue(this.config, key, getConfigValue(SETTING_CONFIG_DEFAULT, key));
+			}
+
+			this.userOverrides.delete(key);
+		}
+
+		// Non-syncable keys: reset is a full return to the instance state, the
+		// admin baseline value when defined, the factory default otherwise.
+		for (const key of Object.keys(SETTING_CONFIG_DEFAULT)) {
+			if (ParameterSyncService.canSyncParameter(key)) {
+				continue;
+			}
+
+			const value =
+				uiSettings && key in uiSettings && uiSettings[key] !== undefined
+					? uiSettings[key]
+					: getConfigValue(SETTING_CONFIG_DEFAULT, key);
+
+			setConfigValue(this.config, key, value);
+
+			if (key === SETTINGS_KEYS.THEME) {
+				setMode(value as ColorMode);
+			}
+
+			this.userOverrides.delete(key);
+		}
+
+		this.saveConfig();
+	}
+
+	/**
+	 * Get the entire configuration object
+	 * @returns The complete configuration object
+	 */
+	getAllConfig(): SettingsConfigType {
+		return { ...this.config };
+	}
+
+	/**
+	 * Get a specific configuration value
+	 * @param key - The configuration key to get
+	 * @returns The configuration value
+	 */
+	getConfig<K extends keyof SettingsConfigType>(key: K): SettingsConfigType[K] {
+		return this.config[key];
+	}
+
+	/**
+	 * Get diff between current settings and server defaults
+	 */
+	getParameterDiff() {
+		const serverDefaults = this.getServerDefaults();
+
+		if (Object.keys(serverDefaults).length === 0) return {};
+
+		const configAsRecord = configToParameterRecord(
+			this.config,
+			ParameterSyncService.getSyncableParameterKeys()
+		);
+
+		return ParameterSyncService.createParameterDiff(configAsRecord, serverDefaults);
+	}
+
+	/**
+	 * Get parameter information including source for a specific parameter
+	 */
+	getParameterInfo(key: string) {
+		const propsDefaults = this.getServerDefaults();
+		const currentValue = getConfigValue(this.config, key);
+
+		return ParameterSyncService.getParameterInfo(
+			key,
+			currentValue ?? '',
+			propsDefaults,
+			this.userOverrides
+		);
+	}
+
+	/**
+	 * Import settings from a previously exported object.
+	 * Restores config (including theme) and user overrides.
+	 * @param data - The exported settings object
+	 */
+	importSettings(data: SettingsExportType): void {
+		if (!browser) return;
+
+		if (!data || !data.config) {
+			throw new Error('Invalid settings data: missing config');
+		}
+
+		// Restore config (theme is included in config)
+		this.config = {
+			...SETTING_CONFIG_DEFAULT,
+			...data.config
+		};
+
+		// Restore user overrides (derived state — may be stale if server defaults differ)
+		this.userOverrides = new Set(data.userOverrides ?? []);
+
+		// Persist to localStorage
+		this.saveConfig();
+
+		// Apply theme for immediate visual feedback
+		setMode(this.config[SETTINGS_KEYS.THEME] as ColorMode);
+
+		console.log('Settings imported successfully');
+	}
+
 	/**
 	 * Initialize the settings store by loading from localStorage.
 	 * Called by initStores() after migrations have run.
@@ -54,70 +231,14 @@ class SettingsStore {
 			console.error('Failed to initialize settings store:', error);
 		}
 	}
-	/**
-	 * Update a specific configuration setting
-	 * @param key - The configuration key to update
-	 * @param value - The new value for the configuration key
-	 */
-	updateConfig<K extends keyof SettingsConfigType>(key: K, value: SettingsConfigType[K]): void {
-		this.config[key] = value;
-
-		if (ParameterSyncService.canSyncParameter(key as string)) {
-			const propsDefaults = this.getServerDefaults();
-			const propsDefault = propsDefaults[key as string];
-
-			if (propsDefault !== undefined) {
-				const normalizedValue = normalizeFloatingPoint(value);
-				const normalizedDefault = normalizeFloatingPoint(propsDefault);
-
-				if (normalizedValue === normalizedDefault) {
-					this.userOverrides.delete(key as string);
-				} else {
-					this.userOverrides.add(key as string);
-				}
-			}
-		}
-
-		this.saveConfig();
-	}
 
 	/**
-	 * Update multiple configuration settings at once
-	 * @param updates - Object containing the configuration updates
+	 * Reset all settings to defaults.
 	 */
-	updateMultipleConfig(updates: Partial<SettingsConfigType>) {
-		Object.assign(this.config, updates);
+	resetAll() {
+		this.resetConfig();
 
-		const propsDefaults = this.getServerDefaults();
-
-		for (const [key, value] of Object.entries(updates)) {
-			if (ParameterSyncService.canSyncParameter(key)) {
-				const propsDefault = propsDefaults[key];
-
-				if (propsDefault !== undefined) {
-					const normalizedValue = normalizeFloatingPoint(value);
-					const normalizedDefault = normalizeFloatingPoint(propsDefault);
-
-					if (normalizedValue === normalizedDefault) {
-						this.userOverrides.delete(key);
-					} else {
-						this.userOverrides.add(key);
-					}
-				}
-			}
-		}
-
-		this.saveConfig();
-	}
-
-	/**
-	 * Update the theme setting.
-	 * @param newTheme - The new theme value
-	 */
-	updateTheme(newTheme: string) {
-		this.updateConfig(SETTINGS_KEYS.THEME, newTheme);
-
-		setMode(newTheme as ColorMode);
+		this.resetTheme();
 	}
 
 	/**
@@ -127,25 +248,6 @@ class SettingsStore {
 		this.config = { ...SETTING_CONFIG_DEFAULT };
 
 		this.saveConfig();
-	}
-
-	/**
-	 * Reset theme to default value.
-	 * Theme is now stored inside the config object.
-	 */
-	resetTheme() {
-		this.updateConfig(SETTINGS_KEYS.THEME, SETTING_CONFIG_DEFAULT[SETTINGS_KEYS.THEME]);
-
-		setMode(SETTING_CONFIG_DEFAULT[SETTINGS_KEYS.THEME] as ColorMode);
-	}
-
-	/**
-	 * Reset all settings to defaults.
-	 */
-	resetAll() {
-		this.resetConfig();
-
-		this.resetTheme();
 	}
 
 	/**
@@ -167,6 +269,16 @@ class SettingsStore {
 
 		this.userOverrides.delete(key);
 		this.saveConfig();
+	}
+
+	/**
+	 * Reset theme to default value.
+	 * Theme is now stored inside the config object.
+	 */
+	resetTheme() {
+		this.updateConfig(SETTINGS_KEYS.THEME, SETTING_CONFIG_DEFAULT[SETTINGS_KEYS.THEME]);
+
+		setMode(SETTING_CONFIG_DEFAULT[SETTINGS_KEYS.THEME] as ColorMode);
 	}
 
 	/**
@@ -226,111 +338,30 @@ class SettingsStore {
 	}
 
 	/**
-	 * Reset all parameters to their default values (from props)
-	 * This is used by the "Reset to Default" functionality
-	 * Prioritizes Server defaults from /props, falls back to UI defaults
+	 * Update a specific configuration setting
+	 * @param key - The configuration key to update
+	 * @param value - The new value for the configuration key
 	 */
-	forceSyncWithServerDefaults(): void {
-		const propsDefaults = this.getServerDefaults();
-		const uiSettings = serverStore.uiSettings;
+	updateConfig<K extends keyof SettingsConfigType>(key: K, value: SettingsConfigType[K]): void {
+		this.config[key] = value;
 
-		for (const key of ParameterSyncService.getSyncableParameterKeys()) {
-			if (uiSettings && key in uiSettings) {
-				// UI setting from admin config: write actual value
-				setConfigValue(this.config, key, uiSettings[key]);
-			} else if (propsDefaults[key] !== undefined) {
-				// sampling param: clear it, let server decide
-				setConfigValue(this.config, key, '');
-			} else if (key in SETTING_CONFIG_DEFAULT) {
-				setConfigValue(this.config, key, getConfigValue(SETTING_CONFIG_DEFAULT, key));
+		if (ParameterSyncService.canSyncParameter(key as string)) {
+			const propsDefaults = this.getServerDefaults();
+			const propsDefault = propsDefaults[key as string];
+
+			if (propsDefault !== undefined) {
+				const normalizedValue = normalizeFloatingPoint(value);
+				const normalizedDefault = normalizeFloatingPoint(propsDefault);
+
+				if (normalizedValue === normalizedDefault) {
+					this.userOverrides.delete(key as string);
+				} else {
+					this.userOverrides.add(key as string);
+				}
 			}
-
-			this.userOverrides.delete(key);
-		}
-
-		// Non-syncable keys: reset is a full return to the instance state, the
-		// admin baseline value when defined, the factory default otherwise.
-		for (const key of Object.keys(SETTING_CONFIG_DEFAULT)) {
-			if (ParameterSyncService.canSyncParameter(key)) {
-				continue;
-			}
-
-			const value =
-				uiSettings && key in uiSettings && uiSettings[key] !== undefined
-					? uiSettings[key]
-					: getConfigValue(SETTING_CONFIG_DEFAULT, key);
-
-			setConfigValue(this.config, key, value);
-
-			if (key === SETTINGS_KEYS.THEME) {
-				setMode(value as ColorMode);
-			}
-
-			this.userOverrides.delete(key);
 		}
 
 		this.saveConfig();
-	}
-
-	/**
-	 * Get a specific configuration value
-	 * @param key - The configuration key to get
-	 * @returns The configuration value
-	 */
-	getConfig<K extends keyof SettingsConfigType>(key: K): SettingsConfigType[K] {
-		return this.config[key];
-	}
-
-	/**
-	 * Get the entire configuration object
-	 * @returns The complete configuration object
-	 */
-	getAllConfig(): SettingsConfigType {
-		return { ...this.config };
-	}
-
-	canSyncParameter(key: string): boolean {
-		return ParameterSyncService.canSyncParameter(key);
-	}
-
-	/**
-	 * Get parameter information including source for a specific parameter
-	 */
-	getParameterInfo(key: string) {
-		const propsDefaults = this.getServerDefaults();
-		const currentValue = getConfigValue(this.config, key);
-
-		return ParameterSyncService.getParameterInfo(
-			key,
-			currentValue ?? '',
-			propsDefaults,
-			this.userOverrides
-		);
-	}
-
-	/**
-	 * Get diff between current settings and server defaults
-	 */
-	getParameterDiff() {
-		const serverDefaults = this.getServerDefaults();
-
-		if (Object.keys(serverDefaults).length === 0) return {};
-
-		const configAsRecord = configToParameterRecord(
-			this.config,
-			ParameterSyncService.getSyncableParameterKeys()
-		);
-
-		return ParameterSyncService.createParameterDiff(configAsRecord, serverDefaults);
-	}
-
-	/**
-	 * Clear all user overrides (for debugging)
-	 */
-	clearAllUserOverrides(): void {
-		this.userOverrides.clear();
-		this.saveConfig();
-		console.log('Cleared all user overrides');
 	}
 
 	/**
@@ -342,73 +373,42 @@ class SettingsStore {
 	 */
 
 	/**
-	 * Export all settings as a versioned JSON-compatible object.
-	 * The export captures the full config (excluding sensitive values like API key)
-	 * and user overrides. Sensitive fields are filtered out for security by default.
-	 * @param includeSensitiveData - If true, include sensitive fields (apiKey, MCP server headers) in export
+	 * Update multiple configuration settings at once
+	 * @param updates - Object containing the configuration updates
 	 */
-	exportSettings(includeSensitiveData: boolean = false): SettingsExportType {
-		// Build config excluding sensitive data unless user opts in
-		const configToExport: Record<string, string | number | boolean | undefined> =
-			includeSensitiveData
-				? { ...this.config }
-				: Object.fromEntries(Object.entries(this.config).filter(([key]) => key !== 'apiKey'));
+	updateMultipleConfig(updates: Partial<SettingsConfigType>) {
+		Object.assign(this.config, updates);
 
-		// Handle MCP servers: exclude custom headers unless user opts in
-		if ('mcpServers' in configToExport && !includeSensitiveData) {
-			try {
-				const mcpServers = JSON.parse(configToExport.mcpServers as string) as Array<
-					Record<string, unknown>
-				>;
-				const safeServers = mcpServers.map((server) => {
-					delete server.headers;
+		const propsDefaults = this.getServerDefaults();
 
-					return server;
-				});
+		for (const [key, value] of Object.entries(updates)) {
+			if (ParameterSyncService.canSyncParameter(key)) {
+				const propsDefault = propsDefaults[key];
 
-				configToExport.mcpServers = JSON.stringify(safeServers);
-			} catch {
-				// If parsing fails, just exclude the entire mcpServers field
-				delete (configToExport as Record<string, unknown>).mcpServers;
+				if (propsDefault !== undefined) {
+					const normalizedValue = normalizeFloatingPoint(value);
+					const normalizedDefault = normalizeFloatingPoint(propsDefault);
+
+					if (normalizedValue === normalizedDefault) {
+						this.userOverrides.delete(key);
+					} else {
+						this.userOverrides.add(key);
+					}
+				}
 			}
 		}
 
-		return {
-			config: configToExport,
-			timestamp: Date.now(),
-			userOverrides: Array.from(this.userOverrides),
-			version: 1
-		};
+		this.saveConfig();
 	}
 
 	/**
-	 * Import settings from a previously exported object.
-	 * Restores config (including theme) and user overrides.
-	 * @param data - The exported settings object
+	 * Update the theme setting.
+	 * @param newTheme - The new theme value
 	 */
-	importSettings(data: SettingsExportType): void {
-		if (!browser) return;
+	updateTheme(newTheme: string) {
+		this.updateConfig(SETTINGS_KEYS.THEME, newTheme);
 
-		if (!data || !data.config) {
-			throw new Error('Invalid settings data: missing config');
-		}
-
-		// Restore config (theme is included in config)
-		this.config = {
-			...SETTING_CONFIG_DEFAULT,
-			...data.config
-		};
-
-		// Restore user overrides (derived state — may be stale if server defaults differ)
-		this.userOverrides = new Set(data.userOverrides ?? []);
-
-		// Persist to localStorage
-		this.saveConfig();
-
-		// Apply theme for immediate visual feedback
-		setMode(this.config[SETTINGS_KEYS.THEME] as ColorMode);
-
-		console.log('Settings imported successfully');
+		setMode(newTheme as ColorMode);
 	}
 
 	/**

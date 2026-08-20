@@ -19,6 +19,11 @@
 import { SvelteSet } from 'svelte/reactivity';
 
 export class ChatActivityStore {
+	/** Convs this browser is piping a stream for (send, attach, resume-wait). */
+	private local = new SvelteSet<string>();
+	/** Convs the backend reports as having a running session (snapshot sync). */
+	private remote = new SvelteSet<string>();
+
 	/** Convs with any activity, the union the sidebar spinners render. */
 	loadingConvs = $derived.by(() => {
 		const out = new SvelteSet<string>(this.local);
@@ -27,34 +32,6 @@ export class ChatActivityStore {
 
 		return Array.from(out);
 	});
-	/** Convs this browser is piping a stream for (send, attach, resume-wait). */
-	private local = new SvelteSet<string>();
-
-	/** Convs the backend reports as having a running session (snapshot sync). */
-	private remote = new SvelteSet<string>();
-
-	isLocal(convId: string): boolean {
-		return this.local.has(convId);
-	}
-
-	isRemote(convId: string): boolean {
-		return this.remote.has(convId);
-	}
-
-	/** A local pipe (send, attach or resume-wait) started for the conv. */
-	markLocal(convId: string): void {
-		this.local.add(convId);
-	}
-
-	/**
-	 * A local pipe ended for the conv. Also drops the remote hint: the local
-	 * pipe is the authoritative observer of session end, so the sidebar hint
-	 * goes away right away instead of ghosting until the next snapshot.
-	 */
-	localEnded(convId: string): void {
-		this.local.delete(convId);
-		this.remote.delete(convId);
-	}
 
 	/**
 	 * Apply a backend snapshot of running sessions (mount / visibilitychange).
@@ -68,6 +45,29 @@ export class ChatActivityStore {
 		}
 
 		for (const id of next) this.remote.add(id);
+	}
+
+	isLocal(convId: string): boolean {
+		return this.local.has(convId);
+	}
+
+	isRemote(convId: string): boolean {
+		return this.remote.has(convId);
+	}
+
+	/**
+	 * A local pipe ended for the conv. Also drops the remote hint: the local
+	 * pipe is the authoritative observer of session end, so the sidebar hint
+	 * goes away right away instead of ghosting until the next snapshot.
+	 */
+	localEnded(convId: string): void {
+		this.local.delete(convId);
+		this.remote.delete(convId);
+	}
+
+	/** A local pipe (send, attach or resume-wait) started for the conv. */
+	markLocal(convId: string): void {
+		this.local.add(convId);
 	}
 }
 

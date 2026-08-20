@@ -46,15 +46,13 @@ export interface ChatStreamHost {
 }
 
 export class ChatStreamManager {
-	// pending resume retry timers while an owning model loads, one per conv
-	private resumeRetryTimers = new SvelteMap<string, ReturnType<typeof setTimeout>>();
+	// in-flight discoverActiveStream guard, keyed by conv id
+	private discoveringConvs = new SvelteSet<string>();
 	// convs whose resume waits on a model load: their loading state belongs to the retry loop,
 	// so discoverActiveStream must not treat it as a live send and bail
 	private resumePendingConvs = new SvelteSet<string>();
-	// in-flight discoverActiveStream guard, keyed by conv id
-	private discoveringConvs = new SvelteSet<string>();
-
-	constructor(private host: ChatStreamHost) {}
+	// pending resume retry timers while an owning model loads, one per conv
+	private resumeRetryTimers = new SvelteMap<string, ReturnType<typeof setTimeout>>();
 
 	/** Kill a pending resume retry, e.g. on explicit stop. */
 	cancelResumeRetry(convId: string): void {
@@ -68,14 +66,7 @@ export class ChatStreamManager {
 		this.resumePendingConvs.delete(convId);
 	}
 
-	/**
-	 * Model frozen at send time for a stream awaiting resume, from the persisted stream state.
-	 * The load progress indicator targets it after a reload, when the message row has no model
-	 * yet and the dropdown selection may not be restored.
-	 */
-	getResumeModel(convId: string): string | null {
-		return ChatService.getStreamState(convId)?.model ?? null;
-	}
+	constructor(private host: ChatStreamHost) {}
 
 	async discoverActiveStream(convId: string): Promise<void> {
 		if (!convId) return;
@@ -171,6 +162,15 @@ export class ChatStreamManager {
 	}
 
 	/**
+	 * Model frozen at send time for a stream awaiting resume, from the persisted stream state.
+	 * The load progress indicator targets it after a reload, when the message row has no model
+	 * yet and the dropdown selection may not be restored.
+	 */
+	getResumeModel(convId: string): string | null {
+		return ChatService.getStreamState(convId)?.model ?? null;
+	}
+
+	/**
 	 * Resync the activity ledger's remote set from the backend. Called by the layout at mount and
 	 * on visibilitychange, no polling. A snapshot semantic: stale entries for sessions that
 	 * finalized while the browser was elsewhere are dropped naturally.
@@ -226,41 +226,6 @@ export class ChatStreamManager {
 			}
 		}
 		this.host.activity.applyRemoteSnapshot(running);
-	}
-
-	/**
-	 * Server side stream discovery, split in three pieces:
-	 *
-	 * probeServerStream(convId) -> hits POST /v1/streams/lookup with the conv id, returns the session to attach
-	 *   to or null. Pure read, no side effect, no UI lock. Safe to fire in parallel with anything.
-	 *
-	 * attachServerStream(convId) -> flips the spinner immediately, fetches the replay stream
-	 *   from byte 0, finds the assistant slot to splice into (creates a placeholder if the conv has
-	 *   no assistant message yet, for cross device or fresh local DB cases), and pipes the SSE bytes
-	 *   into the message via handleStreamResponse.
-	 *
-	 * discoverActiveStream(convId) -> probe + attach in one call. Used by callers that do not need
-	 *   to overlap the probe with other async work.
-	 *
-	 * The chat page in +page.svelte calls discoverActiveStream once the conversation is active
-	 * (immediately if it already is, after loadConversation settles otherwise), and re-runs it on
-	 * visibilitychange. Attaching only after the conversation is loaded gives the earliest
-	 * possible time to spinner and avoids racing against an empty activeMessages array.
-	 */
-	private async probeServerStream(convId: string): Promise<ApiStreamSession | null> {
-		if (!convId) return null;
-
-		let sessions: ApiStreamSession[];
-
-		try {
-			sessions = await ChatService.lookupStreamSessions([convId]);
-		} catch (e) {
-			console.warn(`probeServerStream failed for conv ${convId}:`, e);
-
-			return null;
-		}
-
-		return ChatService.selectActiveStream(sessions);
 	}
 
 	private async attachServerStream(convId: string, streamId?: string): Promise<void> {
@@ -490,5 +455,40 @@ export class ChatStreamManager {
 		}
 
 		return -1;
+	}
+
+	/**
+	 * Server side stream discovery, split in three pieces:
+	 *
+	 * probeServerStream(convId) -> hits POST /v1/streams/lookup with the conv id, returns the session to attach
+	 *   to or null. Pure read, no side effect, no UI lock. Safe to fire in parallel with anything.
+	 *
+	 * attachServerStream(convId) -> flips the spinner immediately, fetches the replay stream
+	 *   from byte 0, finds the assistant slot to splice into (creates a placeholder if the conv has
+	 *   no assistant message yet, for cross device or fresh local DB cases), and pipes the SSE bytes
+	 *   into the message via handleStreamResponse.
+	 *
+	 * discoverActiveStream(convId) -> probe + attach in one call. Used by callers that do not need
+	 *   to overlap the probe with other async work.
+	 *
+	 * The chat page in +page.svelte calls discoverActiveStream once the conversation is active
+	 * (immediately if it already is, after loadConversation settles otherwise), and re-runs it on
+	 * visibilitychange. Attaching only after the conversation is loaded gives the earliest
+	 * possible time to spinner and avoids racing against an empty activeMessages array.
+	 */
+	private async probeServerStream(convId: string): Promise<ApiStreamSession | null> {
+		if (!convId) return null;
+
+		let sessions: ApiStreamSession[];
+
+		try {
+			sessions = await ChatService.lookupStreamSessions([convId]);
+		} catch (e) {
+			console.warn(`probeServerStream failed for conv ${convId}:`, e);
+
+			return null;
+		}
+
+		return ChatService.selectActiveStream(sessions);
 	}
 }

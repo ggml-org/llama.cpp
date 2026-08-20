@@ -34,15 +34,19 @@ class DeviceStore {
 	readonly isIOSDevice: boolean = false;
 	/** The Safari browser app on iOS, excluding other iOS browsers and WKWebViews. */
 	readonly isIOSSafari: boolean = false;
+	/** PWA standalone mode: the page was launched from the home screen icon. */
+	isStandalone = $state(false);
 	/** Any WKWebView context on iOS: in-app browsers, embedded web views, and the
 	 *  third-party iOS browsers (all of which share the WKWebView engine). */
 	readonly isWKWebView: boolean = false;
-	/** PWA standalone mode: the page was launched from the home screen icon. */
-	isStandalone = $state(false);
 	/** OS color scheme preference; the user override lives in settingsStore. */
 	readonly systemTheme = $state({ isDark: false });
 
 	private mobile = new MediaQuery(`max-width: ${DEFAULT_MOBILE_BREAKPOINT - 1}px`);
+
+	get isMobile(): boolean {
+		return this.mobile.current;
+	}
 
 	constructor() {
 		if (!browser) return;
@@ -78,10 +82,6 @@ class DeviceStore {
 		darkMql.addEventListener('change', (e) => {
 			this.systemTheme.isDark = e.matches;
 		});
-	}
-
-	get isMobile(): boolean {
-		return this.mobile.current;
 	}
 }
 

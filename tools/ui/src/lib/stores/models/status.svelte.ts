@@ -31,40 +31,22 @@ export interface ModelStatusHost {
 }
 
 export class ModelStatusManager {
+	private loadingStates = new SvelteMap<string, boolean>();
+	private loadProgress = new SvelteMap<string, ModelLoadProgress>();
 	// /models/sse feed state, the single source of truth for status and load progress
 	private statusAbort: AbortController | null = null;
 	private statusReaderActive = false;
-	private loadProgress = new SvelteMap<string, ModelLoadProgress>();
 	private statusWaiters = new SvelteMap<
 		string,
 		{ target: ServerModelStatus; resolve: () => void; reject: (e: Error) => void }
 	>();
-	private loadingStates = new SvelteMap<string, boolean>();
 
 	constructor(private host: ModelStatusHost) {}
 
-	/**
-	 * Open the /models/sse feed and keep it live with auto reconnect.
-	 * Idempotent and router mode only.
-	 */
-	subscribe(): void {
-		if (this.statusReaderActive) return;
+	async ensureLoaded(modelId: string): Promise<void> {
+		if (this.host.isModelLoaded(modelId)) return;
 
-		if (!serverStore.isRouterMode) return;
-
-		this.statusReaderActive = true;
-		this.statusAbort = new AbortController();
-		void this.runStatusReader(this.statusAbort.signal);
-	}
-
-	/**
-	 * Close the /models/sse feed and drop transient progress.
-	 */
-	unsubscribe(): void {
-		this.statusReaderActive = false;
-		this.statusAbort?.abort();
-		this.statusAbort = null;
-		this.loadProgress.clear();
+		await this.load(modelId);
 	}
 
 	/**
@@ -108,6 +90,20 @@ export class ModelStatusManager {
 		}
 	}
 
+	/**
+	 * Open the /models/sse feed and keep it live with auto reconnect.
+	 * Idempotent and router mode only.
+	 */
+	subscribe(): void {
+		if (this.statusReaderActive) return;
+
+		if (!serverStore.isRouterMode) return;
+
+		this.statusReaderActive = true;
+		this.statusAbort = new AbortController();
+		void this.runStatusReader(this.statusAbort.signal);
+	}
+
 	async unload(modelId: string): Promise<void> {
 		if (!this.host.isModelLoaded(modelId)) return;
 
@@ -137,43 +133,14 @@ export class ModelStatusManager {
 		}
 	}
 
-	async ensureLoaded(modelId: string): Promise<void> {
-		if (this.host.isModelLoaded(modelId)) return;
-
-		await this.load(modelId);
-	}
-
 	/**
-	 * Read the feed and reconnect until unsubscribed.
+	 * Close the /models/sse feed and drop transient progress.
 	 */
-	private async runStatusReader(signal: AbortSignal): Promise<void> {
-		await ModelsService.watchModelEvents(signal, (event) => this.applyStatusEvent(event));
-	}
-
-	/**
-	 * Route one feed record by event kind. Only the status_* events carry a
-	 * status payload, models_reload triggers a list refresh, model_remove drops
-	 * the row, download_* belong to the download surface, not here.
-	 */
-	private applyStatusEvent(event: ApiModelsSseEvent): void {
-		switch (event.event) {
-			case ServerModelsSseEventType.STATUS_CHANGE:
-			case ServerModelsSseEventType.MODEL_STATUS:
-			case ServerModelsSseEventType.STATUS_UPDATE:
-				this.applyModelStatus(event);
-
-				break;
-			case ServerModelsSseEventType.MODELS_RELOAD:
-				void this.host.fetchRouterModels();
-
-				break;
-			case ServerModelsSseEventType.MODEL_REMOVE:
-				this.removeRouterModel(event.model);
-
-				break;
-			case ServerModelsSseEventType.DOWNLOAD_PROGRESS:
-				break;
-		}
+	unsubscribe(): void {
+		this.statusReaderActive = false;
+		this.statusAbort?.abort();
+		this.statusAbort = null;
+		this.loadProgress.clear();
 	}
 
 	/**
@@ -214,6 +181,44 @@ export class ModelStatusManager {
 	}
 
 	/**
+	 * Route one feed record by event kind. Only the status_* events carry a
+	 * status payload, models_reload triggers a list refresh, model_remove drops
+	 * the row, download_* belong to the download surface, not here.
+	 */
+	private applyStatusEvent(event: ApiModelsSseEvent): void {
+		switch (event.event) {
+			case ServerModelsSseEventType.STATUS_CHANGE:
+			case ServerModelsSseEventType.MODEL_STATUS:
+			case ServerModelsSseEventType.STATUS_UPDATE:
+				this.applyModelStatus(event);
+
+				break;
+			case ServerModelsSseEventType.MODELS_RELOAD:
+				void this.host.fetchRouterModels();
+
+				break;
+			case ServerModelsSseEventType.MODEL_REMOVE:
+				this.removeRouterModel(event.model);
+
+				break;
+			case ServerModelsSseEventType.DOWNLOAD_PROGRESS:
+				break;
+		}
+	}
+
+	/**
+	 * Reject and drop the awaiter for a model.
+	 */
+	private rejectStatus(modelId: string, error: Error): void {
+		const waiter = this.statusWaiters.get(modelId);
+
+		if (waiter) {
+			this.statusWaiters.delete(modelId);
+			waiter.reject(error);
+		}
+	}
+
+	/**
 	 * Drop a model row reported gone by the feed and settle its awaiters.
 	 */
 	private removeRouterModel(modelId: string): void {
@@ -222,6 +227,13 @@ export class ModelStatusManager {
 		this.host.routerModels = this.host.routerModels.filter((m) => m.id !== modelId);
 		this.loadProgress.delete(modelId);
 		this.rejectStatus(modelId, new Error(`Model removed: ${this.host.toDisplayName(modelId)}`));
+	}
+
+	/**
+	 * Read the feed and reconnect until unsubscribed.
+	 */
+	private async runStatusReader(signal: AbortSignal): Promise<void> {
+		await ModelsService.watchModelEvents(signal, (event) => this.applyStatusEvent(event));
 	}
 
 	/**
@@ -243,16 +255,6 @@ export class ModelStatusManager {
 	}
 
 	/**
-	 * Register an awaiter that resolves when the feed reports target status.
-	 * One operation runs per model at a time, so one awaiter per model is kept.
-	 */
-	private waitForStatus(modelId: string, target: ServerModelStatus): Promise<void> {
-		return new Promise((resolve, reject) => {
-			this.statusWaiters.set(modelId, { reject, resolve, target });
-		});
-	}
-
-	/**
 	 * Resolve and drop the awaiter when the model reaches its target status.
 	 */
 	private settleStatus(modelId: string, status: ServerModelStatus): void {
@@ -265,14 +267,12 @@ export class ModelStatusManager {
 	}
 
 	/**
-	 * Reject and drop the awaiter for a model.
+	 * Register an awaiter that resolves when the feed reports target status.
+	 * One operation runs per model at a time, so one awaiter per model is kept.
 	 */
-	private rejectStatus(modelId: string, error: Error): void {
-		const waiter = this.statusWaiters.get(modelId);
-
-		if (waiter) {
-			this.statusWaiters.delete(modelId);
-			waiter.reject(error);
-		}
+	private waitForStatus(modelId: string, target: ServerModelStatus): Promise<void> {
+		return new Promise((resolve, reject) => {
+			this.statusWaiters.set(modelId, { reject, resolve, target });
+		});
 	}
 }

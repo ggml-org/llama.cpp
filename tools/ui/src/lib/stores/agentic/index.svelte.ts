@@ -142,9 +142,36 @@ function toAgenticMessages(messages: ApiChatMessageData[]): AgenticMessage[] {
 }
 
 class AgenticStore {
-	private sessions = new SvelteMap<string, AgenticSession>();
 	// permission, continue and steering gates the loop waits on between turns
 	private gates = new AgenticGates();
+	private sessions = new SvelteMap<string, AgenticSession>();
+
+	get isAnyRunning(): boolean {
+		for (const session of this.sessions.values()) {
+			if (session.isRunning) return true;
+		}
+
+		return false;
+	}
+
+	get isReady(): boolean {
+		return true;
+	}
+
+	clearError(conversationId: string): void {
+		this.updateSession(conversationId, { lastError: null });
+	}
+
+	clearSession(conversationId: string): void {
+		this.sessions.delete(conversationId);
+	}
+
+	/**
+	 * Clear the pending steering message without consuming it.
+	 */
+	clearSteeringMessage(conversationId: string): void {
+		this.gates.clearSteeringMessage(conversationId);
+	}
 
 	constructor() {
 		// drop per-conversation session state when the conversation is deleted,
@@ -156,31 +183,12 @@ class AgenticStore {
 		});
 	}
 
-	get isReady(): boolean {
-		return true;
-	}
-
-	get isAnyRunning(): boolean {
-		for (const session of this.sessions.values()) {
-			if (session.isRunning) return true;
-		}
-
-		return false;
-	}
-
-	getSession(conversationId: string): AgenticSession {
-		let session = this.sessions.get(conversationId);
-
-		if (!session) {
-			session = createDefaultSession();
-			this.sessions.set(conversationId, session);
-		}
-
-		return session;
-	}
-
-	clearSession(conversationId: string): void {
-		this.sessions.delete(conversationId);
+	/**
+	 * Consume and return the pending steering message for re-sending.
+	 * Called by chatStore after the agentic flow exits.
+	 */
+	consumePendingSteeringMessage(conversationId: string): SteeringMessage | null {
+		return this.gates.consumePendingSteeringMessage(conversationId);
 	}
 
 	getActiveSessions(): Array<{ conversationId: string; session: AgenticSession }> {
@@ -191,101 +199,6 @@ class AgenticStore {
 		}
 
 		return active;
-	}
-
-	isRunning(conversationId: string): boolean {
-		return this.sessions.get(conversationId)?.isRunning ?? false;
-	}
-
-	// read-only: safe to call from derivations, unlike getSession
-	getLiveLlmTotals(conversationId: string): AgenticSession['liveLlm'] {
-		return this.sessions.get(conversationId)?.liveLlm ?? null;
-	}
-
-	// read-only: safe to call from derivations, unlike getSession
-	getFlowRootMessageId(conversationId: string): string | null {
-		return this.sessions.get(conversationId)?.flowRootMessageId ?? null;
-	}
-
-	getCurrentTurn(conversationId: string): number {
-		return this.sessions.get(conversationId)?.currentTurn ?? 0;
-	}
-
-	getTotalToolCalls(conversationId: string): number {
-		return this.sessions.get(conversationId)?.totalToolCalls ?? 0;
-	}
-
-	getLastError(conversationId: string): Error | null {
-		return this.sessions.get(conversationId)?.lastError ?? null;
-	}
-
-	getStreamingToolCall(conversationId: string): { name: string; arguments: string } | null {
-		return this.sessions.get(conversationId)?.streamingToolCall ?? null;
-	}
-
-	getExecutingToolCallId(conversationId: string): string | null {
-		return this.sessions.get(conversationId)?.executingToolCallId ?? null;
-	}
-
-	getPendingPermissionRequest(
-		conversationId: string
-	): { toolName: string; serverLabel: string } | null {
-		return this.gates.getPendingPermissionRequest(conversationId);
-	}
-
-	getPendingContinueRequest(conversationId: string): boolean {
-		return this.gates.getPendingContinueRequest(conversationId);
-	}
-
-	resolveContinue(conversationId: string, shouldContinue: boolean): void {
-		this.gates.resolveContinue(conversationId, shouldContinue);
-	}
-
-	resolvePermission(conversationId: string, decision: ToolPermissionDecision): void {
-		this.gates.resolvePermission(conversationId, decision);
-	}
-
-	clearError(conversationId: string): void {
-		this.updateSession(conversationId, { lastError: null });
-	}
-
-	hasPendingSteeringMessage(conversationId: string): boolean {
-		return this.gates.hasPendingSteeringMessage(conversationId);
-	}
-
-	getPendingSteeringMessageContent(conversationId: string): string | null {
-		return this.gates.getPendingSteeringMessageContent(conversationId);
-	}
-
-	getPendingSteeringMessageExtras(conversationId: string): DatabaseMessageExtra[] | undefined {
-		return this.gates.getPendingSteeringMessageExtras(conversationId);
-	}
-
-	/**
-	 * Queue a steering message. When the current agentic turn completes,
-	 * the flow exits and the caller re-sends the message as a normal chat message.
-	 */
-	injectSteeringMessage(
-		conversationId: string,
-		content: string,
-		extras?: DatabaseMessageExtra[]
-	): void {
-		this.gates.injectSteeringMessage(conversationId, content, extras);
-	}
-
-	/**
-	 * Clear the pending steering message without consuming it.
-	 */
-	clearSteeringMessage(conversationId: string): void {
-		this.gates.clearSteeringMessage(conversationId);
-	}
-
-	/**
-	 * Consume and return the pending steering message for re-sending.
-	 * Called by chatStore after the agentic flow exits.
-	 */
-	consumePendingSteeringMessage(conversationId: string): SteeringMessage | null {
-		return this.gates.consumePendingSteeringMessage(conversationId);
 	}
 
 	getConfig(settings: SettingsConfigType, perChatOverrides?: McpServerOverride[]): AgenticConfig {
@@ -300,6 +213,93 @@ class AgenticStore {
 			enabled: hasTools && DEFAULT_AGENTIC_CONFIG.enabled,
 			maxTurns
 		};
+	}
+
+	getCurrentTurn(conversationId: string): number {
+		return this.sessions.get(conversationId)?.currentTurn ?? 0;
+	}
+
+	getExecutingToolCallId(conversationId: string): string | null {
+		return this.sessions.get(conversationId)?.executingToolCallId ?? null;
+	}
+
+	// read-only: safe to call from derivations, unlike getSession
+	getFlowRootMessageId(conversationId: string): string | null {
+		return this.sessions.get(conversationId)?.flowRootMessageId ?? null;
+	}
+
+	getLastError(conversationId: string): Error | null {
+		return this.sessions.get(conversationId)?.lastError ?? null;
+	}
+
+	// read-only: safe to call from derivations, unlike getSession
+	getLiveLlmTotals(conversationId: string): AgenticSession['liveLlm'] {
+		return this.sessions.get(conversationId)?.liveLlm ?? null;
+	}
+
+	getPendingContinueRequest(conversationId: string): boolean {
+		return this.gates.getPendingContinueRequest(conversationId);
+	}
+
+	getPendingPermissionRequest(
+		conversationId: string
+	): { toolName: string; serverLabel: string } | null {
+		return this.gates.getPendingPermissionRequest(conversationId);
+	}
+
+	getPendingSteeringMessageContent(conversationId: string): string | null {
+		return this.gates.getPendingSteeringMessageContent(conversationId);
+	}
+
+	getPendingSteeringMessageExtras(conversationId: string): DatabaseMessageExtra[] | undefined {
+		return this.gates.getPendingSteeringMessageExtras(conversationId);
+	}
+
+	getSession(conversationId: string): AgenticSession {
+		let session = this.sessions.get(conversationId);
+
+		if (!session) {
+			session = createDefaultSession();
+			this.sessions.set(conversationId, session);
+		}
+
+		return session;
+	}
+
+	getStreamingToolCall(conversationId: string): { name: string; arguments: string } | null {
+		return this.sessions.get(conversationId)?.streamingToolCall ?? null;
+	}
+
+	getTotalToolCalls(conversationId: string): number {
+		return this.sessions.get(conversationId)?.totalToolCalls ?? 0;
+	}
+
+	hasPendingSteeringMessage(conversationId: string): boolean {
+		return this.gates.hasPendingSteeringMessage(conversationId);
+	}
+
+	/**
+	 * Queue a steering message. When the current agentic turn completes,
+	 * the flow exits and the caller re-sends the message as a normal chat message.
+	 */
+	injectSteeringMessage(
+		conversationId: string,
+		content: string,
+		extras?: DatabaseMessageExtra[]
+	): void {
+		this.gates.injectSteeringMessage(conversationId, content, extras);
+	}
+
+	isRunning(conversationId: string): boolean {
+		return this.sessions.get(conversationId)?.isRunning ?? false;
+	}
+
+	resolveContinue(conversationId: string, shouldContinue: boolean): void {
+		this.gates.resolveContinue(conversationId, shouldContinue);
+	}
+
+	resolvePermission(conversationId: string, decision: ToolPermissionDecision): void {
+		this.gates.resolvePermission(conversationId, decision);
 	}
 
 	async runAgenticFlow(params: AgenticFlowParams): Promise<AgenticFlowResult> {
@@ -393,20 +393,28 @@ class AgenticStore {
 		}
 	}
 
-	private updateSession(conversationId: string, update: Partial<AgenticSession>): void {
-		const session = this.getSession(conversationId);
+	private buildAttachmentName(mimeType: string, index: number): string {
+		const extension = mimeType.startsWith(MimeTypePrefix.AUDIO)
+			? (AUDIO_MIME_TO_EXTENSION[mimeType] ?? DEFAULT_AUDIO_EXTENSION)
+			: (IMAGE_MIME_TO_EXTENSION[mimeType] ?? DEFAULT_IMAGE_EXTENSION);
 
-		this.sessions.set(conversationId, { ...session, ...update });
+		return `${MCP_ATTACHMENT_NAME_PREFIX}-${Date.now()}-${index}.${extension}`;
 	}
 
-	private parseToolArguments(args: string | Record<string, unknown>): Record<string, unknown> {
-		if (typeof args === 'object') return args;
+	private buildFinalTimings(
+		capturedTimings: ChatMessageTimings | undefined,
+		agenticTimings: ChatMessageAgenticTimings
+	): ChatMessageTimings | undefined {
+		if (agenticTimings.toolCallsCount === 0) return capturedTimings;
 
-		const trimmed = args.trim();
-
-		if (trimmed === '') return {};
-
-		return JSON.parse(trimmed) as Record<string, unknown>;
+		return {
+			agentic: agenticTimings,
+			cache_n: capturedTimings?.cache_n,
+			predicted_ms: capturedTimings?.predicted_ms,
+			predicted_n: capturedTimings?.predicted_n,
+			prompt_ms: capturedTimings?.prompt_ms,
+			prompt_n: capturedTimings?.prompt_n
+		};
 	}
 
 	private async executeAgenticLoop(params: {
@@ -973,35 +981,6 @@ class AgenticStore {
 		}
 	}
 
-	private buildFinalTimings(
-		capturedTimings: ChatMessageTimings | undefined,
-		agenticTimings: ChatMessageAgenticTimings
-	): ChatMessageTimings | undefined {
-		if (agenticTimings.toolCallsCount === 0) return capturedTimings;
-
-		return {
-			agentic: agenticTimings,
-			cache_n: capturedTimings?.cache_n,
-			predicted_ms: capturedTimings?.predicted_ms,
-			predicted_n: capturedTimings?.predicted_n,
-			prompt_ms: capturedTimings?.prompt_ms,
-			prompt_n: capturedTimings?.prompt_n
-		};
-	}
-
-	private normalizeToolCalls(toolCalls: ApiChatCompletionToolCall[]): AgenticToolCallList {
-		if (!toolCalls) return [];
-
-		return toolCalls.map((call, index) => ({
-			function: {
-				arguments: call?.function?.arguments ?? '',
-				name: call?.function?.name ?? ''
-			},
-			id: call?.id ?? `tool_${index}`,
-			type: (call?.type as ToolCallType.FUNCTION) ?? ToolCallType.FUNCTION
-		}));
-	}
-
 	private extractBase64Attachments(result: string): {
 		cleanedResult: string;
 		attachments: DatabaseMessageExtra[];
@@ -1057,12 +1036,33 @@ class AgenticStore {
 		return { attachments, cleanedResult: cleanedLines.join(NEWLINE) };
 	}
 
-	private buildAttachmentName(mimeType: string, index: number): string {
-		const extension = mimeType.startsWith(MimeTypePrefix.AUDIO)
-			? (AUDIO_MIME_TO_EXTENSION[mimeType] ?? DEFAULT_AUDIO_EXTENSION)
-			: (IMAGE_MIME_TO_EXTENSION[mimeType] ?? DEFAULT_IMAGE_EXTENSION);
+	private normalizeToolCalls(toolCalls: ApiChatCompletionToolCall[]): AgenticToolCallList {
+		if (!toolCalls) return [];
 
-		return `${MCP_ATTACHMENT_NAME_PREFIX}-${Date.now()}-${index}.${extension}`;
+		return toolCalls.map((call, index) => ({
+			function: {
+				arguments: call?.function?.arguments ?? '',
+				name: call?.function?.name ?? ''
+			},
+			id: call?.id ?? `tool_${index}`,
+			type: (call?.type as ToolCallType.FUNCTION) ?? ToolCallType.FUNCTION
+		}));
+	}
+
+	private parseToolArguments(args: string | Record<string, unknown>): Record<string, unknown> {
+		if (typeof args === 'object') return args;
+
+		const trimmed = args.trim();
+
+		if (trimmed === '') return {};
+
+		return JSON.parse(trimmed) as Record<string, unknown>;
+	}
+
+	private updateSession(conversationId: string, update: Partial<AgenticSession>): void {
+		const session = this.getSession(conversationId);
+
+		this.sessions.set(conversationId, { ...session, ...update });
 	}
 }
 

@@ -15,6 +15,11 @@ import type { DatabaseMessageExtra, SteeringMessage } from '$lib/types';
 import { SvelteMap } from 'svelte/reactivity';
 
 export class AgenticGates {
+	/** Resolve functions for pending continue Promises; nothing derives from this map */
+	private continueResolvers = new SvelteMap<string, (shouldContinue: boolean) => void>();
+	/** Dedicated reactive state for pending continue requests (turn limit reached) */
+	private pendingContinueRequests = new SvelteMap<string, boolean>();
+
 	/** Dedicated reactive state for pending permission requests (ensures immediate UI updates) */
 	private pendingPermissions = new SvelteMap<
 		string,
@@ -23,64 +28,18 @@ export class AgenticGates {
 	/** Resolve functions for pending permission Promises; nothing derives from this map */
 	private permissionResolvers = new SvelteMap<string, (decision: ToolPermissionDecision) => void>();
 
-	/** Dedicated reactive state for pending continue requests (turn limit reached) */
-	private pendingContinueRequests = new SvelteMap<string, boolean>();
-	/** Resolve functions for pending continue Promises; nothing derives from this map */
-	private continueResolvers = new SvelteMap<string, (shouldContinue: boolean) => void>();
-
 	/** Reactive: queued steering messages to inject between turns */
 	private steeringMessages = new SvelteMap<string, SteeringMessage>();
 
-	getPendingPermissionRequest(
-		conversationId: string
-	): { toolName: string; serverLabel: string } | null {
-		return this.pendingPermissions.get(conversationId) ?? null;
-	}
-
-	getPendingContinueRequest(conversationId: string): boolean {
-		return this.pendingContinueRequests.get(conversationId) ?? false;
-	}
-
-	resolveContinue(conversationId: string, shouldContinue: boolean): void {
-		const resolver = this.continueResolvers.get(conversationId);
-
-		if (resolver) {
-			this.continueResolvers.delete(conversationId);
-			resolver(shouldContinue);
-		}
-	}
-
-	resolvePermission(conversationId: string, decision: ToolPermissionDecision): void {
-		const resolver = this.permissionResolvers.get(conversationId);
-
-		if (resolver) {
-			this.permissionResolvers.delete(conversationId);
-			resolver(decision);
-		}
-	}
-
-	hasPendingSteeringMessage(conversationId: string): boolean {
-		return this.steeringMessages.has(conversationId);
-	}
-
-	getPendingSteeringMessageContent(conversationId: string): string | null {
-		return this.steeringMessages.get(conversationId)?.content ?? null;
-	}
-
-	getPendingSteeringMessageExtras(conversationId: string): DatabaseMessageExtra[] | undefined {
-		return this.steeringMessages.get(conversationId)?.extras;
-	}
-
 	/**
-	 * Queue a steering message. When the current agentic turn completes,
-	 * the flow exits and the caller re-sends the message as a normal chat message.
+	 * Drop all pending gate state for a conversation, e.g. when a flow exits.
 	 */
-	injectSteeringMessage(
-		conversationId: string,
-		content: string,
-		extras?: DatabaseMessageExtra[]
-	): void {
-		this.steeringMessages.set(conversationId, { content, extras });
+	clear(conversationId: string): void {
+		this.pendingPermissions.set(conversationId, null);
+		this.permissionResolvers.delete(conversationId);
+		this.pendingContinueRequests.set(conversationId, false);
+		this.continueResolvers.delete(conversationId);
+		this.steeringMessages.delete(conversationId);
 	}
 
 	/**
@@ -104,15 +63,70 @@ export class AgenticGates {
 		return msg;
 	}
 
+	getPendingContinueRequest(conversationId: string): boolean {
+		return this.pendingContinueRequests.get(conversationId) ?? false;
+	}
+
+	getPendingPermissionRequest(
+		conversationId: string
+	): { toolName: string; serverLabel: string } | null {
+		return this.pendingPermissions.get(conversationId) ?? null;
+	}
+
+	getPendingSteeringMessageContent(conversationId: string): string | null {
+		return this.steeringMessages.get(conversationId)?.content ?? null;
+	}
+
+	getPendingSteeringMessageExtras(conversationId: string): DatabaseMessageExtra[] | undefined {
+		return this.steeringMessages.get(conversationId)?.extras;
+	}
+
+	hasPendingSteeringMessage(conversationId: string): boolean {
+		return this.steeringMessages.has(conversationId);
+	}
+
 	/**
-	 * Drop all pending gate state for a conversation, e.g. when a flow exits.
+	 * Queue a steering message. When the current agentic turn completes,
+	 * the flow exits and the caller re-sends the message as a normal chat message.
 	 */
-	clear(conversationId: string): void {
-		this.pendingPermissions.set(conversationId, null);
-		this.permissionResolvers.delete(conversationId);
-		this.pendingContinueRequests.set(conversationId, false);
-		this.continueResolvers.delete(conversationId);
-		this.steeringMessages.delete(conversationId);
+	injectSteeringMessage(
+		conversationId: string,
+		content: string,
+		extras?: DatabaseMessageExtra[]
+	): void {
+		this.steeringMessages.set(conversationId, { content, extras });
+	}
+
+	async requestContinue(conversationId: string, signal?: AbortSignal): Promise<boolean> {
+		this.pendingContinueRequests.set(conversationId, true);
+
+		return new Promise<boolean>((resolve) => {
+			if (signal?.aborted) {
+				this.pendingContinueRequests.set(conversationId, false);
+				resolve(false);
+
+				return;
+			}
+
+			this.continueResolvers.set(conversationId, (shouldContinue) => {
+				this.pendingContinueRequests.set(conversationId, false);
+				resolve(shouldContinue);
+			});
+
+			signal?.addEventListener(
+				'abort',
+				() => {
+					const resolver = this.continueResolvers.get(conversationId);
+
+					if (resolver) {
+						this.continueResolvers.delete(conversationId);
+						this.pendingContinueRequests.set(conversationId, false);
+						resolve(false);
+					}
+				},
+				{ once: true }
+			);
+		});
 	}
 
 	async requestPermission(
@@ -174,35 +188,21 @@ export class AgenticGates {
 		});
 	}
 
-	async requestContinue(conversationId: string, signal?: AbortSignal): Promise<boolean> {
-		this.pendingContinueRequests.set(conversationId, true);
+	resolveContinue(conversationId: string, shouldContinue: boolean): void {
+		const resolver = this.continueResolvers.get(conversationId);
 
-		return new Promise<boolean>((resolve) => {
-			if (signal?.aborted) {
-				this.pendingContinueRequests.set(conversationId, false);
-				resolve(false);
+		if (resolver) {
+			this.continueResolvers.delete(conversationId);
+			resolver(shouldContinue);
+		}
+	}
 
-				return;
-			}
+	resolvePermission(conversationId: string, decision: ToolPermissionDecision): void {
+		const resolver = this.permissionResolvers.get(conversationId);
 
-			this.continueResolvers.set(conversationId, (shouldContinue) => {
-				this.pendingContinueRequests.set(conversationId, false);
-				resolve(shouldContinue);
-			});
-
-			signal?.addEventListener(
-				'abort',
-				() => {
-					const resolver = this.continueResolvers.get(conversationId);
-
-					if (resolver) {
-						this.continueResolvers.delete(conversationId);
-						this.pendingContinueRequests.set(conversationId, false);
-						resolve(false);
-					}
-				},
-				{ once: true }
-			);
-		});
+		if (resolver) {
+			this.permissionResolvers.delete(conversationId);
+			resolver(decision);
+		}
 	}
 }

@@ -89,83 +89,12 @@ class ContextStatsStore {
 	// The canonical resolution lives in modelsStore.activeModelId.
 	activeModelId = $derived(modelsStore.activeModelId);
 
-	isActiveModelLoaded = $derived(
-		this.activeModelId !== null &&
-			(!serverStore.isRouterMode || modelsStore.isModelLoaded(this.activeModelId))
-	);
-
-	isActiveModelLoading = $derived(
-		this.activeModelId !== null && modelsStore.status.isOperationInProgress(this.activeModelId)
-	);
-
-	contextTotal = $derived.by(() => {
-		void modelsStore.props.cacheVersion;
-
-		return this.activeModelId ? modelsStore.props.getModelContextSize(this.activeModelId) : null;
-	});
-
-	private liveStats = $derived(deriveLiveStats(chatStore.processing.activeState));
-
 	// shared by currentRead/Fresh/Cache/Output and cumulative so a per-chunk
 	// churn of activeMessages triggers exactly one scan instead of one per
 	// derived
 	private assistantTimings = $derived.by(() =>
 		summarizeAssistantTimings(conversationsStore.activeMessages as DatabaseMessage[])
 	);
-
-	currentRead = $derived.by(() => {
-		const timings = this.assistantTimings.lastTimings;
-
-		let read = 0;
-
-		if (timings) {
-			read = (timings.prompt_n ?? 0) + (timings.cache_n ?? 0);
-		}
-
-		// live.promptTokens is already the combined reading (prompt + cache),
-		// so do not also add live.cacheTokens.
-		if (this.liveStats && this.liveStats.promptTokens > 0) {
-			read = Math.max(read, this.liveStats.promptTokens);
-		}
-
-		return read;
-	});
-
-	currentFresh = $derived.by(() => {
-		const fresh = this.assistantTimings.lastTimings?.prompt_n ?? 0;
-
-		return Math.max(fresh, this.liveStats?.freshTokens ?? 0);
-	});
-
-	currentCache = $derived.by(() => {
-		const cached = this.assistantTimings.lastTimings?.cache_n ?? 0;
-
-		if (this.liveStats && this.liveStats.promptTokens > 0) {
-			return Math.max(cached, this.liveStats.cacheTokens);
-		}
-
-		return cached;
-	});
-
-	currentOutput = $derived.by(() => {
-		if (this.liveStats && this.liveStats.outputTokens > 0) return this.liveStats.outputTokens;
-
-		return this.assistantTimings.lastTimings?.predicted_n ?? 0;
-	});
-
-	kvTotal = $derived(this.currentRead + this.currentOutput);
-
-	contextUsed = $derived(this.currentRead + this.currentOutput);
-
-	contextAvailable = $derived(
-		this.contextTotal !== null ? this.contextTotal - this.contextUsed : null
-	);
-
-	contextPercent = $derived.by(() => {
-		if (this.contextTotal === null || this.contextTotal <= 0) return null;
-
-		return Math.round((this.contextUsed / this.contextTotal) * 100);
-	});
 
 	private cumulative = $derived.by(() => {
 		const convId = conversationsStore.activeConversation?.id;
@@ -209,13 +138,84 @@ class ContextStatsStore {
 		return { averageTokensPerSecond, cacheTotal, output, read };
 	});
 
-	cumulativeRead = $derived(this.cumulative.read);
+	averageTokensPerSecond = $derived(this.cumulative.averageTokensPerSecond);
 
-	cumulativeOutput = $derived(this.cumulative.output);
+	contextTotal = $derived.by(() => {
+		void modelsStore.props.cacheVersion;
+
+		return this.activeModelId ? modelsStore.props.getModelContextSize(this.activeModelId) : null;
+	});
+
+	private liveStats = $derived(deriveLiveStats(chatStore.processing.activeState));
+
+	currentOutput = $derived.by(() => {
+		if (this.liveStats && this.liveStats.outputTokens > 0) return this.liveStats.outputTokens;
+
+		return this.assistantTimings.lastTimings?.predicted_n ?? 0;
+	});
+
+	currentRead = $derived.by(() => {
+		const timings = this.assistantTimings.lastTimings;
+
+		let read = 0;
+
+		if (timings) {
+			read = (timings.prompt_n ?? 0) + (timings.cache_n ?? 0);
+		}
+
+		// live.promptTokens is already the combined reading (prompt + cache),
+		// so do not also add live.cacheTokens.
+		if (this.liveStats && this.liveStats.promptTokens > 0) {
+			read = Math.max(read, this.liveStats.promptTokens);
+		}
+
+		return read;
+	});
+
+	contextUsed = $derived(this.currentRead + this.currentOutput);
+
+	contextAvailable = $derived(
+		this.contextTotal !== null ? this.contextTotal - this.contextUsed : null
+	);
+
+	contextPercent = $derived.by(() => {
+		if (this.contextTotal === null || this.contextTotal <= 0) return null;
+
+		return Math.round((this.contextUsed / this.contextTotal) * 100);
+	});
 
 	cumulativeCacheTotal = $derived(this.cumulative.cacheTotal);
 
-	averageTokensPerSecond = $derived(this.cumulative.averageTokensPerSecond);
+	cumulativeOutput = $derived(this.cumulative.output);
+
+	cumulativeRead = $derived(this.cumulative.read);
+
+	currentCache = $derived.by(() => {
+		const cached = this.assistantTimings.lastTimings?.cache_n ?? 0;
+
+		if (this.liveStats && this.liveStats.promptTokens > 0) {
+			return Math.max(cached, this.liveStats.cacheTokens);
+		}
+
+		return cached;
+	});
+
+	currentFresh = $derived.by(() => {
+		const fresh = this.assistantTimings.lastTimings?.prompt_n ?? 0;
+
+		return Math.max(fresh, this.liveStats?.freshTokens ?? 0);
+	});
+
+	isActiveModelLoaded = $derived(
+		this.activeModelId !== null &&
+			(!serverStore.isRouterMode || modelsStore.isModelLoaded(this.activeModelId))
+	);
+
+	isActiveModelLoading = $derived(
+		this.activeModelId !== null && modelsStore.status.isOperationInProgress(this.activeModelId)
+	);
+
+	kvTotal = $derived(this.currentRead + this.currentOutput);
 }
 
 export const contextStatsStore = new ContextStatsStore();

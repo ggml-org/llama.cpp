@@ -47,8 +47,6 @@ export class ModelPropsManager {
 	});
 	private fetching = new SvelteSet<string>();
 
-	constructor(private host: ModelPropsHost) {}
-
 	/**
 	 * Whether the selected model's chat template supports thinking/reasoning.
 	 * Uses heuristic detection on the model's chat_template from /props.
@@ -76,67 +74,19 @@ export class ModelPropsManager {
 		return detectThinkingSupport(props?.chat_template ?? '');
 	}
 
-	getModelModalities(modelId: string): ModelModalities | null {
-		if (!serverStore.isRouterMode && serverStore.props?.modalities) {
-			return this.buildModalities(serverStore.props.modalities);
-		}
+	/** Map the router modalities, the only source available while a model is not loaded. */
+	buildArchitectureModalities(
+		architecture: ApiModelDataEntry['architecture']
+	): ModelModalities | undefined {
+		if (!architecture) return undefined;
 
-		const model = this.host.models.find((m) => m.model === modelId || m.id === modelId);
+		const inputs = architecture.input_modalities;
 
-		if (model?.modalities) {
-			return model.modalities;
-		}
-
-		const props = this.cache.get(modelId);
-
-		if (props?.modalities) {
-			return this.buildModalities(props.modalities);
-		}
-
-		return null;
-	}
-
-	modelSupportsVision(modelId: string): boolean {
-		return this.getModelModalities(modelId)?.vision ?? false;
-	}
-
-	modelSupportsAudio(modelId: string): boolean {
-		return this.getModelModalities(modelId)?.audio ?? false;
-	}
-
-	modelSupportsVideo(modelId: string): boolean {
-		return this.getModelModalities(modelId)?.video ?? false;
-	}
-
-	getModelModalitiesArray(modelId: string): ModelModality[] {
-		const modalities = this.getModelModalities(modelId);
-
-		if (!modalities) return [];
-
-		const result: ModelModality[] = [];
-
-		if (modalities.vision) result.push(ModelModality.VISION);
-
-		if (modalities.audio) result.push(ModelModality.AUDIO);
-
-		if (modalities.video) result.push(ModelModality.VIDEO);
-
-		return result;
-	}
-
-	getModelProps(modelId: string): ApiLlamaCppServerProps | null {
-		return this.cache.get(modelId);
-	}
-
-	getModelContextSize(modelId: string): number | null {
-		const props = this.getModelProps(modelId);
-		const nCtx = props?.default_generation_settings?.n_ctx;
-
-		return typeof nCtx === 'number' ? nCtx : null;
-	}
-
-	isModelPropsFetching(modelId: string): boolean {
-		return this.fetching.has(modelId);
+		return {
+			audio: inputs.includes(FileTypeCategory.AUDIO),
+			video: inputs.includes(FileTypeCategory.VIDEO),
+			vision: inputs.includes(FileTypeCategory.IMAGE)
+		};
 	}
 
 	/**
@@ -158,6 +108,37 @@ export class ModelPropsManager {
 		const props = this.getModelProps(modelId);
 
 		return detectThinkingSupport(props?.chat_template ?? '');
+	}
+
+	constructor(private host: ModelPropsHost) {}
+
+	/** Fetch modalities for all loaded models from /props endpoint. */
+	async fetchModalitiesForLoadedModels(): Promise<void> {
+		const loadedModelIds = this.host.loadedModelIds;
+
+		if (loadedModelIds.length === 0) return;
+
+		const propsPromises = loadedModelIds.map((modelId) => this.fetchModelProps(modelId));
+
+		try {
+			const results = await Promise.all(propsPromises);
+
+			this.host.models = this.host.models.map((model) => {
+				const modelIndex = loadedModelIds.indexOf(model.model);
+
+				if (modelIndex === -1) return model;
+
+				const props = results[modelIndex];
+
+				if (!props?.modalities) return model;
+
+				return { ...model, modalities: this.buildModalities(props.modalities) };
+			});
+
+			this.cacheVersion++;
+		} catch (error) {
+			console.warn('Failed to fetch modalities for loaded models:', error);
+		}
 	}
 
 	/**
@@ -199,33 +180,67 @@ export class ModelPropsManager {
 		}
 	}
 
-	/** Fetch modalities for all loaded models from /props endpoint. */
-	async fetchModalitiesForLoadedModels(): Promise<void> {
-		const loadedModelIds = this.host.loadedModelIds;
+	getModelContextSize(modelId: string): number | null {
+		const props = this.getModelProps(modelId);
+		const nCtx = props?.default_generation_settings?.n_ctx;
 
-		if (loadedModelIds.length === 0) return;
+		return typeof nCtx === 'number' ? nCtx : null;
+	}
 
-		const propsPromises = loadedModelIds.map((modelId) => this.fetchModelProps(modelId));
-
-		try {
-			const results = await Promise.all(propsPromises);
-
-			this.host.models = this.host.models.map((model) => {
-				const modelIndex = loadedModelIds.indexOf(model.model);
-
-				if (modelIndex === -1) return model;
-
-				const props = results[modelIndex];
-
-				if (!props?.modalities) return model;
-
-				return { ...model, modalities: this.buildModalities(props.modalities) };
-			});
-
-			this.cacheVersion++;
-		} catch (error) {
-			console.warn('Failed to fetch modalities for loaded models:', error);
+	getModelModalities(modelId: string): ModelModalities | null {
+		if (!serverStore.isRouterMode && serverStore.props?.modalities) {
+			return this.buildModalities(serverStore.props.modalities);
 		}
+
+		const model = this.host.models.find((m) => m.model === modelId || m.id === modelId);
+
+		if (model?.modalities) {
+			return model.modalities;
+		}
+
+		const props = this.cache.get(modelId);
+
+		if (props?.modalities) {
+			return this.buildModalities(props.modalities);
+		}
+
+		return null;
+	}
+
+	getModelModalitiesArray(modelId: string): ModelModality[] {
+		const modalities = this.getModelModalities(modelId);
+
+		if (!modalities) return [];
+
+		const result: ModelModality[] = [];
+
+		if (modalities.vision) result.push(ModelModality.VISION);
+
+		if (modalities.audio) result.push(ModelModality.AUDIO);
+
+		if (modalities.video) result.push(ModelModality.VIDEO);
+
+		return result;
+	}
+
+	getModelProps(modelId: string): ApiLlamaCppServerProps | null {
+		return this.cache.get(modelId);
+	}
+
+	isModelPropsFetching(modelId: string): boolean {
+		return this.fetching.has(modelId);
+	}
+
+	modelSupportsAudio(modelId: string): boolean {
+		return this.getModelModalities(modelId)?.audio ?? false;
+	}
+
+	modelSupportsVideo(modelId: string): boolean {
+		return this.getModelModalities(modelId)?.video ?? false;
+	}
+
+	modelSupportsVision(modelId: string): boolean {
+		return this.getModelModalities(modelId)?.vision ?? false;
 	}
 
 	/**
@@ -244,21 +259,6 @@ export class ModelPropsManager {
 		);
 
 		this.cacheVersion++;
-	}
-
-	/** Map the router modalities, the only source available while a model is not loaded. */
-	buildArchitectureModalities(
-		architecture: ApiModelDataEntry['architecture']
-	): ModelModalities | undefined {
-		if (!architecture) return undefined;
-
-		const inputs = architecture.input_modalities;
-
-		return {
-			audio: inputs.includes(FileTypeCategory.AUDIO),
-			video: inputs.includes(FileTypeCategory.VIDEO),
-			vision: inputs.includes(FileTypeCategory.IMAGE)
-		};
 	}
 
 	private buildModalities(

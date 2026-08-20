@@ -73,261 +73,6 @@ export interface ChatFlowsHost {
 export class ChatMessageFlows {
 	constructor(private host: ChatFlowsHost) {}
 
-	async updateMessage(messageId: string, newContent: string): Promise<void> {
-		const activeConv = conversationsStore.activeConversation;
-
-		if (!activeConv) return;
-
-		if (this.host.isChatLoadingInternal(activeConv.id)) await this.host.stopGeneration();
-
-		const result = this.getMessageByIdWithRole(messageId, MessageRole.USER);
-
-		if (!result) return;
-
-		const { index: messageIndex, message: messageToUpdate } = result;
-		const originalContent = messageToUpdate.content;
-
-		try {
-			const allMessages = await conversationsStore.getConversationMessages(activeConv.id);
-			const rootMessage = allMessages.find((m) => m.type === 'root' && m.parent === null);
-			const isFirstUserMessage = rootMessage && messageToUpdate.parent === rootMessage.id;
-
-			conversationsStore.updateMessageAtIndex(messageIndex, { content: newContent });
-			await DatabaseService.updateMessage(messageId, { content: newContent });
-
-			if (isFirstUserMessage && newContent.trim())
-				await conversationsStore.applyTitleFromContent(activeConv.id, newContent);
-
-			const messagesToRemove = conversationsStore.activeMessages.slice(messageIndex + 1);
-
-			if (messagesToRemove.length > 0)
-				await DatabaseService.deleteMessageCascading(activeConv.id, messagesToRemove[0].id);
-
-			conversationsStore.sliceActiveMessages(messageIndex + 1);
-			conversationsStore.updateConversationTimestamp();
-			this.host.setChatLoading(activeConv.id, true);
-			this.host.clearChatStreaming(activeConv.id);
-			const assistantMessage = await this.host.createAssistantMessage();
-
-			conversationsStore.addMessageToActive(assistantMessage);
-			await conversationsStore.updateCurrentNode(assistantMessage.id);
-			await this.host.streamChatCompletion(
-				conversationsStore.activeMessages.slice(0, -1),
-				assistantMessage,
-				undefined,
-				() => {
-					conversationsStore.updateMessageAtIndex(conversationsStore.findMessageIndex(messageId), {
-						content: originalContent
-					});
-				}
-			);
-		} catch (error) {
-			if (!isAbortError(error)) console.error('Failed to update message:', error);
-		}
-	}
-
-	async regenerateMessage(messageId: string): Promise<void> {
-		const activeConv = conversationsStore.activeConversation;
-
-		if (!activeConv || this.host.isChatLoadingInternal(activeConv.id)) return;
-
-		this.host.cancelPreEncode();
-		const result = this.getMessageByIdWithRole(messageId, MessageRole.ASSISTANT);
-
-		if (!result) return;
-
-		const { index: messageIndex } = result;
-
-		try {
-			const messagesToRemove = conversationsStore.activeMessages.slice(messageIndex);
-
-			await DatabaseService.deleteMessageCascading(activeConv.id, messagesToRemove[0].id);
-			conversationsStore.sliceActiveMessages(messageIndex);
-			conversationsStore.updateConversationTimestamp();
-			this.host.setChatLoading(activeConv.id, true);
-			this.host.clearChatStreaming(activeConv.id);
-			const parentMessageId =
-				conversationsStore.activeMessages.length > 0
-					? conversationsStore.activeMessages[conversationsStore.activeMessages.length - 1].id
-					: undefined;
-			const assistantMessage = await this.host.createAssistantMessage(parentMessageId);
-
-			conversationsStore.addMessageToActive(assistantMessage);
-			await this.host.streamChatCompletion(
-				conversationsStore.activeMessages.slice(0, -1),
-				assistantMessage
-			);
-		} catch (error) {
-			if (!isAbortError(error)) console.error('Failed to regenerate message:', error);
-
-			this.host.setChatLoading(activeConv?.id || '', false);
-		}
-	}
-
-	async regenerateMessageWithBranching(messageId: string, modelOverride?: string): Promise<void> {
-		const activeConv = conversationsStore.activeConversation;
-
-		if (!activeConv || this.host.isChatLoadingInternal(activeConv.id)) return;
-
-		this.host.cancelPreEncode();
-		try {
-			const idx = conversationsStore.findMessageIndex(messageId);
-
-			if (idx === -1) return;
-
-			const msg = conversationsStore.activeMessages[idx];
-
-			if (msg.role !== MessageRole.ASSISTANT) return;
-
-			const allMessages = await conversationsStore.getConversationMessages(activeConv.id);
-			const parentMessage = findMessageById(allMessages, msg.parent);
-
-			if (!parentMessage) return;
-
-			this.host.setChatLoading(activeConv.id, true);
-			this.host.clearChatStreaming(activeConv.id);
-			const newAssistantMessage = await DatabaseService.createMessageBranch(
-				{
-					children: [],
-					content: '',
-					convId: msg.convId,
-					model: null,
-					role: msg.role,
-					timestamp: Date.now(),
-					toolCalls: '',
-					type: msg.type
-				},
-				parentMessage.id
-			);
-
-			await conversationsStore.updateCurrentNode(newAssistantMessage.id);
-			conversationsStore.updateConversationTimestamp();
-			await conversationsStore.refreshActiveMessages();
-			const conversationPath = filterByLeafNodeId(
-				allMessages,
-				parentMessage.id,
-				false
-			) as DatabaseMessage[];
-			const modelToUse = modelOverride || msg.model || undefined;
-
-			await this.host.streamChatCompletion(
-				conversationPath,
-				newAssistantMessage,
-				undefined,
-				undefined,
-				modelToUse
-			);
-		} catch (error) {
-			if (!isAbortError(error))
-				console.error('Failed to regenerate message with branching:', error);
-
-			this.host.setChatLoading(activeConv?.id || '', false);
-		}
-	}
-
-	async getDeletionInfo(messageId: string): Promise<{
-		totalCount: number;
-		userMessages: number;
-		assistantMessages: number;
-		messageTypes: string[];
-	}> {
-		const activeConv = conversationsStore.activeConversation;
-
-		if (!activeConv)
-			return { assistantMessages: 0, messageTypes: [], totalCount: 0, userMessages: 0 };
-
-		const allMessages = await conversationsStore.getConversationMessages(activeConv.id);
-		const messageToDelete = findMessageById(allMessages, messageId);
-
-		// For system messages, don't count descendants as they will be preserved (reparented to root)
-		if (messageToDelete?.role === MessageRole.SYSTEM) {
-			const messagesToDelete = allMessages.filter((m) => m.id === messageId);
-
-			let assistantMessages = 0,
-				userMessages = 0;
-
-			const messageTypes: string[] = [];
-
-			for (const msg of messagesToDelete) {
-				if (msg.role === MessageRole.USER) {
-					userMessages++;
-
-					if (!messageTypes.includes('user message')) messageTypes.push('user message');
-				} else if (msg.role === MessageRole.ASSISTANT) {
-					assistantMessages++;
-
-					if (!messageTypes.includes('assistant response')) messageTypes.push('assistant response');
-				}
-			}
-
-			return { assistantMessages, messageTypes, totalCount: 1, userMessages };
-		}
-
-		const descendants = findDescendantMessages(allMessages, messageId);
-		const allToDelete = [messageId, ...descendants];
-		const messagesToDelete = allMessages.filter((m) => allToDelete.includes(m.id));
-
-		let assistantMessages = 0,
-			userMessages = 0;
-
-		const messageTypes: string[] = [];
-
-		for (const msg of messagesToDelete) {
-			if (msg.role === MessageRole.USER) {
-				userMessages++;
-
-				if (!messageTypes.includes('user message')) messageTypes.push('user message');
-			} else if (msg.role === MessageRole.ASSISTANT) {
-				assistantMessages++;
-
-				if (!messageTypes.includes('assistant response')) messageTypes.push('assistant response');
-			}
-		}
-
-		return { assistantMessages, messageTypes, totalCount: allToDelete.length, userMessages };
-	}
-
-	async deleteMessage(messageId: string): Promise<void> {
-		const activeConv = conversationsStore.activeConversation;
-
-		if (!activeConv) return;
-
-		try {
-			const allMessages = await conversationsStore.getConversationMessages(activeConv.id);
-			const messageToDelete = findMessageById(allMessages, messageId);
-
-			if (!messageToDelete) return;
-
-			const currentPath = filterByLeafNodeId(allMessages, activeConv.currNode || '', false);
-			const isInCurrentPath = currentPath.some((m) => m.id === messageId);
-
-			if (isInCurrentPath && messageToDelete.parent) {
-				const siblings = allMessages.filter(
-					(m) => m.parent === messageToDelete.parent && m.id !== messageId
-				);
-
-				if (siblings.length > 0) {
-					const latestSibling = siblings.reduce((latest, sibling) =>
-						sibling.timestamp > latest.timestamp ? sibling : latest
-					);
-
-					await conversationsStore.updateCurrentNode(findLeafNode(allMessages, latestSibling.id));
-				} else if (messageToDelete.parent) {
-					await conversationsStore.updateCurrentNode(
-						findLeafNode(allMessages, messageToDelete.parent)
-					);
-				}
-			}
-
-			await DatabaseService.deleteMessageCascading(activeConv.id, messageId);
-			await conversationsStore.refreshActiveMessages();
-
-			conversationsStore.updateConversationTimestamp();
-		} catch (error) {
-			console.error('Failed to delete message:', error);
-		}
-	}
-
 	async continueAssistantMessage(messageId: string): Promise<void> {
 		const activeConv = conversationsStore.activeConversation;
 
@@ -511,6 +256,47 @@ export class ChatMessageFlows {
 		}
 	}
 
+	async deleteMessage(messageId: string): Promise<void> {
+		const activeConv = conversationsStore.activeConversation;
+
+		if (!activeConv) return;
+
+		try {
+			const allMessages = await conversationsStore.getConversationMessages(activeConv.id);
+			const messageToDelete = findMessageById(allMessages, messageId);
+
+			if (!messageToDelete) return;
+
+			const currentPath = filterByLeafNodeId(allMessages, activeConv.currNode || '', false);
+			const isInCurrentPath = currentPath.some((m) => m.id === messageId);
+
+			if (isInCurrentPath && messageToDelete.parent) {
+				const siblings = allMessages.filter(
+					(m) => m.parent === messageToDelete.parent && m.id !== messageId
+				);
+
+				if (siblings.length > 0) {
+					const latestSibling = siblings.reduce((latest, sibling) =>
+						sibling.timestamp > latest.timestamp ? sibling : latest
+					);
+
+					await conversationsStore.updateCurrentNode(findLeafNode(allMessages, latestSibling.id));
+				} else if (messageToDelete.parent) {
+					await conversationsStore.updateCurrentNode(
+						findLeafNode(allMessages, messageToDelete.parent)
+					);
+				}
+			}
+
+			await DatabaseService.deleteMessageCascading(activeConv.id, messageId);
+			await conversationsStore.refreshActiveMessages();
+
+			conversationsStore.updateConversationTimestamp();
+		} catch (error) {
+			console.error('Failed to delete message:', error);
+		}
+	}
+
 	async editAssistantMessage(
 		messageId: string,
 		newContent: string,
@@ -553,43 +339,6 @@ export class ChatMessageFlows {
 			await conversationsStore.refreshActiveMessages();
 		} catch (error) {
 			console.error('Failed to edit assistant message:', error);
-		}
-	}
-
-	async editUserMessagePreserveResponses(
-		messageId: string,
-		newContent: string,
-		newExtras?: DatabaseMessageExtra[]
-	): Promise<void> {
-		const activeConv = conversationsStore.activeConversation;
-
-		if (!activeConv) return;
-
-		const result = this.getMessageByIdWithRole(messageId, MessageRole.USER);
-
-		if (!result) return;
-
-		const { index: idx, message: msg } = result;
-
-		try {
-			const updateData: Partial<DatabaseMessage> = { content: newContent };
-
-			if (newExtras !== undefined) updateData.extra = JSON.parse(JSON.stringify(newExtras));
-
-			await DatabaseService.updateMessage(messageId, updateData);
-
-			conversationsStore.updateMessageAtIndex(idx, updateData);
-
-			const allMessages = await conversationsStore.getConversationMessages(activeConv.id);
-			const rootMessage = allMessages.find((m) => m.type === 'root' && m.parent === null);
-
-			if (rootMessage && msg.parent === rootMessage.id && newContent.trim()) {
-				await conversationsStore.applyTitleFromContent(activeConv.id, newContent);
-			}
-
-			conversationsStore.updateConversationTimestamp();
-		} catch (error) {
-			console.error('Failed to edit user message:', error);
 		}
 	}
 
@@ -677,19 +426,255 @@ export class ChatMessageFlows {
 		}
 	}
 
-	private getMessageByIdWithRole(
+	async editUserMessagePreserveResponses(
 		messageId: string,
-		expectedRole?: MessageRole
-	): { message: DatabaseMessage; index: number } | null {
-		const index = conversationsStore.findMessageIndex(messageId);
+		newContent: string,
+		newExtras?: DatabaseMessageExtra[]
+	): Promise<void> {
+		const activeConv = conversationsStore.activeConversation;
 
-		if (index === -1) return null;
+		if (!activeConv) return;
 
-		const message = conversationsStore.activeMessages[index];
+		const result = this.getMessageByIdWithRole(messageId, MessageRole.USER);
 
-		if (expectedRole && message.role !== expectedRole) return null;
+		if (!result) return;
 
-		return { index, message };
+		const { index: idx, message: msg } = result;
+
+		try {
+			const updateData: Partial<DatabaseMessage> = { content: newContent };
+
+			if (newExtras !== undefined) updateData.extra = JSON.parse(JSON.stringify(newExtras));
+
+			await DatabaseService.updateMessage(messageId, updateData);
+
+			conversationsStore.updateMessageAtIndex(idx, updateData);
+
+			const allMessages = await conversationsStore.getConversationMessages(activeConv.id);
+			const rootMessage = allMessages.find((m) => m.type === 'root' && m.parent === null);
+
+			if (rootMessage && msg.parent === rootMessage.id && newContent.trim()) {
+				await conversationsStore.applyTitleFromContent(activeConv.id, newContent);
+			}
+
+			conversationsStore.updateConversationTimestamp();
+		} catch (error) {
+			console.error('Failed to edit user message:', error);
+		}
+	}
+
+	async getDeletionInfo(messageId: string): Promise<{
+		totalCount: number;
+		userMessages: number;
+		assistantMessages: number;
+		messageTypes: string[];
+	}> {
+		const activeConv = conversationsStore.activeConversation;
+
+		if (!activeConv)
+			return { assistantMessages: 0, messageTypes: [], totalCount: 0, userMessages: 0 };
+
+		const allMessages = await conversationsStore.getConversationMessages(activeConv.id);
+		const messageToDelete = findMessageById(allMessages, messageId);
+
+		// For system messages, don't count descendants as they will be preserved (reparented to root)
+		if (messageToDelete?.role === MessageRole.SYSTEM) {
+			const messagesToDelete = allMessages.filter((m) => m.id === messageId);
+
+			let assistantMessages = 0,
+				userMessages = 0;
+
+			const messageTypes: string[] = [];
+
+			for (const msg of messagesToDelete) {
+				if (msg.role === MessageRole.USER) {
+					userMessages++;
+
+					if (!messageTypes.includes('user message')) messageTypes.push('user message');
+				} else if (msg.role === MessageRole.ASSISTANT) {
+					assistantMessages++;
+
+					if (!messageTypes.includes('assistant response')) messageTypes.push('assistant response');
+				}
+			}
+
+			return { assistantMessages, messageTypes, totalCount: 1, userMessages };
+		}
+
+		const descendants = findDescendantMessages(allMessages, messageId);
+		const allToDelete = [messageId, ...descendants];
+		const messagesToDelete = allMessages.filter((m) => allToDelete.includes(m.id));
+
+		let assistantMessages = 0,
+			userMessages = 0;
+
+		const messageTypes: string[] = [];
+
+		for (const msg of messagesToDelete) {
+			if (msg.role === MessageRole.USER) {
+				userMessages++;
+
+				if (!messageTypes.includes('user message')) messageTypes.push('user message');
+			} else if (msg.role === MessageRole.ASSISTANT) {
+				assistantMessages++;
+
+				if (!messageTypes.includes('assistant response')) messageTypes.push('assistant response');
+			}
+		}
+
+		return { assistantMessages, messageTypes, totalCount: allToDelete.length, userMessages };
+	}
+
+	async regenerateMessage(messageId: string): Promise<void> {
+		const activeConv = conversationsStore.activeConversation;
+
+		if (!activeConv || this.host.isChatLoadingInternal(activeConv.id)) return;
+
+		this.host.cancelPreEncode();
+		const result = this.getMessageByIdWithRole(messageId, MessageRole.ASSISTANT);
+
+		if (!result) return;
+
+		const { index: messageIndex } = result;
+
+		try {
+			const messagesToRemove = conversationsStore.activeMessages.slice(messageIndex);
+
+			await DatabaseService.deleteMessageCascading(activeConv.id, messagesToRemove[0].id);
+			conversationsStore.sliceActiveMessages(messageIndex);
+			conversationsStore.updateConversationTimestamp();
+			this.host.setChatLoading(activeConv.id, true);
+			this.host.clearChatStreaming(activeConv.id);
+			const parentMessageId =
+				conversationsStore.activeMessages.length > 0
+					? conversationsStore.activeMessages[conversationsStore.activeMessages.length - 1].id
+					: undefined;
+			const assistantMessage = await this.host.createAssistantMessage(parentMessageId);
+
+			conversationsStore.addMessageToActive(assistantMessage);
+			await this.host.streamChatCompletion(
+				conversationsStore.activeMessages.slice(0, -1),
+				assistantMessage
+			);
+		} catch (error) {
+			if (!isAbortError(error)) console.error('Failed to regenerate message:', error);
+
+			this.host.setChatLoading(activeConv?.id || '', false);
+		}
+	}
+
+	async regenerateMessageWithBranching(messageId: string, modelOverride?: string): Promise<void> {
+		const activeConv = conversationsStore.activeConversation;
+
+		if (!activeConv || this.host.isChatLoadingInternal(activeConv.id)) return;
+
+		this.host.cancelPreEncode();
+		try {
+			const idx = conversationsStore.findMessageIndex(messageId);
+
+			if (idx === -1) return;
+
+			const msg = conversationsStore.activeMessages[idx];
+
+			if (msg.role !== MessageRole.ASSISTANT) return;
+
+			const allMessages = await conversationsStore.getConversationMessages(activeConv.id);
+			const parentMessage = findMessageById(allMessages, msg.parent);
+
+			if (!parentMessage) return;
+
+			this.host.setChatLoading(activeConv.id, true);
+			this.host.clearChatStreaming(activeConv.id);
+			const newAssistantMessage = await DatabaseService.createMessageBranch(
+				{
+					children: [],
+					content: '',
+					convId: msg.convId,
+					model: null,
+					role: msg.role,
+					timestamp: Date.now(),
+					toolCalls: '',
+					type: msg.type
+				},
+				parentMessage.id
+			);
+
+			await conversationsStore.updateCurrentNode(newAssistantMessage.id);
+			conversationsStore.updateConversationTimestamp();
+			await conversationsStore.refreshActiveMessages();
+			const conversationPath = filterByLeafNodeId(
+				allMessages,
+				parentMessage.id,
+				false
+			) as DatabaseMessage[];
+			const modelToUse = modelOverride || msg.model || undefined;
+
+			await this.host.streamChatCompletion(
+				conversationPath,
+				newAssistantMessage,
+				undefined,
+				undefined,
+				modelToUse
+			);
+		} catch (error) {
+			if (!isAbortError(error))
+				console.error('Failed to regenerate message with branching:', error);
+
+			this.host.setChatLoading(activeConv?.id || '', false);
+		}
+	}
+
+	async updateMessage(messageId: string, newContent: string): Promise<void> {
+		const activeConv = conversationsStore.activeConversation;
+
+		if (!activeConv) return;
+
+		if (this.host.isChatLoadingInternal(activeConv.id)) await this.host.stopGeneration();
+
+		const result = this.getMessageByIdWithRole(messageId, MessageRole.USER);
+
+		if (!result) return;
+
+		const { index: messageIndex, message: messageToUpdate } = result;
+		const originalContent = messageToUpdate.content;
+
+		try {
+			const allMessages = await conversationsStore.getConversationMessages(activeConv.id);
+			const rootMessage = allMessages.find((m) => m.type === 'root' && m.parent === null);
+			const isFirstUserMessage = rootMessage && messageToUpdate.parent === rootMessage.id;
+
+			conversationsStore.updateMessageAtIndex(messageIndex, { content: newContent });
+			await DatabaseService.updateMessage(messageId, { content: newContent });
+
+			if (isFirstUserMessage && newContent.trim())
+				await conversationsStore.applyTitleFromContent(activeConv.id, newContent);
+
+			const messagesToRemove = conversationsStore.activeMessages.slice(messageIndex + 1);
+
+			if (messagesToRemove.length > 0)
+				await DatabaseService.deleteMessageCascading(activeConv.id, messagesToRemove[0].id);
+
+			conversationsStore.sliceActiveMessages(messageIndex + 1);
+			conversationsStore.updateConversationTimestamp();
+			this.host.setChatLoading(activeConv.id, true);
+			this.host.clearChatStreaming(activeConv.id);
+			const assistantMessage = await this.host.createAssistantMessage();
+
+			conversationsStore.addMessageToActive(assistantMessage);
+			await conversationsStore.updateCurrentNode(assistantMessage.id);
+			await this.host.streamChatCompletion(
+				conversationsStore.activeMessages.slice(0, -1),
+				assistantMessage,
+				undefined,
+				() => {
+					conversationsStore.updateMessageAtIndex(conversationsStore.findMessageIndex(messageId), {
+						content: originalContent
+					});
+				}
+			);
+		} catch (error) {
+			if (!isAbortError(error)) console.error('Failed to update message:', error);
+		}
 	}
 
 	/**
@@ -790,5 +775,20 @@ export class ChatMessageFlows {
 			console.error('Failed to generate response:', error);
 			this.host.setChatLoading(activeConv.id, false);
 		}
+	}
+
+	private getMessageByIdWithRole(
+		messageId: string,
+		expectedRole?: MessageRole
+	): { message: DatabaseMessage; index: number } | null {
+		const index = conversationsStore.findMessageIndex(messageId);
+
+		if (index === -1) return null;
+
+		const message = conversationsStore.activeMessages[index];
+
+		if (expectedRole && message.role !== expectedRole) return null;
+
+		return { index, message };
 	}
 }

@@ -13,14 +13,47 @@ import { normalizeFloatingPoint } from '$lib/utils';
 
 export class ParameterSyncService {
 	/**
-	 * Round floating-point numbers to avoid JavaScript precision issues.
-	 * E.g., 0.1 + 0.2 = 0.30000000000000004 → 0.3
+	 * Check if a parameter can be synced from server.
 	 *
-	 * @param value - Parameter value to normalize
-	 * @returns Precision-normalized value
+	 * @param key - The parameter key to check
+	 * @returns True if the parameter is in the syncable parameters list
 	 */
-	private static roundFloatingPoint(value: ParameterValue): ParameterValue {
-		return normalizeFloatingPoint(value) as ParameterValue;
+	static canSyncParameter(key: string): boolean {
+		return SYNCABLE_PARAMETERS.some((param) => param.key === key && param.canSync);
+	}
+
+	/**
+	 * Create a diff between current settings and server defaults.
+	 * Shows which parameters differ from server values, useful for debugging
+	 * and for the "Reset to defaults" functionality.
+	 *
+	 * @param currentSettings - Current parameter values in the settings store
+	 * @param serverDefaults - Default values extracted from server props
+	 * @returns Record of parameter diffs with current value, server value, and whether they differ
+	 */
+	static createParameterDiff(
+		currentSettings: ParameterRecord,
+		serverDefaults: ParameterRecord
+	): Record<string, { current: ParameterValue; server: ParameterValue; differs: boolean }> {
+		const diff: Record<
+			string,
+			{ current: ParameterValue; server: ParameterValue; differs: boolean }
+		> = {};
+
+		for (const key of this.getSyncableParameterKeys()) {
+			const currentValue = currentSettings[key];
+			const serverValue = serverDefaults[key];
+
+			if (serverValue !== undefined) {
+				diff[key] = {
+					current: currentValue,
+					differs: currentValue !== serverValue,
+					server: serverValue
+				};
+			}
+		}
+
+		return diff;
 	}
 
 	/**
@@ -60,33 +93,6 @@ export class ParameterSyncService {
 	}
 
 	/**
-	 * Merge server defaults with current user settings.
-	 * User overrides always take priority — only parameters not in `userOverrides`
-	 * set will be updated from server defaults.
-	 *
-	 * @param currentSettings - Current parameter values in the settings store
-	 * @param serverDefaults - Default values extracted from server props
-	 * @param userOverrides - Set of parameter keys explicitly overridden by the user
-	 * @returns Merged parameter record with user overrides preserved
-	 */
-	static mergeWithServerDefaults(
-		currentSettings: ParameterRecord,
-		serverDefaults: ParameterRecord,
-		userOverrides: Set<string> = new Set()
-	): ParameterRecord {
-		const merged = { ...currentSettings };
-
-		for (const [key, serverValue] of Object.entries(serverDefaults)) {
-			// Only update if user hasn't explicitly overridden this parameter
-			if (!userOverrides.has(key)) {
-				merged[key] = this.roundFloatingPoint(serverValue);
-			}
-		}
-
-		return merged;
-	}
-
-	/**
 	 * Get parameter information including source and values.
 	 * Used by SettingsChatParameterSourceIndicator to display the correct badge
 	 * (Custom vs Default) for each parameter in the settings UI.
@@ -117,22 +123,39 @@ export class ParameterSyncService {
 	}
 
 	/**
-	 * Check if a parameter can be synced from server.
-	 *
-	 * @param key - The parameter key to check
-	 * @returns True if the parameter is in the syncable parameters list
-	 */
-	static canSyncParameter(key: string): boolean {
-		return SYNCABLE_PARAMETERS.some((param) => param.key === key && param.canSync);
-	}
-
-	/**
 	 * Get all syncable parameter keys.
 	 *
 	 * @returns Array of parameter keys that can be synced from server
 	 */
 	static getSyncableParameterKeys(): string[] {
 		return SYNCABLE_PARAMETERS.filter((param) => param.canSync).map((param) => param.key);
+	}
+
+	/**
+	 * Merge server defaults with current user settings.
+	 * User overrides always take priority — only parameters not in `userOverrides`
+	 * set will be updated from server defaults.
+	 *
+	 * @param currentSettings - Current parameter values in the settings store
+	 * @param serverDefaults - Default values extracted from server props
+	 * @param userOverrides - Set of parameter keys explicitly overridden by the user
+	 * @returns Merged parameter record with user overrides preserved
+	 */
+	static mergeWithServerDefaults(
+		currentSettings: ParameterRecord,
+		serverDefaults: ParameterRecord,
+		userOverrides: Set<string> = new Set()
+	): ParameterRecord {
+		const merged = { ...currentSettings };
+
+		for (const [key, serverValue] of Object.entries(serverDefaults)) {
+			// Only update if user hasn't explicitly overridden this parameter
+			if (!userOverrides.has(key)) {
+				merged[key] = this.roundFloatingPoint(serverValue);
+			}
+		}
+
+		return merged;
 	}
 
 	/**
@@ -160,36 +183,13 @@ export class ParameterSyncService {
 	}
 
 	/**
-	 * Create a diff between current settings and server defaults.
-	 * Shows which parameters differ from server values, useful for debugging
-	 * and for the "Reset to defaults" functionality.
+	 * Round floating-point numbers to avoid JavaScript precision issues.
+	 * E.g., 0.1 + 0.2 = 0.30000000000000004 → 0.3
 	 *
-	 * @param currentSettings - Current parameter values in the settings store
-	 * @param serverDefaults - Default values extracted from server props
-	 * @returns Record of parameter diffs with current value, server value, and whether they differ
+	 * @param value - Parameter value to normalize
+	 * @returns Precision-normalized value
 	 */
-	static createParameterDiff(
-		currentSettings: ParameterRecord,
-		serverDefaults: ParameterRecord
-	): Record<string, { current: ParameterValue; server: ParameterValue; differs: boolean }> {
-		const diff: Record<
-			string,
-			{ current: ParameterValue; server: ParameterValue; differs: boolean }
-		> = {};
-
-		for (const key of this.getSyncableParameterKeys()) {
-			const currentValue = currentSettings[key];
-			const serverValue = serverDefaults[key];
-
-			if (serverValue !== undefined) {
-				diff[key] = {
-					current: currentValue,
-					differs: currentValue !== serverValue,
-					server: serverValue
-				};
-			}
-		}
-
-		return diff;
+	private static roundFloatingPoint(value: ParameterValue): ParameterValue {
+		return normalizeFloatingPoint(value) as ParameterValue;
 	}
 }
