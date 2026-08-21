@@ -22,13 +22,6 @@
 export { default as ConversationSelection } from './ConversationSelection.svelte';
 
 /**
- * Horizontal scrollable carousel with navigation arrows.
- * Used for displaying items in a horizontally scrollable container
- * with left/right navigation buttons that appear on hover.
- */
-export { default as HorizontalScrollCarousel } from './HorizontalScrollCarousel.svelte';
-
-/**
  * **TruncatedText** - Text with ellipsis and tooltip
  *
  * Displays text with automatic truncation and full content in tooltip.
