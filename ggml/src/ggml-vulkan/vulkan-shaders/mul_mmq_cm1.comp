@@ -94,8 +94,9 @@ shared float16_t buf_b_d[BN];
 #define LOAD_VEC_B 16
 
 #define NUM_WARPS (BLOCK_SIZE / WARP)
+const uint CM_ELEMS = (TM * TN) / WARP;
 
-shared ivec4 coopmat_stage[TM * TN * NUM_WARPS / 4];
+shared int32_t cm_layout_probe[TM * TN];
 
 #include "mul_mm_id_funcs.glsl"
 #include "mul_mmq_cm1_funcs.glsl"
@@ -140,12 +141,27 @@ void main() {
     const uint cms_per_row = WM / TM;
     const uint cms_per_col = WN / TN;
 
-    const uint storestride = WARP / TM;
-    const uint store_r = tiw % TM;
-    const uint store_c = tiw / TM;
-
     const uint warp_r = warp_i % (BM / WM);
     const uint warp_c = warp_i / (BM / WM);
+
+    // Probe coopmat element layout to discover row/col mapping
+    uint elem_row[CM_ELEMS];
+    uint elem_col[CM_ELEMS];
+
+    for (uint i = gl_LocalInvocationID.x; i < TM * TN; i += BLOCK_SIZE) {
+        cm_layout_probe[i] = int32_t(i);
+    }
+    barrier();
+
+    coopmat<int32_t, gl_ScopeSubgroup, TM, TN, gl_MatrixUseAccumulator> probe;
+    coopMatLoad(probe, cm_layout_probe, 0, TN, gl_CooperativeMatrixLayoutRowMajor);
+
+    [[unroll]] for (uint e = 0; e < CM_ELEMS; ++e) {
+        elem_row[e] = uint(probe[e]) / TN;
+        elem_col[e] = uint(probe[e]) % TN;
+    }
+
+    barrier();
 
     const uint loadr_a = gl_LocalInvocationID.x % (BK / LOAD_VEC_A);
     const uint loadc_a = gl_LocalInvocationID.x / (BK / LOAD_VEC_A);
@@ -207,14 +223,10 @@ void main() {
     coopmat<int8_t, gl_ScopeSubgroup, TK, TN, gl_MatrixUseB> cache_b;
     coopmat<int32_t, gl_ScopeSubgroup, TM, TN, gl_MatrixUseAccumulator> cm_result[cms_per_row * cms_per_col];
 
-    const uint accs_per_thread = (WM * WN) / WARP / 4;
-    ACC_TYPE_VEC4 sums[accs_per_thread];
-
-    [[unroll]] for (uint i = 0; i < accs_per_thread; i++) {
-        sums[i] = ACC_TYPE_VEC4(0.0f);
+    ACC_TYPE sums[cms_per_row * cms_per_col * CM_ELEMS];
+    [[unroll]] for (uint i = 0; i < cms_per_row * cms_per_col * CM_ELEMS; i++) {
+        sums[i] = ACC_TYPE(0.0);
     }
-
-    const uint chunks_per_thread_per_tile = (TM * TN) / (WARP * 4);
 
     for (uint block = start_k; block < end_k; block += BK) {
         [[unroll]] for (uint l = 0; loadc_a + l < BM; l += loadstride_a) {
@@ -260,32 +272,14 @@ void main() {
             }
         }
 
-        // Store to shmem
-        const uint subgroup_vec_stride = (TM * TN) / 4;
-        const uint subgroup_offset = warp_i * subgroup_vec_stride;
-
+        // Apply scales directly from coopmat elements
         [[unroll]] for (uint cm_row = 0; cm_row < cms_per_row; cm_row++) {
             [[unroll]] for (uint cm_col = 0; cm_col < cms_per_col; cm_col++) {
                 const uint tile_idx = cm_col * cms_per_row + cm_row;
-                coopMatStore(cm_result[tile_idx], coopmat_stage, subgroup_offset, TM / 4, gl_CooperativeMatrixLayoutColumnMajor);
-
-                controlBarrier(gl_ScopeSubgroup, gl_ScopeSubgroup, gl_StorageSemanticsShared, gl_SemanticsAcquireRelease);
-
-                // Each thread grabs chunks and applies the scales
-                [[unroll]] for (uint chunk = 0; chunk < chunks_per_thread_per_tile; chunk++) {
-                    const uint local_chunk = chunk * WARP + tiw;
-                    const uint col_local = local_chunk / (TM / 4);
-                    const uint row_group = local_chunk % (TM / 4);
-                    const uint row0_local = row_group * 4;
-                    const ivec4 qs = coopmat_stage[subgroup_offset + col_local * (TM / 4) + row_group];
-
-                    const uint a_row0 = warp_r * WM + cm_row * TM + row0_local;
-                    const uint b_col = warp_c * WN + cm_col * TN + col_local;
-
-                    const ACC_TYPE_VEC4 da = ACC_TYPE_VEC4(buf_a_d[a_row0], buf_a_d[a_row0+1], buf_a_d[a_row0+2], buf_a_d[a_row0+3]);
-                    const ACC_TYPE db = ACC_TYPE(buf_b_d[b_col]);
-
-                    sums[tile_idx * chunks_per_thread_per_tile + chunk] += ACC_TYPE_VEC4(qs) * da * db;
+                [[unroll]] for (uint e = 0; e < CM_ELEMS; e++) {
+                    const ACC_TYPE da = ACC_TYPE(buf_a_d[warp_r * WM + cm_row * TM + elem_row[e]]);
+                    const ACC_TYPE db = ACC_TYPE(buf_b_d[warp_c * WN + cm_col * TN + elem_col[e]]);
+                    sums[tile_idx * CM_ELEMS + e] += ACC_TYPE(cm_result[tile_idx][e]) * da * db;
                 }
             }
         }
@@ -296,48 +290,20 @@ void main() {
     const uint dr = ir * BM + warp_r * WM;
     const uint dc = ic * BN + warp_c * WN;
 
-    const bool is_aligned = p.stride_d % 4 == 0;
-
 #ifdef MUL_MAT_ID
     [[unroll]] for (uint cm_row = 0; cm_row < cms_per_row; cm_row++) {
         [[unroll]] for (uint cm_col = 0; cm_col < cms_per_col; cm_col++) {
             const uint tile_idx = cm_col * cms_per_row + cm_row;
-            [[unroll]] for (uint chunk = 0; chunk < chunks_per_thread_per_tile; chunk++) {
-                const uint local_chunk = chunk * WARP + tiw;
-                const uint col_local = local_chunk / (TM / 4);
-                const uint row_group = local_chunk % (TM / 4);
-                const uint row0_local = row_group * 4;
+            [[unroll]] for (uint e = 0; e < CM_ELEMS; e++) {
+                const uint col_i = dc + cm_col * TN + elem_col[e];
+                if (col_i >= _ne1) continue;
 
-                const uint row_i = dc + cm_col * TN + col_local;
+                const uint row_g = dr + cm_row * TM + elem_row[e];
+                if (row_g >= p.M) continue;
 
-                if (row_i >= _ne1) break;
-
-                const uint row0_g = dr + cm_row * TM + row0_local;
-                const u16vec2 row_idx = row_ids[row_i - ic * BN];
-                const uint store_offset = row_idx.y * p.batch_stride_d + row_idx.x * p.stride_d + row0_g;
-                const uint acc_idx = tile_idx * chunks_per_thread_per_tile + chunk;
-
-                if (row0_g + 3 < p.M && is_aligned && (store_offset % 4) == 0) {
-                    data_dv4[store_offset / 4] = D_TYPE_VEC4(sums[acc_idx]);
-                } else if (row0_g + 3 < p.M) {
-                    const ACC_TYPE_VEC4 vals = sums[acc_idx];
-                    data_d[store_offset    ] = D_TYPE(vals.x);
-                    data_d[store_offset + 1] = D_TYPE(vals.y);
-                    data_d[store_offset + 2] = D_TYPE(vals.z);
-                    data_d[store_offset + 3] = D_TYPE(vals.w);
-                } else if (row0_g + 2 < p.M) {
-                    const ACC_TYPE_VEC4 vals = sums[acc_idx];
-                    data_d[store_offset    ] = D_TYPE(vals.x);
-                    data_d[store_offset + 1] = D_TYPE(vals.y);
-                    data_d[store_offset + 2] = D_TYPE(vals.z);
-                } else if (row0_g + 1 < p.M) {
-                    const ACC_TYPE_VEC4 vals = sums[acc_idx];
-                    data_d[store_offset    ] = D_TYPE(vals.x);
-                    data_d[store_offset + 1] = D_TYPE(vals.y);
-                } else if (row0_g < p.M) {
-                    const ACC_TYPE_VEC4 vals = sums[acc_idx];
-                    data_d[store_offset] = D_TYPE(vals.x);
-                }
+                const u16vec2 row_idx = row_ids[col_i - ic * BN];
+                const uint store_offset = row_idx.y * p.batch_stride_d + row_idx.x * p.stride_d + row_g;
+                data_d[store_offset] = D_TYPE(sums[tile_idx * CM_ELEMS + e]);
             }
         }
     }
@@ -347,41 +313,11 @@ void main() {
     [[unroll]] for (uint cm_row = 0; cm_row < cms_per_row; cm_row++) {
         [[unroll]] for (uint cm_col = 0; cm_col < cms_per_col; cm_col++) {
             const uint tile_idx = cm_col * cms_per_row + cm_row;
-            [[unroll]] for (uint chunk = 0; chunk < chunks_per_thread_per_tile; chunk++) {
-                const uint local_chunk = chunk * WARP + tiw;
-                const uint col_local = local_chunk / (TM / 4);
-                const uint row_group = local_chunk % (TM / 4);
-                const uint row0_local = row_group * 4;
-
-                const uint col_g = dc + cm_col * TN + col_local;
-
-                if (col_g >= p.N) break;
-
-                const uint row0_g = dr + cm_row * TM + row0_local;
-
-                const uint store_offset = offsets + col_g * p.stride_d + row0_g;
-                const uint acc_idx = tile_idx * chunks_per_thread_per_tile + chunk;
-
-                if (row0_g + 3 < p.M && is_aligned && (store_offset % 4) == 0) {
-                    data_dv4[store_offset / 4] = D_TYPE_VEC4(sums[acc_idx]);
-                } else if (row0_g + 3 < p.M) {
-                    const ACC_TYPE_VEC4 vals = sums[acc_idx];
-                    data_d[store_offset    ] = D_TYPE(vals.x);
-                    data_d[store_offset + 1] = D_TYPE(vals.y);
-                    data_d[store_offset + 2] = D_TYPE(vals.z);
-                    data_d[store_offset + 3] = D_TYPE(vals.w);
-                } else if (row0_g + 2 < p.M) {
-                    const ACC_TYPE_VEC4 vals = sums[acc_idx];
-                    data_d[store_offset    ] = D_TYPE(vals.x);
-                    data_d[store_offset + 1] = D_TYPE(vals.y);
-                    data_d[store_offset + 2] = D_TYPE(vals.z);
-                } else if (row0_g + 1 < p.M) {
-                    const ACC_TYPE_VEC4 vals = sums[acc_idx];
-                    data_d[store_offset    ] = D_TYPE(vals.x);
-                    data_d[store_offset + 1] = D_TYPE(vals.y);
-                } else if (row0_g < p.M) {
-                    const ACC_TYPE_VEC4 vals = sums[acc_idx];
-                    data_d[store_offset] = D_TYPE(vals.x);
+            [[unroll]] for (uint e = 0; e < CM_ELEMS; e++) {
+                const uint row_g = dr + cm_row * TM + elem_row[e];
+                const uint col_g = dc + cm_col * TN + elem_col[e];
+                if (row_g < p.M && col_g < p.N) {
+                    data_d[offsets + col_g * p.stride_d + row_g] = D_TYPE(sums[tile_idx * CM_ELEMS + e]);
                 }
             }
         }
