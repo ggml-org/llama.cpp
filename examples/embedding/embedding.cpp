@@ -34,7 +34,7 @@ static void batch_add_seq(llama_batch & batch, const std::vector<int32_t> & toke
     }
 }
 
-static void batch_decode(llama_context * ctx, llama_batch & batch, float * output, int n_seq, int n_embd_out, int embd_norm) {
+static void batch_decode(llama_context * ctx, llama_batch & batch, float * output, int n_seq, int n_embd_out, common_embd_norm embd_norm) {
     const enum llama_pooling_type pooling_type = llama_pooling_type(ctx);
 
     // clear previous kv_cache values (irrelevant for embeddings)
@@ -77,14 +77,14 @@ static void print_raw_embeddings(const float * emb,
                                  int n_embd,
                                  const llama_model * model,
                                  enum llama_pooling_type pooling_type,
-                                 int embd_normalize) {
+                                 common_embd_norm embd_normalize) {
     const uint32_t n_cls_out = llama_model_n_cls_out(model);
     const bool is_rank = (pooling_type == LLAMA_POOLING_TYPE_RANK);
     const int cols = is_rank ? std::min<int>(n_embd, (int) n_cls_out) : n_embd;
 
     for (int j = 0; j < n_embd_count; ++j) {
         for (int i = 0; i < cols; ++i) {
-            if (embd_normalize == 0) {
+            if (embd_normalize == COMMON_EMBD_NORM_MAX_ABS) {
                 LOG("%1.0f%s", emb[j * n_embd + i], (i + 1 < cols ? " " : ""));
             } else {
                 LOG("%1.7f%s", emb[j * n_embd + i], (i + 1 < cols ? " " : ""));
@@ -293,7 +293,7 @@ int main(int argc, char ** argv) {
             for (int j = 0; j < n_embd_count; j++) {
                 LOG("embedding %d: ", j);
                 for (int i = 0; i < std::min(3, n_embd_out); i++) {
-                    if (params.embd_normalize == 0) {
+                    if (params.embd_normalize == COMMON_EMBD_NORM_MAX_ABS) {
                         LOG("%6.0f ", emb[j * n_embd_out + i]);
                     } else {
                         LOG("%9.6f ", emb[j * n_embd_out + i]);
@@ -301,7 +301,7 @@ int main(int argc, char ** argv) {
                 }
                 LOG(" ... ");
                 for (int i = n_embd_out - 3; i < n_embd_out; i++) {
-                    if (params.embd_normalize == 0) {
+                    if (params.embd_normalize == COMMON_EMBD_NORM_MAX_ABS) {
                         LOG("%6.0f ", emb[j * n_embd_out + i]);
                     } else {
                         LOG("%9.6f ", emb[j * n_embd_out + i]);
@@ -334,7 +334,7 @@ int main(int argc, char ** argv) {
             for (int j = 0; j < n_prompts; j++) {
                 LOG("embedding %d: ", j);
                 for (int i = 0; i < (n_prompts > 1 ? std::min(16, n_embd_out) : n_embd_out); i++) {
-                    if (params.embd_normalize == 0) {
+                    if (params.embd_normalize == COMMON_EMBD_NORM_MAX_ABS) {
                         LOG("%6.0f ", emb[j * n_embd_out + i]);
                     } else {
                         LOG("%9.6f ", emb[j * n_embd_out + i]);
@@ -371,7 +371,7 @@ int main(int argc, char ** argv) {
             if (notArray) LOG("    {\n      \"object\": \"embedding\",\n      \"index\": %d,\n      \"embedding\": ",j);
             LOG("[");
             for (int i = 0;;) { // at least one iteration (n_embd > 0)
-                LOG(params.embd_normalize == 0 ? "%1.0f" : "%1.7f", emb[j * n_embd_out + i]);
+                LOG(params.embd_normalize == COMMON_EMBD_NORM_MAX_ABS ? "%1.0f" : "%1.7f", emb[j * n_embd_out + i]);
                 i++;
                 if (i < n_embd_out) LOG(","); else break;
             }

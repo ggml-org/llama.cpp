@@ -108,7 +108,7 @@ static void batch_process(llama_context * ctx, llama_batch & batch, float * outp
         }
 
         float * out = output + batch.seq_id[i][0] * n_embd;
-        common_embd_normalize(embd, out, n_embd, 2);
+        common_embd_normalize(embd, out, n_embd, COMMON_EMBD_NORM_EUCLIDEAN);
     }
 }
 
