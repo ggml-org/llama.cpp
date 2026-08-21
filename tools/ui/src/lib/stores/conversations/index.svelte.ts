@@ -10,7 +10,6 @@
 import { browser } from '$app/environment';
 import { goto } from '$app/navigation';
 import { ROUTES } from '$lib/constants';
-import { NEW_CHAT_TAB_ID } from '$lib/constants';
 import { MessageRole } from '$lib/enums';
 import { ConversationTransferService } from '$lib/services/conversation-transfer.service';
 import { DatabaseService } from '$lib/services/database.service';
@@ -107,8 +106,8 @@ class ConversationsStore implements ConversationsPreferencesHost {
 
 	/**
 	 * Deletes multiple conversations in sequence.
-	 * Mirrors deleteConversation() per-id; navigates to NEW_CHAT only if the
-	 * currently-open chat was among the deleted ones.
+	 * Mirrors deleteConversation() per-id; navigates to the new-chat screen only
+	 * if the currently-open chat was among the deleted ones.
 	 * @param convIds - Conversation IDs to delete
 	 */
 	async bulkDeleteConversations(convIds: string[]): Promise<void> {
@@ -590,11 +589,9 @@ class ConversationsStore implements ConversationsPreferencesHost {
 	 * Start a fresh chat by navigating to the bare `#/` new-chat screen. The
 	 * chat layout opens a new-chat tab for it when Conversation tabs are on.
 	 */
-	async openNewChat(): Promise<string> {
+	async openNewChat(): Promise<void> {
 		this.clearActiveConversation();
 		await goto(ROUTES.START);
-
-		return NEW_CHAT_TAB_ID;
 	}
 
 	/**

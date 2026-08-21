@@ -20,10 +20,12 @@ export function initStores(): Promise<void> {
 		permissionsStore.initialize();
 		toolsStore.initialize();
 		void versionStore.initialize();
-		await conversationsStore.initialize();
 
-		// prune persisted tabs against the loaded conversation list
-		tabsStore.init(conversationsStore.conversations.map((c) => c.id));
+		// the full conversation list loads in the background; once it is back,
+		// prune persisted tabs against the conversations that still exist
+		void conversationsStore.initialize().then(() => {
+			tabsStore.init(conversationsStore.conversations.map((c) => c.id));
+		});
 	})();
 
 	return startup;
