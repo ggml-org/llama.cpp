@@ -49,7 +49,7 @@ MTMD_API struct mtmd_helper_bitmap_wrapper mtmd_helper_bitmap_init_from_file(mtm
 // note:
 //   - for now, video input is only supported via C++ helper functions
 //   - audio files will be auto-detected based on magic bytes
-//   - output bitmap will have FNV hash as the ID
+//   - output bitmap will have SHA-256 hash (hex string) as the ID
 // returns nullptr on failure
 // this function is thread-safe
 MTMD_API struct mtmd_helper_bitmap_wrapper mtmd_helper_bitmap_init_from_buf(mtmd_context * ctx, const unsigned char * buf, size_t len, bool placeholder);

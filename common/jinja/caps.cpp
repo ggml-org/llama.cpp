@@ -23,7 +23,7 @@ void caps_apply_preserve_reasoning(jinja::context & ctx, bool enabled) {
     ctx.set_val("preserve_thinking",         mk_val<value_bool>(enabled));
     ctx.set_val("clear_thinking",            mk_val<value_bool>(!enabled));
     ctx.set_val("truncate_history_thinking", mk_val<value_bool>(!enabled));
-    ctx.set_val("drop_thinking",            mk_val<value_bool>(!enabled));
+    ctx.set_val("drop_thinking",             mk_val<value_bool>(!enabled));
 }
 
 void caps_apply_reasoning_effort(jinja::context & ctx, const std::string & effort) {
@@ -117,6 +117,8 @@ caps caps_get(jinja::program & prog) {
 
     JJ_DEBUG("%s\n", ">>> Running capability check: typed content");
 
+    static const std::string content_marker = "STRING_MARKER";
+
     // case: typed content support
     caps_try_execute(
         prog,
@@ -125,21 +127,25 @@ caps caps_get(jinja::program & prog) {
             return json::array({
                 {
                     {"role", "user"},
-                    {"content", "content"}
+                    {"content", content_marker}
                 }
             });
         },
         nullptr, // ctx_fn
         nullptr, // tools_fn
-        [&](context &, bool success, value & messages, value &, const std::string &) {
+        [&](context &, bool success, value & messages, value &, const std::string & rendered) {
             auto & content = messages->at(0)->at("content");
             caps_print_stats(content, "messages[0].content");
-            if (has_op(content, "selectattr") || has_op(content, "array_access")) {
+            bool used_as_array = has_op(content, "selectattr") || has_op(content, "array_access");
+            if (used_as_array) {
                 // accessed as an array
                 result.supports_typed_content = true;
             }
             if (!success) {
                 // failed to execute with content as string
+                result.supports_string_content = false;
+            } else if (used_as_array && rendered.find(content_marker) == std::string::npos) {
+                // edge case: string may be accessed for checking, but does not appear in the output
                 result.supports_string_content = false;
             }
         }

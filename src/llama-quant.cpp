@@ -3,7 +3,6 @@
 #include "llama-model-loader.h"
 #include "llama-ext.h"
 #include "llama-quant.h"
-// #include "llama.h"
 
 #include <algorithm>
 #include <atomic>
@@ -401,7 +400,13 @@ static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type 
             }
         }
     } else if (ftype == LLAMA_FTYPE_MOSTLY_MXFP4_MOE) {
-        if (tensor->ne[2] > 1) {
+        // MLA projection tensors are also 3D, so match expert tensor roles explicitly.
+        const bool is_bailingmoe3_expert = arch == LLM_ARCH_BAILINGMOE3 &&
+            (category == TENSOR_CATEGORY_FFN_UP   ||
+             category == TENSOR_CATEGORY_FFN_GATE ||
+             category == TENSOR_CATEGORY_FFN_DOWN);
+
+        if (tensor->ne[2] > 1 && (arch != LLM_ARCH_BAILINGMOE3 || is_bailingmoe3_expert)) {
             // MoE   tensors -> MXFP4
             new_type = GGML_TYPE_MXFP4;
         } else {
@@ -3194,7 +3199,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
             total_size_org += tensor_size;
             total_size_new += new_size;
 
-            // update the gguf meta data as we go
+            // update the gguf metadata as we go
             gguf_set_tensor_type(ctx_outs[cur_split].get(), metadata[i].name.c_str(), new_type);
             GGML_ASSERT(gguf_get_tensor_size(ctx_outs[cur_split].get(), gguf_find_tensor(ctx_outs[cur_split].get(), metadata[i].name.c_str())) == new_size);
             gguf_set_tensor_data(ctx_outs[cur_split].get(), metadata[i].name.c_str(), new_data);
