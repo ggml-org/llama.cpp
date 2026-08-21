@@ -475,7 +475,7 @@ static std::string detect_gguf_filename(const std::string & repo, const std::str
 
     for (const auto & sibling : j["siblings"]) {
         if (!sibling.contains("rfilename")) { continue; }
-        std::string fname = sibling["rfilename"].get<std::string>();
+        std::string fname = sibling["rfilename"];
         if (fname.size() < 5 || fname.substr(fname.size() - 5) != ".gguf") {
             continue;
         }

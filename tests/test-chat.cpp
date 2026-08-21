@@ -7052,7 +7052,7 @@ static void test_reasoning_budget_message_per_request() {
     if (!llama_params.contains("reasoning_budget_message")) {
         throw std::runtime_error("reasoning_budget_message missing from llama_params (thinking_end_tag may be empty for this template)");
     }
-    std::string got = llama_params["reasoning_budget_message"].get<std::string>();
+    std::string got = llama_params["reasoning_budget_message"];
     if (got != per_request_message) {
         throw std::runtime_error("Expected reasoning_budget_message='" + per_request_message + "', got '" + got + "'");
     }

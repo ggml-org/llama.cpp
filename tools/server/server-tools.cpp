@@ -896,7 +896,7 @@ struct server_tool_read_file : server_tool {
     }
 
     json invoke(json params, server_tool::stream *) const override {
-        std::string path  = params.at("path").get<std::string>();
+        std::string path  = params.at("path");
         int  start_line   = json_value(params, "start_line", 1);
         int  end_line     = json_value(params, "end_line",  -1); // -1 = no limit
         bool append_loc   = json_value(params, "append_loc", false);
@@ -1015,7 +1015,7 @@ struct server_tool_file_glob_search : server_tool {
     json invoke(json params, server_tool::stream *) const override {
         auto io = make_tools_io(params);
 
-        const std::string path = params.at("path").get<std::string>();
+        const std::string path = params.at("path");
 
         std::string base      = io->resolve(path);
         std::string include   = json_value(params, "include", std::string("**"));
@@ -1128,8 +1128,8 @@ struct server_tool_grep_search : server_tool {
     }
 
     json invoke(json params, server_tool::stream *) const override {
-        std::string path        = params.at("path").get<std::string>();
-        std::string pat_str     = params.at("pattern").get<std::string>();
+        std::string path        = params.at("path");
+        std::string pat_str     = params.at("pattern");
         std::string include     = json_value(params, "include", std::string("**"));
         std::string exclude     = json_value(params, "exclude", std::string(""));
         bool        show_lineno = json_value(params, "return_line_numbers", false);
@@ -1271,7 +1271,7 @@ struct server_tool_exec_shell_command : server_tool {
     }
 
     json invoke(json params, server_tool::stream * st) const override {
-        std::string command   = params.at("command").get<std::string>();
+        std::string command   = params.at("command");
         int    timeout        = json_value(params, "timeout",         10);
         size_t max_output     = (size_t) json_value(params, "max_output_size", (int) SERVER_TOOL_EXEC_SHELL_COMMAND_MAX_OUTPUT_SIZE);
 
@@ -1348,8 +1348,8 @@ struct server_tool_write_file : server_tool {
     }
 
     json invoke(json params, server_tool::stream *) const override {
-        std::string path    = params.at("path").get<std::string>();
-        std::string content = params.at("content").get<std::string>();
+        std::string path    = params.at("path");
+        std::string content = params.at("content");
 
         auto io = make_tools_io(params);
         if (!io->write_file(path, content)) {
@@ -1405,7 +1405,7 @@ struct server_tool_edit_file : server_tool {
     }
 
     json invoke(json params, server_tool::stream *) const override {
-        std::string path = params.at("path").get<std::string>();
+        std::string path = params.at("path");
         const json & edits_json = params.at("edits");
 
         if (!edits_json.is_array() || edits_json.empty()) {
@@ -2078,7 +2078,7 @@ void server_tools::setup(const std::vector<std::string> & enabled_tools,
         auto res = std::make_unique<server_tools_res>();
         try {
             json body = json::parse(req.body);
-            std::string tool_name = body.at("tool").get<std::string>();
+            std::string tool_name = body.at("tool");
             json params = body.value("params", json::object());
             bool stream = body.value("stream", false);
 

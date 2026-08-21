@@ -218,7 +218,7 @@ bool cli_context::list_and_ask_models() {
         if (!m.contains("id") || !m.at("id").is_string()) {
             continue;
         }
-        std::string name = m.at("id").get<std::string>();
+        std::string name = m.at("id");
         std::string display = name;
         if (m.contains("aliases") && m.at("aliases").is_array()) {
             std::vector<std::string> aliases;
@@ -387,14 +387,14 @@ bool cli_context::generate_completion(generated_content & content_out, cli_timin
         }
         const auto & delta = choice.at("delta");
         if (delta.contains("reasoning_content") && delta.at("reasoning_content").is_string()) {
-            const std::string text = delta.at("reasoning_content").get<std::string>();
+            const std::string text = delta.at("reasoning_content");
             if (!text.empty()) {
                 content_out.reasoning += text;
                 a.push(ui::ASSISTANT_DISPLAY_MODE_REASONING, text);
             }
         }
         if (delta.contains("content") && delta.at("content").is_string()) {
-            const std::string text = delta.at("content").get<std::string>();
+            const std::string text = delta.at("content");
             if (!text.empty()) {
                 content_out.content += text;
                 a.push(ui::ASSISTANT_DISPLAY_MODE_CONTENT, text);

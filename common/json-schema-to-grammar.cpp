@@ -845,7 +845,7 @@ public:
                 }
             } else if (n.is_object()) {
                 if (n.contains("$ref")) {
-                    std::string ref = n["$ref"].get<std::string>();
+                    std::string ref = n["$ref"];
                     if (_refs.find(ref) == _refs.end()) {
                         json target;
                         if (ref.find("https://") == 0) {
@@ -947,7 +947,7 @@ public:
         }
         if ((schema_type.is_null() || schema_type == "object")
                 && (schema.contains("properties") ||
-                    (schema.contains("additionalProperties") && schema["additionalProperties"] != true))) {
+                    (schema.contains("additionalProperties") && !schema["additionalProperties"].get<bool>()))) {
             std::unordered_set<std::string> required;
             if (schema.contains("required") && schema["required"].is_array()) {
                 for (const auto & item : schema["required"]) {
@@ -1135,7 +1135,7 @@ bool common_schema_info::resolves_to_string(const common_json & schema) {
 
         // Handle $ref
         if (s.contains("$ref")) {
-            const std::string ref = s["$ref"].get<std::string>();
+            const std::string ref = s["$ref"];
             if (visited_refs.find(ref) != visited_refs.end()) {
                 // Circular reference, assume not a string to be safe
                 return false;
@@ -1218,7 +1218,7 @@ bool common_schema_info::resolves_to_string(const common_json & schema) {
 
         // Check format - many formats imply string
         if (s.contains("format")) {
-            const std::string fmt = s["format"].get<std::string>();
+            const std::string fmt = s["format"];
             if (fmt == "date" || fmt == "time" || fmt == "date-time" ||
                 fmt == "uri" || fmt == "email" || fmt == "hostname" ||
                 fmt == "ipv4" || fmt == "ipv6" || fmt == "uuid" ||

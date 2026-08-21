@@ -148,6 +148,10 @@ class common_json {
 
     common_json       & operator[](const std::string & key);
     const common_json & operator[](const std::string & key) const;
+    common_json       & operator[](const char * key)       { return (*this)[std::string(key)]; }
+    const common_json & operator[](const char * key) const { return (*this)[std::string(key)]; }
+    common_json       & operator[](int idx)       { return (*this)[(size_t) idx]; }
+    const common_json & operator[](int idx) const { return (*this)[(size_t) idx]; }
     common_json       & operator[](size_t idx);
     const common_json & operator[](size_t idx) const;
 
@@ -163,6 +167,15 @@ class common_json {
 
     // only for the types instantiated in json.cpp, the rest fails at link time
     template <typename T> T get() const;
+
+    // implicit get<T>() for plain values, so they can be assigned to their C++ type directly
+    // note: kept to this short list on purpose, a wider one makes j["key"] ambiguous
+    operator std::string() const { return get<std::string>(); }
+    operator bool()        const { return get<bool>(); }
+    operator int()         const { return get<int>(); }
+    operator int64_t()     const { return get<int64_t>(); }
+    operator float()       const { return get<float>(); }
+    operator double()      const { return get<double>(); }
 
     template <typename T>
     T value(const std::string & key, T def) const {

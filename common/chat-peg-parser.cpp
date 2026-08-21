@@ -488,7 +488,7 @@ common_peg_parser common_chat_peg_builder::standard_constructed_tools(
             continue;
         }
         const auto &   function = tool_def.at("function");
-        std::string    name     = function.at("name").get<std::string>();
+        std::string    name     = function.at("name");
         ordered_json   params   = function.contains("parameters") ? function.at("parameters") : ordered_json::object();
 
         // Build argument parsers
@@ -565,7 +565,7 @@ common_peg_parser common_chat_peg_builder::python_style_tool_calls(
             continue;
         }
         const auto &   function = tool_def.at("function");
-        std::string    name     = function.at("name").get<std::string>();
+        std::string    name     = function.at("name");
         ordered_json   params   = function.contains("parameters") ? function.at("parameters") : ordered_json::object();
 
         auto args = eps();
@@ -640,7 +640,7 @@ common_peg_parser common_chat_peg_builder::build_json_tools_function_is_key(
             continue;
         }
         const auto &   function = tool_def.at("function");
-        std::string    name     = function.at("name").get<std::string>();
+        std::string    name     = function.at("name");
         ordered_json   params   = function.contains("parameters") ? function.at("parameters") : ordered_json::object();
 
         // Build inner object fields
@@ -726,7 +726,7 @@ common_peg_parser common_chat_peg_builder::build_json_tools_nested_keys(
             continue;
         }
         const auto &   function = tool_def.at("function");
-        std::string    name     = function.at("name").get<std::string>();
+        std::string    name     = function.at("name");
         ordered_json   params   = function.contains("parameters") ? function.at("parameters") : ordered_json::object();
 
         auto nested_name = literal("\"" + nested_name_field + "\"") + space() + literal(":") + space() +
@@ -795,7 +795,7 @@ common_peg_parser common_chat_peg_builder::build_json_tools_flat_keys(
             continue;
         }
         const auto &   function = tool_def.at("function");
-        std::string    name     = function.at("name").get<std::string>();
+        std::string    name     = function.at("name");
         ordered_json   params   = function.contains("parameters") ? function.at("parameters") : ordered_json::object();
 
         auto tool_name_ = name_key_parser + space() + literal(":") + space() +

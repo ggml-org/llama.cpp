@@ -311,7 +311,7 @@ common_peg_parser analyze_tools::build_tool_parser_tag_json(parser_build_context
 
     foreach_function(inputs.tools, [&](const json & tool) {
         const auto & func   = tool.at("function");
-        std::string  name   = func.at("name").get<std::string>();
+        std::string  name   = func.at("name");
         const auto & schema = func.contains("parameters") ? func.at("parameters") : json::object();
 
         // Build call_id parser based on position (if supported)
@@ -384,7 +384,7 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
 
     foreach_function(inputs.tools, [&](const json & tool) {
         const auto &          func       = tool.at("function");
-        std::string           name       = func.at("name").get<std::string>();
+        std::string           name       = func.at("name");
         auto                  params     = func.contains("parameters") ? func.at("parameters") : json::object();
         const auto &          properties = params.contains("properties") ? params.at("properties") : json::object();
 

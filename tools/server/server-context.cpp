@@ -5207,7 +5207,7 @@ void server_routes::init_routes() {
 std::unique_ptr<server_res_generator> server_routes::handle_slots_save(const server_http_req & req, int id_slot) {
     auto res = create_response();
     const json request_data = json::parse(req.body);
-    std::string filename = request_data.at("filename").get<std::string>();
+    std::string filename = request_data.at("filename");
     if (!fs_validate_filename(filename)) {
         res->error(format_error_response("Invalid filename", ERROR_TYPE_INVALID_REQUEST));
         return res;
@@ -5243,7 +5243,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_slots_save(const ser
 std::unique_ptr<server_res_generator> server_routes::handle_slots_restore(const server_http_req & req, int id_slot) {
     auto res = create_response();
     const json request_data = json::parse(req.body);
-    std::string filename = request_data.at("filename").get<std::string>();
+    std::string filename = request_data.at("filename");
     if (!fs_validate_filename(filename)) {
         res->error(format_error_response("Invalid filename", ERROR_TYPE_INVALID_REQUEST));
         return res;
@@ -5332,7 +5332,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_embeddings_impl(cons
 
     bool use_base64 = false;
     if (body.count("encoding_format") != 0) {
-        const std::string format = body.at("encoding_format").get<std::string>();
+        const std::string format = body.at("encoding_format");
         if (format == "base64") {
             use_base64 = true;
         } else if (format != "float") {

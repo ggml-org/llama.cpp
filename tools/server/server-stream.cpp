@@ -510,7 +510,7 @@ server_http_context::handler_t server_stream_make_lookup_handler() {
             if (body.contains("conversation_ids") && body["conversation_ids"].is_array()) {
                 for (const auto & v : body["conversation_ids"]) {
                     if (v.is_string()) {
-                        std::string id = v.get<std::string>();
+                        std::string id = v;
                         if (!id.empty()) {
                             requested.push_back(std::move(id));
                         }

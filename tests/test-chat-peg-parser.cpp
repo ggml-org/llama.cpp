@@ -114,9 +114,9 @@ static json create_tools() {
                         { "default", 5 } } },
                     { "category",
                       { { "type", "string" },
-                        { "enum", { "api", "troubleshooting", "billing", "general" } },
+                        { "enum", json::array({ "api", "troubleshooting", "billing", "general" }) },
                         { "description", "Filter search by specific category." } } } } },
-                { "required", { "query", "category" } },
+                { "required", json::array({ "query", "category" }) },
                 { "additionalProperties", false } } },
             { "strict", true } } }
     };
@@ -400,13 +400,13 @@ static void test_example_qwen3_coder(testing & t) {
         std::vector<common_peg_parser> tool_parsers;
         for (const auto & def : tools) {
             auto        function   = def.at("function");
-            std::string name       = function.at("name").get<std::string>();
+            std::string name       = function.at("name");
             auto        parameters = function.at("parameters");
             auto        properties = parameters.at("properties");
 
             std::set<std::string> required_properties;
             if (function.contains("required")) {
-                required_properties = function.at("required").get<std::vector<std::string>>();
+                required_properties = function.at("required").get<std::set<std::string>>();
             }
 
             std::vector<common_peg_parser> arg_parsers;
