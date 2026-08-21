@@ -25,7 +25,7 @@
 	});
 </script>
 
-<div class={showTabs ? 'md:[--chat-tabs-height:2.5rem]' : ''}>
+<div class={showTabs ? 'md:[--chat-tabs-offset:1.25rem]' : ''}>
 	{#if showTabs}
 		<ChatTabs />
 	{/if}
