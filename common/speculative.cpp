@@ -14,12 +14,11 @@
 
 #include <algorithm>
 #include <cassert>
-#include <chrono>
-#include <cinttypes>
+#include <cmath>
 #include <cstring>
 #include <iomanip>
 #include <map>
-#include <random>
+#include <cinttypes>
 
 #define SPC_DBG(fmt, ...) LOG_DBG("spec %12.*s: " fmt, 12, __func__, __VA_ARGS__)
 #define SPC_TRC(fmt, ...) LOG_TRC("spec %12.*s: " fmt, 12, __func__, __VA_ARGS__)
@@ -927,8 +926,6 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
 
     bool    is_dflash2     = false;
     int32_t selector_top_k = 0;
-    std::vector<std::mt19937> selector_rng;
-    std::vector<bool> selector_reset;
 
     // draft-dspark: the draft carries a Markov head and uses an anchor-first block layout
     const bool is_dspark;
@@ -1007,9 +1004,6 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
             s.reset(common_sampler_init(model_dft, sparams));
         }
 
-        selector_rng.resize(n_seq);
-        selector_reset.assign(n_seq, true);
-
         // offload draft sampling to the backend
         backend_chains.assign(n_seq, nullptr);
         if (this->params.backend_sampling && !is_dflash2) {
@@ -1062,8 +1056,6 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
         if (N <= 0) {
             return;
         }
-
-        selector_reset[seq_id] = true;
 
         const llama_pos pos_max = llama_memory_seq_pos_max(llama_get_memory(params.ctx_dft), seq_id);
         if (pos_max < N - 1) {
@@ -1231,72 +1223,32 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
 
             auto & result = *dp.result;
 
-            if (dp.dists) {
-                dp.dists->clear();
-            }
-
             if (is_dflash2) {
-                GGML_ASSERT(dp.temperature <= 0.0f || dp.dists);
                 const float * lattice = llama_get_embeddings_nextn(ctx_dft);
                 GGML_ASSERT(lattice && "DFlash2 selector produced no lattice");
-
-                if (selector_reset[seq_id]) {
-                    uint32_t seed = dp.seed;
-                    if (seed == LLAMA_DEFAULT_SEED) {
-                        seed = (uint32_t) std::chrono::high_resolution_clock::now().time_since_epoch().count();
-                    }
-                    selector_rng[seq_id].seed(seed ^ 0x85ebca6bU);
-                    selector_reset[seq_id] = false;
-                }
 
                 int32_t predecessor = 0;
                 for (int32_t i = 1; i < n_block_tokens; ++i) {
                     const float * row = lattice + (size_t) (beg + i) * n_embd_dec;
                     const float * scores = row + selector_top_k + (size_t) predecessor * selector_top_k;
 
-                    if (dp.temperature > 0.0f) {
-                        common_speculative_token_dist dist;
-                        dist.ids.resize(selector_top_k);
-                        dist.probs.resize(selector_top_k);
-                        const float max_score = *std::max_element(scores, scores + selector_top_k);
+                    predecessor = (int32_t) std::distance(scores,
+                            std::max_element(scores, scores + selector_top_k));
+                    if (params.p_min > 0.0f) {
+                        // softmax(scores) at the argmax, i.e. 1 / sum(exp(s_k - s_max))
                         float sum = 0.0f;
                         for (int32_t k = 0; k < selector_top_k; ++k) {
-                            dist.ids[k] = (llama_token) row[k];
-                            dist.probs[k] = std::exp((scores[k] - max_score) / dp.temperature);
-                            sum += dist.probs[k];
+                            sum += std::exp(scores[k] - scores[predecessor]);
                         }
-                        for (float & p : dist.probs) {
-                            p /= sum;
-                        }
-                        std::discrete_distribution<int32_t> sample(dist.probs.begin(), dist.probs.end());
-                        predecessor = sample(selector_rng[seq_id]);
-                        if (dist.probs[predecessor] < params.p_min) {
+                        if (1.0f / sum < params.p_min) {
                             break;
                         }
-                        result.push_back(dist.ids[predecessor]);
-                        dp.dists->push_back(std::move(dist));
-                    } else {
-                        predecessor = (int32_t) std::distance(scores,
-                                std::max_element(scores, scores + selector_top_k));
-                        if (params.p_min > 0.0f) {
-                            // softmax(scores) at the argmax, i.e. 1 / sum(exp(s_k - s_max))
-                            float sum = 0.0f;
-                            for (int32_t k = 0; k < selector_top_k; ++k) {
-                                sum += std::exp(scores[k] - scores[predecessor]);
-                            }
-                            if (1.0f / sum < params.p_min) {
-                                break;
-                            }
-                        }
-                        result.push_back((llama_token) row[predecessor]);
                     }
+                    result.push_back((llama_token) row[predecessor]);
                 }
 
                 if (result.size() < (size_t) params.n_min) {
                     result.clear();
-                    if (dp.dists) {
-                        dp.dists->clear();
-                    }
                 }
                 continue;
             }
