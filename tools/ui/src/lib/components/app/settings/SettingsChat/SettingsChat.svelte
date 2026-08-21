@@ -46,7 +46,7 @@
 	let fetchInitiated = false;
 
 	$effect(() => {
-		if (serverStore.isRouterMode && currentSection.fields && !fetchInitiated) {
+		if (serverStore.isRouterMode && currentSection.fields?.length && !fetchInitiated) {
 			fetchInitiated = true;
 
 			void modelsStore
