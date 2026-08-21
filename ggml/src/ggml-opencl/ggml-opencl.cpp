@@ -7393,6 +7393,19 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
                        op->src[0]->type == GGML_TYPE_Q4_K  ||
                        op->src[0]->type == GGML_TYPE_Q5_K  ||
                        op->src[0]->type == GGML_TYPE_Q6_K) {
+                // The E031.41 compiler (usually with A7x) miscompiles the flat K-quant
+                // GEMV kernels (kernel_mul_mv_q*_K_f32_flat) and makes lm_head run much
+                // slower than it should. So, make it fallback to CPU to preserve performance
+                // for this compiler series.
+                static const char * a7x_lmhead_env = getenv("GGML_OPENCL_A7X_LMHEAD_CPU");
+                static const bool   a7x_lmhead_cpu = (a7x_lmhead_env == nullptr || a7x_lmhead_env[0] != '0');
+                if (a7x_lmhead_cpu &&
+                    backend_ctx->adreno_gen == ADRENO_GPU_GEN::A7X &&
+                    (op->src[0]->type == GGML_TYPE_Q4_K || op->src[0]->type == GGML_TYPE_Q5_K ||
+                     op->src[0]->type == GGML_TYPE_Q6_K) &&
+                    op->src[0]->ne[1] >= 32768) {   // vocab-scale weight; no FFN/attn weight is this tall
+                    return false;
+                }
                 return op->src[1]->type == GGML_TYPE_F32 && ggml_is_contiguous(op->src[0]) && ggml_is_contiguous(op->src[1]);
             } else if (op->src[0]->type == GGML_TYPE_Q8_0) {
                 return op->src[1]->type == GGML_TYPE_F32;
