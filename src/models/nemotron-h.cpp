@@ -154,7 +154,7 @@ void llama_model_nemotron_h::load_arch_tensors(llama_model_loader & ml) {
         const int64_t n_head_i       = hparams.n_head(i);
         const int64_t n_embd_k_gqa_i = hparams.n_embd_k_gqa(i);
         const int64_t n_embd_v_gqa_i = hparams.n_embd_v_gqa(i);
-        const int64_t n_ff_exp       = hparams.n_ff_exp ? hparams.n_ff_exp : n_ff / n_expert_used;
+        const int64_t n_ff_exp       = hparams.n_ff_exp(i) ? (int64_t)hparams.n_ff_exp(i) : n_ff / (int64_t)hparams.n_expert_used(i);
         const int64_t n_ff_shexp     = hparams.n_ff_shexp;
 
         // NextN input-fusion tensors

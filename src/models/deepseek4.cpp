@@ -1499,7 +1499,7 @@ llama_model_deepseek4::graph_mtp::graph_mtp(const llama_model & model, const llm
             layer.ffn_gate_exps,
             layer.ffn_down_exps,
             layer.ffn_exp_probs_b,
-            n_expert, hparams.n_expert_used,
+            n_expert, hparams.n_expert_used_impl,
             LLM_FFN_SILU, hparams.expert_weights_norm,
             hparams.expert_weights_scale,
             (llama_expert_gating_func_type) hparams.expert_gating_func,
