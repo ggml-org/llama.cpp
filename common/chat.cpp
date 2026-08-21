@@ -3799,7 +3799,7 @@ static common_chat_params common_chat_templates_apply_legacy(const struct common
     common_chat_params params;
     params.prompt = std::string(buf.data(), res);
     if (!inputs.json_schema.empty()) {
-        params.grammar = json_schema_to_grammar(json::parse(inputs.json_schema));
+        params.grammar = json_schema_to_grammar(common_json::parse(inputs.json_schema));
     } else {
         params.grammar = inputs.grammar;
     }

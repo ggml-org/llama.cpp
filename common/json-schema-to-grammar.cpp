@@ -1227,7 +1227,7 @@ bool common_schema_info::resolves_to_string(const nlohmann::ordered_json & schem
     return check(schema);
 }
 
-std::string json_schema_to_grammar(const json & schema, bool force_gbnf) {
+std::string json_schema_to_grammar(const common_json & schema, bool force_gbnf) {
 #ifdef LLAMA_USE_LLGUIDANCE
     if (!force_gbnf) {
         return "%llguidance {}\nstart: %json " + schema.dump();
@@ -1236,7 +1236,7 @@ std::string json_schema_to_grammar(const json & schema, bool force_gbnf) {
     (void)force_gbnf;
 #endif // LLAMA_USE_LLGUIDANCE
     return build_grammar([&](const common_grammar_builder & callbacks) {
-        auto copy = schema;
+        auto copy = common_json_raw<nlohmann::ordered_json>(schema);
         callbacks.resolve_refs(copy);
         callbacks.add_schema("", copy);
     });

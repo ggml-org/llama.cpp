@@ -1,12 +1,14 @@
 #pragma once
 
+#include "json.h"
+
 #include <nlohmann/json_fwd.hpp>
 
 #include <functional>
 #include <memory>
 #include <string>
 
-std::string json_schema_to_grammar(const nlohmann::ordered_json & schema,
+std::string json_schema_to_grammar(const common_json & schema,
                                    bool force_gbnf = false);
 
 class common_schema_converter;

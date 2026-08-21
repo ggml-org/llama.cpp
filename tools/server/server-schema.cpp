@@ -258,7 +258,7 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
                 try {
                     auto schema                  = json_value(data, "json_schema", json::object());
                     SRV_DBG("JSON schema: %s\n", schema.dump(2).c_str());
-                    std::string grammar_str      = json_schema_to_grammar(schema);
+                    std::string grammar_str      = json_schema_to_grammar(common_json_from_raw(schema));
                     SRV_DBG("Converted grammar: %s\n", grammar_str.c_str());
                     params.sampling.grammar      = {COMMON_GRAMMAR_TYPE_OUTPUT_FORMAT, std::move(grammar_str)};
                 } catch (const std::exception & e) {
