@@ -1,9 +1,9 @@
 <script lang="ts">
 	import ContextGaugeDetailRow from './ContextGaugeDetailRow.svelte';
+	import { gaugePopup } from './gauge-popup.svelte';
 	import { ChevronDown } from '@lucide/svelte';
 	import * as Collapsible from '$lib/components/ui/collapsible';
 	import { STATS_UNITS } from '$lib/constants';
-	import { gaugePopup } from '$lib/stores/context-gauge-popup.svelte';
 
 	interface Props {
 		currentRead: number;

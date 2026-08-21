@@ -13,11 +13,11 @@ export enum ServerRole {
  * Used as the `value` field in the status object from /models endpoint
  */
 export enum ServerModelStatus {
-	UNLOADED = 'unloaded',
-	LOADING = 'loading',
+	FAILED = 'failed',
 	LOADED = 'loaded',
+	LOADING = 'loading',
 	SLEEPING = 'sleeping',
-	FAILED = 'failed'
+	UNLOADED = 'unloaded'
 }
 
 /**
@@ -26,10 +26,10 @@ export enum ServerModelStatus {
  * tools/server/server-models.cpp from the C++ server.
  */
 export enum ServerModelsSseEventType {
-	STATUS_CHANGE = 'status_change',
-	MODEL_STATUS = 'model_status',
-	STATUS_UPDATE = 'status_update',
-	MODELS_RELOAD = 'models_reload',
+	DOWNLOAD_PROGRESS = 'download_progress',
 	MODEL_REMOVE = 'model_remove',
-	DOWNLOAD_PROGRESS = 'download_progress'
+	MODEL_STATUS = 'model_status',
+	MODELS_RELOAD = 'models_reload',
+	STATUS_CHANGE = 'status_change',
+	STATUS_UPDATE = 'status_update'
 }

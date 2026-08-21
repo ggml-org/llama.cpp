@@ -1778,6 +1778,8 @@ void common_threadpools::init(llama_context * ctx, const common_params & params)
     struct ggml_threadpool_params tpp =
             ggml_threadpool_params_from_cpu_params(params.cpuparams);
 
+    // each pool needs to match the respective n_threads exactly
+    // see: https://github.com/ggml-org/llama.cpp/pull/27138#issuecomment-5332307332
     if (!ggml_threadpool_params_match(&tpp, &tpp_batch)) {
         threadpool_batch = ggml_threadpool_new_fn(&tpp_batch);
         if (!threadpool_batch) {

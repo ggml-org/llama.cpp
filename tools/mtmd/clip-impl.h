@@ -858,6 +858,9 @@ static std::ifstream open_ifstream_binary(const std::string & fname) {
 }
 #endif
 
+// in test-mtmd-impl, we include woth common.h and this file, and these functions are duplicated
+// this is a quick fix to avoid compilation errors
+#ifndef DIRECTORY_SEPARATOR
 static std::string string_format(const char * fmt, ...) {
     va_list ap;
     va_list ap2;
@@ -915,6 +918,7 @@ inline bool string_ends_with(std::string_view str, std::string_view suffix) {
     return str.size() >= suffix.size() &&
            str.compare(str.size() - suffix.size(), suffix.size(), suffix) == 0;
 }
+#endif
 
 //
 // gguf utils
