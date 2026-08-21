@@ -11,6 +11,7 @@
 		FAVICON_PATHS,
 		FAVICON_SELECTORS,
 		HEADERS,
+		NEW_CHAT_TAB_ID,
 		ROUTES,
 		SETTINGS_KEYS,
 		TOOLTIP_DELAY_DURATION
@@ -24,7 +25,6 @@
 		deviceStore,
 		mcpStore,
 		modelsStore,
-		NEW_CHAT_TAB_ID,
 		serverStore,
 		settingsStore,
 		tabsStore,

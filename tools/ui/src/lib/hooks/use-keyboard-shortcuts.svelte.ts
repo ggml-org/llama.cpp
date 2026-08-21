@@ -1,6 +1,7 @@
 import { page } from '$app/state';
+import { NEW_CHAT_TAB_ID } from '$lib/constants';
 import { KeyboardKey } from '$lib/enums';
-import { conversationsStore, NEW_CHAT_TAB_ID, settingsStore, tabsStore } from '$lib/stores';
+import { conversationsStore, settingsStore, tabsStore } from '$lib/stores';
 
 interface KeyboardShortcutsCallbacks {
 	activateSearchMode?: () => void;

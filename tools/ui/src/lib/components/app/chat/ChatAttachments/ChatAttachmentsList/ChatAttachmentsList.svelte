@@ -2,9 +2,10 @@
 	import {
 		ChatAttachmentsListItem,
 		DialogChatAttachmentsPreview,
-		DialogMcpResourcePreview
+		DialogMcpResourcePreview,
+		ScrollCarousel
 	} from '$lib/components/app';
-	import { ScrollCarousel } from '$lib/components/ui/scroll-carousel';
+	import { ScrollCarouselVariant } from '$lib/enums';
 	import type { DatabaseMessageExtraMcpResource } from '$lib/types';
 	import { getAttachmentDisplayItems, isMcpPrompt, isMcpResource } from '$lib/utils';
 
@@ -91,7 +92,7 @@
 {#if displayItems.length > 0}
 	<div class={className} {style}>
 		{#if limitToSingleRow}
-			<ScrollCarousel bind:this={carouselRef} variant="center">
+			<ScrollCarousel bind:this={carouselRef} variant={ScrollCarouselVariant.CENTER}>
 				{#each displayItems as item (item.id)}
 					{@render attachmentitem(item)}
 				{/each}
