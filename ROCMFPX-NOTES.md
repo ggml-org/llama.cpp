@@ -13,6 +13,9 @@ Working notes for the `dev` branch. Written 2026-08-21.
 | `feature/rocmfpx-tensors` (2nd) | Vulkan integer-dot (MMVQ/MMQ) paths for ROCmFPx |
 | `pr-27342` | DFlash2 speculative decoding (Jian Chen) |
 
+On top of those, one direct commit: **Vulkan batched-decode fixes for the ROCmFPx
+mat-vec kernels** (2026-08-21). See "Batched decode" below.
+
 Nothing is pushed. `git reset --hard <merge>` undoes any of them.
 
 ## ROCmFPx types
@@ -68,36 +71,95 @@ Built the fork at `68f23f34c` and used it as an oracle:
 FP4 is 12% smaller, ~7% faster at batch 1, ~1.5% worse PPL. The PPL error bars
 overlap, so treat the quality gap as "small but probably real", not precise.
 
-### But FP4 loses under speculative decoding
+### Batched decode — was the FP4 weak spot, fixed 2026-08-21
 
-Same prompt, DFlash2 draft, `--temp 0`:
+FP4 used to *lose badly* under speculative decoding (16.8 t/s vs unsloth's 22.3 at
+n-max 3) even though it accepts about as often (52.7% vs 55.2%, mean accepted len
+2.58 vs 2.65). Verification runs the main model at batch 3-8, and both ROCmFPx
+mat-vec paths were mis-tuned for exactly that range. Two shader fixes:
 
-| | no spec | spec n-max 3 | spec n-max 7 |
+**1. `mul_mat_vecq.comp`: `K_PER_ITER` 8 -> 32 for `ROCMFP4`/`_FAST`.**
+Each MMVQ call handled a quarter of a block and re-decoded *both* UE4M3 scales
+(a byte load plus a shared-LUT lookup each) every time. One whole block per call
+amortises the scales 4x and lets the 8 B dwords load as two `dwordx4` instead of
+two scattered dwords. Needs the matching whole-block `mmvq_dot_product` in
+`mul_mat_vecq_funcs.glsl` and a `K_PER_ITER == 32` branch in the `QUANT_R == 2`
+B-cache load.
+
+**2. `dequant_funcs.glsl`: branch-free, scale-hoisted `dequantize4` for fp6 and fp3.**
+Both were gathering *each weight* through its own bit window with a branch, and
+doing one shared-LUT scale lookup *per weight*. Every caller passes `iqs % 4 == 0`
+(`mul_mat_vec.comp` steps `col` by 8, `copy_from_quant.comp` steps `j` by 4), so
+four codes are exactly three whole bytes (fp6) or twelve bits inside two bytes
+(fp3), and all four share one scale because the halves split at element 16. The
+branch was also stopping the compiler hoisting the decode out of the `NUM_COLS`
+loop, which is why the old cost scaled *linearly* with batch size.
+
+**fp6 mattered for an "FP4" model because the GGUF is mixed.**
+`Qwen3.8-27B-ROCMFPX-MQ-Q4.gguf` is 502 `Q4_0_ROCMFP4` tensors *plus*
+`output.weight` (0.96 GiB, 248320x5120) as `Q6_0_ROCMFPX`. At batch 4 that single
+tensor cost ~22 ms/step, which was the entire unexplained gap after fix 1 landed.
+Check the type mix before blaming the FP4 kernels.
+
+### Kernel level, m=4096 k=14336 (us/run, lower is better)
+
+`test-backend-ops perf`, before -> after the 2026-08-21 fixes:
+
+| type | n=1 | n=4 | n=8 |
 |---|---|---|---|
-| FP4 | **12.56** | 16.2 | 10.9 |
-| unsloth | 11.71 | **20.5** | **14.5** |
+| `q4_0_rocmfp4` | 105 -> 82 | 189 -> 118 | 312 -> **173** |
+| `q4_0_rocmfp4_fast` | 92 -> 80 | 177 -> 118 | 295 -> **174** |
+| `q6_0_rocmfpx` | 551 -> 226 | 1308 -> 307 | 2236 -> **402** |
+| `q3_0_rocmfpx` | 321 -> 275 | 1045 -> 374 | 1942 -> **463** |
+| `q8_0_rocmfpx` (untouched) | 271 | 279 | 309 |
+| `q4_K` (control) | 75-86 | 157-160 | 262-268 |
+| `q6_K` (control) | 211 | 275 | 410 |
+| `mxfp4` (control) | 100 | 160-178 | 277-292 |
 
-Not an acceptance problem — FP4 accepts slightly *more* (49.8% vs 46.7% at n-max 3).
-The cause is batch behaviour: verification runs at batch 3-8, where the FP4 kernels
-lose to the K-quant kernels.
+Dual-scale used to cost 13-18% vs the single-scale `_FAST` layout. After the fix
+the two are within noise of each other (173 vs 174 at n=8), because the second
+scale is now decoded once per block instead of once per 8 weights. fp6 and fp3 no
+longer scale linearly with batch.
 
-### Kernel level, m=4096 k=14336 (GFLOPS)
+### End to end, Qwen3.8-27B ROCMFPX-MQ-Q4
 
-| type | n=1 | n=2 | n=4 |
-|---|---|---|---|
-| `q4_0_rocmfp4` | 382.5 | 562.7 | 887.6 |
-| `q4_0_rocmfp4_fast` | 431.1 | 666.5 | 966.7 |
-| `q8_0_rocmfpx` | 283.4 | 523.3 | 881.9 |
-| `q4_K` | 459.6 | 762.2 | - |
-| `q5_K` | 337.7 | 583.9 | 859.1 |
+`llama-batched-bench -npp 128 -ntg 32`, TG t/s, before -> after:
 
-**Dual-scale costs 13-18%** vs the single-scale `_FAST` layout, at every batch size.
-`q4_K` still beats even `_FAST` at n=1/n=2.
+| B | 1 | 2 | 4 | 8 |
+|---|---|---|---|---|
+| FP4 | 12.6 -> **13.3** | 20.6 -> **24.1** | 30.2 -> **41.0** | 36.3 -> **60.0** |
+| unsloth UD-Q4_K_XL | 11.6 | 21.0 | 34.5 | 44.8 |
+
+DFlash2 spec decoding, prose prompt, `--temp 0`, same Q4_K_M draft:
+
+| | n-max 3 | n-max 7 |
+|---|---|---|
+| FP4 before | 16.8 | 15.2 |
+| FP4 after | **24.6** | **24.5** |
+| unsloth | 22.3 | 18.5 |
+
+FP4 now wins at every batch size. Note that n-max 7 is no longer penalised for
+FP4 — the verification batch got cheap enough that the acceptance loss at 7 is
+paid back. That does *not* hold for the K-quant models, which still prefer 3-4.
+
+`test-backend-ops` 17920/17920 green, and again with `GGML_VK_FORCE_MMVQ=1`.
+Generation output stays coherent.
+
+**Rejected experiment.** Replacing the shared-memory UE4M3 LUT with ~8 VALU ops
+made things *worse* (n=1 105 -> 132 us). The float mat-vec path calls
+`ue4m3_to_fp32` four times per 8 weights, so the LUT was never the problem —
+calling it that often was. The fix is amortisation, not arithmetic.
 
 ### Integer-dot (MMVQ) contribution
 
-MMVQ is **on by default** (`mmvq_mode = 0` -> heuristic, true whenever n > 1). No flag
-needed; `GGML_VK_DISABLE_MMVQ` / `GGML_VK_FORCE_MMVQ` only override.
+MMVQ is **on by default** (`mmvq_mode = 0` -> heuristic). No flag needed;
+`GGML_VK_DISABLE_MMVQ` / `GGML_VK_FORCE_MMVQ` only override. The heuristic returns
+true for n > 1 unconditionally, and on AMD it also returns true at n = 1 for every
+ROCmFPx type once k >= 2048 — so the FP4 tensors in a 27B run take the MMVQ path at
+*every* batch size, including plain single-token generation. That is why the
+`K_PER_ITER` fix above helped batch 1 as well (105 -> 82 us).
+
+Measured before the 2026-08-21 kernel fixes:
 
 | | gain |
 |---|---|
@@ -105,6 +167,9 @@ needed; `GGML_VK_DISABLE_MMVQ` / `GGML_VK_FORCE_MMVQ` only override.
 | batch 8 (synthetic) | +4.6% |
 | real dflash spec workload | +4.3% |
 | pp512 | none |
+
+Re-checked after the fixes, FP4 batched-bench at B=8: 46.2 t/s with MMVQ vs
+45.7 without. Still a win, still small — the fixes moved the cost elsewhere.
 
 MMQ for prefill is **neutral on this device** — a control with stock `q8_0` (which has
 had MMQ upstream forever) behaves identically, because KHR_coopmat matmul already wins
@@ -124,30 +189,50 @@ Acceptance drives everything, and acceptance depends on what is being generated:
 Those are prose workloads, where 7 costs ~40% versus 3-4. The MTP presets in the same
 file already use 3.
 
+That table is for K-quant models and still holds for them. It no longer holds for
+ROCmFPx: after the 2026-08-21 fixes the FP4 27B measures 24.6 t/s at n-max 3 and
+24.5 at n-max 7 on the same prose prompt, i.e. flat. Verification at batch 8 got
+cheap enough to pay for the lower acceptance at 7.
+
 ## TODOs
 
-### Closing the FP4 batched gap (most promising first)
+### Closing the FP4 batched gap — DONE 2026-08-21
 
-1. **Try `Q4_0_ROCMFP4_FAST` instead of dual-scale.** Free 13-18% at kernel level and
-   0.25 bpw smaller. Needs a re-quantized model to confirm end-to-end, and a PPL run
-   to price the quality loss. Cheapest experiment with the largest expected payoff.
-2. **Optimise the dual-scale path.** Two int32 accumulators and two scale multiplies
-   per 32-element block, where K-quants use one. See `mmq_dot_product` /
-   `mmvq_dot_product` under `DATA_A_ROCMFP4` in `mul_mmq_funcs.glsl` /
-   `mul_mat_vecq_funcs.glsl`.
-3. **Check the NUM_COLS > 4 path for FP4.** This is exactly the shape of the IQ3_S
-   register-spill fix already on this branch (`TPB = NUM_COLS <= 4 ? 8 : 16` in
-   `mul_mat_vec_iq3_s.comp`). The perf sweep above returned no data at n=8/16, which
-   is itself worth chasing. Strong candidate for the same class of win.
-4. **Profile which pipeline actually runs at n=4.** Verification batch is neither the
-   n=1 mat-vec regime nor the large-N coopmat prefill regime; possibly neither path
-   is tuned for it.
+Items 1-4 below were the original ranked list. The gap is closed; kept here with
+outcomes so the reasoning is not re-run.
+
+1. ~~Try `Q4_0_ROCMFP4_FAST` instead of dual-scale.~~ **Moot.** The 13-18%
+   dual-scale tax was the per-8-weight scale decode, not the layout. After the
+   `K_PER_ITER` fix the two are within noise (173 vs 174 us at n=8), so `_FAST` no
+   longer buys speed — only the 0.25 bpw. Requantising is now purely a size/quality
+   question.
+2. ~~Optimise the dual-scale path.~~ **Done**, but not the way this item guessed.
+   The two accumulators and two multiplies were never the cost; decoding both UE4M3
+   scales four times per block was.
+3. ~~Check the NUM_COLS > 4 path for FP4.~~ **Not the IQ3_S bug.** No register
+   spilling anywhere in the FP4 mat-vec (`Spilled VGPRs: 0`, 48 VGPRs at every
+   NUM_COLS). The perf sweep "returning no data at n=8" was a stale
+   `test-backend-ops` binary, not a missing case.
+4. ~~Profile which pipeline actually runs at n=4.~~ **MMVQ**, at every batch size
+   including 1 — see the MMVQ section above.
+
+Still open on the perf side:
+
+- fp6/fp3 float mat-vec is fixed but still ~1.5x `q6_K`/`q3_K` at n=1 (226 vs 211,
+  275 vs 109). fp3 in particular still pays a shared-LUT codebook lookup per weight.
+  Low priority: no model here leans on fp3.
+- The same `K_PER_ITER` amortisation probably helps `Q8_0_ROCMFPX` and the upstream
+  `mxfp4` / legacy types, which still decode their scale once per 8 weights. mxfp4
+  at n=8 (277-292 us) is now *slower* than FP4 (173), which is suspicious for a
+  simpler format and worth one experiment. Would be an upstream-able change.
 
 ### Feature gaps in the port
 
 5. `Q3_0_ROCMFPX` / `Q6_0_ROCMFPX` integer-dot paths. fp3 needs a bit-window gather
    that does not fit the current `cache_b` layout; the fork's fp6 int path assumes
-   the broken unpacked layout this tree fixes, so it must be written fresh.
+   the broken unpacked layout this tree fixes, so it must be written fresh. Less
+   urgent than it was — the float path for both is now within ~1.5x of the matching
+   K-quant instead of 5x.
 6. `Q2_0_ROCMFPX` has no Vulkan kernels at all (CPU only).
 7. HIP/CUDA and OpenCL kernels not ported. The HIP sources ship in `ggml/rocmfp4/`
    and `ggml/rocmfpx/` but are not built.
@@ -181,6 +266,27 @@ file already use 3.
   works fine.
 - Upstream renamed `llama-cli`; it is now `llama cli` (subcommand of `llama`).
 - `-md` is not accepted by `llama completion`, only by `llama cli` / `serve`.
+- **`GGML_VK_PERF_LOGGER=1` cannot profile speculative decoding.** With a draft
+  model loaded it aborts on `GGML_ASSERT(ctx->compute_ctx.expired())` in
+  `ggml-vulkan.cpp` after two graphs. `GGML_VK_PERF_LOGGER_CONCURRENT=1` does not
+  help. Use `llama-batched-bench -npl 1,2,4,8` as the stand-in for the verification
+  batch, and `GGML_VK_PIPELINE_STATS=<pipeline name>` for per-shader VGPR /
+  instruction / inverse-throughput counts (needs a run that actually creates that
+  pipeline; names are the `ggml_vk_create_pipeline` strings, e.g.
+  `mul_mat_vec_rocmfp4_q8_1_f32`).
+- **`RADV_DEBUG=shaderstats` prints almost nothing here** because llama.cpp compiles
+  pipelines lazily. `GGML_VK_PIPELINE_STATS` is the tool that works.
+- **`test-backend-ops -p` is a regex over the full `vars()` string**, so
+  `-p "type_a=q4_0_rocmfp4,m=4096"` matches nothing — `type_b=f32` sits in between.
+  Use `-p "type_a=(q4_0_rocmfp4|q4_K),type_b=f32,m=4096,n=8,"`.
+- **The `m=4096 k=14336` perf case is MALL-resident.** The A matrix is ~33 MB against
+  this APU's 32 MB Infinity Cache, so it reports effective bandwidth above the 256
+  GB/s DRAM peak and understates any change that is really about memory. Confirm
+  every kernel win with `llama-batched-bench` on a real model.
+- **A stale `test-backend-ops` binary silently drops types.** `all_types` gained the
+  ROCmFPx entries late; a binary older than `tests/test-backend-ops.cpp` reports
+  "OK" with zero cases for `-p rocmfp`. Check timestamps before believing an empty
+  sweep.
 
 ## Repro commands
 
@@ -191,7 +297,21 @@ GGML_VK_FORCE_MMVQ=1 test-backend-ops -b Vulkan0
 
 # perf, interleaved
 llama-bench -m MODEL -p 512 -n 128 -r 5
-llama-batched-bench -m MODEL -ngl 99 -npp 128 -ntg 64 -npl 1,2,4,8
+llama-batched-bench -m MODEL -ngl 99 -fa on -npp 128 -ntg 32 -npl 1,2,4,8
+
+# per-type mat-vec sweep (run twice, discard the first pass)
+test-backend-ops perf -o MUL_MAT -b Vulkan0 \
+  -p "type_a=(q4_0_rocmfp4|q6_0_rocmfpx|q4_K|q6_K),type_b=f32,"
+
+# per-shader register / instruction counts
+GGML_VK_PIPELINE_STATS=mul_mat_vec_rocmfp4_q8_1_f32 \
+  test-backend-ops perf -o MUL_MAT -b Vulkan0 -p "type_a=q4_0_rocmfp4,"
+
+# tensor type mix of a GGUF (a "FP4" model is usually mixed)
+python3 -c "import sys; sys.path.insert(0,'gguf-py'); from gguf import GGUFReader
+from collections import Counter
+r=GGUFReader('MODEL.gguf'); c=Counter()
+[c.update([t.tensor_type.name]) for t in r.tensors]; print(c)"
 
 # spec decoding + acceptance rate
 llama cli -m MAIN -md DRAFT --spec-type draft-dflash --spec-draft-n-max 3 \
