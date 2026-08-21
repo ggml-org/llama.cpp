@@ -1517,8 +1517,13 @@ static ggml_backend_buffer_t ggml_backend_sycl_host_buffer_type_alloc_buffer(ggm
 }
 
 static size_t ggml_backend_sycl_host_buffer_type_get_max_size(ggml_backend_buffer_type_t buft) {
-    ggml_backend_sycl_device_context * dev_ctx = (ggml_backend_sycl_device_context *) buft->device->context;
-    return dpct::dev_mgr::instance().get_device(dev_ctx->device).get_max_mem_alloc_size();
+
+    if (g_ggml_sycl_enable_host_pinned_mem) {
+        ggml_backend_sycl_device_context * dev_ctx = (ggml_backend_sycl_device_context *) buft->device->context;
+        return dpct::dev_mgr::instance().get_device(dev_ctx->device).get_max_mem_alloc_size();
+    } else {
+        return SIZE_MAX;
+    }
 }
 
 ggml_backend_buffer_type_t ggml_backend_sycl_host_buffer_type() {
