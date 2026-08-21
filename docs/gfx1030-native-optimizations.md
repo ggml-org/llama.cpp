@@ -96,6 +96,12 @@ On the fixed Qwen3.8-27B Q4_0 TP4 MTP workload, a fresh production-tree 5-reques
 
 On the separately measured DFlash2 `n_max=7` workload, the dedicated chain improved pooled warm throughput from `62.3902` to `69.7006 tok/s` (**+11.72%**) and cycle time from `62.880` to `56.285 ms`. A 1,024-token comparison improved `69.8188 -> 79.0672 tok/s`; five-prompt and 20-request persistence runs, prompt-cache replay, fallback cases, and two concurrent slots were exact. The path is independent of target weight quantization, but Q4_0 is the production format validated end to end for both modes.
 
+### Certified Q4_0 M8 rows/block=4 MMVQ
+
+For native gfx1030 TP4 DFlash2 width-eight target verification, the dispatcher automatically uses rows/block=4 for the certified Q4_0 standard-Q8_1, non-routed shapes already covered by the rows2 whitelist. The kernel keeps width eight and the exact per-row K/lane/reduction order while halving the row-block grid. Unsupported shapes, IDs, packed layouts, non-Q4_0 types, non-native devices, and `GGML_HIP_GFX1030_MMVQ_W8_ROWS4=0` all fall back to the retained rows2/stock paths; `GGML_HIP_RDNA2_AUTO=0` disables it globally.
+
+All eight certified Q4_0 shapes were direct byte-exact. Production-equivalent DFlash2 safety checks covered 1,024-token output, five varied prompts, prompt-cache transitions, graph on/off, semantic fallback requests, and two concurrent slots. Same-work ABBA improved `69.7819 -> 70.8576 tok/s` (`+1.5414%`); this narrow path is retained as a safe incremental optimization, not as a >=5% material gain. Resource census is `128 VGPR / 128 SGPR`, one wave, no LDS/scratch.
+
 ## Secondary fusions
 
 ### Graph-scoped standard Q8_1 reuse

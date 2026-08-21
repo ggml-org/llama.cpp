@@ -350,6 +350,12 @@ the measured tradeoff on this system.
 - The implementation remains experimental and opt-in. Generic butterfly is a
   correct slower fallback when RCCL does not service a reduction.
 
+## Q4_0 M8 rows/block=4 MMVQ path
+
+The native gfx1030 profile automatically selects a certified Q4_0 width-eight MMVQ kernel that computes four output rows per one wave/block for the validated DFlash2 target shapes. It is restricted structurally to standard Q8_1 activations, `ncols_dst=8`, no IDs, Q4_0 weights, and the existing certified `(K,N)` whitelist; all misses retain the rows2 or stock fallback. `GGML_HIP_GFX1030_MMVQ_W8_ROWS4=0` disables it, and `GGML_HIP_RDNA2_AUTO=0` disables the native profile globally.
+
+The path preserves the per-row K/lane/reduction order. Direct comparisons across all eight certified Q4_0 shapes and integrated DFlash2 long, varied-prompt, cache, graph, fallback, and concurrent-slot checks were exact. Rows4 uses `128 VGPR / 128 SGPR` versus rows2 `64 VGPR / 128 SGPR` with one wave and no LDS/scratch. On the locked Qwen3.8-27B DFlash2 workload, same-work A/B/B/A measured `69.7819 -> 70.8576 tok/s` (`+1.5414%`); a post-promotion warm rebaseline was `71.2881 tok/s` with exact `c72eda38...` / `5bf3fc32...` hashes and `437/191` counts. This is an incremental safe win, not a claimed >=5% material optimization.
+
 ## Notes and caveats
 
 - Results are specific to four V620 cards, this PCIe topology, ROCm version,

@@ -450,6 +450,12 @@ statistics ngram_map_k: #calls(b,g,a) = 6 1690 26, #gen drafts = 26, #acc drafts
 - `#acc tokens`: number of tokens accepted by the main model
 - `dur(b,g,a): durations of begin (new prompt), generation and accumulation (process acceptance).
 
+### Native DFlash2 Q4_0 rows/block=4
+
+The native gfx1030 dispatcher automatically selects the exact Q4_0 M8 rows/block=4 kernel only for the certified standard-Q8_1, non-routed width-eight target shapes. It preserves rows2 arithmetic order and falls back for every unsupported shape or semantic path. Set `GGML_HIP_GFX1030_MMVQ_W8_ROWS4=0` to retain rows2, or `GGML_HIP_RDNA2_AUTO=0` to disable the native profile.
+
+The validated detached and post-promotion runs preserved output/token hashes, draft/accepted counts, prompt-cache behavior, graph-disabled behavior, fallback semantics, and concurrent slots. The locked DFlash2 A/B/B/A was `69.7819 -> 70.8576 tok/s` (`+1.5414%`). This is retained as a small safe incremental gain; it is not presented as a material >=5% optimization.
+
 ## Benchmarking
 
 To measure the end-to-end effect of speculative decoding (throughput, latency, and draft acceptance) across diverse prompts, see the SPEED-Bench client in [tools/server/bench/speed-bench](../tools/server/bench/speed-bench/README.md).
