@@ -2447,9 +2447,10 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
 #ifdef ASCEND_310P
                         // Q4 && Q8 per group is not support on 310p device
                         return false;
-#endif
+#else
                         // only support contiguous for quantized types.
                         return ggml_is_contiguous(op->src[0]) && ggml_is_contiguous(op->src[1]);
+#endif
                     default:
                         return false;
                 }
@@ -2464,9 +2465,10 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
 #ifdef ASCEND_310P
                     // Q4 && Q8 per group is not support on 310p device
                     return false;
-#endif
+#else
                     // only support contiguous for quantized types.
                     return ggml_is_contiguous(op->src[0]) && ggml_is_contiguous(op->src[1]);
+#endif
                 default:
                     return false;
             }
@@ -2633,7 +2635,7 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
 #ifdef ASCEND_310P
                 // Ger is not supported on 310p device
                 return false;
-#endif
+#else
                 switch (op->src[0]->type) {
                     case GGML_TYPE_F16:
                     case GGML_TYPE_F32:
@@ -2641,6 +2643,7 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
                     default:
                         return false;
                 }
+#endif
             }
         case GGML_OP_CONV_TRANSPOSE_1D:
             return true;
@@ -2659,7 +2662,7 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
 #ifdef ASCEND_310P
                 // FA not support on 310p device
                 return false;
-#endif
+#else
                 // derived from [ggml-cuda.cu]
                 if (op->src[1]->type != GGML_TYPE_F16 || op->src[2]->type != GGML_TYPE_F16) {
                     return false;
@@ -2685,6 +2688,7 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
                     return false;
                 }
                 return true;
+#endif
             }
         case GGML_OP_SSM_CONV:
             return true;
