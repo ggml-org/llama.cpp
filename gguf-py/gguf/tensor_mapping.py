@@ -723,6 +723,7 @@ class TensorNameMap:
             "model.layers.layers.{bid}.mixer.k",                              # plamo2
             "model.layers.layers.{bid}.mixer.k_norm",                         # plamo3
             "layers.{bid}.self_attn.k_norm",                                  # qwen3-embedding
+            "model.layers.{bid}.self_attn.k_rope_only_layernorm",             # dots3note
             "model.layers.{bid}.attention.key_layernorm",                     # apertus
         ),
 

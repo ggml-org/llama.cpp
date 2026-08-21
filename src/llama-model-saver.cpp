@@ -31,6 +31,7 @@ bool llama_model_saver_supports_arch(llm_arch arch) {
         case LLM_ARCH_MELLUM:
         case LLM_ARCH_LAGUNA:
         case LLM_ARCH_GRANITE_SWA:
+        case LLM_ARCH_DOTS3NOTE: // TODO: need to handle SWA pattern and MLA+SWA config
             return false;
         default:
             return true;
