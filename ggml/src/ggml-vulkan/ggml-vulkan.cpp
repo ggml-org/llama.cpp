@@ -8109,25 +8109,15 @@ static vk_matmul_pipeline ggml_vk_get_mul_mat_mat_id_pipeline(ggml_backend_vk_co
         case GGML_TYPE_MXFP4:
         case GGML_TYPE_NVFP4:
         case GGML_TYPE_TQ2_0:
-            if (src1_type == GGML_TYPE_F16 && !ctx->device->coopmat2) {
-                // Use the dedicated f16 B pipeline
-                vk_matmul_pipeline2& mmp_f16b = ctx->device->pipeline_dequant_mul_mat_mat_id_f16b[src0_type];
-                bool prefer_fp16acc = ctx->device->fp16;
-                bool support_fp16acc = !mmp_f16b.f16acc->is_empty();
-                bool support_fp32acc = !mmp_f16b.f32acc->is_empty();
-                if (support_fp16acc && (prefer_fp16acc || !support_fp32acc)) {
-                    return mmp_f16b.f16acc;
-                } else if (support_fp32acc) {
-                    return mmp_f16b.f32acc;
-                }
-                return nullptr;
-            }
             break;
         default:
             return nullptr;
     }
 
-    vk_matmul_pipeline2& mmp = ctx->device->pipeline_dequant_mul_mat_mat_id[src0_type];
+    // Use the dedicated f16 B pipeline when B is f16 for coopmat1.
+    vk_matmul_pipeline2& mmp = (src1_type == GGML_TYPE_F16 && !ctx->device->coopmat2) ?
+        ctx->device->pipeline_dequant_mul_mat_mat_id_f16b[src0_type] :
+        ctx->device->pipeline_dequant_mul_mat_mat_id[src0_type];
     // XXX TODO 'prec' is not actually allowed in mul_mat_id.
     bool prefer_fp16acc = ctx->device->fp16 /*&& prec == GGML_PREC_DEFAULT*/;
     bool support_fp16acc = !mmp.f16acc->is_empty();
