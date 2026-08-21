@@ -2664,11 +2664,8 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_MAINCODER:
         case LLM_ARCH_GLM_DSA:
         case LLM_ARCH_NANBEIGE:
-<<<<<<< HEAD
         case LLM_ARCH_POCKETTTS:
-=======
         case LLM_ARCH_INSTELLA_MOE:
->>>>>>> edfc7992d (Add new InstellaMoEForCausalLM arch)
             return LLAMA_ROPE_TYPE_NORM;
 
         // the pairs of head values are offset by n_rot/2

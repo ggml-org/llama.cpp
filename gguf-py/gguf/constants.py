@@ -598,12 +598,9 @@ class MODEL_ARCH(IntEnum):
     TALKIE           = auto()
     MELLUM           = auto()
     NANBEIGE         = auto()
-<<<<<<< HEAD
     QWEN3TTS         = auto()
     POCKETTTS        = auto()
-=======
     INSTELLA_MOE     = auto()
->>>>>>> edfc7992d (Add new InstellaMoEForCausalLM arch)
 
 
 class VISION_PROJECTOR_TYPE(IntEnum):
@@ -1320,12 +1317,9 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.TALKIE:           "talkie",
     MODEL_ARCH.MELLUM:           "mellum",
     MODEL_ARCH.NANBEIGE:         "nanbeige",
-<<<<<<< HEAD
     MODEL_ARCH.QWEN3TTS:         "qwen3tts",
     MODEL_ARCH.POCKETTTS:        "pockettts",
-=======
     MODEL_ARCH.INSTELLA_MOE:     "instella-moe",
->>>>>>> edfc7992d (Add new InstellaMoEForCausalLM arch)
 }
 
 VISION_PROJECTOR_TYPE_NAMES: dict[VISION_PROJECTOR_TYPE, str] = {
@@ -5167,34 +5161,21 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_DOWN,
         MODEL_TENSOR.FFN_UP,
     ],
-<<<<<<< HEAD
     MODEL_ARCH.QWEN3TTS: [
-=======
-    MODEL_ARCH.INSTELLA_MOE: [
->>>>>>> edfc7992d (Add new InstellaMoEForCausalLM arch)
         MODEL_TENSOR.TOKEN_EMBD,
         MODEL_TENSOR.OUTPUT_NORM,
         MODEL_TENSOR.OUTPUT,
         MODEL_TENSOR.ATTN_NORM,
         MODEL_TENSOR.ATTN_Q,
-<<<<<<< HEAD
         MODEL_TENSOR.ATTN_Q_NORM,
         MODEL_TENSOR.ATTN_K,
         MODEL_TENSOR.ATTN_K_NORM,
         MODEL_TENSOR.ATTN_V,
-=======
-        MODEL_TENSOR.ATTN_KV_A_MQA,
-        MODEL_TENSOR.ATTN_KV_A_NORM,
-        MODEL_TENSOR.ATTN_K_B,
-        MODEL_TENSOR.ATTN_V_B,
-        MODEL_TENSOR.ATTN_GATE,
->>>>>>> edfc7992d (Add new InstellaMoEForCausalLM arch)
         MODEL_TENSOR.ATTN_OUT,
         MODEL_TENSOR.FFN_NORM,
         MODEL_TENSOR.FFN_GATE,
         MODEL_TENSOR.FFN_DOWN,
         MODEL_TENSOR.FFN_UP,
-<<<<<<< HEAD
     ],
     MODEL_ARCH.POCKETTTS: [
         MODEL_TENSOR.TOKEN_EMBD,
@@ -5207,7 +5188,23 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_NORM,
         MODEL_TENSOR.FFN_DOWN,
         MODEL_TENSOR.FFN_UP,
-=======
+    ],
+    MODEL_ARCH.INSTELLA_MOE: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_KV_A_MQA,
+        MODEL_TENSOR.ATTN_KV_A_NORM,
+        MODEL_TENSOR.ATTN_K_B,
+        MODEL_TENSOR.ATTN_V_B,
+        MODEL_TENSOR.ATTN_GATE,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
         MODEL_TENSOR.FFN_GATE_INP,
         MODEL_TENSOR.FFN_EXP_PROBS_B,
         MODEL_TENSOR.FFN_GATE_EXP,
@@ -5216,7 +5213,6 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_GATE_SHEXP,
         MODEL_TENSOR.FFN_DOWN_SHEXP,
         MODEL_TENSOR.FFN_UP_SHEXP,
->>>>>>> edfc7992d (Add new InstellaMoEForCausalLM arch)
     ],
 }
 

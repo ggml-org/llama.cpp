@@ -154,13 +154,10 @@ enum llm_arch {
     LLM_ARCH_MINIMAX_M3,
     LLM_ARCH_DFLASH,
     LLM_ARCH_NANBEIGE,
-<<<<<<< HEAD
     LLM_ARCH_QWEN3TTS,
     LLM_ARCH_POCKETTTS,
     LLM_ARCH_MINIMAX_01,
-=======
     LLM_ARCH_INSTELLA_MOE,
->>>>>>> edfc7992d (Add new InstellaMoEForCausalLM arch)
     LLM_ARCH_UNKNOWN,
 };
 
