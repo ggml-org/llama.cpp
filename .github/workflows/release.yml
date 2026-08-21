@@ -1688,6 +1688,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: ${{ steps.tag.outputs.name }}
+          prerelease: true
           body: |
             <details open>
 

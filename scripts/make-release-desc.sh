@@ -52,10 +52,10 @@ PREV="$( { git tag --list; echo "${VERSION}"; } \
 
 if [[ -n "${PREV}" ]]; then
     CHANGELOG="$(git log --oneline "${PREV}..${RELEASE_COMMIT}")"
-    CHANGELOG_TITLE="Change log since ${PREV}"
+    CHANGELOG_TITLE="Changelog since ${PREV}"
 else
     CHANGELOG="(no previous release tag found)"
-    CHANGELOG_TITLE="Change log"
+    CHANGELOG_TITLE="Changelog"
 fi
 
 # Nightly release: the b* tag pointing at the release commit (|| true: no match is not an error)
