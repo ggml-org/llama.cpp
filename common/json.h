@@ -2,6 +2,7 @@
 
 // JSON object, it works without the need to include a JSON library header
 // the underlay library is pimpl, it should never be exposed here
+// the backing value lives inside this object, so at() and the iterators give a real reference to it
 // note: object keys keep the order in which they are added
 
 #include <cstddef>
@@ -12,19 +13,12 @@
 #include <string>
 #include <type_traits>
 #include <utility>
+#include <vector>
 
 class common_json;
-class common_json_ref;
 
 // common_json_value holds a list of these, and each of them holds a value, so one must come first
 struct common_json_item;
-
-// one value of the backing library, only json.cpp knows what it is
-struct common_json_node;
-
-struct common_json_node_deleter {
-    void operator()(common_json_node * node) const;
-};
 
 struct common_json_error : std::runtime_error {
     using std::runtime_error::runtime_error;
@@ -59,7 +53,7 @@ struct common_json_value {
     common_json_value(std::string val) : type(VAL_STRING), val_string(std::move(val)) {}
     common_json_value(const char * val);
     common_json_value(const common_json & val);
-    common_json_value(const common_json_ref & val);
+    common_json_value(const std::vector<std::string> & vals);
 
     // nested object, e.g. {"fn", {{"name", "x"}}}
     common_json_value(std::initializer_list<common_json_item> items);
@@ -90,15 +84,31 @@ struct common_json_item {
         key(std::move(key)), val(items) {}
 };
 
-// view to a value owned by a common_json, it goes stale if the owner gets a new key
-class common_json_ref {
+class common_json {
   public:
-    explicit common_json_ref(common_json_node * node) : node(node) {}
+    common_json();
+    common_json(const common_json & other);
+    common_json(common_json && other) noexcept;
+    common_json(std::initializer_list<common_json_item> items);
+    common_json(const common_json_value & val);
 
-    common_json_ref(const common_json_ref &) = default;
+    // direct, a value would need two conversions in a row
+    common_json(std::nullptr_t);
 
-    // rebinding a view is almost always a write-through by mistake, use assign() to write
-    common_json_ref & operator=(const common_json_ref &) = delete;
+    common_json & operator=(const common_json & other);
+    common_json & operator=(common_json && other) noexcept;
+
+    ~common_json();
+
+    // throws common_json_error if the text is not valid JSON
+    static common_json parse(const std::string & text);
+
+    static common_json array();
+    static common_json array(std::initializer_list<common_json_value> vals);
+    static common_json object();
+
+    // holds a single value, e.g. make("abc").dump() gives "\"abc\""
+    static common_json make(const common_json_value & val);
 
     bool is_null()    const;
     bool is_object()  const;
@@ -118,9 +128,23 @@ class common_json_ref {
     bool operator!=(const common_json_value & val) const;
 
     // at() throws if the key is missing, operator[] adds a null value instead
-    common_json_ref at(const std::string & key) const;
-    common_json_ref operator[](const std::string & key) const;
-    common_json_ref operator[](size_t idx) const;
+    common_json       & at(const std::string & key);
+    const common_json & at(const std::string & key) const;
+    common_json       & at(size_t idx);
+    const common_json & at(size_t idx) const;
+
+    common_json       & operator[](const std::string & key);
+    const common_json & operator[](const std::string & key) const;
+    common_json       & operator[](size_t idx);
+    const common_json & operator[](size_t idx) const;
+
+    common_json       & front();
+    const common_json & front() const;
+    common_json       & back();
+    const common_json & back()  const;
+
+    void erase(const std::string & key);
+    void erase(size_t idx);
 
     // only for the types instantiated in json.cpp, the rest fails at link time
     template <typename T> T get() const;
@@ -138,21 +162,26 @@ class common_json_ref {
     void set(const common_json_item & item);
     void push_back(const common_json_value & val);
 
-    template <typename T>
-    common_json_ref & operator=(T && val) {
+    // a common_json goes through the copy assignment above, everything else becomes a value
+    template <typename T, typename std::enable_if<!std::is_same<typename std::decay<T>::type, common_json>::value, int>::type = 0>
+    common_json & operator=(T && val) {
         assign(common_json_value(std::forward<T>(val)));
         return *this;
     }
 
     std::string dump(int indent = -1) const;
 
+    // same as dump(), but bad UTF-8 gets replaced instead of throwing
+    std::string dump_safe(int indent = -1) const;
+
     // walks an array by index, or an object in insertion order
     class iterator {
       public:
-        iterator(common_json_node * node, size_t idx) : node(node), idx(idx) {}
+        iterator(common_json * node, size_t idx) : node(node), idx(idx) {}
 
-        common_json_ref operator*() const;
-        std::string     key()       const;
+        common_json & operator*() const;
+        common_json & value()     const { return **this; }
+        std::string   key()       const;
 
         iterator & operator++() {
             idx++;
@@ -163,23 +192,32 @@ class common_json_ref {
         bool operator==(const iterator & other) const { return idx == other.idx; }
 
       private:
-        common_json_node * node;
-        size_t             idx;
+        common_json * node;
+        size_t        idx;
     };
 
-    iterator begin() const { return iterator(node, 0); }
-    iterator end()   const { return iterator(node, size()); }
+    iterator begin() const;
+    iterator end()   const;
 
     // allows: for (const auto & [key, val] : obj.items())
     class items_view {
       public:
-        items_view(common_json_node * node, size_t n) : node(node), n(n) {}
+        // the members are public, so an entry also works with structured bindings
+        struct entry {
+            std::string   k;
+            common_json & v;
+
+            const std::string & key()   const { return k; }
+            common_json &       value() const { return v; }
+        };
+
+        items_view(common_json * node, size_t n) : node(node), n(n) {}
 
         class iterator {
           public:
-            iterator(common_json_node * node, size_t idx) : node(node), idx(idx) {}
+            iterator(common_json * node, size_t idx) : node(node), idx(idx) {}
 
-            std::pair<std::string, common_json_ref> operator*() const;
+            entry operator*() const;
 
             iterator & operator++() {
                 idx++;
@@ -189,62 +227,35 @@ class common_json_ref {
             bool operator!=(const iterator & other) const { return idx != other.idx; }
 
           private:
-            common_json_node * node;
-            size_t             idx;
+            common_json * node;
+            size_t        idx;
         };
 
         iterator begin() const { return iterator(node, 0); }
         iterator end()   const { return iterator(node, n); }
 
       private:
-        common_json_node * node;
-        size_t             n;
+        common_json * node;
+        size_t        n;
     };
 
-    items_view items() const { return items_view(node, size()); }
-
-    common_json_node * get_node() const { return node; }
-
-  protected:
-    common_json_node * node;
-};
-
-// owns the value it points to
-class common_json : public common_json_ref {
-  public:
-    common_json();
-    common_json(std::initializer_list<common_json_item> items);
-    common_json(const common_json & other);
-    common_json(common_json && other) noexcept;
-
-    common_json & operator=(const common_json & other);
-    common_json & operator=(common_json && other) noexcept;
-
-    // out-of-line, the deleter needs to know the real type
-    ~common_json();
-
-    // throws common_json_error if the text is not valid JSON
-    static common_json parse(const std::string & text);
-
-    static common_json array();
-    static common_json array(std::initializer_list<common_json_value> vals);
-    static common_json object();
-
-    // holds a single value, e.g. make("abc").dump() gives "\"abc\""
-    static common_json make(const common_json_value & val);
+    items_view items() const;
 
   private:
-    std::unique_ptr<common_json_node, common_json_node_deleter> pimpl;
+    // the backing value is built here, json.cpp checks that it fits
+    alignas(8) unsigned char storage[32];
 };
+
+using common_json_entry = common_json::items_view::entry;
 
 // bridge for code that still uses internal component from nlohmann::json
 // usage: common_json_raw<nlohmann::ordered_json>(j)
 // TODO: maybe completely remove this in the future
 
-template <typename T> T       & common_json_raw(common_json_ref & json);
-template <typename T> const T & common_json_raw(const common_json_ref & json);
+template <typename T> T       & common_json_raw(common_json & json);
+template <typename T> const T & common_json_raw(const common_json & json);
 
 template <typename T> common_json common_json_from_raw(const T & json);
 
 // view over a value of the backing library, it does not copy
-template <typename T> common_json_ref common_json_ref_from_raw(T & json);
+template <typename T> common_json & common_json_ref_from_raw(T & json);

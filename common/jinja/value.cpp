@@ -1355,7 +1355,7 @@ const func_builtins & value_undefined_t::get_builtins() const {
 //////////////////////////////////
 
 
-static value from_json(const common_json_ref & j, bool mark_input) {
+static value from_json(const common_json & j, bool mark_input) {
     if (j.is_null()) {
         return mk_val<value_none>();
     } else if (j.is_boolean()) {
@@ -1462,8 +1462,7 @@ void global_from_json(context & ctx, const T_JSON & json_obj, bool mark_input) {
     }
 }
 
-template void global_from_json<common_json>    (context &, const common_json &,     bool);
-template void global_from_json<common_json_ref>(context &, const common_json_ref &, bool);
+template void global_from_json<common_json>(context &, const common_json &, bool);
 
 // recursively convert value to JSON string
 // TODO: avoid circular references

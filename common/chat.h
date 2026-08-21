@@ -17,7 +17,6 @@
 #include <vector>
 
 using chat_template_caps = jinja::caps;
-using json = nlohmann::ordered_json;
 
 struct common_chat_templates;
 

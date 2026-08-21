@@ -9,6 +9,9 @@
 
 #include "server-common.h"
 
+// the chat API is not migrated yet, so this file still needs the bridge
+#include <nlohmann/json.hpp>
+
 #include <random>
 #include <sstream>
 #include <fstream>
@@ -977,9 +980,9 @@ static server_tokens tokenize_input_subprompt(const llama_vocab * vocab, mtmd_co
             // JSON object with prompt and multimodal key.
             std::vector<raw_buffer> files;
             for (const auto & entry : json_prompt.at(JSON_MTMD_DATA_KEY)) {
-                files.push_back(base64_decode(entry));
+                files.push_back(base64_decode(entry.get<std::string>()));
             }
-            return process_mtmd_prompt(mctx, json_prompt.at(JSON_STRING_PROMPT_KEY), files);
+            return process_mtmd_prompt(mctx, json_prompt.at(JSON_STRING_PROMPT_KEY).get<std::string>(), files);
         } else {
             // Not multimodal, but contains a subobject.
             llama_tokens tmp = tokenize_mixed(vocab, json_prompt.at(JSON_STRING_PROMPT_KEY), add_special, parse_special);
@@ -1258,8 +1261,8 @@ json oaicompat_chat_params_parse(
     auto caps = common_chat_templates_get_caps(opt.tmpls.get());
 
     common_chat_templates_inputs inputs;
-    inputs.messages               = common_chat_msgs_parse_oaicompat(messages);
-    inputs.tools                  = common_chat_tools_parse_oaicompat(tools);
+    inputs.messages               = common_chat_msgs_parse_oaicompat(common_json_raw<nlohmann::ordered_json>(messages));
+    inputs.tools                  = common_chat_tools_parse_oaicompat(common_json_raw<nlohmann::ordered_json>(tools));
     inputs.tool_choice            = common_chat_tool_choice_parse_oaicompat(tool_choice);
     inputs.json_schema            = json_schema.is_null() ? "" : json_schema.dump();
     inputs.grammar                = grammar;
@@ -1267,7 +1270,7 @@ json oaicompat_chat_params_parse(
     inputs.parallel_tool_calls    = json_value(body, "parallel_tool_calls", caps["supports_parallel_tool_calls"]);
     inputs.add_generation_prompt  = json_value(body, "add_generation_prompt", true);
     inputs.continue_final_message = body.contains("continue_final_message") ?
-        common_chat_continuation_parse(body.at("continue_final_message")) :
+        common_chat_continuation_parse(common_json_raw<nlohmann::ordered_json>(body.at("continue_final_message"))) :
         COMMON_CHAT_CONTINUATION_NONE;
     if (inputs.continue_final_message == COMMON_CHAT_CONTINUATION_NONE && opt.prefill_assistant
         && !inputs.messages.empty() && inputs.messages.back().role == "assistant") {
@@ -1300,7 +1303,8 @@ json oaicompat_chat_params_parse(
     }
 
     // parse the "enable_thinking" kwarg to override the default value
-    auto enable_thinking_kwarg = json_value(inputs.chat_template_kwargs, "enable_thinking", std::string(""));
+    const auto   kwarg_it            = inputs.chat_template_kwargs.find("enable_thinking");
+    std::string  enable_thinking_kwarg = kwarg_it == inputs.chat_template_kwargs.end() ? "" : kwarg_it->second;
     if (enable_thinking_kwarg == "true") {
         inputs.enable_thinking = true;
     } else if (enable_thinking_kwarg == "false") {
@@ -1316,7 +1320,7 @@ json oaicompat_chat_params_parse(
             inputs.enable_thinking = false;
             inputs.chat_template_kwargs.erase("reasoning_effort");
         } else if (!reasoning_effort.empty()) {
-            inputs.chat_template_kwargs["reasoning_effort"] = json(reasoning_effort).dump();
+            inputs.chat_template_kwargs["reasoning_effort"] = json::make(reasoning_effort).dump();
         }
     }
 
@@ -1347,7 +1351,7 @@ json oaicompat_chat_params_parse(
         llama_params["chat_parser"] = chat_params.parser;
     }
 
-    llama_params["message_delimiters"] = chat_params.message_delimiters.to_json();
+    llama_params["message_delimiters"] = common_json_from_raw(chat_params.message_delimiters.to_json());
 
     // Reasoning budget: pass parameters through to sampling layer
     {
@@ -1465,7 +1469,10 @@ json format_response_rerank(
     });
 
     elements.resize(std::min(top_n, (int)elements.size()));
-    json results = elements;
+    json results = json::array();
+    for (const auto & el : elements) {
+        results.push_back(el);
+    }
 
     if (is_tei_format) return results;
 
@@ -1540,7 +1547,7 @@ std::vector<llama_token_data> get_token_probabilities(llama_context * ctx, int i
 }
 
 std::string safe_json_to_str(const json & data) {
-    return data.dump(-1, ' ', false, json::error_handler_t::replace);
+    return data.dump_safe();
 }
 
 // TODO: reuse llama_detokenize
@@ -1790,12 +1797,12 @@ server_tokens format_prompt_rerank(
         std::string prompt = rerank_prompt;
         string_replace_all(prompt, "{query}"   , query);
         string_replace_all(prompt, "{document}", doc  );
-        server_tokens tokens = tokenize_input_subprompt(vocab, mctx, prompt, false, true);
+        server_tokens tokens = tokenize_input_subprompt(vocab, mctx, json::make(prompt), false, true);
         result.push_back(tokens);
     } else {
         // Get EOS token - use SEP token as fallback if EOS is not available
-        server_tokens query_tokens = tokenize_input_subprompt(vocab, mctx, query, false, false);
-        server_tokens doc_tokens   = tokenize_input_subprompt(vocab, mctx, doc,   false, false);
+        server_tokens query_tokens = tokenize_input_subprompt(vocab, mctx, json::make(query), false, false);
+        server_tokens doc_tokens   = tokenize_input_subprompt(vocab, mctx, json::make(doc),   false, false);
         llama_token eos_token = llama_vocab_eos(vocab);
         if (eos_token == LLAMA_TOKEN_NULL) {
             eos_token = llama_vocab_sep(vocab);
