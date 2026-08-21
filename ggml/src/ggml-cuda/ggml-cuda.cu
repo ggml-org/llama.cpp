@@ -1027,11 +1027,22 @@ static int ggml_cuda_rdna2_p2p_host_allreduce_mode() {
             return GGML_CUDA_RDNA2_P2P_HOST_OFF;
         }
         const char * value = std::getenv("GGML_HIP_GFX1030_P2P_ALLREDUCE");
-        if (value == nullptr || std::strcmp(value, "auto") == 0) return GGML_CUDA_RDNA2_P2P_HOST_AUTO;
-        if (std::strcmp(value, "auto-expanded") == 0) return GGML_CUDA_RDNA2_P2P_HOST_AUTO_EXPANDED;
+        // The expanded policy is the safe automatic default: its extra ordinary
+        // boundaries are structurally gated, while TP2/other unsupported
+        // topologies naturally fall through to the existing RCCL path.
+        if (value == nullptr || std::strcmp(value, "auto") == 0 ||
+                std::strcmp(value, "auto-expanded") == 0) {
+            return GGML_CUDA_RDNA2_P2P_HOST_AUTO_EXPANDED;
+        }
+        // Keep the former automatic policy available for controlled A/B tests.
+        if (std::strcmp(value, "auto-basic") == 0) return GGML_CUDA_RDNA2_P2P_HOST_AUTO;
         if (std::strcmp(value, "host") == 0) return GGML_CUDA_RDNA2_P2P_HOST_SIMPLE;
         if (std::strcmp(value, "host-fused") == 0) return GGML_CUDA_RDNA2_P2P_HOST_FUSED;
         if (std::strcmp(value, "host-mtp") == 0) return GGML_CUDA_RDNA2_P2P_HOST_MTP;
+        if (std::strcmp(value, "off") == 0 || std::strcmp(value, "0") == 0 ||
+                std::strcmp(value, "false") == 0) {
+            return GGML_CUDA_RDNA2_P2P_HOST_OFF;
+        }
         return GGML_CUDA_RDNA2_P2P_HOST_OFF;
     }();
     return mode;
