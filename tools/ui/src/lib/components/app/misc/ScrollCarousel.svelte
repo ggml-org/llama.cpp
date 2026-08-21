@@ -18,27 +18,24 @@
 		innerClass?: string;
 		/** Tailwind gap class applied to the content wrapper. */
 		gapSize?: string;
+		/** Show the arrows whenever the content overflows, even without hover. */
+		alwaysShowArrows?: boolean;
 		/** Arrow placement and styling. */
 		variant?: ScrollCarouselVariant;
-		/** Called with whether the content overflows the container. */
-		onScrollableChange?: (isScrollable: boolean) => void;
-		/** Pixels scrolled per arrow click; defaults to ~2/3 of the container width. */
-		scrollBy?: number;
 	}
 
 	let {
+		alwaysShowArrows = false,
 		carousel: externalCarousel,
 		children,
 		class: className = '',
 		containerClass = '',
 		gapSize = '3',
 		innerClass = '',
-		onScrollableChange,
-		scrollBy,
 		variant = ScrollCarouselVariant.TOP
 	}: Props = $props();
 
-	const internalCarousel = $derived(useScrollCarousel(onScrollableChange));
+	const internalCarousel = useScrollCarousel();
 	const carousel = $derived(externalCarousel ?? internalCarousel);
 
 	const isCenter = $derived(variant === ScrollCarouselVariant.CENTER);
@@ -51,7 +48,7 @@
 
 		if (!container) return;
 
-		container.scrollBy({ behavior: 'smooth', left: -(scrollBy ?? container.clientWidth * 0.67) });
+		container.scrollBy({ behavior: 'smooth', left: -(container.clientWidth * 0.67) });
 	}
 
 	function scrollRight(event?: MouseEvent) {
@@ -62,7 +59,7 @@
 
 		if (!container) return;
 
-		container.scrollBy({ behavior: 'smooth', left: scrollBy ?? container.clientWidth * 0.67 });
+		container.scrollBy({ behavior: 'smooth', left: container.clientWidth * 0.67 });
 	}
 
 	export function resetScroll() {
@@ -87,7 +84,9 @@
 				: 'left-2 bg-muted backdrop-blur-sm hover:bg-accent',
 			!isCenter &&
 				(carousel.canScrollLeft
-					? 'opacity-0 group-hover:opacity-100'
+					? alwaysShowArrows
+						? 'opacity-100'
+						: 'opacity-0 group-hover:opacity-100'
 					: 'pointer-events-none opacity-0')
 		)}
 		{...isCenter ? { disabled: !carousel.canScrollLeft } : {}}
@@ -103,7 +102,7 @@
 		onscroll={carousel.updateScrollButtons}
 	>
 		<div
-			class={cn('flex min-w-max', `gap-${gapSize}`, innerClass)}
+			class={cn('flex min-w-max', isCenter && 'items-start', `gap-${gapSize}`, innerClass)}
 			bind:this={carousel.contentContainer}
 		>
 			{@render children?.()}
@@ -118,7 +117,9 @@
 				: 'right-2 bg-muted backdrop-blur-sm hover:bg-accent',
 			!isCenter &&
 				(carousel.canScrollRight
-					? 'opacity-0 group-hover:opacity-100'
+					? alwaysShowArrows
+						? 'opacity-100'
+						: 'opacity-0 group-hover:opacity-100'
 					: 'pointer-events-none opacity-0')
 		)}
 		{...isCenter ? { disabled: !carousel.canScrollRight } : {}}
