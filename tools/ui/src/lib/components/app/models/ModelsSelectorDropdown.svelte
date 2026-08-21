@@ -72,16 +72,13 @@
 
 	const reasoning = useReasoningMenu();
 
-	const samplingSection = $derived(
-		SETTINGS_CHAT_SECTIONS.find((s) => s.slug === SETTINGS_SECTION_SLUGS.SAMPLING)
-	);
-	const penaltiesSection = $derived(
-		SETTINGS_CHAT_SECTIONS.find((s) => s.slug === SETTINGS_SECTION_SLUGS.PENALTIES)
-	);
-
 	// Sampling/penalties need a loaded model to show server defaults, so
-	// disable the submenus until one is loaded.
+	// disable the submenu until one is loaded.
 	const hasModelLoaded = $derived(modelsStore.loadedModelIds.length > 0);
+
+	const samplingPenaltiesSection = $derived(
+		SETTINGS_CHAT_SECTIONS.find((s) => s.slug === SETTINGS_SECTION_SLUGS.SAMPLING_PENALTIES)
+	);
 
 	const showOrgNameInTrigger = $derived(
 		settingsStore.config[SETTINGS_KEYS.SHOW_MODEL_ORG_NAME_IN_TRIGGER] ?? false
@@ -370,12 +367,11 @@
 
 					<ChatFormActionAddReasoningSubmenu />
 
-					{#if samplingSection}
-						<ModelsSelectorSettingsSubmenu section={samplingSection} disabled={!hasModelLoaded} />
-					{/if}
-
-					{#if penaltiesSection}
-						<ModelsSelectorSettingsSubmenu section={penaltiesSection} disabled={!hasModelLoaded} />
+					{#if samplingPenaltiesSection}
+						<ModelsSelectorSettingsSubmenu
+							section={samplingPenaltiesSection}
+							disabled={!hasModelLoaded}
+						/>
 					{/if}
 				</DropdownMenu.Content>
 			</DropdownMenu.Root>
