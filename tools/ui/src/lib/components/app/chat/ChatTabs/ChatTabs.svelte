@@ -1,5 +1,5 @@
 <script lang="ts">
-	import ChatTabItem from './ChatTabItem.svelte';
+	import ChatTabsItem from './ChatTabsItem.svelte';
 	import { Plus } from '@lucide/svelte';
 	import { page } from '$app/state';
 	import { ScrollCarousel } from '$lib/components/ui/scroll-carousel';
@@ -86,7 +86,7 @@
 			{carousel}
 		>
 			{#each tabs as tab (tab.id)}
-				<ChatTabItem
+				<ChatTabsItem
 					{tab}
 					isActive={tab.id === activeId}
 					isLoading={loadingIds.has(tab.id)}
