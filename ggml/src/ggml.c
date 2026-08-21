@@ -328,6 +328,18 @@ void ggml_log_callback_default(enum ggml_log_level level, const char * text, voi
 #endif
 
 
+#if defined(__linux__)
+#include <sys/mman.h>
+// Large allocations are aligned to GGML_LARGE_ALLOC_ALIGN and hinted with
+// MADV_HUGEPAGE. Part of the measured benefit survives with transparent huge
+// pages disabled entirely, so the alignment is not merely a carrier for the
+// hint; how the two split apart is microarchitecture dependent and the
+// mechanism is not established. The names are alignment centric because the
+// alignment is the part this code always performs.
+#define GGML_LARGE_ALLOC_MIN_SIZE (4ull << 20)
+#define GGML_LARGE_ALLOC_ALIGN    (2ull << 20)
+#endif
+
 void * ggml_aligned_malloc(size_t size) {
 #if defined(__s390x__)
     const int alignment = 256;
@@ -362,6 +374,22 @@ void * ggml_aligned_malloc(size_t size) {
         default:
             result = EFAULT;
             break;
+    }
+  #elif defined(__linux__)
+    // Align large allocations to 2 MiB and hint the kernel, so that it can back them with transparent huge pages.
+    // Note: the alignment is applied to every allocation over the threshold, also when THP is not available.
+    int result;
+    if (size >= GGML_LARGE_ALLOC_MIN_SIZE) {
+        result = posix_memalign(&aligned_memory, GGML_LARGE_ALLOC_ALIGN, size);
+        if (result == 0 && aligned_memory != NULL) {
+            (void) madvise(aligned_memory, size, MADV_HUGEPAGE);
+        } else {
+            // The larger alignment can fail where the ordinary one succeeds.
+            // Fall back so this is never worse than the previous behaviour.
+            result = posix_memalign(&aligned_memory, alignment, size);
+        }
+    } else {
+        result = posix_memalign(&aligned_memory, alignment, size);
     }
   #else
     int result = posix_memalign(&aligned_memory, alignment, size);
