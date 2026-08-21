@@ -134,7 +134,7 @@ if (CUDAToolkit_FOUND)
         FetchContent_Declare(
             CUTLASS
             GIT_REPOSITORY https://github.com/NVIDIA/cutlass.git
-            GIT_TAG        b46b16d003484063bca4ed365e44095c4c6ed633
+            GIT_TAG        v4.7.0
             GIT_PROGRESS   TRUE
             SOURCE_SUBDIR  source-only
         )
