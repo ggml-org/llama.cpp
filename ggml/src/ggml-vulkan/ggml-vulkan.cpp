@@ -4299,13 +4299,13 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
             const uint32_t sg = use_wave32 ? 32 : device->subgroup_size;
             const uint32_t wm = use_wave32 ? 32 : 64;
             const uint32_t l_bk_step = use_wave32 ? 3 : 2;
-            const auto block_size = [sg, wm](uint32_t bm, uint32_t bn) {
-                return sg * (bm / wm) * (bn / 32);
+            const auto block_size = [sg](uint32_t bm, uint32_t bn, uint32_t tile_wm) {
+                return sg * (bm / tile_wm) * (bn / 32);
             };
 
-            l_warptile_mmq_cm_int = { block_size(128, 160), 128, 160, 32, wm, 32, 1, cm_i_m, cm_i_n, cm_i_k, sg, l_bk_step };
-            m_warptile_mmq_cm_int = { block_size(128,  64), 128,  64, 32, wm, 32, 1, cm_i_m, cm_i_n, cm_i_k, sg, 2 };
-            s_warptile_mmq_cm_int = { block_size( 32,  32),  32,  32, 32, 32, 32, 1, cm_i_m, cm_i_n, cm_i_k, sg, 2 };
+            l_warptile_mmq_cm_int = { block_size(128, 160, wm), 128, 160, 32, wm, 32, 1, cm_i_m, cm_i_n, cm_i_k, sg, l_bk_step };
+            m_warptile_mmq_cm_int = { block_size(128,  64, wm), 128,  64, 32, wm, 32, 1, cm_i_m, cm_i_n, cm_i_k, sg, 2 };
+            s_warptile_mmq_cm_int = { block_size( 32,  32, 32),  32,  32, 32, 32, 32, 1, cm_i_m, cm_i_n, cm_i_k, sg, 2 };
         }
 
         // Integer MMQ has a smaller shared memory profile, but heavier register use
