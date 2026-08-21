@@ -1135,7 +1135,14 @@ static bool alloc_tensor_range(struct ggml_context * ctx,
         return false;
     }
 
-    *buffers = realloc(*buffers, sizeof(ggml_backend_buffer_t) * (*n_buffers + 1));
+    ggml_backend_buffer_t * new_buffers = realloc(*buffers, sizeof(ggml_backend_buffer_t) * (*n_buffers + 1));
+    if (new_buffers == NULL) {
+        GGML_LOG_ERROR("%s: failed to reallocate buffer array\n", __func__);
+        ggml_backend_buffer_free(buffer);
+        free_buffers(buffers, n_buffers);
+        return false;
+    }
+    *buffers = new_buffers;
     (*buffers)[(*n_buffers)++] = buffer;
 
     struct ggml_tallocr tallocr = ggml_tallocr_new(buffer);
