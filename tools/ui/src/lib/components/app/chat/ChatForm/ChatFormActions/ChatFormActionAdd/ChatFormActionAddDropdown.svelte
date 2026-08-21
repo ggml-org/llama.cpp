@@ -2,7 +2,6 @@
 	import { File, FolderOpen, MessageSquare, Plus, Zap } from '@lucide/svelte';
 	import {
 		ChatFormActionAddMcpServersSubmenu,
-		ChatFormActionAddReasoningSubmenu,
 		ChatFormActionAddToolsSubmenu
 	} from '$lib/components/app';
 	import { buttonVariants } from '$lib/components/ui/button';
@@ -93,10 +92,6 @@
 				}
 			}}
 		>
-			<ChatFormActionAddReasoningSubmenu />
-
-			<DropdownMenu.Separator />
-
 			<DropdownMenu.Sub>
 				<DropdownMenu.SubTrigger class="flex cursor-pointer items-center gap-2">
 					<File class={ICON_CLASS_DEFAULT} />
@@ -156,11 +151,11 @@
 
 			<ChatFormActionAddToolsSubmenu />
 
+			<DropdownMenu.Separator />
+
 			<ChatFormActionAddMcpServersSubmenu onMcpSettingsClick={handleMcpSettingsClick} />
 
 			{#if chatFormActions.hasMcpPromptsSupport}
-				<DropdownMenu.Separator />
-
 				<DropdownMenu.Item
 					class="flex cursor-pointer items-center gap-2"
 					onclick={chatFormActions.onMcpPromptClick}
