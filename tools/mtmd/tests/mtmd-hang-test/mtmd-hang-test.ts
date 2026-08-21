@@ -1,11 +1,11 @@
 /**
  * Run this CLI on node.js for testing
  * hanging video mtmd in windows.
- * 
+ *
  * `node mtmd-hang-test.ts --help` for help.
- * 
+ *
  * exitcode 0: test success
- * 
+ *
  * else: test failed
  */
 
@@ -29,7 +29,7 @@ async function writeBlob(url: string, filename?: string) {
   if (filename == null) {
     filename = url.substring(url.lastIndexOf("/") + 1)
   }
-  
+
   const response = await fetch(url)
 
   if (!response.ok || response.body == null) {
@@ -41,12 +41,17 @@ async function writeBlob(url: string, filename?: string) {
   for await (const chunk of response.body) {
     stream.write(chunk)
   }
-  stream.end()
+
+  return new Promise<void>((res) => {
+    stream.end(() => {
+      res()
+    })
+  })
 }
 
 async function createHash(path: string) {
   // Requires some memory
-  const data = await fs.readFile(path, {encoding: null})
+  const data = await fs.readFile(path, { encoding: null })
   return crypto.createHash("sha256").update(data).digest("hex")
 }
 
@@ -133,6 +138,7 @@ if (!await exists(modelPath)) {
 const modelHashResult = await createHash(modelPath)
 if (modelHashResult !== modelHash) {
   console.error(`Model hash isn't match! Model hash: ${modelHashResult}`)
+  process.exit(-1)
 }
 
 console.log(`Check: model is valid.`)
@@ -145,6 +151,7 @@ if (!await exists(mmprojPath)) {
 const mmprojHashResult = await createHash(mmprojPath)
 if (mmprojHashResult !== mmprojHash) {
   console.error(`Mmproj hash isn't match! Mmproj hash: ${mmprojHashResult}`)
+  process.exit(-1)
 }
 
 console.log(`Check: mmproj is valid.`)
@@ -171,6 +178,9 @@ const exec = spawn(
 
 exec.stdout.on("data", (data: Uint8Array) => process.stdout.write(data))
 exec.stderr.on("data", (data: Uint8Array) => process.stderr.write(data))
+exec.on("error", (err) => {
+  console.error(err)
+})
 
 const killDaemon = setTimeout(() => {
   console.error(`Llama-cli timeout for ${timeoutSec} sec.`)
@@ -194,5 +204,5 @@ Test result: ${code === 0 ? "success" : "failed"}!
 ##########################
 `)
   clearTimeout(killDaemon)
-  process.exit(code)
+  process.exit(code ?? 1)
 })

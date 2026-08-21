@@ -23,7 +23,7 @@ Exiting...
 Process exited with 0
 
 ##########################
-Test result: success!  
+Test result: success!
 ##########################
 ```
 
