@@ -2,9 +2,9 @@
 	import {
 		ChatAttachmentsListItem,
 		DialogChatAttachmentsPreview,
-		DialogMcpResourcePreview,
-		HorizontalScrollCarousel
+		DialogMcpResourcePreview
 	} from '$lib/components/app';
+	import { ScrollCarousel } from '$lib/components/ui/scroll-carousel';
 	import type { DatabaseMessageExtraMcpResource } from '$lib/types';
 	import { getAttachmentDisplayItems, isMcpPrompt, isMcpResource } from '$lib/utils';
 
@@ -42,7 +42,7 @@
 		uploadedFiles = $bindable([])
 	}: Props = $props();
 
-	let carouselRef: HorizontalScrollCarousel | undefined = $state();
+	let carouselRef: ScrollCarousel | undefined = $state();
 	let mcpResourcePreviewOpen = $state(false);
 	let mcpResourcePreviewExtra = $state<DatabaseMessageExtraMcpResource | null>(null);
 	let previewFocusIndex = $state(0);
@@ -91,11 +91,11 @@
 {#if displayItems.length > 0}
 	<div class={className} {style}>
 		{#if limitToSingleRow}
-			<HorizontalScrollCarousel bind:this={carouselRef}>
+			<ScrollCarousel bind:this={carouselRef} variant="center">
 				{#each displayItems as item (item.id)}
 					{@render attachmentitem(item)}
 				{/each}
-			</HorizontalScrollCarousel>
+			</ScrollCarousel>
 		{:else}
 			<div class="flex flex-wrap items-start justify-end gap-3">
 				{#each displayItems as item (item.id)}
