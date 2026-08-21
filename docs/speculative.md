@@ -226,7 +226,7 @@ If a draft model is combined with a draftless decoding the draftless decoding ha
 
 Use `--backend-sampling` to run supported target-model samplers on the model backend. Draft-model sampling uses the backend by default and can be controlled with `--spec-draft-backend-sampling` and `--no-spec-draft-backend-sampling`.
 
-Unsupported samplers and device layouts fall back to CPU sampling. Tensor split mode does not support backend sampling. A fixed seed produces repeatable random draws, but stochastic CPU and backend sampling can still select different tokens because floating-point operations can differ between implementations and devices. Use greedy sampling when exact output matching is required.
+Unsupported samplers and device layouts fall back to CPU sampling. Generic tensor-split backend sampling remains unsupported; the RDNA2 fork has one narrow exception for its certified four-GPU, MTP `n_max=4`, large-vocabulary, temperature-zero path. That path is selected automatically by the gfx1030 native profile only when filtering and penalties are neutral, no grammar/reasoning/probability output is requested, and the request did not explicitly set `backend_sampling`. Set `GGML_HIP_GFX1030_TARGET_BACKEND_SAMPLING=0` (or the global `GGML_HIP_RDNA2_AUTO=0`) to disable it. A fixed seed produces repeatable random draws, but stochastic CPU and backend sampling can still select different tokens because floating-point operations can differ between implementations and devices. Use greedy sampling when exact output matching is required.
 
 ### General Speculative Parameters
 

@@ -1083,10 +1083,17 @@ static void llama_sampler_greedy_backend_apply(
 
     struct ggml_tensor * logits = ggml_reshape_1d(ctx, data->logits, ggml_nelements(data->logits));
 
-    struct ggml_tensor * curl = ggml_argmax(ctx, logits);
-    ggml_set_name(curl, "greedy_argmax");
+    struct ggml_tensor * max_idx = ggml_argmax(ctx, logits);
+    ggml_set_name(max_idx, "greedy_argmax");
 
-    data->sampled = curl;
+    if (data->candidates != nullptr) {
+        struct ggml_tensor * candidates = ggml_reshape_2d(
+            ctx, data->candidates, 1, ggml_nelements(data->candidates));
+        data->sampled = ggml_get_rows(ctx, candidates, max_idx);
+        ggml_set_name(data->sampled, "greedy_sampled_token");
+    } else {
+        data->sampled = max_idx;
+    }
 }
 
 static struct llama_sampler_i llama_sampler_greedy_i = {

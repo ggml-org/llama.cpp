@@ -59,8 +59,9 @@ export HSA_NO_SCRATCH_RECLAIM=1
 
 `HSA_OVERRIDE_GFX_VERSION=10.3.0` is also the umbrella switch for the
 certified V620/gfx1030 profile. It automatically enables native MMVQ/attention/
-GDN, Q8 activation caching, Q8_1 fusion, ADD/RMS_NORM fusion, and GDN sibling
-fusion. The individual `GGML_HIP_GFX1030_*` variables remain available as
+GDN, Q8 activation caching, Q8_1 fusion, ADD/RMS_NORM fusion, GDN sibling
+fusion, and eligible greedy MTP target sampling. The individual
+`GGML_HIP_GFX1030_*` variables remain available as
 explicit overrides; setting one to `0` disables that feature. To disable the
 entire native RDNA2 profile, topology tuner, host-snapshot reduction, deferred
 MTP catch-up, and automatic output sharding with one setting, use:
@@ -83,6 +84,7 @@ list of upstream debugging variables.
 | `HSA_OVERRIDE_GFX_VERSION=10.3.0` | Presents the V620 as the tested `gfx1030` target and enables the certified RDNA2 optimization profile. | The only runtime switch needed for the profile; `HSA_NO_SCRATCH_RECLAIM=1` remains optional stability tuning. |
 | `HSA_NO_SCRATCH_RECLAIM=1` | Keeps HIP scratch allocations instead of reclaiming them between work. | Improves stability/consistency at the cost of retaining more GPU memory. |
 | `GGML_HIP_RDNA2_AUTO=0` | Disables all native RDNA2/Qwen automatic paths with one switch. | Optional emergency/debug fallback; unset by default. |
+| `GGML_HIP_GFX1030_TARGET_BACKEND_SAMPLING=0` | Disables automatic target-side backend sampling for the certified greedy TP4 MTP path. | Debug/fallback override; unset by default. Explicit request-level `backend_sampling` still takes precedence. |
 | `GGML_TP_SHARDED_OUTPUT=auto|0|1` | Splits validated output heads along the embedding dimension, then FP32-all-reduces full logits. | Defaults to `auto` for Qwen35 27B; use `1` for other validated Qwen 35B/122B paths or `0` to disable. Do not combine with `GGML_TP_VOCAB_OUTPUT`. |
 | `GGML_TP_VOCAB_OUTPUT=1` | Splits an eligible output head along vocabulary, selects local candidates, and exchanges only compact TOP_K results. | Raw decode only for now; requires RCCL, CPU sampling, finite `top_k <= 256`, and at most one output row. Do not combine with `GGML_TP_SHARDED_OUTPUT`. |
 

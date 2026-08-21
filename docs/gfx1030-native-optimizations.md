@@ -18,6 +18,7 @@ export GGML_HIP_RDNA2_AUTO=0
 | `GGML_HIP_GFX1030_GDN_SIBLING_FUSION` | unset: inherit HSA umbrella; explicit `0|1` override | Creates and uses fused Qwen3.5/Qwen3.6 DeltaNet sibling projection weights for their structural loader/graph gates. |
 | `GGML_HIP_GFX1030_Q8_CACHE` | unset: inherit HSA umbrella; explicit `0|1` override | Enables graph-owned reuse of exact standard Q8_1 TG activations and the eligible dual RMSNorm F32/Q8_1 producer. Q4_0 `sum_hi`, packed layouts, MMQ, and routed operations remain outside this cache contract. |
 | `GGML_HIP_GFX1030_Q8_CACHE_TELEMETRY` | unset / `0` | Reports eligible standard-MMVQ Q8_1 sources, safe reuses, cache hits, and storage. Telemetry does not allocate or reuse entries by itself. |
+| `GGML_HIP_GFX1030_TARGET_BACKEND_SAMPLING` | unset: inherit native auto policy; explicit `0|off|false` disables | Automatically keeps eligible greedy native-MTP target selection on the backend instead of materializing and scanning the full vocabulary on the CPU. |
 
 The selectors are read once during backend or model initialization. Set them before starting `llama-cli`, `llama-server`, `llama-bench`, or a test binary. Explicit `0` values are useful for A/B and fallback verification; an unset feature follows the automatic HSA profile when `HSA_OVERRIDE_GFX_VERSION=10.3.0` is active.
 
@@ -84,6 +85,14 @@ Both stock and native runs passed `2920/2920` `FLASH_ATTN_EXT` backend tests. Fo
 For GDN calls with more than one token, the native specialization has lane 0 load scalar `beta` and per-column value inputs and broadcast them across the wave. In the non-KDA form it also loads and broadcasts the scalar gate; the KDA form retains its per-row gate loads. Decode (`n_tokens == 1`) keeps the stock specialization.
 
 Direct GDN measurements improved by about 7.9% at 256 tokens and 17.7% at 512 tokens. The GDN backend suite passed all 36 cases across all five tested backends. Full-model PP4096 measurements were sensitive to process order and GPU temperature, so only the direct-kernel improvement is claimed.
+
+### Greedy MTP target backend sampling
+
+The server automatically enables target-side backend sampling for the validated native-MTP workload when the gfx1030 profile is active. Eligibility is structural: tensor-parallel mode over four ROCm devices, MTP `n_max=4`, vocabulary size at least 65,536, temperature-zero sampling with neutral filtering/penalty controls, no grammar or reasoning-budget sampler, no requested probabilities or logit bias, and no model-supplied suppress-token list. An explicit request-level `backend_sampling` value takes precedence. Unsupported backend chains fall back to CPU sampling, and `GGML_HIP_GFX1030_TARGET_BACKEND_SAMPLING=0` or `GGML_HIP_RDNA2_AUTO=0` disables automatic selection.
+
+For deterministic one-candidate distributions, the backend uses a compact `temperature(0) -> greedy` chain. The greedy backend maps a reduced candidate index back to its vocabulary token ID; a focused backend-sampler test covers this composition. This avoids both the full 248,320-entry CPU sampler pass and the mutable random-input tensor used by the general distribution sampler.
+
+On the fixed Qwen3.8-27B Q4_0 TP4 MTP workload, a fresh production-tree 5-request-per-leg A/B/B/A improved the pooled warm median from `65.7854` to `75.9478 tok/s` (**+15.45%**) with identical content/token hashes and draft/accepted counts. Median cycle time fell from `45.345` to `39.356 ms`; warm request E2E throughput improved from `59.37` to `66.69 tok/s`. A 1,024-token comparison was exact and measured `73.4756 -> 85.7679 tok/s`; a 20-request varied-prompt stress test, prompt-cache replay, graph-disabled execution, and two concurrent slots were exact. The path is independent of target weight quantization, but Q4_0 is the production format validated end to end here.
 
 ## Secondary fusions
 
