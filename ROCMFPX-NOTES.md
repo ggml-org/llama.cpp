@@ -140,7 +140,9 @@ DFlash2 spec decoding, prose prompt, `--temp 0`, same Q4_K_M draft:
 
 FP4 now wins at every batch size. Note that n-max 7 is no longer penalised for
 FP4 — the verification batch got cheap enough that the acceptance loss at 7 is
-paid back. That does *not* hold for the K-quant models, which still prefer 3-4.
+paid back. On prose that does *not* hold for the K-quant models, which measure
+22.3 t/s at n-max 3 against 18.5 at 7. See "spec-draft-n-max is content-dependent"
+below; on structured output the picture may differ for them too.
 
 `test-backend-ops` 17920/17920 green, and again with `GGML_VK_FORCE_MMVQ=1`.
 Generation output stays coherent.
@@ -175,24 +177,55 @@ MMQ for prefill is **neutral on this device** — a control with stock `q8_0` (w
 had MMQ upstream forever) behaves identically, because KHR_coopmat matmul already wins
 here. Kept anyway; it should help devices without coopmat.
 
-### DFlash2 tuning — `spec-draft-n-max` is content-dependent
+### `spec-draft-n-max` is content-dependent
 
-Acceptance drives everything, and acceptance depends on what is being generated:
+Acceptance drives everything, and acceptance depends on what is being generated.
+Deeper drafting only pays when acceptance is high enough to fill the extra slots.
 
-| Content | acceptance | tok/step | n-max 3 | n-max 7 |
+**Trust the table below, not the old one.** An earlier version of this section
+carried a three-row table (prose 20.4 / 14.6, HTML 21.7 / 19.1, digits 29.3 / 41.0)
+under a "DFlash2 tuning" heading. Its provenance is not recoverable and it is
+probably MTP, not DFlash2 — it contradicts the 2026-08-20 session note, which has
+DFlash2 at n-max 7 reaching ~33 t/s and beating MTP-4's 26.5 on the same box. It
+has been removed rather than corrected.
+
+Measured 2026-08-21 on the post-fix build (b10558), DFlash2 draft
+`incoai/Qwen3.8-27B-DFlash2-GGUF:Q4_K_M`, `--temp 0`, t/s:
+
+| model | content | n-max 3 | n-max 7 |
+|---|---|---|---|
+| ROCMFPX-MQ-Q4 | prose | 24.6 | 24.5 |
+| unsloth UD-Q4_K_XL | prose | **22.3** | 18.5 |
+| ROCMFPX-MQ-Q4 | HTML | - | **40.7** |
+| unsloth UD-Q4_K_XL | HTML | - | 32.9 |
+
+The two HTML rows are *not* a controlled benchmark — they are single interactive
+runs through the server UI on different prompts (1057 and 1030 tokens), recorded
+because the effect is far larger than the noise. **The unsloth n-max 3 HTML cell is
+still unmeasured**, so the 40.7-vs-32.9 gap is an upper bound on FP4's advantage
+there: the K-quant preset may simply be mis-tuned at 7 for that content.
+
+What this means for the presets:
+
+- ROCmFPx is flat between 3 and 7 on prose, so 7 costs nothing and wins on anything
+  structured. `spec-draft-n-max = 7` in the ROCmFPx preset is deliberate.
+- The K-quant `reasoning-*` presets pay 17% at 7 on prose (22.3 -> 18.5). They also
+  use 7. Whether to drop them to 3 depends on the unmeasured HTML cell above — if
+  those presets are mostly used for code and structured output, 7 may still be
+  right for them too.
+
+### Where the 2026-08-21 fixes actually help
+
+The kernel work helps at every batch size, but the size of the win tracks how many
+tokens a verification step carries, so it compounds with acceptance:
+
+| B | 1 | 2 | 4 | 8 |
 |---|---|---|---|---|
-| Prose / reasoning | 29.5% | 3.02 | **20.4** | 14.6 |
-| HTML | - | - | **21.7** | 19.1 |
-| Number sequence | 77.1% | 6.40 | 29.3 | **41.0** |
+| FP4 batched-bench TG gain | +6% | +17% | +36% | +65% |
 
-`/models/models.ini` uses `spec-draft-n-max = 7` for the three `reasoning-*` presets.
-Those are prose workloads, where 7 costs ~40% versus 3-4. The MTP presets in the same
-file already use 3.
-
-That table is for K-quant models and still holds for them. It no longer holds for
-ROCmFPx: after the 2026-08-21 fixes the FP4 27B measures 24.6 t/s at n-max 3 and
-24.5 at n-max 7 on the same prose prompt, i.e. flat. Verification at batch 8 got
-cheap enough to pay for the lower acceptance at 7.
+Prose spec decoding, where mean accepted length is ~2.6, gained 46% (16.8 -> 24.6).
+Structured output accepts far more per step, sits nearer the B=8 column, and is
+where the fixes pay best. So: a real win everywhere, a large one on code and markup.
 
 ## TODOs
 
@@ -218,6 +251,11 @@ outcomes so the reasoning is not re-run.
 
 Still open on the perf side:
 
+- **Measure unsloth UD-Q4_K_XL on HTML at n-max 3.** It is the one cell that decides
+  whether the three K-quant `reasoning-*` presets should drop to 3, and whether the
+  40.7-vs-32.9 HTML gap is FP4 winning or the K-quant preset being mis-tuned. Use a
+  fixed prompt and run both settings back to back; the two numbers on record came
+  from separate interactive sessions.
 - fp6/fp3 float mat-vec is fixed but still ~1.5x `q6_K`/`q3_K` at n=1 (226 vs 211,
   275 vs 109). fp3 in particular still pays a shared-LUT codebook lookup per weight.
   Low priority: no model here leans on fp3.
