@@ -12,6 +12,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -52,6 +53,9 @@ struct common_json_value {
     common_json_value(std::nullptr_t = nullptr) : type(VAL_NULL) {}
     common_json_value(bool val) : type(VAL_BOOL), val_bool(val) {}
     common_json_value(std::string val) : type(VAL_STRING), val_string(std::move(val)) {}
+    // a string_view does not convert to std::string on its own, and without this
+    // it would land on the common_json ctor below and recurse
+    common_json_value(std::string_view val) : type(VAL_STRING), val_string(val) {}
     common_json_value(const char * val);
     common_json_value(const common_json & val);
     // only for the types instantiated in json.cpp, the rest fails at link time
@@ -102,8 +106,9 @@ class common_json {
                                                   !std::is_same<typename std::decay<T>::type, common_json_value>::value, int>::type = 0>
     common_json(T && val) : common_json(common_json_value(std::forward<T>(val))) {}
 
-    common_json & operator=(const common_json & other);
-    common_json & operator=(common_json && other) noexcept;
+    // by value, same as the backing library: the right side is copied before the
+    // left side can invalidate it, e.g. msg["a"] = msg.at("b") where "a" is new
+    common_json & operator=(common_json other) noexcept;
 
     ~common_json();
 

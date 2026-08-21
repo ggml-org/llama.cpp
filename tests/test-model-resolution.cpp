@@ -55,7 +55,7 @@ static const char * COMMIT = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 static void serve_repos(httplib::Server & server) {
     server.Get(R"(/api/models/(.+)/refs)", [](const httplib::Request & req, httplib::Response & res) {
         if (g_repos.count(req.matches[1])) {
-            res.set_content(common_json{{"branches", {{{"name", "main"}, {"targetCommit", COMMIT}}}}}.dump(),
+            res.set_content(common_json{{"branches", common_json::array({ common_json{{"name", "main"}, {"targetCommit", COMMIT}} })}}.dump(),
                             "application/json");
         } else {
             res.status = 404;

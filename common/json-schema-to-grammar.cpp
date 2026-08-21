@@ -947,7 +947,7 @@ public:
         }
         if ((schema_type.is_null() || schema_type == "object")
                 && (schema.contains("properties") ||
-                    (schema.contains("additionalProperties") && !schema["additionalProperties"].get<bool>()))) {
+                    (schema.contains("additionalProperties") && schema["additionalProperties"] != true))) {
             std::unordered_set<std::string> required;
             if (schema.contains("required") && schema["required"].is_array()) {
                 for (const auto & item : schema["required"]) {

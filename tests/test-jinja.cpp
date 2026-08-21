@@ -240,7 +240,7 @@ static void test_conditionals(testing & t) {
 
     test_template(t, "is undefined key falsy",
         "{{ 'yes' if not y['x'] else 'no' }}",
-        {{"y", {{}}}},
+        {{"y", json::array({nullptr})}},
         "yes"
     );
 
@@ -282,7 +282,7 @@ static void test_conditionals(testing & t) {
 
     test_template(t, "is non-empty object truthy",
         "{{ 'yes' if y else 'no' }}",
-        {{"y", {"x", false}}},
+        {{"y", json::array({"x", false})}},
         "yes"
     );
 

@@ -63,10 +63,10 @@ static json create_tools() {
                           { { "type", "string" }, { "description", "The city and state, e.g. San Francisco, CA" } } },
                         { "unit",
                           { { "type", "string" },
-                            { "enum", { "celsius", "fahrenheit" } },
+                            { "enum", json::array({ "celsius", "fahrenheit" }) },
                             { "description",
                               "The temperature unit to use. Infer this from the users location." } } } } },
-                    { "required", { "location", "unit" } },
+                    { "required", json::array({ "location", "unit" }) },
                 } },
           }                      }
     };
@@ -86,14 +86,14 @@ static json create_tools() {
                           { { "type", "string" }, { "description", "The city and state, e.g. San Francisco, CA" } } },
                         { "unit",
                           { { "type", "string" },
-                            { "enum", { "celsius", "fahrenheit" } },
+                            { "enum", json::array({ "celsius", "fahrenheit" }) },
                             { "description", "The temperature unit to use. Infer this from the users location." } } },
                         { "days",
                           { { "type", "integer" },
                             { "description", "Number of days to forecast (1-10)" },
                             { "minimum", 1 },
                             { "maximum", 10 } } } } },
-                    { "required", { "location", "unit" } },
+                    { "required", json::array({ "location", "unit" }) },
                 } },
           }                      }
     };
@@ -341,7 +341,7 @@ static void test_example_native(testing & t) {
                 { { "invoice_number", { { "type", "string" } } },
                   { "amount", { { "type", "number" } } },
                   { "due_date", { { "type", "string" } } } } },
-              { "required", { "invoice_number", "amount", "due_date" } } },
+              { "required", json::array({ "invoice_number", "amount", "due_date" }) } },
          /* .parallel_tool_calls =  */ false,
          /* .generation_prompt =    */ "<think>",
          /* .input =                */

@@ -98,6 +98,7 @@ common_json_value::common_json_value(const std::vector<T> & vals) : type(VAL_JSO
 #define COMMON_JSON_VEC(...) template common_json_value::common_json_value(const std::vector<__VA_ARGS__> &);
 
 COMMON_JSON_VEC(int)
+COMMON_JSON_VEC(unsigned char)
 COMMON_JSON_VEC(unsigned int)
 COMMON_JSON_VEC(long)
 COMMON_JSON_VEC(unsigned long)
@@ -106,6 +107,7 @@ COMMON_JSON_VEC(unsigned long long)
 COMMON_JSON_VEC(float)
 COMMON_JSON_VEC(double)
 COMMON_JSON_VEC(std::string)
+COMMON_JSON_VEC(std::vector<float>)
 COMMON_JSON_VEC(common_json)
 
 #undef COMMON_JSON_VEC
@@ -113,8 +115,10 @@ COMMON_JSON_VEC(common_json)
 common_json_value::common_json_value(std::initializer_list<common_json_item> items) :
     type(VAL_JSON), val_json(std::make_shared<common_json>(items)) {}
 
+// null, same as the backing library. operator[] turns it into an object,
+// push_back() into an array
 common_json::common_json() {
-    new (storage) ordered_json(ordered_json::object());
+    new (storage) ordered_json();
 }
 
 common_json::common_json(const common_json & other) {
@@ -125,7 +129,9 @@ common_json::common_json(common_json && other) noexcept {
     new (storage) ordered_json(std::move(as_json(&other)));
 }
 
-common_json::common_json(std::initializer_list<common_json_item> items) : common_json() {
+common_json::common_json(std::initializer_list<common_json_item> items) {
+    new (storage) ordered_json(ordered_json::object());
+
     for (const auto & item : items) {
         set(item);
     }
@@ -139,14 +145,8 @@ common_json::common_json(std::nullptr_t) {
     new (storage) ordered_json(nullptr);
 }
 
-common_json & common_json::operator=(const common_json & other) {
-    as_json(this) = as_json(&other);
-
-    return *this;
-}
-
-common_json & common_json::operator=(common_json && other) noexcept {
-    as_json(this) = std::move(as_json(&other));
+common_json & common_json::operator=(common_json other) noexcept {
+    as_json(this).swap(as_json(&other));
 
     return *this;
 }
@@ -186,7 +186,7 @@ common_json common_json::array(std::initializer_list<common_json_value> vals) {
 }
 
 common_json common_json::object() {
-    return common_json();
+    return common_json_from_raw(ordered_json::object());
 }
 
 common_json common_json::object(std::initializer_list<common_json_item> items) {
@@ -319,6 +319,11 @@ template <typename T> T common_json::get() const {
     return as_json(this).get<T>();
 }
 
+// the backing library cannot build a common_json, so this one is just a copy
+template <> common_json common_json::get<common_json>() const {
+    return *this;
+}
+
 // get<T>() is usable only for the types below
 
 #define COMMON_JSON_GET(...) template __VA_ARGS__ common_json::get<__VA_ARGS__>() const;
@@ -333,6 +338,7 @@ COMMON_JSON_GET(unsigned long long)
 COMMON_JSON_GET(float)
 COMMON_JSON_GET(double)
 COMMON_JSON_GET(std::string)
+COMMON_JSON_GET(std::vector<float>)
 COMMON_JSON_GET(std::vector<std::string>)
 COMMON_JSON_GET(std::set<std::string>)
 COMMON_JSON_GET(std::vector<int>)
