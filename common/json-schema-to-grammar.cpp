@@ -1,9 +1,5 @@
 #include "json-schema-to-grammar.h"
-// the grammar builder walks the schema with the library API
-#include "json-shim.h"
 #include "common.h"
-
-#include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <map>

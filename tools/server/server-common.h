@@ -6,7 +6,6 @@
 #include "chat.h"
 #include "mtmd.h"
 
-#define JSON_ASSERT GGML_ASSERT
 #include "json.h"
 
 #include <atomic>

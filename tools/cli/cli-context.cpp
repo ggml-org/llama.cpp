@@ -6,7 +6,6 @@
 #include "log.h"
 #include "console.h"
 
-#define JSON_ASSERT GGML_ASSERT
 #include "json.h"
 
 #include <algorithm>

@@ -4,6 +4,7 @@
 // the underlay library is pimpl, it should never be exposed here
 // the backing value lives inside this object, so at() and the iterators give a real reference to it
 // note: object keys keep the order in which they are added
+// note: every JSON error comes out as a common_json_error
 
 #include <cstddef>
 #include <cstdint>
@@ -60,6 +61,7 @@ struct common_json_value {
     common_json_value(std::string_view val) : type(VAL_STRING), val_string(val) {}
     common_json_value(const char * val);
     common_json_value(const common_json & val);
+    common_json_value(common_json && val);
     // only for the types instantiated in json.cpp, the rest fails at link time
     template <typename T> common_json_value(const std::vector<T> & vals);
     // a set becomes an array, in the set's own order
@@ -68,6 +70,8 @@ struct common_json_value {
     template <typename T> common_json_value(const std::map<std::string, T> & vals);
 
     // nested object, e.g. {"fn", {{"name", "x"}}}
+    // note: a nested pair {"a", "b"} becomes the object {"a": "b"}, not an array
+    // use common_json::array({"a", "b"}) to get an array
     common_json_value(std::initializer_list<common_json_item> items);
 
     template <typename T, typename std::enable_if<std::is_integral<T>::value && !std::is_same<T, bool>::value, int>::type = 0>
@@ -174,7 +178,7 @@ class common_json {
     bool operator==(const common_json_value & val) const;
     bool operator!=(const common_json_value & val) const;
 
-    // at() throws if the key is missing, operator[] adds a null value instead
+    // at() throws common_json_error if the key is missing, operator[] adds a null value instead
     common_json       & at(const std::string & key);
     const common_json & at(const std::string & key) const;
     common_json       & at(size_t idx);
@@ -326,5 +330,8 @@ class common_json {
     // so at() could only give back a copy instead of a real reference
     alignas(8) unsigned char storage[32];
 };
+
+// json.cpp defines this specialization, it must be declared before any use of it
+template <> common_json common_json::get<common_json>() const;
 
 using common_json_entry = common_json::items_view::entry;

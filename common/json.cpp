@@ -18,6 +18,16 @@ using nlohmann::ordered_json;
 static_assert(sizeof(ordered_json)  <= sizeof(common_json),  "common_json storage is too small");
 static_assert(alignof(ordered_json) <= alignof(common_json), "common_json alignment is too weak");
 
+// runs fn and gives every error of the backing library as a common_json_error
+template <typename F>
+static decltype(auto) guard(F && fn) {
+    try {
+        return fn();
+    } catch (const ordered_json::exception & e) {
+        throw common_json_error(e.what());
+    }
+}
+
 static ordered_json & as_json(common_json * self) {
     return *reinterpret_cast<ordered_json *>(self);
 }
@@ -42,7 +52,12 @@ static ordered_json to_json(const common_json_value & val) {
         case common_json_value::VAL_UINT:   return val.val_uint;
         case common_json_value::VAL_DOUBLE: return val.val_double;
         case common_json_value::VAL_STRING: return val.val_string;
-        case common_json_value::VAL_JSON:   return as_json(val.val_json.get());
+        case common_json_value::VAL_JSON:
+            // one owner means no one else can see this tree, so it is safe to move it out
+            if (val.val_json.use_count() == 1) {
+                return std::move(as_json(val.val_json.get()));
+            }
+            return as_json(val.val_json.get());
     }
 
     return nullptr;
@@ -81,6 +96,9 @@ common_json_value::common_json_value(const char * val) {
 
 common_json_value::common_json_value(const common_json & val) :
     type(VAL_JSON), val_json(std::make_shared<common_json>(val)) {}
+
+common_json_value::common_json_value(common_json && val) :
+    type(VAL_JSON), val_json(std::make_shared<common_json>(std::move(val))) {}
 
 template <typename T>
 common_json_value::common_json_value(const std::set<T> & vals) : type(VAL_JSON) {
@@ -259,15 +277,15 @@ bool common_json::operator!=(const common_json_value & val) const {
     return !(*this == val);
 }
 
-common_json       & common_json::at(const std::string & key)       { return as_common(as_json(this).at(key)); }
-const common_json & common_json::at(const std::string & key) const { return as_common(as_json(this).at(key)); }
-common_json       & common_json::at(size_t idx)                    { return as_common(as_json(this).at(idx)); }
-const common_json & common_json::at(size_t idx)              const { return as_common(as_json(this).at(idx)); }
+common_json       & common_json::at(const std::string & key)       { return guard([&]() -> common_json       & { return as_common(as_json(this).at(key)); }); }
+const common_json & common_json::at(const std::string & key) const { return guard([&]() -> const common_json & { return as_common(as_json(this).at(key)); }); }
+common_json       & common_json::at(size_t idx)                    { return guard([&]() -> common_json       & { return as_common(as_json(this).at(idx)); }); }
+const common_json & common_json::at(size_t idx)              const { return guard([&]() -> const common_json & { return as_common(as_json(this).at(idx)); }); }
 
-common_json       & common_json::operator[](const std::string & key)       { return as_common(as_json(this)[key]); }
-const common_json & common_json::operator[](const std::string & key) const { return as_common(as_json(this).at(key)); }
-common_json       & common_json::operator[](size_t idx)                    { return as_common(as_json(this)[idx]); }
-const common_json & common_json::operator[](size_t idx)              const { return as_common(as_json(this).at(idx)); }
+common_json       & common_json::operator[](const std::string & key)       { return guard([&]() -> common_json       & { return as_common(as_json(this)[key]); }); }
+const common_json & common_json::operator[](const std::string & key) const { return guard([&]() -> const common_json & { return as_common(as_json(this).at(key)); }); }
+common_json       & common_json::operator[](size_t idx)                    { return guard([&]() -> common_json       & { return as_common(as_json(this)[idx]); }); }
+const common_json & common_json::operator[](size_t idx)              const { return guard([&]() -> const common_json & { return as_common(as_json(this).at(idx)); }); }
 
 common_json       & common_json::front()       { return as_common(as_json(this).front()); }
 const common_json & common_json::front() const { return as_common(as_json(this).front()); }
@@ -279,11 +297,11 @@ void common_json::clear() {
 }
 
 void common_json::erase(const std::string & key) {
-    as_json(this).erase(key);
+    guard([&] { as_json(this).erase(key); });
 }
 
 void common_json::erase(size_t idx) {
-    as_json(this).erase(idx);
+    guard([&] { as_json(this).erase(idx); });
 }
 
 void common_json::assign(const common_json_value & val) {
@@ -291,17 +309,17 @@ void common_json::assign(const common_json_value & val) {
 }
 
 void common_json::set(const common_json_item & item) {
-    as_json(this)[item.key] = to_json(item.val);
+    guard([&] { as_json(this)[item.key] = to_json(item.val); });
 }
 
 void common_json::push_back(const common_json_value & val) {
-    as_json(this).push_back(to_json(val));
+    guard([&] { as_json(this).push_back(to_json(val)); });
 }
 
 void common_json::push_back(std::initializer_list<common_json_item> items) {
     common_json val(items);
 
-    as_json(this).push_back(as_json(&val));
+    guard([&] { as_json(this).push_back(std::move(as_json(&val))); });
 }
 
 size_t common_json::count(const std::string & key) const {
@@ -309,13 +327,15 @@ size_t common_json::count(const std::string & key) const {
 }
 
 void common_json::insert(const common_json & vals) {
-    ordered_json & self = as_json(this);
+    guard([&] {
+        ordered_json & self = as_json(this);
 
-    self.insert(self.end(), as_json(&vals).begin(), as_json(&vals).end());
+        self.insert(self.end(), as_json(&vals).begin(), as_json(&vals).end());
+    });
 }
 
 std::string common_json::dump(int indent) const {
-    return as_json(this).dump(indent);
+    return guard([&] { return as_json(this).dump(indent); });
 }
 
 std::string common_json::dump_safe(int indent) const {
@@ -324,15 +344,17 @@ std::string common_json::dump_safe(int indent) const {
 
 // an array is indexed directly, an object needs a walk from the start
 common_json & common_json::iterator::operator*() const {
-    if (as_json(node).is_object()) {
-        return as_common(std::next(as_json(node).begin(), idx).value());
-    }
+    return guard([&]() -> common_json & {
+        if (as_json(node).is_object()) {
+            return as_common(std::next(as_json(node).begin(), idx).value());
+        }
 
-    return as_common(as_json(node)[idx]);
+        return as_common(as_json(node)[idx]);
+    });
 }
 
 std::string common_json::iterator::key() const {
-    return std::next(as_json(node).begin(), idx).key();
+    return guard([&] { return std::next(as_json(node).begin(), idx).key(); });
 }
 
 common_json::iterator common_json::begin() const {
@@ -344,9 +366,11 @@ common_json::iterator common_json::end() const {
 }
 
 common_json::items_view::entry common_json::items_view::iterator::operator*() const {
-    auto it = std::next(as_json(node).begin(), idx);
+    return guard([&]() -> entry {
+        auto it = std::next(as_json(node).begin(), idx);
 
-    return { it.key(), as_common(it.value()) };
+        return { it.key(), as_common(it.value()) };
+    });
 }
 
 common_json::items_view common_json::items() const {
@@ -354,7 +378,7 @@ common_json::items_view common_json::items() const {
 }
 
 template <typename T> T common_json::get() const {
-    return as_json(this).get<T>();
+    return guard([&] { return as_json(this).get<T>(); });
 }
 
 // the backing library cannot build a common_json, so this one is just a copy
