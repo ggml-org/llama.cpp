@@ -236,6 +236,11 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_EXPERTS_PER_GROUP,                 hparams.n_group_experts);
     add_kv(LLM_KV_MOE_EVERY_N_LAYERS,                hparams.moe_every_n_layers);
     add_kv(LLM_KV_NEXTN_PREDICT_LAYERS,              hparams.n_layer_nextn);
+    if (model->arch == LLM_ARCH_TELECHAT4) {
+        add_kv(LLM_KV_HYPER_CONNECTION_COUNT,               hparams.tc4_hc_mult);
+        add_kv(LLM_KV_HYPER_CONNECTION_SINKHORN_ITERATIONS, hparams.tc4_hc_sinkhorn_iters);
+        add_kv(LLM_KV_HYPER_CONNECTION_EPSILON,             hparams.tc4_hc_eps);
+    }
     add_kv(LLM_KV_NUM_DEEPSTACK_LAYERS,              hparams.n_deepstack_layers);
     add_kv(LLM_KV_DEEPSTACK_MAPPING,                 hparams.deepstack_mapping_arr);
     add_kv(LLM_KV_POOLING_TYPE,                      uint32_t(hparams.pooling_type));

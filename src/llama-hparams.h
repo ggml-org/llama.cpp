@@ -265,6 +265,11 @@ struct llama_hparams {
     float    dsv4_hc_eps               = 0.0f;
     std::array<uint32_t, LLAMA_MAX_LAYERS> dsv4_compress_ratios;
 
+    // TeleChat4 (DeepSeek-V3 style MLA/MoE + MHC multi-residual-stream blocks)
+    uint32_t tc4_hc_mult              = 0;
+    uint32_t tc4_hc_sinkhorn_iters    = 0;
+    float    tc4_hc_eps               = 0.0f;
+
     // qwen3vl deepstack
     // When parsed from GGUF, this implies the first N layers consume the first
     // N deepstack embeddings. Use deepstack_mapping_arr if you need a more
