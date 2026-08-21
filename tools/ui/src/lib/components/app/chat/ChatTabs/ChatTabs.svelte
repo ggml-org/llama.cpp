@@ -1,11 +1,12 @@
 <script lang="ts">
 	import ChatTabItem from './ChatTabItem.svelte';
-	import { ChevronLeft, ChevronRight, Plus } from '@lucide/svelte';
+	import { Plus } from '@lucide/svelte';
 	import { page } from '$app/state';
+	import { ScrollCarousel } from '$lib/components/ui/scroll-carousel';
 	import * as Tooltip from '$lib/components/ui/tooltip';
-	import { ICON_CLASS_DEFAULT } from '$lib/constants';
 	import { useScrollCarousel } from '$lib/hooks/use-scroll-carousel.svelte';
 	import { chatStore, conversationsStore, NEW_CHAT_TAB_ID, tabsStore, uiStore } from '$lib/stores';
+	import { tick } from 'svelte';
 
 	const carousel = useScrollCarousel();
 
@@ -22,8 +23,8 @@
 		}))
 	);
 
-	// hide the New chat button when the new-chat tab is the only one open
-	let showNewChatButton = $derived(tabsStore.openTabs.some((id) => id !== NEW_CHAT_TAB_ID));
+	// hide the New chat button while a new-chat tab is already open
+	let showNewChatButton = $derived(!tabsStore.openTabs.includes(NEW_CHAT_TAB_ID));
 
 	let loadingIds = $derived(new Set(chatStore.getAllLoadingChats()));
 
@@ -44,13 +45,30 @@
 		}
 	}
 
-	$effect(() => {
-		// keep the active tab in view whenever it changes (activeId drives re-run)
-		const el = carousel.scrollContainer?.querySelector<HTMLElement>('[data-active-tab]');
+	let previousTabIds = new Set<string>();
+	let previousActiveId: string | null = null;
 
-		if (el && activeId) {
-			carousel.scrollToCenter(el);
-		}
+	$effect(() => {
+		const currentIds = new Set(tabs.map((t) => t.id));
+		const addedIds = tabs.filter((t) => !previousTabIds.has(t.id)).map((t) => t.id);
+
+		previousTabIds = currentIds;
+
+		const activeChanged = activeId !== previousActiveId;
+
+		previousActiveId = activeId;
+
+		// scroll when the active tab changes (a click) or when a new tab is added
+		if (addedIds.length === 0 && !activeChanged) return;
+
+		// wait for the new tab to be laid out before scrolling to it
+		void tick().then(() => {
+			const el = carousel.scrollContainer?.querySelector<HTMLElement>('[data-active-tab]');
+
+			if (el && activeId) {
+				carousel.scrollToCenter(el);
+			}
+		});
 	});
 </script>
 
@@ -60,67 +78,57 @@
 		: 'max-w-[calc(100vw-4.5rem)]'}"
 	aria-label="Open conversations"
 >
-	<div class="relative flex h-10 items-center" style="scroll-padding: 1rem;">
-		<button
-			class="absolute left-2 z-10 flex h-6 w-6 items-center justify-center rounded-full bg-muted shadow-md backdrop-blur-sm transition-opacity hover:bg-accent {carousel.canScrollLeft
-				? 'opacity-100'
-				: 'pointer-events-none opacity-0'}"
-			onclick={carousel.scrollLeft}
-			aria-label="Scroll left"
+	<div class="relative">
+		<ScrollCarousel
+			class="h-10"
+			containerClass="flex h-10 min-w-0 items-center"
+			innerClass="items-center gap-1.25"
+			{carousel}
 		>
-			<ChevronLeft class={ICON_CLASS_DEFAULT} />
-		</button>
+			{#each tabs as tab (tab.id)}
+				<ChatTabItem
+					{tab}
+					isActive={tab.id === activeId}
+					isLoading={loadingIds.has(tab.id)}
+					onActivate={(id) => tabsStore.activate(id)}
+					onClose={handleClose}
+					onStop={handleStop}
+					onAuxClick={handleAuxClick}
+				/>
+			{/each}
+
+			{#if showNewChatButton}
+				<Tooltip.Root>
+					<Tooltip.Trigger>
+						{#snippet child({ props })}
+							<button
+								{...props}
+								class="backdrop-blur-lg flex h-8 w-8 mr-4 shrink-0 cursor-pointer items-center justify-center rounded-md transition-colors hover:bg-foreground/5"
+								onclick={() => conversationsStore.openNewChat()}
+								aria-label="New chat"
+							>
+								<Plus class="h-4 w-4 opacity-40 transition-opacity group-hover:opacity-100" />
+							</button>
+						{/snippet}
+					</Tooltip.Trigger>
+
+					<Tooltip.Content>
+						<p>New chat</p>
+					</Tooltip.Content>
+				</Tooltip.Root>
+			{/if}
+		</ScrollCarousel>
 
 		<div
-			class="scrollbar-hide flex h-10 min-w-0 items-center overflow-x-auto"
-			bind:this={carousel.scrollContainer}
-			onscroll={carousel.updateScrollButtons}
-		>
-			<div class="flex min-w-max items-center gap-1.25">
-				{#each tabs as tab (tab.id)}
-					<ChatTabItem
-						{tab}
-						isActive={tab.id === activeId}
-						isLoading={loadingIds.has(tab.id)}
-						onActivate={(id) => tabsStore.activate(id)}
-						onClose={handleClose}
-						onStop={handleStop}
-						onAuxClick={handleAuxClick}
-					/>
-				{/each}
-
-				{#if showNewChatButton}
-					<Tooltip.Root>
-						<Tooltip.Trigger>
-							{#snippet child({ props })}
-								<button
-									{...props}
-									class="backdrop-blur-lg flex h-8 w-8 mr-4 shrink-0 cursor-pointer items-center justify-center rounded-md transition-colors hover:bg-foreground/5"
-									onclick={() => conversationsStore.openNewChat()}
-									aria-label="New chat"
-								>
-									<Plus class="h-4 w-4 opacity-40 transition-opacity group-hover:opacity-100" />
-								</button>
-							{/snippet}
-						</Tooltip.Trigger>
-
-						<Tooltip.Content>
-							<p>New chat</p>
-						</Tooltip.Content>
-					</Tooltip.Root>
-				{/if}
-			</div>
-		</div>
-
-		<button
-			class="absolute right-2 z-10 flex h-6 w-6 items-center justify-center rounded-full bg-muted shadow-md backdrop-blur-sm transition-opacity hover:bg-accent {carousel.canScrollRight
+			class="pointer-events-none absolute inset-y-0 left-0 z-[5] w-8 bg-gradient-to-r from-background to-transparent transition-opacity {carousel.canScrollLeft
 				? 'opacity-100'
-				: 'pointer-events-none opacity-0'}"
-			onclick={carousel.scrollRight}
-			aria-label="Scroll right"
-		>
-			<ChevronRight class={ICON_CLASS_DEFAULT} />
-		</button>
+				: 'opacity-0'}"
+		></div>
+		<div
+			class="pointer-events-none absolute inset-y-0 right-0 z-[5] w-8 bg-gradient-to-l from-background to-transparent transition-opacity {carousel.canScrollRight
+				? 'opacity-100'
+				: 'opacity-0'}"
+		></div>
 	</div>
 </nav>
 
