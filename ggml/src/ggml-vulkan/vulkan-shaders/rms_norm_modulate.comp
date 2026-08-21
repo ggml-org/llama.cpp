@@ -1,0 +1,93 @@
+#version 450
+
+#extension GL_EXT_control_flow_attributes : enable
+
+#define BLOCK_SIZE 512
+
+layout(push_constant) uniform parameter {
+    uint ne00;
+    uint ne01;
+    uint ne02;
+    uint ne03;
+    uint nb01;
+    uint nb02;
+    uint nb03;
+    float eps;
+} p;
+
+layout(binding = 0) readonly buffer A     { float data_a[];     };
+layout(binding = 1) readonly buffer NORM  { float data_norm[];  };
+layout(binding = 2) readonly buffer SCALE { float data_scale[]; };
+layout(binding = 3) readonly buffer SHIFT { float data_shift[]; };
+layout(binding = 4) writeonly buffer D    { float data_d[];     };
+
+layout(local_size_x = BLOCK_SIZE, local_size_y = 1, local_size_z = 1) in;
+
+shared float sumsh[BLOCK_SIZE];
+
+void rms_norm_modulate(uint num_iters) {
+    const uint row     = gl_WorkGroupID.x;
+    const uint channel = gl_WorkGroupID.y;
+    const uint samp    = gl_WorkGroupID.z;
+    const uint tid     = gl_LocalInvocationID.x;
+
+    const uint a_offset = samp*p.nb03 + channel*p.nb02 + row*p.nb01;
+    const uint d_offset = ((samp*p.ne02 + channel)*p.ne01 + row)*p.ne00;
+
+    float sum = 0.0f;
+    [[unroll]] for (uint col = tid, idx = 0; idx < num_iters; col += BLOCK_SIZE, ++idx) {
+        float xi = 0.0f;
+        if (col < p.ne00) {
+            xi = data_a[a_offset + col];
+        }
+        sum += xi * xi;
+    }
+
+    sumsh[tid] = sum;
+    barrier();
+    [[unroll]] for (int s = BLOCK_SIZE / 2; s > 0; s >>= 1) {
+        if (tid < s) {
+            sum += sumsh[tid + s];
+            sumsh[tid] = sum;
+        }
+        barrier();
+    }
+
+    const float inv_rms = inversesqrt(sumsh[0] / float(p.ne00) + p.eps);
+
+    [[unroll]] for (uint col = tid, idx = 0; idx < num_iters; col += BLOCK_SIZE, ++idx) {
+        if (col >= p.ne00) {
+            continue;
+        }
+
+        precise float normalized = inv_rms * data_a[a_offset + col] * data_norm[col];
+        precise float factor     = data_scale[col] * 1.0f + 1.0f;
+        precise float modulated  = normalized * factor;
+        data_d[d_offset + col]   = modulated + data_shift[col];
+    }
+}
+
+void main() {
+    uint num_blocks = (p.ne00 + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    if (num_blocks > 32) {
+        rms_norm_modulate(num_blocks);
+    } else if (num_blocks > 16) {
+        rms_norm_modulate(32);
+    } else if (num_blocks > 12) {
+        rms_norm_modulate(16);
+    } else if (num_blocks > 10) {
+        rms_norm_modulate(12);
+    } else if (num_blocks > 8) {
+        rms_norm_modulate(10);
+    } else if (num_blocks > 4) {
+        rms_norm_modulate(8);
+    } else if (num_blocks == 4) {
+        rms_norm_modulate(4);
+    } else if (num_blocks == 3) {
+        rms_norm_modulate(3);
+    } else if (num_blocks == 2) {
+        rms_norm_modulate(2);
+    } else if (num_blocks == 1) {
+        rms_norm_modulate(1);
+    }
+}

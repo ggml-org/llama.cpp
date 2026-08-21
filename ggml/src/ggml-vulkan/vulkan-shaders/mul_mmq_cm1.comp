@@ -1,0 +1,444 @@
+#version 460
+
+// Integer cooperative-matrix (WMMA) matmul: Q8_0 weights x Q8_1-quantized activations.
+//
+// The float coopmat path (mul_mm.comp) dequantizes the weight tile to f16 before
+// staging it in shared memory, which costs one multiply plus a narrow LDS store per
+// weight element and leaves the matrix cores mostly idle. Q8_0 values are already
+// int8, so here the raw quants are staged as-is and fed to sint8 cooperative
+// matrices; the per-32-value block scales are folded in once per K-block on the
+// int32 accumulator instead of once per element on the operands.
+//
+// Element ownership inside an accumulator fragment is implementation defined, so it
+// is discovered at runtime from a shared-memory probe (see cm_layout_probe below)
+// rather than assumed. That keeps the per-block scaling portable across drivers.
+//
+// The K loop is software pipelined through registers. Global loads for the next
+// group of K blocks are issued after the current group is published to LDS, so they
+// can overlap the current LDS reads, cooperative multiplies, and scale epilogue.
+//
+// Two hazards constrain where the prefetch may sit:
+//   * it overwrites the registers the LDS stores consume, so it must follow them;
+//   * it must stay after the store barrier, because a barrier placed after the loads
+//     could be lowered to a full vmcnt(0) wait and would re-expose the latency.
+// With one LDS buffer the two barriers per iteration (write-visible, then
+// reads-complete) are irreducible; the prefetch changes what they overlap, not how
+// many there are. The workgroup swizzle in main() additionally trades repeated A
+// fetches for the smaller B operand by keeping a bounded group of A panels together.
+
+#extension GL_EXT_control_flow_attributes : enable
+#extension GL_EXT_shader_16bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int8 : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
+#extension GL_KHR_cooperative_matrix : require
+#extension GL_KHR_memory_scope_semantics : require
+#extension GL_KHR_shader_subgroup_basic : require
+
+// Unconditional: the Q8_0/Q8_1 block scales are fp16 and are held in shared memory.
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+
+#include "types.glsl"
+
+
+layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
+
+layout (binding = 0) readonly buffer A_PACKED16 {block_q8_0_packed16 data_a_packed16[];};
+layout (binding = 1) readonly buffer B {block_q8_1_x4_packed128 data_b[];};
+layout (binding = 2) writeonly buffer D {D_TYPE data_d[];};
+
+layout (push_constant) uniform parameter
+{
+    uint M;
+    uint N;
+    uint K;
+    uint stride_a;
+    uint stride_b;
+    uint stride_d;
+
+    uint batch_stride_a;
+    uint batch_stride_b;
+    uint batch_stride_d;
+
+    uint base_work_group_z;
+    uint num_batches;
+    uint k_split;
+    uint ne02;
+    uint ne12;
+    uint broadcast2;
+    uint broadcast3;
+} p;
+
+layout (constant_id = 0)  const uint BLOCK_SIZE = 512;
+layout (constant_id = 1)  const uint BM = 128;
+layout (constant_id = 2)  const uint BN = 128;
+// constant_id 3 (BK) is unused: the K blocking is fixed by the Q8_0/Q8_1 block size.
+layout (constant_id = 4)  const uint WM = 64;
+layout (constant_id = 5)  const uint WN = 32;
+// constant_id 6 (WMITER) is unused: coopmat tiles replace the register subtiling.
+layout (constant_id = 7)  const uint CM_M = 16;
+layout (constant_id = 8)  const uint CM_N = 16;
+layout (constant_id = 9)  const uint CM_K = 16;
+layout (constant_id = 10) const uint WARP = 64;
+// Number of Q8_0 blocks staged per publication barrier. Three is selected for
+// the RADV wave32 large tile; other pipelines retain two.
+layout (constant_id = 11) const uint BK_STEP = 2;
+
+#define BK 32
+
+// Bytes of A the tile-order swizzle in main() tries to keep resident. Half of the 32 MB
+// last-level cache, leaving the other half to the B tiles and the output stream that are
+// flowing through it at the same time.
+#define GROUP_A_BUDGET (16u * 1024u * 1024u)
+
+// Row pitch of the quant tiles, in 32-bit words. The +4 padding both keeps every
+// row 16-byte aligned and spreads consecutive rows across all 32 LDS banks
+// (BK_STEP*8 alone would alias rows two apart onto the same banks).
+const uint QPITCH = BK_STEP * (BK / 4) + 4;
+
+const uint CM_ELEMS   = (CM_M * CM_N) / WARP;
+const uint K_SUB      = BK / CM_K;
+// Magic-bias dequant, folded into an FMA pair. ACO charges wave64 VALU by ISSUE PASSES, not
+// instructions: v_cvt_f32_i32 is absent from is_dual_issue_capable() (aco_statistics.cpp:72) so
+// it costs 2 passes, while v_fma_f32/v_mul_f32/v_sub_f32 cost 1. Wave32 reverses that tradeoff:
+// native conversion and scale arithmetic can be paired as VOPD, while the extra bias state gets
+// in the way. WARP is a specialization constant, so the unused path is removed at pipeline build.
+//
+// Seeding the WMMA C operand with the bit pattern of 1.5*2^23 makes the accumulator readable as
+// a float directly: K_SUB=2 chains 32 int8 products so |acc| <= 32*128*128 = 2^19, and
+// 1.5*2^23 +/- 2^19 stays inside [2^23, 2^24) where the f32 ULP is exactly 1, so
+// intBitsToFloat(BIAS_BITS + n) == BIAS + n exactly for every reachable n.
+//
+// nbias_a = -BIAS*scale_a is exact because BIAS = 3*2^22 has a 2-bit significand and
+// scale_a is an f16 widened to f32 (11 bits), so the product needs 13 bits of the 24
+// available. The first fma then evaluates
+// (BIAS + n)*sa - BIAS*sa = n*sa exactly before its single rounding, which is the same value and
+// the same number of roundings as the v_mul it replaces.
+#define ACC_BIAS_BITS 0x4B400000
+#define ACC_BIAS_F    12582912.0f
+const bool USE_MAGIC_BIAS = WARP != 32;
+
+const uint CMS_PER_ROW = WM / CM_M;
+const uint CMS_PER_COL = WN / CM_N;
+
+const uint loadstride_a = BLOCK_SIZE / (BK / 4);
+const uint loadstride_b = BLOCK_SIZE / (BK / 16);
+
+// Upper bound on the staging iterations an invocation can run: loadc is strictly
+// below its stride, so no invocation can reach index BM/BN before this many steps.
+const uint A_LOADS = (BM + loadstride_a - 1) / loadstride_a;
+const uint B_LOADS = (BN + loadstride_b - 1) / loadstride_b;
+
+// The quant tiles are typed int32_t, not i8vec4. coopMatLoad addresses them
+// identically - its offset and stride are counted in elements of the array type and
+// both types are 4 bytes wide, so QPITCH and every load offset below are unchanged,
+// and the int8 fragment elements are still read packed four per dword. What changes
+// is the store side: LLPC lowers a v4char store to workgroup memory as four
+// ds_store_b8, because the Vulkan memory model marks every shared access
+// NonPrivatePointer and that blocks the merge back into one dword.
+shared int32_t buf_a_qs[BM * QPITCH];
+shared int32_t buf_b_qs[BN * QPITCH];
+// Scales are widened to f32 on the way into LDS. Keeping them as float16_t costs an
+// extra v_cvt_f32_f16 plus 16-bit register shuffling on every gather in the K loop,
+// which measured far more than the extra 1 KB of shared memory is worth.
+shared float buf_a_d[BM * BK_STEP];
+shared float buf_b_d[BN * BK_STEP];
+shared int32_t cm_layout_probe[CM_M * CM_N];
+
+// Global -> registers. Nothing is combined, converted or selected here: every ALU op
+// applied to a load result would pull the s_waitcnt for that load back in front of the
+// compute and undo the pipelining. The two halves of an A quant word therefore stay in
+// separate registers (the packed16 struct puts qs at byte offset 2, so a 32-bit load is
+// not possible anyway) and the k-guard is applied to the *address* rather than to the
+// loaded value, with the matching zero-fill deferred to the LDS store.
+//
+// Only the B side is k-guarded, matching the unpipelined kernel: A rows are read for
+// every staged block, and this is never invoked for a block at or past end_k, so ks==0
+// is always in range and is a safe clamp target.
+#define PREFETCH_BLOCK(blk)                                                                    \
+    [[unroll]] for (uint li = 0; li < A_LOADS; li++) {                                         \
+        const uint buf_ib = loadc_a + li * loadstride_a;                                       \
+        if (buf_ib < BM) {                                                                     \
+            const uint ib = pos_a_ib + buf_ib * p.stride_a / BK;                               \
+            [[unroll]] for (uint ks = 0; ks < BK_STEP; ks++) {                                 \
+                pre_a_q0[li * BK_STEP + ks] = int32_t(data_a_packed16[ib + ks].qs[loadr_a * 2]);\
+                pre_a_q1[li * BK_STEP + ks] =                                                  \
+                    int32_t(data_a_packed16[ib + ks].qs[loadr_a * 2 + 1]);                     \
+                pre_a_d[li * BK_STEP + ks] = data_a_packed16[ib + ks].d;                       \
+            }                                                                                  \
+        }                                                                                      \
+    }                                                                                          \
+    [[unroll]] for (uint li = 0; li < B_LOADS; li++) {                                         \
+        const uint buf_ib = loadc_b + li * loadstride_b;                                       \
+        if (buf_ib < BN) {                                                                     \
+            const uint ib = pos_b_ib + buf_ib * p.stride_b / BK;                               \
+            [[unroll]] for (uint ks = 0; ks < BK_STEP; ks++) {                                 \
+                const uint ib_k = ((blk) + ks * BK < end_k) ? (ib + ks) : ib;                  \
+                const uint ib_outer = ib_k / 4;                                                \
+                const uint ib_inner = ib_k % 4;                                                \
+                pre_b_qs[li * BK_STEP + ks] = data_b[ib_outer].qs[ib_inner * 2 + loadr_b];     \
+                pre_b_d[li * BK_STEP + ks] = data_b[ib_outer].ds[ib_inner].x;                  \
+            }                                                                                  \
+        }                                                                                      \
+    }
+
+// Registers -> LDS for the block starting at blk. The k-guard is re-evaluated here
+// because PREFETCH_BLOCK clamped the address instead of the value.
+#define STORE_BLOCK_TO_LDS(blk)                                                                \
+    [[unroll]] for (uint li = 0; li < A_LOADS; li++) {                                         \
+        const uint buf_ib = loadc_a + li * loadstride_a;                                       \
+        if (buf_ib < BM) {                                                                     \
+            [[unroll]] for (uint ks = 0; ks < BK_STEP; ks++) {                                 \
+                buf_a_qs[buf_ib * QPITCH + ks * (BK / 4) + loadr_a] =                          \
+                    pack32(i16vec2(int16_t(pre_a_q0[li * BK_STEP + ks]),                       \
+                                   int16_t(pre_a_q1[li * BK_STEP + ks])));                     \
+                if (loadr_a == 0) {                                                            \
+                    buf_a_d[ks * BM + buf_ib] = float(pre_a_d[li * BK_STEP + ks]);             \
+                }                                                                              \
+            }                                                                                  \
+        }                                                                                      \
+    }                                                                                          \
+    [[unroll]] for (uint li = 0; li < B_LOADS; li++) {                                         \
+        const uint buf_ib = loadc_b + li * loadstride_b;                                       \
+        if (buf_ib < BN) {                                                                     \
+            [[unroll]] for (uint ks = 0; ks < BK_STEP; ks++) {                                 \
+                const bool in_bounds = (blk) + ks * BK < end_k;                                \
+                const ivec4 v = in_bounds ? pre_b_qs[li * BK_STEP + ks] : ivec4(0);            \
+                const uint base = buf_ib * QPITCH + ks * (BK / 4) + loadr_b * 4;               \
+                buf_b_qs[base    ] = v.x;                                                      \
+                buf_b_qs[base + 1] = v.y;                                                      \
+                buf_b_qs[base + 2] = v.z;                                                      \
+                buf_b_qs[base + 3] = v.w;                                                      \
+                if (loadr_b == 0) {                                                            \
+                    buf_b_d[ks * BN + buf_ib] =                                                \
+                        in_bounds ? float(pre_b_d[li * BK_STEP + ks]) : 0.0f;                  \
+                }                                                                              \
+            }                                                                                  \
+        }                                                                                      \
+    }
+
+void main() {
+    const uint batch_idx = gl_WorkGroupID.z + p.base_work_group_z;
+
+    const uint i13 = batch_idx / p.ne12;
+    const uint i12 = batch_idx % p.ne12;
+
+    const uint i03 = i13 / p.broadcast3;
+    const uint i02 = i12 / p.broadcast2;
+
+    const uint batch_idx_a = i03 * p.ne02 + i02;
+
+    const uint blocks_m = (p.M + BM - 1) / BM;
+    const uint blocks_n = (p.N + BN - 1) / BN;
+    const uint ik = gl_WorkGroupID.x / blocks_m;
+
+    // Workgroups are dispatched over (blocks_m, blocks_n) with x varying fastest, so the
+    // natural order walks every A row-panel once per N tile. One B column tile then stays
+    // resident in the last-level cache for the whole sweep while A is re-fetched from DRAM
+    // blocks_n times - and A is the larger operand, so the cache is being spent on the
+    // wrong one. For m=16384 n=3079 k=6144 that is 25 x 107 MB of A against 20 MB of B.
+    //
+    // Re-index the (row-panel, N-tile) grid so that group_m consecutive row-panels are
+    // held while the N tiles sweep past them. A is then fetched once per group instead of
+    // once per (panel, N tile); the price is re-fetching B once per group, which is the
+    // cheaper direction whenever A is the bigger matrix. group_m is sized so the resident
+    // panels stay well inside the 32 MB Infinity Cache. This only permutes which tile a
+    // workgroup computes; every workgroup still does exactly the same work as before.
+    const uint a_panel_bytes = BM * p.K + (BM * p.K) / 16;  // int8 quants + fp16 block scales
+    const uint group_m = clamp(GROUP_A_BUDGET / max(a_panel_bytes, 1u), 1u, min(blocks_m, 32u));
+
+    // Standard group-major remap. gsize handles a final group shorter than group_m; it is
+    // what keeps the map a bijection onto the full grid, so no tile is dropped or doubled.
+    const uint tiles_per_group = group_m * blocks_n;
+    const uint lin             = gl_WorkGroupID.y * blocks_m + (gl_WorkGroupID.x % blocks_m);
+    const uint group_id        = lin / tiles_per_group;
+    const uint first_m         = group_id * group_m;
+    const uint gsize           = min(blocks_m - first_m, group_m);
+    const uint in_group        = lin - group_id * tiles_per_group;
+
+    const uint ir = first_m + in_group % gsize;
+    const uint ic = in_group / gsize;
+
+    const uint warp_i = gl_SubgroupID;
+    const uint warp_r = warp_i % (BM / WM);
+    const uint warp_c = warp_i / (BM / WM);
+
+    uint elem_row[CM_ELEMS];
+    uint elem_col[CM_ELEMS];
+    if (WARP == 32) {
+        [[unroll]] for (uint e = 0; e < CM_ELEMS; ++e) {
+            elem_row[e] = gl_SubgroupInvocationID / CM_N + 2 * e;
+            elem_col[e] = gl_SubgroupInvocationID % CM_N;
+        }
+    } else {
+        // Accumulator element ownership is implementation defined. Keep runtime
+        // discovery for every path except the RADV-only wave32 specialization.
+        for (uint i = gl_LocalInvocationID.x; i < CM_M * CM_N; i += BLOCK_SIZE) {
+            cm_layout_probe[i] = int32_t(i);
+        }
+        barrier();
+
+        coopmat<int32_t, gl_ScopeSubgroup, CM_M, CM_N, gl_MatrixUseAccumulator> probe;
+        coopMatLoad(probe, cm_layout_probe, 0, CM_N, gl_CooperativeMatrixLayoutRowMajor);
+
+        [[unroll]] for (uint e = 0; e < CM_ELEMS; ++e) {
+            elem_row[e] = uint(probe[e]) / CM_N;
+            elem_col[e] = uint(probe[e]) % CM_N;
+        }
+    }
+
+    const uint loadr_a = gl_LocalInvocationID.x % (BK / 4);
+    const uint loadc_a = gl_LocalInvocationID.x / (BK / 4);
+    const uint loadr_b = gl_LocalInvocationID.x % (BK / 16);
+    const uint loadc_b = gl_LocalInvocationID.x / (BK / 16);
+
+    const uint start_k = ik * p.k_split;
+    const uint end_k = min(p.K, (ik + 1) * p.k_split);
+
+    uint pos_a_ib = batch_idx_a * (p.batch_stride_a / BK) + (ir * BM * p.stride_a + start_k) / BK;
+    uint pos_b_ib = (batch_idx * p.batch_stride_b + ic * BN * p.stride_b + start_k) / BK;
+
+    // 32-bit, not int16_t: half-width registers make the compiler pack two loads into
+    // the lo/hi halves of one VGPR, and that v_mov_b16 forces a partial s_waitcnt back
+    // in front of the WMMAs. Sign-extension folds into the load itself, so this costs
+    // registers but no instructions.
+    int32_t   pre_a_q0[A_LOADS * BK_STEP];
+    int32_t   pre_a_q1[A_LOADS * BK_STEP];
+    float16_t pre_a_d [A_LOADS * BK_STEP];
+    ivec4     pre_b_qs[B_LOADS * BK_STEP];
+    float16_t pre_b_d [B_LOADS * BK_STEP];
+
+    // Prologue: the first K block has no compute to overlap, so it is issued as early
+    // as possible and covered by the accumulator zeroing and the pre-loop barrier.
+    if (start_k < end_k) {
+        PREFETCH_BLOCK(start_k)
+    }
+
+    float sums[CMS_PER_ROW * CMS_PER_COL * CM_ELEMS];
+    [[unroll]] for (uint i = 0; i < CMS_PER_ROW * CMS_PER_COL * CM_ELEMS; i++) {
+        sums[i] = 0.0f;
+    }
+
+    // Row/column of this subgroup's tile within the workgroup tile.
+    const uint a_row0 = warp_r * WM;
+    const uint b_col0 = warp_c * WN;
+    const bool active_col_tile = ic * BN + b_col0 < p.N;
+
+    barrier();
+
+    for (uint block = start_k; block < end_k; block += BK * BK_STEP) {
+        STORE_BLOCK_TO_LDS(block)
+
+        barrier();
+
+        pos_a_ib += BK_STEP;
+        pos_b_ib += BK_STEP;
+
+        const uint next_block = block + BK * BK_STEP;
+        if (next_block < end_k) {
+            PREFETCH_BLOCK(next_block)
+        }
+
+        if (active_col_tile) {
+        [[unroll]] for (uint ks = 0; ks < BK_STEP; ks++) {
+            coopmat<int8_t, gl_ScopeSubgroup, CM_M, CM_K, gl_MatrixUseA> cache_a[CMS_PER_ROW * K_SUB];
+            coopmat<int8_t, gl_ScopeSubgroup, CM_K, CM_N, gl_MatrixUseB> cache_b[CMS_PER_COL * K_SUB];
+
+            [[unroll]] for (uint r = 0; r < CMS_PER_ROW; r++) {
+                [[unroll]] for (uint h = 0; h < K_SUB; h++) {
+                    coopMatLoad(cache_a[r * K_SUB + h], buf_a_qs,
+                                (a_row0 + r * CM_M) * QPITCH + ks * (BK / 4) + h * (CM_K / 4),
+                                QPITCH, gl_CooperativeMatrixLayoutRowMajor);
+                }
+            }
+            [[unroll]] for (uint c = 0; c < CMS_PER_COL; c++) {
+                [[unroll]] for (uint h = 0; h < K_SUB; h++) {
+                    coopMatLoad(cache_b[c * K_SUB + h], buf_b_qs,
+                                (b_col0 + c * CM_N) * QPITCH + ks * (BK / 4) + h * (CM_K / 4),
+                                QPITCH, gl_CooperativeMatrixLayoutColumnMajor);
+                }
+            }
+
+            // Per-block scales, gathered once per tile row/column and reused across
+            // the whole CMS_PER_ROW x CMS_PER_COL grid.
+            float scale_a[CMS_PER_ROW * CM_ELEMS];
+            float nbias_a[CMS_PER_ROW * CM_ELEMS];
+            float scale_b[CMS_PER_COL * CM_ELEMS];
+            [[unroll]] for (uint r = 0; r < CMS_PER_ROW; r++) {
+                [[unroll]] for (uint e = 0; e < CM_ELEMS; e++) {
+                    scale_a[r * CM_ELEMS + e] = (buf_a_d[ks * BM + a_row0 + r * CM_M + elem_row[e]]);
+                    if (USE_MAGIC_BIAS) {
+                        nbias_a[r * CM_ELEMS + e] = -ACC_BIAS_F * scale_a[r * CM_ELEMS + e];
+                    }
+                }
+            }
+            [[unroll]] for (uint c = 0; c < CMS_PER_COL; c++) {
+                [[unroll]] for (uint e = 0; e < CM_ELEMS; e++) {
+                    scale_b[c * CM_ELEMS + e] = (buf_b_d[ks * BN + b_col0 + c * CM_N + elem_col[e]]);
+                }
+            }
+
+            // Issue every coopMatMulAdd for this K block before applying any scales.
+            // Scaling a tile immediately after its own WMMA makes the f32 math read the
+            // accumulator that was just written, which serializes the vector ALU against
+            // the matrix pipe (visible as a wall of s_delay_alu in the ISA). Splitting the
+            // two passes gives the scheduler independent work to hide the dependency
+            // behind. The int32 accumulators stay in registers: CMS_PER_ROW*CMS_PER_COL
+            // tiles * (CM_M*CM_N/WARP) elements is 32 VGPRs at the tuned tile sizes.
+            coopmat<int32_t, gl_ScopeSubgroup, CM_M, CM_N, gl_MatrixUseAccumulator> accs[CMS_PER_ROW * CMS_PER_COL];
+
+            [[unroll]] for (uint r = 0; r < CMS_PER_ROW; r++) {
+                [[unroll]] for (uint c = 0; c < CMS_PER_COL; c++) {
+                    coopmat<int32_t, gl_ScopeSubgroup, CM_M, CM_N, gl_MatrixUseAccumulator> acc =
+                        coopmat<int32_t, gl_ScopeSubgroup, CM_M, CM_N, gl_MatrixUseAccumulator>(
+                            USE_MAGIC_BIAS ? ACC_BIAS_BITS : 0);
+
+                    [[unroll]] for (uint h = 0; h < K_SUB; h++) {
+                        acc = coopMatMulAdd(cache_a[r * K_SUB + h], cache_b[c * K_SUB + h], acc);
+                    }
+
+                    accs[r * CMS_PER_COL + c] = acc;
+                }
+            }
+
+            [[unroll]] for (uint r = 0; r < CMS_PER_ROW; r++) {
+                [[unroll]] for (uint c = 0; c < CMS_PER_COL; c++) {
+                    const uint tile = r * CMS_PER_COL + c;
+                    [[unroll]] for (uint e = 0; e < CM_ELEMS; e++) {
+                        if (USE_MAGIC_BIAS) {
+                            const float t = fma(intBitsToFloat(int(accs[tile][e])),
+                                                scale_a[r * CM_ELEMS + e],
+                                                nbias_a[r * CM_ELEMS + e]);
+                            sums[tile * CM_ELEMS + e] = fma(t, scale_b[c * CM_ELEMS + e],
+                                                            sums[tile * CM_ELEMS + e]);
+                        } else {
+                            sums[tile * CM_ELEMS + e] += float(accs[tile][e]) *
+                                                         scale_a[r * CM_ELEMS + e] *
+                                                         scale_b[c * CM_ELEMS + e];
+                        }
+                    }
+                }
+            }
+        }
+        }
+
+        barrier();
+    }
+
+    const uint dr = ir * BM + a_row0;
+    const uint dc = ic * BN + b_col0;
+    const uint offsets = batch_idx * p.batch_stride_d + ik * p.batch_stride_d * p.num_batches;
+
+    [[unroll]] for (uint r = 0; r < CMS_PER_ROW; r++) {
+        [[unroll]] for (uint c = 0; c < CMS_PER_COL; c++) {
+            const uint sums_base = (r * CMS_PER_COL + c) * CM_ELEMS;
+            [[unroll]] for (uint e = 0; e < CM_ELEMS; e++) {
+                const uint row = dr + r * CM_M + elem_row[e];
+                const uint col = dc + c * CM_N + elem_col[e];
+                if (row < p.M && col < p.N) {
+                    data_d[offsets + col * p.stride_d + row] = D_TYPE(sums[sums_base + e]);
+                }
+            }
+        }
+    }
+}

@@ -626,6 +626,13 @@ void matmul_shaders(bool fp16, MatMulIdType matmul_id_type, bool coopmat, bool c
         if (!f16acc && !coopmat && !coopmat2 && !dot2 && (is_legacy_quant(tname) || is_k_quant(tname) || tname == "mxfp4")) {
             string_to_spv(shader_name + "_" + tname + "_q8_1", "mul_mmq.comp", merge_maps(merge_maps(base_dict, float_type_dict), {{data_a_key, "1"}, {"D_TYPE", "float"},}), fp16, coopmat, coopmat2, f16acc);
         }
+#if defined(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT)
+        // Integer cooperative-matrix mmq. Only Q8_0 qualifies: its quants are already
+        // int8, so they can be fed to sint8 cooperative matrices without unpacking.
+        if (!f16acc && coopmat && !coopmat2 && !dot2 && matmul_id_type == MatMulIdType::NONE && tname == "q8_0") {
+            string_to_spv(shader_name + "_" + tname + "_q8_1", "mul_mmq_cm1.comp", merge_maps(merge_maps(base_dict, float_type_dict), {{data_a_key, "1"}, {"D_TYPE", "float"},}), fp16, coopmat, coopmat2, f16acc);
+        }
+#endif
 #endif
     }
 }
@@ -805,6 +812,9 @@ void process_shaders() {
     string_to_spv("norm_f32", "norm.comp", merge_maps(base_dict, {{"A_TYPE", "float"}, {"D_TYPE", "float"}}));
     string_to_spv("group_norm_f32", "group_norm.comp", merge_maps(base_dict, {{"A_TYPE", "float"}, {"D_TYPE", "float"}}));
     string_to_spv("rms_norm_f32", "rms_norm.comp", merge_maps(base_dict, {{"A_TYPE", "float"}, {"B_TYPE", "float"}, {"D_TYPE", "float"}}));
+    string_to_spv("rms_norm_channel_last_f32", "rms_norm_channel_last.comp", {});
+    string_to_spv("rms_norm_modulate_f32", "rms_norm_modulate.comp", {});
+    string_to_spv("mul_add_f32", "mul_add.comp", {});
     string_to_spv("rms_norm_partials_f32", "rms_norm_partials.comp", merge_maps(base_dict, {{"A_TYPE", "float"}, {"B_TYPE", "float"}, {"D_TYPE", "float"}}));
     string_to_spv("rms_norm_mul_rope_f32_f32", "rms_norm.comp", merge_maps(base_dict, {{"A_TYPE", "float"}, {"B_TYPE", "float"}, {"D_TYPE", "float"}, {"ROPE_D_TYPE", "float"}, {"RMS_NORM_ROPE_FUSION", "1"}}));
     string_to_spv("rms_norm_mul_rope_f32_f16", "rms_norm.comp", merge_maps(base_dict, {{"A_TYPE", "float"}, {"B_TYPE", "float"}, {"D_TYPE", "float"}, {"ROPE_D_TYPE", "float16_t"}, {"RMS_NORM_ROPE_FUSION", "1"}}));
@@ -882,6 +892,10 @@ void process_shaders() {
 
     string_to_spv("quantize_q8_1_x4", "quantize_q8_1.comp", {{"QBLOCK_X4", "1"}});
     string_to_spv("quantize_q8_1_x4_subgroup", "quantize_q8_1.comp", {{"QBLOCK_X4", "1"}, {"USE_SUBGROUPS", "1"}});
+    string_to_spv("quantize_q8_1_x4_swiglu", "quantize_q8_1.comp", {{"QBLOCK_X4", "1"}, {"FUSED_SWIGLU", "1"}});
+    string_to_spv("quantize_q8_1_x4_swiglu_subgroup", "quantize_q8_1.comp", {{"QBLOCK_X4", "1"}, {"FUSED_SWIGLU", "1"}, {"USE_SUBGROUPS", "1"}});
+    string_to_spv("quantize_q8_1_x4_sigmoid_mul", "quantize_q8_1.comp", {{"QBLOCK_X4", "1"}, {"FUSED_SIGMOID_MUL", "1"}});
+    string_to_spv("quantize_q8_1_x4_sigmoid_mul_subgroup", "quantize_q8_1.comp", {{"QBLOCK_X4", "1"}, {"FUSED_SIGMOID_MUL", "1"}, {"USE_SUBGROUPS", "1"}});
 
     string_to_spv("mul_f32", "mul.comp", {{"A_TYPE", "float"}, {"B_TYPE", "float"}, {"D_TYPE", "float"}, {"FLOAT_TYPE", "float"}});
 
