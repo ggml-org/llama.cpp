@@ -74,7 +74,7 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
 
     if (GGML_OPENMP_ENABLED)
         target_compile_definitions(${GGML_CPU_NAME} PRIVATE GGML_USE_OPENMP)
-        target_link_libraries(${GGML_CPU_NAME} PRIVATE OpenMP::OpenMP_C OpenMP::OpenMP_CXX)
+        target_link_libraries(${GGML_CPU_NAME} PRIVATE ${GGML_OPENMP_TARGET_C} ${GGML_OPENMP_TARGET_CXX})
     endif()
 
     if (GGML_LLAMAFILE)
@@ -639,6 +639,7 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
             ${KLEIDIAI_SRC}/kai/ukernels/matmul/matmul_clamp_fp32_bf16p_bf16p/
             ${KLEIDIAI_SRC}/kai/ukernels/matmul/matmul_clamp_f32_f16p_qsi4c32p/
             ${KLEIDIAI_SRC}/kai/ukernels/matmul/matmul_clamp_f32_f32p_f32p/
+            ${KLEIDIAI_SRC}/kai/ukernels/matmul/matmul_clamp_f32_f32_f32p/
             ${KLEIDIAI_SRC}/kai/ukernels/matmul/pack/)
 
         set(ARCH_FLAGS_TEMP "${ARCH_FLAGS}")
@@ -701,6 +702,8 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
                 ${KLEIDIAI_SRC}/kai/ukernels/matmul/matmul_clamp_f32_f16p_qsi4c32p/kai_matmul_clamp_f32_f16p1vlx2_qsi4c32p4vlx2_1vlx4vl_sme2_mopa_asm.S
                 ${KLEIDIAI_SRC}/kai/ukernels/matmul/matmul_clamp_f32_f32p_f32p/kai_matmul_clamp_f32_f32p2vlx1_f32p2vlx1biasf32_sme2_mopa.c
                 ${KLEIDIAI_SRC}/kai/ukernels/matmul/matmul_clamp_f32_f32p_f32p/kai_matmul_clamp_f32_f32p2vlx1_f32p2vlx1biasf32_sme2_mopa_asm.S
+                ${KLEIDIAI_SRC}/kai/ukernels/matmul/matmul_clamp_f32_f32_f32p/kai_matmul_clamp_f32_f32_f32p2vlx1b_1x16vl_sme2_mla.c
+                ${KLEIDIAI_SRC}/kai/ukernels/matmul/matmul_clamp_f32_f32_f32p/kai_matmul_clamp_f32_f32_f32p2vlx1b_1x16vl_sme2_mla_asm.S
                 ${KLEIDIAI_SRC}/kai/ukernels/matmul/pack/kai_lhs_pack_bf16p2vlx2_f32_sme.c
                 ${KLEIDIAI_SRC}/kai/ukernels/matmul/pack/kai_rhs_pack_kxn_bf16p2vlx2b_f32_x32_sme.c
                 ${KLEIDIAI_SRC}/kai/ukernels/matmul/pack/kai_lhs_pack_f16pmrx2_f32_neon.c
@@ -737,8 +740,9 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
         set_target_properties(${GGML_CPU_NAME} PROPERTIES COMPILE_FLAGS "-msimd128")
     endif()
 
-    if (CMAKE_CXX_COMPILER_ID STREQUAL "IntelLLVM")
-        # The compiler automatically enables "-ffast-math" which can cause NaNs in tests due to "-fassociative-math"
-        target_compile_options(${GGML_CPU_NAME} PRIVATE "-fno-associative-math")
-    endif()
+  if (CMAKE_C_COMPILER_ID STREQUAL "IntelLLVM" OR CMAKE_CXX_COMPILER_ID STREQUAL "IntelLLVM")
+      # The compiler automatically enables "-ffast-math" which can cause NaNs in tests due to "-fassociative-math"
+      target_compile_options(${GGML_CPU_NAME} PRIVATE "$<$<OR:$<COMPILE_LANG_AND_ID:C,IntelLLVM>,$<COMPILE_LANG_AND_ID:CXX,IntelLLVM>>:$<$<BOOL:${WIN32}>:/clang:>-fno-associative-math>")
+  endif()
+
 endfunction()

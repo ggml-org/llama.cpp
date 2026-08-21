@@ -8,7 +8,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { ICON_CLASS_DEFAULT } from '$lib/constants';
-	import { conversationsStore, mcpResourceStore, mcpStore } from '$lib/stores';
+	import { conversationsStore, mcpStore } from '$lib/stores';
 	import type { MCPResourceContent, MCPResourceInfo, MCPResourceTemplateInfo } from '$lib/types';
 	import { getResourceDisplayName } from '$lib/utils';
 	import { SvelteSet } from 'svelte/reactivity';
@@ -33,7 +33,7 @@
 	let templatePreviewLoading = $state(false);
 	let templatePreviewError = $state<string | null>(null);
 
-	const totalCount = $derived(mcpResourceStore.totalResourceCount);
+	const totalCount = $derived(mcpStore.resources.totalResourceCount);
 
 	$effect(() => {
 		if (open) {
@@ -48,7 +48,7 @@
 	});
 
 	async function loadResources() {
-		const perChatOverrides = conversationsStore.getAllMcpServerOverrides();
+		const perChatOverrides = conversationsStore.preferences.getAllMcpServerOverrides();
 		const initialized = await mcpStore.ensureInitialized(perChatOverrides);
 
 		if (initialized) {
@@ -126,16 +126,16 @@
 		isAttaching = true;
 
 		try {
-			const knownResource = mcpResourceStore.findResourceByUri(templatePreviewUri);
+			const knownResource = mcpStore.resources.findResourceByUri(templatePreviewUri);
 
 			if (knownResource) {
-				if (!mcpResourceStore.isAttached(knownResource.uri)) {
+				if (!mcpStore.resources.isAttached(knownResource.uri)) {
 					await mcpStore.attachResource(knownResource.uri);
 				}
 
 				toast.success(`Resource attached: ${knownResource.title || knownResource.name}`);
 			} else {
-				if (mcpResourceStore.isAttached(templatePreviewUri)) {
+				if (mcpStore.resources.isAttached(templatePreviewUri)) {
 					toast.info('Resource already attached');
 					handleOpenChange(false);
 
@@ -147,9 +147,9 @@
 					serverName: selectedTemplate.serverName,
 					uri: templatePreviewUri
 				};
-				const attachment = mcpResourceStore.addAttachment(resourceInfo);
+				const attachment = mcpStore.resources.addAttachment(resourceInfo);
 
-				mcpResourceStore.updateAttachmentContent(attachment.id, templatePreviewContent);
+				mcpStore.resources.updateAttachmentContent(attachment.id, templatePreviewContent);
 
 				toast.success(`Resource attached: ${resourceInfo.name}`);
 			}
@@ -199,7 +199,7 @@
 
 	function getAllResourcesFlatInTreeOrder(): MCPResourceInfo[] {
 		const allResources: MCPResourceInfo[] = [];
-		const resourcesMap = mcpResourceStore.serverResources;
+		const resourcesMap = mcpStore.resources.serverResources;
 
 		for (const [serverName, serverRes] of resourcesMap.entries()) {
 			for (const resource of serverRes.resources) {
