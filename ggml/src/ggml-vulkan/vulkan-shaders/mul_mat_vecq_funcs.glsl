@@ -167,12 +167,18 @@ i32vec2 repack(uint ib, uint iqs) {
                    pack32(i8vec4(kvalues_rocmfp4[i_a1.x], kvalues_rocmfp4[i_a1.y], kvalues_rocmfp4[i_a1.z], kvalues_rocmfp4[i_a1.w])));
 }
 
+// K_PER_ITER is 32 for these types: one call consumes a whole block, so the
+// UE4M3 scales are decoded once per block rather than once per 8 weights.
 FLOAT_TYPE mmvq_dot_product(const uint ib_a, const uint iqs) {
-    const i32vec2 data_a_qs = repack(ib_a, iqs);
-
     // the two halves carry different scales, so they cannot share an accumulator
-    const int32_t q_sum0 = dotPacked4x8EXT(data_a_qs.x, cache_b_qs[0]);
-    const int32_t q_sum1 = dotPacked4x8EXT(data_a_qs.y, cache_b_qs[1]);
+    int32_t q_sum0 = 0;
+    int32_t q_sum1 = 0;
+
+    [[unroll]] for (uint k = 0; k < 4; ++k) {
+        const i32vec2 data_a_qs = repack(ib_a, k);
+        q_sum0 += dotPacked4x8EXT(data_a_qs.x, cache_b_qs[k]);
+        q_sum1 += dotPacked4x8EXT(data_a_qs.y, cache_b_qs[k + 4]);
+    }
 
     const FLOAT_TYPEV2 d = get_dm2(ib_a);
     return FLOAT_TYPE(cache_b_ds.x * (float(q_sum0) * float(d.x) + float(q_sum1) * float(d.y)));
