@@ -48,7 +48,7 @@ export * from './pwa.constants';
 export * from './routes.constants';
 export * from './sandbox.constants';
 export * from './settings-keys.constants';
-export * from './settings-registry.constants';
+export * from './settings.constants';
 export * from './special-characters.constants';
 export * from './stream.constants';
 export * from './supported-file-types.constants';
