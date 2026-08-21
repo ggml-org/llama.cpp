@@ -8,9 +8,6 @@ static int ggml_backend_cpu_aarch64_score() {
     const ggml_feats_arch64_runtime_t af = ggml_feats_get_arch64_runtime();
     GGML_UNUSED(af);
 
-#ifdef GGML_USE_DOTPROD
-    if (!af.has_dotprod) { return 0; }
-    score += 1<<1;
 #endif
 #ifdef GGML_USE_FP16_VECTOR_ARITHMETIC
     if (!af.has_fp16) { return 0; }
