@@ -258,7 +258,7 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
                 try {
                     auto schema                  = json_value(data, "json_schema", json::object());
                     SRV_DBG("JSON schema: %s\n", schema.dump(2).c_str());
-                    std::string grammar_str      = json_schema_to_grammar(common_json_from_raw(schema));
+                    std::string grammar_str      = json_schema_to_grammar(schema);
                     SRV_DBG("Converted grammar: %s\n", grammar_str.c_str());
                     params.sampling.grammar      = {COMMON_GRAMMAR_TYPE_OUTPUT_FORMAT, std::move(grammar_str)};
                 } catch (const std::exception & e) {
@@ -487,7 +487,7 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
             const auto & stop = data.at("stop");
             if (stop.is_array()) {
                 for (const auto & word : stop) {
-                    if (!word.empty()) ctx.params.antiprompt.push_back(word);
+                    if (!word.empty()) ctx.params.antiprompt.push_back(word.get<std::string>());
                 }
             } else if (stop.is_string()) {
                 ctx.params.antiprompt.push_back(stop.get<std::string>());
@@ -503,7 +503,7 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
         ->set_handler([&](field_eval_context & ctx, const json & data) {
             const auto & samplers = data.at("samplers");
             if (samplers.is_array()) {
-                ctx.params.sampling.samplers = common_sampler_types_from_names(samplers);
+                ctx.params.sampling.samplers = common_sampler_types_from_names(samplers.get<std::vector<std::string>>());
             } else if (samplers.is_string()) {
                 ctx.params.sampling.samplers = common_sampler_types_from_chars(samplers.get<std::string>());
             }
@@ -580,8 +580,7 @@ static void handle_with_catch(const char * name, std::function<void()> func) {
 
 // treat a null value as absent so clients can send null to request the server default
 static bool has_value(const json & data, const char * n) {
-    auto it = data.find(n);
-    return it != data.end() && !it->is_null();
+    return data.contains(n) && !data.at(n).is_null();
 }
 
 template <typename T>

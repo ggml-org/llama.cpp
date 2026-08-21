@@ -14,7 +14,6 @@
 #include "jinja/caps.h"
 #include "peg-parser.h"
 
-#include "nlohmann/json.hpp"
 
 #include <algorithm>
 #include <cstdio>
@@ -31,7 +30,7 @@
 #include <utility>
 #include <vector>
 
-using json = nlohmann::ordered_json;
+using json = common_json;
 
 static std::string format_time(const std::chrono::system_clock::time_point & now, const std::string & format) {
     auto               time       = std::chrono::system_clock::to_time_t(now);
@@ -49,7 +48,7 @@ static json safe_args_parse(const std::string & to_parse) {
     }
     try {
         return json::parse(stripped);
-    } catch (json::exception & e) {
+    } catch (const common_json_error & e) {
         return stripped;
     }
 }
@@ -387,14 +386,14 @@ std::vector<common_chat_msg> common_chat_msgs_parse_oaicompat(const json & messa
             if (!message.contains("role")) {
                 throw std::invalid_argument("Missing 'role' in message: " + message.dump());
             }
-            msg.role = message.at("role");
+            msg.role = message.at("role").get<std::string>();
 
             auto has_content    = message.contains("content");
             auto has_tool_calls = message.contains("tool_calls");
             if (has_content) {
                 const auto & content = message.at("content");
                 if (content.is_string()) {
-                    msg.content = content;
+                    msg.content = content.get<std::string>();
                 } else if (content.is_array()) {
                     for (const auto & part : content) {
                         if (!part.contains("type")) {
@@ -405,8 +404,8 @@ std::vector<common_chat_msg> common_chat_msgs_parse_oaicompat(const json & messa
                             throw std::invalid_argument("Unsupported content part type: " + type.dump());
                         }
                         common_chat_msg_content_part msg_part;
-                        msg_part.type = type;
-                        msg_part.text = part.at("text");
+                        msg_part.type = type.get<std::string>();
+                        msg_part.text = part.at("text").get<std::string>();
                         msg.content_parts.push_back(msg_part);
                     }
                 } else if (!content.is_null()) {
@@ -432,15 +431,15 @@ std::vector<common_chat_msg> common_chat_msgs_parse_oaicompat(const json & messa
                     if (!fc.contains("name")) {
                         throw std::invalid_argument("Missing tool call name: " + tool_call.dump());
                     }
-                    tc.name           = fc.at("name");
+                    tc.name           = fc.at("name").get<std::string>();
                     const auto & args = fc.at("arguments");
                     if (args.is_string()) {
-                        tc.arguments = args;
+                        tc.arguments = args.get<std::string>();
                     } else {
                         tc.arguments = args.dump();
                     }
                     if (tool_call.contains("id")) {
-                        tc.id = tool_call.at("id");
+                        tc.id = tool_call.at("id").get<std::string>();
                     }
                     msg.tool_calls.push_back(tc);
                 }
@@ -451,13 +450,13 @@ std::vector<common_chat_msg> common_chat_msgs_parse_oaicompat(const json & messa
                     "https://github.com/ggml-org/llama.cpp/issues/12279)");
             }
             if (message.contains("reasoning_content")) {
-                msg.reasoning_content = message.at("reasoning_content");
+                msg.reasoning_content = message.at("reasoning_content").get<std::string>();
             }
             if (message.contains("name")) {
-                msg.tool_name = message.at("name");
+                msg.tool_name = message.at("name").get<std::string>();
             }
             if (message.contains("tool_call_id")) {
-                msg.tool_call_id = message.at("tool_call_id");
+                msg.tool_call_id = message.at("tool_call_id").get<std::string>();
             }
 
             msgs.push_back(msg);
@@ -489,17 +488,17 @@ struct messages_inp_normalizer {
         json normalized = json::array();
         for (const auto & msg : messages) {
             json copy = msg;
-            auto it = copy.find("content");
-            if (it != copy.end()) {
-                if (only_typed && it->is_string()) {
-                    *it = json::array({
+            if (copy.contains("content")) {
+                json & it = copy.at("content");
+                if (only_typed && it.is_string()) {
+                    it = json::array({
                         json{
                             {"type", "text"},
-                            {"text", it->get<std::string>()},
+                            {"text", it.get<std::string>()},
                         }
                     });
-                } else if (only_string && it->is_array()) {
-                    *it = concat_content_parts(*it);
+                } else if (only_string && it.is_array()) {
+                    it = concat_content_parts(it);
                 }
             }
             normalized.push_back(std::move(copy));
@@ -596,7 +595,7 @@ std::vector<common_chat_tool> common_chat_tools_parse_oaicompat(const json & too
 
                 const auto & function = tool.at("function");
                 result.push_back({
-                    /* .name = */ function.at("name"),
+                    /* .name = */ function.at("name").get<std::string>(),
                     /* .description = */ function.value("description", ""),
                     /* .parameters = */ function.value("parameters", json::object()).dump(),
                 });
@@ -609,7 +608,7 @@ std::vector<common_chat_tool> common_chat_tools_parse_oaicompat(const json & too
     return result;
 }
 
-common_chat_continuation common_chat_continuation_parse(const nlohmann::ordered_json & value) {
+common_chat_continuation common_chat_continuation_parse(const common_json & value) {
     if (value.is_boolean() && value.get<bool>()) {
         return COMMON_CHAT_CONTINUATION_AUTO;
     }
@@ -921,7 +920,7 @@ static void foreach_parameter(const json &                                      
     const auto &          props = params.at("properties");
     std::set<std::string> required;
     if (params.contains("required") && params.at("required").is_array()) {
-        params.at("required").get_to(required);
+        required = params.at("required").get<std::set<std::string>>();
     }
     for (const auto & [name, prop] : props.items()) {
         bool is_required = (required.find(name) != required.end());
@@ -938,7 +937,7 @@ static std::string common_chat_template_direct_apply_impl(
     jinja::context ctx(tmpl.source());
 
     // messages_override is already built for this template, do not touch its content parts
-    nlohmann::ordered_json inp = nlohmann::ordered_json{
+    common_json inp = common_json{
         {"messages", messages_override.has_value()
             ? *messages_override
             : messages_inp_normalizer(tmpl.original_caps()).normalize(inputs.messages)},
@@ -973,7 +972,7 @@ static std::string common_chat_template_direct_apply_impl(
         jinja::caps_apply_reasoning_effort(ctx, reasoning_effort);
     }
 
-    jinja::global_from_json(ctx, common_json_from_raw(inp), inputs.mark_input);
+    jinja::global_from_json(ctx, inp, inputs.mark_input);
 
     // render
     jinja::runtime runtime(ctx);
@@ -1059,7 +1058,7 @@ static common_chat_params common_chat_params_init_ministral_3(const common_chat_
                 });
             } else if (msg.at("content").is_array()) {
                 auto blocks = msg.at("content");
-                content.insert(content.end(), blocks.begin(), blocks.end());
+                content.insert(blocks);
             }
         }
 
@@ -1114,7 +1113,7 @@ static common_chat_params common_chat_params_init_ministral_3(const common_chat_
             auto tool_choice = p.choice();
             foreach_function(inputs.tools, [&](const json & tool) {
                 const auto & function = tool.at("function");
-                std::string  name     = function.at("name");
+                std::string  name     = function.at("name").get<std::string>();
                 const auto & schema   = function.at("parameters");
 
                 tool_choice |=
@@ -1222,7 +1221,7 @@ static common_chat_params common_chat_params_init_qwen3_coder(const common_chat_
     // starting <tool_call>. The model may hallucinate a tool name, but it is preferable over
     // constraining on <function which may occur in valid content generation, e.g. #include <functional>
     foreach_function(inputs.tools, [&](const json & tool) {
-        const std::string name = tool.at("function").at("name");
+        const std::string name = tool.at("function").at("name").get<std::string>();
         tool_call_starts.push_back("<function=" + name + ">");
     });
 
@@ -1250,7 +1249,7 @@ static common_chat_params common_chat_params_init_qwen3_coder(const common_chat_
             auto tool_choice = p.choice();
             foreach_function(inputs.tools, [&](const json & tool) {
                 const auto & function   = tool.at("function");
-                std::string  name       = function.at("name");
+                std::string  name       = function.at("name").get<std::string>();
                 auto         parameters = function.contains("parameters") ? function.at("parameters") : json::object();
 
                 auto schema_info = common_schema_info();
@@ -1441,7 +1440,7 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
 
             foreach_function(inputs.tools, [&](const json & tool) {
                 const auto & function = tool.at("function");
-                std::string  name     = function.at("name");
+                std::string  name     = function.at("name").get<std::string>();
                 const auto & params   = function.at("parameters");
 
                 auto func_name  = p.literal(" to=functions.") + p.tool_name(p.literal(name));
@@ -1607,7 +1606,7 @@ static common_chat_params common_chat_params_init_gemma4(const common_chat_templ
 
             foreach_function(inputs.tools, [&](const json & tool) {
                 const auto & function = tool.at("function");
-                std::string  name     = function.at("name");
+                std::string  name     = function.at("name").get<std::string>();
                 // TODO @aldehir : need to extend json-schema-to-grammar to produce more than JSON rules
                 // const auto & params   = function.at("parameters");
 
@@ -1706,7 +1705,7 @@ static common_chat_params common_chat_params_init_functionary_v3_2(const common_
         auto tool_choice = p.choice();
         foreach_function(inputs.tools, [&](const json & tool) {
             const auto & function = tool.at("function");
-            std::string  name     = function.at("name");
+            std::string  name     = function.at("name").get<std::string>();
             const auto & schema   = function.at("parameters");
 
             // Tool format: >>>function_name\n{json_args}
@@ -1843,7 +1842,7 @@ static common_chat_params common_chat_params_init_kimi_k2(const common_chat_temp
         auto tool_choice = p.choice();
         foreach_function(inputs.tools, [&](const json & tool) {
             const auto & function = tool.at("function");
-            std::string  name     = function.at("name");
+            std::string  name     = function.at("name").get<std::string>();
             const auto & schema   = function.at("parameters");
 
             // Match: functions.<name>:<digits>
@@ -2037,7 +2036,7 @@ static common_chat_params common_chat_params_init_gigachat_v3(
             auto tool_choice = p.choice();
             for (const auto & tool : inputs.tools) {
                 const auto & function = tool.at("function");
-                std::string name = function.at("name");
+                std::string name = function.at("name").get<std::string>();
                 const auto & schema = function.at("parameters");
 
                 auto tool_name = p.json_member("name", "\"" + p.tool_name(p.literal(name)) + "\"");
@@ -2233,13 +2232,13 @@ static common_chat_params common_chat_params_init_deepseek_v3_2(const common_cha
         if (has_tool_calls) {
             foreach_function(inputs.tools, [&](const json & tool) {
                 const auto & function = tool.at("function");
-                std::string  name     = function.at("name");
+                std::string  name     = function.at("name").get<std::string>();
                 auto         params   = function.contains("parameters") ? function.at("parameters") : json::object();
                 const auto & props    = params.contains("properties") ? params.at("properties") : json::object();
 
                 std::set<std::string> required;
                 if (params.contains("required")) {
-                    params.at("required").get_to(required);
+                    required = params.at("required").get<std::set<std::string>>();
                 }
 
                 auto schema_info = common_schema_info();
@@ -2468,7 +2467,7 @@ static common_chat_params common_chat_params_init_kimi_k3(const common_chat_temp
         auto tool_choices = p.choice();
         foreach_function(inputs.tools, [&](const json & tool) {
             const auto & function = tool.at("function");
-            std::string  name     = function.at("name");
+            std::string  name     = function.at("name").get<std::string>();
             const json   schema   = function.contains("parameters") ? function.at("parameters") : json::object();
 
             // arguments come one tag per key, with the JSON type in a type="..."
@@ -2789,7 +2788,7 @@ static common_chat_params common_chat_params_init_minimax_m3(const common_chat_t
         auto tool_choice = p.choice();
         foreach_function(inputs.tools, [&](const json & tool) {
             const auto & function = tool.at("function");
-            std::string  name     = function.at("name");
+            std::string  name     = function.at("name").get<std::string>();
             auto         params   = function.contains("parameters") ? function.at("parameters") : json::object();
 
             auto schema_info = common_schema_info();
@@ -2861,7 +2860,7 @@ static common_chat_params common_chat_params_init_minimax_m3(const common_chat_t
 
                 std::set<std::string> required;
                 if (schema.contains("required")) {
-                    schema.at("required").get_to(required);
+                    required = schema.at("required").get<std::set<std::string>>();
                 }
 
                 std::vector<common_peg_parser> required_elements;
@@ -2973,10 +2972,10 @@ static void system_message_not_supported(json & messages) {
             auto & second_msg = messages[1];
             second_msg["content"] = first_msg.at("content").get<std::string>()
                 + "\n" + second_msg.at("content").get<std::string>();
-            messages.erase(messages.begin());
+            messages.erase(0);
         } else {
             LOG_WRN("Removing system prompt due to template not supporting system role\n");
-            messages.erase(messages.begin());
+            messages.erase(0);
         }
     }
 }
@@ -3243,7 +3242,7 @@ static common_chat_params common_chat_params_init_minicpm5(const common_chat_tem
             auto tool_choice = p.choice();
             foreach_function(inputs.tools, [&](const json & tool) {
                 const auto &      function = tool.at("function");
-                const std::string name     = function.at("name");
+                const std::string name     = function.at("name").get<std::string>();
                 auto              params   = function.contains("parameters") ? function.at("parameters") : json::object();
 
                 auto args = p.eps();
@@ -3389,7 +3388,7 @@ static common_chat_params common_chat_params_init_muse_glimmer(const common_chat
             auto tool_choice = p.choice();
             foreach_function(inputs.tools, [&](const json & tool) {
                 const auto &      function = tool.at("function");
-                const std::string name     = function.at("name");
+                const std::string name     = function.at("name").get<std::string>();
                 auto              params   = function.contains("parameters") ? function.at("parameters") : json::object();
 
                 auto args = p.eps();

@@ -1,4 +1,6 @@
 #include "json-schema-to-grammar.h"
+// the grammar builder walks the schema with the library API
+#include "json-shim.h"
 #include "common.h"
 
 #include <nlohmann/json.hpp>
@@ -12,7 +14,7 @@
 #include <unordered_set>
 #include <vector>
 
-using json = nlohmann::ordered_json;
+using json = common_json;
 
 static std::string build_repetition(const std::string & item_rule, int min_items, int max_items, const std::string & separator_rule = "") {
     auto has_max = max_items != std::numeric_limits<int>::max();
@@ -843,7 +845,7 @@ public:
                 }
             } else if (n.is_object()) {
                 if (n.contains("$ref")) {
-                    std::string ref = n["$ref"];
+                    std::string ref = n["$ref"].get<std::string>();
                     if (_refs.find(ref) == _refs.end()) {
                         json target;
                         if (ref.find("https://") == 0) {
@@ -914,7 +916,7 @@ public:
         std::string rule_name = is_reserved_name(name) ? name + "-" : name.empty() ? "root" : name;
 
         if (schema.contains("$ref")) {
-            return _add_rule(rule_name, _resolve_ref(schema["$ref"]));
+            return _add_rule(rule_name, _resolve_ref(schema["$ref"].get<std::string>()));
         }
         if (schema.contains("oneOf") || schema.contains("anyOf")) {
             std::vector<json> alt_schemas = schema.contains("oneOf") ? schema["oneOf"].get<std::vector<json>>() : schema["anyOf"].get<std::vector<json>>();
@@ -968,7 +970,7 @@ public:
             const std::string& hybrid_name = name;
             std::function<void(const json &, bool)> add_component = [&](const json & comp_schema, bool is_required) {
                 if (comp_schema.contains("$ref")) {
-                    add_component(_refs[comp_schema["$ref"]], is_required);
+                    add_component(_refs[comp_schema["$ref"].get<std::string>()], is_required);
                 } else if (comp_schema.contains("properties")) {
                     for (const auto & prop : comp_schema["properties"].items()) {
                         properties.emplace_back(prop.key(), prop.value());
@@ -1031,7 +1033,7 @@ public:
             return _add_rule(rule_name, "\"[\" space " + build_repetition(item_rule_name, min_items, max_items, "\",\" space") + " space \"]\"");
         }
         if ((schema_type.is_null() || schema_type == "string") && schema.contains("pattern")) {
-            return _visit_pattern(schema["pattern"], rule_name);
+            return _visit_pattern(schema["pattern"].get<std::string>(), rule_name);
         }
         if ((schema_type.is_null() || schema_type == "string") && std::regex_match(schema_format, std::regex("^uuid[1-5]?$"))) {
             return _add_primitive(rule_name == "root" ? "root" : schema_format, PRIMITIVE_RULES.at("uuid"));
@@ -1111,7 +1113,7 @@ common_schema_info::~common_schema_info() = default;
 common_schema_info::common_schema_info(common_schema_info &&) noexcept = default;
 common_schema_info & common_schema_info::operator=(common_schema_info &&) noexcept = default;
 
-void common_schema_info::resolve_refs(nlohmann::ordered_json & schema) {
+void common_schema_info::resolve_refs(common_json & schema) {
     impl_->resolve_refs(schema, "");
 }
 
@@ -1119,7 +1121,7 @@ void common_schema_info::resolve_refs(nlohmann::ordered_json & schema) {
 // Some models emit raw string values rather than JSON-encoded strings for string parameters.
 // If any branch of the schema (via oneOf, anyOf, $ref, etc.) permits a string, this returns
 // true, allowing callers to handle the value as a raw string for simplicity.
-bool common_schema_info::resolves_to_string(const nlohmann::ordered_json & schema) {
+bool common_schema_info::resolves_to_string(const common_json & schema) {
     std::unordered_set<std::string> visited_refs;
 
     std::function<bool(const json &)> check = [&](const json & s) -> bool {
@@ -1129,7 +1131,7 @@ bool common_schema_info::resolves_to_string(const nlohmann::ordered_json & schem
 
         // Handle $ref
         if (s.contains("$ref")) {
-            const std::string & ref = s["$ref"];
+            const std::string ref = s["$ref"].get<std::string>();
             if (visited_refs.find(ref) != visited_refs.end()) {
                 // Circular reference, assume not a string to be safe
                 return false;
@@ -1212,7 +1214,7 @@ bool common_schema_info::resolves_to_string(const nlohmann::ordered_json & schem
 
         // Check format - many formats imply string
         if (s.contains("format")) {
-            const std::string & fmt = s["format"];
+            const std::string fmt = s["format"].get<std::string>();
             if (fmt == "date" || fmt == "time" || fmt == "date-time" ||
                 fmt == "uri" || fmt == "email" || fmt == "hostname" ||
                 fmt == "ipv4" || fmt == "ipv6" || fmt == "uuid" ||
@@ -1236,7 +1238,7 @@ std::string json_schema_to_grammar(const common_json & schema, bool force_gbnf) 
     (void)force_gbnf;
 #endif // LLAMA_USE_LLGUIDANCE
     return build_grammar([&](const common_grammar_builder & callbacks) {
-        auto copy = common_json_raw<nlohmann::ordered_json>(schema);
+        auto copy = common_json_raw<common_json>(schema);
         callbacks.resolve_refs(copy);
         callbacks.add_schema("", copy);
     });
@@ -1248,10 +1250,10 @@ std::string build_grammar(const std::function<void(const common_grammar_builder 
         /* .add_rule = */ [&](const std::string & name, const std::string & rule) {
             return converter._add_rule(name, rule);
         },
-        /* .add_schema = */ [&](const std::string & name, const nlohmann::ordered_json & schema) {
+        /* .add_schema = */ [&](const std::string & name, const common_json & schema) {
             return converter.visit(schema, name == "root" ? "" : name);
         },
-        /* .resolve_refs = */ [&](nlohmann::ordered_json & schema) {
+        /* .resolve_refs = */ [&](common_json & schema) {
             converter.resolve_refs(schema, "");
         }
     };

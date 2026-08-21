@@ -9,8 +9,6 @@
 
 #include "server-common.h"
 
-// the chat API is not migrated yet, so this file still needs the bridge
-#include <nlohmann/json.hpp>
 
 #include <random>
 #include <sstream>
@@ -1261,8 +1259,8 @@ json oaicompat_chat_params_parse(
     auto caps = common_chat_templates_get_caps(opt.tmpls.get());
 
     common_chat_templates_inputs inputs;
-    inputs.messages               = common_chat_msgs_parse_oaicompat(common_json_raw<nlohmann::ordered_json>(messages));
-    inputs.tools                  = common_chat_tools_parse_oaicompat(common_json_raw<nlohmann::ordered_json>(tools));
+    inputs.messages               = common_chat_msgs_parse_oaicompat(messages);
+    inputs.tools                  = common_chat_tools_parse_oaicompat(tools);
     inputs.tool_choice            = common_chat_tool_choice_parse_oaicompat(tool_choice);
     inputs.json_schema            = json_schema.is_null() ? "" : json_schema.dump();
     inputs.grammar                = grammar;
@@ -1270,7 +1268,7 @@ json oaicompat_chat_params_parse(
     inputs.parallel_tool_calls    = json_value(body, "parallel_tool_calls", caps["supports_parallel_tool_calls"]);
     inputs.add_generation_prompt  = json_value(body, "add_generation_prompt", true);
     inputs.continue_final_message = body.contains("continue_final_message") ?
-        common_chat_continuation_parse(common_json_raw<nlohmann::ordered_json>(body.at("continue_final_message"))) :
+        common_chat_continuation_parse(body.at("continue_final_message")) :
         COMMON_CHAT_CONTINUATION_NONE;
     if (inputs.continue_final_message == COMMON_CHAT_CONTINUATION_NONE && opt.prefill_assistant
         && !inputs.messages.empty() && inputs.messages.back().role == "assistant") {
@@ -1351,7 +1349,7 @@ json oaicompat_chat_params_parse(
         llama_params["chat_parser"] = chat_params.parser;
     }
 
-    llama_params["message_delimiters"] = common_json_from_raw(chat_params.message_delimiters.to_json());
+    llama_params["message_delimiters"] = chat_params.message_delimiters.to_json();
 
     // Reasoning budget: pass parameters through to sampling layer
     {

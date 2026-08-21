@@ -5,13 +5,12 @@
 #include "common.h"
 #include "json-schema-to-grammar.h"
 #include "log.h"
-#include "nlohmann/json.hpp"
 #include "peg-parser.h"
 
 #include <stdexcept>
 #include <string>
 
-using json = nlohmann::ordered_json;
+using json = common_json;
 
 // Helper to iterate over tools/functions
 static void foreach_function(const json & tools, const std::function<void(const json &)> & fn) {
@@ -312,7 +311,7 @@ common_peg_parser analyze_tools::build_tool_parser_tag_json(parser_build_context
 
     foreach_function(inputs.tools, [&](const json & tool) {
         const auto & func   = tool.at("function");
-        std::string  name   = func.at("name");
+        std::string  name   = func.at("name").get<std::string>();
         const auto & schema = func.contains("parameters") ? func.at("parameters") : json::object();
 
         // Build call_id parser based on position (if supported)
@@ -385,13 +384,13 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
 
     foreach_function(inputs.tools, [&](const json & tool) {
         const auto &          func       = tool.at("function");
-        std::string           name       = func.at("name");
+        std::string           name       = func.at("name").get<std::string>();
         auto                  params     = func.contains("parameters") ? func.at("parameters") : json::object();
         const auto &          properties = params.contains("properties") ? params.at("properties") : json::object();
 
         std::set<std::string> required;
         if (params.contains("required")) {
-            params.at("required").get_to(required);
+            required = params.at("required").get<std::set<std::string>>();
         }
 
         auto schema_info = common_schema_info();

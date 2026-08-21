@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <initializer_list>
+#include <iterator>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -53,7 +54,8 @@ struct common_json_value {
     common_json_value(std::string val) : type(VAL_STRING), val_string(std::move(val)) {}
     common_json_value(const char * val);
     common_json_value(const common_json & val);
-    common_json_value(const std::vector<std::string> & vals);
+    // only for the types instantiated in json.cpp, the rest fails at link time
+    template <typename T> common_json_value(const std::vector<T> & vals);
 
     // nested object, e.g. {"fn", {{"name", "x"}}}
     common_json_value(std::initializer_list<common_json_item> items);
@@ -95,6 +97,11 @@ class common_json {
     // direct, a value would need two conversions in a row
     common_json(std::nullptr_t);
 
+    // one step, so that "abc" or a vector can go straight into a common_json
+    template <typename T, typename std::enable_if<!std::is_same<typename std::decay<T>::type, common_json>::value &&
+                                                  !std::is_same<typename std::decay<T>::type, common_json_value>::value, int>::type = 0>
+    common_json(T && val) : common_json(common_json_value(std::forward<T>(val))) {}
+
     common_json & operator=(const common_json & other);
     common_json & operator=(common_json && other) noexcept;
 
@@ -103,9 +110,15 @@ class common_json {
     // throws common_json_error if the text is not valid JSON
     static common_json parse(const std::string & text);
 
+    // gives a discarded value instead of throwing, check it with is_discarded()
+    static common_json parse_no_throw(const std::string & text);
+
+    bool is_discarded() const;
+
     static common_json array();
     static common_json array(std::initializer_list<common_json_value> vals);
     static common_json object();
+    static common_json object(std::initializer_list<common_json_item> items);
 
     // holds a single value, e.g. make("abc").dump() gives "\"abc\""
     static common_json make(const common_json_value & val);
@@ -143,6 +156,8 @@ class common_json {
     common_json       & back();
     const common_json & back()  const;
 
+    void clear();
+
     void erase(const std::string & key);
     void erase(size_t idx);
 
@@ -162,6 +177,15 @@ class common_json {
     void set(const common_json_item & item);
     void push_back(const common_json_value & val);
 
+    // appends one object, e.g. push_back({{"a", 1}})
+    void push_back(std::initializer_list<common_json_item> items);
+
+    // 1 if the key is there, 0 if not
+    size_t count(const std::string & key) const;
+
+    // appends every value of another array
+    void insert(const common_json & vals);
+
     // a common_json goes through the copy assignment above, everything else becomes a value
     template <typename T, typename std::enable_if<!std::is_same<typename std::decay<T>::type, common_json>::value, int>::type = 0>
     common_json & operator=(T && val) {
@@ -177,6 +201,12 @@ class common_json {
     // walks an array by index, or an object in insertion order
     class iterator {
       public:
+        using iterator_category = std::forward_iterator_tag;
+        using value_type        = common_json;
+        using difference_type   = std::ptrdiff_t;
+        using pointer           = common_json *;
+        using reference         = common_json &;
+
         iterator(common_json * node, size_t idx) : node(node), idx(idx) {}
 
         common_json & operator*() const;
@@ -247,15 +277,3 @@ class common_json {
 };
 
 using common_json_entry = common_json::items_view::entry;
-
-// bridge for code that still uses internal component from nlohmann::json
-// usage: common_json_raw<nlohmann::ordered_json>(j)
-// TODO: maybe completely remove this in the future
-
-template <typename T> T       & common_json_raw(common_json & json);
-template <typename T> const T & common_json_raw(const common_json & json);
-
-template <typename T> common_json common_json_from_raw(const T & json);
-
-// view over a value of the backing library, it does not copy
-template <typename T> common_json & common_json_ref_from_raw(T & json);

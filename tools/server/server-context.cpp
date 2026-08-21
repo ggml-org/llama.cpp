@@ -35,7 +35,6 @@
 #include <windows.h>
 #endif
 
-using json = nlohmann::ordered_json;
 
 constexpr int HTTP_POLLING_SECONDS = 1;
 
@@ -4220,7 +4219,8 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
         // tasks.reserve(inputs.size()); // TODO: this is inaccurate due to child tasks
 
         // message delimiters for checkpointing
-        auto delimiters = common_chat_msg_delimiters_parse(json_value(data, "message_delimiters", json::array()));
+        json delims = json_value(data, "message_delimiters", json::array());
+        auto delimiters = common_chat_msg_delimiters_parse(delims);
         delimiters.tokenize(ctx_server.vocab);
 
         for (size_t i = 0; i < inputs.size(); i++) {
@@ -4483,8 +4483,8 @@ static json get_res_model_info(const server_context_meta & meta) {
 static json get_res_models(const server_context_meta & meta) {
     // note: do NOT use ctx_server here, otherwise it's not possible to use this during sleep
 
-    return {
-        {"models", {
+    return json{
+        {"models", json::array({
             {
                 {"name",  meta.model_name},
                 {"model", meta.model_name},
@@ -4493,23 +4493,23 @@ static json get_res_models(const server_context_meta & meta) {
                 {"digest", ""}, // dummy value, llama.cpp does not support managing model file's hash
                 {"type", "model"},
                 {"description", ""},
-                {"tags", {""}},
-                {"capabilities", meta.has_mtmd ? json({"completion","multimodal"}) : json({"completion"})},
+                {"tags", json::array({""})},
+                {"capabilities", meta.has_mtmd ? json::array({"completion","multimodal"}) : json::array({"completion"})},
                 {"parameters", ""},
                 {"details", {
                     {"parent_model", ""},
                     {"format", "gguf"},
                     {"family", ""},
-                    {"families", {""}},
+                    {"families", json::array({""})},
                     {"parameter_size", ""},
                     {"quantization_level", ""}
                 }}
             }
-        }},
+        })},
         {"object", "list"},
-        {"data", {
+        {"data", json::array({
             get_res_model_info(meta),
-        }}
+        })}
     };
 }
 
@@ -5045,7 +5045,7 @@ void server_routes::init_routes() {
 
         std::string content;
         if (body.count("tokens") != 0) {
-            const llama_tokens tokens = body.at("tokens");
+            const llama_tokens tokens = body.at("tokens").get<llama_tokens>();
             content = tokens_to_str(ctx_server.vocab, tokens);
         }
 
@@ -5103,7 +5103,7 @@ void server_routes::init_routes() {
             std::vector<server_task> tasks;
             tasks.reserve(documents.size());
             for (size_t i = 0; i < documents.size(); i++) {
-                auto tmp = format_prompt_rerank(ctx_server.model_tgt, ctx_server.vocab, ctx_server.mctx, query, documents[i]);
+                auto tmp = format_prompt_rerank(ctx_server.model_tgt, ctx_server.vocab, ctx_server.mctx, query.get<std::string>(), documents[i]);
                 server_task task = server_task(SERVER_TASK_TYPE_RERANK);
                 task.id     = rd.get_new_id();
                 task.tokens = std::move(tmp);
@@ -5207,7 +5207,7 @@ void server_routes::init_routes() {
 std::unique_ptr<server_res_generator> server_routes::handle_slots_save(const server_http_req & req, int id_slot) {
     auto res = create_response();
     const json request_data = json::parse(req.body);
-    std::string filename = request_data.at("filename");
+    std::string filename = request_data.at("filename").get<std::string>();
     if (!fs_validate_filename(filename)) {
         res->error(format_error_response("Invalid filename", ERROR_TYPE_INVALID_REQUEST));
         return res;
@@ -5243,7 +5243,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_slots_save(const ser
 std::unique_ptr<server_res_generator> server_routes::handle_slots_restore(const server_http_req & req, int id_slot) {
     auto res = create_response();
     const json request_data = json::parse(req.body);
-    std::string filename = request_data.at("filename");
+    std::string filename = request_data.at("filename").get<std::string>();
     if (!fs_validate_filename(filename)) {
         res->error(format_error_response("Invalid filename", ERROR_TYPE_INVALID_REQUEST));
         return res;
@@ -5332,7 +5332,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_embeddings_impl(cons
 
     bool use_base64 = false;
     if (body.count("encoding_format") != 0) {
-        const std::string & format = body.at("encoding_format");
+        const std::string format = body.at("encoding_format").get<std::string>();
         if (format == "base64") {
             use_base64 = true;
         } else if (format != "float") {
@@ -5352,7 +5352,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_embeddings_impl(cons
 
     int embd_normalize = params.embd_normalize;
     if (body.count("embd_normalize") != 0) {
-        embd_normalize = body.at("embd_normalize");
+        embd_normalize = body.at("embd_normalize").get<int>();
         if (meta->pooling_type == LLAMA_POOLING_TYPE_NONE) {
             SRV_DBG("embd_normalize is not supported by pooling type %d, ignoring it\n", meta->pooling_type);
         }

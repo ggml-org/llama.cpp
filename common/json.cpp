@@ -1,4 +1,6 @@
 #include "json.h"
+// defines the shim
+#include "json-shim.h"
 
 #include "ggml.h"
 
@@ -80,7 +82,8 @@ common_json_value::common_json_value(const char * val) {
 common_json_value::common_json_value(const common_json & val) :
     type(VAL_JSON), val_json(std::make_shared<common_json>(val)) {}
 
-common_json_value::common_json_value(const std::vector<std::string> & vals) : type(VAL_JSON) {
+template <typename T>
+common_json_value::common_json_value(const std::vector<T> & vals) : type(VAL_JSON) {
     common_json out = common_json::array();
 
     for (const auto & val : vals) {
@@ -89,6 +92,23 @@ common_json_value::common_json_value(const std::vector<std::string> & vals) : ty
 
     val_json = std::make_shared<common_json>(std::move(out));
 }
+
+// a vector value is usable only for the types below
+// note: std::vector<bool> is not here, its proxy reference does not convert
+#define COMMON_JSON_VEC(...) template common_json_value::common_json_value(const std::vector<__VA_ARGS__> &);
+
+COMMON_JSON_VEC(int)
+COMMON_JSON_VEC(unsigned int)
+COMMON_JSON_VEC(long)
+COMMON_JSON_VEC(unsigned long)
+COMMON_JSON_VEC(long long)
+COMMON_JSON_VEC(unsigned long long)
+COMMON_JSON_VEC(float)
+COMMON_JSON_VEC(double)
+COMMON_JSON_VEC(std::string)
+COMMON_JSON_VEC(common_json)
+
+#undef COMMON_JSON_VEC
 
 common_json_value::common_json_value(std::initializer_list<common_json_item> items) :
     type(VAL_JSON), val_json(std::make_shared<common_json>(items)) {}
@@ -143,6 +163,14 @@ common_json common_json::parse(const std::string & text) {
     }
 }
 
+common_json common_json::parse_no_throw(const std::string & text) {
+    return common_json_from_raw(ordered_json::parse(text, nullptr, false));
+}
+
+bool common_json::is_discarded() const {
+    return as_json(this).is_discarded();
+}
+
 common_json common_json::array() {
     return common_json_from_raw(ordered_json::array());
 }
@@ -159,6 +187,10 @@ common_json common_json::array(std::initializer_list<common_json_value> vals) {
 
 common_json common_json::object() {
     return common_json();
+}
+
+common_json common_json::object(std::initializer_list<common_json_item> items) {
+    return common_json(items);
 }
 
 common_json common_json::make(const common_json_value & val) {
@@ -204,6 +236,10 @@ const common_json & common_json::front() const { return as_common(as_json(this).
 common_json       & common_json::back()        { return as_common(as_json(this).back()); }
 const common_json & common_json::back()  const { return as_common(as_json(this).back()); }
 
+void common_json::clear() {
+    as_json(this).clear();
+}
+
 void common_json::erase(const std::string & key) {
     as_json(this).erase(key);
 }
@@ -222,6 +258,22 @@ void common_json::set(const common_json_item & item) {
 
 void common_json::push_back(const common_json_value & val) {
     as_json(this).push_back(to_json(val));
+}
+
+void common_json::push_back(std::initializer_list<common_json_item> items) {
+    common_json val(items);
+
+    as_json(this).push_back(as_json(&val));
+}
+
+size_t common_json::count(const std::string & key) const {
+    return as_json(this).count(key);
+}
+
+void common_json::insert(const common_json & vals) {
+    ordered_json & self = as_json(this);
+
+    self.insert(self.end(), as_json(&vals).begin(), as_json(&vals).end());
 }
 
 std::string common_json::dump(int indent) const {
@@ -283,5 +335,6 @@ COMMON_JSON_GET(double)
 COMMON_JSON_GET(std::string)
 COMMON_JSON_GET(std::vector<std::string>)
 COMMON_JSON_GET(std::set<std::string>)
+COMMON_JSON_GET(std::vector<int>)
 
 #undef COMMON_JSON_GET
