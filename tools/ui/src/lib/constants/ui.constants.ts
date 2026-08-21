@@ -10,6 +10,7 @@ export const SYSTEM_MESSAGE_PLACEHOLDER = 'System message';
 /** Data attributes for app-level DOM contracts. */
 export const UI_DATA_ATTRS = {
 	ACTIVE: 'data-active',
+	ACTIVE_TAB: 'data-active-tab',
 	CONVERSATION_ROW: 'data-conversation-row',
 	HIGHLIGHT_THEME_PREVIEW: 'data-highlight-theme-preview',
 	PICKER_INDEX: 'data-picker-index',
