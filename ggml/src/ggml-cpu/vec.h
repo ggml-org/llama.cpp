@@ -367,6 +367,25 @@ inline static void ggml_vec_dot_f16_f32(const int n, float * GGML_RESTRICT s, co
 #define GGML_HAS_INTERDOT_X4 0
 #endif
 
+// Horizontal sum of one F32 vector accumulator. GGML_F32_VEC_REDUCE reduces an
+// array of GGML_F32_ARR accumulators into a single scalar, so it cannot be used
+// for four independent outputs; this is the single-accumulator form.
+#if defined(__AVX512F__)
+    #define GGML_FA_HSUM(a) _mm512_reduce_add_ps(a)
+#elif defined(__AVX2__) && defined(__F16C__) && defined(__FMA__)
+    #define GGML_FA_HSUM(a) ggml_fa_hsum_avx(a)
+    inline static float ggml_fa_hsum_avx(__m256 a) {
+        __m128 r = _mm_add_ps(_mm256_castps256_ps128(a), _mm256_extractf128_ps(a, 1));
+        r = _mm_add_ps(r, _mm_movehl_ps(r, r));
+        r = _mm_add_ss(r, _mm_movehdup_ps(r));
+        return _mm_cvtss_f32(r);
+    }
+#endif
+
+// macro-simplified x4out: one ISA-independent loop body via ggml's existing
+// GGML_F32_VEC / GGML_F16_VEC macros, and one local macro for the per-output
+// horizontal reduce (GGML_F32_VEC_REDUCE folds an ARR of accumulators into a
+// single scalar, so it cannot serve four independent outputs).
 inline static void ggml_vec_dot_f16_f32_x4out(const int n,
         float * GGML_RESTRICT s0, float * GGML_RESTRICT s1,
         float * GGML_RESTRICT s2, float * GGML_RESTRICT s3,
@@ -375,48 +394,20 @@ inline static void ggml_vec_dot_f16_f32_x4out(const int n,
         const float * GGML_RESTRICT y) {
     int i = 0;
     float f0 = 0.0f, f1 = 0.0f, f2 = 0.0f, f3 = 0.0f;
-#if defined(__AVX512F__)
-    __m512 a0 = _mm512_setzero_ps(), a1 = _mm512_setzero_ps();
-    __m512 a2 = _mm512_setzero_ps(), a3 = _mm512_setzero_ps();
-    for (; i + 15 < n; i += 16) {
-        const __m512 vy = _mm512_loadu_ps(y + i);           // Q loaded ONCE
-        a0 = _mm512_fmadd_ps(_mm512_cvtph_ps(_mm256_loadu_si256((const __m256i *)(x0 + i))), vy, a0);
-        a1 = _mm512_fmadd_ps(_mm512_cvtph_ps(_mm256_loadu_si256((const __m256i *)(x1 + i))), vy, a1);
-        a2 = _mm512_fmadd_ps(_mm512_cvtph_ps(_mm256_loadu_si256((const __m256i *)(x2 + i))), vy, a2);
-        a3 = _mm512_fmadd_ps(_mm512_cvtph_ps(_mm256_loadu_si256((const __m256i *)(x3 + i))), vy, a3);
+#if GGML_HAS_VEC_DOT_F16_F32
+    GGML_F32_VEC a0 = GGML_F32_VEC_ZERO, a1 = GGML_F32_VEC_ZERO;
+    GGML_F32_VEC a2 = GGML_F32_VEC_ZERO, a3 = GGML_F32_VEC_ZERO;
+    for (; i + GGML_F32_EPR - 1 < n; i += GGML_F32_EPR) {
+        const GGML_F32_VEC vy = GGML_F32_VEC_LOAD(y + i);   // Q loaded ONCE
+        a0 = GGML_F32_VEC_FMA(a0, GGML_F16_VEC_LOAD(x0 + i, 0), vy);
+        a1 = GGML_F32_VEC_FMA(a1, GGML_F16_VEC_LOAD(x1 + i, 0), vy);
+        a2 = GGML_F32_VEC_FMA(a2, GGML_F16_VEC_LOAD(x2 + i, 0), vy);
+        a3 = GGML_F32_VEC_FMA(a3, GGML_F16_VEC_LOAD(x3 + i, 0), vy);
     }
-    f0 += _mm512_reduce_add_ps(a0);
-    f1 += _mm512_reduce_add_ps(a1);
-    f2 += _mm512_reduce_add_ps(a2);
-    f3 += _mm512_reduce_add_ps(a3);
-#elif defined(__AVX2__) && defined(__F16C__) && defined(__FMA__)
-    __m256 a0 = _mm256_setzero_ps(), a1 = _mm256_setzero_ps();
-    __m256 a2 = _mm256_setzero_ps(), a3 = _mm256_setzero_ps();
-    for (; i + 7 < n; i += 8) {
-        const __m256 vy = _mm256_loadu_ps(y + i);           // Q loaded ONCE
-        a0 = _mm256_fmadd_ps(_mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)(x0 + i))), vy, a0);
-        a1 = _mm256_fmadd_ps(_mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)(x1 + i))), vy, a1);
-        a2 = _mm256_fmadd_ps(_mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)(x2 + i))), vy, a2);
-        a3 = _mm256_fmadd_ps(_mm256_cvtph_ps(_mm_loadu_si128((const __m128i *)(x3 + i))), vy, a3);
-    }
-    {   // the same 3-step horizontal reduction as ggml_vec_dot_f16_f32, per output
-        __m128 r0 = _mm_add_ps(_mm256_castps256_ps128(a0), _mm256_extractf128_ps(a0, 1));
-        r0 = _mm_add_ps(r0, _mm_movehl_ps(r0, r0));
-        r0 = _mm_add_ss(r0, _mm_movehdup_ps(r0));
-        f0 += _mm_cvtss_f32(r0);
-        __m128 r1 = _mm_add_ps(_mm256_castps256_ps128(a1), _mm256_extractf128_ps(a1, 1));
-        r1 = _mm_add_ps(r1, _mm_movehl_ps(r1, r1));
-        r1 = _mm_add_ss(r1, _mm_movehdup_ps(r1));
-        f1 += _mm_cvtss_f32(r1);
-        __m128 r2 = _mm_add_ps(_mm256_castps256_ps128(a2), _mm256_extractf128_ps(a2, 1));
-        r2 = _mm_add_ps(r2, _mm_movehl_ps(r2, r2));
-        r2 = _mm_add_ss(r2, _mm_movehdup_ps(r2));
-        f2 += _mm_cvtss_f32(r2);
-        __m128 r3 = _mm_add_ps(_mm256_castps256_ps128(a3), _mm256_extractf128_ps(a3, 1));
-        r3 = _mm_add_ps(r3, _mm_movehl_ps(r3, r3));
-        r3 = _mm_add_ss(r3, _mm_movehdup_ps(r3));
-        f3 += _mm_cvtss_f32(r3);
-    }
+    f0 += GGML_FA_HSUM(a0);
+    f1 += GGML_FA_HSUM(a1);
+    f2 += GGML_FA_HSUM(a2);
+    f3 += GGML_FA_HSUM(a3);
 #endif
     // Four separate tail loops, each the same as the tail of ggml_vec_dot_f16_f32.
     // A fused 4 way tail contracts differently, which breaks the match for head sizes that are not a multiple of the vector width.
