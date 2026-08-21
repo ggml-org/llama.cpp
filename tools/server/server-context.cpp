@@ -58,25 +58,27 @@ static bool server_gfx1030_native_auto_enabled() {
     return override_gfx != nullptr && std::strcmp(override_gfx, "10.3.0") == 0;
 }
 
-static bool server_gfx1030_mtp_target_backend_sampling_profile(const common_params & params) {
+static bool server_gfx1030_spec_target_backend_sampling_profile(const common_params & params) {
     if (!server_gfx1030_native_auto_enabled() ||
             server_env_disabled("GGML_HIP_GFX1030_TARGET_BACKEND_SAMPLING")) {
         return false;
     }
 
-    size_t n_mtp_types = 0;
+    common_speculative_type active_type = COMMON_SPECULATIVE_TYPE_NONE;
     for (common_speculative_type type : params.speculative.types) {
         if (type == COMMON_SPECULATIVE_TYPE_NONE) {
             continue;
         }
-        if (type != COMMON_SPECULATIVE_TYPE_DRAFT_MTP) {
+        if (active_type != COMMON_SPECULATIVE_TYPE_NONE) {
             return false;
         }
-        ++n_mtp_types;
+        active_type = type;
     }
 
-    if (n_mtp_types != 1 || params.speculative.draft.n_max != 4 ||
-            params.split_mode != LLAMA_SPLIT_MODE_TENSOR) {
+    const bool supported_mode =
+        (active_type == COMMON_SPECULATIVE_TYPE_DRAFT_MTP && params.speculative.draft.n_max == 4) ||
+        (active_type == COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH && params.speculative.draft.n_max == 7);
+    if (!supported_mode || params.split_mode != LLAMA_SPLIT_MODE_TENSOR) {
         return false;
     }
 
@@ -131,12 +133,12 @@ static bool server_greedy_backend_sampling_eligible(const common_params_sampling
         !has_reasoning_budget;
 }
 
-static bool server_auto_mtp_target_backend_sampling(
+static bool server_auto_spec_target_backend_sampling(
         const common_params & params, const common_params_sampling & sampling, const llama_vocab * vocab) {
     int32_t n_suppress = 0;
     llama_vocab_get_suppress_tokens(vocab, &n_suppress);
 
-    return server_gfx1030_mtp_target_backend_sampling_profile(params) &&
+    return server_gfx1030_spec_target_backend_sampling_profile(params) &&
         server_greedy_backend_sampling_eligible(params.sampling) &&
         server_greedy_backend_sampling_eligible(sampling) &&
         llama_vocab_n_tokens(vocab) >= 65536 && n_suppress == 0;
@@ -1255,11 +1257,11 @@ private:
         // default so request-level eligibility still controls activation.
         const bool backend_sampling_default = params_base.sampling.backend_sampling;
         const bool prime_auto_backend_sampling = !backend_sampling_default &&
-            server_gfx1030_mtp_target_backend_sampling_profile(params_base) &&
+            server_gfx1030_spec_target_backend_sampling_profile(params_base) &&
             server_greedy_backend_sampling_eligible(params_base.sampling);
         if (prime_auto_backend_sampling) {
             params_base.sampling.backend_sampling = true;
-            SRV_INF("%s", "reserving target backend-sampling buffers for gfx1030 MTP auto policy\n");
+            SRV_INF("%s", "reserving target backend-sampling buffers for gfx1030 speculative auto policy\n");
         }
 
         llama_init = common_init_from_params(params_base);
@@ -2028,8 +2030,9 @@ private:
         if (task.need_sampling()) {
             const bool auto_backend_sampling = !task.params.backend_sampling_set &&
                 !task.params.sampling.backend_sampling &&
-                (task.params.speculative_n_max < 0 || task.params.speculative_n_max == 4) &&
-                server_auto_mtp_target_backend_sampling(params_base, task.params.sampling, vocab);
+                (task.params.speculative_n_max < 0 ||
+                    task.params.speculative_n_max == params_base.speculative.draft.n_max) &&
+                server_auto_spec_target_backend_sampling(params_base, task.params.sampling, vocab);
             try {
                 slot.smpl.reset(common_sampler_init(model_tgt, task.params.sampling));
             } catch (std::exception & e) {
@@ -2061,7 +2064,7 @@ private:
                     llama_set_sampler(ctx_tgt, slot.id, nullptr);
                 } else if (auto_backend_sampling) {
                     task.params.sampling.backend_sampling = true;
-                    SLT_INF(slot, "%s", "using automatic gfx1030 backend target sampling for greedy MTP\n");
+                    SLT_INF(slot, "%s", "using automatic gfx1030 backend target sampling for greedy speculative decode\n");
                 }
             } else {
                 llama_set_sampler(ctx_tgt, slot.id, nullptr);
