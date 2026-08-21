@@ -76,6 +76,27 @@
 		}
 	}
 
+	function navigateToTab(direction: -1 | 1) {
+		// only makes sense with conversation tabs enabled
+		if (!settingsStore.config.conversationTabs) return;
+
+		const openTabs = tabsStore.openTabs;
+
+		if (openTabs.length === 0) return;
+
+		const activeId = page.params.id ?? NEW_CHAT_TAB_ID;
+		const idx = openTabs.indexOf(activeId);
+		// active tab not in list (e.g. a non-chat route): start from an edge
+		const targetIdx =
+			idx === -1
+				? direction === 1
+					? 0
+					: openTabs.length - 1
+				: (idx + direction + openTabs.length) % openTabs.length;
+
+		void tabsStore.activate(openTabs[targetIdx]);
+	}
+
 	function navigateToConversation(direction: -1 | 1) {
 		const allConvs = conversationsStore.conversations;
 
@@ -120,7 +141,9 @@
 	const { handleKeydown } = useKeyboardShortcuts({
 		editActiveConversation: () => chatSidebar?.editActiveConversation?.(),
 		navigateToNextConversation: () => navigateToConversation(1),
-		navigateToPrevConversation: () => navigateToConversation(-1)
+		navigateToNextTab: () => navigateToTab(1),
+		navigateToPrevConversation: () => navigateToConversation(-1),
+		navigateToPrevTab: () => navigateToTab(-1)
 	});
 
 	function checkApiKey() {

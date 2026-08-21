@@ -9,6 +9,8 @@ interface KeyboardShortcutsCallbacks {
 	deleteActiveConversation?: () => void;
 	navigateToPrevConversation?: () => void;
 	navigateToNextConversation?: () => void;
+	navigateToPrevTab?: () => void;
+	navigateToNextTab?: () => void;
 	toggleSidebar?: () => void;
 }
 
@@ -81,6 +83,16 @@ export function useKeyboardShortcuts(callbacks: KeyboardShortcutsCallbacks) {
 		if (isCmdOrCtrl && event.shiftKey && event.key === KeyboardKey.ARROW_DOWN) {
 			event.preventDefault();
 			callbacks.navigateToNextConversation?.();
+		}
+
+		if (isCmdOrCtrl && event.shiftKey && event.key === KeyboardKey.ARROW_LEFT) {
+			event.preventDefault();
+			callbacks.navigateToPrevTab?.();
+		}
+
+		if (isCmdOrCtrl && event.shiftKey && event.key === KeyboardKey.ARROW_RIGHT) {
+			event.preventDefault();
+			callbacks.navigateToNextTab?.();
 		}
 	}
 
