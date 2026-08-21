@@ -1060,6 +1060,18 @@ private:
                 uint32_t hp_nct = 0;
                 uint32_t hp_nex = 0;
                 try {
+                    // the draft context follows the target context, measure it at the largest context the target can take
+                    if (cparams_dft.n_ctx == 0) {
+                        auto mparams_tgt = common_model_params_to_llama(params_base);
+                        auto cparams_tgt = common_context_params_to_llama(params_base);
+
+                        common_get_device_memory_data(
+                            params_base.model.path.c_str(), &mparams_tgt, &cparams_tgt,
+                            devs, hp_ngl, hp_nct, hp_nex, GGML_LOG_LEVEL_ERROR);
+
+                        cparams_dft.n_ctx = hp_nct * (params_base.kv_unified ? 1 : params_base.n_parallel);
+                    }
+
                     auto dmd = common_get_device_memory_data(
                         params_dft.model.path.c_str(), &mparams_dft, &cparams_dft,
                         devs, hp_ngl, hp_nct, hp_nex, GGML_LOG_LEVEL_ERROR);
