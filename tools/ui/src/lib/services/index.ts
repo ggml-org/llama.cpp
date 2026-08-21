@@ -340,3 +340,13 @@ export { RouterService } from './router.service';
  * @see migration.service.ts — full implementation (non-destructive)
  */
 export { MigrationService } from './migration.service';
+
+/**
+ * **SettingsService** - localStorage persistence layer for settings
+ *
+ * Stateless read/write of the settings config and user-override keys. Business
+ * logic (default merging, mobile defaults, theme migration) stays in the store.
+ *
+ * @see settingsStore in stores/settings/index.svelte.ts - reactive state + business logic
+ */
+export { SettingsService } from './settings.service';

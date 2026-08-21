@@ -10,18 +10,6 @@ export const URL_PARAMS = {
 	QUERY: 'q'
 } as const;
 
-/** Settings section slugs — used for routes and navigation. */
-export const SETTINGS_SECTION_SLUGS = {
-	AGENTIC: 'agentic',
-	DEVELOPER: 'developer',
-	DISPLAY: 'display',
-	GENERAL: 'general',
-	IMPORT_EXPORT: 'import-export',
-	PENALTIES: 'penalties',
-	SAMPLING: 'sampling',
-	TOOLS: 'tools'
-} as const;
-
 export const ROUTES = {
 	/** Chat base — for dynamic chat URLs use RouterService. */
 	CHAT: '#/chat',
@@ -33,6 +21,8 @@ export const ROUTES = {
 	SEARCH: '#/search',
 	/** Settings base — for dynamic settings URLs use RouterService. */
 	SETTINGS: '#/settings',
+	/** Exit destination for the settings view (fallback when no referrer). */
+	SETTINGS_EXIT: '#/',
 	/** Root — start of the app. */
 	START: '#/'
 } as const;
