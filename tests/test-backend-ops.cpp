@@ -4703,6 +4703,75 @@ struct test_repacked_mul_mat : public test_case {
     }
 };
 
+struct test_cutlass_mul_mat : public test_repacked_mul_mat {
+    ggml_tensor * pair_output = nullptr;
+    std::vector<uint8_t> weight_data;
+
+    test_cutlass_mul_mat(ggml_type type, int64_t m, int64_t n, int64_t k) :
+        test_repacked_mul_mat(type, m, n, k) {
+    }
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "MUL_MAT_CUTLASS";
+    }
+
+    double err(const float * a, const float * b, size_t n) override {
+        if (n == sentinel_size) {
+            return nmse(a, b, n);
+        }
+        GGML_ASSERT(n % 2 == 0);
+        return nmse(a, a + n / 2, n / 2);
+    }
+
+    uint64_t op_flops(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return 4 * m * n * k;
+    }
+
+    bool run_whole_graph() override {
+        return true;
+    }
+
+    std::vector<ggml_tensor *> fusion_test_nodes() override {
+        GGML_ASSERT(pair_output != nullptr);
+        std::vector<ggml_tensor *> nodes = { pair_output };
+        nodes.insert(nodes.end(), sentinels.begin(), sentinels.end());
+        return nodes;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        ggml_tensor * weight_native = ggml_get_tensor(ctx, "weight_native");
+        if (weight_native != nullptr) {
+            test_case::initialize_tensors(ctx);
+            weight_data.resize(ggml_nbytes(weight_native));
+            ggml_backend_tensor_get(weight_native, weight_data.data(), 0, weight_data.size());
+            return;
+        }
+
+        ggml_tensor * weight_repacked = ggml_get_tensor(ctx, "weight_repacked");
+        GGML_ASSERT(weight_repacked != nullptr);
+        GGML_ASSERT(weight_data.size() == ggml_nbytes(weight_repacked));
+        ggml_backend_tensor_set(weight_repacked, weight_data.data(), 0, weight_data.size());
+    }
+
+    ggml_tensor * build_graph(ggml_context * ctx, ggml_context * ctx_weights) override {
+        GGML_ASSERT(ctx_weights != nullptr);
+        ggml_tensor * weight_native = ::ggml_new_tensor_2d(ctx, type, k, m);
+        ggml_tensor * weight_repacked = ::ggml_new_tensor_2d(ctx_weights, type, k, m);
+        ggml_set_name(weight_native, "weight_native");
+        ggml_set_name(weight_repacked, "weight_repacked");
+
+        ggml_tensor * input = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, k, n);
+        ggml_set_name(input, "input");
+        ggml_tensor * native = ggml_mul_mat(ctx, weight_native, input);
+        ggml_tensor * repacked = ggml_mul_mat(ctx, weight_repacked, input);
+        pair_output = ggml_concat(ctx, native, repacked, 1);
+        ggml_set_name(pair_output, "out");
+        return pair_output;
+    }
+};
+
 struct test_repacked_mul_mat_vec_fusion : public test_case {
     const ggml_type type;
     const ggml_glu_op glu_op;
@@ -4769,7 +4838,7 @@ struct test_repacked_mul_mat_vec_fusion : public test_case {
         }
 
         return glu_op == GGML_GLU_OP_SWIGLU_OAI ?
-            ggml_swiglu_oai(ctx, gate, up, 1.702f, 7.0f) :
+            ggml_swiglu_oai(ctx, gate, up, 1.3f, 5.0f) :
             ggml_glu_split(ctx, gate, up, glu_op);
     }
 
@@ -10398,6 +10467,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_repacked_mul_mat(type, 257, 1, 576));
         test_cases.emplace_back(new test_repacked_mul_mat(type, 257, 8, 576));
         test_cases.emplace_back(new test_repacked_mul_mat(type, 260, 256, 576));
+        test_cases.emplace_back(new test_cutlass_mul_mat(type, 260, 256, 576));
         for (ggml_glu_op glu_op : {GGML_GLU_OP_SWIGLU, GGML_GLU_OP_GEGLU, GGML_GLU_OP_SWIGLU_OAI}) {
             test_cases.emplace_back(new test_repacked_mul_mat_vec_fusion(type, glu_op, false, false));
             test_cases.emplace_back(new test_repacked_mul_mat_vec_fusion(type, glu_op, true, false));
