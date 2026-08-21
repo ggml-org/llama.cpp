@@ -152,6 +152,7 @@ llama_build(test-recurrent-state-rollback.cpp)
 
 if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
     # these tests are disabled on Windows because they use internal functions not exported with LLAMA_API (when building with shared libraries)
+    llama_build_and_test(test-unicode.cpp)
     llama_build_and_test(test-sampling.cpp)
     llama_build_and_test(test-reasoning-budget.cpp)
     llama_build_and_test(test-grammar-parser.cpp)
@@ -309,6 +310,9 @@ set(LLAMA_TEST_NAME test-mtmd-c-api)
 llama_build_and_test(test-mtmd-c-api.c)
 target_link_libraries(${LLAMA_TEST_NAME} PRIVATE mtmd)
 unset(LLAMA_TEST_NAME)
+
+llama_build_and_test(test-mtmd-impl.cpp)
+target_link_libraries(test-mtmd-impl PRIVATE mtmd)
 
 # GGUF model data fetcher library for tests that need real model metadata
 # Only compile when cpp-httplib has SSL support (CPPHTTPLIB_OPENSSL_SUPPORT)

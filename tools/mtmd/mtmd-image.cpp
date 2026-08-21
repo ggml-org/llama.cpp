@@ -999,14 +999,45 @@ mtmd_image_preprocessor_llava_uhd::slice_instructions mtmd_image_preprocessor_mi
 // mtmd_image_preprocessor_lfm2
 //
 
+mtmd_image_preproc_out mtmd_image_preprocessor_lfm2::preprocess(const clip_image_u8 & img) {
+    auto const inst = get_slice_instructions(img.get_size());
+    if (!inst.slices.empty()) {
+        return mtmd_image_preprocessor_llava_uhd::preprocess(img);
+    }
+
+    // single tile: no thumbnail
+    // note: not using output.overview here because it will emit <|img_thumbnail|> token, which we don't want in this case
+    auto sliced = slice_image(img, inst);
+    mtmd_image_preproc_out output;
+    output.append(hparams, sliced.overview, true);
+    return output;
+}
+
+bool mtmd_image_preprocessor_lfm2::should_tile(
+        const clip_hparams & hparams,
+        const clip_image_size & original_size) {
+    const int align_size = hparams.patch_size * hparams.n_merge;
+
+    const auto round_by_factor = [align_size](float x) {
+        // see https://github.com/ggml-org/llama.cpp/pull/27057#discussion_r3796264887
+        return static_cast<int>(std::nearbyint(static_cast<double>(x) / align_size)) * align_size;
+    };
+
+    const int h_bar = std::max(hparams.patch_size, round_by_factor(original_size.height));
+    const int w_bar = std::max(hparams.patch_size, round_by_factor(original_size.width));
+
+    return static_cast<double>(h_bar) * static_cast<double>(w_bar) >
+           static_cast<double>(hparams.image_max_pixels) * max_pixels_tolerance;
+}
+
 mtmd_image_preprocessor_llava_uhd::slice_instructions mtmd_image_preprocessor_lfm2::get_slice_instructions(const clip_image_size & original_size) {
     mtmd_image_preprocessor_llava_uhd::slice_instructions inst;
     const int align_size = hparams.patch_size * hparams.n_merge;
     inst.overview_size = img_tool::calc_size_preserved_ratio(
                             original_size,
                             { align_size, hparams.image_min_pixels, hparams.image_max_pixels, 0 });
-    // tile if either dimension exceeds tile_size with tolerance
-    const bool needs_tiling = original_size.width > tile_size * max_pixels_tolerance || original_size.height > tile_size * max_pixels_tolerance;
+
+    const bool needs_tiling = should_tile(hparams, original_size);
 
     if (!needs_tiling) {
         inst.refined_size = clip_image_size{0, 0};
@@ -1606,11 +1637,15 @@ mtmd_image_preproc_out mtmd_image_preprocessor_granite::preprocess(const clip_im
 
     const clip_image_size orig_size = img.get_size();
     const int             tile_size = hparams.image_size;
+    GGML_ASSERT(tile_size > 0);
 
     // llava-next always encodes an overview plus a grid of tiles, even for small images
     const clip_image_size refined_size = select_best_resolution(orig_size, hparams.image_res_candidates);
     const int             grid_x       = refined_size.width  / tile_size;
     const int             grid_y       = refined_size.height / tile_size;
+
+    // the tiles are stacked on the Y axis, a big grid overflows the stacked image height
+    GGML_ASSERT(grid_x >= 0 && grid_x <= 1024 && grid_y >= 0 && grid_y <= 1024);
 
     clip_image_u8 overview;
     img_tool::resize(img, overview, {tile_size, tile_size}, hparams.image_resize_algo_ov,

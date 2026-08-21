@@ -285,10 +285,10 @@ export interface ToolExecutionResult {
 	isError: boolean;
 }
 
-export interface ServerBuiltinToolInfo {
+export interface ServerToolInfo {
 	display_name: string;
 	tool: string;
-	type: ToolSource.BUILTIN;
+	type: ToolSource.SERVER;
 	permissions: {
 		write: boolean;
 	};
