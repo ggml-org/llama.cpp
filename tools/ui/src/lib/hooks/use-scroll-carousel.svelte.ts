@@ -1,4 +1,4 @@
-export function useScrollCarousel(onScrollableChange?: (isScrollable: boolean) => void) {
+export function useScrollCarousel() {
 	let canScrollLeft = $state(false);
 	let canScrollRight = $state(false);
 	let scrollContainer = $state<HTMLDivElement | undefined>();
@@ -16,18 +16,6 @@ export function useScrollCarousel(onScrollableChange?: (isScrollable: boolean) =
 		scrollContainer.scrollBy({ behavior: 'smooth', left: scrollOffset });
 	}
 
-	function scrollLeft() {
-		if (!scrollContainer) return;
-
-		scrollContainer.scrollBy({ behavior: 'smooth', left: -250 });
-	}
-
-	function scrollRight() {
-		if (!scrollContainer) return;
-
-		scrollContainer.scrollBy({ behavior: 'smooth', left: 250 });
-	}
-
 	function updateScrollButtons() {
 		if (!scrollContainer) return;
 
@@ -35,8 +23,6 @@ export function useScrollCarousel(onScrollableChange?: (isScrollable: boolean) =
 
 		canScrollLeft = sl > 0;
 		canScrollRight = sl < scrollWidth - clientWidth - 1;
-
-		onScrollableChange?.(scrollWidth > clientWidth);
 	}
 
 	// Re-evaluate arrow visibility whenever the container or its content resizes,
@@ -75,8 +61,6 @@ export function useScrollCarousel(onScrollableChange?: (isScrollable: boolean) =
 		set scrollContainer(el: HTMLDivElement | undefined) {
 			scrollContainer = el;
 		},
-		scrollLeft,
-		scrollRight,
 		scrollToCenter,
 		updateScrollButtons
 	};
