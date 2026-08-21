@@ -62,15 +62,15 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         with:
           tag_name: ${{ steps.checks.outputs.version }}
-          # TODO: remove the prerelease flag once the semantic versioning workflow is ready
-          # ref: https://github.com/ggml-org/ggml/discussions/1579
-          prerelease: true
+          prerelease: false
+          # TODO: enrich the body of the release with more information
           body: |
-            > [!NOTE]
-            > Semantic versioning is still work in progress.
-            > More info can be found in https://github.com/ggml-org/ggml/discussions/1579
+            ## Overview
+
+            New version has been released.
 
             ${{ steps.desc.outputs.nightly }}
+            **More info:** [dist : releases and versioning of ggml-org projects](https://github.com/ggml-org/ggml/discussions/1579)
 
             ## ${{ steps.desc.outputs.changelog_title }}
 
