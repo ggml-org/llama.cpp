@@ -198,12 +198,22 @@ Measured 2026-08-21 on the post-fix build (b10558), DFlash2 draft
 | unsloth UD-Q4_K_XL | prose | **22.3** | 18.5 |
 | ROCMFPX-MQ-Q4 | HTML | - | **40.7** |
 | unsloth UD-Q4_K_XL | HTML | - | 32.9 |
+| ROCMFPX-MQ-Q4 | digits 0-100 | - | **53.0** |
+| unsloth UD-Q4_K_XL | digits 0-100 | - | 35.8 |
 
-The two HTML rows are *not* a controlled benchmark — they are single interactive
-runs through the server UI on different prompts (1057 and 1030 tokens), recorded
-because the effect is far larger than the noise. **The unsloth n-max 3 HTML cell is
-still unmeasured**, so the 40.7-vs-32.9 gap is an upper bound on FP4's advantage
-there: the K-quant preset may simply be mis-tuned at 7 for that content.
+The HTML and digit rows are *not* a controlled benchmark — they are single
+interactive runs through the server UI, at whatever length the model chose (1057 vs
+1030 tokens for HTML, 464 vs 517 for digits), recorded because the effect is far
+larger than the noise. Both ran at the preset default of n-max 7. **The n-max 3
+cells are still unmeasured**, so those gaps are upper bounds on FP4's advantage:
+the K-quant preset may simply be mis-tuned at 7 for that content.
+
+The digit row is the useful one for calibration. `llama-batched-bench` puts the
+FP4 model's B=8 ceiling at 60.0 t/s, and a counting task runs at 53.0 — 88% of it.
+That is the verification batch running nearly full, and it is the closest thing to
+an upper bound on what DFlash2 can deliver here. Prose, at ~2.6 accepted tokens per
+step, sits at 24.6 against the same ceiling. The whole spread between those two
+numbers is acceptance.
 
 What this means for the presets:
 
@@ -226,6 +236,10 @@ tokens a verification step carries, so it compounds with acceptance:
 Prose spec decoding, where mean accepted length is ~2.6, gained 46% (16.8 -> 24.6).
 Structured output accepts far more per step, sits nearer the B=8 column, and is
 where the fixes pay best. So: a real win everywhere, a large one on code and markup.
+
+Against the unsloth K-quant on the same tasks, FP4 measures +24% on HTML and +48%
+on digits — the ordering the acceptance argument predicts, since digits accept
+more per step than markup and markup more than prose.
 
 ## TODOs
 
@@ -251,11 +265,11 @@ outcomes so the reasoning is not re-run.
 
 Still open on the perf side:
 
-- **Measure unsloth UD-Q4_K_XL on HTML at n-max 3.** It is the one cell that decides
-  whether the three K-quant `reasoning-*` presets should drop to 3, and whether the
-  40.7-vs-32.9 HTML gap is FP4 winning or the K-quant preset being mis-tuned. Use a
-  fixed prompt and run both settings back to back; the two numbers on record came
-  from separate interactive sessions.
+- **Measure unsloth UD-Q4_K_XL at n-max 3 on HTML and on digits.** Those are the
+  cells that decide whether the three K-quant `reasoning-*` presets should drop to
+  3, and whether the HTML and digit gaps are FP4 winning or the K-quant preset being
+  mis-tuned at 7. Use a fixed prompt with a fixed token count and run both settings
+  back to back; every number on record came from a separate interactive session.
 - fp6/fp3 float mat-vec is fixed but still ~1.5x `q6_K`/`q3_K` at n=1 (226 vs 211,
   275 vs 109). fp3 in particular still pays a shared-LUT codebook lookup per weight.
   Low priority: no model here leans on fp3.
