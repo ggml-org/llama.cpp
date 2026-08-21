@@ -7,12 +7,18 @@
 		DialogModelInformation,
 		DropdownMenuSearchable,
 		ModelId,
+		ModelsSelectorAdvancedSubmenu,
 		ModelsSelectorList,
 		ModelsSelectorOption
 	} from '$lib/components/app';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Tooltip from '$lib/components/ui/tooltip';
-	import { MODEL_SELECTOR_ICON, SETTINGS_KEYS } from '$lib/constants';
+	import {
+		MODEL_SELECTOR_ICON,
+		SETTINGS_CHAT_SECTIONS,
+		SETTINGS_KEYS,
+		SETTINGS_SECTION_SLUGS
+	} from '$lib/constants';
 	import { KeyboardKey, ServerModelStatus } from '$lib/enums';
 	import { useModelsSelector } from '$lib/hooks/use-models-selector.svelte';
 	import { useReasoningMenu } from '$lib/hooks/use-reasoning-menu.svelte';
@@ -65,6 +71,14 @@
 	});
 
 	const reasoning = useReasoningMenu();
+
+	// Sampling/penalties need a loaded model to show server defaults, so
+	// disable the submenu until one is loaded.
+	const hasModelLoaded = $derived(modelsStore.loadedModelIds.length > 0);
+
+	const samplingPenaltiesSection = $derived(
+		SETTINGS_CHAT_SECTIONS.find((s) => s.slug === SETTINGS_SECTION_SLUGS.SAMPLING_PENALTIES)
+	);
 
 	const showOrgNameInTrigger = $derived(
 		settingsStore.config[SETTINGS_KEYS.SHOW_MODEL_ORG_NAME_IN_TRIGGER] ?? false
@@ -352,6 +366,13 @@
 					</DropdownMenu.Sub>
 
 					<ChatFormActionAddReasoningSubmenu />
+
+					{#if samplingPenaltiesSection}
+						<ModelsSelectorAdvancedSubmenu
+							section={samplingPenaltiesSection}
+							disabled={!hasModelLoaded}
+						/>
+					{/if}
 				</DropdownMenu.Content>
 			</DropdownMenu.Root>
 		{:else}
