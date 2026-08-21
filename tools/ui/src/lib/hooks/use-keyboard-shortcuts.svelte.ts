@@ -37,7 +37,7 @@ export function useKeyboardShortcuts(callbacks: KeyboardShortcutsCallbacks) {
 		) {
 			event.preventDefault();
 
-			conversationsStore.openNewChat();
+			void conversationsStore.openNewChat();
 		}
 
 		if (event.shiftKey && isCmdOrCtrl && event.key === KeyboardKey.E_UPPER) {
