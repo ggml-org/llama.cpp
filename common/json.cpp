@@ -82,9 +82,43 @@ common_json_value::common_json_value(const char * val) {
 common_json_value::common_json_value(const common_json & val) :
     type(VAL_JSON), val_json(std::make_shared<common_json>(val)) {}
 
-common_json_value::common_json_value(const std::map<std::string, std::string> & vals) : type(VAL_JSON) {
-    val_json = std::make_shared<common_json>(common_json_from_raw(ordered_json(vals)));
+template <typename T>
+common_json_value::common_json_value(const std::set<T> & vals) : type(VAL_JSON) {
+    common_json out = common_json::array();
+
+    for (const auto & val : vals) {
+        out.push_back(val);
+    }
+
+    val_json = std::make_shared<common_json>(std::move(out));
 }
+
+// a set value is usable only for the types below
+#define COMMON_JSON_SET(...) template common_json_value::common_json_value(const std::set<__VA_ARGS__> &);
+
+COMMON_JSON_SET(int)
+COMMON_JSON_SET(std::string)
+
+#undef COMMON_JSON_SET
+
+template <typename T>
+common_json_value::common_json_value(const std::map<std::string, T> & vals) : type(VAL_JSON) {
+    common_json out = common_json::object();
+
+    for (const auto & val : vals) {
+        out.set({ val.first, val.second });
+    }
+
+    val_json = std::make_shared<common_json>(std::move(out));
+}
+
+// a map value is usable only for the types below
+#define COMMON_JSON_MAP(...) template common_json_value::common_json_value(const std::map<std::string, __VA_ARGS__> &);
+
+COMMON_JSON_MAP(bool)
+COMMON_JSON_MAP(std::string)
+
+#undef COMMON_JSON_MAP
 
 template <typename T>
 common_json_value::common_json_value(const std::vector<T> & vals) : type(VAL_JSON) {

@@ -11,6 +11,7 @@
 #include <iterator>
 #include <map>
 #include <memory>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -59,10 +60,12 @@ struct common_json_value {
     common_json_value(std::string_view val) : type(VAL_STRING), val_string(val) {}
     common_json_value(const char * val);
     common_json_value(const common_json & val);
-    // becomes an object, so a plain string map can be passed where a JSON value is expected
-    common_json_value(const std::map<std::string, std::string> & vals);
     // only for the types instantiated in json.cpp, the rest fails at link time
     template <typename T> common_json_value(const std::vector<T> & vals);
+    // a set becomes an array, in the set's own order
+    template <typename T> common_json_value(const std::set<T> & vals);
+    // a map becomes an object, keyed in the map's own order
+    template <typename T> common_json_value(const std::map<std::string, T> & vals);
 
     // nested object, e.g. {"fn", {{"name", "x"}}}
     common_json_value(std::initializer_list<common_json_item> items);
@@ -93,6 +96,26 @@ struct common_json_item {
         key(std::move(key)), val(items) {}
 };
 
+// the types common_json_value holds on its own. anything else reaches its
+// common_json ctor, which builds a common_json again and never stops
+template <typename T> struct common_json_is_value : std::integral_constant<bool,
+    std::is_arithmetic<T>::value ||
+    std::is_same<T, std::nullptr_t>::value ||
+    std::is_same<T, std::string>::value ||
+    std::is_same<T, std::string_view>::value ||
+    std::is_same<T, char *>::value ||
+    std::is_same<T, const char *>::value ||
+    std::is_same<T, common_json>::value> {};
+
+template <typename T, typename A>
+struct common_json_is_value<std::vector<T, A>> : std::true_type {};
+
+template <typename T, typename C, typename A>
+struct common_json_is_value<std::set<T, C, A>> : std::true_type {};
+
+template <typename V, typename C, typename A>
+struct common_json_is_value<std::map<std::string, V, C, A>> : std::true_type {};
+
 class common_json {
   public:
     common_json();
@@ -107,7 +130,10 @@ class common_json {
     // one step, so that "abc" or a vector can go straight into a common_json
     template <typename T, typename std::enable_if<!std::is_same<typename std::decay<T>::type, common_json>::value &&
                                                   !std::is_same<typename std::decay<T>::type, common_json_value>::value, int>::type = 0>
-    common_json(T && val) : common_json(common_json_value(std::forward<T>(val))) {}
+    common_json(T && val) : common_json(common_json_value(std::forward<T>(val))) {
+        static_assert(common_json_is_value<typename std::decay<T>::type>::value,
+                      "no common_json_value ctor holds this type, add one instead of letting it recurse");
+    }
 
     // by value, same as the backing library: the right side is copied before the
     // left side can invalidate it, e.g. msg["a"] = msg.at("b") where "a" is new
