@@ -297,9 +297,6 @@ ggml_tensor * llm_build_mamba_base::build_mamba2_layer(llm_graph_input_rs * inp,
         cur = build_lora_mm(model.layers[il].ssm_out, y, model.layers[il].ssm_out_s);
     }
 
-    // {n_embd, n_seq_tokens, n_seqs} => {n_embd, n_tokens}
-    cur = ggml_reshape_2d(ctx0, cur, cur->ne[0], n_seq_tokens * n_seqs);
     cb(cur, "mamba_out", il);
-
     return cur;
 }
