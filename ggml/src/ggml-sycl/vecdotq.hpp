@@ -429,6 +429,39 @@ template <> struct reorder_vec_dot_q_sycl<GGML_TYPE_Q8_0> {
     }
 };
 
+template <> struct reorder_vec_dot_q_sycl<GGML_TYPE_Q2_K> {
+    static constexpr ggml_type gtype = GGML_TYPE_Q2_K;
+
+    using q2_k_block  = ggml_sycl_reordered::block_q_t<GGML_TYPE_Q2_K>;
+    using q2_k_traits = typename q2_k_block::traits;
+
+    __dpct_inline__ float operator()(const void * __restrict__ vbq, const std::pair<int, int> ibx_offset,
+                                     const std::pair<int, int> d_offset, const int8_t * q8_1_quant_ptr,
+                                     const sycl::half2 * q8_1_ds, const int & iqs) {
+        const uint8_t *    base   = static_cast<const uint8_t *>(vbq);
+        const uint8_t *    qs     = base + ibx_offset.first;
+        const uint8_t *    scales = base + d_offset.first;
+        const ggml_half2 * dm     = reinterpret_cast<const ggml_half2 *>(base + d_offset.second);
+
+        const int bq8_offset   = QR2_K * (iqs / QI8_1);
+        const int scale_offset = iqs - iqs % QI8_1 + (iqs % QI8_1) / (QI8_1 / 2);
+
+        const int v = get_int_from_uint8_aligned(qs, iqs);
+
+        int   u[QR2_K];
+        float d8[QR2_K];
+
+#pragma unroll
+        for (int i = 0; i < QR2_K; ++i) {
+            const int8_t * quant_base_ptr = q8_1_quant_ptr + (bq8_offset + i) * QK8_1;
+            u[i]                          = get_int_from_int8_aligned(quant_base_ptr, iqs % QI8_1);
+            d8[i]                         = (*(q8_1_ds + bq8_offset + i))[0];
+        }
+
+        return vec_dot_q2_K_q8_1_impl_mmvq(v, u, scales + scale_offset, *dm, d8);
+    }
+};
+
 template <> struct reorder_vec_dot_q_sycl<GGML_TYPE_Q3_K> {
     static constexpr ggml_type gtype = GGML_TYPE_Q3_K;
 
