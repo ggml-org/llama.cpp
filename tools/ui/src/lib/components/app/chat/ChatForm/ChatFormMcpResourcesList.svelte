@@ -3,7 +3,7 @@
 		ChatAttachmentsListItemMcpResource,
 		HorizontalScrollCarousel
 	} from '$lib/components/app';
-	import { mcpResourceStore, mcpStore } from '$lib/stores';
+	import { mcpStore } from '$lib/stores';
 
 	interface Props {
 		class?: string;
@@ -12,8 +12,8 @@
 
 	let { class: className, onResourceClick }: Props = $props();
 
-	const attachments = $derived(mcpResourceStore.attachments);
-	const hasAttachments = $derived(mcpResourceStore.hasAttachments);
+	const attachments = $derived(mcpStore.resources.attachments);
+	const hasAttachments = $derived(mcpStore.resources.hasAttachments);
 
 	function handleRemove(attachmentId: string) {
 		mcpStore.removeResourceAttachment(attachmentId);

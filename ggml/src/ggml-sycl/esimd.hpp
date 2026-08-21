@@ -1,15 +1,3 @@
-//
-// MIT license
-// Copyright (C) 2026 Intel Corporation
-// SPDX-License-Identifier: MIT
-//
-
-//
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-//
-
 #ifndef GGML_SYCL_ESIMD_HPP
 #define GGML_SYCL_ESIMD_HPP
 
@@ -273,6 +261,128 @@ template <> struct esimd_reorder_q_traits<GGML_TYPE_Q4_K> {
             simd<uint8_t, 32> qa_hi = qs_hi_a.select<32, 1>(q_offset);
             simd<uint8_t, 32> qb_lo = qs_lo_b.select<32, 1>(q_offset);
             simd<uint8_t, 32> qb_hi = qs_hi_b.select<32, 1>(q_offset);
+
+            simd<float, 32> deq_a_lo = convert<float>(qa_lo) * scale_a_lo + min_a_lo;
+            simd<float, 32> deq_a_hi = convert<float>(qa_hi) * scale_a_hi + min_a_hi;
+            simd<float, 32> deq_b_lo = convert<float>(qb_lo) * scale_b_lo + min_b_lo;
+            simd<float, 32> deq_b_hi = convert<float>(qb_hi) * scale_b_hi + min_b_hi;
+
+            acc_a += y_lo * deq_a_lo;
+            acc_b += y_lo * deq_b_lo;
+            acc_a += y_hi * deq_a_hi;
+            acc_b += y_hi * deq_b_hi;
+        }
+    }
+};
+
+// ---------------------------------------------------------------------------
+// Q5_K, SOA reorder layout produced by reorder_qw_q5_k:
+//   [qs: nb*(QK_K/2)] [qh: nb*(QK_K/8)] [scales: nb*K_SCALE_SIZE] [dm: nb*sizeof(half2)]
+// with nb = nrows*num_blocks_per_row.
+//
+// Identical to Q4_K except each 4-bit quant gains a 5th (high) bit from qh:
+// output chunk c (0..7) adds 16 when bit c of qh[l] is set, where qh[l] indexes
+// the same 32 bytes for every chunk (matches dequantize_row_q5_K).
+// ---------------------------------------------------------------------------
+template <> struct esimd_reorder_q_traits<GGML_TYPE_Q5_K> {
+    struct ptrs {
+        const uint8_t *    qs;
+        const uint8_t *    qh;
+        const uint8_t *    scales;
+        const sycl::half * dm;
+    };
+
+    static ESIMD_INLINE ptrs make_ptrs(const void * vx, size_t nb) {
+        const uint8_t * qs     = (const uint8_t *) vx;
+        const uint8_t * qh     = qs + nb * (QK_K / 2);
+        const uint8_t * scales = qh + nb * (QK_K / 8);
+        const sycl::half * dm  = (const sycl::half *) (scales + nb * K_SCALE_SIZE);
+        return { qs, qh, scales, dm };
+    }
+
+    // extract bit `bit` (0..7) of each lane and move it to bit position 4,
+    // e.g. for the 4-bit base quant's 5th (high) bit. `bit` is always a
+    // compile-time-known unrolled loop constant at call sites, so this folds
+    // to a single mask (bit==4), mask+left-shift (bit<4), or mask+right-shift
+    // (bit>4) instead of the shift+mask+shift a naive `(qh>>bit & 1) << 4` emits.
+    static ESIMD_INLINE sycl::ext::intel::esimd::simd<uint16_t, 32> extract_bit_to_pos4(
+            sycl::ext::intel::esimd::simd<uint8_t, 32> qh, int bit) {
+        using namespace sycl::ext::intel::esimd;
+        simd<uint16_t, 32> masked = convert<uint16_t>(qh & simd<uint8_t, 32>((uint8_t) (1u << bit)));
+        if (bit < 4) {
+            return masked << simd<uint16_t, 32>((uint16_t) (4 - bit));
+        } else if (bit > 4) {
+            return masked >> simd<uint16_t, 32>((uint16_t) (bit - 4));
+        }
+        return masked;
+    }
+
+    static ESIMD_INLINE void mac_pair(
+            const ptrs & pa, size_t bia,
+            const ptrs & pb, size_t bib, bool has_b,
+            sycl::ext::intel::esimd::simd<float, 256> & y_vec,
+            sycl::ext::intel::esimd::simd<float, 32> & acc_a,
+            sycl::ext::intel::esimd::simd<float, 32> & acc_b) {
+        using namespace sycl::ext::intel::esimd;
+
+        simd<uint8_t, 128> qs_a     = block_load<uint8_t, 128>(pa.qs + bia * (QK_K / 2));
+        simd<uint8_t, 128> qs_b     = 0;
+        simd<uint8_t, 32>  qh_a     = block_load<uint8_t, 32>(pa.qh + bia * (QK_K / 8));
+        simd<uint8_t, 32>  qh_b     = 0;
+        simd<uint8_t, 12>  scales_a = block_load<uint8_t, 12>(pa.scales + bia * K_SCALE_SIZE);
+        simd<uint8_t, 12>  scales_b = 0;
+
+        const float dall_a = (float) pa.dm[bia * 2 + 0];
+        const float dmin_a = (float) pa.dm[bia * 2 + 1];
+        float dall_b = 0.0f;
+        float dmin_b = 0.0f;
+        if (has_b) {
+            qs_b     = block_load<uint8_t, 128>(pb.qs + bib * (QK_K / 2));
+            qh_b     = block_load<uint8_t, 32>(pb.qh + bib * (QK_K / 8));
+            scales_b = block_load<uint8_t, 12>(pb.scales + bib * K_SCALE_SIZE);
+            dall_b = (float) pb.dm[bib * 2 + 0];
+            dmin_b = (float) pb.dm[bib * 2 + 1];
+        }
+
+        simd<float, 8> scale_f_a, min_f_a, scale_f_b, min_f_b;
+        unpack_scale_min_k4(scales_a, dall_a, dmin_a, scale_f_a, min_f_a);
+        unpack_scale_min_k4(scales_b, dall_b, dmin_b, scale_f_b, min_f_b);
+
+        simd<uint8_t, 128> qs_lo_a = qs_a & simd<uint8_t, 128>(0x0F);
+        simd<uint8_t, 128> qs_hi_a = qs_a >> simd<uint8_t, 128>(4);
+        simd<uint8_t, 128> qs_lo_b = qs_b & simd<uint8_t, 128>(0x0F);
+        simd<uint8_t, 128> qs_hi_b = qs_b >> simd<uint8_t, 128>(4);
+
+#pragma unroll
+        for (int sb = 0; sb < 8; sb += 2) {
+            const int q_offset = sb * 16;
+            simd<float, 32> y_lo = y_vec.select<32, 1>(sb * 32);
+            simd<float, 32> y_hi = y_vec.select<32, 1>((sb + 1) * 32);
+
+            const float scale_a_lo = scale_f_a[sb];
+            const float scale_a_hi = scale_f_a[sb + 1];
+            const float min_a_lo   = min_f_a[sb];
+            const float min_a_hi   = min_f_a[sb + 1];
+            const float scale_b_lo = scale_f_b[sb];
+            const float scale_b_hi = scale_f_b[sb + 1];
+            const float min_b_lo   = min_f_b[sb];
+            const float min_b_hi   = min_f_b[sb + 1];
+
+            simd<uint8_t, 32> qa_lo_u8 = qs_lo_a.select<32, 1>(q_offset);
+            simd<uint8_t, 32> qa_hi_u8 = qs_hi_a.select<32, 1>(q_offset);
+            simd<uint8_t, 32> qb_lo_u8 = qs_lo_b.select<32, 1>(q_offset);
+            simd<uint8_t, 32> qb_hi_u8 = qs_hi_b.select<32, 1>(q_offset);
+            simd<uint16_t, 32> qa_lo = convert<uint16_t>(qa_lo_u8);
+            simd<uint16_t, 32> qa_hi = convert<uint16_t>(qa_hi_u8);
+            simd<uint16_t, 32> qb_lo = convert<uint16_t>(qb_lo_u8);
+            simd<uint16_t, 32> qb_hi = convert<uint16_t>(qb_hi_u8);
+
+            // add the 5th bit: chunk sb uses qh bit sb, chunk sb+1 uses qh bit sb+1;
+            // qh always indexes the same 32 bytes regardless of chunk
+            qa_lo += extract_bit_to_pos4(qh_a, sb);
+            qa_hi += extract_bit_to_pos4(qh_a, sb + 1);
+            qb_lo += extract_bit_to_pos4(qh_b, sb);
+            qb_hi += extract_bit_to_pos4(qh_b, sb + 1);
 
             simd<float, 32> deq_a_lo = convert<float>(qa_lo) * scale_a_lo + min_a_lo;
             simd<float, 32> deq_a_hi = convert<float>(qa_hi) * scale_a_hi + min_a_hi;
