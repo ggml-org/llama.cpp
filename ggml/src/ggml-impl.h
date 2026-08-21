@@ -552,6 +552,57 @@ static inline uint8_t ggml_fp32_to_ue4m3(float x) {
     return (uint8_t) ((ue4m3_exp << 3) | ue4m3_man);
 }
 
+static inline float ggml_f8_e4m3_to_fp32(uint8_t x) {
+    const uint8_t ax = x & 0x7F;
+    if (ax == 0x7F) {
+        return NAN;
+    }
+
+    const int exp = (ax >> 3) & 0xF;
+    const int man = ax & 0x7;
+    const float value = exp == 0
+        ? ldexpf((float) man, -9)
+        : ldexpf(1.0f + (float) man / 8.0f, exp - 7);
+    return x & 0x80 ? -value : value;
+}
+
+static inline int ggml_round_to_nearest_even(float x) {
+    const int value = (int) floorf(x);
+    const float fraction = x - value;
+    return fraction > 0.5f || (fraction == 0.5f && (value & 1)) ? value + 1 : value;
+}
+
+static inline uint8_t ggml_fp32_to_f8_e4m3(float x) {
+    const uint8_t sign = signbit(x) ? 0x80 : 0;
+    x = fabsf(x);
+
+    if (isnan(x)) {
+        return sign | 0x7F;
+    }
+    if (x == 0.0f) {
+        return sign;
+    }
+    if (isinf(x) || x >= 448.0f) {
+        return sign | 0x7E;
+    }
+    if (x < 0.015625f) {
+        return sign | (uint8_t) ggml_round_to_nearest_even(x * 512.0f);
+    }
+
+    int exp;
+    const float mantissa = frexpf(x, &exp) * 2.0f;
+    int encoded_exp = exp + 6;
+    int encoded_man = ggml_round_to_nearest_even((mantissa - 1.0f) * 8.0f);
+    if (encoded_man == 8) {
+        encoded_man = 0;
+        encoded_exp++;
+    }
+    if (encoded_exp > 15 || (encoded_exp == 15 && encoded_man > 6)) {
+        return sign | 0x7E;
+    }
+    return sign | (uint8_t) (encoded_exp << 3) | (uint8_t) encoded_man;
+}
+
 /**
  * Converts brain16 to float32.
  *
