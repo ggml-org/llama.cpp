@@ -4298,10 +4298,13 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
         // in streaming mode, the first error must be treated as non-stream response
         // this is to match the OAI API behavior
         // ref: https://github.com/ggml-org/llama.cpp/pull/16486#discussion_r2419657309
-        auto first_result = rd.next(req.should_stop);
+        auto first_should_stop = [res_this = res.get()]() {
+            return res_this->should_stop();
+        };
+        auto first_result = rd.next(first_should_stop);
         if (first_result == nullptr) {
-            GGML_ASSERT(req.should_stop());
-            return res; // connection is closed
+            GGML_ASSERT(first_should_stop());
+            return res; // connection is closed or stream cancelled
         }
 
         if (first_result->is_error()) {
