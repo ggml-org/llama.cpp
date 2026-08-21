@@ -70,6 +70,7 @@ jobs:
           cat nightly-tag.txt
 
       - name: Create release
+        id: create_release
         if: ${{ github.event.inputs.dry_run == 'false' }}
         uses: ggml-org/action-create-release@v1
         env:
