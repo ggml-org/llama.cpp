@@ -12,8 +12,7 @@ import {
 	Moon,
 	PencilRuler,
 	SlidersVertical,
-	Sun,
-	TriangleAlert
+	Sun
 } from '@lucide/svelte';
 import { SyncableParameterType } from '$lib/enums';
 import { SettingsFieldType } from '$lib/enums/settings.enums';
@@ -33,8 +32,7 @@ export const SETTINGS_SECTIONS = {
 	DISPLAY: { slug: 'display', title: 'Display' },
 	GENERAL: { slug: 'general', title: 'General' },
 	IMPORT_EXPORT: { slug: 'import-export', title: 'Import/Export' },
-	PENALTIES: { slug: 'penalties', title: 'Penalties' },
-	SAMPLING: { slug: 'sampling', title: 'Sampling' },
+	SAMPLING_PENALTIES: { slug: 'sampling-penalties', title: 'Sampling & Penalties' },
 	TOOLS: { slug: 'tools', title: 'Tools' }
 } as const;
 
@@ -44,8 +42,7 @@ export const SETTINGS_SECTION_SLUGS = {
 	DISPLAY: SETTINGS_SECTIONS.DISPLAY.slug,
 	GENERAL: SETTINGS_SECTIONS.GENERAL.slug,
 	IMPORT_EXPORT: SETTINGS_SECTIONS.IMPORT_EXPORT.slug,
-	PENALTIES: SETTINGS_SECTIONS.PENALTIES.slug,
-	SAMPLING: SETTINGS_SECTIONS.SAMPLING.slug,
+	SAMPLING_PENALTIES: SETTINGS_SECTIONS.SAMPLING_PENALTIES.slug,
 	TOOLS: SETTINGS_SECTIONS.TOOLS.slug
 } as const;
 
@@ -55,8 +52,7 @@ export const SETTINGS_SECTION_TITLES = {
 	DISPLAY: SETTINGS_SECTIONS.DISPLAY.title,
 	GENERAL: SETTINGS_SECTIONS.GENERAL.title,
 	IMPORT_EXPORT: SETTINGS_SECTIONS.IMPORT_EXPORT.title,
-	PENALTIES: SETTINGS_SECTIONS.PENALTIES.title,
-	SAMPLING: SETTINGS_SECTIONS.SAMPLING.title,
+	SAMPLING_PENALTIES: SETTINGS_SECTIONS.SAMPLING_PENALTIES.title,
 	TOOLS: SETTINGS_SECTIONS.TOOLS.title
 } as const;
 
@@ -472,15 +468,7 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 				key: SETTINGS_KEYS.BACKEND_SAMPLING,
 				label: 'Backend sampling',
 				type: SettingsFieldType.CHECKBOX
-			}
-		],
-		slug: SETTINGS_SECTION_SLUGS.SAMPLING,
-		title: SETTINGS_SECTION_TITLES.SAMPLING
-	},
-	// Penalties
-	{
-		icon: TriangleAlert,
-		settings: [
+			},
 			{
 				defaultValue: undefined,
 				help: 'Last n tokens to consider for penalizing repetition',
@@ -567,8 +555,8 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 				type: SettingsFieldType.INPUT
 			}
 		],
-		slug: SETTINGS_SECTION_SLUGS.PENALTIES,
-		title: SETTINGS_SECTION_TITLES.PENALTIES
+		slug: SETTINGS_SECTION_SLUGS.SAMPLING_PENALTIES,
+		title: SETTINGS_SECTION_TITLES.SAMPLING_PENALTIES
 	},
 	// Developer
 	{
