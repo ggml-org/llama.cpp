@@ -1,5 +1,6 @@
 <script lang="ts">
 	import ModelsSelectorSettingsFields from './ModelsSelectorSettingsFields.svelte';
+	import { Funnel } from '@lucide/svelte';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import type { SettingsSection } from '$lib/types';
 
@@ -13,13 +14,13 @@
 
 <DropdownMenu.Sub>
 	<DropdownMenu.SubTrigger class="flex cursor-pointer items-center gap-2" {disabled}>
-		<section.icon class="h-4 w-4 shrink-0 text-muted-foreground" />
+		<Funnel class="h-4 w-4 shrink-0 text-muted-foreground" />
 
-		<span class="text-sm text-muted-foreground">{section.title}</span>
+		<span class="text-sm text-muted-foreground">Sampling & Penalties</span>
 	</DropdownMenu.SubTrigger>
 
 	<DropdownMenu.SubContent
-		class="max-h-96 w-72 overflow-y-auto bg-popover p-2 text-popover-foreground shadow-md outline-none"
+		class="max-h-96 w-72 overflow-y-auto bg-popover p-3 pt-2 text-popover-foreground shadow-md outline-none"
 	>
 		<ModelsSelectorSettingsFields {section} />
 	</DropdownMenu.SubContent>

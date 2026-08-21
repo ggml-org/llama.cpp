@@ -7,9 +7,9 @@
 		DialogModelInformation,
 		DropdownMenuSearchable,
 		ModelId,
+		ModelsSelectorAdvancedSubmenu,
 		ModelsSelectorList,
-		ModelsSelectorOption,
-		ModelsSelectorSettingsSubmenu
+		ModelsSelectorOption
 	} from '$lib/components/app';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Tooltip from '$lib/components/ui/tooltip';
@@ -368,7 +368,7 @@
 					<ChatFormActionAddReasoningSubmenu />
 
 					{#if samplingPenaltiesSection}
-						<ModelsSelectorSettingsSubmenu
+						<ModelsSelectorAdvancedSubmenu
 							section={samplingPenaltiesSection}
 							disabled={!hasModelLoaded}
 						/>
