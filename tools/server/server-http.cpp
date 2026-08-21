@@ -785,7 +785,7 @@ void server_http_context::register_gcp_compat() const {
 
                 try {
                     json payload = instance;
-                    const std::string format = payload.at("@requestFormat");
+                    const std::string format = payload.at("@requestFormat").get<std::string>();
                     payload.erase("@requestFormat");
 
                     if (payload.contains("stream")) {

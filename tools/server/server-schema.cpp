@@ -306,7 +306,7 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
     add((new field_str("generation_prompt"))
         ->set_desc("Generation prompt appended to the chat template output")
         ->set_handler([&](field_eval_context & ctx, const json & data) {
-            std::string s = data.at("generation_prompt");
+            std::string s = data.at("generation_prompt").get<std::string>();
             ctx.params.chat_parser_params.generation_prompt = s;
             ctx.params.sampling.generation_prompt = s;
         }));
@@ -399,13 +399,13 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
             ctx.params.sampling.reasoning_budget_end.clear();
             if (data.contains("reasoning_budget_end_tags")) {
                 for (const auto & t : data.at("reasoning_budget_end_tags")) {
-                    std::string tag = t;
+                    std::string tag = t.get<std::string>();
                     if (!tag.empty()) {
                         ctx.params.sampling.reasoning_budget_end.push_back(common_tokenize(ctx.vocab, tag, false, true));
                     }
                 }
             } else if (data.contains("reasoning_budget_end_tag")) {
-                std::string tag = data.at("reasoning_budget_end_tag");
+                std::string tag = data.at("reasoning_budget_end_tag").get<std::string>();
                 if (!tag.empty()) {
                     ctx.params.sampling.reasoning_budget_end.push_back(common_tokenize(ctx.vocab, tag, false, true));
                 }

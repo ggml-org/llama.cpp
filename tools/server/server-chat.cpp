@@ -679,12 +679,12 @@ json convert_transcriptions_to_chatcmpl(
     chatcmpl_body["stream"] = stream == "true";
 
     if (inp_body.contains("max_tokens")) {
-        std::string inp = inp_body["max_tokens"];
+        std::string inp = inp_body["max_tokens"].get<std::string>();
         chatcmpl_body["max_tokens"] = std::stoul(inp);
     }
 
     if (inp_body.contains("temperature")) {
-        std::string inp = inp_body["temperature"];
+        std::string inp = inp_body["temperature"].get<std::string>();
         chatcmpl_body["temperature"] = std::stof(inp);
     }
 

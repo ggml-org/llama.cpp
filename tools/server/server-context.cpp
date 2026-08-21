@@ -5103,7 +5103,7 @@ void server_routes::init_routes() {
             std::vector<server_task> tasks;
             tasks.reserve(documents.size());
             for (size_t i = 0; i < documents.size(); i++) {
-                auto tmp = format_prompt_rerank(ctx_server.model_tgt, ctx_server.vocab, ctx_server.mctx, query.get<std::string>(), documents[i]);
+                auto tmp = format_prompt_rerank(ctx_server.model_tgt, ctx_server.vocab, ctx_server.mctx, query, documents[i]);
                 server_task task = server_task(SERVER_TASK_TYPE_RERANK);
                 task.id     = rd.get_new_id();
                 task.tokens = std::move(tmp);
@@ -5332,7 +5332,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_embeddings_impl(cons
 
     bool use_base64 = false;
     if (body.count("encoding_format") != 0) {
-        const std::string format = body.at("encoding_format");
+        const std::string & format = body.at("encoding_format");
         if (format == "base64") {
             use_base64 = true;
         } else if (format != "float") {

@@ -244,8 +244,8 @@ static std::string get_repo_commit(const std::string & repo_id,
                 !branch.contains("targetCommit") || !branch["targetCommit"].is_string()) {
                 continue;
             }
-            std::string _name = branch["name"];
-            std::string _commit = branch["targetCommit"];
+            std::string _name = branch["name"].get<std::string>();
+            std::string _commit = branch["targetCommit"].get<std::string>();
 
             if (!is_valid_subpath(refs_path, _name)) {
                 LOG_WRN("%s: skip invalid branch: %s\n", __func__, _name.c_str());

@@ -921,7 +921,7 @@ std::string common_docker_resolve_model(const std::string & docker) {
         if (manifest.contains("layers")) {
             for (const auto & layer : manifest["layers"]) {
                 if (layer.contains("mediaType")) {
-                    std::string media_type = layer["mediaType"];
+                    std::string media_type = layer["mediaType"].get<std::string>();
                     if (media_type == "application/vnd.docker.ai.gguf.v3" ||
                         media_type.find("gguf") != std::string::npos) {
                         gguf_digest = layer["digest"].get<std::string>();
