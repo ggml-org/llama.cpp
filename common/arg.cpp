@@ -4684,6 +4684,12 @@ void common_params_add_preset_options(std::vector<common_arg> & args) {
         [](common_params &, const std::string &) { /* unused */ }
     ).set_env(COMMON_ARG_PRESET_DEDUP_CACHE_MODELS).set_preset_only());
 
+    args.push_back(common_arg(
+        {"no-cache-models"}, "0|1",
+        "in server router mode, do not automatically add models from the cache directory to the model list",
+        [](common_params &, const std::string &) { /* unused */ }
+    ).set_env(COMMON_ARG_PRESET_NO_CACHE_MODELS).set_preset_only());
+
     // args.push_back(common_arg(
     //     {"pin"},
     //     "in server router mode, do not unload this model if models_max is exceeded",

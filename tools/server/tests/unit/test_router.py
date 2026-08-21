@@ -461,6 +461,33 @@ def test_router_dedup_cache_models():
         os.remove(preset_path)
 
 
+def test_router_no_cache_models():
+    """no-cache-models skips scanning the cache"""
+    global server
+
+    server.start()
+
+    ids = _get_model_ids(is_reload=True)
+    assert MODEL_B in ids
+
+    server.stop()
+
+    preset_path = os.path.join(TMP_DIR, "test_nocache.ini")
+    with open(preset_path, "w") as f:
+        f.write(
+            "[*]\n"
+            "no-cache-models = 1\n"
+        )
+
+    try:
+        server.models_preset = preset_path
+        server.start()
+        ids = _get_model_ids(is_reload=True)
+        assert MODEL_B not in ids
+    finally:
+        os.remove(preset_path)
+
+
 def test_router_remote_preset():
     global server
     server.model_hf_repo = "ggml-org/test-preset-ci"
