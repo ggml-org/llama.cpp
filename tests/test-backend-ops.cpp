@@ -4466,6 +4466,79 @@ struct test_rwkv_wkv7 : public test_case {
     }
 };
 
+// GGML_OP_RWKV_WKV7 followed by the recurrent-state cache copy used by RWKV7 models.
+struct test_rwkv_wkv7_cache : public test_case {
+    const int64_t head_size;
+    const int64_t n_seq_tokens;
+    const bool wrong_state_offset;
+    const bool shared_state_view;
+    const bool fused_prep;
+    const bool fused_k_weight;
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "RWKV_WKV7_CACHE";
+    }
+
+    std::string vars() override {
+        return VARS_TO_STR6(
+            head_size, n_seq_tokens, wrong_state_offset, shared_state_view, fused_prep, fused_k_weight);
+    }
+
+    test_rwkv_wkv7_cache(
+            int64_t head_size, int64_t n_seq_tokens,
+            bool wrong_state_offset = false, bool shared_state_view = false,
+            bool fused_prep = false, bool fused_k_weight = false)
+        : head_size(head_size), n_seq_tokens(n_seq_tokens),
+          wrong_state_offset(wrong_state_offset), shared_state_view(shared_state_view),
+          fused_prep(fused_prep), fused_k_weight(fused_k_weight) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        constexpr int64_t head_count = 2;
+        constexpr int64_t n_seqs = 1;
+        const int64_t n_tokens = n_seq_tokens * n_seqs;
+        const int64_t n_embd = head_size * head_count;
+        const int64_t state_elems = n_embd * head_size * n_seqs;
+
+        ggml_tensor * r = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, head_size, head_count, n_tokens);
+        ggml_tensor * w = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, head_size, head_count, n_tokens);
+        ggml_tensor * k = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, head_size, head_count, n_tokens);
+        ggml_tensor * v = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, head_size, head_count, n_tokens);
+        ggml_tensor * a;
+        ggml_tensor * b;
+        if (fused_prep) {
+            ggml_tensor * kk_input = k;
+            if (fused_k_weight) {
+                kk_input = ggml_reshape_2d(ctx, kk_input, n_embd, n_tokens);
+                kk_input = ggml_reshape_3d(
+                    ctx, ggml_mul(ctx, kk_input, ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n_embd)),
+                    head_size, head_count, n_tokens);
+            }
+            ggml_tensor * kk = ggml_l2_norm(ctx, kk_input, 1e-7F);
+            ggml_tensor * gate = ggml_reshape_3d(
+                ctx, ggml_new_tensor_2d(ctx, GGML_TYPE_F32, head_size * head_count, n_tokens),
+                head_size, head_count, n_tokens);
+            a = ggml_neg(ctx, kk);
+            b = ggml_mul(ctx, kk, gate);
+        } else {
+            a = ggml_l2_norm(
+                ctx, ggml_new_tensor_3d(ctx, GGML_TYPE_F32, head_size, head_count, n_tokens), 1e-7F);
+            b = ggml_l2_norm(
+                ctx, ggml_new_tensor_3d(ctx, GGML_TYPE_F32, head_size, head_count, n_tokens), 1e-7F);
+        }
+        ggml_tensor * s = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, state_elems, n_seqs);
+
+        ggml_tensor * wkv = ggml_rwkv_wkv7(ctx, r, w, k, v, a, b, s);
+        const size_t state_offset = wrong_state_offset ? 0 : n_embd * n_tokens * sizeof(float);
+        ggml_tensor * state_view = ggml_view_1d(ctx, wkv, state_elems, state_offset);
+
+        ggml_tensor * cache = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, state_elems);
+        ggml_tensor * cache_view = ggml_view_1d(ctx, cache, state_elems, 0);
+        ggml_tensor * cpy = ggml_cpy(ctx, state_view, cache_view);
+        return shared_state_view ? ggml_add(ctx, cpy, state_view) : cpy;
+    }
+};
+
 // GGML_OP_MUL_MAT
 struct test_mul_mat : public test_case {
     const ggml_type type_a;
@@ -9122,6 +9195,26 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_rwkv_wkv7(GGML_TYPE_F32, 32, 64, 32, 1));
     test_cases.emplace_back(new test_rwkv_wkv7(GGML_TYPE_F32, 32, 64, 32, 4));
     test_cases.emplace_back(new test_rwkv_wkv7(GGML_TYPE_F32, 32, 64, 128, 4));
+    // Exercise the warp-row CUDA path across both supported head sizes and
+    // decode, short chunk, and long prefill sequence lengths.
+    for (const int64_t head_size : { 64, 128 }) {
+        for (const int64_t n_seq_tokens : { 1, 4, 128, 512 }) {
+            test_cases.emplace_back(new test_rwkv_wkv7(GGML_TYPE_F32, 2, head_size, n_seq_tokens, 1));
+        }
+        test_cases.emplace_back(new test_rwkv_wkv7(GGML_TYPE_F32, 2, head_size, 1, 8));
+        for (const int64_t n_seq_tokens : { 1, 4, 128 }) {
+            test_cases.emplace_back(new test_rwkv_wkv7_cache(head_size, n_seq_tokens));
+            test_cases.emplace_back(new test_rwkv_wkv7_cache(head_size, n_seq_tokens, false, false, true));
+            if (head_size == 64) {
+                test_cases.emplace_back(new test_rwkv_wkv7_cache(
+                    head_size, n_seq_tokens, false, false, true, true));
+            }
+        }
+    }
+    // Same graph shape, but the state view is not the WKV tail or has another consumer.
+    // Both cases must reject the cache-write fusion and execute the original graph.
+    test_cases.emplace_back(new test_rwkv_wkv7_cache(64, 1, true, false));
+    test_cases.emplace_back(new test_rwkv_wkv7_cache(64, 1, false, true));
 
     test_cases.emplace_back(new test_gla(GGML_TYPE_F32, 32, 64, 1, 1));
     test_cases.emplace_back(new test_gla(GGML_TYPE_F32, 32, 64, 32, 1));
