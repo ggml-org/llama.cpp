@@ -1913,12 +1913,13 @@ static void ggml_compute_forward_concat_any(
     GGML_ASSERT(dim >= 0 && dim < 4);
     GGML_ASSERT(ggml_is_contiguous_rows(src0));
     GGML_ASSERT(ggml_is_contiguous_rows(src1));
-    GGML_ASSERT(src0->ne[0] % ggml_blck_size(src0->type) == 0);
-    GGML_ASSERT(src1->ne[0] % ggml_blck_size(src1->type) == 0);
 
     int64_t o[4] = {0, 0, 0, 0};
 
     if (dim == 0) {
+        GGML_ASSERT(src0->ne[0] % ggml_blck_size(src0->type) == 0);
+        GGML_ASSERT(src1->ne[0] % ggml_blck_size(src1->type) == 0);
+
         o[dim] = src0->ne[dim]/ggml_blck_size(src0->type);
     } else {
         o[dim] = src0->ne[dim];
