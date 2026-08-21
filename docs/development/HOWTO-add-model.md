@@ -168,14 +168,16 @@ Examples:
 
 ### Rotating only a part of the head
 
-Many models rotate only a part of each head and leave the rest untouched (often called the "nope" part). Do not build this with views plus `ggml_concat`: `ggml_concat` allocates a new tensor and copies every element, which costs more than the RoPE itself. Both layouts can be done with a single RoPE op that copies the untouched dims through for you:
+Many models rotate only a part of each head and leave the rest untouched (often called the "nope" part). Do not build this with views plus `ggml_concat`, it's not efficient. Both layouts can be done with a single RoPE op:
 
 - `[rope|nope]`, rotated dims first: pass `n_dims` smaller than the head size to `ggml_rope_ext`. Dims from `n_dims` to the end are copied as-is.
 - `[nope|rope]`, rotated dims last: call `ggml_rope_set_offset(cur, n_offs)` on the result of the RoPE, where `n_offs` is the size of the leading untouched part. Dims outside `[n_offs, n_offs + n_dims)` are copied as-is.
 
-`n_offs` must be even, `n_offs + n_dims` must fit in the row, and vision RoPE is not supported. Note that the frequencies are computed relative to the rotated window, so the result matches applying `ggml_rope_ext` to that slice on its own.
+`n_offs` must be even, `n_offs + n_dims` must fit in the row, and vision RoPE is not supported. Note that the frequencies are computed relative to the rotated window.
 
 Example: DeepSeek-V4 uses `[nope|rope]` for its query, key and compressed KV tensors, so `src/models/deepseek4.cpp` ropes the whole tensor and then calls `ggml_rope_set_offset(cur, n_embd_head_nope)`.
+
+Exception: some models apply an extra op to the `nope` part, for example `deepseek32.cpp`, and may not use this optimization. While RoPE can be applied selectively to a part of the head, the extra op may not, so these models still need views plus `ggml_concat`.
 
 ## GGUF specification
 
