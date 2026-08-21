@@ -147,7 +147,7 @@ export type {
 	ServerStatus,
 	ToolCallParams,
 	ToolExecutionResult,
-	ServerBuiltinToolInfo,
+	ServerToolInfo,
 	Tool,
 	Prompt,
 	GetPromptResult,
@@ -182,8 +182,8 @@ export type {
 	GlobSearchChildResult
 } from './glob';
 
-// Contenteditable token types (chat form)
-export type { ContentEditableToken } from './contenteditable';
+// ChatFormInputRich token types (chat form)
+export type { ChatFormInputRichToken } from './chat-form-input-rich';
 
 // Agentic types
 export type {
@@ -208,7 +208,7 @@ export type {
 export type { DesktopIconStripItem } from './navigation';
 
 // Tools types
-export type { ToolEntry, ToolGroup, BuiltinToolUiEntry } from './tools';
+export type { ToolEntry, ToolGroup, ToolUiEntry } from './tools';
 
 // Reasoning
 export type { ReasoningEffortLevel } from './reasoning';

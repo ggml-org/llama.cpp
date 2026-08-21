@@ -2064,6 +2064,7 @@ bool ggml_et_op_ssm_scan(ggml_backend_et_device_context * dev_ctx, const ggml_te
     params.src5 = *node->src[5];
     params.src6 = *node->src[6];
     params.dst  = *node;
+    params.K    = ggml_get_op_params_i32(node, 0);
 
     bool kernel_result = ggml_et_launch_kernel(dev_ctx, "ssm_scan_f32", &params, sizeof(params), 0xFFFFFFFF);
 

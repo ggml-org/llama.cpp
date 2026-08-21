@@ -1,15 +1,14 @@
 <script lang="ts">
 	import ContextGaugeDial from './ContextGaugeDial.svelte';
-	import { useContextGauge } from '$lib/hooks/use-context-gauge.svelte';
 	import {
-		chatStore,
-		conversationsStore,
 		gaugeTriggerClick,
 		gaugeTriggerEnter,
 		gaugeTriggerKeydown,
 		gaugeTriggerLeave,
 		gaugeTriggerPointerDown
-	} from '$lib/stores';
+	} from './gauge-popup.svelte';
+	import { useContextGauge } from '$lib/hooks/use-context-gauge.svelte';
+	import { chatStore, conversationsStore } from '$lib/stores';
 	import { untrack } from 'svelte';
 
 	const gauge = useContextGauge();
@@ -17,7 +16,7 @@
 	$effect(() => {
 		const conv = conversationsStore.activeConversation;
 
-		untrack(() => chatStore.setActiveProcessingConversation(conv?.id ?? null));
+		untrack(() => chatStore.processing.setActiveConversation(conv?.id ?? null));
 	});
 
 	$effect(() => {
@@ -29,12 +28,12 @@
 		if (chatStore.isLoading || chatStore.isStreaming()) return;
 
 		if (messages.length === 0) {
-			untrack(() => chatStore.clearProcessingState(conv.id));
+			untrack(() => chatStore.processing.setState(conv.id, null));
 
 			return;
 		}
 
-		untrack(() => chatStore.restoreProcessingStateFromMessages(messages, conv.id));
+		untrack(() => chatStore.processing.restoreFromMessages(messages, conv.id));
 	});
 
 	$effect(() => {
