@@ -2157,7 +2157,7 @@ static void test_tagged_args_with_embedded_quotes(testing & t) {
         for (const auto & tool_def : tools) {
             if (!tool_def.contains("function")) { continue; }
             const auto & function = tool_def.at("function");
-            std::string name = function.at("name");
+            std::string name = function.at("name").get<std::string>();
             const auto & params = function.at("parameters");
 
             if (!params.contains("properties") || !params.at("properties").is_object()) { continue; }

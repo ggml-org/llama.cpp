@@ -173,6 +173,11 @@ class common_json {
         return contains(key) ? at(key).get<std::string>() : std::string(def);
     }
 
+    // a JSON default needs no get<T>(), it is already the right type
+    common_json value(const std::string & key, const common_json & def) const {
+        return contains(key) ? at(key) : def;
+    }
+
     void assign(const common_json_value & val);
     void set(const common_json_item & item);
     void push_back(const common_json_value & val);

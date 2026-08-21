@@ -3,7 +3,7 @@
 #include <random>
 #include <cstdlib>
 
-#include <nlohmann/json.hpp>
+#include "json.h"
 #include "subproc.h"
 
 #include "jinja/runtime.h"
@@ -14,7 +14,7 @@
 
 #include "testing.h"
 
-using json = nlohmann::ordered_json;
+using json = common_json;
 
 static void test_template(testing & t, const std::string & name, const std::string & tmpl, const json & vars, const std::string & expect);
 

@@ -11,9 +11,9 @@
 #include <regex>
 #include <string>
 
-#include "nlohmann/json.hpp"
+#include "json.h"
 
-using json = nlohmann::ordered_json;
+using json = common_json;
 
 static json create_tools();
 static void test_example_native(testing & t);
@@ -400,13 +400,13 @@ static void test_example_qwen3_coder(testing & t) {
         std::vector<common_peg_parser> tool_parsers;
         for (const auto & def : tools) {
             auto        function   = def.at("function");
-            std::string name       = function.at("name");
+            std::string name       = function.at("name").get<std::string>();
             auto        parameters = function.at("parameters");
             auto        properties = parameters.at("properties");
 
             std::set<std::string> required_properties;
             if (function.contains("required")) {
-                function.at("required").get_to(required_properties);
+                required_properties = function.at("required").get<std::vector<std::string>>();
             }
 
             std::vector<common_peg_parser> arg_parsers;
@@ -661,8 +661,8 @@ void test_command7_parser_compare(testing & t) {
         "5. Provide a detailed cost breakdown that includes accommodation, transportation, meals, and entry fees "
         "to attractions.";
 
-    std::vector<std::tuple<std::string, std::string, nlohmann::json>> tool_calls = {
-        { "call_0", "plan_trip", nlohmann::json::parse(R"({
+    std::vector<std::tuple<std::string, std::string, common_json>> tool_calls = {
+        { "call_0", "plan_trip", common_json::parse(R"({
             "destination": "Japan",
             "duration": 14,
             "budget": 4000,
@@ -686,16 +686,16 @@ void test_command7_parser_compare(testing & t) {
     if (!tool_calls.empty()) {
         tokens.emplace_back("<|START_ACTION|>");
 
-        auto json = nlohmann::json::array();
+        auto json = common_json::array();
         for (const auto & tc : tool_calls) {
-            auto tc_json            = nlohmann::json::object();
+            auto tc_json            = common_json::object();
             tc_json["tool_call_id"] = std::get<0>(tc);
             tc_json["tool_name"]    = std::get<1>(tc);
             tc_json["parameters"]   = std::get<2>(tc);
             json.push_back(tc_json);
         }
 
-        auto tokenized = simple_tokenize(json.dump(-1, ' ', true));
+        auto tokenized = simple_tokenize(json.dump(-1));
         tokens.insert(tokens.end(), tokenized.begin(), tokenized.end());
 
         tokens.emplace_back("<|END_ACTION|>");
@@ -737,7 +737,7 @@ static void test_prefix_tool_names(testing & t) {
                       {
                           { "arg1", { { "type", "integer" } } },
                       } },
-                    { "required", { "arg1" } },
+                    { "required", json::array({ "arg1" }) },
                 } },
           } }
     };
@@ -757,7 +757,7 @@ static void test_prefix_tool_names(testing & t) {
                           { "arg1", { { "type", "integer" } } },
                           { "arg2", { { "type", "integer" } } },
                       } },
-                    { "required", { "arg1" } },
+                    { "required", json::array({ "arg1" }) },
                 } },
           } }
     };

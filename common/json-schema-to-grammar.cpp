@@ -919,7 +919,11 @@ public:
             return _add_rule(rule_name, _resolve_ref(schema["$ref"].get<std::string>()));
         }
         if (schema.contains("oneOf") || schema.contains("anyOf")) {
-            std::vector<json> alt_schemas = schema.contains("oneOf") ? schema["oneOf"].get<std::vector<json>>() : schema["anyOf"].get<std::vector<json>>();
+            const json & alts = schema.contains("oneOf") ? schema.at("oneOf") : schema.at("anyOf");
+            std::vector<json> alt_schemas;
+            for (const auto & alt : alts) {
+                alt_schemas.push_back(alt);
+            }
             return _add_rule(rule_name, _generate_union_rule(name, alt_schemas));
         }
         if (schema_type.is_array()) {
@@ -1238,7 +1242,7 @@ std::string json_schema_to_grammar(const common_json & schema, bool force_gbnf) 
     (void)force_gbnf;
 #endif // LLAMA_USE_LLGUIDANCE
     return build_grammar([&](const common_grammar_builder & callbacks) {
-        auto copy = common_json_raw<common_json>(schema);
+        auto copy = schema;
         callbacks.resolve_refs(copy);
         callbacks.add_schema("", copy);
     });
