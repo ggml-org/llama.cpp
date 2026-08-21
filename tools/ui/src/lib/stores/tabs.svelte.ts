@@ -12,8 +12,7 @@
  *   so there is no circular dependency - tab names are resolved by the
  *   ChatTabs component from conversationsStore.
  * - Tab order persists to localStorage and is pruned against the loaded
- *   conversation list on init. The new-chat tab is dropped on reload (it is
- *   not a conversation), which matches browser behavior.
+ *   conversation list on init. The new-chat tab is kept across reloads.
  */
 
 import { browser } from '$app/environment';
@@ -50,7 +49,15 @@ class TabsStore {
 	async close(id: string, activeTabId: string | null): Promise<void> {
 		const idx = this.openTabs.indexOf(id);
 
-		if (idx === -1) return;
+		if (idx === -1) {
+			// tab not tracked (e.g. Conversation tabs are off); still fall back to
+			// the new-chat screen when closing the active conversation
+			if (id === activeTabId) {
+				await goto(ROUTES.START);
+			}
+
+			return;
+		}
 
 		this.openTabs = this.openTabs.filter((tabId) => tabId !== id);
 		this.save();
@@ -77,9 +84,11 @@ class TabsStore {
 	init(validIds: string[]): void {
 		if (!browser) return;
 
-		const valid = new Set(validIds);
-		const persisted = this.load().filter((id) => valid.has(id));
-		const extras = this.openTabs.filter((id) => valid.has(id) && !persisted.includes(id));
+		// the new-chat sentinel is a pseudo-tab, not a conversation, but it is
+		// still kept so a reload on `#/` does not drop the tab the user is on
+		const isLive = (id: string) => validIds.includes(id) || id === NEW_CHAT_TAB_ID;
+		const persisted = this.load().filter(isLive);
+		const extras = this.openTabs.filter((id) => isLive(id) && !persisted.includes(id));
 
 		this.openTabs = [...persisted, ...extras];
 		this.initialized = true;
