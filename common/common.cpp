@@ -1294,11 +1294,34 @@ common_init_result::common_init_result(common_params & params, bool model_only) 
     if (params.fit_params) {
         COM_TRC("%s", "fitting params to device memory ...\n");
         COM_TRC("%s", "(for bugs during this step try to reproduce them with -fit off, or provide --verbose logs if the bug only occurs with -fit on)\n");
+
+        // the draft context is created from the same base params and follows the main context, fit both together
+        const bool has_draft = params.speculative.has_dft();
+        const bool spec_mtp  = std::find(params.speculative.types.begin(), params.speculative.types.end(),
+            COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params.speculative.types.end();
+
+        common_params params_dft = common_base_params_to_speculative(params);
+
+        auto mparams_dft = common_model_params_to_llama(params_dft);
+        auto cparams_dft = common_context_params_to_llama(params_dft);
+        if (spec_mtp) {
+            cparams_dft.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
+        }
+        cparams_dft.n_rs_seq = 0;
+
+        const common_fit_extra_model extra = {
+            /*.path_model   =*/ params_dft.model.path.c_str(),
+            /*.mparams      =*/ &mparams_dft,
+            /*.cparams      =*/ &cparams_dft,
+            /*.shares_model =*/ !has_draft, // an MTP context runs on the weights of the main model
+        };
+
         common_fit_params(params.model.path.c_str(), &mparams, &cparams,
             params.tensor_split,
             params.tensor_buft_overrides.data(),
             params.fit_params_target.data(),
             params.fit_params_min_ctx,
+            has_draft || spec_mtp ? &extra : nullptr,
             params.verbosity >= LOG_LEVEL_DEBUG ? GGML_LOG_LEVEL_DEBUG : GGML_LOG_LEVEL_ERROR);
     }
 

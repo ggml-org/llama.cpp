@@ -178,7 +178,7 @@ common_device_memory_data_vec common_get_device_memory_data(
 static void common_params_fit_impl(
         const char * path_model, struct llama_model_params * mparams, struct llama_context_params * cparams,
         float * tensor_split, struct llama_model_tensor_buft_override * tensor_buft_overrides,
-        size_t * margins_s, uint32_t n_ctx_min, enum ggml_log_level log_level) {
+        size_t * margins_s, uint32_t n_ctx_min, const common_fit_extra_model * extra, enum ggml_log_level log_level) {
     if (mparams->split_mode == LLAMA_SPLIT_MODE_TENSOR) {
         throw common_params_fit_exception("llama_params_fit is not implemented for SPLIT_MODE_TENSOR, abort");
     }
@@ -196,6 +196,67 @@ static void common_params_fit_impl(
     const uint32_t n_streams  = cparams->kv_unified ? 1 : std::max<uint32_t>(1, cparams->n_seq_max);
     const bool     n_ctx_auto = cparams->n_ctx == 0;
 
+    dmds_t   dmds_extra;       // memory of the extra model, laid out on the devices of the main model
+    uint32_t n_ctx_extra = 0;  // context that memory was measured at
+
+    // the extra model competes for the same memory as the main model, add it to every measurement
+    // its memory is measured again whenever the context it follows changes
+    auto add_extra_memory = [&](dmds_t & dmds) {
+        if (extra == nullptr) {
+            return;
+        }
+
+        if (dmds_extra.empty() || n_ctx_extra != cparams->n_ctx) {
+            std::vector<ggml_backend_dev_t> devs_extra;
+            uint32_t ngl_extra = 0;
+            uint32_t nct_extra = 0;
+            uint32_t nex_extra = 0;
+
+            extra->cparams->n_ctx = cparams->n_ctx;
+
+            LOG_TRC("%s: getting device memory data for the extra model at a context size of %" PRIu32 ":\n",
+                __func__, cparams->n_ctx);
+
+            dmds_t measured;
+            try {
+                measured = common_get_device_memory_data_impl(
+                    extra->path_model, extra->mparams, extra->cparams, devs_extra, ngl_extra, nct_extra, nex_extra, log_level);
+            } catch (const std::runtime_error & e) {
+                // the extra model is optional, fit the main model alone rather than giving up
+                LOG_WRN("%s: failed to measure the memory of the extra model, fitting without it: %s\n", __func__, e.what());
+                dmds_extra = dmds_t(devs.size() + 1);
+                n_ctx_extra = cparams->n_ctx;
+                return;
+            }
+
+            dmds_extra = dmds_t(devs.size() + 1);
+            dmds_extra.back().mb = measured.back().mb;
+            for (size_t je = 0; je < devs_extra.size(); je++) {
+                for (size_t id = 0; id < devs.size(); id++) {
+                    if (devs_extra[je] == devs[id]) {
+                        dmds_extra[id].mb.model   += measured[je].mb.model;
+                        dmds_extra[id].mb.context += measured[je].mb.context;
+                        dmds_extra[id].mb.compute += measured[je].mb.compute;
+                        break;
+                    }
+                }
+            }
+            if (extra->shares_model) {
+                for (llama_device_memory_data & dmd : dmds_extra) {
+                    dmd.mb.model = 0;
+                }
+            }
+
+            n_ctx_extra = cparams->n_ctx;
+        }
+
+        for (size_t id = 0; id < dmds.size(); id++) {
+            dmds[id].mb.model   += dmds_extra[id].mb.model;
+            dmds[id].mb.context += dmds_extra[id].mb.context;
+            dmds[id].mb.compute += dmds_extra[id].mb.compute;
+        }
+    };
+
     // step 1: get data for default parameters and check whether any changes are necessary in the first place
 
     LOG_TRC("%s: getting device memory data for initial parameters:\n", __func__);
@@ -205,13 +266,16 @@ static void common_params_fit_impl(
     const uint32_t n_ctx_max       = (uint32_t) std::min<uint64_t>(uint64_t(hp_nct)    * n_streams, UINT32_MAX);
     const uint32_t n_ctx_min_total = (uint32_t) std::min<uint64_t>(uint64_t(n_ctx_min) * n_streams, UINT32_MAX);
 
-    // llama_context would use only hp_nct in total for n_ctx == 0, redo the estimate with the full context:
-    if (n_ctx_auto && n_streams > 1) {
+    // llama_context would use only hp_nct in total for n_ctx == 0, resolve the context before measuring anything else:
+    if (n_ctx_auto) {
         cparams->n_ctx = n_ctx_max;
-        LOG_TRC("%s: context size unset and KV cache not unified -> using %" PRIu32 " for %" PRIu32 " sequences:\n",
-            __func__, n_ctx_max, n_streams);
-        dmds_full = common_get_device_memory_data_impl(path_model, mparams, cparams, devs, hp_ngl, hp_nct, hp_nex, log_level);
+        if (n_streams > 1) {
+            LOG_TRC("%s: context size unset and KV cache not unified -> using %" PRIu32 " for %" PRIu32 " sequences:\n",
+                __func__, n_ctx_max, n_streams);
+            dmds_full = common_get_device_memory_data_impl(path_model, mparams, cparams, devs, hp_ngl, hp_nct, hp_nex, log_level);
+        }
     }
+    add_extra_memory(dmds_full);
 
     const size_t nd = devs.size(); // number of devices
 
@@ -347,7 +411,8 @@ static void common_params_fit_impl(
 
                     int64_t sum_projected_used_min_ctx = 0;
                     cparams->n_ctx = n_ctx_min_total;
-                    const dmds_t dmds_min_ctx = common_get_device_memory_data_impl(path_model, mparams, cparams, devs, hp_ngl, hp_nct, hp_nex, log_level);
+                    dmds_t dmds_min_ctx = common_get_device_memory_data_impl(path_model, mparams, cparams, devs, hp_ngl, hp_nct, hp_nex, log_level);
+                    add_extra_memory(dmds_min_ctx);
                     if (nd == 0) {
                         sum_projected_used_min_ctx = dmds_min_ctx.back().mb.total();
                     } else {
@@ -527,8 +592,9 @@ static void common_params_fit_impl(
         llama_model_params mparams_copy = *mparams;
         set_ngl_tensor_split_tbo(ngl_per_device, overflow_bufts, mparams_copy);
 
-        const dmds_t dmd_nl = common_get_device_memory_data_impl(
+        dmds_t dmd_nl = common_get_device_memory_data_impl(
             path_model, &mparams_copy, cparams, devs, hp_ngl, hp_nct, hp_nex, log_level);
+        add_extra_memory(dmd_nl);
 
         LOG_TRC("%s: memory for test allocation by device:\n", func_name);
         for (size_t id = 0; id < nd; id++) {
@@ -555,8 +621,9 @@ static void common_params_fit_impl(
         mparams->tensor_buft_overrides = tensor_buft_overrides;
 
         LOG_TRC("%s: getting device memory data with all MoE tensors moved to system memory:\n", __func__);
-        const dmds_t dmds_cpu_moe = common_get_device_memory_data_impl(
+        dmds_t dmds_cpu_moe = common_get_device_memory_data_impl(
             path_model, mparams, cparams, devs, hp_ngl, hp_nct, hp_nex, log_level);
+        add_extra_memory(dmds_cpu_moe);
 
         for (size_t id = 0; id < nd; id++) {
             global_surplus_cpu_moe += dmds_cpu_moe[id].free;
@@ -816,11 +883,12 @@ enum common_params_fit_status common_fit_params(
         llama_model_tensor_buft_override * tensor_buft_overrides,
         size_t * margins,
         uint32_t n_ctx_min,
+        const common_fit_extra_model * extra,
         ggml_log_level log_level) {
     const int64_t t0_us = llama_time_us();
     common_params_fit_status status = COMMON_PARAMS_FIT_STATUS_SUCCESS;
     try {
-        common_params_fit_impl(path_model, mparams, cparams, tensor_split, tensor_buft_overrides, margins, n_ctx_min, log_level);
+        common_params_fit_impl(path_model, mparams, cparams, tensor_split, tensor_buft_overrides, margins, n_ctx_min, extra, log_level);
         LOG_TRC("%s: successfully fit params to free device memory\n", __func__);
     } catch (const common_params_fit_exception & e) {
         LOG_WRN("%s: failed to fit params to free device memory: %s\n", __func__, e.what());
