@@ -121,9 +121,8 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 				type: SettingsFieldType.CHECKBOX
 			},
 			{
-				defaultValue: false,
+				defaultValue: true,
 				help: 'Automatically show microphone button instead of send button when textarea is empty for models with audio modality support.',
-				isExperimental: true,
 				key: SETTINGS_KEYS.AUTO_MIC_ON_EMPTY,
 				label: 'Show microphone on empty input',
 				section: SETTINGS_SECTION_SLUGS.GENERAL,
@@ -303,6 +302,14 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 				help: 'Display model tags (e.g. "vision", "reasoning") next to model names throughout the interface.',
 				key: SETTINGS_KEYS.SHOW_MODEL_TAGS,
 				label: 'Show model tags',
+				section: SETTINGS_SECTION_SLUGS.DISPLAY,
+				type: SettingsFieldType.CHECKBOX
+			},
+			{
+				defaultValue: false,
+				help: 'Display the organization name in the model selector trigger button.',
+				key: SETTINGS_KEYS.SHOW_MODEL_ORG_NAME_IN_TRIGGER,
+				label: 'Show organization name in model selector trigger',
 				section: SETTINGS_SECTION_SLUGS.DISPLAY,
 				type: SettingsFieldType.CHECKBOX
 			},
