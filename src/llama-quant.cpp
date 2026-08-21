@@ -2,6 +2,7 @@
 #include "llama-model.h"
 #include "llama-model-loader.h"
 #include "llama-ext.h"
+#include "llama.h"
 
 #include <algorithm>
 #include <cmath>
@@ -306,6 +307,9 @@ static bool tensor_allows_quantization(const llama_model_quantize_params * param
     // NOTE: can't use LLM_TN here because the layer number is not known
     quantize &= name.find("ffn_gate_inp.weight") == std::string::npos;
 
+    // do not quantize the i32 token-id -> expert-id routing table (DeepSeek-V4)
+    quantize &= name.find("ffn_gate_tid2eid.weight") == std::string::npos;
+
     // these are very small (e.g. 4x4)
     quantize &= name.find("altup")  == std::string::npos;
     quantize &= name.find("laurel") == std::string::npos;
@@ -321,6 +325,10 @@ static bool tensor_allows_quantization(const llama_model_quantize_params * param
     // NOTE: can't use LLM_TN here because the layer number is not known
     quantize &= name.find("ssm_conv1d") == std::string::npos;
     quantize &= name.find("shortconv.conv.weight") == std::string::npos;
+
+    // do not quantize MiniMax's indexer projection weights, they are tiny
+    quantize &= name.find("indexer.k_proj.weight") == std::string::npos;
+    quantize &= name.find("indexer.q_proj.weight") == std::string::npos;
 
     // do not quantize RWKV's small yet 2D weights
     quantize &= name.find("time_mix_first.weight") == std::string::npos;
@@ -350,6 +358,10 @@ static bool tensor_allows_quantization(const llama_model_quantize_params * param
     quantize &= name.find(".rel_pos")       == std::string::npos;
     quantize &= name.find(".patch_embd")    == std::string::npos;
     quantize &= name.find(".patch_merger")  == std::string::npos;
+
+    // audio codebook
+    quantize &= name.find("a.rvq.codebook")  == std::string::npos;
+    quantize &= name.find("mm.a.code_embd")  == std::string::npos;
 
     return quantize;
 }
@@ -462,7 +474,12 @@ static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type 
     } else if (ftype == LLAMA_FTYPE_MOSTLY_MXFP4_MOE) {
         // MoE   tensors -> MXFP4
         // other tensors -> Q8_0
-        if (tensor->ne[2] > 1) {
+        // MLA projection tensors are also 3D, so match expert tensor roles explicitly.
+        const bool is_bailingmoe3_expert = arch == LLM_ARCH_BAILINGMOE3 &&
+            (category == tensor_category::FFN_UP ||
+             category == tensor_category::FFN_GATE ||
+             category == tensor_category::FFN_DOWN);
+        if (tensor->ne[2] > 1 && (arch != LLM_ARCH_BAILINGMOE3 || is_bailingmoe3_expert)) {
             new_type = GGML_TYPE_MXFP4;
         } else {
             new_type = GGML_TYPE_Q8_0;
@@ -673,7 +690,7 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, const llama_mod
     ggml_type new_type = default_type;
 
     // get more optimal quantization type based on the tensor shape, layer, etc.
-    if (!params->pure && ggml_is_quantized(default_type)) {
+    if (ggml_is_quantized(default_type)) {
         // if the user provided tensor types - use those
         bool manual = false;
         if (!qs.tensor_type_patterns.empty()) {
@@ -692,7 +709,7 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, const llama_mod
         }
 
         // if not manual - use the standard logic for choosing the quantization type based on the selected mixture
-        if (!manual) {
+        if (!manual && !params->pure) {
             new_type = llama_tensor_get_type_impl(qs, new_type, tensor, params->ftype, tm.category);
         }
 
@@ -873,15 +890,15 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
     // mmap consistently increases speed on Linux, and also increases speed on Windows with
     // hot cache. It may cause a slowdown on macOS, possibly related to free memory.
 #if defined(__linux__) || defined(_WIN32)
-    constexpr bool use_mmap = true;
+    constexpr llama_load_mode load_mode = LLAMA_LOAD_MODE_MMAP;
 #else
-    constexpr bool use_mmap = false;
+    constexpr llama_load_mode load_mode = LLAMA_LOAD_MODE_NONE;
 #endif
 
     const llama_model_kv_override * kv_overrides = params->kv_overrides;
     std::vector<std::string> splits = {};
     llama_model_loader ml(/*metadata*/ nullptr, /*set_tensor_data*/ nullptr, /*set_tensor_data_ud*/ nullptr,
-        fname_inp, splits, /*file*/ nullptr, use_mmap, /*use_direct_io*/ false, /*check_tensors*/ true, /*no_alloc*/ false, kv_overrides, nullptr);
+        fname_inp, splits, /*file*/ nullptr, /*load_mode*/ load_mode, /*check_tensors*/ true, /*no_alloc*/ false, /*load_mtp*/ true, kv_overrides, nullptr);
     ml.init_mappings(false); // no prefetching
 
     auto mparams = llama_model_default_params();
@@ -1253,7 +1270,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
             total_size_org += tensor_size;
             total_size_new += new_size;
 
-            // update the gguf meta data as we go
+            // update the gguf metadata as we go
             gguf_set_tensor_type(ctx_outs[cur_split].get(), metadata[i].name.c_str(), new_type);
             GGML_ASSERT(gguf_get_tensor_size(ctx_outs[cur_split].get(), gguf_find_tensor(ctx_outs[cur_split].get(), metadata[i].name.c_str())) == new_size);
             gguf_set_tensor_data(ctx_outs[cur_split].get(), metadata[i].name.c_str(), new_data);
@@ -1261,6 +1278,10 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
             // write tensor data + padding
             fout.write((const char *) new_data, new_size);
             zeros(fout, GGML_PAD(new_size, align) - new_size);
+
+            // unmap the tensor to free memory
+            if (ml.use_mmap) { ml.unmap_weight(weight); }
+
         } // no --dry-run
     } // main loop
 
@@ -1351,6 +1372,7 @@ llama_model * llama_quant_model_from_metadata(const llama_quant_model_desc * des
     model->hparams.n_embd_head_k_full = desc->n_embd_head_k;
     model->hparams.n_embd_head_v_full = desc->n_embd_head_v;
     model->hparams.n_layer_all        = desc->n_layer;
+    GGML_ASSERT(desc->n_layer > 0 && desc->n_layer <= LLAMA_MAX_LAYERS);
     model->hparams.n_expert           = desc->n_expert;
 
     for (uint32_t i = 0; i < desc->n_layer; i++) {

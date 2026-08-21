@@ -202,6 +202,18 @@ extern "C" {
         LLAMA_SPLIT_MODE_TENSOR = 3,
     };
 
+    enum llama_load_mode {
+        LLAMA_LOAD_MODE_AUTO       = -1, // auto-detect based on device capabilities
+        LLAMA_LOAD_MODE_NONE       =  0, // no special loading mode
+        LLAMA_LOAD_MODE_MMAP       =  1, // memory map the model
+        LLAMA_LOAD_MODE_MLOCK      =  2, // force system to keep model in RAM rather than swapping or compressing
+        LLAMA_LOAD_MODE_MMAP_MLOCK =  3, // mmap + force system to keep model in RAM rather than swapping or compressing
+        LLAMA_LOAD_MODE_DIRECT_IO  =  4, // use direct I/O if available
+    };
+
+    LLAMA_API const char * llama_load_mode_name(enum llama_load_mode load_mode);
+    LLAMA_API enum llama_load_mode llama_load_mode_from_str(const char * str);
+
     enum llama_context_type {
         LLAMA_CONTEXT_TYPE_DEFAULT = 0,
         LLAMA_CONTEXT_TYPE_MTP     = 1,
@@ -301,6 +313,7 @@ extern "C" {
 
         int32_t n_gpu_layers; // number of layers to store in VRAM, a negative value means all layers
         enum llama_split_mode split_mode; // how to split the model across multiple GPUs
+        enum llama_load_mode  load_mode;  // how to load the model
 
         // the GPU that is used for the entire model when split_mode is LLAMA_SPLIT_MODE_NONE
         int32_t main_gpu;
@@ -321,13 +334,11 @@ extern "C" {
 
         // Keep the booleans together to avoid misalignment during copy-by-value.
         bool vocab_only;      // only load the vocabulary, no weights
-        bool use_mmap;        // use mmap if possible
-        bool use_direct_io;   // use direct io, takes precedence over use_mmap when supported
-        bool use_mlock;       // force system to keep model in RAM
         bool check_tensors;   // validate model tensor data
         bool use_extra_bufts; // use extra buffer types (used for weight repacking)
         bool no_host;         // bypass host buffer allowing extra buffers to be used
         bool no_alloc;        // only load metadata and simulate memory allocations
+        bool load_mtp;        // whether to load MTP layers
     };
 
     struct llama_sampler_seq_config {
@@ -338,14 +349,15 @@ extern "C" {
     // NOTE: changing the default values of parameters marked as [EXPERIMENTAL] may cause crashes or incorrect results in certain configurations
     //       https://github.com/ggml-org/llama.cpp/pull/7544
     struct llama_context_params {
-        uint32_t n_ctx;             // text context, 0 = from model
-        uint32_t n_batch;           // logical maximum batch size that can be submitted to llama_decode
-        uint32_t n_ubatch;          // physical maximum batch size
-        uint32_t n_seq_max;         // max number of sequences (i.e. distinct states for recurrent models)
-        uint32_t n_rs_seq;          // number of recurrent-state snapshots per seq for rollback (0 = no rollback) [EXPERIMENTAL]
-        uint32_t n_outputs_max;     // max outputs in a ubatch (0 = n_batch)
-        int32_t  n_threads;         // number of threads to use for generation
-        int32_t  n_threads_batch;   // number of threads to use for batch processing
+        uint32_t n_ctx;                 // text context, 0 = from model
+        uint32_t n_batch;               // logical maximum batch size that can be submitted to llama_decode
+        uint32_t n_ubatch;              // physical maximum batch size
+        uint32_t n_seq_max;             // max number of sequences (i.e. distinct states for recurrent models)
+        uint32_t n_rs_seq;              // number of recurrent-state snapshots per seq for rollback (0 = no rollback) [EXPERIMENTAL]
+        uint32_t n_outputs_max;         // max outputs in a ubatch (0 = n_batch)
+        uint32_t n_outputs_max_per_seq; // max outputs per sequence (0 = n_outputs_max)
+        int32_t  n_threads;             // number of threads to use for generation
+        int32_t  n_threads_batch;       // number of threads to use for batch processing
 
         enum llama_context_type      ctx_type;          // set the context type (e.g. MTP)
         enum llama_rope_scaling_type rope_scaling_type; // RoPE scaling type, from `enum llama_rope_scaling_type`
@@ -444,6 +456,8 @@ extern "C" {
 
     // lora adapter
     struct llama_adapter_lora;
+
+    LLAMA_API const char * llama_version(void);
 
     // Helpers for getting default parameters
     // TODO: update API to start accepting pointers to params structs (https://github.com/ggml-org/llama.cpp/discussions/9172)
@@ -871,6 +885,7 @@ extern "C" {
                const llama_token * tokens,
                           size_t   n_token_count);
 
+    // If tokens_out is NULL, only the token count is reported through n_token_count_out and no state is loaded
     LLAMA_API size_t llama_state_seq_load_file(
             struct llama_context * ctx,
                       const char * filepath,
@@ -1044,6 +1059,9 @@ extern "C" {
     //
 
     // Get the backend sampled token for the ith token.
+    // With multiple outputs, sampler state advances when the token is accepted,
+    // not when it is read through this function.
+    // When accepting multiple outputs, accept a contiguous prefix in output order.
     // Returns LLAMA_TOKEN_NULL if no token was sampled.
     LLAMA_API llama_token llama_get_sampled_token_ith(struct llama_context * ctx, int32_t i);
 
@@ -1092,6 +1110,9 @@ extern "C" {
     LLAMA_API bool llama_vocab_get_add_bos(const struct llama_vocab * vocab);
     LLAMA_API bool llama_vocab_get_add_eos(const struct llama_vocab * vocab);
     LLAMA_API bool llama_vocab_get_add_sep(const struct llama_vocab * vocab);
+
+    // model-specific suppress tokens (gguf key: tokenizer.ggml.suppress_tokens)
+    LLAMA_API const llama_token * llama_vocab_get_suppress_tokens(const struct llama_vocab * vocab, int32_t * n_suppress_tokens);
 
     LLAMA_API llama_token llama_vocab_fim_pre(const struct llama_vocab * vocab);
     LLAMA_API llama_token llama_vocab_fim_suf(const struct llama_vocab * vocab);
@@ -1257,9 +1278,12 @@ extern "C" {
         // [EXPERIMENTAL]
         // backend sampling interface:
 
-        // return true if the backend supports all ops needed by the sampler
+        // return true if the backend supports all ops needed by the sampler and can handle up to n_outputs_max_per_seq outputs per sequence
         // note: call once per sampler
-        bool (*backend_init)(struct llama_sampler * smpl, ggml_backend_buffer_type_t buft);
+        bool (*backend_init)(
+                struct llama_sampler       * smpl,
+                ggml_backend_buffer_type_t   buft,
+                uint32_t                     n_outputs_max_per_seq);
 
         // call after .backend_apply()
         void (*backend_accept)(
@@ -1277,6 +1301,13 @@ extern "C" {
 
         // called before graph execution to set inputs for the current ubatch
         void (*backend_set_input)(struct llama_sampler * smpl);
+
+        // called before rebuilding a sampling graph to clear any internal sampler state
+        void (*backend_reset)(struct llama_sampler * smpl);
+
+        // copy mutable state from src into dst while keeping dst's references to the current sampling graph
+        // src and dst must have the same type and configuration
+        void (*copy_state)(const struct llama_sampler * src, struct llama_sampler * dst);
     };
 
     struct llama_sampler {
@@ -1297,6 +1328,7 @@ extern "C" {
     LLAMA_API void                   llama_sampler_apply (      struct llama_sampler * smpl, llama_token_data_array * cur_p);
     LLAMA_API void                   llama_sampler_reset (      struct llama_sampler * smpl);
     LLAMA_API struct llama_sampler * llama_sampler_clone (const struct llama_sampler * smpl);
+    LLAMA_API void                   llama_sampler_copy  (const struct llama_sampler * src, struct llama_sampler * dst);
     // important: do not free if the sampler has been added to a llama_sampler_chain (via llama_sampler_chain_add)
     LLAMA_API void                   llama_sampler_free  (      struct llama_sampler * smpl);
 
@@ -1411,19 +1443,19 @@ extern "C" {
 
     /// NOTE: Avoid using on the full vocabulary as searching for repeated tokens can become slow. For example, apply top-k or top-p sampling first.
     LLAMA_API struct llama_sampler * llama_sampler_init_penalties(
-                             int32_t   penalty_last_n,   // last n tokens to penalize (0 = disable penalty, -1 = context size)
-                               float   penalty_repeat,   // 1.0 = disabled
-                               float   penalty_freq,     // 0.0 = disabled
-                               float   penalty_present); // 0.0 = disabled
+                             int32_t   n_vocab,
+                             int32_t   penalty_last_n,   // last n tokens to penalize (0 = disable penalty)
+                               float   penalty_repeat,   // must be > 0.0, 1.0 = disabled
+                               float   penalty_freq,     // must be finite, 0.0 = disabled
+                               float   penalty_present); // must be finite, 0.0 = disabled
 
     ///  @details DRY sampler, designed by p-e-w, as described in: https://github.com/oobabooga/text-generation-webui/pull/5677, porting Koboldcpp implementation authored by pi6am: https://github.com/LostRuins/koboldcpp/pull/982
     LLAMA_API struct llama_sampler * llama_sampler_init_dry(
             const struct llama_vocab *  vocab,
-                             int32_t    n_ctx_train,
                                float    dry_multiplier,
                                float    dry_base,
                              int32_t    dry_allowed_length,
-                             int32_t    dry_penalty_last_n,
+                             int32_t    dry_penalty_last_n, // last n tokens to penalize (0 = disable penalty)
                           const char ** seq_breakers,
                               size_t    num_breakers);
 
@@ -1486,6 +1518,7 @@ extern "C" {
     LLAMA_API uint32_t llama_sampler_get_seed(const struct llama_sampler * smpl);
 
     /// @details Sample and accept a token from the idx-th output of the last evaluation
+    // For multiple outputs from one sampler, call this function in output order without gaps.
     //
     // Shorthand for:
     //    const auto * logits = llama_get_logits_ith(ctx, idx);

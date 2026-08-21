@@ -132,6 +132,7 @@ static void ggml_backend_meta_device_get_props(ggml_backend_dev_t dev, ggml_back
         /* .host_buffer           = */ false, // Not implemented.
         /* .buffer_from_host_ptr  = */ false, // Not implemented.
         /* .events                = */ false, // Not implemented.
+        /* .mmap_support          = */ true,
     };
     for (ggml_backend_dev_t simple_dev : meta_dev_ctx->simple_devs) {
         ggml_backend_dev_props tmp_props;
@@ -140,6 +141,7 @@ static void ggml_backend_meta_device_get_props(ggml_backend_dev_t dev, ggml_back
         props->caps.host_buffer          = props->caps.host_buffer          && tmp_props.caps.host_buffer;
         props->caps.buffer_from_host_ptr = props->caps.buffer_from_host_ptr && tmp_props.caps.buffer_from_host_ptr;
         props->caps.events               = props->caps.events               && tmp_props.caps.events;
+        props->caps.mmap_support         = props->caps.mmap_support         && tmp_props.caps.mmap_support;
     }
 }
 
@@ -983,6 +985,11 @@ static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(
             } break;
             case GGML_OP_GATED_DELTA_NET: {
                 split_state = handle_gated_delta_net(src_ss);
+            } break;
+            case GGML_OP_DSV4_HC_COMB:
+            case GGML_OP_DSV4_HC_PRE:
+            case GGML_OP_DSV4_HC_POST: {
+                split_state = handle_generic(src_ss, /*scalar_only =*/ true);
             } break;
             case GGML_OP_UNARY: {
                 split_state = handle_generic(src_ss, /*scalar_only =*/ false);

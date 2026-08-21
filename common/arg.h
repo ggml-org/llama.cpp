@@ -11,8 +11,9 @@
 #include <memory>
 
 // pseudo-env variable to identify preset-only arguments
-#define COMMON_ARG_PRESET_LOAD_ON_STARTUP "__PRESET_LOAD_ON_STARTUP"
-#define COMMON_ARG_PRESET_STOP_TIMEOUT    "__PRESET_STOP_TIMEOUT"
+#define COMMON_ARG_PRESET_LOAD_ON_STARTUP    "__PRESET_LOAD_ON_STARTUP"
+#define COMMON_ARG_PRESET_STOP_TIMEOUT       "__PRESET_STOP_TIMEOUT"
+#define COMMON_ARG_PRESET_DEDUP_CACHE_MODELS "__PRESET_DEDUP_CACHE_MODELS"
 
 //
 // CLI argument parsing
@@ -123,6 +124,9 @@ struct common_params_context {
 // if one argument has invalid value, it will automatically display usage of the specific argument (and not the full usage message)
 bool common_params_parse(int argc, char ** argv, common_params & params, llama_example ex, void(*print_usage)(int, char **) = nullptr);
 
+// load all backends and print the list of available (non-CPU) devices to stdout
+void common_print_available_devices();
+
 // parse input arguments from CLI into a map
 bool common_params_to_map(int argc, char ** argv, llama_example ex, std::map<common_arg, std::string> & out_map);
 
@@ -134,7 +138,6 @@ void common_params_add_preset_options(std::vector<common_arg> & args);
 struct common_models_handler {
     common_download_hf_plan plan;
     common_download_hf_plan plan_spec;
-    common_download_hf_plan plan_voc;
     common_download_opts opts;
 };
 

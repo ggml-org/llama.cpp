@@ -6,6 +6,7 @@ import re
 import argparse
 import statistics
 import logging
+import bisect
 from typing import Any, Dict, List, Optional
 from collections import defaultdict
 
@@ -16,11 +17,11 @@ op_pattern = re.compile(
 )
 
 trace_pattern = re.compile(
-    r"trace-op\s+(?P<op_name>[A-Z_0-9+]+):\s+thread\s+(?P<thread>\d+)\s+event\s+(?P<event>[A-Z_0-9\-]+)\s+info\s+(?P<info>\d+)\s+(?P<state>start|stop)\s+(?P<cycles>\d+)"
+    r"trace-evt\s+(?P<event>[A-Z_0-9\-]+):\s+thread\s+(?P<thread>\d+)\s+info\s+(?P<info>\d+)\s+(?P<state>start|stop)\s+(?P<cycles>\d+)"
 )
 
 
-def normalize_event_name(evt_type):
+def normalize_event_name(evt_type, info=0):
     if evt_type == "HVX_COMP":
         return "V-COMP"
     if evt_type == "HMX_COMP":
@@ -32,9 +33,13 @@ def normalize_event_name(evt_type):
 
 
 class CycleUnwrapper:
-    def __init__(self):
-        self.last_raw = None
-        self.high_part = 0
+    def __init__(self, initial_val=None):
+        if initial_val is not None:
+            self.last_raw = initial_val & 0xFFFFFFFF
+            self.high_part = initial_val & 0xFFFFFFFF00000000
+        else:
+            self.last_raw = None
+            self.high_part = 0
 
     def unwrap(self, raw):
         if self.last_raw is None:
@@ -60,8 +65,10 @@ def parse_log(file_path):
         sys.exit(1)
 
     all_ops: List[Dict[str, Any]] = []
+    all_traces: List[Dict[str, Any]] = []
     current_op: Optional[Dict[str, Any]] = None
-    unwrapper = CycleUnwrapper()
+    unwrapper = None
+    trace_unwrapper = None
     line_idx = 0
 
     for line in f:
@@ -73,6 +80,7 @@ def parse_log(file_path):
             if not prefix_match:
                 continue
 
+            names = parts[1]
             if len(parts) == 7:
                 dims, types, strides, params, timings = parts[2], parts[3], parts[4], parts[5], parts[6]
             elif len(parts) == 6:
@@ -93,6 +101,7 @@ def parse_log(file_path):
             op_match = op_pattern.search(line)
             if op_match:
                 op_name = op_match.group('op_name')
+                names = ""
                 dims = op_match.group('dims').strip() if op_match.group('dims') else ''
                 types = op_match.group('types').strip() if op_match.group('types') else ''
                 strides = op_match.group('strides').strip() if op_match.group('strides') else ''
@@ -103,18 +112,30 @@ def parse_log(file_path):
         if op_match:
             cycles_start_raw = op_match.group('start')
             unwrapped_cycles_start = None
-            if cycles_start_raw:
-                unwrapped_cycles_start = unwrapper.unwrap(int(cycles_start_raw))
+            if op_name == "OPBATCH":
+                if cycles_start_raw:
+                    unwrapped_cycles_start = int(cycles_start_raw)
+                    unwrapper = CycleUnwrapper(unwrapped_cycles_start)
+                    trace_unwrapper = CycleUnwrapper(unwrapped_cycles_start)
+            else:
+                if cycles_start_raw and unwrapper is not None:
+                    unwrapped_cycles_start = unwrapper.unwrap(int(cycles_start_raw))
 
             idx = line.find("profile-op ")
             op_text = line[idx + 11:].strip() if idx != -1 else line.strip()
 
+            evt_str = None
+            if types.startswith("evt-cnt "):
+                evt_str = types[8:].strip()
+
             current_op = {
                 'name':         op_name,
+                'names':        names,
                 'dims':         dims,
                 'types':        types,
                 'strides':      strides,
                 'params':       params,
+                'evt':          evt_str,
                 'op_text':      op_text,
                 'usec':         int(op_match.group('usec')),
                 'cycles':       int(op_match.group('cycles')),
@@ -127,20 +148,22 @@ def parse_log(file_path):
             continue
 
         trace_match = trace_pattern.search(line)
-        if trace_match and current_op:
-            if trace_match.group('op_name') == current_op['name']:
-                raw_cyc = int(trace_match.group('cycles'))
-                current_op['trace_events'].append({
-                    'thread': int(trace_match.group('thread')),
-                    'event':  trace_match.group('event'),
-                    'info':   int(trace_match.group('info')),
-                    'cycles': raw_cyc,
-                    'unwrapped_cycles': unwrapper.unwrap(raw_cyc),
-                    'state':  trace_match.group('state')
-                })
+        if trace_match:
+            raw_cyc = int(trace_match.group('cycles'))
+            unwrapped_cyc = None
+            if trace_unwrapper is not None:
+                unwrapped_cyc = trace_unwrapper.unwrap(raw_cyc)
+            all_traces.append({
+                'thread': int(trace_match.group('thread')),
+                'event':  trace_match.group('event'),
+                'info':   int(trace_match.group('info')),
+                'cycles': raw_cyc,
+                'unwrapped_cycles': unwrapped_cyc,
+                'state':  trace_match.group('state')
+            })
 
     f.close()
-    return all_ops
+    return all_ops, all_traces
 
 # --- Simple protobuf encoder ---
 
@@ -246,7 +269,7 @@ def write_trace_packet_to_file(f, packet_bytes):
 # --- End Protobuf Encoder ---
 
 
-def generate_perfetto_trace(filtered_ops, output_path):
+def generate_perfetto_trace(filtered_ops, trace_events, output_path):
     if not filtered_ops:
         logger.warning("No operators found after filtering.")
         return
@@ -269,14 +292,12 @@ def generate_perfetto_trace(filtered_ops, output_path):
 
     # Process events
     completed_events = []
-    for op in filtered_ops:
-        events = op['trace_events']
-        if not events:
-            continue
-        events = sorted(events, key=lambda e: e['unwrapped_cycles'])
+    if trace_events:
+        trace_events = sorted(trace_events, key=lambda e: e['unwrapped_cycles'])
+        one_usec_cycles = max(avg_freq_mhz, 1.0)
 
         active_starts = {}
-        for e in events:
+        for e in trace_events:
             t = e['thread']
             evt = e['event']
             info = e['info']
@@ -285,6 +306,17 @@ def generate_perfetto_trace(filtered_ops, output_path):
 
             key = (t, evt, info)
             if state == 'start':
+                # Handle missing stop (start followed by another start)
+                if key in active_starts:
+                    prev_start = active_starts[key]
+                    completed_events.append({
+                        'thread': t,
+                        'event': evt,
+                        'info': info,
+                        'start_cyc': prev_start,
+                        'end_cyc': prev_start + one_usec_cycles,
+                        'missing_stop': True,
+                    })
                 active_starts[key] = cyc
             elif state == 'stop':
                 if key in active_starts:
@@ -296,8 +328,29 @@ def generate_perfetto_trace(filtered_ops, output_path):
                         'info': info,
                         'start_cyc': start_cyc,
                         'end_cyc': cyc,
-                        'op_name': op['name']
                     })
+                else:
+                    # Handle missing start (stop without start)
+                    completed_events.append({
+                        'thread': t,
+                        'event': evt,
+                        'info': info,
+                        'start_cyc': cyc - one_usec_cycles,
+                        'end_cyc': cyc,
+                        'missing_start': True,
+                    })
+
+        # Clear remaining unmatched starts
+        for key, start_cyc in active_starts.items():
+            t, evt, info = key
+            completed_events.append({
+                'thread': t,
+                'event': evt,
+                'info': info,
+                'start_cyc': start_cyc,
+                'end_cyc': start_cyc + one_usec_cycles,
+                'missing_stop': True,
+            })
 
     completed_events.sort(key=lambda e: e['start_cyc'])
 
@@ -316,7 +369,7 @@ def generate_perfetto_trace(filtered_ops, output_path):
         ts = e['ts_ns']
         dur = e['dur_ns']
 
-        norm_evt = normalize_event_name(evt)
+        norm_evt = normalize_event_name(evt, e['info'])
         if norm_evt == "DMA":
             track_key = (t, "DMA")
         elif t == 10:
@@ -343,7 +396,7 @@ def generate_perfetto_trace(filtered_ops, output_path):
         evt = e['event']
         slot = e['slot']
 
-        norm_evt = normalize_event_name(evt)
+        norm_evt = normalize_event_name(evt, e['info'])
         if norm_evt == "DMA":
             track_evt = "DMA"
             evt_id = 1
@@ -421,18 +474,26 @@ def generate_perfetto_trace(filtered_ops, output_path):
         for op in filtered_ops:
             op_start_ns = int(round(((op['start_cycles'] - global_min_cyc) / avg_freq_mhz) * 1000))
             op_dur_ns = int(round((op['cycles'] / avg_freq_mhz) * 1000))
-            if op_start_ns < last_op_end_ns:
-                op_start_ns = last_op_end_ns
-            clamped_dur = max(op_dur_ns, 100) # Clamp to 100ns (0.1us)
+            if op['name'] != "OPBATCH":
+                if op_start_ns < last_op_end_ns:
+                    op_start_ns = last_op_end_ns
+                clamped_dur = max(op_dur_ns, 100) # Clamp to 100ns (0.1us)
+                last_op_end_ns = op_start_ns + clamped_dur
+            else:
+                clamped_dur = max(op_dur_ns, 100)
 
             # Debug annotations for Ops
             debug_annots = []
             if 'line_num' in op:
                 debug_annots.append(make_debug_annotation("line", int_val=op['line_num']))
-            if 'strides' in op and op['strides']:
+            if 'names' in op and op['names'] and op['names'] != '----':
+                debug_annots.append(make_debug_annotation("names", string_val=op['names']))
+            if 'strides' in op and op['strides'] and op['strides'] != '----':
                 debug_annots.append(make_debug_annotation("strides", string_val=op['strides']))
             if 'params' in op and op['params'] and op['params'] != '----':
                 debug_annots.append(make_debug_annotation("params", string_val=op['params']))
+            if 'evt' in op and op['evt']:
+                debug_annots.append(make_debug_annotation("evt", string_val=op['evt']))
 
             # Slice Begin
             evt_begin = make_track_event(1, 2, name=f"{op['name']} ({op['dims']})", category="operator", debug_annotations=debug_annots)
@@ -444,15 +505,21 @@ def generate_perfetto_trace(filtered_ops, output_path):
             packet_end = make_trace_packet(op_start_ns + clamped_dur, track_event=evt_end)
             write_trace_packet_to_file(f, packet_end)
 
-            last_op_end_ns = op_start_ns + clamped_dur
-
         # Emit Thread Trace Events
         for e in completed_events:
-            norm_name = normalize_event_name(e['event'])
+            norm_name = normalize_event_name(e['event'], e['info'])
             name = f"DMA {e['info']}" if norm_name == "DMA" else norm_name
+            if e.get('missing_start') or e.get('missing_stop'):
+                name += "!"
+
+            debug_annots = []
+            if e.get('missing_start'):
+                debug_annots.append(make_debug_annotation("missing_start", string_val="true"))
+            if e.get('missing_stop'):
+                debug_annots.append(make_debug_annotation("missing_stop", string_val="true"))
 
             # Slice Begin
-            evt_begin = make_track_event(1, e['uuid'], name=name, category="trace")
+            evt_begin = make_track_event(1, e['uuid'], name=name, category="trace", debug_annotations=debug_annots if debug_annots else None)
             packet_begin = make_trace_packet(e['ts_ns'], track_event=evt_begin)
             write_trace_packet_to_file(f, packet_begin)
 
@@ -477,7 +544,7 @@ def main():
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format='%(message)s')
 
-    ops = parse_log(args.logfile)
+    ops, traces = parse_log(args.logfile)
 
     if args.filter:
         try:
@@ -492,7 +559,30 @@ def main():
     elif args.tail is not None:
         ops = ops[-args.tail:]
 
-    generate_perfetto_trace(ops, args.output)
+    if args.filter or args.head is not None or args.tail is not None:
+        valid_ranges = []
+        for op in ops:
+            start_cyc = op['unwrapped_cycles_start']
+            end_cyc = start_cyc + op['cycles'] if start_cyc is not None else None
+            if start_cyc is not None and end_cyc is not None:
+                valid_ranges.append((start_cyc, end_cyc))
+
+        valid_ranges.sort(key=lambda r: r[0])
+        range_starts = [r[0] for r in valid_ranges]
+
+        filtered_traces = []
+        for e in traces:
+            cyc = e['unwrapped_cycles']
+            if cyc is None:
+                continue
+            idx = bisect.bisect_right(range_starts, cyc) - 1
+            if idx >= 0:
+                start, end = valid_ranges[idx]
+                if start <= cyc <= end:
+                    filtered_traces.append(e)
+        traces = filtered_traces
+
+    generate_perfetto_trace(ops, traces, args.output)
 
 
 if __name__ == "__main__":

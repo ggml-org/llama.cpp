@@ -74,7 +74,6 @@ struct mtmd_image_preprocessor_llava_uhd : mtmd_image_preprocessor {
         std::vector<slice_coordinates> slices;
     };
 
-    // LFM2 override this function to implement its custom slicing logic
     virtual slice_instructions get_slice_instructions(const clip_image_size & original_size);
 
     struct slice_output {
@@ -83,10 +82,8 @@ struct mtmd_image_preprocessor_llava_uhd : mtmd_image_preprocessor {
     };
     slice_output slice_image(const clip_image_u8 & img, const slice_instructions & inst);
 
-private:
+protected:
     clip_image_size get_best_resize(const clip_image_size & original_size, int scale_resolution, int patch_size, bool allow_upscale = false);
-
-    clip_image_size resize_maintain_aspect_ratio(const clip_image_size & orig, const clip_image_size & target_max);
 
     /**
      * Selects the best resolution from a list of possible resolutions based on the original size.
@@ -104,6 +101,9 @@ private:
      * @return The best fit resolution
      */
     clip_image_size select_best_resolution(const clip_image_size & original_size, const std::vector<clip_image_size> & possible_resolutions);
+
+private:
+    clip_image_size resize_maintain_aspect_ratio(const clip_image_size & orig, const clip_image_size & target_max);
     int ensure_divide(int length, int patch_size);
     clip_image_size get_refine_size(const clip_image_size & original_size, const clip_image_size & grid, int scale_resolution, int patch_size, bool allow_upscale = false);
     clip_image_size get_best_grid(const int max_slice_nums, const int multiple, const float log_ratio);
@@ -129,6 +129,12 @@ struct mtmd_image_preprocessor_longest_edge : mtmd_image_preprocessor {
     mtmd_image_preproc_out preprocess(const clip_image_u8 & img) override;
 };
 
+// custom llava-uhd slicing logic for MiniCPM-V
+struct mtmd_image_preprocessor_minicpmv : mtmd_image_preprocessor_llava_uhd {
+    using mtmd_image_preprocessor_llava_uhd::mtmd_image_preprocessor_llava_uhd;
+    slice_instructions get_slice_instructions(const clip_image_size & original_size) override;
+};
+
 // custom llava-uhd slicing logic for LFM2
 // ref: https://github.com/huggingface/transformers/blob/v5.1.0/src/transformers/models/lfm2_vl/image_processing_lfm2_vl_fast.py
 struct mtmd_image_preprocessor_lfm2 : mtmd_image_preprocessor_llava_uhd {
@@ -139,7 +145,10 @@ struct mtmd_image_preprocessor_lfm2 : mtmd_image_preprocessor_llava_uhd {
     static constexpr int   tile_size            = 512;
 
     using mtmd_image_preprocessor_llava_uhd::mtmd_image_preprocessor_llava_uhd;
+    mtmd_image_preproc_out preprocess(const clip_image_u8 & img) override;
     slice_instructions get_slice_instructions(const clip_image_size & original_size) override;
+
+    static bool should_tile(const clip_hparams & hparams, const clip_image_size & original_size);
 
 private:
     clip_image_size find_closest_aspect_ratio(
@@ -219,8 +228,14 @@ struct mtmd_image_preprocessor_youtuvl : mtmd_image_preprocessor {
     mtmd_image_preproc_out preprocess(const clip_image_u8 & img) override;
 };
 
-// similar to llava_uhd, but has add_newline
+// llava-next "anyres": stacks the overview and all tiles into one image, assembled by clip in a single graph
 struct mtmd_image_preprocessor_granite : mtmd_image_preprocessor_llava_uhd {
     mtmd_image_preprocessor_granite(const clip_ctx * ctx) : mtmd_image_preprocessor_llava_uhd(ctx) {}
+    mtmd_image_preproc_out preprocess(const clip_image_u8 & img) override;
+};
+
+// pick the patch grid closest to the input aspect ratio under the per-image token cap, stretch-resize.
+struct mtmd_image_preprocessor_muse_glimmer : mtmd_image_preprocessor {
+    mtmd_image_preprocessor_muse_glimmer(const clip_ctx * ctx) : mtmd_image_preprocessor(ctx) {}
     mtmd_image_preproc_out preprocess(const clip_image_u8 & img) override;
 };

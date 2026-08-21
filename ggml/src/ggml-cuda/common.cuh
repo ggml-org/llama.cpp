@@ -362,6 +362,15 @@ static bool blackwell_mma_available(const int cc) {
            ggml_cuda_highest_compiled_arch(cc) < GGML_CUDA_CC_RUBIN;
 }
 
+// Checks whether the tensor's base data pointer and higher-dimensional strides are byte-aligned to `alignment` bytes.
+static bool ggml_cuda_is_aligned(const ggml_tensor * tensor, const size_t alignment) {
+    GGML_ASSERT(tensor != nullptr);
+    return (reinterpret_cast<uintptr_t>(tensor->data) % alignment) == 0 &&
+           tensor->nb[1] % alignment == 0 &&
+           tensor->nb[2] % alignment == 0 &&
+           tensor->nb[3] % alignment == 0;
+}
+
 static constexpr __device__ int ggml_cuda_get_physical_warp_size() {
 #if defined(GGML_USE_HIP) && (defined(__GFX9__) || defined(__GFX8__))
     return 64;
@@ -618,7 +627,8 @@ template <typename T> struct block_reduce_policy<block_reduce_method::MAX, T> {
 };
 
 template <block_reduce_method reduce_method_t, const unsigned int block_size_template = 0, typename T>
-static __device__ T block_reduce(T val, T * shared_vals) {
+static __device__ T block_reduce(T val, [[maybe_unused]] T * shared_vals) {
+    // for multi-warp reductions, callers must not reuse shared_vals until all reads from this invocation have completed
     val                           = block_reduce_policy<reduce_method_t, T>::reduce(val);
     const unsigned int block_size = block_size_template == 0 ? blockDim.x : block_size_template;
     if (block_size > WARP_SIZE) {
@@ -937,6 +947,9 @@ static __device__ __forceinline__ uint2 fast_div_modulo(uint32_t n, const uint3 
 
 typedef void (*dequantize_kernel_t)(const void * vx, const int64_t ib, const int iqs, float2 & v);
 
+template<typename dst_t>
+using dequantize_kq_t = void (*)(const void * vx, const int64_t ib, dst_t * y, const int tid);
+
 static __device__ __forceinline__ float get_alibi_slope(
     const float max_bias, const uint32_t h, const uint32_t n_head_log2, const float m0, const float m1
 ) {
@@ -963,6 +976,13 @@ struct ggml_cuda_type_traits<GGML_TYPE_Q1_0> {
     static constexpr int qk = QK1_0;
     static constexpr int qr = QR1_0;
     static constexpr int qi = QI1_0;
+};
+
+template<>
+struct ggml_cuda_type_traits<GGML_TYPE_Q2_0> {
+    static constexpr int qk = QK2_0;
+    static constexpr int qr = QR2_0;
+    static constexpr int qi = QI2_0;
 };
 
 template<>
@@ -1115,7 +1135,8 @@ struct ggml_cuda_type_traits<GGML_TYPE_IQ3_S> {
 //////////////////////
 
 struct ggml_cuda_device_info {
-    int device_count;
+    int device_count;           // number of (possibly virtual) devices exposed to the rest of ggml
+    int physical_device_count;  // number of physical CUDA devices actually present
 
     struct cuda_device_info {
         int     cc;                             // compute capability
@@ -1128,6 +1149,9 @@ struct ggml_cuda_device_info {
         size_t  total_vram;
         int     warp_size;                      // Number of threads in a dispatch
         bool    supports_cooperative_launch;    // whether cooperative launch is supported
+        int     physical_device;                // backing physical CUDA device for this (virtual) device
+        int     physical_share_count;           // number of (virtual) devices sharing this device's physical GPU
+        int     virtual_index;                  // index of this (virtual) device among those sharing its physical GPU
     };
 
     cuda_device_info devices[GGML_CUDA_MAX_DEVICES] = {};
@@ -1394,7 +1418,9 @@ struct ggml_backend_cuda_context {
     cudaEvent_t copy_event = nullptr;
 
     cudaStream_t streams[GGML_CUDA_MAX_DEVICES][GGML_CUDA_MAX_STREAMS] = { { nullptr } };
-    cublasHandle_t cublas_handles[GGML_CUDA_MAX_DEVICES] = {nullptr};
+    cublasHandle_t cublas_handles[GGML_CUDA_MAX_DEVICES][GGML_CUDA_MAX_STREAMS] = {nullptr};
+    void * cublas_workspaces[GGML_CUDA_MAX_DEVICES][GGML_CUDA_MAX_STREAMS] = {nullptr};
+    size_t cublas_workspace_sizes[GGML_CUDA_MAX_DEVICES] = {0};
 
     int curr_stream_no = 0;
 
@@ -1471,17 +1497,22 @@ struct ggml_backend_cuda_context {
 
     ggml_cuda_stream_context & stream_context() { return concurrent_stream_context; }
 
-    cublasHandle_t cublas_handle(int device) {
-        if (cublas_handles[device] == nullptr) {
-            ggml_cuda_set_device(device);
-            CUBLAS_CHECK(cublasCreate(&cublas_handles[device]));
-            CUBLAS_CHECK(cublasSetMathMode(cublas_handles[device], CUBLAS_TF32_TENSOR_OP_MATH));
-        }
-        return cublas_handles[device];
-    }
-
     cublasHandle_t cublas_handle() {
-        return cublas_handle(device);
+        if (cublas_handles[device][curr_stream_no] == nullptr) {
+            ggml_cuda_set_device(device);
+            CUBLAS_CHECK(cublasCreate(&cublas_handles[device][curr_stream_no]));
+            CUBLAS_CHECK(cublasSetMathMode(cublas_handles[device][curr_stream_no], CUBLAS_TF32_TENSOR_OP_MATH));
+            CUBLAS_CHECK(cublasSetStream(cublas_handles[device][curr_stream_no], stream()));
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && (CUBLAS_VER_MAJOR > 11 || (CUBLAS_VER_MAJOR == 11 && CUBLAS_VER_MINOR >= 2))
+            if (cublas_workspace_sizes[device] == 0) {
+                const int cc = ggml_cuda_info().devices[device].cc;
+                cublas_workspace_sizes[device] = (cc >= GGML_CUDA_CC_HOPPER) ? 32 * 1024 * 1024 : 4 * 1024 * 1024;
+            }
+            CUDA_CHECK(cudaMalloc(&cublas_workspaces[device][curr_stream_no], cublas_workspace_sizes[device]));
+            CUBLAS_CHECK(cublasSetWorkspace(cublas_handles[device][curr_stream_no], cublas_workspaces[device][curr_stream_no], cublas_workspace_sizes[device]));
+#endif
+        }
+        return cublas_handles[device][curr_stream_no];
     }
 
     // pool

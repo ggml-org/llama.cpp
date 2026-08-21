@@ -17,6 +17,7 @@ from .qwen import QwenModel
 
 
 @ModelBase.register("HunYuanMoEV1ForCausalLM")
+@ModelBase.example("tencent/Hunyuan-A13B-Instruct")
 class HunYuanMoEModel(TextModel):
     model_arch = gguf.MODEL_ARCH.HUNYUAN_MOE
 
@@ -154,6 +155,7 @@ class HunYuanMoEModel(TextModel):
 
 
 @ModelBase.register("HunYuanDenseV1ForCausalLM")
+@ModelBase.example("tencent/Hunyuan-4B-Instruct")
 class HunYuanModel(TextModel):
     model_arch = gguf.MODEL_ARCH.HUNYUAN_DENSE
 
@@ -290,6 +292,7 @@ class HunYuanModel(TextModel):
 
 
 @ModelBase.register("HunYuanVLForConditionalGeneration")
+@ModelBase.example("tencent/HunyuanOCR")
 class HunyuanVLVisionModel(MmprojModel):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -333,11 +336,18 @@ class HunyuanVLVisionModel(MmprojModel):
 
 
 @ModelBase.register("HunYuanVLForConditionalGeneration")
+@ModelBase.example("tencent/HunyuanOCR")
 class HunyuanVLTextModel(HunYuanModel):
     model_arch = gguf.MODEL_ARCH.HUNYUAN_VL
 
     def __init__(self, dir_model: Path, *args, **kwargs):
         super().__init__(dir_model, *args, **kwargs)
+        # transformers 5.13.0 encodes HunyuanVL XD-RoPE as dynamic + mrope_section.
+        # Normalize it to avoid the HunYuan dynamic-RoPE context assertion.
+        if self.rope_parameters.get("rope_type") == "dynamic" and "mrope_section" in self.rope_parameters:
+            self.rope_parameters["rope_type"] = "xdrope"
+            self.rope_parameters["type"] = "xdrope"
+            self.rope_parameters["xdrope_section"] = list(self.rope_parameters["mrope_section"])
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
@@ -359,6 +369,7 @@ class HunyuanVLTextModel(HunYuanModel):
 
 
 @ModelBase.register("HYV3ForCausalLM")
+@ModelBase.example("tencent/Hy3")
 class HYV3Model(TextModel):
     model_arch = gguf.MODEL_ARCH.HY_V3
     supports_mtp_export = True

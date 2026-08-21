@@ -3,9 +3,9 @@
 	import { DropdownMenu as DropdownMenuPrimitive } from 'bits-ui';
 
 	let {
-		ref = $bindable(null),
 		class: className,
 		inset,
+		ref = $bindable(null),
 		variant = 'default',
 		...restProps
 	}: DropdownMenuPrimitive.ItemProps & {

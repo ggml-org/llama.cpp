@@ -71,9 +71,11 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `-ctk, --cache-type-k TYPE` | KV cache data type for K<br/>allowed values: f32, f16, bf16, q8_0, q4_0, q4_1, iq4_nl, q5_0, q5_1<br/>(default: f16)<br/>(env: LLAMA_ARG_CACHE_TYPE_K) |
 | `-ctv, --cache-type-v TYPE` | KV cache data type for V<br/>allowed values: f32, f16, bf16, q8_0, q4_0, q4_1, iq4_nl, q5_0, q5_1<br/>(default: f16)<br/>(env: LLAMA_ARG_CACHE_TYPE_V) |
 | `-dt, --defrag-thold N` | KV cache defragmentation threshold (DEPRECATED)<br/>(env: LLAMA_ARG_DEFRAG_THOLD) |
-| `--mlock` | force system to keep model in RAM rather than swapping or compressing<br/>(env: LLAMA_ARG_MLOCK) |
-| `--mmap, --no-mmap` | whether to memory-map model. (if mmap disabled, slower load but may reduce pageouts if not using mlock) (default: enabled)<br/>(env: LLAMA_ARG_MMAP) |
-| `-dio, --direct-io, -ndio, --no-direct-io` | use DirectIO if available. (default: disabled)<br/>(env: LLAMA_ARG_DIO) |
+| `--rpc SERVERS` | comma-separated list of RPC servers (host:port)<br/>(env: LLAMA_ARG_RPC) |
+| `--mlock` | DEPRECATED in favor of `--load-mode`: force system to keep model in RAM rather than swapping or compressing<br/>(env: LLAMA_ARG_MLOCK) |
+| `--mmap, --no-mmap` | DEPRECATED in favor of `--load-mode`: whether to memory-map model. (if mmap disabled, slower load but may reduce pageouts if not using mlock)<br/>(env: LLAMA_ARG_MMAP) |
+| `-dio, --direct-io, -ndio, --no-direct-io` | DEPRECATED in favor of `--load-mode`: use DirectIO if available<br/>(env: LLAMA_ARG_DIO) |
+| `-lm, --load-mode MODE` | model loading mode (default: auto)<br/>- auto: mmap, unless a device does not support it<br/>- none: no special loading mode<br/>- mmap: memory-map model (if mmap disabled, slower load but may reduce pageouts if not using mlock)<br/>- mlock: force system to keep model in RAM rather than swapping or compressing<br/>- mmap+mlock: mmap + force system to keep model in RAM rather than swapping or compressing<br/>- dio: use DirectIO if available<br/><br/>(env: LLAMA_ARG_LOAD_MODE) |
 | `--numa TYPE` | attempt optimizations that help on some NUMA systems<br/>- distribute: spread execution evenly over all nodes<br/>- isolate: only spawn threads on CPUs on the node that execution started on<br/>- numactl: use the CPU map provided by numactl<br/>if run without this previously, it is recommended to drop the system page cache before using this<br/>see https://github.com/ggml-org/llama.cpp/issues/1437<br/>(env: LLAMA_ARG_NUMA) |
 | `-dev, --device <dev1,dev2,..>` | comma-separated list of devices to use for offloading (none = don't offload)<br/>use --list-devices to see a list of available devices<br/>(env: LLAMA_ARG_DEVICE) |
 | `--list-devices` | print list of available devices and exit |
@@ -100,8 +102,6 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `-dr, --docker-repo [<repo>/]<model>[:quant]` | Docker Hub model repository. repo is optional, default to ai/. quant is optional, default to :latest.<br/>example: gemma3<br/>(default: unused)<br/>(env: LLAMA_ARG_DOCKER_REPO) |
 | `-hf, -hfr, --hf-repo <user>/<model>[:quant]` | Hugging Face model repository; quant is optional, case-insensitive, default to Q4_K_M, or falls back to the first file in the repo if Q4_K_M doesn't exist.<br/>mmproj is also downloaded automatically if available. to disable, add --no-mmproj<br/>example: ggml-org/GLM-4.7-Flash-GGUF:Q4_K_M<br/>(default: unused)<br/>(env: LLAMA_ARG_HF_REPO) |
 | `-hff, --hf-file FILE` | Hugging Face model file. If specified, it will override the quant in --hf-repo (default: unused)<br/>(env: LLAMA_ARG_HF_FILE) |
-| `-hfv, -hfrv, --hf-repo-v <user>/<model>[:quant]` | Hugging Face model repository for the vocoder model (default: unused)<br/>(env: LLAMA_ARG_HF_REPO_V) |
-| `-hffv, --hf-file-v FILE` | Hugging Face model file for the vocoder model (default: unused)<br/>(env: LLAMA_ARG_HF_FILE_V) |
 | `-hft, --hf-token TOKEN` | Hugging Face access token (default: value from HF_TOKEN environment variable)<br/>(env: HF_TOKEN) |
 | `--log-disable` | Log disable |
 | `--log-file FNAME` | Log to file<br/>(env: LLAMA_ARG_LOG_FILE) |
@@ -131,14 +131,14 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `--xtc-probability N` | xtc probability (default: 0.00, 0.0 = disabled) |
 | `--xtc-threshold N` | xtc threshold (default: 0.10, 1.0 = disabled) |
 | `--typical, --typical-p N` | locally typical sampling, parameter p (default: 1.00, 1.0 = disabled) |
-| `--repeat-last-n N` | last n tokens to consider for penalize (default: 64, 0 = disabled, -1 = ctx_size) |
+| `--repeat-last-n N` | last n tokens to consider for penalize (default: 64, 0 = disabled) |
 | `--repeat-penalty N` | penalize repeat sequence of tokens (default: 1.00, 1.0 = disabled) |
 | `--presence-penalty N` | repeat alpha presence penalty (default: 0.00, 0.0 = disabled) |
 | `--frequency-penalty N` | repeat alpha frequency penalty (default: 0.00, 0.0 = disabled) |
 | `--dry-multiplier N` | set DRY sampling multiplier (default: 0.00, 0.0 = disabled) |
 | `--dry-base N` | set DRY sampling base value (default: 1.75) |
 | `--dry-allowed-length N` | set allowed length for DRY sampling (default: 2) |
-| `--dry-penalty-last-n N` | set DRY penalty for the last n tokens (default: -1, 0 = disable, -1 = context size) |
+| `--dry-penalty-last-n N` | set DRY penalty for the last n tokens (default: 64, 0 = disable) |
 | `--dry-sequence-breaker STRING` | add sequence breaker for DRY sampling, clearing out default breakers ('\n', ':', '"', '*') in the process; use "none" to not use any sequence breakers |
 | `--adaptive-target N` | adaptive-p: select tokens near this probability (valid range 0.0 to 1.0; negative = disabled) (default: -1.00)<br/>[(more info)](https://github.com/ggml-org/llama.cpp/pull/17927) |
 | `--adaptive-decay N` | adaptive-p: decay rate for target adaptation over time. lower values are more reactive, higher values are more stable.<br/>(valid range 0.0 to 0.99) (default: 0.90) |
@@ -162,7 +162,7 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `-lcs, --lookup-cache-static FNAME` | path to static lookup cache to use for lookup decoding (not updated by generation) |
 | `-lcd, --lookup-cache-dynamic FNAME` | path to dynamic lookup cache to use for lookup decoding (updated by generation) |
 | `-ctxcp, --ctx-checkpoints, --swa-checkpoints N` | max number of context checkpoints to create per slot (default: 32)[(more info)](https://github.com/ggml-org/llama.cpp/pull/15293)<br/>(env: LLAMA_ARG_CTX_CHECKPOINTS) |
-| `-cms, --checkpoint-min-step N` | minimum spacing between context checkpoints in tokens (default: 256, 0 = no minimum)<br/>(env: LLAMA_ARG_CHECKPOINT_MIN_SPACING_NT) |
+| `-cms, --checkpoint-min-step N` | minimum spacing between context checkpoints in tokens (default: 8192, 0 = no minimum)<br/>(env: LLAMA_ARG_CHECKPOINT_MIN_SPACING_NT) |
 | `-cram, --cache-ram N` | set the maximum cache size in MiB (default: 8192, -1 - no limit, 0 - disable)[(more info)](https://github.com/ggml-org/llama.cpp/pull/16391)<br/>(env: LLAMA_ARG_CACHE_RAM) |
 | `-kvu, --kv-unified, -no-kvu, --no-kv-unified` | use single unified KV buffer shared across all sequences (default: enabled if number of slots is auto)<br/>(env: LLAMA_ARG_KV_UNIFIED) |
 | `--cache-idle-slots, --no-cache-idle-slots` | save idle slots to the prompt cache on new task, and clear them when using unified KV (default: enabled, requires cache-ram)<br/>(env: LLAMA_ARG_CACHE_IDLE_SLOTS) |
@@ -178,6 +178,7 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `-mmu, --mmproj-url URL` | URL to a multimodal projector file. see tools/mtmd/README.md<br/>(env: LLAMA_ARG_MMPROJ_URL) |
 | `--mmproj-auto, --no-mmproj, --no-mmproj-auto` | whether to use multimodal projector file (if available), useful when using -hf (default: enabled)<br/>(env: LLAMA_ARG_MMPROJ_AUTO) |
 | `--mmproj-offload, --no-mmproj-offload` | whether to enable GPU offloading for multimodal projector (default: enabled)<br/>(env: LLAMA_ARG_MMPROJ_OFFLOAD) |
+| `-mmdev, --mmproj-device DEVICE` | device to use for multimodal projector (none = don't offload, default: auto)<br/>use --list-devices to see a list of available devices<br/>(env: MTMD_BACKEND_DEVICE) |
 | `--image-min-tokens N` | minimum number of tokens each image can take, only used by vision models with dynamic resolution (default: read from model)<br/>(env: LLAMA_ARG_IMAGE_MIN_TOKENS) |
 | `--image-max-tokens N` | maximum number of tokens each image can take, only used by vision models with dynamic resolution (default: read from model)<br/>(env: LLAMA_ARG_IMAGE_MAX_TOKENS) |
 | `--mtmd-batch-max-tokens N` | maximum number of image tokens per batch when encoding images (default: 1024)<br/>(env: LLAMA_ARG_MTMD_BATCH_MAX_TOKENS) |
@@ -188,12 +189,19 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `--port PORT` | port to listen (default: 8080)<br/>(env: LLAMA_ARG_PORT) |
 | `--reuse-port` | allow multiple sockets to bind to the same port (default: disabled)<br/>(env: LLAMA_ARG_REUSE_PORT) |
 | `--path PATH` | path to serve static files from (default: )<br/>(env: LLAMA_ARG_STATIC_PATH) |
+| `--cors-origins ORIGINS` | comma-separated list of allowed origins for CORS (default: *)<br/>if set to special value 'localhost', reflect the Origin header only if it is localhost<br/>(env: LLAMA_ARG_CORS_ORIGINS) |
+| `--cors-methods METHODS` | comma-separated list of allowed methods for CORS (default: GET, POST, DELETE, OPTIONS)<br/>(env: LLAMA_ARG_CORS_METHODS) |
+| `--cors-headers HEADERS` | comma-separated list of allowed headers for CORS (default: *)<br/>(env: LLAMA_ARG_CORS_HEADERS) |
+| `--cors-credentials, --no-cors-credentials` | whether to allow credentials for CORS (default: enabled)<br/>note: if this is enabled and --cors-origins is set to * (default), the Origin header will be echoed back, and credentials will always be allowed<br/>(env: LLAMA_ARG_CORS_CREDENTIALS) |
 | `--api-prefix PREFIX` | prefix path the server serves from, without the trailing slash (default: )<br/>(env: LLAMA_ARG_API_PREFIX) |
 | `--ui-config, --webui-config JSON` | JSON that provides default UI settings (overrides UI defaults)<br/>(env: LLAMA_ARG_UI_CONFIG) |
 | `--ui-config-file, --webui-config-file PATH` | JSON file that provides default UI settings (overrides UI defaults)<br/>(env: LLAMA_ARG_UI_CONFIG_FILE) |
 | `--ui-mcp-proxy, --webui-mcp-proxy, --no-ui-mcp-proxy, --no-webui-mcp-proxy` | experimental: whether to enable MCP CORS proxy - do not enable in untrusted environments (default: disabled)<br/>(env: LLAMA_ARG_UI_MCP_PROXY) |
-| `--tools TOOL1,TOOL2,...` | experimental: whether to enable built-in tools for AI agents - do not enable in untrusted environments (default: no tools)<br/>specify "all" to enable all tools<br/>available tools: read_file, file_glob_search, grep_search, exec_shell_command, write_file, edit_file, apply_diff, get_datetime<br/>(env: LLAMA_ARG_TOOLS) |
-| `-ag, --agent, -no-ag, --no-agent` | whether to enable CORS proxy and all built-in tools - do not enable in untrusted environments (default: disabled)<br/>(env: LLAMA_ARG_AGENT) |
+| `--tools TOOL1,TOOL2,...` | experimental: whether to enable built-in tools for AI agents - do not enable in untrusted environments (default: no tools)<br/>specify "all" to enable all tools<br/>available tools: read_file, file_glob_search, grep_search, exec_shell_command, write_file, edit_file, get_info<br/>note: for security reasons, this will limit --cors-origins to localhost by default<br/>(env: LLAMA_ARG_TOOLS) |
+| `--tools-runtime OPTION` | experimental: run tools in a separate runtime environment (default: none, use host environment)<br/>available options:<br/>  'docker:<image>', 'podman:<image>': spin up a new container and reuse it for all invocations, clean up on server exit<br/>  'docker-container:<id>', 'podman-container:<id>': use an existing container by ID, won't stop on server exit<br/>  'ssh:<target>': run tools on a remote POSIX host over SSH, key-based auth and a trusted host key are required<br/><br/>(env: LLAMA_ARG_TOOLS_RUNTIME) |
+| `--mcp-servers-config PATH` | experimental: path to JSON file with MCP server definitions (Cursor-compatible format) - do not enable in untrusted environments (default: none)<br/>note: for security reasons, this will limit --cors-origins to localhost by default<br/>(env: LLAMA_ARG_MCP_SERVERS_CONFIG) |
+| `--mcp-servers-json JSON` | experimental: inline JSON with MCP server definitions (Cursor-compatible format) - do not enable in untrusted environments (default: none)<br/>note: for security reasons, this will limit --cors-origins to localhost by default<br/>(env: LLAMA_ARG_MCP_SERVERS_JSON) |
+| `-ag, --agent, -no-ag, --no-agent` | whether to enable CORS proxy and all built-in tools - do not enable in untrusted environments (default: disabled)<br/>note: for security reasons, this will limit --cors-origins to localhost by default<br/>(env: LLAMA_ARG_AGENT) |
 | `--ui, --webui, --no-ui, --no-webui` | whether to enable the Web UI (default: enabled)<br/>(env: LLAMA_ARG_UI) |
 | `--embedding, --embeddings` | restrict to only support embedding use case; use only with dedicated embedding models (default: disabled)<br/>(env: LLAMA_ARG_EMBEDDINGS) |
 | `--rerank, --reranking` | enable reranking endpoint on server (default: disabled)<br/>(env: LLAMA_ARG_RERANKING) |
@@ -219,8 +227,10 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `--jinja, --no-jinja` | whether to use jinja template engine for chat (default: enabled)<br/>(env: LLAMA_ARG_JINJA) |
 | `--reasoning-format FORMAT` | controls whether thought tags are allowed and/or extracted from the response, and in which format they're returned; one of:<br/>- none: leaves thoughts unparsed in `message.content`<br/>- deepseek: puts thoughts in `message.reasoning_content`<br/>- deepseek-legacy: keeps `<think>` tags in `message.content` while also populating `message.reasoning_content`<br/>(default: auto)<br/>(env: LLAMA_ARG_THINK) |
 | `-rea, --reasoning [on\|off\|auto]` | Use reasoning/thinking in the chat ('on', 'off', or 'auto', default: 'auto' (detect from template))<br/>(env: LLAMA_ARG_REASONING) |
+| `--reasoning-effort LEVEL` | reasoning effort level given to the chat template: 'default' to keep the template default,<br/>or a level such as 'minimal', 'low', 'medium', 'high', 'xhigh' or 'max' (default: default)<br/>(env: LLAMA_ARG_REASONING_EFFORT) |
 | `--reasoning-budget N` | token budget for thinking: -1 for unrestricted, 0 for immediate end, N>0 for token budget (default: -1)<br/>(env: LLAMA_ARG_THINK_BUDGET) |
 | `--reasoning-budget-message MESSAGE` | message injected before the end-of-thinking tag when reasoning budget is exhausted (default: none)<br/>(env: LLAMA_ARG_THINK_BUDGET_MESSAGE) |
+| `--reasoning-preserve, --no-reasoning-preserve` | preserve reasoning trace in the full history, not just the last assistant message (default: template default)<br/>compatible with certain templates having 'supports_preserve_reasoning' capability<br/>example: https://docs.z.ai/guides/capabilities/thinking-mode#preserved-thinking<br/>(env: LLAMA_ARG_REASONING_PRESERVE) |
 | `--chat-template JINJA_TEMPLATE` | set custom jinja chat template (default: template taken from model's metadata)<br/>if suffix/prefix are specified, template will be disabled<br/>only commonly used templates are accepted (unless --jinja is set before this flag):<br/>list of built-in templates:<br/>bailing, bailing-think, bailing2, chatglm3, chatglm4, chatml, command-r, deepseek, deepseek-ocr, deepseek2, deepseek3, exaone-moe, exaone3, exaone4, falcon3, gemma, gigachat, glmedge, gpt-oss, granite, granite-4.0, granite-4.1, grok-2, hunyuan-dense, hunyuan-moe, hunyuan-vl, kimi-k2, llama2, llama2-sys, llama2-sys-bos, llama2-sys-strip, llama3, llama4, megrez, minicpm, mistral-v1, mistral-v3, mistral-v3-tekken, mistral-v7, mistral-v7-tekken, monarch, openchat, orion, pangu-embedded, phi3, phi4, rwkv-world, seed_oss, smolvlm, solar-open, vicuna, vicuna-orca, yandex, zephyr<br/>(env: LLAMA_ARG_CHAT_TEMPLATE) |
 | `--chat-template-file JINJA_TEMPLATE_FILE` | set custom jinja chat template file (default: template taken from model's metadata)<br/>if suffix/prefix are specified, template will be disabled<br/>only commonly used templates are accepted (unless --jinja is set before this flag):<br/>list of built-in templates:<br/>bailing, bailing-think, bailing2, chatglm3, chatglm4, chatml, command-r, deepseek, deepseek-ocr, deepseek2, deepseek3, exaone-moe, exaone3, exaone4, falcon3, gemma, gigachat, glmedge, gpt-oss, granite, granite-4.0, granite-4.1, grok-2, hunyuan-dense, hunyuan-moe, hunyuan-vl, kimi-k2, llama2, llama2-sys, llama2-sys-bos, llama2-sys-strip, llama3, llama4, megrez, minicpm, mistral-v1, mistral-v3, mistral-v3-tekken, mistral-v7, mistral-v7-tekken, monarch, openchat, orion, pangu-embedded, phi3, phi4, rwkv-world, seed_oss, smolvlm, solar-open, vicuna, vicuna-orca, yandex, zephyr<br/>(env: LLAMA_ARG_CHAT_TEMPLATE_FILE) |
 | `--skip-chat-parsing, --no-skip-chat-parsing` | force a pure content parser, even if a Jinja template is specified; model will output everything in the content section, including any reasoning and/or tool calls (default: disabled)<br/>(env: LLAMA_ARG_SKIP_CHAT_PARSING) |
@@ -252,7 +262,7 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `--spec-draft-device, -devd, --device-draft <dev1,dev2,..>` | comma-separated list of devices to use for offloading the draft model (none = don't offload)<br/>use --list-devices to see a list of available devices |
 | `--spec-draft-ngl, -ngld, --gpu-layers-draft, --n-gpu-layers-draft N` | max. number of draft model layers to store in VRAM, either an exact number, 'auto', or 'all' (default: auto)<br/>(env: LLAMA_ARG_N_GPU_LAYERS_DRAFT) |
 | `--spec-draft-model, -md, --model-draft FNAME` | draft model for speculative decoding (default: unused)<br/>(env: LLAMA_ARG_SPEC_DRAFT_MODEL) |
-| `--spec-type none,draft-simple,draft-eagle3,draft-mtp,ngram-simple,ngram-map-k,ngram-map-k4v,ngram-mod,ngram-cache` | comma-separated list of types of speculative decoding to use (default: none)<br/><br/>(env: LLAMA_ARG_SPEC_TYPE) |
+| `--spec-type none,draft-simple,draft-eagle3,draft-mtp,draft-dflash,draft-dspark,ngram-simple,ngram-map-k,ngram-map-k4v,ngram-mod,ngram-cache` | comma-separated list of types of speculative decoding to use (default: none)<br/><br/>(env: LLAMA_ARG_SPEC_TYPE) |
 | `--spec-ngram-mod-n-min N` | minimum number of ngram tokens to use for ngram-based speculative decoding (default: 48) |
 | `--spec-ngram-mod-n-max N` | maximum number of ngram tokens to use for ngram-based speculative decoding (default: 64) |
 | `--spec-ngram-mod-n-match N` | ngram-mod lookup length (default: 24) |
@@ -270,8 +280,6 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `--spec-ngram-size-n N` | the argument has been removed. use the respective --spec-ngram-*-size-n or --spec-ngram-mod-n-match |
 | `--spec-ngram-size-m N` | the argument has been removed. use the respective --spec-ngram-*-size-m |
 | `--spec-ngram-min-hits N` | the argument has been removed. use the respective --spec-ngram-*-min-hits |
-| `-mv, --model-vocoder FNAME` | vocoder model for audio generation (default: unused) |
-| `--tts-use-guide-tokens` | Use guide tokens to improve TTS word recall |
 | `--embd-gemma-default` | use default EmbeddingGemma model (note: can download weights from the internet) |
 | `--fim-qwen-1.5b-default` | use default Qwen 2.5 Coder 1.5B (note: can download weights from the internet) |
 | `--fim-qwen-3b-default` | use default Qwen 2.5 Coder 3B (note: can download weights from the internet) |
@@ -289,10 +297,17 @@ For the full list of features, please refer to [server's changelog](https://gith
 
 Note: If both command line argument and environment variable are both set for the same param, the argument will take precedence over env var.
 
-For boolean options like `--mmap` or `--kv-offload`, the environment variable is handled as shown in this example:
-- `LLAMA_ARG_MMAP=true` means enabled, other accepted values are: `1`, `on`, `enabled`
-- `LLAMA_ARG_MMAP=false` means disabled, other accepted values are: `0`, `off`, `disabled`
-- If `LLAMA_ARG_NO_MMAP` is present (no matter the value), it means disabling mmap
+For string options like `--load-mode`, the environment variable is handled as shown in this example:
+- `LLAMA_ARG_LOAD_MODE=auto` sets the loading mode to auto (default)
+- `LLAMA_ARG_LOAD_MODE=none` disables special loading
+- `LLAMA_ARG_LOAD_MODE=mmap` enables memory-mapping
+- `LLAMA_ARG_LOAD_MODE=mlock` locks the model in RAM
+- `LLAMA_ARG_LOAD_MODE=mmap+mlock` enables memory-mapping and locks in RAM
+- `LLAMA_ARG_LOAD_MODE=dio` uses DirectIO if available
+
+For boolean options like `--kv-offload`:
+- `LLAMA_ARG_KV_OFFLOAD=true` means enabled, other accepted values are: `1`, `on`, `enabled`
+- `LLAMA_ARG_KV_OFFLOAD=false` means disabled, other accepted values are: `0`, `off`, `disabled`
 
 Example usage of docker compose with environment variables:
 
@@ -323,11 +338,63 @@ It is currently available in the following endpoints:
 
 For more details, please refer to [multimodal documentation](../../docs/multimodal.md)
 
-### Built-in tools support
+### Server tools support
 
-The server includes a set of built-in tools that enable the LLM to access the local file system directly from the Web UI.
+The server includes a set of server tools that enable the LLM to access the local file system directly from the Web UI.
 
 To use this feature, start the server with `--tools all`. You can also enable only specific tools by passing a comma-separated list: `--tools name1,name2,...`. Run `--help` for the full list of available tool names.
+
+### MCP servers
+
+Besides the built-in tools, the server can expose tools coming from MCP servers, added in [#26062](https://github.com/ggml-org/llama.cpp/pull/26062). Only the stdio transport is supported: such a server is a child process reading JSON-RPC messages on its stdin and writing replies on its stdout, so nothing has to be started or maintained outside `llama-server`.
+
+Servers are declared in a Cursor-compatible JSON file:
+
+```json
+{
+  "mcpServers": {
+    "example": { "command": "/path/to/server", "args": [] }
+  }
+}
+```
+
+```sh
+llama-server -m model.gguf --mcp-servers-config mcp.json
+```
+
+The same JSON can be passed inline with `--mcp-servers-json`. Each entry under `mcpServers` accepts:
+
+| Key | Explanation |
+| --- | ----------- |
+| `command` | executable to spawn, required, entries without it are skipped |
+| `args` | array of arguments |
+| `env` | object merged over the parent environment |
+| `cwd` | working directory of the child process |
+| `timeout_ms` | per-tool-call timeout (default: 30000) |
+
+Every server is spawned once at startup to list its tools, then stopped, and respawned on demand when one of its tools is called. Tools are exposed as `<server>_<tool>` alongside the built-in ones: they show up in the Web UI and in `GET /tools`, and the model calls them like any other tool. A name colliding with an already registered tool is skipped. This is independent of `--tools`, MCP servers can be the only tools available.
+
+The child process runs with the same privileges as the server, so only declare commands you trust. As with `--tools`, `--cors-origins` then defaults to `localhost`.
+
+Note: `--ui-mcp-proxy` is unrelated, it only lets the Web UI reach remote MCP servers from the browser.
+
+Any server written against the [MCP specification](https://modelcontextprotocol.io) works as is, whether it uses an official SDK or not: the transport is one JSON-RPC message per line on stdio, so a script wrapping an existing program is a valid server too.
+
+### CORS
+
+By default the server reflects any `Origin` header back with credentials allowed. This matches the old, always-on `*` behavior and is fine as long as the server only exposes stateless, read-only endpoints.
+
+Enabling `--tools` or `--agent` exposes file read/write over the API, so in that case `--cors-origins` defaults to `localhost` instead: only pages served from localhost can reach the server. Pass `--cors-origins` explicitly to override either default.
+
+Recommended `--cors-origins` setting, depending on where the server runs:
+
+| Deployment | Recommendation |
+| ---------- | --------------- |
+| Public | set an API key, put the server behind a reverse proxy, `--cors-origins` optional |
+| Local network | set `--cors-origins` to your frontend's origin |
+| Same machine | `--cors-origins localhost` (default once `--agent` is set) |
+
+Related flags: `--cors-origins`, `--cors-methods`, `--cors-headers`, `--cors-credentials` / `--no-cors-credentials`. Background and rationale: [#25655](https://github.com/ggml-org/llama.cpp/pull/25655).
 
 ## Build
 
@@ -467,7 +534,7 @@ These words will not be included in the completion, so make sure to add them to 
 
 `repeat_penalty`: Control the repetition of token sequences in the generated text. Default: `1.1`
 
-`repeat_last_n`: Last n tokens to consider for penalizing repetition. Default: `64`, where `0` is disabled and `-1` is ctx-size.
+`repeat_last_n`: Last n tokens to consider for penalizing repetition. Default: `64`, where `0` is disabled.
 
 `presence_penalty`: Repeat alpha presence penalty. Default: `0.0`, which is disabled.
 
@@ -479,7 +546,7 @@ These words will not be included in the completion, so make sure to add them to 
 
 `dry_allowed_length`: Tokens that extend repetition beyond this receive exponentially increasing penalty: multiplier * base ^ (length of repeating sequence before token - allowed length). Default: `2`
 
-`dry_penalty_last_n`: How many tokens to scan for repetitions. Default: `-1`, where `0` is disabled and `-1` is context size.
+`dry_penalty_last_n`: How many tokens to scan for repetitions. Default: `64`, where `0` is disabled.
 
 `dry_sequence_breakers`: Specify an array of sequence breakers for DRY sampling. Only a JSON array of strings is accepted. Default: `['\n', ':', '"', '*']`
 
@@ -787,7 +854,7 @@ By default, it is read-only. To make POST request to change global properties, y
       "dry_multiplier": 0.0,
       "dry_base": 1.75,
       "dry_allowed_length": 2,
-      "dry_penalty_last_n": -1,
+      "dry_penalty_last_n": 64,
       "dry_sequence_breakers": [
         "\n",
         ":",
@@ -1067,6 +1134,10 @@ In *router mode* the query param `?model={model_id}` has to be set. This endpoin
 | `llamacpp:n_tokens_max` | Counter | High watermark of the context size observed. |
 | `llamacpp:n_decode_total` | Counter | Total Number of llama_decode() calls. |
 | `llamacpp:n_busy_slots_per_decode` | Gauge | Average number of busy slots per llama_decode() call. |
+| `llamacpp:spec_decode_num_draft_tokens_total` | Counter | Total draft tokens generated (0 when spec-decode is off). |
+| `llamacpp:spec_decode_num_accepted_tokens_total` | Counter | Total draft tokens accepted by the target model (0 when spec-decode is off). |
+| `llamacpp:spec_decode_num_drafts_total` | Counter | Total speculative decoding verification steps (0 when spec-decode is off). |
+| `llamacpp:spec_decode_num_accepted_tokens_per_pos_total` | Counter | Accepted tokens per draft position (labeled `position="N"`; absent when spec-decode is off or before the first completed speculative request). |
 
 ### POST `/slots/{id_slot}?action=save`: Save the prompt cache of the specified slot to a file.
 
@@ -1239,6 +1310,8 @@ See [OpenAI Chat Completions API documentation](https://platform.openai.com/docs
 The `response_format` parameter supports both plain JSON output (e.g. `{"type": "json_object"}`) and schema-constrained JSON (e.g. `{"type": "json_object", "schema": {"type": "string", "minLength": 10, "maxLength": 100}}` or `{"type": "json_schema", "schema": {"properties": { "name": { "title": "Name",  "type": "string" }, "date": { "title": "Date",  "type": "string" }, "participants": { "items": {"type: "string" }, "title": "Participants",  "type": "string" } } } }`), similar to other OpenAI-inspired API providers.
 
 `chat_template_kwargs`: Allows sending additional parameters to the json templating system. For example: `{"enable_thinking": false}`
+
+`reasoning_effort`: If `none`, reasoning/thinking is disabled. Otherwise, the value is made available to the jinja template.
 
 `reasoning_format`: The reasoning format to be parsed. If set to `none`, it will output the raw generated text.
 
@@ -1559,9 +1632,9 @@ curl http://localhost:8080/v1/messages/count_tokens \
 {"input_tokens": 10}
 ```
 
-## Server built-in tools
+## Server tools
 
-The server exposes a REST API under `/tools` that allows the Web UI to call built-in tools. This endpoint is intended to be used internally by the Web UI and subject to change or to be removed in the future.
+The server exposes a REST API under `/tools` that allows the Web UI to call server tools. This endpoint is intended to be used internally by the Web UI and subject to change or to be removed in the future.
 
 **Please do NOT use this endpoint in a downstream application**
 
@@ -1685,8 +1758,9 @@ The precedence rule for preset options is as follows:
 3. **Global options** defined in the preset file (`[*]`)
 
 We also offer additional options that are exclusive to presets (these aren't treated as command-line arguments):
-- `load-on-startup` (boolean): Controls whether the model loads automatically when the server starts
+- `load-on-startup` (boolean): Controls whether the model loads automatically when the server starts. Only applies at startup: if the model list is reloaded later (for example after editing the preset file), a newly added model is listed but not loaded
 - `stop-timeout` (int, seconds): After requested unload, wait for this many seconds before forcing termination (default: 10)
+- `dedup-cache-models` (boolean): When the preset uses `hf-repo` pointing to a model that is already downloaded, hide the corresponding cached model entry from `GET /models` (the preset entry remains visible). Set it in the `[*]` section to apply to all presets.
 
 ### Routing requests
 
@@ -1880,7 +1954,7 @@ Example events:
 }
 // note for "loading" status:
 // - subsequent events will follow the same order of "stages" list
-// - mmap is may report incorrect progress on some platforms; if you need exact progress, use --no-mmap
+// - mmap may report incorrect progress on some platforms; if you need exact progress, use --load-mode none
 
 {
   "model": "...",
@@ -1998,6 +2072,7 @@ Note that the following endpoints are exempt from being considered as incoming t
 - `GET /health`
 - `GET /props`
 - `GET /models`
+- `GET /metrics`
 
 ## More examples
 

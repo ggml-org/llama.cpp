@@ -323,7 +323,7 @@ llama_kv_cache::llama_kv_cache(
             hparams.n_embd_head_k() % 64 == 0;
 
         // always create Hadamard rotation tensors for DeepSeek lightning indexers
-        if ((model.arch == LLM_ARCH_DEEPSEEK32 || model.arch == LLM_ARCH_DEEPSEEK4) &&
+        if ((model.arch == LLM_ARCH_DEEPSEEK32 || model.arch == LLM_ARCH_DEEPSEEK4 || model.arch == LLM_ARCH_GLM_DSA) &&
                 hparams.n_embd_head_k_full == hparams.indexer_head_size) {
             attn_rot_k = true;
         }
@@ -1224,6 +1224,12 @@ ggml_tensor * llama_kv_cache::get_k_storage(int32_t il) const {
     return layers[ikv].k;
 }
 
+const llama_kv_cells & llama_kv_cache::get_cells(llama_seq_id seq_id) const {
+    GGML_ASSERT(seq_id >= 0 && (size_t) seq_id < seq_to_stream.size());
+
+    return v_cells[seq_to_stream[seq_id]];
+}
+
 uint32_t llama_kv_cache::get_n_kv(const slot_info & sinfo) const {
     uint32_t result = 0;
 
@@ -1925,6 +1931,10 @@ ggml_cgraph * llama_kv_cache::build_graph_shift(llm_graph_result * res, llama_co
     for (const auto & layer : layers) {
         const uint32_t il = layer.il;
 
+        if (!hparams.has_rope(il)) {
+            continue;
+        }
+
         const int64_t n_head_kv    = hparams.n_head_kv(il);
         const int64_t n_embd_k_gqa = hparams.n_embd_k_gqa(il);
 
@@ -2054,7 +2064,12 @@ void llama_kv_cache::state_read(llama_io_read_i & io, llama_seq_id seq_id, llama
 
         bool res = true;
         res = res && state_read_meta(io, strm, cell_count, sinfo, seq_id);
-        res = res && state_read_data(io, strm, cell_count, sinfo);
+
+        try {
+            res = res && state_read_data(io, strm, cell_count, sinfo);
+        } catch (...) {
+            res = false;
+        }
 
         if (!res) {
             if (seq_id == -1) {
