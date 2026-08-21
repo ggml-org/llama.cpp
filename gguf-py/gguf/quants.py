@@ -764,6 +764,23 @@ class NVFP4(__Quant, qtype=GGMLQuantizationType.NVFP4):
         return (d * vals.astype(np.float32)).reshape(n_super, 64)
 
 
+class F8_E4M3(__Quant, qtype=GGMLQuantizationType.F8_E4M3):
+    @classmethod
+    def dequantize_blocks(cls, blocks: np.ndarray) -> np.ndarray:
+        bits = blocks.astype(np.uint8)
+        sign = np.where(bits & 0x80, -1.0, 1.0)
+        magnitude = bits & 0x7F
+        exponent = magnitude >> 3
+        mantissa = magnitude & 0x07
+        values = np.where(
+            exponent == 0,
+            np.ldexp(mantissa.astype(np.float32), -9),
+            np.ldexp(1.0 + mantissa.astype(np.float32) / 8.0, exponent.astype(np.int32) - 7),
+        )
+        values = np.where(magnitude == 0x7F, np.nan, values)
+        return sign * values
+
+
 class IQ2_XXS(__Quant, qtype=GGMLQuantizationType.IQ2_XXS):
     ksigns: bytes = (
         b"\x00\x81\x82\x03\x84\x05\x06\x87\x88\x09\x0a\x8b\x0c\x8d\x8e\x0f"
