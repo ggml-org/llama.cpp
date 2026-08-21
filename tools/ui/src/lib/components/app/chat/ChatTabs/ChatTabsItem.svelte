@@ -2,6 +2,8 @@
 	import { Loader2, Square, SquarePen, X } from '@lucide/svelte';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { cn } from '$lib/components/ui/utils';
+	import { ROUTES } from '$lib/constants';
+	import { RouterService } from '$lib/services/router.service';
 
 	interface Tab {
 		id: string;
@@ -29,18 +31,39 @@
 		tab
 	}: Props = $props();
 
-	let contentOpacity = $derived(isActive ? '' : 'opacity-40 group-hover:opacity-100');
+	let contentOpacity = $derived(isActive ? '' : 'opacity-45 group-hover:opacity-75');
+
+	let href = $derived(tab.isNewChat ? ROUTES.START : RouterService.chat(tab.id));
+
+	function handleActivate(event: MouseEvent) {
+		// keep routing through tabsStore.activate() so the new-chat sentinel
+		// and history behave exactly like the programmatic navigation
+		event.preventDefault();
+		onActivate?.(tab.id);
+	}
+
+	// stop/close sit inside the tab link; swallow the click so the tab does
+	// not also navigate
+	function handleActionClick(event: MouseEvent, action: () => void) {
+		event.preventDefault();
+		event.stopPropagation();
+		action();
+	}
 </script>
 
-<div
+<a
 	data-active-tab={isActive ? 'true' : undefined}
+	{href}
 	class={cn(
-		'flex h-8 max-w-52 min-w-0 shrink-0 items-center gap-1 rounded-lg pr-1 text-sm whitespace-nowrap transition-[background-color,border-color,box-shadow] hover:bg-foreground/10 border backdrop-blur-xl first:ml-2',
+		'flex h-8 max-w-52 min-w-0 shrink-0 cursor-pointer items-center gap-1 rounded-lg pr-1 text-sm whitespace-nowrap no-underline transition-[background-color,border-color,box-shadow] hover:bg-foreground/10 border backdrop-blur-xl first:ml-2',
 		isLoading ? 'pl-1' : 'pl-3',
 		isActive
 			? 'bg-muted/60 border-border/10 shadow-sm text-accent-foreground hover:bg-primary/15'
 			: 'border-transparent hover:bg-primary/10 hover:border-border/10 hover:shadow-sm'
 	)}
+	onclick={handleActivate}
+	onauxclick={(e) => onAuxClick?.(tab.id, e)}
+	aria-current={isActive ? 'page' : undefined}
 >
 	{#if isLoading}
 		<Tooltip.Root>
@@ -49,12 +72,13 @@
 					<button
 						{...props}
 						class="stop-button flex h-5 w-5 shrink-0 cursor-pointer items-center justify-center rounded-sm text-muted-foreground transition-colors hover:text-foreground"
-						onclick={(e) => onStop?.(tab.id, e)}
+						onclick={(e) => handleActionClick(e, () => onStop?.(tab.id, e))}
 						aria-label="Stop generation"
 					>
 						<Loader2
-							class="loading-icon h-3.5 w-3.5 animate-spin transition-opacity {contentOpacity}"
+							class="loading-icon h-3.5 w-3.5 animate-spin transition-opacity duration-300 {contentOpacity}"
 						/>
+
 						<Square
 							class="stop-icon hidden h-3 w-3 fill-current text-destructive transition-opacity {contentOpacity}"
 						/>
@@ -68,18 +92,11 @@
 		</Tooltip.Root>
 	{/if}
 
-	<button
-		class="flex min-w-0 flex-1 cursor-pointer items-center gap-2"
-		onclick={() => onActivate?.(tab.id)}
-		onauxclick={(e) => onAuxClick?.(tab.id, e)}
-		aria-current={isActive ? 'page' : undefined}
-	>
-		{#if tab.isNewChat}
-			<SquarePen class="h-3.5 w-3.5 shrink-0 transition-opacity {contentOpacity}" />
-		{/if}
+	{#if tab.isNewChat}
+		<SquarePen class="h-3.5 w-3.5 shrink-0 transition-opacity {contentOpacity}" />
+	{/if}
 
-		<span class="truncate transition-opacity {contentOpacity}">{tab.name}</span>
-	</button>
+	<span class="truncate transition-opacity {contentOpacity}">{tab.name}</span>
 
 	<Tooltip.Root>
 		<Tooltip.Trigger>
@@ -87,9 +104,10 @@
 				<button
 					{...props}
 					class={cn(
-						'flex h-5 w-5 shrink-0 cursor-pointer items-center justify-center rounded-sm text-muted-foreground transition-opacity hover:bg-foreground/10 hover:text-foreground'
+						'flex h-5 w-5 shrink-0 cursor-pointer items-center justify-center rounded-sm text-muted-foreground transition-opacity hover:bg-foreground/10 hover:text-foreground',
+						contentOpacity
 					)}
-					onclick={() => onClose?.(tab.id)}
+					onclick={(e) => handleActionClick(e, () => onClose?.(tab.id))}
 					aria-label="Close tab"
 				>
 					<X class="h-3.5 w-3.5" />
@@ -101,7 +119,7 @@
 			<p>Close tab</p>
 		</Tooltip.Content>
 	</Tooltip.Root>
-</div>
+</a>
 
 <style>
 	.stop-button {
