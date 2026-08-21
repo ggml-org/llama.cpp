@@ -3,7 +3,13 @@
 	import ChatTabsNewChatButton from './ChatTabsNewChatButton.svelte';
 	import { page } from '$app/state';
 	import { ScrollCarousel } from '$lib/components/app';
-	import { NEW_CHAT_TAB_ID } from '$lib/constants';
+	import {
+		CHAT_TABS_MAX_WIDTH,
+		NEW_CHAT_LABEL,
+		NEW_CHAT_TAB_ID,
+		UI_DATA_ATTRS,
+		UNNAMED_CHAT_LABEL
+	} from '$lib/constants';
 	import { useScrollCarousel } from '$lib/hooks/use-scroll-carousel.svelte';
 	import { chatStore, conversationsStore, tabsStore, uiStore } from '$lib/stores';
 	import { tick } from 'svelte';
@@ -18,8 +24,8 @@
 			isNewChat: id === NEW_CHAT_TAB_ID,
 			name:
 				id === NEW_CHAT_TAB_ID
-					? 'New chat'
-					: (conversationsStore.conversations.find((c) => c.id === id)?.name ?? 'Chat')
+					? NEW_CHAT_LABEL
+					: (conversationsStore.conversations.find((c) => c.id === id)?.name ?? UNNAMED_CHAT_LABEL)
 		}))
 	);
 
@@ -63,7 +69,9 @@
 
 		// wait for the new tab to be laid out before scrolling to it
 		void tick().then(() => {
-			const el = carousel.scrollContainer?.querySelector<HTMLElement>('[data-active-tab]');
+			const el = carousel.scrollContainer?.querySelector<HTMLElement>(
+				`[${UI_DATA_ATTRS.ACTIVE_TAB}]`
+			);
 
 			if (el && activeId) {
 				carousel.scrollToCenter(el);
@@ -74,8 +82,8 @@
 
 <nav
 	class="group sticky pl-1 top-0 z-10 hidden md:block chat-tabs-fade transition-[padding] duration-200 ease-in-out pt-3.25 {uiStore.isSidebarExpanded
-		? 'max-w-[calc(100vw-20rem)]'
-		: 'max-w-[calc(100vw-5rem)]'}"
+		? CHAT_TABS_MAX_WIDTH.COLLAPSED_SIDEBAR
+		: CHAT_TABS_MAX_WIDTH.EXPANDED_SIDEBAR}"
 	aria-label="Open conversations"
 >
 	<div class="relative">
