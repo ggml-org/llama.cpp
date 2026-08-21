@@ -1,0 +1,37 @@
+#version 450
+
+#extension GL_EXT_control_flow_attributes : require
+
+layout (push_constant) uniform parameter {
+    uint ne0_vec4;
+    uint nrows;
+} p;
+
+layout (binding = 0) readonly buffer Residual { vec4 data_residual[]; };
+layout (binding = 1) readonly buffer Value    { vec4 data_value[]; };
+layout (binding = 2) readonly buffer Gate     { vec4 data_gate[]; };
+layout (binding = 3) writeonly buffer D       { vec4 data_d[]; };
+
+const uint num_threads = 256;
+const uint num_iter = 2;
+
+layout(local_size_x = num_threads, local_size_y = 1, local_size_z = 1) in;
+
+void main() {
+    const uint row = gl_WorkGroupID.y;
+    uint channel = gl_WorkGroupID.x * num_threads * num_iter + gl_LocalInvocationID.x;
+
+    if (row >= p.nrows) {
+        return;
+    }
+
+    [[unroll]] for (uint i = 0; i < num_iter; ++i) {
+        if (channel < p.ne0_vec4) {
+            const uint idx = row * p.ne0_vec4 + channel;
+            precise vec4 product = data_value[idx] * data_gate[channel];
+            precise vec4 sum = data_residual[idx] + product;
+            data_d[idx] = sum;
+        }
+        channel += num_threads;
+    }
+}
