@@ -18,6 +18,7 @@ export GGML_HIP_RDNA2_AUTO=0
 | `GGML_HIP_GFX1030_GDN_SIBLING_FUSION` | unset: inherit HSA umbrella; explicit `0|1` override | Creates and uses fused Qwen3.5/Qwen3.6 DeltaNet sibling projection weights for their structural loader/graph gates. |
 | `GGML_HIP_GFX1030_Q8_CACHE` | unset: inherit HSA umbrella; explicit `0|1` override | Enables graph-owned reuse of exact standard Q8_1 TG activations and the eligible dual RMSNorm F32/Q8_1 producer. Q4_0 `sum_hi`, packed layouts, MMQ, and routed operations remain outside this cache contract. |
 | `GGML_HIP_GFX1030_Q8_CACHE_TELEMETRY` | unset / `0` | Reports eligible standard-MMVQ Q8_1 sources, safe reuses, cache hits, and storage. Telemetry does not allocate or reuse entries by itself. |
+| `GGML_HIP_GFX1030_P2P_ALLREDUCE` | unset / `auto`: expanded automatic policy | Selects the RDNA2 host-snapshot policy. The default `auto-expanded` policy enables the exact ordinary consumer-fused boundaries when their structural TP4 gate passes; `auto-basic` restores the former automatic control policy, and `0`, `off`, or `false` disables this host-snapshot feature while leaving other native paths enabled. Unsupported TP counts/topologies fall back to RCCL. |
 
 The selectors are read once during backend or model initialization. Set them before starting `llama-cli`, `llama-server`, `llama-bench`, or a test binary. Explicit `0` values are useful for A/B and fallback verification; an unset feature follows the automatic HSA profile when `HSA_OVERRIDE_GFX_VERSION=10.3.0` is active.
 
@@ -108,11 +109,11 @@ Set `GGML_HIP_GFX1030_Q8_CACHE_TELEMETRY=1` to print per-device source/hit summa
 
 ### TP4 consumer-fused host-snapshot boundaries
 
-With the automatic `GGML_HIP_GFX1030_P2P_ALLREDUCE=auto-expanded` policy, structurally eligible ordinary TP4 boundaries named `linear_attn_out-*`, `ffn_out-*`, and `attn_output-*` with contiguous F32 shape `[5120,1,1,1]` may use the existing exact consumer-fused host-snapshot kernel. It performs the validated mapped-host reduction and the dependent residual add/RMSNorm/mul in one kernel while preserving the F32 materialization and graph-prefix fallback contract.
+When the RDNA2 automatic profile is enabled, unset `GGML_HIP_GFX1030_P2P_ALLREDUCE` (or `auto`) selects the validated expanded policy. Structurally eligible ordinary TP4 boundaries named `linear_attn_out-*`, `ffn_out-*`, and `attn_output-*` with contiguous F32 shape `[5120,1,1,1]` may use the existing exact consumer-fused host-snapshot kernel. It performs the validated mapped-host reduction and the dependent residual add/RMSNorm/mul in one kernel while preserving the F32 materialization and graph-prefix fallback contract. Set `GGML_HIP_GFX1030_P2P_ALLREDUCE=0` or `GGML_HIP_RDNA2_AUTO=0` to opt out.
 
 The gate is structural and model-independent: it requires the existing four-rank RDNA2 topology/self-test, exact boundary shape/name, contiguous tensors, and an unshared `RESHAPE -> ADD -> RMS_NORM -> MUL` graph prefix. Any miss uses the ordinary host reduction or RCCL fallback. MTP width five (`ne[1]=5`) and external DFlash graphs do not activate this ordinary-only path.
 
-The isolated integrated candidate was byte/content exact across deterministic, prompt-cache, grammar, long/stateful, Flash Attention, graph-reuse, and fallback validation. A clean production-control versus integrated-candidate ABBA measured `53.4202 -> 53.8177 tok/s` (**+0.744%** mean; **+0.742%** median). This is a small measured gain, not a general communication redesign; the existing `auto` control policy remains available.
+The isolated integrated candidate was byte/content exact across deterministic, prompt-cache, grammar, long/stateful, Flash Attention, graph-reuse, and fallback validation. A clean production-control versus integrated-candidate ABBA measured `53.4202 -> 53.8177 tok/s` (**+0.744%** mean; **+0.742%** median). This is a small measured gain, not a general communication redesign; the former automatic control policy remains available as `GGML_HIP_GFX1030_P2P_ALLREDUCE=auto-basic`.
 
 ### Routed SwiGLU to Q8_1 staging
 
