@@ -15,6 +15,7 @@ from .base import ModelBase, SentencePieceTokenTypes, TextModel, gguf, logger
 
 
 @ModelBase.register("BertModel", "BertForMaskedLM", "CamembertModel", "BertForSequenceClassification")
+@ModelBase.example("BAAI/bge-small-en-v1.5", "dangvantuan/sentence-camembert-base")
 class BertModel(TextModel):
     model_arch = gguf.MODEL_ARCH.BERT
 
@@ -240,6 +241,7 @@ class BertModel(TextModel):
 
 
 @ModelBase.register("DistilBertModel", "DistilBertForMaskedLM", "DistilBertForSequenceClassification")
+@ModelBase.example("distilbert/distilbert-base-uncased")
 class DistilBertModel(BertModel):
     model_arch = gguf.MODEL_ARCH.BERT
 
@@ -263,6 +265,7 @@ class DistilBertModel(BertModel):
 
 
 @ModelBase.register("RobertaModel", "RobertaForSequenceClassification")
+@ModelBase.example("sentence-transformers/stsb-roberta-base")
 class RobertaModel(BertModel):
     model_arch = gguf.MODEL_ARCH.BERT
 
@@ -312,6 +315,7 @@ class RobertaModel(BertModel):
 
 
 @ModelBase.register("NomicBertModel")
+@ModelBase.example("nomic-ai/nomic-embed-text-v1.5")
 class NomicBertModel(BertModel):
     model_arch = gguf.MODEL_ARCH.BERT
 
@@ -369,12 +373,13 @@ class NomicBertModel(BertModel):
         return super().filter_tensors(item)
 
     def modify_tensors(self, data_torch: torch.Tensor, name: str, bid: int | None) -> Iterable[tuple[str, torch.Tensor]]:
-        n_experts = self.find_hparam(["num_local_experts", "num_experts"])
         if "mlp.experts.mlp.w1" in name:
+            n_experts = self.find_hparam(["num_local_experts", "num_experts"])
             data_torch = data_torch.view(n_experts, self.hparams["n_inner"], self.hparams["n_embd"])
             name += ".weight"
 
         if "mlp.experts.mlp.w2" in name:
+            n_experts = self.find_hparam(["num_local_experts", "num_experts"])
             data_torch = data_torch.view(n_experts, self.hparams["n_inner"], self.hparams["n_embd"])
             data_torch = data_torch.transpose(1, 2)
             name += ".weight"
@@ -399,6 +404,7 @@ class NomicBertModel(BertModel):
 
 
 @ModelBase.register("NeoBERT", "NeoBERTLMHead", "NeoBERTForSequenceClassification")
+@ModelBase.example("chandar-lab/NeoBERT")
 class NeoBert(BertModel):
     model_arch = gguf.MODEL_ARCH.NEO_BERT
 
@@ -430,6 +436,7 @@ class NeoBert(BertModel):
 
 
 @ModelBase.register("EuroBertModel", "JinaEmbeddingsV5Model")
+@ModelBase.example("hf-tiny-v2/tiny-random-EuroBertModel", "jinaai/jina-embeddings-v5-text-nano")
 class EuroBertModel(TextModel):
     model_arch = gguf.MODEL_ARCH.EUROBERT
 
@@ -458,6 +465,7 @@ class EuroBertModel(TextModel):
 
 
 @ModelBase.register("XLMRobertaModel", "XLMRobertaForSequenceClassification")
+@ModelBase.example("BAAI/bge-m3")
 class XLMRobertaModel(BertModel):
     model_arch = gguf.MODEL_ARCH.BERT
     _lora_files = {}
@@ -560,6 +568,7 @@ class XLMRobertaModel(BertModel):
 
 
 @ModelBase.register("JinaBertModel", "JinaBertForMaskedLM")
+@ModelBase.example("jinaai/jina-embeddings-v2-base-en")
 class JinaBertV2Model(BertModel):
     model_arch = gguf.MODEL_ARCH.JINA_BERT_V2
 
@@ -571,13 +580,23 @@ class JinaBertV2Model(BertModel):
         if tokenizer_class == 'BertTokenizer':
             super().set_vocab()
         elif tokenizer_class == 'RobertaTokenizer':
-            self._set_vocab_gpt2()
+            pre_tokenizer_type = None
+            tokenizer_json_path = self.dir_model / "tokenizer.json"
+            if tokenizer_json_path.is_file():
+                with open(tokenizer_json_path, "r", encoding="utf-8") as f:
+                    pre_tokenizer_type = json.load(f).get("pre_tokenizer", {}).get("type")
+
+            if pre_tokenizer_type == "Whitespace":
+                self._set_vocab_whitespace()
+            else:
+                self._set_vocab_gpt2()
             self.gguf_writer.add_token_type_count(2)
         else:
             raise NotImplementedError(f'Tokenizer {tokenizer_class} is not supported for JinaBertModel')
 
 
 @ModelBase.register("ModernBertModel", "ModernBertForMaskedLM", "ModernBertForSequenceClassification")
+@ModelBase.example("answerdotai/ModernBERT-base")
 class ModernBertModel(BertModel):
     model_arch = gguf.MODEL_ARCH.MODERN_BERT
 
@@ -594,6 +613,12 @@ class ModernBertModel(BertModel):
             self.gguf_writer.add_sliding_window_pattern(sliding_window_pattern)
         self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.NONE)
         self.gguf_writer.add_vocab_size(self.hparams["vocab_size"])
+        # FFN activation: ModernBert uses a GLU pair (ffn_up output is 2*n_ff). The
+        # original ModernBERT uses GELU (-> GeGLU); some derivatives such as IBM
+        # Granite Embedding 97m R2 use SiLU (-> SwiGLU). Persist this so the
+        # llama.cpp graph can pick the matching activation.
+        if hidden_act := self.hparams.get("hidden_activation"):
+            self.gguf_writer.add_hidden_act(hidden_act)
 
     @classmethod
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:

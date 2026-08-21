@@ -1031,7 +1031,7 @@ void launch_fattn(
                 auto KV_max_ptr_ct1 = KV_max.ptr;
 
                 cgh.parallel_for(sycl::nd_range<3>(blocks_num_KV_max * block_dim_KV_max, block_dim_KV_max),
-                                 [=](sycl::nd_item<3> item_ct1) {
+                                 [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(warp_size)]] {
                                      GGML_UNUSED(item_ct1);
                                      flash_attn_mask_to_KV_max<ncols1, warp_size>(
                                          mask_data_ct0, KV_max_ptr_ct1, iter_k, s31, s33,
@@ -1149,7 +1149,7 @@ void launch_fattn(
                 auto K_ne_ct6             = K->ne[2];
 
                 cgh.parallel_for(sycl::nd_range<3>(blocks_num_combine * block_dim_combine, block_dim_combine),
-                                 [=](sycl::nd_item<3> item_ct1) {
+                                 [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(warp_size)]] {
                                      GGML_UNUSED(item_ct1);
                                      flash_attn_stream_k_fixup<DV, ncols1, ncols2>(KQV_data_ct0, dst_tmp_meta_ptr_ct1,
                                                                                    Q_ne_ct2, Q_ne_ct3, Q_ne_ct4,
@@ -1169,7 +1169,7 @@ void launch_fattn(
             auto KQV_data_ct2         = (float *) KQV->data;
 
             cgh.parallel_for(sycl::nd_range<3>(blocks_num_combine * block_dim_combine, block_dim_combine),
-                             [=](sycl::nd_item<3> item_ct1) {
+                             [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(warp_size)]] {
                                  GGML_UNUSED(item_ct1);
                                  flash_attn_combine_results<DV>(
                                      dst_tmp_ptr_ct0, dst_tmp_meta_ptr_ct1, KQV_data_ct2, parallel_blocks,

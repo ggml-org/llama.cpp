@@ -1,130 +1,33 @@
 enable f16;
 enable subgroups;
 
-#ifdef Q_F16
-#define Q_TYPE f16
-#else
-#define Q_TYPE f32
-#endif
+#define BYTE_HELPERS
+#include "common_decls.tmpl"
+#include "flash_attn_decls.tmpl"
 
-#ifdef KV_F32
-#define KV_TYPE f32
-#else
-#define KV_TYPE f16
-#endif
-
-#ifdef DST_F16
-#define DST_TYPE f16
-#else
-#define DST_TYPE f32
-#endif
-
+// Default values
+// The actual values are defined in shader-lib.
 #define HEAD_DIM_QK 64
 #define HEAD_DIM_V 64
-#define KV_STAGE_STRIDE 64
 #define Q_TILE 4
 #define KV_TILE 64
 #define WG_SIZE 128
-#ifndef MIN_SUBGROUP_SIZE
-#define MIN_SUBGROUP_SIZE MAX_SUBGROUP_SIZE
-#endif
 
-struct Params {
-    offset_q: u32,
-    offset_k: u32,
-    offset_v: u32,
-    offset_mask: u32,
-    offset_sinks: u32,
-    offset_dst: u32,
-
-    n_heads: u32,
-    seq_len_q: u32,
-    seq_len_kv: u32,
-
-    stride_q1: u32,
-    stride_q2: u32,
-    stride_q3: u32,
-    stride_k1: u32,
-    stride_k2: u32,
-    stride_k3: u32,
-    stride_v1: u32,
-    stride_v2: u32,
-    stride_v3: u32,
-    stride_mask3: u32,
-
-    q_per_kv: u32,
-
-    scale: f32,
-    max_bias: f32,
-    logit_softcap: f32,
-    n_head_log2: f32,
-    m0: f32,
-    m1: f32,
-};
-
-@group(0) @binding(0) var<storage, read_write> Q: array<Q_TYPE>;
-#ifdef KV_OVERLAP
-@group(0) @binding(1) var<storage, read_write> K: array<vec4<KV_TYPE>>;
-#define V K
-#else
-@group(0) @binding(1) var<storage, read_write> K: array<vec4<KV_TYPE>>;
-@group(0) @binding(2) var<storage, read_write> V: array<vec4<KV_TYPE>>;
-#endif
-
-#if defined(MASK) && defined(SINKS)
-#ifdef KV_OVERLAP
-@group(0) @binding(2) var<storage, read_write> mask: array<f16>;
-@group(0) @binding(3) var<storage, read_write> sinks: array<f32>;
-#define DST_BINDING 4
-#define PARAMS_BINDING 5
-#else
-@group(0) @binding(3) var<storage, read_write> mask: array<f16>;
-@group(0) @binding(4) var<storage, read_write> sinks: array<f32>;
-#define DST_BINDING 5
-#define PARAMS_BINDING 6
-#endif
-#elif defined(MASK)
-#ifdef KV_OVERLAP
-@group(0) @binding(2) var<storage, read_write> mask: array<f16>;
-#define DST_BINDING 3
-#define PARAMS_BINDING 4
-#else
-@group(0) @binding(3) var<storage, read_write> mask: array<f16>;
-#define DST_BINDING 4
-#define PARAMS_BINDING 5
-#endif
-#elif defined(SINKS)
-#ifdef KV_OVERLAP
-@group(0) @binding(2) var<storage, read_write> sinks: array<f32>;
-#define DST_BINDING 3
-#define PARAMS_BINDING 4
-#else
-@group(0) @binding(3) var<storage, read_write> sinks: array<f32>;
-#define DST_BINDING 4
-#define PARAMS_BINDING 5
-#endif
-#else
-#ifdef KV_OVERLAP
-#define DST_BINDING 2
-#define PARAMS_BINDING 3
-#else
-#define DST_BINDING 3
-#define PARAMS_BINDING 4
-#endif
-#endif
-
-@group(0) @binding(DST_BINDING) var<storage, read_write> dst: array<vec4<DST_TYPE>>;
-@group(0) @binding(PARAMS_BINDING) var<uniform> params: Params;
-
-const FLOAT_MIN: f32 = -1.0e9;
 const Q_CHUNKS: u32 = HEAD_DIM_QK / 4u;
 const V_CHUNKS: u32 = HEAD_DIM_V / 4u;
 const SCORE_REGS_PER_LANE: u32 = (KV_TILE + MIN_SUBGROUP_SIZE - 1u) / MIN_SUBGROUP_SIZE;
 const OUT_REGS_PER_LANE: u32 = (V_CHUNKS + MIN_SUBGROUP_SIZE - 1u) / MIN_SUBGROUP_SIZE;
 
+#if !defined(K_DIRECT) || !defined(V_DIRECT)
+#define STAGING_SHMEM kv_shmem
+#define STAGING_OUT_TYPE f16
+#include "flash_attn_staging.tmpl"
+const kv_shmem_size = KV_TILE * max(HEAD_DIM_QK, HEAD_DIM_V);
+var<workgroup> kv_shmem: array<f16, kv_shmem_size>;
+#endif
+
 var<workgroup> q_shmem: array<Q_TYPE, Q_TILE * HEAD_DIM_QK>;
-var<workgroup> kv_shmem: array<KV_TYPE, KV_TILE * KV_STAGE_STRIDE>;
-var<workgroup> p_shmem: array<KV_TYPE, Q_TILE * KV_TILE>;
+var<workgroup> p_shmem: array<f16, Q_TILE * KV_TILE>;
 
 @compute @workgroup_size(WG_SIZE)
 fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
@@ -206,18 +109,11 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
             local_scores[slot] = FLOAT_MIN;
         }
 
-        for (var vec_idx_local = local_id.x; vec_idx_local < kv_count * Q_CHUNKS; vec_idx_local += WG_SIZE) {
-            let kv_local = vec_idx_local / Q_CHUNKS;
-            let chunk = vec_idx_local % Q_CHUNKS;
-            let global_k_row = kv_tile + kv_local;
-            let k_vec_index = (k_head_offset + global_k_row * params.stride_k1 + chunk * 4u) >> 2u;
-            let k4 = K[k_vec_index];
-            let kv_off = kv_local * KV_STAGE_STRIDE + chunk * 4u;
-            kv_shmem[kv_off + 0u] = KV_TYPE(k4.x);
-            kv_shmem[kv_off + 1u] = KV_TYPE(k4.y);
-            kv_shmem[kv_off + 2u] = KV_TYPE(k4.z);
-            kv_shmem[kv_off + 3u] = KV_TYPE(k4.w);
-        }
+        // The tile path stages K/V in shared memory so each tile can be reused across
+        // Q_TILE query rows. It therefore does not use the direct path.
+#ifndef K_DIRECT
+        load_k_tile_block(local_id.x, kv_count, kv_tile, k_head_offset);
+#endif
 
         workgroupBarrier();
 
@@ -238,8 +134,8 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
                         q_shmem[q_off + 1u],
                         q_shmem[q_off + 2u],
                         q_shmem[q_off + 3u]);
-                    let kv_off = kv_local * KV_STAGE_STRIDE + chunk * 4u;
-                    let kv = vec4<KV_TYPE>(
+                    let kv_off = kv_local * HEAD_DIM_QK + chunk * 4u;
+                    let kv = vec4<f16>(
                         kv_shmem[kv_off + 0u],
                         kv_shmem[kv_off + 1u],
                         kv_shmem[kv_off + 2u],
@@ -271,25 +167,18 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
             let kv_local = sg_inv_id + slot * subgroup_size;
             if (row_active && kv_local < kv_count) {
                 let p = exp(local_scores[slot] - new_max);
-                p_shmem[subgroup_p_offset + kv_local] = KV_TYPE(p);
+                p_shmem[subgroup_p_offset + kv_local] = f16(p);
                 local_sum += p;
             }
         }
 
         workgroupBarrier();
 
-        for (var vec_idx_local = local_id.x; vec_idx_local < kv_count * V_CHUNKS; vec_idx_local += WG_SIZE) {
-            let kv_local = vec_idx_local / V_CHUNKS;
-            let chunk = vec_idx_local % V_CHUNKS;
-            let global_v_row = kv_tile + kv_local;
-            let v_vec_index = (v_head_offset + global_v_row * params.stride_v1 + chunk * 4u) >> 2u;
-            let v4 = V[v_vec_index];
-            let kv_off = kv_local * KV_STAGE_STRIDE + chunk * 4u;
-            kv_shmem[kv_off + 0u] = KV_TYPE(v4.x);
-            kv_shmem[kv_off + 1u] = KV_TYPE(v4.y);
-            kv_shmem[kv_off + 2u] = KV_TYPE(v4.z);
-            kv_shmem[kv_off + 3u] = KV_TYPE(v4.w);
-        }
+        // The tile path stages K/V in shared memory so each tile can be reused across
+        // Q_TILE query rows. It therefore does not use the direct path.
+#ifndef V_DIRECT
+        load_v_tile_block(local_id.x, kv_count, kv_tile, v_head_offset);
+#endif
 
         workgroupBarrier();
 
@@ -306,14 +195,14 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
 
                 var acc = out_regs[reg_idx];
                 for (var kv_local = 0u; kv_local < kv_count; kv_local += 1u) {
-                    let p = p_shmem[subgroup_p_offset + kv_local];
-                    let kv_off = kv_local * KV_STAGE_STRIDE + chunk * 4u;
-                    let v4 = vec4<KV_TYPE>(
+                    let p = f32(p_shmem[subgroup_p_offset + kv_local]);
+                    let kv_off = kv_local * HEAD_DIM_V + chunk * 4u;
+                    let v4 = vec4<f16>(
                         kv_shmem[kv_off + 0u],
                         kv_shmem[kv_off + 1u],
                         kv_shmem[kv_off + 2u],
                         kv_shmem[kv_off + 3u]);
-                    acc += f32(p) * vec4<f32>(v4);
+                    acc += p * vec4<f32>(v4);
                 }
                 out_regs[reg_idx] = acc;
             }

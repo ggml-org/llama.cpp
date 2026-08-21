@@ -1,10 +1,8 @@
 import { CLI_FLAGS } from '$lib/constants';
-import { SvelteSet } from 'svelte/reactivity';
 import { ToolSource } from '$lib/enums';
-import { conversationsStore } from '$lib/stores/conversations.svelte';
-import { mcpStore } from '$lib/stores/mcp.svelte';
-import { toolsStore } from '$lib/stores/tools.svelte';
+import { conversationsStore, mcpStore, toolsStore } from '$lib/stores';
 import type { ToolGroup } from '$lib/types';
+import { SvelteSet } from 'svelte/reactivity';
 
 export interface UseToolsPanelReturn {
 	readonly expandedGroups: SvelteSet<string>;
@@ -12,11 +10,13 @@ export interface UseToolsPanelReturn {
 	readonly activeGroups: ToolGroup[];
 	readonly totalToolCount: number;
 	readonly noToolsInfoMessage: string | null;
-	getGroupCheckedState(group: ToolGroup): { checked: boolean; indeterminate: boolean };
+	isGroupChecked(group: ToolGroup): boolean;
 	getEnabledToolCount(group: ToolGroup): number;
-	getFavicon(group: { source: ToolSource; label: string }): string | null;
+	getFavicon(group: ToolGroup): string | null;
 	isGroupDisabled(group: ToolGroup): boolean;
-	toggleGroupExpanded(label: string): void;
+	toggleGroupExpanded(key: string): void;
+	/** Toggle all tools in a group by its stable key (avoids stale group object references). */
+	toggleGroupByKey(key: string): void;
 	handleOpen(): void;
 }
 
@@ -29,94 +29,99 @@ export interface UseToolsPanelReturn {
  */
 export function useToolsPanel(): UseToolsPanelReturn {
 	const expandedGroups = new SvelteSet<string>();
-
 	const groups = $derived(toolsStore.toolGroups);
 	const activeGroups = $derived(
 		groups.filter(
 			(g) =>
 				g.source !== ToolSource.MCP ||
 				!g.serverId ||
-				conversationsStore.isMcpServerEnabledForChat(g.serverId)
+				conversationsStore.preferences.isMcpServerEnabledForChat(g.serverId)
 		)
 	);
 	const totalToolCount = $derived(activeGroups.reduce((n, g) => n + g.tools.length, 0));
 	const noToolsInfoMessage = $derived.by(() => {
 		if (toolsStore.loading) return null;
+
 		if (toolsStore.toolGroups.length > 0) return null;
+
 		// Tools endpoint is unreachable (404) — server started without --tools
 		if (toolsStore.isToolsEndpointUnreachable) {
-			return `To enable Built-In Tools you need to run llama-server with ${CLI_FLAGS.TOOLS} all or ${CLI_FLAGS.TOOLS} <name> flag. To see MCP Tools you need to add / enable MCP Server(s).`;
+			return `To enable Server Tools you need to run llama-server with ${CLI_FLAGS.TOOLS} all or ${CLI_FLAGS.TOOLS} <name> flag. To see MCP Tools you need to add / enable MCP Server(s).`;
 		}
+
 		// Other errors — return null so UI shows "Failed to load tools"
 		if (toolsStore.error) return null;
-		return `To enable Built-In Tools you need to run llama-server with ${CLI_FLAGS.TOOLS} all or ${CLI_FLAGS.TOOLS} <name> flag. To see MCP Tools you need to add / enable MCP Server(s).`;
+
+		return `To enable Server Tools you need to run llama-server with ${CLI_FLAGS.TOOLS} all or ${CLI_FLAGS.TOOLS} <name> flag. To see MCP Tools you need to add / enable MCP Server(s).`;
 	});
 
-	function getGroupCheckedState(group: ToolGroup): { checked: boolean; indeterminate: boolean } {
-		return {
-			checked: toolsStore.isGroupFullyEnabled(group),
-			indeterminate: toolsStore.isGroupPartiallyEnabled(group)
-		};
+	function isGroupChecked(group: ToolGroup): boolean {
+		return toolsStore.isGroupFullyEnabled(group);
 	}
 
 	function getEnabledToolCount(group: ToolGroup): number {
-		return group.tools.filter((tool) => toolsStore.isToolEnabled(tool.function.name)).length;
+		return group.tools.filter((tool) => toolsStore.isToolEnabled(tool.key)).length;
 	}
 
-	function getFavicon(group: { source: ToolSource; label: string }): string | null {
-		if (group.source !== ToolSource.MCP) return null;
+	function getFavicon(group: ToolGroup): string | null {
+		if (group.source !== ToolSource.MCP || !group.serverId) return null;
 
-		for (const server of mcpStore.getServersSorted()) {
-			if (mcpStore.getServerLabel(server) === group.label) {
-				return mcpStore.getServerFavicon(server.id);
-			}
-		}
-
-		return null;
+		return mcpStore.getServerFavicon(group.serverId);
 	}
 
 	function isGroupDisabled(group: ToolGroup): boolean {
 		return (
 			group.source === ToolSource.MCP &&
 			!!group.serverId &&
-			!conversationsStore.isMcpServerEnabledForChat(group.serverId)
+			!conversationsStore.preferences.isMcpServerEnabledForChat(group.serverId)
 		);
 	}
 
-	function toggleGroupExpanded(label: string): void {
-		if (expandedGroups.has(label)) {
-			expandedGroups.delete(label);
+	function toggleGroupExpanded(key: string): void {
+		if (expandedGroups.has(key)) {
+			expandedGroups.delete(key);
 		} else {
-			expandedGroups.add(label);
+			expandedGroups.add(key);
 		}
+	}
+
+	function toggleGroupByKey(key: string): void {
+		// Find current group by key to get up-to-date tool references
+		const group = activeGroups.find((g) => g.key === key);
+
+		if (!group) return;
+
+		toolsStore.toggleGroup(group);
 	}
 
 	function handleOpen(): void {
-		if (toolsStore.builtinTools.length === 0 && !toolsStore.loading) {
-			toolsStore.fetchBuiltinTools();
+		if (toolsStore.serverTools.length === 0 && !toolsStore.loading) {
+			toolsStore.fetchServerTools();
 		}
-		mcpStore.runHealthChecksForServers(mcpStore.getServersSorted().filter((s) => s.enabled));
+
+		mcpStore.runHealthChecksForServers(mcpStore.getServers().filter((s) => s.enabled));
 	}
 
 	return {
-		expandedGroups,
-		get groups() {
-			return groups;
-		},
 		get activeGroups() {
 			return activeGroups;
 		},
-		get totalToolCount() {
-			return totalToolCount;
+		expandedGroups,
+		getEnabledToolCount,
+		getFavicon,
+		get groups() {
+			return groups;
 		},
+		handleOpen,
+		isGroupChecked,
+		isGroupDisabled,
 		get noToolsInfoMessage() {
 			return noToolsInfoMessage;
 		},
-		getGroupCheckedState,
-		getEnabledToolCount,
-		getFavicon,
-		isGroupDisabled,
+		toggleGroupByKey,
 		toggleGroupExpanded,
-		handleOpen
+		get totalToolCount() {
+			return totalToolCount;
+		}
 	};
 }

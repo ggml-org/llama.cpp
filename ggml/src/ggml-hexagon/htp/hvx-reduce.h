@@ -286,6 +286,46 @@ static inline float hvx_sum_of_squares_f32(const uint8_t * restrict src, const i
     }
 }
 
+// Signed 32-bit Integer Max variants
+
+static inline HVX_Vector hvx_vec_reduce_max_n_i32(HVX_Vector in, unsigned int n) {
+    unsigned int total = n * 4;  // total vec nbytes
+    unsigned int width = 4;      // int32 nbytes
+
+    HVX_Vector max_val = in, max_t;
+    while (width < total) {
+        max_t = Q6_V_vror_VR(max_val, width);          // rotate right
+        max_val = Q6_Vw_vmax_VwVw(max_t, max_val);      // elementwise signed max
+        width = width << 1;
+    }
+    return max_val;
+}
+
+static inline HVX_Vector hvx_vec_reduce_max_i32(HVX_Vector in) {
+    return hvx_vec_reduce_max_n_i32(in, 32);
+}
+
+static inline int32_t hvx_reduce_max_i32_a(const uint8_t * restrict src, const int num_elems) {
+    HVX_Vector init_vec = Q6_V_vsplat_R(((const int32_t *) src)[0]);
+    HVX_Vector pad_vec  = Q6_V_vsplat_R(0x80000000);
+    assert((uintptr_t) src % 128 == 0);
+    hvx_reduce_loop_body(HVX_Vector, init_vec, pad_vec, Q6_Vw_vmax_VwVw, hvx_vec_reduce_max_i32, hvx_vec_get_i32);
+}
+
+static inline int32_t hvx_reduce_max_i32_u(const uint8_t * restrict src, const int num_elems) {
+    HVX_Vector init_vec = Q6_V_vsplat_R(((const int32_t *) src)[0]);
+    HVX_Vector pad_vec  = Q6_V_vsplat_R(0x80000000);
+    hvx_reduce_loop_body(HVX_UVector, init_vec, pad_vec, Q6_Vw_vmax_VwVw, hvx_vec_reduce_max_i32, hvx_vec_get_i32);
+}
+
+static inline int32_t hvx_reduce_max_i32(const uint8_t * restrict src, const int num_elems) {
+    if (hex_is_aligned((void *) src, 128)) {
+        return hvx_reduce_max_i32_a(src, num_elems);
+    } else {
+        return hvx_reduce_max_i32_u(src, num_elems);
+    }
+}
+
 #undef hvx_reduce_loop_body
 #undef HVX_REDUCE_MAX_OP
 #undef HVX_REDUCE_SUM_OP

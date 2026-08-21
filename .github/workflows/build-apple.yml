@@ -60,10 +60,10 @@ jobs:
             -DCMAKE_BUILD_RPATH="@loader_path" \
             -DLLAMA_FATAL_WARNINGS=ON \
             -DLLAMA_BUILD_BORINGSSL=ON \
-            -DGGML_METAL_USE_BF16=ON \
             -DGGML_METAL_EMBED_LIBRARY=OFF \
             -DGGML_METAL_SHADER_DEBUG=ON \
-            -DGGML_RPC=ON
+            -DGGML_RPC=ON \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=13.3
           time cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
           leaks -atExit -- ./build/bin/test-thread-safety -hf ggml-org/gemma-3-270m-qat-GGUF -ngl 99 -p "$(printf 'hello %.0s' {1..128})" -n 16 -c 512 -ub 32 -np 2 -t 2 -lv 1
 
@@ -109,40 +109,6 @@ jobs:
           cd build
           ctest -L main --verbose --timeout 900
 
-  macos-latest-ios:
-    runs-on: macos-latest
-
-    steps:
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v6
-
-      # TODO: this likely does not do anything - if yes, remove it
-      - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
-        with:
-          key: apple-ios
-          evict-old-files: 1d
-          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
-
-      - name: Build
-        id: cmake_build
-        run: |
-          sysctl -a
-          cmake -B build -G Xcode \
-            -DGGML_METAL_USE_BF16=ON \
-            -DGGML_METAL_EMBED_LIBRARY=ON \
-            -DLLAMA_BUILD_APP=OFF \
-            -DLLAMA_BUILD_COMMON=OFF \
-            -DLLAMA_BUILD_EXAMPLES=OFF \
-            -DLLAMA_BUILD_TOOLS=OFF \
-            -DLLAMA_BUILD_TESTS=OFF \
-            -DLLAMA_BUILD_SERVER=OFF \
-            -DCMAKE_SYSTEM_NAME=iOS \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
-            -DCMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM=ggml
-          cmake --build build --config Release -j $(sysctl -n hw.logicalcpu) -- CODE_SIGNING_ALLOWED=NO
-
   macos-latest-ios-xcode:
     runs-on: macos-latest
 
@@ -160,7 +126,6 @@ jobs:
         run: |
           sysctl -a
           cmake -B build -G Xcode \
-            -DGGML_METAL_USE_BF16=ON \
             -DGGML_METAL_EMBED_LIBRARY=ON \
             -DLLAMA_OPENSSL=OFF \
             -DLLAMA_BUILD_APP=OFF \
@@ -211,7 +176,6 @@ jobs:
         run: |
           sysctl -a
           cmake -B build -G Xcode \
-            -DGGML_METAL_USE_BF16=ON \
             -DGGML_METAL_EMBED_LIBRARY=ON \
             -DLLAMA_BUILD_COMMON=OFF \
             -DLLAMA_BUILD_APP=OFF \
@@ -245,7 +209,6 @@ jobs:
         run: |
           sysctl -a
           cmake -B build -G Xcode \
-            -DGGML_METAL_USE_BF16=ON \
             -DGGML_METAL_EMBED_LIBRARY=ON \
             -DLLAMA_BUILD_COMMON=OFF \
             -DLLAMA_BUILD_APP=OFF \
@@ -290,7 +253,6 @@ jobs:
         run: |
           sysctl -a
           cmake -B build -G Xcode \
-            -DGGML_METAL_USE_BF16=ON \
             -DGGML_METAL_EMBED_LIBRARY=ON \
             -DLLAMA_OPENSSL=OFF \
             -DLLAMA_BUILD_APP=OFF \

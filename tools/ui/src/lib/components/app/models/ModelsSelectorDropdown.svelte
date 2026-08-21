@@ -1,9 +1,7 @@
 <script lang="ts">
-	import { ChevronDown, Loader2, Package } from '@lucide/svelte';
-	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
-	import * as Tooltip from '$lib/components/ui/tooltip';
-	import { KeyboardKey } from '$lib/enums';
-	import { useModelsSelector } from '$lib/hooks/use-models-selector.svelte';
+	import ModelLoadHighlight from './ModelLoadHighlight.svelte';
+	import type { ModelItem } from './utils';
+	import { ChevronDown, Loader2 } from '@lucide/svelte';
 	import {
 		DialogModelInformation,
 		DropdownMenuSearchable,
@@ -11,7 +9,13 @@
 		ModelsSelectorList,
 		ModelsSelectorOption
 	} from '$lib/components/app';
-	import type { ModelItem } from './utils';
+	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
+	import * as Tooltip from '$lib/components/ui/tooltip';
+	import { MODEL_SELECTOR_ICON } from '$lib/constants';
+	import { KeyboardKey, ServerModelStatus } from '$lib/enums';
+	import { useModelsSelector } from '$lib/hooks/use-models-selector.svelte';
+	import { modelsStore } from '$lib/stores';
+	import { modelLoadFraction } from '$lib/utils';
 
 	interface Props {
 		class?: string;
@@ -32,22 +36,88 @@
 	}: Props = $props();
 
 	let isOpen = $state(false);
-	let highlightedIndex = $state<number>(-1);
+	let highlightedId = $state<string | null>(null);
 
 	const ms = useModelsSelector({
 		currentModel: () => currentModel,
-		useGlobalSelection: () => useGlobalSelection,
 		onModelChange: () => onModelChange,
 		onOpenChange: (open) => {
 			isOpen = open;
-			highlightedIndex = -1;
-		}
+			highlightedId = null;
+		},
+		useGlobalSelection: () => useGlobalSelection
 	});
 
 	$effect(() => {
 		void ms.searchTerm;
-		highlightedIndex = -1;
+		highlightedId = null;
 	});
+
+	// Focus the dropdown's search box without scrolling the page. bits-ui
+	// auto-focuses the opened content by default, which can yank the page
+	// scroll; we prevent that on the Content and refocus the search here.
+	$effect(() => {
+		if (!isOpen) return;
+
+		requestAnimationFrame(() => {
+			const search = document.querySelector<HTMLElement>(
+				'[data-slot="dropdown-menu-content"] input'
+			);
+
+			search?.focus({ preventScroll: true });
+		});
+	});
+
+	// Keyboard navigation follows the on-screen row order, not the flat option list order.
+	let visualOrder = $derived.by(() => {
+		const order: string[] = [];
+
+		for (const item of ms.groupedFilteredOptions.loaded) order.push(item.option.id);
+		for (const item of ms.groupedFilteredOptions.favorites) order.push(item.option.id);
+		for (const group of ms.groupedFilteredOptions.available) {
+			for (const item of group.items) order.push(item.option.id);
+		}
+
+		return order;
+	});
+
+	let highlightedIndex = $derived(highlightedId ? visualOrder.indexOf(highlightedId) : -1);
+
+	function moveHighlight(direction: 1 | -1) {
+		const len = visualOrder.length;
+
+		if (len === 0) {
+			highlightedId = null;
+
+			return;
+		}
+
+		let index = highlightedIndex;
+
+		if (index === -1) {
+			index = direction === 1 ? 0 : len - 1;
+		} else {
+			index = (index + direction + len) % len;
+		}
+
+		highlightedId = visualOrder[index];
+	}
+
+	// Alt+Enter only unloads and keeps the dropdown open.
+	async function handleModelKeyAction(modelId: string, unload: boolean) {
+		if (!unload) {
+			void ms.handleSelect(modelId);
+
+			return;
+		}
+
+		const model = modelsStore.routerModels.find((m) => m.id === modelId);
+		const status = model?.status?.value as ServerModelStatus | undefined;
+
+		if (status === ServerModelStatus.LOADING) return;
+
+		await modelsStore.status.unload(modelId);
+	}
 
 	export function open() {
 		ms.handleOpenChange(true);
@@ -58,33 +128,17 @@
 
 		if (event.key === KeyboardKey.ARROW_DOWN) {
 			event.preventDefault();
-
-			if (ms.filteredOptions.length === 0) return;
-
-			if (highlightedIndex === -1 || highlightedIndex === ms.filteredOptions.length - 1) {
-				highlightedIndex = 0;
-			} else {
-				highlightedIndex += 1;
-			}
+			moveHighlight(1);
 		} else if (event.key === KeyboardKey.ARROW_UP) {
 			event.preventDefault();
-
-			if (ms.filteredOptions.length === 0) return;
-
-			if (highlightedIndex === -1 || highlightedIndex === 0) {
-				highlightedIndex = ms.filteredOptions.length - 1;
-			} else {
-				highlightedIndex -= 1;
-			}
+			moveHighlight(-1);
 		} else if (event.key === KeyboardKey.ENTER) {
 			event.preventDefault();
 
-			if (highlightedIndex >= 0 && highlightedIndex < ms.filteredOptions.length) {
-				const option = ms.filteredOptions[highlightedIndex];
-
-				ms.handleSelect(option.id);
-			} else if (ms.filteredOptions.length > 0) {
-				highlightedIndex = 0;
+			if (highlightedId) {
+				void handleModelKeyAction(highlightedId, event.altKey);
+			} else if (visualOrder.length > 0) {
+				highlightedId = visualOrder[0];
 			}
 		}
 	}
@@ -106,67 +160,84 @@
 				]}
 				style="max-width: min(calc(100cqw - 10rem), 20rem)"
 			>
-				<Package class="h-3.5 w-3.5" />
-
-				<ModelId modelId={currentModel} class="min-w-0" hideQuantization />
+				<MODEL_SELECTOR_ICON class="h-3.5 w-3.5 shrink-0" />
 			</span>
 		{:else}
 			<p class="text-xs text-muted-foreground">No models available.</p>
 		{/if}
 	{:else}
 		{@const selectedOption = ms.getDisplayOption()}
+		{@const triggerModel = selectedOption?.model}
+		{@const triggerStatus = triggerModel
+			? modelsStore.routerModels.find((m) => m.id === triggerModel)?.status?.value
+			: undefined}
+		{@const triggerLoading =
+			!!triggerModel &&
+			(triggerStatus === ServerModelStatus.LOADING ||
+				modelsStore.status.isOperationInProgress(triggerModel))}
+		{@const triggerLoadPercent = triggerLoading
+			? Math.round(modelLoadFraction(modelsStore.status.getLoadProgress(triggerModel)) * 100)
+			: 0}
 
 		{#if ms.isRouter}
 			<DropdownMenu.Root bind:open={isOpen} onOpenChange={ms.handleOpenChange}>
-				<DropdownMenu.Trigger
-					class={[
-						`inline-grid cursor-pointer grid-cols-[1fr_auto_1fr] items-center gap-1.5 rounded-sm bg-background px-1.5 py-1 text-xs shadow-sm transition hover:bg-muted-foreground/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-muted-foreground/15 dark:text-secondary-foreground`,
-						!ms.isCurrentModelInCache
-							? 'bg-red-400/10 !text-red-400 hover:bg-red-400/20 hover:text-red-400'
-							: forceForegroundText
-								? 'text-foreground'
-								: ms.isHighlightedCurrentModelActive
-									? 'text-foreground'
-									: 'text-foreground',
-						isOpen && 'text-foreground',
-						'max-w-[min(calc(100vw-4rem) md:max-w-[min(calc(100cqw-9rem),25rem)]'
-					]}
-					disabled={disabled || ms.updating}
-				>
-					<Package class="h-3.5 w-3.5" />
+				<Tooltip.Root>
+					<Tooltip.Trigger>
+						<!-- prevent another nested button element -->
+						{#snippet child({ props })}
+							<DropdownMenu.Trigger
+								{...props}
+								class={[
+									`relative inline-grid cursor-pointer grid-cols-[1fr_auto_1fr] items-center gap-1.5 rounded-sm bg-background px-1.5 py-1 text-xs shadow-sm transition hover:bg-muted-foreground/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-muted-foreground/15 dark:text-secondary-foreground`,
+									!ms.isCurrentModelInCache
+										? 'bg-red-400/10 !text-red-400 hover:bg-red-400/20 hover:text-red-400'
+										: forceForegroundText
+											? 'text-foreground'
+											: ms.isHighlightedCurrentModelActive
+												? 'text-foreground'
+												: 'text-foreground',
+									isOpen && 'text-foreground',
+									'max-w-[min(calc(100vw-4rem) md:max-w-[min(calc(100cqw-9rem),25rem)]'
+								]}
+								disabled={disabled || ms.updating}
+							>
+								<MODEL_SELECTOR_ICON class="h-3.5 w-3.5 shrink-0" />
 
-					{#if selectedOption}
-						<Tooltip.Root>
-							<Tooltip.Trigger>
-								<!-- prevent another nested button element -->
-								{#snippet child({ props })}
+								{#if selectedOption}
 									<ModelId
 										modelId={selectedOption.model}
 										class="min-w-0 overflow-hidden"
 										hideOrgName={false}
-										{...props}
+										hideQuantization
 									/>
-								{/snippet}
-							</Tooltip.Trigger>
+								{:else}
+									<span class="min-w-0 font-medium">Select model</span>
+								{/if}
 
-							<Tooltip.Content>
-								<p class="font-mono">{selectedOption.model}</p>
-							</Tooltip.Content>
-						</Tooltip.Root>
-					{:else}
-						<span class="min-w-0 font-medium">Select model</span>
-					{/if}
+								{#if ms.updating || ms.isLoadingModel}
+									<Loader2 class="h-3 w-3.5 shrink-0 animate-spin" />
+								{:else}
+									<ChevronDown class="h-3 w-3.5 shrink-0" />
+								{/if}
 
-					{#if ms.updating || ms.isLoadingModel}
-						<Loader2 class="h-3 w-3.5 animate-spin" />
-					{:else}
-						<ChevronDown class="h-3 w-3.5" />
+								{#if triggerLoading}
+									<ModelLoadHighlight percent={triggerLoadPercent} />
+								{/if}
+							</DropdownMenu.Trigger>
+						{/snippet}
+					</Tooltip.Trigger>
+
+					{#if selectedOption}
+						<Tooltip.Content>
+							<p class="font-mono">{selectedOption.model}</p>
+						</Tooltip.Content>
 					{/if}
-				</DropdownMenu.Trigger>
+				</Tooltip.Root>
 
 				<DropdownMenu.Content
 					align="end"
 					class="w-full max-w-[100vw] pt-0 sm:w-max sm:max-w-[calc(100vw-2rem)]"
+					onOpenAutoFocus={(event) => event.preventDefault()}
 				>
 					<DropdownMenuSearchable
 						searchValue={ms.searchTerm}
@@ -198,9 +269,9 @@
 							{/if}
 
 							{#snippet modelOption(item: ModelItem, hideOrgName: boolean)}
-								{@const { option, flatIndex } = item}
+								{@const { option } = item}
 								{@const isSelected = currentModel === option.model || ms.activeId === option.id}
-								{@const isHighlighted = flatIndex === highlightedIndex}
+								{@const isHighlighted = option.id === highlightedId}
 								{@const isFav = ms.isFavorite(option.model)}
 
 								<ModelsSelectorOption
@@ -211,11 +282,11 @@
 									{hideOrgName}
 									onSelect={ms.handleSelect}
 									onInfoClick={ms.handleInfoClick}
-									onMouseEnter={() => (highlightedIndex = flatIndex)}
+									onMouseEnter={() => (highlightedId = option.id)}
 									onKeyDown={(event) => {
 										if (event.key === KeyboardKey.ENTER || event.key === KeyboardKey.SPACE) {
 											event.preventDefault();
-											ms.handleSelect(option.id);
+											void handleModelKeyAction(option.id, event.altKey);
 										}
 									}}
 								/>
@@ -235,48 +306,51 @@
 				</DropdownMenu.Content>
 			</DropdownMenu.Root>
 		{:else}
-			<button
-				class={[
-					`inline-flex cursor-pointer items-center gap-1.5 rounded-sm bg-background px-1.5 py-1 text-xs shadow-sm transition hover:bg-muted-foreground/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-muted-foreground/15 dark:text-secondary-foreground`,
-					!ms.isCurrentModelInCache
-						? 'bg-red-400/10 !text-red-400 hover:bg-red-400/20 hover:text-red-400'
-						: forceForegroundText
-							? 'text-foreground'
-							: ms.isHighlightedCurrentModelActive
-								? 'text-foreground'
-								: 'text-foreground',
-					isOpen && 'text-foreground'
-				]}
-				style="max-width: min(calc(100cqw - 6.5rem), 32rem)"
-				onclick={() => ms.handleOpenChange(true)}
-				disabled={disabled || ms.updating}
-			>
-				<Package class="h-3.5 w-3.5" />
+			<Tooltip.Root>
+				<Tooltip.Trigger>
+					<!-- prevent another nested button element -->
+					{#snippet child({ props })}
+						<button
+							{...props}
+							class={[
+								`inline-flex cursor-pointer items-center gap-1.5 rounded-sm bg-background px-1.5 py-1 text-xs shadow-sm transition hover:bg-muted-foreground/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-muted-foreground/15 dark:text-secondary-foreground`,
+								!ms.isCurrentModelInCache
+									? 'bg-red-400/10 !text-red-400 hover:bg-red-400/20 hover:text-red-400'
+									: forceForegroundText
+										? 'text-foreground'
+										: ms.isHighlightedCurrentModelActive
+											? 'text-foreground'
+											: 'text-foreground',
+								isOpen && 'text-foreground'
+							]}
+							style="max-width: min(calc(100cqw - 6.5rem), 32rem)"
+							onclick={() => ms.handleOpenChange(true)}
+							disabled={disabled || ms.updating}
+						>
+							<MODEL_SELECTOR_ICON class="h-3.5 w-3.5 shrink-0" />
 
-				{#if selectedOption}
-					<Tooltip.Root>
-						<Tooltip.Trigger>
-							<!-- prevent another nested button element -->
-							{#snippet child({ props })}
+							{#if selectedOption}
 								<ModelId
 									modelId={selectedOption.model}
 									class="min-w-0 overflow-hidden"
 									hideOrgName={false}
-									{...props}
+									hideQuantization
 								/>
-							{/snippet}
-						</Tooltip.Trigger>
+							{/if}
 
-						<Tooltip.Content>
-							<p class="font-mono">{selectedOption.model}</p>
-						</Tooltip.Content>
-					</Tooltip.Root>
-				{/if}
+							{#if ms.updating}
+								<Loader2 class="h-3 w-3.5 shrink-0 animate-spin" />
+							{/if}
+						</button>
+					{/snippet}
+				</Tooltip.Trigger>
 
-				{#if ms.updating}
-					<Loader2 class="h-3 w-3.5 animate-spin" />
+				{#if selectedOption}
+					<Tooltip.Content>
+						<p class="font-mono">{selectedOption.model}</p>
+					</Tooltip.Content>
 				{/if}
-			</button>
+			</Tooltip.Root>
 		{/if}
 	{/if}
 </div>

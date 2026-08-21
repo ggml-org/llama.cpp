@@ -1,9 +1,15 @@
-import type { SETTING_CONFIG_DEFAULT, SETTINGS_SECTION_TITLES } from '$lib/constants';
 import type { ChatMessagePromptProgress, ChatMessageTimings } from './chat';
-import type { OpenAIToolDefinition } from './mcp';
 import type { DatabaseMessageExtra } from './database';
-import type { ParameterSource, SyncableParameterType, SettingsFieldType } from '$lib/enums';
+import type { OpenAIToolDefinition } from './mcp';
 import type { Icon } from '@lucide/svelte';
+import type { SETTING_CONFIG_DEFAULT, SETTINGS_SECTION_TITLES } from '$lib/constants';
+import type {
+	ParameterSource,
+	ReasoningEffort,
+	SettingsFieldType,
+	StreamConnectionState,
+	SyncableParameterType
+} from '$lib/enums';
 import type { Component } from 'svelte';
 
 export type SettingsConfigValue = string | number | boolean | undefined;
@@ -21,8 +27,15 @@ export interface SettingsEntry {
 	type: SettingsFieldType;
 	section?: string;
 	options?: Array<{ value: string; label: string; icon: Component }>;
+	/** Options rendered for RADIO fields. Each entry maps a `value` (the radio's selected value) to the underlying config `key` whose boolean state mirrors it. */
+	radioOptions?: Array<{ value: string; label: string; key: string; isExperimental?: boolean }>;
 	isExperimental?: boolean;
 	isPositiveInteger?: boolean;
+	isPrivate?: boolean;
+	placeholder?: string;
+	min?: number;
+	max?: number;
+	dependsOn?: string;
 	sync?: {
 		serverKey: string;
 		paramType: SyncableParameterType;
@@ -43,8 +56,15 @@ export interface SettingsFieldConfig {
 	type: SettingsFieldType;
 	isExperimental?: boolean;
 	isPositiveInteger?: boolean;
+	isPrivate?: boolean;
+	placeholder?: string;
+	min?: number;
+	max?: number;
+	dependsOn?: string;
 	help?: string;
 	options?: Array<{ value: string; label: string; icon?: typeof Icon }>;
+	/** Options rendered for RADIO fields. Each entry maps a `value` (the radio's selected value) to the underlying config `key` whose boolean state mirrors it. */
+	radioOptions?: Array<{ value: string; label: string; key: string; isExperimental?: boolean }>;
 }
 
 /** Re-exported for backward compatibility. */
@@ -65,6 +85,10 @@ export interface SettingsChatServiceOptions {
 	disableReasoningParsing?: boolean;
 	// Strip reasoning content from context before sending
 	excludeReasoningFromContext?: boolean;
+	// Enable model thinking/reasoning via chat_template_kwargs
+	enableThinking?: boolean;
+	// Reasoning effort level (low/medium/high/max) for thinking models
+	reasoningEffort?: ReasoningEffort;
 	tools?: OpenAIToolDefinition[];
 	// Generation parameters
 	temperature?: number;
@@ -90,8 +114,8 @@ export interface SettingsChatServiceOptions {
 	// Sampler configuration
 	samplers?: string | string[];
 	backend_sampling?: boolean;
-	// Custom parameters
-	custom?: string;
+	// Custom JSON parameters
+	customJson?: string;
 	timings_per_token?: boolean;
 	// Continuation control (vLLM compat), opt in to the explicit continue final message flag
 	continueFinalMessage?: boolean;
@@ -101,6 +125,7 @@ export interface SettingsChatServiceOptions {
 	onToolCallChunk?: (chunk: string) => void;
 	onAttachments?: (extras: DatabaseMessageExtra[]) => void;
 	onModel?: (model: string) => void;
+	onCompletionId?: (id: string) => void;
 	onTimings?: (timings?: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => void;
 	onComplete?: (
 		response: string,
@@ -109,6 +134,7 @@ export interface SettingsChatServiceOptions {
 		toolCalls?: string
 	) => void;
 	onError?: (error: Error) => void;
+	onConnectionState?: (state: StreamConnectionState) => void;
 }
 
 export type SettingsConfigType = typeof SETTING_CONFIG_DEFAULT & {

@@ -39,8 +39,8 @@ if (WIN32)
         set(CMAKE_CXX_COMPILER "icx")
         set(CMAKE_CXX_COMPILER_ID "IntelLLVM")
     endif()
-    # Level Zero SDK path for Windows (only when GGML_SYCL_SUPPORT_LEVEL_ZERO is enabled)
-    if(GGML_SYCL_SUPPORT_LEVEL_ZERO)
+    # Level Zero SDK path for Windows (only when GGML_SYCL_SUPPORT_LEVEL_ZERO_API is enabled)
+    if(GGML_SYCL_SUPPORT_LEVEL_ZERO_API)
         if(DEFINED ENV{LEVEL_ZERO_V1_SDK_PATH})
             set(LEVEL_ZERO_V1_SDK_PATH $ENV{LEVEL_ZERO_V1_SDK_PATH})
             if(EXISTS "${LEVEL_ZERO_V1_SDK_PATH}")
@@ -105,8 +105,8 @@ endif()
 
 target_compile_options(ggml-sycl PRIVATE "-Wno-narrowing")
 
-message(STATUS "GGML_SYCL_SUPPORT_LEVEL_ZERO ${GGML_SYCL_SUPPORT_LEVEL_ZERO}")
-if (GGML_SYCL_SUPPORT_LEVEL_ZERO)
+message(STATUS "GGML_SYCL_SUPPORT_LEVEL_ZERO_API ${GGML_SYCL_SUPPORT_LEVEL_ZERO_API}")
+if (GGML_SYCL_SUPPORT_LEVEL_ZERO_API)
     # Link against Level Zero loader for direct device memory allocation.
     # Avoids sycl::malloc_device triggering DMA-buf/TTM system RAM staging
     # in the xe kernel driver during multi-GPU inference.
@@ -114,7 +114,7 @@ if (GGML_SYCL_SUPPORT_LEVEL_ZERO)
     find_library(ZE_LOADER_LIB ze_loader HINTS ${ONEAPI_ROOT}/lib ${LEVEL_ZERO_V1_SDK_LIB_PATH} ENV LD_LIBRARY_PATH)
     if(ZE_LOADER_LIB AND LEVEL_ZERO_INCLUDE_DIR)
         target_link_libraries(ggml-sycl PRIVATE ${ZE_LOADER_LIB})
-        target_compile_definitions(ggml-sycl PRIVATE GGML_SYCL_SUPPORT_LEVEL_ZERO)
+        target_compile_definitions(ggml-sycl PRIVATE GGML_SYCL_SUPPORT_LEVEL_ZERO_API)
         message(STATUS "Level Zero loader found: ${ZE_LOADER_LIB}")
         message(STATUS "Level Zero headers found: ${LEVEL_ZERO_INCLUDE_DIR}")
     else()
@@ -199,9 +199,20 @@ if (GGML_SYCL_DEVICE_ARCH)
         -fsycl-targets=spir64_gen
         "SHELL:-Xsycl-target-backend=spir64_gen \"-device ${GGML_SYCL_DEVICE_ARCH}\""
     )
+
+    # Pass through parallel job (process) count for parallelising the
+    # `llvm-foreach -- ocloc` invocation for compiling AOT device images.
+    include(ProcessorCount)
+    ProcessorCount(_ggml_sycl_nproc)
+    if (_ggml_sycl_nproc LESS 1)
+        set(_ggml_sycl_nproc 1)
+    endif()
+    set(GGML_SYCL_MAX_PARALLEL_LINK_JOBS ${_ggml_sycl_nproc} CACHE STRING
+        "Parallel ocloc jobs for spir64_gen AOT device-image lowering")
     target_link_options(
         ggml-sycl PRIVATE
         -fsycl-targets=spir64_gen
         "SHELL:-Xsycl-target-backend=spir64_gen \"-device ${GGML_SYCL_DEVICE_ARCH}\""
+        -fsycl-max-parallel-link-jobs=${GGML_SYCL_MAX_PARALLEL_LINK_JOBS}
     )
 endif()

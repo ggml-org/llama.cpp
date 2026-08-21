@@ -8,7 +8,7 @@ void llama_model_bailingmoe::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_EXPERT_WEIGHTS_SCALE,        hparams.expert_weights_scale, false);
     ml.get_key(LLM_KV_EXPERT_WEIGHTS_NORM,         hparams.expert_weights_norm, false);
 
-    switch (hparams.n_layer) {
+    switch (hparams.n_layer()) {
         case 28: type = LLM_TYPE_16B; break;
         case 88: type = LLM_TYPE_290B; break;
         default: type = LLM_TYPE_UNKNOWN;

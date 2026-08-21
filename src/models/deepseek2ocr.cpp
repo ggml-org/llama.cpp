@@ -14,7 +14,7 @@ void llama_model_deepseek2ocr::load_arch_hparams(llama_model_loader & ml) {
         hparams.expert_gating_func = LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX;
     }
 
-    switch (hparams.n_layer) {
+    switch (hparams.n_layer()) {
         case 12: type = LLM_TYPE_3B; break;
         default: type = LLM_TYPE_UNKNOWN;
     }

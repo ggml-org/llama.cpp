@@ -74,8 +74,7 @@ export { default as ModelsSelectorOption } from './ModelsSelectorOption.svelte';
  */
 export { default as ModelsSelectorSheet } from './ModelsSelectorSheet.svelte';
 
-/**
- * **ModelBadge** - Model name display badge
+/** * **ModelBadge** - Model name display badge
  *
  * Compact badge showing current model name with package icon.
  * Only visible in single model mode. Supports tooltip and copy functionality.

@@ -26,7 +26,7 @@ class common_params_fit_exception : public std::runtime_error {
     using std::runtime_error::runtime_error;
 };
 
-std::vector<llama_device_memory_data> common_get_device_memory_data(
+static std::vector<llama_device_memory_data> common_get_device_memory_data_impl(
         const char * path_model,
         const llama_model_params * mparams,
         const llama_context_params * cparams,
@@ -54,8 +54,7 @@ std::vector<llama_device_memory_data> common_get_device_memory_data(
 
     llama_model_params mparams_copy = *mparams;
     mparams_copy.no_alloc  = true;
-    mparams_copy.use_mmap  = false;
-    mparams_copy.use_mlock = false;
+    mparams_copy.load_mode = LLAMA_LOAD_MODE_NONE;
 
     llama_model * model = llama_model_load_from_file(path_model, mparams_copy);
     if (model == nullptr) {
@@ -138,6 +137,9 @@ std::vector<llama_device_memory_data> common_get_device_memory_data(
     }
 
     hp_ngl         = llama_model_n_layer(model);
+    if (mparams->load_mtp) {
+        hp_ngl    += llama_model_n_layer_nextn(model);
+    }
     hp_n_ctx_train = llama_model_n_ctx_train(model);
     hp_n_expert    = llama_model_n_expert(model);
 
@@ -147,6 +149,29 @@ std::vector<llama_device_memory_data> common_get_device_memory_data(
     llama_model_free(model);
     llama_log_set(ud.original_logger.callback, ud.original_logger.user_data);
 
+    return ret;
+}
+
+common_device_memory_data_vec common_get_device_memory_data(
+        const char * path_model,
+        const llama_model_params * mparams,
+        const llama_context_params * cparams,
+        std::vector<ggml_backend_dev_t> & devs,
+        uint32_t & hp_ngl,
+        uint32_t & hp_n_ctx_train,
+        uint32_t & hp_n_expert,
+        ggml_log_level log_level) {
+    std::vector<llama_device_memory_data> impl = common_get_device_memory_data_impl(
+            path_model, mparams, cparams, devs, hp_ngl, hp_n_ctx_train, hp_n_expert, log_level);
+
+    common_device_memory_data_vec ret(impl.size());
+    for (size_t i = 0; i < impl.size(); i++) {
+        ret[i].total   = impl[i].total;
+        ret[i].free    = impl[i].free;
+        ret[i].model   = impl[i].mb.model;
+        ret[i].context = impl[i].mb.context;
+        ret[i].compute = impl[i].mb.compute;
+    }
     return ret;
 }
 
@@ -169,7 +194,7 @@ static void common_params_fit_impl(
     // step 1: get data for default parameters and check whether any changes are necessary in the first place
 
     LOG_TRC("%s: getting device memory data for initial parameters:\n", __func__);
-    const dmds_t dmds_full = common_get_device_memory_data(path_model, mparams, cparams, devs, hp_ngl, hp_nct, hp_nex, log_level);
+    const dmds_t dmds_full = common_get_device_memory_data_impl(path_model, mparams, cparams, devs, hp_ngl, hp_nct, hp_nex, log_level);
     const size_t nd = devs.size(); // number of devices
 
     std::vector<int64_t> margins; // this function uses int64_t rather than size_t for memory sizes to more conveniently handle deficits
@@ -210,7 +235,7 @@ static void common_params_fit_impl(
         sum_projected_used = dmds_full.back().mb.total();
         sum_free           = dmds_full.back().total;
         sum_projected_free = sum_free - sum_projected_used;
-        LOG_INF("%s: projected to use %" PRId64 " MiB of host memory vs. %" PRId64 " MiB of total host memory\n",
+        LOG_TRC("%s: projected to use %" PRId64 " MiB of host memory vs. %" PRId64 " MiB of total host memory\n",
             __func__, sum_projected_used/MiB, sum_free/MiB);
         if (sum_projected_free >= margins[0]) {
             LOG_TRC("%s: will leave %" PRId64 " >= %" PRId64 " MiB of system memory, no changes needed\n",
@@ -304,7 +329,7 @@ static void common_params_fit_impl(
 
                     int64_t sum_projected_used_min_ctx = 0;
                     cparams->n_ctx = n_ctx_min;
-                    const dmds_t dmds_min_ctx = common_get_device_memory_data(path_model, mparams, cparams, devs, hp_ngl, hp_nct, hp_nex, log_level);
+                    const dmds_t dmds_min_ctx = common_get_device_memory_data_impl(path_model, mparams, cparams, devs, hp_ngl, hp_nct, hp_nex, log_level);
                     if (nd == 0) {
                         sum_projected_used_min_ctx = dmds_min_ctx.back().mb.total();
                     } else {
@@ -482,7 +507,7 @@ static void common_params_fit_impl(
         llama_model_params mparams_copy = *mparams;
         set_ngl_tensor_split_tbo(ngl_per_device, overflow_bufts, mparams_copy);
 
-        const dmds_t dmd_nl = common_get_device_memory_data(
+        const dmds_t dmd_nl = common_get_device_memory_data_impl(
             path_model, &mparams_copy, cparams, devs, hp_ngl, hp_nct, hp_nex, log_level);
 
         LOG_TRC("%s: memory for test allocation by device:\n", func_name);
@@ -510,7 +535,7 @@ static void common_params_fit_impl(
         mparams->tensor_buft_overrides = tensor_buft_overrides;
 
         LOG_TRC("%s: getting device memory data with all MoE tensors moved to system memory:\n", __func__);
-        const dmds_t dmds_cpu_moe = common_get_device_memory_data(
+        const dmds_t dmds_cpu_moe = common_get_device_memory_data_impl(
             path_model, mparams, cparams, devs, hp_ngl, hp_nct, hp_nex, log_level);
 
         for (size_t id = 0; id < nd; id++) {
@@ -940,7 +965,7 @@ void common_fit_print(
     uint32_t hp_nct = 0; // hparams.n_ctx_train
     uint32_t hp_nex = 0; // hparams.n_expert
 
-    auto dmd = common_get_device_memory_data(path_model, mparams, cparams, devs, hp_ngl, hp_nct, hp_nex, GGML_LOG_LEVEL_ERROR);
+    auto dmd = common_get_device_memory_data_impl(path_model, mparams, cparams, devs, hp_ngl, hp_nct, hp_nex, GGML_LOG_LEVEL_ERROR);
     GGML_ASSERT(dmd.size() == devs.size() + 1);
 
     for (size_t id = 0; id < devs.size(); id++) {

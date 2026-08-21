@@ -3,7 +3,7 @@
 void llama_model_neo_bert::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
 
-    if (hparams.n_layer == 28) {
+    if (hparams.n_layer() == 28) {
         type = LLM_TYPE_250M;
     }
 }

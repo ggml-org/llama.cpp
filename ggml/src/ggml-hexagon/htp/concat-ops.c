@@ -4,7 +4,7 @@
 #include "hexagon_protos.h"
 #include "hvx_hexagon_protos.h"
 #include "hex-dma.h"
-#include "vtcm-utils.h"
+#include "htp-vtcm.h"
 #include "hvx-utils.h"
 #include "hex-fastdiv.h"
 #include <string.h>
@@ -262,6 +262,8 @@ int op_concat(struct htp_ops_context * octx) {
 
         octx->src0_spad.data = octx->ctx->vtcm_base;
         octx->src1_spad.data = octx->src0_spad.data + octx->src0_spad.size;
+        octx->src0_spad.src  = NULL;
+        octx->src1_spad.src  = NULL;
 
         if (type_size == 4) {
             worker_func = concat_2d_f32_transposed;

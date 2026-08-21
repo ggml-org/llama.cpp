@@ -59,8 +59,12 @@ struct common_preset_context {
     bool filter_allowed_keys = false;
     std::set<std::string> allowed_keys;
 
+    // if true, options unknown to the current example are skipped instead of being an error
+    // used for config files shared by all binaries, where each binary only knows a subset of options
+    bool ignore_unknown_keys = false;
+
     // if only_remote_allowed is true, only accept whitelisted keys
-    common_preset_context(llama_example ex, bool only_remote_allowed = false);
+    common_preset_context(llama_example ex);
 
     // load presets from INI file
     common_presets load_from_ini(const std::string & path, common_preset & global) const;
