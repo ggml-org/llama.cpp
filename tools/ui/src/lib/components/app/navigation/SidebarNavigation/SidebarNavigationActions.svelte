@@ -113,7 +113,7 @@
 				item.action === SidebarAction.NEW_CHAT
 					? () => {
 							onNewChat?.();
-							conversationsStore.openNewChat();
+							void conversationsStore.openNewChat();
 						}
 					: item.route
 						? () => {
@@ -167,7 +167,7 @@
 				item.action === SidebarAction.NEW_CHAT
 					? () => {
 							onNewChat?.();
-							conversationsStore.openNewChat();
+							void conversationsStore.openNewChat();
 						}
 					: item.route
 						? () => {

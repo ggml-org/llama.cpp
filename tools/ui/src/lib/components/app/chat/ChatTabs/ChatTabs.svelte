@@ -106,7 +106,7 @@
 			{/each}
 
 			{#if showNewChatButton}
-				<ChatTabsNewChatButton onclick={() => conversationsStore.openNewChat()} />
+				<ChatTabsNewChatButton onclick={() => void conversationsStore.openNewChat()} />
 			{/if}
 		</ScrollCarousel>
 
