@@ -291,7 +291,7 @@ static void set_rows_sycl(
 
     stream->parallel_for(
         sycl::nd_range<1>(grid_size * block_size, block_size),
-        [=](sycl::nd_item<1> item_ct1) [[intel::reqd_sub_group_size(WARP_SIZE)]] {
+        [=](sycl::nd_item<1> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
             k_set_rows<TIn, TIdx, TOut>(
                 src0_d, src1_d, dst_d,
                 ne00, ne01, ne02,
