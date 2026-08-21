@@ -48,7 +48,7 @@
 
 #include "kernels.h"
 
-#include "kai_common.h"
+#include "kai/kai_common.h"
 
 #define GGML_COMMON_DECL_CPP
 #include "ggml-common.h"
@@ -316,6 +316,7 @@ static void init_kleidiai_context(void) {
 
         ctx.features  = (runtime_feat.has_dotprod  ? CPU_FEATURE_DOTPROD : CPU_FEATURE_NONE) |
                         (runtime_feat.has_i8mm     ? CPU_FEATURE_I8MM    : CPU_FEATURE_NONE) |
+                        (runtime_feat.has_fp16     ? CPU_FEATURE_FP16    : CPU_FEATURE_NONE) |
                         (runtime_feat.sve_cnt == QK8_0 ? CPU_FEATURE_SVE : CPU_FEATURE_NONE);
 
         if (env_threads) {
