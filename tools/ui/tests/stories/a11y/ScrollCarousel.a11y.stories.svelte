@@ -1,15 +1,15 @@
 <script module lang="ts">
 	import { defineMeta } from '@storybook/addon-svelte-csf';
-	import HorizontalScrollCarousel from '$lib/components/app/misc/HorizontalScrollCarousel.svelte';
+	import { ScrollCarousel } from '$lib/components/ui/scroll-carousel';
 	import { expect, waitFor } from 'storybook/test';
 
 	const { Story } = defineMeta({
-		component: HorizontalScrollCarousel,
+		component: ScrollCarousel,
 		parameters: {
 			layout: 'centered'
 		},
 		tags: ['!dev'],
-		title: 'Components/HorizontalScrollCarousel/Accessibility'
+		title: 'Components/ScrollCarousel/Accessibility'
 	});
 </script>
 
@@ -33,10 +33,10 @@
 >
 	<div>
 		<button type="button">before</button>
-		<HorizontalScrollCarousel class="w-96">
+		<ScrollCarousel class="w-96" variant="center">
 			<div class="h-12 w-12 shrink-0 bg-muted"></div>
 			<div class="h-12 w-12 shrink-0 bg-muted"></div>
-		</HorizontalScrollCarousel>
+		</ScrollCarousel>
 		<button type="button">after</button>
 	</div>
 </Story>
@@ -60,10 +60,10 @@
 >
 	<div>
 		<button type="button">before</button>
-		<HorizontalScrollCarousel class="w-48">
+		<ScrollCarousel class="w-48" variant="center">
 			{#each [...Array(20).keys()] as i (i)}
 				<div class="h-12 w-24 shrink-0 bg-muted">{i}</div>
 			{/each}
-		</HorizontalScrollCarousel>
+		</ScrollCarousel>
 	</div>
 </Story>
