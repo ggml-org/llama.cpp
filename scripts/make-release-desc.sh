@@ -15,7 +15,8 @@
 # tag exists.
 #
 # Env (when running in GitHub Actions):
-#   GITHUB_OUTPUT: previous_tag, changelog_title, changelog and nightly are written here
+#   GITHUB_OUTPUT: previous_tag, changelog_title, changelog, nightly and nightly_tag
+#     are written here
 #   GITHUB_REPOSITORY: owner/repo, used to build the nightly release URL (skipped when unset)
 set -euo pipefail
 
@@ -80,6 +81,7 @@ if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
         echo "previous_tag=${PREV}"
         echo "changelog_title=${CHANGELOG_TITLE}"
         echo "nightly=${NIGHTLY}"
+        echo "nightly_tag=${NIGHTLY_TAG}"
         echo "changelog<<CHANGELOG_EOF"
         echo "${CHANGELOG}"
         echo "CHANGELOG_EOF"
