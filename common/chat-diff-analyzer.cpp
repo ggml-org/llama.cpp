@@ -6,9 +6,9 @@
 #include "log.h"
 #include "peg-parser.h"
 
-#include <numeric>
 #include <algorithm>
 #include <cctype>
+#include <numeric>
 #include <ostream>
 #include <sstream>
 
@@ -930,9 +930,9 @@ void analyze_tools::analyze_tool_call_format_json_native(const std::string & cle
     std::string cut     = clean_haystack.substr(json_start, json_end - json_start + 1);
     json call_struct    = json::parse(cut);
     auto register_field = [&](const std::string & prefix, const common_json_entry & subel) {
-        if (subel.value().is_string() && subel.value().get<std::string>().find("call0000") != std::string::npos) {
+        if (subel.value().is_string() && std::string(subel.value()).find("call0000") != std::string::npos) {
             format.id_field = !prefix.empty() ? prefix + "." + subel.key() : subel.key();
-        } else if (subel.value().is_string() && subel.value().get<std::string>() == fun_name_needle) {
+        } else if (subel.value().is_string() && std::string(subel.value()) == fun_name_needle) {
             format.name_field = !prefix.empty() ? prefix + "." + subel.key() : subel.key();
         } else if (subel.value().dump().find(arg_name_needle) !=
                    std::string::npos) {  // handle both string and JSON obj variants

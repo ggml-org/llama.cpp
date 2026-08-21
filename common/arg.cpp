@@ -54,6 +54,7 @@
 
 #define LLAMA_MAX_URL_LENGTH 2084 // Maximum URL Length in Chrome: 2083
 
+using json = common_json;
 using namespace common_arg_utils;
 
 static std::initializer_list<enum llama_example> mmproj_examples = {
@@ -2270,7 +2271,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"-j", "--json-schema"}, "SCHEMA",
         "JSON schema to constrain generations (https://json-schema.org/), e.g. `{}` for any JSON object\nFor schemas w/ external $refs, use --grammar + example/json_schema_to_grammar.py instead",
         [](common_params & params, const std::string & value) {
-            params.sampling.grammar = {COMMON_GRAMMAR_TYPE_OUTPUT_FORMAT, json_schema_to_grammar(common_json::parse(value))};
+            params.sampling.grammar = {COMMON_GRAMMAR_TYPE_OUTPUT_FORMAT, json_schema_to_grammar(json::parse(value))};
         }
     ).set_sampling());
     add_opt(common_arg(
@@ -2287,7 +2288,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                 std::istreambuf_iterator<char>(),
                 std::back_inserter(schema)
             );
-            params.sampling.grammar = {COMMON_GRAMMAR_TYPE_OUTPUT_FORMAT, json_schema_to_grammar(common_json::parse(schema))};
+            params.sampling.grammar = {COMMON_GRAMMAR_TYPE_OUTPUT_FORMAT, json_schema_to_grammar(json::parse(schema))};
         }
     ).set_sampling());
     add_opt(common_arg(
@@ -3498,13 +3499,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--chat-template-kwargs"}, "STRING",
         "sets additional params for the json template parser, must be a valid json object string, e.g. '{\"key1\":\"value1\",\"key2\":\"value2\"}'",
         [](common_params & params, const std::string & value) {
-            auto parsed = common_json::parse(value);
-            for (const auto & [key, val] : parsed.items()) {
-                if (key == "enable_thinking") {
+            auto parsed = json::parse(value);
+            for (const auto & item : parsed.items()) {
+                if (item.key() == "enable_thinking") {
                     LOG_WRN("Setting 'enable_thinking' via --chat-template-kwargs is deprecated. "
                             "Use --reasoning on / --reasoning off instead.\n");
                 }
-                params.default_template_kwargs[key] = val.dump();
+                params.default_template_kwargs[item.key()] = item.value().dump();
             }
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_CHAT_TEMPLATE_KWARGS"));
@@ -3672,7 +3673,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             if (value == "default") {
                 params.default_template_kwargs.erase("reasoning_effort");
             } else {
-                params.default_template_kwargs["reasoning_effort"] = common_json::make(value).dump();
+                params.default_template_kwargs["reasoning_effort"] = json(value).dump();
             }
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_REASONING_EFFORT"));

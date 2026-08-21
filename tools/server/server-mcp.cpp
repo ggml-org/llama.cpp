@@ -157,7 +157,7 @@ std::vector<server_mcp_server_config> server_mcp_server_config::parse_cursor_for
         }
         if (cfg.contains("env") && cfg.at("env").is_object()) {
             for (const auto & [k, v] : cfg.at("env").items()) {
-                sc.env[k] = v;
+                sc.env[k] = v.get<std::string>();
             }
         }
 

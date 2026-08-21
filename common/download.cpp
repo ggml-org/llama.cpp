@@ -924,7 +924,7 @@ std::string common_docker_resolve_model(const std::string & docker) {
                     std::string media_type = layer["mediaType"].get<std::string>();
                     if (media_type == "application/vnd.docker.ai.gguf.v3" ||
                         media_type.find("gguf") != std::string::npos) {
-                        gguf_digest = layer["digest"];
+                        gguf_digest = layer["digest"].get<std::string>();
                         break;
                     }
                 }

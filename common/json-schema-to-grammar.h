@@ -2,7 +2,6 @@
 
 #include "json.h"
 
-
 #include <functional>
 #include <memory>
 #include <string>

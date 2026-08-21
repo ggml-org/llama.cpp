@@ -916,7 +916,7 @@ public:
         std::string rule_name = is_reserved_name(name) ? name + "-" : name.empty() ? "root" : name;
 
         if (schema.contains("$ref")) {
-            return _add_rule(rule_name, _resolve_ref(schema["$ref"].get<std::string>()));
+            return _add_rule(rule_name, _resolve_ref(schema["$ref"]));
         }
         if (schema.contains("oneOf") || schema.contains("anyOf")) {
             const json & alts = schema.contains("oneOf") ? schema.at("oneOf") : schema.at("anyOf");
@@ -974,7 +974,7 @@ public:
             const std::string& hybrid_name = name;
             std::function<void(const json &, bool)> add_component = [&](const json & comp_schema, bool is_required) {
                 if (comp_schema.contains("$ref")) {
-                    add_component(_refs[comp_schema["$ref"].get<std::string>()], is_required);
+                    add_component(_refs[comp_schema["$ref"]], is_required);
                 } else if (comp_schema.contains("properties")) {
                     for (const auto & prop : comp_schema["properties"].items()) {
                         properties.emplace_back(prop.key(), prop.value());
@@ -1037,7 +1037,7 @@ public:
             return _add_rule(rule_name, "\"[\" space " + build_repetition(item_rule_name, min_items, max_items, "\",\" space") + " space \"]\"");
         }
         if ((schema_type.is_null() || schema_type == "string") && schema.contains("pattern")) {
-            return _visit_pattern(schema["pattern"].get<std::string>(), rule_name);
+            return _visit_pattern(schema["pattern"], rule_name);
         }
         if ((schema_type.is_null() || schema_type == "string") && std::regex_match(schema_format, std::regex("^uuid[1-5]?$"))) {
             return _add_primitive(rule_name == "root" ? "root" : schema_format, PRIMITIVE_RULES.at("uuid"));
@@ -1135,7 +1135,7 @@ bool common_schema_info::resolves_to_string(const common_json & schema) {
 
         // Handle $ref
         if (s.contains("$ref")) {
-            const std::string ref = s["$ref"];
+            const std::string & ref = s["$ref"];
             if (visited_refs.find(ref) != visited_refs.end()) {
                 // Circular reference, assume not a string to be safe
                 return false;
@@ -1218,7 +1218,7 @@ bool common_schema_info::resolves_to_string(const common_json & schema) {
 
         // Check format - many formats imply string
         if (s.contains("format")) {
-            const std::string fmt = s["format"];
+            const std::string & fmt = s["format"];
             if (fmt == "date" || fmt == "time" || fmt == "date-time" ||
                 fmt == "uri" || fmt == "email" || fmt == "hostname" ||
                 fmt == "ipv4" || fmt == "ipv6" || fmt == "uuid" ||

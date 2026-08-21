@@ -1420,8 +1420,8 @@ struct server_tool_edit_file : server_tool {
         edits.reserve(edits_json.size());
         for (const auto & e : edits_json) {
             edit_req er;
-            er.old_text = e.at("old_text");
-            er.new_text = e.at("new_text");
+            er.old_text = e.at("old_text").get<std::string>();
+            er.new_text = e.at("new_text").get<std::string>();
             if (er.old_text.empty()) {
                 return {{"error", string_format("edits[%zu].old_text must not be empty", edits.size())}};
             }

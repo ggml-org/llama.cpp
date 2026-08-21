@@ -1,6 +1,5 @@
 #include "server-task.h"
 
-
 #include "build-info.h"
 #include "server-chat.h"
 #include "chat.h"
@@ -12,7 +11,6 @@
 #include "server-common.h"
 
 #include <sstream>
-
 
 //
 // task_params

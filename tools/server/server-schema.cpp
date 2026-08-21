@@ -487,7 +487,7 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
             const auto & stop = data.at("stop");
             if (stop.is_array()) {
                 for (const auto & word : stop) {
-                    if (!word.empty()) ctx.params.antiprompt.push_back(word.get<std::string>());
+                    if (!word.empty()) ctx.params.antiprompt.push_back(word);
                 }
             } else if (stop.is_string()) {
                 ctx.params.antiprompt.push_back(stop.get<std::string>());

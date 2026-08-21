@@ -14,7 +14,6 @@
 #include "jinja/caps.h"
 #include "peg-parser.h"
 
-
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
@@ -596,7 +595,7 @@ std::vector<common_chat_tool> common_chat_tools_parse_oaicompat(const json & too
 
                 const auto & function = tool.at("function");
                 result.push_back({
-                    /* .name = */ function.at("name").get<std::string>(),
+                    /* .name = */ function.at("name"),
                     /* .description = */ function.value("description", ""),
                     /* .parameters = */ function.value("parameters", json::object()).dump(),
                 });
@@ -2483,7 +2482,7 @@ static common_chat_params common_chat_params_init_kimi_k3(const common_chat_temp
                     std::string type = "string";
                     if (prop.value().is_object() && prop.value().contains("type") &&
                         prop.value().at("type").is_string()) {
-                        type = prop.value().at("type");
+                        type = prop.value().at("type").get<std::string>();
                     }
 
                     auto value = type == "string" ? p.tool_arg_string_value(p.until(ARG_END)) :

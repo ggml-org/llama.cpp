@@ -370,7 +370,7 @@ caps caps_get(jinja::program & prog) {
     caps_try_execute(
         prog,
         [&]() {
-            json args = json::make(R"({"arg": "value"})");
+            json args = json(R"({"arg": "value"})");
             if (result.supports_object_arguments) {
                 args = json{{"arg", "value"}};
             }

@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <initializer_list>
 #include <iterator>
+#include <map>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -58,6 +59,8 @@ struct common_json_value {
     common_json_value(std::string_view val) : type(VAL_STRING), val_string(val) {}
     common_json_value(const char * val);
     common_json_value(const common_json & val);
+    // becomes an object, so a plain string map can be passed where a JSON value is expected
+    common_json_value(const std::map<std::string, std::string> & vals);
     // only for the types instantiated in json.cpp, the rest fails at link time
     template <typename T> common_json_value(const std::vector<T> & vals);
 

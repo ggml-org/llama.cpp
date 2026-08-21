@@ -299,10 +299,10 @@ void run_single(const std::string& contents, json input, bool use_common, bool d
         std::string bos_token = "<s>";
         std::string eos_token = "</s>";
         if (input.contains("bos_token")) {
-            bos_token = input["bos_token"];
+            bos_token = input["bos_token"].get<std::string>();
         }
         if (input.contains("eos_token")) {
-            eos_token = input["eos_token"];
+            eos_token = input["eos_token"].get<std::string>();
         }
         common_json msgs_json = input["messages"];
         common_json tools_json = input["tools"];

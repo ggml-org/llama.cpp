@@ -82,6 +82,10 @@ common_json_value::common_json_value(const char * val) {
 common_json_value::common_json_value(const common_json & val) :
     type(VAL_JSON), val_json(std::make_shared<common_json>(val)) {}
 
+common_json_value::common_json_value(const std::map<std::string, std::string> & vals) : type(VAL_JSON) {
+    val_json = std::make_shared<common_json>(common_json_from_raw(ordered_json(vals)));
+}
+
 template <typename T>
 common_json_value::common_json_value(const std::vector<T> & vals) : type(VAL_JSON) {
     common_json out = common_json::array();

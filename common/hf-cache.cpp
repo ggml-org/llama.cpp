@@ -213,7 +213,7 @@ static common_json api_get(const std::string & url,
             return common_json::parse(res->body);
         }
         try {
-            body = common_json::parse(res->body)["error"];
+            body = common_json::parse(res->body)["error"].get<std::string>();
         } catch (...) { }
 
         throw std::runtime_error("GET failed (" + std::to_string(res->status) + "): " + body);
@@ -320,7 +320,7 @@ hf_files get_repo_files(const std::string & repo_id,
 
             hf_file file;
             file.repo_id = repo_id;
-            file.path = item["path"];
+            file.path = item["path"].get<std::string>();
 
             if (!is_valid_subpath(commit_path, file.path)) {
                 LOG_WRN("%s: skip invalid path: %s\n", __func__, file.path.c_str());
@@ -329,10 +329,10 @@ hf_files get_repo_files(const std::string & repo_id,
 
             if (item.contains("lfs") && item["lfs"].is_object()) {
                 if (item["lfs"].contains("oid") && item["lfs"]["oid"].is_string()) {
-                    file.oid = item["lfs"]["oid"];
+                    file.oid = item["lfs"]["oid"].get<std::string>();
                 }
             } else if (item.contains("oid") && item["oid"].is_string()) {
-                file.oid = item["oid"];
+                file.oid = item["oid"].get<std::string>();
             }
 
             if (!file.oid.empty() && !is_valid_oid(file.oid)) {

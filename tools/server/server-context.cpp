@@ -35,7 +35,6 @@
 #include <windows.h>
 #endif
 
-
 constexpr int HTTP_POLLING_SECONDS = 1;
 
 static common_speculative_output_limits server_output_limits(const common_params & params) {

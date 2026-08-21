@@ -1378,8 +1378,8 @@ static value from_json(const common_json & j, bool mark_input) {
         return arr;
     } else if (j.is_object()) {
         auto obj = mk_val<value_object>();
-        for (const auto & [key, val] : j.items()) {
-            obj->insert(key, from_json(val, mark_input));
+        for (auto it = j.begin(); it != j.end(); ++it) {
+            obj->insert(it.key(), from_json(it.value(), mark_input));
         }
         return obj;
     } else {
@@ -1451,18 +1451,17 @@ bool value_compare(const value & a, const value & b, value_compare_op op) {
     return result;
 }
 
-template<typename T_JSON>
-void global_from_json(context & ctx, const T_JSON & json_obj, bool mark_input) {
+template<>
+void global_from_json(context & ctx, const common_json & json_obj, bool mark_input) {
+    // printf("global_from_json: %s\n" , json_obj.dump(2).c_str());
     if (json_obj.is_null() || !json_obj.is_object()) {
         throw std::runtime_error("global_from_json: input JSON value must be an object");
     }
-    for (const auto & [key, val] : json_obj.items()) {
-        JJ_DEBUG("global_from_json: setting key '%s'", key.c_str());
-        ctx.set_val(key, from_json(val, mark_input));
+    for (auto it = json_obj.begin(); it != json_obj.end(); ++it) {
+        JJ_DEBUG("global_from_json: setting key '%s'", it.key().c_str());
+        ctx.set_val(it.key(), from_json(it.value(), mark_input));
     }
 }
-
-template void global_from_json<common_json>(context &, const common_json &, bool);
 
 // recursively convert value to JSON string
 // TODO: avoid circular references
