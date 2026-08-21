@@ -3811,6 +3811,7 @@ static bool ggml_sycl_supports_reorder_esimd(enum ggml_type type) {
     switch (type) {
         case GGML_TYPE_Q3_K:
         case GGML_TYPE_Q4_K:
+        case GGML_TYPE_Q5_K:
         case GGML_TYPE_Q6_K:
             return true;
         default:
