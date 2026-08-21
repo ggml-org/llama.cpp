@@ -129,7 +129,7 @@
 
 	$effect(() => {
 		const id = page.params.id ?? (page.route.id === '/(chat)' ? NEW_CHAT_TAB_ID : undefined);
-		const prev = previousChatId;
+		const prev = untrack(() => previousChatId);
 
 		previousChatId = id;
 
