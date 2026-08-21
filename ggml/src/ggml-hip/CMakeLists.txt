@@ -151,3 +151,30 @@ if (GGML_HIP_RCCL)
 endif()
 
 target_link_libraries(ggml-hip PRIVATE ggml-base hip::host roc::rocblas roc::hipblas)
+
+# librocdxg is dlopen'd by libhsa-runtime64, so link-time dependency scanning misses it.
+# it is optional - skip it when the ROCm install does not have it.
+# hip_DIR points at <rocm>/lib/cmake/hip, so the lib dir is two levels up
+get_filename_component(GGML_HIP_LIB_DIR "${hip_DIR}/../.." ABSOLUTE)
+file(GLOB GGML_HIP_ROCDXG "${GGML_HIP_LIB_DIR}/librocdxg.so*")
+
+if (GGML_HIP_ROCDXG)
+    message(STATUS "HIP: bundling ${GGML_HIP_ROCDXG}")
+
+    foreach (GGML_HIP_ROCDXG_FILE IN LISTS GGML_HIP_ROCDXG)
+        get_filename_component(GGML_HIP_ROCDXG_NAME "${GGML_HIP_ROCDXG_FILE}" NAME)
+        if (IS_SYMLINK "${GGML_HIP_ROCDXG_FILE}")
+            file(READ_SYMLINK "${GGML_HIP_ROCDXG_FILE}" GGML_HIP_ROCDXG_LINK)
+            get_filename_component(GGML_HIP_ROCDXG_LINK "${GGML_HIP_ROCDXG_LINK}" NAME)
+            add_custom_command(TARGET ggml-hip POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E create_symlink "${GGML_HIP_ROCDXG_LINK}" "$<TARGET_FILE_DIR:ggml-hip>/${GGML_HIP_ROCDXG_NAME}")
+        else()
+            add_custom_command(TARGET ggml-hip POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different "${GGML_HIP_ROCDXG_FILE}" "$<TARGET_FILE_DIR:ggml-hip>/${GGML_HIP_ROCDXG_NAME}")
+        endif()
+    endforeach()
+
+    # install(DIRECTORY) keeps the symlinks, install(FILES) would resolve them
+    install(DIRECTORY "${GGML_HIP_LIB_DIR}/" DESTINATION ${CMAKE_INSTALL_BINDIR}
+            FILES_MATCHING PATTERN "librocdxg.so*")
+endif()
