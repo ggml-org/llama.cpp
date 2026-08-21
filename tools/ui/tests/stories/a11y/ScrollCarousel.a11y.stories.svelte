@@ -1,6 +1,7 @@
 <script module lang="ts">
 	import { defineMeta } from '@storybook/addon-svelte-csf';
-	import { ScrollCarousel } from '$lib/components/ui/scroll-carousel';
+	import { ScrollCarousel } from '$lib/components/app';
+	import { ScrollCarouselVariant } from '$lib/enums';
 	import { expect, waitFor } from 'storybook/test';
 
 	const { Story } = defineMeta({
@@ -33,7 +34,7 @@
 >
 	<div>
 		<button type="button">before</button>
-		<ScrollCarousel class="w-96" variant="center">
+		<ScrollCarousel class="w-96" variant={ScrollCarouselVariant.CENTER}>
 			<div class="h-12 w-12 shrink-0 bg-muted"></div>
 			<div class="h-12 w-12 shrink-0 bg-muted"></div>
 		</ScrollCarousel>
@@ -60,7 +61,7 @@
 >
 	<div>
 		<button type="button">before</button>
-		<ScrollCarousel class="w-48" variant="center">
+		<ScrollCarousel class="w-48" variant={ScrollCarouselVariant.CENTER}>
 			{#each [...Array(20).keys()] as i (i)}
 				<div class="h-12 w-24 shrink-0 bg-muted">{i}</div>
 			{/each}

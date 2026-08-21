@@ -1,7 +1,7 @@
 import { ROUTES } from './routes.constants';
 import { Package, Search, Settings, SquarePen } from '@lucide/svelte';
 import McpLogo from '$lib/components/app/mcp/McpLogo.svelte';
-import { ToolSource } from '$lib/enums/tools.enums';
+import { SidebarAction, ToolSource } from '$lib/enums';
 import type { DesktopIconStripItem } from '$lib/types';
 
 export const FORK_TREE_DEPTH_PADDING = 8;
@@ -55,7 +55,12 @@ export const ICON_STRIP_TRANSITION_DELAY_MULTIPLIER = 50;
 export const MAX_HEIGHT_CODE_BLOCK = '22rem';
 
 export const SIDEBAR_ACTIONS_ITEMS: DesktopIconStripItem[] = [
-	{ action: 'new-chat', icon: SquarePen, keys: ['shift', 'cmd', 'o'], tooltip: 'New chat' },
+	{
+		action: SidebarAction.NEW_CHAT,
+		icon: SquarePen,
+		keys: ['shift', 'cmd', 'o'],
+		tooltip: 'New chat'
+	},
 	{ icon: Search, keys: ['cmd', 'k'], tooltip: 'Search' },
 	{
 		activeRouteId: '/mcp-servers',

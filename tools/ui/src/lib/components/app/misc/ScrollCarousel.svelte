@@ -2,6 +2,7 @@
 	import { ChevronLeft, ChevronRight } from '@lucide/svelte';
 	import { cn } from '$lib/components/ui/utils';
 	import { ICON_CLASS_DEFAULT } from '$lib/constants';
+	import { ScrollCarouselVariant } from '$lib/enums';
 	import { useScrollCarousel } from '$lib/hooks/use-scroll-carousel.svelte';
 	import type { Snippet } from 'svelte';
 
@@ -18,7 +19,7 @@
 		/** Tailwind gap class applied to the content wrapper. */
 		gapSize?: string;
 		/** Arrow placement and styling. */
-		variant?: 'top' | 'center';
+		variant?: ScrollCarouselVariant;
 		/** Called with whether the content overflows the container. */
 		onScrollableChange?: (isScrollable: boolean) => void;
 		/** Pixels scrolled per arrow click; defaults to ~2/3 of the container width. */
@@ -34,13 +35,13 @@
 		innerClass = '',
 		onScrollableChange,
 		scrollBy,
-		variant = 'top'
+		variant = ScrollCarouselVariant.TOP
 	}: Props = $props();
 
 	const internalCarousel = $derived(useScrollCarousel(onScrollableChange));
 	const carousel = $derived(externalCarousel ?? internalCarousel);
 
-	const isCenter = $derived(variant === 'center');
+	const isCenter = $derived(variant === ScrollCarouselVariant.CENTER);
 
 	function scrollLeft(event?: MouseEvent) {
 		event?.stopPropagation();

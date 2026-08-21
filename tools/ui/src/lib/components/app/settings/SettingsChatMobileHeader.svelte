@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { Settings } from '@lucide/svelte';
-	import { ScrollCarousel } from '$lib/components/ui/scroll-carousel';
+	import { ScrollCarousel } from '$lib/components/app';
 	import { ICON_CLASS_DEFAULT, UI_DATA_ATTRS } from '$lib/constants';
 	import { BooleanString } from '$lib/enums';
 	import { useScrollCarousel } from '$lib/hooks/use-scroll-carousel.svelte';

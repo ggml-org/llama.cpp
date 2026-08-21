@@ -10,6 +10,7 @@
 import { browser } from '$app/environment';
 import { goto } from '$app/navigation';
 import { ROUTES } from '$lib/constants';
+import { NEW_CHAT_TAB_ID } from '$lib/constants';
 import { MessageRole } from '$lib/enums';
 import { ConversationTransferService } from '$lib/services/conversation-transfer.service';
 import { DatabaseService } from '$lib/services/database.service';
@@ -21,7 +22,7 @@ import {
 	type ConversationsPreferencesHost
 } from '$lib/stores/conversations/preferences.svelte';
 import { settingsStore } from '$lib/stores/settings/index.svelte';
-import { NEW_CHAT_TAB_ID, tabsStore } from '$lib/stores/tabs.svelte';
+import { tabsStore } from '$lib/stores/tabs.svelte';
 import { filterByLeafNodeId, findLeafNode, generateConversationTitle } from '$lib/utils';
 import { SvelteSet } from 'svelte/reactivity';
 import { toast } from 'svelte-sonner';

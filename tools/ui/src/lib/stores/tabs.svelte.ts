@@ -18,12 +18,9 @@
 
 import { browser } from '$app/environment';
 import { goto } from '$app/navigation';
-import { CHAT_TABS_LOCALSTORAGE_KEY, ROUTES } from '$lib/constants';
+import { CONVERSATION_TABS_LOCALSTORAGE_KEY, NEW_CHAT_TAB_ID, ROUTES } from '$lib/constants';
 import { RouterService } from '$lib/services/router.service';
 import { untrack } from 'svelte';
-
-/** Sentinel tab id for the bare `#/` new-chat screen */
-export const NEW_CHAT_TAB_ID = 'new-chat';
 
 class TabsStore {
 	/** Ordered tab ids: conversation ids and the `NEW_CHAT_TAB_ID` sentinel */
@@ -124,7 +121,7 @@ class TabsStore {
 
 	private load(): string[] {
 		try {
-			const raw = localStorage.getItem(CHAT_TABS_LOCALSTORAGE_KEY);
+			const raw = localStorage.getItem(CONVERSATION_TABS_LOCALSTORAGE_KEY);
 			const parsed: unknown = raw ? JSON.parse(raw) : [];
 
 			return Array.isArray(parsed) ? parsed.filter((id) => typeof id === 'string') : [];
@@ -138,7 +135,7 @@ class TabsStore {
 		// route sync (layout effect runs before async init) would clobber them
 		if (!browser || !this.initialized) return;
 
-		localStorage.setItem(CHAT_TABS_LOCALSTORAGE_KEY, JSON.stringify(this.openTabs));
+		localStorage.setItem(CONVERSATION_TABS_LOCALSTORAGE_KEY, JSON.stringify(this.openTabs));
 	}
 }
 

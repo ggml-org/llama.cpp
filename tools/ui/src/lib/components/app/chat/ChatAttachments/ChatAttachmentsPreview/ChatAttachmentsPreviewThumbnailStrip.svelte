@@ -1,7 +1,8 @@
 <script lang="ts">
 	import { FileText, Music, Video } from '@lucide/svelte';
-	import { ScrollCarousel } from '$lib/components/ui/scroll-carousel';
+	import { ScrollCarousel } from '$lib/components/app';
 	import { ICON_CLASS_DEFAULT, UI_DATA_ATTRS } from '$lib/constants';
+	import { ScrollCarouselVariant } from '$lib/enums';
 
 	interface PreviewItem {
 		id: string;
@@ -33,7 +34,7 @@
 
 {#if items.length > 1}
 	<div class="sticky bottom-0 z-10 mt-4 flex-shrink-0">
-		<ScrollCarousel class="max-w-full" variant="center">
+		<ScrollCarousel class="max-w-full" variant={ScrollCarouselVariant.CENTER}>
 			{#each items as item, index (item.id)}
 				<button
 					{...{ [UI_DATA_ATTRS.THUMBNAIL_INDEX]: index }}

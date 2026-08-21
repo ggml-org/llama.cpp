@@ -1,11 +1,11 @@
 <script lang="ts">
 	import ChatTabsItem from './ChatTabsItem.svelte';
-	import { Plus } from '@lucide/svelte';
+	import ChatTabsNewChatButton from './ChatTabsNewChatButton.svelte';
 	import { page } from '$app/state';
-	import { ScrollCarousel } from '$lib/components/ui/scroll-carousel';
-	import * as Tooltip from '$lib/components/ui/tooltip';
+	import { ScrollCarousel } from '$lib/components/app';
+	import { NEW_CHAT_TAB_ID } from '$lib/constants';
 	import { useScrollCarousel } from '$lib/hooks/use-scroll-carousel.svelte';
-	import { chatStore, conversationsStore, NEW_CHAT_TAB_ID, tabsStore, uiStore } from '$lib/stores';
+	import { chatStore, conversationsStore, tabsStore, uiStore } from '$lib/stores';
 	import { tick } from 'svelte';
 
 	const carousel = useScrollCarousel();
@@ -98,24 +98,7 @@
 			{/each}
 
 			{#if showNewChatButton}
-				<Tooltip.Root>
-					<Tooltip.Trigger>
-						{#snippet child({ props })}
-							<button
-								{...props}
-								class="backdrop-blur-lg flex h-8 w-8 mr-4 shrink-0 cursor-pointer items-center justify-center rounded-md transition-colors hover:bg-foreground/5"
-								onclick={() => conversationsStore.openNewChat()}
-								aria-label="New chat"
-							>
-								<Plus class="h-4 w-4 opacity-40 transition-opacity group-hover:opacity-100" />
-							</button>
-						{/snippet}
-					</Tooltip.Trigger>
-
-					<Tooltip.Content>
-						<p>New chat</p>
-					</Tooltip.Content>
-				</Tooltip.Root>
+				<ChatTabsNewChatButton onclick={() => conversationsStore.openNewChat()} />
 			{/if}
 		</ScrollCarousel>
 

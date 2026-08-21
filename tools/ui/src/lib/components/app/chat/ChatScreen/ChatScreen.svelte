@@ -40,8 +40,6 @@
 	let initialMessage = $state('');
 	let showDeleteDialog = $state(false);
 	let showEmptyFileDialog = $state(false);
-	// a new-chat tab is an unsaved (temporary) conversation, so the empty
-	// greeting shows whenever the route is a new-chat tab with no messages
 	let isEmpty = $derived(
 		showCenteredEmpty && conversationsStore.activeMessages.length === 0 && !chatStore.isLoading
 	);
