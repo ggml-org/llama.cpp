@@ -11,7 +11,7 @@
 		ROUTES,
 		SIDEBAR_ACTIONS_ITEMS
 	} from '$lib/constants';
-	import { TooltipSide } from '$lib/enums';
+	import { SidebarAction, TooltipSide } from '$lib/enums';
 	import { conversationsStore, deviceStore } from '$lib/stores';
 	import type { Component } from 'svelte';
 	import { onMount } from 'svelte';
@@ -110,7 +110,7 @@
 			{@const isSearchOnMobile = item.icon === Search && deviceStore.isMobile}
 			{@const itemHref = isSearchOnMobile ? ROUTES.SEARCH : item.route}
 			{@const itemOnClick =
-				item.action === 'new-chat'
+				item.action === SidebarAction.NEW_CHAT
 					? () => {
 							onNewChat?.();
 							conversationsStore.openNewChat();
@@ -164,7 +164,7 @@
 			{@const isActive = isItemActive(item)}
 			{@const isSearchOnMobile = item.icon === Search && deviceStore.isMobile}
 			{@const itemOnClick =
-				item.action === 'new-chat'
+				item.action === SidebarAction.NEW_CHAT
 					? () => {
 							onNewChat?.();
 							conversationsStore.openNewChat();

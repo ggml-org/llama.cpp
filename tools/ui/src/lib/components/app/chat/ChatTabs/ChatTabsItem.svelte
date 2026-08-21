@@ -2,7 +2,7 @@
 	import { Loader2, Square, SquarePen, X } from '@lucide/svelte';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { cn } from '$lib/components/ui/utils';
-	import { ROUTES } from '$lib/constants';
+	import { ICON_CLASS_SM, ICON_CLASS_XS, ROUTES } from '$lib/constants';
 	import { RouterService } from '$lib/services/router.service';
 
 	interface Tab {
@@ -76,11 +76,11 @@
 						aria-label="Stop generation"
 					>
 						<Loader2
-							class="loading-icon h-3.5 w-3.5 animate-spin transition-opacity duration-300 {contentOpacity}"
+							class="loading-icon {ICON_CLASS_SM} animate-spin transition-opacity duration-300 {contentOpacity}"
 						/>
 
 						<Square
-							class="stop-icon hidden h-3 w-3 fill-current text-destructive transition-opacity {contentOpacity}"
+							class="stop-icon hidden {ICON_CLASS_XS} fill-current text-destructive transition-opacity {contentOpacity}"
 						/>
 					</button>
 				{/snippet}
@@ -93,7 +93,7 @@
 	{/if}
 
 	{#if tab.isNewChat}
-		<SquarePen class="h-3.5 w-3.5 shrink-0 transition-opacity {contentOpacity}" />
+		<SquarePen class="{ICON_CLASS_SM} shrink-0 transition-opacity {contentOpacity}" />
 	{/if}
 
 	<span class="truncate transition-opacity {contentOpacity}">{tab.name}</span>
@@ -110,7 +110,7 @@
 					onclick={(e) => handleActionClick(e, () => onClose?.(tab.id))}
 					aria-label="Close tab"
 				>
-					<X class="h-3.5 w-3.5" />
+					<X class={ICON_CLASS_SM} />
 				</button>
 			{/snippet}
 		</Tooltip.Trigger>
