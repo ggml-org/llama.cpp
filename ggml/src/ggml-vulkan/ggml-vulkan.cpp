@@ -889,6 +889,10 @@ struct vk_device_struct {
     bool mul_mat_id_m_int[GGML_TYPE_COUNT];
     bool mul_mat_id_s_int[GGML_TYPE_COUNT];
 
+    bool mul_mat_cm_int_l {};
+    bool mul_mat_cm_int_m {};
+    bool mul_mat_cm_int_s {};
+
     vk::DescriptorSetLayout dsl;
 
     vk_matmul_pipeline pipeline_matmul_f32 {};
@@ -4051,6 +4055,29 @@ static bool ggml_vk_matmul_int_shmem_support(const vk_device& device, const std:
     return supported;
 }
 
+static bool ggml_vk_matmul_coopmat_int_shmem_support(const vk_device& device, const std::vector<uint32_t>& warptile) {
+    const uint32_t BM   = warptile[1];
+    const uint32_t BN   = warptile[2];
+    const uint32_t CM_M = warptile[7];
+    const uint32_t CM_N = warptile[8];
+
+    const uint32_t BK      = 32;
+    const uint32_t BK_STEP = warptile.size() > 11 ? warptile[11] : 2;
+    const uint32_t qpitch  = BK_STEP * (BK / 4) + 4;
+
+    const uint32_t buf_qs    = (BM + BN) * qpitch * 4u;
+    const uint32_t buf_d     = (BM + BN) * BK_STEP * 4u;
+    const uint32_t buf_probe = warptile[10] == 32 ? 0u : CM_M * CM_N * 4u;
+
+    const uint32_t total_size = buf_qs + buf_d + buf_probe;
+    const bool supported = total_size <= device->properties.limits.maxComputeSharedMemorySize;
+
+    VK_LOG_DEBUG("ggml_vk_matmul_coopmat_int_shmem_support(BM=" << BM << ", BN=" << BN
+                 << ", total=" << total_size << ", supported=" << supported);
+
+    return supported;
+}
+
 struct GpuPipelineConfig {
     // GPU architecture identifier.
     // Example: vk_device_architecture::AMD_GCN
@@ -4185,7 +4212,8 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
                           l_warptile_mmq_k, m_warptile_mmq_k, s_warptile_mmq_k,
                           l_warptile_mmqid, m_warptile_mmqid, s_warptile_mmqid,
                           l_warptile_mmqid_int, m_warptile_mmqid_int, s_warptile_mmqid_int,
-                          l_warptile_mmqid_int_k, m_warptile_mmqid_int_k, s_warptile_mmqid_int_k;
+                          l_warptile_mmqid_int_k, m_warptile_mmqid_int_k, s_warptile_mmqid_int_k,
+                          l_warptile_mmq_cm_int, m_warptile_mmq_cm_int, s_warptile_mmq_cm_int;
     std::array<uint32_t, 3> l_wg_denoms, m_wg_denoms, s_wg_denoms,
                             l_mmq_wg_denoms, m_mmq_wg_denoms, s_mmq_wg_denoms,
                             l_mmq_wg_denoms_k, m_mmq_wg_denoms_k, s_mmq_wg_denoms_k,
@@ -4260,6 +4288,26 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
         m_warptile_mmq = { 128,              64,  64, 32, subgroup_size_8,     32, 2, tm_m, tn_m, tk_m, subgroup_size_8 };
         s_warptile_mmq = { subgroup_size_32, 32,  32, 32, s_warptile_wm,       32, 2, tm_s, tn_s, tk_s, subgroup_size_8 };
 
+        {
+            const uint32_t cm_i_m = device->coopmat_int_support ? device->coopmat_int_m : 16;
+            const uint32_t cm_i_n = device->coopmat_int_support ? device->coopmat_int_n : 16;
+            const uint32_t cm_i_k = device->coopmat_int_support ? device->coopmat_int_k : 16;
+            const bool use_wave32 = device->architecture == vk_device_architecture::AMD_RDNA3 &&
+                                    device->driver_id == vk::DriverId::eMesaRadv &&
+                                    device->subgroup_size_control &&
+                                    device->subgroup_min_size <= 32 && device->subgroup_max_size >= 32;
+            const uint32_t sg = use_wave32 ? 32 : device->subgroup_size;
+            const uint32_t wm = use_wave32 ? 32 : 64;
+            const uint32_t l_bk_step = use_wave32 ? 3 : 2;
+            const auto block_size = [sg, wm](uint32_t bm, uint32_t bn) {
+                return sg * (bm / wm) * (bn / 32);
+            };
+
+            l_warptile_mmq_cm_int = { block_size(128, 160), 128, 160, 32, wm, 32, 1, cm_i_m, cm_i_n, cm_i_k, sg, l_bk_step };
+            m_warptile_mmq_cm_int = { block_size(128,  64), 128,  64, 32, wm, 32, 1, cm_i_m, cm_i_n, cm_i_k, sg, 2 };
+            s_warptile_mmq_cm_int = { block_size( 32,  32),  32,  32, 32, 32, 32, 1, cm_i_m, cm_i_n, cm_i_k, sg, 2 };
+        }
+
         // Integer MMQ has a smaller shared memory profile, but heavier register use
         l_warptile_mmq_int = { 128,             128, 128, 32, subgroup_size_8 * 2, 64, 2, 4, 4, 1, subgroup_size_8 };
         m_warptile_mmq_int = { 128,              64,  64, 32, subgroup_size_8,     32, 2, 2, 2, 1, subgroup_size_8 };
@@ -4307,6 +4355,13 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
         l_align = 128;
         m_align =  64;
         s_align =  32;
+
+        if (device->coopmat_int_support &&
+            device->coopmat_int_m == 16 && device->coopmat_int_n == 16 && device->coopmat_int_k == 16) {
+            device->mul_mat_cm_int_s = ggml_vk_matmul_coopmat_int_shmem_support(device, s_warptile_mmq_cm_int);
+            device->mul_mat_cm_int_m = device->mul_mat_cm_int_s && ggml_vk_matmul_coopmat_int_shmem_support(device, m_warptile_mmq_cm_int);
+            device->mul_mat_cm_int_l = device->mul_mat_cm_int_m && ggml_vk_matmul_coopmat_int_shmem_support(device, l_warptile_mmq_cm_int);
+        }
 
         for (uint32_t i = 0; i < GGML_TYPE_COUNT; ++i) {
             ggml_type t = (ggml_type)i;
@@ -4751,6 +4806,25 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
         CREATE_MM2(GGML_TYPE_Q5_0, pipeline_dequant_mul_mat_mat[GGML_TYPE_Q5_0], matmul_q5_0_f32, mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, );
         CREATE_MM2(GGML_TYPE_Q5_1, pipeline_dequant_mul_mat_mat[GGML_TYPE_Q5_1], matmul_q5_1_f32, mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, );
         CREATE_MM2(GGML_TYPE_Q8_0, pipeline_dequant_mul_mat_mat[GGML_TYPE_Q8_0], matmul_q8_0_f32, mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, );
+
+#if defined(GGML_VULKAN_INTEGER_DOT_GLSLC_SUPPORT)
+        if (device->integer_dot_product) {
+            const std::array<uint32_t, 3> l_cm_int_wg_denoms = { l_warptile_mmq_cm_int[1], l_warptile_mmq_cm_int[2], 1 };
+            const std::array<uint32_t, 3> m_cm_int_wg_denoms = { m_warptile_mmq_cm_int[1], m_warptile_mmq_cm_int[2], 1 };
+            const std::array<uint32_t, 3> s_cm_int_wg_denoms = { s_warptile_mmq_cm_int[1], s_warptile_mmq_cm_int[2], 1 };
+#define CREATE_MMQ_CM(SUFFIX, TILE, WARPTILE, WG_DENOMS) \
+            if (device->mul_mat_cm_int_ ## TILE) { \
+                ggml_vk_create_pipeline(device, device->pipeline_dequant_mul_mat_mat_q8_1[GGML_TYPE_Q8_0].f32acc->SUFFIX, \
+                    "matmul_q8_0_q8_1_cm1_" #SUFFIX, matmul_q8_0_q8_1_cm1_len, matmul_q8_0_q8_1_cm1_data, "main", 3, \
+                    sizeof(vk_mat_mat_push_constants), WG_DENOMS, WARPTILE, 1, false, true, WARPTILE[10]); \
+            }
+
+            CREATE_MMQ_CM(l, l, l_warptile_mmq_cm_int, l_cm_int_wg_denoms)
+            CREATE_MMQ_CM(m, m, m_warptile_mmq_cm_int, m_cm_int_wg_denoms)
+            CREATE_MMQ_CM(s, s, s_warptile_mmq_cm_int, s_cm_int_wg_denoms)
+#undef CREATE_MMQ_CM
+        }
+#endif
 
         CREATE_MM2(GGML_TYPE_Q2_K, pipeline_dequant_mul_mat_mat[GGML_TYPE_Q2_K], matmul_q2_k_f32, mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, );
         CREATE_MM2(GGML_TYPE_TQ2_0, pipeline_dequant_mul_mat_mat[GGML_TYPE_TQ2_0], matmul_tq2_0_f32, mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, );
@@ -8766,9 +8840,12 @@ static vk_pipeline ggml_vk_guess_matmul_pipeline(ggml_backend_vk_context * ctx, 
     // The q8_1 (integer dot) mmq path uses a different shader with its own
     // shared-memory layout, so use the int-specific availability flags.
     const bool is_q8_1 = (src1_type == GGML_TYPE_Q8_1);
-    const bool mm_l = is_q8_1 ? ctx->device->mul_mat_l_int[src0_type] : ctx->device->mul_mat_l[src0_type];
-    const bool mm_m = is_q8_1 ? ctx->device->mul_mat_m_int[src0_type] : ctx->device->mul_mat_m[src0_type];
-    const bool mm_s = is_q8_1 ? ctx->device->mul_mat_s_int[src0_type] : ctx->device->mul_mat_s[src0_type];
+
+    const bool is_cm_int = is_q8_1 && src0_type == GGML_TYPE_Q8_0 && ctx->device->mul_mat_cm_int_s;
+
+    const bool mm_l = is_cm_int ? ctx->device->mul_mat_cm_int_l : (is_q8_1 ? ctx->device->mul_mat_l_int[src0_type] : ctx->device->mul_mat_l[src0_type]);
+    const bool mm_m = is_cm_int ? ctx->device->mul_mat_cm_int_m : (is_q8_1 ? ctx->device->mul_mat_m_int[src0_type] : ctx->device->mul_mat_m[src0_type]);
+    const bool mm_s = is_cm_int ? ctx->device->mul_mat_cm_int_s : (is_q8_1 ? ctx->device->mul_mat_s_int[src0_type] : ctx->device->mul_mat_s[src0_type]);
 
     if (ctx->device->coopmat2) {
         const uint32_t shader_core_count = ctx->device->shader_core_count;
