@@ -15,10 +15,6 @@ static ordered_json & as_json(common_json_node * node) {
     return *reinterpret_cast<ordered_json *>(node);
 }
 
-static const ordered_json & as_json(const common_json_node * node) {
-    return *reinterpret_cast<const ordered_json *>(node);
-}
-
 static common_json_node * as_node(ordered_json * json) {
     return reinterpret_cast<common_json_node *>(json);
 }
@@ -59,10 +55,15 @@ template <typename T> common_json common_json_from_raw(const T & json) {
     return make_json(json);
 }
 
+template <typename T> common_json_ref common_json_ref_from_raw(T & json) {
+    return common_json_ref(as_node(&json));
+}
+
 // the bridge is usable only for the type below
 template ordered_json       & common_json_raw<ordered_json>(common_json_ref &);
 template const ordered_json & common_json_raw<ordered_json>(const common_json_ref &);
 template common_json          common_json_from_raw<ordered_json>(const ordered_json &);
+template common_json_ref      common_json_ref_from_raw<ordered_json>(ordered_json &);
 
 common_json_value::common_json_value(const char * val) {
     if (val) {
@@ -76,6 +77,9 @@ common_json_value::common_json_value(const char * val) {
 common_json_value::common_json_value(const common_json & val) :
     type(VAL_JSON), val_json(std::make_shared<common_json>(val)) {}
 
+common_json_value::common_json_value(std::initializer_list<common_json_item> items) :
+    type(VAL_JSON), val_json(std::make_shared<common_json>(items)) {}
+
 common_json_value::common_json_value(const common_json_ref & val) :
     type(VAL_JSON), val_json(std::make_shared<common_json>(make_json(as_json(val.get_node())))) {}
 
@@ -86,6 +90,7 @@ bool common_json_ref::is_string()         const { return as_json(node).is_string
 bool common_json_ref::is_boolean()        const { return as_json(node).is_boolean(); }
 bool common_json_ref::is_number()         const { return as_json(node).is_number(); }
 bool common_json_ref::is_number_integer() const { return as_json(node).is_number_integer(); }
+bool common_json_ref::is_number_float()   const { return as_json(node).is_number_float(); }
 
 bool   common_json_ref::empty() const { return as_json(node).empty(); }
 size_t common_json_ref::size()  const { return as_json(node).size(); }
@@ -197,6 +202,16 @@ common_json common_json::parse(const std::string & text) {
 
 common_json common_json::array() {
     return make_json(ordered_json::array());
+}
+
+common_json common_json::array(std::initializer_list<common_json_value> vals) {
+    ordered_json out = ordered_json::array();
+
+    for (const auto & val : vals) {
+        out.push_back(to_json(val));
+    }
+
+    return make_json(out);
 }
 
 common_json common_json::object() {

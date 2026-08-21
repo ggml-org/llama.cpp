@@ -1,6 +1,7 @@
 #pragma once
 
 // JSON object, it works without the need to include a JSON library header
+// the underlay library is pimpl, it should never be exposed here
 // note: object keys keep the order in which they are added
 
 #include <cstddef>
@@ -14,6 +15,9 @@
 
 class common_json;
 class common_json_ref;
+
+// common_json_value holds a list of these, and each of them holds a value, so one must come first
+struct common_json_item;
 
 // one value of the backing library, only json.cpp knows what it is
 struct common_json_node;
@@ -57,6 +61,9 @@ struct common_json_value {
     common_json_value(const common_json & val);
     common_json_value(const common_json_ref & val);
 
+    // nested object, e.g. {"fn", {{"name", "x"}}}
+    common_json_value(std::initializer_list<common_json_item> items);
+
     template <typename T, typename std::enable_if<std::is_integral<T>::value && !std::is_same<T, bool>::value, int>::type = 0>
     common_json_value(T val) : type(std::is_signed<T>::value ? VAL_INT : VAL_UINT) {
         if (std::is_signed<T>::value) {
@@ -77,6 +84,10 @@ struct common_json_item {
     template <typename T>
     common_json_item(std::string key, T && val) :
         key(std::move(key)), val(std::forward<T>(val)) {}
+
+    // a braced list cannot deduce T, so it needs its own overload
+    common_json_item(std::string key, std::initializer_list<common_json_item> items) :
+        key(std::move(key)), val(items) {}
 };
 
 // view to a value owned by a common_json, it goes stale if the owner gets a new key
@@ -96,6 +107,7 @@ class common_json_ref {
     bool is_boolean() const;
     bool is_number()  const;
     bool is_number_integer() const;
+    bool is_number_float()   const;
 
     bool   empty() const;
     size_t size()  const;
@@ -170,9 +182,9 @@ class common_json_ref {
             std::pair<std::string, common_json_ref> operator*() const;
 
             iterator & operator++() {
-            idx++;
-            return *this;
-        }
+                idx++;
+                return *this;
+            }
 
             bool operator!=(const iterator & other) const { return idx != other.idx; }
 
@@ -215,6 +227,7 @@ class common_json : public common_json_ref {
     static common_json parse(const std::string & text);
 
     static common_json array();
+    static common_json array(std::initializer_list<common_json_value> vals);
     static common_json object();
 
     // holds a single value, e.g. make("abc").dump() gives "\"abc\""
@@ -232,3 +245,6 @@ template <typename T> T       & common_json_raw(common_json_ref & json);
 template <typename T> const T & common_json_raw(const common_json_ref & json);
 
 template <typename T> common_json common_json_from_raw(const T & json);
+
+// view over a value of the backing library, it does not copy
+template <typename T> common_json_ref common_json_ref_from_raw(T & json);

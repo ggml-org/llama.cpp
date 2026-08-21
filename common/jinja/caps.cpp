@@ -4,14 +4,14 @@
 
 // note: the json dependency is only for defining input in a convenient way
 // we can remove it in the future when we figure out a better way to define inputs using jinja::value
-#include <nlohmann/json.hpp>
+#include "json.h"
 
 #include <functional>
 #include <sstream>
 
 #define FILENAME "jinja-caps"
 
-using json = nlohmann::ordered_json;
+using json = common_json;
 
 namespace jinja {
 
@@ -370,7 +370,7 @@ caps caps_get(jinja::program & prog) {
     caps_try_execute(
         prog,
         [&]() {
-            json args = json(R"({"arg": "value"})");
+            json args = json::make(R"({"arg": "value"})");
             if (result.supports_object_arguments) {
                 args = json{{"arg", "value"}};
             }

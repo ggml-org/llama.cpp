@@ -6,6 +6,7 @@
 #include "common.h"
 #include "ggml.h"
 #include "json-schema-to-grammar.h"
+#include "json.h"
 #include "log.h"
 
 #include "jinja/value.h"
@@ -972,7 +973,7 @@ static std::string common_chat_template_direct_apply_impl(
         jinja::caps_apply_reasoning_effort(ctx, reasoning_effort);
     }
 
-    jinja::global_from_json(ctx, inp, inputs.mark_input);
+    jinja::global_from_json(ctx, common_json_ref_from_raw(inp), inputs.mark_input);
 
     // render
     jinja::runtime runtime(ctx);
