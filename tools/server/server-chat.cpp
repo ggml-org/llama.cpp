@@ -341,7 +341,7 @@ json server_chat_convert_anthropic_to_oai(const json & body) {
         std::string system_content;
 
         if (system_param.is_string()) {
-            system_content = system_param.get<std::string>();
+            system_content = system_param;
             normalize_anthropic_billing_header(system_content);
         } else if (system_param.is_array()) {
             for (const auto & block : system_param) {

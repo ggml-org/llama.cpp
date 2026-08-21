@@ -386,14 +386,14 @@ std::vector<common_chat_msg> common_chat_msgs_parse_oaicompat(const json & messa
             if (!message.contains("role")) {
                 throw std::invalid_argument("Missing 'role' in message: " + message.dump());
             }
-            msg.role = message.at("role").get<std::string>();
+            msg.role = message.at("role");
 
             auto has_content    = message.contains("content");
             auto has_tool_calls = message.contains("tool_calls");
             if (has_content) {
                 const auto & content = message.at("content");
                 if (content.is_string()) {
-                    msg.content = content.get<std::string>();
+                    msg.content = content;
                 } else if (content.is_array()) {
                     for (const auto & part : content) {
                         if (!part.contains("type")) {
@@ -404,8 +404,8 @@ std::vector<common_chat_msg> common_chat_msgs_parse_oaicompat(const json & messa
                             throw std::invalid_argument("Unsupported content part type: " + type.dump());
                         }
                         common_chat_msg_content_part msg_part;
-                        msg_part.type = type.get<std::string>();
-                        msg_part.text = part.at("text").get<std::string>();
+                        msg_part.type = type;
+                        msg_part.text = part.at("text");
                         msg.content_parts.push_back(msg_part);
                     }
                 } else if (!content.is_null()) {
@@ -431,15 +431,15 @@ std::vector<common_chat_msg> common_chat_msgs_parse_oaicompat(const json & messa
                     if (!fc.contains("name")) {
                         throw std::invalid_argument("Missing tool call name: " + tool_call.dump());
                     }
-                    tc.name           = fc.at("name").get<std::string>();
+                    tc.name           = fc.at("name");
                     const auto & args = fc.at("arguments");
                     if (args.is_string()) {
-                        tc.arguments = args.get<std::string>();
+                        tc.arguments = args;
                     } else {
                         tc.arguments = args.dump();
                     }
                     if (tool_call.contains("id")) {
-                        tc.id = tool_call.at("id").get<std::string>();
+                        tc.id = tool_call.at("id");
                     }
                     msg.tool_calls.push_back(tc);
                 }
@@ -450,13 +450,13 @@ std::vector<common_chat_msg> common_chat_msgs_parse_oaicompat(const json & messa
                     "https://github.com/ggml-org/llama.cpp/issues/12279)");
             }
             if (message.contains("reasoning_content")) {
-                msg.reasoning_content = message.at("reasoning_content").get<std::string>();
+                msg.reasoning_content = message.at("reasoning_content");
             }
             if (message.contains("name")) {
-                msg.tool_name = message.at("name").get<std::string>();
+                msg.tool_name = message.at("name");
             }
             if (message.contains("tool_call_id")) {
-                msg.tool_call_id = message.at("tool_call_id").get<std::string>();
+                msg.tool_call_id = message.at("tool_call_id");
             }
 
             msgs.push_back(msg);
@@ -937,7 +937,7 @@ static std::string common_chat_template_direct_apply_impl(
     jinja::context ctx(tmpl.source());
 
     // messages_override is already built for this template, do not touch its content parts
-    common_json inp = common_json{
+    json inp = json{
         {"messages", messages_override.has_value()
             ? *messages_override
             : messages_inp_normalizer(tmpl.original_caps()).normalize(inputs.messages)},
@@ -2482,7 +2482,7 @@ static common_chat_params common_chat_params_init_kimi_k3(const common_chat_temp
                     std::string type = "string";
                     if (prop.value().is_object() && prop.value().contains("type") &&
                         prop.value().at("type").is_string()) {
-                        type = prop.value().at("type").get<std::string>();
+                        type = prop.value().at("type");
                     }
 
                     auto value = type == "string" ? p.tool_arg_string_value(p.until(ARG_END)) :
@@ -3799,7 +3799,7 @@ static common_chat_params common_chat_templates_apply_legacy(const struct common
     common_chat_params params;
     params.prompt = std::string(buf.data(), res);
     if (!inputs.json_schema.empty()) {
-        params.grammar = json_schema_to_grammar(common_json::parse(inputs.json_schema));
+        params.grammar = json_schema_to_grammar(json::parse(inputs.json_schema));
     } else {
         params.grammar = inputs.grammar;
     }

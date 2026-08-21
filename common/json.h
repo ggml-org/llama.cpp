@@ -170,12 +170,9 @@ class common_json {
 
     // implicit get<T>() for plain values, so they can be assigned to their C++ type directly
     // note: kept to this short list on purpose, a wider one makes j["key"] ambiguous
+    // note: only std::string. adding a numeric one makes "str = json;" ambiguous,
+    // because a number can also convert to char, which std::string accepts
     operator std::string() const { return get<std::string>(); }
-    operator bool()        const { return get<bool>(); }
-    operator int()         const { return get<int>(); }
-    operator int64_t()     const { return get<int64_t>(); }
-    operator float()       const { return get<float>(); }
-    operator double()      const { return get<double>(); }
 
     template <typename T>
     T value(const std::string & key, T def) const {
@@ -291,6 +288,8 @@ class common_json {
 
   private:
     // the backing value is built here, json.cpp checks that it fits
+    // it cannot be a pointer: a value inside a tree would then not be a common_json,
+    // so at() could only give back a copy instead of a real reference
     alignas(8) unsigned char storage[32];
 };
 
