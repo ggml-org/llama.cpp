@@ -3136,6 +3136,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_IMATRIX}));
     add_opt(common_arg(
+        {"--nextn"},
+        string_format("also collect data for MTP/NextN layers, if the model has any (default: %s)", params.load_mtp ? "true" : "false"),
+        [](common_params & params) {
+            params.load_mtp = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_IMATRIX}));
+    add_opt(common_arg(
         {"--ppl"},
         {"--no-ppl"},
         string_format("whether to compute perplexity (default: %s)", params.compute_ppl ? "true" : "false"),

@@ -8,7 +8,7 @@ More information is available in <https://github.com/ggml-org/llama.cpp/pull/486
 ```
 ./llama-imatrix \
     -m model.gguf -f some-text.txt [-o imatrix.gguf] [--output-format {gguf,dat}] [--no-ppl] \
-    [--process-output] [--chunk 123] [--save-frequency 0] [--output-frequency 10] \
+    [--process-output] [--nextn] [--chunk 123] [--save-frequency 0] [--output-frequency 10] \
     [--in-file imatrix-prev-0.gguf --in-file imatrix-prev-1.gguf ...] [--parse-special] \
     [--show-statistics] [...]
 ```
@@ -23,6 +23,7 @@ The parameters in square brackets are optional and have the following meaning:
 * `--output-format` specifies the output format of the generated imatrix file. Either `gguf`, or `dat` (the legacy format). Defaults to `gguf`.
 * `--save-frequency` specifies how often to save a copy of the imatrix in a separate file. Default is 0 (i.e., never)
 * `--process-output` specifies if data will be collected for `output.weight` and `token_embd.weight` (when the model ties its embeddings to the output). Typically, it is better not to utilize the importance matrix when quantizing these tensors, so it's set to `false` by default.
+* `--nextn` also collect data for MTP/NextN layers. Needs a single sequence per batch (i.e. set `--batch-size` ≤ `--ctx-size`). Cannot be used on models with more than one NextN layer, or whose NextN layers share the KV cache.
 * `--in-file` one or more existing imatrix files to load and combine. Useful for merging files from multiple runs/datasets.
 * `--parse-special` enables parsing of special tokens (e.g., `<|im_start|>` in some models). Useful for models with custom tokenizers.
 * `--chunk | --from-chunk` to skip the first `n` chunks of tokens from the input data. Useful for resuming or skipping initial low-quality data.

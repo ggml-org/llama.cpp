@@ -1,13 +1,16 @@
+#include "llama.h"
+#include "../src/llama-ext.h"
+
 #include "arg.h"
 #include "common.h"
 #include "gguf.h"
 #include "imatrix-loader.h"
-#include "llama.h"
 #include "log.h"
 
 #include <chrono>
 #include <climits>
 #include <cmath>
+#include <cstring>
 #include <fstream>
 #include <mutex>
 #include <thread>
@@ -21,7 +24,7 @@ static void print_usage(int, char ** argv) {
     LOG("\nexample usage:\n");
     LOG("\n    %s \\\n"
             "       -m model.gguf -f some-text.txt [-o imatrix.gguf] [--output-format {gguf,dat}] [--no-ppl] \\\n"
-            "       [--process-output] [--chunk 123] [--save-frequency 0] [--output-frequency 10] \\\n"
+            "       [--process-output] [--nextn] [--chunk 123] [--save-frequency 0] [--output-frequency 10] \\\n"
             "       [--in-file imatrix-prev-0.gguf --in-file imatrix-prev-1.gguf ...] [--parse-special] \\\n"
             "       [--show-statistics] [...]\n" , argv[0]);
     LOG("\n");
@@ -69,6 +72,8 @@ public:
     void save_imatrix(int32_t n_chunk = -1) const;
     bool load_imatrix(const char * file_name);
     const std::unordered_map<std::string, Stats> & get_mstats() const { return m_stats; }
+    void set_n_layer_nextn(int32_t n_layer_nextn) { m_n_layer_nextn = n_layer_nextn; }
+    int32_t get_n_layer_nextn() const { return m_n_layer_nextn; }
 private:
     std::unordered_map<std::string, Stats>  m_stats;
     common_params                           m_params;
@@ -76,6 +81,7 @@ private:
     std::vector<std::string>                m_datasets;
     int32_t                                 m_last_chunk = 0;
     int32_t                                 m_chunk_size = 0;
+    int32_t                                 m_n_layer_nextn = 0;
     std::vector<char>                       m_src1_data;
     std::vector<char>                       m_ids; // the expert ids from ggml_mul_mat_id
     int32_t e_chunk_size() const {
@@ -123,7 +129,7 @@ static void process_tensor_name(const std::string & input, std::string & layer, 
         if (name[i] == "weight" && i > 0) {
             for (size_t j = 0; j < name.size(); ++j) {
                 if (name[j] == "blk") {
-                    j+=2;
+                    j += name.size() > 4 ? 1 : 2;
                     continue;
                 }
                 if (j == i) { break; }
@@ -279,7 +285,35 @@ static bool compute_vector_statistics(std::vector<tensor_statistics> & tstats, c
     return true;
 }
 
-static void compute_tensor_statistics(std::vector<tensor_statistics> & tstats, const std::unordered_map<std::string, Stats> & mstats) {
+static int nextn_layer_start(const std::vector<tensor_statistics> & tstats, int32_t n_layer_nextn) {
+    int max_blk = -1;
+    int first   = INT_MAX;
+
+    for (const auto & ts : tstats) {
+        std::string layer_str;
+        std::string name;
+        process_tensor_name(ts.tensor, layer_str, name);
+
+        int blk = -1;
+        try { blk = std::stoi(layer_str); } catch (...) { continue; }
+
+        max_blk = std::max(max_blk, blk);
+        if (name.rfind("nextn.", 0) == 0) { first = std::min(first, blk); }
+    }
+
+    if (n_layer_nextn > 0 && max_blk >= 0) { return std::max(0, max_blk + 1 - n_layer_nextn); }
+
+    return first;
+}
+
+static std::string layer_label(int blk, int nextn_start) {
+    if (blk < 0 || blk == INT_MAX) { return "-"; }
+    if (blk >= nextn_start) { return "mtp" + std::to_string(blk - nextn_start); }
+
+    return std::to_string(blk);
+}
+
+static void compute_tensor_statistics(std::vector<tensor_statistics> & tstats, const std::unordered_map<std::string, Stats> & mstats, int nextn_start) {
     constexpr auto fnan = std::numeric_limits<float>::quiet_NaN();
     std::unordered_map<std::string, size_t> tensor_map;
     tensor_map.reserve(tstats.size());
@@ -293,13 +327,15 @@ static void compute_tensor_statistics(std::vector<tensor_statistics> & tstats, c
         int blk = -1;
         try { blk = std::stoi(layer_str); } catch (...) { continue; }
         if (blk <= 0) { continue; }
+        if (blk == nextn_start) { continue; }
 
+        const int blk_first = blk > nextn_start ? nextn_start : 0;
         const size_t blk_start_pos = ts.tensor.find("blk." + layer_str);
         if (blk_start_pos == std::string::npos) { continue; }
 
         std::string tname = ts.tensor;
         auto it = tensor_map.end();
-        for (int prev = blk - 1; prev >= 0 && it == tensor_map.end(); --prev) {
+        for (int prev = blk - 1; prev >= blk_first && it == tensor_map.end(); --prev) {
             tname = ts.tensor;
             tname.replace(blk_start_pos, layer_str.length() + 4, "blk." + std::to_string(prev));
             it = tensor_map.find(tname);
@@ -535,8 +571,10 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor * t, bool ask, void * 
         if (t->op != GGML_OP_MUL_MAT) { return false; }
         // why are small batches ignored (<16 tokens)?
         if (src1->ne[1] < 16 || src1->type != GGML_TYPE_F32) { return false; }
-        // collect output.weight and token_embd.weight when a tied model uses it as the output matmul
-        if (!(wname.substr(0, 4) == "blk." || (m_params.process_output && (wname == "output.weight" || wname == "token_embd.weight")))) { return false; }
+        const bool is_output = wname == "output.weight" || wname == "token_embd.weight" || wname == "nextn.post_projection.weight";
+        const bool is_nextn  = wname == "nextn.pre_projection.weight";
+        if (!(wname.substr(0, 4) == "blk." || (m_params.process_output && is_output) || (m_params.load_mtp && is_nextn))) { return false; }
+
         return true;
     }
 
@@ -882,7 +920,7 @@ void IMatrixCollector::save_imatrix(int32_t n_chunk) const {
     std::vector<tensor_statistics> tstats;
     tstats.reserve(m_stats.size());
     for (const auto & kv : m_stats) { compute_vector_statistics(tstats, kv.first, kv.second); }
-    if (!tstats.empty()) { compute_tensor_statistics(tstats, m_stats); }
+    if (!tstats.empty()) { compute_tensor_statistics(tstats, m_stats, nextn_layer_start(tstats, m_n_layer_nextn)); }
 
     // index by tensor name
     std::unordered_map<std::string, const tensor_statistics *> tstat_index;
@@ -913,10 +951,11 @@ void IMatrixCollector::save_imatrix(int32_t n_chunk) const {
         // Write the number of chunks the matrix was computed with
         gguf_set_val_u32(ctx_gguf, LLM_KV_IMATRIX_CHUNK_COUNT, m_last_chunk);
         gguf_set_val_u32(ctx_gguf, LLM_KV_IMATRIX_CHUNK_SIZE, e_chunk_size());
-
+        // Write how many of the top layers are NextN layers, so statistics can tell them apart
+        if (m_n_layer_nextn > 0) { gguf_set_val_u32(ctx_gguf, LLM_KV_IMATRIX_N_LAYER_NEXTN, m_n_layer_nextn); }
         // Define the schema for the tensor statistics (for use in quantize.cpp)
-        const char * stats_schema[] = {"sum_sq", "mean", "elements", "std_deviation", "skewness", "kurtosis", "gain",
-            "h_norm", "l2_dist", "cossim", "pearson", "covariance"
+        const char * stats_schema[] = {
+            "sum_sq", "mean", "elements", "std_deviation", "skewness", "kurtosis", "gain", "h_norm", "l2_dist", "cossim", "pearson", "covariance"
         };
         gguf_set_arr_str(ctx_gguf, LLM_KV_IMATRIX_STATS_SCHEMA, stats_schema, 12);
     }
@@ -1020,6 +1059,14 @@ bool IMatrixCollector::load_imatrix(const char * file_name) {
     }
 
     const bool is_legacy = loaded.is_legacy;
+    if (loaded.n_layer_nextn > 0) {
+        if (m_n_layer_nextn == 0) { m_n_layer_nextn = loaded.n_layer_nextn; }
+        else if (m_n_layer_nextn != loaded.n_layer_nextn) {
+            LOG_WRN("%s: NextN layer count mismatch in %s: %d != %d, using %d\n",
+                __func__, file_name, loaded.n_layer_nextn, m_n_layer_nextn, m_n_layer_nextn);
+        }
+    }
+
     if (!is_legacy && loaded.chunk_size > 0) {
         if (m_chunk_size == 0) { m_chunk_size = loaded.chunk_size; }
         else if (m_chunk_size != loaded.chunk_size) {
@@ -1185,7 +1232,111 @@ static void process_logits(
     }
 }
 
-static bool compute_imatrix(llama_context * ctx, const common_params & params, const int32_t n_ctx) {
+struct nextn_collector {
+    llama_context_ptr  ctx;
+    llama_batch        batch = {};
+    int32_t            n_embd = 0;
+    bool               own_lm_head = false;
+    std::vector<float> pending_h;
+    ~nextn_collector() { llama_batch_free(batch); }
+    void clear_memory() {
+        llama_memory_clear(llama_get_memory(ctx.get()), true);
+        pending_h.clear(); // a chunk's last h-row has no next token, the trunk restarts at position 0
+    }
+    bool decode(llama_context * ctx_trunk, const llama_batch & batch_trunk);
+};
+
+struct nextn_model_info {
+    bool has_layers = false;
+    std::vector<bool> own_lm_head;
+};
+
+static nextn_model_info nextn_read_model_info(const std::string & model_path, int32_t n_layer, int32_t n_heads) {
+    nextn_model_info info;
+    info.own_lm_head.assign(n_heads, false);
+
+    struct gguf_init_params gguf_params = { /*.no_alloc =*/ true, /*.ctx =*/ nullptr };
+    struct gguf_context * ctx_gguf = gguf_init_from_file(model_path.c_str(), gguf_params);
+    if (!ctx_gguf) {
+        LOG_WRN("%s: cannot read '%s'\n", __func__, model_path.c_str());
+        return info;
+    }
+
+    const int64_t n_tensors = gguf_get_n_tensors(ctx_gguf);
+
+    for (int32_t head = 0; head < n_heads; ++head) {
+        const std::string prefix  = "blk." + std::to_string(n_layer + head) + ".nextn.";
+        const std::string lm_head = prefix + "shared_head_head.weight";
+        for (int64_t i = 0; i < n_tensors; ++i) {
+            const std::string name = gguf_get_tensor_name(ctx_gguf, i);
+            if (name.rfind(prefix, 0) != 0) { continue; }
+
+            info.has_layers = true;
+            if (name == lm_head) { info.own_lm_head[head] = true; }
+        }
+    }
+
+    gguf_free(ctx_gguf);
+
+    return info;
+}
+
+static std::unique_ptr<nextn_collector> nextn_collector_init(llama_model * model, const common_params & params, bool own_lm_head) {
+    auto cparams = common_context_params_to_llama(params);
+    cparams.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
+    cparams.n_rs_seq = 0;
+    llama_context * ctx = llama_init_from_model(model, cparams);
+    if (ctx == nullptr) {
+        LOG_ERR("%s: failed to create the NextN context\n", __func__);
+        return nullptr;
+    }
+
+    auto res = std::make_unique<nextn_collector>();
+    res->ctx.reset(ctx);
+    res->n_embd = llama_model_n_embd_out(model);
+    res->own_lm_head = own_lm_head;
+    res->batch = llama_batch_init(params.n_batch, res->n_embd, /*n_seq_max =*/ 1);
+    res->batch.token = (llama_token *) malloc(sizeof(llama_token) * params.n_batch);
+
+    return res;
+}
+
+bool nextn_collector::decode(llama_context * ctx_trunk, const llama_batch & batch_trunk) {
+    const int32_t n_last = batch_trunk.n_tokens - 1;
+    common_batch_clear(batch);
+    if (!pending_h.empty()) {
+        common_batch_add(batch, batch_trunk.token[0], batch_trunk.pos[0], { 0 }, false);
+        std::memcpy(batch.embd, pending_h.data(), (size_t) n_embd * sizeof(float));
+    }
+
+    for (int32_t i = 0; i <= n_last; ++i) {
+        const float * h = llama_get_embeddings_nextn_ith(ctx_trunk, i);
+        if (h == nullptr) {
+            LOG_ERR("%s: no NextN hidden state for row %d\n", __func__, i);
+            return false;
+        }
+
+        if (i == n_last) { pending_h.assign(h, h + n_embd); break; }
+
+        const int32_t row = batch.n_tokens;
+        common_batch_add(batch, batch_trunk.token[i + 1], batch_trunk.pos[i + 1], { 0 }, false);
+        std::memcpy(batch.embd + (size_t) row * n_embd, h, (size_t) n_embd * sizeof(float));
+    }
+
+    if (batch.n_tokens == 0) { return true; }
+    if (batch.n_tokens < 16) { LOG_WRN("%s: NextN sub-batch of %d rows is below the collector's 16 row floor and is dropped\n", __func__, batch.n_tokens); }
+
+    std::fill(batch.logits, batch.logits + batch.n_tokens, (int8_t) (own_lm_head ? 1 : 0));
+
+    if (llama_decode(ctx.get(), batch) != 0) {
+        LOG_ERR("%s: failed to decode the NextN layer\n", __func__);
+        return false;
+    }
+
+    return true;
+}
+
+static bool compute_imatrix(llama_context * ctx, const common_params & params, const int32_t n_ctx, nextn_collector * nextn) {
     const llama_model * model = llama_get_model(ctx);
     const llama_vocab * vocab = llama_model_get_vocab(model);
 
@@ -1263,6 +1414,7 @@ static bool compute_imatrix(llama_context * ctx, const common_params & params, c
 
         // clear the KV cache
         llama_memory_clear(llama_get_memory(ctx), true);
+        if (nextn) { nextn->clear_memory(); }
 
         for (int j = 0; j < num_batches; ++j) {
             const int batch_start = start + j * n_batch;
@@ -1295,6 +1447,11 @@ static bool compute_imatrix(llama_context * ctx, const common_params & params, c
 
             if (llama_decode(ctx, batch)) {
                 LOG_ERR("%s : failed to eval\n", __func__);
+                llama_batch_free(batch);
+                return false;
+            }
+
+            if (nextn && !nextn->decode(ctx, batch)) {
                 llama_batch_free(batch);
                 return false;
             }
@@ -1387,7 +1544,8 @@ static bool show_statistics(const common_params & params) {
     }
 
     const bool legacy = n_legacy > 0;
-    compute_tensor_statistics(ts, g_collector.get_mstats());
+    const int nextn_start = nextn_layer_start(ts, g_collector.get_n_layer_nextn());
+    compute_tensor_statistics(ts, g_collector.get_mstats(), nextn_start);
 
     // Sorting logic (Layer index -> Tensor Name)
     struct tensor_comparer {
@@ -1471,6 +1629,7 @@ static bool show_statistics(const common_params & params) {
             else { blk = -1; }
         }
 
+        layer = layer_label(blk, nextn_start);
         if (legacy) {
             printf("%*s%s%-*s%s%10.4f%10.4f%12.4f%12.4f%8.2f%%%s%14.4f%8.2f%s%10.4f%10.4f\n",
                 w_lay, layer.c_str(), sep,
@@ -1504,22 +1663,26 @@ static bool show_statistics(const common_params & params) {
     compute_layer_statistics(ts, layer_cossim, layer_l2_dist, layer_pearson, layer_covariance, layer_gain);
 
     size_t layers = 0;
+    size_t trunk_layers = 0;
     int min = std::numeric_limits<int>::max();
     int max = -1;
 
     for (const auto & [layer, stats] : ls) {
         if (layer >= 0 && layer < 9999 && stats.n > 0) {
             layers++;
-            min = std::min(layer, min);
-            max = std::max(layer, max);
+            if (layer < nextn_start) {
+                trunk_layers++;
+                min = std::min(layer, min);
+                max = std::max(layer, max);
+            }
         }
     }
 
-    if (layers > 0) {
+    if (trunk_layers > 0) {
         const auto expected = (size_t)(max - min + 1);
-        if (layers != expected) {
+        if (trunk_layers != expected) {
             LOG_WRN("\n%s: layer sequence gap detected (found %zu layers in range %d-%d, expected %zu); layer statistics will not be shown\n",
-                __func__, layers, min, max, expected);
+                __func__, trunk_layers, min, max, expected);
             return false;
         }
     }
@@ -1553,17 +1716,16 @@ static bool show_statistics(const common_params & params) {
         float lcs = layer == 0 || layer == INT_MAX ? fnan : get_layer_stat(layer_cossim, layer);
         float lpc = layer == 0 || layer == INT_MAX ? fnan : get_layer_stat(layer_pearson, layer);
         float lcv = layer == 0 || layer == INT_MAX ? fnan : get_layer_stat(layer_covariance, layer);
-        auto str = std::to_string(layer);
-        const auto *lyr = layer == INT_MAX ? "-" : str.c_str();
+        const auto lyr = layer_label(layer, nextn_start);
 
         if (legacy) {
             printf("%*s%s%14.4f%8.2f%s%9.4f%9.4f%12.4f\n",
-                w_lay, lyr, sep,
+                w_lay, lyr.c_str(), sep,
                 stats.layer_sum, lgn, sep,
                 lcs, lpc, lcv);
         } else {
             printf("%*s%s%14.4f%8.2f%s%12.4f%9.4f%9.4f%12.4f\n",
-                w_lay, lyr, sep,
+                w_lay, lyr.c_str(), sep,
                 stats.layer_sum, lgn, sep,
                 ll2, lcs, lpc, lcv);
         }
@@ -1609,6 +1771,11 @@ int main(int argc, char ** argv) {
     {
         const int32_t n_seq = std::max(1, params.n_batch / n_ctx);
         const int32_t n_kv = n_seq * n_ctx;
+
+        if (params.load_mtp && n_seq > 1) {
+            LOG_ERR("%s: '--nextn' needs a single sequence per batch, set '--batch-size' to at most '--ctx-size' (%d)\n", __func__, n_ctx);
+            return 1;
+        }
 
         params.n_parallel = n_seq;
         params.n_ctx      = n_kv;
@@ -1671,15 +1838,43 @@ int main(int argc, char ** argv) {
                 __func__, n_ctx_train, params.n_ctx);
     }
 
+    std::unique_ptr<nextn_collector> nextn;
+
+    if (params.load_mtp) {
+        const int32_t n_heads = llama_model_n_layer_nextn(model);
+        const int32_t n_trunk = llama_model_n_layer(model);
+        const nextn_model_info info = n_heads > 0 ? nextn_read_model_info(params.model.path, n_trunk, n_heads) : nextn_model_info();
+
+        if (n_heads == 0) {
+            LOG_WRN("%s: the model has no NextN layers, '--nextn' has no effect\n", __func__);
+        } else if (n_trunk == 0) {
+            LOG_ERR("%s: NextN layers that share the trunk's KV cache are not supported\n", __func__);
+            return 1;
+        } else if (n_heads > 1) {
+            LOG_ERR("%s: models with more than one NextN layer are not supported (%d found)\n", __func__, n_heads);
+            return 1;
+        } else if (!info.has_layers) {
+            LOG_WRN("%s: no NextN tensor in '%s', '--nextn' has no effect\n", __func__, params.model.path.c_str());
+        } else {
+            nextn = nextn_collector_init(model, params, info.own_lm_head[0]);
+            if (nextn == nullptr) {
+                return 1;
+            }
+
+            llama_set_embeddings_nextn(ctx, true, /*masked*/ false);
+            g_collector.set_n_layer_nextn(n_heads);
+
+            LOG_INF("%s: collecting %d NextN layer(s) from block %d\n", __func__, n_heads, n_trunk);
+        }
+    }
+
     // print system information
     {
         LOG_INF("\n");
         LOG_INF("%s\n", common_params_get_system_info(params).c_str());
     }
 
-    if (!compute_imatrix(ctx, params, n_ctx)) {
-        return 1;
-    }
+    if (!compute_imatrix(ctx, params, n_ctx, nextn.get())) { return 1; }
 
     g_collector.save_imatrix();
 
