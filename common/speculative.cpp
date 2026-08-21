@@ -1002,7 +1002,7 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
         for (auto & s : smpls) {
             common_params_sampling sparams;
             sparams.no_perf  = false;
-            sparams.top_k    = is_dflash2 ? selector_top_k : 10;
+            sparams.top_k    = 10;
             sparams.samplers = { COMMON_SAMPLER_TYPE_TOP_K };
             s.reset(common_sampler_init(model_dft, sparams));
         }
@@ -1091,68 +1091,87 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
 
         const int32_t n_tokens = batch_in.n_tokens;
 
+        // per-seq inclusive batch range (assumes each seq's tokens are contiguous in the batch)
+        std::vector<int32_t> i_batch_beg(n_seq, -1);
+        std::vector<int32_t> i_batch_end(n_seq, -1);
+        for (int32_t k = 0; k < n_tokens; ++k) {
+            GGML_ASSERT(batch_in.n_seq_id[k] == 1);
+            const llama_seq_id seq_id = batch_in.seq_id[k][0];
+            if (seq_id < 0 || seq_id >= (llama_seq_id) n_seq) {
+                continue;
+            }
+            i_batch_end[seq_id] = k;
+            if (i_batch_beg[seq_id] < 0) {
+                i_batch_beg[seq_id] = k;
+            }
+        }
+
         auto * ctx_tgt = this->params.ctx_tgt;
         auto * ctx_dft = this->params.ctx_dft;
 
         const int32_t n_ubatch = (int32_t) llama_n_ubatch(ctx_dft);
 
-        // Flatten token-wise encoder work into shared chunks while preserving each row's position and sequence.
-        for (int32_t offset = 0; offset < n_tokens; offset += n_ubatch) {
-            const int32_t n_chunk = std::min(n_ubatch, n_tokens - offset);
-            features_buf.resize((size_t) n_chunk * n_embd_enc);
-            for (uint32_t k = 0; k < target_layer_ids_n; ++k) {
-                const float * layer = llama_get_embeddings_layer_inp(ctx_tgt, (uint32_t) target_layer_ids[k]);
-                if (!layer) {
-                    GGML_ABORT("DFlash: target layer %d input not extracted.", target_layer_ids[k]);
+        for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
+            if (i_batch_beg[seq_id] < 0) {
+                continue;
+            }
+            const int32_t n_rows = i_batch_end[seq_id] - i_batch_beg[seq_id] + 1;
+
+            for (int32_t offset = 0; offset < n_rows; offset += n_ubatch) {
+                const int32_t n_chunk = std::min(n_ubatch, n_rows - offset);
+
+                // gather this chunk's target features, interleaved by extract layer
+                features_buf.resize((size_t) n_chunk * n_embd_enc);
+                for (uint32_t k = 0; k < target_layer_ids_n; ++k) {
+                    const float * layer = llama_get_embeddings_layer_inp(ctx_tgt, (uint32_t) target_layer_ids[k]);
+                    if (!layer) {
+                        GGML_ABORT("DFlash: target layer %d input not extracted.", target_layer_ids[k]);
+                    }
+                    for (int32_t i = 0; i < n_chunk; ++i) {
+                        float       * dst = features_buf.data() + (size_t) i * n_embd_enc + k * (size_t) n_embd_tgt;
+                        const float * src = layer + (size_t) (i_batch_beg[seq_id] + offset + i) * n_embd_tgt;
+                        std::memcpy(dst, src, (size_t) n_embd_tgt * sizeof(float));
+                    }
                 }
+
+                // fuse extracted features through DFlash encoder
+                llama_batch enc_batch = {
+                    /*.n_tokens =*/ n_chunk,
+                    /*.token    =*/ nullptr,
+                    /*.embd     =*/ features_buf.data(),
+                    /*.pos      =*/ nullptr,
+                    /*.n_seq_id =*/ nullptr,
+                    /*.seq_id   =*/ nullptr,
+                    /*.logits   =*/ nullptr,
+                };
+
+                int32_t rc = llama_encode(ctx_dft, enc_batch);
+                if (rc != 0) {
+                    LOG_ERR("%s: llama_encode(ctx_dft) failed rc=%d (n_tokens=%d, offset=%d)\n",
+                            __func__, rc, (int) n_chunk, (int) offset);
+                    return false;
+                }
+
+                const float * inp_g = llama_get_embeddings_nextn(ctx_dft);
+                GGML_ASSERT(inp_g && "DFlash encoder produced no output.");
+
+                // inject the DFlash decoder K/V cache at the tokens' target positions
+                batch_inject.n_tokens = n_chunk;
+                std::memcpy(batch_inject.embd, inp_g, (size_t) n_chunk * n_embd_dec * sizeof(float));
+
                 for (int32_t i = 0; i < n_chunk; ++i) {
-                    float       * dst = features_buf.data() + (size_t) i * n_embd_enc + k * (size_t) n_embd_tgt;
-                    const float * src = layer + (size_t) (offset + i) * n_embd_tgt;
-                    std::memcpy(dst, src, (size_t) n_embd_tgt * sizeof(float));
+                    batch_inject.pos[i]       = batch_in.pos[i_batch_beg[seq_id] + offset + i];
+                    batch_inject.n_seq_id[i]  = 1;
+                    batch_inject.seq_id[i][0] = seq_id;
+                    batch_inject.logits[i]    = false;
+                }
+                rc = llama_decode(ctx_dft, batch_inject);
+                if (rc != 0) {
+                    LOG_ERR("%s: llama_decode(ctx_dft) failed rc=%d (n_tokens=%d, offset=%d)\n",
+                            __func__, rc, (int) n_chunk, (int) offset);
+                    return false;
                 }
             }
-
-            llama_batch enc_batch = {
-                /*.n_tokens =*/ n_chunk,
-                /*.token    =*/ nullptr,
-                /*.embd     =*/ features_buf.data(),
-                /*.pos      =*/ nullptr,
-                /*.n_seq_id =*/ nullptr,
-                /*.seq_id   =*/ nullptr,
-                /*.logits   =*/ nullptr,
-            };
-
-            int32_t rc = llama_encode(ctx_dft, enc_batch);
-            if (rc != 0) {
-                LOG_ERR("%s: llama_encode(ctx_dft) failed rc=%d (n_tokens=%d, offset=%d)\n",
-                        __func__, rc, (int) n_chunk, (int) offset);
-                return false;
-            }
-
-            const float * inp_g = llama_get_embeddings_nextn(ctx_dft);
-            GGML_ASSERT(inp_g && "DFlash encoder produced no output.");
-
-            batch_inject.n_tokens = n_chunk;
-            std::memcpy(batch_inject.embd, inp_g, (size_t) n_chunk * n_embd_dec * sizeof(float));
-            for (int32_t i = 0; i < n_chunk; ++i) {
-                const int32_t j = offset + i;
-                GGML_ASSERT(batch_in.n_seq_id[j] == 1);
-                const llama_seq_id seq_id = batch_in.seq_id[j][0];
-                GGML_ASSERT(seq_id >= 0 && seq_id < (llama_seq_id) n_seq);
-                batch_inject.pos[i]       = batch_in.pos[j];
-                batch_inject.n_seq_id[i]  = 1;
-                batch_inject.seq_id[i][0] = seq_id;
-                batch_inject.logits[i]    = false;
-            }
-
-            rc = llama_decode(ctx_dft, batch_inject);
-            if (rc != 0) {
-                LOG_ERR("%s: llama_decode(ctx_dft) failed rc=%d (n_tokens=%d, offset=%d)\n",
-                        __func__, rc, (int) n_chunk, (int) offset);
-                return false;
-            }
-            // The server may switch contexts before the next draft decode.
-            llama_synchronize(ctx_dft);
         }
 
         return true;
@@ -2407,7 +2426,7 @@ common_params common_base_params_to_speculative(const common_params & params) {
     result.n_outputs_max = params.n_parallel;
     result.n_outputs_max_per_seq = 1;
 
-    // dflash/dspark decode every sequence's full noise block in one pass
+    // dflash/dspark decode the whole noise block in a single pass and sample every block position on the backend
     // TODO: refactor such properties to be announced by the speculative types
     //       something like `struct common_speculative_type_props common_speculative_type_get_props(...);`
     const bool has_block_draft = std::any_of(
@@ -2419,8 +2438,6 @@ common_params common_base_params_to_speculative(const common_params & params) {
         // per-seq output positions: DFlash decodes anchor + n_max masks (n_max + 1); DSpark n_max -> +1 covers both
         const int32_t per_seq = std::max(1, params_spec.n_max + 1);
         result.n_outputs_max = params.n_parallel * per_seq;
-        result.n_batch  = std::max(result.n_batch,  result.n_outputs_max);
-        result.n_ubatch = std::max(result.n_ubatch, result.n_outputs_max);
         if (params_spec.backend_sampling) {
             result.n_outputs_max_per_seq = per_seq;
         }
