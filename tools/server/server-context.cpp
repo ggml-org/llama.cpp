@@ -3898,7 +3898,13 @@ private:
 
                     // note: we create the checkpoint before calling llama_decode(), so the current batch is not
                     //       yet processed and therefore it is not part of the checkpoint.
-                    if (do_checkpoint) {
+                    // Keep the same prompt chunk boundaries because recurrent/speculative
+                    // models can depend on them. On the structurally certified stateless
+                    // automatic-greedy path, however, a request that explicitly disabled
+                    // prompt-cache reuse does not need this expensive serialized checkpoint.
+                    const bool skip_unused_auto_checkpoint =
+                        slot.smpl_backend_greedy_attached && !slot.task->params.cache_prompt;
+                    if (do_checkpoint && !skip_unused_auto_checkpoint) {
                         create_checkpoint(slot, n_tokens_cur, pos_min, pos_max);
                     }
                 }
