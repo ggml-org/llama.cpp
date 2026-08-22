@@ -13,7 +13,8 @@ from typing import Dict, List, Optional
 from dataclasses import dataclass
 from pathlib import Path
 
-import datasets
+# `datasets` is imported lazily by the loaders that need it, so a suite backed
+# by a local .jsonl works without the HuggingFace stack installed.
 
 # Set cache directory for HuggingFace datasets
 cache_dir = Path.home() / ".cache" / "huggingface" / "datasets"
@@ -76,6 +77,8 @@ class AimeDataset:
         return question.get("problem", question.get("question", ""))
 
     def _load_dataset(self):
+        import datasets
+
         if self.dataset_type == "aime":
             print(f"Loading AIME dataset (split: {self.split})...")
             cache_path = Path.home() / ".cache" / "huggingface" / "datasets" / "AI-MO___aimo-validation-aime" / "default" / "0.0.0"
@@ -164,6 +167,60 @@ class AimeDataset:
             return str(normalized) if normalized is not None else answer
         return str(answer)
 
+class CodeDataset:
+    """Stand-in for a code model: replays canonical solutions as chat replies.
+
+    Handles both code suites: HumanEval keys off the function stub, ClassEval
+    off the class skeleton.
+    """
+
+    DEFAULT_SOURCE = {
+        "humaneval": "openai/openai_humaneval",
+        "classeval": "FudanSELab/ClassEval",
+    }
+
+    def __init__(self, dataset_type: str, source: Optional[str] = None):
+        self.dataset_type = dataset_type
+        self.source = source or self.DEFAULT_SOURCE[dataset_type]
+        self.questions: List[Dict] = []
+        self._load_dataset()
+
+    def _load_dataset(self):
+        print(f"Loading {self.dataset_type} dataset (source: {self.source})...")
+        local = Path(self.source)
+        if local.exists():
+            text = local.read_text()
+            if local.suffix == ".json":
+                rows = json.loads(text)
+            else:
+                rows = [json.loads(ln) for ln in text.splitlines() if ln.strip()]
+        else:
+            import datasets
+            rows = [dict(r) for r in datasets.load_dataset(self.source, split="test")]
+        self.questions = rows
+        print(f"{self.dataset_type} dataset loaded: {len(self.questions)} questions")
+
+    def _stub_field(self) -> str:
+        return "skeleton" if self.dataset_type == "classeval" else "prompt"
+
+    def _get_question_text(self, question: Dict) -> str:
+        return question[self._stub_field()]
+
+    def find_question(self, request_text: str) -> Optional[Dict]:
+        # The prompt template embeds the stub verbatim, so an exact containment
+        # test is enough and avoids fuzzy mismatches.
+        for question in self.questions:
+            stub = question[self._stub_field()].rstrip()
+            if stub and stub in request_text:
+                return question
+        return None
+
+    def get_answer(self, question: Dict) -> str:
+        if self.dataset_type == "classeval":
+            return question["solution_code"]
+        return question["prompt"] + question["canonical_solution"]
+
+
 class Simulator:
     def __init__(
         self,
@@ -171,12 +228,17 @@ class Simulator:
         host: str = "localhost",
         success_rate: float = 0.8,
         dataset_split: str = "train",
-        dataset_type: str = "aime"
+        dataset_type: str = "aime",
+        dataset_source: Optional[str] = None
     ):
         self.port = port
         self.host = host
         self.success_rate = success_rate
-        self.dataset = AimeDataset(dataset_split, dataset_type)
+        self.dataset_type = dataset_type
+        if dataset_type in ("humaneval", "classeval"):
+            self.dataset = CodeDataset(dataset_type, dataset_source)
+        else:
+            self.dataset = AimeDataset(dataset_split, dataset_type)
         self.eval_state = EvalState(
             id=dataset_type,
             tasks=[dataset_type],
@@ -195,6 +257,13 @@ class Simulator:
             response_text = expected_answer
         else:
             response_text = self._generate_wrong_answer(question)
+
+        if self.dataset_type in ("humaneval", "classeval"):
+            # dress it up the way a chat model would actually answer
+            response_text = (
+                f"Here is the implementation:\n\n```python\n{response_text}\n```\n\n"
+                "Let me know if you want it optimised further."
+            )
 
         comp_tokens = random.randint(10000, 60000)
         tps_gen = random.uniform(90.0, 110.0)
@@ -228,6 +297,14 @@ class Simulator:
 
     def _generate_wrong_answer(self, question: Dict) -> str:
         expected_answer = self.dataset.get_answer(question)
+
+        if self.dataset_type == "classeval":
+            # keep the class, gut the methods -- a plausible wrong answer
+            return re.sub(r"(\n\s+def [^\n]+:\n)", r"\1        return None\n",
+                          question["skeleton"])
+        if self.dataset_type == "humaneval":
+            # keep the signature, replace the body -- a plausible wrong answer
+            return question["prompt"] + "    return None\n"
 
         if expected_answer.isdigit():
             wrong_answer = str(int(expected_answer) + 1)
@@ -335,7 +412,7 @@ def main():
         "--dataset",
         type=str,
         default="aime",
-        choices=["aime", "aime2025"],
+        choices=["aime", "aime2025", "humaneval", "classeval"],
         help="Dataset type (default: aime)"
     )
     parser.add_argument(
@@ -343,6 +420,12 @@ def main():
         type=str,
         default="train",
         help="AIME dataset split to use (default: train)"
+    )
+    parser.add_argument(
+        "--dataset-source",
+        type=str,
+        default=None,
+        help="Override the dataset location (local .jsonl path or HuggingFace repo id)"
     )
 
     args = parser.parse_args()
@@ -353,7 +436,8 @@ def main():
         host=args.host,
         success_rate=args.success_rate,
         dataset_split=args.dataset_split,
-        dataset_type=args.dataset
+        dataset_type=args.dataset,
+        dataset_source=args.dataset_source
     )
 
     server = HTTPServer((args.host, args.port), RequestHandler)
