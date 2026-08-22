@@ -1046,6 +1046,16 @@ static int ggml_cuda_rdna2_p2p_host_allreduce_mode() {
                 std::strcmp(value, "false") == 0) {
             return GGML_CUDA_RDNA2_P2P_HOST_OFF;
         }
+        // "1"/"on"/"true"/"yes" previously fell through to the unrecognised
+        // branch below and silently *disabled* the path -- the opposite of what
+        // anyone typing =1 intends.
+        if (std::strcmp(value, "1") == 0 || std::strcmp(value, "on") == 0 ||
+                std::strcmp(value, "true") == 0 || std::strcmp(value, "yes") == 0) {
+            return GGML_CUDA_RDNA2_P2P_HOST_AUTO_EXPANDED;
+        }
+        GGML_LOG_WARN("GGML_HIP_GFX1030_P2P_ALLREDUCE='%s' is not recognised; disabling "
+                "the host-snapshot AllReduce. Valid: auto, auto-expanded, auto-basic, "
+                "host, host-fused, host-mtp, off\n", value);
         return GGML_CUDA_RDNA2_P2P_HOST_OFF;
     }();
     return mode;
@@ -1255,6 +1265,10 @@ struct ggml_backend_cuda_comm_context {
     bool p2p_host_exact_5120 = false;
     bool p2p_host_exact_25600 = false;
     bool p2p_host_logged = false;
+    // Bitmask of batch widths already logged, so a run shows every width the
+    // path served -- and every width it had to refuse.
+    uint32_t p2p_host_logged_widths = 0;
+    uint32_t p2p_host_refused_widths = 0;
 
     bool native_rccl_policy_active = false;
     bool native_rccl_plugin_owned = false;
@@ -1615,6 +1629,22 @@ static bool ggml_backend_cuda_comm_allreduce_rdna2_p2p_host(
             tensors[0]->ne[1] == 1 && tensors[0]->ne[2] == 1 && tensors[0]->ne[3] == 1;
     if ((!mtp5 && !ordinary1) || (mtp5 && !comm_ctx->p2p_host_exact_25600) ||
             (ordinary1 && !comm_ctx->p2p_host_exact_5120)) {
+        // The path only serves ne[1] == 1 and ne[1] == 5, because the reduction
+        // kernels replicate RCCL's chunk schedule for exactly 5120 and 25600
+        // elements. An MTP/DFlash verify batch is n_max+1 wide, so width 5 means
+        // --spec-draft-n-max 4 and nothing else dispatches. Say so once per
+        // width instead of silently falling back to RCCL forever.
+        const int64_t w = tensors[0] != nullptr ? tensors[0]->ne[1] : 0;
+        if (tensors[0] != nullptr && tensors[0]->ne[0] == 5120 && w >= 1 && w <= 31) {
+            const uint32_t bit = 1u << uint32_t(w);
+            if ((comm_ctx->p2p_host_refused_widths & bit) == 0) {
+                comm_ctx->p2p_host_refused_widths |= bit;
+                GGML_LOG_WARN("RDNA2 P2P host-snapshot AllReduce is armed but cannot serve "
+                        "batch width %d (only 1 and 5 are implemented); using RCCL. "
+                        "Width is --spec-draft-n-max + 1, so only n_max=4 dispatches.\n",
+                        int(w));
+            }
+        }
         return false;
     }
     for (int rank = 0; rank < 4; ++rank) {
@@ -1672,10 +1702,14 @@ static bool ggml_backend_cuda_comm_allreduce_rdna2_p2p_host(
         CUDA_CHECK(cudaGetLastError());
     }
     ++comm_ctx->p2p_host_calls;
-    if (!comm_ctx->p2p_host_logged) {
-        std::fprintf(stderr, "using RDNA2 P2P MTP host-snapshot AllReduce for %s [5120,%d,1,1] F32\n",
-                tensors[0]->name, mtp5 ? 5 : 1);
-        comm_ctx->p2p_host_logged = true;
+    {
+        const uint32_t bit = 1u << uint32_t(mtp5 ? 5 : 1);
+        if ((comm_ctx->p2p_host_logged_widths & bit) == 0) {
+            comm_ctx->p2p_host_logged_widths |= bit;
+            comm_ctx->p2p_host_logged = true;
+            std::fprintf(stderr, "using RDNA2 P2P MTP host-snapshot AllReduce for %s [5120,%d,1,1] F32\n",
+                    tensors[0]->name, mtp5 ? 5 : 1);
+        }
     }
     return true;
 }

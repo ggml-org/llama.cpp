@@ -1767,7 +1767,28 @@ static void ggml_backend_meta_buffer_memset_tensor(
 
 static void ggml_backend_meta_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
     const size_t n_bufs = ggml_backend_meta_buffer_n_bufs(buffer);
-    static const bool parallel_set_enabled = getenv("GGML_META_PARALLEL_SET") != nullptr;
+    // Value-checked, not presence-checked. This used to be `getenv(...) != nullptr`,
+    // so GGML_META_PARALLEL_SET=0 *enabled* the parallel path and the only way to
+    // turn it off was to unset the variable entirely.
+    //
+    // KNOWN ISSUE: on 2x gfx1030 with -sm tensor and an external draft model
+    // (-md ... --spec-type draft-dflash), enabling this reproducibly faults
+    // during weight upload:
+    //     Memory access fault by GPU node-3 ... Page not present
+    // Without a draft model the same path is fine. The draft-model memory probe
+    // that runs first always throws for dflash ("requires ctx_other to be set"),
+    // so it unwinds out of a partly-built context immediately beforehand.
+    // Mechanism not yet identified -- ruled out: missing stream sync (the
+    // backend's set_tensor_2d does synchronize) and a set_device race
+    // (ggml_cuda_set_device queries the driver, no shared cache).
+    static const bool parallel_set_enabled = [] {
+        const char * v = getenv("GGML_META_PARALLEL_SET");
+        if (v == nullptr) {
+            return false;
+        }
+        return !(strcmp(v, "0") == 0 || strcmp(v, "off") == 0 ||
+                 strcmp(v, "false") == 0 || strcmp(v, "no") == 0);
+    }();
     const bool parallel_set =
         parallel_set_enabled &&
         ggml_backend_buffer_get_usage(buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS &&
