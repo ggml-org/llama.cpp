@@ -88,7 +88,6 @@ class AXK2Model(TextModel):
         self.gguf_writer.add_value_length_mla(hparams["v_head_dim"])
 
         self.gguf_writer.add_expert_feed_forward_length(hparams["moe_intermediate_size"])
-        self.gguf_writer.add_expert_count(hparams["n_routed_experts"])
         self.gguf_writer.add_expert_shared_count(hparams["n_shared_experts"])
         self.gguf_writer.add_expert_weights_scale(hparams["routed_scaling_factor"])
         if hparams.get("norm_topk_prob"):
