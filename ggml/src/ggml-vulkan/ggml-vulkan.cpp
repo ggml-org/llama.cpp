@@ -568,10 +568,12 @@ struct vk_fa_pipeline_state {
     uint32_t limit_occupancy_shmem;
     ggml_type k_type;
     ggml_type v_type;
+    uint32_t transpose_pv;
+    uint32_t work_per_tile;
 
     bool operator<(const vk_fa_pipeline_state &b) const {
-        return std::tie(HSK, HSV, Br, Bc, D_split, row_split, shmem_staging, path, workgroup_size, subgroup_size, aligned, f32acc, flags, limit_occupancy_shmem, k_type, v_type) <
-               std::tie(b.HSK, b.HSV, b.Br, b.Bc, b.D_split, b.row_split, b.shmem_staging, b.path, b.workgroup_size, b.subgroup_size, b.aligned, b.f32acc, b.flags, b.limit_occupancy_shmem, b.k_type, b.v_type);
+        return std::tie(HSK, HSV, Br, Bc, D_split, row_split, shmem_staging, path, workgroup_size, subgroup_size, aligned, f32acc, flags, limit_occupancy_shmem, k_type, v_type, transpose_pv, work_per_tile) <
+               std::tie(b.HSK, b.HSV, b.Br, b.Bc, b.D_split, b.row_split, b.shmem_staging, b.path, b.workgroup_size, b.subgroup_size, b.aligned, b.f32acc, b.flags, b.limit_occupancy_shmem, b.k_type, b.v_type, b.transpose_pv, b.work_per_tile);
     }
 };
 
@@ -3696,6 +3698,8 @@ struct vk_fa_tuning_params {
     bool shmem_staging;
     bool disable_subgroups;
     uint32_t limit_occupancy_shmem;
+    uint32_t transpose_pv;
+    uint32_t work_per_tile;
 
     void print() const {
         std::cerr << "path=" << path << " workgroup_size=" << workgroup_size << " subgroup_size=" << subgroup_size <<
@@ -3811,6 +3815,14 @@ static vk_fa_tuning_params get_fa_tuning_params_coopmat1(const vk_device& device
 
     result.shmem_staging = (device->vendor_id == VK_VENDOR_ID_NVIDIA && hsk < 256 && hsv < 256) ? 1 : 0;
 
+    const bool llpc_amd = device->vendor_id == VK_VENDOR_ID_AMD &&
+                          (device->driver_id == vk::DriverId::eAmdProprietary ||
+                           device->driver_id == vk::DriverId::eAmdOpenSource);
+    result.transpose_pv = (llpc_amd &&
+                           device->architecture != AMD_GCN &&
+                           device->architecture != AMD_RDNA1 &&
+                           device->architecture != AMD_RDNA2) ? 1 : 0;
+
     return result;
 }
 
@@ -3842,7 +3854,7 @@ static vk_fa_tuning_params get_fa_tuning_params_coopmat2(const vk_device& device
     return result;
 }
 
-static vk_fa_tuning_params get_fa_tuning_params(const vk_device& device, uint32_t hsk, uint32_t hsv, uint32_t n_rows, uint32_t n_kv, ggml_type k_type, ggml_type v_type, bool f32acc) {
+static vk_fa_tuning_params get_fa_tuning_params(const vk_device& device, uint32_t hsk, uint32_t hsv, uint32_t n_rows, uint32_t n_kv, ggml_type k_type, ggml_type v_type, bool f32acc, bool allow_work_per_tile = false) {
     FaCodePath path = device->coopmat2 ? FA_COOPMAT2 :
                       device->coopmat1_fa_support ? FA_COOPMAT1 : FA_SCALAR;
 
@@ -3874,16 +3886,42 @@ static vk_fa_tuning_params get_fa_tuning_params(const vk_device& device, uint32_
         path = FA_SCALAR;
     }
 
+    vk_fa_tuning_params tuned;
     switch (path) {
     case FA_SCALAR:
-        return get_fa_tuning_params_scalar(device, hsk, hsv, n_rows, n_kv, k_type, v_type, f32acc);
+        tuned = get_fa_tuning_params_scalar(device, hsk, hsv, n_rows, n_kv, k_type, v_type, f32acc);
+        break;
     case FA_COOPMAT1:
-        return get_fa_tuning_params_coopmat1(device, hsk, hsv, n_rows, n_kv, k_type, v_type, f32acc);
+        tuned = get_fa_tuning_params_coopmat1(device, hsk, hsv, n_rows, n_kv, k_type, v_type, f32acc);
+        break;
     case FA_COOPMAT2:
-        return get_fa_tuning_params_coopmat2(device, hsk, hsv, n_rows, n_kv, k_type, v_type, f32acc);
+        tuned = get_fa_tuning_params_coopmat2(device, hsk, hsv, n_rows, n_kv, k_type, v_type, f32acc);
+        break;
     default:
         throw std::runtime_error("unsupported FaCodePath");
     }
+
+    const bool work_per_tile_hardware = path == FA_COOPMAT1 &&
+                                        device->vendor_id == VK_VENDOR_ID_AMD &&
+                                        device->driver_id == vk::DriverId::eMesaRadv &&
+                                        device->architecture == vk_device_architecture::AMD_RDNA3 &&
+                                        device->subgroup_size_control &&
+                                        device->subgroup_min_size <= 32 && device->subgroup_max_size >= 32;
+    const bool use_work_per_tile = allow_work_per_tile && work_per_tile_hardware &&
+                                   n_rows == n_kv && n_rows >= 1024 &&
+                                   hsk == 128 && hsv == 128;
+    if (use_work_per_tile) {
+        tuned.work_per_tile = 1;
+        tuned.block_rows = 64;
+        tuned.block_cols = 32;
+        tuned.row_split = 4;
+        tuned.subgroup_size = 32;
+        tuned.workgroup_size = 128;
+        tuned.shmem_staging = false;
+        tuned.transpose_pv = 0;
+    }
+
+    return tuned;
 }
 
 static vk_fa_pipeline_state get_fa_pipeline_state(const vk_device& device, const vk_fa_tuning_params& params, uint32_t hsk, uint32_t hsv, bool aligned, bool f32acc,
@@ -3898,7 +3936,7 @@ static vk_fa_pipeline_state get_fa_pipeline_state(const vk_device& device, const
 
     const uint32_t subgroup_size = params.disable_subgroups ? 0 : params.subgroup_size;
 
-    return vk_fa_pipeline_state{hsk, hsv, params.block_rows, params.block_cols, params.d_split, params.row_split, params.shmem_staging, params.path, params.workgroup_size, subgroup_size, aligned, f32acc, flags, params.limit_occupancy_shmem, k_type, v_type};
+    return vk_fa_pipeline_state{hsk, hsv, params.block_rows, params.block_cols, params.d_split, params.row_split, params.shmem_staging, params.path, params.workgroup_size, subgroup_size, aligned, f32acc, flags, params.limit_occupancy_shmem, k_type, v_type, params.transpose_pv, params.work_per_tile};
 }
 
 static std::vector<uint32_t> get_fa_spec_constants(const vk_fa_pipeline_state& state) {
@@ -3923,6 +3961,8 @@ static std::vector<uint32_t> get_fa_spec_constants(const vk_fa_pipeline_state& s
         /*13 FaTypeV         */ static_cast<uint32_t>(state.v_type),
         /*14 FaBlockBytesK   */ fa_block_bytes(state.k_type),
         /*15 FaBlockBytesV   */ fa_block_bytes(state.v_type),
+        state.transpose_pv,
+        state.work_per_tile,
     };
 }
 
@@ -10848,6 +10888,14 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
     const ggml_type k_type_eff = use_dequant_kv ? GGML_TYPE_F16 : k->type;
     const ggml_type v_type_eff = use_dequant_kv ? GGML_TYPE_F16 : v->type;
 
+    float scale         = 1.0f;
+    float max_bias      = 0.0f;
+    float logit_softcap = 0.0f;
+
+    memcpy(&scale,         (const float *) dst->op_params + 0, sizeof(float));
+    memcpy(&max_bias,      (const float *) dst->op_params + 1, sizeof(float));
+    memcpy(&logit_softcap, (const float *) dst->op_params + 2, sizeof(float));
+
     // For scalar/coopmat1 FA, we can use the "large" size to accommodate qga.
     // For coopmat2 FA, we always use the small size (which is still pretty large for gqa).
     vk_fa_tuning_params tuning_params = get_fa_tuning_params(ctx->device, HSK, HSV, 512, KV, k_type_eff, v_type_eff, f32acc);
@@ -10863,7 +10911,14 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
         workgroups_y /= gqa_ratio;
     }
 
-    tuning_params = get_fa_tuning_params(ctx->device, HSK, HSV, N, KV, k_type_eff, v_type_eff, f32acc);
+    const bool allow_work_per_tile = mask == nullptr && sinks == nullptr &&
+                                     max_bias == 0.0f && logit_softcap == 0.0f &&
+                                     gqa_ratio == 1 && (qk_ratio == 1 || qk_ratio == 4) &&
+                                     qk_ratio * nek2 == neq2 && qk_ratio * nev2 == neq2 &&
+                                     neq3 == nek3 && neq3 == nev3 &&
+                                     HSK == 128 && HSV == 128 &&
+                                     k->type == GGML_TYPE_F16 && v->type == GGML_TYPE_F16;
+    tuning_params = get_fa_tuning_params(ctx->device, HSK, HSV, N, KV, k_type_eff, v_type_eff, f32acc, allow_work_per_tile);
 
     const uint32_t q_stride = (uint32_t)(nbq1 / ggml_type_size(q->type));
     uint32_t k_stride = (uint32_t)(nbk1 / ggml_type_size(k->type));
@@ -10897,14 +10952,6 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
     if (((HSK | HSV) % 16) != 0 && tuning_params.path == FA_COOPMAT2) {
         aligned = false;
     }
-
-    float scale         = 1.0f;
-    float max_bias      = 0.0f;
-    float logit_softcap = 0.0f;
-
-    memcpy(&scale,         (const float *) dst->op_params + 0, sizeof(float));
-    memcpy(&max_bias,      (const float *) dst->op_params + 1, sizeof(float));
-    memcpy(&logit_softcap, (const float *) dst->op_params + 2, sizeof(float));
 
     if (logit_softcap != 0) {
         scale /= logit_softcap;
@@ -10956,6 +11003,11 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
         if (total_wgs_no_split < shader_core_count * 2) {
             split_k = shader_core_count * 2 / total_wgs_no_split;
         }
+    }
+
+    if (fa_pipeline_state.work_per_tile != 0) {
+        split_k = 1;
+        split_kv = KV;
     }
 
     if (split_k > 1) {
