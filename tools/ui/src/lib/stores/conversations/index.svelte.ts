@@ -251,12 +251,15 @@ class ConversationsStore implements ConversationsPreferencesHost {
 	 */
 	async createConversation(name?: string): Promise<string> {
 		const conversationName = name || `Chat ${new Date().toLocaleString()}`;
-		// Working directory and reasoning effort picked on the new-chat screen
-		// get threaded into the new conversation here, then cleared so they
-		// don't bleed onto subsequent new chats.
+		// The tool policy is seeded from the current defaults: edits made inside
+		// the conversation afterwards live on its row and do not flow back into
+		// the defaults. Working directory picked on the new-chat screen gets
+		// threaded in here too, then cleared so it doesn't bleed onto subsequent
+		// new chats.
 		const conversation = await DatabaseService.createConversation(conversationName, {
 			cwd: this.preferences.pendingCwd ?? undefined,
-			reasoningEffort: this.preferences.pendingReasoningEffort
+			reasoningEffort: this.preferences.pendingReasoningEffort,
+			...this.preferences.getToolPolicySnapshot()
 		});
 
 		this.preferences.pendingCwd = null;

@@ -12,6 +12,7 @@ import {
 	buildBrowserInfoToolDefinition,
 	buildGetDatetimeToolDefinition,
 	buildReadMediaToolDefinition,
+	DISABLED_TOOL_CATEGORIES_LOCALSTORAGE_KEY,
 	DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY,
 	HOME_TILDE,
 	TOOL_GROUP_LABELS,
@@ -37,6 +38,9 @@ import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 /** Stable selection identity for a tool, shared by the disabled set and the permission store */
 
 class ToolsStore {
+	// default disabled tool categories, seeded into newly created conversations;
+	// the per-conversation policy lives on the conversation row
+	private _disabledToolCategories = $state(new SvelteSet<ToolSource>());
 	private _disabledTools = $state(new SvelteSet<string>());
 	private _error = $state<string | null>(null);
 	private _loading = $state(false);
@@ -150,32 +154,16 @@ class ToolsStore {
 		}
 	}
 
+	get disabledToolCategories(): ReadonlySet<ToolSource> {
+		return this._disabledToolCategories;
+	}
+
 	get disabledTools(): SvelteSet<string> {
 		return this._disabledTools;
 	}
 
 	get error(): string | null {
 		return this._error;
-	}
-
-	/**
-	 * Check if a working directory is worth setting: at least one server tool
-	 * that reads it is both served and left enabled by the user.
-	 */
-	get hasEnabledCwdTools(): boolean {
-		return this._serverTools.some((def) => {
-			const name = def.function.name;
-
-			return (
-				this.cwdAwareTools.has(name) &&
-				!this._disabledTools.has(this.toolKey(ToolSource.SERVER, name))
-			);
-		});
-	}
-
-	/** Check if there are any enabled tools available (server, MCP, or custom) */
-	get hasEnabledTools(): boolean {
-		return this.getEnabledToolsForLLM().length > 0;
 	}
 
 	get isToolsEndpointUnreachable(): boolean {
@@ -271,17 +259,14 @@ class ToolsStore {
 		}
 	}
 
-	/**
-	 * Enabled tool definitions for sending to the LLM.
-	 * MCP tool schemas are normalized here so the wire payload is consistent
-	 * across all four sources (server, browser/sandbox, MCP, custom JSON).
-	 * The API identifies tools by name, so a name is sent at most once.
-	 */
-	getEnabledToolsForLLM(): OpenAIToolDefinition[] {
+	getEnabledToolsForLLM(
+		disabledTools: ReadonlySet<string> = this._disabledTools,
+		disabledCategories: ReadonlySet<ToolSource> = this._disabledToolCategories
+	): OpenAIToolDefinition[] {
 		const enabledNames = new SvelteSet<string>();
 
 		for (const entry of this.allTools) {
-			if (!this._disabledTools.has(entry.key)) {
+			if (this.isEntryEnabled(entry, disabledTools, disabledCategories)) {
 				enabledNames.add(entry.definition.function.name);
 			}
 		}
@@ -304,6 +289,11 @@ class ToolsStore {
 		for (const def of this.customTools) take(def);
 
 		return result;
+	}
+
+	/** Server-scoped tool key: disabling it disables all of that server's tools. */
+	getMcpServerToolsKey(serverId: string): string {
+		return `mcp:${serverId}`;
 	}
 
 	/** Permission key for a tool name, identical to the selection key */
@@ -334,6 +324,26 @@ class ToolsStore {
 	}
 
 	/**
+	 * Check if a working directory is worth setting: at least one server tool
+	 * that reads it is both served and left enabled by the given policy
+	 * (defaults to the global defaults).
+	 */
+	hasEnabledCwdTools(
+		disabledTools: ReadonlySet<string> = this._disabledTools,
+		disabledCategories: ReadonlySet<ToolSource> = this._disabledToolCategories
+	): boolean {
+		if (disabledCategories.has(ToolSource.SERVER)) return false;
+
+		return this._serverTools.some((def) => {
+			const name = def.function.name;
+
+			return (
+				this.cwdAwareTools.has(name) && !disabledTools.has(this.toolKey(ToolSource.SERVER, name))
+			);
+		});
+	}
+
+	/**
 	 * Load persisted disabled tools and fetch the builtin tool list.
 	 * Called by initStores() after migrations have run.
 	 */
@@ -357,11 +367,56 @@ class ToolsStore {
 			console.error('[ToolsStore] Failed to load disabled tools from localStorage:', err);
 		}
 
+		try {
+			const stored = localStorage.getItem(DISABLED_TOOL_CATEGORIES_LOCALSTORAGE_KEY);
+
+			if (stored) {
+				const parsed = JSON.parse(stored);
+
+				if (Array.isArray(parsed)) {
+					for (const key of parsed) {
+						if (Object.values(ToolSource).includes(key)) {
+							this._disabledToolCategories.add(key as ToolSource);
+						}
+					}
+				}
+			}
+		} catch (err) {
+			console.error('[ToolsStore] Failed to load disabled tool categories from localStorage:', err);
+		}
+
 		this.fetchServerTools();
 	}
 
-	isGroupFullyEnabled(group: ToolGroup): boolean {
-		return group.tools.length > 0 && group.tools.every((t) => this.isToolEnabled(t.key));
+	isCategoryEnabled(source: ToolSource): boolean {
+		return !this._disabledToolCategories.has(source);
+	}
+
+	/**
+	 * Enabled tool definitions for sending to the LLM.
+	 * MCP tool schemas are normalized here so the wire payload is consistent
+	 * across all four sources (server, browser/sandbox, MCP, custom JSON).
+	 * The API identifies tools by name, so a name is sent at most once.
+	 */
+	/**
+	 * The single enable rule for a tool entry: its category must be on, its
+	 * own key must not be disabled, and for MCP tools the server-scoped group
+	 * key must not be disabled either.
+	 */
+	isEntryEnabled(
+		entry: ToolEntry,
+		disabledTools: ReadonlySet<string>,
+		disabledCategories: ReadonlySet<ToolSource>
+	): boolean {
+		if (disabledCategories.has(entry.source)) return false;
+
+		if (disabledTools.has(entry.key)) return false;
+
+		if (entry.source === ToolSource.MCP && entry.serverId) {
+			return !disabledTools.has(this.getMcpServerToolsKey(entry.serverId));
+		}
+
+		return true;
 	}
 
 	isToolEnabled(key: string): boolean {
@@ -394,6 +449,16 @@ class ToolsStore {
 		return this._serverHome;
 	}
 
+	setCategoryEnabled(source: ToolSource, enabled: boolean): void {
+		if (enabled) {
+			this._disabledToolCategories.delete(source);
+		} else {
+			this._disabledToolCategories.add(source);
+		}
+
+		this.persistDisabledToolCategories();
+	}
+
 	setToolEnabled(key: string, enabled: boolean): void {
 		if (enabled) {
 			this._disabledTools.delete(key);
@@ -402,15 +467,8 @@ class ToolsStore {
 		}
 	}
 
-	toggleGroup(group: ToolGroup): void {
-		const allEnabled = group.tools.every((t) => this.isToolEnabled(t.key));
-		const target = !allEnabled;
-
-		for (const tool of group.tools) {
-			if (target) this._disabledTools.delete(tool.key);
-			else this._disabledTools.add(tool.key);
-		}
-		this.persistDisabledTools();
+	toggleCategory(source: ToolSource): void {
+		this.setCategoryEnabled(source, !this.isCategoryEnabled(source));
 	}
 
 	toggleTool(key: string): void {
@@ -600,6 +658,17 @@ class ToolsStore {
 		}
 
 		return normalized;
+	}
+
+	private persistDisabledToolCategories(): void {
+		try {
+			localStorage.setItem(
+				DISABLED_TOOL_CATEGORIES_LOCALSTORAGE_KEY,
+				JSON.stringify([...this._disabledToolCategories])
+			);
+		} catch {
+			// ignore storage errors
+		}
 	}
 
 	private persistDisabledTools(): void {

@@ -58,17 +58,9 @@
 
 	let currentConfig = $derived(settingsStore.config);
 
-	let hasMcpPromptsSupport = $derived.by(() => {
-		const perChatOverrides = conversationsStore.preferences.getAllMcpServerOverrides();
+	let hasMcpPromptsSupport = $derived.by(() => mcpStore.hasPromptsCapability());
 
-		return mcpStore.hasPromptsCapability(perChatOverrides);
-	});
-
-	let hasMcpResourcesSupport = $derived.by(() => {
-		const perChatOverrides = conversationsStore.preferences.getAllMcpServerOverrides();
-
-		return mcpStore.hasResourcesCapability(perChatOverrides);
-	});
+	let hasMcpResourcesSupport = $derived.by(() => mcpStore.hasResourcesCapability());
 
 	let hasAudioModality = $state(false);
 	let hasVideoModality = $state(false);
