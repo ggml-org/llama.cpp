@@ -48,6 +48,8 @@ Follow HOWTO-add-model.md section 3 for the actual touch points (`src/models/<na
 
 Skill-specific addition: before writing `src/models/<name>.cpp`, read at least 10 other files under `src/models/` (pick a mix, not just the one reference architecture) to confirm the struct layout, naming, and style you're about to write actually matches current convention - the pattern drifts over time and the HOWTO doc can lag behind it.
 
+If this model has a non-standard sub-component you're porting independently of the rest of the graph (a custom mixer/state-space block, an AltUp-style block, a non-standard RoPE or interpolation variant, etc.), use the `ggml-test` skill to validate that component's ggml op sequence against a small PyTorch reference before wiring it into the full graph - it's much faster to find a shape/stride bug in an isolated op sequence than in a full forward pass.
+
 ## Step 4 - Optional: multimodal encoder
 
 Only do this if the contributor flagged a vision/audio encoder in Step 0. Follow HOWTO-add-model.md section 4 and `docs/multimodal.md` for the actual touch points (`MmprojModel` subclass, `clip.cpp`, `mtmd.cpp`, encoder graph in `tools/mtmd/models`, etc.).
