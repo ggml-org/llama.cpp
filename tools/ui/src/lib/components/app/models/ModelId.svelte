@@ -48,6 +48,8 @@
 		'inline-flex w-fit shrink-0 items-center justify-center whitespace-nowrap rounded-md border border-border/50 px-1 py-0 text-[10px] font-mono bg-foreground/15 dark:bg-foreground/10 text-foreground [a&]:hover:bg-foreground/25';
 	const tagBadgeClass =
 		'inline-flex w-fit shrink-0 items-center justify-center whitespace-nowrap rounded-md border border-border/50 px-1 py-0 text-[10px] font-mono text-foreground [a&]:hover:bg-accent [a&]:hover:text-accent-foreground';
+	const variantBadgeClass =
+		'inline-flex w-fit shrink-0 items-center justify-center whitespace-nowrap rounded-md bg-primary px-1.5 py-0 text-[10px] font-mono font-semibold uppercase tracking-wide text-primary-foreground';
 
 	let parsed = $derived(ModelsService.parseModelId(modelId));
 	let resolvedShowRaw = $derived(
@@ -84,6 +86,12 @@
 		</span>
 
 		<span class="inline-flex items-center gap-1">
+			{#if parsed.variant}
+				<span class={variantBadgeClass} title={`${parsed.variant.toUpperCase()} draft model`}>
+					{parsed.variant}
+				</span>
+			{/if}
+
 			{#if parsed.params}
 				<span class={badgeClass}>
 					{parsed.params}{parsed.activatedParams ? `-${parsed.activatedParams}` : ''}
