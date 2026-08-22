@@ -1040,62 +1040,7 @@ private:
             }
         }
 
-        // optionally reserve VRAM for the draft / MTP context before fitting the target model
-        if (params_base.fit_params) {
-            if (has_spec) {
-                // MTP draft context lives on the target model, only context+compute are new
-                bool measure_model_bytes = has_draft;
-
-                common_params params_dft = common_base_params_to_speculative(params_base);
-
-                auto mparams_dft = common_model_params_to_llama(params_dft);
-                auto cparams_dft = common_context_params_to_llama(params_dft);
-                if (spec_mtp) {
-                    cparams_dft.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
-                }
-                cparams_dft.n_rs_seq = 0;
-
-                std::vector<ggml_backend_dev_t> devs;
-                uint32_t hp_ngl = 0;
-                uint32_t hp_nct = 0;
-                uint32_t hp_nex = 0;
-                try {
-                    auto dmd = common_get_device_memory_data(
-                        params_dft.model.path.c_str(), &mparams_dft, &cparams_dft,
-                        devs, hp_ngl, hp_nct, hp_nex, GGML_LOG_LEVEL_ERROR);
-
-                    GGML_ASSERT(!params_base.fit_params_target.empty());
-                    size_t total = 0;
-
-                    std::vector<ggml_backend_dev_t> tgt_devices = params.devices;
-
-                    if (tgt_devices.empty()) {
-                        for(size_t i = 0; i < ggml_backend_dev_count(); ++i) {
-                           tgt_devices.push_back(ggml_backend_dev_get(i));
-                        }
-                    }
-
-                    for (size_t j = 0; j < devs.size(); ++j) {
-                        const size_t bytes = (measure_model_bytes ? dmd[j].model : 0) + dmd[j].context + dmd[j].compute;
-                        total += bytes;
-                        for (size_t i = 0; i < tgt_devices.size(); i++) {
-                            if (tgt_devices[i] == devs[j]) {
-                                SRV_DBG("[spec] adding %.2f MiB to fit_params_target for device %s\n",
-                                        bytes / (1024.0 * 1024.0), ggml_backend_dev_name(devs[j]));
-                                params_base.fit_params_target[i] += bytes;
-                                break;
-                            }
-                        }
-                    }
-                    SRV_TRC("[spec] estimated memory usage of %s is %.2f MiB\n",
-                            has_draft ? "draft model" : "MTP context",
-                            total / (1024.0 * 1024.0));
-                } catch (const std::exception & e) {
-                    SRV_WRN("[spec] failed to measure %s memory: %s\n",
-                            has_draft ? "draft model" : "MTP context", e.what());
-                }
-            }
-        }
+        // note: the draft / MTP context is fitted together with the target model, see common_fit_extra_model
 
         // attach a progress callback
         {
