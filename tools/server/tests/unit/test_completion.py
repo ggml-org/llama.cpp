@@ -2,6 +2,7 @@ import pytest
 import requests
 import time
 import random
+import math
 
 from openai import OpenAI
 from utils import *
@@ -661,3 +662,69 @@ def test_completion_prompt_cache():
         assert "prompt_n" in timings and timings["prompt_n"] + timings["cache_n"] == n_prompt
         assert "predicted_n" in timings and timings["predicted_n"] == n_predict
         assert "tokens" in res.body and isinstance(res.body["tokens"], list)
+
+
+def test_oai_completions_echo_logprobs():
+    global server
+    server.start()
+    prompt = "The capital of France is"
+    res = server.make_request("POST", "/v1/completions", data={
+        "prompt": prompt,
+        "echo": True,
+        "logprobs": 3,
+        "max_tokens": 1,
+        "temperature": 0.0,
+    })
+    assert res.status_code == 200
+    assert "choices" in res.body
+    assert len(res.body["choices"]) == 1
+    choice = res.body["choices"][0]
+    assert prompt in choice["text"]
+    assert "logprobs" in choice and choice["logprobs"] is not None
+    lp = choice["logprobs"]
+    assert "tokens" in lp and "token_logprobs" in lp and "top_logprobs" in lp and "text_offset" in lp
+
+    tokens = lp["tokens"]
+    token_logprobs = lp["token_logprobs"]
+    top_logprobs = lp["top_logprobs"]
+    text_offset = lp["text_offset"]
+
+    assert len(tokens) > 1  # prompt tokens + 1 generated token
+    assert len(token_logprobs) == len(tokens)
+    assert len(top_logprobs) == len(tokens)
+    assert len(text_offset) == len(tokens)
+
+    # First prompt token must explicitly have null logprob and null top_logprobs
+    assert token_logprobs[0] is None
+    assert top_logprobs[0] is None
+    assert text_offset[0] == 0
+
+    # Subsequent prompt tokens and generated tokens must have finite negative logprobs
+    for i in range(1, len(tokens)):
+        assert token_logprobs[i] is not None
+        assert math.isfinite(token_logprobs[i])
+        assert token_logprobs[i] <= 0.0
+        assert top_logprobs[i] is not None
+        assert isinstance(top_logprobs[i], dict)
+        assert len(top_logprobs[i]) <= 3
+        for k, v in top_logprobs[i].items():
+            assert isinstance(k, str)
+            assert math.isfinite(v)
+            assert v <= 0.0
+
+
+def test_oai_completions_echo_logprobs_stream():
+    global server
+    server.start()
+    prompt = "The capital of France is"
+    res = server.make_stream_request("POST", "/v1/completions", data={
+        "prompt": prompt,
+        "echo": True,
+        "logprobs": 3,
+        "max_tokens": 1,
+        "temperature": 0.0,
+        "stream": True,
+    })
+    chunks = list(res)
+    assert len(chunks) > 0
+

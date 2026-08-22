@@ -238,6 +238,13 @@ struct server_slot {
     size_t n_sent_text = 0; // number of sent text character (i.e. handle partial UTF-8 on streaming)
 
     std::vector<completion_token_output> generated_token_probs;
+    std::vector<std::pair<int32_t, llama_token>> i_batch_prompt;
+    std::vector<completion_token_output> prompt_probs_output;
+
+    bool need_prompt_logits() const {
+        GGML_ASSERT(task);
+        return task->params.echo && task->params.sampling.n_probs > 0;
+    }
 
     bool has_next_token = true;
     bool has_new_line   = false;
@@ -342,6 +349,8 @@ struct server_slot {
         }
         generated_tokens.clear();
         generated_token_probs.clear();
+        i_batch_prompt.clear();
+        prompt_probs_output.clear();
         json_schema = json();
 
         task_prev = std::move(task);
@@ -2076,6 +2085,9 @@ private:
 
         // populate res.probs_output
         if (slot.task->params.sampling.n_probs > 0) {
+            if (slot.task->params.echo) {
+                res->prompt_probs_output = slot.prompt_probs_output;
+            }
             if (!slot.task->params.stream && slot.stop == STOP_TYPE_WORD) {
                 const llama_tokens stop_word_toks = common_tokenize(ctx_tgt, slot.stopping_word, false);
 
@@ -3073,6 +3085,8 @@ private:
                         slot.stats.update_prompt_start();
 
                         slot.state = SLOT_STATE_PROCESSING_PROMPT;
+                        slot.i_batch_prompt.clear();
+                        slot.prompt_probs_output.clear();
 
                         SLT_TRC(slot, "new prompt, n_ctx_slot = %d, n_keep = %d, task.n_tokens = %d\n",
                                 slot.n_ctx, slot.task->params.n_keep, slot.task->n_tokens());
@@ -3469,11 +3483,15 @@ private:
                         // embedding requires all tokens in the batch to be output;
                         // MTP also wants logits at every prompt position so the
                         // streaming hook can mirror t_h_nextn into ctx_dft.
+                        const bool need_logits = slot.need_embd() || slot.need_prompt_logits();
                         add_ok &= batch.add(slot.id,
                             cur_tok,
                             /* pos       = */ slot.prompt.tokens.pos_next(),
-                            /* output    = */ slot.need_embd(),
+                            /* output    = */ need_logits,
                             /* is_prompt = */ true);
+                        if (slot.need_prompt_logits()) {
+                            slot.i_batch_prompt.push_back({(int32_t)(batch.size() - 1), cur_tok});
+                        }
                         slot.prompt.tokens.push_back(cur_tok);
 
                         // break at the last user message, or at user messages at least min step past the last checkpoint
@@ -3737,6 +3755,20 @@ private:
             if (slot.state == SLOT_STATE_PROCESSING_PROMPT || slot.state == SLOT_STATE_DONE_PROMPT) {
                 if (slot.task->params.stream && slot.task->params.return_progress) {
                     send_partial_response(slot, {}, true);
+                }
+                if (!slot.i_batch_prompt.empty()) {
+                    for (auto & [tok_idx, id] : slot.i_batch_prompt) {
+                        if (!is_inside_view(tok_idx)) {
+                            continue;
+                        }
+                        completion_token_output result;
+                        result.tok          = id;
+                        result.text_to_send = common_token_to_piece(slot.ctx_tgt, result.tok, accept_special_token(slot, result.tok));
+                        result.prob         = 1.0f;
+                        populate_token_probs(slot, result, slot.task->params.post_sampling_probs, params_base.special, tok_idx - off);
+                        slot.prompt_probs_output.push_back(result);
+                    }
+                    slot.i_batch_prompt.clear();
                 }
             }
 

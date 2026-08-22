@@ -1026,8 +1026,8 @@ json oaicompat_completion_params_parse(const json & body) {
     }
 
     // Handle "echo" field
-    if (json_value(body, "echo", false)) {
-        throw std::runtime_error("Only no echo is supported");
+    if (body.contains("echo")) {
+        llama_params["echo"] = body.at("echo");
     }
 
     // Params supported by OAI but unsupported by llama.cpp
