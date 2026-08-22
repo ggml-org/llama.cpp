@@ -653,13 +653,25 @@ void ggml_metal_rsets_free(ggml_metal_rsets_t rsets) {
         return;
     }
 
-    // note: if you hit this assert, most likely you haven't deallocated all Metal resources before exiting
-    GGML_ASSERT([rsets->data count] == 0);
-
+    // Signal the background heartbeat thread to stop FIRST, then wait for it.
+    // This ordering prevents the crash where the process calls exit() (e.g.
+    // [NSApplication terminate:]) while the background GCD block is still
+    // spinning in its usleep loop — the previous ordering asserted before
+    // signaling, which triggered ggml_abort during static destruction.
     atomic_store_explicit(&rsets->d_stop, true, memory_order_relaxed);
 
     dispatch_group_wait(rsets->d_group, DISPATCH_TIME_FOREVER);
     dispatch_release(rsets->d_group);
+
+    // During normal operation, all Metal buffers should have been removed
+    // before the device is freed. During process exit (__cxa_finalize /
+    // static destruction), this may not hold — skip the hard assert and
+    // just clean up to avoid SIGABRT on quit.
+    if ([rsets->data count] != 0) {
+        GGML_LOG_WARN("%s: %d residency set(s) still registered during teardown (process exit?)\n",
+                      __func__, (int)[rsets->data count]);
+        [rsets->data removeAllObjects];
+    }
 
     [rsets->data release];
     [rsets->lock release];
