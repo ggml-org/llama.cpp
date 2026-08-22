@@ -66,6 +66,21 @@ The MTP verify batch is `n_max + 1` tokens, so `ne[1] == 5` ⟺ `n_max == 4`.
 At any other `n_max` the batch width matches neither gate, the path arms at
 startup and then **never dispatches once**. It silently falls back to RCCL.
 
+### This does not impeach the published TP4 number
+
+To be explicit, because it would be easy to read the above as an accusation:
+`OPTIMIZATION-STATUS.md:46` attributes `+2.78-2.95%` to the **ordinary TP4
+server**, and line 31 states the ordinary policy requires `ne[1]=1` and that
+"MTP/DFlash are structurally unaffected". Ordinary non-speculative decode is one
+token wide, takes the `ordinary1` branch, and dispatches normally. That
+measurement is internally consistent and I am not questioning it.
+
+The defect is confined to speculative decoding. Once a drafter is attached every
+decode batch is `n_max + 1` wide, so width-1 batches stop occurring altogether —
+`ordinary1` no longer matches anything, and `mtp5` matches only at `n_max == 4`.
+That is why the observed session below saw zero dispatches rather than merely
+fewer.
+
 `n+1` is not an MTP quirk — it is how every block draft sizes its batch.
 `common/speculative.cpp:2567`:
 
