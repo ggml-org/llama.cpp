@@ -3549,6 +3549,13 @@ private:
                             } else {
                                 // if we don't cache the prompt, we have to remove all previous tokens
                                 n_past = 0;
+
+                                // The automatic path does not serialize a replacement checkpoint
+                                // below. Drop checkpoints from an older prompt so that a later
+                                // cache-enabled request cannot restore stale recurrent state.
+                                if (slot.smpl_backend_greedy_attached) {
+                                    slot.prompt.checkpoints.clear();
+                                }
                             }
 
                             llama_pos pos_next = slot.prompt.tokens.pos_next(n_past);
