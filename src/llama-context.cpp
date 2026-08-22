@@ -2999,28 +2999,31 @@ size_t llama_context::state_seq_get_data(llama_seq_id seq_id, uint8_t * dst, siz
 }
 
 size_t llama_context::state_seq_set_data(llama_seq_id seq_id, const uint8_t * src, size_t size, llama_state_seq_flags flags) {
-    std::unique_ptr<llama_io_read_i> io;
-    if (flags & LLAMA_STATE_SEQ_FLAGS_ON_DEVICE) {
-        // create a temporary io to read the magic and the src seq_id
-        io = std::make_unique<llama_io_read_host>(src, size);
+    try {
+        std::unique_ptr<llama_io_read_i> io;
+        if (flags & LLAMA_STATE_SEQ_FLAGS_ON_DEVICE) {
+            // create a temporary io to read the magic and the src seq_id
+            io = std::make_unique<llama_io_read_host>(src, size);
 
-        uint32_t magic_read;
-        io->read(&magic_read, sizeof(magic_read));
-        if (io_magic != magic_read) {
-            throw std::runtime_error("wrong sequence state magic");
+            uint32_t magic_read;
+            io->read(&magic_read, sizeof(magic_read));
+            if (io_magic != magic_read) {
+                throw std::runtime_error("wrong sequence state magic");
+            }
+
+            llama_seq_id seq_id_read;
+            io->read(&seq_id_read, sizeof(seq_id_read));
+
+            auto it = mem_storage.find(seq_id_read);
+            if (it == mem_storage.end()) {
+                throw std::runtime_error("sequence state not found");
+            }
+
+            io = std::make_unique<llama_io_read_device>(src, size, it->second);
+        } else {
+            io = std::make_unique<llama_io_read_host>(src, size);
         }
 
-        llama_seq_id seq_id_read;
-        io->read(&seq_id_read, sizeof(seq_id_read));
-
-        GGML_ASSERT(mem_storage.find(seq_id_read) != mem_storage.end());
-
-        io = std::make_unique<llama_io_read_device>(src, size, mem_storage[seq_id_read]);
-    } else {
-        io = std::make_unique<llama_io_read_host>(src, size);
-    }
-
-    try {
         uint32_t magic_read;
         io->read(&magic_read, sizeof(magic_read));
         if (io_magic != magic_read) {
