@@ -408,6 +408,11 @@ struct common_params_diffusion {
 
 // reasoning API response format (not to be confused as chat template's reasoning format)
 // only used by server
+enum common_sleep_mode {
+    COMMON_SLEEP_MODE_FREE, // free context and model memory
+    COMMON_SLEEP_MODE_RST, // also restart the process, releasing all backend resources
+};
+
 enum common_reasoning_format {
     COMMON_REASONING_FORMAT_NONE,
     COMMON_REASONING_FORMAT_AUTO,            // Same as deepseek, using `message.reasoning_content`
@@ -634,6 +639,7 @@ struct common_params {
     int enable_reasoning = -1; // -1 = auto, 0 = disable, 1 = enable
     bool prefill_assistant = true; // if true, any trailing assistant message will be prefilled into the response
     int sleep_idle_seconds = -1;   // if >0, server will sleep after this many seconds of idle time
+    common_sleep_mode sleep_mode = COMMON_SLEEP_MODE_FREE;
 
     std::vector<std::string> api_keys;
 

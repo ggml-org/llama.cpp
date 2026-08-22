@@ -450,6 +450,9 @@ struct server_metrics {
             steps += n_steps;
             time  += t_us;
         }
+
+        json to_json() const;
+        void from_json(const json & data);
     };
 
     // these are reset by reset_bucket(), only the rate is read from them
@@ -490,6 +493,10 @@ struct server_metrics {
     void add_prompt_cached(uint64_t n_tokens) {
         n_prompt_cached += n_tokens;
     }
+
+    // used to keep the metrics across a process restart, see --sleep-mode rst
+    json to_json() const;
+    void from_json(const json & data);
 };
 
 //
@@ -603,4 +610,40 @@ struct server_pipe {
         cv.notify_one();
         return true;
     }
+};
+
+//
+// server_sleep_rst
+// this allow --sleep-mode rst to reset the whole process, but still preserve metrics and props data
+// see README-dev.md for more info
+//
+
+struct server_sleep_rst {
+    // true if the process was restarted by a previous instance
+    // in this case, the model is only loaded upon the first request
+    static bool is_boot_to_sleep();
+
+    // remember argv and read the state left by the previous process
+    // must be called once at startup, before spawning any thread or child process
+    void init(int argc, char ** argv);
+
+    // enable the restart upon sleeping, warns and falls back to --sleep-mode free if not possible
+    void enable(common_params & params);
+
+    // state left by the previous process, only valid if is_boot_to_sleep()
+    const json & get_boot_state() const { return boot_state; }
+
+    // set the state to be preserved across the restart
+    void set_state_provider(std::function<json()> provider) { state_provider = std::move(provider); }
+
+    // restart the process, does nothing if not enabled, does not return on success
+    void restart() const;
+
+private:
+    bool    enabled = false;
+    char ** argv    = nullptr;
+
+    json boot_state;
+
+    std::function<json()> state_provider;
 };

@@ -16,6 +16,18 @@
 #include <cstring>
 #include <type_traits>
 
+#if !defined(_WIN32)
+#include <unistd.h>
+#include <limits.h>
+#include <cerrno>
+#include <fcntl.h>
+#include <sys/resource.h>
+#endif
+
+#if defined(__APPLE__)
+#include <mach-o/dyld.h>
+#endif
+
 json format_error_response(const std::string & message, const enum error_type type) {
     std::string type_str;
     int code = 500;
@@ -85,6 +97,64 @@ json server_slot_stats::to_json() const {
     }
 
     return base;
+}
+
+//
+// server_metrics
+//
+
+json server_metrics::bucket::to_json() const {
+    return json {
+        {"count", count},
+        {"steps", steps},
+        {"time",  time },
+    };
+}
+
+void server_metrics::bucket::from_json(const json & data) {
+    count = data.at("count");
+    steps = data.at("steps");
+    time  = data.at("time");
+}
+
+json server_metrics::to_json() const {
+    return json {
+        {"t_start",             t_start},
+
+        {"prompt_bucket",       prompt_bucket .to_json()},
+        {"predict_bucket",      predict_bucket.to_json()},
+        {"prompt",              prompt        .to_json()},
+        {"predict",             predict       .to_json()},
+
+        {"n_prompt_cached",     n_prompt_cached},
+        {"n_tokens_max",        n_tokens_max},
+        {"n_decode",            n_decode},
+        {"n_busy_slots",        n_busy_slots},
+
+        {"n_draft_tokens",      n_draft_tokens},
+        {"n_draft_accepted",    n_draft_accepted},
+        {"n_draft_verif_steps", n_draft_verif_steps},
+        {"n_accepted_per_pos",  n_accepted_per_pos},
+    };
+}
+
+void server_metrics::from_json(const json & data) {
+    t_start = data.at("t_start");
+
+    prompt_bucket .from_json(data.at("prompt_bucket"));
+    predict_bucket.from_json(data.at("predict_bucket"));
+    prompt        .from_json(data.at("prompt"));
+    predict       .from_json(data.at("predict"));
+
+    n_prompt_cached = data.at("n_prompt_cached");
+    n_tokens_max    = data.at("n_tokens_max");
+    n_decode        = data.at("n_decode");
+    n_busy_slots    = data.at("n_busy_slots");
+
+    n_draft_tokens      = data.at("n_draft_tokens");
+    n_draft_accepted    = data.at("n_draft_accepted");
+    n_draft_verif_steps = data.at("n_draft_verif_steps");
+    n_accepted_per_pos  = data.at("n_accepted_per_pos").get<std::vector<uint64_t>>();
 }
 
 //
@@ -1818,4 +1888,141 @@ server_tokens format_prompt_rerank(
     }
 
     return result;
+}
+
+
+//
+// server_sleep_rst
+//
+
+#if !defined(_WIN32)
+static std::string server_proc_exe_path(char ** argv) {
+    char buf[PATH_MAX];
+#if defined(__linux__)
+    const ssize_t len = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
+    if (len > 0) {
+        buf[len] = '\0';
+        return buf;
+    }
+#elif defined(__APPLE__)
+    uint32_t size = sizeof(buf);
+    if (_NSGetExecutablePath(buf, &size) == 0) {
+        return buf;
+    }
+#endif
+    return argv[0];
+}
+
+// exec() keeps the file descriptors open, so mark them all to be closed instead
+// this releases the listening port and the backend devices, and makes child processes see EOF
+static void server_proc_close_fds_on_exec() {
+    int n_fd = 4096;
+
+    struct rlimit lim;
+    if (getrlimit(RLIMIT_NOFILE, &lim) == 0 && lim.rlim_cur != RLIM_INFINITY) {
+        n_fd = std::min<int>(lim.rlim_cur, 65536);
+    }
+
+    // skip stdin/stdout/stderr, they are used to communicate with the router
+    for (int fd = 3; fd < n_fd; fd++) {
+        const int flags = fcntl(fd, F_GETFD);
+        if (flags != -1) {
+            fcntl(fd, F_SETFD, flags | FD_CLOEXEC);
+        }
+    }
+}
+#endif
+
+static void server_proc_restart(char ** argv, const char * env_name, const std::string & env_value) {
+#if defined(_WIN32) || defined(__EMSCRIPTEN__)
+    GGML_UNUSED(argv);
+    GGML_UNUSED(env_name);
+    GGML_UNUSED(env_value);
+    SRV_ERR("%s", "restarting the process is not supported on this platform\n");
+#else
+    GGML_ASSERT(argv != nullptr);
+
+    // exec() rejects an env var larger than MAX_ARG_STRLEN (128 kB on linux)
+    if (env_value.size() > 64*1024) {
+        SRV_ERR("cannot restart the process, '%s' is too large (%zu bytes)\n", env_name, env_value.size());
+        return;
+    }
+
+    common_set_env(env_name, env_value);
+
+    const std::string exe = server_proc_exe_path(argv);
+    SRV_INF("restarting the process, exe = '%s'\n", exe.c_str());
+
+    server_proc_close_fds_on_exec();
+
+    // the log worker thread does not survive exec(), flush it while we still can
+    common_log_pause(common_log_main());
+    fflush(stdout);
+    fflush(stderr);
+
+    execv(exe.c_str(), argv);
+
+    // exec() only returns on error, the server can no longer serve requests at this point
+    GGML_ABORT("execv() failed: %s", strerror(errno));
+#endif
+}
+
+static const char * SLEEP_STATE_ENV = "LLAMA_SERVER_SLEEP_STATE";
+
+void server_sleep_rst::init(int argc, char ** argv) {
+    GGML_ASSERT(argv == nullptr || argc > 0);
+
+    this->argv = argv;
+
+    const std::string state = common_get_env(SLEEP_STATE_ENV);
+    if (state.empty()) {
+        return;
+    }
+
+    // note: the env var is kept, is_boot_to_sleep() reads it during the whole process lifetime
+    try {
+        boot_state = json::parse(state);
+    } catch (const std::exception & e) {
+        SRV_ERR("failed to read the state left by the previous process: %s\n", e.what());
+        common_set_env(SLEEP_STATE_ENV, ""); // unusable, boot normally instead
+    }
+}
+
+void server_sleep_rst::enable(common_params & params) {
+    // the state left by the previous process is unusable without the restart, drop it
+    auto disable = [this]() {
+        boot_state = json();
+        common_set_env(SLEEP_STATE_ENV, "");
+    };
+
+    if (params.sleep_mode != COMMON_SLEEP_MODE_RST) {
+        disable();
+        return;
+    }
+
+    if (argv == nullptr) {
+        // exec() can only restart a standalone process
+        SRV_WRN("%s", "--sleep-mode rst is not supported in this mode, using --sleep-mode free\n");
+        params.sleep_mode = COMMON_SLEEP_MODE_FREE;
+        disable();
+        return;
+    }
+
+    if (params.sleep_idle_seconds < 0) {
+        SRV_WRN("%s", "--sleep-mode has no effect without --sleep-idle-seconds\n");
+    }
+
+    enabled = true;
+}
+
+bool server_sleep_rst::is_boot_to_sleep() {
+    return !common_get_env(SLEEP_STATE_ENV).empty();
+}
+
+void server_sleep_rst::restart() const {
+    if (!enabled) {
+        return;
+    }
+
+    server_proc_restart(argv, SLEEP_STATE_ENV, safe_json_to_str(state_provider ? state_provider() : json()));
 }

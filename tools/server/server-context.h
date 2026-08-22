@@ -87,8 +87,14 @@ struct server_context {
     server_context();
     ~server_context();
 
+    // remember the command line, needed to restart the process, see --sleep-mode rst
+    // must be called once at startup, before spawning any thread or child process
+    void init(int argc, char ** argv);
+
     // load the model and initialize llama_context
     // returns true on success
+    // note: if the process was restarted into sleeping state, no model is loaded and it
+    //       returns true right away, the model is then loaded upon the first request
     bool load_model(common_params & params);
 
     // this function will block main thread until termination
@@ -158,6 +164,11 @@ struct server_routes {
     // to be used in router mode
     json get_model_info() const;
 
+    // save / restore the cached responses across a process restart, see --sleep-mode rst
+    // only valid while sleeping, as the cache is only updated upon entering that state
+    json cache_to_json();
+    bool cache_from_json(const json & data);
+
 private:
     std::unique_ptr<server_res_generator> handle_completions_impl(
             const server_http_req & req,
@@ -191,3 +202,4 @@ private:
     // call right before sleep to update the cached responses
     void update_cached_responses(bool is_sleeping);
 };
+

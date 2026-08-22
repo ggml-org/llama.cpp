@@ -286,6 +286,28 @@ void server_queue::start_loop(int64_t idle_sleep_ms) {
     worker.yielding = false;
     worker.thread = std::thread([this]() { worker_loop(); });
 
+    // the process may start already sleeping, see init_sleeping()
+    {
+        std::unique_lock<std::mutex> lock(mutex_tasks);
+        if (sleeping) {
+            QUE_INF("%s", "starting in sleeping state\n");
+            condition_tasks.wait(lock, [&]{
+                return (!running || req_stop_sleeping);
+            });
+            if (running) {
+                QUE_INF("%s", "exiting sleeping state\n");
+                req_stop_sleeping = false;
+                // Call order cb{N} -> cb1 -> cb0
+                for (size_t i = callback_sleeping_state.size(); i > 0; i--) {
+                    callback_sleeping_state[i - 1](false);
+                }
+                sleeping = false;
+                condition_tasks.notify_all(); // notify wait_until_no_sleep()
+            }
+            time_last_task = ggml_time_ms();
+        }
+    }
+
     constexpr auto max_wait_time = std::chrono::seconds(1);
     auto should_sleep = [&]() -> bool {
         // caller must hold mutex_tasks
