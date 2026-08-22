@@ -3,6 +3,9 @@
 ggml_cgraph * clip_graph_whisper_enc::build() {
     const int n_frames = img.nx();
     const int n_pos    = n_frames / 2;
+    if (model.position_embeddings == nullptr) {
+        throw std::runtime_error("position_embeddings tensor is missing");
+    }
     GGML_ASSERT(model.position_embeddings->ne[1] >= n_pos);
 
     ggml_tensor * inp = build_inp_raw(1);

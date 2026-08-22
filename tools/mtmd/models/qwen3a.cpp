@@ -60,6 +60,9 @@ ggml_cgraph * clip_graph_qwen3a::build() {
     // Per-chunk positional embeddings: repeat pos[0:13] for each chunk
     // (position indices reset 0..12 per chunk, not sequential across chunks)
     {
+        if (model.position_embeddings == nullptr) {
+            throw std::runtime_error("position_embeddings tensor is missing");
+        }
         const int64_t tokens_per_chunk = n_pos / n_chunks; // 13
         ggml_tensor * pos_tmp = ggml_view_2d(ctx0, model.position_embeddings,
             model.position_embeddings->ne[0], tokens_per_chunk,

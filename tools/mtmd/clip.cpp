@@ -311,12 +311,13 @@ void clip_graph::cb(ggml_tensor * cur, const char * name, int il) const {
 // siglip2 naflex
 ggml_tensor * clip_graph::resize_position_embeddings(uint32_t interpolation_mode) {
     ggml_tensor * pos_embd = model.position_embeddings;
+    if (pos_embd == nullptr) {
+        throw std::runtime_error("position_embeddings tensor is missing");
+    }
     const int height       = img.ny() / patch_size;
     const int width        = img.nx() / patch_size;
     const uint32_t mode    = interpolation_mode;
     const int n_per_side   = (int)std::sqrt(pos_embd->ne[1]);
-
-    GGML_ASSERT(pos_embd);
 
     if (height == n_per_side && width == n_per_side) {
         return pos_embd;
@@ -568,6 +569,9 @@ ggml_tensor * clip_graph::build_vit(
 // build the input after conv2d (inp_raw --> patches)
 // returns tensor with shape [n_embd, n_patches]
 ggml_tensor * clip_graph::build_inp() {
+    if (model.patch_embeddings_0 == nullptr) {
+        throw std::runtime_error("patch_embeddings_0 tensor is missing");
+    }
     ggml_tensor * inp_raw = build_inp_raw();
     ggml_tensor * inp = ggml_conv_2d(ctx0, model.patch_embeddings_0, inp_raw, patch_size, patch_size, 0, 0, 1, 1);
     inp = ggml_reshape_3d(ctx0, inp, n_patches, n_embd, n_batch);
@@ -5779,6 +5783,7 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
         case PROJECTOR_TYPE_DEEPSEEKOCR2:
             return ctx->model.mm_fc_w->ne[1];
         case PROJECTOR_TYPE_LFM2A:
+            GGML_ASSERT(ctx->model.position_embeddings != nullptr);
             return ctx->model.position_embeddings->ne[0];
         case PROJECTOR_TYPE_GRANITE_SPEECH:
             return ctx->model.qf_proj_blocks[0].qf_proj_linear_w->ne[1];
