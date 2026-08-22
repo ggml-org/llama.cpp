@@ -2,8 +2,8 @@
 
 // converts between common_json and the backing JSON library
 //
-// include this only in a cpp file that touches an internal component of the library,
-// never in a header. every use here is a place to fix if the library changes.
+// include this only in a cpp file that touches an internal component, never in a header
+// every use here is a place to fix if the library changes
 
 #include "json.h"
 

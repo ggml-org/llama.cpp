@@ -172,8 +172,8 @@ COMMON_JSON_VEC(common_json)
 common_json_value::common_json_value(std::initializer_list<common_json_item> items) :
     type(VAL_JSON), val_json(std::make_shared<common_json>(items)) {}
 
-// null, same as the backing library. operator[] turns it into an object,
-// push_back() into an array
+// null, same as the backing library
+// operator[] turns it into an object, push_back() into an array
 common_json::common_json() {
     new (storage) ordered_json();
 }

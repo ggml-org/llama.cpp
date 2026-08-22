@@ -30,8 +30,7 @@ struct common_json_error : std::runtime_error {
 };
 
 // one value, tagged so that this header stays free of the backing library
-// note: a value that holds a tree is single use, consuming the same value twice
-// (e.g. through a named initializer list) gives null on the second use
+// note: a value that holds a tree is single use, the second use gives null
 struct common_json_value {
     enum value_type {
         VAL_NULL,
@@ -58,8 +57,7 @@ struct common_json_value {
     common_json_value(std::nullptr_t = nullptr) : type(VAL_NULL) {}
     common_json_value(bool val) : type(VAL_BOOL), val_bool(val) {}
     common_json_value(std::string val) : type(VAL_STRING), val_string(std::move(val)) {}
-    // a string_view does not convert to std::string on its own, and without this
-    // it would land on the common_json ctor below and recurse
+    // without this a string_view lands on the common_json ctor below and recurses
     common_json_value(std::string_view val) : type(VAL_STRING), val_string(val) {}
     common_json_value(const char * val);
     common_json_value(const common_json & val);
@@ -102,8 +100,8 @@ struct common_json_item {
         key(std::move(key)), val(items) {}
 };
 
-// the types common_json_value holds on its own. anything else reaches its
-// common_json ctor, which builds a common_json again and never stops
+// the types common_json_value holds on its own
+// anything else reaches its common_json ctor and recurses forever
 template <typename T> struct common_json_is_value : std::integral_constant<bool,
     std::is_arithmetic<T>::value ||
     std::is_same<T, std::nullptr_t>::value ||
@@ -141,8 +139,8 @@ class common_json {
                       "no common_json_value ctor holds this type, add one instead of letting it recurse");
     }
 
-    // by value, same as the backing library: the right side is copied before the
-    // left side can invalidate it, e.g. msg["a"] = msg.at("b") where "a" is new
+    // by value, same as the backing library
+    // the right side is copied before the left side can invalidate it, e.g. msg["a"] = msg.at("b")
     common_json & operator=(common_json other) noexcept;
 
     ~common_json();
@@ -210,8 +208,7 @@ class common_json {
 
     // implicit get<T>() for plain values, so they can be assigned to their C++ type directly
     // note: kept to this short list on purpose, a wider one makes j["key"] ambiguous
-    // note: only std::string. adding a numeric one makes "str = json;" ambiguous,
-    // because a number can also convert to char, which std::string accepts
+    // note: a numeric one would make "str = json;" ambiguous, a number converts to char too
     operator std::string() const { return get<std::string>(); }
 
     template <typename T>
@@ -337,8 +334,8 @@ class common_json {
     }
 
     // the backing value is built here, json.cpp checks that it fits
-    // it cannot be a pointer: a value inside a tree would then not be a common_json,
-    // so at() could only give back a copy instead of a real reference
+    // it cannot be a pointer: a value inside a tree would then not be a common_json
+    // at() could then only give back a copy instead of a real reference
     alignas(8) unsigned char storage[32];
 };
 
