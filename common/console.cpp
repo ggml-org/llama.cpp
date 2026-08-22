@@ -994,40 +994,17 @@ namespace console {
                     char_pos++;
                 }
             }
-
-            if (!line.empty() && (line.back() == '\\' || line.back() == '/')) {
-                replace_last(line.back());
-                is_special_char = true;
-            }
         }
 
         bool has_more = multiline_input;
-        if (is_special_char) {
-            replace_last(' ');
-            pop_cursor();
 
-            char last = line.back();
-            line.pop_back();
-            if (last == '\\') {
-                line += '\n';
-                fputc('\n', out);
-                has_more = !has_more;
-            } else {
-                // llama will just eat the single space, it won't act as a space
-                if (line.length() == 1 && line.back() == ' ') {
-                    line.clear();
-                    pop_cursor();
-                }
-                has_more = false;
-            }
-        } else {
-            if (end_of_stream) {
-                has_more = false;
-            } else {
-                line += '\n';
-                fputc('\n', out);
-            }
+        if (end_of_stream) {
+            has_more = false;
+        } else if (!line.empty()) {
+            line += '\n';
+            fputc('\n', out);
         }
+
 
         if (!end_of_stream && !line.empty()) {
             // remove the trailing newline for history storage
@@ -1064,17 +1041,10 @@ namespace console {
         }
 #endif
         if (!line.empty()) {
-            char last = line.back();
-            if (last == '/') { // Always return control on '/' symbol
-                line.pop_back();
-                return false;
-            }
-            if (last == '\\') { // '\\' changes the default action
-                line.pop_back();
-                multiline_input = !multiline_input;
-            }
+            line += '\n';
         }
-        line += '\n';
+        return multiline_input;
+
 
         // By default, continue input if multiline_input is set
         return multiline_input;
