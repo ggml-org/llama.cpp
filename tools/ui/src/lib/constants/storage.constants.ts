@@ -20,6 +20,9 @@ export const DISABLED_TOOLS_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.disabledTool
 
 /** Disabled tools keyed by stable selection identity, no migration from the name based key */
 export const DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.disabledToolKeys`;
+
+/** Default disabled tool categories, seeded into newly created conversations */
+export const DISABLED_TOOL_CATEGORIES_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.disabledToolCategories`;
 export const FAVORITE_MODELS_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.favoriteModels`;
 export const REASONING_EFFORT_DEFAULT_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.reasoningEffortDefault`;
 export const CONVERSATION_TABS_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.conversationTabs`;
