@@ -1,22 +1,27 @@
 import { CLI_FLAGS } from '$lib/constants';
 import { ToolSource } from '$lib/enums';
 import { conversationsStore, mcpStore, toolsStore } from '$lib/stores';
-import type { ToolGroup } from '$lib/types';
+import type { ToolEntry, ToolGroup } from '$lib/types';
 import { SvelteSet } from 'svelte/reactivity';
 
 export interface UseToolsPanelReturn {
 	readonly expandedGroups: SvelteSet<string>;
-	readonly groups: ToolGroup[];
-	readonly activeGroups: ToolGroup[];
+	readonly categoryGroups: ToolGroup[];
+	readonly mcpGroups: ToolGroup[];
 	readonly totalToolCount: number;
 	readonly noToolsInfoMessage: string | null;
+	readonly mcpCategoryEnabled: boolean;
 	isGroupChecked(group: ToolGroup): boolean;
 	getEnabledToolCount(group: ToolGroup): number;
 	getFavicon(group: ToolGroup): string | null;
 	isGroupDisabled(group: ToolGroup): boolean;
+	isToolEnabled(entry: ToolEntry): boolean;
+	isToolParentDisabled(entry: ToolEntry): boolean;
+	toggleTool(entry: ToolEntry): void;
 	toggleGroupExpanded(key: string): void;
 	/** Toggle all tools in a group by its stable key (avoids stale group object references). */
 	toggleGroupByKey(key: string): void;
+	toggleMcpCategory(): void;
 	handleOpen(): void;
 }
 
@@ -26,19 +31,21 @@ export interface UseToolsPanelReturn {
  * Used by both the desktop dropdown (`ChatFormActionAddToolsSubmenu`)
  * and the mobile sheet (`ChatFormActionAddSheet`) to avoid
  * duplicating group filtering, checked-state derivation, and favicon logic.
+ *
+ * All toggle state routes through `conversationsStore.preferences`: with an
+ * active conversation it edits that conversation's tool policy, on the
+ * new-chat screen it edits the global defaults seeded into new conversations.
  */
 export function useToolsPanel(): UseToolsPanelReturn {
 	const expandedGroups = new SvelteSet<string>();
 	const groups = $derived(toolsStore.toolGroups);
-	const activeGroups = $derived(
-		groups.filter(
-			(g) =>
-				g.source !== ToolSource.MCP ||
-				!g.serverId ||
-				conversationsStore.preferences.isMcpServerEnabledForChat(g.serverId)
-		)
+	// non-MCP groups are 1:1 with tool categories; MCP tools group per server
+	const categoryGroups = $derived(groups.filter((g) => g.source !== ToolSource.MCP));
+	const mcpGroups = $derived(groups.filter((g) => g.source === ToolSource.MCP));
+	const totalToolCount = $derived(groups.reduce((n, g) => n + g.tools.length, 0));
+	const mcpCategoryEnabled = $derived(
+		conversationsStore.preferences.isCategoryEnabled(ToolSource.MCP)
 	);
-	const totalToolCount = $derived(activeGroups.reduce((n, g) => n + g.tools.length, 0));
 	const noToolsInfoMessage = $derived.by(() => {
 		if (toolsStore.loading) return null;
 
@@ -56,11 +63,11 @@ export function useToolsPanel(): UseToolsPanelReturn {
 	});
 
 	function isGroupChecked(group: ToolGroup): boolean {
-		return toolsStore.isGroupFullyEnabled(group);
+		return conversationsStore.preferences.isGroupChecked(group);
 	}
 
 	function getEnabledToolCount(group: ToolGroup): number {
-		return group.tools.filter((tool) => toolsStore.isToolEnabled(tool.key)).length;
+		return group.tools.filter((tool) => conversationsStore.preferences.isToolActive(tool)).length;
 	}
 
 	function getFavicon(group: ToolGroup): string | null {
@@ -70,11 +77,23 @@ export function useToolsPanel(): UseToolsPanelReturn {
 	}
 
 	function isGroupDisabled(group: ToolGroup): boolean {
+		// MCP server groups gray out while the whole MCP category is off
 		return (
 			group.source === ToolSource.MCP &&
-			!!group.serverId &&
-			!conversationsStore.preferences.isMcpServerEnabledForChat(group.serverId)
+			!conversationsStore.preferences.isCategoryEnabled(ToolSource.MCP)
 		);
+	}
+
+	function isToolEnabled(entry: ToolEntry): boolean {
+		return conversationsStore.preferences.isToolEnabled(entry.key);
+	}
+
+	function isToolParentDisabled(entry: ToolEntry): boolean {
+		return conversationsStore.preferences.isToolParentDisabled(entry);
+	}
+
+	function toggleTool(entry: ToolEntry): void {
+		void conversationsStore.preferences.toggleTool(entry.key);
 	}
 
 	function toggleGroupExpanded(key: string): void {
@@ -87,11 +106,15 @@ export function useToolsPanel(): UseToolsPanelReturn {
 
 	function toggleGroupByKey(key: string): void {
 		// Find current group by key to get up-to-date tool references
-		const group = activeGroups.find((g) => g.key === key);
+		const group = groups.find((g) => g.key === key);
 
 		if (!group) return;
 
-		toolsStore.toggleGroup(group);
+		void conversationsStore.preferences.toggleGroup(group);
+	}
+
+	function toggleMcpCategory(): void {
+		void conversationsStore.preferences.toggleCategory(ToolSource.MCP);
 	}
 
 	function handleOpen(): void {
@@ -103,23 +126,30 @@ export function useToolsPanel(): UseToolsPanelReturn {
 	}
 
 	return {
-		get activeGroups() {
-			return activeGroups;
+		get categoryGroups() {
+			return categoryGroups;
 		},
 		expandedGroups,
 		getEnabledToolCount,
 		getFavicon,
-		get groups() {
-			return groups;
-		},
 		handleOpen,
 		isGroupChecked,
 		isGroupDisabled,
+		isToolEnabled,
+		isToolParentDisabled,
+		get mcpCategoryEnabled() {
+			return mcpCategoryEnabled;
+		},
+		get mcpGroups() {
+			return mcpGroups;
+		},
 		get noToolsInfoMessage() {
 			return noToolsInfoMessage;
 		},
 		toggleGroupByKey,
 		toggleGroupExpanded,
+		toggleMcpCategory,
+		toggleTool,
 		get totalToolCount() {
 			return totalToolCount;
 		}

@@ -1,18 +1,10 @@
 <script lang="ts">
-	import { File, FolderOpen, MessageSquare, Zap } from '@lucide/svelte';
-	import {
-		Check,
-		ChevronDown,
-		ChevronRight,
-		Lightbulb,
-		LightbulbOff,
-		PencilRuler
-	} from '@lucide/svelte';
+	import { File, MessageSquare } from '@lucide/svelte';
+	import { ChevronDown, ChevronRight, PencilRuler } from '@lucide/svelte';
 	import { McpLogo } from '$lib/components/app';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import * as Collapsible from '$lib/components/ui/collapsible';
 	import * as Sheet from '$lib/components/ui/sheet';
-	import { Switch } from '$lib/components/ui/switch';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import {
 		ATTACHMENT_FILE_ITEMS,
@@ -20,12 +12,10 @@
 		TOOLTIP_DELAY_DURATION
 	} from '$lib/constants';
 	import { getChatFormActionsContext } from '$lib/contexts';
-	import { HealthCheckStatus } from '$lib/enums';
 	import { AttachmentAction } from '$lib/enums/attachment.enums';
 	import { useAttachmentMenu } from '$lib/hooks/use-attachment-menu.svelte';
-	import { useReasoningMenu } from '$lib/hooks/use-reasoning-menu.svelte';
 	import { useToolsPanel } from '$lib/hooks/use-tools-panel.svelte';
-	import { conversationsStore, mcpStore } from '$lib/stores';
+	import type { ToolGroup } from '$lib/types';
 	import type { Snippet } from 'svelte';
 
 	interface Props {
@@ -38,10 +28,8 @@
 	const chatFormActions = getChatFormActionsContext();
 
 	let sheetOpen = $state(false);
-	let reasoningExpanded = $state(false);
 	let filesExpanded = $state(true);
 	let toolsExpanded = $state(false);
-	let mcpExpanded = $state(false);
 
 	const attachmentMenu = useAttachmentMenu(
 		() => ({
@@ -63,15 +51,12 @@
 	);
 
 	const toolsPanel = useToolsPanel();
-	const reasoning = useReasoningMenu();
 
 	const sheetItemClass =
 		'flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-left text-sm transition-colors hover:bg-accent active:bg-accent disabled:cursor-not-allowed disabled:opacity-50';
 
 	const sheetItemRowClass =
 		'flex w-full items-center justify-between gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors hover:bg-accent';
-
-	let mcpServers = $derived(mcpStore.getServers());
 </script>
 
 <div class="flex items-center gap-1 {className}">
@@ -88,65 +73,6 @@
 			</Sheet.Header>
 
 			<div class="flex flex-col gap-1 px-1.5 pb-2">
-				{#if reasoning.modelSupportsThinking}
-					<Collapsible.Root
-						open={reasoningExpanded}
-						onOpenChange={(open) => (reasoningExpanded = open)}
-					>
-						<Collapsible.Trigger class={sheetItemClass}>
-							{#if reasoningExpanded}
-								<ChevronDown class="{ICON_CLASS_DEFAULT} shrink-0" />
-							{:else}
-								<ChevronRight class="{ICON_CLASS_DEFAULT} shrink-0" />
-							{/if}
-
-							{#if reasoning.isReasoningActive}
-								<Lightbulb class="{ICON_CLASS_DEFAULT} shrink-0 text-amber-400" />
-							{:else if reasoning.isOff}
-								<LightbulbOff class="{ICON_CLASS_DEFAULT} shrink-0 text-muted-foreground" />
-							{:else}
-								<Lightbulb class="{ICON_CLASS_DEFAULT} shrink-0 text-muted-foreground" />
-							{/if}
-
-							<span class="flex-1">Reasoning</span>
-
-							<span class="text-xs capitalize text-muted-foreground">
-								{reasoning.currentEffort}
-							</span>
-						</Collapsible.Trigger>
-
-						<Collapsible.Content>
-							<div class="flex flex-col gap-0.5 pl-4">
-								{#each reasoning.levels as level (level.value)}
-									{@const tokenLabel = reasoning.tokenLabel(level)}
-									<button
-										type="button"
-										class={sheetItemRowClass}
-										class:bg-accent={reasoning.isSelected(level)}
-										onclick={() => reasoning.select(level)}
-									>
-										<div class="flex min-w-0 items-center gap-3">
-											{#if reasoning.isSelected(level)}
-												<Check class="{ICON_CLASS_DEFAULT} shrink-0 text-foreground" />
-											{:else}
-												<div class="{ICON_CLASS_DEFAULT} shrink-0"></div>
-											{/if}
-
-											<span class="text-sm">{level.label}</span>
-										</div>
-
-										{#if tokenLabel}
-											<span class="shrink-0 text-[11px] text-muted-foreground opacity-60">
-												{tokenLabel}
-											</span>
-										{/if}
-									</button>
-								{/each}
-							</div>
-						</Collapsible.Content>
-					</Collapsible.Root>
-				{/if}
-
 				<Collapsible.Root open={filesExpanded} onOpenChange={(open) => (filesExpanded = open)}>
 					<Collapsible.Trigger class={sheetItemClass}>
 						{#if filesExpanded}
@@ -194,82 +120,15 @@
 					</Collapsible.Content>
 				</Collapsible.Root>
 
-				<div class="h-px bg-border"></div>
+				<button
+					type="button"
+					class={sheetItemClass}
+					onclick={() => attachmentMenu.callbacks[AttachmentAction.SYSTEM_PROMPT_CLICK]()}
+				>
+					<MessageSquare class="{ICON_CLASS_DEFAULT} shrink-0" />
 
-				<Collapsible.Root open={mcpExpanded} onOpenChange={(open) => (mcpExpanded = open)}>
-					<Collapsible.Trigger class={sheetItemClass}>
-						{#if mcpExpanded}
-							<ChevronDown class="{ICON_CLASS_DEFAULT} shrink-0" />
-						{:else}
-							<ChevronRight class="{ICON_CLASS_DEFAULT} shrink-0" />
-						{/if}
-
-						<McpLogo class="inline {ICON_CLASS_DEFAULT} shrink-0" />
-
-						<span class="flex-1">MCP Servers</span>
-
-						<span class="text-xs text-muted-foreground">
-							{mcpServers.length} server{mcpServers.length !== 1 ? 's' : ''}
-						</span>
-					</Collapsible.Trigger>
-
-					<Collapsible.Content>
-						<div class="flex flex-col gap-0.5 pl-4">
-							{#each mcpServers as server (server.id)}
-								{@const healthState = mcpStore.getHealthCheckState(server.id)}
-								{@const hasError = healthState.status === HealthCheckStatus.ERROR}
-								{@const displayName = mcpStore.getServerLabel(server)}
-								{@const faviconUrl = mcpStore.getServerFavicon(server.id)}
-								{@const isEnabled = conversationsStore.preferences.isMcpServerEnabledForChat(
-									server.id
-								)}
-
-								<button
-									type="button"
-									class={sheetItemRowClass}
-									onclick={() =>
-										!hasError && conversationsStore.preferences.toggleMcpServerForChat(server.id)}
-									disabled={hasError}
-								>
-									<div class="flex min-w-0 flex-1 items-center gap-2">
-										{#if faviconUrl}
-											<img
-												src={faviconUrl}
-												alt=""
-												class="{ICON_CLASS_DEFAULT} shrink-0 rounded-sm"
-												onerror={(e) => {
-													(e.currentTarget as HTMLImageElement).style.display = 'none';
-												}}
-											/>
-										{/if}
-
-										<span class="min-w-0 truncate text-sm">{displayName}</span>
-									</div>
-
-									{#if hasError}
-										<span
-											class="shrink-0 rounded bg-destructive/15 px-1.5 py-0.5 text-xs text-destructive"
-										>
-											Error
-										</span>
-									{:else}
-										<Switch
-											checked={isEnabled}
-											onCheckedChange={() =>
-												conversationsStore.preferences.toggleMcpServerForChat(server.id)}
-										/>
-									{/if}
-								</button>
-							{/each}
-
-							{#if mcpServers.length === 0}
-								<div class="px-3 py-2 text-center text-sm text-muted-foreground">
-									No MCP servers configured
-								</div>
-							{/if}
-						</div>
-					</Collapsible.Content>
-				</Collapsible.Root>
+					<span>System Message</span>
+				</button>
 
 				{#if toolsPanel.totalToolCount > 0}
 					<Collapsible.Root open={toolsExpanded} onOpenChange={(open) => (toolsExpanded = open)}>
@@ -291,40 +150,12 @@
 
 						<Collapsible.Content>
 							<div class="flex flex-col gap-0.5 pl-4">
-								{#each toolsPanel.activeGroups as group (group.key)}
-									{@const checked = toolsPanel.isGroupChecked(group)}
-									{@const enabledCount = toolsPanel.getEnabledToolCount(group)}
-									{@const favicon = toolsPanel.getFavicon(group)}
+								{#each toolsPanel.categoryGroups as group (group.key)}
+									{@render sheetGroupRow(group)}
+								{/each}
 
-									<button
-										type="button"
-										class={sheetItemRowClass}
-										onclick={() => toolsPanel.toggleGroupByKey(group.key)}
-									>
-										{#if favicon}
-											<img
-												src={favicon}
-												alt=""
-												class="{ICON_CLASS_DEFAULT} shrink-0 rounded-sm"
-												onerror={(e) => {
-													(e.currentTarget as HTMLImageElement).style.display = 'none';
-												}}
-											/>
-										{/if}
-
-										<span class="min-w-0 flex-1 truncate text-sm font-medium">{group.label}</span>
-
-										<span class="shrink-0 text-xs text-muted-foreground">
-											{enabledCount}/{group.tools.length}
-										</span>
-
-										<Checkbox
-											{checked}
-											class="{ICON_CLASS_DEFAULT} shrink-0"
-											onclick={(e) => e.stopPropagation()}
-											onCheckedChange={() => toolsPanel.toggleGroupByKey(group.key)}
-										/>
-									</button>
+								{#each toolsPanel.mcpGroups as group (group.key)}
+									{@render sheetGroupRow(group)}
 								{/each}
 							</div>
 						</Collapsible.Content>
@@ -334,37 +165,50 @@
 				<button
 					type="button"
 					class={sheetItemClass}
-					onclick={() => attachmentMenu.callbacks[AttachmentAction.SYSTEM_PROMPT_CLICK]()}
+					onclick={() => chatFormActions.onMcpSettingsClick?.()}
 				>
-					<MessageSquare class="{ICON_CLASS_DEFAULT} shrink-0" />
+					<McpLogo class="inline {ICON_CLASS_DEFAULT} shrink-0" />
 
-					<span>System Message</span>
+					<span>MCP Servers</span>
 				</button>
-
-				{#if chatFormActions.hasMcpPromptsSupport}
-					<button
-						type="button"
-						class={sheetItemClass}
-						onclick={() => attachmentMenu.callbacks[AttachmentAction.MCP_PROMPT_CLICK]()}
-					>
-						<Zap class="{ICON_CLASS_DEFAULT} shrink-0" />
-
-						<span>MCP Prompt</span>
-					</button>
-				{/if}
-
-				{#if chatFormActions.hasMcpResourcesSupport}
-					<button
-						type="button"
-						class={sheetItemClass}
-						onclick={() => attachmentMenu.callbacks[AttachmentAction.MCP_RESOURCES_CLICK]()}
-					>
-						<FolderOpen class="{ICON_CLASS_DEFAULT} shrink-0" />
-
-						<span>MCP Resources</span>
-					</button>
-				{/if}
 			</div>
 		</Sheet.Content>
 	</Sheet.Root>
 </div>
+
+{#snippet sheetGroupRow(group: ToolGroup)}
+	{@const checked = toolsPanel.isGroupChecked(group)}
+	{@const enabledCount = toolsPanel.getEnabledToolCount(group)}
+	{@const favicon = toolsPanel.getFavicon(group)}
+	{@const groupDisabled = toolsPanel.isGroupDisabled(group)}
+
+	<button
+		type="button"
+		class="{sheetItemRowClass} {groupDisabled ? 'opacity-50' : ''}"
+		onclick={() => toolsPanel.toggleGroupByKey(group.key)}
+	>
+		{#if favicon}
+			<img
+				src={favicon}
+				alt=""
+				class="{ICON_CLASS_DEFAULT} shrink-0 rounded-sm"
+				onerror={(e) => {
+					(e.currentTarget as HTMLImageElement).style.display = 'none';
+				}}
+			/>
+		{/if}
+
+		<span class="min-w-0 flex-1 truncate text-sm font-medium">{group.label}</span>
+
+		<span class="shrink-0 text-xs text-muted-foreground">
+			{enabledCount}/{group.tools.length}
+		</span>
+
+		<Checkbox
+			{checked}
+			class="{ICON_CLASS_DEFAULT} shrink-0"
+			onclick={(e) => e.stopPropagation()}
+			onCheckedChange={() => toolsPanel.toggleGroupByKey(group.key)}
+		/>
+	</button>
+{/snippet}
