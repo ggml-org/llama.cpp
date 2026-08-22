@@ -1112,6 +1112,20 @@ struct ggml_cuda_type_traits<GGML_TYPE_IQ1_M> {
 };
 
 template<>
+struct ggml_cuda_type_traits<GGML_TYPE_IQ2_NL> {
+    static constexpr int qk = QK2_NL;
+    static constexpr int qr = QR2_NL;
+    static constexpr int qi = QI2_NL;
+};
+
+template<>
+struct ggml_cuda_type_traits<GGML_TYPE_IQ3_NL> {
+    static constexpr int qk = QK3_NL;
+    static constexpr int qr = QR3_NL;
+    static constexpr int qi = QI3_NL;
+};
+
+template<>
 struct ggml_cuda_type_traits<GGML_TYPE_IQ4_NL> {
     static constexpr int qk = QK4_NL;
     static constexpr int qr = QR4_NL;
@@ -1131,6 +1145,14 @@ struct ggml_cuda_type_traits<GGML_TYPE_IQ3_S> {
     static constexpr int qr = QR3_S;
     static constexpr int qi = QI3_S;
 };
+
+static __device__ __forceinline__ int iq2_nl_value(const uint8_t * qs, int j, int g) {
+    return kvalues_iq2nl[(qs[j] >> (2*g)) & 3];
+}
+
+static __device__ __forceinline__ int iq3_nl_value(const uint8_t * qs, const uint8_t * qh, int j, int g) {
+    return kvalues_iq3nl[((qs[j] >> (2*g)) & 3) | (((qh[g] >> j) & 1) << 2)];
+}
 
 //////////////////////
 
