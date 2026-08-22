@@ -3884,12 +3884,25 @@ private:
                 common_sampler_ptr smpl_save(common_sampler_clone(slot.smpl.get()));
 
                 GGML_ASSERT(slot.spec_i_batch.size() == n_draft + 1);
-                const auto & synth_probs = common_speculative_get_synth_probs(spec.get());
-                auto accepted = synth_probs.empty()
-                    ? common_sampler_sample_and_accept_n(slot.smpl.get(), slot.ctx_tgt, slot.spec_i_batch, slot.spec_draft)
-                    : server_sample_and_accept_synth(
-                            slot.smpl.get(), slot.ctx_tgt, slot.spec_i_batch, slot.spec_draft,
-                            synth_probs, slot.spec_synth_rng, slot.spec_is_replay);
+                std::vector<llama_token> accepted;
+                if (slot.spec_is_replay) {
+                    // replayed tokens were accepted before the restore; re-verifying them can
+                    // disagree when logits depend on batch shape, and each disagreement restores
+                    // the same checkpoint again - the slot stops making progress
+                    accepted = slot.spec_draft;
+                    for (const llama_token id : accepted) {
+                        common_sampler_accept(slot.smpl.get(), id, true);
+                    }
+                    accepted.push_back(common_sampler_sample(slot.smpl.get(), slot.ctx_tgt, slot.spec_i_batch.back()));
+                    common_sampler_accept(slot.smpl.get(), accepted.back(), true);
+                } else {
+                    const auto & synth_probs = common_speculative_get_synth_probs(spec.get());
+                    accepted = synth_probs.empty()
+                        ? common_sampler_sample_and_accept_n(slot.smpl.get(), slot.ctx_tgt, slot.spec_i_batch, slot.spec_draft)
+                        : server_sample_and_accept_synth(
+                                slot.smpl.get(), slot.ctx_tgt, slot.spec_i_batch, slot.spec_draft,
+                                synth_probs, slot.spec_synth_rng, slot.spec_is_replay);
+                }
                 slot.spec_i_batch.clear();
 
                 GGML_ASSERT(accepted.size() >= 1);
