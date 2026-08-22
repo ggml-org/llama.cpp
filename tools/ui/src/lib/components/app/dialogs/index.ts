@@ -27,6 +27,15 @@ export { default as DialogMcpServerAddNew } from './DialogMcpServerAddNew.svelte
 export { default as DialogMcpServers } from './DialogMcpServers.svelte';
 
 /**
+ * **DialogSettingsChat** - Chat settings shown in a modal dialog
+ *
+ * Wraps the full SettingsChat layout (sidebar, mobile header, fields, footer)
+ * inside a ShadCN Dialog instead of a dedicated route. Section switching is
+ * handled in-app via `onSectionChange` rather than URL navigation.
+ */
+export { default as DialogSettingsChat } from './DialogSettingsChat.svelte';
+
+/**
  * **DialogExportSettings** - Settings export dialog with sensitive data warning
  *
  * Dialog for exporting settings with an option to include or exclude
