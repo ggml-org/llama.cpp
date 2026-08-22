@@ -29,10 +29,9 @@ class AXK2Model(TextModel):
             raise ValueError("--mtp requested but the model has no NextN/MTP layers (num_nextn_predict_layers == 0)")
         # treat a checkpoint without NextN layers the same as --no-mtp
         self.skip_mtp = self.no_mtp or num_nextn == 0
-        self.block_count = self.hparams["num_hidden_layers"]
         if not self.skip_mtp:
             self.block_count += num_nextn
-        self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
+            self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
 
     def index_tensors(self, remote_hf_model_id: str | None = None):
         type(self)._n_main_layers = self.hparams["num_hidden_layers"]
