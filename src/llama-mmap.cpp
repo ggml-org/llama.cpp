@@ -34,6 +34,11 @@
         #define PATH_MAX MAX_PATH
     #endif
     #include <io.h>
+    // IOCTL_STORAGE_QUERY_PROPERTY and STORAGE_ACCESS_ALIGNMENT_DESCRIPTOR: the device
+    // is asked for its sector sizes rather than told what they are.
+    #include <winioctl.h>
+    // _aligned_malloc / _aligned_free, the Windows counterpart to posix_memalign.
+    #include <malloc.h>
 #endif
 
 #if defined(__APPLE__)
@@ -67,7 +72,57 @@ static std::string llama_format_win_err(DWORD err) {
 
 struct llama_file::impl {
 #if defined(_WIN32)
-    HANDLE fp_win32;
+    HANDLE fp_win32 = INVALID_HANDLE_VALUE;
+
+    // True only when this class opened the handle itself with CreateFileW, which is
+    // exactly when direct I/O is in effect. On the buffered path fp_win32 is derived
+    // from the CRT stream and belongs to it - closing it here would be a double close.
+    // The destructor asks about OWNERSHIP, not about mode, which is why this is not
+    // called is_direct_io.
+    bool owns_handle = false;
+
+    // One private handle per concurrent reader. This is the whole point of the pool, and
+    // it is not an optimisation of the OVERLAPPED read - it is the thing the OVERLAPPED
+    // read could not buy.
+    //
+    // Measured 2026-08-03 on this machine, 12.75 MiB blocks, FILE_FLAG_NO_BUFFERING,
+    // same file and offsets throughout: one shared handle read through an OVERLAPPED
+    // offset reaches 1.01x at queue depth 8; one handle per thread reaches 2.22x. The
+    // same pair through SetFilePointerEx gives 0.98x and 2.19x. The read mechanism makes
+    // no difference at all; sharing the handle makes all of it. Windows serialises on the
+    // file object, not on the file pointer.
+    //
+    // The count is a ceiling on worker ids, not a throughput setting. Saturation sits at
+    // depth 8: depth 64 measured 2.15x against 2.22x at depth 8, so slots past the eighth
+    // buy no bandwidth. They are there so that a caller running more readers than the
+    // saturation point still gets a private handle for each of them - a worker id at or
+    // past n_pool falls back to the shared handle and takes the serialisation with it,
+    // which is the one failure this pool exists to prevent. 18 is that headroom, and the
+    // price for it is 18 open handles on one file.
+    //
+    // n_pool counts what was actually opened, always contiguous from 0. That is why the
+    // array needs no sentinel: slots at or past n_pool were never opened, so the
+    // destructor closes exactly [0, n_pool) and an aggregate initialiser that fills with
+    // NULL rather than INVALID_HANDLE_VALUE cannot turn into a CloseHandle(NULL).
+    static constexpr int POOL_SLOTS = 18;
+    HANDLE h_pool[POOL_SLOTS] = {};
+    int    n_pool = 0;
+
+    // The file position under direct I/O, kept here instead of in the kernel.
+    //
+    // Measured 2026-08-03: FILE_FLAG_NO_BUFFERING makes SetFilePointerEx reject any
+    // unaligned position outright with ERROR_INVALID_PARAMETER. The POSIX branch does
+    // not have this problem - lseek positions freely and only read() must be aligned -
+    // which is why read_aligned_chunk, copied from there, could not work here at all.
+    //
+    // So seek() writes to this variable and every read goes through read_raw_at, whose
+    // OVERLAPPED offset never touches the kernel's pointer. Note that this does NOT
+    // lift the alignment requirement: the OVERLAPPED offset must be sector-aligned too.
+    // It only removes the requirement from POSITIONING, which is what was fatal.
+    size_t logical_pos = 0;
+
+    std::string fname;
+
     std::string GetErrorMessageWin32(DWORD error_code) const {
         std::string ret;
         LPSTR lpMsgBuf = NULL;
@@ -83,10 +138,150 @@ struct llama_file::impl {
         return ret;
     }
 
-    impl(const char * fname, const char * mode, [[maybe_unused]] const bool use_direct_io = false) {
-        fp = ggml_fopen(fname, mode);
+    impl(const char * fname, const char * mode, const bool use_direct_io = false) : fname(fname) {
+        // Try unbuffered I/O for read only, mirroring what the POSIX branch does with
+        // O_DIRECT. Until now this parameter was accepted and dropped: the constructor
+        // took use_direct_io, ignored it, and has_direct_io() reported true regardless.
+        // That combination is a promise the code did not keep.
+        if (use_direct_io && std::strcmp(mode, "rb") == 0) {
+            if (init_direct()) {
+                return;
+            }
+            LLAMA_LOG_WARN("Failed to open file '%s' unbuffered: %s. Falling back to buffered I/O\n",
+                           fname, GetErrorMessageWin32(GetLastError()).c_str());
+        }
+        init_fp(mode);
+    }
+
+    // Ask the device for its sector sizes. Returns 0 when the question cannot be
+    // answered, which makes the caller fall back to buffered I/O WITH A WARNING.
+    //
+    // Deliberately no default of 4096. That constant is written three times across this
+    // ecosystem and on this drive it happens to be right - measured 2026-08-03, 512
+    // logical and 4096 physical. Correct by luck is not correct by construction, and a
+    // silent default would turn "the device never answered" into something that looks
+    // like an answer.
+    //
+    // The alignment DUTY of FILE_FLAG_NO_BUFFERING is the LOGICAL sector size; the
+    // PHYSICAL one is Microsoft's performance recommendation. Reading aligned to the
+    // logical size on a 512e drive is permitted and costs read-modify-write on the
+    // controller, so the physical size is what we take.
+    size_t query_sector_size(char drive_letter) const {
+        char volume[] = "\\\\.\\X:";
+        volume[4] = drive_letter;
+
+        // Access 0 asks for metadata only; this needs no elevation.
+        HANDLE hv = CreateFileA(volume, 0, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+                                OPEN_EXISTING, 0, NULL);
+        if (hv == INVALID_HANDLE_VALUE) {
+            return 0;
+        }
+
+        STORAGE_PROPERTY_QUERY query = {};
+        query.PropertyId = StorageAccessAlignmentProperty;
+        query.QueryType  = PropertyStandardQuery;
+
+        STORAGE_ACCESS_ALIGNMENT_DESCRIPTOR desc = {};
+        DWORD returned = 0;
+        const BOOL ok = DeviceIoControl(hv, IOCTL_STORAGE_QUERY_PROPERTY,
+                                        &query, sizeof(query),
+                                        &desc, sizeof(desc), &returned, NULL);
+        CloseHandle(hv);
+
+        if (!ok || returned < sizeof(desc) || desc.BytesPerPhysicalSector == 0) {
+            return 0;
+        }
+        return (size_t) desc.BytesPerPhysicalSector;
+    }
+
+    bool init_direct() {
+        // UTF-8 to UTF-16. ggml_fopen does the same conversion, but its helper is
+        // static inside ggml.c and there is no exported equivalent.
+        const int wlen = MultiByteToWideChar(CP_UTF8, 0, fname.c_str(), -1, NULL, 0);
+        if (wlen == 0) {
+            return false;
+        }
+        std::vector<wchar_t> wname(wlen);
+        if (MultiByteToWideChar(CP_UTF8, 0, fname.c_str(), -1, wname.data(), wlen) == 0) {
+            return false;
+        }
+
+        // Resolve to an absolute path BEFORE deriving the volume. The sector size can
+        // only be asked of a drive letter, and a relative path has none - so a relative
+        // path used to make direct I/O silently unavailable and fall back to buffered
+        // reads. The loader happens to pass absolute paths, which is luck rather than
+        // construction; the test below passes a relative one and is how this was found.
+        wchar_t abs_path[MAX_PATH];
+        const DWORD abs_len = GetFullPathNameW(wname.data(), MAX_PATH, abs_path, NULL);
+        if (abs_len == 0 || abs_len >= MAX_PATH) {
+            return false;
+        }
+        if (abs_path[1] != L':') {
+            // A UNC path has no volume to ask, so the sector size stays unknown and
+            // unbuffered reads cannot be aligned safely.
+            SetLastError(ERROR_NOT_SUPPORTED);
+            return false;
+        }
+
+        HANDLE h = CreateFileW(abs_path, GENERIC_READ, FILE_SHARE_READ, NULL,
+                               OPEN_EXISTING, FILE_FLAG_NO_BUFFERING, NULL);
+        if (h == INVALID_HANDLE_VALUE) {
+            return false;
+        }
+
+        const size_t sector = query_sector_size((char) abs_path[0]);
+        if (sector == 0) {
+            CloseHandle(h);
+            SetLastError(ERROR_NOT_SUPPORTED);
+            return false;
+        }
+
+        LARGE_INTEGER li;
+        if (!GetFileSizeEx(h, &li)) {
+            const DWORD err = GetLastError();
+            CloseHandle(h);
+            SetLastError(err);
+            return false;
+        }
+
+        fp_win32    = h;
+        owns_handle = true;
+        alignment   = sector;
+        size        = (size_t) li.QuadPart;
+
+        // Open the private handles here: single-threaded, after the path, the flags and
+        // the sector size are all known good, and before anyone can read.
+        //
+        // A short pool is NOT fatal. read_raw_at falls back to the shared handle for any
+        // slot that is missing, which costs throughput and correctness nothing. It is
+        // logged rather than swallowed, because a pool that came up empty reads exactly
+        // the same bytes as one that works - it simply never scales, and that is the
+        // failure shape this file keeps finding.
+        //
+        // FILE_SHARE_READ, the same as the handle above. Win32 grants the second open
+        // only if its access is permitted by every existing handle's share mode AND its
+        // own share mode permits every existing handle's access; read-only on both sides
+        // satisfies that. Asking for FILE_SHARE_WRITE here as well would still be granted
+        // and would still mean two different sharing contracts on one file.
+        for (int i = 0; i < POOL_SLOTS; i++) {
+            const HANDLE hp = CreateFileW(abs_path, GENERIC_READ, FILE_SHARE_READ, NULL,
+                                          OPEN_EXISTING, FILE_FLAG_NO_BUFFERING, NULL);
+            if (hp == INVALID_HANDLE_VALUE) {
+                LLAMA_LOG_WARN("%s: opened %d of %d private read handles for '%s': %s. "
+                               "Concurrent reads fall back to the shared handle and will not scale\n",
+                               __func__, i, POOL_SLOTS, fname.c_str(),
+                               GetErrorMessageWin32(GetLastError()).c_str());
+                break;
+            }
+            h_pool[n_pool++] = hp;
+        }
+        return true;
+    }
+
+    void init_fp(const char * mode) {
+        fp = ggml_fopen(fname.c_str(), mode);
         if (fp == NULL) {
-            throw std::runtime_error(format("failed to open %s: %s", fname, strerror(errno)));
+            throw std::runtime_error(format("failed to open %s: %s", fname.c_str(), strerror(errno)));
         }
         fp_win32 = (HANDLE) _get_osfhandle(_fileno(fp));
         seek(0, SEEK_END);
@@ -94,7 +289,7 @@ struct llama_file::impl {
         seek(0, SEEK_SET);
     }
 
-    impl(FILE * file) : owns_fp(false) {
+    impl(FILE * file) : fname("(file*)"), owns_fp(false) {
         fp = file;
         fp_win32 = (HANDLE) _get_osfhandle(_fileno(fp));
         seek(0, SEEK_END);
@@ -103,6 +298,10 @@ struct llama_file::impl {
     }
 
     size_t tell() const {
+        if (owns_handle) {
+            return logical_pos;
+        }
+
         LARGE_INTEGER li;
         li.QuadPart = 0;
         BOOL ret = SetFilePointerEx(fp_win32, li, &li, FILE_CURRENT);
@@ -113,10 +312,24 @@ struct llama_file::impl {
         return li.QuadPart;
     }
 
-    void seek(size_t offset, int whence) const {
+    void seek(size_t offset, int whence) {
         static_assert(SEEK_SET == FILE_BEGIN, "SEEK_SET != FILE_BEGIN");
         static_assert(SEEK_CUR == FILE_CURRENT, "SEEK_CUR != FILE_CURRENT");
         static_assert(SEEK_END == FILE_END, "SEEK_END != FILE_END");
+
+        if (owns_handle) {
+            // Never ask the kernel. See the note on logical_pos: an unaligned position
+            // is refused outright here, and refusing to seek is not something callers
+            // expect from seek().
+            switch (whence) {
+                case SEEK_SET: logical_pos = offset;                break;
+                case SEEK_CUR: logical_pos += offset;               break;
+                case SEEK_END: logical_pos = size + offset;         break;
+                default:
+                    throw std::runtime_error(format("seek error: bad whence %d", whence));
+            }
+            return;
+        }
 
         LARGE_INTEGER li;
         li.QuadPart = offset;
@@ -126,7 +339,24 @@ struct llama_file::impl {
         }
     }
 
-    void read_raw(void * ptr, size_t len) {
+    void read_raw_unsafe(void * ptr, size_t len) {
+        if (owns_handle) {
+            // Direct I/O never uses the kernel's file pointer - see logical_pos.
+            const size_t got = read_raw_at(ptr, len, logical_pos);
+            if (got < len) {
+                // End of file. An aligned request necessarily overshoots a file whose
+                // size is not a sector multiple, and none of the four model files here
+                // ends on a boundary, so this is the normal case rather than an edge
+                // one. Measured 2026-08-03 on all four: ReadFile returns TRUE and
+                // reports exactly the bytes up to the logical EOF. Zero the padding and
+                // carry on; the caller knows the tensor size and trims it. Same
+                // behaviour as the POSIX branch.
+                std::memset(reinterpret_cast<char*>(ptr) + got, 0, len - got);
+            }
+            logical_pos += got;
+            return;
+        }
+
         size_t bytes_read = 0;
         while (bytes_read < len) {
             size_t chunk_size = std::min<size_t>(len - bytes_read, 64*1024*1024);
@@ -136,11 +366,120 @@ struct llama_file::impl {
                 throw std::runtime_error(format("read error: %s", GetErrorMessageWin32(GetLastError()).c_str()));
             }
             if (chunk_read < chunk_size || chunk_read == 0) {
+                // A short count at the end of the file. Under direct I/O this is the
+                // NORMAL case, not an edge one: an aligned request necessarily runs past
+                // a file whose size is not a sector multiple, and none of the four model
+                // files on this machine ends on a sector boundary.
+                //
+                // Measured 2026-08-03 on all four: with FILE_FLAG_NO_BUFFERING, ReadFile
+                // returns TRUE and reports exactly the bytes up to the logical EOF. The
+                // padding is zeroed and the caller - which knows the tensor size and
+                // trims the padding itself - carries on. This mirrors the POSIX branch.
+                //
+                // Reached only on the buffered path now, which never asks for more than
+                // it wants - so a short count here is still a real failure, exactly as
+                // it was before this file learned about direct I/O.
                 throw std::runtime_error("unexpectedly reached end of file");
             }
 
             bytes_read += chunk_read;
         }
+    }
+
+    // Read `size_to_read` bytes from the current position, coping with an offset or
+    // length that direct I/O will not accept. Reads the enclosing sector-aligned range
+    // into an aligned bounce buffer and copies out the part that was asked for.
+    //
+    // Lives here as an implementation detail, not in the header. The header used to
+    // declare read_aligned_chunk() publicly while no llama_file method of that name
+    // existed on any platform and nobody called it - a promise with nothing behind it.
+    void read_aligned_chunk(void * dest, size_t size_to_read) {
+        const size_t offset                = tell();
+        const size_t aligned_offset        = offset & ~(alignment - 1);
+        const size_t offset_from_alignment = offset - aligned_offset;
+        const size_t bytes_to_read         = (offset_from_alignment + size_to_read + alignment - 1) & ~(alignment - 1);
+
+        // The buffer ADDRESS has to be sector-aligned too, not just the offset and the
+        // length. Missing that is what turned the first attempt at this into a
+        // 0xC0000409 with no output at all.
+        void * raw_buffer = _aligned_malloc(bytes_to_read, alignment);
+        if (raw_buffer == nullptr) {
+            throw std::runtime_error(format("_aligned_malloc of %zu bytes failed", bytes_to_read));
+        }
+
+        struct aligned_buffer_deleter {
+            void operator()(void * p) const { _aligned_free(p); }
+        };
+        std::unique_ptr<void, aligned_buffer_deleter> buffer(raw_buffer);
+
+        // Reads at the ALIGNED offset directly, without moving any file pointer. The
+        // earlier form seek(aligned_offset) + read was copied from POSIX and could not
+        // work here: the caller's unaligned position had already been rejected by the
+        // kernel before this function was ever reached.
+        const size_t got = read_raw_at(buffer.get(), bytes_to_read, aligned_offset);
+        if (got < offset_from_alignment + size_to_read) {
+            throw std::runtime_error("unexpectedly reached end of file");
+        }
+
+        std::memcpy(dest, reinterpret_cast<char*>(buffer.get()) + offset_from_alignment, size_to_read);
+
+        // The logical position advances by what the caller asked for, not by what the
+        // bounce buffer had to read around it.
+        logical_pos = offset + size_to_read;
+    }
+
+    void read_raw(void * ptr, size_t len) {
+        if (has_direct_io()) {
+            read_aligned_chunk(ptr, len);
+        } else {
+            read_raw_unsafe(ptr, len);
+        }
+    }
+
+    // The positional read Windows never had in llama_file. The offset travels in the
+    // OVERLAPPED structure, so no seek is needed and the shared file pointer is not
+    // touched - which is what makes it SAFE to call from several threads on one handle.
+    //
+    // Safe was never the same as concurrent, and that distinction cost a measurement to
+    // establish. Passing OVERLAPPED to a handle opened without FILE_FLAG_OVERLAPPED does
+    // not make the read asynchronous: measured 2026-08-03, one shared handle across 8
+    // threads reaches 1.01x the throughput of a single thread whether the offset comes
+    // from the structure or from SetFilePointerEx. A private handle each reaches 2.22x.
+    //
+    // Hence worker_id. It selects this caller's own handle out of the pool, and no lock
+    // guards that selection because none is needed: each index is read by exactly one
+    // thread, and the array is filled once in init_direct before any reader exists.
+    size_t read_raw_at(void * ptr, size_t len, size_t offset, int worker_id = -1) {
+        // Anything the pool does not cover - a negative id, an id past what opened, or a
+        // buffered file that has no pool at all - reads through the shared handle. That
+        // is correct and merely serialised, which is the right way round: a caller that
+        // knows nothing about pools must not be able to index past the array.
+        const HANDLE h_read = (worker_id >= 0 && worker_id < n_pool) ? h_pool[worker_id] : fp_win32;
+
+        size_t total = 0;
+        while (total < len) {
+            const size_t chunk_size = std::min<size_t>(len - total, 64*1024*1024);
+            const size_t pos = offset + total;
+
+            OVERLAPPED ov = {};
+            ov.Offset     = (DWORD) (pos & 0xFFFFFFFFull);
+            ov.OffsetHigh = (DWORD) (pos >> 32);
+
+            DWORD chunk_read = 0;
+            if (!ReadFile(h_read, reinterpret_cast<char*>(ptr) + total, (DWORD) chunk_size, &chunk_read, &ov)) {
+                const DWORD err = GetLastError();
+                if (err == ERROR_HANDLE_EOF) {
+                    return total;
+                }
+                throw std::runtime_error(format("read error: %s", GetErrorMessageWin32(err).c_str()));
+            }
+            total += chunk_read;
+            if (chunk_read < chunk_size) {
+                // Short read means end of file - see the note in read_raw_unsafe.
+                return total;
+            }
+        }
+        return total;
     }
 
     uint32_t read_u32() {
@@ -170,12 +509,41 @@ struct llama_file::impl {
         write_raw(&val, sizeof(val));
     }
 
+    // Used to return true unconditionally, on a branch that never opened anything
+    // unbuffered. The single in-tree caller sits in the POSIX branch, so the lie was
+    // harmless in this repository and would only have been found by external code
+    // asking the question. Any caller that logs "O_DIRECT in effect" on the strength of
+    // this answer would have printed it on Windows while reading through the page cache.
+    //
+    // Asks about ownership AND alignment, so it stays honest when the constructor fell
+    // back to buffered I/O.
     bool has_direct_io() const {
-        return true;
+        return owns_handle && alignment > 1;
+    }
+
+    size_t direct_io_handles() const {
+        return (size_t) n_pool;
     }
 
     ~impl() {
-        if (fp && owns_fp) {
+        // The pool first. These handles are always ours - nothing else can hold them,
+        // since they are opened in init_direct and handed out by value nowhere. Closing
+        // exactly n_pool of them is what lets the array go without a sentinel: the slots
+        // from n_pool upward were never opened, so they are NULL rather than
+        // INVALID_HANDLE_VALUE and must not reach CloseHandle at all.
+        for (int i = 0; i < n_pool; i++) {
+            CloseHandle(h_pool[i]);
+        }
+        n_pool = 0;
+
+        if (owns_handle) {
+            if (fp_win32 != INVALID_HANDLE_VALUE) {
+                CloseHandle(fp_win32);
+            }
+        } else if (fp && owns_fp) {
+            // Buffered path: the CRT stream owns fp_win32. Closing both would be a
+            // double close, and closing fp when owns_fp is false would close a stream
+            // that belongs to the caller.
             std::fclose(fp);
         }
     }
@@ -348,6 +716,39 @@ struct llama_file::impl {
         }
     }
 
+    // Positional read; see the Windows counterpart for what it is for. pread does not
+    // move the file pointer, which is what lets two threads share one descriptor.
+    size_t read_raw_at(void * ptr, size_t len, size_t offset, int worker_id = -1) {
+        // POSIX needs no handle pool. pread carries its offset in the call and does not
+        // hold the file object while it runs, so several threads on ONE descriptor are
+        // already concurrent. Windows has no such call, which is why the pool exists over
+        // there and not here. The parameter is accepted on both so that a caller need not
+        // know which platform it is compiled for.
+        (void) worker_id;
+
+#if defined(fileno)
+        const int use_fd = (fd != -1) ? fd : fileno(fp);
+#else
+        const int use_fd = (fd != -1) ? fd : ::fileno(fp);
+#endif
+        size_t total = 0;
+        while (total < len) {
+            const ssize_t ret = ::pread(use_fd, reinterpret_cast<char *>(ptr) + total,
+                                        len - total, (off_t) (offset + total));
+            if (ret == -1) {
+                if (errno == EINTR) {
+                    continue;  // Interrupted by signal, retry
+                }
+                throw std::runtime_error(format("read error: %s", strerror(errno)));
+            }
+            if (ret == 0) {
+                return total;  // end of file
+            }
+            total += (size_t) ret;
+        }
+        return total;
+    }
+
     uint32_t read_u32() {
         uint32_t ret;
         read_raw(&ret, sizeof(ret));
@@ -371,6 +772,13 @@ struct llama_file::impl {
 
     bool has_direct_io() const {
         return fd != -1 && alignment > 1;
+    }
+
+    // Always zero here, and that is the honest answer rather than a stub: this branch
+    // holds no private handles because pread does not need them. A caller comparing the
+    // number against its thread count learns the right thing on both platforms.
+    size_t direct_io_handles() const {
+        return 0;
     }
 
     ~impl() {
@@ -410,6 +818,20 @@ bool llama_file::has_direct_io() const { return pimpl->has_direct_io(); }
 
 int llama_file::file_id() const {
 #ifdef _WIN32
+    if (pimpl->owns_handle) {
+        // A direct-I/O file has no CRT descriptor, and a HANDLE cannot be squeezed
+        // through an int: it is a 64-bit pointer, so a cast drops the upper half and
+        // yields something that still looks like a valid handle and reads zero bytes
+        // without raising. That exact truncation is easy to hit through any FFI layer
+        // that defaults a handle-returning call to a 32-bit result type.
+        //
+        // An exception rather than GGML_ASSERT on purpose: an assert can be compiled
+        // out by build configuration, and a guard that disappears in release is no
+        // guard at all. Failing here is safe because the two are mutually exclusive by
+        // construction - the model loader only opens files unbuffered for
+        // LLAMA_LOAD_MODE_DIRECT_IO, and that mode does not use mmap.
+        throw std::runtime_error("file_id() is not available on a direct-I/O handle on Windows");
+    }
     return _fileno(pimpl->fp);
 #else
     if (pimpl->fd != -1) {
@@ -425,11 +847,17 @@ int llama_file::file_id() const {
 
 void llama_file::seek(size_t offset, int whence) const { pimpl->seek(offset, whence); }
 void llama_file::read_raw(void * ptr, size_t len) { pimpl->read_raw(ptr, len); }
-#ifdef _WIN32
-void llama_file::read_raw_unsafe(void * ptr, size_t len) { pimpl->read_raw(ptr, len); }
-#else
+
+// The #ifdef that used to sit here routed Windows to read_raw, because the Windows
+// impl had no read_raw_unsafe at all. It has one now - the same loop as before plus
+// the end-of-file case - so the buffered path is unchanged.
 void llama_file::read_raw_unsafe(void * ptr, size_t len) { pimpl->read_raw_unsafe(ptr, len); }
-#endif
+
+size_t llama_file::read_raw_at(void * ptr, size_t len, size_t offset, int worker_id) {
+    return pimpl->read_raw_at(ptr, len, offset, worker_id);
+}
+
+size_t llama_file::direct_io_handles() const { return pimpl->direct_io_handles(); }
 
 uint32_t llama_file::read_u32() { return pimpl->read_u32(); }
 
