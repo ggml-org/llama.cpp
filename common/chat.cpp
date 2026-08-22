@@ -2029,7 +2029,7 @@ static common_chat_params common_chat_params_init_gigachat35(
     data.format             = COMMON_CHAT_FORMAT_PEG_NATIVE;
     data.supports_thinking  = true;
     data.thinking_start_tag = "<think>";
-    data.thinking_end_tag   = "</think>";
+    data.thinking_end_tags  = {"</think>"};
     data.preserved_tokens   = {
         "<|message_sep|>\n\n",
         "<|role_sep|>\n",
@@ -2107,7 +2107,7 @@ static common_chat_params common_chat_params_init_gigachat35(
 
             std::set<std::string> required;
             if (params.contains("required")) {
-                params.at("required").get_to(required);
+                required = params.at("required").get<std::set<std::string>>();
             }
 
             auto schema_info = common_schema_info();

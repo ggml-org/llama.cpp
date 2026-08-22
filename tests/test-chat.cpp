@@ -1482,6 +1482,11 @@ class peg_test_builder {
         return *this;
     }
 
+    peg_test_builder & chat_template_kwargs(std::map<std::string, std::string> kwargs) {
+        tc_.params.chat_template_kwargs = std::move(kwargs);
+        return *this;
+    }
+
     peg_test_builder & parallel_tool_calls(bool val) {
         tc_.params.parallel_tool_calls = val;
         return *this;
@@ -4306,6 +4311,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
 
         tst.test("I'm\nthinking</think>\n\nHello, world!\nWhat's up?")
             .enable_thinking(true)
+            .chat_template_kwargs({ { "reasoning", "true" } })
             .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
             .expect(message_assist_thoughts)
             .run();
@@ -4330,6 +4336,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
                "</｜GCML｜invoke>\n"
                "</｜GCML｜tool_calls>")
             .enable_thinking(true)
+            .chat_template_kwargs({ { "reasoning", "true" } })
             .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
             .tools({ get_time_tool })
             .expect(message_with_tool_calls_and_reasoning("get_time", R"({"city": "Tokyo"})", "Let me check"))
@@ -4346,6 +4353,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
                "</｜GCML｜invoke>\n"
                "</｜GCML｜tool_calls>")
             .enable_thinking(true)
+            .chat_template_kwargs({ { "reasoning", "true" } })
             .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
             .parallel_tool_calls(true)
             .tools({ get_time_tool, get_weather_tool })
