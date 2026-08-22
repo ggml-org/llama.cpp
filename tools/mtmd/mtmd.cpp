@@ -517,6 +517,9 @@ struct mtmd_context {
     // string template for slice image delimiters with row/col (idefics3)
     std::string sli_img_start_tmpl;
 
+    // string template for overview image start (idefics3)
+    std::string ov_img_start_tmpl;
+
     std::unique_ptr<mtmd_audio_preprocessor> audio_preproc;
     std::unique_ptr<mtmd_image_preprocessor> image_preproc;
 
@@ -744,10 +747,11 @@ struct mtmd_context {
                 {
                     // https://github.com/huggingface/transformers/blob/a42ba80fa520c784c8f11a973ca9034e5f859b79/src/transformers/models/idefics3/processing_idefics3.py#L192-L215
                     slice_tmpl         = MTMD_SLICE_TMPL_IDEFICS3;
-                    tok_ov_img_start   = {lookup_token("\n\n"), lookup_token("<fake_token_around_image>"), lookup_token("<global-img>")};
+                    tok_ov_img_start   = {lookup_token("\n\n"), lookup_token("<fake_token_around_image>")};
                     tok_ov_img_end     = {lookup_token("<fake_token_around_image>")};
                     tok_row_end        = {lookup_token("\n")};
                     sli_img_start_tmpl = "<fake_token_around_image><row_%d_col_%d>";
+                    ov_img_start_tmpl  = "\n\n<fake_token_around_image><global-img>";
                     image_preproc = std::make_unique<mtmd_image_preprocessor_idefics3>(ctx_v);
                 } break;
             case PROJECTOR_TYPE_PIXTRAL:
@@ -1386,7 +1390,11 @@ struct mtmd_tokenizer {
 
                 // add overview image (first)
                 if (ctx->ov_img_first) {
-                    add_text(ctx->tok_ov_img_start);
+                    if (!ctx->tok_ov_img_start.empty()) {
+                        add_text(ctx->tok_ov_img_start);
+                    } else if (!ctx->ov_img_start_tmpl.empty()) {
+                        add_text(ctx->ov_img_start_tmpl, true);
+                    }
                     cur.entries.emplace_back(std::move(ov_chunk));
                     add_text(ctx->tok_ov_img_end);
                 }
@@ -1432,7 +1440,11 @@ struct mtmd_tokenizer {
 
                 // add overview image (last)
                 if (!ctx->ov_img_first) {
-                    add_text(ctx->tok_ov_img_start);
+                    if (!ctx->tok_ov_img_start.empty()) {
+                        add_text(ctx->tok_ov_img_start);
+                    } else if (!ctx->ov_img_start_tmpl.empty()) {
+                        add_text(ctx->ov_img_start_tmpl, true);
+                    }
                     cur.entries.emplace_back(std::move(ov_chunk));
                     add_text(ctx->tok_ov_img_end);
                 }
