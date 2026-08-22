@@ -863,6 +863,33 @@ jobs:
           $rocmVersionShort = ('${{ matrix.ROCM_VERSION }}'.Split('.')[0..1] -join '.')
           echo "ROCM_VERSION_SHORT=$rocmVersionShort" >> $env:GITHUB_ENV
 
+      - name: Bundle HIP runtime DLLs (amdhip64_7.dll, rocm_kpack.dll, amd_comgr.dll)
+        run: |
+          $ErrorActionPreference = "Stop"
+          # See issue https://github.com/ggml-org/llama.cpp/issues/26929.
+          # ggml-hip.dll loads amdhip64_7.dll at run time. The Adrenalin driver
+          # ships an amdhip64_7.dll in System32, which the loader searches before PATH,
+          # so a matching DLL from PATH cannot win. Copy amdhip64 next to the
+          # binaries (exe directory is searched before System32) so the correct
+          # runtime is used. rocm_kpack.dll is amdhip64_7's direct dependency, so
+          # copy the matching version too. amd_comgr is copied as well to keep it
+          # in sync with the bundled amdhip64, avoiding a version mismatch with a
+          # amd_comgr from System32.
+          # rocblas/hipblaslt kernels resolve fine via PATH and are not copied.
+          $binPath = (rocm-sdk path --bin).Trim()
+          if (-not $binPath) { throw "rocm-sdk path --bin returned empty" }
+          write-host "ROCm bin path: $binPath"
+
+          $patterns = @("amdhip64_7.dll", "rocm_kpack.dll", "amd_comgr.dll")
+          foreach ($pattern in $patterns) {
+            $files = Get-ChildItem -Path $binPath -Filter $pattern -ErrorAction SilentlyContinue
+            if (-not $files) { throw "no match for $pattern in $binPath" }
+            foreach ($f in $files) {
+              Copy-Item $f.FullName -Destination build\bin\ -Force
+              write-host "  copied $($f.Name)"
+            }
+          }
+
       - name: Pack artifacts
         run: |
           cp "LICENSE" "build\bin\"
