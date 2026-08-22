@@ -709,7 +709,13 @@ class DFlashModel(Qwen3Model):
         yield from super().modify_tensors(data_torch, name, bid)
 
 
-@ModelBase.register("Qwen3DSparkModel", "DSparkDraftModel", "DSparkSpeculator", "Lfm2DSparkDraftModel")
+@ModelBase.register(
+    "Qwen3DSparkModel",
+    "DSparkDraftModel",
+    "DSparkSpeculator",
+    "Lfm2DSparkDraftModel",
+    "LingDSparkModel",
+)
 @ModelBase.example("satgeze/Qwen3.6-27B-DSpark")
 class DSparkModel(DFlashModel):
     # DSpark = DFlash + a semi-autoregressive Markov head.
