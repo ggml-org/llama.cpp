@@ -27,6 +27,9 @@ static __global__ void argmax_f32(const float * __restrict__ x, int32_t * __rest
         if (val > maxval) {
             maxval = val;
             argmax = col;
+        } else if (val == maxval && col < argmax) {
+            // keep the smallest index on ties (first-occurrence wins)
+            argmax = col;
         }
     }
 
@@ -55,6 +58,9 @@ static __global__ void argmax_f32(const float * __restrict__ x, int32_t * __rest
                 const int   col = __shfl_xor_sync(0xFFFFFFFF, argmax, offset, WARP_SIZE);
                 if (val > maxval) {
                     maxval = val;
+                    argmax = col;
+                } else if (val == maxval && col < argmax) {
+                    // keep the smallest index on ties (first-occurrence wins)
                     argmax = col;
                 }
             }

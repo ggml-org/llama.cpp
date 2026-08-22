@@ -38,14 +38,14 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>,
         let vec_val = src[row_idx / VEC_SIZE + col];
         for (var v = 0u; v < VEC_SIZE; v++) {
             let val = vec_val[v];
-            if (val >= local_pair.value) {
+            if (val > local_pair.value) {
                 local_pair = Pair(val, i32(col * VEC_SIZE + v));
             }
         }
     }
 #else
     for (var col = lid.x; col < params.ne0; col += WG_SIZE) {
-        if (src[row_idx + col] >= local_pair.value) {
+        if (src[row_idx + col] > local_pair.value) {
             local_pair = Pair(src[row_idx + col], i32(col));
         }
     }
@@ -59,7 +59,7 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>,
             let b = shared_max[lid.x + offset];
             if (b.value > a.value) {
                 shared_max[lid.x] = b;
-            } else if (b.value == a.value && b.index > a.index) {
+            } else if (b.value == a.value && b.index < a.index) {
                 shared_max[lid.x] = b;
             }
         }
