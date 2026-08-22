@@ -120,6 +120,12 @@ struct clip_graph {
             ffn_op_type type_op,
             int il) const;
 
+    ggml_tensor * build_moe_ffn(
+            ggml_tensor * cur,
+            const clip_layer & layer,
+            ffn_op_type type_op,
+            int il) const;
+
     ggml_tensor * build_attn(
             ggml_tensor * wo,
             ggml_tensor * wo_b,
