@@ -86,6 +86,7 @@ llama_context::llama_context(
     model(model),
     cvec(std::make_unique<llama_adapter_cvec>()),
     loras(std::make_unique<llama_adapter_loras>()),
+    loras_reserve(std::make_unique<llama_adapter_loras>()),
     balloc(std::make_unique<llama_batch_allocr>(model.hparams.n_pos_per_embd())) {
     // TODO warning when creating llama_context with awkward ctx size that is not a power of 2,
     //     may need to be backend-dependent
@@ -591,6 +592,10 @@ void llama_context::sched_reserve() {
 
     const int64_t t_start_us = ggml_time_us();
 
+    // reserve with all adapters at full scale so the buffers cover any combination of scales
+    auto loras_cur = std::move(loras);
+    loras = std::make_unique<llama_adapter_loras>(*loras_reserve);
+
     const uint32_t n_seqs = cparams.n_seq_max;
     const uint32_t n_tokens = std::min(cparams.n_ctx, cparams.n_ubatch);
 
@@ -695,6 +700,8 @@ void llama_context::sched_reserve() {
     } else {
         LLAMA_LOG_INFO("%s: graph splits = %d (with bs=%d), %d (with bs=1)\n", __func__, n_splits_pp, n_tokens, n_splits_tg);
     }
+
+    loras = std::move(loras_cur);
 
     const int64_t t_end_us = ggml_time_us();
 
@@ -1266,7 +1273,12 @@ bool llama_context::set_sampler(llama_seq_id seq_id, llama_sampler * sampler) {
 void llama_context::set_adapters_lora(llama_adapter_lora ** adapters, size_t n_adapters, float * scales) {
     LLAMA_LOG_DEBUG("%s: adapters = %p\n", __func__, (void *) adapters);
 
-    if (adapters_lora_are_same(adapters, n_adapters, scales)) {
+    bool covered = loras_reserve->size() == n_adapters;
+    for (size_t i = 0; covered && i < n_adapters; i ++) {
+        covered = loras_reserve->find(adapters[i]) != loras_reserve->end();
+    }
+
+    if (covered && adapters_lora_are_same(adapters, n_adapters, scales)) {
         return;
     }
 
@@ -1278,7 +1290,16 @@ void llama_context::set_adapters_lora(llama_adapter_lora ** adapters, size_t n_a
         }
     }
 
-    sched_need_reserve = true;
+    // graphs cover all loras, so only re-reserve if the set changed (not just the scales)
+    if (!covered) {
+        loras_reserve.reset(new llama_adapter_loras());
+
+        for (size_t i = 0; i < n_adapters; i ++) {
+            loras_reserve->insert({adapters[i], 1.0f});
+        }
+
+        sched_need_reserve = true;
+    }
 }
 
 bool llama_context::adapters_lora_are_same(llama_adapter_lora ** adapters, size_t n_adapters, float * scales) {
