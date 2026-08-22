@@ -168,8 +168,33 @@ kernel void kernel_mul_mm(
     constexpr int NL1 = NK/8;
 
     const int im = tgpig.z;
-    const int r0 = tgpig.y*NR0;
-    const int r1 = tgpig.x*NR1;
+
+    int sy = tgpig.y;
+    int sx = tgpig.x;
+
+    // Threadgroup swizzle. Walking the grid in groups of SWZ row tiles, cutting src1
+    // DRAM traffic by ~SWZ. Only worth doing once src1 is large.
+    if ((size_t) args.ne1 * args.nb11 > (32u << 20)){
+        const uint tile_bytes = NR0*(uint) args.nb01;
+        const uint want = clamp((10u << 20)/max(tile_bytes, 1u), 1u, 8u);
+
+        const int SWZ = want >= 8 ? 8 : want >= 4 ? 4 : want >= 2 ? 2 : 1;
+
+        const int nbx = (args.ne1 + NR1 - 1)/NR1; // src1 (batch) tiles
+        const int nby = (args.ne0 + NR0 - 1)/NR0; // src0 (row)   tiles
+
+        const int lin = (int) tgpig.y*nbx + (int) tgpig.x;
+        const int tpg = SWZ*nbx;
+        const int y0  = (lin/tpg)*SWZ;
+        const int lid = lin%tpg;
+        const int gh  = (nby - y0) < SWZ ? (nby - y0) : SWZ;
+
+        sy = y0 + lid%gh;
+        sx = lid/gh;
+    }
+
+    const int r0 = sy*NR0;
+    const int r1 = sx*NR1;
 
     // if this block is of 64x32 shape or smaller
     const short nr0 = (args.ne0 - r0 < NR0) ? (args.ne0 - r0) : NR0;
@@ -453,13 +478,37 @@ kernel void kernel_mul_mm_id(
     constexpr int NL1 = NK/8;
 
     const int im = tgpig.z; // expert
-    const int r0 = tgpig.y*NR0;
-    const int r1 = tgpig.x*NR1;
 
     device const uint32_t * tpe_u32 = (device const uint32_t *) (htpe);
     device const int32_t  * ids_i32 = (device const int32_t  *) (hids);
 
     const int32_t neh1 = tpe_u32[im];
+
+    int sy = tgpig.y;
+    int sx = tgpig.x;
+
+    // Same threadgroup swizzle as kernel_mul_mm
+    if ((size_t) neh1 * args.nb11 > (32u << 20)) {
+        const uint tile_bytes = NR0*(uint) args.nb01;
+        const uint want = clamp((10u << 20)/max(tile_bytes, 1u), 1u, 8u);
+
+        const int SWZ = want >= 8 ? 8 : want >= 4 ? 4 : want >= 2 ? 2 : 1;
+
+        const int nbx = (args.ne21 + NR1 - 1)/NR1;
+        const int nby = (args.ne0  + NR0 - 1)/NR0;
+
+        const int lin = (int) tgpig.y*nbx + (int) tgpig.x;
+        const int tpg = SWZ*nbx;
+        const int y0  = (lin/tpg)*SWZ;
+        const int lid = lin%tpg;
+        const int gh  = (nby - y0) < SWZ ? (nby - y0) : SWZ;
+
+        sy = y0 + lid%gh;
+        sx = lid/gh;
+    }
+
+    const int r0 = sy*NR0;
+    const int r1 = sx*NR1;
 
     if (r1 >= neh1) {
         return;
