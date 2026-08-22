@@ -54,10 +54,10 @@ export function useKeyboardShortcuts(callbacks: KeyboardShortcutsCallbacks) {
 			// act so the synchronous navigation does not cascade-close every tab
 			if (event.defaultPrevented) return;
 
-			event.preventDefault();
-
 			// close-tab only makes sense with conversation tabs enabled
 			if (!settingsStore.config.conversationTabs) return;
+
+			event.preventDefault();
 
 			const activeId =
 				page.params.id ?? (page.route.id === '/(chat)' ? NEW_CHAT_TAB_ID : undefined);

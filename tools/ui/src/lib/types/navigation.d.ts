@@ -1,4 +1,4 @@
-import { SidebarAction } from '$lib/enums';
+import type { SidebarAction } from '$lib/enums';
 import type { Component } from 'svelte';
 
 /**

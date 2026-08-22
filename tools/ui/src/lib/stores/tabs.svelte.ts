@@ -88,7 +88,10 @@ class TabsStore {
 		// still kept so a reload on `#/` does not drop the tab the user is on
 		const isLive = (id: string) => validIds.includes(id) || id === NEW_CHAT_TAB_ID;
 		const persisted = this.load().filter(isLive);
-		const extras = this.openTabs.filter((id) => isLive(id) && !persisted.includes(id));
+		// tabs already in openTabs come from the live route, so they stay as they
+		// are: `validIds` is a snapshot and a conversation created while the list
+		// was loading is not in it
+		const extras = this.openTabs.filter((id) => !persisted.includes(id));
 
 		this.openTabs = [...persisted, ...extras];
 		this.initialized = true;

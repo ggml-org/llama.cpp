@@ -343,7 +343,7 @@
 					iconSize="h-4.5 w-4.5 md:h-4 md:w-4"
 					class="{uiStore.isSidebarExpanded
 						? 'bg-muted! md:bg-foreground/5!'
-						: 'bg-transparent'} md:h-9 md:w-9 h-10 w-10 rounded-full md:hover:bg-foreground/10! pointer-events-auto"
+						: 'bg-transparent!'} md:h-9 md:w-9 h-10 w-10 rounded-full md:hover:bg-foreground/10! pointer-events-auto"
 					href={uiStore.isSidebarExpanded ? ROUTES.START : undefined}
 					onclick={uiStore.isSidebarExpanded ? undefined : toggleExpandedMode}
 					tooltip={uiStore.isSidebarExpanded ? undefined : 'Open Sidebar'}

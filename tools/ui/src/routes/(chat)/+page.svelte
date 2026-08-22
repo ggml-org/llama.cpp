@@ -61,10 +61,10 @@
 			}
 		}
 
-		// ?q= sends an immediate prompt in a fresh conversation
+		// ?q= creates the conversation, the chat route sends the prompt once the
+		// conversation id is in the URL
 		if (qParam !== null) {
 			await conversationsStore.createConversation();
-			await chatStore.sendMessage(qParam);
 			clearUrlParams();
 		} else if (modelParam) {
 			clearUrlParams();
