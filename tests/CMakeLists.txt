@@ -228,6 +228,29 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
     set_tests_properties(test-recurrent-state-rollback-nemotron-h PROPERTIES
         FIXTURES_REQUIRED generate-models
     )
+
+    # a failed state restore must not leave data behind that later inference can read
+    # llama covers llama_kv_cache and mamba covers llama_memory_recurrent, both need more than one layer
+    llama_build(test-state-restore-failure.cpp)
+
+    llama_test(
+        test-state-restore-failure
+        LABEL main
+        ARGS -m "${MODEL_DIR}/llama-dense.gguf"
+    )
+    set_tests_properties(test-state-restore-failure PROPERTIES
+        FIXTURES_REQUIRED generate-models
+    )
+
+    llama_test(
+        test-state-restore-failure
+        NAME test-state-restore-failure-mamba
+        LABEL main
+        ARGS -m "${MODEL_DIR}/mamba-dense.gguf"
+    )
+    set_tests_properties(test-state-restore-failure-mamba PROPERTIES
+        FIXTURES_REQUIRED generate-models
+    )
 endif()
 
 llama_build_and_test(test-chat-peg-parser.cpp peg-parser/simple-tokenize.cpp)
