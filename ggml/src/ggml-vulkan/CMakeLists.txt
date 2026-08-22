@@ -174,6 +174,9 @@ if (Vulkan_FOUND)
         message(STATUS "vulkan-shaders-gen toolchain file: ${HOST_CMAKE_TOOLCHAIN_FILE}")
     endif()
 
+    # Termux/Android: libc++ not linked by default for ELF executables
+    list(APPEND VULKAN_SHADER_GEN_CMAKE_ARGS -DCMAKE_EXE_LINKER_FLAGS=-lc++_shared)
+
     ExternalProject_Add(
         vulkan-shaders-gen
         SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/vulkan-shaders
