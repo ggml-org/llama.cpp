@@ -290,6 +290,7 @@ combine_static_libraries() {
         "${base_dir}/${build_dir}/ggml/src/ggml-metal/${release_dir}/libggml-metal.a"
         "${base_dir}/${build_dir}/ggml/src/ggml-blas/${release_dir}/libggml-blas.a"
         "${base_dir}/${build_dir}/tools/mtmd/${release_dir}/libmtmd.a"
+        "${base_dir}/${build_dir}/vendor/hash/${release_dir}/libvendor-hash.a"
     )
 
     # Create temporary directory for processing

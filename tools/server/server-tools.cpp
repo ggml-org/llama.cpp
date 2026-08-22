@@ -2035,7 +2035,7 @@ void server_tools::setup(const std::vector<std::string> & enabled_tools,
         }
     }
 
-    // append MCP tools, skipping any that collide with a built-in or another MCP tool of the same "<server>_<tool>" name
+    // append MCP tools, skipping any that collide with a server tool or another MCP tool of the same "<server>_<tool>" name
     if (!mcp_mgr.empty()) {
         std::unordered_set<std::string> seen_names;
         for (auto & t : tools) {

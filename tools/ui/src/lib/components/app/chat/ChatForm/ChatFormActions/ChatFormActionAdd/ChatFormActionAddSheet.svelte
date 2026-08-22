@@ -218,12 +218,15 @@
 								{@const hasError = healthState.status === HealthCheckStatus.ERROR}
 								{@const displayName = mcpStore.getServerLabel(server)}
 								{@const faviconUrl = mcpStore.getServerFavicon(server.id)}
-								{@const isEnabled = conversationsStore.isMcpServerEnabledForChat(server.id)}
+								{@const isEnabled = conversationsStore.preferences.isMcpServerEnabledForChat(
+									server.id
+								)}
 
 								<button
 									type="button"
 									class={sheetItemRowClass}
-									onclick={() => !hasError && conversationsStore.toggleMcpServerForChat(server.id)}
+									onclick={() =>
+										!hasError && conversationsStore.preferences.toggleMcpServerForChat(server.id)}
 									disabled={hasError}
 								>
 									<div class="flex min-w-0 flex-1 items-center gap-2">
@@ -250,7 +253,8 @@
 									{:else}
 										<Switch
 											checked={isEnabled}
-											onCheckedChange={() => conversationsStore.toggleMcpServerForChat(server.id)}
+											onCheckedChange={() =>
+												conversationsStore.preferences.toggleMcpServerForChat(server.id)}
 										/>
 									{/if}
 								</button>

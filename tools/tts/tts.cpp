@@ -86,6 +86,7 @@ int main(int argc, char ** argv) {
 
     mtmd_context_params mtmd_params = mtmd_context_params_default();
     mtmd_params.use_gpu = params.mmproj_use_gpu;
+    mtmd_params.device  = params.mmproj_device;
     mtmd::context_ptr mctx(mtmd_init_from_file(params.mmproj.path.c_str(), model, mtmd_params));
     if (!mctx) {
         LOG_ERR("failed to load mmproj %s\n", params.mmproj.path.c_str());

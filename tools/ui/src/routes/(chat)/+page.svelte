@@ -47,8 +47,8 @@
 						serverStore.isRouterMode &&
 						!modelsStore.isModelLoaded(model.id)
 					) {
-						modelsStore
-							.loadModel(model.id)
+						modelsStore.status
+							.load(model.id)
 							.catch((error) => console.error('Failed to load model:', error));
 					}
 				} catch (error) {

@@ -3,7 +3,7 @@
 	import { page } from '$app/state';
 	import { ChatForm } from '$lib/components/app';
 	import { useDraftMessages } from '$lib/hooks/use-draft-messages.svelte';
-	import { isMobile } from '$lib/stores';
+	import { deviceStore } from '$lib/stores';
 	import { onMount } from 'svelte';
 
 	interface Props {
@@ -120,13 +120,13 @@
 	}
 
 	onMount(() => {
-		if (!isMobile.current) {
+		if (!deviceStore.isMobile) {
 			setTimeout(focusFormUnlessCaptured, 100);
 		}
 	});
 
 	afterNavigate((navigation) => {
-		if (navigation?.from != null && !isMobile.current) {
+		if (navigation?.from != null && !deviceStore.isMobile) {
 			setTimeout(focusFormUnlessCaptured, 100);
 		}
 	});

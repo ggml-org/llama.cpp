@@ -8,7 +8,7 @@
 	import { BuiltInTool, FileMentionEntryType, GlobSearchType, KeyboardKey } from '$lib/enums';
 	import { useDebouncedSearch } from '$lib/hooks/use-debounced-search.svelte';
 	import { usePickerNavigation } from '$lib/hooks/use-picker-navigation.svelte';
-	import { isMobile, settingsStore, toolsStore } from '$lib/stores';
+	import { deviceStore, settingsStore, toolsStore } from '$lib/stores';
 	import type { FileMentionEntry, GlobEntryResult } from '$lib/types';
 	import { abbreviateHome, runGlobSearchWithChildren } from '$lib/utils';
 
@@ -51,7 +51,7 @@
 	// When the server does not expose file_glob_search (started without
 	// --tools) or the user disabled it, the picker still opens but explains
 	// why instead of firing searches that would only fail.
-	const fileSearchKey = $derived(toolsStore.getPermissionKey(BuiltInTool.FILE_GLOB_SEARCH));
+	const fileSearchKey = $derived(toolsStore.getPermissionKey(BuiltInTool.SERVER_FILE_GLOB_SEARCH));
 	const fileSearchEnabled = $derived(
 		fileSearchKey !== null && toolsStore.isToolEnabled(fileSearchKey)
 	);
@@ -130,7 +130,7 @@
 		return searchError ? `Search failed - ${searchError}` : 'No matching files or folders';
 	});
 
-	const showTooltip = $derived(!isMobile.current);
+	const showTooltip = $derived(!deviceStore.isMobile);
 
 	$effect(() => {
 		if (typeof window === 'undefined') return;

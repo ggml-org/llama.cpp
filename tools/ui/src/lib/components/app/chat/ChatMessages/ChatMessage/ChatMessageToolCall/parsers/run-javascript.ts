@@ -16,7 +16,7 @@ export type RunJavascriptMeta = {
 };
 
 export function parseRunJavascriptMeta(section: AgenticSection): RunJavascriptMeta | null {
-	const args = parseToolArgs(BuiltInTool.RUN_JAVASCRIPT, section);
+	const args = parseToolArgs(BuiltInTool.BROWSER_RUN_JAVASCRIPT, section);
 
 	if (!args) return null;
 

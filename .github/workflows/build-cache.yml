@@ -40,9 +40,9 @@ jobs:
     runs-on: ubuntu-24.04
 
     env:
-      # Sync versions in build.yml, build-self-hosted.yml, release.yml, build-cache.yml, .devops/openvino.Dockerfile
-      OPENVINO_VERSION_MAJOR: "2026.2.1"
-      OPENVINO_VERSION_FULL: "2026.2.1.21919.ede283a88e3"
+      # Sync versions in build-openvino.yml, build-self-hosted.yml, release.yml, build-cache.yml, .devops/openvino.Dockerfile
+      OPENVINO_VERSION_MAJOR: "2026.3"
+      OPENVINO_VERSION_FULL: "2026.3.0.22451.bd8d6542e3c"
 
     steps:
       - name: Clone
@@ -69,8 +69,8 @@ jobs:
 
     env:
       # Sync versions in build.yml, build-self-hosted.yml, release.yml, build-cache.yml, .devops/openvino.Dockerfile
-      OPENVINO_VERSION_MAJOR: "2026.2.1"
-      OPENVINO_VERSION_FULL: "2026.2.1.21919.ede283a88e3"
+      OPENVINO_VERSION_MAJOR: "2026.3"
+      OPENVINO_VERSION_FULL: "2026.3.0.22451.bd8d6542e3c"
 
     steps:
       - name: Clone

@@ -21,7 +21,7 @@ A typical pipeline of the core libmtmd is as follows:
 - A bitmap (RGB image or PCM audio) is created
 - Bitmap and the text prompt is provided to `mtmd_tokenize()` that breaks the input into chunks
     - The tokenizer function first expands a "lazy" bitmap if it finds one. Typically, this is used by video, so that one media token corresponds to one input bitmap
-    - For models that support "fused" temporal frames like Qwen-VL, the tokenizer tries to merge pair of consecutive frames into one batch
+    - For models that support "fused" temporal frames like Qwen-VL, the tokenizer tries to merge pair of consecutive frames into one batch. Only bitmaps marked by `mtmd_bitmap_set_mergeable()` are merged
     - The preprocessor will then be called, which produces a list of chunks
     - Depending on the model itself, special tokens will be injected to separate image chunks (i.e. llava-uhd-style models)
 - Multiple bitmaps may be batched together to form a larger `mtmd_batch()`
