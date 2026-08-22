@@ -1895,11 +1895,14 @@ common_json common_peg_arena::to_json() const {
     for (const auto & parser : parsers_) {
         parsers.push_back(serialize_parser_variant(parser));
     }
-    return common_json_from_raw(nlohmann::ordered_json{
+    // the assignment moves the tree in, it does not copy
+    common_json out;
+    common_json_raw<nlohmann::ordered_json>(out) = nlohmann::ordered_json{
         {"parsers", parsers},
         {"rules", rules_},
         {"root", root_}
-    });
+    };
+    return out;
 }
 
 static common_peg_parser_variant deserialize_parser_variant(const nlohmann::ordered_json & j) {

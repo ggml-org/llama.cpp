@@ -42,7 +42,7 @@ static T json_value(const json & body, const std::string & key, const T & defaul
     if (body.contains(key) && !body.at(key).is_null()) {
         try {
             return body.at(key).get<T>();
-        } catch (const std::exception & err) {
+        } catch (const common_json_error & err) {
             LOG_WRN("Wrong type supplied for parameter '%s', using default value: %s\n", key.c_str(), err.what());
             return default_value;
         }

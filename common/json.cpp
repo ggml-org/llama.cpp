@@ -54,6 +54,7 @@ static ordered_json to_json(const common_json_value & val) {
         case common_json_value::VAL_STRING: return val.val_string;
         case common_json_value::VAL_JSON:
             // one owner means no one else can see this tree, so it is safe to move it out
+            // note: this makes a value single use, same as the json_ref of the backing library
             if (val.val_json.use_count() == 1) {
                 return std::move(as_json(val.val_json.get()));
             }
@@ -213,14 +214,19 @@ common_json::~common_json() {
 
 common_json common_json::parse(const std::string & text) {
     try {
-        return common_json_from_raw(ordered_json::parse(text));
+        // the assignment moves the parsed tree in, it does not copy
+        common_json out;
+        as_json(&out) = ordered_json::parse(text);
+        return out;
     } catch (const std::exception & e) {
         throw common_json_error(e.what());
     }
 }
 
 common_json common_json::parse_no_throw(const std::string & text) {
-    return common_json_from_raw(ordered_json::parse(text, nullptr, false));
+    common_json out;
+    as_json(&out) = ordered_json::parse(text, nullptr, false);
+    return out;
 }
 
 bool common_json::is_discarded() const {
@@ -228,21 +234,27 @@ bool common_json::is_discarded() const {
 }
 
 common_json common_json::array() {
-    return common_json_from_raw(ordered_json::array());
+    common_json out;
+    as_json(&out) = ordered_json::array();
+    return out;
 }
 
 common_json common_json::array(std::initializer_list<common_json_value> vals) {
-    ordered_json out = ordered_json::array();
+    common_json out;
+    ordered_json & arr = as_json(&out);
+    arr = ordered_json::array();
 
     for (const auto & val : vals) {
-        out.push_back(to_json(val));
+        arr.push_back(to_json(val));
     }
 
-    return common_json_from_raw(out);
+    return out;
 }
 
 common_json common_json::object() {
-    return common_json_from_raw(ordered_json::object());
+    common_json out;
+    as_json(&out) = ordered_json::object();
+    return out;
 }
 
 common_json common_json::object(std::initializer_list<common_json_item> items) {
@@ -270,6 +282,10 @@ bool common_json::contains(const std::string & key) const {
 }
 
 bool common_json::operator==(const common_json_value & val) const {
+    // compare a tree in place, to_json() would copy it
+    if (val.type == common_json_value::VAL_JSON) {
+        return as_json(this) == as_json(val.val_json.get());
+    }
     return as_json(this) == to_json(val);
 }
 
@@ -345,11 +361,17 @@ std::string common_json::dump_safe(int indent) const {
 // an array is indexed directly, an object needs a walk from the start
 common_json & common_json::iterator::operator*() const {
     return guard([&]() -> common_json & {
-        if (as_json(node).is_object()) {
-            return as_common(std::next(as_json(node).begin(), idx).value());
+        ordered_json & j = as_json(node);
+
+        if (j.is_object()) {
+            return as_common(std::next(j.begin(), idx).value());
+        }
+        if (j.is_array()) {
+            return as_common(j[idx]);
         }
 
-        return as_common(as_json(node)[idx]);
+        // a plain value gives itself once, same as the backing library
+        return *node;
     });
 }
 
@@ -365,11 +387,21 @@ common_json::iterator common_json::end() const {
     return iterator(const_cast<common_json *>(this), size());
 }
 
+// the keys follow the backing library: the index for an array, "" for a plain value
 common_json::items_view::entry common_json::items_view::iterator::operator*() const {
     return guard([&]() -> entry {
-        auto it = std::next(as_json(node).begin(), idx);
+        ordered_json & j = as_json(node);
 
-        return { it.key(), as_common(it.value()) };
+        if (j.is_object()) {
+            auto it = std::next(j.begin(), idx);
+
+            return { it.key(), as_common(it.value()) };
+        }
+        if (j.is_array()) {
+            return { std::to_string(idx), as_common(j[idx]) };
+        }
+
+        return { std::string(), *node };
     });
 }
 

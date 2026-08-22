@@ -30,6 +30,8 @@ struct common_json_error : std::runtime_error {
 };
 
 // one value, tagged so that this header stays free of the backing library
+// note: a value that holds a tree is single use, consuming the same value twice
+// (e.g. through a named initializer list) gives null on the second use
 struct common_json_value {
     enum value_type {
         VAL_NULL,
@@ -188,8 +190,8 @@ class common_json {
     const common_json & operator[](const std::string & key) const;
     common_json       & operator[](const char * key)       { return (*this)[std::string(key)]; }
     const common_json & operator[](const char * key) const { return (*this)[std::string(key)]; }
-    common_json       & operator[](int idx)       { return (*this)[(size_t) idx]; }
-    const common_json & operator[](int idx) const { return (*this)[(size_t) idx]; }
+    common_json       & operator[](int idx)       { return (*this)[to_idx(idx)]; }
+    const common_json & operator[](int idx) const { return (*this)[to_idx(idx)]; }
     common_json       & operator[](size_t idx);
     const common_json & operator[](size_t idx) const;
 
@@ -236,7 +238,7 @@ class common_json {
     // 1 if the key is there, 0 if not
     size_t count(const std::string & key) const;
 
-    // appends every value of another array
+    // appends every value of another array; inserting an array into itself throws
     void insert(const common_json & vals);
 
     // a common_json goes through the copy assignment above, everything else becomes a value
@@ -252,6 +254,7 @@ class common_json {
     std::string dump_safe(int indent = -1) const;
 
     // walks an array by index, or an object in insertion order
+    // a plain value gives itself once, same as the backing library
     class iterator {
       public:
         using iterator_category = std::forward_iterator_tag;
@@ -325,6 +328,14 @@ class common_json {
     items_view items() const;
 
   private:
+    // a negative index must not turn into a huge size_t
+    static size_t to_idx(int idx) {
+        if (idx < 0) {
+            throw common_json_error("negative array index");
+        }
+        return (size_t) idx;
+    }
+
     // the backing value is built here, json.cpp checks that it fits
     // it cannot be a pointer: a value inside a tree would then not be a common_json,
     // so at() could only give back a copy instead of a real reference
