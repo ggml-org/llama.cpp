@@ -16,7 +16,7 @@
 	}
 </script>
 
-<Dialog.Root {open} onOpenChange={handleOpenChange}>
+<Dialog.Root onOpenChange={handleOpenChange} {open}>
 	<Dialog.Content
 		class="md:h-[calc(100vh-4rem)]! md:max-h-240! md:w-[calc(100vw-4rem)]! md:max-w-360! flex flex-col"
 	>

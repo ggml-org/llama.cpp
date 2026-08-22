@@ -86,7 +86,6 @@
 					<McpServerCardSkeleton />
 				{:else}
 					<McpServerCard
-						{server}
 						enabled={server.enabled}
 						onBrowseResources={() => (isResourcesDialogOpen = true)}
 						onDelete={() => mcpStore.removeServer(server.id)}
@@ -103,6 +102,7 @@
 							}
 						}}
 						onUpdate={(updates) => mcpStore.updateServer(server.id, updates)}
+						{server}
 					/>
 				{/if}
 			{/each}

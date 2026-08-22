@@ -85,10 +85,10 @@
 		aliases={option.aliases}
 		class="flex-1"
 		{hideOrgName}
+		{modalities}
 		modelId={option.model}
-		modalities={modalities}
-		{supportsThinking}
 		showRawTooltip
+		{supportsThinking}
 		tags={option.tags}
 	/>
 
