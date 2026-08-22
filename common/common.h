@@ -16,6 +16,7 @@
 #include <map>
 #include <algorithm>
 #include <fstream>
+#include <memory>
 
 #if defined(_WIN32) && !defined(_WIN32_WINNT)
 #define _WIN32_WINNT 0x0A00
@@ -1134,6 +1135,37 @@ enum ggml_opt_optimizer_type common_opt_get_optimizer(const char *);
 // prompt utils
 //
 
+class common_shared_state_buffer {
+public:
+    size_t size() const {
+        return storage ? storage->size() : 0;
+    }
+
+    bool empty() const {
+        return !storage || storage->empty();
+    }
+
+    const uint8_t * data() const {
+        return storage ? storage->data() : nullptr;
+    }
+
+    // Allocate fresh storage for a complete state snapshot. Copies of this
+    // object keep referencing the previous immutable snapshot; they are never
+    // modified in place. Only the newly allocated, uniquely owned buffer is
+    // exposed as mutable while the caller captures the replacement snapshot.
+    uint8_t * reset(size_t n) {
+        storage = std::make_shared<std::vector<uint8_t>>(n);
+        return storage->data();
+    }
+
+    void clear() {
+        storage.reset();
+    }
+
+private:
+    std::shared_ptr<std::vector<uint8_t>> storage;
+};
+
 struct common_prompt_checkpoint {
     int64_t n_tokens;
 
@@ -1143,8 +1175,11 @@ struct common_prompt_checkpoint {
     llama_pos pos_min;
     llama_pos pos_max;
 
-    std::vector<uint8_t> data_tgt;
-    std::vector<uint8_t> data_dft;
+    // Snapshot payloads are immutable after capture and can be shared safely
+    // between a live slot and host-memory prompt-cache entries. Copying a
+    // checkpoint therefore copies only the ref-counted handles, not the bytes.
+    common_shared_state_buffer data_tgt;
+    common_shared_state_buffer data_dft;
 
     // (optional) speculative-decoding implementation state stashed with the checkpoint
     // (e.g. eagle3's deferred-boundary g_embd row)
