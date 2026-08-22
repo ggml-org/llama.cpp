@@ -1673,7 +1673,7 @@ static bool ggml_backend_cuda_comm_allreduce_rdna2_p2p_host(
     }
     ++comm_ctx->p2p_host_calls;
     if (!comm_ctx->p2p_host_logged) {
-        std::fprintf(stderr, "using RDNA2 P2P MTP host-snapshot AllReduce for %s [5120,%d,1,1] F32\n",
+        std::fprintf(stderr, "using RDNA2 P2P host-snapshot AllReduce for %s [5120,%d,1,1] F32\n",
                 tensors[0]->name, mtp5 ? 5 : 1);
         comm_ctx->p2p_host_logged = true;
     }

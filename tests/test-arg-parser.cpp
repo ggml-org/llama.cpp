@@ -4,6 +4,7 @@
 #include "llama.h"
 #include "speculative.h"
 
+#include <cstdint>
 #include <limits>
 #include <string>
 #include <vector>
@@ -42,6 +43,64 @@ static void test(void) {
         const auto draft = common_base_params_to_speculative(base);
         assert(draft.n_outputs_max == 4);
         assert(draft.n_outputs_max_per_seq == 1);
+    }
+
+    {
+        const auto target_0 = reinterpret_cast<ggml_backend_dev_t>(std::uintptr_t { 1 });
+        const auto target_1 = reinterpret_cast<ggml_backend_dev_t>(std::uintptr_t { 2 });
+        const auto draft_0  = reinterpret_cast<ggml_backend_dev_t>(std::uintptr_t { 3 });
+
+        common_params base;
+        base.devices = { target_0, target_1, nullptr };
+        base.speculative.draft.mparams.path = "draft.gguf";
+
+        // An unspecified draft list inherits the target placement.
+        auto draft = common_base_params_to_speculative(base);
+        assert(draft.devices == base.devices);
+
+        // An explicit draft list must still override the target placement.
+        base.speculative.draft.devices = { draft_0, nullptr };
+        draft = common_base_params_to_speculative(base);
+        assert(draft.devices == base.speculative.draft.devices);
+    }
+
+    // Block drafts cap the inherited compute batch while keeping the entire
+    // non-causal noise block in one ubatch.
+    {
+        common_params base;
+        base.n_parallel = 1;
+        base.n_ubatch = 512;
+        base.speculative.types.push_back(COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH);
+        base.speculative.draft.n_max = 4;
+
+        const auto draft = common_base_params_to_speculative(base);
+        assert(draft.n_outputs_max == 5);
+        assert(draft.n_ubatch == 128);
+        assert(draft.n_batch >= 5);
+    }
+
+    // An explicit value is honored but cannot split the non-causal block.
+    {
+        common_params base;
+        base.n_parallel = 1;
+        base.n_ubatch = 512;
+        base.speculative.types.push_back(COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH);
+        base.speculative.draft.n_max = 4;
+        base.speculative.draft.n_ubatch = 3;
+        assert(common_base_params_to_speculative(base).n_ubatch == 5);
+
+        base.speculative.draft.n_ubatch = 256;
+        assert(common_base_params_to_speculative(base).n_ubatch == 256);
+    }
+
+    // A block larger than the default cap takes precedence over the cap.
+    {
+        common_params base;
+        base.n_parallel = 32;
+        base.n_ubatch = 512;
+        base.speculative.types.push_back(COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH);
+        base.speculative.draft.n_max = 4;
+        assert(common_base_params_to_speculative(base).n_ubatch == 160);
     }
 
     printf("test-arg-parser: make sure there is no duplicated arguments in any examples\n\n");
@@ -196,6 +255,10 @@ static void test(void) {
     argv = {"binary_name", "--spec-draft-n-max", "123"};
     assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_SPECULATIVE));
     assert(params.speculative.draft.n_max == 123);
+
+    argv = {"binary_name", "--spec-draft-ubatch-size", "256"};
+    assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_SPECULATIVE));
+    assert(params.speculative.draft.n_ubatch == 256);
 
     argv = {"binary_name", "-lm", "none"};
     assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
