@@ -215,6 +215,13 @@ static size_t ggml_backend_metal_buffer_type_get_alloc_size(ggml_backend_buffer_
 
     // some operations require additional memory for fleeting data:
     switch (tensor->op) {
+        case GGML_OP_MUL_MAT:
+            {
+                // split-K skinny matmul partials (must cover the runtime gate in ggml-metal-ops.cpp)
+                if (tensor->ne[1] <= 32 && tensor->src[0]->ne[1] <= 5120 && tensor->src[0]->ne[0] >= 1024) {
+                    res += 4*ggml_nbytes(tensor);
+                }
+            } break;
         case GGML_OP_MUL_MAT_ID:
             {
                 res += ggml_metal_op_mul_mat_id_extra_tpe(tensor);
