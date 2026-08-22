@@ -267,7 +267,10 @@ bool tuner_fa_vec_run(ggml_backend_t backend, ggml_backend_dev_t dev, const tune
         { 512, 512 },
         { 576, 512 }
     };
-    const int ne11_rep[] = { 512, 2048, 8192, 32768 };      // ne11 bucket representatives
+    // nsg is a pipeline specialization constant (1 up to ne11=2048, 2 up to 4096, 4 above), so ne11
+    // bucket 1 takes two samples to cover both of its regimes. Bucket 0 is not sampled at all: the
+    // runtime leaves short KV at baseline, so no measurement there can reach the table.
+    const int ne11_rep[] = { 2048, 3072, 8192, 32768 };
     const int ne01_rep[] = { 1, 2, 3, 4, 5, 6, 7, 8, 16 };  // point buckets (1-4) + tail mod-4 cycle + anchor
 
     struct dtype_t {
@@ -297,8 +300,7 @@ bool tuner_fa_vec_run(ggml_backend_t backend, ggml_backend_dev_t dev, const tune
 
     int n_untrusted = 0;
 
-    printf("// ==== BEGIN fa_vec_tuned_table rows (%s) ====\n", dev_token);
-
+    // stdout carries nothing but table rows, so the whole stream pastes into fa_vec_tuned_table
     for (const auto & dtype : dtypes) {
         const ggml_type type_kv = dtype.type;
         if (!fa_filter_has(opts.dtype_filter, ggml_type_name(type_kv))) {
@@ -335,7 +337,7 @@ bool tuner_fa_vec_run(ggml_backend_t backend, ggml_backend_dev_t dev, const tune
                     for (size_t i = 0; i < order.size(); ++i) {
                         order[i] = (int) i;
                     }
-                    std::shuffle(order.begin(), order.end(), std::mt19937(opts.seed));
+                    std::shuffle(order.begin(), order.end(), std::mt19937(fa_cell_seed(sh, opts.seed)));
 
                     char label[128];
                     snprintf(label, sizeof(label), "dk=%d ne11=%d", s.dk, ne11);
@@ -383,9 +385,9 @@ bool tuner_fa_vec_run(ggml_backend_t backend, ggml_backend_dev_t dev, const tune
         }
 
         // compress into pasteable rows. per (dk,dv) and ne01 domain {decode==1, batch>=2},
-        // emit one ne11-collapsed default cfg (ne11_b=-1) plus a per-bucket exception wherever
-        // the default's pointwise regret vs the bucket target, or its aggregate slowdown vs
-        // baseline, exceeds TUNE_TAU.
+        // emit one ne11-collapsed default cfg (ne11_b=-1) plus a per-bucket exception wherever the
+        // default's pointwise regret vs the bucket target exceeds TUNE_TAU, or the default is not
+        // admissible for that bucket (see never_slower / admissible below).
         std::vector<std::string> rows_out;
         char                     rbuf[192];
 
@@ -401,6 +403,63 @@ bool tuner_fa_vec_run(ggml_backend_t backend, ggml_backend_dev_t dev, const tune
                 int                           b11, b01, Ti;
                 std::vector<double>           agg;
                 std::vector<const fa_point *> bp;
+            };
+
+            // A config may represent a bucket only if it is no slower than baseline at every point that
+            // bucket covers. The aggregate gate below sums absolute times, so it can pass on the aligned
+            // and deep points while a misaligned ne01 pays the mod-Q padding. Nothing measured, nothing
+            // proven: a bucket with no surviving sample admits baseline only.
+            auto never_slower = [&](const std::vector<const fa_point *> & bp, int i) {
+                if (i == base_i) {
+                    return true;
+                }
+                if (bp.empty()) {
+                    return false;
+                }
+                for (const auto * p : bp) {
+                    if (p->t[i] <= 0.0 || p->t[base_i] <= 0.0 || p->t[i] > p->t[base_i]) {
+                        return false;
+                    }
+                }
+                return true;
+            };
+
+            // The padded-row waste ceil(n/Q)*Q/n is largest at the smallest ne01 of each residue class
+            // mod Q, so one of a bucket's first Q values carries the worst padding it can ever see, and
+            // that value has to be sampled. Otherwise the bucket bounds nothing: a config picked on the
+            // aligned ne01=8,16 says nothing about ne01=9. This covers the padding term only - the
+            // per-row cost varies with ne01 too - so it is a floor on the evidence, not a proof.
+            auto admissible = [&](const std::vector<const fa_point *> & bp, int b01, int i) {
+                if (!never_slower(bp, i)) {
+                    return false;
+                }
+                const int Q = cands[i].Q;
+                if (Q == 1) {
+                    return true;  // one row per threadgroup, no padding to witness
+                }
+                int lo = bp[0]->ne01;
+                for (const auto * p : bp) {
+                    lo = std::min(lo, p->ne01);
+                }
+                while (lo > 1 && procs.ne01_bucket(lo - 1) == b01) {
+                    lo--;  // walk down to where this bucket's runtime domain starts
+                }
+                int    wit  = lo;
+                double wmax = 0.0;
+                for (int n = lo; n < lo + Q && procs.ne01_bucket(n) == b01; ++n) {
+                    const int    padded = ((n + Q - 1) / Q) * Q;
+                    const double w      = (double) padded / n;
+                    if (w > wmax) {
+                        wmax = w;
+                        wit  = n;
+                    }
+                }
+                for (const auto * p : bp) {
+                    if (p->ne01 == wit) {
+                        return true;
+                    }
+                }
+                return false;
             };
 
             std::set<std::pair<int, int>> buckets;
@@ -429,7 +488,11 @@ bool tuner_fa_vec_run(ggml_backend_t backend, ggml_backend_dev_t dev, const tune
                 fprintf(stderr, "# bucket dk=%d dv=%d ne11_b=%d ne01_b=%d samples=%zu\n", s.dk, s.dv, b11, b01,
                         bp.size());
                 if (bp.empty()) {
-                    fprintf(stderr, "# WARN empty bucket dk=%d dv=%d ne11_b=%d ne01_b=%d\n", s.dk, s.dv, b11, b01);
+                    // nothing to check a config against, so pin the bucket to baseline instead of
+                    // letting the ne11-collapsed domain default ride in unmeasured
+                    fprintf(stderr, "# WARN empty bucket dk=%d dv=%d ne11_b=%d ne01_b=%d -> baseline\n", s.dk, s.dv,
+                            b11, b01);
+                    bks.push_back({ b11, b01, base_i, std::vector<double>(cands.size(), 0.0), {} });
                     continue;
                 }
 
@@ -449,17 +512,50 @@ bool tuner_fa_vec_run(ggml_backend_t backend, ggml_backend_dev_t dev, const tune
                     }
                 }
 
-                int robust = 0;
-                for (size_t i = 1; i < cands.size(); ++i) {
-                    if (worst[i] < worst[robust] || (worst[i] == worst[robust] && (cands[i].Q < cands[robust].Q ||
-                                                                                   (cands[i].Q == cands[robust].Q &&
-                                                                                    cands[i].NE < cands[robust].NE)))) {
+                int robust = -1, oracle_pick = -1;
+                for (size_t i = 0; i < cands.size(); ++i) {
+                    auto tighter = [&](int j) {
+                        return j < 0 || worst[i] < worst[j] ||
+                               (worst[i] == worst[j] && (cands[i].Q < cands[j].Q ||
+                                                         (cands[i].Q == cands[j].Q && cands[i].NE < cands[j].NE)));
+                    };
+                    if (tighter(oracle_pick)) {
+                        oracle_pick = (int) i;
+                    }
+                    if (admissible(bp, b01, (int) i) && tighter(robust)) {
                         robust = (int) i;
                     }
                 }
 
                 const bool tune = robust != base_i && agg[base_i] > 0.0 && agg[robust] > 0.0 &&
                                   agg[base_i] / agg[robust] >= TUNE_THETA;
+
+                // report what the no-harm rule cost this bucket, but only when it changed the outcome:
+                // a sweep on another machine then shows where the winner loses, instead of just
+                // emitting a smaller table
+                const bool refused = oracle_pick != robust && oracle_pick != base_i && agg[base_i] > 0.0 &&
+                                     agg[oracle_pick] > 0.0 && agg[base_i] / agg[oracle_pick] >= TUNE_THETA;
+                if (refused) {
+                    double over = 0.0;
+                    int    at11 = 0, at01 = 0;
+                    for (const auto * p : bp) {
+                        if (p->t[base_i] > 0.0 && p->t[oracle_pick] / p->t[base_i] - 1.0 > over) {
+                            over = p->t[oracle_pick] / p->t[base_i] - 1.0;
+                            at11 = p->ne11;
+                            at01 = p->ne01;
+                        }
+                    }
+                    if (over > 0.0) {
+                        fprintf(stderr,
+                                "# reject dk=%d dv=%d ne11_b=%d ne01_b=%d Q%dNE%d: +%.2f%% vs baseline at "
+                                "ne11=%d ne01=%d\n",
+                                s.dk, s.dv, b11, b01, cands[oracle_pick].Q, cands[oracle_pick].NE, 100.0 * over, at11,
+                                at01);
+                    } else {
+                        fprintf(stderr, "# reject dk=%d dv=%d ne11_b=%d ne01_b=%d Q%dNE%d: no padding witness\n", s.dk,
+                                s.dv, b11, b01, cands[oracle_pick].Q, cands[oracle_pick].NE);
+                    }
+                }
 
                 bks.push_back({ b11, b01, tune ? robust : base_i, agg, bp });
             }
@@ -495,10 +591,7 @@ bool tuner_fa_vec_run(ggml_backend_t backend, ggml_backend_dev_t dev, const tune
                     int    rows = ((int) d != base_i) ? 1 : 0;
                     double tot  = 0.0;
                     for (const auto * b : db) {
-                        const double base_agg = b->agg[base_i];
-                        const double reg      = reg_pointwise(b, (int) d);
-                        const double slow     = base_agg > 0.0 ? b->agg[d] / base_agg - 1.0 : 0.0;
-                        if (reg > TUNE_TAU || slow > TUNE_TAU) {
+                        if (reg_pointwise(b, (int) d) > TUNE_TAU || !admissible(b->bp, b->b01, (int) d)) {
                             rows++;
                             tot += b->agg[b->Ti];
                         } else {
@@ -524,10 +617,7 @@ bool tuner_fa_vec_run(ggml_backend_t backend, ggml_backend_dev_t dev, const tune
                     rows_out.emplace_back(rbuf);
                 }
                 for (const auto * b : db) {
-                    const double base_agg = b->agg[base_i];
-                    const double reg      = reg_pointwise(b, bestD);
-                    const double slow     = base_agg > 0.0 ? b->agg[bestD] / base_agg - 1.0 : 0.0;
-                    if (reg <= TUNE_TAU && slow <= TUNE_TAU) {
+                    if (reg_pointwise(b, bestD) <= TUNE_TAU && admissible(b->bp, b->b01, bestD)) {
                         continue;
                     }
                     snprintf(rbuf, sizeof(rbuf), "    { { %s, %s, %d, %d, %d, %d }, { %d, %d } },", dev_token,
@@ -537,14 +627,11 @@ bool tuner_fa_vec_run(ggml_backend_t backend, ggml_backend_dev_t dev, const tune
             }
         }
 
-        printf("\n    // ---- %s: %zu rows ----\n", ggml_type_name(type_kv), rows_out.size());
         for (const auto & r : rows_out) {
             printf("%s\n", r.c_str());
         }
         fflush(stdout);
     }
-
-    printf("// ==== END fa_vec_tuned_table rows (%s) ====\n", dev_token);
 
     if (n_untrusted > 0) {
         fprintf(stderr, "\n%d cells excluded as untrusted (see DROP lines above)\n", n_untrusted);
