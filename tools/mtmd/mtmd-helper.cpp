@@ -531,18 +531,38 @@ struct mtmd_helper_video {
         ~subprocess_handle() { stop(); }
 
         void stop() {
+#ifdef _WIN32
+            // stdout EOF can set `alive=false` before subprocess exits.
+            if (proc.hProcess) {
+                subprocess_terminate(&proc);
+                WaitForSingleObject(proc.hProcess, INFINITE);
+
+                // close the parent-held stdin handle, so blocked fwrite() gets a broken pipe.
+                if (proc.hStdInput) {
+                    CloseHandle(proc.hStdInput);
+                    proc.hStdInput = SUBPROCESS_NULL;
+                }
+            }
+#else
             if (alive) {
                 subprocess_terminate(&proc);
             }
+#endif
             // join before destroy: feeder holds a FILE* from subprocess_stdin;
             // subprocess_destroy closes it, so the thread must finish first
             if (feeder.joinable()) {
                 feeder.join();
             }
+
+#ifdef _WIN32
+            // stdout EOF may set `alive=false` before subprocess handle is destroyed.
+            subprocess_destroy(&proc);
+#else
             if (alive) {
                 subprocess_destroy(&proc);
-                alive = false;
             }
+#endif
+            alive = false;
         }
 
         FILE * stdout_pipe() {
