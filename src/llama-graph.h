@@ -812,6 +812,11 @@ struct llm_graph_params {
     // return true if the "other" params would result in a graph with the same topology as with the current params
     //   having the same topology allows us to reuse the graph in some cases
     bool allow_reuse(const llm_graph_params & other) const {
+        static const bool dbg_reuse = [] {
+            const char * env = getenv("LLAMA_GRAPH_RESULT_DEBUG");
+            return env != nullptr && atoi(env) > 1;
+        }();
+
         // first check the ubatch
         bool can_reuse_ubatch =
             ubatch.equal_seqs() == other.ubatch.equal_seqs() &&
@@ -825,16 +830,33 @@ struct llm_graph_params {
                 (ubatch.token && other.ubatch.token && ubatch.embd && other.ubatch.embd)
             );
 
+        if (dbg_reuse && !can_reuse_ubatch) {
+            fprintf(stderr, "allow_reuse: ubatch shape eq=%d/%d nt=%d/%d nst=%d/%d ns=%d/%d nsu=%d/%d tok=%d/%d embd=%d/%d\n",
+                    (int) ubatch.equal_seqs(), (int) other.ubatch.equal_seqs(),
+                    (int) ubatch.n_tokens, (int) other.ubatch.n_tokens,
+                    (int) ubatch.n_seq_tokens, (int) other.ubatch.n_seq_tokens,
+                    (int) ubatch.n_seqs, (int) other.ubatch.n_seqs,
+                    (int) ubatch.n_seqs_unq, (int) other.ubatch.n_seqs_unq,
+                    ubatch.token != nullptr, other.ubatch.token != nullptr,
+                    ubatch.embd != nullptr, other.ubatch.embd != nullptr);
+        }
+
         // when we split the batch using "equal_seqs" we have to verify that the participating sequences are the same
         //   the reason is because the set of attention streams would be different for different sequences
         if (can_reuse_ubatch && ubatch.equal_seqs()) {
             if (!ubatch.data) {
                 // if the old ubatch does not own it's data, then we cannot guarantee that it is still alive, and
                 //   therefore we cannot perform the sequence id check. normally should never happen
+                if (dbg_reuse) {
+                    fprintf(stderr, "allow_reuse: stored ubatch does not own data\n");
+                }
                 can_reuse_ubatch = false;
             } else {
                 for (uint32_t s = 0; s < ubatch.n_seqs_unq; ++s) {
                     can_reuse_ubatch &= ubatch.seq_id_unq[s] == other.ubatch.seq_id_unq[s];
+                }
+                if (dbg_reuse && !can_reuse_ubatch) {
+                    fprintf(stderr, "allow_reuse: seq_id_unq mismatch\n");
                 }
             }
         }
@@ -844,6 +866,9 @@ struct llm_graph_params {
         }
 
         if (n_outputs != other.n_outputs) {
+            if (dbg_reuse) {
+                fprintf(stderr, "allow_reuse: n_outputs %d != %d\n", (int) n_outputs, (int) other.n_outputs);
+            }
             return false;
         }
 
@@ -874,6 +899,7 @@ struct llm_graph_params {
             cparams.embeddings              == other.cparams.embeddings              &&
             cparams.embeddings_nextn        == other.cparams.embeddings_nextn        &&
             cparams.embeddings_nextn_masked == other.cparams.embeddings_nextn_masked &&
+            cparams.mtp_chain               == other.cparams.mtp_chain               &&
             cparams.causal_attn             == other.cparams.causal_attn             &&
             arch  == other.arch  &&
             gtype == other.gtype &&
