@@ -11,6 +11,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdio>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -333,6 +334,215 @@ static void test_reasoning_budget_end_match() {
     fprintf(stderr, "  Test 'matched end sequence' passed\n");
 }
 
+// ---------------------------------------------------------------------------
+// Local soft-budget extension tests
+//
+// These tests run with vocab == nullptr, where the sampler treats every token
+// as UTF-8-complete and as a line boundary (the soft message injects at the
+// first opportunity after the threshold), while a paragraph boundary requires
+// a real "\n\n" piece and therefore never matches; grace regions consequently
+// run to exhaustion, which is exactly the safety path worth unit testing.
+// ---------------------------------------------------------------------------
+
+struct soft_budget_step {
+    bool        forcing = false;
+    llama_token forced  = -1;
+};
+
+static std::vector<soft_budget_step> run_soft_sequence(
+    const std::vector<llama_token>   & sequence,
+    const std::vector<llama_tokens>  & start_seqs,
+    const std::vector<llama_tokens>  & end_seqs,
+    const std::vector<llama_token>   & forced_tokens,
+    int32_t                            budget,
+    float                              soft_ratio,
+    const std::vector<llama_token>   & soft_tokens,
+    int32_t                            grace_tokens,
+    common_reasoning_budget_state    * final_state_out = nullptr
+) {
+    llama_token max_token = 0;
+    for (auto t : sequence) max_token = std::max(max_token, t);
+    for (const auto & seq : start_seqs) for (auto t : seq) max_token = std::max(max_token, t);
+    for (const auto & seq : end_seqs)   for (auto t : seq) max_token = std::max(max_token, t);
+    for (auto t : forced_tokens) max_token = std::max(max_token, t);
+    for (auto t : soft_tokens)   max_token = std::max(max_token, t);
+
+    auto * sampler = common_reasoning_budget_init(
+        nullptr, start_seqs, end_seqs, forced_tokens, budget,
+        REASONING_BUDGET_IDLE, soft_ratio, soft_tokens, grace_tokens);
+
+    std::vector<llama_token_data> cur;
+    for (size_t i = 0; i <= (size_t) max_token; i++) {
+        cur.emplace_back(llama_token_data{(llama_token)i, logf((float)(i+1)), 0.0f});
+    }
+    llama_token_data_array cur_p = { cur.data(), cur.size(), -1, false };
+
+    std::vector<soft_budget_step> steps;
+    for (size_t i = 0; i < sequence.size(); i++) {
+        for (size_t j = 0; j < cur.size(); j++) {
+            cur[j].logit = logf((float)(j+1));
+        }
+        llama_sampler_apply(sampler, &cur_p);
+
+        soft_budget_step step;
+        size_t finite_count = 0;
+        for (size_t j = 0; j < cur.size(); j++) {
+            if (std::isfinite(cur[j].logit)) {
+                finite_count++;
+                step.forced = cur[j].id;
+            }
+        }
+        step.forcing = finite_count == 1;
+        steps.push_back(step);
+
+        llama_sampler_accept(sampler, sequence[i]);
+    }
+
+    if (final_state_out) {
+        *final_state_out = common_reasoning_budget_get_state(sampler);
+    }
+    llama_sampler_free(sampler);
+    return steps;
+}
+
+static void expect_only_forced(const char * test_name, const std::vector<soft_budget_step> & steps,
+                               const std::map<size_t, llama_token> & expected) {
+    for (size_t i = 0; i < steps.size(); i++) {
+        const auto it = expected.find(i);
+        if (it != expected.end()) {
+            if (!steps[i].forcing || steps[i].forced != it->second) {
+                fprintf(stderr, "%s: expected forcing of token %d at index %zu, got forcing=%d token=%d\n",
+                        test_name, it->second, i, (int) steps[i].forcing, steps[i].forced);
+                exit(1);
+            }
+        } else if (steps[i].forcing) {
+            fprintf(stderr, "%s: unexpected forcing of token %d at index %zu\n",
+                    test_name, steps[i].forced, i);
+            exit(1);
+        }
+    }
+}
+
+// Soft warning fires once at the configured threshold and the natural end
+// after the warning is accepted normally.
+static void test_soft_fires_once_at_threshold() {
+    common_reasoning_budget_state final_state = REASONING_BUDGET_IDLE;
+    const auto steps = run_soft_sequence(
+        /* sequence    */ {100, 50, 51, 52, 53, 101},
+        /* start_seqs  */ {{100}},
+        /* end_seqs    */ {{101}},
+        /* forced      */ {},
+        /* budget      */ 4,
+        /* soft_ratio  */ 0.5f,   // threshold = ceil(4 * 0.5) = 2 consumed tokens
+        /* soft_tokens */ {200, 201},
+        /* grace       */ 0,
+        &final_state);
+
+    expect_only_forced("soft fires once at threshold", steps, {{3, 200}, {4, 201}});
+    if (final_state != REASONING_BUDGET_DONE) {
+        fprintf(stderr, "soft fires once at threshold: expected DONE, got %d\n", (int) final_state);
+        exit(1);
+    }
+}
+
+// No soft injection before the threshold; a natural end before the threshold
+// prevents any soft injection entirely.
+static void test_soft_does_not_fire_before_threshold() {
+    const auto steps = run_soft_sequence(
+        {100, 50, 51, 101}, {{100}}, {{101}}, {}, 10, 0.5f, {200}, 0);
+
+    expect_only_forced("soft does not fire before threshold", steps, {});
+}
+
+// With an invalid ratio (> 1) the soft feature is fully disabled and the
+// hard-budget path keeps upstream behavior.
+static void test_soft_disabled_on_invalid_ratio() {
+    const auto steps = run_soft_sequence(
+        {100, 50, 51, 52, 101}, {{100}}, {{101}}, {}, 2, 1.5f, {200}, 0);
+
+    expect_only_forced("soft disabled on invalid ratio", steps, {});
+}
+
+// Hard-budget exhaustion enters the bounded grace region; without a paragraph
+// boundary the grace region runs to exhaustion and then forces the end
+// sequence, so total reasoning stays within budget + grace.
+static void test_grace_exhaustion_forces_end() {
+    common_reasoning_budget_state final_state = REASONING_BUDGET_IDLE;
+    const auto steps = run_soft_sequence(
+        {100, 50, 51, 52, 53, 54, 55, 101},
+        {{100}}, {{101}}, {102, 101},
+        2,      // budget
+        -1.0f,  // soft disabled
+        {},
+        2,      // grace tokens
+        &final_state);
+
+    // budget exhausts after i2; grace runs i3-i4; forcing begins at i5
+    expect_only_forced("grace exhaustion forces end", steps, {{5, 102}, {6, 101}});
+    if (final_state != REASONING_BUDGET_DONE) {
+        fprintf(stderr, "grace exhaustion forces end: expected DONE, got %d\n", (int) final_state);
+        exit(1);
+    }
+}
+
+// A natural reasoning close inside the grace region wins over forced
+// termination.
+static void test_grace_natural_close_wins() {
+    const auto steps = run_soft_sequence(
+        {100, 50, 51, 101, 52, 53},
+        {{100}}, {{101}}, {102, 101},
+        2, -1.0f, {}, 5);
+
+    expect_only_forced("grace natural close wins", steps, {});
+}
+
+// Reasoning cannot grow unbounded: with budget B and grace G, forcing must
+// begin no later than B + G generated tokens after the start tag.
+static void test_grace_bounds_total_reasoning() {
+    std::vector<llama_token> sequence = {100};
+    for (int i = 0; i < 30; i++) {
+        sequence.push_back(60 + (i % 20));
+    }
+    sequence.push_back(101);
+
+    const auto steps = run_soft_sequence(
+        sequence, {{100}}, {{101}}, {102, 101},
+        3, -1.0f, {}, 3);
+
+    size_t first_forcing = SIZE_MAX;
+    for (size_t i = 0; i < steps.size(); i++) {
+        if (steps[i].forcing) {
+            first_forcing = i;
+            break;
+        }
+    }
+    // start tag at i0; budget 3 + grace 3 consumed by i6; forcing at i7
+    if (first_forcing != 7) {
+        fprintf(stderr, "grace bounds total reasoning: expected first forcing at index 7, got %zu\n",
+                first_forcing == SIZE_MAX ? (size_t)-1 : first_forcing);
+        exit(1);
+    }
+}
+
+// Multiple reasoning blocks re-arm correctly: the soft warning and the grace
+// region both reset per block.
+static void test_soft_and_grace_rearm_per_block() {
+    common_reasoning_budget_state final_state = REASONING_BUDGET_IDLE;
+    const auto steps = run_soft_sequence(
+        {100, 50, 51, 52, 101,      // block 1: soft fires, natural close
+         100, 60, 61, 62, 63, 64, 101, 65}, // block 2: soft fires, grace exhausts
+        {{100}}, {{101}}, {102, 101},
+        2, 0.5f, {200}, 2,
+        &final_state);
+
+    expect_only_forced("soft and grace re-arm per block", steps,
+                       {{2, 200}, {7, 200}, {11, 102}, {12, 101}});
+    if (final_state != REASONING_BUDGET_DONE) {
+        fprintf(stderr, "soft and grace re-arm per block: expected DONE, got %d\n", (int) final_state);
+        exit(1);
+    }
+}
+
 // UTF-8 boundary detection unit test
 // Tests common_utf8_is_complete() from reasoning-budget.h
 static void test_utf8_boundary_detection() {
@@ -495,7 +705,16 @@ int main(void) {
     test_reasoning_budget_force_manual();
     test_reasoning_budget_end_match();
 
-    printf("OK (12 tests passed)\n");
+    // local soft-budget extension
+    test_soft_fires_once_at_threshold();
+    test_soft_does_not_fire_before_threshold();
+    test_soft_disabled_on_invalid_ratio();
+    test_grace_exhaustion_forces_end();
+    test_grace_natural_close_wins();
+    test_grace_bounds_total_reasoning();
+    test_soft_and_grace_rearm_per_block();
+
+    printf("OK (19 tests passed)\n");
 
     printf("Testing UTF-8 boundary detection... ");
     test_utf8_boundary_detection();

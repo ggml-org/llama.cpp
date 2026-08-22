@@ -3694,6 +3694,30 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_THINK_BUDGET_MESSAGE"));
     add_opt(common_arg(
+        {"--reasoning-budget-soft-ratio"}, "N",
+        "fraction of the reasoning budget after which a one-time soft wrap-up hint may be injected, 0 < N <= 1 (default: -1 = disabled)",
+        [](common_params & params, const std::string & value) {
+            const float ratio = std::stof(value);
+            if (ratio != -1.0f && (ratio <= 0.0f || ratio > 1.0f)) { throw std::invalid_argument("invalid value"); }
+            params.sampling.reasoning_budget_soft_ratio = ratio;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_THINK_BUDGET_SOFT_RATIO"));
+    add_opt(common_arg(
+        {"--reasoning-budget-soft-message"}, "MESSAGE",
+        "wrap-up hint injected once near a line boundary after the soft ratio of the reasoning budget is consumed (default: none)",
+        [](common_params & params, const std::string & value) {
+            params.sampling.reasoning_budget_soft_message = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_THINK_BUDGET_SOFT_MESSAGE"));
+    add_opt(common_arg(
+        {"--reasoning-budget-grace-tokens"}, "N",
+        "extra tokens allowed past the reasoning budget before the end sequence is forced; natural ends and paragraph boundaries inside the grace region are respected (default: 0)",
+        [](common_params & params, int value) {
+            if (value < 0) { throw std::invalid_argument("invalid value"); }
+            params.sampling.reasoning_budget_grace_tokens = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_THINK_BUDGET_GRACE_TOKENS"));
+    add_opt(common_arg(
         {"--reasoning-preserve"},
         {"--no-reasoning-preserve"},
         "preserve reasoning trace in the full history, not just the last assistant message (default: template default)\n"

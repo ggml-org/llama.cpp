@@ -292,6 +292,11 @@ struct common_params_sampling {
     std::string               reasoning_budget_message;        // message injected before end tag when budget exhausted
     bool                      reasoning_control = false;       // create the budget sampler on demand so reasoning can be ended at runtime
 
+    // soft reasoning-budget guidance (local patch; no-op unless reasoning_budget_tokens > 0)
+    float       reasoning_budget_soft_ratio   = -1.0f; // fraction of the budget after which the soft message may be injected; < 0 or > 1 disables
+    std::string reasoning_budget_soft_message;         // wrap-up hint injected once near a line boundary after the soft threshold
+    int32_t     reasoning_budget_grace_tokens = 0;     // extra tokens allowed past the budget before the end sequence is forced
+
     bool backend_sampling = false;
 
     // print the parameters into a string
