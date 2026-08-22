@@ -23,6 +23,7 @@
 #include "kai_matmul_clamp_f32_qsi8d32p1x8_qsi4c32p8x8_1x8_sve_dotprod.h"
 #include "kai_matmul_clamp_f32_f16p1vlx2_qsi4c32p4vlx2_1vlx4vl_sme2_mopa.h"
 #include "kai_matmul_clamp_f32_f32p2vlx1_f32p2vlx1biasf32_sme2_mopa.h"
+#include "kai_matmul_clamp_f32_f32_f32p2vlx1b_1x16vl_sme2_mla.h"
 #include "kai_matmul_clamp_f32_f32p2vlx1_f32p2vlx1b_2vlx2vl_sme_mopa.h"
 
 #include "kai_lhs_pack_bf16p2vlx2_f32_sme.h"
@@ -74,6 +75,21 @@ static inline void kernel_run_fn10(size_t m, size_t n, size_t k, size_t /*bl*/,
                                    size_t dst_stride_row, size_t dst_stride_col,
                                    float clamp_min, float clamp_max) {
     Fn(m, n, k, lhs, rhs, dst, dst_stride_row, dst_stride_col, clamp_min, clamp_max);
+}
+
+template <void (*Fn)(size_t, size_t, size_t, const void *, size_t, const void *, void *, size_t, size_t, float, float)>
+static inline void kernel_run_lhs_stride_fn10(size_t       m,
+                                              size_t       n,
+                                              size_t       k,
+                                              size_t       lhs_stride,
+                                              const void * lhs,
+                                              const void * rhs,
+                                              void *       dst,
+                                              size_t       dst_stride_row,
+                                              size_t       dst_stride_col,
+                                              float        clamp_min,
+                                              float        clamp_max) {
+    Fn(m, n, k, lhs, lhs_stride, rhs, dst, dst_stride_row, dst_stride_col, clamp_min, clamp_max);
 }
 
 template<void(*Fn)(size_t,size_t,size_t,const void*,const void*,float*,size_t,size_t,float,float)>
@@ -947,25 +963,25 @@ static ggml_kleidiai_kernels ggml_kleidiai_kernels_f32[] = {
             /* .packed_size_ex        = */ &lhs_ps_fn5<kai_get_lhs_packed_size_lhs_pack_f32p2vlx1_f32_sme>,
             /* .pack_func_ex          = */ &lhs_pack_void_fn9<kai_run_lhs_pack_f32p2vlx1_f32_sme>,
         },
-        /* SME GEMV */
+        /* SME2 GEMV */
         {
-            /* .get_m_step            = */ kai_get_m_step_matmul_clamp_f32_f32p2vlx1_f32p2vlx1biasf32_sme2_mopa,
-            /* .get_n_step            = */ kai_get_n_step_matmul_clamp_f32_f32p2vlx1_f32p2vlx1biasf32_sme2_mopa,
-            /* .get_mr                = */ kai_get_mr_matmul_clamp_f32_f32p2vlx1_f32p2vlx1biasf32_sme2_mopa,
-            /* .get_nr                = */ kai_get_nr_matmul_clamp_f32_f32p2vlx1_f32p2vlx1biasf32_sme2_mopa,
-            /* .get_kr                = */ kai_get_kr_matmul_clamp_f32_f32p2vlx1_f32p2vlx1biasf32_sme2_mopa,
-            /* .get_sr                = */ kai_get_sr_matmul_clamp_f32_f32p2vlx1_f32p2vlx1biasf32_sme2_mopa,
-            /* .get_dst_offset        = */ kai_get_dst_offset_matmul_clamp_f32_f32p2vlx1_f32p2vlx1biasf32_sme2_mopa,
-            /* .get_dst_size          = */ kai_get_dst_size_matmul_clamp_f32_f32p2vlx1_f32p2vlx1biasf32_sme2_mopa,
-            /* .get_lhs_offset_ex     = */ nullptr,
-            /* .get_rhs_packed_offset_ex = */ nullptr,
-            /* .run_kernel_ex         = */ nullptr,
+            /* .get_m_step            = */ kai_get_m_step_matmul_clamp_f32_f32_f32p2vlx1b_1x16vl_sme2_mla,
+            /* .get_n_step            = */ kai_get_n_step_matmul_clamp_f32_f32_f32p2vlx1b_1x16vl_sme2_mla,
+            /* .get_mr                = */ kai_get_m_step_matmul_clamp_f32_f32_f32p2vlx1b_1x16vl_sme2_mla,
+            /* .get_nr                = */ kai_get_nr_matmul_clamp_f32_f32_f32p2vlx1b_1x16vl_sme2_mla,
+            /* .get_kr                = */ kai_get_kr_matmul_clamp_f32_f32_f32p2vlx1b_1x16vl_sme2_mla,
+            /* .get_sr                = */ kai_get_sr_matmul_clamp_f32_f32_f32p2vlx1b_1x16vl_sme2_mla,
+            /* .get_dst_offset        = */ kai_get_dst_offset_matmul_clamp_f32_f32_f32p2vlx1b_1x16vl_sme2_mla,
+            /* .get_dst_size          = */ kai_get_dst_size_matmul_clamp_f32_f32_f32p2vlx1b_1x16vl_sme2_mla,
+            /* .get_lhs_offset_ex     = */ &kernel_offs_fn2<kai_get_lhs_offset_matmul_clamp_f32_f32_f32p2vlx1b_1x16vl_sme2_mla>,
+            /* .get_rhs_packed_offset_ex = */ &kernel_offs_fn2<kai_get_rhs_packed_offset_matmul_clamp_f32_f32_f32p2vlx1b_1x16vl_sme2_mla>,
+            /* .run_kernel_ex         = */ &kernel_run_lhs_stride_fn10<kai_run_matmul_clamp_f32_f32_f32p2vlx1b_1x16vl_sme2_mla>,
         },
         /* .gemv_lhs_info = */ {
-            /* .get_offset            = */ kai_get_lhs_offset_lhs_pack_f32p2vlx1_f32_sme,
-            /* .get_packed_offset_ex  = */ &lhs_offs_fn5<kai_get_lhs_packed_offset_lhs_pack_f32p2vlx1_f32_sme>,
-            /* .packed_size_ex        = */ &lhs_ps_fn5<kai_get_lhs_packed_size_lhs_pack_f32p2vlx1_f32_sme>,
-            /* .pack_func_ex          = */ &lhs_pack_void_fn9<kai_run_lhs_pack_f32p2vlx1_f32_sme>,
+            /* .get_offset            = */ nullptr,
+            /* .get_packed_offset_ex  = */ nullptr,
+            /* .packed_size_ex        = */ nullptr,
+            /* .pack_func_ex          = */ nullptr,
         },
         /* .rhs_info = */ {
             /* .packed_stride         = */ nullptr,

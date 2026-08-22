@@ -696,6 +696,15 @@ class tensor_traits : public ggml::cpu::tensor_traits {
         }
 
         if (op->src[0]->type == GGML_TYPE_F32) {
+            ggml_kleidiai_kernels * primary     = kernel_chain[0];
+            kernel_info *           gemv_kernel = primary ? &primary->gemv : nullptr;
+            if (is_gemv && op->src[1]->nb[0] == (int64_t) sizeof(float) && gemv_kernel &&
+                gemv_kernel->get_lhs_offset_ex && gemv_kernel->get_rhs_packed_offset_ex &&
+                gemv_kernel->run_kernel_ex && gemv_kernel->get_dst_offset) {
+                size = 0;
+                return true;
+            }
+
             size_t cursor = 0;
             bool any_slot = false;
 
@@ -811,12 +820,25 @@ class tensor_traits : public ggml::cpu::tensor_traits {
             return false;
         }
 
-        kernel_info * kernel        = &kernels->gemm;
+        const size_t k = ne00;
+        const size_t m = ne11;
+        const size_t n = ne01;
+        const bool use_gemv = m == 1 && src1->nb[0] == (int64_t) sizeof(float) &&
+                              kernels->gemv.get_lhs_offset_ex &&
+                              kernels->gemv.get_rhs_packed_offset_ex &&
+                              kernels->gemv.run_kernel_ex &&
+                              kernels->gemv.get_dst_offset;
+
+        kernel_info * kernel        = use_gemv ? &kernels->gemv : &kernels->gemm;
         lhs_packing_info * lhs_info = &kernels->gemm_lhs_info;
 
-        if (!kernel || !lhs_info || !lhs_info->get_offset || !lhs_info->get_packed_offset_ex ||
-            !lhs_info->packed_size_ex || !lhs_info->pack_func_ex ||
+        if (!kernel || !kernel->get_lhs_offset_ex ||
             !kernel->get_rhs_packed_offset_ex || !kernel->run_kernel_ex || !kernel->get_dst_offset) {
+            return false;
+        }
+
+        if (!use_gemv && (!lhs_info || !lhs_info->get_offset || !lhs_info->get_packed_offset_ex ||
+                          !lhs_info->packed_size_ex || !lhs_info->pack_func_ex)) {
             return false;
         }
 
@@ -832,16 +854,14 @@ class tensor_traits : public ggml::cpu::tensor_traits {
         const int nth = params->nth > 0 ? params->nth : 1;
         const int ith = params->ith;
 
-        const size_t k = ne00;
-        const size_t m = ne11;
-        const size_t n = ne01;
-
         const size_t mr = kernel->get_mr();
         const size_t kr = kernel->get_kr();
         const size_t sr = kernel->get_sr();
 
-        const size_t lhs_packed_size = lhs_info->packed_size_ex(m, k, 0, mr, kr, sr);
-        GGML_ASSERT(lhs_packed_size <= params->wsize);
+        const size_t lhs_packed_size = use_gemv ? 0 : lhs_info->packed_size_ex(m, k, 0, mr, kr, sr);
+        if (!use_gemv) {
+            GGML_ASSERT(lhs_packed_size <= params->wsize);
+        }
 
         uint8_t * lhs_packed   = static_cast<uint8_t *>(params->wdata);
         const size_t dst_stride = dst->nb[1];
@@ -853,7 +873,7 @@ class tensor_traits : public ggml::cpu::tensor_traits {
             const uint8_t * lhs_batch_base = static_cast<const uint8_t *>(src1->data) + batch_idx * src1->nb[2];
             uint8_t * dst_batch_base = static_cast<uint8_t *>(dst->data) + batch_idx * dst->nb[2];
 
-            {
+            if (!use_gemv) {
                 const int64_t m_roundup_mr = kai_roundup((int64_t)m, (int64_t)mr);
                 int64_t max_threads = mr ? (m_roundup_mr / (int64_t)mr) : nth;
                 max_threads = std::max<int64_t>(1, max_threads);
@@ -903,15 +923,17 @@ class tensor_traits : public ggml::cpu::tensor_traits {
                 const size_t n_to_process = std::min(chunk_cols, n - n_start);
 
                 if (n_to_process > 0) {
-                    const size_t lhs_packed_offset = lhs_info->get_packed_offset_ex(0, k, 0, mr, kr, sr);
+                    const size_t lhs_offset = use_gemv ? kernel->get_lhs_offset_ex(0, k, 0)
+                                                       : lhs_info->get_packed_offset_ex(0, k, 0, mr, kr, sr);
                     const size_t rhs_packed_offset = kernel->get_rhs_packed_offset_ex(n_start, k, 0);
                     const size_t dst_offset        = kernel->get_dst_offset(0, n_start, dst_stride);
 
-                    const void * lhs_ptr = lhs_packed + lhs_packed_offset;
+                    const void * lhs_ptr = use_gemv ? lhs_batch_base + lhs_offset
+                                                    : lhs_packed + lhs_offset;
                     const void * rhs_ptr = rhs_base + rhs_packed_offset;
                     float * dst_ptr      = reinterpret_cast<float *>(dst_batch_base + dst_offset);
 
-                    kernel->run_kernel_ex(m, n_to_process, k, 0,
+                    kernel->run_kernel_ex(m, n_to_process, k, use_gemv ? src1->nb[1] : 0,
                                           lhs_ptr,
                                           rhs_ptr,
                                           dst_ptr,

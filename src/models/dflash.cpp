@@ -821,17 +821,9 @@ llama_model_dflash::graph_dsv4::graph_dsv4(const llama_model & model, const llm_
             kv = build_norm(kv, layer.attn_kv_norm, nullptr, LLM_NORM_RMS, il);
             kv = ggml_reshape_3d(ctx0, kv, n_embd_head, 1, n_tokens);
 
-            ggml_tensor * kv_nope = ggml_view_3d(ctx0, kv, n_embd_head_nope, 1, n_tokens,
-                    ggml_row_size(kv->type, n_embd_head),
-                    ggml_row_size(kv->type, n_embd_head),
-                    0);
-            ggml_tensor * kv_pe = ggml_view_3d(ctx0, kv, n_embd_head_rope, 1, n_tokens,
-                    ggml_row_size(kv->type, n_embd_head),
-                    ggml_row_size(kv->type, n_embd_head),
-                    ggml_row_size(kv->type, n_embd_head_nope));
-            kv_pe = ggml_rope_ext(ctx0, kv_pe, inp_pos, nullptr, n_embd_head_rope, rope_type, 0,
+            kv = ggml_rope_ext(ctx0, kv, inp_pos, nullptr, n_embd_head_rope, rope_type, 0,
                     freq_base, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
-            kv = ggml_concat(ctx0, kv_nope, kv_pe, 0);
+            kv = ggml_rope_set_offset(kv, n_embd_head_nope);
             cb(kv, "kv_injected", il);
 
             if (inp_attn->self_k_rot_swa) {
