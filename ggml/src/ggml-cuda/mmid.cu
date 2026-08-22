@@ -41,21 +41,30 @@ static __global__ void mm_ids_helper(
     if constexpr (n_expert_used_template == 0) {
         // Generic implementation:
         for (int it = 0; it < n_tokens; ++it) {
-            int iex_used = -1; // The index at which the expert is used, if any.
-            for (int iex = threadIdx.x; iex < n_expert_used; iex += warp_size) {
-                const int expert_used = ids[it*si1 + iex];
+            // A token can use the same expert more than once, so a single thread must not collapse
+            // multiple uses into one: give every use its own iteration and its own slot.
+            for (int iex0 = 0; iex0 < n_expert_used; iex0 += warp_size) {
+                const int iex = iex0 + threadIdx.x; // The index at which the expert is used, if any.
+                const int expert_used = iex < n_expert_used ? ids[it*si1 + iex] : INT_MAX;
+                const int iex_used = expert_used == expert ? iex : -1;
                 nex_prev += expert_used < expert;
-                if (expert_used == expert) {
-                    iex_used = iex;
+
+                // Count how many times the threads in this warp have used the expert:
+                int it_compact_add_self = iex_used != -1 ? 1 : 0;
+#pragma unroll
+                for (int offset = 1; offset < warp_size; offset *= 2) {
+                    const int tmp = __shfl_up_sync(0xFFFFFFFF, it_compact_add_self, offset, warp_size);
+                    if (threadIdx.x >= static_cast<unsigned int>(offset)) {
+                        it_compact_add_self += tmp;
+                    }
                 }
-            }
+                const int rank_in_token = it_compact_add_self - (iex_used != -1 ? 1 : 0);
 
-            if (iex_used != -1) {
-                store[it_compact] = mm_ids_helper_store(it, iex_used);
-            }
+                if (iex_used != -1) {
+                    store[it_compact + rank_in_token] = mm_ids_helper_store(it, iex_used);
+                }
 
-            if (warp_reduce_any<warp_size>(iex_used != -1)) {
-                it_compact++;
+                it_compact += __shfl_sync(0xFFFFFFFF, it_compact_add_self, warp_size - 1, warp_size);
             }
         }
     } else {
@@ -71,8 +80,17 @@ static __global__ void mm_ids_helper(
             const int iex_used = expert_used == expert ? iex : -1;
             nex_prev += expert_used < expert;
 
-            // Whether the threads at this token position have used the expert:
-            const int it_compact_add_self = warp_reduce_any<neu_padded>(iex_used != -1);
+            // A token can use the same expert more than once, so count how many times the threads at this token position have used it:
+            int it_compact_add_self = iex_used != -1 ? 1 : 0;
+#pragma unroll
+            for (int offset = 1; offset < neu_padded; offset *= 2) {
+                const int tmp = __shfl_up_sync(0xFFFFFFFF, it_compact_add_self, offset, neu_padded);
+                if ((threadIdx.x % neu_padded) >= static_cast<unsigned int>(offset)) {
+                    it_compact_add_self += tmp;
+                }
+            }
+            const int rank_in_token = it_compact_add_self - (iex_used != -1 ? 1 : 0);
+            it_compact_add_self = __shfl_sync(0xFFFFFFFF, it_compact_add_self, neu_padded - 1, neu_padded);
 
             // Do a scan over threads at lower token positions in warp to get the correct index for writing data:
             int it_compact_add_lower = 0;
@@ -85,7 +103,7 @@ static __global__ void mm_ids_helper(
             }
 
             if (iex_used != -1) {
-                store[it_compact + it_compact_add_lower] = mm_ids_helper_store(it, iex_used);
+                store[it_compact + it_compact_add_lower + rank_in_token] = mm_ids_helper_store(it, iex_used);
             }
 
             // The thread with the highest index in the warp always has the sum over the whole warp, use it to increment all threads:
@@ -134,7 +152,9 @@ static void launch_mm_ids_helper(
 
     const dim3 num_blocks(n_experts, 1, 1);
     const dim3 block_size(warp_size, 1, 1);
-    const size_t nbytes_shared = n_tokens*sizeof(mm_ids_helper_store);
+    // A token can use the same expert more than once, so one expert needs room for every use of every
+    // token, not for one use per token:
+    const size_t nbytes_shared = size_t(n_tokens)*n_expert_used_var*sizeof(mm_ids_helper_store);
     GGML_ASSERT(nbytes_shared <= smpbo);
     mm_ids_helper<n_expert_used_template><<<num_blocks, block_size, nbytes_shared, stream>>>
         (ids, ids_src1, ids_dst, expert_bounds, n_tokens, n_expert_used_var, nchannels_y, si1, sis1, write_inverse);
