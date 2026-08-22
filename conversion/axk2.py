@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from typing import Iterable, TYPE_CHECKING
+import re
+
+from typing import Callable, Iterable, TYPE_CHECKING
 
 import torch
 
@@ -15,13 +17,49 @@ class AXK2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.AXK2
 
     merge_expert = True
+    supports_mtp_export = True
 
     _experts: list[dict[str, Tensor]] | None = None
+    _n_main_layers: int | None = None
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.block_count = self.hparams["num_hidden_layers"] + self.hparams.get("num_nextn_predict_layers", 0)
+        num_nextn = self.hparams.get("num_nextn_predict_layers", 0) or 0
+        if self.mtp_only and num_nextn == 0:
+            raise ValueError("--mtp requested but the model has no NextN/MTP layers (num_nextn_predict_layers == 0)")
+        # treat a checkpoint without NextN layers the same as --no-mtp
+        self.skip_mtp = self.no_mtp or num_nextn == 0
+        self.block_count = self.hparams["num_hidden_layers"]
+        if not self.skip_mtp:
+            self.block_count += num_nextn
         self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
+
+    def index_tensors(self, remote_hf_model_id: str | None = None):
+        type(self)._n_main_layers = self.hparams["num_hidden_layers"]
+        return super().index_tensors(remote_hf_model_id=remote_hf_model_id)
+
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        if (titem := super().filter_tensors(item)) is None:
+            return None
+        name, gen = titem
+
+        # the NextN/MTP block is appended past num_hidden_layers
+        # (model.layers.61 -> blk.61 in the 62-block file)
+        assert cls._n_main_layers is not None
+        is_mtp = (m := re.match(r"model\.layers\.(\d+)\.", name)) is not None and int(m.group(1)) >= cls._n_main_layers
+
+        # --no-mtp: drop the appended NextN block entirely.
+        if is_mtp and cls.no_mtp:
+            return None
+        # --mtp: keep ONLY NextN-block tensors plus the shared embeddings/
+        # norm/lm_head (so the resulting GGUF carries just the draft head).
+        if cls.mtp_only and not is_mtp and name not in (
+            "model.embed_tokens.weight", "model.norm.weight", "lm_head.weight",
+        ):
+            return None
+
+        return name, gen
 
     def set_vocab(self):
         # A.X-K2 does not prepend BOS: the tokenizer has no post-processor and the chat template
@@ -63,8 +101,8 @@ class AXK2Model(TextModel):
             self.gguf_writer.add_rope_scaling_yarn_log_mul(0.1 * rope_mscale_all)
 
         # NextN/MTP prediction layers
-        if (num_nextn_predict_layers := hparams.get("num_nextn_predict_layers")) is not None:
-            self.gguf_writer.add_nextn_predict_layers(num_nextn_predict_layers)
+        if not self.skip_mtp:
+            self.gguf_writer.add_nextn_predict_layers(hparams["num_nextn_predict_layers"])
 
         # DSA (sparse attention) indexer parameters
         self.gguf_writer.add_indexer_head_count(hparams["index_n_heads"])
