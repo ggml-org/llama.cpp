@@ -1,0 +1,1 @@
+huggingface_hub~=1.26.0
