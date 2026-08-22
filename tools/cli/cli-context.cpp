@@ -1,4 +1,5 @@
 #include "cli-context.h"
+#include "cli-params.h"
 #include "cli-ui.h"
 
 #include "arg.h"
@@ -414,7 +415,7 @@ bool cli_context::generate_completion(generated_content & content_out, cli_timin
 int cli_context::run() {
     const bool conversation = params.conversation_mode != COMMON_CONVERSATION_MODE_DISABLED;
 
-    if (!conversation && params.prompt.empty()) {
+    if (cli_run_requires_prompt(params)) {
         ui::show_error(
             "non-conversation mode requires a prompt (-p)",
             "omit -no-cnv/--no-conversation for interactive chat, or use llama-completion"
