@@ -75,7 +75,15 @@ class AXK2Model(TextModel):
         super().set_gguf_parameters()
         hparams = self.hparams
 
-        self.gguf_writer.add_leading_dense_block_count(hparams["first_k_dense_replace"])
+        # transformers' native AXK2Config consumes first_k_dense_replace into the
+        # mlp_layer_types list ("dense"/"sparse" per layer), so derive it back when
+        # the raw key is gone; the leading dense block is the prefix of "dense" entries
+        first_k_dense_replace = hparams.get("first_k_dense_replace")
+        if first_k_dense_replace is None:
+            mlp_layer_types = hparams["mlp_layer_types"]
+            first_k_dense_replace = next(
+                (i for i, t in enumerate(mlp_layer_types) if t != "dense"), len(mlp_layer_types))
+        self.gguf_writer.add_leading_dense_block_count(first_k_dense_replace)
         self.gguf_writer.add_vocab_size(hparams["vocab_size"])
         self.gguf_writer.add_q_lora_rank(hparams["q_lora_rank"])
 
