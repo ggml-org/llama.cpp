@@ -819,8 +819,6 @@ ggml_tensor * clip_graph::build_attn(
 }
 
 // implementation of the 2D RoPE without adding a new op in ggml
-// this is not efficient (use double the memory), but works on all backends
-// TODO: there was a more efficient which relies on ggml_view and ggml_rope_ext_inplace, but the rope inplace does not work well with non-contiguous tensors ; we should fix that and revert back to the original implementation in https://github.com/ggml-org/llama.cpp/pull/13065
 ggml_tensor * clip_graph::build_rope_2d(
     ggml_context * ctx0,
     ggml_tensor * cur,
@@ -829,9 +827,7 @@ ggml_tensor * clip_graph::build_rope_2d(
     const float freq_base,
     const bool interleave_freq
 ) {
-    const int64_t n_dim  = cur->ne[0];
-    const int64_t n_head = cur->ne[1];
-    const int64_t n_pos  = cur->ne[2];
+    const int64_t n_dim = cur->ne[0];
 
     // for example, if we have cur tensor of shape (n_dim=8, n_head, n_pos)
     // we will have a list of 4 inv_freq: 1e-0, 1e-1, 1e-2, 1e-3
@@ -845,46 +841,30 @@ ggml_tensor * clip_graph::build_rope_2d(
                                 ? std::pow(freq_base, (float)-2/n_dim)
                                 : 1.0;
 
-    // first half
-    ggml_tensor * first;
-    {
-        first = ggml_view_3d(ctx0, cur,
-            n_dim/2, n_head, n_pos,
-            cur->nb[1],
-            cur->nb[2],
-            0);
-        first = ggml_rope_ext(
-            ctx0,
-            first,
-            pos_a,      // positions
-            nullptr,    // freq factors
-            n_dim/2,    // n_dims
-            0, 0, freq_base,
-            1.0f, 0.0f, 1.0f, 0.0f, 0.0f
-        );
-    }
+    // first half, dims [0, n_dim/2)
+    cur = ggml_rope_ext(
+        ctx0,
+        cur,
+        pos_a,      // positions
+        nullptr,    // freq factors
+        n_dim/2,    // n_dims
+        0, 0, freq_base,
+        1.0f, 0.0f, 1.0f, 0.0f, 0.0f
+    );
 
-    // second half
-    ggml_tensor * second;
-    {
-        second = ggml_view_3d(ctx0, cur,
-            n_dim/2, n_head, n_pos,
-            cur->nb[1],
-            cur->nb[2],
-            n_dim/2 * ggml_element_size(cur));
-        second = ggml_rope_ext(
-            ctx0,
-            second,
-            pos_b,      // positions
-            nullptr,    // freq factors
-            n_dim/2,    // n_dims
-            0, 0, freq_base,
-            freq_scale_odd,
-            0.0f, 1.0f, 0.0f, 0.0f
-        );
-    }
+    // second half, dims [n_dim/2, n_dim)
+    cur = ggml_rope_ext(
+        ctx0,
+        cur,
+        pos_b,      // positions
+        nullptr,    // freq factors
+        n_dim/2,    // n_dims
+        0, 0, freq_base,
+        freq_scale_odd,
+        0.0f, 1.0f, 0.0f, 0.0f
+    );
+    cur = ggml_rope_set_offset(cur, n_dim/2);
 
-    cur = ggml_concat(ctx0, first, second, 0);
     return cur;
 }
 
