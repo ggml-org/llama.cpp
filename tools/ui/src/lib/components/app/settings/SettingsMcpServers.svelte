@@ -78,8 +78,8 @@
 		</div>
 	{:else}
 		<div
-			class="grid gap-3 {className}"
-			style="grid-template-columns: repeat(auto-fill, minmax(min(25rem, calc(100dvw - 2rem)), 1fr));"
+			class="grid gap-4 {className}"
+			style="grid-template-columns: repeat(auto-fill, minmax(min(25rem, calc(100dvw - 4rem)), 1fr));"
 		>
 			{#each servers as server (server.id)}
 				{#if isServerPending(server.id, server.enabled)}
