@@ -749,13 +749,13 @@ bool ggml_et_op_mul_mat(ggml_backend_et_device_context * dev_ctx,
 
     } else if (node->type == GGML_TYPE_F32 && node->src[0]->type == GGML_TYPE_F32 &&
                node->src[1]->type == GGML_TYPE_F32 && node->ne[0] % 16 == 0 && node->src[0]->ne[0] % 16 == 0 &&
-               node->src[0]->ne[1] % 16 == 0 && node->src[1]->ne[0] != 1) {  // GEMV is faster with the generic path
+               node->src[0]->ne[1] % 16 == 0 && node->src[1]->ne[1] >= 7) {  // N < 7: vec_dot faster (measured)
 
         kernel_name    = "mul_mat_f32_matrix_engine";
         src0_type_name = "F32";
     } else if (node->type == GGML_TYPE_F32 && node->src[0]->type == GGML_TYPE_F32 &&
                (node->src[1]->type == GGML_TYPE_F16 || node->src[1]->type == GGML_TYPE_F32)) {
-        kernel_name    = "mul_mat_f32";
+        kernel_name    = "mul_mat_f32";  // N < 7, or shape doesn't fit the matrix-engine tiling
         src0_type_name = "F32";
     } else {
         GGML_LOG_ERROR("ET: MUL_MAT operation with unsupported types: dst=%s src0=%s src1=%s\n",
