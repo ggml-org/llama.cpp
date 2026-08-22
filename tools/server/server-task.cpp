@@ -73,6 +73,7 @@ json task_params::to_json(bool only_metrics) const {
             {"n_discard",                 n_discard},
             {"ignore_eos",                sampling.ignore_eos},
             {"stream",                    stream},
+            {"echo",                      echo},
             {"n_probs",                   sampling.n_probs},
             {"min_keep",                  sampling.min_keep},
             {"chat_format",               common_chat_format_name(chat_parser_params.format)},
@@ -127,6 +128,7 @@ json task_params::to_json(bool only_metrics) const {
         {"n_discard",                 n_discard},
         {"ignore_eos",                sampling.ignore_eos},
         {"stream",                    stream},
+        {"echo",                      echo},
         {"logit_bias",                format_logit_bias(sampling.logit_bias)},
         {"n_probs",                   sampling.n_probs},
         {"min_keep",                  sampling.min_keep},
@@ -376,19 +378,67 @@ json server_task_result_cmpl_final::usage_json_oaicompat() {
 json server_task_result_cmpl_final::to_json_oaicompat() {
     std::time_t t = std::time(0);
     json logprobs = json(nullptr); // OAI default to null
-    if (!stream && probs_output.size() > 0) {
-        logprobs = json{
-            {"content", completion_token_output::probs_vector_to_json(probs_output, post_sampling_probs)},
+    if (!stream && (probs_output.size() > 0 || prompt_probs_output.size() > 0)) {
+        json tokens = json::array();
+        json token_logprobs = json::array();
+        json top_logprobs = json::array();
+        json text_offset = json::array();
+
+        size_t cur_offset = 0;
+
+        for (size_t i = 0; i < prompt_probs_output.size(); i++) {
+            const auto & ptok = prompt_probs_output[i];
+            tokens.push_back(ptok.text_to_send);
+            text_offset.push_back(cur_offset);
+            cur_offset += ptok.text_to_send.size();
+
+            if (i == 0) {
+                token_logprobs.push_back(json(nullptr));
+                top_logprobs.push_back(json(nullptr));
+            } else {
+                token_logprobs.push_back(post_sampling_probs ? ptok.prob : completion_token_output::logarithm(ptok.prob));
+                json top = json::object();
+                for (const auto & top_p : ptok.probs) {
+                    std::string txt(top_p.txt);
+                    txt.resize(validate_utf8(txt));
+                    top[txt] = post_sampling_probs ? top_p.prob : completion_token_output::logarithm(top_p.prob);
+                }
+                top_logprobs.push_back(top);
+            }
+        }
+
+        for (size_t i = 0; i < probs_output.size(); i++) {
+            const auto & gtok = probs_output[i];
+            tokens.push_back(gtok.text_to_send);
+            text_offset.push_back(cur_offset);
+            cur_offset += gtok.text_to_send.size();
+
+            token_logprobs.push_back(post_sampling_probs ? gtok.prob : completion_token_output::logarithm(gtok.prob));
+            json top = json::object();
+            for (const auto & top_p : gtok.probs) {
+                std::string txt(top_p.txt);
+                txt.resize(validate_utf8(txt));
+                top[txt] = post_sampling_probs ? top_p.prob : completion_token_output::logarithm(top_p.prob);
+            }
+            top_logprobs.push_back(top);
+        }
+
+        logprobs = json {
+            {"tokens",         tokens},
+            {"token_logprobs", token_logprobs},
+            {"top_logprobs",   top_logprobs},
+            {"text_offset",    text_offset},
         };
     }
     json finish_reason = "length";
     if (stop == STOP_TYPE_WORD || stop == STOP_TYPE_EOS) {
         finish_reason = "stop";
     }
+    std::string text_out = generation_params.echo ? (prompt + content) : content;
     json res = json {
         {"choices",            json::array({
             json{
-                {"text",          content},
+                {"text",          text_out},
                 {"index",         index},
                 {"logprobs",      logprobs},
                 {"finish_reason", finish_reason},
