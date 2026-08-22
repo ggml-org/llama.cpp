@@ -186,7 +186,24 @@ static void init_tensor_kq_mask(ggml_tensor * tensor, float min = -1.0f, float m
 
     ggml_fp32_to_fp16_row(data_f32.data(), data_f16.data(), ne0*ne1*ne2*ne3);
 
-    ggml_backend_tensor_set(tensor, data_f16.data(), 0, data_f16.size()*sizeof(ggml_fp16_t));
+    if (ggml_is_contiguous(tensor)) {
+        ggml_backend_tensor_set(tensor, data_f16.data(), 0, data_f16.size()*sizeof(ggml_fp16_t));
+        return;
+    }
+
+    // scatter the rows to their strides, leaving any padding zeroed
+    GGML_TENSOR_LOCALS(size_t, nb, tensor, nb);
+
+    std::vector<uint8_t> data(ggml_nbytes(tensor), 0);
+    for (int32_t i3 = 0; i3 < ne3; ++i3) {
+        for (int32_t i2 = 0; i2 < ne2; ++i2) {
+            for (int32_t i1 = 0; i1 < ne1; ++i1) {
+                const size_t src = ((size_t)(i3*ne2 + i2)*ne1 + i1)*ne0;
+                memcpy(data.data() + i3*nb3 + i2*nb2 + i1*nb1, &data_f16[src], ne0*sizeof(ggml_fp16_t));
+            }
+        }
+    }
+    ggml_backend_tensor_set(tensor, data.data(), 0, data.size());
 }
 
 // generate a lower triangular matrix
@@ -7623,20 +7640,28 @@ struct input_tensor {
     ggml_type type;
     std::array<int64_t, 4> ne;
     std::array<size_t, 4> nb; // strides (0 = use default contiguous strides)
+    size_t view_offs = 0;
 };
+
+static std::array<size_t, 4> default_strides(const input_tensor & src) {
+    std::array<size_t, 4> nb;
+    nb[0] = ggml_type_size(src.type);
+    nb[1] = nb[0] * (src.ne[0] / ggml_blck_size(src.type));
+    nb[2] = nb[1] * src.ne[1];
+    nb[3] = nb[2] * src.ne[2];
+    return nb;
+}
+
+// strides to build the tensor with, resolving nb[0] == 0 to the contiguous defaults
+static std::array<size_t, 4> effective_strides(const input_tensor & src) {
+    return src.nb[0] == 0 ? default_strides(src) : src.nb;
+}
 
 static bool is_non_contiguous(const input_tensor & src) {
     if (src.nb[0] == 0) {
         return false;
     }
-    const size_t default_nb0 = ggml_type_size(src.type);
-    const size_t default_nb1 = default_nb0 * (src.ne[0] / ggml_blck_size(src.type));
-    const size_t default_nb2 = default_nb1 * src.ne[1];
-    const size_t default_nb3 = default_nb2 * src.ne[2];
-    return src.nb[0] != default_nb0 ||
-           src.nb[1] != default_nb1 ||
-           src.nb[2] != default_nb2 ||
-           src.nb[3] != default_nb3;
+    return src.nb != default_strides(src);
 }
 
 static std::string var_to_str(const std::vector<input_tensor>& sources) {
@@ -7647,6 +7672,9 @@ static std::string var_to_str(const std::vector<input_tensor>& sources) {
         oss << ggml_type_name(src.type) << "[" << src.ne[0] << "," << src.ne[1] << "," << src.ne[2] << "," << src.ne[3] << "]";
         if (is_non_contiguous(src)) {
             oss << "nb[" << src.nb[0] << "," << src.nb[1] << "," << src.nb[2] << "," << src.nb[3] << "]";
+        }
+        if (src.view_offs != 0) {
+            oss << "offs[" << src.view_offs << "]";
         }
         first = false;
     }
@@ -7698,20 +7726,23 @@ struct test_generic_op : public test_case {
         for (size_t i = 0; i < source_count; ++i) {
             const input_tensor& src = sources[i];
 
-            if (is_non_contiguous(src)) {
+            if (is_non_contiguous(src) || src.view_offs != 0) {
+                const std::array<size_t, 4> nb = effective_strides(src);
+
                 size_t total_size;
                 const size_t blck_size = ggml_blck_size(src.type);
                 if (blck_size == 1) {
                     total_size = ggml_type_size(src.type);
                     for (int d = 0; d < 4; d++) {
-                        total_size += (src.ne[d] - 1) * src.nb[d];
+                        total_size += (src.ne[d] - 1) * nb[d];
                     }
                 } else {
-                    total_size = src.ne[0] * src.nb[0] / blck_size;
+                    total_size = src.ne[0] * nb[0] / blck_size;
                     for (int d = 1; d < 4; d++) {
-                        total_size += (src.ne[d] - 1) * src.nb[d];
+                        total_size += (src.ne[d] - 1) * nb[d];
                     }
                 }
+                total_size += src.view_offs;
 
                 // Convert bytes to elements, padded to block size for quantized types
                 const size_t type_size = ggml_type_size(src.type);
@@ -7720,9 +7751,9 @@ struct test_generic_op : public test_case {
                 ggml_tensor * backing = ggml_new_tensor_1d(ctx, src.type, backing_elements);
                 source_tensors[i] = ggml_view_4d(ctx, backing,
                     src.ne[0], src.ne[1], src.ne[2], src.ne[3],
-                    src.nb[1], src.nb[2], src.nb[3], 0);
+                    nb[1], nb[2], nb[3], src.view_offs);
                 // nb[0] does not get set by view_4d, so set it manually
-                source_tensors[i]->nb[0] = src.nb[0];
+                source_tensors[i]->nb[0] = nb[0];
             } else {
                 source_tensors[i] = ggml_new_tensor_4d(ctx, src.type, src.ne[0], src.ne[1], src.ne[2], src.ne[3]);
             }
@@ -7766,6 +7797,7 @@ struct test_generic_op : public test_case {
         case GGML_OP_CPY:
             return 5e-4;
         case GGML_OP_SOFT_MAX:
+        case GGML_OP_LIGHTNING_INDEXER:
             return 1e-6;
         case GGML_OP_RWKV_WKV7:
             return 5e-3;
@@ -7790,6 +7822,46 @@ struct test_generic_op : public test_case {
             ggml_tensor * t = out->src[i];
             if (!t) {
                 break;
+            }
+
+            // LIGHTNING_INDEXER: src[3] is the KQ mask
+            if (op == GGML_OP_LIGHTNING_INDEXER && i == 3) {
+                init_tensor_kq_mask(t);
+                continue;
+            }
+
+            // init_tensor_uniform writes the elements contiguously, which does not
+            // reach the whole extent of the padded views these cases use. Fill the
+            // rows at their strides instead and leave the padding zeroed.
+            if (op == GGML_OP_LIGHTNING_INDEXER) {
+                std::vector<uint8_t> data(ggml_nbytes(t), 0);
+                std::vector<float> row(t->ne[0]);
+                std::vector<float> imatrix(t->ne[0], 1.0f);
+
+                for (int64_t i3 = 0; i3 < t->ne[3]; ++i3) {
+                    for (int64_t i2 = 0; i2 < t->ne[2]; ++i2) {
+                        for (int64_t i1 = 0; i1 < t->ne[1]; ++i1) {
+                            const size_t offset = i3*t->nb[3] + i2*t->nb[2] + i1*t->nb[1];
+                            const int64_t row_index = (i3*t->ne[2] + i2)*t->ne[1] + i1;
+                            for (int64_t i0 = 0; i0 < t->ne[0]; ++i0) {
+                                row[i0] = ((int) ((row_index*t->ne[0] + i0) % 31) - 15) / 16.0f;
+                            }
+
+                            if (t->type == GGML_TYPE_F32) {
+                                memcpy(data.data() + offset, row.data(), ggml_row_size(t->type, t->ne[0]));
+                            } else if (t->type == GGML_TYPE_F16) {
+                                ggml_fp32_to_fp16_row(row.data(), (ggml_fp16_t *) (data.data() + offset), t->ne[0]);
+                            } else if (t->type == GGML_TYPE_BF16) {
+                                ggml_fp32_to_bf16_row(row.data(), (ggml_bf16_t *) (data.data() + offset), t->ne[0]);
+                            } else {
+                                GGML_ASSERT(ggml_is_quantized(t->type));
+                                ggml_quantize_chunk(t->type, row.data(), data.data() + offset, 0, 1, t->ne[0], imatrix.data());
+                            }
+                        }
+                    }
+                }
+                ggml_backend_tensor_set(t, data.data(), 0, data.size());
+                continue;
             }
 
             // FLASH_ATTN_EXT: src[3] is the KQ mask
@@ -10114,8 +10186,29 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     }
 
     for (int kv : { 1, 7, 8, 63, 64, 65 }) {
-        for (ggml_type type_K : {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_BF16, GGML_TYPE_Q8_0, GGML_TYPE_Q5_1, GGML_TYPE_Q5_0, GGML_TYPE_Q4_1, GGML_TYPE_Q4_0}) {
+        for (ggml_type type_K : {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_BF16, GGML_TYPE_Q8_0, GGML_TYPE_Q5_1, GGML_TYPE_Q5_0, GGML_TYPE_Q4_1, GGML_TYPE_Q4_0, GGML_TYPE_IQ4_NL}) {
             test_cases.emplace_back(new test_lightning_indexer(128, 64, kv, 32, 4, 1, type_K));
+        }
+    }
+    // padded strides and a nonzero view offset on every source, for each K type
+    // and both mask layouts (broadcast over streams, and one mask per stream)
+    auto padded_k = [](ggml_type type_K) {
+        const size_t ts  = ggml_type_size(type_K);
+        const size_t row = ts * (128 / ggml_blck_size(type_K));
+        const size_t nb1 = row + ts;
+        const size_t nb2 = nb1 + ts;
+        return input_tensor{ type_K, { 128, 1, 64, 4 }, { ts, nb1, nb2, 64*nb2 + nb1 }, 256 };
+    };
+
+    for (ggml_type type_K : {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_BF16, GGML_TYPE_Q8_0, GGML_TYPE_Q5_1, GGML_TYPE_Q5_0, GGML_TYPE_Q4_1, GGML_TYPE_Q4_0, GGML_TYPE_IQ4_NL}) {
+        for (int64_t nm : { 1, 4 }) {
+            test_cases.emplace_back(new test_generic_op(
+                GGML_OP_LIGHTNING_INDEXER, GGML_TYPE_F32, { 64, 3, 1, 4 }, {}, {
+                    { GGML_TYPE_F32, { 128, 32, 3, 4 }, { 4, 528, 16928, 50848 }, 256 },
+                    padded_k(type_K),
+                    { GGML_TYPE_F32, {  32,  3, 1,  4 }, { 4, 144,   448,   480 }, 256 },
+                    { GGML_TYPE_F16, {  64,  3, 1, nm }, { 2, 144,   448,   480 }, 256 },
+                }, std::string("padded_") + ggml_type_name(type_K) + "_k_nm" + std::to_string(nm)));
         }
     }
 
