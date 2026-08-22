@@ -2552,7 +2552,13 @@ common_params common_base_params_to_speculative(const common_params & params) {
     common_params result = params;
 
     if (has_draft) {
-        result.devices               = params_spec.devices;
+        // Preserve the target device selection unless the draft devices were
+        // explicitly configured. Falling back to library auto-selection can
+        // put a shared DFlash tensor on a backend the draft scheduler does not
+        // own, which aborts on heterogeneous or multi-GPU systems.
+        if (!params_spec.devices.empty()) {
+            result.devices = params_spec.devices;
+        }
         result.model                 = params_spec.mparams;
         result.n_gpu_layers          = params_spec.n_gpu_layers;
         result.tensor_buft_overrides = params_spec.tensor_buft_overrides;
