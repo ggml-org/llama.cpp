@@ -35,7 +35,7 @@
 	let loadingIds = $derived(new Set(chatStore.getAllLoadingChats()));
 
 	function handleClose(id: string) {
-		void tabsStore.close(id, activeId ?? null);
+		void tabsStore.close(id, activeId);
 	}
 
 	function handleStop(id: string, event: MouseEvent) {
@@ -56,7 +56,7 @@
 
 	$effect(() => {
 		const currentIds = new Set(tabs.map((t) => t.id));
-		const addedIds = tabs.filter((t) => !previousTabIds.has(t.id)).map((t) => t.id);
+		const hasAddedTab = tabs.some((t) => !previousTabIds.has(t.id));
 
 		previousTabIds = currentIds;
 
@@ -65,7 +65,7 @@
 		previousActiveId = activeId;
 
 		// scroll when the active tab changes (a click) or when a new tab is added
-		if (addedIds.length === 0 && !activeChanged) return;
+		if (!hasAddedTab && !activeChanged) return;
 
 		// wait for the new tab to be laid out before scrolling to it
 		void tick().then(() => {
@@ -73,7 +73,7 @@
 				`[${UI_DATA_ATTRS.ACTIVE_TAB}]`
 			);
 
-			if (el && activeId) {
+			if (el) {
 				carousel.scrollToCenter(el);
 			}
 		});
@@ -82,8 +82,8 @@
 
 <nav
 	class="group sticky pl-1 top-0 z-10 hidden md:block chat-tabs-fade transition-[padding] duration-200 ease-in-out pt-3.25 {uiStore.isSidebarExpanded
-		? CHAT_TABS_MAX_WIDTH.COLLAPSED_SIDEBAR
-		: CHAT_TABS_MAX_WIDTH.EXPANDED_SIDEBAR}"
+		? CHAT_TABS_MAX_WIDTH.EXPANDED_SIDEBAR
+		: CHAT_TABS_MAX_WIDTH.COLLAPSED_SIDEBAR}"
 	aria-label="Open conversations"
 >
 	<div class="relative">

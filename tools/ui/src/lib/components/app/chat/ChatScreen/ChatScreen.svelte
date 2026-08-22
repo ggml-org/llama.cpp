@@ -73,9 +73,7 @@
 	});
 	const { handleKeydown } = useKeyboardShortcuts({
 		deleteActiveConversation: () => {
-			const conversation = conversationsStore.activeConversation;
-
-			if (conversation) {
+			if (conversationsStore.activeConversation) {
 				showDeleteDialog = true;
 			}
 		}
