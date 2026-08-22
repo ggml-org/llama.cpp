@@ -18,7 +18,9 @@ export GGML_HIP_RDNA2_AUTO=0
 | `GGML_HIP_GFX1030_GDN_SIBLING_FUSION` | unset: inherit HSA umbrella; explicit `0|1` override | Creates and uses fused Qwen3.5/Qwen3.6 DeltaNet sibling projection weights for their structural loader/graph gates. |
 | `GGML_HIP_GFX1030_Q8_CACHE` | unset: inherit HSA umbrella; explicit `0|1` override | Enables graph-owned reuse of exact standard Q8_1 TG activations and the eligible dual RMSNorm F32/Q8_1 producer. Q4_0 `sum_hi`, packed layouts, MMQ, and routed operations remain outside this cache contract. |
 | `GGML_HIP_GFX1030_Q8_CACHE_TELEMETRY` | unset / `0` | Reports eligible standard-MMVQ Q8_1 sources, safe reuses, cache hits, and storage. Telemetry does not allocate or reuse entries by itself. |
-| `GGML_HIP_GFX1030_P2P_ALLREDUCE` | unset / `auto`: expanded automatic policy | Selects the RDNA2 host-snapshot policy. The default `auto-expanded` policy enables the exact ordinary consumer-fused boundaries when their structural TP4 gate passes; `auto-basic` restores the former automatic control policy, and `0`, `off`, or `false` disables this host-snapshot feature while leaving other native paths enabled. Unsupported TP counts/topologies fall back to RCCL. |
+| `GGML_HIP_GFX1030_TARGET_BACKEND_SAMPLING` | unset: inherit native auto policy; explicit `0|off|false` disables | Automatically keeps eligible greedy native-MTP/DFlash target selection on the backend instead of materializing and scanning the full vocabulary on the CPU. |
+| `GGML_HIP_GFX1030_P2P_ALLREDUCE` | unset / `auto`: expanded automatic policy | Selects the RDNA2 host-snapshot policy. The default `auto-expanded` policy enables exact ordinary consumer-fused boundaries when their structural TP4 gate passes; `auto-basic` restores the former control policy, and `0`, `off`, or `false` disables this host-snapshot feature while leaving other native paths enabled. Unsupported TP counts/topologies fall back to RCCL. |
+| `GGML_HIP_GFX1030_MMVQ_W8_ROWS4` | unset: inherit native auto policy; explicit `0` retains rows2 | Automatically selects the certified Q4_0 DFlash2 M8 rows/block=4 MMVQ path; unsupported shapes retain rows2/stock fallback. |
 
 The selectors are read once during backend or model initialization. Set them before starting `llama-cli`, `llama-server`, `llama-bench`, or a test binary. Explicit `0` values are useful for A/B and fallback verification; an unset feature follows the automatic HSA profile when `HSA_OVERRIDE_GFX_VERSION=10.3.0` is active.
 
@@ -86,6 +88,22 @@ For GDN calls with more than one token, the native specialization has lane 0 loa
 
 Direct GDN measurements improved by about 7.9% at 256 tokens and 17.7% at 512 tokens. The GDN backend suite passed all 36 cases across all five tested backends. Full-model PP4096 measurements were sensitive to process order and GPU temperature, so only the direct-kernel improvement is claimed.
 
+### Greedy speculative target backend sampling
+
+The server automatically enables target-side backend sampling for validated native-MTP and DFlash workloads when the gfx1030 profile is active. Eligibility is structural: tensor-parallel mode over four ROCm devices; MTP `n_max=4` or DFlash `n_max=7`; vocabulary size at least 65,536; temperature-zero sampling with neutral filtering/penalty controls; no grammar, reasoning-budget sampler, requested probabilities, logit bias, or model-supplied suppress-token list. An explicit request-level `backend_sampling` value takes precedence. Unsupported backend chains fall back to CPU sampling, and `GGML_HIP_GFX1030_TARGET_BACKEND_SAMPLING=0` or `GGML_HIP_RDNA2_AUTO=0` disables automatic selection.
+
+For deterministic one-candidate distributions, the backend uses a compact `temperature(0) -> greedy` chain. The greedy backend maps a reduced candidate index back to its vocabulary token ID; a focused backend-sampler test covers this composition. This avoids both the full 248,320-entry CPU sampler pass and the mutable random-input tensor used by the general distribution sampler.
+
+On the fixed Qwen3.8-27B Q4_0 TP4 MTP workload, a fresh production-tree 5-request-per-leg A/B/B/A improved the pooled warm median from `65.7854` to `75.9478 tok/s` (**+15.45%**) with identical content/token hashes and draft/accepted counts. Median cycle time fell from `45.345` to `39.356 ms`; warm request E2E throughput improved from `59.37` to `66.69 tok/s`. A 1,024-token comparison was exact and measured `73.4756 -> 85.7679 tok/s`; a 20-request varied-prompt stress test, prompt-cache replay, graph-disabled execution, and two concurrent slots were exact.
+
+On the separately measured DFlash2 `n_max=7` workload, the dedicated chain improved pooled warm throughput from `62.3902` to `69.7006 tok/s` (**+11.72%**) and cycle time from `62.880` to `56.285 ms`. A 1,024-token comparison improved `69.8188 -> 79.0672 tok/s`; five-prompt and 20-request persistence runs, prompt-cache replay, fallback cases, and two concurrent slots were exact. The path is independent of target weight quantization, but Q4_0 is the production format validated end to end for both modes.
+
+### Certified Q4_0 M8 rows/block=4 MMVQ
+
+For native gfx1030 TP4 DFlash2 width-eight target verification, the dispatcher automatically uses rows/block=4 for the certified Q4_0 standard-Q8_1, non-routed shapes already covered by the rows2 whitelist. The kernel keeps width eight and the exact per-row K/lane/reduction order while halving the row-block grid. Unsupported shapes, IDs, packed layouts, non-Q4_0 types, non-native devices, and `GGML_HIP_GFX1030_MMVQ_W8_ROWS4=0` all fall back to the retained rows2/stock paths; `GGML_HIP_RDNA2_AUTO=0` disables it globally.
+
+All eight certified Q4_0 shapes were direct byte-exact. Production-equivalent DFlash2 safety checks covered 1,024-token output, five varied prompts, prompt-cache transitions, graph on/off, semantic fallback requests, and two concurrent slots. Same-work ABBA improved `69.7819 -> 70.8576 tok/s` (`+1.5414%`); this narrow path is retained as a safe incremental optimization, not as a >=5% material gain. Resource census is `128 VGPR / 128 SGPR`, one wave, no LDS/scratch.
+
 ## Secondary fusions
 
 ### Graph-scoped standard Q8_1 reuse
@@ -109,11 +127,11 @@ Set `GGML_HIP_GFX1030_Q8_CACHE_TELEMETRY=1` to print per-device source/hit summa
 
 ### TP4 consumer-fused host-snapshot boundaries
 
-When the RDNA2 automatic profile is enabled, unset `GGML_HIP_GFX1030_P2P_ALLREDUCE` (or `auto`) selects the validated expanded policy. Structurally eligible ordinary TP4 boundaries named `linear_attn_out-*`, `ffn_out-*`, and `attn_output-*` with contiguous F32 shape `[5120,1,1,1]` may use the existing exact consumer-fused host-snapshot kernel. It performs the validated mapped-host reduction and the dependent residual add/RMSNorm/mul in one kernel while preserving the F32 materialization and graph-prefix fallback contract. Set `GGML_HIP_GFX1030_P2P_ALLREDUCE=0` or `GGML_HIP_RDNA2_AUTO=0` to opt out.
+With the automatic `GGML_HIP_GFX1030_P2P_ALLREDUCE=auto-expanded` policy, structurally eligible ordinary TP4 boundaries named `linear_attn_out-*`, `ffn_out-*`, and `attn_output-*` with contiguous F32 shape `[5120,1,1,1]` may use the existing exact consumer-fused host-snapshot kernel. It performs the validated mapped-host reduction and the dependent residual add/RMSNorm/mul in one kernel while preserving the F32 materialization and graph-prefix fallback contract.
 
 The gate is structural and model-independent: it requires the existing four-rank RDNA2 topology/self-test, exact boundary shape/name, contiguous tensors, and an unshared `RESHAPE -> ADD -> RMS_NORM -> MUL` graph prefix. Any miss uses the ordinary host reduction or RCCL fallback. MTP width five (`ne[1]=5`) and external DFlash graphs do not activate this ordinary-only path.
 
-The isolated integrated candidate was byte/content exact across deterministic, prompt-cache, grammar, long/stateful, Flash Attention, graph-reuse, and fallback validation. A clean production-control versus integrated-candidate ABBA measured `53.4202 -> 53.8177 tok/s` (**+0.744%** mean; **+0.742%** median). This is a small measured gain, not a general communication redesign; the former automatic control policy remains available as `GGML_HIP_GFX1030_P2P_ALLREDUCE=auto-basic`.
+The isolated integrated candidate was byte/content exact across deterministic, prompt-cache, grammar, long/stateful, Flash Attention, graph-reuse, and fallback validation. A clean production-control versus integrated-candidate ABBA measured `53.4202 -> 53.8177 tok/s` (**+0.744%** mean; **+0.742%** median). This is a small measured gain, not a general communication redesign; the existing `auto` control policy remains available.
 
 ### Routed SwiGLU to Q8_1 staging
 

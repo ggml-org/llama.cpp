@@ -188,6 +188,25 @@ void test_w8_rows2_fallback_guards() {
     check(!ggml_cuda_mmvq_use_rdna2_w8_rows2(input), "unvalidated MXFP4 output shape accepted");
 }
 
+void test_w8_rows4_q4_0_guard() {
+    auto input = rows2_input(ggml_cuda_mmvq_rdna2_type::q4_0, 5120, 4352);
+    check(ggml_cuda_mmvq_use_rdna2_w8_rows4(input),
+            "certified Q4_0 rows4 shape rejected");
+
+    input.type = ggml_cuda_mmvq_rdna2_type::q4_k;
+    check(!ggml_cuda_mmvq_use_rdna2_w8_rows4(input),
+            "non-Q4_0 rows4 shape accepted");
+
+    input = rows2_input(ggml_cuda_mmvq_rdna2_type::q4_0, 5120, 4096);
+    check(!ggml_cuda_mmvq_use_rdna2_w8_rows4(input),
+            "uncertified Q4_0 rows4 shape accepted");
+
+    input = rows2_input(ggml_cuda_mmvq_rdna2_type::q4_0, 5120, 4352);
+    input.enabled = false;
+    check(!ggml_cuda_mmvq_use_rdna2_w8_rows4(input),
+            "disabled Q4_0 rows4 policy accepted");
+}
+
 } // namespace
 
 int main() {
@@ -198,6 +217,7 @@ int main() {
     test_nvfp4_scale_decode_policy();
     test_w8_rows2_validated_shapes();
     test_w8_rows2_fallback_guards();
+    test_w8_rows4_q4_0_guard();
     std::puts("RDNA2 MMVQ policy tests: PASS");
     return 0;
 }

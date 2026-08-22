@@ -72,8 +72,9 @@ struct task_params {
     std::vector<std::string> antiprompt;
     std::vector<std::string> response_fields;
 
-    bool timings_per_token   = false;
-    bool post_sampling_probs = false;
+    bool timings_per_token       = false;
+    bool post_sampling_probs     = false;
+    bool backend_sampling_set    = false; // explicitly provided by the request
 
     struct common_params_sampling sampling;
     struct common_params_speculative speculative;

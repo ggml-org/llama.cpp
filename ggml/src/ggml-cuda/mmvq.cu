@@ -735,7 +735,7 @@ static __global__ void mul_mat_vec_q(
     constexpr int qk  = ggml_cuda_type_traits<type>::qk;
     constexpr mmvq_parameter_table_id table_id = get_device_table_id();
     constexpr int nwarps = mmvq_calc_nwarps<type, q8_1_layout_block_size, nwarps_override>(ncols_dst, table_id);
-    static_assert(rows_per_block_override == 0 || rows_per_block_override == 2);
+    static_assert(rows_per_block_override == 0 || rows_per_block_override == 2 || rows_per_block_override == 4);
     constexpr int rows_per_cuda_block = rows_per_block_override != 0 ? rows_per_block_override :
         layout_policy::rows_per_block(ncols_dst, table_id, small_k, nwarps);
     constexpr int warp_size = ggml_cuda_get_physical_warp_size();
@@ -1057,7 +1057,7 @@ static std::pair<dim3, dim3> calc_launch_params(
     }
 
     const int nwarps = layout_policy::nwarps(ncols_dst, table_id);
-    static_assert(rows_per_block_override == 0 || rows_per_block_override == 2);
+    static_assert(rows_per_block_override == 0 || rows_per_block_override == 2 || rows_per_block_override == 4);
     const int rpb = rows_per_block_override != 0 ? rows_per_block_override :
         layout_policy::rows_per_block(ncols_dst, table_id, small_k, nwarps);
     const int64_t nblocks = (nrows_x + rpb - 1) / rpb;
@@ -1297,6 +1297,36 @@ static void mul_mat_vec_q_switch_ncols_dst(
                 nrows_x,
                 ncols_dst,
             };
+            const ggml_cuda_mmvq_rdna2_w8_rows2_input rows4_input = {
+                policy_type,
+                use_gfx1030_native &&
+                    ggml_cuda_rdna2_feature_enabled("GGML_HIP_GFX1030_MMVQ_W8_ROWS4"),
+                has_ids,
+                true,
+                ncols_x,
+                nrows_x,
+                ncols_dst,
+            };
+            if (ggml_cuda_mmvq_use_rdna2_w8_rows4(rows4_input)) {
+                constexpr int rows_per_block = 4;
+                std::pair<dim3, dim3> dims = calc_launch_params<type,
+                    MMVQ_Q8_1_BLOCK_SIZE_STANDARD, use_gfx1030_native, rows_per_block>(
+                        c_ncols_dst, nrows_x, nchannels_dst, nsamples_dst, warp_size, table_id);
+                mul_mat_vec_q_switch_fusion<type, c_ncols_dst, false,
+                    MMVQ_Q8_1_BLOCK_SIZE_STANDARD, false, use_gfx1030_native, 0, rows_per_block>(
+                        vx, vy, sum_hi, ids, fusion, dst, ncols_x, nchannels_y_fd,
+                        stride_row_x, stride_col_y, stride_col_dst, channel_ratio_fd,
+                        stride_channel_x, stride_channel_y, stride_channel_dst,
+                        sample_ratio_fd, stride_sample_x, stride_sample_y, stride_sample_dst,
+                        dims.first, dims.second, 0, ids_stride, stream);
+                static std::atomic<bool> logged{false};
+                if (!logged.exchange(true, std::memory_order_relaxed)) {
+                    std::fprintf(stderr,
+                        "using RDNA2 width-eight MMVQ rows/block=4 type=%d ncols=%d nrows=%d\n",
+                        (int) type, ncols_x, nrows_x);
+                }
+                break;
+            }
             if (ggml_cuda_mmvq_use_rdna2_w8_rows2(rows2_input)) {
                 constexpr int rows_per_block = 2;
                 std::pair<dim3, dim3> dims = calc_launch_params<type,

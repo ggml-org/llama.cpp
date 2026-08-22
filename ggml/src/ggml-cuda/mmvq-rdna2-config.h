@@ -79,3 +79,11 @@ inline bool ggml_cuda_mmvq_use_rdna2_w8_rows2(const ggml_cuda_mmvq_rdna2_w8_rows
             return false;
     }
 }
+
+// Certified rows/block=4 policy. It deliberately reuses the rows2 shape
+// whitelist and narrows the automatic path to Q4_0, whose register behavior
+// was validated separately from the retained rows2 paths.
+inline bool ggml_cuda_mmvq_use_rdna2_w8_rows4(const ggml_cuda_mmvq_rdna2_w8_rows2_input & input) {
+    return input.type == ggml_cuda_mmvq_rdna2_type::q4_0 &&
+           ggml_cuda_mmvq_use_rdna2_w8_rows2(input);
+}

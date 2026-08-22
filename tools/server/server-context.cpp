@@ -20,6 +20,8 @@
 #include <algorithm>
 #include <cstddef>
 #include <cinttypes>
+#include <cstdlib>
+#include <cstring>
 #include <exception>
 #include <memory>
 #include <filesystem>
@@ -38,6 +40,109 @@
 using json = nlohmann::ordered_json;
 
 constexpr int HTTP_POLLING_SECONDS = 1;
+
+static bool server_env_disabled(const char * name) {
+    const char * value = std::getenv(name);
+    return value != nullptr &&
+        (std::strcmp(value, "0") == 0 || std::strcmp(value, "off") == 0 || std::strcmp(value, "false") == 0);
+}
+
+static bool server_gfx1030_native_auto_enabled() {
+    if (server_env_disabled("GGML_HIP_RDNA2_AUTO")) {
+        return false;
+    }
+    if (const char * native = std::getenv("GGML_HIP_GFX1030_NATIVE")) {
+        return std::atoi(native) != 0;
+    }
+    const char * override_gfx = std::getenv("HSA_OVERRIDE_GFX_VERSION");
+    return override_gfx != nullptr && std::strcmp(override_gfx, "10.3.0") == 0;
+}
+
+static bool server_gfx1030_spec_target_backend_sampling_profile(const common_params & params) {
+    if (!server_gfx1030_native_auto_enabled() ||
+            server_env_disabled("GGML_HIP_GFX1030_TARGET_BACKEND_SAMPLING")) {
+        return false;
+    }
+
+    common_speculative_type active_type = COMMON_SPECULATIVE_TYPE_NONE;
+    for (common_speculative_type type : params.speculative.types) {
+        if (type == COMMON_SPECULATIVE_TYPE_NONE) {
+            continue;
+        }
+        if (active_type != COMMON_SPECULATIVE_TYPE_NONE) {
+            return false;
+        }
+        active_type = type;
+    }
+
+    const bool supported_mode =
+        (active_type == COMMON_SPECULATIVE_TYPE_DRAFT_MTP && params.speculative.draft.n_max == 4) ||
+        (active_type == COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH && params.speculative.draft.n_max == 7);
+    if (!supported_mode || params.split_mode != LLAMA_SPLIT_MODE_TENSOR) {
+        return false;
+    }
+
+    size_t n_rocm_devices = 0;
+    for (ggml_backend_dev_t device : params.devices) {
+        if (device == nullptr) {
+            continue;
+        }
+        const char * name = ggml_backend_dev_name(device);
+        if (ggml_backend_dev_type(device) != GGML_BACKEND_DEVICE_TYPE_GPU ||
+                name == nullptr || std::strncmp(name, "ROCm", 4) != 0) {
+            return false;
+        }
+        ++n_rocm_devices;
+    }
+    return n_rocm_devices == 4;
+}
+
+static bool server_greedy_backend_sampling_eligible(const common_params_sampling & sampling) {
+    if (sampling.samplers.empty() || sampling.samplers.back() != COMMON_SAMPLER_TYPE_TEMPERATURE) {
+        return false;
+    }
+    for (common_sampler_type sampler : sampling.samplers) {
+        switch (sampler) {
+            case COMMON_SAMPLER_TYPE_PENALTIES:
+            case COMMON_SAMPLER_TYPE_DRY:
+            case COMMON_SAMPLER_TYPE_TOP_N_SIGMA:
+            case COMMON_SAMPLER_TYPE_TOP_K:
+            case COMMON_SAMPLER_TYPE_TYPICAL_P:
+            case COMMON_SAMPLER_TYPE_TOP_P:
+            case COMMON_SAMPLER_TYPE_MIN_P:
+            case COMMON_SAMPLER_TYPE_XTC:
+            case COMMON_SAMPLER_TYPE_TEMPERATURE:
+                break;
+            default:
+                return false;
+        }
+    }
+
+    const bool has_reasoning_budget =
+        !sampling.reasoning_budget_start.empty() && !sampling.reasoning_budget_end.empty() &&
+        (sampling.grammar_lazy || sampling.reasoning_budget_tokens >= 0 || sampling.reasoning_control);
+
+    return sampling.temp <= 0.0f && sampling.dynatemp_range == 0.0f &&
+        sampling.top_k <= 0 && sampling.top_p >= 1.0f && sampling.min_p <= 0.0f &&
+        sampling.typ_p >= 1.0f && sampling.top_n_sigma < 0.0f &&
+        sampling.xtc_probability <= 0.0f && sampling.mirostat == 0 &&
+        sampling.adaptive_target < 0.0f && sampling.penalty_repeat == 1.0f &&
+        sampling.penalty_freq == 0.0f && sampling.penalty_present == 0.0f &&
+        sampling.dry_multiplier == 0.0f && !sampling.ignore_eos && sampling.min_keep == 0 &&
+        sampling.n_probs == 0 && sampling.logit_bias.empty() && sampling.grammar.empty() &&
+        !has_reasoning_budget;
+}
+
+static bool server_auto_spec_target_backend_sampling(
+        const common_params & params, const common_params_sampling & sampling, const llama_vocab * vocab) {
+    int32_t n_suppress = 0;
+    llama_vocab_get_suppress_tokens(vocab, &n_suppress);
+
+    return server_gfx1030_spec_target_backend_sampling_profile(params) &&
+        server_greedy_backend_sampling_eligible(params.sampling) &&
+        server_greedy_backend_sampling_eligible(sampling) &&
+        llama_vocab_n_tokens(vocab) >= 65536 && n_suppress == 0;
+}
 
 static common_speculative_output_limits server_output_limits(const common_params & params) {
     if (params.embedding ||
@@ -323,6 +428,7 @@ struct server_slot {
     json json_schema;
 
     common_sampler_ptr smpl;
+    llama_sampler_ptr  smpl_backend_greedy;
 
     llama_token sampled; // in speculative mode, this is the last accepted token
 
@@ -378,6 +484,7 @@ struct server_slot {
         n_predict_max = -1;
 
         llama_set_sampler(ctx_tgt, id, nullptr);
+        smpl_backend_greedy.reset();
 
         // clear alora start
         alora_invocation_start = -1;
@@ -1144,7 +1251,24 @@ private:
             params_base.load_progress_callback_user_data = &load_progress_text;
         }
 
+        // Dynamic sampler attachment currently requires the backend-sampling
+        // output buffers to exist before the first graph reserve. Prime those
+        // buffers for the narrow automatic MTP profile, then restore the user
+        // default so request-level eligibility still controls activation.
+        const bool backend_sampling_default = params_base.sampling.backend_sampling;
+        const bool prime_auto_backend_sampling = !backend_sampling_default &&
+            server_gfx1030_spec_target_backend_sampling_profile(params_base) &&
+            server_greedy_backend_sampling_eligible(params_base.sampling);
+        if (prime_auto_backend_sampling) {
+            params_base.sampling.backend_sampling = true;
+            SRV_INF("%s", "reserving target backend-sampling buffers for gfx1030 speculative auto policy\n");
+        }
+
         llama_init = common_init_from_params(params_base);
+
+        if (prime_auto_backend_sampling) {
+            params_base.sampling.backend_sampling = backend_sampling_default;
+        }
 
         model_tgt = llama_init->model();
         ctx_tgt   = llama_init->context();
@@ -1904,6 +2028,11 @@ private:
 
         // initialize samplers
         if (task.need_sampling()) {
+            const bool auto_backend_sampling = !task.params.backend_sampling_set &&
+                !task.params.sampling.backend_sampling &&
+                (task.params.speculative_n_max < 0 ||
+                    task.params.speculative_n_max == params_base.speculative.draft.n_max) &&
+                server_auto_spec_target_backend_sampling(params_base, task.params.sampling, vocab);
             try {
                 slot.smpl.reset(common_sampler_init(model_tgt, task.params.sampling));
             } catch (std::exception & e) {
@@ -1914,14 +2043,29 @@ private:
 
             const bool need_pre_sample_logits = task.params.sampling.n_probs > 0 && !task.params.post_sampling_probs;
 
-            bool use_backend_sampling = task.params.sampling.backend_sampling;
+            bool use_backend_sampling = task.params.sampling.backend_sampling || auto_backend_sampling;
 
             // TODO: getting pre sampling logits is not yet supported with backend sampling
             use_backend_sampling &= !need_pre_sample_logits;
 
             // TODO: tmp until backend sampling is fully implemented
             if (use_backend_sampling) {
-                llama_set_sampler(ctx_tgt, slot.id, common_sampler_get(slot.smpl.get()));
+                llama_sampler * backend_sampler = common_sampler_get(slot.smpl.get());
+                if (auto_backend_sampling) {
+                    slot.smpl_backend_greedy.reset(llama_sampler_chain_init(llama_sampler_chain_default_params()));
+                    llama_sampler_chain_add(slot.smpl_backend_greedy.get(), llama_sampler_init_temp(0.0f));
+                    llama_sampler_chain_add(slot.smpl_backend_greedy.get(), llama_sampler_init_greedy());
+                    backend_sampler = slot.smpl_backend_greedy.get();
+                }
+
+                use_backend_sampling = llama_set_sampler(ctx_tgt, slot.id, backend_sampler);
+                if (!use_backend_sampling) {
+                    task.params.sampling.backend_sampling = false;
+                    llama_set_sampler(ctx_tgt, slot.id, nullptr);
+                } else if (auto_backend_sampling) {
+                    task.params.sampling.backend_sampling = true;
+                    SLT_INF(slot, "%s", "using automatic gfx1030 backend target sampling for greedy speculative decode\n");
+                }
             } else {
                 llama_set_sampler(ctx_tgt, slot.id, nullptr);
             }

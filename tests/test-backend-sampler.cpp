@@ -983,6 +983,42 @@ static sampler_comparison_output run_sampler_comparison(
     };
 }
 
+static void test_backend_filtered_greedy_sampling(const test_params & params) {
+    const int seq_id = 0;
+    const std::string prompt = "Filtered greedy";
+    const std::vector<float> raw_logits = decode_raw_logits(params, prompt);
+
+    const auto add_samplers = [](llama_sampler * chain) {
+        llama_sampler_chain_add(chain, llama_sampler_init_temp(0.0f));
+        llama_sampler_chain_add(chain, llama_sampler_init_greedy());
+    };
+    const auto accept_history = [](llama_sampler *) {};
+
+    llama_sampler_ptr cpu_chain = make_sampler_chain(add_samplers, accept_history);
+    const std::vector<llama_token_data> expected = apply_cpu_sampler(raw_logits, cpu_chain.get());
+    const auto expected_it = std::max_element(
+        expected.begin(), expected.end(),
+        [](const llama_token_data & a, const llama_token_data & b) { return a.logit < b.logit; });
+    GGML_ASSERT(expected_it != expected.end());
+
+    llama_sampler_ptr backend_chain = make_sampler_chain(add_samplers, accept_history);
+    std::vector<llama_sampler_seq_config> configs = {{ seq_id, backend_chain.get() }};
+    test_context test_ctx(params, configs);
+    GGML_ASSERT(test_ctx.decode({{ seq_id, prompt }}));
+
+    const int32_t idx = test_ctx.idx_for_seq(seq_id);
+    const llama_token sampled = llama_get_sampled_token_ith(test_ctx.ctx.get(), idx);
+    const uint32_t n_candidates = llama_get_sampled_candidates_count_ith(test_ctx.ctx.get(), idx);
+    const llama_token * candidates = llama_get_sampled_candidates_ith(test_ctx.ctx.get(), idx);
+
+    GGML_ASSERT(n_candidates == 1);
+    GGML_ASSERT(candidates != nullptr);
+    GGML_ASSERT(candidates[0] == expected_it->id);
+    GGML_ASSERT(sampled == expected_it->id);
+
+    printf("backend filtered greedy candidate mapping test PASSED\n");
+}
+
 static std::unordered_map<llama_token, float> map_logits(const std::vector<llama_token_data> & data) {
     std::unordered_map<llama_token, float> result;
     result.reserve(data.size());
@@ -2001,6 +2037,7 @@ struct backend_test_case {
 
 static const backend_test_case BACKEND_TESTS[] = {
     { "greedy",          test_backend_greedy_sampling,         true  },
+    { "filtered_greedy", test_backend_filtered_greedy_sampling, true  },
     { "logit_bias",      test_backend_logit_bias_sampling,     true  },
     { "penalties",       test_backend_penalties_sampling,      true  },
     { "temp",            test_backend_temp_sampling,           true  },
