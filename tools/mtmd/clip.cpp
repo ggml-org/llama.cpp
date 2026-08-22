@@ -2214,6 +2214,9 @@ struct clip_model_loader {
 
         // layers
         const int n_layers_to_load = has_standard_layers ? hparams.n_layer : 0;
+        if (n_layers_to_load < 0 || n_layers_to_load > 4096) {
+            throw std::runtime_error(string_format("%s: implausible n_layer=%d\n", __func__, n_layers_to_load));
+        }
         model.layers.resize(n_layers_to_load);
         for (int il = 0; il < n_layers_to_load; ++il) {
             auto & layer = model.layers[il];
@@ -3771,6 +3774,10 @@ struct clip_model_loader {
             }
             return;
         }
+        const auto t = gguf_get_kv_type(ctx_gguf.get(), i);
+        if (t != GGUF_TYPE_BOOL) {
+            throw std::runtime_error(string_format("%s: key '%s' has type %d, expected BOOL\n", __func__, key.c_str(), t));
+        }
         output = gguf_get_val_bool(ctx_gguf.get(), i);
     }
 
@@ -3782,6 +3789,10 @@ struct clip_model_loader {
             }
             return;
         }
+        const auto t = gguf_get_kv_type(ctx_gguf.get(), i);
+        if (t != GGUF_TYPE_INT32) {
+            throw std::runtime_error(string_format("%s: key '%s' has type %d, expected INT32\n", __func__, key.c_str(), t));
+        }
         output = gguf_get_val_i32(ctx_gguf.get(), i);
     }
 
@@ -3792,6 +3803,10 @@ struct clip_model_loader {
                 throw std::runtime_error("Key not found: " + key);
             }
             return;
+        }
+        const auto t = gguf_get_kv_type(ctx_gguf.get(), i);
+        if (t != GGUF_TYPE_UINT32) {
+            throw std::runtime_error(string_format("%s: key '%s' has type %d, expected UINT32\n", __func__, key.c_str(), t));
         }
         const uint32_t val = gguf_get_val_u32(ctx_gguf.get(), i);
         // sanity check
@@ -3809,6 +3824,10 @@ struct clip_model_loader {
                 throw std::runtime_error("Key not found: " + key);
             }
             return;
+        }
+        const auto t = gguf_get_kv_type(ctx_gguf.get(), i);
+        if (t != GGUF_TYPE_FLOAT32) {
+            throw std::runtime_error(string_format("%s: key '%s' has type %d, expected FLOAT32\n", __func__, key.c_str(), t));
         }
         output = gguf_get_val_f32(ctx_gguf.get(), i);
     }
@@ -3846,6 +3865,10 @@ struct clip_model_loader {
                 throw std::runtime_error("Key not found: " + key);
             }
             return;
+        }
+        const auto t = gguf_get_kv_type(ctx_gguf.get(), i);
+        if (t != GGUF_TYPE_STRING) {
+            throw std::runtime_error(string_format("%s: key '%s' has type %d, expected STRING\n", __func__, key.c_str(), t));
         }
         output = std::string(gguf_get_val_str(ctx_gguf.get(), i));
     }
