@@ -472,6 +472,18 @@ static inline float ggml_e8m0_to_fp32(uint8_t x) {
     return result;
 }
 
+static inline float ggml_mxfp6_e2m3_ue8m0_to_fp32(uint8_t x) {
+    uint32_t bits;
+
+    if (x == 0xFF) return 0.0f; // invalid E8M0 scale;
+    if (x == 0) bits = 0x00400000; // 2^-127
+    else bits = (uint32_t) x << 23;
+
+    float result;
+    memcpy(&result, &bits, sizeof(result));
+    return result;
+}
+
 // Equal to ggml_e8m0_to_fp32/2
 // Useful with MXFP4 quantization since the E0M2 values are doubled
 static inline float ggml_e8m0_to_fp32_half(uint8_t x) {
