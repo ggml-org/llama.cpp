@@ -8912,6 +8912,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
+    // permuted block-quantized src into a contiguous dst, hitting both copy paths of
+    // ggml_compute_forward_dup_bytes: nb00 == type_size (first) and nb00 != type_size (second)
+    test_cases.emplace_back(new test_cpy(GGML_TYPE_Q4_0, GGML_TYPE_Q4_0, {32, 1, 3, 5},  {32, 5, 3, 1},  {0, 1, 3, 2}));
+    test_cases.emplace_back(new test_cpy(GGML_TYPE_Q4_0, GGML_TYPE_Q4_0, {64, 32, 1, 3}, {32, 3, 64, 1}, {3, 0, 1, 2}));
+
     for (ggml_type type_dst : { GGML_TYPE_F32, GGML_TYPE_I32, GGML_TYPE_F16, GGML_TYPE_BF16 }) {
         for (bool use_view_slice : { true, false }) {
             for (std::array<int64_t, 4> ne : std::initializer_list<std::array<int64_t, 4>>{ {2, 1, 1, 1}, {2, 1, 3, 5},
