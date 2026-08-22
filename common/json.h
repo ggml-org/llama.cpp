@@ -351,7 +351,4 @@ class common_json {
     alignas(8) unsigned char storage[32];
 };
 
-// json.cpp defines this specialization, it must be declared before any use of it
-template <> common_json common_json::get<common_json>() const;
-
 using common_json_entry = common_json::items_view::entry;
