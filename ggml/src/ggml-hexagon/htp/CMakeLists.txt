@@ -12,15 +12,12 @@ include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_BINARY_DIR})
 
-set(HTP_LIB ggml-htp-${DSP_VERSION})
-
-add_library(${HTP_LIB} SHARED
-    main.c
-    htp_iface_skel.c
+# Op sources shared by both skel variants (dspqueue entry via main.c and
+# mempool/FastRPC-invoke entry via entry.c). Entry points and glue differ per variant.
+set(HTP_OPS_SRCS
     work-queue.c
     dma-queue.c
     hmx-queue.c
-    htp-tensor.c
     matmul-ops.c
     flash-attn-ops.c
     gated-delta-net-ops.c
@@ -45,13 +42,50 @@ add_library(${HTP_LIB} SHARED
     im2col-ops.c
 )
 
-target_compile_definitions(${HTP_LIB} PRIVATE
-    $<IF:$<BOOL:${HEXAGON_HTP_DEBUG}>,HTP_DEBUG=1,NDEBUG=1>
-    $<IF:$<BOOL:${HEXAGON_HTP_DEBUG}>,FARF_HIGH=1,>)
+# Both variants build ggml-htp-${DSP_VERSION} (libggml-htp-vXX.so); only one
+# is built per configuration.
+option(GGML_HEXAGON_USE_MEMPOOL "Build the mempool/FastRPC-invoke skel variant (entry.c) instead of the dspqueue variant (main.c)" OFF)
 
+if (GGML_HEXAGON_USE_MEMPOOL)
+    set(HTP_LIB ggml-htp-${DSP_VERSION})
 
-build_idl(htp_iface.idl ${HTP_LIB})
+    add_library(${HTP_LIB} SHARED
+        entry.c
+        ${CMAKE_CURRENT_BINARY_DIR}/ggml_dsp_skel.c
+        ${HTP_OPS_SRCS}
+    )
 
-set_target_properties(${HTP_LIB} PROPERTIES EXPORT_COMPILE_COMMANDS ON)
+    target_compile_definitions(${HTP_LIB} PRIVATE
+        GGML_HEXAGON_USE_MEMPOOL=1
+        $<IF:$<BOOL:${HEXAGON_HTP_DEBUG}>,HTP_DEBUG=1,NDEBUG=1>
+        $<IF:$<BOOL:${HEXAGON_HTP_DEBUG}>,FARF_HIGH=1,>
+    )
 
-install(TARGETS ${HTP_LIB})
+    target_compile_options(${HTP_LIB} PRIVATE -Wno-error)
+
+    build_idl(ggml_dsp.idl ${HTP_LIB})
+
+    set_target_properties(${HTP_LIB} PROPERTIES EXPORT_COMPILE_COMMANDS ON)
+
+    install(TARGETS ${HTP_LIB})
+else()
+    set(HTP_LIB ggml-htp-${DSP_VERSION})
+
+    add_library(${HTP_LIB} SHARED
+        main.c
+        htp_iface_skel.c
+        htp-tensor.c
+        ${HTP_OPS_SRCS}
+    )
+
+    target_compile_definitions(${HTP_LIB} PRIVATE
+        $<IF:$<BOOL:${HEXAGON_HTP_DEBUG}>,HTP_DEBUG=1,NDEBUG=1>
+        $<IF:$<BOOL:${HEXAGON_HTP_DEBUG}>,FARF_HIGH=1,>
+    )
+
+    build_idl(htp_iface.idl ${HTP_LIB})
+
+    set_target_properties(${HTP_LIB} PROPERTIES EXPORT_COMPILE_COMMANDS ON)
+
+    install(TARGETS ${HTP_LIB})
+endif()
