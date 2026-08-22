@@ -38,11 +38,11 @@
 	}
 
 	function isServerEnabledForChat(serverId: string): boolean {
-		return conversationsStore.isMcpServerEnabledForChat(serverId);
+		return conversationsStore.preferences.isMcpServerEnabledForChat(serverId);
 	}
 
 	async function toggleServerForChat(serverId: string) {
-		await conversationsStore.toggleMcpServerForChat(serverId);
+		await conversationsStore.preferences.toggleMcpServerForChat(serverId);
 	}
 
 	function handleMcpSubMenuOpen(open: boolean) {

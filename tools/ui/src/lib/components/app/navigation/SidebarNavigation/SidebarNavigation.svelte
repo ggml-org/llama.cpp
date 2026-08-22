@@ -14,7 +14,7 @@
 	import { useKeyboardShortcuts } from '$lib/hooks/use-keyboard-shortcuts.svelte';
 	import { useMarqueeSelection } from '$lib/hooks/use-marquee-selection.svelte';
 	import { RouterService } from '$lib/services/router.service';
-	import { chatStore, conversationsStore, device, isMobile, settingsStore } from '$lib/stores';
+	import { chatStore, conversationsStore, deviceStore, settingsStore } from '$lib/stores';
 	import { buildConversationTree } from '$lib/utils';
 	import { circIn } from 'svelte/easing';
 	import { SvelteSet } from 'svelte/reactivity';
@@ -36,7 +36,7 @@
 	let logoHovered = $state(false);
 
 	const isStripExpanded = $derived(isExpandedMode || hoveredTooltip !== null);
-	const isOnMobile = $derived(isMobile.current);
+	const isOnMobile = $derived(deviceStore.isMobile);
 	const alwaysShowOnDesktop = $derived(settingsStore.config.alwaysShowSidebarOnDesktop as boolean);
 
 	$effect(() => {
@@ -65,7 +65,7 @@
 	});
 
 	$effect(() => {
-		if (isMobile.current && page.url.hash.includes(ROUTES.SEARCH)) {
+		if (deviceStore.isMobile && page.url.hash.includes(ROUTES.SEARCH)) {
 			isExpandedMode = false;
 		}
 	});
@@ -227,7 +227,7 @@
 	}
 
 	async function selectConversation(id: string) {
-		if (isMobile.current) {
+		if (deviceStore.isMobile) {
 			scheduleMobileCollapse();
 		}
 
@@ -315,9 +315,9 @@
 			'fixed md:sticky top-2 left-2 md:left-0 md:ml-2 md:mt-2 pt-2 z-10 w-[calc(100dvw-1rem)]',
 			'md:h-[calc(100dvh-1.125rem)]',
 			isExpandedMode &&
-				(device.isStandalone
+				(deviceStore.isStandalone
 					? 'h-[calc(100dvh-2rem)]'
-					: device.isIOSDevice
+					: deviceStore.isIOSDevice
 						? 'h-[calc(100dvh-0.5rem)]'
 						: 'h-[calc(100dvh-1rem)]'),
 			'rounded-3xl md:rounded-2xl',
@@ -353,7 +353,7 @@
 
 			{#if isOnMobile || (isExpandedMode && !alwaysShowOnDesktop)}
 				<div
-					class="flex items-center transition-all duration-150 ease-out {isMobile.current &&
+					class="flex items-center transition-all duration-150 ease-out {deviceStore.isMobile &&
 					!isExpandedMode
 						? 'opacity-0 h-0!'
 						: ''}"
@@ -361,7 +361,7 @@
 					out:fade={{ duration: 100 }}
 				>
 					<ActionIcon
-						icon={isMobile.current ? X : PanelLeftClose}
+						icon={deviceStore.isMobile ? X : PanelLeftClose}
 						size="lg"
 						iconSize="h-4.5 w-4.5 md:h-4 md:w-4"
 						class="backdrop-blur-none md:h-9 md:w-9 h-10 w-10 rounded-full mr-1 hover:bg-accent!"
@@ -375,9 +375,9 @@
 		</div>
 
 		<div
-			class="mt-2 flex min-h-0 flex-1 flex-col gap-4 md:gap-1 {isMobile.current
+			class="mt-2 flex min-h-0 flex-1 flex-col gap-4 md:gap-1 {deviceStore.isMobile
 				? 'transition-[opacity,height] duration-200 ease-out'
-				: ''} {isMobile.current && !isExpandedMode ? 'opacity-0 !h-0' : ''}"
+				: ''} {deviceStore.isMobile && !isExpandedMode ? 'opacity-0 !h-0' : ''}"
 			in:fade={{ duration: 200 }}
 			out:fade={{ duration: 200 }}
 		>
@@ -395,7 +395,7 @@
 					isSearchModeActive = true;
 				}}
 				onNewChat={() => {
-					if (isMobile.current) {
+					if (deviceStore.isMobile) {
 						scheduleMobileCollapse();
 					}
 				}}

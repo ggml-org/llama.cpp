@@ -45,6 +45,7 @@ MTMD_API struct mtmd_helper_bitmap_wrapper mtmd_helper_bitmap_init_from_file(mtm
 // helper function to construct a mtmd_bitmap from a buffer containing a file
 // supported formats:
 //     image: formats supported by stb_image: jpg, png, bmp, gif, etc.
+//            webp is decoded via ffmpeg, requires MTMD_VIDEO build with ffmpeg in PATH
 //     audio: formats supported by miniaudio: wav, mp3, flac
 // note:
 //   - for now, video input is only supported via C++ helper functions

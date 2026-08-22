@@ -87,7 +87,7 @@
 		isLoading = true;
 
 		try {
-			const perChatOverrides = conversationsStore.getAllMcpServerOverrides();
+			const perChatOverrides = conversationsStore.preferences.getAllMcpServerOverrides();
 			const initialized = await mcpStore.ensureInitialized(perChatOverrides);
 
 			if (!initialized) {

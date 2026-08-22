@@ -228,6 +228,8 @@ Use `--backend-sampling` to run supported target-model samplers on the model bac
 
 Unsupported samplers and device layouts fall back to CPU sampling. Generic tensor-split backend sampling remains unsupported; the RDNA2 fork has narrow exceptions for its certified four-GPU, large-vocabulary, temperature-zero MTP `n_max=4` and DFlash `n_max=7` paths. These paths are selected automatically by the gfx1030 native profile only when filtering and penalties are neutral, no grammar/reasoning/probability output is requested, and the request did not explicitly set `backend_sampling`. Set `GGML_HIP_GFX1030_TARGET_BACKEND_SAMPLING=0` (or the global `GGML_HIP_RDNA2_AUTO=0`) to disable them. A fixed seed produces repeatable random draws, but stochastic CPU and backend sampling can still select different tokens because floating-point operations can differ between implementations and devices. Use greedy sampling when exact output matching is required.
 
+The automatic chain is stateless and remains attached to its slot across compatible requests so the backend can reuse its scheduler reservation. A request that becomes ineligible or explicitly selects a sampler detaches the chain and follows the normal fallback. For the automatic path, `cache_prompt: false` still preserves checkpoint-driven prompt chunk boundaries, but clears older prompt checkpoints and skips serializing an unused replacement. `cache_prompt: true` and all fallback paths retain normal checkpoint behavior; switching from uncached to cached operation requires one full prompt reprocessing pass before checkpoint reuse resumes.
+
 ### General Speculative Parameters
 
 ```

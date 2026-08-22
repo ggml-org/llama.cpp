@@ -1564,6 +1564,70 @@ int main() {
                 space ::= | " " | "\n"{1,2} [ \t]{0,20}
             )""",
         });
+
+        run({
+            SUCCESS,
+            "unanchored regexp",
+            R"""({
+                "type": "string",
+                "pattern": "[0-9]+"
+            })""",
+            R"""(
+                char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
+                root ::= string
+                space ::= | " " | "\n"{1,2} [ \t]{0,20}
+                string ::= "\"" char* "\""
+            )""",
+        });
+
+        // the rules of the partial conversion (here "root-0") must not leak into the grammar
+        run({
+            SUCCESS,
+            "regexp with unsupported shorthand",
+            R"""({
+                "type": "string",
+                "pattern": "^[0-9]{3}\\w$"
+            })""",
+            R"""(
+                char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
+                root ::= string
+                space ::= | " " | "\n"{1,2} [ \t]{0,20}
+                string ::= "\"" char* "\""
+            )""",
+        });
+
+        // a regexp that is invalid under any flavor is still an error
+        run({
+            FAILURE,
+            "regexp with unbalanced parentheses",
+            R"""({
+                "type": "string",
+                "pattern": "^(a$"
+            })""",
+            ""
+        });
+
+        // only the property with the bad pattern degrades
+        run({
+            SUCCESS,
+            "unsupported regexp in a property",
+            R"""({
+                "type": "object",
+                "properties": {
+                    "a": { "type": "string", "pattern": "^[a-z\\-]+$" }
+                },
+                "required": ["a"],
+                "additionalProperties": false
+            })""",
+            R"""(
+                a ::= string
+                a-kv ::= "\"a\"" space ":" space a
+                char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
+                root ::= "{" space a-kv space "}"
+                space ::= | " " | "\n"{1,2} [ \t]{0,20}
+                string ::= "\"" char* "\""
+            )""",
+        });
     }
 
     if (getenv("LLAMA_SKIP_TESTS_SLOW_ON_EMULATOR")) {

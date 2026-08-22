@@ -12,7 +12,7 @@
 	import {
 		classifyToolResult,
 		formatJsonPretty,
-		getBuiltinToolUi,
+		getToolUi,
 		parseToolResultWithMedia
 	} from '$lib/utils';
 	import { createBase64DataUrl } from '$lib/utils/data-url';
@@ -27,7 +27,7 @@
 
 	let { attachments, isStreaming, onToggle, open, section }: Props = $props();
 
-	const title = $derived(getBuiltinToolUi(section.toolName)?.label ?? section.toolName ?? '');
+	const title = $derived(getToolUi(section.toolName)?.label ?? section.toolName ?? '');
 	const outputKind = $derived(classifyToolResult(section.toolResult));
 	const parsedLines: ToolResultLine[] = $derived(
 		section.toolResult ? parseToolResultWithMedia(section.toolResult, attachments) : []
