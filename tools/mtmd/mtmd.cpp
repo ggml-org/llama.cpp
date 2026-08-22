@@ -575,6 +575,7 @@ struct mtmd_context {
             /* no_alloc          */ no_alloc,
             /* progress_callback */ ctx_params.progress_callback,
             /* progress_callback_user_data */ ctx_params.progress_callback_user_data,
+            /* n_threads         */ ctx_params.n_threads,
         };
 
         auto res = clip_init(mmproj_fname, ctx_clip_params);

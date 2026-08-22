@@ -165,6 +165,8 @@ struct clip_ctx {
     clip_flash_attn_type flash_attn_type = CLIP_FLASH_ATTN_TYPE_AUTO;
     bool is_allocated = false;
 
+    int n_threads = 1;
+
     bool debug_output_embeddings = false;
 
     // for measuring memory usage
@@ -181,6 +183,7 @@ struct clip_ctx {
     clip_ctx(clip_context_params & ctx_params) {
         flash_attn_type = ctx_params.flash_attn_type;
         no_alloc = ctx_params.no_alloc;
+        n_threads = ctx_params.n_threads;
         backend_cpu = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
         if (!backend_cpu) {
             throw std::runtime_error("failed to initialize CPU backend");
@@ -3649,6 +3652,22 @@ struct clip_model_loader {
     static void warmup(clip_ctx & ctx_clip) {
         auto batch = get_dummy_batch(ctx_clip);
         warmup(ctx_clip, batch);
+
+        // run a real encode so one-time backend inits happen at load, not on first request
+        // vision only, as audio dummy batches are not encodable
+        if (!ctx_clip.no_alloc && ctx_clip.model.modality == CLIP_MODALITY_VISION &&
+                ctx_clip.backend != ctx_clip.backend_cpu) {
+            LOG_INF("%s: running warmup encode, please wait ... (--no-warmup to disable)\n", __func__);
+            const int64_t t_start_us = ggml_time_us();
+            clip_encode_params params;
+            params.imgs = &batch;
+            params.n_threads = ctx_clip.n_threads;
+            if (clip_encode(&ctx_clip, &params)) {
+                LOG_INF("%s: warmup encode took %.2f ms\n", __func__, (ggml_time_us() - t_start_us) / 1000.0);
+            } else {
+                LOG_WRN("%s: warmup encode failed, image encoding may not work on this backend\n", __func__);
+            }
+        }
     }
 
     static void warmup(clip_ctx & ctx_clip, const clip_image_f32_batch & batch) {
