@@ -655,14 +655,14 @@ struct server_slot {
             res["n_prompt_tokens_processed"] = stats.n_prompt_processed;
             res["n_prompt_tokens_cache"]     = stats.n_prompt_cached;
             res["params"] = ptask->params.to_json(only_metrics);
-            res["next_token"] = {
+            res["next_token"] = json::array({
                 {
                     {"has_next_token", has_next_token},
                     {"has_new_line",   has_new_line},
                     {"n_remain",       n_remaining()},
                     {"n_decoded",      stats.n_gen},
                 }
-            };
+            });
 
             if (!only_metrics) {
                 res["prompt"] = ptask->tokens.detokenize(ctx_tgt, true);

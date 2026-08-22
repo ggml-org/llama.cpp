@@ -2,6 +2,7 @@
 #include "common.h"
 
 #include <algorithm>
+#include <limits>
 #include <map>
 #include <regex>
 #include <sstream>
