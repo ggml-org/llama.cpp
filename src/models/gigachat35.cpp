@@ -46,11 +46,15 @@ void llama_model_gigachat35::load_arch_hparams(llama_model_loader & ml) {
     }
 
     if (ml.get_key(LLM_KV_ROPE_SCALING_YARN_LOG_MUL, hparams.rope_yarn_log_mul, false)) {
-        // Undo the converter-side 0.1 multiplier
+        // [TAG_DEEPSEEK2_YARN_LOG_MUL_FIX]
+        // cancel the factor from the convert script
         hparams.rope_yarn_log_mul /= 0.1f;
     }
 
-    type = LLM_TYPE_432B_A28B;
+    switch (hparams.n_layer()) {
+        case 40: type = LLM_TYPE_432B_A28B; break;
+        default: type = LLM_TYPE_UNKNOWN;
+    }
 }
 
 void llama_model_gigachat35::load_arch_tensors(llama_model_loader & ml) {
@@ -113,6 +117,7 @@ void llama_model_gigachat35::load_arch_tensors(llama_model_loader & ml) {
     GGML_ASSERT(kv_lora_rank > 0);
 
     const int64_t head_k_dim = hparams.ssm_d_state;
+    // assumes linear_key_head_dim == linear_value_head_dim, ssm_inner_size would disagree otherwise
     const int64_t head_v_dim = hparams.ssm_d_state;
     const int64_t n_k_heads  = hparams.ssm_n_group;
     const int64_t n_v_heads  = hparams.ssm_dt_rank;
@@ -465,15 +470,6 @@ llama_model_gigachat35::graph_mtp::graph_mtp(const llama_model & model, const ll
     ggml_build_forward_expand(gf, cur);
 }
 
-ggml_tensor * llama_model_gigachat35::graph_common::build_zero_centered_norm(
-        ggml_tensor * input,
-        ggml_tensor * weight,
-        int           il) {
-    GGML_ASSERT(weight != nullptr);
-
-    return build_norm(input, weight, nullptr, LLM_NORM_RMS, il);
-}
-
 ggml_tensor * llama_model_gigachat35::graph_common::build_zero_centered_gated_norm(
         ggml_tensor * input,
         ggml_tensor * weight,
@@ -483,7 +479,7 @@ ggml_tensor * llama_model_gigachat35::graph_common::build_zero_centered_gated_no
     GGML_ASSERT(gate_up   != nullptr);
     GGML_ASSERT(gate_down != nullptr);
 
-    ggml_tensor * cur = build_zero_centered_norm(input, weight, il);
+    ggml_tensor * cur = build_norm(input, weight, nullptr, LLM_NORM_RMS, il);
     ggml_tensor * gate = build_lora_mm(gate_up, cur);
     gate = ggml_silu(ctx0, gate);
     gate = build_lora_mm(gate_down, gate);
@@ -500,7 +496,7 @@ ggml_tensor * llama_model_gigachat35::graph::build_linear_output_norm(
         ggml_tensor * weight,
         ggml_tensor * gate,
         int           il) {
-    ggml_tensor * cur = build_zero_centered_norm(input, weight, il);
+    ggml_tensor * cur = build_norm(input, weight, nullptr, LLM_NORM_RMS, il);
     gate = ggml_sigmoid(ctx0, gate);
     cur = ggml_mul(ctx0, cur, gate);
     cur = ggml_scale(ctx0, cur, 2.0f);
@@ -585,7 +581,7 @@ ggml_tensor * llama_model_gigachat35::graph::build_layer_attn_linear(
             ggml_row_size(conv->type, head_k_dim), nb1_qkv, nb1_qkv * n_seq_tokens, 0);
     ggml_tensor * k = ggml_view_4d(ctx0, conv, head_k_dim, num_k_heads, n_seq_tokens, n_seqs,
             ggml_row_size(conv->type, head_k_dim), nb1_qkv, nb1_qkv * n_seq_tokens,
-            head_k_dim * num_k_heads * ggml_element_size(conv));
+            ggml_row_size(conv->type, key_dim));
     ggml_tensor * v = ggml_view_4d(ctx0, conv, head_v_dim, num_v_heads, n_seq_tokens, n_seqs,
             ggml_row_size(conv->type, head_v_dim), nb1_qkv, nb1_qkv * n_seq_tokens,
             ggml_row_size(conv->type, 2 * key_dim));

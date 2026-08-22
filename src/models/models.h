@@ -2436,11 +2436,6 @@ struct llama_model_gigachat35 : public llama_model_base {
             llm_build_delta_net_base(params), model(model) {}
 
     protected:
-        ggml_tensor * build_zero_centered_norm(
-                    ggml_tensor * input,
-                    ggml_tensor * weight,
-                            int   il);
-
         ggml_tensor * build_zero_centered_gated_norm(
                     ggml_tensor * input,
                     ggml_tensor * weight,

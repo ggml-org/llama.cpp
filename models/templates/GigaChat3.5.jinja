@@ -621,6 +621,10 @@
 
 {#- ----- DEFAULT DEVSYSTEM ----- -#}
 
+{%- if current_date is not defined -%}
+    {%- set current_date = strftime_now("%d.%m.%Y") -%}
+{%- endif -%}
+
 {%- set DEVSYSTEM = "Вызов функций: последовательный
 Безопасность: соответствует законодательству РФ.
 Текущая дата: " ~ current_date ~ "
