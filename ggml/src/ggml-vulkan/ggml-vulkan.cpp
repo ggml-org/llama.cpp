@@ -10837,7 +10837,9 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
     const bool v_quant = v->type != GGML_TYPE_F16 && v->type != GGML_TYPE_BF16 && v->type != GGML_TYPE_F32;
     // f16 K/V in the strided KV-cache layout goes through the same scratch as a plain copy.
     // A plain copy amortizes later than the fused dequant, so it needs a larger batch.
-    const bool kv_f16_strided = neq1 >= 256 &&
+    // Gated to AMD, where the strided-load penalty was measured.
+    const bool kv_f16_strided = ctx->device->vendor_id == VK_VENDOR_ID_AMD &&
+                                neq1 >= 256 &&
                                 k->type == GGML_TYPE_F16 && v->type == GGML_TYPE_F16 &&
                                 (k->nb[1] != (uint64_t)HSK * sizeof(ggml_fp16_t) ||
                                  v->nb[1] != (uint64_t)HSV * sizeof(ggml_fp16_t)) &&
