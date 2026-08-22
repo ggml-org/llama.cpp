@@ -498,6 +498,33 @@ if __name__ == '__main__':
                     assert tensor.B is not None
                     yield (name, cast(torch.Tensor, LoraTorchTensor(tensor.A, tensor.B)))
 
+            @staticmethod
+            def _reorder_v_heads(tensor: Tensor, dim: int, num_k_heads: int, num_v_per_k: int, head_dim: int) -> Tensor:
+                if not isinstance(tensor, LoraTorchTensor):
+                    return model_class._reorder_v_heads(tensor, dim, num_k_heads, num_v_per_k, head_dim)  # ty: ignore[unresolved-attribute]
+
+                # LoraTorchTensor cannot reshape the row size, so apply the same
+                # reordering to a single LoRA factor instead. W = B @ A, so
+                # reordering output rows reorders B and reordering input columns
+                # reorders A. Reuse the base implementation to build the index.
+                shape = tensor.shape
+                if dim < 0:
+                    dim += len(shape)
+                lora_a, lora_b = tensor.get_lora_A_B()
+                if dim == len(shape) - 1:
+                    perm = model_class._reorder_v_heads(  # ty: ignore[unresolved-attribute]
+                        torch.arange(shape[dim], dtype=torch.long).unsqueeze(0),
+                        1, num_k_heads, num_v_per_k, head_dim,
+                    ).squeeze(0)
+                    lora_a = lora_a.index_select(-1, perm)
+                else:
+                    perm = model_class._reorder_v_heads(  # ty: ignore[unresolved-attribute]
+                        torch.arange(shape[dim], dtype=torch.long).unsqueeze(-1),
+                        0, num_k_heads, num_v_per_k, head_dim,
+                    ).squeeze(-1)
+                    lora_b = lora_b.index_select(dim, perm)
+                return cast(torch.Tensor, LoraTorchTensor(lora_a, lora_b))
+
             def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
                 dest = list(super().modify_tensors(data_torch, name, bid))
                 # some archs may have the same tensor for lm_head and output (tie word embeddings)
