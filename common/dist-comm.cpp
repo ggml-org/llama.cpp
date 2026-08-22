@@ -410,8 +410,17 @@ struct dist_comm_socket_context::impl {
 
     // Optional NetworkDirect data path for the collective payload. Bootstrap, framing, ring
     // ordering and the broadcasts all stay on the TCP sockets above; only exchange_ring()
-    // moves its bytes over ND when this is non-null.
-    dist_nd_conn * nd = nullptr;
+    // moves its bytes over ND when these are non-null.
+    //
+    // There is one connection per ring edge, not one per rank. At world_size 2 next and prev
+    // are the same peer, so a single bidirectional connection serves both halves and the two
+    // pointers alias it (nd_shared). From world_size 3 up they are different hosts and each
+    // edge is negotiated separately, so one half can be on ND while the other is on TCP. That
+    // is the normal case on a fabric that is a line rather than a ring: the edge that closes
+    // the ring has no point-to-point cable behind it.
+    dist_nd_conn * nd_send  = nullptr;   // outbound half, towards next
+    dist_nd_conn * nd_recv  = nullptr;   // inbound half, from prev
+    bool           nd_shared = false;    // nd_send and nd_recv are the same object; free once
     // Payload ceiling for the ND path, in bytes; 0 means no ceiling. ND sends block on each
     // chunk's completion before staging the next, so a payload that spans many chunks (prefill,
     // ~20 MB here) serialises badly and is measurably faster on TCP, while the small per-token
@@ -420,9 +429,18 @@ struct dist_comm_socket_context::impl {
     size_t nd_max_bytes = 0;
 
     ~impl() {
-        if (nd != nullptr) {
-            dist_nd_free(nd);
-            nd = nullptr;
+        // at world_size 2 both pointers are the same object, so freeing twice would be a
+        // double free
+        if (nd_send != nullptr) {
+            dist_nd_free(nd_send);
+            if (nd_shared) {
+                nd_recv = nullptr;
+            }
+            nd_send = nullptr;
+        }
+        if (nd_recv != nullptr) {
+            dist_nd_free(nd_recv);
+            nd_recv = nullptr;
         }
         close_fd(ring_in_fd);
         close_fd(ring_out_fd);
@@ -462,13 +480,19 @@ struct dist_comm_socket_context::impl {
         };
         op_hdr recv_hdr {};
 
-        const bool use_nd = nd != nullptr &&
-                            (nd_max_bytes == 0 || (send_size <= nd_max_bytes && recv_size <= nd_max_bytes));
+        // Decided per edge, not per rank. The peer on the outbound edge evaluates exactly this
+        // expression for the same edge with the same sizes, so the two ends never disagree about
+        // which transport is carrying a given message. From world_size 3 up the two edges are
+        // different links and may legitimately differ: one on ND, the other on TCP.
+        const bool use_nd_send = nd_send != nullptr &&
+                                 (nd_max_bytes == 0 || send_size <= nd_max_bytes);
+        const bool use_nd_recv = nd_recv != nullptr &&
+                                 (nd_max_bytes == 0 || recv_size <= nd_max_bytes);
 
         auto send_payload = [&]() -> bool {
-            if (use_nd) {
+            if (use_nd_send) {
                 // header and payload leave as one ND chunk
-                if (!dist_nd_send2(nd, &send_hdr, sizeof(send_hdr), send_data_ptr, send_size, err)) {
+                if (!dist_nd_send2(nd_send, &send_hdr, sizeof(send_hdr), send_data_ptr, send_size, err)) {
                     return false;
                 }
                 stats.bytes_sent += sizeof(send_hdr) + send_size;
@@ -484,8 +508,8 @@ struct dist_comm_socket_context::impl {
         };
 
         auto recv_payload = [&]() -> bool {
-            if (use_nd) {
-                if (!dist_nd_recv(nd, &recv_hdr, sizeof(recv_hdr), err)) {
+            if (use_nd_recv) {
+                if (!dist_nd_recv(nd_recv, &recv_hdr, sizeof(recv_hdr), err)) {
                     return false;
                 }
                 stats.bytes_recv += sizeof(recv_hdr);
@@ -501,8 +525,8 @@ struct dist_comm_socket_context::impl {
                 return false;
             }
             if (recv_size > 0) {
-                if (use_nd) {
-                    if (!dist_nd_recv(nd, recv_data_ptr, recv_size, err)) {
+                if (use_nd_recv) {
+                    if (!dist_nd_recv(nd_recv, recv_data_ptr, recv_size, err)) {
                         return false;
                     }
                     stats.bytes_recv += recv_size;
@@ -515,6 +539,19 @@ struct dist_comm_socket_context::impl {
         };
 
         // Rank parity avoids blocking send/send for large payloads.
+        //
+        // Parity is a 2-colouring of the ring, and an odd-length cycle cannot be 2-coloured, so
+        // from world_size 3 up exactly one edge has both ends calling send_payload() first. That
+        // is a property of the topology, not a bug to schedule around: no assignment of
+        // send-first / recv-first to ranks can do better than one such edge on an odd ring, and
+        // parity already achieves that minimum. Do not "fix" this by switching to a rank < peer
+        // rule; a rank sits on two edges and one sequential ordering cannot satisfy both.
+        //
+        // It is safe because neither transport requires the peer to be inside recv_payload()
+        // before a send can make progress. TCP has SOCKET_BUFSIZE of socket buffer to absorb the
+        // payload, and ND completes a send into the receives the peer posted at setup time. It
+        // costs latency on that one edge, not correctness. The real remedy is a full-duplex send
+        // on its own thread, which is a larger change than this one.
         const bool ok = ((cfg.rank & 1) == 0)
             ? (send_payload() && recv_payload())
             : (recv_payload() && send_payload());
@@ -525,7 +562,11 @@ struct dist_comm_socket_context::impl {
             // nd_max_bytes fall back to TCP even in an RDMA run, so the endpoint is read from
             // use_nd rather than from whether ND is configured.
             const int64_t ne[GGML_MAX_DIMS] = { (int64_t) send_size, 1, 1, 1 };
-            ggml_trace_rpc(use_nd ? "nd" : "tcp", cfg.rank, "EXCHANGE_RING", "dist-tp", ne,
+            // the two halves can ride different transports once the ring spans more than two
+            // hosts, so a mixed step is reported as such rather than being rounded to one label
+            const char * endpoint = use_nd_send ? (use_nd_recv ? "nd" : "nd/tcp")
+                                                : (use_nd_recv ? "tcp/nd" : "tcp");
+            ggml_trace_rpc(endpoint, cfg.rank, "EXCHANGE_RING", "dist-tp", ne,
                            sizeof(send_hdr) + send_size, sizeof(recv_hdr) + recv_size);
         }
         return ok;
@@ -622,7 +663,61 @@ struct dist_comm_socket_context::impl {
         const int next = (cfg.rank + 1) % cfg.world_size;
         const int prev = (cfg.rank + cfg.world_size - 1) % cfg.world_size;
 
-        ring_out_fd = connect_with_retry(members[next].host, members[next].port, err);
+        // Where to dial for this rank's outbound ring edge.
+        //
+        // By default it is whatever the master recorded for rank next, and the master learned
+        // that from the source address of the TCP connection that rank opened to register. On a
+        // cluster with one flat network that is the right answer. It is the wrong answer here.
+        // The point to point links are separate /24s with no route between them, so bootstrap
+        // has to run over the one network every rank shares while the ring wants the fast link
+        // between each particular pair. The registering address is by construction the bootstrap
+        // one, so following it drags all world_size edges onto the slow network, including the
+        // two that have a dedicated cable sitting idle.
+        //
+        // The override names only this rank's outbound edge, which is exactly the part of the
+        // topology a rank can know on its own. The inbound side needs no counterpart: the
+        // listener is bound to INADDR_ANY, so it accepts on whichever interface prev dialed. A
+        // rank whose outbound edge has no dedicated link just leaves this unset and keeps the
+        // registered address, which is the correct answer for the edge that closes the ring on a
+        // fabric shaped like a line.
+        //
+        // Setting it is not optional bookkeeping once the ND path is per edge: dist-comm-nd
+        // derives the local RDMA address from the ring socket itself, so an edge dialed over the
+        // shared network has no ND capable address behind it and stays on TCP no matter what the
+        // cable situation is.
+        //
+        // The port still comes from the master's table unless the override spells one out. Ports
+        // are derived as master_port + rank and the master already has them right; it is only
+        // the address that bootstrap cannot know.
+        std::string next_host = members[next].host;
+        int         next_port = members[next].port;
+        {
+            const char * ov = std::getenv("LLAMA_DIST_TP_RING_NEXT_HOST");
+            if (ov != nullptr && *ov != 0) {
+                const std::string ov_str = ov;
+                next_host = ov_str;
+                // an explicit host:port is accepted, but only when the tail really is a port,
+                // so that a bare address is never truncated at some unrelated colon
+                const size_t colon = ov_str.rfind(':');
+                if (colon != std::string::npos && colon > 0 && colon + 1 < ov_str.size()) {
+                    const std::string tail = ov_str.substr(colon + 1);
+                    if (tail.find_first_not_of("0123456789") == std::string::npos) {
+                        const int ov_port = std::atoi(tail.c_str());
+                        if (ov_port > 0 && ov_port <= 65535) {
+                            next_host = ov_str.substr(0, colon);
+                            next_port = ov_port;
+                        }
+                    }
+                }
+                std::fprintf(stderr,
+                             "dist-tp: ring edge %d->%d dials %s:%d "
+                             "(LLAMA_DIST_TP_RING_NEXT_HOST overrides the registered %s:%d)\n",
+                             cfg.rank, next, next_host.c_str(), next_port,
+                             members[next].host.c_str(), members[next].port);
+            }
+        }
+
+        ring_out_fd = connect_with_retry(next_host, next_port, err);
         if (ring_out_fd == DIST_CCL_INVALID_SOCKET) {
             return false;
         }
@@ -651,34 +746,87 @@ struct dist_comm_socket_context::impl {
         return true;
     }
 
+    // world_size >= 3: next and prev are different hosts, so each ring edge needs its own ND
+    // connection. Three things make this work that did not arise at world_size 2.
+    //
+    //  - Edges are negotiated in one fixed global order, e = 0 .. world_size-1, where edge e
+    //    joins rank e to rank e+1. Every rank walks the same list and acts only on the two edges
+    //    it belongs to. Both endpoints of an edge therefore handshake at the same moment, and no
+    //    rank is left blocked reading a peer that is busy negotiating a different edge. Get this
+    //    order wrong and the run hangs for ND_CONNECT_TIMEOUT_S per edge instead of failing.
+    //
+    //  - On each edge the lower rank listens. The provider's connection manager sits on a fixed
+    //    port (ND_CM_PORT) and its listener binds one specific local address, so two listeners
+    //    clash only when they land on the same address. Lower-rank-listens leaves every host
+    //    with at most one listener here, which sidesteps the question rather than relying on the
+    //    two USB4 adapters on the hub node having distinct addresses.
+    //
+    //  - The negotiation is handed the same socket for both halves. dist_nd_establish() writes
+    //    on tcp_out and reads on tcp_in; at world_size 2 those are two sockets to one peer, but
+    //    per edge there is exactly one socket and it already faces the right host.
+    //
+    // An edge whose ring socket does not sit on an ND capable local address stays on TCP, which
+    // is the expected outcome for the edge that closes the ring on a line-shaped fabric: it has
+    // no point-to-point cable behind it and runs over whatever ordinary network carries it.
+    void establish_nd_per_edge() {
+        for (int e = 0; e < cfg.world_size; ++e) {
+            const int u = e;
+            const int v = (e + 1) % cfg.world_size;
+            if (cfg.rank != u && cfg.rank != v) {
+                continue;
+            }
+            const bool i_am_u = (cfg.rank == u);
+            // the socket already connected to this edge's peer: outbound for u, inbound for v
+            const socket_t fd = i_am_u ? ring_out_fd : ring_in_fd;
+            // computed identically on both ends, so exactly one side listens
+            const bool listen_side = (cfg.rank == (u < v ? u : v));
+
+            std::string nd_err;
+            dist_nd_conn * c = dist_nd_establish((uintptr_t) fd, (uintptr_t) fd, listen_side,
+                                                 nd_err, /* strict_local_addr */ true);
+            if (c == nullptr) {
+                std::fprintf(stderr,
+                             "dist-tp: NetworkDirect not established on ring edge %d->%d "
+                             "(rank %d, %s); that edge stays on TCP\n",
+                             u, v, cfg.rank, nd_err.c_str());
+            }
+            if (i_am_u) {
+                nd_send = c;
+            } else {
+                nd_recv = c;
+            }
+        }
+    }
+
     // Selects the data path for exchange_ring(). Opt-in via LLAMA_DIST_TP_RDMA; any failure
-    // here is logged and leaves the ring on TCP rather than aborting the run.
+    // here is logged and leaves that ring edge on TCP rather than aborting the run.
     void select_transport() {
         if (cfg.world_size >= 2 && dist_transport_env_true("LLAMA_DIST_TP_RDMA", false)) {
             if (!dist_nd_available()) {
                 std::fprintf(stderr,
                              "dist-tp: LLAMA_DIST_TP_RDMA is set but this binary was built without "
                              "NetworkDirect support; staying on TCP\n");
-            } else if (cfg.world_size != 2) {
-                // one ND listener per host is all the provider's fixed CM port allows, which is
-                // exactly enough for a 2-rank ring where prev and next are the same peer
-                std::fprintf(stderr,
-                             "dist-tp: LLAMA_DIST_TP_RDMA only supports world_size=2 (have %d); "
-                             "staying on TCP\n", cfg.world_size);
-            } else {
+            } else if (cfg.world_size == 2) {
                 std::string nd_err;
-                // rank 0 listens and advertises, rank 1 dials in; rank 0 makes the final call
-                nd = dist_nd_establish((uintptr_t) ring_out_fd, (uintptr_t) ring_in_fd,
-                                       cfg.rank == 0, nd_err);
-                if (nd == nullptr) {
+                // next and prev are the same peer, so one bidirectional connection carries both
+                // halves. rank 0 listens and advertises, rank 1 dials in; rank 0 makes the final
+                // call. This is the proven 2-rank path, kept byte for byte as it was.
+                nd_send = dist_nd_establish((uintptr_t) ring_out_fd, (uintptr_t) ring_in_fd,
+                                            cfg.rank == 0, nd_err);
+                if (nd_send == nullptr) {
                     std::fprintf(stderr,
                                  "dist-tp: NetworkDirect setup failed on rank %d (%s); "
                                  "falling back to TCP\n", cfg.rank, nd_err.c_str());
+                } else {
+                    nd_recv   = nd_send;
+                    nd_shared = true;
                 }
+            } else {
+                establish_nd_per_edge();
             }
         }
 
-        if (nd != nullptr) {
+        if (nd_send != nullptr || nd_recv != nullptr) {
             // default: one ND chunk per exchange; larger payloads stay on TCP. 0 = no ceiling.
             nd_max_bytes = 256 * 1024;
             const char * v = std::getenv("LLAMA_DIST_TP_RDMA_MAX_BYTES");
@@ -694,9 +842,22 @@ struct dist_comm_socket_context::impl {
             }
         }
 
+        // The harness greps for this exact prefix to prove which transport a benchmark actually
+        // used, so the leading "dist-tp transport: " and the "[rank i/N]" field must stay put.
+        const bool any_nd = nd_send != nullptr || nd_recv != nullptr;
         std::fprintf(stderr, "dist-tp transport: %s [rank %d/%d]",
-                     nd != nullptr ? "RDMA (ND)" : "TCP", cfg.rank, cfg.world_size);
-        if (nd != nullptr) {
+                     any_nd ? "RDMA (ND)" : "TCP", cfg.rank, cfg.world_size);
+        if (cfg.world_size > 2) {
+            // From 3 ranks up the two edges are separate links and a partial result is the
+            // expected outcome on a fabric that is a line, so report each edge rather than
+            // letting one word imply both are on ND.
+            const int next = (cfg.rank + 1) % cfg.world_size;
+            const int prev = (cfg.rank + cfg.world_size - 1) % cfg.world_size;
+            std::fprintf(stderr, " (->%d %s, %d-> %s)",
+                         next, nd_send != nullptr ? "ND" : "TCP",
+                         prev, nd_recv != nullptr ? "ND" : "TCP");
+        }
+        if (any_nd) {
             if (nd_max_bytes == 0) {
                 std::fprintf(stderr, " (all payloads over ND)");
             } else {

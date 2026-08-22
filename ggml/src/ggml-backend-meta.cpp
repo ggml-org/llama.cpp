@@ -1866,10 +1866,21 @@ struct ggml_backend_meta_context {
 
         std::vector<cgraph_config>           cgraphs;
         std::vector<ggml_tensor *>           nodes;
+        // One staging buffer per reduction step that can be outstanding at once.
+        //
+        // Two different reductions index this vector and they need different counts. The local
+        // butterfly over the devices inside this rank takes n_reduce_steps steps, a number
+        // derived from the local device count. The distributed ring across ranks takes
+        // world_size - 1 steps, which has nothing to do with the local device count and is the
+        // larger of the two in this cluster: one device per rank makes n_reduce_steps 1, while a
+        // 3 rank ring needs 2. Sizing by n_reduce_steps alone left the ring path with a single
+        // buffer, which is why it used to pin its index at 0 and reuse one buffer for every
+        // step. bufs is indexed with operator[] and never bounds checked, so the count has to
+        // cover whichever consumer needs more.
         std::vector<ggml_backend_buffer_ptr> bufs;
 
-        backend_config(ggml_backend_t backend, const size_t n_reduce_steps) : backend(backend) {
-            bufs.resize(n_reduce_steps);
+        backend_config(ggml_backend_t backend, const size_t n_bufs) : backend(backend) {
+            bufs.resize(n_bufs);
         }
     };
     std::string                 name;
@@ -1878,6 +1889,7 @@ struct ggml_backend_meta_context {
     std::vector<ggml_cgraph *>  cgraphs_aux;
     std::vector<ggml_tensor *>  nodes_aux;
     size_t                      n_reduce_steps;
+    size_t                      n_tmp_bufs;     // entries in backend_config::bufs; see the comment there
     int                         max_nnodes    = 0;
     size_t                      max_tmp_size  = 0;
     size_t                      max_subgraphs = 0;
@@ -1897,6 +1909,17 @@ struct ggml_backend_meta_context {
 
         const size_t n_devs = ggml_backend_meta_dev_n_devs(meta_dev);
         n_reduce_steps = std::max<size_t>(1, static_cast<size_t>(std::ceil(std::log2(n_devs))));
+
+        // See the comment on backend_config::bufs. dist_cfg is assigned just above, so the ring
+        // length is already known here and the staging buffers can be sized for whichever of the
+        // two reductions needs more of them.
+        int dist_rank_cfg = 0;
+        int dist_world_size_cfg = 1;
+        ggml_meta_dist_rank_world(dist_cfg, &dist_rank_cfg, &dist_world_size_cfg);
+        (void) dist_rank_cfg;
+        const size_t dist_steps_cfg = dist_world_size_cfg > 1 ? (size_t) (dist_world_size_cfg - 1) : 0;
+        n_tmp_bufs = std::max(n_reduce_steps, dist_steps_cfg);
+
         name = "Meta(";
         std::vector<ggml_backend_t> simple_backends;
         backend_configs.reserve(n_devs);
@@ -1908,7 +1931,7 @@ struct ggml_backend_meta_context {
             }
             name += ggml_backend_dev_name(simple_dev);
             simple_backends.push_back(ggml_backend_dev_init(simple_dev, params));
-            backend_configs.emplace_back(simple_backends.back(), n_reduce_steps);
+            backend_configs.emplace_back(simple_backends.back(), n_tmp_bufs);
         }
         name += ")";
 
@@ -2043,8 +2066,10 @@ static void ggml_backend_meta_get_tensor_async(ggml_backend_t backend, const ggm
         // Reuse thread-local scratch buffers to avoid large per-call allocations.
         thread_local std::vector<float> cur;
         thread_local std::vector<float> recv;
+        thread_local std::vector<float> sum;
         cur.resize(n);
         recv.resize(n);
+        sum.resize(n);
 
         if (t->type == GGML_TYPE_F32) {
             if (host_size != n * sizeof(float)) {
@@ -2060,6 +2085,25 @@ static void ggml_backend_meta_get_tensor_async(ggml_backend_t backend, const ggm
             return;
         }
 
+        // The accumulator starts as this rank's own shard and every other shard is folded in
+        // as it arrives. It has to be a separate buffer from the outbound payload; see below.
+        std::memcpy(sum.data(), cur.data(), n * sizeof(float));
+
+        // Store and forward ring. Each step a rank forwards the shard it received on the
+        // previous step, so over world_size - 1 steps every shard passes through every rank
+        // exactly once and lands in sum exactly once.
+        //
+        // cur is the outbound payload and sum is the accumulator, and the two must not be the
+        // same vector. Folding the received shard back into cur puts a partial sum on the wire
+        // instead of a single shard, and the next hop adds that partial sum again: at
+        // world_size 3 every rank ends up holding own_r + 2*own_{r-1} + own_{r-2} rather than
+        // the true total. Nothing asserts, the run reports a normal token rate, and only the
+        // generated text is wrong. It is invisible at world_size 2, where the single step ends
+        // the ring before anything is ever forwarded, which is how it survived until now.
+        //
+        // cur_src travels alongside the payload to name which rank's shard is being carried, so
+        // it is only meaningful while cur holds one rank's shard rather than a sum. Refreshing
+        // it in step with the swap keeps the two consistent.
         int32_t cur_src = dist_rank;
         for (int step = 0; step < dist_world_size - 1; ++step) {
             int32_t recv_src = -1;
@@ -2067,16 +2111,20 @@ static void ggml_backend_meta_get_tensor_async(ggml_backend_t backend, const ggm
                 return;
             }
             for (size_t k = 0; k < n; ++k) {
-                cur[k] += recv[k];
+                sum[k] += recv[k];
             }
-            cur_src = recv_src;
+            // Only refresh the outbound payload when another ring step follows.
+            if (step + 1 < dist_world_size - 1) {
+                cur.swap(recv);
+                cur_src = recv_src;
+            }
         }
 
         if (t->type == GGML_TYPE_F32) {
-            std::memcpy(host_data, cur.data(), host_size);
+            std::memcpy(host_data, sum.data(), host_size);
         } else {
             ggml_fp16_t * out = (ggml_fp16_t *) host_data;
-            ggml_fp32_to_fp16_row(cur.data(), out, n);
+            ggml_fp32_to_fp16_row(sum.data(), out, n);
         }
     };
 
@@ -2375,7 +2423,10 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
         if (max_tmp_size > backend_ctx->max_tmp_size) {
             for (size_t j = 0; j < n_backends; j++) {
                 auto & bcj = backend_ctx->backend_configs[j];
-                for (size_t i = 0; i < backend_ctx->n_reduce_steps; i++) {
+                // n_tmp_bufs, not n_reduce_steps: the ring path indexes past n_reduce_steps
+                // whenever world_size - 1 exceeds it, and set_tmp_data would otherwise be the
+                // first thing to touch those entries.
+                for (size_t i = 0; i < backend_ctx->n_tmp_bufs; i++) {
                     bcj.bufs[i].reset(ggml_backend_alloc_buffer(bcj.backend, max_tmp_size));
                 }
             }
@@ -2612,7 +2663,6 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
 
         for (size_t j = 0; j < n_backends; j++) {
             auto & bcj = backend_ctx->backend_configs[j];
-            const size_t i_buf = 0;
 
             for (ggml_tensor * node_dst : nodes_dist_per_backend[j]) {
                 if (node_dst == nullptr) {
@@ -2668,6 +2718,23 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
                 }
 
                 int32_t cur_src = dist_rank;
+
+                // A staging buffer per ring step, the same discipline the local butterfly above
+                // follows. The ADD that consumes step k's buffer is submitted through
+                // ggml_backend_graph_compute_async, and the only thing between it and step k+1
+                // overwriting that buffer is one blocking network exchange. With a single buffer
+                // step k+1 can be writing what step k's ADD is still reading. That is a race
+                // which usually wins, and a race that usually wins is worse than one that
+                // usually loses: it surfaces as slightly wrong numbers at full speed rather than
+                // as a crash. bufs holds at least world_size - 1 entries, so this index never
+                // has to wrap within one ring.
+                //
+                // Reset per node_dst rather than carried across the whole loop. The next
+                // node_dst opens with ggml_backend_tensor_get on this same backend, a
+                // synchronous device to host read, so the queue is drained before buffer 0 comes
+                // round again.
+                size_t i_buf = 0;
+
                 for (int step = 0; step < dist_world_size - 1; ++step) {
                     int32_t recv_src = -1;
                     if (!backend_ctx->dist_comm_allreduce(backend_ctx->dist_comm_ctx, cur.data(), n, cur_src, recv.data(), &recv_src)) {
@@ -2707,6 +2774,7 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
                         cur.swap(recv);
                         cur_src = recv_src;
                     }
+                    i_buf++;
                 }
             }
         }

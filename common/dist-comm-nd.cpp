@@ -7,7 +7,7 @@
 
 bool dist_nd_available() { return false; }
 
-dist_nd_conn * dist_nd_establish(uintptr_t, uintptr_t, bool, std::string & err) {
+dist_nd_conn * dist_nd_establish(uintptr_t, uintptr_t, bool, std::string & err, bool) {
     err = "this binary was built without NetworkDirect support";
     return nullptr;
 }
@@ -411,7 +411,8 @@ static bool nd_setup(std::unique_ptr<dist_nd_conn> & conn, const struct sockaddr
 }
 
 // tries the adapter behind the ring socket first, then any other ND capable local address
-static bool nd_setup_any(std::unique_ptr<dist_nd_conn> & conn, SOCKET fd, struct sockaddr_in * chosen) {
+static bool nd_setup_any(std::unique_ptr<dist_nd_conn> & conn, SOCKET fd, struct sockaddr_in * chosen,
+                         bool strict_local_addr) {
     struct sockaddr_in addr = {};
     if (nd_local_addr(fd, &addr) && nd_setup(conn, addr)) {
         *chosen = addr;
@@ -420,6 +421,13 @@ static bool nd_setup_any(std::unique_ptr<dist_nd_conn> & conn, SOCKET fd, struct
     conn.reset();
     if (std::getenv("LLAMA_DIST_TP_RDMA_ADDR")) {
         // an explicit choice must not be silently overridden
+        return false;
+    }
+    if (strict_local_addr) {
+        // This edge is not on an ND capable address. Scanning would find an adapter facing some
+        // other peer and advertise or dial an address unreachable across this edge, which shows
+        // up as a connect timeout rather than a clean fallback. Give up now and let it run TCP.
+        ND_LOG_DBG("ring-local address is not ND capable and scanning is disabled for this edge\n");
         return false;
     }
     ND_LOG_DBG("setup on the ring-local address failed, scanning ND capable addresses\n");
@@ -847,7 +855,8 @@ static bool tcp_read_all(SOCKET fd, void * data, size_t size) {
 
 bool dist_nd_available() { return true; }
 
-dist_nd_conn * dist_nd_establish(uintptr_t tcp_out_raw, uintptr_t tcp_in_raw, bool listen_side, std::string & err) {
+dist_nd_conn * dist_nd_establish(uintptr_t tcp_out_raw, uintptr_t tcp_in_raw, bool listen_side, std::string & err,
+                                 bool strict_local_addr) {
     const SOCKET tcp_out = (SOCKET)tcp_out_raw;
     const SOCKET tcp_in  = (SOCKET)tcp_in_raw;
 
@@ -858,7 +867,7 @@ dist_nd_conn * dist_nd_establish(uintptr_t tcp_out_raw, uintptr_t tcp_in_raw, bo
 
     std::unique_ptr<dist_nd_conn> conn;
     struct sockaddr_in addr = {};
-    bool local_ok = nd_setup_any(conn, tcp_out, &addr);
+    bool local_ok = nd_setup_any(conn, tcp_out, &addr, strict_local_addr);
     if (!local_ok) {
         conn.reset();
         err = "no usable NetworkDirect adapter on this host";

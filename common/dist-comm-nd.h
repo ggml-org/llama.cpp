@@ -25,12 +25,25 @@ bool dist_nd_available();
 //   tcp_out / tcp_in : the ring sockets already connected to the peer. tcp_out carries the
 //                      outbound half of the negotiation, tcp_in the inbound half; tcp_in is
 //                      also polled for end-of-stream while blocked on the completion queue.
-//   listen_side      : true  -> wait for the peer to dial in  (rank 0)
-//                      false -> dial out to the peer          (rank 1)
+//                      When one socket serves a single ring edge, pass it as both.
+//   listen_side      : true  -> wait for the peer to dial in
+//                      false -> dial out to the peer
+//   strict_local_addr: refuse to fall back to scanning other ND capable local addresses when
+//                      the address behind the ring socket is not itself ND capable.
 //
-// Both ranks agree on the outcome before this returns: rank 0 makes the final call and tells
-// rank 1. Returns nullptr with err set when ND is unavailable or negotiation failed.
-dist_nd_conn * dist_nd_establish(uintptr_t tcp_out, uintptr_t tcp_in, bool listen_side, std::string & err);
+//                      The scan is right for a 2-rank ring, where the one peer is reachable and
+//                      any working adapter will do. It is wrong once the ring spans more than
+//                      two hosts: an edge running over ordinary Ethernet would scan, find the
+//                      unrelated point-to-point adapter, and advertise or dial an address the
+//                      peer cannot reach on that edge, turning a clean TCP fallback into a
+//                      ND_CONNECT_TIMEOUT_S stall. Under strict mode such an edge fails fast
+//                      and stays on TCP, which is the correct answer for a cable that is
+//                      not there.
+//
+// Both ranks agree on the outcome before this returns: the listening side makes the final call
+// and tells the other. Returns nullptr with err set when ND is unavailable or negotiation failed.
+dist_nd_conn * dist_nd_establish(uintptr_t tcp_out, uintptr_t tcp_in, bool listen_side, std::string & err,
+                                 bool strict_local_addr = false);
 
 // Sends a header and its payload as a single ND chunk, so one collective costs one round of
 // wire latency rather than two.
