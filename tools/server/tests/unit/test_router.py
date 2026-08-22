@@ -366,6 +366,38 @@ def test_router_api_key_required():
     assert "error" not in authed.body
 
 
+def test_router_load_preset_without_model_source():
+    """POST /models/load rejects presets that do not specify a model source."""
+    global server
+
+    preset_path = os.path.join(TMP_DIR, "test_no_model_source.ini")
+
+    with open(preset_path, "w") as f:
+        f.write(
+            "[broken-model]\n"
+            "ctx-size = 512\n"
+        )
+
+    server.models_preset = preset_path
+    server.no_models_autoload = True
+    server.start()
+
+    try:
+        ids = _get_model_ids(is_reload=False)
+        assert "broken-model" in ids
+
+        load_res = server.make_request(
+            "POST", "/models/load", data={"model": "broken-model"}
+        )
+        assert load_res.status_code == 400
+        assert "error" in load_res.body
+        assert "no model source" in load_res.body["error"]["message"].lower()
+
+        _wait_for_model_status("broken-model", {"unloaded"}, timeout=5)
+    finally:
+        os.remove(preset_path)
+
+
 def test_router_reload_models():
     """POST /models/reload re-reads the INI preset and updates the model list."""
     global server

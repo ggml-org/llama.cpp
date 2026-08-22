@@ -297,6 +297,23 @@ static std::filesystem::path get_server_exec_path() {
 #endif
 }
 
+static bool preset_has_model_source(const common_preset & preset) {
+    std::string val;
+    if (preset.get_option("LLAMA_ARG_MODEL", val) && !val.empty()) {
+        return true;
+    }
+    if (preset.get_option("LLAMA_ARG_MODEL_URL", val) && !val.empty()) {
+        return true;
+    }
+    if (preset.get_option("LLAMA_ARG_HF_REPO", val) && !val.empty()) {
+        return true;
+    }
+    if (preset.get_option("LLAMA_ARG_DOCKER_REPO", val) && !val.empty()) {
+        return true;
+    }
+    return false;
+}
+
 static void unset_reserved_args(common_preset & preset, bool unset_model_args) {
     preset.unset_option("LLAMA_ARG_SSL_KEY_FILE");
     preset.unset_option("LLAMA_ARG_SSL_CERT_FILE");
@@ -1015,6 +1032,11 @@ void server_models::load(const std::string & name, const load_options & opts) {
 
     if (inst.meta.port <= 0) {
         throw std::runtime_error("failed to get a port number");
+    }
+
+    if (opts.mode != SERVER_CHILD_MODE_DOWNLOAD && !preset_has_model_source(inst.meta.preset)) {
+        throw std::invalid_argument(
+            "model '" + name + "' has no model source (model, model-url, hf-repo, or docker-repo)");
     }
 
     inst.subproc = std::make_shared<server_subproc>();
