@@ -341,6 +341,15 @@ bool ggml_cuda_should_use_mmq(enum ggml_type type, int cc, int64_t ne11, int64_t
         if (ne11 <= 256 && (type == GGML_TYPE_Q4_K || type == GGML_TYPE_Q5_K)) {
             return true;
         }
+        // MXFP4 looks like IQ4_NL to MMQ: 32 values per block, 4 bits each,
+        // decoded through a 16-entry lookup table, one scale per block (an e8m0
+        // exponent instead of an fp16 factor). Its MMQ traits differ from
+        // IQ4_NL's only in the load_tiles function, so change set 14's argument
+        // carries over. Placement note: the clauses above can only return true,
+        // so this block is order-independent with respect to them.
+        if (type == GGML_TYPE_MXFP4) {
+            return true;
+        }
         return false;
     }
 
