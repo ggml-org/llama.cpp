@@ -1,14 +1,8 @@
-#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && CUDART_VERSION >= 11070
-#define USE_CUB
-#endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && CUDART_VERSION >= 11070
-
-#ifdef USE_CUB
-#include <cub/cub.cuh>
-using namespace cub;
-#endif // USE_CUB
-
 #include "ssm-scan.cuh"
 
+#ifdef GGML_CUDA_USE_CUB
+using namespace cub;
+#endif // GGML_CUDA_USE_CUB
 
 // Minimum number of tokens to use SSD (State Space Duality) matmul path instead of scan path.
 // For n_tok <= this threshold, the scan kernel is used (lower overhead for short sequences).
@@ -71,7 +65,7 @@ __global__ void __launch_bounds__(splitD, 1)
     __shared__ float smemB[N];
     __shared__ float smemC[N];
 
-#ifdef USE_CUB
+#ifdef GGML_CUDA_USE_CUB
     using BlockLoad = cub::BlockLoad<float, splitD, N, cub::BLOCK_LOAD_WARP_TRANSPOSE>;
     using BlockStore = cub::BlockStore<float, splitD, N, cub::BLOCK_STORE_WARP_TRANSPOSE>;
 
@@ -93,7 +87,7 @@ __global__ void __launch_bounds__(splitD, 1)
         regA[n] = A_block[threadIdx.x * stride_A + n];
         regs0[n] = s0_block[threadIdx.x * stride_s0 + n];
     }
-#endif
+#endif // GGML_CUDA_USE_CUB
 
 #pragma unroll
     for (size_t i = 0; i < L; i++)
@@ -124,7 +118,7 @@ __global__ void __launch_bounds__(splitD, 1)
         __syncthreads();
     }
 
-#ifdef USE_CUB
+#ifdef GGML_CUDA_USE_CUB
     BlockStore(cub_temp_storage.store_temp).Store(s_block, regs0);
 #else
     const int stride_s = stride_s0;
@@ -133,7 +127,7 @@ __global__ void __launch_bounds__(splitD, 1)
     {
         s_block[threadIdx.x * stride_s + n] = regs0[n];
     }
-#endif
+#endif // GGML_CUDA_USE_CUB
 }
 #ifdef __clang__
 #pragma clang diagnostic pop
@@ -392,7 +386,7 @@ __global__ void ssm_ssd_prepare_dt_kernel(
     // Phase 2+3: per-step inclusive scan to build cs[] in token order.
     // With interleaved distribution the per-thread total scan would not give token-order
     // prefix sums, so we scan one BLOCK_SIZE slab at a time and carry a running total.
-#ifdef USE_CUB
+#ifdef GGML_CUDA_USE_CUB
     using BlockScan = cub::BlockScan<float, BLOCK_SIZE>;
     __shared__ typename BlockScan::TempStorage scan_temp;
     __shared__ float step_total;
@@ -411,7 +405,7 @@ __global__ void ssm_ssd_prepare_dt_kernel(
         __syncthreads();
         running += step_total;
     }
-#else
+#else // GGML_CUDA_USE_CUB
     // Fallback: sequential prefix scan in shared memory, one slab at a time.
     __shared__ float sdata[BLOCK_SIZE];
     float running = 0.0f;
