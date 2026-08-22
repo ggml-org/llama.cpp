@@ -434,9 +434,18 @@ extern "C" {
     };
 
     // precision
+    // this enum is used to declare the allowed floating-point types that can be used during the compute of an op
+    // the declared types can be:
+    //  - result accumulation type
+    //  - source tensor data representation type
+    //  - etc.
+    // the precision parameters are stored as ggml_tensor.op_params to the respective ops
     enum ggml_prec {
-        GGML_PREC_DEFAULT =  0, // stored as ggml_tensor.op_params, 0 by default
+        GGML_PREC_DEFAULT =  0, // TODO: rename to GGML_PREC_UNDEFINED?
         GGML_PREC_F32     = 10,
+        GGML_PREC_F16     = 20,
+        GGML_PREC_Q8      = 30,
+        GGML_PREC_Q4      = 40,
     };
 
     // op hint
@@ -1432,7 +1441,37 @@ extern "C" {
 
     // change the precision of a matrix multiplication
     // set to GGML_PREC_F32 for higher precision (useful for phi-2)
-    GGML_API void ggml_mul_mat_set_prec(
+    GGML_DEPRECATED(GGML_API void ggml_mul_mat_set_prec(
+            struct ggml_tensor * a,
+            enum ggml_prec       prec),
+        "use ggml_mul_mat_set_prec_acc() instead");
+
+    // set the minimum required accumulator type for the implementation to use during the compute
+    // for example:
+    //  - GGML_PREC_DEFAULT - the implementation is allowed to choose the most efficient accumulation type (i.e. same as GGML_PREC_F16)
+    //  - GGML_PREC_F32     - requires accumulation of the results in F32
+    //  - GGML_PREC_F16     - can accumulate the results in F16, BF16, F32
+    //  - GGML_PREC_Q8      - not allowed
+    //  - GGML_PREC_Q4      - not allowed
+    GGML_API void ggml_mul_mat_set_prec_acc(
+            struct ggml_tensor * a,
+            enum ggml_prec       prec);
+
+    // set the smallest rank that the implementation can use to internally convert the src1 data to
+    // ranks in decreasing order:
+    //   - GGML_PREC_F32:     GGML_TYPE_F32
+    //   - GGML_PREC_F16:     GGML_TYPE_F16, GGML_TYPE_BF16
+    //   - GGML_PREC_Q8:      GGML_TYPE_Q8_0, GGML_TYPE_Q8_1, GGML_TYPE_Q8_K, etc.
+    //   - GGML_PREC_Q4:      GGML_TYPE_Q4_0, GGML_TYPE_Q4_1, GGML_TYPE_Q4_K, GGML_TYPE_NVFP4, GGML_TYPE_MXFP4, etc.
+    //
+    // for example:
+    //   - ggml_mul_mat_set_prec_src1(a, GGML_PREC_Q8):
+    //     - allows the implementation to quantize F32, F16 data down to GGML_TYPE_Q8_0
+    //     - cannot quantize it down to GGML_TYPE_Q4_0 or GGML_TYPE_NVFP4
+    //   - ggml_mul_mat_set_prec_src1(a, GGML_PREC_Q4):
+    //     - allows the implementation to quantize F32, F16 data down to GGML_TYPE_Q8_0 or GGML_TYPE_NVFP4
+    //
+    GGML_API void ggml_mul_mat_set_prec_src1(
             struct ggml_tensor * a,
             enum ggml_prec       prec);
 
