@@ -1453,6 +1453,8 @@ class peg_tester {
 
     const std::string & template_path() const { return template_path_; }
 
+    common_chat_templates * templates() const { return tmpls_.get(); }
+
     peg_test_builder test(const std::string & input);
 };
 
@@ -4305,6 +4307,15 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
     {
         auto tst = peg_tester("models/templates/GLM-4.7-Flash.jinja", detailed_debug);
 
+        static const common_chat_tool terminal_tool{
+            "terminal", "Run or interact with a terminal command",
+            R"({"type":"object","properties":{"security_risk":{"type":"string"},"summary":{"type":"string"},"command":{"type":"string"},"is_input":{"type":"boolean"},"timeout":{"type":"integer"},"reset":{"type":"boolean"}},"required":["command","security_risk"]})",
+        };
+        static const common_chat_tool think_tool{
+            "think", "Record reasoning",
+            R"({"type":"object","properties":{"summary":{"type":"string"},"thought":{"type":"string"}},"required":["thought"]})",
+        };
+
         // Pure content (no reasoning)
         tst.test("Hello, world!\nWhat's up?")
             .enable_thinking(false)
@@ -4330,6 +4341,62 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .expect(message_assist_call)
             .expect_reconstruction()
             .run();
+
+        // OpenAI tool arguments are object members: required and optional
+        // fields may be interleaved in any order.
+        tst.test(
+               "<tool_call>terminal"
+               "<arg_key>command</arg_key><arg_value>C-c</arg_value>"
+               "<arg_key>is_input</arg_key><arg_value>true</arg_value>"
+               "<arg_key>security_risk</arg_key><arg_value>LOW</arg_value>"
+               "</tool_call>")
+            .enable_thinking(false)
+            .tools({ terminal_tool, think_tool })
+            .expect_tool_calls({
+                { "terminal", R"({"command":"C-c","is_input":true,"security_risk":"LOW"})", {} },
+            })
+            .run();
+
+        tst.test(
+               "<tool_call>think"
+               "<arg_key>summary</arg_key><arg_value>Inspect the failure</arg_value>"
+               "<arg_key>thought</arg_key><arg_value>Check the process state.</arg_value>"
+               "</tool_call>")
+            .enable_thinking(false)
+            .tools({ terminal_tool, think_tool })
+            .expect_tool_calls({
+                { "think", R"({"summary":"Inspect the failure","thought":"Check the process state."})", {} },
+            })
+            .run();
+
+        // Flexible ordering must not weaken the schema's presence and
+        // uniqueness rules.
+        common_chat_templates_inputs validation_inputs;
+        validation_inputs.messages = { message_user };
+        validation_inputs.tools = { terminal_tool, think_tool };
+        validation_inputs.enable_thinking = false;
+        auto validation_parser = make_peg_parser(tst.templates(), validation_inputs, detailed_debug);
+
+        try {
+            validation_parser.parse(
+                "<tool_call>terminal"
+                "<arg_key>command</arg_key><arg_value>pwd</arg_value>"
+                "</tool_call>", false);
+            throw std::runtime_error("Expected missing required tagged argument to fail");
+        } catch (const std::exception & e) {
+            assert_contains(e.what(), "Missing required tool argument: security_risk");
+        }
+
+        try {
+            validation_parser.parse(
+                "<tool_call>think"
+                "<arg_key>thought</arg_key><arg_value>one</arg_value>"
+                "<arg_key>thought</arg_key><arg_value>two</arg_value>"
+                "</tool_call>", false);
+            throw std::runtime_error("Expected duplicate tagged argument to fail");
+        } catch (const std::exception & e) {
+            assert_contains(e.what(), "Duplicate tool argument: thought");
+        }
 
         // Tool call with reasoning (forced-open mode)
         tst.test(
@@ -4442,7 +4509,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
                 "Thinking.\n"
                 "</think>"
                 "<tool_call>get_weather"
-                "<arg_key>city</arg_key><arg_value>Tokyo</arg_value>"
+                "<arg_key>country</arg_key><arg_value>Japan</arg_value>"
                 "</tool_call>\n";
 
             bool got_runtime_error = false;

@@ -5,6 +5,7 @@
 
 #include <map>
 #include <optional>
+#include <set>
 #include <vector>
 
 class common_chat_peg_mapper {
@@ -26,6 +27,8 @@ class common_chat_peg_mapper {
       int                                  arg_count             = 0;
       bool                                 closing_quote_pending = false;
       std::string                          args_buffer;  // Buffer to delay arguments until tool name is known
+      std::set<std::string>                required_args;
+      std::set<std::string>                seen_args;
 
       // Returns a reference to the active argument destination string.
       // Before tool_name is known, writes go to args_buffer; after, to current_tool->arguments.
@@ -77,6 +80,7 @@ class common_chat_peg_builder : public common_peg_parser_builder {
     static constexpr const char * TOOL_ARG_NAME         = "tool-arg-name";
     static constexpr const char * TOOL_ARG_VALUE        = "tool-arg-value";
     static constexpr const char * TOOL_ARG_STRING_VALUE = "tool-arg-string-value";  // For schema-declared string types
+    static constexpr const char * TOOL_REQUIRED_ARG_PREFIX = "tool-required-arg:";
 
     // Low-level tag methods (from former common_chat_peg_base_builder)
     common_peg_parser reasoning_block(const common_peg_parser & p) { return tag(REASONING_BLOCK, p); }
@@ -105,6 +109,13 @@ class common_chat_peg_builder : public common_peg_parser_builder {
     // Use for schema-declared string types - won't be treated as potential JSON container
     common_peg_parser tool_arg_string_value(const common_peg_parser & p) { return tag(TOOL_ARG_STRING_VALUE, p); }
     common_peg_parser tool_arg_json_value(const common_peg_parser & p) { return tag(TOOL_ARG_VALUE, p); }
+
+    // Attach schema metadata to the AST without consuming model output. The
+    // mapper uses this to enforce required tagged arguments after accepting
+    // them in arbitrary object-key order.
+    common_peg_parser tool_required_arg(const std::string & name) {
+        return tag(std::string(TOOL_REQUIRED_ARG_PREFIX) + name, eps());
+    }
 
 
     // Matches every parser exactly once, in any order.
