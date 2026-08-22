@@ -152,9 +152,8 @@
 		getServerHome: () => toolsStore.serverHome ?? null,
 		getShowModelSelector: () => showModelSelector,
 		getValue: () => value,
-		hasCwdTools: () => toolsStore.hasEnabledCwdTools,
-		hasPrompts: () =>
-			mcpStore.hasPromptsCapability(conversationsStore.preferences.getAllMcpServerOverrides()),
+		hasCwdTools: () => conversationsStore.preferences.hasEnabledCwdTools(),
+		hasPrompts: () => mcpStore.hasPromptsCapability(),
 		openModelSelector: () => chatFormActionsRef?.openModelSelector(),
 		setCaretOffset: (offset) => inputRef?.setCaretOffset(offset),
 		setValue: (v) => {
@@ -635,7 +634,7 @@
 
 	<ContextGaugePopup />
 
-	{#if toolsStore.hasEnabledCwdTools}
+	{#if conversationsStore.preferences.hasEnabledCwdTools()}
 		<ChatFormCurrentWorkingDirectory
 			directory={cwd}
 			isOpen={pickers.isWorkingDirectoryPickerOpen}
