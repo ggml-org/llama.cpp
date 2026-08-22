@@ -5367,6 +5367,16 @@ class GGMLQuantizationType(IntEnum):
     NVFP4   = 40
     Q1_0    = 41
     Q2_0    = 42
+    # experimental per-tensor-levels quant types, parked at 100+ so that upstream
+    # can keep appending types below without colliding
+    Q3_PT   = 100
+    Q3_KPT  = 101
+    Q4_DPT  = 102
+    Q2_DPT  = 103
+    Q2_KPT  = 104
+    IQ2_TQ  = 105
+    IQ3_TQ  = 106
+    IQ1_BN  = 107
 
 
 class ExpertGatingFuncType(IntEnum):
@@ -5557,6 +5567,14 @@ GGML_QUANT_SIZES: dict[GGMLQuantizationType, tuple[int, int]] = {
     GGMLQuantizationType.NVFP4:   (64, 4 + 32),
     GGMLQuantizationType.Q1_0:    (128, 2 + 16),
     GGMLQuantizationType.Q2_0:    (64, 2 + 16),
+    GGMLQuantizationType.Q3_PT:   (256, 124),
+    GGMLQuantizationType.Q3_KPT:  (256, 110),
+    GGMLQuantizationType.Q4_DPT:  (32, 18),
+    GGMLQuantizationType.Q2_DPT:  (32, 10),
+    GGMLQuantizationType.Q2_KPT:  (256, 84),
+    GGMLQuantizationType.IQ2_TQ:  (256, 82),
+    GGMLQuantizationType.IQ3_TQ:  (256, 114),
+    GGMLQuantizationType.IQ1_BN:  (256, 50),
 }
 
 
