@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import re
 
 import torch
 
@@ -18,6 +19,14 @@ from .deepseek import DeepseekV2Model
 class Dots3NoteModel(DeepseekV2Model):
     model_arch = gguf.MODEL_ARCH.DOTS3NOTE
     skip_mtp = False
+    supports_mtp_export = True
+
+    # trunk layer count, stashed before indexing for filter_tensors (mirrors DeepseekV32Model)
+    _n_main_layers: int | None = None
+
+    def index_tensors(self, remote_hf_model_id: str | None = None):
+        type(self)._n_main_layers = self.hparams["num_hidden_layers"]
+        return super().index_tensors(remote_hf_model_id=remote_hf_model_id)
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -77,10 +86,25 @@ class Dots3NoteModel(DeepseekV2Model):
 
     @classmethod
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
-        name, _ = item
+        if (titem := super().filter_tensors(item)) is None:
+            return None
+        name, gen = titem
         if name.startswith(("vision_encoder.", "audio_encoder.")):
             return None
-        return super().filter_tensors(item)
+
+        assert cls._n_main_layers is not None
+        is_mtp = name.startswith("model.mtp.") or \
+            ((m := re.match(r"model\.layers\.(\d+)\.", name)) is not None and int(m.group(1)) >= cls._n_main_layers)
+
+        # --no-mtp: drop the NextN/MTP block; --mtp: keep only that block plus the shared embeddings/norm/lm_head
+        if is_mtp and cls.no_mtp:
+            return None
+        if cls.mtp_only and not is_mtp and name not in (
+            "model.embed_tokens.weight", "model.norm.weight", "lm_head.weight",
+        ):
+            return None
+
+        return name, gen
 
     def set_gguf_parameters(self):
         hparams = self.hparams
@@ -117,6 +141,19 @@ class Dots3NoteModel(DeepseekV2Model):
         self.gguf_writer.add_indexer_key_length(hparams["index_head_dim"])
         self.gguf_writer.add_indexer_top_k(hparams["index_topk"])
         self.gguf_writer.add_indexer_types([not self._is_swa_layer(il) for il in range(n_layer)])
+
+    def prepare_metadata(self, vocab_only: bool):
+        from_dir = self.fname_out.is_dir()
+        super().prepare_metadata(vocab_only=vocab_only)
+
+        if not self.mtp_only or not from_dir:
+            return
+
+        output_type: str = self.ftype.name.partition("_")[2]
+        fname_default: str = gguf.naming_convention(
+            self.metadata.name, self.metadata.basename, self.metadata.finetune,
+            self.metadata.version, size_label=None, output_type=output_type, model_type=None)
+        self.fname_out = self.fname_out.parent / f"mtp-{fname_default}.gguf"
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         # move the MTP token embedding into the NextN block so the standard nextn mapping picks it up
