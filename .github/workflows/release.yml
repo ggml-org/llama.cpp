@@ -1392,11 +1392,6 @@ jobs:
             ${{ env.CMAKE_ARGS }}
           cmake --build build --config Release -j $(nproc)
 
-      - name: ccache-clear
-        uses: ./.github/actions/ccache-clear
-        with:
-          key: release-ubuntu-rocm-${{ matrix.ROCM_VERSION }}-${{ matrix.build }}
-
       - name: Determine tag name
         id: tag
         uses: ./.github/actions/get-tag-name
@@ -1416,10 +1411,10 @@ jobs:
           path: llama-${{ steps.tag.outputs.name }}-bin-ubuntu-rocm-${{ env.ROCM_VERSION_SHORT }}-${{ matrix.build }}.tar.gz
           name: llama-bin-ubuntu-rocm-${{ env.ROCM_VERSION_SHORT }}-${{ matrix.build }}.tar.gz
 
-#       # - name: ccache-clear
-#       #   uses: ./.github/actions/ccache-clear
-#       #   with:
-#       #     key: release-ubuntu-22.04-rocm-${{ matrix.ROCM_VERSION }}
+      - name: ccache-clear
+        uses: ./.github/actions/ccache-clear
+        with:
+          key: release-ubuntu-rocm-${{ matrix.ROCM_VERSION }}-${{ matrix.build }}
 
   ios-xcode:
     needs: [check-release, get-version]
