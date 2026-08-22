@@ -165,7 +165,10 @@
 				<button
 					type="button"
 					class={sheetItemClass}
-					onclick={() => chatFormActions.onMcpSettingsClick?.()}
+					onclick={() => {
+						sheetOpen = false;
+						chatFormActions.onMcpSettingsClick?.();
+					}}
 				>
 					<McpLogo class="inline {ICON_CLASS_DEFAULT} shrink-0" />
 

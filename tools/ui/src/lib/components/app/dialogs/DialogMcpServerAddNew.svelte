@@ -244,7 +244,7 @@
 </script>
 
 <Dialog.Root {open} onOpenChange={handleOpenChange}>
-	<Dialog.Content class="sm:max-w-2xl">
+	<Dialog.Content class="max-w-2xl!">
 		<Dialog.Header>
 			<Dialog.Title class="select-none">Add New MCP Server</Dialog.Title>
 		</Dialog.Header>

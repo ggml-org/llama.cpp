@@ -252,7 +252,7 @@
 </script>
 
 <Dialog.Root {open} onOpenChange={handleOpenChange}>
-	<Dialog.Content class="max-h-[80vh] !max-w-4xl overflow-hidden p-0">
+	<Dialog.Content class="max-h-[80vh] md:max-w-4xl! w-full! overflow-hidden p-0">
 		<Dialog.Header class="border-b border-border/30 px-6 py-4">
 			<Dialog.Title class="flex items-center gap-2">
 				<FolderOpen class="h-5 w-5" />

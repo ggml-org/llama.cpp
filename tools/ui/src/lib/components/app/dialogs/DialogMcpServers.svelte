@@ -18,7 +18,7 @@
 
 <Dialog.Root {open} onOpenChange={handleOpenChange}>
 	<Dialog.Content
-		class="h-[calc(100vh-4rem)]! max-h-240! w-[calc(100vw-4rem)]! max-w-360! flex flex-col"
+		class="md:h-[calc(100vh-4rem)]! md:max-h-240! md:w-[calc(100vw-4rem)]! md:max-w-360! flex flex-col"
 	>
 		<Dialog.Header>
 			<Dialog.Title class="flex items-center gap-2">
