@@ -1327,6 +1327,12 @@ class GGUFWriter:
     def add_vision_spatial_merge_size(self, value: int) -> None:
         self.add_uint32(Keys.ClipVision.SPATIAL_MERGE_SIZE, value)
 
+    def add_vision_expert_count_per_layer(self, value: Sequence[int]) -> None:
+        self.add_array(Keys.ClipVision.EXPERT_COUNT_PER_LAYER, value)
+
+    def add_vision_expert_used_count(self, value: int) -> None:
+        self.add_uint32(Keys.ClipVision.EXPERT_USED_COUNT, value)
+
     def add_vision_use_gelu(self, value: bool) -> None:
         self.add_bool(Keys.ClipVision.USE_GELU, value)
 

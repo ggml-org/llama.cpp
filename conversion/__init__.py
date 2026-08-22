@@ -282,6 +282,8 @@ MMPROJ_MODEL_MAP: dict[str, str] = {
     "CogVLMForCausalLM": "cogvlm",
     "DeepseekOCR2ForCausalLM": "deepseek",
     "DeepseekOCRForCausalLM": "deepseek",
+    "Dots3NoteForCausalLM": "dots3",
+    "Dots3NoteForConditionalGeneration": "dots3",
     "DotsOCRForCausalLM": "dotsocr",
     "Exaone4_5_ForConditionalGeneration": "exaone",
     "Gemma3ForConditionalGeneration": "gemma",

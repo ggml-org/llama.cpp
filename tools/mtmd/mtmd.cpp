@@ -825,6 +825,7 @@ struct mtmd_context {
                     image_preproc = std::make_unique<mtmd_image_preprocessor_longest_edge>(ctx_v);
                 } break;
             case PROJECTOR_TYPE_DOTS_OCR:
+            case PROJECTOR_TYPE_DOTS3NOTE_V:
                 {
                     // <|img|> ... (image embeddings) ... <|endofimg|>
                     img_beg = "<|img|>";
@@ -975,6 +976,13 @@ struct mtmd_context {
                     aud_beg = "<|audio>";
                     aud_end = "<audio|>";
                     audio_preproc = std::make_unique<mtmd_audio_preprocessor_gemma4ua>(ctx_a);
+                } break;
+            case PROJECTOR_TYPE_DOTS3NOTE_A:
+                {
+                    // <|audio_comp_start|> ... (embeddings) ... <|audio_comp_end|>
+                    aud_beg = "<|audio_comp_start|>";
+                    aud_end = "<|audio_comp_end|>";
+                    audio_preproc = std::make_unique<mtmd_audio_preprocessor_dots3note>(ctx_a);
                 } break;
             case PROJECTOR_TYPE_MIMO_AUDIO:
                 {

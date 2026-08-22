@@ -111,6 +111,15 @@ struct mtmd_audio_preprocessor_qwen3a : mtmd_audio_preprocessor {
     mtmd_audio_cache cache;
 };
 
+struct mtmd_audio_preprocessor_dots3note : mtmd_audio_preprocessor {
+    mtmd_audio_preprocessor_dots3note(const clip_ctx * ctx) : mtmd_audio_preprocessor(ctx) {}
+    void initialize() override;
+    bool preprocess(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output) override;
+
+  private:
+    mtmd_audio_cache cache;
+};
+
 struct mtmd_audio_preprocessor_mimo_audio : mtmd_audio_preprocessor {
     mtmd_audio_preprocessor_mimo_audio(const clip_ctx * ctx) : mtmd_audio_preprocessor(ctx) {}
     void initialize() override;

@@ -3,12 +3,14 @@ from __future__ import annotations
 import math
 import re
 
-from typing import TYPE_CHECKING, Callable, Iterable
+import torch
+
+from typing import TYPE_CHECKING, Any, Callable, Iterable
 
 if TYPE_CHECKING:
     from torch import Tensor
 
-from .base import ModelBase, gguf
+from .base import MmprojModel, ModelBase, gguf
 
 from .deepseek import DeepseekV2Model
 
@@ -193,3 +195,129 @@ class Dots3NoteModel(DeepseekV2Model):
             return
 
         yield from super().modify_tensors(data_torch, name, bid)
+
+
+@ModelBase.register("Dots3NoteForCausalLM", "Dots3NoteForConditionalGeneration")
+class Dots3NoteMmprojModel(MmprojModel):
+    has_vision_encoder = True
+    has_audio_encoder = True
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        assert self.hparams_vision is not None
+        assert self.hparams_audio is not None
+
+        # preprocessor_config.json nests the image params under vision_config
+        self.preprocessor_config = {**self.preprocessor_config, **self.preprocessor_config.get("vision_config", {})}
+
+        vis = self.hparams_vision
+        # in this config, hidden_size is the adapter output width; embed_dim is the tower width
+        vis["hidden_size"] = vis["embed_dim"]
+        vis["image_size"] = 0  # dynamic resolution
+        self.pyramid = [max(0, n) for n in vis["pyramid_num_routed"]]
+
+        if vis.get("adapter_type") != "patch_merger" or not vis.get("pre_pixel_shuffle"):
+            raise ValueError("dots3-note vision conversion requires adapter_type=patch_merger and pre_pixel_shuffle")
+        if vis.get("router_scoring_func", "sigmoid") != "sigmoid" or vis.get("router_scale", 1.0) != 1.0:
+            raise ValueError("dots3-note vision conversion only supports sigmoid routing with router_scale=1.0")
+        if vis.get("temporal_patch_size", 1) != 1 or vis.get("use_bias") or not vis.get("use_qk_norm"):
+            raise ValueError("unsupported dots3-note vision config variant")
+
+        aud = self.hparams_audio
+        if not aud.get("use_conv2d_stem") or not aud.get("use_rope") or not aud.get("use_rms_norm") or aud.get("use_causal"):
+            raise ValueError("unsupported dots3-note audio config variant")
+        if aud["whisper_config"].get("activation_function") != "swiglu":
+            raise ValueError("dots3-note audio conversion requires the swiglu activation")
+        if aud.get("merge_factor", 1) != 1 or aud.get("chunk_seconds") != 60:
+            raise ValueError("unsupported dots3-note audio chunking config")
+        # the graph hard-codes these rope parameters
+        rope = aud.get("rope_parameters", {})
+        if rope.get("partial_rotary_factor") != 0.5 or rope.get("rope_theta") != 10000.0:
+            raise ValueError("unsupported dots3-note audio rope config")
+
+    def get_audio_config(self) -> dict[str, Any] | None:
+        cfg = self.global_config.get("audio_config")
+        if cfg is not None:
+            # aliases so MmprojModel.find_aparam() / n_block_keys can resolve them
+            whisper = cfg["whisper_config"]
+            cfg["hidden_size"] = whisper["d_model"]
+            cfg["intermediate_size"] = whisper["encoder_ffn_dim"]
+            cfg["num_attention_heads"] = whisper["encoder_attention_heads"]
+            cfg["num_hidden_layers"] = whisper["encoder_layers"]
+        return cfg
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        assert self.hparams_vision is not None
+        assert self.hparams_audio is not None
+
+        self.gguf_writer.add_clip_vision_projector_type(gguf.VisionProjectorType.DOTS3NOTE_V)
+        self.gguf_writer.add_vision_use_silu(True)
+        self.gguf_writer.add_vision_attention_layernorm_eps(self.hparams_vision["rms_norm_eps"])
+        self.gguf_writer.add_vision_spatial_merge_size(self.hparams_vision["spatial_merge_size"])
+        self.gguf_writer.add_vision_min_pixels(self.preprocessor_config["min_pixels"])
+        self.gguf_writer.add_vision_max_pixels(self.preprocessor_config["max_pixels"])
+        # pyramid MoE: per-block routed expert count, 0 = dense block
+        self.gguf_writer.add_vision_expert_count_per_layer(self.pyramid)
+        self.gguf_writer.add_vision_expert_used_count(int(self.hparams_vision["capacity_factor"]))
+
+        self.gguf_writer.add_clip_audio_projector_type(gguf.VisionProjectorType.DOTS3NOTE_A)
+        self.gguf_writer.add_audio_num_mel_bins(self.hparams_audio["whisper_config"]["num_mel_bins"])
+        self.gguf_writer.add_audio_attention_layernorm_eps(1e-6)  # Dots3NoteAudioRMSNorm default
+
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, _ = item
+        if not name.startswith(("vision_encoder.", "audio_encoder.")):
+            return None
+        return super().filter_tensors(item)
+
+    _vis_experts: dict[int, dict[str, Tensor]] | None = None
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # router params have no .weight suffix in the checkpoint, but gguf tools expect one
+        if name.endswith((".gate_weight", ".router_bias")):
+            name += ".weight"
+
+        # audio fc1 fuses gate and up for swiglu; split it
+        if ".speech_encoder.layers." in name and ".fc1." in name:
+            gate, up = data_torch.chunk(2, dim=0)
+            yield from super().modify_tensors(gate, name.replace(".fc1.", ".fc1_gate."), bid)
+            yield from super().modify_tensors(up, name.replace(".fc1.", ".fc1_up."), bid)
+            return
+
+        # vision MoE: stack per-expert weights into a single 3D tensor per block
+        if ".mlp.experts." in name:
+            assert bid is not None
+            n_expert = self.pyramid[bid]
+            if self._vis_experts is None:
+                self._vis_experts = {}
+            buf = self._vis_experts.setdefault(bid, {})
+            buf[name] = data_torch
+
+            if len(buf) >= n_expert * 3:
+                for w_name in ("fc1", "fc2", "fc3"):
+                    datas: list[Tensor] = []
+                    for xid in range(n_expert):
+                        ename = f"vision_encoder.blocks.{bid}.mlp.experts.{xid}.{w_name}.weight"
+                        datas.append(buf.pop(ename))
+                    merged = torch.stack(datas, dim=0)
+                    yield from super().modify_tensors(merged, f"vision_encoder.blocks.{bid}.mlp.experts.{w_name}.weight", bid)
+            return
+
+        yield from super().modify_tensors(data_torch, name, bid)
+
+    def prepare_tensors(self):
+        super().prepare_tensors()
+        if self._vis_experts is not None:
+            leftover = [k for d in self._vis_experts.values() for k in d.keys()]
+            if leftover:
+                raise ValueError(f"unprocessed vision experts: {leftover}")
+
+    def tensor_force_quant(self, name, new_name, bid, n_dims):
+        # FP32 routing is load-bearing for the vision MoE (near-tied expert scores)
+        if ".ffn_gate_inp." in new_name or ".exp_probs_b." in new_name:
+            return gguf.GGMLQuantizationType.F32
+        if ".conv2d" in new_name or "a.conv_out" in new_name:
+            return gguf.GGMLQuantizationType.F32
+        return super().tensor_force_quant(name, new_name, bid, n_dims)

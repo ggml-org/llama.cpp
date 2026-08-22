@@ -364,6 +364,8 @@ class Keys:
         IMAGE_MEAN            = "clip.vision.image_mean"
         IMAGE_STD             = "clip.vision.image_std"
         SPATIAL_MERGE_SIZE    = "clip.vision.spatial_merge_size"
+        EXPERT_COUNT_PER_LAYER = "clip.vision.expert_count_per_layer" # dots3note pyramid MoE, 0 = dense layer
+        EXPERT_USED_COUNT     = "clip.vision.expert_used_count"
         USE_GELU              = "clip.use_gelu"
         USE_SILU              = "clip.use_silu"
         N_WA_PATTERN          = "clip.vision.n_wa_pattern"     # used by qwen2.5vl
@@ -874,6 +876,11 @@ class MODEL_TENSOR(IntEnum):
     V_ENC_FFN_UP         = auto()
     V_ENC_FFN_GATE       = auto()
     V_ENC_FFN_DOWN       = auto()
+    V_ENC_FFN_GATE_INP   = auto() # dots3note vision MoE router
+    V_ENC_FFN_GATE_EXPS  = auto()
+    V_ENC_FFN_UP_EXPS    = auto()
+    V_ENC_FFN_DOWN_EXPS  = auto()
+    V_ENC_FFN_EXP_PROBS_B = auto()
     V_ENC_ATTN_POST_NORM = auto() # gemma4
     V_ENC_FFN_POST_NORM  = auto()
     V_LAYER_SCALE_1      = auto()
@@ -1591,6 +1598,11 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.V_ENC_FFN_UP:              "v.blk.{bid}.ffn_up",
     MODEL_TENSOR.V_ENC_FFN_GATE:            "v.blk.{bid}.ffn_gate",
     MODEL_TENSOR.V_ENC_FFN_DOWN:            "v.blk.{bid}.ffn_down",
+    MODEL_TENSOR.V_ENC_FFN_GATE_INP:        "v.blk.{bid}.ffn_gate_inp",
+    MODEL_TENSOR.V_ENC_FFN_GATE_EXPS:       "v.blk.{bid}.ffn_gate_exps",
+    MODEL_TENSOR.V_ENC_FFN_UP_EXPS:         "v.blk.{bid}.ffn_up_exps",
+    MODEL_TENSOR.V_ENC_FFN_DOWN_EXPS:       "v.blk.{bid}.ffn_down_exps",
+    MODEL_TENSOR.V_ENC_FFN_EXP_PROBS_B:     "v.blk.{bid}.exp_probs_b",
     MODEL_TENSOR.V_ENC_ATTN_POST_NORM:      "v.blk.{bid}.attn_post_norm",
     MODEL_TENSOR.V_ENC_FFN_POST_NORM:       "v.blk.{bid}.ffn_post_norm",
     MODEL_TENSOR.V_LAYER_SCALE_1:           "v.blk.{bid}.ls1",
@@ -1913,6 +1925,11 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.V_ENC_FFN_UP,
         MODEL_TENSOR.V_ENC_FFN_GATE,
         MODEL_TENSOR.V_ENC_FFN_DOWN,
+        MODEL_TENSOR.V_ENC_FFN_GATE_INP,
+        MODEL_TENSOR.V_ENC_FFN_GATE_EXPS,
+        MODEL_TENSOR.V_ENC_FFN_UP_EXPS,
+        MODEL_TENSOR.V_ENC_FFN_DOWN_EXPS,
+        MODEL_TENSOR.V_ENC_FFN_EXP_PROBS_B,
         MODEL_TENSOR.V_ENC_ATTN_POST_NORM,
         MODEL_TENSOR.V_ENC_FFN_POST_NORM,
         MODEL_TENSOR.V_LAYER_SCALE_1,
@@ -5497,6 +5514,8 @@ class VisionProjectorType:
     COGVLM = "cogvlm"
     JANUS_PRO = "janus_pro"
     DOTSOCR = "dots_ocr"
+    DOTS3NOTE_V = "dots3note_v"
+    DOTS3NOTE_A = "dots3note_a" # audio
     DEEPSEEKOCR = "deepseekocr"
     DEEPSEEKOCR2 = "deepseekocr2"
     LFM2A = "lfm2a" # audio
