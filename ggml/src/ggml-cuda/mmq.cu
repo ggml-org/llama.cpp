@@ -314,6 +314,22 @@ bool ggml_cuda_should_use_mmq(enum ggml_type type, int cc, int64_t ne11, int64_t
     }
 
     if (ggml_cuda_highest_compiled_arch(cc) < GGML_CUDA_CC_DP4A) {
+        // for MoE, mmq can be faster even without native dp4a
+        // TODO: check if cards older than pascal might benefit from this as well
+        if (cc == GGML_CUDA_CC_PASCAL && n_experts > 0) {
+            // TODO: figure out why these are so slow on sm_60
+            // ref: https://github.com/ggml-org/llama.cpp/pull/26264#issuecomment-5141087554
+            switch (type) {
+                case GGML_TYPE_Q2_K:
+                case GGML_TYPE_Q4_K:
+                case GGML_TYPE_Q5_K:
+                case GGML_TYPE_Q6_K:
+                    return false;
+                default:
+                    return true;
+            }
+        }
+
         return false;
     }
 
