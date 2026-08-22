@@ -1,11 +1,5 @@
 #pragma once
 
-// JSON object, it works without the need to include a JSON library header
-// the underlay library is pimpl, it should never be exposed here
-// the backing value lives inside this object, so at() and the iterators give a real reference to it
-// note: object keys keep the order in which they are added
-// note: every JSON error comes out as a common_json_error
-
 #include <cstddef>
 #include <cstdint>
 #include <initializer_list>
@@ -20,6 +14,19 @@
 #include <unordered_map>
 #include <utility>
 #include <vector>
+
+// common_json, a thin wrapper around vendor json library
+// the underlay library is pimpl, we are using nlohmann::json for now
+//
+// many features of the library are deliberately left out, to keep this interface small and generic and to keep compile time down
+//
+// some main differences compared to nlohmann::json :
+// - object keys keep the order in which they are added
+// - errors are always throw as common_json_error
+// - obj.push_back({key, val}) is intentionally unsupported to avoid confusion with push_back on a vector; write it as obj[key] = val for clarity
+// - a braced pair in value position does not build, e.g. {"key", {"a", "b"}}; write array({"a", "b"}) where nlohmann made an array
+//
+// in doubt, search the code base for an existing usage example; do not add anything to this header unless absolutely necessary
 
 class common_json;
 
@@ -72,8 +79,7 @@ struct common_json_value {
     template <typename T> common_json_value(const std::unordered_map<std::string, T> & vals);
 
     // nested object, e.g. {"fn", {{"name", "x"}}}
-    // note: a nested pair {"a", "b"} becomes the object {"a": "b"}, not an array
-    // use common_json::array({"a", "b"}) to get an array
+    // note: a nested pair {"a", "b"} does not build, use common_json::array({"a", "b"}) for an array
     common_json_value(std::initializer_list<common_json_item> items);
 
     template <typename T, typename std::enable_if<std::is_integral<T>::value && !std::is_same<T, bool>::value, int>::type = 0>
@@ -184,6 +190,7 @@ class common_json {
     bool operator!=(const common_json_value & val) const;
 
     // at() throws common_json_error if the key is missing, operator[] adds a null value instead
+    // note: a const operator[] cannot add, it throws like at()
     common_json       & at(const std::string & key);
     const common_json & at(const std::string & key) const;
     common_json       & at(size_t idx);
