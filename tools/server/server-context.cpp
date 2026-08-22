@@ -429,6 +429,7 @@ struct server_slot {
 
     common_sampler_ptr smpl;
     llama_sampler_ptr  smpl_backend_greedy;
+    bool               smpl_backend_greedy_attached = false;
 
     llama_token sampled; // in speculative mode, this is the last accepted token
 
@@ -483,8 +484,17 @@ struct server_slot {
 
         n_predict_max = -1;
 
-        llama_set_sampler(ctx_tgt, id, nullptr);
-        smpl_backend_greedy.reset();
+        // The automatic speculative target chain is stateless. Keep it attached
+        // across compatible requests so that the target context can reuse its
+        // existing scheduler reservation instead of rebuilding the PP/TG/PP
+        // reserve graphs for every request.
+        if (smpl_backend_greedy_attached) {
+            GGML_ASSERT(smpl_backend_greedy);
+            llama_sampler_reset(smpl_backend_greedy.get());
+        } else {
+            llama_set_sampler(ctx_tgt, id, nullptr);
+            smpl_backend_greedy.reset();
+        }
 
         // clear alora start
         alora_invocation_start = -1;
@@ -2052,27 +2062,40 @@ private:
             if (use_backend_sampling) {
                 llama_sampler * backend_sampler = common_sampler_get(slot.smpl.get());
                 if (auto_backend_sampling) {
-                    slot.smpl_backend_greedy.reset(llama_sampler_chain_init(llama_sampler_chain_default_params()));
-                    llama_sampler_chain_add(slot.smpl_backend_greedy.get(), llama_sampler_init_temp(0.0f));
-                    llama_sampler_chain_add(slot.smpl_backend_greedy.get(), llama_sampler_init_greedy());
+                    if (!slot.smpl_backend_greedy) {
+                        slot.smpl_backend_greedy.reset(llama_sampler_chain_init(llama_sampler_chain_default_params()));
+                        llama_sampler_chain_add(slot.smpl_backend_greedy.get(), llama_sampler_init_temp(0.0f));
+                        llama_sampler_chain_add(slot.smpl_backend_greedy.get(), llama_sampler_init_greedy());
+                    } else {
+                        llama_sampler_reset(slot.smpl_backend_greedy.get());
+                    }
                     backend_sampler = slot.smpl_backend_greedy.get();
                 }
 
-                use_backend_sampling = llama_set_sampler(ctx_tgt, slot.id, backend_sampler);
+                if (!auto_backend_sampling || !slot.smpl_backend_greedy_attached) {
+                    use_backend_sampling = llama_set_sampler(ctx_tgt, slot.id, backend_sampler);
+                }
                 if (!use_backend_sampling) {
                     task.params.sampling.backend_sampling = false;
                     llama_set_sampler(ctx_tgt, slot.id, nullptr);
+                    slot.smpl_backend_greedy_attached = false;
                 } else if (auto_backend_sampling) {
+                    slot.smpl_backend_greedy_attached = true;
                     task.params.sampling.backend_sampling = true;
                     SLT_INF(slot, "%s", "using automatic gfx1030 backend target sampling for greedy speculative decode\n");
+                } else {
+                    slot.smpl_backend_greedy_attached = false;
                 }
             } else {
                 llama_set_sampler(ctx_tgt, slot.id, nullptr);
+                slot.smpl_backend_greedy_attached = false;
             }
 
             SLT_TRC(slot, "sampler chain: %s\n", common_sampler_print(slot.smpl.get()).c_str());
             SLT_TRC(slot, "sampler params: \n%s\n", task.params.sampling.print().c_str());
         } else {
+            llama_set_sampler(ctx_tgt, slot.id, nullptr);
+            slot.smpl_backend_greedy_attached = false;
             slot.smpl.reset();
         }
 
