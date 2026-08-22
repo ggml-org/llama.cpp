@@ -2344,7 +2344,7 @@ class TensorNameMap:
 
         MODEL_TENSOR.A_ENC_FFN_GATE: (
             "audio_encoder.dots_encoder.speech_encoder.layers.{bid}.fc1_gate", # dots3note (split from fc1 in conversion code)
-),
+        ),
 
         MODEL_TENSOR.A_ENC_FFN_DOWN: (
             "audio_encoder.dots_encoder.speech_encoder.layers.{bid}.fc2", # dots3note
