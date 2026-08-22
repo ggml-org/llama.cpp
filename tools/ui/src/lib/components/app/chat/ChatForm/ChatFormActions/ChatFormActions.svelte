@@ -1,6 +1,5 @@
 <script lang="ts">
 	import { SkipForward, Square } from '@lucide/svelte';
-	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import {
 		ChatFormActionModels,
@@ -10,7 +9,7 @@
 		ChatFormContextGauge
 	} from '$lib/components/app';
 	import { Button } from '$lib/components/ui/button';
-	import { ICON_CLASS_DEFAULT, ROUTES } from '$lib/constants';
+	import { ICON_CLASS_DEFAULT } from '$lib/constants';
 	import { setChatFormActionsContext } from '$lib/contexts';
 	import { FileTypeCategory, MessageRole } from '$lib/enums';
 	import { ChatService } from '$lib/services';
@@ -34,6 +33,7 @@
 		onSystemPromptClick?: () => void;
 		onMcpPromptClick?: () => void;
 		onMcpResourcesClick?: () => void;
+		onMcpSettingsClick?: () => void;
 	}
 
 	let {
@@ -47,6 +47,7 @@
 		onFileUpload,
 		onMcpPromptClick,
 		onMcpResourcesClick,
+		onMcpSettingsClick,
 		onMicClick,
 		onStop,
 		onSystemPromptClick,
@@ -163,7 +164,7 @@
 			return onMcpResourcesClick;
 		},
 		get onMcpSettingsClick() {
-			return () => goto(ROUTES.MCP_SERVERS);
+			return onMcpSettingsClick;
 		},
 		get onSystemPromptClick() {
 			return onSystemPromptClick;

@@ -19,6 +19,14 @@
 export { default as DialogMcpServerAddNew } from './DialogMcpServerAddNew.svelte';
 
 /**
+ * **DialogMcpServers** - MCP servers dialog shown from the chat form
+ *
+ * Shows the same MCP server list as the `/mcp-servers` route inside a modal
+ * dialog.
+ */
+export { default as DialogMcpServers } from './DialogMcpServers.svelte';
+
+/**
  * **DialogExportSettings** - Settings export dialog with sensitive data warning
  *
  * Dialog for exporting settings with an option to include or exclude

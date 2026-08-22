@@ -8,7 +8,8 @@
 		ChatFormInputFileInputInvisible,
 		ChatFormMcpResourcesList,
 		ChatFormPickers,
-		DialogMcpResourcesBrowser
+		DialogMcpResourcesBrowser,
+		DialogMcpServers
 	} from '$lib/components/app';
 	import {
 		CLIPBOARD_CONTENT_QUOTE_PREFIX,
@@ -182,6 +183,9 @@
 	// Resource Dialog State
 	let isResourceDialogOpen = $state(false);
 	let preSelectedResourceUri = $state<string | undefined>(undefined);
+
+	// MCP Servers Dialog State
+	let isMcpServersDialogOpen = $state(false);
 
 	let currentConfig = $derived(settingsStore.config);
 
@@ -624,6 +628,7 @@
 				onSystemPromptClick={() => onSystemPromptClick?.({ files: uploadedFiles, message: value })}
 				onMcpPromptClick={showMcpPromptButton ? () => pickers.openPromptPicker() : undefined}
 				onMcpResourcesClick={() => (isResourceDialogOpen = true)}
+				onMcpSettingsClick={() => (isMcpServersDialogOpen = true)}
 			/>
 		</div>
 	</div>
@@ -656,3 +661,5 @@
 		}
 	}}
 />
+
+<DialogMcpServers bind:open={isMcpServersDialogOpen} />
