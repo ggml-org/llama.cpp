@@ -2812,7 +2812,7 @@ static bool ggml_hexagon_supported_mul_mat(const struct ggml_hexagon_session * s
             }
 
             // src0 (weights) must be repacked
-            if (src0->buffer && !ggml_backend_buffer_is_hexagon_repack(src0->buffer)) {
+            if (!src0->buffer || !ggml_backend_buffer_is_hexagon_repack(src0->buffer)) {
                 return false;
             }
             break;
@@ -2873,7 +2873,7 @@ static bool ggml_hexagon_supported_mul_mat_id(const struct ggml_hexagon_session 
             }
 
             // src0 (weights) must be repacked
-            if (src0->buffer && !ggml_backend_buffer_is_hexagon_repack(src0->buffer)) {
+            if (!src0->buffer || !ggml_backend_buffer_is_hexagon_repack(src0->buffer)) {
                 return false;
             }
             break;
