@@ -4,6 +4,7 @@
 #include "gguf.h"
 #include "llama-impl.h"
 #include "llama-model-loader.h"
+#include "openhashmap.h"
 
 #include "unicode.h"
 
@@ -644,7 +645,7 @@ struct llm_tokenizer_bpe_session {
 
             // build token(s)
             while (!work_queue.empty()) {
-                auto bigram = work_queue.pop_move();
+                auto bigram = work_queue.pop_move();//cache miss 1.97, br miss 10.7
 
                 auto & left_symbol = symbols[bigram.left];
                 auto & right_symbol = symbols[bigram.right];
@@ -652,10 +653,12 @@ struct llm_tokenizer_bpe_session {
                 if (left_symbol.n == 0 || right_symbol.n == 0) {
                     continue;
                 }
-                std::string left_token = std::string(left_symbol.text, left_symbol.n);
-                std::string right_token = std::string(right_symbol.text, right_symbol.n);
-                if (left_token + right_token != bigram.text) {
-                    continue;  // Skip this bigram if it's outdated
+                if (left_symbol.n + right_symbol.n != bigram.text.size()) {
+                    continue; // Skip this bigram if it's outdated
+                }
+                if (memcmp(left_symbol.text, bigram.text.data(), left_symbol.n) != 0 ||
+                    memcmp(right_symbol.text, bigram.text.data() + left_symbol.n, right_symbol.n) != 0) {
+                    continue; // Skip this bigram if it's outdated
                 }
 
                 // merge the right sym into the left one
@@ -742,8 +745,9 @@ private:
 
         bigram.left  = left;
         bigram.right = right;
-        bigram.text  = left_token + right_token;
         bigram.size  = left_token.size() + right_token.size();
+        bigram.text = std::move(left_token);
+        bigram.text += right_token;
         bigram.rank  = rank_found;
 
         work_queue.push(bigram);
@@ -754,7 +758,7 @@ private:
 
     std::vector<llm_symbol> symbols;
     std::vector<llm_symbol> symbols_final;
-    llm_bigram_bpe::queue work_queue;
+    llm_bigram_bpe::queue work_queue; //TODO - improve algo (now pop_move, push eat cpy cycles)
 };
 
 //
@@ -1824,18 +1828,12 @@ struct llama_vocab::impl {
     // BertNormalizer options
     llama_vocab::normalizer_options normalizer_opts;
 
-    std::unordered_map<std::string, llama_token> token_to_id;
+    OpenHashMap<std::string, llama_token, 262144, StringHash> token_to_id; // 262144 - conservative inital capacity
     std::vector<token_data>                      id_to_token;
 
     std::vector<llama_token> cache_special_tokens;
     std::vector<std::string> cache_token_to_piece; // llama_token_to_piece(special = true);
-    struct pair_hash {
-        size_t operator()(const std::pair<std::string, std::string> & p) const {
-            return std::hash<std::string>{}(p.first) ^  //create some hash for pair
-                   (std::hash<std::string>{}(p.second) << 1);
-        }
-    };
-    std::unordered_map<std::pair<std::string, std::string>, int, pair_hash> bpe_ranks;
+    OpenHashMap<std::pair<std::string, std::string>, int, 262144, PairStringHash> bpe_ranks; // 262144 - conservative inital capacity
 
     // set of all tokens that cause "end of generation"
     std::set<llama_token> special_eog_ids;
@@ -2008,7 +2006,7 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                         second = word.substr(pos + 1);
                     }
 
-                    bpe_ranks.emplace(std::make_pair(first, second), i);
+                    bpe_ranks.insert(std::make_pair(first, second), i);
                 }
             }
 
@@ -2108,7 +2106,7 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                         second = word.substr(pos + 1);
                     }
 
-                    bpe_ranks.emplace(std::make_pair(first, second), i);
+                    bpe_ranks.insert(std::make_pair(first, second), i);
                 }
             }
 
@@ -2471,7 +2469,7 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             word = "[EMPTY_" + std::to_string(i) + "]";
         }
 
-        token_to_id[word] = i;
+        token_to_id.insert_or_assign(word, i); // operator[] semantics: last duplicate wins
         max_token_len = std::max(max_token_len, (int) word.size());
 
         auto & token_data = id_to_token[i];
@@ -2505,8 +2503,8 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
     // k-mers are the block right after <oov>, so only scan from there.
     if (tokenizer_model == "hybriddna") {
         const auto idx = token_to_id.find("<oov>");
-        if (idx != token_to_id.end()) {
-            auto it = id_to_token.begin() + idx->second + 1;
+        if (idx != nullptr) {
+            auto it = id_to_token.begin() + (*idx) + 1;
             for (; it != id_to_token.end(); ++it) {
                 std::string & text = it->text;
                 if (text.size() > dna_kmer_marker.size()
@@ -3044,7 +3042,10 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
         };
 
         auto _set_token_attr = [&] (const std::string & token, llama_token_attr attr, bool value) {
-            _set_tokenid_attr(token_to_id.at(token), attr, value);
+            auto tok_id = token_to_id.find(token);
+            if (tok_id != nullptr) {
+                _set_tokenid_attr(*tok_id, attr, value);
+            }
         };
 
         std::string model_name;
@@ -3067,7 +3068,7 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                 || _contains_any(tokenizer_pre, {"jina-v2-de", "jina-v2-es", "jina-v2-code"})
                 || _contains_any(general_arch, {"nomic-bert-moe", "jina-bert-v3"})
            ) {
-            if (token_to_id.count("<mask>") == 0) {
+            if (token_to_id.find("<mask>") == nullptr) {
                 LLAMA_LOG_WARN("%s: Mask token is missing in vocab, please reconvert model!\n", __func__);
             } else {
                 _set_token_attr("<mask>", LLAMA_TOKEN_ATTR_LSTRIP, true);
@@ -3083,7 +3084,7 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                 _set_token_attr(token, LLAMA_TOKEN_ATTR_RSTRIP, false);
             }
         } else if (_contains_any(model_name, {"modern-bert"})) {
-            if (token_to_id.count("[MASK]") == 0 ) {
+            if (token_to_id.find("[MASK]") == nullptr) {
                 LLAMA_LOG_WARN("%s: Mask token missing in vocab!\n", __func__);
             }
             else {
@@ -3918,8 +3919,8 @@ llama_token llama_vocab::byte_to_token(uint8_t ch) const {
         case LLAMA_VOCAB_TYPE_UGM: {
             const char buf[7] = { '<', '0', 'x', hex[ch >> 4], hex[ch & 15], '>', 0 };
             auto token = pimpl->token_to_id.find(buf);
-            if (token != pimpl->token_to_id.end()) {
-                return (*token).second;
+            if (token != nullptr) {
+                return *token;
             }
             // Try to fall back to just the byte as a string
             const char buf2[2] = { (char)ch, 0 };
@@ -3942,9 +3943,8 @@ llama_token llama_vocab::byte_to_token(uint8_t ch) const {
 
 llama_token llama_vocab::text_to_token(const std::string & text) const {
     GGML_ASSERT(pimpl->type != LLAMA_VOCAB_TYPE_NONE);
-    auto it = pimpl->token_to_id.find(text);
-    if (it != pimpl->token_to_id.end()) {
-        return (*it).second;
+    if (auto it = pimpl->token_to_id.find(text)) {
+        return *it;
     }
     return LLAMA_TOKEN_NULL;
 }
@@ -4089,15 +4089,11 @@ int llama_vocab::max_token_len() const {
 }
 
 int llama_vocab::find_bpe_rank(const std::string & token_left, const std::string & token_right) const {
-    GGML_ASSERT(token_left.find(' ')   == std::string::npos);
+    GGML_ASSERT(token_left.find(' ')   == std::string::npos); // TODO optimize find for small strings
     GGML_ASSERT(token_right.find(' ')  == std::string::npos);
 
-    auto it = pimpl->bpe_ranks.find(std::make_pair(token_left, token_right));
-    if (it == pimpl->bpe_ranks.end()) {
-        return -1;
-    }
-
-    return it->second;
+    auto it = pimpl->bpe_ranks.find(std::make_pair(token_left, token_right)); // TODO compute hash from string,string without creating pair
+    return it ? *it : -1;
 }
 
 std::vector<std::string> llama_vocab::get_bpe_merges() const {

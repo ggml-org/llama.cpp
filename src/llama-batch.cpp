@@ -752,20 +752,24 @@ llama_ubatch llama_batch_allocr::ubatch_add(const std::vector<int32_t> & idxs, u
     assert(n_tokens%n_seqs == 0);
 
     auto udata = std::make_shared<llama_ubatch::data_t>();
+    udata->seq_id_unq.resize(0);
 
     const int64_t n_embd_all = batch.embd ? (int64_t) n_tokens*n_embd : 0;
     const int64_t n_pos_all  =              (int64_t) n_tokens*n_pos_per_embd;
 
-    udata->token     .resize(n_tokens);
-    udata->embd      .resize(n_embd_all);
     udata->pos       .resize(n_pos_all);
     udata->n_seq_id  .resize(n_tokens);
-    udata->seq_id    .resize(n_tokens);
-    udata->seq_id_unq.resize(0);
     udata->seq_idx   .resize(LLAMA_MAX_SEQ, -1);
     udata->output    .resize(n_tokens);
 
     udata->seq_id_data.reserve(n_tokens);
+    udata->token     .resize(n_tokens);
+    if (batch.embd) {
+        udata->embd.clear();
+        udata->embd.reserve(n_embd_all);
+    } else {
+        udata->embd.resize(n_embd_all); // fill all size..new_size elems by 0.0f
+    }
 
     seq_set_t seq_set_unq;
 
@@ -775,10 +779,13 @@ llama_ubatch llama_batch_allocr::ubatch_add(const std::vector<int32_t> & idxs, u
         }
 
         if (batch.embd) {
-            memcpy(udata->embd.data() + i*n_embd, batch.embd + (int64_t) idxs[i]*n_embd, n_embd*sizeof(float));
+            auto src = batch.embd + (int64_t) idxs[i] * n_embd;
+            // use safe method for auto increase size
+            // next improvements - write own vector without automatic filling float)
+            udata->embd.insert(udata->embd.end(), src, src + n_embd);
         }
 
-        for (size_t j = 0; j < (size_t)n_pos_per_embd; ++j) {
+        for (size_t j = 0; j < (size_t) n_pos_per_embd; ++j) {
             // if we are using M-RoPE
             //     if the current batch is text, we need to broadcast the same position across all RoPE sections
             //     otherwise, the input batch is image embeddings, we copy the positions as-is
@@ -802,6 +809,7 @@ llama_ubatch llama_batch_allocr::ubatch_add(const std::vector<int32_t> & idxs, u
         }
     }
 
+    udata->seq_id.resize(n_tokens);
     llama_seq_id * seq_id_ptr = udata->seq_id_data.data();
     for (size_t i = 0; i < idxs.size(); ++i) {
         udata->seq_id[i] = seq_id_ptr;
