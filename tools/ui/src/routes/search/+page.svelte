@@ -21,10 +21,10 @@
 	});
 
 	// Search page is intended for mobile; on desktop the sidebar already exposes
-	// in-place search, so bounce back to a chat.
+	// in-place search, so bounce back to a new-chat tab without a history entry.
 	$effect(() => {
 		if (browser && !deviceStore.isMobile) {
-			goto(ROUTES.NEW_CHAT, { replaceState: true });
+			goto(ROUTES.START, { replaceState: true });
 		}
 	});
 
@@ -66,7 +66,7 @@
 		if (history.length > 1) {
 			history.back();
 		} else {
-			goto(ROUTES.NEW_CHAT);
+			conversationsStore.openNewChat();
 		}
 	}
 </script>
