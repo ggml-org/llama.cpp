@@ -11,6 +11,9 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
+#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__)
+    #include <immintrin.h>
+#endif
 
 #ifdef __ARM_FEATURE_SVE
 #include <arm_sve.h>
@@ -382,6 +385,12 @@ static inline uint32_t fp32_to_bits(float f) {
 }
 
 static inline float ggml_compute_fp16_to_fp32(ggml_fp16_t h) {
+#ifdef __F16C__
+    return _cvtsh_ss(h);
+#elif defined(__aarch64__) && defined(__ARM_FP) && (__ARM_FP & 2)
+    union { uint16_t u; __fp16 f; } u = { .u = h };
+    return (float)u.f;
+#else
     const uint32_t w = (uint32_t) h << 16;
     const uint32_t sign = w & UINT32_C(0x80000000);
     const uint32_t two_w = w + w;
@@ -402,6 +411,7 @@ static inline float ggml_compute_fp16_to_fp32(ggml_fp16_t h) {
     const uint32_t result = sign |
         (two_w < denormalized_cutoff ? fp32_to_bits(denormalized_value) : fp32_to_bits(normalized_value));
     return fp32_from_bits(result);
+#endif
 }
 
 static inline ggml_fp16_t ggml_compute_fp32_to_fp16(float f) {

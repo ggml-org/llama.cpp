@@ -90,6 +90,16 @@ struct llama_context {
 
     float * get_embeddings_layer_inp(uint32_t lid);
 
+    // persistent device tensor holding the concat of the enabled layer-input tensors
+    // (zero-copy embd_dev path); null when not in use
+    ggml_tensor * get_embd_layer_inp_fused() { return embd_layer_inp_fused; }
+
+    // event recorded after each compute that writes the fused tensor; null when disabled
+    ggml_backend_event_t get_embd_layer_inp_fused_event() { return embd_layer_inp_fused_event; }
+
+    // persistent device tensor holding the encoder output (t_h_nextn); null when disabled
+    ggml_tensor * get_embd_nextn_persist() { return embd_nextn_persist; }
+
     llama_token * get_sampled_tokens() const;
     llama_token   get_sampled_token_ith(int32_t idx);
 
@@ -138,7 +148,8 @@ struct llama_context {
                 const llama_ubatch & ubatch,
                     llm_graph_type   gtype,
             llama_memory_context_i * mctx,
-                       ggml_status & ret);
+                       ggml_status & ret,
+                          int64_t      token_offset = 0);
 
     int encode(const llama_batch & batch_inp);
     int decode(const llama_batch & batch_inp);
@@ -234,6 +245,15 @@ private:
     // from backend into host-side embd_layer_inp buffers
     void extract_layer_inputs(const llm_graph_result * res, size_t token_offset, size_t n_tokens);
 
+    // lazily allocate the persistent device buffer that receives the concat of the
+    // enabled layer-input tensors (zero-copy embd_dev path). returns null when no
+    // layer-input extraction is enabled (host path).
+    ggml_tensor * ensure_embd_layer_inp_fused();
+
+    // lazily allocate the persistent device buffer that receives the encoder output
+    // (t_h_nextn) so the decoder KV-injection can alias it (zero-copy nextn path).
+    ggml_tensor * ensure_embd_nextn_persist();
+
     //
     // graph
     //
@@ -258,7 +278,8 @@ private:
                         llm_graph_result * res,
                       const llama_ubatch & ubatch,
             const llama_memory_context_i * mctx,
-                          llm_graph_type   gtype) const;
+                          llm_graph_type   gtype,
+                               int64_t      token_offset = 0) const;
 
     llm_graph_cb graph_get_cb() const;
 
@@ -369,6 +390,23 @@ private:
 
     // host buffer for the model output (logits and embeddings)
     ggml_backend_buffer_ptr buf_output;
+
+    // persistent device buffer for the concat of the enabled layer-input tensors
+    // (zero-copy embd_dev path). lazily allocated on first use; null when disabled.
+    ggml_tensor * embd_layer_inp_fused = nullptr;
+    ggml_context * embd_layer_inp_fused_ctx = nullptr;
+    ggml_backend_buffer_ptr embd_layer_inp_fused_buf;
+
+    // recorded after each compute that writes embd_layer_inp_fused; lets a foreign
+    // context (the speculative draft) wait on the GPU stream instead of host-syncing
+    ggml_backend_event_t embd_layer_inp_fused_event = nullptr;
+
+    // persistent device buffer holding the encoder output (t_h_nextn) of the previous
+    // compute call, so the DFlash decoder KV-injection can alias it via a view instead
+    // of a host read + H2D copy. lazily allocated on first use; null when disabled.
+    ggml_tensor * embd_nextn_persist = nullptr;
+    ggml_context * embd_nextn_persist_ctx = nullptr;
+    ggml_backend_buffer_ptr embd_nextn_persist_buf;
 
     // keep copies of the per-sequence memory on the device
     std::map<llama_seq_id, llama_memory_buffers> mem_storage;

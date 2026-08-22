@@ -303,6 +303,11 @@ struct server_slot {
 
     common_sampler_ptr smpl;
 
+    // persistent sampler snapshot used to roll back the sampler state on partial
+    // draft acceptance. initialized once alongside smpl; we copy state into it
+    // (llama_sampler_copy, no allocation) instead of deep-cloning every token.
+    common_sampler_ptr smpl_save;
+
     llama_token sampled; // in speculative mode, this is the last accepted token
 
     // for TTS models, this is the embd generated from prev step, decode this to generate next hidden state
@@ -1734,6 +1739,8 @@ private:
         if (task.need_sampling()) {
             try {
                 slot.smpl.reset(common_sampler_init(model_tgt, task.params.sampling));
+                // one persistent snapshot for speculative rollback (state copied, not cloned)
+                slot.smpl_save.reset(common_sampler_init(model_tgt, task.params.sampling));
             } catch (std::exception & e) {
                 std::string err_msg = std::string("Failed to initialize samplers: ") + e.what();
                 send_error(task, err_msg, ERROR_TYPE_INVALID_REQUEST);
@@ -3838,7 +3845,11 @@ private:
 
             // verify and try to accept the draft
             {
-                common_sampler_ptr smpl_save(common_sampler_clone(slot.smpl.get()));
+                // snapshot the sampler state (cheap copy_state, no deep clone) so we
+                // can restore it on partial draft acceptance
+                if (slot.smpl_save) {
+                    common_sampler_copy(slot.smpl.get(), slot.smpl_save.get());
+                }
 
                 GGML_ASSERT(slot.spec_i_batch.size() == n_draft + 1);
                 auto accepted = common_sampler_sample_and_accept_n(slot.smpl.get(), slot.ctx_tgt, slot.spec_i_batch, slot.spec_draft);
@@ -3876,7 +3887,9 @@ private:
                         slot.mem.seq_rm(slot.id, ckpt.pos_max + 1, -1);
 
                         slot.prompt.tokens.keep_first(ckpt.n_tokens);
-                        common_sampler_copy(smpl_save.get(), slot.smpl.get());
+                        if (slot.smpl_save) {
+                            common_sampler_copy(slot.smpl_save.get(), slot.smpl.get());
+                        }
 
                         return;
                     }

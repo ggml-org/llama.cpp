@@ -482,6 +482,11 @@ llama_context::~llama_context() {
     // wait for any pending asynchronous copies into the output buffers before they are freed
     synchronize();
 
+    if (embd_layer_inp_fused_event) {
+        ggml_backend_event_free(embd_layer_inp_fused_event);
+        embd_layer_inp_fused_event = nullptr;
+    }
+
     if (!model.hparams.no_alloc) {
         for (size_t i = 0; i < backend_ptrs.size(); ++i) {
             ggml_backend_t             backend = backend_ptrs[i];
@@ -1322,7 +1327,7 @@ bool llama_context::set_adapter_cvec(
     return res;
 }
 
-llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, llm_graph_type gtype, llama_memory_context_i * mctx, ggml_status & ret) {
+llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, llm_graph_type gtype, llama_memory_context_i * mctx, ggml_status & ret, int64_t token_offset) {
     if (mctx && !mctx->apply()) {
         LLAMA_LOG_ERROR("%s: failed to apply memory context\n", __func__);
         ret = GGML_STATUS_FAILED;
@@ -1332,9 +1337,14 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
     auto * res = gf_res_prev.get();
     auto * gf  = res->get_gf();
 
+    // ensure the persistent fused layer-input device buffer exists (zero-copy path),
+    // so that graph_params can hand it to the graph builder
+    ensure_embd_layer_inp_fused();
+    ensure_embd_nextn_persist();
+
     // the new graph parameters
     // in order to correctly reuse a graph, it's full topology has to be uniquely determined by these parameters
-    const auto gparams = graph_params(res, ubatch, mctx, gtype);
+    const auto gparams = graph_params(res, ubatch, mctx, gtype, token_offset);
 
     if (!graph_reuse_disable && res->can_reuse(gparams)) {
         //LLAMA_LOG_DEBUG("%s: reusing previous graph\n", __func__);
@@ -1389,6 +1399,16 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         return nullptr;
     }
 
+    // record the fused layer-input write event so a foreign context (the speculative
+    // draft) can wait on the GPU stream instead of host-syncing. graph_compute runs
+    // async, so the event lands in the queue after the fused cpy kernels.
+    if (embd_layer_inp_fused_event && embd_layer_inp_fused) {
+        ggml_backend_t fused_backend = ggml_backend_sched_get_tensor_backend(sched.get(), embd_layer_inp_fused);
+        if (fused_backend) {
+            ggml_backend_event_record(embd_layer_inp_fused_event, fused_backend);
+        }
+    }
+
     ret = GGML_STATUS_SUCCESS;
 
     return res;
@@ -1397,7 +1417,7 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
 int llama_context::encode(const llama_batch & batch_inp) {
     // MTP hook batches carry both token (next-token id) and embd (h_nextn row),
     // so accept either present rather than requiring exactly one.
-    GGML_ASSERT(batch_inp.token || batch_inp.embd);
+    GGML_ASSERT(batch_inp.token || batch_inp.embd || batch_inp.embd_dev);
 
     if (batch_inp.n_tokens == 0) {
         LLAMA_LOG_ERROR("%s: n_tokens == 0\n", __func__);
@@ -1635,7 +1655,7 @@ static bool needs_raw_logits(const llama_ubatch & ubatch, const std::map<llama_s
 int llama_context::decode(const llama_batch & batch_inp) {
     // MTP hook batches carry both token (next-token id) and embd (h_nextn row),
     // so accept either present rather than requiring exactly one.
-    GGML_ASSERT(batch_inp.token || batch_inp.embd);
+    GGML_ASSERT(batch_inp.token || batch_inp.embd || batch_inp.embd_dev);
 
     if (!memory) {
         LLAMA_LOG_DEBUG("%s: cannot decode batches with this context (calling encode() instead)\n", __func__);
@@ -1813,7 +1833,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
 
         ggml_status status;
 
-        const auto * res = process_ubatch(ubatch, ctx_type_to_graph_type(cparams.ctx_type), mctx.get(), status);
+        const auto * res = process_ubatch(ubatch, ctx_type_to_graph_type(cparams.ctx_type), mctx.get(), status, n_tokens_prev);
 
         if (!res) {
             // the last ubatch failed or was aborted -> remove all positions of that ubatch from the memory module
@@ -2219,6 +2239,106 @@ void llama_context::extract_layer_inputs(const llm_graph_result * res, size_t to
     }
 }
 
+ggml_tensor * llama_context::ensure_embd_layer_inp_fused() {
+    // count enabled layer-input extractions; without any, the zero-copy path is disabled
+    uint32_t n_extract = 0;
+    for (bool enabled : cparams.embeddings_layer_inp) {
+        if (enabled) {
+            ++n_extract;
+        }
+    }
+    if (n_extract == 0) {
+        return nullptr;
+    }
+
+    if (embd_layer_inp_fused) {
+        return embd_layer_inp_fused;
+    }
+
+    const uint32_t n_embd  = model.hparams.n_embd;
+    const uint32_t n_batch = cparams.n_batch;
+
+    auto * dev = model.dev_output();
+    if (dev == nullptr) {
+        return nullptr;
+    }
+    auto * buft = ggml_backend_dev_buffer_type(dev);
+
+    ggml_init_params iparams = {
+        /*.mem_size   =*/ ggml_tensor_overhead() + ggml_graph_overhead_custom(0, false),
+        /*.mem_buffer =*/ nullptr,
+        /*.no_alloc   =*/ true,
+    };
+    embd_layer_inp_fused_ctx = ggml_init(iparams);
+    if (!embd_layer_inp_fused_ctx) {
+        return nullptr;
+    }
+
+    embd_layer_inp_fused = ggml_new_tensor_2d(embd_layer_inp_fused_ctx, GGML_TYPE_F32,
+                                              (int64_t) n_extract * n_embd, n_batch);
+    ggml_set_name(embd_layer_inp_fused, "embd_layer_inp_fused");
+
+    embd_layer_inp_fused_buf.reset(ggml_backend_alloc_ctx_tensors_from_buft(embd_layer_inp_fused_ctx, buft));
+    if (!embd_layer_inp_fused_buf) {
+        embd_layer_inp_fused_ctx = nullptr;
+        embd_layer_inp_fused     = nullptr;
+        return nullptr;
+    }
+    ggml_backend_buffer_set_usage(embd_layer_inp_fused_buf.get(), GGML_BACKEND_BUFFER_USAGE_COMPUTE);
+
+    embd_layer_inp_fused_event = ggml_backend_event_new(dev);
+    if (!embd_layer_inp_fused_event) {
+        LLAMA_LOG_WARN("%s: failed to create fused event, falling back to host sync\n", __func__);
+        // not fatal - the getter falls back to ctx->synchronize() when the event is null
+    }
+
+    return embd_layer_inp_fused;
+}
+
+ggml_tensor * llama_context::ensure_embd_nextn_persist() {
+    // only meaningful when nextn extraction is enabled (the speculative draft/encoder
+    // context); otherwise the buffer would be allocated on every context in vain
+    if (!cparams.embeddings_nextn) {
+        return nullptr;
+    }
+
+    if (embd_nextn_persist) {
+        return embd_nextn_persist;
+    }
+
+    const uint32_t n_embd_out = model.hparams.n_embd_out();
+    const uint32_t n_batch    = cparams.n_batch;
+
+    auto * dev = model.dev_output();
+    if (dev == nullptr) {
+        return nullptr;
+    }
+    auto * buft = ggml_backend_dev_buffer_type(dev);
+
+    ggml_init_params iparams = {
+        /*.mem_size   =*/ ggml_tensor_overhead() + ggml_graph_overhead_custom(0, false),
+        /*.mem_buffer =*/ nullptr,
+        /*.no_alloc   =*/ true,
+    };
+    embd_nextn_persist_ctx = ggml_init(iparams);
+    if (!embd_nextn_persist_ctx) {
+        return nullptr;
+    }
+
+    embd_nextn_persist = ggml_new_tensor_2d(embd_nextn_persist_ctx, GGML_TYPE_F32, n_embd_out, n_batch);
+    ggml_set_name(embd_nextn_persist, "embd_nextn_persist");
+
+    embd_nextn_persist_buf.reset(ggml_backend_alloc_ctx_tensors_from_buft(embd_nextn_persist_ctx, buft));
+    if (!embd_nextn_persist_buf) {
+        embd_nextn_persist_ctx = nullptr;
+        embd_nextn_persist     = nullptr;
+        return nullptr;
+    }
+    ggml_backend_buffer_set_usage(embd_nextn_persist_buf.get(), GGML_BACKEND_BUFFER_USAGE_COMPUTE);
+
+    return embd_nextn_persist;
+}
+
 void llama_context::output_reorder() {
     const uint64_t n_vocab     = model.vocab.n_tokens();
     const uint64_t n_embd      = model.hparams.n_embd;
@@ -2452,7 +2572,8 @@ llm_graph_params llama_context::graph_params(
                         llm_graph_result * res,
                       const llama_ubatch & ubatch,
             const llama_memory_context_i * mctx,
-                          llm_graph_type   gtype) const {
+                          llm_graph_type   gtype,
+                               int64_t      token_offset) const {
     return {
         /*.arch        =*/ model.arch,
         /*.hparams     =*/ model.hparams,
@@ -2465,6 +2586,9 @@ llm_graph_params llama_context::graph_params(
         /*.loras       =*/ loras.get(),
         /*.mctx        =*/ mctx,
         /*.cross       =*/ &cross,
+        /*.token_offset =*/ token_offset,
+        /*.embd_layer_inp_fused =*/ embd_layer_inp_fused,
+        /*.embd_nextn_persist =*/ embd_nextn_persist,
         /*.samplers    =*/ sampling.samplers,
         /*.n_outputs   =*/ n_outputs,
         /*.cb          =*/ graph_get_cb(),
@@ -3810,6 +3934,56 @@ float * llama_get_embeddings_layer_inp(llama_context * ctx, uint32_t lid) {
     ctx->synchronize();
 
     return ctx->get_embeddings_layer_inp(lid);
+}
+
+const ggml_tensor * llama_get_embeddings_layer_inp_tensor(llama_context * ctx) {
+    // NOTE: no ctx->synchronize() here - the consumer (draft) must call
+    // llama_embd_layer_inp_wait() to wait on the GPU stream for the fused write
+    // to complete (event-based, no host block). if the consumer reads the tensor
+    // data on the host, it must synchronize itself.
+    return ctx->get_embd_layer_inp_fused();
+}
+
+const ggml_tensor * llama_get_embeddings_nextn_tensor(llama_context * ctx) {
+    // NOTE: no ctx->synchronize() - the encoder output is consumed on the same context's
+    // stream (decoder KV-injection runs right after encode), so stream ordering suffices.
+    return ctx->get_embd_nextn_persist();
+}
+
+
+void llama_embd_layer_inp_wait(llama_context * ctx_tgt, llama_context * ctx_dft) {
+    if (!ctx_tgt || !ctx_dft) {
+        return;
+    }
+    auto * event = ctx_tgt->get_embd_layer_inp_fused_event();
+    if (!event) {
+        // no event (fused not in use, or event creation failed) - host sync as fallback
+        ctx_tgt->synchronize();
+        return;
+    }
+
+    auto * sched = ctx_dft->get_sched();
+    if (!sched) {
+        ctx_tgt->synchronize();
+        return;
+    }
+
+    const int n_backends = ggml_backend_sched_get_n_backends(sched);
+    for (int i = 0; i < n_backends; ++i) {
+        ggml_backend_t backend = ggml_backend_sched_get_backend(sched, i);
+        if (backend) {
+            // only device backends implement event_wait (CUDA/Metal/Vulkan); CPU and
+            // ACCEL backends don't and don't need to wait (fused lives on the GPU)
+            ggml_backend_dev_t dev = ggml_backend_get_device(backend);
+            if (dev) {
+                const enum ggml_backend_dev_type dev_type = ggml_backend_dev_type(dev);
+                if (dev_type == GGML_BACKEND_DEVICE_TYPE_CPU || dev_type == GGML_BACKEND_DEVICE_TYPE_ACCEL) {
+                    continue;
+                }
+            }
+            ggml_backend_event_wait(backend, event);
+        }
+    }
 }
 
 bool llama_set_sampler(llama_context * ctx, llama_seq_id seq_id, llama_sampler * smpl) {

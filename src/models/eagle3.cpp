@@ -119,8 +119,19 @@ ggml_tensor * llama_model_eagle3::graph<true>::build_inp_embd_enc() const {
     // Input: Target model features (3 layers concatenated: low, mid, high)
     // Data will be provided via ubatch->embd in encode_eagle3_features()
     auto inp_target = std::make_unique<llm_graph_input_embd>(hparams.n_embd_inp_enc());
-    inp_target->embd = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, hparams.n_embd_inp_enc(), n_tokens);
-    ggml_set_input(inp_target->embd);
+    if (ubatch.embd_dev) {
+        // zero-copy path: alias the external fused device tensor via a view
+        GGML_ASSERT(hparams.n_embd_inp_enc() == ubatch.embd_dev->ne[0]);
+        GGML_ASSERT(ubatch.embd_dev_off + ubatch.n_tokens <= ubatch.embd_dev->ne[1]);
+
+        inp_target->embd = ggml_view_2d(ctx0, ubatch.embd_dev, hparams.n_embd_inp_enc(), ubatch.n_tokens,
+                                        ubatch.embd_dev->nb[1], (size_t) ubatch.embd_dev_off * ubatch.embd_dev->nb[1]);
+        inp_target->embd_dev_ptr = ubatch.embd_dev;
+        // NOTE: no ggml_set_input - the tensor is already resident on the backend
+    } else {
+        inp_target->embd = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, hparams.n_embd_inp_enc(), n_tokens);
+        ggml_set_input(inp_target->embd);
+    }
 
     cur = inp_target->embd;
     cb(cur, "inp_embd", -1);

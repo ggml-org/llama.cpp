@@ -135,6 +135,10 @@ public:
     ggml_tensor * tokens = nullptr; // I32 [n_batch]
     ggml_tensor * embd   = nullptr; // F32 [n_embd, n_batch]
 
+    // external device tensor this graph aliases via a view (zero-copy path), if any
+    // used to invalidate the graph on pointer change
+    ggml_tensor * embd_dev_ptr = nullptr;
+
     const int64_t n_embd = 0;
 };
 
@@ -151,6 +155,9 @@ public:
     ggml_tensor * tokens = nullptr; // I32 [n_batch]
     ggml_tensor * embd   = nullptr; // F32 [n_embd, n_batch]
     ggml_tensor * h      = nullptr; // F32 [n_embd, n_batch]
+
+    // external device tensor this graph aliases via a view (zero-copy path), if any
+    ggml_tensor * embd_dev_ptr = nullptr;
 
     const int64_t n_embd = 0;
 };
@@ -786,6 +793,19 @@ struct llm_graph_params {
     const llama_memory_context_i * mctx;
     const llama_cross            * cross;
 
+    // offset of this ubatch within the full batch (in tokens); used when writing the
+    // fused layer-input tensor so that multi-ubatch decodes land at the right columns.
+    int64_t token_offset = 0;
+
+    // persistent device buffer that receives the concat of the enabled layer-input
+    // tensors (t_layer_inp[il]) each compute call; used by the zero-copy embd_dev path.
+    // null when zero-copy is not in use.
+    ggml_tensor * embd_layer_inp_fused = nullptr;
+
+    // persistent device buffer that receives the encoder output (t_h_nextn) so the
+    // DFlash decoder KV-injection can alias it (zero-copy nextn path). null when disabled.
+    ggml_tensor * embd_nextn_persist = nullptr;
+
     std::map<llama_seq_id, llama_sampler *> samplers;
 
     static bool samplers_equal(
@@ -823,7 +843,11 @@ struct llm_graph_params {
                 (!ubatch.token && !other.ubatch.token) ||
                 (!ubatch.embd  && !other.ubatch.embd)  ||
                 (ubatch.token && other.ubatch.token && ubatch.embd && other.ubatch.embd)
-            );
+            ) &&
+            // zero-copy path: the graph embeds a view of the external device tensor,
+            // so both the tensor pointer and the column offset must match to reuse
+            ubatch.embd_dev     == other.ubatch.embd_dev &&
+            ubatch.embd_dev_off == other.ubatch.embd_dev_off;
 
         // when we split the batch using "equal_seqs" we have to verify that the participating sequences are the same
         //   the reason is because the set of attention streams would be different for different sequences
