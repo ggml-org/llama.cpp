@@ -17,6 +17,7 @@
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -68,6 +69,7 @@ struct common_json_value {
     template <typename T> common_json_value(const std::set<T> & vals);
     // a map becomes an object, keyed in the map's own order
     template <typename T> common_json_value(const std::map<std::string, T> & vals);
+    template <typename T> common_json_value(const std::unordered_map<std::string, T> & vals);
 
     // nested object, e.g. {"fn", {{"name", "x"}}}
     // note: a nested pair {"a", "b"} becomes the object {"a": "b"}, not an array
@@ -119,6 +121,9 @@ struct common_json_is_value<std::set<T, C, A>> : std::true_type {};
 
 template <typename V, typename C, typename A>
 struct common_json_is_value<std::map<std::string, V, C, A>> : std::true_type {};
+
+template <typename V, typename H, typename E, typename A>
+struct common_json_is_value<std::unordered_map<std::string, V, H, E, A>> : std::true_type {};
 
 class common_json {
   public:

@@ -1,6 +1,4 @@
 #include "json.h"
-// defines the shim
-#include "json-shim.h"
 
 #include "ggml.h"
 
@@ -10,6 +8,7 @@
 #include <iterator>
 #include <new>
 #include <set>
+#include <unordered_map>
 #include <vector>
 
 using nlohmann::ordered_json;
@@ -64,28 +63,6 @@ static ordered_json to_json(const common_json_value & val) {
     return nullptr;
 }
 
-template <typename T> T & common_json_raw(common_json & json) {
-    return as_json(&json);
-}
-
-template <typename T> const T & common_json_raw(const common_json & json) {
-    return as_json(&json);
-}
-
-template <typename T> common_json common_json_from_raw(const T & json) {
-    return common_json(as_common(json));
-}
-
-template <typename T> common_json & common_json_ref_from_raw(T & json) {
-    return as_common(json);
-}
-
-// the bridge is usable only for the type below
-template ordered_json       & common_json_raw<ordered_json>(common_json &);
-template const ordered_json & common_json_raw<ordered_json>(const common_json &);
-template common_json          common_json_from_raw<ordered_json>(const ordered_json &);
-template common_json        & common_json_ref_from_raw<ordered_json>(ordered_json &);
-
 common_json_value::common_json_value(const char * val) {
     if (val) {
         type       = VAL_STRING;
@@ -138,6 +115,24 @@ COMMON_JSON_MAP(bool)
 COMMON_JSON_MAP(std::string)
 
 #undef COMMON_JSON_MAP
+
+template <typename T>
+common_json_value::common_json_value(const std::unordered_map<std::string, T> & vals) : type(VAL_JSON) {
+    common_json out = common_json::object();
+
+    for (const auto & val : vals) {
+        out.set({ val.first, val.second });
+    }
+
+    val_json = std::make_shared<common_json>(std::move(out));
+}
+
+// an unordered map value is usable only for the types below
+#define COMMON_JSON_UMAP(...) template common_json_value::common_json_value(const std::unordered_map<std::string, __VA_ARGS__> &);
+
+COMMON_JSON_UMAP(size_t)
+
+#undef COMMON_JSON_UMAP
 
 template <typename T>
 common_json_value::common_json_value(const std::vector<T> & vals) : type(VAL_JSON) {
@@ -436,5 +431,7 @@ COMMON_JSON_GET(std::vector<float>)
 COMMON_JSON_GET(std::vector<std::string>)
 COMMON_JSON_GET(std::set<std::string>)
 COMMON_JSON_GET(std::vector<int>)
+COMMON_JSON_GET(std::vector<size_t>)
+COMMON_JSON_GET(std::unordered_map<std::string, size_t>)
 
 #undef COMMON_JSON_GET
