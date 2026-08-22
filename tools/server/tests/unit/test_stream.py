@@ -98,6 +98,50 @@ def test_stream_stop_during_model_load():
     assert res.status_code == 404
 
 
+def test_stream_stop_during_prompt_processing():
+    global server
+    server.n_ctx = 8192
+    server.start()
+
+    thread_error: list[ServerError] = []
+    thread_done = threading.Event()
+
+    def fire_post():
+        try:
+            for _ in server.make_stream_request("POST", "/chat/completions", data={
+                "model": MODEL,
+                "stream": True,
+                "max_tokens": 512,
+                "messages": [{"role": "user", "content": "hello " * 7000}],
+            }, headers={"X-Conversation-Id": STREAM_ID}):
+                pass
+        except ServerError as e:
+            thread_error.append(e)
+        finally:
+            thread_done.set()
+
+    t = threading.Thread(target=fire_post)
+    t.start()
+
+    # Wait until the child has installed the stream session. This happens before the first
+    # result, while the request can still be tokenizing or processing its prompt.
+    deadline = time.time() + 60.0
+    while time.time() < deadline:
+        res = server.make_request("POST", "/v1/streams/lookup", data={
+            "conversation_ids": [STREAM_ID],
+        })
+        if res.body:
+            break
+        time.sleep(0.01)
+    else:
+        pytest.fail("stream session was not installed")
+
+    res = server.make_request("DELETE", f"/v1/stream?{QS}")
+    assert res.status_code == 204
+    assert thread_done.wait(timeout=10), "generation continued after explicit stop"
+    t.join()
+
+
 def test_stream_resumes_after_reload_during_model_load():
     global server
     server.start()
