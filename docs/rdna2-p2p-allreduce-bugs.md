@@ -230,7 +230,7 @@ rewrite buys low single digits. Not worth it.
 
 ## Related, if useful: TP2 unlock (separate, and a null result)
 
-There is a local branch `exp/rdna2-tp2-unlock` that opens the four-rank gates
+A separate (unmerged, not part of this PR) experiment opens the four-rank gates
 for TP2: rank-parameterised topology predicates, a `barrier2`, an
 element-count-generic pair-sum reduce kernel, and a startup self-test sweep
 that validated batch widths 1..12 byte-for-byte against installed RCCL on

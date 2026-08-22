@@ -10397,10 +10397,18 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     test_cases.emplace_back(new test_flash_attn_ext(256, 256, 2, {16, 1}, 20000, 512, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
 
     for (int kv : { 4096, 8192, 16384, }) {
-        for (int hs : { 64, 128, }) {
+        for (int hs : { 64, 128, 256, }) {
             for (int nr : { 1, 4, }) {
                 test_cases.emplace_back(new test_flash_attn_ext(hs, hs, 8, {nr, 1}, kv, 1, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
             }
+        }
+    }
+    // Qwen3.5/3.8 shape: head size 256, 24 heads / 4 KV heads (GQA 6), long KV.
+    // The stock perf list stops at 128, so the (256,256,...) fattn-tile configs
+    // are never exercised by `test-backend-ops perf`.
+    for (int kv : { 8192, 32768, 131072, }) {
+        for (int nb : { 1, 128, }) {
+            test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {6, 1}, kv, nb, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
         }
     }
 
