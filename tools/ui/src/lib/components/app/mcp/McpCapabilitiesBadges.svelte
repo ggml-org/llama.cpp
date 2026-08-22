@@ -1,13 +1,22 @@
 <script lang="ts">
-	import { Database, FileText, ListChecks, MessageSquare, Sparkles, Wrench } from '@lucide/svelte';
+	import {
+		Database,
+		ExternalLink,
+		FileText,
+		ListChecks,
+		MessageSquare,
+		Sparkles,
+		Wrench
+	} from '@lucide/svelte';
 	import { Badge } from '$lib/components/ui/badge';
 	import type { MCPCapabilitiesInfo } from '$lib/types';
 
 	interface Props {
 		capabilities?: MCPCapabilitiesInfo;
+		onBrowseResources?: () => void;
 	}
 
-	let { capabilities }: Props = $props();
+	let { capabilities, onBrowseResources }: Props = $props();
 </script>
 
 {#if capabilities}
@@ -20,10 +29,24 @@
 	{/if}
 
 	{#if capabilities.server.resources}
-		<Badge variant="outline" class="h-5 gap-1 bg-blue-50 px-1.5 text-[10px] dark:bg-blue-950">
+		<Badge
+			variant="outline"
+			class="h-5 cursor-pointer gap-1 bg-blue-50 px-1.5 text-[10px] transition-colors hover:bg-blue-100 dark:bg-blue-950 dark:hover:bg-blue-900"
+			role="button"
+			tabindex={0}
+			onclick={onBrowseResources}
+			onkeydown={(e) => {
+				if (e.key === 'Enter' || e.key === ' ') {
+					e.preventDefault();
+					onBrowseResources?.();
+				}
+			}}
+		>
 			<Database class="h-3 w-3 text-blue-600 dark:text-blue-400" />
 
 			Resources
+
+			<ExternalLink class="h-3 w-3 text-blue-600 dark:text-blue-400" />
 		</Badge>
 	{/if}
 
