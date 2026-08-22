@@ -226,6 +226,11 @@ json common_chat_msg::to_json_oaicompat(bool concat_typed_text) const {
                 });
             }
         }
+    } else if (!content_present) {
+        // Preserve an omitted OpenAI-compatible content field. Some templates
+        // distinguish this from explicit null and an empty string.
+    } else if (content_is_null) {
+        jmsg["content"] = nullptr;
     } else {
         jmsg["content"] = "";
     }
@@ -390,6 +395,7 @@ std::vector<common_chat_msg> common_chat_msgs_parse_oaicompat(const json & messa
 
             auto has_content    = message.contains("content");
             auto has_tool_calls = message.contains("tool_calls");
+            msg.content_present = has_content;
             if (has_content) {
                 const auto & content = message.at("content");
                 if (content.is_string()) {
@@ -408,7 +414,9 @@ std::vector<common_chat_msg> common_chat_msgs_parse_oaicompat(const json & messa
                         msg_part.text = part.at("text");
                         msg.content_parts.push_back(msg_part);
                     }
-                } else if (!content.is_null()) {
+                } else if (content.is_null()) {
+                    msg.content_is_null = true;
+                } else {
                     throw std::invalid_argument("Invalid 'content' type: expected string or array, got " +
                                                 content.dump() +
                                                 " (ref: https://github.com/ggml-org/llama.cpp/issues/8367)");
