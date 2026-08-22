@@ -5881,7 +5881,7 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
 
         for (ggml_type k_type : lightning_indexer_k_types) {
             const std::string name = "lightning_indexer_" + std::string(ggml_type_name(k_type)) + "_k_f32";
-            ggml_vk_create_pipeline(device, device->pipeline_lightning_indexer_f32[k_type], name.c_str(), li_len, li_data, "main", 5, sizeof(vk_op_lightning_indexer_push_constants), {1, 1, 1}, {(uint32_t)k_type, fa_block_bytes(k_type), device->subgroup_size}, 1, false, li_subgroup);
+            ggml_vk_create_pipeline(device, device->pipeline_lightning_indexer_f32[k_type], name.c_str(), li_len, li_data, "main", 5, sizeof(vk_op_lightning_indexer_push_constants), {1, 1, 1}, {(uint32_t)k_type, fa_block_bytes(k_type), device->subgroup_size}, 1, true, li_subgroup);
         }
     }
 

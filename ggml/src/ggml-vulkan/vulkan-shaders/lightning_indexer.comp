@@ -102,9 +102,11 @@ void main() {
     }
     barrier();
 
+    const float k_val = k_row[tid];
+
     float score = 0.0;
     for (uint h = 0; h < n_heads; ++h) {
-        const float prod = q[h * q_nb1 + t * q_nb2 + s * q_nb3 + tid] * k_row[tid];
+        const float prod = q[h * q_nb1 + t * q_nb2 + s * q_nb3 + tid] * k_val;
 
 #if USE_SUBGROUP_ADD
         const float sg_sum = subgroupAdd(prod);
