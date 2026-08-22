@@ -8,7 +8,7 @@ void test_json_serialization(testing &t) {
     auto json_serialized = original.to_json().dump();
 
     t.test("compare before/after", [&](testing &t) {
-        auto deserialized = common_peg_arena::from_json(nlohmann::json::parse(json_serialized));
+        auto deserialized = common_peg_arena::from_json(common_json::parse(json_serialized));
 
         // Test complex JSON
         std::string input = R"({"name": "test", "values": [1, 2, 3], "nested": {"a": true}})";
@@ -23,6 +23,6 @@ void test_json_serialization(testing &t) {
     });
 
     t.bench("deserialize", [&]() {
-        auto deserialized = common_peg_arena::from_json(nlohmann::json::parse(json_serialized));
+        auto deserialized = common_peg_arena::from_json(common_json::parse(json_serialized));
     }, 100);
 }

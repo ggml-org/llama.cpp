@@ -9,7 +9,7 @@
 #include "http.h"
 #include "log.h"
 
-#include <nlohmann/json.hpp>
+#include "json.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -55,7 +55,7 @@ static const char * COMMIT = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 static void serve_repos(httplib::Server & server) {
     server.Get(R"(/api/models/(.+)/refs)", [](const httplib::Request & req, httplib::Response & res) {
         if (g_repos.count(req.matches[1])) {
-            res.set_content(nlohmann::json{{"branches", {{{"name", "main"}, {"targetCommit", COMMIT}}}}}.dump(),
+            res.set_content(common_json{{"branches", common_json::array({ common_json{{"name", "main"}, {"targetCommit", COMMIT}} })}}.dump(),
                             "application/json");
         } else {
             res.status = 404;
@@ -66,7 +66,7 @@ static void serve_repos(httplib::Server & server) {
             res.status = 404;
             return;
         }
-        auto files = nlohmann::json::array();
+        auto files = common_json::array();
         size_t i = 0;
         for (const auto & p : g_repos[req.matches[1]]) {
             char oid[41];

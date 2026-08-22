@@ -7,7 +7,7 @@ The implementation can be found in the `common/jinja` directory.
 ## Key Features
 
 - Input marking: security against special token injection
-- Decoupled from `nlohmann::json`: this dependency is only used for JSON-to-internal type translation and is completely optional
+- Decoupled from the JSON library: `common_json` is only used for JSON-to-internal type translation and is completely optional
 - Minimal primitive types: int, float, bool, string, array, object, none, undefined
 - Detailed logging: allow source tracing on error
 - Clean architecture: workarounds are applied to input data before entering the runtime (see `common/chat.cpp`)

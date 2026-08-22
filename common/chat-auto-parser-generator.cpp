@@ -5,13 +5,12 @@
 #include "common.h"
 #include "json-schema-to-grammar.h"
 #include "log.h"
-#include "nlohmann/json.hpp"
 #include "peg-parser.h"
 
 #include <stdexcept>
 #include <string>
 
-using json = nlohmann::ordered_json;
+using json = common_json;
 
 // Helper to iterate over tools/functions
 static void foreach_function(const json & tools, const std::function<void(const json &)> & fn) {
@@ -391,7 +390,7 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
 
         std::set<std::string> required;
         if (params.contains("required")) {
-            params.at("required").get_to(required);
+            required = params.at("required").get<std::set<std::string>>();
         }
 
         auto schema_info = common_schema_info();

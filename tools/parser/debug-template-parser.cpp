@@ -5,7 +5,7 @@
 #include "gguf.h"
 #include "jinja/runtime.h"
 #include "log.h"
-#include "nlohmann/json.hpp"
+#include "json.h"
 #include "peg-parser.h"
 
 #include <fstream>
@@ -15,7 +15,7 @@
 #include <sstream>
 #include <string>
 
-using json = nlohmann::ordered_json;
+using json = common_json;
 
 enum class output_mode {
     ANALYSIS,  // Only output analysis results (default)

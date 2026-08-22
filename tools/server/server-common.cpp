@@ -1540,7 +1540,7 @@ std::vector<llama_token_data> get_token_probabilities(llama_context * ctx, int i
 }
 
 std::string safe_json_to_str(const json & data) {
-    return data.dump(-1, ' ', false, json::error_handler_t::replace);
+    return data.dump_safe();
 }
 
 // TODO: reuse llama_detokenize

@@ -6,7 +6,7 @@
 
 #include "../src/llama-grammar.h"
 
-#include <nlohmann/json.hpp>
+#include "json.h"
 
 #include <cassert>
 #include <fstream>
@@ -1442,7 +1442,7 @@ static void test_resolves_to_string() {
     auto test = [](const std::string & name, const std::string & schema_str, bool expected) {
         fprintf(stderr, "- %s\n", name.c_str());
         common_schema_info info;
-        auto schema = nlohmann::ordered_json::parse(schema_str);
+        auto schema = common_json::parse(schema_str);
         info.resolve_refs(schema);
         bool result = info.resolves_to_string(schema);
         if (result != expected) {
@@ -1517,7 +1517,7 @@ int main() {
 
     test_all("C++", [](const TestCase & tc) {
         try {
-            tc.verify(json_schema_to_grammar(nlohmann::ordered_json::parse(tc.schema), true));
+            tc.verify(json_schema_to_grammar(common_json::parse(tc.schema), true));
             tc.verify_status(SUCCESS);
         } catch (const std::invalid_argument & ex) {
             fprintf(stderr, "Error: %s\n", ex.what());
@@ -1531,7 +1531,7 @@ int main() {
         auto run = [](const TestCase & tc) {
             fprintf(stderr, "- %s\n", tc.name.c_str());
             try {
-                tc.verify(json_schema_to_grammar(nlohmann::ordered_json::parse(tc.schema), true));
+                tc.verify(json_schema_to_grammar(common_json::parse(tc.schema), true));
                 tc.verify_status(SUCCESS);
             } catch (const std::invalid_argument & ex) {
                 fprintf(stderr, "Error: %s\n", ex.what());

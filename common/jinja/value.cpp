@@ -3,7 +3,7 @@
 #include "value.h"
 
 // for converting from JSON to jinja values
-#include <nlohmann/json.hpp>
+#include "json.h"
 
 #include <sstream>
 #include <string>
@@ -1355,7 +1355,7 @@ const func_builtins & value_undefined_t::get_builtins() const {
 //////////////////////////////////
 
 
-static value from_json(const nlohmann::ordered_json & j, bool mark_input) {
+static value from_json(const common_json & j, bool mark_input) {
     if (j.is_null()) {
         return mk_val<value_none>();
     } else if (j.is_boolean()) {
@@ -1452,7 +1452,7 @@ bool value_compare(const value & a, const value & b, value_compare_op op) {
 }
 
 template<>
-void global_from_json(context & ctx, const nlohmann::ordered_json & json_obj, bool mark_input) {
+void global_from_json(context & ctx, const common_json & json_obj, bool mark_input) {
     // printf("global_from_json: %s\n" , json_obj.dump(2).c_str());
     if (json_obj.is_null() || !json_obj.is_object()) {
         throw std::runtime_error("global_from_json: input JSON value must be an object");

@@ -4,11 +4,11 @@
 #include "chat.h"
 #include "common.h"
 #include "log.h"
-#include "nlohmann/json.hpp"
 #include "peg-parser.h"
 
 #include <algorithm>
 #include <cctype>
+#include <numeric>
 #include <ostream>
 #include <sstream>
 
@@ -17,7 +17,7 @@
 #define ANSI_ORANGE "\033[1m\x1b[38;5;214m"
 #define ANSI_RED    "\033[1m\x1b[38;5;196m"
 
-using json = nlohmann::ordered_json;
+using json = common_json;
 
 namespace autoparser {
 
@@ -929,7 +929,7 @@ void analyze_tools::analyze_tool_call_format_json_native(const std::string & cle
     int  json_end       = clean_haystack.find_last_of('}');
     std::string cut     = clean_haystack.substr(json_start, json_end - json_start + 1);
     json call_struct    = json::parse(cut);
-    auto register_field = [&](const std::string & prefix, const nlohmann::detail::iteration_proxy_value<json::iterator> & subel) {
+    auto register_field = [&](const std::string & prefix, const common_json_entry & subel) {
         if (subel.value().is_string() && std::string(subel.value()).find("call0000") != std::string::npos) {
             format.id_field = !prefix.empty() ? prefix + "." + subel.key() : subel.key();
         } else if (subel.value().is_string() && std::string(subel.value()) == fun_name_needle) {

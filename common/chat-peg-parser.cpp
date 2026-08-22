@@ -4,12 +4,10 @@
 #include "ggml.h"
 #include "peg-parser.h"
 
-#include <nlohmann/json.hpp>
-
 #include <cstdint>
 #include <functional>
 
-using ordered_json = nlohmann::ordered_json;
+using ordered_json = common_json;
 
 static std::string_view trim_trailing_space(std::string_view sv, int max = -1) {
     int count = 0;
