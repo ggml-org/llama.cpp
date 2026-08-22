@@ -217,6 +217,22 @@ static int ggml_cuda_parse_id(char devName[]) {
 static ggml_cuda_device_info ggml_cuda_init() {
     ggml_cuda_device_info info = {};
 
+    // Optionally use blocking synchronization so that the host thread sleeps
+    // instead of busy-waiting while the GPU is working. This greatly reduces
+    // CPU usage for fully offloaded inference at the cost of a small increase
+    // in synchronization latency. Must be set before any CUDA context is
+    // created on the device.
+    const char * blocking_sync_env = getenv("GGML_CUDA_BLOCKING_SYNC");
+    if (blocking_sync_env != nullptr && std::atoi(blocking_sync_env) != 0) {
+        cudaError_t flags_err = cudaSetDeviceFlags(cudaDeviceScheduleBlockingSync);
+        if (flags_err != cudaSuccess) {
+            GGML_LOG_WARN("%s: failed to set cudaDeviceScheduleBlockingSync: %s\n",
+                          __func__, cudaGetErrorString(flags_err));
+        } else {
+            GGML_LOG_INFO("%s: using cudaDeviceScheduleBlockingSync\n", __func__);
+        }
+    }
+
     cudaError_t err = cudaGetDeviceCount(&info.physical_device_count);
     if (err != cudaSuccess) {
         GGML_LOG_ERROR("%s: failed to initialize " GGML_CUDA_NAME ": %s\n", __func__, cudaGetErrorString(err));
