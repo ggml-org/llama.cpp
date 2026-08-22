@@ -576,6 +576,35 @@ void llama_context::resolve_fused_ops(const llama_memory_context_i * mctx, uint3
         resolve(llm_fused_op_dsv4_hc_post_probe, cparams.fused_dsv4_hc_post);
         cparams.auto_fhc = false;
     }
+
+    // The KV cache types that are not supported by the FA kernels on the layer device would fall
+    // back to the CPU, which breaks the split state consistency of tensor-parallel graphs.
+    fa_kv_f16.assign(model.hparams.n_layer_all, false);
+    if (cparams.flash_attn) {
+        const uint32_t n_tokens_probe = n_seqs;
+
+        auto * gf = graph_reserve(n_tokens_probe, n_seqs, n_tokens_probe, mctx, true);
+        if (!gf) {
+            throw std::runtime_error(std::string("failed to reserve graph for flash attention KV type check"));
+        }
+
+        for (const auto & node : get_gf_res_reserve()->get_fused_nodes()) {
+            if (node.op != LLM_FUSED_OP_FLASH_ATTN) {
+                continue;
+            }
+
+            GGML_ASSERT(node.il >= 0);
+            GGML_ASSERT(node.il < (int) fa_kv_f16.size());
+
+            ggml_backend_t backend_fused = ggml_backend_sched_get_tensor_backend(sched.get(), node.tensor);
+            ggml_backend_dev_t device_fused = backend_fused ? ggml_backend_get_device(backend_fused) : nullptr;
+            ggml_backend_dev_t device_layer = model.dev_layer(node.il);
+
+            if (device_fused != device_layer) {
+                fa_kv_f16[node.il] = true;
+            }
+        }
+    }
 }
 
 void llama_context::sched_reserve() {
@@ -2461,6 +2490,7 @@ llm_graph_params llama_context::graph_params(
         /*.gtype       =*/ gtype,
         /*.sched       =*/ sched.get(),
         /*.backend_cpu =*/ backend_cpu,
+        /*.fa_kv_f16   =*/ &fa_kv_f16,
         /*.cvec        =*/ cvec.get(),
         /*.loras       =*/ loras.get(),
         /*.mctx        =*/ mctx,
