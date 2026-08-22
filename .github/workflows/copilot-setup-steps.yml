@@ -53,4 +53,5 @@ jobs:
         run: |
           python3 -m venv .venv
           source .venv/bin/activate
+          source scripts/apply-pip-cooldown.sh python3
           pip install -r requirements/requirements-all.txt -r tools/server/tests/requirements.txt

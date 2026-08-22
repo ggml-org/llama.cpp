@@ -72,6 +72,7 @@ jobs:
           cd tools/server/bench
           python3 -m venv venv
           source venv/bin/activate
+          source "$GITHUB_WORKSPACE/scripts/apply-pip-cooldown.sh" python3
           pip install -r requirements.txt
 
       - name: Prometheus
