@@ -4287,6 +4287,7 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
         s_warptile_mmqid_int_k = { mul_mat_subgroup_size_32, 32,  32, 32, s_warptile_wm,                32, 1, 2, 1, 1, mul_mat_subgroup_size_16 };
 
         // chip specific tuning
+        bool gfx1151_mmq_k_tile = false;
         if ((device->architecture == AMD_GCN) && (device->driver_id != vk::DriverId::eAmdProprietary)) {
             m_warptile_mmq = m_warptile_mmq_int = { 256, 64, 64, 32, 16, 16, 2, 2, 2, 1, 16 };
             m_warptile_mmqid = m_warptile_mmqid_int = { 256, 64, 64, 32, 16, 16, 2, 2, 2, 1, 16 };
@@ -4295,6 +4296,19 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
             l_warptile = { 256, 128, 128, 16, subgroup_size_8, 64, 2, tm_m, tn_m, tk_m, subgroup_size_8 };
             l_warptile_mmq = l_warptile_mmq_int = { 256, 128, 128, 32, subgroup_size_8, 64, 2, tm_m, tn_m, tk_m, subgroup_size_8 };
             l_warptile_mmq_int_k = { 256, 128, 128, 32, subgroup_size_16, 64, 1, 4, 2, 1, subgroup_size_16 };
+
+            // RDNA3 iGPU (gfx1151-class, e.g. Radeon 8060S): the stock 128x128 large
+            // tile at 256 threads underfills the shader cores at dense prefill shapes
+            // and re-reads the A weights once per 128-token slab. Doubling only BN and
+            // the thread count keeps the per-thread register tiling identical while
+            // halving the A re-reads per token: measured ~1.8x prompt processing on
+            // Qwen3.8-27B Q5_K_XL (pp4096, -ub 2048), tg128 unchanged, greedy outputs
+            // byte-identical. Decode and verify batches (n <= 64) select the small or
+            // medium tile and are unaffected.
+            gfx1151_mmq_k_tile = device->architecture == AMD_RDNA3 && device->uma;
+            if (gfx1151_mmq_k_tile) {
+                l_warptile_mmq_int_k = { 512, 128, 256, 32, subgroup_size_16, 64, 1, 4, 2, 1, subgroup_size_16 };
+            }
         } else if (device->vendor_id == VK_VENDOR_ID_INTEL && device->coopmat_support) {
             // Xe2/Xe3 with coopmat enabled - warptile performance tuning
             l_warptile = { 512, 128, 128, 16, subgroup_size_8, 32, 2, tm_m, tn_m, tk_m, subgroup_size_8 };
@@ -4304,6 +4318,10 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
         l_mmq_wg_denoms = l_wg_denoms = {128, 128, 1 };
         m_mmq_wg_denoms = m_wg_denoms = { 64,  64, 1 };
         s_mmq_wg_denoms = s_wg_denoms = { 32,  32, 1 };
+        // keep the dispatch grid in sync with the 128x256 gfx1151 tile above
+        if (gfx1151_mmq_k_tile) {
+            l_mmq_wg_denoms = { 128, 256, 1 };
+        }
         l_align = 128;
         m_align =  64;
         s_align =  32;
