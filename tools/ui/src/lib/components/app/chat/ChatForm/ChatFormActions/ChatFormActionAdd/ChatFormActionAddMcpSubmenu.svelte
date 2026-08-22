@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { FolderOpen, Server, Zap } from '@lucide/svelte';
-	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import { McpLogo } from '$lib/components/app';
+	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import { ICON_CLASS_DEFAULT } from '$lib/constants';
 	import { getChatFormActionsContext } from '$lib/contexts';
 
@@ -20,10 +20,7 @@
 	</DropdownMenu.SubTrigger>
 
 	<DropdownMenu.SubContent class="w-48">
-		<DropdownMenu.Item
-			class="flex cursor-pointer items-center gap-2"
-			onclick={handleServersClick}
-		>
+		<DropdownMenu.Item class="flex cursor-pointer items-center gap-2" onclick={handleServersClick}>
 			<Server class={ICON_CLASS_DEFAULT} />
 
 			<span>Servers</span>
