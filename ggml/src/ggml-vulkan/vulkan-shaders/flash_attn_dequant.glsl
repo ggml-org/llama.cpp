@@ -7,10 +7,6 @@
 // Not included by flash_attn_cm2.comp, which has its own buffer_reference-based
 // decode path.
 //
-// Define FA_K_ONLY before including to drop the V views and the FaTypeV switch.
-// Shaders that only read K do not declare FaTypeV, and binding 2 is theirs to
-// use for something else.
-//
 // We use macros (rather than per-quant decode functions taking a struct) on
 // purpose: the FA shaders don't enable GL_EXT_shader_explicit_arithmetic_types_float16
 // when FLOAT16 isn't defined, which makes float16-containing struct values
@@ -28,7 +24,6 @@ layout (binding = 1) readonly buffer K_PACKED_Q8_0 { block_q8_0_packed16 data[];
 layout (binding = 1) readonly buffer K_PACKED_IQ4_NL { block_iq4_nl_packed16 data[]; } k_packed_iq4_nl;
 layout (binding = 1) readonly buffer K_PACKED_BF16 { u16vec4 data[]; } k_packed_bf16;
 
-#ifndef FA_K_ONLY
 layout (binding = 2) readonly buffer V_PACKED_F32  { vec4 data[]; }                v_packed_f32;
 layout (binding = 2) readonly buffer V_PACKED_Q4_0 { block_q4_0_packed16 data[]; } v_packed_q4_0;
 layout (binding = 2) readonly buffer V_PACKED_Q4_1 { block_q4_1_packed16 data[]; } v_packed_q4_1;
@@ -37,7 +32,6 @@ layout (binding = 2) readonly buffer V_PACKED_Q5_1 { block_q5_1_packed16 data[];
 layout (binding = 2) readonly buffer V_PACKED_Q8_0 { block_q8_0_packed16 data[]; } v_packed_q8_0;
 layout (binding = 2) readonly buffer V_PACKED_IQ4_NL { block_iq4_nl_packed16 data[]; } v_packed_iq4_nl;
 layout (binding = 2) readonly buffer V_PACKED_BF16 { u16vec4 data[]; } v_packed_bf16;
-#endif
 
 // Q4_1 and Q5_1 packed32 views: aliased to the same memory as the packed16
 // views, used by the MMQ K-side hot path for fast 4-uint loads.
@@ -137,7 +131,6 @@ FLOAT_TYPEV4 dequantize4(uint ib, uint iqs, uint a_offset, uint binding_idx) {
             case FA_TYPE_BF16: FA_DEQUANT4_BF16(k_packed_bf16)
         }
     }
-#ifndef FA_K_ONLY
     else {
         switch (FaTypeV) {
             case FA_TYPE_F32:  FA_DEQUANT4_F32 (v_packed_f32)
@@ -150,6 +143,5 @@ FLOAT_TYPEV4 dequantize4(uint ib, uint iqs, uint a_offset, uint binding_idx) {
             case FA_TYPE_BF16: FA_DEQUANT4_BF16(v_packed_bf16)
         }
     }
-#endif
     return FLOAT_TYPEV4(0);
 }
