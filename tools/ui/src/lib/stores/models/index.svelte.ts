@@ -114,6 +114,18 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 		return this._status;
 	}
 
+	/**
+	 * First loaded model with audio input, used to transcribe mic input
+	 * when the active model is text-only (ROUTER mode only).
+	 */
+	get transcriptionModelId(): string | null {
+		if (!serverStore.isRouterMode) return null;
+
+		const model = this.models.find((m) => m.modalities?.audio && this.isModelLoaded(m.model));
+
+		return model?.model ?? null;
+	}
+
 	clearSelection(): void {
 		this.selectedModelId = null;
 		this.selectedModelName = null;

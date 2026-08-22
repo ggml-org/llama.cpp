@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Mic, Square } from '@lucide/svelte';
+	import { LoaderCircle, Mic, Square } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { ICON_CLASS_DEFAULT } from '$lib/constants';
@@ -10,7 +10,9 @@
 		hasAudioModality?: boolean;
 		isLoading?: boolean;
 		isRecording?: boolean;
+		isTranscribing?: boolean;
 		onMicClick?: () => void;
+		transcriptionModelName?: string | null;
 	}
 
 	let {
@@ -19,8 +21,12 @@
 		hasAudioModality = false,
 		isLoading = false,
 		isRecording = false,
-		onMicClick
+		isTranscribing = false,
+		onMicClick,
+		transcriptionModelName = null
 	}: Props = $props();
+
+	let canRecord = $derived(hasAudioModality || !!transcriptionModelName);
 </script>
 
 <div class="flex items-center gap-1 {className}">
@@ -30,13 +36,15 @@
 				class="h-8 w-8 rounded-full p-0 {isRecording
 					? 'animate-pulse bg-red-500 text-white hover:bg-red-600'
 					: ''}"
-				disabled={disabled || isLoading || !hasAudioModality}
+				disabled={disabled || isLoading || isTranscribing || !canRecord}
 				onclick={onMicClick}
 				type="button"
 			>
 				<span class="sr-only">{isRecording ? 'Stop recording' : 'Start recording'}</span>
 
-				{#if isRecording}
+				{#if isTranscribing}
+					<LoaderCircle class="{ICON_CLASS_DEFAULT} animate-spin" />
+				{:else if isRecording}
 					<Square class="{ICON_CLASS_DEFAULT} animate-pulse fill-white" />
 				{:else}
 					<Mic class={ICON_CLASS_DEFAULT} />
@@ -46,7 +54,11 @@
 
 		{#if !hasAudioModality}
 			<Tooltip.Content>
-				<p>Current model does not support audio</p>
+				{#if transcriptionModelName}
+					<p>Voice input is transcribed by {transcriptionModelName}</p>
+				{:else}
+					<p>Current model does not support audio</p>
+				{/if}
 			</Tooltip.Content>
 		{/if}
 	</Tooltip.Root>

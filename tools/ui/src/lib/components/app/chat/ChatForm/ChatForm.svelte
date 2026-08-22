@@ -27,6 +27,7 @@
 		ToolSource
 	} from '$lib/enums';
 	import { useChatFormPickers } from '$lib/hooks/use-chat-form-pickers.svelte';
+	import { ChatService } from '$lib/services';
 	import {
 		chatStore,
 		conversationsStore,
@@ -62,6 +63,7 @@
 		isAudioRecordingSupported
 	} from '$lib/utils/browser-only';
 	import { onMount } from 'svelte';
+	import { toast } from 'svelte-sonner';
 
 	interface Props {
 		// Data
@@ -133,6 +135,7 @@
 
 	// Audio Recording State
 	let isRecording = $state(false);
+	let isTranscribing = $state(false);
 	let recordingSupported = $state(false);
 
 	// Invisible anchor at the form's top edge so the mention/WD popovers
@@ -520,7 +523,15 @@
 				const wavBlob = await convertToWav(audioBlob);
 				const audioFile = createAudioFile(wavBlob);
 
-				onFilesAdd?.([audioFile]);
+				const supportsAudio = activeModelId
+					? modelsStore.props.modelSupportsAudio(activeModelId)
+					: false;
+
+				if (supportsAudio) {
+					onFilesAdd?.([audioFile]);
+				} else {
+					await transcribeRecording(audioFile);
+				}
 			} catch (error) {
 				console.error('Failed to stop recording:', error);
 			}
@@ -531,6 +542,32 @@
 			} catch (error) {
 				console.error('Failed to start recording:', error);
 			}
+		}
+	}
+
+	async function transcribeRecording(audioFile: File) {
+		const transcriptionModel = modelsStore.transcriptionModelId;
+
+		if (!transcriptionModel) {
+			toast.error('No loaded model supports audio input');
+
+			return;
+		}
+
+		isTranscribing = true;
+		try {
+			const text = (await ChatService.transcribeAudio(audioFile, transcriptionModel)).trim();
+
+			if (text) {
+				value = value.trim() ? `${value} ${text}` : text;
+				onValueChange?.(value);
+				refocusInput();
+			}
+		} catch (error) {
+			console.error('Failed to transcribe recording:', error);
+			toast.error(error instanceof Error ? error.message : 'Failed to transcribe recording');
+		} finally {
+			isTranscribing = false;
 		}
 	}
 </script>
@@ -627,6 +664,7 @@
 				{isLoading}
 				isReasoning={chatStore.isReasoning}
 				{isRecording}
+				{isTranscribing}
 				onFileUpload={handleFileUpload}
 				onMcpSettingsClick={() => (isMcpServersDialogOpen = true)}
 				onMicClick={handleMicClick}
