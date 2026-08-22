@@ -454,11 +454,12 @@ static __global__ void quantize_mmq_mxfp4(const float * __restrict__ x,
 }
 
 // scatter: grid over tokens, quantize once, write to all the token's compact rows
-template <mmq_q8_1_ds_layout ds_layout, bool scatter>
+template <mmq_q8_1_ds_layout ds_layout, bool scatter, bool swiglu = false>
 static __global__ void quantize_mmq_q8_1(
         const float * __restrict__ x, const int32_t * __restrict__ ids, void * __restrict__ vy,
         const int64_t ne00, const int64_t s01, const int64_t s02, const int64_t s03,
-        const int64_t ne0, const int ne1, const int ne2, const int n_expert_used) {
+        const int64_t ne0, const int ne1, const int ne2, const int n_expert_used,
+        const float * __restrict__ gate = nullptr, const float * __restrict__ row_scales = nullptr) {
 
     constexpr int vals_per_scale = ds_layout == MMQ_Q8_1_DS_LAYOUT_D2S6 ? 64 : 32;
     constexpr int vals_per_sum   = ds_layout == MMQ_Q8_1_DS_LAYOUT_D2S6 ? 16 : 32;
@@ -489,7 +490,24 @@ static __global__ void quantize_mmq_q8_1(
     const int64_t iqs     = i0 % QK8_1_MMQ; // quant index in block
 
     // Load 4 floats per thread and calculate max. abs. value between them:
-    const float4 xi = i0 < ne00 ? x4[(base_idx + i00)/4] : make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+    float4 xi = i0 < ne00 ? x4[(base_idx + i00)/4] : make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+
+    if constexpr (swiglu) {
+        // silu(gate)*up and the routing weight folded in here: the block scale absorbs the factor,
+        // so the int8 codes are unchanged and only d (and the sum term) scale by it
+        const float4 g = i0 < ne00 ? ((const float4 *) gate)[(base_idx + i00)/4]
+                                   : make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+        xi.x *= g.x/(1.0f + expf(-g.x));
+        xi.y *= g.y/(1.0f + expf(-g.y));
+        xi.z *= g.z/(1.0f + expf(-g.z));
+        xi.w *= g.w/(1.0f + expf(-g.w));
+
+        if (row_scales) {
+            const float w = row_scales[blockIdx.x];
+            xi.x *= w; xi.y *= w; xi.z *= w; xi.w *= w;
+        }
+    }
+
     float amax = fabsf(xi.x);
     amax = fmaxf(amax, fabsf(xi.y));
     amax = fmaxf(amax, fabsf(xi.z));
@@ -595,6 +613,37 @@ void quantize_mmq_q8_1_cuda(
         case MMQ_Q8_1_DS_LAYOUT_D2S6:
             quantize_mmq_q8_1<MMQ_Q8_1_DS_LAYOUT_D2S6, false>
                 <<<num_blocks, block_size, 0, stream>>>(x, ids, vy, ne00, s01, s02, s03, ne0, ne1, ne2, /*n_expert_used=*/0);
+            break;
+        default:
+            GGML_ABORT("fatal error");
+            break;
+    }
+}
+
+// quantizes silu(gate)*up * routing_weight without materializing the product;
+// up/gate are contiguous [ne00, ne1] sharing the row stride s01
+void quantize_mmq_q8_1_swiglu_cuda(
+        const float * up, const float * gate, void * vy, const ggml_type type_src0,
+        const int64_t ne00, const int64_t s01, const int64_t ne0, const int64_t ne1,
+        const float * row_scales, cudaStream_t stream) {
+    GGML_ASSERT(ne00 % 4 == 0);
+    GGML_ASSERT(ne0 % QK8_1_MMQ == 0);
+
+    const int64_t block_num_y = (ne0 + 4*CUDA_QUANTIZE_BLOCK_SIZE_MMQ - 1) / (4*CUDA_QUANTIZE_BLOCK_SIZE_MMQ);
+    const dim3 num_blocks(ne1, block_num_y, 1);
+    const dim3 block_size(CUDA_QUANTIZE_BLOCK_SIZE_MMQ, 1, 1);
+    switch (mmq_get_q8_1_ds_layout(type_src0)) {
+        case MMQ_Q8_1_DS_LAYOUT_D4:
+            quantize_mmq_q8_1<MMQ_Q8_1_DS_LAYOUT_D4, false, true><<<num_blocks, block_size, 0, stream>>>(
+                up, nullptr, vy, ne00, s01, s01*ne1, s01*ne1, ne0, (int) ne1, 1, 0, gate, row_scales);
+            break;
+        case MMQ_Q8_1_DS_LAYOUT_DS4:
+            quantize_mmq_q8_1<MMQ_Q8_1_DS_LAYOUT_DS4, false, true><<<num_blocks, block_size, 0, stream>>>(
+                up, nullptr, vy, ne00, s01, s01*ne1, s01*ne1, ne0, (int) ne1, 1, 0, gate, row_scales);
+            break;
+        case MMQ_Q8_1_DS_LAYOUT_D2S6:
+            quantize_mmq_q8_1<MMQ_Q8_1_DS_LAYOUT_D2S6, false, true><<<num_blocks, block_size, 0, stream>>>(
+                up, nullptr, vy, ne00, s01, s01*ne1, s01*ne1, ne0, (int) ne1, 1, 0, gate, row_scales);
             break;
         default:
             GGML_ABORT("fatal error");

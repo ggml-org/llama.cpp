@@ -1083,6 +1083,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "DSV4_HC_COMB",
     "DSV4_HC_PRE",
     "DSV4_HC_POST",
+    "MOE_FFN",
 
     "UNARY",
 
@@ -1100,7 +1101,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "GLU",
 };
 
-static_assert(GGML_OP_COUNT == 101, "GGML_OP_COUNT != 101");
+static_assert(GGML_OP_COUNT == 102, "GGML_OP_COUNT != 102");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -1198,6 +1199,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "dsv4_hc_comb(mixes, scale, base)",
     "dsv4_hc_pre(x, weights)",
     "dsv4_hc_post(x, residual, post, comb)",
+    "moe_ffn(x)",
 
     "unary(x)",
 
@@ -1215,7 +1217,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "glu(x)",
 };
 
-static_assert(GGML_OP_COUNT == 101, "GGML_OP_COUNT != 101");
+static_assert(GGML_OP_COUNT == 102, "GGML_OP_COUNT != 102");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -3348,6 +3350,87 @@ struct ggml_tensor * ggml_mul_mat_id(
     result->src[0] = as;
     result->src[1] = b;
     result->src[2] = ids;
+
+    return result;
+}
+
+// ggml_moe_ffn
+
+/*
+    out = ggml_moe_ffn(ctx, x, gate_inp, up_exps, gate_exps, down_exps, n_expert_used);
+
+    x         -> [n_embd, n_tokens]
+    gate_inp  -> [n_embd, n_expert]
+    up_exps   -> [n_embd, n_ff, n_expert]
+    gate_exps -> [n_embd, n_ff, n_expert]
+    down_exps -> [n_ff, n_embd, n_expert]
+    out       -> [n_embd, n_tokens]
+
+    if gate_exps is NULL, up_exps is a merged [n_embd, 2*n_ff, n_expert] tensor holding the
+    gate rows first and the up rows second
+
+    probs = softmax(gate_inp^T @ x), top-n_expert_used experts are selected per token,
+    their weights normalized to sum to 1, then:
+
+    out = sum_k w_k * down_exps[e_k] @ (silu(gate_exps[e_k] @ x) * (up_exps[e_k] @ x))
+*/
+struct ggml_tensor * ggml_moe_ffn(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * x,
+        struct ggml_tensor  * gate_inp,
+        struct ggml_tensor  * up_exps,
+        struct ggml_tensor  * gate_exps,
+        struct ggml_tensor  * down_exps,
+        int                   n_expert_used,
+        enum ggml_moe_gating_op gating_op,
+        bool                  norm_w,
+        enum ggml_glu_op      act) {
+    GGML_ASSERT(gating_op == GGML_MOE_GATING_OP_SOFTMAX && "only softmax routing is implemented");
+    GGML_ASSERT(norm_w                                  && "only normalized expert weights are implemented");
+    GGML_ASSERT(act       == GGML_GLU_OP_SWIGLU         && "only swiglu is implemented");
+    GGML_ASSERT(x->type == GGML_TYPE_F32);
+    GGML_ASSERT(ggml_is_contiguous(x));
+    GGML_ASSERT(ggml_is_matrix(x));
+    GGML_ASSERT(ggml_is_matrix(gate_inp));
+    GGML_ASSERT(!ggml_is_transposed(up_exps));
+    GGML_ASSERT(!ggml_is_transposed(down_exps));
+
+    const bool merged = gate_exps == NULL;
+
+    const int64_t n_embd   = x->ne[0];
+    const int64_t n_tokens = x->ne[1];
+    const int64_t n_expert = gate_inp->ne[1];
+    const int64_t n_ff     = merged ? up_exps->ne[1]/2 : up_exps->ne[1];
+
+    GGML_ASSERT(gate_inp->ne[0]  == n_embd);
+    GGML_ASSERT(up_exps->ne[0]   == n_embd);
+    GGML_ASSERT(up_exps->ne[2]   == n_expert);
+    GGML_ASSERT(up_exps->ne[3]   == 1);
+    if (merged) {
+        GGML_ASSERT(up_exps->ne[1] == 2*n_ff);
+    } else {
+        GGML_ASSERT(!ggml_is_transposed(gate_exps));
+        GGML_ASSERT(ggml_are_same_shape(up_exps, gate_exps));
+        GGML_ASSERT(up_exps->type == gate_exps->type);
+    }
+    GGML_ASSERT(down_exps->ne[0] == n_ff);
+    GGML_ASSERT(down_exps->ne[1] == n_embd);
+    GGML_ASSERT(down_exps->ne[2] == n_expert);
+    GGML_ASSERT(n_expert_used > 0 && n_expert_used <= n_expert);
+
+    struct ggml_tensor * result = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_embd, n_tokens);
+
+    ggml_set_op_params_i32(result, 0, n_expert_used);
+    ggml_set_op_params_i32(result, 1, (int32_t) gating_op);
+    ggml_set_op_params_i32(result, 2, (int32_t) norm_w);
+    ggml_set_op_params_i32(result, 3, (int32_t) act);
+
+    result->op     = GGML_OP_MOE_FFN;
+    result->src[0] = x;
+    result->src[1] = gate_inp;
+    result->src[2] = up_exps;
+    result->src[3] = gate_exps;
+    result->src[4] = down_exps;
 
     return result;
 }
