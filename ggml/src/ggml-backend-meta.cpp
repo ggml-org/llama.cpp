@@ -1977,7 +1977,7 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
 
         {
             // For MoE models it may make sense to delay the AllReduce in order to reduce I/O:
-            auto get_i_delayed = [&](const int i) -> int {
+            auto get_i_delayed_branch = [&](const int i) -> int {
                 int id = i; // i_delayed
                 int idr = i; // i_delayed return, last safe return value
 
@@ -2075,6 +2075,62 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
                 }
                 idr = id;
                 return idr;
+            };
+
+            // AllReduce(a) + AllReduce(b) == AllReduce(a + b) for independent partial branches.
+            auto get_i_delayed = [&](const int i) -> int {
+                const int i_delayed = get_i_delayed_branch(i);
+                ggml_tensor * node = cgraph->nodes[i_delayed];
+
+                if (ggml_node_get_use_count(cgraph, i_delayed) != 1) {
+                    return i_delayed;
+                }
+
+                for (int id = i_delayed + 1; id < cgraph->n_nodes; id++) {
+                    ggml_tensor * next = cgraph->nodes[id];
+                    if (next->view_src == node) {
+                        return i_delayed;
+                    }
+                    for (int s = 0; s < GGML_MAX_SRC; s++) {
+                        if (next->src[s] == node) {
+                            return i_delayed;
+                        }
+                    }
+
+                    if (next->view_src != nullptr && next->view_src->op == GGML_OP_NONE && ggml_backend_buffer_is_host(next->view_src->buffer)) {
+                        continue;
+                    }
+                    if (ggml_backend_meta_get_split_state(next, false).axis != GGML_BACKEND_SPLIT_AXIS_PARTIAL) {
+                        continue;
+                    }
+
+                    const int i_other = id;
+                    const int i_other_delayed = get_i_delayed_branch(i_other);
+                    ggml_tensor * other = cgraph->nodes[i_other_delayed];
+                    if (ggml_node_get_use_count(cgraph, i_other_delayed) != 1 || i_other_delayed + 1 >= cgraph->n_nodes) {
+                        return i_delayed;
+                    }
+
+                    ggml_tensor * sum = cgraph->nodes[i_other_delayed + 1];
+                    if (sum->op != GGML_OP_ADD ||
+                            !ggml_are_same_shape(node, other) || node->type != other->type || sum->type != node->type ||
+                            !((sum->src[0] == node && sum->src[1] == other) ||
+                              (sum->src[0] == other && sum->src[1] == node)) ||
+                            ggml_backend_meta_get_split_state(sum, false).axis != GGML_BACKEND_SPLIT_AXIS_MIRRORED) {
+                        return i_delayed;
+                    }
+
+                    for (size_t j = 0; j < n_backends; j++) {
+                        auto & bcj = backend_ctx->backend_configs[j];
+                        const bool compute       = bcj.nodes[i]->flags       & GGML_TENSOR_FLAG_COMPUTE;
+                        const bool compute_other = bcj.nodes[i_other]->flags & GGML_TENSOR_FLAG_COMPUTE;
+                        if (compute != compute_other) {
+                            return i_delayed;
+                        }
+                    }
+                    return i_other_delayed + 1;
+                }
+                return i_delayed;
             };
 
             int i_start = 0;
