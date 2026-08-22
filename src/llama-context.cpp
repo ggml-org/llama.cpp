@@ -19,6 +19,7 @@
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
 
 //
 // llama_context
@@ -284,6 +285,15 @@ llama_context::llama_context(
         }
     }
 
+    {
+        const char * LLAMA_GRAPH_INPUT_DEBUG = getenv("LLAMA_GRAPH_INPUT_DEBUG");
+        graph_input_debug = LLAMA_GRAPH_INPUT_DEBUG ? (atoi(LLAMA_GRAPH_INPUT_DEBUG) != 0) : graph_input_debug;
+
+        if (graph_input_debug) {
+            LLAMA_LOG_WARN("%s: graph input debug enabled\n", __func__);
+        }
+    }
+
     // ref: https://github.com/ggml-org/llama.cpp/pull/17046#discussion_r2503085732
     cparams.n_ctx = GGML_PAD(cparams.n_ctx, 256);
 
@@ -510,8 +520,8 @@ void llama_context::resolve_fused_ops(const llama_memory_context_i * mctx, uint3
 
         const uint32_t n_tokens_probe = probe.n_tokens_per_seq*n_seqs;
 
-        auto * gf = graph_reserve(n_tokens_probe, n_seqs, n_tokens_probe, mctx, true);
-        if (!gf) {
+        auto res = graph_reserve({ n_tokens_probe, n_seqs, n_tokens_probe, mctx, true, nullptr });
+        if (!res.gf) {
             throw std::runtime_error(std::string("failed to reserve graph for ") + probe.name + " check");
         }
 
@@ -578,6 +588,40 @@ void llama_context::resolve_fused_ops(const llama_memory_context_i * mctx, uint3
     }
 }
 
+static int llama_graph_n_input_tensors(ggml_cgraph * gf, int debug) {
+    std::unordered_map<const ggml_tensor *, std::vector<ggml_tensor *>> users;
+    for (int i = 0; i < ggml_graph_n_nodes(gf); ++i) {
+        ggml_tensor * node = ggml_graph_node(gf, i);
+        if (node->flags & GGML_TENSOR_FLAG_INPUT) {
+            users[node].push_back(node);
+        }
+        for (int j = 0; j < GGML_MAX_SRC; ++j) {
+            ggml_tensor * src = node->src[j];
+            if (!src) {
+                break;
+            }
+            if (src->flags & GGML_TENSOR_FLAG_INPUT) {
+                users[src].push_back(node);
+            }
+        }
+    }
+
+    for (const auto & [tensor, nodes] : users) {
+        if (tensor->op != GGML_OP_NONE) {
+            LLAMA_LOG_WARN("%s: input tensor '%s' has op %s, expected GGML_OP_NONE\n",
+                    __func__, tensor->name, ggml_op_name(tensor->op));
+        }
+        if (debug > 0) {
+            for (const ggml_tensor * node : nodes) {
+                LLAMA_LOG_INFO("%s: input tensor '%s' is used by node '%s' (%s)\n",
+                        __func__, tensor->name, node->name, ggml_op_name(node->op));
+            }
+        }
+    }
+
+    return (int) users.size();
+}
+
 void llama_context::sched_reserve() {
     if (!sched_need_reserve) {
         return;
@@ -620,52 +664,64 @@ void llama_context::sched_reserve() {
     resolve_fused_ops(mctx.get(), n_seqs);
 
     // reserve worst-case graph
-    int n_splits_pp = -1;
-    int n_nodes_pp  = -1;
+    int n_splits_pp        = -1;
+    int n_nodes_pp         = -1;
+    int n_inputs_pp        = -1;
+    int n_input_tensors_pp = -1;
 
-    int n_splits_tg = -1;
-    int n_nodes_tg  = -1;
+    int n_splits_tg        = -1;
+    int n_nodes_tg         = -1;
+    int n_inputs_tg        = -1;
+    int n_input_tensors_tg = -1;
 
     const uint32_t n_outputs_pp = std::min(n_tokens, cparams.n_outputs_max);
 
     // reserve pp (prompt processing) graph first so that buffers are only allocated once
     {
-        auto * gf = graph_reserve(n_tokens, n_seqs, n_outputs_pp, mctx.get(),
-                model.hparams.no_alloc, model.hparams.no_alloc ? backend_buf_exp_size.data() : nullptr);
+        auto res = graph_reserve({ n_tokens, n_seqs, n_outputs_pp, mctx.get(),
+                model.hparams.no_alloc, model.hparams.no_alloc ? backend_buf_exp_size.data() : nullptr });
+        auto * gf = res.gf;
         if (!gf) {
             if (cparams.pipeline_parallel) {
                 LLAMA_LOG_WARN("%s: compute buffer allocation failed, retrying without pipeline parallelism\n", __func__);
                 cparams.pipeline_parallel = false;
                 sched.reset(ggml_backend_sched_new(backend_ptrs.data(), backend_buft.data(), backend_ptrs.size(), max_nodes, false, cparams.op_offload));
-                gf = graph_reserve(n_tokens, n_seqs, n_outputs_pp, mctx.get());
+                auto res = graph_reserve({ n_tokens, n_seqs, n_outputs_pp, mctx.get() });
+                gf = res.gf;
             }
             if (!gf) {
                 throw std::runtime_error("failed to allocate compute pp buffers");
             }
         }
 
-        n_splits_pp = ggml_backend_sched_get_n_splits(sched.get());
-        n_nodes_pp  = ggml_graph_n_nodes(gf);
+        n_splits_pp        = ggml_backend_sched_get_n_splits(sched.get());
+        n_nodes_pp         = ggml_graph_n_nodes(gf);
+        n_inputs_pp        = get_gf_res_reserve()->inputs.size();
+        n_input_tensors_pp = res.n_intput_tensors;
     }
 
     // reserve with tg (token generation) graph to get the number of splits and nodes
     {
-        auto * gf = graph_reserve(n_seqs, n_seqs, n_seqs, mctx.get(), model.hparams.no_alloc);
+        auto res = graph_reserve({ n_seqs, n_seqs, n_seqs, mctx.get(), model.hparams.no_alloc });
+        auto * gf = res.gf;
         if (!gf) {
             throw std::runtime_error("failed to allocate compute tg buffers");
         }
 
-        n_splits_tg = ggml_backend_sched_get_n_splits(sched.get());
-        n_nodes_tg  = ggml_graph_n_nodes(gf);
+        n_splits_tg        = ggml_backend_sched_get_n_splits(sched.get());
+        n_nodes_tg         = ggml_graph_n_nodes(gf);
+        n_inputs_tg        = get_gf_res_reserve()->inputs.size();
+        n_input_tensors_tg = res.n_intput_tensors;
     }
 
     // reserve again with pp graph to avoid ggml-alloc reallocations during inference
     {
         // TODO: not sure if the following graph would be worst case for multi-stream KV caches:
         //
-        // auto * gf = graph_reserve(n_tokens, 1, n_tokens, mctx.get());
+        // auto res = graph_reserve({ n_tokens, 1, n_tokens, mctx.get() });
         //
-        auto * gf = graph_reserve(n_tokens, n_seqs, n_outputs_pp, mctx.get(), model.hparams.no_alloc);
+        auto res = graph_reserve({ n_tokens, n_seqs, n_outputs_pp, mctx.get(), model.hparams.no_alloc });
+        auto * gf = res.gf;
         if (!gf) {
             throw std::runtime_error("failed to allocate compute pp buffers");
         }
@@ -687,13 +743,25 @@ void llama_context::sched_reserve() {
     if (n_nodes_pp == n_nodes_tg) {
         LLAMA_LOG_INFO("%s: graph nodes  = %d\n", __func__, n_nodes_pp);
     } else {
-        LLAMA_LOG_INFO("%s: graph nodes  = %d (with bs=%d), %d (with bs=1)\n", __func__, n_nodes_pp, n_tokens, n_nodes_tg);
+        LLAMA_LOG_INFO("%s: graph nodes  = %d (with bs=%d), %d (with bs=%d)\n", __func__, n_nodes_pp, n_tokens, n_nodes_tg, n_seqs);
     }
 
     if (n_splits_pp == n_splits_tg) {
         LLAMA_LOG_INFO("%s: graph splits = %d\n", __func__, n_splits_pp);
     } else {
-        LLAMA_LOG_INFO("%s: graph splits = %d (with bs=%d), %d (with bs=1)\n", __func__, n_splits_pp, n_tokens, n_splits_tg);
+        LLAMA_LOG_INFO("%s: graph splits = %d (with bs=%d), %d (with bs=%d)\n", __func__, n_splits_pp, n_tokens, n_splits_tg, n_seqs);
+    }
+
+    if (n_inputs_pp == n_inputs_tg) {
+        LLAMA_LOG_INFO("%s: graph inputs = %d\n", __func__, n_inputs_pp);
+    } else {
+        LLAMA_LOG_INFO("%s: graph inputs = %d (with bs=%d), %d (with bs=%d)\n", __func__, n_inputs_pp, n_tokens, n_inputs_tg, n_seqs);
+    }
+
+    if (n_input_tensors_pp == n_input_tensors_tg) {
+        LLAMA_LOG_INFO("%s: graph input tensors = %d (env LLAMA_GRAPH_INPUT_DEBUG for extra info)\n", __func__, n_input_tensors_pp);
+    } else {
+        LLAMA_LOG_INFO("%s: graph input tensors = %d (with bs=%d), %d (with bs=%d) (env LLAMA_GRAPH_INPUT_DEBUG for extra info)\n", __func__, n_input_tensors_pp, n_tokens, n_input_tensors_tg, n_seqs);
     }
 
     const int64_t t_end_us = ggml_time_us();
@@ -827,7 +895,8 @@ bool llama_context::memory_update(bool optimize) {
 
         const uint32_t n_outputs_max = std::min(n_tokens, cparams.n_outputs_max);
 
-        auto * gf = graph_reserve(n_tokens, n_seqs, n_outputs_max, mctx.get());
+        auto res = graph_reserve({ n_tokens, n_seqs, n_outputs_max, mctx.get() });
+        auto * gf = res.gf;
         if (!gf) {
             LLAMA_LOG_ERROR("%s: failed to reserve graph after the memory update\n", __func__);
         }
@@ -2340,11 +2409,11 @@ llm_graph_result * llama_context::get_gf_res_reserve() const {
 }
 
 // pack sampler outputs into as few sequences as possible before using sequences without samplers
-static void ubatch_prepare_reserve(
-              llama_ubatch                            & ubatch,
-              uint32_t                                  n_outputs,
-        const std::map<llama_seq_id, llama_sampler *> & samplers,
-              uint32_t                                  n_outputs_max_per_seq) {
+static void graph_reserve_prepare_ubatch(
+        llama_ubatch         & ubatch,
+        const llama_samplers & samplers,
+        uint32_t               n_outputs,
+        uint32_t               n_outputs_max_per_seq) {
     const uint32_t n_seqs       = ubatch.n_seqs;
     const uint32_t n_seq_tokens = ubatch.n_seq_tokens;
 
@@ -2396,14 +2465,15 @@ static void ubatch_prepare_reserve(
     }
 }
 
-ggml_cgraph * llama_context::graph_reserve(
-        uint32_t n_tokens, uint32_t n_seqs, uint32_t n_outputs, const llama_memory_context_i * mctx, bool split_only, size_t * sizes) {
-    LLAMA_LOG_DEBUG("%s: reserving a graph for ubatch with n_tokens = %4u, n_seqs = %2u, n_outputs = %4u\n", __func__, n_tokens, n_seqs, n_outputs);
-    GGML_ASSERT(n_outputs >= 1);
+llama_context::graph_reserve_result llama_context::graph_reserve(graph_reserve_params params) {
+    LLAMA_LOG_DEBUG("%s: reserving a graph for ubatch with n_tokens = %4u, n_seqs = %2u, n_outputs = %4u\n",
+            __func__, params.n_tokens, params.n_seqs, params.n_outputs);
+    GGML_ASSERT(params.n_outputs >= 1);
 
-    if (n_tokens % n_seqs != 0) {
-        n_tokens = ((n_tokens + (n_seqs - 1)) / n_seqs) * n_seqs; // round to next multiple of n_seqs
-        LLAMA_LOG_DEBUG("%s: making n_tokens a multiple of n_seqs - n_tokens = %u, n_seqs = %u, n_outputs = %u\n", __func__, n_tokens, n_seqs, n_outputs);
+    if (params.n_tokens % params.n_seqs != 0) {
+        params.n_tokens = ((params.n_tokens + (params.n_seqs - 1)) / params.n_seqs) * params.n_seqs; // round to next multiple of n_seqs
+        LLAMA_LOG_DEBUG("%s: making n_tokens a multiple of n_seqs - n_tokens = %u, n_seqs = %u, n_outputs = %u\n",
+                __func__, params.n_tokens, params.n_seqs, params.n_outputs);
     }
 
     ggml_backend_sched_reset(sched.get());
@@ -2415,16 +2485,16 @@ ggml_cgraph * llama_context::graph_reserve(
     // TODO: not sure if needed, might simplify in the future by removing this
     const auto save_n_outputs = this->n_outputs;
 
-    this->n_outputs = n_outputs;
+    this->n_outputs = params.n_outputs;
 
     llama_batch_allocr balloc(model.hparams.n_pos_per_embd());
-    llama_ubatch ubatch = balloc.ubatch_reserve(n_tokens/n_seqs, n_seqs);
+    llama_ubatch ubatch = balloc.ubatch_reserve(params.n_tokens/params.n_seqs, params.n_seqs);
 
-    ubatch_prepare_reserve(ubatch, n_outputs, sampling.samplers, cparams.n_outputs_max_per_seq);
+    graph_reserve_prepare_ubatch(ubatch, sampling.samplers, params.n_outputs, cparams.n_outputs_max_per_seq);
 
     auto * res = gf_res_reserve.get();
 
-    const auto gparams = graph_params(res, ubatch, mctx, ctx_type_to_graph_type(cparams.ctx_type));
+    const auto gparams = graph_params(res, ubatch, params.mctx, ctx_type_to_graph_type(cparams.ctx_type));
 
     res->reset();
 
@@ -2432,20 +2502,23 @@ ggml_cgraph * llama_context::graph_reserve(
 
     this->n_outputs = save_n_outputs;
 
+    // determine the input tensors before the sched reservation
+    const uint32_t n_intput_tensors = llama_graph_n_input_tensors(gf, graph_input_debug);
+
     // initialize scheduler with the specified graph
-    if (split_only) {
-        if (sizes) {
-            ggml_backend_sched_reserve_size(sched.get(), gf, sizes);
+    if (params.split_only) {
+        if (params.sizes) {
+            ggml_backend_sched_reserve_size(sched.get(), gf, params.sizes);
         } else {
             ggml_backend_sched_split_graph(sched.get(), gf);
         }
     } else if (!ggml_backend_sched_reserve(sched.get(), gf)) {
-        GGML_ASSERT(!sizes);
+        GGML_ASSERT(!params.sizes);
         LLAMA_LOG_ERROR("%s: failed to allocate compute buffers\n", __func__);
-        return nullptr;
+        return { nullptr, 0 };
     }
 
-    return gf;
+    return { gf, n_intput_tensors };
 }
 
 llm_graph_params llama_context::graph_params(
@@ -3863,12 +3936,13 @@ struct ggml_cgraph * llama_graph_reserve(
         uint32_t n_tokens,
         uint32_t n_seqs,
         uint32_t n_outputs) {
-    auto memory = ctx->get_memory();
+    auto * memory = ctx->get_memory();
     llama_memory_context_ptr mctx;
     if (memory) {
         mctx = memory->init_full();
     }
-    return ctx->graph_reserve(n_tokens, n_seqs, n_outputs, mctx.get());
+    auto res = ctx->graph_reserve({ n_tokens, n_seqs, n_outputs, mctx.get() });
+    return res.gf;
 }
 
 // llama adapter API
