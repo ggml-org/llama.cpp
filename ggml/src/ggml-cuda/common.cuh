@@ -1437,11 +1437,30 @@ struct ggml_backend_cuda_context {
         // sweep every 5s, evicting cuda graphs unused for >=10s
         if (time_now - last_graph_eviction_sweep >= 5'000'000) {
             last_graph_eviction_sweep = time_now;
+            bool evict = false;
             for (auto it = cuda_graphs.begin(); it != cuda_graphs.end(); ) {
                 if (time_now - it->second->last_used_time >= 10'000'000) {
-                    it = cuda_graphs.erase(it);
+                    evict = true;
+                    break;
                 } else {
                     ++it;
+                }
+            }
+            cudaStreamCaptureStatus capture_status = cudaStreamCaptureStatusNone;
+            CUDA_CHECK(cudaStreamIsCapturing(stream(), &capture_status));
+            if (evict && capture_status == cudaStreamCaptureStatusNone) {
+                // graph execs are launched asynchronously on these streams
+                for (int i = 0; i < GGML_CUDA_MAX_STREAMS; ++i) {
+                    if (streams[device][i] != nullptr) {
+                        CUDA_CHECK(cudaStreamSynchronize(streams[device][i]));
+                    }
+                }
+                for (auto it = cuda_graphs.begin(); it != cuda_graphs.end(); ) {
+                    if (time_now - it->second->last_used_time >= 10'000'000) {
+                        it = cuda_graphs.erase(it);
+                    } else {
+                        ++it;
+                    }
                 }
             }
         }
