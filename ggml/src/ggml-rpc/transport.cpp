@@ -36,6 +36,15 @@ using ssize_t = __int64;
 typedef int sockfd_t;
 #endif
 
+// A send to a peer that is gone raises SIGPIPE, which kills the process by default. send()
+// must return an error instead, so that a lost RPC server does not take the caller down.
+// BSD and macOS use the SO_NOSIGPIPE socket option, everything else uses the MSG_NOSIGNAL flag.
+#if defined(_WIN32) || defined(SO_NOSIGPIPE)
+#  define RPC_SEND_FLAGS 0
+#else
+#  define RPC_SEND_FLAGS MSG_NOSIGNAL
+#endif
+
 static const char * RPC_DEBUG = std::getenv("GGML_RPC_DEBUG");
 
 #define LOG_DBG(...) \
@@ -468,7 +477,7 @@ bool socket_t::impl::send_data(const void * data, size_t size) {
     size_t bytes_sent = 0;
     while (bytes_sent < size) {
         size_t size_to_send = std::min(size - bytes_sent, MAX_CHUNK_SIZE);
-        ssize_t n = send(fd, (const char *)data + bytes_sent, size_to_send, 0);
+        ssize_t n = send(fd, (const char *)data + bytes_sent, size_to_send, RPC_SEND_FLAGS);
         if (n < 0) {
             GGML_LOG_ERROR("send failed (bytes_sent=%zu, size_to_send=%zu)\n",
                            bytes_sent, size_to_send);
@@ -579,6 +588,15 @@ static bool set_no_delay(sockfd_t sockfd) {
     return ret == 0;
 }
 
+static void set_no_sigpipe(sockfd_t sockfd) {
+#ifdef SO_NOSIGPIPE
+    int flag = 1;
+    setsockopt(sockfd, SOL_SOCKET, SO_NOSIGPIPE, (char *)&flag, sizeof(int));
+#else
+    GGML_UNUSED(sockfd);
+#endif
+}
+
 static bool set_reuse_addr(sockfd_t sockfd) {
     int flag = 1;
     int ret = setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, (char *)&flag, sizeof(int));
@@ -594,6 +612,7 @@ socket_ptr socket_t::accept() {
         GGML_LOG_ERROR("Failed to set TCP_NODELAY\n");
         return nullptr;
     }
+    set_no_sigpipe(client_socket_fd);
     return socket_ptr(new socket_t(std::make_unique<impl>(client_socket_fd)));
 }
 
@@ -633,6 +652,7 @@ socket_ptr socket_t::connect(const char * host, int port) {
         GGML_LOG_ERROR("Failed to set TCP_NODELAY\n");
         return nullptr;
     }
+    set_no_sigpipe(sockfd);
     struct sockaddr_in addr;
     addr.sin_family = AF_INET;
     addr.sin_port = htons(port);
