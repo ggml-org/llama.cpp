@@ -22,9 +22,10 @@
 		onToggle: (enabled: boolean) => void;
 		onUpdate: (updates: Partial<MCPServerSettingsEntry>) => void;
 		onDelete: () => void;
+		onBrowseResources?: () => void;
 	}
 
-	let { enabled, onDelete, onToggle, onUpdate, server }: Props = $props();
+	let { enabled, onBrowseResources, onDelete, onToggle, onUpdate, server }: Props = $props();
 
 	let healthState = $derived<HealthCheckState>(mcpStore.getHealthCheckState(server.id));
 	let displayName = $derived(mcpStore.getServerLabel(server));
@@ -125,6 +126,7 @@
 			enabled={enabled ?? server.enabled}
 			disabled={isError}
 			{onToggle}
+			{onBrowseResources}
 			{serverInfo}
 			{capabilities}
 			{transportType}
@@ -186,12 +188,14 @@
 				</div>
 			{/if}
 
-			<McpServerCardActions
-				{isHealthChecking}
-				onEdit={startEditing}
-				onRefresh={handleHealthCheck}
-				onDelete={handleDeleteClick}
-			/>
+			<div class="flex items-center gap-2">
+				<McpServerCardActions
+					{isHealthChecking}
+					onEdit={startEditing}
+					onRefresh={handleHealthCheck}
+					onDelete={handleDeleteClick}
+				/>
+			</div>
 		</div>
 	{/if}
 </Card.Root>
