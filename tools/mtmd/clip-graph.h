@@ -131,7 +131,15 @@ struct clip_graph {
             int il,
             ggml_tensor * sinks = nullptr) const;
 
-    // implementation of the 2D RoPE without adding a new op in ggml
+    // implementation of the 2D RoPE using two ggml_rope_ext calls
+    //
+    // unlike GGML_ROPE_TYPE_VISION which forces NEOX ordering, this rotates adjacent pairs (normal ordering)
+    //
+    // example:
+    //  given a single head with size = 8 --> [00000000]
+    //  dims [0, 4) rotate with pos_a, dims [4, 8) rotate with pos_b --> [aaaabbbb]
+    //  interleave_freq = false --> both halves use the same inv_freq set (like GGML_ROPE_TYPE_VISION)
+    //  interleave_freq = true  --> first half uses even inv_freq, second half uses odd inv_freq (used by pixtral)
     ggml_tensor * build_rope_2d(
         ggml_context * ctx0,
         ggml_tensor * cur,
