@@ -10412,6 +10412,18 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
         }
     }
 
+    // Gemma-class head size 512 and DeepSeek-class 576/512. Both are absent from
+    // the stock perf list above, so their fattn-tile configs (and in particular
+    // their nbatch_K choice) are never measured. GQA ratio must be >= 2 and kv a
+    // multiple of FATTN_KQ_STRIDE (256) or fattn.cu returns BEST_FATTN_KERNEL_NONE
+    // and the case is silently skipped.
+    for (int kv : { 8192, 32768, }) {
+        for (int nb : { 1, 128, }) {
+            test_cases.emplace_back(new test_flash_attn_ext(512, 512, 4, {8, 1}, kv, nb, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
+            test_cases.emplace_back(new test_flash_attn_ext(576, 512, 4, {8, 1}, kv, nb, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
+        }
+    }
+
     for (int col : {8192, 16384, 32768, 65536, 131072, 262144, 524288}) {
         for (int rows : {1, 4, 16}){
             test_cases.emplace_back(new test_soft_max(GGML_TYPE_F32, {col, rows, 1, 1}, false,  false,  GGML_TYPE_F32, {1, 1}, 1.0f, 0.0f));
