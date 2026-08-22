@@ -10,7 +10,7 @@
 		class: className,
 		portalProps,
 		ref = $bindable(null),
-		showCloseButton = true,
+		showCloseButton = false,
 		...restProps
 	}: WithoutChildrenOrChild<DialogPrimitive.ContentProps> & {
 		portalProps?: DialogPrimitive.PortalProps;
