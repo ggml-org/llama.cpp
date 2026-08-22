@@ -1,4 +1,3 @@
-import { ROUTES } from './routes.constants';
 import { Package, Search, Settings, SquarePen } from '@lucide/svelte';
 import { SidebarAction, ToolSource } from '$lib/enums';
 import type { DesktopIconStripItem } from '$lib/types';
@@ -63,9 +62,8 @@ export const SIDEBAR_ACTIONS_ITEMS: DesktopIconStripItem[] = [
 	},
 	{ icon: Search, keys: ['cmd', 'k'], tooltip: 'Search' },
 	{
-		activeUrlIncludes: '#/settings',
+		action: SidebarAction.SETTINGS,
 		icon: Settings,
-		route: `${ROUTES.SETTINGS}/general`,
 		tooltip: 'Settings'
 	}
 ];
