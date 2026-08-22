@@ -2799,6 +2799,176 @@ static int ggml_cuda_try_gdn_cache_fusion(
     return skip;
 }
 
+struct ggml_cuda_rwkv7_output_fusion {
+    const ggml_tensor * norm        = nullptr;
+    const ggml_tensor * norm_weight = nullptr;
+    const ggml_tensor * norm_bias   = nullptr;
+    const ggml_tensor * k           = nullptr;
+    const ggml_tensor * r           = nullptr;
+    const ggml_tensor * r_k         = nullptr;
+    const ggml_tensor * v           = nullptr;
+    const ggml_tensor * gate        = nullptr;
+    ggml_tensor *       dst         = nullptr;
+};
+
+static const ggml_tensor * ggml_cuda_other_src(const ggml_tensor * node, const ggml_tensor * src) {
+    if (node->src[0] == src) {
+        return node->src[1];
+    }
+    if (node->src[1] == src) {
+        return node->src[0];
+    }
+    return nullptr;
+}
+
+static int ggml_cuda_try_rwkv7_output_fusion(
+        const ggml_cgraph * cgraph, int node_idx, ggml_cuda_rwkv7_output_fusion & fusion) {
+    static const ggml_op ops[] = {
+        GGML_OP_NORM,
+        GGML_OP_RESHAPE,
+        GGML_OP_MUL,
+        GGML_OP_ADD,
+        GGML_OP_MUL,
+        GGML_OP_RESHAPE,
+        GGML_OP_MUL,
+        GGML_OP_SUM_ROWS,
+        GGML_OP_MUL,
+        GGML_OP_RESHAPE,
+        GGML_OP_ADD,
+    };
+
+    constexpr int node_count = sizeof(ops) / sizeof(ops[0]);
+    if (node_idx + node_count > cgraph->n_nodes) {
+        return 0;
+    }
+
+    bool has_gate = false;
+    if (node_idx + node_count < cgraph->n_nodes) {
+        const ggml_tensor * maybe_gate = cgraph->nodes[node_idx + node_count];
+        has_gate = maybe_gate->op == GGML_OP_MUL &&
+                   (maybe_gate->src[0] == cgraph->nodes[node_idx + node_count - 1] ||
+                    maybe_gate->src[1] == cgraph->nodes[node_idx + node_count - 1]);
+    }
+
+    std::array<ggml_op, node_count + 1> matched_ops;
+    std::copy(std::begin(ops), std::end(ops), matched_ops.begin());
+    if (has_gate) {
+        matched_ops[node_count] = GGML_OP_MUL;
+    }
+
+    const int matched_count = node_count + (has_gate ? 1 : 0);
+    const int output_idx    = node_idx + matched_count - 1;
+    if (!ggml_can_fuse_subgraph(
+            cgraph, node_idx, matched_count, matched_ops.data(), &output_idx, 1)) {
+        return 0;
+    }
+
+    const ggml_tensor * norm         = cgraph->nodes[node_idx + 0];
+    const ggml_tensor * reshape_norm = cgraph->nodes[node_idx + 1];
+    const ggml_tensor * mul_norm     = cgraph->nodes[node_idx + 2];
+    const ggml_tensor * add_norm     = cgraph->nodes[node_idx + 3];
+    const ggml_tensor * mul_kr       = cgraph->nodes[node_idx + 4];
+    const ggml_tensor * reshape_r_k  = cgraph->nodes[node_idx + 5];
+    const ggml_tensor * mul_krrk     = cgraph->nodes[node_idx + 6];
+    const ggml_tensor * sum_rk       = cgraph->nodes[node_idx + 7];
+    const ggml_tensor * mul_v        = cgraph->nodes[node_idx + 8];
+    const ggml_tensor * reshape_v    = cgraph->nodes[node_idx + 9];
+    const ggml_tensor * add_out      = cgraph->nodes[node_idx + 10];
+    const ggml_tensor * gate_out     = has_gate ? cgraph->nodes[node_idx + 11] : nullptr;
+
+    if (reshape_norm->src[0] != norm || add_norm->src[0] != mul_norm || reshape_r_k->src[0] == nullptr ||
+        sum_rk->src[0] != mul_krrk || reshape_v->src[0] != mul_v) {
+        return 0;
+    }
+
+    const ggml_tensor * norm_weight = ggml_cuda_other_src(mul_norm, reshape_norm);
+    const ggml_tensor * norm_bias   = ggml_cuda_other_src(add_norm, mul_norm);
+    const ggml_tensor * r_k_view    = ggml_cuda_other_src(mul_krrk, mul_kr);
+    const ggml_tensor * v           = ggml_cuda_other_src(mul_v, sum_rk);
+    if (norm_weight == nullptr || norm_bias == nullptr || r_k_view != reshape_r_k || v == nullptr ||
+        ggml_cuda_other_src(add_out, add_norm) != reshape_v) {
+        return 0;
+    }
+
+    const ggml_tensor * gate = nullptr;
+    ggml_tensor *       dst  = const_cast<ggml_tensor *>(add_out);
+    if (has_gate) {
+        gate = ggml_cuda_other_src(gate_out, add_out);
+        if (gate == nullptr) {
+            return 0;
+        }
+        dst = const_cast<ggml_tensor *>(gate_out);
+    }
+
+    const ggml_tensor * x   = norm->src[0];
+    const ggml_tensor * k   = mul_kr->src[0];
+    const ggml_tensor * r   = mul_kr->src[1];
+    const ggml_tensor * r_k = reshape_r_k->src[0];
+
+    // Every value read by the fused kernel must already exist before this
+    // range is executed. In particular, do not reinterpret an elided compute
+    // node as a weight or activation input merely because the op sequence and
+    // element counts happen to match.
+    auto is_elided_node = [&](const ggml_tensor * tensor) {
+        for (int i = 0; i < matched_count - 1; ++i) {
+            if (tensor == cgraph->nodes[node_idx + i]) {
+                return true;
+            }
+        }
+        return false;
+    };
+    if (is_elided_node(x) || is_elided_node(norm_weight) || is_elided_node(norm_bias) || is_elided_node(k) ||
+        is_elided_node(r) || is_elided_node(r_k) || is_elided_node(v) || (gate != nullptr && is_elided_node(gate))) {
+        return 0;
+    }
+
+    if (x == nullptr || k == nullptr || r == nullptr || x->type != GGML_TYPE_F32 || norm->type != GGML_TYPE_F32 ||
+        norm_weight->type != GGML_TYPE_F32 || norm_bias->type != GGML_TYPE_F32 || k->type != GGML_TYPE_F32 ||
+        r->type != GGML_TYPE_F32 || r_k->type != GGML_TYPE_F32 || v->type != GGML_TYPE_F32 ||
+        (gate != nullptr && gate->type != GGML_TYPE_F32) || dst->type != GGML_TYPE_F32) {
+        return 0;
+    }
+
+    const int64_t head_size = x->ne[0];
+    const int64_t H         = x->ne[1];
+    const int64_t C         = head_size * H;
+    const int64_t n_tokens  = ggml_nelements(x) / C;
+
+    auto has_shape = [](const ggml_tensor * tensor, int64_t ne0, int64_t ne1, int64_t ne2, int64_t ne3) {
+        return tensor->ne[0] == ne0 && tensor->ne[1] == ne1 && tensor->ne[2] == ne2 && tensor->ne[3] == ne3;
+    };
+
+    if ((head_size != 64 && head_size != 128) || !ggml_are_same_shape(x, norm) || !ggml_are_same_shape(x, mul_kr) ||
+        !ggml_are_same_shape(x, k) || !ggml_are_same_shape(x, r) || !ggml_are_same_shape(x, v) ||
+        !has_shape(x, head_size, H, n_tokens, 1) || !has_shape(reshape_norm, C, n_tokens, 1, 1) ||
+        !has_shape(mul_norm, C, n_tokens, 1, 1) || !has_shape(add_norm, C, n_tokens, 1, 1) ||
+        !has_shape(norm_weight, C, 1, 1, 1) || !has_shape(norm_bias, C, 1, 1, 1) ||
+        !has_shape(reshape_r_k, head_size, H, 1, 1) || !has_shape(r_k, C, 1, 1, 1) ||
+        !has_shape(mul_krrk, head_size, H, n_tokens, 1) || !has_shape(sum_rk, 1, H, n_tokens, 1) ||
+        !has_shape(mul_v, head_size, H, n_tokens, 1) || !has_shape(reshape_v, C, n_tokens, 1, 1) ||
+        !has_shape(add_out, C, n_tokens, 1, 1) || !has_shape(dst, C, n_tokens, 1, 1) ||
+        (gate != nullptr && !has_shape(gate, C, n_tokens, 1, 1))) {
+        return 0;
+    }
+
+    if (!ggml_is_contiguous(x) || !ggml_is_contiguous(norm_weight) || !ggml_is_contiguous(norm_bias) ||
+        !ggml_is_contiguous(k) || !ggml_is_contiguous(r) || !ggml_is_contiguous(r_k) || !ggml_is_contiguous(v) ||
+        (gate != nullptr && !ggml_is_contiguous(gate)) || !ggml_is_contiguous(dst)) {
+        return 0;
+    }
+
+    fusion.norm        = norm;
+    fusion.norm_weight = norm_weight;
+    fusion.norm_bias   = norm_bias;
+    fusion.k           = k;
+    fusion.r           = r;
+    fusion.r_k         = r_k;
+    fusion.v           = v;
+    fusion.gate        = gate;
+    fusion.dst         = dst;
+    return matched_count - 1;
+}
+
 static bool ggml_cuda_topk_moe_fusion(const struct ggml_cgraph * cgraph, int node_idx, ggml_cuda_topk_moe_args & args) {
     args.sigmoid         = false;
     args.sqrt_softplus   = false;
@@ -3278,6 +3448,33 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
     }
 
     ggml_tensor * node = cgraph->nodes[i];
+
+    if (node->op == GGML_OP_NORM) {
+        ggml_cuda_rwkv7_output_fusion fusion;
+        const int nodes_to_skip = ggml_cuda_try_rwkv7_output_fusion(cgraph, i, fusion);
+        if (nodes_to_skip > 0) {
+            const int out_nodes[] = { i + nodes_to_skip };
+            if (!ggml_cuda_check_fusion_memory_ranges(cgraph, i, nodes_to_skip + 1, out_nodes, 1)) {
+                return 0;
+            }
+#ifdef GGML_CUDA_DEBUG
+            GGML_LOG_INFO("%s: fused RWKV7 output preparation for %s (skipped %d nodes)\n",
+                          __func__, node->name, nodes_to_skip);
+#endif
+            ggml_cuda_op_rwkv7_output_fused(
+                *cuda_ctx,
+                fusion.norm,
+                fusion.norm_weight,
+                fusion.norm_bias,
+                fusion.k,
+                fusion.r,
+                fusion.r_k,
+                fusion.v,
+                fusion.gate,
+                fusion.dst);
+            return nodes_to_skip;
+        }
+    }
 
     // gated_delta_net -> cpy: scatter recurrent-state snapshots into the cache
     if (node->op == GGML_OP_GATED_DELTA_NET) {

@@ -4466,6 +4466,81 @@ struct test_rwkv_wkv7 : public test_case {
     }
 };
 
+// RWKV7 output preparation: per-head norm, affine transform, RKV correction,
+// and optional gate. CUDA fuses this graph without adding a public ggml op.
+struct test_rwkv7_output : public test_case {
+    const int64_t head_count;
+    const int64_t head_size;
+    const int64_t n_tokens;
+    const bool    gate;
+    const bool    broadcast_affine;
+    const bool    internal_norm_weight;
+
+    test_rwkv7_output(int64_t head_count,
+                      int64_t head_size,
+                      int64_t n_tokens,
+                      bool    gate,
+                      bool    broadcast_affine     = false,
+                      bool    internal_norm_weight = false) :
+        head_count(head_count),
+        head_size(head_size),
+        n_tokens(n_tokens),
+        gate(gate),
+        broadcast_affine(broadcast_affine),
+        internal_norm_weight(internal_norm_weight) {
+        GGML_ASSERT(!broadcast_affine || (n_tokens % 2 == 0 && head_count * head_size % 2 == 0));
+        GGML_ASSERT(!internal_norm_weight || (head_count == 1 && n_tokens == 1));
+    }
+
+    std::string vars() override {
+        return VARS_TO_STR6(head_count, head_size, n_tokens, gate, broadcast_affine, internal_norm_weight);
+    }
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "RWKV7_OUTPUT";
+    }
+
+    bool run_whole_graph() override { return true; }
+    bool use_weight_context() override { return true; }
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        GGML_ASSERT(!use_weight_context());
+        return build_graph(ctx, nullptr);
+    }
+
+    ggml_tensor * build_graph(ggml_context * ctx, ggml_context * ctx_weights) override {
+        GGML_ASSERT(ctx_weights != nullptr);
+
+        const int64_t C   = head_count * head_size;
+        ggml_tensor * x   = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, head_size, head_count, n_tokens);
+        ggml_tensor * k   = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, head_size, head_count, n_tokens);
+        ggml_tensor * r   = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, head_size, head_count, n_tokens);
+        ggml_tensor * r_k = ggml_new_tensor_1d(ctx_weights, GGML_TYPE_F32, C);
+        ggml_tensor * v   = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, head_size, head_count, n_tokens);
+
+        ggml_tensor * cur         = ggml_norm(ctx, x, 64e-5f);
+        ggml_tensor * norm_weight = internal_norm_weight ?
+                                        cur :
+                                        (broadcast_affine ? ggml_new_tensor_2d(ctx_weights, GGML_TYPE_F32, C / 2, 2) :
+                                                            ggml_new_tensor_1d(ctx_weights, GGML_TYPE_F32, C));
+        ggml_tensor * norm_bias   = broadcast_affine ? ggml_new_tensor_2d(ctx_weights, GGML_TYPE_F32, C / 2, 2) :
+                                                       ggml_new_tensor_1d(ctx_weights, GGML_TYPE_F32, C);
+        cur                       = ggml_reshape_2d(ctx, cur, C, n_tokens);
+        cur                       = ggml_add(ctx, ggml_mul(ctx, cur, norm_weight), norm_bias);
+
+        ggml_tensor * rk =
+            ggml_sum_rows(ctx, ggml_mul(ctx, ggml_mul(ctx, k, r), ggml_reshape_2d(ctx, r_k, head_size, head_count)));
+        cur = ggml_add(ctx, cur, ggml_reshape_2d(ctx, ggml_mul(ctx, v, rk), C, n_tokens));
+
+        if (gate) {
+            ggml_tensor * g = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, C, n_tokens);
+            cur             = ggml_mul(ctx, cur, g);
+        }
+        return cur;
+    }
+};
+
 // GGML_OP_MUL_MAT
 struct test_mul_mat : public test_case {
     const ggml_type type_a;
@@ -9122,6 +9197,19 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_rwkv_wkv7(GGML_TYPE_F32, 32, 64, 32, 1));
     test_cases.emplace_back(new test_rwkv_wkv7(GGML_TYPE_F32, 32, 64, 32, 4));
     test_cases.emplace_back(new test_rwkv_wkv7(GGML_TYPE_F32, 32, 64, 128, 4));
+
+    for (int64_t head_size : { 64, 128 }) {
+        for (int64_t n_tokens : { 1, 4 }) {
+            for (bool gate : { false, true }) {
+                test_cases.emplace_back(new test_rwkv7_output(8, head_size, n_tokens, gate));
+            }
+        }
+    }
+    // These graphs have the same op sequence and element counts as RWKV7 output
+    // preparation, but their inputs do not satisfy the fused kernel contract.
+    // CUDA must reject the fusion and execute the original graph.
+    test_cases.emplace_back(new test_rwkv7_output(8, 64, 4, false, true, false));
+    test_cases.emplace_back(new test_rwkv7_output(1, 64, 1, false, false, true));
 
     test_cases.emplace_back(new test_gla(GGML_TYPE_F32, 32, 64, 1, 1));
     test_cases.emplace_back(new test_gla(GGML_TYPE_F32, 32, 64, 32, 1));
