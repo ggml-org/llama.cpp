@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { SettingsMcpServers } from '$lib/components/app/settings';
 	import { McpLogo } from '$lib/components/app';
+	import { SettingsMcpServers } from '$lib/components/app/settings';
 	import * as Dialog from '$lib/components/ui/dialog';
 
 	interface Props {
@@ -17,8 +17,10 @@
 </script>
 
 <Dialog.Root {open} onOpenChange={handleOpenChange}>
-	<Dialog.Content class="h-[calc(100vh-4rem)]! max-h-240! w-[calc(100vw-4rem)]! max-w-360! flex flex-col">
-		<Dialog.Header >
+	<Dialog.Content
+		class="h-[calc(100vh-4rem)]! max-h-240! w-[calc(100vw-4rem)]! max-w-360! flex flex-col"
+	>
+		<Dialog.Header>
 			<Dialog.Title class="flex items-center gap-2">
 				<McpLogo class="h-5 w-5" />
 
