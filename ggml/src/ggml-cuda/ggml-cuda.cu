@@ -69,6 +69,10 @@
 #include "ggml-cuda/lightning-indexer.cuh"
 #include "ggml.h"
 
+#if defined(GGML_USE_HIP)
+#include "ggml-cuda/vendors/hipblaslt_batched_gemm.cuh"
+#endif // defined(GGML_USE_HIP)
+
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -707,6 +711,12 @@ ggml_backend_cuda_context::~ggml_backend_cuda_context() {
         CUDA_CHECK(cudaEventDestroy(copy_event));
     }
     for (int i = 0; i < GGML_CUDA_MAX_DEVICES; ++i) {
+#if defined(GGML_USE_HIP)
+        const int cc = ggml_cuda_info().devices[i].cc;
+        if(ggml::vendors::getHipblasltBatchedGemmEnvVal() != 0 && GGML_CUDA_CC_IS_CDNA3(cc)){
+            ggml::vendors::HipblasltBatchedGemmSingleton::getInstance().hipblasltDestroy(i);
+        }
+#endif // defined(GGML_USE_HIP)
         for (int j = 0; j < GGML_CUDA_MAX_STREAMS; ++j) {
             if (streams[i][j] != nullptr) {
                 CUDA_CHECK(cudaStreamDestroy(streams[i][j]));
@@ -1433,6 +1443,15 @@ static void ggml_cuda_mul_mat_cublas_impl(ggml_backend_cuda_context & ctx, const
     int64_t s12 = nb12 / src1_ts;
     int64_t s13 = nb13 / src1_ts;
 
+#if defined(GGML_USE_HIP)
+    int cur_dev_id = ggml_cuda_get_device();
+    const int cur_dev_cc = ggml_cuda_info().devices[cur_dev_id].cc;
+    if(ggml::vendors::getHipblasltBatchedGemmEnvVal() != 0 && GGML_CUDA_CC_IS_CDNA3(cur_dev_cc)){
+        auto& instance = ggml::vendors::HipblasltBatchedGemmSingleton::getInstance();
+        instance.hipblasLtSetStream(ctx.device, main_stream);
+    }
+#endif // defined(GGML_USE_HIP)
+
     float * dst_ddf = (float *) dst->data;
 
     const cuda_t * src0_ptr = nullptr;
@@ -1601,6 +1620,16 @@ static void ggml_cuda_mul_mat_cublas_impl(ggml_backend_cuda_context & ctx, const
 
         CUDA_CHECK(cudaGetLastError());
 
+#if defined(GGML_USE_HIP)
+        CUBLAS_CHECK(ggml::vendors::hipblasGemmBatchedEx(ctx.cublas_handle(), CUBLAS_OP_T, CUBLAS_OP_N,
+                    ne01, ne11, ne10,
+                    alpha, (const void **) (ptrs_src.get() + 0*ne23), cu_data_type_a, nb01/nb00,
+                        (const void **) (ptrs_src.get() + 1*ne23), cu_data_type_b, s11,
+                    beta,  (      void **) (ptrs_dst.get() + 0*ne23), cu_data_type,   ne0,
+                    ne23,
+                    cu_compute_type,
+                    CUBLAS_GEMM_DEFAULT_TENSOR_OP));
+#else
         CUBLAS_CHECK(
         cublasGemmBatchedEx(cublas_h, CUBLAS_OP_T, CUBLAS_OP_N,
                 ne01, ne11, ne10,
@@ -1610,6 +1639,7 @@ static void ggml_cuda_mul_mat_cublas_impl(ggml_backend_cuda_context & ctx, const
                 ne23,
                 cu_compute_type,
                 CUBLAS_GEMM_DEFAULT_TENSOR_OP));
+#endif // defined(GGML_USE_HIP)
     }
 
     // Convert output back to F32 if needed
