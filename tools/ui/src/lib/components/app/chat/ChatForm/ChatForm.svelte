@@ -8,7 +8,8 @@
 		ChatFormInputFileInputInvisible,
 		ChatFormMcpResourcesList,
 		ChatFormPickers,
-		DialogMcpResourcesBrowser
+		DialogMcpResourcesBrowser,
+		DialogMcpServers
 	} from '$lib/components/app';
 	import {
 		CLIPBOARD_CONTENT_QUOTE_PREFIX,
@@ -151,9 +152,8 @@
 		getServerHome: () => toolsStore.serverHome ?? null,
 		getShowModelSelector: () => showModelSelector,
 		getValue: () => value,
-		hasCwdTools: () => toolsStore.hasEnabledCwdTools,
-		hasPrompts: () =>
-			mcpStore.hasPromptsCapability(conversationsStore.preferences.getAllMcpServerOverrides()),
+		hasCwdTools: () => conversationsStore.preferences.hasEnabledCwdTools(),
+		hasPrompts: () => mcpStore.hasPromptsCapability(),
 		openModelSelector: () => chatFormActionsRef?.openModelSelector(),
 		setCaretOffset: (offset) => inputRef?.setCaretOffset(offset),
 		setValue: (v) => {
@@ -182,6 +182,9 @@
 	// Resource Dialog State
 	let isResourceDialogOpen = $state(false);
 	let preSelectedResourceUri = $state<string | undefined>(undefined);
+
+	// MCP Servers Dialog State
+	let isMcpServersDialogOpen = $state(false);
 
 	let currentConfig = $derived(settingsStore.config);
 
@@ -624,13 +627,14 @@
 				onSystemPromptClick={() => onSystemPromptClick?.({ files: uploadedFiles, message: value })}
 				onMcpPromptClick={showMcpPromptButton ? () => pickers.openPromptPicker() : undefined}
 				onMcpResourcesClick={() => (isResourceDialogOpen = true)}
+				onMcpSettingsClick={() => (isMcpServersDialogOpen = true)}
 			/>
 		</div>
 	</div>
 
 	<ContextGaugePopup />
 
-	{#if toolsStore.hasEnabledCwdTools}
+	{#if conversationsStore.preferences.hasEnabledCwdTools()}
 		<ChatFormCurrentWorkingDirectory
 			directory={cwd}
 			isOpen={pickers.isWorkingDirectoryPickerOpen}
@@ -656,3 +660,5 @@
 		}
 	}}
 />
+
+<DialogMcpServers bind:open={isMcpServersDialogOpen} />
