@@ -663,7 +663,7 @@ void server_models::load_models() {
                 /* progress      */ {},
                 /* exit_code     */ 0,
                 /* stop_timeout  */ DEFAULT_STOP_TIMEOUT,
-                /* multimodal    */ mtmd_caps{false, false},
+                /* multimodal    */ mtmd_caps{false, false, false},
                 // /* need_download */ false,
             };
             add_model(std::move(meta));
@@ -839,7 +839,7 @@ void server_models::load_models() {
                     /* progress      */ {},
                     /* exit_code     */ 0,
                     /* stop_timeout  */ DEFAULT_STOP_TIMEOUT,
-                    /* multimodal    */ mtmd_caps{false, false},
+                    /* multimodal    */ mtmd_caps{false, false, false},
                     // /* need_download */ false,
                 };
                 add_model(std::move(meta));

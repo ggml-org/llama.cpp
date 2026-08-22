@@ -12,6 +12,8 @@ Simple usage:
 llama-tts -hf ggml-org/Qwen3-TTS-12Hz-1.7B-Base-GGUF -p "Hello world" --output out.wav
 ```
 
+Note: it's highly recommended to always provide a speaker reference voice (via `--tts-speaker-file`); otherwise, the model's performance may be degraded.
+
 Common params:
 - Sampling params such as `--top-k`, `--top-p`, `--temp`, etc.
 - `-n <number_of_frames>` limits the output length, e.g. `-n 500`. Note that how many milliseconds each frame represents varies by model
