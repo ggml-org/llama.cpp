@@ -3,6 +3,7 @@
 #include "llama.h"
 
 #include "../src/llama-batch.h"
+#include "../src/llama-hparams.h"
 #include "../src/llama-memory.h"
 #include "../src/llama-vocab.h"
 
@@ -650,6 +651,29 @@ static void test_mrope(testing & t) {
     });
 }
 
+static void test_mtp_embd_width(testing & t) {
+    t.test("mtp_uses_n_embd_out", [&](testing & t) {
+        llama_hparams hparams = {};
+        hparams.n_embd             = 64;
+        hparams.n_deepstack_layers = 2;   // makes n_embd_inp() = 64 + 64*2 = 192
+        hparams.n_embd_out_impl    = 96;  // makes n_embd_out() = 96
+
+        t.assert_equal("default context uses n_embd_inp (deepstack-aware)",
+                (size_t) 192, llama_batch_ext_select_n_embd_inp(LLAMA_CONTEXT_TYPE_DEFAULT, hparams));
+
+        t.assert_equal("MTP context uses n_embd_out instead (target-model hidden state width)",
+                (size_t) 96, llama_batch_ext_select_n_embd_inp(LLAMA_CONTEXT_TYPE_MTP, hparams));
+    });
+
+    t.test("mtp_falls_back_to_n_embd_when_no_override", [&](testing & t) {
+        llama_hparams hparams = {};
+        hparams.n_embd = 64; // no deepstack, no n_embd_out_impl override
+
+        t.assert_equal((size_t) 64, llama_batch_ext_select_n_embd_inp(LLAMA_CONTEXT_TYPE_DEFAULT, hparams));
+        t.assert_equal((size_t) 64, llama_batch_ext_select_n_embd_inp(LLAMA_CONTEXT_TYPE_MTP, hparams));
+    });
+}
+
 int main(int argc, char ** argv) {
     testing t;
 
@@ -665,10 +689,11 @@ int main(int argc, char ** argv) {
         t.set_filter(argv[1]);
     }
 
-    t.test("init",      test_init);
-    t.test("split",     test_split);
-    t.test("keep_tail", test_keep_tail);
-    t.test("mrope",     test_mrope);
+    t.test("init",           test_init);
+    t.test("split",          test_split);
+    t.test("keep_tail",      test_keep_tail);
+    t.test("mrope",          test_mrope);
+    t.test("mtp_embd_width", test_mtp_embd_width);
 
     return t.summary();
 }

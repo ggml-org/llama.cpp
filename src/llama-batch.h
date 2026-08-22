@@ -10,6 +10,7 @@
 #include <bitset>
 #include <memory>
 #include <unordered_map>
+#include <unordered_set>
 
 // keep this struct lightweight
 struct llama_ubatch {
@@ -68,19 +69,55 @@ struct llama_ubatch {
     std::shared_ptr<data_t> data;
 };
 
+struct llama_hparams;
+
+// MTP hook batches carry the target model's hidden state (n_embd_out size).
+// Normal batches carry token embeddings (n_embd_inp size).
+size_t llama_batch_ext_select_n_embd_inp(llama_context_type ctx_type, const llama_hparams & hparams);
+
+struct llama_batch_ext {
+    const size_t n_tokens_max;     // max number of tokens that can be stored in the batch
+    const size_t n_embd_inp;       // number of embedding dimensions per token
+    const llama_seq_id n_seq_max;  // max number of sequences
+    llama_memory_i * mem;          // memory for position inference
+    const llama_token n_vocab;     // max token ID that we accept
+    const size_t n_pos_per_embd;
+
+    struct token {
+        llama_token  id = LLAMA_TOKEN_NULL;
+        bool         has_embd = false; // whether embd_off is set
+        size_t       embd_off = 0; // index offset in the embd array
+        bool         output = false; // TODO: have dedicated output flags
+        std::unordered_set<llama_seq_id> seq_ids;
+        std::array<llama_pos, GGML_MROPE_SECTIONS> pos = {0, 0, 0, 0};
+    };
+    std::vector<token> tokens;
+    std::vector<float> embd;
+
+    llama_batch_ext(llama_context * ctx);
+
+    void clear();
+
+    // add an entry with an undefined position
+    // the caller must set it explicitly via set_token_pos()
+    int32_t add_token(llama_seq_id seq_id);
+
+    bool add_seq(int32_t idx, llama_seq_id seq_id);
+    bool set_token_id(int32_t idx, llama_token id);
+    bool set_token_embd(int32_t idx, llama_embd embd_in);
+    bool set_token_pos(int32_t idx, llama_pos * pos_in);
+    bool set_output(int32_t idx, bool output_last);
+};
+
 // a helper for sanitizing, fulfilling and splitting a batch
 class llama_batch_allocr {
 public:
     llama_batch_allocr(uint32_t n_pos_per_embd);
 
-    // sanitize and auto-gen missing data in the input batch
-    // memory is optional. if provided will be used to check for sequence continuity and to determine the positions
+    // convert a llama_batch_ext to internal llama_batch and sanitize it
     bool init(
-            const llama_batch & batch_inp,
+            const llama_batch_ext & batch_inp,
             const llama_vocab & vocab,
-            const llama_memory_i * memory,
-            uint32_t n_embd,
-            uint32_t n_seq_max,
             bool output_all);
 
     const llama_batch & get_batch() const;
@@ -137,7 +174,9 @@ private:
     uint32_t n_seq_max;
     uint32_t n_outputs;
 
-    std::array<llama_seq_id, 1> seq_id_0 = {{ 0 }}; // default sequence id
+    std::vector<llama_token>    token_vec;    // owned token IDs built from llama_batch_ext
+    std::vector<float>          embd_vec;     // owned embeddings built from llama_batch_ext
+    std::vector<llama_seq_id>   seq_id_data;  // flat storage for seq_id pointers below
 
     std::vector<llama_pos>      pos;
     std::vector<int32_t>        n_seq_id;
@@ -171,4 +210,11 @@ private:
     std::vector<bool> used;
 
     int debug;
+};
+
+// RAII translation layer: converts a llama_batch (old API) into a llama_batch_ext
+struct llama_batch_compat {
+    llama_batch_ext * batch_ext;
+    llama_batch_compat(llama_context * ctx, const llama_batch & batch_inp);
+    ~llama_batch_compat();
 };
