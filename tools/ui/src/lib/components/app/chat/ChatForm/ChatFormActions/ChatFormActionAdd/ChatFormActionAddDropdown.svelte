@@ -1,9 +1,6 @@
 <script lang="ts">
-	import { File, FolderOpen, MessageSquare, Plus, Zap } from '@lucide/svelte';
-	import {
-		ChatFormActionAddMcpServersSubmenu,
-		ChatFormActionAddToolsSubmenu
-	} from '$lib/components/app';
+	import { File, MessageSquare, Plus } from '@lucide/svelte';
+	import { ChatFormActionAddToolsSubmenu, McpLogo } from '$lib/components/app';
 	import { buttonVariants } from '$lib/components/ui/button';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Tooltip from '$lib/components/ui/tooltip';
@@ -29,11 +26,6 @@
 	// The system message action moves focus to the message editor, so the menu
 	// must not restore focus to the trigger on close
 	let suppressCloseAutoFocus = false;
-
-	function handleMcpSettingsClick() {
-		dropdownOpen = false;
-		chatFormActions.onMcpSettingsClick?.();
-	}
 
 	const attachmentMenu = useAttachmentMenu(
 		() => ({
@@ -151,31 +143,14 @@
 
 			<ChatFormActionAddToolsSubmenu />
 
-			<DropdownMenu.Separator />
+			<DropdownMenu.Item
+				class="flex cursor-pointer items-center gap-2"
+				onclick={chatFormActions.onMcpSettingsClick}
+			>
+				<McpLogo class={ICON_CLASS_DEFAULT} />
 
-			<ChatFormActionAddMcpServersSubmenu onMcpSettingsClick={handleMcpSettingsClick} />
-
-			{#if chatFormActions.hasMcpPromptsSupport}
-				<DropdownMenu.Item
-					class="flex cursor-pointer items-center gap-2"
-					onclick={chatFormActions.onMcpPromptClick}
-				>
-					<Zap class={ICON_CLASS_DEFAULT} />
-
-					<span>MCP Prompt</span>
-				</DropdownMenu.Item>
-			{/if}
-
-			{#if chatFormActions.hasMcpResourcesSupport}
-				<DropdownMenu.Item
-					class="flex cursor-pointer items-center gap-2"
-					onclick={chatFormActions.onMcpResourcesClick}
-				>
-					<FolderOpen class={ICON_CLASS_DEFAULT} />
-
-					<span>MCP Resources</span>
-				</DropdownMenu.Item>
-			{/if}
+				<span>MCP Servers</span>
+			</DropdownMenu.Item>
 		</DropdownMenu.Content>
 	</DropdownMenu.Root>
 </div>
