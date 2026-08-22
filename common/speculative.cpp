@@ -2585,9 +2585,18 @@ common_params common_base_params_to_speculative(const common_params & params) {
     if (has_block_draft) {
         // per-seq output positions: DFlash decodes anchor + n_max masks (n_max + 1); DSpark n_max -> +1 covers both
         const int32_t per_seq = std::max(1, params_spec.n_max + 1);
-        result.n_outputs_max = params.n_parallel * per_seq;
-        result.n_batch  = std::max(result.n_batch,  result.n_outputs_max);
-        result.n_ubatch = std::max(result.n_ubatch, result.n_outputs_max);
+        // The noise block is decoded as a whole under non-causal attention, so it must fit in a single ubatch.
+        const int32_t n_block = params.n_parallel * per_seq;
+        result.n_outputs_max = n_block;
+        result.n_batch = std::max(result.n_batch, n_block);
+
+        // The draft only decodes a small block during generation, so avoid reserving a compute buffer for the
+        // full inherited ubatch. The explicit override wins, while every value is floored to the noise block.
+        const int32_t n_ubatch_dft_cap = 128;
+        const int32_t n_ubatch_dft_req = params_spec.n_ubatch > 0 ? params_spec.n_ubatch
+                                                                  : std::min(result.n_ubatch, n_ubatch_dft_cap);
+        result.n_ubatch = std::max(n_ubatch_dft_req, n_block);
+
         if (params_spec.backend_sampling) {
             result.n_outputs_max_per_seq = per_seq;
         }
