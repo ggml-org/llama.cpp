@@ -491,6 +491,7 @@ void ggml_metal_encoder_debug_group_pop (ggml_metal_encoder_t encoder) {
 }
 
 void ggml_metal_encoder_set_pipeline(ggml_metal_encoder_t encoder, struct ggml_metal_pipeline_with_params pipeline) {
+    GGML_ASSERT(pipeline.pipeline && "missing Metal pipeline (kernel not found in library)");
     [encoder->obj setComputePipelineState:pipeline.pipeline->obj];
 }
 
@@ -1388,7 +1389,10 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
         case GGML_OP_SOLVE_TRI:
         case GGML_OP_MUL_MAT:
         case GGML_OP_MUL_MAT_ID:
-            return has_simdgroup_reduction && op->src[0]->type != GGML_TYPE_NVFP4;
+            return has_simdgroup_reduction &&
+                op->src[0]->type != GGML_TYPE_NVFP4 &&
+                op->src[0]->type != GGML_TYPE_IQ2_NL &&
+                op->src[0]->type != GGML_TYPE_IQ3_NL;
         case GGML_OP_SET:
         case GGML_OP_CPY:
         case GGML_OP_DUP:
@@ -1452,7 +1456,9 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
                 };
             }
         case GGML_OP_GET_ROWS:
-            return op->src[0]->type != GGML_TYPE_NVFP4;
+            return op->src[0]->type != GGML_TYPE_NVFP4 &&
+                   op->src[0]->type != GGML_TYPE_IQ2_NL &&
+                   op->src[0]->type != GGML_TYPE_IQ3_NL;
         case GGML_OP_SET_ROWS:
             {
                 if (op->src[0]->type == GGML_TYPE_F16) {

@@ -860,6 +860,22 @@ static const struct ggml_type_traits type_traits[GGML_TYPE_COUNT] = {
         .to_float                 = (ggml_to_float_t) dequantize_row_iq1_m,
         .from_float_ref           = NULL,
     },
+    [GGML_TYPE_IQ2_NL] = {
+        .type_name                = "iq2_nl",
+        .blck_size                = QK2_NL,
+        .type_size                = sizeof(block_iq2_nl),
+        .is_quantized             = true,
+        .to_float                 = (ggml_to_float_t) dequantize_row_iq2_nl,
+        .from_float_ref           = (ggml_from_float_t)quantize_row_iq2_nl_ref,
+    },
+    [GGML_TYPE_IQ3_NL] = {
+        .type_name                = "iq3_nl",
+        .blck_size                = QK3_NL,
+        .type_size                = sizeof(block_iq3_nl),
+        .is_quantized             = true,
+        .to_float                 = (ggml_to_float_t) dequantize_row_iq3_nl,
+        .from_float_ref           = (ggml_from_float_t)quantize_row_iq3_nl_ref,
+    },
     [GGML_TYPE_IQ4_NL] = {
         .type_name                = "iq4_nl",
         .blck_size                = QK4_NL,
@@ -7986,6 +8002,8 @@ size_t ggml_quantize_chunk(
         case GGML_TYPE_IQ2_S:   result = quantize_iq2_s  (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_IQ1_S:   result = quantize_iq1_s  (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_IQ1_M:   result = quantize_iq1_m  (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
+        case GGML_TYPE_IQ2_NL:  result = quantize_iq2_nl (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
+        case GGML_TYPE_IQ3_NL:  result = quantize_iq3_nl (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_IQ4_NL:  result = quantize_iq4_nl (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_IQ4_XS:  result = quantize_iq4_xs (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_F16:

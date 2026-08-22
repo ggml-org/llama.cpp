@@ -1280,6 +1280,69 @@ void ggml_vec_dot_iq4_nl_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs,
     *s = sumf;
 }
 
+void ggml_vec_dot_iq2_nl_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+    assert(n % QK2_NL == 0);
+    static_assert(QK2_NL == QK8_0, "QK2_NL and QK8_0 must be the same");
+
+    const block_iq2_nl * GGML_RESTRICT x = vx;
+    const block_q8_0   * GGML_RESTRICT y = vy;
+
+    const int nb = n / QK2_NL;
+
+    int ib = 0;
+    float sumf = 0;
+
+    for (; ib < nb; ++ib) {
+        const float d = GGML_CPU_FP16_TO_FP32(y[ib].d)*GGML_CPU_FP16_TO_FP32(x[ib].d);
+        int sumi = 0;
+        for (int j = 0; j < QK2_NL/4; ++j) {
+            for (int g = 0; g < 4; ++g) {
+                sumi += y[ib].qs[j + g*(QK2_NL/4)] * kvalues_iq2nl[(x[ib].qs[j] >> 2*g) & 3];
+            }
+        }
+        sumf += d * sumi;
+    }
+    *s = sumf;
+}
+
+void ggml_vec_dot_iq3_nl_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+    assert(n % QK3_NL == 0);
+    static_assert(QK3_NL == QK8_0, "QK3_NL and QK8_0 must be the same");
+
+    const block_iq3_nl * GGML_RESTRICT x = vx;
+    const block_q8_0   * GGML_RESTRICT y = vy;
+
+    const int nb = n / QK3_NL;
+
+    int ib = 0;
+    float sumf = 0;
+
+    for (; ib < nb; ++ib) {
+        const float d = GGML_CPU_FP16_TO_FP32(y[ib].d)*GGML_CPU_FP16_TO_FP32(x[ib].d);
+        const uint8_t * qs = x[ib].qs;
+        const uint8_t * qh = x[ib].qh;
+        int sumi = 0;
+        for (int j = 0; j < QK3_NL/4; ++j) {
+            for (int g = 0; g < 4; ++g) {
+                const int idx = ((qs[j] >> 2*g) & 3) | (((qh[g] >> j) & 1) << 2);
+                sumi += y[ib].qs[j + g*(QK3_NL/4)] * kvalues_iq3nl[idx];
+            }
+        }
+        sumf += d * sumi;
+    }
+    *s = sumf;
+}
+
 void ggml_vec_dot_iq4_xs_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(nrc == 1);
     UNUSED(nrc);
@@ -1327,6 +1390,16 @@ void ggml_vec_dot_iq4_xs_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs,
 }
 
 // ============================ 4-bit non-linear quants
+
+void quantize_row_iq2_nl(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK2_NL == 0);
+    quantize_row_iq2_nl_ref(x, y, k);
+}
+
+void quantize_row_iq3_nl(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK3_NL == 0);
+    quantize_row_iq3_nl_ref(x, y, k);
+}
 
 void quantize_row_iq4_nl(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
     assert(k % QK4_NL == 0);
