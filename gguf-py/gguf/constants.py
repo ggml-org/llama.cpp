@@ -661,7 +661,7 @@ class MODEL_TENSOR(IntEnum):
     HC_HEAD_DOWN         = auto() # qwen4exp
     HC_HEAD_UP           = auto() # qwen4exp
     OUTPUT_NORM_GATE_UP  = auto()
-    OUTPUT_NORM_GATE_DOWN= auto()
+    OUTPUT_NORM_GATE_DOWN = auto()
     ROPE_FREQS           = auto()
     ROPE_FACTORS_LONG    = auto()
     ROPE_FACTORS_SHORT   = auto()

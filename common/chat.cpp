@@ -2036,7 +2036,7 @@ static common_chat_params common_chat_params_init_gigachat35(
     data.format             = COMMON_CHAT_FORMAT_PEG_NATIVE;
     data.supports_thinking  = true;
     data.thinking_start_tag = "<think>";
-    data.thinking_end_tag   = "</think>";
+    data.thinking_end_tags  = {"</think>"};
     data.preserved_tokens   = {
         "<|message_sep|>\n\n",
         "<|role_sep|>\n",
@@ -2078,22 +2078,14 @@ static common_chat_params common_chat_params_init_gigachat35(
     auto include_grammar   = has_tools && render_inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE;
 
     auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
-        auto generation_prompt = p.literal(data.generation_prompt);
+        // anchor on the bare generation prompt: the "<think>" opener rendered by the template
+        // and any continuation prefill are re-parsed, so prefilled reasoning/content ends up
+        // in the parsed message
+        auto generation_prompt = p.literal(GEN_PROMPT);
         auto end               = p.end();
 
-        const bool prompt_opens_think =
-            data.generation_prompt.size() >= THINK_START.size() &&
-            data.generation_prompt.compare(data.generation_prompt.size() - THINK_START.size(),
-                                           THINK_START.size(),
-                                           THINK_START) == 0;
-
         auto reasoning = p.eps();
-        if (extract_reasoning && prompt_opens_think) {
-            reasoning = p.optional(
-                p.reasoning(p.until(THINK_END)) +
-                THINK_END +
-                p.optional(p.literal("\n\n")));
-        } else if (extract_reasoning) {
+        if (extract_reasoning) {
             reasoning = p.optional(
                 THINK_START +
                 p.reasoning(p.until(THINK_END)) +
@@ -2114,7 +2106,7 @@ static common_chat_params common_chat_params_init_gigachat35(
 
             std::set<std::string> required;
             if (params.contains("required")) {
-                params.at("required").get_to(required);
+                required = params.at("required").get<std::set<std::string>>();
             }
 
             auto schema_info = common_schema_info();
@@ -2187,7 +2179,7 @@ static common_chat_params common_chat_params_init_gigachat35(
             tool_calls = p.optional(tool_calls);
         }
 
-        auto content_before_tools = p.content(p.until(FC_START));
+        auto content_before_tools = p.negate(p.literal(THINK_START)) + p.content(p.until(FC_START));
         return generation_prompt + reasoning + content_before_tools + tool_calls + end;
     });
 

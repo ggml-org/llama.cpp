@@ -118,6 +118,14 @@ class TensorNameMap:
             "model.norm",                              # cogvlm
         ),
 
+        MODEL_TENSOR.OUTPUT_NORM_GATE_UP: (
+            "model.norm.gate_up_projection",  # gigachat35
+        ),
+
+        MODEL_TENSOR.OUTPUT_NORM_GATE_DOWN: (
+            "model.norm.gate_down_projection",  # gigachat35
+        ),
+
         # Rope frequencies
         MODEL_TENSOR.ROPE_FREQS: (
             "rope.freqs",  # llama-pth
@@ -216,6 +224,14 @@ class TensorNameMap:
             "layers.{bid}.input_layernorm",                         # qwen3-embedding
             "model.layers.{bid}.attention_layernorm",               # apertus
             "model.layers.{bid}.pre_attention_layernorm",           # kormo
+        ),
+
+        MODEL_TENSOR.ATTN_NORM_GATE_UP: (
+            "model.layers.{bid}.input_layernorm.gate_up_projection",  # gigachat35
+        ),
+
+        MODEL_TENSOR.ATTN_NORM_GATE_DOWN: (
+            "model.layers.{bid}.input_layernorm.gate_down_projection",  # gigachat35
         ),
 
         # Attention norm 2
@@ -374,6 +390,14 @@ class TensorNameMap:
             "model.layers.layers.{bid}.post_mixer_norm.weight",  # plamo2
         ),
 
+        MODEL_TENSOR.ATTN_POST_NORM_GATE_UP: (
+            "model.layers.{bid}.post_self_attn_layernorm.gate_up_projection",  # gigachat35
+        ),
+
+        MODEL_TENSOR.ATTN_POST_NORM_GATE_DOWN: (
+            "model.layers.{bid}.post_self_attn_layernorm.gate_down_projection",  # gigachat35
+        ),
+
         # Rotary embeddings
         MODEL_TENSOR.ATTN_ROT_EMBD: (
             "model.layers.{bid}.self_attn.rotary_emb.inv_freq",        # llama-hf
@@ -421,6 +445,14 @@ class TensorNameMap:
             "layers.{bid}.mlp_norm"                                          # modern-bert
         ),
 
+        MODEL_TENSOR.FFN_NORM_GATE_UP: (
+            "model.layers.{bid}.post_attention_layernorm.gate_up_projection",  # gigachat35
+        ),
+
+        MODEL_TENSOR.FFN_NORM_GATE_DOWN: (
+            "model.layers.{bid}.post_attention_layernorm.gate_down_projection",  # gigachat35
+        ),
+
         # Pre feed-forward norm
         MODEL_TENSOR.FFN_PRE_NORM: (
             "model.layers.{bid}.pre_feedforward_layernorm", # gemma2
@@ -441,6 +473,14 @@ class TensorNameMap:
             "model.layers.layers.{bid}.post_mlp_norm.weight", # plamo2
             "model.layers.{bid}.feed_forward.up_proj",
             "model.layers.{bid}.post_moe_norm",               # grok-2
+        ),
+
+        MODEL_TENSOR.FFN_POST_NORM_GATE_UP: (
+            "model.layers.{bid}.post_feedforward_layernorm.gate_up_projection",  # gigachat35
+        ),
+
+        MODEL_TENSOR.FFN_POST_NORM_GATE_DOWN: (
+            "model.layers.{bid}.post_feedforward_layernorm.gate_down_projection",  # gigachat35
         ),
 
         MODEL_TENSOR.FFN_POST_NORM_1: (
@@ -1156,10 +1196,26 @@ class TensorNameMap:
             "layers.{bid}.attention.q_a_norm",            # mistral-large
         ),
 
+        MODEL_TENSOR.ATTN_Q_A_NORM_GATE_UP: (
+            "model.layers.{bid}.self_attn.q_a_layernorm.gate_up_projection",  # gigachat35
+        ),
+
+        MODEL_TENSOR.ATTN_Q_A_NORM_GATE_DOWN: (
+            "model.layers.{bid}.self_attn.q_a_layernorm.gate_down_projection",  # gigachat35
+        ),
+
         MODEL_TENSOR.ATTN_KV_A_NORM: (
             "model.layers.{bid}.self_attn.kv_a_layernorm", # deepseek2
             "model.layers.{bid}.attention.kv_a_layernorm", # bailingmoe3
             "layers.{bid}.attention.kv_a_norm",            # mistral-large
+        ),
+
+        MODEL_TENSOR.ATTN_KV_A_NORM_GATE_UP: (
+            "model.layers.{bid}.self_attn.kv_a_layernorm.gate_up_projection",  # gigachat35
+        ),
+
+        MODEL_TENSOR.ATTN_KV_A_NORM_GATE_DOWN: (
+            "model.layers.{bid}.self_attn.kv_a_layernorm.gate_down_projection",  # gigachat35
         ),
 
         MODEL_TENSOR.ATTN_SUB_NORM: (
@@ -2685,8 +2741,24 @@ class TensorNameMap:
             "model.layers.{bid}.enorm",
         ),
 
+        MODEL_TENSOR.NEXTN_ENORM_GATE_UP: (
+            "model.layers.{bid}.enorm.gate_up_projection",  # gigachat35
+        ),
+
+        MODEL_TENSOR.NEXTN_ENORM_GATE_DOWN: (
+            "model.layers.{bid}.enorm.gate_down_projection",  # gigachat35
+        ),
+
         MODEL_TENSOR.NEXTN_HNORM: (
             "model.layers.{bid}.hnorm",
+        ),
+
+        MODEL_TENSOR.NEXTN_HNORM_GATE_UP: (
+            "model.layers.{bid}.hnorm.gate_up_projection",  # gigachat35
+        ),
+
+        MODEL_TENSOR.NEXTN_HNORM_GATE_DOWN: (
+            "model.layers.{bid}.hnorm.gate_down_projection",  # gigachat35
         ),
 
         MODEL_TENSOR.NEXTN_SHARED_HEAD_HEAD: (
@@ -2695,6 +2767,14 @@ class TensorNameMap:
 
         MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM: (
             "model.layers.{bid}.shared_head.norm",
+        ),
+
+        MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM_GATE_UP: (
+            "model.layers.{bid}.shared_head.norm.gate_up_projection",  # gigachat35
+        ),
+
+        MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM_GATE_DOWN: (
+            "model.layers.{bid}.shared_head.norm.gate_down_projection",  # gigachat35
         ),
     }
 
@@ -2765,6 +2845,17 @@ class TensorNameMap:
             ),
             MODEL_TENSOR.PLE_CONV1D: (
                 "model.layers.{bid}.ple.conv1d",
+            ),
+        },
+        MODEL_ARCH.GIGACHAT35: {
+            MODEL_TENSOR.SSM_CONV1D: (
+                "model.layers.{bid}.self_attn.conv1d",
+            ),
+            MODEL_TENSOR.SSM_NORM: (
+                "model.layers.{bid}.self_attn.norm",
+            ),
+            MODEL_TENSOR.SSM_OUT: (
+                "model.layers.{bid}.self_attn.out_proj",
             ),
         },
     }
