@@ -10,7 +10,7 @@
 #include <set>
 #include <stdexcept>
 
-#define MAX_REPETITION_THRESHOLD 2000
+#define MAX_REPETITION_THRESHOLD 2000000
 //
 // helpers
 //
@@ -95,6 +95,10 @@ static bool is_digit_char(char c) {
     return '0' <= c && c <= '9';
 }
 
+static bool is_hex_char(char c) {
+    return is_digit_char(c) || ('a' <= c && c <= 'f') || ('A' <= c && c <= 'F');
+}
+
 static bool is_word_char(char c) {
     return ('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z') || c == '-' || is_digit_char(c);
 }
@@ -168,6 +172,9 @@ static std::pair<uint32_t, const char *> parse_char(const char * src) {
             case 't': return std::make_pair('\t', src + 2);
             case 'r': return std::make_pair('\r', src + 2);
             case 'n': return std::make_pair('\n', src + 2);
+            case 'b': return std::make_pair('\b', src + 2);
+            case 'f': return std::make_pair('\f', src + 2);
+            case '/': return std::make_pair('/', src + 2);
             case '\\':
             case '"':
             case '[':
@@ -526,6 +533,41 @@ const char * llama_grammar_parser::parse_sequence(
         GGML_ASSERT(n_prev_rules >= 1);
     };
 
+    // regex-style class shorthands used by some generators (e.g. \d \w \s inside literals)
+    static const auto push_char_class = [](std::vector<llama_grammar_element> & rule, const char * pos, llama_gretype first_type) -> size_t {
+        std::vector<std::pair<uint32_t, uint32_t>> ranges;
+        bool negated = false;
+        switch (pos[1]) {
+            case 'd': ranges = {{'0', '9'}}; break;
+            case 'D': ranges = {{'0', '9'}}; negated = true; break;
+            case 'w': ranges = {{'0','9'}, {'A','Z'}, {'_','_'}, {'a','z'}}; break;
+            case 'W': ranges = {{'0','9'}, {'A','Z'}, {'_','_'}, {'a','z'}}; negated = true; break;
+            case 's': ranges = {{' ',' '}, {'\t','\t'}, {'\r','\r'}, {'\n','\n'}}; break;
+            case 'S': ranges = {{' ',' '}, {'\t','\t'}, {'\r','\r'}, {'\n','\n'}}; negated = true; break;
+            default: return 0;
+        }
+        if (negated && first_type == LLAMA_GRETYPE_CHAR) {
+            first_type = LLAMA_GRETYPE_CHAR_NOT;
+        }
+        bool first = true;
+        for (const auto & r : ranges) {
+            if (first) {
+                rule.push_back({first_type, r.first});
+                first = false;
+            } else {
+                rule.push_back({LLAMA_GRETYPE_CHAR_ALT, r.first});
+            }
+            if (r.second != r.first) {
+                rule.push_back({LLAMA_GRETYPE_CHAR_RNG_UPPER, r.second});
+            }
+        }
+        return 2;
+    };
+
+    const auto is_class_shorthand = [](char c) {
+        return c == 'd' || c == 'D' || c == 'w' || c == 'W' || c == 's' || c == 'S';
+    };
+
     while (*pos) {
         if (*pos == '"') { // literal string
             pos++;
@@ -535,9 +577,13 @@ const char * llama_grammar_parser::parse_sequence(
                 if (!*pos) {
                     throw std::runtime_error("unexpected end of input");
                 }
-                auto char_pair = parse_char(pos);
-                     pos       = char_pair.second;
-                rule.push_back({LLAMA_GRETYPE_CHAR, char_pair.first});
+                if (*pos == '\\' && is_class_shorthand(pos[1])) {
+                    pos += push_char_class(rule, pos, LLAMA_GRETYPE_CHAR);
+                } else {
+                    auto char_pair = parse_char(pos);
+                         pos       = char_pair.second;
+                    rule.push_back({LLAMA_GRETYPE_CHAR, char_pair.first});
+                }
             }
             pos = parse_space(pos + 1, is_nested);
         } else if (*pos == '[') { // char range(s)
@@ -553,20 +599,27 @@ const char * llama_grammar_parser::parse_sequence(
                 if (!*pos) {
                     throw std::runtime_error("unexpected end of input");
                 }
-                auto char_pair = parse_char(pos);
-                     pos       = char_pair.second;
-                enum llama_gretype type = last_sym_start < rule.size()
-                    ? LLAMA_GRETYPE_CHAR_ALT
-                    : start_type;
+                if (*pos == '\\' && is_class_shorthand(pos[1])) {
+                    enum llama_gretype type = last_sym_start < rule.size()
+                        ? LLAMA_GRETYPE_CHAR_ALT
+                        : start_type;
+                    pos += push_char_class(rule, pos, type);
+                } else {
+                    auto char_pair = parse_char(pos);
+                         pos       = char_pair.second;
+                    enum llama_gretype type = last_sym_start < rule.size()
+                        ? LLAMA_GRETYPE_CHAR_ALT
+                        : start_type;
 
-                rule.push_back({type, char_pair.first});
-                if (pos[0] == '-' && pos[1] != ']') {
-                    if (!pos[1]) {
-                        throw std::runtime_error("unexpected end of input");
+                    rule.push_back({type, char_pair.first});
+                    if (pos[0] == '-' && pos[1] != ']') {
+                        if (!pos[1]) {
+                            throw std::runtime_error("unexpected end of input");
+                        }
+                        auto endchar_pair = parse_char(pos + 1);
+                             pos          = endchar_pair.second;
+                        rule.push_back({LLAMA_GRETYPE_CHAR_RNG_UPPER, endchar_pair.first});
                     }
-                    auto endchar_pair = parse_char(pos + 1);
-                         pos          = endchar_pair.second;
-                    rule.push_back({LLAMA_GRETYPE_CHAR_RNG_UPPER, endchar_pair.first});
                 }
             }
             pos = parse_space(pos + 1, is_nested);
@@ -582,6 +635,35 @@ const char * llama_grammar_parser::parse_sequence(
             n_prev_rules = 1;
             rule.push_back({type, token_pair.first});
             pos = parse_space(token_end, is_nested);
+        } else if (*pos == 'a' && (pos[1] == 'c' || !is_word_char(pos[1]))) { // legacy llama.cpp GBNF: "a" = any char, "a"c[-hex] = any char except
+            pos++; // skip 'a'
+            last_sym_start = rule.size();
+            n_prev_rules = 1;
+            std::vector<uint32_t> exceptions;
+            if (*pos == 'c') {
+                pos++; // skip 'c'
+                while (*pos == '-') {
+                    pos++; // skip '-'
+                    if (is_hex_char(pos[0]) && is_hex_char(pos[1])) {
+                        auto hex_pair = parse_hex(pos, 2);
+                        pos       = hex_pair.second;
+                        exceptions.push_back(hex_pair.first);
+                    } else {
+                        auto char_pair = parse_char(pos);
+                        pos       = char_pair.second;
+                        exceptions.push_back(char_pair.first);
+                    }
+                }
+            }
+            if (exceptions.empty()) {
+                rule.push_back({LLAMA_GRETYPE_CHAR_ANY, 0});
+            } else {
+                rule.push_back({LLAMA_GRETYPE_CHAR_NOT, exceptions[0]});
+                for (size_t i = 1; i < exceptions.size(); ++i) {
+                    rule.push_back({LLAMA_GRETYPE_CHAR_ALT, exceptions[i]});
+                }
+            }
+            pos = parse_space(pos, is_nested);
         } else if (is_word_char(*pos)) { // rule reference
             const char * name_end    = parse_name(pos);
             uint32_t ref_rule_id = get_symbol_id(pos, name_end - pos);
