@@ -323,8 +323,11 @@ static void common_params_fit_impl(
                         //   - for MoE models only whole tensors can be assigned to devices, which we estimate to be <= 1/3 of a layer
                         //   - on average we expect a waste of 0.5 layers/tensors per device
                         //   - use slightly more than the expected average for nd devices to be safe
-                        const int64_t model_per_layer = sum_projected_model / std::min(uint32_t(mparams->n_gpu_layers), hp_ngl);
-                        sum_used_target -= (nd + 1) * model_per_layer / (hp_nex == 0 ? 2 : 6);
+                        const uint32_t n_gpu_layers = std::min(uint32_t(mparams->n_gpu_layers), hp_ngl);
+                        if (n_gpu_layers > 0) {
+                            const int64_t model_per_layer = sum_projected_model / n_gpu_layers;
+                            sum_used_target -= (nd + 1) * model_per_layer / (hp_nex == 0 ? 2 : 6);
+                        }
                     }
 
                     int64_t sum_projected_used_min_ctx = 0;
