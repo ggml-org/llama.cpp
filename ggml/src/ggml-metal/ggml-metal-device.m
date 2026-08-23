@@ -728,6 +728,10 @@ ggml_metal_device_t ggml_metal_device_init(int device) {
             dev->addr_virt = 0x000000400ULL;
 
             dev->props.device = device;
+            // the Metal backend uses the system default device as the single physical device;
+            // additional (virtual) devices are emulated on top of it via GGML_METAL_DEVICES
+            dev->props.physical_device = 0;
+            dev->props.virtual_index = device;
             dev->props.has_simdgroup_reduction  = [dev->mtl_device supportsFamily:MTLGPUFamilyApple7];
             dev->props.has_simdgroup_reduction |= [dev->mtl_device supportsFamily:MTLGPUFamilyMetal3_GGML];
 

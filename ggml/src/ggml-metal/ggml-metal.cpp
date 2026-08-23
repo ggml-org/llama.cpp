@@ -655,7 +655,16 @@ static const char * ggml_backend_metal_device_get_name(ggml_backend_dev_t dev) {
 static const char * ggml_backend_metal_device_get_description(ggml_backend_dev_t dev) {
     ggml_metal_device_t ctx_dev = (ggml_metal_device_t)dev->context;
 
-    return ggml_metal_device_get_props(ctx_dev)->desc;
+    const ggml_metal_device_props * props_dev = ggml_metal_device_get_props(ctx_dev);
+
+    // when emulating multiple (virtual) devices on the single physical device, report the mapping
+    static std::string description;
+    description = props_dev->desc;
+    if (g_devices > 1) {
+        description += " (dev p" + std::to_string(props_dev->physical_device) +
+                       "/v" + std::to_string(props_dev->virtual_index) + ")";
+    }
+    return description.c_str();
 }
 
 static void ggml_backend_metal_device_get_memory(ggml_backend_dev_t dev, size_t * free, size_t * total) {
