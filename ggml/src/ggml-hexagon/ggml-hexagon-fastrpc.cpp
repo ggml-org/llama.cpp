@@ -414,33 +414,33 @@ static struct hexagon_appcfg_t g_hexagon_appcfg = {
 
 //supported Snapdragon devices with Hexagon DSP
 static struct qcom_socinfo g_hexagon_soc_info_table[] = {
-        /* Qualcomm SnapDragon 8 Gen 2 */
+        /* Qualcomm Snapdragon 8 Gen 2 */
         {
                 .soc_model         = SM8550,
                 .htp_arch          = V73,
                 .vtcm_size_in_mb   = 8,
-                .soc_desc          = "Qualcomm SnapDragon 8 Gen 2"},
+                .soc_desc          = "Qualcomm Snapdragon 8 Gen 2"},
 
-        /* Qualcomm SnapDragon 8 Gen 3 */
+        /* Qualcomm Snapdragon 8 Gen 3 */
         {
                 .soc_model         = SM8650,
                 .htp_arch          = V75,
                 .vtcm_size_in_mb   = 8,
-                .soc_desc          = "Qualcomm SnapDragon 8 Gen 3 "},
+                .soc_desc          = "Qualcomm Snapdragon 8 Gen 3 "},
 
-        /* Qualcomm SnapDragon 8 Gen 4 */
+        /* Qualcomm Snapdragon 8 Gen 4 */
         {
                 .soc_model         = SM8750,
                 .htp_arch          = V79,
                 .vtcm_size_in_mb   = 8,
-                .soc_desc          = "Qualcomm SnapDragon 8 Elite"},
+                .soc_desc          = "Qualcomm Snapdragon 8 Elite"},
 
-        /* Qualcomm SnapDragon 8 Gen 5 */
+        /* Qualcomm Snapdragon 8 Gen 5 */
         {
                 .soc_model         = SM8850,
                 .htp_arch          = V81,
                 .vtcm_size_in_mb   = 8,
-                .soc_desc          = "Qualcomm SnapDragon 8 Elite Gen5"},
+                .soc_desc          = "Qualcomm Snapdragon 8 Elite Gen5"},
 };
 #if defined(__GNUC__) || defined(__clang__)
 #pragma GCC diagnostic pop
@@ -1603,61 +1603,50 @@ bail:
 }
 
 static int ggmlhexagon_init_rpcmempool(ggml_backend_hexagon_context * ctx) {
-    size_t candidate_size   = 0;
-    uint8_t * rpc_buffer    = nullptr;
-    std::vector<int>        probe_slots;
-
-    if (nullptr == ctx)
+    if (nullptr == ctx) {
+        GGMLHEXAGON_LOG_ERROR("sanity check failure");
         return 1;
+    }
 
     int htp_arch = 0;
     htp_arch = ggmlhexagon_probe_dspinfo(ctx);
-    if (0 == htp_arch)
+    if (0 == htp_arch) {
+        GGMLHEXAGON_LOG_ERROR("failed to get valid htp arch");
         return 2;
-
-    /* Probe mempool capacity, find a large contiguous block near the 4 GiB boundary on devices. */
-    probe_slots.push_back(2048);
-    if (htp_arch > 75) {
-        probe_slots.push_back(3840);
-        probe_slots.push_back(3968);
-        probe_slots.push_back(4032);
-    } else {
-        probe_slots.push_back(3830);
     }
 
-    size_t probe_counts     = probe_slots.size();
-    for (size_t idx = 0; idx < probe_counts; idx++) {
-        rpc_buffer = static_cast<uint8_t *>(rpcmem_alloc2(RPCMEM_HEAP_ID_SYSTEM, RPCMEM_DEFAULT_FLAGS, (probe_slots[idx] * SIZE_IN_MB)));
-        if (nullptr == rpc_buffer) {
-            GGMLHEXAGON_LOG_DEBUG("alloc rpcmem %d (MiB) failure during probe rpc memory info, reason: %s\n", probe_slots[idx], strerror(errno));
-            break;
-        } else {
-            candidate_size = probe_slots[idx];
-            rpcmem_free(rpc_buffer);
-            rpc_buffer = nullptr;
+    size_t targets_79plus[] = { 4032, 3968, 3840, 3072, 2048 };
+    size_t targets_legacy[] = { 3830, 3072, 2048 };
+    size_t * targets        = (htp_arch > 75) ? targets_79plus : targets_legacy;
+    size_t   n_targets      = (htp_arch > 75) ? sizeof(targets_79plus) / sizeof(targets_79plus[0])
+                                              : sizeof(targets_legacy) / sizeof(targets_legacy[0]);
+    for (size_t i = 0; i < n_targets; i++) {
+        size_t pool_size = targets[i] - 8;
+        uint8_t * buf = static_cast<uint8_t *>(rpcmem_alloc2(RPCMEM_HEAP_ID_SYSTEM, RPCMEM_DEFAULT_FLAGS, pool_size * SIZE_IN_MB));
+        if (buf) {
+            ctx->rpc_mempool          = buf;
+            ctx->rpc_mempool_capacity = targets[i] * SIZE_IN_MB;
+            ctx->rpc_mempool_len      = pool_size * SIZE_IN_MB;
+            GGMLHEXAGON_LOG_ALWAYS("rpc mempool: %zu MiB allocated (target %zu MiB, device %d)",
+                                    pool_size, targets[i], ctx->device);
+            goto mempool_acquired;
         }
+        GGMLHEXAGON_LOG_DEBUG("init rpc mempool: alloc %zu MiB failed, trying next smaller target", pool_size);
     }
-    ctx->rpc_mempool_capacity = candidate_size * SIZE_IN_MB;
-    GGMLHEXAGON_LOG_ALWAYS("rpc memory capacity %ld(%d MiB) for device %d",
-                          ctx->rpc_mempool_capacity, ctx->rpc_mempool_capacity / SIZE_IN_MB, ctx->device);
-    if (ctx->rpc_mempool_capacity <= (8 * SIZE_IN_MB)) {
-        GGMLHEXAGON_LOG_ERROR("rpc mempool probe failed: no contiguous block > 8MiB found");
-        return 3;
-    }
-    ctx->rpc_mempool_len = ctx->rpc_mempool_capacity - (8 * SIZE_IN_MB);
-    ctx->rpc_mempool = rpcmem_alloc2(RPCMEM_HEAP_ID_SYSTEM, RPCMEM_DEFAULT_FLAGS, ctx->rpc_mempool_len);
-    if (nullptr == ctx->rpc_mempool) {
-        GGMLHEXAGON_LOG_ERROR("alloc rpc memorypool %ld(%d MiB) failed", ctx->rpc_mempool_len, ctx->rpc_mempool_capacity / SIZE_IN_MB);
-        return 4;
-    } else {
-        GGMLHEXAGON_LOG_DEBUG("alloc rpc memorypool %p successfully %ld(%d MiB)",
-                              ctx->rpc_mempool, ctx->rpc_mempool_len,
-                              ctx->rpc_mempool_len / SIZE_IN_MB);
-    }
+    GGMLHEXAGON_LOG_ERROR("init rpc mempool: all allocation attempts failure");
+    return 3;
+
+mempool_acquired:
     ctx->rpc_mempool_handle = rpcmem_to_fd(ctx->rpc_mempool);
-    GGMLHEXAGON_LOG_INFO("rpc mempool handle %d", ctx->rpc_mempool_handle);
-    GGMLHEXAGON_LOG_INFO("rpc mempool addr %p", ctx->rpc_mempool);
-    GGMLHEXAGON_LOG_INFO("rpc mempool size %lld(%dMB)", ctx->rpc_mempool_len, ctx->rpc_mempool_len/ SIZE_IN_MB);
+    if (ctx->rpc_mempool_handle < 0) {
+        GGMLHEXAGON_LOG_ERROR("rpcmem_to_fd failed for %p", ctx->rpc_mempool);
+        rpcmem_free(ctx->rpc_mempool);
+        ctx->rpc_mempool = nullptr;
+        return 4;
+    }
+    GGMLHEXAGON_LOG_INFO("rpc mempool handle %d",       ctx->rpc_mempool_handle);
+    GGMLHEXAGON_LOG_INFO("rpc mempool addr %p",         ctx->rpc_mempool);
+    GGMLHEXAGON_LOG_INFO("rpc mempool size %lld(%dMB)", ctx->rpc_mempool_len, ctx->rpc_mempool_len / SIZE_IN_MB);
     // Register mempool with FastRPC kernel driver.
     // rpc_mmap_mode = 0: FASTRPC_MAP_FD_DELAYED (default), defers DSP-side mapping until HAP_mmap2().
     // rpc_mmap_mode = 1: FASTRPC_MAP_FD (eager), creates immediate kernel-level mapping and pins pages.
@@ -1665,24 +1654,22 @@ static int ggmlhexagon_init_rpcmempool(ggml_backend_hexagon_context * ctx) {
                                         ? FASTRPC_MAP_FD
                                         : FASTRPC_MAP_FD_DELAYED;
     const char * mmap_mode_str = (g_hexagon_appcfg.rpc_mmap_mode == 1) ? "EAGER" : "DELAYED";
-    int mmap_err = fastrpc_mmap(ctx->domain_id, ctx->rpc_mempool_handle,
-                                 ctx->rpc_mempool, 0, ctx->rpc_mempool_len,
-                                 mmap_flags);
+    int mmap_err = fastrpc_mmap(ctx->domain_id, ctx->rpc_mempool_handle, ctx->rpc_mempool, 0, ctx->rpc_mempool_len, mmap_flags);
     if (mmap_err != 0) {
         GGMLHEXAGON_LOG_ERROR("fastrpc_mmap(%s) returned %d (fd=%d), aborting backend init",
-                             mmap_mode_str, mmap_err, ctx->rpc_mempool_handle);
+                               mmap_mode_str, mmap_err, ctx->rpc_mempool_handle);
         rpcmem_free(ctx->rpc_mempool);
         ctx->rpc_mempool = nullptr;
         return 5;
     }
     GGMLHEXAGON_LOG_INFO("fastrpc_mmap(%s) OK: fd=%d, size=%dMB",
-                         mmap_mode_str, ctx->rpc_mempool_handle, ctx->rpc_mempool_len / SIZE_IN_MB);
+                          mmap_mode_str, ctx->rpc_mempool_handle, ctx->rpc_mempool_len / SIZE_IN_MB);
 
     // Register mempool on DSP side via pure-scalar IDL call.
     // This avoids FastRPC's fdlist_fd_from_buf() scan that triggers
     // implicit fd_mmap_create when dsptensor.data pointers are passed.
     // The DSP will call HAP_mmap2(fd) to get a user-space-accessible VA.
-    uint32_t ion_fd = (uint32_t)ctx->rpc_mempool_handle;
+    uint32_t ion_fd  = (uint32_t)ctx->rpc_mempool_handle;
     uint32_t size_lo = (uint32_t)(ctx->rpc_mempool_len & 0xFFFFFFFF);
     uint32_t size_hi = (uint32_t)((ctx->rpc_mempool_len >> 32) & 0xFFFFFFFF);
 
@@ -1697,7 +1684,7 @@ static int ggmlhexagon_init_rpcmempool(ggml_backend_hexagon_context * ctx) {
         return 6;
     }
     GGMLHEXAGON_LOG_ALWAYS("registered mempool base via scalar call: fd=%d, size=%dMB, time=%lld us",
-                         ctx->rpc_mempool_handle, ctx->rpc_mempool_len / SIZE_IN_MB, (long long)dt_reg);
+                            ctx->rpc_mempool_handle, ctx->rpc_mempool_len / SIZE_IN_MB, (long long)dt_reg);
     GGMLHEXAGON_LOG_ALWAYS("mempool layout: total=%zuMB", ctx->rpc_mempool_len / SIZE_IN_MB);
     // Prime the RPC overhead profiler with a few no-op warmup calls to get
     // a meaningful min/max/avg distribution without polluting the pool.

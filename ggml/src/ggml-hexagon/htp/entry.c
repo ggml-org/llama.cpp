@@ -1797,9 +1797,9 @@ AEEResult ggml_dsp_register_rpcmem(remote_handle64 h, uint32_t ion_fd, uint32_t 
 #endif
     int64_t dt_mmap = ggml_time_us() - t0_mmap;
 
-    if (va == (void *)-1) {
+    if (va == NULL || va == (void *)-1) {
         g_dsp_ctx->mempool_dsp_base = NULL;
-        GGMLHEXAGON_LOG_ERROR("[ION-REG] HAP_mmap2 FAILED: returned -1 (fd=%d, size=%llu)", fd, (unsigned long long)size);
+        GGMLHEXAGON_LOG_ERROR("[ION-REG] HAP_mmap2 FAILED: returned %p (fd=%d, size=%llu)", va, fd, (unsigned long long)size);
         return AEE_EFAILED;
     }
 

@@ -65,8 +65,8 @@ GGUF_MODEL_NAME=/sdcard/gemma-4-E2B-it-Q4_0.gguf
 # Usage: ./scripts/build-run-ggmlhexagon-android.sh run_llamacli <alias>
 #   qwen3-2b            -> Qwen3.5-2B-Q4_0.gguf
 #   qwen3-9b            -> Qwen3.5-9B-Q4_0.gguf
-#   gemma4-e2b          -> gemma-4-E2B-it-Q4_0.gguf (2.9 GiB, fits entirely in ION mempool)
-#   gemma4-e4b          -> gemma-4-E4B_q4_0-it.gguf (4.9 GiB, triggers mirror/eviction for stress testing)
+#   gemma4-e2b          -> gemma-4-E2B-it-Q4_0.gguf
+#   gemma4-e4b          -> gemma-4-E4B_q4_0-it.gguf
 #   qwen1               -> qwen1_5-1_8b-chat-q4_0.gguf
 #   llama3              -> Llama-3.2-1B-Instruct-Q4_0.gguf
 #   nanbeige-3b         -> Nanbeige_Nanbeige4.2-3B-Q4_0.gguf
@@ -93,8 +93,6 @@ function resolve_model_name()
 
 PROMPT_STRING="Hello, good morning, you are a powerful domain expert and know many things, now pls help to introduce the movie Once Upon a Time in America briefly, pls pay attention short then 1000 words\n"
 
-#unified command-line parameters used during inference testing for fair performance comparison of PP and TG across the dspqueue and mempool/FastRPC ggml-hexagon variants
-#running_params=" -ngl 99 -t 6 -n 256 --no-warmup --load-mode none --poll 1000 --cpu-mask 0xfc --cpu-strict 1 --ctx-size 8192 --ubatch-size 1024 -fa on"
 running_params=" -ngl 99 -t 6 -n 256 --ctx-size 8192 --ubatch-size 64 --poll 1000 --no-warmup --load-mode none -fa on --jinja -st"
 
 ######## part-3: utilities and functions ########
@@ -117,8 +115,7 @@ function check_command_in_host()
     set +e
     cmd=$1
     if command -v ${cmd} > /dev/null 2>&1; then
-        printf "${cmd} is available on host machine\n"
-        echo ""
+        printf "${cmd} is available on host machine\n" > /dev/null
     else
         printf "${cmd} not exist on host machine, pls install command line utility ${cmd} firstly and accordingly\n"
         exit 1
@@ -219,7 +216,7 @@ function check_and_download_hexagon_sdk()
         echo -e "HEXAGON_SDK_PATH ${HEXAGON_SDK_PATH} not exist, pls install it accordingly...\n"
         exit 0
     else
-        printf "Qualcomm Hexagon SDK already exist:${HEXAGON_SDK_PATH} \n\n"
+        printf "Qualcomm Hexagon SDK already exist:${HEXAGON_SDK_PATH} \n\n" > /dev/null
     fi
 }
 
@@ -283,7 +280,7 @@ function check_and_download_opencl_sdk()
 
         cd ${PROJECT_ROOT_PATH}
     else
-        printf "OpenCL SDK already exist:    ${OPENCL_SDK_PATH} \n\n"
+        printf "OpenCL SDK already exist:    ${OPENCL_SDK_PATH} \n\n" > /dev/null
     fi
 }
 
@@ -317,7 +314,7 @@ function check_and_download_ndk()
 
         printf "Android NDK saved to ${ANDROID_NDK} \n\n"
     else
-        printf "Android NDK already exist:         ${ANDROID_NDK} \n\n"
+        printf "Android NDK already exist:         ${ANDROID_NDK} \n\n" > /dev/null
     fi
 }
 
@@ -550,9 +547,9 @@ function check_and_download_model()
     model_name=$1
     model_url=$2
 
-    adb shell ls /sdcard/${model_name}
+    adb shell ls /sdcard/${model_name} >/dev/null 2>&1
     if [ $? -eq 0 ]; then
-        printf "the prebuild LLM model ${model_name} already exist on Android phone\n"
+        printf "the prebuild LLM model ${model_name} already exist on Android phone\n" > /dev/null
     else
         printf "the prebuild LLM model ${model_name} not exist on Android phone\n"
         printf "downloading from ${model_url}\n"
@@ -580,7 +577,7 @@ function check_prebuilt_models()
     #2.9 GiB
     check_and_download_model gemma-4-E2B-it-Q4_0.gguf     https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-Q4_0.gguf
 
-    # gemma-4-E4B_q4_0-it.gguf (4.9 GiB) is a stress-test model that triggers mirror/eviction in the 4GB ION mempool.
+    #4.9 GiB
     check_and_download_model gemma-4-E4B_q4_0-it.gguf     https://huggingface.co/google/gemma-4-E4B-it-qat-q4_0-gguf/resolve/main/gemma-4-E4B_q4_0-it.gguf
 
     #737 MiB
@@ -1006,18 +1003,32 @@ function run_llamacli_all()
 
 function run_llamabench()
 {
+    local model_name=""
+    local model_path=""
+
+    if [ $# -ge 1 ]; then
+        model_name="$1"
+        model_path=$(resolve_model_name "$model_name")
+        if [ -z "$model_path" ]; then
+            echo "ERROR: unknown model alias '$model_name'. Valid aliases: qwen3-2b, qwen3-9b, gemma4-e2b, gemma4-e4b, qwen1, llama3"
+            exit 1
+        fi
+    else
+        model_path="${GGUF_MODEL_NAME}"
+    fi
+
     prepare_run_on_phone llama-bench
 
     #GGML_HEXAGON_OPPOLL is only effective for the dspqueue variant, doesn't apply to the mempool/FastRPC variant
     echo "adb shell \"cd ${REMOTE_PATH} \
                && export LD_LIBRARY_PATH=${REMOTE_PATH} \
                && export GGML_HEXAGON_OPPOLL=1 \
-               && ${REMOTE_PATH}/llama-bench -t 6 --poll 1000 -ngl 99 -fa 1 --ubatch-size 1024 -p 200,500,800,1024 -n 128 -m ${GGUF_MODEL_NAME}\""
+               && ${REMOTE_PATH}/llama-bench -t 6 --poll 1000 -ngl 99 -fa 1 --ubatch-size 1024 -p 200,500,800,1024 -n 128 -m ${model_path}\""
 
     adb shell "cd ${REMOTE_PATH} \
                && export LD_LIBRARY_PATH=${REMOTE_PATH} \
                && export GGML_HEXAGON_OPPOLL=1 \
-               && ${REMOTE_PATH}/llama-bench -t 6 --poll 1000 -ngl 99 -fa 1 --ubatch-size 1024 -p 200,500,800,1024 -n 128 -m ${GGUF_MODEL_NAME}"
+               && ${REMOTE_PATH}/llama-bench -t 6 --poll 1000 -ngl 99 -fa 1 --ubatch-size 1024 -p 200,500,800,1024 -n 128 -m ${model_path}"
 }
 
 
@@ -1211,7 +1222,6 @@ function run_abtest_all()
         rounds=$1
     fi
 
-    #local all_models="qwen1 minicpm5-1b llama3 qwen3-2b gemma4-e2b nanbeige-3b gemma4-e4b qwen3-9b"
     local all_models="gemma4-e2b gemma4-e4b qwen3-2b nanbeige-3b qwen1 minicpm5-1b llama3 qwen3-9b"
     local total=8
     local idx=0
@@ -1311,8 +1321,6 @@ function show_usage()
     echo "  $0 run_testops"
     echo "  $0 run_testop     ADD/MUL_MAT/FLASH_ATTN_EXT (verify accuracy    of ADD/MUL_MAT)"
     echo "  $0 run_perfop     ADD/MUL_MAT/FLASH_ATTN_EXT (verify performance of ADD/MUL_MAT)"
-
-    echo "  $0 run_llamabench"
     echo -e "\n"
 
     echo "  $0 run_abtest_all [rounds]"
@@ -1322,7 +1330,8 @@ function show_usage()
     echo "      $0 run_abtest_all 2>&1 | tee log_abtest_all_\$(date +%Y%m%d-%H%M%S).txt"
     echo -e "\n"
 
-    echo "  $0 run_llamacli   [model_alias]"
+    echo "  $0 run_llamacli     [model_alias]"
+    echo "  $0 run_llamabench   [model_alias]"
     echo "  Model aliases for run_llamacli:"
     echo "    qwen3-2b      -> Qwen3.5-2B-Q4_0.gguf"
     echo "    qwen3-9b      -> Qwen3.5-9B-Q4_0.gguf"
@@ -1334,10 +1343,10 @@ function show_usage()
     echo "    minicpm5-1b   -> minicpm5-1b-q4_0.gguf"
     echo "    (default)     -> gemma-4-E2B-it-Q4_0.gguf"
     echo "  Examples:"
-    echo "    $0 run_llamacli              # run gemma4-e2b inference test on an Qualcomm mobile SoC-based Android phone"
-    echo "    $0 run_llamacli qwen3-2b     # test qwen3-2b"
-    echo "    $0 run_llamacli gemma4-e2b   # test gemma4-e2b"
-    echo "    $0 run_llamacli gemma4-e4b   # test gemma4-e4b (mirror stress test)"
+    echo "    $0 run_llamacli/run_llamabench              # run gemma4-e2b inference test on an Qualcomm mobile SoC-based Android phone"
+    echo "    $0 run_llamacli/run_llamabench qwen3-2b     # test qwen3-2b"
+    echo "    $0 run_llamacli/run_llamabench gemma4-e2b   # test gemma4-e2b"
+    echo "    $0 run_llamacli/run_llamabench gemma4-e4b   # test gemma4-e4b"
 }
 
 
@@ -1422,11 +1431,19 @@ elif [ $# == 2 ]; then
         exit 0
     elif [ "$1" == "run_llamacli" ]; then
         if [ -z "$(resolve_model_name "$2")" ]; then
-            echo "ERROR: unknown model alias '$2'. Valid aliases: qwen3-2b, qwen3-9b, gemma4-e2b, gemma4-e4b, qwen1, llama3"
+            echo "ERROR: unknown model alias '$2'. Valid aliases: qwen1 minicpm5-1b llama3 qwen3-2b gemma4-e2b nanbeige-3b gemma4-e4b qwen3-9b"
             show_usage
             exit 1
         fi
         run_llamacli "$2"
+        exit 0
+    elif [ "$1" == "run_llamabench" ]; then
+        if [ -z "$(resolve_model_name "$2")" ]; then
+            echo "ERROR: unknown model alias '$2'. Valid aliases: qwen1 minicpm5-1b llama3 qwen3-2b gemma4-e2b nanbeige-3b gemma4-e4b qwen3-9b"
+            show_usage
+            exit 1
+        fi
+        run_llamabench "$2"
         exit 0
     elif [ "$1" == "run_abtest" ]; then
         run_abtest "$2"
