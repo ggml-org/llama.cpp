@@ -10397,30 +10397,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     test_cases.emplace_back(new test_flash_attn_ext(256, 256, 2, {16, 1}, 20000, 512, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
 
     for (int kv : { 4096, 8192, 16384, }) {
-        for (int hs : { 64, 128, 256, }) {
+        for (int hs : { 64, 128, }) {
             for (int nr : { 1, 4, }) {
                 test_cases.emplace_back(new test_flash_attn_ext(hs, hs, 8, {nr, 1}, kv, 1, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
             }
-        }
-    }
-    // Qwen3.5/3.8 shape: head size 256, 24 heads / 4 KV heads (GQA 6), long KV.
-    // The stock perf list stops at 128, so the (256,256,...) fattn-tile configs
-    // are never exercised by `test-backend-ops perf`.
-    for (int kv : { 8192, 32768, 131072, }) {
-        for (int nb : { 1, 128, }) {
-            test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {6, 1}, kv, nb, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
-        }
-    }
-
-    // Gemma-class head size 512 and DeepSeek-class 576/512. Both are absent from
-    // the stock perf list above, so their fattn-tile configs (and in particular
-    // their nbatch_K choice) are never measured. GQA ratio must be >= 2 and kv a
-    // multiple of FATTN_KQ_STRIDE (256) or fattn.cu returns BEST_FATTN_KERNEL_NONE
-    // and the case is silently skipped.
-    for (int kv : { 8192, 32768, }) {
-        for (int nb : { 1, 128, }) {
-            test_cases.emplace_back(new test_flash_attn_ext(512, 512, 4, {8, 1}, kv, nb, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
-            test_cases.emplace_back(new test_flash_attn_ext(576, 512, 4, {8, 1}, kv, nb, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
         }
     }
 
