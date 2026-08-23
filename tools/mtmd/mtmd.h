@@ -129,6 +129,12 @@ MTMD_API mtmd_context * mtmd_init_from_file(const char * mmproj_fname,
 
 MTMD_API void mtmd_free(mtmd_context * ctx);
 
+typedef void (*mtmd_work_done_cb)(void * user, uint64_t work_us);
+
+// report the elapsed wall time (in us) after a successful image or audio encode
+// pass cb = nullptr to clear the callback
+MTMD_API void mtmd_set_work_done_callback(mtmd_context * ctx, mtmd_work_done_cb cb, void * user);
+
 // whether we need to set non-causal mask before llama_decode
 // if chunk is nullptr, we assume the default case where chunk is an image chunk
 MTMD_API bool mtmd_decode_use_non_causal(const mtmd_context * ctx, const mtmd_input_chunk * chunk);

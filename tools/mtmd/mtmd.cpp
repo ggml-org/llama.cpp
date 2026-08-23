@@ -523,6 +523,10 @@ struct mtmd_context {
     // batching
     int32_t batch_max_tokens;
 
+    // optional callback reporting encode wall time, e.g. for power throttling
+    mtmd_work_done_cb cb_work_done = nullptr;
+    void * cb_work_done_user = nullptr;
+
     // TODO @ngxson : add timings
 
     mtmd_context(const char * mmproj_fname,
@@ -1088,6 +1092,14 @@ mtmd_context * mtmd_init_from_file(const char * mmproj_fname,
 
 void mtmd_free(mtmd_context * ctx) {
     delete ctx;
+}
+
+void mtmd_set_work_done_callback(mtmd_context * ctx, mtmd_work_done_cb cb, void * user) {
+    if (!ctx) {
+        return;
+    }
+    ctx->cb_work_done      = cb;
+    ctx->cb_work_done_user = user;
 }
 
 std::vector<std::vector<const mtmd_bitmap *>> mtmd_group_mergeable_bitmaps(std::vector<mtmd_input_part> & parts, int n_merge) {
@@ -1724,11 +1736,16 @@ static int32_t mtmd_encode_impl(mtmd_context * ctx, const mtmd_image_tokens * im
         return 1;
     }
 
+    const int64_t t0 = ggml_time_us();
     bool ok = clip_image_batch_encode(
         ctx_clip,
         ctx->n_threads,
         &image_tokens->batch_f32,
         out_embd);
+
+    if (ok && ctx->cb_work_done != nullptr) {
+        ctx->cb_work_done(ctx->cb_work_done_user, (uint64_t)(ggml_time_us() - t0));
+    }
 
     return ok ? 0 : 1;
 }
@@ -1766,11 +1783,15 @@ static int32_t mtmd_encode_chunk_impl(mtmd_context * ctx, const mtmd_input_chunk
         }
         int n_mmproj_embd = ctx->n_embd_out();
         out_embd.resize((size_t)chunk->tokens_audio->n_tokens * n_mmproj_embd);
+        const int64_t t0 = ggml_time_us();
         bool ok = clip_image_batch_encode(
             ctx->ctx_a,
             ctx->n_threads,
             &chunk->tokens_audio->batch_f32,
             out_embd);
+        if (ok && ctx->cb_work_done != nullptr) {
+            ctx->cb_work_done(ctx->cb_work_done_user, (uint64_t)(ggml_time_us() - t0));
+        }
         return ok ? 0 : 1;
     }
 
