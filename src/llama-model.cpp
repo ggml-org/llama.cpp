@@ -2210,11 +2210,12 @@ static uint32_t attn_cache_evict_size(const llama_cparams & cparams) {
     if (cparams.n_kv_sink == 0) {
         return cparams.n_ctx_seq;
     }
-    const uint32_t per_seq = cparams.n_kv_sink + cparams.n_kv_recent;
-    if (cparams.kv_unified) {
-        return cparams.n_seq_max * per_seq + cparams.n_ubatch;
-    }
-    return per_seq + cparams.n_ubatch;
+    const uint64_t per_seq = (uint64_t) cparams.n_kv_sink + cparams.n_kv_recent;
+    const uint64_t total   = cparams.kv_unified
+        ? (uint64_t) cparams.n_seq_max * per_seq + cparams.n_ubatch
+        : per_seq + cparams.n_ubatch;
+    GGML_ASSERT(total <= UINT32_MAX && "kv eviction physical cache size overflow");
+    return (uint32_t) total;
 }
 
 llama_memory_i * llama_model::create_memory(const llama_memory_params & params, const llama_cparams & cparams) const {

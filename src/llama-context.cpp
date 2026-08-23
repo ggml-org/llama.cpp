@@ -125,6 +125,12 @@ llama_context::llama_context(
             cparams.n_kv_sink   = 0;
             cparams.n_kv_recent = 0;
         }
+        // the hybrid sliding-window cache (hybrid_iswa) does not support eviction yet
+        if (model.hparams.swa_type != LLAMA_SWA_TYPE_NONE) {
+            LLAMA_LOG_WARN("%s: kv eviction unsupported for sliding-window hybrid caches; disabling\n", __func__);
+            cparams.n_kv_sink   = 0;
+            cparams.n_kv_recent = 0;
+        }
     }
 
     cparams.n_threads               = params.n_threads;

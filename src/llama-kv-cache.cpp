@@ -1092,12 +1092,11 @@ llama_kv_cache::slot_info llama_kv_cache::find_slot(const llama_ubatch & ubatch,
         if (res.idxs[s].size() < n_tokens) {
             if (n_kv_sink > 0 && n_kv_recent > 0) {
                 // streaming eviction: recycle the oldest masked-middle cell of this sequence
-                // only recycle cells outside the recent window of EVERY query in this ubatch,
-                // i.e. strictly older than (min query pos - n_kv_recent), so the batch's own
-                // attention never loses a cell it must see.
-                llama_pos p1_min = ubatch.pos[0];
-                for (uint32_t t = 1; t < ubatch.n_tokens; ++t) {
-                    if (ubatch.pos[t] < p1_min) {
+                // only recycle cells outside the recent window of EVERY query in this ubatch
+                // for this sequence, so the batch's own attention never loses a cell it must see.
+                llama_pos p1_min = std::numeric_limits<llama_pos>::max();
+                for (uint32_t t = 0; t < ubatch.n_tokens; ++t) {
+                    if (ubatch.seq_id[t][0] == seq_id && ubatch.pos[t] < p1_min) {
                         p1_min = ubatch.pos[t];
                     }
                 }
@@ -1114,6 +1113,8 @@ llama_kv_cache::slot_info llama_kv_cache::find_slot(const llama_ubatch & ubatch,
                     if (pos_cell < (llama_pos) n_kv_sink) continue;
                     // never recycle cells still inside the visible recent window of this ubatch
                     if (pos_cell >= p1_min - (llama_pos) n_kv_recent) continue;
+                    // never select a cell already claimed for this ubatch (e.g. via SWA reuse)
+                    if (std::find(res.idxs[s].begin(), res.idxs[s].end(), idx) != res.idxs[s].end()) continue;
 
                     candidates.push_back(idx);
                 }
