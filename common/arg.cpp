@@ -5,6 +5,7 @@
 #include "common.h"
 #include "download.h"
 #include "json-schema-to-grammar.h"
+#include "json.h"
 #include "llama.h"
 #include "log.h"
 #include "sampling.h"
@@ -21,9 +22,6 @@
 #include <shellapi.h>
 #endif
 
-#define JSON_ASSERT GGML_ASSERT
-#include <nlohmann/json.hpp>
-
 #include <algorithm>
 #include <cinttypes>
 #include <climits>
@@ -32,6 +30,7 @@
 #include <filesystem>
 #include <fstream>
 #include <list>
+#include <numeric>
 #include <regex>
 #include <set>
 #include <string>
@@ -55,7 +54,7 @@
 
 #define LLAMA_MAX_URL_LENGTH 2084 // Maximum URL Length in Chrome: 2083
 
-using json = nlohmann::ordered_json;
+using json = common_json;
 using namespace common_arg_utils;
 
 static std::initializer_list<enum llama_example> mmproj_examples = {
@@ -1898,7 +1897,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, bool value) {
             params.conversation_mode = value ? COMMON_CONVERSATION_MODE_ENABLED : COMMON_CONVERSATION_MODE_DISABLED;
         }
-    ).set_examples({LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI}));
+    ).set_examples({LLAMA_EXAMPLE_COMPLETION}));
     add_opt(common_arg(
         {"-st", "--single-turn"},
         "run conversation for a single turn only, then exit when done\n"

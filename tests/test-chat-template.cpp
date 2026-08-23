@@ -7,7 +7,7 @@
 #include <fstream>
 #include <filesystem>
 
-#include <nlohmann/json.hpp>
+#include "json.h"
 
 #undef NDEBUG
 #include <cassert>
@@ -20,7 +20,7 @@
 #include "jinja/lexer.h"
 #include "jinja/caps.h"
 
-using json = nlohmann::ordered_json;
+using json = common_json;
 
 static int main_automated_tests(void);
 
@@ -304,8 +304,8 @@ void run_single(const std::string& contents, json input, bool use_common, bool d
         if (input.contains("eos_token")) {
             eos_token = input["eos_token"].get<std::string>();
         }
-        nlohmann::ordered_json msgs_json = input["messages"];
-        nlohmann::ordered_json tools_json = input["tools"];
+        common_json msgs_json = input["messages"];
+        common_json tools_json = input["tools"];
         auto messages = common_chat_msgs_parse_oaicompat(msgs_json);
         auto tools = common_chat_tools_parse_oaicompat(tools_json);
         auto output = format_using_common(contents, bos_token, eos_token, messages, tools);

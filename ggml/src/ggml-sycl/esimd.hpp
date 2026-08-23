@@ -62,6 +62,93 @@ static ESIMD_INLINE void unpack_scale_min_k4(
 }
 
 // ---------------------------------------------------------------------------
+// Q2_K, SOA reorder layout produced by reorder_qw_q2_k:
+//   [qs: nb*(QK_K/4)] [scales: nb*(QK_K/16)] [dm: nb*sizeof(half2)]
+// with nb = nrows*num_blocks_per_row.
+//
+// 2 bits per weight. The 8 output chunks of 32 (matching dequantize_row_q2_K)
+// map to super-chunk s (0..7): byte base 32*(s/4) into the 64-byte qs array,
+// bit shift 2*(s%4); the low 16 lanes use scales[2s], the high 16 use
+// scales[2s+1], with dl = d*(sc & 0xF), ml = dmin*(sc >> 4), deq = dl*q - ml.
+// ---------------------------------------------------------------------------
+template <> struct esimd_reorder_q_traits<GGML_TYPE_Q2_K> {
+    struct ptrs {
+        const uint8_t *    qs;
+        const uint8_t *    scales;
+        const sycl::half * dm;
+    };
+
+    static ESIMD_INLINE ptrs make_ptrs(const void * vx, size_t nb) {
+        const uint8_t * qs     = (const uint8_t *) vx;
+        const uint8_t * scales = qs + nb * (QK_K / 4);
+        const sycl::half * dm  = (const sycl::half *) (scales + nb * (QK_K / 16));
+        return { qs, scales, dm };
+    }
+
+    static ESIMD_INLINE void mac_pair(
+            const ptrs & pa, size_t bia,
+            const ptrs & pb, size_t bib, bool has_b,
+            sycl::ext::intel::esimd::simd<float, 256> & y_vec,
+            sycl::ext::intel::esimd::simd<float, 32> & acc_a,
+            sycl::ext::intel::esimd::simd<float, 32> & acc_b) {
+        using namespace sycl::ext::intel::esimd;
+
+        simd<uint8_t, 64> qs_a     = block_load<uint8_t, 64>(pa.qs + bia * (QK_K / 4));
+        simd<uint8_t, 64> qs_b     = 0;
+        simd<uint8_t, 16> scales_a = block_load<uint8_t, 16>(pa.scales + bia * (QK_K / 16));
+        simd<uint8_t, 16> scales_b = 0;
+
+        const float dall_a = (float) pa.dm[bia * 2 + 0];
+        const float dmin_a = (float) pa.dm[bia * 2 + 1];
+        float dall_b = 0.0f;
+        float dmin_b = 0.0f;
+        if (has_b) {
+            qs_b     = block_load<uint8_t, 64>(pb.qs + bib * (QK_K / 4));
+            scales_b = block_load<uint8_t, 16>(pb.scales + bib * (QK_K / 16));
+            dall_b = (float) pb.dm[bib * 2 + 0];
+            dmin_b = (float) pb.dm[bib * 2 + 1];
+        }
+
+        // per-chunk scale (d * (sc & 0xF)) and min (-dmin * (sc >> 4)), all 16 codes;
+        // min carries the negation so the dequant epilogue adds (matches Q4_K/Q5_K)
+        simd<float, 16> scale_f_a = convert<float>(scales_a & simd<uint8_t, 16>(0x0F)) * dall_a;
+        simd<float, 16> min_f_a   = convert<float>(scales_a >> simd<uint8_t, 16>(4))  * (-dmin_a);
+        simd<float, 16> scale_f_b = convert<float>(scales_b & simd<uint8_t, 16>(0x0F)) * dall_b;
+        simd<float, 16> min_f_b   = convert<float>(scales_b >> simd<uint8_t, 16>(4))  * (-dmin_b);
+
+#pragma unroll
+        for (int s = 0; s < 8; ++s) {
+            const int     byte_base = 32 * (s / 4);
+            const uint8_t shift     = (uint8_t) (2 * (s % 4));
+            simd<float, 32> y_s = y_vec.select<32, 1>(s * 32);
+
+            simd<uint8_t, 32> qa = (qs_a.select<32, 1>(byte_base) >> shift) & simd<uint8_t, 32>(3);
+            simd<uint8_t, 32> qb = (qs_b.select<32, 1>(byte_base) >> shift) & simd<uint8_t, 32>(3);
+
+            const float scale_a_lo = scale_f_a[2 * s + 0];
+            const float scale_a_hi = scale_f_a[2 * s + 1];
+            const float min_a_lo   = min_f_a[2 * s + 0];
+            const float min_a_hi   = min_f_a[2 * s + 1];
+            const float scale_b_lo = scale_f_b[2 * s + 0];
+            const float scale_b_hi = scale_f_b[2 * s + 1];
+            const float min_b_lo   = min_f_b[2 * s + 0];
+            const float min_b_hi   = min_f_b[2 * s + 1];
+
+            simd<float, 32> scale_vec_a = splat_lo_hi(scale_a_lo, scale_a_hi);
+            simd<float, 32> min_vec_a   = splat_lo_hi(min_a_lo, min_a_hi);
+            simd<float, 32> scale_vec_b = splat_lo_hi(scale_b_lo, scale_b_hi);
+            simd<float, 32> min_vec_b   = splat_lo_hi(min_b_lo, min_b_hi);
+
+            simd<float, 32> deq_a = convert<float>(qa) * scale_vec_a + min_vec_a;
+            simd<float, 32> deq_b = convert<float>(qb) * scale_vec_b + min_vec_b;
+
+            acc_a += y_s * deq_a;
+            acc_b += y_s * deq_b;
+        }
+    }
+};
+
+// ---------------------------------------------------------------------------
 // Q3_K, SOA reorder layout produced by reorder_qw_q3_k:
 //   [qs: nb*(QK_K/4)] [hmask: nb*(QK_K/8)] [scales: nb*12] [d: nb*sizeof(half)]
 // with nb = nrows*num_blocks_per_row. Single super-block scale d, no dmin.

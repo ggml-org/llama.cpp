@@ -11,9 +11,9 @@
 #include <vector>
 #include <algorithm>
 
-#include "nlohmann/json.hpp"
+#include "json.h"
 
-using json = nlohmann::ordered_json;
+using json = common_json;
 
 // ANSI color codes - using 256-color palette for brighter colors (all bold)
 #define ANSI_RESET       "\033[0m"

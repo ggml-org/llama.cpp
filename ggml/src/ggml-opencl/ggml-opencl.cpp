@@ -577,6 +577,12 @@ struct ggml_backend_opencl_context {
     // whether fuse moe combine
     cl_uint fuse_moe_combine;
 
+    // whether to fold the MoE bias adds into swiglu_oai
+    cl_uint fuse_moe_bias_glu;
+
+    // whether to fold the MoE down-projection bias add into the combine
+    cl_uint fuse_moe_bias_combine;
+
     bool adreno_has_large_buffer;
     bool adreno_use_large_buffer;
     bool adreno_use_bin_kernels;
@@ -658,6 +664,7 @@ struct ggml_backend_opencl_context {
 
     cl_program program_add;
     cl_program program_add_id;
+    cl_program program_moe_add_id_glu;
     cl_program program_clamp;
     cl_program program_cvt;
     cl_program program_diag_mask_inf;
@@ -723,6 +730,7 @@ struct ggml_backend_opencl_context {
     cl_kernel kernel_div, kernel_div_row, kernel_div_f16, kernel_div_row_f16;
     cl_kernel kernel_sub, kernel_sub_row, kernel_sub_f16, kernel_sub_row_f16;
     cl_kernel kernel_add_id;
+    cl_kernel kernel_add_id_add_id_swiglu_oai;
     cl_kernel kernel_scale_f32, kernel_scale_f32_4;
     cl_kernel kernel_sqr_cont_f32, kernel_sqr_cont_f32_4, kernel_sqr_cont_f16, kernel_sqr_cont_f16_4;
     cl_kernel kernel_sqrt_cont_f32, kernel_sqrt_cont_f32_4, kernel_sqrt_cont_f16, kernel_sqrt_cont_f16_4;
@@ -899,6 +907,7 @@ struct ggml_backend_opencl_context {
     cl_kernel kernel_moe_histogram, kernel_moe_scan, kernel_moe_fill, kernel_moe_scatter;
     cl_kernel kernel_moe_scatter_stable = nullptr;   // deterministic slot assignment
     cl_kernel kernel_moe_combine_f32 = nullptr;   // fused router-weight mul + cross-expert sum
+    cl_kernel kernel_moe_combine_bias_f32 = nullptr;  // same, with the down-projection bias add folded in
     cl_kernel kernel_mul_mv_id_q4_0_f32_8x_flat;
     cl_kernel kernel_mul_mv_id_q8_0_f32, kernel_mul_mv_id_q8_0_f32_flat;
     cl_kernel kernel_mul_mv_id_mxfp4_f32;
@@ -1343,6 +1352,23 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
             build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
 
         CL_CHECK((backend_ctx->kernel_add_id = clCreateKernel(backend_ctx->program_add_id, "kernel_add_id", &err), err));
+        GGML_LOG_CONT(".");
+    }
+
+    // moe_add_id_glu
+    {
+#ifdef GGML_OPENCL_EMBED_KERNELS
+        const std::string kernel_src {
+            #include "moe_add_id_glu.cl.h"
+        };
+#else
+        const std::string kernel_src = read_file("moe_add_id_glu.cl");
+#endif
+        backend_ctx->program_moe_add_id_glu =
+            build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
+
+        CL_CHECK((backend_ctx->kernel_add_id_add_id_swiglu_oai =
+            clCreateKernel(backend_ctx->program_moe_add_id_glu, "kernel_add_id_add_id_swiglu_oai", &err), err));
         GGML_LOG_CONT(".");
     }
 
@@ -3276,6 +3302,8 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
             backend_ctx, kernel_src.c_str(), compile_opts);
         CL_CHECK((backend_ctx->kernel_moe_combine_f32 =
                     clCreateKernel(prog, "kernel_moe_combine_f32", &err), err));
+        CL_CHECK((backend_ctx->kernel_moe_combine_bias_f32 =
+                    clCreateKernel(prog, "kernel_moe_combine_bias_f32", &err), err));
         CL_CHECK(clReleaseProgram(prog));
         GGML_LOG_CONT(".");
     }
@@ -6012,6 +6040,12 @@ static ggml_backend_opencl_context * ggml_cl_init(ggml_backend_dev_t dev) {
     backend_ctx->adreno_moe_ragged_skip_gran = (ragged_gran_env != NULL) ? atoi(ragged_gran_env) : 8;
 
     // whether fuse moe combine
+    static const char * fuse_moe_bias_glu_env = getenv("GGML_OPENCL_FUSE_MOE_BIAS_GLU");
+    backend_ctx->fuse_moe_bias_glu = fuse_moe_bias_glu_env == NULL ? 1 : (atoi(fuse_moe_bias_glu_env) != 0);
+
+    static const char * fuse_moe_bias_combine_env = getenv("GGML_OPENCL_FUSE_MOE_BIAS_COMBINE");
+    backend_ctx->fuse_moe_bias_combine = fuse_moe_bias_combine_env == NULL ? 1 : (atoi(fuse_moe_bias_combine_env) != 0);
+
     static const char * fuse_moe_combine_env = getenv("GGML_OPENCL_FUSE_MOE_COMBINE");
     backend_ctx->fuse_moe_combine = fuse_moe_combine_env == NULL ? 1 : (atoi(fuse_moe_combine_env) != 0);
 
@@ -6880,6 +6914,300 @@ static bool ggml_opencl_can_fuse_moe_combine(const struct ggml_cgraph * cgraph, 
     return true;
 }
 
+// Detect the gpt-oss MoE bias+activation epilogue on the PREFILL path:
+// {MUL_MAT_ID(gate), ADD_ID(gate_bias), MUL_MAT_ID(up), ADD_ID(up_bias), GLU(swiglu_oai)}.
+// The two matmuls still run as their own dispatches (the prefill GEMM is the vendor's);
+// what collapses is the epilogue — both add_id passes are in-place read-modify-writes of a
+// tensor the GLU immediately reads again, so they are three full passes over the same
+// [n_ff, n_expert_used, n_tokens] f32 tensor where one suffices.
+//
+// The decode counterpart is handled by the mxfp4 fused GEMV arm in ggml_opencl_can_fuse,
+// which folds the matmul too; this one deliberately fires only when that cannot (ne[2] > 1).
+static bool ggml_opencl_can_fuse_moe_bias_glu(const struct ggml_cgraph * cgraph, int node_idx) {
+    if (node_idx + 4 >= cgraph->n_nodes) {
+        return false;
+    }
+
+    const enum ggml_op mg_ops[] = { GGML_OP_MUL_MAT_ID, GGML_OP_ADD_ID, GGML_OP_MUL_MAT_ID, GGML_OP_ADD_ID, GGML_OP_GLU };
+    const int          mg_out[] = { node_idx + 4 };
+    if (!ggml_can_fuse_subgraph(cgraph, node_idx, 5, mg_ops, mg_out, 1)) {
+        return false;
+    }
+
+    const ggml_tensor * gmm = cgraph->nodes[node_idx];
+    const ggml_tensor * gad = cgraph->nodes[node_idx+1];
+    const ggml_tensor * umm = cgraph->nodes[node_idx+2];
+    const ggml_tensor * uad = cgraph->nodes[node_idx+3];
+    const ggml_tensor * glu = cgraph->nodes[node_idx+4];
+
+    if (ggml_get_glu_op(glu) != GGML_GLU_OP_SWIGLU_OAI) {
+        return false;
+    }
+    // Prefill only — at one token the mxfp4 arm above folds the matmul as well.
+    if (gmm->src[1]->ne[2] == 1) {
+        return false;
+    }
+    // Wiring: both matmuls share the activation and the expert selection, each add_id
+    // biases its own matmul, and the GLU consumes the two biased results as separate
+    // operands (so the same-buffer ne00_off/ne10_off split path is not in play).
+    if (gad->src[0] != gmm || uad->src[0] != umm ||
+        glu->src[0] != gad || glu->src[1] != uad ||
+        umm->src[1] != gmm->src[1] || umm->src[2] != gmm->src[2]) {
+        return false;
+    }
+    // A swapped GLU would exchange the gate/up roles the fused kernel hard-codes.
+    if (ggml_get_op_params_i32(glu, 1)) {
+        return false;
+    }
+    if (gad->type != GGML_TYPE_F32 || uad->type != GGML_TYPE_F32 || glu->type != GGML_TYPE_F32) {
+        return false;
+    }
+    if (!gad->src[1] || gad->src[1]->type != GGML_TYPE_F32 ||
+        !uad->src[1] || uad->src[1]->type != GGML_TYPE_F32) {
+        return false;
+    }
+    if (!gad->src[2] || gad->src[2]->type != GGML_TYPE_I32 || uad->src[2] != gad->src[2]) {
+        return false;
+    }
+    // Full width on both operands: the kernel writes one output element per input pair.
+    if (!ggml_are_same_shape(gad, uad) || glu->ne[0] != gad->ne[0] ||
+        glu->ne[1] != gad->ne[1] || glu->ne[2] != gad->ne[2] || glu->ne[3] != gad->ne[3]) {
+        return false;
+    }
+    if (gad->ne[3] != 1) {
+        return false;
+    }
+    // The destination is addressed by (expert slot, token) rather than the GLU's flat row
+    // walk; those agree only for a contiguous destination.
+    if (!ggml_is_contiguous(glu) || !ggml_is_contiguous(gmm) || !ggml_is_contiguous(umm)) {
+        return false;
+    }
+    return true;
+}
+
+static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst);
+
+// Runs the gate and up matmuls unchanged, then one kernel in place of
+// add_id(gate) + add_id(up) + swiglu_oai. See ggml_opencl_can_fuse_moe_bias_glu.
+static void ggml_cl_moe_bias_glu_fused(ggml_backend_t backend, ggml_tensor * gate_mm, const ggml_tensor * gate_add,
+                                       ggml_tensor * up_mm, const ggml_tensor * up_add, const ggml_tensor * glu) {
+    ggml_backend_opencl_context * backend_ctx = (ggml_backend_opencl_context *)backend->context;
+
+    ggml_cl_mul_mat_id(backend, gate_mm->src[0], gate_mm->src[1], gate_mm);
+    ggml_cl_mul_mat_id(backend, up_mm->src[0], up_mm->src[1], up_mm);
+
+    const ggml_tensor * gbias = gate_add->src[1];
+    const ggml_tensor * ubias = up_add->src[1];
+    const ggml_tensor * ids   = gate_add->src[2];
+
+    ggml_tensor_extra_cl * eg  = (ggml_tensor_extra_cl *)gate_mm->extra;
+    ggml_tensor_extra_cl * egb = (ggml_tensor_extra_cl *)gbias->extra;
+    ggml_tensor_extra_cl * eu  = (ggml_tensor_extra_cl *)up_mm->extra;
+    ggml_tensor_extra_cl * eub = (ggml_tensor_extra_cl *)ubias->extra;
+    ggml_tensor_extra_cl * ei  = (ggml_tensor_extra_cl *)ids->extra;
+    ggml_tensor_extra_cl * ed  = (ggml_tensor_extra_cl *)glu->extra;
+
+    cl_ulong off_g  = eg->offset  + gate_mm->view_offs;
+    cl_ulong off_gb = egb->offset + gbias->view_offs;
+    cl_ulong off_u  = eu->offset  + up_mm->view_offs;
+    cl_ulong off_ub = eub->offset + ubias->view_offs;
+    cl_ulong off_i  = ei->offset  + ids->view_offs;
+    cl_ulong off_d  = ed->offset  + glu->view_offs;
+
+    const cl_ulong nb01_g = gate_mm->nb[1];
+    const cl_ulong nb02_g = gate_mm->nb[2];
+    const cl_ulong nb01_u = up_mm->nb[1];
+    const cl_ulong nb02_u = up_mm->nb[2];
+    const cl_ulong nb11_g = gbias->nb[1];
+    const cl_ulong nb11_u = ubias->nb[1];
+    const cl_ulong nb21   = ids->nb[1];
+    const cl_ulong nbd1   = glu->nb[1];
+    const cl_ulong nbd2   = glu->nb[2];
+
+    const int   ne0   = (int)glu->ne[0];
+    const float alpha = ggml_get_op_params_f32(glu, 2);
+    const float limit = ggml_get_op_params_f32(glu, 3);
+
+    cl_kernel kernel = backend_ctx->kernel_add_id_add_id_swiglu_oai;
+
+    int i = 0;
+    CL_CHECK(clSetKernelArg(kernel, i++, sizeof(cl_mem),   &eg->data_device));
+    CL_CHECK(clSetKernelArg(kernel, i++, sizeof(cl_ulong), &off_g));
+    CL_CHECK(clSetKernelArg(kernel, i++, sizeof(cl_mem),   &egb->data_device));
+    CL_CHECK(clSetKernelArg(kernel, i++, sizeof(cl_ulong), &off_gb));
+    CL_CHECK(clSetKernelArg(kernel, i++, sizeof(cl_mem),   &eu->data_device));
+    CL_CHECK(clSetKernelArg(kernel, i++, sizeof(cl_ulong), &off_u));
+    CL_CHECK(clSetKernelArg(kernel, i++, sizeof(cl_mem),   &eub->data_device));
+    CL_CHECK(clSetKernelArg(kernel, i++, sizeof(cl_ulong), &off_ub));
+    CL_CHECK(clSetKernelArg(kernel, i++, sizeof(cl_mem),   &ei->data_device));
+    CL_CHECK(clSetKernelArg(kernel, i++, sizeof(cl_ulong), &off_i));
+    CL_CHECK(clSetKernelArg(kernel, i++, sizeof(cl_mem),   &ed->data_device));
+    CL_CHECK(clSetKernelArg(kernel, i++, sizeof(cl_ulong), &off_d));
+    CL_CHECK(clSetKernelArg(kernel, i++, sizeof(cl_ulong), &nb01_g));
+    CL_CHECK(clSetKernelArg(kernel, i++, sizeof(cl_ulong), &nb02_g));
+    CL_CHECK(clSetKernelArg(kernel, i++, sizeof(cl_ulong), &nb01_u));
+    CL_CHECK(clSetKernelArg(kernel, i++, sizeof(cl_ulong), &nb02_u));
+    CL_CHECK(clSetKernelArg(kernel, i++, sizeof(cl_ulong), &nb11_g));
+    CL_CHECK(clSetKernelArg(kernel, i++, sizeof(cl_ulong), &nb11_u));
+    CL_CHECK(clSetKernelArg(kernel, i++, sizeof(cl_ulong), &nb21));
+    CL_CHECK(clSetKernelArg(kernel, i++, sizeof(cl_ulong), &nbd1));
+    CL_CHECK(clSetKernelArg(kernel, i++, sizeof(cl_ulong), &nbd2));
+    CL_CHECK(clSetKernelArg(kernel, i++, sizeof(int),      &ne0));
+    CL_CHECK(clSetKernelArg(kernel, i++, sizeof(float),    &limit));
+    CL_CHECK(clSetKernelArg(kernel, i++, sizeof(float),    &alpha));
+
+    const int nth = MIN(ne0, (int) backend_ctx->get_kernel_workgroup_size(kernel));
+    size_t global_work_size[] = { (size_t)glu->ne[1]*nth, (size_t)glu->ne[2], 1 };
+    size_t local_work_size[]  = { (size_t)nth, 1, 1 };
+
+    backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, (ggml_tensor *)glu);
+}
+
+// Fusion B: the MoE down-projection bias add feeding the combine.
+//
+// The graph runs ADD_ID(down_bias) and then immediately the combine subgraph
+// {MUL(router weights), k VIEWs, k-1 ADDs}, and the ADD_ID's only consumer is that
+// MUL. Since the ADD_ID is an in-place read-modify-write of a tensor the combine
+// reads once more, the bias can be added inside the combine instead, dropping a
+// full pass over [n_embd, k, n_tokens].
+//
+// Shape checks for the combine tail are delegated to ggml_opencl_can_fuse_moe_combine
+// (which also owns the n_nodes >= 32 bail and the experts/dst aliasing bail); what is
+// added here is the ADD_ID wiring plus a subgraph check over the WHOLE run, so that
+// the intermediate bias result is confirmed not to escape.
+static bool ggml_opencl_can_fuse_moe_bias_combine(const struct ggml_cgraph * cgraph, int node_idx,
+                                                  const ggml_tensor ** out_final_add) {
+    if (node_idx + 1 >= cgraph->n_nodes) {
+        return false;
+    }
+    const ggml_tensor * add = cgraph->nodes[node_idx];
+    if (add->op != GGML_OP_ADD_ID) {
+        return false;
+    }
+    const ggml_tensor * mul = cgraph->nodes[node_idx+1];
+    if (mul->op != GGML_OP_MUL || mul->src[0] != add) {
+        return false;
+    }
+
+    const ggml_tensor * final_add = NULL;
+    if (!ggml_opencl_can_fuse_moe_combine(cgraph, node_idx+1, &final_add)) {
+        return false;
+    }
+
+    const ggml_tensor * raw  = add->src[0];
+    const ggml_tensor * bias = add->src[1];
+    const ggml_tensor * ids  = add->src[2];
+    if (!raw || !bias || !ids) {
+        return false;
+    }
+    if (raw->type != GGML_TYPE_F32 || bias->type != GGML_TYPE_F32 ||
+        ids->type != GGML_TYPE_I32 || add->type != GGML_TYPE_F32) {
+        return false;
+    }
+    // The combine reads the raw matmul output with the strides it computed from the
+    // add_id result, so the two must have the same layout.
+    if (!ggml_are_same_shape(raw, add) || !ggml_is_contiguous(raw)) {
+        return false;
+    }
+    if (raw->nb[1] != add->nb[1] || raw->nb[2] != add->nb[2]) {
+        return false;
+    }
+    // ids is indexed as [expert slot, token]; the combine walks the same two axes.
+    if (ids->ne[0] < add->ne[1] || ids->ne[1] < add->ne[2]) {
+        return false;
+    }
+
+    // Whole-run escape check: ADD_ID + MUL + k VIEWs + (k-1) ADDs, only the last node escapes.
+    const int k       = (int)add->ne[1];
+    const int n_nodes = 2 + k + (k - 1);
+    if (n_nodes >= 32 || node_idx + n_nodes > cgraph->n_nodes) {
+        return false;
+    }
+    enum ggml_op ops[32];
+    int n = 0;
+    ops[n++] = GGML_OP_ADD_ID;
+    ops[n++] = GGML_OP_MUL;
+    for (int j = 0; j < k;     ++j) ops[n++] = GGML_OP_VIEW;
+    for (int j = 0; j < k - 1; ++j) ops[n++] = GGML_OP_ADD;
+    const int outs[] = { node_idx + n_nodes - 1 };
+    if (!ggml_can_fuse_subgraph(cgraph, node_idx, n_nodes, ops, outs, 1)) {
+        return false;
+    }
+
+    *out_final_add = final_add;
+    return true;
+}
+
+
+// Fusion B dispatch: the combine, reading the RAW matmul output and adding the
+// per-expert bias row inline. See ggml_opencl_can_fuse_moe_bias_combine.
+static void ggml_cl_moe_bias_combine_fused(ggml_backend_t backend, const ggml_tensor * add,
+                                           const ggml_tensor * mul, const ggml_tensor * dst) {
+    ggml_backend_opencl_context * backend_ctx = (ggml_backend_opencl_context *)backend->context;
+
+    const ggml_tensor * experts = add->src[0];   // raw matmul output, bias not yet applied
+    const ggml_tensor * bias    = add->src[1];
+    const ggml_tensor * ids     = add->src[2];
+    const ggml_tensor * weights = mul->src[1];
+
+    ggml_tensor_extra_cl * ee = (ggml_tensor_extra_cl *)experts->extra;
+    ggml_tensor_extra_cl * eb = (ggml_tensor_extra_cl *)bias->extra;
+    ggml_tensor_extra_cl * ei = (ggml_tensor_extra_cl *)ids->extra;
+    ggml_tensor_extra_cl * ew = (ggml_tensor_extra_cl *)weights->extra;
+    ggml_tensor_extra_cl * ed = (ggml_tensor_extra_cl *)dst->extra;
+    cl_ulong off_e = ee->offset + experts->view_offs;
+    cl_ulong off_b = eb->offset + bias->view_offs;
+    cl_ulong off_i = ei->offset + ids->view_offs;
+    cl_ulong off_w = ew->offset + weights->view_offs;
+    cl_ulong off_d = ed->offset + dst->view_offs;
+
+    const int n_embd4 = (int)(experts->ne[0] / 4);
+    const int k       = (int)experts->ne[1];
+    const int nt      = (int)experts->ne[2];
+    const cl_uint e1 = (cl_uint)(experts->nb[1] / sizeof(float));
+    const cl_uint e2 = (cl_uint)(experts->nb[2] / sizeof(float));
+    const cl_uint w1 = (cl_uint)(weights->nb[1] / sizeof(float));
+    const cl_uint w2 = (cl_uint)(weights->nb[2] / sizeof(float));
+    const cl_uint d1 = (cl_uint)(dst->nb[1] / sizeof(float));
+    const cl_ulong nb_b1 = bias->nb[1];
+    const cl_ulong nb_i1 = ids->nb[1];
+
+    const size_t w_bytes = ggml_nbytes(weights);
+    backend_ctx->prealloc_moe_combine_w.allocate(backend_ctx->context, w_bytes);
+    CL_CHECK(clEnqueueCopyBuffer(backend_ctx->queue, ew->data_device, backend_ctx->prealloc_moe_combine_w.buffer,
+                                 off_w, 0, w_bytes, 0, NULL, NULL));
+    cl_mem   w_dev = backend_ctx->prealloc_moe_combine_w.buffer;
+    cl_ulong w_off = 0;
+
+    cl_kernel kernel = backend_ctx->kernel_moe_combine_bias_f32;
+    int a = 0;
+    CL_CHECK(clSetKernelArg(kernel, a++, sizeof(cl_mem),   &ee->data_device));
+    CL_CHECK(clSetKernelArg(kernel, a++, sizeof(cl_ulong), &off_e));
+    CL_CHECK(clSetKernelArg(kernel, a++, sizeof(cl_mem),   &w_dev));
+    CL_CHECK(clSetKernelArg(kernel, a++, sizeof(cl_ulong), &w_off));
+    CL_CHECK(clSetKernelArg(kernel, a++, sizeof(cl_mem),   &eb->data_device));
+    CL_CHECK(clSetKernelArg(kernel, a++, sizeof(cl_ulong), &off_b));
+    CL_CHECK(clSetKernelArg(kernel, a++, sizeof(cl_mem),   &ei->data_device));
+    CL_CHECK(clSetKernelArg(kernel, a++, sizeof(cl_ulong), &off_i));
+    CL_CHECK(clSetKernelArg(kernel, a++, sizeof(cl_mem),   &ed->data_device));
+    CL_CHECK(clSetKernelArg(kernel, a++, sizeof(cl_ulong), &off_d));
+    CL_CHECK(clSetKernelArg(kernel, a++, sizeof(int),      &n_embd4));
+    CL_CHECK(clSetKernelArg(kernel, a++, sizeof(int),      &k));
+    CL_CHECK(clSetKernelArg(kernel, a++, sizeof(int),      &nt));
+    CL_CHECK(clSetKernelArg(kernel, a++, sizeof(cl_uint),  &e1));
+    CL_CHECK(clSetKernelArg(kernel, a++, sizeof(cl_uint),  &e2));
+    CL_CHECK(clSetKernelArg(kernel, a++, sizeof(cl_uint),  &w1));
+    CL_CHECK(clSetKernelArg(kernel, a++, sizeof(cl_uint),  &w2));
+    CL_CHECK(clSetKernelArg(kernel, a++, sizeof(cl_uint),  &d1));
+    CL_CHECK(clSetKernelArg(kernel, a++, sizeof(cl_ulong), &nb_b1));
+    CL_CHECK(clSetKernelArg(kernel, a++, sizeof(cl_ulong), &nb_i1));
+
+    size_t lws[2] = { 64, 1 };
+    size_t gws[2] = { (size_t)(((n_embd4 + 63) / 64) * 64), (size_t)nt };
+    backend_ctx->enqueue_ndrange_kernel(kernel, 2, gws, lws, (ggml_tensor *)dst);
+}
+
+
 static void ggml_cl_moe_combine_fused(ggml_backend_t backend, const ggml_tensor * mul, const ggml_tensor * dst) {
     ggml_backend_opencl_context * backend_ctx = (ggml_backend_opencl_context *)backend->context;
     const ggml_tensor * experts = mul->src[0];
@@ -7034,6 +7362,31 @@ static ggml_status ggml_backend_opencl_graph_compute(ggml_backend_t backend, ggm
         }
         // Fuse the MoE combine: router-weight mul + cross-expert add chain ->
         // one weighted-sum-across-experts kernel.
+        // Fold the gpt-oss MoE bias epilogue: add_id(gate_bias) + add_id(up_bias) +
+        // glu(swiglu_oai) -> one kernel, leaving the two matmuls as their own dispatches.
+        // Both add_ids are in-place passes over a tensor the GLU reads again, so this
+        // drops two full read+write passes per layer. Opt out GGML_OPENCL_FUSE_MOE_BIAS_GLU=0.
+        if (backend_ctx->fuse_moe_bias_glu && !backend_ctx->disable_fusion &&
+            ggml_opencl_can_fuse_moe_bias_glu(cgraph, i)) {
+            ggml_cl_moe_bias_glu_fused(backend, node, cgraph->nodes[i+1], cgraph->nodes[i+2],
+                                       cgraph->nodes[i+3], cgraph->nodes[i+4]);
+            i += 4;
+            continue;
+        }
+
+        // Fold the MoE down-projection bias into the combine: add_id(down_bias) + the whole
+        // combine subgraph -> one kernel. Checked before the plain combine arm so the longer
+        // pattern wins. Opt out GGML_OPENCL_FUSE_MOE_BIAS_COMBINE=0.
+        if (backend_ctx->fuse_moe_bias_combine && backend_ctx->fuse_moe_combine &&
+            !backend_ctx->disable_fusion) {
+            const ggml_tensor * bias_combine_out = nullptr;
+            if (ggml_opencl_can_fuse_moe_bias_combine(cgraph, i, &bias_combine_out)) {
+                ggml_cl_moe_bias_combine_fused(backend, node, cgraph->nodes[i+1], bias_combine_out);
+                i += 2 * (int)node->ne[1];   // ADD_ID + MUL + k VIEWs + (k-1) ADDs
+                continue;
+            }
+        }
+
         if (backend_ctx->fuse_moe_combine && !backend_ctx->disable_fusion) {
             const ggml_tensor * combine_out = nullptr;
             if (ggml_opencl_can_fuse_moe_combine(cgraph, i, &combine_out)) {

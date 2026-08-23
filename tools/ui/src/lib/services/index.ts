@@ -294,7 +294,7 @@ export { SandboxService } from './sandbox.service';
  * **RouterService** — Dynamic route URL construction utility
  *
  * Stateless utility for building dynamic route URLs from ROUTES base paths.
- * Static routes (START, NEW_CHAT, MCP_SERVERS) live in ROUTES constants;
+ * Static routes (START, MCP_SERVERS) live in ROUTES constants;
  * dynamic routes (CHAT, SETTINGS) are constructed here by appending parameters.
  *
  * **Architecture & Relationships:**
@@ -340,3 +340,13 @@ export { RouterService } from './router.service';
  * @see migration.service.ts — full implementation (non-destructive)
  */
 export { MigrationService } from './migration.service';
+
+/**
+ * **SettingsService** - localStorage persistence layer for settings
+ *
+ * Stateless read/write of the settings config and user-override keys. Business
+ * logic (default merging, mobile defaults, theme migration) stays in the store.
+ *
+ * @see settingsStore in stores/settings/index.svelte.ts - reactive state + business logic
+ */
+export { SettingsService } from './settings.service';
