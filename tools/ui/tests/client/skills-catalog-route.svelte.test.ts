@@ -389,6 +389,18 @@ describe('/skills catalog preview', () => {
 		);
 		expect(screen.getByRole('button', { name: 'Back' }).query()).toBeNull();
 	});
+
+	it('exposes the desktop splitter as a named resize control', async () => {
+		mockFetchOnce(catalogOf('demo-skill'));
+		const screen = await render(SkillsPageWrapper);
+
+		await screen.getByRole('button', { name: /demo-skill/ }).click();
+
+		await expect.element(screen.getByRole('separator')).toBeInTheDocument();
+		await expect
+			.element(screen.getByRole('separator', { name: 'Resize catalog and detail panels' }))
+			.toBeInTheDocument();
+	});
 });
 
 describe('SkillCatalogList badges', () => {

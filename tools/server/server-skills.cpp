@@ -624,8 +624,6 @@ static server_http_res_ptr error_response(int status, const std::string & messag
     return response;
 }
 
-// TODO: damerau_levenshtein allocates O(rows*columns) non-contiguous memory per candidate, run up to 256 times per 404
-// refactor to skip the DP entirely when abs(len(a) - len(b)) already guarantees a normalized score worse than the current 3rd-best in best 
 static int damerau_levenshtein(const std::string & left, const std::string & right) {
     const int rows = static_cast<int>(left.size());
     const int columns = static_cast<int>(right.size());
@@ -1065,9 +1063,15 @@ server_skills::server_skills(server_skills_config config, token_count_callback c
             if (!fs::exists(resource_path, ec) || ec) {
                 const resource_listing listing = list_resources(skill);
                 std::vector<ranked_path> best;
+                const size_t requested_size = requested_path.size();
                 for (const std::string & path : listing.paths) {
-                    const size_t denominator = std::max(path.size(), requested_path.size());
-                    keep_best_three(best, {denominator == 0 ? 0.0 : static_cast<double>(damerau_levenshtein(requested_path, path)) / denominator, path});
+                    const size_t path_size = path.size();
+                    const size_t denominator = std::max(path_size, requested_size);
+                    const size_t length_difference = path_size > requested_size ? path_size - requested_size : requested_size - path_size;
+                    if (best.size() == 3 && static_cast<double>(length_difference) / denominator > best.back().score) {
+                        continue;
+                    }
+                    keep_best_three(best, {static_cast<double>(damerau_levenshtein(requested_path, path)) / denominator, path});
                 }
                 std::vector<std::string> suggestions;
                 suggestions.reserve(best.size());

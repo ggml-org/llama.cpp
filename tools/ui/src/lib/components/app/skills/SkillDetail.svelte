@@ -81,7 +81,7 @@
 
 <div
 	data-testid="skill-detail"
-	class="flex p-6 h-full min-h-0 flex-col"
+	class="flex px-6 h-full min-h-0 flex-col"
 	in:fly|global={{ duration: 200, opacity: 0, x: mobile ? 0 : 48 }}
 >
 	<div data-testid="skill-detail-header" class="flex shrink-0 flex-col gap-4">
@@ -90,7 +90,7 @@
 				<h2 class="text-base font-semibold">{entry.name}</h2>
 				<p class="text-xs text-muted-foreground">
 					{entry.scope} / <SkillProviderLabel provider={entry.provider} />
-				</p>
+				</p>Skills
 				{#if entry.disable_model_invocation}
 					<Badge
 						variant="secondary"

@@ -366,7 +366,11 @@
 							</div>
 						</Resizable.Pane>
 
-						<Resizable.Handle withHandle class="w-3 bg-transparent after:bg-border after:w-px" />
+						<Resizable.Handle
+							withHandle
+							aria-label="Resize catalog and detail panels"
+							class="data-[active=pointer]:before:shadow-[0_0_8px_hsl(var(--ring)/0.35)]"
+						/>
 
 						<Resizable.Pane
 							defaultSize={sizes[1]}
