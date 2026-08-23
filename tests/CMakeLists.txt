@@ -290,6 +290,10 @@ target_include_directories(test-cuda-allreduce-precision PRIVATE ${CMAKE_CURRENT
 llama_build_and_test(test-rdna2-rccl-policy.cpp)
 target_include_directories(test-rdna2-rccl-policy PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../ggml/src/ggml-hip)
 
+# Pure host-side parser and dispatch contract for the RDNA2 P2P host-snapshot path.
+llama_build_and_test(test-rdna2-p2p-policy.cpp)
+target_include_directories(test-rdna2-p2p-policy PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../ggml/src/ggml-cuda)
+
 # Pure host-side selector contract for the bounded gfx1030 routed MMVQ six-row path.
 llama_build_and_test(test-mmvq-batch6-config.cpp)
 target_include_directories(test-mmvq-batch6-config PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../ggml/src/ggml-cuda)

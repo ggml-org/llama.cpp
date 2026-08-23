@@ -4,12 +4,14 @@
 #include "ggml-backend-impl.h"
 #include "ggml-alloc.h"
 #include "ggml-cpp.h"
+#include "ggml-env-util.h"
 
 #include <algorithm>
 #include <cassert>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <functional>
 #include <future>
@@ -1767,7 +1769,26 @@ static void ggml_backend_meta_buffer_memset_tensor(
 
 static void ggml_backend_meta_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
     const size_t n_bufs = ggml_backend_meta_buffer_n_bufs(buffer);
-    static const bool parallel_set_enabled = getenv("GGML_META_PARALLEL_SET") != nullptr;
+    // Value-checked, not presence-checked. This used to make
+    // GGML_META_PARALLEL_SET=0 enable the parallel path. Keep the feature
+    // fail-closed for missing or invalid values. Parallel upload with an
+    // external draft model remains a known opt-in issue; false values are the
+    // documented workaround.
+    static const bool parallel_set_enabled = [] {
+        const char * value = std::getenv("GGML_META_PARALLEL_SET");
+        switch (ggml_env_parse_flag(value)) {
+            case ggml_env_flag_value::enabled:
+                return true;
+            case ggml_env_flag_value::unset:
+            case ggml_env_flag_value::disabled:
+                return false;
+            case ggml_env_flag_value::invalid:
+                GGML_LOG_WARN("GGML_META_PARALLEL_SET='%s' is not recognized; disabling parallel "
+                        "weight upload. Valid: 1/on/true/yes, 0/off/false/no\n", value);
+                return false;
+        }
+        return false;
+    }();
     const bool parallel_set =
         parallel_set_enabled &&
         ggml_backend_buffer_get_usage(buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS &&

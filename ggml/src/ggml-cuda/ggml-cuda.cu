@@ -5,6 +5,7 @@
 #include "ggml-cuda/allreduce.cuh"
 #include "ggml-cuda/comm-precision.h"
 #include "ggml-cuda/common.cuh"
+#include "ggml-cuda/rdna2-p2p-allreduce-policy.h"
 #include "ggml-cuda/acc.cuh"
 #include "ggml-cuda/add-id.cuh"
 #include "ggml-cuda/arange.cuh"
@@ -1015,38 +1016,17 @@ ggml_backend_buffer_type_t ggml_backend_cuda_buffer_type(int device) {
 // (NCCL communicators or the internal AllReduce pipeline) are initialised
 // eagerly during comm_init so any init failure surfaces at startup rather
 // than mid-run.
-enum ggml_cuda_rdna2_p2p_host_mode {
-    GGML_CUDA_RDNA2_P2P_HOST_OFF       = 0,
-    GGML_CUDA_RDNA2_P2P_HOST_SIMPLE    = 1,
-    GGML_CUDA_RDNA2_P2P_HOST_FUSED     = 2,
-    GGML_CUDA_RDNA2_P2P_HOST_MTP       = 3,
-    GGML_CUDA_RDNA2_P2P_HOST_AUTO      = 4,
-    GGML_CUDA_RDNA2_P2P_HOST_AUTO_EXPANDED = 5,
-};
-
 static int ggml_cuda_rdna2_p2p_host_allreduce_mode() {
     static const int mode = []() {
-        if (!ggml_cuda_rdna2_auto_enabled()) {
-            return GGML_CUDA_RDNA2_P2P_HOST_OFF;
-        }
         const char * value = std::getenv("GGML_HIP_GFX1030_P2P_ALLREDUCE");
-        // The expanded policy is the safe automatic default: its extra ordinary
-        // boundaries are structurally gated, while TP2/other unsupported
-        // topologies naturally fall through to the existing RCCL path.
-        if (value == nullptr || std::strcmp(value, "auto") == 0 ||
-                std::strcmp(value, "auto-expanded") == 0) {
-            return GGML_CUDA_RDNA2_P2P_HOST_AUTO_EXPANDED;
+        const auto result = ggml_cuda_rdna2_p2p_host_parse_mode(
+            ggml_cuda_rdna2_auto_enabled(), value);
+        if (!result.recognized) {
+            GGML_LOG_WARN("GGML_HIP_GFX1030_P2P_ALLREDUCE='%s' is not recognized; disabling "
+                    "the host-snapshot AllReduce. Valid: auto, auto-expanded, auto-basic, host, "
+                    "host-fused, host-mtp, 1/on/true/yes, 0/off/false/no\n", value);
         }
-        // Keep the former automatic policy available for controlled A/B tests.
-        if (std::strcmp(value, "auto-basic") == 0) return GGML_CUDA_RDNA2_P2P_HOST_AUTO;
-        if (std::strcmp(value, "host") == 0) return GGML_CUDA_RDNA2_P2P_HOST_SIMPLE;
-        if (std::strcmp(value, "host-fused") == 0) return GGML_CUDA_RDNA2_P2P_HOST_FUSED;
-        if (std::strcmp(value, "host-mtp") == 0) return GGML_CUDA_RDNA2_P2P_HOST_MTP;
-        if (std::strcmp(value, "off") == 0 || std::strcmp(value, "0") == 0 ||
-                std::strcmp(value, "false") == 0) {
-            return GGML_CUDA_RDNA2_P2P_HOST_OFF;
-        }
-        return GGML_CUDA_RDNA2_P2P_HOST_OFF;
+        return result.mode;
     }();
     return mode;
 }
@@ -1254,7 +1234,10 @@ struct ggml_backend_cuda_comm_context {
     bool p2p_host_initialized = false;
     bool p2p_host_exact_5120 = false;
     bool p2p_host_exact_25600 = false;
-    bool p2p_host_logged = false;
+    // Bitmasks of batch widths already logged, so a run shows every width the
+    // path served or refused without duplicate messages from the fused route.
+    uint32_t p2p_host_logged_widths = 0;
+    uint32_t p2p_host_refused_widths = 0;
 
     bool native_rccl_policy_active = false;
     bool native_rccl_plugin_owned = false;
@@ -1592,10 +1575,11 @@ static bool ggml_backend_cuda_comm_allreduce_rdna2_p2p_host_fused_prefix(
         CUDA_CHECK(cudaGetLastError());
     }
     ++comm_ctx->p2p_host_calls;
-    if (!comm_ctx->p2p_host_logged) {
+    const uint32_t bit = ggml_cuda_rdna2_p2p_host_width_bit(1);
+    if ((comm_ctx->p2p_host_logged_widths & bit) == 0) {
+        comm_ctx->p2p_host_logged_widths |= bit;
         std::fprintf(stderr, "using RDNA2 P2P consumer-fused host-snapshot AllReduce for %s [5120,1,1,1] F32\n",
                 tensors[0]->name);
-        comm_ctx->p2p_host_logged = true;
     }
     return true;
 }
@@ -1608,15 +1592,34 @@ static bool ggml_backend_cuda_comm_allreduce_rdna2_p2p_host(
             comm_ctx->backends.size() != 4) {
         return false;
     }
-    const bool mtp5 = ggml_cuda_rdna2_p2p_host_allreduce_mtp_enabled() && tensors[0] != nullptr &&
-            tensors[0]->ne[0] == 5120 && tensors[0]->ne[1] == 5 &&
-            tensors[0]->ne[2] == 1 && tensors[0]->ne[3] == 1;
-    const bool ordinary1 = !mtp5 && tensors[0] != nullptr && tensors[0]->ne[0] == 5120 &&
-            tensors[0]->ne[1] == 1 && tensors[0]->ne[2] == 1 && tensors[0]->ne[3] == 1;
-    if ((!mtp5 && !ordinary1) || (mtp5 && !comm_ctx->p2p_host_exact_25600) ||
-            (ordinary1 && !comm_ctx->p2p_host_exact_5120)) {
+    const auto route = tensors[0] == nullptr
+        ? ggml_cuda_rdna2_p2p_host_route_result {
+              ggml_cuda_rdna2_p2p_host_route::fallback,
+              ggml_cuda_rdna2_p2p_host_fallback_reason::unrelated_shape }
+        : ggml_cuda_rdna2_p2p_host_select_route(
+              tensors[0]->ne[0], tensors[0]->ne[1], tensors[0]->ne[2], tensors[0]->ne[3],
+              ggml_cuda_rdna2_p2p_host_allreduce_mtp_enabled(),
+              comm_ctx->p2p_host_exact_5120, comm_ctx->p2p_host_exact_25600);
+    if (route.route == ggml_cuda_rdna2_p2p_host_route::fallback) {
+        const int64_t width = tensors[0] != nullptr ? tensors[0]->ne[1] : 0;
+        const uint32_t bit = ggml_cuda_rdna2_p2p_host_width_bit(width);
+        const bool should_log =
+            route.fallback_reason == ggml_cuda_rdna2_p2p_host_fallback_reason::unsupported_width ||
+            route.fallback_reason == ggml_cuda_rdna2_p2p_host_fallback_reason::self_test_failed;
+        if (bit != 0 && should_log && (comm_ctx->p2p_host_refused_widths & bit) == 0) {
+            comm_ctx->p2p_host_refused_widths |= bit;
+            if (route.fallback_reason == ggml_cuda_rdna2_p2p_host_fallback_reason::unsupported_width) {
+                GGML_LOG_WARN("RDNA2 P2P host-snapshot AllReduce has no exact kernel for tensor shape "
+                        "[5120,%d,1,1]; using RCCL (implemented widths: 1 and 5). Speculative verify "
+                        "width is commonly --spec-draft-n-max + 1.\n", int(width));
+            } else {
+                GGML_LOG_WARN("RDNA2 P2P host-snapshot AllReduce implements batch width %d, but its "
+                        "startup exactness self-test did not pass; using RCCL.\n", int(width));
+            }
+        }
         return false;
     }
+    const bool mtp5 = route.route == ggml_cuda_rdna2_p2p_host_route::speculative_width5;
     for (int rank = 0; rank < 4; ++rank) {
         if (tensors[rank] == nullptr || tensors[rank]->data == nullptr) {
             return false;
@@ -1672,10 +1675,13 @@ static bool ggml_backend_cuda_comm_allreduce_rdna2_p2p_host(
         CUDA_CHECK(cudaGetLastError());
     }
     ++comm_ctx->p2p_host_calls;
-    if (!comm_ctx->p2p_host_logged) {
-        std::fprintf(stderr, "using RDNA2 P2P host-snapshot AllReduce for %s [5120,%d,1,1] F32\n",
-                tensors[0]->name, mtp5 ? 5 : 1);
-        comm_ctx->p2p_host_logged = true;
+    {
+        const uint32_t bit = ggml_cuda_rdna2_p2p_host_width_bit(mtp5 ? 5 : 1);
+        if ((comm_ctx->p2p_host_logged_widths & bit) == 0) {
+            comm_ctx->p2p_host_logged_widths |= bit;
+            std::fprintf(stderr, "using RDNA2 P2P host-snapshot AllReduce for %s [5120,%d,1,1] F32\n",
+                    tensors[0]->name, mtp5 ? 5 : 1);
+        }
     }
     return true;
 }
