@@ -359,77 +359,83 @@ private:
         };
 
         // Horizontal resampling pass
-        // Resizes width from imIn to out_nx, preserving height
-        auto resample_horizontal = [&](const clip_image_u8 & imIn, clip_image_u8 & imOut,
+        // Resizes width from src to out_nx, preserving height
+        auto resample_horizontal = [&](const uint8_t * src, int in_nx, int in_ny,
                                        int out_nx,
                                        int ksize, const std::vector<int> & bounds, const std::vector<int32_t> & weights) {
-            const int in_ny = imIn.get_size().height;
-            imOut.set_size({out_nx, in_ny}, false);
+            std::vector<uint8_t> out((size_t) out_nx * in_ny * 3);
 
             // Process each row independently
             for (int yy = 0; yy < in_ny; yy++) {
+                const uint8_t * src_row = src + (size_t) yy * in_nx * 3;
+                uint8_t * dst_row = out.data() + (size_t) yy * out_nx * 3;
+
                 // For each output pixel in this row
                 for (int xx = 0; xx < out_nx; xx++) {
-                    // Get the range of input pixels and filter coefficients
-                    int xmin = bounds[xx * 2 + 0];  // First input pixel index
-                    int xcnt = bounds[xx * 2 + 1];  // Number of input pixels
+                    const int xmin = bounds[xx * 2 + 0];  // First input pixel index
+                    const int xcnt = bounds[xx * 2 + 1];  // Number of input pixels
+                    const int32_t * k = &weights[xx * ksize];
+                    const uint8_t * p = src_row + (size_t) xmin * 3;
 
-                    // Initialize accumulators for RGB channels with rounding bias (0.5 in fixed-point)
+                    // Accumulators for RGB channels, with rounding bias (0.5 in fixed-point)
                     int32_t ss0 = 1 << (PRECISION_BITS - 1);
                     int32_t ss1 = 1 << (PRECISION_BITS - 1);
                     int32_t ss2 = 1 << (PRECISION_BITS - 1);
 
                     // Convolve: sum weighted input pixels
                     for (int x = 0; x < xcnt; x++) {
-                        const auto src_px = imIn.get_pixel(x + xmin, yy);
-                        ss0 += src_px[0] * weights[xx * ksize + x];  // R channel
-                        ss1 += src_px[1] * weights[xx * ksize + x];  // G channel
-                        ss2 += src_px[2] * weights[xx * ksize + x];  // B channel
+                        ss0 += p[0] * k[x];
+                        ss1 += p[1] * k[x];
+                        ss2 += p[2] * k[x];
+                        p += 3;
                     }
 
                     // Convert back from fixed-point (divide by 2^PRECISION_BITS) and clamp to [0,255]
-                    imOut.set_pixel(xx, yy, {clip8(ss0 >> PRECISION_BITS),
-                                             clip8(ss1 >> PRECISION_BITS),
-                                             clip8(ss2 >> PRECISION_BITS)});
+                    dst_row[xx * 3 + 0] = clip8(ss0 >> PRECISION_BITS);
+                    dst_row[xx * 3 + 1] = clip8(ss1 >> PRECISION_BITS);
+                    dst_row[xx * 3 + 2] = clip8(ss2 >> PRECISION_BITS);
                 }
             }
+
+            return out;
         };
 
         // Vertical resampling pass
-        // Resizes height from imIn to out_ny, preserving width
-        auto resample_vertical = [&](const clip_image_u8 & imIn, clip_image_u8 & imOut,
+        // Resizes height from src to out_ny, preserving width
+        // Accumulates whole rows at once (contiguous access, auto-vectorizes well)
+        auto resample_vertical = [&](const uint8_t * src, int in_nx,
                                      int out_ny,
                                      int ksize, const std::vector<int> & bounds, const std::vector<int32_t> & weight) {
-            const int in_nx = imIn.get_size().width;
-            imOut.set_size({in_nx, out_ny}, false);
+            const size_t row_elems = (size_t) in_nx * 3;
+            std::vector<uint8_t> out(row_elems * out_ny);
+            std::vector<int32_t> acc(row_elems);
 
             // For each output row
             for (int yy = 0; yy < out_ny; yy++) {
-                // Get the range of input rows and filter coefficients
-                int ymin = bounds[yy * 2 + 0];  // First input row index
-                int ycnt = bounds[yy * 2 + 1];  // Number of input rows
+                const int ymin = bounds[yy * 2 + 0];  // First input row index
+                const int ycnt = bounds[yy * 2 + 1];  // Number of input rows
+                const int32_t * k = &weight[yy * ksize];
 
-                // Process each column in this output row
-                for (int xx = 0; xx < in_nx; xx++) {
-                    // Initialize accumulators for RGB channels with rounding bias
-                    int32_t ss0 = 1 << (PRECISION_BITS - 1);
-                    int32_t ss1 = 1 << (PRECISION_BITS - 1);
-                    int32_t ss2 = 1 << (PRECISION_BITS - 1);
+                // Rounding bias (0.5 in fixed-point)
+                std::fill(acc.begin(), acc.end(), 1 << (PRECISION_BITS - 1));
 
-                    // Convolve: sum weighted input pixels vertically
-                    for (int y = 0; y < ycnt; y++) {
-                        const auto src_px = imIn.get_pixel(xx, y + ymin);
-                        ss0 += src_px[0] * weight[yy * ksize + y];  // R channel
-                        ss1 += src_px[1] * weight[yy * ksize + y];  // G channel
-                        ss2 += src_px[2] * weight[yy * ksize + y];  // B channel
+                // Convolve: accumulate each weighted input row
+                for (int y = 0; y < ycnt; y++) {
+                    const uint8_t * src_row = src + (size_t) (ymin + y) * row_elems;
+                    const int32_t w = k[y];
+                    for (size_t i = 0; i < row_elems; i++) {
+                        acc[i] += src_row[i] * w;
                     }
+                }
 
-                    // Convert back from fixed-point and clamp to [0,255]
-                    imOut.set_pixel(xx, yy, {clip8(ss0 >> PRECISION_BITS),
-                                             clip8(ss1 >> PRECISION_BITS),
-                                             clip8(ss2 >> PRECISION_BITS)});
+                // Convert back from fixed-point and clamp to [0,255]
+                uint8_t * dst_row = out.data() + (size_t) yy * row_elems;
+                for (size_t i = 0; i < row_elems; i++) {
+                    dst_row[i] = clip8(acc[i] >> PRECISION_BITS);
                 }
             }
+
+            return out;
         };
 
         // Main resampling logic using separable two-pass approach
@@ -453,23 +459,21 @@ private:
         }
 
         // Perform two-pass resampling
+        const uint8_t * src = img.get_ro_buf().data();
         if (need_horizontal && need_vertical) {
-            // Both horizontal and vertical
-            clip_image_u8 temp;
-            resample_horizontal(img, temp, target_width, ksize_horiz, bounds_horiz, weights_horiz);
-            resample_vertical(temp, dst, target_height, ksize_vert, bounds_vert, weights_vert);
+            auto temp = resample_horizontal(src, src_width, src_height, target_width, ksize_horiz, bounds_horiz, weights_horiz);
+            dst.set_size({target_width, target_height}, false);
+            dst.cpy_buf(resample_vertical(temp.data(), target_width, target_height, ksize_vert, bounds_vert, weights_vert));
         } else if (need_horizontal) {
-            // Only horizontal
-            resample_horizontal(img, dst, target_width, ksize_horiz, bounds_horiz, weights_horiz);
+            dst.set_size({target_width, src_height}, false);
+            dst.cpy_buf(resample_horizontal(src, src_width, src_height, target_width, ksize_horiz, bounds_horiz, weights_horiz));
         } else if (need_vertical) {
-            // Only vertical
-            resample_vertical(img, dst, target_height, ksize_vert, bounds_vert, weights_vert);
+            dst.set_size({src_width, target_height}, false);
+            dst.cpy_buf(resample_vertical(src, src_width, target_height, ksize_vert, bounds_vert, weights_vert));
         } else {
             // No resizing needed - direct copy
-            dst.set_size(img.get_size(), img.is_placeholder());
-            if (!img.is_placeholder()) {
-                dst.cpy_buf(img.get_ro_buf());
-            }
+            dst.set_size(img.get_size(), false);
+            dst.cpy_buf(img.get_ro_buf());
         }
 
         return true;
