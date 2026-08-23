@@ -12,13 +12,12 @@ Strix Halo is least tuned.
 
 | | |
 |---|---|
-| **+14.1 %** prefill (pp512), any stock K-quant, upstreamable one-constant fix |
-| **5.4×** at batch 8 — the width speculative decoding actually runs at |
-| **3.0×** bare decode with DFlash2 on structured output (41.5 vs 13.9 t/s) |
-| **3.0×** bare decode with MTP at 31 K context (36.07 vs 12.20 t/s) |
-| **6** new ROCmFPx quant types (FP4 / FPx) — mainline cannot load the models |
-| FP4 mat-vec at batch 8: **312 → 173 µs** (1.8×), FP6: **2236 → 402 µs** (5.6×) |
-
+| prefill (pp512), any stock K-quant, upstreamable one-constant fix | **+14.1 %** |
+| Qwen3.8 27B token generation | 42 T/S |
+| vs bare decode with DFlash2 on structured output (41.5 vs 13.9 t/s) |  **3.0×** |
+| vs bare decode with MTP at 31 K context (36.07 vs 12.20 t/s) | **3.0×** |
+| FP4 mat-vec at batch 8: **312 → 173 µs**, FP6: **2236 → 402 µs**| 1.8 - 5.6× |
+ 
 All numbers: single Radeon 8060S (Strix Halo APU), RADV / Mesa 26.0.3, idle GPU,
 interleaved against upstream `ggml-org/llama.cpp` master `95b8e33e1`.
 Full detail, caveats, and the measurement traps below.
