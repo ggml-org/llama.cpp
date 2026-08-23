@@ -1354,18 +1354,16 @@ int main(int argc, char ** argv) {
         if (n_heads == 0) {
             LOG_WRN("%s: the model has no NextN layers, '--nextn' has no effect\n", __func__);
         } else if (n_trunk == 0) {
-            LOG_ERR("%s: NextN layers that share the trunk's KV cache are not supported\n", __func__);
+            LOG_ERR("%s: NextN layers sharing the trunk's KV cache are not supported\n", __func__);
             return 1;
         } else if (n_heads > 1) {
-            LOG_ERR("%s: models with more than one NextN layer are not supported (%d found)\n", __func__, n_heads);
+            LOG_ERR("%s: models with more than one NextN layer (%d found) are not supported\n", __func__, n_heads);
             return 1;
         } else if (!info.has_layers) {
             LOG_WRN("%s: no NextN tensor in '%s', '--nextn' has no effect\n", __func__, params.model.path.c_str());
         } else {
             nextn = nextn_collector_init(model, params, info.own_lm_head[0]);
-            if (nextn == nullptr) {
-                return 1;
-            }
+            if (nextn == nullptr) { return 1; }
 
             llama_set_embeddings_nextn(ctx, true, /*masked*/ false);
             g_collector.set_n_layer_nextn(n_heads);
