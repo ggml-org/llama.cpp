@@ -25,7 +25,7 @@ static const char * type_str(llama_gretype type) {
 static void verify_parsing(const char *grammar_bytes, const std::vector<std::pair<std::string, uint32_t>> expected, const std::vector<llama_grammar_element> &expected_rules) {
     uint32_t index = 0;
     llama_grammar_parser parsed_grammar;
-    parsed_grammar.parse(grammar_bytes);
+    bool parsed = parsed_grammar.parse(grammar_bytes);
 
     std::map<uint32_t, std::string> symbol_names;
     for (auto it = parsed_grammar.symbol_ids.begin(); it != parsed_grammar.symbol_ids.end(); ++it) {
@@ -76,6 +76,9 @@ static void verify_parsing(const char *grammar_bytes, const std::vector<std::pai
     }
 
     fprintf(stderr, "Testing grammar:%s\n", grammar_bytes);
+
+    // parse() empties the rules on error, so the checks below pass without this
+    assert(parsed && "should have parsed");
 
     if (parsed_grammar.symbol_ids.size() != expected.size()) {
         fprintf(stderr, "Code to update expectation (set TEST_GRAMMAR_PARSER_PRINT_ALL=1 to print all):\n");
@@ -225,6 +228,21 @@ int main()
         {LLAMA_GRETYPE_ALT, 0},
         {LLAMA_GRETYPE_CHAR_NOT, '1'},
         {LLAMA_GRETYPE_CHAR_RNG_UPPER, '3'},
+        {LLAMA_GRETYPE_END, 0},
+    });
+
+    // the GBNF generator escapes "-" in char classes, so the parser must accept "\-"
+    verify_parsing(R"""(
+        root  ::= [\-a] | [^\-<]
+    )""", {
+        {"root", 0},
+    }, {
+        // root (index 0)
+        {LLAMA_GRETYPE_CHAR, '-'},
+        {LLAMA_GRETYPE_CHAR_ALT, 'a'},
+        {LLAMA_GRETYPE_ALT, 0},
+        {LLAMA_GRETYPE_CHAR_NOT, '-'},
+        {LLAMA_GRETYPE_CHAR_ALT, '<'},
         {LLAMA_GRETYPE_END, 0},
     });
 
