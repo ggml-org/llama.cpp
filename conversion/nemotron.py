@@ -521,11 +521,13 @@ class NemotronHModel(GraniteHybridModel):
 class NemotronHPuzzleModel(NemotronHModel):
     """NVIDIA Puzzle: NemotronH with a per-block MoE config (block_configs).
 
-    The checkpoint also ships an MTP draft head (mtp.safetensors); like the other
-    NemotronH variants we skip it, since inference support for it is not in tree."""
+    The checkpoint also ships an MTP draft head (mtp.safetensors). It is skipped
+    here: there is no Puzzle MTP inference path in tree, and the head is laid out
+    by mtp_block_configs rather than the mtp.layers.* form NemotronHModel maps."""
 
     model_arch = gguf.MODEL_ARCH.NEMOTRON_H_MOE
     is_moe: bool = True
+    supports_mtp_export = False
 
     def __init__(self, dir_model: "Path", *args, **kwargs):
         hparams = dict(kwargs.pop("hparams", None) or ModelBase.load_hparams(dir_model, self.is_mistral_format))
@@ -548,6 +550,11 @@ class NemotronHPuzzleModel(NemotronHModel):
 
         self.head_dim = self.find_hparam(["head_dim", "attention_head_dim"])
         self.d_inner = self.find_hparam(["num_heads"]) * self.d_model
+
+        # NemotronHModel.__init__ folds an MTP block into block_count when the
+        # config carries num_nextn_predict_layers; Puzzle's config does, but its
+        # head has a different layout and no inference path, so stay opted out.
+        self._mtp_bid = None
 
     def set_gguf_parameters(self):
         GraniteHybridModel.set_gguf_parameters(self)
@@ -584,5 +591,11 @@ class NemotronHPuzzleModel(NemotronHModel):
         if name.endswith("mixer.gate.e_score_correction_bias"):
             name = name[: -len("e_score_correction_bias")] + "e_score_correction.bias"
 
-        # mtp.* is dropped by NemotronHModel.modify_tensors, as for the other variants.
         yield from super().modify_tensors(data_torch, name, bid)
+
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        # Drop the MTP head unconditionally; see the class docstring.
+        if item[0].startswith("mtp."):
+            return None
+        return super().filter_tensors(item)
