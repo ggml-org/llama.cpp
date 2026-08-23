@@ -4,12 +4,14 @@
 #include "ggml-backend-impl.h"
 #include "ggml-alloc.h"
 #include "ggml-cpp.h"
+#include "ggml-env-util.h"
 
 #include <algorithm>
 #include <cassert>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <functional>
 #include <future>
@@ -1767,27 +1769,25 @@ static void ggml_backend_meta_buffer_memset_tensor(
 
 static void ggml_backend_meta_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
     const size_t n_bufs = ggml_backend_meta_buffer_n_bufs(buffer);
-    // Value-checked, not presence-checked. This used to be `getenv(...) != nullptr`,
-    // so GGML_META_PARALLEL_SET=0 *enabled* the parallel path and the only way to
-    // turn it off was to unset the variable entirely.
-    //
-    // KNOWN ISSUE: on 2x gfx1030 with -sm tensor and an external draft model
-    // (-md ... --spec-type draft-dflash), enabling this reproducibly faults
-    // during weight upload:
-    //     Memory access fault by GPU node-3 ... Page not present
-    // Without a draft model the same path is fine. The draft-model memory probe
-    // that runs first always throws for dflash ("requires ctx_other to be set"),
-    // so it unwinds out of a partly-built context immediately beforehand.
-    // Mechanism not yet identified -- ruled out: missing stream sync (the
-    // backend's set_tensor_2d does synchronize) and a set_device race
-    // (ggml_cuda_set_device queries the driver, no shared cache).
+    // Value-checked, not presence-checked. This used to make
+    // GGML_META_PARALLEL_SET=0 enable the parallel path. Keep the feature
+    // fail-closed for missing or invalid values. Parallel upload with an
+    // external draft model remains a known opt-in issue; false values are the
+    // documented workaround.
     static const bool parallel_set_enabled = [] {
-        const char * v = getenv("GGML_META_PARALLEL_SET");
-        if (v == nullptr) {
-            return false;
+        const char * value = std::getenv("GGML_META_PARALLEL_SET");
+        switch (ggml_env_parse_flag(value)) {
+            case ggml_env_flag_value::enabled:
+                return true;
+            case ggml_env_flag_value::unset:
+            case ggml_env_flag_value::disabled:
+                return false;
+            case ggml_env_flag_value::invalid:
+                GGML_LOG_WARN("GGML_META_PARALLEL_SET='%s' is not recognized; disabling parallel "
+                        "weight upload. Valid: 1/on/true/yes, 0/off/false/no\n", value);
+                return false;
         }
-        return !(strcmp(v, "0") == 0 || strcmp(v, "off") == 0 ||
-                 strcmp(v, "false") == 0 || strcmp(v, "no") == 0);
+        return false;
     }();
     const bool parallel_set =
         parallel_set_enabled &&
