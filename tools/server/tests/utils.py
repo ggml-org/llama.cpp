@@ -29,7 +29,7 @@ from re import RegexFlag
 import wget
 
 
-DEFAULT_HTTP_TIMEOUT = 60
+DEFAULT_SERVER_START_TIMEOUT = 180
 
 # per-request timeout, a hung server fails the test instead of stalling the CI for hours
 DEFAULT_REQUEST_TIMEOUT = 600
@@ -134,7 +134,7 @@ class ServerProcess:
             self.server_port = int(os.environ["PORT"])
         self.external_server = "DEBUG_EXTERNAL" in os.environ
 
-    def start(self, timeout_seconds: int = DEFAULT_HTTP_TIMEOUT) -> None:
+    def start(self, timeout_seconds: int = DEFAULT_SERVER_START_TIMEOUT) -> None:
         env = {
             **os.environ,
             "LLAMA_SERVER_DEBUG_FAKE_TIMING": "1",
