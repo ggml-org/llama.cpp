@@ -1870,9 +1870,36 @@ void server_models_routes::init_routes() {
         throw std::runtime_error("subprocess is not enabled on this build");
     }
 
-    this->get_router_props = [this](const server_http_req & req) {
+    auto list_running_models = [this](std::vector<std::string> & names) {
+        for (const auto & meta : models.get_all_meta()) {
+            if (meta.is_running()) {
+                names.push_back(meta.name);
+            }
+        }
+    };
+
+    auto do_proxy_get = [this](const server_http_req & req, std::string & name) {
+        std::string method = "GET";
+        bool autoload = is_autoload(params, req);
+        auto error_res = std::make_unique<server_http_res>();
+        if (!router_validate_model(name, models, autoload, error_res)) {
+            return error_res;
+        }
+        if (autoload) {
+            models.ensure_model_ready(name, req.should_stop);
+        }
+        return models.proxy_request(req, method, name, false);
+    };
+
+    this->get_router_props = [this, do_proxy_get, list_running_models](const server_http_req & req) {
         std::string name = req.get_param("model");
         if (name.empty()) {
+            // no model given: serve the single running model, if there is exactly one
+            std::vector<std::string> running;
+            list_running_models(running);
+            if (running.size() == 1) {
+                return do_proxy_get(req, running[0]);
+            }
             // main instance
             auto res = std::make_unique<server_http_res>();
             res_ok(res, {
@@ -1894,26 +1921,16 @@ void server_models_routes::init_routes() {
             });
             return res;
         }
-        return proxy_get(req);
+        return do_proxy_get(req, name);
     };
 
-    this->proxy_get = [this](const server_http_req & req) {
-        std::string method = "GET";
+    this->proxy_get = [do_proxy_get](const server_http_req & req) {
         std::string name = req.get_param("model");
-        bool autoload = is_autoload(params, req);
-        auto error_res = std::make_unique<server_http_res>();
-        if (!router_validate_model(name, models, autoload, error_res)) {
-            return error_res;
-        }
-        if (autoload) {
-            models.ensure_model_ready(name, req.should_stop);
-        }
-        return models.proxy_request(req, method, name, false);
+        return do_proxy_get(req, name);
     };
 
-    this->proxy_post = [this](const server_http_req & req) {
+    auto do_proxy_post = [this](const server_http_req & req, const json & body) {
         std::string method = "POST";
-        json body = json::parse(req.body);
         std::string name = json_value(body, "model", std::string());
         bool autoload = is_autoload(params, req);
         auto error_res = std::make_unique<server_http_res>();
@@ -1940,6 +1957,31 @@ void server_models_routes::init_routes() {
         // client may have dropped during the wait (page reload) and the session buffer must
         // still receive the generation for a later resume
         return models.proxy_request(req, method, name, true, waited && ticket != 0); // update last usage for POST request only
+    };
+
+    this->proxy_post = [do_proxy_post](const server_http_req & req) {
+        return do_proxy_post(req, json::parse(req.body));
+    };
+
+    this->post_router_props = [do_proxy_post, list_running_models](const server_http_req & req) {
+        json body = json::parse(req.body);
+        if (json_value(body, "model", std::string()).empty()) {
+            // no model given: use the only running model, if there is exactly one
+            std::vector<std::string> running;
+            list_running_models(running);
+            if (running.size() != 1) {
+                auto res = std::make_unique<server_http_res>();
+                res_err(res, format_error_response(running.empty()
+                        ? "no model is currently loaded, specify \"model\" in the request"
+                        : "multiple models are currently loaded, specify \"model\" in the request",
+                        ERROR_TYPE_INVALID_REQUEST));
+                return res;
+            }
+            if (body.is_object()) {
+                body["model"] = running[0];
+            }
+        }
+        return do_proxy_post(req, body);
     };
 
     this->post_router_models_load = [this](const server_http_req & req) {

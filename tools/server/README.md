@@ -1796,6 +1796,8 @@ For **POST** endpoints (`/v1/chat/completions`, `/v1/completions`, `/infill`, et
 }
 ```
 
+For `POST /props` the `"model"` field is optional: when exactly one model is loaded, the router routes the request to it. With zero or multiple loaded models the request is rejected, with a hint to specify `"model"`.
+
 For **GET** endpoints (`/props`, `/metrics`, etc.) The router uses the `model` query parameter (URL-encoded):
 
 ```
