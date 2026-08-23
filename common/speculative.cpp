@@ -263,7 +263,7 @@ struct common_speculative_impl_draft_simple : public common_speculative_impl {
         llama_batch batch_dft = batch;
         batch_dft.logits = nullptr;
 
-        const int ret = llama_decode(ctx_dft, batch_dft);
+        const int ret = common_power_decode(ctx_dft, batch_dft, params.power_throttle);
 
         if (ret != 0) {
             SPC_ERR("failed to decode draft batch, ret = %d\n", ret);
@@ -297,7 +297,7 @@ struct common_speculative_impl_draft_simple : public common_speculative_impl {
             common_batch_add(batch, dp.id_last, dp.n_past, { seq_id }, true);
         }
 
-        int ret = llama_decode(ctx_dft, batch);
+        int ret = common_power_decode(ctx_dft, batch, params.power_throttle);
         if (ret != 0) {
             SPC_ERR("llama_decode returned %d\n", ret);
             return;
@@ -361,7 +361,7 @@ struct common_speculative_impl_draft_simple : public common_speculative_impl {
             }
 
             // evaluate the drafted tokens on the draft model
-            ret = llama_decode(ctx_dft, batch);
+            ret = common_power_decode(ctx_dft, batch, params.power_throttle);
             if (ret != 0) {
                 SPC_ERR("llama_decode[%d] returned %d\n", i, ret);
                 break;
@@ -634,7 +634,7 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
                 /*.seq_id   =*/ nullptr,
                 /*.logits   =*/ nullptr,
             };
-            const int32_t rc = llama_encode(ctx_dft, enc_batch);
+            const int32_t rc = common_power_decode(ctx_dft, enc_batch, params.power_throttle);
             if (rc != 0) {
                 SPC_ERR("llama_encode(ctx_dft) failed rc=%d (n_tokens=%d, offset=%d)\n",
                         rc, (int) n_chunk, (int) i);
@@ -705,7 +705,7 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
         }
 
         if (batch.n_tokens > 0) {
-            const int32_t rc = llama_decode(ctx_dft, batch);
+            const int32_t rc = common_power_decode(ctx_dft, batch, params.power_throttle);
             if (rc != 0) {
                 SPC_ERR("llama_decode(ctx_dft) failed rc=%d (n_tokens=%d, ubatch_pos[0]=%d)\n",
                         rc, (int) batch.n_tokens, (int) batch_in.pos[0]);
@@ -757,7 +757,7 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
             return;
         }
 
-        int ret = llama_decode(ctx_dft, batch);
+        int ret = common_power_decode(ctx_dft, batch, params.power_throttle);
         if (ret != 0) {
             SPC_ERR("llama_decode returned %d\n", ret);
             return;
@@ -822,7 +822,7 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
                 break;
             }
 
-            ret = llama_decode(ctx_dft, batch);
+            ret = common_power_decode(ctx_dft, batch, params.power_throttle);
             if (ret != 0) {
                 SPC_ERR("llama_decode[%d] returned %d\n", i, ret);
                 break;
@@ -1128,7 +1128,7 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
                     /*.logits   =*/ nullptr,
                 };
 
-                int32_t rc = llama_encode(ctx_dft, enc_batch);
+                int32_t rc = common_power_decode(ctx_dft, enc_batch, params.power_throttle);
                 if (rc != 0) {
                     LOG_ERR("%s: llama_encode(ctx_dft) failed rc=%d (n_tokens=%d, offset=%d)\n",
                             __func__, rc, (int) n_chunk, (int) offset);
@@ -1148,7 +1148,7 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
                     batch_inject.seq_id[i][0] = seq_id;
                     batch_inject.logits[i]    = false;
                 }
-                rc = llama_decode(ctx_dft, batch_inject);
+                rc = common_power_decode(ctx_dft, batch_inject, params.power_throttle);
                 if (rc != 0) {
                     LOG_ERR("%s: llama_decode(ctx_dft) failed rc=%d (n_tokens=%d, offset=%d)\n",
                             __func__, rc, (int) n_chunk, (int) offset);
@@ -1195,7 +1195,7 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
         }
 
         // decode all sequence's noise block in a single batch
-        int ret = llama_decode(ctx_dft, batch);
+        int ret = common_power_decode(ctx_dft, batch, params.power_throttle);
         if (ret != 0) {
             LOG_WRN("%s: llama_decode returned %d\n", __func__, ret);
             return;
@@ -1511,7 +1511,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                     llama_set_nextn_layer_offset(ctx_dft, head);
                 }
 
-                const int32_t rc = llama_decode(ctx_dft, batch);
+                const int32_t rc = common_power_decode(ctx_dft, batch, params.power_throttle);
                 if (rc != 0) {
                     SPC_ERR("llama_decode(ctx_dft) head=%d failed rc=%d (pos=%d)\n",
                             head, (int) rc, (int) batch_in.pos[0]);
@@ -1600,7 +1600,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                 llama_set_nextn_layer_offset(ctx_dft, i);
             }
 
-            int ret = llama_decode(ctx_dft, batch);
+            int ret = common_power_decode(ctx_dft, batch, params.power_throttle);
             if (ret != 0) {
                 SPC_ERR("llama_decode[%d] returned %d\n", i, ret);
                 break;
@@ -2458,7 +2458,9 @@ common_speculative_output_limits common_speculative_get_output_limits(
 
 // initialization of the speculative decoding system
 //
-common_speculative * common_speculative_init(common_params_speculative & params, uint32_t n_seq) {
+common_speculative * common_speculative_init(common_params_speculative & params, uint32_t n_seq, common_power_throttle * power_throttle) {
+    params.draft.power_throttle = power_throttle;
+
     // Compute the implementations to use based on the config and their order of preference
     std::vector<common_speculative_config> configs = {}; // list of speculative configs to try
     {
