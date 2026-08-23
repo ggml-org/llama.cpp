@@ -135,7 +135,7 @@ struct quantize_state_impl {
     int i_ffn_down     = 0;
     int i_ffn_gate     = 0;
     int i_ffn_up       = 0;
-    int n_fallback    = 0;
+    int n_fallback     = 0;
     bool has_imatrix = false;
 
     // used to figure out if a model has tied embeddings (tok_embd shares weights with output)
@@ -376,8 +376,8 @@ static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type 
         return std::make_pair(i_layer, n_layer);
     };
 
-    // for arches that share the same tensor between the token embeddings and the output, we quantize the token embeddings
-    // with the quantization of the output tensor
+    // for arches that share the same tensor between the token embeddings and the output,
+    // we quantize the token embeddings with the quantization of the output tensor
     if (category == TENSOR_CATEGORY_OUTPUT || (qs.has_tied_embeddings && category == TENSOR_CATEGORY_TOKEN_EMBD)) {
         if (qs.params->output_tensor_type < GGML_TYPE_COUNT) { new_type = qs.params->output_tensor_type; }
         else {
@@ -596,7 +596,7 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs,
             }
         }
 
-        // otherwise, use the standard logic for choosing the quantization type based on the selected mixture
+        // otherwise, use the standard logic
         if (!manual && !params->pure) { new_type = llama_tensor_get_type_impl(qs, new_type, tensor, params->ftype, tm.category); }
 
         // if incompatible tensor shape, fallback to a compatible type
@@ -2737,8 +2737,10 @@ ggml_type llama_ftype_get_default_type(const llama_ftype ftype) {
         case LLAMA_FTYPE_MOSTLY_Q5_K_S:
         case LLAMA_FTYPE_MOSTLY_Q5_K_M:  return GGML_TYPE_Q5_K;
         case LLAMA_FTYPE_MOSTLY_Q6_K:    return GGML_TYPE_Q6_K;
+        // Ternary quants
         case LLAMA_FTYPE_MOSTLY_TQ1_0:   return GGML_TYPE_TQ1_0;
         case LLAMA_FTYPE_MOSTLY_TQ2_0:   return GGML_TYPE_TQ2_0;
+        // Lattice and Non-linear quants
         case LLAMA_FTYPE_MOSTLY_IQ2_XXS: return GGML_TYPE_IQ2_XXS;
         case LLAMA_FTYPE_MOSTLY_IQ2_XS:  return GGML_TYPE_IQ2_XS;
         case LLAMA_FTYPE_MOSTLY_IQ2_S:   return GGML_TYPE_IQ2_XS;
