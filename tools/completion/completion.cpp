@@ -203,6 +203,12 @@ int llama_completion(int argc, char ** argv) {
         LOG_INF("\n");
     }
 
+    common_power_throttle power_throttle;
+    common_power_throttle_init(power_throttle, params.power_percent);
+    if (common_power_throttle_enabled(&power_throttle)) {
+        LOG_INF("%s: power throttle target = %d%% compute duty cycle\n", __func__, power_throttle.percent.load());
+    }
+
     std::string path_session = params.path_prompt_cache;
     std::vector<llama_token> session_tokens;
 
@@ -528,10 +534,12 @@ int llama_completion(int argc, char ** argv) {
         int enc_input_size = embd_inp.size();
         llama_token * enc_input_buf = embd_inp.data();
 
+        const int64_t enc_t0 = llama_time_us();
         if (llama_encode(ctx, llama_batch_get_one(enc_input_buf, enc_input_size))) {
             LOG_ERR("%s : failed to eval\n", __func__);
             return 1;
         }
+        common_power_throttle_apply(&power_throttle, (double) (llama_time_us() - enc_t0), false);
 
         llama_token decoder_start_token_id = llama_model_decoder_start_token(model);
         if (decoder_start_token_id == LLAMA_TOKEN_NULL) {
@@ -644,7 +652,7 @@ int llama_completion(int argc, char ** argv) {
                 const bool is_last_batch = (n_consumed >= (int) embd_inp.size());
                 const bool save_now = session_do_save && is_last_batch;
                 session_tokens.insert(session_tokens.end(), embd.begin(), embd.end());
-                if (!common_prompt_batch_decode(ctx, session_tokens, embd.size(), n_past, params.n_batch, path_session, save_now)) {
+                if (!common_prompt_batch_decode(ctx, session_tokens, embd.size(), n_past, params.n_batch, path_session, save_now, &power_throttle)) {
                     return 1;
                 }
                 n_session_consumed += embd.size();
