@@ -2203,6 +2203,20 @@ ggml_tensor * llama_model::get_rope_factors(const llama_cparams & cparams, int i
     return layers[il].rope_short;
 }
 
+// Physical attention-KV cell count under streaming eviction: per-sequence
+// sink+recent capacity (scaled by n_seq_max for the unified cache) plus the
+// ubatch, so the recent window of one sequence can never evict another's.
+static uint32_t attn_cache_evict_size(const llama_cparams & cparams) {
+    if (cparams.n_kv_sink == 0) {
+        return cparams.n_ctx_seq;
+    }
+    const uint32_t per_seq = cparams.n_kv_sink + cparams.n_kv_recent;
+    if (cparams.kv_unified) {
+        return cparams.n_seq_max * per_seq + cparams.n_ubatch;
+    }
+    return per_seq + cparams.n_ubatch;
+}
+
 llama_memory_i * llama_model::create_memory(const llama_memory_params & params, const llama_cparams & cparams) const {
     llama_memory_i * res;
 
@@ -2266,7 +2280,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                             !cparams.flash_attn,
                             cparams.offload_kqv,
                             cparams.kv_unified,
-                            cparams.n_ctx_seq,
+                            attn_cache_evict_size(cparams),
                             cparams.n_seq_max,
                             1,
                             hparams.n_swa,
@@ -2275,6 +2289,13 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                             filter,
                             nullptr,
                             nullptr);
+
+                    if (cparams.n_kv_sink > 0 && cparams.n_kv_recent > 0) {
+                        auto * kv = dynamic_cast<llama_kv_cache *>(res);
+                        if (kv) {
+                            kv->set_eviction(cparams.n_kv_sink, cparams.n_kv_recent);
+                        }
+                    }
                 } else {
                     // Main context: DSA cache for the trunk layers only - the nextn
                     // layer(s) are never attended by the trunk graph.
@@ -2318,7 +2339,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                             !cparams.flash_attn,
                             cparams.offload_kqv,
                             cparams.kv_unified,
-                            cparams.n_ctx_seq,
+                            attn_cache_evict_size(cparams),
                             cparams.n_seq_max,
                             1,
                             hparams.n_swa,
@@ -2327,6 +2348,13 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                             filter,
                             nullptr,
                             nullptr);
+
+                    if (cparams.n_kv_sink > 0 && cparams.n_kv_recent > 0) {
+                        auto * kv = dynamic_cast<llama_kv_cache *>(res);
+                        if (kv) {
+                            kv->set_eviction(cparams.n_kv_sink, cparams.n_kv_recent);
+                        }
+                    }
                 } else {
                     // main context: DSA cache for the trunk full-attention layers plus a window-sized SWA cache
                     llama_kv_cache::layer_filter_cb filter_mla = nullptr;
@@ -2526,7 +2554,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                             /* attn_type_k       */ params.type_k,
                             /* attn_type_v       */ params.type_v,
                             /* attn_v_trans      */ !cparams.flash_attn,
-                            /* attn_kv_size      */ cparams.n_ctx_seq,
+                            /* attn_kv_size      */ attn_cache_evict_size(cparams),
                             /* attn_n_pad        */ 1,
                             /* attn_n_swa        */ hparams.n_swa,
                             /* attn_swa_type     */ hparams.swa_type,
@@ -2535,6 +2563,8 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                             /* recurrent_kv_size */ std::max((uint32_t) 1, cparams.n_seq_max),
                             /* n_seq_max         */ cparams.n_seq_max,
                             /* n_rs_seq          */ cparams.n_rs_seq,
+                            /* n_kv_sink         */ cparams.n_kv_sink,
+                            /* n_kv_recent       */ cparams.n_kv_recent,
                             /* offload           */ cparams.offload_kqv,
                             /* unified           */ cparams.kv_unified,
                             /* filter_attn       */ std::move(filter_attn),
@@ -2632,7 +2662,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                                 !cparams.flash_attn,
                                 cparams.offload_kqv,
                                 cparams.kv_unified,
-                                cparams.n_ctx_seq,
+                                attn_cache_evict_size(cparams),
                                 cparams.n_seq_max,
                                 1,
                                 hparams.n_swa,
@@ -2641,6 +2671,13 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                                 filter,
                                 nullptr,
                                 nullptr);
+
+                        if (cparams.n_kv_sink > 0 && cparams.n_kv_recent > 0) {
+                            auto * kv = dynamic_cast<llama_kv_cache *>(res);
+                            if (kv) {
+                                kv->set_eviction(cparams.n_kv_sink, cparams.n_kv_recent);
+                            }
+                        }
                     }
                 }
             }

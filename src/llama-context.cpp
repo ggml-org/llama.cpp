@@ -108,6 +108,25 @@ llama_context::llama_context(
         cparams.n_rs_seq = 0;
     }
 
+    cparams.n_kv_sink   = params.n_kv_sink;
+    cparams.n_kv_recent = params.n_kv_recent;
+    if ((cparams.n_kv_sink == 0) != (cparams.n_kv_recent == 0)) {
+        throw std::runtime_error("n_kv_sink and n_kv_recent must both be zero (disabled) or both non-zero");
+    }
+    if (cparams.n_kv_sink > 0) {
+        if (cparams.n_kv_sink + cparams.n_kv_recent + cparams.n_ubatch < cparams.n_kv_sink) {
+            throw std::runtime_error("n_kv_sink + n_kv_recent + n_ubatch overflow");
+        }
+        // MTP rollback only rewinds a few draft tokens, which stays inside n_kv_recent,
+        // so eviction is safe under MTP as long as the recent window is large enough.
+        if (params.ctx_type == LLAMA_CONTEXT_TYPE_MTP && cparams.n_kv_recent < 64) {
+            LLAMA_LOG_WARN("%s: kv eviction under MTP requires n_kv_recent >= 64 (got %u); disabling\n",
+                    __func__, cparams.n_kv_recent);
+            cparams.n_kv_sink   = 0;
+            cparams.n_kv_recent = 0;
+        }
+    }
+
     cparams.n_threads               = params.n_threads;
     cparams.n_threads_batch         = params.n_threads_batch;
     cparams.yarn_ext_factor         = params.yarn_ext_factor  >= 0.0f ? params.yarn_ext_factor  : hparams.yarn_ext_factor;
@@ -314,6 +333,8 @@ llama_context::llama_context(
     LLAMA_LOG_INFO("%s: freq_base             = %.1f\n", __func__, cparams.rope_freq_base);
     LLAMA_LOG_INFO("%s: freq_scale            = %g\n",   __func__, cparams.rope_freq_scale);
     LLAMA_LOG_INFO("%s: n_rs_seq              = %u\n",   __func__, cparams.n_rs_seq);
+    LLAMA_LOG_INFO("%s: n_kv_sink             = %u\n",   __func__, cparams.n_kv_sink);
+    LLAMA_LOG_INFO("%s: n_kv_recent           = %u\n",   __func__, cparams.n_kv_recent);
     LLAMA_LOG_INFO("%s: n_outputs_max         = %u\n",   __func__, cparams.n_outputs_max);
     LLAMA_LOG_INFO("%s: n_outputs_max_per_seq = %u\n",   __func__, cparams.n_outputs_max_per_seq);
 
@@ -3596,6 +3617,8 @@ llama_context_params llama_context_default_params() {
         /*.n_ubatch                    =*/ 512,
         /*.n_seq_max                   =*/ 1,
         /*.n_rs_seq                    =*/ 0,
+        /*.n_kv_sink                  =*/ 0,
+        /*.n_kv_recent                =*/ 0,
         /*.n_outputs_max               =*/ 0,
         /*.n_outputs_max_per_seq       =*/ 1,
         /*.n_threads                   =*/ GGML_DEFAULT_N_THREADS, // TODO: better default

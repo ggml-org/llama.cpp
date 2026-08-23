@@ -1079,6 +1079,10 @@ llama_kv_cache::slot_info llama_kv_cache::find_slot(const llama_ubatch & ubatch,
             }
 
             if (n_tested >= cells.size()) {
+                // eviction: fall through to victim recycling instead of failing
+                if (n_kv_sink > 0 && n_kv_recent > 0) {
+                    break;
+                }
                 //LLAMA_LOG_ERROR("%s: failed to find a slot for %d tokens\n", __func__, n_tokens);
                 return { };
             }
@@ -1086,7 +1090,47 @@ llama_kv_cache::slot_info llama_kv_cache::find_slot(const llama_ubatch & ubatch,
 
         // we didn't find a suitable slot - return empty result
         if (res.idxs[s].size() < n_tokens) {
-            return { };
+            if (n_kv_sink > 0 && n_kv_recent > 0) {
+                // streaming eviction: recycle the oldest masked-middle cell of this sequence
+                // only recycle cells outside the recent window of EVERY query in this ubatch,
+                // i.e. strictly older than (min query pos - n_kv_recent), so the batch's own
+                // attention never loses a cell it must see.
+                llama_pos p1_min = ubatch.pos[0];
+                for (uint32_t t = 1; t < ubatch.n_tokens; ++t) {
+                    if (ubatch.pos[t] < p1_min) {
+                        p1_min = ubatch.pos[t];
+                    }
+                }
+
+                std::vector<uint32_t> candidates;
+                for (uint32_t idx = 0; idx < cells.size(); ++idx) {
+                    if (cells.is_empty(idx)) continue;
+                    if (cells.seq_count(idx) != 1) continue;
+                    if (!cells.seq_has(idx, seq_id)) continue;
+
+                    const llama_pos pos_cell = cells.pos_get(idx);
+
+                    // never recycle attention-sink cells
+                    if (pos_cell < (llama_pos) n_kv_sink) continue;
+                    // never recycle cells still inside the visible recent window of this ubatch
+                    if (pos_cell >= p1_min - (llama_pos) n_kv_recent) continue;
+
+                    candidates.push_back(idx);
+                }
+
+                std::sort(candidates.begin(), candidates.end(), [&](uint32_t a, uint32_t b) {
+                    return cells.pos_get(a) < cells.pos_get(b);
+                });
+
+                const uint32_t need = n_tokens - res.idxs[s].size();
+                for (uint32_t i = 0; i < need && i < candidates.size(); ++i) {
+                    res.idxs[s].push_back(candidates[i]);
+                }
+            }
+
+            if (res.idxs[s].size() < n_tokens) {
+                return { };
+            }
         }
     }
 
@@ -1118,11 +1162,15 @@ void llama_kv_cache::apply_ubatch(const slot_info & sinfo, const llama_ubatch & 
 
             const auto idx = sinfo.idxs[s][ii];
 
+            GGML_ASSERT(idx < cells.size() && "eviction: recycled slot out of bounds");
+
             if (!cells.is_empty(idx)) {
                 assert(cells.seq_count(idx) == 1);
 
                 const llama_seq_id seq_id = cells.seq_get(idx);
                 const llama_pos    pos    = cells.pos_get(idx);
+
+                GGML_ASSERT(seq_id >= 0 && seq_id < LLAMA_MAX_SEQ && "eviction: bad seq_id");
 
                 seq_pos_max_rm[seq_id] = std::max(seq_pos_max_rm[seq_id], pos);
 
@@ -1161,20 +1209,24 @@ void llama_kv_cache::apply_ubatch(const slot_info & sinfo, const llama_ubatch & 
     // note: we want to preserve the invariant that all positions between [pos_min, pos_max] for each sequence
     //       will be present in the cache. so we have to purge any position which is less than those we would overwrite
     //       ref: https://github.com/ggml-org/llama.cpp/pull/13746#issuecomment-2916057092
-    for (uint32_t s = 0; s < LLAMA_MAX_SEQ; ++s) {
-        if (seq_pos_max_rm[s] == -1) {
-            continue;
-        }
+    // when streaming eviction is active the cache is intentionally non-contiguous (sink + sliding recent window),
+    // so the purge is skipped and recycling is handled by find_slot instead.
+    if (n_kv_sink == 0 && n_kv_recent == 0) {
+        for (uint32_t s = 0; s < LLAMA_MAX_SEQ; ++s) {
+            if (seq_pos_max_rm[s] == -1) {
+                continue;
+            }
 
-        GGML_ASSERT(s < seq_to_stream.size());
+            GGML_ASSERT(s < seq_to_stream.size());
 
-        auto & cells = v_cells[seq_to_stream[s]];
+            auto & cells = v_cells[seq_to_stream[s]];
 
-        if (cells.seq_pos_min(s) <= seq_pos_max_rm[s]) {
-            LLAMA_LOG_DEBUG("%s: purging positions [%d, %d] of sequence %d from KV cache\n",
-                    __func__, cells.seq_pos_min(s), seq_pos_max_rm[s], s);
+            if (cells.seq_pos_min(s) <= seq_pos_max_rm[s]) {
+                LLAMA_LOG_DEBUG("%s: purging positions [%d, %d] of sequence %d from KV cache\n",
+                        __func__, cells.seq_pos_min(s), seq_pos_max_rm[s], s);
 
-            seq_rm(s, cells.seq_pos_min(s), seq_pos_max_rm[s] + 1);
+                seq_rm(s, cells.seq_pos_min(s), seq_pos_max_rm[s] + 1);
+            }
         }
     }
 
@@ -1192,6 +1244,10 @@ bool llama_kv_cache::get_can_shift() const {
         return false;
     }
     if (hparams.n_pos_per_embd() > 1) {
+        return false;
+    }
+    // a fragmented evicting cache cannot be shifted
+    if (n_kv_sink > 0 && n_kv_recent > 0) {
         return false;
     }
     return true;
@@ -1547,6 +1603,9 @@ struct args_set_input_kq_mask {
     uint32_t       n_swa;
     llama_swa_type swa_type;
 
+    uint32_t n_kv_sink;
+    uint32_t n_kv_recent;
+
     int64_t n_kv;
     int64_t n_stream;
     int64_t n_tps;
@@ -1611,7 +1670,7 @@ static void set_input_kq_mask_impl(const args_set_input_kq_mask & args, T * data
 
             auto & idxs = seq_idxs[seq_id];
 
-            if (!alibi) {
+            if (!alibi && args.n_kv_sink == 0 && args.n_kv_recent == 0) {
                 if (seq_srct.find(seq_id) != seq_srct.end()) {
                     const uint32_t srct = seq_srct[seq_id];
 
@@ -1652,6 +1711,13 @@ static void set_input_kq_mask_impl(const args_set_input_kq_mask & args, T * data
                 }
 
                 p0 = cells.pos_get(j);
+
+                // eviction: mask the middle region, keep [0,n_kv_sink) and [p1-n_kv_recent, p1)
+                if (args.n_kv_sink != 0 && args.n_kv_recent != 0) {
+                    if (p0 >= (llama_pos) args.n_kv_sink && p0 < p1 - (llama_pos) args.n_kv_recent) {
+                        goto skip;
+                    }
+                }
 
                 if (!alibi) {
                     if (!prev) {
@@ -1762,6 +1828,8 @@ void llama_kv_cache::set_input_kq_mask(ggml_tensor * dst, const llama_ubatch * u
         /*.seq_to_stream    =*/ seq_to_stream,
         /*.n_swa            =*/ n_swa,
         /*.swa_type         =*/ swa_type,
+        /*.n_kv_sink        =*/ n_kv_sink,
+        /*.n_kv_recent      =*/ n_kv_recent,
         /*.n_kv             =*/ n_kv,
         /*.n_stream         =*/ n_stream,
         /*.n_tps            =*/ n_tps,

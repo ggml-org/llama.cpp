@@ -118,8 +118,12 @@ public:
 
     ~llama_kv_cache() = default;
 
-    //
-    // llama_memory_i
+    // enable streaming eviction (sink + recent window); must be called before use
+    void set_eviction(uint32_t sink, uint32_t recent) {
+        n_kv_sink   = sink;
+        n_kv_recent = recent;
+    }
+
     //
 
     llama_memory_context_ptr init_batch(
@@ -269,6 +273,10 @@ private:
 
     // SWA
     const uint32_t n_swa = 0;
+
+    // streaming eviction: attention-sink + recent window (0 = disabled)
+    uint32_t n_kv_sink   = 0;
+    uint32_t n_kv_recent = 0;
 
     // env: LLAMA_ATTN_ROT_DISABLE
     bool attn_rot_k = false;

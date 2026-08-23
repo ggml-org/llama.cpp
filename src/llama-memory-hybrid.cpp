@@ -25,6 +25,8 @@ llama_memory_hybrid::llama_memory_hybrid(
                             /* common */
                  uint32_t   n_seq_max,
                  uint32_t   n_rs_seq,
+                 uint32_t   n_kv_sink,
+                 uint32_t   n_kv_recent,
                      bool   offload,
                      bool   unified,
                             /* layer filters */
@@ -62,7 +64,11 @@ llama_memory_hybrid::llama_memory_hybrid(
         filter_recr == nullptr ?
             [&](int32_t il) { return hparams.is_recr(il); }
             : filter_recr
-    )) {}
+    )) {
+    if (n_kv_sink > 0 && n_kv_recent > 0) {
+        mem_attn->set_eviction(n_kv_sink, n_kv_recent);
+    }
+}
 
 llama_memory_context_ptr llama_memory_hybrid::init_batch(llama_batch_allocr & balloc, uint32_t n_ubatch, bool embd_all) {
     do {
