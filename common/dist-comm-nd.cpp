@@ -17,6 +17,7 @@ bool dist_nd_send2(dist_nd_conn *, const void *, size_t, const void *, size_t, s
     return false;
 }
 bool dist_nd_recv(dist_nd_conn *, void *, size_t, std::string & err) { err = "no ND"; return false; }
+bool dist_nd_send_drain(dist_nd_conn *, std::string &) { return true; }
 void dist_nd_free(dist_nd_conn *) {}
 
 #else // LLAMA_DIST_TP_ND
@@ -66,6 +67,10 @@ static constexpr uint32_t ND_HELLO_VER   = 1;
 static constexpr size_t   ND_PAYLOAD    = 256 * 1024;      // provider caps a transfer at 1 MiB
 static constexpr int      ND_RX_DEPTH   = 24;              // pre-posted receives: 24 x 256 KiB = 6 MiB
 static constexpr int      ND_WINDOW     = ND_RX_DEPTH - 1; // chunks in flight before an ack is required
+// Staging slots for outbound chunks. ONE slot meant one outstanding send, which forced the whole
+// exchange to serialize; a small ring lets a send stay on the wire while this rank receives. Kept
+// well under ND_WINDOW so flow control, not the ring, stays what bounds messages in flight.
+static constexpr int      ND_TX_DEPTH   = 4;
 static constexpr int      ND_CONNECT_TIMEOUT_S = 30;
 static constexpr uint64_t ND_POLL_SPIN  = 4096;
 static constexpr uint32_t ND_POLL_TICK_MS = 200;   // how long to sleep on the CQ between peer liveness checks
@@ -186,8 +191,14 @@ struct dist_nd_conn {
     int      tx_since_ack = 0;
     int      rx_since_ack = 0;
     uint32_t tx_seq       = 0;
-    size_t   tx_fill      = 0;   // payload bytes staged in tx_buf behind the header
+    size_t   tx_fill      = 0;   // payload bytes staged in the current tx slot behind the header
     int      corked       = 0;
+    int      tx_slot_cur  = 0;   // ring index currently being staged into
+    int      tx_inflight  = 0;   // sends posted whose completion has not been reaped yet
+
+    uint8_t * tx_slot(int i) const {
+        return tx_buf + (size_t)i * ND_SLOT;
+    }
 
     uint8_t * rx_slot(int i) const {
         return rx_buf + (size_t)i * ND_SLOT;
@@ -349,7 +360,7 @@ static bool nd_setup(std::unique_ptr<dist_nd_conn> & conn, const struct sockaddr
         return false;
     }
 
-    c->tx_buf = (uint8_t *)_aligned_malloc(ND_SLOT, 4096);
+    c->tx_buf = (uint8_t *)_aligned_malloc(ND_SLOT * ND_TX_DEPTH, 4096);
     c->rx_buf = (uint8_t *)_aligned_malloc(ND_SLOT * ND_RX_DEPTH, 4096);
     if (!c->tx_buf || !c->rx_buf) {
         return false;
@@ -363,7 +374,7 @@ static bool nd_setup(std::unique_ptr<dist_nd_conn> & conn, const struct sockaddr
     if (FAILED(hr)) {
         return false;
     }
-    hr = c->tx_mr->Register(c->tx_buf, ND_SLOT, ND_MR_FLAG_ALLOW_LOCAL_WRITE, &c->ov.ov);
+    hr = c->tx_mr->Register(c->tx_buf, ND_SLOT * ND_TX_DEPTH, ND_MR_FLAG_ALLOW_LOCAL_WRITE, &c->ov.ov);
     if (!nd_done(hr, c->tx_mr, &c->ov.ov)) {
         ND_LOG_DBG("tx Register failed: 0x%08lx\n", (unsigned long)hr);
         return false;
@@ -669,6 +680,9 @@ static bool nd_step(dist_nd_conn * c) {
     }
     if (res.RequestContext == ND_CTX_SEND) {
         c->send_done++;
+        if (c->tx_inflight > 0) {
+            c->tx_inflight--;   // the slot that send occupied is free to stage into again
+        }
         return true;
     }
     const int slot = nd_ctx_slot(res.RequestContext);
@@ -699,18 +713,23 @@ static bool nd_step(dist_nd_conn * c) {
     return true;
 }
 
-static bool nd_post_send(dist_nd_conn * c, size_t len) {
-    ND2_SGE sge = {};
-    sge.Buffer            = c->tx_buf;
-    sge.BufferLength      = (ULONG)len;
-    sge.MemoryRegionToken = c->tx_token;
+static bool nd_flush(dist_nd_conn * c);
 
-    c->send_done = 0;
-    if (FAILED(c->qp->Send(ND_CTX_SEND, &sge, 1, 0))) {
-        ND_LOG_ERR("Send post failed\n");
-        return false;
-    }
-    while (c->send_done == 0) {
+// Opt-in. Unset, every send still retires before dist_nd_send2 returns, which is exactly what the
+// committed known-good build does.
+static bool nd_full_duplex() {
+    static const bool on = []() {
+        const char * v = std::getenv("LLAMA_DIST_TP_FULL_DUPLEX");
+        return v && v[0] != '\0' && v[0] != '0';
+    }();
+    return on;
+}
+
+// The slot about to be staged into must not still be on the wire. Sends are posted round-robin and
+// retire in order, so while fewer than ND_TX_DEPTH are outstanding the current slot is the free
+// one; that invariant is why this is the only place a staging write can block.
+static bool nd_tx_slot_ready(dist_nd_conn * c) {
+    while (c->tx_inflight >= ND_TX_DEPTH) {
         if (!nd_step(c)) {
             return false;
         }
@@ -718,10 +737,55 @@ static bool nd_post_send(dist_nd_conn * c, size_t len) {
     return true;
 }
 
+// Post WITHOUT waiting for the completion. This is the change that lets an exchange overlap: this
+// function used to spin on its own send completion, so a full-duplex link carried one direction at
+// a time and every collective paid two serial transfers instead of one.
+static bool nd_post_send(dist_nd_conn * c, int slot, size_t len) {
+    ND2_SGE sge = {};
+    sge.Buffer            = c->tx_slot(slot);
+    sge.BufferLength      = (ULONG)len;
+    sge.MemoryRegionToken = c->tx_token;
+
+    if (FAILED(c->qp->Send(ND_CTX_SEND, &sge, 1, 0))) {
+        ND_LOG_ERR("Send post failed\n");
+        return false;
+    }
+    c->tx_inflight++;
+    return true;
+}
+
+// Wait until every posted send has retired, so a staging slot is never recycled or freed while a
+// transfer still references it.
+static bool nd_send_drain_local(dist_nd_conn * c) {
+    while (c->tx_inflight > 0) {
+        if (!nd_step(c)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// A bare header (ack, bye) takes its own slot so it cannot overwrite a staged data chunk. Anything
+// still staged is flushed first, which also keeps tx_seq ordering intact.
+static bool nd_post_hdr_only(dist_nd_conn * c, const nd_msg_hdr & hdr) {
+    if (c->tx_fill != 0 && !nd_flush(c)) {
+        return false;
+    }
+    if (!nd_tx_slot_ready(c)) {
+        return false;
+    }
+    const int slot = c->tx_slot_cur;
+    memcpy(c->tx_slot(slot), &hdr, sizeof(hdr));
+    if (!nd_post_send(c, slot, sizeof(hdr))) {
+        return false;
+    }
+    c->tx_slot_cur = (c->tx_slot_cur + 1) % ND_TX_DEPTH;
+    return true;
+}
+
 static bool nd_send_ack(dist_nd_conn * c) {
     const nd_msg_hdr hdr = { ND_MSG_MAGIC, ND_MSG_ACK, 0, c->tx_seq++ };
-    memcpy(c->tx_buf, &hdr, sizeof(hdr));
-    return nd_post_send(c, sizeof(hdr));
+    return nd_post_hdr_only(c, hdr);
 }
 
 // The provider raises no completion and no notification when a peer disconnects, so an
@@ -729,8 +793,7 @@ static bool nd_send_ack(dist_nd_conn * c) {
 // in the slot ND_WINDOW keeps spare, so it needs no flow control of its own.
 static bool nd_send_bye(dist_nd_conn * c) {
     const nd_msg_hdr hdr = { ND_MSG_MAGIC, ND_MSG_BYE, 0, c->tx_seq++ };
-    memcpy(c->tx_buf, &hdr, sizeof(hdr));
-    return nd_post_send(c, sizeof(hdr));
+    return nd_post_hdr_only(c, hdr);
 }
 
 static bool nd_flush(dist_nd_conn * c) {
@@ -746,13 +809,15 @@ static bool nd_flush(dist_nd_conn * c) {
         c->ack_pending--;
         c->tx_since_ack = 0;
     }
+    const int slot = c->tx_slot_cur;
     const nd_msg_hdr hdr = { ND_MSG_MAGIC, ND_MSG_DATA, (uint32_t)c->tx_fill, c->tx_seq++ };
-    memcpy(c->tx_buf, &hdr, sizeof(hdr));
+    memcpy(c->tx_slot(slot), &hdr, sizeof(hdr));
     const size_t len = sizeof(hdr) + c->tx_fill;
     c->tx_fill = 0;
-    if (!nd_post_send(c, len)) {
+    if (!nd_post_send(c, slot, len)) {
         return false;
     }
+    c->tx_slot_cur = (c->tx_slot_cur + 1) % ND_TX_DEPTH;
     c->tx_since_ack++;
     return true;
 }
@@ -764,8 +829,12 @@ static bool nd_send_raw(dist_nd_conn * c, const void * data, size_t size) {
         if (c->tx_fill == ND_PAYLOAD && !nd_flush(c)) {
             return false;
         }
+        // Starting a fresh chunk: the slot must not still be on the wire before we write it.
+        if (c->tx_fill == 0 && !nd_tx_slot_ready(c)) {
+            return false;
+        }
         const size_t take = std::min(rem, ND_PAYLOAD - c->tx_fill);
-        memcpy(c->tx_buf + sizeof(nd_msg_hdr) + c->tx_fill, src, take);
+        memcpy(c->tx_slot(c->tx_slot_cur) + sizeof(nd_msg_hdr) + c->tx_fill, src, take);
         c->tx_fill += take;
         src += take;
         rem -= take;
@@ -984,9 +1053,26 @@ bool dist_nd_send2(dist_nd_conn * c, const void * hdr, size_t hdr_size,
     if (ok) {
         ok = nd_flush(c);
     }
+    // Default retires the send before returning, identical to the previous behaviour. Full-duplex
+    // mode drains after the matching receive instead, which is the whole point: both directions
+    // are then on the wire at once.
+    if (ok && !nd_full_duplex()) {
+        ok = nd_send_drain_local(c);
+    }
     if (!ok) {
         c->tx_fill = 0;   // drop the half-staged chunk; the connection is finished either way
         err = c->peer_gone ? "peer closed connection" : "NetworkDirect send failed";
+        return false;
+    }
+    return true;
+}
+
+bool dist_nd_send_drain(dist_nd_conn * c, std::string & err) {
+    if (!c) {
+        return true;
+    }
+    if (!nd_send_drain_local(c)) {
+        err = c->peer_gone ? "peer closed connection" : "NetworkDirect send drain failed";
         return false;
     }
     return true;
@@ -1005,7 +1091,11 @@ void dist_nd_free(dist_nd_conn * c) {
         return;
     }
     if (c->connected && !c->peer_gone) {
+        // Retire outstanding sends around the bye, so teardown never frees a staging slot that
+        // still has a transfer against it.
+        (void) nd_send_drain_local(c);
         (void) nd_send_bye(c);
+        (void) nd_send_drain_local(c);
     }
     delete c;
 }

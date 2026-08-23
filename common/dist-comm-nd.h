@@ -50,5 +50,8 @@ dist_nd_conn * dist_nd_establish(uintptr_t tcp_out, uintptr_t tcp_in, bool liste
 bool dist_nd_send2(dist_nd_conn * c, const void * hdr, size_t hdr_size,
                    const void * payload, size_t payload_size, std::string & err);
 bool dist_nd_recv(dist_nd_conn * c, void * data, size_t size, std::string & err);
+// Wait for sends posted but not yet retired. Only needed in full-duplex mode, where dist_nd_send2
+// returns as soon as the chunk is posted rather than when it has completed.
+bool dist_nd_send_drain(dist_nd_conn * c, std::string & err);
 
 void dist_nd_free(dist_nd_conn * c);

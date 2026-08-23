@@ -538,23 +538,49 @@ struct dist_comm_socket_context::impl {
             return true;
         };
 
-        // Rank parity avoids blocking send/send for large payloads.
+        // Full-duplex exchange, opt-in via LLAMA_DIST_TP_FULL_DUPLEX=1.
         //
-        // Parity is a 2-colouring of the ring, and an odd-length cycle cannot be 2-coloured, so
-        // from world_size 3 up exactly one edge has both ends calling send_payload() first. That
-        // is a property of the topology, not a bug to schedule around: no assignment of
-        // send-first / recv-first to ranks can do better than one such edge on an odd ring, and
-        // parity already achieves that minimum. Do not "fix" this by switching to a rank < peer
-        // rule; a rank sits on two edges and one sequential ordering cannot satisfy both.
+        // A small collective cost several times its wire time, and decode runs one collective per
+        // subgraph boundary for every token. Both halves of
+        // the cause were structural. dist_nd_send2 blocked until its own send completion arrived
+        // because there was a single tx staging buffer, and the parity order below then made
+        // rank 1 wait for the entire inbound payload before it could begin sending. On a
+        // full-duplex link that is two serial transfers where one would do.
         //
-        // It is safe because neither transport requires the peer to be inside recv_payload()
-        // before a send can make progress. TCP has SOCKET_BUFSIZE of socket buffer to absorb the
-        // payload, and ND completes a send into the receives the peer posted at setup time. It
-        // costs latency on that one edge, not correctness. The real remedy is a full-duplex send
-        // on its own thread, which is a larger change than this one.
-        const bool ok = ((cfg.rank & 1) == 0)
-            ? (send_payload() && recv_payload())
-            : (recv_payload() && send_payload());
+        // With the tx ring, dist_nd_send2 returns once the chunk is posted, so posting first and
+        // draining after the receive puts both directions on the wire together. The drain is what
+        // makes it safe: a staging slot is never reused until its transfer has retired.
+        //
+        // Taken only when this edge's send is actually on ND. A TCP send blocks in the socket
+        // buffer and gains nothing, and a mixed edge (ND one way, TCP the other, which happens
+        // from world_size 3 up) keeps the ordering it was reasoned about with.
+        static const bool full_duplex = []() {
+            const char * v = getenv("LLAMA_DIST_TP_FULL_DUPLEX");
+            return v && v[0] != '\0' && v[0] != '0';
+        }();
+
+        bool ok;
+        if (full_duplex && use_nd_send) {
+            ok = send_payload() && recv_payload() && dist_nd_send_drain(nd_send, err);
+        } else {
+            // Rank parity avoids blocking send/send for large payloads.
+            //
+            // Parity is a 2-colouring of the ring, and an odd-length cycle cannot be 2-coloured,
+            // so from world_size 3 up exactly one edge has both ends calling send_payload()
+            // first. That is a property of the topology, not a bug to schedule around: no
+            // assignment of send-first / recv-first to ranks can do better than one such edge on
+            // an odd ring, and parity already achieves that minimum. Do not "fix" this by
+            // switching to a rank < peer rule; a rank sits on two edges and one sequential
+            // ordering cannot satisfy both.
+            //
+            // It is safe because neither transport requires the peer to be inside recv_payload()
+            // before a send can make progress. TCP has SOCKET_BUFSIZE of socket buffer to absorb
+            // the payload, and ND completes a send into the receives the peer posted at setup
+            // time. It costs latency on that one edge, not correctness.
+            ok = ((cfg.rank & 1) == 0)
+                ? (send_payload() && recv_payload())
+                : (recv_payload() && send_payload());
+        }
 
         if (ok) {
             // Recorded so the trace report accounts for the bytes this collective actually put
