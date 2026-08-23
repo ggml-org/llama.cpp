@@ -2266,7 +2266,8 @@ bool common_prompt_batch_decode(
                                int & n_past,
                                int   n_batch,
                   std::string_view   state_path,
-                              bool   save_state) {
+                              bool   save_state,
+             common_power_throttle * power_throttle) {
     if (n_new == 0) {
         return true;
     }
@@ -2282,7 +2283,7 @@ bool common_prompt_batch_decode(
         // Memory implementations in recurrent/hybrid models don't support removing tokens from their
         // memory, so we can't just remove the last token from the memory and replay the last token which
         // is the reason for this logic.
-        if (llama_decode(ctx, llama_batch_get_one(const_cast<llama_token*>(all_tokens.data() + offset), n_tokens_before_last))) {
+        if (common_power_decode(ctx, llama_batch_get_one(const_cast<llama_token*>(all_tokens.data() + offset), n_tokens_before_last), power_throttle)) {
             COM_ERR("%s", "failed to eval\n");
             return false;
         }
@@ -2296,13 +2297,13 @@ bool common_prompt_batch_decode(
         int32_t pos = n_past;
         batch.pos = &pos;
 
-        if (llama_decode(ctx, batch)) {
+        if (common_power_decode(ctx, batch, power_throttle)) {
             COM_ERR("%s", "failed to eval last token\n");
             return false;
         }
         n_past++;
     } else {
-        if (llama_decode(ctx, llama_batch_get_one(const_cast<llama_token*>(all_tokens.data() + offset), n_new))) {
+        if (common_power_decode(ctx, llama_batch_get_one(const_cast<llama_token*>(all_tokens.data() + offset), n_new), power_throttle)) {
             COM_ERR("%s", "failed to eval\n");
             return false;
         }

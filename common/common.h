@@ -1029,7 +1029,8 @@ bool common_prompt_batch_decode(
                                int & n_past,
                                int   n_batch,
                   std::string_view   state_path,
-                              bool   save_state);
+                              bool   save_state,
+             common_power_throttle * power_throttle = nullptr);
 
 // replays the last token after loading state to regenerate logits
 // used after loading session state to ensure the sampling context has valid logits
