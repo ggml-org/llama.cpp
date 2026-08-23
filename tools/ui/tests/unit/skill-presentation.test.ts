@@ -7,7 +7,9 @@ import {
 } from '$lib/components/app/skills/skill-resource-presentation';
 import { normalizeSkillDescription } from '$lib/utils/formatters';
 import { deriveSkillBudgetChip } from '$lib/utils/skill-budget-chip';
-import type { SkillPackedCatalog } from '$lib/types';
+import type { SkillPackedCatalog, SkillCatalogEntry } from '$lib/types';
+import { applySkillCatalogFilters, distinctSkillProviders } from '$lib/utils/skill-catalog-filter';
+import { makeEntry } from '../fixtures/skills';
 import { describe, expect, it } from 'vitest';
 
 describe('skill resource presentation', () => {
@@ -189,5 +191,61 @@ describe('deriveSkillBudgetChip', () => {
 		expect(chip?.label).toBe('Partial fit');
 		expect(chip?.detail).toContain('5,000 tokens (estimated)');
 		expect(chip?.detail).toContain('3 of 8 skills are included');
+describe('skill catalog filtering', () => {
+	function entriesOf(...overrides: Array<Partial<SkillCatalogEntry> & { name: string }>) {
+		return overrides.map(({ name, ...rest }) => makeEntry(name, rest));
+	}
+
+	it('returns entries unchanged in original order when the query is empty', () => {
+		const entries = entriesOf({ name: 'zeta' }, { name: 'alpha' });
+
+		const result = applySkillCatalogFilters(entries, {
+			excludedProviders: new Set(),
+			includeProject: true,
+			query: '  '
+		});
+
+		expect(result.map((e) => e.name)).toEqual(['zeta', 'alpha']);
+	});
+
+	it('ranks case-insensitive name matches above description matches, both above non-matches', () => {
+		const entries = entriesOf(
+			{ description: 'mentions canvas somewhere', name: 'other-tool' },
+			{ description: 'no match here', name: 'unrelated' },
+			{ description: 'plain description', name: 'Canvas-Design' }
+		);
+
+		const result = applySkillCatalogFilters(entries, {
+			excludedProviders: new Set(),
+			includeProject: true,
+			query: 'canvas'
+		});
+
+		expect(result.map((e) => e.name)).toEqual(['Canvas-Design', 'other-tool']);
+	});
+
+	it('excludes entries by provider and by project scope', () => {
+		const entries = entriesOf(
+			{ name: 'a', provider: 'agents', scope: 'global' },
+			{ name: 'b', provider: 'local', scope: 'project' }
+		);
+
+		const result = applySkillCatalogFilters(entries, {
+			excludedProviders: new Set(['local']),
+			includeProject: false,
+			query: ''
+		});
+
+		expect(result.map((e) => e.name)).toEqual(['a']);
+	});
+
+	it('returns the sorted set of distinct providers', () => {
+		const entries = entriesOf(
+			{ name: 'a', provider: 'local' },
+			{ name: 'b', provider: 'agents' },
+			{ name: 'c', provider: 'agents' }
+		);
+
+		expect(distinctSkillProviders(entries)).toEqual(['agents', 'local']);
 	});
 });

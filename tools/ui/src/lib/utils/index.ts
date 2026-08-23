@@ -123,6 +123,9 @@ export { isTextFileByName, readFileAsText, isLikelyTextFile } from './text-files
 // Debounce utilities
 export { debounce } from './debounce';
 
+// Skills catalog search/filter utilities
+export { applySkillCatalogFilters, distinctSkillProviders } from './skill-catalog-filter';
+
 // Sanitization utilities
 export { sanitizeKeyValuePairKey, sanitizeKeyValuePairValue } from './sanitize';
 

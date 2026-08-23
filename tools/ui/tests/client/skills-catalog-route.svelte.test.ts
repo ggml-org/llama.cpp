@@ -4,6 +4,7 @@ import SkillsPage from '../../src/routes/skills/+page.svelte';
 import SkillsPageWrapper from './components/SkillsPageWrapper.svelte';
 import SkillCatalogList from '$lib/components/app/skills/SkillCatalogList.svelte';
 import SkillDiagnosticsPanel from '$lib/components/app/skills/SkillDiagnosticsPanel.svelte';
+import SkillCatalogSearchToolbar from '$lib/components/app/skills/SkillCatalogSearchToolbar.svelte';
 import { CONFIG_LOCALSTORAGE_KEY } from '$lib/constants';
 import { serializeSkillCatalogEnvelope } from '$lib/services/skills.service';
 import { conversationsStore } from '$lib/stores/conversations.svelte';
@@ -514,5 +515,70 @@ describe('SkillDiagnosticsPanel', () => {
 			props: { budgetChip: null, diagnostics: [error('e1', 'error one')], dismissed: true, onDismiss }
 		});
 		expect(bodyText()).not.toContain('error one');
+describe('SkillCatalogSearchToolbar', () => {
+	it('debounces search input before calling onQueryChange', async () => {
+		vi.useFakeTimers();
+		const onQueryChange = vi.fn();
+		const screen = await render(SkillCatalogSearchToolbar, {
+			props: {
+				excludedProviders: new Set(),
+				includeProject: true,
+				onIncludeProjectChange: vi.fn(),
+				onProvidersChange: vi.fn(),
+				onQueryChange,
+				providers: ['agents', 'local']
+			}
+		});
+
+		await screen.getByLabelText('Search skills').fill('canvas');
+		expect(onQueryChange).not.toHaveBeenCalled();
+
+		vi.advanceTimersByTime(150);
+		expect(onQueryChange).toHaveBeenCalledWith('canvas');
+		vi.useRealTimers();
+	});
+
+	it('lists one checkbox per provider, toggling it via onProvidersChange', async () => {
+		const onProvidersChange = vi.fn();
+		const screen = await render(SkillCatalogSearchToolbar, {
+			props: {
+				excludedProviders: new Set(),
+				includeProject: true,
+				onIncludeProjectChange: vi.fn(),
+				onProvidersChange,
+				onQueryChange: vi.fn(),
+				providers: ['agents', 'local']
+			}
+		});
+
+		await screen.getByRole('button', { name: 'Filter skills' }).click();
+		await screen.getByText('local').click();
+
+		expect(onProvidersChange).toHaveBeenCalledWith(new Set(['local']));
+	});
+
+	it('shows the active-filter dot when a filter deviates from default, and Reset restores both facets', async () => {
+		const onProvidersChange = vi.fn();
+		const onIncludeProjectChange = vi.fn();
+		const screen = await render(SkillCatalogSearchToolbar, {
+			props: {
+				excludedProviders: new Set(['local']),
+				includeProject: true,
+				onIncludeProjectChange,
+				onProvidersChange,
+				onQueryChange: vi.fn(),
+				providers: ['local']
+			}
+		});
+
+		await expect.element(screen.getByTestId('skill-filter-active-dot')).toBeInTheDocument();
+
+		await screen.getByRole('button', { name: 'Filter skills' }).click();
+		await screen.getByText('Include project skills').click();
+		expect(onIncludeProjectChange).toHaveBeenCalledWith(false);
+
+		await screen.getByRole('button', { name: 'Reset' }).click();
+		expect(onProvidersChange).toHaveBeenCalledWith(new Set());
+		expect(onIncludeProjectChange).toHaveBeenCalledWith(true);
 	});
 });
