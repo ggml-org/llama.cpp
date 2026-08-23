@@ -3438,6 +3438,54 @@ struct test_add_mul : public test_case {
     }
 };
 
+// GGML_OP_SUB + optional GGML_OP_REPEAT + GGML_OP_MUL + GGML_OP_ADD
+struct test_lerp_fusion : public test_case {
+    const std::array<int64_t, 4> ne;
+    const int64_t n_mix;
+    const bool use_repeat;
+    const bool scale_first;
+    const bool add_cur_first;
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "LERP";
+    }
+
+    bool run_whole_graph() override { return true; }
+
+    std::string vars() override {
+        return VARS_TO_STR5(ne, n_mix, use_repeat, scale_first, add_cur_first);
+    }
+
+    test_lerp_fusion(
+            std::array<int64_t, 4> ne,
+            int64_t n_mix,
+            bool use_repeat,
+            bool scale_first,
+            bool add_cur_first)
+        : ne(ne), n_mix(n_mix), use_repeat(use_repeat), scale_first(scale_first), add_cur_first(add_cur_first) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * x_prev = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne.data());
+        ggml_tensor * cur    = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne.data());
+        ggml_tensor * weight = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, ne[0], 1, 1, n_mix);
+        ggml_set_param(x_prev);
+        ggml_set_param(cur);
+        ggml_set_param(weight);
+
+        ggml_tensor * sx = ggml_sub(ctx, x_prev, cur);
+        if (use_repeat) {
+            ggml_tensor * shape = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, ne[0], ne[1], ne[2], n_mix);
+            sx = ggml_repeat(ctx, sx, shape);
+        }
+
+        ggml_tensor * scaled = scale_first ? ggml_mul(ctx, weight, sx) : ggml_mul(ctx, sx, weight);
+        ggml_tensor * out = add_cur_first ? ggml_add(ctx, cur, scaled) : ggml_add(ctx, scaled, cur);
+        ggml_set_name(out, "out");
+        return out;
+    }
+};
+
 // GGML_OP_SCALE + GGML_UNARY_OP_TANH + GGML_OP_SCALE
 struct test_softcap : public test_case {
     const ggml_type type;
@@ -9321,6 +9369,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             test_cases.emplace_back(new test_add_mul(GGML_TYPE_F32, { 1025, 2, 1, 1 }, scale_first, view_scale));
         }
     }
+    test_cases.emplace_back(new test_lerp_fusion({ 64, 5, 4, 1 }, 1, false, false, false));
+    test_cases.emplace_back(new test_lerp_fusion({ 64, 5, 4, 1 }, 1, false, false, true));
+    test_cases.emplace_back(new test_lerp_fusion({ 65, 1, 1, 1 }, 1, false, true, false));
+    test_cases.emplace_back(new test_lerp_fusion({ 65, 1, 1, 1 }, 1, false, true, true));
+    test_cases.emplace_back(new test_lerp_fusion({ 65, 2, 3, 1 }, 6, true, false, false));
     test_cases.emplace_back(new test_softcap(GGML_TYPE_F32, {10, 10, 10, 10}, 50.0f));
     test_cases.emplace_back(new test_silu_back());
 
