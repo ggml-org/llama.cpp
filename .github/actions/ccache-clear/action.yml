@@ -64,7 +64,7 @@ runs:
         [[ "$CLEAR_MIN" =~ ^[0-9]+$ ]] || { echo "Invalid min value: $CLEAR_MIN" >&2; exit 1; }
         [[ "$CLEAR_DRY_RUN" =~ ^(true|false)$ ]] || { echo "Invalid dry-run value: $CLEAR_DRY_RUN" >&2; exit 1; }
 
-        CACHES=$(gh cache list --key "ccache-$CLEAR_KEY" --json id,key,createdAt --jq '.[] | [.createdAt, .id, .key] | @tsv' 2>/dev/null | LC_ALL=C sort)
+        CACHES=$(gh cache list --repo "$GITHUB_REPOSITORY" --key "ccache-$CLEAR_KEY" --json id,key,createdAt --jq '.[] | [.createdAt, .id, .key] | @tsv' 2>/dev/null | LC_ALL=C sort)
         if [ -z "$CACHES" ]; then
           echo "No caches found with key prefix: $CLEAR_KEY"
           exit 0
@@ -98,7 +98,7 @@ runs:
             echo "Would delete cache: $ID ($KEY)"
           else
             echo "Deleting cache: $ID ($KEY)"
-            gh cache delete "$ID"
+            gh cache delete --repo "$GITHUB_REPOSITORY" "$ID"
           fi
           DELETED=$((DELETED + 1))
         done <<< "$CACHES"
