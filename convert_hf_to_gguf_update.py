@@ -190,6 +190,10 @@ pre_computed_hashes = [
     {"name": "gpt-2", "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/evilfreelancer/ruGPT3XL", "chkhsh": "0fe1cf6eda062318a1af7270f3331a85c539a01778ff948e24388e949c5282f4"},
     # lfm2 variants
     {"name": "lfm2", "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/LiquidAI/LFM2.5-8B-A1B", "chkhsh": "9e454714343b69b99b71795c1d27a68c2a1d15dab111f4d353109f966af29da7"},
+    # hrm-text (DFM Mimir) is SPM-style BPE: normalizer maps ' ' -> '▁', merges
+    # over the whole text (fix_mistral_regex inserts a tekken regex that is a
+    # no-op here); the gemma4 pre (escape ws, split on newlines only) matches it.
+    {"name": "gemma4", "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/danish-foundation-models/DFM-Mimir", "chkhsh": "846deafc5b0fa786186fa4ae6c7b49903cf2f1d1895bdb80b9120d60be135252"},
 ]
 
 

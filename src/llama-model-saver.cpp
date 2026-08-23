@@ -11,6 +11,7 @@
 
 #include <cstdint>
 #include <string>
+#include <unordered_set>
 
 bool llama_model_saver_supports_arch(llm_arch arch) {
     switch (arch) {
@@ -252,6 +253,10 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_TIME_DECAY_EXTRA_DIM,              hparams.time_decay_extra_dim);
     add_kv(LLM_KV_RESIDUAL_SCALE,                    hparams.f_residual_scale);
     add_kv(LLM_KV_EMBEDDING_SCALE,                   hparams.f_embedding_scale);
+    add_kv(LLM_KV_LAYERS_PER_STACK,                  hparams.n_hrm_layers_per_stack);
+    add_kv(LLM_KV_H_CYCLES,                          hparams.n_hrm_h_cycles);
+    add_kv(LLM_KV_L_CYCLES,                          hparams.n_hrm_l_cycles);
+    add_kv(LLM_KV_PREFIX_LM,                         hparams.hrm_prefix_lm);
     add_kv(LLM_KV_TOKEN_SHIFT_COUNT,                 hparams.token_shift_count);
     add_kv(LLM_KV_INTERLEAVE_MOE_LAYER_STEP,         hparams.n_moe_layer_step);
     // add_kv(LLM_KV_FULL_ATTENTION_INTERVAL,           ???); // saved as LLM_KV_ATTENTION_RECURRENT_LAYERS instead
@@ -442,10 +447,19 @@ void llama_model_saver::add_tensors_from_model() {
     add_tensor(model->hc_head_fn);
     add_tensor(model->hc_head_base);
     add_tensor(model->hc_head_scale);
+    add_tensor(model->hrm_z_l_init);
+
+    // looped architectures alias physical tensors across cache slots; save each
+    // tensor once. a different tensor with an existing name still asserts below
+    std::unordered_set<const struct ggml_tensor *> seen;
 
     for (const struct llama_layer & layer : model->layers) {
         for (size_t i = 0; i < sizeof(layer)/sizeof(struct ggml_tensor *); ++i) {
-            add_tensor(reinterpret_cast<const struct ggml_tensor * const *>(&layer)[i]);
+            const struct ggml_tensor * tensor = reinterpret_cast<const struct ggml_tensor * const *>(&layer)[i];
+            if (tensor == nullptr || !seen.insert(tensor).second) {
+                continue;
+            }
+            add_tensor(tensor);
         }
     }
 }

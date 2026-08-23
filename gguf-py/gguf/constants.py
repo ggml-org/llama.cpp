@@ -147,6 +147,10 @@ class Keys:
         TOKEN_SHIFT_COUNT                 = "{arch}.token_shift_count"
         INTERLEAVE_MOE_LAYER_STEP         = "{arch}.interleave_moe_layer_step"
         FULL_ATTENTION_INTERVAL           = "{arch}.full_attention_interval"
+        HRM_LAYERS_PER_STACK               = "{arch}.layers_per_stack"
+        HRM_H_CYCLES                       = "{arch}.h_cycles"
+        HRM_L_CYCLES                       = "{arch}.l_cycles"
+        HRM_PREFIX_LM                      = "{arch}.prefix_lm"
         NUM_LOOPS                         = "{arch}.num_loops"
         SKIP_LOOP_FINAL_NORM              = "{arch}.skip_loop_final_norm"
         HASH_LAYER_COUNT                  = "{arch}.hash_layer_count"
@@ -490,6 +494,7 @@ class MODEL_ARCH(IntEnum):
     QWEN3            = auto()
     QWEN3MOE         = auto()
     QWEN3NEXT        = auto()
+    HRM_TEXT         = auto()
     QWEN3VL          = auto()
     QWEN3VLMOE       = auto()
     QWEN35           = auto()
@@ -630,6 +635,7 @@ class MODEL_TENSOR(IntEnum):
     TOKEN_TYPES          = auto()
     POS_EMBD             = auto()
     OUTPUT               = auto()
+    HRM_Z_L_INIT         = auto()
     DENSE_2_OUT          = auto() # embeddinggemma 2_Dense
     DENSE_3_OUT          = auto() # embeddinggemma 3_Dense
     OUTPUT_NORM          = auto()
@@ -1213,6 +1219,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.QWEN3:            "qwen3",
     MODEL_ARCH.QWEN3MOE:         "qwen3moe",
     MODEL_ARCH.QWEN3NEXT:        "qwen3next",
+    MODEL_ARCH.HRM_TEXT:         "hrm_text",
     MODEL_ARCH.QWEN3VL:          "qwen3vl",
     MODEL_ARCH.QWEN3VLMOE:       "qwen3vlmoe",
     MODEL_ARCH.QWEN35:           "qwen35",
@@ -1353,6 +1360,7 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.POS_EMBD:                  "position_embd",
     MODEL_TENSOR.OUTPUT_NORM:               "output_norm",
     MODEL_TENSOR.OUTPUT:                    "output",
+    MODEL_TENSOR.HRM_Z_L_INIT:               "hrm.z_l_init",
     MODEL_TENSOR.DENSE_2_OUT:               "dense_2", # embeddinggemma 2_Dense
     MODEL_TENSOR.DENSE_3_OUT:               "dense_3", # embeddinggemma 2_Dense
     MODEL_TENSOR.HC_HEAD_FN:                "output_hc_fn",
@@ -2690,6 +2698,19 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.NEXTN_HNORM,
         MODEL_TENSOR.NEXTN_SHARED_HEAD_HEAD,
         MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM,
+    ],
+    MODEL_ARCH.HRM_TEXT: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.HRM_Z_L_INIT,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_GATE,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
     ],
     MODEL_ARCH.QWEN3VL: [
         MODEL_TENSOR.TOKEN_EMBD,

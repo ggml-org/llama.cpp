@@ -649,6 +649,9 @@ struct llama_model {
     struct ggml_tensor * dspark_conf_proj   = nullptr;
     struct ggml_tensor * dspark_conf_proj_b = nullptr;
 
+    // hrm-text initial low-cycle state
+    struct ggml_tensor * hrm_z_l_init = nullptr;
+
     // unified vector to store target-model extracted layer ids in eagle3, dflash, etc.
     std::vector<int32_t> target_layer_ids;
 
