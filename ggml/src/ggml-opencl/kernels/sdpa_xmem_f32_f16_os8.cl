@@ -9,14 +9,6 @@
 __constant sampler_t smp_none = CLK_NORMALIZED_COORDS_FALSE | CLK_ADDRESS_NONE | CLK_FILTER_NEAREST;
 __constant sampler_t smp_zero = CLK_NORMALIZED_COORDS_FALSE | CLK_ADDRESS_CLAMP | CLK_FILTER_NEAREST;
 
-inline int round_up_div(int x, int y) {
-    return (x + y - 1) / y;
-}
-
-inline half4 rotate_tail_mask(half4 in_mask) {
-    return (half4) (in_mask.y, in_mask.z, in_mask.w, in_mask.x);
-}
-
 __kernel void adreno_xmem_attn_q_f32_to_img_scaled(const global void *  src_void,
                                                    ulong                src_offset,
                                                    write_only image2d_t dst_image2d,
@@ -24,6 +16,7 @@ __kernel void adreno_xmem_attn_q_f32_to_img_scaled(const global void *  src_void
                                                    const int            d_head,
                                                    const int            n_q,
                                                    const int            n_head,
+                                                   const int            n_head_kv,
                                                    const int            n_batch,
                                                    const ulong          src_nb1,
                                                    const ulong          src_nb2,
@@ -41,6 +34,11 @@ __kernel void adreno_xmem_attn_q_f32_to_img_scaled(const global void *  src_void
 
     const int batch = flat_h / n_head;
     const int head  = flat_h % n_head;
+    const int gqa   = n_head / n_head_kv;
+    const int head_kv = head / gqa;
+    const int head_group = head - head_kv * gqa;
+    const int compact_h = batch * n_head_kv + head_kv;
+    const int compact_x = head_group * n_q + x;
     const int c     = d * 4;
 
     const global char *  src_base = (const global char *) src_void + src_offset;
@@ -58,7 +56,7 @@ __kernel void adreno_xmem_attn_q_f32_to_img_scaled(const global void *  src_void
         out.w = convert_half(row_ptr[c + 3] * scale);
     }
 
-    write_imageh(dst_image2d, (int2) (x, flat_h * kpack + d), out);
+    write_imageh(dst_image2d, (int2) (compact_x, compact_h * kpack + d), out);
 }
 
 __kernel void adreno_xmem_attn_kv_f32_to_img_gqa(const global void *  src_void,
@@ -66,7 +64,7 @@ __kernel void adreno_xmem_attn_kv_f32_to_img_gqa(const global void *  src_void,
                                                  write_only image2d_t dst_image2d,
                                                  const int            d_head,
                                                  const int            n_kv,
-                                                 const int            n_head,
+                                                 const int            n_kv_padded,
                                                  const int            n_head_kv,
                                                  const int            n_batch,
                                                  const ulong          src_nb1,
@@ -76,32 +74,32 @@ __kernel void adreno_xmem_attn_kv_f32_to_img_gqa(const global void *  src_void,
     const int flat_h = get_global_id(1);
     const int d      = get_global_id(2);
 
-    const int heads_total = n_head * n_batch;
-    const int kpack       = d_head / 4;
+    const int kv_heads_total = n_head_kv * n_batch;
+    const int kpack          = d_head / 4;
 
-    if (x >= n_kv || flat_h >= heads_total || d >= kpack) {
+    if (x >= n_kv_padded || flat_h >= kv_heads_total || d >= kpack) {
         return;
     }
 
-    const int batch   = flat_h / n_head;
-    const int head    = flat_h % n_head;
-    const int head_kv = head / (n_head / n_head_kv);
+    const int batch   = flat_h / n_head_kv;
+    const int head_kv = flat_h % n_head_kv;
     const int c       = d * 4;
 
-    const global char *  src_base = (const global char *) src_void + src_offset;
-    const global float * row_ptr =
-        (const global float *) (src_base + batch * src_nb3 + head_kv * src_nb2 + x * src_nb1);
-
     half4 out = (half4) (0.0h);
-    out.x     = convert_half(row_ptr[c + 0]);
-    if (c + 1 < d_head) {
-        out.y = convert_half(row_ptr[c + 1]);
-    }
-    if (c + 2 < d_head) {
-        out.z = convert_half(row_ptr[c + 2]);
-    }
-    if (c + 3 < d_head) {
-        out.w = convert_half(row_ptr[c + 3]);
+    if (x < n_kv) {
+        const global char *  src_base = (const global char *) src_void + src_offset;
+        const global float * row_ptr =
+            (const global float *) (src_base + batch * src_nb3 + head_kv * src_nb2 + x * src_nb1);
+        out.x = convert_half(row_ptr[c + 0]);
+        if (c + 1 < d_head) {
+            out.y = convert_half(row_ptr[c + 1]);
+        }
+        if (c + 2 < d_head) {
+            out.z = convert_half(row_ptr[c + 2]);
+        }
+        if (c + 3 < d_head) {
+            out.w = convert_half(row_ptr[c + 3]);
+        }
     }
 
     write_imageh(dst_image2d, (int2) (x, flat_h * kpack + d), out);
@@ -112,7 +110,7 @@ __kernel void adreno_xmem_attn_kv_f16_to_img_gqa(const global void *  src_void,
                                                  write_only image2d_t dst_image2d,
                                                  const int            d_head,
                                                  const int            n_kv,
-                                                 const int            n_head,
+                                                 const int            n_kv_padded,
                                                  const int            n_head_kv,
                                                  const int            n_batch,
                                                  const ulong          src_nb1,
@@ -122,31 +120,32 @@ __kernel void adreno_xmem_attn_kv_f16_to_img_gqa(const global void *  src_void,
     const int flat_h = get_global_id(1);
     const int d      = get_global_id(2);
 
-    const int heads_total = n_head * n_batch;
-    const int kpack       = d_head / 4;
+    const int kv_heads_total = n_head_kv * n_batch;
+    const int kpack          = d_head / 4;
 
-    if (x >= n_kv || flat_h >= heads_total || d >= kpack) {
+    if (x >= n_kv_padded || flat_h >= kv_heads_total || d >= kpack) {
         return;
     }
 
-    const int batch   = flat_h / n_head;
-    const int head    = flat_h % n_head;
-    const int head_kv = head / (n_head / n_head_kv);
+    const int batch   = flat_h / n_head_kv;
+    const int head_kv = flat_h % n_head_kv;
     const int c       = d * 4;
 
-    const global char * src_base = (const global char *) src_void + src_offset;
-    const global half * row_ptr  = (const global half *) (src_base + batch * src_nb3 + head_kv * src_nb2 + x * src_nb1);
-
     half4 out = (half4) (0.0h);
-    out.x     = row_ptr[c + 0];
-    if (c + 1 < d_head) {
-        out.y = row_ptr[c + 1];
-    }
-    if (c + 2 < d_head) {
-        out.z = row_ptr[c + 2];
-    }
-    if (c + 3 < d_head) {
-        out.w = row_ptr[c + 3];
+    if (x < n_kv) {
+        const global char * src_base = (const global char *) src_void + src_offset;
+        const global half * row_ptr =
+            (const global half *) (src_base + batch * src_nb3 + head_kv * src_nb2 + x * src_nb1);
+        out.x = row_ptr[c + 0];
+        if (c + 1 < d_head) {
+            out.y = row_ptr[c + 1];
+        }
+        if (c + 2 < d_head) {
+            out.z = row_ptr[c + 2];
+        }
+        if (c + 3 < d_head) {
+            out.w = row_ptr[c + 3];
+        }
     }
 
     write_imageh(dst_image2d, (int2) (x, flat_h * kpack + d), out);
@@ -158,6 +157,7 @@ __kernel void adreno_xmem_attn_img_to_f32(global void *       dst_void,
                                           const int           d_head,
                                           const int           n_q,
                                           const int           n_head,
+                                          const int           n_head_kv,
                                           const int           n_batch,
                                           const ulong         dst_nb1,
                                           const ulong         dst_nb2,
@@ -175,12 +175,17 @@ __kernel void adreno_xmem_attn_img_to_f32(global void *       dst_void,
 
     const int batch = flat_h / n_head;
     const int head  = flat_h % n_head;
+    const int gqa   = n_head / n_head_kv;
+    const int head_kv = head / gqa;
+    const int head_group = head - head_kv * gqa;
+    const int compact_h = batch * n_head_kv + head_kv;
+    const int compact_x = head_group * n_q + x;
     const int c     = d * 4;
 
     global char *  dst_base = (global char *) dst_void + dst_offset;
     global float * row_ptr  = (global float *) (dst_base + batch * dst_nb3 + x * dst_nb2 + head * dst_nb1);
 
-    const half4 in_value = read_imageh(src_image2d, smp_zero, (int2) (x, flat_h * kpack + d));
+    const half4 in_value = read_imageh(src_image2d, smp_zero, (int2) (compact_x, compact_h * kpack + d));
     row_ptr[c + 0]       = convert_float(in_value.x);
     if (c + 1 < d_head) {
         row_ptr[c + 1] = convert_float(in_value.y);
@@ -235,8 +240,7 @@ __kernel void adreno_xmem_attn_pack_k(global half4 *             dst_tensor_buff
                                       read_only image1d_buffer_t src_image_buffer,
                                       const int4                 shared_int4_0,
                                       const int4                 shared_int4_1,
-                                      const int4                 shared_int4_2,
-                                      const half4                shared_half4_0) {
+                                      const int4                 shared_int4_2) {
     int linear_index = get_global_id(0);
     if (linear_index >= shared_int4_0.y) {
         return;
@@ -275,13 +279,6 @@ __kernel void adreno_xmem_attn_pack_k(global half4 *             dst_tensor_buff
     }
     if (i_slice * 4 + 3 < shared_int4_0.w && o_slice < shared_int4_1.w) {
         w3 = read_imageh(src_image_buffer, (((o_slice) *shared_int4_1.z + (W)) * shared_int4_2.x + (i_slice * 4 + 3)));
-    }
-    if (o_slice == shared_int4_1.w - 1) {
-        half4 mask = (half4) (shared_half4_0.y, shared_half4_0.z, shared_half4_0.w, shared_half4_0.x);
-        w0 *= mask;
-        w1 *= mask;
-        w2 *= mask;
-        w3 *= mask;
     }
     half4 r0                                = w0;
     half4 r1                                = w1;
@@ -531,11 +528,12 @@ __kernel void adreno_xmem_attn_softmax_reduce_basic(read_only image1d_buffer_t s
         float4 exp_res = native_exp(src - maximum);
         sum += dot(mask_dot, exp_res);
     }
-    float inv_sum = 1.0f / sum;
-    half4 result;
-    result.x = convert_half(inv_sum);
-    result.y = convert_half(maximum);
-    write_imageh(dst_tensor_image2d, (int2) ((X), ((Y) *shared_int4_0.y + (0))), result);
+    if (!isfinite(maximum) || sum == 0.0f) {
+        write_imageh(dst_tensor_image2d, (int2) (X, Y), (half4) (0.0h));
+        return;
+    }
+    write_imageh(dst_tensor_image2d, (int2) (X, Y),
+                 (half4) (convert_half(1.0f / sum), convert_half(maximum), 0.0h, 0.0h));
 }
 
 __kernel void adreno_xmem_attn_softmax_apply_basic(global half4 *             dst_tensor_buffer,
@@ -554,9 +552,22 @@ __kernel void adreno_xmem_attn_softmax_apply_basic(global half4 *             ds
         half4 src_final;
         {
             {
-                half4 exp_val =
-                    read_imageh(src_tensor_1_image2d, smp_zero, (int2) (((X)), (((Y)) * shared_int4_0.w + (0))));
+                half4 exp_val = read_imageh(src_tensor_1_image2d, smp_zero, (int2) (X, Y));
                 src_final = exp(src - exp_val.y) * exp_val.x;
+                const int k = Z * 4;
+                const int n_kv = shared_int4_1.z;
+                if (k + 0 >= n_kv) {
+                    src_final.x = 0.0h;
+                }
+                if (k + 1 >= n_kv) {
+                    src_final.y = 0.0h;
+                }
+                if (k + 2 >= n_kv) {
+                    src_final.z = 0.0h;
+                }
+                if (k + 3 >= n_kv) {
+                    src_final.w = 0.0h;
+                }
             }
         }
         dst_tensor_buffer[(((Z) *shared_int4_0.x + (Y)) * shared_int4_0.z + (X))] = src_final;
@@ -566,11 +577,14 @@ __kernel void adreno_xmem_attn_softmax_apply_basic(global half4 *             ds
 __kernel void adreno_xmem_attn_mask_scores(global half4 *             dst_score_tensor_buffer,
                                            read_only image1d_buffer_t src_score_image_buffer,
                                            const global half *        mask,
+                                           const ulong                mask_offset,
+                                           const int                  q_width,
                                            const int                  n_q,
                                            const int                  n_kv,
-                                           const int                  heads_total,
+                                           const int                  n_kv_padded,
+                                           const int                  kv_heads_total,
                                            const int                  n_head,
-                                           const int                  is_causal,
+                                           const int                  n_head_kv,
                                            const ulong                mask_nb1,
                                            const ulong                mask_nb2,
                                            const ulong                mask_nb3,
@@ -579,21 +593,24 @@ __kernel void adreno_xmem_attn_mask_scores(global half4 *             dst_score_
     const int X     = get_global_id(0);
     const int Y     = get_global_id(1);
     const int Z     = get_global_id(2);
-    const int npack = round_up_div(n_kv, 4);
-    if (X >= n_q || Y >= heads_total || Z >= npack) {
+    const int npack = n_kv_padded / 4;
+    if (X >= q_width || Y >= kv_heads_total || Z >= npack) {
         return;
     }
 
-    const int           head           = Y % n_head;
-    const int           batch          = Y / n_head;
-    const int           mask_head_idx  = mask ? (head % mask_ne2) : 0;
-    const int           mask_batch_idx = mask ? (batch % mask_ne3) : 0;
-    const global half * mask_row       = mask ?
-                                             (const global half *) ((const global char *) mask + mask_batch_idx * mask_nb3 +
-                                                              mask_head_idx * mask_nb2 + X * mask_nb1) :
-                                             0;
+    const int           gqa            = n_head / n_head_kv;
+    const int           head_kv        = Y % n_head_kv;
+    const int           batch          = Y / n_head_kv;
+    const int           head_group     = X / n_q;
+    const int           q              = X - head_group * n_q;
+    const int           head           = head_kv * gqa + head_group;
+    const int           mask_head_idx  = head % mask_ne2;
+    const int           mask_batch_idx = batch % mask_ne3;
+    const global char *  mask_base      = (const global char *) mask + mask_offset;
+    const global half *  mask_row       = (const global half *) (mask_base + mask_batch_idx * mask_nb3 +
+                                                                 mask_head_idx * mask_nb2 + q * mask_nb1);
 
-    const half4 score   = read_imageh(src_score_image_buffer, ((Z * heads_total + Y) * n_q + X));
+    const half4 score   = read_imageh(src_score_image_buffer, ((Z * kv_heads_total + Y) * q_width + X));
     float       vals[4] = {
         convert_float(score.x),
         convert_float(score.y),
@@ -603,189 +620,21 @@ __kernel void adreno_xmem_attn_mask_scores(global half4 *             dst_score_
 
     for (int lane = 0; lane < 4; ++lane) {
         const int k_idx = Z * 4 + lane;
-        if (k_idx >= n_kv || (is_causal && k_idx > (n_kv - n_q + X))) {
+        if (k_idx >= n_kv) {
             vals[lane] = -INFINITY;
-        } else if (mask) {
+        } else {
             vals[lane] += convert_float(mask_row[k_idx]);
         }
     }
 
-    dst_score_tensor_buffer[((Z * heads_total + Y) * n_q + X)] =
+    dst_score_tensor_buffer[((Z * kv_heads_total + Y) * q_width + X)] =
         (half4) (convert_half(vals[0]), convert_half(vals[1]), convert_half(vals[2]), convert_half(vals[3]));
-}
-
-__kernel void adreno_xmem_attn_mask_all_zero(global int *        dst_flag,
-                                             const global half * mask,
-                                             const ulong         mask_offset,
-                                             const int           mask_elems) {
-    const int           lid      = get_local_id(0);
-    const int           lsize    = get_local_size(0);
-    const global half * mask_ptr = (const global half *) ((const global char *) mask + mask_offset);
-
-    int found = 0;
-    for (int i = lid; i < mask_elems; i += lsize) {
-        found |= mask_ptr[i] != (half) 0.0h;
-    }
-
-    __local int reduced[256];
-    reduced[lid] = found;
-    barrier(CLK_LOCAL_MEM_FENCE);
-
-    for (int stride = lsize >> 1; stride > 0; stride >>= 1) {
-        if (lid < stride) {
-            reduced[lid] |= reduced[lid + stride];
-        }
-        barrier(CLK_LOCAL_MEM_FENCE);
-    }
-
-    if (lid == 0) {
-        dst_flag[0] = reduced[0];
-    }
-}
-
-__kernel void adreno_xmem_attn_softmax_reduce_masked(read_only image1d_buffer_t src_tensor_image_buffer,
-                                                     write_only image2d_t       dst_tensor_image2d,
-                                                     const global half *        mask,
-                                                     const ulong                mask_offset,
-                                                     const int                  has_mask,
-                                                     const int                  n_q,
-                                                     const int                  n_kv,
-                                                     const int                  heads_total,
-                                                     const int                  n_head,
-                                                     const int                  is_causal,
-                                                     const ulong                mask_nb1,
-                                                     const ulong                mask_nb2,
-                                                     const ulong                mask_nb3,
-                                                     const int                  mask_ne2,
-                                                     const int                  mask_ne3) {
-    const int X = get_global_id(0);
-    const int Y = get_global_id(1);
-    if (X >= n_q || Y >= heads_total) {
-        return;
-    }
-
-    const int           head           = Y % n_head;
-    const int           batch          = Y / n_head;
-    const global char * mask_base      = has_mask ? ((const global char *) mask + mask_offset) : 0;
-    const int           mask_head_idx  = has_mask ? (head % mask_ne2) : 0;
-    const int           mask_batch_idx = has_mask ? (batch % mask_ne3) : 0;
-    const global half * mask_row =
-        has_mask ?
-            (const global half *) (mask_base + mask_batch_idx * mask_nb3 + mask_head_idx * mask_nb2 + X * mask_nb1) :
-            0;
-
-    float     maximum = -INFINITY;
-    const int npack   = round_up_div(n_kv, 4);
-    for (int d = 0; d < npack; ++d) {
-        const half4 packed_scores = read_imageh(src_tensor_image_buffer, ((d * heads_total + Y) * n_q + X));
-        float4      scores        = convert_float4(packed_scores);
-        for (int lane = 0; lane < 4; ++lane) {
-            const int k_idx = d * 4 + lane;
-            float     score = lane == 0 ? scores.x : lane == 1 ? scores.y : lane == 2 ? scores.z : scores.w;
-            if (k_idx >= n_kv || (is_causal && k_idx > (n_kv - n_q + X))) {
-                score = -INFINITY;
-            } else if (has_mask) {
-                score += convert_float(mask_row[k_idx]);
-            }
-            maximum = fmax(maximum, score);
-        }
-    }
-
-    float sum = 0.0f;
-    if (!isfinite(maximum)) {
-        write_imageh(dst_tensor_image2d, (int2) (X, Y), (half4) ((half) 0.0h, (half) 0.0h, (half) 0.0h, (half) 0.0h));
-        return;
-    }
-
-    for (int d = 0; d < npack; ++d) {
-        const half4 packed_scores = read_imageh(src_tensor_image_buffer, ((d * heads_total + Y) * n_q + X));
-        float4      scores        = convert_float4(packed_scores);
-        for (int lane = 0; lane < 4; ++lane) {
-            const int k_idx = d * 4 + lane;
-            float     score = lane == 0 ? scores.x : lane == 1 ? scores.y : lane == 2 ? scores.z : scores.w;
-            if (k_idx >= n_kv || (is_causal && k_idx > (n_kv - n_q + X))) {
-                continue;
-            }
-            if (has_mask) {
-                score += convert_float(mask_row[k_idx]);
-            }
-            sum += native_exp(score - maximum);
-        }
-    }
-
-    const float inv_sum = sum > 0.0f ? 1.0f / sum : 0.0f;
-    write_imageh(dst_tensor_image2d, (int2) (X, Y),
-                 (half4) (convert_half(inv_sum), convert_half(maximum), (half) 0.0h, (half) 0.0h));
-}
-
-__kernel void adreno_xmem_attn_softmax_apply_masked(global half4 *             dst_tensor_buffer,
-                                                    read_only image1d_buffer_t src_tensor_image_buffer,
-                                                    read_only image2d_t        src_stats_image2d,
-                                                    const global half *        mask,
-                                                    const ulong                mask_offset,
-                                                    const int                  has_mask,
-                                                    const int                  n_q,
-                                                    const int                  n_kv,
-                                                    const int                  heads_total,
-                                                    const int                  n_head,
-                                                    const int                  is_causal,
-                                                    const ulong                mask_nb1,
-                                                    const ulong                mask_nb2,
-                                                    const ulong                mask_nb3,
-                                                    const int                  mask_ne2,
-                                                    const int                  mask_ne3) {
-    const int X     = get_global_id(0);
-    const int Y     = get_global_id(1);
-    const int Z     = get_global_id(2);
-    const int npack = round_up_div(n_kv, 4);
-    if (X >= n_q || Y >= heads_total || Z >= npack) {
-        return;
-    }
-
-    const int           head           = Y % n_head;
-    const int           batch          = Y / n_head;
-    const global char * mask_base      = has_mask ? ((const global char *) mask + mask_offset) : 0;
-    const int           mask_head_idx  = has_mask ? (head % mask_ne2) : 0;
-    const int           mask_batch_idx = has_mask ? (batch % mask_ne3) : 0;
-    const global half * mask_row =
-        has_mask ?
-            (const global half *) (mask_base + mask_batch_idx * mask_nb3 + mask_head_idx * mask_nb2 + X * mask_nb1) :
-            0;
-
-    const half4 src   = read_imageh(src_tensor_image_buffer, ((Z * heads_total + Y) * n_q + X));
-    const half4 stats = read_imageh(src_stats_image2d, smp_zero, (int2) (X, Y));
-
-    half4       out     = (half4) (0.0h);
-    const float inv_sum = convert_float(stats.x);
-    const float maximum = convert_float(stats.y);
-    if (inv_sum > 0.0f) {
-        const float src_vals[4] = { convert_float(src.x), convert_float(src.y), convert_float(src.z),
-                                    convert_float(src.w) };
-        float       out_vals[4] = { 0, 0, 0, 0 };
-        for (int lane = 0; lane < 4; ++lane) {
-            const int k_idx = Z * 4 + lane;
-            if (k_idx >= n_kv || (is_causal && k_idx > (n_kv - n_q + X))) {
-                out_vals[lane] = 0.0f;
-                continue;
-            }
-            float score = src_vals[lane];
-            if (has_mask) {
-                score += convert_float(mask_row[k_idx]);
-            }
-            out_vals[lane] = native_exp(score - maximum) * inv_sum;
-        }
-        out = (half4) (convert_half(out_vals[0]), convert_half(out_vals[1]), convert_half(out_vals[2]),
-                       convert_half(out_vals[3]));
-    }
-
-    dst_tensor_buffer[((Z * heads_total + Y) * n_q + X)] = out;
 }
 
 __kernel void adreno_xmem_attn_pack_v(global half4 *      dst_tensor_buffer,
                                       read_only image2d_t src_image2d,
                                       const int4          shared_int4_0,
-                                      const int4          shared_int4_1,
-                                      const half4         shared_half4_0) {
+                                      const int4          shared_int4_1) {
     int linear_index = get_global_id(0);
     if (linear_index >= shared_int4_0.y) {
         return;
@@ -824,13 +673,6 @@ __kernel void adreno_xmem_attn_pack_v(global half4 *      dst_tensor_buffer,
     }
     if (i_slice * 4 + 3 < shared_int4_0.w && o_slice < shared_int4_1.z) {
         w3 = read_imageh(src_image2d, smp_zero, (int2) ((i_slice * 4 + 3), ((W) *shared_int4_1.z + (o_slice))));
-    }
-    if (o_slice == shared_int4_1.z - 1) {
-        half4 mask = (half4) (shared_half4_0.y, shared_half4_0.z, shared_half4_0.w, shared_half4_0.x);
-        w0 *= mask;
-        w1 *= mask;
-        w2 *= mask;
-        w3 *= mask;
     }
     half4 r0                                = w0;
     half4 r1                                = w1;

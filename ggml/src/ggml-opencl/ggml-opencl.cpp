@@ -560,9 +560,11 @@ struct ggml_cl_adreno_xmem_attn_scratch {
 
     int n_q = 0;
     int n_kv = 0;
+    int n_kv_padded = 0;
     int d_head_q = 0;
     int d_head_v = 0;
-    int heads_total = 0;
+    int q_width = 0;
+    int kv_heads_total = 0;
 };
 
 struct ggml_cl_adreno_xmem_attn_state {
@@ -570,6 +572,7 @@ struct ggml_cl_adreno_xmem_attn_state {
     bool logged = false;
 
     cl_kernel kernel_q_f32_to_img_scaled = nullptr;
+    cl_kernel kernel_kv_f32_to_img_gqa = nullptr;
     cl_kernel kernel_kv_f16_to_img_gqa = nullptr;
     cl_kernel kernel_img_to_f32 = nullptr;
     cl_kernel kernel_k_gather = nullptr;
@@ -577,6 +580,7 @@ struct ggml_cl_adreno_xmem_attn_state {
     cl_kernel kernel_qk_gemm = nullptr;
     cl_kernel kernel_softmax_reduce_basic = nullptr;
     cl_kernel kernel_softmax_apply_basic = nullptr;
+    cl_kernel kernel_mask_scores = nullptr;
     cl_kernel kernel_pack_v = nullptr;
     cl_kernel kernel_pv_gemm = nullptr;
 
@@ -2307,6 +2311,8 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
         auto & xmem_attn = backend_ctx->adreno_xmem_attn;
         CL_CHECK((xmem_attn.kernel_q_f32_to_img_scaled =
             clCreateKernel(program, "adreno_xmem_attn_q_f32_to_img_scaled", &err), err));
+        CL_CHECK((xmem_attn.kernel_kv_f32_to_img_gqa =
+            clCreateKernel(program, "adreno_xmem_attn_kv_f32_to_img_gqa", &err), err));
         CL_CHECK((xmem_attn.kernel_kv_f16_to_img_gqa =
             clCreateKernel(program, "adreno_xmem_attn_kv_f16_to_img_gqa", &err), err));
         CL_CHECK((xmem_attn.kernel_img_to_f32 =
@@ -2321,6 +2327,8 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
             clCreateKernel(program, "adreno_xmem_attn_softmax_reduce_basic", &err), err));
         CL_CHECK((xmem_attn.kernel_softmax_apply_basic =
             clCreateKernel(program, "adreno_xmem_attn_softmax_apply_basic", &err), err));
+        CL_CHECK((xmem_attn.kernel_mask_scores =
+            clCreateKernel(program, "adreno_xmem_attn_mask_scores", &err), err));
         CL_CHECK((xmem_attn.kernel_pack_v =
             clCreateKernel(program, "adreno_xmem_attn_pack_v", &err), err));
         CL_CHECK((xmem_attn.kernel_pv_gemm =
@@ -14609,14 +14617,23 @@ static ggml_cl_adreno_xmem_attn_schedule ggml_cl_adreno_xmem_attn_select_schedul
         const ggml_backend_opencl_context * backend_ctx,
         int n_q,
         int n_kv,
-        int heads_total) {
+        int heads_total,
+        int q_width,
+        int gqa_ratio) {
     const bool big_h = heads_total >= 8;
     ggml_cl_adreno_xmem_attn_schedule sched;
 
-    if (n_q >= 512) { sched.qk_lws0 = 512; }
-    else if (n_q >= 256) { sched.qk_lws0 = 128; }
-    else { sched.qk_lws0 = 64; }
-    sched.qk_lws2 = (big_h && n_q >= 512) ? 2 : 1;
+    if (gqa_ratio == 1) {
+        if (n_q >= 512) { sched.qk_lws0 = 512; }
+        else if (n_q >= 256) { sched.qk_lws0 = 128; }
+        else { sched.qk_lws0 = 64; }
+        sched.qk_lws2 = (big_h && n_q >= 512) ? 2 : 1;
+    } else {
+        if (q_width >= 2048) { sched.qk_lws0 = 512; }
+        else if (q_width >= 256) { sched.qk_lws0 = 128; }
+        else { sched.qk_lws0 = 64; }
+        sched.qk_lws2 = MIN(8, (int) backend_ctx->max_workgroup_size / sched.qk_lws0);
+    }
 
     if (n_kv >= 2048) { sched.softmax_reduce_lws0 = 1024; }
     else if (n_kv >= 512) { sched.softmax_reduce_lws0 = big_h ? 256 : 512; }
@@ -14648,34 +14665,28 @@ static ggml_cl_adreno_xmem_attn_schedule ggml_cl_adreno_xmem_attn_select_schedul
     return sched;
 }
 
-static void ggml_cl_adreno_xmem_attn_make_tail_mask(int n, ggml_fp16_t out[4]) {
-    float actual[4] = {1.0f, 1.0f, 1.0f, 1.0f};
-    const int rem = n & 3;
-    if (rem != 0) {
-        for (int i = rem; i < 4; ++i) {
-            actual[i] = 0.0f;
-        }
-    }
-    out[0] = ggml_fp32_to_fp16(actual[3]);
-    out[1] = ggml_fp32_to_fp16(actual[0]);
-    out[2] = ggml_fp32_to_fp16(actual[1]);
-    out[3] = ggml_fp32_to_fp16(actual[2]);
-}
-
 static bool ggml_cl_adreno_xmem_attn_prepare(
         ggml_backend_opencl_context * backend_ctx,
         int n_q,
         int n_kv,
         int d_head_q,
         int d_head_v,
-        int heads_total) {
+        int n_head,
+        int n_head_kv,
+        int n_batch) {
     auto & s = backend_ctx->adreno_xmem_attn.scratch;
+    const int gqa_ratio = n_head / n_head_kv;
+    const int q_width = n_q * gqa_ratio;
+    const int kv_heads_total = n_head_kv * n_batch;
+    const int n_kv_padded = (int) ggml_cl_round_up((size_t) n_kv, 32);
     if (s.q_img != nullptr &&
             s.n_q == n_q &&
             s.n_kv == n_kv &&
+            s.n_kv_padded == n_kv_padded &&
             s.d_head_q == d_head_q &&
             s.d_head_v == d_head_v &&
-            s.heads_total == heads_total) {
+            s.q_width == q_width &&
+            s.kv_heads_total == kv_heads_total) {
         return true;
     }
 
@@ -14683,45 +14694,48 @@ static bool ggml_cl_adreno_xmem_attn_prepare(
 
     const int qpack = d_head_q / 4;
     const int vpack = d_head_v / 4;
-    const int npack = ggml_cl_round_up_div(n_kv, 4);
-    const size_t q_img_h = (size_t) heads_total * qpack;
-    const size_t v_img_h = (size_t) heads_total * vpack;
+    const int npack = n_kv_padded / 4;
+    const size_t q_img_h = (size_t) kv_heads_total * qpack;
+    const size_t v_img_h = (size_t) kv_heads_total * vpack;
 
-    s.q_img = ggml_cl_make_image2d_half4(backend_ctx->context, CL_MEM_READ_WRITE, (size_t) n_q, q_img_h);
-    s.k_img = ggml_cl_make_image2d_half4(backend_ctx->context, CL_MEM_READ_WRITE, (size_t) n_kv, q_img_h);
-    s.v_img = ggml_cl_make_image2d_half4(backend_ctx->context, CL_MEM_READ_WRITE, (size_t) n_kv, v_img_h);
-    s.out_img = ggml_cl_make_image2d_half4(backend_ctx->context, CL_MEM_READ_WRITE, (size_t) n_q, v_img_h);
+    s.q_img = ggml_cl_make_image2d_half4(backend_ctx->context, CL_MEM_READ_WRITE, (size_t) q_width, q_img_h);
+    s.k_img = ggml_cl_make_image2d_half4(backend_ctx->context, CL_MEM_READ_WRITE, (size_t) n_kv_padded, q_img_h);
+    s.v_img = ggml_cl_make_image2d_half4(backend_ctx->context, CL_MEM_READ_WRITE, (size_t) n_kv_padded, v_img_h);
+    s.out_img = ggml_cl_make_image2d_half4(backend_ctx->context, CL_MEM_READ_WRITE, (size_t) q_width, v_img_h);
 
-    const size_t k_transpose_half4_elems = (size_t) npack * heads_total * d_head_q;
+    const size_t k_transpose_half4_elems = (size_t) npack * kv_heads_total * d_head_q;
     s.k_transpose_buf = clCreateBuffer(backend_ctx->context, CL_MEM_READ_WRITE, k_transpose_half4_elems * sizeof(uint16_t) * 4, nullptr, nullptr);
     GGML_ASSERT(s.k_transpose_buf != nullptr);
     s.k_transpose_img1d = ggml_cl_make_image1d_buffer_half4(backend_ctx->context, CL_MEM_READ_ONLY, k_transpose_half4_elems, s.k_transpose_buf);
 
-    const size_t k_groups16 = (size_t) ggml_cl_round_up_div(heads_total * d_head_q, 16);
-    const size_t v_groups16 = (size_t) ggml_cl_round_up_div(heads_total * d_head_v, 16);
-    const size_t k_packed_half4_elems = (size_t) n_kv * k_groups16 * 4;
-    const size_t v_packed_half4_elems = (size_t) n_kv * v_groups16 * 4;
+    const size_t k_groups16 = (size_t) ggml_cl_round_up_div(kv_heads_total * d_head_q, 16);
+    const size_t v_groups16 = (size_t) ggml_cl_round_up_div(kv_heads_total * d_head_v, 16);
+    const size_t k_packed_half4_elems = (size_t) n_kv_padded * k_groups16 * 4;
+    const size_t v_packed_half4_elems = (size_t) n_kv_padded * v_groups16 * 4;
     s.k_packed_buf = clCreateBuffer(backend_ctx->context, CL_MEM_READ_WRITE, k_packed_half4_elems * sizeof(uint16_t) * 4, nullptr, nullptr);
     s.v_packed_buf = clCreateBuffer(backend_ctx->context, CL_MEM_READ_WRITE, v_packed_half4_elems * sizeof(uint16_t) * 4, nullptr, nullptr);
     GGML_ASSERT(s.k_packed_buf != nullptr && s.v_packed_buf != nullptr);
 
-    const size_t score_half4_elems = (size_t) npack * heads_total * n_q;
+    const size_t score_half4_elems = (size_t) npack * kv_heads_total * q_width;
     const size_t score_bytes = score_half4_elems * sizeof(uint16_t) * 4;
     s.score_buf = clCreateBuffer(backend_ctx->context, CL_MEM_READ_WRITE, score_bytes, nullptr, nullptr);
     s.prob_buf = clCreateBuffer(backend_ctx->context, CL_MEM_READ_WRITE, score_bytes, nullptr, nullptr);
     GGML_ASSERT(s.score_buf != nullptr && s.prob_buf != nullptr);
     s.score_img1d = ggml_cl_make_image1d_buffer_half4(backend_ctx->context, CL_MEM_READ_ONLY, score_half4_elems, s.score_buf);
     s.prob_img1d = ggml_cl_make_image1d_buffer_half4(backend_ctx->context, CL_MEM_READ_ONLY, score_half4_elems, s.prob_buf);
-    s.softmax_stats_img2d = ggml_cl_make_image2d_half4(backend_ctx->context, CL_MEM_READ_WRITE, (size_t) n_q, (size_t) heads_total);
+    s.softmax_stats_img2d = ggml_cl_make_image2d_half4(backend_ctx->context, CL_MEM_READ_WRITE,
+                                                       (size_t) q_width, (size_t) kv_heads_total);
     s.xmem_qk = clCreateBuffer(backend_ctx->context, CL_MEM_READ_ONLY, 6144, nullptr, nullptr);
     s.xmem_pv = clCreateBuffer(backend_ctx->context, CL_MEM_READ_ONLY, 6144, nullptr, nullptr);
     GGML_ASSERT(s.softmax_stats_img2d != nullptr && s.xmem_qk != nullptr && s.xmem_pv != nullptr);
 
     s.n_q = n_q;
     s.n_kv = n_kv;
+    s.n_kv_padded = n_kv_padded;
     s.d_head_q = d_head_q;
     s.d_head_v = d_head_v;
-    s.heads_total = heads_total;
+    s.q_width = q_width;
+    s.kv_heads_total = kv_heads_total;
     return true;
 }
 
@@ -14737,14 +14751,19 @@ static bool ggml_cl_adreno_xmem_attn_can_use(
     if (!backend_ctx->adreno_xmem_attn.compiled || backend_ctx->gpu_family != GPU_FAMILY::ADRENO) {
         return false;
     }
-    if (q->type != GGML_TYPE_F32 || k->type != GGML_TYPE_F16 || v->type != GGML_TYPE_F16 || dst->type != GGML_TYPE_F32) {
+    if (q->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32 ||
+        (k->type != GGML_TYPE_F16 && k->type != GGML_TYPE_F32) ||
+        (v->type != GGML_TYPE_F16 && v->type != GGML_TYPE_F32)) {
         return false;
     }
-    if (mask != nullptr || sinks != nullptr) {
+    if (sinks != nullptr) {
         return false;
     }
     if (q->nb[0] != ggml_type_size(q->type) || k->nb[0] != ggml_type_size(k->type) ||
         v->nb[0] != ggml_type_size(v->type) || dst->nb[0] != ggml_type_size(dst->type)) {
+        return false;
+    }
+    if (mask != nullptr && (mask->type != GGML_TYPE_F16 || mask->nb[0] != sizeof(ggml_fp16_t))) {
         return false;
     }
 
@@ -14756,7 +14775,7 @@ static bool ggml_cl_adreno_xmem_attn_can_use(
     const int n_head_kv = k->ne[2];
     const int n_batch = q->ne[3];
 
-    if (n_q <= 1 || (n_q % 32) != 0 || (n_kv % 32) != 0) {
+    if (n_q <= 1 || n_kv <= 0 || n_kv > 8192) {
         return false;
     }
     if (d_head_q != k->ne[0] || d_head_v != v->ne[0] || k->ne[1] != v->ne[1] || k->ne[3] != v->ne[3]) {
@@ -14771,7 +14790,11 @@ static bool ggml_cl_adreno_xmem_attn_can_use(
     if (dst->ne[0] != d_head_v || dst->ne[1] != n_head || dst->ne[2] != n_q || dst->ne[3] != n_batch) {
         return false;
     }
-    if ((d_head_q % 8) != 0 || (d_head_v % 4) != 0) {
+    if ((d_head_q % 8) != 0 || (d_head_v % 32) != 0) {
+        return false;
+    }
+    if (mask != nullptr &&
+        (mask->ne[0] < n_kv || mask->ne[1] < n_q || mask->ne[2] <= 0 || mask->ne[3] <= 0)) {
         return false;
     }
 
@@ -14781,20 +14804,24 @@ static bool ggml_cl_adreno_xmem_attn_can_use(
         return false;
     }
 
-    const int heads_total = n_head * n_batch;
+    const int gqa_ratio = n_head / n_head_kv;
+    const int q_width = n_q * gqa_ratio;
+    const int kv_heads_total = n_head_kv * n_batch;
+    const int n_kv_padded = (int) ggml_cl_round_up((size_t) n_kv, 32);
     const int qpack = d_head_q / 4;
     const int vpack = d_head_v / 4;
-    const int npack = ggml_cl_round_up_div(n_kv, 4);
+    const int npack = n_kv_padded / 4;
 
-    if ((size_t) n_q > backend_ctx->image2d_max_width || (size_t) n_kv > backend_ctx->image2d_max_width) {
+    if ((size_t) q_width > backend_ctx->image2d_max_width ||
+        (size_t) n_kv_padded > backend_ctx->image2d_max_width) {
         return false;
     }
-    if ((size_t) heads_total * (size_t) qpack > backend_ctx->image2d_max_height ||
-        (size_t) heads_total * (size_t) vpack > backend_ctx->image2d_max_height) {
+    if ((size_t) kv_heads_total * (size_t) qpack > backend_ctx->image2d_max_height ||
+        (size_t) kv_heads_total * (size_t) vpack > backend_ctx->image2d_max_height) {
         return false;
     }
-    if ((size_t) npack * (size_t) heads_total * (size_t) d_head_q > backend_ctx->image_max_buffer_size ||
-        (size_t) npack * (size_t) heads_total * (size_t) n_q > backend_ctx->image_max_buffer_size) {
+    if ((size_t) npack * (size_t) kv_heads_total * (size_t) d_head_q > backend_ctx->image_max_buffer_size ||
+        (size_t) npack * (size_t) kv_heads_total * (size_t) q_width > backend_ctx->image_max_buffer_size) {
         return false;
     }
 
@@ -14815,16 +14842,19 @@ static void ggml_cl_adreno_xmem_attn_run(
     }
 
     const ggml_tensor * v = dst->src[2];
+    const ggml_tensor * mask = dst->src[3];
 
     ggml_tensor_extra_cl * extra_q = (ggml_tensor_extra_cl *) q->extra;
     ggml_tensor_extra_cl * extra_k = (ggml_tensor_extra_cl *) k->extra;
     ggml_tensor_extra_cl * extra_v = (ggml_tensor_extra_cl *) v->extra;
     ggml_tensor_extra_cl * extra_o = (ggml_tensor_extra_cl *) dst->extra;
+    ggml_tensor_extra_cl * extra_mask = mask ? (ggml_tensor_extra_cl *) mask->extra : nullptr;
 
     const cl_ulong offset_q = extra_q->offset + q->view_offs;
     const cl_ulong offset_k = extra_k->offset + k->view_offs;
     const cl_ulong offset_v = extra_v->offset + v->view_offs;
     const cl_ulong offset_o = extra_o->offset + dst->view_offs;
+    const cl_ulong offset_mask = extra_mask ? extra_mask->offset + mask->view_offs : 0;
 
     const int n_q = q->ne[1];
     const int n_kv = k->ne[1];
@@ -14834,17 +14864,23 @@ static void ggml_cl_adreno_xmem_attn_run(
     const int n_head_kv = k->ne[2];
     const int n_batch = q->ne[3];
     const int heads_total = n_head * n_batch;
+    const int gqa_ratio = n_head / n_head_kv;
+    const int q_width = n_q * gqa_ratio;
+    const int kv_heads_total = n_head_kv * n_batch;
+    const int n_kv_padded = (int) ggml_cl_round_up((size_t) n_kv, 32);
     const int qpack = d_head_q / 4;
     const int opack = d_head_v / 4;
-    const int npack = ggml_cl_round_up_div(n_kv, 4);
+    const int npack = n_kv_padded / 4;
     const float scale = ((const float *) dst->op_params)[0];
 
-    GGML_ASSERT(ggml_cl_adreno_xmem_attn_prepare(backend_ctx, n_q, n_kv, d_head_q, d_head_v, heads_total));
+    GGML_ASSERT(ggml_cl_adreno_xmem_attn_prepare(
+        backend_ctx, n_q, n_kv, d_head_q, d_head_v, n_head, n_head_kv, n_batch));
     const ggml_cl_adreno_xmem_attn_schedule sched =
-        ggml_cl_adreno_xmem_attn_select_schedule(backend_ctx, n_q, n_kv, heads_total);
+        ggml_cl_adreno_xmem_attn_select_schedule(
+            backend_ctx, n_q, n_kv_padded, heads_total, q_width, gqa_ratio);
 
     {
-        size_t gws[3] = {(size_t) n_q, (size_t) heads_total, (size_t) qpack};
+        size_t gws[3] = {ggml_cl_round_up((size_t) n_q, 8), (size_t) heads_total, (size_t) qpack};
         size_t lws[3] = {8, 1, (size_t) ((qpack <= 32) ? qpack : 1)};
         cl_kernel kernel = xstate.kernel_q_f32_to_img_scaled;
         CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem),   &extra_q->data_device));
@@ -14854,23 +14890,25 @@ static void ggml_cl_adreno_xmem_attn_run(
         CL_CHECK(clSetKernelArg(kernel, 4, sizeof(int),      &d_head_q));
         CL_CHECK(clSetKernelArg(kernel, 5, sizeof(int),      &n_q));
         CL_CHECK(clSetKernelArg(kernel, 6, sizeof(int),      &n_head));
-        CL_CHECK(clSetKernelArg(kernel, 7, sizeof(int),      &n_batch));
-        CL_CHECK(clSetKernelArg(kernel, 8, sizeof(cl_ulong), &q->nb[1]));
-        CL_CHECK(clSetKernelArg(kernel, 9, sizeof(cl_ulong), &q->nb[2]));
-        CL_CHECK(clSetKernelArg(kernel, 10, sizeof(cl_ulong), &q->nb[3]));
+        CL_CHECK(clSetKernelArg(kernel, 7, sizeof(int),      &n_head_kv));
+        CL_CHECK(clSetKernelArg(kernel, 8, sizeof(int),      &n_batch));
+        CL_CHECK(clSetKernelArg(kernel, 9, sizeof(cl_ulong), &q->nb[1]));
+        CL_CHECK(clSetKernelArg(kernel, 10, sizeof(cl_ulong), &q->nb[2]));
+        CL_CHECK(clSetKernelArg(kernel, 11, sizeof(cl_ulong), &q->nb[3]));
         backend_ctx->enqueue_ndrange_kernel(kernel, 3, gws, lws, dst);
     }
 
     {
-        size_t gws[3] = {(size_t) n_kv, (size_t) heads_total, (size_t) qpack};
+        size_t gws[3] = {(size_t) n_kv_padded, (size_t) kv_heads_total, (size_t) qpack};
         size_t lws[3] = {8, 1, (size_t) ((qpack <= 32) ? qpack : 1)};
-        cl_kernel kernel = xstate.kernel_kv_f16_to_img_gqa;
+        cl_kernel kernel = k->type == GGML_TYPE_F16 ?
+            xstate.kernel_kv_f16_to_img_gqa : xstate.kernel_kv_f32_to_img_gqa;
         CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem),   &extra_k->data_device));
         CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_ulong), &offset_k));
         CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem),   &s.k_img));
         CL_CHECK(clSetKernelArg(kernel, 3, sizeof(int),      &d_head_q));
         CL_CHECK(clSetKernelArg(kernel, 4, sizeof(int),      &n_kv));
-        CL_CHECK(clSetKernelArg(kernel, 5, sizeof(int),      &n_head));
+        CL_CHECK(clSetKernelArg(kernel, 5, sizeof(int),      &n_kv_padded));
         CL_CHECK(clSetKernelArg(kernel, 6, sizeof(int),      &n_head_kv));
         CL_CHECK(clSetKernelArg(kernel, 7, sizeof(int),      &n_batch));
         CL_CHECK(clSetKernelArg(kernel, 8, sizeof(cl_ulong), &k->nb[1]));
@@ -14880,15 +14918,16 @@ static void ggml_cl_adreno_xmem_attn_run(
     }
 
     {
-        size_t gws[3] = {(size_t) n_kv, (size_t) heads_total, (size_t) opack};
+        size_t gws[3] = {(size_t) n_kv_padded, (size_t) kv_heads_total, (size_t) opack};
         size_t lws[3] = {8, 1, (size_t) ((opack <= 32) ? opack : 1)};
-        cl_kernel kernel = xstate.kernel_kv_f16_to_img_gqa;
+        cl_kernel kernel = v->type == GGML_TYPE_F16 ?
+            xstate.kernel_kv_f16_to_img_gqa : xstate.kernel_kv_f32_to_img_gqa;
         CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem),   &extra_v->data_device));
         CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_ulong), &offset_v));
         CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem),   &s.v_img));
         CL_CHECK(clSetKernelArg(kernel, 3, sizeof(int),      &d_head_v));
         CL_CHECK(clSetKernelArg(kernel, 4, sizeof(int),      &n_kv));
-        CL_CHECK(clSetKernelArg(kernel, 5, sizeof(int),      &n_head));
+        CL_CHECK(clSetKernelArg(kernel, 5, sizeof(int),      &n_kv_padded));
         CL_CHECK(clSetKernelArg(kernel, 6, sizeof(int),      &n_head_kv));
         CL_CHECK(clSetKernelArg(kernel, 7, sizeof(int),      &n_batch));
         CL_CHECK(clSetKernelArg(kernel, 8, sizeof(cl_ulong), &v->nb[1]));
@@ -14898,34 +14937,30 @@ static void ggml_cl_adreno_xmem_attn_run(
     }
 
     {
-        size_t gws[3] = {(size_t) d_head_q, (size_t) heads_total, (size_t) npack};
-        size_t lws[3] = {(size_t) MIN(64, d_head_q), (size_t) (heads_total >= 2 ? 2 : 1), (size_t) MIN(8, npack > 0 ? npack : 1)};
+        size_t gws[3] = {(size_t) d_head_q, (size_t) kv_heads_total, (size_t) npack};
+        size_t lws[3] = {(size_t) MIN(64, d_head_q), (size_t) (kv_heads_total >= 2 ? 2 : 1), (size_t) MIN(8, npack)};
         if (lws[0] * lws[1] * lws[2] > backend_ctx->max_workgroup_size) {
             lws[1] = 1;
         }
         cl_kernel kernel = xstate.kernel_k_gather;
         CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &s.k_transpose_buf));
         CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem), &s.k_img));
-        ggml_cl_set_arg_int4(kernel, 2, n_kv, heads_total, npack, d_head_q);
+        ggml_cl_set_arg_int4(kernel, 2, n_kv_padded, kv_heads_total, npack, d_head_q);
         ggml_cl_set_arg_int4(kernel, 3, qpack, 0, 0, 0);
         backend_ctx->enqueue_ndrange_kernel(kernel, 3, gws, lws, dst);
     }
     {
-        const size_t groups16 = (size_t) ggml_cl_round_up_div(heads_total * d_head_q, 16);
-        const size_t packed_linear = (size_t) n_kv * groups16;
+        const size_t groups16 = (size_t) ggml_cl_round_up_div(kv_heads_total * d_head_q, 16);
+        const size_t packed_linear = (size_t) n_kv_padded * groups16;
         const size_t lws0 = MIN((size_t) 1024, backend_ctx->max_workgroup_size);
         size_t gws[3] = {ggml_cl_round_up(packed_linear, lws0), 1, 1};
         size_t lws[3] = {lws0, 1, 1};
-        ggml_fp16_t tail_mask[4];
-        ggml_cl_adreno_xmem_attn_make_tail_mask(n_kv, tail_mask);
-
         cl_kernel kernel = xstate.kernel_pack_k;
         CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &s.k_packed_buf));
         CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem), &s.k_transpose_img1d));
         ggml_cl_set_arg_int4(kernel, 2, 8, (int) packed_linear, qpack, d_head_q);
-        ggml_cl_set_arg_int4(kernel, 3, heads_total, heads_total, heads_total, npack);
+        ggml_cl_set_arg_int4(kernel, 3, kv_heads_total, kv_heads_total, kv_heads_total, npack);
         ggml_cl_set_arg_int4(kernel, 4, d_head_q, 0, 0, 0);
-        CL_CHECK(clSetKernelArg(kernel, 5, sizeof(tail_mask), tail_mask));
         backend_ctx->enqueue_ndrange_kernel(kernel, 3, gws, lws, dst);
     }
 
@@ -14933,11 +14968,11 @@ static void ggml_cl_adreno_xmem_attn_run(
         size_t lws[3] = {(size_t) sched.qk_lws0, 1, (size_t) sched.qk_lws2};
         const int slices_per_group = sched.qk_lws2 * 8;
         const size_t groups_z = (size_t) ggml_cl_round_up_div(npack, slices_per_group);
-        const size_t groups_x = (size_t) ggml_cl_round_up_div(n_q, sched.qk_lws0);
+        const size_t groups_x = (size_t) ggml_cl_round_up_div(q_width, sched.qk_lws0);
         size_t gws[3] = {
             lws[0] * groups_z,
             groups_x,
-            (size_t) heads_total * lws[2],
+            (size_t) kv_heads_total * lws[2],
         };
 
         cl_kernel kernel = xstate.kernel_qk_gemm;
@@ -14945,51 +14980,87 @@ static void ggml_cl_adreno_xmem_attn_run(
         CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem), &s.k_packed_buf));
         CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem), &s.xmem_qk));
         CL_CHECK(clSetKernelArg(kernel, 3, sizeof(cl_mem), &s.q_img));
-        ggml_cl_set_arg_int4(kernel, 4, heads_total, npack, n_q, 32);
-        ggml_cl_set_arg_int4(kernel, 5, qpack, 0, 0, heads_total);
+        ggml_cl_set_arg_int4(kernel, 4, kv_heads_total, npack, q_width, 32);
+        ggml_cl_set_arg_int4(kernel, 5, qpack, 0, 0, kv_heads_total);
         ggml_cl_set_arg_int4(kernel, 6, qpack, 1, 1, 0);
         backend_ctx->enqueue_ndrange_kernel(kernel, 3, gws, lws, dst);
     }
+    cl_mem softmax_input_img = s.score_img1d;
+    cl_mem softmax_output_buf = s.prob_buf;
+    cl_mem pv_prob_img = s.prob_img1d;
+
+    if (mask != nullptr) {
+        const cl_ulong mask_nb1 = mask->nb[1];
+        const cl_ulong mask_nb2 = mask->nb[2];
+        const cl_ulong mask_nb3 = mask->nb[3];
+        const int mask_ne2 = mask->ne[2];
+        const int mask_ne3 = mask->ne[3];
+        size_t lws[3] = {(size_t) sched.softmax_apply_lws0, 1, (size_t) sched.softmax_apply_lws2};
+        size_t gws[3] = {
+            ggml_cl_round_up((size_t) q_width, lws[0]),
+            (size_t) kv_heads_total,
+            ggml_cl_round_up((size_t) npack, lws[2]),
+        };
+        cl_kernel kernel = xstate.kernel_mask_scores;
+        CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &s.prob_buf));
+        CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem), &s.score_img1d));
+        CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem), &extra_mask->data_device));
+        CL_CHECK(clSetKernelArg(kernel, 3, sizeof(cl_ulong), &offset_mask));
+        CL_CHECK(clSetKernelArg(kernel, 4, sizeof(int), &q_width));
+        CL_CHECK(clSetKernelArg(kernel, 5, sizeof(int), &n_q));
+        CL_CHECK(clSetKernelArg(kernel, 6, sizeof(int), &n_kv));
+        CL_CHECK(clSetKernelArg(kernel, 7, sizeof(int), &n_kv_padded));
+        CL_CHECK(clSetKernelArg(kernel, 8, sizeof(int), &kv_heads_total));
+        CL_CHECK(clSetKernelArg(kernel, 9, sizeof(int), &n_head));
+        CL_CHECK(clSetKernelArg(kernel, 10, sizeof(int), &n_head_kv));
+        CL_CHECK(clSetKernelArg(kernel, 11, sizeof(cl_ulong), &mask_nb1));
+        CL_CHECK(clSetKernelArg(kernel, 12, sizeof(cl_ulong), &mask_nb2));
+        CL_CHECK(clSetKernelArg(kernel, 13, sizeof(cl_ulong), &mask_nb3));
+        CL_CHECK(clSetKernelArg(kernel, 14, sizeof(int), &mask_ne2));
+        CL_CHECK(clSetKernelArg(kernel, 15, sizeof(int), &mask_ne3));
+        backend_ctx->enqueue_ndrange_kernel(kernel, 3, gws, lws, dst);
+
+        softmax_input_img = s.prob_img1d;
+        softmax_output_buf = s.score_buf;
+        pv_prob_img = s.score_img1d;
+    }
+
     {
         size_t lws[3] = {(size_t) sched.softmax_reduce_lws0, 1, 1};
-        size_t gws[3] = {ggml_cl_round_up((size_t) n_q, lws[0]), (size_t) heads_total, 1};
+        size_t gws[3] = {ggml_cl_round_up((size_t) q_width, lws[0]), (size_t) kv_heads_total, 1};
         cl_kernel kernel = xstate.kernel_softmax_reduce_basic;
-        CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &s.score_img1d));
+        CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &softmax_input_img));
         CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem), &s.softmax_stats_img2d));
-        ggml_cl_set_arg_int4(kernel, 2, heads_total, 1, n_q, n_kv);
-        ggml_cl_set_arg_int4(kernel, 3, heads_total, n_q, 0, 0);
+        ggml_cl_set_arg_int4(kernel, 2, kv_heads_total, 1, q_width, n_kv);
+        ggml_cl_set_arg_int4(kernel, 3, kv_heads_total, q_width, 0, 0);
         backend_ctx->enqueue_ndrange_kernel(kernel, 3, gws, lws, dst);
     }
     {
         size_t lws[3] = {(size_t) sched.softmax_apply_lws0, 1, (size_t) sched.softmax_apply_lws2};
         size_t gws[3] = {
-            ggml_cl_round_up((size_t) n_q, lws[0]),
-            (size_t) heads_total,
+            ggml_cl_round_up((size_t) q_width, lws[0]),
+            (size_t) kv_heads_total,
             ggml_cl_round_up((size_t) npack, lws[2]),
         };
         cl_kernel kernel = xstate.kernel_softmax_apply_basic;
-        CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &s.prob_buf));
-        CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem), &s.score_img1d));
+        CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &softmax_output_buf));
+        CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem), &softmax_input_img));
         CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem), &s.softmax_stats_img2d));
-        ggml_cl_set_arg_int4(kernel, 3, heads_total, npack, n_q, 1);
-        ggml_cl_set_arg_int4(kernel, 4, heads_total, n_q, 0, 0);
+        ggml_cl_set_arg_int4(kernel, 3, kv_heads_total, npack, q_width, 1);
+        ggml_cl_set_arg_int4(kernel, 4, kv_heads_total, q_width, n_kv, 0);
         backend_ctx->enqueue_ndrange_kernel(kernel, 3, gws, lws, dst);
     }
     {
-        const size_t groups16 = (size_t) ggml_cl_round_up_div(heads_total * d_head_v, 16);
-        const size_t packed_linear = (size_t) n_kv * groups16;
+        const size_t groups16 = (size_t) ggml_cl_round_up_div(kv_heads_total * d_head_v, 16);
+        const size_t packed_linear = (size_t) n_kv_padded * groups16;
         const size_t lws0 = MIN((size_t) 1024, backend_ctx->max_workgroup_size);
         size_t gws[3] = {ggml_cl_round_up(packed_linear, lws0), 1, 1};
         size_t lws[3] = {lws0, 1, 1};
-        ggml_fp16_t tail_mask[4];
-        ggml_cl_adreno_xmem_attn_make_tail_mask(n_kv, tail_mask);
-
         cl_kernel kernel = xstate.kernel_pack_v;
         CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &s.v_packed_buf));
         CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem), &s.v_img));
-        ggml_cl_set_arg_int4(kernel, 2, 8, (int) packed_linear, npack, n_kv);
-        ggml_cl_set_arg_int4(kernel, 3, heads_total, heads_total, opack, 0);
-        CL_CHECK(clSetKernelArg(kernel, 4, sizeof(tail_mask), tail_mask));
+        ggml_cl_set_arg_int4(kernel, 2, 8, (int) packed_linear, npack, n_kv_padded);
+        ggml_cl_set_arg_int4(kernel, 3, kv_heads_total, kv_heads_total, opack, 0);
         backend_ctx->enqueue_ndrange_kernel(kernel, 3, gws, lws, dst);
     }
 
@@ -14997,27 +15068,27 @@ static void ggml_cl_adreno_xmem_attn_run(
         size_t lws[3] = {(size_t) sched.pv_lws0, 1, (size_t) sched.pv_lws2};
         const int blocks = ggml_cl_round_up_div(opack, 8);
         const size_t groups_z = (size_t) ggml_cl_round_up_div(blocks, sched.pv_lws2);
-        const size_t groups_x = (size_t) ggml_cl_round_up_div(n_q, sched.pv_lws0);
+        const size_t groups_x = (size_t) ggml_cl_round_up_div(q_width, sched.pv_lws0);
         size_t gws[3] = {
             lws[0] * groups_z,
             groups_x,
-            (size_t) heads_total * lws[2],
+            (size_t) kv_heads_total * lws[2],
         };
 
         cl_kernel kernel = xstate.kernel_pv_gemm;
         CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &s.v_packed_buf));
         CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem), &s.xmem_pv));
-        CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem), &s.prob_img1d));
+        CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem), &pv_prob_img));
         CL_CHECK(clSetKernelArg(kernel, 3, sizeof(cl_mem), &s.out_img));
-        ggml_cl_set_arg_int4(kernel, 4, heads_total, opack, n_q, 32);
-        ggml_cl_set_arg_int4(kernel, 5, npack, 0, 0, heads_total);
-        ggml_cl_set_arg_int4(kernel, 6, heads_total * n_q, npack, n_q, 1);
+        ggml_cl_set_arg_int4(kernel, 4, kv_heads_total, opack, q_width, 32);
+        ggml_cl_set_arg_int4(kernel, 5, npack, 0, 0, kv_heads_total);
+        ggml_cl_set_arg_int4(kernel, 6, kv_heads_total * q_width, npack, q_width, 1);
         ggml_cl_set_arg_int4(kernel, 7, 1, 0, 0, 0);
         backend_ctx->enqueue_ndrange_kernel(kernel, 3, gws, lws, dst);
     }
 
     {
-        size_t gws[3] = {(size_t) n_q, (size_t) heads_total, (size_t) opack};
+        size_t gws[3] = {ggml_cl_round_up((size_t) n_q, 8), (size_t) heads_total, (size_t) opack};
         size_t lws[3] = {8, 1, (size_t) ((opack <= 32) ? opack : 1)};
         cl_kernel kernel = xstate.kernel_img_to_f32;
         CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem),   &extra_o->data_device));
@@ -15026,10 +15097,11 @@ static void ggml_cl_adreno_xmem_attn_run(
         CL_CHECK(clSetKernelArg(kernel, 3, sizeof(int),      &d_head_v));
         CL_CHECK(clSetKernelArg(kernel, 4, sizeof(int),      &n_q));
         CL_CHECK(clSetKernelArg(kernel, 5, sizeof(int),      &n_head));
-        CL_CHECK(clSetKernelArg(kernel, 6, sizeof(int),      &n_batch));
-        CL_CHECK(clSetKernelArg(kernel, 7, sizeof(cl_ulong), &dst->nb[1]));
-        CL_CHECK(clSetKernelArg(kernel, 8, sizeof(cl_ulong), &dst->nb[2]));
-        CL_CHECK(clSetKernelArg(kernel, 9, sizeof(cl_ulong), &dst->nb[3]));
+        CL_CHECK(clSetKernelArg(kernel, 6, sizeof(int),      &n_head_kv));
+        CL_CHECK(clSetKernelArg(kernel, 7, sizeof(int),      &n_batch));
+        CL_CHECK(clSetKernelArg(kernel, 8, sizeof(cl_ulong), &dst->nb[1]));
+        CL_CHECK(clSetKernelArg(kernel, 9, sizeof(cl_ulong), &dst->nb[2]));
+        CL_CHECK(clSetKernelArg(kernel, 10, sizeof(cl_ulong), &dst->nb[3]));
         backend_ctx->enqueue_ndrange_kernel(kernel, 3, gws, lws, dst);
     }
 }
