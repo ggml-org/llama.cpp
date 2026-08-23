@@ -13,12 +13,6 @@ void llama_model_dots3note::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS, hparams.n_layer_nextn, false);
     GGML_ASSERT(hparams.n_layer_nextn < hparams.n_layer_all && "n_layer_nextn must be < n_layer_all");
 
-    // the NextN/MTP block uses the sliding-attention MLA, so mark it as SWA
-    // (the sliding_window_pattern key covers only the trunk layers)
-    for (uint32_t il = hparams.n_layer(); il < hparams.n_layer_all; ++il) {
-        hparams.is_swa_impl[il] = 1;
-    }
-
     // MoE parameters
     ml.get_key(LLM_KV_EXPERT_SHARED_COUNT,        hparams.n_expert_shared);
     ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, hparams.n_ff_exp);
@@ -42,6 +36,12 @@ void llama_model_dots3note::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa);
     ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA,       hparams.rope_freq_base_train_swa);
     ml.get_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.is_swa_impl);
+
+    // the NextN/MTP block uses the sliding-attention MLA, so mark it as SWA
+    // (the sliding_window_pattern key covers only the trunk layers)
+    for (uint32_t il = hparams.n_layer(); il < hparams.n_layer_all; ++il) {
+        hparams.is_swa_impl[il] = 1;
+    }
 
     // DSA parameters
     ml.get_key(LLM_KV_ATTENTION_INDEXER_HEAD_COUNT, hparams.indexer_n_head);
