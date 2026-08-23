@@ -558,24 +558,14 @@ llama_model_dots3note::graph_mtp::graph_mtp(const llama_model & model, const llm
     // the MTP cache is a sliding-window cache; build_attn_inp_k_impl rejects SWA
     // caches, so construct the input directly (same as the SWA input of the trunk)
     const auto * mctx_cur = static_cast<const llama_kv_cache_context *>(mctx);
-    auto inp_attn_u = std::make_unique<llm_graph_input_attn_k>(hparams, cparams, mctx_cur);
+    auto inp_swa = std::make_unique<llm_graph_input_attn_k>(hparams, cparams, mctx_cur);
 
-    inp_attn_u->self_k_idxs = mctx_cur->build_input_k_idxs(ctx0, ubatch);
+    inp_swa->self_k_idxs = mctx_cur->build_input_k_idxs(ctx0, ubatch);
 
-    {
-        // same mask tensor as build_attn_inp_kq_mask()
-        const auto n_kv     = mctx_cur->get_n_kv();
-        const auto n_stream = cparams.kv_unified ? 1 : ubatch.n_seqs_unq;
-        const auto type     = cparams.flash_attn ? GGML_TYPE_F16 : GGML_TYPE_F32;
+    inp_swa->self_kq_mask = build_attn_inp_kq_mask(ctx0, mctx_cur, ubatch, cparams);
+    inp_swa->self_kq_mask_cnv = inp_swa->self_kq_mask;
 
-        inp_attn_u->self_kq_mask = ggml_new_tensor_4d(ctx0, type, n_kv, n_tokens/n_stream, 1, n_stream);
-        ggml_set_input(inp_attn_u->self_kq_mask);
-        ggml_set_name(inp_attn_u->self_kq_mask, "attn_inp_kq_mask");
-
-        inp_attn_u->self_kq_mask_cnv = inp_attn_u->self_kq_mask;
-    }
-
-    auto * inp_attn = (llm_graph_input_attn_k *) res->add_input(std::move(inp_attn_u));
+    auto * inp_attn = (llm_graph_input_attn_k *) res->add_input(std::move(inp_swa));
 
     ggml_tensor * h_norm = build_norm(h_embd, layer.nextn.hnorm, nullptr, LLM_NORM_RMS, il);
     cb(h_norm, "mtp_hnorm", il);
