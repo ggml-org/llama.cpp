@@ -196,7 +196,7 @@
 		--assistant-min-height-offset: calc(
 			var(--last-user-message-height, 19rem) + var(--chat-form-height, 6rem) +
 				var(--chat-form-bottom-position, 0.5rem) + var(--chat-form-padding-top, 6rem) +
-				var(--assistant-margin-top, 3rem)
+				var(--assistant-margin-top, 3rem) + var(--chat-tabs-offset, 0px)
 		);
 		min-height: calc(100dvh - var(--assistant-min-height-offset));
 
@@ -204,7 +204,7 @@
 			--assistant-min-height-offset: calc(
 				var(--last-user-message-height, 18rem) + var(--chat-form-height, 6rem) +
 					var(--chat-form-bottom-position, 1rem) + var(--chat-form-padding-top, 6rem) +
-					var(--assistant-margin-top, 3rem)
+					var(--assistant-margin-top, 3rem) + var(--chat-tabs-offset, 0px)
 			);
 		}
 	}

@@ -687,6 +687,18 @@ export { default as ChatMessageSystem } from './ChatMessages/ChatMessage/ChatMes
 export { default as ChatScreen } from './ChatScreen/ChatScreen.svelte';
 
 /**
+ * **ChatTabs** - Browser-style tab bar for open conversations
+ *
+ * Horizontal strip of tabs rendered above ChatScreen in the chat layout,
+ * one per conversation tracked by tabsStore. The active tab follows the
+ * route's conversation id; clicking a tab navigates to it, middle-click or
+ * the close button closes it (switching to the left neighbor when closing
+ * the active tab), and a trailing "+" button starts a new chat. Shows a
+ * spinner on tabs with a running generation. Desktop-only.
+ */
+export { default as ChatTabs } from './ChatTabs/ChatTabs.svelte';
+
+/**
  * Visual overlay displayed when user drags files over the chat screen.
  * Shows drop zone indicator to guide users where to release files.
  * Integrated with ChatScreen's drag-drop file upload handling.

@@ -14,6 +14,6 @@
 		tooltip="Scroll to bottom"
 		size="lg"
 		iconSize={ICON_CLASS_DEFAULT}
-		class="h-9 w-9 rounded-full bg-accent text-accent-foreground absolute bottom-4 shadow-md"
+		class="h-9 w-9 rounded-full bg-muted/60 border border-border/20 shadow-sm text-accent-foreground absolute bottom-4"
 	/>
 </div>

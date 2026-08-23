@@ -12,6 +12,21 @@ export enum TooltipSide {
 }
 
 /**
+ * ScrollCarousel arrow placement.
+ */
+export enum ScrollCarouselVariant {
+	CENTER = 'center',
+	TOP = 'top'
+}
+
+/**
+ * Sidebar icon strip actions handled directly by the sidebar.
+ */
+export enum SidebarAction {
+	NEW_CHAT = 'new-chat'
+}
+
+/**
  * MCP prompt display variant
  */
 export enum McpPromptVariant {

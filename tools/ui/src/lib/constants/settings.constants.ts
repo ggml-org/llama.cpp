@@ -256,6 +256,13 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 				type: SettingsFieldType.CHECKBOX
 			},
 			{
+				defaultValue: true,
+				help: 'Show open chats as browser-style tabs above the conversation, one per open chat. When disabled, only one chat is shown at a time.',
+				key: SETTINGS_KEYS.CONVERSATION_TABS,
+				label: 'Conversation tabs',
+				type: SettingsFieldType.CHECKBOX
+			},
+			{
 				defaultValue: false,
 				help: 'Display full raw model identifiers (e.g. "ggml-org/GLM-4.7-Flash-GGUF:Q8_0") instead of parsed names with badges.',
 				key: SETTINGS_KEYS.SHOW_RAW_MODEL_NAMES,

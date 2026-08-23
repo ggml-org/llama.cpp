@@ -11,6 +11,7 @@ export const SETTINGS_KEYS = {
 	API_KEY: 'apiKey',
 	AUTO_MIC_ON_EMPTY: 'autoMicOnEmpty',
 	BACKEND_SAMPLING: 'backend_sampling',
+	CONVERSATION_TABS: 'conversationTabs',
 	COPY_TEXT_ATTACHMENTS_AS_PLAIN_TEXT: 'copyTextAttachmentsAsPlainText',
 	CUSTOM_CSS: 'customCss',
 	// PY_INTERPRETER_ENABLED: 'pyInterpreterEnabled',

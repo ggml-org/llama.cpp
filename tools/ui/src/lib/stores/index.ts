@@ -22,6 +22,9 @@ export { chatStore } from './chat/index.svelte';
 
 export { draftMessagesStore } from './chat/drafts.svelte';
 
+// CONVERSATION TABS
+export { tabsStore } from './tabs.svelte';
+
 // CONTEXT STATS (active conversation context window usage)
 export { contextStatsStore } from './chat/context-stats.svelte';
 
@@ -39,6 +42,9 @@ export { modelsStore } from './models/index.svelte';
 
 // SERVER
 export { serverStore } from './server.svelte';
+
+// UI / LAYOUT
+export { uiStore } from './ui.svelte';
 
 // SETTINGS / UI PREFERENCES
 export { settingsStore } from './settings/index.svelte';

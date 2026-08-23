@@ -625,7 +625,7 @@
 		}
 
 		if (rootElement && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
-			const isWordJump = (event.altKey || event.ctrlKey) && !event.metaKey;
+			const isWordJump = (event.altKey || event.ctrlKey) && !event.metaKey && !event.shiftKey;
 			const isPlainLeft =
 				event.key === 'ArrowLeft' && !event.altKey && !event.ctrlKey && !event.metaKey;
 

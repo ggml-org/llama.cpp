@@ -4,8 +4,6 @@ export const URL_PARAMS = {
 	LOAD: 'load',
 	/** Model to select. */
 	MODEL: 'model',
-	/** Start a new chat. */
-	NEW_CHAT: 'new_chat',
 	/** Prompt to send on arrival. */
 	QUERY: 'q'
 } as const;
@@ -15,8 +13,6 @@ export const ROUTES = {
 	CHAT: '#/chat',
 	/** MCP servers. */
 	MCP_SERVERS: '#/mcp-servers',
-	/** New chat — root with new chat query param. */
-	NEW_CHAT: `?${URL_PARAMS.NEW_CHAT}=true#/`,
 	/** Search — mobile-only full-page conversation search. */
 	SEARCH: '#/search',
 	/** Settings base — for dynamic settings URLs use RouterService. */

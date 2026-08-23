@@ -1,3 +1,4 @@
+import type { SidebarAction } from '$lib/enums';
 import type { Component } from 'svelte';
 
 /**
@@ -7,6 +8,8 @@ export interface DesktopIconStripItem {
 	icon: Component;
 	tooltip: string;
 	route?: string;
+	/** Custom action handled by the sidebar, e.g. opening a new-chat tab */
+	action?: SidebarAction;
 	activeRouteId?: string;
 	activeRoutePrefix?: string;
 	activeUrlIncludes?: string;

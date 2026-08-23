@@ -21,6 +21,7 @@ import {
 	type ConversationsPreferencesHost
 } from '$lib/stores/conversations/preferences.svelte';
 import { settingsStore } from '$lib/stores/settings/index.svelte';
+import { tabsStore } from '$lib/stores/tabs.svelte';
 import { filterByLeafNodeId, findLeafNode, generateConversationTitle } from '$lib/utils';
 import { SvelteSet } from 'svelte/reactivity';
 import { toast } from 'svelte-sonner';
@@ -105,8 +106,8 @@ class ConversationsStore implements ConversationsPreferencesHost {
 
 	/**
 	 * Deletes multiple conversations in sequence.
-	 * Mirrors deleteConversation() per-id; navigates to NEW_CHAT only if the
-	 * currently-open chat was among the deleted ones.
+	 * Mirrors deleteConversation() per-id; navigates to the new-chat screen only
+	 * if the currently-open chat was among the deleted ones.
 	 * @param convIds - Conversation IDs to delete
 	 */
 	async bulkDeleteConversations(convIds: string[]): Promise<void> {
@@ -138,8 +139,13 @@ class ConversationsStore implements ConversationsPreferencesHost {
 			this.notifyConversationsDeleted([...idsToRemove]);
 
 			if (activeWasDeleted) {
+				const activeId = this.activeConversation!.id;
+
+				tabsStore.removeTabs([...idsToRemove].filter((id) => id !== activeId));
 				this.clearActiveConversation();
-				await goto(ROUTES.NEW_CHAT);
+				await tabsStore.close(activeId, activeId);
+			} else {
+				tabsStore.removeTabs([...idsToRemove]);
 			}
 
 			toast.success(
@@ -276,11 +282,12 @@ class ConversationsStore implements ConversationsPreferencesHost {
 
 			this.clearActiveConversation();
 			this.conversations = [];
+			tabsStore.clear();
 			this.notifyConversationsDeleted(allIds);
 
 			toast.success('All conversations deleted');
 
-			await goto(ROUTES.NEW_CHAT);
+			await goto(ROUTES.START);
 		} catch (error) {
 			console.error('Failed to delete all conversations:', error);
 			toast.error('Failed to delete conversations');
@@ -313,8 +320,13 @@ class ConversationsStore implements ConversationsPreferencesHost {
 				this.conversations = this.conversations.filter((c) => !idsToRemove.has(c.id));
 
 				if (this.activeConversation && idsToRemove.has(this.activeConversation.id)) {
+					const activeId = this.activeConversation.id;
+
+					tabsStore.removeTabs([...idsToRemove].filter((id) => id !== activeId));
 					this.clearActiveConversation();
-					await goto(ROUTES.NEW_CHAT);
+					await tabsStore.close(activeId, activeId);
+				} else {
+					tabsStore.removeTabs([...idsToRemove]);
 				}
 
 				this.notifyConversationsDeleted([...idsToRemove]);
@@ -333,7 +345,9 @@ class ConversationsStore implements ConversationsPreferencesHost {
 
 				if (this.activeConversation?.id === convId) {
 					this.clearActiveConversation();
-					await goto(ROUTES.NEW_CHAT);
+					await tabsStore.close(convId, convId);
+				} else {
+					tabsStore.removeTabs([convId]);
 				}
 
 				this.notifyConversationsDeleted([convId]);
@@ -572,6 +586,15 @@ class ConversationsStore implements ConversationsPreferencesHost {
 	}
 
 	/**
+	 * Start a fresh chat by navigating to the bare `#/` new-chat screen. The
+	 * chat layout opens a new-chat tab for it when Conversation tabs are on.
+	 */
+	async openNewChat(): Promise<void> {
+		this.clearActiveConversation();
+		await goto(ROUTES.START);
+	}
+
+	/**
 	 * Refreshes active messages based on currNode after branch navigation.
 	 */
 	async refreshActiveMessages(): Promise<void> {
@@ -677,14 +700,6 @@ class ConversationsStore implements ConversationsPreferencesHost {
 	}
 
 	/**
-	 *
-	 *
-	 * Import & Export
-	 *
-	 *
-	 */
-
-	/**
 	 * Updates the current node of the active conversation
 	 * @param nodeId - The new current node ID
 	 */
@@ -716,6 +731,14 @@ class ConversationsStore implements ConversationsPreferencesHost {
 			}
 		}
 	}
+
+	/**
+	 *
+	 *
+	 * Import & Export
+	 *
+	 *
+	 */
 
 	private notifyConversationsDeleted(convIds: string[]): void {
 		if (convIds.length === 0) return;
