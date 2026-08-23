@@ -32,10 +32,10 @@ struct common_speculative_adaptive {
         switch (depth) {
             case 1: return 2;
             case 2: return 4;
-            case 3: return 6;
-            case 4: return 5;
-            case 5: return 4;
-            case 6: return 3;
+            case 3: return 10; // hardened 3->4 barrier: keeps prose/reasoning pinned
+            case 4: return 6;
+            case 5: return 3;
+            case 6: return 2;
             default: return 2; // depth >= 7
         }
     }

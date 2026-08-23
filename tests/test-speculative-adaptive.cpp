@@ -1,9 +1,9 @@
 #include "speculative-adaptive.h"
 
+#undef NDEBUG
+
 #include <cassert>
 #include <cstdio>
-
-#undef NDEBUG
 
 static void test_reset(void) {
     common_speculative_adaptive ctrl;
@@ -46,8 +46,9 @@ static void test_climb(void) {
     ctrl.update(2, 2, 8, 1);
     assert(ctrl.n_cur == 3);
 
-    // depth 3 is the barrier: 6 consecutive full accepts to reach depth 4
-    for (int i = 0; i < 5; ++i) {
+    // depth 3 is the hardened barrier: 10 consecutive full accepts to reach
+    // depth 4, so prose/reasoning stay pinned at the floor
+    for (int i = 0; i < 9; ++i) {
         ctrl.update(3, 3, 8, 1);
         assert(ctrl.n_cur == 3);
     }
@@ -60,25 +61,23 @@ static void test_climb(void) {
     assert(ctrl.n_climb == 1);
     assert(ctrl.n_drop == 0);
 
-    // depth 4-5 need 5 consecutive full accepts
-    for (int i = 0; i < 4; ++i) {
+    // depth 4 needs 6 consecutive full accepts
+    for (int i = 0; i < 5; ++i) {
         ctrl.update(4, 4, 8, 1);
     }
     assert(ctrl.n_cur == 5);
 
-    // depth 5 needs 4 consecutive full accepts
-    for (int i = 0; i < 3; ++i) {
+    // depth 5 needs 3 consecutive full accepts
+    for (int i = 0; i < 2; ++i) {
         ctrl.update(5, 5, 8, 1);
         assert(ctrl.n_cur == 5);
     }
     ctrl.update(5, 5, 8, 1);
     assert(ctrl.n_cur == 6);
 
-    // depth 6 needs 3 consecutive full accepts
-    for (int i = 0; i < 2; ++i) {
-        ctrl.update(6, 6, 8, 1);
-        assert(ctrl.n_cur == 6);
-    }
+    // depth 6 needs 2 consecutive full accepts
+    ctrl.update(6, 6, 8, 1);
+    assert(ctrl.n_cur == 6);
     ctrl.update(6, 6, 8, 1);
     assert(ctrl.n_cur == 7);
 
