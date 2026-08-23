@@ -78,19 +78,21 @@ common_json_value::common_json_value(const common_json & val) :
 common_json_value::common_json_value(common_json && val) :
     type(VAL_JSON), val_json(std::make_shared<common_json>(std::move(val))) {}
 
+// the ctors and get<T>() below are explicit specializations, giving strong symbols
+// an explicit instantiation is a weak symbol, dropped by some LTO builds (clang-cl)
 template <typename T>
-common_json_value::common_json_value(const std::set<T> & vals) : type(VAL_JSON) {
+static std::shared_ptr<common_json> set_json(const std::set<T> & vals) {
     common_json out = common_json::array();
 
     for (const auto & val : vals) {
         out.push_back(val);
     }
 
-    val_json = std::make_shared<common_json>(std::move(out));
+    return std::make_shared<common_json>(std::move(out));
 }
 
 // a set value is usable only for the types below
-#define COMMON_JSON_SET(...) template common_json_value::common_json_value(const std::set<__VA_ARGS__> &);
+#define COMMON_JSON_SET(...) template <> common_json_value::common_json_value(const std::set<__VA_ARGS__> & vals) : type(VAL_JSON), val_json(set_json(vals)) {}
 
 COMMON_JSON_SET(int)
 COMMON_JSON_SET(std::string)
@@ -98,56 +100,45 @@ COMMON_JSON_SET(std::string)
 #undef COMMON_JSON_SET
 
 template <typename T>
-common_json_value::common_json_value(const std::map<std::string, T> & vals) : type(VAL_JSON) {
+static std::shared_ptr<common_json> map_json(const T & vals) {
     common_json out = common_json::object();
 
     for (const auto & val : vals) {
         out.set({ val.first, val.second });
     }
 
-    val_json = std::make_shared<common_json>(std::move(out));
+    return std::make_shared<common_json>(std::move(out));
 }
 
 // a map value is usable only for the types below
-#define COMMON_JSON_MAP(...) template common_json_value::common_json_value(const std::map<std::string, __VA_ARGS__> &);
+#define COMMON_JSON_MAP(...) template <> common_json_value::common_json_value(const std::map<std::string, __VA_ARGS__> & vals) : type(VAL_JSON), val_json(map_json(vals)) {}
 
 COMMON_JSON_MAP(bool)
 COMMON_JSON_MAP(std::string)
 
 #undef COMMON_JSON_MAP
 
-template <typename T>
-common_json_value::common_json_value(const std::unordered_map<std::string, T> & vals) : type(VAL_JSON) {
-    common_json out = common_json::object();
-
-    for (const auto & val : vals) {
-        out.set({ val.first, val.second });
-    }
-
-    val_json = std::make_shared<common_json>(std::move(out));
-}
-
 // an unordered map value is usable only for the types below
-#define COMMON_JSON_UMAP(...) template common_json_value::common_json_value(const std::unordered_map<std::string, __VA_ARGS__> &);
+#define COMMON_JSON_UMAP(...) template <> common_json_value::common_json_value(const std::unordered_map<std::string, __VA_ARGS__> & vals) : type(VAL_JSON), val_json(map_json(vals)) {}
 
 COMMON_JSON_UMAP(size_t)
 
 #undef COMMON_JSON_UMAP
 
 template <typename T>
-common_json_value::common_json_value(const std::vector<T> & vals) : type(VAL_JSON) {
+static std::shared_ptr<common_json> vec_json(const std::vector<T> & vals) {
     common_json out = common_json::array();
 
     for (const auto & val : vals) {
         out.push_back(val);
     }
 
-    val_json = std::make_shared<common_json>(std::move(out));
+    return std::make_shared<common_json>(std::move(out));
 }
 
 // a vector value is usable only for the types below
 // note: std::vector<bool> is not here, its proxy reference does not convert
-#define COMMON_JSON_VEC(...) template common_json_value::common_json_value(const std::vector<__VA_ARGS__> &);
+#define COMMON_JSON_VEC(...) template <> common_json_value::common_json_value(const std::vector<__VA_ARGS__> & vals) : type(VAL_JSON), val_json(vec_json(vals)) {}
 
 COMMON_JSON_VEC(int)
 COMMON_JSON_VEC(unsigned char)
@@ -404,10 +395,6 @@ common_json::items_view common_json::items() const {
     return items_view(const_cast<common_json *>(this), size());
 }
 
-template <typename T> T common_json::get() const {
-    return guard([&] { return as_json(this).get<T>(); });
-}
-
 // the backing library cannot build a common_json, so this one is just a copy
 template <> common_json common_json::get<common_json>() const {
     return *this;
@@ -415,7 +402,7 @@ template <> common_json common_json::get<common_json>() const {
 
 // get<T>() is usable only for the types below
 
-#define COMMON_JSON_GET(...) template __VA_ARGS__ common_json::get<__VA_ARGS__>() const;
+#define COMMON_JSON_GET(...) template <> __VA_ARGS__ common_json::get<__VA_ARGS__>() const { return guard([&] { return as_json(this).get<__VA_ARGS__>(); }); }
 
 COMMON_JSON_GET(bool)
 COMMON_JSON_GET(int)
@@ -435,3 +422,12 @@ COMMON_JSON_GET(std::vector<size_t>)
 COMMON_JSON_GET(std::unordered_map<std::string, size_t>)
 
 #undef COMMON_JSON_GET
+
+// must stay below the get<std::string> specialization
+common_json::operator std::string() const {
+    return get<std::string>();
+}
+
+std::string common_json::value(const std::string & key, const char * def) const {
+    return contains(key) ? at(key).get<std::string>() : std::string(def);
+}
