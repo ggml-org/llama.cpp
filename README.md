@@ -8,8 +8,8 @@
 > Concretely that means AMD-native FP4/FPx quantisation, every speculative
 > decoding method llama.cpp supports (MTP, DFlash2, DSpark, ngram) benchmarked
 > against each other on this hardware, and Vulkan kernel fixes that make the two
-> work well *together*. Everything below the divider is the upstream README,
-> unchanged.
+> work well *together* — several of which fix bugs that are still live in
+> mainline. Everything below the divider is the upstream README, unchanged.
 >
 > Vulkan is the target deliberately: it is the path that works on a stock Mesa
 > install with no ROCm toolchain, and it is where Strix Halo is least tuned.
@@ -19,9 +19,9 @@
 | | Where it came from |
 |---|---|
 | **ROCmFPx quant types** — `Q4_0_ROCMFP4`, `_FAST`, `Q2/Q3/Q6/Q8_0_ROCMFPX`, with CPU codecs and Vulkan dequant / mat-vec / matmul / integer-dot kernels | Hand-ported from [ciru-ai/ROCmFPX](https://github.com/ciru-ai/ROCmFPX). Two decode bugs in that source are fixed here — see [ROCMFPX-NOTES.md](ROCMFPX-NOTES.md) |
-| **DFlash2 speculative decoding** | [PR #27342](https://github.com/ggml-org/llama.cpp/pull/27342) by Jian Chen, not yet merged upstream. Carried unmodified, original authorship intact |
+| **DFlash2 speculative decoding** | [PR #27342](https://github.com/ggml-org/llama.cpp/pull/27342) by Jian Chen. This fork carried it before it landed; upstream has since merged it, so the fork now builds on upstream's version rather than diverging |
 | **Vulkan batched mat-vec fixes** | New here. IQ3_S register spill at `NUM_COLS > 4` (5x at n=8), and the ROCmFPx batch 3-8 rework described below. Both are upstreamable |
-| **Vulkan LDS stride fix** — +13.7% prefill on *any* quant, not just ours | New here. A four-way LDS bank conflict in the coopmat matmul that affects every non-Intel device. Upstreamable, and the single biggest win in this fork — see [PROGRESS.md](PROGRESS.md) |
+| **Vulkan LDS stride fix** — +14% prefill on *any* quant, not just ours | New here. A four-way LDS bank conflict in the coopmat matmul that affects every non-Intel device. Upstreamable, and the single biggest win in this fork — see [PROGRESS.md](PROGRESS.md) |
 
 ## Against mainline llama.cpp
 
@@ -32,14 +32,28 @@ ROCmFPx, no fork-specific model format — so this measures the Vulkan work alon
 
 | model | metric | mainline | this fork | |
 |---|---|---|---|---|
-| unsloth `Qwen3.8-27B-UD-Q4_K_XL` (dense) | pp512 | 270.1 | **307.2** | **+13.7%** |
-| | pp2048 | 260.2 | **291.7** | **+12.1%** |
-| | tg64 | 11.72 | 11.71 | — |
-| bartowski `Ornith-1.5-35B-A3B-Q4_K_M` (MoE) | pp512 | 1034.9 | 1049.9 | +1.5% |
-| | pp2048 | 845.3 | **872.5** | **+3.2%** |
-| | tg64 | 65.74 | 65.74 | — |
+| unsloth `Qwen3.8-27B-UD-Q4_K_XL` (dense) | pp512 | 272.8 | **311.3** | **+14.1%** |
+| | pp2048 | 259.3 | **290.5** | **+12.0%** |
+| | tg64 | 11.71 | 11.69 | — |
+| bartowski `Ornith-1.5-35B-A3B-Q4_K_M` (MoE) | pp512 | 1003.4 | **1043.0** | **+3.9%** |
+| | pp2048 | 840.9 | **867.4** | **+3.2%** |
+| | tg64 | 65.61 | 65.48 | — |
+
+Measured after merging upstream, so the fork is `origin/master` plus this fork's
+own commits and nothing else — the delta is the fork's work, not a version gap.
+`pp2048` is the number to trust: `pp512` carries ±20–29 on both sides because the
+APU's first-run boost clock lands inside the repetition set.
 
 MoE gains less because a 3B-active model is far less matmul-bound to begin with.
+
+The cause is one constant. `mul_mm.comp` stages its shared tiles at
+`SHMEM_STRIDE = BK/2 + PAD` in dword units, which map 1:1 onto the 32 LDS banks,
+and reads B back column-major — so `gcd(SHMEM_STRIDE, 32)` is the bank-conflict
+factor. Upstream sets `PAD` only for Intel-on-Windows; everything else takes the
+shader default of 4, giving stride 20 and a four-way conflict on every B load.
+Stride must stay *even* (an odd stride costs 3x by breaking RADV's wide
+`ds_read_b64/b128` path) so 6 is the fix. It is worth 1.17x on `q4_0` and 1.18x
+on `q8_0` at the kernel level.
 
 Generation is unchanged **in this particular comparison**, which is the expected
 result and not a disappointing one: single-stream decode of a stock K-quant is
@@ -88,15 +102,6 @@ the whole point is verifying batches of drafts.
 ROCmFPx is the other half: mainline cannot load these models at all, so the
 question of drafting with them does not arise. Making the two work *together* —
 FP4 weights at spec-decoding batch widths — is what most of this fork is.
-
-The cause is one constant. `mul_mm.comp` stages its shared tiles at
-`SHMEM_STRIDE = BK/2 + PAD` in dword units, which map 1:1 onto the 32 LDS banks,
-and reads B back column-major — so `gcd(SHMEM_STRIDE, 32)` is the bank-conflict
-factor. Upstream sets `PAD` only for Intel-on-Windows; everything else takes the
-shader default of 4, giving stride 20 and a four-way conflict on every B load.
-Stride must stay *even* (an odd stride costs 3x by breaking RADV's wide
-`ds_read_b64/b128` path) so 6 is the fix. It is worth 1.17x on `q4_0` and 1.18x
-on `q8_0` at the kernel level.
 
 ## Why it exists
 
@@ -211,9 +216,9 @@ weight the codes are not the problem, the coarse scale is.
   landed. What this fork adds on top is making them *fast at the batch sizes they
   actually run at*.
 - **Not upstream, and not a stable base.** Branches here are rebuilt against
-  `ggml-org/master` by hand. As of this writing the fork is 51 commits behind
-  upstream master, so the comparison above also carries whatever upstream changed
-  in those 51 commits.
+  `ggml-org/master` by hand. The fork is currently merged up to `95b8e33e1` with
+  no divergence, but it drifts behind between merges — check before trusting the
+  comparison above.
 
 Correctness is checked with `test-backend-ops` against the CPU backend —
 17920/17920 on Vulkan, and again with `GGML_VK_FORCE_MMVQ=1`.

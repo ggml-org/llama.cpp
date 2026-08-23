@@ -13,7 +13,7 @@ revision of this fork.
 
 ## 1. Shipped: LDS stride padding for the coopmat matmul
 
-**+13.7% prefill against mainline, on a stock unsloth K-quant.** One constant.
+**+14% prefill against mainline, on a stock unsloth K-quant.** One constant.
 
 ### The bug
 
@@ -74,12 +74,16 @@ Both binaries, same models, interleaved, idle GPU.
 
 | model | metric | mainline | this fork | |
 |---|---|---|---|---|
-| unsloth Qwen3.8-27B UD-Q4_K_XL (dense) | pp512 | 270.1 | **307.2** | **+13.7%** |
-| | pp2048 | 260.2 | **291.7** | **+12.1%** |
-| | tg64 | 11.72 | 11.71 | — |
-| Ornith-1.5-35B-A3B Q4_K_M (MoE) | pp512 | 1034.9 | 1049.9 | +1.5% |
-| | pp2048 | 845.3 | **872.5** | **+3.2%** |
-| | tg64 | 65.74 | 65.74 | — |
+| unsloth Qwen3.8-27B UD-Q4_K_XL (dense) | pp512 | 272.8 | **311.3** | **+14.1%** |
+| | pp2048 | 259.3 | **290.5** | **+12.0%** |
+| | tg64 | 11.71 | 11.69 | — |
+| Ornith-1.5-35B-A3B Q4_K_M (MoE) | pp512 | 1003.4 | **1043.0** | **+3.9%** |
+| | pp2048 | 840.9 | **867.4** | **+3.2%** |
+| | tg64 | 65.61 | 65.48 | — |
+
+Re-measured after merging upstream, so the fork is `origin/master` plus this
+fork's own commits and nothing else. `pp2048` is the number to trust; `pp512`
+carries +-20-29 on both sides from the APU's first-run boost clock.
 
 Per-type at m=4096 n=512 k=14336: q8_0 **1.18x**, q4_0 **1.17x**, q4_K 1.12x,
 f16 1.09x, rocmfp4_fast 1.09x. **Not FP4-specific — a general RADV matmul win.**
