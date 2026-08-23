@@ -22,7 +22,7 @@ Only mechanisms with roughly a 7 ms/cycle exact end-to-end ceiling should be pur
 2. Exact collective scheduling/fusion or LM-head reduction that retains all mandatory TP shards.
 3. GPU-side acceptance that preserves sampler, grammar, rollback, recurrent state, and fallback semantics.
 
-Do not retry single-GPU target verification, naïve verification chunking, forced RCCL Ring/LL/channel/thread overrides, width-six rows/block=3/4, Q4_0 eight-wave MMVQ, or `p_split` tuning. The earlier width-two P2P POC targeted the wrong shape; its corrected exact width-six replacement gained only `0.74%`. Width-six gate/up/GLU fusion serialized otherwise overlapping projections and regressed `4.63%`. Detailed traces remain outside Git in the sprint ledger.
+Do not retry single-GPU target verification, naïve verification chunking, forced RCCL Ring/LL/channel/thread overrides, width-six rows/block=3/4, Q4_0 eight-wave MMVQ, or `p_split` tuning. The earlier width-two P2P POC targeted the wrong shape; its corrected exact width-six replacement gained only `0.74%`. Width-six gate/up/GLU fusion serialized otherwise overlapping projections and regressed `4.63%`. Detailed traces remain outside Git in the sprint ledger. The current rows2 target census requires eliminating at least 69.13% of the generous serial Q4 work to close the 7.077 ms gap; the final nwarps=2 screen failed raw-F32 exactness. No remaining local candidate has both exactness and a >=5% engine ceiling; stop adding local POCs until a new overlap-preserving design appears.
 
 ## General priority order
 
