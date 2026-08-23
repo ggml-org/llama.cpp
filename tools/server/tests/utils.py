@@ -630,6 +630,21 @@ class ServerPreset:
         return server
 
     @staticmethod
+    def smolvlm2() -> ServerProcess:
+        server = ServerProcess()
+        server.offline = True # will be downloaded by load_all()
+        # mmproj is already provided by HF registry API
+        server.model_hf_file = None
+        server.model_hf_repo = "ggml-org/SmolVLM2-256M-Video-Instruct-GGUF:Q4_K_M"
+        server.model_alias = "smolvlm2"
+        server.n_ctx = 2048
+        server.n_batch = 32
+        server.n_slots = 2
+        server.n_predict = 4
+        server.seed = 42
+        return server
+
+    @staticmethod
     def router() -> ServerProcess:
         server = ServerProcess()
         server.offline = True # will be downloaded by load_all()

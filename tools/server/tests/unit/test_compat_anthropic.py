@@ -31,9 +31,9 @@ def create_server():
 def vision_server():
     """Separate fixture for vision tests that require multimodal support"""
     global server
-    server = ServerPreset.tinygemma3()
+    server = ServerPreset.smolvlm2()
     server.offline = False  # Allow downloading the model
-    server.model_alias = "tinygemma3-anthropic"
+    server.model_alias = "smolvlm2-anthropic"
     server.server_port = 8083  # Different port to avoid conflicts
     server.n_slots = 1
     return server
