@@ -603,7 +603,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_ssm_scan_ssd_mma
     char name[256];
 
     snprintf(base, 256, "kernel_ssm_scan_ssd_mma_%s", ggml_type_name(op->src[0]->type));
-    snprintf(name, 256, "%s", base, OP_SSM_SCAN_SSD_CS, OP_SSM_SCAN_SSD_NSG);
+    snprintf(name, 256, "%s", base);
 
     ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
     if (!res.pipeline) {
