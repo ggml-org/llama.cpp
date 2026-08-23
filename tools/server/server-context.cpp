@@ -1973,6 +1973,11 @@ private:
         }
     }
 
+    bool accept_special_token(const server_slot & slot, llama_token token) const {
+        return params_base.special ||
+            slot.task->params.sampling.preserved_tokens.find(token) != slot.task->params.sampling.preserved_tokens.end();
+    }
+
     void send_error(const server_task & task, const std::string & error, const enum error_type type = ERROR_TYPE_SERVER) {
         send_error(task.id, error, type);
     }
@@ -3464,8 +3469,14 @@ private:
                     const auto & spans = slot.task->params.message_spans;
                     const auto last_user_pos = spans.last_user_message_pos();
 
+                    const int32_t n_tokens_prev_slot = batch.size();
+                    const int32_t max_prompt_batch_slot = slot.need_prompt_logits() ?
+                        std::max<int32_t>(1, llama_n_outputs_max(ctx_tgt)) : n_batch;
+
                     // add prompt tokens for processing in the current batch
-                    while (slot.prompt.n_tokens() < slot.task->n_tokens() && batch.size() < n_batch) {
+                    while (slot.prompt.n_tokens() < slot.task->n_tokens() &&
+                           batch.size() < n_batch &&
+                           (batch.size() - n_tokens_prev_slot) < max_prompt_batch_slot) {
                         // get next token to process
                         llama_token cur_tok = input_tokens[slot.prompt.n_tokens()];
                         if (cur_tok == LLAMA_TOKEN_NULL) {
@@ -3745,28 +3756,38 @@ private:
             }
         });
 
-        auto accept_special_token = [&](server_slot & slot, llama_token token) {
-            return params_base.special ||
-                slot.task->params.sampling.preserved_tokens.find(token) != slot.task->params.sampling.preserved_tokens.end();
-        };
-
         iterate(slots, [&](server_slot & slot) {
-            // optionally send prompt processing progress
             if (slot.state == SLOT_STATE_PROCESSING_PROMPT || slot.state == SLOT_STATE_DONE_PROMPT) {
                 if (slot.task->params.stream && slot.task->params.return_progress) {
                     send_partial_response(slot, {}, true);
                 }
                 if (!slot.i_batch_prompt.empty()) {
-                    for (auto & [tok_idx, id] : slot.i_batch_prompt) {
+                    if (slot.prompt_probs_output.empty() && !slot.prompt.tokens.empty()) {
+                        completion_token_output res0;
+                        res0.tok = slot.prompt.tokens[0];
+                        res0.text_to_send = common_token_to_piece(slot.ctx_tgt, res0.tok, accept_special_token(slot, res0.tok));
+                        res0.prob = 1.0f;
+                        slot.prompt_probs_output.push_back(res0);
+                    }
+
+                    const size_t chunk_start = slot.prompt.n_tokens() - slot.i_batch_prompt.size();
+
+                    for (size_t k = 0; k < slot.i_batch_prompt.size(); ++k) {
+                        const auto & [tok_idx, id] = slot.i_batch_prompt[k];
                         if (!is_inside_view(tok_idx)) {
                             continue;
                         }
-                        completion_token_output result;
-                        result.tok          = id;
-                        result.text_to_send = common_token_to_piece(slot.ctx_tgt, result.tok, accept_special_token(slot, result.tok));
-                        result.prob         = 1.0f;
-                        populate_token_probs(slot, result, slot.task->params.post_sampling_probs, params_base.special, tok_idx - off);
-                        slot.prompt_probs_output.push_back(result);
+
+                        const size_t target_token_idx = chunk_start + k + 1;
+                        if (target_token_idx < (size_t) slot.task->n_tokens()) {
+                            llama_token target_tok = slot.task->tokens[target_token_idx];
+                            completion_token_output result;
+                            result.tok          = target_tok;
+                            result.text_to_send = common_token_to_piece(slot.ctx_tgt, result.tok, accept_special_token(slot, result.tok));
+                            result.prob         = 1.0f;
+                            populate_token_probs(slot, result, slot.task->params.post_sampling_probs, params_base.special, tok_idx - off);
+                            slot.prompt_probs_output.push_back(result);
+                        }
                     }
                     slot.i_batch_prompt.clear();
                 }

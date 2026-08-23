@@ -3685,6 +3685,10 @@ uint32_t llama_n_rs_seq(const llama_context * ctx) {
     return ctx->get_cparams().n_rs_seq;
 }
 
+uint32_t llama_n_outputs_max(const llama_context * ctx) {
+    return ctx->get_cparams().n_outputs_max;
+}
+
 const llama_model * llama_get_model(const llama_context * ctx) {
     return &ctx->get_model();
 }
