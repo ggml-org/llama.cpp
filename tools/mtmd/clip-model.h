@@ -29,10 +29,10 @@ enum patch_merge_type {
     PATCH_MERGE_SPATIAL_UNPAD,
 };
 
+// all algos are Pillow-compatible (matching PIL.Image.resize output)
 enum resize_algo {
-    RESIZE_ALGO_BILINEAR, // stretch to target resolution
-    RESIZE_ALGO_BICUBIC, // center-crop when aspect ratio doesn't match
-    RESIZE_ALGO_BICUBIC_PILLOW,
+    RESIZE_ALGO_BILINEAR,
+    RESIZE_ALGO_BICUBIC,
     RESIZE_ALGO_LANCZOS,
 };
 
@@ -73,7 +73,7 @@ struct clip_hparams {
     int32_t preproc_max_tiles = 0;
     int32_t preproc_tile_size = 0; // local tile size (deepseek-ocr)
     resize_algo image_resize_algo_rf = RESIZE_ALGO_BICUBIC;
-    resize_algo image_resize_algo_ov = RESIZE_ALGO_BILINEAR;
+    resize_algo image_resize_algo_ov = RESIZE_ALGO_BICUBIC;
     pad_style image_pad_rf = PAD_CEIL;  // padding style for the refined image (e.g. llava-1.6)
     pad_style image_pad_ov = PAD_NONE;  // padding style for the overview image (e.g. llava-1.6)
     std::array<uint8_t, 3> image_pad_color_rf = {0, 0, 0}; // padding color for refined image
