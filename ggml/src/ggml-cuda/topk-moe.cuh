@@ -3,6 +3,9 @@
 
 #include <initializer_list>
 
+// Rows that one CUDA block handles.
+#define TOPK_MOE_ROWS_PER_BLOCK 8
+
 struct ggml_cuda_topk_moe_args {
     bool sigmoid{};
     bool sqrt_softplus{};
