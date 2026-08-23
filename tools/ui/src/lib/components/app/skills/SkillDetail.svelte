@@ -90,7 +90,7 @@
 				<h2 class="text-base font-semibold">{entry.name}</h2>
 				<p class="text-xs text-muted-foreground">
 					{entry.scope} / <SkillProviderLabel provider={entry.provider} />
-				</p>Skills
+				</p>
 				{#if entry.disable_model_invocation}
 					<Badge
 						variant="secondary"

@@ -1,8 +1,9 @@
 <script lang="ts">
-	import { Filter, Search } from '@lucide/svelte';
+	import { skillProviderLabel } from './skill-provider-presentation';
+	import { ListFilter } from '@lucide/svelte';
+	import { SearchInput } from '$lib/components/app/forms';
 	import { Button } from '$lib/components/ui/button';
 	import { Checkbox } from '$lib/components/ui/checkbox';
-	import { Input } from '$lib/components/ui/input';
 	import * as Popover from '$lib/components/ui/popover';
 	import { debounce } from '$lib/utils/debounce';
 
@@ -10,6 +11,7 @@
 		providers: readonly string[];
 		excludedProviders: ReadonlySet<string>;
 		includeProject: boolean;
+		value?: string;
 		onQueryChange: (query: string) => void;
 		onProvidersChange: (excludedProviders: ReadonlySet<string>) => void;
 		onIncludeProjectChange: (includeProject: boolean) => void;
@@ -21,15 +23,12 @@
 		onIncludeProjectChange,
 		onProvidersChange,
 		onQueryChange,
-		providers
+		providers,
+		value = ''
 	}: Props = $props();
 
 	const SEARCH_DEBOUNCE_MS = 150;
 	const dispatchQuery = debounce((query: string) => onQueryChange(query), SEARCH_DEBOUNCE_MS);
-
-	function handleInput(event: Event & { currentTarget: HTMLInputElement }) {
-		dispatchQuery(event.currentTarget.value);
-	}
 
 	function toggleProvider(provider: string, included: boolean) {
 		const next = new Set(excludedProviders);
@@ -49,19 +48,14 @@
 </script>
 
 <div class="flex items-center gap-2">
-	<div class="relative flex-1">
-		<Search
-			class="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground"
-			aria-hidden="true"
-		/>
-		<Input
-			type="search"
-			placeholder="Search skills..."
-			aria-label="Search skills"
-			class="pl-8"
-			oninput={handleInput}
-		/>
-	</div>
+	<label for="skills-search" class="sr-only">Search skills</label>
+	<SearchInput
+		class="flex-1"
+		id="skills-search"
+		{value}
+		placeholder="Search skills..."
+		onInput={dispatchQuery}
+	/>
 
 	<Popover.Root>
 		<Popover.Trigger>
@@ -73,7 +67,7 @@
 					class="relative shrink-0"
 					aria-label="Filter skills"
 				>
-					<Filter class="size-4" />
+					<ListFilter class="size-4" />
 					{#if isFilterActive}
 						<span
 							data-testid="skill-filter-active-dot"
@@ -96,7 +90,7 @@
 									checked={!excludedProviders.has(provider)}
 									onCheckedChange={(checked) => toggleProvider(provider, checked === true)}
 								/>
-								{provider}
+								{skillProviderLabel(provider)}
 							</label>
 						{/each}
 					</div>

@@ -13,7 +13,7 @@ import { settingsStore } from '$lib/stores/settings.svelte';
 import { skillsStore } from '$lib/stores/skills.svelte';
 import type { SkillCatalogEntry, SkillCatalogResponse, SkillDiagnostic } from '$lib/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render } from 'vitest-browser-svelte';
+import { render, type RenderResult } from 'vitest-browser-svelte';
 import { catalogOf, deferredRead, jsonResponse, makeCatalog, makeEntry } from '../fixtures/skills';
 
 function bodyText(): string {
@@ -129,7 +129,7 @@ describe('/skills route states', () => {
 		expect(text).not.toContain('catalog_instruction_xml');
 	});
 
-	it('renders diagnostics with duplicate-code rows and a collapsed shadowed providers list', async () => {
+	it('renders distinct diagnostics and a collapsed shadowed providers list', async () => {
 		const catalog: SkillCatalogResponse = {
 			...catalogOf('demo-skill'),
 			diagnostics: [
@@ -162,24 +162,25 @@ describe('/skills route states', () => {
 		};
 
 		mockFetchOnce(catalog);
-		render(SkillsPage);
+		const screen = await render(SkillsPage);
 
-		await vi.waitFor(() => expect(bodyText()).toContain('first diagnostic message'));
+		await vi.waitFor(() => expect(bodyText()).toContain('second diagnostic message'));
+		await screen.getByTestId('skill-diagnostics-warnings-toggle').click();
 
 		const text = bodyText();
 
-		// Duplicate codes stay two independent rows: the code renders once per row.
+		// Diagnostics stay independent even when their server codes match.
 		expect(text).toContain('Skill: Alpha Skill');
 		expect(text).toContain('Skill: Beta Skill');
 		expect(text).toContain('first diagnostic message');
 		expect(text).toContain('second diagnostic message');
-		expect(text.match(/overlapping-skill/g)).toHaveLength(2);
+		expect(text).not.toContain('overlapping-skill');
 		// The shadowed diagnostic renders the singular first provider and the
 		// collapsed full list exactly once.
 		expect(text).toContain('Provider: claude');
 		expect(text).toContain('Providers: claude, gemini, opencode');
 		expect(text.match(/Providers:/g)).toHaveLength(1);
-		expect(text.match(/skill_shadowed/g)).toHaveLength(1);
+		expect(text).not.toContain('skill_shadowed');
 	});
 
 	it.each([
@@ -187,7 +188,7 @@ describe('/skills route states', () => {
 			'shows the empty state for a server-empty catalog',
 			() => makeCatalog([]),
 			200,
-			(text: string) => expect(text).toContain('No skills found')
+			async (text: string) => expect(text).toContain('No skills found')
 		],
 		[
 			'keeps a zero budget distinct from a server-empty catalog',
@@ -197,11 +198,14 @@ describe('/skills route states', () => {
 				return catalogOf('demo-skill');
 			},
 			200,
-			(text: string) => {
+			async (text: string, screen: RenderResult<typeof SkillsPage>) => {
 				expect(text).toContain('demo-skill');
-				expect(text).toContain(
-					'Skills tools are disabled because the catalog budget is 0 tokens'
-				);
+				expect(text).toContain('Tools disabled');
+				await expect
+					.element(
+						screen.getByTitle(/Skills tools are disabled because the catalog budget is 0 tokens/)
+					)
+					.toBeInTheDocument();
 				expect(text).not.toContain('No skills found');
 			}
 		],
@@ -209,7 +213,7 @@ describe('/skills route states', () => {
 			'shows the generic error state with a retry action',
 			() => ({ error: { code: 503, message: 'catalog temporarily unavailable' } }),
 			503,
-			(text: string) => {
+			async (text: string) => {
 				expect(text).toContain('catalog temporarily unavailable');
 				expect(text).toContain('Retry');
 			}
@@ -218,21 +222,21 @@ describe('/skills route states', () => {
 			'distinguishes a missing skills route from a request error',
 			() => 'Not Found',
 			404,
-			(text: string) => {
+			async (text: string) => {
 				expect(text).toContain('not enabled');
 				expect(text).not.toContain('Retry');
 			}
 		]
 	])('%s', async (_label, makeBody, status, assert) => {
 		mockFetchOnce(makeBody(), status);
-		render(SkillsPage);
+		const screen = await render(SkillsPage);
 
-		await vi.waitFor(() => assert(bodyText()));
+		await vi.waitFor(() => assert(bodyText(), screen));
 	});
 });
 
 describe('/skills budget copy', () => {
-	it('renders complete budget copy from the measured full token count and drops the old Budget line', async () => {
+	it('renders no budget chip when the full catalog fits the budget', async () => {
 		modelsStore.selectedModelName = 'test-model';
 		const catalog = makePaddedCatalog(
 			[
@@ -247,44 +251,37 @@ describe('/skills budget copy', () => {
 		vi.mocked(fetch).mockClear();
 		render(SkillsPage);
 
-		await vi.waitFor(() =>
-			expect(bodyText()).toContain('The full Skills catalog uses 120 of 2,000 budget tokens')
-		);
-		const text = bodyText();
-
-		expect(text).toContain('list_skill() is not registered');
-		expect(text).toContain('demo-skill');
-		expect(text).not.toContain('Budget:');
+		await vi.waitFor(() => expect(bodyText()).toContain('demo-skill'));
+		expect(bodyText()).not.toContain('Partial fit');
+		expect(bodyText()).not.toContain('Tools disabled');
 		// One tokenizer request for the complete envelope, never remeasured.
 		expect(
 			vi.mocked(fetch).mock.calls.filter(([url]) => String(url).includes('/tokenize'))
 		).toHaveLength(1);
 	});
 
-	it('renders partial budget copy with the full token requirement and the included count', async () => {
+	it('renders a Partial fit chip carrying the full token requirement and included count', async () => {
 		modelsStore.selectedModelName = 'test-model';
 		const catalog = makePaddedCatalog(makePaddedEntries(8, 80), '<inst/>', 2400);
 
 		mockCharCountingFetch(catalog);
 		vi.mocked(fetch).mockClear();
-		render(SkillsPage);
+		const screen = await render(SkillsPage);
 
-		await vi.waitFor(() =>
-			expect(bodyText()).toContain('The full Skills catalog requires 2,400 tokens')
-		);
-		const text = bodyText().replace(/\s+/g, ' ');
-
-		expect(text).toContain('3 of 8 skills are included');
-		expect(text).toContain('list_skill() is available');
+		await vi.waitFor(() => expect(bodyText()).toContain('Partial fit'));
+		await expect
+			.element(screen.getByTitle(/2,400 tokens.*3 of 8 skills are included/))
+			.toBeInTheDocument();
 	});
 
-	it('labels the budget status as estimated when no direct tokenizer is available', async () => {
-		mockFetchOnce(catalogOf('demo-skill'));
+	it('labels the Partial fit chip detail as estimated when no direct tokenizer is available', async () => {
+		const catalog = makePaddedCatalog(makePaddedEntries(8, 1010), '<inst/>', 9000);
+		mockFetchOnce(catalog);
 		vi.mocked(fetch).mockClear();
-		render(SkillsPage);
+		const screen = await render(SkillsPage);
 
-		await vi.waitFor(() => expect(bodyText()).toContain('demo-skill'));
-		await vi.waitFor(() => expect(bodyText()).toMatch(/budget tokens \(estimated\)/));
+		await vi.waitFor(() => expect(bodyText()).toContain('Partial fit'));
+		await expect.element(screen.getByTitle(/\(estimated\)/)).toBeInTheDocument();
 		expect(
 			vi.mocked(fetch).mock.calls.filter(([url]) => String(url).includes('/tokenize'))
 		).toHaveLength(0);
@@ -348,10 +345,9 @@ describe('/skills budget copy', () => {
 
 		tokenizeResolvers[1](jsonResponse({ tokens: Array.from({ length: 80 }, (_, i) => i) }));
 
-		await vi.waitFor(() =>
-			expect(bodyText()).toContain('The full Skills catalog uses 80 of 500 budget tokens')
-		);
-		expect(bodyText()).not.toContain('uses 80 of 2,000');
+		await vi.waitFor(() => expect(bodyText()).not.toContain('Calculating'));
+		expect(bodyText()).not.toContain('Partial fit');
+		expect(bodyText()).not.toContain('Tools disabled');
 	});
 });
 
@@ -473,6 +469,13 @@ describe('SkillDiagnosticsPanel', () => {
 
 		expect(bodyText()).toContain('warning one');
 		expect(bodyText()).toContain('warning two');
+		await vi.waitFor(() =>
+			expect(
+				[...document.querySelectorAll('[data-slot="badge"]')].map((badge) =>
+					badge.textContent?.trim()
+				)
+			).toEqual(['warning'])
+		);
 	});
 
 	it('renders the budget chip above errors and warnings, excluded from the warnings count', async () => {
@@ -490,29 +493,50 @@ describe('SkillDiagnosticsPanel', () => {
 		});
 
 		const text = bodyText();
-		const order = [text.indexOf('Partial fit'), text.indexOf('error one'), text.indexOf('2 warnings')];
+		const order = [
+			text.indexOf('Partial fit'),
+			text.indexOf('2 warnings'),
+			text.indexOf('error one')
+		];
 
 		expect(order[0]).toBeGreaterThanOrEqual(0);
 		expect(order[0]).toBeLessThan(order[1]);
 		expect(order[1]).toBeLessThan(order[2]);
-		await expect
-			.element(screen.getByTitle('exceeds budget detail text'))
-			.toBeInTheDocument();
+		expect(
+			document.querySelector('[data-testid="skill-diagnostics-summary-row"]')?.textContent
+		).toContain('Partial fit');
+		expect(
+			document.querySelector('[data-testid="skill-diagnostics-summary-row"]')?.textContent
+		).toContain('2 warnings');
+		await expect.element(screen.getByTitle('exceeds budget detail text')).toBeInTheDocument();
 	});
 
 	it('renders nothing when dismissed, and calls onDismiss from the dismiss control', async () => {
 		const onDismiss = vi.fn();
 		const screen = await render(SkillDiagnosticsPanel, {
-			props: { budgetChip: null, diagnostics: [error('e1', 'error one')], dismissed: false, onDismiss }
+			props: {
+				budgetChip: null,
+				diagnostics: [error('e1', 'error one')],
+				dismissed: false,
+				onDismiss
+			}
 		});
 
+		await expect
+			.element(screen.getByRole('region', { name: 'Skill diagnostics' }))
+			.toBeInTheDocument();
 		await screen.getByRole('button', { name: 'Dismiss diagnostics' }).click();
 		expect(onDismiss).toHaveBeenCalledOnce();
 
 		screen.unmount();
 
 		await render(SkillDiagnosticsPanel, {
-			props: { budgetChip: null, diagnostics: [error('e1', 'error one')], dismissed: true, onDismiss }
+			props: {
+				budgetChip: null,
+				diagnostics: [error('e1', 'error one')],
+				dismissed: true,
+				onDismiss
+			}
 		});
 		expect(bodyText()).not.toContain('error one');
 describe('SkillCatalogSearchToolbar', () => {
@@ -552,6 +576,8 @@ describe('SkillCatalogSearchToolbar', () => {
 		});
 
 		await screen.getByRole('button', { name: 'Filter skills' }).click();
+		expect(bodyText()).toContain('generic');
+		expect(bodyText()).not.toContain('agents');
 		await screen.getByText('local').click();
 
 		expect(onProvidersChange).toHaveBeenCalledWith(new Set(['local']));
@@ -580,5 +606,43 @@ describe('SkillCatalogSearchToolbar', () => {
 		await screen.getByRole('button', { name: 'Reset' }).click();
 		expect(onProvidersChange).toHaveBeenCalledWith(new Set());
 		expect(onIncludeProjectChange).toHaveBeenCalledWith(true);
+	});
+});
+
+describe('/skills search and filter integration', () => {
+	it('filters the rendered list by search text and clears via the empty-state action', async () => {
+		mockFetchOnce(
+			makeCatalog([
+				makeEntry('canvas-design', { description: 'unrelated description' }),
+				makeEntry('unrelated', { description: 'no match here' })
+			])
+		);
+		const screen = await render(SkillsPageWrapper);
+
+		await vi.waitFor(() => expect(bodyText()).toContain('unrelated'));
+		await screen.getByLabelText('Search skills').fill('canvas');
+		await vi.waitFor(() => expect(bodyText()).not.toContain('no match here'));
+		expect(bodyText()).toContain('canvas-design');
+
+		await screen.getByLabelText('Search skills').fill('no-such-skill');
+		await vi.waitFor(() => expect(bodyText()).toContain('No skills match'));
+
+		await screen.getByRole('button', { name: 'Clear filters' }).click();
+		await vi.waitFor(() => expect(bodyText()).toContain('canvas-design'));
+	});
+
+	it('resets search and filters when the CWD changes', async () => {
+		mockFetchOnce(makeCatalog([makeEntry('demo-skill')]));
+		const screen = await render(SkillsPageWrapper);
+
+		await vi.waitFor(() => expect(bodyText()).toContain('demo-skill'));
+		await screen.getByLabelText('Search skills').fill('no-such-skill');
+		await vi.waitFor(() => expect(bodyText()).toContain('No skills match'));
+
+		mockFetchOnce(makeCatalog([makeEntry('other-skill')]));
+		conversationsStore.pendingCwd = '/tmp/other-cwd';
+
+		await vi.waitFor(() => expect(bodyText()).toContain('other-skill'));
+		expect(bodyText()).not.toContain('No skills match');
 	});
 });

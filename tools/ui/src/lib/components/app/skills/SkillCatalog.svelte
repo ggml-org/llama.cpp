@@ -1,16 +1,14 @@
 <script lang="ts">
-	import SkillBudgetStatus from './SkillBudgetStatus.svelte';
 	import SkillCatalogList from './SkillCatalogList.svelte';
+	import SkillCatalogSearchToolbar from './SkillCatalogSearchToolbar.svelte';
 	import SkillDetail from './SkillDetail.svelte';
-	import SkillProviderLabel from './SkillProviderLabel.svelte';
-	import { BookOpen, Circle, CircleSlash, RefreshCw, X } from '@lucide/svelte';
+	import SkillDiagnosticsPanel from './SkillDiagnosticsPanel.svelte';
+	import { BookOpen, Circle, CircleSlash, RefreshCw } from '@lucide/svelte';
 	import { browser } from '$app/environment';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { StandalonePageShell } from '$lib/components/app';
-	import { ActionIcon } from '$lib/components/app/actions';
 	import { Alert, AlertDescription, AlertTitle } from '$lib/components/ui/alert';
-	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import * as Empty from '$lib/components/ui/empty';
 	import * as Resizable from '$lib/components/ui/resizable/index.js';
@@ -36,6 +34,8 @@
 	import type { SkillCatalogEntry, SkillPackedCatalog } from '$lib/types';
 	import { isAbortError } from '$lib/utils';
 	import { ApiError } from '$lib/utils/api-fetch';
+	import { deriveSkillBudgetChip } from '$lib/utils/skill-budget-chip';
+	import { applySkillCatalogFilters, distinctSkillProviders } from '$lib/utils/skill-catalog-filter';
 	import { fly } from 'svelte/transition';
 
 	interface Props {
@@ -109,9 +109,11 @@
 		sizes = normalizePaneSizes(persistedPaneSizes.value);
 	});
 
-	// Reset dismissals when the catalog reloads.
+	// Reset dismissals and filters when the catalog reloads.
 	let diagnosticsDismissed = $state(false);
-	let budgetDismissed = $state(false);
+	let searchQuery = $state('');
+	let excludedProviders = $state<Set<string>>(new Set());
+	let includeProjectSkills = $state(true);
 
 	function handleSelect(entry: SkillCatalogEntry) {
 		if (selectedId === entry.id) return;
@@ -133,12 +135,14 @@
 		if (persistedPaneSizes) persistedPaneSizes.value = normalized;
 	}
 
-	// Reset selection and dismissals when the CWD changes.
+	// Reset selection, dismissals, and filters when the CWD changes.
 	$effect(() => {
 		void cwd;
 		selectedEntry = null;
 		diagnosticsDismissed = false;
-		budgetDismissed = false;
+		searchQuery = '';
+		excludedProviders = new Set();
+		includeProjectSkills = true;
 	});
 
 	const budget = $derived(
@@ -171,7 +175,6 @@
 	$effect(() => {
 		void catalog;
 		diagnosticsDismissed = false;
-		budgetDismissed = false;
 	});
 
 	$effect(() => {
@@ -211,17 +214,57 @@
 
 		return () => controller.abort();
 	});
+
+	const availableProviders = $derived(distinctSkillProviders(catalog?.skills ?? []));
+	const filteredEntries = $derived(
+		applySkillCatalogFilters(catalog?.skills ?? [], {
+			excludedProviders,
+			includeProject: includeProjectSkills,
+			query: searchQuery
+		})
+	);
+	const budgetChip = $derived(packState === 'idle' ? deriveSkillBudgetChip(packed, budget) : null);
+
+	function clearCatalogFilters() {
+		searchQuery = '';
+		excludedProviders = new Set();
+		includeProjectSkills = true;
+	}
 </script>
 
 {#snippet catalogList(open: boolean)}
-	<SkillCatalogList
-		entries={catalog?.skills ?? []}
-		{selectedId}
-		{open}
-		onSelect={handleSelect}
-		isDisabled={(id) => skillAvailabilityStore.isDisabled(id)}
-		onEnabledChange={(entry, enabled) => skillAvailabilityStore.setEnabled(entry.id, enabled)}
-	/>
+	{#if catalog && catalog.skills.length > 0 && filteredEntries.length === 0}
+		<div class="flex flex-1 items-center justify-center py-16">
+			<Empty.Root class="max-w-md">
+				<Empty.Header>
+					<Empty.Media variant="icon">
+						<BookOpen />
+					</Empty.Media>
+
+					<Empty.Title>No skills match</Empty.Title>
+
+					<Empty.Description>
+						No skills match your search and filters for this working directory.
+					</Empty.Description>
+				</Empty.Header>
+
+				<Empty.Content>
+					<Button size="sm" variant="outline" onclick={clearCatalogFilters}>
+						Clear filters
+					</Button>
+				</Empty.Content>
+			</Empty.Root>
+		</div>
+	{:else}
+		<SkillCatalogList
+			entries={filteredEntries}
+			{selectedId}
+			{open}
+			onSelect={handleSelect}
+			isDisabled={(id) => skillAvailabilityStore.isDisabled(id)}
+			onEnabledChange={(entry, enabled) => skillAvailabilityStore.setEnabled(entry.id, enabled)}
+		/>
+	{/if}
 {/snippet}
 
 <StandalonePageShell
@@ -285,7 +328,7 @@
 				</Empty.Root>
 			</div>
 		{:else}
-			{#if !selectedEntry && !budgetDismissed}
+			{#if !selectedEntry}
 				{#if packState === 'packing'}
 					<p class="text-sm text-muted-foreground">Calculating the Skills prompt budget...</p>
 				{:else if packState === 'error'}
@@ -294,57 +337,26 @@
 						<AlertTitle>Could not pack the Skills catalog</AlertTitle>
 						<AlertDescription>{packErrorMessage}</AlertDescription>
 					</Alert>
-				{:else if packed}
-					<SkillBudgetStatus {packed} {budget} onDismiss={() => (budgetDismissed = true)} />
 				{/if}
-			{/if}
-			{#if !selectedEntry && !diagnosticsDismissed && catalog && catalog.diagnostics.length > 0}
-				<div class="relative">
-					<div class="flex flex-col gap-2">
-						{#each catalog.diagnostics as diagnostic, i (`${diagnostic.code}-${i}`)}
-							<div class="flex items-start gap-2 text-sm">
-								<Badge
-									variant={diagnostic.severity === 'error' ? 'destructive' : 'outline'}
-									class="shrink-0 {diagnostic.severity === 'warning'
-										? 'border-amber-500/40 text-amber-700 dark:text-amber-400'
-										: ''}"
-								>
-									{diagnostic.severity}
-								</Badge>
 
-								<span class="min-w-0 text-muted-foreground">
-									<code class="mr-1">{diagnostic.code}</code>
-									{#if diagnostic.name}
-										<span class="mr-2">Skill: {diagnostic.name}</span>
-									{/if}
-									{#if diagnostic.scope}
-										<span class="mr-2">Scope: {diagnostic.scope}</span>
-									{/if}
-									{#if diagnostic.provider}
-										<span class="mr-2"
-											>Provider: <SkillProviderLabel provider={diagnostic.provider} /></span
-										>
-									{/if}
-									{#if diagnostic.providers && diagnostic.providers.length > 0}
-										<span class="mr-2"
-											>Providers: {#each diagnostic.providers as provider, index (provider)}{#if index > 0}<span
-														>,&#32;</span
-													>{/if}<SkillProviderLabel {provider} />{/each}</span
-										>
-									{/if}
-									{diagnostic.message}
-								</span>
-							</div>
-						{/each}
-					</div>
-
-					<ActionIcon
-						icon={X}
-						tooltip="Dismiss diagnostics"
-						class="absolute right-2 top-2"
-						onclick={() => (diagnosticsDismissed = true)}
+				{#if catalog}
+					<SkillDiagnosticsPanel
+						diagnostics={catalog.diagnostics}
+						{budgetChip}
+						dismissed={diagnosticsDismissed}
+						onDismiss={() => (diagnosticsDismissed = true)}
 					/>
-				</div>
+				{/if}
+
+				<SkillCatalogSearchToolbar
+					providers={availableProviders}
+					{excludedProviders}
+					includeProject={includeProjectSkills}
+					value={searchQuery}
+					onQueryChange={(query) => (searchQuery = query)}
+					onProvidersChange={(next) => (excludedProviders = new Set(next))}
+					onIncludeProjectChange={(value) => (includeProjectSkills = value)}
+				/>
 			{/if}
 
 			{#if mobile}
