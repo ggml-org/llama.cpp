@@ -8,6 +8,7 @@
 #include "ggml.h"
 #include "llama.h"
 
+#include <atomic>
 #include <set>
 #include <sstream>
 #include <string>
@@ -45,6 +46,17 @@ struct common_time_meas {
 
     int64_t & t_acc;
 };
+
+struct common_power_throttle {
+    std::atomic<int32_t> percent{100};
+    double  batch_avg_us = 0.0;
+    double  token_avg_us = 0.0;
+};
+
+void common_power_throttle_init(common_power_throttle & throttle, int32_t percent);
+bool common_power_throttle_enabled(const common_power_throttle * throttle);
+int  common_power_decode(struct llama_context * ctx, struct llama_batch batch, common_power_throttle * throttle);
+void common_power_throttle_apply(common_power_throttle * throttle, double work_us, bool single_token);
 
 struct common_adapter_lora_info {
     std::string path;
