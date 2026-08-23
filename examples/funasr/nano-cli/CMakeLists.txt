@@ -7,9 +7,9 @@ target_include_directories(${TARGET} PRIVATE
 target_link_libraries(${TARGET} PRIVATE llama ggml ${CMAKE_THREAD_LIBS_INIT})
 target_compile_features(${TARGET} PRIVATE cxx_std_17)
 if(MSVC)
-    # 源文件含 UTF-8 中文(如 "语音转写" / "no(截断)"), 避免 MSVC 按 GBK 解析报错
+    # the source contains a UTF-8 Chinese prompt string; tell MSVC not to parse as GBK
     target_compile_options(${TARGET} PRIVATE /utf-8)
-    # Windows min/max 宏会污染 std::min/std::max; M_PI 需要 _USE_MATH_DEFINES
+    # Windows min/max macros clash with std::min/std::max; M_PI needs _USE_MATH_DEFINES
     target_compile_definitions(${TARGET} PRIVATE NOMINMAX _USE_MATH_DEFINES)
 endif()
 

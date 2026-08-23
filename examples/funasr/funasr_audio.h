@@ -1,4 +1,4 @@
-// funasr_audio.h — load any audio file (WAV/MP3/FLAC/OGG...) as 16 kHz mono f32,
+// funasr_audio.h - load any audio file (WAV/MP3/FLAC/OGG...) as 16 kHz mono f32,
 // via miniaudio's decoder (handles arbitrary sample rate, channels, bit depth).
 // One TU must define FUNASR_AUDIO_IMPLEMENTATION before including.
 #ifndef FUNASR_AUDIO_H

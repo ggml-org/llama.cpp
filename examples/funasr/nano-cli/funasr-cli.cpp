@@ -6,6 +6,10 @@
 //
 // This is the whisper.cpp-style single-binary path: no Python at runtime.
 //
+// NOTE: this source contains one non-ASCII string, the Chinese transcript prompt
+// "语音转写：" ("transcribe:") - it is required verbatim by the trained model.
+// Everything else in the file is ASCII.
+//
 //   funasr-cli --enc funasr-encoder.gguf -m qwen3-0.6b.gguf -a audio.wav
 
 #include "ggml.h"
@@ -15,6 +19,7 @@
 #include "gguf.h"
 #include "llama.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cctype>
 #include <cstdarg>
@@ -24,6 +29,10 @@
 #include <map>
 #include <string>
 #include <vector>
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846   // not guaranteed by <cmath> on MSVC
+#endif
 
 // any audio (wav/mp3/flac, any rate/channels) -> 16 kHz mono f32, via miniaudio
 #define FUNASR_AUDIO_IMPLEMENTATION
@@ -80,8 +89,9 @@ static std::vector<float> compute_fbank(std::vector<float> wav, int & T_out) {
 // ======================= ggml SAN-M encoder + adaptor =======================
 struct cfg { int d_model=512,n_head=4,num_blocks=50,tp_blocks=20,kernel=11,adp_llm=1024,adp_layers=2,adp_head=8; };
 struct enc_model { cfg c; ggml_context*ctx_w=nullptr; std::map<std::string,ggml_tensor*> t;
-    // 原始 CPU 权重字节副本(load_enc 时固化); run_encoder 每段上传 GPU 时从它取源数据,
-    // 避免 tensor->data 被改为 GPU buffer 后原始数据悬垂。
+    // CPU byte copies of the weights (fixed at load_enc time); run_encoder uploads each
+    // segment from these, so the source data is not dangling after tensor->data is
+    // repointed at a GPU buffer.
     std::vector<std::pair<struct ggml_tensor*,std::vector<uint8_t>>> cpu_w;
     ggml_tensor* g(const std::string&n){auto it=t.find(n);if(it==t.end()){fprintf(stderr,"missing %s\n",n.c_str());exit(1);}return it->second;} };
 static const float LN_EPS=1e-5f;
@@ -145,27 +155,27 @@ static void add_posenc(std::vector<float>&x,int T,int depth){
 }
 // find a GPU backend device by name ("cuda"/"vulkan"/...); returns nullptr if absent
 static bool icontains(const std::string&s,const std::string&needle){
-  if(needle.size()>s.size()) return false;
-  for(size_t i=0;i+needle.size()<=s.size();i++){
-    size_t j=0; for(;j<needle.size();j++){
-      if(std::tolower((unsigned char)s[i+j])!=std::tolower((unsigned char)needle[j])) break;
+    if(needle.size()>s.size()) return false;
+    for(size_t i=0;i+needle.size()<=s.size();i++){
+        size_t j=0; for(;j<needle.size();j++){
+            if(std::tolower((unsigned char)s[i+j])!=std::tolower((unsigned char)needle[j])) break;
+        }
+        if(j==needle.size()) return true;
     }
-    if(j==needle.size()) return true;
-  }
-  return false;
+    return false;
 }
 static ggml_backend_dev_t find_gpu_backend_device(const std::string&backend_name){
-  ggml_backend_load_all();
-  for(size_t i=0;i<ggml_backend_dev_count();i++){
-    ggml_backend_dev_t dev=ggml_backend_dev_get(i);
-    if(ggml_backend_dev_type(dev)!=GGML_BACKEND_DEVICE_TYPE_GPU) continue;
-    std::string reg=ggml_backend_reg_name(ggml_backend_dev_backend_reg(dev));
-    std::string dev_name=ggml_backend_dev_name(dev);
-    if(icontains(reg,backend_name)||icontains(dev_name,backend_name)){
-      return dev;
+    ggml_backend_load_all();
+    for(size_t i=0;i<ggml_backend_dev_count();i++){
+        ggml_backend_dev_t dev=ggml_backend_dev_get(i);
+        if(ggml_backend_dev_type(dev)!=GGML_BACKEND_DEVICE_TYPE_GPU) continue;
+        std::string reg=ggml_backend_reg_name(ggml_backend_dev_backend_reg(dev));
+        std::string dev_name=ggml_backend_dev_name(dev);
+        if(icontains(reg,backend_name)||icontains(dev_name,backend_name)){
+            return dev;
+        }
     }
-  }
-  return nullptr;
+    return nullptr;
 }
 
 // fbank [T x F] -> adaptor out [T x adp_llm] row-major
@@ -192,7 +202,8 @@ static std::vector<float> run_encoder(enc_model&m,std::vector<float> fbank,int T
         wbuf=ggml_backend_alloc_buffer(be,total);
         char* base=(char*)ggml_backend_buffer_get_base(wbuf); size_t off=0;
         fprintf(stderr,"[encoder] weight buffer %zu bytes on GPU\n",total);
-        // 源数据取自 m.cpu_w 的 CPU 副本, 避免 tensor->data 已被上一轮改成 GPU buffer 而悬垂
+        // source data comes from the m.cpu_w CPU copies, so tensor->data repointed at
+        // a GPU buffer in a previous segment is not read from while dangling
         for(auto&cw:m.cpu_w){
             struct ggml_tensor*t=cw.first; size_t n=ggml_nbytes(t);
             t->buffer=wbuf; t->data=base+off; off+=ggml_backend_buffer_get_alloc_size(wbuf,t);
@@ -265,7 +276,10 @@ int main(int argc,char**argv){
     LOG("encoder loaded: d_model=%d blocks=%d tp_blocks=%d kernel=%d adp_llm=%d adp_layers=%d",
         em.c.d_model,em.c.num_blocks,em.c.tp_blocks,em.c.kernel,em.c.adp_llm,em.c.adp_layers);
     ggml_backend_load_all();
-    llama_model_params mp=llama_model_default_params(); mp.n_gpu_layers=999; // offload all LLM layers to GPU
+    // n_gpu_layers=999: offload every layer to the GPU backend (CUDA when available,
+    // falls back to CPU automatically). The value is larger than any real model's
+    // layer count, so effectively means "all layers".
+    llama_model_params mp=llama_model_default_params(); mp.n_gpu_layers=999;
     llama_model*model=llama_model_load_from_file(llm_path.c_str(),mp); if(!model){LOG("failed to load LLM model");return 1;}
     LOG("LLM model loaded");
     const llama_vocab*vocab=llama_model_get_vocab(model);
@@ -278,6 +292,8 @@ int main(int argc,char**argv){
     if(rep!=1.0f) llama_sampler_chain_add(smpl,llama_sampler_init_penalties(llama_vocab_n_tokens(vocab),256,rep,0.0f,0.0f));
     llama_sampler_chain_add(smpl,llama_sampler_init_greedy());
 
+    // the transcript prompt is Chinese ("语音转写：" = "transcribe:"): the model was
+    // trained with this exact prompt, so the non-ASCII bytes are required here
     const char*prefix="<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n<|im_start|>user\n语音转写：";
     const char*suffix="<|im_end|>\n<|im_start|>assistant\n";
     auto tokenize=[&](const char*s){int n=-llama_tokenize(vocab,s,strlen(s),nullptr,0,false,true);
@@ -337,7 +353,7 @@ int main(int argc,char**argv){
             tk=llama_sampler_sample(smpl,ctx,-1);
         }
         LOG("  seg[%zu/%zu] done gen_tokens=%d eog=%s total=%.2fs full_chars=%zu",
-            wi+1, wins.size(), gen, llama_vocab_is_eog(vocab,tk)?"yes":"no(截断)", (ggml_time_us()-st)/1e6, full.size());
+            wi+1, wins.size(), gen, llama_vocab_is_eog(vocab,tk)?"yes":"no (truncated)", (ggml_time_us()-st)/1e6, full.size());
     }
     printf("%s\n", full.c_str());
     int64_t t2=ggml_time_us();
