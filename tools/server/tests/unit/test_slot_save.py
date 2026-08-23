@@ -305,7 +305,6 @@ def test_slot_save_restore_with_two_images(mmproj_server):
     server = mmproj_server
     server.swa_full = True
     server.n_ctx = 2048  # two images need more than the default 512 per slot
-    server.cache_ram = 0
     server.start()
 
     prompt = {
