@@ -7,9 +7,6 @@ static void norm_f32(const float* x, float* dst, const int ncols,
     const int64_t dst_stride_col, const int64_t dst_stride_row, const int64_t dst_stride_channel, const int64_t dst_stride_sample,
     const float eps, const sycl::nd_item<3>& item_ct1, sycl::float2* s_sum, int block_size) {
 
-    const int nrows = item_ct1.get_group_range(2);
-    const int nchannels = item_ct1.get_group_range(1);
-
     const int nthreads = item_ct1.get_local_range(2);
     const int sample  = item_ct1.get_group(0);
     const int channel = item_ct1.get_group(1);
@@ -155,9 +152,6 @@ static void rms_norm_f32(const float* x, float* dst, const int ncols,
     const float* mul = nullptr, const int64_t mul_stride_row = 0, const int64_t mul_stride_channel = 0,
     const int64_t mul_stride_sample = 0, const int mul_nrows = 0, const int mul_nchannels = 0, const int mul_nsamples = 0) {
 
-    const int nrows = item_ct1.get_group_range(2);
-    const int nchannels = item_ct1.get_group_range(1);
-
     const int sample  = item_ct1.get_group(0);
     const int channel = item_ct1.get_group(1);
     const int row     = item_ct1.get_group(2);
@@ -225,8 +219,6 @@ static void l2_norm_f32(const float * x, float * dst, const int ncols,
     const int64_t src_stride_sample, const int64_t dst_stride_col, const int64_t dst_stride_row,
     const int64_t dst_stride_channel, const int64_t dst_stride_sample, const float eps,
     const sycl::nd_item<3>& item_ct1, float* s_sum, const int block_size) {
-    const int nrows     = item_ct1.get_group_range(2);
-    const int nchannels = item_ct1.get_group_range(1);
 
     const int row     = item_ct1.get_group(2);
     const int channel = item_ct1.get_group(1);

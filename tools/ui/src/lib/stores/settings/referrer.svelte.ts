@@ -5,9 +5,9 @@
  * there after a fallback exit. Standalone reactive value, no host.
  */
 
-import { SETTINGS_FALLBACK_EXIT_ROUTE } from '$lib/constants';
+import { ROUTES } from '$lib/constants';
 
-let _url = $state<string>(SETTINGS_FALLBACK_EXIT_ROUTE);
+let _url = $state<string>(ROUTES.SETTINGS_EXIT);
 
 export const settingsReferrer = {
 	get url() {

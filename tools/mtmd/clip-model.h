@@ -93,6 +93,7 @@ struct clip_hparams {
 
     float eps = 1e-6;
     float rope_theta = 0.0;
+    int32_t n_expert_used = 0;
     std::vector<int32_t> feature_layers;
     int32_t attn_window_size = 0;
     int32_t n_wa_pattern = 0;
@@ -258,6 +259,13 @@ struct clip_layer {
     ggml_tensor * ff_gate_b = nullptr;
     ggml_tensor * ff_down_w = nullptr;
     ggml_tensor * ff_down_b = nullptr;
+
+    // MoE FFN (dots3note vision pyramid blocks)
+    ggml_tensor * ff_gate_inp_w  = nullptr;
+    ggml_tensor * ff_gate_exps_w = nullptr;
+    ggml_tensor * ff_up_exps_w   = nullptr;
+    ggml_tensor * ff_down_exps_w = nullptr;
+    ggml_tensor * ff_exp_probs_b = nullptr;
 
     // layernorm 2 (or pre-FFN norm)
     ggml_tensor * ln_2_w = nullptr;
