@@ -3926,6 +3926,33 @@ static std::vector<uint32_t> get_fa_spec_constants(const vk_fa_pipeline_state& s
     };
 }
 
+// SHMEM_STRIDE_PAD for mul_mm.comp (constantID=12), in FLOAT_TYPEV2 units.
+//
+// The shader lays out the shared A/B tiles with SHMEM_STRIDE = BK/2 + pad, where
+// each element is a FLOAT_TYPEV2 (one dword), so the stride maps 1:1 onto the 32
+// LDS banks. B is read back with a column-major coopMatLoad, which makes lane i
+// land on bank (SHMEM_STRIDE * i) % 32 -- so gcd(SHMEM_STRIDE, 32) is the
+// conflict factor. Two constraints, in priority order:
+//
+//   1. The stride must stay EVEN. An odd stride misaligns every other row and
+//      RADV loses the wide ds_read_b64/b128 path for coopMatLoad; measured 3x
+//      slower on gfx1151 (16.5 -> 5.5 TFLOPS), which swamps any conflict win.
+//   2. Among even strides, minimise gcd(stride, 32).
+//
+// With BK=32 the shader default of 4 gives stride 20 (gcd 4, four-way conflict).
+// 6 gives stride 22 (gcd 2) and measures +11% prefill on gfx1151. Only changed
+// where it has been measured; other vendors keep the shader default.
+static uint32_t ggml_vk_mul_mm_shmem_pad(const vk_device& device) {
+    if (device->vendor_id == VK_VENDOR_ID_INTEL && device->coopmat_support &&
+        device->driver_id == vk::DriverId::eIntelProprietaryWindows) {
+        return 0;
+    }
+    if (device->vendor_id == VK_VENDOR_ID_AMD && device->coopmat_support) {
+        return 6;
+    }
+    return 4;  // mul_mm.comp default
+}
+
 static bool ggml_vk_matmul_shmem_support(const vk_device& device, const std::vector<uint32_t>& warptile, bool mul_mat_id, ggml_type src0_type) {
 
     uint32_t lut_size = 0;
@@ -3977,9 +4004,9 @@ static bool ggml_vk_matmul_shmem_support(const vk_device& device, const std::vec
 
     // Needs to be kept up to date on shader changes
     // Needs to stay aligned with ggml_vk_mul_mm_spec.
-    const bool intel_shmem_stride_pad_zero = device->vendor_id == VK_VENDOR_ID_INTEL && device->coopmat_support &&
-                                              device->driver_id == vk::DriverId::eIntelProprietaryWindows;
-    const uint32_t bank_conflict_offset = intel_shmem_stride_pad_zero ? 0 : (device->coopmat_support ? 8 : 1);
+    // The shared tiles are (BK/2 + pad) FLOAT_TYPEV2 per row, i.e. (BK + 2*pad)
+    // elements, so the byte-space offset below is twice the shader's pad.
+    const uint32_t bank_conflict_offset = device->coopmat_support ? 2 * ggml_vk_mul_mm_shmem_pad(device) : 1;
     const uint32_t type_size = device->fp16 ? sizeof(ggml_fp16_t) : sizeof(float);
     const uint32_t warps = warptile[0] / warptile[10];
 
@@ -4135,6 +4162,11 @@ static uint32_t get_subgroup_size(const std::string &pipeline_name, const vk_dev
 static bool ggml_vk_fa_type_needs_shmem(ggml_type type) {
     switch (type) {
     case GGML_TYPE_IQ4_NL:
+        return true;
+    case GGML_TYPE_Q4_0_ROCMFP4:
+    case GGML_TYPE_Q6_0_ROCMFPX:
+    case GGML_TYPE_Q3_0_ROCMFPX:
+        // codebook and/or the UE4M3 scale table
         return true;
     default:
         return false;
@@ -4604,6 +4636,8 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
             device->driver_id == vk::DriverId::eIntelProprietaryWindows) {
             spec.push_back(0u);  // constantID=12: SHMEM_STRIDE_PAD = 0
             spec.push_back(1u);  // constantID=13: APPLY_SLM_A_RESHAPE = true
+        } else {
+            spec.push_back(ggml_vk_mul_mm_shmem_pad(device));  // constantID=12
         }
         return spec;
     };
@@ -18353,7 +18387,7 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                 if (op->src[3] && op->src[3]->type != GGML_TYPE_F16) {
                     return false;
                 }
-                auto fa_kv_ok = [](ggml_type t) {
+                auto fa_kv_ok = [coopmat2](ggml_type t) {
                     switch (t) {
                     case GGML_TYPE_F32:
                     case GGML_TYPE_F16:
@@ -18365,6 +18399,14 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                     case GGML_TYPE_Q4_0:
                     case GGML_TYPE_IQ4_NL:
                         return true;
+                    case GGML_TYPE_Q4_0_ROCMFP4:
+                    case GGML_TYPE_Q6_0_ROCMFPX:
+                    case GGML_TYPE_Q3_0_ROCMFPX:
+                        // decode lives in flash_attn_dequant.glsl, which only the
+                        // scalar and coopmat1 shaders include. coopmat2 has its own
+                        // buffer_reference decode path that is not wired up for the
+                        // ROCmFPx types yet, and would silently return zeros.
+                        return !coopmat2;
                     default:
                         return false;
                     }
