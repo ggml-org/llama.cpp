@@ -214,11 +214,55 @@ Every one of these produced a wrong conclusion at least once.
 
 ---
 
-## 6. Open leads
+## 6. The prefill ceiling, measured
 
-- **Prefill is still at ~40% of the WMMA instruction roof** after §1. Tiles,
-  occupancy and register blocking are all ruled out; the remaining suspects are
-  the global→shared load path and the dequant into shared memory.
+The dequant path was the standing hypothesis for the remaining prefill gap. It is
+**wrong**, and the shader turns out to sit near a real structural ceiling.
+
+Probes on the `q4_0_rocmfp4_fast` matmul (m=4096 n=512 k=14336), each built by
+deleting work from the shader and re-measuring (results are wrong, timings are
+not), all boost-discarded:
+
+| configuration | TFLOPS | share of runtime |
+|---|---|---|
+| baseline | 15.3 | — |
+| − A staging (global read + dequant + LDS write) | 18.3 | A staging ~17% |
+| − A *and* B staging | 22.5 | B staging ~16% |
+| pure WMMA, fragments resident in registers | 38.1 | inner loop ~28%, WMMA ~40% |
+
+Sub-probe: removing only the *global weight read* gives 17.2, so **the dequant
+arithmetic is worth ~5% of runtime**. Making dequant free changes almost nothing.
+
+**38.1 TFLOPS is not an achievable roof.** That microbenchmark keeps A and B
+fragments in registers for the whole loop; a real GEMM must re-read fragments
+from LDS every k-step. The achievable ceiling for this shader shape is the
+no-staging number, **~22.5 TFLOPS** — so we are at **68% of it**, not 40% of 38.
+Remaining upside is bounded at roughly 1.45x, not 2.5x.
+
+### Two exits, both closed
+
+**Wide LDS stores.** The B staging writes adjacent `FLOAT_TYPEV2` pairs that
+could be one `ds_write_b64`/`b128`, and the ISA shows 128 `ds_write_b16` +
+128 `ds_load_u16_d16` per 32 `v_wmma`. But `buf_idx = col * SHMEM_STRIDE + ...`
+is only 2-aligned, never 4-aligned, because `gcd(stride,32) = 2` *requires*
+`stride ≡ 2 (mod 4)`. Wide stores and low bank conflict are mutually exclusive
+here, and §1 already measured that bank conflict wins by 16%.
+
+**Double buffering.** Would hide the ~33% staging behind the ~40% compute, but it
+doubles staging LDS (25.6 -> ~46 KB) and forces 1 workgroup/CU instead of 2.
+Measured that regime directly by padding LDS to 33792 bytes: **15.3 -> 10.7
+TFLOPS, a 30% loss.** It would cost more than it could recover. Two resident
+workgroups already supply the pipelining, without paying the LDS.
+
+That also retro-explains §4's tile sweep: BM=BN=256 blew LDS past the
+2-workgroup threshold *and* spilled, which is why it collapsed to 6-7 TFLOPS.
+
+**Probe gotcha:** ACO deletes an unused `shared` array no matter how you guard the
+write — a 60 KB array still reported LDS 25600 and full speed. Keep it alive the
+way `flash_attn.comp` does: write **unconditionally**, then read it under a
+condition whose result escapes to a global buffer.
+
+## 7. Remaining leads
 - **`CONCAT` in prefill**: 48 x 1004 us = 48 ms, ~3% of pp512, for a pure copy in
   the GDN layers — roughly 16x off what its byte count should cost.
 - **~7 ms/step of launch-bound small ops in decode** (9.4%): `GET_ROWS` 97 x
