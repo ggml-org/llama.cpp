@@ -129,6 +129,80 @@ are flat to within noise. The win is for **concurrent multi-slot serving**.
 
 ---
 
+## 2b. Shipped: adaptive draft length (`--spec-draft-adaptive`)
+
+A fixed `--spec-draft-n-max` can only be right for one kind of content, and
+llama.cpp has no acceptance-driven adaptivity at all: `p_min` gates on the
+*draft's own predicted confidence* (open loop, and defaults to 0 = off), while
+`n_acc_tokens` is collected and used **only to print a statistics line**. The
+acceptance signal was already being measured and thrown away.
+
+This tracks a per-sequence EMA of accepted tokens and sizes each draft from it.
+The design point that makes it work is that **the action censors the
+measurement**: when every drafted token is accepted we learn only that
+acceptance was *at least* `n_drafted`, never how much further it would have
+gone. Averaging that lower bound ratchets the length down and strands it there.
+So:
+
+  partial accept -> uncensored, the exact stopping point was seen: track it
+  full accept    -> censored, a lower bound only: probe upward instead
+
+Backing off averages (alpha 0.25, ~4-step memory); probing is additive. Reset on
+`begin()` only -- a new prompt or reused server slot -- never mid-generation,
+since following content drift within a response is the point.
+
+Radeon 8060S, greedy, 300 generated tokens, t/s as prose / json:
+
+| arm | n=3 fixed | n=7 fixed | n=7 adaptive |
+|---|---|---|---|
+| Qwen3.8 MTP | 23.3 / 36.7 | 21.3 / 44.9 | **23.0 / 45.1** |
+| Qwen3.8 DFlash + z-lab Q8_0 | 24.7 / 36.6 | 23.0 / 35.8 | **25.0 / 48.5** |
+| Qwen3.8 DFlash + our FP4 | 25.5 / 38.3 | 21.8 / 34.1 | 23.6 / 50.2 |
+| Muse-Glimmer-30B + its dflash | 19.9 / 21.6 | 17.2 / 18.8 | 18.9 / 25.0 |
+
+Adding `--spec-draft-n-min 3` as a floor removes the prose cost entirely on the
+worst arm and improves json further -- Qwen3.8 DFlash+FP4 goes from
+25.7 / 38.3 (best fixed) to **26.6 / 52.8**, i.e. +3.5% prose and +37.9% json.
+The floor stops the controller dipping on a transient run of rejections.
+**Recommended config: `--spec-draft-adaptive --spec-draft-n-min 3` with n_max
+left at whatever the model card says.**
+
+The clearest demonstration is Muse-Glimmer at the n_max=15 its own card
+recommends:
+
+| Muse-Glimmer n_max=15 | prose | json |
+|---|---|---|
+| n=15 fixed | 13.0 | 16.2 |
+| n=15 adaptive + n_min=3 | **19.3** | **21.5** |
+
+**+48% prose, +33% json** -- and it lands within noise of the best hand-tuned
+fixed setting (n=3 gives 19.7 / 21.7). Anyone following that model card today
+loses a third of their prose throughput with no way to know.
+
+**Structured output gains 16-32%; prose costs 0-7%.** MTP adaptive matches the
+better fixed setting on both content types at once -- previously you had to pick
+one and lose ~18% whenever content did not match the guess. DFlash2 with the
+z-lab Q8_0 sidecar beats every fixed setting on both axes.
+
+`n_max=12` adaptive is within noise of `n_max=7` in every arm, so **n_max becomes
+a safety ceiling rather than a tuning parameter** -- probably the more useful
+property than any single number, since agentic traffic mixes prose, code and
+JSON inside one session.
+
+The constants (init 2.0, probe +1.0, target `round(ema)`) were fitted by
+measurement. The first attempt (init 4.0, probe +2.0, target `ema+1`) was
+**worse than both fixed settings** on JSON, 26.6 vs 45.0. Treat them as tuned
+for these arms, not universal.
+
+Side finding: with adaptive on, our 0.96 GB FP4 sidecar beats z-lab's 1.92 GB
+Q8_0 on JSON (50.2 vs 48.5) despite measurably lower acceptance -- it is half
+the size, so each draft step costs less bandwidth. Q8_0 still wins prose. On a
+bandwidth-bound APU, draft choice is a speed/acceptance tradeoff rather than a
+ranking.
+
+Off by default. Speculation stays distribution-preserving, so this can only
+move throughput, never output.
+
 ## 3. Where the time actually goes
 
 Profiled with `GGML_VK_PERF_LOGGER=1` on Qwen3.8-27B-ROCmFP4_FAST.
