@@ -602,27 +602,40 @@ static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(
             case GGML_BACKEND_SPLIT_AXIS_1:
             case GGML_BACKEND_SPLIT_AXIS_2:
             case GGML_BACKEND_SPLIT_AXIS_3: {
-                GGML_ASSERT(src_ss[0].n_segments == 1);
-                if (src_ss[0].axis == ggml_n_dims(tensor->src[0]) - 1 && src_ss[0].nr[0] == 1) {
-                    return {ggml_backend_meta_split_axis(ggml_n_dims(tensor) - 1), {0}, {1}, 1};
-                }
-                int64_t base_ne_in = tensor->src[0]->ne[0];
-                for (int dim = 1; dim <= src_ss[0].axis; dim++) {
+                int64_t base_ne_in = 1;
+                for (int dim = 0; dim <= src_ss[0].axis; dim++) {
                     base_ne_in *= tensor->src[0]->ne[dim];
                 }
-                base_ne_in /= src_ss[0].nr[0];
+                if (src_ss[0].n_segments == 1) {
+                    base_ne_in /= src_ss[0].nr[0];
+                    if (src_ss[0].axis == ggml_n_dims(tensor->src[0]) - 1 && src_ss[0].nr[0] == 1) {
+                        return {ggml_backend_meta_split_axis(ggml_n_dims(tensor) - 1), {0}, {1}, 1};
+                    }
+                    if (src_ss[0].axis == GGML_BACKEND_SPLIT_AXIS_0 && tensor->ne[0] == tensor->src[0]->ne[0] &&
+                            tensor->ne[1] == 1 && src_ss[0].nr[0] == 1) {
+                        bool complete_rows = true;
+                        for (size_t j = 0; j < n_bufs; j++) {
+                            const int64_t ne = src_ss[0].ne[j];
+                            complete_rows = complete_rows && (ne == 0 || ne == tensor->src[0]->ne[0]);
+                        }
+                        if (complete_rows) {
+                            // Move a complete dim-0 split to the following singleton dimension.
+                            return {GGML_BACKEND_SPLIT_AXIS_1, {0}, {1}, 1};
+                        }
+                    }
+                }
+                // Reshape outputs use one segment; split-state propagation merges source segments.
                 int64_t base_ne_out = 1;
                 for (int dim = 0; dim < GGML_MAX_DIMS; dim++) {
-                    const int64_t base_ne_out_next = base_ne_out *= tensor->ne[dim];
-                    if (base_ne_out_next % base_ne_in == 0) {
-                        return {ggml_backend_meta_split_axis(dim), {0}, {uint32_t(base_ne_out_next/base_ne_in)}, 1};
+                    base_ne_out *= tensor->ne[dim];
+                    if (base_ne_out % base_ne_in == 0) {
+                        return {ggml_backend_meta_split_axis(dim), {0}, {uint32_t(base_ne_out/base_ne_in)}, 1};
                     }
-                    if (base_ne_out_next > base_ne_in) {
+                    if (base_ne_out > base_ne_in) {
                         GGML_ASSERT(src_ss[0].n_segments == 1);
                         GGML_ASSERT(src_ss[0].nr[0]      == 1);
                         return {ggml_backend_meta_split_axis(dim), {0}, {1}, 1};
                     }
-                    base_ne_out = base_ne_out_next;
                 }
                 GGML_ABORT("shape mismatch for %s", ggml_op_name(tensor->op));
             }
@@ -792,7 +805,7 @@ static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(
             ggml_backend_dev_t dev = ggml_backend_buft_get_device(ggml_backend_buffer_get_type(tensor->buffer));
             const ggml_backend_meta_device_context * dev_ctx = (const ggml_backend_meta_device_context *) dev->context;
             ggml_backend_meta_split_state ret = dev_ctx->get_split_state(tensor, dev_ctx->get_split_state_ud);
-            if (ret.axis >= 0 && ret.axis <= GGML_MAX_DIMS) {
+            if (ret.axis >= 0 && ret.axis < GGML_MAX_DIMS) {
                 const int64_t granularity = ret.axis == GGML_BACKEND_SPLIT_AXIS_0 ? ggml_blck_size(tensor->type) : 1;
                 int64_t ne_sum = 0;
                 for (size_t s = 0; s < ret.n_segments; s++) {
@@ -802,6 +815,9 @@ static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(
                     }
                 }
                 GGML_ASSERT(ne_sum == tensor->ne[ret.axis]);
+            } else if (ret.axis == GGML_BACKEND_SPLIT_AXIS_PARTIAL) {
+                GGML_ASSERT(ret.n_segments == 1);
+                GGML_ASSERT(ret.nr[0] == 1);
             }
             return ret;
         }
@@ -1352,15 +1368,29 @@ static void ggml_backend_meta_buffer_set_tensor(ggml_backend_buffer_t buffer, gg
         } break;
         case GGML_BACKEND_SPLIT_AXIS_PARTIAL: {
             GGML_ASSERT(tensor->type == GGML_TYPE_F32);
-            const int64_t ne = ggml_nelements(tensor);
-            std::vector<float> tmp;
-            tmp.reserve(ne);
-            for (int64_t i = 0; i < ne; i++) {
-                tmp.push_back(((const float *) data)[i] / n_bufs);
+            GGML_ASSERT(offset % sizeof(float) == 0);
+            GGML_ASSERT(size   % sizeof(float) == 0);
+            const size_t n_values = size / sizeof(float);
+            size_t n_contributors = 0;
+            for (size_t j = 0; j < n_bufs; j++) {
+                n_contributors += split_state.ne[j] != 0;
+            }
+            const bool has_contributor_mask = n_contributors != 0;
+            if (!has_contributor_mask) {
+                n_contributors = n_bufs;
+            }
+            std::vector<float> tmp(n_values);
+            for (size_t i = 0; i < n_values; i++) {
+                tmp[i] = ((const float *) data)[i] / n_contributors;
+            }
+            std::vector<float> zero;
+            if (has_contributor_mask) {
+                zero.resize(n_values, 0.0f);
             }
             for (size_t j = 0; j < n_bufs; j++) {
                 ggml_tensor * simple_tensor = ggml_backend_meta_buffer_simple_tensor(tensor, j);
-                ggml_backend_tensor_set(simple_tensor, tmp.data(), offset, size);
+                const float * partial = has_contributor_mask && split_state.ne[j] == 0 ? zero.data() : tmp.data();
+                ggml_backend_tensor_set(simple_tensor, partial, offset, size);
             }
         } break;
         default: {
