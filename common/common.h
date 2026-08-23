@@ -220,6 +220,23 @@ inline bool common_grammar_needs_prefill(const common_grammar & g) {
 }
 
 // sampling parameters
+// A fractional reasoning budget expression, e.g. "0.5+4000" resolves to
+// round(0.5 * ref_len) + 4000 tokens, where ref_len is the conversation or
+// current-prompt length. See common_reasoning_budget_parse() / _eval().
+struct common_reasoning_budget_expr {
+    float frac = -1.0f;      // < 0 = unset
+    int32_t offset = 0;      // token offset applied after scaling
+
+    bool is_set() const { return frac >= 0.0f; }
+};
+
+// Parses "N" (fixed budget), "F", "F+K" or "F-K" (F in [0,1]).
+// Fills exactly one of out_fixed / out_expr; returns true on success.
+bool common_reasoning_budget_parse(const std::string & value, int32_t & out_fixed, common_reasoning_budget_expr & out_expr);
+
+// clamp(llround(frac*ref_len)+offset, 0, INT32_MAX); -1 if unset or ref_len <= 0.
+int32_t common_reasoning_budget_eval(const common_reasoning_budget_expr & expr, int32_t ref_len);
+
 struct common_params_sampling {
     uint32_t seed = LLAMA_DEFAULT_SEED; // the seed used to initialize llama_sampler
 
@@ -291,6 +308,12 @@ struct common_params_sampling {
     std::vector<llama_token>  reasoning_budget_forced;         // forced sequence (message + first end tag)
     std::string               reasoning_budget_message;        // message injected before end tag when budget exhausted
     bool                      reasoning_control = false;       // create the budget sampler on demand so reasoning can be ended at runtime
+    // fractional reasoning budgets (issue #27571); resolved in common_sampler_init()
+    // precedence: reasoning_budget_tokens > expr_current > expr
+    common_reasoning_budget_expr reasoning_budget_expr;
+    common_reasoning_budget_expr reasoning_budget_expr_current;
+    int32_t reasoning_budget_ref_conversation = 0;
+    int32_t reasoning_budget_ref_current      = 0;
 
     bool backend_sampling = false;
 

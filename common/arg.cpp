@@ -3678,13 +3678,36 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_REASONING_EFFORT"));
     add_opt(common_arg(
-        {"--reasoning-budget"}, "N",
-        "token budget for thinking: -1 for unrestricted, 0 for immediate end, N>0 for token budget (default: -1)",
-        [](common_params & params, int value) {
-            if (value < -1) { throw std::invalid_argument("invalid value"); }
-            params.sampling.reasoning_budget_tokens = value;
-        }
-    ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_THINK_BUDGET"));
+        {"--reasoning-budget"},
+        "N",
+        "token budget for thinking: -1 unrestricted, 0 immediate end, N>0 fixed token budget, "
+        "or fraction of conversation length with optional +/-K token offset: F, F+K, F-K with F in [0,1] "
+        "(e.g. 0.5, 0.25+4000, 0.5-2300) (default: -1)",
+        [](common_params & params, const std::string & value) {
+            int32_t fixed = -1;
+            common_reasoning_budget_expr expr;
+            if (!common_reasoning_budget_parse(value, fixed, expr)) {
+                throw std::invalid_argument("invalid --reasoning-budget: \"" + value +
+                    "\" (expected -1, a token count, or e.g. 0.5 / 0.5+4000 / 0.3-2300)");
+            }
+            if (expr.is_set()) { params.sampling.reasoning_budget_expr = expr; }
+            else { params.sampling.reasoning_budget_tokens = fixed; }
+        }).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_THINK_BUDGET"));
+
+    add_opt(common_arg(
+        {"--reasoning-budget-current"},
+        "N",
+        "like --reasoning-budget, but fractional budgets are relative to the newest input message "
+        "(e.g. 0.3, 0.3+4000)",
+        [](common_params & params, const std::string & value) {
+            int32_t fixed = -1;
+            common_reasoning_budget_expr expr;
+            if (!common_reasoning_budget_parse(value, fixed, expr) || !expr.is_set()) {
+                throw std::invalid_argument("invalid --reasoning-budget-current: \"" + value +
+                    "\" (expected a fraction like 0.3 / 0.3+4000)");
+            }
+            params.sampling.reasoning_budget_expr_current = expr;
+        }).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_THINK_BUDGET_CURRENT"));
     add_opt(common_arg(
         {"--reasoning-budget-message"}, "MESSAGE",
         "message injected before the end-of-thinking tag when reasoning budget is exhausted (default: none)",
