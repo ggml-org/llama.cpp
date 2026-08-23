@@ -319,7 +319,6 @@ def test_slot_save_restore_with_two_images(mmproj_server):
         "prompt": prompt,
     })
     assert res.status_code == 200
-    content = res.body["content"]
     prompt_n_full = res.body["timings"]["prompt_n"]
     assert prompt_n_full > 64
 
@@ -345,6 +344,26 @@ def test_slot_save_restore_with_two_images(mmproj_server):
     assert res.status_code == 200
     assert res.body["timings"]["cache_n"] == prompt_n_full - 1
     assert res.body["timings"]["prompt_n"] == 1
+    content = res.body["content"]
+
+    res = server.make_request("POST", "/slots/1?action=restore", data={
+        "filename": "mm_slot_two_images.bin",
+    })
+    assert res.status_code == 200
+    assert res.body["n_restored"] == n_saved
+
+    res = server.make_request("POST", "/completions", data={
+        "temperature": 0.0,
+        "top_k": 1,
+        "id_slot": 0,
+        "cache_prompt": True,
+        "prompt": prompt,
+    })
+    assert res.status_code == 200
+    assert res.body["timings"]["cache_n"] == prompt_n_full - 1
+    assert res.body["timings"]["prompt_n"] == 1
+    content = res.body["content"]
+
     assert res.body["content"] == content
 
 

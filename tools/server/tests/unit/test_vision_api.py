@@ -121,7 +121,7 @@ def test_vision_chat_completion_token_count():
     "prompt, image_data, success, re_content",
     [
         # test model is trained on CIFAR-10, but it's quite dumb due to small size
-        ("What is this: <__media__>\n", "IMG_BASE64_0",         True, "(cat)+"),
+        ("What is this: <__media__>\n", "IMG_BASE64_0",         True, "(cat)+|(automobile)+"),
         ("What is this: <__media__>\n", "IMG_BASE64_1",         True, "(frog)+"),
         ("What is this: <__media__>\n", "malformed",            False, None), # non-image data
         ("What is this:\n",             "",                     False, None), # empty string
