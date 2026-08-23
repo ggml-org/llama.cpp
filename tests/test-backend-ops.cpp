@@ -3717,7 +3717,9 @@ struct test_unary_mul : public test_case {
         // performs; relax the tolerance to match that drift
         switch (type) {
             case GGML_TYPE_F16: return 5e-5;
-            default:            return 1e-7;
+            // the shader evaluates gelu with an exp-based tanh identity while the CPU
+            // reference uses tanhf, which differs by ~1 ulp near |result| ~ 1
+            default:            return op == GGML_UNARY_OP_GELU ? 5e-7 : 1e-7;
         }
     }
 
