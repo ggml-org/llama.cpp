@@ -1,6 +1,6 @@
 # gfx1030 next optimization plan
 
-> Current implemented paths, supported environment variables, correctness evidence, and benchmark results are consolidated in [Opt-in gfx1030 native optimizations](gfx1030-native-optimizations.md).
+> Current implemented paths, supported environment variables, correctness evidence, and benchmark results are consolidated in [gfx1030 native optimizations](gfx1030-native-optimizations.md).
 
 ## Audit result
 
@@ -14,7 +14,7 @@ The research is directionally correct, but parts are stale relative to this fork
 
 ## DFlash2 sustained-2x frontier
 
-The validated normal-width candidate combines automatic greedy target backend sampling with opt-in width-six Q4_0/Q4_K/Q6_K rows/block=2. It measures `77.783 tok/s` at `48.554 ms/speculative cycle` with a mean committed span of `3.724`; the 2x target is `89.784 tok/s` and about `41.477 ms/cycle`. A representative five-workload mean is `83.85 tok/s` (`1.87x` AR), so 2x has not been reached.
+The validated normal-width candidate combines automatic greedy target backend sampling with default-on width-six Q4_0/Q4_K/Q6_K rows/block=2; set `GGML_HIP_GFX1030_DFLASH_MMVQ_ROWS2=0` to opt out. It measures `77.783 tok/s` at `48.554 ms/speculative cycle` with a mean committed span of `3.724`; the 2x target is `89.784 tok/s` and about `41.477 ms/cycle`. A representative five-workload mean is `83.85 tok/s` (`1.87x` AR), so 2x has not been reached.
 
 Only mechanisms with roughly a 7 ms/cycle exact end-to-end ceiling should be pursued next:
 

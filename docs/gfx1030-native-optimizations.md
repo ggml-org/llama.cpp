@@ -19,7 +19,7 @@ export GGML_HIP_RDNA2_AUTO=0
 | `GGML_HIP_GFX1030_Q8_CACHE` | unset: inherit HSA umbrella; explicit `0|1` override | Enables graph-owned reuse of exact standard Q8_1 TG activations and the eligible dual RMSNorm F32/Q8_1 producer. Q4_0 `sum_hi`, packed layouts, MMQ, and routed operations remain outside this cache contract. |
 | `GGML_HIP_GFX1030_Q8_CACHE_TELEMETRY` | unset / `0` | Reports eligible standard-MMVQ Q8_1 sources, safe reuses, cache hits, and storage. Telemetry does not allocate or reuse entries by itself. |
 | `GGML_HIP_GFX1030_TARGET_BACKEND_SAMPLING` | unset: inherit native auto policy; explicit `0|off|false` disables | Automatically keeps eligible greedy native-MTP/DFlash target selection on the backend instead of materializing and scanning the full vocabulary on the CPU. |
-| `GGML_HIP_GFX1030_DFLASH_MMVQ_ROWS2` | unset / `0`: disabled; explicit `1` enables | Uses two output rows per block for gfx1030 width-six Q4_0/Q4_K/Q6_K MMVQ. This measured DFlash2 candidate remains opt-in while broader model coverage is accumulated. The global RDNA2 auto-off switch disables it. |
+| `GGML_HIP_GFX1030_DFLASH_MMVQ_ROWS2` | unset: enabled; explicit `0|off|false` disables | Uses two output rows per block for gfx1030 width-six Q4_0/Q4_K/Q6_K MMVQ. This is the validated default for the measured V620 DFlash2 path; the global RDNA2 auto-off switch still disables it. |
 | `GGML_HIP_GFX1030_P2P_ALLREDUCE` | unset / `auto`: expanded automatic policy | Selects the RDNA2 host-snapshot policy. The default `auto-expanded` policy enables exact ordinary consumer-fused boundaries when their structural TP4 gate passes; `auto-basic` restores the former control policy, and `0`, `off`, or `false` disables this host-snapshot feature while leaving other native paths enabled. Unsupported TP counts/topologies fall back to RCCL. |
 | `GGML_HIP_GFX1030_MMVQ_W8_ROWS4` | unset: inherit native auto policy; explicit `0` retains rows2 | Automatically selects the certified Q4_0 DFlash2 M8 rows/block=4 MMVQ path; unsupported shapes retain rows2/stock fallback. |
 
@@ -45,7 +45,7 @@ unset GGML_HIP_GFX1030_Q8_1_FUSION
 unset GGML_HIP_GFX1030_GDN_SIBLING_FUSION
 unset GGML_HIP_GFX1030_Q8_CACHE
 unset GGML_HIP_GFX1030_Q8_CACHE_TELEMETRY
-unset GGML_HIP_GFX1030_DFLASH_MMVQ_ROWS2
+export GGML_HIP_GFX1030_DFLASH_MMVQ_ROWS2=0
 ```
 
 Multi-GPU ROCm state save/restore stability has a separate opt-in, `GGML_HIP_SAFE_STATE_IO=1`. It does not require the gfx1030 master switch and does not change inference kernels. See [the multi-GPU ROCm state-I/O workaround](rocm-multi-gpu-state-io.md).
@@ -106,9 +106,9 @@ The stateless automatic chain remains attached to its server slot between compat
 
 For the same structurally certified path, a request with `cache_prompt: false` retains the checkpoint-driven prompt chunk boundaries required for exact recurrent/DFlash behavior but does not serialize a checkpoint that it will not reuse. It first discards older prompt checkpoints so a later cache-enabled request cannot restore stale recurrent state. Cache-enabled and fallback requests retain normal checkpoint creation. Incremental A/B/B/A reduced prompt latency from `424.264` to `169.662 ms` and improved useful client-wall throughput by **6.50%**, with identical output hashes, draft/accepted counts, and generation throughput. Together with persistent sampler attachment, comparison against the original merged implementation improved client-wall throughput from `62.4933` to `67.7398 tok/s` (**+8.40%**). If a later request switches from uncached to cached operation, it reprocesses once to create a checkpoint; subsequent cached requests resume normal reuse.
 
-### Opt-in DFlash width-six rows/block=2 MMVQ
+### Default-on DFlash width-six rows/block=2 MMVQ
 
-Setting `GGML_HIP_GFX1030_DFLASH_MMVQ_ROWS2=1` packs two output rows into each block for gfx1030 width-six Q4_0, Q4_K, and Q6_K MMVQ. Unset/`0`, non-gfx1030 execution, unsupported quantization or width, and global `GGML_HIP_RDNA2_AUTO=0` retain the existing dispatcher. The route is explicit rather than automatic because it is optimized for the measured DFlash verification/draft shapes and has not been claimed as a universal small-batch policy.
+The gfx1030 native profile automatically packs two output rows into each block for width-six Q4_0, Q4_K, and Q6_K MMVQ. Set `GGML_HIP_GFX1030_DFLASH_MMVQ_ROWS2=0` (or `off`/`false`) to restore the existing dispatcher. Non-gfx1030 execution, unsupported quantization or width, and global `GGML_HIP_RDNA2_AUTO=0` also retain the existing dispatcher. End-to-end evidence is validated on four V620s with TP4; TP2 is not claimed until separately benchmarked.
 
 With backend target sampling already active, controlled Q4 DFlash2 `n_max=5` testing improved `72.717 -> 77.783 tok/s` (**+6.97%**). Mean speculative-cycle time fell `51.872 -> 48.554 ms`: target verification saved `2.317 ms/cycle` and draft evaluation saved `1.064 ms/cycle`. Synthetic width-six Q4_0/Q4_K/Q6_K raw-F32 checks were exact; 1,024-token Q4, Q8, reasoning, grammar, requested probabilities, prompt-cache, parallel, cancellation/recovery, and repeated-request gates passed.
 

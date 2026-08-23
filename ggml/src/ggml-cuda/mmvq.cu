@@ -1382,9 +1382,13 @@ static void mul_mat_vec_q_switch_ncols_dst(
             constexpr int c_ncols_dst = 6;
             if constexpr (use_gfx1030_native &&
                     (type == GGML_TYPE_Q4_0 || type == GGML_TYPE_Q4_K || type == GGML_TYPE_Q6_K)) {
+                // This schedule is the validated default for the gfx1030 width-six
+                // Q4 DFlash shapes. Set the feature variable to 0 to restore the
+                // original dispatcher; the global RDNA2 switch still disables it.
                 static const bool dflash_rows2_enabled = [] {
                     const char * value = std::getenv("GGML_HIP_GFX1030_DFLASH_MMVQ_ROWS2");
-                    return ggml_cuda_rdna2_auto_enabled() && value != nullptr && std::atoi(value) != 0;
+                    return ggml_cuda_rdna2_auto_enabled() &&
+                           (value == nullptr || std::atoi(value) != 0);
                 }();
                 if (dflash_rows2_enabled) {
                     // DFlash Q4_K_M uses six output rows. Reuse each weight tile
