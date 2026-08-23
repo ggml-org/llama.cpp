@@ -112,7 +112,7 @@ Setting `GGML_HIP_GFX1030_DFLASH_MMVQ_ROWS2=1` packs two output rows into each b
 
 With backend target sampling already active, controlled Q4 DFlash2 `n_max=5` testing improved `72.717 -> 77.783 tok/s` (**+6.97%**). Mean speculative-cycle time fell `51.872 -> 48.554 ms`: target verification saved `2.317 ms/cycle` and draft evaluation saved `1.064 ms/cycle`. Synthetic width-six Q4_0/Q4_K/Q6_K raw-F32 checks were exact; 1,024-token Q4, Q8, reasoning, grammar, requested probabilities, prompt-cache, parallel, cancellation/recovery, and repeated-request gates passed.
 
-This candidate does not by itself reach sustained 2x. A warm five-workload matrix averaged `83.85 tok/s` versus `44.74 tok/s` AR (**1.87x**), with per-case speedups from `1.12x` to `2.34x`. Rows/block=4 was slower, an eight-wave Q4_0 variant failed raw-F32 exactness, `p_split` changes were neutral, and forced RCCL protocol/channel/thread settings regressed. These alternatives must not be enabled by default.
+This candidate does not by itself reach sustained 2x. A warm five-workload matrix averaged `83.85 tok/s` versus `44.74 tok/s` AR (**1.87x**), with per-case speedups from `1.12x` to `2.34x`. Rows/block=3/4 was slower, an eight-wave Q4_0 variant failed raw-F32 exactness, `p_split` changes were neutral, and forced RCCL settings regressed. A corrected exact width-six host-snapshot reduction gained only `0.74%`; fusing width-six gate/up/GLU regressed `4.63%`. These alternatives must not be enabled by default.
 
 ### Certified Q4_0 M8 rows/block=4 MMVQ
 

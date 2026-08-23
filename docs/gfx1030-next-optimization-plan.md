@@ -22,7 +22,7 @@ Only mechanisms with roughly a 7 ms/cycle exact end-to-end ceiling should be pur
 2. Exact collective scheduling/fusion or LM-head reduction that retains all mandatory TP shards.
 3. GPU-side acceptance that preserves sampler, grammar, rollback, recurrent state, and fallback semantics.
 
-Do not retry single-GPU target verification, naïve verification chunking, forced RCCL Ring/LL/channel/thread overrides, guessed width-two P2P schedules, width-six rows/block=4, Q4_0 eight-wave MMVQ, or `p_split` tuning. Those paths were measured as slower, neutral, or incorrect. Detailed traces remain outside Git in the sprint ledger.
+Do not retry single-GPU target verification, naïve verification chunking, forced RCCL Ring/LL/channel/thread overrides, width-six rows/block=3/4, Q4_0 eight-wave MMVQ, or `p_split` tuning. The earlier width-two P2P POC targeted the wrong shape; its corrected exact width-six replacement gained only `0.74%`. Width-six gate/up/GLU fusion serialized otherwise overlapping projections and regressed `4.63%`. Detailed traces remain outside Git in the sprint ledger.
 
 ## General priority order
 
