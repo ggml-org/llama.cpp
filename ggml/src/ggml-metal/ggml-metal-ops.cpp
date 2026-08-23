@@ -1756,7 +1756,8 @@ int ggml_metal_op_ssm_scan(ggml_metal_op_t ctx, int idx) {
 
     constexpr int64_t CHUNK = OP_SSM_SCAN_SSD_CS;
 
-    const int64_t mma_tokens = (n_seq_tokens / CHUNK) * CHUNK; // largest multiple of CHUNK <= n_seq_tokens
+    const int64_t snap_reserve = K > 1 ? K : 0; // tokens reserved for sequential kernel rollback snapshots
+    const int64_t mma_tokens = ((n_seq_tokens - snap_reserve) / CHUNK) * CHUNK; // largest multiple of CHUNK that leaves snap_reserve for the tail
     const bool use_mma =
         mma_tokens > 0 &&
         ne30 == 1 && // checks that A tensor is set to scalar decay per head (A shape {1, n_head})
