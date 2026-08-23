@@ -527,7 +527,8 @@ struct mtmd_helper_video {
     // RAII wrapper for managing subprocess
     struct subprocess_handle {
         struct subprocess_s proc = {};
-        bool alive = false;
+        bool created = false; // process exists and must be cleaned up
+        bool alive   = false; // process can still give us data
         std::thread feeder;
 
         subprocess_handle() = default;
@@ -536,18 +537,27 @@ struct mtmd_helper_video {
         ~subprocess_handle() { stop(); }
 
         void stop() {
-            if (alive) {
-                subprocess_terminate(&proc);
+            // note: alive becomes false on stdout EOF, but the process still needs cleanup
+            if (!created) {
+                return;
             }
+            subprocess_terminate(&proc);
+#ifdef _WIN32
+            // no SIGPIPE on windows: a blocked feeder only gets a broken pipe once we close our read end of the child stdin
+            if (proc.hStdInput) {
+                CloseHandle(proc.hStdInput);
+                proc.hStdInput = nullptr;
+            }
+#endif
             // join before destroy: feeder holds a FILE* from subprocess_stdin;
             // subprocess_destroy closes it, so the thread must finish first
             if (feeder.joinable()) {
                 feeder.join();
             }
-            if (alive) {
-                subprocess_destroy(&proc);
-                alive = false;
-            }
+            subprocess_join(&proc, nullptr); // reap the child, or else it stays a zombie
+            subprocess_destroy(&proc);
+            created = false;
+            alive   = false;
         }
 
         FILE * stdout_pipe() {
@@ -558,19 +568,19 @@ struct mtmd_helper_video {
         void start_feeder(const std::vector<uint8_t> & buf) {
             feeder = std::thread([this, &buf]() {
 #ifndef _WIN32
-                // ffmpeg can exit before it reads all the input, for example when ffprobe already has the metadata.
-                // the write below must fail with EPIPE instead of killing the process with SIGPIPE
+                // ffmpeg can exit before it reads all the input, for example when ffprobe already got the metadata.
+                // the write below must then fail with EPIPE, instead of killing the process with SIGPIPE
                 sigset_t sigpipe_set;
                 sigemptyset(&sigpipe_set);
                 sigaddset(&sigpipe_set, SIGPIPE);
-                pthread_sigmask(SIG_BLOCK, &sigpipe_set, nullptr); // linux: the signal goes to the writing thread
+                pthread_sigmask(SIG_BLOCK, &sigpipe_set, nullptr); // linux sends the signal to the writing thread
 #endif
                 FILE * f = subprocess_stdin(&proc);
                 if (!f) {
                     return;
                 }
 #ifdef F_SETNOSIGPIPE
-                fcntl(fileno(f), F_SETNOSIGPIPE, 1); // macOS/BSD: the signal goes to the process, so mask it per-fd
+                fcntl(fileno(f), F_SETNOSIGPIPE, 1); // macos/bsd send it to the process, so turn it off per fd
 #endif
                 fwrite(buf.data(), 1, buf.size(), f);
                 fclose(f);
@@ -617,7 +627,8 @@ struct mtmd_helper_video {
             LOG_ERR("%s: failed to launch ffprobe\n", __func__);
             return false;
         }
-        probe_sp.alive = true;
+        probe_sp.created = true;
+        probe_sp.alive   = true;
 
         if (is_buf_input()) {
             probe_sp.start_feeder(input_buf);
@@ -732,7 +743,8 @@ struct mtmd_helper_video {
             subprocess_option_search_user_path | subprocess_option_inherit_environment,
             &sp.proc);
 
-        sp.alive = (ret == 0);
+        sp.created = (ret == 0);
+        sp.alive   = (ret == 0);
         LOG_DBG("%s: subprocess_create ret=%d proc_alive=%d\n", __func__, ret, (int)sp.alive);
 
         if (sp.alive && is_buf_input()) {
