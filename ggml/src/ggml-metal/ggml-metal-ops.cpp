@@ -1794,7 +1794,7 @@ int ggml_metal_op_ssm_scan(ggml_metal_op_t ctx, int idx) {
         1);
 
     if (mma_tokens < n_seq_tokens) {
-        ggml_metal_encoder_memory_barrier(enc);
+        ggml_metal_op_concurrency_reset(ctx);
 
         args.n_seq_tokens = n_seq_tokens - mma_tokens;
         args.token_offset = mma_tokens;
