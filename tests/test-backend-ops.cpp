@@ -4837,9 +4837,7 @@ struct test_repacked_mul_mat_vec_fusion : public test_case {
             gate = ggml_add(ctx, gate, gate_bias);
         }
 
-        return glu_op == GGML_GLU_OP_SWIGLU_OAI ?
-            ggml_swiglu_oai(ctx, gate, up, 1.3f, 5.0f) :
-            ggml_glu_split(ctx, gate, up, glu_op);
+        return ggml_glu_split(ctx, gate, up, glu_op);
     }
 
     ggml_tensor * build_graph(ggml_context * ctx, ggml_context * ctx_weights) override {
@@ -10468,7 +10466,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_repacked_mul_mat(type, 257, 8, 576));
         test_cases.emplace_back(new test_repacked_mul_mat(type, 260, 256, 576));
         test_cases.emplace_back(new test_cutlass_mul_mat(type, 260, 256, 576));
-        for (ggml_glu_op glu_op : {GGML_GLU_OP_SWIGLU, GGML_GLU_OP_GEGLU, GGML_GLU_OP_SWIGLU_OAI}) {
+        for (ggml_glu_op glu_op : {GGML_GLU_OP_SWIGLU, GGML_GLU_OP_GEGLU}) {
             test_cases.emplace_back(new test_repacked_mul_mat_vec_fusion(type, glu_op, false, false));
             test_cases.emplace_back(new test_repacked_mul_mat_vec_fusion(type, glu_op, true, false));
             if (type == GGML_TYPE_NVFP4) {
@@ -10865,12 +10863,6 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
                     }
                 }
             }
-        }
-    }
-
-    for (ggml_type type : {GGML_TYPE_MXFP4, GGML_TYPE_NVFP4}) {
-        for (int64_t n : {512, 2048, 8192}) {
-            test_cases.emplace_back(new test_repacked_mul_mat(type, 2048, n, 2048));
         }
     }
 

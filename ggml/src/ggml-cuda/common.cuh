@@ -1539,8 +1539,6 @@ struct ggml_cuda_mm_fusion_args_host {
     const ggml_tensor * x_scale = nullptr;
     const ggml_tensor * gate_scale = nullptr;
     ggml_glu_op glu_op;
-    float swiglu_oai_alpha = 0.0f;
-    float swiglu_oai_limit = 0.0f;
 };
 struct ggml_cuda_mm_fusion_args_device {
     const void * x_bias = nullptr;
@@ -1550,8 +1548,6 @@ struct ggml_cuda_mm_fusion_args_device {
     const void * x_scale = nullptr;
     const void * gate_scale = nullptr;
     ggml_glu_op glu_op;
-    float swiglu_oai_alpha = 0.0f;
-    float swiglu_oai_limit = 0.0f;
 };
 
 struct ggml_cuda_kernel_launch_params {

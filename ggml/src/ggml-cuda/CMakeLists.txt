@@ -135,7 +135,6 @@ if (CUDAToolkit_FOUND)
             CUTLASS
             GIT_REPOSITORY https://github.com/NVIDIA/cutlass.git
             GIT_TAG        v4.7.0
-            GIT_PROGRESS   TRUE
             SOURCE_SUBDIR  source-only
         )
         FetchContent_MakeAvailable(CUTLASS)
