@@ -1004,9 +1004,14 @@ struct vk_device_struct {
     vk_pipeline pipeline_trunc[2];
     vk_pipeline pipeline_sgn[2];
 
+    vk_pipeline pipeline_gelu_mul[2];
+    vk_pipeline pipeline_gelu_mul_norepeat[2];
     vk_pipeline pipeline_sigmoid_mul[2];
+    vk_pipeline pipeline_sigmoid_mul_norepeat[2];
     vk_pipeline pipeline_silu_mul[2];
+    vk_pipeline pipeline_silu_mul_norepeat[2];
     vk_pipeline pipeline_softplus_mul[2];
+    vk_pipeline pipeline_softplus_mul_norepeat[2];
 
     vk_pipeline pipeline_add1_f16_f16;
     vk_pipeline pipeline_add1_f16_f32;
@@ -5671,9 +5676,12 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
 #undef CREATE_UNARY
 
 #define CREATE_UNARY_MUL(name) \
-    ggml_vk_create_pipeline(device, device->pipeline_ ## name ## _mul[0], #name "_mul_f32", name ## _mul_f32_len, name ## _mul_f32_data, "main", 3, sizeof(vk_op_binary_push_constants), {512, 1, 1}, {1}, 1); \
-    ggml_vk_create_pipeline(device, device->pipeline_ ## name ## _mul[1], #name "_mul_f16", name ## _mul_f16_len, name ## _mul_f16_data, "main", 3, sizeof(vk_op_binary_push_constants), {512, 1, 1}, {1}, 1);
+    ggml_vk_create_pipeline(device, device->pipeline_ ## name ## _mul[0], #name "_mul_f32", name ## _mul_f32_len, name ## _mul_f32_data, "main", 3, sizeof(vk_op_binary_push_constants), {512, 1, 1}, {0}, 1); \
+    ggml_vk_create_pipeline(device, device->pipeline_ ## name ## _mul[1], #name "_mul_f16", name ## _mul_f16_len, name ## _mul_f16_data, "main", 3, sizeof(vk_op_binary_push_constants), {512, 1, 1}, {0}, 1); \
+    ggml_vk_create_pipeline(device, device->pipeline_ ## name ## _mul_norepeat[0], #name "_mul_f32_norepeat", name ## _mul_f32_len, name ## _mul_f32_data, "main", 3, sizeof(vk_op_binary_push_constants), {512, 1, 1}, {1}, 1); \
+    ggml_vk_create_pipeline(device, device->pipeline_ ## name ## _mul_norepeat[1], #name "_mul_f16_norepeat", name ## _mul_f16_len, name ## _mul_f16_data, "main", 3, sizeof(vk_op_binary_push_constants), {512, 1, 1}, {1}, 1);
 
+    CREATE_UNARY_MUL(gelu)
     CREATE_UNARY_MUL(sigmoid)
     CREATE_UNARY_MUL(silu)
     CREATE_UNARY_MUL(softplus)
@@ -12524,34 +12532,6 @@ static void ggml_vk_mul(ggml_backend_vk_context * ctx, vk_context& subctx, const
     });
 }
 
-static bool ggml_vk_should_fuse_unary_mul(const ggml_tensor * unary, const ggml_tensor * mul) {
-    switch (ggml_get_unary_op(unary)) {
-        case GGML_UNARY_OP_SIGMOID:
-        case GGML_UNARY_OP_SILU:
-        case GGML_UNARY_OP_SOFTPLUS:
-            break;
-        default:
-            return false;
-    }
-    if (unary->type != GGML_TYPE_F32 && unary->type != GGML_TYPE_F16) {
-        return false;
-    }
-    if (unary->type != mul->type) {
-        return false;
-    }
-    if (mul->src[0] != unary && mul->src[1] != unary) {
-        return false;
-    }
-    const ggml_tensor * other = (mul->src[0] == unary) ? mul->src[1] : mul->src[0];
-    if (other == nullptr || other->type != unary->type) {
-        return false;
-    }
-    if (!ggml_is_contiguous_1(other) || !ggml_is_contiguous_1(unary->src[0]) || !ggml_are_same_shape(other, unary)) {
-        return false;
-    }
-    return true;
-}
-
 static void ggml_vk_unary_mul(ggml_backend_vk_context * ctx, vk_context& subctx, const struct ggml_cgraph * cgraph, int node_idx) {
     const ggml_tensor * unary = cgraph->nodes[node_idx];
     ggml_tensor * mul = cgraph->nodes[node_idx + 1];
@@ -12559,13 +12539,25 @@ static void ggml_vk_unary_mul(ggml_backend_vk_context * ctx, vk_context& subctx,
     const ggml_tensor * src1 = (mul->src[0] == unary) ? mul->src[1] : mul->src[0];
 
     const bool f16 = src0->type == GGML_TYPE_F16;
-    vk_pipeline pipeline;
-    switch (ggml_get_unary_op(unary)) {
-        case GGML_UNARY_OP_SIGMOID:  pipeline = ctx->device->pipeline_sigmoid_mul[f16]; break;
-        case GGML_UNARY_OP_SILU:     pipeline = ctx->device->pipeline_silu_mul[f16];     break;
-        case GGML_UNARY_OP_SOFTPLUS: pipeline = ctx->device->pipeline_softplus_mul[f16]; break;
-        default:                     GGML_ABORT("fatal error");
+    const vk_pipeline * pipelines;
+    if (ggml_are_same_shape(src0, src1)) {
+        switch (ggml_get_unary_op(unary)) {
+            case GGML_UNARY_OP_GELU:     pipelines = ctx->device->pipeline_gelu_mul_norepeat;     break;
+            case GGML_UNARY_OP_SIGMOID:  pipelines = ctx->device->pipeline_sigmoid_mul_norepeat;  break;
+            case GGML_UNARY_OP_SILU:     pipelines = ctx->device->pipeline_silu_mul_norepeat;     break;
+            case GGML_UNARY_OP_SOFTPLUS: pipelines = ctx->device->pipeline_softplus_mul_norepeat; break;
+            default:                     GGML_ABORT("fatal error");
+        }
+    } else {
+        switch (ggml_get_unary_op(unary)) {
+            case GGML_UNARY_OP_GELU:     pipelines = ctx->device->pipeline_gelu_mul;     break;
+            case GGML_UNARY_OP_SIGMOID:  pipelines = ctx->device->pipeline_sigmoid_mul;  break;
+            case GGML_UNARY_OP_SILU:     pipelines = ctx->device->pipeline_silu_mul;     break;
+            case GGML_UNARY_OP_SOFTPLUS: pipelines = ctx->device->pipeline_softplus_mul; break;
+            default:                     GGML_ABORT("fatal error");
+        }
     }
+    vk_pipeline pipeline = pipelines[f16];
 
     const uint32_t src0_type_size = ggml_type_size(src0->type);
     const uint32_t src1_type_size = ggml_type_size(src1->type);
@@ -16483,6 +16475,46 @@ static bool ggml_vk_is_empty(ggml_tensor * node) {
     return ggml_is_empty(node) || node->op == GGML_OP_NONE || node->op == GGML_OP_RESHAPE || node->op == GGML_OP_TRANSPOSE || node->op == GGML_OP_VIEW || node->op == GGML_OP_PERMUTE;
 }
 
+// UNARY + MUL fusion: the unary op is one of gelu/sigmoid/silu/softplus and the MUL
+// consumes it. The other operand may repeat against the unary result, but cannot
+// exceed its shape, since the fused kernel never writes the intermediate.
+static bool ggml_vk_can_fuse_unary_mul(const struct ggml_cgraph * cgraph, int unary_idx, int mul_idx) {
+    const ggml_tensor * unary = cgraph->nodes[unary_idx];
+    const ggml_tensor * mul = cgraph->nodes[mul_idx];
+
+    switch (ggml_get_unary_op(unary)) {
+        case GGML_UNARY_OP_GELU:
+        case GGML_UNARY_OP_SIGMOID:
+        case GGML_UNARY_OP_SILU:
+        case GGML_UNARY_OP_SOFTPLUS:
+            break;
+        default:
+            return false;
+    }
+    if (unary->type != GGML_TYPE_F32 && unary->type != GGML_TYPE_F16) {
+        return false;
+    }
+    if (unary->type != mul->type) {
+        return false;
+    }
+    if (mul->src[0] != unary && mul->src[1] != unary) {
+        return false;
+    }
+    const ggml_tensor * other = (mul->src[0] == unary) ? mul->src[1] : mul->src[0];
+    if (other == nullptr || other->type != unary->type) {
+        return false;
+    }
+    if (!ggml_is_contiguous_1(other) || !ggml_is_contiguous_1(unary->src[0])) {
+        return false;
+    }
+    for (int i = 0; i < GGML_MAX_DIMS; ++i) {
+        if (other->ne[i] != unary->ne[i] && other->ne[i] != 1) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static bool ggml_vk_can_fuse(const ggml_backend_vk_context * ctx, const struct ggml_cgraph * cgraph, int node_idx, std::initializer_list<enum ggml_op> ops) {
     if (!ggml_can_fuse(cgraph, node_idx, ops)) {
         return false;
@@ -16513,7 +16545,7 @@ static bool ggml_vk_can_fuse(const ggml_backend_vk_context * ctx, const struct g
     }
 
     if (ops.size() == 2 && ops.begin()[0] == GGML_OP_UNARY && ops.begin()[1] == GGML_OP_MUL) {
-        if (!ggml_vk_should_fuse_unary_mul(cgraph->nodes[node_idx], cgraph->nodes[node_idx + 1])) {
+        if (!ggml_vk_can_fuse_unary_mul(cgraph, node_idx, node_idx + 1)) {
             return false;
         }
     }
@@ -17251,6 +17283,7 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
             } else if (ggml_vk_can_fuse(ctx, cgraph, i, { GGML_OP_UNARY, GGML_OP_MUL })) {
                 ctx->num_additional_fused_ops = 1;
                 switch (ggml_get_unary_op(cgraph->nodes[i])) {
+                    case GGML_UNARY_OP_GELU:     fusion_string = "GELU_MUL";     break;
                     case GGML_UNARY_OP_SIGMOID:  fusion_string = "SIGMOID_MUL";  break;
                     case GGML_UNARY_OP_SILU:     fusion_string = "SILU_MUL";     break;
                     default:                     fusion_string = "SOFTPLUS_MUL"; break;
@@ -17589,48 +17622,6 @@ static void ggml_vk_graph_optimize(ggml_backend_t backend, struct ggml_cgraph * 
         // First, grab the next unused node.
         current_set.push_back(first_unused);
 
-        auto const &try_pull_unary_mul = [&](int unary_idx) {
-            ggml_tensor * unary = graph->nodes[unary_idx];
-            if (unary->op != GGML_OP_UNARY) {
-                return;
-            }
-            const ggml_unary_op uop = ggml_get_unary_op(unary);
-            if (uop != GGML_UNARY_OP_SIGMOID && uop != GGML_UNARY_OP_SILU && uop != GGML_UNARY_OP_SOFTPLUS) {
-                return;
-            }
-            for (int k = unary_idx + 1; k < std::min(unary_idx + 15, graph->n_nodes); ++k) {
-                if (used[k]) {
-                    continue;
-                }
-                if (std::find(current_set.begin(), current_set.end(), k) != current_set.end()) {
-                    return;
-                }
-                ggml_tensor * n = graph->nodes[k];
-                if (n->op != GGML_OP_MUL || (n->src[0] != unary && n->src[1] != unary)) {
-                    continue;
-                }
-                ggml_tensor * other = (n->src[0] == unary) ? n->src[1] : n->src[0];
-                if (other && other->op != GGML_OP_NONE &&
-                    used_node_set.find(other) == used_node_set.end()) {
-                    bool other_in_set = false;
-                    for (int idx : current_set) {
-                        if (graph->nodes[idx] == other) {
-                            other_in_set = true;
-                            break;
-                        }
-                    }
-                    if (!other_in_set) {
-                        continue;
-                    }
-                }
-                current_set.push_back(k);
-                used[k] = true;
-                return;
-            }
-        };
-
-        try_pull_unary_mul(first_unused);
-
         // Loop through the next N nodes. Grab any that don't depend on other nodes that
         // haven't already been run. Nodes that have already been run have used[i] set
         // to true. Allow nodes that depend on the previous node if it's a fusion pattern
@@ -17672,7 +17663,6 @@ static void ggml_vk_graph_optimize(ggml_backend_t backend, struct ggml_cgraph * 
             }
             if (ok) {
                 current_set.push_back(j);
-                try_pull_unary_mul(j);
 
                 int rope_idx = j;
 
@@ -17760,6 +17750,27 @@ static void ggml_vk_graph_optimize(ggml_backend_t backend, struct ggml_cgraph * 
                             used[k] = true;
                             break;
                         }
+                    }
+                }
+                // UNARY + MUL: pull the consuming MUL forward
+                if (j > 0 &&
+                    graph->nodes[j]->op == GGML_OP_UNARY) {
+                    for (int k = j + 1; k < std::min(j + 15, graph->n_nodes); ++k) {
+                        ggml_tensor * mul = graph->nodes[k];
+                        if (mul->op != GGML_OP_MUL || (mul->src[0] != graph->nodes[j] && mul->src[1] != graph->nodes[j])) {
+                            continue;
+                        }
+                        ggml_tensor * other = (mul->src[0] == graph->nodes[j]) ? mul->src[1] : mul->src[0];
+                        // the other src must either be weights or already processed
+                        if (!(other->op == GGML_OP_NONE || used_node_set.find(other) != used_node_set.end())) {
+                            continue;
+                        }
+                        if (!ggml_vk_can_fuse_unary_mul(graph, j, k)) {
+                            continue;
+                        }
+                        current_set.push_back(k);
+                        used[k] = true;
+                        break;
                     }
                 }
             }
