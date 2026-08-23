@@ -1575,6 +1575,16 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ));
     add_opt(common_arg(
+        {"--power"}, "N",
+        string_format("target compute duty cycle percentage, 1..100 (default: %d)", params.power_percent),
+        [](common_params & params, int value) {
+            if (value < 1 || value > 100) {
+                throw std::invalid_argument("invalid value");
+            }
+            params.power_percent = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_POWER"));
+    add_opt(common_arg(
         {"-Cb", "--cpu-mask-batch"}, "M",
         "CPU affinity mask: arbitrarily long hex. Complements cpu-range-batch (default: same as --cpu-mask)",
         [](common_params & params, const std::string & mask) {
