@@ -1143,11 +1143,10 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
             }
             const int32_t n_rows = i_batch_end[seq_id] - i_batch_beg[seq_id] + 1;
 
-            // the previous block decoded its noise tokens at these very positions and left their K/V
-            // behind. injecting now would add a second cell at each position, and since the decoder
-            // runs non-causal both would be attended. drop the stale draft region first: the cache
-            // must hold exactly one injected target state per token, as in the reference.
-            llama_memory_seq_rm(llama_get_memory(ctx_dft), seq_id, batch_in.pos[i_batch_beg[seq_id]], -1);
+            // M-RoPE target positions are tuples whose temporal component can repeat across image
+            // tokens. The 1-D draft cache instead keeps exactly one dense row per target token.
+            // Server-side draft trimming guarantees that its current tail is the next token index.
+            llama_pos pos_next = llama_memory_seq_pos_max(llama_get_memory(ctx_dft), seq_id) + 1;
 
             for (int32_t offset = 0; offset < n_rows; offset += n_ubatch) {
                 const int32_t n_chunk = std::min(n_ubatch, n_rows - offset);
@@ -1212,12 +1211,13 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
                 const float * inp_g = llama_get_embeddings_nextn(ctx_dft);
                 GGML_ASSERT(inp_g && "DFlash encoder produced no output.");
 
-                // inject the DFlash decoder K/V cache at the tokens' target positions
+                // Inject the DFlash decoder K/V cache in dense token space. For text-only batches
+                // this is identical to the target positions; for M-RoPE it avoids repeated positions.
                 batch_inject.n_tokens = n_chunk;
                 std::memcpy(batch_inject.embd, inp_g, (size_t) n_chunk * n_embd_dec * sizeof(float));
 
                 for (int32_t i = 0; i < n_chunk; ++i) {
-                    batch_inject.pos[i]       = batch_in.pos[i_batch_beg[seq_id] + offset + i];
+                    batch_inject.pos[i]       = pos_next++;
                     batch_inject.n_seq_id[i]  = 1;
                     batch_inject.seq_id[i][0] = seq_id;
                     batch_inject.logits[i]    = false;
@@ -1332,11 +1332,24 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
                         }
                         std::discrete_distribution<int32_t> sample(dist.probs.begin(), dist.probs.end());
                         predecessor = sample(selector_rng[seq_id]);
+                        if (dist.probs[predecessor] < params.p_min) {
+                            break;
+                        }
                         result.push_back(dist.ids[predecessor]);
                         dp.dists->push_back(std::move(dist));
                     } else {
                         predecessor = (int32_t) std::distance(scores,
                                 std::max_element(scores, scores + selector_top_k));
+                        if (params.p_min > 0.0f) {
+                            // softmax(scores) at the argmax, i.e. 1 / sum(exp(s_k - s_max))
+                            float sum = 0.0f;
+                            for (int32_t k = 0; k < selector_top_k; ++k) {
+                                sum += std::exp(scores[k] - scores[predecessor]);
+                            }
+                            if (1.0f / sum < params.p_min) {
+                                break;
+                            }
+                        }
                         result.push_back((llama_token) row[predecessor]);
                     }
                 }
@@ -2539,7 +2552,13 @@ common_params common_base_params_to_speculative(const common_params & params) {
     common_params result = params;
 
     if (has_draft) {
-        result.devices               = params_spec.devices;
+        // Preserve the target device selection unless the draft devices were
+        // explicitly configured. Falling back to library auto-selection can
+        // put a shared DFlash tensor on a backend the draft scheduler does not
+        // own, which aborts on heterogeneous or multi-GPU systems.
+        if (!params_spec.devices.empty()) {
+            result.devices = params_spec.devices;
+        }
         result.model                 = params_spec.mparams;
         result.n_gpu_layers          = params_spec.n_gpu_layers;
         result.tensor_buft_overrides = params_spec.tensor_buft_overrides;
@@ -2566,9 +2585,18 @@ common_params common_base_params_to_speculative(const common_params & params) {
     if (has_block_draft) {
         // per-seq output positions: DFlash decodes anchor + n_max masks (n_max + 1); DSpark n_max -> +1 covers both
         const int32_t per_seq = std::max(1, params_spec.n_max + 1);
-        result.n_outputs_max = params.n_parallel * per_seq;
-        result.n_batch  = std::max(result.n_batch,  result.n_outputs_max);
-        result.n_ubatch = std::max(result.n_ubatch, result.n_outputs_max);
+        // The noise block is decoded as a whole under non-causal attention, so it must fit in a single ubatch.
+        const int32_t n_block = params.n_parallel * per_seq;
+        result.n_outputs_max = n_block;
+        result.n_batch = std::max(result.n_batch, n_block);
+
+        // The draft only decodes a small block during generation, so avoid reserving a compute buffer for the
+        // full inherited ubatch. The explicit override wins, while every value is floored to the noise block.
+        const int32_t n_ubatch_dft_cap = 128;
+        const int32_t n_ubatch_dft_req = params_spec.n_ubatch > 0 ? params_spec.n_ubatch
+                                                                  : std::min(result.n_ubatch, n_ubatch_dft_cap);
+        result.n_ubatch = std::max(n_ubatch_dft_req, n_block);
+
         if (params_spec.backend_sampling) {
             result.n_outputs_max_per_seq = per_seq;
         }

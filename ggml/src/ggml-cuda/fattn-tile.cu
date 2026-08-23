@@ -1,6 +1,9 @@
 #include "common.cuh"
 #include "fattn-tile.cuh"
 
+#include <atomic>
+#include <cstdio>
+
 void ggml_cuda_flash_attn_ext_tile(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * K = dst->src[1];
     const ggml_tensor * V = dst->src[2];
@@ -39,7 +42,15 @@ void ggml_cuda_flash_attn_ext_tile(ggml_backend_cuda_context & ctx, ggml_tensor 
         } break;
         case 256: {
             GGML_ASSERT(V->ne[0] == K->ne[0]);
-            ggml_cuda_flash_attn_ext_tile_case<256, 256>(ctx, dst);
+            if (ggml_cuda_fattn_tile_use_gfx1030_q8_0(ggml_cuda_get_device(), dst)) {
+                ggml_cuda_flash_attn_ext_tile_case<256, 256, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0>(ctx, dst);
+                static std::atomic<bool> logged{false};
+                if (!logged.exchange(true, std::memory_order_relaxed)) {
+                    std::fprintf(stderr, "using RDNA2 direct-Q8_0 tiled FlashAttention for D=256 Q=3..8 GQA=6\n");
+                }
+            } else {
+                ggml_cuda_flash_attn_ext_tile_case<256, 256>(ctx, dst);
+            }
         } break;
         case 320: {
             GGML_ASSERT(V->ne[0] == 256);

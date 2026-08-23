@@ -3,3 +3,4 @@
 #include "../fattn-tile.cuh"
 
 DECL_FATTN_TILE_CASE(256, 256);
+DECL_FATTN_TILE_CASE_Q8_0(256, 256);

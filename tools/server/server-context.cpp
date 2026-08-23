@@ -77,7 +77,8 @@ static bool server_gfx1030_spec_target_backend_sampling_profile(const common_par
 
     const bool supported_mode =
         (active_type == COMMON_SPECULATIVE_TYPE_DRAFT_MTP && params.speculative.draft.n_max == 4) ||
-        (active_type == COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH && params.speculative.draft.n_max == 7);
+        (active_type == COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH &&
+            (params.speculative.draft.n_max == 5 || params.speculative.draft.n_max == 7));
     if (!supported_mode || params.split_mode != LLAMA_SPLIT_MODE_TENSOR) {
         return false;
     }
@@ -3347,7 +3348,9 @@ private:
                     ckpt.load_dft(ctx_dft, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
                 }
 
-                if (!llama_memory_seq_rm(llama_get_memory(ctx_dft), slot.id, ckpt.pos_max + 1, -1)) {
+                // The draft cache has one dense row per token. M-RoPE target pos_max can be smaller
+                // than the token count because image spans repeat their temporal position.
+                if (!llama_memory_seq_rm(llama_get_memory(ctx_dft), slot.id, (llama_pos) ckpt.n_tokens, -1)) {
                     GGML_ABORT("failed to remove sequence %d\n", slot.id);
                 }
             }
@@ -3740,7 +3743,7 @@ private:
 
                     SLT_TRC(slot, "cached n_tokens = %d, memory_seq_rm [%d, end)\n", slot.prompt.n_tokens(), p0);
 
-                    slot.mem.seq_rm(slot.id, p0, -1);
+                    slot.mem.seq_rm(slot.id, p0, -1, (llama_pos) slot.prompt.n_tokens());
 
                     // If using an alora, there may be uncached tokens that come
                     // before the invocation sequence. When this happens, the
@@ -4268,7 +4271,7 @@ private:
                             ckpt.load_dft(slot.ctx_dft, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
                         }
 
-                        slot.mem.seq_rm(slot.id, ckpt.pos_max + 1, -1);
+                        slot.mem.seq_rm(slot.id, ckpt.pos_max + 1, -1, (llama_pos) ckpt.n_tokens);
 
                         slot.prompt.tokens.keep_first(ckpt.n_tokens);
                         common_sampler_copy(smpl_save.get(), slot.smpl.get());
@@ -4316,7 +4319,7 @@ private:
             slot.sampled = ids.back(); // last accepted token
             SLT_DBG(slot, "add accepted tokens: sampled=%d, ids.size=%zu, n_draft=%zu\n", slot.sampled, ids.size(), n_draft);
 
-            slot.mem.seq_rm(slot.id, slot.prompt.tokens.pos_next(), -1);
+            slot.mem.seq_rm(slot.id, slot.prompt.tokens.pos_next(), -1, (llama_pos) slot.prompt.n_tokens());
 
             for (size_t i = 0; i < ids.size(); ++i) {
                 completion_token_output result;

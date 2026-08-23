@@ -325,6 +325,8 @@ struct common_params_speculative_draft {
     int32_t n_max = 3; // maximum number of tokens to draft during speculative decoding
     int32_t n_min = 0; // minimum number of draft tokens to use for speculative decoding
 
+    int32_t n_ubatch = 0; // compute ubatch size of the draft context, decoupled from --ubatch-size (0 = auto)
+
     float p_split = 0.1f; // speculative decoding split probability
     float p_min   = 0.0f; // minimum speculative decoding probability (greedy)
 
@@ -987,6 +989,8 @@ struct common_memory {
 
     // aborts execution on failure
     void seq_rm (llama_seq_id seq_id, llama_pos p0, llama_pos p1) const;
+    // M-RoPE target positions can diverge from the dense one-row-per-token draft positions.
+    void seq_rm (llama_seq_id seq_id, llama_pos p0, llama_pos p1, llama_pos p0_dft) const;
     void seq_add(llama_seq_id seq_id, llama_pos p0, llama_pos p1, llama_pos delta) const;
     void seq_cp (llama_seq_id seq_id_src, llama_seq_id seq_id_dst, llama_pos p0, llama_pos p1) const;
 };
