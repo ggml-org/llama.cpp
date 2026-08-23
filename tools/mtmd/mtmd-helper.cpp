@@ -42,6 +42,11 @@
 #ifdef MTMD_VIDEO
 #include "sheredom/subprocess.h"
 #include <thread>
+#ifndef _WIN32
+#include <csignal>
+#include <fcntl.h>
+#include <pthread.h>
+#endif
 #endif
 
 //
@@ -552,10 +557,21 @@ struct mtmd_helper_video {
         // buf is tied to lifetime of mtmd_helper_video, so it's guaranteed to outlive the feeder thread
         void start_feeder(const std::vector<uint8_t> & buf) {
             feeder = std::thread([this, &buf]() {
+#ifndef _WIN32
+                // ffmpeg can exit before it reads all the input, for example when ffprobe already has the metadata.
+                // the write below must fail with EPIPE instead of killing the process with SIGPIPE
+                sigset_t sigpipe_set;
+                sigemptyset(&sigpipe_set);
+                sigaddset(&sigpipe_set, SIGPIPE);
+                pthread_sigmask(SIG_BLOCK, &sigpipe_set, nullptr); // linux: the signal goes to the writing thread
+#endif
                 FILE * f = subprocess_stdin(&proc);
                 if (!f) {
                     return;
                 }
+#ifdef F_SETNOSIGPIPE
+                fcntl(fileno(f), F_SETNOSIGPIPE, 1); // macOS/BSD: the signal goes to the process, so mask it per-fd
+#endif
                 fwrite(buf.data(), 1, buf.size(), f);
                 fclose(f);
                 proc.stdin_file = nullptr; // prevent double-close in subprocess_destroy
