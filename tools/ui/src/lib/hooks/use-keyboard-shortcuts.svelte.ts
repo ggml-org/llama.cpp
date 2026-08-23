@@ -86,12 +86,12 @@ export function useKeyboardShortcuts(callbacks: KeyboardShortcutsCallbacks) {
 			callbacks.navigateToNextConversation?.();
 		}
 
-		if (isCmdOrCtrl && event.shiftKey && event.key === KeyboardKey.ARROW_LEFT) {
+		if (isCmdOrCtrl && event.altKey && event.shiftKey && event.code === KeyboardKey.BRACKET_LEFT) {
 			event.preventDefault();
 			callbacks.navigateToPrevTab?.();
 		}
 
-		if (isCmdOrCtrl && event.shiftKey && event.key === KeyboardKey.ARROW_RIGHT) {
+		if (isCmdOrCtrl && event.altKey && event.shiftKey && event.code === KeyboardKey.BRACKET_RIGHT) {
 			event.preventDefault();
 			callbacks.navigateToNextTab?.();
 		}
