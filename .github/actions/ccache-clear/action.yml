@@ -32,9 +32,16 @@ runs:
         # Install the GitHub CLI if it is not available (e.g. in container jobs)
         if ! command -v gh >/dev/null 2>&1; then
           echo "GitHub CLI not found, installing..."
+          if ! command -v curl >/dev/null 2>&1; then
+            apt-get update >/dev/null 2>&1 || true
+            apt-get install -y curl >/dev/null 2>&1 || true
+          fi
+          mkdir -p -m 755 /etc/apt/keyrings
+          curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | tee /etc/apt/keyrings/githubcli-archive-keyring.gpg >/dev/null
+          chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list
           apt-get update >/dev/null 2>&1 || true
-          (command -v curl >/dev/null 2>&1 || apt-get install -y curl >/dev/null 2>&1) || true
-          curl -fsSL https://cli.github.com/install.sh | bash
+          apt-get install -y gh || { echo "Failed to install GitHub CLI (gh)" >&2; exit 1; }
         fi
         command -v gh >/dev/null 2>&1 || { echo "GitHub CLI (gh) is required but could not be installed" >&2; exit 1; }
 
