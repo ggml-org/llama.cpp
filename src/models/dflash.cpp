@@ -406,13 +406,33 @@ static ggml_tensor * build_dflash2_conv(
 
     const int64_t block_size = n_tokens / n_blocks;
     ggml_context * ctx0 = g.ctx0;
-    hidden = ggml_cont_2d(ctx0, hidden, hidden_size, n_tokens);
-    dynamic = ggml_cont_2d(ctx0, dynamic, dynamic->ne[0], n_tokens);
+    // Both arrive contiguous from the caller in the common case; ggml_cont
+    // would still copy, and this runs 4x per layer.
+    if (!ggml_is_contiguous(hidden) || hidden->ne[1] != n_tokens) {
+        hidden = ggml_cont_2d(ctx0, hidden, hidden_size, n_tokens);
+    }
+    if (!ggml_is_contiguous(dynamic) || dynamic->ne[1] != n_tokens) {
+        dynamic = ggml_cont_2d(ctx0, dynamic, dynamic->ne[0], n_tokens);
+    }
     ggml_tensor * blocks = ggml_reshape_3d(ctx0, hidden, hidden_size, block_size, n_blocks);
     ggml_tensor * grouped = ggml_reshape_3d(ctx0, hidden, group_size, n_groups, n_tokens);
     ggml_tensor * coeffs = ggml_reshape_4d(ctx0, dynamic, n_groups, kernel_size, 2, n_tokens);
     ggml_tensor * coeffs_side = ggml_view_3d(ctx0, coeffs, n_groups, kernel_size, n_tokens,
             coeffs->nb[1], coeffs->nb[3], side * coeffs->nb[2]);
+
+    // All taps' coefficients live in one tensor already, so the contiguous copy
+    // and the group broadcast are done once instead of per tap. The (coeff +
+    // base) form is kept fused: distributing it over the multiply would change
+    // the rounding.
+    ggml_tensor * coeff_all = ggml_cont(ctx0, coeffs_side);
+    coeff_all = ggml_reshape_4d(ctx0, coeff_all, 1, n_groups, kernel_size, n_tokens);
+    coeff_all = ggml_repeat_4d(ctx0, coeff_all, group_size, n_groups, kernel_size, n_tokens);
+
+    ggml_tensor * base_side = ggml_reshape_4d(ctx0,
+            ggml_view_1d(ctx0, base, hidden_size * kernel_size, side * base->nb[2]),
+            group_size, n_groups, kernel_size, 1);
+
+    ggml_tensor * weight_all = ggml_add(ctx0, coeff_all, base_side);
 
     ggml_tensor * result = nullptr;
     for (int64_t tap = 0; tap < kernel_size; ++tap) {
@@ -430,15 +450,11 @@ static ggml_tensor * build_dflash2_conv(
         }
         values = ggml_reshape_2d(ctx0, values, hidden_size, n_tokens);
 
-        ggml_tensor * coeff = ggml_view_2d(ctx0, coeffs_side, n_groups, n_tokens,
-                coeffs_side->nb[2], tap * coeffs_side->nb[1]);
-        coeff = ggml_cont(ctx0, coeff);
-        coeff = ggml_reshape_3d(ctx0, coeff, 1, n_groups, n_tokens);
-        coeff = ggml_reshape_2d(ctx0, ggml_repeat(ctx0, coeff, grouped), hidden_size, n_tokens);
+        ggml_tensor * weight = ggml_reshape_2d(ctx0,
+                ggml_cont(ctx0, ggml_view_4d(ctx0, weight_all, group_size, n_groups, 1, n_tokens,
+                        weight_all->nb[1], weight_all->nb[2], weight_all->nb[3], tap * weight_all->nb[2])),
+                hidden_size, n_tokens);
 
-        ggml_tensor * base_tap = ggml_view_1d(ctx0, base, hidden_size,
-                tap * base->nb[1] + side * base->nb[2]);
-        ggml_tensor * weight = ggml_add(ctx0, coeff, ggml_repeat(ctx0, base_tap, hidden));
         ggml_tensor * term = ggml_mul(ctx0, weight, values);
         result = result ? ggml_add(ctx0, result, term) : term;
     }
@@ -466,68 +482,72 @@ static void build_dflash2_selector(llm_graph_context & g, const llama_model & mo
 
     const int64_t tokens_per_block = n_tokens / n_blocks;
     const int64_t block_size = std::min<int64_t>(tokens_per_block, hparams.dflash_block_size);
-    ggml_tensor * candidates = ggml_top_k(ctx0, res->t_logits, top_k);
+    const int64_t row_used   = top_k + top_k * top_k;
+
+    ggml_tensor * candidates  = ggml_top_k(ctx0, res->t_logits, top_k);
     ggml_tensor * logits_rows = ggml_reshape_3d(ctx0, res->t_logits, 1, res->t_logits->ne[0], n_tokens);
-    ggml_tensor * unary = ggml_reshape_2d(ctx0,
+    ggml_tensor * unary       = ggml_reshape_2d(ctx0,
             ggml_get_rows(ctx0, logits_rows, candidates), top_k, n_tokens);
+    ggml_tensor * hidden      = g.build_lora_mm(model.dflash_selector_hidden, res->t_embd);
 
-    std::vector<ggml_tensor *> candidate_ids(block_size);
-    std::vector<ggml_tensor *> unary_logits(block_size);
-    for (int64_t pos = 1; pos < block_size; ++pos) {
-        candidate_ids[pos] = ggml_cont_2d(ctx0,
-                ggml_view_2d(ctx0, candidates, top_k, n_blocks,
-                    tokens_per_block * candidates->nb[1], pos * candidates->nb[1]),
-                top_k, n_blocks);
-        unary_logits[pos] = ggml_cont_2d(ctx0,
-                ggml_view_2d(ctx0, unary, top_k, n_blocks,
-                    tokens_per_block * unary->nb[1], pos * unary->nb[1]),
-                top_k, n_blocks);
-    }
+    // Everything below indexes [.., tokens_per_block, n_blocks]: the block
+    // position varies fastest, sequences are the outer dimension.
+    ggml_tensor * cand3  = ggml_reshape_3d(ctx0, candidates, top_k, tokens_per_block, n_blocks);
+    ggml_tensor * unary3 = ggml_reshape_3d(ctx0, unary,      top_k, tokens_per_block, n_blocks);
+    ggml_tensor * hid3   = ggml_reshape_3d(ctx0, hidden,     rank,  tokens_per_block, n_blocks);
 
-    ggml_tensor * hidden = g.build_lora_mm(model.dflash_selector_hidden, res->t_embd);
+    // Score a run of block positions at once. A position's score depends only
+    // on the candidate sets at pos-1 and pos, both of which top-k already
+    // produced, so the positions carry no dependency on one another and the
+    // whole run is one batched matmul instead of one per position.
+    auto score_run = [&](int64_t beg_pos, int64_t n_pos, ggml_tensor * pred_ids) {
+        ggml_tensor * ids = ggml_cont(ctx0, ggml_view_3d(ctx0, cand3, top_k, n_pos, n_blocks,
+                    cand3->nb[1], cand3->nb[2], beg_pos * cand3->nb[1]));
+        ggml_tensor * un  = ggml_cont(ctx0, ggml_view_3d(ctx0, unary3, top_k, n_pos, n_blocks,
+                    unary3->nb[1], unary3->nb[2], beg_pos * unary3->nb[1]));
+        ggml_tensor * hid = ggml_cont(ctx0, ggml_view_3d(ctx0, hid3, rank, n_pos, n_blocks,
+                    hid3->nb[1], hid3->nb[2], beg_pos * hid3->nb[1]));
 
-    ggml_tensor * anchor_ids = ggml_view_2d(ctx0, tokens, 1, n_blocks,
-            tokens_per_block * tokens->nb[0], 0);
-    anchor_ids = ggml_cont_1d(ctx0, anchor_ids, n_blocks);
+        const int64_t n_pred = pred_ids->ne[0] / (n_pos * n_blocks);
+
+        ggml_tensor * successor = ggml_reshape_4d(ctx0,
+                ggml_get_rows(ctx0, model.dflash_selector_next, ggml_reshape_1d(ctx0, ids, top_k * n_pos * n_blocks)),
+                rank, top_k, n_pos, n_blocks);
+        ggml_tensor * predecessor = ggml_reshape_4d(ctx0,
+                ggml_get_rows(ctx0, model.dflash_selector_prev, pred_ids),
+                rank, n_pred, n_pos, n_blocks);
+
+        ggml_tensor * hid4  = ggml_reshape_4d(ctx0, hid, rank, 1, n_pos, n_blocks);
+        ggml_tensor * cond  = ggml_mul(ctx0, predecessor, ggml_repeat(ctx0, hid4, predecessor));
+        ggml_tensor * score = ggml_mul_mat(ctx0, successor, cond);
+        if (n_pred == 1) {
+            score = ggml_repeat_4d(ctx0, score, top_k, top_k, n_pos, n_blocks);
+        }
+        ggml_tensor * un4 = ggml_reshape_4d(ctx0, un, top_k, 1, n_pos, n_blocks);
+        score = ggml_add(ctx0, score, ggml_repeat(ctx0, un4, score));
+
+        ggml_tensor * row = ggml_concat(ctx0,
+                ggml_cast(ctx0, ids, GGML_TYPE_F32),
+                ggml_reshape_3d(ctx0, score, top_k * top_k, n_pos, n_blocks), 0);
+        return ggml_pad(ctx0, row, n_embd - row_used, 0, 0, 0);
+    };
 
     ggml_tensor * packed = ggml_fill(ctx0,
             ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, n_embd, 1, n_blocks), 0.0f);
 
-    for (int64_t pos = 1; pos < block_size; ++pos) {
-        ggml_tensor * ids = candidate_ids[pos];
-        ggml_tensor * unary_pos = unary_logits[pos];
-        ggml_tensor * successor = ggml_get_rows(ctx0, model.dflash_selector_next,
-                ggml_reshape_1d(ctx0, ids, top_k * n_blocks));
-        successor = ggml_reshape_3d(ctx0, successor, rank, top_k, n_blocks);
-
-        ggml_tensor * hidden_pos = ggml_cont(ctx0, ggml_view_2d(ctx0, hidden, rank, n_blocks,
-                tokens_per_block * hidden->nb[1], pos * hidden->nb[1]));
-        hidden_pos = ggml_reshape_3d(ctx0, hidden_pos, rank, 1, n_blocks);
-
-        ggml_tensor * predecessor;
-        if (pos == 1) {
-            predecessor = ggml_get_rows(ctx0, model.dflash_selector_prev, anchor_ids);
-            predecessor = ggml_reshape_3d(ctx0, predecessor, rank, 1, n_blocks);
-        } else {
-            predecessor = ggml_get_rows(ctx0, model.dflash_selector_prev,
-                    ggml_reshape_1d(ctx0, candidate_ids[pos - 1], top_k * n_blocks));
-            predecessor = ggml_reshape_3d(ctx0, predecessor, rank, top_k, n_blocks);
-        }
-
-        ggml_tensor * conditioned = ggml_mul(ctx0, predecessor, ggml_repeat(ctx0, hidden_pos, predecessor));
-        ggml_tensor * scores = ggml_mul_mat(ctx0, successor, conditioned);
-        if (pos == 1) {
-            scores = ggml_repeat_4d(ctx0, scores, top_k, top_k, n_blocks, 1);
-        }
-        ggml_tensor * unary_3d = ggml_reshape_3d(ctx0, unary_pos, top_k, 1, n_blocks);
-        scores = ggml_add(ctx0, scores, ggml_repeat(ctx0, unary_3d, scores));
-
-        ggml_tensor * row = ggml_concat(ctx0,
-                ggml_cast(ctx0, ids, GGML_TYPE_F32),
-                ggml_reshape_2d(ctx0, scores, top_k * top_k, n_blocks), 0);
-        row = ggml_pad(ctx0, row, n_embd - row->ne[0], 0, 0, 0);
-        row = ggml_reshape_3d(ctx0, row, n_embd, 1, n_blocks);
-        packed = ggml_concat(ctx0, packed, row, 1);
+    if (block_size > 1) {
+        // Position 1 alone: its predecessor is the anchor token, one id per
+        // sequence rather than a candidate set.
+        ggml_tensor * anchor_ids = ggml_cont_1d(ctx0,
+                ggml_view_2d(ctx0, tokens, 1, n_blocks, tokens_per_block * tokens->nb[0], 0), n_blocks);
+        packed = ggml_concat(ctx0, packed, score_run(1, 1, anchor_ids), 1);
+    }
+    if (block_size > 2) {
+        ggml_tensor * prev_ids = ggml_reshape_1d(ctx0,
+                ggml_cont(ctx0, ggml_view_3d(ctx0, cand3, top_k, block_size - 2, n_blocks,
+                        cand3->nb[1], cand3->nb[2], cand3->nb[1])),
+                top_k * (block_size - 2) * n_blocks);
+        packed = ggml_concat(ctx0, packed, score_run(2, block_size - 2, prev_ids), 1);
     }
 
     packed = ggml_reshape_2d(ctx0, packed, n_embd, block_size * n_blocks);
