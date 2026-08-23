@@ -353,3 +353,6 @@ export { remToPx } from './css';
 
 // Audio format helper (used by agentic store and chat service)
 export { getAudioInputFormat } from './audio-format';
+
+// Skills budget chip (budget status as a diagnostics-block entry)
+export { deriveSkillBudgetChip, type SkillBudgetChip } from './skill-budget-chip';

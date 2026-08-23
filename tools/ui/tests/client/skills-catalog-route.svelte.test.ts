@@ -3,13 +3,14 @@
 import SkillsPage from '../../src/routes/skills/+page.svelte';
 import SkillsPageWrapper from './components/SkillsPageWrapper.svelte';
 import SkillCatalogList from '$lib/components/app/skills/SkillCatalogList.svelte';
+import SkillDiagnosticsPanel from '$lib/components/app/skills/SkillDiagnosticsPanel.svelte';
 import { CONFIG_LOCALSTORAGE_KEY } from '$lib/constants';
 import { serializeSkillCatalogEnvelope } from '$lib/services/skills.service';
 import { conversationsStore } from '$lib/stores/conversations.svelte';
 import { modelsStore } from '$lib/stores/models.svelte';
 import { settingsStore } from '$lib/stores/settings.svelte';
 import { skillsStore } from '$lib/stores/skills.svelte';
-import type { SkillCatalogEntry, SkillCatalogResponse } from '$lib/types';
+import type { SkillCatalogEntry, SkillCatalogResponse, SkillDiagnostic } from '$lib/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-svelte';
 import { catalogOf, deferredRead, jsonResponse, makeCatalog, makeEntry } from '../fixtures/skills';
@@ -425,5 +426,93 @@ describe('SkillCatalogList badges', () => {
 		expect(bodyText()).toContain('16 bytes');
 		await expect.element(screen.getByRole('switch', { name: 'Enable gated' })).toBeInTheDocument();
 		expect(screen.getByRole('button', { name: /gated/ }).query()).not.toBeNull();
+	});
+});
+
+describe('SkillDiagnosticsPanel', () => {
+	function warning(code: string, message: string): SkillDiagnostic {
+		return { code, message, severity: 'warning' };
+	}
+
+	function error(code: string, message: string): SkillDiagnostic {
+		return { code, message, severity: 'error' };
+	}
+
+	it('always renders errors and a single warning inline, with no collapse chip', async () => {
+		render(SkillDiagnosticsPanel, {
+			props: {
+				budgetChip: null,
+				diagnostics: [error('e1', 'error one'), warning('w1', 'warning one')],
+				dismissed: false,
+				onDismiss: vi.fn()
+			}
+		});
+
+		const text = bodyText();
+
+		expect(text).toContain('error one');
+		expect(text).toContain('warning one');
+		expect(text).not.toContain('warnings');
+	});
+
+	it('collapses 2+ warnings behind a summary chip, expandable to the full list', async () => {
+		const screen = await render(SkillDiagnosticsPanel, {
+			props: {
+				budgetChip: null,
+				diagnostics: [warning('w1', 'warning one'), warning('w2', 'warning two')],
+				dismissed: false,
+				onDismiss: vi.fn()
+			}
+		});
+
+		expect(bodyText()).toContain('2 warnings');
+		expect(bodyText()).not.toContain('warning one');
+
+		await screen.getByTestId('skill-diagnostics-warnings-toggle').click();
+
+		expect(bodyText()).toContain('warning one');
+		expect(bodyText()).toContain('warning two');
+	});
+
+	it('renders the budget chip above errors and warnings, excluded from the warnings count', async () => {
+		const screen = await render(SkillDiagnosticsPanel, {
+			props: {
+				budgetChip: { detail: 'exceeds budget detail text', label: 'Partial fit' },
+				diagnostics: [
+					error('e1', 'error one'),
+					warning('w1', 'warning one'),
+					warning('w2', 'warning two')
+				],
+				dismissed: false,
+				onDismiss: vi.fn()
+			}
+		});
+
+		const text = bodyText();
+		const order = [text.indexOf('Partial fit'), text.indexOf('error one'), text.indexOf('2 warnings')];
+
+		expect(order[0]).toBeGreaterThanOrEqual(0);
+		expect(order[0]).toBeLessThan(order[1]);
+		expect(order[1]).toBeLessThan(order[2]);
+		await expect
+			.element(screen.getByTitle('exceeds budget detail text'))
+			.toBeInTheDocument();
+	});
+
+	it('renders nothing when dismissed, and calls onDismiss from the dismiss control', async () => {
+		const onDismiss = vi.fn();
+		const screen = await render(SkillDiagnosticsPanel, {
+			props: { budgetChip: null, diagnostics: [error('e1', 'error one')], dismissed: false, onDismiss }
+		});
+
+		await screen.getByRole('button', { name: 'Dismiss diagnostics' }).click();
+		expect(onDismiss).toHaveBeenCalledOnce();
+
+		screen.unmount();
+
+		await render(SkillDiagnosticsPanel, {
+			props: { budgetChip: null, diagnostics: [error('e1', 'error one')], dismissed: true, onDismiss }
+		});
+		expect(bodyText()).not.toContain('error one');
 	});
 });

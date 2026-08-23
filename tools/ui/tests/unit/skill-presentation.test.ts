@@ -6,6 +6,8 @@ import {
 	getInitialExpandedFolderPaths
 } from '$lib/components/app/skills/skill-resource-presentation';
 import { normalizeSkillDescription } from '$lib/utils/formatters';
+import { deriveSkillBudgetChip } from '$lib/utils/skill-budget-chip';
+import type { SkillPackedCatalog } from '$lib/types';
 import { describe, expect, it } from 'vitest';
 
 describe('skill resource presentation', () => {
@@ -151,5 +153,41 @@ describe('normalizeSkillDescription', () => {
 		expect(normalizeSkillDescription('')).toBe('');
 		expect(normalizeSkillDescription('   ')).toBe('');
 		expect(normalizeSkillDescription('\t\n \t ')).toBe('');
+	});
+});
+
+describe('deriveSkillBudgetChip', () => {
+	function packed(overrides: Partial<SkillPackedCatalog> = {}): SkillPackedCatalog {
+		return {
+			envelope: '<skills_catalog/>',
+			estimated: false,
+			fullTokens: 100,
+			included: 2,
+			total: 2,
+			...overrides
+		};
+	}
+
+	it('returns null when nothing is packed yet or the full catalog fits the budget', () => {
+		expect(deriveSkillBudgetChip(null, 2000)).toBeNull();
+		expect(deriveSkillBudgetChip(packed({ included: 2, total: 2 }), 2000)).toBeNull();
+	});
+
+	it('returns a "Tools disabled" chip when the budget is 0', () => {
+		const chip = deriveSkillBudgetChip(packed({ fullTokens: null }), 0);
+
+		expect(chip?.label).toBe('Tools disabled');
+		expect(chip?.detail).toContain('budget is 0 tokens');
+	});
+
+	it('returns a "Partial fit" chip with counts and estimate label when the catalog exceeds the budget', () => {
+		const chip = deriveSkillBudgetChip(
+			packed({ estimated: true, fullTokens: 5000, included: 3, total: 8 }),
+			2000
+		);
+
+		expect(chip?.label).toBe('Partial fit');
+		expect(chip?.detail).toContain('5,000 tokens (estimated)');
+		expect(chip?.detail).toContain('3 of 8 skills are included');
 	});
 });
