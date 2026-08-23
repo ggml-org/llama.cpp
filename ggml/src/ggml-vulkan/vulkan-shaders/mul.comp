@@ -20,19 +20,7 @@ void main() {
         uint i00, i01, i02, i03;
         get_indices(idx, i00, i01, i02, i03);
 
-        FLOAT_TYPE a = FLOAT_TYPE(data_a[get_aoffset() + src0_idx(i00, i01, i02, i03)]);
-        FLOAT_TYPE b = FLOAT_TYPE(data_b[get_boffset() + src1_idx(i00, i01, i02, i03)]);
-        // param3: 0=plain, 1=sigmoid(b), 2=silu(b), 3=softplus(b)
-        if (p.param3 == 1) {
-            b = FLOAT_TYPE(1.0f / (1.0f + exp(-float(b))));
-        } else if (p.param3 == 2) {
-            const float x = float(b);
-            b = FLOAT_TYPE(x / (1.0f + exp(-x)));
-        } else if (p.param3 == 3) {
-            const float x = float(b);
-            b = FLOAT_TYPE((x > 20.0f) ? x : log(1.0f + exp(x)));
-        }
-        data_d[get_doffset() + dst_idx(i00, i01, i02, i03)] = D_TYPE(a * b);
+        data_d[get_doffset() + dst_idx(i00, i01, i02, i03)] = D_TYPE(FLOAT_TYPE(data_a[get_aoffset() + src0_idx(i00, i01, i02, i03)]) * FLOAT_TYPE(data_b[get_boffset() + src1_idx(i00, i01, i02, i03)]));
 
         idx += num_threads;
     }

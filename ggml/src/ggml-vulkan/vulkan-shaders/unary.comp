@@ -1,7 +1,11 @@
 #version 450
 
 #include "types.glsl"
+#if defined(UNARY_MUL_FUSION)
+#include "generic_binary_head.glsl"
+#else
 #include "generic_unary_head.glsl"
+#endif
 
 layout(local_size_x = 512, local_size_y = 1, local_size_z = 1) in;
 
@@ -123,6 +127,7 @@ float op_gelu_erf(float a) {
     return 0.5f * a * (1.0f + sign_x * y);
 }
 
+#if !defined(UNARY_MUL_FUSION)
 float op_xielu(float x) {
     const float alpha_n = p.param1;
     const float alpha_p = p.param2;
@@ -136,6 +141,7 @@ float op_xielu(float x) {
     const float min_x_eps = min(x, eps);
     return (op_expm1(min_x_eps) - x) * alpha_n + beta * x;
 }
+#endif
 
 float op_floor(float x) {
     return floor(x);
@@ -161,8 +167,16 @@ void main() {
         return;
     }
 
+#if defined(UNARY_MUL_FUSION)
+    uint i00, i01, i02, i03;
+    get_indices(idx, i00, i01, i02, i03);
+
+    data_d[get_doffset() + dst_idx(i00, i01, i02, i03)] =
+        D_TYPE(FLOAT_TYPE(OP(float(data_a[get_aoffset() + src0_idx(i00, i01, i02, i03)]))) * FLOAT_TYPE(data_b[get_boffset() + src1_idx(i00, i01, i02, i03)]));
+#else
     const uint a_idx = get_aoffset() + src0_idx(idx);
     const uint d_idx = get_doffset() + dst_idx(idx);
 
     data_d[d_idx] = D_TYPE(OP(float(data_a[a_idx])));
+#endif
 }

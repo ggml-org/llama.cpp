@@ -1004,6 +1004,10 @@ struct vk_device_struct {
     vk_pipeline pipeline_trunc[2];
     vk_pipeline pipeline_sgn[2];
 
+    vk_pipeline pipeline_sigmoid_mul[2];
+    vk_pipeline pipeline_silu_mul[2];
+    vk_pipeline pipeline_softplus_mul[2];
+
     vk_pipeline pipeline_add1_f16_f16;
     vk_pipeline pipeline_add1_f16_f32;
     vk_pipeline pipeline_add1_f32_f32;
@@ -2388,8 +2392,6 @@ struct ggml_backend_vk_context {
     int fused_ops_write_mask {};
     topk_moe_mode fused_topk_moe_mode {};
     bool fused_topk_moe_scale {};
-    // UNARY skipped; MUL will dispatch fused act*mul
-    const ggml_tensor * pending_unary_mul {};
 
     // for GGML_VK_PERF_LOGGER
     std::unique_ptr<vk_perf_logger> perf_logger;
@@ -5667,6 +5669,15 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
     CREATE_UNARY(exp)
     CREATE_UNARY(expm1)
 #undef CREATE_UNARY
+
+#define CREATE_UNARY_MUL(name) \
+    ggml_vk_create_pipeline(device, device->pipeline_ ## name ## _mul[0], #name "_mul_f32", name ## _mul_f32_len, name ## _mul_f32_data, "main", 3, sizeof(vk_op_binary_push_constants), {512, 1, 1}, {1}, 1); \
+    ggml_vk_create_pipeline(device, device->pipeline_ ## name ## _mul[1], #name "_mul_f16", name ## _mul_f16_len, name ## _mul_f16_data, "main", 3, sizeof(vk_op_binary_push_constants), {512, 1, 1}, {1}, 1);
+
+    CREATE_UNARY_MUL(sigmoid)
+    CREATE_UNARY_MUL(silu)
+    CREATE_UNARY_MUL(softplus)
+#undef CREATE_UNARY_MUL
 
     ggml_vk_create_pipeline(device, device->pipeline_add1_f16_f16, "add1_f16_f16", add1_f16_f16_len, add1_f16_f16_data, "main", 3, sizeof(vk_op_binary_push_constants), {512, 1, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_add1_f16_f32, "add1_f16_f32", add1_f16_f32_len, add1_f16_f32_data, "main", 3, sizeof(vk_op_binary_push_constants), {512, 1, 1}, {}, 1);
@@ -11902,7 +11913,7 @@ template <> void init_pushconst_tensor_offsets(ggml_backend_vk_context * ctx, vk
 }
 
 template<typename PC>
-static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * src2, const ggml_tensor * src3, ggml_tensor * dst, ggml_op op, PC&& pc) {
+static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * src2, const ggml_tensor * src3, ggml_tensor * dst, ggml_op op, PC&& pc, vk_pipeline pipeline_override = nullptr) {
     VK_LOG_DEBUG("ggml_vk_op_f32((" << src0 << ", name=" << src0->name << ", type=" << src0->type << ", ne0=" << src0->ne[0] << ", ne1=" << src0->ne[1] << ", ne2=" << src0->ne[2] << ", ne3=" << src0->ne[3] << ", nb0=" << src0->nb[0] << ", nb1=" << src0->nb[1] << ", nb2=" << src0->nb[2] << ", nb3=" << src0->nb[3];
     if (src1 != nullptr) {
         std::cerr << "), (" << src1 << ", name=" << src1->name << ", type=" << src1->type << ", ne0=" << src1->ne[0] << ", ne1=" << src1->ne[1] << ", ne2=" << src1->ne[2] << ", ne3=" << src1->ne[3] << ", nb0=" << src1->nb[0] << ", nb1=" << src1->nb[1] << ", nb2=" << src1->nb[2] << ", nb3=" << src1->nb[3];
@@ -11933,7 +11944,12 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
 
     init_pushconst_fastdiv(pc);
 
-    vk_pipeline pipeline = ggml_vk_op_get_pipeline(ctx, src0, src1, src2, dst, op);
+    vk_pipeline pipeline;
+    if (pipeline_override) {
+        pipeline = pipeline_override;
+    } else {
+        pipeline = ggml_vk_op_get_pipeline(ctx, src0, src1, src2, dst, op);
+    }
 
     if (pipeline == nullptr) {
         std::cerr << "ggml_vulkan: Error: Missing op: " << ggml_op_name(op) << " for " << ggml_type_name(src0->type);
@@ -12493,8 +12509,7 @@ static void ggml_vk_sub(ggml_backend_vk_context * ctx, vk_context& subctx, const
     });
 }
 
-// act: 0=plain, 1=sigmoid(src1), 2=silu(src1), 3=softplus(src1)
-static void ggml_vk_mul(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst, int32_t act = 0) {
+static void ggml_vk_mul(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
     const uint32_t src0_type_size = ggml_type_size(src0->type);
     const uint32_t src1_type_size = ggml_type_size(src1->type);
     const uint32_t dst_type_size = ggml_type_size(dst->type);
@@ -12505,22 +12520,18 @@ static void ggml_vk_mul(ggml_backend_vk_context * ctx, vk_context& subctx, const
         (uint32_t)src1->ne[0], (uint32_t)src1->ne[1], (uint32_t)src1->ne[2],(uint32_t)src1->ne[3], (uint32_t)src1->nb[0] / src1_type_size, (uint32_t)src1->nb[1] / src1_type_size, (uint32_t)src1->nb[2] / src1_type_size, (uint32_t)src1->nb[3] / src1_type_size,
         (uint32_t) dst->ne[0], (uint32_t) dst->ne[1], (uint32_t) dst->ne[2],(uint32_t) dst->ne[3], (uint32_t) dst->nb[0] /  dst_type_size, (uint32_t) dst->nb[1] /  dst_type_size, (uint32_t) dst->nb[2] /  dst_type_size, (uint32_t) dst->nb[3] /  dst_type_size,
         0,
-        0.0f, 0.0f, act,
+        0.0f, 0.0f, 0,
     });
 }
 
-static int32_t ggml_vk_unary_mul_act(const ggml_tensor * unary) {
-    switch (ggml_get_unary_op(unary)) {
-        case GGML_UNARY_OP_SIGMOID:  return 1;
-        case GGML_UNARY_OP_SILU:     return 2;
-        case GGML_UNARY_OP_SOFTPLUS: return 3;
-        default:                     return 0;
-    }
-}
-
 static bool ggml_vk_should_fuse_unary_mul(const ggml_tensor * unary, const ggml_tensor * mul) {
-    if (ggml_vk_unary_mul_act(unary) == 0) {
-        return false;
+    switch (ggml_get_unary_op(unary)) {
+        case GGML_UNARY_OP_SIGMOID:
+        case GGML_UNARY_OP_SILU:
+        case GGML_UNARY_OP_SOFTPLUS:
+            break;
+        default:
+            return false;
     }
     if (unary->type != GGML_TYPE_F32 && unary->type != GGML_TYPE_F16) {
         return false;
@@ -12541,29 +12552,33 @@ static bool ggml_vk_should_fuse_unary_mul(const ggml_tensor * unary, const ggml_
     return true;
 }
 
-static ggml_tensor * ggml_vk_find_unary_mul_consumer(const ggml_cgraph * cgraph, int unary_idx) {
-    if (!ggml_node_has_n_uses(cgraph, unary_idx, 1)) {
-        return nullptr;
-    }
-    const ggml_tensor * unary = cgraph->nodes[unary_idx];
-    ggml_tensor * found = nullptr;
-    for (int i = unary_idx + 1; i < cgraph->n_nodes; ++i) {
-        ggml_tensor * n = cgraph->nodes[i];
-        if (n->src[0] != unary && n->src[1] != unary) {
-            continue;
-        }
-        if (n->op != GGML_OP_MUL || found != nullptr) {
-            return nullptr;
-        }
-        found = n;
-    }
-    return found;
-}
+static void ggml_vk_unary_mul(ggml_backend_vk_context * ctx, vk_context& subctx, const struct ggml_cgraph * cgraph, int node_idx) {
+    const ggml_tensor * unary = cgraph->nodes[node_idx];
+    ggml_tensor * mul = cgraph->nodes[node_idx + 1];
+    const ggml_tensor * src0 = unary->src[0];
+    const ggml_tensor * src1 = (mul->src[0] == unary) ? mul->src[1] : mul->src[0];
 
-static void ggml_vk_unary_mul(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * unary, ggml_tensor * mul) {
-    const ggml_tensor * unary_src = unary->src[0];
-    const ggml_tensor * other = (mul->src[0] == unary) ? mul->src[1] : mul->src[0];
-    ggml_vk_mul(ctx, subctx, other, unary_src, mul, ggml_vk_unary_mul_act(unary));
+    const bool f16 = src0->type == GGML_TYPE_F16;
+    vk_pipeline pipeline;
+    switch (ggml_get_unary_op(unary)) {
+        case GGML_UNARY_OP_SIGMOID:  pipeline = ctx->device->pipeline_sigmoid_mul[f16]; break;
+        case GGML_UNARY_OP_SILU:     pipeline = ctx->device->pipeline_silu_mul[f16];     break;
+        case GGML_UNARY_OP_SOFTPLUS: pipeline = ctx->device->pipeline_softplus_mul[f16]; break;
+        default:                     GGML_ABORT("fatal error");
+    }
+
+    const uint32_t src0_type_size = ggml_type_size(src0->type);
+    const uint32_t src1_type_size = ggml_type_size(src1->type);
+    const uint32_t dst_type_size = ggml_type_size(mul->type);
+
+    ggml_vk_op_f32<vk_op_binary_push_constants>(ctx, subctx, src0, src1, nullptr, nullptr, mul, GGML_OP_UNARY, {
+        (uint32_t)ggml_nelements(src0),
+        (uint32_t)src0->ne[0], (uint32_t)src0->ne[1], (uint32_t)src0->ne[2],(uint32_t)src0->ne[3], (uint32_t)src0->nb[0] / src0_type_size, (uint32_t)src0->nb[1] / src0_type_size, (uint32_t)src0->nb[2] / src0_type_size, (uint32_t)src0->nb[3] / src0_type_size,
+        (uint32_t)src1->ne[0], (uint32_t)src1->ne[1], (uint32_t)src1->ne[2],(uint32_t)src1->ne[3], (uint32_t)src1->nb[0] / src1_type_size, (uint32_t)src1->nb[1] / src1_type_size, (uint32_t)src1->nb[2] / src1_type_size, (uint32_t)src1->nb[3] / src1_type_size,
+        (uint32_t) mul->ne[0], (uint32_t) mul->ne[1], (uint32_t) mul->ne[2],(uint32_t) mul->ne[3], (uint32_t) mul->nb[0] /  dst_type_size, (uint32_t) mul->nb[1] /  dst_type_size, (uint32_t) mul->nb[2] /  dst_type_size, (uint32_t) mul->nb[3] /  dst_type_size,
+        0,
+        0.0f, 0.0f, 0,
+    }, pipeline);
 }
 
 static void ggml_vk_div(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
@@ -15414,11 +15429,6 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgr
     case GGML_OP_MUL:
         if (ctx->num_additional_fused_ops) {
             ggml_vk_snake_dispatch_fused(ctx, compute_ctx, cgraph, node_idx);
-        } else if (ctx->pending_unary_mul &&
-                   (src0 == ctx->pending_unary_mul || src1 == ctx->pending_unary_mul) &&
-                   ggml_vk_should_fuse_unary_mul(ctx->pending_unary_mul, node)) {
-            ggml_vk_unary_mul(ctx, compute_ctx, ctx->pending_unary_mul, node);
-            ctx->pending_unary_mul = nullptr;
         } else {
             ggml_vk_mul(ctx, compute_ctx, src0, src1, node);
         }
@@ -15535,18 +15545,8 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgr
             break;
         }
         if (ctx->num_additional_fused_ops) {
-            ggml_vk_unary_mul(ctx, compute_ctx, node, cgraph->nodes[node_idx + 1]);
+            ggml_vk_unary_mul(ctx, compute_ctx, cgraph, node_idx);
             break;
-        }
-        if (!ctx->device->disable_fusion) {
-            ggml_tensor * consumer = ggml_vk_find_unary_mul_consumer(cgraph, node_idx);
-            // skip if the MUL is the next node: adjacent fuse already ran (or was disabled)
-            if (consumer &&
-                (node_idx + 1 >= cgraph->n_nodes || consumer != cgraph->nodes[node_idx + 1]) &&
-                ggml_vk_should_fuse_unary_mul(node, consumer)) {
-                ctx->pending_unary_mul = node;
-                break;
-            }
         }
 
         switch (ggml_get_unary_op(node)) {
@@ -17048,7 +17048,6 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
     ctx->prealloc_size_add_rms_partials_offset = 0;
     ctx->do_add_rms_partials = false;
     ctx->do_add_rms_partials_offset_calculation = false;
-    ctx->pending_unary_mul = nullptr;
 
     int last_node = cgraph->n_nodes - 1;
 
@@ -17254,8 +17253,7 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
                 switch (ggml_get_unary_op(cgraph->nodes[i])) {
                     case GGML_UNARY_OP_SIGMOID:  fusion_string = "SIGMOID_MUL";  break;
                     case GGML_UNARY_OP_SILU:     fusion_string = "SILU_MUL";     break;
-                    case GGML_UNARY_OP_SOFTPLUS: fusion_string = "SOFTPLUS_MUL"; break;
-                    default:                     fusion_string = "UNARY_MUL";    break;
+                    default:                     fusion_string = "SOFTPLUS_MUL"; break;
                 }
                 op_srcs_fused_elementwise[0] = true;
                 op_srcs_fused_elementwise[1] = true;
