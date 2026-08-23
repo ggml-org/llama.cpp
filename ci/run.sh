@@ -307,10 +307,19 @@ function gg_run_test_llama_archs_tensor_split {
 
     set -e
 
-    GGML_CUDA_DEVICES=1 ./build-ci-release/bin/test-llama-archs -s 1 2>&1
-    GGML_CUDA_DEVICES=2 ./build-ci-release/bin/test-llama-archs -s 1 2>&1
-    GGML_CUDA_DEVICES=3 ./build-ci-release/bin/test-llama-archs -s 1 2>&1
-    GGML_CUDA_DEVICES=4 ./build-ci-release/bin/test-llama-archs -s 1 2>&1
+    if [ ! -z ${GG_BUILD_CUDA} ]; then
+        GGML_CUDA_DEVICES=1 ./build-ci-release/bin/test-llama-archs -s 1 2>&1
+        GGML_CUDA_DEVICES=2 ./build-ci-release/bin/test-llama-archs -s 1 2>&1
+        GGML_CUDA_DEVICES=3 ./build-ci-release/bin/test-llama-archs -s 1 2>&1
+        GGML_CUDA_DEVICES=4 ./build-ci-release/bin/test-llama-archs -s 1 2>&1
+    fi
+
+    if [ ! -z ${GG_BUILD_METAL} ]; then
+        GGML_METAL_DEVICES=1 ./build-ci-release/bin/test-llama-archs -s 1 2>&1
+        GGML_METAL_DEVICES=2 ./build-ci-release/bin/test-llama-archs -s 1 2>&1
+        GGML_METAL_DEVICES=3 ./build-ci-release/bin/test-llama-archs -s 1 2>&1
+        GGML_METAL_DEVICES=4 ./build-ci-release/bin/test-llama-archs -s 1 2>&1
+    fi
 
     set +e
 }
@@ -318,7 +327,7 @@ function gg_run_test_llama_archs_tensor_split {
 function gg_sum_test_llama_archs_tensor_split {
     gg_printf '### %s\n\n' "${ci}"
 
-    gg_printf 'Runs test-llama-archs with 1 to 4 CUDA devices\n'
+    gg_printf 'Runs test-llama-archs with 1 to 4 devices\n'
     gg_printf '- status: %s\n' "$(cat $OUT/${ci}.exit)"
     gg_printf '```\n'
     gg_printf '%s\n' "$(cat $OUT/${ci}.log)"
@@ -776,9 +785,7 @@ ret=0
 test $ret -eq 0 && gg_run ctest_debug
 test $ret -eq 0 && gg_run ctest_release
 
-if [ ! -z ${GG_BUILD_CUDA} ]; then
-    test $ret -eq 0 && gg_run test_llama_archs_tensor_split
-fi
+test $ret -eq 0 && gg_run test_llama_archs_tensor_split
 
 if [ ! -z ${GG_BUILD_HIGH_PERF} ]; then
     test $ret -eq 0 && gg_run test_backend_ops_cpu
