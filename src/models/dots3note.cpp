@@ -722,11 +722,10 @@ llama_model_dots3note::graph_mtp::graph_mtp(const llama_model & model, const llm
     GGML_ASSERT(head_norm_w && "DOTS3NOTE MTP: missing both nextn.shared_head_norm and output_norm");
     cur = build_norm(cur, head_norm_w, nullptr, LLM_NORM_RMS, -1);
 
+    cur = ggml_get_rows(ctx0, cur, inp_out_ids);
+
     cb(cur, "h_nextn", -1);
     res->t_h_nextn = cur;
-
-    cur = ggml_get_rows(ctx0, cur, inp_out_ids);
-    cb(cur, "mtp_shared_head_norm", -1);
 
     cur = ggml_mul_mat(ctx0, model.output, cur);
     cb(cur, "result_output", -1);
