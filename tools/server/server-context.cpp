@@ -77,7 +77,8 @@ static bool server_gfx1030_spec_target_backend_sampling_profile(const common_par
 
     const bool supported_mode =
         (active_type == COMMON_SPECULATIVE_TYPE_DRAFT_MTP && params.speculative.draft.n_max == 4) ||
-        (active_type == COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH && params.speculative.draft.n_max == 7);
+        (active_type == COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH &&
+            (params.speculative.draft.n_max == 5 || params.speculative.draft.n_max == 7));
     if (!supported_mode || params.split_mode != LLAMA_SPLIT_MODE_TENSOR) {
         return false;
     }

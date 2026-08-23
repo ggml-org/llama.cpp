@@ -1380,6 +1380,35 @@ static void mul_mat_vec_q_switch_ncols_dst(
         } break;
         case 6: {
             constexpr int c_ncols_dst = 6;
+            if constexpr (use_gfx1030_native &&
+                    (type == GGML_TYPE_Q4_0 || type == GGML_TYPE_Q4_K || type == GGML_TYPE_Q6_K)) {
+                static const bool dflash_rows2_enabled = [] {
+                    const char * value = std::getenv("GGML_HIP_GFX1030_DFLASH_MMVQ_ROWS2");
+                    return ggml_cuda_rdna2_auto_enabled() && value != nullptr && std::atoi(value) != 0;
+                }();
+                if (dflash_rows2_enabled) {
+                    // DFlash Q4_K_M uses six output rows. Reuse each weight tile
+                    // across two rows instead of assigning one wave/block per row.
+                    constexpr int rows_per_block = 2;
+                    std::pair<dim3, dim3> dims = calc_launch_params<type,
+                        MMVQ_Q8_1_BLOCK_SIZE_STANDARD, use_gfx1030_native, rows_per_block>(
+                            c_ncols_dst, nrows_x, nchannels_dst, nsamples_dst, warp_size, table_id);
+                    mul_mat_vec_q_switch_fusion<type, c_ncols_dst, false,
+                        MMVQ_Q8_1_BLOCK_SIZE_STANDARD, false, use_gfx1030_native, 0, rows_per_block>(
+                            vx, vy, sum_hi, ids, fusion, dst, ncols_x, nchannels_y_fd,
+                            stride_row_x, stride_col_y, stride_col_dst, channel_ratio_fd,
+                            stride_channel_x, stride_channel_y, stride_channel_dst,
+                            sample_ratio_fd, stride_sample_x, stride_sample_y, stride_sample_dst,
+                            dims.first, dims.second, 0, ids_stride, stream);
+                    static std::atomic<bool> logged{false};
+                    if (!logged.exchange(true, std::memory_order_relaxed)) {
+                        std::fprintf(stderr,
+                            "using RDNA2 DFlash width-six MMVQ rows/block=2 type=%d ncols=%d nrows=%d\n",
+                            (int) type, ncols_x, nrows_x);
+                    }
+                    break;
+                }
+            }
             std::pair<dim3, dim3> dims = calc_launch_params<type, MMVQ_Q8_1_BLOCK_SIZE_STANDARD, use_gfx1030_native>(c_ncols_dst, nrows_x, nchannels_dst, nsamples_dst, warp_size, table_id);
             mul_mat_vec_q_switch_fusion<type, c_ncols_dst, false, MMVQ_Q8_1_BLOCK_SIZE_STANDARD, false, use_gfx1030_native>(vx, vy, sum_hi, ids, fusion, dst, ncols_x, nchannels_y_fd, stride_row_x, stride_col_y, stride_col_dst,
                  channel_ratio_fd, stride_channel_x, stride_channel_y, stride_channel_dst,

@@ -19,6 +19,7 @@ export GGML_HIP_RDNA2_AUTO=0
 | `GGML_HIP_GFX1030_Q8_CACHE` | unset: inherit HSA umbrella; explicit `0|1` override | Enables graph-owned reuse of exact standard Q8_1 TG activations and the eligible dual RMSNorm F32/Q8_1 producer. Q4_0 `sum_hi`, packed layouts, MMQ, and routed operations remain outside this cache contract. |
 | `GGML_HIP_GFX1030_Q8_CACHE_TELEMETRY` | unset / `0` | Reports eligible standard-MMVQ Q8_1 sources, safe reuses, cache hits, and storage. Telemetry does not allocate or reuse entries by itself. |
 | `GGML_HIP_GFX1030_TARGET_BACKEND_SAMPLING` | unset: inherit native auto policy; explicit `0|off|false` disables | Automatically keeps eligible greedy native-MTP/DFlash target selection on the backend instead of materializing and scanning the full vocabulary on the CPU. |
+| `GGML_HIP_GFX1030_DFLASH_MMVQ_ROWS2` | unset / `0`: disabled; explicit `1` enables | Uses two output rows per block for gfx1030 width-six Q4_0/Q4_K/Q6_K MMVQ. This measured DFlash2 candidate remains opt-in while broader model coverage is accumulated. The global RDNA2 auto-off switch disables it. |
 | `GGML_HIP_GFX1030_P2P_ALLREDUCE` | unset / `auto`: expanded automatic policy | Selects the RDNA2 host-snapshot policy. The default `auto-expanded` policy enables exact ordinary consumer-fused boundaries when their structural TP4 gate passes; `auto-basic` restores the former control policy, and `0`, `off`, or `false` disables this host-snapshot feature while leaving other native paths enabled. Unsupported TP counts/topologies fall back to RCCL. |
 | `GGML_HIP_GFX1030_MMVQ_W8_ROWS4` | unset: inherit native auto policy; explicit `0` retains rows2 | Automatically selects the certified Q4_0 DFlash2 M8 rows/block=4 MMVQ path; unsupported shapes retain rows2/stock fallback. |
 
@@ -44,6 +45,7 @@ unset GGML_HIP_GFX1030_Q8_1_FUSION
 unset GGML_HIP_GFX1030_GDN_SIBLING_FUSION
 unset GGML_HIP_GFX1030_Q8_CACHE
 unset GGML_HIP_GFX1030_Q8_CACHE_TELEMETRY
+unset GGML_HIP_GFX1030_DFLASH_MMVQ_ROWS2
 ```
 
 Multi-GPU ROCm state save/restore stability has a separate opt-in, `GGML_HIP_SAFE_STATE_IO=1`. It does not require the gfx1030 master switch and does not change inference kernels. See [the multi-GPU ROCm state-I/O workaround](rocm-multi-gpu-state-io.md).
@@ -90,7 +92,7 @@ Direct GDN measurements improved by about 7.9% at 256 tokens and 17.7% at 512 to
 
 ### Greedy speculative target backend sampling
 
-The server automatically enables target-side backend sampling for validated native-MTP and DFlash workloads when the gfx1030 profile is active. Eligibility is structural: tensor-parallel mode over four ROCm devices; MTP `n_max=4` or DFlash `n_max=7`; vocabulary size at least 65,536; temperature-zero sampling with neutral filtering/penalty controls; no grammar, reasoning-budget sampler, requested probabilities, logit bias, or model-supplied suppress-token list. An explicit request-level `backend_sampling` value takes precedence. Unsupported backend chains fall back to CPU sampling, and `GGML_HIP_GFX1030_TARGET_BACKEND_SAMPLING=0` or `GGML_HIP_RDNA2_AUTO=0` disables automatic selection.
+The server automatically enables target-side backend sampling for validated native-MTP and DFlash workloads when the gfx1030 profile is active. Eligibility is structural: tensor-parallel mode over four ROCm devices; MTP `n_max=4` or DFlash `n_max=5|7`; vocabulary size at least 65,536; temperature-zero sampling with neutral filtering/penalty controls; no grammar, reasoning-budget sampler, requested probabilities, logit bias, or model-supplied suppress-token list. An explicit request-level `backend_sampling` value takes precedence. Unsupported backend chains fall back to CPU sampling, and `GGML_HIP_GFX1030_TARGET_BACKEND_SAMPLING=0` or `GGML_HIP_RDNA2_AUTO=0` disables automatic selection.
 
 For deterministic one-candidate distributions, the backend uses a compact `temperature(0) -> greedy` chain. The greedy backend maps a reduced candidate index back to its vocabulary token ID; a focused backend-sampler test covers this composition. This avoids both the full 248,320-entry CPU sampler pass and the mutable random-input tensor used by the general distribution sampler.
 
@@ -98,9 +100,19 @@ On the fixed Qwen3.8-27B Q4_0 TP4 MTP workload, a fresh production-tree 5-reques
 
 On the separately measured DFlash2 `n_max=7` workload, the dedicated chain improved pooled warm throughput from `62.3902` to `69.7006 tok/s` (**+11.72%**) and cycle time from `62.880` to `56.285 ms`. A 1,024-token comparison improved `69.8188 -> 79.0672 tok/s`; five-prompt and 20-request persistence runs, prompt-cache replay, fallback cases, and two concurrent slots were exact. The path is independent of target weight quantization, but Q4_0 is the production format validated end to end for both modes.
 
+For the normal DFlash2 `n_max=5` configuration, a fresh isolated five-request reproduction improved the warm median from `64.68` to `73.17 tok/s` (**+13.1%**) with identical content/token hashes, draft counts, and accepted counts. Temperature/top-k/top-p, grammar, requested-probability, reasoning, and combined n-gram cases retained the CPU fallback or their existing sampler semantics; prompt cache, parallel slots, cancellation/recovery, repeated requests, Q8 KV, and long outputs passed the server-safety matrix.
+
 The stateless automatic chain remains attached to its server slot between compatible requests. This avoids rebuilding the target scheduler's prompt, token-generation, and prompt reservation graphs on every request; incompatible or explicitly configured sampler requests still detach and use the normal path. On the fixed DFlash2 workload this reduced prompt latency by about 81 ms and improved useful client-wall throughput by 1.38%.
 
 For the same structurally certified path, a request with `cache_prompt: false` retains the checkpoint-driven prompt chunk boundaries required for exact recurrent/DFlash behavior but does not serialize a checkpoint that it will not reuse. It first discards older prompt checkpoints so a later cache-enabled request cannot restore stale recurrent state. Cache-enabled and fallback requests retain normal checkpoint creation. Incremental A/B/B/A reduced prompt latency from `424.264` to `169.662 ms` and improved useful client-wall throughput by **6.50%**, with identical output hashes, draft/accepted counts, and generation throughput. Together with persistent sampler attachment, comparison against the original merged implementation improved client-wall throughput from `62.4933` to `67.7398 tok/s` (**+8.40%**). If a later request switches from uncached to cached operation, it reprocesses once to create a checkpoint; subsequent cached requests resume normal reuse.
+
+### Opt-in DFlash width-six rows/block=2 MMVQ
+
+Setting `GGML_HIP_GFX1030_DFLASH_MMVQ_ROWS2=1` packs two output rows into each block for gfx1030 width-six Q4_0, Q4_K, and Q6_K MMVQ. Unset/`0`, non-gfx1030 execution, unsupported quantization or width, and global `GGML_HIP_RDNA2_AUTO=0` retain the existing dispatcher. The route is explicit rather than automatic because it is optimized for the measured DFlash verification/draft shapes and has not been claimed as a universal small-batch policy.
+
+With backend target sampling already active, controlled Q4 DFlash2 `n_max=5` testing improved `72.717 -> 77.783 tok/s` (**+6.97%**). Mean speculative-cycle time fell `51.872 -> 48.554 ms`: target verification saved `2.317 ms/cycle` and draft evaluation saved `1.064 ms/cycle`. Synthetic width-six Q4_0/Q4_K/Q6_K raw-F32 checks were exact; 1,024-token Q4, Q8, reasoning, grammar, requested probabilities, prompt-cache, parallel, cancellation/recovery, and repeated-request gates passed.
+
+This candidate does not by itself reach sustained 2x. A warm five-workload matrix averaged `83.85 tok/s` versus `44.74 tok/s` AR (**1.87x**), with per-case speedups from `1.12x` to `2.34x`. Rows/block=4 was slower, an eight-wave Q4_0 variant failed raw-F32 exactness, `p_split` changes were neutral, and forced RCCL protocol/channel/thread settings regressed. These alternatives must not be enabled by default.
 
 ### Certified Q4_0 M8 rows/block=4 MMVQ
 
