@@ -3237,6 +3237,100 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
     }
 
     {
+        // Regression test for https://github.com/ggml-org/llama.cpp/issues/27588:
+        // a trailing assistant message with tool_calls must not have its calls
+        // silently dropped from the rendered prompt.
+        auto tmpls = read_templates("models/templates/Qwen-Qwen3-0.6B.jinja");
+
+        common_chat_msg message_user;
+        message_user.role    = "user";
+        message_user.content = "weather?";
+
+        auto message_tool_call = simple_assist_msg("", "", "get_weather", "{\"city\": \"Rome\"}", "c0");
+
+        common_chat_tool tool;
+        tool.name        = "get_weather";
+        tool.description = "Get the weather";
+        tool.parameters  = "{\"type\": \"object\", \"properties\": {\"city\": {\"type\": \"string\"}}, \"required\": [\"city\"]}";
+
+        {
+            // Without continuation, the tool call must be rendered.
+            common_chat_templates_inputs inputs;
+            inputs.messages              = { message_user, message_tool_call };
+            inputs.tools                 = { tool };
+            inputs.add_generation_prompt = true;
+
+            auto params = common_chat_templates_apply(tmpls.get(), inputs);
+
+            if (params.prompt.find("get_weather") == std::string::npos) {
+                throw std::runtime_error("Qwen3: tool call missing from rendered prompt (issue #27588)");
+            }
+        }
+
+        {
+            // Explicitly continuing a message with tool calls must be rejected loudly
+            // instead of silently dropping the calls.
+            common_chat_templates_inputs inputs;
+            inputs.messages               = { message_user, message_tool_call };
+            inputs.tools                  = { tool };
+            inputs.add_generation_prompt  = false;
+            inputs.continue_final_message = COMMON_CHAT_CONTINUATION_CONTENT;
+
+            bool threw = false;
+            try {
+                common_chat_templates_apply(tmpls.get(), inputs);
+            } catch (const std::invalid_argument &) {
+                threw = true;
+            }
+            if (!threw) {
+                throw std::runtime_error("Continuing an assistant message with tool calls should be rejected (issue #27588)");
+            }
+        }
+
+        {
+            // Server-side auto continuation (--prefill-assistant) must not trigger for
+            // trailing assistant messages with tool calls: the request must render the
+            // tool call and keep the generation prompt.
+            server_chat_params opt;
+            opt.tmpls                      = std::move(tmpls);
+            opt.use_jinja                  = true;
+            opt.prefill_assistant          = true;
+            opt.reasoning_format           = COMMON_REASONING_FORMAT_NONE;
+            opt.allow_image                = false;
+            opt.allow_audio                = false;
+            opt.allow_video                = false;
+
+            json body = json::parse(R"({
+                "messages": [
+                    {"role": "user", "content": "weather?"},
+                    {"role": "assistant", "content": "", "tool_calls": [
+                        {"type": "function", "function": {"name": "get_weather", "arguments": {"city": "Rome"}}}
+                    ]}
+                ],
+                "tools": [
+                    {"type": "function", "function": {
+                        "name": "get_weather",
+                        "description": "Get the weather",
+                        "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}
+                    }}
+                ],
+                "add_generation_prompt": true
+            })");
+
+            std::vector<raw_buffer> files;
+            auto data = oaicompat_chat_params_parse(body, opt, files);
+            auto prompt = data.at("prompt").get<std::string>();
+
+            if (prompt.find("get_weather") == std::string::npos) {
+                throw std::runtime_error("prefill-assistant: tool call dropped from prompt (issue #27588)");
+            }
+            if (prompt.find("<|im_start|>assistant") == std::string::npos) {
+                throw std::runtime_error("prefill-assistant: generation prompt missing after tool call message (issue #27588)");
+            }
+        }
+    }
+
+    {
         // Qwen-QwQ-32B (reasoning model)
         auto tst = peg_tester("models/templates/Qwen-QwQ-32B.jinja");
 
