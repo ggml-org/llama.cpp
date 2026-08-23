@@ -247,6 +247,8 @@ class common_json {
 
     // appends every value of another array; inserting an array into itself throws
     void insert(const common_json & vals);
+    // appends every value of another array at the beginning; inserting an array into itself throws
+    void insert_before(const common_json & vals);
 
     // a common_json goes through the copy assignment above, everything else becomes a value
     template <typename T, typename std::enable_if<!std::is_same<typename std::decay<T>::type, common_json>::value, int>::type = 0>
