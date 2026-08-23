@@ -923,7 +923,23 @@ To use this endpoint with POST method, you need to start server with `--props`
 
 *Options:*
 
-- None yet
+- `power_percent` - the target compute duty cycle percentage for the `--power` throttle. Integer, range `1..100`. Any other key is rejected, except `model` which is ignored by the handler (in router mode it selects the child server, or is auto-detected when exactly one model is loaded).
+
+Example:
+
+```sh
+curl -X POST localhost:8080/props -d '{"power_percent": 50}'
+```
+
+In router mode the target model is auto-detected when exactly one model is loaded; otherwise include it in the body:
+
+```sh
+curl -X POST localhost:8080/props -d '{"model": "my-model", "power_percent": 50}'
+```
+
+Response: `{"success":true,"power_percent":50}`
+
+Note: a change applies until the next model load. When a model is (re)loaded, the throttle is re-initialized from the `power_percent` of the load request, so a runtime change is reset at that point.
 
 ### POST `/embeddings`: non-OpenAI-compatible embeddings API
 

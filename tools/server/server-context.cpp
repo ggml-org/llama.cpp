@@ -824,6 +824,14 @@ public:
         metrics.reset_bucket();
     }
 
+    int32_t get_power_percent() const {
+        return power_throttle.percent.load();
+    }
+
+    void set_power_percent(int32_t percent) {
+        power_throttle.percent.store(percent);
+    }
+
 private:
     // note: accessing these fields outside of this class is not thread-safe
     // use server_context methods instead
@@ -873,6 +881,8 @@ private:
     int64_t  t_decode_start  = 0; // start of the last submitted decode
     int64_t  t_prompt_start  = 0; // start of the oldest queued prompt decode
     uint64_t n_prompt_queued = 0;
+
+    common_power_throttle power_throttle;
 
     json json_ui_settings = json::object();
 
@@ -963,6 +973,11 @@ private:
         const bool is_resume = sleeping;
 
         params_base = params;
+        common_power_throttle_init(power_throttle, params_base.power_percent);
+        if (common_power_throttle_enabled(&power_throttle)) {
+            SRV_INF("power throttle target = %d%% compute duty cycle\n", power_throttle.percent.load());
+        }
+
         const auto output_limits = server_output_limits(params_base);
         params_base.n_outputs_max = output_limits.total;
         params_base.n_outputs_max_per_seq = output_limits.per_seq;
@@ -1116,6 +1131,9 @@ private:
                 SRV_ERR("failed to load multimodal model, '%s'\n", mmproj_path.c_str());
                 return false;
             }
+            mtmd_set_work_done_callback(mctx, [](void * user, uint64_t work_us) {
+                common_power_throttle_apply(static_cast<common_power_throttle *>(user), (double) work_us, false);
+            }, &power_throttle);
             SRV_INF("loaded multimodal model, '%s'\n", mmproj_path.c_str());
 
             if (params_base.ctx_shift) {
@@ -1184,7 +1202,7 @@ private:
         // try speculative decoding
         if (ctx_tgt_seq_rm_type != COMMON_CONTEXT_SEQ_RM_TYPE_NO) {
             try {
-                spec.reset(common_speculative_init(params_base.speculative, params_base.n_parallel));
+                spec.reset(common_speculative_init(params_base.speculative, params_base.n_parallel, &power_throttle));
             } catch (const std::exception & e) {
                 SRV_ERR("failed to initialize speculative decoding context: %s\n", e.what());
             }
@@ -3563,7 +3581,7 @@ private:
         // note: the sync is done here too, so that the wait is also covered by the yield
         int ret = 0;
         queue_tasks.yield_to_queue([&]() {
-            ret = llama_decode(ctx_tgt, batch_view);
+            ret = common_power_decode(ctx_tgt, batch_view, &power_throttle);
             if (ret == 0 && has_output) {
                 llama_synchronize(ctx_tgt);
             }
@@ -4468,7 +4486,7 @@ static json get_res_models(const server_context_meta & meta) {
     };
 }
 
-static json get_res_props(const server_context_meta & meta, const common_params & params, bool is_sleeping) {
+static json get_res_props(const server_context_meta & meta, const common_params & params, bool is_sleeping, int32_t power_percent) {
     // note: do NOT use ctx_server here, otherwise it's not possible to use this during sleep
 
     task_params tparams;
@@ -4496,6 +4514,7 @@ static json get_res_props(const server_context_meta & meta, const common_params 
         { "endpoint_slots",              params.endpoint_slots },
         { "endpoint_props",              params.endpoint_props },
         { "endpoint_metrics",            params.endpoint_metrics },
+        { "power_percent",               power_percent },
         { "ui",                          params.ui },
         { "ui_settings",                 meta.json_ui_settings },
         { "chat_template",               tmpl_default },
@@ -4680,20 +4699,51 @@ void server_routes::init_routes() {
             std::unique_lock<std::mutex> lock(mutex_cache);
             res->ok(cached_props);
         } else {
-            res->ok(get_res_props(*meta, params, false));
+            res->ok(get_res_props(*meta, params, false, ctx_server.get_power_percent()));
         }
         return res;
     };
 
-    this->post_props = [this](const server_http_req &) {
+    this->post_props = [this](const server_http_req & req) {
         auto res = create_response();
         if (!params.endpoint_props) {
             res->error(format_error_response("This server does not support changing global properties. Start it with `--props`", ERROR_TYPE_NOT_SUPPORTED));
             return res;
         }
-        // update any props here
 
-        res->ok({{ "success", true }});
+        json data = json::parse(req.body);
+        if (!data.is_object()) {
+            res->error(format_error_response("Expected a JSON object", ERROR_TYPE_INVALID_REQUEST));
+            return res;
+        }
+
+        if (!data.contains("power_percent")) {
+            res->error(format_error_response("Missing property: power_percent (the only supported property)", ERROR_TYPE_INVALID_REQUEST));
+            return res;
+        }
+
+        for (const auto & [key, val] : data.items()) {
+            if (key == "model") {
+                continue; // added by the router proxy, ignored here
+            }
+            if (key != "power_percent") {
+                res->error(format_error_response(string_format("Unsupported property: %s (the only supported property is power_percent)", key.c_str()), ERROR_TYPE_INVALID_REQUEST));
+                return res;
+            }
+            if (!val.is_number_integer()) {
+                res->error(format_error_response("\"power_percent\" must be an integer", ERROR_TYPE_INVALID_REQUEST));
+                return res;
+            }
+            const int64_t n = val.get<int64_t>();
+            if (n < 1 || n > 100) {
+                res->error(format_error_response("\"power_percent\" must be in range 1..100", ERROR_TYPE_INVALID_REQUEST));
+                return res;
+            }
+            ctx_server.set_power_percent(static_cast<int32_t>(n));
+            SRV_INF("power throttle target = %d%% compute duty cycle (updated via POST /props)\n", static_cast<int32_t>(n));
+        }
+
+        res->ok({{ "success", true }, { "power_percent", ctx_server.get_power_percent() }});
         return res;
     };
 
@@ -5414,7 +5464,7 @@ void server_routes::update_cached_responses(bool is_sleeping) {
 
     if (is_sleeping) {
         cached_models  = get_res_models(*meta);
-        cached_props   = get_res_props(*meta, params, true);
+        cached_props   = get_res_props(*meta, params, true, params.power_percent);
         cached_metrics = ctx_server.get_metrics();
 
         should_reset_buckets = false;
