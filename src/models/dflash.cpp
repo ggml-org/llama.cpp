@@ -406,8 +406,7 @@ static ggml_tensor * build_dflash2_conv(
 
     const int64_t block_size = n_tokens / n_blocks;
     ggml_context * ctx0 = g.ctx0;
-    // Both arrive contiguous from the caller in the common case; ggml_cont
-    // would still copy, and this runs 4x per layer.
+    // ggml_cont copies even when the tensor is already contiguous
     if (!ggml_is_contiguous(hidden) || hidden->ne[1] != n_tokens) {
         hidden = ggml_cont_2d(ctx0, hidden, hidden_size, n_tokens);
     }
@@ -420,10 +419,6 @@ static ggml_tensor * build_dflash2_conv(
     ggml_tensor * coeffs_side = ggml_view_3d(ctx0, coeffs, n_groups, kernel_size, n_tokens,
             coeffs->nb[1], coeffs->nb[3], side * coeffs->nb[2]);
 
-    // All taps' coefficients live in one tensor already, so the contiguous copy
-    // and the group broadcast are done once instead of per tap. The (coeff +
-    // base) form is kept fused: distributing it over the multiply would change
-    // the rounding.
     ggml_tensor * coeff_all = ggml_cont(ctx0, coeffs_side);
     coeff_all = ggml_reshape_4d(ctx0, coeff_all, 1, n_groups, kernel_size, n_tokens);
     coeff_all = ggml_repeat_4d(ctx0, coeff_all, group_size, n_groups, kernel_size, n_tokens);
@@ -496,10 +491,8 @@ static void build_dflash2_selector(llm_graph_context & g, const llama_model & mo
     ggml_tensor * unary3 = ggml_reshape_3d(ctx0, unary,      top_k, tokens_per_block, n_blocks);
     ggml_tensor * hid3   = ggml_reshape_3d(ctx0, hidden,     rank,  tokens_per_block, n_blocks);
 
-    // Score a run of block positions at once. A position's score depends only
-    // on the candidate sets at pos-1 and pos, both of which top-k already
-    // produced, so the positions carry no dependency on one another and the
-    // whole run is one batched matmul instead of one per position.
+    // a position's score reads only the candidate sets at pos-1 and pos, so a run
+    // of positions has no internal dependency and scores in one batched matmul
     auto score_run = [&](int64_t beg_pos, int64_t n_pos, ggml_tensor * pred_ids) {
         ggml_tensor * ids = ggml_cont(ctx0, ggml_view_3d(ctx0, cand3, top_k, n_pos, n_blocks,
                     cand3->nb[1], cand3->nb[2], beg_pos * cand3->nb[1]));
@@ -767,9 +760,8 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
 
     cur = build_lora_mm(output, cur, output_s);
 
-    // DFlash2 feeds these logits to the selector, so they carry the target's
-    // output transforms. DFlash1 and DSpark read them through the sampler and
-    // are left untouched.
+    // DFlash2 feeds these logits to the selector, so they need the target's output
+    // transforms; DFlash1 and DSpark read them through the sampler instead
     if (model.dflash_selector_hidden) {
         if (hparams.f_logit_scale != 0.0f) {
             cur = ggml_scale(ctx0, cur, hparams.f_logit_scale);
@@ -806,7 +798,6 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
         build_dspark_markov_head(*this, model, inp_tokens);
     }
 
-    // DFlash2: pack the selector lattice for the CPU-side walk
     if (model.dflash_selector_hidden) {
         build_dflash2_selector(*this, model, inp_tokens);
     }

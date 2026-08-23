@@ -2315,6 +2315,8 @@ uint32_t llama_context::graph_max_nodes(uint32_t n_tokens) const {
     }
 
     if (model.arch == LLM_ARCH_DFLASH && model.hparams.dflash_selector_rank > 0) {
+        // the selector runs on block positions only: at most one block per sequence,
+        // and never more rows than a ubatch holds - so take the tighter bound
         const uint32_t selector_tokens = std::min<uint32_t>(
                 n_tokens, model.hparams.dflash_block_size * cparams.n_seq_max);
         res += 32*selector_tokens;

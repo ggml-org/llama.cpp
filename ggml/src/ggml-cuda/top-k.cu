@@ -49,28 +49,11 @@ static int next_power_of_2(int x) {
 #endif                            // CUB_TOP_K_AVAILABLE
 
 
-// Two-stage top-k, for rows too wide to select one at a time.
-//
-// Tiling first cannot drop a winner: a global top-k element has at most k-1
-// larger elements anywhere, so at most k-1 inside its own tile. What survives
-// fits the existing bitonic argsort, which finishes every row in one launch.
-//
-// Keys pack the value and the column into 64 bits, so a max reduction resolves
-// the ordering and the tie-break at once and every key in a tile is distinct -
-// which is what makes clearing the entry equal to the running maximum remove
-// exactly one element.
+// Two-stage top-k for wide rows: a global top-k element has at most k-1 larger
+// elements, so at most k-1 inside its own tile and tiling cannot drop a winner.
+#define TOPK_CAND  1024   // argsort_f32_i32_cuda_bitonic's row limit
 
-// 1024 is argsort_f32_i32_cuda_bitonic's row limit. It bounds what the second
-// stage can be handed, and it is also where this path starts to pay: below it
-// the bitonic sort already takes the row whole and is faster (measured on
-// H200 and A10G, k=16, 16 rows: 5 us vs 18 us at 16 columns, crossing over by
-// 1000).
-#define TOPK_CAND  1024
-
-// Block size measured best at 256 on both cards and every width; 512 and 1024
-// lose more to occupancy than they gain in reduction depth. The tile size does
-// not have one winner - narrow rows prefer 4096, and both cards agree on 8192
-// from 65536 columns up (A10G, 200000x16: 132 us at 4096 vs 120 us at 8192).
+// measured on H200 and A10G
 #define TOPK_BLOCK     256
 #define TOPK_TILE_WIDE 8192
 #define TOPK_TILE      4096
