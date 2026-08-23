@@ -673,6 +673,11 @@ struct mtmd_helper_video {
         }
 
         cmd.push_back("-nostdin");
+        if (is_buf_input()) {
+            // remove the 64KB read-ahead limit of cache:, or else ffmpeg cannot reach a moov atom at end of file
+            cmd.push_back("-read_ahead_limit");
+            cmd.push_back("-1");
+        }
         cmd.push_back("-i");
         // cache:pipe:0 wraps stdin with a seekable in-memory cache, letting ffmpeg seek
         // backwards for container headers (e.g. MP4 moov atom at end of file)
