@@ -13,6 +13,12 @@ void llama_model_dots3note::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS, hparams.n_layer_nextn, false);
     GGML_ASSERT(hparams.n_layer_nextn < hparams.n_layer_all && "n_layer_nextn must be < n_layer_all");
 
+    // the NextN/MTP block uses the sliding-attention MLA, so mark it as SWA
+    // (the sliding_window_pattern key covers only the trunk layers)
+    for (uint32_t il = hparams.n_layer(); il < hparams.n_layer_all; ++il) {
+        hparams.is_swa_impl[il] = 1;
+    }
+
     // MoE parameters
     ml.get_key(LLM_KV_EXPERT_SHARED_COUNT,        hparams.n_expert_shared);
     ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, hparams.n_ff_exp);
@@ -78,8 +84,8 @@ void llama_model_dots3note::load_arch_tensors(llama_model_loader & ml) {
         // the NextN/MTP block uses the sliding-attention geometry
         const bool is_swa = is_mtp || hparams.is_swa(i);
 
-        // MTP tensors are preserved in the GGUF but there is no MTP graph yet
-        const int flags = is_mtp ? TENSOR_SKIP | TENSOR_NOT_REQUIRED : 0;
+        // MTP tensors are loaded only when the MTP draft head is enabled
+        const int flags = is_mtp ? (ml.load_mtp ? 0 : TENSOR_SKIP | TENSOR_NOT_REQUIRED) : 0;
 
         const int64_t n_head_l = hparams.n_head(i);
 
@@ -143,13 +149,16 @@ void llama_model_dots3note::load_arch_tensors(llama_model_loader & ml) {
             layer.nextn.eh_proj          = create_tensor(tn(LLM_TENSOR_NEXTN_EH_PROJ,          "weight", i), { 2 * n_embd, n_embd }, flags);
             layer.nextn.enorm            = create_tensor(tn(LLM_TENSOR_NEXTN_ENORM,            "weight", i), { n_embd }, flags);
             layer.nextn.hnorm            = create_tensor(tn(LLM_TENSOR_NEXTN_HNORM,            "weight", i), { n_embd }, flags);
-            layer.nextn.embed_tokens     = create_tensor(tn(LLM_TENSOR_NEXTN_EMBED_TOKENS,     "weight", i), { n_embd, n_vocab }, flags);
+            layer.nextn.embed_tokens     = create_tensor(tn(LLM_TENSOR_NEXTN_EMBED_TOKENS,     "weight", i), { n_embd, n_vocab }, TENSOR_NOT_REQUIRED | flags);
             layer.nextn.shared_head_norm = create_tensor(tn(LLM_TENSOR_NEXTN_SHARED_HEAD_NORM, "weight", i), { n_embd }, flags);
         }
     }
 }
 
 std::unique_ptr<llm_graph_context> llama_model_dots3note::build_arch_graph(const llm_graph_params & params) const {
+    if (params.gtype == LLM_GRAPH_TYPE_DECODER_MTP) {
+        return std::make_unique<graph_mtp>(*this, params);
+    }
     return std::make_unique<graph>(*this, params);
 }
 
@@ -407,7 +416,7 @@ llama_model_dots3note::graph::graph(const llama_model & model, const llm_graph_p
             }
         }
 
-        if (il == n_layer - 1 && inp_out_ids) {
+        if (il == n_layer - 1 && inp_out_ids && (!cparams.embeddings_nextn || cparams.embeddings_nextn_masked)) {
             cur   = ggml_get_rows(ctx0, cur, inp_out_ids);
             inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
         }
@@ -468,6 +477,14 @@ llama_model_dots3note::graph::graph(const llama_model & model, const llm_graph_p
 
     cur = build_norm(cur, model.output_norm, NULL, LLM_NORM_RMS, -1);
 
+    // post-norm hidden state feeds the NextN/MTP draft head
+    cb(cur, "h_nextn", -1);
+    res->t_h_nextn = cur;
+
+    if (cparams.embeddings_nextn && !cparams.embeddings_nextn_masked && inp_out_ids) {
+        cur = ggml_get_rows(ctx0, cur, inp_out_ids);
+    }
+
     cb(cur, "result_norm", -1);
     res->t_embd = cur;
 
@@ -476,5 +493,254 @@ llama_model_dots3note::graph::graph(const llama_model & model, const llm_graph_p
     cb(cur, "result_output", -1);
     res->t_logits = cur;
 
+    ggml_build_forward_expand(gf, cur);
+}
+
+// LLM_GRAPH_TYPE_DECODER_MTP draft head for dots3note
+llama_model_dots3note::graph_mtp::graph_mtp(const llama_model & model, const llm_graph_params & params)
+    : llm_graph_context(params) {
+    GGML_ASSERT(hparams.n_layer_nextn > 0 && "DOTS3NOTE MTP requires n_layer_nextn > 0");
+    GGML_ASSERT(hparams.is_mla() && "DOTS3NOTE MTP requires MLA");
+
+    const int il = hparams.n_layer() + cparams.nextn_layer_offset;
+    GGML_ASSERT(cparams.nextn_layer_offset >= 0 &&
+                cparams.nextn_layer_offset < (int) hparams.n_layer_nextn &&
+                "nextn_layer_offset out of range [0, n_layer_nextn)");
+    const auto & layer = model.layers[il];
+
+    GGML_ASSERT(layer.nextn.eh_proj && "MTP block missing nextn.eh_proj");
+    GGML_ASSERT(layer.nextn.enorm   && "MTP block missing nextn.enorm");
+    GGML_ASSERT(layer.nextn.hnorm   && "MTP block missing nextn.hnorm");
+
+    // the NextN block uses the sliding-attention MLA geometry (see load_arch_tensors)
+    const int64_t n_head_l          = hparams.n_head(il);
+    const int64_t kv_lora_rank      = hparams.n_lora_kv_swa;
+    const int64_t n_embd_head_k_mla = hparams.n_embd_head_k_mla_swa;
+    const int64_t n_embd_head_v_mla = hparams.n_embd_head_v_mla_swa;
+
+    const int64_t n_embd_head_qk_rope = hparams.n_rot();
+    const int64_t n_embd_head_qk_nope = n_embd_head_k_mla - n_embd_head_qk_rope;
+
+    const float kq_scale    = 1.0f/sqrtf(float(n_embd_head_k_mla));
+    const float freq_base_l = model.get_rope_freq_base(cparams, il);
+
+    // TODO: extract in a common llm_graph_context::build_inp_embd_h()
+    auto inp = std::make_unique<llm_graph_input_embd_h>(hparams.n_embd);
+
+    inp->tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_tokens);
+    ggml_set_input(inp->tokens);
+
+    inp->embd = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, hparams.n_embd_inp(), n_tokens);
+    ggml_set_input(inp->embd);
+
+    ggml_tensor * tok_embd;
+    if (ubatch.token) {
+        ggml_tensor * tok_embd_w = layer.nextn.embed_tokens ? layer.nextn.embed_tokens : model.tok_embd;
+
+        tok_embd = ggml_get_rows(ctx0, tok_embd_w, inp->tokens);
+    } else {
+        tok_embd = inp->embd;
+    }
+    cb(tok_embd, "mtp_tok_embd", il);
+
+    inp->h = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, hparams.n_embd, n_tokens);
+    ggml_set_input(inp->h);
+    ggml_set_name(inp->h, "mtp_h_input");
+
+    ggml_tensor * h_embd = inp->h;
+
+    res->add_input(std::move(inp));
+
+    ggml_tensor * inp_pos     = build_inp_pos();
+    ggml_tensor * inp_out_ids = build_inp_out_ids();
+
+    // MLA with the absorption optimization uses a K-only cache (V is a view of K)
+    // the MTP cache is a sliding-window cache; build_attn_inp_k_impl rejects SWA
+    // caches, so construct the input directly (same as the SWA input of the trunk)
+    const auto * mctx_cur = static_cast<const llama_kv_cache_context *>(mctx);
+    auto inp_attn_u = std::make_unique<llm_graph_input_attn_k>(hparams, cparams, mctx_cur);
+
+    inp_attn_u->self_k_idxs = mctx_cur->build_input_k_idxs(ctx0, ubatch);
+
+    {
+        // same mask tensor as build_attn_inp_kq_mask()
+        const auto n_kv     = mctx_cur->get_n_kv();
+        const auto n_stream = cparams.kv_unified ? 1 : ubatch.n_seqs_unq;
+        const auto type     = cparams.flash_attn ? GGML_TYPE_F16 : GGML_TYPE_F32;
+
+        inp_attn_u->self_kq_mask = ggml_new_tensor_4d(ctx0, type, n_kv, n_tokens/n_stream, 1, n_stream);
+        ggml_set_input(inp_attn_u->self_kq_mask);
+        ggml_set_name(inp_attn_u->self_kq_mask, "attn_inp_kq_mask");
+
+        inp_attn_u->self_kq_mask_cnv = inp_attn_u->self_kq_mask;
+    }
+
+    auto * inp_attn = (llm_graph_input_attn_k *) res->add_input(std::move(inp_attn_u));
+
+    ggml_tensor * h_norm = build_norm(h_embd, layer.nextn.hnorm, nullptr, LLM_NORM_RMS, il);
+    cb(h_norm, "mtp_hnorm", il);
+
+    ggml_tensor * e_norm = build_norm(tok_embd, layer.nextn.enorm, nullptr, LLM_NORM_RMS, il);
+    cb(e_norm, "mtp_enorm", il);
+
+    ggml_tensor * concat = ggml_concat(ctx0, e_norm, h_norm, /*dim=*/ 0);
+    cb(concat, "mtp_concat", il);
+
+    ggml_tensor * cur = build_lora_mm(layer.nextn.eh_proj, concat, layer.nextn.eh_proj_s);
+    cb(cur, "mtp_eh_proj", il);
+
+    ggml_tensor * inpSA = cur;
+
+    cur = build_norm(cur, layer.attn_norm, nullptr, LLM_NORM_RMS, il);
+    cb(cur, "mtp_attn_norm", il);
+
+    // self-attention: dense MLA, same construction as the sliding-window branch of the trunk graph
+    {
+        ggml_tensor * attn_inp = cur;
+
+        ggml_tensor * qr = ggml_mul_mat(ctx0, layer.wq_a, cur);
+        cb(qr, "mtp_qr", il);
+
+        qr = build_norm(qr, layer.attn_q_a_norm, nullptr, LLM_NORM_RMS, il);
+        cb(qr, "mtp_qr", il);
+
+        ggml_tensor * q = ggml_mul_mat(ctx0, layer.wq_b, qr);
+        cb(q, "mtp_q", il);
+
+        // split into {n_embd_head_qk_nope, n_head_l, n_tokens}
+        ggml_tensor * q_nope =
+            ggml_view_3d(ctx0, q, n_embd_head_qk_nope, n_head_l, n_tokens,
+                         ggml_row_size(q->type, n_embd_head_k_mla),
+                         ggml_row_size(q->type, n_embd_head_k_mla) * n_head_l, 0);
+        cb(q_nope, "mtp_q_nope", il);
+
+        // and {n_embd_head_qk_rope, n_head_l, n_tokens}
+        ggml_tensor * q_pe = ggml_view_3d(
+            ctx0, q, n_embd_head_qk_rope, n_head_l, n_tokens,
+            ggml_row_size(q->type, n_embd_head_k_mla),
+            ggml_row_size(q->type, n_embd_head_k_mla) * n_head_l,
+            ggml_row_size(q->type, n_embd_head_qk_nope));
+        cb(q_pe, "mtp_q_pe", il);
+
+        ggml_tensor * kv_cmpr_pe = ggml_mul_mat(ctx0, layer.wkv_a_mqa, cur);
+        cb(kv_cmpr_pe, "mtp_kv_cmpr_pe", il);
+
+        // split into {kv_lora_rank, n_tokens}
+        ggml_tensor * kv_cmpr =
+            ggml_view_2d(ctx0, kv_cmpr_pe, kv_lora_rank, n_tokens,
+                         ggml_row_size(kv_cmpr_pe->type, kv_lora_rank + n_embd_head_qk_rope), 0);
+        cb(kv_cmpr, "mtp_kv_cmpr", il);
+
+        // and {n_embd_head_qk_rope, 1, n_tokens}
+        ggml_tensor * k_pe = ggml_view_3d(ctx0, kv_cmpr_pe, n_embd_head_qk_rope, 1, n_tokens,
+                                          ggml_row_size(kv_cmpr_pe->type, kv_lora_rank + n_embd_head_qk_rope),
+                                          ggml_row_size(kv_cmpr_pe->type, kv_lora_rank + n_embd_head_qk_rope),
+                                          ggml_row_size(kv_cmpr_pe->type, kv_lora_rank));
+        cb(k_pe, "mtp_k_pe", il);
+
+        // norm on the shared rope key, applied before rope
+        k_pe = build_norm(k_pe, layer.attn_k_norm, nullptr, LLM_NORM_RMS, il);
+        cb(k_pe, "mtp_k_pe", il);
+
+        q_pe = ggml_rope_ext(ctx0, q_pe, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base_l, freq_scale,
+                             ext_factor, attn_factor, beta_fast, beta_slow);
+        cb(q_pe, "mtp_q_pe", il);
+
+        k_pe = ggml_rope_ext(ctx0, k_pe, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base_l, freq_scale,
+                             ext_factor, attn_factor, beta_fast, beta_slow);
+        cb(k_pe, "mtp_k_pe", il);
+
+        kv_cmpr = build_norm(kv_cmpr, layer.attn_kv_a_norm, nullptr, LLM_NORM_RMS, il);
+        cb(kv_cmpr, "mtp_kv_cmpr", il);
+
+        // MLA with the absorption optimization
+        {
+            // {n_embd_head_qk_nope, n_tokens, n_head_l}
+            q_nope = ggml_permute(ctx0, q_nope, 0, 2, 1, 3);
+            cb(q_nope, "mtp_q_nope_perm", il);
+
+            // {n_embd_head_qk_nope, kv_lora_rank, n_head_l} x {n_embd_head_qk_nope, n_tokens, n_head_l}
+            ggml_tensor * q_nope_absorbed = ggml_mul_mat(ctx0, layer.wk_b, q_nope);
+            cb(q_nope_absorbed, "mtp_q_nope_absorbed", il);
+
+            // {kv_lora_rank, n_head_l, n_tokens}
+            q_nope_absorbed = ggml_permute(ctx0, q_nope_absorbed, 0, 2, 1, 3);
+            cb(q_nope_absorbed, "mtp_q_nope_absorbed_perm", il);
+
+            // {n_embd_head_qk_rope + kv_lora_rank, n_head_l, n_tokens}
+            ggml_tensor * Qcur = ggml_concat(ctx0, q_nope_absorbed, q_pe, 0);
+            cb(Qcur, "mtp_Qcur", il);
+
+            kv_cmpr = ggml_reshape_3d(ctx0, kv_cmpr, kv_lora_rank, 1, n_tokens);
+            cb(kv_cmpr, "mtp_kv_cmpr_reshape", il);
+
+            // {n_embd_head_qk_rope + kv_lora_rank, 1, n_tokens}
+            ggml_tensor * Kcur = ggml_concat(ctx0, kv_cmpr, k_pe, 0);
+            cb(Kcur, "mtp_Kcur", il);
+
+            // {kv_lora_rank, 1, n_tokens}
+            ggml_tensor * Vcur = kv_cmpr;
+            cb(Vcur, "mtp_Vcur", il);
+
+            cur = build_attn(inp_attn,
+                    nullptr, nullptr, nullptr,
+                    Qcur, Kcur, Vcur, nullptr, nullptr, layer.wv_b, kq_scale, il);
+            cb(cur, "mtp_attn_out", il);
+
+            // apply the head-wise output gate before o_proj, same as the trunk graph
+            ggml_tensor * gate = build_lora_mm(layer.wqkv_gate, attn_inp);
+            cb(gate, "mtp_attn_gate", il);
+
+            gate = ggml_sigmoid(ctx0, gate);
+            cb(gate, "mtp_attn_gate_sigmoid", il);
+
+            // broadcast the per-head gate over the head dimension
+            ggml_tensor * attn_3d = ggml_reshape_3d(ctx0, cur, n_embd_head_v_mla, n_head_l, n_tokens);
+            ggml_tensor * gate_3d = ggml_reshape_3d(ctx0, gate,                1, n_head_l, n_tokens);
+            attn_3d = ggml_mul(ctx0, attn_3d, gate_3d);
+            cb(attn_3d, "mtp_attn_gated", il);
+
+            cur = ggml_reshape_2d(ctx0, attn_3d, n_embd_head_v_mla * n_head_l, n_tokens);
+
+            cur = build_lora_mm(layer.wo, cur, layer.wo_s);
+            cb(cur, "mtp_attn_output", il);
+        }
+    }
+
+    ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpSA);
+    cb(ffn_inp, "mtp_ffn_inp", il);
+
+    cur = build_norm(ffn_inp, layer.ffn_norm, NULL, LLM_NORM_RMS, il);
+    cb(cur, "mtp_ffn_norm", il);
+
+    // dense FFN - the NextN block uses the dense branch (see load_arch_tensors)
+    cur = build_ffn(cur,
+        layer.ffn_up, NULL, layer.ffn_up_s,
+        layer.ffn_gate, NULL, layer.ffn_gate_s,
+        layer.ffn_down, NULL, layer.ffn_down_s,
+        NULL, LLM_FFN_SILU, LLM_FFN_PAR, il);
+    cb(cur, "mtp_ffn_out", il);
+
+    cur = ggml_add(ctx0, cur, ffn_inp);
+    cb(cur, "mtp_post_ffn", il);
+
+    // shared_head_norm applied after the decoder block, before the shared LM head.
+    // The post-norm hidden state seeds the next MTP step.
+    ggml_tensor * head_norm_w = layer.nextn.shared_head_norm
+            ? layer.nextn.shared_head_norm
+            : model.output_norm;
+    GGML_ASSERT(head_norm_w && "DOTS3NOTE MTP: missing both nextn.shared_head_norm and output_norm");
+    cur = build_norm(cur, head_norm_w, nullptr, LLM_NORM_RMS, -1);
+
+    cb(cur, "h_nextn", -1);
+    res->t_h_nextn = cur;
+
+    cur = ggml_get_rows(ctx0, cur, inp_out_ids);
+    cb(cur, "mtp_shared_head_norm", -1);
+
+    cur = ggml_mul_mat(ctx0, model.output, cur);
+    cb(cur, "result_output", -1);
+
+    res->t_logits = cur;
     ggml_build_forward_expand(gf, cur);
 }
