@@ -966,6 +966,7 @@ struct vk_device_struct {
     vk_pipeline pipeline_sub_norepeat[2][2][2];
     vk_pipeline pipeline_mul[2][2][2];
     vk_pipeline pipeline_mul_norepeat[2][2][2];
+    vk_pipeline pipeline_add_mul_f32;
     vk_pipeline pipeline_div[2][2][2];
     vk_pipeline pipeline_div_norepeat[2][2][2];
     vk_pipeline pipeline_add_rms[2][2][2];
@@ -5561,6 +5562,7 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
     ggml_vk_create_pipeline(device, device->pipeline_get_rows_back_f32, "get_rows_back_f32", get_rows_back_f32_len, get_rows_back_f32_data, "main", 3, sizeof(vk_op_binary_push_constants), {256, 1, 1}, {}, 1, true);
 
     ggml_vk_create_pipeline(device, device->pipeline_matmul_split_k_reduce, "split_k_reduce", split_k_reduce_len, split_k_reduce_data, "main", 2, 2 * sizeof(uint32_t), {256 * 4, 1, 1}, {}, 1);
+    ggml_vk_create_pipeline(device, device->pipeline_add_mul_f32, "add_mul_f32", add_mul_f32_len, add_mul_f32_data, "main", 4, sizeof(vk_op_binary_push_constants), {512, 1, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_flash_attn_split_k_reduce, "fa_split_k_reduce", fa_split_k_reduce_len, fa_split_k_reduce_data, "main", 3, sizeof(vk_op_flash_attn_split_k_reduce_push_constants), {1, device->subgroup_size, 1}, {device->subgroup_size}, 1, true);
 
     for (auto &it : device->pipeline_fa_mask_opt) {
@@ -12763,6 +12765,49 @@ static void ggml_vk_mul(ggml_backend_vk_context * ctx, vk_context& subctx, const
     });
 }
 
+static void ggml_vk_add_mul(ggml_backend_vk_context * ctx, vk_context& subctx, ggml_cgraph * cgraph, int node_idx) {
+    const ggml_tensor * add = cgraph->nodes[node_idx];
+    ggml_tensor * dst = cgraph->nodes[node_idx + 1];
+    const ggml_tensor * scale = dst->src[0] == add ? dst->src[1] : dst->src[0];
+    const ggml_tensor * src0 = add->src[0];
+    const ggml_tensor * src1 = add->src[1];
+
+    const uint32_t src0_type_size = ggml_type_size(src0->type);
+    const uint32_t src1_type_size = ggml_type_size(src1->type);
+    const uint32_t dst_type_size  = ggml_type_size(dst->type);
+
+    vk_op_binary_push_constants pc {
+        (uint32_t) ggml_nelements(dst),
+        (uint32_t) src0->ne[0], (uint32_t) src0->ne[1], (uint32_t) src0->ne[2], (uint32_t) src0->ne[3], (uint32_t) src0->nb[0] / src0_type_size, (uint32_t) src0->nb[1] / src0_type_size, (uint32_t) src0->nb[2] / src0_type_size, (uint32_t) src0->nb[3] / src0_type_size,
+        (uint32_t) src1->ne[0], (uint32_t) src1->ne[1], (uint32_t) src1->ne[2], (uint32_t) src1->ne[3], (uint32_t) src1->nb[0] / src1_type_size, (uint32_t) src1->nb[1] / src1_type_size, (uint32_t) src1->nb[2] / src1_type_size, (uint32_t) src1->nb[3] / src1_type_size,
+        (uint32_t)  dst->ne[0], (uint32_t)  dst->ne[1], (uint32_t)  dst->ne[2], (uint32_t)  dst->ne[3], (uint32_t)  dst->nb[0] /  dst_type_size, (uint32_t)  dst->nb[1] /  dst_type_size, (uint32_t)  dst->nb[2] /  dst_type_size, (uint32_t)  dst->nb[3] /  dst_type_size,
+        0,
+        0.0f, 0.0f, 0,
+    };
+
+    init_pushconst_fastdiv(pc);
+    init_pushconst_tensor_offsets(ctx, pc, src0, src1, nullptr, nullptr, dst);
+
+    vk_subbuffer src0_buf  = ggml_vk_tensor_subbuffer(ctx, src0, true);
+    vk_subbuffer src1_buf  = ggml_vk_tensor_subbuffer(ctx, src1, true);
+    vk_subbuffer dst_buf   = ggml_vk_tensor_subbuffer(ctx, dst, true);
+    vk_subbuffer scale_buf = ggml_vk_tensor_subbuffer(ctx, scale);
+
+    std::array<uint32_t, 3> elements;
+    const uint32_t ne = (uint32_t) ggml_nelements(dst);
+    if (ne > 262144) {
+        elements = { 512, 512, CEIL_DIV(ne, 262144) };
+    } else if (ne > 512) {
+        elements = { 512, CEIL_DIV(ne, 512), 1 };
+    } else {
+        elements = { ne, 1, 1 };
+    }
+
+    vk_pipeline pipeline = ctx->device->pipeline_add_mul_f32;
+    ggml_pipeline_request_descriptor_sets(ctx, pipeline, 1);
+    ggml_vk_dispatch_pipeline(ctx, subctx, pipeline, { src0_buf, src1_buf, dst_buf, scale_buf }, pc, elements);
+}
+
 static void ggml_vk_div(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
     const uint32_t src0_type_size = ggml_type_size(src0->type);
     const uint32_t src1_type_size = ggml_type_size(src1->type);
@@ -15903,7 +15948,11 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgr
         break;
     case GGML_OP_ADD:
         if (ctx->num_additional_fused_ops) {
-            ggml_vk_multi_add(ctx, compute_ctx, cgraph, node_idx);
+            if (cgraph->nodes[node_idx + 1]->op == GGML_OP_MUL) {
+                ggml_vk_add_mul(ctx, compute_ctx, cgraph, node_idx);
+            } else {
+                ggml_vk_multi_add(ctx, compute_ctx, cgraph, node_idx);
+            }
         } else {
             ggml_vk_add(ctx, compute_ctx, src0, src1, node);
         }
@@ -16990,6 +17039,33 @@ static bool ggml_vk_is_empty(ggml_tensor * node) {
     return ggml_is_empty(node) || node->op == GGML_OP_NONE || node->op == GGML_OP_RESHAPE || node->op == GGML_OP_TRANSPOSE || node->op == GGML_OP_VIEW || node->op == GGML_OP_PERMUTE;
 }
 
+static bool ggml_vk_should_fuse_add_mul(const ggml_backend_vk_context * ctx, const ggml_tensor * add, const ggml_tensor * mul) {
+    if (add->op != GGML_OP_ADD || mul->op != GGML_OP_MUL ||
+        (mul->src[0] != add && mul->src[1] != add)) {
+        return false;
+    }
+
+    const ggml_tensor * scale = mul->src[0] == add ? mul->src[1] : mul->src[0];
+
+    if (add->src[0]->type != GGML_TYPE_F32 ||
+        add->src[1]->type != GGML_TYPE_F32 ||
+        add->type         != GGML_TYPE_F32 ||
+        scale->type       != GGML_TYPE_F32 ||
+        mul->type         != GGML_TYPE_F32) {
+        return false;
+    }
+
+    if (!ggml_are_same_shape(add->src[0], mul) ||
+        !ggml_are_same_shape(add->src[1], mul) ||
+        !ggml_are_same_shape(scale, mul)       ||
+        !ggml_are_same_stride(scale, mul)) {
+        return false;
+    }
+
+    // The shader indexes scale with the destination layout and base offset.
+    return get_misalign_bytes(ctx, scale) == 0 && get_misalign_bytes(ctx, mul) == 0;
+}
+
 static bool ggml_vk_can_fuse(const ggml_backend_vk_context * ctx, const struct ggml_cgraph * cgraph, int node_idx, std::initializer_list<enum ggml_op> ops) {
     if (!ggml_can_fuse(cgraph, node_idx, ops)) {
         return false;
@@ -17027,6 +17103,10 @@ static bool ggml_vk_can_fuse(const ggml_backend_vk_context * ctx, const struct g
 
         // The shader reuses the scale tensor's shape, stride, and base offset for the bias tensor.
         if (get_misalign_bytes(ctx, w) != 0 || get_misalign_bytes(ctx, b) != 0) {
+            return false;
+        }
+    } else if (ops.size() == 2 && ops.begin()[0] == GGML_OP_ADD && ops.begin()[1] == GGML_OP_MUL) {
+        if (!ggml_vk_should_fuse_add_mul(ctx, cgraph->nodes[node_idx], cgraph->nodes[node_idx + 1])) {
             return false;
         }
     } else if (ops.size() == 2 && ops.begin()[0] == GGML_OP_RMS_NORM && ops.begin()[1] == GGML_OP_MUL) {
@@ -17850,6 +17930,11 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
                 op_srcs_fused_elementwise[0] = true;
                 op_srcs_fused_elementwise[1] = true;
                 op_srcs_fused_elementwise[2] = true;
+            } else if (ggml_vk_can_fuse(ctx, cgraph, i, { GGML_OP_ADD, GGML_OP_MUL })) {
+                ctx->num_additional_fused_ops = 1;
+                fusion_string = "ADD_MUL";
+                op_srcs_fused_elementwise[0] = true;
+                op_srcs_fused_elementwise[1] = true;
             } else if (ggml_can_fuse_subgraph(cgraph, i, { GGML_OP_RMS_NORM, GGML_OP_MUL, GGML_OP_ROPE, GGML_OP_VIEW, GGML_OP_SET_ROWS }, { i + 4 }) &&
                        ggml_check_edges(cgraph, i, rms_norm_mul_rope_view_set_rows_edges) &&
                        ggml_vk_can_fuse_rms_norm_mul_rope(ctx, cgraph, i) &&
@@ -18229,6 +18314,9 @@ static void ggml_vk_graph_optimize(ggml_backend_t backend, struct ggml_cgraph * 
         if (keep_pattern({ GGML_OP_NORM, GGML_OP_MUL, GGML_OP_ADD })) {
             continue;
         }
+        if (keep_pattern({ GGML_OP_ADD, GGML_OP_MUL })) {
+            continue;
+        }
 
         // First, grab the next unused node.
         current_set.push_back(first_unused);
@@ -18264,7 +18352,8 @@ static void ggml_vk_graph_optimize(ggml_backend_t backend, struct ggml_cgraph * 
                 match_pattern(topk_moe_late_softmax, j) ||
                 match_pattern(snake_pattern, j) ||
                 in_qsa_pattern(j) ||
-                match_pattern({ GGML_OP_NORM, GGML_OP_MUL, GGML_OP_ADD }, j)) {
+                match_pattern({ GGML_OP_NORM, GGML_OP_MUL, GGML_OP_ADD }, j) ||
+                match_pattern({ GGML_OP_ADD, GGML_OP_MUL }, j)) {
                 continue;
             }
             bool ok = true;
@@ -18273,6 +18362,7 @@ static void ggml_vk_graph_optimize(ggml_backend_t backend, struct ggml_cgraph * 
                     is_src_of(graph->nodes[j], graph->nodes[c]) &&
                     !(j == c+1 && c == current_set.back() && graph->nodes[c]->op == GGML_OP_NORM && graph->nodes[j]->op == GGML_OP_MUL) &&
                     !(j == c+1 && c == current_set.back() && graph->nodes[c]->op == GGML_OP_MUL && graph->nodes[j]->op == GGML_OP_ADD) &&
+                    !(j == c+1 && c == current_set.back() && graph->nodes[c]->op == GGML_OP_ADD && graph->nodes[j]->op == GGML_OP_MUL) &&
                     !(j == c+1 && c == current_set.back() && graph->nodes[c]->op == GGML_OP_RMS_NORM && graph->nodes[j]->op == GGML_OP_MUL) &&
                     !(j == c+1 && c == current_set.back() && graph->nodes[c]->op == GGML_OP_MUL_MAT && graph->nodes[j]->op == GGML_OP_ADD) &&
                     !(j == c+1 && c == current_set.back() && graph->nodes[c]->op == GGML_OP_MUL_MAT_ID && graph->nodes[j]->op == GGML_OP_ADD_ID) &&

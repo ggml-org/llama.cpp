@@ -3394,6 +3394,50 @@ struct test_scale : public test_case {
     }
 };
 
+// GGML_OP_ADD + GGML_OP_MUL
+struct test_add_mul : public test_case {
+    const ggml_type type;
+    const std::array<int64_t, 4> ne;
+    const bool scale_first;
+    const bool view_scale;
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "ADD_MUL";
+    }
+
+    bool run_whole_graph() override { return true; }
+
+    std::string vars() override {
+        return VARS_TO_STR4(type, ne, scale_first, view_scale);
+    }
+
+    test_add_mul(
+            ggml_type type = GGML_TYPE_F32,
+            std::array<int64_t, 4> ne = {128, 2, 1, 1},
+            bool scale_first = false,
+            bool view_scale = false)
+        : type(type), ne(ne), scale_first(scale_first), view_scale(view_scale) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * a = ggml_new_tensor(ctx, type, 4, ne.data());
+        ggml_tensor * b = ggml_new_tensor(ctx, type, 4, ne.data());
+        ggml_tensor * scale = ggml_new_tensor(ctx, type, 4, ne.data());
+        ggml_set_param(a);
+        ggml_set_param(b);
+        ggml_set_param(scale);
+
+        if (view_scale) {
+            scale = ggml_reshape_4d(ctx, scale, ne[0], ne[1], ne[2], ne[3]);
+        }
+
+        ggml_tensor * add = ggml_add(ctx, a, b);
+        ggml_tensor * out = scale_first ? ggml_mul(ctx, scale, add) : ggml_mul(ctx, add, scale);
+        ggml_set_name(out, "out");
+        return out;
+    }
+};
+
 // GGML_OP_SCALE + GGML_UNARY_OP_TANH + GGML_OP_SCALE
 struct test_softcap : public test_case {
     const ggml_type type;
@@ -9271,6 +9315,12 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_scale(GGML_TYPE_F32, {10, 10, 10, 10}, 2.0f, 1.0f));
     test_cases.emplace_back(new test_scale(GGML_TYPE_F32, {10, 10, 10, 10}, 2.0f, 1.0f, true)); // inplace test
     test_cases.emplace_back(new test_scale(GGML_TYPE_F32, {100, 10, 10, 10}, 2.0f, 1.0f));
+    for (bool scale_first : { false, true }) {
+        for (bool view_scale : { false, true }) {
+            test_cases.emplace_back(new test_add_mul(GGML_TYPE_F32, { 64, 5, 4, 3 }, scale_first, view_scale));
+            test_cases.emplace_back(new test_add_mul(GGML_TYPE_F32, { 1025, 2, 1, 1 }, scale_first, view_scale));
+        }
+    }
     test_cases.emplace_back(new test_softcap(GGML_TYPE_F32, {10, 10, 10, 10}, 50.0f));
     test_cases.emplace_back(new test_silu_back());
 
