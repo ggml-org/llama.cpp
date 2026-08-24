@@ -31,7 +31,6 @@ layout (binding = 0) readonly buffer A_PACKED32 {A_TYPE_PACKED32 data_a_packed32
 #endif
 layout (binding = 1) readonly buffer B {block_q8_1_x4_packed128 data_b[];};
 layout (binding = 2) writeonly buffer D {D_TYPE data_d[];};
-layout (binding = 2) writeonly buffer D4 {D_TYPE_VEC4 data_dv4[];};
 
 #ifdef MUL_MAT_ID
 layout (binding = 3) readonly buffer IDS {int data_ids[];};
@@ -73,7 +72,6 @@ layout (constant_id = 2) const uint BN = 128;
 // layout (constant_id = 3) const uint BK = 32;
 layout (constant_id = 4) const uint WM = 64;
 layout (constant_id = 5) const uint WN = 32;
-layout (constant_id = 6) const uint WMITER = 2;
 layout (constant_id = 7) const uint TM = 16;
 layout (constant_id = 8) const uint TN = 16;
 layout (constant_id = 9) const uint TK = 16;
@@ -95,7 +93,6 @@ shared float buf_b_d[BN * BK_STEP];
 #define LOAD_VEC_A (4 * QUANT_R)
 #define LOAD_VEC_B 16
 
-#define NUM_WARPS (BLOCK_SIZE / WARP)
 const uint CM_ELEMS = (TM * TN) / WARP;
 #define ACC_BIAS_BITS 0x4B400000
 #define ACC_BIAS_F    12582912.0f
@@ -103,8 +100,10 @@ const bool USE_MAGIC_BIAS = WARP != 32;
 
 shared int32_t cm_layout_probe[TM * TN];
 
+#ifdef MUL_MAT_ID
+#define NUM_WARPS (BLOCK_SIZE / WARP)
 #include "mul_mm_id_funcs.glsl"
-#include "mul_mmq_cm1_funcs.glsl"
+#endif
 
 void main() {
     const uint blocks_m = (p.M + BM - 1) / BM;
@@ -132,10 +131,6 @@ void main() {
     const uint ic = in_group / gsize;
 #endif
 
-#ifdef NEEDS_INIT_IQ_SHMEM
-    init_iq_shmem(gl_WorkGroupSize);
-#endif
-
 #ifndef MUL_MAT_ID
     const uint batch_idx = gl_WorkGroupID.z + p.base_work_group_z;
 
@@ -148,13 +143,7 @@ void main() {
     const uint batch_idx_a = i03 * p.ne02 + i02;
 #endif
 
-    const uint WNITER = (WM * WN) / (WARP * TM * TN * WMITER);
-    const uint WSUBM = WM / WMITER;
-    const uint WSUBN = WN / WNITER;
-
     const uint warp_i = gl_SubgroupID;
-
-    const uint tiw = gl_SubgroupInvocationID;
 
     const uint cms_per_row = WM / TM;
     const uint cms_per_col = WN / TN;
