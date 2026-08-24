@@ -220,8 +220,6 @@ void main() {
     uint pos_b_ib = (batch_idx * p.batch_stride_b + ic * BN * p.stride_b + start_k) / BK;
 #endif
 
-    coopmat<int8_t, gl_ScopeSubgroup, TM, TK, gl_MatrixUseA> cache_a;
-    coopmat<int8_t, gl_ScopeSubgroup, TK, TN, gl_MatrixUseB> cache_b;
     coopmat<int32_t, gl_ScopeSubgroup, TM, TN, gl_MatrixUseAccumulator> cm_result[cms_per_row * cms_per_col];
 
     ACC_TYPE sums[cms_per_row * cms_per_col * CM_ELEMS];
@@ -348,14 +346,25 @@ void main() {
                 cm_result[idx] = coopmat<int32_t, gl_ScopeSubgroup, TM, TN, gl_MatrixUseAccumulator>(0);
             }
 
-            [[unroll]] for (uint i = 0; i < BK; i += TK) {
-                [[unroll]] for (uint cm_row = 0; cm_row < cms_per_row; cm_row++) {
-                    coopMatLoad(cache_a, buf_a_qs, (warp_r * WM + cm_row * TM) * QPITCH + ks * (BK / 4) + i / 4, QPITCH, gl_CooperativeMatrixLayoutRowMajor);
+            const uint K_SUB = BK / TK;
+            coopmat<int8_t, gl_ScopeSubgroup, TM, TK, gl_MatrixUseA> all_a[cms_per_row * K_SUB];
+            coopmat<int8_t, gl_ScopeSubgroup, TK, TN, gl_MatrixUseB> all_b[cms_per_col * K_SUB];
 
-                    [[unroll]] for (uint cm_col = 0; cm_col < cms_per_col; cm_col++) {
-                        coopMatLoad(cache_b, buf_b_qs, (warp_c * WN + cm_col * TN) * QPITCH + ks * (BK / 4) + i / 4, QPITCH, gl_CooperativeMatrixLayoutColumnMajor);
+            [[unroll]] for (uint cm_row = 0; cm_row < cms_per_row; cm_row++) {
+                [[unroll]] for (uint h = 0; h < K_SUB; h++) {
+                    coopMatLoad(all_a[cm_row * K_SUB + h], buf_a_qs, (warp_r * WM + cm_row * TM) * QPITCH + ks * (BK / 4) + h * (TK / 4), QPITCH, gl_CooperativeMatrixLayoutRowMajor);
+                }
+            }
+            [[unroll]] for (uint cm_col = 0; cm_col < cms_per_col; cm_col++) {
+                [[unroll]] for (uint h = 0; h < K_SUB; h++) {
+                    coopMatLoad(all_b[cm_col * K_SUB + h], buf_b_qs, (warp_c * WN + cm_col * TN) * QPITCH + ks * (BK / 4) + h * (TK / 4), QPITCH, gl_CooperativeMatrixLayoutColumnMajor);
+                }
+            }
 
-                        cm_result[cm_col * cms_per_row + cm_row] = coopMatMulAdd(cache_a, cache_b, cm_result[cm_col * cms_per_row + cm_row]);
+            [[unroll]] for (uint cm_row = 0; cm_row < cms_per_row; cm_row++) {
+                [[unroll]] for (uint cm_col = 0; cm_col < cms_per_col; cm_col++) {
+                    [[unroll]] for (uint h = 0; h < K_SUB; h++) {
+                        cm_result[cm_col * cms_per_row + cm_row] = coopMatMulAdd(all_a[cm_row * K_SUB + h], all_b[cm_col * K_SUB + h], cm_result[cm_col * cms_per_row + cm_row]);
                     }
                 }
             }
