@@ -20,7 +20,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cinttypes>
-#include <cstdio>
+#include <exception>
 #include <memory>
 #include <filesystem>
 #include <utility>
