@@ -71,6 +71,7 @@ static bool server_gfx1030_spec_target_backend_sampling_profile(const common_par
 
     const auto profile = server_spec_target_backend_profile_select(params.speculative);
     if (!profile ||
+            !server_spec_target_backend_profile_auto_enabled(profile) ||
             (profile.has_ngram_mod &&
              !server_env_enabled("GGML_HIP_GFX1030_STACKED_TARGET_BACKEND_SAMPLING"))) {
         return false;

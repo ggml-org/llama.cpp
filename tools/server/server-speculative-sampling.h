@@ -2,6 +2,9 @@
 
 #include "common.h"
 
+#include <cstdlib>
+#include <cstring>
+
 enum class server_spec_target_backend_profile_kind {
     NONE,
     MTP,
@@ -16,6 +19,25 @@ struct server_spec_target_backend_profile {
         return kind != server_spec_target_backend_profile_kind::NONE;
     }
 };
+
+// DFlash target backend sampling is retained as an explicit experiment, but
+// stays off by default until a matched DFlash E2E gain is qualified. MTP and
+// its validated stacked path remain enabled by their existing gates.
+inline bool server_spec_target_backend_profile_auto_enabled(
+        const server_spec_target_backend_profile & profile) {
+    if (!profile) {
+        return false;
+    }
+    if (profile.kind != server_spec_target_backend_profile_kind::DFLASH) {
+        return true;
+    }
+
+    const char * value = std::getenv("GGML_HIP_GFX1030_DFLASH_TARGET_BACKEND_SAMPLING");
+    return value != nullptr &&
+        std::strcmp(value, "0") != 0 &&
+        std::strcmp(value, "off") != 0 &&
+        std::strcmp(value, "false") != 0;
+}
 
 // Return true only for the practical stateless stochastic chain that can reduce
 // the target output transfer. Active history/stateful or unsupported samplers

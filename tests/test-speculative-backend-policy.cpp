@@ -99,6 +99,17 @@ int main() {
         make_spec({COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH}, 7),
         server_spec_target_backend_profile_kind::DFLASH, false);
 
+    const auto mtp_profile = server_spec_target_backend_profile_select(
+        make_spec({COMMON_SPECULATIVE_TYPE_DRAFT_MTP}, 4));
+    const auto dflash_profile = server_spec_target_backend_profile_select(
+        make_spec({COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH}, 5));
+    unsetenv("GGML_HIP_GFX1030_DFLASH_TARGET_BACKEND_SAMPLING");
+    require(server_spec_target_backend_profile_auto_enabled(mtp_profile), "MTP auto gate remains enabled");
+    require(!server_spec_target_backend_profile_auto_enabled(dflash_profile), "DFlash auto gate defaults off");
+    setenv("GGML_HIP_GFX1030_DFLASH_TARGET_BACKEND_SAMPLING", "1", 1);
+    require(server_spec_target_backend_profile_auto_enabled(dflash_profile), "DFlash explicit opt-in gate");
+    unsetenv("GGML_HIP_GFX1030_DFLASH_TARGET_BACKEND_SAMPLING");
+
     expect_profile(
         make_spec({COMMON_SPECULATIVE_TYPE_NGRAM_MOD, COMMON_SPECULATIVE_TYPE_DRAFT_MTP}, 4),
         server_spec_target_backend_profile_kind::MTP, true);
