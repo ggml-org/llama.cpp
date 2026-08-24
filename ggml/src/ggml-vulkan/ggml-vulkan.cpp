@@ -4252,6 +4252,12 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
 
     uint32_t l_align, m_align, s_align;
 
+    // RDNA3.5 preferred wave32 here
+    const bool cm1_use_wave32 = device->vendor_id == VK_VENDOR_ID_AMD &&
+                                device->subgroup_size_control &&
+                                device->subgroup_min_size <= 32 && device->subgroup_max_size >= 32;
+    const uint32_t cm1_sg = cm1_use_wave32 ? 32 : device->subgroup_size;
+
     vk_pipeline wait_pipeline;
     CompileTask claimed_task {};
     bool has_claimed_task = false;
@@ -4334,11 +4340,6 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
         m_warptile_mmq_int = { 128,              64,  64, 32, mm_warp_8,     32, 2, itm_m, itn_m, itk_m, mm_warp_8 };
         s_warptile_mmq_int = { subgroup_size_32, 32,  32, 32, s_warptile_wm, 32, 2, itm_s, itn_s, itk_s, subgroup_size_8 };
 
-        // RDNA3.5 preferred wave32 here
-        const bool cm1_use_wave32 = device->vendor_id == VK_VENDOR_ID_AMD &&
-                                    device->subgroup_size_control &&
-                                    device->subgroup_min_size <= 32 && device->subgroup_max_size >= 32;
-        const uint32_t cm1_sg = cm1_use_wave32 ? 32 : device->subgroup_size;
         const auto cm1_bs = [cm1_sg](uint32_t bm, uint32_t bn) {
             return cm1_sg * (bm / std::min(cm1_sg, bm)) * (bn / 32);
         };
