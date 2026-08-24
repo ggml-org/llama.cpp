@@ -10,6 +10,33 @@ static constexpr __device__ int ggml_cuda_fattn_vec_get_nthreads_device() {
     return 128;
 }
 
+template<int D, int ncols, ggml_type type_K, ggml_type type_V>
+static constexpr __device__ int ggml_cuda_fattn_vec_get_nthreads_KQ(const int cpy_nb) {
+    if constexpr (type_K == GGML_TYPE_F16 || type_K == GGML_TYPE_BF16) return 128 / cpy_nb;
+#if defined(GGML_USE_HIP)
+#if defined(RDNA)
+    constexpr bool use_nthreads_KQ_2 = D == 256 && ncols == 2 && type_V == GGML_TYPE_F16 && (type_K == GGML_TYPE_Q4_0 || type_K == GGML_TYPE_Q4_1);
+    if constexpr (use_nthreads_KQ_2) return 2;
+    if constexpr (D == 256) return 4;
+    return 2;
+#else
+    return 4;
+#endif // defined(GGML_USE_HIP)
+#else
+    return D / 4 < 32 ? D / 4 : 32;
+#endif // defined(RDNA)
+}
+
+template<int D, int ncols, ggml_type type_K, ggml_type type_V>
+static constexpr __device__ int ggml_cuda_fattn_vec_get_nthreads_V(const int cpy_nb) {
+#if defined(GGML_USE_HIP) && defined(RDNA)
+    if constexpr (D == 256 && ncols == 2 && type_K == GGML_TYPE_BF16 && type_V == GGML_TYPE_BF16) return 16;
+    if constexpr (D == 64 && ncols == 1 && type_K == GGML_TYPE_F16 && type_V == GGML_TYPE_Q4_1) return 32;
+#endif
+    if constexpr (type_V == GGML_TYPE_F16 || type_V == GGML_TYPE_BF16) return 128 / cpy_nb;
+    return D / 4 < 32 ? D / 4 : 32;
+}
+
 // Currently llvm with the amdgcn target does not support unrolling loops
 // that contain a break that can not be resolved at compile time.
 #ifdef __clang__
@@ -70,22 +97,10 @@ static __global__ void flash_attn_ext_vec(
 
     constexpr int cpy_nb = ggml_cuda_get_max_cpy_bytes();
     constexpr int cpy_ne = cpy_nb / 4;
-
-#ifdef GGML_USE_HIP
-#ifdef RDNA
-    constexpr int nthreads_KQ_q = 2;
-#else
-    constexpr int nthreads_KQ_q = 4;
-#endif // RDNA
-    constexpr int nthreads_V_q  = (D/4 < 32 ? D/4 : 32);
-#else
-    constexpr int nthreads_KQ_q = (D/4 < 32 ? D/4 : 32);
-    constexpr int nthreads_V_q  = (D/4 < 32 ? D/4 : 32);
-#endif // GGML_USE_HIP
-
-    constexpr int nthreads    = ggml_cuda_fattn_vec_get_nthreads_device();
-    constexpr int nthreads_KQ = (type_K == GGML_TYPE_F16 || type_K == GGML_TYPE_BF16) ? 128 / cpy_nb : nthreads_KQ_q;
-    constexpr int nthreads_V  = (type_V == GGML_TYPE_F16 || type_V == GGML_TYPE_BF16) ? 128 / cpy_nb : nthreads_V_q;
+    
+    constexpr int nthreads = ggml_cuda_fattn_vec_get_nthreads_device();
+    constexpr int nthreads_KQ = ggml_cuda_fattn_vec_get_nthreads_KQ<D, ncols, type_K, type_V>(cpy_nb);
+    constexpr int nthreads_V = ggml_cuda_fattn_vec_get_nthreads_V<D, ncols, type_K, type_V>(cpy_nb);
 
     static_assert(WARP_SIZE % nthreads_KQ == 0, "bad nthreads_K");
     static_assert(WARP_SIZE % nthreads_V  == 0, "bad nthreads_V");
@@ -547,11 +562,14 @@ template <int D, ggml_type type_K, ggml_type type_V>
 void ggml_cuda_flash_attn_ext_vec_case(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * KQV = dst;
     const ggml_tensor * Q   = dst->src[0];
+    const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
+    constexpr bool is_d128_q8_q4 = D == 128 && type_K == GGML_TYPE_Q8_0 && (type_V == GGML_TYPE_Q4_0 || type_V == GGML_TYPE_Q4_1);
+    const bool force_cols_per_block_1 = GGML_CUDA_CC_IS_RDNA(cc) && is_d128_q8_q4;
 
     float logit_softcap;
     memcpy(&logit_softcap, (const float *) KQV->op_params + 2, sizeof(float));
 
-    if (Q->ne[1] == 1) {
+    if (Q->ne[1] == 1 || force_cols_per_block_1) {
         constexpr int cols_per_block = 1;
         if (logit_softcap == 0.0f) {
             constexpr bool use_logit_softcap = false;
