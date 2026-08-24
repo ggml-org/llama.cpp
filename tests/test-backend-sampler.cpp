@@ -829,11 +829,46 @@ static void test_backend_logit_bias_sampling(const test_params & params) {
         GGML_ASSERT(false && "Failed to decode token");
     }
 
-    llama_token backend_token = llama_get_sampled_token_ith(test_ctx.ctx.get(), test_ctx.idx_for_seq(seq_id));
-    printf("sampled token = %d, expected = %d\n", backend_token, bias_token);
-    GGML_ASSERT(backend_token == bias_token);
+    const int32_t backend_idx = test_ctx.idx_for_seq(seq_id);
+    llama_token backend_token = llama_get_sampled_token_ith(test_ctx.ctx.get(), backend_idx);
+    const uint32_t n_logits = llama_get_sampled_logits_count_ith(test_ctx.ctx.get(), backend_idx);
+    const float * sampled_logits = llama_get_sampled_logits_ith(test_ctx.ctx.get(), backend_idx);
+    const float * sampled_probs = llama_get_sampled_probs_ith(test_ctx.ctx.get(), backend_idx);
+    const llama_token * sampled_ids = llama_get_sampled_candidates_ith(test_ctx.ctx.get(), backend_idx);
+    const uint32_t n_candidates = llama_get_sampled_candidates_count_ith(test_ctx.ctx.get(), backend_idx);
 
-    printf("backend logit bias sampling test PASSED\n");
+    // A finite +10 bias need not make the biased token the sampled token. Verify
+    // the backend transformation itself against an unfiltered CPU logits row
+    // instead of asserting a particular random draw.
+    std::vector<llama_sampler_seq_config> reference_configs;
+    test_context reference_ctx(params, reference_configs);
+    if (!reference_ctx.decode({{seq_id, "Hello"}})) {
+        GGML_ASSERT(false && "Failed to decode reference token");
+    }
+    const int32_t reference_idx = reference_ctx.idx_for_seq(seq_id);
+    const float * raw_logits = llama_get_logits_ith(reference_ctx.ctx.get(), reference_idx);
+    GGML_ASSERT(raw_logits != nullptr);
+    GGML_ASSERT(sampled_logits != nullptr);
+    GGML_ASSERT(sampled_probs != nullptr);
+    GGML_ASSERT(n_logits == (uint32_t) llama_vocab_n_tokens(vocab));
+    GGML_ASSERT(n_candidates == 0 || n_candidates == n_logits);
+    GGML_ASSERT(n_candidates == 0 || sampled_ids != nullptr);
+
+    float prob_sum = 0.0f;
+    for (uint32_t i = 0; i < n_logits; ++i) {
+        const llama_token token = n_candidates == 0 ? (llama_token) i : sampled_ids[i];
+        const float expected = raw_logits[token] + (token == bias_token ? 10.0f : 0.0f);
+        const float tolerance = 1e-4f * std::max(1.0f, std::fabs(expected));
+        GGML_ASSERT(std::fabs(sampled_logits[i] - expected) <= tolerance);
+        GGML_ASSERT(std::isfinite(sampled_probs[i]));
+        GGML_ASSERT(sampled_probs[i] >= 0.0f);
+        prob_sum += sampled_probs[i];
+    }
+    GGML_ASSERT(std::fabs(prob_sum - 1.0f) <= 1e-3f);
+    GGML_ASSERT(backend_token >= 0 && backend_token < llama_vocab_n_tokens(vocab));
+
+    printf("backend logit bias sampling test PASSED (bias token=%d, sampled=%d)\n", bias_token, backend_token);
+
 }
 
 static void accept_prompt(llama_sampler * smpl, const llama_vocab * vocab, const std::string & prompt) {
