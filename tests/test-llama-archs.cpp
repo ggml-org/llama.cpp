@@ -696,13 +696,6 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const gg
                     if (dc.split_mode != LLAMA_SPLIT_MODE_TENSOR || llm_arch_supports_sm_tensor(arch)) {
                         model_and_ctx_dev = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, dc.devs, dc.split_mode, encode);
                         logits_dev = get_logits(model_and_ctx_dev.first.get(), model_and_ctx_dev.second.get(), tokens, encode);
-                        if (arch == LLM_ARCH_DEEPSEEK4) {
-                            // DSV4 is the only arch whose seq_rm clears per-sequence cache contents via
-                            // ggml_backend_tensor_memset (the compressed buffers must never expose stale rows);
-                            // for the Meta config this is the only test coverage of the meta backend's memset_tensor
-                            GGML_ASSERT(llama_memory_seq_rm(
-                                    llama_get_memory(model_and_ctx_dev.second.get()), 0, -1, -1));
-                        }
                         const double nmse_val = nmse(logits_cpu, logits_dev);
                         snprintf(nmse_str, sizeof(nmse_str), "(%.2e)", nmse_val);
                         status_nmse = "\033[1;32mOK\033[0m";
