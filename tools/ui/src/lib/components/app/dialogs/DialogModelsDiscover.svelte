@@ -59,9 +59,8 @@
 	<Dialog.Content
 		class="grid gap-0 p-0 md:h-[calc(100vh-4rem)]! md:max-h-240! md:w-[calc(100vw-4rem)]! md:max-w-360!" style="grid-template-columns: auto 1fr;"
 	>
-		<!-- <div class="flex min-h-0 flex-1"> -->
 			<aside
-				class="sticky top-0 w-100 shrink-0 self-start border-r border-border/40 bg-background overflow-y-auto md:p-4 h-full space-y-1"
+				class="sticky top-0 w-100 shrink-0 self-start border-r border-border/40 bg-background overflow-y-auto md:p-4 h-full space-y-1 md:max-h-239.5!"
 			>
 				<div class="p-2 sticky top-0 z-99">
 					<SearchInput
@@ -95,6 +94,5 @@
 					<ModelsDiscoverDetails modelId={selectedId} />
 				{/if}
 			</main>
-		<!-- </div> -->
 	</Dialog.Content>
 </Dialog.Root>
