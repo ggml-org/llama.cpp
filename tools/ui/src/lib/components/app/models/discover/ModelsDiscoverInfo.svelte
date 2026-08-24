@@ -54,7 +54,7 @@
 </script>
 
 <span class="min-w-0 flex-1">
-	<ModelId modelId={model.id} hideOrgName {modalities} {draftVariants} class="min-w-0" />
+	<ModelId modelId={model.id} hideOrgName {modalities} {draftVariants} wrap class="min-w-0" />
 
 	<span class="mt-0.5 block truncate text-xs text-muted-foreground">
 		<span class="inline-flex items-center gap-1">

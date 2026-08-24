@@ -57,26 +57,22 @@
 
 <Dialog.Root {open} onOpenChange={handleOpenChange}>
 	<Dialog.Content
-		class="flex flex-col md:h-[calc(100vh-4rem)]! md:max-h-240! md:w-[calc(100vw-4rem)]! md:max-w-360!"
+		class="grid gap-0 p-0 md:h-[calc(100vh-4rem)]! md:max-h-240! md:w-[calc(100vw-4rem)]! md:max-w-360!" style="grid-template-columns: auto 1fr;"
 	>
-		<Dialog.Header>
-			<Dialog.Title class="flex items-center gap-2">
-				<Boxes class="h-4 w-4" />
-				Discover Models
-			</Dialog.Title>
-		</Dialog.Header>
-
-		<div class="flex min-h-0 flex-1">
-			<aside class="flex w-88 shrink-0 flex-col border-r border-border/40">
-				<div class="p-2">
+		<!-- <div class="flex min-h-0 flex-1"> -->
+			<aside
+				class="sticky top-0 w-100 shrink-0 self-start border-r border-border/40 bg-background overflow-y-auto md:p-4 h-full space-y-1"
+			>
+				<div class="p-2 sticky top-0 z-99">
 					<SearchInput
+					    class=""
 						bind:value={searchQuery}
 						placeholder="Search models..."
 						onInput={handleSearchInput}
 					/>
 				</div>
 
-				<div class="min-h-0 flex-1 overflow-y-auto">
+				<div>
 					{#if modelsHubStore.loading}
 						<p class="p-4 text-sm text-muted-foreground">Loading models...</p>
 					{:else if modelsHubStore.error}
@@ -94,11 +90,11 @@
 				</div>
 			</aside>
 
-			<main class="min-w-0 flex-1 overflow-y-auto">
+			<main>
 				{#if selectedId}
 					<ModelsDiscoverDetails modelId={selectedId} />
 				{/if}
 			</main>
-		</div>
+		<!-- </div> -->
 	</Dialog.Content>
 </Dialog.Root>

@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { HuggingFaceService } from '$lib/services';
+	import { DARK_INVERT_AVATAR_ORGS } from '$lib/constants';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 
 	interface Props {
@@ -13,6 +14,9 @@
 
 	let avatarError = $state(false);
 	let quantError = $state(false);
+
+	let invertAvatar = $derived(DARK_INVERT_AVATAR_ORGS.includes(org));
+	let invertQuant = $derived(DARK_INVERT_AVATAR_ORGS.includes(quantOrg ?? ''));
 
 	// Monogram fallback: org initial on a hue derived from its name, so each org
 	// gets a stable distinct color.
@@ -44,19 +48,21 @@
 			{org.charAt(0).toUpperCase()}
 		</span>
 	{:else}
-		<img
-			src={HuggingFaceService.getAvatarUrl(org)}
-			onerror={() => (avatarError = true)}
-			class="h-9 w-9 rounded-md bg-gray-200 p-0.5"
-			alt=""
-			loading="lazy"
-		/>
+        <div class="rounded-md">
+    		<img
+    			src={HuggingFaceService.getAvatarUrl(org)}
+    			onerror={() => (avatarError = true)}
+    			class="h-9 w-9 rounded-md {invertAvatar ? 'dark:invert' : ''}"
+    			alt=""
+    			loading="lazy"
+    		/>
+	    </div>
 	{/if}
 
-	{#if quantOrg}
+	{#if quantOrg && quantOrg !== org}
 		<Tooltip.Root>
 			<Tooltip.Trigger
-				class="absolute -bottom-0.75 -right-0.75 h-4.25 w-4.25 overflow-hidden rounded-full border border-background"
+				class="absolute -bottom-0.75 -right-0.75 h-4.25 w-4.25 overflow-hidden rounded-full border border-background bg-muted "
 			>
 				{#if quantError}
 					<span
@@ -70,7 +76,7 @@
 					<img
 						src={HuggingFaceService.getAvatarUrl(quantOrg)}
 						onerror={() => (quantError = true)}
-						class="h-full w-full rounded-full bg-gray-200"
+						class="h-full w-full rounded-full {invertQuant ? 'dark:invert' : ''}"
 						alt=""
 						loading="lazy"
 					/>

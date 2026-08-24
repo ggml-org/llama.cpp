@@ -45,6 +45,9 @@ export const STATS_UNITS = {
 
 export const DEFAULT_MOBILE_BREAKPOINT = 768;
 
+/** Orgs whose avatar is dark and needs inverting in dark mode. */
+export const DARK_INVERT_AVATAR_ORGS = ['openai'];
+
 /** Icon used for the model selector and the `/model` slash command. */
 export const MODEL_SELECTOR_ICON = Package;
 

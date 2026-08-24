@@ -14,9 +14,6 @@ import { HuggingFaceService } from '$lib/services';
 import type { HfModelInfo } from '$lib/types/huggingface';
 
 class ModelsHubStore {
-	/** Org whose models the sidebar lists by default. */
-	private static readonly DEFAULT_AUTHOR = 'ggml-org';
-
 	models = $state<HfModelInfo[]>([]);
 	loading = $state(false);
 	error = $state<string | null>(null);
@@ -29,8 +26,10 @@ class ModelsHubStore {
 	private searchRequestId = 0;
 
 	/**
-	 * Fetch the default list: the curated ggml-org models in display order.
-	 * No-op when already loaded or in flight.
+	 * Fetch the default list: the curated ggml--org models in display order.
+	 * Each curated model is fetched directly by ID, so the list is independent
+	 * of download ranking (curated models may fall outside the top-50 search
+	 * window). No-op when already loaded or in flight.
 	 */
 	async fetch(): Promise<void> {
 		if (this.loading || this.fetched) return;
@@ -39,31 +38,11 @@ class ModelsHubStore {
 		this.error = null;
 
 		try {
-			const results = await HuggingFaceService.search({
-				author: ModelsHubStore.DEFAULT_AUTHOR,
-				sort: 'downloads',
-				limit: 50,
-				full: true
-			});
-
-			const byId = new Map(results.map((m) => [m.id, m]));
-
-			// Keep only the curated models, in the curated display order.
-			const curated = CURATED_MODEL_IDS.flatMap((id) => {
-				const model = byId.get(id);
-
-				return model ? [model] : [];
-			});
-
-			// The list endpoint omits gguf metadata (context length, architecture),
-			// so fetch it per model and merge it in.
-			this.defaultModels = await Promise.all(
-				curated.map(async (model) => {
-					const details = await HuggingFaceService.getDetails(model.id);
-
-					return details?.gguf ? { ...model, gguf: details.gguf } : model;
-				})
-			);
+			// getDetails returns full metadata (downloads, likes, lastModified,
+			// siblings, tags, gguf) for a single model.
+			this.defaultModels = (
+				await Promise.all(CURATED_MODEL_IDS.map((id) => HuggingFaceService.getDetails(id)))
+			).filter((m): m is HfModelInfo => m !== null);
 			this.models = this.defaultModels;
 			this.fetched = true;
 		} catch (err) {

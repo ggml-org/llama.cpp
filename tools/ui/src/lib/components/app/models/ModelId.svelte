@@ -27,6 +27,8 @@
 		modalities?: ModelModalities;
 		capabilities?: ModelCapabilities;
 		draftVariants?: DraftVariant[];
+		/** Allow badges to wrap onto new lines instead of truncating. */
+		wrap?: boolean;
 		class?: string;
 	}
 
@@ -44,6 +46,7 @@
 		showRawTooltip = false,
 		supportsThinking = false,
 		tags,
+		wrap = false,
 		...rest
 	}: Props = $props();
 
@@ -89,7 +92,7 @@
 			{#if !hideOrgName && parsed.orgName}{parsed.orgName}/{/if}{displayName}
 		</span>
 
-		<span class="inline-flex items-center gap-1">
+		<span class="inline-flex items-center gap-1 {wrap ? 'flex-wrap' : ''}">
 			{#if parsed.variant}
 				<span class={variantBadgeClass} title={`${parsed.variant.toUpperCase()} draft model`}>
 					{parsed.variant}
@@ -132,7 +135,7 @@
 		</span>
 	{/snippet}
 
-	<span class="flex min-w-0 items-center gap-1.5 {className}" {...rest}>
+	<span class="flex min-w-0 items-center gap-1.5 {wrap ? 'flex-wrap' : ''} {className}" {...rest}>
 		{#if showRawTooltip}
 			<Tooltip.Root>
 				<Tooltip.Trigger class="flex min-w-0 items-center gap-1.5">
