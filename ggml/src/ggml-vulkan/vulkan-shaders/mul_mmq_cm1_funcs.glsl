@@ -1,56 +1,196 @@
-// Quant-specific A-side unpacking: registers → shared memory
-#if defined(DATA_A_Q4_0) || defined(DATA_A_Q4_1)
-#define STORE_A_QS(buf_ib, ks, idx)                                                             \
-                uint32_t lo4 = pre_a_qs[idx] & 0x0F0F0F0F;                                      \
-                uint32_t hi4 = (pre_a_qs[idx] >> 4) & 0x0F0F0F0F;                               \
-                lo4 = ((lo4 | 0x80808080) - 0x08080808) ^ 0x80808080;                           \
-                hi4 = ((hi4 | 0x80808080) - 0x08080808) ^ 0x80808080;                           \
-                buf_a_qs[(buf_ib) * QPITCH + (ks) * (BK / 4) + loadr_a    ] = lo4;              \
-                buf_a_qs[(buf_ib) * QPITCH + (ks) * (BK / 4) + loadr_a + 4] = hi4;
-#elif defined(DATA_A_Q5_0) || defined(DATA_A_Q5_1)
-#define STORE_A_QS(buf_ib, ks, idx)                                                             \
-                uint32_t lo4 = pre_a_qs[idx] & 0x0F0F0F0F;                                      \
-                uint32_t hi4 = (pre_a_qs[idx] >> 4) & 0x0F0F0F0F;                               \
-                const uint32_t qh = pre_a_qh[idx];                                              \
-                lo4 |= ((qh >> (4u * loadr_a       )) & 0xFu) * 0x02040810u & 0x10101010u;      \
-                hi4 |= ((qh >> (4u * loadr_a + 16u )) & 0xFu) * 0x02040810u & 0x10101010u;     \
-                lo4 = ((lo4 | 0x80808080) - 0x10101010) ^ 0x80808080;                           \
-                hi4 = ((hi4 | 0x80808080) - 0x10101010) ^ 0x80808080;                           \
-                buf_a_qs[(buf_ib) * QPITCH + (ks) * (BK / 4) + loadr_a    ] = lo4;              \
-                buf_a_qs[(buf_ib) * QPITCH + (ks) * (BK / 4) + loadr_a + 4] = hi4;
-#elif defined(DATA_A_Q8_0)
-#define STORE_A_QS(buf_ib, ks, idx)                                                             \
-                buf_a_qs[(buf_ib) * QPITCH + (ks) * (BK / 4) + loadr_a] = pre_a_qs[idx];
-#endif
+// Per-quant-type data structures and functions for the cm1 int8 coopmat path.
+// Each quant type defines:
+//   struct block_a_prefetch  — register data for one A-block per thread
+//   block_a_load()           — load from global memory into a block_a_prefetch
+//   block_a_to_shmem()       — unpack and write to shared memory
 
-// Quant-specific extra prefetch helpers (no-ops for types that don't need them)
-#if defined(DATA_A_Q5_0)
-#define PREFETCH_A_QH(li, ks, ib)                                                               \
-                pre_a_qh[(li) * BK_STEP + (ks)] =                                              \
-                    pack32(u16vec2(data_a_packed16[(ib) + (ks)].qh[0],                          \
-                                   data_a_packed16[(ib) + (ks)].qh[1]));
+#if defined(DATA_A_Q4_0)
+
+struct block_a_prefetch {
+    uint32_t qs;
+    float16_t d;
+};
+
+block_a_prefetch block_a_load(uint ib, uint loadr) {
+    block_a_prefetch blk;
+    blk.qs = pack32(u16vec2(data_a_packed16[ib].qs[loadr * 2],
+                             data_a_packed16[ib].qs[loadr * 2 + 1]));
+    blk.d = data_a_packed16[ib].d;
+    return blk;
+}
+
+void block_a_to_shmem(block_a_prefetch blk, uint buf_ib, uint ks, uint loadr) {
+    uint32_t lo4 = blk.qs & 0x0F0F0F0F;
+    uint32_t hi4 = (blk.qs >> 4) & 0x0F0F0F0F;
+    lo4 = ((lo4 | 0x80808080) - 0x08080808) ^ 0x80808080;
+    hi4 = ((hi4 | 0x80808080) - 0x08080808) ^ 0x80808080;
+    buf_a_qs[buf_ib * QPITCH + ks * (BK / 4) + loadr    ] = lo4;
+    buf_a_qs[buf_ib * QPITCH + ks * (BK / 4) + loadr + 4] = hi4;
+
+    if (loadr == 0) {
+        buf_a_d[ks * BM + buf_ib] = float(blk.d);
+    }
+}
+
+#elif defined(DATA_A_Q4_1)
+
+struct block_a_prefetch {
+    uint32_t qs;
+    float16_t d;
+    float16_t m;
+};
+
+block_a_prefetch block_a_load(uint ib, uint loadr) {
+    block_a_prefetch blk;
+    blk.qs = pack32(u16vec2(data_a_packed16[ib].qs[loadr * 2],
+                             data_a_packed16[ib].qs[loadr * 2 + 1]));
+    blk.d = data_a_packed16[ib].d;
+    blk.m = data_a_packed16[ib].m;
+    return blk;
+}
+
+void block_a_to_shmem(block_a_prefetch blk, uint buf_ib, uint ks, uint loadr) {
+    uint32_t lo4 = blk.qs & 0x0F0F0F0F;
+    uint32_t hi4 = (blk.qs >> 4) & 0x0F0F0F0F;
+    lo4 = ((lo4 | 0x80808080) - 0x08080808) ^ 0x80808080;
+    hi4 = ((hi4 | 0x80808080) - 0x08080808) ^ 0x80808080;
+    buf_a_qs[buf_ib * QPITCH + ks * (BK / 4) + loadr    ] = lo4;
+    buf_a_qs[buf_ib * QPITCH + ks * (BK / 4) + loadr + 4] = hi4;
+
+    if (loadr == 0) {
+        buf_a_d[ks * BM + buf_ib] = float(blk.d);
+        buf_a_m[ks * BM + buf_ib] = float(blk.m);
+    }
+}
+
+#elif defined(DATA_A_Q5_0)
+
+struct block_a_prefetch {
+    uint32_t qs;
+    float16_t d;
+    uint32_t qh;
+};
+
+block_a_prefetch block_a_load(uint ib, uint loadr) {
+    block_a_prefetch blk;
+    blk.qs = pack32(u16vec2(data_a_packed16[ib].qs[loadr * 2],
+                             data_a_packed16[ib].qs[loadr * 2 + 1]));
+    blk.d = data_a_packed16[ib].d;
+    blk.qh = pack32(u16vec2(data_a_packed16[ib].qh[0], data_a_packed16[ib].qh[1]));
+    return blk;
+}
+
+void block_a_to_shmem(block_a_prefetch blk, uint buf_ib, uint ks, uint loadr) {
+    uint32_t lo4 = blk.qs & 0x0F0F0F0F;
+    uint32_t hi4 = (blk.qs >> 4) & 0x0F0F0F0F;
+    lo4 |= ((blk.qh >> (4u * loadr       )) & 0xFu) * 0x02040810u & 0x10101010u;
+    hi4 |= ((blk.qh >> (4u * loadr + 16u )) & 0xFu) * 0x02040810u & 0x10101010u;
+    lo4 = ((lo4 | 0x80808080) - 0x10101010) ^ 0x80808080;
+    hi4 = ((hi4 | 0x80808080) - 0x10101010) ^ 0x80808080;
+    buf_a_qs[buf_ib * QPITCH + ks * (BK / 4) + loadr    ] = lo4;
+    buf_a_qs[buf_ib * QPITCH + ks * (BK / 4) + loadr + 4] = hi4;
+
+    if (loadr == 0) {
+        buf_a_d[ks * BM + buf_ib] = float(blk.d);
+    }
+}
+
 #elif defined(DATA_A_Q5_1)
-#define PREFETCH_A_QH(li, ks, ib)                                                               \
-                pre_a_qh[(li) * BK_STEP + (ks)] = data_a_packed16[(ib) + (ks)].qh;
-#else
-#define PREFETCH_A_QH(li, ks, ib)
+
+struct block_a_prefetch {
+    uint32_t qs;
+    float16_t d;
+    float16_t m;
+    uint32_t qh;
+};
+
+block_a_prefetch block_a_load(uint ib, uint loadr) {
+    block_a_prefetch blk;
+    blk.qs = pack32(u16vec2(data_a_packed16[ib].qs[loadr * 2],
+                             data_a_packed16[ib].qs[loadr * 2 + 1]));
+    blk.d = data_a_packed16[ib].d;
+    blk.m = data_a_packed16[ib].m;
+    blk.qh = data_a_packed16[ib].qh;
+    return blk;
+}
+
+void block_a_to_shmem(block_a_prefetch blk, uint buf_ib, uint ks, uint loadr) {
+    uint32_t lo4 = blk.qs & 0x0F0F0F0F;
+    uint32_t hi4 = (blk.qs >> 4) & 0x0F0F0F0F;
+    lo4 |= ((blk.qh >> (4u * loadr       )) & 0xFu) * 0x02040810u & 0x10101010u;
+    hi4 |= ((blk.qh >> (4u * loadr + 16u )) & 0xFu) * 0x02040810u & 0x10101010u;
+    lo4 = ((lo4 | 0x80808080) - 0x10101010) ^ 0x80808080;
+    hi4 = ((hi4 | 0x80808080) - 0x10101010) ^ 0x80808080;
+    buf_a_qs[buf_ib * QPITCH + ks * (BK / 4) + loadr    ] = lo4;
+    buf_a_qs[buf_ib * QPITCH + ks * (BK / 4) + loadr + 4] = hi4;
+
+    if (loadr == 0) {
+        buf_a_d[ks * BM + buf_ib] = float(blk.d);
+        buf_a_m[ks * BM + buf_ib] = float(blk.m);
+    }
+}
+
+#elif defined(DATA_A_Q8_0)
+
+struct block_a_prefetch {
+    uint32_t qs;
+    float16_t d;
+};
+
+block_a_prefetch block_a_load(uint ib, uint loadr) {
+    block_a_prefetch blk;
+    blk.qs = pack32(u16vec2(data_a_packed16[ib].qs[loadr * 2],
+                             data_a_packed16[ib].qs[loadr * 2 + 1]));
+    blk.d = data_a_packed16[ib].d;
+    return blk;
+}
+
+void block_a_to_shmem(block_a_prefetch blk, uint buf_ib, uint ks, uint loadr) {
+    buf_a_qs[buf_ib * QPITCH + ks * (BK / 4) + loadr] = blk.qs;
+
+    if (loadr == 0) {
+        buf_a_d[ks * BM + buf_ib] = float(blk.d);
+    }
+}
+
 #endif
 
+// ===== B-side: load and store =====
+
+struct block_b_prefetch {
+    ivec4 qs;
+    float16_t d;
 #if defined(DATA_A_Q4_1) || defined(DATA_A_Q5_1)
-#define PREFETCH_A_M(li, ks, ib)                                                                \
-                pre_a_m[(li) * BK_STEP + (ks)] = data_a_packed16[(ib) + (ks)].m;
-#define PREFETCH_B_S(li, ks, ib_outer, ib_inner)                                                \
-                pre_b_s[(li) * BK_STEP + (ks)] = data_b[(ib_outer)].ds[(ib_inner)].y;
-#define STORE_A_M(buf_ib, ks, idx)                                                              \
-                    buf_a_m[(ks) * BM + (buf_ib)] = float(pre_a_m[idx]);
-#define STORE_B_S(in_bounds, buf_ib, ks, idx)                                                   \
-                    buf_b_s[(ks) * BN + (buf_ib)] = (in_bounds) ? float(pre_b_s[idx]) : 0.0f;
-#else
-#define PREFETCH_A_M(li, ks, ib)
-#define PREFETCH_B_S(li, ks, ib_outer, ib_inner)
-#define STORE_A_M(buf_ib, ks, idx)
-#define STORE_B_S(in_bounds, buf_ib, ks, idx)
+    float16_t s;
 #endif
+};
+
+block_b_prefetch block_b_load(uint ib_outer, uint ib_inner, uint loadr) {
+    block_b_prefetch blk;
+    blk.qs = data_b[ib_outer].qs[ib_inner * 2 + loadr];
+    blk.d = data_b[ib_outer].ds[ib_inner].x;
+#if defined(DATA_A_Q4_1) || defined(DATA_A_Q5_1)
+    blk.s = data_b[ib_outer].ds[ib_inner].y;
+#endif
+    return blk;
+}
+
+void block_b_to_shmem(block_b_prefetch blk, uint buf_ib, uint ks, uint loadr, bool in_bounds) {
+    const ivec4 v = in_bounds ? blk.qs : ivec4(0);
+    const uint base = buf_ib * QPITCH + ks * (BK / 4) + loadr * 4;
+    buf_b_qs[base    ] = v.x;
+    buf_b_qs[base + 1] = v.y;
+    buf_b_qs[base + 2] = v.z;
+    buf_b_qs[base + 3] = v.w;
+    if (loadr == 0) {
+        buf_b_d[ks * BN + buf_ib] = in_bounds ? float(blk.d) : 0.0f;
+#if defined(DATA_A_Q4_1) || defined(DATA_A_Q5_1)
+        buf_b_s[ks * BN + buf_ib] = in_bounds ? float(blk.s) : 0.0f;
+#endif
+    }
+}
+
+// ===== Framework macros =====
 
 #ifdef MUL_MAT_ID
 #define B_IB_CALC                                                                               \
@@ -62,19 +202,13 @@
             const uint ib = pos_b_ib + buf_ib * p.stride_b / BK;
 #endif
 
-// Prefetch: global memory → registers
 #define PREFETCH_BLOCK(blk)                                                                     \
     [[unroll]] for (uint li = 0; li < A_LOADS; li++) {                                          \
         const uint buf_ib = loadc_a + li * loadstride_a;                                        \
         if (buf_ib < BM) {                                                                      \
             const uint ib = pos_a_ib + buf_ib * p.stride_a / BK;                                \
             [[unroll]] for (uint ks = 0; ks < BK_STEP; ks++) {                                  \
-                pre_a_qs[li * BK_STEP + ks] =                                                   \
-                    pack32(u16vec2(data_a_packed16[ib + ks].qs[loadr_a * 2],                    \
-                                   data_a_packed16[ib + ks].qs[loadr_a * 2 + 1]));              \
-                pre_a_d[li * BK_STEP + ks] = data_a_packed16[ib + ks].d;                        \
-                PREFETCH_A_QH(li, ks, ib)                                                       \
-                PREFETCH_A_M(li, ks, ib)                                                        \
+                pre_a[li * BK_STEP + ks] = block_a_load(ib + ks, loadr_a);                      \
             }                                                                                   \
         }                                                                                       \
     }                                                                                           \
@@ -84,27 +218,17 @@
             B_IB_CALC                                                                           \
             [[unroll]] for (uint ks = 0; ks < BK_STEP; ks++) {                                  \
                 const uint ib_k = ((blk) + ks * BK < end_k) ? (ib + ks) : ib;                   \
-                const uint ib_outer = ib_k / 4;                                                 \
-                const uint ib_inner = ib_k % 4;                                                 \
-                pre_b_qs[li * BK_STEP + ks] = data_b[ib_outer].qs[ib_inner * 2 + loadr_b];      \
-                pre_b_d[li * BK_STEP + ks] = data_b[ib_outer].ds[ib_inner].x;                   \
-                PREFETCH_B_S(li, ks, ib_outer, ib_inner)                                        \
+                pre_b[li * BK_STEP + ks] = block_b_load(ib_k / 4, ib_k % 4, loadr_b);          \
             }                                                                                   \
         }                                                                                       \
     }
 
-// Store: registers → shared memory (with quant-specific unpacking)
 #define STORE_BLOCK_TO_LDS(blk)                                                                 \
     [[unroll]] for (uint li = 0; li < A_LOADS; li++) {                                          \
         const uint buf_ib = loadc_a + li * loadstride_a;                                        \
         if (buf_ib < BM) {                                                                      \
             [[unroll]] for (uint ks = 0; ks < BK_STEP; ks++) {                                  \
-                const uint idx = li * BK_STEP + ks;                                             \
-                STORE_A_QS(buf_ib, ks, idx)                                                     \
-                if (loadr_a == 0) {                                                             \
-                    buf_a_d[ks * BM + buf_ib] = float(pre_a_d[idx]);                            \
-                    STORE_A_M(buf_ib, ks, idx)                                                  \
-                }                                                                               \
+                block_a_to_shmem(pre_a[li * BK_STEP + ks], buf_ib, ks, loadr_a);                \
             }                                                                                   \
         }                                                                                       \
     }                                                                                           \
@@ -113,17 +237,7 @@
         if (buf_ib < BN) {                                                                      \
             [[unroll]] for (uint ks = 0; ks < BK_STEP; ks++) {                                  \
                 const bool in_bounds = (blk) + ks * BK < end_k;                                 \
-                const uint idx = li * BK_STEP + ks;                                             \
-                const ivec4 v = in_bounds ? pre_b_qs[idx] : ivec4(0);                           \
-                const uint base = buf_ib * QPITCH + ks * (BK / 4) + loadr_b * 4;                \
-                buf_b_qs[base    ] = v.x;                                                       \
-                buf_b_qs[base + 1] = v.y;                                                       \
-                buf_b_qs[base + 2] = v.z;                                                       \
-                buf_b_qs[base + 3] = v.w;                                                       \
-                if (loadr_b == 0) {                                                             \
-                    buf_b_d[ks * BN + buf_ib] = in_bounds ? float(pre_b_d[idx]) : 0.0f;         \
-                    STORE_B_S(in_bounds, buf_ib, ks, idx)                                       \
-                }                                                                               \
+                block_b_to_shmem(pre_b[li * BK_STEP + ks], buf_ib, ks, loadr_b, in_bounds);     \
             }                                                                                   \
         }                                                                                       \
     }

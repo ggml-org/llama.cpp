@@ -116,6 +116,8 @@ shared int32_t cm_layout_probe[TM * TN];
 #include "mul_mm_id_funcs.glsl"
 #endif
 
+#include "mul_mmq_cm1_funcs.glsl"
+
 void main() {
     const uint blocks_m = (p.M + BM - 1) / BM;
     const uint ik = gl_WorkGroupID.x / blocks_m;
@@ -251,20 +253,8 @@ void main() {
     const uint A_LOADS = (BM + loadstride_a - 1) / loadstride_a;
     const uint B_LOADS = (BN + loadstride_b - 1) / loadstride_b;
 
-    uint32_t  pre_a_qs[A_LOADS * BK_STEP];
-    float16_t pre_a_d [A_LOADS * BK_STEP];
-    ivec4     pre_b_qs[B_LOADS * BK_STEP];
-    float16_t pre_b_d [B_LOADS * BK_STEP];
-
-#if defined(DATA_A_Q5_0) || defined(DATA_A_Q5_1)
-    uint32_t  pre_a_qh[A_LOADS * BK_STEP];
-#endif
-#if defined(DATA_A_Q4_1) || defined(DATA_A_Q5_1)
-    float16_t pre_a_m [A_LOADS * BK_STEP];
-    float16_t pre_b_s [B_LOADS * BK_STEP];
-#endif
-
-#include "mul_mmq_cm1_funcs.glsl"
+    block_a_prefetch pre_a[A_LOADS * BK_STEP];
+    block_b_prefetch pre_b[B_LOADS * BK_STEP];
 
     // Prefetch first block
     if (start_k < end_k) {
@@ -386,15 +376,9 @@ void main() {
         barrier();
     }
 
-#undef STORE_A_QS
+#undef PREFETCH_BLOCK
 #undef STORE_BLOCK_TO_LDS
 #undef B_IB_CALC
-#undef PREFETCH_BLOCK
-#undef PREFETCH_A_QH
-#undef PREFETCH_A_M
-#undef PREFETCH_B_S
-#undef STORE_A_M
-#undef STORE_B_S
 
     const uint dr = ir * BM + a_row0;
     const uint dc = ic * BN + b_col0;
