@@ -711,7 +711,7 @@ static enum ggml_metal_device_id ggml_metal_device_id_parse(const char * name) {
     return GGML_METAL_DEVICE_GENERIC;
 }
 
-ggml_metal_device_t ggml_metal_device_init(int device) {
+ggml_metal_device_t ggml_metal_device_init(int device, int n_devices) {
     ggml_metal_device_t dev = calloc(1, sizeof(struct ggml_metal_device));
 
     assert(dev != NULL);
@@ -728,6 +728,12 @@ ggml_metal_device_t ggml_metal_device_init(int device) {
             dev->addr_virt = 0x000000400ULL;
 
             dev->props.device = device;
+
+            // the Metal backend uses the system default device as the single physical device;
+            // additional (virtual) devices are emulated on top of it via GGML_METAL_DEVICES
+            dev->props.device_phys = 0;
+            dev->props.device_virt = device;
+
             dev->props.has_simdgroup_reduction  = [dev->mtl_device supportsFamily:MTLGPUFamilyApple7];
             dev->props.has_simdgroup_reduction |= [dev->mtl_device supportsFamily:MTLGPUFamilyMetal3_GGML];
 
@@ -891,7 +897,13 @@ ggml_metal_device_t ggml_metal_device_init(int device) {
             }
 
             snprintf(dev->props.name, sizeof(dev->props.name), "%s%d", "MTL", device);
-            snprintf(dev->props.desc, sizeof(dev->props.desc), "%s", [[dev->mtl_device name] UTF8String]);
+            const char * gpu_name = [[dev->mtl_device name] UTF8String];
+            if (n_devices > 1) {
+                snprintf(dev->props.desc, sizeof(dev->props.desc), "%s (dev p%d/v%d)",
+                         gpu_name, dev->props.device_phys, dev->props.device_virt);
+            } else {
+                snprintf(dev->props.desc, sizeof(dev->props.desc), "%s", gpu_name);
+            }
 
             dev->library = ggml_metal_library_init(dev);
             if (!dev->library) {
