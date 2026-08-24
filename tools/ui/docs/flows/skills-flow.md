@@ -6,10 +6,12 @@ sequenceDiagram
     participant activationStore as skillActivationStore
     participant agenticStore as agenticStore
     participant SkillsSvc as SkillsService
+    participant toolsStore as toolsStore
     participant PackingSvc as SkillsPackingService
     participant Tokenize as POST /tokenize
     participant ChatSvc as ChatService
     participant DbSvc as DatabaseService
+    participant CmdSvc as SkillCommandService
     participant server as llama-server (--skills)
 
     Note over skillsStore: State:<br/>CWD-keyed catalog slots<br/>monotonic request generations<br/>availability: unknown/loading/available/disabled/error<br/>shared catalog requests per CWD
@@ -53,7 +55,7 @@ sequenceDiagram
     UI->>skillsStore: ensureCatalog(cwd)
     activate skillsStore
     skillsStore->>SkillsSvc: list(cwd)
-    SkillsSvc->>server: GET /skills
+    SkillsSvc->>server: GET /skills<br/>X-Skill-Cwd when a CWD is selected
     activate server
     server->>server: resolve effective CWD
     Note right of server: Absent header uses server process CWD,<br/>invalid explicit CWD returns 400
@@ -77,7 +79,7 @@ sequenceDiagram
         skillsStore->>skillsStore: bump generation and clear old slot
         UI->>skillsStore: ensureCatalog(newCwd)
         skillsStore->>SkillsSvc: list(newCwd)
-        SkillsSvc->>server: GET /skills with new CWD
+        SkillsSvc->>server: GET /skills with new CWD<br/>X-Skill-Cwd
         server-->>SkillsSvc: new CWD catalog
         SkillsSvc-->>skillsStore: new catalog
         skillsStore-->>UI: render new CWD only
@@ -102,7 +104,7 @@ sequenceDiagram
 
     UI->>UI: select catalog entry
     UI->>SkillsSvc: read({name}, cwd)
-    SkillsSvc->>server: POST /skills/read<br/>{name}
+    SkillsSvc->>server: POST /skills/read<br/>{name}<br/>X-Skill-Cwd when a CWD is selected
     server->>server: re-resolve name for effective CWD
     alt Base skill read
         server-->>SkillsSvc: kind=skill, metadata, resources,<br/>source, body_markdown, opaque content_xml
@@ -155,8 +157,8 @@ sequenceDiagram
         UI->>UI: goto /skills
         UI->>skillsStore: route refresh for current CWD
     else Select /skills name argument
-        UI->>CmdSvc: dispatchSkillActivation(name, cwd)
-            Note right of CmdSvc: SkillCommandService entry point.<br/>Resolves the base read, then routes<br/>through the shared durable activation path.<br/>Success wakes the agentic loop as an<br/>assistant turn (never a system-tagged<br/>user message).
+        UI->>CmdSvc: dispatchSkillActivation(name)
+            Note right of CmdSvc: SkillCommandService entry point.<br/>Resolves active conversation or pending CWD,<br/>then routes through the shared durable activation path.<br/>Success wakes the agentic loop from the new leaf<br/>as an assistant turn (never a system-tagged user message).
         CmdSvc->>SkillsSvc: read({name}, cwd)
             Note right of SkillsSvc: Sends the active conversation CWD<br/>through X-Skill-Cwd when selected
         SkillsSvc->>server: POST /skills/read<br/>{name}
@@ -191,16 +193,16 @@ sequenceDiagram
 
     UI->>agenticStore: runAgenticFlow(conversationId, messages, options)
     activate agenticStore
-    agenticStore->>activationStore: loadConversation(conversationId)
-    activationStore->>DbSvc: read persisted conversation metadata
-    DbSvc-->>activationStore: typed base activation records
     agenticStore->>agenticStore: read maxSkillBudget
     alt Budget is zero
         agenticStore-->>agenticStore: register no Skills prompt or adapters
     else Budget is positive
+        agenticStore->>activationStore: loadConversation(conversationId)
+        activationStore->>DbSvc: read persisted conversation metadata
+        DbSvc-->>activationStore: typed base activation records
         agenticStore->>skillsStore: createRunSnapshot(cwd)
         skillsStore->>SkillsSvc: list(cwd)
-        SkillsSvc->>server: GET /skills
+        SkillsSvc->>server: GET /skills<br/>X-Skill-Cwd when a CWD is selected
         server-->>SkillsSvc: current catalog response
         SkillsSvc-->>skillsStore: run-owned catalog response
         skillsStore->>PackingSvc: buildSkillRunSnapshot(cwd, catalog)
@@ -217,10 +219,10 @@ sequenceDiagram
         end
         PackingSvc->>PackingSvc: measure complete envelope first
         alt Complete envelope fits budget
-            PackingSvc-->>agenticStore: complete envelope, read_skill only
+            PackingSvc-->>agenticStore: complete envelope, read_skill definition if enabled
         else Only a prefix fits
             PackingSvc->>PackingSvc: keep leading entries in server order
-            PackingSvc-->>agenticStore: partial envelope, list_skill + read_skill
+            PackingSvc-->>agenticStore: partial envelope, list_skill + read_skill definitions if enabled
         end
         agenticStore->>agenticStore: compare adapter names with existing tools
         Note right of agenticStore: Existing custom, builtin, and MCP names win,<br/>colliding Skills adapters are omitted with diagnostics
@@ -246,7 +248,7 @@ sequenceDiagram
             agenticStore-->>ChatSvc: structured Skills error result
         else Valid snapshot request
             agenticStore->>SkillsSvc: read({name, path?}, snapshot.cwd)
-            SkillsSvc->>server: POST /skills/read<br/>{name, optional path}
+            SkillsSvc->>server: POST /skills/read<br/>{name, optional path}<br/>X-Skill-Cwd when a CWD is selected
             server->>server: resolve current identity and validate containment
             alt Base read
                 server-->>SkillsSvc: kind=skill + opaque identity + content_xml
