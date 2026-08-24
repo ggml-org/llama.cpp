@@ -5,7 +5,7 @@
 	import {
 		ChatFormActionAddReasoningSubmenu,
 		DialogModelInformation,
-		DialogModelsHub,
+		DialogModelsDiscover,
 		DropdownMenuSearchable,
 		ModelId,
 		ModelsSelectorList,
@@ -429,4 +429,4 @@
 	/>
 {/if}
 
-<DialogModelsHub bind:open={modelsHubOpen} />
+<DialogModelsDiscover bind:open={modelsHubOpen} />

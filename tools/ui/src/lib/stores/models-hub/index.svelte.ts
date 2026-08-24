@@ -2,13 +2,14 @@
  * modelsHubStore - Model Hub browse state
  *
  * Owns the HuggingFace GGUF model list shown in the hub sidebar
- * (DialogModelsHub). The hub has no "nothing selected" screen: it always opens
+ * (DialogModelsDiscover). The hub has no "nothing selected" screen: it always opens
  * a model, so `firstModel` drives the initial selection. By default the list
- * shows the official ggml-org GGUF models sorted by popularity (downloads);
+ * shows a curated set of official ggml-org GGUF models in a fixed display order;
  * search replaces the list with matching models across all of HuggingFace.
- * Detail data is loaded by ModelsHubModelDetails, not here.
+ * Detail data is loaded by ModelsDiscoverDetails, not here.
  */
 
+import { CURATED_MODEL_IDS } from '$lib/constants';
 import { HuggingFaceService } from '$lib/services';
 import type { HfModelInfo } from '$lib/types/huggingface';
 
@@ -28,8 +29,8 @@ class ModelsHubStore {
 	private searchRequestId = 0;
 
 	/**
-	 * Fetch the default list: official ggml-org GGUF models sorted by popularity
-	 * (downloads). No-op when already loaded or in flight.
+	 * Fetch the default list: the curated ggml-org models in display order.
+	 * No-op when already loaded or in flight.
 	 */
 	async fetch(): Promise<void> {
 		if (this.loading || this.fetched) return;
@@ -45,8 +46,24 @@ class ModelsHubStore {
 				full: true
 			});
 
-			// `models-moved` is a redirect placeholder, not a browsable model
-			this.defaultModels = results.filter((m) => m.id !== 'ggml-org/models-moved');
+			const byId = new Map(results.map((m) => [m.id, m]));
+
+			// Keep only the curated models, in the curated display order.
+			const curated = CURATED_MODEL_IDS.flatMap((id) => {
+				const model = byId.get(id);
+
+				return model ? [model] : [];
+			});
+
+			// The list endpoint omits gguf metadata (context length, architecture),
+			// so fetch it per model and merge it in.
+			this.defaultModels = await Promise.all(
+				curated.map(async (model) => {
+					const details = await HuggingFaceService.getDetails(model.id);
+
+					return details?.gguf ? { ...model, gguf: details.gguf } : model;
+				})
+			);
 			this.models = this.defaultModels;
 			this.fetched = true;
 		} catch (err) {

@@ -42,7 +42,7 @@
  * />
  * ```
  */
-export { default as ModelsSelectorDropdown } from './ModelsSelector/ModelsSelectorDropdown.svelte';
+export { default as ModelsSelectorDropdown } from './selector/ModelsSelectorDropdown.svelte';
 
 /**
  * **ModelsSelectorList** - Grouped model options list
@@ -54,7 +54,7 @@ export { default as ModelsSelectorDropdown } from './ModelsSelector/ModelsSelect
  * Accepts an optional `renderOption` snippet to customize how each option is
  * rendered (e.g., to add keyboard navigation or highlighting).
  */
-export { default as ModelsSelectorList } from './ModelsSelector/ModelsSelectorList.svelte';
+export { default as ModelsSelectorList } from './selector/ModelsSelectorList.svelte';
 
 /**
  * **ModelsSelectorOption** - Single model option row
@@ -63,7 +63,7 @@ export { default as ModelsSelectorList } from './ModelsSelector/ModelsSelectorLi
  * load/unload actions, status indicators, and an info button.
  * Used inside ModelsSelectorList or directly in custom render snippets.
  */
-export { default as ModelsSelectorOption } from './ModelsSelector/ModelsSelectorOption.svelte';
+export { default as ModelsSelectorOption } from './selector/ModelsSelectorOption.svelte';
 
 /**
  * **ModelsSelectorSheet** - Mobile model selection sheet
@@ -72,7 +72,7 @@ export { default as ModelsSelectorOption } from './ModelsSelector/ModelsSelector
  * on mobile devices. Same functionality as ModelsSelectorDropdown but uses Sheet UI
  * instead of DropdownMenu.
  */
-export { default as ModelsSelectorSheet } from './ModelsSelector/ModelsSelectorSheet.svelte';
+export { default as ModelsSelectorSheet } from './selector/ModelsSelectorSheet.svelte';
 
 /** * **ModelBadge** - Model name display badge
  *

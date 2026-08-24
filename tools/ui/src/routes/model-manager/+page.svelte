@@ -11,7 +11,7 @@
 		Trash2,
 		X
 	} from '@lucide/svelte';
-	import { ActionIcon, DialogModelsHub, ModelId } from '$lib/components/app';
+	import { ActionIcon, DialogModelsDiscover, ModelId } from '$lib/components/app';
 	import { Button } from '$lib/components/ui/button';
 	import { ServerModelStatus } from '$lib/enums';
 	import { modelsStore, serverStore } from '$lib/stores';
@@ -261,4 +261,4 @@
 	{/if}
 </div>
 
-<DialogModelsHub bind:open={modelsHubOpen} />
+<DialogModelsDiscover bind:open={modelsHubOpen} />

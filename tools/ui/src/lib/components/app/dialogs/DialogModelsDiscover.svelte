@@ -1,6 +1,7 @@
 <script lang="ts">
+	import { Boxes } from '@lucide/svelte';
 	import { SearchInput } from '$lib/components/app';
-	import { ModelsHubList, ModelsHubModelDetails } from '$lib/components/app/models-hub';
+	import { ModelsDiscoverList, ModelsDiscoverDetails } from '$lib/components/app/models/discover';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { modelsHubStore } from '$lib/stores';
 	import { untrack } from 'svelte';
@@ -59,11 +60,14 @@
 		class="flex flex-col md:h-[calc(100vh-4rem)]! md:max-h-240! md:w-[calc(100vw-4rem)]! md:max-w-360!"
 	>
 		<Dialog.Header>
-			<Dialog.Title>Discover Models</Dialog.Title>
+			<Dialog.Title class="flex items-center gap-2">
+				<Boxes class="h-4 w-4" />
+				Discover Models
+			</Dialog.Title>
 		</Dialog.Header>
 
 		<div class="flex min-h-0 flex-1">
-			<aside class="flex w-72 shrink-0 flex-col border-r border-border/40">
+			<aside class="flex w-88 shrink-0 flex-col border-r border-border/40">
 				<div class="p-2">
 					<SearchInput
 						bind:value={searchQuery}
@@ -80,7 +84,7 @@
 					{:else if modelsHubStore.models.length === 0}
 						<p class="p-4 text-sm text-muted-foreground">No models found</p>
 					{:else}
-						<ModelsHubList
+						<ModelsDiscoverList
 							models={modelsHubStore.models}
 							activeId={selectedId}
 							showBaseModelAvatar
@@ -92,7 +96,7 @@
 
 			<main class="min-w-0 flex-1 overflow-y-auto">
 				{#if selectedId}
-					<ModelsHubModelDetails modelId={selectedId} />
+					<ModelsDiscoverDetails modelId={selectedId} />
 				{/if}
 			</main>
 		</div>

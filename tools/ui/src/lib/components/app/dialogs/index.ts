@@ -27,14 +27,14 @@ export { default as DialogMcpServerAddNew } from './DialogMcpServerAddNew.svelte
 export { default as DialogMcpServers } from './DialogMcpServers.svelte';
 
 /**
- * **DialogModelsHub** - Models Hub discovery dialog
+ * **DialogModelsDiscover** - Models Hub discovery dialog
  *
  * Two-pane HuggingFace GGUF browser in a modal dialog: a sidebar model list
- * (ModelsHubList) and a detail view (ModelsHubModelDetails). Always opens the
+ * (ModelsDiscoverList) and a detail view (ModelsDiscoverDetails). Always opens the
  * first model. Used for discovery and downloading; the `/models-hub` route is
  * reserved for model management.
  */
-export { default as DialogModelsHub } from './DialogModelsHub.svelte';
+export { default as DialogModelsDiscover } from './DialogModelsDiscover.svelte';
 
 /**
  * **DialogSettingsChat** - Chat settings shown in a modal dialog

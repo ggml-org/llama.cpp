@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { type DraftVariant } from '$lib/constants';
 	import { TruncatedText } from '$lib/components/app';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import {
@@ -25,6 +26,7 @@
 		tags?: string[];
 		modalities?: ModelModalities;
 		capabilities?: ModelCapabilities;
+		draftVariants?: DraftVariant[];
 		class?: string;
 	}
 
@@ -32,6 +34,7 @@
 		aliases,
 		capabilities,
 		class: className = '',
+		draftVariants,
 		hideOrgName = false,
 		hideQuantization,
 		hideTags,
@@ -62,6 +65,7 @@
 
 	let uniqueAliases = $derived([...new Set(aliases ?? [])]);
 	let uniqueTags = $derived([...new Set([...(parsed.tags ?? []), ...(tags ?? [])])]);
+	let uniqueDraftVariants = $derived([...new Set(draftVariants ?? [])]);
 
 	const allModalities = [ModelModality.VISION, ModelModality.VIDEO, ModelModality.AUDIO] as const;
 	const allCapabilities: ModelCapability[] = [ModelCapability.REASONING];
@@ -91,6 +95,12 @@
 					{parsed.variant}
 				</span>
 			{/if}
+
+			{#each uniqueDraftVariants as variant (variant)}
+				<span class={variantBadgeClass} title={`${variant.toUpperCase()} draft model available`}>
+					{variant}
+				</span>
+			{/each}
 
 			{#if parsed.params}
 				<span class={badgeClass}>

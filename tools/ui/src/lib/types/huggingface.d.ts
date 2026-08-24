@@ -67,6 +67,8 @@ export interface HfModelInfo {
 	lastModified?: string;
 	/** Repository file listing (present when full=true) */
 	siblings?: HfModelSiblingRef[];
+	/** GGUF metadata (context length, architecture, etc.) */
+	gguf?: HfModelGguf;
 }
 
 // Model Details (with full=true)
