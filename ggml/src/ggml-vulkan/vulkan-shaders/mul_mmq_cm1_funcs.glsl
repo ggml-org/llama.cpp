@@ -153,6 +153,68 @@ void block_a_to_shmem(block_a_prefetch blk, uint buf_ib, uint ks, uint loadr) {
     }
 }
 
+#elif defined(DATA_A_IQ4_NL)
+
+struct block_a_prefetch {
+    uint32_t qs;
+    float16_t d;
+};
+
+block_a_prefetch block_a_load(uint ib, uint loadr) {
+    block_a_prefetch blk;
+    blk.qs = pack32(u16vec2(data_a_packed16[ib].qs[loadr * 2],
+                             data_a_packed16[ib].qs[loadr * 2 + 1]));
+    blk.d = data_a_packed16[ib].d;
+    return blk;
+}
+
+void block_a_to_shmem(block_a_prefetch blk, uint buf_ib, uint ks, uint loadr) {
+    const u8vec4 lo_idx = unpack8(blk.qs & 0x0F0F0F0F);
+    const u8vec4 hi_idx = unpack8((blk.qs >> 4) & 0x0F0F0F0F);
+    buf_a_qs[buf_ib * QPITCH + ks * (BK / 4) + loadr    ] =
+        pack32(i8vec4(kvalues_iq4nl_const[lo_idx.x], kvalues_iq4nl_const[lo_idx.y],
+                      kvalues_iq4nl_const[lo_idx.z], kvalues_iq4nl_const[lo_idx.w]));
+    buf_a_qs[buf_ib * QPITCH + ks * (BK / 4) + loadr + 4] =
+        pack32(i8vec4(kvalues_iq4nl_const[hi_idx.x], kvalues_iq4nl_const[hi_idx.y],
+                      kvalues_iq4nl_const[hi_idx.z], kvalues_iq4nl_const[hi_idx.w]));
+
+    if (loadr == 0) {
+        buf_a_d[ks * BM + buf_ib] = float(blk.d);
+    }
+}
+
+#elif defined(DATA_A_MXFP4)
+
+struct block_a_prefetch {
+    uint32_t qs;
+    uint8_t e;
+};
+
+block_a_prefetch block_a_load(uint ib, uint loadr) {
+    block_a_prefetch blk;
+    blk.qs = pack32(u8vec4(data_a[ib].qs[loadr * 4],
+                            data_a[ib].qs[loadr * 4 + 1],
+                            data_a[ib].qs[loadr * 4 + 2],
+                            data_a[ib].qs[loadr * 4 + 3]));
+    blk.e = data_a[ib].e;
+    return blk;
+}
+
+void block_a_to_shmem(block_a_prefetch blk, uint buf_ib, uint ks, uint loadr) {
+    const u8vec4 lo_idx = unpack8(blk.qs & 0x0F0F0F0F);
+    const u8vec4 hi_idx = unpack8((blk.qs >> 4) & 0x0F0F0F0F);
+    buf_a_qs[buf_ib * QPITCH + ks * (BK / 4) + loadr    ] =
+        pack32(i8vec4(kvalues_mxfp4_const[lo_idx.x], kvalues_mxfp4_const[lo_idx.y],
+                      kvalues_mxfp4_const[lo_idx.z], kvalues_mxfp4_const[lo_idx.w]));
+    buf_a_qs[buf_ib * QPITCH + ks * (BK / 4) + loadr + 4] =
+        pack32(i8vec4(kvalues_mxfp4_const[hi_idx.x], kvalues_mxfp4_const[hi_idx.y],
+                      kvalues_mxfp4_const[hi_idx.z], kvalues_mxfp4_const[hi_idx.w]));
+
+    if (loadr == 0) {
+        buf_a_d[ks * BM + buf_ib] = e8m0_to_fp32(blk.e) * 0.5;
+    }
+}
+
 #endif
 
 // ===== B-side: load and store =====
