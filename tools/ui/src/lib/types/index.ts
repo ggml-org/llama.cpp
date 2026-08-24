@@ -34,6 +34,9 @@ export type {
 	ApiRouterModelsListResponse,
 	ApiRouterModelsUnloadRequest,
 	ApiRouterModelsUnloadResponse,
+	ApiRouterModelsDownloadRequest,
+	ApiRouterModelsDownloadResponse,
+	ApiModelsDownloadProgressData,
 	AudioInputFormat,
 	ApiStreamSession
 } from './api';
@@ -93,6 +96,7 @@ export type {
 	ModelModalities,
 	ModelOption,
 	ModelLoadProgress,
+	ModelDownloadProgress,
 	ModalityCapabilities
 } from './models';
 
@@ -216,3 +220,23 @@ export type { ReasoningEffortLevel } from './reasoning';
 
 // Splash
 export type { SplashDimensions } from './splash';
+
+// HuggingFace types
+export type {
+	HfModelSearchParams,
+	HfModelSort,
+	HfModelInfo,
+	HfModelCardData,
+	HfModelDetails,
+	HfModelDetailInfo,
+	HfModelSibling,
+	HfModelApiResponse
+} from './huggingface';
+
+// Model manager tree types
+export type {
+	ModelManagerDraft,
+	ModelManagerQuant,
+	ModelManagerQuantOrg,
+	ModelManagerParent
+} from './model-manager';

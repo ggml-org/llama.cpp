@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Info, Loader2 } from '@lucide/svelte';
+	import { Info, LoaderCircle } from '@lucide/svelte';
 	import { AgenticSectionType } from '$lib/enums';
 	import { toolsStore } from '$lib/stores';
 	import type { AgenticSection } from '$lib/types';
@@ -55,8 +55,7 @@
 
 	{#if showSpinner}
 		<span class="text-foreground/80 text-sm font-medium">Runtime info</span>
-
-		<Loader2 class="text-muted-foreground/70 h-3 w-3 animate-spin" />
+		<LoaderCircle class="text-muted-foreground/70 h-3 w-3 animate-spin" />
 	{:else if infoMeta.errorMessage}
 		<span class="text-foreground/80 text-sm font-medium">Runtime info&nbsp;</span>
 

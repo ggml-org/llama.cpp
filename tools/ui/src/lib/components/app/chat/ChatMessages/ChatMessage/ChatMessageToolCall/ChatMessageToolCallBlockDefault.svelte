@@ -4,7 +4,7 @@
 	// shared chrome shell.
 
 	import ToolCallBlock from './ToolCallBlock.svelte';
-	import { Loader2 } from '@lucide/svelte';
+	import { LoaderCircle } from '@lucide/svelte';
 	import { MarkdownContent, SyntaxHighlightedCode } from '$lib/components/app';
 	import { MAX_HEIGHT_CODE_BLOCK } from '$lib/constants';
 	import { AttachmentType, FileTypeText, MimeTypeAudio, ToolResultKind } from '$lib/enums';
@@ -41,7 +41,7 @@
 				<span>Input</span>
 
 				{#if ctx.isStreaming}
-					<Loader2 class="h-3 w-3 animate-spin" />
+					<LoaderCircle class="h-3 w-3 animate-spin" />
 				{/if}
 			</div>
 
@@ -86,7 +86,7 @@
 				<span>Output</span>
 
 				{#if ctx.isPending}
-					<Loader2 class="h-3 w-3 animate-spin" />
+					<LoaderCircle class="h-3 w-3 animate-spin" />
 				{/if}
 			</div>
 

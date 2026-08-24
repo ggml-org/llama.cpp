@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Loader2, RefreshCw } from '@lucide/svelte';
+	import { LoaderCircle, RefreshCw } from '@lucide/svelte';
 	import { SearchInput } from '$lib/components/app/forms';
 	import { Button } from '$lib/components/ui/button';
 	import { ICON_CLASS_DEFAULT } from '$lib/constants';
@@ -31,7 +31,7 @@
 			variant="ghost"
 		>
 			{#if isLoading}
-				<Loader2 class="{ICON_CLASS_DEFAULT} animate-spin" />
+				<LoaderCircle class="{ICON_CLASS_DEFAULT} animate-spin" />
 			{:else}
 				<RefreshCw class={ICON_CLASS_DEFAULT} />
 			{/if}

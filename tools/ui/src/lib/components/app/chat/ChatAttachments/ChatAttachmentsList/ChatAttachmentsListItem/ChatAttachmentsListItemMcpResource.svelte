@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { AlertCircle, Loader2 } from '@lucide/svelte';
+	import { AlertCircle, LoaderCircle } from '@lucide/svelte';
 	import { X } from '@lucide/svelte';
 	import { ActionIcon } from '$lib/components/app';
 	import * as Tooltip from '$lib/components/ui/tooltip';
@@ -45,7 +45,7 @@
 			type="button"
 		>
 			{#if attachment.loading}
-				<Loader2 class="h-3 w-3 animate-spin text-muted-foreground" />
+				<LoaderCircle class="h-3 w-3 animate-spin text-muted-foreground" />
 			{:else if attachment.error}
 				<AlertCircle class="h-3 w-3 text-red-500" />
 			{:else}

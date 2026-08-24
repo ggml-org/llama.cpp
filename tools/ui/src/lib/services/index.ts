@@ -146,6 +146,7 @@ export { ConversationTransferService } from './conversation-transfer.service';
  * @see modelsStore in stores/models/index.svelte.ts — primary consumer for reactive model state
  */
 export { ModelsService } from './models.service';
+export type { GgufVariantTagInput } from './models.service';
 
 /**
  * **PropsService** - Server properties and capabilities retrieval
@@ -349,3 +350,28 @@ export { MigrationService } from './migration.service';
  * @see settingsStore in stores/settings/index.svelte.ts - reactive state + business logic
  */
 export { SettingsService } from './settings.service';
+
+/**
+ * **HuggingFaceService** - HuggingFace Hub model browsing and searching
+ *
+ * Stateless HTTP access to the HuggingFace Hub API for discovering, browsing,
+ * and inspecting GGUF models. Supports search, trending/popular/liked/new
+ * browsing, filtering by pipeline task, and fetching model details + file trees.
+ *
+ * **Architecture & Relationships:**
+ * - **HuggingFaceService** (this class): Stateless HTTP communication with the HF API
+ * - **model-hub routes**: Primary consumers for the model browsing/detail UI
+ *
+ * **Key Responsibilities:**
+ * - Search and browse GGUF models with filters (query, task, author, sort)
+ * - Fetch model details and repository file listings
+ * - Extract quantization/variant metadata from GGUF filenames
+ * - Format downloads, likes, file sizes, and timestamps for display
+ *
+ * **API Endpoints:**
+ * - `GET https://huggingface.co/api/models` - Model search/browsing
+ * - `GET https://huggingface.co/api/models/{modelId}` - Model details
+ * - `GET https://huggingface.co/api/models/{modelId}/tree/main` - Repository file tree
+ */
+export { HuggingFaceService } from './huggingface.service';
+export type { GgufVariantForm } from './huggingface.service';

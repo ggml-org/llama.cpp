@@ -9,7 +9,7 @@
 
 // API utilities
 export { getAuthHeaders, getJsonHeaders, sanitizeHeaders } from './api-headers';
-export { ApiError, apiFetch, apiFetchWithParams, apiPost } from './api-fetch';
+export { ApiError, apiDelete, apiFetch, apiFetchWithParams, apiPost } from './api-fetch';
 export { validateApiKey } from './api-key-validation';
 
 // Attachment utilities
@@ -106,6 +106,15 @@ export {
 
 // Model name utilities
 export { normalizeModelName, isValidModelName } from './model-names';
+
+// Model manager tree utilities
+export {
+	buildModelManagerTree,
+	getRepoId,
+	heuristicParentId,
+	normalizeParentName,
+	resolveBaseModel
+} from './model-manager';
 
 // Portal utilities
 export { portalToBody } from './portal-to-body';

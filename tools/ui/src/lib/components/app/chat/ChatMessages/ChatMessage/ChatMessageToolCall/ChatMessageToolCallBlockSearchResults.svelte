@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Globe, Loader2 } from '@lucide/svelte';
+	import { Globe, LoaderCircle } from '@lucide/svelte';
 	import { CollapsibleContentBlock } from '$lib/components/app';
 	import * as HoverCard from '$lib/components/ui/hover-card';
 	import { ICON_CLASS_DEFAULT, ICON_CLASS_SPIN } from '$lib/constants';
@@ -33,7 +33,7 @@
 	// MCP-server branding is consistent across both views. Spinner wins
 	// while the call is in flight so the user sees execution status.
 	const iconUrl = $derived(showSpinner ? null : mcpStore.getServerFaviconForTool(section.toolName));
-	const icon = $derived(showSpinner ? Loader2 : undefined);
+	const icon = $derived(showSpinner ? LoaderCircle : undefined);
 	const iconClass = $derived(showSpinner ? ICON_CLASS_SPIN : ICON_CLASS_DEFAULT);
 
 	// Verb reflects state: "Searching" while the call is in flight, "Searched"
@@ -167,8 +167,7 @@
 		</div>
 	{:else if showSpinner}
 		<div class="text-muted-foreground/70 flex items-center gap-2 py-1 text-xs italic">
-			<Loader2 class="h-3 w-3 animate-spin" />
-
+			<LoaderCircle class="h-3 w-3 animate-spin" />
 			<span>Searching...</span>
 		</div>
 	{:else}

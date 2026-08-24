@@ -3,7 +3,7 @@
 		Download,
 		GitBranch,
 		ListChecks,
-		Loader2,
+		LoaderCircle,
 		MoreHorizontal,
 		Pencil,
 		Pin,
@@ -225,7 +225,7 @@
 						role="button"
 						tabindex="0"
 					>
-						<Loader2 class="loading-icon h-3.5 w-3.5 animate-spin" />
+						<LoaderCircle class="loading-icon h-3.5 w-3.5 animate-spin" />
 
 						<Square class="stop-icon hidden h-3 w-3 fill-current text-destructive" />
 					</div>

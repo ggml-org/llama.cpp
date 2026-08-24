@@ -1,3 +1,4 @@
+import type { DraftVariant } from '$lib/constants/model-id.constants';
 import type { ApiModelDataEntry, ApiModelDetails, ApiModelLoadStage } from '$lib/types/api';
 
 export interface ModelModalities {
@@ -35,6 +36,15 @@ export interface ModelLoadProgress {
 	value: number;
 }
 
+/**
+ * Per-byte download progress for one in-flight model download, driven by the
+ * /models/sse feed. Lives only while a download runs.
+ */
+export interface ModelDownloadProgress {
+	downloadedBytes: number;
+	totalBytes: number;
+}
+
 export interface ParsedModelId {
 	raw: string;
 	orgName: string | null;
@@ -42,6 +52,7 @@ export interface ParsedModelId {
 	params: string | null;
 	activatedParams: string | null;
 	quantization: string | null;
+	variant: DraftVariant | null;
 	tags: string[];
 }
 

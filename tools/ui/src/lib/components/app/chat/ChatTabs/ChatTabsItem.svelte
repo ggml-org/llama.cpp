@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Loader2, Square, SquarePen, X } from '@lucide/svelte';
+	import { LoaderCircle, Square, SquarePen, X } from '@lucide/svelte';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { cn } from '$lib/components/ui/utils';
 	import { ICON_CLASS_SM, ICON_CLASS_XS, ROUTES, UI_DATA_ATTRS } from '$lib/constants';
@@ -85,7 +85,7 @@
 						class="stop-button relative z-10 flex h-5 w-5 shrink-0 cursor-pointer items-center justify-center rounded-sm text-muted-foreground transition-colors hover:text-foreground"
 						onclick={(e) => handleActionClick(e, () => onStop?.(tab.id, e))}
 					>
-						<Loader2
+						<LoaderCircle
 							class="loading-icon {ICON_CLASS_SM} animate-spin transition-opacity duration-300 {contentOpacity}"
 						/>
 

@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { AlertCircle, Download, FileText, Loader2 } from '@lucide/svelte';
+	import { AlertCircle, Download, FileText, LoaderCircle } from '@lucide/svelte';
 	import { ActionIconCopyToClipboard } from '$lib/components/app';
 	import { Button } from '$lib/components/ui/button';
 	import { ICON_CLASS_DEFAULT } from '$lib/constants';
@@ -116,7 +116,7 @@
 		<div class="min-h-[200px] overflow-auto rounded-md border bg-muted/30 p-3 break-all">
 			{#if isLoading}
 				<div class="flex items-center justify-center py-8">
-					<Loader2 class="h-6 w-6 animate-spin text-muted-foreground" />
+					<LoaderCircle class="h-6 w-6 animate-spin text-muted-foreground" />
 				</div>
 			{:else if error}
 				<div class="flex flex-col items-center justify-center gap-2 py-8 text-red-500">

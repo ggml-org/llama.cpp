@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Braces, FolderOpen, Loader2, Plus } from '@lucide/svelte';
+	import { Braces, FolderOpen, LoaderCircle, Plus } from '@lucide/svelte';
 	import {
 		McpResourcePreview,
 		McpResourcesBrowser,
@@ -306,7 +306,7 @@
 
 						{#if templatePreviewLoading}
 							<div class="flex flex-1 items-center justify-center">
-								<Loader2 class="h-6 w-6 animate-spin text-muted-foreground" />
+								<LoaderCircle class="h-6 w-6 animate-spin text-muted-foreground" />
 							</div>
 						{:else if templatePreviewError}
 							<div class="flex flex-1 flex-col items-center justify-center gap-2 text-red-500">
@@ -367,7 +367,7 @@
 			{#if hasTemplateResult}
 				<Button disabled={isAttaching} onclick={handleAttachTemplateResource}>
 					{#if isAttaching}
-						<Loader2 class="mr-2 {ICON_CLASS_DEFAULT} animate-spin" />
+						<LoaderCircle class="mr-2 {ICON_CLASS_DEFAULT} animate-spin" />
 					{:else}
 						<Plus class="mr-2 {ICON_CLASS_DEFAULT}" />
 					{/if}
@@ -377,7 +377,7 @@
 			{:else}
 				<Button disabled={selectedResources.size === 0 || isAttaching} onclick={handleAttach}>
 					{#if isAttaching}
-						<Loader2 class="mr-2 {ICON_CLASS_DEFAULT} animate-spin" />
+						<LoaderCircle class="mr-2 {ICON_CLASS_DEFAULT} animate-spin" />
 					{:else}
 						<Plus class="mr-2 {ICON_CLASS_DEFAULT}" />
 					{/if}

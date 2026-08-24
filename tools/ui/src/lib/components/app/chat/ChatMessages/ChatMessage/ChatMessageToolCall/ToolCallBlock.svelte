@@ -9,7 +9,7 @@
 	// Components supply only their `meta`, a title snippet, and a body
 	// snippet - everything around them is this single source of truth.
 
-	import { Loader2, Wrench } from '@lucide/svelte';
+	import { LoaderCircle, Wrench } from '@lucide/svelte';
 	import { CollapsibleContentBlock } from '$lib/components/app';
 	import { ICON_CLASS_DEFAULT, ICON_CLASS_SPIN } from '$lib/constants';
 	import { AgenticSectionType } from '$lib/enums';
@@ -43,7 +43,7 @@
 		 */
 		extraLiveStreaming?: boolean;
 		/**
-		 * Swap the title-row icon for a spinning `Loader2` while the
+		 * Swap the title-row icon for a spinning `LoaderCircle` while the
 		 * spinner is showing. Only meaningful for tools where "live"
 		 * is interesting (e.g. exec_shell_command showing the in-flight
 		 * process). Other tools leave it off and render the spinner
@@ -84,7 +84,7 @@
 
 	const toolUi: ToolUiEntry | null = $derived(getToolUi(section.toolName));
 	const toolIcon: Component = $derived(
-		spinIconWhenActive && showSpinner ? Loader2 : (toolUi?.icon ?? Wrench)
+		spinIconWhenActive && showSpinner ? LoaderCircle : (toolUi?.icon ?? Wrench)
 	);
 	const toolIconClass = $derived(
 		spinIconWhenActive && showSpinner ? ICON_CLASS_SPIN : ICON_CLASS_DEFAULT

@@ -1,4 +1,6 @@
 export const API_MODELS = {
+	DELETE: '/models',
+	DOWNLOAD: '/models',
 	LIST: '/v1/models',
 	LOAD: '/models/load',
 	SSE: '/models/sse',

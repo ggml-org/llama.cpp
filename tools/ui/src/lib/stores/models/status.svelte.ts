@@ -8,11 +8,14 @@
  */
 
 import { ServerModelsSseEventType, ServerModelStatus } from '$lib/enums';
+import { HuggingFaceService } from '$lib/services/huggingface.service';
 import { ModelsService } from '$lib/services/models.service';
 import type { ModelPropsManager } from '$lib/stores/models/props.svelte';
 // direct imports between stores, not via the barrel, to avoid circular deps
 import { serverStore } from '$lib/stores/server.svelte';
-import { SvelteMap } from 'svelte/reactivity';
+// explicit type imports: the app.d.ts globals resolve to `any`, so import the real types
+import type { ApiModelsDownloadProgressData, ModelDownloadProgress } from '$lib/types';
+import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 import { toast } from 'svelte-sonner';
 
 /**
@@ -31,8 +34,35 @@ export interface ModelStatusHost {
 }
 
 export class ModelStatusManager {
+	private downloadProgress = new SvelteMap<string, ModelDownloadProgress>();
+	/** `<repo>:<tag>` strings whose most recent download attempt failed (download_failed). */
+	private failedDownloads = new SvelteSet<string>();
 	private loadingStates = new SvelteMap<string, boolean>();
 	private loadProgress = new SvelteMap<string, ModelLoadProgress>();
+	/**
+	 * Draft sidecar files pulled by registered models, as `<repo>/<file>` keys.
+	 * Drafts are not separate /v1/models entries - the router pulls them as
+	 * sidecars of a main model and records them in its `--model-draft` arg.
+	 */
+	private downloadedDrafts = $derived.by(() => {
+		const result = new SvelteSet<string>();
+
+		for (const m of this.host.routerModels) {
+			const args = m.status?.args;
+
+			if (!args) continue;
+
+			for (let i = 0; i < args.length - 1; i++) {
+				if (args[i] !== '--model-draft' && args[i] !== '-md') continue;
+
+				const parsed = HuggingFaceService.parseCachePath(args[i + 1]);
+
+				if (parsed) result.add(`${parsed.repo}/${parsed.file}`);
+			}
+		}
+
+		return result;
+	});
 	// /models/sse feed state, the single source of truth for status and load progress
 	private statusAbort: AbortController | null = null;
 	private statusReaderActive = false;
@@ -41,7 +71,70 @@ export class ModelStatusManager {
 		{ target: ServerModelStatus; resolve: () => void; reject: (e: Error) => void }
 	>();
 
+	/**
+	 * Cancel an in-flight download or remove a previously downloaded/failed model
+	 * from the server cache (ROUTER mode only). The cached row is dropped via the
+	 * feed's model_remove event.
+	 */
+	async cancelDownload(repoWithTag: string): Promise<boolean> {
+		if (!serverStore.isRouterMode) {
+			toast.error('Model downloads are only available in router mode');
+
+			return false;
+		}
+
+		this.subscribe();
+
+		try {
+			const res = await ModelsService.cancelDownload(repoWithTag);
+			const ok = res.success === true;
+
+			if (ok) {
+				this.downloadProgress.delete(repoWithTag);
+				this.failedDownloads.delete(repoWithTag);
+			}
+
+			return ok;
+		} catch (error) {
+			toast.error(`Failed to cancel: ${error instanceof Error ? error.message : 'unknown error'}`);
+
+			return false;
+		}
+	}
+
 	constructor(private host: ModelStatusHost) {}
+
+	/**
+	 * Trigger a model download from HuggingFace via POST /models
+	 * (ggml-org/llama.cpp#23976). The download runs in the background on the
+	 * server; the model appears in the list once the feed reports models_reload.
+	 */
+	async downloadModel(repoWithTag: string, displayName?: string): Promise<void> {
+		if (!serverStore.isRouterMode) {
+			toast.error('Model downloads are only available in router mode');
+
+			return;
+		}
+
+		// the feed must be live so the resulting models_reload event refreshes the list
+		this.subscribe();
+
+		const label = displayName ?? repoWithTag;
+
+		try {
+			const res = await ModelsService.downloadModel(repoWithTag);
+
+			if (res.success) {
+				toast.success(`Download started: ${label}`);
+			} else {
+				throw new Error(res.error?.message ?? 'Server rejected the download request');
+			}
+		} catch (error) {
+			toast.error(`Download failed: ${label}`);
+
+			throw error;
+		}
+	}
 
 	async ensureLoaded(modelId: string): Promise<void> {
 		if (this.host.isModelLoaded(modelId)) return;
@@ -50,10 +143,47 @@ export class ModelStatusManager {
 	}
 
 	/**
+	 * Current download progress (bytes) for a `<repo>:<tag>` identifier, or null
+	 * when no download is being reported by the /models/sse feed.
+	 */
+	getDownloadProgress(repoWithTag: string): ModelDownloadProgress | null {
+		return this.downloadProgress.get(repoWithTag) ?? null;
+	}
+
+	/**
 	 * Current load progress for a model, or null when not loading.
 	 */
 	getLoadProgress(modelId: string): ModelLoadProgress | null {
 		return this.loadProgress.get(modelId) ?? null;
+	}
+
+	/** Whether the most recent download attempt for the given entry failed. */
+	hasFailedDownload(repoWithTag: string): boolean {
+		return this.failedDownloads.has(repoWithTag);
+	}
+
+	/**
+	 * True when the feed reports an active download for the given `<repo>:<tag>`.
+	 * Cleared on download_finished / download_failed.
+	 */
+	isDownloadInProgress(repoWithTag: string): boolean {
+		return this.downloadProgress.has(repoWithTag);
+	}
+
+	/**
+	 * True when the given `<repo>:<tag>` is already a fully downloaded model
+	 * registered with the server (i.e. it shows up in the /v1/models list).
+	 */
+	isModelDownloaded(repoWithTag: string): boolean {
+		return this.host.routerModels.some((m) => m.id === repoWithTag);
+	}
+
+	/**
+	 * True when the given draft sidecar file (repo-relative path) has been pulled
+	 * as the `--model-draft` of some registered model.
+	 */
+	isDraftDownloaded(repoId: string, filePath: string): boolean {
+		return this.downloadedDrafts.has(`${repoId}/${filePath}`);
 	}
 
 	isOperationInProgress(modelId: string): boolean {
@@ -134,6 +264,26 @@ export class ModelStatusManager {
 	}
 
 	/**
+	 * Cancel an in-flight load (ROUTER mode only). The server force-kills a
+	 * LOADING model on unload; the feed reports the settled status, so no
+	 * waiter is registered here.
+	 */
+	async cancelLoad(modelId: string): Promise<void> {
+		if (!serverStore.isRouterMode) return;
+
+		this.subscribe();
+
+		try {
+			await ModelsService.unload(modelId);
+			toast.info(`Load cancelled: ${this.host.toDisplayName(modelId)}`);
+		} catch (error) {
+			toast.error(`Failed to cancel load: ${this.host.toDisplayName(modelId)}`);
+
+			throw error;
+		}
+	}
+
+	/**
 	 * Close the /models/sse feed and drop transient progress.
 	 */
 	unsubscribe(): void {
@@ -141,6 +291,48 @@ export class ModelStatusManager {
 		this.statusAbort?.abort();
 		this.statusAbort = null;
 		this.loadProgress.clear();
+		this.downloadProgress.clear();
+		this.failedDownloads.clear();
+	}
+
+	/**
+	 * Drop the stored progress for the model and toast the outcome.
+	 * Marks failed entries so the UI can offer a delete-and-retry path.
+	 */
+	private applyDownloadFinished(event: ApiModelsSseEvent): void {
+		this.downloadProgress.delete(event.model);
+
+		const ok = event.event === ServerModelsSseEventType.DOWNLOAD_FINISHED;
+
+		if (ok) {
+			this.failedDownloads.delete(event.model);
+			toast.success(`Download finished: ${this.host.toDisplayName(event.model)}`);
+		} else {
+			this.failedDownloads.add(event.model);
+			toast.error(`Download failed: ${this.host.toDisplayName(event.model)}`);
+		}
+	}
+
+	/**
+	 * Bucket the per-file byte counts from a `download_progress` envelope.
+	 * Total = sum of `total` across files (plan size), downloaded sum of `done`.
+	 */
+	private applyDownloadProgress(event: ApiModelsSseEvent): void {
+		const data = event.data;
+
+		if (!data || !('progress' in data)) return;
+
+		const progress = (data as ApiModelsDownloadProgressData).progress;
+
+		let downloaded = 0;
+		let total = 0;
+
+		for (const file of Object.values(progress)) {
+			downloaded += file?.done ?? 0;
+			total += file?.total ?? 0;
+		}
+
+		this.downloadProgress.set(event.model, { downloadedBytes: downloaded, totalBytes: total });
 	}
 
 	/**
@@ -151,7 +343,7 @@ export class ModelStatusManager {
 		const model = event.model;
 		const data = event.data;
 
-		if (!model || !data?.status) return;
+		if (!model || !data || !('status' in data) || !data.status) return;
 
 		const status = data.status;
 
@@ -202,6 +394,13 @@ export class ModelStatusManager {
 
 				break;
 			case ServerModelsSseEventType.DOWNLOAD_PROGRESS:
+				this.applyDownloadProgress(event);
+
+				break;
+			case ServerModelsSseEventType.DOWNLOAD_FINISHED:
+			case ServerModelsSseEventType.DOWNLOAD_FAILED:
+				this.applyDownloadFinished(event);
+
 				break;
 		}
 	}

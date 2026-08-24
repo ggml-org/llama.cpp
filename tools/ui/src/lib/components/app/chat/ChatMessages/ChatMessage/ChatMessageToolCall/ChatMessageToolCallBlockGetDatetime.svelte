@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Clock, Loader2 } from '@lucide/svelte';
+	import { Clock, LoaderCircle } from '@lucide/svelte';
 	import { AgenticSectionType } from '$lib/enums';
 	import type { AgenticSection } from '$lib/types';
 
@@ -47,8 +47,7 @@
 
 	{#if showSpinner}
 		<span class="text-foreground/80 text-sm font-medium">Current time</span>
-
-		<Loader2 class="text-muted-foreground/70 h-3 w-3 animate-spin" />
+		<LoaderCircle class="text-muted-foreground/70 h-3 w-3 animate-spin" />
 	{:else if dateMeta.errorMessage}
 		<span class="text-foreground/80 text-sm font-medium">Current time&nbsp;</span>
 

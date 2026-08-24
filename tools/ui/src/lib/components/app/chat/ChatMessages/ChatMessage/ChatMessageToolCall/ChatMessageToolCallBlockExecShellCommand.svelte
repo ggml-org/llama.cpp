@@ -8,7 +8,7 @@
 
 	import { parseExecShellCommandMeta } from './parsers/exec-shell-command';
 	import ToolCallBlock from './ToolCallBlock.svelte';
-	import { AlertTriangle, Check, Loader2, XCircle } from '@lucide/svelte';
+	import { AlertTriangle, Check, LoaderCircle, XCircle } from '@lucide/svelte';
 	import { CollapsibleTerminalBlock } from '$lib/components/app';
 	import { SETTINGS_KEYS, TOOL_RUNTIME_SCROLL_AT_BOTTOM_THRESHOLD_PX } from '$lib/constants';
 	import { AttachmentType } from '$lib/enums';
@@ -204,7 +204,7 @@
 	{#snippet children(_meta, ctx)}
 		{#if ctx.isPending}
 			<div class="flex items-start gap-2 text-xs text-muted-foreground/70">
-				<Loader2 class="h-3 w-3 animate-spin" />
+				<LoaderCircle class="h-3 w-3 animate-spin" />
 				Running...
 			</div>
 		{:else if execShellError}

@@ -11,6 +11,12 @@ export const URL_PARAMS = {
 export const ROUTES = {
 	/** Chat base — for dynamic chat URLs use RouterService. */
 	CHAT: '#/chat',
+	/** Model detail - for dynamic model URLs use RouterService. */
+	MANAGE_MODEL: '#/models-hub/[modelId]',
+	/** Model hub - browse and download HuggingFace GGUF models. */
+	MANAGE_MODELS: '#/models-hub',
+	/** Model manager - installed models from /v1/models. */
+	MODEL_MANAGER: '#/model-manager',
 	/** MCP servers. */
 	MCP_SERVERS: '#/mcp-servers',
 	/** Search — mobile-only full-page conversation search. */

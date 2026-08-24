@@ -8,5 +8,6 @@ export * from './mcp';
 export * from './misc';
 export * from './settings';
 export * from './models';
+export * from './models-hub';
 export * from './navigation';
 export * from './server';

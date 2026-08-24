@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { AlertTriangle, Loader2, RefreshCw } from '@lucide/svelte';
+	import { AlertTriangle, LoaderCircle, RefreshCw } from '@lucide/svelte';
 	import * as Alert from '$lib/components/ui/alert';
 	import { ICON_CLASS_DEFAULT } from '$lib/constants';
 	import { serverStore } from '$lib/stores';
@@ -12,7 +12,7 @@
 	<div class="pointer-events-auto mx-auto mb-4 max-w-[48rem] px-1">
 		<Alert.Root variant={isLoadingModel ? 'default' : 'destructive'}>
 			{#if isLoadingModel}
-				<Loader2 class="{ICON_CLASS_DEFAULT} animate-spin" />
+				<LoaderCircle class="{ICON_CLASS_DEFAULT} animate-spin" />
 			{:else}
 				<AlertTriangle class={ICON_CLASS_DEFAULT} />
 			{/if}

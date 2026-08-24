@@ -1,11 +1,11 @@
 <script lang="ts">
-	import ModelLoadHighlight from './ModelLoadHighlight.svelte';
+	import ModelLoadHighlight from '../ModelLoadHighlight.svelte';
 	import {
 		CircleAlert,
 		Heart,
 		HeartOff,
 		Info,
-		Loader2,
+		LoaderCircle,
 		Power,
 		PowerOff,
 		RotateCw
@@ -134,7 +134,7 @@
 
 		{#if isLoading}
 			<div class="flex w-4 items-center justify-center [@media(pointer:coarse)]:w-5">
-				<Loader2 class="{ICON_CLASS_DEFAULT} animate-spin text-muted-foreground" />
+				<LoaderCircle class="{ICON_CLASS_DEFAULT} animate-spin text-muted-foreground" />
 			</div>
 		{:else if isFailed}
 			<div class="flex w-4 items-center justify-center [@media(pointer:coarse)]:w-auto">

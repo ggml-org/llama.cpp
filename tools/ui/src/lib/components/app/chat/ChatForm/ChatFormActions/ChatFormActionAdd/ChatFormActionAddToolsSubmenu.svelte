@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Check, ChevronDown, ChevronRight, Info, Loader2, PencilRuler } from '@lucide/svelte';
+	import { Check, ChevronDown, ChevronRight, Info, LoaderCircle, PencilRuler } from '@lucide/svelte';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import * as Collapsible from '$lib/components/ui/collapsible';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
@@ -24,7 +24,7 @@
 		{#if toolsPanel.totalToolCount === 0}
 			{#if toolsStore.loading}
 				<div class="px-3 py-4 text-center text-sm text-muted-foreground">
-					<Loader2 class="mx-auto mb-1 {ICON_CLASS_DEFAULT} animate-spin" />
+					<LoaderCircle class="mx-auto mb-1 {ICON_CLASS_DEFAULT} animate-spin" />
 
 					Loading tools...
 				</div>

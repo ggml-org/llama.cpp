@@ -5,7 +5,7 @@
 		type ResourceTreeNode,
 		sortTreeChildren
 	} from './mcp-resources-browser';
-	import { Braces, ChevronDown, ChevronRight, FolderOpen, Loader2 } from '@lucide/svelte';
+	import { Braces, ChevronDown, ChevronRight, FolderOpen, LoaderCircle } from '@lucide/svelte';
 	import { McpServerIdentity } from '$lib/components/app/mcp';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import * as Collapsible from '$lib/components/ui/collapsible';
@@ -177,7 +177,7 @@
 		</span>
 
 		{#if serverRes.loading}
-			<Loader2 class="ml-auto h-3 w-3 animate-spin text-muted-foreground" />
+			<LoaderCircle class="ml-auto h-3 w-3 animate-spin text-muted-foreground" />
 		{/if}
 	</Collapsible.Trigger>
 

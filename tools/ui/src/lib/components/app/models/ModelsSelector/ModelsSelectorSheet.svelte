@@ -1,6 +1,6 @@
 <script lang="ts">
-	import ModelLoadHighlight from './ModelLoadHighlight.svelte';
-	import { ChevronDown, Loader2, Package } from '@lucide/svelte';
+	import ModelLoadHighlight from '../ModelLoadHighlight.svelte';
+	import { ChevronDown, LoaderCircle, Package } from '@lucide/svelte';
 	import {
 		DialogModelInformation,
 		ModelId,
@@ -58,7 +58,7 @@
 <div class={['relative inline-flex flex-col items-end gap-1', className]}>
 	{#if ms.loading && ms.options.length === 0 && ms.isRouter}
 		<div class="flex items-center gap-2 text-xs text-muted-foreground">
-			<Loader2 class="h-3.5 w-3.5 animate-spin" />
+			<LoaderCircle class="h-3.5 w-3.5 animate-spin" />
 			Loading models…
 		</div>
 	{:else if ms.options.length === 0 && ms.isRouter}
@@ -110,7 +110,7 @@
 				{/if}
 
 				{#if ms.updating || ms.isLoadingModel}
-					<Loader2 class="h-3 w-3.5 shrink-0 animate-spin" />
+					<LoaderCircle class="h-3 w-3.5 shrink-0 animate-spin" />
 				{:else}
 					<ChevronDown class="h-3 w-3.5 shrink-0" />
 				{/if}
@@ -194,7 +194,7 @@
 				<ModelId class="font-medium" hideQuantization modelId={selectedOption?.model || ''} />
 
 				{#if ms.updating}
-					<Loader2 class="h-3 w-3.5 shrink-0 animate-spin" />
+					<LoaderCircle class="h-3 w-3.5 shrink-0 animate-spin" />
 				{/if}
 			</button>
 		{/if}

@@ -1,10 +1,11 @@
 <script lang="ts">
-	import ModelLoadHighlight from './ModelLoadHighlight.svelte';
-	import type { ModelItem } from './utils';
-	import { ChevronDown, Lightbulb, Loader2 } from '@lucide/svelte';
+	import ModelLoadHighlight from '../ModelLoadHighlight.svelte';
+	import type { ModelItem } from '../utils';
+	import { Boxes, ChevronDown, Lightbulb, LoaderCircle, PackageSearch, Plus } from '@lucide/svelte';
 	import {
 		ChatFormActionAddReasoningSubmenu,
 		DialogModelInformation,
+		DialogModelsHub,
 		DropdownMenuSearchable,
 		ModelId,
 		ModelsSelectorList,
@@ -39,6 +40,7 @@
 
 	let isOpen = $state(false);
 	let highlightedId = $state<string | null>(null);
+	let modelsHubOpen = $state(false);
 	// The model submenu opens together with the menu so the list and its search
 	// box are immediately available, as before the submenu was introduced
 	let modelSubOpen = $state(false);
@@ -169,7 +171,7 @@
 <div class={['relative inline-flex flex-col items-end gap-1', className]}>
 	{#if ms.loading && ms.options.length === 0 && ms.isRouter}
 		<div class="flex items-center gap-2 text-xs text-muted-foreground">
-			<Loader2 class="h-3.5 w-3.5 animate-spin" />
+			<LoaderCircle class="h-3.5 w-3.5 animate-spin" />
 
 			Loading models…
 		</div>
@@ -243,7 +245,7 @@
 								</span>
 
 								{#if ms.updating || ms.isLoadingModel}
-									<Loader2 class="h-3 w-3.5 shrink-0 animate-spin" />
+									<LoaderCircle class="h-3 w-3.5 shrink-0 animate-spin" />
 								{:else}
 									<ChevronDown class="h-3 w-3.5 shrink-0" />
 								{/if}
@@ -352,6 +354,17 @@
 					</DropdownMenu.Sub>
 
 					<ChatFormActionAddReasoningSubmenu />
+
+					<DropdownMenu.Separator />
+
+					<DropdownMenu.Item
+						class="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.75 text-left text-sm transition-colors hover:bg-accent"
+						onclick={() => (modelsHubOpen = true)}
+					>
+						<PackageSearch class="h-4 w-4 shrink-0 text-muted-foreground" />
+
+						<span>Discover models</span>
+					</DropdownMenu.Item>
 				</DropdownMenu.Content>
 			</DropdownMenu.Root>
 		{:else}
@@ -392,7 +405,7 @@
 							{/if}
 
 							{#if ms.updating}
-								<Loader2 class="h-3 w-3.5 shrink-0 animate-spin" />
+								<LoaderCircle class="h-3 w-3.5 shrink-0 animate-spin" />
 							{/if}
 						</button>
 					{/snippet}
@@ -415,3 +428,5 @@
 		open={ms.showModelDialog}
 	/>
 {/if}
+
+<DialogModelsHub bind:open={modelsHubOpen} />
