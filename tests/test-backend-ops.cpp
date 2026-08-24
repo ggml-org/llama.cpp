@@ -10573,6 +10573,101 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_from_file(const c
     return test_cases;
 }
 
+// ---- FA vec (Q,NE): forced-config numerical slice (Metal only) ----
+using set_fa_vec_override_t   = void (*)(int, int);
+using clear_fa_vec_override_t = void (*)(void);
+
+// NL = 32/NE must divide both dk/4 and dv/4.
+static std::vector<int> fa_vec_legal_ne(int dk, int dv) {
+    std::vector<int> r;
+    for (int ne : {1, 2, 4}) {
+        const int nl = 32 / ne;
+        if ((dk/4) % nl == 0 && (dv/4) % nl == 0) {
+            r.push_back(ne);
+        }
+    }
+    return r;
+}
+
+static bool op_names_filter_selects(const char * op_names_filter, const char * op_name) {
+    if (!op_names_filter) {
+        return true;
+    }
+    std::string_view filter(op_names_filter);
+    while (!filter.empty()) {
+        auto comma_pos = filter.find_first_of(',');
+        const auto lparen_pos = filter.find_first_of('(');
+        std::string_view entry;
+        if (lparen_pos < comma_pos) {
+            const auto rparen_pos = filter.find_first_of(')');
+            comma_pos = filter.find_first_of(',', rparen_pos);
+            entry = filter.substr(0, lparen_pos);
+        } else {
+            entry = filter.substr(0, comma_pos);
+        }
+        if (entry == op_name) {
+            return true;
+        }
+        filter = comma_pos != std::string_view::npos ? filter.substr(comma_pos + 1) : "";
+    }
+    return false;
+}
+
+// Covers padded rows, sinks, kvpad, multi-SIMDgroup reduction, quantized K/V, and MLA views.
+// The override is backend-global, so this runs after all parallel workers have joined.
+static bool run_fa_vec_slice(ggml_backend_t backend, ggml_backend_t backend_cpu, const char * op_names_filter) {
+    if (!op_names_filter_selects(op_names_filter, "FLASH_ATTN_EXT")) {
+        return true;
+    }
+
+    auto * reg = ggml_backend_dev_backend_reg(ggml_backend_get_device(backend));
+
+    auto set_ov   = (set_fa_vec_override_t)   ggml_backend_reg_get_proc_address(reg, "ggml_backend_metal_tuning_set_fa_vec_override");
+    auto clear_ov = (clear_fa_vec_override_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_metal_tuning_clear_fa_vec_override");
+    if (!set_ov || !clear_ov) {
+        return true;  // not the Metal backend: nothing to force
+    }
+
+    struct shape_t { int dk, dv; };
+    const shape_t   shapes[] = { { 128, 128 }, { 576, 512 } };  // mainstream head size + MLA shared K/V view
+    const int       ne01_pts[] = { 1, 3 };                      // decode, and padded rows for Q=2 and Q=4
+    const int       ne11_pts[] = { 512, 4097 };                 // nsg=1, and nsg>=2 together with kvpad
+    const ggml_type types[]    = { GGML_TYPE_F16, GGML_TYPE_Q4_0 };
+
+    int n_run = 0, n_fail = 0;
+    for (auto s : shapes) {
+        for (int ne : fa_vec_legal_ne(s.dk, s.dv)) {
+            for (int Q : { 1, 2, 4 }) {
+                for (ggml_type type_kv : types) {
+                    for (bool sinks : { false, true }) {
+                        for (int ne01 : ne01_pts) {
+                            for (int ne11 : ne11_pts) {
+                                set_ov(Q, ne);
+                                test_flash_attn_ext tc(s.dk, s.dv, /*nh=*/4, { 1, 1 }, /*kv=*/ne11, /*nb=*/ne01,
+                                                       /*mask=*/true, sinks, 0.0f, 0.0f, GGML_PREC_F32,
+                                                       type_kv, type_kv);
+                                auto st = tc.eval(backend, backend_cpu, "FLASH_ATTN_EXT", nullptr);
+                                clear_ov();
+
+                                if (st == test_status_t::FAIL) {
+                                    printf("  FAIL fa_vec slice: dk=%d dv=%d Q=%d ne=%d type=%s ne01=%d ne11=%d sinks=%d\n",
+                                           s.dk, s.dv, Q, ne, ggml_type_name(type_kv), ne01, ne11, (int) sinks);
+                                    n_fail++;
+                                }
+                                n_run++;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    printf("  fa_vec (Q,NE) slice: %d cases run, %d failed\n", n_run, n_fail);
+
+    return n_fail == 0;
+}
+
 static bool test_backend(ggml_backend_t backend, ggml_backend_dev_t dev, test_mode mode, const char * op_names_filter, const char * params_filter,
                          printer * output_printer, const char * test_file_path, int parallel_workers) {
     auto filter_test_cases = [](std::vector<std::unique_ptr<test_case>> & test_cases, const char * params_filter) {
@@ -10710,7 +10805,9 @@ static bool test_backend(ggml_backend_t backend, ggml_backend_dev_t dev, test_mo
         output_printer->print_summary(test_summary_info(n_ok, tests_run, false));
         output_printer->print_failed_tests(failed_tests);
 
-        return n_ok == tests_run;
+        const bool slice_ok = run_fa_vec_slice(backend, backend_cpu.get(), op_names_filter);
+
+        return n_ok == tests_run && slice_ok;
     }
 
     if (mode == MODE_GRAD) {

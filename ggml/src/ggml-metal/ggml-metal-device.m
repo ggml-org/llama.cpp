@@ -962,6 +962,34 @@ void ggml_metal_rsets_free(ggml_metal_rsets_t rsets) {
     free(rsets);
 }
 
+static const struct {
+    const char *              name;
+    const char *              token;
+    enum ggml_metal_device_id id;
+} k_metal_devices[] = {
+#define DEV(name, id) { name, #id, id }
+    DEV("M1",       GGML_METAL_DEVICE_M1),
+    DEV("M1 Pro",   GGML_METAL_DEVICE_M1_PRO),
+    DEV("M1 Max",   GGML_METAL_DEVICE_M1_MAX),
+    DEV("M1 Ultra", GGML_METAL_DEVICE_M1_ULTRA),
+    DEV("M2",       GGML_METAL_DEVICE_M2),
+    DEV("M2 Pro",   GGML_METAL_DEVICE_M2_PRO),
+    DEV("M2 Max",   GGML_METAL_DEVICE_M2_MAX),
+    DEV("M2 Ultra", GGML_METAL_DEVICE_M2_ULTRA),
+    DEV("M3",       GGML_METAL_DEVICE_M3),
+    DEV("M3 Pro",   GGML_METAL_DEVICE_M3_PRO),
+    DEV("M3 Max",   GGML_METAL_DEVICE_M3_MAX),
+    DEV("M3 Ultra", GGML_METAL_DEVICE_M3_ULTRA),
+    DEV("M4",       GGML_METAL_DEVICE_M4),
+    DEV("M4 Pro",   GGML_METAL_DEVICE_M4_PRO),
+    DEV("M4 Max",   GGML_METAL_DEVICE_M4_MAX),
+    DEV("M5",       GGML_METAL_DEVICE_M5),
+    DEV("M5 Pro",   GGML_METAL_DEVICE_M5_PRO),
+    DEV("M5 Max",   GGML_METAL_DEVICE_M5_MAX),
+    DEV("M5 Ultra", GGML_METAL_DEVICE_M5_ULTRA),
+#undef DEV
+};
+
 static enum ggml_metal_device_id ggml_metal_device_id_parse(const char * name) {
     if (!name) {
         return GGML_METAL_DEVICE_GENERIC;
@@ -973,37 +1001,21 @@ static enum ggml_metal_device_id ggml_metal_device_id_parse(const char * name) {
     }
     const char * suffix = name + sizeof(prefix) - 1;
 
-    static const struct {
-        const char * name;
-        enum ggml_metal_device_id id;
-    } table[] = {
-        {"M1",       GGML_METAL_DEVICE_M1},
-        {"M1 Pro",   GGML_METAL_DEVICE_M1_PRO},
-        {"M1 Max",   GGML_METAL_DEVICE_M1_MAX},
-        {"M1 Ultra", GGML_METAL_DEVICE_M1_ULTRA},
-        {"M2",       GGML_METAL_DEVICE_M2},
-        {"M2 Pro",   GGML_METAL_DEVICE_M2_PRO},
-        {"M2 Max",   GGML_METAL_DEVICE_M2_MAX},
-        {"M2 Ultra", GGML_METAL_DEVICE_M2_ULTRA},
-        {"M3",       GGML_METAL_DEVICE_M3},
-        {"M3 Pro",   GGML_METAL_DEVICE_M3_PRO},
-        {"M3 Max",   GGML_METAL_DEVICE_M3_MAX},
-        {"M3 Ultra", GGML_METAL_DEVICE_M3_ULTRA},
-        {"M4",       GGML_METAL_DEVICE_M4},
-        {"M4 Pro",   GGML_METAL_DEVICE_M4_PRO},
-        {"M4 Max",   GGML_METAL_DEVICE_M4_MAX},
-        {"M5",       GGML_METAL_DEVICE_M5},
-        {"M5 Pro",   GGML_METAL_DEVICE_M5_PRO},
-        {"M5 Max",   GGML_METAL_DEVICE_M5_MAX},
-        {"M5 Ultra", GGML_METAL_DEVICE_M5_ULTRA},
-    };
-
-    for (size_t i = 0; i < sizeof(table)/sizeof(table[0]); ++i) {
-        if (strcmp(suffix, table[i].name) == 0) {
-            return table[i].id;
+    for (size_t i = 0; i < sizeof(k_metal_devices)/sizeof(k_metal_devices[0]); ++i) {
+        if (strcmp(suffix, k_metal_devices[i].name) == 0) {
+            return k_metal_devices[i].id;
         }
     }
     return GGML_METAL_DEVICE_GENERIC;
+}
+
+const char * ggml_metal_device_id_token(enum ggml_metal_device_id id) {
+    for (size_t i = 0; i < sizeof(k_metal_devices)/sizeof(k_metal_devices[0]); ++i) {
+        if (k_metal_devices[i].id == id) {
+            return k_metal_devices[i].token;
+        }
+    }
+    return "GGML_METAL_DEVICE_GENERIC";
 }
 
 ggml_metal_device_t ggml_metal_device_init(int device, int n_devices) {
@@ -1220,7 +1232,8 @@ ggml_metal_device_t ggml_metal_device_init(int device, int n_devices) {
             {
                 for (int i = MTLGPUFamilyApple1 + 20; i >= MTLGPUFamilyApple1; --i) {
                     if ([dev->mtl_device supportsFamily:i]) {
-                        GGML_LOG_INFO("%s: GPU family: MTLGPUFamilyApple%d  (%d)\n", __func__, i - (int) MTLGPUFamilyApple1 + 1, i);
+                        dev->props.gpu_family = i - (int) MTLGPUFamilyApple1 + 1;
+                        GGML_LOG_INFO("%s: GPU family: MTLGPUFamilyApple%d  (%d)\n", __func__, dev->props.gpu_family, i);
                         break;
                     }
                 }
