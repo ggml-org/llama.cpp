@@ -183,14 +183,6 @@ jobs:
         id: checkout
         uses: actions/checkout@v6
 
-      # TODO: this likely does not do anything - if yes, remove it
-      - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
-        with:
-          key: apple-tvos
-          evict-old-files: 1d
-          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
-
       - name: Build
         id: cmake_build
         run: |
@@ -208,16 +200,6 @@ jobs:
             -DCMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM=ggml
           cmake --build build --config Release -j $(sysctl -n hw.logicalcpu) -- CODE_SIGNING_ALLOWED=NO
 
-      - name: ccache-clear
-        uses: ./.github/actions/ccache-clear
-        env:
-          GH_TOKEN: ${{ github.token }}
-        with:
-          key: apple-tvos
-          older: 5m
-          min: 1
-          dry-run: ${{ github.event_name != 'push' || github.ref != 'refs/heads/master' }}
-
   macos-latest-visionos:
     runs-on: macos-latest
 
@@ -225,14 +207,6 @@ jobs:
       - name: Clone
         id: checkout
         uses: actions/checkout@v6
-
-      # TODO: this likely does not do anything - if yes, remove it
-      - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
-        with:
-          key: apple-visionos
-          evict-old-files: 1d
-          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Build
         id: cmake_build
@@ -251,16 +225,6 @@ jobs:
             -DCMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM=ggml
           cmake --build build --config Release -j $(sysctl -n hw.logicalcpu) -- CODE_SIGNING_ALLOWED=NO
 
-      - name: ccache-clear
-        uses: ./.github/actions/ccache-clear
-        env:
-          GH_TOKEN: ${{ github.token }}
-        with:
-          key: apple-visionos
-          older: 5m
-          min: 1
-          dry-run: ${{ github.event_name != 'push' || github.ref != 'refs/heads/master' }}
-
   macos-latest-swift:
     runs-on: macos-latest
     needs: macos-latest-ios-xcode
@@ -273,14 +237,6 @@ jobs:
       - name: Clone
         id: checkout
         uses: actions/checkout@v6
-
-      # TODO: this likely does not do anything - if yes, remove it
-      - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
-        with:
-          key: apple-swift
-          evict-old-files: 1d
-          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Download xcframework artifact
         uses: actions/download-artifact@v7
@@ -302,13 +258,3 @@ jobs:
             -DLLAMA_BUILD_SERVER=OFF \
             -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
           cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
-
-      - name: ccache-clear
-        uses: ./.github/actions/ccache-clear
-        env:
-          GH_TOKEN: ${{ github.token }}
-        with:
-          key: apple-swift
-          older: 5m
-          min: 1
-          dry-run: ${{ github.event_name != 'push' || github.ref != 'refs/heads/master' }}
