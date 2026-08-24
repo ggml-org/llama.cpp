@@ -1,23 +1,24 @@
 // Guards /skills activation, wake, form token handling, and the export/import round trip.
 
-import ChatFormTestWrapper from './components/ChatFormTestWrapper.svelte';
 import { baseResult, makeEntry, resourceResult } from '../fixtures/skills';
-import { NEWLINE, SKILL_READ_TOOL } from '$lib/constants';
+import ChatFormTestWrapper from './components/ChatFormTestWrapper.svelte';
+import { SKILL_READ_TOOL } from '$lib/constants';
 import { AttachmentType, MessageRole, MessageType } from '$lib/enums';
 import { ChatService } from '$lib/services/chat.service';
+import { ConversationTransferService } from '$lib/services/conversation-transfer.service';
 import { DatabaseService } from '$lib/services/database.service';
-import { dispatchSkillActivation } from '$lib/services/skill-command.service';
-import { isSkillExtra, skillActivationExtra } from '$lib/services/skills-activation.service';
+import { dispatchSkillActivation } from '$lib/services/skills-adapters.service';
 import { SkillsService } from '$lib/services/skills.service';
-import { agenticStore } from '$lib/stores/agentic.svelte';
-import { chatStore } from '$lib/stores/chat.svelte';
-import { conversationsStore } from '$lib/stores/conversations.svelte';
+import { isSkillExtra, skillActivationExtra } from '$lib/services/skills-activation.service';
+import { agenticStore, chatStore, conversationsStore } from '$lib/stores';
 import { skillActivationStore } from '$lib/stores/skill-activation.svelte';
-import { skillAvailabilityStore } from '$lib/stores/skill-availability.svelte';
-import type { SkillCatalogSlot } from '$lib/stores/skills.svelte';
-import { skillsStore } from '$lib/stores/skills.svelte';
+import { skillsStore, type SkillCatalogSlot } from '$lib/stores/skills.svelte';
 import type { SkillCatalogEntry } from '$lib/types';
-import type { DatabaseConversation, DatabaseMessage, ExportedConversation } from '$lib/types/database';
+import type {
+	DatabaseConversation,
+	DatabaseMessage,
+	ExportedConversation
+} from '$lib/types/database';
 import type { SkillBaseReadResult } from '$lib/types/skills';
 import { tick } from 'svelte';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -146,25 +147,28 @@ vi.mock('$lib/services/database.service', () => ({
 	}
 }));
 
-vi.mock('$lib/services/skill-command.service', () => ({ dispatchSkillActivation: vi.fn() }));
+vi.mock('$lib/services/skills-adapters.service', async (importOriginal) => {
+	const actual = (await importOriginal()) as Record<string, unknown>;
+
+	return { ...actual, dispatchSkillActivation: vi.fn() };
+});
 vi.mock('$lib/services/skills.service', async (importOriginal) => {
-	const actual = await importOriginal();
+	const actual = (await importOriginal()) as Record<string, unknown>;
 
 	return { ...actual, SkillsService: { read: vi.fn() } };
 });
-vi.mock('$lib/stores/skill-availability.svelte', () => ({
-	skillAvailabilityStore: { isDisabled: vi.fn(() => false) }
-}));
 vi.mock('$lib/stores/skills.svelte', () => ({
 	skillsStore: {
 		ensureCatalog: vi.fn(async () => undefined),
 		invalidate: vi.fn(),
+		isDisabled: vi.fn(() => false),
+		onRouteCwdChange: vi.fn(),
+		disposeRouteCatalog: vi.fn(),
 		refresh: vi.fn(async () => undefined),
 		slotFor: vi.fn()
 	}
 }));
 
-const mockSendMessage = vi.mocked(ChatService.sendMessage);
 const CONV_ID = 'conv-wake-1';
 
 function makeConversation(): DatabaseConversation {
@@ -177,19 +181,6 @@ function makeConversation(): DatabaseConversation {
 		reasoningEffort: undefined,
 		thinkingEnabled: false
 	};
-}
-
-function wakeResult(id: string, name: string, contentXml: string): SkillBaseReadResult {
-	return baseResult(name, {
-		content_xml: contentXml,
-		skill: {
-			id,
-			metadata: { description: `The ${name} skill`, name },
-			name,
-			provider: 'project',
-			scope: 'project'
-		}
-	});
 }
 
 function readySlot(entries: SkillCatalogEntry[]): SkillCatalogSlot {
@@ -235,12 +226,12 @@ beforeEach(() => {
 
 	conversationsStore.activeConversation = null;
 	conversationsStore.activeMessages = [];
-	conversationsStore.pendingCwd = null;
+	conversationsStore.preferences.pendingCwd = null;
 
 	vi.mocked(SkillsService.read).mockReset();
 	vi.mocked(SkillsService.read).mockResolvedValue(baseResult('frontend-design'));
-	vi.mocked(skillAvailabilityStore.isDisabled).mockReset();
-	vi.mocked(skillAvailabilityStore.isDisabled).mockReturnValue(false);
+	vi.mocked(skillsStore.isDisabled).mockReset();
+	vi.mocked(skillsStore.isDisabled).mockReturnValue(false);
 	vi.mocked(dispatchSkillActivation).mockReset();
 	vi.mocked(dispatchSkillActivation).mockResolvedValue({ created: true, ok: true });
 	vi.mocked(skillsStore.slotFor).mockReset();
@@ -258,15 +249,14 @@ describe('dispatchSkillActivation', () => {
 	let realDispatch: typeof dispatchSkillActivation;
 
 	beforeAll(async () => {
-		({ dispatchSkillActivation: realDispatch } = await vi.importActual<typeof import('$lib/services/skill-command.service')>(
-			'$lib/services/skill-command.service'
-		));
+		({ dispatchSkillActivation: realDispatch } = await vi.importActual<
+			typeof import('$lib/services/skills-adapters.service')
+		>('$lib/services/skills-adapters.service'));
 	});
 
 	it('creates a Skill-named conversation and persists the activation in fresh state', async () => {
 		const create = vi.spyOn(conversationsStore, 'createConversation');
 		const record = vi.spyOn(skillActivationStore, 'recordActivation');
-
 		const outcome = await realDispatch('frontend-design');
 
 		expect(create).toHaveBeenCalledWith('Skill: frontend-design');
@@ -278,9 +268,8 @@ describe('dispatchSkillActivation', () => {
 
 	it('reuses the active conversation and threads the pending CWD through read and record', async () => {
 		conversationsStore.activeConversation = { ...makeConversation(), id: 'conv-active' };
-		conversationsStore.pendingCwd = '/pending';
+		conversationsStore.preferences.pendingCwd = '/pending';
 		const record = vi.spyOn(skillActivationStore, 'recordActivation');
-
 		const outcome = await realDispatch('frontend-design');
 
 		expect(vi.mocked(DatabaseService.createConversation)).not.toHaveBeenCalled();
@@ -304,7 +293,7 @@ describe('dispatchSkillActivation', () => {
 				vi.mocked(SkillsService.read).mockResolvedValue(resourceResult('frontend-design'));
 			} else if (reason === 'disabled') {
 				vi.mocked(SkillsService.read).mockResolvedValue(baseResult('frontend-design'));
-				vi.mocked(skillAvailabilityStore.isDisabled).mockImplementation(
+				vi.mocked(skillsStore.isDisabled).mockImplementation(
 					(id) => id === 'opaque-frontend-design'
 				);
 			} else {
@@ -358,7 +347,6 @@ describe('/skills wake and form integration', () => {
 			expect(runTurn).not.toHaveBeenCalled();
 		}
 	);
-
 
 	it('auto-opens the picker with the trimmed query and dispatches exactly once on explicit selection, clearing the buffer', async () => {
 		const textarea = await textareaOf();
@@ -503,13 +491,13 @@ describe('conversation export/import round trip with Skills metadata', () => {
 	}
 
 	it('round-trips the SKILL extra, the pairing, plain messages, and malformed records, and converts the pair for the model', async () => {
-		const [session] = await conversationsStore.parseImportFile(
-			new File([conversationsStore.serializeSessionToJsonl(makeSession())], 'export.jsonl')
+		const [session] = await ConversationTransferService.parseImportFile(
+			new File([ConversationTransferService.serializeSessionToJsonl(makeSession())], 'export.jsonl')
 		);
-		const assistant = session.messages.find((m) => m.id === 'assistant-1');
-		const toolResult = session.messages.find((m) => m.id === 'tool-result-1');
-		const plainAssistant = session.messages.find((m) => m.id === 'assistant-2');
-		const mcpToolResult = session.messages.find((m) => m.id === 'tool-result-2');
+		const assistant = session.messages.find((m: DatabaseMessage) => m.id === 'assistant-1');
+		const toolResult = session.messages.find((m: DatabaseMessage) => m.id === 'tool-result-1');
+		const plainAssistant = session.messages.find((m: DatabaseMessage) => m.id === 'assistant-2');
+		const mcpToolResult = session.messages.find((m: DatabaseMessage) => m.id === 'tool-result-2');
 
 		expect(plainAssistant?.content).toBe('Plain non-Skills reply');
 		expect(mcpToolResult?.extra).toEqual([
@@ -564,11 +552,12 @@ describe('conversation export/import round trip with Skills metadata', () => {
 			}
 		] as unknown as typeof malformedTool.extra;
 
-		const malformedSessions = await conversationsStore.parseImportFile(
-			new File([conversationsStore.serializeSessionToJsonl(malformed)], 'export.jsonl')
+		const malformedSessions = await ConversationTransferService.parseImportFile(
+			new File([ConversationTransferService.serializeSessionToJsonl(malformed)], 'export.jsonl')
 		);
 		const [malformedExtra] =
-			malformedSessions[0].messages.find((m) => m.id === 'tool-result-1')!.extra ?? [];
+			malformedSessions[0].messages.find((m: DatabaseMessage) => m.id === 'tool-result-1')!.extra ??
+			[];
 
 		expect(isSkillExtra(malformedExtra)).toBe(false);
 

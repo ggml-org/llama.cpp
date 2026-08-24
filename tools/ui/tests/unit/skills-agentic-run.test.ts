@@ -1,6 +1,7 @@
 // Guards the agentic flow's Skills integration: snapshot creation, adapter
 // registration, and consent routing through the shared durable operation.
 
+import { baseResult, catalogOf, resourceResult } from '../fixtures/skills';
 import { SKILL_LIST_TOOL, SKILL_READ_TOOL } from '$lib/constants';
 import { MessageRole, ToolPermissionDecision } from '$lib/enums';
 import { ChatService } from '$lib/services';
@@ -9,14 +10,12 @@ import { SkillsService } from '$lib/services/skills.service';
 import { buildSkillRunSnapshot, serializeSkillCatalogEnvelope } from '$lib/services/skills.service';
 import { skillActivationExtra, skillResourceExtra } from '$lib/services/skills-activation.service';
 import { skillDenialResult } from '$lib/services/skills-adapters.service';
-import { agenticStore } from '$lib/stores/agentic.svelte';
-import { settingsStore } from '$lib/stores/settings.svelte';
+import { agenticStore, settingsStore } from '$lib/stores';
 import { skillsStore } from '$lib/stores/skills.svelte';
 import { toolsStore } from '$lib/stores/tools.svelte';
 import type { AgenticFlowCallbacks } from '$lib/types/agentic';
 import type { Mock } from 'vitest';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { baseResult, catalogOf, resourceResult } from '../fixtures/skills';
 
 vi.mock('$lib/services/skills.service', async (importOriginal) => {
 	const actual = await importOriginal<typeof SkillsServiceModule>();
@@ -43,6 +42,7 @@ vi.mock('$lib/stores/skill-activation.svelte', () => ({
 vi.mock('$lib/services/chat.service', () => ({
 	ChatService: {
 		convertDbMessageToApiChatMessageData: vi.fn(),
+		normalizeMessagesForApi: vi.fn(async (messages) => messages),
 		sendMessage: vi.fn()
 	}
 }));
@@ -81,7 +81,7 @@ vi.mock('$lib/stores/tools.svelte', () => ({
 		]
 	}
 }));
-vi.mock('$lib/stores/mcp.svelte', () => ({
+vi.mock('$lib/stores/mcp/index.svelte', () => ({
 	mcpStore: {
 		acquireConnection: vi.fn(),
 		ensureInitialized: vi.fn(),
@@ -90,23 +90,27 @@ vi.mock('$lib/stores/mcp.svelte', () => ({
 		releaseConnection: vi.fn()
 	}
 }));
-vi.mock('$lib/stores/models.svelte', () => ({
+vi.mock('$lib/stores/models/index.svelte', () => ({
 	modelsStore: {
 		isModelLoaded: vi.fn(() => false),
 		models: [],
-		modelSupportsVision: vi.fn(() => false)
+		modelSupportsVision: vi.fn(() => false),
+		props: { modelSupportsAudio: vi.fn(() => false), modelSupportsVision: vi.fn(() => false) }
 	}
 }));
 vi.mock('$lib/stores/permissions.svelte', () => ({
 	permissionsStore: { allowTool: vi.fn(), allowTools: vi.fn(), hasTool: vi.fn(() => false) }
 }));
-vi.mock('$lib/stores/conversations.svelte', () => ({
-	conversationsStore: { activeConversation: { cwd: '/run-cwd' } }
+vi.mock('$lib/stores/conversations/index.svelte', () => ({
+	conversationsStore: {
+		activeConversation: { cwd: '/run-cwd' },
+		onConversationsDeleted: vi.fn(() => () => {})
+	}
 }));
 vi.mock('$lib/stores/server.svelte', () => ({
 	serverStore: { isRouterMode: false }
 }));
-vi.mock('$lib/stores/settings.svelte', () => ({
+vi.mock('$lib/stores/settings/index.svelte', () => ({
 	settingsStore: { config: { agenticMaxTurns: 100, maxSkillBudget: 2000 } }
 }));
 
@@ -173,7 +177,7 @@ async function waitForPermission(convId: string) {
 	const deadline = Date.now() + 3000;
 
 	while (Date.now() < deadline) {
-		const pending = agenticStore.pendingPermissionRequest(convId);
+		const pending = agenticStore.getPendingPermissionRequest(convId);
 
 		if (pending) return pending;
 
@@ -289,7 +293,6 @@ describe('agenticStore.runAgenticFlow Skills integration', () => {
 		mockSendMessage.mockClear();
 
 		await agenticStore.runAgenticFlow(runParams('conv-1', makeCallbacks().callbacks));
-
 	});
 
 	it('denies an unapproved base read with a structured no-content tool result and no activation', async () => {

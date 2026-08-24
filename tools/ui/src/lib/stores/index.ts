@@ -53,8 +53,6 @@ export { settingsReferrer } from './settings/referrer.svelte';
 
 export { permissionsStore } from './permissions.svelte';
 
-// SKILLS
-export { skillAvailabilityStore } from './skill-availability.svelte';
 
 // TOOLS
 export { toolsStore } from './tools.svelte';

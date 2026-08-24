@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { skillProviderLabel } from './skill-provider-presentation';
+	import { skillProviderLabel, toggleSkillProviderExclusion } from './skill-presentation';
 	import { ListFilter } from '@lucide/svelte';
 	import { SearchInput } from '$lib/components/app/forms';
 	import { Button } from '$lib/components/ui/button';
@@ -31,12 +31,7 @@
 	const dispatchQuery = debounce((query: string) => onQueryChange(query), SEARCH_DEBOUNCE_MS);
 
 	function toggleProvider(provider: string, included: boolean) {
-		const next = new Set(excludedProviders);
-
-		if (included) next.delete(provider);
-		else next.add(provider);
-
-		onProvidersChange(next);
+		onProvidersChange(toggleSkillProviderExclusion(excludedProviders, provider, included));
 	}
 
 	function resetFilters() {

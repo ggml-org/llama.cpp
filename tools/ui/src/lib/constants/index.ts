@@ -47,7 +47,6 @@ export * from './routes.constants';
 export * from './sandbox.constants';
 export * from './settings-keys.constants';
 export * from './settings.constants';
-export * from './settings-registry.constants';
 export * from './skills';
 export * from './special-characters.constants';
 export * from './stream.constants';

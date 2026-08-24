@@ -123,8 +123,6 @@ export { isTextFileByName, readFileAsText, isLikelyTextFile } from './text-files
 // Debounce utilities
 export { debounce } from './debounce';
 
-// Skills catalog search/filter utilities
-export { applySkillCatalogFilters, distinctSkillProviders } from './skill-catalog-filter';
 
 // Sanitization utilities
 export { sanitizeKeyValuePairKey, sanitizeKeyValuePairValue } from './sanitize';
@@ -357,5 +355,3 @@ export { remToPx } from './css';
 // Audio format helper (used by agentic store and chat service)
 export { getAudioInputFormat } from './audio-format';
 
-// Skills budget chip (budget status as a diagnostics-block entry)
-export { deriveSkillBudgetChip, type SkillBudgetChip } from './skill-budget-chip';

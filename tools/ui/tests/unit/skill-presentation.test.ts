@@ -1,3 +1,4 @@
+import { makeEntry } from '../fixtures/skills';
 import {
 	buildSkillResourceTree,
 	classifySkillResourceFormat,
@@ -5,11 +6,13 @@ import {
 	flattenSkillResourceTree,
 	getInitialExpandedFolderPaths
 } from '$lib/components/app/skills/skill-resource-presentation';
+import {
+	applySkillCatalogFilters,
+	deriveSkillBudgetChip,
+	distinctSkillProviders
+} from '$lib/components/app/skills/skill-presentation';
+import type { SkillCatalogEntry, SkillPackedCatalog } from '$lib/types';
 import { normalizeSkillDescription } from '$lib/utils/formatters';
-import { deriveSkillBudgetChip } from '$lib/utils/skill-budget-chip';
-import type { SkillPackedCatalog, SkillCatalogEntry } from '$lib/types';
-import { applySkillCatalogFilters, distinctSkillProviders } from '$lib/utils/skill-catalog-filter';
-import { makeEntry } from '../fixtures/skills';
 import { describe, expect, it } from 'vitest';
 
 describe('skill resource presentation', () => {
@@ -191,6 +194,9 @@ describe('deriveSkillBudgetChip', () => {
 		expect(chip?.label).toBe('Partial fit');
 		expect(chip?.detail).toContain('5,000 tokens (estimated)');
 		expect(chip?.detail).toContain('3 of 8 skills are included');
+	});
+});
+
 describe('skill catalog filtering', () => {
 	function entriesOf(...overrides: Array<Partial<SkillCatalogEntry> & { name: string }>) {
 		return overrides.map(({ name, ...rest }) => makeEntry(name, rest));
@@ -198,7 +204,6 @@ describe('skill catalog filtering', () => {
 
 	it('returns entries unchanged in original order when the query is empty', () => {
 		const entries = entriesOf({ name: 'zeta' }, { name: 'alpha' });
-
 		const result = applySkillCatalogFilters(entries, {
 			excludedProviders: new Set(),
 			includeProject: true,
@@ -214,7 +219,6 @@ describe('skill catalog filtering', () => {
 			{ description: 'no match here', name: 'unrelated' },
 			{ description: 'plain description', name: 'Canvas-Design' }
 		);
-
 		const result = applySkillCatalogFilters(entries, {
 			excludedProviders: new Set(),
 			includeProject: true,
@@ -229,7 +233,6 @@ describe('skill catalog filtering', () => {
 			{ name: 'a', provider: 'agents', scope: 'global' },
 			{ name: 'b', provider: 'local', scope: 'project' }
 		);
-
 		const result = applySkillCatalogFilters(entries, {
 			excludedProviders: new Set(['local']),
 			includeProject: false,

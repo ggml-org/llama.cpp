@@ -1,6 +1,5 @@
-import { BookOpen, List } from '@lucide/svelte';
 import { JsonSchemaType, ToolCallType } from '$lib/enums';
-import type { OpenAIToolDefinition, SkillToolSetting } from '$lib/types';
+import type { OpenAIToolDefinition } from '$lib/types';
 
 /** Working-directory header for Skills requests. */
 export const X_SKILL_CWD_HEADER = 'x-skill-cwd';
@@ -67,23 +66,3 @@ export function freezeSkillToolDefinition(def: OpenAIToolDefinition): OpenAITool
 		})
 	});
 }
-
-/** Settings-only rows for the Skills adapters. */
-export const SKILL_TOOL_SETTINGS: readonly SkillToolSetting[] = Object.freeze([
-	{
-		definition: freezeSkillToolDefinition(buildSkillReadToolDefinition()),
-		description: SKILL_READ_TOOL_DESCRIPTION,
-		icon: BookOpen,
-		key: 'skill:read_skill',
-		label: 'Read skill',
-		toolName: SKILL_READ_TOOL
-	},
-	{
-		definition: freezeSkillToolDefinition(buildSkillListToolDefinition()),
-		description: SKILL_LIST_TOOL_DESCRIPTION,
-		icon: List,
-		key: 'skill:list_skill',
-		label: 'List skills',
-		toolName: SKILL_LIST_TOOL
-	}
-]);

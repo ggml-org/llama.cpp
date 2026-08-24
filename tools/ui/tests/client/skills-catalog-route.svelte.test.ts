@@ -1,20 +1,19 @@
 // Guards read-only `/skills` states, safe fields, packing, retry, and settings.
 
 import SkillsPage from '../../src/routes/skills/+page.svelte';
+import { catalogOf, deferredRead, jsonResponse, makeCatalog, makeEntry } from '../fixtures/skills';
 import SkillsPageWrapper from './components/SkillsPageWrapper.svelte';
+import { page } from '@vitest/browser/context';
 import SkillCatalogList from '$lib/components/app/skills/SkillCatalogList.svelte';
-import SkillDiagnosticsPanel from '$lib/components/app/skills/SkillDiagnosticsPanel.svelte';
 import SkillCatalogSearchToolbar from '$lib/components/app/skills/SkillCatalogSearchToolbar.svelte';
+import SkillDiagnosticsPanel from '$lib/components/app/skills/SkillDiagnosticsPanel.svelte';
 import { CONFIG_LOCALSTORAGE_KEY } from '$lib/constants';
 import { serializeSkillCatalogEnvelope } from '$lib/services/skills.service';
-import { conversationsStore } from '$lib/stores/conversations.svelte';
-import { modelsStore } from '$lib/stores/models.svelte';
-import { settingsStore } from '$lib/stores/settings.svelte';
+import { conversationsStore, modelsStore, settingsStore } from '$lib/stores';
 import { skillsStore } from '$lib/stores/skills.svelte';
 import type { SkillCatalogEntry, SkillCatalogResponse, SkillDiagnostic } from '$lib/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, type RenderResult } from 'vitest-browser-svelte';
-import { catalogOf, deferredRead, jsonResponse, makeCatalog, makeEntry } from '../fixtures/skills';
 
 function bodyText(): string {
 	return document.body.textContent ?? '';
@@ -68,7 +67,7 @@ beforeEach(() => {
 	settingsStore.initialize();
 	skillsStore.invalidate(undefined);
 	modelsStore.selectedModelName = null;
-	conversationsStore.pendingCwd = null;
+	conversationsStore.preferences.pendingCwd = null;
 	vi.mocked(fetch).mockClear();
 });
 
@@ -276,6 +275,7 @@ describe('/skills budget copy', () => {
 
 	it('labels the Partial fit chip detail as estimated when no direct tokenizer is available', async () => {
 		const catalog = makePaddedCatalog(makePaddedEntries(8, 1010), '<inst/>', 9000);
+
 		mockFetchOnce(catalog);
 		vi.mocked(fetch).mockClear();
 		const screen = await render(SkillsPage);
@@ -353,7 +353,7 @@ describe('/skills budget copy', () => {
 
 describe('/skills catalog preview', () => {
 	it('aborts the detail read and clears the selection when the CWD changes', async () => {
-		conversationsStore.pendingCwd = '/srv/project-a';
+		conversationsStore.preferences.pendingCwd = '/srv/project-a';
 		const read = deferredRead();
 		const readCwdHeaders: string[] = [];
 
@@ -377,7 +377,7 @@ describe('/skills catalog preview', () => {
 		await vi.waitFor(() => expect(read.signal).toBeDefined());
 		expect(readCwdHeaders).toEqual(['/srv/project-a']);
 
-		conversationsStore.pendingCwd = '/srv/project-b';
+		conversationsStore.preferences.pendingCwd = '/srv/project-b';
 
 		await vi.waitFor(() => expect(read.signal?.aborted).toBe(true));
 		// The old detail is cleared: the list is back and the mobile Back
@@ -389,15 +389,23 @@ describe('/skills catalog preview', () => {
 	});
 
 	it('exposes the desktop splitter as a named resize control', async () => {
-		mockFetchOnce(catalogOf('demo-skill'));
-		const screen = await render(SkillsPageWrapper);
+		// The default test iframe is mobile-width; the split layout only exists above the breakpoint.
+		const { innerHeight, innerWidth } = window;
 
-		await screen.getByRole('button', { name: /demo-skill/ }).click();
+		await page.viewport(1280, 800);
+		try {
+			mockFetchOnce(catalogOf('demo-skill'));
+			const screen = await render(SkillsPageWrapper);
 
-		await expect.element(screen.getByRole('separator')).toBeInTheDocument();
-		await expect
-			.element(screen.getByRole('separator', { name: 'Resize catalog and detail panels' }))
-			.toBeInTheDocument();
+			await screen.getByRole('button', { name: /demo-skill/ }).click();
+
+			await expect.element(screen.getByRole('separator')).toBeInTheDocument();
+			await expect
+				.element(screen.getByRole('separator', { name: 'Resize catalog and detail panels' }))
+				.toBeInTheDocument();
+		} finally {
+			await page.viewport(innerWidth, innerHeight);
+		}
 	});
 });
 
@@ -491,7 +499,6 @@ describe('SkillDiagnosticsPanel', () => {
 				onDismiss: vi.fn()
 			}
 		});
-
 		const text = bodyText();
 		const order = [
 			text.indexOf('Partial fit'),
@@ -539,13 +546,16 @@ describe('SkillDiagnosticsPanel', () => {
 			}
 		});
 		expect(bodyText()).not.toContain('error one');
+	});
+});
+
 describe('SkillCatalogSearchToolbar', () => {
 	it('debounces search input before calling onQueryChange', async () => {
 		vi.useFakeTimers();
 		const onQueryChange = vi.fn();
 		const screen = await render(SkillCatalogSearchToolbar, {
 			props: {
-				excludedProviders: new Set(),
+				excludedProviders: new Set<string>(),
 				includeProject: true,
 				onIncludeProjectChange: vi.fn(),
 				onProvidersChange: vi.fn(),
@@ -566,7 +576,7 @@ describe('SkillCatalogSearchToolbar', () => {
 		const onProvidersChange = vi.fn();
 		const screen = await render(SkillCatalogSearchToolbar, {
 			props: {
-				excludedProviders: new Set(),
+				excludedProviders: new Set<string>(),
 				includeProject: true,
 				onIncludeProjectChange: vi.fn(),
 				onProvidersChange,
@@ -640,7 +650,7 @@ describe('/skills search and filter integration', () => {
 		await vi.waitFor(() => expect(bodyText()).toContain('No skills match'));
 
 		mockFetchOnce(makeCatalog([makeEntry('other-skill')]));
-		conversationsStore.pendingCwd = '/tmp/other-cwd';
+		conversationsStore.preferences.pendingCwd = '/tmp/other-cwd';
 
 		await vi.waitFor(() => expect(bodyText()).toContain('other-skill'));
 		expect(bodyText()).not.toContain('No skills match');

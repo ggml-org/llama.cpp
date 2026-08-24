@@ -3,10 +3,11 @@
 	import { McpServerIdentity, TruncatedText } from '$lib/components/app';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import * as Collapsible from '$lib/components/ui/collapsible';
-	import { ICON_CLASS_DEFAULT, SKILL_TOOL_SETTINGS } from '$lib/constants';
+	import { ICON_CLASS_DEFAULT } from '$lib/constants';
 	import { ToolSource } from '$lib/enums/tools.enums';
 	import { mcpStore, permissionsStore, toolsStore } from '$lib/stores';
 	import { skillsStore } from '$lib/stores/skills.svelte';
+	import { SKILL_TOOL_SETTINGS } from '$lib/components/app/skills/skill-presentation';
 	import { getToolUi } from '$lib/utils';
 	import { SvelteSet } from 'svelte/reactivity';
 

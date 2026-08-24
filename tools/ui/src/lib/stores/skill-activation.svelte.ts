@@ -13,7 +13,7 @@ import type {
 	SkillActivationResult,
 	SkillActivationStore
 } from '$lib/services/skills-adapters.service';
-import { conversationsStore } from '$lib/stores/conversations.svelte';
+import { conversationsStore } from '$lib/stores/conversations/index.svelte';
 import type { DatabaseMessage, DatabaseMessageExtraSkill } from '$lib/types/database';
 import type { SkillBaseReadResult, SkillReadResult } from '$lib/types/skills';
 import { SvelteMap, SvelteSet } from 'svelte/reactivity';
@@ -27,11 +27,6 @@ export class DurableSkillActivationStore implements SkillActivationStore {
 	/** Durable base activations by conversation, keyed by the opaque skill id. */
 	private readonly _activatedByConversation = new SvelteMap<string, SvelteSet<string>>();
 	private readonly _inFlight = new SvelteMap<string, Promise<DatabaseMessage>>();
-
-	/** Stable per-conversation-per-identity key shared by both activation paths. */
-	private static activationKey(conversationId: string, identityId: string): string {
-		return `${conversationId}\u0000${identityId}`;
-	}
 
 	isActivated(conversationId: string, identityId: string): boolean {
 		return this._activatedByConversation.get(conversationId)?.has(identityId) ?? false;
@@ -115,6 +110,41 @@ export class DurableSkillActivationStore implements SkillActivationStore {
 		}
 	}
 
+	/** Stable per-conversation-per-identity key shared by both activation paths. */
+	private static activationKey(conversationId: string, identityId: string): string {
+		return `${conversationId}\u0000${identityId}`;
+	}
+
+	/** Current leaf to append under (last active message, else last persisted, else null). */
+	private async appendParentFor(conversationId: string): Promise<string | null> {
+		if (conversationsStore.activeConversation?.id === conversationId) {
+			const active = conversationsStore.activeMessages;
+
+			if (active.length > 0) return active[active.length - 1].id;
+		}
+
+		const messages = await conversationsStore.getConversationMessages(conversationId);
+		const last = messages[messages.length - 1];
+
+		if (last) return last.id;
+
+		const root = messages.find((message) => message.parent === null && message.type === 'root');
+
+		return root ? root.id : null;
+	}
+
+	/** The typed metadata for a non-persisting record (dedupe). */
+	private extraFor(result: SkillReadResult): DatabaseMessageExtraSkill {
+		return result.kind === 'resource' ? skillResourceExtra(result) : skillActivationExtra(result);
+	}
+
+	/** Mirror a store-created message into the active store when the conversation is displayed. */
+	private mirrorActive(conversationId: string, message: DatabaseMessage): void {
+		if (conversationsStore.activeConversation?.id === conversationId) {
+			conversationsStore.addMessageToActive(message);
+		}
+	}
+
 	/**
 	 * Model path: create the paired tool result under the persisted assistant
 	 * message that carries the model's own tool call id.
@@ -169,11 +199,6 @@ export class DurableSkillActivationStore implements SkillActivationStore {
 		return toolResult;
 	}
 
-	/** The typed metadata for a non-persisting record (dedupe). */
-	private extraFor(result: SkillReadResult): DatabaseMessageExtraSkill {
-		return result.kind === 'resource' ? skillResourceExtra(result) : skillActivationExtra(result);
-	}
-
 	private remember(conversationId: string, identityId: string): void {
 		const set = this._activatedByConversation.get(conversationId) ?? new SvelteSet<string>();
 
@@ -208,31 +233,6 @@ export class DurableSkillActivationStore implements SkillActivationStore {
 		}
 
 		return null;
-	}
-
-	/** Current leaf to append under (last active message, else last persisted, else null). */
-	private async appendParentFor(conversationId: string): Promise<string | null> {
-		if (conversationsStore.activeConversation?.id === conversationId) {
-			const active = conversationsStore.activeMessages;
-
-			if (active.length > 0) return active[active.length - 1].id;
-		}
-
-		const messages = await conversationsStore.getConversationMessages(conversationId);
-		const last = messages[messages.length - 1];
-
-		if (last) return last.id;
-
-		const root = messages.find((message) => message.parent === null && message.type === 'root');
-
-		return root ? root.id : null;
-	}
-
-	/** Mirror a store-created message into the active store when the conversation is displayed. */
-	private mirrorActive(conversationId: string, message: DatabaseMessage): void {
-		if (conversationsStore.activeConversation?.id === conversationId) {
-			conversationsStore.addMessageToActive(message);
-		}
 	}
 }
 

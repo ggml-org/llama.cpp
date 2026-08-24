@@ -15,7 +15,6 @@ import {
 	DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY,
 	HOME_TILDE,
 	SKILL_SERVER_LABEL,
-	SKILL_TOOL_SETTINGS,
 	TOOL_GROUP_LABELS,
 	TOOL_SERVER_LABELS
 } from '$lib/constants';
@@ -28,7 +27,7 @@ import {
 	ToolSource
 } from '$lib/enums';
 import { ToolsService } from '$lib/services/tools.service';
-// direct imports between stores, not via the barrel, to avoid circular deps
+import { SKILL_TOOL_SETTINGS } from '$lib/components/app/skills/skill-presentation';
 import { mcpStore } from '$lib/stores/mcp/index.svelte';
 import { modelsStore } from '$lib/stores/models/index.svelte';
 import { settingsStore } from '$lib/stores/settings/index.svelte';
@@ -200,6 +199,29 @@ class ToolsStore {
 		return this._serverTools;
 	}
 
+	/**
+	 * Settings-only Skills group, derived solely from the centralized
+	 * `SKILL_TOOL_SETTINGS` registry. Skills are NOT ordinary model tools:
+	 * this group feeds only the Chat tool settings tab and must never enter
+	 * `allTools`, `toolGroups`, or `getEnabledToolsForLLM()`.
+	 */
+	get skillToolGroups(): ToolGroup[] {
+		const tools: ToolEntry[] = SKILL_TOOL_SETTINGS.map((setting) => ({
+			definition: setting.definition,
+			key: setting.key,
+			source: ToolSource.SKILLS
+		}));
+
+		return [
+			{
+				key: ToolSource.SKILLS,
+				label: SKILL_SERVER_LABEL,
+				source: ToolSource.SKILLS,
+				tools
+			}
+		];
+	}
+
 	/** Tools grouped by category for tree display, derived from the canonical entries */
 	get toolGroups(): ToolGroup[] {
 		const groups: ToolGroup[] = [];
@@ -274,29 +296,6 @@ class ToolsStore {
 	}
 
 	/**
-	 * Settings-only Skills group, derived solely from the centralized
-	 * `SKILL_TOOL_SETTINGS` registry. Skills are NOT ordinary model tools:
-	 * this group feeds only the Chat tool settings tab and must never enter
-	 * `allTools`, `toolGroups`, or `getEnabledToolsForLLM()`.
-	 */
-	get skillToolGroups(): ToolGroup[] {
-		const tools: ToolEntry[] = SKILL_TOOL_SETTINGS.map((setting) => ({
-			definition: setting.definition,
-			key: setting.key,
-			source: ToolSource.SKILLS
-		}));
-
-		return [
-			{
-				key: ToolSource.SKILLS,
-				label: SKILL_SERVER_LABEL,
-				source: ToolSource.SKILLS,
-				tools
-			}
-		];
-	}
-
-	/**
 	 * Model-facing Skill tool names (`read_skill` / `list_skill`) whose local
 	 * setting is enabled. Defaults to both; the persisted disabled-tool set
 	 * drives removal. The settings key is a local selection key, never a
@@ -312,11 +311,6 @@ class ToolsStore {
 		}
 
 		return enabled;
-	}
-
-	/** True when `key` is a stable `skill:<tool>` settings key. */
-	isSkillToolKey(key: string): boolean {
-		return SKILL_TOOL_SETTINGS.some((setting) => setting.key === key);
 	}
 
 	/**
@@ -357,116 +351,6 @@ class ToolsStore {
 	/** Permission key for a tool name, identical to the selection key */
 	getPermissionKey(toolName: string): string | null {
 		return this.findEntryByName(toolName)?.key ?? null;
-	}
-
-	get allToolDefinitions(): OpenAIToolDefinition[] {
-		return this.allTools.map((t) => t.definition);
-	}
-
-	get loading(): boolean {
-		return this._loading;
-	}
-
-	get error(): string | null {
-		return this._error;
-	}
-
-	get isToolsEndpointUnreachable(): boolean {
-		return this._toolsEndpointUnreachable;
-	}
-
-	get disabledTools(): SvelteSet<string> {
-		return this._disabledTools;
-	}
-
-	isToolEnabled(key: string): boolean {
-		return !this._disabledTools.has(key);
-	}
-
-	toggleTool(key: string): void {
-		if (this._disabledTools.has(key)) {
-			this._disabledTools.delete(key);
-		} else {
-			this._disabledTools.add(key);
-		}
-
-		this.persistDisabledTools();
-	}
-
-	setToolEnabled(key: string, enabled: boolean): void {
-		if (enabled) {
-			this._disabledTools.delete(key);
-		} else {
-			this._disabledTools.add(key);
-		}
-
-		this.persistDisabledTools();
-	}
-
-	/** Enable all tools belonging to a specific MCP server */
-	enableAllToolsForServer(serverId: string): void {
-		const connection = mcpStore.getConnections().get(serverId);
-
-		if (!connection) return;
-
-		for (const tool of connection.tools) {
-			this._disabledTools.delete(this.toolKey(ToolSource.MCP, tool.name, serverId));
-		}
-		this.persistDisabledTools();
-	}
-
-	toggleGroup(group: ToolGroup): void {
-		const allEnabled = group.tools.every((t) => this.isToolEnabled(t.key));
-		const target = !allEnabled;
-
-		for (const tool of group.tools) {
-			if (target) this._disabledTools.delete(tool.key);
-			else this._disabledTools.add(tool.key);
-		}
-		this.persistDisabledTools();
-	}
-
-	isGroupFullyEnabled(group: ToolGroup): boolean {
-		return group.tools.length > 0 && group.tools.every((t) => this.isToolEnabled(t.key));
-	}
-
-	/** Get MCP tools from health check data, used when live connections aren't established yet */
-	private getMcpToolsFromHealthChecks(): {
-		serverId: string;
-		serverName: string;
-		tools: { name: string; description?: string }[];
-	}[] {
-		const result: ReturnType<ToolsStore['getMcpToolsFromHealthChecks']> = [];
-
-		for (const server of mcpStore.getServers()) {
-			if (!server.enabled) continue;
-
-			const health = mcpStore.getHealthCheckState(server.id);
-
-			if (health.status === HealthCheckStatus.SUCCESS && health.tools.length > 0) {
-				result.push({
-					serverId: server.id,
-					serverName: mcpStore.getServerLabel(server),
-					tools: health.tools
-				});
-			}
-		}
-
-		return result;
-	}
-
-	/** First canonical entry matching a tool name, runtime tool calls resolve by name */
-	private findEntryByName(toolName: string): ToolEntry | null {
-		for (const entry of this.allTools) {
-			if (entry.definition.function.name === toolName) return entry;
-		}
-
-		return null;
-	}
-
-	/** Determine the source of a tool by its name */
-	getToolSource(toolName: string): ToolSource | null {
-		return this.findEntryByName(toolName)?.source ?? null;
 	}
 
 	/** Get the display label for the server that owns a given tool */
@@ -520,6 +404,11 @@ class ToolsStore {
 
 	isGroupFullyEnabled(group: ToolGroup): boolean {
 		return group.tools.length > 0 && group.tools.every((t) => this.isToolEnabled(t.key));
+	}
+
+	/** True when `key` is a stable `skill:<tool>` settings key. */
+	isSkillToolKey(key: string): boolean {
+		return SKILL_TOOL_SETTINGS.some((setting) => setting.key === key);
 	}
 
 	isToolEnabled(key: string): boolean {

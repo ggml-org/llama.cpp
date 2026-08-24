@@ -312,93 +312,6 @@ class AgenticStore {
 		this.gates.resolvePermission(conversationId, decision);
 	}
 
-	private async prepareSkillRun(
-		conversationId: string,
-		options: AgenticFlowOptions,
-		signal?: AbortSignal
-	): Promise<SkillRunAdapters | null> {
-		const budget = normalizeSkillBudget(settingsStore.config.maxSkillBudget);
-
-		if (budget <= 0) return null;
-
-		// Reconstruct the conversation's durable base activations so in-run
-		// authorization and dedupe see what survived reload.
-		await skillActivationStore.loadConversation(conversationId);
-
-		let snapshot: SkillRunSnapshot;
-
-		try {
-			snapshot = await skillsStore.createRunSnapshot(
-				conversationsStore.activeConversation?.cwd,
-				signal
-			);
-		} catch (error) {
-			console.info(
-				'[AgenticStore] Skills snapshot unavailable; running without Skills adapters:',
-				error
-			);
-
-			return null;
-		}
-
-		if (snapshot.total === 0) return null;
-
-		try {
-			const effectiveModel = options.model || modelsStore.models[0]?.model || '';
-			const packOptions = resolveSkillPackOptions(
-				effectiveModel,
-				serverStore.isRouterMode,
-				(model) => modelsStore.isModelLoaded(model)
-			);
-			const packed = await SkillsPackingService.pack(snapshot, { budget, ...packOptions, signal });
-
-			if (packed.envelope === '') return null;
-
-			const existingNames = new Set(
-				toolsStore.allTools.map((entry) => entry.definition.function.name)
-			);
-			// Read the user's enabled Skill tool names once, at preparation
-			// time, from the current run's settings. SkillRunAdapters holds
-			// only the frozen snapshot and these already-filtered definitions.
-			const built = buildSkillToolDefinitions(
-				snapshot,
-				packed,
-				existingNames,
-				toolsStore.getEnabledSkillToolNames()
-			);
-
-			for (const diagnostic of built.diagnostics) {
-				console.warn(`[AgenticStore] ${diagnostic.code}: ${diagnostic.message}`);
-			}
-
-			if (built.definitions.length === 0) return null;
-
-			return new SkillRunAdapters({
-				activation: skillActivationStore,
-				conversationId,
-				definitions: built.definitions,
-				packed,
-				requestPermission: (toolName, serverLabel, skill, sig) =>
-					this.requestPermission(conversationId, toolName, serverLabel, skill, sig),
-				snapshot
-			});
-		} catch (error) {
-			console.info('[AgenticStore] Skills packing failed; running without Skills adapters:', error);
-
-			return null;
-		}
-	}
-
-	private requestPermission(
-		conversationId: string,
-		toolName: string,
-		serverLabel: string,
-		skill?: SkillConsentInfo,
-		signal?: AbortSignal
-	): Promise<ToolPermissionDecision> {
-		return this.gates.requestPermission(conversationId, toolName, serverLabel, signal, skill);
-	}
-
 	async runAgenticFlow(params: AgenticFlowParams): Promise<AgenticFlowResult> {
 		const {
 			callbacks,
@@ -1214,6 +1127,93 @@ class AgenticStore {
 		if (trimmed === '') return {};
 
 		return JSON.parse(trimmed) as Record<string, unknown>;
+	}
+
+	private async prepareSkillRun(
+		conversationId: string,
+		options: AgenticFlowOptions,
+		signal?: AbortSignal
+	): Promise<SkillRunAdapters | null> {
+		const budget = normalizeSkillBudget(settingsStore.config.maxSkillBudget);
+
+		if (budget <= 0) return null;
+
+		// Reconstruct the conversation's durable base activations so in-run
+		// authorization and dedupe see what survived reload.
+		await skillActivationStore.loadConversation(conversationId);
+
+		let snapshot: SkillRunSnapshot;
+
+		try {
+			snapshot = await skillsStore.createRunSnapshot(
+				conversationsStore.activeConversation?.cwd,
+				signal
+			);
+		} catch (error) {
+			console.info(
+				'[AgenticStore] Skills snapshot unavailable; running without Skills adapters:',
+				error
+			);
+
+			return null;
+		}
+
+		if (snapshot.total === 0) return null;
+
+		try {
+			const effectiveModel = options.model || modelsStore.models[0]?.model || '';
+			const packOptions = resolveSkillPackOptions(
+				effectiveModel,
+				serverStore.isRouterMode,
+				(model) => modelsStore.isModelLoaded(model)
+			);
+			const packed = await SkillsPackingService.pack(snapshot, { budget, ...packOptions, signal });
+
+			if (packed.envelope === '') return null;
+
+			const existingNames = new Set(
+				toolsStore.allTools.map((entry) => entry.definition.function.name)
+			);
+			// Read the user's enabled Skill tool names once, at preparation
+			// time, from the current run's settings. SkillRunAdapters holds
+			// only the frozen snapshot and these already-filtered definitions.
+			const built = buildSkillToolDefinitions(
+				snapshot,
+				packed,
+				existingNames,
+				toolsStore.getEnabledSkillToolNames()
+			);
+
+			for (const diagnostic of built.diagnostics) {
+				console.warn(`[AgenticStore] ${diagnostic.code}: ${diagnostic.message}`);
+			}
+
+			if (built.definitions.length === 0) return null;
+
+			return new SkillRunAdapters({
+				activation: skillActivationStore,
+				conversationId,
+				definitions: built.definitions,
+				packed,
+				requestPermission: (toolName, serverLabel, skill, sig) =>
+					this.requestPermission(conversationId, toolName, serverLabel, skill, sig),
+				snapshot
+			});
+		} catch (error) {
+			console.info('[AgenticStore] Skills packing failed; running without Skills adapters:', error);
+
+			return null;
+		}
+	}
+
+	private requestPermission(
+		conversationId: string,
+		toolName: string,
+		serverLabel: string,
+		skill?: SkillConsentInfo,
+		signal?: AbortSignal
+	): Promise<ToolPermissionDecision> {
+		return this.gates.requestPermission(conversationId, toolName, serverLabel, signal, skill);
 	}
 
 	private updateSession(conversationId: string, update: Partial<AgenticSession>): void {

@@ -365,7 +365,6 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 				key: SETTINGS_KEYS.MAX_SKILL_BUDGET,
 				label: 'Skills catalog budget',
 				min: 0,
-				section: SETTINGS_SECTION_SLUGS.AGENTIC,
 				type: SettingsFieldType.INPUT
 			}
 		],

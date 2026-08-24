@@ -1,4 +1,9 @@
 <script lang="ts">
+	import {
+		applySkillCatalogFilters,
+		deriveSkillBudgetChip,
+		distinctSkillProviders
+	} from './skill-presentation';
 	import SkillCatalogList from './SkillCatalogList.svelte';
 	import SkillCatalogSearchToolbar from './SkillCatalogSearchToolbar.svelte';
 	import SkillDetail from './SkillDetail.svelte';
@@ -24,18 +29,14 @@
 		resolveSkillPackOptions,
 		SkillsPackingService
 	} from '$lib/services';
-	import { isMobile } from '$lib/stores';
-	import { modelsStore } from '$lib/stores/models.svelte';
-	import { persisted } from '$lib/stores/persisted.svelte';
+	import { deviceStore } from '$lib/stores/device.svelte';
+	import { modelsStore } from '$lib/stores/models/index.svelte';
 	import { serverStore } from '$lib/stores/server.svelte';
-	import { settingsStore } from '$lib/stores/settings.svelte';
-	import { skillAvailabilityStore } from '$lib/stores/skill-availability.svelte';
+	import { settingsStore } from '$lib/stores/settings/index.svelte';
 	import { skillsStore } from '$lib/stores/skills.svelte';
 	import type { SkillCatalogEntry, SkillPackedCatalog } from '$lib/types';
 	import { isAbortError } from '$lib/utils';
 	import { ApiError } from '$lib/utils/api-fetch';
-	import { deriveSkillBudgetChip } from '$lib/utils/skill-budget-chip';
-	import { applySkillCatalogFilters, distinctSkillProviders } from '$lib/utils/skill-catalog-filter';
 	import { fly } from 'svelte/transition';
 
 	interface Props {
@@ -65,7 +66,7 @@
 		}
 	}
 
-	const mobile = $derived(isMobile.current);
+	const mobile = $derived(deviceStore.isMobile);
 	let selectedEntry = $state<SkillCatalogEntry | null>(null);
 	const selectedId = $derived(selectedEntry?.id ?? null);
 
@@ -96,17 +97,22 @@
 		return [catalog, 100 - catalog];
 	}
 
-	let persistedPaneSizes: ReturnType<typeof persisted> | null = null;
+	let paneSizesLoaded = false;
 	let sizes = $state<[number, number]>([...DEFAULT_PANE_SIZES]);
 
 	$effect(() => {
-		if (mobile || persistedPaneSizes) return;
+		if (!browser || mobile || paneSizesLoaded) return;
 
-		persistedPaneSizes = persisted<[number, number]>(
-			SKILLS_PANE_SIZES_LOCALSTORAGE_KEY,
-			DEFAULT_PANE_SIZES
-		);
-		sizes = normalizePaneSizes(persistedPaneSizes.value);
+		paneSizesLoaded = true;
+		try {
+			const stored = localStorage.getItem(SKILLS_PANE_SIZES_LOCALSTORAGE_KEY);
+
+			if (stored !== null) {
+				sizes = normalizePaneSizes(JSON.parse(stored));
+			}
+		} catch (error) {
+			console.warn(`Failed to load ${SKILLS_PANE_SIZES_LOCALSTORAGE_KEY}:`, error);
+		}
 	});
 
 	// Reset dismissals and filters when the catalog reloads.
@@ -132,7 +138,11 @@
 
 		sizes = normalized;
 
-		if (persistedPaneSizes) persistedPaneSizes.value = normalized;
+		try {
+			localStorage.setItem(SKILLS_PANE_SIZES_LOCALSTORAGE_KEY, JSON.stringify(normalized));
+		} catch (error) {
+			console.warn(`Failed to persist ${SKILLS_PANE_SIZES_LOCALSTORAGE_KEY}:`, error);
+		}
 	}
 
 	// Reset selection, dismissals, and filters when the CWD changes.
@@ -249,9 +259,7 @@
 				</Empty.Header>
 
 				<Empty.Content>
-					<Button size="sm" variant="outline" onclick={clearCatalogFilters}>
-						Clear filters
-					</Button>
+					<Button size="sm" variant="outline" onclick={clearCatalogFilters}>Clear filters</Button>
 				</Empty.Content>
 			</Empty.Root>
 		</div>
@@ -261,8 +269,8 @@
 			{selectedId}
 			{open}
 			onSelect={handleSelect}
-			isDisabled={(id) => skillAvailabilityStore.isDisabled(id)}
-			onEnabledChange={(entry, enabled) => skillAvailabilityStore.setEnabled(entry.id, enabled)}
+			isDisabled={(id) => skillsStore.isDisabled(id)}
+			onEnabledChange={(entry, enabled) => skillsStore.setEnabled(entry.id, enabled)}
 		/>
 	{/if}
 {/snippet}

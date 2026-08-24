@@ -1,24 +1,24 @@
 <script lang="ts">
 	import { SkillCatalog } from '$lib/components/app/skills';
-	import { useSkillCatalogRefresh } from '$lib/hooks/use-skill-catalog-refresh.svelte';
-	import { conversationsStore } from '$lib/stores/conversations.svelte';
+	import { conversationsStore } from '$lib/stores/conversations/index.svelte';
+	import { skillsStore } from '$lib/stores/skills.svelte';
 
 	// Route-owned CWD refresh; stale responses are invalidated and snapshots stay immutable.
-	const refresh = useSkillCatalogRefresh();
-
 	const cwd = $derived(
-		conversationsStore.activeConversation?.cwd ?? conversationsStore.pendingCwd ?? undefined
+		conversationsStore.activeConversation?.cwd ??
+			conversationsStore.preferences.pendingCwd ??
+			undefined
 	);
 
 	$effect(() => {
-		refresh.onCwdChange(cwd);
+		skillsStore.onRouteCwdChange(cwd);
 	});
 
-	$effect(() => () => refresh.dispose());
+	$effect(() => () => skillsStore.disposeRouteCatalog());
 </script>
 
 <svelte:head>
 	<title>Skills · llama.cpp</title>
 </svelte:head>
 
-<SkillCatalog {cwd} onRetry={refresh.retry} />
+<SkillCatalog {cwd} onRetry={() => skillsStore.retryRouteCatalog()} />

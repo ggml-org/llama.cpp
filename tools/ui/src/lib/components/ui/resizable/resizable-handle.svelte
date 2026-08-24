@@ -22,6 +22,8 @@
 	{...restProps}
 >
 	{#if withHandle}
-		<div class="pointer-events-none z-10 flex h-6 w-1 shrink-0 rounded-lg bg-border transition-colors duration-150 group-hover:bg-ring/70 group-data-[active=keyboard]:bg-ring group-data-[active=pointer]:bg-ring motion-reduce:transition-none"></div>
+		<div
+			class="pointer-events-none z-10 flex h-6 w-1 shrink-0 rounded-lg bg-border transition-colors duration-150 group-hover:bg-ring/70 group-data-[active=keyboard]:bg-ring group-data-[active=pointer]:bg-ring motion-reduce:transition-none"
+		></div>
 	{/if}
 </ResizablePrimitive.PaneResizer>

@@ -13,7 +13,7 @@
 	} from '$lib/constants';
 	import { SidebarAction, TooltipSide } from '$lib/enums';
 	import { conversationsStore } from '$lib/stores/conversations/index.svelte';
-	import { deviceStore, isMobile } from '$lib/stores';
+	import { deviceStore } from '$lib/stores/device.svelte';
 	import { skillsStore } from '$lib/stores/skills.svelte';
 	import type { Component } from 'svelte';
 	import { onMount } from 'svelte';
@@ -71,7 +71,9 @@
 
 		void skillsStore
 			.probeAvailability(
-				conversationsStore.activeConversation?.cwd ?? conversationsStore.pendingCwd ?? undefined,
+				conversationsStore.activeConversation?.cwd ??
+					conversationsStore.preferences.pendingCwd ??
+					undefined,
 				probe.signal
 			)
 			.catch(() => {});

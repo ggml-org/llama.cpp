@@ -1,7 +1,7 @@
+import { baseResult, jsonResponse, makeEntry, previewResult } from '../fixtures/skills';
 import SkillDetail from '$lib/components/app/skills/SkillDetail.svelte';
 import { DatabaseService } from '$lib/services/database.service';
 import { skillActivationStore } from '$lib/stores/skill-activation.svelte';
-import { baseResult, jsonResponse, makeEntry, previewResult } from '../fixtures/skills';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-svelte';
 

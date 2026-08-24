@@ -350,7 +350,8 @@ export { MigrationService } from './migration.service';
  * @see settingsStore in stores/settings/index.svelte.ts - reactive state + business logic
  */
 export { SettingsService } from './settings.service';
- * **SkillsService** — Stateless transport for the llama-server Skills API
+/**
+ * **SkillsService** - Stateless transport for the llama-server Skills API
  *
  * Sends `GET /skills` and `POST /skills/read` through the shared `apiFetch`
  * envelope with an optional validated CWD header. The server owns discovery,
@@ -409,16 +410,18 @@ export {
 	SkillRunAdapters,
 	buildSkillToolDefinitions,
 	decorateSkillPrompt,
+	dispatchSkillActivation,
 	listSkillContent,
-	skillDenialResult,
 	skillErrorResult
 } from './skills-adapters.service';
+
 export type {
 	SkillActivationStore,
 	SkillActivationInput,
 	SkillActivationResult,
 	SkillAdapterDiagnostic,
 	SkillAdaptersBuildResult,
+	SkillCommandOutcome,
 	SkillRunAdaptersOptions,
 	SkillToolExecutionResult
 } from './skills-adapters.service';

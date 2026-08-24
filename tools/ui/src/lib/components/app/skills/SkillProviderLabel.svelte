@@ -1,8 +1,9 @@
 <script lang="ts">
 	import {
 		GENERIC_SKILL_PROVIDER_TOOLTIP,
+		isGenericSkillProvider,
 		skillProviderLabel
-	} from './skill-provider-presentation';
+	} from './skill-presentation';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 
 	interface Props {
@@ -12,7 +13,7 @@
 	let { provider }: Props = $props();
 
 	const label = $derived(skillProviderLabel(provider));
-	const isGenericProvider = $derived(provider === 'agents');
+	const isGenericProvider = $derived(isGenericSkillProvider(provider));
 </script>
 
 {#if isGenericProvider}

@@ -1,17 +1,22 @@
 // Merged Skills presentation smoke: provider label, chat result block, page shell, toolsStore settings.
 
-import ChatMessageActionCardPermissionRequest from '$lib/components/app/chat/ChatMessages/ChatMessageActions/ChatMessageActionCard/ChatMessageActionCardPermissionRequest.svelte';
-import ChatMessageToolCallBlock from '$lib/components/app/chat/ChatMessages/ChatMessage/ChatMessageToolCall/ChatMessageToolCallBlock.svelte';
-import SkillProviderLabel from '$lib/components/app/skills/SkillProviderLabel.svelte';
 import SkillsPage from '../../src/routes/skills/+page.svelte';
+import { jsonResponse, makeCatalog, makeEntry } from '../fixtures/skills';
 import { goto } from '$app/navigation';
-import { DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY, ROUTES, SKILL_LIST_TOOL, SKILL_READ_TOOL } from '$lib/constants';
+import ChatMessageToolCallBlock from '$lib/components/app/chat/ChatMessages/ChatMessage/ChatMessageToolCall/ChatMessageToolCallBlock.svelte';
+import ChatMessageActionCardPermissionRequest from '$lib/components/app/chat/ChatMessages/ChatMessageActions/ChatMessageActionCard/ChatMessageActionCardPermissionRequest.svelte';
+import SkillProviderLabel from '$lib/components/app/skills/SkillProviderLabel.svelte';
+import {
+	DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY,
+	ROUTES,
+	SKILL_LIST_TOOL,
+	SKILL_READ_TOOL
+} from '$lib/constants';
 import { AgenticSectionType, AttachmentType } from '$lib/enums';
-import { settingsStore } from '$lib/stores/settings.svelte';
+import { settingsStore } from '$lib/stores';
 import { skillsStore } from '$lib/stores/skills.svelte';
 import type { toolsStore as ToolsStoreValue } from '$lib/stores/tools.svelte';
 import type { AgenticSection, DatabaseMessageExtraSkill, SkillConsentInfo } from '$lib/types';
-import { jsonResponse, makeCatalog, makeEntry } from '../fixtures/skills';
 import { tick } from 'svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-svelte';
@@ -186,7 +191,10 @@ let toolsStore: typeof ToolsStoreValue;
 describe('ToolsStore Skills settings group', () => {
 	beforeEach(async () => {
 		storageState.clear();
-		Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: storagePolyfill });
+		Object.defineProperty(globalThis, 'localStorage', {
+			configurable: true,
+			value: storagePolyfill
+		});
 		// A fresh store instance re-reads the persisted disabled-tool set.
 		vi.resetModules();
 		({ toolsStore } = await import('$lib/stores/tools.svelte'));
@@ -205,15 +213,15 @@ describe('ToolsStore Skills settings group', () => {
 		toolsStore.toggleTool('skill:read_skill');
 
 		expect(toolsStore.isToolEnabled('skill:read_skill')).toBe(false);
-		expect(
-			JSON.parse(localStorage.getItem(DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY) ?? '[]')
-		).toEqual(['skill:read_skill']);
+		expect(JSON.parse(localStorage.getItem(DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY) ?? '[]')).toEqual([
+			'skill:read_skill'
+		]);
 
 		toolsStore.toggleTool('skill:read_skill');
 
-		expect(
-			JSON.parse(localStorage.getItem(DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY) ?? '[]')
-		).toEqual([]);
+		expect(JSON.parse(localStorage.getItem(DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY) ?? '[]')).toEqual(
+			[]
+		);
 	});
 
 	it('reflects the enabled set in getEnabledSkillToolNames', () => {

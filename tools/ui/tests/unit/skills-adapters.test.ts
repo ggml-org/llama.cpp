@@ -1,8 +1,9 @@
 // Guards adapter registration, prompt decoration, and the consent/activation core.
+import { baseResult, catalogOf, resourceResult } from '../fixtures/skills';
 import { SKILL_LIST_TOOL, SKILL_READ_TOOL, SKILL_SERVER_LABEL } from '$lib/constants';
 import { MessageRole, ToolCallType, ToolPermissionDecision } from '$lib/enums';
-import { SkillsService } from '$lib/services/skills.service';
 import * as SkillsServiceModule from '$lib/services/skills.service';
+import { SkillsService } from '$lib/services/skills.service';
 import { buildSkillRunSnapshot } from '$lib/services/skills.service';
 import { skillActivationExtra, skillResourceExtra } from '$lib/services/skills-activation.service';
 import type {
@@ -23,7 +24,6 @@ import type { DatabaseMessage } from '$lib/types';
 import type { AgenticToolCallPayload } from '$lib/types/agentic';
 import type { Mock } from 'vitest';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { baseResult, catalogOf, makeCatalog, resourceResult } from '../fixtures/skills';
 
 vi.mock('$lib/services/skills.service', async (importOriginal) => {
 	const actual = await importOriginal<typeof SkillsServiceModule>();
@@ -160,14 +160,56 @@ function readCall(name: string, path?: string): AgenticToolCallPayload {
 describe('buildSkillToolDefinitions', () => {
 	it.each([
 		['empty envelope', { envelope: '' }, new Set<string>(), undefined, [], []],
-		['complete envelope', { included: 2, total: 2 }, new Set<string>(), undefined, [SKILL_READ_TOOL], []],
-		['partial envelope', { included: 1, total: 2 }, new Set<string>(), undefined, [SKILL_READ_TOOL, SKILL_LIST_TOOL], []],
-		['enabled set keeps both', { included: 1, total: 2 }, new Set<string>(), [SKILL_READ_TOOL, SKILL_LIST_TOOL], [SKILL_READ_TOOL, SKILL_LIST_TOOL], []],
-		['enabled set omits read_skill', { included: 1, total: 2 }, new Set<string>(), [SKILL_LIST_TOOL], [SKILL_LIST_TOOL], []],
-		['enabled set omits list_skill', { included: 1, total: 2 }, new Set<string>(), [SKILL_READ_TOOL], [SKILL_READ_TOOL], []],
+		[
+			'complete envelope',
+			{ included: 2, total: 2 },
+			new Set<string>(),
+			undefined,
+			[SKILL_READ_TOOL],
+			[]
+		],
+		[
+			'partial envelope',
+			{ included: 1, total: 2 },
+			new Set<string>(),
+			undefined,
+			[SKILL_READ_TOOL, SKILL_LIST_TOOL],
+			[]
+		],
+		[
+			'enabled set keeps both',
+			{ included: 1, total: 2 },
+			new Set<string>(),
+			[SKILL_READ_TOOL, SKILL_LIST_TOOL],
+			[SKILL_READ_TOOL, SKILL_LIST_TOOL],
+			[]
+		],
+		[
+			'enabled set omits read_skill',
+			{ included: 1, total: 2 },
+			new Set<string>(),
+			[SKILL_LIST_TOOL],
+			[SKILL_LIST_TOOL],
+			[]
+		],
+		[
+			'enabled set omits list_skill',
+			{ included: 1, total: 2 },
+			new Set<string>(),
+			[SKILL_READ_TOOL],
+			[SKILL_READ_TOOL],
+			[]
+		],
 		['empty enabled set', { included: 1, total: 2 }, new Set<string>(), [], [], []],
 		['existing tool collides', {}, new Set([SKILL_READ_TOOL]), undefined, [], [SKILL_READ_TOOL]],
-		['disabled adapter collides', { included: 0 }, new Set([SKILL_LIST_TOOL]), [SKILL_READ_TOOL], [SKILL_READ_TOOL], [SKILL_LIST_TOOL]]
+		[
+			'disabled adapter collides',
+			{ included: 0 },
+			new Set([SKILL_LIST_TOOL]),
+			[SKILL_READ_TOOL],
+			[SKILL_READ_TOOL],
+			[SKILL_LIST_TOOL]
+		]
 	] as const)(
 		'registers adapters for %s',
 		(_label, packedOverrides, existingTools, enabledNames, expectedNames, expectedDiagnostics) => {
@@ -175,7 +217,9 @@ describe('buildSkillToolDefinitions', () => {
 			const snapshot = buildSkillRunSnapshot('/cwd', catalogOf('alpha'));
 			const complete = packed({
 				...packedOverrides,
-				envelope: packedOverrides.envelope ?? '<skills_catalog total="2" included="1">...</skills_catalog>'
+				envelope:
+					(packedOverrides as { envelope?: string }).envelope ??
+					'<skills_catalog total="2" included="1">...</skills_catalog>'
 			});
 			const { definitions, diagnostics } = buildSkillToolDefinitions(
 				snapshot,
@@ -220,7 +264,6 @@ describe('decorateSkillPrompt', () => {
 		];
 		const withoutSystem = [{ content: 'hi', role: MessageRole.USER }];
 		const withSystemSnapshot = structuredClone(withSystem);
-
 		const decoratedWith = decorateSkillPrompt(withSystem, envelope);
 		const decoratedWithout = decorateSkillPrompt(withoutSystem, envelope);
 
@@ -249,7 +292,9 @@ describe('decorateSkillPrompt', () => {
 
 describe('listSkillContent and structured results', () => {
 	it('returns structured snapshot entries only, never XML or opaque IDs', () => {
-		const content = listSkillContent(buildSkillRunSnapshot('/cwd', catalogOf('alpha', 'beta')).entries);
+		const content = listSkillContent(
+			buildSkillRunSnapshot('/cwd', catalogOf('alpha', 'beta')).entries
+		);
 
 		expect(JSON.parse(content)).toEqual([
 			{ description: 'description of alpha', name: 'alpha', provider: 'agents', scope: 'project' },
@@ -302,7 +347,12 @@ describe('SkillRunAdapters', () => {
 	it('rejects malformed arguments, unknown names, and broken JSON without a server call', async () => {
 		mockRead.mockResolvedValue(baseResult('demo-skill'));
 		const adapters = makeAdapters({ names: ['demo-skill'] });
-		const cases = ['{}', '{"name":"not-in-snapshot"}', '{"name":"demo-skill","path":7}', '{not json'];
+		const cases = [
+			'{}',
+			'{"name":"not-in-snapshot"}',
+			'{"name":"demo-skill","path":7}',
+			'{not json'
+		];
 
 		for (const args of cases) {
 			const result = await adapters.execute({
@@ -334,7 +384,8 @@ describe('SkillRunAdapters', () => {
 	});
 
 	it('pauses an unapproved identity, resumes on allow, and records the activation through the shared store', async () => {
-		const contentXml = '<skill_content name="a&amp;b">&lt;code&gt;x &lt; y&lt;/code&gt;&amp; trailing</skill_content>';
+		const contentXml =
+			'<skill_content name="a&amp;b">&lt;code&gt;x &lt; y&lt;/code&gt;&amp; trailing</skill_content>';
 
 		mockRead.mockResolvedValue(baseResult('demo-skill', { content_xml: contentXml }));
 		const requestPermission = defaultPermission();

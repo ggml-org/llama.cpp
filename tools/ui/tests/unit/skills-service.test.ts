@@ -1,9 +1,9 @@
 // Guards SkillsService transport, the catalog slot keepers, and availability probing.
 
+import { catalogOf, jsonResponse, resourceResult } from '../fixtures/skills';
 import { SkillsService } from '$lib/services/skills.service';
 import { type SkillAvailability, skillsStore } from '$lib/stores/skills.svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { catalogOf, jsonResponse, resourceResult } from '../fixtures/skills';
 
 const TEST_CWDS = [undefined, '/a'] as const;
 
@@ -30,7 +30,6 @@ describe('SkillsService', () => {
 			{ 'Content-Type': 'application/json' }
 		]);
 	});
-
 
 	it('propagates handler errors as ApiError with the status code', async () => {
 		vi.stubGlobal(
@@ -72,7 +71,9 @@ describe('SkillsService', () => {
 	});
 
 	it('POSTs /skills/read with only name and the optional path, dropping smuggled fields', async () => {
-		const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(jsonResponse(resourceResult())));
+		const fetchMock = vi
+			.fn()
+			.mockImplementation(() => Promise.resolve(jsonResponse(resourceResult())));
 
 		vi.stubGlobal('fetch', fetchMock);
 
@@ -127,12 +128,8 @@ describe('skillsStore', () => {
 			'fetch',
 			vi
 				.fn()
-				.mockImplementationOnce(
-					() => new Promise<Response>((resolve) => (resolveFirst = resolve))
-				)
-				.mockImplementationOnce(
-					() => new Promise<Response>((resolve) => (resolveSecond = resolve))
-				)
+				.mockImplementationOnce(() => new Promise<Response>((resolve) => (resolveFirst = resolve)))
+				.mockImplementationOnce(() => new Promise<Response>((resolve) => (resolveSecond = resolve)))
 		);
 
 		const first = skillsStore.refresh('/a');
@@ -210,7 +207,10 @@ describe('skillsStore', () => {
 		vi.stubGlobal('fetch', fetchMock);
 
 		await expect(
-			Promise.all([skillsStore.probeAvailability(undefined), skillsStore.probeAvailability(undefined)])
+			Promise.all([
+				skillsStore.probeAvailability(undefined),
+				skillsStore.probeAvailability(undefined)
+			])
 		).resolves.toHaveLength(2);
 
 		expect(fetchMock).toHaveBeenCalledTimes(1);

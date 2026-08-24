@@ -27,8 +27,7 @@
 		SpecialFileType
 	} from '$lib/enums';
 	import { useChatFormPickers } from '$lib/hooks/use-chat-form-pickers.svelte';
-	import { useSkillCatalogRefresh } from '$lib/hooks/use-skill-catalog-refresh.svelte';
-	import { dispatchSkillActivation } from '$lib/services/skill-command.service';
+	import { dispatchSkillActivation } from '$lib/services/skills-adapters.service';
 	import {
 		chatStore,
 		conversationsStore,
@@ -38,7 +37,6 @@
 		settingsStore,
 		toolsStore
 	} from '$lib/stores';
-	import { skillAvailabilityStore } from '$lib/stores/skill-availability.svelte';
 	import { skillsStore } from '$lib/stores/skills.svelte';
 	import type {
 		FileMentionEntry,
@@ -145,15 +143,13 @@
 	const skillSuggestions = $derived(
 		skillCatalogSlot?.status === 'ready'
 			? (skillCatalogSlot.catalog?.skills ?? []).filter(
-					(entry) => !skillAvailabilityStore.isDisabled(entry.id)
+					(entry) => !skillsStore.isDisabled(entry.id)
 				)
 			: []
 	);
 
-	const skillCatalogRefresh = useSkillCatalogRefresh();
-
 	$effect(() => {
-		skillCatalogRefresh.onCwdChange(cwd ?? undefined);
+		skillsStore.onRouteCwdChange(cwd ?? undefined);
 	});
 
 	const pickers = useChatFormPickers({
@@ -282,7 +278,7 @@
 		recordingSupported = isAudioRecordingSupported();
 		audioRecorder = new AudioRecorder();
 
-		return () => skillCatalogRefresh.dispose();
+		return () => skillsStore.disposeRouteCatalog();
 	});
 
 	export function focus() {

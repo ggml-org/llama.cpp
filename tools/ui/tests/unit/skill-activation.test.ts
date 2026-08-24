@@ -1,26 +1,30 @@
 // Guards durable activation persistence: record shapes, reconstruction from
 // persisted messages, deduplication, and the synthetic message pair.
 
+import { baseResult, resourceResult } from '../fixtures/skills';
 import { SKILL_READ_TOOL } from '$lib/constants';
 import { AttachmentType, MessageRole, MessageType } from '$lib/enums';
 import { DatabaseService } from '$lib/services/database.service';
 import {
 	buildSkillActivationPair,
 	findBaseSkillActivation,
-	isSkillExtra,
 	isBaseSkillActivation,
+	isSkillExtra,
 	resolveSkillSectionMeta,
 	skillActivationExtra,
 	skillExtraFromExtras,
 	skillExtraFromMessage,
 	skillResourceExtra
 } from '$lib/services/skills-activation.service';
-import { conversationsStore } from '$lib/stores/conversations.svelte';
+import { conversationsStore } from '$lib/stores';
 import { skillActivationStore } from '$lib/stores/skill-activation.svelte';
 import type { DatabaseMessage, DatabaseMessageExtra, DatabaseMessageExtraSkill } from '$lib/types';
-import type { SkillBaseReadResult, SkillMetadata, SkillResourceReadResult } from '$lib/types/skills';
+import type {
+	SkillBaseReadResult,
+	SkillMetadata,
+	SkillResourceReadResult
+} from '$lib/types/skills';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { baseResult, resourceResult } from '../fixtures/skills';
 
 vi.mock('$lib/services/database.service', () => ({
 	DatabaseService: {
@@ -37,7 +41,7 @@ const conversationsMockState = vi.hoisted(() => ({
 	getConversationMessages: vi.fn()
 }));
 
-vi.mock('$lib/stores/conversations.svelte', () => ({
+vi.mock('$lib/stores/conversations/index.svelte', () => ({
 	conversationsStore: {
 		get activeConversation() {
 			return conversationsMockState.activeConversation;
@@ -47,6 +51,7 @@ vi.mock('$lib/stores/conversations.svelte', () => ({
 		},
 		addMessageToActive: vi.fn(),
 		getConversationMessages: conversationsMockState.getConversationMessages,
+		onConversationsDeleted: vi.fn(() => () => {}),
 		updateConversationTimestamp: vi.fn()
 	}
 }));
@@ -54,7 +59,6 @@ vi.mock('$lib/stores/conversations.svelte', () => ({
 const mockCreateMessageBranch = vi.mocked(DatabaseService.createMessageBranch);
 const mockCreateMessageBranchPair = vi.mocked(DatabaseService.createMessageBranchPair);
 const mockGetConversationMessages = vi.mocked(conversationsStore.getConversationMessages);
-
 const METADATA: SkillMetadata = { description: 'A demo skill', license: 'MIT', name: 'demo-skill' };
 
 function activationBaseResult(): SkillBaseReadResult {
@@ -371,7 +375,9 @@ describe('DurableSkillActivationStore', () => {
 		expect(parentId).toBe('assistant-1');
 		expect(messageData.role).toBe(MessageRole.TOOL);
 		expect(messageData.toolCallId).toBe('call_1');
-		expect(messageData.content).toBe('<skill_content name="demo-skill">body &amp; more</skill_content>');
+		expect(messageData.content).toBe(
+			'<skill_content name="demo-skill">body &amp; more</skill_content>'
+		);
 		expect(messageData.extra).toEqual([record.extra]);
 	});
 

@@ -1,5 +1,6 @@
 // Guards budget packing, snapshot immutability, envelope serialization, and budget settings.
 
+import { jsonResponse, makeCatalog, makeEntry } from '../fixtures/skills';
 import {
 	normalizeSkillBudget,
 	POSITIVE_INTEGER_FIELDS,
@@ -18,7 +19,6 @@ import {
 } from '$lib/services/skills.service';
 import type { SkillRunSnapshot } from '$lib/types';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { jsonResponse, makeCatalog, makeEntry } from '../fixtures/skills';
 
 const INSTRUCTION_XML = '<inst/>';
 const ENTRY_XMLS = ['<e0/>', '<e1/>', '<e2/>'];
@@ -67,7 +67,10 @@ describe('envelope serialization and run snapshots', () => {
 	});
 
 	it('copies entries immutably and freezes them so store mutations cannot reach the snapshot', () => {
-		const manual = { ...makeEntry('manual', { catalog_xml: '<manual/>' }), disable_model_invocation: true };
+		const manual = {
+			...makeEntry('manual', { catalog_xml: '<manual/>' }),
+			disable_model_invocation: true
+		};
 		const normal = makeEntry('normal', { catalog_xml: '<normal/>' });
 		const catalog = makeCatalog([manual, normal], '<inst/>');
 		const snapshot = buildSkillRunSnapshot('/cwd', catalog, new Set(['opaque-normal']));
@@ -80,7 +83,9 @@ describe('envelope serialization and run snapshots', () => {
 		// by opaque ID, never by name; the raw browsing catalog is retained.
 		expect(snapshot.total).toBe(0);
 		expect(snapshot.entries).toEqual([]);
-		expect(snapshot.envelope).toBe('<skills_catalog total="0" included="0"><inst/></skills_catalog>');
+		expect(snapshot.envelope).toBe(
+			'<skills_catalog total="0" included="0"><inst/></skills_catalog>'
+		);
 		expect(snapshot.catalog.skills).toHaveLength(3);
 		expect(Object.isFrozen(snapshot.entries)).toBe(true);
 		expect(Object.isFrozen(snapshot.entries[0])).toBe(true);
@@ -89,7 +94,11 @@ describe('envelope serialization and run snapshots', () => {
 	it('excludes locally disabled entries by opaque ID, never by matching name', () => {
 		const a = { ...makeEntry('duplicate', { catalog_xml: '<a/>' }), id: 'opaque-a' };
 		const b = { ...makeEntry('duplicate', { catalog_xml: '<b/>' }), id: 'opaque-b' };
-		const snapshot = buildSkillRunSnapshot('/cwd', makeCatalog([a, b], '<inst/>'), new Set(['opaque-a']));
+		const snapshot = buildSkillRunSnapshot(
+			'/cwd',
+			makeCatalog([a, b], '<inst/>'),
+			new Set(['opaque-a'])
+		);
 
 		expect(snapshot.entries.map((e) => e.id)).toEqual(['opaque-b']);
 		expect(snapshot.envelope).toContain('<b/>');
@@ -148,7 +157,7 @@ describe('SkillsPackingService.pack', () => {
 		});
 
 		const [url, init] = vi.mocked(fetch).mock.calls[0];
-		const body = JSON.parse(init.body as string) as Record<string, unknown>;
+		const body = JSON.parse(init!.body as string) as Record<string, unknown>;
 
 		expect(String(url)).toContain('/tokenize');
 		expect(body).toMatchObject({
@@ -227,7 +236,13 @@ describe('SkillsPackingService.pack', () => {
 
 describe('resolveSkillPackOptions', () => {
 	it.each([
-		['model mode with a model', 'model-a', false, () => false, { mode: 'direct', model: 'model-a' }],
+		[
+			'model mode with a model',
+			'model-a',
+			false,
+			() => false,
+			{ mode: 'direct', model: 'model-a' }
+		],
 		['no effective model', '', false, () => false, { mode: 'estimated' }],
 		['router mode with an unloaded model', 'model-a', true, () => false, { mode: 'estimated' }],
 		[

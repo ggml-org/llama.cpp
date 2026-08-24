@@ -1,9 +1,10 @@
-/** CWD-keyed Skills catalog state and startup navigation availability. */
+/** CWD-keyed Skills catalog state, per-skill enablement, and navigation availability. */
+import { browser } from '$app/environment';
+import { DISABLED_SKILL_IDS_LOCALSTORAGE_KEY } from '$lib/constants';
 import { buildSkillRunSnapshot, SkillsService } from '$lib/services/skills.service';
-import { skillAvailabilityStore } from '$lib/stores/skill-availability.svelte';
 import type { SkillCatalogResponse, SkillRunSnapshot } from '$lib/types';
 import { ApiError } from '$lib/utils/api-fetch';
-import { SvelteMap } from 'svelte/reactivity';
+import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 
 export type SkillCatalogStatus = 'loading' | 'ready' | 'error';
 
@@ -40,11 +41,32 @@ interface CatalogEnsure {
 }
 
 class SkillsStore {
-	private _slots = $state<SvelteMap<string | undefined, SkillCatalogSlot>>(new SvelteMap());
-	private _generationByCwd = new Map<string | undefined, number>();
 	private _availability = $state<SkillAvailability>('unknown');
-	private _probeGeneration = 0;
 	private _catalogEnsures = new Map<string | undefined, CatalogEnsure>();
+	private _disabledIds = $state(new SvelteSet<string>());
+	private _generationByCwd = new Map<string | undefined, number>();
+	private _probeGeneration = 0;
+	private _slots = $state<SvelteMap<string | undefined, SkillCatalogSlot>>(new SvelteMap());
+
+	constructor() {
+		if (!browser) {
+			return;
+		}
+
+		let stored: unknown = [];
+
+		try {
+			const raw = localStorage.getItem(DISABLED_SKILL_IDS_LOCALSTORAGE_KEY);
+
+			if (raw !== null) stored = JSON.parse(raw);
+		} catch (error) {
+			console.warn(`Failed to load ${DISABLED_SKILL_IDS_LOCALSTORAGE_KEY}:`, error);
+		}
+
+		if (Array.isArray(stored) && stored.every((item) => typeof item === 'string')) {
+			this._disabledIds = new SvelteSet(stored);
+		}
+	}
 
 	/** Startup Skills navigation availability; see `showInNavigation`. */
 	get availability(): SkillAvailability {
@@ -56,35 +78,41 @@ class SkillsStore {
 		return this._availability === 'available' || this._availability === 'error';
 	}
 
-	/** Current screen slot for a selected CWD (undefined = no CWD selected). */
-	slotFor(cwd: string | undefined): SkillCatalogSlot | undefined {
-		return this._slots.get(cwd);
+	/** Persisted disabled Skills by opaque server-owned catalog ID. */
+	get disabledIds(): ReadonlySet<string> {
+		return this._disabledIds;
 	}
 
-	/**
-	 * Fetch the catalog. The result always returns to the caller but updates
-	 * the UI slot only while it is still the latest generation for that CWD.
-	 */
-	async refresh(cwd: string | undefined, signal?: AbortSignal): Promise<SkillCatalogResponse> {
-		const generation = this.bumpGeneration(cwd);
+	isDisabled(id: string): boolean {
+		return this._disabledIds.has(id);
+	}
 
-		this.setSlot({ cwd, generation, status: 'loading' });
+	/** Persist a skill's enablement by opaque catalog ID. */
+	setEnabled(id: string, enabled: boolean): void {
+		if (enabled) {
+			this._disabledIds.delete(id);
+		} else {
+			this._disabledIds.add(id);
+		}
 
 		try {
-			const catalog = await SkillsService.list(cwd, signal);
-
-			if (this._generationByCwd.get(cwd) === generation) {
-				this.setSlot({ catalog, cwd, generation, status: 'ready' });
-			}
-
-			return catalog;
+			localStorage.setItem(
+				DISABLED_SKILL_IDS_LOCALSTORAGE_KEY,
+				JSON.stringify([...this._disabledIds])
+			);
 		} catch (error) {
-			if (this._generationByCwd.get(cwd) === generation) {
-				this.setSlot({ cwd, error, generation, status: 'error' });
-			}
-
-			throw error;
+			console.warn(`Failed to persist ${DISABLED_SKILL_IDS_LOCALSTORAGE_KEY}:`, error);
 		}
+	}
+
+	/** Create an immutable per-run snapshot from the run's own catalog response. */
+	async createRunSnapshot(
+		cwd: string | undefined,
+		signal?: AbortSignal
+	): Promise<SkillRunSnapshot> {
+		const catalog = await SkillsService.list(cwd, signal);
+
+		return buildSkillRunSnapshot(cwd, catalog, this.disabledIds);
 	}
 
 	/**
@@ -145,6 +173,12 @@ class SkillsStore {
 		return this.attachToEnsure(cwd, entry, signal);
 	}
 
+	/** Invalidate screen state for a CWD; in-flight responses become stale. */
+	invalidate(cwd: string | undefined): void {
+		this.bumpGeneration(cwd);
+		this._slots.delete(cwd);
+	}
+
 	/**
 	 * Probe the catalog and gate the sidebar entry: success -> available,
 	 * only 404 -> disabled, every other failure -> error.
@@ -176,20 +210,35 @@ class SkillsStore {
 		}
 	}
 
-	/** Create an immutable per-run snapshot from the run's own catalog response. */
-	async createRunSnapshot(
-		cwd: string | undefined,
-		signal?: AbortSignal
-	): Promise<SkillRunSnapshot> {
-		const catalog = await SkillsService.list(cwd, signal);
+	/**
+	 * Fetch the catalog. The result always returns to the caller but updates
+	 * the UI slot only while it is still the latest generation for that CWD.
+	 */
+	async refresh(cwd: string | undefined, signal?: AbortSignal): Promise<SkillCatalogResponse> {
+		const generation = this.bumpGeneration(cwd);
 
-		return buildSkillRunSnapshot(cwd, catalog, skillAvailabilityStore.disabledIds);
+		this.setSlot({ cwd, generation, status: 'loading' });
+
+		try {
+			const catalog = await SkillsService.list(cwd, signal);
+
+			if (this._generationByCwd.get(cwd) === generation) {
+				this.setSlot({ catalog, cwd, generation, status: 'ready' });
+			}
+
+			return catalog;
+		} catch (error) {
+			if (this._generationByCwd.get(cwd) === generation) {
+				this.setSlot({ cwd, error, generation, status: 'error' });
+			}
+
+			throw error;
+		}
 	}
 
-	/** Invalidate screen state for a CWD; in-flight responses become stale. */
-	invalidate(cwd: string | undefined): void {
-		this.bumpGeneration(cwd);
-		this._slots.delete(cwd);
+	/** Current screen slot for a selected CWD (undefined = no CWD selected). */
+	slotFor(cwd: string | undefined): SkillCatalogSlot | undefined {
+		return this._slots.get(cwd);
 	}
 
 	/** Attach one caller to a shared entry; aborting it rejects only this caller. */
@@ -250,6 +299,62 @@ class SkillsStore {
 
 	private setSlot(slot: SkillCatalogSlot): void {
 		this._slots.set(slot.cwd, slot);
+	}
+
+	// -- Route-owned refresh lifecycle ---------------------------------------
+
+	private _routeCwd: string | undefined;
+	private _routeInflight: AbortController | undefined;
+	private _routeInitialized = false;
+
+	/**
+	 * Route-level catalog loading: handle the initial mount or a selected-CWD
+	 * change. The previous CWD's slot is invalidated before its response can
+	 * apply, and the in-flight request is aborted.
+	 */
+	onRouteCwdChange(cwd: string | undefined): void {
+		if (this._routeInitialized && cwd === this._routeCwd) return;
+
+		this.requestRouteCatalog(cwd, false);
+	}
+
+	/** Force a fresh request for the route's current CWD. */
+	retryRouteCatalog(): void {
+		if (!this._routeInitialized) return;
+
+		this.requestRouteCatalog(this._routeCwd, true);
+	}
+
+	/**
+	 * Abort the route's in-flight request and reset the route lifecycle for
+	 * the next mount; call on route unmount.
+	 */
+	disposeRouteCatalog(): void {
+		this._routeInitialized = false;
+		this._routeCwd = undefined;
+		this._routeInflight?.abort();
+		this._routeInflight = undefined;
+	}
+
+	private requestRouteCatalog(cwd: string | undefined, force: boolean): void {
+		if (this._routeInitialized && cwd !== this._routeCwd) {
+			// Invalidate the previous route slot before its response can apply.
+			this.invalidate(this._routeCwd);
+		}
+
+		this._routeInitialized = true;
+		this._routeCwd = cwd;
+
+		this._routeInflight?.abort();
+
+		const next = new AbortController();
+
+		this._routeInflight = next;
+
+		// The slot records success or failure; this promise need not be awaited.
+		const load = force ? this.refresh(cwd, next.signal) : this.ensureCatalog(cwd, next.signal);
+
+		void load.catch(() => {});
 	}
 }
 

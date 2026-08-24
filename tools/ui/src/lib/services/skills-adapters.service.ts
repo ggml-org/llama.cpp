@@ -8,6 +8,9 @@ import {
 } from '$lib/constants';
 import { MessageRole, ToolPermissionDecision } from '$lib/enums';
 import { SkillsService } from '$lib/services/skills.service';
+import { conversationsStore } from '$lib/stores/conversations/index.svelte';
+import { skillActivationStore } from '$lib/stores/skill-activation.svelte';
+import { skillsStore } from '$lib/stores/skills.svelte';
 import type { AgenticToolCallPayload } from '$lib/types/agentic';
 import type { ApiChatMessageData } from '$lib/types/api';
 import type {
@@ -203,16 +206,24 @@ export function skillErrorResult(toolName: string, message: string): string {
  * refreshes the catalog, and derives identity only from server responses.
  */
 export class SkillRunAdapters {
-	private readonly _snapshot: SkillRunSnapshot;
-	private readonly _packed: SkillPackedCatalog;
-	private readonly _definitions: readonly OpenAIToolDefinition[];
-	private readonly _snapshotNames: Set<string>;
-	private readonly _registeredNames: Set<string>;
-	private readonly _conversationId: string;
 	private readonly _activation: SkillActivationStore;
-	private readonly _requestPermission: SkillRunAdaptersOptions['requestPermission'];
+	private readonly _conversationId: string;
+	private readonly _definitions: readonly OpenAIToolDefinition[];
+	private readonly _packed: SkillPackedCatalog;
 	/** One shared pending consent decision per consent identity. */
 	private readonly _pendingDecisions = new Map<string, Promise<'allowed' | 'denied'>>();
+	private readonly _registeredNames: Set<string>;
+	private readonly _requestPermission: SkillRunAdaptersOptions['requestPermission'];
+	private readonly _snapshot: SkillRunSnapshot;
+	private readonly _snapshotNames: Set<string>;
+
+	get definitions(): readonly OpenAIToolDefinition[] {
+		return this._definitions;
+	}
+
+	get envelope(): string {
+		return this._packed.envelope;
+	}
 
 	constructor(options: SkillRunAdaptersOptions) {
 		this._snapshot = options.snapshot;
@@ -223,19 +234,6 @@ export class SkillRunAdapters {
 		this._conversationId = options.conversationId;
 		this._activation = options.activation;
 		this._requestPermission = options.requestPermission;
-	}
-
-	get definitions(): readonly OpenAIToolDefinition[] {
-		return this._definitions;
-	}
-
-	get envelope(): string {
-		return this._packed.envelope;
-	}
-
-	/** True only for skill tool names this run actually registered (collision-free). */
-	isSkillTool(name: string): boolean {
-		return this._registeredNames.has(name);
 	}
 
 	decorate(messages: ApiChatMessageData[]): ApiChatMessageData[] {
@@ -271,6 +269,60 @@ export class SkillRunAdapters {
 			content: skillErrorResult(name, `Unknown Skills tool "${name}".`),
 			isError: true
 		};
+	}
+
+	/** True only for skill tool names this run actually registered (collision-free). */
+	isSkillTool(name: string): boolean {
+		return this._registeredNames.has(name);
+	}
+
+	/**
+	 * Per-identity consent: an identity with a durable activation proceeds;
+	 * an unapproved one pauses in the established consent mechanism.
+	 * Concurrent reads of the same resolved identity share one pending
+	 * decision; only explicit allow resumes past the pause.
+	 */
+	private async authorize(
+		result: SkillReadResult,
+		path: string | undefined,
+		signal?: AbortSignal
+	): Promise<'allowed' | 'denied'> {
+		const identityId = result.skill.id;
+
+		if (this._activation.isActivated(this._conversationId, identityId)) return 'allowed';
+
+		const pending = this._pendingDecisions.get(identityId);
+
+		if (pending) return pending;
+
+		const decision = this._requestPermission(
+			SKILL_READ_TOOL,
+			SKILL_SERVER_LABEL,
+			{
+				name: result.skill.name,
+				provider: result.skill.provider,
+				scope: result.skill.scope,
+				...(path !== undefined ? { path } : {})
+			},
+			signal
+		)
+			.then(async (permission) => {
+				// Yield so Svelte can flush the consent card before the result lands.
+				await new Promise((resolve) => setTimeout(resolve, 0));
+
+				if (signal?.aborted || permission === ToolPermissionDecision.DENY) {
+					return 'denied' as const;
+				}
+
+				return 'allowed' as const;
+			})
+			.finally(() => {
+				this._pendingDecisions.delete(identityId);
+			});
+
+		this._pendingDecisions.set(identityId, decision);
+
+		return decision;
 	}
 
 	/**
@@ -357,54 +409,67 @@ export class SkillRunAdapters {
 		// Server XML is opaque model content, preserved byte-for-byte.
 		return { content: result.content_xml, extras: [record.extra], isError: false };
 	}
+}
 
-	/**
-	 * Per-identity consent: an identity with a durable activation proceeds;
-	 * an unapproved one pauses in the established consent mechanism.
-	 * Concurrent reads of the same resolved identity share one pending
-	 * decision; only explicit allow resumes past the pause.
-	 */
-	private async authorize(
-		result: SkillReadResult,
-		path: string | undefined,
-		signal?: AbortSignal
-	): Promise<'allowed' | 'denied'> {
-		const identityId = result.skill.id;
+// -- Explicit `/skills <name>` activation ----------------------------------
 
-		if (this._activation.isActivated(this._conversationId, identityId)) return 'allowed';
+/** Outcome of an explicit `/skills <name>` activation. */
+export interface SkillCommandOutcome {
+	ok: boolean;
+	created?: boolean;
+	/** True when a NEW durable base activation was persisted. */
+	reason?: 'unavailable' | 'not-found' | 'disabled' | 'persistence-failed';
+}
 
-		const pending = this._pendingDecisions.get(identityId);
+/** Read a named skill, then route it through the shared durable activation path. */
+export async function dispatchSkillActivation(
+	name: string,
+	options: { cwd?: string; signal?: AbortSignal } = {}
+): Promise<SkillCommandOutcome> {
+	const cwd =
+		options.cwd ??
+		conversationsStore.activeConversation?.cwd ??
+		conversationsStore.preferences.pendingCwd ??
+		undefined;
 
-		if (pending) return pending;
+	let result: SkillReadResult;
 
-		const decision = this._requestPermission(
-			SKILL_READ_TOOL,
-			SKILL_SERVER_LABEL,
-			{
-				name: result.skill.name,
-				provider: result.skill.provider,
-				scope: result.skill.scope,
-				...(path !== undefined ? { path } : {})
-			},
-			signal
-		)
-			.then(async (permission) => {
-				// Yield so Svelte can flush the consent card before the result lands.
-				await new Promise((resolve) => setTimeout(resolve, 0));
+	try {
+		result = await SkillsService.read({ name }, cwd, options.signal);
+	} catch {
+		return { ok: false, reason: 'unavailable' };
+	}
 
-				if (signal?.aborted || permission === ToolPermissionDecision.DENY) {
-					return 'denied' as const;
-				}
+	if (result.kind !== 'skill') {
+		return { ok: false, reason: 'not-found' };
+	}
 
-				return 'allowed' as const;
-			})
-			.finally(() => {
-				this._pendingDecisions.delete(identityId);
-			});
+	// Check the resolved opaque ID before creating, persisting, or waking.
+	if (skillsStore.isDisabled(result.skill.id)) {
+		return { ok: false, reason: 'disabled' };
+	}
 
-		this._pendingDecisions.set(identityId, decision);
+	let conversationId = conversationsStore.activeConversation?.id;
 
-		return decision;
+	try {
+		if (!conversationId) {
+			conversationId = await conversationsStore.createConversation(`Skill: ${name}`);
+		}
+
+		// Rebuild persisted activations so repeated commands deduplicate.
+		await skillActivationStore.loadConversation(conversationId);
+
+		const record = await skillActivationStore.recordActivation({
+			conversationId,
+			cwd,
+			result
+		});
+
+		return { created: record.created, ok: true };
+	} catch {
+		// Rare: persistence failed after a successful read. The conversation
+		// (if created) stays visible and deletable; nothing wakes.
+		return { ok: false, reason: 'persistence-failed' };
 	}
 }
 
