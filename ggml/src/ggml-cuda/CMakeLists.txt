@@ -139,6 +139,10 @@ if (CUDAToolkit_FOUND)
         )
         FetchContent_MakeAvailable(CUTLASS)
 
+        if (COMMAND license_add_file)
+            license_add_file("CUTLASS" "${cutlass_SOURCE_DIR}/LICENSE.txt")
+        endif()
+
         list(REMOVE_ITEM GGML_SOURCES_CUDA "${GGML_CUDA_CUTLASS_SOURCE}")
     endif()
 
