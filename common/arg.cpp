@@ -4170,6 +4170,55 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_DRAFT_MODEL"));
     add_opt(common_arg(
+        {"--spec-prefill"},
+        "enable speculative prefill using draft model to filter prompt tokens",
+        [](common_params & params) {
+            params.speculative.prefill.enabled = true;
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_PREFILL"));
+    add_opt(common_arg(
+        {"--spec-prefill-p", "--spec-prefill-percentage"}, "P",
+        string_format("fraction of prompt tokens to retain during speculative prefill (default: %.2f)", (double) params.speculative.prefill.percentage),
+        [](common_params & params, const std::string & value) {
+            const float val = std::stof(value);
+            if (val <= 0.0f || val > 1.0f) {
+                throw std::invalid_argument("spec-prefill percentage must be between 0.0 (exclusive) and 1.0 (inclusive)");
+            }
+            params.speculative.prefill.enabled    = true;
+            params.speculative.prefill.percentage = val;
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_PREFILL_P"));
+    add_opt(common_arg(
+        {"--spec-prefill-chunk", "--spec-prefill-chunk-size"}, "N",
+        string_format("chunk grouping size for speculative prefill (default: %d, 0 to disable)", params.speculative.prefill.chunk_size),
+        [](common_params & params, int value) {
+            if (value < 0) {
+                throw std::invalid_argument("spec-prefill chunk size must be >= 0");
+            }
+            params.speculative.prefill.chunk_size = value;
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+    add_opt(common_arg(
+        {"--spec-prefill-lookahead", "--spec-prefill-lah"}, "N",
+        string_format("number of lookahead decode steps on draft model for attention estimation (default: %d)", params.speculative.prefill.look_ahead_cnt),
+        [](common_params & params, int value) {
+            if (value < 1) {
+                throw std::invalid_argument("spec-prefill lookahead count must be >= 1");
+            }
+            params.speculative.prefill.look_ahead_cnt = value;
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+    add_opt(common_arg(
+        {"--spec-prefill-pool-kernel"}, "N",
+        string_format("1D average pooling kernel size for attention smoothing (default: %d, 0 to disable)", params.speculative.prefill.pool_kernel_size),
+        [](common_params & params, int value) {
+            if (value < 0) {
+                throw std::invalid_argument("spec-prefill pool kernel size must be >= 0");
+            }
+            params.speculative.prefill.pool_kernel_size = value;
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+    add_opt(common_arg(
         {"--spec-type"}, common_speculative_all_types_str(),
         string_format("comma-separated list of types of speculative decoding to use (default: %s)\n",
             common_speculative_type_name_str(params.speculative.types).c_str()),

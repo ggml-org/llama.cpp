@@ -366,6 +366,16 @@ struct common_params_speculative_ngram_cache {
     std::string lookup_cache_dynamic; // path of dynamic ngram cache file for lookup decoding
 };
 
+struct common_params_speculative_prefill {
+    bool    enabled          = false; // enable speculative prefill
+    float   percentage       = 0.3f;  // fraction of prompt tokens to retain (0.0 < p <= 1.0)
+    int32_t chunk_size       = 32;    // chunk grouping size (0 to disable chunking)
+    int32_t look_ahead_cnt   = 8;     // lookahead decode steps on draft model
+    int32_t pool_kernel_size = 13;    // 1D average pooling kernel size for smoothing
+    bool    keep_bos         = true;  // preserve first token (BOS)
+    bool    keep_last        = true;  // preserve last token / tail chunk
+};
+
 struct common_params_speculative {
     std::vector<enum common_speculative_type> types = { COMMON_SPECULATIVE_TYPE_NONE };
 
@@ -378,6 +388,8 @@ struct common_params_speculative {
     common_params_speculative_ngram_map ngram_map_k4v;
 
     common_params_speculative_ngram_cache ngram_cache;
+
+    common_params_speculative_prefill prefill;
 
     bool has_dft() const {
         return !draft.mparams.empty();
