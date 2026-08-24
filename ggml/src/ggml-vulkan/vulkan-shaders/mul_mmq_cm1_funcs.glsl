@@ -29,7 +29,7 @@ void block_a_to_shmem(const uint buf_ib, const uint ib, const uint iqs, const ui
 
     if (iqs == 0) {
 #ifdef DATA_A_Q4_0
-        buf_a_d[ks * BM + buf_ib] = FLOAT_TYPE(data_a_packed16[ib].d);
+        buf_a_d[ks * BM + buf_ib] = float(data_a_packed16[ib].d);
 #else // DATA_A_Q4_1
 #endif
     }
@@ -51,7 +51,7 @@ void block_a_to_shmem(const uint buf_ib, const uint ib, const uint iqs, const ui
     buf_a_qs[buf_ib * QPITCH + ks * (BK / 4) + iqs] = vui;
 
     if (iqs == 0) {
-        buf_a_d[ks * BM + buf_ib] = FLOAT_TYPE(data_a_packed16[ib].d);
+        buf_a_d[ks * BM + buf_ib] = float(data_a_packed16[ib].d);
     }
 }
 #endif
@@ -83,7 +83,7 @@ void block_b_to_shmem(const uint buf_ib, const uint ib, const uint iqs, const ui
     const uint ib_inner = ib % 4;
 
     if (iqs == 0) {
-        buf_b_d[ks * BN + buf_ib] = data_b[ib_outer].ds[ib_inner].x;
+        buf_b_d[ks * BN + buf_ib] = float(data_b[ib_outer].ds[ib_inner].x);
     }
 
     const ivec4 values = data_b[ib_outer].qs[ib_inner * 2 + iqs];
