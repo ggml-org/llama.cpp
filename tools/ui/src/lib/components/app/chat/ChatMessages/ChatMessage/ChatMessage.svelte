@@ -247,7 +247,12 @@
 	}
 
 	function handleContinue() {
-		chatActions.continueAssistantMessage(message);
+		// A grouped agentic turn keeps its continuations in toolMessages, and the group
+		// renders under the anchor. Continue resumes from the last assistant of the turn,
+		// otherwise it resumes from the anchor and drops every turn generated after it.
+		const lastAssistant = toolMessages.findLast((m) => m.role === MessageRole.ASSISTANT);
+
+		chatActions.continueAssistantMessage(lastAssistant ?? message);
 	}
 
 	function handleForkConversation(options: { name: string; includeAttachments: boolean }) {
