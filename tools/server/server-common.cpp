@@ -1270,8 +1270,7 @@ json oaicompat_chat_params_parse(
         common_chat_continuation_parse(body.at("continue_final_message")) :
         COMMON_CHAT_CONTINUATION_NONE;
     if (inputs.continue_final_message == COMMON_CHAT_CONTINUATION_NONE && opt.prefill_assistant
-        && !inputs.messages.empty() && inputs.messages.back().role == "assistant"
-        && inputs.messages.back().tool_calls.empty()) {
+        && !inputs.messages.empty() && inputs.messages.back().role == "assistant") {
         if (inputs.messages.size() >= 2 && inputs.messages[inputs.messages.size() - 2].role == "assistant") {
             throw std::invalid_argument("Cannot have 2 or more assistant messages at the end of the list.");
         }
@@ -1280,6 +1279,12 @@ json oaicompat_chat_params_parse(
     }
     if (inputs.continue_final_message != COMMON_CHAT_CONTINUATION_NONE && inputs.add_generation_prompt) {
         throw std::invalid_argument("Cannot set both add_generation_prompt and continue_final_message to true.");
+    }
+    if (inputs.continue_final_message != COMMON_CHAT_CONTINUATION_NONE
+        && !inputs.messages.empty()
+        && inputs.messages.back().role == "assistant"
+        && !inputs.messages.back().tool_calls.empty()) {
+        throw std::invalid_argument("Cannot continue an assistant message that contains tool calls.");
     }
     inputs.reasoning_format = opt.reasoning_format;
     if (body.contains("reasoning_format")) {

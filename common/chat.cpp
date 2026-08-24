@@ -3809,10 +3809,6 @@ static common_chat_params common_chat_templates_apply_legacy(const struct common
 common_chat_params common_chat_templates_apply(const struct common_chat_templates *        tmpls,
                                                const struct common_chat_templates_inputs & inputs) {
     GGML_ASSERT(tmpls != nullptr);
-    if (inputs.continue_final_message != COMMON_CHAT_CONTINUATION_NONE && !inputs.messages.empty() &&
-        inputs.messages.back().role == "assistant" && !inputs.messages.back().tool_calls.empty()) {
-        throw std::invalid_argument("Cannot continue an assistant message that contains tool calls.");
-    }
     return inputs.use_jinja ? common_chat_templates_apply_jinja(tmpls, inputs) :
                               common_chat_templates_apply_legacy(tmpls, inputs);
 }
