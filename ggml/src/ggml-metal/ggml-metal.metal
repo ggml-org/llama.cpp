@@ -6820,7 +6820,10 @@ void kernel_flash_attn_ext_impl(
                         q8x8_t mq[2];
 
                         // note: too much unroll can tank the performance for large heads
-                        #pragma unroll (MIN(DK8/2, 4*NSG))
+                        // the original guard was `#pragma unroll (MIN(DK8/2, 4*NSG))`, but NSG is a
+                        // template parameter and the host picks nsg=8 for DK=512, so the MIN folds to
+                        // 32 - a 32x unroll of the DK loop. Cap it at 4.
+                        #pragma unroll (DK8/2 > 8 ? 4 : DK8/2)
                         for (short i = 0; i < DK8/2; ++i) {
                             simdgroup_barrier(mem_flags::mem_none);
 
