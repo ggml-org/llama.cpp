@@ -8,11 +8,11 @@
 #extension GL_KHR_shader_subgroup_arithmetic : enable
 #endif
 
-#define FA_K_ONLY
 #define BINDING_IDX_K 0u
 
 #include "types.glsl"
 #include "fa_types.glsl"
+#define FaTypeV FA_TYPE_F32
 
 layout(constant_id = 0) const uint FaTypeK = FA_TYPE_F32;
 layout(constant_id = 1) const uint FaBlockBytesK = 4;
