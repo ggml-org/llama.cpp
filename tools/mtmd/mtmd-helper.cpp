@@ -42,6 +42,11 @@
 #ifdef MTMD_VIDEO
 #include "sheredom/subprocess.h"
 #include <thread>
+#ifndef _WIN32
+#include <csignal>
+#include <fcntl.h>
+#include <pthread.h>
+#endif
 #endif
 
 //
@@ -522,7 +527,8 @@ struct mtmd_helper_video {
     // RAII wrapper for managing subprocess
     struct subprocess_handle {
         struct subprocess_s proc = {};
-        bool alive = false;
+        bool created = false; // process exists and must be cleaned up
+        bool alive   = false; // process can still give us data
         std::thread feeder;
 
         subprocess_handle() = default;
@@ -531,18 +537,27 @@ struct mtmd_helper_video {
         ~subprocess_handle() { stop(); }
 
         void stop() {
-            if (alive) {
-                subprocess_terminate(&proc);
+            // note: alive becomes false on stdout EOF, but the process still needs cleanup
+            if (!created) {
+                return;
             }
+            subprocess_terminate(&proc);
+#ifdef _WIN32
+            // no SIGPIPE on windows: a blocked feeder only gets a broken pipe once we close our read end of the child stdin
+            if (proc.hStdInput) {
+                CloseHandle(proc.hStdInput);
+                proc.hStdInput = nullptr;
+            }
+#endif
             // join before destroy: feeder holds a FILE* from subprocess_stdin;
             // subprocess_destroy closes it, so the thread must finish first
             if (feeder.joinable()) {
                 feeder.join();
             }
-            if (alive) {
-                subprocess_destroy(&proc);
-                alive = false;
-            }
+            subprocess_join(&proc, nullptr); // reap the child, or else it stays a zombie
+            subprocess_destroy(&proc);
+            created = false;
+            alive   = false;
         }
 
         FILE * stdout_pipe() {
@@ -552,10 +567,21 @@ struct mtmd_helper_video {
         // buf is tied to lifetime of mtmd_helper_video, so it's guaranteed to outlive the feeder thread
         void start_feeder(const std::vector<uint8_t> & buf) {
             feeder = std::thread([this, &buf]() {
+#ifndef _WIN32
+                // ffmpeg can exit before it reads all the input, for example when ffprobe already got the metadata.
+                // the write below must then fail with EPIPE, instead of killing the process with SIGPIPE
+                sigset_t sigpipe_set;
+                sigemptyset(&sigpipe_set);
+                sigaddset(&sigpipe_set, SIGPIPE);
+                pthread_sigmask(SIG_BLOCK, &sigpipe_set, nullptr); // linux sends the signal to the writing thread
+#endif
                 FILE * f = subprocess_stdin(&proc);
                 if (!f) {
                     return;
                 }
+#ifdef F_SETNOSIGPIPE
+                fcntl(fileno(f), F_SETNOSIGPIPE, 1); // macos/bsd send it to the process, so turn it off per fd
+#endif
                 fwrite(buf.data(), 1, buf.size(), f);
                 fclose(f);
                 proc.stdin_file = nullptr; // prevent double-close in subprocess_destroy
@@ -601,7 +627,8 @@ struct mtmd_helper_video {
             LOG_ERR("%s: failed to launch ffprobe\n", __func__);
             return false;
         }
-        probe_sp.alive = true;
+        probe_sp.created = true;
+        probe_sp.alive   = true;
 
         if (is_buf_input()) {
             probe_sp.start_feeder(input_buf);
@@ -673,6 +700,11 @@ struct mtmd_helper_video {
         }
 
         cmd.push_back("-nostdin");
+        if (is_buf_input()) {
+            // remove the 64KB read-ahead limit of cache:, or else ffmpeg cannot reach a moov atom at end of file
+            cmd.push_back("-read_ahead_limit");
+            cmd.push_back("-1");
+        }
         cmd.push_back("-i");
         // cache:pipe:0 wraps stdin with a seekable in-memory cache, letting ffmpeg seek
         // backwards for container headers (e.g. MP4 moov atom at end of file)
@@ -711,7 +743,8 @@ struct mtmd_helper_video {
             subprocess_option_search_user_path | subprocess_option_inherit_environment,
             &sp.proc);
 
-        sp.alive = (ret == 0);
+        sp.created = (ret == 0);
+        sp.alive   = (ret == 0);
         LOG_DBG("%s: subprocess_create ret=%d proc_alive=%d\n", __func__, ret, (int)sp.alive);
 
         if (sp.alive && is_buf_input()) {
