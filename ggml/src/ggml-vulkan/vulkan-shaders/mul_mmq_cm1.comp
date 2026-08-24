@@ -168,24 +168,17 @@ void main() {
     uint elem_row[CM_ELEMS];
     uint elem_col[CM_ELEMS];
 
-    if (WARP == 32) {
-        [[unroll]] for (uint e = 0; e < CM_ELEMS; ++e) {
-            elem_row[e] = gl_SubgroupInvocationID / TN + 2 * e;
-            elem_col[e] = gl_SubgroupInvocationID % TN;
-        }
-    } else {
-        for (uint i = gl_LocalInvocationID.x; i < TM * TN; i += BLOCK_SIZE) {
-            cm_layout_probe[i] = int32_t(i);
-        }
-        barrier();
+    for (uint i = gl_LocalInvocationID.x; i < TM * TN; i += BLOCK_SIZE) {
+        cm_layout_probe[i] = int32_t(i);
+    }
+    barrier();
 
-        coopmat<int32_t, gl_ScopeSubgroup, TM, TN, gl_MatrixUseAccumulator> probe;
-        coopMatLoad(probe, cm_layout_probe, 0, TN, gl_CooperativeMatrixLayoutRowMajor);
+    coopmat<int32_t, gl_ScopeSubgroup, TM, TN, gl_MatrixUseAccumulator> probe;
+    coopMatLoad(probe, cm_layout_probe, 0, TN, gl_CooperativeMatrixLayoutRowMajor);
 
-        [[unroll]] for (uint e = 0; e < CM_ELEMS; ++e) {
-            elem_row[e] = uint(probe[e]) / TN;
-            elem_col[e] = uint(probe[e]) % TN;
-        }
+    [[unroll]] for (uint e = 0; e < CM_ELEMS; ++e) {
+        elem_row[e] = uint(probe[e]) / TN;
+        elem_col[e] = uint(probe[e]) % TN;
     }
 
     const uint loadr_a = gl_LocalInvocationID.x % (BK / LOAD_VEC_A);
