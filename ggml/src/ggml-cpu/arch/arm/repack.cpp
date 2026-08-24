@@ -14,7 +14,6 @@
 #include <cassert>
 #include <cstdlib> // for qsort
 #include <cstdio>  // for GGML_ASSERT
-#include <iostream>
 
 #define GGML_CPU_CLANG_WORKAROUND
 #include "../../repack.h"
@@ -564,16 +563,6 @@ void ggml_gemv_mxfp4_4x4_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const v
                 const svfloat16_t d_f16 = svreinterpret_f16_u16(svdup_n_u16(a_ptr[l].d));
                 const svfloat32_t d_f32 = svcvt_f32_f16_x(pg4, d_f16);
                 const svfloat32_t scale = svmul_f32_x(pg4, svreinterpret_f32_u32(e_bits), d_f32);
-                
-                //Non Vectorized - NEON equivalent ~ slow
-                // const svfloat32_t b_d = svdupq_n_f32(
-                //     GGML_CPU_E8M0_TO_FP32_HALF(b_ptr[l].e[0]),
-                //     GGML_CPU_E8M0_TO_FP32_HALF(b_ptr[l].e[1]),
-                //     GGML_CPU_E8M0_TO_FP32_HALF(b_ptr[l].e[2]),
-                //     GGML_CPU_E8M0_TO_FP32_HALF(b_ptr[l].e[3])
-                // );
-                // const svfloat32_t a_d = svcvt_f32_f16_x(pg4, svreinterpret_f16_u16(svdup_n_u16(a_ptr[l].d)));
-                // const svfloat32_t scale = svmul_f32_x(pg4, a_d, b_d);
                 sumf = svmla_f32_m(pg4, sumf,svcvt_f32_s32_m(svdup_n_f32(0.0f), pg4, sumi_cols), scale);
             }
             svst1_f32(pg4, res_ptr + x * 4, sumf);
