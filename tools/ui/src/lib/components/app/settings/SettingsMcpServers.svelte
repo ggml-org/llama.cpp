@@ -121,11 +121,13 @@
 				{:else}
 					<McpServerCard
 						{server}
-						enabled={conversationsStore.isMcpServerEnabledForChat(server.id)}
+						enabled={conversationsStore.preferences.isMcpServerEnabledForChat(server.id)}
 						onToggle={async () => {
-							const wasEnabled = conversationsStore.isMcpServerEnabledForChat(server.id);
+							const wasEnabled = conversationsStore.preferences.isMcpServerEnabledForChat(
+								server.id
+							);
 
-							await conversationsStore.toggleMcpServerForChat(server.id);
+							await conversationsStore.preferences.toggleMcpServerForChat(server.id);
 
 							if (!wasEnabled) {
 								// Promote the connection so tools/prompts/resources become

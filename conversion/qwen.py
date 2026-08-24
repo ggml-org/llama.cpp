@@ -709,7 +709,13 @@ class DFlashModel(Qwen3Model):
         yield from super().modify_tensors(data_torch, name, bid)
 
 
-@ModelBase.register("Qwen3DSparkModel", "DSparkDraftModel", "DSparkSpeculator")
+@ModelBase.register(
+    "Qwen3DSparkModel",
+    "DSparkDraftModel",
+    "DSparkSpeculator",
+    "Lfm2DSparkDraftModel",
+    "LingDSparkModel",
+)
 @ModelBase.example("satgeze/Qwen3.6-27B-DSpark")
 class DSparkModel(DFlashModel):
     # DSpark = DFlash + a semi-autoregressive Markov head.
@@ -759,6 +765,13 @@ class DSparkModel(DFlashModel):
             return None
         return super().filter_tensors(item)
 
+    _ROPE_PERMUTE_SUFFIXES = (
+        "self_attn.q_proj.weight",
+        "self_attn.k_proj.weight",
+        "self_attn.q_norm.weight",
+        "self_attn.k_norm.weight",
+    )
+
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         if name == "model.d2t":
             self._d2t = data_torch
@@ -766,6 +779,12 @@ class DSparkModel(DFlashModel):
 
         if self._n_vocab_draft == self.hparams["vocab_size"] and name.endswith(("embed_tokens.weight", "lm_head.weight")):
             return
+
+        # interleaved-rope checkpoints (rope_is_neox_style = false) -> NeoX layout: per head, even dims first then odd
+        if not self.hparams.get("rope_is_neox_style", True) and name.endswith(self._ROPE_PERMUTE_SUFFIXES):
+            head_dim = self.hparams["head_dim"]
+            shape = data_torch.shape
+            data_torch = data_torch.reshape(-1, head_dim // 2, 2, *shape[1:]).transpose(1, 2).reshape(shape)
 
         yield from super().modify_tensors(data_torch, name, bid)
 

@@ -1,3 +1,10 @@
+/**
+ * ReadMediaService - Reads local media files for the read_media tool
+ *
+ * Encodes image and audio files as base64 data URLs with the metadata the
+ * model needs. No reactive state; consumed by toolsStore.
+ */
+
 import { ToolsService } from './tools.service';
 import {
 	FILE_EXTENSION_SEPARATOR,
@@ -40,7 +47,7 @@ function fileExtension(path: string): string {
  * actually use the result - the server has no idea which model is selected.
  *
  * @see buildReadMediaToolDefinition in constants/read-media.ts - tool schema sent to the LLM
- * @see agenticStore in stores/agentic.svelte.ts - tool dispatch and attachment extraction
+ * @see agenticStore in stores/agentic/index.svelte.ts - tool dispatch and attachment extraction
  */
 export class ReadMediaService {
 	static async executeTool(

@@ -145,11 +145,6 @@ jobs:
             ${{ env.CMAKE_ARGS }}
           cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
 
-      - name: ccache-clear
-        uses: ./.github/actions/ccache-clear
-        with:
-          key: release-${{ matrix.os }}-${{ matrix.arch }}
-
       - name: Determine tag name
         id: tag
         uses: ./.github/actions/get-tag-name
@@ -165,6 +160,11 @@ jobs:
         with:
           path: llama-${{ steps.tag.outputs.name }}-bin-macos-${{ matrix.build }}.tar.gz
           name: llama-bin-macos-${{ matrix.build }}.tar.gz
+
+      - name: ccache-clear
+        uses: ./.github/actions/ccache-clear
+        with:
+          key: release-${{ matrix.os }}-${{ matrix.arch }}
 
   ubuntu-cpu:
     needs: [check-release, get-version]
@@ -231,12 +231,6 @@ jobs:
             ${{ env.CMAKE_ARGS }}
           cmake --build build --config Release -j $(nproc)
 
-      - name: ccache-clear
-        if: ${{ matrix.build != 's390x' }}
-        uses: ./.github/actions/ccache-clear
-        with:
-          key: release-${{ matrix.os }}-cpu
-
       - name: Determine tag name
         id: tag
         uses: ./.github/actions/get-tag-name
@@ -252,6 +246,12 @@ jobs:
         with:
           path: llama-${{ steps.tag.outputs.name }}-bin-ubuntu-${{ matrix.build }}.tar.gz
           name: llama-bin-ubuntu-${{ matrix.build }}.tar.gz
+
+      - name: ccache-clear
+        if: ${{ matrix.build != 's390x' }}
+        uses: ./.github/actions/ccache-clear
+        with:
+          key: release-${{ matrix.os }}-cpu
 
   ubuntu-vulkan:
     needs: [check-release, get-version]
@@ -318,11 +318,6 @@ jobs:
             ${{ env.CMAKE_ARGS }}
           cmake --build build --config Release -j $(nproc)
 
-      - name: ccache-clear
-        uses: ./.github/actions/ccache-clear
-        with:
-          key: release-${{ matrix.os }}-vulkan
-
       - name: Determine tag name
         id: tag
         uses: ./.github/actions/get-tag-name
@@ -338,6 +333,11 @@ jobs:
         with:
           path: llama-${{ steps.tag.outputs.name }}-bin-ubuntu-vulkan-${{ matrix.build }}.tar.gz
           name: llama-bin-ubuntu-vulkan-${{ matrix.build }}.tar.gz
+
+      - name: ccache-clear
+        uses: ./.github/actions/ccache-clear
+        with:
+          key: release-${{ matrix.os }}-vulkan
 
   android-arm64:
     needs: [check-release, get-version]
@@ -512,11 +512,6 @@ jobs:
             ${{ env.CMAKE_ARGS }}
           cmake --build build/ReleaseOV --config Release --parallel
 
-      - name: ccache-clear
-        uses: ./.github/actions/ccache-clear
-        with:
-          key: release-ubuntu-24.04-openvino-release-no-preset-v1
-
       - name: Determine tag name
         id: tag
         uses: ./.github/actions/get-tag-name
@@ -550,6 +545,11 @@ jobs:
         with:
           path: llama-${{ steps.tag.outputs.name }}-bin-ubuntu-openvino-${{ env.OPENVINO_VERSION_MAJOR }}-x64.tar.gz
           name: llama-bin-ubuntu-openvino-${{ env.OPENVINO_VERSION_MAJOR }}-x64.tar.gz
+
+      - name: ccache-clear
+        uses: ./.github/actions/ccache-clear
+        with:
+          key: release-ubuntu-24.04-openvino-release-no-preset-v1
 
   windows-openvino:
     needs: [check-release]
@@ -637,11 +637,6 @@ jobs:
 
           cmake --build build\ReleaseOV --config Release -- /m
 
-      - name: ccache-clear
-        uses: ./.github/actions/ccache-clear
-        with:
-          key: release-windows-2022-openvino
-
       - name: Determine tag name
         id: tag
         uses: ./.github/actions/get-tag-name
@@ -680,7 +675,13 @@ jobs:
           path: llama-${{ steps.tag.outputs.name }}-bin-win-openvino-${{ env.OPENVINO_VERSION_MAJOR }}-x64.zip
           name: llama-bin-win-openvino-${{ env.OPENVINO_VERSION_MAJOR }}-x64.zip
 
+      - name: ccache-clear
+        uses: ./.github/actions/ccache-clear
+        with:
+          key: release-windows-2022-openvino
+
   windows-cpu:
+    name: windows-cpu / ${{ matrix.arch }}
     needs: [check-release]
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
@@ -728,18 +729,13 @@ jobs:
             -DGGML_BACKEND_DL=ON ^
             -DGGML_CPU_ALL_VARIANTS=${{ matrix.arch == 'x64' && 'ON' || 'OFF' }} ^
             -DGGML_OPENMP=ON ^
+            -DGGML_OPENMP_FETCH=ON ^
             ${{ env.CMAKE_ARGS }}
           cmake --build build --config Release
-
-      - name: ccache-clear
-        uses: ./.github/actions/ccache-clear
-        with:
-          key: release-windows-2025-vs2026-${{ matrix.arch }}-cpu
 
       - name: Pack artifacts
         id: pack_artifacts
         run: |
-          Copy-Item "C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Redist\MSVC\14.51.36231\debug_nonredist\${{ matrix.arch }}\Microsoft.VC145.OpenMP.LLVM\libomp140.${{ matrix.arch == 'x64' && 'x86_64' || 'aarch64' }}.dll" .\build\bin\Release\
           7z a -snl llama-bin-win-cpu-${{ matrix.arch }}.zip .\build\bin\Release\*
 
       - name: Upload artifacts
@@ -747,6 +743,11 @@ jobs:
         with:
           path: llama-bin-win-cpu-${{ matrix.arch }}.zip
           name: llama-bin-win-cpu-${{ matrix.arch }}.zip
+
+      - name: ccache-clear
+        uses: ./.github/actions/ccache-clear
+        with:
+          key: release-windows-2025-vs2026-${{ matrix.arch }}-cpu
 
   windows-rocm:
     needs: [check-release]
@@ -773,6 +774,7 @@ jobs:
         with:
           key: windows-rocm-${{ matrix.ROCM_VERSION }}-${{ matrix.build }}
           evict-old-files: 1d
+          max-size: "1G"
 
       # - name: Cache ROCm Installation
       #   id: cache-rocm
@@ -840,11 +842,6 @@ jobs:
             -DAMDGPU_TARGETS="${{ matrix.gpu_targets }}"
           cmake --build . --config Release --parallel ${env:NUMBER_OF_PROCESSORS}
 
-      - name: ccache-clear
-        uses: ./.github/actions/ccache-clear
-        with:
-          key: windows-rocm-${{ matrix.ROCM_VERSION }}-${{ matrix.build }}
-
       - name: Verify HIP backend was built
         run: |
           $hipDll = Get-ChildItem -Path build\bin -Filter "ggml-hip*.dll" -ErrorAction SilentlyContinue
@@ -876,6 +873,11 @@ jobs:
         with:
           path: llama-bin-win-rocm-${{ env.ROCM_VERSION_SHORT }}-${{ matrix.build }}.zip
           name: llama-bin-win-rocm-${{ env.ROCM_VERSION_SHORT }}-${{ matrix.build }}.zip
+
+      - name: ccache-clear
+        uses: ./.github/actions/ccache-clear
+        with:
+          key: windows-rocm-${{ matrix.ROCM_VERSION }}-${{ matrix.build }}
 
   windows:
     needs: [check-release]
@@ -1042,11 +1044,6 @@ jobs:
           set /A NINJA_JOBS=%NUMBER_OF_PROCESSORS%-1
           cmake --build build --config Release -j %NINJA_JOBS% --target ggml-cuda
 
-      - name: ccache-clear
-        uses: ./.github/actions/ccache-clear
-        with:
-          key: release-windows-2022-${{ matrix.arch }}-cuda-${{ matrix.cuda }}
-
       - name: Pack artifacts
         id: pack_artifacts
         run: |
@@ -1081,6 +1078,11 @@ jobs:
         with:
           path: cudart-llama-bin-win-cuda-${{ matrix.cuda }}-${{ matrix.arch }}.zip
           name: cudart-llama-bin-win-cuda-${{ matrix.cuda }}-${{ matrix.arch }}.zip
+
+      - name: ccache-clear
+        uses: ./.github/actions/ccache-clear
+        with:
+          key: release-windows-2022-${{ matrix.arch }}-cuda-${{ matrix.cuda }}
 
   windows-sycl:
     needs: [check-release]
@@ -1141,11 +1143,6 @@ jobs:
             -DLLAMA_BUILD_BORINGSSL=ON
           cmake --build build --target ggml-sycl -j %NUMBER_OF_PROCESSORS%
 
-      - name: ccache-clear
-        uses: ./.github/actions/ccache-clear
-        with:
-          key: release-windows-2022-x64-sycl
-
       - name: Build the release package
         id: pack_artifacts
         run: |
@@ -1191,6 +1188,11 @@ jobs:
         with:
           path: llama-bin-win-sycl-x64.zip
           name: llama-bin-win-sycl-x64.zip
+
+      - name: ccache-clear
+        uses: ./.github/actions/ccache-clear
+        with:
+          key: release-windows-2022-x64-sycl
 
   ubuntu-24-sycl:
     needs: [check-release]
@@ -1264,11 +1266,6 @@ jobs:
             -DGGML_SYCL_F16=${{ matrix.fp16 }}
           time cmake --build build --config Release -j $(nproc)
 
-      - name: ccache-clear
-        uses: ./.github/actions/ccache-clear
-        with:
-          key: release-ubuntu-24.04-sycl-${{ matrix.build }}
-
       - name: Determine tag name
         id: tag
         uses: ./.github/actions/get-tag-name
@@ -1285,123 +1282,139 @@ jobs:
           path: llama-${{ steps.tag.outputs.name }}-bin-ubuntu-sycl-${{ matrix.build }}-x64.tar.gz
           name: llama-bin-ubuntu-sycl-${{ matrix.build }}-x64.tar.gz
 
-#   ubuntu-22-rocm:
-#     needs: [check-release, get-version]
-#     if: ${{ needs.check-release.outputs.should_release == 'true' }}
+      - name: ccache-clear
+        uses: ./.github/actions/ccache-clear
+        with:
+          key: release-ubuntu-24.04-sycl-${{ matrix.build }}
 
-#     runs-on: ubuntu-22.04
+  ubuntu-22-rocm:
+    needs: [check-release, get-version]
+    if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
-#     permissions:
-#       actions: write
+    runs-on: ubuntu-22.04
 
-#     strategy:
-#       matrix:
-#         include:
-#           - ROCM_VERSION: "7.14.0"
-#             gpu_targets: "gfx908;gfx90a;gfx942;gfx950;gfx1010;gfx1011;gfx1012;gfx1030;gfx1031;gfx1032;gfx1033;gfx1034;gfx1035;gfx1036;gfx1100;gfx1101;gfx1102;gfx1150;gfx1151;gfx1152;gfx1200;gfx1201"
-#             build: 'x64'
+    permissions:
+      actions: write
 
-#     steps:
-#       - name: Clone
-#         id: checkout
-#         uses: actions/checkout@v6
-#         with:
-#           fetch-depth: 0
+    strategy:
+      matrix:
+        include:
+          - ROCM_VERSION: "7.14.0"
+            gpu_targets: "gfx908;gfx90a;gfx942;gfx950;gfx1010;gfx1011;gfx1012;gfx1030;gfx1031;gfx1032;gfx1033;gfx1034;gfx1035;gfx1036;gfx1100;gfx1101;gfx1102;gfx1150;gfx1151;gfx1152;gfx1200;gfx1201"
+            build: 'x64'
 
-#       - name: Setup Node.js
-#         uses: actions/setup-node@v6
-#         with:
-#           node-version: "24"
-#           cache: "npm"
-#           cache-dependency-path: "tools/ui/package-lock.json"
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
-#       - name: Free up disk space
-#         uses: ggml-org/free-disk-space@v1.3.1
-#         with:
-#           tool-cache: true
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: "npm"
+          cache-dependency-path: "tools/ui/package-lock.json"
 
-#       # - name: ccache
-#       #   uses: ggml-org/ccache-action@v1.2.21
-#       #   with:
-#       #     key: release-ubuntu-22.04-rocm-${{ matrix.ROCM_VERSION }}
+      - name: Free up disk space
+        uses: ggml-org/free-disk-space@v1.3.1
+        with:
+          tool-cache: true
 
-#       - name: Dependencies
-#         id: depends
-#         run: |
-#           sudo apt install -y build-essential git cmake wget
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.21
+        with:
+          key: release-ubuntu-rocm-${{ matrix.ROCM_VERSION }}-${{ matrix.build }}
+          evict-old-files: 1d
+          max-size: "1G"
 
-#       - name: Setup TheRock with Wheels
-#         id: therock_env
-#         run: |
-#           # Create Python virtual environment
-#           python3 -m venv .venv
-#           source .venv/bin/activate
+      - name: Tune ccache for reinstalled ROCm toolchain
+        run: |
+          # ROCm is pip-installed fresh each run, so the clang binary's mtime
+          # changes every time. With the default compiler_check=mtime that
+          # invalidates the cache; hash compiler contents instead so warm
+          # builds hit.
+          ccache --set-config=compiler_check=content
+          ccache --set-config=sloppiness=time_macros,include_file_mtime,include_file_ctime
 
-#           # Install ROCm wheels for build
-#           # libraries = HIP runtime and CMake configs needed for linking
-#           # devel = compilers, headers, static libs
-#           python -m pip install --upgrade pip
-#           python -m pip install --index-url https://repo.amd.com/rocm/whl-multi-arch/ "rocm[libraries,devel]==${{ matrix.ROCM_VERSION }}"
+      - name: Dependencies
+        id: depends
+        run: |
+          sudo apt install -y build-essential git cmake wget
 
-#           # Get ROCm installation paths using the rocm-sdk CLI tool
-#           ROCM_PATH=$(rocm-sdk path --root)
-#           CMAKE_PATH=$(rocm-sdk path --cmake)
-#           BIN_PATH=$(rocm-sdk path --bin)
-#           echo "ROCM_PATH=$ROCM_PATH"
-#           echo "CMAKE_PATH=$CMAKE_PATH"
-#           echo "BIN_PATH=$BIN_PATH"
+      - name: Setup TheRock with Wheels
+        id: therock_env
+        run: |
+          # Create Python virtual environment
+          python3 -m venv .venv
+          source .venv/bin/activate
 
-#           # Set environment variables
-#           echo "ROCM_PATH=$ROCM_PATH" >> $GITHUB_ENV
-#           echo "CMAKE_PREFIX_PATH=$CMAKE_PATH" >> $GITHUB_ENV
-#           echo "HIP_PATH=$ROCM_PATH" >> $GITHUB_ENV
-#           echo "PATH=$BIN_PATH:${PATH}" >> $GITHUB_ENV
-#           echo "LD_LIBRARY_PATH=$ROCM_PATH/lib:${LD_LIBRARY_PATH:-}" >> $GITHUB_ENV
+          # Install ROCm wheels for build
+          # libraries = HIP runtime and CMake configs needed for linking
+          # devel = compilers, headers, static libs
+          python -m pip install --upgrade pip
+          python -m pip install --index-url https://repo.amd.com/rocm/whl-multi-arch/ "rocm[libraries,devel]==${{ matrix.ROCM_VERSION }}"
 
-#           # Keep venv activated for subsequent steps
-#           echo "$(pwd)/.venv/bin" >> $GITHUB_PATH
+          # Get ROCm installation paths using the rocm-sdk CLI tool
+          ROCM_PATH=$(rocm-sdk path --root)
+          CMAKE_PATH=$(rocm-sdk path --cmake)
+          BIN_PATH=$(rocm-sdk path --bin)
+          echo "ROCM_PATH=$ROCM_PATH"
+          echo "CMAKE_PATH=$CMAKE_PATH"
+          echo "BIN_PATH=$BIN_PATH"
 
-#       - name: Build with native CMake HIP support
-#         id: cmake_build
-#         run: |
-#           cmake -B build -S . \
-#             -DCMAKE_HIP_COMPILER="$(hipconfig -l)/clang" \
-#             -DCMAKE_BUILD_TYPE=Release \
-#             -DGGML_BACKEND_DL=ON \
-#             -DGGML_NATIVE=OFF \
-#             -DCMAKE_INSTALL_RPATH='$ORIGIN' \
-#             -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
-#             -DGGML_CPU_ALL_VARIANTS=ON \
-#             -DGPU_TARGETS="${{ matrix.gpu_targets }}" \
-#             -DGGML_HIP=ON \
-#             -DHIP_PLATFORM=amd \
-#             -DHF_UI_VERSION=${{ needs.get-version.outputs.ui_version }} \
-#             ${{ env.CMAKE_ARGS }}
-#           cmake --build build --config Release -j $(nproc)
+          # Set environment variables
+          echo "ROCM_PATH=$ROCM_PATH" >> $GITHUB_ENV
+          echo "CMAKE_PREFIX_PATH=$CMAKE_PATH" >> $GITHUB_ENV
+          echo "HIP_PATH=$ROCM_PATH" >> $GITHUB_ENV
+          echo "PATH=$BIN_PATH:${PATH}" >> $GITHUB_ENV
+          echo "LD_LIBRARY_PATH=$ROCM_PATH/lib:${LD_LIBRARY_PATH:-}" >> $GITHUB_ENV
 
-#       # - name: ccache-clear
-#       #   uses: ./.github/actions/ccache-clear
-#       #   with:
-#       #     key: release-ubuntu-22.04-rocm-${{ matrix.ROCM_VERSION }}
+          # Keep venv activated for subsequent steps
+          echo "$(pwd)/.venv/bin" >> $GITHUB_PATH
 
-#       - name: Determine tag name
-#         id: tag
-#         uses: ./.github/actions/get-tag-name
+      - name: Build with native CMake HIP support
+        id: cmake_build
+        run: |
+          cmake -B build -S . \
+            -DCMAKE_HIP_COMPILER="$(hipconfig -l)/clang" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DGGML_BACKEND_DL=ON \
+            -DGGML_NATIVE=OFF \
+            -DCMAKE_INSTALL_RPATH='$ORIGIN' \
+            -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
+            -DGGML_CPU_ALL_VARIANTS=ON \
+            -DGPU_TARGETS="${{ matrix.gpu_targets }}" \
+            -DGGML_HIP=ON \
+            -DHIP_PLATFORM=amd \
+            -DHF_UI_VERSION=${{ needs.get-version.outputs.ui_version }} \
+            ${{ env.CMAKE_ARGS }}
+          cmake --build build --config Release -j $(nproc)
 
-#       - name: Get ROCm short version
-#         run: echo "ROCM_VERSION_SHORT=$(echo '${{ matrix.ROCM_VERSION }}' | cut -d '.' -f 1,2)" >> $GITHUB_ENV
+      - name: Determine tag name
+        id: tag
+        uses: ./.github/actions/get-tag-name
 
-#       - name: Pack artifacts
-#         id: pack_artifacts
-#         run: |
-#           cp LICENSE ./build/bin/
-#           tar -czvf llama-${{ steps.tag.outputs.name }}-bin-ubuntu-rocm-${{ env.ROCM_VERSION_SHORT }}-${{ matrix.build }}.tar.gz --transform "s,^\.,llama-${{ steps.tag.outputs.name }}," -C ./build/bin .
+      - name: Get ROCm short version
+        run: echo "ROCM_VERSION_SHORT=$(echo '${{ matrix.ROCM_VERSION }}' | cut -d '.' -f 1,2)" >> $GITHUB_ENV
 
-#       - name: Upload artifacts
-#         uses: actions/upload-artifact@v6
-#         with:
-#           path: llama-${{ steps.tag.outputs.name }}-bin-ubuntu-rocm-${{ env.ROCM_VERSION_SHORT }}-${{ matrix.build }}.tar.gz
-#           name: llama-bin-ubuntu-rocm-${{ env.ROCM_VERSION_SHORT }}-${{ matrix.build }}.tar.gz
+      - name: Pack artifacts
+        id: pack_artifacts
+        run: |
+          cp LICENSE ./build/bin/
+          tar -czvf llama-${{ steps.tag.outputs.name }}-bin-ubuntu-rocm-${{ env.ROCM_VERSION_SHORT }}-${{ matrix.build }}.tar.gz --transform "s,^\.,llama-${{ steps.tag.outputs.name }}," -C ./build/bin .
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          path: llama-${{ steps.tag.outputs.name }}-bin-ubuntu-rocm-${{ env.ROCM_VERSION_SHORT }}-${{ matrix.build }}.tar.gz
+          name: llama-bin-ubuntu-rocm-${{ env.ROCM_VERSION_SHORT }}-${{ matrix.build }}.tar.gz
+
+      - name: ccache-clear
+        uses: ./.github/actions/ccache-clear
+        with:
+          key: release-ubuntu-rocm-${{ matrix.ROCM_VERSION }}-${{ matrix.build }}
 
   ios-xcode:
     needs: [check-release, get-version]
@@ -1569,6 +1582,8 @@ jobs:
     # https://docs.github.com/en/actions/security-for-github-actions/security-guides/automatic-token-authentication#modifying-the-permissions-for-the-github_token
     permissions:
         contents: write # for creating release
+        id-token: write
+        attestations: write
 
     runs-on: ubuntu-slim
 
@@ -1577,14 +1592,14 @@ jobs:
       - windows
       - windows-cpu
       - windows-cuda
-      #- windows-sycl
+      - windows-sycl
       - windows-rocm
       - windows-openvino
-      #- ubuntu-22-rocm
+      - ubuntu-22-rocm
       - ubuntu-cpu
       - ubuntu-vulkan
       - ubuntu-24-openvino
-      #- ubuntu-24-sycl
+      - ubuntu-24-sycl
       - android-arm64
       - macos-cpu
       - ios-xcode
@@ -1662,6 +1677,12 @@ jobs:
         run: |
           tar -czvf release/llama-${{ steps.tag.outputs.name }}-ui.tar.gz --transform "s,^\.,llama-${{ steps.tag.outputs.name }}," -C ./ui-dist .
 
+      - name: Attest release artifacts
+        id: attest
+        uses: actions/attest@v4
+        with:
+          subject-path: 'release/*'
+
       - name: Create and push git tag
         run: |
           TAG="${{ steps.tag.outputs.name }}"
@@ -1679,6 +1700,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: ${{ steps.tag.outputs.name }}
+          prerelease: true
           body: |
             <details open>
 
@@ -1688,6 +1710,9 @@ jobs:
 
             **Website:**
             - <https://llama.app>
+
+            **Attestations:**
+            - <${{ steps.attest.outputs.attestation-url }}>
 
             **macOS/iOS:**
             - [macOS Apple Silicon (arm64)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-macos-arm64.tar.gz)
@@ -1701,7 +1726,7 @@ jobs:
             - [Ubuntu s390x (CPU)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-s390x.tar.gz)
             - [Ubuntu x64 (Vulkan)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-vulkan-x64.tar.gz)
             - [Ubuntu arm64 (Vulkan)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-vulkan-arm64.tar.gz)
-            - Ubuntu x64 (ROCm 7.14)[DISABLED](https://github.com/ggml-org/llama.cpp/pull/26969)
+            - [Ubuntu x64 (ROCm 7.14)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-rocm-7.14-x64.tar.gz)
             - [Ubuntu x64 (OpenVINO)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-openvino-${{ needs.ubuntu-24-openvino.outputs.openvino_version }}-x64.tar.gz)
             - [Ubuntu x64 (SYCL FP32)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-sycl-fp32-x64.tar.gz)
             - [Ubuntu x64 (SYCL FP16)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-ubuntu-sycl-fp16-x64.tar.gz)

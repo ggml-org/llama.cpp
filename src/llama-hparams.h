@@ -101,6 +101,11 @@ struct llama_hparams {
     uint32_t n_group_used       = 0;
     uint32_t n_group_experts    = 0;
 
+    // MLA + SWA (i.e. dots3note)
+    uint32_t n_lora_kv_swa           = 0;
+    uint32_t n_embd_head_k_mla_swa   = 0;
+    uint32_t n_embd_head_v_mla_swa   = 0;
+
     float    expert_group_scale   = 0.05f;
     float    expert_weights_scale = 0.0f;
     bool     expert_weights_norm  = false;
@@ -143,6 +148,10 @@ struct llama_hparams {
     float    yarn_beta_slow   =  1.0f;
 
     std::array<int, 4> rope_sections;
+
+    // Per-layer RoPE enable flags (1 = use RoPE, 0 = NoPE)
+    // by default, all layers use RoPE (controlled by rope_finetuned)
+    std::array<uint32_t, LLAMA_MAX_LAYERS> rope_pattern;
 
     // Sliding Window Attention (SWA)
     llama_swa_type swa_type = LLAMA_SWA_TYPE_NONE;

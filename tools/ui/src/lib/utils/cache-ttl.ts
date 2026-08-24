@@ -31,14 +31,47 @@ interface CacheEntry<T> {
 
 export class TTLCache<K extends string, V> {
 	private cache = new Map<K, CacheEntry<V>>();
-	private readonly ttlMs: number;
 	private readonly maxEntries: number;
 	private readonly onEvict?: (key: string, value: unknown) => void;
+	private readonly ttlMs: number;
+
+	/**
+	 * Get the number of entries (including potentially expired ones).
+	 */
+	get size(): number {
+		return this.cache.size;
+	}
+
+	/**
+	 * Clear all entries from cache.
+	 */
+	clear(): void {
+		if (this.onEvict) {
+			for (const [key, entry] of this.cache) {
+				this.onEvict(key, entry.value);
+			}
+		}
+
+		this.cache.clear();
+	}
 
 	constructor(options: TTLCacheOptions = {}) {
 		this.ttlMs = options.ttlMs ?? CACHE.DEFAULT_TTL_MS;
 		this.maxEntries = options.maxEntries ?? CACHE.DEFAULT_MAX_ENTRIES;
 		this.onEvict = options.onEvict;
+	}
+
+	/**
+	 * Delete a specific key from cache.
+	 */
+	delete(key: K): boolean {
+		const entry = this.cache.get(key);
+
+		if (entry && this.onEvict) {
+			this.onEvict(key, entry.value);
+		}
+
+		return this.cache.delete(key);
 	}
 
 	/**
@@ -62,25 +95,6 @@ export class TTLCache<K extends string, V> {
 	}
 
 	/**
-	 * Set a value in cache with TTL.
-	 */
-	set(key: K, value: V, customTtlMs?: number): void {
-		// Evict oldest entries if at capacity
-		if (this.cache.size >= this.maxEntries && !this.cache.has(key)) {
-			this.evictOldest();
-		}
-
-		const ttl = customTtlMs ?? this.ttlMs;
-		const now = Date.now();
-
-		this.cache.set(key, {
-			expiresAt: now + ttl,
-			lastAccessed: now,
-			value
-		});
-	}
-
-	/**
 	 * Check if key exists and is not expired.
 	 */
 	has(key: K): boolean {
@@ -98,36 +112,19 @@ export class TTLCache<K extends string, V> {
 	}
 
 	/**
-	 * Delete a specific key from cache.
+	 * Get all valid (non-expired) keys.
 	 */
-	delete(key: K): boolean {
-		const entry = this.cache.get(key);
+	keys(): K[] {
+		const now = Date.now();
+		const validKeys: K[] = [];
 
-		if (entry && this.onEvict) {
-			this.onEvict(key, entry.value);
-		}
-
-		return this.cache.delete(key);
-	}
-
-	/**
-	 * Clear all entries from cache.
-	 */
-	clear(): void {
-		if (this.onEvict) {
-			for (const [key, entry] of this.cache) {
-				this.onEvict(key, entry.value);
+		for (const [key, entry] of this.cache) {
+			if (now <= entry.expiresAt) {
+				validKeys.push(key);
 			}
 		}
 
-		this.cache.clear();
-	}
-
-	/**
-	 * Get the number of entries (including potentially expired ones).
-	 */
-	get size(): number {
-		return this.cache.size;
+		return validKeys;
 	}
 
 	/**
@@ -150,38 +147,22 @@ export class TTLCache<K extends string, V> {
 	}
 
 	/**
-	 * Get all valid (non-expired) keys.
+	 * Set a value in cache with TTL.
 	 */
-	keys(): K[] {
+	set(key: K, value: V, customTtlMs?: number): void {
+		// Evict oldest entries if at capacity
+		if (this.cache.size >= this.maxEntries && !this.cache.has(key)) {
+			this.evictOldest();
+		}
+
+		const ttl = customTtlMs ?? this.ttlMs;
 		const now = Date.now();
-		const validKeys: K[] = [];
 
-		for (const [key, entry] of this.cache) {
-			if (now <= entry.expiresAt) {
-				validKeys.push(key);
-			}
-		}
-
-		return validKeys;
-	}
-
-	/**
-	 * Evict the oldest (least recently accessed) entry.
-	 */
-	private evictOldest(): void {
-		let oldestKey: K | null = null;
-		let oldestTime = Infinity;
-
-		for (const [key, entry] of this.cache) {
-			if (entry.lastAccessed < oldestTime) {
-				oldestTime = entry.lastAccessed;
-				oldestKey = key;
-			}
-		}
-
-		if (oldestKey !== null) {
-			this.delete(oldestKey);
-		}
+		this.cache.set(key, {
+			expiresAt: now + ttl,
+			lastAccessed: now,
+			value
+		});
 	}
 
 	/**
@@ -205,6 +186,25 @@ export class TTLCache<K extends string, V> {
 
 		return true;
 	}
+
+	/**
+	 * Evict the oldest (least recently accessed) entry.
+	 */
+	private evictOldest(): void {
+		let oldestKey: K | null = null;
+		let oldestTime = Infinity;
+
+		for (const [key, entry] of this.cache) {
+			if (entry.lastAccessed < oldestTime) {
+				oldestTime = entry.lastAccessed;
+				oldestKey = key;
+			}
+		}
+
+		if (oldestKey !== null) {
+			this.delete(oldestKey);
+		}
+	}
 }
 
 /**
@@ -213,12 +213,24 @@ export class TTLCache<K extends string, V> {
  */
 export class ReactiveTTLMap<K extends string, V> {
 	private entries = $state<Map<K, CacheEntry<V>>>(new Map());
-	private readonly ttlMs: number;
 	private readonly maxEntries: number;
+	private readonly ttlMs: number;
+
+	get size(): number {
+		return this.entries.size;
+	}
+
+	clear(): void {
+		this.entries.clear();
+	}
 
 	constructor(options: TTLCacheOptions = {}) {
 		this.ttlMs = options.ttlMs ?? CACHE.DEFAULT_TTL_MS;
 		this.maxEntries = options.maxEntries ?? CACHE.DEFAULT_MAX_ENTRIES;
+	}
+
+	delete(key: K): boolean {
+		return this.entries.delete(key);
 	}
 
 	get(key: K): V | null {
@@ -237,21 +249,6 @@ export class ReactiveTTLMap<K extends string, V> {
 		return entry.value;
 	}
 
-	set(key: K, value: V, customTtlMs?: number): void {
-		if (this.entries.size >= this.maxEntries && !this.entries.has(key)) {
-			this.evictOldest();
-		}
-
-		const ttl = customTtlMs ?? this.ttlMs;
-		const now = Date.now();
-
-		this.entries.set(key, {
-			expiresAt: now + ttl,
-			lastAccessed: now,
-			value
-		});
-	}
-
 	has(key: K): boolean {
 		const entry = this.entries.get(key);
 
@@ -264,18 +261,6 @@ export class ReactiveTTLMap<K extends string, V> {
 		}
 
 		return true;
-	}
-
-	delete(key: K): boolean {
-		return this.entries.delete(key);
-	}
-
-	clear(): void {
-		this.entries.clear();
-	}
-
-	get size(): number {
-		return this.entries.size;
 	}
 
 	prune(): number {
@@ -291,6 +276,21 @@ export class ReactiveTTLMap<K extends string, V> {
 		}
 
 		return pruned;
+	}
+
+	set(key: K, value: V, customTtlMs?: number): void {
+		if (this.entries.size >= this.maxEntries && !this.entries.has(key)) {
+			this.evictOldest();
+		}
+
+		const ttl = customTtlMs ?? this.ttlMs;
+		const now = Date.now();
+
+		this.entries.set(key, {
+			expiresAt: now + ttl,
+			lastAccessed: now,
+			value
+		});
 	}
 
 	private evictOldest(): void {

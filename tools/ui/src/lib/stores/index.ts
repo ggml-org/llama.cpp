@@ -18,34 +18,38 @@
  */
 
 // CHAT / MESSAGING
-export { chatStore } from './chat.svelte';
+export { chatStore } from './chat/index.svelte';
 
-export { draftMessagesStore } from './draft-messages.svelte';
+export { draftMessagesStore } from './chat/drafts.svelte';
 
-// AGENTIC (multi-turn tool orchestration)
-export { agenticStore } from './agentic.svelte';
-
-// CONVERSATIONS
-export { conversationsStore } from './conversations.svelte';
+// CONVERSATION TABS
+export { tabsStore } from './tabs.svelte';
 
 // CONTEXT STATS (active conversation context window usage)
-export { contextStatsStore } from './context-stats.svelte';
+export { contextStatsStore } from './chat/context-stats.svelte';
+
+// AGENTIC (multi-turn tool orchestration)
+export { agenticStore } from './agentic/index.svelte';
+
+// CONVERSATIONS
+export { conversationsStore } from './conversations/index.svelte';
 
 // MCP
-export { mcpStore } from './mcp.svelte';
-
-export { mcpResourceStore } from './mcp-resources.svelte';
+export { mcpStore } from './mcp/index.svelte';
 
 // MODELS
-export { modelsStore } from './models.svelte';
+export { modelsStore } from './models/index.svelte';
 
 // SERVER
 export { serverStore } from './server.svelte';
 
-// SETTINGS / UI PREFERENCES
-export { settingsStore } from './settings.svelte';
+// UI / LAYOUT
+export { uiStore } from './ui.svelte';
 
-export { settingsReferrer } from './settings-referrer.svelte';
+// SETTINGS / UI PREFERENCES
+export { settingsStore } from './settings/index.svelte';
+
+export { settingsReferrer } from './settings/referrer.svelte';
 
 export { permissionsStore } from './permissions.svelte';
 

@@ -358,6 +358,15 @@ static bool decode_audio_from_buf(const unsigned char * buf_in, size_t len, int 
 
 } // namespace audio_helpers
 
+static bool is_webp_file(const unsigned char * buf, size_t len) {
+    // WEBP ref: https://developers.google.com/speed/webp/docs/riff_container
+    return len >= 12 && memcmp(buf, "RIFF", 4) == 0 && memcmp(buf + 8, "WEBP", 4) == 0;
+}
+
+#ifdef MTMD_VIDEO
+static mtmd_bitmap * decode_webp_with_ffmpeg(mtmd_context * mctx, const unsigned char * buf, size_t len, bool placeholder);
+#endif
+
 mtmd_helper_bitmap_wrapper mtmd_helper_bitmap_init_from_buf(mtmd_context * ctx, const unsigned char * buf, size_t len, bool placeholder) {
     // calculate the hash if needed
     std::string id;
@@ -396,6 +405,19 @@ mtmd_helper_bitmap_wrapper mtmd_helper_bitmap_init_from_buf(mtmd_context * ctx, 
         }
         // otherwise, fallthrough to video decoding (if supported)
     }
+
+#ifdef MTMD_VIDEO
+    // stb_image does not support webp; decode it with ffmpeg as a single frame
+    if (!result && is_webp_file(buf, len)) {
+        result = decode_webp_with_ffmpeg(ctx, buf, len, placeholder);
+        if (!result) {
+            LOG_ERR("%s: failed to decode webp buffer\n", __func__);
+            return {nullptr, nullptr};
+        }
+        mtmd_bitmap_set_id(result, id.empty() ? nullptr : id.c_str());
+        return {result, nullptr};
+    }
+#endif
 
     // last try: load as video
 #ifdef MTMD_VIDEO
@@ -727,7 +749,9 @@ struct mtmd_helper_video {
 
         LOG_DBG("%s: frame %d read OK\n", __func__, current_frame);
         current_frame++;
-        return mtmd_bitmap_init(info.width, info.height, frame_buf.data());
+        mtmd_bitmap * frame = mtmd_bitmap_init(info.width, info.height, frame_buf.data());
+        mtmd_bitmap_set_mergeable(frame, true);
+        return frame;
     }
 
     int32_t read_next(mtmd_bitmap ** out_bitmap, char ** out_text) {
@@ -817,6 +841,33 @@ static std::string video_resolve_bin(const char * bin_dir, const char * name) {
 #endif
     return result;
 }
+
+#ifdef MTMD_VIDEO
+static mtmd_bitmap * decode_webp_with_ffmpeg(mtmd_context * mctx, const unsigned char * buf, size_t len, bool placeholder) {
+    auto params = mtmd_helper_video_init_params_default();
+    mtmd_helper_video vctx;
+    vctx.mctx        = mctx;
+    vctx.input_buf.assign(buf, buf + len);
+    vctx.ffmpeg_bin  = video_resolve_bin(params.ffmpeg_bin_dir, "ffmpeg");
+    vctx.ffprobe_bin = video_resolve_bin(params.ffmpeg_bin_dir, "ffprobe");
+    if (!vctx.probe(0.0f)) {
+        return nullptr;
+    }
+    if (placeholder) {
+        return mtmd_bitmap_init(vctx.info.width, vctx.info.height, nullptr);
+    }
+    // still image: the fps filter would output no frame, so disable it
+    vctx.fps_target = 0.0f;
+    if (!vctx.start_ffmpeg(0.0f)) {
+        return nullptr;
+    }
+    mtmd_bitmap * frame = vctx.read_next_frame();
+    if (frame) {
+        mtmd_bitmap_set_mergeable(frame, false);
+    }
+    return frame;
+}
+#endif
 
 mtmd_helper_video * mtmd_helper_video_init(
         mtmd_context * mctx,

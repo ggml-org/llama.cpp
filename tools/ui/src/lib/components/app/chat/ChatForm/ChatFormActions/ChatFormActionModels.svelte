@@ -81,10 +81,10 @@
 
 	$effect(() => {
 		if (activeModelId) {
-			const cached = modelsStore.getModelProps(activeModelId);
+			const cached = modelsStore.props.getModelProps(activeModelId);
 
 			if (!cached) {
-				modelsStore.fetchModelProps(activeModelId).then(() => {
+				modelsStore.props.fetchModelProps(activeModelId).then(() => {
 					modelPropsVersion++;
 				});
 			}
@@ -94,19 +94,21 @@
 	$effect(() => {
 		void modelPropsVersion;
 
-		hasAudioModality = activeModelId ? modelsStore.modelSupportsAudio(activeModelId) : false;
+		hasAudioModality = activeModelId ? modelsStore.props.modelSupportsAudio(activeModelId) : false;
 	});
 
 	$effect(() => {
 		void modelPropsVersion;
 
-		hasVideoModality = activeModelId ? modelsStore.modelSupportsVideo(activeModelId) : false;
+		hasVideoModality = activeModelId ? modelsStore.props.modelSupportsVideo(activeModelId) : false;
 	});
 
 	$effect(() => {
 		void modelPropsVersion;
 
-		hasVisionModality = activeModelId ? modelsStore.modelSupportsVision(activeModelId) : false;
+		hasVisionModality = activeModelId
+			? modelsStore.props.modelSupportsVision(activeModelId)
+			: false;
 	});
 
 	$effect(() => {

@@ -209,11 +209,9 @@ class NemotronHModel(GraniteHybridModel):
         # calling the parent __init__. This is because the parent constructor
         # uses self.model_arch to build the tensor name map, and all MoE-specific
         # mappings would be missed if it were called with the default non-MoE arch.
-        # LoRA conversion passes AutoConfig-derived hparams, which may omit required
-        # fields such as num_hidden_layers. Load complete config.json directly.
-        with open(args[0] / "config.json", "r", encoding="utf-8") as f:
-            hparams = json.load(f)
-        kwargs["hparams"] = hparams
+        hparams = kwargs.pop("hparams", None)
+        if hparams is None:
+            hparams = ModelBase.load_hparams(args[0], self.is_mistral_format)
         has_moe_params = (
             "num_experts_per_tok" in hparams
             or (isinstance(hparams.get("llm_config"), dict) and "num_experts_per_tok" in hparams["llm_config"])
@@ -221,8 +219,11 @@ class NemotronHModel(GraniteHybridModel):
         if has_moe_params:
             self.model_arch = gguf.MODEL_ARCH.NEMOTRON_H_MOE
             self.is_moe = True
+        layers_block_type = hparams.get("layers_block_type")
+        if layers_block_type is not None:
+            hparams["num_hidden_layers"] = len(layers_block_type)
 
-        super().__init__(*args, **kwargs)
+        super().__init__(*args, hparams=hparams, **kwargs)
 
         # Save the top-level head_dim for later
         self.head_dim = self.hparams.get("head_dim", self.hparams.get("attention_head_dim"))
