@@ -81,6 +81,7 @@ layout (constant_id = 10) const uint WARP = 32;
 
 #define BK 32
 #define BK_STEP 2
+#define GROUP_A_BUDGET (16u * 1024u * 1024u)
 
 const uint QPITCH = BK_STEP * (BK / 4) + 4;
 
@@ -106,14 +107,31 @@ shared int32_t cm_layout_probe[TM * TN];
 #include "mul_mmq_cm1_funcs.glsl"
 
 void main() {
-    const uint ic = gl_WorkGroupID.y;
+    const uint blocks_m = (p.M + BM - 1) / BM;
+    const uint ik = gl_WorkGroupID.x / blocks_m;
 
 #ifdef MUL_MAT_ID
+    const uint ic = gl_WorkGroupID.y;
+    const uint ir = gl_WorkGroupID.x % blocks_m;
     const uint expert_idx = gl_WorkGroupID.z;
     if (ic * BN >= data_expert_count[expert_idx]) {
         return;
     }
+#else
+    // L2-friendly workgroup scheduling
+    const uint blocks_n = (p.N + BN - 1) / BN;
+    const uint a_panel_bytes = BM * p.K + (BM * p.K) / 16;
+    const uint group_m = clamp(GROUP_A_BUDGET / max(a_panel_bytes, 1u), 1u, min(blocks_m, 32u));
+    const uint tiles_per_group = group_m * blocks_n;
+    const uint lin = gl_WorkGroupID.y * blocks_m + (gl_WorkGroupID.x % blocks_m);
+    const uint group_id = lin / tiles_per_group;
+    const uint first_m = group_id * group_m;
+    const uint gsize = min(blocks_m - first_m, group_m);
+    const uint in_group = lin - group_id * tiles_per_group;
+    const uint ir = first_m + in_group % gsize;
+    const uint ic = in_group / gsize;
 #endif
+
 #ifdef NEEDS_INIT_IQ_SHMEM
     init_iq_shmem(gl_WorkGroupSize);
 #endif
@@ -129,10 +147,6 @@ void main() {
 
     const uint batch_idx_a = i03 * p.ne02 + i02;
 #endif
-
-    const uint blocks_m = (p.M + BM - 1) / BM;
-    const uint ir = gl_WorkGroupID.x % blocks_m;
-    const uint ik = gl_WorkGroupID.x / blocks_m;
 
     const uint WNITER = (WM * WN) / (WARP * TM * TN * WMITER);
     const uint WSUBM = WM / WMITER;
