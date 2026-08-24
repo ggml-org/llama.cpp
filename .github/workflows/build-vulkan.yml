@@ -55,7 +55,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: vulkan-ubuntu-24.04-arm-new
+          key: vulkan-ubuntu-24.04-arm
           variant: ccache
           evict-old-files: 1d
           save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
@@ -78,7 +78,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         with:
-          key: vulkan-ubuntu-24.04-arm-new
+          key: vulkan-ubuntu-24.04-arm
           older: 5m
           min: 1
           dry-run: ${{ github.event_name != 'push' || github.ref != 'refs/heads/master' }}
