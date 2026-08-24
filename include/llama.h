@@ -582,7 +582,6 @@ extern "C" {
     LLAMA_API int32_t llama_model_n_embd_out   (const struct llama_model * model);
     LLAMA_API int32_t llama_model_n_layer      (const struct llama_model * model);
     LLAMA_API int32_t llama_model_n_layer_nextn(const struct llama_model * model);
-    LLAMA_API int32_t llama_model_dflash_selector_top_k(const struct llama_model * model);
     LLAMA_API int32_t llama_model_n_head       (const struct llama_model * model);
     LLAMA_API int32_t llama_model_n_head_kv    (const struct llama_model * model);
     LLAMA_API int32_t llama_model_n_swa        (const struct llama_model * model);
