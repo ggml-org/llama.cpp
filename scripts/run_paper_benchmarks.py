@@ -37,9 +37,9 @@ def parse_args():
 
     parser = argparse.ArgumentParser(description="Run ICML 2025 Speculative Prefill Paper Benchmarks (RULER, LongBench QA, and Scaling)")
     parser.add_argument("-m", "--target-model", required=True, help="Target model path")
-    parser.add_argument("-md", "--draft-model", required=True, help="Draft model path")
+    parser.add_argument("-mpd", "-md", "--draft-model", "--spec-prefill-model", required=True, help="Draft model path")
     parser.add_argument("-ngl", "--n-gpu-layers", type=int, default=99)
-    parser.add_argument("-ngld", "--n-gpu-layers-draft", type=int, default=99)
+    parser.add_argument("-nglpd", "-ngld", "--n-gpu-layers-draft", "--spec-prefill-ngl", type=int, default=99)
     parser.add_argument("--percentages", default="1.0,0.50,0.30,0.15", help="Keep percentages")
     parser.add_argument("--chunk-size", type=int, default=32)
     parser.add_argument("--lookahead", type=int, default=4)

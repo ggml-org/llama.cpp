@@ -11,9 +11,9 @@ def parse_args():
 
     parser = argparse.ArgumentParser(description="Evaluate Speculative Prefill Quality Impact (Needle-in-a-Haystack & QA)")
     parser.add_argument("-m", "--target-model", required=True, help="Path to target model GGUF")
-    parser.add_argument("-md", "--draft-model", help="Path to draft model GGUF")
+    parser.add_argument("-mpd", "-md", "--draft-model", "--spec-prefill-model", help="Path to prefill draft model GGUF")
     parser.add_argument("-ngl", "--n-gpu-layers", type=int, default=99, help="GPU layers for target model")
-    parser.add_argument("-ngld", "--n-gpu-layers-draft", type=int, default=99, help="GPU layers for draft model")
+    parser.add_argument("-nglpd", "-ngld", "--n-gpu-layers-draft", "--spec-prefill-ngl", type=int, default=99, help="GPU layers for draft model")
     parser.add_argument("--percentages", default="1.0,0.50,0.30,0.20,0.15", help="Comma-separated keep percentages")
     parser.add_argument("--chunk-size", type=int, default=32, help="Chunk size (default: 32)")
     parser.add_argument("--lookahead", type=int, default=4, help="Lookahead count (default: 4)")

@@ -25,8 +25,13 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    if (params.speculative.draft.mparams.empty()) {
-        LOG_ERR("%s: draft model is required for speculative prefill (specify with -md or --spec-draft-model)\n", __func__);
+    common_params_model dft_model = params.speculative.prefill.model;
+    if (dft_model.empty()) {
+        dft_model = params.speculative.draft.mparams;
+    }
+
+    if (dft_model.empty()) {
+        LOG_ERR("%s: draft model is required for speculative prefill (specify with -mpd, --spec-prefill-model, or -md)\n", __func__);
         return 1;
     }
 
@@ -50,6 +55,10 @@ int main(int argc, char ** argv) {
     // load draft model with standard attention to allow attention extraction
     LOG_INF("%s: loading draft model...\n", __func__);
     common_params params_dft = common_base_params_to_speculative(params);
+    params_dft.model = dft_model;
+    if (params.speculative.prefill.n_gpu_layers != -1) {
+        params_dft.n_gpu_layers = params.speculative.prefill.n_gpu_layers;
+    }
     params_dft.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED; // standard attention needed to capture kq_soft_max weights
 
     auto init_dft = common_init_from_params(params_dft);

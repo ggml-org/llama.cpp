@@ -361,6 +361,7 @@ static bool spec_types_is_default(const common_params & params) {
 common_models_handler common_models_handler_init(const common_params & params, llama_example curr_ex) {
     common_download_hf_plan plan;
     common_download_hf_plan plan_spec;
+    common_download_hf_plan plan_prefill;
     common_download_opts opts;
 
     const bool spec_type_draft_mtp = std::find(params.speculative.types.begin(),
@@ -413,7 +414,11 @@ common_models_handler common_models_handler_init(const common_params & params, l
         plan_spec = common_download_get_hf_plan(params.speculative.draft.mparams, opts_spec);
     }
 
-    return common_models_handler{plan, plan_spec, opts};
+    if (!params.speculative.prefill.model.hf_repo.empty()) {
+        plan_prefill = common_download_get_hf_plan(params.speculative.prefill.model, opts);
+    }
+
+    return common_models_handler{plan, plan_spec, plan_prefill, opts};
 }
 
 bool common_models_handler_is_preset_repo(const common_models_handler & handler) {
@@ -461,8 +466,9 @@ static std::vector<common_download_task> build_url_tasks(const common_params_mod
 void common_models_handler_apply(common_models_handler & handler, common_params & params, common_download_callback * callback) {
     std::vector<common_download_task> tasks;
 
-    auto & plan      = handler.plan;
-    auto & plan_spec = handler.plan_spec;
+    auto & plan         = handler.plan;
+    auto & plan_spec    = handler.plan_spec;
+    auto & plan_prefill = handler.plan_prefill;
 
     auto opts = handler.opts; // copy
     opts.callback = callback;
@@ -478,6 +484,7 @@ void common_models_handler_apply(common_models_handler & handler, common_params 
     handle_url(params.model);
     handle_url(params.mmproj);
     handle_url(params.speculative.draft.mparams);
+    handle_url(params.speculative.prefill.model);
 
     // optionally, if docker repo is set, resolve it
     if (!params.model.docker_repo.empty()) {
@@ -512,6 +519,13 @@ void common_models_handler_apply(common_models_handler & handler, common_params 
         task.opts       = opts;
         tasks.push_back(task);
         had_spec_url = true;
+    }
+    if (!params.speculative.prefill.model.url.empty()) {
+        common_download_task task;
+        task.url        = params.speculative.prefill.model.url;
+        task.local_path = params.speculative.prefill.model.path;
+        task.opts       = opts;
+        tasks.push_back(task);
     }
 
     // handle hf_plan tasks
@@ -624,6 +638,11 @@ void common_models_handler_apply(common_models_handler & handler, common_params 
     if (!plan_spec.model_files.empty() && !had_spec_url && !spec_sidecar_found) {
         add_tasks(plan_spec.model_files, plan_spec.primary, params.speculative.draft.mparams);
         had_spec_url = true;
+    }
+
+    // handle plan_prefill (e.g. --spec-prefill-hf)
+    if (!plan_prefill.model_files.empty()) {
+        add_tasks(plan_prefill.model_files, plan_prefill.primary, params.speculative.prefill.model);
     }
 
     if (!plan.model_files.empty()) {
@@ -4170,12 +4189,48 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_DRAFT_MODEL"));
     add_opt(common_arg(
-        {"--spec-prefill"},
+        {"--spec-prefill", "--speculative-prefill"},
         "enable speculative prefill using draft model to filter prompt tokens",
         [](common_params & params) {
             params.speculative.prefill.enabled = true;
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_PREFILL"));
+    add_opt(common_arg(
+        {"--spec-prefill-draft-model", "--spec-prefill-model", "-mpd", "--speculative-prefill-model", "--speculative-prefill-draft-model"}, "FNAME",
+        "draft model for speculative prefill (default: unused)",
+        [](common_params & params, const std::string & value) {
+            params.speculative.prefill.model.path    = value;
+            params.speculative.prefill.model.hf_file = value; // will be used if --spec-prefill-hf is set
+            params.speculative.prefill.enabled       = true;
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_PREFILL_MODEL"));
+    add_opt(common_arg(
+        {"--spec-prefill-draft-hf", "--spec-prefill-hf", "-hfpd", "--speculative-prefill-hf", "--speculative-prefill-draft-hf"}, "<user>/<model>[:quant]",
+        "Hugging Face model repository for speculative prefill draft model (default: unused)",
+        [](common_params & params, const std::string & value) {
+            params.speculative.prefill.model.hf_repo = value;
+            params.speculative.prefill.enabled       = true;
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_PREFILL_HF"));
+    add_opt(common_arg(
+        {"--spec-prefill-draft-ngl", "--spec-prefill-ngl", "-nglpd", "--speculative-prefill-ngl", "--speculative-prefill-draft-ngl"}, "N",
+        string_format("max. number of speculative prefill draft model layers to store in VRAM, either an exact number, 'auto', or 'all' (default: %s)",
+            params.speculative.prefill.n_gpu_layers == -1 ? "auto" : "all"),
+        [](common_params & params, const std::string & value) {
+            if (value == "auto") {
+                params.speculative.prefill.n_gpu_layers = -1;
+            } else if (value == "all") {
+                params.speculative.prefill.n_gpu_layers = -2;
+            } else {
+                params.speculative.prefill.n_gpu_layers = std::stoi(value);
+            }
+            if (!llama_supports_gpu_offload()) {
+                fprintf(stderr, "warning: no usable GPU found, --spec-prefill-ngl option will be ignored\n");
+                fprintf(stderr, "warning: one possible reason is that llama.cpp was compiled without GPU support\n");
+                fprintf(stderr, "warning: consult docs/build.md for compilation instructions\n");
+            }
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_PREFILL_N_GPU_LAYERS"));
     add_opt(common_arg(
         {"--spec-prefill-p", "--spec-prefill-percentage"}, "P",
         string_format("fraction of prompt tokens to retain during speculative prefill (default: %.2f)", (double) params.speculative.prefill.percentage),
