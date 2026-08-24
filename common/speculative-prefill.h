@@ -31,7 +31,7 @@ std::vector<int32_t> common_speculative_prefill_select_indices(
 // execute draft prefill, lookahead decoding, attention collection, and index selection
 common_speculative_prefill_result common_speculative_prefill_execute(
     llama_context * ctx_dft,
-    struct common_sampler * smpl_dft,
+    common_sampler * smpl_dft,
     const std::vector<llama_token> & prompt,
     llama_seq_id seq_id,
     const common_params_speculative_prefill & params);

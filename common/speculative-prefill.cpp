@@ -146,7 +146,7 @@ struct cb_attn_collector_data {
     std::vector<std::vector<float>> layer_attns;
 };
 
-static bool cb_collect_attn(struct ggml_tensor * t, bool ask, void * user_data) {
+static bool cb_collect_attn(ggml_tensor * t, bool ask, void * user_data) {
     if (ask) {
         return true;
     }
@@ -186,7 +186,7 @@ static bool cb_collect_attn(struct ggml_tensor * t, bool ask, void * user_data) 
 
 common_speculative_prefill_result common_speculative_prefill_execute(
     llama_context * ctx_dft,
-    struct common_sampler * smpl_dft,
+    common_sampler * smpl_dft,
     const std::vector<llama_token> & prompt,
     llama_seq_id seq_id,
     const common_params_speculative_prefill & params) {
