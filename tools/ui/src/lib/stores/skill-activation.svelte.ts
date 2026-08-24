@@ -194,6 +194,9 @@ export class DurableSkillActivationStore implements SkillActivationStore {
 
 		this.mirrorActive(input.conversationId, assistant);
 		this.mirrorActive(input.conversationId, toolResult);
+		conversationsStore.applyConversationUpdate(input.conversationId, {
+			currNode: toolResult.id
+		});
 		conversationsStore.updateConversationTimestamp();
 
 		return toolResult;

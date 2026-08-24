@@ -50,6 +50,16 @@ vi.mock('$lib/stores/conversations/index.svelte', () => ({
 			return conversationsMockState.activeMessages;
 		},
 		addMessageToActive: vi.fn(),
+		applyConversationUpdate: vi.fn(
+			(id: string, updates: { currNode?: string | null }) => {
+				if (conversationsMockState.activeConversation?.id === id) {
+					conversationsMockState.activeConversation = {
+						...conversationsMockState.activeConversation,
+						...updates
+					};
+				}
+			}
+		),
 		getConversationMessages: conversationsMockState.getConversationMessages,
 		onConversationsDeleted: vi.fn(() => () => {}),
 		updateConversationTimestamp: vi.fn()
@@ -326,6 +336,7 @@ describe('DurableSkillActivationStore', () => {
 		);
 		expect(toolResultData.extra).toEqual([record.extra]);
 		expect(skillActivationStore.isActivated('conv-slash', 'opaque-id-1')).toBe(true);
+		expect(conversationsMockState.activeConversation?.currNode).toBe('created-tool-result');
 	});
 
 	it('recordActivation dedupes concurrent slash and model activations of the same opaque id into one durable record', async () => {
