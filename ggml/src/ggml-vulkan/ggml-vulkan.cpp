@@ -1880,14 +1880,7 @@ struct vk_op_pool2d_push_constants {
     int32_t p0; int32_t p1;
 };
 
-struct vk_op_rwkv_wkv6_push_constants {
-    uint32_t B;
-    uint32_t T;
-    uint32_t C;
-    uint32_t H;
-};
-
-struct vk_op_rwkv_wkv7_push_constants {
+struct vk_op_rwkv_wkv_push_constants {
     uint32_t B;
     uint32_t T;
     uint32_t C;
@@ -5940,9 +5933,9 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
     ggml_vk_create_pipeline(device, device->pipeline_pool1d_f32, "pool1d_f32", pool1d_f32_len, pool1d_f32_data, "main", 2, sizeof(vk_op_pool1d_push_constants), {512, 1, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_pool2d_f32, "pool2d_f32", pool2d_f32_len, pool2d_f32_data, "main", 2, sizeof(vk_op_pool2d_push_constants), {512, 1, 1}, {}, 1);
 
-    ggml_vk_create_pipeline(device, device->pipeline_rwkv_wkv6_f32, "rwkv_wkv6_f32", rwkv_wkv6_f32_len, rwkv_wkv6_f32_data, "main", 7, sizeof(vk_op_rwkv_wkv6_push_constants), {1, 1, 1}, {device->subgroup_size}, 1);
+    ggml_vk_create_pipeline(device, device->pipeline_rwkv_wkv6_f32, "rwkv_wkv6_f32", rwkv_wkv6_f32_len, rwkv_wkv6_f32_data, "main", 7, sizeof(vk_op_rwkv_wkv_push_constants), {1, 1, 1}, {device->subgroup_size}, 1);
 
-    ggml_vk_create_pipeline(device, device->pipeline_rwkv_wkv7_f32, "rwkv_wkv7_f32", rwkv_wkv7_f32_len, rwkv_wkv7_f32_data, "main", 8, sizeof(vk_op_rwkv_wkv7_push_constants), {1, 1, 1}, {device->subgroup_size}, 1);
+    ggml_vk_create_pipeline(device, device->pipeline_rwkv_wkv7_f32, "rwkv_wkv7_f32", rwkv_wkv7_f32_len, rwkv_wkv7_f32_data, "main", 8, sizeof(vk_op_rwkv_wkv_push_constants), {1, 1, 1}, {device->subgroup_size}, 1);
 
     ggml_vk_create_pipeline(device, device->pipeline_gated_linear_attn_f32, "gated_linear_attn_f32", gated_linear_attn_f32_len, gated_linear_attn_f32_data, "main", 6, sizeof(vk_op_gated_linear_attn_push_constants), {1, 1, 1}, {}, 1);
 
@@ -12790,7 +12783,7 @@ static void ggml_vk_add_id(ggml_backend_vk_context * ctx, vk_context& subctx, co
     });
 }
 
-static void ggml_vk_op_f32_wkv(ggml_backend_vk_context * ctx, vk_context& subctx, ggml_tensor * dst, const vk_op_rwkv_wkv6_push_constants&& pc, int version) {
+static void ggml_vk_op_f32_wkv(ggml_backend_vk_context * ctx, vk_context& subctx, ggml_tensor * dst, const vk_op_rwkv_wkv_push_constants&& pc, int version) {
     GGML_ASSERT(version == 6 || version == 7);
     int num_srcs = version == 6 ? 6 : 7;
 
