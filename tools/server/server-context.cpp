@@ -71,7 +71,6 @@ static bool server_gfx1030_spec_target_backend_sampling_profile(const common_par
 
     const auto profile = server_spec_target_backend_profile_select(params.speculative);
     if (!profile ||
-            !server_spec_target_backend_profile_auto_enabled(profile) ||
             (profile.has_ngram_mod &&
              !server_env_enabled("GGML_HIP_GFX1030_STACKED_TARGET_BACKEND_SAMPLING"))) {
         return false;
@@ -143,7 +142,8 @@ static server_auto_spec_target_backend_sampling_mode server_auto_spec_target_bac
     int32_t n_suppress = 0;
     llama_vocab_get_suppress_tokens(vocab, &n_suppress);
 
-    if (!server_gfx1030_spec_target_backend_sampling_profile(params) ||
+    const auto profile = server_spec_target_backend_profile_select(params.speculative);
+    if (!server_gfx1030_spec_target_backend_sampling_profile(params) || !profile ||
             llama_vocab_n_tokens(vocab) < 65536 || n_suppress != 0) {
         return server_auto_spec_target_backend_sampling_mode::NONE;
     }
@@ -151,7 +151,8 @@ static server_auto_spec_target_backend_sampling_mode server_auto_spec_target_bac
     if (server_greedy_backend_sampling_eligible(sampling)) {
         return server_auto_spec_target_backend_sampling_mode::GREEDY;
     }
-    if (server_env_enabled("GGML_HIP_GFX1030_STOCHASTIC_TARGET_BACKEND_SAMPLING") &&
+    if (server_spec_target_backend_profile_allows_stochastic_auto(profile) &&
+            server_env_enabled("GGML_HIP_GFX1030_STOCHASTIC_TARGET_BACKEND_SAMPLING") &&
             server_spec_target_backend_sampling_stochastic_eligible(sampling)) {
         return server_auto_spec_target_backend_sampling_mode::STOCHASTIC;
     }
@@ -1309,11 +1310,13 @@ private:
         // output buffers to exist before the first graph reserve. Prime those
         // buffers for the validated automatic speculative profile, then restore
         // the user default so request-level eligibility still controls activation.
+        const auto auto_profile = server_spec_target_backend_profile_select(params_base.speculative);
         const bool backend_sampling_default = params_base.sampling.backend_sampling;
         const bool prime_auto_backend_sampling = !backend_sampling_default &&
             server_gfx1030_spec_target_backend_sampling_profile(params_base) &&
             (server_greedy_backend_sampling_eligible(params_base.sampling) ||
-             (server_env_enabled("GGML_HIP_GFX1030_STOCHASTIC_TARGET_BACKEND_SAMPLING") &&
+             (server_spec_target_backend_profile_allows_stochastic_auto(auto_profile) &&
+              server_env_enabled("GGML_HIP_GFX1030_STOCHASTIC_TARGET_BACKEND_SAMPLING") &&
               server_spec_target_backend_sampling_stochastic_eligible(params_base.sampling)));
         if (prime_auto_backend_sampling) {
             params_base.sampling.backend_sampling = true;

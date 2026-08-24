@@ -34,22 +34,6 @@ static void expect_stochastic(bool expected, const common_params_sampling & samp
     require(server_spec_target_backend_sampling_stochastic_eligible(sampling) == expected, "stochastic eligibility");
 }
 
-static void set_test_env(const char * name, const char * value) {
-#if defined(_WIN32)
-    require(_putenv_s(name, value) == 0, "set test environment");
-#else
-    require(setenv(name, value, 1) == 0, "set test environment");
-#endif
-}
-
-static void clear_test_env(const char * name) {
-#if defined(_WIN32)
-    require(_putenv_s(name, "") == 0, "clear test environment");
-#else
-    require(unsetenv(name) == 0, "clear test environment");
-#endif
-}
-
 int main() {
     common_params_sampling practical;
     practical.temp = 1.0f;
@@ -119,12 +103,10 @@ int main() {
         make_spec({COMMON_SPECULATIVE_TYPE_DRAFT_MTP}, 4));
     const auto dflash_profile = server_spec_target_backend_profile_select(
         make_spec({COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH}, 5));
-    clear_test_env("GGML_HIP_GFX1030_DFLASH_TARGET_BACKEND_SAMPLING");
-    require(server_spec_target_backend_profile_auto_enabled(mtp_profile), "MTP auto gate remains enabled");
-    require(!server_spec_target_backend_profile_auto_enabled(dflash_profile), "DFlash auto gate defaults off");
-    set_test_env("GGML_HIP_GFX1030_DFLASH_TARGET_BACKEND_SAMPLING", "1");
-    require(server_spec_target_backend_profile_auto_enabled(dflash_profile), "DFlash explicit opt-in gate");
-    clear_test_env("GGML_HIP_GFX1030_DFLASH_TARGET_BACKEND_SAMPLING");
+    require(server_spec_target_backend_profile_allows_stochastic_auto(mtp_profile),
+        "MTP stochastic auto profile");
+    require(!server_spec_target_backend_profile_allows_stochastic_auto(dflash_profile),
+        "DFlash stochastic auto profile is rejected");
 
     expect_profile(
         make_spec({COMMON_SPECULATIVE_TYPE_NGRAM_MOD, COMMON_SPECULATIVE_TYPE_DRAFT_MTP}, 4),
