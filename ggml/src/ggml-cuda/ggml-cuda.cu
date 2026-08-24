@@ -28,6 +28,7 @@
 #include "ggml-cuda/fwht.cuh"
 #include "ggml-cuda/getrows.cuh"
 #include "ggml-cuda/im2col.cuh"
+#include "ggml-cuda/lerp.cuh"
 #include "ggml-cuda/mmf.cuh"
 #include "ggml-cuda/mmq.cuh"
 #include "ggml-cuda/mmvf.cuh"
@@ -3171,7 +3172,60 @@ static bool ggml_cuda_match_moe_weighted_reduction(
     return true;
 }
 
+static bool ggml_cuda_should_fuse_lerp(
+        const ggml_tensor * sub,
+        const ggml_tensor * repeat,
+        const ggml_tensor * mul,
+        const ggml_tensor * add,
+        const ggml_tensor ** x_prev,
+        const ggml_tensor ** cur,
+        const ggml_tensor ** weight) {
+    const ggml_tensor * delta = sub;
+    if (repeat) {
+        if (repeat->src[0] != sub) {
+            return false;
+        }
+        delta = repeat;
+    }
 
+    const ggml_tensor * w = nullptr;
+    if (mul->src[0] == delta) {
+        w = mul->src[1];
+    } else if (mul->src[1] == delta) {
+        w = mul->src[0];
+    } else {
+        return false;
+    }
+
+    const ggml_tensor * c = nullptr;
+    if (add->src[0] == mul) {
+        c = add->src[1];
+    } else if (add->src[1] == mul) {
+        c = add->src[0];
+    } else {
+        return false;
+    }
+
+    if (c != sub->src[1]) {
+        return false;
+    }
+
+    const ggml_tensor * xp = sub->src[0];
+    if (xp->type != GGML_TYPE_F32 || c->type != GGML_TYPE_F32 || w->type != GGML_TYPE_F32 || add->type != GGML_TYPE_F32) {
+        return false;
+    }
+    if (!ggml_can_repeat(xp, add) || !ggml_can_repeat(c, add) || !ggml_can_repeat(w, add)) {
+        return false;
+    }
+    if (!ggml_is_contiguous(xp) || !ggml_is_contiguous(c) || !ggml_is_contiguous(w) || !ggml_is_contiguous(add)) {
+        return false;
+    }
+
+    *x_prev = xp;
+    *cur     = c;
+    *weight  = w;
+    return true;
+}
 static bool ggml_cuda_can_fuse(const struct ggml_cgraph *                cgraph,
                                int                                       node_idx,
                                std::initializer_list<enum ggml_op>       ops,
@@ -3429,6 +3483,41 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
     static bool disable_fusion = getenv("GGML_CUDA_DISABLE_FUSION") != nullptr && std::atoi(getenv("GGML_CUDA_DISABLE_FUSION"));
     if (disable_fusion) {
         return 0;
+    }
+
+    const auto try_lerp = [&](const ggml_tensor * repeat, int n_nodes) {
+        const ggml_tensor * x_prev = nullptr;
+        const ggml_tensor * cur    = nullptr;
+        const ggml_tensor * weight = nullptr;
+        const int mul_idx = i + n_nodes - 2;
+        const int add_idx = i + n_nodes - 1;
+
+        if (!ggml_cuda_should_fuse_lerp(cgraph->nodes[i], repeat, cgraph->nodes[mul_idx], cgraph->nodes[add_idx],
+                                        &x_prev, &cur, &weight)) {
+            return 0;
+        }
+
+        const int out_nodes[] = { add_idx };
+        if (!ggml_cuda_check_fusion_memory_ranges(cgraph, i, n_nodes, out_nodes, 1)) {
+            return 0;
+        }
+
+        ggml_cuda_op_lerp_fused(*cuda_ctx, x_prev, cur, weight, cgraph->nodes[add_idx]);
+        return n_nodes - 1;
+    };
+
+    if (ggml_can_fuse_subgraph(cgraph, i, { GGML_OP_SUB, GGML_OP_REPEAT, GGML_OP_MUL, GGML_OP_ADD }, { i + 3 })) {
+        const int nodes_to_skip = try_lerp(cgraph->nodes[i + 1], 4);
+        if (nodes_to_skip) {
+            return nodes_to_skip;
+        }
+    }
+
+    if (ggml_can_fuse_subgraph(cgraph, i, { GGML_OP_SUB, GGML_OP_MUL, GGML_OP_ADD }, { i + 2 })) {
+        const int nodes_to_skip = try_lerp(nullptr, 3);
+        if (nodes_to_skip) {
+            return nodes_to_skip;
+        }
     }
 
     ggml_tensor * node = cgraph->nodes[i];
