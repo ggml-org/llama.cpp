@@ -259,8 +259,8 @@ enum ggml_metal_device_id {
 
 struct ggml_metal_device_props {
     int device;
-    int physical_device;
-    int virtual_index;
+    int device_phys;
+    int device_virt;
     char name[128];
     char desc[128];
 
