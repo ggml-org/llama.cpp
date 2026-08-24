@@ -36,16 +36,13 @@ void block_a_to_shmem(block_a_prefetch blk, uint buf_ib, uint ks, uint loadr) {
 
 struct block_a_prefetch {
     uint32_t qs;
-    float16_t d;
-    float16_t m;
+    f16vec2 dm;
 };
 
 block_a_prefetch block_a_load(uint ib, uint loadr) {
     block_a_prefetch blk;
-    blk.qs = pack32(u16vec2(data_a_packed16[ib].qs[loadr * 2],
-                             data_a_packed16[ib].qs[loadr * 2 + 1]));
-    blk.d = data_a_packed16[ib].d;
-    blk.m = data_a_packed16[ib].m;
+    blk.qs = data_a_packed32[ib].qs[loadr];
+    blk.dm = data_a_packed32[ib].dm;
     return blk;
 }
 
@@ -58,8 +55,8 @@ void block_a_to_shmem(block_a_prefetch blk, uint buf_ib, uint ks, uint loadr) {
     buf_a_qs[buf_ib * QPITCH + ks * (BK / 4) + loadr + 4] = hi4;
 
     if (loadr == 0) {
-        buf_a_d[ks * BM + buf_ib] = float(blk.d);
-        buf_a_m[ks * BM + buf_ib] = float(blk.m);
+        buf_a_d[ks * BM + buf_ib] = float(blk.dm.x);
+        buf_a_m[ks * BM + buf_ib] = float(blk.dm.y);
     }
 }
 
@@ -99,18 +96,15 @@ void block_a_to_shmem(block_a_prefetch blk, uint buf_ib, uint ks, uint loadr) {
 
 struct block_a_prefetch {
     uint32_t qs;
-    float16_t d;
-    float16_t m;
+    f16vec2 dm;
     uint32_t qh;
 };
 
 block_a_prefetch block_a_load(uint ib, uint loadr) {
     block_a_prefetch blk;
-    blk.qs = pack32(u16vec2(data_a_packed16[ib].qs[loadr * 2],
-                             data_a_packed16[ib].qs[loadr * 2 + 1]));
-    blk.d = data_a_packed16[ib].d;
-    blk.m = data_a_packed16[ib].m;
-    blk.qh = data_a_packed16[ib].qh;
+    blk.qs = data_a_packed32[ib].qs[loadr];
+    blk.dm = data_a_packed32[ib].dm;
+    blk.qh = data_a_packed32[ib].qh;
     return blk;
 }
 
@@ -125,8 +119,8 @@ void block_a_to_shmem(block_a_prefetch blk, uint buf_ib, uint ks, uint loadr) {
     buf_a_qs[buf_ib * QPITCH + ks * (BK / 4) + loadr + 4] = hi4;
 
     if (loadr == 0) {
-        buf_a_d[ks * BM + buf_ib] = float(blk.d);
-        buf_a_m[ks * BM + buf_ib] = float(blk.m);
+        buf_a_d[ks * BM + buf_ib] = float(blk.dm.x);
+        buf_a_m[ks * BM + buf_ib] = float(blk.dm.y);
     }
 }
 
