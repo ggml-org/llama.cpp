@@ -80,8 +80,9 @@ json server_slot_stats::to_json() const {
     };
 
     if (n_draft_tokens > 0) {
-        base["draft_n"]          = n_draft_tokens;
-        base["draft_n_accepted"] = n_draft_accepted;
+        base["draft_n"]             = n_draft_tokens;
+        base["draft_n_accepted"]    = n_draft_accepted;
+        base["draft_n_verif_steps"] = n_draft_verif_steps;
     }
 
     return base;

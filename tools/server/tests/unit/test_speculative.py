@@ -47,7 +47,11 @@ def test_with_and_without_draft():
     server.start()
     res = server.make_request("POST", "/completion", data=request)
     assert res.status_code == 200
-    assert res.body["timings"]["draft_n"] > 0
+    timings = res.body["timings"]
+    assert timings["draft_n"] > 0
+    assert timings["draft_n_accepted"] <= timings["draft_n"]
+    # mean acceptance length needs this, the other two only give the rate
+    assert timings["draft_n_verif_steps"] > 0
     tokens_draft = res.body["tokens"]
 
     assert tokens_no_draft == tokens_draft
