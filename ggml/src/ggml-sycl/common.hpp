@@ -421,7 +421,7 @@ struct ggml_backend_sycl_context {
             pool = it->second.get();
         }
 
-        size_t scratchpad_size = scratchpad_md.get_size();
+        size_t scratchpad_size = std::max((size_t)1, scratchpad_md.get_size());
         if (scratchpad_size > pool->actual_size) {
             pool->realloc(scratchpad_size);
         }
