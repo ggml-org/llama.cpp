@@ -128,6 +128,16 @@ jobs:
           export LLAMA_ARG_BACKEND_SAMPLING=1
           SLOW_TESTS=1 ./tests.sh
 
+      - name: ccache-clear
+        uses: ./.github/actions/ccache-clear
+        env:
+          GH_TOKEN: ${{ github.token }}
+        with:
+          key: server-ubuntu-24.04-arm
+          older: 5m
+          min: 1
+          dry-run: ${{ github.event_name != 'push' || github.ref != 'refs/heads/master' }}
+
   windows:
     runs-on: windows-2025
 
@@ -181,3 +191,13 @@ jobs:
           cd tools/server/tests
           export SLOW_TESTS="1"
           ./tests.sh
+
+      - name: ccache-clear
+        uses: ./.github/actions/ccache-clear
+        env:
+          GH_TOKEN: ${{ github.token }}
+        with:
+          key: server-windows-2025-x64
+          older: 5m
+          min: 1
+          dry-run: ${{ github.event_name != 'push' || github.ref != 'refs/heads/master' }}

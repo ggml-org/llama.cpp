@@ -21,68 +21,30 @@ inputs:
 runs:
   using: "composite"
   steps:
+    - name: Install GitHub CLI if missing
+      shell: bash
+      run: |
+        # e.g. in container jobs, where it is not preinstalled
+        if ! command -v gh >/dev/null 2>&1; then
+          echo "GitHub CLI not found, installing..."
+          if ! command -v curl >/dev/null 2>&1; then
+            apt-get update >/dev/null 2>&1 || true
+            apt-get install -y curl >/dev/null 2>&1 || true
+          fi
+          mkdir -p -m 755 /etc/apt/keyrings
+          curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | tee /etc/apt/keyrings/githubcli-archive-keyring.gpg >/dev/null
+          chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list
+          apt-get update >/dev/null 2>&1 || true
+          apt-get install -y gh || { echo "Failed to install GitHub CLI (gh)" >&2; exit 1; }
+        fi
+        command -v gh >/dev/null 2>&1 || { echo "GitHub CLI (gh) is required but could not be installed" >&2; exit 1; }
+
     - name: Clear caches
       shell: bash
-      env:
-        CLEAR_KEY: ${{ inputs.key }}
-        CLEAR_OLDER: ${{ inputs.older }}
-        CLEAR_MIN: ${{ inputs.min }}
-        CLEAR_DRY_RUN: ${{ inputs.dry-run }}
       run: |
-        # Convert a duration (e.g. 90m, 1h, 1d, plain seconds) to seconds
-        to_seconds() {
-          local val="$1"
-          [[ "$val" =~ ^[0-9]+$ ]] && { echo "$val"; return 0; }
-          local num="${val%?}" unit="${val: -1}" mult
-          [[ "$num" =~ ^[0-9]+$ ]] || return 1
-          case "$unit" in
-            s) mult=1 ;;
-            m) mult=60 ;;
-            h) mult=3600 ;;
-            d) mult=86400 ;;
-            *) return 1 ;;
-          esac
-          echo $((num * mult))
-        }
-
-        [[ "$CLEAR_MIN" =~ ^[0-9]+$ ]] || { echo "Invalid min value: $CLEAR_MIN" >&2; exit 1; }
-        [[ "$CLEAR_DRY_RUN" =~ ^(true|false)$ ]] || { echo "Invalid dry-run value: $CLEAR_DRY_RUN" >&2; exit 1; }
-
-        CACHES=$(gh cache list --key "ccache-$CLEAR_KEY" --json id,key,createdAt --jq '.[] | [.createdAt, .id, .key] | @tsv' 2>/dev/null | LC_ALL=C sort)
-        if [ -z "$CACHES" ]; then
-          echo "No caches found with key prefix: $CLEAR_KEY"
-          exit 0
-        fi
-
-        TOTAL=$(( $(wc -l <<< "$CACHES") ))
-
-        echo "Found $TOTAL cache(s) with key prefix: $CLEAR_KEY (oldest first):"
-        while IFS=$'\t' read -r CREATED ID KEY; do
-          printf '  %s  %s  %s\n' "$CREATED" "$ID" "$KEY"
-        done <<< "$CACHES"
-
-        CUTOFF=""
-        if [ -n "$CLEAR_OLDER" ]; then
-          OLDER_SECONDS=$(to_seconds "$CLEAR_OLDER") || { echo "Invalid older value: $CLEAR_OLDER (expected e.g. 90m, 1h, 1d)" >&2; exit 1; }
-          CUTOFF=$(( $(date +%s) - OLDER_SECONDS ))
-        fi
-
-        # Caches are sorted oldest first
-        DELETED=0
-        while IFS=$'\t' read -r CREATED ID KEY; do
-          if [ -n "$CUTOFF" ] && [ "$(date -d "$CREATED" +%s)" -ge "$CUTOFF" ]; then
-            echo "Rest are not older than $CLEAR_OLDER, stopping"
-            break
-          fi
-          if [ $((TOTAL - DELETED - 1)) -lt "$CLEAR_MIN" ]; then
-            echo "Keeping at least $CLEAR_MIN cache(s), stopping"
-            break
-          fi
-          if [ "$CLEAR_DRY_RUN" = "true" ]; then
-            echo "Would delete cache: $ID ($KEY)"
-          else
-            echo "Deleting cache: $ID ($KEY)"
-            gh cache delete "$ID"
-          fi
-          DELETED=$((DELETED + 1))
-        done <<< "$CACHES"
+        bash scripts/ccache-clear.sh \
+          --key "${{ inputs.key }}" \
+          --older "${{ inputs.older }}" \
+          --min "${{ inputs.min }}" \
+          ${{ inputs.dry-run == 'true' && '--dry-run' || '' }}
