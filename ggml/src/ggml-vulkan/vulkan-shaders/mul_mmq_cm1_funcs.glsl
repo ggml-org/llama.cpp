@@ -9,7 +9,7 @@
 #if defined(DATA_A_Q4_0) || defined(DATA_A_Q4_1)
 // 2-byte loads for Q4_0 blocks (18 bytes)
 // 4-byte loads for Q4_1 blocks (20 bytes)
-void block_a_to_shmem(const uint buf_ib, const uint ib, const uint iqs) {
+void block_a_to_shmem(const uint buf_ib, const uint ib, const uint iqs, const uint ks) {
 #ifdef DATA_A_Q4_0
     const uint32_t vui = pack32(u16vec2(data_a_packed16[ib].qs[iqs * 2],
                                         data_a_packed16[ib].qs[iqs * 2 + 1]));
@@ -24,12 +24,12 @@ void block_a_to_shmem(const uint buf_ib, const uint ib, const uint iqs) {
     lo4 = ((lo4 | 0x80808080) - 0x08080808) ^ 0x80808080;
     hi4 = ((hi4 | 0x80808080) - 0x08080808) ^ 0x80808080;
 
-    buf_a_qs[buf_ib * shmem_stride + iqs    ] = lo4;
-    buf_a_qs[buf_ib * shmem_stride + iqs + 4] = hi4;
+    buf_a_qs[buf_ib * QPITCH + ks * (BK / 4) + iqs    ] = lo4;
+    buf_a_qs[buf_ib * QPITCH + ks * (BK / 4) + iqs + 4] = hi4;
 
     if (iqs == 0) {
 #ifdef DATA_A_Q4_0
-        buf_a_d[buf_ib] = FLOAT_TYPE(data_a_packed16[ib].d);
+        buf_a_d[ks * BM + buf_ib] = FLOAT_TYPE(data_a_packed16[ib].d);
 #else // DATA_A_Q4_1
 #endif
     }
@@ -44,14 +44,14 @@ void block_a_to_shmem(const uint buf_ib, const uint ib, const uint iqs) {
 
 #if defined(DATA_A_Q8_0)
 // 2-byte loads for Q8_0 blocks (34 bytes)
-void block_a_to_shmem(const uint buf_ib, const uint ib, const uint iqs) {
+void block_a_to_shmem(const uint buf_ib, const uint ib, const uint iqs, const uint ks) {
     const uint32_t vui = pack32(u16vec2(data_a_packed16[ib].qs[iqs * 2],
                                         data_a_packed16[ib].qs[iqs * 2 + 1]));
 
-    buf_a_qs[buf_ib * shmem_stride + iqs] = vui;
+    buf_a_qs[buf_ib * QPITCH + ks * (BK / 4) + iqs] = vui;
 
     if (iqs == 0) {
-        buf_a_d[buf_ib] = FLOAT_TYPE(data_a_packed16[ib].d);
+        buf_a_d[ks * BM + buf_ib] = FLOAT_TYPE(data_a_packed16[ib].d);
     }
 }
 #endif
@@ -78,18 +78,17 @@ void block_a_to_shmem(const uint buf_ib, const uint ib, const uint iqs) {
 // 2-byte loads for Q6_K blocks (210 bytes)
 #endif
 
-void block_b_to_shmem(const uint buf_ib, const uint ib, const uint iqs) {
+void block_b_to_shmem(const uint buf_ib, const uint ib, const uint iqs, const uint ks) {
     const uint ib_outer = ib / 4;
     const uint ib_inner = ib % 4;
 
     if (iqs == 0) {
-        // Divide by TK for matmul scale application
-        buf_b_d[buf_ib] = data_b[ib_outer].ds[ib_inner].x;
+        buf_b_d[ks * BN + buf_ib] = data_b[ib_outer].ds[ib_inner].x;
     }
 
     const ivec4 values = data_b[ib_outer].qs[ib_inner * 2 + iqs];
-    buf_b_qs[buf_ib * shmem_stride + iqs * 4    ] = values.x;
-    buf_b_qs[buf_ib * shmem_stride + iqs * 4 + 1] = values.y;
-    buf_b_qs[buf_ib * shmem_stride + iqs * 4 + 2] = values.z;
-    buf_b_qs[buf_ib * shmem_stride + iqs * 4 + 3] = values.w;
+    buf_b_qs[buf_ib * QPITCH + ks * (BK / 4) + iqs * 4    ] = values.x;
+    buf_b_qs[buf_ib * QPITCH + ks * (BK / 4) + iqs * 4 + 1] = values.y;
+    buf_b_qs[buf_ib * QPITCH + ks * (BK / 4) + iqs * 4 + 2] = values.z;
+    buf_b_qs[buf_ib * QPITCH + ks * (BK / 4) + iqs * 4 + 3] = values.w;
 }
