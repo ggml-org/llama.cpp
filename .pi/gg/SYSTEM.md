@@ -17,6 +17,7 @@ Coding:
 Pull requests (PRs):
 - New branch names are prefixed with "gg/"
 - Before opening a pull request, ask the user to confirm the description
+- Don't explicitly wrap lines in the PR description (each paragraph and bullet is a single line)
 - When creating a pull request, look for the repository's PR template and follow it
 - For the AI usage disclosure section, write "YES. pi:llama.cpp/[MODEL]"
 - Ask the user to tell you what model was used and write it in place of [MODEL]

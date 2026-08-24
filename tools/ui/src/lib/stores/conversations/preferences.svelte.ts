@@ -152,11 +152,13 @@ export class ConversationPreferences {
 			return;
 		}
 
-		this.host.applyConversationUpdate(this.host.activeConversation.id, {
+		const id = this.host.activeConversation.id;
+
+		this.host.applyConversationUpdate(id, {
 			cwd: trimmed
 		});
 
-		await DatabaseService.updateConversation(this.host.activeConversation.id, {
+		await DatabaseService.updateConversation(id, {
 			cwd: trimmed
 		});
 
@@ -202,12 +204,15 @@ export class ConversationPreferences {
 			}
 		}
 
-		await DatabaseService.updateConversation(this.host.activeConversation.id, {
-			mcpServerOverrides: newOverrides.length > 0 ? newOverrides : undefined
+		const overrides = newOverrides.length > 0 ? newOverrides : undefined;
+		const id = this.host.activeConversation.id;
+
+		this.host.applyConversationUpdate(id, {
+			mcpServerOverrides: overrides
 		});
 
-		this.host.applyConversationUpdate(this.host.activeConversation.id, {
-			mcpServerOverrides: newOverrides.length > 0 ? newOverrides : undefined
+		await DatabaseService.updateConversation(id, {
+			mcpServerOverrides: overrides
 		});
 	}
 
@@ -224,11 +229,13 @@ export class ConversationPreferences {
 			return;
 		}
 
-		this.host.applyConversationUpdate(this.host.activeConversation.id, {
+		const id = this.host.activeConversation.id;
+
+		this.host.applyConversationUpdate(id, {
 			reasoningEffort: effort
 		});
 
-		await DatabaseService.updateConversation(this.host.activeConversation.id, {
+		await DatabaseService.updateConversation(id, {
 			reasoningEffort: effort
 		});
 	}

@@ -101,6 +101,11 @@ struct llama_hparams {
     uint32_t n_group_used       = 0;
     uint32_t n_group_experts    = 0;
 
+    // MLA + SWA (i.e. dots3note)
+    uint32_t n_lora_kv_swa           = 0;
+    uint32_t n_embd_head_k_mla_swa   = 0;
+    uint32_t n_embd_head_v_mla_swa   = 0;
+
     float    expert_group_scale   = 0.05f;
     float    expert_weights_scale = 0.0f;
     bool     expert_weights_norm  = false;
