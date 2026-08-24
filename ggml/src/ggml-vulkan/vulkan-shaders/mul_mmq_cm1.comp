@@ -101,6 +101,10 @@ shared float buf_b_s[BN * BK_STEP];
 #define QUANT_OFFSET 16.0
 #endif
 
+#if defined(DATA_A_IQ4_NL) || defined(DATA_A_MXFP4)
+shared int8_t cm1_kvalues[16];
+#endif
+
 #define LOAD_VEC_A (4 * QUANT_R)
 #define LOAD_VEC_B 16
 
@@ -119,6 +123,18 @@ shared int32_t cm_layout_probe[TM * TN];
 #include "mul_mmq_cm1_funcs.glsl"
 
 void main() {
+#if defined(DATA_A_IQ4_NL)
+    if (gl_LocalInvocationIndex < 16u) {
+        cm1_kvalues[gl_LocalInvocationIndex] = kvalues_iq4nl_const[gl_LocalInvocationIndex];
+    }
+    barrier();
+#elif defined(DATA_A_MXFP4)
+    if (gl_LocalInvocationIndex < 16u) {
+        cm1_kvalues[gl_LocalInvocationIndex] = kvalues_mxfp4_const[gl_LocalInvocationIndex];
+    }
+    barrier();
+#endif
+
     const uint blocks_m = (p.M + BM - 1) / BM;
     const uint ik = gl_WorkGroupID.x / blocks_m;
 

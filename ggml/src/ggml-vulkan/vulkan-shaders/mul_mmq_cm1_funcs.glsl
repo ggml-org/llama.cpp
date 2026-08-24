@@ -172,11 +172,11 @@ void block_a_to_shmem(block_a_prefetch blk, uint buf_ib, uint ks, uint loadr) {
     const u8vec4 lo_idx = unpack8(blk.qs & 0x0F0F0F0F);
     const u8vec4 hi_idx = unpack8((blk.qs >> 4) & 0x0F0F0F0F);
     buf_a_qs[buf_ib * QPITCH + ks * (BK / 4) + loadr    ] =
-        pack32(i8vec4(kvalues_iq4nl_const[lo_idx.x], kvalues_iq4nl_const[lo_idx.y],
-                      kvalues_iq4nl_const[lo_idx.z], kvalues_iq4nl_const[lo_idx.w]));
+        pack32(i8vec4(cm1_kvalues[lo_idx.x], cm1_kvalues[lo_idx.y],
+                      cm1_kvalues[lo_idx.z], cm1_kvalues[lo_idx.w]));
     buf_a_qs[buf_ib * QPITCH + ks * (BK / 4) + loadr + 4] =
-        pack32(i8vec4(kvalues_iq4nl_const[hi_idx.x], kvalues_iq4nl_const[hi_idx.y],
-                      kvalues_iq4nl_const[hi_idx.z], kvalues_iq4nl_const[hi_idx.w]));
+        pack32(i8vec4(cm1_kvalues[hi_idx.x], cm1_kvalues[hi_idx.y],
+                      cm1_kvalues[hi_idx.z], cm1_kvalues[hi_idx.w]));
 
     if (loadr == 0) {
         buf_a_d[ks * BM + buf_ib] = float(blk.d);
@@ -204,11 +204,11 @@ void block_a_to_shmem(block_a_prefetch blk, uint buf_ib, uint ks, uint loadr) {
     const u8vec4 lo_idx = unpack8(blk.qs & 0x0F0F0F0F);
     const u8vec4 hi_idx = unpack8((blk.qs >> 4) & 0x0F0F0F0F);
     buf_a_qs[buf_ib * QPITCH + ks * (BK / 4) + loadr    ] =
-        pack32(i8vec4(kvalues_mxfp4_const[lo_idx.x], kvalues_mxfp4_const[lo_idx.y],
-                      kvalues_mxfp4_const[lo_idx.z], kvalues_mxfp4_const[lo_idx.w]));
+        pack32(i8vec4(cm1_kvalues[lo_idx.x], cm1_kvalues[lo_idx.y],
+                      cm1_kvalues[lo_idx.z], cm1_kvalues[lo_idx.w]));
     buf_a_qs[buf_ib * QPITCH + ks * (BK / 4) + loadr + 4] =
-        pack32(i8vec4(kvalues_mxfp4_const[hi_idx.x], kvalues_mxfp4_const[hi_idx.y],
-                      kvalues_mxfp4_const[hi_idx.z], kvalues_mxfp4_const[hi_idx.w]));
+        pack32(i8vec4(cm1_kvalues[hi_idx.x], cm1_kvalues[hi_idx.y],
+                      cm1_kvalues[hi_idx.z], cm1_kvalues[hi_idx.w]));
 
     if (loadr == 0) {
         buf_a_d[ks * BM + buf_ib] = e8m0_to_fp32(blk.e) * 0.5;
