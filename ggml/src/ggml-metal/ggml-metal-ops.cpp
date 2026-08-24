@@ -144,6 +144,11 @@ int ggml_metal_op_n_nodes(ggml_metal_op_t ctx) {
     return ctx->n_nodes();
 }
 
+// the split-K skinny matmul is instantiated with a fixed number of K splits
+static int mm_splitk_nsk() {
+    return 4;
+}
+
 static bool ggml_metal_op_concurrency_reset(ggml_metal_op_t ctx) {
     if (!ctx->mem_ranges) {
         return true;
@@ -2333,7 +2338,24 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
 
     // find the break-even point where the matrix-matrix kernel becomes more efficient compared
     // to the matrix-vector kernel
-    const int ne11_mm_min = 8;
+    // lower bound for the mat-mat branch; with the skinny+split-K kernels the mm path can win
+    // well below the upstream break-even of 8 (A/B via GGML_METAL_MM_MIN)
+    const bool mv_ext_src0_float = op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_F16 || op->src[0]->type == GGML_TYPE_BF16;
+    // measured crossover on M3 Max: skinny+split-K mm beats the ext kernels from ne11=4 (quants)
+    // and ne11=6 (floats); ext keeps the remainder (2..mm_min)
+    // keep the stock mv-ext/mm break-even by default: on M4 Max the skinny mm tiles win the
+    // 8 < ne11 <= 32 range from the stock threshold, while the retuned (M3-measured) lower
+    // crossovers measured slightly worse; the envs below allow per-device tuning
+    const int  mm_min_default = 8;
+    static const int ne11_mm_min_env = getenv("GGML_METAL_MM_MIN") ? atoi(getenv("GGML_METAL_MM_MIN")) : -1;
+    const int ne11_mm_min = ne11_mm_min_env >= 0 ? ne11_mm_min_env : mm_min_default;
+
+    // extended small-batch mat-vec window (skinny-batch / spec-decode optimization):
+    // floats stream weights once with r1ptg=16 up to ne11=16; quants tolerate re-reads up to ne11=32 with r1ptg=8.
+    // A/B overrides: GGML_METAL_MV_EXT_MAX (window; 8 = upstream behavior), GGML_METAL_MV_EXT_R1 (force r1ptg for ne11>8)
+    static const int mv_ext_max_env = getenv("GGML_METAL_MV_EXT_MAX") ? atoi(getenv("GGML_METAL_MV_EXT_MAX")) : -1;
+    static const int mv_ext_r1_env  = getenv("GGML_METAL_MV_EXT_R1")  ? atoi(getenv("GGML_METAL_MV_EXT_R1"))  : -1;
+    const int  mv_ext_max = mv_ext_max_env >= 0 ? mv_ext_max_env : mm_min_default;
 
     // first try to use small-batch mat-mv kernels
     // these should be efficient for BS [2, ~8]
@@ -2353,7 +2375,7 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
            op->src[0]->type == GGML_TYPE_Q8_0 ||
            op->src[0]->type == GGML_TYPE_MXFP4 ||
            op->src[0]->type == GGML_TYPE_IQ4_NL ||
-           false) && (ne11 >= 2 && ne11 <= 8)
+           false) && (ne11 >= 2 && ne11 <= mv_ext_max)
          ) ||
          (
           (
@@ -2404,7 +2426,10 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
             case 5:
                 r1ptg = 5; break;
             default:
-                GGML_ABORT("unsupported ne11");
+                // ne11 > 8: wide variants; floats prefer r1ptg=16 (weights streamed once)
+                r1ptg = (mv_ext_r1_env == 8 || mv_ext_r1_env == 16) ? (int16_t) mv_ext_r1_env
+                      : (mv_ext_src0_float && ne11 <= 16 ? 16 : 8);
+                break;
         };
 
         auto pipeline = ggml_metal_library_get_pipeline_mul_mv_ext(lib, op, nsg, nxpsg, r1ptg);
@@ -2454,7 +2479,19 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
         //    default: break;
         //}
 
-        auto pipeline = ggml_metal_library_get_pipeline_mul_mm(lib, op);
+        // skinny-batch tiles (32x16) for small N: 4x threadgroups, no N-padding waste at N<=16
+        static const int mm_skinny_max = getenv("GGML_METAL_MM_SKINNY_MAX") ? atoi(getenv("GGML_METAL_MM_SKINNY_MAX")) : 32;
+        const bool use_mm_skinny = !props_dev->has_tensor && ne11 <= mm_skinny_max;
+
+        // split-K for occupancy-starved skinny shapes (few row-tiles): deterministic two-pass
+        static const int mm_splitk = getenv("GGML_METAL_MM_SPLITK") ? atoi(getenv("GGML_METAL_MM_SPLITK")) : 4;
+        const bool use_mm_sk = use_mm_skinny && mm_splitk > 1 &&
+            ne01 <= 5120 && ne00 >= 1024 &&
+            (uint64_t) ne0*ne1*ne12*ne13 <= UINT32_MAX;
+
+        auto pipeline = use_mm_sk     ? ggml_metal_library_get_pipeline_mul_mm_sk(lib, op)
+                      : use_mm_skinny ? ggml_metal_library_get_pipeline_mul_mm_s (lib, op)
+                                      : ggml_metal_library_get_pipeline_mul_mm  (lib, op);
 
         ggml_metal_kargs_mul_mm args = {
             /*.ne00 =*/ ne00,
@@ -2473,11 +2510,19 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
             /*.r3   =*/ r3,
         };
 
+        ggml_metal_buffer_id bid_dst = ggml_metal_get_buffer_id(op);
+
+        // split-K partials live in the scratch tail of the dst allocation
+        ggml_metal_buffer_id bid_out = bid_dst;
+        if (use_mm_sk) {
+            bid_out.offs += ggml_nbytes(op);
+        }
+
         ggml_metal_encoder_set_pipeline(enc, pipeline);
         ggml_metal_encoder_set_bytes   (enc, &args, sizeof(args), 0);
         ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[0]), 1);
         ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[1]), 2);
-        ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         3);
+        ggml_metal_encoder_set_buffer  (enc, bid_out,                              3);
 
         const size_t smem = pipeline.smem;
 
@@ -2487,7 +2532,29 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
         const int nr1 = pipeline.nr1;
         const int nsg = pipeline.nsg;
 
-        ggml_metal_encoder_dispatch_threadgroups(enc, ((ne11 + nr1 - 1) / nr1), ((ne01 + nr0 - 1) / nr0), ne12 * ne13, 32, nsg, 1);
+        const int nz = use_mm_sk ? ne12 * ne13 * mm_splitk_nsk() : ne12 * ne13;
+
+        ggml_metal_encoder_dispatch_threadgroups(enc, ((ne11 + nr1 - 1) / nr1), ((ne01 + nr0 - 1) / nr0), nz, 32, nsg, 1);
+
+        if (use_mm_sk) {
+            ggml_metal_op_concurrency_reset(ctx);
+
+            auto pipeline_red = ggml_metal_library_get_pipeline_mul_mm_sk_reduce(lib);
+
+            ggml_metal_kargs_mul_mm_sk_reduce args_red = {
+                /*.plane =*/ (uint64_t) ne0*ne1,
+                /*.total =*/ (uint64_t) ne0*ne1*ne12*ne13,
+                /*.nsk   =*/ mm_splitk_nsk(),
+            };
+
+            ggml_metal_encoder_set_pipeline(enc, pipeline_red);
+            ggml_metal_encoder_set_bytes   (enc, &args_red, sizeof(args_red), 0);
+            ggml_metal_encoder_set_buffer  (enc, bid_out, 1);
+            ggml_metal_encoder_set_buffer  (enc, bid_dst, 2);
+
+            const int64_t total = (int64_t) ne0*ne1*ne12*ne13;
+            ggml_metal_encoder_dispatch_threadgroups(enc, (int)((total + 255)/256), 1, 1, 256, 1, 1);
+        }
     } else {
         auto pipeline = ggml_metal_library_get_pipeline_mul_mv(lib, op);
 
