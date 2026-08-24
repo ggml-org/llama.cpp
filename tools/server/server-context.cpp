@@ -121,15 +121,46 @@ static bool server_greedy_backend_sampling_eligible(const common_params_sampling
         !has_reasoning_budget;
 }
 
-static bool server_auto_spec_target_backend_sampling(
+enum class server_auto_spec_target_backend_sampling_mode {
+    NONE,
+    GREEDY,
+    STOCHASTIC,
+};
+
+static server_auto_spec_target_backend_sampling_mode server_auto_spec_target_backend_sampling(
         const common_params & params, const common_params_sampling & sampling, const llama_vocab * vocab) {
     int32_t n_suppress = 0;
     llama_vocab_get_suppress_tokens(vocab, &n_suppress);
 
-    return server_gfx1030_spec_target_backend_sampling_profile(params) &&
-        server_greedy_backend_sampling_eligible(params.sampling) &&
-        server_greedy_backend_sampling_eligible(sampling) &&
-        llama_vocab_n_tokens(vocab) >= 65536 && n_suppress == 0;
+    if (!server_gfx1030_spec_target_backend_sampling_profile(params) ||
+            llama_vocab_n_tokens(vocab) < 65536 || n_suppress != 0) {
+        return server_auto_spec_target_backend_sampling_mode::NONE;
+    }
+
+    if (server_greedy_backend_sampling_eligible(sampling)) {
+        return server_auto_spec_target_backend_sampling_mode::GREEDY;
+    }
+    if (server_spec_target_backend_sampling_stochastic_eligible(sampling)) {
+        return server_auto_spec_target_backend_sampling_mode::STOCHASTIC;
+    }
+
+    return server_auto_spec_target_backend_sampling_mode::NONE;
+}
+
+static bool server_sampler_chain_backend_fully_supported(llama_sampler * chain) {
+    if (chain == nullptr || llama_sampler_chain_get(chain, -1) == nullptr) {
+        return false;
+    }
+
+    for (int i = 0; i < llama_sampler_chain_n(chain); ++i) {
+        llama_sampler * sampler = llama_sampler_chain_get(chain, i);
+        const char * name = sampler != nullptr ? llama_sampler_name(sampler) : nullptr;
+        if (name == nullptr || name[0] == '-') {
+            return false;
+        }
+    }
+
+    return true;
 }
 
 static common_speculative_output_limits server_output_limits(const common_params & params) {
@@ -1264,12 +1295,13 @@ private:
 
         // Dynamic sampler attachment currently requires the backend-sampling
         // output buffers to exist before the first graph reserve. Prime those
-        // buffers for the narrow automatic MTP profile, then restore the user
-        // default so request-level eligibility still controls activation.
+        // buffers for the validated automatic speculative profile, then restore
+        // the user default so request-level eligibility still controls activation.
         const bool backend_sampling_default = params_base.sampling.backend_sampling;
         const bool prime_auto_backend_sampling = !backend_sampling_default &&
             server_gfx1030_spec_target_backend_sampling_profile(params_base) &&
-            server_greedy_backend_sampling_eligible(params_base.sampling);
+            (server_greedy_backend_sampling_eligible(params_base.sampling) ||
+             server_spec_target_backend_sampling_stochastic_eligible(params_base.sampling));
         if (prime_auto_backend_sampling) {
             params_base.sampling.backend_sampling = true;
             SRV_INF("%s", "reserving target backend-sampling buffers for gfx1030 speculative auto policy\n");
@@ -2039,11 +2071,14 @@ private:
 
         // initialize samplers
         if (task.need_sampling()) {
-            const bool auto_backend_sampling = !task.params.backend_sampling_set &&
+            const auto auto_backend_sampling_mode = !task.params.backend_sampling_set &&
                 !task.params.sampling.backend_sampling &&
                 (task.params.speculative_n_max < 0 ||
-                    task.params.speculative_n_max == params_base.speculative.draft.n_max) &&
-                server_auto_spec_target_backend_sampling(params_base, task.params.sampling, vocab);
+                    task.params.speculative_n_max == params_base.speculative.draft.n_max)
+                ? server_auto_spec_target_backend_sampling(params_base, task.params.sampling, vocab)
+                : server_auto_spec_target_backend_sampling_mode::NONE;
+            const bool auto_backend_sampling =
+                auto_backend_sampling_mode != server_auto_spec_target_backend_sampling_mode::NONE;
             try {
                 slot.smpl.reset(common_sampler_init(model_tgt, task.params.sampling));
             } catch (std::exception & e) {
@@ -2059,10 +2094,9 @@ private:
             // TODO: getting pre sampling logits is not yet supported with backend sampling
             use_backend_sampling &= !need_pre_sample_logits;
 
-            // TODO: tmp until backend sampling is fully implemented
             if (use_backend_sampling) {
                 llama_sampler * backend_sampler = common_sampler_get(slot.smpl.get());
-                if (auto_backend_sampling) {
+                if (auto_backend_sampling_mode == server_auto_spec_target_backend_sampling_mode::GREEDY) {
                     if (!slot.smpl_backend_greedy) {
                         slot.smpl_backend_greedy.reset(llama_sampler_chain_init(llama_sampler_chain_default_params()));
                         llama_sampler_chain_add(slot.smpl_backend_greedy.get(), llama_sampler_init_temp(0.0f));
@@ -2073,17 +2107,37 @@ private:
                     backend_sampler = slot.smpl_backend_greedy.get();
                 }
 
-                if (!auto_backend_sampling || !slot.smpl_backend_greedy_attached) {
+                const bool reuse_greedy_sampler =
+                    auto_backend_sampling_mode == server_auto_spec_target_backend_sampling_mode::GREEDY &&
+                    slot.smpl_backend_greedy_attached;
+                if (!reuse_greedy_sampler) {
                     use_backend_sampling = llama_set_sampler(ctx_tgt, slot.id, backend_sampler);
                 }
+
+                // Automatic stochastic mode must be fully backend-executable.
+                // Partial prefix offload is valid for explicit requests, but it
+                // would make the claimed automatic E2E optimization ambiguous.
+                if (use_backend_sampling &&
+                        auto_backend_sampling_mode == server_auto_spec_target_backend_sampling_mode::STOCHASTIC &&
+                        !server_sampler_chain_backend_fully_supported(backend_sampler)) {
+                    SLT_WRN(slot, "%s", "automatic backend sampling unavailable for the complete stochastic sampler chain; using CPU fallback\n");
+                    use_backend_sampling = false;
+                    llama_set_sampler(ctx_tgt, slot.id, nullptr);
+                    slot.smpl.reset(common_sampler_init(model_tgt, task.params.sampling));
+                }
+
                 if (!use_backend_sampling) {
                     task.params.sampling.backend_sampling = false;
                     llama_set_sampler(ctx_tgt, slot.id, nullptr);
                     slot.smpl_backend_greedy_attached = false;
-                } else if (auto_backend_sampling) {
+                } else if (auto_backend_sampling_mode == server_auto_spec_target_backend_sampling_mode::GREEDY) {
                     slot.smpl_backend_greedy_attached = true;
                     task.params.sampling.backend_sampling = true;
                     SLT_INF(slot, "%s", "using automatic gfx1030 backend target sampling for greedy speculative decode\n");
+                } else if (auto_backend_sampling_mode == server_auto_spec_target_backend_sampling_mode::STOCHASTIC) {
+                    slot.smpl_backend_greedy_attached = false;
+                    task.params.sampling.backend_sampling = true;
+                    SLT_INF(slot, "%s", "using automatic gfx1030 backend sampling for stochastic speculative decode\n");
                 } else {
                     slot.smpl_backend_greedy_attached = false;
                 }
