@@ -96,6 +96,9 @@ shared float buf_b_d[BN * BK_STEP];
 
 #define NUM_WARPS (BLOCK_SIZE / WARP)
 const uint CM_ELEMS = (TM * TN) / WARP;
+#define ACC_BIAS_BITS 0x4B400000
+#define ACC_BIAS_F    12582912.0f
+const bool USE_MAGIC_BIAS = WARP != 32;
 
 shared int32_t cm_layout_probe[TM * TN];
 
@@ -343,7 +346,8 @@ void main() {
         // Compute from shmem
         [[unroll]] for (uint ks = 0; ks < BK_STEP; ks++) {
             [[unroll]] for (uint idx = 0; idx < cms_per_row * cms_per_col; idx++) {
-                cm_result[idx] = coopmat<int32_t, gl_ScopeSubgroup, TM, TN, gl_MatrixUseAccumulator>(0);
+                cm_result[idx] = coopmat<int32_t, gl_ScopeSubgroup, TM, TN, gl_MatrixUseAccumulator>(
+                    USE_MAGIC_BIAS ? ACC_BIAS_BITS : 0);
             }
 
             const uint K_SUB = BK / TK;
@@ -370,16 +374,20 @@ void main() {
             }
 
             // Pre-load scales into registers
-            ACC_TYPE scale_a[cms_per_row * CM_ELEMS];
-            ACC_TYPE scale_b[cms_per_col * CM_ELEMS];
+            float scale_a[cms_per_row * CM_ELEMS];
+            float nbias_a[cms_per_row * CM_ELEMS];
+            float scale_b[cms_per_col * CM_ELEMS];
             [[unroll]] for (uint r = 0; r < cms_per_row; r++) {
                 [[unroll]] for (uint e = 0; e < CM_ELEMS; e++) {
-                    scale_a[r * CM_ELEMS + e] = ACC_TYPE(buf_a_d[ks * BM + warp_r * WM + r * TM + elem_row[e]]);
+                    scale_a[r * CM_ELEMS + e] = buf_a_d[ks * BM + warp_r * WM + r * TM + elem_row[e]];
+                    if (USE_MAGIC_BIAS) {
+                        nbias_a[r * CM_ELEMS + e] = -ACC_BIAS_F * scale_a[r * CM_ELEMS + e];
+                    }
                 }
             }
             [[unroll]] for (uint c = 0; c < cms_per_col; c++) {
                 [[unroll]] for (uint e = 0; e < CM_ELEMS; e++) {
-                    scale_b[c * CM_ELEMS + e] = ACC_TYPE(buf_b_d[ks * BN + warp_c * WN + c * TN + elem_col[e]]);
+                    scale_b[c * CM_ELEMS + e] = buf_b_d[ks * BN + warp_c * WN + c * TN + elem_col[e]];
                 }
             }
 
@@ -388,8 +396,16 @@ void main() {
                 [[unroll]] for (uint cm_col = 0; cm_col < cms_per_col; cm_col++) {
                     const uint tile_idx = cm_col * cms_per_row + cm_row;
                     [[unroll]] for (uint e = 0; e < CM_ELEMS; e++) {
-                        sums[tile_idx * CM_ELEMS + e] += ACC_TYPE(cm_result[tile_idx][e])
-                            * scale_a[cm_row * CM_ELEMS + e] * scale_b[cm_col * CM_ELEMS + e];
+                        if (USE_MAGIC_BIAS) {
+                            const float t = fma(intBitsToFloat(int(cm_result[tile_idx][e])),
+                                                scale_a[cm_row * CM_ELEMS + e],
+                                                nbias_a[cm_row * CM_ELEMS + e]);
+                            sums[tile_idx * CM_ELEMS + e] = ACC_TYPE(fma(t, scale_b[cm_col * CM_ELEMS + e],
+                                                                float(sums[tile_idx * CM_ELEMS + e])));
+                        } else {
+                            sums[tile_idx * CM_ELEMS + e] += ACC_TYPE(float(cm_result[tile_idx][e])
+                                * scale_a[cm_row * CM_ELEMS + e] * scale_b[cm_col * CM_ELEMS + e]);
+                        }
                     }
                 }
             }
