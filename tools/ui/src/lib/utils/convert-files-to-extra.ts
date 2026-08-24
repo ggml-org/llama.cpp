@@ -2,12 +2,11 @@ import { convertPDFToImage, convertPDFToText } from './pdf-processing';
 import { isSvgMimeType, svgBase64UrlToPngDataURL } from './svg-to-png';
 import { isLikelyTextFile, readFileAsText } from './text-files';
 import { isWebpMimeType, webpBase64UrlToPngDataURL } from './webp-to-png';
-import { SETTINGS_KEYS } from '$lib/constants';
 import { AttachmentType, FileTypeCategory, SpecialFileType } from '$lib/enums';
 import { modelsStore } from '$lib/stores/models/index.svelte';
 import { settingsStore } from '$lib/stores/settings/index.svelte';
 import type { ChatUploadedFile, DatabaseMessageExtra, FileProcessingResult } from '$lib/types';
-import { getFileTypeCategory } from '$lib/utils';
+import { getFileTypeCategory, getPdfParseMode } from '$lib/utils';
 import { toast } from 'svelte-sonner';
 
 function readFileAsBase64(file: File): Promise<string> {
@@ -109,39 +108,22 @@ export async function parseFilesToMessageExtras(
 			try {
 				// Always get base64 data for preview functionality
 				const base64Data = await readFileAsBase64(file.file);
-				const currentConfig = settingsStore.config;
-				// Use per-model vision check for router mode
+				const parseMode = getPdfParseMode(settingsStore.config);
 				const hasVisionSupport = activeModelId
 					? modelsStore.props.modelSupportsVision(activeModelId)
 					: false;
 
-				// Force PDF-to-text for non-vision models
-				let shouldProcessAsImages = Boolean(currentConfig.pdfAsImage) && hasVisionSupport;
-
-				// If user had pdfAsImage enabled but model doesn't support vision, update setting and notify
-				if (currentConfig.pdfAsImage && !hasVisionSupport) {
-					console.log('Non-vision model detected: forcing PDF-to-text mode and updating settings');
-
-					// Update the setting in localStorage
-					settingsStore.updateConfig(SETTINGS_KEYS.PDF_AS_IMAGE, false);
-
-					// Show toast notification to user
+				if (parseMode === 'image' && !hasVisionSupport) {
 					toast.warning(
-						'PDF setting changed: Non-vision model detected, PDFs will be processed as text instead of images.',
-						{
-							duration: 5000
-						}
+						`PDF "${file.name}" kept as original file: Parse as image needs a vision model.`,
+						{ duration: 5000 }
 					);
-
-					shouldProcessAsImages = false;
 				}
 
-				if (shouldProcessAsImages) {
-					// Process PDF as images (only for vision models)
+				if (parseMode === 'image' && hasVisionSupport) {
 					try {
 						const images = await convertPDFToImage(file.file);
 
-						// Show success toast for PDF image processing
 						toast.success(
 							`PDF "${file.name}" processed as ${images.length} images for vision model.`,
 							{
@@ -154,33 +136,34 @@ export async function parseFilesToMessageExtras(
 							content: `PDF file with ${images.length} pages`,
 							images: images,
 							name: file.name,
+							parsedAs: 'image',
 							processedAsImages: true,
 							size: file.size,
 							type: AttachmentType.PDF
 						});
 					} catch (imageError) {
 						console.warn(
-							`Failed to process PDF ${file.name} as images, falling back to text:`,
+							`Failed to process PDF ${file.name} as images, keeping original file:`,
 							imageError
 						);
 
-						// Fallback to text processing
-						const content = await convertPDFToText(file.file);
+						toast.warning(`Could not render PDF "${file.name}" as images; keeping original file.`, {
+							duration: 4000
+						});
 
 						extras.push({
 							base64Data: base64Data,
-							content: content,
+							content: '',
 							name: file.name,
+							parsedAs: 'none',
 							processedAsImages: false,
 							size: file.size,
 							type: AttachmentType.PDF
 						});
 					}
-				} else {
-					// Process PDF as text (default or forced for non-vision models)
+				} else if (parseMode === 'text') {
 					const content = await convertPDFToText(file.file);
 
-					// Show success toast for PDF text processing
 					toast.success(`PDF "${file.name}" processed as text content.`, {
 						duration: 3000
 					});
@@ -189,6 +172,17 @@ export async function parseFilesToMessageExtras(
 						base64Data: base64Data,
 						content: content,
 						name: file.name,
+						parsedAs: 'text',
+						processedAsImages: false,
+						size: file.size,
+						type: AttachmentType.PDF
+					});
+				} else {
+					extras.push({
+						base64Data: base64Data,
+						content: '',
+						name: file.name,
+						parsedAs: 'none',
 						processedAsImages: false,
 						size: file.size,
 						type: AttachmentType.PDF

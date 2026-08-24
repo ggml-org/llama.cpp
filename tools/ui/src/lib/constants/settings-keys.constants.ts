@@ -39,6 +39,8 @@ export const SETTINGS_KEYS = {
 	MIN_P: 'min_p',
 	PASTE_LONG_TEXT_TO_FILE_LEN: 'pasteLongTextToFileLen',
 	PDF_AS_IMAGE: 'pdfAsImage',
+	PDF_PARSE_NONE: 'pdfParseNone',
+	PDF_PARSE_TEXT: 'pdfParseText',
 	// Performance
 	PRE_ENCODE_CONVERSATION: 'preEncodeConversation',
 	PRESENCE_PENALTY: 'presence_penalty',

@@ -2,12 +2,9 @@ import { heicFileToJpegDataURL, isHeicMimeType } from './heic-to-jpeg';
 import { convertPDFToText } from './pdf-processing';
 import { isSvgMimeType, svgBase64UrlToPngDataURL } from './svg-to-png';
 import { isWebpMimeType, webpBase64UrlToPngDataURL } from './webp-to-png';
-import { SETTINGS_KEYS } from '$lib/constants';
 import { FileTypeCategory } from '$lib/enums';
-import { modelsStore } from '$lib/stores/models/index.svelte';
 import { settingsStore } from '$lib/stores/settings/index.svelte';
-import { getFileTypeCategory } from '$lib/utils';
-import { toast } from 'svelte-sonner';
+import { getFileTypeCategory, getPdfParseMode } from '$lib/utils';
 
 /**
  * Read a file as a data URL (base64 encoded)
@@ -96,35 +93,19 @@ export async function processFilesToChatUploaded(
 
 				results.push({ ...base, preview });
 			} else if (getFileTypeCategory(file.type) === FileTypeCategory.PDF) {
-				// Extract text content from PDF for preview
-				try {
-					const textContent = await convertPDFToText(file);
+				const parseMode = getPdfParseMode(settingsStore.config);
 
-					results.push({ ...base, textContent });
-				} catch (err) {
-					console.warn('Failed to extract text from PDF, adding without content:', err);
+				if (parseMode === 'text') {
+					try {
+						const textContent = await convertPDFToText(file);
+
+						results.push({ ...base, textContent });
+					} catch (err) {
+						console.warn('Failed to extract text from PDF, adding without content:', err);
+						results.push(base);
+					}
+				} else {
 					results.push(base);
-				}
-
-				// Show suggestion toast if vision model is available but PDF as image is disabled
-				const hasVisionSupport = activeModelId
-					? modelsStore.props.modelSupportsVision(activeModelId)
-					: false;
-				const currentConfig = settingsStore.config;
-
-				if (hasVisionSupport && !currentConfig.pdfAsImage) {
-					toast.info(`You can enable parsing PDF as images with vision models.`, {
-						action: {
-							label: 'Enable PDF as Images',
-							onClick: () => {
-								settingsStore.updateConfig(SETTINGS_KEYS.PDF_AS_IMAGE, true);
-								toast.success('PDF parsing as images enabled!', {
-									duration: 3000
-								});
-							}
-						},
-						duration: 8000
-					});
 				}
 			} else if (getFileTypeCategory(file.type) === FileTypeCategory.AUDIO) {
 				// Generate preview URL for audio files

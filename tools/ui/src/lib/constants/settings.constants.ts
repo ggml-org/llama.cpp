@@ -171,9 +171,42 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 			},
 			{
 				defaultValue: false,
-				help: 'Parse PDF as image instead of text. Automatically falls back to text processing for non-vision models.',
+				help: 'How to prepare attached PDFs. No parse keeps the original file for tools such as thaiocr. Parse as text extracts page text into the chat. Parse as image renders pages as images for vision models.',
+				key: SETTINGS_KEYS.PDF_PARSE_NONE,
+				label: 'PDF handling',
+				radioOptions: [
+					{
+						key: SETTINGS_KEYS.PDF_PARSE_NONE,
+						label: 'No parse PDF (pass original file to tools)',
+						value: 'none'
+					},
+					{
+						key: SETTINGS_KEYS.PDF_PARSE_TEXT,
+						label: 'Parse PDF as text',
+						value: 'text'
+					},
+					{
+						key: SETTINGS_KEYS.PDF_AS_IMAGE,
+						label: 'Parse PDF as image',
+						value: 'image'
+					}
+				],
+				type: SettingsFieldType.RADIO
+			},
+			{
+				defaultValue: false,
+				help: 'Counterpart of PDF handling radio: parse attached PDFs as text.',
+				key: SETTINGS_KEYS.PDF_PARSE_TEXT,
+				label: 'Parse PDF as text',
+				standaloneField: false,
+				type: SettingsFieldType.CHECKBOX
+			},
+			{
+				defaultValue: false,
+				help: 'Counterpart of PDF handling radio: render attached PDFs as images for vision models.',
 				key: SETTINGS_KEYS.PDF_AS_IMAGE,
 				label: 'Parse PDF as image',
+				standaloneField: false,
 				type: SettingsFieldType.CHECKBOX
 			},
 			{

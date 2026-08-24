@@ -276,6 +276,11 @@ export class ChatService {
 						type: ContentPartType.IMAGE_URL
 					});
 				}
+			} else if (pdfFile.parsedAs === 'none' || !pdfFile.content) {
+				contentParts.push({
+					text: `[PDF attached: ${pdfFile.name} — original file, not parsed. Use a file tool to read it.]`,
+					type: ContentPartType.TEXT
+				});
 			} else {
 				contentParts.push({
 					text: formatAttachmentText(AttachmentLabel.PDF_FILE, pdfFile.name, pdfFile.content),

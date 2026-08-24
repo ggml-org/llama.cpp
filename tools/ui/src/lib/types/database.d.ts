@@ -61,6 +61,8 @@ export interface DatabaseMessageExtraPdfFile {
 	content: string;
 	images?: string[];
 	processedAsImages: boolean;
+	/** How this PDF was prepared. `none` keeps the original file for tools. */
+	parsedAs?: 'none' | 'text' | 'image';
 }
 
 export interface DatabaseMessageExtraTextFile {

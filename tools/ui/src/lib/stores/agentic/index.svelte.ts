@@ -75,6 +75,10 @@ import type {
 	DatabaseMessageExtraImageFile
 } from '$lib/types/database';
 import {
+	collectLastUserMessageExtras,
+	injectChatFilesIntoToolArgs
+} from '$lib/utils/inject-chat-files';
+import {
 	executeBrowserInfoTool,
 	executeGetDatetimeTool,
 	getAudioInputFormat,
@@ -343,6 +347,8 @@ class AgenticStore {
 
 		console.log(`[AgenticStore] Starting agentic flow with ${tools.length} tools`);
 
+		const chatFileExtras = collectLastUserMessageExtras(messages);
+
 		const normalizedMessages: ApiChatMessageData[] =
 			await ChatService.normalizeMessagesForApi(messages);
 
@@ -361,6 +367,7 @@ class AgenticStore {
 			await this.executeAgenticLoop({
 				agenticConfig,
 				callbacks,
+				chatFileExtras,
 				conversationId,
 				messages: normalizedMessages,
 				options,
@@ -425,8 +432,18 @@ class AgenticStore {
 		agenticConfig: AgenticConfig;
 		callbacks: AgenticFlowCallbacks;
 		signal?: AbortSignal;
+		chatFileExtras: DatabaseMessageExtra[];
 	}): Promise<void> {
-		const { agenticConfig, callbacks, conversationId, messages, options, signal, tools } = params;
+		const {
+			agenticConfig,
+			callbacks,
+			chatFileExtras,
+			conversationId,
+			messages,
+			options,
+			signal,
+			tools
+		} = params;
 		const {
 			createAssistantMessage,
 			createToolResultMessage,
@@ -772,13 +789,17 @@ class AgenticStore {
 					toolSuccess = false;
 				} else {
 					try {
+						const args = injectChatFilesIntoToolArgs(
+							this.parseToolArguments(toolCall.function.arguments),
+							chatFileExtras
+						);
+
 						if (
 							toolSource === ToolSource.SERVER &&
 							toolName === BuiltInTool.SERVER_EXEC_SHELL_COMMAND &&
 							createToolResultMessage &&
 							updateToolResultMessage
 						) {
-							const args = this.parseToolArguments(toolCall.function.arguments);
 							const cwd = conversationsStore.activeConversation?.cwd;
 							const msg = await createToolResultMessage(toolCall.id, '', undefined, cwd);
 
@@ -806,7 +827,6 @@ class AgenticStore {
 							}
 							result = accumulated;
 						} else if (toolSource === ToolSource.SERVER) {
-							const args = this.parseToolArguments(toolCall.function.arguments);
 							const cwd = conversationsStore.activeConversation?.cwd;
 							const executionResult = await ToolsService.executeTool(toolName, args, signal, cwd);
 
@@ -814,8 +834,6 @@ class AgenticStore {
 
 							if (executionResult.isError) toolSuccess = false;
 						} else if (toolSource === ToolSource.BROWSER) {
-							const args = this.parseToolArguments(toolCall.function.arguments);
-
 							let executionResult: ToolExecutionResult;
 
 							if (toolName === BuiltInTool.BROWSER_GET_DATETIME) {
@@ -841,7 +859,7 @@ class AgenticStore {
 							if (executionResult.isError) toolSuccess = false;
 						} else {
 							const mcpCall: MCPToolCall = {
-								function: { arguments: toolCall.function.arguments, name: toolName },
+								function: { arguments: JSON.stringify(args), name: toolName },
 								id: toolCall.id
 							};
 							const executionResult = await mcpStore.executeTool(mcpCall, signal);

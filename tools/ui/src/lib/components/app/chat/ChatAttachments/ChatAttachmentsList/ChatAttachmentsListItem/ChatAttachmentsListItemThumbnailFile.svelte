@@ -2,10 +2,12 @@
 	import { Music, Video, X } from '@lucide/svelte';
 	import { ActionIcon } from '$lib/components/app';
 	import { ICON_CLASS_DEFAULT } from '$lib/constants';
-	import { AttachmentType } from '$lib/enums';
+	import { settingsStore } from '$lib/stores/settings/index.svelte';
 	import {
 		formatFileSize,
 		getFileTypeLabel,
+		getPdfParseMode,
+		getPdfProcessingLabel,
 		getPreviewText,
 		isAudioFile,
 		isPdfFile,
@@ -67,13 +69,11 @@
 	});
 
 	let pdfProcessingMode = $derived.by(() => {
-		if (attachment?.type === AttachmentType.PDF) {
-			const pdfAttachment = attachment as DatabaseMessageExtraPdfFile;
-
-			return pdfAttachment.processedAsImages ? 'Sent as Image' : 'Sent as Text';
+		if (!isPdf) {
+			return null;
 		}
 
-		return null;
+		return getPdfProcessingLabel(attachment, getPdfParseMode(settingsStore.config));
 	});
 </script>
 
