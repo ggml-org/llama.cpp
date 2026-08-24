@@ -293,6 +293,8 @@ export interface ChatMessageActionsContext {
 }
 
 export interface ChatMessageEditState {
+	/** Agentic turns span several messages, so editing is offered on plain turns only */
+	readonly canEdit: boolean;
 	readonly isEditing: boolean;
 	readonly editedContent: string;
 	readonly editedExtras: DatabaseMessageExtra[];

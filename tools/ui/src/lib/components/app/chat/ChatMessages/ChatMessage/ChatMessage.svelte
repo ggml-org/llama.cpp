@@ -17,7 +17,7 @@
 		ChatMessageDeletionInfo,
 		DatabaseMessageExtraMcpPrompt
 	} from '$lib/types';
-	import { deriveAgenticSections } from '$lib/utils';
+	import { deriveAgenticSections, hasAgenticContent } from '$lib/utils';
 	import { parseFilesToMessageExtras } from '$lib/utils/browser-only';
 
 	interface Props {
@@ -58,6 +58,8 @@
 	// of a user bubble. The persisted flag is the single source of truth.
 	let isSynthetic = $derived(Boolean(message.isSynthetic));
 
+	let canEdit = $derived(!hasAgenticContent(message, toolMessages));
+
 	let showSaveOnlyOption = $derived(message.role === MessageRole.USER);
 	let showBranchAfterEditOption = $derived(message.role === MessageRole.ASSISTANT);
 	// Tool calls and tool results live in their own fields and rows, so the edit form
@@ -68,6 +70,9 @@
 
 	setChatMessageEditContext({
 		cancel: handleCancelEdit,
+		get canEdit() {
+			return canEdit;
+		},
 		get editedContent() {
 			return editedContent;
 		},
@@ -170,7 +175,7 @@
 	$effect(() => {
 		const pendingId = chatStore.pendingEditMessageId;
 
-		if (pendingId && pendingId === message.id && !isEditing) {
+		if (pendingId && pendingId === message.id && !isEditing && canEdit) {
 			handleEdit();
 			chatStore.clearPendingEditMessageId();
 		}
