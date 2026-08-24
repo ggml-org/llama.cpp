@@ -59,6 +59,7 @@ enum class ggml_cuda_rdna2_p2p_host_route {
     fallback,
     ordinary_width1,
     speculative_width5,
+    speculative_width6,
 };
 
 enum class ggml_cuda_rdna2_p2p_host_fallback_reason {
@@ -76,7 +77,7 @@ struct ggml_cuda_rdna2_p2p_host_route_result {
 
 inline ggml_cuda_rdna2_p2p_host_route_result ggml_cuda_rdna2_p2p_host_select_route(
         int64_t ne0, int64_t ne1, int64_t ne2, int64_t ne3,
-        bool speculative_width5_enabled, bool exact_width1, bool exact_width5) {
+        bool speculative_widths_enabled, bool exact_width1, bool exact_width5, bool exact_width6) {
     if (ne0 != 5120 || ne2 != 1 || ne3 != 1) {
         return { ggml_cuda_rdna2_p2p_host_route::fallback,
                  ggml_cuda_rdna2_p2p_host_fallback_reason::unrelated_shape };
@@ -90,7 +91,7 @@ inline ggml_cuda_rdna2_p2p_host_route_result ggml_cuda_rdna2_p2p_host_select_rou
                  ggml_cuda_rdna2_p2p_host_fallback_reason::none };
     }
     if (ne1 == 5) {
-        if (!speculative_width5_enabled) {
+        if (!speculative_widths_enabled) {
             return { ggml_cuda_rdna2_p2p_host_route::fallback,
                      ggml_cuda_rdna2_p2p_host_fallback_reason::policy_disabled };
         }
@@ -99,6 +100,18 @@ inline ggml_cuda_rdna2_p2p_host_route_result ggml_cuda_rdna2_p2p_host_select_rou
                      ggml_cuda_rdna2_p2p_host_fallback_reason::self_test_failed };
         }
         return { ggml_cuda_rdna2_p2p_host_route::speculative_width5,
+                 ggml_cuda_rdna2_p2p_host_fallback_reason::none };
+    }
+    if (ne1 == 6) {
+        if (!speculative_widths_enabled) {
+            return { ggml_cuda_rdna2_p2p_host_route::fallback,
+                     ggml_cuda_rdna2_p2p_host_fallback_reason::policy_disabled };
+        }
+        if (!exact_width6) {
+            return { ggml_cuda_rdna2_p2p_host_route::fallback,
+                     ggml_cuda_rdna2_p2p_host_fallback_reason::self_test_failed };
+        }
+        return { ggml_cuda_rdna2_p2p_host_route::speculative_width6,
                  ggml_cuda_rdna2_p2p_host_fallback_reason::none };
     }
     return { ggml_cuda_rdna2_p2p_host_route::fallback,
