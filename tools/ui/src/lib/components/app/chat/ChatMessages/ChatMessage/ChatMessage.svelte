@@ -7,9 +7,9 @@
 		ChatMessageSystem,
 		ChatMessageUser
 	} from '$lib/components/app/chat';
-	import { REASONING_TAGS, ROUTES, SYSTEM_MESSAGE_PLACEHOLDER } from '$lib/constants';
+	import { ROUTES, SYSTEM_MESSAGE_PLACEHOLDER } from '$lib/constants';
 	import { setChatMessageActionsContext, setChatMessageEditContext } from '$lib/contexts';
-	import { AgenticSectionType, AttachmentType, MessageRole } from '$lib/enums';
+	import { AttachmentType, MessageRole } from '$lib/enums';
 	import { DatabaseService } from '$lib/services/database.service';
 	import { chatStore, conversationsStore, deviceStore } from '$lib/stores';
 	import type {
@@ -17,7 +17,6 @@
 		ChatMessageDeletionInfo,
 		DatabaseMessageExtraMcpPrompt
 	} from '$lib/types';
-	import { deriveAgenticSections } from '$lib/utils';
 	import { parseFilesToMessageExtras } from '$lib/utils/browser-only';
 
 	interface Props {
@@ -43,73 +42,28 @@
 	}: Props = $props();
 
 	let deletionInfo = $state<ChatMessageDeletionInfo | null>(null);
-	// The system message placeholder must never surface as editable content; keeping
-	// it in the derived (not just in handleEdit) guards against prop invalidation
-	// reverting the override while editing
-	let editedContent = $derived(
-		message.role === MessageRole.SYSTEM && message.content === SYSTEM_MESSAGE_PLACEHOLDER
-			? ''
-			: message.content
-	);
-
-	// Synthetic cwd-change messages render with the folder-row UI instead
-	// of a user bubble. The persisted flag is the single source of truth.
-	let isSynthetic = $derived(Boolean(message.isSynthetic));
-
-	let rawEditContent = $derived.by(() => {
-		if (message.role !== MessageRole.ASSISTANT) return undefined;
-
-		const sections = deriveAgenticSections(message, toolMessages, [], false);
-		const parts: string[] = [];
-
-		for (const section of sections) {
-			switch (section.type) {
-				case AgenticSectionType.REASONING:
-				case AgenticSectionType.REASONING_PENDING:
-					parts.push(`${REASONING_TAGS.START}\n${section.content}\n${REASONING_TAGS.END}`);
-
-					break;
-
-				case AgenticSectionType.TEXT:
-					parts.push(section.content);
-
-					break;
-
-				case AgenticSectionType.TOOL_CALL:
-				case AgenticSectionType.TOOL_CALL_PENDING:
-				case AgenticSectionType.TOOL_CALL_STREAMING: {
-					const callObj: Record<string, unknown> = { name: section.toolName };
-
-					if (section.toolArgs) {
-						try {
-							callObj.arguments = JSON.parse(section.toolArgs);
-						} catch {
-							callObj.arguments = section.toolArgs;
-						}
-					}
-
-					parts.push(JSON.stringify(callObj, null, 2));
-
-					if (section.toolResult) {
-						parts.push(`[Tool Result]\n${section.toolResult}`);
-					}
-
-					break;
-				}
-			}
-		}
-
-		return parts.join('\n\n\n');
-	});
-	let editedExtras = $derived<DatabaseMessageExtra[]>(message.extra ? [...message.extra] : []);
+	// The edit buffer is plain state seeded by handleEdit. Deriving it from the message
+	// would tie it to a value the store rewrites at will, discarding what the user types.
+	let editedContent = $state('');
+	let editedExtras = $state<DatabaseMessageExtra[]>([]);
+	let editedReasoning = $state('');
 	let editedUploadedFiles = $state<ChatUploadedFile[]>([]);
 	let isEditing = $state(false);
 	let showDeleteDialog = $state(false);
 	let shouldBranchAfterEdit = $state(false);
 	let textareaElement: HTMLTextAreaElement | undefined = $state();
 
+	// Synthetic cwd-change messages render with the folder-row UI instead
+	// of a user bubble. The persisted flag is the single source of truth.
+	let isSynthetic = $derived(Boolean(message.isSynthetic));
+
 	let showSaveOnlyOption = $derived(message.role === MessageRole.USER);
 	let showBranchAfterEditOption = $derived(message.role === MessageRole.ASSISTANT);
+	// Tool calls and tool results live in their own fields and rows, so the edit form
+	// exposes exactly the two free text fields of an assistant turn: content and reasoning
+	let showReasoningField = $derived(
+		message.role === MessageRole.ASSISTANT && Boolean(message.reasoningContent)
+	);
 
 	setChatMessageEditContext({
 		cancel: handleCancelEdit,
@@ -118,6 +72,9 @@
 		},
 		get editedExtras() {
 			return editedExtras;
+		},
+		get editedReasoning() {
+			return editedReasoning;
 		},
 		get editedUploadedFiles() {
 			return editedUploadedFiles;
@@ -129,15 +86,13 @@
 			return message.role;
 		},
 		get originalContent() {
-			return message.role === MessageRole.ASSISTANT
-				? (rawEditContent ?? message.content)
-				: message.content;
+			return message.content;
 		},
 		get originalExtras() {
 			return message.extra || [];
 		},
-		get rawEditContent() {
-			return rawEditContent;
+		get originalReasoning() {
+			return message.reasoningContent ?? '';
 		},
 		save: handleSaveEdit,
 		saveOnly: handleSaveEditOnly,
@@ -146,6 +101,9 @@
 		},
 		setExtras: (extras: DatabaseMessageExtra[]) => {
 			editedExtras = extras;
+		},
+		setReasoning: (reasoning: string) => {
+			editedReasoning = reasoning;
 		},
 		setShouldBranchAfterEdit: (value: boolean) => {
 			shouldBranchAfterEdit = value;
@@ -158,6 +116,9 @@
 		},
 		get showBranchAfterEditOption() {
 			return showBranchAfterEditOption;
+		},
+		get showReasoningField() {
+			return showReasoningField;
 		},
 		get showSaveOnlyOption() {
 			return showSaveOnlyOption;
@@ -224,16 +185,7 @@
 			if (conversationDeleted) {
 				goto(ROUTES.START);
 			}
-
-			return;
 		}
-
-		editedContent =
-			message.role === MessageRole.ASSISTANT
-				? rawEditContent || message.content || ''
-				: message.content;
-		editedExtras = message.extra ? [...message.extra] : [];
-		editedUploadedFiles = [];
 	}
 
 	function handleCopy() {
@@ -262,14 +214,12 @@
 	function handleEdit() {
 		isEditing = true;
 
-		// Clear temporary placeholder content for system messages
-		if (message.role === MessageRole.SYSTEM && message.content === SYSTEM_MESSAGE_PLACEHOLDER) {
-			editedContent = '';
-		} else if (message.role === MessageRole.ASSISTANT) {
-			editedContent = rawEditContent || message.content || '';
-		} else {
-			editedContent = message.content;
-		}
+		// The system placeholder is a marker, never content the user should see
+		const isSystemPlaceholder =
+			message.role === MessageRole.SYSTEM && message.content === SYSTEM_MESSAGE_PLACEHOLDER;
+
+		editedContent = isSystemPlaceholder ? '' : message.content;
+		editedReasoning = message.reasoningContent ?? '';
 
 		textareaElement?.focus({ preventScroll: true });
 		editedExtras = message.extra ? [...message.extra] : [];
@@ -342,9 +292,14 @@
 
 			chatActions.editWithBranching(message, editedContent.trim(), finalExtras);
 		} else {
-			// For assistant messages, preserve exact content including trailing whitespace
-			// This is important for the Continue feature to work properly
-			chatActions.editWithReplacement(message, editedContent, shouldBranchAfterEdit);
+			// Assistant content and reasoning go back untrimmed, trailing whitespace included,
+			// so Continue resumes on the exact byte the model stopped at
+			chatActions.editWithReplacement(
+				message,
+				editedContent,
+				editedReasoning,
+				shouldBranchAfterEdit
+			);
 		}
 
 		isEditing = false;
@@ -392,7 +347,6 @@
 		<ChatMessageUser class={className} {isLastUserMessage} {message} {nextAssistantMessage} />
 	{:else}
 		<ChatMessageAssistant
-			bind:textareaElement
 			class={className}
 			{isLastAssistantMessage}
 			{message}
