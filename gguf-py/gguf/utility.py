@@ -36,7 +36,8 @@ def model_weight_count_rounded_notation(model_params_count: int, min_digits: int
         scaled_model_params = model_params_count * 1e-3
         scale_suffix = "K"
 
-    fix = max(min_digits - len(str(round(scaled_model_params)).lstrip('0')), 0)
+    rounded_str = str(round(scaled_model_params)).lstrip('0') or '0'
+    fix = max(min_digits - len(rounded_str), 0)
 
     return f"{scaled_model_params:.{fix}f}{scale_suffix}"
 
