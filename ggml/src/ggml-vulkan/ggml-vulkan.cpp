@@ -4248,6 +4248,7 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
     std::array<uint32_t, 3> l_wg_denoms, m_wg_denoms, s_wg_denoms,
                             l_mmq_wg_denoms, m_mmq_wg_denoms, s_mmq_wg_denoms,
                             l_mmq_wg_denoms_k, m_mmq_wg_denoms_k, s_mmq_wg_denoms_k,
+                            l_mmq_cm1_wg_denoms, m_mmq_cm1_wg_denoms, s_mmq_cm1_wg_denoms,
                             l_mmqid_wg_denoms, m_mmqid_wg_denoms, s_mmqid_wg_denoms;
 
     uint32_t l_align, m_align, s_align;
@@ -4336,8 +4337,8 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
 
         // Coopmat int8 cm1 shader uses larger workgroups for better occupancy
         // Force wave32 for VOPD on RDNA3+
-        l_warptile_mmq_cm1_int = { 512, 128, 128, 32, 32, 32, 2, itm_l, itn_l, itk_l, 32 };
-        m_warptile_mmq_cm1_int = { 128,  64,  64, 32, 32, 32, 2, itm_m, itn_m, itk_m, 32 };
+        l_warptile_mmq_cm1_int = { 640, 128, 160, 32, 32, 32, 2, itm_l, itn_l, itk_l, 32 };
+        m_warptile_mmq_cm1_int = { 256, 128,  64, 32, 32, 32, 2, itm_m, itn_m, itk_m, 32 };
         s_warptile_mmq_cm1_int = {  32,  32,  32, 32, 32, 32, 2, itm_s, itn_s, itk_s, 32 };
 
         // K-quants use even more registers, mitigate by setting WMITER to 1
@@ -4379,6 +4380,9 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
         l_mmq_wg_denoms = l_wg_denoms = {128, 128, 1 };
         m_mmq_wg_denoms = m_wg_denoms = { 64,  64, 1 };
         s_mmq_wg_denoms = s_wg_denoms = { 32,  32, 1 };
+        l_mmq_cm1_wg_denoms = {128, 160, 1 };
+        m_mmq_cm1_wg_denoms = {128,  64, 1 };
+        s_mmq_cm1_wg_denoms = { 32,  32, 1 };
         l_align = 128;
         m_align =  64;
         s_align =  32;
@@ -4866,8 +4870,8 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
         }
 
         if (device->coopmat_int_support) {
-            CREATE_MMQ2(GGML_TYPE_Q4_0, pipeline_dequant_mul_mat_mat_q8_1[GGML_TYPE_Q4_0], matmul_q4_0_q8_1, mmq_wg_denoms, warptile_mmq_cm1_int, vk_mat_mat_push_constants, 3, );
-            CREATE_MMQ2(GGML_TYPE_Q8_0, pipeline_dequant_mul_mat_mat_q8_1[GGML_TYPE_Q8_0], matmul_q8_0_q8_1, mmq_wg_denoms, warptile_mmq_cm1_int, vk_mat_mat_push_constants, 3, );
+            CREATE_MMQ2(GGML_TYPE_Q4_0, pipeline_dequant_mul_mat_mat_q8_1[GGML_TYPE_Q4_0], matmul_q4_0_q8_1, mmq_cm1_wg_denoms, warptile_mmq_cm1_int, vk_mat_mat_push_constants, 3, );
+            CREATE_MMQ2(GGML_TYPE_Q8_0, pipeline_dequant_mul_mat_mat_q8_1[GGML_TYPE_Q8_0], matmul_q8_0_q8_1, mmq_cm1_wg_denoms, warptile_mmq_cm1_int, vk_mat_mat_push_constants, 3, );
         }
 
         GGML_ASSERT(device->subgroup_ballot);
