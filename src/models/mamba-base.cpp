@@ -182,13 +182,14 @@ ggml_tensor * llm_build_mamba_base::build_mamba2_layer(llm_graph_input_rs * inp,
     ggml_tensor * conv = build_rs(inp, conv_states_all, hparams.n_embd_r(), n_seqs);
     conv               = ggml_reshape_3d(ctx0, conv, d_conv - 1, d_inner + 2 * n_group * d_state, n_seqs);
 
-    // {n_embd, n_tokens} => {n_embd, n_seq_tokens, n_seqs}
-    cur = ggml_reshape_3d(ctx0, cur, cur->ne[0], n_seq_tokens, n_seqs);
-
     // d_in_proj = 2 * self.d_inner + 2 * self.ngroups * self.d_state + self.nheads
 
-    // {n_embd, d_in_proj} @ {n_embd, n_seq_tokens, n_seqs} => {d_in_proj, n_seq_tokens, n_seqs}
+    // Keep the projection 2D: with a {n_embd, 1, n_seqs} batch the CUDA backend
+    // dispatches a column-batched GEMV for what is a large dense GEMM.
+    // {n_embd, d_in_proj} @ {n_embd, n_tokens} => {d_in_proj, n_tokens}
     ggml_tensor * zxBCdt = build_lora_mm(model.layers[il].ssm_in, cur, model.layers[il].ssm_in_s);
+    // {d_in_proj, n_tokens} => {d_in_proj, n_seq_tokens, n_seqs}
+    zxBCdt = ggml_reshape_3d(ctx0, zxBCdt, zxBCdt->ne[0], n_seq_tokens, n_seqs);
 
     // split the above in three
     ggml_tensor * z   = ggml_view_4d(ctx0, zxBCdt, head_dim, n_head, n_seq_tokens, n_seqs, head_dim * zxBCdt->nb[0],
@@ -290,15 +291,12 @@ ggml_tensor * llm_build_mamba_base::build_mamba2_layer(llm_graph_input_rs * inp,
             y = build_norm(y, model.layers[il].ssm_norm, NULL, LLM_NORM_RMS, il);
         }
 
-        y = ggml_reshape_3d(ctx0, y, d_inner, n_seq_tokens, n_seqs);
+        y = ggml_reshape_2d(ctx0, y, d_inner, n_seq_tokens * n_seqs);
 
-        // {d_inner, n_embd} @ {d_inner, n_seq_tokens, n_seqs} => {n_embd, n_seq_tokens, n_seqs}
+        // {d_inner, n_embd} @ {d_inner, n_tokens} => {n_embd, n_tokens}
         cur = build_lora_mm(model.layers[il].ssm_out, y, model.layers[il].ssm_out_s);
     }
 
-    // {n_embd, n_seq_tokens, n_seqs} => {n_embd, n_tokens}
-    cur = ggml_reshape_2d(ctx0, cur, cur->ne[0], n_seq_tokens * n_seqs);
     cb(cur, "mamba_out", il);
-
     return cur;
 }
