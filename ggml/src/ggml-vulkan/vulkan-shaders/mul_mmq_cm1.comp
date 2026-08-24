@@ -229,39 +229,120 @@ void main() {
         sums[i] = ACC_TYPE(0.0);
     }
 
-    for (uint block = start_k; block < end_k; block += BK * BK_STEP) {
-        [[unroll]] for (uint ks = 0; ks < BK_STEP; ks++) {
-            const bool k_in_bounds = block + ks * BK < end_k;
-            [[unroll]] for (uint l = 0; loadc_a + l < BM; l += loadstride_a) {
-                const uint buf_ib = loadc_a + l;
-                const uint ib = pos_a_ib + buf_ib * p.stride_a / BK + ks;
-                if (k_in_bounds) {
-                    block_a_to_shmem(buf_ib, ib, loadr_a, ks);
-                } else if (loadr_a == 0) {
-                    buf_a_d[ks * BM + buf_ib] = FLOAT_TYPE(0.0);
-                }
-            }
-            [[unroll]] for (uint l = 0; loadc_b + l < BN; l += loadstride_b) {
-                const uint buf_ib = loadc_b + l;
+    // Double-buffering: prefetch registers
+    const uint A_LOADS = (BM + loadstride_a - 1) / loadstride_a;
+    const uint B_LOADS = (BN + loadstride_b - 1) / loadstride_b;
+
+    uint32_t  pre_a_qs[A_LOADS * BK_STEP];
+    float16_t pre_a_d [A_LOADS * BK_STEP];
+    ivec4     pre_b_qs[B_LOADS * BK_STEP];
+    float16_t pre_b_d [B_LOADS * BK_STEP];
+
+// Prefetch: global memory → registers
+#define PREFETCH_BLOCK(blk)                                                                     \
+    [[unroll]] for (uint li = 0; li < A_LOADS; li++) {                                          \
+        const uint buf_ib = loadc_a + li * loadstride_a;                                        \
+        if (buf_ib < BM) {                                                                      \
+            const uint ib = pos_a_ib + buf_ib * p.stride_a / BK;                                \
+            [[unroll]] for (uint ks = 0; ks < BK_STEP; ks++) {                                  \
+                pre_a_qs[li * BK_STEP + ks] =                                                   \
+                    pack32(u16vec2(data_a_packed16[ib + ks].qs[loadr_a * 2],                    \
+                                   data_a_packed16[ib + ks].qs[loadr_a * 2 + 1]));              \
+                pre_a_d[li * BK_STEP + ks] = data_a_packed16[ib + ks].d;                        \
+            }                                                                                   \
+        }                                                                                       \
+    }                                                                                           \
+    [[unroll]] for (uint li = 0; li < B_LOADS; li++) {                                          \
+        const uint buf_ib = loadc_b + li * loadstride_b;                                        \
+        if (buf_ib < BN) {                                                                      \
+            B_IB_CALC                                                                           \
+            [[unroll]] for (uint ks = 0; ks < BK_STEP; ks++) {                                  \
+                const uint ib_k = ((blk) + ks * BK < end_k) ? (ib + ks) : ib;                   \
+                const uint ib_outer = ib_k / 4;                                                 \
+                const uint ib_inner = ib_k % 4;                                                 \
+                pre_b_qs[li * BK_STEP + ks] = data_b[ib_outer].qs[ib_inner * 2 + loadr_b];      \
+                pre_b_d[li * BK_STEP + ks] = data_b[ib_outer].ds[ib_inner].x;                   \
+            }                                                                                   \
+        }                                                                                       \
+    }
+
 #ifdef MUL_MAT_ID
-                const u16vec2 row_idx = row_ids[buf_ib];
-                const uint ib = pos_b_ib + row_idx.y * p.batch_stride_b / BK + (row_idx.x % p.ne11) * p.stride_b / BK + ks;
+#define B_IB_CALC                                                                               \
+            const u16vec2 row_idx = row_ids[buf_ib];                                            \
+            const uint ib = pos_b_ib + row_idx.y * p.batch_stride_b / BK                        \
+                          + (row_idx.x % p.ne11) * p.stride_b / BK;
 #else
-                const uint ib = pos_b_ib + buf_ib * p.stride_b / BK + ks;
+#define B_IB_CALC                                                                               \
+            const uint ib = pos_b_ib + buf_ib * p.stride_b / BK;
 #endif
-                if (k_in_bounds) {
-                    block_b_to_shmem(buf_ib, ib, loadr_b, ks);
-                } else if (loadr_b == 0) {
-                    buf_b_d[ks * BN + buf_ib] = FLOAT_TYPE(0.0);
-                }
-            }
-        }
+
+// Store: registers → shared memory (with quant-specific unpacking)
+#define STORE_BLOCK_TO_LDS(blk)                                                                 \
+    [[unroll]] for (uint li = 0; li < A_LOADS; li++) {                                          \
+        const uint buf_ib = loadc_a + li * loadstride_a;                                        \
+        if (buf_ib < BM) {                                                                      \
+            [[unroll]] for (uint ks = 0; ks < BK_STEP; ks++) {                                  \
+                const uint idx = li * BK_STEP + ks;                                             \
+                STORE_A_QS(buf_ib, ks, idx)                                                     \
+                if (loadr_a == 0) {                                                             \
+                    buf_a_d[ks * BM + buf_ib] = pre_a_d[idx];                                   \
+                }                                                                               \
+            }                                                                                   \
+        }                                                                                       \
+    }                                                                                           \
+    [[unroll]] for (uint li = 0; li < B_LOADS; li++) {                                          \
+        const uint buf_ib = loadc_b + li * loadstride_b;                                        \
+        if (buf_ib < BN) {                                                                      \
+            [[unroll]] for (uint ks = 0; ks < BK_STEP; ks++) {                                  \
+                const bool in_bounds = (blk) + ks * BK < end_k;                                 \
+                const uint idx = li * BK_STEP + ks;                                             \
+                const ivec4 v = in_bounds ? pre_b_qs[idx] : ivec4(0);                           \
+                const uint base = buf_ib * QPITCH + ks * (BK / 4) + loadr_b * 4;                \
+                buf_b_qs[base    ] = v.x;                                                       \
+                buf_b_qs[base + 1] = v.y;                                                       \
+                buf_b_qs[base + 2] = v.z;                                                       \
+                buf_b_qs[base + 3] = v.w;                                                       \
+                if (loadr_b == 0) {                                                             \
+                    buf_b_d[ks * BN + buf_ib] = in_bounds ? pre_b_d[idx] : float16_t(0.0);      \
+                }                                                                               \
+            }                                                                                   \
+        }                                                                                       \
+    }
+
+#if defined(DATA_A_Q4_0) || defined(DATA_A_Q4_1)
+#define STORE_A_QS(buf_ib, ks, idx)                                                             \
+                uint32_t lo4 = pre_a_qs[idx] & 0x0F0F0F0F;                                      \
+                uint32_t hi4 = (pre_a_qs[idx] >> 4) & 0x0F0F0F0F;                               \
+                lo4 = ((lo4 | 0x80808080) - 0x08080808) ^ 0x80808080;                           \
+                hi4 = ((hi4 | 0x80808080) - 0x08080808) ^ 0x80808080;                           \
+                buf_a_qs[(buf_ib) * QPITCH + (ks) * (BK / 4) + loadr_a    ] = lo4;              \
+                buf_a_qs[(buf_ib) * QPITCH + (ks) * (BK / 4) + loadr_a + 4] = hi4;
+#elif defined(DATA_A_Q8_0)
+#define STORE_A_QS(buf_ib, ks, idx)                                                             \
+                buf_a_qs[(buf_ib) * QPITCH + (ks) * (BK / 4) + loadr_a] = pre_a_qs[idx];
+#endif
+
+    // Prefetch first block
+    if (start_k < end_k) {
+        PREFETCH_BLOCK(start_k)
+    }
+
+    for (uint block = start_k; block < end_k; block += BK * BK_STEP) {
+        // Store prefetched data to shmem
+        STORE_BLOCK_TO_LDS(block)
 
         barrier();
 
         pos_a_ib += BK_STEP;
         pos_b_ib += BK_STEP;
 
+        // Prefetch next block (overlaps with compute)
+        const uint next_block = block + BK * BK_STEP;
+        if (next_block < end_k) {
+            PREFETCH_BLOCK(next_block)
+        }
+
+        // Compute from shmem
         [[unroll]] for (uint ks = 0; ks < BK_STEP; ks++) {
             [[unroll]] for (uint idx = 0; idx < cms_per_row * cms_per_col; idx++) {
                 cm_result[idx] = coopmat<int32_t, gl_ScopeSubgroup, TM, TN, gl_MatrixUseAccumulator>(0);
@@ -294,6 +375,11 @@ void main() {
 
         barrier();
     }
+
+#undef STORE_A_QS
+#undef STORE_BLOCK_TO_LDS
+#undef B_IB_CALC
+#undef PREFETCH_BLOCK
 
     const uint dr = ir * BM + warp_r * WM;
     const uint dc = ic * BN + warp_c * WN;
