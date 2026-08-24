@@ -107,6 +107,7 @@
 #define FC_SUM_ROWS                    1400
 #define FC_UPSCALE                     1500
 #define FC_GATED_DELTA_NET             1600
+#define FC_SSM_SCAN                    1700
 
 // op-specific constants
 #define OP_FLASH_ATTN_EXT_NQPSG 8

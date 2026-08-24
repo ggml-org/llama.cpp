@@ -1783,7 +1783,7 @@ int ggml_metal_op_ssm_scan(ggml_metal_op_t ctx, int idx) {
     };
 
     if (!use_mma) {
-        dispatch(ggml_metal_library_get_pipeline_ssm_scan(lib, op), d_state, d_inner);
+        dispatch(ggml_metal_library_get_pipeline_ssm_scan(lib, op, false), d_state, d_inner);
         return 1;
     }
 
@@ -1798,7 +1798,7 @@ int ggml_metal_op_ssm_scan(ggml_metal_op_t ctx, int idx) {
 
         args.n_seq_tokens = n_seq_tokens - mma_tokens;
         args.token_offset = mma_tokens;
-        dispatch(ggml_metal_library_get_pipeline_ssm_scan(lib, op), d_state, d_inner);
+        dispatch(ggml_metal_library_get_pipeline_ssm_scan(lib, op, true), d_state, d_inner);
     }
 
     return 1;
