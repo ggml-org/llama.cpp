@@ -59,10 +59,20 @@ static bool server_gfx1030_native_auto_enabled() {
     return override_gfx != nullptr && std::strcmp(override_gfx, "10.3.0") == 0;
 }
 
+static bool server_env_enabled(const char * name) {
+    return std::getenv(name) != nullptr && !server_env_disabled(name);
+}
+
 static bool server_gfx1030_spec_target_backend_sampling_profile(const common_params & params) {
     if (!server_gfx1030_native_auto_enabled() ||
-            server_env_disabled("GGML_HIP_GFX1030_TARGET_BACKEND_SAMPLING") ||
-            !server_spec_target_backend_profile_select(params.speculative)) {
+            server_env_disabled("GGML_HIP_GFX1030_TARGET_BACKEND_SAMPLING")) {
+        return false;
+    }
+
+    const auto profile = server_spec_target_backend_profile_select(params.speculative);
+    if (!profile ||
+            (profile.has_ngram_mod &&
+             !server_env_enabled("GGML_HIP_GFX1030_STACKED_TARGET_BACKEND_SAMPLING"))) {
         return false;
     }
 
@@ -140,7 +150,8 @@ static server_auto_spec_target_backend_sampling_mode server_auto_spec_target_bac
     if (server_greedy_backend_sampling_eligible(sampling)) {
         return server_auto_spec_target_backend_sampling_mode::GREEDY;
     }
-    if (server_spec_target_backend_sampling_stochastic_eligible(sampling)) {
+    if (server_env_enabled("GGML_HIP_GFX1030_STOCHASTIC_TARGET_BACKEND_SAMPLING") &&
+            server_spec_target_backend_sampling_stochastic_eligible(sampling)) {
         return server_auto_spec_target_backend_sampling_mode::STOCHASTIC;
     }
 
@@ -1301,7 +1312,8 @@ private:
         const bool prime_auto_backend_sampling = !backend_sampling_default &&
             server_gfx1030_spec_target_backend_sampling_profile(params_base) &&
             (server_greedy_backend_sampling_eligible(params_base.sampling) ||
-             server_spec_target_backend_sampling_stochastic_eligible(params_base.sampling));
+             (server_env_enabled("GGML_HIP_GFX1030_STOCHASTIC_TARGET_BACKEND_SAMPLING") &&
+              server_spec_target_backend_sampling_stochastic_eligible(params_base.sampling)));
         if (prime_auto_backend_sampling) {
             params_base.sampling.backend_sampling = true;
             SRV_INF("%s", "reserving target backend-sampling buffers for gfx1030 speculative auto policy\n");
