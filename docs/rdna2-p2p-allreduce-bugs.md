@@ -48,9 +48,9 @@ genuinely unrecognised values instead of silently disabling.
 
 ---
 
-## 2. The speculative width gate only serves one `n_max`
+## 2. The speculative width gate originally served one `n_max`
 
-The exact host-snapshot kernels implement `[5120,1,1,1]` and
+The original exact host-snapshot kernels implemented only `[5120,1,1,1]` and
 `[5120,5,1,1]`. A speculative verify batch is commonly `n_max + 1` tokens, so
 width five corresponds to `--spec-draft-n-max 4`. Other widths correctly fall
 back to RCCL, but that fallback used to be silent after startup had reported the
@@ -59,16 +59,24 @@ path as armed.
 This was first observed with MTP `n_max=5` (width six) on TP2. Later TP4 traces
 also confirmed that the DFlash target pass reaches `[5120,6,1,1]` at
 `n_max=5`; the layer-split DFlash draft does not perform TP AllReduce. Neither
-workload can use the width-five kernel at `n_max=5`.
+workload could use the width-five kernel at `n_max=5`.
+
+The precompiled TP4 route now also supports `[5120,6,1,1]`. Its 30,720-element
+reduction is checked against the installed RCCL implementation by the same
+startup exactness self-test used for widths one and five. TP1 and TP2 do not
+activate this four-rank host-snapshot path and continue to use their normal
+RCCL/internal fallback.
 
 This does not invalidate the published ordinary TP4 result. Ordinary decode is
 width one, takes the validated width-one route, and retains its measured
-`+2.78-2.95%` benefit over RCCL-only execution.
+`+2.78-2.95%` benefit over RCCL-only execution. The width-six route is a
+separate incremental optimization and does not claim to close the remaining 2x
+gap.
 
 **Fix:** classify the route explicitly and log unsupported widths once. A
 supported width whose startup exactness self-test failed receives a different
-warning. The PR deliberately does not generalize the reduction kernel: a new
-TP4 width requires its own installed-RCCL exactness validation.
+warning. The implementation deliberately does not generalize the reduction
+kernel: a new TP4 width requires its own installed-RCCL exactness validation.
 
 ---
 
@@ -78,7 +86,7 @@ Startup prints:
 
 ```
 RDNA2 P2P startup self-test matched installed RCCL for 5120 elements (4 patterns x 16 chains)
-armed RDNA2 P2P MTP-width5-auto-expanded host-snapshot AllReduce after installed-RCCL self-test (n1=1 n5=1)
+armed RDNA2 P2P MTP-width5-auto-expanded host-snapshot AllReduce after installed-RCCL self-test (n1=1 n5=1 n6=1)
 ```
 
 That reads as "working". But `p2p_host_calls` is only printed in the
