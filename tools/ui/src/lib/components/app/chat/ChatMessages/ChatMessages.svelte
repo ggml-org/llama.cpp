@@ -70,10 +70,11 @@
 		editWithReplacement: async (
 			message: DatabaseMessage,
 			newContent: string,
+			newReasoning: string,
 			shouldBranch: boolean
 		) => {
 			onUserAction?.();
-			await chatStore.editAssistantMessage(message.id, newContent, shouldBranch);
+			await chatStore.editAssistantMessage(message.id, newContent, newReasoning, shouldBranch);
 
 			// only a branch changes sibling info; an in-place edit already
 			// landed in activeMessages
