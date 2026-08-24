@@ -47,6 +47,44 @@ export { default as ModelsDiscoverInfo } from './ModelsDiscoverInfo.svelte';
 export { default as ModelsDiscoverDetails } from './ModelsDiscoverDetails.svelte';
 
 /**
+ * **ModelsDiscoverDetailsHeader** - Detail view header
+ *
+ * Shows the model avatar (base org + quant org corner badge), name, base model
+ * info, stats, metadata chips and capability badges.
+ */
+export { default as ModelsDiscoverDetailsHeader } from './ModelsDiscoverDetailsHeader.svelte';
+
+/**
+ * **ModelsDiscoverDetailsName** - Model name block
+ *
+ * Shows the quant model name with a copy button, and the base model name with a
+ * smaller external-link icon on the line below.
+ */
+export { default as ModelsDiscoverDetailsName } from './ModelsDiscoverDetailsName.svelte';
+
+/**
+ * **ModelsDiscoverDetailsDownloadOptions** - GGUF download options
+ *
+ * Groups GGUF files by bit depth and renders per-file download buttons with
+ * progress, owned by the download confirmation dialog.
+ */
+export { default as ModelsDiscoverDetailsDownloadOptions } from './ModelsDiscoverDetailsDownloadOptions.svelte';
+
+/**
+ * **ModelsDiscoverDetailsReadme** - Detail view README
+ *
+ * Renders the model card README as markdown.
+ */
+export { default as ModelsDiscoverDetailsReadme } from './ModelsDiscoverDetailsReadme.svelte';
+
+/**
+ * **TerminalCommands** - Terminal command block
+ *
+ * Shows the `llama serve` / `llama cli` commands for a model with copy buttons.
+ */
+export { default as TerminalCommands } from './TerminalCommands.svelte';
+
+/**
  * **DialogModelDownload** - Download confirmation / progress dialog
  *
  * Confirms a single GGUF download, tracks live progress over the SSE feed and

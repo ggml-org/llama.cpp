@@ -15,6 +15,11 @@
 
 	let contextLength = $derived(model.gguf?.context_length);
 
+	// Reasoning support from the chat template, matching the details view.
+	let supportsThinking = $derived(
+		Boolean(model.gguf?.chat_template && /think|reasoning/i.test(model.gguf.chat_template))
+	);
+
 	// Modalities derived from HF metadata: vision from an mmproj sidecar or a
 	// multimodal pipeline tag, audio/video from their pipeline tags.
 	let modalities = $derived.by<ModelModalities>(() => {
@@ -54,7 +59,15 @@
 </script>
 
 <span class="min-w-0 flex-1">
-	<ModelId modelId={model.id} hideOrgName {modalities} {draftVariants} wrap class="min-w-0" />
+	<ModelId
+		modelId={model.id}
+		hideOrgName
+		{modalities}
+		{supportsThinking}
+		{draftVariants}
+		wrap
+		class="min-w-0"
+	/>
 
 	<span class="mt-0.5 block truncate text-xs text-muted-foreground">
 		<span class="inline-flex items-center gap-1">
