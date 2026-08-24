@@ -44,6 +44,16 @@ void block_a_to_shmem(const uint buf_ib, const uint ib, const uint iqs) {
 
 #if defined(DATA_A_Q8_0)
 // 2-byte loads for Q8_0 blocks (34 bytes)
+void block_a_to_shmem(const uint buf_ib, const uint ib, const uint iqs) {
+    const uint32_t vui = pack32(u16vec2(data_a_packed16[ib].qs[iqs * 2],
+                                        data_a_packed16[ib].qs[iqs * 2 + 1]));
+
+    buf_a_qs[buf_ib * shmem_stride + iqs] = vui;
+
+    if (iqs == 0) {
+        buf_a_d[buf_ib] = FLOAT_TYPE(data_a_packed16[ib].d);
+    }
+}
 #endif
 
 #if defined(DATA_A_MXFP4)
