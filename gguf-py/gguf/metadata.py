@@ -83,7 +83,7 @@ class Metadata:
             metadata.sampling_xtc_threshold   = gen_config.get("xtc_threshold",   metadata.sampling_xtc_threshold)
             metadata.sampling_temp            = gen_config.get("temperature",     metadata.sampling_temp)
             metadata.sampling_penalty_last_n  = gen_config.get("penalty_last_n",  metadata.sampling_penalty_last_n)
-            metadata.sampling_penalty_repeat  = gen_config.get("penalty_repeat",  metadata.sampling_penalty_repeat)
+            metadata.sampling_penalty_repeat  = gen_config.get("penalty_repeat",  gen_config.get("repetition_penalty", metadata.sampling_penalty_repeat))
             metadata.sampling_mirostat        = gen_config.get("mirostat",        metadata.sampling_mirostat)
             metadata.sampling_mirostat_tau    = gen_config.get("mirostat_tau",    metadata.sampling_mirostat_tau)
             metadata.sampling_mirostat_eta    = gen_config.get("mirostat_eta",    metadata.sampling_mirostat_eta)
