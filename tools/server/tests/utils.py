@@ -623,7 +623,7 @@ class ServerPreset:
         server.model_hf_repo = "ggml-org/tinygemma3-GGUF:Q8_0"
         server.model_alias = "tinygemma3"
         server.n_ctx = 1024
-        server.n_batch = 32
+        server.n_batch = 512
         server.n_slots = 2
         server.n_predict = 4
         server.seed = 42
