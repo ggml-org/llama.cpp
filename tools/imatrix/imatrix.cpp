@@ -75,7 +75,8 @@ private:
 };
 
 // remove any prefix and suffixes from the name
-// CUDA0#blk.0.attn_k.weight#0 => blk.0.attn_k.weight
+// CUDA0#blk.0.attn_k.weight#0                => blk.0.attn_k.weight
+// blk.0.attn_output_a.weight (reshaped)      => blk.0.attn_output_a.weight
 static std::string filter_tensor_name(const char * name) {
     std::string wname;
     const char * p = strchr(name, '#');
@@ -89,6 +90,15 @@ static std::string filter_tensor_name(const char * name) {
         }
     } else {
         wname = name;
+    }
+    // strip trailing view/reshape annotations that ggml appends to derived tensors
+    // (e.g. a weight reshaped inline before ggml_mul_mat), so importance stats are
+    // keyed by the original weight name and match at quantization time
+    for (const char * suffix : { " (reshaped)", " (view)", " (cont)", " (transposed)", " (permuted)" }) {
+        const size_t slen = strlen(suffix);
+        if (wname.size() >= slen && wname.compare(wname.size() - slen, slen, suffix) == 0) {
+            wname.resize(wname.size() - slen);
+        }
     }
     return wname;
 }

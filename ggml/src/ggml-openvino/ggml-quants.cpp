@@ -872,7 +872,7 @@ std::shared_ptr<ov::Node> requantize_to_buffers(const ggml_tensor * tensor,
         // Full materialization (original behavior): dequantize the whole tensor to F32,
         // then convert/quantize in one call.
         std::vector<float> weights_f32(n_elements);
-        type_traits->to_float(data, weights_f32.data(), n_elements);
+        type_traits->to_float(data, weights_f32.data(), n_elements, tensor->quant_levels);
         if (requant_type == ExtraQuantType::F16) {
             ggml_get_type_traits(GGML_TYPE_F16)->from_float_ref(weights_f32.data(), weights.data(), n_elements);
             auto result = std::make_shared<ov::op::v0::Constant>(weights);
@@ -897,7 +897,7 @@ std::shared_ptr<ov::Node> requantize_to_buffers(const ggml_tensor * tensor,
             const int64_t rows = std::min(CHUNK_ROWS, n_rows - r0);
             const int64_t elems = rows * ne0;
             const auto * src = static_cast<const uint8_t *>(data) + r0 * src_row_bytes;
-            type_traits->to_float(src, scratch.data(), elems);
+            type_traits->to_float(src, scratch.data(), elems, tensor->quant_levels);
 
             if (requant_type == ExtraQuantType::F16) {
                 ggml_get_type_traits(GGML_TYPE_F16)
