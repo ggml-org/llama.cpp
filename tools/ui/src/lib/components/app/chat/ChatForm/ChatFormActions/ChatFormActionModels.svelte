@@ -5,6 +5,7 @@
 
 	interface Props {
 		disabled?: boolean;
+		extraRowCssWidth?: string;
 		forceForegroundText?: boolean;
 		hasAudioModality?: boolean;
 		hasVideoModality?: boolean;
@@ -17,6 +18,7 @@
 
 	let {
 		disabled = false,
+		extraRowCssWidth = '0rem',
 		forceForegroundText = false,
 		hasAudioModality = $bindable(false),
 		hasModelSelected = $bindable(false),
@@ -156,6 +158,7 @@
 		disabled={disabled || isOffline}
 		bind:this={selectorModelRef}
 		currentModel={selectorModel}
+		extraRowCssWidth={extraRowCssWidth}
 		{forceForegroundText}
 		{useGlobalSelection}
 	/>
