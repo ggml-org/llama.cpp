@@ -3226,6 +3226,56 @@ static bool ggml_cuda_should_fuse_lerp(
     *weight  = w;
     return true;
 }
+static bool ggml_cuda_should_fuse_add_mul(
+        const ggml_tensor * add,
+        const ggml_tensor * mul,
+        const ggml_tensor ** src0,
+        const ggml_tensor ** src1,
+        const ggml_tensor ** scale) {
+    const ggml_tensor * s = nullptr;
+    if (mul->src[0] == add) {
+        s = mul->src[1];
+    } else if (mul->src[1] == add) {
+        s = mul->src[0];
+    } else {
+        return false;
+    }
+
+    const ggml_tensor * a = add->src[0];
+    const ggml_tensor * b = add->src[1];
+    if (a->type != GGML_TYPE_F32 || b->type != GGML_TYPE_F32 || s->type != GGML_TYPE_F32 || mul->type != GGML_TYPE_F32) {
+        return false;
+    }
+    if (!ggml_can_repeat(a, mul) || !ggml_can_repeat(b, mul) || !ggml_can_repeat(s, mul)) {
+        return false;
+    }
+    if (!ggml_is_contiguous(a) || !ggml_is_contiguous(b) || !ggml_is_contiguous(s) || !ggml_is_contiguous(mul)) {
+        return false;
+    }
+
+    *src0  = a;
+    *src1  = b;
+    *scale = s;
+    return true;
+}
+
+static bool ggml_cuda_check_elementwise_aliasing(
+        const ggml_tensor * src0,
+        const ggml_tensor * src1,
+        const ggml_tensor * scale,
+        const ggml_tensor * dst) {
+    const auto tensors_overlap = [](const ggml_tensor * a, const ggml_tensor * b) {
+        const uintptr_t a_start = reinterpret_cast<uintptr_t>(a->data);
+        const uintptr_t b_start = reinterpret_cast<uintptr_t>(b->data);
+        const uintptr_t a_end   = a_start + ggml_backend_buft_get_alloc_size(a->buffer->buft, a);
+        const uintptr_t b_end   = b_start + ggml_backend_buft_get_alloc_size(b->buffer->buft, b);
+        return a_start < b_end && b_start < a_end;
+    };
+    const auto safe = [dst, &tensors_overlap](const ggml_tensor * src) {
+        return !tensors_overlap(dst, src);
+    };
+    return safe(src0) && safe(src1) && safe(scale);
+}
 static bool ggml_cuda_can_fuse(const struct ggml_cgraph *                cgraph,
                                int                                       node_idx,
                                std::initializer_list<enum ggml_op>       ops,
@@ -3531,6 +3581,28 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
                     *cuda_ctx, match.experts, match.expert_scale, match.weights, match.dst);
                 return match.node_count - 1;
             }
+        }
+    }
+
+    int add_mul_idx = i + 1;
+    while (add_mul_idx < cgraph->n_nodes && ggml_cuda_is_view_or_noop(cgraph->nodes[add_mul_idx])) {
+        ++add_mul_idx;
+    }
+
+    const int add_mul_nodes[] = { i, add_mul_idx };
+    const ggml_op add_mul_ops[] = { GGML_OP_ADD, GGML_OP_MUL };
+    const int add_mul_outputs[] = { add_mul_idx };
+    if (add_mul_idx < cgraph->n_nodes &&
+            ggml_can_fuse_subgraph_ext(cgraph, add_mul_nodes, 2, add_mul_ops, add_mul_outputs, 1)) {
+        const ggml_tensor * src0  = nullptr;
+        const ggml_tensor * src1  = nullptr;
+        const ggml_tensor * scale = nullptr;
+        ggml_tensor * mul = cgraph->nodes[add_mul_idx];
+
+        if (ggml_cuda_should_fuse_add_mul(node, mul, &src0, &src1, &scale) &&
+                ggml_cuda_check_elementwise_aliasing(src0, src1, scale, mul)) {
+            ggml_cuda_op_fused_add_mul(*cuda_ctx, src0, src1, scale, mul);
+            return add_mul_idx - i;
         }
     }
 
