@@ -14,6 +14,7 @@
 #include "log.h"
 #include "sampling.h"
 #include "speculative.h"
+#include "server-speculative-sampling.h"
 #include "mtmd.h"
 #include "mtmd-helper.h"
 
@@ -60,26 +61,12 @@ static bool server_gfx1030_native_auto_enabled() {
 
 static bool server_gfx1030_spec_target_backend_sampling_profile(const common_params & params) {
     if (!server_gfx1030_native_auto_enabled() ||
-            server_env_disabled("GGML_HIP_GFX1030_TARGET_BACKEND_SAMPLING")) {
+            server_env_disabled("GGML_HIP_GFX1030_TARGET_BACKEND_SAMPLING") ||
+            !server_spec_target_backend_profile_select(params.speculative)) {
         return false;
     }
 
-    common_speculative_type active_type = COMMON_SPECULATIVE_TYPE_NONE;
-    for (common_speculative_type type : params.speculative.types) {
-        if (type == COMMON_SPECULATIVE_TYPE_NONE) {
-            continue;
-        }
-        if (active_type != COMMON_SPECULATIVE_TYPE_NONE) {
-            return false;
-        }
-        active_type = type;
-    }
-
-    const bool supported_mode =
-        (active_type == COMMON_SPECULATIVE_TYPE_DRAFT_MTP && params.speculative.draft.n_max == 4) ||
-        (active_type == COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH &&
-            (params.speculative.draft.n_max == 5 || params.speculative.draft.n_max == 7));
-    if (!supported_mode || params.split_mode != LLAMA_SPLIT_MODE_TENSOR) {
+    if (params.split_mode != LLAMA_SPLIT_MODE_TENSOR) {
         return false;
     }
 

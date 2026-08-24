@@ -324,6 +324,11 @@ llama_build_and_test(test-model-load-cancel.cpp LABEL "model")
 llama_build_and_test(test-autorelease.cpp       LABEL "model")
 llama_build_and_test(test-backend-sampler.cpp   LABEL "model")
 
+# Pure host-side policy contract for the automatic gfx1030 speculative target
+# backend-sampling profile, including the ngram-mod proposal cascade.
+llama_build_and_test(test-speculative-backend-policy.cpp)
+target_include_directories(test-speculative-backend-policy PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../tools/server)
+
 # Test for state restore with fragmented KV cache
 # Requires a model, uses same args pattern as test-thread-safety
 llama_build_and_test(test-state-restore-fragmented.cpp LABEL "model" ARGS -m "${MODEL_DEST}")
