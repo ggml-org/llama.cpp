@@ -61,6 +61,20 @@ runs:
           echo $((num * mult))
         }
 
+        # Convert an ISO-8601 UTC timestamp (e.g. 2026-08-23T16:51:23.313693Z) to epoch seconds
+        to_epoch() {
+          local val="$1" out
+          # GNU date (e.g. Linux)
+          if out=$(date -d "$val" +%s 2>/dev/null) && [[ "$out" =~ ^[0-9]+$ ]]; then
+            echo "$out"
+            return 0
+          fi
+          # BSD date (e.g. macOS); fractional seconds are not needed, TZ forces UTC
+          out=$(TZ=UTC date -j -f "%Y-%m-%dT%H:%M:%S" "${val:0:19}" +%s 2>/dev/null) || return 1
+          [[ "$out" =~ ^[0-9]+$ ]] || return 1
+          echo "$out"
+        }
+
         [[ "$CLEAR_MIN" =~ ^[0-9]+$ ]] || { echo "Invalid min value: $CLEAR_MIN" >&2; exit 1; }
         [[ "$CLEAR_DRY_RUN" =~ ^(true|false)$ ]] || { echo "Invalid dry-run value: $CLEAR_DRY_RUN" >&2; exit 1; }
 
@@ -86,9 +100,12 @@ runs:
         # Caches are sorted oldest first
         DELETED=0
         while IFS=$'\t' read -r CREATED ID KEY; do
-          if [ -n "$CUTOFF" ] && [ "$(date -d "$CREATED" +%s)" -ge "$CUTOFF" ]; then
-            echo "Rest are not older than $CLEAR_OLDER, stopping"
-            break
+          if [ -n "$CUTOFF" ]; then
+            CREATED_SECONDS=$(to_epoch "$CREATED") || { echo "Failed to parse date: $CREATED" >&2; exit 1; }
+            if [ "$CREATED_SECONDS" -ge "$CUTOFF" ]; then
+              echo "Rest are not older than $CLEAR_OLDER, stopping"
+              break
+            fi
           fi
           if [ $((TOTAL - DELETED - 1)) -lt "$CLEAR_MIN" ]; then
             echo "Keeping at least $CLEAR_MIN cache(s), stopping"
