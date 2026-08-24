@@ -417,7 +417,6 @@ static ggml_tensor * build_dflash2_conv(
         dynamic = ggml_cont_2d(ctx0, dynamic, dynamic->ne[0], n_tokens);
     }
     ggml_tensor * blocks = ggml_reshape_3d(ctx0, hidden, hidden_size, block_size, n_blocks);
-    ggml_tensor * grouped = ggml_reshape_3d(ctx0, hidden, group_size, n_groups, n_tokens);
     ggml_tensor * coeffs = ggml_reshape_4d(ctx0, dynamic, n_groups, kernel_size, 2, n_tokens);
     ggml_tensor * coeffs_side = ggml_view_3d(ctx0, coeffs, n_groups, kernel_size, n_tokens,
             coeffs->nb[1], coeffs->nb[3], side * coeffs->nb[2]);
