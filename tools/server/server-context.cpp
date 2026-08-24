@@ -1,5 +1,4 @@
 #include "server-context.h"
-#include "json.h"
 #include "server-chat.h"
 #include "server-common.h"
 #include "server-http.h"
@@ -22,14 +21,10 @@
 #include <cstddef>
 #include <cinttypes>
 #include <cstdio>
-#include <exception>
-#include <iostream>
 #include <memory>
 #include <filesystem>
-#include <string>
 #include <utility>
 #include <fstream>
-#include <vector>
 
 // fix problem with std::min and std::max
 #if defined(_WIN32)
