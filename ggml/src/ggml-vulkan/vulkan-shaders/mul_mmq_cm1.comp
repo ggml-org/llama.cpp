@@ -90,6 +90,17 @@ shared float buf_a_d[BM * BK_STEP];
 shared uint32_t buf_b_qs[BN * QPITCH];
 shared float buf_b_d[BN * BK_STEP];
 
+#if defined(DATA_A_Q4_1) || defined(DATA_A_Q5_1)
+shared float buf_a_m[BM * BK_STEP];
+shared float buf_b_s[BN * BK_STEP];
+#endif
+
+#if defined(DATA_A_Q4_1)
+#define QUANT_OFFSET 8.0
+#elif defined(DATA_A_Q5_1)
+#define QUANT_OFFSET 16.0
+#endif
+
 #define LOAD_VEC_A (4 * QUANT_R)
 #define LOAD_VEC_B 16
 
@@ -245,6 +256,14 @@ void main() {
     ivec4     pre_b_qs[B_LOADS * BK_STEP];
     float16_t pre_b_d [B_LOADS * BK_STEP];
 
+#if defined(DATA_A_Q5_0) || defined(DATA_A_Q5_1)
+    uint32_t  pre_a_qh[A_LOADS * BK_STEP];
+#endif
+#if defined(DATA_A_Q4_1) || defined(DATA_A_Q5_1)
+    float16_t pre_a_m [A_LOADS * BK_STEP];
+    float16_t pre_b_s [B_LOADS * BK_STEP];
+#endif
+
 #include "mul_mmq_cm1_funcs.glsl"
 
     // Prefetch first block
@@ -308,6 +327,22 @@ void main() {
                 }
             }
 
+#if defined(DATA_A_Q4_1) || defined(DATA_A_Q5_1)
+            float corr_a[cms_per_row * CM_ELEMS];
+            float sum_b[cms_per_col * CM_ELEMS];
+            [[unroll]] for (uint r = 0; r < cms_per_row; r++) {
+                [[unroll]] for (uint e = 0; e < CM_ELEMS; e++) {
+                    corr_a[r * CM_ELEMS + e] = float(QUANT_OFFSET) * scale_a[r * CM_ELEMS + e]
+                        + buf_a_m[ks * BM + a_row0 + r * TM + elem_row[e]];
+                }
+            }
+            [[unroll]] for (uint c = 0; c < cms_per_col; c++) {
+                [[unroll]] for (uint e = 0; e < CM_ELEMS; e++) {
+                    sum_b[c * CM_ELEMS + e] = buf_b_s[ks * BN + b_col0 + c * TN + elem_col[e]];
+                }
+            }
+#endif
+
             coopmat<int32_t, gl_ScopeSubgroup, TM, TN, gl_MatrixUseAccumulator> accs[cms_per_row * cms_per_col];
 
             [[unroll]] for (uint r = 0; r < cms_per_row; r++) {
@@ -338,6 +373,10 @@ void main() {
                             sums[tile_idx * CM_ELEMS + e] += ACC_TYPE(float(accs[tile_idx][e])
                                 * scale_a[r * CM_ELEMS + e] * scale_b[c * CM_ELEMS + e]);
                         }
+#if defined(DATA_A_Q4_1) || defined(DATA_A_Q5_1)
+                        sums[tile_idx * CM_ELEMS + e] += ACC_TYPE(
+                            corr_a[r * CM_ELEMS + e] * sum_b[c * CM_ELEMS + e]);
+#endif
                     }
                 }
             }
@@ -351,6 +390,11 @@ void main() {
 #undef STORE_BLOCK_TO_LDS
 #undef B_IB_CALC
 #undef PREFETCH_BLOCK
+#undef PREFETCH_A_QH
+#undef PREFETCH_A_M
+#undef PREFETCH_B_S
+#undef STORE_A_M
+#undef STORE_B_S
 
     const uint dr = ir * BM + a_row0;
     const uint dc = ic * BN + b_col0;
