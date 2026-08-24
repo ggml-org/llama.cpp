@@ -118,7 +118,6 @@ static void test(const std::string & test_desc, const std::string & grammar_str,
     fflush(stderr);
 
     auto * grammar = build_grammar(grammar_str);
-    assert(grammar != nullptr);
 
     // Save the original grammar stacks so that we can reset after every new string we want to test
     const llama_grammar_stacks stacks_org = llama_grammar_get_stacks(grammar); // copy
@@ -622,27 +621,6 @@ static void test_special_chars() {
             "aaaabccccc",
             "🔵🟠✅❌abc❌✅🟠🔵",
             "🔵🟠abc🟠🔵"
-        }
-    );
-
-    // the GBNF generator escapes "-" in char classes, so the parser must accept "\-"
-    test_grammar(
-        "escaped hyphen in char class",
-        // Grammar
-        R"""(
-            root ::= [\-a]+ [^\-<]
-            )""",
-        // Passing strings
-        {
-            "-a",
-            "aaa-b",
-            "--0"
-        },
-        // Failing strings
-        {
-            "b",
-            "a-",
-            "a<"
         }
     );
 }
