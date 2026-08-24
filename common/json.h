@@ -247,7 +247,7 @@ class common_json {
 
     // appends every value of another array; inserting an array into itself throws
     void insert(const common_json & vals);
-    // appends every value of another array at the beginning; inserting an array into itself throws
+    // prepends chat message json to the beginning of the messages array
     void insert_before(const common_json & vals);
 
     // a common_json goes through the copy assignment above, everything else becomes a value
