@@ -1442,8 +1442,17 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
         split_sum += splits[i];
         splits[i] = split_sum;
     }
-    for (size_t i = 0; i < n_devices(); ++i) {
-        splits[i] /= split_sum;
+    if (split_sum <= 0.0f) {
+        // no device memory info available (common on Windows where the CPU
+        // backend does not report memory and VRAM may read as momentarily 0):
+        // fall back to an even split instead of dividing by zero (NaN)
+        for (size_t i = 0; i < n_devices(); ++i) {
+            splits[i] = float(i + 1)/float(n_devices());
+        }
+    } else {
+        for (size_t i = 0; i < n_devices(); ++i) {
+            splits[i] /= split_sum;
+        }
     }
 
     const int i_gpu_start = std::max(n_layer_all + 1 - n_gpu_layers, 0);
