@@ -1,168 +1,159 @@
 # llama.cpp — ROCmFPx + DFlash2 fork
 
-> A personal fork of [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp)
-> with two goals: **be the fastest Vulkan path on AMD Strix Halo**, and **carry the
-> newest inference features** — new quant families, new speculative-decoding
-> methods — while they are still in flight upstream.
->
-> Concretely that means AMD-native FP4/FPx quantisation, every speculative
-> decoding method llama.cpp supports (MTP, DFlash2, DSpark, ngram) benchmarked
-> against each other on this hardware, and Vulkan kernel fixes that make the two
-> work well *together* — several of which fix bugs that are still live in
-> mainline. Everything below the divider is the upstream README, unchanged.
->
-> Vulkan is the target deliberately: it is the path that works on a stock Mesa
-> install with no ROCm toolchain, and it is where Strix Halo is least tuned.
+A fast fork of [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp) with
+two jobs: **be the fastest Vulkan path on AMD Strix Halo**, and **carry the newest
+inference features while they're still in flight upstream** — new quant families,
+new speculative-decoding methods — before mainline is ready for them.
 
-## What is in here
+Vulkan is the target deliberately: stock Mesa, no ROCm toolchain, and the path
+Strix Halo is least tuned.
 
-| | Where it came from |
+## The numbers
+
+| | |
 |---|---|
-| **ROCmFPx quant types** — `Q4_0_ROCMFP4`, `_FAST`, `Q2/Q3/Q6/Q8_0_ROCMFPX`, with CPU codecs and Vulkan dequant / mat-vec / matmul / integer-dot kernels | Hand-ported from [ciru-ai/ROCmFPX](https://github.com/ciru-ai/ROCmFPX). Two decode bugs in that source are fixed here — see [ROCMFPX-NOTES.md](ROCMFPX-NOTES.md) |
-| **DFlash2 speculative decoding** | [PR #27342](https://github.com/ggml-org/llama.cpp/pull/27342) by Jian Chen. This fork carried it before it landed; upstream has since merged it, so the fork now builds on upstream's version rather than diverging |
-| **Vulkan batched mat-vec fixes** | New here. IQ3_S register spill at `NUM_COLS > 4` (5x at n=8), and the ROCmFPx batch 3-8 rework described below. Both are upstreamable |
-| **Vulkan LDS stride fix** — +14% prefill on *any* quant, not just ours | New here. A four-way LDS bank conflict in the coopmat matmul that affects every non-Intel device. Upstreamable, and the single biggest win in this fork — see [PROGRESS.md](PROGRESS.md) |
+| prefill (pp512), any stock K-quant, upstreamable one-constant fix | **+14.1 %** |
+| Qwen3.8 27B token generation | 42 T/S |
+| vs bare decode with DFlash2 on structured output (41.5 vs 13.9 t/s) |  **3.0×** |
+| vs bare decode with MTP at 31 K context (36.07 vs 12.20 t/s) | **3.0×** |
+| FP4 mat-vec at batch 8: **312 → 173 µs**, FP6: **2236 → 402 µs**| 1.8 - 5.6× |
+ 
+All numbers: single Radeon 8060S (Strix Halo APU), RADV / Mesa 26.0.3, idle GPU,
+interleaved against upstream `ggml-org/llama.cpp` master `95b8e33e1`.
+Full detail, caveats, and the measurement traps below.
 
-## Against mainline llama.cpp
+## Why this fork exists
 
-The table below is this fork versus upstream `ggml-org/llama.cpp` master
-`95b8e33e1`, built from a clean worktree with the same CMake flags, run
-interleaved on an idle GPU. **Both columns run stock third-party K-quants** — no
-ROCmFPx, no fork-specific model format — so this measures the Vulkan work alone.
+Two problems that don't have a one-line answer:
 
-| model | metric | mainline | this fork | |
+1. **Speculative decoding lives at batch 3–8.** Every method — DFlash2, MTP,
+   DSpark, ngram — verifies several drafted tokens in one batch. But the Vulkan
+   mat-vec kernels fall apart in exactly that range: a stock upstream IQ3_S
+   shader overflows the VGPR budget at `NUM_COLS > 4` and is **5× slower** at
+   the width the method needs. The fix is a register-spill elimination in a
+   shader that upstream has, but nobody noticed because single-token decode
+   never reaches that width.
+
+2. **FP4 / FPx weights beat K-quants at batch 1 and lost at batch 8.** Two
+   shader changes — amortising the UE4M3 scale decode over a whole 32-weight
+   block, and replacing the per-weight bit-window gather with a branch-free
+   one — fixed the batching. Mainline cannot load these models at all, so the
+   question of making them fast doesn't arise upstream.
+
+The one-constant LDS stride fix is the surprise: a four-way bank conflict in
+the coopmat matmul that costs 17–18 % at the kernel level and 12–14 % at the
+benchmark level, on **every non-Intel device**, with **any quant**. It's
+upstreamable and is the single biggest win in this fork.
+
+## What's in the fork
+
+| Component | Status |
+|---|---|
+| **ROCmFPx quant types** — Q4\_0\_ROCMFP4, \_FAST, Q2/Q3/Q6/Q8\_0\_ROCMFPX, CPU codecs + Vulkan dequant / mat-vec / matmul / integer-dot kernels | Hand-ported from ciru-ai/ROCmFPX. Two decode bugs fixed here — see `ROCMFPX-NOTES.md` |
+| **DFlash2 speculative decoding** | [PR #27342](https://github.com/ggml-org/llama.cpp/pull/27342) by Jian Chen. Fork carried it before merge; now builds on upstream's version |
+| **Vulkan batched mat-vec fixes** — IQ3\_S register spill at `NUM_COLS > 4` (5× at n=8), ROCmFPx batch 3–8 rework | New here. Both upstreamable |
+| **Vulkan LDS stride fix** — `SHMEM_STRIDE` pad 4→6, +14 % prefill on any quant | New here. One constant. Upstreamable |
+
+## Against mainline — Vulkan only, stock K-quants
+
+Same CMake flags, clean worktree, interleaved on an idle GPU. No ROCmFPx,
+no fork-specific model format — this measures the Vulkan work alone.
+
+| model | metric | mainline | this fork | Δ |
 |---|---|---|---|---|
-| unsloth `Qwen3.8-27B-UD-Q4_K_XL` (dense) | pp512 | 272.8 | **311.3** | **+14.1%** |
-| | pp2048 | 259.3 | **290.5** | **+12.0%** |
+| unsloth Qwen3.8-27B-UD-Q4\_K\_XL (dense) | pp512 | 272.8 | 311.3 | **+14.1 %** |
+| | pp2048 | 259.3 | 290.5 | **+12.0 %** |
 | | tg64 | 11.71 | 11.69 | — |
-| bartowski `Ornith-1.5-35B-A3B-Q4_K_M` (MoE) | pp512 | 1003.4 | **1043.0** | **+3.9%** |
-| | pp2048 | 840.9 | **867.4** | **+3.2%** |
+| bartowski Ornith-1.5-35B-A3B-Q4\_K\_M (MoE) | pp512 | 1003.4 | 1043.0 | **+3.9 %** |
+| | pp2048 | 840.9 | 867.4 | **+3.2 %** |
 | | tg64 | 65.61 | 65.48 | — |
 
-Measured after merging upstream, so the fork is `origin/master` plus this fork's
-own commits and nothing else — the delta is the fork's work, not a version gap.
-`pp2048` is the number to trust: `pp512` carries ±20–29 on both sides because the
-APU's first-run boost clock lands inside the repetition set.
+pp2048 is the number to trust: pp512 carries ±20–29 on both sides because
+the APU's first-run boost clock lands inside the repetition set.
 
-MoE gains less because a 3B-active model is far less matmul-bound to begin with.
+MoE gains less because a 3 B-active model is far less matmul-bound.
+Generation is unchanged: single-stream decode of a stock K-quant is already at
+80 % of theoretical memory bandwidth on this APU — no kernel can move it.
+The generation headroom is at the batch widths speculative decoding runs at,
+which is where this fork works.
 
-The cause is one constant. `mul_mm.comp` stages its shared tiles at
-`SHMEM_STRIDE = BK/2 + PAD` in dword units, which map 1:1 onto the 32 LDS banks,
-and reads B back column-major — so `gcd(SHMEM_STRIDE, 32)` is the bank-conflict
-factor. Upstream sets `PAD` only for Intel-on-Windows; everything else takes the
-shader default of 4, giving stride 20 and a four-way conflict on every B load.
-Stride must stay *even* (an odd stride costs 3x by breaking RADV's wide
-`ds_read_b64/b128` path) so 6 is the fix. It is worth 1.17x on `q4_0` and 1.18x
-on `q8_0` at the kernel level.
+**The fix in one sentence.** `mul_mm.comp` stages shared tiles at
+`SHMEM_STRIDE = BK/2 + PAD` in dword units (1:1 with the 32 LDS banks) and
+reads B back column-major, so `gcd(SHMEM_STRIDE, 32)` is the conflict factor.
+Upstream sets `PAD` only for Intel-on-Windows; everything else takes the
+shader default of 4, giving stride 20 → four-way conflict on every B load.
+Stride must stay even (an odd stride breaks RADV's wide `ds_read_b64/b128`
+path and costs 3×), so **6** is the fix. Worth 1.17× on q4\_0 and 1.18× on
+q8\_0 at the kernel level.
 
-Generation is unchanged **in this particular comparison**, which is the expected
-result and not a disappointing one: single-stream decode of a stock K-quant is
-already at 80% of theoretical memory bandwidth on this APU, so no kernel can move
-it. The generation work here is aimed where the headroom actually is — at the
-batch sizes speculative decoding runs at.
+## Speculative decoding at the batch widths that matter
 
-### Speculative decoding: present upstream, but broken where it counts
+DFlash2, MTP, DSpark, and Eagle3 all landed upstream. Having the method is not
+the same as having it work. Speculation verifies several drafted tokens in one
+batch, so it lives at **batch 3–8** — exactly the range where the Vulkan
+mat-vec kernels were broken:
 
-DFlash2, MTP, DSpark and Eagle3 all landed in upstream master. Having the method
-is not the same as having it work. Speculation verifies several drafted tokens in
-one batch, so it lives at batch 3–8 — and that is exactly the range where the
-Vulkan mat-vec kernels fall apart:
-
-IQ3_S mat-vec, m=4096 k=14336, µs/run against upstream `95b8e33e1` — lower is
-better. `n` is the batch width, i.e. how many drafted tokens are verified at once:
+**IQ3\_S mat-vec, m=4096 k=14336, µs/run — lower is better.**
+n is the batch width (how many drafted tokens are verified at once).
 
 | n | mainline | this fork | |
 |---|---|---|---|
 | 1 | 98.3 | 98.0 | parity |
-| 2 | 110.7 | 114.0 | −3% |
-| 4 | 167.4 | 172.9 | −3% |
-| **8** | **1542.0** | **285.0** | **5.4x** |
+| 2 | 110.7 | 114.0 | −3 % |
+| 4 | 167.4 | 172.9 | −3 % |
+| **8** | **1542.0** | **285.0** | **5.4×** |
 
-The rest, which mainline has no equivalent for:
+The 3 % at n=2 and n=4 is a real cost, not noise: the fix moves `dscale`
+inside the inner loop for every `NUM_COLS`, so the narrow cases pay slightly
+for the wide ones. Trading 3 % at n=2 for 5.4× at n=8 is the right side of
+that bargain when the whole point is verifying batches of drafts.
+
+**The rest, which mainline has no equivalent for:**
 
 | | mainline | this fork |
 |---|---|---|
-| **ROCmFPx with DFlash2** | cannot load the model at all | 6 quant types, CPU + Vulkan |
-| ROCmFPx mat-vec at batch 3–8 | n/a | 312 → **173** µs (fp4), 2236 → **402** (fp6) |
-| GDN output projection, multi-slot | one GEMV per sequence | one batch-wide GEMV, **+8.6%** at B=8 |
-
-The IQ3_S spill is the clearest case. `IQ3_S` is a stock upstream quant type and
-the bug is in a stock upstream shader: it assigns 8 invocations per 256-weight
-superblock, so at `NUM_COLS > 4` each invocation keeps 32 floats of B live per
-column and overflows the 256-VGPR budget. Single-token generation never reaches
-that width, which is why it went unnoticed — **speculative decoding is in that
-range on every step.** So on mainline, DFlash2 plus an IQ3_S model is a feature
-that nominally works and is 5x slower than it should be.
-
-The 3% at n=2 and n=4 is a real cost, not noise: the fix moves `dscale` inside the
-inner loop for every `NUM_COLS`, so the narrow cases pay slightly for the wide
-ones. Trading 3% at n=2 for 5.4x at n=8 is the right side of that bargain when
-the whole point is verifying batches of drafts.
-
-ROCmFPx is the other half: mainline cannot load these models at all, so the
-question of drafting with them does not arise. Making the two work *together* —
-FP4 weights at spec-decoding batch widths — is what most of this fork is.
-
-## Why it exists
-
-Speculative decoding verifies several tokens in one batch, so a decoder that is
-fast at batch 1 and slow at batch 8 throws the speedup away. That is exactly what
-the ROCmFPx kernels did: FP4 beat a K-quant of the same model at batch 1 and lost
-badly at batch 8. Two shader changes fixed it — amortising the UE4M3 scale decode
-over a whole 32-weight block, and replacing the per-weight bit-window gather in the
-fp6/fp3 paths with a branch-free one.
-
-Vulkan mat-vec, m=4096 k=14336, n=8, µs/run — lower is better:
-
-| | before | after |
-|---|---|---|
-| `q4_0_rocmfp4` | 312 | **173** |
-| `q6_0_rocmfpx` | 2236 | **402** |
-| `q3_0_rocmfpx` | 1942 | **463** |
+| ROCmFPx with DFlash2 | cannot load the model at all | 6 quant types, CPU + Vulkan |
+| ROCmFPx mat-vec at batch 3–8 | n/a | 312 → 173 µs (fp4), 2236 → 402 (fp6) |
+| GDN output projection, multi-slot | one GEMV per sequence | one batch-wide GEMV, +8.6 % at B=8 |
 
 ## Measured results
 
-Qwen3.8-27B-ROCmFP4_FAST (13.55 GiB, 4.26 bpw, 505 of 506 weight tensors on the
-ROCMFP4_FAST path), Radeon 8060S (Strix Halo APU), RADV / Mesa 26.0.3, idle GPU,
-build `eacc56f4e`. Greedy sampling, 300 generated tokens, 186 measured cells at
-0.29% median spread.
-
-### Bare decode is against the memory wall
+### Bare decode is at the memory wall
 
 | model | size | tg128 | achieved | of 256 GB/s peak |
 |---|---|---|---|---|
-| ROCmFP4_FAST | 13.55 GiB | 14.05 ± 0.09 | 204.4 GB/s | 79.8% |
-| Q3_K_M | 12.56 GiB | 15.18 ± 0.08 | 204.7 GB/s | 80.0% |
+| ROCmFP4\_FAST | 13.55 GiB | 14.05 ± 0.09 | 204.4 GB/s | 79.8 % |
+| Q3\_K\_M | 12.56 GiB | 15.18 ± 0.08 | 204.7 GB/s | 80.0 % |
 
-Two decoders with nothing in common — an FP4 codebook with UE4M3 scales, and Q3_K
-superblocks — reach the same bandwidth to three significant figures. **Single-stream
-decode has no headroom left in these shaders.** Every remaining gain has to come
-from draft acceptance, which multiplies effective bandwidth instead of competing
-for it. That makes this a draft-quality problem, not a kernel problem.
+Two decoders with nothing in common — an FP4 codebook with UE4M3 scales, and
+Q3\_K superblocks — reach the same bandwidth to three significant figures.
+Single-stream decode has no headroom left. Every remaining gain has to come
+from draft acceptance, which multiplies effective bandwidth instead of
+competing for it. This is a draft-quality problem, not a kernel problem.
 
 ### Speculative decoding, tokens/s
 
-Short context (~350 tokens):
+**Short context (~350 tokens):**
 
 | config | prose | code | JSON |
 |---|---|---|---|
 | bare | 13.90 | 13.90 | 13.89 |
-| MTP n=3 | **26.18** | 29.83 | 34.91 |
-| DFlash2 · z-lab Q8_0 n=7 | 21.96 | **35.24** | **41.54** |
+| MTP n=3 | 26.18 | 29.83 | 34.91 |
+| DFlash2 · z-lab Q8\_0 n=7 | 21.96 | 35.24 | **41.54** |
 
-Long context (~31K tokens of real C source):
+**Long context (~31 K tokens of real C source):**
 
 | config | verbatim reproduction | prose about the code |
 |---|---|---|
 | bare | 12.20 | 12.19 |
-| MTP n=4 | **36.07** (97.5% acc) | **20.54** |
-| DFlash2 · Q8_0 n=7 | 31.79 | 15.69 |
+| MTP n=4 | **36.07** (97.5 % acc) | 20.54 |
+| DFlash2 · Q8\_0 n=7 | 31.79 | 15.69 |
 | ngram-simple (no draft) | 25.41 | 11.72 (below bare) |
 
-**The ranking inverts with context length.** DFlash2 wins at short context — 41.5 t/s
-on JSON, 3.0× bare. By 31K, MTP takes both tasks, reversing a 41.5-vs-35.3 deficit.
-The cause is structural: a DFlash2 sidecar keeps its own KV cache over the full
-context and re-runs up to seven times per verification step, so its cost scales with
+The ranking inverts with context length. DFlash2 wins at short context —
+41.5 t/s on JSON, **3.0× bare**. By 31 K, MTP takes both tasks. The cause is
+structural: a DFlash2 sidecar keeps its own KV cache over the full context and
+re-runs up to seven times per verification step, so its cost scales with
 context. MTP's nextn layer reuses the target's state and never pays that.
 
 Content dominates configuration: identical weights at identical context span
@@ -172,75 +163,34 @@ Content dominates configuration: identical weights at identical context span
 
 | situation | method |
 |---|---|
-| short context, structured output | `--spec-type draft-dflash`, z-lab Q8_0 sidecar, `--spec-draft-n-max 7` |
+| short context, structured output | `--spec-type draft-dflash`, z-lab Q8\_0 sidecar, `--spec-draft-n-max 7` |
 | long context, any task | `--spec-type draft-mtp` at n-max 3–4 — no sidecar, no second KV cache |
-| quote-heavy long context | `ngram-simple` alone, never layered under a draft model (costs 13%) |
-| avoid | `ngram-cache` (slower than bare), `Q2_0_ROCMFPX` (no Vulkan kernel), DSpark on this target |
+| quote-heavy long context | ngram-simple alone, never layered under a draft model (costs 13 %) |
+| **avoid** | ngram-cache (slower than bare), Q2\_0\_ROCMFPX (no Vulkan kernel), DSpark on this target |
 
-Do not requantize the z-lab Q8_0 sidecar. Our `Q8_0_ROCMFPX` scores 53.5% acceptance
-against z-lab's 60.2% at the same bpw and identical tensor routing — it even lands
-below our own FP4, which is impossible as a precision effect. The cause is the block
-scale: `Q8_0` stores an fp16 scale, ROCmFPx stores a UE4M3 byte. At 8 bits per
-weight the codes are not the problem, the coarse scale is.
+Do not requantise the z-lab Q8\_0 sidecar. Our Q8\_0\_ROCMFPX scores 53.5 %
+acceptance against z-lab's 60.2 % at the same bpw and identical tensor
+routing — it even lands below our own FP4, which is impossible as a
+precision effect. The cause is the block scale: Q8\_0 stores an fp16 scale,
+ROCmFPx stores a UE4M3 byte. At 8 bits per weight the codes are not the
+problem, the coarse scale is.
 
-## What this does not claim
+## Quick start
 
-- **One machine.** Every number above is from a single Radeon 8060S. Nothing here
-  has been tested on discrete AMD, NVIDIA, Intel, or Apple hardware.
-- **FP4 is not free.** ROCmFPX-MQ-Q4 measures 5.9842 wikitext-2 perplexity against
-  5.8965 for UD-Q4_K_XL — about 1.5% worse, with overlapping error bars.
-- **Earlier numbers in this file were wrong about which file they measured.** A
-  previous revision quoted ~13.3 t/s bare and 24.6 t/s DFlash2-prose as "FP4".
-  Those were measured through a `:Q3_K_M` tag that resolves to a stock unsloth
-  k-quant sitting beside the FP4 builds in the same repository — a file containing
-  zero ROCmFPx tensors. The table above is the actual FP4 file. Always check the
-  tensor type mix of a "FP4" GGUF before attributing a number to FP4.
-- **Only the JSON column is a clean draft comparison.** Greedy decoding is not
-  bitwise-reproducible across verification batch shapes on Vulkan: reduction order
-  shifts, and on high-entropy content a small logit difference flips an argmax.
-  Output hashing showed 7 distinct outputs across 8 drafts on prose and 4 on code,
-  but 1 on JSON. Speculation stays distribution-preserving; it is simply not
-  bit-identical, so prose and code acceptance figures are confounded by the drafts
-  generating different text of different difficulty.
-- **Incomplete port.** No HIP/CUDA or OpenCL FPx kernels, no Vulkan kernels for
-  `Q2_0_ROCMFPX`. Flash-attention with FPx KV is in the tree but uncommitted, and
-  measurement says it is not worth much: at depth 20,000 `q8_0` KV is +2.1% over
-  f16 and `q4_0_rocmfp4` is −1.8%, because per-access dequantization costs more
-  than the bandwidth it saves.
-- **The table above is a narrow comparison, by design.** It is one stock quant,
-  one stream, no speculation — chosen so the Vulkan work is the only variable.
-  It is not the whole picture: the batching and quant work below moves generation
-  too, on configurations that table deliberately excludes.
-- **Speculative decoding is no longer a differentiator.** DFlash2, MTP, DSpark
-  and Eagle3 are all in upstream master now — [PR #27342](https://github.com/ggml-org/llama.cpp/pull/27342)
-  landed. What this fork adds on top is making them *fast at the batch sizes they
-  actually run at*.
-- **Not upstream, and not a stable base.** Branches here are rebuilt against
-  `ggml-org/master` by hand. The fork is currently merged up to `95b8e33e1` with
-  no divergence, but it drifts behind between merges — check before trusting the
-  comparison above.
-
-Correctness is checked with `test-backend-ops` against the CPU backend —
-17920/17920 on Vulkan, and again with `GGML_VK_FORCE_MMVQ=1`.
-
-## Try it
-
-```sh
+```bash
 cmake -B build -DGGML_VULKAN=ON && cmake --build build -j
+
+# Short context, structured output — DFlash2
 build/bin/llama cli \
   -hf  lmcoleman/Qwen3.8-27B-ROCmFPX-GGUF:Q4 \
   -hfd incoai/Qwen3.8-27B-DFlash2-GGUF:Q4_K_M \
   --spec-type draft-dflash --spec-draft-n-max 7 -ngl 99 -fa on
-```
 
-`--spec-draft-n-max 7` is the DFlash2 value for short, structured output. Past
-roughly 30K tokens of context, switch to `--spec-type draft-mtp` at n-max 3–4:
-it needs no sidecar and no second KV cache, and it wins on both quotable and
-non-quotable output at that length. MTP peaks at n=3–4 and decays — by n=7 it is
-below its own n=3 result on every content class.
+# Long context — MTP (no sidecar needed)
+build/bin/llama cli \
+  -hf  lmcoleman/Qwen3.8-27B-ROCmFPX-GGUF:Q4 \
+  --spec-type draft-mtp --spec-draft-n-max 4 -ngl 99 -fa on
 
-[ROCMFPX-NOTES.md](ROCMFPX-NOTES.md) has the full measurements, the open work, and
-the profiling traps.
 
 ---
 
