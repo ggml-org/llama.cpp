@@ -2559,7 +2559,7 @@ void ggml_sycl_op_mul_mat_vec_q(ggml_backend_sycl_context & ctx, const ggml_tens
                 }
                 break;
             default:
-                GGML_ABORT("fatal error: unsupport data type=%s\n", ggml_type_name(src0->type));
+                GGML_ABORT("fatal error: unsupport src0 data type %s\n", ggml_type_name(src0->type));
         }
     }
     GGML_UNUSED(src1);
