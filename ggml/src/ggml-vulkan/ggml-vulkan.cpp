@@ -948,6 +948,7 @@ struct vk_device_struct {
     vk_pipeline pipeline_add_id_f32;
 
     vk_pipeline pipeline_concat_i8, pipeline_concat_i16, pipeline_concat_i32, pipeline_concat_i64;
+    vk_pipeline pipeline_concat_transpose_i32;
     vk_pipeline pipeline_upscale_nearest_f32, pipeline_upscale_bilinear_f32, pipeline_upscale_bicubic_f32, pipeline_upscale_bilinear_antialias_f32;
     vk_pipeline pipeline_scale_f32;
     vk_pipeline pipeline_log[2];
@@ -2450,6 +2451,36 @@ static bool ggml_vk_concat_supported(const ggml_tensor * src0, const ggml_tensor
 
     // Quantized tensor rows are block-aligned when created.
     return ggml_is_contiguous_rows(src0) && ggml_is_contiguous_rows(src1) && ggml_is_contiguous_rows(dst);
+}
+
+// The delta-net conv-state path does ggml_transpose() straight into a dim-0 ggml_concat(), so the
+// generic concat walks src1 with a conv_channels * 4 byte stride. On qwen35 that is 40960 B, which
+// is 160 * 256 B with 160 % 16 == 0, so every read lands on the same one of the 16 memory channels.
+// Route that exact shape to a tiled-transpose kernel instead.
+static bool ggml_vk_concat_is_transposed(const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * dst) {
+    // On by default: +45% pp2048 on a delta-net MoE, +3.3% on a dense hybrid, never measured
+    // negative. GGML_VK_CONCAT_TRANSPOSE=0 opts out.
+    static const char * env = getenv("GGML_VK_CONCAT_TRANSPOSE");
+    if (env && env[0] == '0') {
+        return false;
+    }
+    if (dst->type != GGML_TYPE_F32) {                    // the i32 unit-size shader only
+        return false;
+    }
+    if (ggml_get_op_params_i32(dst, 0) != 0) {           // dim 0 only
+        return false;
+    }
+    if (src0->ne[2] != 1 || src0->ne[3] != 1 || src1->ne[2] != 1 || src1->ne[3] != 1) {
+        return false;
+    }
+    const size_t ts = ggml_type_size(src0->type);
+    if (src0->nb[0] != ts || dst->nb[0] != ts) {         // src0 and dst rows must be contiguous
+        return false;
+    }
+    if (src1->nb[0] <= src1->nb[1]) {                    // src1 must actually be transposed
+        return false;
+    }
+    return src0->ne[1] == src1->ne[1] && dst->ne[1] == src1->ne[1];
 }
 
 template <typename T> void init_pushconst_tensor_offsets(ggml_backend_vk_context * ctx, T &p, const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * src2, const ggml_tensor * src3, ggml_tensor * dst) {
@@ -5809,6 +5840,7 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
     ggml_vk_create_pipeline(device, device->pipeline_concat_i16, "concat_i16", concat_i16_len, concat_i16_data, "main", 3, sizeof(vk_op_binary_push_constants), {512, 1, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_concat_i32, "concat_i32", concat_i32_len, concat_i32_data, "main", 3, sizeof(vk_op_binary_push_constants), {512, 1, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_concat_i64, "concat_i64", concat_i64_len, concat_i64_data, "main", 3, sizeof(vk_op_binary_push_constants), {512, 1, 1}, {}, 1);
+    ggml_vk_create_pipeline(device, device->pipeline_concat_transpose_i32, "concat_transpose_i32", concat_transpose_i32_len, concat_transpose_i32_data, "main", 3, sizeof(vk_op_binary_push_constants), {1, 1, 1}, {}, 1);
 
     ggml_vk_create_pipeline(device, device->pipeline_upscale_nearest_f32, "upscale_f32", upscale_f32_len, upscale_f32_data, "main", 2, sizeof(vk_op_upscale_push_constants), {512, 1, 1}, {GGML_SCALE_MODE_NEAREST}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_upscale_bilinear_f32, "upscale_f32", upscale_f32_len, upscale_f32_data, "main", 2, sizeof(vk_op_upscale_push_constants), {512, 1, 1}, {GGML_SCALE_MODE_BILINEAR}, 1);
@@ -11493,6 +11525,14 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
         if (!ggml_vk_concat_supported(src0, src1, dst)) {
             return nullptr;
         }
+        if (ggml_vk_concat_is_transposed(src0, src1, dst)) {
+            // The tiled kernel has no grid-stride loop, so it needs the whole grid in one dispatch.
+            const auto & max_wg = ctx->device->properties.limits.maxComputeWorkGroupCount;
+            if ((uint64_t) CEIL_DIV(dst->ne[1], 32) <= max_wg[0] &&
+                (uint64_t) CEIL_DIV(src1->ne[0], 32) <= max_wg[1]) {
+                return ctx->device->pipeline_concat_transpose_i32;
+            }
+        }
         switch (ggml_vk_concat_unit_size(src0->type)) {
         case 1:
             return ctx->device->pipeline_concat_i8;
@@ -12527,7 +12567,12 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
                 elements = { ne, 1, 1 };
             }
 
-            if (pipeline == ctx->device->pipeline_cpy_transpose_02_32 ||
+            if (pipeline == ctx->device->pipeline_concat_transpose_i32) {
+                // 32x32 tiles: x over the shared row axis, y over src1's transposed width
+                elements[0] = (uint32_t)CEIL_DIV(dst->ne[1], 32);
+                elements[1] = (uint32_t)CEIL_DIV(src1->ne[0], 32);
+                elements[2] = 1;
+            } else if (pipeline == ctx->device->pipeline_cpy_transpose_02_32 ||
                 pipeline == ctx->device->pipeline_cpy_transpose_02_16) {
                 // 32x32 tiles over dims 0 and 2; dim1 and dim3 are the batch
                 elements[0] = (uint32_t)CEIL_DIV(dst->ne[0], 32);
