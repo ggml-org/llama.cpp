@@ -55,7 +55,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: vulkan-ubuntu-24.04-arm-new
+          key: vulkan-ubuntu-24.04-arm
           variant: ccache
           evict-old-files: 1d
           save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
@@ -72,6 +72,16 @@ jobs:
         id: cmake_build
         run: |
           time cmake --build build -j $(nproc)
+
+      - name: ccache-clear
+        uses: ./.github/actions/ccache-clear
+        env:
+          GH_TOKEN: ${{ github.token }}
+        with:
+          key: vulkan-ubuntu-24.04-arm
+          older: 5m
+          min: 1
+          dry-run: ${{ github.event_name != 'push' || github.ref != 'refs/heads/master' }}
 
   ubuntu-llvmpipe:
     runs-on: ubuntu-24.04
@@ -128,6 +138,16 @@ jobs:
           # test-backend-ops is too slow on llvmpipe, skip it
           ctest -L main -E test-backend-ops --verbose --timeout 900
 
+      - name: ccache-clear
+        uses: ./.github/actions/ccache-clear
+        env:
+          GH_TOKEN: ${{ github.token }}
+        with:
+          key: vulkan-ubuntu-24.04-llvmpipe
+          older: 5m
+          min: 1
+          dry-run: ${{ github.event_name != 'push' || github.ref != 'refs/heads/master' }}
+
   windows:
     runs-on: windows-2025
 
@@ -180,3 +200,13 @@ jobs:
         run: |
           cd build
           ctest -L main -C Release --verbose --timeout 900
+
+      - name: ccache-clear
+        uses: ./.github/actions/ccache-clear
+        env:
+          GH_TOKEN: ${{ github.token }}
+        with:
+          key: cpu-windows-2025-x64-vulkan
+          older: 5m
+          min: 1
+          dry-run: ${{ github.event_name != 'push' || github.ref != 'refs/heads/master' }}

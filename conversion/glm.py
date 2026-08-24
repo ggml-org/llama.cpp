@@ -122,7 +122,9 @@ class Glm4MoeModel(TextModel):
             self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
 
     def index_tensors(self, remote_hf_model_id: str | None = None):
-        type(self)._n_main_layers = self.hparams["num_hidden_layers"]
+        hparams = {**self.hparams, **self.hparams.get("text_config", {})}
+        key = next((k for k in ["n_layers", "num_hidden_layers", "n_layer", "num_layers"] if k in hparams), None)
+        type(self)._n_main_layers = hparams.get(key)
         return super().index_tensors(remote_hf_model_id=remote_hf_model_id)
 
     @classmethod

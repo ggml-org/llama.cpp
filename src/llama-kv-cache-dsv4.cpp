@@ -1737,6 +1737,7 @@ void llama_kv_cache_dsv4::clear_compressed(llama_seq_id seq_id, bool data) {
             kv->seq_rm(seq_id, -1, -1);
 
             if (data) {
+                //TODO: do not clear the kv-cache during `seq_rm`, ref: https://github.com/ggml-org/llama.cpp/pull/26490#discussion_r3798143663
                 for (uint32_t il : kv->get_layer_ids()) {
                     dsv4_clear_tensor_stream(kv->get_k_storage(il), (uint32_t) seq_id);
                 }
