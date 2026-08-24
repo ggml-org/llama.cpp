@@ -78,7 +78,7 @@ layout (constant_id = 9) const uint TK = 16;
 layout (constant_id = 10) const uint WARP = 32;
 
 #define BK 32
-#define BK_STEP 2
+#define BK_STEP 4
 #define GROUP_A_BUDGET (16u * 1024u * 1024u)
 
 const uint QPITCH = BK_STEP * (BK / 4) + 4;
