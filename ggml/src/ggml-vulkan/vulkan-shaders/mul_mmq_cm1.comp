@@ -263,7 +263,11 @@ void main() {
 
     const uint a_row0 = warp_r * WM;
     const uint b_col0 = warp_c * WN;
+#ifdef MUL_MAT_ID
+    const bool active_col_tile = ic * BN + b_col0 < _ne1;
+#else
     const bool active_col_tile = ic * BN + b_col0 < p.N;
+#endif
 
     barrier();
 
