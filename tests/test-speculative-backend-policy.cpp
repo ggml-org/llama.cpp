@@ -74,6 +74,17 @@ int main() {
     requested_probs.n_probs = 5;
     expect_stochastic(false, requested_probs);
 
+    // The server precomputes EOG biases for every model, but they are inactive
+    // unless ignore_eos is requested. The inactive table must not disable the
+    // compact backend chain; active EOS suppression remains rejected below.
+    common_params_sampling eog_metadata = practical;
+    eog_metadata.logit_bias_eog.push_back({2, -1.0f});
+    expect_stochastic(true, eog_metadata);
+
+    common_params_sampling active_eos = practical;
+    active_eos.ignore_eos = true;
+    expect_stochastic(false, active_eos);
+
     common_params_sampling min_keep = practical;
     min_keep.min_keep = 1;
     expect_stochastic(false, min_keep);

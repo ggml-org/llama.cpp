@@ -23,10 +23,12 @@ struct server_spec_target_backend_profile {
 // backend-capable samplers in common_sampler_init().
 inline bool server_spec_target_backend_sampling_stochastic_eligible(
         const common_params_sampling & sampling) {
+    // logit_bias_eog is only applied when ignore_eos is active; the guard above
+    // rejects that active path, so the precomputed inactive table is harmless.
     if (sampling.samplers.empty() || sampling.temp <= 0.0f || sampling.dynatemp_range != 0.0f ||
             sampling.mirostat != 0 || sampling.adaptive_target >= 0.0f || sampling.min_keep != 0 ||
             sampling.ignore_eos || sampling.n_probs > 0 || !sampling.logit_bias.empty() ||
-            !sampling.logit_bias_eog.empty() || !sampling.grammar.empty()) {
+            !sampling.grammar.empty()) {
         return false;
     }
 
