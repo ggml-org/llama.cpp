@@ -47,6 +47,9 @@ export function useChatMessageEditContext(options: UseChatMessageEditContextOpti
 
 	setChatMessageEditContext({
 		cancel: handleCancelEdit,
+		get canEdit() {
+			return true;
+		},
 		get editedContent() {
 			return editedContent;
 		},
