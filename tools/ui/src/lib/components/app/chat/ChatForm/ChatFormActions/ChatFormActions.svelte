@@ -74,9 +74,7 @@
 	);
 	// text-only active model: mic input is transcribed by another loaded audio model
 	let transcriptionModelId = $derived(hasAudioModality ? null : modelsStore.transcriptionModelId);
-	// canSend, not canSubmit: only canSend is wired from ChatForm, it is true when
-	// the input has text or attachments. Keep the button while a recording or
-	// transcription is still in flight so it can be stopped
+	// keep the button while a recording or transcription is still in flight so it can be stopped
 	let shouldShowRecordButton = $derived(
 		(hasAudioModality || transcriptionModelId !== null) &&
 			currentConfig.autoMicOnEmpty &&
@@ -216,7 +214,6 @@
 	{:else if shouldShowRecordButton}
 		<ChatFormActionRecord
 			{disabled}
-			{hasAudioModality}
 			{isLoading}
 			{isRecording}
 			{isTranscribing}
