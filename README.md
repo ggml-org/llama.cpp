@@ -6,7 +6,8 @@ length follows measured acceptance instead of a fixed `n`. The other job is the
 fastest Vulkan path on AMD Strix Halo: stock Mesa, no ROCm toolchain.
 
 **Qwen3.8-27B on AMD Strix Halo (Radeon 8060S): 65 t/s generation, 440 t/s prefill.**
-**Ornith1.5 on AMD Strix Halo (Radeon 8060S): 103 t/s generation, 1188 t/s prefill.**
+
+**Ornith1.5 on AMD Strix Halo (Radeon 8060S): 103 t/s generation, 1616 t/s prefill.**
 
 ## The numbers
 
