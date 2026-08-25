@@ -643,14 +643,241 @@ ggml_tensor * llama_model_qwen4exp::graph::build_layer_ffn(ggml_tensor * cur, co
     return cur;
 }
 
-// The PLE n-gram hash embedding lands in the follow-up commit; a checkpoint
-// without ple_layer_ids never reaches this path.
+// -- PLE n-gram hash embedding ------------------------------------------------
+//
+// Each token is addressed by ple_n_heads rows of a shared table. A row index
+// comes from hashing the token together with its 1..ngram_size-1 predecessors:
+//
+//   mixed_n = (t[p] * m[0]) ^ (t[p-1] * m[1]) ^ ... ^ (t[p-n+1] * m[n-1])
+//   row     = mixed_n % vocab_size[h] + offset[h]
+//
+// for each n-gram order n in 2..ngram_size and each head h of that order. The
+// multipliers are splitmix64-derived and reach ~2^45, so the products need
+// int64 and the whole hash has to run on the host; ggml has neither 64-bit
+// integers nor xor. The result is a plain row gather, which is the same shape
+// gemma3n's per-layer embedding uses.
+//
+// Predecessors reset at an EOS token, and positions before the start of the
+// sequence read as EOS.
+
+class llm_graph_input_ple : public llm_graph_input_i {
+public:
+    llm_graph_input_ple(const llama_model_qwen4exp & pmodel) : pmodel(pmodel) {}
+    virtual ~llm_graph_input_ple() = default;
+
+    void set_input(const llama_ubatch * ubatch) override;
+
+    ggml_tensor * rows = nullptr;   // I32 [ple_n_heads * n_tokens]
+
+    const llama_model_qwen4exp & pmodel;
+};
+
+void llm_graph_input_ple::set_input(const llama_ubatch * ubatch) {
+    if (!ubatch->token) {
+        return;
+    }
+
+    const auto & hp = pmodel.hparams;
+
+    const int64_t n_tokens = ubatch->n_tokens;
+    const int64_t n_gram   = hp.ple_ngram_size;
+    const int64_t n_heads  = hp.ple_n_heads;
+    const int64_t per_gram = hp.ple_heads_per_ngram;
+    const int64_t eos      = hp.ple_eos_token_id;
+
+    std::vector<int32_t> idx(n_heads * n_tokens);
+
+    // Predecessors that are not in this ubatch come from the per-sequence
+    // history the model keeps across calls. vLLM carries the same thing as its
+    // per-request ngram_context. History is only trusted when it is contiguous
+    // with the incoming position, so a fresh prompt or a cache rollback falls
+    // back to EOS padding instead of hashing against stale tokens.
+    auto & hist_map = pmodel.ple_hist;
+
+    // Snapshot the incoming history before touching it. Reading and updating in
+    // the same pass would let a token near the start of the ubatch pick up an
+    // earlier token of this same ubatch as if it were prior context.
+    std::unordered_map<llama_seq_id, std::vector<llama_token>> snap;
+    for (int64_t i = 0; i < n_tokens; ++i) {
+        const llama_seq_id seq = ubatch->seq_id[i][0];
+        if (snap.count(seq)) {
+            continue;
+        }
+        auto & h = hist_map[seq];
+        if (h.next_pos != ubatch->pos[i]) {
+            h.toks.assign(n_gram - 1, eos);
+        }
+        h.toks.resize(n_gram - 1, eos);
+        snap[seq] = h.toks;
+    }
+
+    for (int64_t i = 0; i < n_tokens; ++i) {
+        const llama_seq_id seq = ubatch->seq_id[i][0];
+        const llama_pos    pos = ubatch->pos[i];
+
+        const auto & hist = snap[seq];
+
+        // predecessor s (1-based) of this token, EOS past a segment boundary
+        auto prev = [&](int64_t s) -> int64_t {
+            const int64_t j = i - s;
+            if (j >= 0 && ubatch->seq_id[j][0] == seq && ubatch->pos[j] == pos - s) {
+                return ubatch->token[j];
+            }
+            // s - i positions before this ubatch started, most recent last
+            const int64_t back = s - i;
+            const int64_t k    = (int64_t) hist.size() - back;
+            if (back > 0 && k >= 0 && k < (int64_t) hist.size() && pos - s >= 0) {
+                return hist[k];
+            }
+            return eos;
+        };
+
+        // an EOS in the window resets everything at or before it
+        // Note the token's own EOS does not cut its context: the reference
+        // takes the last EOS strictly *before* this position, so a segment
+        // boundary only hides tokens from the positions that follow it.
+        std::vector<int64_t> ctx(n_gram);
+        ctx[0] = ubatch->token[i];
+        bool cut = false;
+        for (int64_t s = 1; s < n_gram; ++s) {
+            ctx[s] = cut ? eos : prev(s);
+            if (ctx[s] == eos) {
+                cut = true;
+            }
+        }
+
+        for (int64_t n = 2; n <= n_gram; ++n) {
+            uint64_t mixed = (uint64_t) ctx[0] * hp.ple_layer_multipliers[0];
+            for (int64_t j = 1; j < n; ++j) {
+                mixed ^= (uint64_t) ctx[j] * hp.ple_layer_multipliers[j];
+            }
+            const int64_t base = (n - 2) * per_gram;
+            for (int64_t g = 0; g < per_gram; ++g) {
+                const int64_t h_i = base + g;
+                idx[i * n_heads + h_i] =
+                    (int32_t) (mixed % hp.ple_head_vocab_sizes[h_i] + hp.ple_head_offsets[h_i]);
+            }
+        }
+
+        auto & h = hist_map[seq];
+        h.toks.push_back(ubatch->token[i]);
+        if ((int64_t) h.toks.size() > n_gram - 1) {
+            h.toks.erase(h.toks.begin(), h.toks.end() - (n_gram - 1));
+        }
+        h.next_pos = pos + 1;
+    }
+
+    ggml_backend_tensor_set(rows, idx.data(), 0, idx.size()*ggml_element_size(rows));
+}
+
 ggml_tensor * llama_model_qwen4exp::graph::build_ple(
         llm_graph_input_rs * inp,
         ggml_tensor *        hidden,
         int                  il) {
     GGML_UNUSED(inp);
-    GGML_UNUSED(hidden);
-    GGML_UNUSED(il);
-    throw std::runtime_error("qwen4exp: PLE not implemented yet");
+
+    const int64_t hc      = hparams.dsv4_hc_mult;
+    const int64_t hc_dim  = hc * n_embd;
+    const int64_t n_heads = hparams.ple_n_heads;
+
+    auto ple_inp = std::make_unique<llm_graph_input_ple>(
+            static_cast<const llama_model_qwen4exp &>(model));
+
+    ple_inp->rows = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_heads * n_tokens);
+    ggml_set_input(ple_inp->rows);
+    ggml_tensor * rows = ple_inp->rows;
+    res->add_input(std::move(ple_inp));
+
+    // gather then flatten the heads: get_rows already lays the head dimension
+    // out slowest, matching the reference's flatten over the head axis
+    ggml_tensor * emb = ggml_get_rows(ctx0, model.per_layer_tok_embd, rows);
+    emb = ggml_reshape_2d(ctx0, emb, hparams.ple_head_dim * n_heads, n_tokens);
+    cb(emb, "ple_embd", il);
+
+    ggml_tensor * key   = build_lora_mm(model.layers[il].ple_key,   emb);
+    ggml_tensor * value = build_lora_mm(model.layers[il].ple_value, emb);
+
+    // both norms are grouped over one hc stream, with an affine weight that
+    // spans the whole hc*n_embd layout, exactly as in build_hc_mix
+    auto grouped_norm = [&](ggml_tensor * x, ggml_tensor * w) {
+        ggml_tensor * t = ggml_reshape_3d(ctx0, x, n_embd, hc, n_tokens);
+        t = ggml_rms_norm(ctx0, t, hparams.f_norm_rms_eps);
+        t = ggml_reshape_2d(ctx0, t, hc_dim, n_tokens);
+        t = ggml_mul(ctx0, t, w);
+        return ggml_reshape_3d(ctx0, t, n_embd, hc, n_tokens);
+    };
+
+    key = grouped_norm(key, model.layers[il].ple_norm_key);
+    ggml_tensor * query = grouped_norm(hidden, model.layers[il].ple_norm_query);
+
+    // per-stream dot product, then a signed square root before the sigmoid
+    ggml_tensor * s = ggml_sum_rows(ctx0, ggml_mul(ctx0, key, query));
+    s = ggml_scale(ctx0, s, 1.0f / sqrtf((float) n_embd));
+
+    ggml_tensor * mag  = ggml_sqrt(ctx0, ggml_clamp(ctx0, ggml_abs(ctx0, s), 1e-6f, INFINITY));
+    ggml_tensor * gate = ggml_sigmoid(ctx0, ggml_mul(ctx0, ggml_sgn(ctx0, s), mag));
+    cb(gate, "ple_gate", il);
+
+    // [n_embd, 1, T] value broadcast across the hc streams, scaled by the gate
+    ggml_tensor * v3 = ggml_reshape_3d(ctx0, value, n_embd, 1, n_tokens);
+    v3 = ggml_repeat_4d(ctx0, v3, n_embd, hc, n_tokens, 1);
+
+    ggml_tensor * gated = ggml_mul(ctx0, v3, gate);
+    cb(gated, "ple_gated_value", il);
+
+    ggml_tensor * normalized = grouped_norm(
+            ggml_reshape_2d(ctx0, gated, hc_dim, n_tokens),
+            model.layers[il].ple_norm_conv);
+    normalized = ggml_reshape_2d(ctx0, normalized, hc_dim, n_tokens);
+
+    // Depthwise causal conv, dilated by the n-gram size. Written out as a sum
+    // of shifted, per-channel-scaled copies rather than via ggml_conv_1d_dw:
+    // that op carries a "very likely wrong for some cases" warning upstream,
+    // and this form is a handful of ops on a tensor this small.
+    //
+    //   out[c, t] = sum_k w[k, c] * x[c, t - (K-1-k)*dilation]
+    //
+    // Positions before the sequence start read as zero, which is what the
+    // reference's zero-padded nn.Conv1d does.
+    const int64_t kern = hparams.ple_conv_kernel;
+    const int64_t dil  = hparams.ple_ngram_size;
+
+    ggml_tensor * conv_out = nullptr;
+    for (int64_t k = 0; k < kern; ++k) {
+        const int64_t shift = (kern - 1 - k) * dil;
+
+        ggml_tensor * shifted;
+        if (shift == 0) {
+            shifted = normalized;
+        } else if (shift >= n_tokens) {
+            continue;   // entirely out of range, contributes nothing
+        } else {
+            ggml_tensor * keep = ggml_view_2d(ctx0, normalized, hc_dim, n_tokens - shift,
+                    normalized->nb[1], 0);
+            ggml_tensor * zeros = ggml_scale(ctx0,
+                    ggml_view_2d(ctx0, normalized, hc_dim, shift, normalized->nb[1], 0), 0.0f);
+            shifted = ggml_concat(ctx0, zeros, keep, 1);
+        }
+
+        // column k of the [kern, hc_dim] kernel is one weight per channel
+        ggml_tensor * wk = ggml_cont(ctx0,
+                ggml_view_2d(ctx0, model.layers[il].ple_conv1d, 1, hc_dim,
+                        model.layers[il].ple_conv1d->nb[1],
+                        k * model.layers[il].ple_conv1d->nb[0]));
+        // unlike the 1-D norm gammas, this kernel keeps the file's type, so it
+        // needs an explicit cast before multiplying an f32 activation
+        wk = ggml_reshape_1d(ctx0, wk, hc_dim);
+        if (wk->type != GGML_TYPE_F32) {
+            wk = ggml_cast(ctx0, wk, GGML_TYPE_F32);
+        }
+
+        ggml_tensor * term = ggml_mul(ctx0, shifted, wk);
+        conv_out = conv_out ? ggml_add(ctx0, conv_out, term) : term;
+    }
+
+    conv_out = ggml_silu(ctx0, conv_out);
+    conv_out = ggml_reshape_3d(ctx0, conv_out, n_embd, hc, n_tokens);
+    cb(conv_out, "ple_conv_out", il);
+
+    return ggml_add(ctx0, hidden, ggml_add(ctx0, gated, conv_out));
 }

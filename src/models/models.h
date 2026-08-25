@@ -2273,6 +2273,18 @@ struct llama_model_qwen35 : public llama_model_base {
 
 struct llama_model_qwen4exp : public llama_model_base {
     llama_model_qwen4exp(const struct llama_model_params & params) : llama_model_base(params) {}
+
+    // The PLE hash needs each token's ngram_size-1 predecessors. During decode
+    // they are not in the ubatch, so they are remembered here between calls,
+    // mirroring the per-request ngram_context the reference implementation
+    // carries. next_pos guards the history: if it does not line up with the
+    // incoming position the sequence was reset or rewound, and the hash falls
+    // back to EOS padding rather than trusting stale tokens.
+    struct ple_history {
+        llama_pos                next_pos = -1;
+        std::vector<llama_token> toks;
+    };
+    mutable std::unordered_map<llama_seq_id, ple_history> ple_hist;
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
