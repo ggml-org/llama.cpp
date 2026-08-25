@@ -7,7 +7,6 @@
 	interface Props {
 		class?: string;
 		disabled?: boolean;
-		hasAudioModality?: boolean;
 		isLoading?: boolean;
 		isRecording?: boolean;
 		isTranscribing?: boolean;
@@ -18,15 +17,12 @@
 	let {
 		class: className = '',
 		disabled = false,
-		hasAudioModality = false,
 		isLoading = false,
 		isRecording = false,
 		isTranscribing = false,
 		onMicClick,
 		transcriptionModelName = null
 	}: Props = $props();
-
-	let canRecord = $derived(hasAudioModality || !!transcriptionModelName);
 </script>
 
 <div class="flex items-center gap-1 {className}">
@@ -36,7 +32,7 @@
 				class="h-8 w-8 rounded-full p-0 {isRecording
 					? 'animate-pulse bg-red-500 text-white hover:bg-red-600'
 					: ''}"
-				disabled={disabled || isLoading || isTranscribing || !canRecord}
+				disabled={disabled || isLoading || isTranscribing}
 				onclick={onMicClick}
 				type="button"
 			>
@@ -52,13 +48,9 @@
 			</Button>
 		</Tooltip.Trigger>
 
-		{#if !hasAudioModality}
+		{#if transcriptionModelName}
 			<Tooltip.Content>
-				{#if transcriptionModelName}
-					<p>Voice input is transcribed by {transcriptionModelName}</p>
-				{:else}
-					<p>Current model does not support audio</p>
-				{/if}
+				<p>Voice input is transcribed by {transcriptionModelName}</p>
 			</Tooltip.Content>
 		{/if}
 	</Tooltip.Root>
