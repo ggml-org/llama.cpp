@@ -16507,12 +16507,9 @@ static bool ggml_vk_can_fuse_unary_mul(const struct ggml_cgraph * cgraph, int un
     if (!ggml_is_contiguous_1(other) || !ggml_is_contiguous_1(unary->src[0])) {
         return false;
     }
-    for (int i = 0; i < GGML_MAX_DIMS; ++i) {
-        if (other->ne[i] != unary->ne[i] && other->ne[i] != 1) {
-            return false;
-        }
-    }
-    return true;
+    // the fused kernel indexes src1 with per-dim fastmod (generic_binary_head.glsl), which is
+    // exact iff the unary result can be represented as a repetition of other
+    return ggml_can_repeat(other, unary);
 }
 
 static bool ggml_vk_can_fuse(const ggml_backend_vk_context * ctx, const struct ggml_cgraph * cgraph, int node_idx, std::initializer_list<enum ggml_op> ops) {
