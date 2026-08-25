@@ -1183,3 +1183,7 @@ struct common_prompt_checkpoint {
     void clear_tgt();
     void clear_dft();
 };
+
+// compute the number of training data points for a token sequence of length n_tokens
+// (used by common_opt_dataset_init; extracted for unit testing, see tests/test-opt-dataset)
+int64_t common_opt_dataset_ndata(size_t n_tokens, int64_t n_ctx, int64_t stride);
