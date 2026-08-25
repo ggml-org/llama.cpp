@@ -160,7 +160,8 @@
 					</div>
 				{/if}
 			{:else if field.type === SettingsFieldType.SELECT}
-				{@const selectedOption = field.options?.find(
+				{@const selectOptions = field.optionsGenerator?.(modelsStore.models) ?? field.options}
+				{@const selectedOption = selectOptions?.find(
 					(opt: { value: string; label: string; icon?: Component }) =>
 						opt.value === localConfig[field.key]
 				)}
@@ -228,8 +229,8 @@
 					</div>
 
 					<Select.Content>
-						{#if field.options}
-							{#each field.options as option (option.value)}
+						{#if selectOptions}
+							{#each selectOptions as option (option.value)}
 								<Select.Item label={option.label} value={option.value}>
 									<div class="flex items-center gap-2">
 										{#if option.icon}
