@@ -12,6 +12,7 @@
 	import { modelsStore, serverStore, settingsStore } from '$lib/stores';
 	import { normalizeFloatingPoint } from '$lib/utils/precision';
 	import type { Component } from 'svelte';
+	import { Props } from '../../../ui/button';
 
 	interface Props {
 		fields: SettingsFieldConfig[];
@@ -132,7 +133,10 @@
 					id={field.key}
 					value={String(localConfig[field.key] ?? '')}
 					onchange={(e) => onConfigChange(field.key, e.currentTarget.value)}
-					placeholder=""
+					disabled={field.key === SETTINGS_KEYS.SYSTEM_MESSAGE && Boolean(serverStore.props?.system_prompt)}
+					placeholder={field.key === SETTINGS_KEYS.SYSTEM_MESSAGE && serverStore.props?.system_prompt
+					  ? "The System Prompt is currently set by the System Admin."
+					  : ""}
 					class="min-h-[10rem] w-full md:max-w-3xl"
 				/>
 
@@ -146,7 +150,8 @@
 					<div class="mt-3 flex items-center gap-2">
 						<Checkbox
 							id="showSystemMessage"
-							checked={Boolean(localConfig.showSystemMessage ?? true)}
+							disabled={Boolean(serverStore.props?.system_prompt)}
+							checked={Boolean(Boolean(serverStore.props?.system_prompt) ? false : localConfig.showSystemMessage ?? true)}
 							onCheckedChange={(checked) =>
 								onConfigChange(SETTINGS_KEYS.SHOW_SYSTEM_MESSAGE, Boolean(checked))}
 						/>
