@@ -22,7 +22,8 @@ on:
     types: [opened, synchronize, reopened]
     paths: [
       '.github/workflows/build-apple.yml',
-      'ggml/src/ggml-metal/**'
+      'ggml/src/ggml-metal/**',
+      'ggml/src/ggml-rpc/**'
     ]
 
 concurrency:
