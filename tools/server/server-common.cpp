@@ -1280,6 +1280,12 @@ json oaicompat_chat_params_parse(
     if (inputs.continue_final_message != COMMON_CHAT_CONTINUATION_NONE && inputs.add_generation_prompt) {
         throw std::invalid_argument("Cannot set both add_generation_prompt and continue_final_message to true.");
     }
+    if (inputs.continue_final_message != COMMON_CHAT_CONTINUATION_NONE
+        && !inputs.messages.empty()
+        && inputs.messages.back().role == "assistant"
+        && !inputs.messages.back().tool_calls.empty()) {
+        throw std::invalid_argument("Cannot continue an assistant message that contains tool calls.");
+    }
     inputs.reasoning_format = opt.reasoning_format;
     if (body.contains("reasoning_format")) {
         inputs.reasoning_format = common_reasoning_format_from_name(body.at("reasoning_format").get<std::string>());
