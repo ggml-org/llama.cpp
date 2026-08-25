@@ -12,7 +12,6 @@
 	import { modelsStore, serverStore, settingsStore } from '$lib/stores';
 	import { normalizeFloatingPoint } from '$lib/utils/precision';
 	import type { Component } from 'svelte';
-	import { Props } from '../../../ui/button';
 
 	interface Props {
 		fields: SettingsFieldConfig[];
