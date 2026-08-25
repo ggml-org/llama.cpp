@@ -686,26 +686,19 @@ namespace dpct
       /// memory on the SYCL device.
       void get_memory_info(size_t &free_memory, size_t &total_memory) {
         total_memory = get_device_info().get_global_mem_size();
-        static bool warned = false;
         const char *warning_info =
             "get_memory_info: [warning] ext_intel_free_memory is not "
             "supported (export/set ZES_ENABLE_SYSMAN=1 to support), "
             "use total memory as free memory";
 #if (defined(__SYCL_COMPILER_VERSION) && __SYCL_COMPILER_VERSION >= 20221105)
         if (!has(sycl::aspect::ext_intel_free_memory)) {
-          if (!warned) {
-            std::cerr << warning_info << std::endl;
-            warned = true;
-          }
+          std::cerr << warning_info << std::endl;
           free_memory = total_memory;
         } else {
           free_memory = get_info<sycl::ext::intel::info::device::free_memory>();
         }
 #else
-        if (!warned) {
-          std::cerr << warning_info << std::endl;
-          warned = true;
-        }
+        std::cerr << warning_info << std::endl;
         free_memory = total_memory;
 #if defined(_MSC_VER) && !defined(__clang__)
 #pragma message("Querying the number of bytes of free memory is not supported")
