@@ -121,6 +121,8 @@
 					</p>
 				{/if}
 			{:else if field.type === SettingsFieldType.TEXTAREA}
+			    {@const useGlobalSystemPrompt = field.key === SETTINGS_KEYS.SYSTEM_MESSAGE && Boolean(serverStore.props?.system_prompt)}
+
 				{#if field.label}
 					<Label class="block flex items-center gap-1.5 text-sm font-medium" for={field.key}>
 						{field.label}
@@ -135,8 +137,9 @@
 					class="min-h-[10rem] w-full md:max-w-3xl"
 					id={field.key}
 					onchange={(e) => onConfigChange(field.key, e.currentTarget.value)}
-					placeholder=""
-					value={String(localConfig[field.key] ?? '')}
+					disabled={useGlobalSystemPrompt}
+					placeholder={useGlobalSystemPrompt ? "The System Prompt is currently set by the System Admin." : ""}
+					value={String(useGlobalSystemPrompt ? '' : localConfig[field.key] ?? '')}
 				/>
 
 				{#if field.help || SETTING_CONFIG_INFO[field.key]}
@@ -148,8 +151,9 @@
 				{#if field.key === SETTINGS_KEYS.SYSTEM_MESSAGE}
 					<div class="mt-3 flex items-center gap-2">
 						<Checkbox
-							checked={Boolean(localConfig.showSystemMessage ?? true)}
 							id="showSystemMessage"
+							disabled={Boolean(serverStore.props?.system_prompt)}
+							checked={Boolean(Boolean(useGlobalSystemPrompt ? false : localConfig.showSystemMessage ?? true)}
 							onCheckedChange={(checked) =>
 								onConfigChange(SETTINGS_KEYS.SHOW_SYSTEM_MESSAGE, Boolean(checked))}
 						/>
