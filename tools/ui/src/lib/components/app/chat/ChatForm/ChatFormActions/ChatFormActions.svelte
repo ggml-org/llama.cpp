@@ -196,6 +196,7 @@
 				bind:hasModelSelected
 				bind:isSelectedModelInCache
 				bind:submitTooltip
+				extraRowCssWidth={isReasoning ? '2rem' : '0rem'}
 				forceForegroundText
 				useGlobalSelection
 			/>

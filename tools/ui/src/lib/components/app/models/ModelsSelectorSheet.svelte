@@ -19,6 +19,7 @@
 		/** Callback when model changes. Return false to keep menu open (e.g., for validation failures) */
 		onModelChange?: (modelId: string, modelName: string) => Promise<boolean> | boolean | void;
 		disabled?: boolean;
+		extraRowCssWidth?: string;
 		forceForegroundText?: boolean;
 		/** When true, user's global selection takes priority over currentModel (for form selector) */
 		useGlobalSelection?: boolean;
@@ -28,6 +29,7 @@
 		class: className = '',
 		currentModel = null,
 		disabled = false,
+		extraRowCssWidth = '0rem',
 		forceForegroundText = false,
 		onModelChange,
 		useGlobalSelection = false
@@ -91,7 +93,7 @@
 								: 'text-foreground',
 					sheetOpen && 'text-foreground'
 				]}
-				style="max-width: min(calc(100cqw - 9rem), 20rem)"
+				style={`max-width: min(calc(100cqw - 9rem - ${extraRowCssWidth}), 20rem)`}
 				disabled={disabled || ms.updating}
 				onclick={() => ms.handleOpenChange(true)}
 			>
