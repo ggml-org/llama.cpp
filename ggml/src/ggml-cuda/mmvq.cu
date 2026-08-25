@@ -796,12 +796,12 @@ static __global__ void mul_mat_vec_q_moe(
 
     // fuse gate, bias, scales, and glu_op into the up projection
     bool use_gate = false;
-    [[maybe_unused]] const void  * vgate      = nullptr;
-    [[maybe_unused]] const float * x_bias     = nullptr;
-    [[maybe_unused]] const float * gate_bias  = nullptr;
-    [[maybe_unused]] const float * x_scale    = nullptr;
-    [[maybe_unused]] const float * gate_scale = nullptr;
-    [[maybe_unused]] ggml_glu_op   active_glu = GGML_GLU_OP_SWIGLU;
+    const void  * vgate      = nullptr;
+    const float * x_bias     = nullptr;
+    const float * gate_bias  = nullptr;
+    const float * x_scale    = nullptr;
+    const float * gate_scale = nullptr;
+    ggml_glu_op   active_glu = GGML_GLU_OP_SWIGLU;
 
     if constexpr (has_fusion) {
         use_gate   = fusion.gate != nullptr;
@@ -909,7 +909,9 @@ static __global__ void mul_mat_vec_q_moe(
     }
 
     if constexpr (!has_fusion) {
-        GGML_UNUSED_VARS(use_gate, tmp_gate);
+        GGML_UNUSED_VARS(use_gate, tmp_gate, vgate, x_bias, gate_bias, active_glu, x_scale, gate_scale);
+    } else if constexpr (type != GGML_TYPE_NVFP4) {
+        GGML_UNUSED_VARS(x_scale, gate_scale);
     }
 }
 

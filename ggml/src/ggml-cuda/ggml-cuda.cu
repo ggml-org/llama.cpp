@@ -2983,9 +2983,10 @@ static bool ggml_cuda_check_fusion_memory_ranges(const ggml_cgraph * cgraph,
     };
 
     bool is_ok = true;
-    // With multiple rows, keep all rows in one block so no row overwrites logits before another row reads them.
+    // one block reads all logits before it writes, so logits may alias the out nodes
+    const ggml_tensor * logits_may_alias = nullptr;
     if (is_topk_moe && ggml_nrows(cgraph->nodes[node_idx]) <= TOPK_MOE_ROWS_PER_BLOCK) {
-        return true;
+        logits_may_alias = cgraph->nodes[node_idx]->src[0];
     }
 
     for (int i = 0; i < out_count; ++i) {
@@ -2999,7 +3000,7 @@ static bool ggml_cuda_check_fusion_memory_ranges(const ggml_cgraph * cgraph,
             for (int src_idx = 0; src_idx < GGML_MAX_SRC; ++src_idx) {
                 const ggml_tensor * src = cgraph->nodes[j]->src[src_idx];
 
-                if (!src || src->op == GGML_OP_NONE) {
+                if (!src || src->op == GGML_OP_NONE || src == logits_may_alias) {
                     continue;
                 }
 

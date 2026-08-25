@@ -10205,8 +10205,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
                                     use_id, 16, 8, b, with_bias, with_gate, with_lane_scale));
                                 test_cases.emplace_back(new test_mul_mat_vec_fusion(type, glu_op, 1, 32, 256,
                                     use_id, 16, 8, b, with_bias, with_gate, with_lane_scale, {1, 1}));
-                                if (!use_id && with_gate && !with_bias && glu_op != GGML_GLU_OP_SWIGLU_CLAMP) {
-                                    // small multi-token batches (speculative decoding / MTP verify)
+                                if (glu_op != GGML_GLU_OP_SWIGLU_CLAMP) {
+                                    // multi-token batches (spec decoding)
                                     for (int64_t m_batch : { 2, 4, 8 }) {
                                         test_cases.emplace_back(new test_mul_mat_vec_fusion(type, glu_op, m_batch, 32, 256,
                                             use_id, 16, 8, b, with_bias, with_gate, with_lane_scale, {1, 1}));
@@ -10225,28 +10225,6 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             true, 16, 8, b, false, true, false));
     }
 
-    // Multi-token MoE fusion used by speculative decoding.
-    for (ggml_type type : {GGML_TYPE_Q4_0, GGML_TYPE_Q4_K, GGML_TYPE_NVFP4}) {
-        for (int64_t n_tokens : {2, 4, 8}) {
-            for (bool with_gate : {false, true}) {
-                for (ggml_glu_op glu_op : {GGML_GLU_OP_SWIGLU, GGML_GLU_OP_GEGLU}) {
-                    if (!with_gate && glu_op != GGML_GLU_OP_SWIGLU) {
-                        continue;
-                    }
-                    for (bool with_bias : {false, true}) {
-                        for (bool with_lane_scale : {false, true}) {
-                            if (with_lane_scale && type != GGML_TYPE_NVFP4) {
-                                continue;
-                            }
-                            test_cases.emplace_back(new test_mul_mat_vec_fusion(type, glu_op, n_tokens, 32, 256,
-                                true, 16, 8, true, with_bias, with_gate, with_lane_scale));
-                        }
-                    }
-                }
-            }
-        }
-    }
-
     for (auto gate : {GATING_FUNC_SOFTMAX, GATING_FUNC_SIGMOID, GATING_FUNC_SOFTMAX_WEIGHT, GATING_FUNC_SQRT_SOFTPLUS}) {
         for (bool with_norm : {false, true}) {
             for (bool bias_probs : {false, true}) {
@@ -10262,6 +10240,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
                     test_cases.emplace_back(new test_topk_moe({256, 22, 1, 1}, 6, with_norm, bias_probs, gate, scale_w)); // Used by DeepSeek-V4
                     test_cases.emplace_back(new test_topk_moe({288, 22, 1, 1}, 8, with_norm, bias_probs, gate, scale_w)); // Used by StepFun 3.7
                     // rows at and just past the limit where one block still covers all rows
+                    test_cases.emplace_back(new test_topk_moe({32, 8, 1, 1}, 4, with_norm, bias_probs, gate, scale_w));
                     test_cases.emplace_back(new test_topk_moe({32, 8, 1, 1}, 8, with_norm, bias_probs, gate, scale_w));
                     test_cases.emplace_back(new test_topk_moe({32, 9, 1, 1}, 8, with_norm, bias_probs, gate, scale_w));
                 }
