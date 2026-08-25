@@ -17,7 +17,7 @@
 	const readFileMeta = $derived(parseReadFileMeta(section));
 </script>
 
-<ToolCallBlock {section} {open} {isStreaming} meta={readFileMeta} {onToggle}>
+<ToolCallBlock {isStreaming} meta={readFileMeta} {onToggle} {open} {section}>
 	{#snippet titleSnippet()}
 		<span class="text-muted-foreground">Read file </span>
 

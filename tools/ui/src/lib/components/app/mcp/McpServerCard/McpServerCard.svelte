@@ -111,22 +111,22 @@
 	{#if isEditing}
 		<McpServerCardEditForm
 			bind:this={editFormRef}
+			onCancel={cancelEditing}
+			onSave={saveEditing}
 			serverId={server.id}
+			serverLabel={displayName}
 			serverUrl={server.url}
 			serverUseProxy={server.useProxy}
-			serverLabel={displayName}
-			onSave={saveEditing}
-			onCancel={cancelEditing}
 		/>
 	{:else}
 		<McpServerCardHeader
-			{displayName}
-			{faviconUrl}
-			enabled={enabled ?? server.enabled}
+			{capabilities}
 			disabled={isError}
+			{displayName}
+			enabled={enabled ?? server.enabled}
+			{faviconUrl}
 			{onToggle}
 			{serverInfo}
-			{capabilities}
 			{transportType}
 		/>
 
@@ -175,7 +175,7 @@
 				{/if}
 
 				{#if connectionLogs.length > 0}
-					<McpConnectionLogs logs={connectionLogs} {connectionTimeMs} />
+					<McpConnectionLogs {connectionTimeMs} logs={connectionLogs} />
 				{/if}
 			{/if}
 		</div>
@@ -193,9 +193,9 @@
 
 			<McpServerCardActions
 				{isHealthChecking}
+				onDelete={handleDeleteClick}
 				onEdit={startEditing}
 				onRefresh={handleHealthCheck}
-				onDelete={handleDeleteClick}
 			/>
 		</div>
 	{/if}
@@ -204,6 +204,6 @@
 <McpServerCardDeleteDialog
 	bind:open={showDeleteDialog}
 	{displayName}
-	onOpenChange={(open) => (showDeleteDialog = open)}
 	onConfirm={onDelete}
+	onOpenChange={(open) => (showDeleteDialog = open)}
 />

@@ -68,12 +68,12 @@
 					<Tooltip.Trigger>
 						<div class="box-shadow-lg overflow-hidden rounded-full bg-muted ring-1 ring-muted">
 							<img
-								src={favicon.url}
 								alt=""
 								class={ICON_CLASS_DEFAULT}
 								onerror={(e) => {
 									(e.currentTarget as HTMLImageElement).style.display = 'none';
 								}}
+								src={favicon.url}
 							/>
 						</div>
 					</Tooltip.Trigger>

@@ -108,16 +108,16 @@
 								<Table.Head>
 									<div class="inline-flex items-center gap-2">
 										<span
-											class="resizable-text-container min-w-0 flex-1 truncate"
 											style:--threshold="12rem"
+											class="resizable-text-container min-w-0 flex-1 truncate"
 										>
 											{modelName}
 										</span>
 
 										<ActionIconCopyToClipboard
-											text={modelName || ''}
-											canCopy={!!modelName}
 											ariaLabel="Copy model name to clipboard"
+											canCopy={!!modelName}
+											text={modelName || ''}
 										/>
 									</div>
 								</Table.Head>
@@ -133,15 +133,15 @@
 									class="inline-flex h-10 items-center gap-2 align-middle font-mono text-xs"
 								>
 									<span
-										class="resizable-text-container min-w-0 flex-1 truncate"
 										style:--threshold="14rem"
+										class="resizable-text-container min-w-0 flex-1 truncate"
 									>
 										{serverProps.model_path}
 									</span>
 
 									<ActionIconCopyToClipboard
-										text={serverProps.model_path}
 										ariaLabel="Copy model path to clipboard"
+										text={serverProps.model_path}
 									/>
 								</Table.Cell>
 							</Table.Row>

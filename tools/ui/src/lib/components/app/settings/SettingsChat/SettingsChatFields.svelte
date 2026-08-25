@@ -66,7 +66,7 @@
 				})()}
 
 				<div class="flex items-center gap-2">
-					<Label for={field.key} class="flex items-center gap-1.5 text-sm font-medium">
+					<Label class="flex items-center gap-1.5 text-sm font-medium" for={field.key}>
 						{field.label}
 
 						{#if field.isExperimental}
@@ -81,9 +81,9 @@
 
 				<div class="relative w-full">
 					<Input
+						autocomplete={field.isPrivate ? 'new-password' : undefined}
 						id={field.key}
 						type={field.isPrivate ? 'password' : field.isPositiveInteger ? 'number' : 'text'}
-						autocomplete={field.isPrivate ? 'new-password' : undefined}
 						{...field.isPositiveInteger
 							? {
 									min: String(field.min ?? 1),
@@ -91,24 +91,24 @@
 									...(field.max != null ? { max: String(field.max) } : {})
 								}
 							: {}}
-						value={currentValue}
+						class="w-full {isCustomRealTime ? 'pr-8' : ''}"
 						oninput={(e) => onConfigChange(field.key, e.currentTarget.value)}
 						placeholder={currentModelParams[field.key] != null
 							? `Default: ${normalizeFloatingPoint(currentModelParams[field.key])}`
 							: (field.placeholder ?? '')}
-						class="w-full {isCustomRealTime ? 'pr-8' : ''}"
+						value={currentValue}
 					/>
 
 					{#if isCustomRealTime}
 						<button
-							type="button"
+							aria-label="Reset to default"
+							class="absolute top-1/2 right-2 inline-flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded transition-colors hover:bg-muted"
 							onclick={() => {
 								settingsStore.resetParameterToServerDefault(field.key);
 								onConfigChange(field.key, '');
 							}}
-							class="absolute top-1/2 right-2 inline-flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded transition-colors hover:bg-muted"
-							aria-label="Reset to default"
 							title="Reset to default"
+							type="button"
 						>
 							<RotateCcw class="h-3 w-3" />
 						</button>
@@ -122,7 +122,7 @@
 				{/if}
 			{:else if field.type === SettingsFieldType.TEXTAREA}
 				{#if field.label}
-					<Label for={field.key} class="block flex items-center gap-1.5 text-sm font-medium">
+					<Label class="block flex items-center gap-1.5 text-sm font-medium" for={field.key}>
 						{field.label}
 
 						{#if field.isExperimental}
@@ -132,11 +132,11 @@
 				{/if}
 
 				<Textarea
+					class="min-h-[10rem] w-full md:max-w-3xl"
 					id={field.key}
-					value={String(localConfig[field.key] ?? '')}
 					onchange={(e) => onConfigChange(field.key, e.currentTarget.value)}
 					placeholder=""
-					class="min-h-[10rem] w-full md:max-w-3xl"
+					value={String(localConfig[field.key] ?? '')}
 				/>
 
 				{#if field.help || SETTING_CONFIG_INFO[field.key]}
@@ -148,13 +148,13 @@
 				{#if field.key === SETTINGS_KEYS.SYSTEM_MESSAGE}
 					<div class="mt-3 flex items-center gap-2">
 						<Checkbox
-							id="showSystemMessage"
 							checked={Boolean(localConfig.showSystemMessage ?? true)}
+							id="showSystemMessage"
 							onCheckedChange={(checked) =>
 								onConfigChange(SETTINGS_KEYS.SHOW_SYSTEM_MESSAGE, Boolean(checked))}
 						/>
 
-						<Label for="showSystemMessage" class="cursor-pointer text-sm font-normal">
+						<Label class="cursor-pointer text-sm font-normal" for="showSystemMessage">
 							Show system message in conversations
 						</Label>
 					</div>
@@ -175,7 +175,7 @@
 				})()}
 
 				<div class="flex items-center gap-2">
-					<Label for={field.key} class="flex items-center gap-1.5 text-sm font-medium">
+					<Label class="flex items-center gap-1.5 text-sm font-medium" for={field.key}>
 						{field.label}
 
 						{#if field.isExperimental}
@@ -189,8 +189,6 @@
 				</div>
 
 				<Select.Root
-					type="single"
-					value={currentValue}
 					onValueChange={(value) => {
 						if (field.key === SETTINGS_KEYS.THEME && value && onThemeChange) {
 							onThemeChange(value);
@@ -198,6 +196,8 @@
 							onConfigChange(field.key, value);
 						}
 					}}
+					type="single"
+					value={currentValue}
 				>
 					<div class="relative w-full md:w-auto">
 						<Select.Trigger class="w-full">
@@ -213,14 +213,14 @@
 
 						{#if isCustomRealTime}
 							<button
-								type="button"
+								aria-label="Reset to default"
+								class="absolute top-1/2 right-8 inline-flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded transition-colors hover:bg-muted"
 								onclick={() => {
 									settingsStore.resetParameterToServerDefault(field.key);
 									onConfigChange(field.key, '');
 								}}
-								class="absolute top-1/2 right-8 inline-flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded transition-colors hover:bg-muted"
-								aria-label="Reset to default"
 								title="Reset to default"
+								type="button"
 							>
 								<RotateCcw class="h-3 w-3" />
 							</button>
@@ -230,7 +230,7 @@
 					<Select.Content>
 						{#if field.options}
 							{#each field.options as option (option.value)}
-								<Select.Item value={option.value} label={option.label}>
+								<Select.Item label={option.label} value={option.value}>
 									<div class="flex items-center gap-2">
 										{#if option.icon}
 											{@const IconComponent = option.icon}
@@ -265,21 +265,21 @@
 
 				<RadioGroup.Root
 					class="gap-4"
-					value={currentMode}
 					onValueChange={(value) => {
 						for (const opt of radioOptions) {
 							onConfigChange(opt.key, opt.value === value);
 						}
 					}}
+					value={currentMode}
 				>
 					{#each radioOptions as opt (opt.value)}
 						{@const itemId = `${field.key}-${opt.value}`}
 						<div class="flex items-center gap-2">
-							<RadioGroup.Item value={opt.value} id={itemId} />
+							<RadioGroup.Item id={itemId} value={opt.value} />
 
 							<Label
-								for={itemId}
 								class="flex cursor-pointer items-center gap-1.5 text-sm font-normal"
+								for={itemId}
 							>
 								{opt.label}
 
@@ -299,16 +299,16 @@
 			{:else if field.type === SettingsFieldType.CHECKBOX}
 				<div class="flex items-start space-x-3">
 					<Checkbox
-						id={field.key}
 						checked={Boolean(localConfig[field.key])}
-						onCheckedChange={(checked) => onConfigChange(field.key, checked)}
 						class="mt-1"
+						id={field.key}
+						onCheckedChange={(checked) => onConfigChange(field.key, checked)}
 					/>
 
 					<div class="space-y-1">
 						<label
-							for={field.key}
 							class="flex cursor-pointer items-center gap-1.5 pt-1 pb-0.5 text-sm leading-none font-medium"
+							for={field.key}
 						>
 							{field.label}
 

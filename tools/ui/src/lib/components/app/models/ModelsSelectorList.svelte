@@ -33,15 +33,15 @@
 	{@const isFav = modelsStore.favoriteModelIds.has(option.model)}
 
 	<ModelsSelectorOption
-		{option}
-		{isSelected}
-		isHighlighted={false}
-		{isFav}
 		{hideOrgName}
-		{onSelect}
+		{isFav}
+		isHighlighted={false}
+		{isSelected}
 		{onInfoClick}
-		onMouseEnter={() => {}}
 		onKeyDown={() => {}}
+		onMouseEnter={() => {}}
+		{onSelect}
+		{option}
 	/>
 {/snippet}
 

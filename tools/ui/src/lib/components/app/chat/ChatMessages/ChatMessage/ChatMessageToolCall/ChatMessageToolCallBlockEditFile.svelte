@@ -23,7 +23,7 @@
 	);
 </script>
 
-<ToolCallBlock {section} {open} {isStreaming} meta={editFileMeta} {onToggle}>
+<ToolCallBlock {isStreaming} meta={editFileMeta} {onToggle} {open} {section}>
 	{#snippet titleSnippet()}
 		<span class="text-muted-foreground">Edit file </span>
 
@@ -52,7 +52,7 @@
 						Edit {ei + 1}&nbsp;of&nbsp;{meta.edits.length}
 					</div>
 
-					<div class="diff-block" style:max-height={MAX_HEIGHT_CODE_BLOCK}>
+					<div style:max-height={MAX_HEIGHT_CODE_BLOCK} class="diff-block">
 						<div class="diff-pre">
 							{#each diffLines as line, li (li)}
 								<div class="diff-line diff-{line.kind}">

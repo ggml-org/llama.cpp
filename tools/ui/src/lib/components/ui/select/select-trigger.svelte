@@ -30,9 +30,9 @@
 
 <SelectPrimitive.Trigger
 	bind:ref
-	data-slot="select-trigger"
-	data-size={size}
 	class={cn(baseClasses, className)}
+	data-size={size}
+	data-slot="select-trigger"
 	{...restProps}
 >
 	{@render children?.()}

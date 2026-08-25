@@ -86,19 +86,19 @@
 	{@const safeUrl = sanitizeExternalUrl(result.url)}
 	{@const showHoverCard = safeUrl !== null && hasDetails(result)}
 	{#if safeUrl}
-		<HoverCard.Root openDelay={150} closeDelay={100}>
+		<HoverCard.Root closeDelay={100} openDelay={150}>
 			<HoverCard.Trigger
-				href={safeUrl}
-				target="_blank"
-				rel="noopener noreferrer"
 				class="hover:bg-muted/80 focus-visible:ring-ring inline-flex max-w-full items-center gap-1.5 rounded-full border bg-muted px-2.5 py-1 text-xs transition-colors outline-none focus-visible:ring-2"
+				href={safeUrl}
+				rel="noopener noreferrer"
+				target="_blank"
 			>
 				{#if faviconUrl}
 					<img
-						src={faviconUrl}
 						alt=""
 						class="h-3 w-3 shrink-0 rounded-sm"
 						onerror={hideBrokenIcon}
+						src={faviconUrl}
 					/>
 				{:else}
 					<Globe class="text-muted-foreground/70 h-3 w-3 shrink-0" />
@@ -111,18 +111,17 @@
 				{@const publishDate = formatPublishDate(result.published)}
 				{@const host = hostFor(safeUrl)}
 				<HoverCard.Content
-					side="top"
 					align="start"
-					sideOffset={6}
 					class="bg-popover text-popover-foreground z-50 w-80 max-w-[90vw] rounded-lg border p-0 shadow-lg"
+					side="top"
+					sideOffset={6}
 				>
 					<div class="flex flex-col gap-2 p-3">
 						<a
-							href={safeUrl}
-							target="_blank"
-							rel="noopener noreferrer"
 							class="line-clamp-3 text-sm font-medium leading-snug hover:underline"
-							>{result.title}</a
+							href={safeUrl}
+							rel="noopener noreferrer"
+							target="_blank">{result.title}</a
 						>
 
 						{#if publishDate || result.author}
@@ -159,7 +158,7 @@
 	{/if}
 {/snippet}
 
-<CollapsibleContentBlock {open} class="my-2" {icon} {iconClass} {iconUrl} {title} {onToggle}>
+<CollapsibleContentBlock class="my-2" {icon} {iconClass} {iconUrl} {onToggle} {open} {title}>
 	{#if results.length > 0}
 		<div class="flex flex-wrap items-center gap-2 pb-1">
 			{#each results as result (result.url)}

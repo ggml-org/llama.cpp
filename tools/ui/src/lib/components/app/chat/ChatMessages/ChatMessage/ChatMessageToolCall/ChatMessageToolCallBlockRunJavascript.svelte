@@ -21,7 +21,7 @@
 	const title = $derived(getToolUi(section.toolName)?.label ?? section.toolName ?? '');
 </script>
 
-<ToolCallBlock {section} {open} {isStreaming} meta={runJsMeta} {title} {onToggle}>
+<ToolCallBlock {isStreaming} meta={runJsMeta} {onToggle} {open} {section} {title}>
 	{#snippet children(meta, ctx)}
 		{#if ctx.isPending}
 			<div class="rounded bg-muted/20 p-2 text-xs text-muted-foreground/70 italic">Running...</div>

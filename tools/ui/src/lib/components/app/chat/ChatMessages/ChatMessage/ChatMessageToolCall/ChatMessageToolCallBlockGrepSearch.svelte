@@ -19,7 +19,7 @@
 	const home = $derived(toolsStore.serverHome);
 </script>
 
-<ToolCallBlock {section} {open} {isStreaming} meta={grepMeta} {onToggle}>
+<ToolCallBlock {isStreaming} meta={grepMeta} {onToggle} {open} {section}>
 	{#snippet titleSnippet()}
 		{#if grepMeta}
 			<span class="text-muted-foreground">Search for&nbsp;</span>

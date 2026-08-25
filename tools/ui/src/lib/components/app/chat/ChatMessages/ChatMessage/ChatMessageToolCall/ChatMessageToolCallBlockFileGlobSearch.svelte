@@ -19,7 +19,7 @@
 	const home = $derived(toolsStore.serverHome);
 </script>
 
-<ToolCallBlock {section} {open} {isStreaming} meta={fileGlobMeta} {onToggle}>
+<ToolCallBlock {isStreaming} meta={fileGlobMeta} {onToggle} {open} {section}>
 	{#snippet titleSnippet()}
 		{#if fileGlobMeta}
 			<span class="text-muted-foreground"

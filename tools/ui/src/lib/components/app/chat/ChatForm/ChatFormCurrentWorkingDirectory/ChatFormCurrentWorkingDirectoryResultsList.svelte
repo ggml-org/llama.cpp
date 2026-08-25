@@ -34,8 +34,8 @@
 
 <div
 	bind:this={container}
-	class="max-h-48 overflow-y-auto py-2"
 	transition:fly={{ duration: FLY_DURATION_MS, y: FLY_Y_PX }}
+	class="max-h-48 overflow-y-auto py-2"
 >
 	{#if isSearching && results.length === 0}
 		<div class="px-2 py-1.5 text-sm text-muted-foreground">Searching...</div>
@@ -48,10 +48,10 @@
 			<button
 				type="button"
 				{...{ [UI_DATA_ATTRS.RESULT_INDEX]: index }}
-				data-highlighted={index === hoveredIndex ? '' : undefined}
 				class={cn(
 					'relative flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-hidden select-none data-highlighted:bg-accent data-highlighted:text-accent-foreground'
 				)}
+				data-highlighted={index === hoveredIndex ? '' : undefined}
 				onclick={() => onCommit?.(path)}
 				onmouseenter={() => onHover?.(index)}
 			>

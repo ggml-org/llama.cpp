@@ -123,21 +123,21 @@
 	}
 </script>
 
-<div class="mx-auto flex h-full w-full flex-col md:pl-8" in:fade={{ duration: 150 }}>
+<div in:fade={{ duration: 150 }} class="mx-auto flex h-full w-full flex-col md:pl-8">
 	<div class="flex flex-1 flex-col gap-4 md:flex-row">
 		<SettingsChatDesktopSidebar
-			sections={SETTINGS_CHAT_SECTIONS}
-			isActive={(section: SettingsSection) => section.slug === activeSlug}
 			getHref={getSectionHref ??
 				((section: SettingsSection) => RouterService.settings(section.slug))}
+			isActive={(section: SettingsSection) => section.slug === activeSlug}
+			sections={SETTINGS_CHAT_SECTIONS}
 		/>
 
 		<SettingsChatMobileHeader
-			sections={SETTINGS_CHAT_SECTIONS}
-			isActive={(section: SettingsSection) => section.slug === activeSlug}
+			bind:this={mobileHeader}
 			getHref={getSectionHref ??
 				((section: SettingsSection) => RouterService.settings(section.slug))}
-			bind:this={mobileHeader}
+			isActive={(section: SettingsSection) => section.slug === activeSlug}
+			sections={SETTINGS_CHAT_SECTIONS}
 		/>
 
 		<div class="mx-auto max-w-3xl flex-1">
@@ -164,7 +164,7 @@
 
 							{#if currentSection.slug === SETTINGS_SECTION_SLUGS.GENERAL}
 								<div class="flex justify-end">
-									<Button variant="outline" onclick={() => window.location.reload()}>
+									<Button onclick={() => window.location.reload()} variant="outline">
 										<RefreshCw class="h-3 w-3" />
 										Reload app
 									</Button>

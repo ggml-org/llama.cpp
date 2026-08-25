@@ -264,9 +264,49 @@ export default ts.config(
 			// grouping); Prettier normalizes comma spacing afterwards.
 			'simple-import-sort/imports': ['error', { groups: [['.*']] }],
 			'svelte/no-at-html-tags': 'off',
-
 			// This app uses hash-based routing (#/) where resolve() from $app/paths does not apply
-			'svelte/no-navigation-without-resolve': 'off'
+			'svelte/no-navigation-without-resolve': 'off',
+
+			// Sort HTML attributes alphabetically in the markup. The Svelte directives
+			// (bind:/use:/animate:/style:/in:/out:/transition:/class:) sort first,
+			// alphabetically among themselves, then all remaining attributes sort
+			// alphabetically. The rule keeps spread attributes in place and does not cross
+			// them. `this` stays first on <svelte:element> because Prettier forces it there
+			// - reordering it alphabetically would fight the formatter.
+			'svelte/sort-attributes': [
+				'error',
+				{
+					order: [
+						'this',
+						{
+							match: [
+								'/^bind:/u',
+								'/^use:/u',
+								'/^animate:/u',
+								'/^style:/u',
+								'/^in:/u',
+								'/^out:/u',
+								'/^transition:/u',
+								'/^class:/u'
+							],
+							sort: 'alphabetical'
+						},
+						{
+							match: [
+								'!/^bind:/u',
+								'!/^use:/u',
+								'!/^animate:/u',
+								'!/^style:/u',
+								'!/^in:/u',
+								'!/^out:/u',
+								'!/^transition:/u',
+								'!/^class:/u'
+							],
+							sort: 'alphabetical'
+						}
+					]
+				}
+			]
 		}
 	},
 	{

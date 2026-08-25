@@ -47,8 +47,8 @@
 
 	<SheetPrimitive.Content
 		bind:ref
-		data-slot="sheet-content"
 		class={cn(sheetVariants({ side }), className)}
+		data-slot="sheet-content"
 		{...restProps}
 	>
 		{@render children?.()}

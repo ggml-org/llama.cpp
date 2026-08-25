@@ -188,14 +188,14 @@
 {/snippet}
 
 <ToolCallBlock
-	{section}
-	{open}
+	extraLiveStreaming={isLive}
 	{isStreaming}
 	meta={execShellMeta ? { errorMessage: execShellError } : null}
-	wrapper={CollapsibleTerminalBlock}
-	extraLiveStreaming={isLive}
-	spinIconWhenActive={true}
 	{onToggle}
+	{open}
+	{section}
+	spinIconWhenActive={true}
+	wrapper={CollapsibleTerminalBlock}
 >
 	{#snippet titleSnippet()}
 		{@render execShellTitle()}
@@ -216,8 +216,8 @@
 		{:else if section.toolResult}
 			<div
 				bind:this={scrollEl}
-				class="terminal-output"
 				class:is-clamped={!useFullHeightCodeBlocks}
+				class="terminal-output"
 				onscroll={handleScrollEvent}
 			>
 				{#each outputLines as line, i (i)}
@@ -225,10 +225,10 @@
 
 					{#if line.media?.type === AttachmentType.IMAGE}
 						<img
-							src={line.media.base64Url}
 							alt={line.media.name}
 							class="mt-2 mb-2 h-auto max-w-full rounded-lg"
 							loading="lazy"
+							src={line.media.base64Url}
 						/>
 					{/if}
 				{/each}

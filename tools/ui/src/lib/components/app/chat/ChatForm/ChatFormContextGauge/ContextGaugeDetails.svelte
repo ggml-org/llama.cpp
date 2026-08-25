@@ -57,10 +57,10 @@
 					{#if cumulativeRead > 0}
 						<ContextGaugeDetailRow
 							label="Prompt tokens evaluated"
-							value={`${cumulativeRead.toLocaleString()} tok`}
 							subtitle={cumulativeCacheTotal > 0
 								? `${cumulativeCacheTotal.toLocaleString()} reused from KV cache`
 								: undefined}
+							value={`${cumulativeRead.toLocaleString()} tok`}
 						/>
 					{/if}
 
@@ -84,10 +84,10 @@
 					{#if currentRead > 0}
 						<ContextGaugeDetailRow
 							label="Prompt"
-							value={`${currentRead.toLocaleString()} tok`}
 							subtitle={currentCache > 0
 								? `${currentFresh.toLocaleString()} fresh + ${currentCache.toLocaleString()} cached`
 								: undefined}
+							value={`${currentRead.toLocaleString()} tok`}
 						/>
 					{/if}
 

@@ -27,10 +27,10 @@
 {#snippet tooltipContent()}
 	<TooltipPrimitive.Content
 		bind:ref
-		data-slot="tooltip-content"
-		{sideOffset}
-		{side}
 		class={contentClass}
+		data-slot="tooltip-content"
+		{side}
+		{sideOffset}
 		{...restProps}
 	>
 		{@render children?.()}

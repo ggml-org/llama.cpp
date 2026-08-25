@@ -87,20 +87,20 @@
 
 <div class="mb-4 flex items-center justify-end gap-2">
 	<Button
-		variant={pdfViewMode === PdfViewMode.TEXT ? 'default' : 'outline'}
-		size="sm"
-		onclick={() => (pdfViewMode = PdfViewMode.TEXT)}
 		disabled={pdfImagesLoading}
+		onclick={() => (pdfViewMode = PdfViewMode.TEXT)}
+		size="sm"
+		variant={pdfViewMode === PdfViewMode.TEXT ? 'default' : 'outline'}
 	>
 		<FileText class="mr-1 {ICON_CLASS_DEFAULT}" />
 		Text
 	</Button>
 
 	<Button
-		variant={pdfViewMode === PdfViewMode.PAGES ? 'default' : 'outline'}
-		size="sm"
-		onclick={() => (pdfViewMode = PdfViewMode.PAGES)}
 		disabled={pdfImagesLoading}
+		onclick={() => (pdfViewMode = PdfViewMode.PAGES)}
+		size="sm"
+		variant={pdfViewMode === PdfViewMode.PAGES ? 'default' : 'outline'}
 	>
 		{#if pdfImagesLoading}
 			<div
@@ -160,7 +160,7 @@
 	{#each pdfImages as image, index (image)}
 		<p class="mb-2 text-sm text-white/50">Page {index + 1}</p>
 
-		<img src={image} alt="PDF Page {index + 1}" class="mx-auto max-w-[85vw] rounded-lg shadow-lg" />
+		<img alt="PDF Page {index + 1}" class="mx-auto max-w-[85vw] rounded-lg shadow-lg" src={image} />
 
 		<div class="h-4"></div>
 	{/each}

@@ -66,10 +66,10 @@
 			{/if}
 
 			<DropdownMenu.Item
+				class="flex items-center justify-between hover:[&>kbd]:opacity-100"
+				disabled={action.disabled}
 				onclick={action.onclick}
 				variant={action.variant}
-				disabled={action.disabled}
-				class="flex items-center justify-between hover:[&>kbd]:opacity-100"
 			>
 				<div class="flex items-center gap-2">
 					{@render iconComponent(

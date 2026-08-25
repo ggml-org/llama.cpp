@@ -21,7 +21,7 @@
 	const home = $derived(toolsStore.serverHome);
 </script>
 
-<ToolCallBlock {section} {open} {isStreaming} meta={writeFileMeta} {onToggle}>
+<ToolCallBlock {isStreaming} meta={writeFileMeta} {onToggle} {open} {section}>
 	{#snippet titleSnippet()}
 		<span class="text-muted-foreground">Write file </span>
 

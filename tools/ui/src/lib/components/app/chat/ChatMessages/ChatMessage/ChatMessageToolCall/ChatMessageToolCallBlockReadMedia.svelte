@@ -43,7 +43,7 @@
 	const audioMimeType = $derived(readMediaMeta?.mimeType ?? MimeTypeAudio.MP3_MPEG);
 </script>
 
-<ToolCallBlock {section} {open} {isStreaming} meta={readMediaMeta} {onToggle}>
+<ToolCallBlock {isStreaming} meta={readMediaMeta} {onToggle} {open} {section}>
 	{#snippet titleSnippet()}
 		<span class="text-muted-foreground">Read media </span>
 
@@ -58,7 +58,7 @@
 				</div>
 			{:else if mediaAttachment.type === AttachmentType.AUDIO}
 				<div class="mt-2">
-					<audio controls class="w-full rounded-lg">
+					<audio class="w-full rounded-lg" controls>
 						<source
 							src={createBase64DataUrl(audioMimeType, mediaAttachment.base64Data)}
 							type={audioMimeType}
@@ -69,10 +69,10 @@
 			{:else}
 				<div class="mt-2">
 					<img
-						src={mediaAttachment.base64Url}
 						alt={readMediaMeta?.fileName ?? 'media'}
 						class="max-h-[60vh] max-w-full rounded-lg object-contain shadow-lg"
 						loading="lazy"
+						src={mediaAttachment.base64Url}
 					/>
 				</div>
 			{/if}

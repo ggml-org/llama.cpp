@@ -31,7 +31,7 @@
 
 <div class="sticky bottom-0 mx-auto mt-4 flex w-full justify-between p-6">
 	<div class="flex gap-2">
-		<Button variant="outline" onclick={handleResetClick}>
+		<Button onclick={handleResetClick} variant="outline">
 			<RotateCcw class="h-3 w-3" />
 
 			Reset to default

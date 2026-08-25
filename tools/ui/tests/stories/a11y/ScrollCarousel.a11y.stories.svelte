@@ -1,4 +1,4 @@
-<script module lang="ts">
+<script lang="ts" module>
 	import { defineMeta } from '@storybook/addon-svelte-csf';
 	import { ScrollCarousel } from '$lib/components/app';
 	import { ScrollCarouselVariant } from '$lib/enums';

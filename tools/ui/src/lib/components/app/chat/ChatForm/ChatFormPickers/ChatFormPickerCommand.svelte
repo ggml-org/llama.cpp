@@ -104,26 +104,26 @@
 <ChatFormPickerPopover
 	bind:isOpen
 	class={className}
-	srLabel="Open command picker"
 	{onClose}
 	onKeydown={handleKeydown}
+	srLabel="Open command picker"
 >
 	<ChatFormPickerList
-		items={filteredCommands}
+		emptyMessage="No matching command"
 		isLoading={false}
+		itemKey={(command) => command.name}
+		items={filteredCommands}
+		scrollTrigger={nav.scrollTrigger}
+		searchQuery={query ?? ''}
 		selectedIndex={nav.hoveredIndex}
 		showSearchInput={false}
-		searchQuery={query ?? ''}
-		emptyMessage="No matching command"
-		itemKey={(command) => command.name}
-		scrollTrigger={nav.scrollTrigger}
 	>
 		{#snippet item(command, index, isSelected)}
 			{@const Icon = commandIcon[command.action]}
 			<ChatFormPickerListItem
 				dataIndex={index}
-				{isSelected}
 				disabled={command.disabled}
+				{isSelected}
 				onclick={() => handleSelect(command)}
 				onmouseenter={() => {
 					if (!command.disabled) nav.setHover(index);

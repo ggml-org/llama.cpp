@@ -18,7 +18,6 @@
 
 	<AlertDialogPrimitive.Content
 		bind:ref
-		data-slot="alert-dialog-content"
 		class={cn(
 			'fixed z-[999999] grid w-full gap-4 border bg-background p-6 shadow-lg duration-200',
 			// Mobile: Bottom sheet behavior
@@ -31,6 +30,7 @@
 			'sm:data-[state=open]:slide-in-from-bottom-0 sm:data-[state=open]:zoom-in-95',
 			className
 		)}
+		data-slot="alert-dialog-content"
 		{...restProps}
 	/>
 </AlertDialogPrimitive.Portal>

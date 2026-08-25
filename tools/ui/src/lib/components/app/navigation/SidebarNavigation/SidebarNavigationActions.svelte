@@ -92,8 +92,8 @@
 {#if isSearchModeActive}
 	<div class="px-4 my-2">
 		<SearchInput
-			bind:value={searchQuery}
 			bind:ref={searchInputRef}
+			bind:value={searchQuery}
 			onClose={handleSearchModeDeactivate}
 			onKeyDown={(e) => e.key === 'Escape' && handleSearchModeDeactivate()}
 			placeholder="Search conversations..."
@@ -137,8 +137,8 @@
 							: ''}"
 						href={itemHref}
 						onclick={itemOnClick}
-						variant="ghost"
 						size="default"
+						variant="ghost"
 					>
 						<span class="flex min-w-0 items-center px-0.5 gap-2">
 							{@render itemIcon(item.icon)}
@@ -186,15 +186,15 @@
 			{#if showIcons}
 				<div transition:fade={itemTransition}>
 					<ActionIcon
-						icon={item.icon}
-						tooltip={item.tooltip}
-						tooltipSide={TooltipSide.RIGHT}
-						size="lg"
-						iconSize={ICON_CLASS_DEFAULT}
 						class="h-9 w-9 rounded-full hover:bg-accent! {isActive
 							? 'bg-accent text-accent-foreground'
 							: ''}"
+						icon={item.icon}
+						iconSize={ICON_CLASS_DEFAULT}
 						onclick={itemOnClick}
+						size="lg"
+						tooltip={item.tooltip}
+						tooltipSide={TooltipSide.RIGHT}
 					/>
 				</div>
 			{/if}
