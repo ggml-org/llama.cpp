@@ -39,7 +39,12 @@ public:
                      bool   unified,
                             /* layer filters */
     const layer_filter_cb & filter_attn = nullptr,
-    const layer_filter_cb & filter_recr = nullptr);
+    const layer_filter_cb & filter_recr = nullptr,
+                            /* optional per-token indexer key cache, for hybrid
+                               models whose attention layers are sparse. absent
+                               unless filter_idx is given, so every existing
+                               architecture is unaffected. */
+    const layer_filter_cb & filter_idx  = nullptr);
 
     ~llama_memory_hybrid() = default;
 
@@ -82,12 +87,18 @@ public:
 
     llama_kv_cache * get_mem_attn() const;
     llama_memory_recurrent * get_mem_recr() const;
+    llama_kv_cache * get_mem_idx()  const;   // nullptr when the model has no indexer
 
 private:
     const llama_hparams & hparams;
 
+    // geometry for the indexer cache: MQA with a single key head of
+    // indexer_head_size, mirroring how llama_kv_cache_dsa builds its own
+    llama_hparams hparams_idx;
+
     const std::unique_ptr<llama_kv_cache> mem_attn;
     const std::unique_ptr<llama_memory_recurrent> mem_recr;
+    const std::unique_ptr<llama_kv_cache> mem_idx;
 };
 
 class llama_memory_hybrid_context : public llama_memory_context_i {
@@ -110,6 +121,7 @@ public:
     llama_memory_hybrid_context(
               llama_memory_hybrid * mem,
                   slot_info_vec_t   sinfos_attn,
+                  slot_info_vec_t   sinfos_idx,
         std::vector<llama_ubatch>   ubatches);
 
     ~llama_memory_hybrid_context() = default;
@@ -126,6 +138,7 @@ public:
 
     const llama_kv_cache_context * get_attn() const;
     const llama_memory_recurrent_context * get_recr() const;
+    const llama_kv_cache_context * get_idx()  const;   // nullptr without an indexer
 
 private:
     // the index of the next ubatch to process
@@ -135,6 +148,7 @@ private:
 
     const llama_memory_context_ptr ctx_attn;
     const llama_memory_context_ptr ctx_recr;
+    const llama_memory_context_ptr ctx_idx;   // null unless the model has an indexer
 
     const llama_memory_status status;
 };
