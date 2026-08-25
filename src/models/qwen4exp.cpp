@@ -409,9 +409,10 @@ ggml_tensor * llama_model_qwen4exp::graph::build_qsa_top_k(
     const int64_t n_idx_h  = hparams.indexer_n_head;
     const int64_t r        = hparams.dsv4_compress_ratios[il];
     const int64_t n_kv     = mctx_idx->get_n_kv();
-    const int64_t n_blocks = (n_kv + r - 1)/r;
 
     GGML_ASSERT(r > 0);
+
+    const int64_t n_blocks = (n_kv + r - 1)/r;
 
     auto qsa = std::make_unique<llm_graph_input_qsa>(mctx_idx, (uint32_t) r);
 
@@ -512,9 +513,10 @@ ggml_tensor * llama_model_qwen4exp::graph::build_layer_attn(
     const int64_t n_embd_head = hparams.n_embd_head_v();
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());
 
-    // The indexer reads the same block input as q/k/v; with no indexer cache this
-    // falls back to dense, which is what the model computes below the budget anyway.
-    ggml_tensor * top_k = mctx_idx ? build_qsa_top_k(mctx_idx, cur, inp_pos, sections, il) : nullptr;
+    // indexer reads the same block input as q/k/v; no cache or no ratio means dense
+    const bool qsa = mctx_idx != nullptr && hparams.dsv4_compress_ratios[il] > 0;
+
+    ggml_tensor * top_k = qsa ? build_qsa_top_k(mctx_idx, cur, inp_pos, sections, il) : nullptr;
 
     // Order: joint QG projection, QG split, Q norm, KV projection, K norm, RoPE, attention
 
