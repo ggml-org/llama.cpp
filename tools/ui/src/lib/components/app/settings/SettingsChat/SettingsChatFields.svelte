@@ -152,8 +152,8 @@
 					<div class="mt-3 flex items-center gap-2">
 						<Checkbox
 							id="showSystemMessage"
-							disabled={Boolean(serverStore.props?.system_prompt)}
-							checked={Boolean(Boolean(useGlobalSystemPrompt ? false : localConfig.showSystemMessage ?? true)}
+							disabled={useGlobalSystemPrompt}
+							checked={Boolean(useGlobalSystemPrompt ? false : localConfig.showSystemMessage ?? true)}
 							onCheckedChange={(checked) =>
 								onConfigChange(SETTINGS_KEYS.SHOW_SYSTEM_MESSAGE, Boolean(checked))}
 						/>
