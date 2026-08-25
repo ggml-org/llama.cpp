@@ -2329,6 +2329,17 @@ struct llama_model_qwen4exp : public llama_model_base {
                     ggml_tensor * gate,
                             int   layer);
 
+        // conv history at an explicit offset in the recurrent row: this arch
+        // packs the delta-net and PLE conv states into the same row
+        ggml_tensor * build_conv_state_at(
+             llm_graph_input_rs * inp,
+                    ggml_tensor * conv_states_all,
+                    ggml_tensor * x,
+                        int64_t   state_cols,
+                        int64_t   channels,
+                        int64_t   row_offset,
+                            int   il);
+
         ggml_tensor * build_ple(
              llm_graph_input_rs * inp,
                     ggml_tensor * hidden,
