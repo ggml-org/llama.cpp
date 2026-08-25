@@ -333,8 +333,8 @@ Two configurations, because **the best ubatch is model-dependent** - see the tab
 # Dense hybrid: Qwen3.8-27B, FP4 target + FP4 DFlash2 sidecar.
 # This is the 65 t/s configuration. ubatch 512 (the default) is fastest here.
 llama-server \
-  -m  Qwen3.8-27B-ROCmFP4-FAST.gguf \
-  -md Qwen3.8-27B-DFlash2-Q4_0_ROCMFP4_FAST.gguf \
+  -hf  julianmb/Qwen-3.8-27B-ROCmFP4-FAST-GGUF:FAST \
+  -hfd agentionai/Qwen3.8-27B-DFlash2-ROCmFP4-FAST-GGUF \
   --spec-type draft-dflash --spec-draft-adaptive \
   --spec-draft-n-min 3 --spec-draft-n-max 7 --spec-draft-ngl 99 \
   -ngl 999 -fa on -b 2048 -ub 512 -c 32768 \
@@ -400,16 +400,15 @@ and 104.0 at a fixed `n=3`. With a DFlash2 sidecar the picture reverses and `n-m
 cmake -B build -DGGML_VULKAN=ON && cmake --build build -j
 
 # Short context, structured output - DFlash2, adaptive.
-# This is the exact pair the 65 t/s figure was measured on. The sidecar is a
-# requantisation of z-lab/Qwen3.8-27B-DFlash2 to the FP4 format; swap -md for
-# -hfd once it is published.
+# This is the exact pair the 65 t/s figure was measured on. The sidecar is an
+# FP4 requantisation of z-lab/Qwen3.8-27B-DFlash2.
 build/bin/llama cli \
-  -hf julianmb/Qwen-3.8-27B-ROCmFP4-FAST-GGUF:FAST \
-  -md /path/to/Qwen3.8-27B-DFlash2-Q4_0_ROCMFP4_FAST.gguf \
+  -hf  julianmb/Qwen-3.8-27B-ROCmFP4-FAST-GGUF:FAST \
+  -hfd agentionai/Qwen3.8-27B-DFlash2-ROCmFP4-FAST-GGUF \
   --spec-type draft-dflash --spec-draft-adaptive --spec-draft-n-min 3 \
   --spec-draft-n-max 7 --spec-draft-ngl 99 -ngl 99 -fa on
 
-# Same, with a published sidecar. Larger and slower here - on a bandwidth-bound
+# Same with the Q8_0 sidecar. Larger and slower here - on a bandwidth-bound
 # APU the cheaper draft wins even at lower acceptance.
 build/bin/llama cli \
   -hf  julianmb/Qwen-3.8-27B-ROCmFP4-FAST-GGUF:FAST \

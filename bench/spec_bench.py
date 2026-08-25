@@ -34,6 +34,12 @@ PRESETS = {
         "target_quant": "Q4_K_M", "draft_quant": None,
         "method": "draft-mtp",
     },
+    "ornith-dflash": {
+        "target": HF / "models--ornith-ai--Ornith-1.5-35B-A3B-GGUF/snapshots/12393612fd4f730ff5aadc23e9b8f9648aa49ceb/Ornith-1.5-35B-Q4_K_M.gguf",
+        "draft":  pathlib.Path("/models/dflash2-fpx/Ornith-1.5-35B-A3B-DFlash2-BF16.gguf"),
+        "target_quant": "Q4_K_M", "draft_quant": "BF16",
+        "method": "draft-dflash",
+    },
     "kquant": {
         "target": HF / "models--unsloth--Qwen3.8-27B-GGUF/snapshots/f1bfb127c64f7072bdd2cad55f258b9c8b2910fe/Qwen3.8-27B-UD-Q4_K_XL.gguf",
         "draft":  HF / "models--z-lab--Qwen3.8-27B-DFlash2-GGUF/snapshots/57ab3265056d4024870b0621cfc2c127537020ed/Qwen3.8-27B-DFlash2-Q8_0.gguf",
