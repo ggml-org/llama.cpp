@@ -84,11 +84,13 @@ jobs:
 
             New version has been released.
 
+            ## Assets
+
             ${{ steps.desc.outputs.nightly }}
 
-            **Web UI:** the `nightly-tag.txt` asset contains the tag of the corresponding nightly release
+            ## More info
 
-            **More info:** [dist : releases and versioning of ggml-org projects](https://github.com/ggml-org/ggml/discussions/1579)
+            - [Releases and versioning of `ggml-org` projects](https://github.com/ggml-org/ggml/discussions/1579)
 
             ## ${{ steps.desc.outputs.changelog_title }}
 

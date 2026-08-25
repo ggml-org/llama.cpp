@@ -1,0 +1,47 @@
+Take a look at the changelog between the current version and the previous version - use the `./scripts/make-release-desc.sh [current-version]` to obtain it.
+
+Write a summary of the change log in a few sections:
+
+```
+## Overview
+
+[an overview using 1 to 3 sentences (no line breaks)]
+
+### API changes (if applicable)
+
+[summarize any API changes to `/include/*`, `/tools/mtmd/mtmd.h` and `/tools/server`]
+
+### New models (if applicable)
+
+[summarize new models added to the `src/models/` directory]
+
+### Core changes (if applicable)
+
+[summarize the changes to `/src/*`
+
+### Multi-modality changes (if applicable)
+
+[summarize the changes to `/tools/mtmd/`]
+
+### Server changes (if applicable)
+
+[summarize the changes to `/tools/server/`]
+
+### UI changes (if applicable)
+
+[summarize the changes to `/tools/ui/`]
+
+### ggml changes (if applicable)
+
+[if the version has been updated, link to the respective `ggml` releases on Github, f.ex `https://github.com/ggml-org/ggml/releases/tag/v0.22.0`. for each version bump, lookup the release description and copy the summary here]
+
+```
+
+Guidelines:
+
+- All bullet point in the summary should be concise and rarely exceed a single line of 120 characters
+- Avoid repeating `ggml`-specific changes - these should already be covered by the `ggml` release links
+- Provide PR link for each bullet point where possible
+- Don't add bullet point to state that there are no API changes in some module
+
+Output just the summary in a markdown block, without any extra text.
