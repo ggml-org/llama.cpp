@@ -1,10 +1,21 @@
 <script lang="ts">
 	import ModelsDiscoverAvatar from './ModelsDiscoverAvatar.svelte';
+	import ModelsDiscoverChatTemplateDialog from './ModelsDiscoverChatTemplateDialog.svelte';
 	import ModelsDiscoverDetailsName from './ModelsDiscoverDetailsName.svelte';
-	import { Download, ExternalLink, Heart, Image, Lightbulb, Wrench } from '@lucide/svelte';
+	import {
+		Download,
+		ExternalLink,
+		Heart,
+		Image,
+		Lightbulb,
+		MessageSquareCode,
+		Wrench
+	} from '@lucide/svelte';
+	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { HuggingFaceService } from '$lib/services';
 	import { modelsHubStore } from '$lib/stores';
 	import type { HfModelDetailInfo, HfModelGguf } from '$lib/types/huggingface';
+	import { formatParameters } from '$lib/utils';
 
 	interface Props {
 		modelId: string;
@@ -31,6 +42,8 @@
 	let description = $derived(
 		modelsHubStore.descriptionFor(modelId) ?? details.cardData?.description
 	);
+
+	let chatTemplateOpen = $state(false);
 </script>
 
 <header class="space-y-3">
@@ -76,7 +89,7 @@
 	<div class="flex flex-wrap items-center gap-1.5">
 		{#if gguf?.total}
 			<span class="rounded bg-secondary px-2 py-0.5 text-xs font-medium text-secondary-foreground">
-				{HuggingFaceService.formatFileSize(gguf.total).replace(' B', '')}B params
+				{formatParameters(gguf.total)} params
 			</span>
 		{/if}
 		{#if gguf?.architecture}
@@ -90,6 +103,16 @@
 			<span class="rounded bg-secondary px-2 py-0.5 text-xs font-medium text-secondary-foreground">
 				{gguf.context_length.toLocaleString()} ctx
 			</span>
+		{/if}
+		{#if gguf?.chat_template}
+			<button
+				type="button"
+				onclick={() => (chatTemplateOpen = true)}
+				class="inline-flex items-center gap-1 rounded bg-secondary px-2 py-0.5 text-xs font-medium text-secondary-foreground transition-colors hover:bg-secondary/70"
+			>
+				<MessageSquareCode class="h-3 w-3" />
+				Chat template
+			</button>
 		{/if}
 		{#if licenseTag}
 			<span class="rounded bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
@@ -105,33 +128,46 @@
 		{/if}
 	</div>
 
-	<!-- Capability badges -->
+	<!-- Capability / modality icons, matching the list item's icon style -->
 	{#if hasVision || hasTools || hasReasoning}
-		<div class="flex flex-wrap items-center gap-1.5">
+		<div class="flex flex-wrap items-center gap-2.5 text-muted-foreground">
 			{#if hasVision}
-				<span
-					class="inline-flex items-center gap-1 rounded bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary"
-				>
-					<Image class="h-3 w-3" />
-					Vision
-				</span>
+				<Tooltip.Root>
+					<Tooltip.Trigger>
+						<Image class="h-4 w-4" />
+					</Tooltip.Trigger>
+					<Tooltip.Content>
+						<p>Vision</p>
+					</Tooltip.Content>
+				</Tooltip.Root>
 			{/if}
 			{#if hasTools}
-				<span
-					class="inline-flex items-center gap-1 rounded bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary"
-				>
-					<Wrench class="h-3 w-3" />
-					Tool use
-				</span>
+				<Tooltip.Root>
+					<Tooltip.Trigger>
+						<Wrench class="h-4 w-4" />
+					</Tooltip.Trigger>
+					<Tooltip.Content>
+						<p>Tool use</p>
+					</Tooltip.Content>
+				</Tooltip.Root>
 			{/if}
 			{#if hasReasoning}
-				<span
-					class="inline-flex items-center gap-1 rounded bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary"
-				>
-					<Lightbulb class="h-3 w-3" />
-					Reasoning
-				</span>
+				<Tooltip.Root>
+					<Tooltip.Trigger>
+						<Lightbulb class="h-4 w-4" />
+					</Tooltip.Trigger>
+					<Tooltip.Content>
+						<p>Reasoning</p>
+					</Tooltip.Content>
+				</Tooltip.Root>
 			{/if}
 		</div>
 	{/if}
 </header>
+
+{#if gguf?.chat_template}
+	<ModelsDiscoverChatTemplateDialog
+		bind:open={chatTemplateOpen}
+		chatTemplate={gguf.chat_template}
+	/>
+{/if}

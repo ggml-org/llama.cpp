@@ -43,10 +43,11 @@ export const MODEL_ID = {
 	PARAMS_RE: /^[Ee]?\d+(\.\d+)?[BbMmKkTt]$/,
 
 	/**
-	 * Matches a quantization/precision segment, e.g. `Q4_K_M`, `IQ4_XS`, `F16`, `BF16`, `MXFP4`.
-	 * Case-insensitive to handle both uppercase and lowercase inputs.
+	 * Matches a quantization/precision segment, e.g. `Q4_K_M`, `IQ4_XS`, `TQ1_0`,
+	 * `F16`, `BF16`, `MXFP4`. Case-insensitive to handle both cases.
 	 */
-	QUANTIZATION_SEGMENT_RE: /^(I?Q\d+(_[A-Z0-9]+)*|F\d+|BF\d+|MXFP\d+(_[A-Z0-9]+)*)$/i,
+	QUANTIZATION_SEGMENT_RE:
+		/^(I?Q\d+(_[A-Z0-9]+)*|TQ\d+(_[A-Z0-9]+)*|F\d+|BF\d+|MXFP\d+(_[A-Z0-9]+)*)$/i,
 
 	/** Separates the model path from the quantization tag, e.g. `model:Q4_K_M`. */
 	QUANTIZATION_SEPARATOR: ':',

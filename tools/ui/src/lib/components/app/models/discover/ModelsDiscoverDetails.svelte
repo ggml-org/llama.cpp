@@ -95,7 +95,10 @@
 			}
 
 			details = info;
-			files = HuggingFaceService.filterByExtension(tree, '.gguf');
+			files = HuggingFaceService.filterByExtension(
+				HuggingFaceService.collapseGgufShards(tree),
+				'.gguf'
+			);
 			readme = readmeText;
 		} catch (err) {
 			error = err instanceof Error ? err.message : 'Failed to load model';
@@ -131,7 +134,12 @@
 			{hasReasoning}
 		/>
 
-		<ModelsDiscoverDetailsDownloadOptions {modelId} {bitDepthRows} />
+		<ModelsDiscoverDetailsDownloadOptions
+			{modelId}
+			{files}
+			{bitDepthRows}
+			nativeCtxTokens={gguf?.context_length ?? 0}
+		/>
 
 		<TerminalCommands {modelId} {draftVariants} />
 

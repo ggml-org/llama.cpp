@@ -26,6 +26,7 @@
 	--border: oklch(0.875 0 0);
 	--input: oklch(0.92 0 0);
 	--ring: oklch(0.708 0 0);
+	--brand: #f65e00;
 	--chart-1: oklch(0.646 0.222 41.116);
 	--chart-2: oklch(0.6 0.118 184.704);
 	--chart-3: oklch(0.398 0.07 227.392);
@@ -115,6 +116,7 @@
 	--color-muted-foreground: var(--muted-foreground);
 	--color-accent: var(--accent);
 	--color-accent-foreground: var(--accent-foreground);
+	--color-brand: var(--brand);
 	--color-destructive: var(--destructive);
 	--color-border: var(--border);
 	--color-input: var(--input);

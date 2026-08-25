@@ -118,6 +118,14 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 				type: SettingsFieldType.CHECKBOX
 			},
 			{
+				defaultValue: 0,
+				help: 'Total device memory (RAM) in GB, used to estimate which models can run. Set to 0 to auto-detect from the browser when possible.',
+				isPositiveInteger: true,
+				key: SETTINGS_KEYS.DEVICE_MEMORY_GB,
+				label: 'Device memory (GB)',
+				type: SettingsFieldType.INPUT
+			},
+			{
 				defaultValue: false,
 				help: 'Enable "Continue" button for assistant messages, including reasoning models.',
 				isExperimental: true,

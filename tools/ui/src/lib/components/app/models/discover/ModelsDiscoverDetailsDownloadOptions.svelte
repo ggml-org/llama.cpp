@@ -1,15 +1,20 @@
 <script lang="ts">
 	import DialogModelDownload from './DialogModelDownload.svelte';
 	import DownloadProgressBar from './DownloadProgressBar.svelte';
-	import { Check, MessageSquareCode } from '@lucide/svelte';
+	import { Check, Cpu, MessageSquareCode, TriangleAlert, X } from '@lucide/svelte';
+	import { browser } from '$app/environment';
+	import * as Tooltip from '$lib/components/ui/tooltip';
 	import type { GgufVariantTagInput } from '$lib/services';
 	import { HuggingFaceService, ModelsService } from '$lib/services';
-	import { modelsStore } from '$lib/stores';
+	import { modelsStore, settingsStore } from '$lib/stores';
 	import type { HfModelSibling } from '$lib/types/huggingface';
+	import { computeFileCompatibilityTiers, detectOs, resolveDeviceMemoryGb } from '$lib/utils';
 
 	interface Props {
 		modelId: string;
+		files: HfModelSibling[];
 		bitDepthRows: BitDepthRow[];
+		nativeCtxTokens: number;
 	}
 
 	interface PendingDownload {
@@ -21,19 +26,64 @@
 
 	type BitDepthRow = { bitDepth: number; files: HfModelSibling[] };
 
-	let { bitDepthRows, modelId }: Props = $props();
+	let { bitDepthRows, files, modelId, nativeCtxTokens }: Props = $props();
 
 	let pendingDownload = $state<PendingDownload | null>(null);
+
+	let deviceMemoryGb = $derived(
+		resolveDeviceMemoryGb(Number(settingsStore.config.deviceMemoryGb) || 0)
+	);
+	let osLabel = $derived(browser ? detectOs(navigator.userAgent) : 'unknown');
+	let tiers = $derived(computeFileCompatibilityTiers(files, nativeCtxTokens, deviceMemoryGb));
+
+	function buttonClass(parts: {
+		isDownloaded: boolean;
+		isFailed: boolean;
+		isUnavailable: boolean;
+	}): string {
+		const { isDownloaded, isFailed, isUnavailable } = parts;
+		const classes = [
+			'relative inline-flex items-center gap-1 overflow-hidden rounded-md border bg-muted px-2 py-1 text-left font-mono text-xs transition-colors'
+		];
+
+		// Buttons stay neutral; only the leading compatibility badge carries
+		// color (green/yellow/red). Unavailable quants are greyed + disabled.
+		if (isUnavailable) {
+			classes.push('cursor-not-allowed opacity-50');
+		} else {
+			classes.push('cursor-pointer hover:border-primary/60 hover:bg-primary/5');
+		}
+
+		if (isDownloaded && !isFailed) {
+			classes.push('border-foreground bg-muted');
+		} else if (isFailed) {
+			classes.push('border-destructive');
+		}
+
+		return classes.join(' ');
+	}
 </script>
 
 {#if bitDepthRows.length}
 	<section class="space-y-3">
-		<h2
-			class="flex items-center gap-1.5 text-xs font-semibold tracking-wide text-muted-foreground uppercase"
-		>
-			<MessageSquareCode class="h-3.5 w-3.5" />
-			Download options
-		</h2>
+		<div class="flex flex-wrap items-center justify-between gap-2">
+			<h2
+				class="flex items-center gap-1.5 text-xs font-semibold tracking-wide text-muted-foreground uppercase"
+			>
+				<MessageSquareCode class="h-3.5 w-3.5" />
+				Download options
+			</h2>
+
+			<span
+				class="inline-flex items-center gap-1.5 rounded-full border bg-background px-2.5 py-1 text-xs font-medium"
+			>
+				<Cpu class="h-3 w-3 text-muted-foreground" />
+				{osLabel}
+				{#if deviceMemoryGb > 0}
+					<span class="text-muted-foreground">({deviceMemoryGb} GB)</span>
+				{/if}
+			</span>
+		</div>
 		<div class="space-y-2">
 			{#each bitDepthRows as row (row.bitDepth)}
 				<div class="grid grid-cols-[5rem_1fr] items-start gap-3">
@@ -59,60 +109,97 @@
 								? modelsStore.status.isDraftDownloaded(modelId, file.path)
 								: modelsStore.status.isModelDownloaded(hfRepoWithTag)}
 							{@const isFailed = modelsStore.status.hasFailedDownload(hfRepoWithTag)}
-							<button
-								type="button"
-								onclick={() =>
-									(pendingDownload = {
-										filePath: file.path,
-										quant: meta?.quant ?? null,
-										sizeBytes: file.size ?? null,
-										variant: meta?.variant ?? null
-									})}
-								title={isDownloading
-									? `Downloading ${file.path}`
-									: isDownloaded
-										? `Already downloaded: ${file.path}`
-										: isFailed
-											? `Last attempt failed: ${file.path}. Click to retry.`
+							{@const tier = tiers.get(file.path)}
+							{@const isUnavailable =
+								tier === 'none' && !isDownloaded && !isDownloading && !isFailed}
+							{@const isAvailable = tier === 'full' && !isDownloaded && !isDownloading && !isFailed}
+							{@const isLimited =
+								tier === 'limited' && !isDownloaded && !isDownloading && !isFailed}
+							{@const tooltipText = isDownloading
+								? `Downloading ${file.path}`
+								: isDownloaded
+									? `Already downloaded: ${file.path}`
+									: isFailed
+										? `Last attempt failed: ${file.path}. Click to retry.`
+										: isUnavailable
+											? `Does not fit this device: ${file.path}`
 											: `Download ${file.path}`}
-								class="relative inline-flex cursor-pointer items-center gap-1 overflow-hidden rounded-md border bg-background px-2 py-1 text-left font-mono text-xs transition-colors hover:border-primary/60 hover:bg-primary/5"
-								class:border-foreground={isDownloaded && !isDownloading && !isFailed}
-								class:bg-muted={isDownloaded && !isDownloading && !isFailed}
-								class:border-destructive={isFailed && !isDownloading}
-							>
-								{#if isDownloaded && !isDownloading}
-									<Check class="h-3 w-3 text-foreground/70" />
-								{/if}
-								{#if isFailed && !isDownloading && !isDownloaded}
-									<span
-										class="rounded bg-destructive px-1 py-0.5 text-[10px] font-semibold tracking-wide text-destructive-foreground uppercase"
-									>
-										Failed
-									</span>
-								{/if}
-								{#if meta?.variant}
-									<span
-										class="rounded bg-primary px-1 py-0.5 text-[10px] font-semibold tracking-wide text-primary-foreground uppercase"
-									>
-										{meta.variant}
-									</span>
-								{/if}
-								<span class="font-medium">{label}</span>
-								<span class="text-muted-foreground">
-									{#if isDownloading && progress && progress.totalBytes > 0}
-										{Math.round((progress.downloadedBytes / progress.totalBytes) * 100)}%
-									{:else}
-										{HuggingFaceService.formatFileSize(file.size ?? 0)}
+							<Tooltip.Root>
+								<Tooltip.Trigger
+									type="button"
+									onclick={() => {
+										if (isUnavailable) return;
+
+										pendingDownload = {
+											filePath: file.path,
+											quant: meta?.quant ?? null,
+											sizeBytes: file.size ?? null,
+											variant: meta?.variant ?? null
+										};
+									}}
+									aria-disabled={isUnavailable}
+									class={buttonClass({
+										isDownloaded,
+										isFailed,
+										isUnavailable
+									})}
+								>
+									{#if isAvailable}
+										<span
+											class="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full bg-green-600"
+										>
+											<Check class="h-2.5 w-2.5 text-white" />
+										</span>
+									{:else if isLimited}
+										<span
+											class="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full bg-yellow-500"
+										>
+											<TriangleAlert class="h-2.5 w-2.5 text-white" />
+										</span>
+									{:else if isUnavailable}
+										<span
+											class="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full bg-red-600"
+										>
+											<X class="h-2.5 w-2.5 text-white" />
+										</span>
 									{/if}
-								</span>
-								{#if isDownloading && progress}
-									<DownloadProgressBar
-										overlay
-										downloadedBytes={progress.downloadedBytes}
-										totalBytes={progress.totalBytes}
-									/>
-								{/if}
-							</button>
+									{#if isFailed && !isDownloading && !isDownloaded}
+										<span
+											class="rounded bg-destructive px-1 py-0.5 text-[10px] font-semibold tracking-wide text-destructive-foreground uppercase"
+										>
+											Failed
+										</span>
+									{/if}
+									{#if meta?.variant}
+										<span
+											class="rounded bg-primary px-1 py-0.5 text-[10px] font-semibold tracking-wide text-primary-foreground uppercase"
+										>
+											{meta.variant}
+										</span>
+									{/if}
+									<span class="font-medium {isDownloaded ? '' : 'text-muted-foreground/80'}"
+										>{label}</span
+									>
+									<span class={isDownloaded ? '' : 'text-muted-foreground/80'}>
+										{#if isDownloading && progress && progress.totalBytes > 0}
+											{Math.round((progress.downloadedBytes / progress.totalBytes) * 100)}%
+										{:else}
+											{HuggingFaceService.formatFileSize(file.size ?? 0)}
+										{/if}
+									</span>
+									{#if isDownloading && progress}
+										<DownloadProgressBar
+											overlay
+											downloadedBytes={progress.downloadedBytes}
+											totalBytes={progress.totalBytes}
+										/>
+									{/if}
+								</Tooltip.Trigger>
+
+								<Tooltip.Content>
+									<p>{tooltipText}</p>
+								</Tooltip.Content>
+							</Tooltip.Root>
 						{/each}
 					</div>
 				</div>

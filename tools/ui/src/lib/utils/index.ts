@@ -116,6 +116,14 @@ export {
 	resolveBaseModel
 } from './model-manager';
 
+// Model hardware-compatibility estimation
+export {
+	computeFileCompatibilityTiers,
+	deviceMemoryBudgetMb,
+	resolveDeviceMemoryGb
+} from './model-compatibility';
+export type { CompatibilityTier } from './model-compatibility';
+
 // Portal utilities
 export { portalToBody } from './portal-to-body';
 
@@ -350,7 +358,7 @@ export { buildSandboxToolDefinition, SANDBOX_TOOL_DEFINITION } from './sandbox-t
 export { executeGetDatetimeTool } from './get-datetime';
 
 // Browser fallback for the server's get_info tool
-export { executeBrowserInfoTool } from './browser-info';
+export { detectOs, executeBrowserInfoTool } from './browser-info';
 
 // Cryptography utilities
 

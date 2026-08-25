@@ -71,6 +71,13 @@ export { default as ModelsDiscoverDetailsName } from './ModelsDiscoverDetailsNam
 export { default as ModelsDiscoverDetailsDownloadOptions } from './ModelsDiscoverDetailsDownloadOptions.svelte';
 
 /**
+ * **ModelsDiscoverChatTemplateDialog** - Chat template viewer
+ *
+ * Shows the model's chat template in a scrollable dialog with a copy button.
+ */
+export { default as ModelsDiscoverChatTemplateDialog } from './ModelsDiscoverChatTemplateDialog.svelte';
+
+/**
  * **ModelsDiscoverDetailsReadme** - Detail view README
  *
  * Renders the model card README as markdown.

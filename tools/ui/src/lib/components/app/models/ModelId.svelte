@@ -31,6 +31,8 @@
 		contextLength?: number;
 		/** Min/max GGUF file size (main + draft) across quants; renders a range when set. */
 		sizeRange?: { min: number; max: number } | null;
+		/** Params badge fallback (formatted) when the model id carries no params token. */
+		params?: string;
 		draftVariants?: DraftVariant[];
 		/** Allow badges to wrap onto new lines instead of truncating. */
 		wrap?: boolean;
@@ -52,6 +54,7 @@
 		iconsOnNewLine = false,
 		modalities,
 		modelId,
+		params,
 		showRaw = undefined,
 		showRawTooltip = false,
 		sizeRange,
@@ -104,9 +107,9 @@
 				</span>
 			{/if}
 
-			{#if parsed.params && !hideParameters}
+			{#if (parsed.params || params) && !hideParameters}
 				<span class={badgeClass}>
-					{parsed.params}{parsed.activatedParams ? `-${parsed.activatedParams}` : ''}
+					{parsed.params ?? params}{parsed.activatedParams ? `-${parsed.activatedParams}` : ''}
 				</span>
 			{/if}
 

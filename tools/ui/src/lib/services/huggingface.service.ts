@@ -199,6 +199,47 @@ export class HuggingFaceService {
 	};
 
 	/**
+	 * Collapse split GGUF shard sets (`-00001-of-00015.gguf`, ...) to their first
+	 * shard, summing every shard's size so the kept entry reflects the whole
+	 * quant. Non-sharded files pass through unchanged. Downloads are tag-based
+	 * (`repo:quant`), so the first shard is enough to represent the set.
+	 */
+	static collapseGgufShards(siblings: HfModelSibling[]): HfModelSibling[] {
+		const sizeByPath = new Map(siblings.map((f) => [f.path, f.size ?? 0]));
+		const result: HfModelSibling[] = [];
+
+		for (const file of siblings) {
+			const match = /-(\d{5})-of-(\d{5})\.gguf$/i.exec(file.path);
+
+			if (!match) {
+				result.push(file);
+
+				continue;
+			}
+
+			// Keep only the first shard; its size becomes the whole shard set's.
+			if (match[1] !== '00001') continue;
+
+			const total = parseInt(match[2], 10);
+			const stem = file.path.slice(0, file.path.length - match[0].length);
+
+			let size = 0;
+
+			for (let i = 1; i <= total; i++) {
+				const shard = `${stem}-${String(i).padStart(5, '0')}-of-${String(total).padStart(5, '0')}.gguf`;
+
+				size += sizeByPath.get(shard) ?? 0;
+			}
+
+			result.push({ ...file, size });
+		}
+
+		return result;
+	}
+
+	// GGUF Model Browsing
+
+	/**
 	 * Extract the GGUF quantization token (e.g. `Q4_K_M`) and any draft/aux variant
 	 * (`mtp`, `dflash`, `mmproj`) from a `.gguf` filename. The variant shows up
 	 * either as a sidecar prefix (`mtp-<name>.gguf`, `dflash-<name>.gguf`,
@@ -249,13 +290,17 @@ export class HuggingFaceService {
 		// - For embedded MTP like `Hy3-IQ1_M-mtp.gguf` we have `Hy3-IQ1_M` and `IQ1_M` matches.
 		// - For main files like `Llama-3-8B-Q4_K_M.gguf` we land on the trailing quant.
 		const segments = source.split(MODEL_ID.SEGMENT_SEPARATOR);
-		const quantSeg = segments.find((seg) => MODEL_ID.QUANTIZATION_SEGMENT_RE.test(seg));
-		const quant = quantSeg ? quantSeg.toUpperCase() : null;
+		const quantIdx = segments.findIndex((seg) => MODEL_ID.QUANTIZATION_SEGMENT_RE.test(seg));
+
+		let quant = quantIdx >= 0 ? segments[quantIdx].toUpperCase() : null;
+
+		// Recombine a `UD-` (Unsloth Dynamic) prefix, e.g. `...-UD-Q4_K_XL.gguf`.
+		if (quant && quantIdx > 0 && segments[quantIdx - 1].toUpperCase() === 'UD') {
+			quant = `UD-${quant}`;
+		}
 
 		return { quant, variant, variantForm };
 	}
-
-	// GGUF Model Browsing
 
 	/**
 	 * Filter raw siblings by file extension and sort by size descending.
@@ -301,19 +346,6 @@ export class HuggingFaceService {
 	}
 
 	/**
-	 * Format a min-max size range with a single shared unit and no spaces
-	 * around the dash, e.g. `19.0-28.6 GB`.
-	 */
-	static formatSizeRange(min: number, max: number): string {
-		const unit = max >= 1_000_000_000 ? 'GB' : max >= 1_000_000 ? 'MB' : max >= 1_000 ? 'KB' : 'B';
-		const div =
-			unit === 'GB' ? 1_000_000_000 : unit === 'MB' ? 1_000_000 : unit === 'KB' ? 1_000 : 1;
-		const fmt = (n: number) => (div === 1 ? `${n}` : `${(n / div).toFixed(1)}`);
-
-		return `${fmt(min)}-${fmt(max)} ${unit}`;
-	}
-
-	/**
 	 * Format likes count with K suffix if applicable
 	 */
 	static formatLikes(likes: number): string {
@@ -344,6 +376,19 @@ export class HuggingFaceService {
 		if (diffDays < 365) return `${Math.floor(diffDays / 30)} months ago`;
 
 		return `${Math.floor(diffDays / 365)} years ago`;
+	}
+
+	/**
+	 * Format a min-max size range with a single shared unit and no spaces
+	 * around the dash, e.g. `19.0-28.6 GB`.
+	 */
+	static formatSizeRange(min: number, max: number): string {
+		const unit = max >= 1_000_000_000 ? 'GB' : max >= 1_000_000 ? 'MB' : max >= 1_000 ? 'KB' : 'B';
+		const div =
+			unit === 'GB' ? 1_000_000_000 : unit === 'MB' ? 1_000_000 : unit === 'KB' ? 1_000 : 1;
+		const fmt = (n: number) => (div === 1 ? `${n}` : `${(n / div).toFixed(1)}`);
+
+		return `${fmt(min)}-${fmt(max)} ${unit}`;
 	}
 
 	// Model Details & Files
@@ -411,7 +456,17 @@ export class HuggingFaceService {
 	 * Returns `null` for unrecognized tokens.
 	 */
 	static getBitDepth(quant: string): number | null {
-		return HuggingFaceService.QUANT_BIT_DEPTH[quant] ?? null;
+		// Strip a leading `UD-` (Unsloth Dynamic) prefix before lookup.
+		const base = quant.replace(/^UD-/i, '');
+		const direct = HuggingFaceService.QUANT_BIT_DEPTH[base];
+
+		if (direct !== undefined) return direct;
+
+		// Fall back to the leading precision digits for variants missing from the
+		// map, e.g. `Q4_K_XL` -> 4, `IQ2_XXS` -> 2, `TQ1_0` -> 1, `BF16` -> 16.
+		const match = /^(?:I?Q|TQ|BF|F|MXFP)?(\d+)/i.exec(base);
+
+		return match ? parseInt(match[1], 10) : null;
 	}
 
 	/**
@@ -529,23 +584,35 @@ export class HuggingFaceService {
 	}
 
 	/**
-	 * Get repository file tree to list available GGUF variants
+	 * Get repository file tree to list available GGUF variants. Recursive so
+	 * repos that keep quants in per-quant subdirectories (e.g. `UD-Q4_K_XL/`)
+	 * are included; follows cursor pagination for repos over one page.
 	 */
 	static async getTree(modelId: string): Promise<HfModelSibling[]> {
-		const url = `https://huggingface.co/api/models/${modelId}/tree/main`;
+		const files: HfModelSibling[] = [];
+
+		let url: string | null =
+			`https://huggingface.co/api/models/${modelId}/tree/main?recursive=true`;
 
 		try {
-			const response = await fetch(url);
+			while (url) {
+				const response: Response = await fetch(url);
 
-			if (!response.ok) return [];
+				if (!response.ok) return files;
 
-			const data = (await response.json()) as HfModelSibling[];
+				const data = (await response.json()) as HfModelSibling[];
 
-			return data.filter((f) => f.type !== 'directory');
+				files.push(...data.filter((f) => f.type !== 'directory'));
+
+				url = HuggingFaceService.parseNextPageUrl(response.headers.get('Link'));
+			}
 		} catch {
-			return [];
+			// Return whatever was fetched before the failure.
 		}
+
+		return files;
 	}
+
 	/**
 	 * Get trending GGUF models
 	 */
@@ -554,7 +621,6 @@ export class HuggingFaceService {
 	): Promise<HfModelInfo[]> {
 		return this.search({ limit, sort: 'trendingScore' });
 	}
-
 	/**
 	 * Parse a local HF cache file path
 	 * (`.../models--<org>--<name>/snapshots/<sha>/<file>`) into its repo id and
@@ -664,14 +730,14 @@ export class HuggingFaceService {
 		return url.toString();
 	}
 
-	// Internal Methods
-
 	/**
 	 * Delay helper for retry logic
 	 */
 	private static delay(ms: number): Promise<void> {
 		return new Promise((resolve) => setTimeout(resolve, ms));
 	}
+
+	// Internal Methods
 
 	/**
 	 * Fetch data with retry logic for resilience
@@ -717,6 +783,15 @@ export class HuggingFaceService {
 
 			throw error;
 		}
+	}
+
+	/** Extract the `rel="next"` URL from an RFC 5988 `Link` header, if present. */
+	private static parseNextPageUrl(linkHeader: string | null): string | null {
+		if (!linkHeader) return null;
+
+		const match = /<([^>]+)>;\s*rel="next"/.exec(linkHeader);
+
+		return match ? match[1] : null;
 	}
 
 	/** Strip a leading YAML frontmatter block (--- ... ---) from a markdown document. */
