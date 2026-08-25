@@ -9,27 +9,37 @@
  * Detail data is loaded by ModelsDiscoverDetails, not here.
  */
 
-import { CURATED_MODEL_IDS } from '$lib/constants';
 import { HuggingFaceService } from '$lib/services';
-import type { HfModelInfo } from '$lib/types/huggingface';
+import type { HfCatalogEntry, HfModelInfo } from '$lib/types/huggingface';
 
 class ModelsHubStore {
-	models = $state<HfModelInfo[]>([]);
-	loading = $state(false);
 	error = $state<string | null>(null);
-
+	models = $state<HfModelInfo[]>([]);
 	/** First model in the list - the hub auto-opens this one. */
 	firstModel = $derived(this.models[0] ?? null);
 
-	private fetched = false;
+	loading = $state(false);
+
+	private catalog: HfCatalogEntry[] = [];
 	private defaultModels: HfModelInfo[] = [];
+	private fetched = false;
 	private searchRequestId = 0;
 
 	/**
-	 * Fetch the default list: the curated ggml--org models in display order.
-	 * Each curated model is fetched directly by ID, so the list is independent
-	 * of download ranking (curated models may fall outside the top-50 search
-	 * window). No-op when already loaded or in flight.
+	 * Catalog family description for a repo id, or undefined when the repo is
+	 * not part of the catalog (e.g. a search result outside the curated list).
+	 */
+	descriptionFor(modelId: string): string | undefined {
+		return this.catalog.find((entry) =>
+			entry.sizes.some((size) => size.builds.some((build) => build.repo === modelId))
+		)?.description;
+	}
+
+	/**
+	 * Fetch the default list from the llama.app catalog, flattened to a flat
+	 * list of ggml-org repo ids in catalog order (one per size). Each repo is
+	 * fetched directly by ID, so the list is independent of download ranking.
+	 * No-op when already loaded or in flight.
 	 */
 	async fetch(): Promise<void> {
 		if (this.loading || this.fetched) return;
@@ -38,10 +48,15 @@ class ModelsHubStore {
 		this.error = null;
 
 		try {
+			const catalog = await HuggingFaceService.getCatalog();
+
+			this.catalog = catalog;
+			const ids = this.catalogModelIds(catalog);
+
 			// getDetails returns full metadata (downloads, likes, lastModified,
 			// siblings, tags, gguf) for a single model.
 			this.defaultModels = (
-				await Promise.all(CURATED_MODEL_IDS.map((id) => HuggingFaceService.getDetails(id)))
+				await Promise.all(ids.map((id) => HuggingFaceService.getDetails(id)))
 			).filter((m): m is HfModelInfo => m !== null);
 			this.models = this.defaultModels;
 			this.fetched = true;
@@ -65,13 +80,14 @@ class ModelsHubStore {
 		if (!trimmed) {
 			this.models = this.defaultModels;
 			this.error = null;
+
 			return;
 		}
 
 		const requestId = this.searchRequestId;
 
 		try {
-			const results = await HuggingFaceService.searchByQuery(trimmed, { limit: 50, full: true });
+			const results = await HuggingFaceService.searchByQuery(trimmed, { full: true, limit: 50 });
 
 			if (requestId === this.searchRequestId) {
 				this.models = results;
@@ -82,6 +98,42 @@ class ModelsHubStore {
 				this.error = err instanceof Error ? err.message : 'Search failed';
 			}
 		}
+	}
+
+	/**
+	 * Min/max GGUF file size (bytes) across the available quants for a repo,
+	 * or undefined when the repo is not part of the catalog.
+	 */
+	sizeRangeFor(modelId: string): { min: number; max: number } | undefined {
+		for (const entry of this.catalog) {
+			for (const size of entry.sizes) {
+				const builds = size.builds.filter((b) => b.repo === modelId);
+
+				if (builds.length === 0) continue;
+
+				const bytes = builds.map((b) => b.sizeBytes);
+
+				return { max: Math.max(...bytes), min: Math.min(...bytes) };
+			}
+		}
+
+		return undefined;
+	}
+
+	/**
+	 * Flatten the catalog to a flat list of ggml-org repo ids, newest family
+	 * first (by release date). Returns an empty array when the catalog is empty.
+	 */
+	private catalogModelIds(catalog: HfCatalogEntry[]): string[] {
+		return [...catalog]
+			.sort((a, b) => b.released.localeCompare(a.released))
+			.flatMap((entry) =>
+				entry.sizes.flatMap((size) => {
+					const build = size.builds.find((b) => b.repo.startsWith('ggml-org/'));
+
+					return build ? [build.repo] : [];
+				})
+			);
 	}
 }
 

@@ -263,6 +263,8 @@ export {
 	detectThinkingSupportWithReason
 } from './chat-template-thinking-detector';
 
+export { detectToolUseSupport } from './chat-template-tool-detector';
+
 // Agentic content utilities (structured section derivation)
 export {
 	deriveAgenticSections,

@@ -15,10 +15,10 @@ export const ROUTES = {
 	MANAGE_MODEL: '#/models-hub/[modelId]',
 	/** Model hub - browse and download HuggingFace GGUF models. */
 	MANAGE_MODELS: '#/models-hub',
-	/** Model manager - installed models from /v1/models. */
-	MODEL_MANAGER: '#/model-manager',
 	/** MCP servers. */
 	MCP_SERVERS: '#/mcp-servers',
+	/** Model manager - installed models from /v1/models. */
+	MODEL_MANAGER: '#/model-manager',
 	/** Search — mobile-only full-page conversation search. */
 	SEARCH: '#/search',
 	/** Root — start of the app. */

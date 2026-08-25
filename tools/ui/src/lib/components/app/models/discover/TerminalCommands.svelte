@@ -14,11 +14,11 @@
 
 	// llama.cpp --spec-type value for each draft variant.
 	const SPEC_TYPE: Record<DraftVariant, string> = {
-		mtp: 'draft-mtp',
 		dflash: 'draft-dflash',
 		dspark: 'draft-dspark',
 		eagle3: 'eagle3',
-		mmproj: ''
+		mmproj: '',
+		mtp: 'draft-mtp'
 	};
 
 	let copiedIndex = $state<number | null>(null);
@@ -33,7 +33,6 @@
 	// draft sidecar, or just the base command when none is present.
 	let boxes = $derived.by(() => {
 		const variants = draftVariants.filter((v) => v !== 'mmproj');
-
 		const build = (bin: string) => {
 			const base = `llama ${bin} -hf ${modelId}`;
 
@@ -43,8 +42,8 @@
 		};
 
 		return [
-			{ title: 'Serve', icon: Server, commands: build('serve') },
-			{ title: 'CLI', icon: SquareTerminal, commands: build('cli') }
+			{ commands: build('serve'), icon: Server, title: 'Serve' },
+			{ commands: build('cli'), icon: SquareTerminal, title: 'CLI' }
 		];
 	});
 </script>
@@ -65,7 +64,9 @@
 
 			<div class="space-y-1 p-2">
 				{#each box.commands as cmd, i (cmd)}
-					<div class="group flex items-center justify-between gap-2 rounded px-2 py-1 font-mono text-xs">
+					<div
+						class="group flex items-center justify-between gap-2 rounded px-2 py-1 font-mono text-xs"
+					>
 						<span class="truncate text-foreground/90">{cmd}</span>
 						<button
 							type="button"

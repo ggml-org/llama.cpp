@@ -1,21 +1,15 @@
 import { ModelModality } from '$lib/enums';
 import type { ModelOption } from '$lib/types/models';
-import { SvelteMap } from 'svelte/reactivity';
 
 export interface ModelItem {
 	option: ModelOption;
 	flatIndex: number;
 }
 
-export interface OrgGroup {
-	orgName: string | null;
-	items: ModelItem[];
-}
-
 export interface GroupedModelOptions {
 	loaded: ModelItem[];
 	favorites: ModelItem[];
-	available: OrgGroup[];
+	available: ModelItem[];
 }
 
 function matchesModality(option: ModelOption, term: string): boolean {
@@ -77,24 +71,15 @@ export function groupModelOptions(
 		}
 	}
 
-	// Available models grouped by org (excluding loaded and favorites)
-	const available: OrgGroup[] = [];
-	const orgGroups = new SvelteMap<string, ModelItem[]>();
+	// Available models (excluding loaded and favorites)
+	const available: ModelItem[] = [];
 
 	for (let i = 0; i < filteredOptions.length; i++) {
 		const option = filteredOptions[i];
 
 		if (loadedModelIds.has(option.model) || favoriteIds.has(option.model)) continue;
 
-		const key = option.parsedId?.orgName ?? '';
-
-		if (!orgGroups.has(key)) orgGroups.set(key, []);
-
-		orgGroups.get(key)!.push({ flatIndex: i, option });
-	}
-
-	for (const [orgName, items] of orgGroups) {
-		available.push({ items, orgName: orgName || null });
+		available.push({ flatIndex: i, option });
 	}
 
 	return { available, favorites, loaded };

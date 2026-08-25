@@ -1,16 +1,31 @@
 <script lang="ts">
-	import { HuggingFaceService } from '$lib/services';
-	import { DARK_INVERT_AVATAR_ORGS } from '$lib/constants';
 	import * as Tooltip from '$lib/components/ui/tooltip';
+	import { DARK_INVERT_AVATAR_ORGS } from '$lib/constants';
+	import { HuggingFaceService } from '$lib/services';
 
 	interface Props {
 		/** Org whose avatar is shown (may differ from the repo's org for base models). */
 		org: string;
 		/** Repo's own org, shown as a small corner badge when provided. */
 		quantOrg?: string;
+		/** Tailwind size classes for the main avatar (default `h-9 w-9`). */
+		size?: string;
+		/** Extra classes appended to the base (main) image. */
+		baseImageClass?: string;
+		/** Size classes for the quant corner badge image (default `h-full w-full`). */
+		quantImageClass?: string;
+		/** Positioning classes for the quant corner badge (default `-bottom-0.75 -right-0.75`). */
+		quantPositionClass?: string;
 	}
 
-	let { org, quantOrg }: Props = $props();
+	let {
+		baseImageClass = '',
+		org,
+		quantImageClass = 'h-full w-full',
+		quantOrg,
+		quantPositionClass = '-bottom-0.75 -right-0.75',
+		size = 'h-9 w-9'
+	}: Props = $props();
 
 	let avatarError = $state(false);
 	let quantError = $state(false);
@@ -30,6 +45,7 @@
 
 	let quantHue = $derived.by(() => {
 		const name = quantOrg ?? '';
+
 		let h = 0;
 
 		for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
@@ -41,28 +57,28 @@
 <span class="relative mt-0.5 inline-flex shrink-0">
 	{#if avatarError}
 		<span
-			class="flex h-9 w-9 items-center justify-center rounded-md text-sm font-semibold text-white"
+			class="flex {size} items-center justify-center rounded-md text-sm font-semibold text-white"
 			style="background-color: hsl({hue} 60% 45%)"
 			aria-hidden="true"
 		>
 			{org.charAt(0).toUpperCase()}
 		</span>
 	{:else}
-        <div class="rounded-md">
-    		<img
-    			src={HuggingFaceService.getAvatarUrl(org)}
-    			onerror={() => (avatarError = true)}
-    			class="h-9 w-9 rounded-md {invertAvatar ? 'dark:invert' : ''}"
-    			alt=""
-    			loading="lazy"
-    		/>
-	    </div>
+		<div class="rounded-md">
+			<img
+				src={HuggingFaceService.getAvatarUrl(org)}
+				onerror={() => (avatarError = true)}
+				class="{size} rounded-md {invertAvatar ? 'dark:invert' : ''} {baseImageClass}"
+				alt=""
+				loading="lazy"
+			/>
+		</div>
 	{/if}
 
 	{#if quantOrg && quantOrg !== org}
 		<Tooltip.Root>
 			<Tooltip.Trigger
-				class="absolute -bottom-0.75 -right-0.75 h-4.25 w-4.25 overflow-hidden rounded-full border border-background bg-muted "
+				class="absolute {quantPositionClass} h-4.25 w-4.25 overflow-hidden rounded-full border border-background bg-muted "
 			>
 				{#if quantError}
 					<span
@@ -76,7 +92,7 @@
 					<img
 						src={HuggingFaceService.getAvatarUrl(quantOrg)}
 						onerror={() => (quantError = true)}
-						class="h-full w-full rounded-full {invertQuant ? 'dark:invert' : ''}"
+						class="{quantImageClass} rounded-full {invertQuant ? 'dark:invert' : ''}"
 						alt=""
 						loading="lazy"
 					/>

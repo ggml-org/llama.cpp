@@ -22,7 +22,7 @@
 	import { SvelteMap } from 'svelte/reactivity';
 
 	let modelsHubOpen = $state(false);
-	let baseModels = $state(new SvelteMap<string, string | null>());
+	let baseModels = new SvelteMap<string, string | null>();
 
 	let isRouter = $derived(serverStore.isRouterMode);
 
@@ -61,7 +61,8 @@
 	{@const entry = getRouterEntry(option.model)}
 	{@const status = entry?.status}
 	{@const statusValue = status?.value}
-	{@const isLoaded = statusValue === ServerModelStatus.LOADED || statusValue === ServerModelStatus.SLEEPING}
+	{@const isLoaded =
+		statusValue === ServerModelStatus.LOADED || statusValue === ServerModelStatus.SLEEPING}
 	{@const isLoading = statusValue === ServerModelStatus.LOADING}
 	{@const isDownloading = statusValue === ServerModelStatus.DOWNLOADING}
 	{@const isFailed = statusValue === ServerModelStatus.FAILED || status?.failed === true}
@@ -78,7 +79,7 @@
 				tags={option.tags}
 				modalities={option.modalities}
 				supportsThinking={modelsStore.props.checkModelSupportsThinking(option.model)}
-				hideQuantization={hideQuantization}
+				{hideQuantization}
 				showRawTooltip
 			/>
 		</td>

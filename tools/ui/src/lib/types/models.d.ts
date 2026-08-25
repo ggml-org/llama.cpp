@@ -23,6 +23,8 @@ export interface ModelOption {
 	parsedId?: ParsedModelId;
 	aliases?: string[];
 	tags?: string[];
+	/** Original (non-GGUF) base model, resolved from the HF card. */
+	baseModel?: { org: string; name: string };
 }
 
 /**

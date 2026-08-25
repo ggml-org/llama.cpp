@@ -34,11 +34,6 @@ export interface ModelStatusHost {
 }
 
 export class ModelStatusManager {
-	private downloadProgress = new SvelteMap<string, ModelDownloadProgress>();
-	/** `<repo>:<tag>` strings whose most recent download attempt failed (download_failed). */
-	private failedDownloads = new SvelteSet<string>();
-	private loadingStates = new SvelteMap<string, boolean>();
-	private loadProgress = new SvelteMap<string, ModelLoadProgress>();
 	/**
 	 * Draft sidecar files pulled by registered models, as `<repo>/<file>` keys.
 	 * Drafts are not separate /v1/models entries - the router pulls them as
@@ -63,6 +58,11 @@ export class ModelStatusManager {
 
 		return result;
 	});
+	private downloadProgress = new SvelteMap<string, ModelDownloadProgress>();
+	/** `<repo>:<tag>` strings whose most recent download attempt failed (download_failed). */
+	private failedDownloads = new SvelteSet<string>();
+	private loadingStates = new SvelteMap<string, boolean>();
+	private loadProgress = new SvelteMap<string, ModelLoadProgress>();
 	// /models/sse feed state, the single source of truth for status and load progress
 	private statusAbort: AbortController | null = null;
 	private statusReaderActive = false;
@@ -99,6 +99,26 @@ export class ModelStatusManager {
 			toast.error(`Failed to cancel: ${error instanceof Error ? error.message : 'unknown error'}`);
 
 			return false;
+		}
+	}
+
+	/**
+	 * Cancel an in-flight load (ROUTER mode only). The server force-kills a
+	 * LOADING model on unload; the feed reports the settled status, so no
+	 * waiter is registered here.
+	 */
+	async cancelLoad(modelId: string): Promise<void> {
+		if (!serverStore.isRouterMode) return;
+
+		this.subscribe();
+
+		try {
+			await ModelsService.unload(modelId);
+			toast.info(`Load cancelled: ${this.host.toDisplayName(modelId)}`);
+		} catch (error) {
+			toast.error(`Failed to cancel load: ${this.host.toDisplayName(modelId)}`);
+
+			throw error;
 		}
 	}
 
@@ -171,19 +191,19 @@ export class ModelStatusManager {
 	}
 
 	/**
-	 * True when the given `<repo>:<tag>` is already a fully downloaded model
-	 * registered with the server (i.e. it shows up in the /v1/models list).
-	 */
-	isModelDownloaded(repoWithTag: string): boolean {
-		return this.host.routerModels.some((m) => m.id === repoWithTag);
-	}
-
-	/**
 	 * True when the given draft sidecar file (repo-relative path) has been pulled
 	 * as the `--model-draft` of some registered model.
 	 */
 	isDraftDownloaded(repoId: string, filePath: string): boolean {
 		return this.downloadedDrafts.has(`${repoId}/${filePath}`);
+	}
+
+	/**
+	 * True when the given `<repo>:<tag>` is already a fully downloaded model
+	 * registered with the server (i.e. it shows up in the /v1/models list).
+	 */
+	isModelDownloaded(repoWithTag: string): boolean {
+		return this.host.routerModels.some((m) => m.id === repoWithTag);
 	}
 
 	isOperationInProgress(modelId: string): boolean {
@@ -260,26 +280,6 @@ export class ModelStatusManager {
 			throw error;
 		} finally {
 			this.loadingStates.set(modelId, false);
-		}
-	}
-
-	/**
-	 * Cancel an in-flight load (ROUTER mode only). The server force-kills a
-	 * LOADING model on unload; the feed reports the settled status, so no
-	 * waiter is registered here.
-	 */
-	async cancelLoad(modelId: string): Promise<void> {
-		if (!serverStore.isRouterMode) return;
-
-		this.subscribe();
-
-		try {
-			await ModelsService.unload(modelId);
-			toast.info(`Load cancelled: ${this.host.toDisplayName(modelId)}`);
-		} catch (error) {
-			toast.error(`Failed to cancel load: ${this.host.toDisplayName(modelId)}`);
-
-			throw error;
 		}
 	}
 

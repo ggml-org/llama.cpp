@@ -1,10 +1,12 @@
-import { type DraftVariant,MODEL_ID } from '$lib/constants';
+import { type DraftVariant, MODEL_ID } from '$lib/constants';
 import type {
+	HfCatalogEntry,
 	HfModelDetailInfo,
 	HfModelInfo,
 	HfModelSearchParams,
 	HfModelSibling,
-	HfModelSort} from '$lib/types/huggingface';
+	HfModelSort
+} from '$lib/types/huggingface';
 
 /** Variant flag in a GGUF filename (e.g. draft-mtp, diffusion-flash, multimodal projector). */
 export type GgufVariant = DraftVariant;
@@ -142,9 +144,20 @@ export class HuggingFaceService {
 
 	private static readonly BASE_URL = 'https://huggingface.co/api/models';
 
+	// Cached base model lookups keyed by repo id, so repeated selector opens
+	// never re-hit the HF API for the same repo.
+	private static baseModelCache = new Map<string, { org: string; name: string } | null>();
+
+	private static baseModelPending = new Map<
+		string,
+		Promise<{ org: string; name: string } | null>
+	>();
+
 	private static readonly DEFAULT_LIMIT = 50;
 
 	private static readonly MAX_LIMIT = 100;
+
+	// GGUF Model Searching
 
 	/**
 	 * Map of quant token to its average bit-depth in bits-per-weight (bpw).
@@ -242,7 +255,7 @@ export class HuggingFaceService {
 		return { quant, variant, variantForm };
 	}
 
-	// GGUF Model Searching
+	// GGUF Model Browsing
 
 	/**
 	 * Filter raw siblings by file extension and sort by size descending.
@@ -268,8 +281,6 @@ export class HuggingFaceService {
 		return downloads.toString();
 	}
 
-	// GGUF Model Browsing
-
 	/**
 	 * Format file size in bytes to human-readable string
 	 */
@@ -287,6 +298,19 @@ export class HuggingFaceService {
 		}
 
 		return `${bytes} B`;
+	}
+
+	/**
+	 * Format a min-max size range with a single shared unit and no spaces
+	 * around the dash, e.g. `19.0-28.6 GB`.
+	 */
+	static formatSizeRange(min: number, max: number): string {
+		const unit = max >= 1_000_000_000 ? 'GB' : max >= 1_000_000 ? 'MB' : max >= 1_000 ? 'KB' : 'B';
+		const div =
+			unit === 'GB' ? 1_000_000_000 : unit === 'MB' ? 1_000_000 : unit === 'KB' ? 1_000 : 1;
+		const fmt = (n: number) => (div === 1 ? `${n}` : `${(n / div).toFixed(1)}`);
+
+		return `${fmt(min)}-${fmt(max)} ${unit}`;
 	}
 
 	/**
@@ -322,6 +346,66 @@ export class HuggingFaceService {
 		return `${Math.floor(diffDays / 365)} years ago`;
 	}
 
+	// Model Details & Files
+
+	/**
+	 * Avatar URL for an author (org or user). 404s when the author does not
+	 * exist, so callers should provide a fallback.
+	 */
+	static getAvatarUrl(author: string): string {
+		return `https://huggingface.co/api/avatars/${author}`;
+	}
+
+	/**
+	 * Resolve the original (non-GGUF) base model `{ org, name }` for a GGUF repo
+	 * from its HF card (`cardData.base_model`). Returns null when the card has no
+	 * base model. Results are cached per repo.
+	 */
+	static getBaseModel(repoId: string): Promise<{ org: string; name: string } | null> {
+		const cached = this.baseModelCache.get(repoId);
+
+		if (cached !== undefined) return Promise.resolve(cached);
+
+		const pending = this.baseModelPending.get(repoId);
+
+		if (pending) return pending;
+
+		const promise = (async () => {
+			const details = await this.getDetails(repoId);
+			const base = this.getBaseModels(details)[0];
+
+			if (!base) return null;
+
+			const [org, ...rest] = base.split('/');
+
+			return { name: rest.join('/'), org };
+		})();
+
+		this.baseModelPending.set(repoId, promise);
+
+		promise
+			.then((result) => this.baseModelCache.set(repoId, result))
+			.finally(() => this.baseModelPending.delete(repoId));
+
+		return promise;
+	}
+
+	/**
+	 * Extract the original (non-GGUF) base model ids for a repo, from
+	 * `cardData.base_model` (string or list) and the `base_model:` tags.
+	 */
+	static getBaseModels(model: HfModelDetailInfo | null): string[] {
+		if (!model) return [];
+
+		const cardBase = model.cardData?.base_model;
+		const fromCard: string[] = Array.isArray(cardBase) ? cardBase : cardBase ? [cardBase] : [];
+		const fromTags = (model.tags ?? [])
+			.map((t) => /^base_model:(?:quantized:)?(.+)$/.exec(t)?.[1])
+			.filter((v): v is string => Boolean(v));
+
+		return Array.from(new Set([...fromCard, ...fromTags]));
+	}
+
 	/**
 	 * Look up the average bit-depth for a known GGUF quantization.
 	 * Returns `null` for unrecognized tokens.
@@ -343,11 +427,29 @@ export class HuggingFaceService {
 		});
 	}
 
-	// Model Details & Files
-
 	/**
 	 * Get detailed information about a specific GGUF model
 	 */
+	/**
+	 * Fetch the llama.app model catalog (https://llama.app/v1/catalog.json).
+	 * Returns an empty array on failure so callers can fall back gracefully.
+	 */
+	static async getCatalog(): Promise<HfCatalogEntry[]> {
+		const url = 'https://llama.app/v1/catalog.json';
+
+		try {
+			const response = await fetch(url);
+
+			if (!response.ok) throw new Error(`Failed to fetch catalog: ${response.status}`);
+
+			return (await response.json()) as HfCatalogEntry[];
+		} catch (error) {
+			console.error('Error fetching catalog:', error);
+
+			return [];
+		}
+	}
+
 	static async getDetails(modelId: string): Promise<HfModelDetailInfo | null> {
 		// Do not encode the modelId, it contains slashes for author/name.
 		// `full=true` includes cardData (description, base_model) and safetensors.
@@ -369,6 +471,15 @@ export class HuggingFaceService {
 			return null;
 		}
 	}
+
+	/**
+	 * Get model URL on Hugging Face Hub
+	 */
+	static getModelUrl(modelId: string): string {
+		return `https://huggingface.co/${modelId}`;
+	}
+
+	// Utility Methods
 
 	/**
 	 * Get most liked GGUF models
@@ -396,6 +507,28 @@ export class HuggingFaceService {
 	}
 
 	/**
+	 * Fetch the raw README.md for a repo, with the YAML frontmatter stripped.
+	 */
+	static async getReadme(modelId: string): Promise<string | null> {
+		// Do not encode the modelId, it contains slashes for author/name
+		const url = `https://huggingface.co/${modelId}/raw/main/README.md`;
+
+		try {
+			const response = await fetch(url);
+
+			if (response.status === 404) return null;
+
+			if (!response.ok) throw new Error(`Failed to fetch README: ${response.status}`);
+
+			return HuggingFaceService.stripFrontmatter(await response.text());
+		} catch (error) {
+			console.error(`Error fetching README for ${modelId}:`, error);
+
+			return null;
+		}
+	}
+
+	/**
 	 * Get repository file tree to list available GGUF variants
 	 */
 	static async getTree(modelId: string): Promise<HfModelSibling[]> {
@@ -413,7 +546,6 @@ export class HuggingFaceService {
 			return [];
 		}
 	}
-
 	/**
 	 * Get trending GGUF models
 	 */
@@ -421,44 +553,6 @@ export class HuggingFaceService {
 		limit: number = HuggingFaceService.DEFAULT_LIMIT
 	): Promise<HfModelInfo[]> {
 		return this.search({ limit, sort: 'trendingScore' });
-	}
-
-	/**
-	 * Fetch the raw README.md for a repo, with the YAML frontmatter stripped.
-	 */
-	static async getReadme(modelId: string): Promise<string | null> {
-		// Do not encode the modelId, it contains slashes for author/name
-		const url = `https://huggingface.co/${modelId}/raw/main/README.md`;
-
-		try {
-			const response = await fetch(url);
-
-			if (response.status === 404) return null;
-			if (!response.ok) throw new Error(`Failed to fetch README: ${response.status}`);
-
-			return HuggingFaceService.stripFrontmatter(await response.text());
-		} catch (error) {
-			console.error(`Error fetching README for ${modelId}:`, error);
-
-			return null;
-		}
-	}
-
-	// Utility Methods
-
-	/**
-	 * Get model URL on Hugging Face Hub
-	 */
-	static getModelUrl(modelId: string): string {
-		return `https://huggingface.co/${modelId}`;
-	}
-
-	/**
-	 * Avatar URL for an author (org or user). 404s when the author does not
-	 * exist, so callers should provide a fallback.
-	 */
-	static getAvatarUrl(author: string): string {
-		return `https://huggingface.co/api/avatars/${author}`;
 	}
 
 	/**
@@ -475,31 +569,20 @@ export class HuggingFaceService {
 
 		if (parts.length < 2) return null;
 
-		return { repo: `${parts[0]}/${parts.slice(1).join('--')}`, file: match[2] };
+		return { file: match[2], repo: `${parts[0]}/${parts.slice(1).join('--')}` };
 	}
 
 	/**
-	 * Extract the original (non-GGUF) base model ids for a repo, from
-	 * `cardData.base_model` (string or list) and the `base_model:` tags.
+	 * Best-effort parameter count parsed from a model id/name, e.g. `27B` from
+	 * `Qwen3.8-27B-GGUF` or `300M` from `embeddinggemma-300M-GGUF`. Returns null
+	 * when no size token is present.
 	 */
-	static getBaseModels(model: HfModelDetailInfo | null): string[] {
-		if (!model) return [];
+	static parseParamCount(name: string): string | null {
+		const match = /(?:^|[^a-z0-9])(\d+(?:[._]\d+)?)\s*([bm])(?![a-z0-9])/i.exec(name);
 
-		const cardBase = model.cardData?.base_model;
-		const fromCard: string[] = Array.isArray(cardBase) ? cardBase : cardBase ? [cardBase] : [];
+		if (!match) return null;
 
-		const fromTags = (model.tags ?? [])
-			.map((t) => /^base_model:(?:quantized:)?(.+)$/.exec(t)?.[1])
-			.filter((v): v is string => Boolean(v));
-
-		return Array.from(new Set([...fromCard, ...fromTags]));
-	}
-
-	/** Strip a leading YAML frontmatter block (--- ... ---) from a markdown document. */
-	private static stripFrontmatter(text: string): string {
-		const match = text.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/);
-
-		return match ? text.slice(match[0].length) : text;
+		return `${match[1]}${match[2].toUpperCase()}`;
 	}
 
 	/**
@@ -519,19 +602,6 @@ export class HuggingFaceService {
 		const tasks = tags.filter((tag) => Object.keys(HuggingFaceService.TASKS).includes(tag));
 
 		return { isGated, isGguf, isSafetensors, license, tasks };
-	}
-
-	/**
-	 * Best-effort parameter count parsed from a model id/name, e.g. `27B` from
-	 * `Qwen3.8-27B-GGUF` or `300M` from `embeddinggemma-300M-GGUF`. Returns null
-	 * when no size token is present.
-	 */
-	static parseParamCount(name: string): string | null {
-		const match = /(?:^|[^a-z0-9])(\d+(?:[._]\d+)?)\s*([bm])(?![a-z0-9])/i.exec(name);
-
-		if (!match) return null;
-
-		return `${match[1]}${match[2].toUpperCase()}`;
 	}
 
 	/** Resolve a pipeline_tag to a lucide icon name, or null when unknown. */
@@ -575,8 +645,6 @@ export class HuggingFaceService {
 		});
 	}
 
-	// Internal Methods
-
 	/**
 	 * Build API URL from search parameters
 	 */
@@ -595,6 +663,8 @@ export class HuggingFaceService {
 
 		return url.toString();
 	}
+
+	// Internal Methods
 
 	/**
 	 * Delay helper for retry logic
@@ -647,5 +717,12 @@ export class HuggingFaceService {
 
 			throw error;
 		}
+	}
+
+	/** Strip a leading YAML frontmatter block (--- ... ---) from a markdown document. */
+	private static stripFrontmatter(text: string): string {
+		const match = text.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/);
+
+		return match ? text.slice(match[0].length) : text;
 	}
 }

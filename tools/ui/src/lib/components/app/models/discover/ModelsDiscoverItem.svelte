@@ -1,8 +1,8 @@
 <script lang="ts">
-	import { HuggingFaceService } from '$lib/services';
-	import type { HfModelInfo } from '$lib/types/huggingface';
 	import ModelsDiscoverAvatar from './ModelsDiscoverAvatar.svelte';
 	import ModelsDiscoverInfo from './ModelsDiscoverInfo.svelte';
+	import { HuggingFaceService } from '$lib/services';
+	import type { HfModelInfo } from '$lib/types/huggingface';
 
 	interface Props {
 		model: HfModelInfo;
@@ -12,7 +12,7 @@
 		onSelect?: (modelId: string) => void;
 	}
 
-	let { model, active = false, showBaseModelAvatar = false, onSelect }: Props = $props();
+	let { active = false, model, onSelect, showBaseModelAvatar = false }: Props = $props();
 
 	let org = $derived(model.id.split('/')[0] ?? model.id);
 

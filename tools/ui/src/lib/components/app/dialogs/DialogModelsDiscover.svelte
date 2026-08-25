@@ -1,7 +1,6 @@
 <script lang="ts">
-	import { Boxes } from '@lucide/svelte';
 	import { SearchInput } from '$lib/components/app';
-	import { ModelsDiscoverList, ModelsDiscoverDetails } from '$lib/components/app/models/discover';
+	import { ModelsDiscoverDetails, ModelsDiscoverList } from '$lib/components/app/models/discover';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { modelsHubStore } from '$lib/stores';
 	import { untrack } from 'svelte';
@@ -57,42 +56,43 @@
 
 <Dialog.Root {open} onOpenChange={handleOpenChange}>
 	<Dialog.Content
-		class="grid gap-0 p-0 md:h-[calc(100vh-4rem)]! md:max-h-240! md:w-[calc(100vw-4rem)]! md:max-w-360!" style="grid-template-columns: auto 1fr;"
+		class="grid gap-0 p-0 md:h-[calc(100vh-4rem)]! md:max-h-240! md:w-[calc(100vw-4rem)]! md:max-w-360!"
+		style="grid-template-columns: auto 1fr;"
 	>
-			<aside
-				class="sticky top-0 w-100 shrink-0 self-start border-r border-border/40 bg-background overflow-y-auto md:p-4 h-full space-y-1 md:max-h-239.5!"
-			>
-				<div class="p-2 sticky top-0 z-99">
-					<SearchInput
-					    class=""
-						bind:value={searchQuery}
-						placeholder="Search models..."
-						onInput={handleSearchInput}
+		<aside
+			class="w-108 shrink-0 self-start border-r border-border/40 bg-background overflow-y-auto md:p-4 h-full space-y-1"
+		>
+			<div class="p-2 sticky top-0 z-99">
+				<SearchInput
+					class=""
+					bind:value={searchQuery}
+					placeholder="Search models..."
+					onInput={handleSearchInput}
+				/>
+			</div>
+
+			<div>
+				{#if modelsHubStore.loading}
+					<p class="p-4 text-sm text-muted-foreground">Loading models...</p>
+				{:else if modelsHubStore.error}
+					<p class="p-4 text-sm text-destructive">{modelsHubStore.error}</p>
+				{:else if modelsHubStore.models.length === 0}
+					<p class="p-4 text-sm text-muted-foreground">No models found</p>
+				{:else}
+					<ModelsDiscoverList
+						models={modelsHubStore.models}
+						activeId={selectedId}
+						showBaseModelAvatar
+						onSelect={(id) => (selectedId = id)}
 					/>
-				</div>
-
-				<div>
-					{#if modelsHubStore.loading}
-						<p class="p-4 text-sm text-muted-foreground">Loading models...</p>
-					{:else if modelsHubStore.error}
-						<p class="p-4 text-sm text-destructive">{modelsHubStore.error}</p>
-					{:else if modelsHubStore.models.length === 0}
-						<p class="p-4 text-sm text-muted-foreground">No models found</p>
-					{:else}
-						<ModelsDiscoverList
-							models={modelsHubStore.models}
-							activeId={selectedId}
-							showBaseModelAvatar
-							onSelect={(id) => (selectedId = id)}
-						/>
-					{/if}
-				</div>
-			</aside>
-
-			<main>
-				{#if selectedId}
-					<ModelsDiscoverDetails modelId={selectedId} />
 				{/if}
-			</main>
+			</div>
+		</aside>
+
+		<main class="overflow-y-auto">
+			{#if selectedId}
+				<ModelsDiscoverDetails modelId={selectedId} />
+			{/if}
+		</main>
 	</Dialog.Content>
 </Dialog.Root>

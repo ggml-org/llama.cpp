@@ -1,5 +1,5 @@
-import type { DraftVariant } from '$lib/constants';
 import type { ModelOption } from './models';
+import type { DraftVariant } from '$lib/constants';
 
 /**
  * A draft sidecar model attached to a quant (speculative decoding).

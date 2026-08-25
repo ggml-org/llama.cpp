@@ -1,12 +1,12 @@
 <script lang="ts">
-	import DownloadProgressBar from './DownloadProgressBar.svelte';
-	import { Download, LoaderCircle, Trash2, TriangleAlert } from '@lucide/svelte';
-	import { DialogConfirmation } from '$lib/components/app';
+	import DownloadToast from './DownloadToast.svelte';
+	import { Download, LoaderCircle, TriangleAlert } from '@lucide/svelte';
 	import * as AlertDialog from '$lib/components/ui/alert-dialog';
 	import type { DraftVariant } from '$lib/constants';
 	import { KeyboardKey } from '$lib/enums';
 	import { type GgufVariantTagInput, ModelsService } from '$lib/services/models.service';
 	import { modelsStore } from '$lib/stores';
+	import { toast } from 'svelte-sonner';
 
 	interface Props {
 		open: boolean;
@@ -30,9 +30,8 @@
 		variant
 	}: Props = $props();
 
-	type Phase = 'pending' | 'starting' | 'downloading' | 'finished';
+	type Phase = 'pending' | 'starting';
 	let phase = $state<Phase>('pending');
-	let hasSeenProgress = $state(false);
 	let lastError: string | null = $state(null);
 
 	let tagInput = $derived<GgufVariantTagInput | null>(
@@ -49,36 +48,10 @@
 		return 'default';
 	});
 
-	let inFlight = $derived(phase === 'starting' || phase === 'downloading');
 	// True when a previous SSE `download_failed` left a recorded failure for the
 	// same <repo>:<tag>. The dialog swaps Download for a delete-&-retry flow
 	// because POST /models rejects already-existing partial entries.
 	let previousFailure = $derived(modelsStore.status.hasFailedDownload(hfRepoWithTag));
-	let cancelling = $state(false);
-	let lastCancelError: string | null = $state(null);
-
-	// Only offer Delete when the model is registered with the server (a fully
-	// downloaded entry in /v1/models). For an in-flight download the partial
-	// files are cleaned up by the Retry path, so Delete would be redundant.
-	let canDelete = $derived(
-		phase === 'finished' && modelsStore.status.isModelDownloaded(hfRepoWithTag)
-	);
-	let showDeleteConfirm = $state(false);
-	async function handleConfirmDelete() {
-		showDeleteConfirm = false;
-		await modelsStore.status.cancelDownload(hfRepoWithTag);
-		// Close the download dialog too - removing the entry makes the wizard moot.
-		onCancel();
-	}
-
-	// Reactive: while the SSE feed reports progress for our download, surface it.
-	// The downloadProgress map is deleted on download_finished/download_failed.
-	let progress = $derived(modelsStore.status.getDownloadProgress(hfRepoWithTag));
-	let progressPercent = $derived.by(() => {
-		if (!progress || progress.totalBytes <= 0) return 0;
-
-		return Math.round((progress.downloadedBytes / progress.totalBytes) * 100);
-	});
 
 	function handleKeydown(event: KeyboardEvent) {
 		if (event.key === KeyboardKey.ENTER && phase === 'pending') {
@@ -87,28 +60,24 @@
 		}
 	}
 
+	// The dialog is always closable - downloads run in the background and are
+	// tracked by a toast, so closing mid-flight never aborts the download.
 	function handleOpenChange(newOpen: boolean) {
 		if (newOpen) {
 			lastError = null;
-			lastCancelError = null;
-			showDeleteConfirm = false;
 			phase = 'pending';
-			hasSeenProgress = false;
 
 			return;
 		}
 
-		if (!inFlight) onCancel();
+		onCancel();
 	}
 
 	async function trigger() {
-		if (inFlight) return;
+		if (phase === 'starting') return;
 
 		phase = 'starting';
-		hasSeenProgress = false;
 		lastError = null;
-		lastCancelError = null;
-		showDeleteConfirm = false;
 
 		// A recorded failure for the same <repo>:<tag> means the server still holds
 		// a partial entry that POST /models would reject; remove it before retrying.
@@ -118,54 +87,26 @@
 
 		try {
 			await modelsStore.status.downloadModel(hfRepoWithTag, filePath);
-			phase = 'downloading';
+			// Download runs on the server; hand progress off to a toast and close.
+			showDownloadToast();
+			onConfirm();
 		} catch (error) {
 			lastError = error instanceof Error ? error.message : 'Failed to start download';
 			phase = 'pending';
 		}
 	}
 
-	async function cancel() {
-		if (cancelling) return;
-
-		cancelling = true;
-		lastCancelError = null;
-		try {
-			const ok = await modelsStore.status.cancelDownload(hfRepoWithTag);
-
-			if (!ok) {
-				lastCancelError = 'Cancel request failed. Try again in a moment.';
-			}
-		} finally {
-			cancelling = false;
-		}
+	function showDownloadToast() {
+		toast.custom(DownloadToast, {
+			componentProps: {
+				displayName: filePath,
+				repoId,
+				repoWithTag: hfRepoWithTag
+			},
+			dismissible: true,
+			duration: Infinity
+		});
 	}
-
-	// Latch once we've seen real progress so we know what 'no longer in flight'
-	// actually means. Without this the dialog auto-closed shortly after the POST
-	// resolved because no SSE event had landed yet.
-	$effect(() => {
-		if (phase !== 'downloading') return;
-
-		if (progress) hasSeenProgress = true;
-	});
-
-	// Promote to 'finished' only after progress was observed and the feed then
-	// drops our entry. Auto-close after a short pause.
-	$effect(() => {
-		if (phase !== 'downloading') return;
-
-		if (!hasSeenProgress) return;
-
-		const stillInFlight = modelsStore.status.isDownloadInProgress(hfRepoWithTag);
-
-		if (!stillInFlight) {
-			phase = 'finished';
-			const timer = setTimeout(() => onConfirm(), 600);
-
-			return () => clearTimeout(timer);
-		}
-	});
 </script>
 
 <AlertDialog.Root {open} onOpenChange={handleOpenChange}>
@@ -173,19 +114,12 @@
 		<AlertDialog.Header>
 			<AlertDialog.Title class="flex items-center gap-2">
 				<Download class="h-5 w-5 text-primary" />
-				{#if phase === 'pending'}
-					Download this model?
-				{:else}
-					Downloading {tagDisplay}
-				{/if}
+				Download this model?
 			</AlertDialog.Title>
 			<AlertDialog.Description>
-				{#if phase === 'pending'}
-					llama-server will download this file (and related sidecar weights such as multimodal
-					projectors or draft models) from Hugging Face into your local model cache.
-				{:else}
-					Download runs in the background; this dialog tracks live progress.
-				{/if}
+				llama-server will download this file (and related sidecar weights such as multimodal
+				projectors or draft models) from Hugging Face into your local model cache. The download runs
+				in the background and its progress is shown in a notification.
 			</AlertDialog.Description>
 
 			{#if previousFailure && phase === 'pending'}
@@ -202,20 +136,6 @@
 				</div>
 			{/if}
 		</AlertDialog.Header>
-
-		{#if canDelete}
-			<div class="flex justify-end">
-				<button
-					type="button"
-					onclick={() => (showDeleteConfirm = true)}
-					class="inline-flex items-center gap-1.5 rounded-md border border-destructive/40 px-2 py-1 text-xs font-medium text-destructive transition-colors hover:bg-destructive/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-destructive/50"
-					aria-label="Delete model from cache"
-				>
-					<Trash2 class="h-3.5 w-3.5" />
-					Delete from cache
-				</button>
-			</div>
-		{/if}
 
 		<div class="space-y-3 rounded-md border bg-muted/40 p-3 text-xs">
 			<div class="flex flex-col gap-1">
@@ -243,74 +163,25 @@
 					</span>
 				{/if}
 			</div>
-
-			{#if phase === 'downloading' || phase === 'finished'}
-				<div class="flex flex-col gap-1.5">
-					<div class="flex items-center justify-between text-muted-foreground">
-						<span>
-							{#if phase === 'finished'}
-								Complete
-							{:else if progress && progress.totalBytes > 0}
-								Downloading
-							{:else}
-								Preparing download
-							{/if}
-						</span>
-						<span class="font-mono tabular-nums">{progressPercent}%</span>
-					</div>
-					<DownloadProgressBar
-						downloadedBytes={progress?.downloadedBytes ?? 0}
-						totalBytes={progress?.totalBytes ?? 0}
-					/>
-				</div>
-			{/if}
 		</div>
 
 		{#if lastError}
 			<p class="text-xs text-destructive">{lastError}</p>
 		{/if}
-		{#if lastCancelError}
-			<p class="text-xs text-destructive">{lastCancelError}</p>
-		{/if}
 
 		<AlertDialog.Footer>
-			{#if phase === 'downloading'}
-				<AlertDialog.Action disabled={cancelling} onclick={cancel}>
-					{#if cancelling}
-						<LoaderCircle class="mr-1.5 h-4 w-4 animate-spin" />
-						Cancelling...
-					{:else}
-						Cancel download
-					{/if}
-				</AlertDialog.Action>
-			{:else}
-				<AlertDialog.Cancel disabled={inFlight} onclick={onCancel}>
-					{#if phase === 'finished'}Close{:else}Cancel{/if}
-				</AlertDialog.Cancel>
-			{/if}
-			{#if phase === 'pending'}
-				<AlertDialog.Action disabled={inFlight} onclick={trigger}>
-					<Download class="mr-1.5 h-4 w-4" />
-					{previousFailure ? 'Retry download' : 'Download'}
-				</AlertDialog.Action>
-			{:else if phase === 'starting'}
-				<AlertDialog.Action disabled>
+			<AlertDialog.Cancel disabled={phase === 'starting'} onclick={onCancel}>
+				Cancel
+			</AlertDialog.Cancel>
+			<AlertDialog.Action disabled={phase === 'starting'} onclick={trigger}>
+				{#if phase === 'starting'}
 					<LoaderCircle class="mr-1.5 h-4 w-4 animate-spin" />
 					Starting...
-				</AlertDialog.Action>
-			{/if}
+				{:else}
+					<Download class="mr-1.5 h-4 w-4" />
+					{previousFailure ? 'Retry download' : 'Download'}
+				{/if}
+			</AlertDialog.Action>
 		</AlertDialog.Footer>
 	</AlertDialog.Content>
 </AlertDialog.Root>
-
-<DialogConfirmation
-	bind:open={showDeleteConfirm}
-	title="Delete model"
-	description={`Remove "${hfRepoWithTag}" from your cache? Any cached files will be deleted from disk.`}
-	confirmText="Delete"
-	cancelText="Cancel"
-	variant="destructive"
-	icon={Trash2}
-	onConfirm={handleConfirmDelete}
-	onCancel={() => (showDeleteConfirm = false)}
-/>

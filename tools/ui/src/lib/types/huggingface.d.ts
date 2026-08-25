@@ -189,3 +189,33 @@ export interface HfModelApiResponse {
 	/** Total count (if available) */
 	total?: number;
 }
+
+// llama.app model catalog (https://llama.app/v1/catalog.json)
+
+/** A single GGUF build/repo within a catalog size. */
+export interface HfCatalogBuild {
+	quant: string;
+	size: string;
+	sizeBytes: number;
+	repo: string;
+}
+
+/** A size variant (e.g. `GPT-OSS 20B`) within a catalog entry. */
+export interface HfCatalogSize {
+	name: string;
+	params: string;
+	builds: HfCatalogBuild[];
+}
+
+/** A single model family in the catalog. `featured` marks the staff picks. */
+export interface HfCatalogEntry {
+	name: string;
+	brand: string;
+	description: string;
+	details: string;
+	released: string;
+	license: string;
+	featured?: boolean;
+	maxMemGb?: number;
+	sizes: HfCatalogSize[];
+}

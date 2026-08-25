@@ -1,13 +1,12 @@
 <script lang="ts">
-	import { ExternalLink } from '@lucide/svelte';
-	import { type DraftVariant } from '$lib/constants';
-	import { HuggingFaceService } from '$lib/services';
-	import type { HfModelDetailInfo, HfModelSibling } from '$lib/types/huggingface';
-	import { SvelteMap } from 'svelte/reactivity';
 	import ModelsDiscoverDetailsDownloadOptions from './ModelsDiscoverDetailsDownloadOptions.svelte';
 	import ModelsDiscoverDetailsHeader from './ModelsDiscoverDetailsHeader.svelte';
 	import ModelsDiscoverDetailsReadme from './ModelsDiscoverDetailsReadme.svelte';
 	import TerminalCommands from './TerminalCommands.svelte';
+	import { type DraftVariant } from '$lib/constants';
+	import { HuggingFaceService } from '$lib/services';
+	import type { HfModelDetailInfo, HfModelSibling } from '$lib/types/huggingface';
+	import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 
 	interface Props {
 		/** Full HuggingFace model id, e.g. `ggml-org/gemma-3-4b-it-GGUF`. */
@@ -44,7 +43,7 @@
 	// Draft sidecar variants (mtp, dflash, dspark, eagle3) present in the repo,
 	// e.g. speculative-decoding drafts. mmproj is excluded: it is vision.
 	let draftVariants = $derived.by<DraftVariant[]>(() => {
-		const set = new Set<DraftVariant>();
+		const set = new SvelteSet<DraftVariant>();
 
 		for (const file of files) {
 			const variant = HuggingFaceService.extractQuantMeta(file.path)?.variant;

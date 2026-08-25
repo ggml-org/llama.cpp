@@ -1,7 +1,7 @@
 <script lang="ts">
 	import ModelLoadHighlight from '../ModelLoadHighlight.svelte';
 	import type { ModelItem } from '../utils';
-	import { Boxes, ChevronDown, Lightbulb, LoaderCircle, PackageSearch, Plus } from '@lucide/svelte';
+	import { ChevronDown, Lightbulb, LoaderCircle, PackageSearch } from '@lucide/svelte';
 	import {
 		ChatFormActionAddReasoningSubmenu,
 		DialogModelInformation,
@@ -98,9 +98,7 @@
 
 		for (const item of ms.groupedFilteredOptions.loaded) order.push(item.option.id);
 		for (const item of ms.groupedFilteredOptions.favorites) order.push(item.option.id);
-		for (const group of ms.groupedFilteredOptions.available) {
-			for (const item of group.items) order.push(item.option.id);
-		}
+		for (const item of ms.groupedFilteredOptions.available) order.push(item.option.id);
 
 		return order;
 	});
@@ -214,7 +212,7 @@
 								class={[
 									`relative inline-grid cursor-pointer grid-cols-[1fr_auto_1fr] items-center gap-1 rounded-sm bg-background px-1.5 py-1 text-xs shadow-sm transition hover:bg-muted-foreground/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-muted-foreground/15 dark:text-secondary-foreground`,
 									!ms.isCurrentModelInCache
-										? 'bg-red-400/10 !text-red-400 hover:bg-red-400/20 hover:text-red-400'
+										? 'bg-red-400/10 text-red-400! hover:bg-red-400/20 hover:text-red-400'
 										: forceForegroundText
 											? 'text-foreground'
 											: ms.isHighlightedCurrentModelActive
@@ -230,10 +228,10 @@
 								<span class="flex min-w-0 items-center gap-1">
 									{#if selectedOption}
 										<ModelId
-											class="min-w-0 overflow-hidden"
-											hideOrgName={!showOrgNameInTrigger}
-											hideQuantization
 											modelId={selectedOption.model}
+											class="min-w-0 overflow-hidden"
+											hideQuantization
+											hideOrgName={!showOrgNameInTrigger}
 										/>
 									{:else}
 										<span class="min-w-0 font-medium">Select model</span>
@@ -266,7 +264,7 @@
 
 				<DropdownMenu.Content
 					align="end"
-					class="w-full md:min-w-64 md:max-w-80 max-w-[calc(100vw-2rem)]"
+					class="w-full md:min-w-64 max-w-[calc(100vw-2rem)]"
 					onOpenAutoFocus={(event) => event.preventDefault()}
 				>
 					<DropdownMenu.Sub bind:open={modelSubOpen}>
@@ -275,37 +273,37 @@
 
 							{#if selectedOption}
 								<ModelId
+									modelId={selectedOption.model}
 									class="min-w-0 flex-1 overflow-hidden"
 									hideOrgName={!showOrgNameInTrigger}
 									hideQuantization
-									modelId={selectedOption.model}
 								/>
 							{:else}
 								<span class="min-w-0 flex-1 truncate text-muted-foreground">No model</span>
 							{/if}
 						</DropdownMenu.SubTrigger>
 
-						<DropdownMenu.SubContent class="w-100 max-w-[calc(100vw-2rem)] pt-0">
+						<DropdownMenu.SubContent class="max-w-[calc(100vw-2rem)] md:max-w-108 pt-0">
 							<DropdownMenuSearchable
+								searchValue={ms.searchTerm}
+								onSearchChange={(v) => ms.setSearchTerm(v)}
+								placeholder="Search models..."
+								onSearchKeyDown={handleSearchKeyDown}
 								emptyMessage="No models found."
 								isEmpty={ms.filteredOptions.length === 0 && ms.isCurrentModelInCache}
-								onSearchChange={(v) => ms.setSearchTerm(v)}
-								onSearchKeyDown={handleSearchKeyDown}
-								placeholder="Search models..."
-								searchValue={ms.searchTerm}
 							>
 								<div class="models-list">
 									{#if !ms.isCurrentModelInCache && currentModel}
 										<!-- Show unavailable model as first option (disabled) -->
 										<button
-											aria-disabled="true"
-											aria-selected="true"
-											class="flex w-full cursor-not-allowed items-center bg-red-400/10 p-2 text-left text-sm text-red-400"
-											disabled
-											role="option"
 											type="button"
+											class="flex w-full cursor-not-allowed items-center bg-red-400/10 p-2 text-left text-sm text-red-400"
+											role="option"
+											aria-selected="true"
+											aria-disabled="true"
+											disabled
 										>
-											<ModelId class="flex-1" hideQuantization modelId={currentModel} />
+											<ModelId modelId={currentModel} class="flex-1" hideQuantization />
 
 											<span class="ml-2 text-xs whitespace-nowrap opacity-70">(not available)</span>
 										</button>
@@ -315,38 +313,39 @@
 										<p class="px-4 py-3 text-sm text-muted-foreground">No models found.</p>
 									{/if}
 
-									{#snippet modelOption(item: ModelItem, hideOrgName: boolean)}
+									{#snippet modelOption(item: ModelItem, _hideOrgName: boolean, compact = false)}
 										{@const { option } = item}
 										{@const isSelected = currentModel === option.model || ms.activeId === option.id}
 										{@const isHighlighted = option.id === highlightedId}
 										{@const isFav = ms.isFavorite(option.model)}
 
 										<ModelsSelectorOption
-											{hideOrgName}
-											{isFav}
-											{isHighlighted}
+											{option}
 											{isSelected}
+											{isHighlighted}
+											{isFav}
+											hideOrgName={false}
+											{compact}
+											onSelect={ms.handleSelect}
 											onInfoClick={ms.handleInfoClick}
+											onMouseEnter={() => (highlightedId = option.id)}
 											onKeyDown={(event) => {
 												if (event.key === KeyboardKey.ENTER || event.key === KeyboardKey.SPACE) {
 													event.preventDefault();
 													void handleModelKeyAction(option.id, event.altKey);
 												}
 											}}
-											onMouseEnter={() => (highlightedId = option.id)}
-											onSelect={ms.handleSelect}
-											{option}
 										/>
 									{/snippet}
 
 									<ModelsSelectorList
-										activeId={ms.activeId}
-										{currentModel}
 										groups={ms.groupedFilteredOptions}
-										onInfoClick={ms.handleInfoClick}
-										onSelect={ms.handleSelect}
-										renderOption={modelOption}
+										{currentModel}
+										activeId={ms.activeId}
 										sectionHeaderClass="my-1.5 px-2 py-2 text-[13px] font-semibold text-muted-foreground/70 select-none"
+										onSelect={ms.handleSelect}
+										onInfoClick={ms.handleInfoClick}
+										renderOption={modelOption}
 									/>
 								</div>
 							</DropdownMenuSearchable>
@@ -385,18 +384,18 @@
 											: 'text-foreground',
 								isOpen && 'text-foreground'
 							]}
-							disabled={disabled || ms.updating}
-							onclick={() => ms.handleOpenChange(true)}
 							style="max-width: min(calc(100cqw - 6.5rem), 32rem)"
+							onclick={() => ms.handleOpenChange(true)}
+							disabled={disabled || ms.updating}
 						>
 							<MODEL_SELECTOR_ICON class="h-3.5 w-3.5 shrink-0" />
 
 							{#if selectedOption}
 								<ModelId
+									modelId={selectedOption.model}
 									class="min-w-0 overflow-hidden"
 									hideOrgName={!showOrgNameInTrigger}
 									hideQuantization
-									modelId={selectedOption.model}
 								/>
 							{/if}
 
@@ -423,9 +422,9 @@
 
 {#if ms.showModelDialog}
 	<DialogModelInformation
-		modelId={ms.infoModelId}
-		onOpenChange={(v) => ms.setShowModelDialog(v)}
 		open={ms.showModelDialog}
+		onOpenChange={(v) => ms.setShowModelDialog(v)}
+		modelId={ms.infoModelId}
 	/>
 {/if}
 

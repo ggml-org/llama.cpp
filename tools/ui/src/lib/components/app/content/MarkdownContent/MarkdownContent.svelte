@@ -55,6 +55,7 @@
 	import { detectIncompleteCodeBlock, highlightCode, type IncompleteCodeBlock } from '$lib/utils';
 	import { sanitizeSvg } from '$lib/utils/sanitize-svg';
 	import { mountSvgShadow } from '$lib/utils/svg-shadow';
+	import DOMPurify from 'dompurify';
 	import type { Root as HastRoot, RootContent as HastRootContent } from 'hast';
 	import githubLightCss from 'highlight.js/styles/github.css?inline';
 	import githubDarkCss from 'highlight.js/styles/github-dark.css?inline';
@@ -77,6 +78,8 @@
 		content: string;
 		class?: string;
 		disableMath?: boolean;
+		/** Render raw HTML found in the markdown (sanitized) instead of escaping it. */
+		allowHtml?: boolean;
 	}
 
 	interface MarkdownBlock {
@@ -85,7 +88,13 @@
 		contentHash?: string;
 	}
 
-	let { attachments, class: className = '', content, disableMath = false }: Props = $props();
+	let {
+		allowHtml = false,
+		attachments,
+		class: className = '',
+		content,
+		disableMath = false
+	}: Props = $props();
 
 	let containerRef = $state<HTMLDivElement>();
 	let renderedBlocks = $state<MarkdownBlock[]>([]);
@@ -148,6 +157,7 @@
 
 	let processor = $derived(() => {
 		void attachments;
+		void allowHtml;
 		// eslint-disable-next-line @typescript-eslint/no-explicit-any
 		let proc: any = remark().use(remarkGfm); // GitHub Flavored Markdown
 
@@ -155,10 +165,15 @@
 			proc = proc.use(remarkMath); // Parse $inline$ and $$block$$ math
 		}
 
-		proc = proc
-			.use(remarkBreaks) // Convert line breaks to <br>
-			.use(remarkLiteralHtml) // Treat raw HTML as literal text with preserved indentation
-			.use(remarkRehype); // Convert Markdown AST to rehype
+		proc = proc.use(remarkBreaks); // Convert line breaks to <br>
+
+		if (!allowHtml) {
+			// Treat raw HTML as literal text with preserved indentation
+			proc = proc.use(remarkLiteralHtml);
+		}
+
+		// Convert Markdown AST to rehype. Keep raw HTML as-is when allowHtml is set.
+		proc = proc.use(remarkRehype, allowHtml ? { allowDangerousHtml: true } : undefined);
 
 		if (!disableMath) {
 			proc = proc.use(rehypeKatex); // Render math using KaTeX
@@ -261,10 +276,11 @@
 		const singleNodeRoot = { children: [node], type: 'root' };
 		const transformedRoot = (await processorInstance.run(singleNodeRoot as MdastRoot)) as HastRoot;
 		const html = processorInstance.stringify(transformedRoot);
+		const safeHtml = allowHtml ? (DOMPurify.sanitize(html) as unknown as string) : html;
 
-		transformCache.set(hash, html);
+		transformCache.set(hash, safeHtml);
 
-		return { hash, html };
+		return { hash, html: safeHtml };
 	}
 
 	/**
@@ -463,6 +479,10 @@
 			)) as HastRoot;
 
 			unstableHtml = processorInstance.stringify(transformedRoot);
+
+			if (allowHtml) {
+				unstableHtml = DOMPurify.sanitize(unstableHtml) as unknown as string;
+			}
 		}
 
 		renderedBlocks = nextBlocks;

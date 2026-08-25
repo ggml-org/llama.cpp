@@ -12,19 +12,19 @@ export const MODEL_ID = {
 	/** Matches prefix for custom quantization types, e.g. `UD-Q8_K_XL`. */
 	CUSTOM_QUANTIZATION_PREFIX_RE: /^UD$/i,
 	/**
-	 * Trailing `-<variant>` suffix marking a GGUF with an embedded draft in the
-	 * same weight file (MTP) or a sidecar download entry, e.g.
-	 * `Hy3-IQ1_M-mtp.gguf`, `Q4_K_M-dspark`. The captured prefix is the
-	 * candidate model id; the caller decides whether it looks quantized.
-	 */
-	DRAFT_VARIANT_SUFFIX_RE: /^(.*)-(mtp|dflash|dspark|eagle3)$/i,
-	/**
 	 * Sidecar prefix that wraps a model id with a draft/aux variant, e.g.
 	 * `mtp-<name>.gguf`, `dflash-<name>.gguf`, `dspark-<name>.gguf`,
 	 * `eagle3-<name>.gguf`, `mmproj-<name>.gguf`. Captures the bare variant
 	 * token for typed lookup.
 	 */
 	DRAFT_VARIANT_PREFIX_RE: /^(mtp|dflash|dspark|eagle3|mmproj)-(.*)$/i,
+	/**
+	 * Trailing `-<variant>` suffix marking a GGUF with an embedded draft in the
+	 * same weight file (MTP) or a sidecar download entry, e.g.
+	 * `Hy3-IQ1_M-mtp.gguf`, `Q4_K_M-dspark`. The captured prefix is the
+	 * candidate model id; the caller decides whether it looks quantized.
+	 */
+	DRAFT_VARIANT_SUFFIX_RE: /^(.*)-(mtp|dflash|dspark|eagle3)$/i,
 
 	/** Container format segments to exclude from tags (every model uses these). */
 	IGNORED_SEGMENTS: new Set(['GGUF', 'GGML']),

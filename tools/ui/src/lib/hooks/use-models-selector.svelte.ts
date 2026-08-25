@@ -1,8 +1,10 @@
 import { filterModelOptions, groupModelOptions } from '$lib/components/app/models/utils';
 import { CHAT_INPUT_FOCUS_SELECTOR } from '$lib/constants';
+import { HuggingFaceService } from '$lib/services';
 import { modelsStore, serverStore } from '$lib/stores';
 import type { ModelOption } from '$lib/types/models';
 import { onMount } from 'svelte';
+import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 
 export interface UseModelsSelectorOptions {
 	currentModel: () => string | null;
@@ -76,13 +78,46 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 	let searchTerm = $state('');
 	let showModelDialog = $state(false);
 	let infoModelId = $state<string | null>(null);
+	let menuOpen = $state(false);
 
+	// Base model org per base repo (e.g. `Qwen` for `ggml-org/Qwen3.8-27B-GGUF`),
+	// resolved lazily from the HF card while the menu is open.
+	const baseOrgs = new SvelteMap<string, string>();
 	const filteredOptions = $derived(filterModelOptions(options, searchTerm));
+	// Augment each option with its base model; the org falls back to the quant
+	// org until the HF lookup resolves.
+	const optionsWithBaseModel = $derived(
+		filteredOptions.map((option) => {
+			const repo = option.model.split(':')[0];
+			const org = baseOrgs.get(repo) ?? option.parsedId?.orgName ?? repo.split('/')[0] ?? '';
+			const name = option.parsedId?.modelName ?? option.name ?? option.model;
+
+			return { ...option, baseModel: { name, org } };
+		})
+	);
 	const groupedFilteredOptions = $derived(
-		groupModelOptions(filteredOptions, modelsStore.favoriteModelIds, (m) =>
+		groupModelOptions(optionsWithBaseModel, modelsStore.favoriteModelIds, (m) =>
 			modelsStore.isModelLoaded(m)
 		)
 	);
+
+	// Fetch base model orgs for the visible repos while the menu is open. The
+	// service caches per repo, so repeated opens never re-hit the HF API.
+	$effect(() => {
+		if (!menuOpen) return;
+
+		const repos = new SvelteSet<string>();
+
+		for (const option of options) repos.add(option.model.split(':')[0]);
+
+		for (const repo of repos) {
+			if (baseOrgs.has(repo)) continue;
+
+			void HuggingFaceService.getBaseModel(repo).then((info) => {
+				baseOrgs.set(repo, info?.org ?? repo.split('/')[0] ?? '');
+			});
+		}
+	});
 
 	function handleInfoClick(modelName: string) {
 		infoModelId = modelName;
@@ -97,6 +132,8 @@ export function useModelsSelector(opts: UseModelsSelectorOptions): UseModelsSele
 
 	function handleOpenChange(open: boolean) {
 		if (loading || updating) return;
+
+		menuOpen = open;
 
 		if (isRouter) {
 			searchTerm = '';

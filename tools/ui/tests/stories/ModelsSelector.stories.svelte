@@ -82,26 +82,11 @@
 
 	const groupedOptions: GroupedModelOptions = {
 		available: [
-			{
-				items: [availableModels[0]],
-				orgName: 'deepseek'
-			},
-			{
-				items: [availableModels[1]],
-				orgName: 'google'
-			},
-			{
-				items: [availableModels[2]],
-				orgName: 'microsoft'
-			},
-			{
-				items: [availableModels[3]],
-				orgName: 'codellama'
-			},
-			{
-				items: [availableModels[4]],
-				orgName: 'intel'
-			}
+			availableModels[0],
+			availableModels[1],
+			availableModels[2],
+			availableModels[3],
+			availableModels[4]
 		],
 		favorites: favoriteModels,
 		loaded: loadedModels

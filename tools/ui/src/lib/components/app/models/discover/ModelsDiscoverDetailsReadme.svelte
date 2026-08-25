@@ -9,10 +9,8 @@
 </script>
 
 {#if readme}
-	<section class="space-y-2">
+	<section class="space-y-2 bg-muted/50 p-3 rounded-xl">
 		<h2 class="text-xs font-semibold tracking-wide text-muted-foreground uppercase">README</h2>
-		<article class="rounded-lg border bg-card p-4">
-			<MarkdownContent content={readme} class="prose-sm max-w-none" />
-		</article>
+		<MarkdownContent content={readme} allowHtml class="prose-sm max-w-none" />
 	</section>
 {/if}

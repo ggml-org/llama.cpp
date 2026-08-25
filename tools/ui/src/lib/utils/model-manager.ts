@@ -1,9 +1,5 @@
 import { HuggingFaceService } from '$lib/services';
-import type {
-	ModelManagerParent,
-	ModelManagerQuant,
-	ModelManagerQuantOrg
-} from '$lib/types';
+import type { ModelManagerParent, ModelManagerQuant, ModelManagerQuantOrg } from '$lib/types';
 import type { ModelOption } from '$lib/types/models';
 
 /** Strip the `:quant` / `:quant-VARIANT` tag from a model id to get the repo id. */
@@ -50,7 +46,9 @@ export async function resolveBaseModel(repoId: string): Promise<string | null> {
 			resolved = first.trim();
 		} else {
 			// tag fallback, e.g. `base_model:Qwen/Qwen3-8B`
-			const tag = details?.tags?.find((t) => t.startsWith('base_model:') && !t.startsWith('base_model:quantized:'));
+			const tag = details?.tags?.find(
+				(t) => t.startsWith('base_model:') && !t.startsWith('base_model:quantized:')
+			);
 			const fromTag = tag?.slice('base_model:'.length).trim();
 
 			if (fromTag) resolved = fromTag;
@@ -90,17 +88,18 @@ export function buildModelManagerTree(
 		}
 
 		const key = quant ?? '';
+
 		let entry = quantMap.get(key);
 
 		if (!entry) {
-			entry = { quant, main: option, drafts: [], mmproj: null };
+			entry = { drafts: [], main: option, mmproj: null, quant };
 			quantMap.set(key, entry);
 		}
 
 		if (variant === 'mmproj') {
 			entry.mmproj = option;
 		} else if (variant) {
-			entry.drafts.push({ variant, option });
+			entry.drafts.push({ option, variant });
 		} else {
 			entry.main = option;
 		}
@@ -119,7 +118,7 @@ export function buildModelManagerTree(
 		const slashIdx = repoId.indexOf('/');
 		const orgName = slashIdx !== -1 ? repoId.slice(0, slashIdx) : repoId;
 
-		quantOrgs.push({ repoId, orgName, quants });
+		quantOrgs.push({ orgName, quants, repoId });
 	}
 
 	// Group quant orgs under parents.

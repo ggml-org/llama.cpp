@@ -1,11 +1,11 @@
 <script lang="ts">
-	import { Check, MessageSquareCode } from '@lucide/svelte';
-	import { HuggingFaceService, ModelsService } from '$lib/services';
-	import type { GgufVariantTagInput } from '$lib/services';
-	import { modelsStore } from '$lib/stores';
-	import type { HfModelSibling } from '$lib/types/huggingface';
 	import DialogModelDownload from './DialogModelDownload.svelte';
 	import DownloadProgressBar from './DownloadProgressBar.svelte';
+	import { Check, MessageSquareCode } from '@lucide/svelte';
+	import type { GgufVariantTagInput } from '$lib/services';
+	import { HuggingFaceService, ModelsService } from '$lib/services';
+	import { modelsStore } from '$lib/stores';
+	import type { HfModelSibling } from '$lib/types/huggingface';
 
 	interface Props {
 		modelId: string;
@@ -28,7 +28,9 @@
 
 {#if bitDepthRows.length}
 	<section class="space-y-3">
-		<h2 class="flex items-center gap-1.5 text-xs font-semibold tracking-wide text-muted-foreground uppercase">
+		<h2
+			class="flex items-center gap-1.5 text-xs font-semibold tracking-wide text-muted-foreground uppercase"
+		>
 			<MessageSquareCode class="h-3.5 w-3.5" />
 			Download options
 		</h2>
@@ -62,8 +64,8 @@
 								onclick={() =>
 									(pendingDownload = {
 										filePath: file.path,
-										sizeBytes: file.size ?? null,
 										quant: meta?.quant ?? null,
+										sizeBytes: file.size ?? null,
 										variant: meta?.variant ?? null
 									})}
 								title={isDownloading
@@ -82,12 +84,16 @@
 									<Check class="h-3 w-3 text-foreground/70" />
 								{/if}
 								{#if isFailed && !isDownloading && !isDownloaded}
-									<span class="rounded bg-destructive px-1 py-0.5 text-[10px] font-semibold tracking-wide text-destructive-foreground uppercase">
+									<span
+										class="rounded bg-destructive px-1 py-0.5 text-[10px] font-semibold tracking-wide text-destructive-foreground uppercase"
+									>
 										Failed
 									</span>
 								{/if}
 								{#if meta?.variant}
-									<span class="rounded bg-primary px-1 py-0.5 text-[10px] font-semibold tracking-wide text-primary-foreground uppercase">
+									<span
+										class="rounded bg-primary px-1 py-0.5 text-[10px] font-semibold tracking-wide text-primary-foreground uppercase"
+									>
 										{meta.variant}
 									</span>
 								{/if}

@@ -1,9 +1,10 @@
 <script lang="ts">
-	import { Download, ExternalLink, Heart, Image, Lightbulb, Wrench } from '@lucide/svelte';
-	import { HuggingFaceService } from '$lib/services';
-	import type { HfModelDetailInfo, HfModelGguf } from '$lib/types/huggingface';
 	import ModelsDiscoverAvatar from './ModelsDiscoverAvatar.svelte';
 	import ModelsDiscoverDetailsName from './ModelsDiscoverDetailsName.svelte';
+	import { Download, ExternalLink, Heart, Image, Lightbulb, Wrench } from '@lucide/svelte';
+	import { HuggingFaceService } from '$lib/services';
+	import { modelsHubStore } from '$lib/stores';
+	import type { HfModelDetailInfo, HfModelGguf } from '$lib/types/huggingface';
 
 	interface Props {
 		modelId: string;
@@ -16,16 +17,8 @@
 		hasReasoning: boolean;
 	}
 
-	let {
-		baseModels,
-		details,
-		gguf,
-		hasReasoning,
-		hasTools,
-		hasVision,
-		licenseTag,
-		modelId
-	}: Props = $props();
+	let { baseModels, details, gguf, hasReasoning, hasTools, hasVision, licenseTag, modelId }: Props =
+		$props();
 
 	// Avatar shows the base model's org (e.g. the Qwen logo for a ggml-org GGUF)
 	// with the quant org as a corner badge when they differ.
@@ -33,12 +26,17 @@
 	let baseOrg = $derived(baseModels[0]?.split('/')[0]);
 	let avatarOrg = $derived(baseOrg || repoOrg);
 	let quantOrg = $derived(baseOrg && baseOrg !== repoOrg ? repoOrg : undefined);
+
+	// Catalog family description when curated, else the HF card description.
+	let description = $derived(
+		modelsHubStore.descriptionFor(modelId) ?? details.cardData?.description
+	);
 </script>
 
 <header class="space-y-3">
 	<div class="flex items-start justify-between gap-3">
 		<div class="flex min-w-0 items-center gap-2">
-			<ModelsDiscoverAvatar org={avatarOrg} quantOrg={quantOrg} />
+			<ModelsDiscoverAvatar org={avatarOrg} {quantOrg} />
 			<ModelsDiscoverDetailsName modelId={details.id ?? modelId} {baseModels} />
 		</div>
 		<a
@@ -70,8 +68,8 @@
 		{/if}
 	</div>
 
-	{#if details.cardData?.description}
-		<p class="text-sm text-muted-foreground">{details.cardData.description}</p>
+	{#if description}
+		<p class="text-sm text-muted-foreground">{description}</p>
 	{/if}
 
 	<!-- Metadata chips -->
@@ -82,7 +80,9 @@
 			</span>
 		{/if}
 		{#if gguf?.architecture}
-			<span class="rounded bg-secondary px-2 py-0.5 text-xs font-medium text-secondary-foreground capitalize">
+			<span
+				class="rounded bg-secondary px-2 py-0.5 text-xs font-medium text-secondary-foreground capitalize"
+			>
 				{gguf.architecture.replace(/_/g, ' ')}
 			</span>
 		{/if}
@@ -97,7 +97,9 @@
 			</span>
 		{/if}
 		{#if details.gated === true}
-			<span class="rounded bg-yellow-500/10 px-2 py-0.5 text-xs font-medium text-yellow-600 dark:text-yellow-400">
+			<span
+				class="rounded bg-yellow-500/10 px-2 py-0.5 text-xs font-medium text-yellow-600 dark:text-yellow-400"
+			>
 				gated
 			</span>
 		{/if}
@@ -107,19 +109,25 @@
 	{#if hasVision || hasTools || hasReasoning}
 		<div class="flex flex-wrap items-center gap-1.5">
 			{#if hasVision}
-				<span class="inline-flex items-center gap-1 rounded bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
+				<span
+					class="inline-flex items-center gap-1 rounded bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary"
+				>
 					<Image class="h-3 w-3" />
 					Vision
 				</span>
 			{/if}
 			{#if hasTools}
-				<span class="inline-flex items-center gap-1 rounded bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
+				<span
+					class="inline-flex items-center gap-1 rounded bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary"
+				>
 					<Wrench class="h-3 w-3" />
 					Tool use
 				</span>
 			{/if}
 			{#if hasReasoning}
-				<span class="inline-flex items-center gap-1 rounded bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
+				<span
+					class="inline-flex items-center gap-1 rounded bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary"
+				>
 					<Lightbulb class="h-3 w-3" />
 					Reasoning
 				</span>

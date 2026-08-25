@@ -10,7 +10,7 @@
 		PowerOff,
 		RotateCw
 	} from '@lucide/svelte';
-	import { ActionIcon, ModelId } from '$lib/components/app';
+	import { ActionIcon, ModelId, ModelsDiscoverAvatar } from '$lib/components/app';
 	import { ICON_CLASS_DEFAULT } from '$lib/constants';
 	import { ServerModelStatus } from '$lib/enums';
 	import { modelsStore } from '$lib/stores';
@@ -23,6 +23,8 @@
 		isHighlighted: boolean;
 		isFav: boolean;
 		hideOrgName?: boolean;
+		/** Show only the quant/param badges, hiding the avatar and org/model name. */
+		compact?: boolean;
 		onSelect: (modelId: string) => void;
 		onMouseEnter: () => void;
 		onKeyDown: (e: KeyboardEvent) => void;
@@ -30,6 +32,7 @@
 	}
 
 	let {
+		compact = false,
 		hideOrgName = false,
 		isFav,
 		isHighlighted,
@@ -59,13 +62,12 @@
 	let loadPercent = $derived(Math.round(modelLoadFraction(loadProgress) * 100));
 	let loadTitle = $derived(modelLoadProgressText(loadProgress));
 	let modalities = $derived(option.modalities);
-	let capabilities = $derived.by(() => ({
-		reasoning: modelsStore.props.checkModelSupportsThinking(option.model)
-	}));
+	let supportsThinking = $derived(modelsStore.props.checkModelSupportsThinking(option.model));
+	let quantOrg = $derived(option.parsedId?.orgName || option.model.split('/')[0] || option.model);
+	let baseOrg = $derived(option.baseModel?.org || quantOrg);
 </script>
 
 <div
-	aria-selected={isSelected || isHighlighted}
 	class={[
 		'group relative flex w-full items-center gap-2 rounded-sm p-2 text-left text-sm transition focus:outline-none',
 		'cursor-pointer',
@@ -76,23 +78,36 @@
 		'focus:bg-accent',
 		isLoaded ? 'text-popover-foreground' : 'text-muted-foreground'
 	]}
-	onclick={() => onSelect(option.id)}
-	onkeydown={onKeyDown}
-	onmouseenter={onMouseEnter}
 	role="option"
-	tabindex="0"
+	aria-selected={isSelected || isHighlighted}
 	title={loadTitle}
+	tabindex="0"
+	onclick={() => onSelect(option.id)}
+	onmouseenter={onMouseEnter}
+	onkeydown={onKeyDown}
 >
+	{#if !compact}
+		<ModelsDiscoverAvatar
+			org={baseOrg}
+			{quantOrg}
+			size="size-5"
+			quantImageClass="size-3.25"
+			quantPositionClass="-right-1.25 -bottom-1.25"
+		/>
+	{/if}
+
 	<ModelId
-		aliases={option.aliases}
-		{capabilities}
-		class="flex-1"
-		{hideOrgName}
-		{modalities}
 		modelId={option.model}
-		showRawTooltip
-		{supportsThinking}
+		{hideOrgName}
+		hideName={compact}
+		hideModalities={compact}
+		hideParameters={compact}
+		aliases={option.aliases}
 		tags={option.tags}
+		{modalities}
+		{supportsThinking}
+		showRawTooltip
+		class="flex-1"
 	/>
 
 	<div class="flex shrink-0 items-center gap-1">
@@ -104,30 +119,30 @@
 		>
 			{#if isFav}
 				<ActionIcon
-					class="h-3 w-3 hover:text-foreground"
-					icon={HeartOff}
 					iconSize="h-2.5 w-2.5"
-					onclick={() => modelsStore.toggleFavorite(option.model)}
+					icon={HeartOff}
 					tooltip="Remove from favorites"
+					class="h-3 w-3 hover:text-foreground"
+					onclick={() => modelsStore.toggleFavorite(option.model)}
 				/>
 			{:else}
 				<ActionIcon
-					class="h-3 w-3 hover:text-foreground"
-					icon={Heart}
 					iconSize="h-2.5 w-2.5"
-					onclick={() => modelsStore.toggleFavorite(option.model)}
+					icon={Heart}
 					tooltip="Add to favorites"
+					class="h-3 w-3 hover:text-foreground"
+					onclick={() => modelsStore.toggleFavorite(option.model)}
 				/>
 			{/if}
 
 			<!-- info button: only shown when model is loaded and callback is provided -->
 			{#if isLoaded && onInfoClick}
 				<ActionIcon
-					class="h-3 w-3 hover:text-foreground"
-					icon={Info}
 					iconSize="h-2.5 w-2.5"
-					onclick={() => onInfoClick(option.model)}
+					icon={Info}
 					tooltip="Model information"
+					class="h-3 w-3 hover:text-foreground"
+					onclick={() => onInfoClick(option.model)}
 				/>
 			{/if}
 		</div>
@@ -144,12 +159,12 @@
 
 				<div class="hidden group-hover:flex [@media(pointer:coarse)]:flex">
 					<ActionIcon
-						class="h-3 w-3 text-red-500 hover:text-foreground"
-						icon={RotateCw}
 						iconSize="h-2.5 w-2.5"
+						icon={RotateCw}
+						tooltip="Retry loading model"
+						class="h-3 w-3 text-red-500 hover:text-foreground"
 						onclick={() => modelsStore.status.load(option.model)}
 						stopPropagationOnClick
-						tooltip="Retry loading model"
 					/>
 				</div>
 			</div>
@@ -161,14 +176,14 @@
 
 				<div class="hidden group-hover:flex [@media(pointer:coarse)]:flex">
 					<ActionIcon
-						class="h-3 w-3 text-red-500 hover:text-red-600 [@media(pointer:coarse)]:text-amber-500 [@media(pointer:coarse)]:hover:text-amber-600"
-						icon={PowerOff}
 						iconSize="h-2.5 w-2.5"
+						icon={PowerOff}
+						tooltip="Unload model"
+						class="h-3 w-3 text-red-500 hover:text-red-600 [@media(pointer:coarse)]:text-amber-500 [@media(pointer:coarse)]:hover:text-amber-600"
 						onclick={(e) => {
 							e?.stopPropagation();
 							modelsStore.status.unload(option.model);
 						}}
-						tooltip="Unload model"
 					/>
 				</div>
 			</div>
@@ -180,12 +195,12 @@
 
 				<div class="hidden group-hover:flex [@media(pointer:coarse)]:flex">
 					<ActionIcon
-						class="h-3 w-3 text-red-500 hover:text-red-600 [@media(pointer:coarse)]:text-green-500 [@media(pointer:coarse)]:hover:text-green-600"
-						icon={PowerOff}
 						iconSize="h-2.5 w-2.5"
+						icon={PowerOff}
+						tooltip="Unload model"
+						class="h-3 w-3 text-red-500 hover:text-red-600 [@media(pointer:coarse)]:text-green-500 [@media(pointer:coarse)]:hover:text-green-600"
 						onclick={() => modelsStore.status.unload(option.model)}
 						stopPropagationOnClick
-						tooltip="Unload model"
 					/>
 				</div>
 			</div>
@@ -197,12 +212,12 @@
 
 				<div class="hidden group-hover:flex [@media(pointer:coarse)]:flex">
 					<ActionIcon
-						class="h-3 w-3 [@media(pointer:coarse)]:text-muted-foreground"
-						icon={Power}
 						iconSize="h-2.5 w-2.5"
+						icon={Power}
+						tooltip="Load model"
+						class="h-3 w-3 [@media(pointer:coarse)]:text-muted-foreground"
 						onclick={() => modelsStore.status.load(option.model)}
 						stopPropagationOnClick
-						tooltip="Load model"
 					/>
 				</div>
 			</div>
