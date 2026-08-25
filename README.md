@@ -1,4 +1,4 @@
-# llama.cpp - adaptive speculation (MTP / DFlash2)
+# llama.cpp - adaptive speculation performance fork (MTP / DFlash2)
 
 A fast fork of [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp). The
 headline feature is **adaptive speculative decoding** with MTP or DFlash2: draft
@@ -6,6 +6,7 @@ length follows measured acceptance instead of a fixed `n`. The other job is the
 fastest Vulkan path on AMD Strix Halo: stock Mesa, no ROCm toolchain.
 
 **Qwen3.8-27B on AMD Strix Halo (Radeon 8060S): 65 t/s generation, 440 t/s prefill.**
+**Ornith1.5 on AMD Strix Halo (Radeon 8060S): 103 t/s generation, 1188 t/s prefill.**
 
 ## The numbers
 
@@ -91,7 +92,7 @@ upstreamable and is the single biggest win in this fork.
 | **ROCmFPx quant types** — Q4\_0\_ROCMFP4, \_FAST, Q2/Q3/Q6/Q8\_0\_ROCMFPX, CPU codecs + Vulkan dequant / mat-vec / matmul / integer-dot kernels | Hand-ported from ciru-ai/ROCmFPX. Two decode bugs fixed here — see `ROCMFPX-NOTES.md` |
 | **Vulkan batched mat-vec fixes** — IQ3\_S register spill at `NUM_COLS > 4` (5× at n=8), ROCmFPx batch 3–8 rework | New here. Both upstreamable |
 | **Vulkan LDS stride fix** — `SHMEM_STRIDE` pad, +7.3 % prefill on any quant, +10–20 % at the kernel | New here. One constant. Upstreamable. Now driver-gated, see below |
-| **Vulkan prefill gates** — tiled concat-transpose, f16 B operand for quantized matmul and matmul\_id | Ported from [Nathanw1014/llama.cpp](https://github.com/Nathanw1014/llama.cpp/tree/strix-halo-vulkan). Re-measured here; see `WORKLOG.local.md` |
+| **Vulkan prefill gates** — tiled concat-transpose, f16 B operand for quantized matmul and matmul\_id | Ported from [Nathanw1014/llama.cpp](https://github.com/Nathanw1014/llama.cpp/tree/strix-halo-vulkan). Re-measured here, see [`bench/`](bench/) |
 
 ## Against mainline — Vulkan only, stock K-quants
 
@@ -153,7 +154,7 @@ keeps the spec-aligned pad 4. `GGML_VK_SHMEM_PAD=N` overrides both, for probing.
 ## Speculative decoding at the batch widths that matter
 
 DFlash2, MTP, DSpark, and Eagle3 all landed upstream. Having the method is not
-the same as having it work. Speculation verifies several drafted tokens in one
+the same as having it work well. Speculation verifies several drafted tokens in one
 batch, so it lives at **batch 3–8** — exactly the range where the Vulkan
 mat-vec kernels were broken:
 
@@ -182,6 +183,11 @@ that bargain when the whole point is verifying batches of drafts.
 
 ## Measured results
 
+*An earlier measurement set, kept because the bandwidth-wall analysis and the long-context
+inversion still stand. It used the z-lab Q8\_0 sidecar at a fixed draft length on the everyday
+power profile, so its absolute numbers are lower than the headline above, which used the FP4
+sidecar with adaptive drafting on a high-power burst. Compare within a table, not across them.*
+
 ### Bare decode is at the memory wall
 
 | model | size | tg128 | achieved | of 256 GB/s peak |
@@ -191,9 +197,9 @@ that bargain when the whole point is verifying batches of drafts.
 
 Two decoders with nothing in common — an FP4 codebook with UE4M3 scales, and
 Q3\_K superblocks — reach the same bandwidth to three significant figures.
-Single-stream decode has no headroom left. Every remaining gain has to come
+Single-stream decode has very little headroom left. Every remaining gain has to come
 from draft acceptance, which multiplies effective bandwidth instead of
-competing for it. This is a draft-quality problem, not a kernel problem.
+competing for it. Performance has become a draft-quality problem, not a kernel problem. At least with these models.
 
 ### Speculative decoding, tokens/s
 
@@ -239,24 +245,102 @@ precision effect. The cause is the block scale: Q8\_0 stores an fp16 scale,
 ROCmFPx stores a UE4M3 byte. At 8 bits per weight the codes are not the
 problem, the coarse scale is.
 
-## Quick start
+## Running it with llama-server
+
+Two configurations, because **the best ubatch is model-dependent** - see the table below.
+
+```bash
+# Dense hybrid: Qwen3.8-27B, FP4 target + FP4 DFlash2 sidecar.
+# This is the 65 t/s configuration. ubatch 512 (the default) is fastest here.
+llama-server \
+  -m  Qwen3.8-27B-ROCmFP4-FAST.gguf \
+  -md Qwen3.8-27B-DFlash2-Q4_0_ROCMFP4_FAST.gguf \
+  --spec-type draft-dflash --spec-draft-adaptive \
+  --spec-draft-n-min 3 --spec-draft-n-max 7 --spec-draft-ngl 99 \
+  -ngl 999 -fa on -b 2048 -ub 512 -c 32768 \
+  --host 0.0.0.0 --port 8080
+
+# Delta-net MoE: Ornith-1.5-35B-A3B, MTP, no sidecar.
+# ubatch 2048 is worth +29% prefill here. Keep n-max tight - see the note below.
+llama-server \
+  -m Ornith-1.5-35B-Q4_K_M.gguf \
+  --spec-type draft-mtp --spec-draft-adaptive \
+  --spec-draft-n-min 2 --spec-draft-n-max 4 \
+  -ngl 999 -fa on -b 2048 -ub 2048 -c 32768 \
+  --host 0.0.0.0 --port 8080
+```
+
+### Choosing `--ubatch-size`
+
+Measured on a Radeon 8060S, flash attention on, five repetitions, warmup discarded:
+
+| model | pp512 ub512 | pp2048 ub512 | pp512 ub2048 | pp2048 ub2048 |
+|---|---:|---:|---:|---:|
+| Qwen3.8-27B ROCmFP4-FAST (dense) | **439.3** | **427.4** | 431.0 | 414.8 |
+| Ornith-1.5-35B-A3B Q4\_K\_M (MoE) | 1285.8 | 1254.1 | 1261.8 | **1615.7** |
+
+The dense model prefers the default 512; the MoE gains 29 % at 2048 on a long prompt. Do not
+generalise one to the other.
+
+> **`-ub 2048` at long context can hang the GPU.** On this hardware,
+> `-ub 2048` with a context depth at or beyond 65536 reproducibly times out the compute ring
+> (`amdgpu: ring comp_1.2.0 timeout`, recovered by a ring reset). It reproduces on **stock upstream
+> llama.cpp** as well, so it is not something this fork introduces - but it does mean the MoE's
+> ubatch-2048 win is only safe for short-to-mid context. It has been confirmed on the dense model
+> and is **untested on the MoE**. At `-ub 512` and `-ub 1024` the same depth completes normally.
+> If you serve long context, keep `-ub 512`.
+
+### `models.ini` form
+
+With `--models-preset`, the same settings as a preset entry:
+
+```ini
+[ornith-ai/Ornith-1.5-35B-A3B-GGUF:Q4_K_M]
+alias = Ornith-1.5-A3B
+spec-type = draft-mtp
+spec-draft-n-min = 2
+spec-draft-n-max = 4
+ubatch-size = 2048
+flash-attn = on
+n-gpu-layers = 999
+```
+
+**Keep `spec-draft-n-max` tight for MTP.** The adaptive controller maximises accepted tokens, not
+throughput, and for MTP those diverge: later nextn layers are less accurate while draft cost stays
+linear in `n`. On Ornith, `n-max 7` gives 85.7 t/s on structured output against 100.4 at `n-max 4`
+and 104.0 at a fixed `n=3`. With a DFlash2 sidecar the picture reverses and `n-max 7` is right.
+
+## Quick start (this fork)
 
 ```bash
 cmake -B build -DGGML_VULKAN=ON && cmake --build build -j
 
-# Short context, structured output - DFlash2, adaptive
+# Short context, structured output - DFlash2, adaptive.
+# This is the exact pair the 65 t/s figure was measured on. The sidecar is a
+# requantisation of z-lab/Qwen3.8-27B-DFlash2 to the FP4 format; swap -md for
+# -hfd once it is published.
 build/bin/llama cli \
-  -hf  lmcoleman/Qwen3.8-27B-ROCmFPX-GGUF:Q4 \
-  -hfd incoai/Qwen3.8-27B-DFlash2-GGUF:Q4_K_M \
+  -hf julianmb/Qwen-3.8-27B-ROCmFP4-FAST-GGUF:FAST \
+  -md /path/to/Qwen3.8-27B-DFlash2-Q4_0_ROCMFP4_FAST.gguf \
   --spec-type draft-dflash --spec-draft-adaptive --spec-draft-n-min 3 \
-  --spec-draft-n-max 7 -ngl 99 -fa on
+  --spec-draft-n-max 7 --spec-draft-ngl 99 -ngl 99 -fa on
 
-# Long context - MTP, adaptive (no sidecar needed)
+# Same, with a published sidecar. Larger and slower here - on a bandwidth-bound
+# APU the cheaper draft wins even at lower acceptance.
 build/bin/llama cli \
-  -hf  lmcoleman/Qwen3.8-27B-ROCmFPX-GGUF:Q4 \
-  --spec-type draft-mtp --spec-draft-adaptive --spec-draft-n-min 3 \
-  --spec-draft-n-max 4 -ngl 99 -fa on
+  -hf  julianmb/Qwen-3.8-27B-ROCmFP4-FAST-GGUF:FAST \
+  -hfd z-lab/Qwen3.8-27B-DFlash2-GGUF:Q8_0 \
+  --spec-type draft-dflash --spec-draft-adaptive --spec-draft-n-min 3 \
+  --spec-draft-n-max 7 --spec-draft-ngl 99 -ngl 99 -fa on
 
+# Long context - MTP, adaptive, no sidecar. Keep n-max tight: the controller
+# maximises accepted tokens, not throughput, and for MTP those diverge because
+# later nextn layers are less accurate while cost stays linear in n.
+build/bin/llama cli \
+  -hf julianmb/Qwen-3.8-27B-ROCmFP4-FAST-GGUF:FAST \
+  --spec-type draft-mtp --spec-draft-adaptive --spec-draft-n-min 2 \
+  --spec-draft-n-max 4 -ngl 99 -fa on
+```
 
 ---
 
