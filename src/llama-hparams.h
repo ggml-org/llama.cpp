@@ -298,8 +298,7 @@ struct llama_hparams {
 
     bool is_ple(uint32_t il) const;
 
-    // rows of the PLE depthwise conv history: (kernel - 1) * dilation, where
-    // the dilation is the n-gram size. zero unless the model has a PLE module.
+    // PLE conv history rows: (kernel - 1) * ngram_size; 0 without a PLE module
     uint32_t ple_conv_state() const;
 
     // qwen3vl deepstack

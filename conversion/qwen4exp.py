@@ -65,9 +65,8 @@ class Qwen4ExpTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
             [ratio if layer_types[i] == "full_attention" else 0 for i in range(n_layer)]
         )
 
-        # ple_layer_ids is 1-based in the HF config. An empty list means the
-        # checkpoint carries no n-gram table at all, so emit no PLE keys either
-        # rather than keys the loader would then have to treat as optional.
+        # ple_layer_ids is 1-based in the HF config; empty means no n-gram table,
+        # so emit no PLE keys rather than optional ones
         ple_layers = [i - 1 for i in hp["ple_layer_ids"]]
         if not ple_layers:
             return
