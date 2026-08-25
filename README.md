@@ -1,26 +1,64 @@
-# llama.cpp — ROCmFPx + DFlash2 fork
+# llama.cpp - adaptive speculation (MTP / DFlash2)
 
-A fast fork of [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp) with
-two jobs: **be the fastest Vulkan path on AMD Strix Halo**, and **carry the newest
-inference features while they're still in flight upstream** — new quant families,
-new speculative-decoding methods — before mainline is ready for them.
+A fast fork of [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp). The
+headline feature is **adaptive speculative decoding** with MTP or DFlash2: draft
+length follows measured acceptance instead of a fixed `n`. The other job is the
+fastest Vulkan path on AMD Strix Halo: stock Mesa, no ROCm toolchain.
 
-Vulkan is the target deliberately: stock Mesa, no ROCm toolchain, and the path
-Strix Halo is least tuned.
+**Qwen3.8-27B on AMD Strix Halo (Radeon 8060S): 65 t/s generation, 440 t/s prefill.**
 
 ## The numbers
 
-| | |
-|---|---|
-| prefill (pp512), any stock K-quant, upstreamable one-constant fix | **+14.1 %** |
-| Qwen3.8 27B token generation | 42 T/S |
-| vs bare decode with DFlash2 on structured output (41.5 vs 13.9 t/s) |  **3.0×** |
-| vs bare decode with MTP at 31 K context (36.07 vs 12.20 t/s) | **3.0×** |
-| FP4 mat-vec at batch 8: **312 → 173 µs**, FP6: **2236 → 402 µs**| 1.8 - 5.6× |
- 
-All numbers: single Radeon 8060S (Strix Halo APU), RADV / Mesa 26.0.3, idle GPU,
-interleaved against upstream `ggml-org/llama.cpp` master `95b8e33e1`.
-Full detail, caveats, and the measurement traps below.
+**Generation, 65 t/s.** Adaptive DFlash2, FP4 target + FP4 sidecar, Qwen3.8-27B,
+greedy, 300 tokens:
+
+| | structured output | prose |
+|---|---|---|
+| bare decode | 14.0 t/s | 14.1 t/s |
+| fixed draft n=3 | 41.6 | 25.4 |
+| fixed draft n=7 | 20.2 | 24.8 |
+| **adaptive draft, `n_max 7` `n_min 3`** | **65.6 t/s — 4.7×** | **26.1** |
+
+Draft acceptance is what moves: fixed n=7 collapses to 18 %, fixed n=3 sits at 95 % and is
+*under*-drafting, adaptive holds 96 % while drafting longer. The same `n_max` that destroys the
+fixed arm is safe under adaptive. MTP uses the target's own nextn layers and needs no sidecar;
+DFlash2 uses one. Adaptive works on both.
+
+**Prefill, 440 t/s.** Same 27B, `pp512`, Q4_K or FP4 (they tie). Against pinned
+upstream `95b8e33e1`, stock K-quants, no ROCmFPx:
+
+| context depth | 0 | 4 K | 16 K | 32 K | 64 K |
+|---|---|---|---|---|---|
+| Qwen3.8-27B UD-Q4\_K\_XL | **+13.0 %** | +11.6 % | +9.1 % | +8.2 % | +4.6 % |
+| Ornith-1.5-35B-A3B Q4\_K\_M | **+12.6 %** | +10.0 % | +5.9 % | +5.1 % | noise |
+
+The gain decays with depth — as context grows, attention takes a larger share of prefill and the
+matmul and concat paths this fork tunes take a smaller one. Generation on stock K-quants is flat
+within ±1 %; the fork's generation story is speculative decoding and ROCmFPx, neither of which a
+plain `llama-bench` run can see.
+
+**Individual Vulkan gates**, measured on/off in one binary at `pp2048`:
+
+| gate | Qwen3.8-27B dense | Ornith MoE | HauhauCS Q6\_K MoE |
+|---|---|---|---|
+| tiled concat-transpose | +3.3 % | **+45.1 %** | **+49.3 %** |
+| f16 B for `mul_mat_id` | — | +6.9 % | +9.1 % |
+| f16 B for `mul_mat` | +4.5 % | — | +5.8 % |
+| LDS stride pad | +7.3 % | — | — |
+
+Single Radeon 8060S (Strix Halo APU), RADV / Mesa 26.0.8, idle GPU, arms interleaved in palindrome
+order against upstream `ggml-org/llama.cpp` `95b8e33e1` — the exact commit this fork merged, so the
+delta is this fork's changes and not upstream drift.
+
+**Two caveats that matter.** The speculative table was taken on a short high-power burst (79 °C,
+115 W) that this chassis cannot sustain all day; on the everyday power profile the same
+configuration reads **55.0 t/s** on structured output. And every generation figure needs its context
+depth attached — these models declare 262144 context and generation at depth is roughly a third of
+its depth-0 value.
+
+Structured data, methodology and charts: [`bench/`](bench/) —
+[`RESULTS.md`](bench/RESULTS.md), [`charts.html`](bench/charts.html),
+[`README.md`](bench/README.md).
 
 ## Why this fork exists
 
@@ -49,29 +87,45 @@ upstreamable and is the single biggest win in this fork.
 
 | Component | Status |
 |---|---|
+| **Adaptive speculation** -- `--spec-draft-adaptive`, MTP or DFlash2 | New here. Draft length tracks accepted tokens; `n_max` is a ceiling. Recommended: `--spec-draft-adaptive --spec-draft-n-min 3` |
 | **ROCmFPx quant types** — Q4\_0\_ROCMFP4, \_FAST, Q2/Q3/Q6/Q8\_0\_ROCMFPX, CPU codecs + Vulkan dequant / mat-vec / matmul / integer-dot kernels | Hand-ported from ciru-ai/ROCmFPX. Two decode bugs fixed here — see `ROCMFPX-NOTES.md` |
-| **DFlash2 speculative decoding** | [PR #27342](https://github.com/ggml-org/llama.cpp/pull/27342) by Jian Chen. Fork carried it before merge; now builds on upstream's version |
 | **Vulkan batched mat-vec fixes** — IQ3\_S register spill at `NUM_COLS > 4` (5× at n=8), ROCmFPx batch 3–8 rework | New here. Both upstreamable |
-| **Vulkan LDS stride fix** — `SHMEM_STRIDE` pad 4→6, +14 % prefill on any quant | New here. One constant. Upstreamable |
+| **Vulkan LDS stride fix** — `SHMEM_STRIDE` pad, +7.3 % prefill on any quant, +10–20 % at the kernel | New here. One constant. Upstreamable. Now driver-gated, see below |
+| **Vulkan prefill gates** — tiled concat-transpose, f16 B operand for quantized matmul and matmul\_id | Ported from [Nathanw1014/llama.cpp](https://github.com/Nathanw1014/llama.cpp/tree/strix-halo-vulkan). Re-measured here; see `WORKLOG.local.md` |
 
 ## Against mainline — Vulkan only, stock K-quants
 
 Same CMake flags, clean worktree, interleaved on an idle GPU. No ROCmFPx,
 no fork-specific model format — this measures the Vulkan work alone.
 
-| model | metric | mainline | this fork | Δ |
-|---|---|---|---|---|
-| unsloth Qwen3.8-27B-UD-Q4\_K\_XL (dense) | pp512 | 272.8 | 311.3 | **+14.1 %** |
-| | pp2048 | 259.3 | 290.5 | **+12.0 %** |
-| | tg64 | 11.71 | 11.69 | — |
-| bartowski Ornith-1.5-35B-A3B-Q4\_K\_M (MoE) | pp512 | 1003.4 | 1043.0 | **+3.9 %** |
-| | pp2048 | 840.9 | 867.4 | **+3.2 %** |
-| | tg64 | 65.61 | 65.48 | — |
+`pp2048` at ubatch 512 with flash attention on, three repetitions per cell, arms in palindrome
+order (fork · mainline · mainline · fork) so clock drift cancels between them rather than being
+charged to one, and a discarded warmup per process because this APU gives the first run of a set a
+15–20 % boost clock.
 
-pp2048 is the number to trust: pp512 carries ±20–29 on both sides because
-the APU's first-run boost clock lands inside the repetition set.
+| model | metric | depth 0 | 4 K | 16 K | 32 K | 64 K |
+|---|---|---|---|---|---|---|
+| unsloth Qwen3.8-27B-UD-Q4\_K\_XL (dense) | pp2048 | **+13.0 %** | +11.6 % | +9.1 % | +8.2 % | +4.6 % |
+| | tg64 | −0.7 % | −0.7 % | −0.4 % | −0.6 % | −0.5 % |
+| bartowski Ornith-1.5-35B-A3B-Q4\_K\_M (MoE) | pp2048 | **+12.6 %** | +10.0 % | +5.9 % | +5.1 % | noise |
+| | tg64 | noise | +1.5 % | +0.7 % | noise | noise |
 
-MoE gains less because a 3 B-active model is far less matmul-bound.
+Absolute t/s and the per-cell spread are in [`bench/RESULTS.md`](bench/RESULTS.md); "noise" marks a
+cell under 2σ.
+
+**The gain decays with depth.** This fork's Vulkan work is in the matmul and concat paths; as
+context grows, attention takes a larger share of prefill and those paths take a smaller one. A
+single headline percentage would hide that, which is why depth is an axis here and not a footnote.
+
+**Generation is flat on stock K-quants** — a consistent −0.6 % on the dense model, small positive on
+the MoE. That is the honest result for this configuration: no speculation, no ROCmFPx, so none of
+the paths this fork actually optimises for generation are in play. See the speculative table above
+for the case that is.
+
+The MoE now gains as much as the dense model at short context, where an earlier measurement of this
+same pair showed only +3.2 %. The difference is the tiled concat-transpose kernel, worth **+45 %**
+on its own for delta-net MoE prefill — the generic concat walks the transposed conv-state with a
+40960-byte stride, so every read lands on the same one of 16 memory channels.
 Generation is unchanged: single-stream decode of a stock K-quant is already at
 80 % of theoretical memory bandwidth on this APU — no kernel can move it.
 The generation headroom is at the batch widths speculative decoding runs at,
@@ -83,8 +137,18 @@ reads B back column-major, so `gcd(SHMEM_STRIDE, 32)` is the conflict factor.
 Upstream sets `PAD` only for Intel-on-Windows; everything else takes the
 shader default of 4, giving stride 20 → four-way conflict on every B load.
 Stride must stay even (an odd stride breaks RADV's wide `ds_read_b64/b128`
-path and costs 3×), so **6** is the fix. Worth 1.17× on q4\_0 and 1.18× on
-q8\_0 at the kernel level.
+path and costs 3×), so any pad with `gcd(BK/2 + pad, 32) == 2` is the fix.
+Worth 1.17× on q4\_0 and 1.18× on q8\_0 at the kernel level.
+
+**Why it is driver-gated.** The coopmat path hands `SHMEM_STRIDE` to
+`coopMatLoad` as its Stride operand, and the spec wants that 16-byte aligned for
+16×16 f16 tiles. Stride bytes are `(BK/2 + pad) * 4`, so only `pad % 4 == 0` is
+in contract — every conflict-free pad is out of it. RADV before 25.3 lowers
+`coopMatLoad` to `ds_read_b128`, which the contract entitles it to, and the
+misaligned rows then pay runtime splits: pp512 collapses by more than 2×. RADV
+25.3 and later lowers to `ds_read_b64`, which the stride always suits, and the
+bank spread wins. So the fix applies **only on RADV ≥ 25.3**; everything else
+keeps the spec-aligned pad 4. `GGML_VK_SHMEM_PAD=N` overrides both, for probing.
 
 ## Speculative decoding at the batch widths that matter
 
@@ -163,8 +227,8 @@ Content dominates configuration: identical weights at identical context span
 
 | situation | method |
 |---|---|
-| short context, structured output | `--spec-type draft-dflash`, z-lab Q8\_0 sidecar, `--spec-draft-n-max 7` |
-| long context, any task | `--spec-type draft-mtp` at n-max 3–4 — no sidecar, no second KV cache |
+| short context, structured output | `--spec-type draft-dflash --spec-draft-adaptive --spec-draft-n-min 3`, z-lab Q8\_0 sidecar, `--spec-draft-n-max 7` |
+| long context, any task | `--spec-type draft-mtp --spec-draft-adaptive --spec-draft-n-min 3` at n-max 3–4 — no sidecar, no second KV cache |
 | quote-heavy long context | ngram-simple alone, never layered under a draft model (costs 13 %) |
 | **avoid** | ngram-cache (slower than bare), Q2\_0\_ROCMFPX (no Vulkan kernel), DSpark on this target |
 
@@ -180,16 +244,18 @@ problem, the coarse scale is.
 ```bash
 cmake -B build -DGGML_VULKAN=ON && cmake --build build -j
 
-# Short context, structured output — DFlash2
+# Short context, structured output - DFlash2, adaptive
 build/bin/llama cli \
   -hf  lmcoleman/Qwen3.8-27B-ROCmFPX-GGUF:Q4 \
   -hfd incoai/Qwen3.8-27B-DFlash2-GGUF:Q4_K_M \
-  --spec-type draft-dflash --spec-draft-n-max 7 -ngl 99 -fa on
+  --spec-type draft-dflash --spec-draft-adaptive --spec-draft-n-min 3 \
+  --spec-draft-n-max 7 -ngl 99 -fa on
 
-# Long context — MTP (no sidecar needed)
+# Long context - MTP, adaptive (no sidecar needed)
 build/bin/llama cli \
   -hf  lmcoleman/Qwen3.8-27B-ROCmFPX-GGUF:Q4 \
-  --spec-type draft-mtp --spec-draft-n-max 4 -ngl 99 -fa on
+  --spec-type draft-mtp --spec-draft-adaptive --spec-draft-n-min 3 \
+  --spec-draft-n-max 4 -ngl 99 -fa on
 
 
 ---
@@ -317,6 +383,19 @@ The `llama.cpp` project is build on top of the [ggml](https://github.com/ggml-or
 - Read the [CONTRIBUTING.md](CONTRIBUTING.md) for more information
 
 ## Acknowledgements
+
+Fork-specific, on top of upstream llama.cpp:
+
+- [ciru-ai/ROCmFPX](https://github.com/ciru-ai/ROCmFPX) - the ROCmFPx quant formats and reference
+  codecs. Hand-ported here (that tree shares no git history with llama.cpp, so it cannot be merged).
+- [Jian Chen](https://github.com/ggml-org/llama.cpp/pull/27342) - DFlash2 speculative decoding,
+  PR #27342. This fork carried it before it merged upstream.
+- [Nathanw1014/llama.cpp](https://github.com/Nathanw1014/llama.cpp/tree/strix-halo-vulkan) - the
+  Strix Halo Vulkan branch this fork's prefill gates and several correctness fixes were ported from.
+  Every one was re-measured here before adopting, and two of their defaults are disabled on this
+  hardware because we could not reproduce the gain.
+
+Upstream llama.cpp acknowledgements:
 
 - [yhirose/cpp-httplib](https://github.com/yhirose/cpp-httplib) - Single-header HTTP server, used by `llama-server` - MIT license
 - [nothings/stb](https://github.com/nothings/stb) - Single-header image format decoder, used by multimodal subsystem - Public domain
