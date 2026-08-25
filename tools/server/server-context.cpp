@@ -604,7 +604,7 @@ struct server_slot {
         }
 
         const double n_prompt_second = stats.n_prompt_tps();
-        const double f_progress = task->n_tokens() > 0 ? (double) prompt.n_tokens() / task->n_tokens() : 0.0;
+        const double f_progress = n_prompt_src() > 0 ? (double) prompt.n_tokens() / n_prompt_src() : 0.0;
 
         SLT_INF(*this, "prompt processing, n_tokens = %6d, progress = %.2f, t = %6.2f s / %.2f tokens per second\n",
                 (int) stats.n_prompt_processed, f_progress, t_prompt_total / 1e3, n_prompt_second);
@@ -678,7 +678,7 @@ struct server_slot {
 
         if (ptask) {
             res["id_task"] = ptask->id;
-            res["n_prompt_tokens"]           = (int32_t) prompt.tokens.size();
+            res["n_prompt_tokens"]           = ptask->n_tokens();
             res["n_prompt_tokens_processed"] = stats.n_prompt_processed;
             res["n_prompt_tokens_cache"]     = stats.n_prompt_cached;
             res["params"] = ptask->params.to_json(only_metrics);
@@ -3178,6 +3178,7 @@ private:
                 // this slot still has a prompt to be processed
                 if (slot.state == SLOT_STATE_PROCESSING_PROMPT || slot.state == SLOT_STATE_STARTED) {
                     if (slot.state == SLOT_STATE_STARTED) {
+                        slot.stats.update_prompt_start();
                         apply_spec_prefill(slot);
                     }
 
@@ -3189,8 +3190,6 @@ private:
 
                     // TODO: maybe move branch to outside of this loop in the future
                     if (slot.state == SLOT_STATE_STARTED) {
-                        slot.stats.update_prompt_start();
-
                         slot.state = SLOT_STATE_PROCESSING_PROMPT;
 
                         SLT_TRC(slot, "new prompt, n_ctx_slot = %d, n_keep = %d, task.n_tokens = %d\n",
@@ -3644,6 +3643,10 @@ private:
                     // entire prompt has been processed
                     if (slot.prompt.n_tokens() == n_prompt_in) {
                         slot.state = SLOT_STATE_DONE_PROMPT;
+
+                        if (slot.spec_prefill_active && slot.task) {
+                            slot.stats.n_prompt_processed = slot.task->n_tokens() - slot.stats.n_prompt_cached;
+                        }
 
                         GGML_ASSERT(batch.size() > 0);
 

@@ -178,7 +178,8 @@ int main(int argc, char ** argv) {
     const double tgt_prefill_ms = (t_tgt_prefill_end - t_tgt_prefill_start) / 1000.0;
 
     LOG_INF("%s: sparse target prefill time = %.2f ms\n", __func__, tgt_prefill_ms);
-    LOG_INF("%s: total Time-To-First-Token (TTFT) = %.2f ms\n", __func__, ttft_ms);
+    LOG_INF("%s: total Time-To-First-Token (TTFT) = %.2f ms (%.2f effective prompt tokens/s)\n",
+            __func__, ttft_ms, ttft_ms > 0.0 ? (1000.0 * (double) n_prompt / ttft_ms) : 0.0);
 
     // step 3: autoregressive generation
     common_sampler_ptr smpl_tgt(common_sampler_init(model_tgt, params.sampling));
