@@ -4093,6 +4093,7 @@ server_context_meta server_context::get_meta() const {
         /* model_n_params         */ llama_model_n_params(impl->model_tgt),
         /* model_size             */ llama_model_size(impl->model_tgt),
         /* model_ftype            */ ftype_name,
+        /* created                */ std::time(nullptr),
     };
 }
 
@@ -4420,7 +4421,7 @@ static json get_res_model_info(const server_context_meta & meta) {
         {"aliases",  meta.model_aliases},
         {"tags",     meta.model_tags},
         {"object",   "model"},
-        {"created",  std::time(0)},
+        {"created",  meta.created},
         {"owned_by", "llamacpp"},
         {"meta",     {
             {"vocab_type",  meta.model_vocab_type},

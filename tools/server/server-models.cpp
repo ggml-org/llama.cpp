@@ -1968,7 +1968,6 @@ void server_models_routes::init_routes() {
         auto res = std::make_unique<server_http_res>();
         json models_json = json::array();
         auto all_models = models.get_all_meta();
-        std::time_t t = std::time(0);
         for (const auto & meta : all_models) {
             if (meta.hidden) {
                 continue; // cache model deduplicated by a preset
@@ -2010,7 +2009,7 @@ void server_models_routes::init_routes() {
                 {"tags",          meta.tags},
                 {"object",        "model"},    // for OAI-compat
                 {"owned_by",      "llamacpp"}, // for OAI-compat
-                {"created",       t},          // for OAI-compat
+                {"created",       meta.created},  // for OAI-compat
                 {"status",        status},
                 {"architecture",  architecture},
                 {"source",        server_model_source_to_string(meta.source)},

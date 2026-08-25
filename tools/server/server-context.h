@@ -7,6 +7,7 @@
 #include "json.h"
 
 #include <cstddef>
+#include <ctime>
 #include <memory>
 #include <mutex>
 #include <set>
@@ -52,6 +53,7 @@ struct server_context_meta {
     uint64_t model_n_params;
     uint64_t model_size;
     std::string model_ftype;
+    std::time_t created; // set once at model load, for /v1/models
 };
 
 enum server_state {
