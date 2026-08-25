@@ -56,8 +56,16 @@ jobs:
         uses: ggml-org/ccache-action@v1.2.21
         with:
           key: cuda-ubuntu-24.04-cuda
-          evict-old-files: 1d
-          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+          save: false
+
+      - name: ccache-buckets-restore
+        uses: ./.github/actions/ccache-buckets
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN_CACHE_OUTPUT }}
+        with:
+          key: cuda-ubuntu-24.04-cuda
+          folder: llama.cpp
+          hf_bucket: ${{ vars.HF_BUCKET_CACHE_OUTPUT }}
 
       - name: Build with CMake
         # TODO: Remove GGML_CUDA_CUB_3DOT2 flag once CCCL 3.2 is bundled within CTK and that CTK version is used in this project
@@ -72,15 +80,16 @@ jobs:
             -DGGML_CUDA_CUB_3DOT2=ON
           cmake --build build
 
-      - name: ccache-clear
-        uses: ./.github/actions/ccache-clear
+      - name: ccache-buckets-save
+        uses: ./.github/actions/ccache-buckets
         env:
-          GH_TOKEN: ${{ github.token }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN_CACHE_OUTPUT }}
         with:
           key: cuda-ubuntu-24.04-cuda
-          older: 5m
-          min: 1
-          dry-run: ${{ github.event_name != 'push' || github.ref != 'refs/heads/master' }}
+          folder: llama.cpp
+          evict-old-files: 1d
+          hf_bucket: ${{ vars.HF_BUCKET_CACHE_OUTPUT }}
+          save: true
 
   hip:
     runs-on: ubuntu-22.04
@@ -101,8 +110,16 @@ jobs:
         uses: ggml-org/ccache-action@v1.2.21
         with:
           key: cuda-ubuntu-22.04-hip
-          evict-old-files: 1d
-          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+          save: false
+
+      - name: ccache-buckets-restore
+        uses: ./.github/actions/ccache-buckets
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN_CACHE_OUTPUT }}
+        with:
+          key: cuda-ubuntu-22.04-hip
+          folder: llama.cpp
+          hf_bucket: ${{ vars.HF_BUCKET_CACHE_OUTPUT }}
 
       - name: Build with native CMake HIP support
         id: cmake_build
@@ -113,15 +130,16 @@ jobs:
             -DGGML_HIP=ON
           cmake --build build --config Release -j $(nproc)
 
-      - name: ccache-clear
-        uses: ./.github/actions/ccache-clear
+      - name: ccache-buckets-save
+        uses: ./.github/actions/ccache-buckets
         env:
-          GH_TOKEN: ${{ github.token }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN_CACHE_OUTPUT }}
         with:
           key: cuda-ubuntu-22.04-hip
-          older: 5m
-          min: 1
-          dry-run: ${{ github.event_name != 'push' || github.ref != 'refs/heads/master' }}
+          folder: llama.cpp
+          evict-old-files: 1d
+          hf_bucket: ${{ vars.HF_BUCKET_CACHE_OUTPUT }}
+          save: true
 
   musa:
     runs-on: ubuntu-22.04
@@ -142,8 +160,16 @@ jobs:
         uses: ggml-org/ccache-action@v1.2.21
         with:
           key: cuda-ubuntu-22.04-musa
-          evict-old-files: 1d
-          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+          save: false
+
+      - name: ccache-buckets-restore
+        uses: ./.github/actions/ccache-buckets
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN_CACHE_OUTPUT }}
+        with:
+          key: cuda-ubuntu-22.04-musa
+          folder: llama.cpp
+          hf_bucket: ${{ vars.HF_BUCKET_CACHE_OUTPUT }}
 
       - name: Build with native CMake MUSA support
         id: cmake_build
@@ -152,12 +178,13 @@ jobs:
             -DGGML_MUSA=ON
           time cmake --build build --config Release -j $(nproc)
 
-      - name: ccache-clear
-        uses: ./.github/actions/ccache-clear
+      - name: ccache-buckets-save
+        uses: ./.github/actions/ccache-buckets
         env:
-          GH_TOKEN: ${{ github.token }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN_CACHE_OUTPUT }}
         with:
           key: cuda-ubuntu-22.04-musa
-          older: 5m
-          min: 1
-          dry-run: ${{ github.event_name != 'push' || github.ref != 'refs/heads/master' }}
+          folder: llama.cpp
+          evict-old-files: 1d
+          hf_bucket: ${{ vars.HF_BUCKET_CACHE_OUTPUT }}
+          save: true
