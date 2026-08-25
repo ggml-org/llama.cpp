@@ -245,6 +245,40 @@ precision effect. The cause is the block scale: Q8\_0 stores an fp16 scale,
 ROCmFPx stores a UE4M3 byte. At 8 bits per weight the codes are not the
 problem, the coarse scale is.
 
+## Download a prebuilt binary
+
+Ubuntu / x86-64 builds are attached to the
+[releases page](https://github.com/LaurentZuijdwijk/llama.cpp/releases) of this fork. No
+compiler, no Vulkan SDK, no CMake.
+
+```bash
+# Pick the newest llama-*-bin-ubuntu-vulkan-x64.tar.gz from the releases page.
+tar xzf llama-*-bin-ubuntu-vulkan-x64.tar.gz
+cd llama-*/
+./llama --version
+```
+
+The archive is self-contained: the shared libraries sit next to the executables and are found
+through an `$ORIGIN` rpath, so nothing needs installing and `LD_LIBRARY_PATH` stays untouched.
+Run the binaries from the folder you extracted. See
+[Running it with llama-server](#running-it-with-llama-server) below for the model commands.
+
+**What you need**
+
+| | |
+|---|---|
+| OS | Linux, x86-64 |
+| driver | any Vulkan 1.3 driver. Measured on Mesa RADV 26.0.8 |
+| GPU | any Vulkan device. The Strix Halo gates auto-detect; the rest is generic |
+| check | `vulkaninfo --summary` lists your device |
+
+The release binary is built portable (`GGML_NATIVE=OFF`, plus every CPU variant, selected at
+run time). The benchmark figures on this page came from a `GGML_NATIVE=ON` build. Practically
+all the work is on the GPU, so the two measure the same, but the builds are not bit-identical.
+
+Prefer to build it yourself? The flags used for the release are in
+[`.github/workflows/release-vulkan.yml`](.github/workflows/release-vulkan.yml).
+
 ## Running it with llama-server
 
 Two configurations, because **the best ubatch is model-dependent** - see the table below.
