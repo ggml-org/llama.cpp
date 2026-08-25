@@ -1472,9 +1472,9 @@ void ggml_metal_device_event_synchronize(ggml_metal_device_t dev, ggml_metal_eve
 void ggml_metal_device_get_memory(ggml_metal_device_t dev, size_t * free, size_t * total) {
     if (@available(macOS 10.12, iOS 16.0, *)) {
         *total = dev->mtl_device.recommendedMaxWorkingSetSize;
-        size_t current_allocated_size = dev->mtl_device.currentAllocatedSize;
-        if (*total >= current_allocated_size) {
-            *free  = *total - dev->mtl_device.currentAllocatedSize;
+        size_t cur = dev->mtl_device.currentAllocatedSize;
+        if (*total >= cur) {
+            *free  = *total - cur;
         } else {
             // We could have allocated above `recommendedMaxWorkingSetSize`,
             // if that's the case report no free memory.
