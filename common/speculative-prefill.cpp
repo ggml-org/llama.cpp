@@ -132,7 +132,14 @@ std::vector<int32_t> common_speculative_prefill_select_indices(
     }
 
     if (params.keep_last) {
-        selected.push_back(n_prompt - 1);
+        if (params.chunk_size > 0 && n_prompt > params.chunk_size) {
+            const int32_t start = ((n_prompt - 1) / params.chunk_size) * params.chunk_size;
+            for (int32_t i = start; i < n_prompt; ++i) {
+                selected.push_back(i);
+            }
+        } else {
+            selected.push_back(n_prompt - 1);
+        }
     }
 
     std::sort(selected.begin(), selected.end());
@@ -148,7 +155,7 @@ struct cb_attn_collector_data {
 
 static bool cb_collect_attn(ggml_tensor * t, bool ask, void * user_data) {
     if (ask) {
-        return true;
+        return strncmp(t->name, "kq_soft_max", 11) == 0;
     }
 
     if (strncmp(t->name, "kq_soft_max", 11) != 0) {
@@ -160,23 +167,23 @@ static bool cb_collect_attn(ggml_tensor * t, bool ask, void * user_data) {
         return true;
     }
 
+    if (t->type != GGML_TYPE_F32) {
+        return true;
+    }
+
     const int32_t n_past_total = (int32_t) t->ne[0];
     const int32_t n_heads      = (int32_t) t->ne[2];
     const int32_t n_prompt     = data->n_prompt;
 
-    if (n_past_total < n_prompt || n_heads <= 0) {
+    if (t->nb[0] != sizeof(float) || n_heads <= 0 || n_past_total < n_prompt) {
         return true;
     }
-
-    std::vector<float> raw_buf((size_t) ggml_nelements(t));
-    ggml_backend_tensor_get(t, raw_buf.data(), 0, ggml_nbytes(t));
 
     std::vector<float> layer_data((size_t) n_heads * n_prompt);
 
     for (int32_t h = 0; h < n_heads; ++h) {
-        const float * src = raw_buf.data() + (size_t) h * n_past_total;
-        float * dst       = layer_data.data() + (size_t) h * n_prompt;
-        std::copy(src, src + n_prompt, dst);
+        float * dst = layer_data.data() + (size_t) h * n_prompt;
+        ggml_backend_tensor_get(t, dst, (size_t) h * t->nb[2], (size_t) n_prompt * sizeof(float));
     }
 
     data->layer_attns.push_back(std::move(layer_data));
@@ -295,12 +302,17 @@ common_speculative_prefill_result common_speculative_prefill_execute(
     // detach callback
     llama_set_eval_callback(ctx_dft, nullptr, nullptr);
 
-    if (actual_steps > 0) {
-        for (size_t i = 0; i < prompt.size(); ++i) {
-            total_importance[i] /= (float) actual_steps;
-        }
-    } else {
-        std::fill(total_importance.begin(), total_importance.end(), 1.0f);
+    if (actual_steps == 0) {
+        LOG_WRN("spec-prefill: attention was not captured (flash attn on?); keeping full prompt\n");
+        res.kept_indices.resize(prompt.size());
+        std::iota(res.kept_indices.begin(), res.kept_indices.end(), 0);
+        res.n_prompt_kept = (int32_t) res.kept_indices.size();
+        res.importance_scores.assign(prompt.size(), 1.0f);
+        return res;
+    }
+
+    for (size_t i = 0; i < prompt.size(); ++i) {
+        total_importance[i] /= (float) actual_steps;
     }
 
     const auto t_est_start = ggml_time_us();

@@ -2444,6 +2444,11 @@ static bool test_speculative_prefill_prompt(
     const int32_t       n_vocab_dft = llama_vocab_n_tokens(vocab_dft);
 
     const int32_t n_vocab_min = std::min(n_vocab_tgt, n_vocab_dft);
+    const int32_t vocab_diff  = n_vocab_tgt > n_vocab_dft ? n_vocab_tgt - n_vocab_dft : n_vocab_dft - n_vocab_tgt;
+    if (vocab_diff > 128) {
+        fprintf(stderr, "%s: vocab size difference %d exceeds 128, skipping instance\n", __func__, vocab_diff);
+        return false;
+    }
 
     std::vector<llama_token> prompt_tokens(n_prompt);
     prompt_tokens[0] = llama_vocab_get_add_bos(vocab_tgt) ? llama_vocab_bos(vocab_tgt) : (std::rand() % n_vocab_min);
@@ -2471,7 +2476,7 @@ static bool test_speculative_prefill_prompt(
             const int32_t k = i + j;
             const int32_t orig_idx = spec_res.kept_indices[k];
             const bool is_last = (k == n_kept_total - 1);
-            common_batch_add(batch_tgt, prompt_tokens[orig_idx], (llama_pos) k, { seq_id }, is_last);
+            common_batch_add(batch_tgt, prompt_tokens[orig_idx], (llama_pos) orig_idx, { seq_id }, is_last);
         }
 
         const int ret = llama_decode(ctx_tgt, batch_tgt);
@@ -2709,6 +2714,18 @@ int llama_bench(int argc, char ** argv) {
             }
         }
 
+        if (has_spec_prefill) {
+            const llama_vocab * vocab_tgt = llama_model_get_vocab(lmodel);
+            const llama_vocab * vocab_dft = llama_model_get_vocab(lmodel_dft);
+            const int n_vocab_tgt = llama_vocab_n_tokens(vocab_tgt);
+            const int n_vocab_dft = llama_vocab_n_tokens(vocab_dft);
+            const int vocab_diff  = n_vocab_tgt > n_vocab_dft ? n_vocab_tgt - n_vocab_dft : n_vocab_dft - n_vocab_tgt;
+            if (vocab_diff > 128) {
+                fprintf(stderr, "%s: vocab size difference %d exceeds 128, skipping instance\n", __func__, vocab_diff);
+                continue;
+            }
+        }
+
         llama_context * ctx = llama_init_from_model(lmodel, cparams);
         if (ctx == NULL) {
             fprintf(stderr, "%s: error: failed to create context with model '%s'\n", __func__, inst.model.c_str());
@@ -2746,6 +2763,7 @@ int llama_bench(int argc, char ** argv) {
             }
 
             common_params_sampling sparams_dft;
+            sparams_dft.temp = 0.0f;
             smpl_dft.reset(common_sampler_init(lmodel_dft, sparams_dft));
 
             spf_params.enabled          = true;

@@ -14,6 +14,8 @@
 #include <string>
 #include <vector>
 
+#define SPEC_VOCAB_MAX_SIZE_DIFFERENCE 128
+
 int main(int argc, char ** argv) {
     std::setlocale(LC_NUMERIC, "C");
 
@@ -76,6 +78,27 @@ int main(int argc, char ** argv) {
     llama_context * ctx_dft = init_dft->context();
 
     const llama_vocab * vocab_tgt = llama_model_get_vocab(model_tgt);
+    const llama_vocab * vocab_dft = llama_model_get_vocab(model_dft);
+
+    if (llama_vocab_get_add_bos(vocab_tgt) != llama_vocab_get_add_bos(vocab_dft) ||
+        (llama_vocab_get_add_bos(vocab_tgt) && llama_vocab_bos(vocab_tgt) != llama_vocab_bos(vocab_dft))) {
+        LOG_ERR("%s: draft model bos tokens must match target model. add: %d - %d, id: %d - %d\n",
+                __func__,
+                llama_vocab_get_add_bos(vocab_tgt), llama_vocab_get_add_bos(vocab_dft),
+                llama_vocab_bos(vocab_tgt), llama_vocab_bos(vocab_dft));
+        return 1;
+    }
+
+    {
+        const int n_vocab_tgt = llama_vocab_n_tokens(vocab_tgt);
+        const int n_vocab_dft = llama_vocab_n_tokens(vocab_dft);
+        const int vocab_diff  = n_vocab_tgt > n_vocab_dft ? n_vocab_tgt - n_vocab_dft : n_vocab_dft - n_vocab_tgt;
+        if (vocab_diff > SPEC_VOCAB_MAX_SIZE_DIFFERENCE) {
+            LOG_ERR("%s: target vocab size %d does not match draft vocab size %d - difference %d, max allowed %d\n",
+                    __func__, n_vocab_tgt, n_vocab_dft, vocab_diff, SPEC_VOCAB_MAX_SIZE_DIFFERENCE);
+            return 1;
+        }
+    }
 
     // tokenize prompt
     std::vector<llama_token> prompt_tokens = common_tokenize(ctx_tgt, params.prompt, true, true);
@@ -135,7 +158,7 @@ int main(int argc, char ** argv) {
             const int32_t k = i + j;
             const int32_t orig_idx = spec_res.kept_indices[k];
             const bool is_last = (k == n_kept_total - 1);
-            common_batch_add(batch_tgt, prompt_tokens[orig_idx], (llama_pos) k, { seq_id }, is_last);
+            common_batch_add(batch_tgt, prompt_tokens[orig_idx], (llama_pos) orig_idx, { seq_id }, is_last);
         }
 
         ret = llama_decode(ctx_tgt, batch_tgt);
@@ -146,6 +169,9 @@ int main(int argc, char ** argv) {
         }
     }
     llama_batch_free(batch_tgt);
+
+    llama_synchronize(ctx_tgt);
+    llama_synchronize(ctx_dft);
 
     const auto t_tgt_prefill_end = ggml_time_us();
     const double ttft_ms = (t_tgt_prefill_end - t_spec_prefill_start) / 1000.0;
@@ -160,7 +186,7 @@ int main(int argc, char ** argv) {
     LOG("\n--- Generation Start ---\n");
 
     int32_t n_predict = params.n_predict > 0 ? params.n_predict : 32;
-    int32_t cur_pos = (int32_t) spec_res.kept_indices.size();
+    int32_t cur_pos = spec_res.kept_indices.empty() ? 0 : spec_res.kept_indices.back() + 1;
     int32_t n_generated = 0;
 
     llama_batch batch_gen = llama_batch_init(1, 0, 1);

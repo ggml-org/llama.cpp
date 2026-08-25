@@ -3728,6 +3728,10 @@ void llama_set_abort_callback(llama_context * ctx, bool (*abort_callback)(void *
 }
 
 void llama_set_eval_callback(llama_context * ctx, ggml_backend_sched_eval_callback cb_eval, void * cb_eval_user_data) {
+    if (!ctx) {
+        return;
+    }
+
     ctx->set_eval_callback(cb_eval, cb_eval_user_data);
 }
 
