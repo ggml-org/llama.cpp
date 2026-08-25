@@ -6,6 +6,7 @@
 
 // note: almost all graphs require at least sqrtf, so include cmath globally
 #include <cmath>
+#include <map>
 
 //
 // base classes
@@ -2278,12 +2279,9 @@ struct llama_model_qwen35 : public llama_model_base {
 struct llama_model_qwen4exp : public llama_model_base {
     llama_model_qwen4exp(const struct llama_model_params & params) : llama_model_base(params) {}
 
-    // The PLE hash needs each token's ngram_size-1 predecessors. During decode
-    // they are not in the ubatch, so they are remembered here between calls,
-    // mirroring the per-request ngram_context the reference implementation
-    // carries. next_pos guards the history: if it does not line up with the
-    // incoming position the sequence was reset or rewound, and the hash falls
-    // back to EOS padding rather than trusting stale tokens.
+    // PLE predecessors are absent from a decode ubatch, so remember them here
+    // (vLLM's ngram_context). next_pos guards it: a mismatch means the sequence
+    // was reset or rewound, and the hash falls back to EOS padding.
     struct ple_history {
         llama_pos                next_pos = -1;
         std::vector<llama_token> toks;
@@ -2333,8 +2331,11 @@ struct llama_model_qwen4exp : public llama_model_base {
                     ggml_tensor * gate,
                             int   layer);
 
-        // conv history at an explicit offset in the recurrent row: this arch
-        // packs the delta-net and PLE conv states into the same row
+        // build_rs writes the state tensor in place, so run it at most once per
+        // layer; both convolutions share this gather.
+        std::map<int, ggml_tensor *> rs_rows;
+
+        // conv history at an explicit offset: delta-net and PLE share the row
         ggml_tensor * build_conv_state_at(
              llm_graph_input_rs * inp,
                     ggml_tensor * conv_states_all,
