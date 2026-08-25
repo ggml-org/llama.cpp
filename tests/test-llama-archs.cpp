@@ -493,9 +493,9 @@ static bool arch_supported(const llm_arch arch) {
         return false; // FIXME @ngxson
     }
     if (arch == LLM_ARCH_QWEN4EXP) {
-        // FIXME: get_gguf_ctx's hyper-connection keys never reach the synthesised
-        // file, so loading trips on hyper_connection.count. Graph is covered by
-        // the vLLM parity tests.
+        // FIXME: loading reports "key not found: qwen4exp.hyper_connection.count" even
+        // though the gguf_context passed in carries both HC keys among its 67 KVs, so
+        // the mismatch is in the loader's view of it. Graph is covered by vLLM parity.
         return false;
     }
     if (arch == LLM_ARCH_GRANITE_SWITCH) {
