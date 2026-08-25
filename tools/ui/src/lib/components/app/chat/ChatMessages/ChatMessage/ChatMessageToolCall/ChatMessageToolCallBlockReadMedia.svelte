@@ -46,6 +46,7 @@
 <ToolCallBlock {section} {open} {isStreaming} meta={readMediaMeta} {onToggle}>
 	{#snippet titleSnippet()}
 		<span class="text-muted-foreground">Read media </span>
+
 		<span class="font-mono">{readMediaMeta?.fileName}</span>
 	{/snippet}
 
@@ -81,6 +82,7 @@
 					{#if readMediaMeta?.sizeBytes}
 						<span>Size: {readMediaMeta.sizeBytes} bytes</span>
 					{/if}
+
 					{#if readMediaMeta?.mimeType}
 						<span>MIME: {readMediaMeta.mimeType}</span>
 					{/if}

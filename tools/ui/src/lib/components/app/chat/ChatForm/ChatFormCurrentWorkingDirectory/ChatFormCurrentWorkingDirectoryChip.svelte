@@ -42,6 +42,7 @@
 						<span {...props} class="max-w-64 truncate">{displayLabel}</span>
 					{/snippet}
 				</Tooltip.Trigger>
+
 				<Tooltip.Content>
 					<p>{displayLabelTitle}</p>
 				</Tooltip.Content>

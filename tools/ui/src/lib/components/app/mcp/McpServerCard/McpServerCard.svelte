@@ -145,11 +145,15 @@
 				<div class="space-y-2">
 					<div class="flex items-center gap-2">
 						<Skeleton class="{ICON_CLASS_DEFAULT} rounded" />
+
 						<Skeleton class="h-3 w-24" />
 					</div>
+
 					<div class="flex flex-wrap gap-1.5">
 						<Skeleton class="h-5 w-16 rounded-full" />
+
 						<Skeleton class="h-5 w-20 rounded-full" />
+
 						<Skeleton class="h-5 w-14 rounded-full" />
 					</div>
 				</div>
@@ -157,6 +161,7 @@
 				<div class="space-y-1.5">
 					<div class="flex items-center gap-2">
 						<Skeleton class="{ICON_CLASS_DEFAULT} rounded" />
+
 						<Skeleton class="h-3 w-32" />
 					</div>
 				</div>

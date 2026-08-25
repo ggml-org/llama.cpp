@@ -130,8 +130,10 @@
 				}}
 			>
 				<Icon class="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+
 				<div class="flex min-w-0 flex-1 flex-col">
 					<span class="font-mono text-sm font-medium">/{command.name}</span>
+
 					<span class="min-w-0 flex-1 truncate text-left text-xs text-muted-foreground">
 						{command.description}
 					</span>

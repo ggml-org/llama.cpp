@@ -64,7 +64,9 @@
 		<div class="flex flex-col gap-2">
 			<div class="flex items-center gap-2">
 				<span class="font-medium">Context</span>
+
 				<span class="text-muted-foreground">·</span>
+
 				<span class="font-mono text-muted-foreground">
 					{formatParameters(gauge.contextUsed)}
 					/ {gauge.contextTotal !== null ? formatParameters(gauge.contextTotal) : '-'}
@@ -91,6 +93,7 @@
 					<span>
 						<span class={colorLevelTextClass(gauge.colorLevel)}>{gauge.contextPercent}%</span> used
 					</span>
+
 					<span>
 						{formatParameters(gauge.contextAvailable ?? 0)} remaining
 					</span>

@@ -56,6 +56,7 @@
 				onmouseenter={() => onHover?.(index)}
 			>
 				<Folder class="size-4 shrink-0 text-muted-foreground" />
+
 				<span class="min-w-0 flex-1 truncate font-mono text-left">
 					{#each highlightMatch(path, rawQuery.trim()) as seg, segIndex (segIndex)}
 						{#if seg.match}

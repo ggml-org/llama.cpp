@@ -116,7 +116,9 @@
 {#if !hasVisionModality && activeModelId && currentItem}
 	<Alert.Root class="mb-4 max-w-4xl">
 		<Info class={ICON_CLASS_DEFAULT} />
+
 		<Alert.Title>Preview only</Alert.Title>
+
 		<Alert.Description>
 			<span class="inline-flex">
 				The selected model does not support vision. Only the extracted
@@ -140,6 +142,7 @@
 			<div
 				class="mx-auto mb-4 h-8 w-8 animate-spin rounded-full border-4 border-white border-t-transparent"
 			></div>
+
 			<p class="text-white/70">Converting PDF to images...</p>
 		</div>
 	</div>
@@ -147,20 +150,25 @@
 	<div class="flex flex-1 items-center justify-center p-8">
 		<div class="text-center">
 			<FileText class="mx-auto mb-4 h-16 w-16 text-white/50" />
+
 			<p class="mb-4 text-white/70">Failed to load PDF images</p>
+
 			<p class="text-sm text-white/50">{pdfImagesError}</p>
 		</div>
 	</div>
 {:else if pdfImages.length > 0}
 	{#each pdfImages as image, index (image)}
 		<p class="mb-2 text-sm text-white/50">Page {index + 1}</p>
+
 		<img src={image} alt="PDF Page {index + 1}" class="mx-auto max-w-[85vw] rounded-lg shadow-lg" />
+
 		<div class="h-4"></div>
 	{/each}
 {:else}
 	<div class="flex flex-1 items-center justify-center p-8">
 		<div class="text-center">
 			<FileText class="mx-auto mb-4 h-16 w-16 text-white/50" />
+
 			<p class="text-white/70">No PDF pages available</p>
 		</div>
 	</div>

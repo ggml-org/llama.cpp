@@ -61,6 +61,7 @@
 						}}
 					>
 						<section.icon class="{ICON_CLASS_DEFAULT} flex-shrink-0" />
+
 						<span>{section.title}</span>
 					</a>
 				{:else}
@@ -77,6 +78,7 @@
 						}}
 					>
 						<section.icon class="{ICON_CLASS_DEFAULT} flex-shrink-0" />
+
 						<span>{section.title}</span>
 					</button>
 				{/if}

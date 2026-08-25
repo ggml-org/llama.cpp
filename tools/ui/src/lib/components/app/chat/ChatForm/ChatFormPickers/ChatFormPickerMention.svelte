@@ -245,6 +245,7 @@
 								: 'text-muted-foreground'
 						]}
 					/>
+
 					<div class="flex min-w-0 flex-1 flex-col">
 						<div class="flex min-w-0 items-center gap-2">
 							{#if showTooltip}
@@ -254,6 +255,7 @@
 											<span {...props} class="truncate text-sm font-medium">{entry.name}</span>
 										{/snippet}
 									</Tooltip.Trigger>
+
 									<Tooltip.Content>
 										<p>{entry.path}</p>
 									</Tooltip.Content>
@@ -261,12 +263,14 @@
 							{:else}
 								<span class="truncate text-sm font-medium">{entry.name}</span>
 							{/if}
+
 							<span
 								class="shrink-0 rounded-full bg-muted px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wide text-muted-foreground"
 							>
 								{entry.type}
 							</span>
 						</div>
+
 						<span class="min-w-0 flex-1 truncate font-mono text-left text-xs">
 							<HighlightedMatch text={abbreviateHome(entry.path, home)} query={trimmedQuery} />
 						</span>

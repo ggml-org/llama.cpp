@@ -73,6 +73,7 @@
 							<FlaskConical class="h-3.5 w-3.5 text-muted-foreground" />
 						{/if}
 					</Label>
+
 					{#if isCustomRealTime}
 						<SettingsChatParameterSourceIndicator />
 					{/if}
@@ -97,6 +98,7 @@
 							: (field.placeholder ?? '')}
 						class="w-full {isCustomRealTime ? 'pr-8' : ''}"
 					/>
+
 					{#if isCustomRealTime}
 						<button
 							type="button"
@@ -112,6 +114,7 @@
 						</button>
 					{/if}
 				</div>
+
 				{#if field.help || SETTING_CONFIG_INFO[field.key]}
 					<p class="mt-1 text-xs text-muted-foreground">
 						{@html field.help || SETTING_CONFIG_INFO[field.key]}
@@ -179,6 +182,7 @@
 							<FlaskConical class="h-3.5 w-3.5 text-muted-foreground" />
 						{/if}
 					</Label>
+
 					{#if isCustomRealTime}
 						<SettingsChatParameterSourceIndicator />
 					{/if}
@@ -206,6 +210,7 @@
 								{selectedOption?.label || `Select ${field.label.toLowerCase()}`}
 							</div>
 						</Select.Trigger>
+
 						{#if isCustomRealTime}
 							<button
 								type="button"
@@ -221,6 +226,7 @@
 							</button>
 						{/if}
 					</div>
+
 					<Select.Content>
 						{#if field.options}
 							{#each field.options as option (option.value)}
@@ -237,6 +243,7 @@
 						{/if}
 					</Select.Content>
 				</Select.Root>
+
 				{#if field.help || SETTING_CONFIG_INFO[field.key]}
 					<p class="mt-1 text-xs text-muted-foreground">
 						{field.help || SETTING_CONFIG_INFO[field.key]}
@@ -269,6 +276,7 @@
 						{@const itemId = `${field.key}-${opt.value}`}
 						<div class="flex items-center gap-2">
 							<RadioGroup.Item value={opt.value} id={itemId} />
+
 							<Label
 								for={itemId}
 								class="flex cursor-pointer items-center gap-1.5 text-sm font-normal"

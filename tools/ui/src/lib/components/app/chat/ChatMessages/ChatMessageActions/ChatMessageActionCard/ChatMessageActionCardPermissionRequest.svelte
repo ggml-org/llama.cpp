@@ -54,6 +54,7 @@
 					Always allow <pre>{toolName}</pre>
 					tool
 				</DropdownMenu.Item>
+
 				{#if serverLabel}
 					<DropdownMenu.Item onclick={() => onDecision(ToolPermissionDecision.ALWAYS_SERVER)}>
 						Always allow all tools from {serverLabel}

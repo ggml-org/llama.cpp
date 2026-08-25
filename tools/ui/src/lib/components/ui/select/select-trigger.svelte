@@ -36,5 +36,6 @@
 	{...restProps}
 >
 	{@render children?.()}
+
 	<ChevronDownIcon class={chevronClasses} />
 </SelectPrimitive.Trigger>

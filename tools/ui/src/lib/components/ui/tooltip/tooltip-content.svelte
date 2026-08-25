@@ -34,6 +34,7 @@
 		{...restProps}
 	>
 		{@render children?.()}
+
 		<TooltipPrimitive.Arrow>
 			{#snippet child({ props })}
 				<div

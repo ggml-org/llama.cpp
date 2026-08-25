@@ -103,8 +103,10 @@
 				{:else}
 					<Globe class="text-muted-foreground/70 h-3 w-3 shrink-0" />
 				{/if}
+
 				<span class="truncate font-medium text-foreground/80">{result.title}</span>
 			</HoverCard.Trigger>
+
 			{#if showHoverCard}
 				{@const publishDate = formatPublishDate(result.published)}
 				{@const host = hostFor(safeUrl)}
@@ -122,19 +124,23 @@
 							class="line-clamp-3 text-sm font-medium leading-snug hover:underline"
 							>{result.title}</a
 						>
+
 						{#if publishDate || result.author}
 							<div class="text-muted-foreground flex items-center gap-1.5 text-[11px]">
 								{#if publishDate}
 									<span>{publishDate}</span>
 								{/if}
+
 								{#if publishDate && result.author}
 									<span class="opacity-50">&middot;</span>
 								{/if}
+
 								{#if result.author}
 									<span class="truncate">{result.author}</span>
 								{/if}
 							</div>
 						{/if}
+
 						{#if result.highlights}
 							<p
 								class="text-popover-foreground/85 line-clamp-5 text-xs leading-relaxed whitespace-pre-line"
@@ -142,6 +148,7 @@
 								{result.highlights}
 							</p>
 						{/if}
+
 						{#if host}
 							<div class="text-muted-foreground/80 truncate text-[11px]">{host}</div>
 						{/if}
@@ -162,6 +169,7 @@
 	{:else if showSpinner}
 		<div class="text-muted-foreground/70 flex items-center gap-2 py-1 text-xs italic">
 			<Loader2 class="h-3 w-3 animate-spin" />
+
 			<span>Searching...</span>
 		</div>
 	{:else}

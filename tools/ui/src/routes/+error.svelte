@@ -55,11 +55,14 @@
 						/>
 					</svg>
 				</div>
+
 				<h1 class="mb-2 text-2xl font-bold">Error {status}</h1>
+
 				<p class="text-muted-foreground">
 					{error?.message || 'Something went wrong'}
 				</p>
 			</div>
+
 			<button
 				onclick={() => goto(ROUTES.START)}
 				class="rounded-md bg-primary px-4 py-2 text-primary-foreground hover:bg-primary/90"

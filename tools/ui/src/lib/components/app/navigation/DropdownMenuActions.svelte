@@ -44,12 +44,14 @@
 					onclick={(e) => e.stopPropagation()}
 				>
 					{@render iconComponent(triggerIcon, 'h-3 w-3')}
+
 					{#if triggerTooltip}
 						<span class="sr-only">{triggerTooltip}</span>
 					{/if}
 				</DropdownMenu.Trigger>
 			{/snippet}
 		</Tooltip.Trigger>
+
 		{#if triggerTooltip}
 			<Tooltip.Content>
 				<p>{triggerTooltip}</p>

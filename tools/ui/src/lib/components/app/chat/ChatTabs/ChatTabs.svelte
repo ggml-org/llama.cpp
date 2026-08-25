@@ -115,6 +115,7 @@
 				? 'opacity-100'
 				: 'opacity-0'}"
 		></div>
+
 		<div
 			class="pointer-events-none absolute inset-y-0 right-0 z-[5] w-8 bg-gradient-to-l from-background to-transparent transition-opacity {carousel.canScrollRight
 				? 'opacity-100'

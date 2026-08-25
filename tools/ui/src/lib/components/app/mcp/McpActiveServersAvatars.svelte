@@ -77,6 +77,7 @@
 							/>
 						</div>
 					</Tooltip.Trigger>
+
 					<Tooltip.Content>
 						<p>{favicon.name}</p>
 					</Tooltip.Content>

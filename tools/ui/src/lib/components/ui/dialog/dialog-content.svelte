@@ -21,6 +21,7 @@
 
 <Dialog.Portal {...portalProps}>
 	<Dialog.Overlay />
+
 	<DialogPrimitive.Content
 		bind:ref
 		data-slot="dialog-content"
@@ -31,11 +32,13 @@
 		{...restProps}
 	>
 		{@render children?.()}
+
 		{#if showCloseButton}
 			<DialogPrimitive.Close
 				class="absolute top-4 right-4 rounded-xs opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:outline-hidden disabled:pointer-events-none [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4"
 			>
 				<XIcon />
+
 				<span class="sr-only">Close</span>
 			</DialogPrimitive.Close>
 		{/if}

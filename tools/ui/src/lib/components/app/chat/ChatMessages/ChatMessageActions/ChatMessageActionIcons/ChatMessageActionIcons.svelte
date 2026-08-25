@@ -100,6 +100,7 @@
 	{#if showRawOutputSwitch}
 		<div class="flex items-center gap-2">
 			<span class="text-xs text-muted-foreground">Show raw output</span>
+
 			<Switch
 				checked={rawOutputEnabled}
 				onCheckedChange={(checked) => onRawOutputToggle?.(checked)}

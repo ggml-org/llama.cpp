@@ -123,6 +123,7 @@
 								</Table.Head>
 							</Table.Row>
 						</Table.Header>
+
 						<Table.Body>
 							<!-- Model Path -->
 							<Table.Row>
@@ -213,6 +214,7 @@
 							{#if modelMeta?.vocab_type}
 								<Table.Row>
 									<Table.Cell class="align-middle font-medium">Vocabulary Type</Table.Cell>
+
 									<Table.Cell class="align-middle capitalize">{modelMeta.vocab_type}</Table.Cell>
 								</Table.Row>
 							{/if}

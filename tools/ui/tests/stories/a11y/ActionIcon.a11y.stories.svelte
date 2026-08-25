@@ -29,6 +29,7 @@
 >
 	<div>
 		<button type="button">before</button>
+
 		<ActionIcon icon={Copy} tooltip="Copy" onclick={() => {}} />
 	</div>
 </Story>

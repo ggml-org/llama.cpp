@@ -44,6 +44,7 @@
 
 <SheetPrimitive.Portal {...portalProps}>
 	<SheetOverlay />
+
 	<SheetPrimitive.Content
 		bind:ref
 		data-slot="sheet-content"
@@ -51,10 +52,12 @@
 		{...restProps}
 	>
 		{@render children?.()}
+
 		<SheetPrimitive.Close
 			class="absolute top-4 right-4 rounded-xs opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:outline-hidden disabled:pointer-events-none"
 		>
 			<XIcon class="size-4" />
+
 			<span class="sr-only">Close</span>
 		</SheetPrimitive.Close>
 	</SheetPrimitive.Content>

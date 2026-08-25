@@ -893,6 +893,7 @@
 			<div class="mermaid-block-wrapper streaming-mermaid-block">
 				<div class="code-block-header">
 					<span class="code-language">mermaid</span>
+
 					<div class="code-block-actions">
 						<ActionIconCopyToClipboard
 							text={incompleteCodeBlock.code}
@@ -901,6 +902,7 @@
 						/>
 					</div>
 				</div>
+
 				<div class="mermaid-loading-placeholder">
 					<span class="mermaid-loading-text">Generating diagram...</span>
 				</div>
@@ -909,6 +911,7 @@
 			<div class="svg-block-wrapper streaming-svg-block">
 				<div class="code-block-header">
 					<span class="code-language">svg</span>
+
 					<div class="code-block-actions">
 						<ActionIconCopyToClipboard
 							text={incompleteCodeBlock.code}
@@ -917,6 +920,7 @@
 						/>
 					</div>
 				</div>
+
 				{#if liveSvgHtml}
 					<div class="svg-scroll-container">
 						<div class={SVG.BLOCK_CLASS}>
@@ -933,6 +937,7 @@
 			<div class="code-block-wrapper streaming-code-block relative">
 				<div class="code-block-header">
 					<span class="code-language">{incompleteCodeBlock.language || 'text'}</span>
+
 					<CodeBlockActions
 						code={incompleteCodeBlock.code}
 						language={incompleteCodeBlock.language || 'text'}

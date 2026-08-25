@@ -63,6 +63,7 @@
 								: undefined}
 						/>
 					{/if}
+
 					{#if cumulativeOutput > 0}
 						<ContextGaugeDetailRow
 							label="Tokens generated"
@@ -100,6 +101,7 @@
 					<div class="pt-1 mt-0.5 border-t border-border/30">
 						<div class="flex justify-between">
 							<span class="text-muted-foreground">KV cache total</span>
+
 							<span class="font-mono font-medium">{kvTotal.toLocaleString()} tok</span>
 						</div>
 					</div>

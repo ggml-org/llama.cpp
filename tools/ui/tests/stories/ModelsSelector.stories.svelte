@@ -168,6 +168,7 @@
 		<div class="px-2 py-2 text-[13px] font-semibold text-muted-foreground/70 select-none">
 			Server model states
 		</div>
+
 		<ModelsSelectorOption
 			option={mockModel('model-idle', 'Model (idle)', 'meta')}
 			isSelected={false}
@@ -178,6 +179,7 @@
 			onMouseEnter={() => {}}
 			onKeyDown={() => {}}
 		/>
+
 		<ModelsSelectorOption
 			option={mockModel('model-loading', 'Model (loading)', 'meta')}
 			isSelected={false}
@@ -188,6 +190,7 @@
 			onMouseEnter={() => {}}
 			onKeyDown={() => {}}
 		/>
+
 		<ModelsSelectorOption
 			option={mockModel('model-loaded', 'Model (loaded)', 'meta')}
 			isSelected={false}
@@ -198,6 +201,7 @@
 			onMouseEnter={() => {}}
 			onKeyDown={() => {}}
 		/>
+
 		<ModelsSelectorOption
 			option={mockModel('model-sleeping', 'Model (sleeping)', 'meta')}
 			isSelected={false}
@@ -208,6 +212,7 @@
 			onMouseEnter={() => {}}
 			onKeyDown={() => {}}
 		/>
+
 		<ModelsSelectorOption
 			option={mockModel('model-failed', 'Model (failed)', 'meta')}
 			isSelected={false}
@@ -226,6 +231,7 @@
 		<div class="px-2 py-2 text-[13px] font-semibold text-muted-foreground/70 select-none">
 			Selection states
 		</div>
+
 		<ModelsSelectorOption
 			option={mockModel('normal-model', 'Normal Model', 'meta')}
 			isSelected={false}
@@ -236,6 +242,7 @@
 			onMouseEnter={() => {}}
 			onKeyDown={() => {}}
 		/>
+
 		<ModelsSelectorOption
 			option={mockModel('selected-model', 'Selected Model', 'meta')}
 			isSelected={true}
@@ -246,6 +253,7 @@
 			onMouseEnter={() => {}}
 			onKeyDown={() => {}}
 		/>
+
 		<ModelsSelectorOption
 			option={mockModel('highlighted-model', 'Highlighted Model', 'meta')}
 			isSelected={false}
@@ -256,6 +264,7 @@
 			onMouseEnter={() => {}}
 			onKeyDown={() => {}}
 		/>
+
 		<ModelsSelectorOption
 			option={mockModel('fav-model', 'Favorite Model', 'Qwen')}
 			isSelected={false}

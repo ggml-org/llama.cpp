@@ -45,14 +45,17 @@
 	<AlertDialog.Content>
 		<AlertDialog.Header>
 			<AlertDialog.Title>Reset Settings to Default</AlertDialog.Title>
+
 			<AlertDialog.Description>
 				Are you sure you want to reset all settings to their default values? This will reset all
 				parameters to the values provided by the server's /props endpoint and remove all your custom
 				configurations.
 			</AlertDialog.Description>
 		</AlertDialog.Header>
+
 		<AlertDialog.Footer>
 			<AlertDialog.Cancel>Cancel</AlertDialog.Cancel>
+
 			<AlertDialog.Action onclick={handleConfirmReset}>Reset to Default</AlertDialog.Action>
 		</AlertDialog.Footer>
 	</AlertDialog.Content>

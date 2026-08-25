@@ -26,6 +26,7 @@
 				<CircleIcon class="size-2 fill-current" />
 			{/if}
 		</span>
+
 		{@render childrenProp?.({ checked })}
 	{/snippet}
 </DropdownMenuPrimitive.RadioItem>

@@ -255,6 +255,7 @@
 			<div class="space-y-3 pt-2">
 				<div class="flex items-center justify-between gap-3">
 					<h3 class="text-sm font-medium">Recommended Servers</h3>
+
 					<Button class="text-muted-foreground" variant="ghost" size="sm" onclick={handleDismissAll}
 						>Dismiss</Button
 					>

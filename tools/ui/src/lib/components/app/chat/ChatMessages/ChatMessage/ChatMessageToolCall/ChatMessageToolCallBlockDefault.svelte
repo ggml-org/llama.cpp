@@ -39,10 +39,12 @@
 		{#if ctx.isStreamingCall}
 			<div class="mb-2 flex items-center gap-2 text-xs text-muted-foreground/70">
 				<span>Input</span>
+
 				{#if ctx.isStreaming}
 					<Loader2 class="h-3 w-3 animate-spin" />
 				{/if}
 			</div>
+
 			{#if section.toolArgs}
 				<SyntaxHighlightedCode
 					code={formatJsonPretty(section.toolArgs)}
@@ -67,6 +69,7 @@
 				<div class="mb-1.5 flex items-center gap-2 text-xs text-muted-foreground/70">
 					<span>Input</span>
 				</div>
+
 				<SyntaxHighlightedCode
 					code={formatJsonPretty(section.toolArgs ?? '')}
 					language={FileTypeText.JSON}
@@ -74,16 +77,19 @@
 					streaming={ctx.isCodeStreaming}
 				/>
 			{/if}
+
 			<div
 				class={showInput
 					? 'mt-4 mb-1.5 flex items-center gap-2 text-xs text-muted-foreground/70'
 					: 'mb-1.5 flex items-center gap-2 text-xs text-muted-foreground/70'}
 			>
 				<span>Output</span>
+
 				{#if ctx.isPending}
 					<Loader2 class="h-3 w-3 animate-spin" />
 				{/if}
 			</div>
+
 			{#if ctx.isPending}
 				<div class="rounded bg-muted/20 p-2 text-xs text-muted-foreground/70 italic">
 					Waiting for result...
@@ -103,6 +109,7 @@
 							<div class="font-mono text-[11px] leading-relaxed whitespace-pre-wrap">
 								{line.text}
 							</div>
+
 							{#if line.media}
 								{#if line.media.type === AttachmentType.AUDIO}
 									{@const audioMimeType = line.media.mimeType ?? MimeTypeAudio.MP3_MPEG}

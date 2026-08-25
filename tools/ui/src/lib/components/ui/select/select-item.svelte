@@ -29,6 +29,7 @@
 				<CheckIcon class="size-4" />
 			{/if}
 		</span>
+
 		{#if childrenProp}
 			{@render childrenProp({ highlighted, selected })}
 		{:else}

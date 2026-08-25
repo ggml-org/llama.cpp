@@ -170,6 +170,7 @@
 									: ''}"
 							disabled={apiKeyState === 'validating'}
 						/>
+
 						{#if apiKeyState === 'validating'}
 							<div class="absolute top-1/2 right-3 -translate-y-1/2">
 								<RefreshCw class="{ICON_CLASS_DEFAULT} animate-spin text-muted-foreground" />
@@ -190,17 +191,20 @@
 							</div>
 						{/if}
 					</div>
+
 					{#if apiKeyError}
 						<p class="text-sm text-destructive" in:fly={{ duration: 200, y: -10 }}>
 							{apiKeyError}
 						</p>
 					{/if}
+
 					{#if apiKeyState === 'success'}
 						<p class="text-sm text-green-600" in:fly={{ duration: 200, y: -10 }}>
 							✓ API key validated successfully! Connecting...
 						</p>
 					{/if}
 				</div>
+
 				<div class="flex gap-2">
 					<Button
 						onclick={handleSaveApiKey}
@@ -218,6 +222,7 @@
 							Save & Retry
 						{/if}
 					</Button>
+
 					<Button
 						onclick={() => {
 							showApiKeyInput = false;
@@ -271,6 +276,7 @@
 								<p class="mt-1">llama-server -m locally-stored-model.gguf</p>
 							</div>
 						</div>
+
 						<ul class="list-disc space-y-1 pl-4">
 							<li>Check that the server is accessible at the correct URL</li>
 

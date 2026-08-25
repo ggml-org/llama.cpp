@@ -36,6 +36,7 @@
 				<CheckIcon class={cn('size-4', !checked && 'text-transparent')} />
 			{/if}
 		</span>
+
 		{@render childrenProp?.()}
 	{/snippet}
 </DropdownMenuPrimitive.CheckboxItem>

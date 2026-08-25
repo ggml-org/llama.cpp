@@ -30,11 +30,14 @@
 	>
 		{@render children?.()}
 	</ScrollAreaPrimitive.Viewport>
+
 	{#if orientation === 'vertical' || orientation === 'both'}
 		<Scrollbar orientation="vertical" class={scrollbarYClasses} />
 	{/if}
+
 	{#if orientation === 'horizontal' || orientation === 'both'}
 		<Scrollbar orientation="horizontal" class={scrollbarXClasses} />
 	{/if}
+
 	<ScrollAreaPrimitive.Corner />
 </ScrollAreaPrimitive.Root>

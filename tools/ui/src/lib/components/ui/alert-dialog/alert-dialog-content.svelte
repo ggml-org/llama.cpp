@@ -15,6 +15,7 @@
 
 <AlertDialogPrimitive.Portal {...portalProps}>
 	<AlertDialogOverlay />
+
 	<AlertDialogPrimitive.Content
 		bind:ref
 		data-slot="alert-dialog-content"
