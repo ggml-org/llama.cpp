@@ -503,7 +503,10 @@ ggml_tensor * llama_model_qwen4exp::graph::build_layer_attn_linear(
     const int64_t conv_kernel_size = conv_kernel->ne[0];
     const int64_t conv_channels    = d_inner + 2 * hparams.ssm_n_group * hparams.ssm_d_state;
 
-    ggml_tensor * conv_input = build_conv_state(inp, conv_states_all, qkv_mixed, conv_kernel_size, conv_channels, il);
+    // offset 0: the delta-net history sits at the front of the row, with the
+    // PLE history (if this model has one) after it
+    ggml_tensor * conv_input = build_conv_state_at(inp, conv_states_all, qkv_mixed,
+            conv_kernel_size - 1, conv_channels, 0, il);
 
     ggml_tensor * state = build_rs(inp, ssm_states_all, hparams.n_embd_s(), n_seqs);
     state = ggml_reshape_4d(ctx0, state, head_v_dim, head_v_dim, num_v_heads, n_seqs);
@@ -770,6 +773,60 @@ void llm_graph_input_ple::set_input(const llama_ubatch * ubatch) {
     ggml_backend_tensor_set(rows, idx.data(), 0, idx.size()*ggml_element_size(rows));
 }
 
+// Fetch one conv history out of the recurrent row and write the updated tail
+// back, at an explicit offset within that row.
+//
+// The shared build_conv_state assumes the whole row belongs to one convolution.
+// Here the row carries the delta-net conv history followed by the PLE one, so
+// each caller addresses its own slice. Same structure as the shared helper,
+// only with an offset and an explicit dilation.
+ggml_tensor * llama_model_qwen4exp::graph::build_conv_state_at(
+        llm_graph_input_rs * inp,
+        ggml_tensor *        conv_states_all,
+        ggml_tensor *        x,
+        int64_t              state_cols,
+        int64_t              channels,
+        int64_t              row_offset,
+        int                  il) {
+    const auto * mctx_cur = inp->mctx;
+
+    const auto kv_head  = mctx_cur->get_head();
+    const auto mem_size = mctx_cur->get_size();
+
+    const int64_t n_seqs    = ubatch.n_seqs;
+    const int64_t row_total = hparams.n_embd_r();
+
+    // the gather needs the whole row, then this convolution takes its slice
+    ggml_tensor * rows = build_rs(inp, conv_states_all, row_total, n_seqs);
+
+    const size_t esz = ggml_element_size(rows);
+
+    ggml_tensor * state = ggml_cont(ctx0,
+            ggml_view_2d(ctx0, rows, state_cols * channels, n_seqs,
+                    rows->nb[1], row_offset * esz));
+    state = ggml_reshape_3d(ctx0, state, state_cols, channels, n_seqs);
+    cb(state, "conv_state_at", il);
+
+    ggml_tensor * conv_input = ggml_concat(ctx0, state, ggml_transpose(ctx0, x), 0);
+
+    // keep the last state_cols columns for the next ubatch
+    const size_t row_size = ggml_row_size(conv_states_all->type, row_total);
+
+    ggml_tensor * tail = ggml_view_3d(ctx0, conv_input,
+            state_cols, channels, n_seqs,
+            conv_input->nb[1], conv_input->nb[2],
+            ggml_row_size(conv_input->type, conv_input->ne[0] - state_cols));
+
+    ggml_tensor * dst = ggml_view_2d(ctx0, conv_states_all,
+            state_cols * channels, n_seqs,
+            conv_states_all->nb[1],
+            kv_head * row_size + row_offset * ggml_element_size(conv_states_all));
+
+    ggml_build_forward_expand(gf, ggml_cpy(ctx0, ggml_cont(ctx0, tail), dst));
+
+    return conv_input;
+}
+
 ggml_tensor * llama_model_qwen4exp::graph::build_ple(
         llm_graph_input_rs * inp,
         ggml_tensor *        hidden,
@@ -837,27 +894,29 @@ ggml_tensor * llama_model_qwen4exp::graph::build_ple(
     //
     //   out[c, t] = sum_k w[k, c] * x[c, t - (K-1-k)*dilation]
     //
-    // Positions before the sequence start read as zero, which is what the
-    // reference's zero-padded nn.Conv1d does.
+    // History from earlier ubatches is prepended, so decode and chunked prefill
+    // see the same context a single-shot prefill would. A fresh sequence starts
+    // with a zeroed state, which is what the reference's zero-padded nn.Conv1d
+    // gives at a sequence start.
     const int64_t kern = hparams.ple_conv_kernel;
     const int64_t dil  = hparams.ple_ngram_size;
+    const int64_t hist = (kern - 1) * dil;
+
+    // [hc_dim, hist + n_tokens], transposed to put tokens on ne[0]
+    ggml_tensor * padded = build_conv_state_at(inp, inp->mctx->get_r_l(il),
+            normalized, hist, hc_dim,
+            hparams.n_embd_r() - hparams.ple_conv_state(), il);
 
     ggml_tensor * conv_out = nullptr;
     for (int64_t k = 0; k < kern; ++k) {
-        const int64_t shift = (kern - 1 - k) * dil;
+        // tap k reads (kern-1-k)*dilation positions back
+        const int64_t start = hist - (kern - 1 - k) * dil;
 
-        ggml_tensor * shifted;
-        if (shift == 0) {
-            shifted = normalized;
-        } else if (shift >= n_tokens) {
-            continue;   // entirely out of range, contributes nothing
-        } else {
-            ggml_tensor * keep = ggml_view_2d(ctx0, normalized, hc_dim, n_tokens - shift,
-                    normalized->nb[1], 0);
-            ggml_tensor * zeros = ggml_scale(ctx0,
-                    ggml_view_2d(ctx0, normalized, hc_dim, shift, normalized->nb[1], 0), 0.0f);
-            shifted = ggml_concat(ctx0, zeros, keep, 1);
-        }
+        ggml_tensor * shifted = ggml_cont(ctx0,
+                ggml_transpose(ctx0,
+                        ggml_view_2d(ctx0, padded, n_tokens, hc_dim,
+                                padded->nb[1],
+                                ggml_row_size(padded->type, start))));
 
         // column k of the [kern, hc_dim] kernel is one weight per channel
         ggml_tensor * wk = ggml_cont(ctx0,
