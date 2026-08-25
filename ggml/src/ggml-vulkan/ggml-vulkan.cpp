@@ -17616,6 +17616,90 @@ static void ggml_vk_graph_optimize(ggml_backend_t backend, struct ggml_cgraph * 
             continue;
         }
 
+        // UNARY + EMPTY* + MUL: when only zero-compute nodes (GGML_OP_NONE,
+        // VIEW/RESHAPE/TRANSPOSE/PERMUTE - see ggml_op_is_empty) separate a UNARY
+        // from its consuming MUL, schedule them first so the pair becomes adjacent
+        // and can fuse (e.g. gemma4 per-layer embedding gating).
+        auto const &match_unary_view_mul = [&]() -> std::vector<int> {
+            const int u = first_unused;
+            if (used[u] || graph->nodes[u]->op != GGML_OP_UNARY) {
+                return {};
+            }
+            for (int k = u + 1; k < std::min(u + 15, graph->n_nodes); ++k) {
+                ggml_tensor * mul = graph->nodes[k];
+                if (used[k] || mul->op != GGML_OP_MUL ||
+                    (mul->src[0] != graph->nodes[u] && mul->src[1] != graph->nodes[u])) {
+                    continue;
+                }
+                // don't steal nodes from protected fusion patterns
+                if (match_pattern(topk_moe_early_softmax_norm, k) ||
+                    match_pattern(topk_moe_sigmoid_norm_bias, k) ||
+                    match_pattern(topk_moe_sqrt_softplus_norm_bias, k) ||
+                    match_pattern(topk_moe_early_softmax, k) ||
+                    match_pattern(topk_moe_late_softmax, k) ||
+                    match_pattern(snake_pattern, k)) {
+                    continue;
+                }
+                // every node between the unary and the mul must be an unscheduled zero-compute node
+                bool empty_only = true;
+                for (int v = u + 1; v < k; ++v) {
+                    if (used[v] || !is_empty(graph->nodes[v])) {
+                        empty_only = false;
+                        break;
+                    }
+                }
+                if (!empty_only || !ggml_vk_can_fuse_unary_mul(graph, u, k)) {
+                    continue;
+                }
+                // their sources must already be available: params or nodes
+                // scheduled before the unary
+                bool srcs_ok = true;
+                for (int v = u + 1; v < k && srcs_ok; ++v) {
+                    for (int s = 0; s < GGML_MAX_SRC && graph->nodes[v]->src[s] != nullptr; ++s) {
+                        ggml_tensor * src = graph->nodes[v]->src[s];
+                        if (src->op == GGML_OP_NONE || used_node_set.find(src) != used_node_set.end()) {
+                            continue;
+                        }
+                        bool scheduled_before = false;
+                        for (int t = 0; t < u; ++t) {
+                            if (graph->nodes[t] == src) {
+                                scheduled_before = true;
+                                break;
+                            }
+                        }
+                        if (!scheduled_before) {
+                            srcs_ok = false;
+                            break;
+                        }
+                    }
+                }
+                if (!srcs_ok) {
+                    continue;
+                }
+                std::vector<int> order;
+                for (int v = u + 1; v < k; ++v) {
+                    order.push_back(v);
+                }
+                order.push_back(u);
+                order.push_back(k);
+                return order;
+            }
+            return {};
+        };
+
+        std::vector<int> hoist_set = match_unary_view_mul();
+        if (!hoist_set.empty()) {
+            for (int idx : hoist_set) {
+                new_order.push_back(graph->nodes[idx]);
+                used_node_set.insert(graph->nodes[idx]);
+                used[idx] = true;
+            }
+            while (first_unused < graph->n_nodes && used[first_unused]) {
+                first_unused++;
+            }
+            continue;
+        }
+
         // First, grab the next unused node.
         current_set.push_back(first_unused);
 
