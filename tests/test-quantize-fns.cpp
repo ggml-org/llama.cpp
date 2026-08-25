@@ -89,8 +89,9 @@ static float dot_product_error(const ggml_type_traits_cpu * qfns_cpu, ggml_type 
                                const float * test_data3, const float * test_data4,
                                const int nrc) {
     const auto * vdot = ggml_get_type_traits_cpu(qfns_cpu->vec_dot_type);
-    const size_t bx   = ggml_row_size(src0_type, test_size);
-    const size_t by   = ggml_row_size(qfns_cpu->vec_dot_type, test_size);
+    const size_t pad  = 64;
+    const size_t bx   = ggml_row_size(src0_type, test_size) + pad;
+    const size_t by   = ggml_row_size(qfns_cpu->vec_dot_type, test_size) + pad;
 
     std::vector<uint8_t> tmp_q1(bx * nrc);
     std::vector<uint8_t> tmp_q2(by * nrc);
@@ -108,12 +109,13 @@ static float dot_product_error(const ggml_type_traits_cpu * qfns_cpu, ggml_type 
 
     // nrc == 2: kernel computes a 2x2 dot product matrix
     // Output layout: s[0]=dot(vx0,vy0), s[1]=dot(vx1,vy0), s[bs]=dot(vx0,vy1), s[bs+1]=dot(vx1,vy1)
+    // row and output strides are padded, same as in the mul_mat path
     qfns_cpu->from_float(test_data3, tmp_q1.data() + bx, test_size);
     vdot->from_float(test_data4, tmp_q2.data() + by, test_size);
 
-    const size_t bs = 2;
-    float result[4] = {INFINITY, INFINITY, INFINITY, INFINITY};
-    qfns_cpu->vec_dot(test_size, result, bs, tmp_q1.data(), bx, tmp_q2.data(), by, 2);
+    const size_t bs = 16;
+    std::vector<float> result(bs + 2, INFINITY);
+    qfns_cpu->vec_dot(test_size, result.data(), bs, tmp_q1.data(), bx, tmp_q2.data(), by, 2);
 
     const float ref00 = dot_product(test_data1, test_data2, test_size);
     const float ref10 = dot_product(test_data3, test_data2, test_size);
