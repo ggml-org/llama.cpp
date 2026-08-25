@@ -546,7 +546,8 @@ static void set_rows_sycl(ggml_backend_sycl_context & ctx, const ggml_tensor * s
                 stream);
             break;
         default:
-            GGML_ABORT("Unsupported tensor type!");
+            GGML_ABORT("Unsupported tensor type: src0 %s src1 %s dst %s", ggml_type_name(dst->src[0]->type),
+                ggml_type_name(dst->src[1]->type), ggml_type_name(dst->type));
             break;
     }
 }
