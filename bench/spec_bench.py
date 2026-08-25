@@ -28,6 +28,12 @@ PRESETS = {
         "target_quant": "Q4_0_ROCMFP4_FAST", "draft_quant": "Q4_0_ROCMFP4_FAST",
         "method": "draft-dflash",
     },
+    "ornith-mtp": {
+        "target": HF / "models--ornith-ai--Ornith-1.5-35B-A3B-GGUF/snapshots/12393612fd4f730ff5aadc23e9b8f9648aa49ceb/Ornith-1.5-35B-Q4_K_M.gguf",
+        "draft":  None,                      # MTP drafts from the target's own nextn layers
+        "target_quant": "Q4_K_M", "draft_quant": None,
+        "method": "draft-mtp",
+    },
     "kquant": {
         "target": HF / "models--unsloth--Qwen3.8-27B-GGUF/snapshots/f1bfb127c64f7072bdd2cad55f258b9c8b2910fe/Qwen3.8-27B-UD-Q4_K_XL.gguf",
         "draft":  HF / "models--z-lab--Qwen3.8-27B-DFlash2-GGUF/snapshots/57ab3265056d4024870b0621cfc2c127537020ed/Qwen3.8-27B-DFlash2-Q8_0.gguf",
@@ -41,6 +47,11 @@ ARMS = [
     ("fixed-n3",    True,  ["--spec-draft-n-max", "3"]),
     ("fixed-n7",    True,  ["--spec-draft-n-max", "7"]),
     ("adaptive",    True,  ["--spec-draft-n-max", "7", "--spec-draft-adaptive", "--spec-draft-n-min", "3"]),
+    # MTP wants a tight cap: the EMA maximises accepted tokens, not throughput, and for MTP those
+    # diverge because later nextn layers are less accurate while cost stays linear in n. Capping at
+    # 4 is what the measured data points at, and is what this fork recommends.
+    ("fixed-n4",    True,  ["--spec-draft-n-max", "4"]),
+    ("adaptive-2-4", True, ["--spec-draft-n-max", "4", "--spec-draft-adaptive", "--spec-draft-n-min", "2"]),
 ]
 
 TASKS = {
@@ -96,7 +107,7 @@ def gpu_containers(stop: bool):
 
 
 @contextlib.contextmanager
-def server(target, draft, method, port, extra, ctx, log_path):
+def server(target, draft, method, port, extra, ctx, log_path, spec=True):
     """Start llama-server, wait for health, and guarantee it is gone afterwards."""
     for _ in range(60):
         if port_free(port):
@@ -110,8 +121,10 @@ def server(target, draft, method, port, extra, ctx, log_path):
         time.sleep(2)
 
     cmd = [str(SERVER), "-m", str(target)]
-    if draft:
-        cmd += ["-md", str(draft), "--spec-type", method, "--spec-draft-ngl", "99"]
+    if spec:
+        cmd += ["--spec-type", method]
+        if draft:                      # MTP has no sidecar; it drafts from the target's nextn layers
+            cmd += ["-md", str(draft), "--spec-draft-ngl", "99"]
     cmd += ["--host", "127.0.0.1", "--port", str(port), "-fa", "on", "-ngl", "999",
             "-c", str(ctx)] + extra
 
@@ -182,7 +195,7 @@ def main():
     ctx = args.ctx or max(8192, max(depths) + args.n_predict + 4096)
     out = pathlib.Path(args.out) if args.out else HERE / f"results-spec-{args.preset}.jsonl"
 
-    for path in (SERVER, cfg["target"], cfg["draft"]):
+    for path in [SERVER, cfg["target"]] + ([cfg["draft"]] if cfg["draft"] else []):
         if not pathlib.Path(path).exists():
             sys.exit(f"missing: {path}")
 
@@ -210,7 +223,8 @@ def main():
                     label = args.label
                 try:
                     with server(cfg["target"], cfg["draft"] if use_draft else None, cfg["method"],
-                                args.port, extra, ctx, f"/tmp/spec-{args.preset}-{label}.log"):
+                                args.port, extra, ctx, f"/tmp/spec-{args.preset}-{label}.log",
+                                spec=use_draft):
                         for depth in depths:
                             filler = build_filler(depth)
                             line = []
@@ -229,7 +243,7 @@ def main():
                                     "workload": workload, "depth": depth, "power": power,
                                     "gpu_temp_c": int(temp) // 1000 if temp.isdigit() else None,
                                     "target": cfg["target"].name, "target_quant": cfg["target_quant"],
-                                    "draft": cfg["draft"].name if use_draft else None,
+                                    "draft": (cfg["draft"].name if cfg["draft"] else "(target nextn)") if use_draft else None,
                                     "draft_quant": cfg["draft_quant"] if use_draft else None,
                                     "spec_method": cfg["method"] if use_draft else "none",
                                     "prompt_n": t.get("prompt_n"),
