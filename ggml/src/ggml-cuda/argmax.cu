@@ -140,9 +140,10 @@ void ggml_cuda_argmax(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     int32_t     * dst_d  = (int32_t     *) dst->data;
     cudaStream_t stream = ctx.stream();
 
-    if (ne00 >= ARGMAX_TILE) {
-        const int64_t ntiles = (ne00 + ARGMAX_TILE - 1) / ARGMAX_TILE;
+    // With fewer than 4 tiles the second launch and the combine pass cost more than the parallelism they add.
+    const int64_t ntiles = (ne00 + ARGMAX_TILE - 1) / ARGMAX_TILE;
 
+    if (ntiles >= 4) {
         ggml_cuda_pool_alloc<float>   part_val(ctx.pool(), nrows * ntiles);
         ggml_cuda_pool_alloc<int32_t> part_idx(ctx.pool(), nrows * ntiles);
 
