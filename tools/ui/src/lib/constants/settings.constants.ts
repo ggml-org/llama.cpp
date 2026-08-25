@@ -56,6 +56,9 @@ export const SETTINGS_SECTION_TITLES = {
 	TOOLS: SETTINGS_SECTIONS.TOOLS.title
 } as const;
 
+/** Transcription model setting value that auto-picks the first loaded audio model. */
+export const TRANSCRIPTION_MODEL_AUTO = '';
+
 export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 	// General
 	{
@@ -118,13 +121,13 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 				type: SettingsFieldType.CHECKBOX
 			},
 			{
-				defaultValue: '',
+				defaultValue: TRANSCRIPTION_MODEL_AUTO,
 				dependsOn: SETTINGS_KEYS.AUTO_MIC_ON_EMPTY,
 				help: 'Model used to transcribe mic input when the current model does not take audio. Auto picks the first loaded model with audio input.',
 				key: SETTINGS_KEYS.TRANSCRIPTION_MODEL,
 				label: 'Transcription model',
 				optionsGenerator: (models) => [
-					{ label: 'Auto (first loaded audio model)', value: '' },
+					{ label: 'Auto (first loaded audio model)', value: TRANSCRIPTION_MODEL_AUTO },
 					...models
 						.filter((m) => m.modalities?.audio)
 						.map((m) => ({ label: m.name, value: m.model }))

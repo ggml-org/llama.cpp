@@ -7,7 +7,7 @@
  * {@link ModelsStore.status}; tracks which conversations use which models.
  */
 
-import { FAVORITE_MODELS_LOCALSTORAGE_KEY } from '$lib/constants';
+import { FAVORITE_MODELS_LOCALSTORAGE_KEY, TRANSCRIPTION_MODEL_AUTO } from '$lib/constants';
 import { ServerModelStatus } from '$lib/enums';
 import { ModelsService } from '$lib/services/models.service';
 // direct imports between stores, not via the barrel, to avoid circular deps
@@ -126,7 +126,7 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 		const isUsable = (m: ModelOption) => m.modalities?.audio && this.isModelLoaded(m.model);
 		const preferred = settingsStore.config.transcriptionModel;
 
-		if (typeof preferred === 'string' && preferred) {
+		if (typeof preferred === 'string' && preferred !== TRANSCRIPTION_MODEL_AUTO) {
 			const model = this.models.find((m) => m.model === preferred && isUsable(m));
 
 			if (model) return model.model;
