@@ -1,0 +1,267 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>llama.cpp Strix Halo fork — benchmark results</title>
+<style>
+    :root { color-scheme: light dark; }
+    .viz-root {
+      color-scheme: light;
+      --surface-1: #fcfcfb; --text-primary: #0b0b0b; --text-secondary: #52514e;
+      --text-muted: #767570; --grid: #e7e6e2;
+      --series-1: #2a78d6; --series-2: #eb6834; --series-3: #1baf7a;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root:where(:not([data-theme="light"])) .viz-root {
+        color-scheme: dark;
+        --surface-1: #1a1a19; --text-primary: #ffffff; --text-secondary: #c3c2b7;
+        --text-muted: #96958c; --grid: #33322f;
+        --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70;
+      }
+    }
+    :root[data-theme="dark"] .viz-root {
+      color-scheme: dark;
+      --surface-1: #1a1a19; --text-primary: #ffffff; --text-secondary: #c3c2b7;
+      --text-muted: #96958c; --grid: #33322f;
+      --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70;
+    }
+    body { margin: 0; background: var(--surface-1); color: var(--text-primary);
+           font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+    .viz-root { max-width: 1000px; margin: 0 auto; padding: 40px 24px 80px; }
+    h1 { font-size: 26px; margin: 0 0 6px; letter-spacing: -0.01em; }
+    .lede { color: var(--text-secondary); margin: 0 0 8px; max-width: 68ch; }
+    .caveat { color: var(--text-muted); font-size: 13px; max-width: 68ch;
+              border-left: 2px solid var(--grid); padding-left: 12px; margin: 16px 0 40px; }
+    .chart { margin: 0 0 52px; }
+    .chart figcaption h3 { font-size: 17px; margin: 0 0 4px; }
+    .chart figcaption p { margin: 0 0 14px; color: var(--text-secondary); font-size: 13.5px;
+                          max-width: 72ch; }
+    svg { width: 100%; height: auto; overflow: visible; }
+    .axis { stroke: var(--grid); stroke-width: 1; }
+    .grid { stroke: var(--grid); stroke-width: 1; }
+    .tick, .cat { fill: var(--text-secondary); font-size: 12.5px; }
+    .axlabel { fill: var(--text-muted); font-size: 12px; }
+    .val, .endlabel { fill: var(--text-primary); font-size: 12.5px; font-weight: 600; }
+    .line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+    .dot { stroke: var(--surface-1); stroke-width: 2; }
+    .bar-row:hover .bar, .bar-row:focus .bar { opacity: 0.82; }
+    .bar-row:focus { outline: none; }
+    .bar-row:focus .cat { fill: var(--text-primary); font-weight: 600; }
+    .legend { display: flex; gap: 18px; flex-wrap: wrap; margin: 0 0 10px; font-size: 13px;
+              color: var(--text-secondary); }
+    .key { display: inline-flex; align-items: center; gap: 7px; }
+    .key i { width: 14px; height: 3px; border-radius: 2px; display: inline-block; }
+    .tableview { margin: -34px 0 52px; font-size: 13px; }
+    .tableview summary { cursor: pointer; color: var(--text-muted); }
+    table { border-collapse: collapse; margin-top: 12px; width: 100%; }
+    th, td { text-align: left; padding: 5px 12px 5px 0; border-bottom: 1px solid var(--grid); }
+    th { color: var(--text-muted); font-weight: 600; }
+    .missing figcaption p { color: var(--text-muted); }
+    code { font-size: 12.5px; background: var(--grid); padding: 1px 5px; border-radius: 3px; }
+    </style></head>
+<body><main class="viz-root">
+  <h1>Strix Halo Vulkan fork — benchmark results</h1>
+  <p class="lede">Radeon 8060S (gfx1151, RDNA 3.5), RADV / Mesa 26.0.8. Upstream pinned at
+  <code>95b8e33e1</code>, the exact commit this fork merged, so deltas are this fork's changes and
+  not upstream drift.</p>
+  <p class="caveat"><strong>Read deltas across charts, not absolutes.</strong> The fork-vs-upstream
+  and gate figures are ratios measured within one session on one power profile with interleaved
+  arms — those hold. Absolute t/s depends on the power profile, and the speculative chart was taken
+  on a short high-power burst (79 °C, 115 W) that this chassis cannot sustain all day. Every
+  generation figure carries its context depth: these models declare 262144 context and generation at
+  depth is roughly a third of its depth-0 value.</p>
+  
+  <figure class="chart">
+    <figcaption><h3>Vulkan gate ablations</h3><p>pp2048 at ubatch 2048, each gate on vs off in one binary. Three models, three quant families.</p></figcaption>
+    <svg viewBox="0 0 900 448" role="img" aria-label="Vulkan gate ablations">
+      <line class="axis" x1="279.3737769080235" y1="0" x2="279.3737769080235" y2="442"/>
+      
+      <g class="bar-row" tabindex="0">
+        <title>CONCAT_TRANSPOSE · Q6_K_P: +49.3% — Qwen3.6-35B-A3B HauhauCS</title>
+        <text class="cat" x="248" y="22.0" text-anchor="end">CONCAT_TRANSPOSE · Q6_K_P</text>
+        <path class="bar" d="M279.3737769080235 0 h526.6262230919765 a4 4 0 0 1 4 4 v26 a4 4 0 0 1 -4 4 H279.3737769080235 Z" fill="var(--series-1)"/>
+        <text class="val" x="818.0" y="22.0" text-anchor="start">+49.3%</text>
+      </g>
+      <g class="bar-row" tabindex="0">
+        <title>CONCAT_TRANSPOSE · Q4_K_M: +45.1% — Ornith-1.5-35B-A3B</title>
+        <text class="cat" x="248" y="66.0" text-anchor="end">CONCAT_TRANSPOSE · Q4_K_M</text>
+        <path class="bar" d="M279.3737769080235 44 h481.42074363992174 a4 4 0 0 1 4 4 v26 a4 4 0 0 1 -4 4 H279.3737769080235 Z" fill="var(--series-1)"/>
+        <text class="val" x="772.7945205479452" y="66.0" text-anchor="start">+45.1%</text>
+      </g>
+      <g class="bar-row" tabindex="0">
+        <title>MMID_F16B · Q6_K_P: +9.1% — Qwen3.6-35B-A3B HauhauCS</title>
+        <text class="cat" x="248" y="110.0" text-anchor="end">MMID_F16B · Q6_K_P</text>
+        <path class="bar" d="M279.3737769080235 88 h93.94520547945206 a4 4 0 0 1 4 4 v26 a4 4 0 0 1 -4 4 H279.3737769080235 Z" fill="var(--series-1)"/>
+        <text class="val" x="385.31898238747556" y="110.0" text-anchor="start">+9.1%</text>
+      </g>
+      <g class="bar-row" tabindex="0">
+        <title>MMID_F16B · Q4_K_M: +6.9% — Ornith-1.5-35B-A3B</title>
+        <text class="cat" x="248" y="154.0" text-anchor="end">MMID_F16B · Q4_K_M</text>
+        <path class="bar" d="M279.3737769080235 132 h70.26614481409001 a4 4 0 0 1 4 4 v26 a4 4 0 0 1 -4 4 H279.3737769080235 Z" fill="var(--series-1)"/>
+        <text class="val" x="361.6399217221135" y="154.0" text-anchor="start">+6.9%</text>
+      </g>
+      <g class="bar-row" tabindex="0">
+        <title>DENSE_F16B · Q6_K_P: +5.8% — Qwen3.6-35B-A3B HauhauCS</title>
+        <text class="cat" x="248" y="198.0" text-anchor="end">DENSE_F16B · Q6_K_P</text>
+        <path class="bar" d="M279.3737769080235 176 h58.42661448140899 a4 4 0 0 1 4 4 v26 a4 4 0 0 1 -4 4 H279.3737769080235 Z" fill="var(--series-1)"/>
+        <text class="val" x="349.8003913894325" y="198.0" text-anchor="start">+5.8%</text>
+      </g>
+      <g class="bar-row" tabindex="0">
+        <title>DENSE_F16B · Q4_K_XL: +4.5% — Qwen3.8-27B UD-Q4_K_XL</title>
+        <text class="cat" x="248" y="242.0" text-anchor="end">DENSE_F16B · Q4_K_XL</text>
+        <path class="bar" d="M279.3737769080235 220 h44.434442270058696 a4 4 0 0 1 4 4 v26 a4 4 0 0 1 -4 4 H279.3737769080235 Z" fill="var(--series-1)"/>
+        <text class="val" x="335.8082191780822" y="242.0" text-anchor="start">+4.5%</text>
+      </g>
+      <g class="bar-row" tabindex="0">
+        <title>CONCAT_TRANSPOSE · Q4_K_XL: +3.3% — Qwen3.8-27B UD-Q4_K_XL</title>
+        <text class="cat" x="248" y="286.0" text-anchor="end">CONCAT_TRANSPOSE · Q4_K_XL</text>
+        <path class="bar" d="M279.3737769080235 264 h31.51859099804301 a4 4 0 0 1 4 4 v26 a4 4 0 0 1 -4 4 H279.3737769080235 Z" fill="var(--series-1)"/>
+        <text class="val" x="322.8923679060665" y="286.0" text-anchor="start">+3.3%</text>
+      </g>
+      <g class="bar-row" tabindex="0">
+        <title>FUSE_UNARY_MUL · Q4_K_XL: +0.1% — Qwen3.8-27B UD-Q4_K_XL</title>
+        <text class="cat" x="248" y="330.0" text-anchor="end">FUSE_UNARY_MUL · Q4_K_XL</text>
+        <path class="bar" d="M279.3737769080235 308 h-2.5 a4 4 0 0 1 4 4 v26 a4 4 0 0 1 -4 4 H279.3737769080235 Z" fill="var(--series-1)"/>
+        <text class="val" x="288.8737769080235" y="330.0" text-anchor="start">+0.1%</text>
+      </g>
+      <g class="bar-row" tabindex="0">
+        <title>MMID_WAVE32 · Q4_K_M: -0.6% — Ornith-1.5-35B-A3B</title>
+        <text class="cat" x="248" y="374.0" text-anchor="end">MMID_WAVE32 · Q4_K_M</text>
+        <path class="bar" d="M279.3737769080235 352 H276.91585127201563 a4 4 0 0 0 -4 4 v26 a4 4 0 0 0 4 4 h2.4579256360078716 Z" fill="var(--series-1)"/>
+        <text class="val" x="264.91585127201563" y="374.0" text-anchor="end">-0.6%</text>
+      </g>
+      <g class="bar-row" tabindex="0">
+        <title>MMID_WG256 · Q4_K_M: -1.8% — Ornith-1.5-35B-A3B</title>
+        <text class="cat" x="248" y="418.0" text-anchor="end">MMID_WG256 · Q4_K_M</text>
+        <path class="bar" d="M279.3737769080235 396 H264.0 a4 4 0 0 0 -4 4 v26 a4 4 0 0 0 4 4 h15.373776908023501 Z" fill="var(--series-1)"/>
+        <text class="val" x="252.0" y="418.0" text-anchor="end">-1.8%</text>
+      </g>
+    </svg>
+  </figure><details class="tableview"><summary>Gate ablations — table view</summary><table><thead><tr><th>gate</th><th>model</th><th>quant</th><th>off t/s</th><th>on t/s</th><th>delta %</th></tr></thead><tbody><tr><td>CONCAT_TRANSPOSE</td><td>Qwen3.8-27B UD-Q4_K_XL</td><td>Q4_K_XL</td><td>252.0</td><td>260.4</td><td>+3.3</td></tr><tr><td>DENSE_F16B</td><td>Qwen3.8-27B UD-Q4_K_XL</td><td>Q4_K_XL</td><td>252.0</td><td>263.0</td><td>+4.5</td></tr><tr><td>FUSE_UNARY_MUL</td><td>Qwen3.8-27B UD-Q4_K_XL</td><td>Q4_K_XL</td><td>252.0</td><td>251.4</td><td>+0.1</td></tr><tr><td>CONCAT_TRANSPOSE</td><td>Ornith-1.5-35B-A3B</td><td>Q4_K_M</td><td>819.2</td><td>1188.3</td><td>+45.1</td></tr><tr><td>MMID_F16B</td><td>Ornith-1.5-35B-A3B</td><td>Q4_K_M</td><td>815.7</td><td>872.2</td><td>+6.9</td></tr><tr><td>MMID_WAVE32</td><td>Ornith-1.5-35B-A3B</td><td>Q4_K_M</td><td>810.0</td><td>805.3</td><td>-0.6</td></tr><tr><td>MMID_WG256</td><td>Ornith-1.5-35B-A3B</td><td>Q4_K_M</td><td>805.0</td><td>790.3</td><td>-1.8</td></tr><tr><td>CONCAT_TRANSPOSE</td><td>Qwen3.6-35B-A3B HauhauCS</td><td>Q6_K_P</td><td>884.2</td><td>1320.3</td><td>+49.3</td></tr><tr><td>MMID_F16B</td><td>Qwen3.6-35B-A3B HauhauCS</td><td>Q6_K_P</td><td>1204.7</td><td>1314.0</td><td>+9.1</td></tr><tr><td>DENSE_F16B</td><td>Qwen3.6-35B-A3B HauhauCS</td><td>Q6_K_P</td><td>1253.7</td><td>1326.1</td><td>+5.8</td></tr></tbody></table></details>
+  <figure class="chart">
+    <figcaption><h3>Speculative decoding — FP4 target, FP4 draft (peak power profile)</h3><p>Qwen3.8-27B-ROCmFP4-FAST + DFlash2 FP4 sidecar, greedy, 300 tokens, depth 0. Absolute t/s, higher is better.</p></figcaption>
+    <svg viewBox="0 0 900 360" role="img" aria-label="Speculative decoding — FP4 target, FP4 draft (peak power profile)">
+      <line class="axis" x1="260.0" y1="0" x2="260.0" y2="354"/>
+      
+      <g class="bar-row" tabindex="0">
+        <title>bare-decode · prose: +14.1 t/s — no draft</title>
+        <text class="cat" x="248" y="22.0" text-anchor="end">bare-decode · prose</text>
+        <path class="bar" d="M260.0 0 h114.05275346562689 a4 4 0 0 1 4 4 v26 a4 4 0 0 1 -4 4 H260.0 Z" fill="var(--series-1)"/>
+        <text class="val" x="386.0527534656269" y="22.0" text-anchor="start">+14.1 t/s</text>
+      </g>
+      <g class="bar-row" tabindex="0">
+        <title>bare-decode · json: +14.0 t/s — no draft</title>
+        <text class="cat" x="248" y="66.0" text-anchor="end">bare-decode · json</text>
+        <path class="bar" d="M260.0 44 h113.35112906559374 a4 4 0 0 1 4 4 v26 a4 4 0 0 1 -4 4 H260.0 Z" fill="var(--series-1)"/>
+        <text class="val" x="385.35112906559374" y="66.0" text-anchor="start">+14.0 t/s</text>
+      </g>
+      <g class="bar-row" tabindex="0">
+        <title>fixed-n3 · prose: +25.4 t/s — acceptance 44%</title>
+        <text class="cat" x="248" y="110.0" text-anchor="end">fixed-n3 · prose</text>
+        <path class="bar" d="M260.0 88 h208.64700178966626 a4 4 0 0 1 4 4 v26 a4 4 0 0 1 -4 4 H260.0 Z" fill="var(--series-1)"/>
+        <text class="val" x="480.64700178966626" y="110.0" text-anchor="start">+25.4 t/s</text>
+      </g>
+      <g class="bar-row" tabindex="0">
+        <title>fixed-n3 · json: +41.6 t/s — acceptance 95%</title>
+        <text class="cat" x="248" y="154.0" text-anchor="end">fixed-n3 · json</text>
+        <path class="bar" d="M260.0 132 h345.0996825430409 a4 4 0 0 1 4 4 v26 a4 4 0 0 1 -4 4 H260.0 Z" fill="var(--series-1)"/>
+        <text class="val" x="617.0996825430409" y="154.0" text-anchor="start">+41.6 t/s</text>
+      </g>
+      <g class="bar-row" tabindex="0">
+        <title>fixed-n7 · prose: +24.8 t/s — acceptance 25%</title>
+        <text class="cat" x="248" y="198.0" text-anchor="end">fixed-n7 · prose</text>
+        <path class="bar" d="M260.0 176 h204.16789905760356 a4 4 0 0 1 4 4 v26 a4 4 0 0 1 -4 4 H260.0 Z" fill="var(--series-1)"/>
+        <text class="val" x="476.16789905760356" y="198.0" text-anchor="start">+24.8 t/s</text>
+      </g>
+      <g class="bar-row" tabindex="0">
+        <title>fixed-n7 · json: +20.2 t/s — acceptance 18%</title>
+        <text class="cat" x="248" y="242.0" text-anchor="end">fixed-n7 · json</text>
+        <path class="bar" d="M260.0 220 h165.1919605897026 a4 4 0 0 1 4 4 v26 a4 4 0 0 1 -4 4 H260.0 Z" fill="var(--series-1)"/>
+        <text class="val" x="437.1919605897026" y="242.0" text-anchor="start">+20.2 t/s</text>
+      </g>
+      <g class="bar-row" tabindex="0">
+        <title>adaptive · prose: +26.1 t/s — acceptance 44%</title>
+        <text class="cat" x="248" y="286.0" text-anchor="end">adaptive · prose</text>
+        <path class="bar" d="M260.0 264 h215.21268414713245 a4 4 0 0 1 4 4 v26 a4 4 0 0 1 -4 4 H260.0 Z" fill="var(--series-1)"/>
+        <text class="val" x="487.21268414713245" y="286.0" text-anchor="start">+26.1 t/s</text>
+      </g>
+      <g class="bar-row" tabindex="0">
+        <title>adaptive · json: +65.6 t/s — acceptance 96%</title>
+        <text class="cat" x="248" y="330.0" text-anchor="end">adaptive · json</text>
+        <path class="bar" d="M260.0 308 h546.0 a4 4 0 0 1 4 4 v26 a4 4 0 0 1 -4 4 H260.0 Z" fill="var(--series-1)"/>
+        <text class="val" x="818.0" y="330.0" text-anchor="start">+65.6 t/s</text>
+      </g>
+    </svg>
+  </figure><details class="tableview"><summary>Speculative arms — table view</summary><table><thead><tr><th>policy</th><th>workload</th><th>t/s</th><th>acceptance</th><th>power</th></tr></thead><tbody><tr><td>bare-decode</td><td>prose</td><td>14.07</td><td>—</td><td>auto/performance</td></tr><tr><td>bare-decode</td><td>json</td><td>13.99</td><td>—</td><td>auto/performance</td></tr><tr><td>fixed-n3</td><td>prose</td><td>25.35</td><td>44%</td><td>auto/performance</td></tr><tr><td>fixed-n3</td><td>json</td><td>41.62</td><td>95%</td><td>auto/performance</td></tr><tr><td>fixed-n7</td><td>prose</td><td>24.82</td><td>25%</td><td>auto/performance</td></tr><tr><td>fixed-n7</td><td>json</td><td>20.17</td><td>18%</td><td>auto/performance</td></tr><tr><td>adaptive</td><td>prose</td><td>26.14</td><td>44%</td><td>auto/performance</td></tr><tr><td>adaptive</td><td>json</td><td>65.57</td><td>96%</td><td>auto/performance</td></tr></tbody></table></details>
+  <figure class="chart">
+    <figcaption><h3>Prefill: fork vs pinned upstream, against context depth</h3><p>Percent difference against upstream 95b8e33e1, the exact commit this fork merged. ubatch 512, flash attention on, palindrome-ordered arms.</p></figcaption>
+    <div class="legend"><span class="key"><i style="background:var(--series-1)"></i>qwen38-27b-q4kxl</span><span class="key"><i style="background:var(--series-2)"></i>ornith-35b-a3b-q4km</span></div>
+    <svg viewBox="0 0 900 380" role="img" aria-label="Prefill: fork vs pinned upstream, against context depth">
+      <line class="grid" x1="70" y1="334.0" x2="770" y2="334.0"/><text class="tick" x="60" y="338.0" text-anchor="end">0</text><line class="grid" x1="70" y1="271.2" x2="770" y2="271.2"/><text class="tick" x="60" y="275.2" text-anchor="end">3</text><line class="grid" x1="70" y1="208.4" x2="770" y2="208.4"/><text class="tick" x="60" y="212.4" text-anchor="end">6</text><line class="grid" x1="70" y1="145.6" x2="770" y2="145.6"/><text class="tick" x="60" y="149.6" text-anchor="end">9</text><line class="grid" x1="70" y1="82.8" x2="770" y2="82.8"/><text class="tick" x="60" y="86.8" text-anchor="end">12</text><line class="grid" x1="70" y1="20.0" x2="770" y2="20.0"/><text class="tick" x="60" y="24.0" text-anchor="end">15</text><text class="tick" x="70.0" y="354" text-anchor="middle">0</text><text class="tick" x="245.0" y="354" text-anchor="middle">4,096</text><text class="tick" x="420.0" y="354" text-anchor="middle">16,384</text><text class="tick" x="595.0" y="354" text-anchor="middle">32,768</text><text class="tick" x="770.0" y="354" text-anchor="middle">65,536</text>
+      <line class="axis" x1="70" y1="20" x2="70" y2="334"/>
+      <line class="axis" x1="70" y1="334" x2="770" y2="334"/>
+      <text class="axlabel" x="420" y="374" text-anchor="middle">context depth (tokens)</text>
+      <text class="axlabel" transform="rotate(-90 16 190)" x="16" y="190" text-anchor="middle">Prefill delta vs upstream (%)</text>
+      <path class="line" d="M70.0 53.6 L245.0 83.9 L420.0 137.1 L595.0 157.4 L770.0 234.1" stroke="var(--series-1)"/><circle class="dot" cx="70.0" cy="53.6" r="4.5" fill="var(--series-1)"><title>qwen38-27b-q4kxl — context depth (tokens) 0: 13.0%</title></circle><circle class="dot" cx="245.0" cy="83.9" r="4.5" fill="var(--series-1)"><title>qwen38-27b-q4kxl — context depth (tokens) 4,096: 11.6%</title></circle><circle class="dot" cx="420.0" cy="137.1" r="4.5" fill="var(--series-1)"><title>qwen38-27b-q4kxl — context depth (tokens) 16,384: 9.1%</title></circle><circle class="dot" cx="595.0" cy="157.4" r="4.5" fill="var(--series-1)"><title>qwen38-27b-q4kxl — context depth (tokens) 32,768: 8.2%</title></circle><circle class="dot" cx="770.0" cy="234.1" r="4.5" fill="var(--series-1)"><title>qwen38-27b-q4kxl — context depth (tokens) 65,536: 4.6%</title></circle><text class="endlabel" x="782.0" y="238.1">4.6%</text><path class="line" d="M70.0 61.4 L245.0 117.3 L420.0 207.0 L595.0 223.2 L770.0 353.5" stroke="var(--series-2)"/><circle class="dot" cx="70.0" cy="61.4" r="4.5" fill="var(--series-2)"><title>ornith-35b-a3b-q4km — context depth (tokens) 0: 12.6%</title></circle><circle class="dot" cx="245.0" cy="117.3" r="4.5" fill="var(--series-2)"><title>ornith-35b-a3b-q4km — context depth (tokens) 4,096: 10.0%</title></circle><circle class="dot" cx="420.0" cy="207.0" r="4.5" fill="var(--series-2)"><title>ornith-35b-a3b-q4km — context depth (tokens) 16,384: 5.9%</title></circle><circle class="dot" cx="595.0" cy="223.2" r="4.5" fill="var(--series-2)"><title>ornith-35b-a3b-q4km — context depth (tokens) 32,768: 5.1%</title></circle><circle class="dot" cx="770.0" cy="353.5" r="4.5" fill="var(--series-2)"><title>ornith-35b-a3b-q4km — context depth (tokens) 65,536: -0.9%</title></circle><text class="endlabel" x="782.0" y="357.5">-0.9%</text>
+    </svg>
+  </figure>
+  <figure class="chart">
+    <figcaption><h3>Generation: fork vs pinned upstream, against context depth</h3><p>Percent difference against upstream 95b8e33e1, the exact commit this fork merged. ubatch 512, flash attention on, palindrome-ordered arms.</p></figcaption>
+    <div class="legend"><span class="key"><i style="background:var(--series-1)"></i>qwen38-27b-q4kxl</span><span class="key"><i style="background:var(--series-2)"></i>ornith-35b-a3b-q4km</span></div>
+    <svg viewBox="0 0 900 380" role="img" aria-label="Generation: fork vs pinned upstream, against context depth">
+      <line class="grid" x1="70" y1="334.0" x2="770" y2="334.0"/><text class="tick" x="60" y="338.0" text-anchor="end">0</text><line class="grid" x1="70" y1="271.2" x2="770" y2="271.2"/><text class="tick" x="60" y="275.2" text-anchor="end">0</text><line class="grid" x1="70" y1="208.4" x2="770" y2="208.4"/><text class="tick" x="60" y="212.4" text-anchor="end">1</text><line class="grid" x1="70" y1="145.6" x2="770" y2="145.6"/><text class="tick" x="60" y="149.6" text-anchor="end">1</text><line class="grid" x1="70" y1="82.8" x2="770" y2="82.8"/><text class="tick" x="60" y="86.8" text-anchor="end">2</text><line class="grid" x1="70" y1="20.0" x2="770" y2="20.0"/><text class="tick" x="60" y="24.0" text-anchor="end">2</text><text class="tick" x="70.0" y="354" text-anchor="middle">0</text><text class="tick" x="245.0" y="354" text-anchor="middle">4,096</text><text class="tick" x="420.0" y="354" text-anchor="middle">16,384</text><text class="tick" x="595.0" y="354" text-anchor="middle">32,768</text><text class="tick" x="770.0" y="354" text-anchor="middle">65,536</text>
+      <line class="axis" x1="70" y1="20" x2="70" y2="334"/>
+      <line class="axis" x1="70" y1="334" x2="770" y2="334"/>
+      <text class="axlabel" x="420" y="374" text-anchor="middle">context depth (tokens)</text>
+      <text class="axlabel" transform="rotate(-90 16 190)" x="16" y="190" text-anchor="middle">Generation delta vs upstream (%)</text>
+      <path class="line" d="M70.0 438.8 L245.0 436.1 L420.0 398.7 L595.0 427.2 L770.0 405.9" stroke="var(--series-1)"/><circle class="dot" cx="70.0" cy="438.8" r="4.5" fill="var(--series-1)"><title>qwen38-27b-q4kxl — context depth (tokens) 0: -0.7%</title></circle><circle class="dot" cx="245.0" cy="436.1" r="4.5" fill="var(--series-1)"><title>qwen38-27b-q4kxl — context depth (tokens) 4,096: -0.7%</title></circle><circle class="dot" cx="420.0" cy="398.7" r="4.5" fill="var(--series-1)"><title>qwen38-27b-q4kxl — context depth (tokens) 16,384: -0.4%</title></circle><circle class="dot" cx="595.0" cy="427.2" r="4.5" fill="var(--series-1)"><title>qwen38-27b-q4kxl — context depth (tokens) 32,768: -0.6%</title></circle><circle class="dot" cx="770.0" cy="405.9" r="4.5" fill="var(--series-1)"><title>qwen38-27b-q4kxl — context depth (tokens) 65,536: -0.5%</title></circle><text class="endlabel" x="782.0" y="409.9">-0.5%</text><path class="line" d="M70.0 262.6 L245.0 109.2 L420.0 225.4 L595.0 53.6 L770.0 420.9" stroke="var(--series-2)"/><circle class="dot" cx="70.0" cy="262.6" r="4.5" fill="var(--series-2)"><title>ornith-35b-a3b-q4km — context depth (tokens) 0: 0.5%</title></circle><circle class="dot" cx="245.0" cy="109.2" r="4.5" fill="var(--series-2)"><title>ornith-35b-a3b-q4km — context depth (tokens) 4,096: 1.5%</title></circle><circle class="dot" cx="420.0" cy="225.4" r="4.5" fill="var(--series-2)"><title>ornith-35b-a3b-q4km — context depth (tokens) 16,384: 0.7%</title></circle><circle class="dot" cx="595.0" cy="53.6" r="4.5" fill="var(--series-2)"><title>ornith-35b-a3b-q4km — context depth (tokens) 32,768: 1.8%</title></circle><circle class="dot" cx="770.0" cy="420.9" r="4.5" fill="var(--series-2)"><title>ornith-35b-a3b-q4km — context depth (tokens) 65,536: -0.6%</title></circle><text class="endlabel" x="782.0" y="424.9">-0.6%</text>
+    </svg>
+  </figure>
+  <figure class="chart">
+    <figcaption><h3>Adaptive drafting — prefill against context depth (json)</h3><p>Qwen3.8-27B UD-Q4_K_XL. MTP uses the target&#x27;s own nextn layers; DFlash2 uses the z-lab Q8_0 sidecar. Both adaptive, n_max 7, n_min 3. Degenerate runs excluded; depth 0 omitted, its ~40-token prompt measures overhead rather than prefill.</p></figcaption>
+    <div class="legend"><span class="key"><i style="background:var(--series-1)"></i>MTP adaptive</span><span class="key"><i style="background:var(--series-2)"></i>DFlash adaptive</span></div>
+    <svg viewBox="0 0 900 380" role="img" aria-label="Adaptive drafting — prefill against context depth (json)">
+      <line class="grid" x1="70" y1="334.0" x2="770" y2="334.0"/><text class="tick" x="60" y="338.0" text-anchor="end">0</text><line class="grid" x1="70" y1="271.2" x2="770" y2="271.2"/><text class="tick" x="60" y="275.2" text-anchor="end">67</text><line class="grid" x1="70" y1="208.4" x2="770" y2="208.4"/><text class="tick" x="60" y="212.4" text-anchor="end">134</text><line class="grid" x1="70" y1="145.6" x2="770" y2="145.6"/><text class="tick" x="60" y="149.6" text-anchor="end">201</text><line class="grid" x1="70" y1="82.8" x2="770" y2="82.8"/><text class="tick" x="60" y="86.8" text-anchor="end">267</text><line class="grid" x1="70" y1="20.0" x2="770" y2="20.0"/><text class="tick" x="60" y="24.0" text-anchor="end">334</text><text class="tick" x="70.0" y="354" text-anchor="middle">4,096</text><text class="tick" x="420.0" y="354" text-anchor="middle">16,384</text><text class="tick" x="770.0" y="354" text-anchor="middle">32,768</text>
+      <line class="axis" x1="70" y1="20" x2="70" y2="334"/>
+      <line class="axis" x1="70" y1="334" x2="770" y2="334"/>
+      <text class="axlabel" x="420" y="374" text-anchor="middle">context depth (tokens)</text>
+      <text class="axlabel" transform="rotate(-90 16 190)" x="16" y="190" text-anchor="middle">Prefill (t/s)</text>
+      <path class="line" d="M70.0 54.5 L420.0 140.0 L770.0 236.5" stroke="var(--series-1)"/><circle class="dot" cx="70.0" cy="54.5" r="4.5" fill="var(--series-1)"><title>MTP adaptive — context depth (tokens) 4,096: 297.6 t/s</title></circle><circle class="dot" cx="420.0" cy="140.0" r="4.5" fill="var(--series-1)"><title>MTP adaptive — context depth (tokens) 16,384: 206.5 t/s</title></circle><circle class="dot" cx="770.0" cy="236.5" r="4.5" fill="var(--series-1)"><title>MTP adaptive — context depth (tokens) 32,768: 103.8 t/s</title></circle><text class="endlabel" x="782.0" y="240.5">103.8 t/s</text><path class="line" d="M70.0 53.6 L420.0 116.1 L770.0 230.8" stroke="var(--series-2)"/><circle class="dot" cx="70.0" cy="53.6" r="4.5" fill="var(--series-2)"><title>DFlash adaptive — context depth (tokens) 4,096: 298.5 t/s</title></circle><circle class="dot" cx="420.0" cy="116.1" r="4.5" fill="var(--series-2)"><title>DFlash adaptive — context depth (tokens) 16,384: 232.0 t/s</title></circle><circle class="dot" cx="770.0" cy="230.8" r="4.5" fill="var(--series-2)"><title>DFlash adaptive — context depth (tokens) 32,768: 109.9 t/s</title></circle><text class="endlabel" x="782.0" y="234.8">109.9 t/s</text>
+    </svg>
+  </figure>
+  <figure class="chart">
+    <figcaption><h3>Adaptive drafting — prefill against context depth (prose)</h3><p>Qwen3.8-27B UD-Q4_K_XL. MTP uses the target&#x27;s own nextn layers; DFlash2 uses the z-lab Q8_0 sidecar. Both adaptive, n_max 7, n_min 3. Degenerate runs excluded; depth 0 omitted, its ~40-token prompt measures overhead rather than prefill.</p></figcaption>
+    <div class="legend"><span class="key"><i style="background:var(--series-1)"></i>MTP adaptive</span><span class="key"><i style="background:var(--series-2)"></i>DFlash adaptive</span></div>
+    <svg viewBox="0 0 900 380" role="img" aria-label="Adaptive drafting — prefill against context depth (prose)">
+      <line class="grid" x1="70" y1="334.0" x2="770" y2="334.0"/><text class="tick" x="60" y="338.0" text-anchor="end">0</text><line class="grid" x1="70" y1="271.2" x2="770" y2="271.2"/><text class="tick" x="60" y="275.2" text-anchor="end">87</text><line class="grid" x1="70" y1="208.4" x2="770" y2="208.4"/><text class="tick" x="60" y="212.4" text-anchor="end">174</text><line class="grid" x1="70" y1="145.6" x2="770" y2="145.6"/><text class="tick" x="60" y="149.6" text-anchor="end">261</text><line class="grid" x1="70" y1="82.8" x2="770" y2="82.8"/><text class="tick" x="60" y="86.8" text-anchor="end">348</text><line class="grid" x1="70" y1="20.0" x2="770" y2="20.0"/><text class="tick" x="60" y="24.0" text-anchor="end">435</text><text class="tick" x="70.0" y="354" text-anchor="middle">4,096</text><text class="tick" x="420.0" y="354" text-anchor="middle">16,384</text><text class="tick" x="770.0" y="354" text-anchor="middle">32,768</text>
+      <line class="axis" x1="70" y1="20" x2="70" y2="334"/>
+      <line class="axis" x1="70" y1="334" x2="770" y2="334"/>
+      <text class="axlabel" x="420" y="374" text-anchor="middle">context depth (tokens)</text>
+      <text class="axlabel" transform="rotate(-90 16 190)" x="16" y="190" text-anchor="middle">Prefill (t/s)</text>
+      <path class="line" d="M70.0 55.8 L770.0 222.1" stroke="var(--series-1)"/><circle class="dot" cx="70.0" cy="55.8" r="4.5" fill="var(--series-1)"><title>MTP adaptive — context depth (tokens) 4,096: 385.7 t/s</title></circle><circle class="dot" cx="770.0" cy="222.1" r="4.5" fill="var(--series-1)"><title>MTP adaptive — context depth (tokens) 32,768: 155.2 t/s</title></circle><text class="endlabel" x="782.0" y="226.1">155.2 t/s</text><path class="line" d="M70.0 53.6 L420.0 107.2 L770.0 210.1" stroke="var(--series-2)"/><circle class="dot" cx="70.0" cy="53.6" r="4.5" fill="var(--series-2)"><title>DFlash adaptive — context depth (tokens) 4,096: 388.8 t/s</title></circle><circle class="dot" cx="420.0" cy="107.2" r="4.5" fill="var(--series-2)"><title>DFlash adaptive — context depth (tokens) 16,384: 314.5 t/s</title></circle><circle class="dot" cx="770.0" cy="210.1" r="4.5" fill="var(--series-2)"><title>DFlash adaptive — context depth (tokens) 32,768: 171.8 t/s</title></circle><text class="endlabel" x="782.0" y="214.1">171.8 t/s</text>
+    </svg>
+  </figure>
+  <figure class="chart">
+    <figcaption><h3>Adaptive drafting — generation against context depth (json)</h3><p>Qwen3.8-27B UD-Q4_K_XL. MTP uses the target&#x27;s own nextn layers; DFlash2 uses the z-lab Q8_0 sidecar. Both adaptive, n_max 7, n_min 3. Degenerate runs excluded.</p></figcaption>
+    <div class="legend"><span class="key"><i style="background:var(--series-1)"></i>MTP adaptive</span><span class="key"><i style="background:var(--series-2)"></i>DFlash adaptive</span></div>
+    <svg viewBox="0 0 900 380" role="img" aria-label="Adaptive drafting — generation against context depth (json)">
+      <line class="grid" x1="70" y1="334.0" x2="770" y2="334.0"/><text class="tick" x="60" y="338.0" text-anchor="end">0</text><line class="grid" x1="70" y1="271.2" x2="770" y2="271.2"/><text class="tick" x="60" y="275.2" text-anchor="end">11</text><line class="grid" x1="70" y1="208.4" x2="770" y2="208.4"/><text class="tick" x="60" y="212.4" text-anchor="end">22</text><line class="grid" x1="70" y1="145.6" x2="770" y2="145.6"/><text class="tick" x="60" y="149.6" text-anchor="end">33</text><line class="grid" x1="70" y1="82.8" x2="770" y2="82.8"/><text class="tick" x="60" y="86.8" text-anchor="end">44</text><line class="grid" x1="70" y1="20.0" x2="770" y2="20.0"/><text class="tick" x="60" y="24.0" text-anchor="end">55</text><text class="tick" x="70.0" y="354" text-anchor="middle">0</text><text class="tick" x="303.3" y="354" text-anchor="middle">4,096</text><text class="tick" x="536.7" y="354" text-anchor="middle">16,384</text><text class="tick" x="770.0" y="354" text-anchor="middle">32,768</text>
+      <line class="axis" x1="70" y1="20" x2="70" y2="334"/>
+      <line class="axis" x1="70" y1="334" x2="770" y2="334"/>
+      <text class="axlabel" x="420" y="374" text-anchor="middle">context depth (tokens)</text>
+      <text class="axlabel" transform="rotate(-90 16 190)" x="16" y="190" text-anchor="middle">Generation (t/s)</text>
+      <path class="line" d="M70.0 83.5 L303.3 126.7 L536.7 163.0 L770.0 163.0" stroke="var(--series-1)"/><circle class="dot" cx="70.0" cy="83.5" r="4.5" fill="var(--series-1)"><title>MTP adaptive — context depth (tokens) 0: 44.0 t/s</title></circle><circle class="dot" cx="303.3" cy="126.7" r="4.5" fill="var(--series-1)"><title>MTP adaptive — context depth (tokens) 4,096: 36.4 t/s</title></circle><circle class="dot" cx="536.7" cy="163.0" r="4.5" fill="var(--series-1)"><title>MTP adaptive — context depth (tokens) 16,384: 30.1 t/s</title></circle><circle class="dot" cx="770.0" cy="163.0" r="4.5" fill="var(--series-1)"><title>MTP adaptive — context depth (tokens) 32,768: 30.0 t/s</title></circle><text class="endlabel" x="782.0" y="167.0">30.0 t/s</text><path class="line" d="M70.0 53.6 L303.3 146.5 L536.7 112.6 L770.0 191.4" stroke="var(--series-2)"/><circle class="dot" cx="70.0" cy="53.6" r="4.5" fill="var(--series-2)"><title>DFlash adaptive — context depth (tokens) 0: 49.3 t/s</title></circle><circle class="dot" cx="303.3" cy="146.5" r="4.5" fill="var(--series-2)"><title>DFlash adaptive — context depth (tokens) 4,096: 32.9 t/s</title></circle><circle class="dot" cx="536.7" cy="112.6" r="4.5" fill="var(--series-2)"><title>DFlash adaptive — context depth (tokens) 16,384: 38.9 t/s</title></circle><circle class="dot" cx="770.0" cy="191.4" r="4.5" fill="var(--series-2)"><title>DFlash adaptive — context depth (tokens) 32,768: 25.1 t/s</title></circle><text class="endlabel" x="782.0" y="195.4">25.1 t/s</text>
+    </svg>
+  </figure>
+  <figure class="chart">
+    <figcaption><h3>Adaptive drafting — generation against context depth (prose)</h3><p>Qwen3.8-27B UD-Q4_K_XL. MTP uses the target&#x27;s own nextn layers; DFlash2 uses the z-lab Q8_0 sidecar. Both adaptive, n_max 7, n_min 3. Degenerate runs excluded.</p></figcaption>
+    <div class="legend"><span class="key"><i style="background:var(--series-1)"></i>MTP adaptive</span><span class="key"><i style="background:var(--series-2)"></i>DFlash adaptive</span></div>
+    <svg viewBox="0 0 900 380" role="img" aria-label="Adaptive drafting — generation against context depth (prose)">
+      <line class="grid" x1="70" y1="334.0" x2="770" y2="334.0"/><text class="tick" x="60" y="338.0" text-anchor="end">0</text><line class="grid" x1="70" y1="271.2" x2="770" y2="271.2"/><text class="tick" x="60" y="275.2" text-anchor="end">5</text><line class="grid" x1="70" y1="208.4" x2="770" y2="208.4"/><text class="tick" x="60" y="212.4" text-anchor="end">10</text><line class="grid" x1="70" y1="145.6" x2="770" y2="145.6"/><text class="tick" x="60" y="149.6" text-anchor="end">14</text><line class="grid" x1="70" y1="82.8" x2="770" y2="82.8"/><text class="tick" x="60" y="86.8" text-anchor="end">19</text><line class="grid" x1="70" y1="20.0" x2="770" y2="20.0"/><text class="tick" x="60" y="24.0" text-anchor="end">24</text><text class="tick" x="70.0" y="354" text-anchor="middle">0</text><text class="tick" x="303.3" y="354" text-anchor="middle">4,096</text><text class="tick" x="536.7" y="354" text-anchor="middle">16,384</text><text class="tick" x="770.0" y="354" text-anchor="middle">32,768</text>
+      <line class="axis" x1="70" y1="20" x2="70" y2="334"/>
+      <line class="axis" x1="70" y1="334" x2="770" y2="334"/>
+      <text class="axlabel" x="420" y="374" text-anchor="middle">context depth (tokens)</text>
+      <text class="axlabel" transform="rotate(-90 16 190)" x="16" y="190" text-anchor="middle">Generation (t/s)</text>
+      <path class="line" d="M70.0 53.6 L303.3 107.6 L770.0 89.9" stroke="var(--series-1)"/><circle class="dot" cx="70.0" cy="53.6" r="4.5" fill="var(--series-1)"><title>MTP adaptive — context depth (tokens) 0: 21.3 t/s</title></circle><circle class="dot" cx="303.3" cy="107.6" r="4.5" fill="var(--series-1)"><title>MTP adaptive — context depth (tokens) 4,096: 17.2 t/s</title></circle><circle class="dot" cx="770.0" cy="89.9" r="4.5" fill="var(--series-1)"><title>MTP adaptive — context depth (tokens) 32,768: 18.6 t/s</title></circle><text class="endlabel" x="782.0" y="93.9">18.6 t/s</text><path class="line" d="M70.0 56.4 L303.3 110.8 L536.7 112.4 L770.0 84.3" stroke="var(--series-2)"/><circle class="dot" cx="70.0" cy="56.4" r="4.5" fill="var(--series-2)"><title>DFlash adaptive — context depth (tokens) 0: 21.1 t/s</title></circle><circle class="dot" cx="303.3" cy="110.8" r="4.5" fill="var(--series-2)"><title>DFlash adaptive — context depth (tokens) 4,096: 17.0 t/s</title></circle><circle class="dot" cx="536.7" cy="112.4" r="4.5" fill="var(--series-2)"><title>DFlash adaptive — context depth (tokens) 16,384: 16.9 t/s</title></circle><circle class="dot" cx="770.0" cy="84.3" r="4.5" fill="var(--series-2)"><title>DFlash adaptive — context depth (tokens) 32,768: 19.0 t/s</title></circle><text class="endlabel" x="782.0" y="88.3">19.0 t/s</text>
+    </svg>
+  </figure>
+</main></body></html>
