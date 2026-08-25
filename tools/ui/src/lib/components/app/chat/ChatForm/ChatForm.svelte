@@ -533,7 +533,6 @@
 				const audioBlob = await audioRecorder.stopRecording();
 				const wavBlob = await convertToWav(audioBlob);
 				const audioFile = createAudioFile(wavBlob);
-
 				const supportsAudio = activeModelId
 					? modelsStore.props.modelSupportsAudio(activeModelId)
 					: false;
