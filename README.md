@@ -7,7 +7,7 @@ fastest Vulkan path on AMD Strix Halo: stock Mesa, no ROCm toolchain.
 
 **Qwen3.8-27B on AMD Strix Halo (Radeon 8060S): 65 t/s generation, 440 t/s prefill.**
 
-**Ornith1.5 on AMD Strix Halo (Radeon 8060S): 103 t/s generation, 1616 t/s prefill.**
+**Ornith1.5-35B-A3B on AMD Strix Halo (Radeon 8060S): 1616 t/s prefill, 1.9x mainline.**
 
 ## The numbers
 
@@ -38,6 +38,20 @@ The gain decays with depth — as context grows, attention takes a larger share 
 matmul and concat paths this fork tunes take a smaller one. Generation on stock K-quants is flat
 within ±1 %; the fork's generation story is speculative decoding and ROCmFPx, neither of which a
 plain `llama-bench` run can see.
+
+**At ubatch 2048 the gap becomes 1.9x.** Those percentages are at ubatch 512. Raise the ubatch on
+the MoE and mainline goes backwards while this fork goes forwards:
+
+| Ornith-1.5-35B-A3B Q4\_K\_M, ubatch 2048 | mainline `95b8e33e1` | this fork | |
+|---|---:|---:|---:|
+| pp512 | 1144.3 | 1289.7 | +12.7 % |
+| pp2048 | 870.5 | **1648.5** | **+89.4 %** |
+| tg64 | 76.6 | 76.8 | tie |
+
+Two independent sessions measured that fork cell at 1615.7 and 1648.5 t/s, so the headline quotes
+the lower one. Mainline at ubatch 2048 is slower than mainline at ubatch 512 (870.5 against 1144.3). The
+tiled concat-transpose and the mul\_mat\_id stack are what turn a wide ubatch from a regression
+into the fastest setting available. This is the single largest measured gain in the fork.
 
 **Individual Vulkan gates**, measured on/off in one binary at `pp2048`:
 
@@ -114,6 +128,29 @@ charged to one, and a discarded warmup per process because this APU gives the fi
 
 Absolute t/s and the per-cell spread are in [`bench/RESULTS.md`](bench/RESULTS.md); "noise" marks a
 cell under 2σ.
+
+### Where the win is, and where it is not
+
+Prefill and generation pull in opposite directions, and which model you run decides which one you
+get. Both are measured against the same pinned upstream, on the same box, minutes apart.
+
+| | prefill vs mainline | generation vs mainline |
+|---|---|---|
+| **Ornith-1.5-35B-A3B** (MoE, MTP) | **+89 %** at ubatch 2048 | parity |
+| **Qwen3.8-27B** (dense, DFlash2 + FP4) | +13 % | **4.7x bare decode**, unreachable upstream |
+
+**On Ornith the generation win is not ours.** MTP at a fixed draft length landed upstream and works
+there: mainline reaches 104.2 t/s on structured output against this fork's 101.8-104.0, and bare
+decode ties to within 0.0 %. That figure belongs to the model and to Strix Halo's bandwidth, not to
+this fork. What this fork adds on Ornith is prefill, and it adds a lot of it.
+
+**On the dense 27B the generation win is entirely ours**, because it needs two things upstream does
+not have: the ROCmFPx FP4 sidecar and adaptive draft sizing. 14.0 t/s bare decode becomes 65.6 t/s,
+a 4.7x that no upstream build can reach at any setting.
+
+The honest one-line summary: run the MoE for prefill, run the dense 27B with a sidecar for
+generation. Bare single-stream decode is at the memory wall on this hardware and no kernel work
+moves it, which is exactly why the fork's generation effort went into speculation instead.
 
 **The gain decays with depth.** This fork's Vulkan work is in the matmul and concat paths; as
 context grows, attention takes a larger share of prefill and those paths take a smaller one. A
@@ -316,6 +353,10 @@ Measured on a Radeon 8060S, flash attention on, five repetitions, warmup discard
 
 The dense model prefers the default 512; the MoE gains 29 % at 2048 on a long prompt. Do not
 generalise one to the other.
+
+This is also where the fork separates from upstream most sharply: at ubatch 2048 mainline drops to
+870.5 t/s on the MoE, so the same setting that is this fork's fastest is a regression on stock
+llama.cpp. See [Where the win is, and where it is not](#where-the-win-is-and-where-it-is-not).
 
 > **`-ub 2048` at long context can hang the GPU.** On this hardware,
 > `-ub 2048` with a context depth at or beyond 65536 reproducibly times out the compute ring
