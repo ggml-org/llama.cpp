@@ -15235,12 +15235,12 @@ static void ggml_vk_bench_pair(
 
     // Fill source
     {
-        vk_context subctx = ggml_vk_create_temporary_context(dev0->transfer_queue.cmd_pool);
+        vk_context subctx = ggml_vk_create_temporary_context(dev0->transfer_queue->cmd_pool);
         ggml_vk_ctx_begin(dev0, subctx);
         subctx->s->buffer->buf.fillBuffer(buf_src->buffer, 0, max_size, 0xDEADBEEF);
         ggml_vk_ctx_end(subctx);
         ggml_vk_submit(subctx, dev0->fence);
-        VK_CHECK(dev0->device.waitForFences({ dev0->fence }, true, UINT64_MAX), "fill");
+        VK_CHECK(dev0->device.waitForFences({ dev0->fence }, true, UINT64_MAX), "fill", dev0);
         dev0->device.resetFences({ dev0->fence });
     }
 
@@ -15425,23 +15425,23 @@ static void ggml_vk_bench_pair(
                 try {
                     {
                         std::lock_guard<std::recursive_mutex> guard(dev0->mutex);
-                        vk_context subctx = ggml_vk_create_temporary_context(dev0->transfer_queue.cmd_pool);
+                        vk_context subctx = ggml_vk_create_temporary_context(dev0->transfer_queue->cmd_pool);
                         ggml_vk_ctx_begin(dev0, subctx);
                         ggml_vk_buffer_copy_async(subctx, staging_src, 0, buf_src, 0, size);
                         ggml_vk_ctx_end(subctx);
                         ggml_vk_submit(subctx, dev0->fence);
-                        VK_CHECK(dev0->device.waitForFences({ dev0->fence }, true, UINT64_MAX), "baseline hop1");
+                        VK_CHECK(dev0->device.waitForFences({ dev0->fence }, true, UINT64_MAX), "baseline hop1", dev0);
                         dev0->device.resetFences({ dev0->fence });
                     }
                     memcpy(staging_dst->ptr, staging_src->ptr, size);
                     {
                         std::lock_guard<std::recursive_mutex> guard(dev1->mutex);
-                        vk_context subctx = ggml_vk_create_temporary_context(dev1->transfer_queue.cmd_pool);
+                        vk_context subctx = ggml_vk_create_temporary_context(dev1->transfer_queue->cmd_pool);
                         ggml_vk_ctx_begin(dev1, subctx);
                         ggml_vk_buffer_copy_async(subctx, buf_dst, 0, staging_dst, 0, size);
                         ggml_vk_ctx_end(subctx);
                         ggml_vk_submit(subctx, dev1->fence);
-                        VK_CHECK(dev1->device.waitForFences({ dev1->fence }, true, UINT64_MAX), "baseline hop2");
+                        VK_CHECK(dev1->device.waitForFences({ dev1->fence }, true, UINT64_MAX), "baseline hop2", dev1);
                         dev1->device.resetFences({ dev1->fence });
                     }
                 } catch (vk::SystemError& e) {
@@ -15469,22 +15469,22 @@ static void ggml_vk_bench_pair(
                     try {
                         {
                             std::lock_guard<std::recursive_mutex> guard(dev0->mutex);
-                            vk_context subctx = ggml_vk_create_temporary_context(dev0->transfer_queue.cmd_pool);
+                            vk_context subctx = ggml_vk_create_temporary_context(dev0->transfer_queue->cmd_pool);
                             ggml_vk_ctx_begin(dev0, subctx);
                             ggml_vk_buffer_copy_async(subctx, stg.buf_dev0, 0, buf_src, 0, size);
                             ggml_vk_ctx_end(subctx);
                             ggml_vk_submit(subctx, dev0->fence);
-                            VK_CHECK(dev0->device.waitForFences({ dev0->fence }, true, UINT64_MAX), "shared hop1");
+                            VK_CHECK(dev0->device.waitForFences({ dev0->fence }, true, UINT64_MAX), "shared hop1", dev0);
                             dev0->device.resetFences({ dev0->fence });
                         }
                         {
                             std::lock_guard<std::recursive_mutex> guard(dev1->mutex);
-                            vk_context subctx = ggml_vk_create_temporary_context(dev1->transfer_queue.cmd_pool);
+                            vk_context subctx = ggml_vk_create_temporary_context(dev1->transfer_queue->cmd_pool);
                             ggml_vk_ctx_begin(dev1, subctx);
                             ggml_vk_buffer_copy_async(subctx, buf_dst, 0, stg.buf_dev1, 0, size);
                             ggml_vk_ctx_end(subctx);
                             ggml_vk_submit(subctx, dev1->fence);
-                            VK_CHECK(dev1->device.waitForFences({ dev1->fence }, true, UINT64_MAX), "shared hop2");
+                            VK_CHECK(dev1->device.waitForFences({ dev1->fence }, true, UINT64_MAX), "shared hop2", dev1);
                             dev1->device.resetFences({ dev1->fence });
                         }
                     } catch (vk::SystemError& e) {
@@ -15536,7 +15536,7 @@ static void ggml_vk_bench_pair(
                             size_t off_stg = c * chunk_aligned;
                             size_t csz = (c == n_chunks - 1) ? (size - c * chunk_data) : chunk_data;
 
-                            vk_context subctx = ggml_vk_create_temporary_context(dev0->transfer_queue.cmd_pool);
+                            vk_context subctx = ggml_vk_create_temporary_context(dev0->transfer_queue->cmd_pool);
                             ggml_vk_ctx_begin(dev0, subctx);
                             ggml_vk_buffer_copy_async(subctx, stg.buf_dev0, off_stg, buf_src, off_src, csz);
                             sem_vals[c]++;
@@ -15551,16 +15551,16 @@ static void ggml_vk_bench_pair(
                             size_t csz = (c == n_chunks - 1) ? (size - c * chunk_data) : chunk_data;
 
                             vk::SemaphoreWaitInfo swi{vk::SemaphoreWaitFlags{}, chunk_sems[c], sem_vals[c]};
-                            VK_CHECK(dev0->device.waitSemaphores(swi, UINT64_MAX), "chunked sem wait");
+                            VK_CHECK(dev0->device.waitSemaphores(swi, UINT64_MAX), "chunked sem wait", dev0);
 
-                            vk_context subctx = ggml_vk_create_temporary_context(dev1->transfer_queue.cmd_pool);
+                            vk_context subctx = ggml_vk_create_temporary_context(dev1->transfer_queue->cmd_pool);
                             ggml_vk_ctx_begin(dev1, subctx);
                             ggml_vk_buffer_copy_async(subctx, buf_dst, off_dst, stg.buf_dev1, off_stg, csz);
                             ggml_vk_ctx_end(subctx);
                             ggml_vk_submit(subctx, (c == n_chunks - 1) ? dev1->fence : vk::Fence{});
                         }
 
-                        VK_CHECK(dev1->device.waitForFences({ dev1->fence }, true, UINT64_MAX), "chunked final");
+                        VK_CHECK(dev1->device.waitForFences({ dev1->fence }, true, UINT64_MAX), "chunked final", dev1);
                         dev1->device.resetFences({ dev1->fence });
                     } catch (vk::SystemError& e) {
                         std::cerr << "  chunked_2             : FAILED (" << e.what() << ")" << std::endl;
@@ -15602,7 +15602,7 @@ static void ggml_vk_bench_pair(
                     try {
                         // Hop 1 + signal
                         {
-                            vk_context subctx = ggml_vk_create_temporary_context(dev0->transfer_queue.cmd_pool);
+                            vk_context subctx = ggml_vk_create_temporary_context(dev0->transfer_queue->cmd_pool);
                             ggml_vk_ctx_begin(dev0, subctx);
                             ggml_vk_buffer_copy_async(subctx, stg.buf_dev0, 0, buf_src, 0, size);
                             subctx->s->signal_semaphores.push_back({ sem_dev0, 0 });
@@ -15631,13 +15631,13 @@ static void ggml_vk_bench_pair(
 
                         // Hop 2 with GPU-side wait
                         {
-                            vk_context subctx = ggml_vk_create_temporary_context(dev1->transfer_queue.cmd_pool);
+                            vk_context subctx = ggml_vk_create_temporary_context(dev1->transfer_queue->cmd_pool);
                             ggml_vk_ctx_begin(dev1, subctx);
                             subctx->s->wait_semaphores.push_back({ sem_dev1, 0 });
                             ggml_vk_buffer_copy_async(subctx, buf_dst, 0, stg.buf_dev1, 0, size);
                             ggml_vk_ctx_end(subctx);
                             ggml_vk_submit(subctx, dev1->fence);
-                            VK_CHECK(dev1->device.waitForFences({ dev1->fence }, true, UINT64_MAX), "syncfd final");
+                            VK_CHECK(dev1->device.waitForFences({ dev1->fence }, true, UINT64_MAX), "syncfd final", dev1);
                             dev1->device.resetFences({ dev1->fence });
                         }
 
@@ -15694,7 +15694,7 @@ static void ggml_vk_bench_pair(
                             size_t off_stg = c * chunk_aligned;
                             size_t csz = (c == n_chunks - 1) ? (size - c * chunk_data) : chunk_data;
 
-                            vk_context subctx = ggml_vk_create_temporary_context(dev0->transfer_queue.cmd_pool);
+                            vk_context subctx = ggml_vk_create_temporary_context(dev0->transfer_queue->cmd_pool);
                             ggml_vk_ctx_begin(dev0, subctx);
                             ggml_vk_buffer_copy_async(subctx, stg.buf_dev0, off_stg, buf_src, off_src, csz);
                             subctx->s->signal_semaphores.push_back({ sems_dev0[c], 0 });
@@ -15725,7 +15725,7 @@ static void ggml_vk_bench_pair(
                                 dev1->device.importSemaphoreFdKHR(ii);
                             }
 
-                            vk_context subctx = ggml_vk_create_temporary_context(dev1->transfer_queue.cmd_pool);
+                            vk_context subctx = ggml_vk_create_temporary_context(dev1->transfer_queue->cmd_pool);
                             ggml_vk_ctx_begin(dev1, subctx);
                             subctx->s->wait_semaphores.push_back({ sem_dev1, 0 });
                             ggml_vk_buffer_copy_async(subctx, buf_dst, off_dst, stg.buf_dev1, off_stg, csz);
@@ -15735,7 +15735,7 @@ static void ggml_vk_bench_pair(
                             dev1->device.destroySemaphore(sem_dev1);
                         }
 
-                        VK_CHECK(dev1->device.waitForFences({ dev1->fence }, true, UINT64_MAX), "syncfd_chunked final");
+                        VK_CHECK(dev1->device.waitForFences({ dev1->fence }, true, UINT64_MAX), "syncfd_chunked final", dev1);
                         dev1->device.resetFences({ dev1->fence });
                     } catch (vk::SystemError& e) {
                         std::cerr << "  syncfd_chunked_2      : FAILED (" << e.what() << ")" << std::endl;
@@ -15801,13 +15801,13 @@ static void ggml_vk_bench_pair(
                 dev0->device.bindBufferMemory(exp_buffer, exp_mem, 0);
 
                 // Copy data from buf_src into exportable buffer
-                vk_context subctx = ggml_vk_create_temporary_context(dev0->transfer_queue.cmd_pool);
+                vk_context subctx = ggml_vk_create_temporary_context(dev0->transfer_queue->cmd_pool);
                 ggml_vk_ctx_begin(dev0, subctx);
                 VkBufferCopy fill_bc{ 0, 0, size };
                 vkCmdCopyBuffer(subctx->s->buffer->buf, buf_src->buffer, exp_buffer, 1, &fill_bc);
                 ggml_vk_ctx_end(subctx);
                 ggml_vk_submit(subctx, dev0->fence);
-                VK_CHECK(dev0->device.waitForFences({ dev0->fence }, true, UINT64_MAX), "dmabuf fill");
+                VK_CHECK(dev0->device.waitForFences({ dev0->fence }, true, UINT64_MAX), "dmabuf fill", dev0);
                 dev0->device.resetFences({ dev0->fence });
             } catch (vk::SystemError& e) {
                 std::cerr << "  dmabuf_p2p            : SKIPPED (src alloc: " << e.what() << ")" << std::endl;
@@ -15900,13 +15900,13 @@ static void ggml_vk_bench_pair(
                     auto begin = std::chrono::high_resolution_clock::now();
 
                     try {
-                        vk_context subctx = ggml_vk_create_temporary_context(dev1->transfer_queue.cmd_pool);
+                        vk_context subctx = ggml_vk_create_temporary_context(dev1->transfer_queue->cmd_pool);
                         ggml_vk_ctx_begin(dev1, subctx);
                         VkBufferCopy bc{ 0, 0, size };
                         vkCmdCopyBuffer(subctx->s->buffer->buf, imported_buffer, buf_dst->buffer, 1, &bc);
                         ggml_vk_ctx_end(subctx);
                         ggml_vk_submit(subctx, dev1->fence);
-                        VK_CHECK(dev1->device.waitForFences({ dev1->fence }, true, UINT64_MAX), "dmabuf_p2p");
+                        VK_CHECK(dev1->device.waitForFences({ dev1->fence }, true, UINT64_MAX), "dmabuf_p2p", dev1);
                         dev1->device.resetFences({ dev1->fence });
                     } catch (vk::SystemError& e) {
                         std::cerr << "  dmabuf_p2p            : FAILED (copy: " << e.what() << ")" << std::endl;
@@ -16076,25 +16076,25 @@ static void ggml_vk_bench_pair(
                         // Hop 1: dev0 VRAM -> GTT buffer
                         {
                             std::lock_guard<std::recursive_mutex> guard(dev0->mutex);
-                            vk_context subctx = ggml_vk_create_temporary_context(dev0->transfer_queue.cmd_pool);
+                            vk_context subctx = ggml_vk_create_temporary_context(dev0->transfer_queue->cmd_pool);
                             ggml_vk_ctx_begin(dev0, subctx);
                             VkBufferCopy bc{ 0, 0, size };
                             vkCmdCopyBuffer(subctx->s->buffer->buf, buf_src->buffer, gtt_buffer, 1, &bc);
                             ggml_vk_ctx_end(subctx);
                             ggml_vk_submit(subctx, dev0->fence);
-                            VK_CHECK(dev0->device.waitForFences({ dev0->fence }, true, UINT64_MAX), "dmabuf_gtt hop1");
+                            VK_CHECK(dev0->device.waitForFences({ dev0->fence }, true, UINT64_MAX), "dmabuf_gtt hop1", dev0);
                             dev0->device.resetFences({ dev0->fence });
                         }
                         // Hop 2: GTT buffer (imported view) -> dev1 VRAM
                         {
                             std::lock_guard<std::recursive_mutex> guard(dev1->mutex);
-                            vk_context subctx = ggml_vk_create_temporary_context(dev1->transfer_queue.cmd_pool);
+                            vk_context subctx = ggml_vk_create_temporary_context(dev1->transfer_queue->cmd_pool);
                             ggml_vk_ctx_begin(dev1, subctx);
                             VkBufferCopy bc{ 0, 0, size };
                             vkCmdCopyBuffer(subctx->s->buffer->buf, imported_buffer, buf_dst->buffer, 1, &bc);
                             ggml_vk_ctx_end(subctx);
                             ggml_vk_submit(subctx, dev1->fence);
-                            VK_CHECK(dev1->device.waitForFences({ dev1->fence }, true, UINT64_MAX), "dmabuf_gtt hop2");
+                            VK_CHECK(dev1->device.waitForFences({ dev1->fence }, true, UINT64_MAX), "dmabuf_gtt hop2", dev1);
                             dev1->device.resetFences({ dev1->fence });
                         }
                     } catch (vk::SystemError& e) {
@@ -16265,25 +16265,25 @@ static void ggml_vk_bench_pair(
                         // Hop 1: dev0 VRAM -> GTT buffer (imported from dev1)
                         {
                             std::lock_guard<std::recursive_mutex> guard(dev0->mutex);
-                            vk_context subctx = ggml_vk_create_temporary_context(dev0->transfer_queue.cmd_pool);
+                            vk_context subctx = ggml_vk_create_temporary_context(dev0->transfer_queue->cmd_pool);
                             ggml_vk_ctx_begin(dev0, subctx);
                             VkBufferCopy bc{ 0, 0, size };
                             vkCmdCopyBuffer(subctx->s->buffer->buf, buf_src->buffer, imported_buffer, 1, &bc);
                             ggml_vk_ctx_end(subctx);
                             ggml_vk_submit(subctx, dev0->fence);
-                            VK_CHECK(dev0->device.waitForFences({ dev0->fence }, true, UINT64_MAX), "dmabuf_gtt_rev hop1");
+                            VK_CHECK(dev0->device.waitForFences({ dev0->fence }, true, UINT64_MAX), "dmabuf_gtt_rev hop1", dev0);
                             dev0->device.resetFences({ dev0->fence });
                         }
                         // Hop 2: GTT buffer (own) -> dev1 VRAM
                         {
                             std::lock_guard<std::recursive_mutex> guard(dev1->mutex);
-                            vk_context subctx = ggml_vk_create_temporary_context(dev1->transfer_queue.cmd_pool);
+                            vk_context subctx = ggml_vk_create_temporary_context(dev1->transfer_queue->cmd_pool);
                             ggml_vk_ctx_begin(dev1, subctx);
                             VkBufferCopy bc{ 0, 0, size };
                             vkCmdCopyBuffer(subctx->s->buffer->buf, gtt_buffer, buf_dst->buffer, 1, &bc);
                             ggml_vk_ctx_end(subctx);
                             ggml_vk_submit(subctx, dev1->fence);
-                            VK_CHECK(dev1->device.waitForFences({ dev1->fence }, true, UINT64_MAX), "dmabuf_gtt_rev hop2");
+                            VK_CHECK(dev1->device.waitForFences({ dev1->fence }, true, UINT64_MAX), "dmabuf_gtt_rev hop2", dev1);
                             dev1->device.resetFences({ dev1->fence });
                         }
                     } catch (vk::SystemError& e) {
@@ -16438,13 +16438,13 @@ static void ggml_vk_bench_pair(
 
                     try {
                         // Single hop: dev0 copies VRAM -> imported dev1 VRAM (P2P write)
-                        vk_context subctx = ggml_vk_create_temporary_context(dev0->transfer_queue.cmd_pool);
+                        vk_context subctx = ggml_vk_create_temporary_context(dev0->transfer_queue->cmd_pool);
                         ggml_vk_ctx_begin(dev0, subctx);
                         VkBufferCopy bc{ 0, 0, size };
                         vkCmdCopyBuffer(subctx->s->buffer->buf, buf_src->buffer, imported_buffer, 1, &bc);
                         ggml_vk_ctx_end(subctx);
                         ggml_vk_submit(subctx, dev0->fence);
-                        VK_CHECK(dev0->device.waitForFences({ dev0->fence }, true, UINT64_MAX), "dmabuf_p2p_rev");
+                        VK_CHECK(dev0->device.waitForFences({ dev0->fence }, true, UINT64_MAX), "dmabuf_p2p_rev", dev0);
                         dev0->device.resetFences({ dev0->fence });
                     } catch (vk::SystemError& e) {
                         std::cerr << "  dmabuf_p2p_rev        : FAILED (copy: " << e.what() << ")" << std::endl;
@@ -16524,7 +16524,7 @@ static void ggml_vk_bench_pair(
                 si.pCommandBuffers = &fill_cb;
                 si.setPNext(&dg_submit_info);
                 dg_queue.submit({ si }, dg_fence);
-                VK_CHECK(dg_device.waitForFences({ dg_fence }, true, UINT64_MAX), "devgroup fill");
+                VK_CHECK(dg_device.waitForFences({ dg_fence }, true, UINT64_MAX), "devgroup fill", dev0);
                 dg_device.resetFences({ dg_fence });
                 dg_device.resetCommandPool(dg_cmd_pool);
             } catch (vk::SystemError& e) {
@@ -16560,7 +16560,7 @@ static void ggml_vk_bench_pair(
                     si.pCommandBuffers = &cb;
                     si.setPNext(&dg_submit_info);
                     dg_queue.submit({ si }, dg_fence);
-                    VK_CHECK(dg_device.waitForFences({ dg_fence }, true, UINT64_MAX), "devgroup_p2p");
+                    VK_CHECK(dg_device.waitForFences({ dg_fence }, true, UINT64_MAX), "devgroup_p2p", dev0);
                     dg_device.resetFences({ dg_fence });
                     dg_device.resetCommandPool(dg_cmd_pool);
                 } catch (vk::SystemError& e) {
