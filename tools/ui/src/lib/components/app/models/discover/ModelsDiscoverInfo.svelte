@@ -134,17 +134,17 @@
 
 <span class="min-w-0 flex-1">
 	<ModelId
-		modelId={model.id}
+		class="min-w-0"
+		{contextLength}
+		{draftVariants}
 		hideOrgName
+		iconsOnNewLine
 		{modalities}
+		modelId={model.id}
+		params={paramsFallback}
+		{sizeRange}
 		{supportsThinking}
 		{supportsToolUse}
-		{contextLength}
-		{sizeRange}
-		{draftVariants}
-		params={paramsFallback}
-		iconsOnNewLine
 		wrap
-		class="min-w-0"
 	/>
 </span>

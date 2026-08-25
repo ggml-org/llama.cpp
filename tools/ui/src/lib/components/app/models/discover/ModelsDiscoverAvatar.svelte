@@ -57,20 +57,20 @@
 <span class="relative mt-0.5 inline-flex shrink-0">
 	{#if avatarError}
 		<span
+			aria-hidden="true"
 			class="flex {size} items-center justify-center rounded-md text-sm font-semibold text-white"
 			style="background-color: hsl({hue} 60% 45%)"
-			aria-hidden="true"
 		>
 			{org.charAt(0).toUpperCase()}
 		</span>
 	{:else}
 		<div class="rounded-md">
 			<img
-				src={HuggingFaceService.getAvatarUrl(org)}
-				onerror={() => (avatarError = true)}
-				class="{size} rounded-md {invertAvatar ? 'dark:invert' : ''} {baseImageClass}"
 				alt=""
+				class="{size} rounded-md {invertAvatar ? 'dark:invert' : ''} {baseImageClass}"
 				loading="lazy"
+				onerror={() => (avatarError = true)}
+				src={HuggingFaceService.getAvatarUrl(org)}
 			/>
 		</div>
 	{/if}
@@ -82,22 +82,23 @@
 			>
 				{#if quantError}
 					<span
+						aria-hidden="true"
 						class="flex h-full w-full items-center justify-center rounded-full text-[8px] font-semibold text-white"
 						style="background-color: hsl({quantHue} 60% 45%)"
-						aria-hidden="true"
 					>
 						{quantOrg.charAt(0).toUpperCase()}
 					</span>
 				{:else}
 					<img
-						src={HuggingFaceService.getAvatarUrl(quantOrg)}
-						onerror={() => (quantError = true)}
-						class="{quantImageClass} rounded-full {invertQuant ? 'dark:invert' : ''}"
 						alt=""
+						class="{quantImageClass} rounded-full {invertQuant ? 'dark:invert' : ''}"
 						loading="lazy"
+						onerror={() => (quantError = true)}
+						src={HuggingFaceService.getAvatarUrl(quantOrg)}
 					/>
 				{/if}
 			</Tooltip.Trigger>
+
 			<Tooltip.Content>
 				<p>{quantOrg}</p>
 			</Tooltip.Content>

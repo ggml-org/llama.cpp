@@ -74,13 +74,13 @@
 	<tr class="border-t transition-colors hover:bg-muted/40">
 		<td class="px-3 py-2 {indent ? 'pl-8' : ''}">
 			<ModelId
-				modelId={option.model}
 				aliases={option.aliases}
-				tags={option.tags}
-				modalities={option.modalities}
-				supportsThinking={modelsStore.props.checkModelSupportsThinking(option.model)}
 				{hideQuantization}
+				modalities={option.modalities}
+				modelId={option.model}
 				showRawTooltip
+				supportsThinking={modelsStore.props.checkModelSupportsThinking(option.model)}
+				tags={option.tags}
 			/>
 		</td>
 
@@ -88,21 +88,27 @@
 			<span class="inline-flex items-center gap-1.5 text-xs">
 				{#if isLoading}
 					<LoaderCircle class="h-3.5 w-3.5 animate-spin text-muted-foreground" />
+
 					<span>Loading</span>
 				{:else if isDownloading}
 					<LoaderCircle class="h-3.5 w-3.5 animate-spin text-muted-foreground" />
+
 					<span>Downloading</span>
 				{:else if isLoaded}
 					<span class="h-2 w-2 rounded-full bg-green-500"></span>
+
 					<span>{statusValue === ServerModelStatus.SLEEPING ? 'Sleeping' : 'Loaded'}</span>
 				{:else if isFailed}
 					<span class="h-2 w-2 rounded-full bg-red-500"></span>
+
 					<span>Failed</span>
 				{:else if statusValue === ServerModelStatus.DOWNLOADED}
 					<span class="h-2 w-2 rounded-full bg-muted-foreground/50"></span>
+
 					<span>Downloaded</span>
 				{:else}
 					<span class="h-2 w-2 rounded-full bg-muted-foreground/50"></span>
+
 					<span>Unloaded</span>
 				{/if}
 			</span>
@@ -125,57 +131,57 @@
 					{#if isLoading}
 						<ActionIcon
 							icon={X}
-							tooltip="Cancel load"
 							onclick={() => modelsStore.status.cancelLoad(option.model)}
+							tooltip="Cancel load"
 						/>
 					{:else if isDownloading}
 						<ActionIcon
 							icon={X}
-							tooltip="Cancel download"
 							onclick={() => modelsStore.status.cancelDownload(option.model)}
+							tooltip="Cancel download"
 						/>
 					{:else if isLoaded}
 						<ActionIcon
 							icon={PowerOff}
-							tooltip="Unload model"
 							onclick={() => modelsStore.status.unload(option.model)}
+							tooltip="Unload model"
 						/>
 					{:else}
 						<ActionIcon
 							icon={Power}
-							tooltip="Load model"
 							onclick={() => modelsStore.status.load(option.model)}
+							tooltip="Load model"
 						/>
 					{/if}
 
 					{#if canRemove && !isDownloading}
 						<ActionIcon
 							icon={Trash2}
-							tooltip="Delete model"
 							onclick={() => modelsStore.status.cancelDownload(option.model)}
+							tooltip="Delete model"
 						/>
 					{/if}
 				{/if}
 
 				<ActionIcon
 					icon={isFav ? HeartOff : Heart}
-					tooltip={isFav ? 'Remove from favorites' : 'Add to favorites'}
 					onclick={() => modelsStore.toggleFavorite(option.model)}
+					tooltip={isFav ? 'Remove from favorites' : 'Add to favorites'}
 				/>
 
 				<ActionIcon
 					icon={Copy}
-					tooltip="Copy model id"
 					onclick={() => copyToClipboard(option.model)}
+					tooltip="Copy model id"
 				/>
 
 				{#if hfLink}
 					<a
-						href={hfLink}
-						target="_blank"
-						rel="noreferrer"
-						class="inline-flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted-foreground/10 hover:text-foreground"
 						aria-label="View on HuggingFace"
+						class="inline-flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted-foreground/10 hover:text-foreground"
+						href={hfLink}
+						rel="noreferrer"
+						target="_blank"
 						title="View on HuggingFace"
 					>
 						<ExternalLink class="h-3.5 w-3.5" />
@@ -196,7 +202,7 @@
 			</p>
 		</div>
 
-		<Button size="sm" onclick={() => (modelsHubOpen = true)}>
+		<Button onclick={() => (modelsHubOpen = true)} size="sm">
 			<Plus class="h-4 w-4" />
 
 			Add more models
@@ -215,7 +221,7 @@
 		<div class="flex flex-col items-center justify-center gap-3 py-16 text-center">
 			<p class="text-sm text-muted-foreground">No models installed.</p>
 
-			<Button size="sm" variant="outline" onclick={() => (modelsHubOpen = true)}>
+			<Button onclick={() => (modelsHubOpen = true)} size="sm" variant="outline">
 				<Plus class="h-4 w-4" />
 
 				Add more models
@@ -227,7 +233,9 @@
 				<thead class="bg-muted/40 text-left text-xs text-muted-foreground">
 					<tr>
 						<th class="px-3 py-2 font-medium">Model</th>
+
 						<th class="px-3 py-2 font-medium">Status</th>
+
 						<th class="px-3 py-2 text-right font-medium">Actions</th>
 					</tr>
 				</thead>
@@ -235,14 +243,14 @@
 				<tbody>
 					{#each tree as parent (parent.parentId)}
 						<tr class="border-t bg-muted/20">
-							<td colspan="3" class="px-3 py-1.5 text-xs font-semibold text-muted-foreground">
+							<td class="px-3 py-1.5 text-xs font-semibold text-muted-foreground" colspan="3">
 								{parent.parentId}
 							</td>
 						</tr>
 
 						{#each parent.quantOrgs as org (org.repoId)}
 							<tr class="border-t bg-muted/10">
-								<td colspan="3" class="px-6 py-1.5 text-xs font-medium text-muted-foreground">
+								<td class="px-6 py-1.5 text-xs font-medium text-muted-foreground" colspan="3">
 									{org.repoId}
 								</td>
 							</tr>

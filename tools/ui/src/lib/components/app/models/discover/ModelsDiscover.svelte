@@ -38,10 +38,10 @@
 >
 	<div class="p-2 sticky top-0 z-99">
 		<SearchInput
-			class=""
 			bind:value={searchQuery}
-			placeholder="Search models..."
+			class=""
 			onInput={handleSearchInput}
+			placeholder="Search models..."
 		/>
 	</div>
 
@@ -54,10 +54,10 @@
 			<p class="p-4 text-sm text-muted-foreground">No models found</p>
 		{:else}
 			<ModelsDiscoverList
-				models={modelsHubStore.models}
 				activeId={selectedId}
-				showBaseModelAvatar
+				models={modelsHubStore.models}
 				onSelect={(id) => (selectedId = id)}
+				showBaseModelAvatar
 			/>
 		{/if}
 	</div>

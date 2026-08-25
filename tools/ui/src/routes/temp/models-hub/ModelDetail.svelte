@@ -119,16 +119,16 @@
 		class="flex shrink-0 items-center gap-2 border-b border-border/40 bg-background/90 px-4 py-3 backdrop-blur"
 	>
 		<div class="lg:hidden">
-			<ActionIcon icon={ArrowLeft} tooltip="Back to models" onclick={handleBack} />
+			<ActionIcon icon={ArrowLeft} onclick={handleBack} tooltip="Back to models" />
 		</div>
 
 		<h1 class="min-w-0 flex-1 truncate font-semibold">{modelId}</h1>
 
 		<button
-			type="button"
-			onclick={handleCopy}
-			class="inline-flex shrink-0 items-center gap-1.5 rounded-md border px-2 py-1 text-xs font-medium text-muted-foreground transition-colors hover:border-border hover:text-foreground"
 			aria-label="Copy model id"
+			class="inline-flex shrink-0 items-center gap-1.5 rounded-md border px-2 py-1 text-xs font-medium text-muted-foreground transition-colors hover:border-border hover:text-foreground"
+			onclick={handleCopy}
+			type="button"
 		>
 			{#if copied}
 				<Check class="h-3.5 w-3.5 text-primary" />
@@ -139,20 +139,21 @@
 		</button>
 
 		<a
-			href={`https://huggingface.co/${modelId}`}
-			target="_blank"
-			rel="noopener noreferrer"
 			class="inline-flex shrink-0 items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+			href={`https://huggingface.co/${modelId}`}
+			rel="noopener noreferrer"
+			target="_blank"
 		>
 			<ExternalLink size={14} />
+
 			<span class="hidden sm:inline">View on HF</span>
 		</a>
 	</header>
 
 	<div class="min-h-0 flex-1 overflow-y-auto">
 		<Breadcrumb
-			items={[{ href: ROUTES.MANAGE_MODELS, label: 'Models' }, { label: modelId }]}
 			class="px-4 pt-4 md:px-6"
+			items={[{ href: ROUTES.MANAGE_MODELS, label: 'Models' }, { label: modelId }]}
 		/>
 
 		{#if error}
@@ -179,11 +180,13 @@
 						{author}
 					</span>
 				{/if}
+
 				{#if modelInfo.pipeline_tag}
 					<span class="rounded bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
 						{HuggingFaceService.pipelineTagLabel(modelInfo.pipeline_tag)}
 					</span>
 				{/if}
+
 				{#if modelInfo.library_name}
 					<span
 						class="rounded bg-secondary px-2 py-0.5 text-xs font-medium text-secondary-foreground"
@@ -191,6 +194,7 @@
 						{modelInfo.library_name}
 					</span>
 				{/if}
+
 				{#if modelInfo.gated === true}
 					<span
 						class="rounded bg-yellow-500/10 px-2 py-0.5 text-xs font-medium text-yellow-600 dark:text-yellow-400"
@@ -198,6 +202,7 @@
 						gated
 					</span>
 				{/if}
+
 				{#if licenseTag}
 					<span class="rounded bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
 						{licenseTag}
@@ -213,6 +218,7 @@
 							<h2 class="mb-3 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
 								About
 							</h2>
+
 							<p class="text-sm whitespace-pre-line text-foreground/90">{description}</p>
 						</section>
 					{/if}
@@ -222,26 +228,32 @@
 							<h2 class="mb-3 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
 								GGUF Specs
 							</h2>
+
 							<dl class="grid grid-cols-2 gap-x-4 gap-y-3 md:grid-cols-3">
 								{#if gguf.architecture}
 									<div>
 										<dt class="text-xs text-muted-foreground">Architecture</dt>
+
 										<dd class="text-sm font-medium capitalize">
 											{gguf.architecture.replace(/_/g, ' ')}
 										</dd>
 									</div>
 								{/if}
+
 								{#if gguf.total}
 									<div>
 										<dt class="text-xs text-muted-foreground">Total params</dt>
+
 										<dd class="text-sm font-medium tabular-nums">
 											{HuggingFaceService.formatFileSize(gguf.total).replace(' B', '')}B
 										</dd>
 									</div>
 								{/if}
+
 								{#if gguf.context_length}
 									<div>
 										<dt class="text-xs text-muted-foreground">Context length</dt>
+
 										<dd class="text-sm font-medium tabular-nums">
 											{gguf.context_length.toLocaleString()}
 										</dd>
@@ -257,6 +269,7 @@
 						<h2 class="mb-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
 							Stats
 						</h2>
+
 						<dl class="space-y-2.5 text-sm">
 							{#if typeof modelInfo.downloads === 'number'}
 								<div class="flex items-center justify-between">
@@ -264,33 +277,40 @@
 										<Download size={13} />
 										Downloads
 									</dt>
+
 									<dd class="font-medium tabular-nums">
 										{HuggingFaceService.formatDownloads(modelInfo.downloads)}
 									</dd>
 								</div>
 							{/if}
+
 							{#if typeof modelInfo.likes === 'number'}
 								<div class="flex items-center justify-between">
 									<dt class="flex items-center gap-1.5 text-muted-foreground">
 										<Heart size={13} />
 										Likes
 									</dt>
+
 									<dd class="font-medium tabular-nums">
 										{HuggingFaceService.formatLikes(modelInfo.likes)}
 									</dd>
 								</div>
 							{/if}
+
 							{#if details?.lastModified}
 								<div class="flex items-center justify-between">
 									<dt class="text-muted-foreground">Last modified</dt>
+
 									<dd class="font-medium">
 										{HuggingFaceService.formatRelativeTime(details.lastModified)}
 									</dd>
 								</div>
 							{/if}
+
 							{#if gguf?.totalFileSize}
 								<div class="flex items-center justify-between">
 									<dt class="text-muted-foreground">Total size</dt>
+
 									<dd class="font-medium tabular-nums">
 										{HuggingFaceService.formatFileSize(gguf.totalFileSize)}
 									</dd>
@@ -302,7 +322,8 @@
 					{#if ggufFiles.length}
 						<section class="rounded-lg border bg-card p-4">
 							<header class="mb-3 flex items-center gap-1.5">
-								<Cpu size={13} class="text-muted-foreground" />
+								<Cpu class="text-muted-foreground" size={13} />
+
 								<h2 class="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
 									Available files
 								</h2>
@@ -318,6 +339,7 @@
 												{row.bitDepth}-bit
 											{/if}
 										</div>
+
 										<div class="flex flex-wrap gap-1.5">
 											{#each row.files as file (file.path)}
 												{@const meta = HuggingFaceService.extractQuantMeta(file.path)}
@@ -349,7 +371,10 @@
 															? 'failed'
 															: 'idle'}
 												<button
-													type="button"
+													class:bg-muted={isFullyDownloaded && !isDownloading && !isFailed}
+													class:border-destructive={isFailed && !isDownloading}
+													class:border-foreground={isFullyDownloaded && !isDownloading && !isFailed}
+													class="relative inline-flex cursor-pointer items-center gap-1 overflow-hidden rounded-md border bg-background px-2 py-1 text-left font-mono text-xs transition-colors hover:border-primary/60 hover:bg-primary/5"
 													onclick={() =>
 														(pendingDownload = {
 															filePath: file.path,
@@ -357,10 +382,6 @@
 															sizeBytes: file.size ?? null,
 															variant: meta?.variant ?? null
 														})}
-													class="relative inline-flex cursor-pointer items-center gap-1 overflow-hidden rounded-md border bg-background px-2 py-1 text-left font-mono text-xs transition-colors hover:border-primary/60 hover:bg-primary/5"
-													class:border-foreground={isFullyDownloaded && !isDownloading && !isFailed}
-													class:bg-muted={isFullyDownloaded && !isDownloading && !isFailed}
-													class:border-destructive={isFailed && !isDownloading}
 													title={chipState === 'downloading'
 														? `In progress: ${file.path}. Click to view cancel options.`
 														: chipState === 'downloaded'
@@ -368,10 +389,12 @@
 															: chipState === 'failed'
 																? `Last attempt failed: ${file.path}. Click to delete partial files and retry.`
 																: `Download ${file.path}`}
+													type="button"
 												>
 													{#if isFullyDownloaded && !isDownloading}
 														<Check class="h-3 w-3 text-foreground/70" />
 													{/if}
+
 													{#if isFailed && !isDownloading && !isFullyDownloaded}
 														<span
 															class="rounded bg-destructive px-1 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-destructive-foreground"
@@ -379,6 +402,7 @@
 															Failed
 														</span>
 													{/if}
+
 													{#if meta?.variant && meta.variantForm === 'prefix'}
 														<span
 															class="rounded bg-primary px-1 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-primary-foreground"
@@ -386,7 +410,9 @@
 															{meta.variant}
 														</span>
 													{/if}
+
 													<span class="font-medium">{label}</span>
+
 													{#if meta?.variant && meta.variantForm === 'suffix'}
 														<span
 															class="rounded bg-primary px-1 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-primary-foreground"
@@ -394,6 +420,7 @@
 															{meta.variant}
 														</span>
 													{/if}
+
 													<span class="text-muted-foreground">
 														{#if isDownloading && downloadProgress && downloadProgress.totalBytes > 0}
 															{Math.round(
@@ -404,10 +431,11 @@
 															{HuggingFaceService.formatFileSize(file.size ?? 0)}
 														{/if}
 													</span>
+
 													{#if isDownloading && downloadProgress}
 														<DownloadProgressBar
-															overlay
 															downloadedBytes={downloadProgress.downloadedBytes}
+															overlay
 															totalBytes={downloadProgress.totalBytes}
 														/>
 													{/if}
@@ -433,14 +461,14 @@
 				if (!v) pendingDownload = null;
 			}
 		}
-		repoId={modelId}
 		filePath={pendingDownload.filePath}
-		quant={pendingDownload.quant}
-		variant={pendingDownload.variant}
 		formattedSize={pendingDownload.sizeBytes !== null
 			? HuggingFaceService.formatFileSize(pendingDownload.sizeBytes)
 			: ''}
-		onConfirm={() => (pendingDownload = null)}
 		onCancel={() => (pendingDownload = null)}
+		onConfirm={() => (pendingDownload = null)}
+		quant={pendingDownload.quant}
+		repoId={modelId}
+		variant={pendingDownload.variant}
 	/>
 {/if}

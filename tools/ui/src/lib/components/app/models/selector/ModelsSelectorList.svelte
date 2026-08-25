@@ -31,21 +31,22 @@
 	{@const isFav = modelsStore.favoriteModelIds.has(option.model)}
 
 	<ModelsSelectorOption
-		{option}
-		{isSelected}
-		isHighlighted={false}
-		{isFav}
-		{hideOrgName}
 		{compact}
-		{onSelect}
+		{hideOrgName}
+		{isFav}
+		isHighlighted={false}
+		{isSelected}
 		{onInfoClick}
-		onMouseEnter={() => {}}
 		onKeyDown={() => {}}
+		onMouseEnter={() => {}}
+		{onSelect}
+		{option}
 	/>
 {/snippet}
 
 {#if groups.loaded.length > 0}
 	<p class={sectionHeaderClass}>Loaded models</p>
+
 	{#each groups.loaded as item (`loaded-${item.option.id}`)}
 		{@render render(item, false)}
 	{/each}
@@ -53,6 +54,7 @@
 
 {#if groups.favorites.length > 0}
 	<p class={sectionHeaderClass}>Favorite models</p>
+
 	{#each groups.favorites as item (`fav-${item.option.id}`)}
 		{@render render(item, true)}
 	{/each}
@@ -60,6 +62,7 @@
 
 {#if groups.available.length > 0}
 	<p class={sectionHeaderClass}>Available models</p>
+
 	{#each groups.available as item (`avail-${item.option.id}`)}
 		{@render render(item, false)}
 	{/each}

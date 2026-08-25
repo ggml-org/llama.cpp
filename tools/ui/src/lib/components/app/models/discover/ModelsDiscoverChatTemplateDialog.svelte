@@ -17,16 +17,17 @@
 	}
 </script>
 
-<Dialog.Root {open} onOpenChange={handleOpenChange}>
+<Dialog.Root onOpenChange={handleOpenChange} {open}>
 	<Dialog.Content
 		class="flex max-h-[calc(100vh-4rem)] flex-col gap-0 p-0 md:w-[calc(100vw-4rem)]! md:max-w-4xl!"
 	>
 		<Dialog.Header class="flex-row items-center justify-between border-b border-border/40 p-4">
 			<Dialog.Title class="text-sm font-semibold">Chat template</Dialog.Title>
+
 			<button
-				type="button"
-				onclick={() => copyToClipboard(chatTemplate)}
 				class="inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs font-medium transition-colors hover:bg-muted"
+				onclick={() => copyToClipboard(chatTemplate)}
+				type="button"
 			>
 				<Copy class="h-3.5 w-3.5" />
 				Copy

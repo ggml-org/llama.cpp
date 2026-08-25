@@ -150,6 +150,7 @@
 		<div class="shrink-0 space-y-3 border-b border-border/40 bg-background/80 p-3 backdrop-blur">
 			<div class="flex items-center justify-between gap-2">
 				<h1 class="text-base font-semibold">Models</h1>
+
 				{#if !loading}
 					<span class="text-xs text-muted-foreground">{filteredModels.length}</span>
 				{/if}
@@ -158,26 +159,27 @@
 			{#if !isSearching}
 				<div class="flex rounded-md border bg-muted/40 p-0.5 text-xs font-medium" role="tablist">
 					<button
-						type="button"
-						role="tab"
 						aria-selected={feed === 'trending'}
-						onclick={() => (feed = 'trending')}
 						class="flex flex-1 cursor-pointer items-center justify-center gap-1.5 rounded px-2 py-1 transition-colors {feed ===
 						'trending'
 							? 'bg-background text-foreground shadow-sm'
 							: 'text-muted-foreground hover:text-foreground'}"
+						onclick={() => (feed = 'trending')}
+						role="tab"
+						type="button"
 					>
 						Trending
 					</button>
+
 					<button
-						type="button"
-						role="tab"
 						aria-selected={feed === 'recommended'}
-						onclick={() => (feed = 'recommended')}
 						class="flex flex-1 cursor-pointer items-center justify-center gap-1.5 rounded px-2 py-1 transition-colors {feed ===
 						'recommended'
 							? 'bg-background text-foreground shadow-sm'
 							: 'text-muted-foreground hover:text-foreground'}"
+						onclick={() => (feed = 'recommended')}
+						role="tab"
+						type="button"
 					>
 						<Sparkles class="h-3 w-3 text-primary" />
 						ggml-org
@@ -187,13 +189,14 @@
 
 			<SearchInput
 				bind:value={searchQuery}
-				placeholder="Search models..."
 				onInput={handleSearchInput}
+				placeholder="Search models..."
 			/>
 
 			{#if !isSearching}
 				<label class="flex items-center gap-2 text-xs text-muted-foreground">
 					<span>Sort</span>
+
 					<select
 						bind:value={sortBy}
 						class="flex-1 rounded-md border bg-background px-2 py-1 text-xs font-medium text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
@@ -210,25 +213,26 @@
 			{#if !isSearching && availableFilters.length > 0}
 				<div class="flex flex-wrap items-center gap-1">
 					<button
-						type="button"
-						onclick={() => (activeFilter = null)}
 						class="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium transition-colors {activeFilter ===
 						null
 							? 'border-primary bg-primary/10 text-primary'
 							: 'border-border bg-background text-muted-foreground hover:border-primary/40 hover:text-foreground'}"
+						onclick={() => (activeFilter = null)}
+						type="button"
 					>
 						All
 					</button>
+
 					{#each availableFilters as f (f.tag)}
 						{@const isActive = activeFilter === f.tag}
 						<button
-							type="button"
-							onclick={() => (activeFilter = isActive ? null : f.tag)}
 							class="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium transition-colors {isActive
 								? 'border-primary bg-primary/10 text-primary'
 								: 'border-border bg-background text-muted-foreground hover:border-primary/40 hover:text-foreground'}"
+							onclick={() => (activeFilter = isActive ? null : f.tag)}
+							type="button"
 						>
-							<IconFromName name={HuggingFaceService.pipelineTagIcon(f.tag)} class="h-3 w-3" />
+							<IconFromName class="h-3 w-3" name={HuggingFaceService.pipelineTagIcon(f.tag)} />
 							{HuggingFaceService.pipelineTagLabel(f.tag)}
 							<span class="text-muted-foreground">{f.count}</span>
 						</button>
@@ -244,11 +248,13 @@
 					<p class="text-xs text-destructive">{error}</p>
 				</div>
 			{/if}
+
 			{#if searchError}
 				<div class="mx-1 rounded-lg border border-destructive/50 bg-destructive/5 p-4 text-center">
 					<p class="text-xs text-destructive">{searchError}</p>
 				</div>
 			{/if}
+
 			{#if loading || searchLoading}
 				<div class="flex items-center justify-center py-16">
 					<p class="text-xs text-muted-foreground">
@@ -270,38 +276,42 @@
 					{#each filteredModels as model (model.id)}
 						{@const isActive = model.id === selectedModelId}
 						<button
-							type="button"
-							onclick={() => openModelDetails(model)}
 							class="flex w-full cursor-pointer items-start gap-2.5 rounded-lg p-2.5 text-left transition-colors {isActive
 								? 'bg-primary/10 hover:bg-primary/15'
 								: 'hover:bg-muted/60'}"
+							onclick={() => openModelDetails(model)}
+							type="button"
 						>
 							<div
 								class="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary"
 							>
 								<IconFromName
-									name={HuggingFaceService.pipelineTagIcon(model.pipeline_tag)}
 									class="h-4 w-4"
+									name={HuggingFaceService.pipelineTagIcon(model.pipeline_tag)}
 								/>
 							</div>
 
 							<div class="min-w-0 flex-1">
 								<div class="flex items-center justify-between gap-2">
 									<span class="truncate text-sm font-medium">{model.id}</span>
+
 									<span class="shrink-0 text-[10px] text-muted-foreground">
 										{HuggingFaceService.formatRelativeTime(model.createdAt)}
 									</span>
 								</div>
+
 								{#if model.pipeline_tag}
 									<p class="mt-0.5 truncate text-xs text-muted-foreground">
 										{HuggingFaceService.pipelineTagLabel(model.pipeline_tag)}
 									</p>
 								{/if}
+
 								<div class="mt-1 flex items-center gap-3 text-xs text-muted-foreground">
 									<span class="flex items-center gap-1">
 										<Download class="h-3 w-3" />
 										{HuggingFaceService.formatDownloads(model.downloads)}
 									</span>
+
 									<span class="flex items-center gap-1">
 										<Heart class="h-3 w-3" />
 										{HuggingFaceService.formatLikes(model.likes)}
@@ -322,7 +332,7 @@
 			: 'hidden lg:flex'} h-full flex-1 lg:border-l lg:border-border/40"
 	>
 		{#if selectedModelId}
-			<ModelDetail modelId={selectedModelId} class="h-full" />
+			<ModelDetail class="h-full" modelId={selectedModelId} />
 		{:else}
 			<div
 				class="flex h-full items-center justify-center px-8 text-center text-sm text-muted-foreground"
@@ -331,6 +341,7 @@
 					<div class="flex h-14 w-14 items-center justify-center rounded-2xl bg-muted/60">
 						<Download class="h-6 w-6 text-muted-foreground/60" />
 					</div>
+
 					<p class="max-w-xs">
 						Select a model from the list to see its details and download options.
 					</p>

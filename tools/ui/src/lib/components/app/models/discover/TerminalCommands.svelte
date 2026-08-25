@@ -59,6 +59,7 @@
 				style="border-bottom: 1px solid color-mix(in oklch, var(--border) 30%, transparent);"
 			>
 				<box.icon class="h-3.5 w-3.5 text-muted-foreground/60" />
+
 				<span class="text-xs font-medium text-foreground/80">{box.title}</span>
 			</div>
 
@@ -68,11 +69,12 @@
 						class="group flex items-center justify-between gap-2 rounded px-2 py-1 font-mono text-xs"
 					>
 						<span class="truncate text-foreground/90">{cmd}</span>
+
 						<button
-							type="button"
-							onclick={() => handleCopy(i, cmd)}
-							class="shrink-0 text-muted-foreground/60 transition-colors hover:text-foreground"
 							aria-label="Copy command"
+							class="shrink-0 text-muted-foreground/60 transition-colors hover:text-foreground"
+							onclick={() => handleCopy(i, cmd)}
+							type="button"
 						>
 							{#if copiedIndex === i}
 								<Check class="h-3.5 w-3.5 text-green-500" />

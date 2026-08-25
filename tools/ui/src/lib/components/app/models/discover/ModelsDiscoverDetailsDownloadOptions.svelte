@@ -1,7 +1,7 @@
 <script lang="ts">
 	import DialogModelDownload from './DialogModelDownload.svelte';
 	import DownloadProgressBar from './DownloadProgressBar.svelte';
-	import { Check, Cpu, Download, MessageSquareCode, Monitor, TriangleAlert, X } from '@lucide/svelte';
+	import { Check, Cpu, Download, TriangleAlert, X } from '@lucide/svelte';
 	import { browser } from '$app/environment';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import type { GgufVariantTagInput } from '$lib/services';
@@ -82,6 +82,7 @@
 				{/if}
 			</span>
 		</div>
+
 		<div class="divide-y px-4 pb-1">
 			{#each bitDepthRows as row (row.bitDepth)}
 				<div class="grid grid-cols-[5rem_1fr] items-start gap-3 py-3">
@@ -92,6 +93,7 @@
 							{row.bitDepth}-bit
 						{/if}
 					</div>
+
 					<div class="flex flex-wrap justify-end gap-1.5">
 						{#each row.files as file (file.path)}
 							{@const meta = HuggingFaceService.extractQuantMeta(file.path)}
@@ -124,7 +126,12 @@
 											: `Download ${file.path}`}
 							<Tooltip.Root>
 								<Tooltip.Trigger
-									type="button"
+									aria-disabled={isUnavailable}
+									class={buttonClass({
+										isDownloaded,
+										isFailed,
+										isUnavailable
+									})}
 									onclick={() => {
 										if (isUnavailable) return;
 
@@ -135,12 +142,7 @@
 											variant: meta?.variant ?? null
 										};
 									}}
-									aria-disabled={isUnavailable}
-									class={buttonClass({
-										isDownloaded,
-										isFailed,
-										isUnavailable
-									})}
+									type="button"
 								>
 									{#if isAvailable}
 										<span
@@ -161,6 +163,7 @@
 											<X class="h-2.5 w-2.5 text-white" />
 										</span>
 									{/if}
+
 									{#if isFailed && !isDownloading && !isDownloaded}
 										<span
 											class="rounded bg-destructive px-1 py-0.5 text-[10px] font-semibold tracking-wide text-destructive-foreground uppercase"
@@ -168,6 +171,7 @@
 											Failed
 										</span>
 									{/if}
+
 									{#if meta?.variant}
 										<span
 											class="rounded bg-primary px-1 py-0.5 text-[10px] font-semibold tracking-wide text-primary-foreground uppercase"
@@ -175,10 +179,13 @@
 											{meta.variant}
 										</span>
 									{/if}
+
 									<span class="font-medium {isDownloaded ? '' : 'text-muted-foreground/80'}"
 										>{label}</span
 									>
+
 									<span class="-my-1 w-px self-stretch bg-border"></span>
+
 									<span class={isDownloaded ? '' : 'text-muted-foreground/80'}>
 										{#if isDownloading && progress && progress.totalBytes > 0}
 											{Math.round((progress.downloadedBytes / progress.totalBytes) * 100)}%
@@ -186,10 +193,11 @@
 											{HuggingFaceService.formatFileSize(file.size ?? 0)}
 										{/if}
 									</span>
+
 									{#if isDownloading && progress}
 										<DownloadProgressBar
-											overlay
 											downloadedBytes={progress.downloadedBytes}
+											overlay
 											totalBytes={progress.totalBytes}
 										/>
 									{/if}
@@ -215,14 +223,14 @@
 				if (!v) pendingDownload = null;
 			}
 		}
-		repoId={modelId}
 		filePath={pendingDownload.filePath}
-		quant={pendingDownload.quant}
-		variant={pendingDownload.variant}
 		formattedSize={pendingDownload.sizeBytes != null
 			? HuggingFaceService.formatFileSize(pendingDownload.sizeBytes)
 			: undefined}
-		onConfirm={() => (pendingDownload = null)}
 		onCancel={() => (pendingDownload = null)}
+		onConfirm={() => (pendingDownload = null)}
+		quant={pendingDownload.quant}
+		repoId={modelId}
+		variant={pendingDownload.variant}
 	/>
 {/if}

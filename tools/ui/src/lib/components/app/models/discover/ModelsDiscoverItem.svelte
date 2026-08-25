@@ -29,14 +29,15 @@
 
 <li>
 	<button
-		type="button"
-		onclick={() => onSelect?.(model.id)}
 		aria-current={active ? 'page' : undefined}
 		class="flex w-full cursor-pointer items-start gap-2.5 rounded-lg p-2.5 text-left transition-colors {active
 			? 'bg-primary/10 hover:bg-primary/15'
 			: 'hover:bg-muted/60'}"
+		onclick={() => onSelect?.(model.id)}
+		type="button"
 	>
 		<ModelsDiscoverAvatar org={avatarOrg} quantOrg={showBaseModelAvatar ? org : undefined} />
+
 		<ModelsDiscoverInfo {model} />
 	</button>
 </li>

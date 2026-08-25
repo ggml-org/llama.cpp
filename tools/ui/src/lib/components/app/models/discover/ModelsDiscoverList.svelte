@@ -1,6 +1,6 @@
 <script lang="ts">
-	import type { HfModelInfo } from '$lib/types/huggingface';
 	import ModelsDiscoverItem from './ModelsDiscoverItem.svelte';
+	import type { HfModelInfo } from '$lib/types/huggingface';
 
 	interface Props {
 		models: HfModelInfo[];
@@ -10,11 +10,11 @@
 		onSelect?: (modelId: string) => void;
 	}
 
-	let { models, activeId = null, showBaseModelAvatar = false, onSelect }: Props = $props();
+	let { activeId = null, models, onSelect, showBaseModelAvatar = false }: Props = $props();
 </script>
 
 <ul class="space-y-0.5 p-2">
 	{#each models as model (model.id)}
-		<ModelsDiscoverItem {model} active={model.id === activeId} {showBaseModelAvatar} {onSelect} />
+		<ModelsDiscoverItem active={model.id === activeId} {model} {onSelect} {showBaseModelAvatar} />
 	{/each}
 </ul>

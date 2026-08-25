@@ -72,17 +72,21 @@
 				Downloading
 			{/if}
 		</span>
+
 		<span class="font-mono text-xs tabular-nums text-muted-foreground">{percent}%</span>
 	</div>
+
 	<p class="truncate text-xs text-muted-foreground">{displayName}</p>
+
 	<DownloadProgressBar
 		downloadedBytes={progress?.downloadedBytes ?? 0}
 		totalBytes={progress?.totalBytes ?? 0}
 	/>
+
 	<button
-		type="button"
-		onclick={openDetails}
 		class="inline-flex items-center justify-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
+		onclick={openDetails}
+		type="button"
 	>
 		Open details
 		<ArrowUpRight class="h-3.5 w-3.5" />

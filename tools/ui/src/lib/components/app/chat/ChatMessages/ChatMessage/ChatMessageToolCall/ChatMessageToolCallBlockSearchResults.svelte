@@ -168,6 +168,7 @@
 	{:else if showSpinner}
 		<div class="text-muted-foreground/70 flex items-center gap-2 py-1 text-xs italic">
 			<LoaderCircle class="h-3 w-3 animate-spin" />
+
 			<span>Searching...</span>
 		</div>
 	{:else}

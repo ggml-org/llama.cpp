@@ -124,24 +124,24 @@
 {:else if details}
 	<div class="space-y-6 p-6">
 		<ModelsDiscoverDetailsHeader
-			{modelId}
+			{baseModels}
 			{details}
 			{gguf}
-			{baseModels}
-			{licenseTag}
-			{hasVision}
-			{hasTools}
 			{hasReasoning}
+			{hasTools}
+			{hasVision}
+			{licenseTag}
+			{modelId}
 		/>
 
 		<ModelsDiscoverDetailsDownloadOptions
-			{modelId}
-			{files}
 			{bitDepthRows}
+			{files}
+			{modelId}
 			nativeCtxTokens={gguf?.context_length ?? 0}
 		/>
 
-		<TerminalCommands {modelId} {draftVariants} />
+		<TerminalCommands {draftVariants} {modelId} />
 
 		<ModelsDiscoverDetailsReadme {readme} />
 	</div>

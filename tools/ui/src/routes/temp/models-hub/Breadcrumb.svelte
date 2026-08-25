@@ -22,7 +22,7 @@
 	}
 </script>
 
-<nav class={className} aria-label="Breadcrumb">
+<nav aria-label="Breadcrumb" class={className}>
 	<ol class="flex list-none items-center gap-1.5 p-0 text-sm">
 		{#each items as item, i (item.label)}
 			<li class="flex items-center gap-1.5">
@@ -32,8 +32,8 @@
 
 				{#if item.href && i < items.length - 1}
 					<a
-						href={item.href}
 						class="text-muted-foreground transition-colors hover:text-foreground"
+						href={item.href}
 						onclick={(e) => {
 							e.preventDefault();
 							navigateTo(item.href);

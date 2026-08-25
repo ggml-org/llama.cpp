@@ -169,6 +169,7 @@
 					<Tooltip.Trigger>
 						<Wrench class="h-3 w-3 text-muted-foreground" />
 					</Tooltip.Trigger>
+
 					<Tooltip.Content>
 						<p>Tool use</p>
 					</Tooltip.Content>
@@ -180,6 +181,7 @@
 					<Tooltip.Trigger>
 						<Lightbulb class="h-3 w-3 text-muted-foreground" />
 					</Tooltip.Trigger>
+
 					<Tooltip.Content>
 						<p>Reasoning</p>
 					</Tooltip.Content>
@@ -193,6 +195,7 @@
 							<Tooltip.Trigger>
 								<Image class="h-3 w-3 text-muted-foreground" />
 							</Tooltip.Trigger>
+
 							<Tooltip.Content>
 								<p>Vision</p>
 							</Tooltip.Content>
@@ -204,6 +207,7 @@
 							<Tooltip.Trigger>
 								<Video class="h-3 w-3 text-muted-foreground" />
 							</Tooltip.Trigger>
+
 							<Tooltip.Content>
 								<p>Video</p>
 							</Tooltip.Content>
@@ -215,6 +219,7 @@
 							<Tooltip.Trigger>
 								<Mic class="h-3 w-3 text-muted-foreground" />
 							</Tooltip.Trigger>
+
 							<Tooltip.Content>
 								<p>Audio</p>
 							</Tooltip.Content>
@@ -228,6 +233,7 @@
 			{#if contextLength}
 				<span class="inline-flex items-center gap-1 text-muted-foreground">
 					<ScrollText class="h-3 w-3" />
+
 					<span class="text-xs">{formatParameters(contextLength)}</span>
 				</span>
 			{/if}
@@ -235,6 +241,7 @@
 			{#if sizeRange}
 				<span class="inline-flex items-center gap-1 text-muted-foreground">
 					<Database class="h-3 w-3" />
+
 					<span class="text-xs"
 						>{HuggingFaceService.formatSizeRange(sizeRange.min, sizeRange.max)}</span
 					>

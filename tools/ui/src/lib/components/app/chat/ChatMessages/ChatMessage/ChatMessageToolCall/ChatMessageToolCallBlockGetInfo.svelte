@@ -55,6 +55,7 @@
 
 	{#if showSpinner}
 		<span class="text-foreground/80 text-sm font-medium">Runtime info</span>
+
 		<LoaderCircle class="text-muted-foreground/70 h-3 w-3 animate-spin" />
 	{:else if infoMeta.errorMessage}
 		<span class="text-foreground/80 text-sm font-medium">Runtime info&nbsp;</span>

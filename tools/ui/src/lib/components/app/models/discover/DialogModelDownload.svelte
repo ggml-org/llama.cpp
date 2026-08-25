@@ -168,17 +168,19 @@
 	});
 </script>
 
-<AlertDialog.Root {open} onOpenChange={handleOpenChange}>
-	<AlertDialog.Content onkeydown={handleKeydown} class="max-w-md">
+<AlertDialog.Root onOpenChange={handleOpenChange} {open}>
+	<AlertDialog.Content class="max-w-md" onkeydown={handleKeydown}>
 		<AlertDialog.Header>
 			<AlertDialog.Title class="flex items-center gap-2">
 				<Download class="h-5 w-5 text-primary" />
+
 				{#if phase === 'pending'}
 					Download this model?
 				{:else}
 					Downloading {tagDisplay}
 				{/if}
 			</AlertDialog.Title>
+
 			<AlertDialog.Description>
 				{#if phase === 'pending'}
 					llama-server will download this file (and related sidecar weights such as multimodal
@@ -194,6 +196,7 @@
 					role="status"
 				>
 					<TriangleAlert class="mt-0.5 h-4 w-4 shrink-0" />
+
 					<span>
 						A previous attempt for this tag failed and left partial files on disk. The server will
 						reject a fresh download until those files are removed. The Retry button below deletes
@@ -206,10 +209,10 @@
 		{#if canDelete}
 			<div class="flex justify-end">
 				<button
-					type="button"
-					onclick={() => (showDeleteConfirm = true)}
-					class="inline-flex items-center gap-1.5 rounded-md border border-destructive/40 px-2 py-1 text-xs font-medium text-destructive transition-colors hover:bg-destructive/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-destructive/50"
 					aria-label="Delete model from cache"
+					class="inline-flex items-center gap-1.5 rounded-md border border-destructive/40 px-2 py-1 text-xs font-medium text-destructive transition-colors hover:bg-destructive/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-destructive/50"
+					onclick={() => (showDeleteConfirm = true)}
+					type="button"
 				>
 					<Trash2 class="h-3.5 w-3.5" />
 					Delete from cache
@@ -220,21 +223,27 @@
 		<div class="space-y-3 rounded-md border bg-muted/40 p-3 text-xs">
 			<div class="flex flex-col gap-1">
 				<span class="text-muted-foreground">Request</span>
+
 				<code class="break-all font-mono"
 					>POST /models&nbsp;&middot;&nbsp;{`{ model: "${hfRepoWithTag}" }`}</code
 				>
 			</div>
+
 			<div class="flex flex-col gap-1">
 				<span class="text-muted-foreground">File</span>
+
 				<code class="break-all font-mono">{filePath}</code>
 			</div>
+
 			<div class="flex flex-wrap items-center gap-2">
 				<span class="rounded bg-primary/15 px-2 py-0.5 font-mono font-semibold text-primary">
 					{tagDisplay}
 				</span>
+
 				{#if formattedSize}
 					<span class="text-muted-foreground">{formattedSize}</span>
 				{/if}
+
 				{#if variant}
 					<span
 						class="rounded bg-primary px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-primary-foreground"
@@ -256,8 +265,10 @@
 								Preparing download
 							{/if}
 						</span>
+
 						<span class="font-mono tabular-nums">{progressPercent}%</span>
 					</div>
+
 					<DownloadProgressBar
 						downloadedBytes={progress?.downloadedBytes ?? 0}
 						totalBytes={progress?.totalBytes ?? 0}
@@ -269,6 +280,7 @@
 		{#if lastError}
 			<p class="text-xs text-destructive">{lastError}</p>
 		{/if}
+
 		{#if lastCancelError}
 			<p class="text-xs text-destructive">{lastCancelError}</p>
 		{/if}
@@ -288,6 +300,7 @@
 					{#if phase === 'finished'}Close{:else}Cancel{/if}
 				</AlertDialog.Cancel>
 			{/if}
+
 			{#if phase === 'pending'}
 				<AlertDialog.Action disabled={inFlight} onclick={trigger}>
 					<Download class="mr-1.5 h-4 w-4" />
@@ -305,12 +318,12 @@
 
 <DialogConfirmation
 	bind:open={showDeleteConfirm}
-	title="Delete model"
-	description={`Remove "${hfRepoWithTag}" from your cache? Any cached files will be deleted from disk.`}
-	confirmText="Delete"
 	cancelText="Cancel"
-	variant="destructive"
+	confirmText="Delete"
+	description={`Remove "${hfRepoWithTag}" from your cache? Any cached files will be deleted from disk.`}
 	icon={Trash2}
-	onConfirm={handleConfirmDelete}
 	onCancel={() => (showDeleteConfirm = false)}
+	onConfirm={handleConfirmDelete}
+	title="Delete model"
+	variant="destructive"
 />

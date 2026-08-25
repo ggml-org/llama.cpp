@@ -109,13 +109,14 @@
 	}
 </script>
 
-<AlertDialog.Root {open} onOpenChange={handleOpenChange}>
-	<AlertDialog.Content onkeydown={handleKeydown} class="max-w-md">
+<AlertDialog.Root onOpenChange={handleOpenChange} {open}>
+	<AlertDialog.Content class="max-w-md" onkeydown={handleKeydown}>
 		<AlertDialog.Header>
 			<AlertDialog.Title class="flex items-center gap-2">
 				<Download class="h-5 w-5 text-primary" />
 				Download this model?
 			</AlertDialog.Title>
+
 			<AlertDialog.Description>
 				llama-server will download this file (and related sidecar weights such as multimodal
 				projectors or draft models) from Hugging Face into your local model cache. The download runs
@@ -128,6 +129,7 @@
 					role="status"
 				>
 					<TriangleAlert class="mt-0.5 h-4 w-4 shrink-0" />
+
 					<span>
 						A previous attempt for this tag failed and left partial files on disk. The server will
 						reject a fresh download until those files are removed. The Retry button below deletes
@@ -140,21 +142,27 @@
 		<div class="space-y-3 rounded-md border bg-muted/40 p-3 text-xs">
 			<div class="flex flex-col gap-1">
 				<span class="text-muted-foreground">Request</span>
+
 				<code class="break-all font-mono"
 					>POST /models&nbsp;&middot;&nbsp;{`{ model: "${hfRepoWithTag}" }`}</code
 				>
 			</div>
+
 			<div class="flex flex-col gap-1">
 				<span class="text-muted-foreground">File</span>
+
 				<code class="break-all font-mono">{filePath}</code>
 			</div>
+
 			<div class="flex flex-wrap items-center gap-2">
 				<span class="rounded bg-primary/15 px-2 py-0.5 font-mono font-semibold text-primary">
 					{tagDisplay}
 				</span>
+
 				{#if formattedSize}
 					<span class="text-muted-foreground">{formattedSize}</span>
 				{/if}
+
 				{#if variant}
 					<span
 						class="rounded bg-primary px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-primary-foreground"
@@ -173,6 +181,7 @@
 			<AlertDialog.Cancel disabled={phase === 'starting'} onclick={onCancel}>
 				Cancel
 			</AlertDialog.Cancel>
+
 			<AlertDialog.Action disabled={phase === 'starting'} onclick={trigger}>
 				{#if phase === 'starting'}
 					<LoaderCircle class="mr-1.5 h-4 w-4 animate-spin" />

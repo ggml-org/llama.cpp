@@ -3,11 +3,11 @@
 	import ModelsDiscoverChatTemplateDialog from './ModelsDiscoverChatTemplateDialog.svelte';
 	import ModelsDiscoverDetailsName from './ModelsDiscoverDetailsName.svelte';
 	import { Download, ExternalLink, Heart, MessageSquareCode } from '@lucide/svelte';
+	import { ICON_CLASS_SM } from '$lib/constants';
 	import { HuggingFaceService } from '$lib/services';
 	import { modelsHubStore } from '$lib/stores';
 	import type { HfModelDetailInfo, HfModelGguf } from '$lib/types/huggingface';
 	import { formatParameters } from '$lib/utils';
-	import { ICON_CLASS_DEFAULT, ICON_CLASS_SM } from '$lib/constants';
 
 	interface Props {
 		modelId: string;
@@ -42,22 +42,23 @@
 	<div class="flex items-start justify-between gap-3">
 		<div class="flex min-w-0 items-center gap-2">
 			<ModelsDiscoverAvatar org={avatarOrg} {quantOrg} />
+
 			<ModelsDiscoverDetailsName
-				modelId={details.id ?? modelId}
 				{baseModels}
-				{hasVision}
-				{hasTools}
 				{hasReasoning}
+				{hasTools}
+				{hasVision}
+				modelId={details.id ?? modelId}
 			/>
 		</div>
 
 		<a
-			href={HuggingFaceService.getModelUrl(modelId)}
-			target="_blank"
-			rel="noopener noreferrer"
 			class="inline-flex shrink-0 items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-medium transition-colors hover:bg-muted"
+			href={HuggingFaceService.getModelUrl(modelId)}
+			rel="noopener noreferrer"
+			target="_blank"
 		>
-			<img src="/recommended-mcp/huggingface.ico" alt="" class="h-3.5 w-3.5" />
+			<img alt="" class="h-3.5 w-3.5" src="/recommended-mcp/huggingface.ico" />
 
 			View on Hugging Face
 
@@ -72,12 +73,14 @@
 				{HuggingFaceService.formatDownloads(details.downloads)}
 			</span>
 		{/if}
+
 		{#if typeof details.likes === 'number'}
 			<span class="inline-flex items-center gap-1.5">
 				<Heart class="h-3.5 w-3.5" />
 				{HuggingFaceService.formatLikes(details.likes)}
 			</span>
 		{/if}
+
 		{#if details.lastModified}
 			<span>Updated {HuggingFaceService.formatRelativeTime(details.lastModified)}</span>
 		{/if}
@@ -92,39 +95,49 @@
 		{#if gguf?.total}
 			<span class="inline-flex items-center divide-x divide-border rounded-md border text-xs">
 				<span class="px-2.5 py-1 text-muted-foreground">Model size</span>
+
 				<span class="px-2.5 py-1 font-medium">{formatParameters(gguf.total)} params</span>
 			</span>
 		{/if}
+
 		{#if gguf?.context_length}
 			<span class="inline-flex items-center divide-x divide-border rounded-md border text-xs">
 				<span class="px-2.5 py-1 text-muted-foreground">Context</span>
+
 				<span class="px-2.5 py-1 font-medium">{gguf.context_length.toLocaleString()}</span>
 			</span>
 		{/if}
+
 		{#if gguf?.architecture}
 			<span class="inline-flex items-center divide-x divide-border rounded-md border text-xs">
 				<span class="px-2.5 py-1 text-muted-foreground">Architecture</span>
+
 				<span class="px-2.5 py-1 font-medium">{gguf.architecture}</span>
 			</span>
 		{/if}
+
 		{#if gguf?.chat_template}
 			<button
-				type="button"
-				onclick={() => (chatTemplateOpen = true)}
 				class="inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-medium transition-colors hover:bg-muted"
+				onclick={() => (chatTemplateOpen = true)}
+				type="button"
 			>
 				<MessageSquareCode class="h-3 w-3" />
 				Chat template
 			</button>
 		{/if}
+
 		{#if licenseTag}
     		<span class="inline-flex items-center divide-x divide-border rounded-md border text-xs">
     			<span class="px-2.5 py-1 text-muted-foreground">License</span>
+
     			<span class="px-2.5 py-1 font-medium">{licenseTag}</span>
     		</span>
+
 			<span class="rounded bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
 			</span>
 		{/if}
+
 		{#if details.gated === true}
 			<span
 				class="rounded bg-yellow-500/10 px-2 py-0.5 text-xs font-medium text-yellow-600 dark:text-yellow-400"

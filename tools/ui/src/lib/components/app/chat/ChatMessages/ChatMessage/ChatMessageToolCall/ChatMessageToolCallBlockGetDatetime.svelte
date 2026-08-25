@@ -47,6 +47,7 @@
 
 	{#if showSpinner}
 		<span class="text-foreground/80 text-sm font-medium">Current time</span>
+
 		<LoaderCircle class="text-muted-foreground/70 h-3 w-3 animate-spin" />
 	{:else if dateMeta.errorMessage}
 		<span class="text-foreground/80 text-sm font-medium">Current time&nbsp;</span>
