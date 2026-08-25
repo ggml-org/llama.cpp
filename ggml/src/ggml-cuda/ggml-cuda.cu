@@ -3284,6 +3284,9 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
     ggml_tensor * node = cgraph->nodes[i];
 
     // gated_delta_net -> cpy: scatter recurrent-state snapshots into the cache
+    // HIP: the fused snapshot write path hangs RDNA3 iGPUs (gfx1102/gfx1103) —
+    // the unfused kernel + plain cpy is correct there, so skip the fusion.
+#if !defined(GGML_USE_HIP)
     if (node->op == GGML_OP_GATED_DELTA_NET) {
         ggml_cuda_gated_delta_net_fused_cache fused_state_cpy;
         const int nodes_to_skip = ggml_cuda_try_gdn_cache_fusion(cgraph, i, fused_state_cpy);
@@ -3296,6 +3299,7 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
             return nodes_to_skip;
         }
     }
+#endif
 
     //topk-moe
     if (cgraph->nodes[i]->op == GGML_OP_UNARY || cgraph->nodes[i]->op == GGML_OP_SOFT_MAX ||
