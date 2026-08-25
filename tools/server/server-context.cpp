@@ -3803,10 +3803,23 @@ private:
                 const bool can_rollback =
                     ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_PART ||
                     (ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_RS && n_draft <= llama_n_rs_seq(ctx_tgt));
-                auto accepted = can_rollback && slot.task->params.sampling.temp > 0.0f &&
-                                slot.spec_dists.size() == slot.spec_draft.size()
-                    ? common_sampler_sample_and_accept_n(slot.smpl.get(), slot.ctx_tgt, slot.spec_i_batch, slot.spec_draft, slot.spec_dists)
-                    : common_sampler_sample_and_accept_n(slot.smpl.get(), slot.ctx_tgt, slot.spec_i_batch, slot.spec_draft);
+                std::vector<llama_token> accepted;
+                if (slot.spec_is_replay) {
+                    // replayed tokens were accepted before the restore. Re-verifying them can
+                    // disagree when logits depend on batch shape, and each disagreement restores
+                    // the same checkpoint again, so the slot stops making progress.
+                    accepted = slot.spec_draft;
+                    for (const llama_token id : accepted) {
+                        common_sampler_accept(slot.smpl.get(), id, true);
+                    }
+                    accepted.push_back(common_sampler_sample(slot.smpl.get(), slot.ctx_tgt, slot.spec_i_batch.back()));
+                    common_sampler_accept(slot.smpl.get(), accepted.back(), true);
+                } else if (can_rollback && slot.task->params.sampling.temp > 0.0f &&
+                           slot.spec_dists.size() == slot.spec_draft.size()) {
+                    accepted = common_sampler_sample_and_accept_n(slot.smpl.get(), slot.ctx_tgt, slot.spec_i_batch, slot.spec_draft, slot.spec_dists);
+                } else {
+                    accepted = common_sampler_sample_and_accept_n(slot.smpl.get(), slot.ctx_tgt, slot.spec_i_batch, slot.spec_draft);
+                }
                 slot.spec_i_batch.clear();
 
                 GGML_ASSERT(accepted.size() >= 1);
