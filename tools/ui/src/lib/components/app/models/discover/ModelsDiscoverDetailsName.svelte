@@ -1,29 +1,59 @@
 <script lang="ts">
-	import { Copy, ExternalLink } from '@lucide/svelte';
+	import { ExternalLink, Image, Lightbulb, Wrench } from '@lucide/svelte';
+	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { HuggingFaceService } from '$lib/services';
-	import { copyToClipboard } from '$lib/utils';
 
 	interface Props {
 		/** Full HuggingFace model id (quant org + name), e.g. `ggml-org/Qwen3.8-27B-GGUF`. */
 		modelId: string;
 		/** Base model ids, shown as small text under the quant name. */
 		baseModels: string[];
+		hasVision: boolean;
+		hasTools: boolean;
+		hasReasoning: boolean;
 	}
 
-	let { baseModels, modelId }: Props = $props();
+	let { baseModels, hasReasoning, hasTools, hasVision, modelId }: Props = $props();
 </script>
 
 <div class="min-w-0">
 	<div class="flex items-center gap-2">
 		<h1 class="truncate text-lg font-semibold">{modelId}</h1>
-		<button
-			type="button"
-			onclick={() => copyToClipboard(modelId)}
-			class="shrink-0 text-muted-foreground transition-colors hover:text-foreground"
-			aria-label="Copy model id"
-		>
-			<Copy class="h-4 w-4" />
-		</button>
+
+		{#if hasVision || hasTools || hasReasoning}
+			<div class="flex shrink-0 items-center gap-2.5 text-muted-foreground">
+				{#if hasVision}
+					<Tooltip.Root>
+						<Tooltip.Trigger>
+							<Image class="h-4 w-4" />
+						</Tooltip.Trigger>
+						<Tooltip.Content>
+							<p>Vision</p>
+						</Tooltip.Content>
+					</Tooltip.Root>
+				{/if}
+				{#if hasTools}
+					<Tooltip.Root>
+						<Tooltip.Trigger>
+							<Wrench class="h-4 w-4" />
+						</Tooltip.Trigger>
+						<Tooltip.Content>
+							<p>Tool use</p>
+						</Tooltip.Content>
+					</Tooltip.Root>
+				{/if}
+				{#if hasReasoning}
+					<Tooltip.Root>
+						<Tooltip.Trigger>
+							<Lightbulb class="h-4 w-4" />
+						</Tooltip.Trigger>
+						<Tooltip.Content>
+							<p>Reasoning</p>
+						</Tooltip.Content>
+					</Tooltip.Root>
+				{/if}
+			</div>
+		{/if}
 	</div>
 
 	{#if baseModels.length}

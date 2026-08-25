@@ -8,6 +8,15 @@
  */
 
 /**
+ * **ModelsDiscover** - Models hub explorer
+ *
+ * The complete discovery layout: a sidebar search + model list on the left and a
+ * detail view for the selected model on the right. Used as the body of the
+ * discovery dialog.
+ */
+export { default as ModelsDiscover } from './ModelsDiscover.svelte';
+
+/**
  * **ModelsDiscoverList** - Sidebar model list
  *
  * Renders the hub's model list as a navigable column. Each row links to the
@@ -57,8 +66,9 @@ export { default as ModelsDiscoverDetailsHeader } from './ModelsDiscoverDetailsH
 /**
  * **ModelsDiscoverDetailsName** - Model name block
  *
- * Shows the quant model name with a copy button, and the base model name with a
- * smaller external-link icon on the line below.
+ * Shows the quant model name with capability icons (vision, tool use,
+ * reasoning) beside it, and the base model name with a smaller external-link
+ * icon on the line below.
  */
 export { default as ModelsDiscoverDetailsName } from './ModelsDiscoverDetailsName.svelte';
 

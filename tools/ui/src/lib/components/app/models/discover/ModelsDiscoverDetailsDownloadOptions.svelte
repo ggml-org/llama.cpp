@@ -1,7 +1,7 @@
 <script lang="ts">
 	import DialogModelDownload from './DialogModelDownload.svelte';
 	import DownloadProgressBar from './DownloadProgressBar.svelte';
-	import { Check, Cpu, MessageSquareCode, TriangleAlert, X } from '@lucide/svelte';
+	import { Check, Cpu, Download, MessageSquareCode, Monitor, TriangleAlert, X } from '@lucide/svelte';
 	import { browser } from '$app/environment';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import type { GgufVariantTagInput } from '$lib/services';
@@ -65,13 +65,11 @@
 </script>
 
 {#if bitDepthRows.length}
-	<section class="space-y-3">
-		<div class="flex flex-wrap items-center justify-between gap-2">
-			<h2
-				class="flex items-center gap-1.5 text-xs font-semibold tracking-wide text-muted-foreground uppercase"
-			>
-				<MessageSquareCode class="h-3.5 w-3.5" />
-				Download options
+	<section class="rounded-xl border">
+		<div class="flex flex-wrap items-center justify-between gap-2 px-4 pt-3 pb-1">
+			<h2 class="flex items-center gap-1.5 text-sm font-medium text-muted-foreground">
+				<Download class="h-4 w-4" />
+				Downloadable options
 			</h2>
 
 			<span
@@ -84,17 +82,17 @@
 				{/if}
 			</span>
 		</div>
-		<div class="space-y-2">
+		<div class="divide-y px-4 pb-1">
 			{#each bitDepthRows as row (row.bitDepth)}
-				<div class="grid grid-cols-[5rem_1fr] items-start gap-3">
-					<div class="pt-1 text-xs font-semibold tabular-nums text-muted-foreground">
+				<div class="grid grid-cols-[5rem_1fr] items-start gap-3 py-3">
+					<div class="pt-1 text-sm tabular-nums text-muted-foreground">
 						{#if row.bitDepth === 99}
 							Other
 						{:else}
 							{row.bitDepth}-bit
 						{/if}
 					</div>
-					<div class="flex flex-wrap gap-1.5">
+					<div class="flex flex-wrap justify-end gap-1.5">
 						{#each row.files as file (file.path)}
 							{@const meta = HuggingFaceService.extractQuantMeta(file.path)}
 							{@const basename = file.path.split('/').pop() ?? file.path}
@@ -180,6 +178,7 @@
 									<span class="font-medium {isDownloaded ? '' : 'text-muted-foreground/80'}"
 										>{label}</span
 									>
+									<span class="-my-1 w-px self-stretch bg-border"></span>
 									<span class={isDownloaded ? '' : 'text-muted-foreground/80'}>
 										{#if isDownloading && progress && progress.totalBytes > 0}
 											{Math.round((progress.downloadedBytes / progress.totalBytes) * 100)}%
