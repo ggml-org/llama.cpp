@@ -120,7 +120,9 @@ int main(int argc, char ** argv) {
     llama_seq_id seq_id = 0;
 
     // initialize draft sampler for lookahead steps
-    common_sampler_ptr smpl_dft(common_sampler_init(model_dft, params.sampling));
+    common_params_sampling sparams_dft = params.sampling;
+    sparams_dft.temp = 0.0f;
+    common_sampler_ptr smpl_dft(common_sampler_init(model_dft, sparams_dft));
 
     // step 1: run speculative prefill on draft model
     const auto t_spec_prefill_start = ggml_time_us();

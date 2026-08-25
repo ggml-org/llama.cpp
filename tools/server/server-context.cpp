@@ -215,6 +215,8 @@ struct server_slot {
 
     bool spec_prefill_active = false;
     server_tokens spec_prefill_tokens;
+    std::vector<int32_t> spec_prefill_pos; // parallel to spec_prefill_tokens, orig indices
+    llama_pos spec_prefill_gen_pos = 0;    // first generation pos = last orig + 1
 
     // TODO: move members that belong to the task (such as `generated_text`, `has_new_line`) to task_results_state
     //       see https://github.com/ggml-org/llama.cpp/pull/18283#issuecomment-3710175837
@@ -365,6 +367,8 @@ struct server_slot {
 
         spec_prefill_active = false;
         spec_prefill_tokens.clear();
+        spec_prefill_pos.clear();
+        spec_prefill_gen_pos = 0;
     }
 
     void init_sampler() const {
@@ -478,6 +482,9 @@ struct server_slot {
             i_batch = batch.size();
 
             llama_pos pos = prompt.tokens.pos_next();
+            if (spec_prefill_active) {
+                pos = spec_prefill_gen_pos + (prompt.n_tokens() - (int) spec_prefill_tokens.size());
+            }
 
             if (!inp_embd.empty()) {
                 add_ok &= batch.add(id, inp_embd, pos, true, false);
@@ -499,6 +506,9 @@ struct server_slot {
             }
 
             llama_pos pos0 = prompt.tokens.pos_next();
+            if (spec_prefill_active) {
+                pos0 = spec_prefill_gen_pos + (prompt.n_tokens() - (int) spec_prefill_tokens.size());
+            }
 
             add_ok &= batch.add(id, sampled, pos0++, true, false);
             for (auto token : spec_draft) {
@@ -993,6 +1003,8 @@ private:
     void apply_spec_prefill(server_slot & slot) {
         slot.spec_prefill_active = false;
         slot.spec_prefill_tokens.clear();
+        slot.spec_prefill_pos.clear();
+        slot.spec_prefill_gen_pos = 0;
 
         if (!ctx_spf || !smpl_spf || !params_base.speculative.prefill.enabled) {
             return;
@@ -1018,16 +1030,20 @@ private:
 
         llama_tokens kept;
         kept.reserve(res.kept_indices.size());
+        slot.spec_prefill_pos.reserve(res.kept_indices.size());
         for (const int32_t idx : res.kept_indices) {
             if (idx >= 0 && idx < (int32_t) prompt.size()) {
                 kept.push_back(prompt[idx]);
+                slot.spec_prefill_pos.push_back(idx);
             }
         }
         if (kept.size() < 2) {
+            slot.spec_prefill_pos.clear();
             return;
         }
 
         slot.spec_prefill_tokens = server_tokens(kept, slot.task->tokens.has_mtmd);
+        slot.spec_prefill_gen_pos = res.kept_indices.back() + 1;
         slot.spec_prefill_active = true;
 
         SLT_INF(slot, "speculative prefill kept %d / %d tokens (%.1f%%)\n",
@@ -3579,6 +3595,9 @@ private:
                         // MTP also wants logits at every prompt position so the
                         // streaming hook can mirror t_h_nextn into ctx_dft.
                         llama_pos pos = slot.prompt.tokens.pos_next();
+                        if (slot.spec_prefill_active) {
+                            pos = (llama_pos) slot.spec_prefill_pos[slot.prompt.n_tokens()];
+                        }
                         add_ok &= batch.add(slot.id,
                             cur_tok,
                             /* pos       = */ pos,
