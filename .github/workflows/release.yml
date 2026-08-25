@@ -1287,11 +1287,11 @@ jobs:
         with:
           key: release-ubuntu-24.04-sycl-${{ matrix.build }}
 
-  ubuntu-22-rocm:
+  ubuntu-24-rocm:
     needs: [check-release, get-version]
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
 
     permissions:
       actions: write
@@ -1325,7 +1325,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: release-ubuntu-rocm-${{ matrix.ROCM_VERSION }}-${{ matrix.build }}
+          key: release-ubuntu-24.04-rocm-${{ matrix.ROCM_VERSION }}-${{ matrix.build }}
           evict-old-files: 1d
           max-size: "1G"
 
@@ -1414,7 +1414,7 @@ jobs:
       - name: ccache-clear
         uses: ./.github/actions/ccache-clear
         with:
-          key: release-ubuntu-rocm-${{ matrix.ROCM_VERSION }}-${{ matrix.build }}
+          key: release-ubuntu-24.04-rocm-${{ matrix.ROCM_VERSION }}-${{ matrix.build }}
 
   ios-xcode:
     needs: [check-release, get-version]
@@ -1595,7 +1595,7 @@ jobs:
       - windows-sycl
       - windows-rocm
       - windows-openvino
-      - ubuntu-22-rocm
+      - ubuntu-24-rocm
       - ubuntu-cpu
       - ubuntu-vulkan
       - ubuntu-24-openvino

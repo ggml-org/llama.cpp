@@ -84,11 +84,12 @@ static std::string read_file(const std::string & path) {
 }
 
 static void print_usage(const char * program_name) {
-    LOG_ERR("Usage: %s [options]\n", program_name);
+    LOG_ERR("Debug the auto-parser's differential analysis: render a template with/without tools, reasoning, etc. and show the diffs.\n");
+    LOG_ERR("\nUsage: %s [options]\n", program_name);
     LOG_ERR("\nOptions:\n");
     LOG_ERR("  --template <name>       Analyze specific template from test suite (e.g., 'deepseek' or 'DeepSeek-V3.1')\n");
     LOG_ERR("  --template-file <path>  Analyze custom template file\n");
-    LOG_ERR("  --all                   Analyze all templates from test suite\n");
+    LOG_ERR("  --all                   Analyze all templates from test suite (default when no arguments are given)\n");
     LOG_ERR("\nExamples:\n");
     LOG_ERR("  %s --all\n", program_name);
     LOG_ERR("  %s --template deepseek\n", program_name);
@@ -97,14 +98,17 @@ static void print_usage(const char * program_name) {
 
 static bool parse_options(int argc, char ** argv, analysis_options & opts) {
     if (argc < 2) {
-        print_usage(argv[0]);
-        return false;
+        // default mode: analyze all templates from the test suite
+        opts.analyze_all = true;
     }
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
 
-        if (arg == "--all") {
+        if (arg == "-h" || arg == "--help") {
+            print_usage(argv[0]);
+            return false;
+        } else if (arg == "--all") {
             opts.analyze_all = true;
         } else if (arg == "--template") {
             if (i + 1 >= argc) {

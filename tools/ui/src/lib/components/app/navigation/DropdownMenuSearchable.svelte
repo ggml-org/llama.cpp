@@ -28,10 +28,10 @@
 
 <div class="sticky top-0 z-10 mb-2 bg-popover p-1 pt-2">
 	<SearchInput
-		{placeholder}
 		bind:value={searchValue}
 		onInput={onSearchChange}
 		onKeyDown={onSearchKeyDown}
+		{placeholder}
 	/>
 </div>
 

@@ -30,7 +30,7 @@
 </script>
 
 <div class="fixed top-4.5 right-4 z-50 md:hidden">
-	<ActionIcon icon={X} tooltip="Close" onclick={handleClose} />
+	<ActionIcon icon={X} onclick={handleClose} tooltip="Close" />
 </div>
 
 <div class="min-h-full">
