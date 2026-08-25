@@ -333,6 +333,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
             return new llama_model_kimi_k3(params);
         case LLM_ARCH_STEP35:
             return new llama_model_step35(params);
+        case LLM_ARCH_SPARK3:
+            return new llama_model_spark3(params);
         default:
             throw std::runtime_error(std::string("unsupported model architecture: '") + llm_arch_name(arch) + "'");
     }
@@ -699,7 +701,7 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
                     // the grouped output projection requires each device to hold whole groups of heads
                     const int64_t n_head_group = hparams.n_head(il) / hparams.dsv4_o_group_count;
                     return {n_head_group * hparams.n_embd_head_k(il)};
-                }
+            }
                 if (std::regex_match(tensor_name, pattern_attn_out_a_weight)) {
                     GGML_ASSERT(segments.size() == 1);
                     return {1};
@@ -2876,6 +2878,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_QWEN3NEXT:
         case LLM_ARCH_MIMO2:
         case LLM_ARCH_STEP35:
+        case LLM_ARCH_SPARK3:
         case LLM_ARCH_TALKIE:
         case LLM_ARCH_MELLUM:
             return LLAMA_ROPE_TYPE_NEOX;

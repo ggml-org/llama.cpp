@@ -1659,6 +1659,9 @@ class TextModel(ModelBase):
         if chkhsh == "877081d19cf6996e2c4ff0e1236341e9b7bde288f5311a56a937f0afbbb3aeb5":
             # ref: https://huggingface.co/deepseek-ai/DeepSeek-V3
             res = "deepseek-v3"
+        if chkhsh == "0a766d034107bc736a3f2dc4968fd62e54a3570f1454443e0c5a4cc6bd7941ed":
+            # ref: local Spark3 tokenizer
+            res = "spark3"
         if chkhsh == "b3f499bb4255f8ca19fccd664443283318f2fd2414d5e0b040fbdd0cc195d6c5":
             # ref: https://huggingface.co/deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B
             res = "deepseek-r1-qwen"

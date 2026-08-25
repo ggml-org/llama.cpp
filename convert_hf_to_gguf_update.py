@@ -167,6 +167,8 @@ models = [
 
 # some models are known to be broken upstream, so we will skip them as exceptions
 pre_computed_hashes = [
+    # Local Spark3 tokenizer. Keep the pre-computed hash here so regenerating
+    {"name": "spark3", "tokt": TOKENIZER_TYPE.BPE, "repo": "local Spark3 tokenizer", "chkhsh": "0a766d034107bc736a3f2dc4968fd62e54a3570f1454443e0c5a4cc6bd7941ed"},
     # chatglm-bpe has 2 hashes, why?
     {"name": "chatglm-bpe", "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/THUDM/glm-4-9b-chat", "chkhsh": "b6e8e1518dc4305be2fe39c313ed643381c4da5db34a98f6a04c093f8afbe99b"},
     {"name": "chatglm-bpe", "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/THUDM/glm-4-9b-chat", "chkhsh": "81d72c7348a9f0ebe86f23298d37debe0a5e71149e29bd283904c02262b27516"},
