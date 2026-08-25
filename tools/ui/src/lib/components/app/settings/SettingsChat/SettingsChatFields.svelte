@@ -134,16 +134,6 @@
 				{/if}
 
 				<Textarea
-<<<<<<< HEAD
-=======
-					id={field.key}
-					value={String(localConfig[field.key] ?? '')}
-					onchange={(e) => onConfigChange(field.key, e.currentTarget.value)}
-					disabled={field.key === SETTINGS_KEYS.SYSTEM_MESSAGE && Boolean(serverStore.props?.system_prompt)}
-					placeholder={field.key === SETTINGS_KEYS.SYSTEM_MESSAGE && serverStore.props?.system_prompt
-					  ? "The System Prompt is currently set by the System Admin."
-					  : ""}
->>>>>>> 3861dbc80aefebeaf6a9553660df52e5348d44af
 					class="min-h-[10rem] w-full md:max-w-3xl"
 					id={field.key}
 					onchange={(e) => onConfigChange(field.key, e.currentTarget.value)}
@@ -163,11 +153,7 @@
 						<Checkbox
 							id="showSystemMessage"
 							disabled={Boolean(serverStore.props?.system_prompt)}
-<<<<<<< HEAD
 							checked={Boolean(Boolean(useGlobalSystemPrompt ? false : localConfig.showSystemMessage ?? true)}
-=======
-							checked={Boolean(Boolean(serverStore.props?.system_prompt) ? false : localConfig.showSystemMessage ?? true)}
->>>>>>> 3861dbc80aefebeaf6a9553660df52e5348d44af
 							onCheckedChange={(checked) =>
 								onConfigChange(SETTINGS_KEYS.SHOW_SYSTEM_MESSAGE, Boolean(checked))}
 						/>
