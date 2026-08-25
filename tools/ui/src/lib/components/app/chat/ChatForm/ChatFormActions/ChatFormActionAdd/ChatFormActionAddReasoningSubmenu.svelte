@@ -64,6 +64,7 @@
 							<Tooltip.Trigger>
 								<Info class="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
 							</Tooltip.Trigger>
+
 							<Tooltip.Content side="left">
 								<p>Maximum reasoning effort with extended context usage</p>
 							</Tooltip.Content>

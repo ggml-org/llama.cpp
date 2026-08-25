@@ -73,7 +73,7 @@
 
 <div in:fade={{ duration: 150 }} class="flex min-h-[calc(100dvh-4rem)] flex-col">
 	<div class="fixed top-4.5 right-4 z-50 md:hidden">
-		<ActionIcon icon={X} tooltip="Close" onclick={handleClose} />
+		<ActionIcon icon={X} onclick={handleClose} tooltip="Close" />
 	</div>
 
 	<div
@@ -102,7 +102,7 @@
 				</Empty.Header>
 
 				<Empty.Content>
-					<Button size="sm" onclick={() => (isAddingServer = true)}>
+					<Button onclick={() => (isAddingServer = true)} size="sm">
 						<Plus />
 
 						Add New Server
@@ -120,8 +120,8 @@
 					<McpServerCardSkeleton />
 				{:else}
 					<McpServerCard
-						{server}
 						enabled={conversationsStore.preferences.isMcpServerEnabledForChat(server.id)}
+						onDelete={() => mcpStore.removeServer(server.id)}
 						onToggle={async () => {
 							const wasEnabled = conversationsStore.preferences.isMcpServerEnabledForChat(
 								server.id
@@ -137,7 +137,7 @@
 							}
 						}}
 						onUpdate={(updates) => mcpStore.updateServer(server.id, updates)}
-						onDelete={() => mcpStore.removeServer(server.id)}
+						{server}
 					/>
 				{/if}
 			{/each}
@@ -155,7 +155,7 @@
 					</Empty.Header>
 
 					<Empty.Content>
-						<Button size="sm" onclick={() => (isAddingServer = true)}>
+						<Button onclick={() => (isAddingServer = true)} size="sm">
 							<Plus />
 
 							Add New Server

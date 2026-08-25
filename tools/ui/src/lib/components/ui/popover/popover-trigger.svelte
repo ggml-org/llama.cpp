@@ -11,7 +11,7 @@
 
 <PopoverPrimitive.Trigger
 	bind:ref
-	data-slot="popover-trigger"
 	class={cn('', className)}
+	data-slot="popover-trigger"
 	{...restProps}
 />

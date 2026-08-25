@@ -12,8 +12,8 @@
 
 <div
 	bind:this={ref}
-	data-slot="empty-header"
 	class={cn('gap-2 flex max-w-sm flex-col items-center', className)}
+	data-slot="empty-header"
 	{...restProps}
 >
 	{@render children?.()}

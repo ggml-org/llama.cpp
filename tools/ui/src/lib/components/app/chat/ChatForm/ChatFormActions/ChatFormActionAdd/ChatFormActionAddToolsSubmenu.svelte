@@ -68,8 +68,8 @@
 					{@const favicon = toolsPanel.getFavicon(group)}
 
 					<Collapsible.Root
-						open={isExpanded}
 						onOpenChange={() => toolsPanel.toggleGroupExpanded(group.key)}
+						open={isExpanded}
 					>
 						<div class="flex items-center gap-1">
 							<Collapsible.Trigger
@@ -84,12 +84,12 @@
 								<span class="inline-flex min-w-0 items-center gap-1.5 font-medium">
 									{#if favicon}
 										<img
-											src={favicon}
 											alt=""
 											class="{ICON_CLASS_DEFAULT} shrink-0 rounded-sm"
 											onerror={(e) => {
 												(e.currentTarget as HTMLImageElement).style.display = 'none';
 											}}
+											src={favicon}
 										/>
 									{/if}
 
@@ -107,8 +107,8 @@
 										<Checkbox
 											{...props}
 											{checked}
-											onCheckedChange={() => toolsPanel.toggleGroupByKey(group.key)}
 											class="mr-2 {ICON_CLASS_DEFAULT} shrink-0"
+											onCheckedChange={() => toolsPanel.toggleGroupByKey(group.key)}
 										/>
 									{/snippet}
 								</Tooltip.Trigger>
@@ -127,14 +127,14 @@
 								{#each group.tools as entry (entry.key)}
 									{@const enabled = toolsStore.isToolEnabled(entry.key)}
 									<button
-										type="button"
 										class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm transition-colors hover:bg-muted/50"
 										onclick={() => toolsStore.toggleTool(entry.key)}
+										type="button"
 									>
 										<span
+											class="flex size-4 shrink-0 items-center justify-center rounded-[4px] border border-input data-[state=checked]:border-primary data-[state=checked]:bg-primary data-[state=checked]:text-primary-foreground"
 											data-slot="checkbox"
 											data-state={enabled ? 'checked' : 'unchecked'}
-											class="flex size-4 shrink-0 items-center justify-center rounded-[4px] border border-input data-[state=checked]:border-primary data-[state=checked]:bg-primary data-[state=checked]:text-primary-foreground"
 										>
 											{#if enabled}
 												<Check class="size-3.5" />

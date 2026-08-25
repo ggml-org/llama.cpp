@@ -140,15 +140,15 @@
 			{#snippet child({ props })}
 				<button
 					{...props}
-					type="button"
 					class="inline-flex h-5 w-5 items-center justify-center rounded-sm transition-colors {activeView ===
 					opts.view
 						? 'bg-background text-foreground shadow-sm'
 						: opts.disabled
 							? 'cursor-not-allowed opacity-40'
 							: 'hover:text-foreground'}"
-					onclick={() => !opts.disabled && (activeView = opts.view)}
 					disabled={opts.disabled}
+					onclick={() => !opts.disabled && (activeView = opts.view)}
+					type="button"
 				>
 					<IconComponent class="h-3 w-3" />
 
@@ -208,85 +208,85 @@
 			<ChatMessageStatisticsBadge
 				class="bg-transparent"
 				icon={WholeWord}
-				value="{predictedTokens?.toLocaleString()} tokens"
 				tooltipLabel="Generated tokens"
+				value="{predictedTokens?.toLocaleString()} tokens"
 			/>
 
 			<ChatMessageStatisticsBadge
 				class="bg-transparent"
 				icon={Clock}
-				value={formattedTime}
 				tooltipLabel="Generation time"
+				value={formattedTime}
 			/>
 
 			<ChatMessageStatisticsBadge
 				class="bg-transparent"
 				icon={Gauge}
-				value="{tokensPerSecond.toFixed(2)} t/s"
 				tooltipLabel="Generation speed"
+				value="{tokensPerSecond.toFixed(2)} t/s"
 			/>
 		{:else if activeView === ChatMessageStatsView.TOOLS && hasAgenticStats}
 			<ChatMessageStatisticsBadge
 				class="bg-transparent"
 				icon={Wrench}
-				value="{agenticTimings!.toolCallsCount} calls"
 				tooltipLabel="Tool calls executed"
+				value="{agenticTimings!.toolCallsCount} calls"
 			/>
 
 			<ChatMessageStatisticsBadge
 				class="bg-transparent"
 				icon={Clock}
-				value={formattedAgenticToolsTime}
 				tooltipLabel="Tool execution time"
+				value={formattedAgenticToolsTime}
 			/>
 
 			<ChatMessageStatisticsBadge
 				class="bg-transparent"
 				icon={Gauge}
-				value="{agenticToolsPerSecond.toFixed(2)} calls/s"
 				tooltipLabel="Tool execution rate"
+				value="{agenticToolsPerSecond.toFixed(2)} calls/s"
 			/>
 		{:else if activeView === ChatMessageStatsView.SUMMARY && hasAgenticStats}
 			<ChatMessageStatisticsBadge
 				class="bg-transparent"
 				icon={Layers}
-				value="{agenticTimings!.turns} turns"
 				tooltipLabel="Agentic turns (LLM calls)"
+				value="{agenticTimings!.turns} turns"
 			/>
 
 			<ChatMessageStatisticsBadge
 				class="bg-transparent"
 				icon={WholeWord}
-				value="{agenticTimings!.llm.predicted_n.toLocaleString()} tokens"
 				tooltipLabel="Total tokens generated"
+				value="{agenticTimings!.llm.predicted_n.toLocaleString()} tokens"
 			/>
 
 			<ChatMessageStatisticsBadge
 				class="bg-transparent"
 				icon={Clock}
-				value={formattedAgenticTotalTime}
 				tooltipLabel="Total time (LLM + tools)"
+				value={formattedAgenticTotalTime}
 			/>
 		{:else if hasPromptStats && (mode === ChatMessageStatisticsMode.READING || isSwitchable)}
 			<ChatMessageStatisticsBadge
 				class="bg-transparent"
 				icon={WholeWord}
-				value="{promptTokens} tokens"
 				tooltipLabel="Prompt tokens"
+				value="{promptTokens} tokens"
 			/>
 
 			<ChatMessageStatisticsBadge
 				class="bg-transparent"
 				icon={Clock}
-				value={formattedPromptTime ?? '0s'}
 				tooltipLabel="Prompt processing time"
+				value={formattedPromptTime ?? '0s'}
 			/>
 
 			<ChatMessageStatisticsBadge
 				class="bg-transparent"
 				icon={Gauge}
-				value="{promptTokensPerSecond!.toFixed(2)} tokens/s"
 				tooltipLabel="Prompt processing speed"
+				value="{promptTokensPerSecond!.toFixed(2)} tokens/s"
 			/>
 		{/if}
 	</div>

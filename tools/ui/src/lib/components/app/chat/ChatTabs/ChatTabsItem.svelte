@@ -67,12 +67,12 @@
 	)}
 >
 	<a
-		{href}
-		class="absolute inset-0 z-0 rounded-lg"
-		onclick={handleActivate}
-		onauxclick={(e) => onAuxClick?.(tab.id, e)}
 		aria-current={isActive ? 'page' : undefined}
 		aria-label={tab.name}
+		class="absolute inset-0 z-0 rounded-lg"
+		{href}
+		onauxclick={(e) => onAuxClick?.(tab.id, e)}
+		onclick={handleActivate}
 	></a>
 
 	{#if isLoading}
@@ -81,9 +81,9 @@
 				{#snippet child({ props })}
 					<button
 						{...props}
+						aria-label="Stop generation"
 						class="stop-button relative z-10 flex h-5 w-5 shrink-0 cursor-pointer items-center justify-center rounded-sm text-muted-foreground transition-colors hover:text-foreground"
 						onclick={(e) => handleActionClick(e, () => onStop?.(tab.id, e))}
-						aria-label="Stop generation"
 					>
 						<Loader2
 							class="loading-icon {ICON_CLASS_SM} animate-spin transition-opacity duration-300 {contentOpacity}"
@@ -115,12 +115,12 @@
 			{#snippet child({ props })}
 				<button
 					{...props}
+					aria-label="Close tab"
 					class={cn(
 						'relative z-10 flex h-5 w-5 shrink-0 cursor-pointer items-center justify-center rounded-sm text-muted-foreground transition-opacity hover:bg-foreground/10 hover:text-foreground',
 						contentOpacity
 					)}
 					onclick={(e) => handleActionClick(e, () => onClose?.(tab.id))}
-					aria-label="Close tab"
 				>
 					<X class={ICON_CLASS_SM} />
 				</button>

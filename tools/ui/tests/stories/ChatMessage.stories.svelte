@@ -1,4 +1,4 @@
-<script module lang="ts">
+<script lang="ts" module>
 	import { defineMeta } from '@storybook/addon-svelte-csf';
 	import ChatMessage from '$lib/components/app/chat/ChatMessages/ChatMessage/ChatMessage.svelte';
 	import type { ChatMessageActions } from '$lib/types';
@@ -100,10 +100,10 @@
 </script>
 
 <Story
-	name="User"
 	args={{
 		message: userMessage
 	}}
+	name="User"
 	play={async () => {
 		const { settingsStore } = await import('$lib/stores/settings/index.svelte');
 
@@ -112,11 +112,11 @@
 />
 
 <Story
-	name="Assistant"
 	args={{
 		class: 'max-w-[56rem] w-[calc(100vw-2rem)]',
 		message: assistantMessage
 	}}
+	name="Assistant"
 	play={async () => {
 		const { settingsStore } = await import('$lib/stores/settings/index.svelte');
 
@@ -125,11 +125,11 @@
 />
 
 <Story
-	name="AssistantWithReasoning"
 	args={{
 		class: 'max-w-[56rem] w-[calc(100vw-2rem)]',
 		message: assistantWithReasoning
 	}}
+	name="AssistantWithReasoning"
 	play={async () => {
 		const { settingsStore } = await import('$lib/stores/settings/index.svelte');
 
@@ -138,11 +138,11 @@
 />
 
 <Story
-	name="RawLlmOutput"
 	args={{
 		class: 'max-w-[56rem] w-[calc(100vw-2rem)]',
 		message: rawOutputMessage
 	}}
+	name="RawLlmOutput"
 	play={async () => {
 		const { settingsStore } = await import('$lib/stores/settings/index.svelte');
 
@@ -151,11 +151,11 @@
 />
 
 <Story
-	name="WithReasoningContent"
 	args={{
 		message: streamingMessage
 	}}
 	asChild
+	name="WithReasoningContent"
 	play={async () => {
 		const { settingsStore } = await import('$lib/stores/settings/index.svelte');
 
@@ -203,15 +203,15 @@
 	}}
 >
 	<div class="w-[56rem]">
-		<ChatMessage message={streamingMessage} {chatActions} />
+		<ChatMessage {chatActions} message={streamingMessage} />
 	</div>
 </Story>
 
 <Story
-	name="Processing"
 	args={{
 		message: processingMessage
 	}}
+	name="Processing"
 	play={async () => {
 		const { settingsStore } = await import('$lib/stores/settings/index.svelte');
 

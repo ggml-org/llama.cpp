@@ -30,7 +30,7 @@
 	}
 </script>
 
-<AlertDialog.Root {open} onOpenChange={handleOpenChange}>
+<AlertDialog.Root onOpenChange={handleOpenChange} {open}>
 	<AlertDialog.Content class="max-w-lg">
 		<AlertDialog.Header>
 			<AlertDialog.Title class="flex items-center gap-2">
@@ -53,14 +53,16 @@
 			{#if availableModels.length > 0}
 				<div class="text-sm">
 					<p class="mb-2 font-medium text-muted-foreground">Select an available model:</p>
+
 					<div class="max-h-48 space-y-1 overflow-y-auto rounded-md border p-1">
 						{#each availableModels as model (model)}
 							<button
-								type="button"
 								class="group flex w-full items-center justify-between gap-2 rounded-sm px-3 py-2 text-left text-sm transition-colors hover:bg-accent hover:text-accent-foreground"
 								onclick={() => handleSelectModel(model)}
+								type="button"
 							>
 								<span class="min-w-0 truncate font-mono text-xs">{model}</span>
+
 								<ArrowRight
 									class="{ICON_CLASS_DEFAULT} shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100"
 								/>

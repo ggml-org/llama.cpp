@@ -30,7 +30,7 @@
 </script>
 
 {#snippet image()}
-	<img src={preview} alt={name} class="{height} {width} cursor-pointer object-cover {imageClass}" />
+	<img alt={name} class="{height} {width} cursor-pointer object-cover {imageClass}" src={preview} />
 {/snippet}
 
 <div

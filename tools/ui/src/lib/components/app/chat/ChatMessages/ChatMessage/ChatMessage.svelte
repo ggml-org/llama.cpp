@@ -381,13 +381,13 @@
 	}
 </script>
 
-<div class="chat-message" class:chat-message--synthetic={isSynthetic}>
+<div class:chat-message--synthetic={isSynthetic} class="chat-message">
 	{#if message.role === MessageRole.SYSTEM}
 		<ChatMessageSystem bind:textareaElement class={className} {message} />
 	{:else if mcpPromptExtra}
-		<ChatMessageMcpPrompt class={className} {message} mcpPrompt={mcpPromptExtra} />
+		<ChatMessageMcpPrompt class={className} mcpPrompt={mcpPromptExtra} {message} />
 	{:else if isSynthetic}
-		<ChatMessageSynthetic {message} class={className} />
+		<ChatMessageSynthetic class={className} {message} />
 	{:else if message.role === MessageRole.USER}
 		<ChatMessageUser class={className} {isLastUserMessage} {message} {nextAssistantMessage} />
 	{:else}
@@ -396,9 +396,9 @@
 			class={className}
 			{isLastAssistantMessage}
 			{message}
-			{toolMessages}
 			onContinue={handleContinue}
 			onRegenerate={handleRegenerate}
+			{toolMessages}
 		/>
 	{/if}
 </div>

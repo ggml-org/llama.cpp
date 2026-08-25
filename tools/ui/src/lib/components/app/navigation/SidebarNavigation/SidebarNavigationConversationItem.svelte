@@ -162,33 +162,33 @@
 		: ''} px-2"
 	{...{ [UI_DATA_ATTRS.CONVERSATION_ROW]: conversation.id }}
 	onclick={(e) => handleSelect(e)}
-	onmouseover={handleMouseOver}
-	onmouseleave={handleMouseLeave}
-	onmousedown={(e) => handleRowMouseDown(e)}
 	onfocusin={handleMouseOver}
 	onfocusout={(e) => {
 		if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
 			handleMouseLeave();
 		}
 	}}
+	onmousedown={(e) => handleRowMouseDown(e)}
+	onmouseleave={handleMouseLeave}
+	onmouseover={handleMouseOver}
 >
 	<div
-		class="flex min-w-0 flex-1 items-center gap-2"
 		style:padding-left="{depth * FORK_TREE_DEPTH_PADDING}px"
+		class="flex min-w-0 flex-1 items-center gap-2"
 	>
 		{#if isSelectionMode}
 			<div
+				aria-checked={isSelected}
+				aria-label={isSelected ? `Deselect ${conversation.name}` : `Select ${conversation.name}`}
 				class="shrink-0"
 				onclick={(e) => handleCheckboxClick(e)}
 				onkeydown={handleCheckboxKeydown}
 				role="checkbox"
-				aria-checked={isSelected}
-				aria-label={isSelected ? `Deselect ${conversation.name}` : `Select ${conversation.name}`}
 				tabindex="-1"
 			>
 				<Checkbox
-					checked={isSelected}
 					aria-label={isSelected ? `Deselect ${conversation.name}` : `Select ${conversation.name}`}
+					checked={isSelected}
 				/>
 			</div>
 		{/if}
@@ -200,8 +200,8 @@
 					{#snippet child({ props })}
 						<a
 							{...props}
-							href={RouterService.chat(conversation.forkedFromConversationId)}
 							class="flex shrink-0 items-center text-muted-foreground transition-colors hover:text-foreground"
+							href={RouterService.chat(conversation.forkedFromConversationId)}
 						>
 							<GitBranch class="h-3.5 w-3.5" />
 						</a>
@@ -218,12 +218,12 @@
 			<Tooltip.Root>
 				<Tooltip.Trigger>
 					<div
+						aria-label="Stop generation"
 						class="stop-button flex {ICON_CLASS_DEFAULT} shrink-0 cursor-pointer items-center justify-center rounded text-muted-foreground transition-colors hover:text-foreground"
 						onclick={handleStop}
 						onkeydown={(e) => e.key === 'Enter' && handleStop(e)}
 						role="button"
 						tabindex="0"
-						aria-label="Stop generation"
 					>
 						<Loader2 class="loading-icon h-3.5 w-3.5 animate-spin" />
 
@@ -237,14 +237,12 @@
 			</Tooltip.Root>
 		{/if}
 
-		<TruncatedText text={conversation.name} class="text-sm font-medium" showTooltip={false} />
+		<TruncatedText class="text-sm font-medium" showTooltip={false} text={conversation.name} />
 	</div>
 
 	{#if !isSelectionMode && renderActionsDropdown}
 		<div class="actions flex items-center">
 			<DropdownMenuActions
-				triggerIcon={MoreHorizontal}
-				triggerTooltip="More actions"
 				bind:open={dropdownOpen}
 				actions={[
 					{
@@ -284,6 +282,8 @@
 						variant: 'destructive'
 					}
 				]}
+				triggerIcon={MoreHorizontal}
+				triggerTooltip="More actions"
 			/>
 		</div>
 	{/if}

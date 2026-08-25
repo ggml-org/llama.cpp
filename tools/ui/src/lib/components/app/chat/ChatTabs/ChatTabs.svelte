@@ -81,27 +81,27 @@
 </script>
 
 <nav
+	aria-label="Open conversations"
 	class="group sticky pl-1 top-0 z-10 hidden md:block chat-tabs-fade transition-[padding] duration-200 ease-in-out pt-3.25 {uiStore.isSidebarExpanded
 		? CHAT_TABS_MAX_WIDTH.EXPANDED_SIDEBAR
 		: CHAT_TABS_MAX_WIDTH.COLLAPSED_SIDEBAR}"
-	aria-label="Open conversations"
 >
 	<div class="relative">
 		<ScrollCarousel
+			{carousel}
 			class="h-10"
 			containerClass="flex h-10 min-w-0 items-center"
 			innerClass="items-center gap-1.25"
-			{carousel}
 		>
 			{#each tabs as tab (tab.id)}
 				<ChatTabsItem
-					{tab}
 					isActive={tab.id === activeId}
 					isLoading={loadingIds.has(tab.id)}
 					onActivate={(id) => tabsStore.activate(id)}
+					onAuxClick={handleAuxClick}
 					onClose={handleClose}
 					onStop={handleStop}
-					onAuxClick={handleAuxClick}
+					{tab}
 				/>
 			{/each}
 
@@ -115,6 +115,7 @@
 				? 'opacity-100'
 				: 'opacity-0'}"
 		></div>
+
 		<div
 			class="pointer-events-none absolute inset-y-0 right-0 z-[5] w-8 bg-gradient-to-l from-background to-transparent transition-opacity {carousel.canScrollRight
 				? 'opacity-100'

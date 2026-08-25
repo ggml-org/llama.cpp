@@ -296,7 +296,7 @@
 
 <svelte:head>
 	{#if pwaAssetsHead.themeColor}
-		<meta name="theme-color" content={pwaAssetsHead.themeColor.content} />
+		<meta content={pwaAssetsHead.themeColor.content} name="theme-color" />
 	{/if}
 
 	{#if settingsStore.config.customCss}
@@ -310,7 +310,7 @@
 	<PwaMetaTags />
 </svelte:head>
 
-<svelte:window onkeydown={handleKeydown} bind:innerHeight bind:innerWidth />
+<svelte:window bind:innerHeight bind:innerWidth onkeydown={handleKeydown} />
 <svelte:document onvisibilitychange={handleVisibilityChange} />
 
 <Tooltip.Provider delayDuration={TOOLTIP_DELAY_DURATION}>
@@ -342,8 +342,8 @@
 	{/if}
 
 	<PwaRefreshAlert
-		needRefresh={$needRefresh || pwa.needRefreshByStorage}
 		forceReload={pwa.needRefreshByStorage}
+		needRefresh={$needRefresh || pwa.needRefreshByStorage}
 		{updateServiceWorker}
 	/>
 </div>

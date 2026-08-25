@@ -23,12 +23,14 @@
 	);
 </script>
 
-<ToolCallBlock {section} {open} {isStreaming} meta={editFileMeta} {onToggle}>
+<ToolCallBlock {isStreaming} meta={editFileMeta} {onToggle} {open} {section}>
 	{#snippet titleSnippet()}
 		<span class="text-muted-foreground">Edit file </span>
+
 		<span class="font-mono" title={editFileMeta?.filePath}
 			>{abbreviateHome(editFileMeta?.filePath ?? '', home)}</span
 		>
+
 		{#if editFileMeta?.errorMessage}
 			<span class="ml-1 text-xs italic text-muted-foreground/70">(failed)</span>
 		{/if}
@@ -40,6 +42,7 @@
 				class="flex items-start gap-2 rounded bg-red-500/10 p-2 text-xs text-red-600 italic dark:text-red-400"
 			>
 				<XCircle class="mt-0.5 h-3 w-3 shrink-0" />
+
 				<span>{meta.errorMessage}</span>
 			</div>
 		{:else if meta && meta.edits.length > 0}
@@ -48,13 +51,17 @@
 					<div class="mb-1.5 text-xs text-muted-foreground/70 italic">
 						Edit {ei + 1}&nbsp;of&nbsp;{meta.edits.length}
 					</div>
-					<div class="diff-block" style:max-height={MAX_HEIGHT_CODE_BLOCK}>
+
+					<div style:max-height={MAX_HEIGHT_CODE_BLOCK} class="diff-block">
 						<div class="diff-pre">
 							{#each diffLines as line, li (li)}
 								<div class="diff-line diff-{line.kind}">
 									<span class="diff-old-num">{line.oldLine ?? ''}</span>
+
 									<span class="diff-marker">{prefixFor(line.kind)}</span>
+
 									<span class="diff-new-num">{line.newLine ?? ''}</span>
+
 									<span class="diff-text">{line.text || ' '}</span>
 								</div>
 							{/each}
@@ -62,9 +69,11 @@
 					</div>
 				</div>
 			{/each}
+
 			<div class="mt-1.5 text-xs text-muted-foreground/70 italic">
 				{#if meta.resultMessage}
 					{meta.resultMessage}{meta.editsApplied != null ? RESULT_STAT_SEPARATOR : ''}{/if}
+
 				{#if meta.editsApplied != null}
 					<span class="font-mono">{meta.editsApplied}</span>
 					{meta.editsApplied === 1 ? 'edit' : 'edits'}&nbsp;applied

@@ -29,9 +29,9 @@
 		<ChatMessageEditForm />
 	{:else}
 		<ChatMessageMcpPromptContent
+			class="w-full max-w-[80%]"
 			prompt={mcpPrompt}
 			variant={McpPromptVariant.MESSAGE}
-			class="w-full max-w-[80%]"
 		/>
 
 		{#if message.timestamp}

@@ -153,17 +153,17 @@
 
 {#if deviceStore.isMobile}
 	<ModelsSelectorSheet
-		disabled={disabled || isOffline}
 		bind:this={selectorModelRef}
 		currentModel={selectorModel}
+		disabled={disabled || isOffline}
 		{forceForegroundText}
 		{useGlobalSelection}
 	/>
 {:else}
 	<ModelsSelectorDropdown
-		disabled={disabled || isOffline}
 		bind:this={selectorModelRef}
 		currentModel={selectorModel}
+		disabled={disabled || isOffline}
 		{forceForegroundText}
 		{useGlobalSelection}
 	/>

@@ -18,8 +18,8 @@
 			class="file-upload-button md:h-8 md:w-8 h-9 w-9 rounded-full p-0"
 			{disabled}
 			{onclick}
-			variant="secondary"
 			type="button"
+			variant="secondary"
 		>
 			<span class="sr-only">{ATTACHMENT_TOOLTIP_TEXT}</span>
 

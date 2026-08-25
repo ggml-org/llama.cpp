@@ -867,10 +867,10 @@
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
 	bind:this={containerRef}
-	onclick={handleMermaidClick}
 	class="markdown-content {className}{settingsStore.config[SETTINGS_KEYS.FULL_HEIGHT_CODE_BLOCKS]
 		? ' full-height-code-blocks'
 		: ''}"
+	onclick={handleMermaidClick}
 >
 	{#each renderedBlocks as block (block.id)}
 		<div class="markdown-block" {...{ [MARKDOWN_DATA_ATTRS.BLOCK_ID]: block.id }}>
@@ -893,14 +893,16 @@
 			<div class="mermaid-block-wrapper streaming-mermaid-block">
 				<div class="code-block-header">
 					<span class="code-language">mermaid</span>
+
 					<div class="code-block-actions">
 						<ActionIconCopyToClipboard
-							text={incompleteCodeBlock.code}
-							canCopy={false}
 							ariaLabel="Diagram incomplete"
+							canCopy={false}
+							text={incompleteCodeBlock.code}
 						/>
 					</div>
 				</div>
+
 				<div class="mermaid-loading-placeholder">
 					<span class="mermaid-loading-text">Generating diagram...</span>
 				</div>
@@ -909,14 +911,16 @@
 			<div class="svg-block-wrapper streaming-svg-block">
 				<div class="code-block-header">
 					<span class="code-language">svg</span>
+
 					<div class="code-block-actions">
 						<ActionIconCopyToClipboard
-							text={incompleteCodeBlock.code}
-							canCopy={false}
 							ariaLabel="Diagram incomplete"
+							canCopy={false}
+							text={incompleteCodeBlock.code}
 						/>
 					</div>
 				</div>
+
 				{#if liveSvgHtml}
 					<div class="svg-scroll-container">
 						<div class={SVG.BLOCK_CLASS}>
@@ -933,10 +937,11 @@
 			<div class="code-block-wrapper streaming-code-block relative">
 				<div class="code-block-header">
 					<span class="code-language">{incompleteCodeBlock.language || 'text'}</span>
+
 					<CodeBlockActions
 						code={incompleteCodeBlock.code}
-						language={incompleteCodeBlock.language || 'text'}
 						disabled
+						language={incompleteCodeBlock.language || 'text'}
 						onPreview={(code, lang) => {
 							previewCode = code;
 							previewLanguage = lang;
@@ -961,16 +966,16 @@
 </div>
 
 <DialogCodePreview
-	open={previewDialogOpen}
 	code={previewCode}
 	language={previewLanguage}
 	onOpenChange={handlePreviewDialogOpenChange}
+	open={previewDialogOpen}
 />
 
 <DialogMermaidPreview
+	onOpenChange={handleMermaidPreviewOpenChange}
 	open={mermaidPreviewOpen}
 	svgHtml={mermaidPreviewSvgHtml}
-	onOpenChange={handleMermaidPreviewOpenChange}
 />
 
 <style>

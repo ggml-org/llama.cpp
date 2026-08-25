@@ -32,6 +32,7 @@
 					href={getHref(section)}
 				>
 					<section.icon class={ICON_CLASS_DEFAULT} />
+
 					<span class="ml-2">{section.title}</span>
 				</a>
 			{:else}
@@ -44,6 +45,7 @@
 					onclick={() => onSectionChange?.(section.title)}
 				>
 					<section.icon class={ICON_CLASS_DEFAULT} />
+
 					<span class="ml-2">{section.title}</span>
 				</button>
 			{/if}

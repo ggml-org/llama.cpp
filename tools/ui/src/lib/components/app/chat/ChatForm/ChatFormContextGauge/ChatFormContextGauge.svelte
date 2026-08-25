@@ -42,16 +42,16 @@
 </script>
 
 <div
-	role="button"
-	tabindex="0"
 	aria-label="Context usage"
-	data-context-gauge-trigger
 	class="flex h-5 w-5 cursor-default items-center justify-center"
+	data-context-gauge-trigger
 	onclick={gaugeTriggerClick}
 	onkeydown={gaugeTriggerKeydown}
 	onpointerdown={gaugeTriggerPointerDown}
 	onpointerenter={gaugeTriggerEnter}
 	onpointerleave={gaugeTriggerLeave}
+	role="button"
+	tabindex="0"
 >
-	<ContextGaugeDial percent={gauge.contextPercent} level={gauge.colorLevel} />
+	<ContextGaugeDial level={gauge.colorLevel} percent={gauge.contextPercent} />
 </div>
