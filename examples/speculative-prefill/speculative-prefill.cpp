@@ -59,6 +59,11 @@ int main(int argc, char ** argv) {
     if (params.speculative.prefill.n_gpu_layers != -1) {
         params_dft.n_gpu_layers = params.speculative.prefill.n_gpu_layers;
     }
+    if (!params.speculative.prefill.devices.empty()) {
+        params_dft.devices = params.speculative.prefill.devices;
+    } else if (!params.speculative.draft.devices.empty()) {
+        params_dft.devices = params.speculative.draft.devices;
+    }
     params_dft.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED; // standard attention needed to capture kq_soft_max weights
 
     auto init_dft = common_init_from_params(params_dft);

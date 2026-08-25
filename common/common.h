@@ -370,6 +370,7 @@ struct common_params_speculative_prefill {
     bool                enabled          = false; // enable speculative prefill
     common_params_model model;                    // draft model for speculative prefill
     int32_t             n_gpu_layers     = -1;    // max draft model layers to store in VRAM (-1 - use default)
+    std::vector<ggml_backend_dev_t> devices;      // devices to use for offloading the draft model
     float               percentage       = 0.3f;  // fraction of prompt tokens to retain (0.0 < p <= 1.0)
     int32_t             chunk_size       = 32;    // chunk grouping size (0 to disable chunking)
     int32_t             look_ahead_cnt   = 8;     // lookahead decode steps on draft model

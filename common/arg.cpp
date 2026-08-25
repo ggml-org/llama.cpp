@@ -4232,6 +4232,15 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_PREFILL_N_GPU_LAYERS"));
     add_opt(common_arg(
+        {"--spec-prefill-draft-device", "--spec-prefill-device", "-devpd", "--speculative-prefill-device", "--speculative-prefill-draft-device"}, "<dev1,dev2,..>",
+        "comma-separated list of devices to use for offloading the speculative prefill draft model (none = don't offload)\n"
+        "use --list-devices to see a list of available devices",
+        [](common_params & params, const std::string & value) {
+            params.speculative.prefill.devices = parse_device_list(value);
+            params.speculative.prefill.enabled = true;
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_PREFILL_DEVICE"));
+    add_opt(common_arg(
         {"--spec-prefill-p", "--spec-prefill-percentage"}, "P",
         string_format("fraction of prompt tokens to retain during speculative prefill (default: %.2f)", (double) params.speculative.prefill.percentage),
         [](common_params & params, const std::string & value) {
