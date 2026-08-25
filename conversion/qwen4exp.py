@@ -6,6 +6,7 @@ import torch
 from torch import Tensor
 
 import gguf
+import numpy as np
 
 from .base import ModelBase, MmprojModel
 from .qwen import _LinearAttentionVReorderBase, _Qwen35MRopeMixin
@@ -30,8 +31,13 @@ class Qwen4ExpTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self._ple_shards: dict[int, Tensor] = {}
+        # shards held only until the row stride is known, normally none
+        self._ple_pending: dict[int, Tensor] = {}
+        self._ple_shard_rows: dict[int, int] = {}
         self._ple_row_dim: int | None = None
+        self._ple_rows_per_shard: int | None = None
+        self._ple_map = None
+        self._ple_path = None
 
     def _read_hash_constants(self, suffix: str) -> list[int]:
         """Read an int64 PLE constant straight from the checkpoint.
@@ -105,16 +111,7 @@ class Qwen4ExpTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
             return []
 
         if ".ngram_embedding.shard_" in name:
-            idx = int(name.rpartition(".shard_")[2].partition(".")[0])
-            self._ple_shards[idx] = data_torch
-            self._ple_row_dim = int(data_torch.shape[-1])
-            n_parts = self.hparams["split_ngram_parts"]
-            if len(self._ple_shards) < n_parts:
-                return []
-            table = torch.cat([self._ple_shards[i] for i in range(n_parts)], dim=0)
-            self._ple_shards.clear()
-            name = gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.PER_LAYER_TOKEN_EMBD]
-            return [(name + ".weight", table)]
+            return self._place_ple_shard(data_torch, name)
 
         # one projection feeds indexer q and k; split it, as minimax-m3 does
         if ".indexer.index_qk_proj.weight" in name:
@@ -136,12 +133,101 @@ class Qwen4ExpTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
 
         return super().modify_tensors(data_torch, name, bid)
 
+    # -- the PLE table ----------------------------------------------------
+    #
+    # 128 shards concatenate into one enormous tensor. Holding them all and then
+    # torch.cat-ing peaks near 300 GB of RSS, which most machines that can
+    # otherwise convert this model do not have. Each shard is instead written
+    # straight into a memory-mapped file at its final row offset and dropped, so
+    # the peak is one shard and the rest is the page cache's problem. The trade
+    # is a temporary file beside the output, removed when the write finishes.
+    #
+    # The file holds float32 because that is what base.py has already cast the
+    # shards to by the time modify_tensors sees them, and what it calls .numpy()
+    # on afterwards.
+
+    def _place_ple_shard(self, data_torch: Tensor, name: str) -> Iterable[tuple[str, Tensor]]:
+
+        idx = int(name.rpartition(".shard_")[2].partition(".")[0])
+        n_parts = self.hparams["split_ngram_parts"]
+        rows, row_dim = int(data_torch.shape[0]), int(data_torch.shape[-1])
+
+        self._ple_row_dim = row_dim
+        self._ple_shard_rows[idx] = rows
+
+        if self._ple_map is None:
+            if idx == n_parts - 1 and n_parts > 1:
+                # the last shard may be short, so it cannot set the stride. This
+                # only happens if the checkpoint yields shards out of order
+                self._ple_pending[idx] = data_torch
+                return []
+            self._ple_rows_per_shard = rows
+            self._ple_path = self.fname_out.parent / f".{self.fname_out.stem}.ple.tmp"
+            self._ple_map = np.memmap(
+                self._ple_path, dtype=np.float32, mode="w+",
+                shape=(n_parts * rows, row_dim))
+
+        for i, held in list(self._ple_pending.items()):
+            self._ple_pending.pop(i)
+            self._write_ple_shard(i, held)
+        self._write_ple_shard(idx, data_torch)
+
+        if len(self._ple_shard_rows) < n_parts:
+            return []
+
+        total = sum(self._ple_shard_rows.values())
+        table = self._finish_ple_table(total)
+
+        gguf_name = gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.PER_LAYER_TOKEN_EMBD]
+        return [(gguf_name + ".weight", table)]
+
+    def _write_ple_shard(self, idx: int, shard: Tensor) -> None:
+
+        rows = int(shard.shape[0])
+        if idx != self.hparams["split_ngram_parts"] - 1 and rows != self._ple_rows_per_shard:
+            raise ValueError(
+                f"PLE shard {idx} has {rows} rows, expected {self._ple_rows_per_shard}; "
+                "shards other than the last must be uniform for direct placement"
+            )
+
+        start = idx * self._ple_rows_per_shard
+        # the shard is still lazy here; force it, since the point of this path
+        # is that exactly one shard is resident at a time
+        from .base import LazyTorchTensor
+
+        eager = LazyTorchTensor.to_eager(shard).to(torch.float32).contiguous()
+        self._ple_map[start:start + rows] = eager.numpy()
+        del eager
+
+    def _finish_ple_table(self, total_rows: int):
+
+        self._ple_map.flush()
+        del self._ple_map
+        self._ple_map = None
+
+        # trim the tail if the last shard came up short of a full stride
+        want = total_rows * self._ple_row_dim * 4
+        if self._ple_path.stat().st_size != want:
+            with open(self._ple_path, "r+b") as f:
+                f.truncate(want)
+
+        raw = np.memmap(self._ple_path, dtype=np.float32, mode="r+",
+                        shape=(total_rows, self._ple_row_dim))
+        return torch.from_numpy(np.asarray(raw))
+
     def prepare_tensors(self):
         super().prepare_tensors()
-        if self._ple_shards:
+        if self._ple_pending:
             raise ValueError(
-                f"unprocessed PLE embedding shards: {sorted(self._ple_shards)}"
+                f"unprocessed PLE embedding shards: {sorted(self._ple_pending)}"
             )
+
+    def write(self):
+        try:
+            super().write()
+        finally:
+            if self._ple_path is not None and self._ple_path.exists():
+                self._ple_path.unlink()
 
 
 @ModelBase.register("Qwen4ExpForConditionalGeneration")
