@@ -1002,7 +1002,7 @@ private:
         if (!ctx_spf || !smpl_spf || !params_base.speculative.prefill.enabled) {
             return;
         }
-        if (!slot.task || !slot.task->need_logits() || slot.task->tokens.has_mtmd) {
+        if (!slot.task || !slot.task->need_logits() || slot.task->tokens.has_media()) {
             return;
         }
 
@@ -1035,7 +1035,7 @@ private:
             return;
         }
 
-        slot.spec_prefill_tokens = server_tokens(kept, false);
+        slot.spec_prefill_tokens = server_tokens(kept, slot.task->tokens.has_mtmd);
         slot.spec_prefill_gen_pos = res.kept_indices.back() + 1;
         slot.spec_prefill_active = true;
 
