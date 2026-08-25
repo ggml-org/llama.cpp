@@ -593,11 +593,18 @@ struct server_slot {
             return;
         }
 
-        const double n_prompt_second = stats.n_prompt_tps();
         const double f_progress = n_prompt_src() > 0 ? (double) prompt.n_tokens() / n_prompt_src() : 0.0;
+        int n_tokens_disp = (int) stats.n_prompt_processed;
+        double n_prompt_second = stats.n_prompt_tps();
+
+        if (spec_prefill_active && task && n_prompt_src() > 0) {
+            const int n_uncached = (int) (task->n_tokens() - stats.n_prompt_cached);
+            n_tokens_disp = (int) (f_progress * n_uncached);
+            n_prompt_second = t_prompt_total > 0.0 ? (1e3 / t_prompt_total) * n_tokens_disp : 0.0;
+        }
 
         SLT_INF(*this, "prompt processing, n_tokens = %6d, progress = %.2f, t = %6.2f s / %.2f tokens per second\n",
-                (int) stats.n_prompt_processed, f_progress, t_prompt_total / 1e3, n_prompt_second);
+                n_tokens_disp, f_progress, t_prompt_total / 1e3, n_prompt_second);
     }
 
     void print_timings() const {
