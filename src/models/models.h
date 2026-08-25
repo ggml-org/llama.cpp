@@ -2311,6 +2311,16 @@ struct llama_model_qwen4exp : public llama_model_base {
 
         ggml_tensor * build_layer_attn(
         llm_graph_input_attn_kv * inp_attn,
+  const llama_kv_cache_context * mctx_idx,
+                    ggml_tensor * cur,
+                    ggml_tensor * inp_pos,
+                            int * sections,
+                            int   il);
+
+        // QSA: the token indices this layer's queries may attend to, or nullptr
+        // to attend densely
+        ggml_tensor * build_qsa_top_k(
+  const llama_kv_cache_context * mctx_idx,
                     ggml_tensor * cur,
                     ggml_tensor * inp_pos,
                             int * sections,

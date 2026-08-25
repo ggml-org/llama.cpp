@@ -1206,6 +1206,27 @@ struct llm_graph_context {
                   float   kq_scale,
                     int   il) const;
 
+    // as above, but attending only to the positions named by top_k. Used by
+    // architectures whose sparse attention is plain GQA rather than MLA.
+    ggml_tensor * build_attn(
+            llm_graph_input_attn_kv * inp,
+            ggml_tensor * wo,
+            ggml_tensor * wo_b,
+            ggml_tensor * wo_s,
+            ggml_tensor * q_cur, // [n_embd_head_q, n_head_q, n_tokens]
+            ggml_tensor * k_cur, // [n_embd_head_k, n_head_k, n_tokens]
+            ggml_tensor * v_cur, // [n_embd_head_v, n_head_v, n_tokens]
+            ggml_tensor * kq_b,
+            ggml_tensor * sinks, // [n_head_q]
+            ggml_tensor * v_mla,
+            ggml_tensor * top_k, // [n_top_k, n_tokens]
+                  float   kq_scale,
+                    int   il) const;
+
+    ggml_tensor * build_attn_mask_top_k(
+            ggml_tensor * kq_mask,
+            ggml_tensor * top_k) const;
+
     llm_graph_input_attn_k  * build_attn_inp_k() const;
 
     ggml_tensor * build_attn(
