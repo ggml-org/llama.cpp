@@ -19,7 +19,7 @@ HERE = pathlib.Path(__file__).resolve().parent
 REPO = HERE.parent
 HF = pathlib.Path.home() / ".cache/huggingface/hub"
 
-SERVER = REPO / "build/bin/llama-server"
+SERVER = REPO / "build/bin/llama-server"   # overridable with --server, to compare against mainline
 
 PRESETS = {
     "fp4": {
@@ -188,7 +188,15 @@ def main():
                     help="comma-separated subset of: " + ",".join(a[0] for a in ARMS))
     ap.add_argument("--label", default=None, help="override the policy label written to rows")
     ap.add_argument("--out", default=None)
+    ap.add_argument("--server", default=None,
+                    help="llama-server to drive. Use a mainline build to compare against upstream.")
+    ap.add_argument("--build", default="fork",
+                    help="label recorded on every row, so fork and mainline rows stay separable")
     args = ap.parse_args()
+
+    global SERVER
+    if args.server:
+        SERVER = pathlib.Path(args.server).resolve()
 
     cfg = PRESETS[args.preset]
     depths = [int(d) for d in args.depths.split(",")]
@@ -207,11 +215,15 @@ def main():
         temp = sysfs(t, "0")
         break
 
+    build_commit = subprocess.run(
+        ["git", "-C", str(SERVER.parent.parent.parent), "rev-parse", "--short=9", "HEAD"],
+        capture_output=True, text=True).stdout.strip() or "unknown"
+
     stopped = gpu_containers(stop=True)
     if stopped:
         print(f"stopped GPU containers: {' '.join(stopped)}", flush=True)
-    print(f"preset={args.preset} power={power} ctx={ctx} depths={depths} n_predict={args.n_predict}",
-          flush=True)
+    print(f"preset={args.preset} build={args.build} server={SERVER}", flush=True)
+    print(f"power={power} ctx={ctx} depths={depths} n_predict={args.n_predict}", flush=True)
 
     try:
         with open(out, "a") as fh:
@@ -240,6 +252,7 @@ def main():
                                 n = t.get("predicted_n") or 0
                                 fh.write(json.dumps({
                                     "suite": "spec", "preset": args.preset, "policy": label,
+                                    "build": args.build, "build_commit": build_commit,
                                     "workload": workload, "depth": depth, "power": power,
                                     "gpu_temp_c": int(temp) // 1000 if temp.isdigit() else None,
                                     "target": cfg["target"].name, "target_quant": cfg["target_quant"],
@@ -258,7 +271,7 @@ def main():
                                 flag = "  DEGENERATE" if n < args.n_predict * 0.9 else ""
                                 line.append(f"{workload} {t.get('predicted_per_second') or 0:6.2f} t/s"
                                             + (f" acc {acc:.0f}%" if acc is not None else "") + flag)
-                            print(f"  {label:12} d={depth:<6} " + "   ".join(line), flush=True)
+                            print(f"  {args.build:8} {label:12} d={depth:<6} " + "   ".join(line), flush=True)
                 except Exception as exc:
                     print(f"  {label:12} ARM FAILED: {exc}", flush=True)
     finally:
