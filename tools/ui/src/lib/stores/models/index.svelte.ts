@@ -13,7 +13,8 @@ import {
 	HIDDEN_MODELS_LOCALSTORAGE_KEY,
 	MODEL_GROUP_OPEN_LOCALSTORAGE_KEY,
 	RECENT_MODEL_LIMIT,
-	RECENT_MODELS_LOCALSTORAGE_KEY
+	RECENT_MODELS_LOCALSTORAGE_KEY,
+	TRANSCRIPTION_MODEL_AUTO
 } from '$lib/constants';
 import { ServerModelStatus } from '$lib/enums';
 import { HuggingFaceService } from '$lib/services/huggingface.service';
@@ -217,7 +218,7 @@ class ModelsStore implements ModelPropsHost, ModelStatusHost {
 		const isUsable = (m: ModelOption) => m.modalities?.audio && this.isModelLoaded(m.model);
 		const preferred = settingsStore.config.transcriptionModel;
 
-		if (typeof preferred === 'string' && preferred) {
+		if (typeof preferred === 'string' && preferred !== TRANSCRIPTION_MODEL_AUTO) {
 			const model = this.models.find((m) => m.model === preferred && isUsable(m));
 
 			if (model) return model.model;
