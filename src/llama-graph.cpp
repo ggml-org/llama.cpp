@@ -3000,9 +3000,8 @@ ggml_tensor * llm_graph_context::build_attn(
     return cur;
 }
 
-// Restrict a KQ mask to the positions named by top_k. Lifted verbatim out of the
-// DSA build_attn below so the sparse-attention architectures that do not use MLA
-// can share it; the node sequence is unchanged.
+// Restrict a KQ mask to the positions named by top_k. Lifted verbatim from the DSA
+// build_attn below so non-MLA sparse architectures can share it; node sequence unchanged.
 ggml_tensor * llm_graph_context::build_attn_mask_top_k(
         ggml_tensor * kq_mask,
         ggml_tensor * top_k) const {

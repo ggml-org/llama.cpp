@@ -266,8 +266,9 @@ llama_model_qwen4exp::graph::graph(const llama_model & model, const llm_graph_pa
 
     auto * inp = build_inp_mem_hybrid();
 
-    // present only when the GGUF carries indexer tensors, so a model without
-    // them still builds a dense graph
+    // present only when the GGUF carries indexer tensors, so a model without them still
+    // builds a dense graph. The indexer cache takes the attention cache's slot layout,
+    // so the two agree cell for cell by construction.
     const llama_kv_cache_context * mctx_idx = inp->mctx->get_idx();
     if (mctx_idx) {
         GGML_ASSERT(mctx_idx->get_n_kv() == inp->mctx->get_attn()->get_n_kv() &&
@@ -372,14 +373,10 @@ ggml_tensor * llama_model_qwen4exp::graph::build_norm_gated(
     return ggml_mul(ctx0, normalized, gated);
 }
 
-// QSA attends to a budget of whole blocks of `compress_ratio` tokens, chosen by
-// scoring one mean-pooled indexer key per block, plus the tail of tokens that do
-// not yet make up a complete block, which is always visible. Below
-// indexer_top_k + compress_ratio - 1 cached tokens every block fits in the
-// budget and the result is exactly dense attention.
-//
-// Everything that depends on the cache layout - which cells make up a block,
-// which blocks a query may see - is computed host-side in set_input, so the
+// QSA attends to a budget of whole blocks of `compress_ratio` tokens, scored by one
+// mean-pooled indexer key each, plus the always-visible incomplete tail. Below
+// indexer_top_k + compress_ratio - 1 cached tokens this is exactly dense attention.
+// Everything depending on cache layout is computed host-side in set_input; the
 // graph only gathers, pools and scores.
 class llm_graph_input_qsa : public llm_graph_input_i {
 public:
@@ -432,8 +429,7 @@ ggml_tensor * llama_model_qwen4exp::graph::build_qsa_top_k(
     llm_graph_input_qsa * inp = qsa.get();
     res->add_input(std::move(qsa));
 
-    // the cached indexer keys are raw: pooling happens before the norm and the
-    // rotation, so neither may be applied on the way in
+    // cached indexer keys are raw: pooling precedes norm and rotation, so apply neither
     ggml_tensor * k_raw = build_lora_mm(model.layers[il].index_k_proj, cur);
     k_raw = ggml_reshape_3d(ctx0, k_raw, idx_dim, 1, n_tokens);
     cb(k_raw, "indexer_k_raw", il);
@@ -447,8 +443,8 @@ ggml_tensor * llama_model_qwen4exp::graph::build_qsa_top_k(
     ggml_tensor * members = ggml_get_rows(ctx0, k_all, inp->blk_cells);
     members = ggml_reshape_3d(ctx0, members, idx_dim, r, n_blocks);
 
-    // mean over the block's members. compress_ratio is small, so summing the
-    // slices costs less than transposing to reach ggml_sum_rows
+    // mean over the block's members; compress_ratio is small, so summing slices beats
+    // transposing to reach ggml_sum_rows
     ggml_tensor * pooled = nullptr;
     for (int64_t i = 0; i < r; ++i) {
         ggml_tensor * slice = ggml_cont(ctx0,
@@ -474,10 +470,9 @@ ggml_tensor * llama_model_qwen4exp::graph::build_qsa_top_k(
             ext_factor, attn_factor, beta_fast, beta_slow);
     cb(q, "indexer_q", il);
 
-    // Each head's dot product is rectified before the heads are summed, as in
-    // DeepSeek's lightning indexer, but with no learned per-head weight. The
-    // reference then divides by a constant, which cannot reorder anything, so
-    // that is left out.
+    // Each head's dot product is rectified before summing, as in DeepSeek's lightning
+    // indexer but with no learned per-head weight. The reference's constant divisor
+    // cannot reorder anything, so it is left out.
     ggml_tensor * score = ggml_mul_mat(ctx0, pooled,
             ggml_reshape_2d(ctx0, ggml_cont(ctx0, q), idx_dim, n_idx_h*n_tokens));
     score = ggml_reshape_3d(ctx0, score, n_blocks, n_idx_h, n_tokens);
@@ -487,19 +482,18 @@ ggml_tensor * llama_model_qwen4exp::graph::build_qsa_top_k(
     score = ggml_reshape_2d(ctx0, score, n_blocks, n_tokens);
     cb(score, "indexer_score", il);
 
-    // Give every token of a block its block's score, rather than expanding the
-    // selected block indices: that would need an integer multiply-add, which
-    // ggml has no op for. Because the budget is a whole number of blocks and the
-    // members of a block tie exactly, the cut still lands on a block boundary.
-    // get_rows gathers rows, so the scores are transposed for the gather.
+    // Give every token of a block its block's score rather than expanding the block
+    // indices, which would need an integer multiply-add ggml has no op for. The
+    // budget is a whole number of blocks and members tie, so the cut still lands on
+    // a block boundary. get_rows gathers rows, so scores are transposed first.
     ggml_tensor * expanded = ggml_get_rows(ctx0,
             ggml_cont(ctx0, ggml_transpose(ctx0, score)), inp->cell_blk);
     expanded = ggml_cont(ctx0, ggml_transpose(ctx0, expanded));
     expanded = ggml_add(ctx0, expanded, inp->bias);
     cb(expanded, "indexer_score_tokens", il);
 
-    // the reference returns indexer_top_k + compress_ratio - 1 tokens: a whole
-    // budget of blocks plus the incomplete tail
+    // the reference returns indexer_top_k + compress_ratio - 1: a whole budget of
+    // blocks plus the incomplete tail
     const int64_t width = std::min<int64_t>(n_kv, (int64_t) hparams.indexer_top_k + r - 1);
 
     ggml_tensor * top_k = ggml_cont(ctx0, ggml_top_k(ctx0, expanded, width));
@@ -518,9 +512,8 @@ ggml_tensor * llama_model_qwen4exp::graph::build_layer_attn(
     const int64_t n_embd_head = hparams.n_embd_head_v();
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());
 
-    // The indexer reads the same block input as q/k/v. Without an indexer cache
-    // this falls back to dense attention, which is what the model computes
-    // anyway for anything shorter than the budget.
+    // The indexer reads the same block input as q/k/v; with no indexer cache this
+    // falls back to dense, which is what the model computes below the budget anyway.
     ggml_tensor * top_k = mctx_idx ? build_qsa_top_k(mctx_idx, cur, inp_pos, sections, il) : nullptr;
 
     // Order: joint QG projection, QG split, Q norm, KV projection, K norm, RoPE, attention

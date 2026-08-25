@@ -66,8 +66,7 @@ llama_memory_hybrid::llama_memory_hybrid(
             : filter_recr
     )),
     mem_idx(filter_idx == nullptr ? nullptr : [&] {
-        // MQA with a single key head of indexer_head_size, the same shaping
-        // llama_kv_cache_dsa applies to its lightning-indexer cache
+        // MQA with a single key head of indexer_head_size, as llama_kv_cache_dsa shapes its own
         std::fill(hparams_idx.n_head_kv_arr.begin(), hparams_idx.n_head_kv_arr.end(), 1);
         hparams_idx.n_embd_head_k_full = model.hparams.indexer_head_size;
 
@@ -124,18 +123,19 @@ llama_memory_context_ptr llama_memory_hybrid::init_batch(llama_batch_allocr & ba
         }
 
         // prepare the attention cache
-        llama_kv_cache::slot_info_vec_t heads_idx;
-        if (mem_idx) {
-            heads_idx = mem_idx->prepare(ubatches);
-            if (heads_idx.empty()) {
-                break;
-            }
-        }
-
         auto heads_attn = mem_attn->prepare(ubatches);
         if (heads_attn.empty()) {
             LLAMA_LOG_ERROR("%s: failed to prepare attention ubatches\n", __func__);
             return std::make_unique<llama_memory_hybrid_context>(LLAMA_MEMORY_STATUS_FAILED_PREPARE);
+        }
+
+        // The indexer cache is a side buffer addressed by the attention cache's cells, so it
+        // takes that slot layout rather than finding its own. Allocating separately let the
+        // two drift once context was rewritten between turns, pointing QSA top-k at the
+        // wrong cells.
+        llama_kv_cache::slot_info_vec_t heads_idx;
+        if (mem_idx) {
+            heads_idx = heads_attn;
         }
 
         return std::make_unique<llama_memory_hybrid_context>(

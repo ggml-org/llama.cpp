@@ -92,8 +92,7 @@ public:
 private:
     const llama_hparams & hparams;
 
-    // geometry for the indexer cache: MQA with a single key head of
-    // indexer_head_size, mirroring how llama_kv_cache_dsa builds its own
+    // indexer cache geometry: MQA, one key head of indexer_head_size, as in llama_kv_cache_dsa
     llama_hparams hparams_idx;
 
     const std::unique_ptr<llama_kv_cache> mem_attn;

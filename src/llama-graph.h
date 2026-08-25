@@ -1206,8 +1206,8 @@ struct llm_graph_context {
                   float   kq_scale,
                     int   il) const;
 
-    // as above, but attending only to the positions named by top_k. Used by
-    // architectures whose sparse attention is plain GQA rather than MLA.
+    // as above, but attending only to positions named by top_k; for sparse attention
+    // architectures that are plain GQA rather than MLA
     ggml_tensor * build_attn(
             llm_graph_input_attn_kv * inp,
             ggml_tensor * wo,
