@@ -2739,6 +2739,31 @@ static bool ggml_cuda_should_fuse_rms_norm_mul_rope(const ggml_tensor * rms_norm
     return true;
 }
 
+static bool ggml_cuda_rwkv_wkv7_output_uses_are_safe(
+        const ggml_cgraph * cgraph, int wkv_idx, int state_view_idx, size_t output_bytes) {
+    const ggml_tensor * wkv = cgraph->nodes[wkv_idx];
+    if (wkv->flags & GGML_TENSOR_FLAG_OUTPUT) {
+        return false;
+    }
+
+    int32_t remaining_uses = ggml_node_get_use_count(cgraph, wkv_idx);
+    for (int node_idx = wkv_idx + 1; node_idx < cgraph->n_nodes && remaining_uses > 0; ++node_idx) {
+        const ggml_tensor * node = cgraph->nodes[node_idx];
+        for (int src_idx = 0; src_idx < GGML_MAX_SRC; ++src_idx) {
+            if (node->src[src_idx] != wkv) {
+                continue;
+            }
+            --remaining_uses;
+            if (node_idx != state_view_idx &&
+                (node->view_src != wkv || !ggml_is_contiguous(node) || node->view_offs > output_bytes ||
+                 ggml_nbytes(node) > output_bytes - node->view_offs)) {
+                return false;
+            }
+        }
+    }
+    return remaining_uses == 0;
+}
+
 static bool ggml_cuda_prepare_rwkv_wkv7_cache_fusion(
         const ggml_cgraph * cgraph, int wkv_idx, int state_view_idx, int cache_view_idx, int cpy_idx,
         ggml_cuda_rwkv_wkv7_fused_cache & fused_cache) {
@@ -2747,7 +2772,7 @@ static bool ggml_cuda_prepare_rwkv_wkv7_cache_fusion(
     const ggml_tensor * cache_view = cgraph->nodes[cache_view_idx];
     const ggml_tensor * cpy        = cgraph->nodes[cpy_idx];
 
-    if (wkv->type != GGML_TYPE_F32 || state_view->type != GGML_TYPE_F32 ||
+    if (wkv->type != GGML_TYPE_F32 || wkv->src[6]->type != GGML_TYPE_F32 || state_view->type != GGML_TYPE_F32 ||
         cache_view->type != GGML_TYPE_F32 || cpy->type != GGML_TYPE_F32 || cache_view->data == nullptr) {
         return false;
     }
@@ -2758,19 +2783,23 @@ static bool ggml_cuda_prepare_rwkv_wkv7_cache_fusion(
     if (state_view->src[0] != wkv || state_view->view_src != wkv || state_view->view_offs != output_bytes ||
         cpy->src[0] != state_view || cpy->src[1] != cache_view ||
         ggml_nelements(state_view) != state_elems || ggml_nelements(cache_view) != state_elems ||
-        !ggml_is_contiguous(state_view) || !ggml_is_contiguous(cache_view)) {
+        !ggml_is_contiguous(state_view) || !ggml_is_contiguous(cache_view) ||
+        !ggml_cuda_rwkv_wkv7_output_uses_are_safe(cgraph, wkv_idx, state_view_idx, output_bytes)) {
         return false;
     }
 
-    // The direct state write may alias the recurrent-state input, which is safe because every
-    // kernel path loads its state shard before storing the final value. It must not overlap any
-    // activation input or the attention prefix that remains live after this fusion.
     const auto ranges_overlap = [](const void * a, size_t a_size, const void * b, size_t b_size) {
         const uintptr_t a_begin = (uintptr_t) a;
         const uintptr_t b_begin = (uintptr_t) b;
         return a_begin < b_begin + b_size && b_begin < a_begin + a_size;
     };
     const size_t state_bytes = ggml_row_size(GGML_TYPE_F32, state_elems);
+    const ggml_tensor * state = wkv->src[6];
+    // The state destination can be disjoint or exactly in-place.
+    if (state->data == nullptr ||
+        (ranges_overlap(cache_view->data, state_bytes, state->data, state_bytes) && cache_view->data != state->data)) {
+        return false;
+    }
     for (int src_idx = 0; src_idx < 6; ++src_idx) {
         const ggml_tensor * src = wkv->src[src_idx];
         if (src->data == nullptr || ranges_overlap(cache_view->data, state_bytes, src->data, ggml_nbytes(src))) {
@@ -2828,7 +2857,6 @@ static int ggml_cuda_try_rwkv_wkv7_prep_cache_fusion(
     const ggml_tensor * wkv       = cgraph->nodes[node_idx + 3];
     const ggml_tensor * kk        = neg->src[0];
     const ggml_tensor * mul_other = mul->src[0] == kk ? mul->src[1] : mul->src[0];
-
     if (ggml_get_unary_op(neg) != GGML_UNARY_OP_NEG || mul_other != gate ||
         (mul->src[0] != kk && mul->src[1] != kk) || wkv->src[4] != neg || wkv->src[5] != mul ||
         kk->type != GGML_TYPE_F32 || gate->type != GGML_TYPE_F32 || !ggml_are_same_shape(kk, gate) ||
@@ -2872,7 +2900,6 @@ static int ggml_cuda_try_rwkv_wkv7_l2_prep_cache_fusion(
     const int64_t H = wkv->src[0]->ne[1];
     const int64_t C = wkv->ne[0];
     const float eps = ggml_get_op_params_f32(l2, 0);
-
     if (ggml_get_unary_op(neg) != GGML_UNARY_OP_NEG || neg->src[0] != l2 || mul_other != gate ||
         (mul->src[0] != l2 && mul->src[1] != l2) || wkv->src[4] != neg || wkv->src[5] != mul ||
         kk->type != GGML_TYPE_F32 || gate->type != GGML_TYPE_F32 || !ggml_are_same_shape(l2, gate) ||
@@ -2900,7 +2927,7 @@ static int ggml_cuda_try_rwkv_wkv7_k_l2_prep_cache_fusion(
 
     if (!ggml_can_fuse_subgraph(
             cgraph, node_idx, ops,
-            { node_idx + 1, node_idx + 4, node_idx + 6, node_idx + 8, node_idx + 9 })) {
+            { node_idx + 4, node_idx + 6, node_idx + 8, node_idx + 9 })) {
         return 0;
     }
 
@@ -2919,7 +2946,6 @@ static int ggml_cuda_try_rwkv_wkv7_k_l2_prep_cache_fusion(
     const int64_t H = wkv->src[0]->ne[1];
     const int64_t C = wkv->ne[0];
     const float eps = ggml_get_op_params_f32(l2, 0);
-
     // MUL is commutative. For prefill, the activation has T*C elements while the weight has C;
     // for decode both have C elements, so either assignment preserves the exact product.
     const bool src0_is_input = ggml_nelements(kk_mul->src[0]) == T * C &&
