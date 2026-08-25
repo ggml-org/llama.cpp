@@ -1,30 +1,38 @@
-# llama.cpp - adaptive speculation performance fork (MTP / DFlash2)
+# llama.cpp – Adaptive Speculation + Fastest Vulkan on AMD Strix Halo
 
-A fast fork of [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp). The
-headline feature is **adaptive speculative decoding** with MTP or DFlash2: draft
-length follows measured acceptance instead of a fixed `n`. The other job is the
-fastest Vulkan path on AMD Strix Halo: stock Mesa, no ROCm toolchain.
+**Adaptive speculative decoding that actually works**  
+Draft length follows measured acceptance instead of a fixed `n`.  
+Combined with a heavily optimized Vulkan backend for AMD Strix Halo (stock Mesa RADV, no ROCm required).
 
-**Qwen3.8-27B on AMD Strix Halo (Radeon 8060S): 65 t/s generation, 440 t/s prefill.**
+### Headline numbers (AMD Strix Halo / Radeon 8060S)
 
-**Ornith1.5-35B-A3B on AMD Strix Halo (Radeon 8060S): 1616 t/s prefill, 1.9x mainline.**
+| Model                   | Metric                | Result                    | Baseline                                  |
+|-------------------------|-----------------------|---------------------------|-------------------------------------------|
+| **Qwen3.8-27B** (FP4)   | Generation            | **65.6 t/s** structured   | **4.7x** bare decode, unreachable upstream |
+|                         | Prefill (pp512)       | **440 t/s**               | +13 % vs mainline at pp2048               |
+| **Ornith-1.5-35B-A3B**  | Prefill (ubatch 2048) | **~1616-1648 t/s**        | **1.9x mainline**                         |
 
-## The numbers
+Adaptive draft (n\_min=3, n\_max=7) keeps **96 % acceptance** while drafting longer.
+Fixed `n=7` collapses to 18 % acceptance. Same ceiling, completely different result:
 
-**Generation, 65 t/s.** Adaptive DFlash2, FP4 target + FP4 sidecar, Qwen3.8-27B,
-greedy, 300 tokens:
-
-| | structured output | prose |
+| Qwen3.8-27B, adaptive DFlash2, FP4 target + FP4 sidecar, greedy, 300 tokens | structured output | prose |
 |---|---|---|
 | bare decode | 14.0 t/s | 14.1 t/s |
 | fixed draft n=3 | 41.6 | 25.4 |
 | fixed draft n=7 | 20.2 | 24.8 |
-| **adaptive draft, `n_max 7` `n_min 3`** | **65.6 t/s — 4.7×** | **26.1** |
+| **adaptive draft, `n_max 7` `n_min 3`** | **65.6 t/s - 4.7x** | **26.1** |
 
 Draft acceptance is what moves: fixed n=7 collapses to 18 %, fixed n=3 sits at 95 % and is
 *under*-drafting, adaptive holds 96 % while drafting longer. The same `n_max` that destroys the
 fixed arm is safe under adaptive. MTP uses the target's own nextn layers and needs no sidecar;
 DFlash2 uses one. Adaptive works on both.
+
+This fork:
+
+- Makes speculative decoding (MTP / DFlash2) **adapt** to real acceptance rates
+- Delivers the fastest Vulkan path we have measured on Strix Halo with stock Mesa
+- Properly accelerates the exact batch widths (3-8) that speculation needs
+- Ships working ROCmFPx / FP4 support with high-performance Vulkan kernels
 
 **Prefill, 440 t/s.** Same 27B, `pp512`, Q4_K or FP4 (they tie). Against pinned
 upstream `95b8e33e1`, stock K-quants, no ROCmFPx:
