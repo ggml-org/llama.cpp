@@ -1,0 +1,91 @@
+name: "ccache-buckets"
+description: "Save/restore latest GitHub Actions ccache matching a key prefix to/from HF buckets"
+inputs:
+  key:
+    description: "Cache key prefix to match and load"
+    required: true
+  folder:
+    description: "Bucket folder containing ccache files"
+    required: true
+  evict-old-files:
+    description: "Corresponds to the ccache --evict-older-than AGE option, where AGE is the number of seconds or days followed by the 's' or 'd' suffix respectively."
+    default: ''
+  save:
+    description: "Save ccache"
+    required: false
+    default: false
+    type: boolean
+  hf_bucket:
+    description: 'Hugging Face buckets path'
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    - name: Install Hugging Face Hub CLI
+      shell: bash
+      run: |
+        python3 -m venv .venv-hf
+        .venv-hf/bin/pip install -U huggingface_hub==1.28.0
+
+    - name: Restore ccache from buckets
+      if: ${{ inputs.save != 'true' }}
+      shell: bash
+      run: |
+        set +e -uo pipefail
+        source .venv-hf/bin/activate
+        CCACHE_DIR=$(ccache -k cache_dir)
+        if [[ -d "$CCACHE_DIR" ]]; then
+            CACHE_PATH=$(hf buckets list "hf://buckets/${{ inputs.hf_bucket }}/${{ inputs.folder }}" --json | jq -r '[.[] | select(.type == "file") | select(.path | startswith("${{ inputs.folder }}/${{ inputs.key }}") and endswith(".tar.gz"))] | sort_by(.path) | last | .path // ""')
+            if [[ -n "$CACHE_PATH" ]]; then
+                echo "Restoring ccache from '$CACHE_PATH'."
+                hf buckets cp "hf://buckets/${{ inputs.hf_bucket }}/$CACHE_PATH" ccache_bucket.tar.gz
+                mkdir -p ccache_bucket
+                if tar -xzf ccache_bucket.tar.gz -C ccache_bucket; then
+                    rm -rf "$CCACHE_DIR"
+                    mv ccache_bucket "$CCACHE_DIR"
+                    ccache -z
+                fi
+                rm ccache_bucket.tar.gz
+            else
+                echo "No ccache found."
+            fi
+        else
+            echo "'$CCACHE_DIR' not found."
+        fi
+
+    - name: Save ccache to buckets
+      if: ${{ inputs.save == 'true' }}
+      shell: bash
+      run: |
+        set +e -uo pipefail
+        source .venv-hf/bin/activate
+        CCACHE_DIR=$(ccache -k cache_dir)
+        if [[ -d "$CCACHE_DIR" ]]; then
+            ccache -s
+            if [[ -n "${{ inputs.evict-old-files }}" ]]; then
+                ccache --evict-older-than "${{ inputs.evict-old-files }}"
+            fi
+            DATESTAMP=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+            CACHEFILE="${{ inputs.key }}-$DATESTAMP.tar.gz"
+            if tar -czf ccache_bucket.tar.gz -C "$CCACHE_DIR" .; then
+                hf buckets cp ccache_bucket.tar.gz "hf://buckets/${{ inputs.hf_bucket }}/${{ inputs.folder }}/$CACHEFILE"
+            fi
+            rm ccache_bucket.tar.gz
+        else
+            echo "'$CCACHE_DIR' not found."
+        fi
+
+    - name: Remove old ccache files from buckets
+      if: ${{ inputs.save == 'true' }}
+      shell: bash
+      run: |
+        set +e -uo pipefail
+        source .venv-hf/bin/activate
+        CACHE_FILES=$(hf buckets list "hf://buckets/${{ inputs.hf_bucket }}/${{ inputs.folder }}" --json | jq -r '[.[] | select(.type == "file") | select((.uploaded_at | .[:19]+"Z" | fromdateiso8601) < (now - 5 * 60)) | select(.path | startswith("${{ inputs.folder }}/${{ inputs.key }}") and endswith(".tar.gz"))] | sort_by(.path)[:-1] | .[] | [.path // ""] | @tsv')
+        if [[ -n "$CACHE_FILES" ]]; then
+            echo "Removing old ccache files..."
+            while IFS=$'\t' read -r CACHE_PATH; do
+                hf buckets rm "hf://buckets/${{ inputs.hf_bucket }}/$CACHE_PATH" -y
+            done <<< "$CACHE_FILES"
+        fi
