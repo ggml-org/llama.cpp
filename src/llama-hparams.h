@@ -9,6 +9,8 @@
 // bump if necessary
 #define LLAMA_MAX_LAYERS  512
 #define LLAMA_MAX_EXPERTS 1024 // Kimi K3
+#define LLAMA_MAX_PLE_NGRAM 8  // qwen4exp
+#define LLAMA_MAX_PLE_HEADS 64 // qwen4exp
 
 enum llama_expert_gating_func_type {
     LLAMA_EXPERT_GATING_FUNC_TYPE_NONE           = 0,
@@ -279,6 +281,24 @@ struct llama_hparams {
     // true when a DFlash drafter uses a DeepSeek-V4 backbone (MLA + MoE + hyper-connections)
     // instead of the original dense Qwen3-style backbone.
     bool dflash_dsv4_backbone = false;
+
+    // qwen4exp low-rank hyper-connections
+    // 0 means full rank, which is the DeepSeek-V4 parameterisation
+    uint32_t hc_low_rank = 0;
+
+    // qwen4exp PLE n-gram hash embeddings
+    uint32_t ple_ngram_size      = 0;
+    uint32_t ple_heads_per_ngram = 0;
+    uint32_t ple_conv_kernel     = 0;
+    uint32_t ple_n_heads         = 0;   // (ngram_size - 1) * heads_per_ngram
+    uint32_t ple_head_dim        = 0;
+    uint32_t ple_eos_token_id    = 0;
+    std::array<uint32_t, LLAMA_MAX_LAYERS> is_ple_impl;
+    std::array<uint64_t, LLAMA_MAX_PLE_NGRAM>  ple_layer_multipliers;
+    std::array<uint64_t, LLAMA_MAX_PLE_HEADS>  ple_head_offsets;
+    std::array<uint64_t, LLAMA_MAX_PLE_HEADS>  ple_head_vocab_sizes;
+
+    bool is_ple(uint32_t il) const;
 
     // qwen3vl deepstack
     // When parsed from GGUF, this implies the first N layers consume the first

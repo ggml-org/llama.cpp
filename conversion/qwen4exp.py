@@ -116,7 +116,8 @@ class Qwen4ExpTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
             # shards are contiguous row ranges in index order
             table = torch.cat([self._ple_shards[i] for i in range(n_parts)], dim=0)
             self._ple_shards.clear()
-            return [(gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.PER_LAYER_TOKEN_EMBD], table)]
+            name = gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.PER_LAYER_TOKEN_EMBD]
+            return [(name + ".weight", table)]
 
         # one projection feeds both indexer q and k; split it so the two get
         # separate tensors, matching how minimax-m3 stores them
