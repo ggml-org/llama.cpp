@@ -34,11 +34,9 @@ var<uniform> params: Params;
 var<workgroup> shmem_idx: array<u32, WG_SIZE>;
 
 #if ORDER == 0
-#define EXTREME_VALUE 1e30
 #define SWAP_COMPARE_UP >
 #define SWAP_COMPARE_DOWN <
 #else
-#define EXTREME_VALUE -1e30
 #define SWAP_COMPARE_UP <
 #define SWAP_COMPARE_DOWN >
 #endif
@@ -78,11 +76,9 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>,
                 let dir_up = (lid.x & k) == 0;
                 let a_idx = shmem_idx[lid.x];
                 let b_idx = shmem_idx[ixj];
-                let a_val = select(EXTREME_VALUE, src[row_base + a_idx], a_idx < params.src_ne0);
-                let b_val = select(EXTREME_VALUE, src[row_base + b_idx], b_idx < params.src_ne0);
                 let should_swap = select(
-                    (a_val SWAP_COMPARE_DOWN b_val),
-                    (a_val SWAP_COMPARE_UP b_val),
+                    b_idx >= params.src_ne0 || (a_idx < params.src_ne0 && src[row_base + a_idx] SWAP_COMPARE_DOWN src[row_base + b_idx]),
+                    a_idx >= params.src_ne0 || (b_idx < params.src_ne0 && src[row_base + a_idx] SWAP_COMPARE_UP src[row_base + b_idx]),
                     dir_up);
                 if (should_swap) {
                     shmem_idx[lid.x] = b_idx;
