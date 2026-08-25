@@ -1930,6 +1930,10 @@ void server_models_routes::init_routes() {
                 {"value",  server_model_status_to_string(meta.status)},
                 {"args",   meta.args},
             };
+            if (!meta.progress.is_null() && !meta.progress.empty()) {
+                status["progress"] = meta.progress;
+                status["payload"]  = meta.progress;
+            }
             if (!meta.preset.name.empty()) {
                 common_preset preset_copy = meta.preset;
                 unset_reserved_args(preset_copy, false);

@@ -647,7 +647,7 @@ struct server_slot {
 
         if (ptask) {
             res["id_task"] = ptask->id;
-            res["n_prompt_tokens"]           = (int32_t) prompt.tokens.size();
+            res["n_prompt_tokens"]           = (int32_t) (ptask ? ptask->tokens.size() : prompt.tokens.size());
             res["n_prompt_tokens_processed"] = n_prompt_tokens_processed;
             res["n_prompt_tokens_cache"]     = n_prompt_tokens_cache;
             res["params"] = ptask->params.to_json(only_metrics);
@@ -3987,7 +3987,20 @@ private:
                                                 ssd_lcp, (unsigned long)ssd_n_tokens);
                                         llama_memory_seq_rm_attn_only(
                                             llama_get_memory(ctx_tgt), slot.id, ssd_lcp, -1);
-                                        n_past = ssd_lcp;
+                                        const auto cur_pos_min = llama_memory_seq_pos_min(llama_get_memory(ctx_tgt), slot.id);
+                                        if (cur_pos_min == -1 || cur_pos_min > 0) {
+                                            SLT_WRN(slot, "SSD cache partial-LCP restore: prefix [0, %d] not in KV cache (pos_min=%d) - rejecting SSD restore\n",
+                                                    ssd_lcp, cur_pos_min);
+                                            llama_memory_seq_rm(llama_get_memory(ctx_tgt), slot.id, -1, -1);
+                                            if (ctx_dft) {
+                                                llama_memory_seq_rm(llama_get_memory(ctx_dft.get()), slot.id, -1, -1);
+                                            }
+                                            n_past = 0;
+                                            slot.prompt.tokens.clear();
+                                            ssd_n_tokens = 0;
+                                        } else {
+                                            n_past = ssd_lcp;
+                                        }
                                     }
 
                                     if (ssd_n_tokens > 0) {
@@ -4239,8 +4252,11 @@ private:
                                 SLT_DBG(slot, "[PROBE] in-block n_past=%d pos_min=%d pos_min_thold=%d\n",
                                         n_past, pos_min, pos_min_thold);
                                 if (pos_min == -1) {
-                                    SLT_ERR(slot, "n_past = %d, slot.prompt.tokens.size() = %d, seq_id = %d, pos_min = %d\n", n_past, (int) slot.prompt.tokens.size(), slot.id, pos_min);
-                                    GGML_ABORT("pos_min == -1, but n_past > 0 - should not happen: https://github.com/ggml-org/llama.cpp/pull/13833#discussion_r2116181237");
+                                    SLT_WRN(slot, "pos_min == -1 but n_past = %d (seq_id = %d) - KV cache is empty, resetting n_past to 0\n",
+                                            n_past, slot.id);
+                                    n_past = 0;
+                                    slot.prompt.tokens.clear();
+                                    slot.prompt.checkpoints.clear();
                                 }
 
                                 // when the prompt prefix does not match, print the tokens around the mismatch
@@ -5770,11 +5786,53 @@ void server_routes::init_routes() {
         std::string tmpl_default = common_chat_templates_source(meta->chat_params.tmpls.get(), "");
         std::string tmpl_tools   = common_chat_templates_source(meta->chat_params.tmpls.get(), "tool_use");
 
+        std::string primary_backend = "cpu";
+        std::string primary_device_name = "CPU";
+        json devices_json = json::array();
+        size_t dev_count = ggml_backend_dev_count();
+        for (size_t i = 0; i < dev_count; ++i) {
+            ggml_backend_dev_t dev = ggml_backend_dev_get(i);
+            if (dev) {
+                const char * name = ggml_backend_dev_name(dev);
+                const char * desc = ggml_backend_dev_description(dev);
+                enum ggml_backend_dev_type dtype = ggml_backend_dev_type(dev);
+                std::string stype = "cpu";
+                if (dtype == GGML_BACKEND_DEVICE_TYPE_GPU || dtype == GGML_BACKEND_DEVICE_TYPE_IGPU) {
+                    stype = "gpu";
+                } else if (dtype == GGML_BACKEND_DEVICE_TYPE_ACCEL) {
+                    stype = "accel";
+                }
+                std::string reg_name = "cpu";
+                ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
+                if (reg) {
+                    const char * rname = ggml_backend_reg_name(reg);
+                    if (rname) {
+                        std::string rstr(rname);
+                        for (char & c : rstr) c = std::tolower(c);
+                        reg_name = rstr;
+                    }
+                }
+                devices_json.push_back({
+                    {"name", name ? name : ""},
+                    {"description", desc ? desc : ""},
+                    {"type", stype},
+                    {"backend", reg_name},
+                });
+                if (dtype == GGML_BACKEND_DEVICE_TYPE_GPU || dtype == GGML_BACKEND_DEVICE_TYPE_IGPU || dtype == GGML_BACKEND_DEVICE_TYPE_ACCEL) {
+                    primary_backend = reg_name;
+                    primary_device_name = desc ? desc : (name ? name : "GPU");
+                }
+            }
+        }
+
         json props = {
             { "default_generation_settings", default_generation_settings_for_props },
             { "total_slots",                 params.n_parallel },
             { "model_alias",                 meta->model_name },
             { "model_path",                  meta->model_path },
+            { "backend",                     primary_backend },
+            { "device_name",                 primary_device_name },
+            { "devices",                     devices_json },
             { "modalities",                  json {
                 {"vision", meta->has_inp_image},
                 {"video",  meta->has_inp_video},
@@ -6307,22 +6365,66 @@ void server_routes::init_routes() {
 }
 
 json server_routes::get_model_info() const {
+    std::string primary_backend = "cpu";
+    std::string primary_device_name = "CPU";
+    json devices_json = json::array();
+    size_t dev_count = ggml_backend_dev_count();
+    for (size_t i = 0; i < dev_count; ++i) {
+        ggml_backend_dev_t dev = ggml_backend_dev_get(i);
+        if (dev) {
+            const char * name = ggml_backend_dev_name(dev);
+            const char * desc = ggml_backend_dev_description(dev);
+            enum ggml_backend_dev_type dtype = ggml_backend_dev_type(dev);
+            std::string stype = "cpu";
+            if (dtype == GGML_BACKEND_DEVICE_TYPE_GPU || dtype == GGML_BACKEND_DEVICE_TYPE_IGPU) {
+                stype = "gpu";
+            } else if (dtype == GGML_BACKEND_DEVICE_TYPE_ACCEL) {
+                stype = "accel";
+            }
+            std::string reg_name = "cpu";
+            ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
+            if (reg) {
+                const char * rname = ggml_backend_reg_name(reg);
+                if (rname) {
+                    std::string rstr(rname);
+                    for (char & c : rstr) c = std::tolower(c);
+                    reg_name = rstr;
+                }
+            }
+            devices_json.push_back({
+                {"name", name ? name : ""},
+                {"description", desc ? desc : ""},
+                {"type", stype},
+                {"backend", reg_name},
+            });
+            if (dtype == GGML_BACKEND_DEVICE_TYPE_GPU || dtype == GGML_BACKEND_DEVICE_TYPE_IGPU || dtype == GGML_BACKEND_DEVICE_TYPE_ACCEL) {
+                primary_backend = reg_name;
+                primary_device_name = desc ? desc : (name ? name : "GPU");
+            }
+        }
+    }
+
     return json {
-        {"id",       meta->model_name},
-        {"aliases",  meta->model_aliases},
-        {"tags",     meta->model_tags},
-        {"object",   "model"},
-        {"created",  std::time(0)},
-        {"owned_by", "llamacpp"},
+        {"id",          meta->model_name},
+        {"aliases",     meta->model_aliases},
+        {"tags",        meta->model_tags},
+        {"object",      "model"},
+        {"created",     std::time(0)},
+        {"owned_by",    "llamacpp"},
+        {"backend",     primary_backend},
+        {"device_name", primary_device_name},
+        {"devices",     devices_json},
         {"meta",     {
-            {"vocab_type",  meta->model_vocab_type},
-            {"n_vocab",     meta->model_vocab_n_tokens},
-            {"n_ctx",       meta->slot_n_ctx},
-            {"n_ctx_train", meta->model_n_ctx_train},
-            {"n_embd",      meta->model_n_embd_inp},
-            {"n_params",    meta->model_n_params},
-            {"size",        meta->model_size},
-            {"ftype",       meta->model_ftype},
+            {"vocab_type",   meta->model_vocab_type},
+            {"n_vocab",      meta->model_vocab_n_tokens},
+            {"n_ctx",        meta->slot_n_ctx},
+            {"n_ctx_train",  meta->model_n_ctx_train},
+            {"n_embd",       meta->model_n_embd_inp},
+            {"n_params",     meta->model_n_params},
+            {"size",         meta->model_size},
+            {"ftype",        meta->model_ftype},
+            {"backend",      primary_backend},
+            {"device_name",  primary_device_name},
         }},
     };
 }

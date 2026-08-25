@@ -116,8 +116,8 @@ if (Vulkan_FOUND)
     # host-ram.cpp is in common/, but linking ggml-vulkan against llama-common creates a
     # cyclic dep (llama-common already depends on ggml-vulkan). Compile the single TU
     # directly into ggml-vulkan instead. The function is small and self-contained.
-    target_include_directories(ggml-vulkan PRIVATE ${CMAKE_SOURCE_DIR}/common)
-    target_sources(ggml-vulkan PRIVATE ${CMAKE_SOURCE_DIR}/common/host-ram.cpp)
+    target_include_directories(ggml-vulkan PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../common)
+    target_sources(ggml-vulkan PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../../common/host-ram.cpp)
 
     # Workaround to the "can't dereference invalidated vector iterator" bug in clang-cl debug build
     # Possibly relevant: https://stackoverflow.com/questions/74748276/visual-studio-no-displays-the-correct-length-of-stdvector
