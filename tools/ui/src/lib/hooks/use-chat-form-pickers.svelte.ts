@@ -11,34 +11,34 @@ import {
 	takeMentionDismissSnapshot
 } from '$lib/utils';
 
-/** Dependencies injected as getters so the hook stays free of store circular imports. */
+/** Injected getters avoid store circular imports. */
 export interface UseChatFormPickersOptions {
 	getValue: () => string;
-	/** Also fires the form's onChange. */
+	/** Also fires the form change handler. */
 	setValue: (value: string) => void;
-	/** Undefined when unmounted. */
+	/** Undefined after unmount. */
 	getCaretOffset: () => number | undefined;
 	setCaretOffset: (offset: number) => void;
 	focusInput: () => void;
-	/** Gates `/model`. */
+	/** Enables `/model`. */
 	getShowModelSelector: () => boolean;
-	/** Gates `/prompt`. */
+	/** Enables `/prompt`. */
 	hasPrompts: () => boolean;
-	/** Gates `/cwd`. */
+	/** Enables `/cwd`. */
 	hasCwdTools: () => boolean;
+	/** Enables `/skills`. */
+	hasSkills: () => boolean;
+	/** Dispatch a selected Skills command. */
+	dispatchSkillsCommand: (args: string) => void;
 	getCwd: () => string | null;
-	/** Mention search fallback scope. */
+	/** Fallback scope for mention search. */
 	getServerHome: () => string | null;
 	openModelSelector: () => void;
-	/** Delegate a keydown to the mounted pickers component, if any. */
+	/** Delegate keydown to the mounted picker component. */
 	getPickersRef: () => { handleKeydown(event: KeyboardEvent): boolean } | undefined;
 }
 
-/**
- * Chat-form picker state and the `/`+`@` routing that drives them.
- * Owns open/query state, dismiss snapshots and slash-command dispatch;
- * textarea/caret/attachment handling stays in the chat form.
- */
+/** Manage picker state and `/`/`@` routing. */
 export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 	let isCommandPickerOpen = $state(false);
 	let commandQuery = $state('');
@@ -48,19 +48,20 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 	let mentionQuery = $state('');
 	let isWorkingDirectoryPickerOpen = $state(false);
 	let workingDirectoryQuery = $state('');
-	// Last dismissed `@`-mention token; while intact, the picker does not
-	// reopen, so an escaped `@<query>` stays literal until edited.
+	let isSkillPickerOpen = $state(false);
+	let skillQuery = $state('');
+	// Keep dismissed mention tokens literal until edited.
 	let mentionDismissedSnapshot: MentionDismissSnapshot | null = null;
-	// Same dismissal contract for the `/`-command token.
+	// Apply the same dismissal rule to slash commands.
 	let commandDismissedSnapshot: CommandDismissSnapshot | null = null;
 
-	// Fall back to the server home so the picker still finds matches
-	// before a cwd is set.
+	// Use the server home until a CWD is selected.
 	const mentionScopePath = $derived(opts.getCwd() ?? opts.getServerHome() ?? null);
 	const availableCommands = $derived(
 		getChatCommands({
 			hasCwdTools: opts.hasCwdTools,
 			hasPrompts: opts.hasPrompts,
+			hasSkills: opts.hasSkills,
 			showModelSelector: opts.getShowModelSelector()
 		})
 	);
@@ -103,6 +104,28 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 				opts.openModelSelector();
 
 				break;
+			case ChatFormCommandAction.SKILLS: {
+				const trimmed = args.trim();
+
+				if (!trimmed) {
+					opts.setValue('');
+					opts.dispatchSkillsCommand('');
+
+					break;
+				}
+
+				const newValue = `/skills ${trimmed}`;
+
+				if (opts.getValue() !== newValue) {
+					opts.setValue(newValue);
+					queueMicrotask(() => opts.setCaretOffset(newValue.length));
+				}
+
+				skillQuery = trimmed;
+				isSkillPickerOpen = true;
+
+				break;
+			}
 		}
 	}
 
@@ -125,6 +148,12 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 				return;
 			}
 
+			// The `/skills` picker triggers on a trailing space (`/skills `,
+			// `/skills <name>`); a bare `/skills` stays on the command list
+			// so Enter navigates to the catalog route.
+			const hasTokenSpace =
+				value.length > 1 + token.name.length && /\s/.test(value.charAt(1 + token.name.length));
+
 			// While the `/cwd` picker is open the token doubles as its search
 			// field: keep the two in sync instead of re-dispatching.
 			if (isWorkingDirectoryPickerOpen) {
@@ -141,6 +170,25 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 				return;
 			}
 
+			// Same controlled state for the `/skills` picker: the token is the
+			// search field while open; editing it away closes the picker.
+			// Never dispatches from this path. A bare `/skills` (trailing
+			// space deleted) falls through to the command list so Enter still
+			// navigates to the catalog.
+			if (isSkillPickerOpen) {
+				isCommandPickerOpen = false;
+				commandQuery = '';
+
+				if (token.name === 'skills' && hasTokenSpace) {
+					skillQuery = token.args.trim();
+
+					return;
+				}
+
+				isSkillPickerOpen = false;
+				skillQuery = '';
+			}
+
 			// Dismissed token stays literal until it changes.
 			const isDismissedSticky =
 				commandDismissedSnapshot !== null &&
@@ -150,6 +198,23 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 			if (isDismissedSticky) {
 				isCommandPickerOpen = false;
 				commandQuery = '';
+
+				return;
+			}
+
+			// `/skills` skips the command list: once the token name resolves
+			// to `skills` and a space follows it, the typed name doubles as
+			// the skill picker's fuzzy search field. Gated by the command's
+			// availability; opens the picker only, never dispatches.
+			if (
+				token.name === 'skills' &&
+				hasTokenSpace &&
+				availableCommands.some((c) => c.name === 'skills' && !c.disabled)
+			) {
+				isCommandPickerOpen = false;
+				commandQuery = '';
+				isSkillPickerOpen = true;
+				skillQuery = token.args.trim();
 
 				return;
 			}
@@ -177,6 +242,11 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 
 		if (isWorkingDirectoryPickerOpen) {
 			isWorkingDirectoryPickerOpen = false;
+		}
+
+		if (isSkillPickerOpen) {
+			isSkillPickerOpen = false;
+			skillQuery = '';
 		}
 
 		const token = findMentionToken(value, cursor);
@@ -282,6 +352,31 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 		opts.focusInput();
 	}
 
+	// Explicitly picked a skill: close the picker, clear the composer and
+	// dispatch the durable activation exactly once. Runs only on explicit
+	// selection, never from typing.
+	function handleSkillSelect(name: string) {
+		isSkillPickerOpen = false;
+		skillQuery = '';
+		// A successful activation ends the dismissed-token contract: the next
+		// `/skills <query>` must rediscover instead of staying literal.
+		commandDismissedSnapshot = null;
+		opts.setValue('');
+		opts.dispatchSkillsCommand(name);
+	}
+
+	// Picker dismissed (Escape/click-away): snapshot the live token so the
+	// retained `/skills <query>` stays literal until deleted or retyped.
+	function handleSkillPickerClose() {
+		if (isSkillPickerOpen) {
+			commandDismissedSnapshot = takeCommandDismissSnapshot(opts.getValue());
+		}
+
+		isSkillPickerOpen = false;
+		skillQuery = '';
+		opts.focusInput();
+	}
+
 	// Two-way bind the text after `/cwd ` and the picker search input; the
 	// reverse direction is handled by handleInput.
 	$effect(() => {
@@ -322,6 +417,8 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 		handleKeydown,
 		handleMentionPickerClose,
 		handlePromptPickerClose,
+		handleSkillPickerClose,
+		handleSkillSelect,
 		handleWorkingDirectoryClose,
 		handleWorkingDirectoryOpen,
 		get isCommandPickerOpen() {
@@ -341,6 +438,12 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 		},
 		set isPromptPickerOpen(v: boolean) {
 			isPromptPickerOpen = v;
+		},
+		get isSkillPickerOpen() {
+			return isSkillPickerOpen;
+		},
+		set isSkillPickerOpen(v: boolean) {
+			isSkillPickerOpen = v;
 		},
 		get isWorkingDirectoryPickerOpen() {
 			return isWorkingDirectoryPickerOpen;
@@ -365,6 +468,12 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 		},
 		set promptSearchQuery(v: string) {
 			promptSearchQuery = v;
+		},
+		get skillQuery() {
+			return skillQuery;
+		},
+		set skillQuery(v: string) {
+			skillQuery = v;
 		},
 		get workingDirectoryQuery() {
 			return workingDirectoryQuery;

@@ -19,6 +19,8 @@ export const ROUTES = {
 	SETTINGS: '#/settings',
 	/** Exit destination for the settings view (fallback when no referrer). */
 	SETTINGS_EXIT: '#/',
+	/** Skills — read-only catalog of the server's discovered skills. */
+	SKILLS: '#/skills',
 	/** Root — start of the app. */
 	START: '#/'
 } as const;

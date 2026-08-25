@@ -8,7 +8,7 @@
  */
 
 import { browser } from '$app/environment';
-import { SETTING_CONFIG_DEFAULT, SETTINGS_KEYS } from '$lib/constants';
+import { normalizeSkillBudget, SETTING_CONFIG_DEFAULT, SETTINGS_KEYS } from '$lib/constants';
 import { ColorMode } from '$lib/enums';
 import { ParameterSyncService } from '$lib/services/parameter-sync.service';
 import { SettingsService } from '$lib/services/settings.service';
@@ -445,6 +445,9 @@ class SettingsStore {
 			...SETTING_CONFIG_DEFAULT,
 			...savedVal
 		};
+		this.config[SETTINGS_KEYS.MAX_SKILL_BUDGET] = normalizeSkillBudget(
+			this.config[SETTINGS_KEYS.MAX_SKILL_BUDGET]
+		);
 
 		// Default sendOnEnter to false on mobile when the user has no saved preference
 		if (!(SETTINGS_KEYS.SEND_ON_ENTER in savedVal)) {

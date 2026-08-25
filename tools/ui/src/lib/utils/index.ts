@@ -9,7 +9,7 @@
 
 // API utilities
 export { getAuthHeaders, getJsonHeaders, sanitizeHeaders } from './api-headers';
-export { ApiError, apiFetch, apiFetchWithParams, apiPost } from './api-fetch';
+export { ApiError, apiFetch, apiFetchWithParams, apiPost, type ApiFetchOptions } from './api-fetch';
 export { validateApiKey } from './api-key-validation';
 
 // Attachment utilities
@@ -88,7 +88,8 @@ export {
 	formatJsonPretty,
 	formatTime,
 	formatPerformanceTime,
-	formatAttachmentText
+	formatAttachmentText,
+	normalizeSkillDescription
 } from './formatters';
 
 // IME utilities
@@ -121,6 +122,7 @@ export { isTextFileByName, readFileAsText, isLikelyTextFile } from './text-files
 
 // Debounce utilities
 export { debounce } from './debounce';
+
 
 // Sanitization utilities
 export { sanitizeKeyValuePairKey, sanitizeKeyValuePairValue } from './sanitize';
@@ -262,7 +264,9 @@ export {
 	splitSearchSummaryList,
 	hasAgenticContent,
 	classifyToolResult,
-	classifyContinueIntent
+	classifyContinueIntent,
+	classifyLeafResume,
+	type LeafResumeKind
 } from './agentic';
 
 // Line-level unified diff for tool result rendering (`edit_file` block)
@@ -350,3 +354,4 @@ export { remToPx } from './css';
 
 // Audio format helper (used by agentic store and chat service)
 export { getAudioInputFormat } from './audio-format';
+

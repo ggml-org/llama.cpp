@@ -885,9 +885,17 @@ private:
 
     bool sleeping = false;
 
+    // Advances whenever the direct tokenizer/model is invalidated (destroy)
+    // or replaced (load) during the load/sleep lifecycle, so token-count
+    // snapshots and catalog cache keys observe a new tokenizer epoch.
+    uint64_t tokenizer_generation = 0;
+
     int64_t t_last_load_progress_ms = 0;
 
     void destroy() {
+        // the direct tokenizer/model is invalidated: a new generation makes
+        // any token-count snapshot taken against the old tokenizer stale
+        ++tokenizer_generation;
         spec.reset();
         spec_init.reset();
 
@@ -1064,6 +1072,9 @@ private:
         }
 
         vocab = llama_model_get_vocab(model_tgt);
+        // the direct tokenizer is (re)placed: advance the generation so
+        // token-count snapshots and catalog cache keys observe the new epoch
+        ++tokenizer_generation;
 
         n_ctx = llama_n_ctx(ctx_tgt);
 
@@ -4048,6 +4059,25 @@ llama_context * server_context::get_llama_context() const {
 
 server_response_reader server_context::get_response_reader() {
     return impl->get_response_reader();
+}
+
+std::optional<server_token_count_snapshot> server_context::token_count_snapshot(const std::string & text) const {
+    std::optional<server_token_count_snapshot> snapshot;
+    // The model thread performs destroy/reload transitions while holding the
+    // queue task mutex; acquiring it (non-blocking) both rejects an in-flight
+    // transition and makes the state below safe to observe. A contended mutex
+    // or an unavailable tokenizer (router, unloaded, sleeping) rejects with
+    // nullopt so the caller estimates instead of waking or waiting on the
+    // model.
+    const bool locked = impl->queue_tasks.try_with_task_lock([&]() {
+        if (impl->sleeping || impl->model_tgt == nullptr || impl->vocab == nullptr || impl->ctx_tgt == nullptr) {
+            return; // router / unloaded / sleeping / unavailable: reject
+        }
+        // audited no-special-token flags, identical to the /tokenize defaults
+        const llama_tokens tokens = tokenize_mixed(impl->vocab, text, /* add_special */ false, /* parse_special */ true);
+        snapshot = server_token_count_snapshot{tokens.size(), impl->tokenizer_generation};
+    });
+    return locked ? snapshot : std::nullopt;
 }
 
 server_context_meta server_context::get_meta() const {

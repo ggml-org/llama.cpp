@@ -12,6 +12,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cinttypes>
+#include <filesystem>
 #include <functional>
 #include <mutex>
 #include <queue>
@@ -515,6 +516,22 @@ std::string format_oai_resp_sse(const json & data);
 std::string format_anthropic_sse(const json & data);
 
 bool is_valid_utf8(const std::string & str);
+
+// a narrow path uses the active code page on Windows, so every crossing between
+// a std::string (always UTF-8 here) and fs::path is converted explicitly
+std::filesystem::path path_from_utf8(const std::string & s);
+
+// '/' separators on every platform: Windows accepts them, the web UI needs them
+std::string path_to_utf8(const std::filesystem::path & p);
+
+// raw, uncached HOME/USERPROFILE lookup; safe to call repeatedly to observe
+// environment changes within one process (e.g. across test fixtures).
+// home_dir() below memoizes this for hot-path callers where HOME is stable
+// for the process lifetime.
+std::string raw_home_env();
+
+// home directory, read once at first use (getenv is not thread safe against setenv)
+const std::string & home_dir();
 
 //
 // formatting output responses

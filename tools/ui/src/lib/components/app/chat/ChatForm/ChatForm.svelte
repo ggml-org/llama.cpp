@@ -1,5 +1,6 @@
 <script lang="ts">
 	import ContextGaugePopup from './ChatFormContextGauge/ContextGaugePopup.svelte';
+	import { goto } from '$app/navigation';
 	import {
 		ChatAttachmentsList,
 		ChatFormActions,
@@ -15,6 +16,7 @@
 		INITIAL_FILE_SIZE,
 		INPUT_CLASSES,
 		PROMPT_CONTENT_SEPARATOR,
+		ROUTES,
 		SETTING_CONFIG_DEFAULT
 	} from '$lib/constants';
 	import {
@@ -25,6 +27,7 @@
 		SpecialFileType
 	} from '$lib/enums';
 	import { useChatFormPickers } from '$lib/hooks/use-chat-form-pickers.svelte';
+	import { dispatchSkillActivation } from '$lib/services/skills-adapters.service';
 	import {
 		chatStore,
 		conversationsStore,
@@ -34,6 +37,7 @@
 		settingsStore,
 		toolsStore
 	} from '$lib/stores';
+	import { skillsStore } from '$lib/stores/skills.svelte';
 	import type {
 		FileMentionEntry,
 		GetPromptResult,
@@ -60,14 +64,13 @@
 		isAudioRecordingSupported
 	} from '$lib/utils/browser-only';
 	import { onMount } from 'svelte';
+	import { toast } from 'svelte-sonner';
 
 	interface Props {
-		// Data
 		attachments?: DatabaseMessageExtra[];
 		uploadedFiles?: ChatUploadedFile[];
 		value?: string;
 
-		// UI State
 		class?: string;
 		disabled?: boolean;
 		isLoading?: boolean;
@@ -76,7 +79,6 @@
 		showAddButton?: boolean;
 		showModelSelector?: boolean;
 
-		// Event Handlers
 		onAttachmentRemove?: (index: number) => void;
 		onFilesAdd?: (files: File[]) => void;
 		onStop?: () => void;
@@ -108,8 +110,7 @@
 		value = $bindable('')
 	}: Props = $props();
 
-	// Component References
-	// Shared handle of the two input renderers (plain textarea + rich chat form input).
+	// Shared handle for the textarea and rich input renderers.
 	type ChatInputHandle = {
 		focus(): void;
 		resetHeight(): void;
@@ -125,25 +126,34 @@
 		$state(undefined);
 	let inputRef: ChatInputHandle | undefined = $state(undefined);
 
-	// Render-mode gate: the plain textarea by default, the rich chat form input
-	// while the buffer carries a `file://` mention link or a complete code
-	// span (badges and code chips need a DOM the textarea cannot provide).
-	// Demotes back once neither remains.
+	// Use rich input for file mentions and code spans.
 	let useRichInput = $state(false);
 
-	// Audio Recording State
 	let isRecording = $state(false);
 	let recordingSupported = $state(false);
 
-	// Invisible anchor at the form's top edge so the mention/WD popovers
-	// float above the box.
 	let mentionAnchor: HTMLDivElement | null = $state(null);
 
 	let cwd = $derived(
 		conversationsStore.activeConversation?.cwd ?? conversationsStore.preferences.pendingCwd
 	);
 
+	// Suggest enabled skills from the ready catalog for the active CWD.
+	const skillCatalogSlot = $derived(skillsStore.slotFor(cwd ?? undefined));
+	const skillSuggestions = $derived(
+		skillCatalogSlot?.status === 'ready'
+			? (skillCatalogSlot.catalog?.skills ?? []).filter(
+					(entry) => !skillsStore.isDisabled(entry.id)
+				)
+			: []
+	);
+
+	$effect(() => {
+		skillsStore.onRouteCwdChange(cwd ?? undefined);
+	});
+
 	const pickers = useChatFormPickers({
+		dispatchSkillsCommand: handleSkillsCommand,
 		focusInput: refocusInput,
 		getCaretOffset: () => inputRef?.getCaretOffset(),
 		getCwd: () => cwd,
@@ -154,6 +164,7 @@
 		hasCwdTools: () => toolsStore.hasEnabledCwdTools,
 		hasPrompts: () =>
 			mcpStore.hasPromptsCapability(conversationsStore.preferences.getAllMcpServerOverrides()),
+		hasSkills: () => skillsStore.slotFor(cwd ?? undefined)?.status !== 'error',
 		openModelSelector: () => chatFormActionsRef?.openModelSelector(),
 		setCaretOffset: (offset) => inputRef?.setCaretOffset(offset),
 		setValue: (v) => {
@@ -162,9 +173,42 @@
 		}
 	});
 
+	// Dispatch /skills: open the catalog without args, activate a named skill.
+	function handleSkillsCommand(args: string): void {
+		if (!args) {
+			void goto(ROUTES.SKILLS);
+
+			return;
+		}
+
+		void dispatchSkillActivation(args).then((outcome) => {
+			if (!outcome.ok) {
+				if (outcome.reason === 'not-found') {
+					toast.error(`Skill "${args}" was not found`);
+				} else if (outcome.reason === 'disabled') {
+					// Disabled skills never wake the agent.
+					toast.error(`Skill "${args}" is disabled`);
+				} else if (outcome.reason === 'persistence-failed') {
+					toast.error(`Skill "${args}" could not be saved`);
+				} else {
+					toast.error('Skills are unavailable on this server');
+				}
+
+				return;
+			}
+
+			if (!outcome.created) {
+				toast.info(`Skill "${args}" is already activated in this conversation`);
+			} else {
+				toast.success(`Skill "${args}" activated`);
+			}
+
+			void chatStore.runTurnFromLeaf();
+		});
+	}
+
 	async function handleWorkingDirectoryChange(newDir: string | null) {
-		// Committing a directory consumes the `/cwd` token; the chip's
-		// clear-X path has no token to consume.
+		// Only a committed /cwd token is consumed.
 		const token = findCommandToken(value);
 
 		if (token && token.name === 'cwd') {
@@ -179,7 +223,6 @@
 		}
 	}
 
-	// Resource Dialog State
 	let isResourceDialogOpen = $state(false);
 	let preSelectedResourceUri = $state<string | undefined>(undefined);
 
@@ -206,10 +249,7 @@
 	);
 	let canSubmit = $derived(value.trim().length > 0 || hasAttachments);
 
-	// Caret offset restored after a renderer swap. Callers that mutate
-	// `value` themselves (e.g. the mention picker) pin the target offset
-	// BEFORE the assignment; otherwise the swap effect snapshots the
-	// current caret.
+	// Pin caret offsets before renderer swaps; otherwise the swap effect overwrites them.
 	let pendingCaretOffset = 0;
 	let caretOffsetPinned = false;
 
@@ -237,6 +277,8 @@
 	onMount(() => {
 		recordingSupported = isAudioRecordingSupported();
 		audioRecorder = new AudioRecorder();
+
+		return () => skillsStore.disposeRouteCatalog();
 	});
 
 	export function focus() {
@@ -282,8 +324,7 @@
 	}
 
 	function handleKeydown(event: KeyboardEvent) {
-		// Pickers consume navigation/escape keys first; when consumed, skip
-		// the enter-to-submit logic below.
+		// Let pickers handle navigation keys before submit logic.
 		if (pickers.handleKeydown(event)) {
 			return;
 		}
@@ -292,11 +333,7 @@
 			const isModifier = event.ctrlKey || event.metaKey;
 			const sendOnEnter = currentConfig.sendOnEnter !== false;
 
-			// Caret inside a fenced code block (closed, or still open
-			// while being typed): Enter adds a line, never submits. The
-			// rich chat form input consumes this case locally; this gate
-			// covers the plain textarea, where skipping submit lets the
-			// native newline through.
+			// Enter inside a code block inserts a newline instead of submitting.
 			if (!isModifier && isOffsetInCodeBlock(value ?? '', inputRef?.getCaretOffset() ?? 0)) {
 				return;
 			}
@@ -336,7 +373,6 @@
 				value = parsed.message;
 				onValueChange?.(parsed.message);
 
-				// Handle text attachments as files
 				if (parsed.textAttachments.length > 0) {
 					const attachmentFiles = parsed.textAttachments.map(
 						(att) =>
@@ -348,7 +384,6 @@
 					onFilesAdd?.(attachmentFiles);
 				}
 
-				// Handle MCP prompt attachments as ChatUploadedFile with mcpPrompt data
 				if (parsed.mcpPromptAttachments.length > 0) {
 					const mcpPromptFiles: ChatUploadedFile[] = parsed.mcpPromptAttachments.map((att) => ({
 						file: new File([att.content], `${att.name}${FileExtensionText.TXT}`, {
@@ -460,14 +495,12 @@
 		onUploadedFilesChange?.(uploadedFiles);
 	}
 
-	// Deferred so the closing popover's focus scope tears down first -
-	// bits-ui yanks a synchronous focus() back into the still-mounted popover.
+	// Wait for the popover focus scope to unmount before refocusing.
 	function refocusInput() {
 		queueMicrotask(() => inputRef?.focus());
 	}
 
-	// Splice the mention link in place of the `@<query>` token. Uses the
-	// live cursor, not a stale snapshot - the token may have been edited.
+	// Replace the live mention token, not a stale query snapshot.
 	function handleMentionSelect(entry: FileMentionEntry) {
 		const cursor = inputRef?.getCaretOffset() ?? value.length;
 		const token = findMentionToken(value, cursor);
@@ -478,17 +511,14 @@
 
 		if (!built) return;
 
-		// Pin the post-insertion caret BEFORE the swap effect runs;
-		// otherwise the effect clobbers it with the textarea's selection
-		// at promotion time (browser-dependent: usually reset to 0).
+		// Pin the inserted caret before the promotion effect runs.
 		pendingCaretOffset = built.caretOffset;
 		caretOffsetPinned = true;
 
 		value = built.newValue;
 		onValueChange?.(built.newValue);
 
-		// Already in rich chat form input mode: no renderer flip, so the swap
-		// effect's caret restore never runs.
+		// Restore the caret directly when already using rich input.
 		if (useRichInput) {
 			queueCaretRestore();
 		}
@@ -555,6 +585,11 @@
 		onPromptLoadStart={handlePromptLoadStart}
 		onPromptLoadComplete={handlePromptLoadComplete}
 		onPromptLoadError={handlePromptLoadError}
+		isSkillPickerOpen={pickers.isSkillPickerOpen}
+		skillQuery={pickers.skillQuery}
+		skills={skillSuggestions}
+		onSkillPickerClose={pickers.handleSkillPickerClose}
+		onSkillSelect={pickers.handleSkillSelect}
 	/>
 
 	<div

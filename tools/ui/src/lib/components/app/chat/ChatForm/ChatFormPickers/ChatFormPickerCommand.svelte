@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { FolderOpen, Sparkles } from '@lucide/svelte';
+	import { BookOpen, FolderOpen, Sparkles } from '@lucide/svelte';
 	import {
 		ChatFormPickerList,
 		ChatFormPickerListItem,
@@ -10,11 +10,7 @@
 	import { usePickerNavigation } from '$lib/hooks/use-picker-navigation.svelte';
 	import type { ChatFormCommand } from '$lib/types';
 
-	/**
-	 * Slash-command picker; `query` (typed after `/`) filters the commands.
-	 * The parent owns the "dismissed token, don't act until it changes"
-	 * snapshot, so this picker just renders and reports selection.
-	 */
+	// Parent owns dismissal state; picker filters commands and reports selection.
 	interface Props {
 		class?: string;
 		isOpen: boolean;
@@ -29,7 +25,8 @@
 	const commandIcon: Record<ChatFormCommandAction, typeof Sparkles> = {
 		[ChatFormCommandAction.CWD]: FolderOpen,
 		[ChatFormCommandAction.MODEL]: MODEL_SELECTOR_ICON,
-		[ChatFormCommandAction.PROMPT]: Sparkles
+		[ChatFormCommandAction.PROMPT]: Sparkles,
+		[ChatFormCommandAction.SKILLS]: BookOpen
 	};
 
 	const trimmedQuery = $derived((query ?? '').trim().toLowerCase());

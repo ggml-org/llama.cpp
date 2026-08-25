@@ -57,3 +57,37 @@ def test_tokenize_with_pieces():
         assert token["id"] > 0
         assert "piece" in token
         assert len(token["piece"]) > 0
+
+
+# In a direct tiny-model server, the catalog instruction token count must
+# equal the existing audited tokenizer operation with no special tokens
+# (POST /tokenize defaults: add_special=false, parse_special=true).
+def test_skills_catalog_token_count_matches_tokenize(tmp_path):
+    global server
+    server.skills = True
+    server.trust_project_skills = True
+    home = tmp_path / "home"
+    home.mkdir()
+    server.skill_home = str(home)
+    project = tmp_path / "proj"
+    project.mkdir()
+    body = "Use the read_skill tool when a task matches a skill description."
+    skill = project / ".agents" / "skills" / "counted"
+    (skill / "SKILL.md").parent.mkdir(parents=True, exist_ok=True)
+    (skill / "SKILL.md").write_text(
+        f"---\nname: counted\ndescription: counted skill\n---\n{body}", encoding="utf-8"
+    )
+    server.start()
+
+    res = server.make_request("GET", "/skills", headers={"X-Skill-Cwd": str(project)})
+    assert res.status_code == 200
+    assert len(res.body["skills"]) == 1
+    instruction = res.body["skills"][0]["instruction"]
+    assert instruction["tokens_estimated"] is False
+    assert instruction["bytes"] == len(body)
+    # compare against the existing audited tokenizer operation with no special tokens
+    res_tok = server.make_request("POST", "/tokenize", data={
+        "content": body,
+    })
+    assert res_tok.status_code == 200
+    assert instruction["tokens"] == len(res_tok.body["tokens"])

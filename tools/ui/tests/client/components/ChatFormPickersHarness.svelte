@@ -4,11 +4,21 @@
 		type UseChatFormPickersReturn
 	} from '$lib/hooks/use-chat-form-pickers.svelte';
 
+	interface Props {
+		/** Gates the `/skills` command; defaults to available. */
+		hasSkills?: boolean;
+	}
+
+	let { hasSkills = true }: Props = $props();
+
 	let value = $state('');
 	let caretOffset = $state(0);
 	const calls: string[] = [];
 
 	const pickers = useChatFormPickers({
+		dispatchSkillsCommand: (args: string) => {
+			calls.push(`dispatchSkillsCommand:${args}`);
+		},
 		focusInput: () => {},
 		getCaretOffset: () => caretOffset,
 		getCwd: () => null,
@@ -18,6 +28,7 @@
 		getValue: () => value,
 		hasCwdTools: () => true,
 		hasPrompts: () => true,
+		hasSkills: () => hasSkills,
 		openModelSelector: () => {
 			calls.push('openModelSelector');
 		},

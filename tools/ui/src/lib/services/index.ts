@@ -350,3 +350,105 @@ export { MigrationService } from './migration.service';
  * @see settingsStore in stores/settings/index.svelte.ts - reactive state + business logic
  */
 export { SettingsService } from './settings.service';
+/**
+ * **SkillsService** - Stateless transport for the llama-server Skills API
+ *
+ * Sends `GET /skills` and `POST /skills/read` through the shared `apiFetch`
+ * envelope with an optional validated CWD header. The server owns discovery,
+ * resolution, identity, containment, parsing, and XML; reads send only `name`
+ * and an optional `path`.
+ *
+ * **Key Responsibilities:**
+ * - `list(cwd?, signal?)` — deterministic catalog for an effective CWD
+ * - `read({ name, path? }, cwd?, signal?)` — current base or resource content
+ *
+ * @see skillsStore in stores/skills.svelte.ts — CWD-keyed catalog screen state and run snapshots
+ */
+export { SkillsService } from './skills.service';
+
+/**
+ * **SkillsPackingService** — Centralized Skills budget packing policy
+ *
+ * Serializes the `<skills_catalog total="..." included="...">` envelope from a
+ * frozen snapshot, applies `maxSkillBudget` by truncating entry fragments at
+ * the budget boundary in server order, and centralizes the direct-tokenizer /
+ * labeled-estimate fallback policy. Direct mode measures with the audited
+ * selected-model `POST /tokenize` request and no-special-token flags; a failed
+ * or unavailable request falls back to a labeled deterministic estimate
+ * (`ceil(bytes / 4)`) without retry, model selection, or wake. Estimated mode
+ * never issues a tokenizer request.
+ *
+ * @see buildSkillRunSnapshot — immutable per-run snapshot construction
+ * @see serializeSkillCatalogEnvelope — verbatim server-XML envelope assembly
+ */
+export { SkillsPackingService } from './skills.service';
+export {
+	buildSkillRunSnapshot,
+	estimateSkillTokens,
+	resolveSkillPackOptions,
+	serializeSkillCatalogEnvelope
+} from './skills.service';
+
+/**
+ * **SkillRunAdapters** — Snapshot-only Skills adapters for frontend-driven runs
+ *
+ * Builds collision-safe `read_skill(name, path?)` / `list_skill()` tool
+ * definitions and prompt decoration from one frozen `SkillRunSnapshot`, and
+ * executes model reads through `SkillsService` using only the snapshot
+ * CWD/name/path. Reads resolve through the server first, then pause
+ * unapproved resolved identities in the established consent mechanism;
+ * concurrent reads of the same identity share one decision, denial yields a
+ * structured no-content result, and allowed `content_xml` is preserved
+ * byte-for-byte. Allowed reads route through the durable `SkillActivationStore`
+ * (see stores/skill-activation.svelte.ts) - the single shared successful-base
+ * persistence path for model and explicit `/skills <name>` activations.
+ *
+ * @see buildSkillToolDefinitions — collision-safe adapter registration
+ * @see decorateSkillPrompt — byte-preserved envelope decoration
+ */
+export {
+	SkillRunAdapters,
+	buildSkillToolDefinitions,
+	decorateSkillPrompt,
+	dispatchSkillActivation,
+	listSkillContent,
+	skillErrorResult
+} from './skills-adapters.service';
+
+export type {
+	SkillActivationStore,
+	SkillActivationInput,
+	SkillActivationResult,
+	SkillAdapterDiagnostic,
+	SkillAdaptersBuildResult,
+	SkillCommandOutcome,
+	SkillRunAdaptersOptions,
+	SkillToolExecutionResult
+} from './skills-adapters.service';
+
+/**
+ * **SkillsActivationService** — durable Skills activation record + presentation
+ *
+ * Pure helpers for the shared successful-base-activation operation: the typed
+ * `DatabaseMessageExtraSkill` record builders, its validation, the synthetic
+ * assistant tool-call + paired tool-result pair for `/skills <name>`, the
+ * reconstruction helpers that read durable metadata back, and the renderer
+ * meta resolution. Never touches host paths, roots, or parses `content_xml`.
+ *
+ * @see skillActivationExtra — typed durable base-activation record
+ * @see buildSkillActivationPair — synthetic assistant/tool-result pair
+ * @see resolveSkillSectionMeta — safe renderer metadata with generic fallback
+ */
+export {
+	buildSkillActivationPair,
+	findBaseSkillActivation,
+	isBaseSkillActivation,
+	isSkillExtra,
+	isSkillToolSection,
+	resolveSkillSectionMeta,
+	skillActivationExtra,
+	skillExtraFromExtras,
+	skillExtraFromMessage,
+	skillResourceExtra
+} from './skills-activation.service';
+export type { SkillActivationPairData, SkillSectionMeta } from './skills-activation.service';

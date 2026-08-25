@@ -70,6 +70,7 @@
 		"mdsvex": "0.12.7",
 		"mermaid": "11.15.0",
 		"mode-watcher": "1.1.0",
+		"paneforge": "^1.0.2",
 		"pdfjs-dist": "5.4.54",
 		"playwright": "1.56.1",
 		"prettier": "3.8.3",

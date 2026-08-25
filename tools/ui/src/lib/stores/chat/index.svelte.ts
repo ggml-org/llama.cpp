@@ -41,6 +41,7 @@ import type {
 	ErrorDialogState
 } from '$lib/types';
 import {
+	filterByLeafNodeId,
 	findMessageById,
 	formatCwdMessage,
 	getConversationModel,
@@ -609,6 +610,62 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 		}
 	}
 
+	/**
+	 * Trigger a new agentic turn from the current conversation leaf node.
+	 * Used after skill activation to continue the conversation.
+	 */
+	async runTurnFromLeaf(): Promise<void> {
+		const activeConv = conversationsStore.activeConversation;
+
+		if (!activeConv) return;
+
+		const leafId = activeConv.currNode;
+
+		if (!leafId) return;
+
+		this.showErrorDialog(null);
+		this.setChatLoading(activeConv.id, true);
+		this.clearChatStreaming(activeConv.id);
+
+		try {
+			const allMessages = await conversationsStore.getConversationMessages(activeConv.id);
+			const leafMessage = findMessageById(allMessages, leafId);
+
+			if (!leafMessage) {
+				this.setChatLoading(activeConv.id, false);
+
+				return;
+			}
+
+			const assistantMessage = await DatabaseService.createMessageBranch(
+				{
+					children: [],
+					content: '',
+					convId: activeConv.id,
+					model: null,
+					role: MessageRole.ASSISTANT,
+					timestamp: Date.now(),
+					toolCalls: '',
+					type: MessageType.TEXT
+				},
+				leafMessage.id
+			);
+
+			conversationsStore.addMessageToActive(assistantMessage);
+
+			const conversationPath = filterByLeafNodeId(
+				allMessages,
+				leafMessage.id,
+				false
+			) as DatabaseMessage[];
+
+			await this.streamChatCompletion(conversationPath, assistantMessage);
+		} catch (error) {
+			console.error('Failed to run turn from leaf:', error);
+			this.setChatLoading(activeConv.id, false);
+		}
+	}
+
 	savePendingDraft(message: string, files: ChatUploadedFile[]): void {
 		this.pendingDraftMessage = message;
 		this.pendingDraftFiles = [...files];
@@ -1097,6 +1154,9 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 				conversationsStore.updateMessageAtIndex(idx, {
 					toolCalls: JSON.stringify(toolCalls)
 				});
+			},
+			onToolResultMessageCreated: (messageId: string) => {
+				lastCreatedInFlow = messageId;
 			},
 			onTurnComplete: (intermediateTimings: ChatMessageTimings) => {
 				// Update the first assistant message with cumulative agentic timings

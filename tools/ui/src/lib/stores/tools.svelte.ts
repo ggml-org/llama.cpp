@@ -14,6 +14,7 @@ import {
 	buildReadMediaToolDefinition,
 	DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY,
 	HOME_TILDE,
+	SKILL_SERVER_LABEL,
 	TOOL_GROUP_LABELS,
 	TOOL_SERVER_LABELS
 } from '$lib/constants';
@@ -26,7 +27,7 @@ import {
 	ToolSource
 } from '$lib/enums';
 import { ToolsService } from '$lib/services/tools.service';
-// direct imports between stores, not via the barrel, to avoid circular deps
+import { SKILL_TOOL_SETTINGS } from '$lib/components/app/skills/skill-presentation';
 import { mcpStore } from '$lib/stores/mcp/index.svelte';
 import { modelsStore } from '$lib/stores/models/index.svelte';
 import { settingsStore } from '$lib/stores/settings/index.svelte';
@@ -198,6 +199,29 @@ class ToolsStore {
 		return this._serverTools;
 	}
 
+	/**
+	 * Settings-only Skills group, derived solely from the centralized
+	 * `SKILL_TOOL_SETTINGS` registry. Skills are NOT ordinary model tools:
+	 * this group feeds only the Chat tool settings tab and must never enter
+	 * `allTools`, `toolGroups`, or `getEnabledToolsForLLM()`.
+	 */
+	get skillToolGroups(): ToolGroup[] {
+		const tools: ToolEntry[] = SKILL_TOOL_SETTINGS.map((setting) => ({
+			definition: setting.definition,
+			key: setting.key,
+			source: ToolSource.SKILLS
+		}));
+
+		return [
+			{
+				key: ToolSource.SKILLS,
+				label: SKILL_SERVER_LABEL,
+				source: ToolSource.SKILLS,
+				tools
+			}
+		];
+	}
+
 	/** Tools grouped by category for tree display, derived from the canonical entries */
 	get toolGroups(): ToolGroup[] {
 		const groups: ToolGroup[] = [];
@@ -269,6 +293,24 @@ class ToolsStore {
 		} finally {
 			this._loading = false;
 		}
+	}
+
+	/**
+	 * Model-facing Skill tool names (`read_skill` / `list_skill`) whose local
+	 * setting is enabled. Defaults to both; the persisted disabled-tool set
+	 * drives removal. The settings key is a local selection key, never a
+	 * generic permission/consent key.
+	 */
+	getEnabledSkillToolNames(): ReadonlySet<string> {
+		const enabled = new SvelteSet<string>();
+
+		for (const setting of SKILL_TOOL_SETTINGS) {
+			if (!this._disabledTools.has(setting.key)) {
+				enabled.add(setting.toolName);
+			}
+		}
+
+		return enabled;
 	}
 
 	/**
@@ -362,6 +404,11 @@ class ToolsStore {
 
 	isGroupFullyEnabled(group: ToolGroup): boolean {
 		return group.tools.length > 0 && group.tools.every((t) => this.isToolEnabled(t.key));
+	}
+
+	/** True when `key` is a stable `skill:<tool>` settings key. */
+	isSkillToolKey(key: string): boolean {
+		return SKILL_TOOL_SETTINGS.some((setting) => setting.key === key);
 	}
 
 	isToolEnabled(key: string): boolean {

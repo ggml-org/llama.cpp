@@ -56,6 +56,16 @@ export const SETTINGS_SECTION_TITLES = {
 	TOOLS: SETTINGS_SECTIONS.TOOLS.title
 } as const;
 
+export const SKILL_BUDGET_DEFAULT = 2000;
+
+export function normalizeSkillBudget(value: unknown): number {
+	if (typeof value !== 'number' || !Number.isFinite(value)) {
+		return SKILL_BUDGET_DEFAULT;
+	}
+
+	return Math.max(0, Math.round(value));
+}
+
 export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 	// General
 	{
@@ -346,6 +356,15 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 				max: FILE_GLOB_SEARCH_PICKERS.MAX_SEARCH_DEPTH,
 				min: 1,
 				placeholder: `${FILE_GLOB_SEARCH_PICKERS.DEFAULT_SEARCH_DEPTH}`,
+				type: SettingsFieldType.INPUT
+			},
+			{
+				defaultValue: SKILL_BUDGET_DEFAULT,
+				help: 'Maximum tokens the Skills catalog may contribute to an agentic prompt. A value of 0 keeps the catalog listed here but packs no Skills prompt envelope and registers no Skills tools.',
+				isPositiveInteger: true,
+				key: SETTINGS_KEYS.MAX_SKILL_BUDGET,
+				label: 'Skills catalog budget',
+				min: 0,
 				type: SettingsFieldType.INPUT
 			}
 		],

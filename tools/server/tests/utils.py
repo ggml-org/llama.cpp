@@ -6,7 +6,11 @@
 import subprocess
 import os
 
-TMP_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tmp")
+# this test utility's own directory, i.e. <repo>/tools/server/tests; the
+# default server-binary fallback is anchored here so it resolves inside the
+# repository regardless of the Python process CWD
+TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
+TMP_DIR = os.path.join(TESTS_DIR, "tmp")
 import re
 import json
 from json import JSONDecodeError
@@ -121,6 +125,13 @@ class ServerProcess:
     mcp_servers_config: str | None = None
     mcp_servers_json: str | None = None
     cors_origins: str | None = None
+    cors_headers: str | None = None
+    api_prefix: str | None = None
+    skills: bool = False
+    trust_project_skills: bool = False
+    skill_providers: str | None = None
+    skill_home: str | None = None
+    skill_cwd: str | None = None
 
     # session variables
     process: subprocess.Popen | None = None
@@ -134,13 +145,21 @@ class ServerProcess:
             self.server_port = int(os.environ["PORT"])
         self.external_server = "DEBUG_EXTERNAL" in os.environ
 
-    def start(self, timeout_seconds: int = DEFAULT_HTTP_TIMEOUT) -> None:
+    def _spawn(self) -> None:
+        """Launch the server process without waiting for readiness.
+
+        Shared by start() (which then polls /health) and by tests that need to
+        observe the not-ready middleware window (503) before the model load
+        completes.
+        """
         env = {
             **os.environ,
             "LLAMA_SERVER_DEBUG_FAKE_TIMING": "1",
         }
         if "LLAMA_CACHE" not in os.environ:
             env["LLAMA_CACHE"] = "tmp"
+        if self.skill_home is not None:
+            env["HOME"] = self.skill_home
         if self.external_server:
             print(f"[external_server]: Assuming external server running on {self.server_host}:{self.server_port}")
             return
@@ -149,9 +168,16 @@ class ServerProcess:
         elif "LLAMA_SERVER_BIN_PATH" in os.environ:
             server_path = os.environ["LLAMA_SERVER_BIN_PATH"]
         elif os.name == "nt":
-            server_path = "../../../build/bin/Release/llama-server.exe"
+            server_path = os.path.join(TESTS_DIR, "../../../build/bin/Release/llama-server.exe")
         else:
-            server_path = "../../../build/bin/llama-server"
+            server_path = os.path.join(TESTS_DIR, "../../../build/bin/llama-server")
+        # normalize to an absolute path so a fixture-supplied server process
+        # CWD (cwd=self.skill_cwd in Popen below) cannot break resolution;
+        # the default fallback above is anchored to this test utility's
+        # repository location, so it is stable regardless of the Python
+        # process CWD, while explicit server_path/LLAMA_SERVER_BIN_PATH
+        # keep their existing process-CWD-relative behavior
+        server_path = os.path.abspath(server_path)
         server_args = [
             "--host",
             self.server_host,
@@ -182,6 +208,10 @@ class ServerProcess:
             server_args.extend(["--models-preset", self.models_preset])
         if self.cors_origins:
             server_args.extend(["--cors-origins", self.cors_origins])
+        if self.cors_headers:
+            server_args.extend(["--cors-headers", self.cors_headers])
+        if self.api_prefix:
+            server_args.extend(["--api-prefix", self.api_prefix])
         if self.n_batch:
             server_args.extend(["--batch-size", self.n_batch])
         if self.n_ubatch:
@@ -283,6 +313,12 @@ class ServerProcess:
             server_args.extend(["--mcp-servers-config", self.mcp_servers_config])
         if self.mcp_servers_json:
             server_args.extend(["--mcp-servers-json", self.mcp_servers_json])
+        if self.skills:
+            server_args.append("--skills")
+        if self.trust_project_skills:
+            server_args.append("--trust-project-skills")
+        if self.skill_providers is not None:
+            server_args.extend(["--skill-providers", self.skill_providers])
         if self.backend_sampling:
             server_args.append("--backend_sampling")
         if self.gcp_compat:
@@ -308,17 +344,28 @@ class ServerProcess:
             stdout=self._log,
             stderr=self._log if self._log != sys.stdout else sys.stdout,
             env=env,
+            cwd=self.skill_cwd,
         )
         server_instances.add(self)
 
         print(f"server pid={self.process.pid}, pytest pid={os.getpid()}")
+
+    def spawn(self) -> None:
+        """Launch the server process and return immediately (no readiness wait)."""
+        self._spawn()
+
+    def start(self, timeout_seconds: int = DEFAULT_HTTP_TIMEOUT) -> None:
+        self.spawn()
+        if self.external_server:
+            return
 
         # wait for server to start
         start_time = time.time()
         last_print_time = start_time
         while time.time() - start_time < timeout_seconds:
             try:
-                response = self.make_request("GET", "/health", headers={
+                health_path = f"{self.api_prefix}/health" if self.api_prefix else "/health"
+                response = self.make_request("GET", health_path, headers={
                     "Authorization": f"Bearer {self.api_key}" if self.api_key else None
                 })
                 if response.status_code == 200:

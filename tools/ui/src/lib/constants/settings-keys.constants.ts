@@ -1,9 +1,4 @@
-/**
- * Settings key constants for ChatSettings configuration.
- *
- * These keys correspond to properties in SettingsConfigType and are used
- * in settings field configurations to ensure consistency.
- */
+/** Stable keys for ChatSettings configuration. */
 export const SETTINGS_KEYS = {
 	AGENTIC_MAX_TURNS: 'agenticMaxTurns',
 	ALWAYS_SHOW_SIDEBAR_ON_DESKTOP: 'alwaysShowSidebarOnDesktop',
@@ -31,6 +26,7 @@ export const SETTINGS_KEYS = {
 	FULL_HEIGHT_CODE_BLOCKS: 'fullHeightCodeBlocks',
 	JS_SANDBOX_ENABLED: 'jsSandboxEnabled',
 	MAX_IMAGE_RESOLUTION: 'maxImageMPixels',
+	MAX_SKILL_BUDGET: 'maxSkillBudget',
 	MAX_TOKENS: 'max_tokens',
 	MCP_REQUEST_TIMEOUT_SECONDS: 'mcpRequestTimeoutSeconds',
 	// MCP

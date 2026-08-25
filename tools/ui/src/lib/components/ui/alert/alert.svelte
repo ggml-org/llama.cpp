@@ -10,7 +10,11 @@
 			variant: {
 				default: 'bg-card text-card-foreground',
 				destructive:
-					'text-destructive bg-card *:data-[slot=alert-description]:text-destructive/90 [&>svg]:text-current'
+					'text-destructive bg-card *:data-[slot=alert-description]:text-destructive/90 [&>svg]:text-current',
+				success:
+					'border-green-500/40 bg-green-500/10 text-green-700 dark:text-green-400 *:data-[slot=alert-description]:text-green-700/90 dark:*:data-[slot=alert-description]:text-green-400/90 [&>svg]:text-current',
+				warning:
+					'border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-400 *:data-[slot=alert-description]:text-amber-700/90 dark:*:data-[slot=alert-description]:text-amber-400/90 [&>svg]:text-current'
 			}
 		}
 	});
