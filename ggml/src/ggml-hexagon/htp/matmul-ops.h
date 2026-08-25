@@ -714,7 +714,7 @@ static inline bool htp_mm_hmx_solve_2d_params(
     uint32_t k,
     uint32_t m_id_rows,
     uint32_t ne01_padded,
-    uint32_t ne11_padded,
+    uint32_t m_padded,
     uint32_t m_for_cost,
     int n_threads,
     bool pipeline,
@@ -732,7 +732,7 @@ static inline bool htp_mm_hmx_solve_2d_params(
     size_t best_n_chunk = 0;
     size_t best_vtcm_size = 0;
 
-    const int m_for_chunks = is_matmul_id ? hex_align_up(m_id_rows, 32) : ne11_padded;
+    const int m_for_chunks = is_matmul_id ? hex_align_up(m_id_rows, 32) : m_padded;
 
     int act_threads = n_threads;
     while (act_threads >= 1) {

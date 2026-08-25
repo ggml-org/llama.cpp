@@ -3331,7 +3331,6 @@ static int hmx_mm_op_matmul(struct htp_ops_context * octx, const struct htp_mm_k
 
     int k = (int) src0->ne[0];
     int n = (int) src0->ne[1];
-    const int m_total    = (int) src1->ne[1];
     const int act_stride = (int)(src1->nb[1] / sizeof(float));
     const int wgt_stride = (int)(src0->nb[1] / sizeof(__fp16));
 
@@ -3354,7 +3353,7 @@ static int hmx_mm_op_matmul(struct htp_ops_context * octx, const struct htp_mm_k
             .src2            = src2_ptr,
             .activation      = (float *) src1->data,
             .weight          = (const __fp16 *) src0->data,
-            .m               = m_total,
+            .m               = (int) src1->ne[1],
             .k               = k,
             .n               = n,
             .act_stride      = act_stride,
@@ -3382,6 +3381,8 @@ static int hmx_mm_op_matmul(struct htp_ops_context * octx, const struct htp_mm_k
                                      &kparams->div_ne00_padded,
                                      kparams->vtcm_size);
     } else {
+        // HMX 2D consumes all contiguous activation rows as one matrix
+        const int m_total = (int) (src1->ne[1] * src1->ne[2] * src1->ne[3]);
         ret = hmx_mm_2d_f32(
             octx->ctx, (float*) dst->data, src2_ptr, (float*) src1->data, (const uint8_t *) src0->data,
             m_total, k, n, act_stride, (int) src0->nb[1], (int) src0->type, (int) src1->ne[0],
