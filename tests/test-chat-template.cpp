@@ -28,6 +28,8 @@ static void run_multiple(const std::string& dir_path, bool stop_on_first_failure
 static void run_single(const std::string& contents, json input, bool use_common = false, bool dump_prog = false, const std::string & output_path = "");
 
 static std::string HELP = R"(
+Test the Jinja engine by rendering chat templates and comparing the output against expected results.
+
 Usage: test-chat-template [OPTIONS] PATH_TO_TEMPLATE
 Options:
   -h, --help               Show this help message and exit.
