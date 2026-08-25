@@ -91,6 +91,8 @@ RUN bash -c "source ${OpenVINO_DIR}/setupvars.sh && \
         -DCMAKE_BUILD_TYPE=Release \
         -DLLAMA_BUILD_TESTS=OFF \
         -DGGML_NATIVE=OFF \
+        -DGGML_BACKEND_DL=ON \
+        -DGGML_CPU_ALL_VARIANTS=ON \
         -DGGML_OPENVINO=ON && \
     cmake --build build/ReleaseOV --parallel "
 
