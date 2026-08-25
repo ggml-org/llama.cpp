@@ -3,13 +3,8 @@
 // switches on FaTypeK / FaTypeV. After spec-constant specialization the driver
 // folds away every path except the one matching the K/V type for this pipeline.
 //
-// Included by flash_attn.comp, flash_attn_cm1.comp and lightning_indexer.comp.
-// Not included by flash_attn_cm2.comp, which has its own buffer_reference-based
-// decode path.
-//
-// Define FA_K_ONLY before including to drop the V views and the FaTypeV switch.
-// Shaders that only read K do not declare FaTypeV, and binding 2 is theirs to
-// use for something else.
+// Included by flash_attn.comp and flash_attn_cm1.comp. Not included by
+// flash_attn_cm2.comp, which has its own buffer_reference-based decode path.
 //
 // We use macros (rather than per-quant decode functions taking a struct) on
 // purpose: the FA shaders don't enable GL_EXT_shader_explicit_arithmetic_types_float16
@@ -21,6 +16,7 @@
 // does for F32 in the cm2 shader. FaBlockBytesK/V == 16 for F32.
 layout (binding = 1) readonly buffer K_PACKED_F32  { vec4 data[]; }                k_packed_f32;
 layout (binding = 2) readonly buffer V_PACKED_F32  { vec4 data[]; }                v_packed_f32;
+
 layout (binding = 1) readonly buffer K_PACKED_Q4_0 { block_q4_0_packed16 data[]; } k_packed_q4_0;
 layout (binding = 2) readonly buffer V_PACKED_Q4_0 { block_q4_0_packed16 data[]; } v_packed_q4_0;
 layout (binding = 1) readonly buffer K_PACKED_Q4_1 { block_q4_1_packed16 data[]; } k_packed_q4_1;
@@ -134,12 +130,7 @@ FLOAT_TYPEV4 dequantize4(uint ib, uint iqs, uint a_offset, uint binding_idx) {
             case FA_TYPE_IQ4_NL: FA_DEQUANT4_IQ4_NL(k_packed_iq4_nl)
             case FA_TYPE_BF16: FA_DEQUANT4_BF16(k_packed_bf16)
         }
-    }
-    // K-only shaders (see comment on the V_PACKED_* views above) never reach
-    // this branch — they don't declare a real FaTypeV spec constant, so they
-    // must #define FaTypeV to some FA_TYPE_* value before including this file
-    // just so the switch below has something to compile against.
-    else {
+    } else {
         switch (FaTypeV) {
             case FA_TYPE_F32:  FA_DEQUANT4_F32 (v_packed_f32)
             case FA_TYPE_Q4_0: FA_DEQUANT4_Q4_0(v_packed_q4_0)
