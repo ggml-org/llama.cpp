@@ -858,8 +858,10 @@ private:
     // slots / clients
     std::vector<server_slot> slots;
 
-    int trace = 0;
-    int slots_debug = 0;
+    int trace = 0;        // env: LLAMA_TRACE
+    int slots_debug = 0;  // env: LLAMA_SERVER_SLOTS_DEBUG
+    int slots_n_diff = 0; // env: LLAMA_SERVER_SLOTS_N_DIFF
+
     int n_empty_consecutive = 0;
 
     std::unique_ptr<server_prompt_cache> prompt_cache;
@@ -1244,6 +1246,15 @@ private:
 
             if (slots_debug) {
                 SRV_WRN("LLAMA_SERVER_SLOTS_DEBUG = %d\n", slots_debug);
+            }
+        }
+
+        {
+            const char * LLAMA_SERVER_SLOTS_N_DIFF = getenv("LLAMA_SERVER_SLOTS_N_DIFF");
+            slots_n_diff = LLAMA_SERVER_SLOTS_N_DIFF ? atoi(LLAMA_SERVER_SLOTS_N_DIFF) : 0;
+
+            if (slots_n_diff) {
+                SRV_WRN("LLAMA_SERVER_SLOTS_N_DIFF = %d\n", slots_n_diff);
             }
         }
 
@@ -3179,8 +3190,8 @@ private:
                                 // when the prompt prefix does not match, print the tokens around the mismatch
                                 // this is useful for debugging prompt caching
                                 if (slots_debug) {
-                                    const int np0 = std::max<int>(n_past - 4, 0);
-                                    const int np1 = std::min<int>(n_past + 6, std::min(slot.prompt.tokens.size(), slot.task->tokens.size()));
+                                    const int np0 = std::max<int>(n_past - slots_n_diff, 0);
+                                    const int np1 = std::min<int>(n_past + slots_n_diff + 2, std::min(slot.prompt.tokens.size(), slot.task->tokens.size()));
 
                                     std::stringstream ss0;
                                     std::stringstream ss1;

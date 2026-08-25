@@ -2,6 +2,7 @@ export function useScrollCarousel() {
 	let canScrollLeft = $state(false);
 	let canScrollRight = $state(false);
 	let scrollContainer = $state<HTMLDivElement | undefined>();
+	let contentContainer = $state<HTMLDivElement | undefined>();
 
 	function scrollToCenter(element: HTMLElement) {
 		if (!scrollContainer) return;
@@ -15,18 +16,6 @@ export function useScrollCarousel() {
 		scrollContainer.scrollBy({ behavior: 'smooth', left: scrollOffset });
 	}
 
-	function scrollLeft() {
-		if (!scrollContainer) return;
-
-		scrollContainer.scrollBy({ behavior: 'smooth', left: -250 });
-	}
-
-	function scrollRight() {
-		if (!scrollContainer) return;
-
-		scrollContainer.scrollBy({ behavior: 'smooth', left: 250 });
-	}
-
 	function updateScrollButtons() {
 		if (!scrollContainer) return;
 
@@ -36,10 +25,21 @@ export function useScrollCarousel() {
 		canScrollRight = sl < scrollWidth - clientWidth - 1;
 	}
 
+	// Re-evaluate arrow visibility whenever the container or its content resizes,
+	// otherwise the arrows may not appear when overflowing items are added (e.g. new
+	// tabs/attachments) and the user has not scrolled yet.
 	$effect(() => {
-		if (scrollContainer) {
-			updateScrollButtons();
-		}
+		if (!scrollContainer) return;
+
+		updateScrollButtons();
+
+		const observer = new ResizeObserver(() => updateScrollButtons());
+
+		observer.observe(scrollContainer);
+
+		if (contentContainer) observer.observe(contentContainer);
+
+		return () => observer.disconnect();
 	});
 
 	return {
@@ -49,14 +49,18 @@ export function useScrollCarousel() {
 		get canScrollRight() {
 			return canScrollRight;
 		},
+		get contentContainer() {
+			return contentContainer;
+		},
+		set contentContainer(el: HTMLDivElement | undefined) {
+			contentContainer = el;
+		},
 		get scrollContainer() {
 			return scrollContainer;
 		},
 		set scrollContainer(el: HTMLDivElement | undefined) {
 			scrollContainer = el;
 		},
-		scrollLeft,
-		scrollRight,
 		scrollToCenter,
 		updateScrollButtons
 	};
