@@ -341,6 +341,9 @@ private:
 
     std::vector<swap_info> output_swaps;
 
+    // the same, over token rows, for the buffers that hold a row per token
+    std::vector<swap_info> token_swaps;
+
     ggml_backend_sched_ptr sched;
 
     bool sched_need_reserve = true;

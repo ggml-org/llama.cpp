@@ -10,6 +10,7 @@
 // TODO: replace with #include "llama-ext.h" in the future
 #include "../src/llama-arch.h"
 #include "../src/llama-model-saver.h"
+#include "../src/llama-ext.h"
 
 #include <cinttypes>
 #include <cstddef>
@@ -741,6 +742,103 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const gg
     return all_ok ? 0 : 1;
 }
 
+
+// output_reorder() permutes the extracted buffers by output row, but embd_layer_inp holds one
+// row per token and those rows arrive in ubatch order.
+// two sequences split over two ubatches therefore need the token permutation, not the output one.
+static int test_output_reorder_token_rows(const size_t seed) {
+    ggml_backend_dev_t dev_cpu = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+    if (dev_cpu == nullptr) {
+        return 0;
+    }
+
+    gguf_context_ptr gguf_ctx = get_gguf_ctx(LLM_ARCH_LLAMA, false);
+
+    llama_model_params model_params = llama_model_default_params();
+    model_params.progress_callback = silent_model_load_progress;
+
+    std::vector<ggml_backend_dev_t> devs = { dev_cpu, nullptr };
+    model_params.devices = devs.data();
+
+    size_t tmp = seed;
+    llama_model_ptr model(llama_model_init_from_user(gguf_ctx.get(), set_tensor_data, &tmp, model_params));
+    if (!model) {
+        throw std::runtime_error("failed to create llama model");
+    }
+
+    const uint32_t n_embd = llama_model_n_embd(model.get());
+
+    const llama_token tokens[4] = { 3, 5, 7, 11 };
+
+    auto decode_rows = [&](uint32_t n_ubatch, uint32_t n_seq_max,
+                           const llama_pos * pos, const llama_seq_id * seq, const bool * output) {
+        llama_context_params ctx_params = llama_context_default_params();
+        ctx_params.n_ctx           = 128;
+        ctx_params.n_batch         = 4;
+        ctx_params.n_ubatch        = n_ubatch;
+        ctx_params.n_seq_max       = n_seq_max;
+        ctx_params.n_threads       = 2;
+        ctx_params.n_threads_batch = 2;
+
+        llama_context_ptr lctx(llama_init_from_model(model.get(), ctx_params));
+        if (!lctx) {
+            throw std::runtime_error("failed to create llama context");
+        }
+
+        llama_set_embeddings_layer_inp(lctx.get(), 0, true);
+
+        llama_batch batch = llama_batch_init(4, 0, 1);
+        for (int i = 0; i < 4; i++) {
+            common_batch_add(batch, tokens[i], pos[i], { seq[i] }, output[i]);
+        }
+
+        const int rc = llama_decode(lctx.get(), batch);
+        llama_batch_free(batch);
+        if (rc != 0) {
+            throw std::runtime_error("failed to decode batch");
+        }
+
+        const float * layer = llama_get_embeddings_layer_inp(lctx.get(), 0);
+        return std::vector<float>(layer, layer + (size_t) 4*n_embd);
+    };
+
+    // one sequence in order: nothing is permuted, so row i is the layer input of tokens[i]
+    const llama_pos    pos_one[4] = { 0, 1, 2, 3 };
+    const llama_seq_id seq_one[4] = { 0, 0, 0, 0 };
+    const bool         out_all[4] = { true, true, true, true };
+
+    const std::vector<float> ref = decode_rows(4, 1, pos_one, seq_one, out_all);
+
+    // two sequences over two ubatches: the rows come back as batch 0, 2, 1, 3
+    // out_all keeps n_outputs equal to n_tokens, out_mid makes the outputs a subset of them
+    const llama_pos    pos_two[4] = { 0, 1, 0, 1 };
+    const llama_seq_id seq_two[4] = { 0, 0, 1, 1 };
+    const bool         out_mid[4] = { false, true, true, false };
+
+    int n_fail = 0;
+
+    for (int c = 0; c < 2; c++) {
+        const bool * output = c == 0 ? out_all : out_mid;
+
+        const std::vector<float> got = decode_rows(2, 2, pos_two, seq_two, output);
+
+        for (int i = 0; i < 4; i++) {
+            for (uint32_t k = 0; k < n_embd; k++) {
+                if (got[(size_t) i*n_embd + k] != ref[(size_t) i*n_embd + k]) {
+                    printf("%s: with %s outputs, row %d is not the layer input of batch position %d\n",
+                            __func__, c == 0 ? "all" : "partial", i, i);
+                    n_fail++;
+                    break;
+                }
+            }
+        }
+    }
+
+    printf("%s: %s\n", __func__, n_fail == 0 ? "OK" : "FAILED");
+
+    return n_fail == 0 ? 0 : 1;
+}
+
 int main(int argc, char ** argv) {
     // FIXME these tests are disabled in the CI for macOS-latest-cmake-arm64 because they are segfaulting
     common_init();
@@ -788,10 +886,15 @@ int main(int argc, char ** argv) {
     }
     printf("%s: using seed %zu\n", __func__, seed);
 
+
     try {
         if (!out.empty()) {
             return save_models(arch, seed, log_level, out);
         }
+        if (test_output_reorder_token_rows(seed) != 0) {
+            return 1;
+        }
+
         return test_backends(arch, seed, log_level);
     } catch (const std::exception & err) {
         fprintf(stderr, "encountered runtime error: %s\n", err.what());
