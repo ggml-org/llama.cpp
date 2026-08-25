@@ -19050,10 +19050,10 @@ static void * ggml_backend_vk_comm_init(ggml_backend_t * backends, size_t n_back
         comm->xfer_pool_max_val.assign(n_backends, 0);
         comm->ring_ok = true;
         for (size_t i = 0; i < n_backends; i++) {
-            comm->cmd_pool[i].init(comm->device[i], &comm->device[i]->compute_queue);
-            comm->cmd_pool_xfer[i].init(comm->device[i], &comm->device[i]->transfer_queue);
+            comm->cmd_pool[i].init(comm->device[i], comm->device[i]->compute_queue.get());
+            comm->cmd_pool_xfer[i].init(comm->device[i], comm->device[i]->transfer_queue.get());
             if (comm->device[i]->single_queue ||
-                comm->device[i]->transfer_queue.queue == comm->device[i]->compute_queue.queue) {
+                comm->device[i]->transfer_queue->handle->queue == comm->device[i]->compute_queue->handle->queue) {
                 comm->ring_ok = false;
             }
         }
