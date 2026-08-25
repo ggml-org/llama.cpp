@@ -3,17 +3,16 @@
 # Asset provisioning priority:
 #   1. Pre-built assets in SRC_DIST_DIR (manually built by user)
 #   2. If BUILD_UI=ON: npm build
-#   3. If above did not produce assets and HF_ENABLED=ON: HF Bucket download
-#      of dist.tar.gz (verified against dist.tar.gz.sha256)
+#   3. If above did not produce assets and PREBUILT_ENABLED=ON: GH Releases
+#      download of llama-<version>-ui.tar.gz (verified against the asset digest)
 
 cmake_minimum_required(VERSION 3.18)
 
 set(UI_SOURCE_DIR     "" CACHE STRING "UI source directory (to run npm build)")
 set(UI_BINARY_DIR     "" CACHE STRING "UI binary directory (to store generated files)")
 set(LLAMA_SOURCE_DIR  "" CACHE STRING "Project source root (to resolve version from git)")
-set(HF_BUCKET         "" CACHE STRING "Hugging Face bucket name")
-set(HF_VERSION        "" CACHE STRING "Version to download (empty = resolve from git)")
-set(HF_ENABLED        "" CACHE STRING "Whether to allow HF Bucket download (ON/OFF)")
+set(UI_VERSION        "" CACHE STRING "Version to download (empty = resolve from git)")
+set(PREBUILT_ENABLED  "" CACHE STRING "Whether to allow GH Releases download (ON/OFF)")
 set(BUILD_UI          "" CACHE STRING "Build UI via npm (ON/OFF)")
 set(LLAMA_UI_EMBED    "" CACHE STRING "Path to llama-ui-embed helper")
 set(LLAMA_UI_GZIP     "" CACHE STRING "Apply gzip compress to assets to save bandwidth")
@@ -141,7 +140,7 @@ function(npm_build out_var)
 
     message(STATUS "UI: running npm run build, output -> ${DIST_DIR}")
     execute_process(
-        COMMAND ${CMAKE_COMMAND} -E env "LLAMA_UI_OUT_DIR=${DIST_DIR}" "LLAMA_UI_VERSION=${HF_VERSION}" "LLAMA_BUILD_NUMBER=${LLAMA_BUILD_NUMBER}"
+        COMMAND ${CMAKE_COMMAND} -E env "LLAMA_UI_OUT_DIR=${DIST_DIR}" "LLAMA_BUILD_NUMBER=${LLAMA_BUILD_NUMBER}"
                 ${NPM_EXECUTABLE} run build
         WORKING_DIRECTORY "${WORK_DIR}"
         RESULT_VARIABLE rc
@@ -164,8 +163,8 @@ function(npm_build out_var)
 endfunction()
 
 function(resolve_version out_var)
-    if(NOT "${HF_VERSION}" STREQUAL "")
-        set(${out_var} "${HF_VERSION}" PARENT_SCOPE)
+    if(NOT "${UI_VERSION}" STREQUAL "")
+        set(${out_var} "${UI_VERSION}" PARENT_SCOPE)
         return()
     endif()
 
@@ -180,68 +179,157 @@ function(resolve_version out_var)
     set(${out_var} "" PARENT_SCOPE)
 endfunction()
 
-function(hf_download version out_var out_resolved)
+# Resolve the most recent bNNNN release tag. The /releases/latest endpoint
+# does not work here because the releases are marked as prereleases.
+function(gh_latest_tag out_var)
+    set(${out_var} "" PARENT_SCOPE)
+
+    set(auth_headers "")
+    if(DEFINED ENV{GH_TOKEN} AND NOT "$ENV{GH_TOKEN}" STREQUAL "")
+        list(APPEND auth_headers "HTTPHEADER" "Authorization: Bearer $ENV{GH_TOKEN}")
+    elseif(DEFINED ENV{GITHUB_TOKEN} AND NOT "$ENV{GITHUB_TOKEN}" STREQUAL "")
+        list(APPEND auth_headers "HTTPHEADER" "Authorization: Bearer $ENV{GITHUB_TOKEN}")
+    endif()
+
+    set(json_file "${UI_BINARY_DIR}/gh-releases.json")
+    file(DOWNLOAD "https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=30" "${json_file}"
+        STATUS status TIMEOUT 30 ${auth_headers}
+    )
+    list(GET status 0 rc)
+    if(NOT rc EQUAL 0)
+        list(GET status 1 errmsg)
+        message(STATUS "UI: failed to query GH releases: ${errmsg}")
+        return()
+    endif()
+
+    file(READ "${json_file}" json)
+    file(REMOVE "${json_file}")
+    string(REGEX MATCHALL "\"tag_name\"[ \t]*:[ \t]*\"b[0-9]+\"" tags "${json}")
+
+    set(best 0)
+    set(best_tag "")
+    foreach(t ${tags})
+        string(REGEX MATCH "b[0-9]+" tag "${t}")
+        string(SUBSTRING "${tag}" 1 -1 num)
+        if(num GREATER best)
+            set(best ${num})
+            set(best_tag "${tag}")
+        endif()
+    endforeach()
+
+    set(${out_var} "${best_tag}" PARENT_SCOPE)
+endfunction()
+
+# Get the sha256 digest of the UI asset of a release tag via the GH API.
+# Available for all assets, including ones from older releases.
+function(gh_asset_digest tag out_var)
+    set(${out_var} "" PARENT_SCOPE)
+
+    set(auth_headers "")
+    if(DEFINED ENV{GH_TOKEN} AND NOT "$ENV{GH_TOKEN}" STREQUAL "")
+        list(APPEND auth_headers "HTTPHEADER" "Authorization: Bearer $ENV{GH_TOKEN}")
+    elseif(DEFINED ENV{GITHUB_TOKEN} AND NOT "$ENV{GITHUB_TOKEN}" STREQUAL "")
+        list(APPEND auth_headers "HTTPHEADER" "Authorization: Bearer $ENV{GITHUB_TOKEN}")
+    endif()
+
+    set(json_file "${UI_BINARY_DIR}/gh-release-${tag}.json")
+    file(DOWNLOAD "https://api.github.com/repos/ggml-org/llama.cpp/releases/tags/${tag}" "${json_file}"
+        STATUS status TIMEOUT 30 ${auth_headers}
+    )
+    list(GET status 0 rc)
+    if(NOT rc EQUAL 0)
+        list(GET status 1 errmsg)
+        message(STATUS "UI: failed to query release ${tag}: ${errmsg}")
+        file(REMOVE "${json_file}")
+        return()
+    endif()
+
+    file(READ "${json_file}" json)
+    file(REMOVE "${json_file}")
+
+    # the digest of an asset is the first digest after its name in the response
+    string(FIND "${json}" "\"llama-${tag}-ui.tar.gz\"" pos)
+    if(pos EQUAL -1)
+        message(STATUS "UI: release ${tag} has no UI asset")
+        return()
+    endif()
+    string(SUBSTRING "${json}" ${pos} -1 rest)
+    string(REGEX MATCH "\"digest\"[ \t]*:[ \t]*\"sha256:([0-9a-f]+)\"" match "${rest}")
+    if(NOT match)
+        message(STATUS "UI: no digest found for the UI asset of ${tag}")
+        return()
+    endif()
+
+    set(${out_var} "${CMAKE_MATCH_1}" PARENT_SCOPE)
+endfunction()
+
+function(gh_download version out_var out_resolved)
     set(${out_var}      FALSE PARENT_SCOPE)
     set(${out_resolved} ""    PARENT_SCOPE)
 
-    set(archive "${UI_BINARY_DIR}/dist.tar.gz")
+    set(archive "${UI_BINARY_DIR}/ui.tar.gz")
 
-    # Use HF_TOKEN to benefit from higher rate limits
+    # Use GH_TOKEN to benefit from higher rate limits
     set(auth_headers "")
-    if(DEFINED ENV{HF_TOKEN} AND NOT "$ENV{HF_TOKEN}" STREQUAL "")
-        list(APPEND auth_headers "HTTPHEADER" "Authorization: Bearer $ENV{HF_TOKEN}")
+    if(DEFINED ENV{GH_TOKEN} AND NOT "$ENV{GH_TOKEN}" STREQUAL "")
+        list(APPEND auth_headers "HTTPHEADER" "Authorization: Bearer $ENV{GH_TOKEN}")
+    elseif(DEFINED ENV{GITHUB_TOKEN} AND NOT "$ENV{GITHUB_TOKEN}" STREQUAL "")
+        list(APPEND auth_headers "HTTPHEADER" "Authorization: Bearer $ENV{GITHUB_TOKEN}")
     endif()
 
     set(candidates "")
     if(NOT "${version}" STREQUAL "")
         list(APPEND candidates "${version}")
     endif()
-    list(APPEND candidates "latest")
+    gh_latest_tag(latest_tag)
+    if(NOT "${latest_tag}" STREQUAL "")
+        list(APPEND candidates "${latest_tag}")
+    endif()
+    list(REMOVE_DUPLICATES candidates)
 
     foreach(resolved ${candidates})
-        set(base "https://huggingface.co/buckets/${HF_BUCKET}/resolve/${resolved}")
+        set(base  "https://github.com/ggml-org/llama.cpp/releases/download/${resolved}")
+        set(asset "llama-${resolved}-ui.tar.gz")
 
-        message(STATUS "UI: downloading from ${resolved}: ${base}/dist.tar.gz")
+        gh_asset_digest(${resolved} expected)
+        if("${expected}" STREQUAL "")
+            continue()
+        endif()
 
-        file(DOWNLOAD "${base}/dist.tar.gz?download=true" "${archive}"
+        message(STATUS "UI: downloading ${base}/${asset}")
+
+        file(DOWNLOAD "${base}/${asset}" "${archive}"
             STATUS status TIMEOUT 300 ${auth_headers}
         )
         list(GET status 0 rc)
         if(NOT rc EQUAL 0)
             list(GET status 1 errmsg)
-            message(STATUS "UI: download dist.tar.gz from ${resolved} failed: ${errmsg}")
+            message(STATUS "UI: download ${asset} failed: ${errmsg}")
             continue()
         endif()
 
-        file(DOWNLOAD "${base}/dist.tar.gz.sha256?download=true" "${archive}.sha256"
-            STATUS status TIMEOUT 30 ${auth_headers}
-        )
-        list(GET status 0 rc)
-        if(NOT rc EQUAL 0)
-            list(GET status 1 errmsg)
-            message(STATUS "UI: download dist.tar.gz.sha256 from ${resolved} failed: ${errmsg}")
-            continue()
-        endif()
-
-        # Validate sha256 checkums
-        file(READ "${archive}.sha256" expected)
-        string(REGEX MATCH "^[0-9a-fA-F]+" expected "${expected}")
-        string(TOLOWER "${expected}" expected)
+        # Validate against the release asset digest
         file(SHA256 "${archive}" actual)
-        if("${expected}" STREQUAL "" OR NOT "${actual}" STREQUAL "${expected}")
-            message(STATUS "UI: checksum mismatch for dist.tar.gz from ${resolved}")
+        if(NOT "${actual}" STREQUAL "${expected}")
+            message(STATUS "UI: checksum mismatch for ${asset}")
+            continue()
+        endif()
+
+        # The release archive wraps the assets in a llama-<tag>/ directory
+        set(extract_dir "${UI_BINARY_DIR}/ui-extract")
+        file(REMOVE_RECURSE "${extract_dir}")
+        file(MAKE_DIRECTORY "${extract_dir}")
+        file(ARCHIVE_EXTRACT INPUT "${archive}" DESTINATION "${extract_dir}")
+
+        if(NOT EXISTS "${extract_dir}/llama-${resolved}/index.html")
+            message(STATUS "UI: archive ${asset} is missing required assets")
             continue()
         endif()
 
         # Clear DIST_DIR to remove stale files first
         file(REMOVE_RECURSE "${DIST_DIR}")
-
-        file(ARCHIVE_EXTRACT INPUT "${archive}" DESTINATION "${DIST_DIR}")
-
-        if(NOT EXISTS "${DIST_DIR}/index.html")
-            message(STATUS "UI: archive from ${resolved} is missing required assets")
-            continue()
-        endif()
+        file(RENAME "${extract_dir}/llama-${resolved}" "${DIST_DIR}")
+        file(REMOVE_RECURSE "${extract_dir}")
 
         message(STATUS "UI: archive verified and extracted")
         set(${out_var}      TRUE          PARENT_SCOPE)
@@ -308,7 +396,7 @@ set(provisioned FALSE)
 
 if(BUILD_UI)
     # Resolve version from git build-info if not explicitly set
-    resolve_version(HF_VERSION)
+    resolve_version(UI_VERSION)
     npm_build(NPM_OK)
     if(NPM_OK)
         set(provisioned TRUE)
@@ -316,9 +404,9 @@ if(BUILD_UI)
 endif()
 
 # ---------------------------------------------------------------------------
-# 3. Priority 3: HF Bucket download (if npm did not produce assets and HF_ENABLED=ON)
+# 3. Priority 3: GH Releases download (if npm did not produce assets and PREBUILT_ENABLED=ON)
 # ---------------------------------------------------------------------------
-if(NOT provisioned AND HF_ENABLED)
+if(NOT provisioned AND PREBUILT_ENABLED)
     resolve_version(VERSION)
 
     set(stamp_ok FALSE)
@@ -335,16 +423,16 @@ if(NOT provisioned AND HF_ENABLED)
         set(have_assets TRUE)
     endif()
     if(stamp_ok AND have_assets)
-        message(STATUS "UI: HF stamp '${stamped}' matches version, skipping HF fetch")
+        message(STATUS "UI: stamp '${stamped}' matches version, skipping GH Releases fetch")
         set(provisioned TRUE)
     else()
-        hf_download("${VERSION}" HF_OK HF_RESOLVED)
-        if(HF_OK)
-            file(WRITE "${STAMP_FILE}" "${HF_RESOLVED}")
-            message(STATUS "UI: HF download succeeded, stamp updated (${HF_RESOLVED})")
+        gh_download("${VERSION}" GH_OK GH_RESOLVED)
+        if(GH_OK)
+            file(WRITE "${STAMP_FILE}" "${GH_RESOLVED}")
+            message(STATUS "UI: GH Releases download succeeded, stamp updated (${GH_RESOLVED})")
             set(provisioned TRUE)
         else()
-            message(STATUS "UI: HF download failed")
+            message(STATUS "UI: GH Releases download failed")
         endif()
     endif()
 endif()
@@ -357,7 +445,7 @@ if(NOT provisioned)
         message(WARNING "UI: provisioning failed; embedding stale assets from ${DIST_DIR}")
     else()
         message(WARNING "UI: no assets available - building without an embedded UI. "
-                        "In a disconnected environment, download the pre-built UI "
+                        "In a disconnected environment, download llama-<version>-ui.tar.gz "
                         "from a llama.cpp release at "
                         "https://github.com/ggml-org/llama.cpp/releases and "
                         "extract to tools/ui/dist.")
