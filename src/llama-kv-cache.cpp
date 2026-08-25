@@ -1810,19 +1810,17 @@ void llama_kv_cache::set_input_qsa(
     int32_t * dst_blk_pos   = (int32_t *) blk_pos->data;
     float   * dst_bias      = (float   *) bias->data;
 
-    // block b is positions [b*ratio, (b+1)*ratio), so its first token sits at
-    // b*ratio. The three mrope sections all carry that position: exact for text,
-    // an approximation for the interleaved t/h/w positions of image tokens.
+    // block b covers [b*ratio, (b+1)*ratio), so its first token is at b*ratio. All three
+    // mrope sections carry that position: exact for text, approximate for image tokens.
     for (int64_t s = 0; s < 4; ++s) {
         for (int64_t b = 0; b < n_blocks; ++b) {
             dst_blk_pos[s*n_blocks + b] = (int32_t) (b*r);
         }
     }
 
-    // a block that is not completely populated cannot be pooled. Those cells are
-    // exactly the tail of the sequence, which the bias below forces in whatever
-    // score they carry, so they are pointed at block 0 only to keep the gather
-    // in range. -1 marks a cell with no usable block at all.
+    // an incompletely populated block cannot be pooled. Those cells are the tail, which
+    // the bias below forces in anyway, so they point at block 0 just to keep the gather
+    // in range. -1 marks a cell with no usable block.
     std::vector<int32_t> blk_of(n_kv, -1);
     std::vector<int32_t> filled(n_blocks, 0);
 
@@ -1856,9 +1854,8 @@ void llama_kv_cache::set_input_qsa(
         const llama_seq_id seq_id = ubatch->seq_id[i][0];
         const llama_pos    q      = ubatch->pos[i];
 
-        // everything from here on is inside an incomplete block and is always
-        // attended to, which is what makes the whole selection land on block
-        // boundaries the way the reference implementation does
+        // from here on we are inside an incomplete block, always attended to, which is what
+        // lands the selection on block boundaries as the reference does
         const llama_pos tail_start = (q + 1)/r*r;
 
         for (int64_t j = 0; j < n_kv; ++j) {
