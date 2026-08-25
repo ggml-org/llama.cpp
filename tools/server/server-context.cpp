@@ -23,6 +23,7 @@
 #include <exception>
 #include <memory>
 #include <filesystem>
+#include <random>
 #include <utility>
 #include <fstream>
 
@@ -48,6 +49,44 @@ static common_speculative_output_limits server_output_limits(const common_params
 
     result.total   = std::max<int32_t>(1, result.total);
     result.per_seq = std::max<int32_t>(1, result.per_seq);
+    return result;
+}
+
+static std::vector<llama_token> server_sample_and_accept_synthetic(
+        common_sampler * smpl,
+        llama_context * ctx,
+        const std::vector<int32_t> & idxs,
+        const llama_tokens & draft,
+        const std::vector<double> & acceptance_probs,
+        std::mt19937 & rng,
+        bool is_replay) {
+    GGML_ASSERT(idxs.size() == draft.size() + 1);
+    GGML_ASSERT(acceptance_probs.size() >= draft.size());
+
+    std::vector<llama_token> result;
+    result.reserve(idxs.size());
+
+    const llama_vocab * vocab = llama_model_get_vocab(llama_get_model(ctx));
+    std::uniform_real_distribution<double> dist(0.0, 1.0);
+    for (size_t i = 0; i < draft.size(); ++i) {
+        const llama_token id = common_sampler_sample(smpl, ctx, idxs[i]);
+        const bool accept = is_replay || dist(rng) < acceptance_probs[i];
+        if (accept && (is_replay || !llama_vocab_is_eog(vocab, draft[i]))) {
+            const bool is_replay_target = is_replay && i + 1 == draft.size();
+            common_sampler_accept(smpl, draft[i], is_replay_target);
+            result.push_back(draft[i]);
+            continue;
+        }
+
+        common_sampler_accept(smpl, id, true);
+        result.push_back(id);
+        return result;
+    }
+
+    const llama_token id = common_sampler_sample(smpl, ctx, idxs[draft.size()]);
+    common_sampler_accept(smpl, id, true);
+    result.push_back(id);
+
     return result;
 }
 
@@ -211,6 +250,7 @@ struct server_slot {
     std::vector<int32_t> spec_i_batch;
     common_prompt_checkpoint spec_ckpt;
     bool spec_is_replay = false;
+    std::mt19937 spec_acceptance_rng;
 
     // TODO: move members that belong to the task (such as `generated_text`, `has_new_line`) to task_results_state
     //       see https://github.com/ggml-org/llama.cpp/pull/18283#issuecomment-3710175837
@@ -847,6 +887,8 @@ private:
 
     common_speculative_ptr spec;
 
+    std::vector<double> spec_acceptance_probs;
+
     bool add_bos_token = true;
 
     int32_t n_ctx; // total context for all clients / slots
@@ -961,6 +1003,8 @@ private:
         load_progress_data load_progress_spec  (this, "spec_model");
 
         const bool is_resume = sleeping;
+
+        spec_acceptance_probs.clear();
 
         params_base = params;
         const auto output_limits = server_output_limits(params_base);
@@ -1200,6 +1244,38 @@ private:
             spec_init.reset();
             ctx_dft   = nullptr;
             model_dft = nullptr;
+        }
+
+        const int32_t spec_n_max_configured = common_speculative_n_max(&params_base.speculative);
+        const int32_t spec_n_max_effective  = common_speculative_n_max(spec.get());
+        std::vector<double> spec_acceptance_rates;
+        try {
+            spec_acceptance_rates = common_speculative_resolve_synthetic_acceptance_rates(
+                    &params_base.speculative, spec_n_max_effective);
+        } catch (const std::exception & e) {
+            SRV_ERR("invalid synthetic acceptance configuration: %s\n", e.what());
+            return false;
+        }
+
+        spec_acceptance_probs.reserve(spec_acceptance_rates.size());
+        std::vector<std::string> spec_acceptance_rates_str;
+        spec_acceptance_rates_str.reserve(spec_acceptance_rates.size());
+        double rate_prev = 1.0;
+        double acceptance_length = 1.0;
+        for (const double rate : spec_acceptance_rates) {
+            spec_acceptance_probs.push_back(rate_prev > 0.0 ? rate / rate_prev : 0.0);
+            spec_acceptance_rates_str.push_back(string_format("%.6g", rate));
+            rate_prev = rate;
+            acceptance_length += rate;
+        }
+        if (!spec_acceptance_probs.empty()) {
+            SRV_WRN("%s", "synthetic speculative acceptance is enabled for benchmarking; generated output is not valid\n");
+            if (spec_n_max_effective != spec_n_max_configured) {
+                SRV_WRN("synthetic acceptance draft limit was reduced from %d to %d by the initialized speculative implementations\n",
+                        spec_n_max_configured, spec_n_max_effective);
+            }
+            SRV_INF("synthetic acceptance: n_max = %zu, mean length = %.6f, rates = [%s]\n",
+                    spec_acceptance_rates.size(), acceptance_length, string_join(spec_acceptance_rates_str, ", ").c_str());
         }
 
         for (int i = 0; i < params_base.n_parallel; i++) {
@@ -1710,6 +1786,13 @@ private:
 
             SLT_TRC(slot, "sampler chain: %s\n", common_sampler_print(slot.smpl.get()).c_str());
             SLT_TRC(slot, "sampler params: \n%s\n", task.params.sampling.print().c_str());
+
+            if (!spec_acceptance_probs.empty()) {
+                const uint32_t seed = task.params.sampling.seed == LLAMA_DEFAULT_SEED
+                    ? std::random_device{}()
+                    : task.params.sampling.seed;
+                slot.spec_acceptance_rng.seed(seed);
+            }
         } else {
             slot.smpl.reset();
         }
@@ -3795,7 +3878,11 @@ private:
                 common_sampler_ptr smpl_save(common_sampler_clone(slot.smpl.get()));
 
                 GGML_ASSERT(slot.spec_i_batch.size() == n_draft + 1);
-                auto accepted = common_sampler_sample_and_accept_n(slot.smpl.get(), slot.ctx_tgt, slot.spec_i_batch, slot.spec_draft);
+                auto accepted = spec_acceptance_probs.empty()
+                    ? common_sampler_sample_and_accept_n(slot.smpl.get(), slot.ctx_tgt, slot.spec_i_batch, slot.spec_draft)
+                    : server_sample_and_accept_synthetic(
+                            slot.smpl.get(), slot.ctx_tgt, slot.spec_i_batch, slot.spec_draft,
+                            spec_acceptance_probs, slot.spec_acceptance_rng, slot.spec_is_replay);
                 slot.spec_i_batch.clear();
 
                 GGML_ASSERT(accepted.size() >= 1);
@@ -3861,7 +3948,7 @@ private:
 
             auto & n_accepted_per_pos = slot.n_accepted_per_pos;
             if (n_accepted_per_pos.empty()) {
-                n_accepted_per_pos.resize(common_speculative_n_max(&params_base.speculative), 0);
+                n_accepted_per_pos.resize(common_speculative_n_max(spec.get()), 0);
             }
             for (size_t i = 0; i < n_accepted && i < n_accepted_per_pos.size(); ++i) {
                 n_accepted_per_pos[i]++;

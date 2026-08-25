@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cmath>
 #include <cstring>
 #include <iomanip>
 #include <map>
@@ -138,6 +139,7 @@ struct common_speculative_impl {
     const common_speculative_type type;
 
     uint32_t n_seq;
+    int32_t n_max; // maximum draft length after implementation-specific limits
 
     size_t n_call_begin  = 0; // number of times this implementation was called for refresh.
     size_t n_call_draft  = 0; // number of times this implementation was called for generation.
@@ -157,7 +159,7 @@ struct common_speculative_impl {
     int64_t t_draft_us  = 0; // total time spent in generating drafts in this implementation in microseconds.
     int64_t t_accept_us = 0; // total time spent in accumulation of this implementation in microseconds.
 
-    common_speculative_impl(common_speculative_type type, uint32_t n_seq) : type(type), n_seq(n_seq) {}
+    common_speculative_impl(common_speculative_type type, uint32_t n_seq, int32_t n_max) : type(type), n_seq(n_seq), n_max(n_max) {}
 
     virtual ~common_speculative_impl() = default;
 
@@ -182,7 +184,7 @@ struct common_speculative_impl_draft_simple : public common_speculative_impl {
     std::vector<common_sampler_ptr> smpls;
 
     common_speculative_impl_draft_simple(const common_params_speculative & params, uint32_t n_seq)
-        : common_speculative_impl(COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE, n_seq)
+        : common_speculative_impl(COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE, n_seq, params.draft.n_max)
         , params(params.draft)
     {
         auto * ctx_dft = this->params.ctx_dft;
@@ -452,7 +454,7 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
     std::vector<float> g_embd_buf;
 
     common_speculative_impl_draft_eagle3(const common_params_speculative & params, uint32_t n_seq)
-        : common_speculative_impl(COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3, n_seq)
+        : common_speculative_impl(COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3, n_seq, params.draft.n_max)
         , params(params.draft)
     {
         SPC_TRC("%s", "adding speculative implementation 'draft-eagle3'\n");
@@ -937,7 +939,7 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
 
     common_speculative_impl_draft_dflash(const common_params_speculative & params, uint32_t n_seq,
             common_speculative_type type = COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH)
-        : common_speculative_impl(type, n_seq)
+        : common_speculative_impl(type, n_seq, params.draft.n_max)
         , params(params.draft)
         , is_dspark(type == COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK)
     {
@@ -983,6 +985,7 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
             this->params.n_max = std::min(this->params.n_max, n_draft_max);
             this->params.n_min = std::min(this->params.n_min, n_draft_max);
         }
+        this->n_max = this->params.n_max;
 
         batch        = llama_batch_init(llama_n_batch(ctx_dft), 0,          n_seq);
         batch_inject = llama_batch_init(llama_n_batch(ctx_dft), n_embd_dec, n_seq);
@@ -1315,7 +1318,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
     std::vector<std::vector<float>> chain_h;
 
     common_speculative_impl_draft_mtp(const common_params_speculative & params, uint32_t n_seq)
-        : common_speculative_impl(COMMON_SPECULATIVE_TYPE_DRAFT_MTP, n_seq)
+        : common_speculative_impl(COMMON_SPECULATIVE_TYPE_DRAFT_MTP, n_seq, params.draft.n_max)
         , params(params.draft)
     {
         auto * ctx_tgt = this->params.ctx_tgt;
@@ -1382,6 +1385,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                 c.reserve((size_t) (this->params.n_max + 1) * n_embd);
             }
         }
+        this->n_max = this->params.n_max;
 
         pending_h.assign(n_seq, std::vector<float>(n_embd, 0.0f));
 
@@ -1726,7 +1730,7 @@ struct common_speculative_impl_ngram_simple : public common_speculative_impl {
     common_speculative_impl_ngram_simple(
             const common_params_speculative & params, uint32_t n_seq,
             common_ngram_simple_config config)
-        : common_speculative_impl(COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE, n_seq)
+        : common_speculative_impl(COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE, n_seq, params.ngram_simple.size_m)
         , params(params.ngram_simple)
         , config(config)
     {
@@ -1770,7 +1774,7 @@ struct common_speculative_impl_ngram_map_k : public common_speculative_impl {
             const common_ngram_map & config,
             uint32_t n_seq)
         : common_speculative_impl(config.key_only ? COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K
-            : COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V, n_seq)
+            : COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V, n_seq, config.size_value)
     {
         for (uint32_t i = 0; i < n_seq; i++) {
             this->config.push_back(config);
@@ -1841,7 +1845,7 @@ struct common_speculative_impl_ngram_mod : public common_speculative_impl {
     common_speculative_impl_ngram_mod(
             const common_params_speculative & params,
             uint32_t n_seq)
-        : common_speculative_impl(COMMON_SPECULATIVE_TYPE_NGRAM_MOD, n_seq)
+        : common_speculative_impl(COMMON_SPECULATIVE_TYPE_NGRAM_MOD, n_seq, params.ngram_mod.n_max)
         , params(params.ngram_mod)
         , mod(params.ngram_mod.n_match, 4*1024*1024)
         , verbose(std::getenv("LLAMA_TRACE") != nullptr) {
@@ -2017,7 +2021,7 @@ struct common_speculative_impl_ngram_cache : public common_speculative_impl {
             const std::string & path_dynamic,
             bool save_dynamic,
             bool save_static)
-        : common_speculative_impl(COMMON_SPECULATIVE_TYPE_NGRAM_CACHE, n_seq)
+        : common_speculative_impl(COMMON_SPECULATIVE_TYPE_NGRAM_CACHE, n_seq, n_draft)
         , params(params.ngram_cache)
         , n_draft(n_draft)
         , save_dynamic(save_dynamic)
@@ -2314,6 +2318,96 @@ int32_t common_speculative_n_max(const common_params_speculative * spec) {
     }
 
     return n_max;
+}
+
+int32_t common_speculative_n_max(const common_speculative * spec) {
+    int32_t n_max = 0;
+
+    if (spec == nullptr) {
+        return n_max;
+    }
+
+    for (const auto & impl : spec->impls) {
+        n_max = std::max(n_max, std::max(0, impl->n_max));
+    }
+
+    return n_max;
+}
+
+std::vector<double> common_speculative_resolve_synthetic_acceptance_rates(const common_params_speculative * spec, int32_t n_max) {
+    const bool has_length = spec->synthetic_acceptance_length != -1.0;
+    const bool has_rates  = !spec->synthetic_acceptance_rates.empty();
+
+    if (!has_length && !has_rates) {
+        return {};
+    }
+    if (has_length && has_rates) {
+        throw std::invalid_argument("synthetic acceptance length and rates are mutually exclusive");
+    }
+
+    if (n_max <= 0) {
+        throw std::invalid_argument("synthetic acceptance requires at least one speculative token");
+    }
+
+    if (has_rates) {
+        const auto & rates = spec->synthetic_acceptance_rates;
+        if (rates.size() != (size_t) n_max) {
+            throw std::invalid_argument(string_format(
+                    "synthetic acceptance rates must contain %d values, got %zu", n_max, rates.size()));
+        }
+
+        for (size_t i = 0; i < rates.size(); ++i) {
+            if (!std::isfinite(rates[i]) || rates[i] < 0.0 || rates[i] > 1.0) {
+                throw std::invalid_argument("synthetic acceptance rates must be finite and within [0, 1]");
+            }
+            if (i > 0 && rates[i] > rates[i - 1]) {
+                throw std::invalid_argument("synthetic acceptance rates must be monotonically non-increasing");
+            }
+        }
+
+        return rates;
+    }
+
+    const double length = spec->synthetic_acceptance_length;
+    const double length_max = (double) n_max + 1.0;
+    if (!std::isfinite(length) || length < 1.0 || length > length_max) {
+        throw std::invalid_argument(string_format(
+                "synthetic acceptance length must be finite and within [1, %.0f]", length_max));
+    }
+
+    double p = 0.0;
+    if (length == length_max) {
+        p = 1.0;
+    } else if (length > 1.0) {
+        double p_min = 0.0;
+        double p_max = 1.0;
+        for (int i = 0; i < 32; ++i) {
+            const double p_mid = 0.5 * (p_min + p_max);
+            double sum = 0.0;
+            double term = p_mid;
+            for (int32_t j = 0; j < n_max; ++j) {
+                sum += term;
+                term *= p_mid;
+            }
+
+            if (sum < length - 1.0) {
+                p_min = p_mid;
+            } else {
+                p_max = p_mid;
+            }
+        }
+        p = 0.5 * (p_min + p_max);
+    }
+
+    std::vector<double> rates;
+    rates.reserve(n_max);
+    double rate = p;
+    for (int32_t i = 0; i < n_max; ++i) {
+        rates.push_back(rate);
+        rate *= p;
+    }
+
+    return rates;
 }
 
 common_params common_base_params_to_speculative(const common_params & params) {

@@ -99,6 +99,8 @@ class ServerProcess:
     spec_type: str | None = None
     spec_draft_n_min: int | None = None
     spec_draft_n_max: int | None = None
+    spec_synthetic_acceptance_length: float | None = None
+    spec_synthetic_acceptance_rates: List[float] | None = None
     no_ui: bool | None = None
     jinja: bool | None = None
     reasoning_format: Literal['deepseek', 'none', 'nothink'] | None = None
@@ -245,6 +247,11 @@ class ServerProcess:
             server_args.extend(["--spec-draft-n-max", self.spec_draft_n_max])
         if self.spec_draft_n_min:
             server_args.extend(["--spec-draft-n-min", self.spec_draft_n_min])
+        if self.spec_synthetic_acceptance_length is not None:
+            server_args.extend(["--spec-synthetic-acceptance-length", self.spec_synthetic_acceptance_length])
+        if self.spec_synthetic_acceptance_rates is not None:
+            rates = ",".join(str(rate) for rate in self.spec_synthetic_acceptance_rates)
+            server_args.extend(["--spec-synthetic-acceptance-rates", rates])
         if self.no_ui:
             server_args.append("--no-ui")
         if self.no_models_autoload:
