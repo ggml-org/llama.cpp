@@ -172,6 +172,7 @@ static std::pair<uint32_t, const char *> parse_char(const char * src) {
             case '"':
             case '[':
             case ']':
+            case '-':
                       return std::make_pair(src[1], src + 2);
             default:
                       throw std::runtime_error(std::string("unknown escape at ") + src);
