@@ -401,6 +401,15 @@ static ggml_type tensor_type_fallback(quantize_state_impl & qs, const ggml_tenso
             case GGML_TYPE_Q5_K:    return_type = GGML_TYPE_Q5_1;   break;
             case GGML_TYPE_Q6_K:    return_type = GGML_TYPE_Q8_0;   break;
             default:
+                if (qk_k <= 32) {
+                    // the target is already a 32-block type, so there is no smaller block to demote to
+                    // and the shape is simply not representable; the check below turns it into F16, the
+                    // same answer 256-block types reach when their fallback does not fit. Getting here
+                    // means ncols is not a multiple of 32, e.g. a conv kernel a recipe forgot to pin;
+                    // throwing gave no tensor name or message, making a recipe gap look like corruption.
+                    return_type = target_type;
+                    break;
+                }
                 throw std::runtime_error(format("no tensor type fallback is defined for type %s",
                                                 ggml_type_name(target_type)));
         }
