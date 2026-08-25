@@ -4186,7 +4186,7 @@ static bool ggml_vk_d2d_try_timeline_sync(vk_device& src_dev, vk_device& dst_dev
     }
 
     try {
-        path.hop1_cmd_pool.init(src_dev, &src_dev->transfer_queue);
+        path.hop1_cmd_pool.init(src_dev, src_dev->transfer_queue.get());
     } catch (const vk::SystemError& e) {
         VK_LOG_DEBUG("ggml_vk_d2d_try_timeline_sync: cmd pool/fence creation failed: " << e.what());
         if (path.hop1_cmd_pool.pool) {
@@ -4239,7 +4239,7 @@ static bool ggml_vk_d2d_try_syncfd_sync(vk_device& src_dev, vk_device& dst_dev, 
     }
 
     try {
-        path.hop1_cmd_pool.init(src_dev, &src_dev->compute_queue);
+        path.hop1_cmd_pool.init(src_dev, src_dev->compute_queue.get());
     } catch (const vk::SystemError& e) {
         VK_LOG_DEBUG("ggml_vk_d2d_try_syncfd_sync: cmd pool creation failed: " << e.what());
         if (path.hop1_cmd_pool.pool) {
@@ -9359,14 +9359,14 @@ static bool ggml_vk_d2d_test_copy(vk_device& device, vk_buffer& shared_buf, size
     }
 
     std::lock_guard<std::recursive_mutex> guard(device->mutex);
-    vk_context subctx = ggml_vk_create_temporary_context(device->transfer_queue.cmd_pool);
+    vk_context subctx = ggml_vk_create_temporary_context(device->transfer_queue->cmd_pool);
     ggml_vk_ctx_begin(device, subctx);
     VkBufferCopy bc{ 0, 0, size };
     vkCmdCopyBuffer(subctx->s->buffer->buf, (VkBuffer)shared_buf->buffer, (VkBuffer)tmp->buffer, 1, &bc);
     ggml_vk_ctx_end(subctx);
     try {
         ggml_vk_submit(subctx, device->fence);
-        VK_CHECK(device->device.waitForFences({ device->fence }, true, UINT64_MAX), "d2d test copy waitForFences");
+        VK_CHECK(device->device.waitForFences({ device->fence }, true, UINT64_MAX), "d2d test copy waitForFences", device);
         device->device.resetFences({ device->fence });
         ggml_vk_queue_command_pools_cleanup(device);
         ggml_vk_destroy_buffer(tmp);
@@ -9838,7 +9838,7 @@ static bool ggml_vk_buffer_copy_async_d2d_semiasync(
     // Hop 1: synchronous copy on src device (VRAM -> shared buffer)
     {
         std::lock_guard<std::recursive_mutex> guard(src->device->mutex);
-        vk_context hop1_ctx = ggml_vk_create_temporary_context(src->device->compute_queue.cmd_pool);
+        vk_context hop1_ctx = ggml_vk_create_temporary_context(src->device->compute_queue->cmd_pool);
         ggml_vk_ctx_begin(src->device, hop1_ctx);
 
         VkBufferCopy bc{ src_offset, 0, size };
@@ -9846,7 +9846,7 @@ static bool ggml_vk_buffer_copy_async_d2d_semiasync(
 
         ggml_vk_ctx_end(hop1_ctx);
         ggml_vk_submit(hop1_ctx, src->device->fence);
-        VK_CHECK(src->device->device.waitForFences({ src->device->fence }, true, UINT64_MAX), "d2d_semiasync hop1 waitForFences");
+        VK_CHECK(src->device->device.waitForFences({ src->device->fence }, true, UINT64_MAX), "d2d_semiasync hop1 waitForFences", src->device);
         src->device->device.resetFences({ src->device->fence });
     }
 
