@@ -149,9 +149,6 @@ llama_model_qwen3::graph::graph(const llama_model & model, const llm_graph_param
     cb(cur, "result_norm", -1);
     res->t_embd = cur;
 
-    // embedding/reranking contexts never consume logits, and because embeddings
-    // mode marks every token as an output this would reserve an [n_vocab, n_ubatch]
-    // buffer (~0.58 MiB per ubatch token) that is then thrown away
     if (!cparams.embeddings) {
         // lm_head
         cur = build_lora_mm(model.output, cur, model.output_s);

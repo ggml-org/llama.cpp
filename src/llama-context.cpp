@@ -2040,8 +2040,6 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
     const auto n_embd     = hparams.n_embd;
     const auto n_embd_out = hparams.n_embd_out();
 
-    // embedding/reranking contexts never produce logits (see build_pooling), so
-    // reserving n_vocab*n_outputs_max floats for them wastes GBs of host RAM
     bool has_logits     = !cparams.embeddings;
     bool has_embd       = cparams.embeddings;
     bool has_embd_nextn = cparams.embeddings_nextn;
