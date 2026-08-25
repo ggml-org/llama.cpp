@@ -82,7 +82,7 @@ runs:
       run: |
         set +e -uo pipefail
         source .venv-hf/bin/activate
-        CACHE_FILES=$(hf buckets list "hf://buckets/${{ inputs.hf_bucket }}/${{ inputs.folder }}" --json | jq -r '[.[] | select(.type == "file") | select(.path | startswith("${{ inputs.folder }}/${{ inputs.key }}") and endswith(".tar.gz"))] | sort_by(.path)[:-1] | .[] | [.path // ""] | @tsv')
+        CACHE_FILES=$(hf buckets list "hf://buckets/${{ inputs.hf_bucket }}/${{ inputs.folder }}" --json | jq -r '[.[] | select(.type == "file") | select((.uploaded_at | .[:19]+"Z" | fromdateiso8601) < (now - 5 * 60)) | select(.path | startswith("${{ inputs.folder }}/${{ inputs.key }}") and endswith(".tar.gz"))] | sort_by(.path)[:-1] | .[] | [.path // ""] | @tsv')
         if [[ -n "$CACHE_FILES" ]]; then
             echo "Removing old ccache files..."
             while IFS=$'\t' read -r CACHE_PATH; do
