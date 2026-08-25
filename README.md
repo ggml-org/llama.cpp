@@ -374,6 +374,34 @@ llama.cpp. See [Where the win is, and where it is not](#where-the-win-is-and-whe
 > and is **untested on the MoE**. At `-ub 512` and `-ub 1024` the same depth completes normally.
 > If you serve long context, keep `-ub 512`.
 
+### `GGML_VK_DENSE_WAVE32` on MoE models
+
+Set `GGML_VK_DENSE_WAVE32=1` if you run a mixture-of-experts model. It retiles the quantized
+matmul to 32-wide subgroups, and on this hardware that splits by architecture:
+
+| model | quant | off | on | |
+|---|---|---:|---:|---:|
+| Ornith-1.5-35B-A3B (MoE) | Q4\_K\_M | 1628.1 | **1727.8** | **+6.1 %** |
+| Qwen3.6-35B-A3B HauhauCS (MoE) | Q6\_K\_P | 1520.6 | **1599.3** | **+5.2 %** |
+| Qwen3.8-27B (dense), pp512 | Q4\_K\_XL | 438.8 | 429.6 | -2.1 % |
+| Qwen3.8-27B (dense), pp2048 | Q4\_K\_XL | 426.8 | 416.6 | -2.4 % |
+
+`pp2048` at ubatch 2048 for the MoE rows, ubatch 512 for the dense rows, five repetitions per
+cell, palindrome order (off, on, on, off) so clock drift cancels, GPU otherwise idle.
+
+Two MoE models gain about 5-6 %; the dense model loses about 2 %. That is why it is off by
+default rather than on: there is no single right answer. On Ornith it takes prefill to
+**1727.8 t/s, very close to 2x mainline's 870.5**.
+
+```bash
+GGML_VK_DENSE_WAVE32=1 llama-server -m Ornith-1.5-35B-Q4_K_M.gguf ...
+```
+
+Credit for spotting that this flag was never measured end-to-end on a MoE goes to a reader.
+It had been tested only as an isolated `MUL_MAT` microbenchmark and under the separate
+`GGML_VK_MMID_WAVE32` knob, both of which came back negative and were wrongly assumed to settle
+the MoE case.
+
 ### `models.ini` form
 
 With `--models-preset`, the same settings as a preset entry:
