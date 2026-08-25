@@ -135,6 +135,7 @@ struct socket_t::impl {
 #endif // GGML_RPC_RDMA
     bool     use_rdma;
     sockfd_t fd;
+    bool     skip_hash = false;  // server advertised no tensor cache
 };
 
 socket_t::impl::~impl() {
@@ -562,6 +563,14 @@ void socket_t::get_caps(uint8_t * local_caps) {
 
 void socket_t::update_caps(const uint8_t * remote_caps) {
     return pimpl->update_caps(remote_caps);
+}
+
+void socket_t::set_skip_tensor_hash(bool v) {
+    pimpl->skip_hash = v;
+}
+
+bool socket_t::skip_tensor_hash() const {
+    return pimpl->skip_hash;
 }
 
 static bool is_valid_fd(sockfd_t sockfd) {
