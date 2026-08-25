@@ -97,6 +97,8 @@ static void test_normalize_quotes_with_embedded_quotes(testing & t);
 
 // TAG_WITH_TAGGED argument parsing tests
 static void test_tagged_args_with_embedded_quotes(testing & t);
+static void test_tagged_args_array_object(testing & t);
+static void test_tagged_args_array_object_partial(testing & t);
 static void test_bailing_v3_tool_format(testing & t);
 
 static void test_role_markers_all_templates(testing & t);
@@ -562,6 +564,8 @@ int main(int argc, char * argv[]) {
     t.test("standard_json_tools", test_standard_json_tools_formats);
     t.test("normalize_quotes_to_json", test_normalize_quotes_to_json);
     t.test("tagged_args_embedded_quotes", test_tagged_args_with_embedded_quotes);
+    t.test("tagged_args_array_object", test_tagged_args_array_object);
+    t.test("tagged_args_array_object_partial", test_tagged_args_array_object_partial);
     t.test("bailing_v3", test_bailing_v3_tool_format);
     t.test("role_markers_all_templates", test_role_markers_all_templates);
 
@@ -2586,6 +2590,160 @@ static void test_bailing_v3_tool_format(testing & t) {
         "</tool_call>";
     common_peg_parse_context ctx(output, COMMON_PEG_PARSE_FLAG_LENIENT);
     t.assert_true("multi-argument tool call", parser.parse(ctx).success());
+}
+
+// Test that reproduces #21771: array<object> tool params in TAG_WITH_TAGGED
+// format (Qwen3 family). A parameter whose JSON schema resolves to an array
+// of objects must parse cleanly through build_tool_parser_tag_tagged.
+static common_chat_template build_qwen3_style_tagged_template() {
+    // Qwen3-style tagged tool call rendering, same shape as Qwen3-Coder:
+    // <tool_call>\n<function=name>\n<parameter=key>\nvalue\n</parameter>\n</function>\n</tool_call>
+    const std::string template_source = R"JINJA(
+{%- for message in messages %}
+{%- if message.role == "assistant" and message.tool_calls is defined and message.tool_calls %}
+<|im_start|>assistant
+{%- for tool_call in message.tool_calls %}
+{%- set tc = tool_call.function %}
+<tool_call>
+<function={{ tc.name }}>
+{%- for args_name, args_value in tc.arguments|items %}
+{%- set args_value = args_value | tojson | safe if args_value is mapping or (args_value is sequence and args_value is not string) else args_value | string %}
+<parameter={{ args_name }}>
+{{ args_value }}
+</parameter>
+{%- endfor %}
+</function>
+</tool_call>
+{%- endfor %}
+<|im_end|>
+{%- elif message.role == "user" or message.role == "assistant" %}
+<|im_start|>{{ message.role }}
+{{ message.content }}
+<|im_end|>
+{%- endif %}
+{%- endfor %}
+{%- if add_generation_prompt %}<|im_start|>assistant
+{%- endif %}
+)JINJA";
+    return common_chat_template(template_source, "", "");
+}
+
+// Tool set with an array<object> parameter, mirroring e.g. a web_search tool
+// whose "queries" parameter is an array of objects like [{"type":"web"}].
+static json build_array_object_tools() {
+    return json::array({
+        {
+            { "type", "function" },
+            { "function", {
+                { "name", "web_search" },
+                { "parameters", {
+                    { "type", "object" },
+                    { "properties", {
+                        { "queries", {
+                            { "type", "array" },
+                            { "items", { { "type", "object" } } }
+                        } }
+                    } },
+                    { "required", json::array({ "queries" }) }
+                } }
+            } }
+        }
+    });
+}
+
+static void test_tagged_args_array_object(testing & t) {
+    common_chat_template tmpl = build_qwen3_style_tagged_template();
+    struct autoparser analysis;
+    analysis.analyze_template(tmpl);
+
+    t.assert_true("tool format should be TAG_WITH_TAGGED",
+                  analysis.tools.format.mode == tool_format::TAG_WITH_TAGGED);
+
+    generation_params inputs;
+    inputs.tools            = build_array_object_tools();
+    inputs.reasoning_format = COMMON_REASONING_FORMAT_NONE;
+    auto parser = analysis.build_parser(inputs, "");
+
+    const std::string output =
+        "<tool_call>\n"
+        "<function=web_search>\n"
+        "<parameter=queries>\n"
+        "[{\"type\":\"web\"}]\n"
+        "</parameter>\n"
+        "</function>\n"
+        "</tool_call>";
+
+    common_peg_parse_context ctx(output, COMMON_PEG_PARSE_FLAG_LENIENT);
+    auto result = parser.parse(ctx);
+    t.assert_true("array<object> tool param parses cleanly", result.success());
+
+    if (!result.success()) {
+        return;
+    }
+
+    common_chat_msg msg;
+    auto mapper = common_chat_peg_mapper(msg);
+    mapper.from_ast(ctx.ast, result);
+
+    t.assert_equal("tool calls count", 1u, msg.tool_calls.size());
+    if (msg.tool_calls.empty()) {
+        return;
+    }
+
+    t.assert_equal("tool name", "web_search", msg.tool_calls[0].name);
+
+    std::string args = msg.tool_calls[0].arguments;
+    try {
+        json parsed = json::parse(args);
+        t.assert_true("arguments is valid JSON", true);
+        if (parsed.contains("queries")) {
+            t.assert_true("queries is an array", parsed["queries"].is_array());
+            if (parsed["queries"].is_array() && !parsed["queries"].empty()) {
+                t.assert_true("queries[0] is an object", parsed["queries"][0].is_object());
+                t.assert_equal("queries[0].type", "web", parsed["queries"][0].value("type", ""));
+            }
+        }
+    } catch (const std::exception & e) {
+        t.assert_true(std::string("arguments should be valid JSON: ") + e.what() + " args=" + args, false);
+    }
+}
+
+// Streaming regression for #21771: while the model is still emitting an
+// array<object> value inside a <parameter> tag, the partial parse must not
+// leak a malformed single-char "arguments" that would poison replayed history.
+static void test_tagged_args_array_object_partial(testing & t) {
+    common_chat_template tmpl = build_qwen3_style_tagged_template();
+    struct autoparser analysis;
+    analysis.analyze_template(tmpl);
+
+    generation_params inputs;
+    inputs.tools            = build_array_object_tools();
+    inputs.reasoning_format = COMMON_REASONING_FORMAT_NONE;
+    auto parser = analysis.build_parser(inputs, "");
+
+    common_chat_parser_params params;
+    params.format = COMMON_CHAT_FORMAT_PEG_SIMPLE;
+    params.parser = parser;
+
+    // Simulate streaming prefixes of the full tool call. None of the partial
+    // states should surface a tool_call whose arguments are a lone "{".
+    const std::vector<std::string> prefixes = {
+        "<tool_call>\n",
+        "<tool_call>\n<function=web_search>\n",
+        "<tool_call>\n<function=web_search>\n<parameter=queries>\n",
+        "<tool_call>\n<function=web_search>\n<parameter=queries>\n[",
+        "<tool_call>\n<function=web_search>\n<parameter=queries>\n[{\"type\":\"web\"}",
+        "<tool_call>\n<function=web_search>\n<parameter=queries>\n[{\"type\":\"web\"}]\n",
+    };
+
+    for (size_t i = 0; i < prefixes.size(); i++) {
+        common_chat_msg msg = common_chat_peg_parse(parser, prefixes[i], /* is_partial = */ true, params);
+        for (const auto & tc : msg.tool_calls) {
+            const std::string & a = tc.arguments;
+            t.assert_true("partial arguments must not be a lone brace",
+                          a != "{" && a != "\"" && !(a.size() == 1));
+        }
+    }
 }
 
 // Test that reproduces the Seed-OSS template issue with embedded quotes

@@ -361,9 +361,12 @@ void common_chat_peg_mapper::map(const common_peg_ast_node & node) {
         if (!args_buffer.empty()) {
             current_tool->arguments = args_buffer;
             args_buffer.clear();
-        } else if (current_tool->arguments.empty()) {
-            current_tool->arguments = "{";
         }
+        // Do NOT initialize arguments to "{" here. A lone opening brace would be
+        // streamed to the client as a partial tool_call delta and, if the stream
+        // later fails to parse, would poison replayed history. The opening brace
+        // is added lazily at the first argument name (see is_arg_name below) or
+        // as "{}" at tool close when no arguments were emitted.
         // Add the tool call to results so streaming can see it
         if (pending_tool_call.has_value()) {
             result.tool_calls.push_back(pending_tool_call.value());
@@ -440,6 +443,11 @@ void common_chat_peg_mapper::map(const common_peg_ast_node & node) {
         if (closing_quote_pending) {
             current_tool->arguments += "\"";
             closing_quote_pending = false;
+        }
+        // A named tool call with no emitted arguments still needs a valid,
+        // empty JSON object as its arguments.
+        if (current_tool->arguments.empty()) {
+            current_tool->arguments = "{}";
         }
         // Close any unclosed braces (accounts for nested objects)
         for (int d = json_brace_depth(current_tool->arguments); d > 0; d--) {
