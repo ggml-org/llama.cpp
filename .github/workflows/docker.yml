@@ -64,7 +64,7 @@ jobs:
     needs: create_tag
     uses: ./.github/workflows/ui-build.yml
     with:
-      hf_ui_version: ${{ needs.create_tag.outputs.source_tag }}
+      ui_version: ${{ needs.create_tag.outputs.source_tag }}
 
   prepare_matrices:
     name: Prepare Docker matrices
