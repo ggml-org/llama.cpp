@@ -293,37 +293,66 @@ problem, the coarse scale is.
 
 ## Download a prebuilt binary
 
-Ubuntu / x86-64 builds are attached to the
+Linux and Windows x86-64 builds are attached to the
 [releases page](https://github.com/LaurentZuijdwijk/llama.cpp/releases) of this fork. No
 compiler, no Vulkan SDK, no CMake.
 
+| | |
+|---|---|
+| Linux x86-64 | `llama-*-bin-ubuntu-vulkan-x64.tar.gz` |
+| Windows x64 | `llama-*-bin-win-vulkan-x64.zip` |
+
 ```bash
-# Pick the newest llama-*-bin-ubuntu-vulkan-x64.tar.gz from the releases page.
 tar xzf llama-*-bin-ubuntu-vulkan-x64.tar.gz
 cd llama-*/
 ./llama --version
 ```
 
-The archive is self-contained: the shared libraries sit next to the executables and are found
-through an `$ORIGIN` rpath, so nothing needs installing and `LD_LIBRARY_PATH` stays untouched.
-Run the binaries from the folder you extracted. See
+Both archives are self-contained. On Linux the shared libraries sit next to the
+executables and are found through an `$ORIGIN` rpath, so nothing needs installing and
+`LD_LIBRARY_PATH` stays untouched; on Windows the DLLs sit next to the `.exe` files. Run
+them from the folder you extracted. See
 [Running it with llama-server](#running-it-with-llama-server) below for the model commands.
 
 **What you need**
 
 | | |
 |---|---|
-| OS | Linux, x86-64 |
+| OS | Linux or Windows, x86-64 |
 | driver | any Vulkan 1.3 driver. Measured on Mesa RADV 26.0.8 |
 | GPU | any Vulkan device. The Strix Halo gates auto-detect; the rest is generic |
 | check | `vulkaninfo --summary` lists your device |
 
-The release binary is built portable (`GGML_NATIVE=OFF`, plus every CPU variant, selected at
-run time). The benchmark figures on this page came from a `GGML_NATIVE=ON` build. Practically
-all the work is on the GPU, so the two measure the same, but the builds are not bit-identical.
+The release binaries are built portable (`GGML_NATIVE=OFF`, plus every CPU variant,
+selected at run time). The benchmark figures on this page came from a `GGML_NATIVE=ON`
+build. Practically all the work is on the GPU, so the two measure the same, but the
+builds are not bit-identical.
 
-Prefer to build it yourself? The flags used for the release are in
+> **What Windows does not get.** The LDS stride fix is **RADV-only**.
+> `ggml_vk_coopmat_shmem_pad()` returns the padded stride only when the driver reports as
+> Mesa RADV 25.3 or newer — see [Why it is driver-gated](#why-it-is-driver-gated) — and
+> AMD's Windows driver reports a different driver id, so it takes the upstream default
+> pad 4. That is the ~12–14 % prefill line, and it stays off there. Everything else
+> applies on both platforms: adaptive speculation, the ROCmFPx quant types, the batch 3–8
+> mat-vec fixes, and the tiled concat-transpose and f16-B prefill gates.
+
+Prefer to build it yourself? The flags used for the releases are in
 [`.github/workflows/release-vulkan.yml`](.github/workflows/release-vulkan.yml).
+
+### Or use the packaging repo
+
+[**agention-llama**](https://github.com/LaurentZuijdwijk/agention-llama) wraps all of this
+in a container image, seven ready-made configurations and a preflight check that tells you
+whether the driver gate above is actually taken on your machine:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/LaurentZuijdwijk/agention-llama/master/install.sh | sh
+agention-llama doctor
+agention-llama run dflash-fp4
+```
+
+It lives outside this tree on purpose, so the fork stays clean and its upstreamable fixes
+stay easy to send upstream.
 
 ## Running it with llama-server
 
