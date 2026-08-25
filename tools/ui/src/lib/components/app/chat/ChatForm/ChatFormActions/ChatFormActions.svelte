@@ -20,7 +20,6 @@
 
 	interface Props {
 		canSend?: boolean;
-		canSubmit?: boolean;
 		class?: string;
 		disabled?: boolean;
 		isLoading?: boolean;
@@ -38,7 +37,6 @@
 
 	let {
 		canSend = false,
-		canSubmit = false,
 		class: className = '',
 		disabled = false,
 		isLoading = false,
@@ -76,9 +74,7 @@
 	);
 	// text-only active model: mic input is transcribed by another loaded audio model
 	let transcriptionModelId = $derived(hasAudioModality ? null : modelsStore.transcriptionModelId);
-	// canSend, not canSubmit: only canSend is wired from ChatForm, it is true when
-	// the input has text or attachments. Keep the button while a recording or
-	// transcription is still in flight so it can be stopped
+	// keep the button while a recording or transcription is still in flight so it can be stopped
 	let shouldShowRecordButton = $derived(
 		(hasAudioModality || transcriptionModelId !== null) &&
 			currentConfig.autoMicOnEmpty &&
@@ -202,7 +198,7 @@
 		</Button>
 	{/if}
 
-	{#if isLoading && !canSubmit}
+	{#if isLoading}
 		<Button
 			class="group h-8 w-8 rounded-full p-0 max-md:h-9 max-md:w-9 hover:bg-destructive/10!"
 			onclick={onStop}
@@ -218,7 +214,6 @@
 	{:else if shouldShowRecordButton}
 		<ChatFormActionRecord
 			{disabled}
-			{hasAudioModality}
 			{isLoading}
 			{isRecording}
 			{isTranscribing}
