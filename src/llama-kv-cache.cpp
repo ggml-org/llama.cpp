@@ -1786,6 +1786,94 @@ void llama_kv_cache::set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch 
     }
 }
 
+void llama_kv_cache::set_input_qsa(
+        ggml_tensor * cell_blk,
+        ggml_tensor * blk_cells,
+        ggml_tensor * blk_pos,
+        ggml_tensor * bias,
+        const llama_ubatch * ubatch,
+        uint32_t ratio) const {
+    GGML_ASSERT(n_stream == 1 && "TODO: support multiple streams");
+    GGML_ASSERT(ratio > 0);
+
+    const auto & cells = v_cells[0];
+
+    GGML_ASSERT(ggml_backend_buffer_is_host(cell_blk->buffer));
+
+    const int64_t n_kv     = cell_blk->ne[0];
+    const int64_t n_blocks = blk_pos->ne[0]/4;
+    const int64_t n_tokens = ubatch->n_tokens;
+    const int64_t r        = ratio;
+
+    int32_t * dst_cell_blk  = (int32_t *) cell_blk->data;
+    int32_t * dst_blk_cells = (int32_t *) blk_cells->data;
+    int32_t * dst_blk_pos   = (int32_t *) blk_pos->data;
+    float   * dst_bias      = (float   *) bias->data;
+
+    // block b is positions [b*ratio, (b+1)*ratio), so its first token sits at
+    // b*ratio. The three mrope sections all carry that position: exact for text,
+    // an approximation for the interleaved t/h/w positions of image tokens.
+    for (int64_t s = 0; s < 4; ++s) {
+        for (int64_t b = 0; b < n_blocks; ++b) {
+            dst_blk_pos[s*n_blocks + b] = (int32_t) (b*r);
+        }
+    }
+
+    // a block that is not completely populated cannot be pooled. Those cells are
+    // exactly the tail of the sequence, which the bias below forces in whatever
+    // score they carry, so they are pointed at block 0 only to keep the gather
+    // in range. -1 marks a cell with no usable block at all.
+    std::vector<int32_t> blk_of(n_kv, -1);
+    std::vector<int32_t> filled(n_blocks, 0);
+
+    std::fill(dst_blk_cells, dst_blk_cells + r*n_blocks, 0);
+
+    for (int64_t j = 0; j < n_kv; ++j) {
+        if (cells.is_empty(j)) {
+            continue;
+        }
+
+        const llama_pos p = cells.pos_get(j);
+        const int64_t   b = p/r;
+
+        if (b >= n_blocks) {
+            continue;
+        }
+
+        blk_of[j] = (int32_t) b;
+        dst_blk_cells[b*r + (p%r)] = (int32_t) j;
+        filled[b]++;
+    }
+
+    for (int64_t j = 0; j < n_kv; ++j) {
+        if (blk_of[j] >= 0 && filled[blk_of[j]] < r) {
+            blk_of[j] = -1;
+        }
+        dst_cell_blk[j] = blk_of[j] < 0 ? 0 : blk_of[j];
+    }
+
+    for (int64_t i = 0; i < n_tokens; ++i) {
+        const llama_seq_id seq_id = ubatch->seq_id[i][0];
+        const llama_pos    q      = ubatch->pos[i];
+
+        // everything from here on is inside an incomplete block and is always
+        // attended to, which is what makes the whole selection land on block
+        // boundaries the way the reference implementation does
+        const llama_pos tail_start = (q + 1)/r*r;
+
+        for (int64_t j = 0; j < n_kv; ++j) {
+            float v = -INFINITY;
+
+            if (!cells.is_empty(j) && cells.seq_has(j, seq_id) && cells.pos_get(j) <= q) {
+                // finite, so it can never meet a -inf and produce a nan
+                v = cells.pos_get(j) >= tail_start ? 1e9f : (blk_of[j] < 0 ? -INFINITY : 0.0f);
+            }
+
+            dst_bias[i*n_kv + j] = v;
+        }
+    }
+}
+
 void llama_kv_cache::set_input_k_rot(ggml_tensor * dst) const {
     GGML_ASSERT(ggml_backend_buffer_is_host(dst->buffer));
 
@@ -2641,6 +2729,16 @@ void llama_kv_cache_context::set_input_kq_mask(ggml_tensor * dst, const llama_ub
 
 void llama_kv_cache_context::set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const {
     kv->set_input_pos_bucket(dst, ubatch);
+}
+
+void llama_kv_cache_context::set_input_qsa(
+        ggml_tensor * cell_blk,
+        ggml_tensor * blk_cells,
+        ggml_tensor * blk_pos,
+        ggml_tensor * bias,
+        const llama_ubatch * ubatch,
+        uint32_t ratio) const {
+    kv->set_input_qsa(cell_blk, blk_cells, blk_pos, bias, ubatch, ratio);
 }
 
 void llama_kv_cache_context::set_input_k_rot(ggml_tensor * dst) const {

@@ -1,4 +1,5 @@
 #include "models.h"
+#include "llama-memory-hybrid.h"
 #include "llama-memory-recurrent.h"
 
 void llama_model_qwen4exp::load_arch_hparams(llama_model_loader & ml) {
@@ -265,6 +266,14 @@ llama_model_qwen4exp::graph::graph(const llama_model & model, const llm_graph_pa
 
     auto * inp = build_inp_mem_hybrid();
 
+    // present only when the GGUF carries indexer tensors, so a model without
+    // them still builds a dense graph
+    const llama_kv_cache_context * mctx_idx = inp->mctx->get_idx();
+    if (mctx_idx) {
+        GGML_ASSERT(mctx_idx->get_n_kv() == inp->mctx->get_attn()->get_n_kv() &&
+                "the indexer cache must track the attention cache cell for cell");
+    }
+
     ggml_tensor * inp_pos     = build_inp_pos();
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
@@ -294,7 +303,7 @@ llama_model_qwen4exp::graph::graph(const llama_model & model, const llm_graph_pa
         if (hparams.is_recr(il)) {
             cur = build_layer_attn_linear(inp->get_recr(), cur, il);
         } else {
-            cur = build_layer_attn(inp->get_attn(), cur, inp_pos, sections, il);
+            cur = build_layer_attn(inp->get_attn(), mctx_idx, cur, inp_pos, sections, il);
         }
 
         res_hc = build_hc_combine(res_hc, cur, inject, il);
@@ -363,14 +372,156 @@ ggml_tensor * llama_model_qwen4exp::graph::build_norm_gated(
     return ggml_mul(ctx0, normalized, gated);
 }
 
+// QSA attends to a budget of whole blocks of `compress_ratio` tokens, chosen by
+// scoring one mean-pooled indexer key per block, plus the tail of tokens that do
+// not yet make up a complete block, which is always visible. Below
+// indexer_top_k + compress_ratio - 1 cached tokens every block fits in the
+// budget and the result is exactly dense attention.
+//
+// Everything that depends on the cache layout - which cells make up a block,
+// which blocks a query may see - is computed host-side in set_input, so the
+// graph only gathers, pools and scores.
+class llm_graph_input_qsa : public llm_graph_input_i {
+public:
+    llm_graph_input_qsa(const llama_kv_cache_context * mctx, uint32_t ratio) :
+        mctx(mctx), ratio(ratio) {}
+    virtual ~llm_graph_input_qsa() = default;
+
+    void set_input(const llama_ubatch * ubatch) override {
+        mctx->set_input_k_idxs(k_idxs, ubatch);
+        mctx->set_input_qsa(cell_blk, blk_cells, blk_pos, bias, ubatch, ratio);
+    }
+
+    ggml_tensor * k_idxs    = nullptr;   // I32 [n_tokens]
+    ggml_tensor * cell_blk  = nullptr;   // I32 [n_kv]
+    ggml_tensor * blk_cells = nullptr;   // I32 [ratio*n_blocks]
+    ggml_tensor * blk_pos   = nullptr;   // I32 [4*n_blocks]
+    ggml_tensor * bias      = nullptr;   // F32 [n_kv, n_tokens]
+
+    const llama_kv_cache_context * mctx;
+    const uint32_t ratio;
+};
+
+ggml_tensor * llama_model_qwen4exp::graph::build_qsa_top_k(
+        const llama_kv_cache_context * mctx_idx,
+        ggml_tensor *                  cur,
+        ggml_tensor *                  inp_pos,
+        int *                          sections,
+        int                            il) {
+    const int64_t idx_dim  = hparams.indexer_head_size;
+    const int64_t n_idx_h  = hparams.indexer_n_head;
+    const int64_t r        = hparams.dsv4_compress_ratios[il];
+    const int64_t n_kv     = mctx_idx->get_n_kv();
+    const int64_t n_blocks = (n_kv + r - 1)/r;
+
+    GGML_ASSERT(r > 0);
+
+    auto qsa = std::make_unique<llm_graph_input_qsa>(mctx_idx, (uint32_t) r);
+
+    qsa->k_idxs    = mctx_idx->build_input_k_idxs(ctx0, ubatch);
+    qsa->cell_blk  = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_kv);
+    qsa->blk_cells = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, r*n_blocks);
+    qsa->blk_pos   = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, 4*n_blocks);
+    qsa->bias      = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_kv, n_tokens);
+
+    ggml_set_input(qsa->cell_blk);
+    ggml_set_input(qsa->blk_cells);
+    ggml_set_input(qsa->blk_pos);
+    ggml_set_input(qsa->bias);
+
+    llm_graph_input_qsa * inp = qsa.get();
+    res->add_input(std::move(qsa));
+
+    // the cached indexer keys are raw: pooling happens before the norm and the
+    // rotation, so neither may be applied on the way in
+    ggml_tensor * k_raw = build_lora_mm(model.layers[il].index_k_proj, cur);
+    k_raw = ggml_reshape_3d(ctx0, k_raw, idx_dim, 1, n_tokens);
+    cb(k_raw, "indexer_k_raw", il);
+
+    ggml_build_forward_expand(gf, mctx_idx->cpy_k(ctx0, k_raw, inp->k_idxs, il));
+
+    // one key head, so the per-cell rows are contiguous and this view is dense
+    ggml_tensor * k_all = mctx_idx->get_k(ctx0, il);
+    k_all = ggml_view_2d(ctx0, k_all, idx_dim, n_kv, k_all->nb[2], 0);
+
+    ggml_tensor * members = ggml_get_rows(ctx0, k_all, inp->blk_cells);
+    members = ggml_reshape_3d(ctx0, members, idx_dim, r, n_blocks);
+
+    // mean over the block's members. compress_ratio is small, so summing the
+    // slices costs less than transposing to reach ggml_sum_rows
+    ggml_tensor * pooled = nullptr;
+    for (int64_t i = 0; i < r; ++i) {
+        ggml_tensor * slice = ggml_cont(ctx0,
+                ggml_view_2d(ctx0, members, idx_dim, n_blocks, members->nb[2], i*members->nb[1]));
+        pooled = pooled ? ggml_add(ctx0, pooled, slice) : slice;
+    }
+    pooled = ggml_scale(ctx0, pooled, 1.0f/(float) r);
+    cb(pooled, "indexer_k_pooled", il);
+
+    pooled = ggml_reshape_3d(ctx0, pooled, idx_dim, 1, n_blocks);
+    pooled = build_norm(pooled, model.layers[il].index_k_norm, nullptr, LLM_NORM_RMS, il);
+    pooled = ggml_rope_multi(ctx0, pooled, inp->blk_pos, nullptr,
+            n_rot, sections, rope_type, n_ctx_orig, freq_base, freq_scale,
+            ext_factor, attn_factor, beta_fast, beta_slow);
+    pooled = ggml_reshape_2d(ctx0, pooled, idx_dim, n_blocks);
+    cb(pooled, "indexer_k", il);
+
+    ggml_tensor * q = build_lora_mm(model.layers[il].index_q_proj, cur);
+    q = ggml_reshape_3d(ctx0, q, idx_dim, n_idx_h, n_tokens);
+    q = build_norm(q, model.layers[il].index_q_norm, nullptr, LLM_NORM_RMS, il);
+    q = ggml_rope_multi(ctx0, q, inp_pos, nullptr,
+            n_rot, sections, rope_type, n_ctx_orig, freq_base, freq_scale,
+            ext_factor, attn_factor, beta_fast, beta_slow);
+    cb(q, "indexer_q", il);
+
+    // Each head's dot product is rectified before the heads are summed, as in
+    // DeepSeek's lightning indexer, but with no learned per-head weight. The
+    // reference then divides by a constant, which cannot reorder anything, so
+    // that is left out.
+    ggml_tensor * score = ggml_mul_mat(ctx0, pooled,
+            ggml_reshape_2d(ctx0, ggml_cont(ctx0, q), idx_dim, n_idx_h*n_tokens));
+    score = ggml_reshape_3d(ctx0, score, n_blocks, n_idx_h, n_tokens);
+    score = ggml_relu(ctx0, score);
+    score = ggml_cont(ctx0, ggml_permute(ctx0, score, 1, 0, 2, 3));
+    score = ggml_sum_rows(ctx0, score);
+    score = ggml_reshape_2d(ctx0, score, n_blocks, n_tokens);
+    cb(score, "indexer_score", il);
+
+    // Give every token of a block its block's score, rather than expanding the
+    // selected block indices: that would need an integer multiply-add, which
+    // ggml has no op for. Because the budget is a whole number of blocks and the
+    // members of a block tie exactly, the cut still lands on a block boundary.
+    // get_rows gathers rows, so the scores are transposed for the gather.
+    ggml_tensor * expanded = ggml_get_rows(ctx0,
+            ggml_cont(ctx0, ggml_transpose(ctx0, score)), inp->cell_blk);
+    expanded = ggml_cont(ctx0, ggml_transpose(ctx0, expanded));
+    expanded = ggml_add(ctx0, expanded, inp->bias);
+    cb(expanded, "indexer_score_tokens", il);
+
+    // the reference returns indexer_top_k + compress_ratio - 1 tokens: a whole
+    // budget of blocks plus the incomplete tail
+    const int64_t width = std::min<int64_t>(n_kv, (int64_t) hparams.indexer_top_k + r - 1);
+
+    ggml_tensor * top_k = ggml_cont(ctx0, ggml_top_k(ctx0, expanded, width));
+    cb(top_k, "indexer_top_k", il);
+
+    return top_k;
+}
+
 ggml_tensor * llama_model_qwen4exp::graph::build_layer_attn(
         llm_graph_input_attn_kv * inp,
+        const llama_kv_cache_context * mctx_idx,
         ggml_tensor *             cur,
         ggml_tensor *             inp_pos,
         int *                     sections,
         int                       il) {
     const int64_t n_embd_head = hparams.n_embd_head_v();
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());
+
+    // The indexer reads the same block input as q/k/v. Without an indexer cache
+    // this falls back to dense attention, which is what the model computes
+    // anyway for anything shorter than the budget.
+    ggml_tensor * top_k = mctx_idx ? build_qsa_top_k(mctx_idx, cur, inp_pos, sections, il) : nullptr;
 
     // Order: joint QG projection, QG split, Q norm, KV projection, K norm, RoPE, attention
 
@@ -427,9 +578,15 @@ ggml_tensor * llama_model_qwen4exp::graph::build_layer_attn(
     // Attention computation
     const float kq_scale = hparams.f_attention_scale == 0.0f ? 1.0f / sqrtf(float(n_embd_head)) : hparams.f_attention_scale;
 
-    cur = build_attn(inp,
-                nullptr, nullptr, nullptr,
-                Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
+    if (top_k) {
+        cur = build_attn(inp,
+                    nullptr, nullptr, nullptr,
+                    Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, top_k, kq_scale, il);
+    } else {
+        cur = build_attn(inp,
+                    nullptr, nullptr, nullptr,
+                    Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
+    }
     cb(cur, "attn_pregate", il);
 
     ggml_tensor * gate_sigmoid = ggml_sigmoid(ctx0, gate);
