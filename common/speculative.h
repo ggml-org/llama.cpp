@@ -69,6 +69,12 @@ struct common_speculative_draft_params {
 
     // the generated draft from the last _draft() call
     llama_tokens * result;
+
+    // candidate distribution per drafted token; set it to make draft-simple and draft-mtp sample
+    std::vector<std::vector<llama_token_data>> * result_q = nullptr;
+
+    // the target's config; only temp and seed are read, to retune the draft sampler
+    const common_params_sampling * sampling = nullptr;
 };
 
 common_speculative_draft_params & common_speculative_get_draft_params(common_speculative * spec, llama_seq_id seq_id);
