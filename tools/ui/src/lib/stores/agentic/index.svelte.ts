@@ -334,9 +334,10 @@ class AgenticStore {
 			}
 		}
 
+		// callers without an explicit policy fall back to the global defaults
 		const tools = toolsStore.getEnabledToolsForLLM(
-			new Set(toolPolicy?.disabledTools ?? []),
-			new Set(toolPolicy?.disabledToolCategories ?? [])
+			new Set(toolPolicy?.disabledTools ?? toolsStore.disabledTools),
+			new Set(toolPolicy?.disabledToolCategories ?? toolsStore.disabledToolCategories)
 		);
 
 		if (tools.length === 0) {
