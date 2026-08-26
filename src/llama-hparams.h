@@ -290,14 +290,16 @@ struct llama_hparams {
     uint32_t ple_conv_kernel     = 0;
     uint32_t ple_n_heads         = 0;   // (ngram_size - 1) * heads_per_ngram
     uint32_t ple_head_dim        = 0;
-    uint32_t ple_eos_token_id    = 0;
-    // placeholder the PLE hash sees where an image chunk is spliced in; 0 means the
-    // file predates this key and the loader falls back to EOS
-    uint32_t ple_image_token_id  = 0;
-    std::array<uint32_t, LLAMA_MAX_LAYERS> is_ple_impl;
-    std::array<uint64_t, LLAMA_MAX_PLE_NGRAM>  ple_layer_multipliers;
-    std::array<uint64_t, LLAMA_MAX_PLE_HEADS>  ple_head_offsets;
-    std::array<uint64_t, LLAMA_MAX_PLE_HEADS>  ple_head_vocab_sizes;
+    uint32_t ple_eos_token_id       = 0;
+    // Placeholder the PLE hash sees where an image chunk is spliced in. Keep
+    // key presence separately because token id 0 is valid; when absent, the
+    // loader sets the runtime value to EOS but the saver keeps the key absent.
+    uint32_t ple_image_token_id     = 0;
+    bool     ple_has_image_token_id = false;
+    std::array<uint32_t, LLAMA_MAX_LAYERS> is_ple_impl {};
+    std::array<uint64_t, LLAMA_MAX_PLE_NGRAM>  ple_layer_multipliers {};
+    std::array<uint64_t, LLAMA_MAX_PLE_HEADS>  ple_head_offsets {};
+    std::array<uint64_t, LLAMA_MAX_PLE_HEADS>  ple_head_vocab_sizes {};
 
     bool is_ple(uint32_t il) const;
 

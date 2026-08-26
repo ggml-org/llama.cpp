@@ -407,6 +407,7 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
     static const std::regex pattern_qkv_bias        ("blk\\.\\d*\\.attn_qkv.bias");
     static const std::regex pattern_qk_norm         ("blk\\.\\d*\\.attn_(q|k)_norm\\.weight");
     static const std::regex pattern_kv_cache        ("cache_(k|v)_l\\d*");
+    static const std::regex pattern_idx_cache       ("cache_idx_(k|v)_l\\d*");
     static const std::regex pattern_dsv4_state      ("dsv4_.*_state_(kv|score)_l\\d*");
     static const std::regex pattern_attn_sinks      ("blk\\.\\d*\\.attn_sinks.weight");
     static const std::regex pattern_attn_out_weight ("blk\\.\\d*\\.attn_output.weight");
@@ -427,6 +428,7 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
     static const std::regex pattern_ssm_beta_alpha  ("blk\\.\\d*\\.ssm_ba.weight");
     static const std::regex pattern_r_cache         ("cache_r_l\\d*");
     static const std::regex pattern_s_cache         ("cache_s_l\\d*");
+    static const std::regex pattern_ple_cache       ("cache_ple_(r|s)_l\\d*");
     static const std::regex pattern_ssm_conv1d      ("blk\\.\\d*\\.ssm_conv1d.weight");
     static const std::regex pattern_ssm_out_weight  ("blk\\.\\d*\\.ssm_out.weight");
 
@@ -515,6 +517,13 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
         if (std::regex_match(tensor_name, pattern_qk_norm)) {
             return get_tensor_config_impl(tensor->ne[1] == 1 ? GGML_BACKEND_SPLIT_AXIS_MIRRORED : GGML_BACKEND_SPLIT_AXIS_1, "attn_output.weight");
         }
+        if (ud->model->arch == LLM_ARCH_QWEN4EXP &&
+                std::regex_match(tensor_name, pattern_idx_cache)) {
+            // Qwen4Exp's indexer projections are currently mirrored. Keep the
+            // optional side cache in the same regime instead of accidentally
+            // inheriting main-attention KV sharding from its tensor name.
+            return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_MIRRORED);
+        }
         if (ud->model->arch == LLM_ARCH_DEEPSEEK4 &&
                 (std::regex_match(tensor_name, pattern_kv_cache) ||
                  std::regex_match(tensor_name, pattern_dsv4_state))) {
@@ -562,6 +571,12 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
         if (std::regex_match(tensor_name, pattern_ssm_alpha) || std::regex_match(tensor_name, pattern_ssm_beta) ||
                 std::regex_match(tensor_name, pattern_ssm_beta_alpha)) {
             return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_1, "ssm_out.weight");
+        }
+        if (ud->model->arch == LLM_ARCH_QWEN4EXP &&
+                std::regex_match(tensor_name, pattern_ple_cache)) {
+            // PLE activations and its depthwise convolution are mirrored. Its
+            // state must not inherit the GDN head-sharded cache placement.
+            return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_MIRRORED, "");
         }
         if (std::regex_match(tensor_name, pattern_r_cache) || std::regex_match(tensor_name, pattern_s_cache)) {
             if (ud->model->arch == LLM_ARCH_LFM2 || ud->model->arch == LLM_ARCH_LFM2MOE) {
@@ -613,7 +628,8 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
     };
 
     auto get_split_segments = [&](int axis, uint32_t il) -> std::vector<std::pair<int64_t, uint32_t>> {
-        if (ud->model->arch == LLM_ARCH_QWEN3NEXT || ud->model->arch == LLM_ARCH_QWEN35 || ud->model->arch == LLM_ARCH_QWEN35MOE) {
+        if (ud->model->arch == LLM_ARCH_QWEN3NEXT || ud->model->arch == LLM_ARCH_QWEN35 ||
+                ud->model->arch == LLM_ARCH_QWEN35MOE || ud->model->arch == LLM_ARCH_QWEN4EXP) {
             const int64_t head_k_dim = hparams.ssm_d_state;
             const int64_t head_v_dim = hparams.ssm_d_state;
             const int64_t n_k_heads  = hparams.ssm_n_group;
@@ -745,7 +761,8 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
             if (std::regex_match(tensor_name, pattern_q_weight) || std::regex_match(tensor_name, pattern_q_bias)) {
                 GGML_ASSERT(segments.size() == 1);
                 // some models have Q gate tensors, for those cases the granularity needs to be doubled:
-                if (ud->model->arch == LLM_ARCH_QWEN3NEXT || ud->model->arch == LLM_ARCH_QWEN35 || ud->model->arch == LLM_ARCH_QWEN35MOE) {
+                if (ud->model->arch == LLM_ARCH_QWEN3NEXT || ud->model->arch == LLM_ARCH_QWEN35 ||
+                        ud->model->arch == LLM_ARCH_QWEN35MOE || ud->model->arch == LLM_ARCH_QWEN4EXP) {
                     return {std::lcm(2*n_embd_q, blck_size_perf)};
                 }
                 return {granularity_q};
@@ -2664,8 +2681,10 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                         }
                     }
 
-                    if (hparams.swa_type != LLAMA_SWA_TYPE_NONE) {
-                        // Use hybrid-iswa for hybrid models with SWA
+                    if (hparams.swa_type != LLAMA_SWA_TYPE_NONE && !needs_mem_idx) {
+                        // Use hybrid-iswa for hybrid models with SWA. Qwen4Exp
+                        // needs its architecture-specific index/PLE memory;
+                        // llama_memory_hybrid_idx passes SWA metadata through.
                         res = new llama_memory_hybrid_iswa(
                             /* model             */ *this,
                             /* attn_type_k       */ params.type_k,

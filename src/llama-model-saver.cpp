@@ -330,6 +330,9 @@ void llama_model_saver::add_kv_from_model() {
         add_kv(LLM_KV_PLE_HEADS_PER_NGRAM,   hparams.ple_heads_per_ngram);
         add_kv(LLM_KV_PLE_CONV_KERNEL,       hparams.ple_conv_kernel);
         add_kv(LLM_KV_PLE_EOS_TOKEN_ID,      hparams.ple_eos_token_id);
+        if (hparams.ple_has_image_token_id) {
+            add_kv(LLM_KV_PLE_IMAGE_TOKEN_ID, hparams.ple_image_token_id);
+        }
         add_kv(LLM_KV_EMBEDDING_LENGTH_PER_LAYER, hparams.ple_head_dim);
         add_kv(LLM_KV_PLE_LAYER_MULTIPLIERS, std::vector<uint64_t>(
                 hparams.ple_layer_multipliers.begin(),

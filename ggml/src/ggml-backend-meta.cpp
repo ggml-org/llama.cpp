@@ -2857,7 +2857,10 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
                 continue;
             }
             ggml_tensor * node_zero = get_node_aux(node);
-            node_zero->op = GGML_OP_SCALE; // FIXME 0.0f * NaN == NaN
+            // A disabled zero-sized shard can alias a buffer that previously
+            // held Inf/NaN. Multiplication by zero preserves NaNs; FILL writes
+            // an actual additive identity before the collective.
+            node_zero->op = GGML_OP_FILL;
             node_zero->src[0] = node;
             ggml_set_op_params_f32(node_zero, 0, 0.0f);
             node_zero->data = node->data;

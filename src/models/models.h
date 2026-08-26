@@ -2277,14 +2277,6 @@ struct llama_model_qwen35 : public llama_model_base {
 struct llama_model_qwen4exp : public llama_model_base {
     llama_model_qwen4exp(const struct llama_model_params & params) : llama_model_base(params) {}
 
-    // PLE predecessors are absent from a decode ubatch, so remember them here
-    // (vLLM's ngram_context). next_pos guards it: a mismatch means the sequence
-    // was reset or rewound, and the hash falls back to EOS padding.
-    struct ple_history {
-        llama_pos                next_pos = -1;
-        std::vector<llama_token> toks;
-    };
-    mutable std::unordered_map<llama_seq_id, ple_history> ple_hist;
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -2366,6 +2358,7 @@ struct llama_model_qwen4exp : public llama_model_base {
 
         ggml_tensor * build_ple(
              llm_graph_input_rs * inp,
+  const llama_memory_hybrid_idx_context * mctx_hyb,
                     ggml_tensor * hidden,
                             int   il);
 

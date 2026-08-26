@@ -2,6 +2,7 @@
 
 #include "llama-memory-hybrid.h"
 
+#include <map>
 #include <memory>
 #include <vector>
 
@@ -9,19 +10,10 @@
 // llama_memory_hybrid_idx
 //
 
-// llama_memory_hybrid plus a third cache holding one indexer key per token, for hybrid
-// architectures whose attention layers are block-sparse (qwen4exp QSA).
-//
-// this is a separate llama_memory type rather than an option on llama_memory_hybrid so that
-// nothing in the hybrid path used by the other architectures changes. it duplicates
-// llama_memory_hybrid::init_batch because the indexer cache must be given the attention
-// cache's slot layout instead of finding its own, and that layout is not observable from
-// outside the returned context.
-//
-// the indexer cache is a side buffer addressed by the attention cache's cells: same size,
-// same padding, same stream count, same slots, so cell j means the same token in both.
-// everything that depends on that layout is computed host-side in set_input_qsa; the model
-// graph only gathers, pools and scores.
+// llama_memory_hybrid plus qwen4exp-specific per-token indexer and PLE host state.
+// Keeping these in a distinct memory type leaves the shared hybrid/KV paths used by
+// every other architecture unchanged. The indexer cache takes the attention cache's
+// exact slot layout, so cell j identifies the same token in both caches.
 
 class llama_memory_hybrid_idx : public llama_memory_hybrid {
 public:
@@ -52,18 +44,15 @@ public:
 
     ~llama_memory_hybrid_idx() = default;
 
-    //
-    // llama_memory_i
-    //
-
     llama_memory_context_ptr init_batch(
             llama_batch_allocr & balloc,
             uint32_t n_ubatch,
             bool embd_all) override;
 
     llama_memory_context_ptr init_full() override;
-
     llama_memory_context_ptr init_update(llama_context * lctx, bool optimize) override;
+
+    bool get_can_shift() const override;
 
     void clear(bool data) override;
 
@@ -75,37 +64,58 @@ public:
 
     std::map<ggml_backend_buffer_type_t, size_t> memory_breakdown() const override;
 
-    //
-    // llama_memory_hybrid_idx specific API
-    //
+    void state_write(llama_io_write_i & io, llama_seq_id seq_id = -1, llama_state_seq_flags flags = 0) const override;
+    void state_read (llama_io_read_i  & io, llama_seq_id seq_id = -1, llama_state_seq_flags flags = 0)       override;
 
-    llama_kv_cache * get_mem_idx() const;   // nullptr when the model carries no indexer
+    llama_kv_cache * get_mem_idx() const;
+    llama_memory_recurrent * get_mem_ple() const;
+
+    // PLE needs logical token predecessors, not just primary positions: M-RoPE
+    // image patches can share a position. Prefixes are captured during apply().
+    using ple_prefix_map = std::map<llama_seq_id, std::vector<llama_token>>;
+    void ple_apply_ubatch(const llama_ubatch & ubatch, ple_prefix_map & prefix);
 
 private:
-    // the indexer cache stores only one key head per layer, so it needs its own hparams
-    // instance: llama_kv_cache keeps a reference to whatever it is given
-    llama_hparams hparams_idx;
+    struct ple_history_entry {
+        llama_pos   pos;
+        llama_token token;
+    };
+    using ple_seq_history = std::vector<ple_history_entry>;
 
+    void ple_append  (llama_seq_id seq_id, llama_pos pos, llama_token token);
+    void ple_seq_rm  (llama_seq_id seq_id, llama_pos p0, llama_pos p1);
+    void ple_seq_cp  (llama_seq_id seq_id_src, llama_seq_id seq_id_dst, llama_pos p0, llama_pos p1);
+    void ple_seq_keep(llama_seq_id seq_id);
+    void ple_seq_add (llama_seq_id seq_id, llama_pos p0, llama_pos p1, llama_pos shift);
+    void ple_seq_div (llama_seq_id seq_id, llama_pos p0, llama_pos p1, int d);
+    void ple_state_write(llama_io_write_i & io, llama_seq_id seq_id) const;
+    void ple_state_read (llama_io_read_i  & io, llama_seq_id seq_id);
+
+    const llama_hparams & hparams;
+    const uint32_t n_seq_max;
+
+    // The indexer stores one key head per full-attention layer and needs a
+    // stable hparams object because llama_kv_cache retains it by reference.
+    llama_hparams hparams_idx;
     const std::unique_ptr<llama_kv_cache> mem_idx;
+
+    // PLE convolution history is mirrored and independent of the TP-sharded
+    // GDN state. Combining them in one row makes neither placement correct.
+    const std::unique_ptr<llama_memory_recurrent> mem_ple;
+
+    std::map<llama_seq_id, ple_seq_history> ple_history;
 };
 
 class llama_memory_hybrid_idx_context : public llama_memory_hybrid_context {
 public:
     using slot_info_vec_t = llama_kv_cache::slot_info_vec_t;
 
-    // used for errors
     explicit llama_memory_hybrid_idx_context(llama_memory_status status);
-
-    // used to create a full-cache context
     explicit llama_memory_hybrid_idx_context(llama_memory_hybrid_idx * mem);
-
-    // used to create an update context
     llama_memory_hybrid_idx_context(
             llama_memory_hybrid_idx * mem,
                       llama_context * lctx,
                                bool   optimize);
-
-    // used to create a batch processing context from a batch
     llama_memory_hybrid_idx_context(
             llama_memory_hybrid_idx * mem,
                     slot_info_vec_t   sinfos_attn,
@@ -114,44 +124,32 @@ public:
 
     ~llama_memory_hybrid_idx_context() = default;
 
-    //
-    // llama_memory_context_i
-    //
-
     bool next()  override;
     bool apply() override;
+    llama_memory_status get_status() const override;
 
-    //
-    // llama_memory_hybrid_idx_context specific API
-    //
-
-    // nullptr when the model carries no indexer, and for the full and update contexts,
-    // which do not drive the sparse-attention graph
     const llama_kv_cache_context * get_idx() const;
-
-    // streams in the current slot info, matching get_k/get_v's `ns`. 1 if unified.
+    const llama_memory_recurrent_context * get_ple() const;
     uint32_t get_n_stream() const;
 
-    // block-compressed sparse attention (qwen4exp QSA) over the indexer cache's cells.
-    // blocks cut the *position* line, not the cell array, so nothing assumes a contiguous
-    // layout:
-    //   cell_blk  I32 [n_kv, ns]           block each cell belongs to
-    //   blk_cells I32 [ratio*n_blocks, ns] cells making up each block
-    //   blk_pos   I32 [4*n_blocks*ns]      mrope position rows of each block's first token
-    //   bias      F32 [n_kv, n_tokens/ns, ns] -inf where invisible, large where always visible
+    // QSA is safe only when each stream has one sequence with unique,
+    // contiguous primary positions. Other layouts use dense attention.
+    bool qsa_compatible(const llama_ubatch * ubatch, uint32_t ratio) const;
     void set_input_qsa(ggml_tensor * cell_blk, ggml_tensor * blk_cells, ggml_tensor * blk_pos,
                        ggml_tensor * bias, const llama_ubatch * ubatch, uint32_t ratio) const;
 
+    llama_token ple_prefix_token(llama_seq_id seq_id, size_t lookback, llama_token fallback) const;
+
 private:
-    const llama_memory_hybrid_idx * mem = nullptr;
+    llama_memory_hybrid_idx * mem = nullptr;
 
-    // streams per ubatch, taken from the slot infos before they are handed to ctx_idx.
-    // declared first so that it is initialised while sinfos_idx is still intact
-    const std::vector<uint32_t> ns_ubatch;
+    // Expected stream ids for each actual ubatch, captured before slot infos are
+    // moved into ctx_idx. Empty for reserve/update contexts.
+    const std::vector<std::vector<llama_seq_id>> stream_ids_ubatch;
 
-    // null unless the model has an indexer and this is a batch context
     const llama_memory_context_ptr ctx_idx;
-
-    // mirrors the base class's ubatch cursor, which is private there
+    const llama_memory_context_ptr ctx_ple;
     size_t i_cur = 0;
+
+    llama_memory_hybrid_idx::ple_prefix_map ple_prefix;
 };

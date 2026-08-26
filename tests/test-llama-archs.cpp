@@ -12,6 +12,7 @@
 #include "../src/llama-model-saver.h"
 
 #include <cinttypes>
+#include <cmath>
 #include <cstddef>
 #include <cstdlib>
 #include <cstdio>
@@ -250,8 +251,29 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
     if (arch == LLM_ARCH_QWEN4EXP) {
         ms.add_kv(LLM_KV_HYPER_CONNECTION_COUNT,    uint32_t(4));
         ms.add_kv(LLM_KV_HYPER_CONNECTION_LOW_RANK, uint32_t(8));
-        // without this the QSA layers fall back to dense and go uncovered
-        ms.add_kv(LLM_KV_ATTENTION_COMPRESS_RATIOS, std::vector<uint32_t>(n_layer, 4));
+        // The interval-2 fixture alternates recurrent/full layers. Only the
+        // full layers carry a QSA ratio, matching converted checkpoints.
+        std::vector<uint32_t> qsa_ratios(n_layer, 0);
+        for (uint32_t il = 1; il < n_layer; il += 2) {
+            qsa_ratios[il] = 4;
+        }
+        ms.add_kv(LLM_KV_ATTENTION_COMPRESS_RATIOS, qsa_ratios);
+
+        // Exercise the PLE graph as well as QSA. Layer 0 is recurrent with the
+        // interval-2 fixture, and four 64-wide heads flatten to n_embd.
+        ms.add_kv(LLM_KV_PLE_LAYERS,             std::vector<uint32_t>({0}));
+        ms.add_kv(LLM_KV_PLE_NGRAM_SIZE,         uint32_t(3));
+        ms.add_kv(LLM_KV_PLE_HEADS_PER_NGRAM,    uint32_t(2));
+        ms.add_kv(LLM_KV_PLE_CONV_KERNEL,        uint32_t(3));
+        ms.add_kv(LLM_KV_PLE_EOS_TOKEN_ID,       uint32_t(127));
+        ms.add_kv(LLM_KV_PLE_IMAGE_TOKEN_ID,     uint32_t(126));
+        ms.add_kv(LLM_KV_EMBEDDING_LENGTH_PER_LAYER, uint32_t(64));
+        ms.add_kv(LLM_KV_PLE_LAYER_MULTIPLIERS,
+                std::vector<uint64_t>({1, 2654435761ULL, 1099511627791ULL}));
+        ms.add_kv(LLM_KV_PLE_HEAD_OFFSETS,
+                std::vector<uint64_t>({0, 16, 32, 48}));
+        ms.add_kv(LLM_KV_PLE_HEAD_VOCAB_SIZES,
+                std::vector<uint64_t>({16, 16, 16, 16}));
     }
 
     ms.add_kv(LLM_KV_ATTENTION_INDEXER_HEAD_COUNT,
@@ -344,7 +366,9 @@ static bool silent_model_load_progress(float /*progress*/, void * /*user_data*/)
 
 static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
         struct gguf_context * gguf_ctx, FILE * file, const size_t seed, const std::vector<ggml_backend_dev_t> & devs,
-        const llama_split_mode split_mode = LLAMA_SPLIT_MODE_LAYER, bool encode = false) {
+        const llama_split_mode split_mode = LLAMA_SPLIT_MODE_LAYER, bool encode = false,
+        uint32_t n_seq_max = 1, bool kv_unified = false,
+        ggml_type cache_type = GGML_TYPE_F16) {
     GGML_ASSERT((gguf_ctx == nullptr) != (file == nullptr));
     llama_model_params model_params = llama_model_default_params();
     model_params.progress_callback = silent_model_load_progress;
@@ -357,6 +381,10 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
     ctx_params.n_ctx = 0;
     ctx_params.n_threads = 4;
     ctx_params.n_threads_batch = 4;
+    ctx_params.n_seq_max = n_seq_max;
+    ctx_params.kv_unified = kv_unified;
+    ctx_params.type_k = cache_type;
+    ctx_params.type_v = cache_type;
     if (!encode) {
         ctx_params.n_ubatch = 64;
     }
@@ -376,6 +404,419 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
         throw std::runtime_error("failed to create llama context");
     }
     return std::make_pair(std::move(model), std::move(lctx));
+}
+
+static void check_qwen4exp_invalid_metadata(size_t seed) {
+    struct scoped_silent_log {
+        ggml_log_callback callback;
+        void * user_data;
+
+        scoped_silent_log() {
+            llama_log_get(&callback, &user_data);
+            llama_log_set([](ggml_log_level, const char *, void *) {}, nullptr);
+        }
+        ~scoped_silent_log() {
+            llama_log_set(callback, user_data);
+        }
+    } silent_log;
+
+    auto expect_rejected = [seed](gguf_context_ptr ctx, const char * what) {
+        try {
+            auto model_and_ctx = get_model_and_ctx(ctx.get(), nullptr, seed, {});
+            GGML_UNUSED(model_and_ctx);
+        } catch (const std::exception &) {
+            return;
+        }
+        throw std::runtime_error(std::string("Qwen4Exp accepted invalid metadata: ") + what);
+    };
+
+    {
+        auto ctx = get_gguf_ctx(LLM_ARCH_QWEN4EXP, true);
+        llama_model_saver ms(LLM_ARCH_QWEN4EXP, ctx.get());
+        ms.add_kv(LLM_KV_PLE_HEAD_OFFSETS, std::vector<uint64_t>({0, 8, 32, 48}));
+        expect_rejected(std::move(ctx), "overlapping PLE ranges");
+    }
+    {
+        auto ctx = get_gguf_ctx(LLM_ARCH_QWEN4EXP, true);
+        llama_model_saver ms(LLM_ARCH_QWEN4EXP, ctx.get());
+        ms.add_kv(LLM_KV_ATTENTION_COMPRESS_RATIOS, std::vector<uint32_t>({4, 4}));
+        expect_rejected(std::move(ctx), "QSA ratio on a recurrent layer");
+    }
+    {
+        auto ctx = get_gguf_ctx(LLM_ARCH_QWEN4EXP, true);
+        llama_model_saver ms(LLM_ARCH_QWEN4EXP, ctx.get());
+        ms.add_kv(LLM_KV_PLE_IMAGE_TOKEN_ID, uint32_t(128));
+        expect_rejected(std::move(ctx), "out-of-vocabulary image token");
+    }
+    {
+        auto ctx = get_gguf_ctx(LLM_ARCH_QWEN4EXP, true);
+        llama_model_saver ms(LLM_ARCH_QWEN4EXP, ctx.get());
+        ms.add_kv(LLM_KV_PLE_LAYERS, std::vector<uint32_t>({0, 0}));
+        expect_rejected(std::move(ctx), "duplicate PLE layer");
+    }
+    {
+        auto ctx = get_gguf_ctx(LLM_ARCH_QWEN4EXP, true);
+        gguf_set_arr_data(ctx.get(), "qwen4exp.ple.layers", GGUF_TYPE_UINT32, nullptr, 0);
+        expect_rejected(std::move(ctx), "empty PLE metadata group");
+    }
+}
+
+static llama_context_ptr get_additional_test_ctx(llama_model * model) {
+    llama_context_params ctx_params = llama_context_default_params();
+    ctx_params.n_ctx = 0;
+    ctx_params.n_threads = 4;
+    ctx_params.n_threads_batch = 4;
+    ctx_params.n_ubatch = 64;
+    if (getenv("LLAMA_TEST_FLASH_ATTN") != nullptr) {
+        ctx_params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED;
+    }
+    llama_context_ptr lctx(llama_init_from_model(model, ctx_params));
+    if (!lctx) {
+        throw std::runtime_error("failed to create additional test context");
+    }
+    return lctx;
+}
+
+static std::vector<float> decode_one(llama_context * lctx, llama_token token, llama_pos pos) {
+    llama_batch batch = llama_batch_init(1, 0, 1);
+    common_batch_add(batch, token, pos, {0}, true);
+    batch.n_tokens = 1;
+    if (llama_decode(lctx, batch)) {
+        llama_batch_free(batch);
+        throw std::runtime_error("failed to decode state-equivalence token");
+    }
+    const uint32_t n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(llama_get_model(lctx)));
+    const float * logits = llama_get_logits_ith(lctx, 0);
+    std::vector<float> result(logits, logits + n_vocab);
+    llama_batch_free(batch);
+    return result;
+}
+
+static std::vector<float> decode_qwen4exp_tokens(
+        llama_context * lctx, const std::vector<llama_token> & tokens, llama_seq_id seq_id) {
+    llama_batch batch = llama_batch_init((int32_t) tokens.size(), 0, 1);
+    for (uint32_t pos = 0; pos < tokens.size(); ++pos) {
+        common_batch_add(batch, tokens[pos], pos, {seq_id}, true);
+    }
+    batch.n_tokens = (int32_t) tokens.size();
+    if (llama_decode(lctx, batch)) {
+        llama_batch_free(batch);
+        throw std::runtime_error("failed to decode Qwen4Exp sequence");
+    }
+
+    const uint32_t n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(llama_get_model(lctx)));
+    std::vector<float> result;
+    result.reserve(tokens.size() * n_vocab);
+    for (uint32_t i = 0; i < tokens.size(); ++i) {
+        const float * logits = llama_get_logits_ith(lctx, i);
+        result.insert(result.end(), logits, logits + n_vocab);
+    }
+    llama_batch_free(batch);
+    return result;
+}
+
+static std::vector<float> decode_qwen4exp_one(
+        llama_context * lctx, llama_token token, llama_pos pos, llama_seq_id seq_id) {
+    llama_batch batch = llama_batch_init(1, 0, 1);
+    common_batch_add(batch, token, pos, {seq_id}, true);
+    batch.n_tokens = 1;
+    if (llama_decode(lctx, batch)) {
+        llama_batch_free(batch);
+        throw std::runtime_error("failed to decode Qwen4Exp continuation token");
+    }
+    const uint32_t n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(llama_get_model(lctx)));
+    const float * logits = llama_get_logits_ith(lctx, 0);
+    std::vector<float> result(logits, logits + n_vocab);
+    llama_batch_free(batch);
+    return result;
+}
+
+static void check_qwen4exp_qsa_streams(gguf_context * gguf_ctx, size_t seed) {
+    constexpr uint32_t n_tokens = 16; // above the fixture's QSA budget
+    std::vector<llama_token> tokens0(n_tokens);
+    std::vector<llama_token> tokens1(n_tokens);
+    for (uint32_t i = 0; i < n_tokens; ++i) {
+        tokens0[i] = (llama_token) ((7*i + 3) % 120);
+        tokens1[i] = (llama_token) ((11*i + 5) % 120);
+    }
+
+    auto multi = get_model_and_ctx(
+            gguf_ctx, nullptr, seed, {}, LLAMA_SPLIT_MODE_LAYER, false, 2, false);
+    llama_batch batch = llama_batch_init(2*n_tokens, 0, 1);
+    for (uint32_t i = 0; i < n_tokens; ++i) {
+        common_batch_add(batch, tokens0[i], i, {0}, true);
+    }
+    for (uint32_t i = 0; i < n_tokens; ++i) {
+        common_batch_add(batch, tokens1[i], i, {1}, true);
+    }
+    batch.n_tokens = 2*n_tokens;
+    if (llama_decode(multi.second.get(), batch)) {
+        llama_batch_free(batch);
+        throw std::runtime_error("failed to decode Qwen4Exp non-unified QSA batch");
+    }
+
+    const uint32_t n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(multi.first.get()));
+    std::vector<float> actual;
+    actual.reserve((size_t) 2*n_tokens*n_vocab);
+    for (uint32_t i = 0; i < 2*n_tokens; ++i) {
+        const float * logits = llama_get_logits_ith(multi.second.get(), i);
+        actual.insert(actual.end(), logits, logits + n_vocab);
+    }
+    llama_batch_free(batch);
+
+    auto ref0 = get_model_and_ctx(gguf_ctx, nullptr, seed, {});
+    auto ref1 = get_model_and_ctx(gguf_ctx, nullptr, seed, {});
+    auto expected = decode_qwen4exp_tokens(ref0.second.get(), tokens0, 0);
+    const auto expected1 = decode_qwen4exp_tokens(ref1.second.get(), tokens1, 0);
+    expected.insert(expected.end(), expected1.begin(), expected1.end());
+    if (nmse(expected, actual) > 1e-6) {
+        throw std::runtime_error("Qwen4Exp non-unified QSA streams changed logits");
+    }
+
+    // Quantized K/V caches enable the cache Hadamard rotations. The sparse
+    // overload must preserve the same rotation path as ordinary GQA attention.
+    auto q8 = get_model_and_ctx(
+            gguf_ctx, nullptr, seed, {}, LLAMA_SPLIT_MODE_LAYER, false, 1, false, GGML_TYPE_Q8_0);
+    const auto q8_logits = decode_qwen4exp_tokens(q8.second.get(), tokens0, 0);
+    const std::vector<float> expected0(expected.begin(), expected.begin() + q8_logits.size());
+    const double q8_nmse = nmse(expected0, q8_logits);
+    if (!std::isfinite(q8_nmse) || q8_nmse > 1e-2) {
+        throw std::runtime_error("Qwen4Exp Q8 KV sparse attention produced invalid logits");
+    }
+
+    // Exercise graph reuse as a unified cache changes from one compatible
+    // sequence to two interleaved logical histories. The second request must
+    // reject the old QSA graph and use the dense fallback.
+    auto unified = get_model_and_ctx(
+            gguf_ctx, nullptr, seed, {}, LLAMA_SPLIT_MODE_LAYER, false, 2, true);
+    const std::vector<llama_token> short0(tokens0.begin(), tokens0.begin() + 4);
+    const std::vector<llama_token> short1(tokens1.begin(), tokens1.begin() + 4);
+    decode_qwen4exp_tokens(unified.second.get(), short0, 0);
+    const auto unified_second = decode_qwen4exp_tokens(unified.second.get(), short1, 1);
+    auto single = get_model_and_ctx(gguf_ctx, nullptr, seed, {});
+    const auto single_second = decode_qwen4exp_tokens(single.second.get(), short1, 0);
+    if (nmse(single_second, unified_second) > 1e-6) {
+        throw std::runtime_error("Qwen4Exp unified-cache dense fallback changed logits");
+    }
+
+    // After the incompatible sequence is removed, QSA may become eligible
+    // again. Dense fallback still cached every indexer key, so historical
+    // blocks remain defined across this graph transition.
+    if (!llama_memory_seq_rm(llama_get_memory(unified.second.get()), 1, -1, -1)) {
+        throw std::runtime_error("failed to remove Qwen4Exp unified-cache sequence");
+    }
+    const auto reenabled = decode_one(unified.second.get(), tokens0[4], 4);
+    auto single5 = get_model_and_ctx(gguf_ctx, nullptr, seed, {});
+    const std::vector<llama_token> first5(tokens0.begin(), tokens0.begin() + 5);
+    const auto expected5_all = decode_qwen4exp_tokens(single5.second.get(), first5, 0);
+    const std::vector<float> expected5(expected5_all.end() - n_vocab, expected5_all.end());
+    if (nmse(expected5, reenabled) > 1e-6) {
+        throw std::runtime_error("Qwen4Exp QSA re-enable used stale indexer keys");
+    }
+}
+
+static void decode_qwen4exp_embd(
+        llama_context * lctx, const std::vector<float> & embd, int32_t first, int32_t count) {
+    const int32_t n_embd = llama_model_n_embd_inp(llama_get_model(lctx));
+    std::vector<llama_pos> pos((size_t) count * 4);
+    std::vector<int32_t> n_seq_id(count, 1);
+    std::vector<llama_seq_id> seq_storage(count, 0);
+    std::vector<llama_seq_id *> seq_ids(count);
+    std::vector<int8_t> logits(count, 0);
+    for (int32_t i = 0; i < count; ++i) {
+        const int32_t src = first + i;
+        // Qwen-VL image patches share the temporal (primary) position while
+        // carrying distinct spatial positions in the other M-RoPE sections.
+        pos[i]           = 5;
+        pos[count + i]   = 5 + src / 2;
+        pos[2*count + i] = 5 + src % 2;
+        pos[3*count + i] = 0;
+        seq_ids[i] = &seq_storage[i];
+    }
+
+    llama_batch batch = {
+        /*.n_tokens =*/ count,
+        /*.token    =*/ nullptr,
+        /*.embd     =*/ const_cast<float *>(embd.data()) + (size_t) first * n_embd,
+        /*.pos      =*/ pos.data(),
+        /*.n_seq_id =*/ n_seq_id.data(),
+        /*.seq_id   =*/ seq_ids.data(),
+        /*.logits   =*/ logits.data(),
+    };
+    if (llama_decode(lctx, batch)) {
+        throw std::runtime_error("failed to decode Qwen4Exp repeated-position embedding batch");
+    }
+}
+
+static void check_qwen4exp_mrope_history(gguf_context * gguf_ctx, size_t seed) {
+    constexpr int32_t n_image = 4;
+    auto full    = get_model_and_ctx(gguf_ctx, nullptr, seed, {});
+    auto chunked = get_model_and_ctx(gguf_ctx, nullptr, seed, {});
+    const int32_t n_embd = llama_model_n_embd_inp(full.first.get());
+    std::vector<float> embd((size_t) n_image * n_embd);
+    for (size_t i = 0; i < embd.size(); ++i) {
+        embd[i] = 0.05f * std::sin((float) i * 0.013f);
+    }
+
+    decode_qwen4exp_embd(full.second.get(), embd, 0, n_image);
+    for (int32_t i = 0; i < n_image; ++i) {
+        decode_qwen4exp_embd(chunked.second.get(), embd, i, 1);
+    }
+
+    // A second context sharing the same model must start with an empty PLE
+    // history. The upstream implementation stored this on the model and leaked
+    // predecessors between otherwise independent contexts.
+    auto sibling = get_additional_test_ctx(full.first.get());
+    auto pristine = get_model_and_ctx(gguf_ctx, nullptr, seed, {});
+    const auto sibling_first = decode_one(sibling.get(),          3, 0);
+    const auto pristine_first = decode_one(pristine.second.get(), 3, 0);
+    if (sibling_first != pristine_first) {
+        throw std::runtime_error("Qwen4Exp PLE history leaked between contexts");
+    }
+
+    // Save while duplicate primary positions are present. PLE state must keep
+    // all four logical predecessors rather than collapsing them by position.
+    std::vector<uint8_t> state(llama_state_get_size(full.second.get()));
+    const size_t written = llama_state_get_data(full.second.get(), state.data(), state.size());
+    if (written == 0 || written > state.size()) {
+        throw std::runtime_error("failed to save Qwen4Exp M-RoPE state");
+    }
+    state.resize(written);
+    auto restored = get_model_and_ctx(gguf_ctx, nullptr, seed, {});
+    if (llama_state_set_data(restored.second.get(), state.data(), state.size()) != state.size()) {
+        throw std::runtime_error("failed to restore Qwen4Exp M-RoPE state");
+    }
+
+    const auto expected = decode_one(full.second.get(),     7, 6);
+    const auto split    = decode_one(chunked.second.get(),  7, 6);
+    const auto loaded   = decode_one(restored.second.get(), 7, 6);
+    if (nmse(expected, split) > 1e-6 || expected != loaded) {
+        throw std::runtime_error("Qwen4Exp M-RoPE PLE history changed across chunking or state restore");
+    }
+}
+
+static void check_qwen4exp_state_restore(
+        gguf_context * gguf_ctx, size_t seed, const std::vector<llama_token> & tokens) {
+    constexpr uint32_t n_prefix = 64;
+    GGML_ASSERT(tokens.size() > n_prefix);
+
+    auto source = get_model_and_ctx(gguf_ctx, nullptr, seed, {});
+    llama_batch prefix = llama_batch_init(n_prefix, 0, 1);
+    for (uint32_t pos = 0; pos < n_prefix; ++pos) {
+        common_batch_add(prefix, tokens[pos], pos, {0}, false);
+    }
+    prefix.n_tokens = n_prefix;
+    if (llama_decode(source.second.get(), prefix)) {
+        llama_batch_free(prefix);
+        throw std::runtime_error("failed to decode Qwen4Exp state prefix");
+    }
+    llama_batch_free(prefix);
+
+    std::vector<uint8_t> state(llama_state_get_size(source.second.get()));
+    const size_t written = llama_state_get_data(source.second.get(), state.data(), state.size());
+    if (written == 0 || written > state.size()) {
+        throw std::runtime_error("failed to save Qwen4Exp state");
+    }
+    state.resize(written);
+
+    std::vector<uint8_t> seq_state(llama_state_seq_get_size(source.second.get(), 0));
+    const size_t seq_written = llama_state_seq_get_data(
+            source.second.get(), seq_state.data(), seq_state.size(), 0);
+    if (seq_written == 0 || seq_written > seq_state.size()) {
+        throw std::runtime_error("failed to save Qwen4Exp sequence state");
+    }
+    seq_state.resize(seq_written);
+
+    auto restored = get_model_and_ctx(gguf_ctx, nullptr, seed, {});
+    if (llama_state_set_data(restored.second.get(), state.data(), state.size()) != state.size()) {
+        throw std::runtime_error("failed to restore Qwen4Exp state");
+    }
+    auto restored_seq = get_model_and_ctx(gguf_ctx, nullptr, seed, {});
+    if (llama_state_seq_set_data(
+            restored_seq.second.get(), seq_state.data(), seq_state.size(), 0) != seq_state.size()) {
+        throw std::runtime_error("failed to restore Qwen4Exp sequence state");
+    }
+
+    // Without recurrent rollback snapshots, partial removal must fail without
+    // mutating the attention/indexer/PLE participants that follow it.
+    auto failed_rm = get_model_and_ctx(gguf_ctx, nullptr, seed, {});
+    if (llama_state_set_data(failed_rm.second.get(), state.data(), state.size()) != state.size() ||
+            llama_memory_seq_rm(llama_get_memory(failed_rm.second.get()), 0, 60, -1)) {
+        throw std::runtime_error("Qwen4Exp partial sequence removal was not fail-closed");
+    }
+
+    // Full sequence removal is supported and must clear PLE history too.
+    auto cleared = get_model_and_ctx(gguf_ctx, nullptr, seed, {});
+    if (llama_state_set_data(cleared.second.get(), state.data(), state.size()) != state.size() ||
+            !llama_memory_seq_rm(llama_get_memory(cleared.second.get()), 0, -1, -1)) {
+        throw std::runtime_error("failed to clear Qwen4Exp sequence state");
+    }
+    auto pristine = get_model_and_ctx(gguf_ctx, nullptr, seed, {});
+    if (decode_one(cleared.second.get(), tokens[0], 0) !=
+            decode_one(pristine.second.get(), tokens[0], 0)) {
+        throw std::runtime_error("Qwen4Exp full sequence removal left stale state");
+    }
+
+    const auto expected   = decode_one(source.second.get(),       tokens[n_prefix], n_prefix);
+    const auto actual     = decode_one(restored.second.get(),     tokens[n_prefix], n_prefix);
+    const auto actual_seq = decode_one(restored_seq.second.get(), tokens[n_prefix], n_prefix);
+    const auto after_fail = decode_one(failed_rm.second.get(),    tokens[n_prefix], n_prefix);
+    if (expected != actual || expected != actual_seq || expected != after_fail) {
+        throw std::runtime_error("Qwen4Exp continuation changed after state restore");
+    }
+}
+
+static void check_qwen4exp_sequence_ops(
+        gguf_context * gguf_ctx, size_t seed, const std::vector<llama_token> & tokens) {
+    constexpr uint32_t n_prefix = 8;
+    GGML_ASSERT(tokens.size() > n_prefix + 1);
+    const std::vector<llama_token> prefix(tokens.begin(), tokens.begin() + n_prefix);
+
+    // Copying a live sequence must copy attention, recurrent, indexer, and PLE
+    // state together. A continuation on the destination must match the source.
+    auto copied = get_model_and_ctx(
+            gguf_ctx, nullptr, seed, {}, LLAMA_SPLIT_MODE_LAYER, false, 2, false);
+    decode_qwen4exp_tokens(copied.second.get(), prefix, 0);
+    llama_memory_seq_cp(llama_get_memory(copied.second.get()), 0, 1, -1, -1);
+
+    auto copy_ref = get_model_and_ctx(gguf_ctx, nullptr, seed, {});
+    decode_qwen4exp_tokens(copy_ref.second.get(), prefix, 0);
+    const auto expected_copy = decode_qwen4exp_one(
+            copy_ref.second.get(), tokens[n_prefix], n_prefix, 0);
+    const auto actual_copy = decode_qwen4exp_one(
+            copied.second.get(), tokens[n_prefix], n_prefix, 1);
+    if (expected_copy != actual_copy) {
+        throw std::runtime_error("Qwen4Exp sequence copy lost indexer or PLE state");
+    }
+
+    // Keeping one sequence must preserve it and clear every other sequence,
+    // including host-side PLE history and the optional indexer cache.
+    std::vector<llama_token> alternate(n_prefix);
+    for (uint32_t i = 0; i < n_prefix; ++i) {
+        alternate[i] = (llama_token) ((tokens[i] + 17 + i) % 120);
+    }
+    auto kept = get_model_and_ctx(
+            gguf_ctx, nullptr, seed, {}, LLAMA_SPLIT_MODE_LAYER, false, 2, false);
+    decode_qwen4exp_tokens(kept.second.get(), prefix, 0);
+    decode_qwen4exp_tokens(kept.second.get(), alternate, 1);
+    llama_memory_seq_keep(llama_get_memory(kept.second.get()), 1);
+
+    auto keep_ref = get_model_and_ctx(gguf_ctx, nullptr, seed, {});
+    decode_qwen4exp_tokens(keep_ref.second.get(), alternate, 0);
+    const auto expected_keep = decode_qwen4exp_one(
+            keep_ref.second.get(), tokens[n_prefix + 1], n_prefix, 0);
+    const auto actual_keep = decode_qwen4exp_one(
+            kept.second.get(), tokens[n_prefix + 1], n_prefix, 1);
+    if (expected_keep != actual_keep) {
+        throw std::runtime_error("Qwen4Exp sequence keep changed the retained state");
+    }
+
+    auto pristine = get_model_and_ctx(gguf_ctx, nullptr, seed, {});
+    const auto expected_fresh = decode_qwen4exp_one(pristine.second.get(), prefix[0], 0, 0);
+    const auto actual_fresh = decode_qwen4exp_one(kept.second.get(), prefix[0], 0, 0);
+    if (expected_fresh != actual_fresh) {
+        throw std::runtime_error("Qwen4Exp sequence keep left removed state behind");
+    }
 }
 
 static std::vector<float> get_logits(
@@ -629,9 +1070,17 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const gg
         std::vector<ggml_backend_dev_t> devs;
         std::string                     label;
         llama_split_mode                split_mode;
+        ggml_type                       cache_type;
+        bool                            qwen4exp_only;
 
-        device_config(std::vector<ggml_backend_dev_t> devs, std::string name, llama_split_mode split_mode)
-            : devs(std::move(devs)), label(std::move(name)), split_mode(split_mode) {}
+        device_config(
+                std::vector<ggml_backend_dev_t> devs,
+                std::string name,
+                llama_split_mode split_mode,
+                ggml_type cache_type = GGML_TYPE_F16,
+                bool qwen4exp_only = false) :
+            devs(std::move(devs)), label(std::move(name)), split_mode(split_mode),
+            cache_type(cache_type), qwen4exp_only(qwen4exp_only) {}
     };
 
     std::vector<device_config> dev_configs;
@@ -653,6 +1102,8 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const gg
         }
 
         dev_configs.emplace_back(devices_meta, "Meta", LLAMA_SPLIT_MODE_TENSOR);
+        dev_configs.emplace_back(devices_meta, "Meta-Q8", LLAMA_SPLIT_MODE_TENSOR, GGML_TYPE_Q8_0, true);
+        max_device_label_length = std::max(max_device_label_length, dev_configs.back().label.length());
     }
 
     size_t max_arch_name_length = 0;
@@ -706,6 +1157,9 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const gg
             std::pair<llama_model_ptr, llama_context_ptr> model_and_ctx_cpu;
             std::vector<float> logits_cpu;
             for (device_config & dc : dev_configs) {
+                if (dc.qwen4exp_only && arch != LLM_ARCH_QWEN4EXP) {
+                    continue;
+                }
                 // print test config first; should anything fail during model loading or inference, at least we know which test case caused it
                 printf(template_row_cfg.c_str(),
                     llm_arch_name(arch), dc.label.c_str(), config_name.c_str());
@@ -721,13 +1175,22 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const gg
                     if (logits_cpu.empty()) {
                         model_and_ctx_cpu = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, {}, LLAMA_SPLIT_MODE_LAYER, encode);
                         logits_cpu = get_logits(model_and_ctx_cpu.first.get(), model_and_ctx_cpu.second.get(), tokens, encode);
+                        if (arch == LLM_ARCH_QWEN4EXP) {
+                            check_qwen4exp_state_restore(gguf_ctx.get(), seed, tokens);
+                            check_qwen4exp_sequence_ops(gguf_ctx.get(), seed, tokens);
+                            check_qwen4exp_mrope_history(gguf_ctx.get(), seed);
+                            check_qwen4exp_qsa_streams(gguf_ctx.get(), seed);
+                            check_qwen4exp_invalid_metadata(seed);
+                        }
                         if (arch == LLM_ARCH_DEEPSEEK4) {
                             GGML_ASSERT(llama_memory_seq_rm(
                                     llama_get_memory(model_and_ctx_cpu.second.get()), 0, -1, -1));
                         }
                     }
                     if (dc.split_mode != LLAMA_SPLIT_MODE_TENSOR || llm_arch_supports_sm_tensor(arch)) {
-                        model_and_ctx_dev = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, dc.devs, dc.split_mode, encode);
+                        model_and_ctx_dev = get_model_and_ctx(
+                                gguf_ctx.get(), nullptr, seed, dc.devs, dc.split_mode, encode,
+                                1, false, dc.cache_type);
                         logits_dev = get_logits(model_and_ctx_dev.first.get(), model_and_ctx_dev.second.get(), tokens, encode);
                         if (arch == LLM_ARCH_DEEPSEEK4) {
                             GGML_ASSERT(llama_memory_seq_rm(
@@ -736,7 +1199,9 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const gg
                         const double nmse_val = nmse(logits_cpu, logits_dev);
                         snprintf(nmse_str, sizeof(nmse_str), "(%.2e)", nmse_val);
                         status_nmse = "\033[1;32mOK\033[0m";
-                        if (nmse_val > 1e-4) {
+                        const double nmse_limit = dc.cache_type == GGML_TYPE_Q8_0 ? 1e-2 : 1e-4;
+                        if (nmse_val > nmse_limit ||
+                                (arch == LLM_ARCH_QWEN4EXP && !std::isfinite(nmse_val))) {
                             all_ok = false;
                             status_nmse = "\033[1;31mFAIL\033[0m";
                         }

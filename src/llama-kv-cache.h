@@ -5,6 +5,7 @@
 #include "llama-kv-cells.h"
 #include "llama-memory.h"
 
+#include <string>
 #include <unordered_map>
 #include <vector>
 
@@ -112,7 +113,8 @@ public:
                llama_memory_t   mem_other,
         const layer_filter_cb & filter,
         const  layer_reuse_cb & reuse,
-        const  layer_share_cb & share);
+        const  layer_share_cb & share,
+           const std::string & name_prefix = "cache");
 
     ~llama_kv_cache() = default;
 
@@ -222,6 +224,7 @@ public:
 private:
     const llama_model & model;
     const llama_hparams & hparams;
+    const std::string name_prefix;
 
     struct kv_layer {
         // layer index in the model
