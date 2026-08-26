@@ -17588,17 +17588,6 @@ static void ggml_vk_graph_optimize(ggml_backend_t backend, struct ggml_cgraph * 
     std::vector<bool> used(graph->n_nodes, false);
     std::set<ggml_tensor *> used_node_set;
 
-    // true if every node in [lo, hi) is already scheduled or is a zero-compute
-    // (view-class) node: a UNARY may be followed by its consuming MUL across such a gap
-    auto const &empty_or_scheduled_between = [&](int lo, int hi) -> bool {
-        for (int v = lo; v < hi; ++v) {
-            if (!used[v] && !is_empty(graph->nodes[v])) {
-                return false;
-            }
-        }
-        return true;
-    };
-
     int first_unused = 0;
     while (first_unused < graph->n_nodes) {
         std::vector<int> current_set;
@@ -17677,23 +17666,12 @@ static void ggml_vk_graph_optimize(ggml_backend_t backend, struct ggml_cgraph * 
                 match_pattern(snake_pattern, j)) {
                 continue;
             }
-            // allow a consuming MUL to join its in-set UNARY across zero-compute
-            // nodes (e.g. gemma4/gemma3n per-layer gating: gelu -> view -> mul)
-            bool unary_mul_gap_ok = false;
-            {
-                const int back = current_set.back();
-                if (graph->nodes[back]->op == GGML_OP_UNARY && graph->nodes[j]->op == GGML_OP_MUL &&
-                    (graph->nodes[j]->src[0] == graph->nodes[back] || graph->nodes[j]->src[1] == graph->nodes[back])) {
-                    unary_mul_gap_ok = empty_or_scheduled_between(back + 1, j);
-                }
-            }
             bool ok = true;
             for (int c = first_unused; c < j; ++c) {
                 if (!used[c] &&
-                    (unary_mul_gap_ok ? !is_empty(graph->nodes[c]) : true) &&
                     is_src_of(graph->nodes[j], graph->nodes[c]) &&
                     !(j == c+1 && c == current_set.back() && graph->nodes[c]->op == GGML_OP_RMS_NORM && graph->nodes[j]->op == GGML_OP_MUL) &&
-                    !(c == current_set.back() && graph->nodes[c]->op == GGML_OP_UNARY && graph->nodes[j]->op == GGML_OP_MUL && unary_mul_gap_ok) &&
+                    !(j == c+1 && c == current_set.back() && graph->nodes[c]->op == GGML_OP_UNARY && graph->nodes[j]->op == GGML_OP_MUL) &&
                     !(j == c+1 && c == current_set.back() && graph->nodes[c]->op == GGML_OP_MUL_MAT && graph->nodes[j]->op == GGML_OP_ADD) &&
                     !(j == c+1 && c == current_set.back() && graph->nodes[c]->op == GGML_OP_MUL_MAT_ID && graph->nodes[j]->op == GGML_OP_ADD_ID) &&
                     !(j == c+1 && c == current_set.back() && graph->nodes[c]->op == GGML_OP_MUL_MAT_ID && graph->nodes[j]->op == GGML_OP_MUL) &&
