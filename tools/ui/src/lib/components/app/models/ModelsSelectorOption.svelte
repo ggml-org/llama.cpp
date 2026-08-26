@@ -86,7 +86,7 @@
 		class="flex-1"
 		{hideOrgName}
 		modelId={option.model}
-		modalities={modalities}
+		{modalities}
 		{supportsThinking}
 		showRawTooltip
 		tags={option.tags}

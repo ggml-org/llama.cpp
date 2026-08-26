@@ -5,7 +5,11 @@
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { cn } from '$lib/components/ui/utils';
-	import { ATTACHMENT_FILE_ITEMS, ATTACHMENT_TOOLTIP_TEXT, ICON_CLASS_DEFAULT } from '$lib/constants';
+	import {
+		ATTACHMENT_FILE_ITEMS,
+		ATTACHMENT_TOOLTIP_TEXT,
+		ICON_CLASS_DEFAULT
+	} from '$lib/constants';
 	import { getChatFormActionsContext } from '$lib/contexts';
 	import { AttachmentAction, AttachmentItemEnabledWhen } from '$lib/enums';
 	import { useAttachmentMenu } from '$lib/hooks/use-attachment-menu.svelte';
@@ -44,11 +48,10 @@
 		[AttachmentItemEnabledWhen.HAS_VIDEO_MODALITY]: { icon: Video, label: 'Video' }
 	};
 
-	const supportedModalities = $derived.by(
-		() =>
-			ATTACHMENT_FILE_ITEMS.filter((item) => attachmentMenu.isItemEnabled(item.enabledWhen))
-				.map((item) => FILE_MODALITY_ICONS[item.enabledWhen ?? ''])
-				.filter((modality) => modality !== undefined)
+	const supportedModalities = $derived.by(() =>
+		ATTACHMENT_FILE_ITEMS.filter((item) => attachmentMenu.isItemEnabled(item.enabledWhen))
+			.map((item) => FILE_MODALITY_ICONS[item.enabledWhen ?? ''])
+			.filter((modality) => modality !== undefined)
 	);
 </script>
 
