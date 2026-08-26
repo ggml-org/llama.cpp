@@ -13,6 +13,7 @@ contracts it places on callers and on backends.
 - [Splits](#splits)
 - [Allocation and graph reuse](#allocation-and-graph-reuse)
 - [Graph input ring buffer](#graph-input-ring-buffer)
+- [Output lifetime under asynchronous execution](#output-lifetime-under-asynchronous-execution)
 - [Memory read in place by another backend](#memory-read-in-place-by-another-backend)
 - [Ops that alias their source](#ops-that-alias-their-source)
 - [The scheduler sanitizer](#the-scheduler-sanitizer)
@@ -96,6 +97,24 @@ Two obligations come with this:
   scheduler re-stamps the split uids whenever it re-points inputs. A backend keeping such a cache
   must key it on the uid or re-check the addresses itself. Violating this does not degrade
   gracefully: the cached work replays against stale addresses and the results are quietly wrong.
+
+## Output lifetime under asynchronous execution
+
+The scheduler ring versions graph inputs, not graph outputs. `GGML_TENSOR_FLAG_OUTPUT` keeps a tensor's allocation alive until the end of its graph; it does not create one result allocation per asynchronous submission. Reusing a graph can therefore write its output tensors again.
+
+This does not require an output ring when each output is consumed in submission order. Operations submitted to one backend are ordered, so a copy or downstream consumer queued after one graph runs before a later graph on that backend can overwrite the same output allocation. Internal backend streams must join or otherwise preserve that order before subsequent operations use the result.
+
+llama.cpp queues every required output readback immediately after each micro-batch and before it submits the next one. Each readback writes to that micro-batch's rows in the persistent host output buffer. The terminal backend therefore sees:
+
+```
+compute A -> readback A -> compute B -> readback B
+```
+
+Pipeline stages can overlap on different backends, but micro-batch B cannot overtake micro-batch A on the terminal backend. Different execution times do not change the queue order. If asynchronous readback is unsupported, the backend API synchronizes before copying instead. The public llama.cpp result accessors also synchronize before exposing host result pointers.
+
+This differs from graph input preparation: the host writes the next inputs directly, outside the backend queue, so no ordering edge protects an input allocation without synchronization or rotation.
+
+A scheduler caller that needs every asynchronous result must enqueue an ordered copy or consumer before another submission can overwrite the output, or synchronize before reusing the graph. If several results must remain resident on a device at the same time, the caller must provide distinct output storage. `n_copies` does not provide output snapshots.
 
 ## Memory read in place by another backend
 
