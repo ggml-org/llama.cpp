@@ -2313,6 +2313,18 @@ struct llama_model_qwen4exp : public llama_model_base {
                             int * sections,
                             int   il);
 
+        // dense self-attention restricted to the cells named by top_k. arch-local rather
+        // than a build_attn overload so that no shared attention path changes: the sparse
+        // MLA architectures keep their own copy of the same mask construction.
+        ggml_tensor * build_attn_qsa(
+        llm_graph_input_attn_kv * inp,
+                    ggml_tensor * q_cur,
+                    ggml_tensor * k_cur,
+                    ggml_tensor * v_cur,
+                    ggml_tensor * top_k,
+                          float   kq_scale,
+                            int   il);
+
         // QSA: token indices this layer's queries may attend to, or nullptr for dense
         ggml_tensor * build_qsa_top_k(
   const llama_kv_cache_context * mctx_idx,
