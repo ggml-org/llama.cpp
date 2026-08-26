@@ -104,7 +104,7 @@ class Qwen4ExpTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
 
         # ple_layer_ids is 1-based in the HF config; empty means no n-gram table,
         # so emit no PLE keys rather than optional ones
-        ple_layers = [i - 1 for i in hp["ple_layer_ids"]]
+        ple_layers = [] if self._no_ple else [i - 1 for i in hp["ple_layer_ids"]]
         if not ple_layers:
             return
         self.gguf_writer.add_ple_layers(ple_layers)
@@ -149,6 +149,11 @@ class Qwen4ExpTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
         return int(eos)
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # --no-ple drops the whole block: the table, its hash constants, and the
+        # projections, norms and conv that only read it
+        if self._no_ple and ".ple." in name:
+            return []
+
         # int64 hash constants must stay exact; 1-D tensors force F32, so use KV
         if name.endswith("ple_embedding.layer_multipliers"):
             self._ple_multipliers = [int(x) for x in data_torch.tolist()]
