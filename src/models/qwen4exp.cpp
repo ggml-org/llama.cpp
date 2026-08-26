@@ -45,6 +45,9 @@ void llama_model_qwen4exp::load_arch_hparams(llama_model_loader & ml) {
         ml.get_key(LLM_KV_PLE_HEADS_PER_NGRAM, hparams.ple_heads_per_ngram);
         ml.get_key(LLM_KV_PLE_CONV_KERNEL,     hparams.ple_conv_kernel);
         ml.get_key(LLM_KV_PLE_EOS_TOKEN_ID,    hparams.ple_eos_token_id);
+        // optional: absent in files converted before multimodal batches
+        // were exercised, in which case the PLE hash falls back to EOS
+        ml.get_key(LLM_KV_PLE_IMAGE_TOKEN_ID,  hparams.ple_image_token_id, false);
         ml.get_key(LLM_KV_EMBEDDING_LENGTH_PER_LAYER, hparams.n_embd_per_layer);
 
         hparams.ple_n_heads  = (hparams.ple_ngram_size - 1) * hparams.ple_heads_per_ngram;
@@ -803,11 +806,25 @@ public:
 };
 
 void llm_graph_input_ple::set_input(const llama_ubatch * ubatch) {
-    if (!ubatch->token) {
-        return;
-    }
-
     const auto & hp = pmodel.hparams;
+
+    // A multimodal ubatch arrives as embeddings: the mtmd layer has already
+    // consumed the image placeholder ids, so ubatch->token is null. The hash
+    // still has to produce a row for every position, because this input feeds
+    // ggml_get_rows. Returning early here left the index buffer uninitialised,
+    // so whatever happened to be in it indexed a 320 M row table -- an
+    // out-of-range gather, which aborts inside ggml_compute_forward_get_rows.
+    //
+    // The reference hashes input_ids, where those positions still hold the
+    // image placeholder, so use that token here. A file converted before the
+    // key existed falls back to EOS, which is defined and simply treats the
+    // image as a segment boundary.
+    const llama_token img_tok = hp.ple_image_token_id != 0
+        ? (llama_token) hp.ple_image_token_id
+        : (llama_token) hp.ple_eos_token_id;
+    auto tok_of = [&](int64_t k) -> llama_token {
+        return ubatch->token ? ubatch->token[k] : img_tok;
+    };
 
     const int64_t n_tokens = ubatch->n_tokens;
     const int64_t n_gram   = hp.ple_ngram_size;
@@ -848,7 +865,7 @@ void llm_graph_input_ple::set_input(const llama_ubatch * ubatch) {
         auto prev = [&](int64_t s) -> int64_t {
             const int64_t j = i - s;
             if (j >= 0 && ubatch->seq_id[j][0] == seq && ubatch->pos[j] == pos - s) {
-                return ubatch->token[j];
+                return tok_of(j);
             }
             // s - i positions before this ubatch started, most recent last
             const int64_t back = s - i;
@@ -864,7 +881,7 @@ void llm_graph_input_ple::set_input(const llama_ubatch * ubatch) {
         // takes the last EOS strictly *before* this position, so a segment
         // boundary only hides tokens from the positions that follow it.
         std::vector<int64_t> ctx(n_gram);
-        ctx[0] = ubatch->token[i];
+        ctx[0] = tok_of(i);
         bool cut = false;
         for (int64_t s = 1; s < n_gram; ++s) {
             ctx[s] = cut ? eos : prev(s);
@@ -887,7 +904,7 @@ void llm_graph_input_ple::set_input(const llama_ubatch * ubatch) {
         }
 
         auto & h = hist_map[seq];
-        h.toks.push_back(ubatch->token[i]);
+        h.toks.push_back(tok_of(i));
         if ((int64_t) h.toks.size() > n_gram - 1) {
             h.toks.erase(h.toks.begin(), h.toks.end() - (n_gram - 1));
         }

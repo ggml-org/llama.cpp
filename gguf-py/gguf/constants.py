@@ -241,6 +241,7 @@ class Keys:
         HEAD_OFFSETS       = "{arch}.ple.head_offsets"
         HEAD_VOCAB_SIZES   = "{arch}.ple.head_vocab_sizes"
         EOS_TOKEN_ID       = "{arch}.ple.eos_token_id"
+        IMAGE_TOKEN_ID     = "{arch}.ple.image_token_id"
 
     class Rope:
         DIMENSION_COUNT           = "{arch}.rope.dimension_count"

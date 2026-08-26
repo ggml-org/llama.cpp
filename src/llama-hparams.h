@@ -291,6 +291,9 @@ struct llama_hparams {
     uint32_t ple_n_heads         = 0;   // (ngram_size - 1) * heads_per_ngram
     uint32_t ple_head_dim        = 0;
     uint32_t ple_eos_token_id    = 0;
+    // placeholder the PLE hash sees where an image chunk is spliced in; 0 means the
+    // file predates this key and the loader falls back to EOS
+    uint32_t ple_image_token_id  = 0;
     std::array<uint32_t, LLAMA_MAX_LAYERS> is_ple_impl;
     std::array<uint64_t, LLAMA_MAX_PLE_NGRAM>  ple_layer_multipliers;
     std::array<uint64_t, LLAMA_MAX_PLE_HEADS>  ple_head_offsets;
