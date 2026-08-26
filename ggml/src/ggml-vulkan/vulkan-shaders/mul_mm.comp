@@ -58,11 +58,6 @@ uint mm_load_vec_a() {
     case GGML_TYPE_Q4_0:
     case GGML_TYPE_Q4_1:
     case GGML_TYPE_Q5_1:
-    case GGML_TYPE_IQ1_S:
-    case GGML_TYPE_IQ1_M:
-    case GGML_TYPE_IQ2_XXS:
-    case GGML_TYPE_IQ2_XS:
-    case GGML_TYPE_IQ2_S:
         return 8u;
     case GGML_TYPE_Q2_0:
     case GGML_TYPE_Q5_0:
@@ -70,12 +65,6 @@ uint mm_load_vec_a() {
     case GGML_TYPE_Q2_K:
     case GGML_TYPE_Q4_K:
     case GGML_TYPE_Q5_K:
-    case GGML_TYPE_IQ3_XXS:
-    case GGML_TYPE_IQ3_S:
-    case GGML_TYPE_IQ4_XS:
-    case GGML_TYPE_IQ4_NL:
-    case GGML_TYPE_MXFP4:
-    case GGML_TYPE_NVFP4:
         return 4u;
     default:
         return 2u;
@@ -114,31 +103,18 @@ layout (binding = 0) readonly buffer BUF_Q3_K     { block_q3_K data[];     } a_q
 layout (binding = 0) readonly buffer BUF_Q4_K     { block_q4_K data[];     } a_q4_k;
 layout (binding = 0) readonly buffer BUF_Q5_K     { block_q5_K data[];     } a_q5_k;
 layout (binding = 0) readonly buffer BUF_Q6_K     { block_q6_K data[];     } a_q6_k;
-layout (binding = 0) readonly buffer BUF_IQ1_S    { block_iq1_s data[];    } a_iq1_s;
-layout (binding = 0) readonly buffer BUF_IQ1_M    { block_iq1_m data[];    } a_iq1_m;
-layout (binding = 0) readonly buffer BUF_IQ2_XXS  { block_iq2_xxs data[];  } a_iq2_xxs;
-layout (binding = 0) readonly buffer BUF_IQ2_XS   { block_iq2_xs data[];   } a_iq2_xs;
-layout (binding = 0) readonly buffer BUF_IQ2_S    { block_iq2_s data[];    } a_iq2_s;
-layout (binding = 0) readonly buffer BUF_IQ3_XXS  { block_iq3_xxs data[];  } a_iq3_xxs;
-layout (binding = 0) readonly buffer BUF_IQ3_S    { block_iq3_s data[];    } a_iq3_s;
-layout (binding = 0) readonly buffer BUF_IQ4_XS   { block_iq4_xs data[];   } a_iq4_xs;
-layout (binding = 0) readonly buffer BUF_MXFP4    { block_mxfp4 data[];    } a_mxfp4;
-layout (binding = 0) readonly buffer BUF_NVFP4    { block_nvfp4 data[];    } a_nvfp4;
 // Packed16 aliases
 layout (binding = 0) readonly buffer BUF_Q4_0_P16   { block_q4_0_packed16 data[];   } a_q4_0_p16;
 layout (binding = 0) readonly buffer BUF_Q5_0_P16   { block_q5_0_packed16 data[];   } a_q5_0_p16;
 layout (binding = 0) readonly buffer BUF_Q8_0_P16   { block_q8_0_packed16 data[];   } a_q8_0_p16;
 layout (binding = 0) readonly buffer BUF_Q3_K_P16   { block_q3_K_packed16 data[];   } a_q3_k_p16;
 layout (binding = 0) readonly buffer BUF_Q6_K_P16   { block_q6_K_packed16 data[];   } a_q6_k_p16;
-layout (binding = 0) readonly buffer BUF_IQ3_XXS_P16{ block_iq3_xxs_packed16 data[];} a_iq3_xxs_p16;
-layout (binding = 0) readonly buffer BUF_IQ4_NL_P16 { block_iq4_nl_packed16 data[]; } a_iq4_nl_p16;
 // Packed32 aliases
 layout (binding = 0) readonly buffer BUF_Q4_1_P32   { block_q4_1_packed32 data[];   } a_q4_1_p32;
 layout (binding = 0) readonly buffer BUF_Q5_1_P32   { block_q5_1_packed32 data[];   } a_q5_1_p32;
 layout (binding = 0) readonly buffer BUF_Q2_K_P32   { block_q2_K_packed32 data[];   } a_q2_k_p32;
 layout (binding = 0) readonly buffer BUF_Q4_K_P32   { block_q4_K_packed32 data[];   } a_q4_k_p32;
 layout (binding = 0) readonly buffer BUF_Q5_K_P32   { block_q5_K_packed32 data[];   } a_q5_k_p32;
-layout (binding = 0) readonly buffer BUF_IQ4_XS_P32 { block_iq4_xs_packed32 data[]; } a_iq4_xs_p32;
 #endif
 
 layout (binding = 1) readonly buffer B {B_TYPE data_b[];};
