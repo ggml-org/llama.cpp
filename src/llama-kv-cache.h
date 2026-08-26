@@ -222,12 +222,6 @@ public:
     // true if llama_kv_cell_ext holds information that has to survive a state save/restore
     bool has_cell_ext() const;
 
-    // for every token of the ubatch, the ids of the n tokens that precede it in its sequence
-    // res is [n_tokens*n]; res[i*n + j] holds the token at pos[i] - (n - j), most recent last
-    // entries with no matching cell are set to LLAMA_TOKEN_NULL
-    // note: used by n-gram input embeddings
-    void get_prev_tokens(const llama_ubatch & ubatch, uint32_t n, std::vector<llama_token> & res) const;
-
 private:
     const llama_model & model;
     const llama_hparams & hparams;
