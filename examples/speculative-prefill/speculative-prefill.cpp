@@ -54,6 +54,11 @@ int main(int argc, char ** argv) {
     llama_model * model_tgt = init_tgt->model();
     llama_context * ctx_tgt = init_tgt->context();
 
+    if (llama_model_is_recurrent(model_tgt) || llama_model_is_hybrid(model_tgt)) {
+        LOG_ERR("%s: speculative prefill is not supported for recurrent or hybrid models\n", __func__);
+        return 1;
+    }
+
     // load draft model with standard attention to allow attention extraction
     LOG_INF("%s: loading draft model...\n", __func__);
     common_params params_dft = common_base_params_to_speculative(params);
@@ -160,7 +165,7 @@ int main(int argc, char ** argv) {
             const int32_t k = i + j;
             const int32_t orig_idx = spec_res.kept_indices[k];
             const bool is_last = (k == n_kept_total - 1);
-            common_batch_add(batch_tgt, prompt_tokens[orig_idx], (llama_pos) orig_idx, { seq_id }, is_last);
+            common_batch_add(batch_tgt, prompt_tokens[orig_idx], (llama_pos) k, { seq_id }, is_last);
         }
 
         ret = llama_decode(ctx_tgt, batch_tgt);
@@ -189,7 +194,7 @@ int main(int argc, char ** argv) {
     LOG("\n--- Generation Start ---\n");
 
     int32_t n_predict = params.n_predict > 0 ? params.n_predict : 32;
-    int32_t cur_pos = spec_res.kept_indices.empty() ? 0 : spec_res.kept_indices.back() + 1;
+    int32_t cur_pos = n_kept_total;
     int32_t n_generated = 0;
 
     llama_batch batch_gen = llama_batch_init(1, 0, 1);

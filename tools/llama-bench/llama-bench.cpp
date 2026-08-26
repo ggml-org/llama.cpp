@@ -2439,6 +2439,11 @@ static bool test_speculative_prefill_prompt(
     const llama_vocab * vocab_tgt = llama_model_get_vocab(model_tgt);
     const int32_t       n_vocab_tgt = llama_vocab_n_tokens(vocab_tgt);
 
+    if (llama_model_is_recurrent(model_tgt) || llama_model_is_hybrid(model_tgt)) {
+        fprintf(stderr, "%s: speculative prefill is not supported for recurrent or hybrid models, skipping instance\n", __func__);
+        return false;
+    }
+
     const llama_model * model_dft = llama_get_model(ctx_dft);
     const llama_vocab * vocab_dft = llama_model_get_vocab(model_dft);
     const int32_t       n_vocab_dft = llama_vocab_n_tokens(vocab_dft);
@@ -2476,7 +2481,7 @@ static bool test_speculative_prefill_prompt(
             const int32_t k = i + j;
             const int32_t orig_idx = spec_res.kept_indices[k];
             const bool is_last = (k == n_kept_total - 1);
-            common_batch_add(batch_tgt, prompt_tokens[orig_idx], (llama_pos) orig_idx, { seq_id }, is_last);
+            common_batch_add(batch_tgt, prompt_tokens[orig_idx], (llama_pos) k, { seq_id }, is_last);
         }
 
         const int ret = llama_decode(ctx_tgt, batch_tgt);
