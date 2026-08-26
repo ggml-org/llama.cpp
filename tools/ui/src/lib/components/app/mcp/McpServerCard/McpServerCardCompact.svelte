@@ -30,11 +30,11 @@
 	<div class="flex min-w-0 items-center gap-2">
 		{#if activeIconUrl}
 			<img
-				src={activeIconUrl}
 				alt=""
 				class="h-5 w-5 shrink-0 rounded"
-				loading="lazy"
 				decoding="async"
+				loading="lazy"
+				src={activeIconUrl}
 			/>
 		{/if}
 

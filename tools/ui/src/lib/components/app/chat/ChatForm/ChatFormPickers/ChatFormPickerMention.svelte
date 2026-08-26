@@ -187,10 +187,10 @@
 </script>
 
 <Popover.Root
-	open={isOpen}
 	onOpenChange={(open) => {
 		if (!open) onClose();
 	}}
+	open={isOpen}
 >
 	<!-- Invisible form-wide trigger: stops bits-ui's outside-click detector
 	     from closing the picker when the user clicks inside the textarea.
@@ -198,36 +198,36 @@
 	     (tabindex=-1 + pointer-events-none + opacity-0 + aria-hidden).
 	     Positioning comes from `customAnchor` at the form's top edge. -->
 	<Popover.Trigger
+		aria-hidden="true"
 		class="pointer-events-none absolute inset-0 opacity-0"
 		tabindex={-1}
-		aria-hidden="true"
 	>
 		<span class="sr-only">Open file mention picker</span>
 	</Popover.Trigger>
 
 	<Popover.Content
 		align="start"
-		side="top"
-		sideOffset={12}
-		{customAnchor}
-		preventScroll={false}
-		onkeydown={handleKeydown}
-		onOpenAutoFocus={(event) => event.preventDefault()}
-		onCloseAutoFocus={(event) => event.preventDefault()}
 		class={[
 			'w-[var(--bits-popover-anchor-width)] max-w-none rounded-xl border-border/50 p-0 shadow-xl',
 			className
 		]}
+		{customAnchor}
+		onCloseAutoFocus={(event) => event.preventDefault()}
+		onOpenAutoFocus={(event) => event.preventDefault()}
+		onkeydown={handleKeydown}
+		preventScroll={false}
+		side="top"
+		sideOffset={12}
 	>
 		<ChatFormPickerList
-			items={displayedItems}
+			{emptyMessage}
 			isLoading={search.isSearching}
+			itemKey={(entry) => entry.type + ':' + entry.path}
+			items={displayedItems}
+			scrollTrigger={nav.scrollTrigger}
+			searchQuery={query ?? ''}
 			selectedIndex={nav.hoveredIndex}
 			showSearchInput={false}
-			searchQuery={query ?? ''}
-			{emptyMessage}
-			itemKey={(entry) => entry.type + ':' + entry.path}
-			scrollTrigger={nav.scrollTrigger}
 		>
 			{#snippet item(entry, index, isSelected)}
 				<ChatFormPickerListItem
@@ -245,6 +245,7 @@
 								: 'text-muted-foreground'
 						]}
 					/>
+
 					<div class="flex min-w-0 flex-1 flex-col">
 						<div class="flex min-w-0 items-center gap-2">
 							{#if showTooltip}
@@ -254,6 +255,7 @@
 											<span {...props} class="truncate text-sm font-medium">{entry.name}</span>
 										{/snippet}
 									</Tooltip.Trigger>
+
 									<Tooltip.Content>
 										<p>{entry.path}</p>
 									</Tooltip.Content>
@@ -261,14 +263,16 @@
 							{:else}
 								<span class="truncate text-sm font-medium">{entry.name}</span>
 							{/if}
+
 							<span
 								class="shrink-0 rounded-full bg-muted px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wide text-muted-foreground"
 							>
 								{entry.type}
 							</span>
 						</div>
+
 						<span class="min-w-0 flex-1 truncate font-mono text-left text-xs">
-							<HighlightedMatch text={abbreviateHome(entry.path, home)} query={trimmedQuery} />
+							<HighlightedMatch query={trimmedQuery} text={abbreviateHome(entry.path, home)} />
 						</span>
 					</div>
 				</ChatFormPickerListItem>

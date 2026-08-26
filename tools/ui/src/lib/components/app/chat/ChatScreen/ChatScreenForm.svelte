@@ -147,20 +147,20 @@
 	});
 </script>
 
-<div class="chat-screen-form-wrapper" bind:this={formWrapperEl}>
+<div bind:this={formWrapperEl} class="chat-screen-form-wrapper">
 	<ChatForm
-		class="mx-auto max-w-3xl {className}"
 		bind:this={chatFormRef}
-		bind:value={message}
 		bind:uploadedFiles
+		bind:value={message}
+		class="mx-auto max-w-3xl {className}"
 		{disabled}
 		enablePromptHistory
 		{isLoading}
-		showMcpPromptButton
 		onFilesAdd={handleFilesAdd}
 		{onStop}
 		onSubmit={handleSubmit}
 		onSystemPromptClick={handleSystemPromptClick}
 		onUploadedFileRemove={handleUploadedFileRemove}
+		showMcpPromptButton
 	/>
 </div>
