@@ -1,4 +1,4 @@
-static constexpr __host__ __device__ ggml_cuda_mmq_config ggml_cuda_mmq_get_config_pascal(ggml_type type, int J, bool fallback) {
+static constexpr __host__ __device__ ggml_cuda_mmq_config ggml_cuda_mmq_get_config_pascal_older(ggml_type type, int J, bool fallback) {
     CASE(GGML_TYPE_Q1_0, 256, 2, 64,   8, GGML_CUDA_MMQ_SRAM_LAYOUT_Q8_0, MMQ_ITER_K, false, true);
     CASE(GGML_TYPE_Q1_0, 256, 2, 64,  16, GGML_CUDA_MMQ_SRAM_LAYOUT_Q8_0, MMQ_ITER_K, false, true);
     CASE(GGML_TYPE_Q1_0, 256, 2, 64,  32, GGML_CUDA_MMQ_SRAM_LAYOUT_Q8_0, MMQ_ITER_K, false, true);
