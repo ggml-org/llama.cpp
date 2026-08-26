@@ -778,7 +778,9 @@ void ggml_metal_encoder_free(ggml_metal_encoder_t encoder) {
 }
 
 void ggml_metal_encoder_debug_group_push(ggml_metal_encoder_t encoder, const char * name) {
-    [encoder->obj pushDebugGroup:[NSString stringWithCString:name encoding:NSUTF8StringEncoding]];
+    @autoreleasepool {
+        [encoder->obj pushDebugGroup:[NSString stringWithCString:name encoding:NSUTF8StringEncoding]];
+    }
 }
 
 void ggml_metal_encoder_debug_group_pop (ggml_metal_encoder_t encoder) {
@@ -1023,249 +1025,251 @@ ggml_metal_device_t ggml_metal_device_init(int device, int n_devices) {
 
     assert(dev != NULL);
 
-    if (dev->mtl_device == nil) {
-        dev->mtl_device = MTLCreateSystemDefaultDevice();
+    @autoreleasepool {
+        if (dev->mtl_device == nil) {
+            dev->mtl_device = MTLCreateSystemDefaultDevice();
 
-        if (dev->mtl_device) {
-            dev->mtl_queue = [dev->mtl_device newCommandQueue];
-            if (dev->mtl_queue == nil) {
-                GGML_LOG_ERROR("%s: error: failed to create command queue\n", __func__);
-            }
+            if (dev->mtl_device) {
+                dev->mtl_queue = [dev->mtl_device newCommandQueue];
+                if (dev->mtl_queue == nil) {
+                    GGML_LOG_ERROR("%s: error: failed to create command queue\n", __func__);
+                }
 
-            dev->addr_virt = 0x000000400ULL;
+                dev->addr_virt = 0x000000400ULL;
 
-            dev->props.device = device;
+                dev->props.device = device;
 
-            // the Metal backend uses the system default device as the single physical device;
-            // additional (virtual) devices are emulated on top of it via GGML_METAL_DEVICES
-            dev->props.device_phys = 0;
-            dev->props.device_virt = device;
+                // the Metal backend uses the system default device as the single physical device;
+                // additional (virtual) devices are emulated on top of it via GGML_METAL_DEVICES
+                dev->props.device_phys = 0;
+                dev->props.device_virt = device;
 
-            dev->props.has_simdgroup_reduction  = [dev->mtl_device supportsFamily:MTLGPUFamilyApple7];
-            dev->props.has_simdgroup_reduction |= [dev->mtl_device supportsFamily:MTLGPUFamilyMetal3_GGML];
+                dev->props.has_simdgroup_reduction  = [dev->mtl_device supportsFamily:MTLGPUFamilyApple7];
+                dev->props.has_simdgroup_reduction |= [dev->mtl_device supportsFamily:MTLGPUFamilyMetal3_GGML];
 
-            dev->props.has_simdgroup_mm = [dev->mtl_device supportsFamily:MTLGPUFamilyApple7];
-            dev->props.has_unified_memory = dev->mtl_device.hasUnifiedMemory;
+                dev->props.has_simdgroup_mm = [dev->mtl_device supportsFamily:MTLGPUFamilyApple7];
+                dev->props.has_unified_memory = dev->mtl_device.hasUnifiedMemory;
 
-            dev->props.has_bfloat  = [dev->mtl_device supportsFamily:MTLGPUFamilyMetal3_GGML];
-            dev->props.has_bfloat |= [dev->mtl_device supportsFamily:MTLGPUFamilyApple6];
-            if (getenv("GGML_METAL_BF16_DISABLE") != NULL) {
-                dev->props.has_bfloat = false;
-            }
+                dev->props.has_bfloat  = [dev->mtl_device supportsFamily:MTLGPUFamilyMetal3_GGML];
+                dev->props.has_bfloat |= [dev->mtl_device supportsFamily:MTLGPUFamilyApple6];
+                if (getenv("GGML_METAL_BF16_DISABLE") != NULL) {
+                    dev->props.has_bfloat = false;
+                }
 
-            dev->props.has_tensor = [dev->mtl_device supportsFamily:MTLGPUFamilyMetal4_GGML];
-            if (getenv("GGML_METAL_TENSOR_DISABLE") != NULL) {
-                dev->props.has_tensor = false;
-            }
-
-            // note: disable the tensor API by default for old chips because with the current implementation it is not useful
-            // - M2 Ultra:   ~5% slower
-            // - M4, M4 Max: no significant difference
-            //
-            // TODO: try to update the tensor API kernels to at least match the simdgroup performance
-            if (getenv("GGML_METAL_TENSOR_ENABLE") == NULL &&
-                ![[dev->mtl_device name] containsString:@"M5"] &&
-                ![[dev->mtl_device name] containsString:@"M6"] &&
-                ![[dev->mtl_device name] containsString:@"A19"] &&
-                ![[dev->mtl_device name] containsString:@"A20"]) {
-                GGML_LOG_INFO("%s: tensor API disabled for pre-M5 and pre-A19 devices\n", __func__);
-                dev->props.has_tensor = false;
-            }
-
-            // double-check that the tensor API compiles
-            if (dev->props.has_tensor) {
-                const char * src_tensor_f16 = "\n"
-                    "#include <metal_stdlib> \n"
-                    "#include <metal_tensor> \n"
-                    "#include <MetalPerformancePrimitives/MetalPerformancePrimitives.h> \n"
-                    " \n"
-                    "using namespace metal; \n"
-                    "using namespace mpp::tensor_ops; \n"
-                    " \n"
-                    "kernel void dummy_kernel( \n"
-                    "    tensor<device  half, dextents<int32_t, 2>> A [[buffer(0)]], \n"
-                    "    tensor<device  half, dextents<int32_t, 2>> B [[buffer(1)]], \n"
-                    "    device float * C [[buffer(2)]], \n"
-                    "    uint2 tgid [[threadgroup_position_in_grid]]) \n"
-                    "{ \n"
-                    "    auto tA = A.slice(0, (int)tgid.y); \n"
-                    "    auto tB = B.slice((int)tgid.x, 0); \n"
-                    " \n"
-                    "    matmul2d< \n"
-                    "        matmul2d_descriptor(16, 16, dynamic_extent), \n"
-                    "        execution_simdgroups<4>> mm; \n"
-                    " \n"
-                    "    auto cT = mm.get_destination_cooperative_tensor<decltype(tA), decltype(tB), float>(); \n"
-                    " \n"
-                    "    auto sA = tA.slice(0, 0); \n"
-                    "    auto sB = tB.slice(0, 0); \n"
-                    "    mm.run(sB, sA, cT); \n"
-                    " \n"
-                    "    auto tC = tensor<device float, dextents<int32_t, 2>, tensor_inline>(C, dextents<int32_t, 2>(16, 16)); \n"
-                    " \n"
-                    "    cT.store(tC); \n"
-                    "}";
-
-                GGML_LOG_INFO("%s: testing tensor API for f16 support\n", __func__);
-                ggml_metal_library_t lib = ggml_metal_library_init_from_source(dev, src_tensor_f16, false);
-                if (lib == NULL) {
-                    GGML_LOG_WARN("%s: - the tensor API is not supported in this environment - disabling\n", __func__);
+                dev->props.has_tensor = [dev->mtl_device supportsFamily:MTLGPUFamilyMetal4_GGML];
+                if (getenv("GGML_METAL_TENSOR_DISABLE") != NULL) {
                     dev->props.has_tensor = false;
-                } else {
-                    struct ggml_metal_pipeline_with_params ppl = ggml_metal_library_compile_pipeline(lib, "dummy_kernel", "dummy_kernel", nil);
-                    if (!ppl.pipeline) {
+                }
+
+                // note: disable the tensor API by default for old chips because with the current implementation it is not useful
+                // - M2 Ultra:   ~5% slower
+                // - M4, M4 Max: no significant difference
+                //
+                // TODO: try to update the tensor API kernels to at least match the simdgroup performance
+                if (getenv("GGML_METAL_TENSOR_ENABLE") == NULL &&
+                    ![[dev->mtl_device name] containsString:@"M5"] &&
+                    ![[dev->mtl_device name] containsString:@"M6"] &&
+                    ![[dev->mtl_device name] containsString:@"A19"] &&
+                    ![[dev->mtl_device name] containsString:@"A20"]) {
+                    GGML_LOG_INFO("%s: tensor API disabled for pre-M5 and pre-A19 devices\n", __func__);
+                    dev->props.has_tensor = false;
+                }
+
+                // double-check that the tensor API compiles
+                if (dev->props.has_tensor) {
+                    const char * src_tensor_f16 = "\n"
+                        "#include <metal_stdlib> \n"
+                        "#include <metal_tensor> \n"
+                        "#include <MetalPerformancePrimitives/MetalPerformancePrimitives.h> \n"
+                        " \n"
+                        "using namespace metal; \n"
+                        "using namespace mpp::tensor_ops; \n"
+                        " \n"
+                        "kernel void dummy_kernel( \n"
+                        "    tensor<device  half, dextents<int32_t, 2>> A [[buffer(0)]], \n"
+                        "    tensor<device  half, dextents<int32_t, 2>> B [[buffer(1)]], \n"
+                        "    device float * C [[buffer(2)]], \n"
+                        "    uint2 tgid [[threadgroup_position_in_grid]]) \n"
+                        "{ \n"
+                        "    auto tA = A.slice(0, (int)tgid.y); \n"
+                        "    auto tB = B.slice((int)tgid.x, 0); \n"
+                        " \n"
+                        "    matmul2d< \n"
+                        "        matmul2d_descriptor(16, 16, dynamic_extent), \n"
+                        "        execution_simdgroups<4>> mm; \n"
+                        " \n"
+                        "    auto cT = mm.get_destination_cooperative_tensor<decltype(tA), decltype(tB), float>(); \n"
+                        " \n"
+                        "    auto sA = tA.slice(0, 0); \n"
+                        "    auto sB = tB.slice(0, 0); \n"
+                        "    mm.run(sB, sA, cT); \n"
+                        " \n"
+                        "    auto tC = tensor<device float, dextents<int32_t, 2>, tensor_inline>(C, dextents<int32_t, 2>(16, 16)); \n"
+                        " \n"
+                        "    cT.store(tC); \n"
+                        "}";
+
+                    GGML_LOG_INFO("%s: testing tensor API for f16 support\n", __func__);
+                    ggml_metal_library_t lib = ggml_metal_library_init_from_source(dev, src_tensor_f16, false);
+                    if (lib == NULL) {
                         GGML_LOG_WARN("%s: - the tensor API is not supported in this environment - disabling\n", __func__);
                         dev->props.has_tensor = false;
+                    } else {
+                        struct ggml_metal_pipeline_with_params ppl = ggml_metal_library_compile_pipeline(lib, "dummy_kernel", "dummy_kernel", nil);
+                        if (!ppl.pipeline) {
+                            GGML_LOG_WARN("%s: - the tensor API is not supported in this environment - disabling\n", __func__);
+                            dev->props.has_tensor = false;
+                        }
+
+                        ggml_metal_library_free(lib);
                     }
-
-                    ggml_metal_library_free(lib);
                 }
-            }
 
-            // try to compile a dummy kernel to determine if the tensor API is supported for bfloat
-            if (dev->props.has_tensor && dev->props.has_bfloat) {
-                const char * src_tensor_bf16 = "\n"
-                    "#include <metal_stdlib> \n"
-                    "#include <metal_tensor> \n"
-                    "#include <MetalPerformancePrimitives/MetalPerformancePrimitives.h> \n"
-                    " \n"
-                    "using namespace metal; \n"
-                    "using namespace mpp::tensor_ops; \n"
-                    " \n"
-                    "kernel void dummy_kernel( \n"
-                    "    tensor<device bfloat, dextents<int32_t, 2>> A [[buffer(0)]], \n"
-                    "    tensor<device bfloat, dextents<int32_t, 2>> B [[buffer(1)]], \n"
-                    "    device float * C [[buffer(2)]], \n"
-                    "    uint2 tgid [[threadgroup_position_in_grid]]) \n"
-                    "{ \n"
-                    "    auto tA = A.slice(0, (int)tgid.y); \n"
-                    "    auto tB = B.slice((int)tgid.x, 0); \n"
-                    " \n"
-                    "    matmul2d< \n"
-                    "        matmul2d_descriptor(16, 16, dynamic_extent), \n"
-                    "        execution_simdgroups<4>> mm; \n"
-                    " \n"
-                    "    auto cT = mm.get_destination_cooperative_tensor<decltype(tA), decltype(tB), float>(); \n"
-                    " \n"
-                    "    auto sA = tA.slice(0, 0); \n"
-                    "    auto sB = tB.slice(0, 0); \n"
-                    "    mm.run(sB, sA, cT); \n"
-                    " \n"
-                    "    auto tC = tensor<device float, dextents<int32_t, 2>, tensor_inline>(C, dextents<int32_t, 2>(16, 16)); \n"
-                    " \n"
-                    "    cT.store(tC); \n"
-                    "}";
+                // try to compile a dummy kernel to determine if the tensor API is supported for bfloat
+                if (dev->props.has_tensor && dev->props.has_bfloat) {
+                    const char * src_tensor_bf16 = "\n"
+                        "#include <metal_stdlib> \n"
+                        "#include <metal_tensor> \n"
+                        "#include <MetalPerformancePrimitives/MetalPerformancePrimitives.h> \n"
+                        " \n"
+                        "using namespace metal; \n"
+                        "using namespace mpp::tensor_ops; \n"
+                        " \n"
+                        "kernel void dummy_kernel( \n"
+                        "    tensor<device bfloat, dextents<int32_t, 2>> A [[buffer(0)]], \n"
+                        "    tensor<device bfloat, dextents<int32_t, 2>> B [[buffer(1)]], \n"
+                        "    device float * C [[buffer(2)]], \n"
+                        "    uint2 tgid [[threadgroup_position_in_grid]]) \n"
+                        "{ \n"
+                        "    auto tA = A.slice(0, (int)tgid.y); \n"
+                        "    auto tB = B.slice((int)tgid.x, 0); \n"
+                        " \n"
+                        "    matmul2d< \n"
+                        "        matmul2d_descriptor(16, 16, dynamic_extent), \n"
+                        "        execution_simdgroups<4>> mm; \n"
+                        " \n"
+                        "    auto cT = mm.get_destination_cooperative_tensor<decltype(tA), decltype(tB), float>(); \n"
+                        " \n"
+                        "    auto sA = tA.slice(0, 0); \n"
+                        "    auto sB = tB.slice(0, 0); \n"
+                        "    mm.run(sB, sA, cT); \n"
+                        " \n"
+                        "    auto tC = tensor<device float, dextents<int32_t, 2>, tensor_inline>(C, dextents<int32_t, 2>(16, 16)); \n"
+                        " \n"
+                        "    cT.store(tC); \n"
+                        "}";
 
-                GGML_LOG_INFO("%s: testing tensor API for bfloat support\n", __func__);
-                ggml_metal_library_t lib = ggml_metal_library_init_from_source(dev, src_tensor_bf16, false);
-                if (lib == NULL) {
-                    GGML_LOG_WARN("%s: - the tensor API does not support bfloat - disabling bfloat support\n", __func__);
-                    dev->props.has_bfloat = false;
-                } else {
-                    struct ggml_metal_pipeline_with_params ppl = ggml_metal_library_compile_pipeline(lib, "dummy_kernel", "dummy_kernel", nil);
-                    if (!ppl.pipeline) {
+                    GGML_LOG_INFO("%s: testing tensor API for bfloat support\n", __func__);
+                    ggml_metal_library_t lib = ggml_metal_library_init_from_source(dev, src_tensor_bf16, false);
+                    if (lib == NULL) {
                         GGML_LOG_WARN("%s: - the tensor API does not support bfloat - disabling bfloat support\n", __func__);
                         dev->props.has_bfloat = false;
+                    } else {
+                        struct ggml_metal_pipeline_with_params ppl = ggml_metal_library_compile_pipeline(lib, "dummy_kernel", "dummy_kernel", nil);
+                        if (!ppl.pipeline) {
+                            GGML_LOG_WARN("%s: - the tensor API does not support bfloat - disabling bfloat support\n", __func__);
+                            dev->props.has_bfloat = false;
+                        }
+
+                        ggml_metal_library_free(lib);
                     }
-
-                    ggml_metal_library_free(lib);
                 }
-            }
 
-            dev->props.use_residency_sets = true;
+                dev->props.use_residency_sets = true;
 #if defined(GGML_METAL_HAS_RESIDENCY_SETS)
-            dev->props.use_residency_sets = getenv("GGML_METAL_NO_RESIDENCY") == nil;
+                dev->props.use_residency_sets = getenv("GGML_METAL_NO_RESIDENCY") == nil;
 #endif
 
-            dev->props.use_shared_buffers = dev->props.has_unified_memory;
+                dev->props.use_shared_buffers = dev->props.has_unified_memory;
 #if TARGET_OS_OSX
-            // In case of eGPU, shared memory may be preferable.
-            dev->props.use_shared_buffers |= [dev->mtl_device location] == MTLDeviceLocationExternal;
+                // In case of eGPU, shared memory may be preferable.
+                dev->props.use_shared_buffers |= [dev->mtl_device location] == MTLDeviceLocationExternal;
 #endif
-            if (getenv("GGML_METAL_SHARED_BUFFERS_DISABLE") != NULL) {
-                dev->props.use_shared_buffers = false;
-            }
-            if (getenv("GGML_METAL_SHARED_BUFFERS_ENABLE") != NULL) {
-                dev->props.use_shared_buffers = true;
-            }
+                if (getenv("GGML_METAL_SHARED_BUFFERS_DISABLE") != NULL) {
+                    dev->props.use_shared_buffers = false;
+                }
+                if (getenv("GGML_METAL_SHARED_BUFFERS_ENABLE") != NULL) {
+                    dev->props.use_shared_buffers = true;
+                }
 
-            dev->props.supports_gpu_family_apple7 = [dev->mtl_device supportsFamily:MTLGPUFamilyApple7];
+                dev->props.supports_gpu_family_apple7 = [dev->mtl_device supportsFamily:MTLGPUFamilyApple7];
 
-            dev->props.device_id = ggml_metal_device_id_parse([[dev->mtl_device name] UTF8String]);
+                dev->props.device_id = ggml_metal_device_id_parse([[dev->mtl_device name] UTF8String]);
 
-            dev->props.op_offload_min_batch_size  = getenv("GGML_OP_OFFLOAD_MIN_BATCH") ? atoi(getenv("GGML_OP_OFFLOAD_MIN_BATCH")) : 32;
+                dev->props.op_offload_min_batch_size  = getenv("GGML_OP_OFFLOAD_MIN_BATCH") ? atoi(getenv("GGML_OP_OFFLOAD_MIN_BATCH")) : 32;
 
-            dev->props.max_buffer_size            = dev->mtl_device.maxBufferLength;
-            dev->props.max_theadgroup_memory_size = dev->mtl_device.maxThreadgroupMemoryLength;
-            if (@available(macOS 10.12, iOS 16.0, *)) {
-                dev->props.max_working_set_size   = dev->mtl_device.recommendedMaxWorkingSetSize;
-            } else {
-                dev->props.max_working_set_size   = dev->mtl_device.maxBufferLength;
-            }
+                dev->props.max_buffer_size            = dev->mtl_device.maxBufferLength;
+                dev->props.max_theadgroup_memory_size = dev->mtl_device.maxThreadgroupMemoryLength;
+                if (@available(macOS 10.12, iOS 16.0, *)) {
+                    dev->props.max_working_set_size   = dev->mtl_device.recommendedMaxWorkingSetSize;
+                } else {
+                    dev->props.max_working_set_size   = dev->mtl_device.maxBufferLength;
+                }
 
-            snprintf(dev->props.name, sizeof(dev->props.name), "%s%d", "MTL", device);
-            const char * gpu_name = [[dev->mtl_device name] UTF8String];
-            if (n_devices > 1) {
-                snprintf(dev->props.desc, sizeof(dev->props.desc), "%s (dev p%d/v%d)",
-                         gpu_name, dev->props.device_phys, dev->props.device_virt);
-            } else {
-                snprintf(dev->props.desc, sizeof(dev->props.desc), "%s", gpu_name);
-            }
+                snprintf(dev->props.name, sizeof(dev->props.name), "%s%d", "MTL", device);
+                const char * gpu_name = [[dev->mtl_device name] UTF8String];
+                if (n_devices > 1) {
+                    snprintf(dev->props.desc, sizeof(dev->props.desc), "%s (dev p%d/v%d)",
+                             gpu_name, dev->props.device_phys, dev->props.device_virt);
+                } else {
+                    snprintf(dev->props.desc, sizeof(dev->props.desc), "%s", gpu_name);
+                }
 
-            dev->library = ggml_metal_library_init(dev);
-            if (!dev->library) {
-                GGML_LOG_ERROR("%s: error: failed to create library\n", __func__);
-            }
+                dev->library = ggml_metal_library_init(dev);
+                if (!dev->library) {
+                    GGML_LOG_ERROR("%s: error: failed to create library\n", __func__);
+                }
 
-            if (dev->props.use_residency_sets) {
-                dev->rsets = ggml_metal_rsets_init(dev);
-            } else {
-                dev->rsets = nil;
-            }
+                if (dev->props.use_residency_sets) {
+                    dev->rsets = ggml_metal_rsets_init(dev);
+                } else {
+                    dev->rsets = nil;
+                }
 
-            // print MTL GPU family:
-            GGML_LOG_INFO("%s: GPU name:   %s (%s)\n", __func__, dev->props.name, dev->props.desc);
+                // print MTL GPU family:
+                GGML_LOG_INFO("%s: GPU name:   %s (%s)\n", __func__, dev->props.name, dev->props.desc);
 
-            // determine max supported GPU family
-            // https://developer.apple.com/metal/Metal-Shading-Language-Specification.pdf
-            // https://developer.apple.com/metal/Metal-Feature-Set-Tables.pdf
-            {
-                for (int i = MTLGPUFamilyApple1 + 20; i >= MTLGPUFamilyApple1; --i) {
-                    if ([dev->mtl_device supportsFamily:i]) {
-                        dev->props.gpu_family = i - (int) MTLGPUFamilyApple1 + 1;
-                        GGML_LOG_INFO("%s: GPU family: MTLGPUFamilyApple%d  (%d)\n", __func__, dev->props.gpu_family, i);
-                        break;
+                // determine max supported GPU family
+                // https://developer.apple.com/metal/Metal-Shading-Language-Specification.pdf
+                // https://developer.apple.com/metal/Metal-Feature-Set-Tables.pdf
+                {
+                    for (int i = MTLGPUFamilyApple1 + 20; i >= MTLGPUFamilyApple1; --i) {
+                        if ([dev->mtl_device supportsFamily:i]) {
+                            dev->props.gpu_family = i - (int) MTLGPUFamilyApple1 + 1;
+                            GGML_LOG_INFO("%s: GPU family: MTLGPUFamilyApple%d  (%d)\n", __func__, dev->props.gpu_family, i);
+                            break;
+                        }
+                    }
+
+                    for (int i = MTLGPUFamilyCommon1 + 5; i >= MTLGPUFamilyCommon1; --i) {
+                        if ([dev->mtl_device supportsFamily:i]) {
+                            GGML_LOG_INFO("%s: GPU family: MTLGPUFamilyCommon%d (%d)\n", __func__, i - (int) MTLGPUFamilyCommon1 + 1, i);
+                            break;
+                        }
+                    }
+
+                    for (int i = MTLGPUFamilyMetal3_GGML + 5; i >= MTLGPUFamilyMetal3_GGML; --i) {
+                        if ([dev->mtl_device supportsFamily:i]) {
+                            GGML_LOG_INFO("%s: GPU family: MTLGPUFamilyMetal%d  (%d)\n", __func__, i - (int) MTLGPUFamilyMetal3_GGML + 3, i);
+                            break;
+                        }
                     }
                 }
 
-                for (int i = MTLGPUFamilyCommon1 + 5; i >= MTLGPUFamilyCommon1; --i) {
-                    if ([dev->mtl_device supportsFamily:i]) {
-                        GGML_LOG_INFO("%s: GPU family: MTLGPUFamilyCommon%d (%d)\n", __func__, i - (int) MTLGPUFamilyCommon1 + 1, i);
-                        break;
-                    }
-                }
-
-                for (int i = MTLGPUFamilyMetal3_GGML + 5; i >= MTLGPUFamilyMetal3_GGML; --i) {
-                    if ([dev->mtl_device supportsFamily:i]) {
-                        GGML_LOG_INFO("%s: GPU family: MTLGPUFamilyMetal%d  (%d)\n", __func__, i - (int) MTLGPUFamilyMetal3_GGML + 3, i);
-                        break;
-                    }
-                }
-            }
-
-            GGML_LOG_INFO("%s: simdgroup reduction   = %s\n", __func__, dev->props.has_simdgroup_reduction ? "true" : "false");
-            GGML_LOG_INFO("%s: simdgroup matrix mul. = %s\n", __func__, dev->props.has_simdgroup_mm        ? "true" : "false");
-            GGML_LOG_INFO("%s: has unified memory    = %s\n", __func__, dev->props.has_unified_memory      ? "true" : "false");
-            GGML_LOG_INFO("%s: has bfloat            = %s\n", __func__, dev->props.has_bfloat              ? "true" : "false");
-            GGML_LOG_INFO("%s: has tensor            = %s\n", __func__, dev->props.has_tensor              ? "true" : "false");
-            GGML_LOG_INFO("%s: use residency sets    = %s\n", __func__, dev->props.use_residency_sets      ? "true" : "false");
-            GGML_LOG_INFO("%s: use shared buffers    = %s\n", __func__, dev->props.use_shared_buffers      ? "true" : "false");
+                GGML_LOG_INFO("%s: simdgroup reduction   = %s\n", __func__, dev->props.has_simdgroup_reduction ? "true" : "false");
+                GGML_LOG_INFO("%s: simdgroup matrix mul. = %s\n", __func__, dev->props.has_simdgroup_mm        ? "true" : "false");
+                GGML_LOG_INFO("%s: has unified memory    = %s\n", __func__, dev->props.has_unified_memory      ? "true" : "false");
+                GGML_LOG_INFO("%s: has bfloat            = %s\n", __func__, dev->props.has_bfloat              ? "true" : "false");
+                GGML_LOG_INFO("%s: has tensor            = %s\n", __func__, dev->props.has_tensor              ? "true" : "false");
+                GGML_LOG_INFO("%s: use residency sets    = %s\n", __func__, dev->props.use_residency_sets      ? "true" : "false");
+                GGML_LOG_INFO("%s: use shared buffers    = %s\n", __func__, dev->props.use_shared_buffers      ? "true" : "false");
 
 #if TARGET_OS_OSX || (TARGET_OS_IOS && __clang_major__ >= 15)
-            if (@available(macOS 10.12, iOS 16.0, *)) {
-                GGML_LOG_INFO("%s: recommendedMaxWorkingSetSize  = %8.2f MB\n", __func__, dev->props.max_working_set_size / 1e6);
-            }
+                if (@available(macOS 10.12, iOS 16.0, *)) {
+                    GGML_LOG_INFO("%s: recommendedMaxWorkingSetSize  = %8.2f MB\n", __func__, dev->props.max_working_set_size / 1e6);
+                }
 #endif
+            }
         }
     }
 
