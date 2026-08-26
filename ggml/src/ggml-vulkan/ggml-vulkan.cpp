@@ -1004,24 +1004,9 @@ struct vk_device_struct {
     vk_pipeline pipeline_trunc[2];
     vk_pipeline pipeline_sgn[2];
 
-    vk_pipeline pipeline_gelu_mul[2];
-    vk_pipeline pipeline_gelu_mul_norepeat[2];
-    vk_pipeline pipeline_sigmoid_mul[2];
-    vk_pipeline pipeline_sigmoid_mul_norepeat[2];
-    vk_pipeline pipeline_silu_mul[2];
-    vk_pipeline pipeline_silu_mul_norepeat[2];
-    vk_pipeline pipeline_softplus_mul[2];
-    vk_pipeline pipeline_softplus_mul_norepeat[2];
-
-    // OP applied to the B operand: the unary result tiles into mul->src[0]
-    vk_pipeline pipeline_gelu_mul_b[2];
-    vk_pipeline pipeline_gelu_mul_b_norepeat[2];
-    vk_pipeline pipeline_sigmoid_mul_b[2];
-    vk_pipeline pipeline_sigmoid_mul_b_norepeat[2];
-    vk_pipeline pipeline_silu_mul_b[2];
-    vk_pipeline pipeline_silu_mul_b_norepeat[2];
-    vk_pipeline pipeline_softplus_mul_b[2];
-    vk_pipeline pipeline_softplus_mul_b_norepeat[2];
+    // fused UNARY+MUL pipelines: [unary op][f16][norepeat][op_on_b]
+    // op indices are the ggml_vk_unary_mul_op_index() mapping (gelu, sigmoid, silu, softplus)
+    vk_pipeline pipeline_unary_mul[4][2][2][2];
 
     vk_pipeline pipeline_add1_f16_f16;
     vk_pipeline pipeline_add1_f16_f32;
@@ -5685,22 +5670,26 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
     CREATE_UNARY(expm1)
 #undef CREATE_UNARY
 
-// spec constant list: {norepeat, op_on_b} - the OP-on-B variants reuse the same
-// SPIR-V as the base pipelines, selected via specialization instead of separate shaders
-#define CREATE_UNARY_MUL(name) \
-    ggml_vk_create_pipeline(device, device->pipeline_ ## name ## _mul[0], #name "_mul_f32", name ## _mul_f32_len, name ## _mul_f32_data, "main", 3, sizeof(vk_op_binary_push_constants), {512, 1, 1}, {0, 0}, 1); \
-    ggml_vk_create_pipeline(device, device->pipeline_ ## name ## _mul[1], #name "_mul_f16", name ## _mul_f16_len, name ## _mul_f16_data, "main", 3, sizeof(vk_op_binary_push_constants), {512, 1, 1}, {0, 0}, 1); \
-    ggml_vk_create_pipeline(device, device->pipeline_ ## name ## _mul_norepeat[0], #name "_mul_f32_norepeat", name ## _mul_f32_len, name ## _mul_f32_data, "main", 3, sizeof(vk_op_binary_push_constants), {512, 1, 1}, {1, 0}, 1); \
-    ggml_vk_create_pipeline(device, device->pipeline_ ## name ## _mul_norepeat[1], #name "_mul_f16_norepeat", name ## _mul_f16_len, name ## _mul_f16_data, "main", 3, sizeof(vk_op_binary_push_constants), {512, 1, 1}, {1, 0}, 1); \
-    ggml_vk_create_pipeline(device, device->pipeline_ ## name ## _mul_b[0], #name "_mul_b_f32", name ## _mul_f32_len, name ## _mul_f32_data, "main", 3, sizeof(vk_op_binary_push_constants), {512, 1, 1}, {0, 1}, 1); \
-    ggml_vk_create_pipeline(device, device->pipeline_ ## name ## _mul_b[1], #name "_mul_b_f16", name ## _mul_f16_len, name ## _mul_f16_data, "main", 3, sizeof(vk_op_binary_push_constants), {512, 1, 1}, {0, 1}, 1); \
-    ggml_vk_create_pipeline(device, device->pipeline_ ## name ## _mul_b_norepeat[0], #name "_mul_b_f32_norepeat", name ## _mul_f32_len, name ## _mul_f32_data, "main", 3, sizeof(vk_op_binary_push_constants), {512, 1, 1}, {1, 1}, 1); \
-    ggml_vk_create_pipeline(device, device->pipeline_ ## name ## _mul_b_norepeat[1], #name "_mul_b_f16_norepeat", name ## _mul_f16_len, name ## _mul_f16_data, "main", 3, sizeof(vk_op_binary_push_constants), {512, 1, 1}, {1, 1}, 1);
+// spec constant list: {norepeat, op_on_b} - matches the trailing table dims.
+// The OP-on-B variants reuse the same SPIR-V as the base pipelines, selected via
+// specialization instead of separate shaders.
+#define CREATE_UNARY_MUL(name, idx) \
+    for (int dt = 0; dt < 2; ++dt) { \
+        const size_t len_ = dt ? name ## _mul_f16_len : name ## _mul_f32_len; \
+        const unsigned char * data_ = dt ? name ## _mul_f16_data : name ## _mul_f32_data; \
+        const std::string dts_ = dt ? "f16" : "f32"; \
+        for (int ob = 0; ob < 2; ++ob) \
+            for (int nr = 0; nr < 2; ++nr) \
+                ggml_vk_create_pipeline(device, device->pipeline_unary_mul[(idx)][dt][nr][ob], \
+                    (#name "_mul" + std::string(ob ? "_b" : "") + "_" + dts_ + (nr ? "_norepeat" : "")).c_str(), \
+                    len_, data_, "main", 3, sizeof(vk_op_binary_push_constants), {512, 1, 1}, \
+                    { (uint32_t) nr, (uint32_t) ob }, 1); \
+    }
 
-    CREATE_UNARY_MUL(gelu)
-    CREATE_UNARY_MUL(sigmoid)
-    CREATE_UNARY_MUL(silu)
-    CREATE_UNARY_MUL(softplus)
+    CREATE_UNARY_MUL(gelu, 0)
+    CREATE_UNARY_MUL(sigmoid, 1)
+    CREATE_UNARY_MUL(silu, 2)
+    CREATE_UNARY_MUL(softplus, 3)
 #undef CREATE_UNARY_MUL
 
     ggml_vk_create_pipeline(device, device->pipeline_add1_f16_f16, "add1_f16_f16", add1_f16_f16_len, add1_f16_f16_data, "main", 3, sizeof(vk_op_binary_push_constants), {512, 1, 1}, {}, 1);
@@ -12548,6 +12537,17 @@ static void ggml_vk_mul(ggml_backend_vk_context * ctx, vk_context& subctx, const
     });
 }
 
+// index into device->pipeline_unary_mul for the supported unary ops, or -1
+static int ggml_vk_unary_mul_op_index(ggml_unary_op op) {
+    switch (op) {
+        case GGML_UNARY_OP_GELU:     return 0;
+        case GGML_UNARY_OP_SIGMOID:  return 1;
+        case GGML_UNARY_OP_SILU:     return 2;
+        case GGML_UNARY_OP_SOFTPLUS: return 3;
+        default:                     return -1;
+    }
+}
+
 static void ggml_vk_unary_mul(ggml_backend_vk_context * ctx, vk_context& subctx, const struct ggml_cgraph * cgraph, int node_idx) {
     const ggml_tensor * unary = cgraph->nodes[node_idx];
     ggml_tensor * mul = cgraph->nodes[node_idx + 1];
@@ -12566,45 +12566,12 @@ static void ggml_vk_unary_mul(ggml_backend_vk_context * ctx, vk_context& subctx,
         ((mul->src[0] == unary) ? mul->src[1] : mul->src[0]);
 
     const bool f16 = src0->type == GGML_TYPE_F16;
-    const vk_pipeline * pipelines;
-    if (ggml_are_same_shape(src0, src1)) {
-        if (op_on_b) {
-            switch (ggml_get_unary_op(unary)) {
-                case GGML_UNARY_OP_GELU:     pipelines = ctx->device->pipeline_gelu_mul_b_norepeat;     break;
-                case GGML_UNARY_OP_SIGMOID:  pipelines = ctx->device->pipeline_sigmoid_mul_b_norepeat;  break;
-                case GGML_UNARY_OP_SILU:     pipelines = ctx->device->pipeline_silu_mul_b_norepeat;     break;
-                case GGML_UNARY_OP_SOFTPLUS: pipelines = ctx->device->pipeline_softplus_mul_b_norepeat; break;
-                default:                     GGML_ABORT("fatal error");
-            }
-        } else {
-            switch (ggml_get_unary_op(unary)) {
-                case GGML_UNARY_OP_GELU:     pipelines = ctx->device->pipeline_gelu_mul_norepeat;     break;
-                case GGML_UNARY_OP_SIGMOID:  pipelines = ctx->device->pipeline_sigmoid_mul_norepeat;  break;
-                case GGML_UNARY_OP_SILU:     pipelines = ctx->device->pipeline_silu_mul_norepeat;     break;
-                case GGML_UNARY_OP_SOFTPLUS: pipelines = ctx->device->pipeline_softplus_mul_norepeat; break;
-                default:                     GGML_ABORT("fatal error");
-            }
-        }
-    } else {
-        if (op_on_b) {
-            switch (ggml_get_unary_op(unary)) {
-                case GGML_UNARY_OP_GELU:     pipelines = ctx->device->pipeline_gelu_mul_b;     break;
-                case GGML_UNARY_OP_SIGMOID:  pipelines = ctx->device->pipeline_sigmoid_mul_b;  break;
-                case GGML_UNARY_OP_SILU:     pipelines = ctx->device->pipeline_silu_mul_b;     break;
-                case GGML_UNARY_OP_SOFTPLUS: pipelines = ctx->device->pipeline_softplus_mul_b; break;
-                default:                     GGML_ABORT("fatal error");
-            }
-        } else {
-            switch (ggml_get_unary_op(unary)) {
-                case GGML_UNARY_OP_GELU:     pipelines = ctx->device->pipeline_gelu_mul;     break;
-                case GGML_UNARY_OP_SIGMOID:  pipelines = ctx->device->pipeline_sigmoid_mul;  break;
-                case GGML_UNARY_OP_SILU:     pipelines = ctx->device->pipeline_silu_mul;     break;
-                case GGML_UNARY_OP_SOFTPLUS: pipelines = ctx->device->pipeline_softplus_mul; break;
-                default:                     GGML_ABORT("fatal error");
-            }
-        }
+    const bool norepeat = ggml_are_same_shape(src0, src1);
+    const int oi = ggml_vk_unary_mul_op_index(ggml_get_unary_op(unary));
+    if (oi < 0) {
+        GGML_ABORT("fatal error");
     }
-    vk_pipeline pipeline = pipelines[f16];
+    vk_pipeline pipeline = ctx->device->pipeline_unary_mul[oi][f16][norepeat][op_on_b];
 
     const uint32_t src0_type_size = ggml_type_size(src0->type);
     const uint32_t src1_type_size = ggml_type_size(src1->type);
@@ -16532,14 +16499,8 @@ static bool ggml_vk_can_fuse_unary_mul(const struct ggml_cgraph * cgraph, int un
     const ggml_tensor * unary = cgraph->nodes[unary_idx];
     const ggml_tensor * mul = cgraph->nodes[mul_idx];
 
-    switch (ggml_get_unary_op(unary)) {
-        case GGML_UNARY_OP_GELU:
-        case GGML_UNARY_OP_SIGMOID:
-        case GGML_UNARY_OP_SILU:
-        case GGML_UNARY_OP_SOFTPLUS:
-            break;
-        default:
-            return false;
+    if (ggml_vk_unary_mul_op_index(ggml_get_unary_op(unary)) < 0) {
+        return false;
     }
     if (unary->type != GGML_TYPE_F32 && unary->type != GGML_TYPE_F16) {
         return false;
