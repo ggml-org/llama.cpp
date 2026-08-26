@@ -2323,8 +2323,14 @@ void kernel_flash_attn_ext_tensor_impl(
     // coop destination tile layout implementation-defined and the compiler
     // can collapse the (C, QPSG) tile (verified: n dim shrinks, results wrong).
     constexpr short NLANES = 1;                    // simdgroups per threadgroup
-    constexpr short QPSG   = 8;                    // queries per threadgroup
-    constexpr short C      = OP_FLASH_ATTN_EXT_NCPSG; // 64 kv items per chunk
+    // NOTE: 16 queries per threadgroup (QPSG = 16) is 2x faster in isolated
+    // microbenchmarks (K/V bandwidth bound per query: 12.6 -> 24.8 TFLOPS),
+    // but in the full kernel the larger tiles (P: (C,16), O: (PVM,16)) spill
+    // and it is ~30% SLOWER (8.6 -> 6.1 TFLOPS).  8 queries is the sweet spot.
+    constexpr short QPSG   = 8;                   // queries per threadgroup
+    constexpr short C      = OP_FLASH_ATTN_EXT_VEC_NCPSG; // 32 kv items per chunk
+    // (32-wide chunks: smaller K/V operand and P tiles fit better in registers
+    // than 64-wide; the pad buffer is written with matching 32-wide chunks)
 
     // the tensor-core destination tile caps the m dimension at 128; for
     // dv > 128 split the PV into d blocks (128-wide, or 64-wide when dv is
@@ -2441,32 +2447,41 @@ void kernel_flash_attn_ext_tensor_impl(
                 if (cT_pv1.is_valid_element(i)) { cT_pv1[i] = 0.0f; }
             }
         }
-        for (int j = t; j < QPSG; j += 32) {
-            sh_M[jb + j]      = -FLT_MAX / 2;
-            sh_S[jb + j]      = 0.0f;
-            sh_alpha[jb + j]  = 1.0f;
+        // online-softmax state in PER-THREAD REGISTERS: the chunk reductions
+        // use simd_max/simd_sum (warp-level), so the state is uniform across
+        // the simdgroup and NO shared memory / barriers are needed.  Barriers
+        // drain the tensor-core pipeline between the QK^T and PV matmuls
+        // (microbench on this GPU: ~10.5 TFLOPS with the smem + 4-barrier
+        // reduction vs ~12.6 without).
+        // the running max may be ANY constant >= max score seen so far: it
+        // cancels in O/S.  Use ONE GLOBAL max (scalar) for the O rescale so
+        // the per-chunk rescale is a trivial scalar multiply (no per-element
+        // index decode / per-query alpha array).  Per-row maxes are tracked
+        // only for the sinks correction at the end.
+        float M = -FLT_MAX / 2;
+        float S[QPSG];
+        for (int j = 0; j < QPSG; ++j) {
+            S[j] = 0.0f;
         }
-        simdgroup_barrier(mem_flags::mem_threadgroup);
+        float alpha = 1.0f; // exp(M_old - M_new), uniform scalar
 
-        for (int ic = 0; ic < nchunks; ++ic) {
-            const int k0 = ic*C;
-            const int kc = min((int) C, kv - k0);
+        // ---- chunk interleave: QK^T of chunk ic+1 is issued before PV of
+        // chunk ic, so the two tensor-core matmuls pipeline.  (Serial
+        // per-chunk QK->PV starves the tensor core between matmuls;
+        // microbench on this GPU: serial 12.5 vs interleaved 22.2 TFLOPS.)
+        // Two P tiles alternate (coop tiles cannot be swapped by assignment);
+        // the QK^T destination type is chunk-independent, so both tiles share
+        // the chunk-0 operand decltypes.
+        auto tK0c = tensor(kp, dextents<int, 2>(DK, C), array<int, 2>{ 1, sk });
+        auto cT_qkA = mm_qk.template get_destination_cooperative_tensor<decltype(tK0c), decltype(tQ), float>();
+        auto cT_qkB = mm_qk.template get_destination_cooperative_tensor<decltype(tK0c), decltype(tQ), float>();
+        using cT_qk_t = decltype(cT_qkA);
 
-            // reset this thread's (q, t) column
-            {
-                #pragma clang loop unroll(full)
-                for (int j = 0; j < QPSG; ++j) {
-                    sh_qmax[jqb + j*32 + t] = -FLT_MAX / 2;
-                    sh_qsum[jqb + j*32 + t] = 0.0f;
-                }
-            }
-
-            // the last partial chunk is read from the pad buffer (padded with 0);
-            // the pad buffer holds only the last C kv items per (KV head, batch),
-            // so its rows are indexed from 0 (not k0)
-            const bool use_pad = has_kvpad && k0 + C > kv;
-            device half * kp_c = use_pad ? (device half *) (pad + pad_k_offs) : kp + (uint) k0*sk;
-            device half * vp_c = use_pad ? (device half *) (pad + pad_v_offs) : vp + (uint) k0*sv;
+        // ---- prologue: QK^T(0) + score + online-softmax reduction -> cT_qkA ----
+        {
+            const int kc = min((int) C, kv);
+            const bool use_pad = has_kvpad && C > kv;
+            device half * kp_c = use_pad ? (device half *) (pad + pad_k_offs) : kp;
 
             // mask row base for this chunk: real mask (kv contiguous, query
             // stride nb31) or the pad section (C per query, indexed from 0)
@@ -2478,26 +2493,19 @@ void kernel_flash_attn_ext_tensor_impl(
                     mstride = C;
                 } else {
                     // global query index: iq1 + sgitg*QPSG + j (j is local, 0..QPSG-1)
-                    mp      = (device const half *) (mask + (uint64_t) k0 * 2 + mbase)
-                            + (uint64_t) (iq1 + sgitg*QPSG) * (args.nb31 / 2);
+                    mp      = (device const half *) (mask + mbase) + (uint64_t) (iq1 + sgitg*QPSG) * (args.nb31 / 2);
                     mstride = (int) (args.nb31 / 2);
                 }
             }
 
-            auto tK  = tensor(kp_c, dextents<int, 2>(DK, C), array<int, 2>{ 1, sk });
-            // d blocks: block 0 covers d = 0..PVM-1, block 1 covers d = PVM..2*PVM-1
-            auto tV0 = tensor(vp_c, dextents<int, 2>(PVM, C), array<int, 2>{ 1, sv });
-            auto tV1 = tensor(vp_c + PVM, dextents<int, 2>(PVM, C), array<int, 2>{ 1, sv });
-
-            // ---- QK^T ----
-            auto cT_qk = mm_qk.template get_destination_cooperative_tensor<decltype(tK), decltype(tQ), float>();
+            auto tK = tensor(kp_c, dextents<int, 2>(DK, C), array<int, 2>{ 1, sk });
             {
                 #pragma clang loop unroll(full)
-                for (uint i = 0; i < cT_qk.get_capacity(); ++i) {
-                    if (cT_qk.is_valid_element(i)) { cT_qk[i] = 0.0f; }
+                for (uint i = 0; i < cT_qkA.get_capacity(); ++i) {
+                    if (cT_qkA.is_valid_element(i)) { cT_qkA[i] = 0.0f; }
                 }
             }
-            mm_qk.run(tK, tQ, cT_qk);
+            mm_qk.run(tK, tQ, cT_qkA);
 
             // scale in registers; clobber padded kv (idx1 >= kc) to -inf
             float lmax[QPSG], lsum[QPSG];
@@ -2505,97 +2513,180 @@ void kernel_flash_attn_ext_tensor_impl(
             for (int j = 0; j < QPSG; ++j) { lmax[j] = -FLT_MAX / 2; lsum[j] = 0.0f; }
             {
                 #pragma clang loop unroll(full)
-                for (uint i = 0; i < cT_qk.get_capacity(); ++i) {
-                    if (!cT_qk.is_valid_element(i)) { continue; }
-                    auto idx = cT_qk.get_multidimensional_index(i);
+                for (uint i = 0; i < cT_qkA.get_capacity(); ++i) {
+                    if (!cT_qkA.is_valid_element(i)) { continue; }
+                    auto idx = cT_qkA.get_multidimensional_index(i);
                     const int q = (int) idx[0];
                     float s;
                     if ((int) idx[1] >= kc) {
                         s = -FLT_MAX / 2;
                     } else {
-                        s = cT_qk[i]*args.scale;
+                        s = cT_qkA[i]*args.scale;
                         if (has_scap) { s = args.logit_softcap * tanh(s); }
                         if (has_mask) { s += (float) mp[(uint) q * mstride + (uint) idx[1]] * mscale; }
                     }
-                    cT_qk[i] = s;
+                    cT_qkA[i] = s;
                     if (s > lmax[q]) { lmax[q] = s; }
                 }
             }
 
-            // partial max -> shared (non-owned queries hold -FLT_MAX/2 -> harmless)
+            // warp-level reduction: ONE global max (scalar) + per-row sums.
+            // (The max cancels in O/S; a global max keeps the per-chunk O
+            // rescale a trivial scalar multiply.)
+            float lmax_g = -FLT_MAX / 2;
+            #pragma clang loop unroll(full)
+            for (int j = 0; j < QPSG; ++j) {
+                lmax_g = max(lmax_g, simd_max(lmax[j]));
+            }
             {
+                const float m_old = M;
+                M = max(M, lmax_g);
+                alpha = exp(m_old - M);
                 #pragma clang loop unroll(full)
                 for (int j = 0; j < QPSG; ++j) {
-                    sh_qmax[jqb + j*32 + t] = lmax[j];
+                    S[j] = S[j]*alpha;
                 }
             }
-            simdgroup_barrier(mem_flags::mem_threadgroup);
-
-            // M / alpha update: thread t (< QPSG) finalizes query t
-            if (t < QPSG) {
-                const int j = t;
-                float m_new = sh_M[jb + j];
-                #pragma clang loop unroll(full)
-                for (int tt = 0; tt < 32; ++tt) {
-                    m_new = max(m_new, sh_qmax[jqb + j*32 + tt]);
-                }
-                sh_alpha[jb + j] = exp(sh_M[jb + j] - m_new);
-                sh_M[jb + j]     = m_new;
-            }
-            simdgroup_barrier(mem_flags::mem_threadgroup);
 
             // ---- exp in registers, partial sums ----
             {
                 #pragma clang loop unroll(full)
-                for (uint i = 0; i < cT_qk.get_capacity(); ++i) {
-                    if (!cT_qk.is_valid_element(i)) { continue; }
-                    auto idx = cT_qk.get_multidimensional_index(i);
+                for (uint i = 0; i < cT_qkA.get_capacity(); ++i) {
+                    if (!cT_qkA.is_valid_element(i)) { continue; }
+                    auto idx = cT_qkA.get_multidimensional_index(i);
                     const int q = (int) idx[0];
-                    const float p = exp(cT_qk[i] - sh_M[jb + q]);
-                    cT_qk[i] = p; // P in registers (f32), later used as PV right input
+                    const float p = exp(cT_qkA[i] - M);
+                    cT_qkA[i] = p; // P in registers (f32), later used as PV right input
                     lsum[q] += p;
                 }
             }
-            {
-                #pragma clang loop unroll(full)
-                for (int j = 0; j < QPSG; ++j) {
-                    sh_qsum[jqb + j*32 + t] = lsum[j];
-                }
+            #pragma clang loop unroll(full)
+            for (int j = 0; j < QPSG; ++j) {
+                S[j] += simd_sum(lsum[j]);
             }
-            simdgroup_barrier(mem_flags::mem_threadgroup);
+        }
 
-            // S update: thread t (< QPSG) finalizes query t
-            if (t < QPSG) {
-                const int j = t;
-                float s_new = 0.0f;
-                #pragma clang loop unroll(full)
-                for (int tt = 0; tt < 32; ++tt) {
-                    s_new += sh_qsum[jqb + j*32 + tt];
-                }
-                sh_S[jb + j] = sh_S[jb + j]*sh_alpha[jb + j] + s_new;
-            }
-            simdgroup_barrier(mem_flags::mem_threadgroup);
+        for (int ic = 0; ic < nchunks; ++ic) {
+            // ---- current-chunk context (PV only) ----
+            const int k0 = ic*C;
+            const bool use_pad = has_kvpad && k0 + C > kv;
+            device half * vp_c = use_pad ? (device half *) (pad + pad_v_offs) : vp + (uint) k0*sv;
+            auto tV0 = tensor(vp_c, dextents<int, 2>(PVM, C), array<int, 2>{ 1, sv });
+            auto tV1 = tensor(vp_c + PVM, dextents<int, 2>(PVM, C), array<int, 2>{ 1, sv });
 
             // ---- rescale both O accumulators (per element: query = idx0) ----
-            // NOTE: skip the first chunk: alpha_1 = exp(-FLT_MAX/2 - m_new) = 0
-            if (ic > 0) {
+            // reads alpha_ic (written by the reduction of chunk ic); skip the
+            // first chunk: alpha_0 = exp(-FLT_MAX/2 - m_new) = 0
+            // rescale only when the running max actually changed (alpha < 1):
+            // with random/causal scores M stabilizes after a few chunks and
+            // the pass is skipped for the rest (uniform scalar branch - no
+            // divergence).  The pass itself does not overlap with the tensor
+            // core (it serializes between QK^T and PV), so skipping matters.
+            if (ic > 0 && alpha != 1.0f) {
+                // scalar alpha (global max): a trivial multiply, no index decode
                 #pragma clang loop unroll(full)
                 for (uint i = 0; i < cT_pv0.get_capacity(); ++i) {
-                    if (!cT_pv0.is_valid_element(i)) { continue; }
-                    auto idx = cT_pv0.get_multidimensional_index(i);
-                    cT_pv0[i] *= sh_alpha[jb + (int) idx[0]];
+                    if (cT_pv0.is_valid_element(i)) { cT_pv0[i] *= alpha; }
                 }
                 #pragma clang loop unroll(full)
                 for (uint i = 0; i < cT_pv1.get_capacity(); ++i) {
-                    if (!cT_pv1.is_valid_element(i)) { continue; }
-                    auto idx = cT_pv1.get_multidimensional_index(i);
-                    cT_pv1[i] *= sh_alpha[jb + (int) idx[0]];
+                    if (cT_pv1.is_valid_element(i)) { cT_pv1[i] *= alpha; }
                 }
             }
 
-            // ---- PV: P (in registers) as right input, both d blocks ----
+            // ---- early QK^T(ic+1) + score + reduction -> the other P tile ----
+            // issued before PV(ic) so the two matmuls pipeline on the tensor core
+            if (ic + 1 < nchunks) {
+                const int k1 = (ic + 1)*C;
+                const int kc = min((int) C, kv - k1);
+                const bool use_pad1 = has_kvpad && k1 + C > kv;
+                device half * kp_c = use_pad1 ? (device half *) (pad + pad_k_offs) : kp + (uint) k1*sk;
+
+                device const half * mp = nullptr;
+                int mstride = 0; // in halfs, per local query j
+                if (has_mask) {
+                    if (use_pad1) {
+                        mp      = (device const half *) (pad + pad_mask_offs) + (iq1 + sgitg*QPSG) * (int) C;
+                        mstride = C;
+                    } else {
+                        // global query index: iq1 + sgitg*QPSG + j (j is local, 0..QPSG-1)
+                        mp      = (device const half *) (mask + (uint64_t) k1 * 2 + mbase)
+                                + (uint64_t) (iq1 + sgitg*QPSG) * (args.nb31 / 2);
+                        mstride = (int) (args.nb31 / 2);
+                    }
+                }
+
+                thread cT_qk_t & cT_qkN = (ic & 1) ? cT_qkA : cT_qkB;
+                auto tK = tensor(kp_c, dextents<int, 2>(DK, C), array<int, 2>{ 1, sk });
+                {
+                    #pragma clang loop unroll(full)
+                    for (uint i = 0; i < cT_qkN.get_capacity(); ++i) {
+                        if (cT_qkN.is_valid_element(i)) { cT_qkN[i] = 0.0f; }
+                    }
+                }
+                mm_qk.run(tK, tQ, cT_qkN);
+
+                // scale in registers; clobber padded kv (idx1 >= kc) to -inf
+                float lmax[QPSG], lsum[QPSG];
+                #pragma clang loop unroll(full)
+                for (int j = 0; j < QPSG; ++j) { lmax[j] = -FLT_MAX / 2; lsum[j] = 0.0f; }
+                {
+                    #pragma clang loop unroll(full)
+                    for (uint i = 0; i < cT_qkN.get_capacity(); ++i) {
+                        if (!cT_qkN.is_valid_element(i)) { continue; }
+                        auto idx = cT_qkN.get_multidimensional_index(i);
+                        const int q = (int) idx[0];
+                        float s;
+                        if ((int) idx[1] >= kc) {
+                            s = -FLT_MAX / 2;
+                        } else {
+                            s = cT_qkN[i]*args.scale;
+                            if (has_scap) { s = args.logit_softcap * tanh(s); }
+                            if (has_mask) { s += (float) mp[(uint) q * mstride + (uint) idx[1]] * mscale; }
+                        }
+                        cT_qkN[i] = s;
+                        if (s > lmax[q]) { lmax[q] = s; }
+                    }
+                }
+
+                // warp-level reduction: one global max (scalar) + per-row sums
+                float lmax_g = -FLT_MAX / 2;
+                #pragma clang loop unroll(full)
+                for (int j = 0; j < QPSG; ++j) {
+                    lmax_g = max(lmax_g, simd_max(lmax[j]));
+                }
+                {
+                    const float m_old = M;
+                    M = max(M, lmax_g);
+                    alpha = exp(m_old - M);
+                    #pragma clang loop unroll(full)
+                    for (int j = 0; j < QPSG; ++j) {
+                        S[j] = S[j]*alpha;
+                    }
+                }
+
+                // ---- exp in registers, partial sums ----
+                {
+                    #pragma clang loop unroll(full)
+                    for (uint i = 0; i < cT_qkN.get_capacity(); ++i) {
+                        if (!cT_qkN.is_valid_element(i)) { continue; }
+                        auto idx = cT_qkN.get_multidimensional_index(i);
+                        const int q = (int) idx[0];
+                        const float p = exp(cT_qkN[i] - M);
+                        cT_qkN[i] = p; // P in registers (f32), later used as PV right input
+                        lsum[q] += p;
+                    }
+                }
+                #pragma clang loop unroll(full)
+                for (int j = 0; j < QPSG; ++j) {
+                    S[j] += simd_sum(lsum[j]);
+                }
+            }
+
+            // ---- PV(ic): P(ic) (in the current P tile) as right input, both d blocks ----
             {
-                auto cT_pr = mm_pvb.template get_right_input_cooperative_tensor<half, float, float>(cT_qk);
+                thread cT_qk_t & cT_qkC = (ic & 1) ? cT_qkB : cT_qkA;
+                auto cT_pr = mm_pvb.template get_right_input_cooperative_tensor<half, float, float>(cT_qkC);
                 mm_pvb.run(tV0, cT_pr, cT_pv0);
                 mm_pvb.run(tV1, cT_pr, cT_pv1);
             }
@@ -2604,26 +2695,25 @@ void kernel_flash_attn_ext_tensor_impl(
 
         // ---- final: sinks, O /= S, element-wise write for both d blocks ----
         {
-            simdgroup_barrier(mem_flags::mem_threadgroup);
-
             // sinks: a virtual sink position with score sinks[iq2] and no O
-            // contribution: M' = max(M, sink), S' = S*exp(M - M') + exp(sink - M'),
-            // O' = O*exp(M - M'). The per-query O factor is stashed in sh_alpha
-            // (reused; the last-chunk alpha is not needed at this point).
+            // contribution.  O and S are both relative to the final global
+            // max M, so the correction uses M: M' = max(M, sink),
+            // S' = S*exp(M - M') + exp(sink - M'), O' = O*exp(M - M').
+            // (M' is uniform across queries: the sink is per head, not per
+            // query, but the per-query loop keeps the write form simple.)
+            float alpha_final[QPSG];
+            float s_sink = 0.0f;
             if (has_sinks) {
-                const float s_sink = ((device const float *) sinks)[iq2];
-                for (int j = t; j < QPSG; j += 32) {
-                    const float m  = sh_M[jb + j];
-                    const float m2 = max(m, s_sink);
-                    sh_alpha[jb + j] = exp(m - m2);
-                    sh_S[jb + j]     = sh_S[jb + j]*sh_alpha[jb + j] + exp(s_sink - m2);
-                }
-            } else {
-                for (int j = t; j < QPSG; j += 32) {
-                    sh_alpha[jb + j] = 1.0f;
+                s_sink = ((device const float *) sinks)[iq2];
+            }
+            const float m2 = has_sinks ? max(M, s_sink) : M;
+            const float a_final = has_sinks ? exp(M - m2) : 1.0f;
+            for (int j = 0; j < QPSG; ++j) {
+                alpha_final[j] = a_final;
+                if (has_sinks) {
+                    S[j] = S[j]*a_final + exp(s_sink - m2);
                 }
             }
-            simdgroup_barrier(mem_flags::mem_threadgroup);
 
             // output layout is (DV, heads, batch, batch3) with DV innermost:
             //   offset = (iq3*ne2*ne1 + iq2 + (iq1 + sgitg*QPSG + j)*ne1)*DV + d
@@ -2641,8 +2731,8 @@ void kernel_flash_attn_ext_tensor_impl(
                     const int j = (int) idx[0]; // query
                     const int d = (int) idx[1]; // head dim (block 0)
                     if (j >= 0 && j < QPSG && d >= 0 && d < (int) PVM && iq1 + j < args.ne01) {
-                        const float s = sh_S[jb + j];
-                        op[(uint64_t) j*args.ne1*DV + (uint) d] = (s == 0.0f) ? 0.0f : cT_pv0[i]*sh_alpha[jb + j]/s;
+                        const float s = S[j];
+                        op[(uint64_t) j*args.ne1*DV + (uint) d] = (s == 0.0f) ? 0.0f : cT_pv0[i]*alpha_final[j]/s;
                     }
                 }
             }
@@ -2654,8 +2744,8 @@ void kernel_flash_attn_ext_tensor_impl(
                     const int j = (int) idx[0]; // query
                     const int d = PVM + (int) idx[1]; // head dim (block 1)
                     if (j >= 0 && j < QPSG && d >= 0 && d < (int) DV && iq1 + j < args.ne01) {
-                        const float s = sh_S[jb + j];
-                        op[(uint64_t) j*args.ne1*DV + (uint) d] = (s == 0.0f) ? 0.0f : cT_pv1[i]*sh_alpha[jb + j]/s;
+                        const float s = S[j];
+                        op[(uint64_t) j*args.ne1*DV + (uint) d] = (s == 0.0f) ? 0.0f : cT_pv1[i]*alpha_final[j]/s;
                     }
                 }
             }

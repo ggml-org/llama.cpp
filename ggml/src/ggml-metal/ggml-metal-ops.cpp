@@ -3254,9 +3254,15 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
         GGML_ASSERT(nqptg  % 8  == 0);
         GGML_ASSERT(ncpsg  % 32 == 0);
 
+        // the tensor kernel uses 32-wide KV chunks (smaller operand/P tiles fit
+        // better in registers); the pad buffer is then written with 32-wide
+        // chunks (the reserved pad space is 64-wide, a superset)
+        const bool use_tensor = ggml_metal_op_flash_attn_ext_use_tensor(props_dev, op, max_bias, logit_softcap);
+        const int ncpsg_pad = use_tensor ? OP_FLASH_ATTN_EXT_VEC_NCPSG : ncpsg;
+
         bool need_sync = false;
 
-        const bool has_kvpad = ne11 % ncpsg != 0;
+        const bool has_kvpad = ne11 % ncpsg_pad != 0;
 
         if (has_kvpad) {
             assert(ggml_metal_op_flash_attn_ext_extra_pad(op) != 0);
@@ -3279,7 +3285,7 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
                 /*.nb33    =*/nb33,
             };
 
-            auto pipeline0 = ggml_metal_library_get_pipeline_flash_attn_ext_pad(lib, op, has_mask, ncpsg);
+            auto pipeline0 = ggml_metal_library_get_pipeline_flash_attn_ext_pad(lib, op, has_mask, ncpsg_pad);
 
             ggml_metal_encoder_set_pipeline(enc, pipeline0);
             ggml_metal_encoder_set_bytes   (enc, &args0, sizeof(args0), 0);
@@ -3291,7 +3297,7 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
             assert(ne12 == ne22);
             assert(ne13 == ne23);
 
-            ggml_metal_encoder_dispatch_threadgroups(enc, ncpsg, std::max(ne12, ne32), std::max(ne13, ne33), 32, 1, 1);
+            ggml_metal_encoder_dispatch_threadgroups(enc, ncpsg_pad, std::max(ne12, ne32), std::max(ne13, ne33), 32, 1, 1);
 
             need_sync = true;
         }
@@ -3329,14 +3335,14 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
             ggml_metal_op_concurrency_reset(ctx);
         }
 
-        if (ggml_metal_op_flash_attn_ext_use_tensor(props_dev, op, max_bias, logit_softcap)) {
+        if (use_tensor) {
             // Tensor API (MPP tensor_ops) fast path - see kernel_flash_attn_ext_tensor in kernels/fa.metal
-            // 8 queries per threadgroup (1 simdgroup), C = 64 kv per chunk
+            // 8 queries per threadgroup (1 simdgroup), C = 32 kv per chunk
             const int nqptg = 8;
             const int nsg   = 1;
 
             GGML_ASSERT(ne01 % nqptg == 0);
-            GGML_ASSERT(ne11 % OP_FLASH_ATTN_EXT_NCPSG == 0 || has_kvpad);
+            GGML_ASSERT(ne11 % OP_FLASH_ATTN_EXT_VEC_NCPSG == 0 || has_kvpad);
 
             const int32_t ns10 = nb11_attn/nb10_attn;
             const int32_t ns20 = nb21_attn/nb20_attn;
@@ -3392,6 +3398,8 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
             ggml_metal_encoder_set_buffer  (enc, bid_dst,  8);
 
             // sh_qmax[8][32] + sh_qsum[8][32] + sh_M[8] + sh_S[8] + sh_alpha[8]
+            // (the NBLK == 2 branch keeps the softmax state in registers and
+            // does not use shared memory; the size covers the per-block form)
             const size_t smem = (8*32 + 8*32 + 3*8)*sizeof(float);
             GGML_ASSERT(smem <= props_dev->max_theadgroup_memory_size);
 
