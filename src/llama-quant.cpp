@@ -1266,8 +1266,15 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                 LLAMA_LOG_INFO("converting to %s .. ", ggml_type_name(new_type));
                 fflush(stdout);
 
-                if (work.size() < (size_t)nelements * 4) {
-                    work.resize(nelements * 4); // upper bound on size
+                // Exact output size: ggml_row_size(new_type, ne0) per row, ne1 rows, ne2 slices --
+                // what the loop writes, what new_size sums to, and what the GGUF metadata is
+                // asserted against. The previous `nelements * 4` was a loose upper bound, invisible
+                // on a normal model but 205 GB of dead address space on Qwen3.8-Flash-Next's 51.2 G
+                // element PLE table -- about half of what OOMed a 2 TB machine at five-wide.
+                const size_t out_size =
+                    ggml_row_size(new_type, tensor->ne[0]) * tensor->ne[1] * tensor->ne[2];
+                if (work.size() < out_size) {
+                    work.resize(out_size);
                 }
                 new_data = work.data();
 
