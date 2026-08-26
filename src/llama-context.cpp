@@ -951,7 +951,7 @@ float * llama_context::get_embeddings_nextn_ith(int32_t i) {
 
         const uint32_t n_embd = model.hparams.n_embd_out();
 
-        if (!cparams.embeddings_nextn_masked) {
+        if (!embd_nextn_masked_output) {
             // unmasked: nextn rows are stored densely, indexed by raw token position.
             if (i < 0 || (size_t)(i + 1) * n_embd > embd_nextn.size) {
                 throw std::runtime_error(format("out of range [0, %zu)", embd_nextn.size / n_embd));
@@ -2020,8 +2020,8 @@ int llama_context::decode(const llama_batch & batch_inp) {
         }
     }
 
-    // embd_layer_inp and the unmasked embd_nextn hold a row per token, not a row per output,
-    // so output_swaps does not address them. their rows arrive in ubatch order.
+    // embd_layer_inp and the unmasked embd_nextn hold a row per token, so output_swaps does not
+    // address them: their rows arrive in ubatch order and need a permutation over token indices.
     {
         bool has_token_rows = cparams.embeddings_nextn && !cparams.embeddings_nextn_masked;
 
@@ -2034,10 +2034,9 @@ int llama_context::decode(const llama_batch & batch_inp) {
 
             GGML_ASSERT(tok_ids.size() == (size_t) n_tokens_all);
 
-            // tok_ids is a permutation of the batch positions, so following its cycles sorts it
-            // with at most n_tokens - 1 swaps, without the quadratic scan used for the outputs.
-            // unlike that scan this indexes by value, so both bounds are checked: a list that is
-            // not a permutation would otherwise read out of range or spin here forever.
+            // tok_ids[row] is the batch index of that row; following its cycles sorts it and the
+            // same swaps replayed over the data put row i back at batch position i.
+            // this indexes by value, unlike the scan used for out_ids, so both bounds are checked.
             size_t swaps_left = tok_ids.size();
 
             for (uint32_t i = 0; i < tok_ids.size(); ++i) {
@@ -2103,6 +2102,9 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
         // those flagged via batch.logits[i] -> size by token count instead.
         embd_nextn.size = (size_t) n_embd_out * n_batch;
     }
+
+    // recorded here so the row domain can never disagree with the size just chosen for it
+    embd_nextn_masked_output = cparams.embeddings_nextn_masked;
 
     for (bool enabled : cparams.embeddings_layer_inp) {
         if (enabled) {
@@ -2250,6 +2252,11 @@ void llama_context::extract_layer_inputs(const llm_graph_result * res, size_t to
         GGML_ASSERT(nfloats % n_tokens == 0);
 
         const size_t row_floats = nfloats / n_tokens;
+
+        // output_reorder() swaps these rows a fixed n_embd floats at a time, so a layer input
+        // that is not n_embd wide would overlap its neighbours instead of being permuted.
+        GGML_ASSERT(row_floats == model.hparams.n_embd);
+
         const size_t dst_offset = token_offset * row_floats;
         GGML_ASSERT(dst_offset + nfloats <= embd_layer_inp[il].size);
 
@@ -2281,7 +2288,7 @@ void llama_context::output_reorder() {
         }
 
         // embd_nextn is output-row indexed only when masked, token-row indexed when not
-        if (embd_nextn.size > 0 && cparams.embeddings_nextn_masked) {
+        if (embd_nextn.size > 0 && embd_nextn_masked_output) {
             for (uint64_t k = 0; k < n_embd_out; k++) {
                 std::swap(embd_nextn.data[i0*n_embd_out + k], embd_nextn.data[i1*n_embd_out + k]);
             }
@@ -2319,7 +2326,12 @@ void llama_context::output_reorder() {
         const uint64_t i0 = token_swaps[s].i0;
         const uint64_t i1 = token_swaps[s].i1;
 
-        if (embd_nextn.size > 0 && !cparams.embeddings_nextn_masked) {
+        if (embd_nextn.size > 0 && !embd_nextn_masked_output) {
+            // token rows must be inside the buffer the decode actually sized. this loop writes
+            // before any getter can range-check, so without it a mismatch corrupts silently.
+            GGML_ASSERT((i0 + 1)*n_embd_out <= embd_nextn.size);
+            GGML_ASSERT((i1 + 1)*n_embd_out <= embd_nextn.size);
+
             for (uint64_t k = 0; k < n_embd_out; k++) {
                 std::swap(embd_nextn.data[i0*n_embd_out + k], embd_nextn.data[i1*n_embd_out + k]);
             }

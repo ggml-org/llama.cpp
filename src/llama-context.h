@@ -344,6 +344,11 @@ private:
     // the same, over token rows, for the buffers that hold a row per token
     std::vector<swap_info> token_swaps;
 
+    // how embd_nextn was laid out when it was filled. cparams holds the setting for the NEXT
+    // evaluation and may be changed before the buffer is read, so reading it here would apply
+    // one layout's swaps to the other's rows.
+    bool embd_nextn_masked_output = false;
+
     ggml_backend_sched_ptr sched;
 
     bool sched_need_reserve = true;
