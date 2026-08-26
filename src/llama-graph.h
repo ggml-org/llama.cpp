@@ -30,6 +30,7 @@ class llama_kv_cache_dsv4_context;
 class llama_kv_cache_iswa_context;
 class llama_memory_recurrent_context;
 class llama_memory_hybrid_context;
+class llama_memory_hybrid_idx_context;
 class llama_memory_hybrid_iswa_context;
 
 // certain models (typically multi-modal) can produce different types of graphs
@@ -713,6 +714,36 @@ public:
     const llama_memory_hybrid_context * mctx;
 };
 
+// same as llm_graph_input_mem_hybrid_k, for the memory container that also carries an
+// indexer cache. The indexer's own inputs are arch-specific and live in the model file.
+class llm_graph_input_mem_hybrid_idx : public llm_graph_input_i {
+public:
+    llm_graph_input_mem_hybrid_idx(
+            const llama_cparams & cparams,
+            std::unique_ptr<llm_graph_input_attn_k> inp_attn,
+            std::unique_ptr<llm_graph_input_rs>     inp_rs,
+            const llama_memory_hybrid_idx_context * mctx) :
+        inp_attn(std::move(inp_attn)),
+        inp_rs(std::move(inp_rs)),
+        cparams(cparams),
+        mctx(mctx) { }
+    virtual ~llm_graph_input_mem_hybrid_idx() = default;
+
+    void set_input(const llama_ubatch * ubatch) override;
+
+    bool can_reuse(const llm_graph_params & params) override;
+
+    std::unique_ptr<llm_graph_input_attn_k> inp_attn;
+    std::unique_ptr<llm_graph_input_rs>     inp_rs;
+
+    llm_graph_input_attn_k * get_attn() const { return inp_attn.get(); }
+    llm_graph_input_rs     * get_recr() const { return inp_rs.get(); }
+
+    const llama_cparams cparams;
+
+    const llama_memory_hybrid_idx_context * mctx;
+};
+
 class llm_graph_input_mem_hybrid_iswa : public llm_graph_input_i {
 public:
     llm_graph_input_mem_hybrid_iswa(
@@ -1223,6 +1254,27 @@ struct llm_graph_context {
                   float   kq_scale,
                     int   il) const;
 
+    // unmask only the selected cells of the KQ mask (sparse attention)
+    //   top_k: I32 [n_top_k, n_batch/n_stream, 1, n_stream], indices into the cache cells
+    ggml_tensor * build_attn_mask_top_k(
+            ggml_tensor * kq_mask,
+            ggml_tensor * top_k) const;
+
+    ggml_tensor * build_attn(
+            llm_graph_input_attn_k * inp,
+            ggml_tensor * wo,
+            ggml_tensor * wo_b,
+            ggml_tensor * wo_s,
+            ggml_tensor * q_cur, // [n_embd_head_q, n_head_q, n_tokens]
+            ggml_tensor * k_cur, // [n_embd_head_k, n_head_k, n_tokens]
+            ggml_tensor * v_cur, // [n_embd_head_v, n_head_v, n_tokens]
+            ggml_tensor * kq_b,
+            ggml_tensor * sinks, // [n_head_q]
+            ggml_tensor * v_mla, // [n_embd_head_v_mla, n_embd_head_v, n_head_v]
+            ggml_tensor * top_k, // [n_top_k, n_batch/n_stream, 1, n_stream], null = dense
+                  float   kq_scale,
+                    int   il) const;
+
     llm_graph_input_attn_k_dsa * build_attn_inp_k_dsa() const;
 
     llm_graph_input_attn_k_dsa_iswa * build_attn_inp_k_dsa_iswa() const;
@@ -1342,6 +1394,7 @@ struct llm_graph_context {
 
     llm_graph_input_mem_hybrid * build_inp_mem_hybrid() const;
     llm_graph_input_mem_hybrid_k * build_inp_mem_hybrid_k() const;
+    llm_graph_input_mem_hybrid_idx * build_inp_mem_hybrid_idx() const;
 
     llm_graph_input_mem_hybrid_iswa * build_inp_mem_hybrid_iswa() const;
 

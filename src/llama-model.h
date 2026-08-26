@@ -145,6 +145,7 @@ enum llm_type {
     LLM_TYPE_288B_A19B, // dots3-note
     LLM_TYPE_300B_A47B, // Ernie MoE big
     LLM_TYPE_310B_A15B, // /MiMo-V2-Flash
+    LLM_TYPE_312B_A17B, // GLM-5.3-Flash
     LLM_TYPE_355B_A32B, // GLM-4.5
     LLM_TYPE_397B_A17B, // Qwen3.5
     LLM_TYPE_685B_A37B, // DeepSeek V3.2
