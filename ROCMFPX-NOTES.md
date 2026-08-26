@@ -302,6 +302,106 @@ Still open on the perf side:
 10. "rotorquant" does not exist anywhere in that fork or its remote branches. Need a
     pointer before it can be evaluated.
 
+
+## Qwen3.8-Flash-Next (qwen4exp), 2026-08-26
+
+Carries [ggml-org/llama.cpp#27742](https://github.com/ggml-org/llama.cpp/pull/27742)
+(Daniel Han) at `bea3b12da`, cherry-picked with authorship preserved. That PR is an
+unmerged draft; prefer upstream if it lands. Everything below is what had to change on
+top of it.
+
+### Three fixes to build it from the FP8 release
+
+The PR was developed against the BF16 weights, so none of these show up there.
+
+1. **The FP8 n-gram table needs its scalar scale applied.** One BF16
+   `ngram_embedding.weight_scale` covers all 128 shards, where the other 75,264 FP8
+   tensors carry 128x128 `weight_scale_inv` block scales. `conversion/base.py` only
+   rewrites a weight whose scale name derives from that weight, so nothing dequantized
+   it: the converter stopped with `Can not map tensor`, and had it not stopped, a
+   51.2 B parameter table would have been written as raw FP8 codes at +/-240 instead
+   of values around +/-0.05. Verified numerically, not from the naming convention:
+   reading the safetensors directly gives std 0.007475 for `codes * scale`, and the
+   converter emits std 0.00746816.
+2. **The table has to be quantized shard by shard.** Upstream writes it to an F32
+   scratch file (205 GB here) and then hands it to `gguf.quants`, which allocates the
+   whole output array at once. Quantizing each shard to Q8_0 as it is placed drops
+   scratch to 51 GB and peak resident memory to one shard.
+3. **`llama-quantize` has to work in row bands.** It expanded each tensor to F32 in
+   full and held the whole result before writing: 205 GB and 22 GB respectively for a
+   51.2 G element tensor. Now it dequantizes, quantizes and streams a band at a time.
+   Byte-identical to the old path by md5 across three target types, at a 512 MB band
+   (one band per tensor) and a 64 KB band (many bands plus streamed writes).
+
+### The n-gram table is stored per head (we diverge on purpose)
+
+Upstream joins the 128 checkpoint shards into one `per_layer_token_embd` of 20.9 GiB.
+That is past `maxStorageBufferRange`, which is 4 GiB on this RADV device and 4 GiB on
+most Vulkan implementations, so joined the table can never be a device buffer for
+*anyone* -- `ggml_backend_vk_device_supports_op` rejects it on size before it ever
+looks at the op. It is therefore host-pinned, and on a box whose VRAM carve-out leaves
+the host 30 GB it goes to swap: measured 21.10 GiB swapped, 2.57 GiB resident, ~156
+major faults/sec while serving.
+
+The 16 n-gram heads are already disjoint contiguous row ranges, ~1.3 GiB each, so the
+table ships as 16 tensors (`ple_ngram_embd.%d`) classified `LLM_TENSOR_LAYER_REPEATING`
+-- which also means they follow `-ngl` to the GPU with no `-ot` needed. `set_input`
+emits head-major, head-local indices; the graph gathers per head and concatenates.
+
+The loader still accepts the joined layout and reads it through 16 `ggml_view_2d`
+slices, so the fork loads anyone's qwen4exp GGUF.
+
+`gguf-py/gguf/scripts/gguf_split_ple_heads.py` converts an existing file either way.
+Head bounds come from its own KV and the quantized bytes are copied through untouched,
+so there is no dequantize, no requantize and no quality change. Handles split inputs
+and writes one unsplit file.
+
+### Measurements (Radeon 8060S, 96 GiB VRAM carve-out, 30 GB host)
+
+Qwen3.8-Flash-Next, experts `Q4_0_ROCMFP4_FAST` 4.25 bpw, n-gram table
+`Q3_0_ROCMFPX` 3.50 bpw, `token_embd`/`output` Q6_K. 83.65 GiB, 4.06 bpw.
+
+| table layout | VRAM | swap | s/pass | wikitext-2 PPL |
+|---|---|---|---|---|
+| joined (upstream) | 64.5 GiB | 21.10 GiB | 5.39 | 4.6744 +/- 0.02776 |
+| per head | 85.1 GiB | 0.1 GiB | 5.31 | 4.6785 +/- 0.02780 |
+| no table at all | -- | -- | 5.42 | 6.2089 +/- 0.03766 |
+
+145 chunks at `-c 2048`. Unquantized reference is 4.0068 +/- 0.02271 as reported in
+the PR.
+
+**Placement buys memory, not speed.** 5.39 -> 5.31 s/pass is 1.5%, and a model doing
+*zero* table lookups is slower than both, so the gather is not on the critical path:
+16 rows x 70 bytes per token is ~31 KB/s against ~256 GB/s. The reason to do it is the
+21 GiB of host RAM and the swap.
+
+**The table earns its 20.9 GiB.** Removing it costs +33% perplexity. It is 51.2 B of
+the 180 B parameters, read at layer 2 only, as a gated retrieval: the n-gram supplies
+key and value, the hidden state supplies the query, and a sigmoid gate on their dot
+product decides how much value enters the residual. Nothing is skipped -- attention and
+the MoE still run for that layer.
+
+**No imatrix.** All three ROCmFPx encoders took their `if (!imatrix)` branch, so the
+`_weighted` paths are unexercised. Likely the largest remaining quality lever, and free
+in file size.
+
+### Gotchas
+
+- The default `Q4_0_ROCMFP4` recipe promotes `ffn_down_exps` to q5_K, but the expert
+  intermediate is 640 wide and q5_K needs a multiple of 256, so all 96 of them fall
+  back to **q5_1** -- 5.71 bpw and a third of the weights off the ROCmFPx kernel path.
+  Use `--pure` with explicit `--token-embedding-type`/`--output-tensor-type`.
+- `blk.N.ple_conv1d.weight` has ncols 4, so no 32-block type fits and it falls back to
+  F16. That is the PR's `qk_k <= 32` fallback doing its job; without it the run aborts.
+- qwen4exp asserts in the `ggml-backend-meta` split simulator
+  (`split_states_equal(src_ss[0], src_ss[2])` in `handle_set_rows`) while qwen3next and
+  qwen3moe pass. Multi-device tensor split only; single-device Vulkan and CPU are fine.
+- `test-llama-archs -a qwen4exp` does **not** cover the PLE path -- the test config
+  sets no PLE keys, so `ple_n_heads == 0` and the whole branch is skipped. A green
+  result there says nothing about the n-gram table.
+- llama.cpp under-predicts the compute buffer for this arch (538 MiB actual vs 497 MiB
+  expected, host 60.4 vs 12.0 MiB).
+
 ## Gotchas
 
 - **Benchmarking.** This APU gives the *first* run of any set a ~15% boost-clock
