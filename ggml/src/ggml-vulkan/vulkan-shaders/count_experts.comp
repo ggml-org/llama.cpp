@@ -68,7 +68,6 @@ void main() {
         }
         barrier();
 
-        
 #ifdef USE_SUBGROUPS
         if (gl_SubgroupID == 0) {
             // pad the trip count so the subgroup ops stay in uniform control flow
