@@ -44,6 +44,7 @@
 #include "ggml-cuda/quantize.cuh"
 #include "ggml-cuda/rope.cuh"
 #include "ggml-cuda/roll.cuh"
+#include "ggml-cuda/rwkv-fusion.cuh"
 #include "ggml-cuda/scale.cuh"
 #include "ggml-cuda/snake.cuh"
 #include "ggml-cuda/softcap.cuh"
@@ -3226,6 +3227,58 @@ static bool ggml_cuda_should_fuse_lerp(
     *weight  = w;
     return true;
 }
+static bool ggml_cuda_should_fuse_key_adjust(
+        const ggml_tensor * ka,
+        const ggml_tensor * a_ka,
+        const ggml_tensor * delta,
+        const ggml_tensor * add,
+        const ggml_tensor ** k,
+        const ggml_tensor ** a,
+        const ggml_tensor ** k_a) {
+    if (delta->src[0] != a_ka || delta->src[1] != ka) {
+        return false;
+    }
+
+    const ggml_tensor * av = a_ka->src[0] == ka ? a_ka->src[1] :
+                              a_ka->src[1] == ka ? a_ka->src[0] : nullptr;
+    const ggml_tensor * kv = add->src[0] == delta ? add->src[1] :
+                              add->src[1] == delta ? add->src[0] : nullptr;
+    if (!av || !kv) {
+        return false;
+    }
+
+    const ggml_tensor * kav = ka->src[0] == kv ? ka->src[1] :
+                               ka->src[1] == kv ? ka->src[0] : nullptr;
+    if (!kav ||
+        kv->type   != GGML_TYPE_F32 ||
+        av->type   != GGML_TYPE_F32 ||
+        kav->type  != GGML_TYPE_F32 ||
+        ka->type   != GGML_TYPE_F32 ||
+        a_ka->type != GGML_TYPE_F32 ||
+        delta->type != GGML_TYPE_F32 ||
+        add->type   != GGML_TYPE_F32) {
+        return false;
+    }
+
+    if (!ggml_are_same_shape(kv, av) ||
+        !ggml_are_same_shape(kv, add) ||
+        kav->ne[0] != add->ne[0] ||
+        ggml_nelements(kav) != add->ne[0]) {
+        return false;
+    }
+
+    if (!ggml_is_contiguous(kv) ||
+        !ggml_is_contiguous(av) ||
+        !ggml_is_contiguous(kav) ||
+        !ggml_is_contiguous(add)) {
+        return false;
+    }
+
+    *k   = kv;
+    *a   = av;
+    *k_a = kav;
+    return true;
+}
 static bool ggml_cuda_should_fuse_add_mul(
         const ggml_tensor * add,
         const ggml_tensor * mul,
@@ -3534,6 +3587,21 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
     static bool disable_fusion = getenv("GGML_CUDA_DISABLE_FUSION") != nullptr && std::atoi(getenv("GGML_CUDA_DISABLE_FUSION"));
     if (disable_fusion) {
         return 0;
+    }
+
+    if (ggml_can_fuse_subgraph(cgraph, i, { GGML_OP_MUL, GGML_OP_MUL, GGML_OP_SUB, GGML_OP_ADD }, { i + 3 })) {
+        const ggml_tensor * k   = nullptr;
+        const ggml_tensor * a   = nullptr;
+        const ggml_tensor * k_a = nullptr;
+        if (ggml_cuda_should_fuse_key_adjust(
+                    cgraph->nodes[i], cgraph->nodes[i + 1], cgraph->nodes[i + 2], cgraph->nodes[i + 3],
+                    &k, &a, &k_a)) {
+            const int out_nodes[] = { i + 3 };
+            if (ggml_cuda_check_fusion_memory_ranges(cgraph, i, 4, out_nodes, 1)) {
+                ggml_cuda_op_key_adjust_fused(*cuda_ctx, k, a, k_a, cgraph->nodes[i + 3]);
+                return 3;
+            }
+        }
     }
 
     const auto try_lerp = [&](const ggml_tensor * repeat, int n_nodes) {

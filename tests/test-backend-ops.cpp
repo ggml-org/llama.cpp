@@ -3486,6 +3486,40 @@ struct test_lerp_fusion : public test_case {
     }
 };
 
+// GGML_OP_MUL + GGML_OP_MUL + GGML_OP_SUB + GGML_OP_ADD
+struct test_key_adjust_fusion : public test_case {
+    const std::array<int64_t, 4> ne;
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "KEY_ADJUST";
+    }
+
+    bool run_whole_graph() override { return true; }
+
+    std::string vars() override {
+        return VARS_TO_STR1(ne);
+    }
+
+    test_key_adjust_fusion(std::array<int64_t, 4> ne) : ne(ne) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * k   = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne.data());
+        ggml_tensor * a   = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne.data());
+        ggml_tensor * k_a = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, ne[0]);
+        ggml_set_param(k);
+        ggml_set_param(a);
+        ggml_set_param(k_a);
+
+        ggml_tensor * ka   = ggml_mul(ctx, k, k_a);
+        ggml_tensor * a_ka = ggml_mul(ctx, a, ka);
+        ggml_tensor * delta = ggml_sub(ctx, a_ka, ka);
+        ggml_tensor * out = ggml_add(ctx, k, delta);
+        ggml_set_name(out, "out");
+        return out;
+    }
+};
+
 // GGML_OP_SCALE + GGML_UNARY_OP_TANH + GGML_OP_SCALE
 struct test_softcap : public test_case {
     const ggml_type type;
@@ -9374,6 +9408,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_lerp_fusion({ 65, 1, 1, 1 }, 1, false, true, false));
     test_cases.emplace_back(new test_lerp_fusion({ 65, 1, 1, 1 }, 1, false, true, true));
     test_cases.emplace_back(new test_lerp_fusion({ 65, 2, 3, 1 }, 6, true, false, false));
+    test_cases.emplace_back(new test_key_adjust_fusion({ 64, 5, 4, 3 }));
+    test_cases.emplace_back(new test_key_adjust_fusion({ 65, 5, 4, 3 }));
     test_cases.emplace_back(new test_softcap(GGML_TYPE_F32, {10, 10, 10, 10}, 50.0f));
     test_cases.emplace_back(new test_silu_back());
 
