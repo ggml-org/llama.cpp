@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Iterable
 
 import torch
@@ -81,6 +82,12 @@ class Qwen4ExpTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
         self.gguf_writer.add_ple_heads_per_ngram(hp["heads_per_ngram"])
         self.gguf_writer.add_ple_conv_kernel(hp["ple_conv_kernel_size"])
         self.gguf_writer.add_ple_eos_token_id(self._eos_token_id())
+        # The PLE hash runs over token ids, but a multimodal batch arrives as embeddings
+        # with the placeholder consumed. Carry it so those positions hash what the
+        # reference sees in input_ids instead of being undefined.
+        _img = self._image_token_id()
+        if _img is not None:
+            self.gguf_writer.add_ple_image_token_id(int(_img))
         if self._ple_row_dim is not None:
             self.gguf_writer.add_embedding_length_per_layer_input(self._ple_row_dim)
 
@@ -90,6 +97,19 @@ class Qwen4ExpTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
             self._read_hash_constants("ple_embedding.ngram_heads_offsets"))
         self.gguf_writer.add_ple_head_vocab_sizes(
             self._read_hash_constants("ple_embedding.ngram_heads_vocab_sizes"))
+
+    def _image_token_id(self) -> int | None:
+        # image_token_id is top-level in config.json, not in self.hparams once that is
+        # narrowed to text_config, and the text model has no global_config; read the file
+        img = self.hparams.get("image_token_id")
+        if img is not None:
+            return int(img)
+        try:
+            with open(self.dir_model / "config.json", "r", encoding="utf-8") as f:
+                img = json.load(f).get("image_token_id")
+        except Exception:
+            return None
+        return None if img is None else int(img)
 
     def _eos_token_id(self) -> int:
         eos = self.hparams.get("eos_token_id")

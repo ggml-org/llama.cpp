@@ -1072,6 +1072,9 @@ class GGUFWriter:
     def add_ple_eos_token_id(self, value: int) -> None:
         self.add_uint32(Keys.PLE.EOS_TOKEN_ID.format(arch=self.arch), value)
 
+    def add_ple_image_token_id(self, value: int) -> None:
+        self.add_uint32(Keys.PLE.IMAGE_TOKEN_ID.format(arch=self.arch), value)
+
     def add_attention_scale(self, value: float) -> None:
         self.add_float32(Keys.Attention.SCALE.format(arch=self.arch), value)
 
