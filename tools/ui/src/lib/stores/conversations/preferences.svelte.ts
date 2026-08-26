@@ -49,12 +49,20 @@ export interface ConversationsPreferencesHost {
 	applyConversationUpdate(id: string, updates: Partial<DatabaseConversation>): void;
 }
 
-/** Effective disabled tool keys: conversation row, falling back to defaults. */
+/**
+ * Effective disabled tool keys: the active conversation row, or the global
+ * defaults when there is no conversation. An existing row with an unset
+ * field has an empty policy, not a fallback to defaults.
+ */
 function buildDisabledTools(conv: DatabaseConversation | null): Set<string> {
 	return new Set(conv ? (conv.disabledTools ?? []) : [...toolsStore.disabledTools]);
 }
 
-/** Effective disabled tool categories: conversation row, falling back to defaults. */
+/**
+ * Effective disabled tool categories: the active conversation row, or the
+ * global defaults when there is no conversation. An existing row with an
+ * unset field has an empty policy, not a fallback to defaults.
+ */
 function buildDisabledToolCategories(conv: DatabaseConversation | null): Set<ToolSource> {
 	return new Set(
 		conv ? (conv.disabledToolCategories ?? []) : [...toolsStore.disabledToolCategories]
@@ -185,6 +193,14 @@ export class ConversationPreferences {
 	}
 
 	/**
+	 *
+	 *
+	 * Working Directory
+	 *
+	 *
+	 */
+
+	/**
 	 * Sets the working directory for the active conversation. Pass `null` or
 	 * an empty string to clear it, which restores the picker's empty state.
 	 *
@@ -216,6 +232,14 @@ export class ConversationPreferences {
 
 		this.pendingCwd = null;
 	}
+
+	/**
+	 *
+	 *
+	 * Reasoning Effort
+	 *
+	 *
+	 */
 
 	/**
 	 * Sets the reasoning effort for the active conversation.
@@ -268,14 +292,6 @@ export class ConversationPreferences {
 		await this.toggleTool(toolsStore.getMcpServerToolsKey(serverId));
 	}
 
-	/**
-	 *
-	 *
-	 * Reasoning Effort
-	 *
-	 *
-	 */
-
 	async toggleTool(key: string): Promise<void> {
 		const conv: DatabaseConversation | null = this.host.activeConversation;
 
@@ -304,14 +320,6 @@ export class ConversationPreferences {
 
 		await DatabaseService.updateConversation(conv.id, { disabledToolCategories });
 	}
-
-	/**
-	 *
-	 *
-	 * Working Directory
-	 *
-	 *
-	 */
 
 	private async persistDisabledTools(disabled: Set<string>): Promise<void> {
 		const conv = this.host.activeConversation;
