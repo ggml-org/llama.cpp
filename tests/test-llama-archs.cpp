@@ -82,7 +82,7 @@ static std::vector<llama_token> get_tokens(const uint32_t n_tokens, const uint32
 static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
     gguf_context_ptr ret(gguf_init_empty());
     llama_model_saver ms(arch, ret.get());
-    const uint32_t n_ctx = 128;
+    const uint32_t n_ctx = 256;
 
     uint32_t n_vocab = 128;
     uint32_t n_embd  = 256;
