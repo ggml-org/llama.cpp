@@ -202,6 +202,10 @@ class NemotronHModel(GraniteHybridModel):
     is_moe: bool = False
     supports_mtp_export = True
 
+    _SSM_LAYER_TYPES = {"mamba", "linear_attention"}
+    _ATTN_LAYER_TYPES = {"attention", "full_attention"}
+    _MLP_LAYER_TYPES = {"moe"}
+
     def __init__(self, *args, **kwargs):
         # We have to determine the correct model architecture (MoE vs non-MoE) before
         # calling the parent __init__. This is because the parent constructor
@@ -242,8 +246,8 @@ class NemotronHModel(GraniteHybridModel):
             self._ssm_layers = [i for i, val in enumerate(pattern) if val == "M"]
             self._mlp_layers = [i for i, val in enumerate(pattern) if val == ("E" if self.is_moe else "-")]
         else:
-            self._ssm_layers = [i for i, val in enumerate(pattern) if val == "mamba"]
-            self._mlp_layers = [i for i, val in enumerate(pattern) if val == "moe"]
+            self._ssm_layers = [i for i, val in enumerate(pattern) if val in self._SSM_LAYER_TYPES]
+            self._mlp_layers = [i for i, val in enumerate(pattern) if val in self._MLP_LAYER_TYPES]
 
         # `--no-mtp` drops it entirely; `--mtp` exports only the MTP head
         self._mtp_bid: int | None = None
@@ -272,7 +276,7 @@ class NemotronHModel(GraniteHybridModel):
         if isinstance(pattern, str):
             return [i for i, val in enumerate(pattern) if val == "*"]
 
-        return [i for i, val in enumerate(pattern) if val == "attention"]
+        return [i for i, val in enumerate(pattern) if val in self._ATTN_LAYER_TYPES]
 
     @classmethod
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
