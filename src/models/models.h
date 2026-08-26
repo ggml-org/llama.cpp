@@ -8,6 +8,8 @@
 #include <cmath>
 #include <map>
 
+class llama_memory_hybrid_idx_context;
+
 //
 // base classes
 //
@@ -2306,8 +2308,8 @@ struct llama_model_qwen4exp : public llama_model_base {
                             int   il);
 
         ggml_tensor * build_layer_attn(
-        llm_graph_input_attn_kv * inp_attn,
-  const llama_kv_cache_context * mctx_idx,
+              llm_graph_input_attn_kv * inp_attn,
+  const llama_memory_hybrid_idx_context * mctx_hyb,
                     ggml_tensor * cur,
                     ggml_tensor * inp_pos,
                             int * sections,
@@ -2327,7 +2329,7 @@ struct llama_model_qwen4exp : public llama_model_base {
 
         // QSA: token indices this layer's queries may attend to, or nullptr for dense
         ggml_tensor * build_qsa_top_k(
-  const llama_kv_cache_context * mctx_idx,
+  const llama_memory_hybrid_idx_context * mctx_hyb,
                     ggml_tensor * cur,
                     ggml_tensor * inp_pos,
                             int * sections,

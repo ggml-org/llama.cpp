@@ -1,5 +1,5 @@
 #include "models.h"
-#include "llama-memory-hybrid.h"
+#include "llama-memory-hybrid-idx.h"
 #include "llama-memory-recurrent.h"
 
 void llama_model_qwen4exp::load_arch_hparams(llama_model_loader & ml) {
@@ -275,7 +275,11 @@ llama_model_qwen4exp::graph::graph(const llama_model & model, const llm_graph_pa
     // present only when the GGUF carries indexer tensors, so a model without them still
     // builds a dense graph. The indexer cache takes the attention cache's slot layout,
     // so the two agree cell for cell by construction.
-    const llama_kv_cache_context * mctx_idx = inp->mctx->get_idx();
+    // qwen4exp always builds llama_memory_hybrid_idx, so this downcast is total; the
+    // indexer cache inside it is absent when the GGUF carries no indexer tensors
+    const auto * mctx_hyb = static_cast<const llama_memory_hybrid_idx_context *>(inp->mctx);
+
+    const llama_kv_cache_context * mctx_idx = mctx_hyb->get_idx();
     if (mctx_idx) {
         GGML_ASSERT(mctx_idx->get_n_kv() == inp->mctx->get_attn()->get_n_kv() &&
                 "the indexer cache must track the attention cache cell for cell");
@@ -310,7 +314,7 @@ llama_model_qwen4exp::graph::graph(const llama_model & model, const llm_graph_pa
         if (hparams.is_recr(il)) {
             cur = build_layer_attn_linear(inp->get_recr(), cur, il);
         } else {
-            cur = build_layer_attn(inp->get_attn(), mctx_idx, cur, inp_pos, sections, il);
+            cur = build_layer_attn(inp->get_attn(), mctx_hyb, cur, inp_pos, sections, il);
         }
 
         res_hc = build_hc_combine(res_hc, cur, inject, il);
@@ -386,12 +390,12 @@ ggml_tensor * llama_model_qwen4exp::graph::build_norm_gated(
 // graph only gathers, pools and scores.
 class llm_graph_input_qsa : public llm_graph_input_i {
 public:
-    llm_graph_input_qsa(const llama_kv_cache_context * mctx, uint32_t ratio) :
+    llm_graph_input_qsa(const llama_memory_hybrid_idx_context * mctx, uint32_t ratio) :
         mctx(mctx), ratio(ratio) {}
     virtual ~llm_graph_input_qsa() = default;
 
     void set_input(const llama_ubatch * ubatch) override {
-        mctx->set_input_k_idxs(k_idxs, ubatch);
+        mctx->get_idx()->set_input_k_idxs(k_idxs, ubatch);
         mctx->set_input_qsa(cell_blk, blk_cells, blk_pos, bias, ubatch, ratio);
     }
 
@@ -402,16 +406,18 @@ public:
     ggml_tensor * blk_pos   = nullptr;   // I32 [4*n_blocks*n_stream]
     ggml_tensor * bias      = nullptr;   // F32 [n_kv, n_tokens/n_stream, n_stream]
 
-    const llama_kv_cache_context * mctx;
+    const llama_memory_hybrid_idx_context * mctx;
     const uint32_t ratio;
 };
 
 ggml_tensor * llama_model_qwen4exp::graph::build_qsa_top_k(
-        const llama_kv_cache_context * mctx_idx,
-        ggml_tensor *                  cur,
-        ggml_tensor *                  inp_pos,
-        int *                          sections,
-        int                            il) {
+        const llama_memory_hybrid_idx_context * mctx_hyb,
+        ggml_tensor *                           cur,
+        ggml_tensor *                           inp_pos,
+        int *                                   sections,
+        int                                     il) {
+    const llama_kv_cache_context * mctx_idx = mctx_hyb->get_idx();
+
     const int64_t idx_dim  = hparams.indexer_head_size;
     const int64_t n_idx_h  = hparams.indexer_n_head;
     const int64_t r        = hparams.dsv4_compress_ratios[il];
@@ -421,12 +427,12 @@ ggml_tensor * llama_model_qwen4exp::graph::build_qsa_top_k(
 
     const int64_t n_blocks = (n_kv + r - 1)/r;
 
-    // n_tps: tokens divide evenly across streams, as build_attn_mask_top_k and the KQ mask assume.
-    const int64_t n_stream = mctx_idx->get_n_stream();
+    // n_tps: tokens divide evenly across streams, as build_attn_qsa and the KQ mask assume.
+    const int64_t n_stream = mctx_hyb->get_n_stream();
     GGML_ASSERT(n_tokens % n_stream == 0);
     const int64_t n_tps = n_tokens/n_stream;
 
-    auto qsa = std::make_unique<llm_graph_input_qsa>(mctx_idx, (uint32_t) r);
+    auto qsa = std::make_unique<llm_graph_input_qsa>(mctx_hyb, (uint32_t) r);
 
     qsa->k_idxs    = mctx_idx->build_input_k_idxs(ctx0, ubatch);
     qsa->cell_blk  = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, n_kv, n_stream);
@@ -595,7 +601,7 @@ ggml_tensor * llama_model_qwen4exp::graph::build_attn_qsa(
 
 ggml_tensor * llama_model_qwen4exp::graph::build_layer_attn(
         llm_graph_input_attn_kv * inp,
-        const llama_kv_cache_context * mctx_idx,
+        const llama_memory_hybrid_idx_context * mctx_hyb,
         ggml_tensor *             cur,
         ggml_tensor *             inp_pos,
         int *                     sections,
@@ -604,9 +610,9 @@ ggml_tensor * llama_model_qwen4exp::graph::build_layer_attn(
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());
 
     // indexer reads the same block input as q/k/v; no cache or no ratio means dense
-    const bool qsa = mctx_idx != nullptr && hparams.dsv4_compress_ratios[il] > 0;
+    const bool qsa = mctx_hyb->get_idx() != nullptr && hparams.dsv4_compress_ratios[il] > 0;
 
-    ggml_tensor * top_k = qsa ? build_qsa_top_k(mctx_idx, cur, inp_pos, sections, il) : nullptr;
+    ggml_tensor * top_k = qsa ? build_qsa_top_k(mctx_hyb, cur, inp_pos, sections, il) : nullptr;
 
     // Order: joint QG projection, QG split, Q norm, KV projection, K norm, RoPE, attention
 

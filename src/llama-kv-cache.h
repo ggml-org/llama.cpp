@@ -216,15 +216,6 @@ public:
     void set_input_kq_mask   (ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const;
     void set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const;
 
-    // block-compressed sparse attention (qwen4exp QSA) over this cache's cells. Blocks
-    // cut the *position* line, not the cell array, so nothing assumes contiguous layout:
-    //   cell_blk  I32 [n_kv]           block each cell belongs to
-    //   blk_cells I32 [ratio*n_blocks] cells making up each block
-    //   blk_pos   I32 [4*n_blocks]     mrope position rows of each block's first token
-    //   bias      F32 [n_kv, n_tokens] -inf where invisible, large where always visible
-    void set_input_qsa(ggml_tensor * cell_blk, ggml_tensor * blk_cells, ggml_tensor * blk_pos,
-                       ggml_tensor * bias, const llama_ubatch * ubatch, uint32_t ratio) const;
-
     void set_input_k_rot(ggml_tensor * dst) const;
     void set_input_v_rot(ggml_tensor * dst) const;
 
@@ -375,9 +366,6 @@ public:
 
     uint32_t get_n_kv() const;
 
-    // streams in the current slot info; 1 for a unified cache
-    uint32_t get_n_stream() const;
-
     ggml_type type_k() const;
     ggml_type type_v() const;
 
@@ -409,9 +397,6 @@ public:
     void set_input_k_shift   (ggml_tensor * dst) const;
     void set_input_kq_mask   (ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const;
     void set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const;
-
-    void set_input_qsa(ggml_tensor * cell_blk, ggml_tensor * blk_cells, ggml_tensor * blk_pos,
-                       ggml_tensor * bias, const llama_ubatch * ubatch, uint32_t ratio) const;
 
     void set_input_k_rot(ggml_tensor * dst) const;
     void set_input_v_rot(ggml_tensor * dst) const;

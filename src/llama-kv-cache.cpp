@@ -1786,109 +1786,6 @@ void llama_kv_cache::set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch 
     }
 }
 
-void llama_kv_cache::set_input_qsa(
-        ggml_tensor * cell_blk,
-        ggml_tensor * blk_cells,
-        ggml_tensor * blk_pos,
-        ggml_tensor * bias,
-        const llama_ubatch * ubatch,
-        uint32_t ratio) const {
-    GGML_ASSERT(ratio > 0);
-
-    GGML_ASSERT(ggml_backend_buffer_is_host(cell_blk->buffer));
-
-    const int64_t n_kv     = cell_blk->ne[0];
-    const int64_t n_ns     = cell_blk->ne[1];        // streams in this ubatch
-    const int64_t n_blocks = blk_pos->ne[0]/(4*n_ns);
-    const int64_t n_tokens = ubatch->n_tokens;
-    const int64_t r        = ratio;
-
-    GGML_ASSERT(n_tokens % n_ns == 0);
-    const int64_t n_tps = n_tokens/n_ns;             // tokens per stream
-
-    int32_t * dst_cell_blk  = (int32_t *) cell_blk->data;
-    int32_t * dst_blk_cells = (int32_t *) blk_cells->data;
-    int32_t * dst_blk_pos   = (int32_t *) blk_pos->data;
-    float   * dst_bias      = (float   *) bias->data;
-
-    // block b covers [b*ratio, (b+1)*ratio), so its first token is at b*ratio. All three
-    // mrope sections carry it: exact for text, approximate for images. Positions repeat per stream.
-    for (int64_t sec = 0; sec < 4; ++sec) {
-        for (int64_t s = 0; s < n_ns; ++s) {
-            for (int64_t b = 0; b < n_blocks; ++b) {
-                dst_blk_pos[sec*(n_blocks*n_ns) + s*n_blocks + b] = (int32_t) (b*r);
-            }
-        }
-    }
-
-    // One pass per stream: cell j is a different token in each, so no mapping is shared.
-    // n_ns == 1 is the single-stream behaviour this replaced.
-    std::vector<int32_t> blk_of(n_kv);
-    std::vector<int32_t> filled(n_blocks);
-
-    for (int64_t s = 0; s < n_ns; ++s) {
-        // ubatch index s*n_tps belongs to this stream; ask which cells array it uses
-        const llama_seq_id seq_of_stream = ubatch->seq_id[s*n_tps][0];
-        const auto & cells = v_cells[seq_to_stream[seq_of_stream]];
-
-        int32_t * cur_cell_blk  = dst_cell_blk  + s*n_kv;
-        int32_t * cur_blk_cells = dst_blk_cells + s*(r*n_blocks);
-
-        // an incomplete block cannot be pooled: those tail cells are forced in by the bias
-        // below, so block 0 only keeps the gather in range. -1 = no usable block.
-        std::fill(blk_of.begin(),  blk_of.end(),  -1);
-        std::fill(filled.begin(),  filled.end(),   0);
-        std::fill(cur_blk_cells, cur_blk_cells + r*n_blocks, 0);
-
-        for (int64_t j = 0; j < n_kv; ++j) {
-            if (cells.is_empty(j)) {
-                continue;
-            }
-
-            const llama_pos p = cells.pos_get(j);
-            const int64_t   b = p/r;
-
-            if (b >= n_blocks) {
-                continue;
-            }
-
-            blk_of[j] = (int32_t) b;
-            cur_blk_cells[b*r + (p%r)] = (int32_t) j;
-            filled[b]++;
-        }
-
-        for (int64_t j = 0; j < n_kv; ++j) {
-            if (blk_of[j] >= 0 && filled[blk_of[j]] < r) {
-                blk_of[j] = -1;
-            }
-            cur_cell_blk[j] = blk_of[j] < 0 ? 0 : blk_of[j];
-        }
-
-        for (int64_t ii = 0; ii < n_tps; ++ii) {
-            const int64_t      i      = s*n_tps + ii;
-            const llama_seq_id seq_id = ubatch->seq_id[i][0];
-            const llama_pos    q      = ubatch->pos[i];
-
-            // the rest is an incomplete block, always attended to, which is what lands the
-            // selection on block boundaries like the reference
-            const llama_pos tail_start = (q + 1)/r*r;
-
-            float * cur_bias = dst_bias + i*n_kv;
-
-            for (int64_t j = 0; j < n_kv; ++j) {
-                float v = -INFINITY;
-
-                if (!cells.is_empty(j) && cells.seq_has(j, seq_id) && cells.pos_get(j) <= q) {
-                    // finite, so it can never meet a -inf and produce a nan
-                    v = cells.pos_get(j) >= tail_start ? 1e9f : (blk_of[j] < 0 ? -INFINITY : 0.0f);
-                }
-
-                cur_bias[j] = v;
-            }
-        }
-    }
-}
-
 void llama_kv_cache::set_input_k_rot(ggml_tensor * dst) const {
     GGML_ASSERT(ggml_backend_buffer_is_host(dst->buffer));
 
@@ -2686,11 +2583,6 @@ uint32_t llama_kv_cache_context::get_n_kv() const {
     return n_kv;
 }
 
-uint32_t llama_kv_cache_context::get_n_stream() const {
-    // streams in the current slot info, matching get_k/get_v's `ns`. 1 if unified.
-    return sinfos[i_cur].s1 - sinfos[i_cur].s0 + 1;
-}
-
 ggml_type llama_kv_cache_context::type_k() const {
     return kv->type_k();
 }
@@ -2749,16 +2641,6 @@ void llama_kv_cache_context::set_input_kq_mask(ggml_tensor * dst, const llama_ub
 
 void llama_kv_cache_context::set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const {
     kv->set_input_pos_bucket(dst, ubatch);
-}
-
-void llama_kv_cache_context::set_input_qsa(
-        ggml_tensor * cell_blk,
-        ggml_tensor * blk_cells,
-        ggml_tensor * blk_pos,
-        ggml_tensor * bias,
-        const llama_ubatch * ubatch,
-        uint32_t ratio) const {
-    kv->set_input_qsa(cell_blk, blk_cells, blk_pos, bias, ubatch, ratio);
 }
 
 void llama_kv_cache_context::set_input_k_rot(ggml_tensor * dst) const {
