@@ -1103,17 +1103,22 @@ static void handle_media(
         // try to decode base64 image
         std::vector<std::string> parts = string_split<std::string>(url, /*separator*/ ',');
         if (parts.size() != 2) {
-            throw std::runtime_error("Invalid uri-encoded base64 value");
-        } else if (!string_starts_with(parts[0], "data:image/")) {
-            throw std::runtime_error("Invalid uri format: " + parts[0]);
+            throw std::invalid_argument("Invalid uri-encoded base64 value");
+        } else if (!string_starts_with(parts[0], "data:image/")
+                && !string_starts_with(parts[0], "data:video/")
+                && !string_starts_with(parts[0], "data:audio/")) {
+            throw std::invalid_argument("Invalid uri format: " + parts[0]);
         } else if (!string_ends_with(parts[0], "base64")) {
-            throw std::runtime_error("uri must be base64 encoded");
+            throw std::invalid_argument("uri must be base64 encoded");
         } else {
             auto base64_data = parts[1];
             auto decoded_data = base64_decode(base64_data);
             out_files.push_back(decoded_data);
         }
 
+    } else if (string_starts_with(url, "data:")) {
+        // data: URLs are not valid raw base64 - fail with an actionable error
+        throw std::invalid_argument("Invalid uri format: " + url.substr(0, url.find(',')));
     } else {
         // try as raw base64 string
         auto decoded_data = base64_decode(url);
@@ -1229,7 +1234,7 @@ json oaicompat_chat_params_parse(
                 json input_audio = json_value(p, "input_audio", json::object());
                 std::string url  = json_value(input_audio, "data",
                                         json_value(input_audio, "url", std::string()));
-                handle_media(out_files, url, opt.media_path, false);
+                handle_media(out_files, url, opt.media_path, true);
 
                 p["type"] = "media_marker";
                 p["text"] = get_media_marker();
@@ -1243,7 +1248,7 @@ json oaicompat_chat_params_parse(
                 json input_video = json_value(p, "input_video", json::object());
                 std::string url  = json_value(input_video, "data",
                                         json_value(input_video, "url", std::string()));
-                handle_media(out_files, url, opt.media_path, false);
+                handle_media(out_files, url, opt.media_path, true);
 
                 p["type"] = "media_marker";
                 p["text"] = get_media_marker();
