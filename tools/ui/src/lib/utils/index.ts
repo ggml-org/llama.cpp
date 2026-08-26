@@ -27,6 +27,18 @@ export {
 	resolvePdfParseModeFromExtra,
 	type PdfParseMode
 } from './pdf-parse-mode';
+export {
+	canScrollInDirection,
+	isCaretOnFirstLine,
+	isCaretOnLastLine,
+	parsePromptHistory,
+	pushPromptHistory,
+	recallNext,
+	recallPrevious,
+	swipeDirection,
+	type PromptHistoryCursor,
+	type PromptHistorySwipe
+} from './prompt-history';
 
 // Textarea utilities
 export { default as autoResizeTextarea } from './autoresize-textarea';

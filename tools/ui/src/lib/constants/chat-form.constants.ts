@@ -6,3 +6,8 @@ export const PROMPT_CONTENT_SEPARATOR = '\n\n';
 export const CLIPBOARD_CONTENT_QUOTE_PREFIX = '"';
 export const PROMPT_TRIGGER_PREFIX = '/';
 export const NEW_CHAT_DRAFT_KEY = '__new_chat__';
+
+/** Sent prompts kept for ArrowUp / swipe recall. */
+export const PROMPT_HISTORY_MAX_ENTRIES = 100;
+/** Minimum vertical pointer travel (px) to treat a gesture as history swipe. */
+export const PROMPT_HISTORY_SWIPE_MIN_PX = 48;

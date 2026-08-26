@@ -8,6 +8,8 @@ import {
 import { describe, expect, it } from 'vitest';
 
 const pngDataUrl = 'data:image/png;base64,iVBORw0KGgo=';
+const pdfMime = 'application/pdf';
+const pdfDataUrl = `data:${pdfMime};base64,JVBERi0=`;
 
 describe('injectChatFilesIntoToolArgs', () => {
 	it('injects __files__, __file__, __image__, image, and file_id for a PNG', () => {
@@ -39,7 +41,8 @@ describe('injectChatFilesIntoToolArgs', () => {
 		expect(out.__file__).toMatchObject({
 			mimeType: 'application/pdf',
 			name: 'doc.pdf',
-			type: 'file'
+			type: 'file',
+			url: pdfDataUrl
 		});
 		expect(out.task).toBe('v1.5');
 	});
@@ -109,5 +112,6 @@ describe('extrasToChatFiles', () => {
 		]);
 
 		expect(files.map((f) => f.type)).toEqual(['image', 'file']);
+		expect(files[1].url).toBe(pdfDataUrl);
 	});
 });

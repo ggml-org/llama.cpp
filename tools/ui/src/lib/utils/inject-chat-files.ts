@@ -49,7 +49,8 @@ export function extrasToChatFiles(extras: DatabaseMessageExtra[]): ChatFileInjec
 
 		if (extra.type === AttachmentType.PDF && extra.base64Data) {
 			const data = extra.base64Data;
-			const url = `data:application/pdf;base64,${data}`;
+			const mime = 'application/pdf';
+			const url = `data:${mime};base64,${data}`;
 
 			files.push({
 				base64: url,

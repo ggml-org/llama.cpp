@@ -25,6 +25,7 @@
 		SpecialFileType
 	} from '$lib/enums';
 	import { useChatFormPickers } from '$lib/hooks/use-chat-form-pickers.svelte';
+	import { usePromptHistory } from '$lib/hooks/use-prompt-history.svelte';
 	import {
 		chatStore,
 		conversationsStore,
@@ -42,15 +43,20 @@
 		PromptMessage
 	} from '$lib/types';
 	import {
+		autoResizeTextarea,
 		buildMentionInsertion,
+		canScrollInDirection,
 		containsCodeSpan,
 		containsFileMentionLink,
 		findCommandToken,
 		findMentionToken,
 		getConversationModel,
+		isCaretOnFirstLine,
+		isCaretOnLastLine,
 		isIMEComposing,
 		isOffsetInCodeBlock,
 		parseClipboardContent,
+		swipeDirection,
 		uuid
 	} from '$lib/utils';
 	import {
@@ -70,6 +76,7 @@
 		// UI State
 		class?: string;
 		disabled?: boolean;
+		enablePromptHistory?: boolean;
 		isLoading?: boolean;
 		placeholder?: string;
 		showMcpPromptButton?: boolean;
@@ -91,6 +98,7 @@
 		attachments = [],
 		class: className = '',
 		disabled = false,
+		enablePromptHistory = false,
 		isLoading = false,
 		onAttachmentRemove,
 		onFilesAdd,
@@ -161,6 +169,11 @@
 			onValueChange?.(v);
 		}
 	});
+
+	const promptHistory = usePromptHistory();
+	let swipeStartX = 0;
+	let swipeStartY = 0;
+	let swipeTracking = false;
 
 	async function handleWorkingDirectoryChange(newDir: string | null) {
 		// Committing a directory consumes the `/cwd` token; the chip's
@@ -281,10 +294,163 @@
 		}
 	}
 
+	function isPromptHistoryPickerOpen(): boolean {
+		return (
+			pickers.isCommandPickerOpen ||
+			pickers.isMentionPickerOpen ||
+			pickers.isPromptPickerOpen ||
+			pickers.isWorkingDirectoryPickerOpen
+		);
+	}
+
+	function applyPromptHistoryValue(next: string) {
+		value = next;
+		onValueChange?.(next);
+
+		queueMicrotask(() => {
+			inputRef?.focus();
+			inputRef?.setCaretOffset(next.length);
+
+			const el = inputRef?.getElement();
+
+			if (el instanceof HTMLTextAreaElement) {
+				autoResizeTextarea(el);
+			}
+		});
+	}
+
+	function recallPromptHistory(direction: 'previous' | 'next'): boolean {
+		if (!enablePromptHistory || disabled || isPromptHistoryPickerOpen()) {
+			return false;
+		}
+
+		const recalled =
+			direction === 'previous' ? promptHistory.previous(value) : promptHistory.next(value);
+
+		if (recalled === null) {
+			return false;
+		}
+
+		applyPromptHistoryValue(recalled);
+
+		return true;
+	}
+
+	function handlePromptHistoryKeydown(event: KeyboardEvent): boolean {
+		if (!enablePromptHistory || isIMEComposing(event)) {
+			return false;
+		}
+
+		if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) {
+			return false;
+		}
+
+		const caret = inputRef?.getCaretOffset() ?? (value ?? '').length;
+
+		if (event.key === KeyboardKey.ARROW_UP) {
+			if (!isCaretOnFirstLine(value ?? '', caret)) {
+				return false;
+			}
+
+			if (!recallPromptHistory('previous')) {
+				return false;
+			}
+
+			event.preventDefault();
+
+			return true;
+		}
+
+		if (event.key === KeyboardKey.ARROW_DOWN) {
+			if (!isCaretOnLastLine(value ?? '', caret)) {
+				return false;
+			}
+
+			if (!recallPromptHistory('next')) {
+				return false;
+			}
+
+			event.preventDefault();
+
+			return true;
+		}
+
+		return false;
+	}
+
+	function handlePromptHistoryTouchStart(event: TouchEvent) {
+		if (!enablePromptHistory || disabled || event.touches.length !== 1) {
+			swipeTracking = false;
+
+			return;
+		}
+
+		swipeTracking = true;
+		swipeStartX = event.touches[0].clientX;
+		swipeStartY = event.touches[0].clientY;
+	}
+
+	function handlePromptHistoryTouchEnd(event: TouchEvent) {
+		if (!swipeTracking || event.changedTouches.length === 0) {
+			swipeTracking = false;
+
+			return;
+		}
+
+		swipeTracking = false;
+
+		const touch = event.changedTouches[0];
+		const direction = swipeDirection(touch.clientX - swipeStartX, touch.clientY - swipeStartY);
+
+		if (!direction) {
+			return;
+		}
+
+		const el = inputRef?.getElement();
+
+		if (el && canScrollInDirection(el, direction)) {
+			return;
+		}
+
+		const caret = inputRef?.getCaretOffset() ?? (value ?? '').length;
+
+		if (direction === 'up') {
+			if (!isCaretOnFirstLine(value ?? '', caret)) {
+				return;
+			}
+
+			if (recallPromptHistory('previous')) {
+				event.preventDefault();
+			}
+
+			return;
+		}
+
+		if (!isCaretOnLastLine(value ?? '', caret)) {
+			return;
+		}
+
+		if (recallPromptHistory('next')) {
+			event.preventDefault();
+		}
+	}
+
+	function submitForm() {
+		if (enablePromptHistory) {
+			promptHistory.record(value);
+		}
+
+		onSubmit?.();
+	}
+
 	function handleKeydown(event: KeyboardEvent) {
 		// Pickers consume navigation/escape keys first; when consumed, skip
 		// the enter-to-submit logic below.
 		if (pickers.handleKeydown(event)) {
+			return;
+		}
+
+		if (handlePromptHistoryKeydown(event)) {
 			return;
 		}
 
@@ -306,7 +472,7 @@
 
 				if (!canSubmit || disabled || hasLoadingAttachments) return;
 
-				onSubmit?.();
+				submitForm();
 			}
 		}
 	}
@@ -532,7 +698,7 @@
 
 		if (!canSubmit || disabled || hasLoadingAttachments) return;
 
-		onSubmit?.();
+		submitForm();
 	}}
 >
 	<ChatFormPickers
@@ -568,6 +734,8 @@
 			? 'cursor-not-allowed opacity-60'
 			: ''}"
 		data-slot="input-area"
+		ontouchend={handlePromptHistoryTouchEnd}
+		ontouchstart={handlePromptHistoryTouchStart}
 	>
 		<ChatAttachmentsList
 			{attachments}

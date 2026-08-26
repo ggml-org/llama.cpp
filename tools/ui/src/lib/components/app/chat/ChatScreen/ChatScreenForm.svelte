@@ -154,6 +154,7 @@
 		bind:value={message}
 		bind:uploadedFiles
 		{disabled}
+		enablePromptHistory
 		{isLoading}
 		showMcpPromptButton
 		onFilesAdd={handleFilesAdd}
