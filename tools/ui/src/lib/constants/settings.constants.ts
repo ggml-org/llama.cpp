@@ -171,7 +171,7 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 			},
 			{
 				defaultValue: false,
-				help: 'How to prepare attached PDFs. No parse keeps the original file for tools such as thaiocr. Parse as text extracts page text into the chat. Parse as image renders pages as images for vision models.',
+				help: 'How to prepare attached PDFs. No parse keeps the original file for tools such as OCR or any that required input file. Parse as text extracts page text into the chat. Parse as image renders pages as images for vision models.',
 				key: SETTINGS_KEYS.PDF_PARSE_NONE,
 				label: 'PDF handling',
 				radioOptions: [
