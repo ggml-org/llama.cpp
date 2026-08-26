@@ -28,16 +28,9 @@ jobs:
         run: npm run build
         working-directory: tools/ui
 
-      - name: Generate checksums
-        run: |
-          cd tools/ui/dist
-          for f in *; do
-            sha256sum "$f" | awk '{print $1, $2}' >> checksums.txt
-          done
-
       - name: Upload built UI
         uses: actions/upload-artifact@v6
         with:
-          name: ui-build
+          name: llama-ui.zip
           path: tools/ui/dist/
           retention-days: 1

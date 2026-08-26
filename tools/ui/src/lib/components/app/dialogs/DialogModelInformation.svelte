@@ -1,11 +1,10 @@
 <script lang="ts">
+	import { ActionIconCopyToClipboard, BadgesModality } from '$lib/components/app';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import * as Table from '$lib/components/ui/table';
-	import { BadgesModality, ActionIconCopyToClipboard } from '$lib/components/app';
-	import { serverStore } from '$lib/stores/server.svelte';
-	import { modelsStore, modelOptions, modelsLoading } from '$lib/stores/models.svelte';
-	import { formatFileSize, formatParameters, formatNumber } from '$lib/utils';
+	import { modelsStore, serverStore } from '$lib/stores';
 	import type { ApiLlamaCppServerProps } from '$lib/types';
+	import { formatFileSize, formatNumber, formatParameters } from '$lib/utils';
 
 	interface Props {
 		open?: boolean;
@@ -14,7 +13,7 @@
 		modelId?: string | null;
 	}
 
-	let { open = $bindable(), onOpenChange, modelId = null }: Props = $props();
+	let { modelId = null, onOpenChange, open = $bindable() }: Props = $props();
 
 	let isRouter = $derived(serverStore.isRouterMode);
 
@@ -26,8 +25,8 @@
 	let serverProps = $derived(isRouter && modelId ? routerModelProps : serverStore.props);
 
 	let modelName = $derived(isRouter && modelId ? modelId : modelsStore.singleModelName);
-	let models = $derived(modelOptions());
-	let isLoadingModels = $derived(modelsLoading());
+	let models = $derived(modelsStore.models);
+	let isLoadingModels = $derived(modelsStore.loading);
 
 	// in router mode, find the model option matching modelId
 	// in single mode, use the first model as before
@@ -35,13 +34,15 @@
 		if (isRouter && modelId) {
 			return models.find((m) => m.model === modelId) ?? null;
 		}
+
 		return models[0] ?? null;
 	});
 
 	// Get modalities from modelStore using the model ID from the first model
 	let modalities = $derived.by(() => {
 		if (!firstModel?.id) return [];
-		return modelsStore.getModelModalitiesArray(firstModel.id);
+
+		return modelsStore.props.getModelModalitiesArray(firstModel.id);
 	});
 
 	// Ensure models are fetched when dialog opens
@@ -55,7 +56,7 @@
 	$effect(() => {
 		if (open && isRouter && modelId) {
 			isLoadingRouterProps = true;
-			modelsStore
+			modelsStore.props
 				.fetchModelProps(modelId)
 				.then((props) => {
 					routerModelProps = props;
@@ -67,6 +68,7 @@
 					isLoadingRouterProps = false;
 				});
 		}
+
 		if (!open) {
 			routerModelProps = null;
 		}
@@ -106,21 +108,22 @@
 								<Table.Head>
 									<div class="inline-flex items-center gap-2">
 										<span
-											class="resizable-text-container min-w-0 flex-1 truncate"
 											style:--threshold="12rem"
+											class="resizable-text-container min-w-0 flex-1 truncate"
 										>
 											{modelName}
 										</span>
 
 										<ActionIconCopyToClipboard
-											text={modelName || ''}
-											canCopy={!!modelName}
 											ariaLabel="Copy model name to clipboard"
+											canCopy={!!modelName}
+											text={modelName || ''}
 										/>
 									</div>
 								</Table.Head>
 							</Table.Row>
 						</Table.Header>
+
 						<Table.Body>
 							<!-- Model Path -->
 							<Table.Row>
@@ -130,15 +133,15 @@
 									class="inline-flex h-10 items-center gap-2 align-middle font-mono text-xs"
 								>
 									<span
-										class="resizable-text-container min-w-0 flex-1 truncate"
 										style:--threshold="14rem"
+										class="resizable-text-container min-w-0 flex-1 truncate"
 									>
 										{serverProps.model_path}
 									</span>
 
 									<ActionIconCopyToClipboard
-										text={serverProps.model_path}
 										ariaLabel="Copy model path to clipboard"
+										text={serverProps.model_path}
 									/>
 								</Table.Cell>
 							</Table.Row>
@@ -211,6 +214,7 @@
 							{#if modelMeta?.vocab_type}
 								<Table.Row>
 									<Table.Cell class="align-middle font-medium">Vocabulary Type</Table.Cell>
+
 									<Table.Cell class="align-middle capitalize">{modelMeta.vocab_type}</Table.Cell>
 								</Table.Row>
 							{/if}

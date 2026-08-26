@@ -1,7 +1,8 @@
 <script lang="ts">
-	import { Copy } from '@lucide/svelte';
-	import { copyToClipboard } from '$lib/utils';
 	import ActionIcon from './ActionIcon.svelte';
+	import { Copy } from '@lucide/svelte';
+	import { ICON_CLASS_DEFAULT } from '$lib/constants';
+	import { copyToClipboard } from '$lib/utils';
 
 	export let ariaLabel: string = 'Copy to clipboard';
 	export let canCopy: boolean = true;
@@ -9,9 +10,9 @@
 </script>
 
 <ActionIcon
-	icon={Copy}
-	tooltip={ariaLabel}
-	iconSize="h-4 w-4"
 	disabled={!canCopy}
+	icon={Copy}
+	iconSize={ICON_CLASS_DEFAULT}
 	onclick={() => canCopy && copyToClipboard(text)}
+	tooltip={ariaLabel}
 />

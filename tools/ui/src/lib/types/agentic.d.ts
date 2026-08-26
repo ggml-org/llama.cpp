@@ -1,13 +1,22 @@
-import type { MessageRole } from '$lib/enums';
-import { ToolCallType } from '$lib/enums';
 import type {
 	ApiChatCompletionRequest,
 	ApiChatCompletionToolCall,
 	ApiChatMessageContentPart,
 	ApiChatMessageData
 } from './api';
-import type { ChatMessageTimings, ChatMessagePromptProgress } from './chat';
-import type { DatabaseMessage, DatabaseMessageExtra, McpServerOverride } from './database';
+import type {
+	ChatMessageAgenticTimings,
+	ChatMessagePromptProgress,
+	ChatMessageTimings
+} from './chat';
+import type {
+	DatabaseMessage,
+	DatabaseMessageExtra,
+	DatabaseMessageExtraAudioFile,
+	DatabaseMessageExtraImageFile
+} from './database';
+import type { MessageRole } from '$lib/enums';
+import { AgenticSectionType, ContinueIntentKind, ToolCallType } from '$lib/enums';
 
 /**
  * Agentic orchestration configuration.
@@ -15,7 +24,6 @@ import type { DatabaseMessage, DatabaseMessageExtra, McpServerOverride } from '.
 export interface AgenticConfig {
 	enabled: boolean;
 	maxTurns: number;
-	maxToolPreviewLines: number;
 }
 
 /**
@@ -70,6 +78,17 @@ export interface AgenticSession {
 	lastError: Error | null;
 	streamingToolCall: { name: string; arguments: string } | null;
 	pendingPermissionRequest: { toolName: string; serverLabel: string } | null;
+	/** ID of the tool call whose output is currently being streamed back
+	 *  (e.g. exec_shell_command outputting to /tools?stream=true). Lets the
+	 *  matching tool renderer flip into live-update mode while chunks
+	 *  arrive; cleared when the tool's terminal event lands. */
+	executingToolCallId: string | null;
+	/** Live LLM token totals of the running flow: completed turns plus the
+	 *  in-flight turn's streamed counts; null when idle. */
+	liveLlm: ChatMessageAgenticTimings['llm'] | null;
+	/** ID of the flow's first assistant message (the one the UI groups the
+	 *  whole run under); null when idle. */
+	flowRootMessageId: string | null;
 }
 
 /**
@@ -105,8 +124,18 @@ export interface AgenticFlowCallbacks {
 	createToolResultMessage?: (
 		toolCallId: string,
 		content: string,
-		extras?: DatabaseMessageExtra[]
+		extras?: DatabaseMessageExtra[],
+		toolCwd?: string
 	) => Promise<DatabaseMessage>;
+	/** Update an already-created tool result message. Used while a streaming
+	 *  tool (e.g. exec_shell_command) accumulates output chunks before its
+	 *  terminal event; the same message is rewritten in place so the chat UI
+	 *  sees the partial output live. */
+	updateToolResultMessage?: (
+		messageId: string,
+		content: string,
+		extras?: DatabaseMessageExtra[]
+	) => Promise<void>;
 	/** Create a new assistant message for the next agentic turn */
 	createAssistantMessage?: () => Promise<DatabaseMessage>;
 	/** Entire agentic flow is complete */
@@ -135,6 +164,8 @@ export interface AgenticFlowOptions {
  */
 export interface AgenticFlowParams {
 	conversationId: string;
+	/** ID of the flow's first assistant message, used to keep its stats live */
+	flowRootMessageId?: string;
 	messages: (ApiChatMessageData | (DatabaseMessage & { extra?: DatabaseMessageExtra[] }))[];
 	options?: AgenticFlowOptions;
 	callbacks: AgenticFlowCallbacks;
@@ -157,3 +188,55 @@ export interface SteeringMessage {
 	content: string;
 	extras?: DatabaseMessageExtra[];
 }
+
+/**
+ * Represents a parsed section of agentic content for display
+ */
+export interface AgenticSection {
+	type: AgenticSectionType;
+	content: string;
+	toolName?: string;
+	toolArgs?: string;
+	toolResult?: string;
+	toolResultExtras?: DatabaseMessageExtra[];
+	/** Working directory the tool call ran with (from the tool result
+	 *  message), shown by the exec_shell_command renderer. */
+	toolCwd?: string;
+	/** ID of the model-side tool call (matches tool_calls[i].id). Lets
+	 *  downstream consumers correlate a section with the agentic loop's
+	 *  currently-executing tool, e.g. to drive live-streaming UI state
+	 *  by matching against agenticStore.getExecutingToolCallId. */
+	toolCallId?: string;
+	wasInterrupted?: boolean;
+}
+
+/**
+ * Represents a tool result line that may reference an image attachment
+ */
+export type ToolResultLine = {
+	text: string;
+	media?: DatabaseMessageExtraImageFile | DatabaseMessageExtraAudioFile;
+};
+
+/**
+ * Classification of how a Continue click on an assistant message should resume
+ * generation. The caller dispatches the resume path based on this value.
+ *
+ *   append_text  -> the target is a plain text turn, resume with
+ *                   continue_final_message and rehydrate the persisted
+ *                   tool_calls and attachments through the regular DB to API
+ *                   message converter.
+ *   rerun_turn   -> the target carries tool_calls that were never resolved by
+ *                   tool result messages. The agentic stream was cut mid turn,
+ *                   so we drop the target and rerun the loop from the previous
+ *                   history. truncateAfter is the last kept index, inclusive.
+ *   next_turn    -> the target's tool_calls were already resolved by trailing
+ *                   tool results. Hand the history up to and including the
+ *                   last consecutive tool result back to the agentic loop so it
+ *                   starts the next turn naturally. truncateAfter points at
+ *                   that last tool result.
+ */
+export type ContinueIntent =
+	| { kind: ContinueIntentKind.APPEND_TEXT }
+	| { kind: ContinueIntentKind.RERUN_TURN; truncateAfter: number }
+	| { kind: ContinueIntentKind.NEXT_TURN; truncateAfter: number };

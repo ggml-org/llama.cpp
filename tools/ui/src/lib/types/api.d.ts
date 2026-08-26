@@ -1,5 +1,11 @@
-import type { ContentPartType, FileTypeAudio, ServerModelStatus, ServerRole } from '$lib/enums';
 import type { ChatMessagePromptProgress, ChatRole } from './chat';
+import type {
+	ContentPartType,
+	FileTypeAudio,
+	ServerModelsSseEventType,
+	ServerModelStatus,
+	ServerRole
+} from '$lib/enums';
 
 export type AudioInputFormat = FileTypeAudio.WAV | FileTypeAudio.MP3;
 
@@ -92,8 +98,59 @@ export interface ApiModelDataEntry {
 	aliases?: string[];
 	/** Informational tags for this model */
 	tags?: string[];
+	/** Modality capabilities, reported by the router for every model regardless of load state */
+	architecture?: ApiModelArchitecture;
 	/** Legacy meta field (may be present in older responses) */
 	meta?: Record<string, unknown> | null;
+}
+
+/**
+ * Modality capabilities of a model, as advertised by the ROUTER /models endpoint.
+ * Read from the model manifest, so it is available before the model is loaded.
+ */
+export interface ApiModelArchitecture {
+	/** Accepted input modalities, always contains "text" */
+	input_modalities: string[];
+}
+
+/**
+ * Load stage reported by the /models/sse feed, in load order.
+ */
+export type ApiModelLoadStage = 'text_model' | 'spec_model' | 'mmproj_model';
+
+/**
+ * Load progress snapshot: the full ordered stage plan, the active stage,
+ * and its fractional value (0.0 -> 1.0).
+ */
+export interface ApiModelsSseProgress {
+	stages: ApiModelLoadStage[];
+	current: ApiModelLoadStage;
+	value: number;
+}
+
+/**
+ * Status payload carried by a /models/sse envelope.
+ * exit_code appears on unload.
+ */
+export interface ApiModelsSseData {
+	status: ServerModelStatus;
+	progress?: ApiModelsSseProgress;
+	exit_code?: number;
+}
+
+/**
+ * Event kind multiplexed on the /models/sse feed.
+ * Only the status_* events carry a status payload, models_reload signals a
+ * full list refresh, model_remove drops a row, download_* drive download UI.
+ */
+/**
+ * One /models/sse record. event discriminates the kind, model names the
+ * target instance, data carries the status payload when present.
+ */
+export interface ApiModelsSseEvent {
+	model: string;
+	event: ServerModelsSseEventType;
+	data: ApiModelsSseData;
 }
 
 export interface ApiModelDetails {
@@ -219,6 +276,7 @@ export interface ApiChatCompletionRequest {
 	stream?: boolean;
 	model?: string;
 	return_progress?: boolean;
+	sse_ping_interval?: number;
 	tools?: ApiChatCompletionTool[];
 	// Reasoning parameters
 	reasoning_format?: string;
@@ -465,4 +523,19 @@ export interface ApiRouterModelsUnloadRequest {
 export interface ApiRouterModelsUnloadResponse {
 	success: boolean;
 	error?: string;
+}
+
+/**
+ * Entry returned by POST /v1/streams/lookup. The client passes the conv ids it owns in the body
+ * and the server returns one entry per matching live or recently completed background streaming
+ * session, keyed by conversation_id. The WebUI uses this at mount and on visibilitychange to
+ * populate sidebar spinners and to reattach to an ongoing inference for the active conversation.
+ * The server never lists ids the client did not ask about, so foreign random UUIDs stay private.
+ */
+export interface ApiStreamSession {
+	conversation_id: string;
+	is_done: boolean;
+	total_bytes: number;
+	started_at: number;
+	completed_at: number;
 }

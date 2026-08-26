@@ -9,6 +9,7 @@ from .base import ModelBase, TextModel, gguf, logger
 
 
 @ModelBase.register("DbrxForCausalLM")
+@ModelBase.example("alpindale/dbrx-instruct")
 class DbrxModel(TextModel):
     model_arch = gguf.MODEL_ARCH.DBRX
 

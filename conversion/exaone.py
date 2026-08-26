@@ -15,6 +15,7 @@ from .qwenvl import Qwen2VLVisionModel
 
 
 @ModelBase.register("ExaoneForCausalLM")
+@ModelBase.example("LGAI-EXAONE/EXAONE-3.5-2.4B-Instruct")
 class ExaoneModel(TextModel):
     model_arch = gguf.MODEL_ARCH.EXAONE
 
@@ -24,7 +25,7 @@ class ExaoneModel(TextModel):
 
         assert (hparams["activation_function"] == "silu")
 
-        rotary_factor = self.find_hparam(["partial_rotary_factor", "rope_pct"], optional=True)
+        rotary_factor = self.rope_parameters.get("partial_rotary_factor")
         rotary_factor = rotary_factor if rotary_factor is not None else 1.0
         self.gguf_writer.add_rope_dimension_count(int(rotary_factor * (hparams["hidden_size"] // hparams["num_attention_heads"])))
 
@@ -39,7 +40,7 @@ class ExaoneModel(TextModel):
                 factor = rope_params.get("factor", 8.0)
                 low_freq_factor = rope_params.get("low_freq_factor", 1.0)
                 high_freq_factor = rope_params.get("high_freq_factor", 4.0)
-                old_context_len = self.hparams.get("original_max_position_embeddings", 8192)
+                old_context_len = rope_params.get("original_max_position_embeddings", 8192)
 
                 low_freq_wavelen = old_context_len / low_freq_factor
                 high_freq_wavelen = old_context_len / high_freq_factor
@@ -60,6 +61,7 @@ class ExaoneModel(TextModel):
 
 
 @ModelBase.register("Exaone4ForCausalLM")
+@ModelBase.example("LGAI-EXAONE/EXAONE-4.0-32B")
 class Exaone4Model(TextModel):
     model_arch = gguf.MODEL_ARCH.EXAONE4
 
@@ -104,7 +106,7 @@ class Exaone4Model(TextModel):
                 factor = rope_params.get("factor", 16.0)
                 low_freq_factor = rope_params.get("low_freq_factor", 1.0)
                 high_freq_factor = rope_params.get("high_freq_factor", 4.0)
-                old_context_len = self.hparams.get("original_max_position_embeddings", 8192)
+                old_context_len = rope_params.get("original_max_position_embeddings", 8192)
 
                 low_freq_wavelen = old_context_len / low_freq_factor
                 high_freq_wavelen = old_context_len / high_freq_factor
@@ -123,7 +125,10 @@ class Exaone4Model(TextModel):
                 yield (self.format_tensor_name(gguf.MODEL_TENSOR.ROPE_FREQS), torch.tensor(rope_factors, dtype=torch.float32))
 
 
-@ModelBase.register("ExaoneMoEForCausalLM")
+# note: transformers >= 5.1 renamed the class to "ExaoneMoeForCausalLM" (lowercase 'e'),
+#       so accept both spellings - LG AI have updated the configs of already-released models
+@ModelBase.register("ExaoneMoEForCausalLM", "ExaoneMoeForCausalLM")
+@ModelBase.example("LGAI-EXAONE/K-EXAONE-236B-A23B")
 class ExaoneMoEModel(Exaone4Model):
     model_arch = gguf.MODEL_ARCH.EXAONE_MOE
 
@@ -212,6 +217,7 @@ class ExaoneMoEModel(Exaone4Model):
 
 
 @ModelBase.register("Exaone4_5_ForConditionalGeneration")
+@ModelBase.example("LGAI-EXAONE/EXAONE-4.5-33B")
 class Exaone4_5_TextModel(Exaone4Model):
     """Text tower of EXAONE 4.5; Tensors match EXAONE4"""
 
@@ -265,6 +271,7 @@ class Exaone4_5_TextModel(Exaone4Model):
 
 
 @ModelBase.register("Exaone4_5_ForConditionalGeneration")
+@ModelBase.example("LGAI-EXAONE/EXAONE-4.5-33B")
 class Exaone4_5VisionModel(Qwen2VLVisionModel):
     """Vision tower for EXAONE 4.5; Qwen2-VL-style ViT (GQA) + patch merger"""
 

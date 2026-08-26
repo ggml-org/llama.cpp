@@ -1,8 +1,10 @@
 // See https://svelte.dev/docs/kit/types#app.d.ts
 // for information about these interfaces
 
+import 'vite-plugin-pwa/pwa-assets';
+import 'vite-plugin-pwa/svelte';
+import { ModelModality, ServerModelStatus, ServerRole } from '$lib/enums';
 // Import chat types from dedicated module
-
 import type {
 	// API types
 	ApiChatCompletionRequest,
@@ -10,53 +12,56 @@ import type {
 	ApiChatCompletionStreamChunk,
 	ApiChatCompletionToolCall,
 	ApiChatCompletionToolCallDelta,
-	ApiChatMessageData,
 	ApiChatMessageContentPart,
+	ApiChatMessageData,
 	ApiContextSizeError,
 	ApiErrorResponse,
 	ApiLlamaCppServerProps,
 	ApiModelDataEntry,
 	ApiModelListResponse,
+	ApiModelLoadStage,
+	ApiModelsSseData,
+	ApiModelsSseEvent,
+	ApiModelsSseProgress,
 	ApiProcessingState,
 	ApiRouterModelMeta,
+	ApiRouterModelsListResponse,
 	ApiRouterModelsLoadRequest,
 	ApiRouterModelsLoadResponse,
 	ApiRouterModelsStatusRequest,
 	ApiRouterModelsStatusResponse,
-	ApiRouterModelsListResponse,
 	ApiRouterModelsUnloadRequest,
 	ApiRouterModelsUnloadResponse,
-	// Chat types
 	ChatAttachmentDisplayItem,
+	// Chat types
+	ChatMessagePromptProgress,
+	ChatMessageSiblingInfo,
+	ChatMessageTimings,
 	ChatMessageType,
 	ChatRole,
 	ChatUploadedFile,
-	ChatMessageSiblingInfo,
-	ChatMessagePromptProgress,
-	ChatMessageTimings,
 	// Database types
 	DatabaseConversation,
 	DatabaseMessage,
 	DatabaseMessageExtra,
 	DatabaseMessageExtraAudioFile,
-	DatabaseMessageExtraVideoFile,
 	DatabaseMessageExtraImageFile,
-	DatabaseMessageExtraTextFile,
-	DatabaseMessageExtraPdfFile,
 	DatabaseMessageExtraLegacyContext,
+	DatabaseMessageExtraPdfFile,
+	DatabaseMessageExtraTextFile,
+	DatabaseMessageExtraVideoFile,
 	ExportedConversation,
 	ExportedConversations,
+	ModelLoadProgress,
 	// Model types
 	ModelModalities,
 	ModelOption,
 	// Settings types
 	SettingsChatServiceOptions,
+	SettingsConfigType,
 	SettingsConfigValue,
-	SettingsFieldConfig,
-	SettingsConfigType
+	SettingsFieldConfig
 } from '$lib/types';
-
-import { ServerRole, ServerModelStatus, ModelModality } from '$lib/enums';
 
 declare global {
 	// namespace App {
@@ -80,6 +85,10 @@ declare global {
 		ApiErrorResponse,
 		ApiLlamaCppServerProps,
 		ApiModelDataEntry,
+		ApiModelLoadStage,
+		ApiModelsSseProgress,
+		ApiModelsSseData,
+		ApiModelsSseEvent,
 		ApiModelListResponse,
 		ApiProcessingState,
 		ApiRouterModelMeta,
@@ -117,6 +126,7 @@ declare global {
 		// Model types
 		ModelModalities,
 		ModelOption,
+		ModelLoadProgress,
 		// Settings types
 		SettingsChatServiceOptions,
 		SettingsConfigValue,
@@ -129,5 +139,12 @@ declare global {
 	interface Window {
 		idxThemeStyle?: number;
 		idxCodeBlock?: number;
+
+		// File System Access API - not in the DOM lib and unavailable in some browsers
+		showDirectoryPicker?: (options?: {
+			id?: string;
+			mode?: 'read' | 'readwrite';
+			startIn?: FileSystemHandle | string;
+		}) => Promise<FileSystemDirectoryHandle>;
 	}
 }

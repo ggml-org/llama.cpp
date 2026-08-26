@@ -104,21 +104,21 @@ jobs:
         id: server_integration_tests
         run: |
           cd tools/server/tests
-          pytest -v -x -m "not slow"
+          ./tests.sh
 
       - name: Slow tests
         id: server_integration_tests_slow
         if: ${{ github.event.schedule || github.event.inputs.slow_tests == 'true' }}
         run: |
           cd tools/server/tests
-          SLOW_TESTS=1 pytest -v -x
+          SLOW_TESTS=1 ./tests.sh
 
       - name: Tests (Backend sampling)
         id: server_integration_tests_backend_sampling
         run: |
           cd tools/server/tests
           export LLAMA_ARG_BACKEND_SAMPLING=1
-          pytest -v -x -m "not slow"
+          ./tests.sh
 
       - name: Slow tests (Backend sampling)
         id: server_integration_tests_slow_backend_sampling
@@ -126,7 +126,17 @@ jobs:
         run: |
           cd tools/server/tests
           export LLAMA_ARG_BACKEND_SAMPLING=1
-          SLOW_TESTS=1 pytest -v -x
+          SLOW_TESTS=1 ./tests.sh
+
+      - name: ccache-clear
+        uses: ./.github/actions/ccache-clear
+        env:
+          GH_TOKEN: ${{ github.token }}
+        with:
+          key: server-ubuntu-24.04-arm
+          older: 5m
+          min: 1
+          dry-run: ${{ github.event_name != 'push' || github.ref != 'refs/heads/master' }}
 
   windows:
     runs-on: windows-2025
@@ -167,15 +177,27 @@ jobs:
 
       - name: Tests
         id: server_integration_tests
+        shell: bash
         run: |
           cd tools/server/tests
-          $env:PYTHONIOENCODING = ":replace"
-          pytest -v -x -m "not slow"
+          export PYTHONIOENCODING=":replace"
+          ./tests.sh
 
       - name: Slow tests
         id: server_integration_tests_slow
         if: ${{ github.event.schedule || github.event.inputs.slow_tests == 'true' }}
+        shell: bash
         run: |
           cd tools/server/tests
-          $env:SLOW_TESTS = "1"
-          pytest -v -x
+          export SLOW_TESTS="1"
+          ./tests.sh
+
+      - name: ccache-clear
+        uses: ./.github/actions/ccache-clear
+        env:
+          GH_TOKEN: ${{ github.token }}
+        with:
+          key: server-windows-2025-x64
+          older: 5m
+          min: 1
+          dry-run: ${{ github.event_name != 'push' || github.ref != 'refs/heads/master' }}

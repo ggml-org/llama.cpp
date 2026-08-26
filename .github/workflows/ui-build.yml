@@ -2,6 +2,11 @@ name: UI Build
 
 on:
   workflow_call:
+    inputs:
+      ui_version:
+        description: 'Version string embedded in build.json (e.g. b1234); defaults to b<commit-count>'
+        required: false
+        type: string
 
 jobs:
   build:
@@ -12,6 +17,17 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Resolve UI version
+        id: version
+        run: |
+          version="${{ inputs.ui_version }}"
+          if [ -z "$version" ]; then
+            version="b$(git rev-list --count HEAD)"
+          fi
+          echo "ui_version=${version}" >> $GITHUB_OUTPUT
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -25,19 +41,18 @@ jobs:
         working-directory: tools/ui
 
       - name: Build application
+        env:
+          LLAMA_BUILD_NUMBER: ${{ steps.version.outputs.ui_version }}
         run: npm run build
         working-directory: tools/ui
 
-      - name: Generate checksums
-        run: |
-          cd tools/ui/dist
-          for f in *; do
-            sha256sum "$f" | awk '{print $1, $2}' >> checksums.txt
-          done
+      - name: Run PWA unit tests (versioned build output)
+        run: npx vitest --project=unit --run tests/unit/pwa.spec.ts
+        working-directory: tools/ui
 
       - name: Upload built UI
         uses: actions/upload-artifact@v6
         with:
-          name: ui-build
+          name: llama-ui.zip
           path: tools/ui/dist/
           retention-days: 1

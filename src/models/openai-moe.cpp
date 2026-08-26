@@ -75,6 +75,8 @@ llama_model_openai_moe::graph::graph(const llama_model & model, const llm_graph_
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
     for (int il = 0; il < n_layer; ++il) {
+        res->t_layer_inp[il] = inpL;
+
         const float freq_base_l  = model.get_rope_freq_base (cparams, il);
         const float freq_scale_l = model.get_rope_freq_scale(cparams, il);
 
@@ -114,7 +116,7 @@ llama_model_openai_moe::graph::graph(const llama_model & model, const llm_graph_
 
             cb(cur, "attn_out", il);
         }
-        if (il == n_layer - 1) {
+        if (il == n_layer - 1 && inp_out_ids && cparams.embeddings_nextn_masked) {
             // skip computing output for unused tokens
             cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
             inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
@@ -151,6 +153,12 @@ llama_model_openai_moe::graph::graph(const llama_model & model, const llm_graph_
         inpL = cur;
     }
     cur = inpL;
+
+    res->t_h_nextn = cur;
+
+    if (!cparams.embeddings_nextn_masked && inp_out_ids) {
+        cur = ggml_get_rows(ctx0, cur, inp_out_ids);
+    }
 
     cur = build_norm(cur,
             model.output_norm, NULL,

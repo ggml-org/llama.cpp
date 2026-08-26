@@ -1,10 +1,9 @@
 <script lang="ts">
-	import * as Tooltip from '$lib/components/ui/tooltip';
-	import { conversationsStore } from '$lib/stores/conversations.svelte';
-	import { mcpStore } from '$lib/stores/mcp.svelte';
-	import { HealthCheckStatus } from '$lib/enums';
-	import { MAX_DISPLAYED_MCP_AVATARS } from '$lib/constants';
 	import McpLogo from './McpLogo.svelte';
+	import * as Tooltip from '$lib/components/ui/tooltip';
+	import { ICON_CLASS_DEFAULT, MAX_DISPLAYED_MCP_AVATARS } from '$lib/constants';
+	import { HealthCheckStatus } from '$lib/enums';
+	import { conversationsStore, mcpStore } from '$lib/stores';
 
 	interface Props {
 		class?: string;
@@ -13,13 +12,16 @@
 
 	let { class: className = '', onclick }: Props = $props();
 
-	let mcpServers = $derived(mcpStore.getServersSorted().filter((s) => s.enabled));
+	let mcpServers = $derived(mcpStore.getServers().filter((s) => s.enabled));
 	let enabledMcpServersForChat = $derived(
-		mcpServers.filter((s) => conversationsStore.isMcpServerEnabledForChat(s.id) && s.url.trim())
+		mcpServers.filter(
+			(s) => conversationsStore.preferences.isMcpServerEnabledForChat(s.id) && s.url.trim()
+		)
 	);
 	let healthyEnabledMcpServers = $derived(
 		enabledMcpServersForChat.filter((s) => {
 			const healthState = mcpStore.getHealthCheckState(s.id);
+
 			return healthState.status !== HealthCheckStatus.ERROR;
 		})
 	);
@@ -50,7 +52,7 @@
 	>
 		<Tooltip.Root>
 			<Tooltip.Trigger>
-				<McpLogo class="h-4 w-4" />
+				<McpLogo class={ICON_CLASS_DEFAULT} />
 			</Tooltip.Trigger>
 
 			<Tooltip.Content>
@@ -66,15 +68,16 @@
 					<Tooltip.Trigger>
 						<div class="box-shadow-lg overflow-hidden rounded-full bg-muted ring-1 ring-muted">
 							<img
-								src={favicon.url}
 								alt=""
-								class="h-4 w-4"
+								class={ICON_CLASS_DEFAULT}
 								onerror={(e) => {
 									(e.currentTarget as HTMLImageElement).style.display = 'none';
 								}}
+								src={favicon.url}
 							/>
 						</div>
 					</Tooltip.Trigger>
+
 					<Tooltip.Content>
 						<p>{favicon.name}</p>
 					</Tooltip.Content>

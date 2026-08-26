@@ -13,6 +13,7 @@ from .gemma import ConformerAudioModel
 
 
 @ModelBase.register("Lfm2ForCausalLM", "LFM2ForCausalLM")
+@ModelBase.example("LiquidAI/LFM2-1.2B", "LiquidAI/LFM2.5-350M")
 class LFM2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.LFM2
 
@@ -64,10 +65,17 @@ class LFM2Model(TextModel):
         yield from super().modify_tensors(data_torch, name, bid)
 
 
-@ModelBase.register("Lfm2Model")
+@ModelBase.register("Lfm2Model", "Lfm2BidirectionalModel")
+@ModelBase.example("LiquidAI/LFM2.5-ColBERT-350M", "LiquidAI/LFM2.5-Embedding-350M")
 class LFM2ColBertModel(LFM2Model):
     model_arch = gguf.MODEL_ARCH.LFM2
     dense_tensor_name = "dense_2"
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        if self.hf_arch == "Lfm2BidirectionalModel":
+            self.gguf_writer.add_causal_attention(False)
+        self._try_set_pooling_type()
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         if not name.startswith(self.dense_tensor_name):
@@ -76,16 +84,18 @@ class LFM2ColBertModel(LFM2Model):
         yield from super().modify_tensors(data_torch, name, bid)
 
     def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
-        # dense tensor is stored in a separate safetensors file
+        # optional dense tensor is stored in a separate safetensors file
         from safetensors.torch import load_file
         tensors_file = self.dir_model / "1_Dense" / "model.safetensors"
-        assert tensors_file.is_file()
+        if not tensors_file.is_file():
+            return
         tensor = load_file(tensors_file)["linear.weight"]
         self.gguf_writer.add_embedding_length_out(tensor.shape[0])
         yield f"{self.dense_tensor_name}.weight", tensor.clone()
 
 
 @ModelBase.register("Lfm2MoeForCausalLM")
+@ModelBase.example("LiquidAI/LFM2-8B-A1B")
 class LFM2MoeModel(TextModel):
     model_arch = gguf.MODEL_ARCH.LFM2MOE
 
@@ -159,6 +169,7 @@ class LFM2MoeModel(TextModel):
 
 
 @ModelBase.register("Lfm2VlForConditionalGeneration")
+@ModelBase.example("LiquidAI/LFM2-VL-450M")
 class LFM2VLModel(MmprojModel):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -193,6 +204,7 @@ class LFM2VLModel(MmprojModel):
 
 
 @ModelBase.register("Lfm2AudioForConditionalGeneration")
+@ModelBase.example("LiquidAI/LFM2.5-Audio-1.5B", "LiquidAI/LFM2-Audio-1.5B")
 class LFM2AudioModel(ConformerAudioModel):
     has_vision_encoder = False
     has_audio_encoder = True
@@ -231,6 +243,7 @@ class LFM2AudioModel(ConformerAudioModel):
 
 
 @ModelBase.register("Lfm25AudioTokenizer")
+@ModelBase.example("LiquidAI/LFM2.5-Audio-1.5B")
 class LFM25AudioTokenizer(LFM2Model):
     model_arch = gguf.MODEL_ARCH.LFM2
 
