@@ -10063,10 +10063,8 @@ static void ggml_vk_mul_mat_id_q_f16(ggml_backend_vk_context * ctx, vk_context& 
     // const uint64_t ne23 = dst->ne[3];
 
     const uint64_t n_as = ne02;
-    // Size of the hoisted row id table built by count_experts: n_as counts, n_as start
-    // offsets, one total, then one packed row id per (expert, token) pair. See the layout
-    // comment in count_experts.comp. Only hoist when the indices fit the packing used
-    // there (16 bits each) and the table fits a storage buffer binding.
+    // n_as counts, n_as offsets, one total, then one packed row id per (expert, token).
+    // Hoisting requires 16-bit indices for the packing and a table that fits one binding.
     const uint64_t hoisted_row_id_words = 2 * n_as + 1 + nei0 * nei1;
     const bool hoist_row_ids = n_as <= 256 && nei0 <= 0xffff && nei1 <= 0xffff &&
                                 hoisted_row_id_words * sizeof(uint32_t) <=

@@ -41,18 +41,12 @@ uint fastdiv(uint n, uint mp, uint L) {
     return (msbs + n) >> L;
 }
 
-// Layout of data_d when p.hoist_row_ids is set. A single workgroup builds the
-// per-expert row lists here, so that the mul_mat_id shaders can load their tile
-// directly instead of rescanning the whole ids array in every workgroup:
-//
-//   [0,              n_experts)    per-expert row count
-//   [n_experts,    2*n_experts)    per-expert start offset into the row id region below
-//   [2*n_experts]                  total row count, i.e. the sum of all per-expert counts
-//   [2*n_experts + 1,        )     row ids grouped by expert, each packed as
-//                                  (i01 << 16) | (i00 & 0xffff)
-//
-// When p.hoist_row_ids is 0 the dispatch is one workgroup per expert and only
-// data_d[expert_id] is written, holding that expert's row count.
+// data_d layout when p.hoist_row_ids is set:
+//   [0,              n_experts)   per-expert row count
+//   [n_experts,    2*n_experts)   per-expert start offset into the row id region
+//   [2*n_experts]                 total row count
+//   [2*n_experts + 1,         )   row ids grouped by expert, packed as (i01 << 16) | (i00 & 0xffff)
+// Otherwise only data_d[expert_id] is written, holding that expert's row count.
 void main() {
     const uint expert_id = gl_WorkGroupID.x;
     const uint num_elements = p.ne00 * p.ne01;
@@ -74,11 +68,10 @@ void main() {
         }
         barrier();
 
-        // Exclusive prefix sum over the per-expert counts, to turn them into
-        // start offsets into the row id region.
+        
 #ifdef USE_SUBGROUPS
         if (gl_SubgroupID == 0) {
-            // round the trip count up so the loop stays uniform across the subgroup
+            // pad the trip count so the subgroup ops stay in uniform control flow
             const uint n_experts_padded = (p.n_experts + gl_SubgroupSize - 1) & ~(gl_SubgroupSize - 1);
             uint base = 0;
             for (uint expert = gl_SubgroupInvocationID; expert < n_experts_padded; expert += gl_SubgroupSize) {
