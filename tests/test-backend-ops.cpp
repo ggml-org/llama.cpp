@@ -3789,6 +3789,12 @@ struct test_unary_mul : public test_case {
             // like gemma4's per-layer embedding gating (gemma4.cpp)
             a = ggml_new_tensor(ctx, type, 4, ne.data());
             b = nullptr;
+        } else if (layout == "gate") {
+            // qwen shared-expert gating shape: the unary result is a small gate
+            // that repeats into the other operand (OP-on-B)
+            const std::array<int64_t, 4> ne_gate = { 1, ne[1], ne[2], ne[3] };
+            a = ggml_new_tensor(ctx, type, 4, ne_gate.data());
+            b = ggml_new_tensor(ctx, type, 4, ne.data());
         } else {
             GGML_ABORT("unknown layout %s", layout.c_str());
         }
@@ -3803,7 +3809,7 @@ struct test_unary_mul : public test_case {
         ggml_set_name(u, "unary");
 
         // a broadcasting operand can only be the second one
-        const bool second = swap && layout != "bcast" && layout != "view_mid";
+        const bool second = layout == "gate" || (swap && layout != "bcast" && layout != "view_mid");
         if (layout == "view_mid") {
             // create the view operand only after the unary node, so it sits
             // between UNARY and MUL in the graph (the fusion-blocking pattern)
@@ -8330,6 +8336,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             test_cases.emplace_back(new test_unary_mul(op, type, { 128, 2, 2, 2 }, false, "rep_ne0"));
             // view node between unary and mul: fuses only when graph_optimize hoists the view
             test_cases.emplace_back(new test_unary_mul(op, type, { 128, 2, 2, 2 }, false, "view_mid"));
+            // OP applied to a broadcast B operand (qwen shared-expert gate shape)
+            test_cases.emplace_back(new test_unary_mul(op, type, { 128, 2, 2, 2 }, false, "gate"));
             // must not fuse
             test_cases.emplace_back(new test_unary_mul(op, type, { 128, 2, 2, 2 }, false, "strided_dim1"));
             test_cases.emplace_back(new test_unary_mul(op, type, { 128, 2, 2, 2 }, false, "packed", "reuse"));

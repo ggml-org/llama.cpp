@@ -1013,6 +1013,16 @@ struct vk_device_struct {
     vk_pipeline pipeline_softplus_mul[2];
     vk_pipeline pipeline_softplus_mul_norepeat[2];
 
+    // OP applied to the B operand: the unary result tiles into mul->src[0]
+    vk_pipeline pipeline_gelu_mul_b[2];
+    vk_pipeline pipeline_gelu_mul_b_norepeat[2];
+    vk_pipeline pipeline_sigmoid_mul_b[2];
+    vk_pipeline pipeline_sigmoid_mul_b_norepeat[2];
+    vk_pipeline pipeline_silu_mul_b[2];
+    vk_pipeline pipeline_silu_mul_b_norepeat[2];
+    vk_pipeline pipeline_softplus_mul_b[2];
+    vk_pipeline pipeline_softplus_mul_b_norepeat[2];
+
     vk_pipeline pipeline_add1_f16_f16;
     vk_pipeline pipeline_add1_f16_f32;
     vk_pipeline pipeline_add1_f32_f32;
@@ -5679,7 +5689,11 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
     ggml_vk_create_pipeline(device, device->pipeline_ ## name ## _mul[0], #name "_mul_f32", name ## _mul_f32_len, name ## _mul_f32_data, "main", 3, sizeof(vk_op_binary_push_constants), {512, 1, 1}, {0}, 1); \
     ggml_vk_create_pipeline(device, device->pipeline_ ## name ## _mul[1], #name "_mul_f16", name ## _mul_f16_len, name ## _mul_f16_data, "main", 3, sizeof(vk_op_binary_push_constants), {512, 1, 1}, {0}, 1); \
     ggml_vk_create_pipeline(device, device->pipeline_ ## name ## _mul_norepeat[0], #name "_mul_f32_norepeat", name ## _mul_f32_len, name ## _mul_f32_data, "main", 3, sizeof(vk_op_binary_push_constants), {512, 1, 1}, {1}, 1); \
-    ggml_vk_create_pipeline(device, device->pipeline_ ## name ## _mul_norepeat[1], #name "_mul_f16_norepeat", name ## _mul_f16_len, name ## _mul_f16_data, "main", 3, sizeof(vk_op_binary_push_constants), {512, 1, 1}, {1}, 1);
+    ggml_vk_create_pipeline(device, device->pipeline_ ## name ## _mul_norepeat[1], #name "_mul_f16_norepeat", name ## _mul_f16_len, name ## _mul_f16_data, "main", 3, sizeof(vk_op_binary_push_constants), {512, 1, 1}, {1}, 1); \
+    ggml_vk_create_pipeline(device, device->pipeline_ ## name ## _mul_b[0], #name "_mul_b_f32", name ## _mul_b_f32_len, name ## _mul_b_f32_data, "main", 3, sizeof(vk_op_binary_push_constants), {512, 1, 1}, {0}, 1); \
+    ggml_vk_create_pipeline(device, device->pipeline_ ## name ## _mul_b[1], #name "_mul_b_f16", name ## _mul_b_f16_len, name ## _mul_b_f16_data, "main", 3, sizeof(vk_op_binary_push_constants), {512, 1, 1}, {0}, 1); \
+    ggml_vk_create_pipeline(device, device->pipeline_ ## name ## _mul_b_norepeat[0], #name "_mul_b_f32_norepeat", name ## _mul_b_f32_len, name ## _mul_b_f32_data, "main", 3, sizeof(vk_op_binary_push_constants), {512, 1, 1}, {1}, 1); \
+    ggml_vk_create_pipeline(device, device->pipeline_ ## name ## _mul_b_norepeat[1], #name "_mul_b_f16_norepeat", name ## _mul_b_f16_len, name ## _mul_b_f16_data, "main", 3, sizeof(vk_op_binary_push_constants), {512, 1, 1}, {1}, 1);
 
     CREATE_UNARY_MUL(gelu)
     CREATE_UNARY_MUL(sigmoid)
@@ -12535,26 +12549,57 @@ static void ggml_vk_mul(ggml_backend_vk_context * ctx, vk_context& subctx, const
 static void ggml_vk_unary_mul(ggml_backend_vk_context * ctx, vk_context& subctx, const struct ggml_cgraph * cgraph, int node_idx) {
     const ggml_tensor * unary = cgraph->nodes[node_idx];
     ggml_tensor * mul = cgraph->nodes[node_idx + 1];
-    const ggml_tensor * src0 = unary->src[0];
-    const ggml_tensor * src1 = (mul->src[0] == unary) ? mul->src[1] : mul->src[0];
+
+    // OP-on-B: the unary result is the second MUL operand and tiles into the first
+    // (e.g. qwen shared-expert gating: ffn_shexp * sigmoid(gate)). The kernel then
+    // iterates over mul's extent, applying the OP to the fastmod-indexed B operand.
+    const bool op_on_b = mul->src[1] == unary &&
+                         !ggml_are_same_shape(unary->src[0], mul->src[0]) &&
+                         ggml_can_repeat(unary, mul->src[0]);
+
+    // kernel A is the operand whose extent drives the iteration; kernel B (fastmod
+    // indexed when shapes differ) carries the OP in op_on_b mode
+    const ggml_tensor * src0 = op_on_b ? mul->src[0] : unary->src[0];
+    const ggml_tensor * src1 = op_on_b ? unary->src[0] :
+        ((mul->src[0] == unary) ? mul->src[1] : mul->src[0]);
 
     const bool f16 = src0->type == GGML_TYPE_F16;
     const vk_pipeline * pipelines;
     if (ggml_are_same_shape(src0, src1)) {
-        switch (ggml_get_unary_op(unary)) {
-            case GGML_UNARY_OP_GELU:     pipelines = ctx->device->pipeline_gelu_mul_norepeat;     break;
-            case GGML_UNARY_OP_SIGMOID:  pipelines = ctx->device->pipeline_sigmoid_mul_norepeat;  break;
-            case GGML_UNARY_OP_SILU:     pipelines = ctx->device->pipeline_silu_mul_norepeat;     break;
-            case GGML_UNARY_OP_SOFTPLUS: pipelines = ctx->device->pipeline_softplus_mul_norepeat; break;
-            default:                     GGML_ABORT("fatal error");
+        if (op_on_b) {
+            switch (ggml_get_unary_op(unary)) {
+                case GGML_UNARY_OP_GELU:     pipelines = ctx->device->pipeline_gelu_mul_b_norepeat;     break;
+                case GGML_UNARY_OP_SIGMOID:  pipelines = ctx->device->pipeline_sigmoid_mul_b_norepeat;  break;
+                case GGML_UNARY_OP_SILU:     pipelines = ctx->device->pipeline_silu_mul_b_norepeat;     break;
+                case GGML_UNARY_OP_SOFTPLUS: pipelines = ctx->device->pipeline_softplus_mul_b_norepeat; break;
+                default:                     GGML_ABORT("fatal error");
+            }
+        } else {
+            switch (ggml_get_unary_op(unary)) {
+                case GGML_UNARY_OP_GELU:     pipelines = ctx->device->pipeline_gelu_mul_norepeat;     break;
+                case GGML_UNARY_OP_SIGMOID:  pipelines = ctx->device->pipeline_sigmoid_mul_norepeat;  break;
+                case GGML_UNARY_OP_SILU:     pipelines = ctx->device->pipeline_silu_mul_norepeat;     break;
+                case GGML_UNARY_OP_SOFTPLUS: pipelines = ctx->device->pipeline_softplus_mul_norepeat; break;
+                default:                     GGML_ABORT("fatal error");
+            }
         }
     } else {
-        switch (ggml_get_unary_op(unary)) {
-            case GGML_UNARY_OP_GELU:     pipelines = ctx->device->pipeline_gelu_mul;     break;
-            case GGML_UNARY_OP_SIGMOID:  pipelines = ctx->device->pipeline_sigmoid_mul;  break;
-            case GGML_UNARY_OP_SILU:     pipelines = ctx->device->pipeline_silu_mul;     break;
-            case GGML_UNARY_OP_SOFTPLUS: pipelines = ctx->device->pipeline_softplus_mul; break;
-            default:                     GGML_ABORT("fatal error");
+        if (op_on_b) {
+            switch (ggml_get_unary_op(unary)) {
+                case GGML_UNARY_OP_GELU:     pipelines = ctx->device->pipeline_gelu_mul_b;     break;
+                case GGML_UNARY_OP_SIGMOID:  pipelines = ctx->device->pipeline_sigmoid_mul_b;  break;
+                case GGML_UNARY_OP_SILU:     pipelines = ctx->device->pipeline_silu_mul_b;     break;
+                case GGML_UNARY_OP_SOFTPLUS: pipelines = ctx->device->pipeline_softplus_mul_b; break;
+                default:                     GGML_ABORT("fatal error");
+            }
+        } else {
+            switch (ggml_get_unary_op(unary)) {
+                case GGML_UNARY_OP_GELU:     pipelines = ctx->device->pipeline_gelu_mul;     break;
+                case GGML_UNARY_OP_SIGMOID:  pipelines = ctx->device->pipeline_sigmoid_mul;  break;
+                case GGML_UNARY_OP_SILU:     pipelines = ctx->device->pipeline_silu_mul;     break;
+                case GGML_UNARY_OP_SOFTPLUS: pipelines = ctx->device->pipeline_softplus_mul; break;
+                default:                     GGML_ABORT("fatal error");
+            }
         }
     }
     vk_pipeline pipeline = pipelines[f16];
@@ -12564,7 +12609,7 @@ static void ggml_vk_unary_mul(ggml_backend_vk_context * ctx, vk_context& subctx,
     const uint32_t dst_type_size = ggml_type_size(mul->type);
 
     ggml_vk_op_f32<vk_op_binary_push_constants>(ctx, subctx, src0, src1, nullptr, nullptr, mul, GGML_OP_UNARY, {
-        (uint32_t)ggml_nelements(src0),
+        (uint32_t)ggml_nelements(op_on_b ? mul : src0),
         (uint32_t)src0->ne[0], (uint32_t)src0->ne[1], (uint32_t)src0->ne[2],(uint32_t)src0->ne[3], (uint32_t)src0->nb[0] / src0_type_size, (uint32_t)src0->nb[1] / src0_type_size, (uint32_t)src0->nb[2] / src0_type_size, (uint32_t)src0->nb[3] / src0_type_size,
         (uint32_t)src1->ne[0], (uint32_t)src1->ne[1], (uint32_t)src1->ne[2],(uint32_t)src1->ne[3], (uint32_t)src1->nb[0] / src1_type_size, (uint32_t)src1->nb[1] / src1_type_size, (uint32_t)src1->nb[2] / src1_type_size, (uint32_t)src1->nb[3] / src1_type_size,
         (uint32_t) mul->ne[0], (uint32_t) mul->ne[1], (uint32_t) mul->ne[2],(uint32_t) mul->ne[3], (uint32_t) mul->nb[0] /  dst_type_size, (uint32_t) mul->nb[1] /  dst_type_size, (uint32_t) mul->nb[2] /  dst_type_size, (uint32_t) mul->nb[3] /  dst_type_size,
@@ -16476,8 +16521,11 @@ static bool ggml_vk_is_empty(ggml_tensor * node) {
 }
 
 // UNARY + MUL fusion: the unary op is one of gelu/sigmoid/silu/softplus and the MUL
-// consumes it. The other operand may repeat against the unary result, but cannot
-// exceed its shape, since the fused kernel never writes the intermediate.
+// consumes it. Either operand may be the unary result:
+//  - unary as src0: the other operand repeats against it, but cannot exceed its
+//    shape, since the kernel iterates over the unary extent.
+//  - unary as src1 (OP-on-B, e.g. sigmoid gates): the unary result must tile into
+//    mul->src[0], whose extent drives the iteration.
 static bool ggml_vk_can_fuse_unary_mul(const struct ggml_cgraph * cgraph, int unary_idx, int mul_idx) {
     const ggml_tensor * unary = cgraph->nodes[unary_idx];
     const ggml_tensor * mul = cgraph->nodes[mul_idx];
@@ -16507,12 +16555,44 @@ static bool ggml_vk_can_fuse_unary_mul(const struct ggml_cgraph * cgraph, int un
     if (!ggml_is_contiguous_1(other) || !ggml_is_contiguous_1(unary->src[0])) {
         return false;
     }
-    // the fused kernel indexes src1 with per-dim fastmod (generic_binary_head.glsl), which is
-    // exact iff the unary result can be represented as a repetition of other
-    return ggml_can_repeat(other, unary);
+    // the fused kernel indexes one operand with per-dim fastmod (generic_binary_head.glsl),
+    // which is exact iff that operand tiles into the iteration extent (the dst shape)
+    if (mul->src[0] == unary) {
+        return ggml_can_repeat(other, unary);
+    }
+    return ggml_can_repeat(unary, mul->src[0]);
+}
+
+// like ggml_can_fuse({GGML_OP_UNARY, GGML_OP_MUL}), but without the generic
+// requirement that the two nodes share a shape: an OP-on-B unary result is a
+// gate that legally tiles into the MUL's shape (see ggml_vk_can_fuse_unary_mul).
+static bool ggml_vk_can_fuse_unary_mul_pair(const struct ggml_cgraph * cgraph, int node_idx) {
+    if (node_idx + 1 >= cgraph->n_nodes) {
+        return false;
+    }
+    const ggml_tensor * u = cgraph->nodes[node_idx];
+    const ggml_tensor * m = cgraph->nodes[node_idx + 1];
+    if (u->op != GGML_OP_UNARY || m->op != GGML_OP_MUL) {
+        return false;
+    }
+    if ((u->flags & GGML_TENSOR_FLAG_COMPUTE) == 0 || (m->flags & GGML_TENSOR_FLAG_COMPUTE) == 0) {
+        return false;
+    }
+    // the intermediate must not be consumed anywhere else
+    if (!ggml_node_has_n_uses(cgraph, node_idx, 1)) {
+        return false;
+    }
+    if (m->src[0] != u && m->src[1] != u) {
+        return false;
+    }
+    return ggml_vk_can_fuse_unary_mul(cgraph, node_idx, node_idx + 1);
 }
 
 static bool ggml_vk_can_fuse(const ggml_backend_vk_context * ctx, const struct ggml_cgraph * cgraph, int node_idx, std::initializer_list<enum ggml_op> ops) {
+    if (ops.size() == 2 && ops.begin()[0] == GGML_OP_UNARY && ops.begin()[1] == GGML_OP_MUL) {
+        return ggml_vk_can_fuse_unary_mul_pair(cgraph, node_idx);
+    }
+
     if (!ggml_can_fuse(cgraph, node_idx, ops)) {
         return false;
     }
@@ -16541,13 +16621,7 @@ static bool ggml_vk_can_fuse(const ggml_backend_vk_context * ctx, const struct g
         }
     }
 
-    if (ops.size() == 2 && ops.begin()[0] == GGML_OP_UNARY && ops.begin()[1] == GGML_OP_MUL) {
-        if (!ggml_vk_can_fuse_unary_mul(cgraph, node_idx, node_idx + 1)) {
-            return false;
-        }
-    }
-    auto const &mm_add_ok = [&](const ggml_tensor *mul, const ggml_tensor *add) {
-        const ggml_tensor *bias = add->src[0] == mul ? add->src[1] : add->src[0];
+    auto const &mm_add_ok = [&](const ggml_tensor *mul, const ggml_tensor *add) {        const ggml_tensor *bias = add->src[0] == mul ? add->src[1] : add->src[0];
 
         // mat-vec only
         if (ggml_nrows(mul) != 1) {

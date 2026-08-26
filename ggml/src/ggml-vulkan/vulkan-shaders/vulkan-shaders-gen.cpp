@@ -964,6 +964,17 @@ void process_shaders() {
     string_to_spv("softplus_mul_f32","unary.comp",      {{"A_TYPE", "float"},       {"B_TYPE", "float"},     {"D_TYPE", "float"},     {"FLOAT_TYPE", "float"}, {"OP", "op_softplus"}, {"UNARY_MUL_FUSION", "1"}});
     string_to_spv("softplus_mul_f16","unary.comp",      {{"A_TYPE", "float16_t"},   {"B_TYPE", "float16_t"}, {"D_TYPE", "float16_t"}, {"FLOAT_TYPE", "float"}, {"OP", "op_softplus"}, {"UNARY_MUL_FUSION", "1"}});
 
+    // fused unary + mul with the OP applied to the B operand: dst = src0 * OP(src1),
+    // where the unary result repeats into the dst shape (e.g. sigmoid gates)
+#define UNARY_MUL_B_ENTRIES(OPNAME, OP) \
+    string_to_spv(OPNAME "_mul_b_f32", "unary.comp",    {{"A_TYPE", "float"},       {"B_TYPE", "float"},     {"D_TYPE", "float"},     {"FLOAT_TYPE", "float"}, {"OP", OP},            {"UNARY_MUL_FUSION", "1"}, {"UNARY_MUL_B_FUSION", "1"}}); \
+    string_to_spv(OPNAME "_mul_b_f16", "unary.comp",    {{"A_TYPE", "float16_t"},   {"B_TYPE", "float16_t"}, {"D_TYPE", "float16_t"}, {"FLOAT_TYPE", "float"}, {"OP", OP},            {"UNARY_MUL_FUSION", "1"}, {"UNARY_MUL_B_FUSION", "1"}});
+    UNARY_MUL_B_ENTRIES("gelu", "op_gelu")
+    UNARY_MUL_B_ENTRIES("sigmoid", "op_sigmoid")
+    UNARY_MUL_B_ENTRIES("silu", "op_silu")
+    UNARY_MUL_B_ENTRIES("softplus", "op_softplus")
+#undef UNARY_MUL_B_ENTRIES
+
     string_to_spv("add1_f16_f16",   "add1.comp",        {{"A_TYPE", "float16_t"},   {"B_TYPE", "float16_t"}, {"D_TYPE", "float16_t"}, {"FLOAT_TYPE", "float"}});
     string_to_spv("add1_f16_f32",   "add1.comp",        {{"A_TYPE", "float16_t"},   {"B_TYPE", "float"}, {"D_TYPE", "float16_t"}, {"FLOAT_TYPE", "float"}});
     string_to_spv("add1_f32_f32",   "add1.comp",        {{"A_TYPE", "float"},       {"B_TYPE", "float"}, {"D_TYPE", "float"}, {"FLOAT_TYPE", "float"}});
