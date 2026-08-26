@@ -704,6 +704,7 @@ class MODEL_TENSOR(IntEnum):
     LAYER_OUT_NORM       = auto()
     LAYER_OUT_SCALE      = auto()
     PER_LAYER_TOKEN_EMBD = auto() # gemma3n
+    PLE_NGRAM_EMBD       = auto() # qwen4exp, one tensor per n-gram head
     PER_LAYER_MODEL_PROJ = auto() # gemma3n
     PER_LAYER_INP_GATE   = auto() # gemma3n
     PER_LAYER_PROJ       = auto() # gemma3n
@@ -1451,6 +1452,7 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.LAYER_OUT_NORM:            "blk.{bid}.layer_output_norm",
     MODEL_TENSOR.LAYER_OUT_SCALE:           "blk.{bid}.layer_output_scale",
     MODEL_TENSOR.PER_LAYER_TOKEN_EMBD:      "per_layer_token_embd",           # gemma3n
+    MODEL_TENSOR.PLE_NGRAM_EMBD:            "ple_ngram_embd.{bid}",           # qwen4exp
     MODEL_TENSOR.PER_LAYER_MODEL_PROJ:      "per_layer_model_proj",           # gemma3n
     MODEL_TENSOR.PER_LAYER_PROJ_NORM:       "per_layer_proj_norm",            # gemma3n
     MODEL_TENSOR.ALTUP_UNEMBD_PROJ:         "altup_unembd_proj",              # gemma3n
@@ -2906,7 +2908,7 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_UP_EXP,
         MODEL_TENSOR.FFN_GATE_EXP,
         MODEL_TENSOR.FFN_GATE_UP_EXP,
-        MODEL_TENSOR.PER_LAYER_TOKEN_EMBD,
+        MODEL_TENSOR.PLE_NGRAM_EMBD,
         MODEL_TENSOR.PLE_KEY,
         MODEL_TENSOR.PLE_VALUE,
         MODEL_TENSOR.PLE_NORM_KEY,

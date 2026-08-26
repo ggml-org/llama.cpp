@@ -2287,6 +2287,17 @@ struct llama_model_qwen4exp : public llama_model_base {
         std::vector<llama_token> toks;
     };
     mutable std::unordered_map<llama_seq_id, ple_history> ple_hist;
+
+    // The n-gram table is stored one tensor per head. Joined it is 20.9 GiB, over the
+    // 4 GiB maxBufferSize a Vulkan device reports, so it could only ever live on the
+    // host -- and on a machine whose VRAM carve-out leaves less than that, in swap.
+    // Per head it is ~1.3 GiB and fits. The heads are already disjoint contiguous
+    // ranges of the same table, and index by head, so they follow the layer device.
+    std::vector<ggml_tensor *> ple_ngram_embd;
+
+    // A file written the upstream way carries the heads joined into one tensor instead.
+    // It is read through 16 views, so the graph does not care which layout it got.
+    ggml_tensor * ple_joined = nullptr;
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 

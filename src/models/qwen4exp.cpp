@@ -96,14 +96,26 @@ void llama_model_qwen4exp::load_arch_tensors(llama_model_loader & ml) {
         output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), { n_embd, n_vocab }, TENSOR_DUPLICATED);
     }
 
-    // flat [ple_head_dim, n_rows] gather target; n_rows is padded, so read it back
+    // One [ple_head_dim, head_vocab] gather target per head. Row counts differ a little
+    // between heads and the file is authoritative, so read each back rather than trusting
+    // the KV.
     if (hparams.ple_n_heads > 0) {
-        const std::string ple_name = tn(LLM_TENSOR_PER_LAYER_TOKEN_EMBD, "weight").str();
-        const auto * ple_w = ml.get_weight(ple_name.c_str());
-        GGML_ASSERT(ple_w != nullptr && "qwen4exp is missing the PLE n-gram table");
-        const int64_t ple_rows = ple_w->tensor->ne[1];
-        per_layer_tok_embd = create_tensor(tn(LLM_TENSOR_PER_LAYER_TOKEN_EMBD, "weight"),
-                                           { hparams.ple_head_dim, ple_rows }, 0);
+        const std::string joined = tn(LLM_TENSOR_PER_LAYER_TOKEN_EMBD, "weight").str();
+        if (const auto * w = ml.get_weight(joined.c_str())) {
+            // Upstream layout: every head in one tensor. It stays on the host whatever
+            // -ngl says, because it is past the buffer size a device will accept.
+            ple_joined = create_tensor(tn(LLM_TENSOR_PER_LAYER_TOKEN_EMBD, "weight"),
+                                       { hparams.ple_head_dim, w->tensor->ne[1] }, 0);
+        } else {
+            ple_ngram_embd.resize(hparams.ple_n_heads);
+            for (uint32_t h = 0; h < hparams.ple_n_heads; ++h) {
+                const std::string name = tn(LLM_TENSOR_PLE_NGRAM_EMBD, "weight", h).str();
+                const auto * wh = ml.get_weight(name.c_str());
+                GGML_ASSERT(wh != nullptr && "qwen4exp is missing a PLE n-gram head table");
+                ple_ngram_embd[h] = create_tensor(tn(LLM_TENSOR_PLE_NGRAM_EMBD, "weight", h),
+                                                  { hparams.ple_head_dim, wh->tensor->ne[1] }, 0);
+            }
+        }
     }
 
     for (int il = 0; il < n_layer; ++il) {
@@ -914,8 +926,9 @@ void llm_graph_input_ple::set_input(const llama_ubatch * ubatch) {
             const int64_t base = (n - 2) * per_gram;
             for (int64_t g = 0; g < per_gram; ++g) {
                 const int64_t h_i = base + g;
-                idx[i * n_heads + h_i] =
-                    (int32_t) (mixed % hp.ple_head_vocab_sizes[h_i] + hp.ple_head_offsets[h_i]);
+                // head-major, and local to the head: each head is now its own tensor, so
+                // its index column is a contiguous view and the global offset is gone
+                idx[h_i * n_tokens + i] = (int32_t) (mixed % hp.ple_head_vocab_sizes[h_i]);
             }
         }
 
@@ -1008,7 +1021,22 @@ ggml_tensor * llama_model_qwen4exp::graph::build_ple(
 
     // gather then flatten the heads: get_rows already lays the head dimension
     // out slowest, matching the reference's flatten over the head axis
-    ggml_tensor * emb = ggml_get_rows(ctx0, model.per_layer_tok_embd, rows);
+    // One gather per head, then concatenate along the row axis. Concatenating in head
+    // order reproduces exactly what the single gather over the joined table produced,
+    // because that laid the head dimension out slowest.
+    const auto & qmodel = static_cast<const llama_model_qwen4exp &>(model);
+
+    ggml_tensor * emb = nullptr;
+    for (int64_t h = 0; h < n_heads; ++h) {
+        ggml_tensor * tbl = qmodel.ple_joined
+            ? ggml_view_2d(ctx0, qmodel.ple_joined, hparams.ple_head_dim, hparams.ple_head_vocab_sizes[h],
+                           qmodel.ple_joined->nb[1], hparams.ple_head_offsets[h]*qmodel.ple_joined->nb[1])
+            : qmodel.ple_ngram_embd[h];
+
+        ggml_tensor * idx_h = ggml_view_1d(ctx0, rows, n_tokens, h*n_tokens*ggml_element_size(rows));
+        ggml_tensor * emb_h = ggml_get_rows(ctx0, tbl, idx_h);
+        emb = emb ? ggml_concat(ctx0, emb, emb_h, 0) : emb_h;
+    }
     emb = ggml_reshape_2d(ctx0, emb, hparams.ple_head_dim * n_heads, n_tokens);
     cb(emb, "ple_embd", il);
 

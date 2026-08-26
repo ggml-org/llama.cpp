@@ -239,9 +239,21 @@ class Qwen4ExpTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
         total = sum(self._ple_shard_rows.values())
         table = self._finish_ple_table(total)
 
-        gguf_name = gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.PER_LAYER_TOKEN_EMBD] + ".weight"
-        logger.info(f"{gguf_name}, {self._ple_qtype.name}, shape = {{{self._ple_row_dim}, {total}}}")
-        self.gguf_writer.add_tensor(gguf_name, table, raw_dtype=self._ple_qtype)
+        # Emit one tensor per n-gram head rather than the joined table. A head is a
+        # contiguous row range, so each is a plain slice of the same memory map, and at
+        # ~1.3 GiB it fits the 4 GiB buffer a Vulkan device will accept. The joined
+        # 20.9 GiB table never could, which pinned it to the host.
+        offs = self._read_hash_constants("ple_embedding.ngram_heads_offsets")
+        vocs = self._read_hash_constants("ple_embedding.ngram_heads_vocab_sizes")
+        if len(offs) != len(vocs):
+            raise ValueError(f"PLE head offsets ({len(offs)}) and vocab sizes ({len(vocs)}) disagree")
+        if offs[-1] + vocs[-1] > total:
+            raise ValueError(f"PLE heads need {offs[-1] + vocs[-1]} rows, table has {total}")
+
+        for h, (o, v) in enumerate(zip(offs, vocs)):
+            name = gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.PLE_NGRAM_EMBD].format(bid=h) + ".weight"
+            logger.info(f"{name}, {self._ple_qtype.name}, shape = {{{self._ple_row_dim}, {v}}}")
+            self.gguf_writer.add_tensor(name, table[o:o + v], raw_dtype=self._ple_qtype)
         return []
 
     def _write_ple_shard(self, idx: int, shard: Tensor) -> None:

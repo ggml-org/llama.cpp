@@ -486,6 +486,7 @@ enum llm_tensor {
     LLM_TENSOR_POST_ATTN_NORM,
     LLM_TENSOR_POST_MLP_NORM,
     LLM_TENSOR_PER_LAYER_TOKEN_EMBD, // gemma3n
+    LLM_TENSOR_PLE_NGRAM_EMBD,       // qwen4exp, one tensor per n-gram head
     LLM_TENSOR_PER_LAYER_MODEL_PROJ, // gemma3n
     LLM_TENSOR_PER_LAYER_INP_GATE,   // gemma3n
     LLM_TENSOR_PER_LAYER_PROJ,       // gemma3n
