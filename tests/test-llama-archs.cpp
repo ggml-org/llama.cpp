@@ -65,7 +65,7 @@ static void set_tensor_data(struct ggml_tensor * tensor, void * userdata) {
 }
 
 static void usage(char ** argv) {
-    printf("Usage: %s [-a/--arch arch] [-s/--seed seed] [-v/--verbose]\n", argv[0]);
+    printf("Usage: %s [-a/--arch arch] [-s/--seed seed] [-o/--out dir] [-v/--verbose] [-h/--help]\n", argv[0]);
 }
 
 static std::vector<llama_token> get_tokens(const uint32_t n_tokens, const uint32_t n_vocab, const size_t seed){
@@ -752,6 +752,10 @@ int main(int argc, char ** argv) {
     std::string out;
 
     for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
+            usage(argv);
+            return 0;
+        }
         if (strcmp(argv[i], "-a") == 0 || strcmp(argv[i], "--arch") == 0) {
             if (i + 1 < argc) {
                 const std::string arch_name = argv[++i];
