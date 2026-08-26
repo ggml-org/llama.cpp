@@ -715,7 +715,8 @@ jobs:
           key: release-windows-2025-vs2026-${{ matrix.arch }}-cpu
 
   # TODO: build only the ggml-hip backend like the other windows backend jobs
-  #       (windows-cuda, windows-sycl), then drop the ui-build dependency
+  #       (windows-backend-cuda, windows-backend-sycl), then drop the ui-build
+  #       dependency
   windows-rocm:
     needs: [check-release, ui-build]
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
@@ -854,7 +855,8 @@ jobs:
 
   # note: builds only the backend library - llama-server (with the embedded UI)
   #       is injected from the windows-cpu zip during the release "Merge artifacts" step
-  windows:
+  windows-backend:
+    name: windows-backend-${{ matrix.backend }}
     needs: [check-release]
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
@@ -948,8 +950,8 @@ jobs:
 
   # note: builds only the ggml-cuda backend - llama-server is injected from the
   #       windows-cpu zip during the release "Merge artifacts" step
-  windows-cuda:
-    name: windows-cuda (${{ matrix.cuda }}, ${{ matrix.arch }})
+  windows-backend-cuda:
+    name: windows-backend-cuda-${{ matrix.cuda }}
     needs: [check-release]
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
@@ -990,7 +992,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: release-windows-2022-${{ matrix.arch }}-cuda-${{ matrix.cuda }}
+          key: release-windows-2022-${{ matrix.arch }}-backend-cuda-${{ matrix.cuda }}
 
       - name: Build
         id: cmake_build
@@ -1045,11 +1047,11 @@ jobs:
       - name: ccache-clear
         uses: ./.github/actions/ccache-clear
         with:
-          key: release-windows-2022-${{ matrix.arch }}-cuda-${{ matrix.cuda }}
+          key: release-windows-2022-${{ matrix.arch }}-backend-cuda-${{ matrix.cuda }}
 
   # note: builds only the ggml-sycl backend - llama-server is injected from the
   #       windows-cpu zip during the release "Merge artifacts" step
-  windows-sycl:
+  windows-backend-sycl:
     needs: [check-release]
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
@@ -1086,7 +1088,7 @@ jobs:
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
         with:
-          key: release-windows-2022-x64-sycl
+          key: release-windows-2022-x64-backend-sycl
 
       - name: Build
         id: cmake_build
@@ -1150,7 +1152,7 @@ jobs:
       - name: ccache-clear
         uses: ./.github/actions/ccache-clear
         with:
-          key: release-windows-2022-x64-sycl
+          key: release-windows-2022-x64-backend-sycl
 
   ubuntu-24-sycl:
     needs: [check-release, ui-build]
@@ -1540,10 +1542,10 @@ jobs:
     runs-on: ubuntu-slim
 
     needs:
-      - windows
+      - windows-backend
       - windows-cpu
-      - windows-cuda
-      - windows-sycl
+      - windows-backend-cuda
+      - windows-backend-sycl
       - windows-rocm
       - windows-openvino
       - ubuntu-24-rocm
