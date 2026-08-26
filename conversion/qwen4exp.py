@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Iterable
 
 import torch
@@ -12,6 +13,8 @@ import numpy as np
 from .base import ModelBase, MmprojModel
 from .qwen import _LinearAttentionVReorderBase, _Qwen35MRopeMixin
 from .qwen3vl import Qwen3VLVisionModel
+
+logger = logging.getLogger(__name__)
 
 
 @ModelBase.register("Qwen4ExpForConditionalGeneration", "Qwen4ExpForCausalLM")
@@ -39,6 +42,13 @@ class Qwen4ExpTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
         self._ple_rows_per_shard: int | None = None
         self._ple_map = None
         self._ple_path = None
+        # The table is quantized a shard at a time on the way to disk. Holding it as F32
+        # first needs a 205 GB scratch file and then a 54 GB array in one piece, because
+        # gguf.quants allocates the whole output. Q8_0 is the smallest type gguf-py can
+        # encode, and llama-quantize takes it the rest of the way.
+        self._ple_qtype = gguf.GGMLQuantizationType.Q8_0
+        self._ple_row_bytes: int | None = None
+        self._ple_weight_scale: float | None = None
 
     def _read_hash_constants(self, suffix: str) -> list[int]:
         """Read an int64 PLE constant straight from the checkpoint.
@@ -54,6 +64,26 @@ class Qwen4ExpTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
                     t = t.to(torch.int64)
                 return [int(x) for x in t.tolist()]
         raise ValueError(f"PLE constant {suffix!r} missing from the checkpoint")
+
+    def _read_ple_weight_scale(self) -> float:
+        """Scale of the FP8 n-gram table.
+
+        The table is FP8 with one scalar scale for the whole thing, not the 128x128
+        block scales the rest of an FP8 checkpoint carries, and one scale serves all
+        128 shards. base.py only rewrites tensors whose scale names its own weight,
+        so nothing dequantizes this one and the shards arrive as raw codes.
+        """
+        if self._ple_weight_scale is None:
+            for name, gen in self.model_tensors.items():
+                if name.endswith("ngram_embedding.weight_scale"):
+                    from .base import LazyTorchTensor
+
+                    t = LazyTorchTensor.to_eager(gen())
+                    self._ple_weight_scale = float(t.to(torch.float32).reshape(-1)[0])
+                    break
+            else:
+                raise ValueError("PLE n-gram table is FP8 but ngram_embedding.weight_scale is missing")
+        return self._ple_weight_scale
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
@@ -129,6 +159,8 @@ class Qwen4ExpTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
         if name.endswith("ple_embedding.ngram_heads_vocab_sizes"):
             self._ple_head_vocab_sizes = [int(x) for x in data_torch.tolist()]
             return []
+        if name.endswith("ngram_embedding.weight_scale"):
+            return []
 
         if ".ngram_embedding.shard_" in name:
             return self._place_ple_shard(data_torch, name)
@@ -182,10 +214,14 @@ class Qwen4ExpTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
                 self._ple_pending[idx] = data_torch
                 return []
             self._ple_rows_per_shard = rows
+            blck, tsize = gguf.GGML_QUANT_SIZES[self._ple_qtype]
+            if row_dim % blck != 0:
+                raise ValueError(f"PLE row of {row_dim} is not a multiple of the {self._ple_qtype.name} block {blck}")
+            self._ple_row_bytes = row_dim // blck * tsize
             self._ple_path = self.fname_out.parent / f".{self.fname_out.stem}.ple.tmp"
             self._ple_map = np.memmap(
-                self._ple_path, dtype=np.float32, mode="w+",
-                shape=(n_parts * rows, row_dim))
+                self._ple_path, dtype=np.uint8, mode="w+",
+                shape=(n_parts * rows, self._ple_row_bytes))
 
         for i, held in list(self._ple_pending.items()):
             self._ple_pending.pop(i)
@@ -198,8 +234,10 @@ class Qwen4ExpTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
         total = sum(self._ple_shard_rows.values())
         table = self._finish_ple_table(total)
 
-        gguf_name = gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.PER_LAYER_TOKEN_EMBD]
-        return [(gguf_name + ".weight", table)]
+        gguf_name = gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.PER_LAYER_TOKEN_EMBD] + ".weight"
+        logger.info(f"{gguf_name}, {self._ple_qtype.name}, shape = {{{self._ple_row_dim}, {total}}}")
+        self.gguf_writer.add_tensor(gguf_name, table, raw_dtype=self._ple_qtype)
+        return []
 
     def _write_ple_shard(self, idx: int, shard: Tensor) -> None:
 
@@ -216,7 +254,14 @@ class Qwen4ExpTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
         from .base import LazyTorchTensor
 
         eager = LazyTorchTensor.to_eager(shard).to(torch.float32).contiguous()
-        self._ple_map[start:start + rows] = eager.numpy()
+        eager = eager * self._read_ple_weight_scale()
+
+        if idx == 0:
+            a = eager.abs()
+            logger.info(f"PLE shard 0 after scaling by {self._read_ple_weight_scale():.6g}: "
+                        f"absmax {a.max():.6g}, std {eager.std():.6g}")
+
+        self._ple_map[start:start + rows] = gguf.quants.quantize(eager.numpy(), self._ple_qtype)
         del eager
 
     def _finish_ple_table(self, total_rows: int):
@@ -226,14 +271,13 @@ class Qwen4ExpTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
         self._ple_map = None
 
         # trim the tail if the last shard came up short of a full stride
-        want = total_rows * self._ple_row_dim * 4
+        want = total_rows * self._ple_row_bytes
         if self._ple_path.stat().st_size != want:
             with open(self._ple_path, "r+b") as f:
                 f.truncate(want)
 
-        raw = np.memmap(self._ple_path, dtype=np.float32, mode="r+",
-                        shape=(total_rows, self._ple_row_dim))
-        return torch.from_numpy(np.asarray(raw))
+        return np.memmap(self._ple_path, dtype=np.uint8, mode="r",
+                         shape=(total_rows, self._ple_row_bytes))
 
     def prepare_tensors(self):
         super().prepare_tensors()
