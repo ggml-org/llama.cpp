@@ -37,6 +37,7 @@ export {
 	recallPrevious,
 	shouldLockPageScroll,
 	swipeDirection,
+	wheelHistoryDirection,
 	type PromptHistoryCursor,
 	type PromptHistorySwipe
 } from './prompt-history';

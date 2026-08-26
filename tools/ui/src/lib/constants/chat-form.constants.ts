@@ -11,3 +11,5 @@ export const NEW_CHAT_DRAFT_KEY = '__new_chat__';
 export const PROMPT_HISTORY_MAX_ENTRIES = 100;
 /** Minimum vertical pointer travel (px) to treat a gesture as history swipe. */
 export const PROMPT_HISTORY_SWIPE_MIN_PX = 48;
+/** Minimum ms between mouse-wheel history steps. */
+export const PROMPT_HISTORY_WHEEL_COOLDOWN_MS = 90;

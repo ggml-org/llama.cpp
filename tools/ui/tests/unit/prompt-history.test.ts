@@ -7,7 +7,8 @@ import {
 	recallNext,
 	recallPrevious,
 	shouldLockPageScroll,
-	swipeDirection
+	swipeDirection,
+	wheelHistoryDirection
 } from '$lib/utils/prompt-history';
 import { describe, expect, it } from 'vitest';
 
@@ -86,6 +87,19 @@ describe('swipeDirection', () => {
 		expect(swipeDirection(80, -50, 48)).toBeNull();
 		expect(swipeDirection(0, -48, 48)).toBe('up');
 		expect(swipeDirection(10, 60, 48)).toBe('down');
+	});
+});
+
+describe('wheelHistoryDirection', () => {
+	it('maps vertical wheel to history swipe directions', () => {
+		expect(wheelHistoryDirection(-40, 0)).toBe('up');
+		expect(wheelHistoryDirection(40, 0)).toBe('down');
+	});
+
+	it('ignores tiny or horizontal-dominant wheels', () => {
+		expect(wheelHistoryDirection(0, 0)).toBeNull();
+		expect(wheelHistoryDirection(0.4, 0)).toBeNull();
+		expect(wheelHistoryDirection(-10, 40)).toBeNull();
 	});
 });
 

@@ -135,6 +135,22 @@ export function swipeDirection(
 	return dy < 0 ? 'up' : 'down';
 }
 
+/** Wheel up (negative deltaY) recalls previous; wheel down recalls next. */
+export function wheelHistoryDirection(
+	deltaY: number,
+	deltaX = 0
+): PromptHistorySwipe | null {
+	if (!Number.isFinite(deltaY) || Math.abs(deltaY) < 1) {
+		return null;
+	}
+
+	if (Math.abs(deltaY) <= Math.abs(deltaX)) {
+		return null;
+	}
+
+	return deltaY < 0 ? 'up' : 'down';
+}
+
 /**
  * Lock document scrolling while a finger moves vertically on the chat
  * input, unless the input itself still has room to scroll that way.

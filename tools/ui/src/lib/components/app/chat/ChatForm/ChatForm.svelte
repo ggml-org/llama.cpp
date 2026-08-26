@@ -15,6 +15,7 @@
 		INITIAL_FILE_SIZE,
 		INPUT_CLASSES,
 		PROMPT_CONTENT_SEPARATOR,
+		PROMPT_HISTORY_WHEEL_COOLDOWN_MS,
 		SETTING_CONFIG_DEFAULT
 	} from '$lib/constants';
 	import {
@@ -58,7 +59,8 @@
 		parseClipboardContent,
 		shouldLockPageScroll,
 		swipeDirection,
-		uuid
+		uuid,
+		wheelHistoryDirection
 	} from '$lib/utils';
 	import {
 		AudioRecorder,
@@ -176,6 +178,7 @@
 	let swipeStartX = 0;
 	let swipeStartY = 0;
 	let swipeTracking = false;
+	let lastWheelStepAt = 0;
 
 	$effect(() => {
 		const el = inputAreaEl;
@@ -202,10 +205,16 @@
 			}
 		};
 
+		const onWheel = (event: WheelEvent) => {
+			handlePromptHistoryWheel(event);
+		};
+
 		el.addEventListener('touchmove', onTouchMove, { passive: false });
+		el.addEventListener('wheel', onWheel, { passive: false });
 
 		return () => {
 			el.removeEventListener('touchmove', onTouchMove);
+			el.removeEventListener('wheel', onWheel);
 		};
 	});
 
@@ -410,6 +419,50 @@
 		}
 
 		return false;
+	}
+
+	function handlePromptHistoryWheel(event: WheelEvent) {
+		if (!enablePromptHistory || disabled || isPromptHistoryPickerOpen()) {
+			return;
+		}
+
+		if (event.ctrlKey || event.metaKey) {
+			return;
+		}
+
+		const direction = wheelHistoryDirection(event.deltaY, event.deltaX);
+
+		if (!direction) {
+			return;
+		}
+
+		const el = inputRef?.getElement();
+
+		if (el && canScrollInDirection(el, direction)) {
+			return;
+		}
+
+		const caret = inputRef?.getCaretOffset() ?? (value ?? '').length;
+
+		if (direction === 'up' && !isCaretOnFirstLine(value ?? '', caret)) {
+			return;
+		}
+
+		if (direction === 'down' && !isCaretOnLastLine(value ?? '', caret)) {
+			return;
+		}
+
+		event.preventDefault();
+
+		const now = performance.now();
+
+		if (now - lastWheelStepAt < PROMPT_HISTORY_WHEEL_COOLDOWN_MS) {
+			return;
+		}
+
+		if (recallPromptHistory(direction === 'up' ? 'previous' : 'next')) {
+			lastWheelStepAt = now;
+		}
 	}
 
 	function handlePromptHistoryTouchStart(event: TouchEvent) {
