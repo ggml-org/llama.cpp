@@ -3292,8 +3292,8 @@ void ggml_prec_set_acc(
 
 void ggml_prec_set_src(
         struct ggml_tensor * a,
-        int                  idx,
-        enum ggml_prec       prec) {
+        enum ggml_prec       prec,
+        int                  idx) {
     GGML_ASSERT(idx >= 0 && idx < GGML_MAX_SRC);
 
     switch (a->op) {

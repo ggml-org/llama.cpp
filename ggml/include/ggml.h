@@ -1453,16 +1453,16 @@ extern "C" {
     //  - GGML_PREC_Q4   -   GGML_TYPE_Q4_0, GGML_TYPE_Q4_1, GGML_TYPE_Q4_K, GGML_TYPE_NVFP4, GGML_TYPE_MXFP4, etc.
     //
     // for example:
-    //   - ggml_prec_set_src(a, GGML_PREC_Q8):
-    //     - allows the implementation to quantize F32, BF16, F16 data down to GGML_TYPE_Q8_0
+    //   - ggml_prec_set_src(a, GGML_PREC_Q8, 1):
+    //     - allows the implementation to quantize F32, BF16, F16 data of src[1] down to GGML_TYPE_Q8_0
     //     - cannot quantize it down to GGML_TYPE_Q4_0 or GGML_TYPE_NVFP4
-    //   - ggml_prec_set_src(a, GGML_PREC_Q4):
-    //     - allows the implementation to quantize F32, BF16, F16 data down to GGML_TYPE_Q8_0 or GGML_TYPE_NVFP4
+    //   - ggml_prec_set_src(a, GGML_PREC_Q4, 1):
+    //     - allows the implementation to quantize F32, BF16, F16 data of src[1] down to GGML_TYPE_Q8_0 or GGML_TYPE_NVFP4
     //
     GGML_API void ggml_prec_set_src(
             struct ggml_tensor * a,
-            int                  idx,
-            enum ggml_prec       prec);
+            enum ggml_prec       prec,
+            int                  idx);
 
     // A: k columns, n rows => [ne03, ne02, n, k]
     // B: k columns, m rows  (i.e. we transpose it internally) => [ne03 * x, ne02 * y, m, k]
