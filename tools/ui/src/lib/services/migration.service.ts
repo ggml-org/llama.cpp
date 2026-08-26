@@ -762,7 +762,7 @@ const mcpServerOverridesToToolPolicyMigration: Migration = {
 				}
 			}
 		} catch {
-			return;
+			// fall through with empty defaults so legacy overrides still migrate
 		}
 
 		const db = await getDatabaseService();
