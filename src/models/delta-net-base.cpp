@@ -460,7 +460,17 @@ ggml_tensor * llm_build_delta_net_base::build_conv_state(
 
     const int64_t n_seqs = ubatch.n_seqs;
 
-    ggml_tensor * conv_states = build_rs(inp, conv_states_all, hparams.n_embd_r(), n_seqs);
+    // the row width comes from the target: this helper is also used for a model's second
+    // recurrent state, whose rows are narrower than n_embd_r()
+    const int64_t n_embd_row = conv_states_all->ne[0];
+
+    // ... and the row has to be exactly the conv state, since that is what gets reshaped and what
+    // the cell stride below assumes. A wider row (state packed next to something else) needs its
+    // own slice, not this helper
+    GGML_ASSERT(n_embd_row == (conv_kernel_size - 1) * conv_channels &&
+            "build_conv_state: the recurrent row must hold only the conv state");
+
+    ggml_tensor * conv_states = build_rs(inp, conv_states_all, n_embd_row, n_seqs);
     cb(conv_states, "conv_states", il);
 
     conv_states = ggml_reshape_3d(ctx0, conv_states, conv_kernel_size - 1, conv_channels, n_seqs);

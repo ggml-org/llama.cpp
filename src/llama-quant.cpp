@@ -324,6 +324,10 @@ static bool tensor_allows_quantization(const llama_model_quantize_params * param
     // do not quantize Mamba/Kimi's small conv1d weights
     // NOTE: can't use LLM_TN here because the layer number is not known
     quantize &= name.find("ssm_conv1d") == std::string::npos;
+    quantize &= name.find("ple_conv1d") == std::string::npos;
+    // the hyper-connection projections are tiny (hc_lowrank wide) and their names would otherwise
+    // be picked up by the ffn_up/ffn_down substring match in tensor_get_category()
+    quantize &= name.find("hc_ffn_") == std::string::npos;
     quantize &= name.find("shortconv.conv.weight") == std::string::npos;
 
     // do not quantize MiniMax's indexer projection weights, they are tiny

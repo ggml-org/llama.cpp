@@ -93,6 +93,18 @@ class TensorNameMap:
         MODEL_TENSOR.DENSE_3_OUT: (
             "dense_3_out",  # embeddinggemma
         ),
+        MODEL_TENSOR.HC_MIX_NORM: (
+            "model.hyper_connection_mixer.hc_norm",  # qwen4exp
+        ),
+
+        MODEL_TENSOR.HC_MIX_DOWN: (
+            "model.hyper_connection_mixer.input_mix_weight_down",  # qwen4exp
+        ),
+
+        MODEL_TENSOR.HC_MIX_UP: (
+            "model.hyper_connection_mixer.input_mix_weight_up",  # qwen4exp
+        ),
+
         # Output norm
         MODEL_TENSOR.OUTPUT_NORM: (
             "gpt_neox.final_layer_norm",               # gptneox
@@ -1301,8 +1313,9 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.INDEXER_K_NORM: (
-            "model.layers.{bid}.self_attn.indexer.k_norm",  # DSA
-            "model.layers.{bid}.self_attn.index_k_norm",    # MSA
+            "model.layers.{bid}.self_attn.indexer.k_norm",         # DSA
+            "model.layers.{bid}.self_attn.index_k_norm",           # MSA
+            "model.layers.{bid}.self_attn.indexer.k_layernorm",    # qwen4exp
         ),
 
         MODEL_TENSOR.INDEXER_PROJ: (
@@ -1326,7 +1339,64 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.INDEXER_Q_NORM: (
-            "model.layers.{bid}.self_attn.index_q_norm", # MSA
+            "model.layers.{bid}.self_attn.index_q_norm",           # MSA
+            "model.layers.{bid}.self_attn.indexer.q_layernorm",    # qwen4exp
+        ),
+
+        MODEL_TENSOR.HC_ATTN_NORM: (
+            "model.layers.{bid}.attn_hyper_connection.hc_norm",  # qwen4exp
+        ),
+
+        MODEL_TENSOR.HC_ATTN_DOWN: (
+            "model.layers.{bid}.attn_hyper_connection.input_mix_weight_down",  # qwen4exp
+        ),
+
+        MODEL_TENSOR.HC_ATTN_UP: (
+            "model.layers.{bid}.attn_hyper_connection.input_mix_weight_up",  # qwen4exp
+        ),
+
+        MODEL_TENSOR.HC_ATTN_INJECT: (
+            "model.layers.{bid}.attn_hyper_connection.block_inject_weight",  # qwen4exp
+        ),
+
+        MODEL_TENSOR.HC_FFN_NORM: (
+            "model.layers.{bid}.mlp_hyper_connection.hc_norm",  # qwen4exp
+        ),
+
+        MODEL_TENSOR.HC_FFN_DOWN: (
+            "model.layers.{bid}.mlp_hyper_connection.input_mix_weight_down",  # qwen4exp
+        ),
+
+        MODEL_TENSOR.HC_FFN_UP: (
+            "model.layers.{bid}.mlp_hyper_connection.input_mix_weight_up",  # qwen4exp
+        ),
+
+        MODEL_TENSOR.HC_FFN_INJECT: (
+            "model.layers.{bid}.mlp_hyper_connection.block_inject_weight",  # qwen4exp
+        ),
+
+        MODEL_TENSOR.PLE_KEY: (
+            "model.layers.{bid}.ple.key_proj",  # qwen4exp
+        ),
+
+        MODEL_TENSOR.PLE_VALUE: (
+            "model.layers.{bid}.ple.value_proj",  # qwen4exp
+        ),
+
+        MODEL_TENSOR.PLE_KEY_NORM: (
+            "model.layers.{bid}.ple.norm_key",  # qwen4exp
+        ),
+
+        MODEL_TENSOR.PLE_QUERY_NORM: (
+            "model.layers.{bid}.ple.norm_query",  # qwen4exp
+        ),
+
+        MODEL_TENSOR.PLE_CONV_NORM: (
+            "model.layers.{bid}.ple.norm_conv",  # qwen4exp
+        ),
+
+        MODEL_TENSOR.PLE_CONV1D: (
+            "model.layers.{bid}.ple.conv1d",  # qwen4exp
         ),
 
         ############################################################################

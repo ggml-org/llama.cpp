@@ -2314,6 +2314,106 @@ struct llama_model_qwen35moe : public llama_model_base {
 };
 
 
+class llm_graph_input_qsa;
+
+struct llama_model_qwen4exp : public llama_model_base {
+    llama_model_qwen4exp(const struct llama_model_params & params) : llama_model_base(params) {}
+    void load_arch_hparams(llama_model_loader & ml) override;
+    void load_arch_tensors(llama_model_loader & ml) override;
+
+    struct graph : public llm_build_delta_net_base {
+        // the MTP block reuses the builders below, so it chains to this ctor and builds its own graph
+        graph(const llama_model & model, const llm_graph_params & params, bool /*mtp*/)
+            : llm_build_delta_net_base(params), model(model) {}
+        graph(const llama_model & model, const llm_graph_params & params);
+    protected:
+        // hyper-connection input mixer: returns the block input and the per-stream injection weights
+        ggml_tensor * build_hc_pre(
+                    ggml_tensor * x,
+                    ggml_tensor * norm,
+                    ggml_tensor * down,
+                    ggml_tensor * up,
+                    ggml_tensor * inject,
+                   ggml_tensor ** inject_out,
+                            int   il);
+
+        // scatter the block output back into the hyper-connection streams
+        ggml_tensor * build_hc_post(
+                    ggml_tensor * residual,
+                    ggml_tensor * y,
+                    ggml_tensor * inject,
+                            int   il);
+
+        // RMS norm over each hyper-connection stream separately
+        ggml_tensor * build_hc_norm(
+                    ggml_tensor * x,
+                    ggml_tensor * w,
+                            int   il);
+
+        ggml_tensor * build_ple(
+                    ggml_tensor * x,
+                    ggml_tensor * ngram_ids,
+                    ggml_tensor * tokens,
+             llm_graph_input_rs * inp,
+                            int   il);
+
+        // the host-side QSA maps, or nullptr when this context has no indexer cache
+        llm_graph_input_qsa * build_qsa_inp();
+
+        // relu(q . k_blk) summed over the indexer heads, for one token against every block
+        ggml_tensor * build_qsa_scores(
+            llm_graph_input_qsa * inp_qsa,
+                    ggml_tensor * cur,
+                    ggml_tensor * inp_pos,
+                            int * sections,
+                            int   il);
+
+        // QSA block scores -> the kq mask of the cells the attention may read
+        ggml_tensor * build_qsa_mask(
+            llm_graph_input_qsa * inp_qsa,
+                    ggml_tensor * sc,
+                    ggml_tensor * kq_mask,
+                            int   il);
+
+        // QSA block scores -> the selected keys and values, gathered into one compact buffer
+        void build_qsa_gather(
+            llm_graph_input_qsa * inp_qsa,
+                    ggml_tensor * sc,
+                    ggml_tensor * k_all,
+                    ggml_tensor * v_all,
+                    ggml_tensor * kq_mask,
+                   ggml_tensor ** k_out,
+                   ggml_tensor ** v_out,
+                   ggml_tensor ** m_out);
+
+        ggml_tensor * build_layer_attn(
+        llm_graph_input_attn_kv * inp_attn,
+            llm_graph_input_qsa * inp_qsa,
+                    ggml_tensor * cur,
+                    ggml_tensor * inp_pos,
+                            int * sections,
+                            int   il);
+
+        ggml_tensor * build_layer_attn_linear(
+             llm_graph_input_rs * inp,
+                    ggml_tensor * cur,
+                            int   il);
+
+        ggml_tensor * build_layer_ffn(
+                    ggml_tensor * cur,
+                            int   il);
+
+        const llama_model & model;
+    };
+
+    struct graph_mtp : public graph {
+        graph_mtp(const llama_model & model, const llm_graph_params & params);
+    };
+
+    std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
+};
+
+
 struct llama_model_mistral3 : public llama_model_base {
     llama_model_mistral3(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;

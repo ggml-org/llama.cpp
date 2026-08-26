@@ -836,6 +836,11 @@ class GGUFWriter:
     def add_rope_pattern(self, value: Sequence[bool]) -> None:
         self.add_array(Keys.Attention.ROPE_PATTERN.format(arch=self.arch), value)
 
+    # true means the layer is recurrent (linear attention), false means full attention.
+    # llama.cpp falls back to full_attention_interval when this is absent
+    def add_recurrent_layers(self, value: Sequence[bool]) -> None:
+        self.add_array(Keys.Attention.RECURRENT_LAYERS.format(arch=self.arch), value)
+
     def add_dense_features_dims(self, dense:str, in_f:int, out_f:int) -> None:
         self.add_uint32(Keys.LLM.DENSE_FEAT_IN_SIZE.format(arch=self.arch, dense=dense), in_f)
         self.add_uint32(Keys.LLM.DENSE_FEAT_OUT_SIZE.format(arch=self.arch, dense=dense), out_f)
@@ -1022,6 +1027,28 @@ class GGUFWriter:
 
     def add_hyper_connection_count(self, count: int) -> None:
         self.add_uint32(Keys.HyperConnection.COUNT.format(arch=self.arch), count)
+
+    def add_hyper_connection_lowrank(self, lowrank: int) -> None:
+        self.add_uint32(Keys.HyperConnection.LOWRANK.format(arch=self.arch), lowrank)
+
+    def add_ple_embedding_length(self, length: int) -> None:
+        self.add_uint32(Keys.Ple.EMBD_LENGTH.format(arch=self.arch), length)
+
+    def add_ple_conv_kernel(self, size: int) -> None:
+        self.add_uint32(Keys.Ple.CONV_KERNEL.format(arch=self.arch), size)
+
+    def _add_i64_array(self, key: str, values: Sequence[int]) -> None:
+        # signed: the values come from a torch int64 buffer and the hash is done in int64
+        self.add_key_value(key, list(values), GGUFValueType.ARRAY, GGUFValueType.INT64)
+
+    def add_ple_ngram_multipliers(self, values: Sequence[int]) -> None:
+        self._add_i64_array(Keys.Ple.NGRAM_MULTIPLIERS.format(arch=self.arch), values)
+
+    def add_ple_ngram_vocab_sizes(self, values: Sequence[int]) -> None:
+        self._add_i64_array(Keys.Ple.NGRAM_VOCAB_SIZES.format(arch=self.arch), values)
+
+    def add_ple_ngram_offsets(self, values: Sequence[int]) -> None:
+        self._add_i64_array(Keys.Ple.NGRAM_OFFSETS.format(arch=self.arch), values)
 
     def add_hyper_connection_sinkhorn_iterations(self, count: int) -> None:
         self.add_uint32(Keys.HyperConnection.SINKHORN_ITERATIONS.format(arch=self.arch), count)

@@ -39,7 +39,11 @@ public:
                      bool   unified,
                             /* layer filters */
     const layer_filter_cb & filter_attn = nullptr,
-    const layer_filter_cb & filter_recr = nullptr);
+    const layer_filter_cb & filter_recr = nullptr,
+                            /* optional per-token indexer keys (QSA), attention layers only */
+    const layer_filter_cb & filter_lid  = nullptr,
+                            /* optional second recurrent state (qwen4exp PLE), its own layers */
+    const layer_filter_cb & filter_ple  = nullptr);
 
     ~llama_memory_hybrid() = default;
 
@@ -83,11 +87,21 @@ public:
     llama_kv_cache * get_mem_attn() const;
     llama_memory_recurrent * get_mem_recr() const;
 
+    // null unless the model asked for an indexer cache
+    llama_kv_cache * get_mem_lid() const;
+    llama_memory_recurrent * get_mem_ple() const;
+
 private:
     const llama_hparams & hparams;
 
+    // the indexer cache stores one key per token, so it needs its own head layout
+    llama_hparams hparams_lid;
+    llama_hparams hparams_ple;
+
     const std::unique_ptr<llama_kv_cache> mem_attn;
     const std::unique_ptr<llama_memory_recurrent> mem_recr;
+    std::unique_ptr<llama_kv_cache> mem_lid;
+    std::unique_ptr<llama_memory_recurrent> mem_ple;
 };
 
 class llama_memory_hybrid_context : public llama_memory_context_i {
@@ -110,6 +124,7 @@ public:
     llama_memory_hybrid_context(
               llama_memory_hybrid * mem,
                   slot_info_vec_t   sinfos_attn,
+                  slot_info_vec_t   sinfos_lid,
         std::vector<llama_ubatch>   ubatches);
 
     ~llama_memory_hybrid_context() = default;
@@ -127,7 +142,33 @@ public:
     const llama_kv_cache_context * get_attn() const;
     const llama_memory_recurrent_context * get_recr() const;
 
+    // null unless the model asked for an indexer cache
+    const llama_kv_cache_context * get_lid() const;
+
+    // null unless the model asked for a second recurrent state
+    const llama_memory_recurrent_context * get_ple() const;
+
+    // QSA selects blocks of keys over token positions, but the caches store them by cell, and the
+    // two only agree for an append-only single-sequence cache. These maps let the graph translate.
+    // ref: src/llama-kv-cache-msa.cpp
+
+    // length of the position axis: past the largest position in the cache, padded so that the
+    // graph shape stays constant across batches and can be reused
+    uint32_t get_n_pos(uint32_t n_pad, uint32_t n_seq_max) const;
+
+    // I32/F32 [n_pos, n_stream] pos -> cell, of the indexer cache when lid, else of the attention
+    // cache. Positions with no cell, and cells past the first n_rows (all the graph views), get 0,
+    // which aliases cell 0. That is only harmless while a sequence occupies a contiguous range of
+    // positions, which is what an append-only cache gives. A hole in the middle of the range (a
+    // mid-range seq_rm, a ranged seq_cp) makes a consumer read cell 0 for the missing positions.
+    void set_input_pos_cell(ggml_tensor * dst, const llama_ubatch * ubatch, bool lid, int64_t n_rows) const;
+
+    // I32 [n_kv, n_stream] attention cell -> pos/div. Empty and other-sequence cells get 0.
+    void set_input_cell_blk(ggml_tensor * dst, const llama_ubatch * ubatch, int32_t div) const;
+
 private:
+    llama_memory_hybrid * mem = nullptr;
+
     // the index of the next ubatch to process
     size_t i_next = 0;
 
@@ -135,6 +176,8 @@ private:
 
     const llama_memory_context_ptr ctx_attn;
     const llama_memory_context_ptr ctx_recr;
+    const llama_memory_context_ptr ctx_lid;
+    const llama_memory_context_ptr ctx_ple;
 
     const llama_memory_status status;
 };

@@ -18,6 +18,7 @@ class llama_memory_recurrent : public llama_memory_i {
 public:
     llama_memory_recurrent(
             const llama_model & model,
+          const llama_hparams & hparams,
                     ggml_type   type_r,
                     ggml_type   type_s,
                          bool   offload,

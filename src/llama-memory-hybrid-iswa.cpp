@@ -52,6 +52,7 @@ llama_memory_hybrid_iswa::llama_memory_hybrid_iswa(
     )),
     mem_recr(new llama_memory_recurrent(
         model,
+        model.hparams,
         type_r,
         type_s,
         offload,

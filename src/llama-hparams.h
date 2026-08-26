@@ -7,6 +7,9 @@
 #include <cmath>
 
 // bump if necessary
+#define LLAMA_MAX_NGRAM         8
+#define LLAMA_MAX_NGRAM_HEADS  64
+
 #define LLAMA_MAX_LAYERS  512
 #define LLAMA_MAX_EXPERTS 1024 // Kimi K3
 
@@ -257,6 +260,12 @@ struct llama_hparams {
     uint32_t indexer_local_blocks = 0;
 
     // Indexer is "full" (1) or "shared" (0)
+    // QSA (Qwen4-Exp): the indexer selects whole blocks of indexer_block_size keys, up to
+    // indexer_top_k keys in total. All four values are needed to run it.
+    bool has_qsa() const {
+        return indexer_n_head > 0 && indexer_head_size > 0 && indexer_block_size > 0 && indexer_top_k > 0;
+    }
+
     // Shared indexers reuse top-k from previous full layer
     std::array<uint32_t, LLAMA_MAX_LAYERS> is_indexer_full_impl;
 
@@ -286,6 +295,29 @@ struct llama_hparams {
 
     // gemma4 per-layer embedding
     uint32_t n_embd_per_layer = 0;
+
+    // Qwen4-Exp hyper-connections and per-layer embedding (PLE)
+    uint32_t hc_count       = 0;
+    uint32_t hc_lowrank     = 0;
+    uint32_t n_embd_ple      = 0;
+    uint32_t ple_conv_kernel = 0;
+    uint32_t ple_ngram_size  = 0;  // 0 = no PLE
+    uint32_t ple_ngram_heads = 0;
+    // n_embd_r()/n_embd_s() are derived from the ssm sizes. A model that keeps a second recurrent
+    // state hands llama_memory_recurrent an hparams copy with these set to that state's geometry.
+    // Keep them 0 in the model's own hparams, or the primary state changes shape too
+    uint32_t n_embd_r_override = 0;
+    uint32_t n_embd_s_override = 0;
+
+    // geometry of that second state, which the hybrid copies into the overrides above
+    uint32_t n_embd_r_2nd = 0;
+    uint32_t n_embd_s_2nd = 0;
+
+    // the single layer that owns the second state, -1 when there is none
+    int32_t  il_2nd = -1;
+    std::array<uint64_t, LLAMA_MAX_NGRAM>       ple_ngram_mult;   // hash multiplier per n-gram position
+    std::array<uint64_t, LLAMA_MAX_NGRAM_HEADS> ple_ngram_vocab;  // vocab size of each hashed n-gram head
+    std::array<uint64_t, LLAMA_MAX_NGRAM_HEADS> ple_ngram_offs;   // row offset of each hashed n-gram head
 
     // needed by encoder-decoder models (e.g. T5, FLAN-T5)
     // ref: https://github.com/ggml-org/llama.cpp/pull/8141

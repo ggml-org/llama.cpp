@@ -500,6 +500,23 @@ struct llama_layer {
     struct ggml_tensor * hc_ffn_fn    = nullptr;
     struct ggml_tensor * hc_ffn_base  = nullptr;
     struct ggml_tensor * hc_ffn_scale = nullptr;
+    // Qwen4-Exp hyper-connections and per-layer embedding (PLE)
+    struct ggml_tensor * hc_attn_norm   = nullptr;
+    struct ggml_tensor * hc_attn_down   = nullptr;
+    struct ggml_tensor * hc_attn_up     = nullptr;
+    struct ggml_tensor * hc_attn_inject = nullptr;
+    struct ggml_tensor * hc_ffn_norm    = nullptr;
+    struct ggml_tensor * hc_ffn_down    = nullptr;
+    struct ggml_tensor * hc_ffn_up      = nullptr;
+    struct ggml_tensor * hc_ffn_inject  = nullptr;
+    struct ggml_tensor * ple_ngram_embd = nullptr;
+    struct ggml_tensor * ple_key        = nullptr;
+    struct ggml_tensor * ple_value      = nullptr;
+    struct ggml_tensor * ple_key_norm   = nullptr;
+    struct ggml_tensor * ple_query_norm = nullptr;
+    struct ggml_tensor * ple_conv_norm  = nullptr;
+    struct ggml_tensor * ple_conv1d     = nullptr;
+
     struct ggml_tensor * attn_comp_wkv   = nullptr;
     struct ggml_tensor * attn_comp_wgate = nullptr;
     struct ggml_tensor * attn_comp_ape   = nullptr;
@@ -620,6 +637,11 @@ struct llama_model {
     struct ggml_tensor * hc_head_fn    = nullptr;
     struct ggml_tensor * hc_head_base  = nullptr;
     struct ggml_tensor * hc_head_scale = nullptr;
+
+    // Qwen4-Exp final hyper-connection mixer
+    struct ggml_tensor * hc_mix_norm = nullptr;
+    struct ggml_tensor * hc_mix_down = nullptr;
+    struct ggml_tensor * hc_mix_up   = nullptr;
 
     // classifier
     struct ggml_tensor * cls       = nullptr;
