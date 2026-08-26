@@ -1433,6 +1433,37 @@ extern "C" {
             struct ggml_tensor  * b,
             float                 eps);
 
+    // set the minimum required accumulator type for the implementation to use during the compute
+    // for example:
+    //  - GGML_PREC_F32  - requires accumulation of the results in F32
+    //  - GGML_PREC_BF16 - can accumulate the results in BF16, F32
+    //  - GGML_PREC_F16  - can accumulate the results in F16, F32
+    //  - GGML_PREC_Q8   - not allowed
+    //  - GGML_PREC_Q4   - not allowed
+    GGML_API void ggml_prec_set_acc(
+            struct ggml_tensor * a,
+            enum ggml_prec       prec);
+
+    // set the smallest rank that the implementation can use to internally convert the src[idx] data to
+    // ranks in decreasing order:
+    //  - GGML_PREC_F32  -   GGML_TYPE_F32
+    //  - GGML_PREC_BF16 -   GGML_TYPE_BF16
+    //  - GGML_PREC_F16  -   GGML_TYPE_F16,
+    //  - GGML_PREC_Q8   -   GGML_TYPE_Q8_0, GGML_TYPE_Q8_1, GGML_TYPE_Q8_K, etc.
+    //  - GGML_PREC_Q4   -   GGML_TYPE_Q4_0, GGML_TYPE_Q4_1, GGML_TYPE_Q4_K, GGML_TYPE_NVFP4, GGML_TYPE_MXFP4, etc.
+    //
+    // for example:
+    //   - ggml_prec_set_src(a, GGML_PREC_Q8):
+    //     - allows the implementation to quantize F32, BF16, F16 data down to GGML_TYPE_Q8_0
+    //     - cannot quantize it down to GGML_TYPE_Q4_0 or GGML_TYPE_NVFP4
+    //   - ggml_prec_set_src(a, GGML_PREC_Q4):
+    //     - allows the implementation to quantize F32, BF16, F16 data down to GGML_TYPE_Q8_0 or GGML_TYPE_NVFP4
+    //
+    GGML_API void ggml_prec_set_src(
+            struct ggml_tensor * a,
+            int                  idx,
+            enum ggml_prec       prec);
+
     // A: k columns, n rows => [ne03, ne02, n, k]
     // B: k columns, m rows  (i.e. we transpose it internally) => [ne03 * x, ne02 * y, m, k]
     // result is n columns, m rows => [ne03 * x, ne02 * y, m, n]
@@ -1446,37 +1477,7 @@ extern "C" {
     GGML_DEPRECATED(GGML_API void ggml_mul_mat_set_prec(
             struct ggml_tensor * a,
             enum ggml_prec       prec),
-        "use ggml_mul_mat_set_prec_acc() instead");
-
-    // set the minimum required accumulator type for the implementation to use during the compute
-    // for example:
-    //  - GGML_PREC_F32  - requires accumulation of the results in F32
-    //  - GGML_PREC_BF16 - can accumulate the results in BF16, F32
-    //  - GGML_PREC_F16  - can accumulate the results in F16, F32
-    //  - GGML_PREC_Q8   - not allowed
-    //  - GGML_PREC_Q4   - not allowed
-    GGML_API void ggml_mul_mat_set_prec_acc(
-            struct ggml_tensor * a,
-            enum ggml_prec       prec);
-
-    // set the smallest rank that the implementation can use to internally convert the src1 data to
-    // ranks in decreasing order:
-    //  - GGML_PREC_F32  -   GGML_TYPE_F32
-    //  - GGML_PREC_BF16 -   GGML_TYPE_BF16
-    //  - GGML_PREC_F16  -   GGML_TYPE_F16,
-    //  - GGML_PREC_Q8   -   GGML_TYPE_Q8_0, GGML_TYPE_Q8_1, GGML_TYPE_Q8_K, etc.
-    //  - GGML_PREC_Q4   -   GGML_TYPE_Q4_0, GGML_TYPE_Q4_1, GGML_TYPE_Q4_K, GGML_TYPE_NVFP4, GGML_TYPE_MXFP4, etc.
-    //
-    // for example:
-    //   - ggml_mul_mat_set_prec_src1(a, GGML_PREC_Q8):
-    //     - allows the implementation to quantize F32, BF16, F16 data down to GGML_TYPE_Q8_0
-    //     - cannot quantize it down to GGML_TYPE_Q4_0 or GGML_TYPE_NVFP4
-    //   - ggml_mul_mat_set_prec_src1(a, GGML_PREC_Q4):
-    //     - allows the implementation to quantize F32, BF16, F16 data down to GGML_TYPE_Q8_0 or GGML_TYPE_NVFP4
-    //
-    GGML_API void ggml_mul_mat_set_prec_src1(
-            struct ggml_tensor * a,
-            enum ggml_prec       prec);
+        "use ggml_prec_set_acc() instead");
 
     // change the hint of a matrix multiplication
     GGML_API void ggml_mul_mat_set_hint(
@@ -2481,9 +2482,10 @@ extern "C" {
             float                 max_bias,
             float                 logit_softcap);
 
-    GGML_API void ggml_flash_attn_ext_set_prec(
+    GGML_DEPRECATED(GGML_API void ggml_flash_attn_ext_set_prec(
             struct ggml_tensor * a,
-            enum ggml_prec       prec);
+            enum ggml_prec       prec),
+        "use ggml_prec_set_acc() instead");
 
     GGML_API enum ggml_prec ggml_flash_attn_ext_get_prec(
             const struct ggml_tensor * a);

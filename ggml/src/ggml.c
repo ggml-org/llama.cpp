@@ -3265,6 +3265,52 @@ struct ggml_tensor * ggml_l2_norm_inplace(
     return ggml_l2_norm_impl(ctx, a, eps, true);
 }
 
+// ggml_prec
+
+void ggml_prec_set_acc(
+        struct ggml_tensor * a,
+        enum ggml_prec       prec) {
+    switch (a->op) {
+        case GGML_OP_MUL_MAT:
+            {
+                const int32_t prec_i32 = (int32_t) prec;
+
+                ggml_set_op_params_i32(a, 0, prec_i32);
+            }
+            break;
+        case GGML_OP_FLASH_ATTN_EXT:
+            {
+                const int32_t prec_i32 = (int32_t) prec;
+
+                ggml_set_op_params_i32(a, 3, prec_i32);
+            }
+            break;
+        default:
+            GGML_ABORT("not implemented");
+    };
+}
+
+void ggml_prec_set_src(
+        struct ggml_tensor * a,
+        int                  idx,
+        enum ggml_prec       prec) {
+    GGML_ASSERT(idx >= 0 && idx < GGML_MAX_SRC);
+
+    switch (a->op) {
+        case GGML_OP_MUL_MAT:
+            {
+                GGML_ASSERT(idx == 1);
+
+                const int32_t prec_i32 = (int32_t) prec;
+
+                ggml_set_op_params_i32(a, 2 + idx, prec_i32);
+            }
+            break;
+        default:
+            GGML_ABORT("not implemented");
+    };
+}
+
 // ggml_mul_mat
 
 static inline bool ggml_can_mul_mat(const struct ggml_tensor * t0, const struct ggml_tensor * t1) {
