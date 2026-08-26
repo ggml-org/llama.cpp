@@ -31,6 +31,6 @@ jobs:
       - name: Upload built UI
         uses: actions/upload-artifact@v6
         with:
-          name: ui-build
+          name: llama-ui.zip
           path: tools/ui/dist/
           retention-days: 1

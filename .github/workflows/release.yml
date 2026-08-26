@@ -61,31 +61,8 @@ jobs:
             echo "should_release=false" >> $GITHUB_OUTPUT
           fi
 
-  get-version:
-    runs-on: ubuntu-slim
-    outputs:
-      ui_version: ${{ steps.version.outputs.ui_version }}
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-      - id: version
-        run: |
-          # Resolve UI version: BUILD_NUMBER from cmake/build-info.cmake > git hash + epoch > fallback
-          version=""
-          if grep -q "BUILD_NUMBER" cmake/build-info.cmake; then
-            build_number=$(grep "set(BUILD_NUMBER" cmake/build-info.cmake | grep -oP '\d+')
-            if [ -n "$build_number" ] && [ "$build_number" -gt 0 ]; then
-              version="b${build_number}"
-            fi
-          fi
-          if [ -z "$version" ]; then
-            version=$(git rev-parse --short HEAD)-$(date +%s)
-          fi
-          echo "ui_version=${version}" >> $GITHUB_OUTPUT
-
   macos-cpu:
-    needs: [check-release, get-version]
+    needs: [check-release, ui-build]
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
     strategy:
       matrix:
@@ -119,12 +96,11 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
+      - name: Download UI build
+        uses: actions/download-artifact@v7
         with:
-          node-version: "24"
-          cache: "npm"
-          cache-dependency-path: "tools/ui/package-lock.json"
+          name: llama-ui.zip
+          path: tools/ui/dist
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
@@ -141,7 +117,6 @@ jobs:
             -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
             -DLLAMA_FATAL_WARNINGS=ON \
             -DLLAMA_BUILD_BORINGSSL=ON \
-            -DHF_UI_VERSION=${{ needs.get-version.outputs.ui_version }} \
             ${{ env.CMAKE_ARGS }}
           cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
 
@@ -167,7 +142,7 @@ jobs:
           key: release-${{ matrix.os }}-${{ matrix.arch }}
 
   ubuntu-cpu:
-    needs: [check-release, get-version]
+    needs: [check-release, ui-build]
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
     strategy:
       matrix:
@@ -191,12 +166,11 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
+      - name: Download UI build
+        uses: actions/download-artifact@v7
         with:
-          node-version: "24"
-          cache: "npm"
-          cache-dependency-path: "tools/ui/package-lock.json"
+          name: llama-ui.zip
+          path: tools/ui/dist
 
       - name: Dependencies
         id: depends
@@ -227,7 +201,6 @@ jobs:
             -DGGML_NATIVE=OFF \
             -DGGML_CPU_ALL_VARIANTS=ON \
             -DLLAMA_FATAL_WARNINGS=ON \
-            -DHF_UI_VERSION=${{ needs.get-version.outputs.ui_version }} \
             ${{ env.CMAKE_ARGS }}
           cmake --build build --config Release -j $(nproc)
 
@@ -254,7 +227,7 @@ jobs:
           key: release-${{ matrix.os }}-cpu
 
   ubuntu-vulkan:
-    needs: [check-release, get-version]
+    needs: [check-release, ui-build]
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
     strategy:
@@ -277,12 +250,11 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
+      - name: Download UI build
+        uses: actions/download-artifact@v7
         with:
-          node-version: "24"
-          cache: "npm"
-          cache-dependency-path: "tools/ui/package-lock.json"
+          name: llama-ui.zip
+          path: tools/ui/dist
 
       - name: Dependencies
         id: depends
@@ -314,7 +286,6 @@ jobs:
             -DGGML_NATIVE=OFF \
             -DGGML_CPU_ALL_VARIANTS=ON \
             -DGGML_VULKAN=ON \
-            -DHF_UI_VERSION=${{ needs.get-version.outputs.ui_version }} \
             ${{ env.CMAKE_ARGS }}
           cmake --build build --config Release -j $(nproc)
 
@@ -340,7 +311,7 @@ jobs:
           key: release-${{ matrix.os }}-vulkan
 
   android-arm64:
-    needs: [check-release, get-version]
+    needs: [check-release, ui-build]
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
     runs-on: ubuntu-latest
@@ -358,12 +329,11 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
+      - name: Download UI build
+        uses: actions/download-artifact@v7
         with:
-          node-version: "24"
-          cache: "npm"
-          cache-dependency-path: "tools/ui/package-lock.json"
+          name: llama-ui.zip
+          path: tools/ui/dist
 
       - name: Set up JDK
         uses: actions/setup-java@v5
@@ -407,7 +377,6 @@ jobs:
             -DLLAMA_FATAL_WARNINGS=ON \
             -DGGML_OPENMP=OFF \
             -DLLAMA_BUILD_BORINGSSL=ON \
-            -DHF_UI_VERSION=${{ needs.get-version.outputs.ui_version }} \
             ${{ env.CMAKE_ARGS }}
           cmake --build build --config Release -j $(nproc)
 
@@ -433,7 +402,7 @@ jobs:
           name: llama-bin-android-arm64.tar.gz
 
   ubuntu-24-openvino:
-    needs: [check-release, get-version]
+    needs: [check-release, ui-build]
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
     runs-on: ubuntu-24.04
@@ -460,12 +429,11 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
+      - name: Download UI build
+        uses: actions/download-artifact@v7
         with:
-          node-version: "24"
-          cache: "npm"
-          cache-dependency-path: "tools/ui/package-lock.json"
+          name: llama-ui.zip
+          path: tools/ui/dist
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
@@ -508,7 +476,6 @@ jobs:
             -DGGML_OPENVINO=ON \
             -DCMAKE_INSTALL_RPATH='$ORIGIN' \
             -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
-            -DHF_UI_VERSION=${{ needs.get-version.outputs.ui_version }} \
             ${{ env.CMAKE_ARGS }}
           cmake --build build/ReleaseOV --config Release --parallel
 
@@ -552,7 +519,7 @@ jobs:
           key: release-ubuntu-24.04-openvino-release-no-preset-v1
 
   windows-openvino:
-    needs: [check-release]
+    needs: [check-release, ui-build]
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
     runs-on: windows-2022
@@ -577,12 +544,11 @@ jobs:
         with:
             fetch-depth: 0
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
+      - name: Download UI build
+        uses: actions/download-artifact@v7
         with:
-          node-version: "24"
-          cache: "npm"
-          cache-dependency-path: "tools/ui/package-lock.json"
+          name: llama-ui.zip
+          path: tools/ui/dist
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
@@ -682,7 +648,7 @@ jobs:
 
   windows-cpu:
     name: windows-cpu / ${{ matrix.arch }}
-    needs: [check-release]
+    needs: [check-release, ui-build]
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
     runs-on: windows-2025-vs2026
@@ -702,12 +668,11 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
+      - name: Download UI build
+        uses: actions/download-artifact@v7
         with:
-          node-version: "24"
-          cache: "npm"
-          cache-dependency-path: "tools/ui/package-lock.json"
+          name: llama-ui.zip
+          path: tools/ui/dist
 
       - name: Install Ninja
         run: |
@@ -749,8 +714,10 @@ jobs:
         with:
           key: release-windows-2025-vs2026-${{ matrix.arch }}-cpu
 
+  # TODO: build only the ggml-hip backend like the other windows backend jobs
+  #       (windows-cuda, windows-sycl), then drop the ui-build dependency
   windows-rocm:
-    needs: [check-release]
+    needs: [check-release, ui-build]
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
     runs-on: windows-2022
@@ -768,6 +735,12 @@ jobs:
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
+
+      - name: Download UI build
+        uses: actions/download-artifact@v7
+        with:
+          name: llama-ui.zip
+          path: tools/ui/dist
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
@@ -879,6 +852,8 @@ jobs:
         with:
           key: windows-rocm-${{ matrix.ROCM_VERSION }}-${{ matrix.build }}
 
+  # note: builds only the backend library - llama-server (with the embedded UI)
+  #       is injected from the windows-cpu zip during the release "Merge artifacts" step
   windows:
     needs: [check-release]
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
@@ -908,13 +883,6 @@ jobs:
       - name: Clone
         id: checkout
         uses: actions/checkout@v6
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: "24"
-          cache: "npm"
-          cache-dependency-path: "tools/ui/package-lock.json"
 
       - name: Install Vulkan SDK
         id: get_vulkan
@@ -978,6 +946,8 @@ jobs:
           path: llama-bin-win-${{ matrix.backend }}-${{ matrix.arch }}.zip
           name: llama-bin-win-${{ matrix.backend }}-${{ matrix.arch }}.zip
 
+  # note: builds only the ggml-cuda backend - llama-server is injected from the
+  #       windows-cpu zip during the release "Merge artifacts" step
   windows-cuda:
     name: windows-cuda (${{ matrix.cuda }}, ${{ matrix.arch }})
     needs: [check-release]
@@ -1005,13 +975,6 @@ jobs:
       - name: Clone
         id: checkout
         uses: actions/checkout@v6
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: "24"
-          cache: "npm"
-          cache-dependency-path: "tools/ui/package-lock.json"
 
       - name: Install Cuda Toolkit
         uses: ./.github/actions/windows-setup-cuda
@@ -1084,6 +1047,8 @@ jobs:
         with:
           key: release-windows-2022-${{ matrix.arch }}-cuda-${{ matrix.cuda }}
 
+  # note: builds only the ggml-sycl backend - llama-server is injected from the
+  #       windows-cpu zip during the release "Merge artifacts" step
   windows-sycl:
     needs: [check-release]
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
@@ -1117,13 +1082,6 @@ jobs:
           Invoke-WebRequest -Uri "${{ env.LEVEL_ZERO_SDK_URL }}" -OutFile "level-zero-win-sdk.zip"
           Expand-Archive -Path "level-zero-win-sdk.zip" -DestinationPath "C:/level-zero-sdk" -Force
           "LEVEL_ZERO_V1_SDK_PATH=C:/level-zero-sdk" | Out-File -FilePath $env:GITHUB_ENV -Append
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: "24"
-          cache: "npm"
-          cache-dependency-path: "tools/ui/package-lock.json"
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
@@ -1195,7 +1153,7 @@ jobs:
           key: release-windows-2022-x64-sycl
 
   ubuntu-24-sycl:
-    needs: [check-release]
+    needs: [check-release, ui-build]
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
     strategy:
@@ -1237,12 +1195,11 @@ jobs:
           wget -q "https://github.com/oneapi-src/level-zero/releases/download/v${LEVEL_ZERO_VERSION}/level-zero-devel_${LEVEL_ZERO_VERSION}%2B${LEVEL_ZERO_UBUNTU_VERSION}_amd64.deb" -O level-zero-devel.deb
           sudo apt-get install -y ./level-zero.deb ./level-zero-devel.deb
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
+      - name: Download UI build
+        uses: actions/download-artifact@v7
         with:
-          node-version: "24"
-          cache: "npm"
-          cache-dependency-path: "tools/ui/package-lock.json"
+          name: llama-ui.zip
+          path: tools/ui/dist
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
@@ -1288,7 +1245,7 @@ jobs:
           key: release-ubuntu-24.04-sycl-${{ matrix.build }}
 
   ubuntu-24-rocm:
-    needs: [check-release, get-version]
+    needs: [check-release, ui-build]
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
     runs-on: ubuntu-24.04
@@ -1310,12 +1267,11 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
+      - name: Download UI build
+        uses: actions/download-artifact@v7
         with:
-          node-version: "24"
-          cache: "npm"
-          cache-dependency-path: "tools/ui/package-lock.json"
+          name: llama-ui.zip
+          path: tools/ui/dist
 
       - name: Free up disk space
         uses: ggml-org/free-disk-space@v1.3.1
@@ -1388,7 +1344,6 @@ jobs:
             -DGPU_TARGETS="${{ matrix.gpu_targets }}" \
             -DGGML_HIP=ON \
             -DHIP_PLATFORM=amd \
-            -DHF_UI_VERSION=${{ needs.get-version.outputs.ui_version }} \
             ${{ env.CMAKE_ARGS }}
           cmake --build build --config Release -j $(nproc)
 
@@ -1417,7 +1372,7 @@ jobs:
           key: release-ubuntu-24.04-rocm-${{ matrix.ROCM_VERSION }}-${{ matrix.build }}
 
   ios-xcode:
-    needs: [check-release, get-version]
+    needs: [check-release]
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
     runs-on: macos-26
 
@@ -1445,8 +1400,7 @@ jobs:
             -DLLAMA_BUILD_SERVER=OFF \
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=16.0 \
-            -DCMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM=ggml \
-            -DHF_UI_VERSION=${{ needs.get-version.outputs.ui_version }}
+            -DCMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM=ggml
           cmake --build build --config Release -j $(sysctl -n hw.logicalcpu) -- CODE_SIGNING_ALLOWED=NO
 
       - name: xcodebuild for swift package
@@ -1569,11 +1523,9 @@ jobs:
 #          name: llama-bin-${{ matrix.chip_type }}-openEuler-${{ matrix.arch }}${{ matrix.use_acl_graph == 'on' && '-aclgraph' || '' }}.tar.gz
 
   ui-build:
-    needs: [check-release, get-version]
+    needs: [check-release]
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
     uses: ./.github/workflows/ui-build.yml
-    with:
-      hf_ui_version: ${{ needs.get-version.outputs.ui_version }}
 
   release:
     if: ${{ ( github.event_name == 'push' && github.ref == 'refs/heads/master' ) || github.event.inputs.create_release == 'true' }}
@@ -1588,7 +1540,6 @@ jobs:
     runs-on: ubuntu-slim
 
     needs:
-      - get-version
       - windows
       - windows-cpu
       - windows-cuda
@@ -1628,24 +1579,27 @@ jobs:
           path: ./artifact
           merge-multiple: true
 
-      - name: Move artifacts
+      - name: Merge artifacts
         id: move_artifacts
         run: |
           mkdir -p release
 
-          echo "Adding CPU backend files to existing zips..."
+          # the windows-cpu zip contains the full toolset (llama-server with the embedded
+          # UI, ggml-cpu) - inject it into the other windows zips so that every archive
+          # ships the same binaries, only with a different backend library on top
+          echo "Injecting windows-cpu binaries (llama-server + CPU backend) into the backend zips..."
           for arch in x64 arm64; do
             cpu_zip="artifact/llama-bin-win-cpu-${arch}.zip"
             temp_dir=$(mktemp -d)
-            echo "Extracting CPU backend for $arch..."
+            echo "Extracting windows-cpu-${arch} package..."
             unzip "$cpu_zip" -d "$temp_dir"
 
-            echo "Adding CPU files to $arch zips..."
+            echo "Merging into $arch zips..."
             for target_zip in artifact/llama-bin-win-*-${arch}.zip; do
               if [[ "$target_zip" == "$cpu_zip" ]]; then
                 continue
               fi
-              echo "Adding CPU backend to $(basename "$target_zip")"
+              echo "Injecting into $(basename "$target_zip")"
               realpath_target_zip=$(realpath "$target_zip")
               (cd "$temp_dir" && zip -r "$realpath_target_zip" .)
             done
@@ -1669,7 +1623,7 @@ jobs:
         id: download_ui
         uses: actions/download-artifact@v7
         with:
-          name: ui-build
+          name: llama-ui.zip
           path: ./ui-dist
 
       - name: Package UI
