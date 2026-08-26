@@ -2250,3 +2250,449 @@ template [[host_name("kernel_lightning_indexer_q4_1")]] kernel kernel_lightning_
 template [[host_name("kernel_lightning_indexer_q5_0")]] kernel kernel_lightning_indexer_t kernel_lightning_indexer<block_q5_0, 2, dequantize_q5_0>;
 template [[host_name("kernel_lightning_indexer_q5_1")]] kernel kernel_lightning_indexer_t kernel_lightning_indexer<block_q5_1, 2, dequantize_q5_1>;
 template [[host_name("kernel_lightning_indexer_q8_0")]] kernel kernel_lightning_indexer_t kernel_lightning_indexer<block_q8_0, 2, dequantize_q8_0>;
+
+// ============================================================================
+// Tensor API (MPP tensor_ops) Flash Attention prefill kernel
+//
+// One simdgroup per threadgroup (32 threads); each matmul op runs with
+// execution scope = the whole (single) simdgroup (metal::execution_simdgroup).
+// Each threadgroup handles QPSG = 8 queries over the full KV range (same
+// "one threadgroup per Q tile, full KV loop" model as the matrix kernel above
+// - no split-KV across simdgroups).
+//
+// IMPORTANT: the MPP coop destination tile layout is implementation-defined
+// (it depends on the op, the dtypes, the opscope AND the surrounding code /
+// register pressure).  Two verified landmines (do not "simplify" these away):
+//   - the output write must be ELEMENT pointer arithmetic on a float*
+//     ((device float *) dst + (uint64_t)elems * DV); doing the offset in BYTES
+//     (char* + elems*DV*4) corrupts the QK^T (C, QPSG) coop tile layout
+//   - dispatching 4 simdgroups with per-lane execution scope (the former
+//     design) only produced correct results in the presence of extra
+//     dead-code "bloat" - the 1-simdgroup design is the stable one
+//
+// Verified design notes (see the Phase-0 spike, 2026-07):
+//   - QK^T: descriptor(m=C, n=QPSG, k=DK, transL=false, transR=true);
+//     left = K tile (DK, C) f16 device, right = Q tile (DK, QPSG) f32 device
+//     (half x float -> float is in the dtype table; Q is f32 in ggml)
+//   - the QK destination coop tensor (f32) has idx0 = query, idx1 = kv; each
+//     thread owns a (2 queries x 8 kv) sub-tile
+//   - per-query max/sum: in-register partials + threadgroup exchange
+//     (the hardware reduce_rows/reduce_columns reduce the wrong axis for this
+//     tile shape and their ownership is not what we need)
+//   - P stays in registers (f32) and is fed directly to the PV matmul as the
+//     right input: get_right_input_cooperative_tensor<half, float, float>(P)
+//   - PV: descriptor(m=PVM, n=QPSG, k=C, transL=true, transR=false),
+//     left = V tile (PVM, C) f16 device, m dimension capped at 128 -> for
+//     dv > 128 the PV is split into d blocks (PVM = 128, or 64 for dv % 128
+//     != 0); each block re-runs the chunk loop with a self-contained f32
+//     accumulator (a coop destination tile is a compiler-managed register
+//     tile: distinct named objects do not share storage)
+//   - the PV destination has idx0 = query, idx1 = d; the output is written
+//     element-wise (store() only works for the transposed natural layout)
+//   - the last partial KV chunk (ne11 % C != 0) is read from the pad buffer
+//     produced by kernel_flash_attn_ext_pad (padded rows are zero; the padded
+//     scores are clobbered to -FLT_MAX/2 in registers before the softmax)
+//
+// fast-path gate (host-side): f16 K/V, no mask/sinks/ALiBi/softcap,
+// dk % 16 == 0, dv % 64 == 0 && dv <= 512, ne01 % (NLANES*QPSG) == 0 (== 8)
+// ============================================================================
+#ifdef GGML_METAL_HAS_TENSOR
+#include <metal_tensor>
+#include <MetalPerformancePrimitives/MetalPerformancePrimitives.h>
+
+// note: file-scope constants are not allowed in MSL, so these are defined in the kernel
+//       (the host-side gate mirrors the values: NLANES*QPSG = 8 queries per threadgroup)
+template <short DK, short DV>
+void kernel_flash_attn_ext_tensor_impl(
+        constant ggml_metal_kargs_flash_attn_ext & args,
+        device const char * q,
+        device const char * k,
+        device const char * v,
+        device const char * mask,
+        device const char * sinks,
+        device const char * pad,
+        device       char * dst,
+        threadgroup  half * shmem_f16,
+        uint3   tgpig,
+        ushort  tiitg,
+        ushort  sgitg) {
+    using namespace mpp::tensor_ops;
+
+    // NOTE: 1 simdgroup per threadgroup (32 threads), execution scope = 1
+    // simdgroup.  Using 4 simdgroups with execution_simdgroups<1> leaves the
+    // coop destination tile layout implementation-defined and the compiler
+    // can collapse the (C, QPSG) tile (verified: n dim shrinks, results wrong).
+    constexpr short NLANES = 1;                    // simdgroups per threadgroup
+    constexpr short QPSG   = 8;                    // queries per threadgroup
+    constexpr short C      = OP_FLASH_ATTN_EXT_NCPSG; // 64 kv items per chunk
+
+    // the tensor-core destination tile caps the m dimension at 128; for
+    // dv > 128 split the PV into d blocks (128-wide, or 64-wide when dv is
+    // not a multiple of 128 - both verified)
+    constexpr short PVM  = ((DV % 128) == 0) ? ((DV < 128) ? DV : 128) : 64;
+    constexpr short NBLK = (DV + PVM - 1) / PVM;
+    static_assert(DV % PVM == 0, "dv must be a multiple of the PV block size");
+
+    const ushort iq3 = tgpig[2];
+    const ushort iq2 = tgpig[1];
+    const int    iq1 = tgpig[0]*QPSG;              // 8 queries per threadgroup
+
+    // GQA: Q head -> KV head
+    const short ikv2 = iq2/(args.ne02/args.ne_12_2);
+    const short ikv3 = iq3/(args.ne03/args.ne_12_3);
+
+    // row strides in elements
+    const int sq = args.nb01/4;  // Q is f32
+    const int sk = args.ns10;
+    const int sv = args.ns20;
+
+    // NOTE: MPP requires non-const element types in the operand decltypes
+    device float * qp = (device float *) (q + iq1*args.nb01 + iq2*args.nb02 + iq3*args.nb03) + (sgitg*QPSG)*sq;
+    device half  * kp = (device half  *) (k + ikv2*args.nb12 + ikv3*args.nb13);
+    device half  * vp = (device half  *) (v + ikv2*args.nb22 + ikv3*args.nb23);
+
+    // ---- Q tile for this lane: (DK, QPSG) f32, strided ----
+    auto tQ = tensor(qp, dextents<int, 2>(DK, QPSG), array<int, 2>{ 1, sq });
+
+    // ---- matmul ops (execution scope: 1 simdgroup = this lane) ----
+    // QK^T: P (C, QPSG) = K^T (DK, C) x Q (DK, QPSG)
+    // NOTE: k must be dynamic_extent (k is taken from the left operand extent);
+    // using a compile-time constant here breaks the coop destination tile layout
+    constexpr auto desc_qk = matmul2d_descriptor(
+            C, QPSG, static_cast<int>(dynamic_extent), false, true, false, matmul2d_descriptor::mode::multiply);
+    matmul2d<desc_qk, execution_simdgroup> mm_qk;
+
+    // PV: O (PVM, QPSG) += V^T (PVM, C) x P (C, QPSG)
+    constexpr auto desc_pvb = matmul2d_descriptor(
+            PVM, QPSG, C, true, false, false, matmul2d_descriptor::mode::multiply_accumulate);
+    matmul2d<desc_pvb, execution_simdgroup> mm_pvb;
+
+    auto tK0 = tensor(kp, dextents<int, 2>(DK, C), array<int, 2>{ 1, sk });
+    auto tV0 = tensor(vp, dextents<int, 2>(PVM, C), array<int, 2>{ 1, sv });
+
+    auto cT_qk0 = mm_qk.template get_destination_cooperative_tensor<decltype(tK0), decltype(tQ), float>();
+
+    // ---- shared memory per lane: partial max/sum per (query, thread) + M/S/alpha ----
+    constexpr short SHM_FLOATS = NLANES*(QPSG*32 + QPSG*32 + 3*QPSG);
+    threadgroup float * sh_qmax  = (threadgroup float *) shmem_f16;
+    threadgroup float * sh_qsum  = sh_qmax  + NLANES*QPSG*32;
+    threadgroup float * sh_M     = sh_qsum  + NLANES*QPSG*32;
+    threadgroup float * sh_S     = sh_M     + NLANES*QPSG;
+    threadgroup float * sh_alpha = sh_S     + NLANES*QPSG;
+
+    (void) SHM_FLOATS;
+
+    const int jb  = sgitg*QPSG;          // query offset within lane (sgitg == 0)
+    const int jqb = sgitg*QPSG*32;       // (query, thread) offset (sgitg == 0)
+    const int t   = tiitg % 32;          // thread within the (only) simdgroup
+
+    const int kv      = args.ne11;
+    const int nchunks = (kv + C - 1)/C;
+    const bool has_kvpad = kv % C != 0;
+
+    // mask: (kv, nq, ne32, ne33) f16, kv contiguous; ne31 == 0 means no mask
+    const bool has_mask  = args.ne31 != 0;
+    const bool has_sinks = (args.flags & 1u) != 0;
+    const bool has_scap  = args.logit_softcap != 0.0f;
+
+    // ALiBi: slope per Q head (the mask holds the position distances)
+    float slope = 1.0f;
+    if (args.max_bias != 0.0f) {
+        const int h = iq2;
+        const float base = h < args.n_head_log2 ? args.m0 : args.m1;
+        const int exph = h < args.n_head_log2 ? h + 1 : 2*(h - args.n_head_log2) + 1;
+        slope = pow(base, (float) exph);
+    }
+    const float mscale = args.max_bias != 0.0f ? slope : 1.0f;
+
+    // mask head/batch offset (bytes); the query offset is applied per element
+    const uint64_t mbase = (uint64_t) (iq2 % args.ne32) * args.nb32 + (uint64_t) (iq3 % args.ne33) * args.nb33;
+
+    // pad buffer layout (kernel_flash_attn_ext_pad): the last C kv items per
+    // (KV head, batch), K then V, zero-padded beyond kv; the mask section is
+    // (nq, C) f16 per (Q head, batch) with -MAXHALF beyond kv
+    const uint64_t pad_k_offs = (uint64_t) (ikv2 + ikv3*args.ne_12_2) * args.nb11*C;
+    const uint64_t pad_v_offs = (uint64_t) args.nb11*C*args.ne_12_2*args.ne_12_3 +
+                                (uint64_t) (ikv2 + ikv3*args.ne_12_2) * args.nb21*C;
+    const uint64_t pad_mask_offs = (uint64_t) (args.nb11 + args.nb21) * C * args.ne_12_2 * args.ne_12_3 +
+                                   2u * C * args.ne31 * ((uint64_t) (iq2 % args.ne32) + (uint64_t) (iq3 % args.ne33) * args.ne32);
+
+    for (int b = 0; b < NBLK; ++b) {
+        auto make_cT_pv = [&]() {
+            auto tVb = tensor(vp, dextents<int, 2>(PVM, C), array<int, 2>{ 1, sv });
+            return mm_pvb.template get_destination_cooperative_tensor<decltype(tVb), decltype(cT_qk0), float>();
+        };
+
+        auto cT_pv = make_cT_pv();
+
+        {
+            #pragma clang loop unroll(full)
+            for (uint i = 0; i < cT_pv.get_capacity(); ++i) {
+                if (cT_pv.is_valid_element(i)) { cT_pv[i] = 0.0f; }
+            }
+        }
+        for (int j = t; j < QPSG; j += 32) {
+            sh_M[jb + j]      = -FLT_MAX / 2;
+            sh_S[jb + j]      = 0.0f;
+            sh_alpha[jb + j]  = 1.0f;
+        }
+        simdgroup_barrier(mem_flags::mem_threadgroup);
+
+        for (int ic = 0; ic < nchunks; ++ic) {
+            const int k0 = ic*C;
+            const int kc = min((int) C, kv - k0);
+
+            // reset this thread's (q, t) column
+            {
+                #pragma clang loop unroll(full)
+                for (int j = 0; j < QPSG; ++j) {
+                    sh_qmax[jqb + j*32 + t] = -FLT_MAX / 2;
+                    sh_qsum[jqb + j*32 + t] = 0.0f;
+                }
+            }
+
+            // the last partial chunk is read from the pad buffer (padded with 0);
+            // the pad buffer holds only the last C kv items per (KV head, batch),
+            // so its rows are indexed from 0 (not k0)
+            const bool use_pad = has_kvpad && k0 + C > kv;
+            device half * kp_c = use_pad ? (device half *) (pad + pad_k_offs) : kp + (uint) k0*sk;
+            device half * vp_c = use_pad ? (device half *) (pad + pad_v_offs) : vp + (uint) k0*sv;
+
+            // mask row base for this chunk: real mask (kv contiguous, query
+            // stride nb31) or the pad section (C per query, indexed from 0)
+            device const half * mp = nullptr;
+            int mstride = 0; // in halfs, per local query j
+            if (has_mask) {
+                if (use_pad) {
+                    mp      = (device const half *) (pad + pad_mask_offs) + (iq1 + sgitg*QPSG) * (int) C;
+                    mstride = C;
+                } else {
+                    // global query index: iq1 + sgitg*QPSG + j (j is local, 0..QPSG-1)
+                    mp      = (device const half *) (mask + (uint64_t) k0 * 2 + mbase)
+                            + (uint64_t) (iq1 + sgitg*QPSG) * (args.nb31 / 2);
+                    mstride = (int) (args.nb31 / 2);
+                }
+            }
+
+            auto tK  = tensor(kp_c, dextents<int, 2>(DK, C), array<int, 2>{ 1, sk });
+            // block b covers d = b*PVM .. b*PVM + PVM - 1 (d is the innermost dim of V)
+            auto tVb = tensor(vp_c + (uint) b*PVM, dextents<int, 2>(PVM, C), array<int, 2>{ 1, sv });
+
+            // ---- QK^T ----
+            auto cT_qk = mm_qk.template get_destination_cooperative_tensor<decltype(tK), decltype(tQ), float>();
+            {
+                #pragma clang loop unroll(full)
+                for (uint i = 0; i < cT_qk.get_capacity(); ++i) {
+                    if (cT_qk.is_valid_element(i)) { cT_qk[i] = 0.0f; }
+                }
+            }
+            mm_qk.run(tK, tQ, cT_qk);
+
+            // scale in registers; clobber padded kv (idx1 >= kc) to -inf
+            float lmax[QPSG], lsum[QPSG];
+            #pragma clang loop unroll(full)
+            for (int j = 0; j < QPSG; ++j) { lmax[j] = -FLT_MAX / 2; lsum[j] = 0.0f; }
+            {
+                #pragma clang loop unroll(full)
+                for (uint i = 0; i < cT_qk.get_capacity(); ++i) {
+                    if (!cT_qk.is_valid_element(i)) { continue; }
+                    auto idx = cT_qk.get_multidimensional_index(i);
+                    const int q = (int) idx[0];
+                    float s;
+                    if ((int) idx[1] >= kc) {
+                        s = -FLT_MAX / 2;
+                    } else {
+                        s = cT_qk[i]*args.scale;
+                        if (has_scap) { s = args.logit_softcap * tanh(s); }
+                        if (has_mask) { s += (float) mp[(uint) q * mstride + (uint) idx[1]] * mscale; }
+                    }
+                    cT_qk[i] = s;
+                    if (s > lmax[q]) { lmax[q] = s; }
+                }
+            }
+
+            // partial max -> shared (non-owned queries hold -FLT_MAX/2 -> harmless)
+            {
+                #pragma clang loop unroll(full)
+                for (int j = 0; j < QPSG; ++j) {
+                    sh_qmax[jqb + j*32 + t] = lmax[j];
+                }
+            }
+            simdgroup_barrier(mem_flags::mem_threadgroup);
+
+            // M / alpha update: thread t (< QPSG) finalizes query t
+            if (t < QPSG) {
+                const int j = t;
+                float m_new = sh_M[jb + j];
+                #pragma clang loop unroll(full)
+                for (int tt = 0; tt < 32; ++tt) {
+                    m_new = max(m_new, sh_qmax[jqb + j*32 + tt]);
+                }
+                sh_alpha[jb + j] = exp(sh_M[jb + j] - m_new);
+                sh_M[jb + j]     = m_new;
+            }
+            simdgroup_barrier(mem_flags::mem_threadgroup);
+
+            // ---- exp in registers, partial sums ----
+            {
+                #pragma clang loop unroll(full)
+                for (uint i = 0; i < cT_qk.get_capacity(); ++i) {
+                    if (!cT_qk.is_valid_element(i)) { continue; }
+                    auto idx = cT_qk.get_multidimensional_index(i);
+                    const int q = (int) idx[0];
+                    const float p = exp(cT_qk[i] - sh_M[jb + q]);
+                    cT_qk[i] = p; // P in registers (f32), later used as PV right input
+                    lsum[q] += p;
+                }
+            }
+            {
+                #pragma clang loop unroll(full)
+                for (int j = 0; j < QPSG; ++j) {
+                    sh_qsum[jqb + j*32 + t] = lsum[j];
+                }
+            }
+            simdgroup_barrier(mem_flags::mem_threadgroup);
+
+            // S update: thread t (< QPSG) finalizes query t
+            if (t < QPSG) {
+                const int j = t;
+                float s_new = 0.0f;
+                #pragma clang loop unroll(full)
+                for (int tt = 0; tt < 32; ++tt) {
+                    s_new += sh_qsum[jqb + j*32 + tt];
+                }
+                sh_S[jb + j] = sh_S[jb + j]*sh_alpha[jb + j] + s_new;
+            }
+            simdgroup_barrier(mem_flags::mem_threadgroup);
+
+            // ---- rescale O accumulator (per element: query = idx0) ----
+            // NOTE: skip the first chunk: alpha_1 = exp(-FLT_MAX/2 - m_new) = 0
+            if (ic > 0) {
+                #pragma clang loop unroll(full)
+                for (uint i = 0; i < cT_pv.get_capacity(); ++i) {
+                    if (!cT_pv.is_valid_element(i)) { continue; }
+                    auto idx = cT_pv.get_multidimensional_index(i);
+                    cT_pv[i] *= sh_alpha[jb + (int) idx[0]];
+                }
+            }
+
+            // ---- PV: P (in registers) as right input ----
+            {
+                auto cT_pr = mm_pvb.template get_right_input_cooperative_tensor<half, float, float>(cT_qk);
+                mm_pvb.run(tVb, cT_pr, cT_pv);
+            }
+            simdgroup_barrier(mem_flags::mem_threadgroup);
+        }
+
+        // ---- final: sinks, O /= S, element-wise write for this d block ----
+        {
+            simdgroup_barrier(mem_flags::mem_threadgroup);
+
+            // sinks: a virtual sink position with score sinks[iq2] and no O
+            // contribution: M' = max(M, sink), S' = S*exp(M - M') + exp(sink - M'),
+            // O' = O*exp(M - M'). The per-query O factor is stashed in sh_alpha
+            // (reused; the last-chunk alpha is not needed at this point).
+            if (has_sinks) {
+                const float s_sink = ((device const float *) sinks)[iq2];
+                for (int j = t; j < QPSG; j += 32) {
+                    const float m  = sh_M[jb + j];
+                    const float m2 = max(m, s_sink);
+                    sh_alpha[jb + j] = exp(m - m2);
+                    sh_S[jb + j]     = sh_S[jb + j]*sh_alpha[jb + j] + exp(s_sink - m2);
+                }
+            } else {
+                for (int j = t; j < QPSG; j += 32) {
+                    sh_alpha[jb + j] = 1.0f;
+                }
+            }
+            simdgroup_barrier(mem_flags::mem_threadgroup);
+
+            // output layout is (DV, heads, batch, batch3) with DV innermost:
+            //   offset = (iq3*ne2*ne1 + iq2 + (iq1 + sgitg*QPSG + j)*ne1)*DV + d
+            // (this lane handles queries iq1 + sgitg*QPSG .. + QPSG-1)
+            // NOTE: the write must use ELEMENT pointer arithmetic on a float*
+            // (cast dst first, then add element offsets).  Doing the offset in
+            // BYTES (char* + element*DV) corrupts the coop tile register layout
+            // of the matmul ops above (verified: QK^T (C,QPSG) tile collapses).
+            device float * op = (device float *) dst +
+                    (uint64_t) (iq3*args.ne2*args.ne1 + iq2 + (iq1 + sgitg*QPSG)*args.ne1) * DV;
+            {
+                #pragma clang loop unroll(full)
+                for (uint i = 0; i < cT_pv.get_capacity(); ++i) {
+                    if (!cT_pv.is_valid_element(i)) { continue; }
+                    auto idx = cT_pv.get_multidimensional_index(i);
+                    const int j = (int) idx[0]; // query
+                    const int d = b*PVM + (int) idx[1]; // head dim
+                    if (j >= 0 && j < QPSG && d >= 0 && d < (int) DV && iq1 + j < args.ne01) {
+                        const float s = sh_S[jb + j];
+                        op[(uint64_t) j*args.ne1*DV + (uint) d] = (s == 0.0f) ? 0.0f : cT_pv[i]*sh_alpha[jb + j]/s;
+                    }
+                }
+            }
+
+        }
+    }
+}
+
+template <short DK, short DV>
+kernel void kernel_flash_attn_ext_tensor(
+        constant ggml_metal_kargs_flash_attn_ext & args,
+        device const char * q,
+        device const char * k,
+        device const char * v,
+        device const char * mask,
+        device const char * sinks,
+        device const char * pad,
+        device const char * blk,
+        device       char * dst,
+        threadgroup  half * shmem_f16 [[threadgroup(0)]],
+        uint3   tgpig[[threadgroup_position_in_grid]],
+        ushort  tiitg[[thread_index_in_threadgroup]],
+        ushort  sgitg[[simdgroup_index_in_threadgroup]]) {
+    (void) blk;
+
+    kernel_flash_attn_ext_tensor_impl<DK, DV>(args, q, k, v, mask, sinks, pad, dst, shmem_f16, tgpig, tiitg, sgitg);
+}
+
+// head size instantiations (f16 K/V only - see the host-side fast-path gate)
+template [[host_name("kernel_flash_attn_ext_tensor_dk64_dv64"  )]]  kernel void kernel_flash_attn_ext_tensor<  64,  64>(
+        constant ggml_metal_kargs_flash_attn_ext & args,
+        device const char * q, device const char * k, device const char * v, device const char * mask,
+        device const char * sinks, device const char * pad, device const char * blk,
+        device       char * dst, threadgroup half * shmem_f16, uint3 tgpig, ushort tiitg, ushort sgitg);
+template [[host_name("kernel_flash_attn_ext_tensor_dk128_dv128")]]  kernel void kernel_flash_attn_ext_tensor< 128, 128>(
+        constant ggml_metal_kargs_flash_attn_ext & args,
+        device const char * q, device const char * k, device const char * v, device const char * mask,
+        device const char * sinks, device const char * pad, device const char * blk,
+        device       char * dst, threadgroup half * shmem_f16, uint3 tgpig, ushort tiitg, ushort sgitg);
+template [[host_name("kernel_flash_attn_ext_tensor_dk192_dv128")]]  kernel void kernel_flash_attn_ext_tensor< 192, 128>(
+        constant ggml_metal_kargs_flash_attn_ext & args,
+        device const char * q, device const char * k, device const char * v, device const char * mask,
+        device const char * sinks, device const char * pad, device const char * blk,
+        device       char * dst, threadgroup half * shmem_f16, uint3 tgpig, ushort tiitg, ushort sgitg);
+template [[host_name("kernel_flash_attn_ext_tensor_dk192_dv192")]]  kernel void kernel_flash_attn_ext_tensor< 192, 192>(
+        constant ggml_metal_kargs_flash_attn_ext & args,
+        device const char * q, device const char * k, device const char * v, device const char * mask,
+        device const char * sinks, device const char * pad, device const char * blk,
+        device       char * dst, threadgroup half * shmem_f16, uint3 tgpig, ushort tiitg, ushort sgitg);
+template [[host_name("kernel_flash_attn_ext_tensor_dk256_dv256")]]  kernel void kernel_flash_attn_ext_tensor< 256, 256>(
+        constant ggml_metal_kargs_flash_attn_ext & args,
+        device const char * q, device const char * k, device const char * v, device const char * mask,
+        device const char * sinks, device const char * pad, device const char * blk,
+        device       char * dst, threadgroup half * shmem_f16, uint3 tgpig, ushort tiitg, ushort sgitg);
+template [[host_name("kernel_flash_attn_ext_tensor_dk320_dv256")]]  kernel void kernel_flash_attn_ext_tensor< 320, 256>(
+        constant ggml_metal_kargs_flash_attn_ext & args,
+        device const char * q, device const char * k, device const char * v, device const char * mask,
+        device const char * sinks, device const char * pad, device const char * blk,
+        device       char * dst, threadgroup half * shmem_f16, uint3 tgpig, ushort tiitg, ushort sgitg);
+template [[host_name("kernel_flash_attn_ext_tensor_dk512_dv512")]]  kernel void kernel_flash_attn_ext_tensor< 512, 512>(
+        constant ggml_metal_kargs_flash_attn_ext & args,
+        device const char * q, device const char * k, device const char * v, device const char * mask,
+        device const char * sinks, device const char * pad, device const char * blk,
+        device       char * dst, threadgroup half * shmem_f16, uint3 tgpig, ushort tiitg, ushort sgitg);
+template [[host_name("kernel_flash_attn_ext_tensor_dk576_dv512")]]  kernel void kernel_flash_attn_ext_tensor< 576, 512>(
+        constant ggml_metal_kargs_flash_attn_ext & args,
+        device const char * q, device const char * k, device const char * v, device const char * mask,
+        device const char * sinks, device const char * pad, device const char * blk,
+        device       char * dst, threadgroup half * shmem_f16, uint3 tgpig, ushort tiitg, ushort sgitg);
+#endif // GGML_METAL_HAS_TENSOR

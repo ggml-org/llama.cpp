@@ -419,6 +419,8 @@ typedef struct {
     float    m1;
     int32_t  n_head_log2;
     float    logit_softcap;
+    // bit 0: has sinks (src[4]); the mask flag is (ne31 != 0)
+    uint32_t flags;
 } ggml_metal_kargs_flash_attn_ext;
 
 typedef struct {

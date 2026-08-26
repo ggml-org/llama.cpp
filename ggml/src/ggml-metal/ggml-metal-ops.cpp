@@ -2802,6 +2802,76 @@ bool ggml_metal_op_flash_attn_ext_use_vec(const ggml_tensor * op) {
     return (ne01 < 20) && (ne00 % 32 == 0);
 }
 
+// use the Tensor API (MPP tensor_ops) prefill kernel when the shape is in its fast path
+// ref: the kernel in kernels/fa.metal (kernel_flash_attn_ext_tensor)
+static bool ggml_metal_op_flash_attn_ext_use_tensor(const struct ggml_metal_device_props * props_dev,
+                                                    const ggml_tensor * op,
+                                                    float max_bias,
+                                                    float logit_softcap) {
+    assert(op->op == GGML_OP_FLASH_ATTN_EXT);
+
+    if (!props_dev->has_tensor) {
+        return false;
+    }
+
+    // override for A/B testing: GGML_METAL_FA_TENSOR=0|1 (default: auto)
+    static int fa_tensor_env = -1;
+    if (fa_tensor_env == -1) {
+        const char * env = getenv("GGML_METAL_FA_TENSOR");
+        fa_tensor_env = env ? atoi(env) : -1;
+    }
+    if (fa_tensor_env == 0) {
+        return false;
+    }
+
+    // decode stays on the vec path
+    if (ggml_metal_op_flash_attn_ext_use_vec(op)) {
+        return false;
+    }
+
+
+    // f16 K/V only (quantized KV needs the kv_f16 pre-pass; f32/bf16 KV later)
+    if (op->src[1]->type != GGML_TYPE_F16) {
+        return false;
+    }
+
+    // mask (f16, asserted above), sinks, ALiBi (max_bias) and softcap
+    // (logit_softcap) are all supported by the tensor kernel; the pad and blk
+    // buffers are pre-computed by the pad/blk kernels when needed
+    (void) max_bias;
+    (void) logit_softcap;
+
+    const int64_t dk = op->src[0]->ne[0];
+    const int64_t dv = op->src[2]->ne[0];
+    const int64_t nq = op->src[0]->ne[1];
+
+    if (dk % 16 != 0) {
+        return false;
+    }
+
+    // PV d-block split: 128-wide blocks (64-wide when dv % 128 != 0)
+    if (dv % 64 != 0 || dv > 512) {
+        return false;
+    }
+
+    // 8 queries per threadgroup (1 simdgroup)
+    if (nq % 8 != 0) {
+        return false;
+    }
+
+    // only the (dk, dv) pairs with an instantiated kernel
+    switch (dv) {
+        case 64:  if (dk != 64)                        return false; break;
+        case 128: if (dk != 128 && dk != 192)          return false; break;
+        case 192: if (dk != 192)                       return false; break;
+        case 256: if (dk != 256 && dk != 320)          return false; break;
+        case 512: if (dk != 512 && dk != 576)          return false; break;
+        default:  return false;
+    }
+
+    return true;
+}
+
 // ref: https://github.com/ggml-org/llama.cpp/pull/27390
 // dequantize the quantized KV cache to F16 before running the F16 flash attention kernels
 static bool ggml_metal_op_flash_attn_ext_use_kv_f16(const ggml_tensor * op) {
@@ -3257,6 +3327,79 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
 
         if (need_sync) {
             ggml_metal_op_concurrency_reset(ctx);
+        }
+
+        if (ggml_metal_op_flash_attn_ext_use_tensor(props_dev, op, max_bias, logit_softcap)) {
+            // Tensor API (MPP tensor_ops) fast path - see kernel_flash_attn_ext_tensor in kernels/fa.metal
+            // 8 queries per threadgroup (1 simdgroup), C = 64 kv per chunk
+            const int nqptg = 8;
+            const int nsg   = 1;
+
+            GGML_ASSERT(ne01 % nqptg == 0);
+            GGML_ASSERT(ne11 % OP_FLASH_ATTN_EXT_NCPSG == 0 || has_kvpad);
+
+            const int32_t ns10 = nb11_attn/nb10_attn;
+            const int32_t ns20 = nb21_attn/nb20_attn;
+
+            ggml_metal_kargs_flash_attn_ext args = {
+                /*.ne01          =*/ ne01,
+                /*.ne02          =*/ ne02,
+                /*.ne03          =*/ ne03,
+                /*.nb01          =*/ nb01,
+                /*.nb02          =*/ nb02,
+                /*.nb03          =*/ nb03,
+                /*.ne11          =*/ ne11,
+                /*.ne_12_2       =*/ ne12,
+                /*.ne_12_3       =*/ ne13,
+                /*.ns10          =*/ ns10,
+                /*.nb11          =*/ nb11_attn,
+                /*.nb12          =*/ nb12_attn,
+                /*.nb13          =*/ nb13_attn,
+                /*.ns20          =*/ ns20,
+                /*.nb21          =*/ nb21_attn,
+                /*.nb22          =*/ nb22_attn,
+                /*.nb23          =*/ nb23_attn,
+                /*.ne31          =*/ ne31,
+                /*.ne32          =*/ ne32,
+                /*.ne33          =*/ ne33,
+                /*.nb31          =*/ nb31,
+                /*.nb32          =*/ nb32,
+                /*.nb33          =*/ nb33,
+                /*.ne1           =*/ ne1,
+                /*.ne2           =*/ ne2,
+                /*.ne3           =*/ ne3,
+                /*.scale         =*/ scale,
+                /*.max_bias      =*/ max_bias,
+                /*.m0            =*/ m0,
+                /*.m1            =*/ m1,
+                /*.n_head_log2   =*/ n_head_log2,
+                /*.logit_softcap =*/ logit_softcap,
+                /*.flags         =*/ has_sinks ? 1u : 0u,
+            };
+
+            auto pipeline = ggml_metal_library_get_pipeline_flash_attn_ext_tensor(lib, op);
+            GGML_ASSERT(pipeline.pipeline);
+
+            ggml_metal_encoder_set_pipeline(enc, pipeline);
+            ggml_metal_encoder_set_bytes   (enc, &args, sizeof(args), 0);
+            ggml_metal_encoder_set_buffer  (enc, bid_src0, 1);
+            ggml_metal_encoder_set_buffer  (enc, bid_k,    2);
+            ggml_metal_encoder_set_buffer  (enc, bid_v,    3);
+            ggml_metal_encoder_set_buffer  (enc, bid_src3, 4);
+            ggml_metal_encoder_set_buffer  (enc, bid_src4, 5);
+            ggml_metal_encoder_set_buffer  (enc, bid_pad,  6);
+            ggml_metal_encoder_set_buffer  (enc, bid_blk,  7);
+            ggml_metal_encoder_set_buffer  (enc, bid_dst,  8);
+
+            // sh_qmax[8][32] + sh_qsum[8][32] + sh_M[8] + sh_S[8] + sh_alpha[8]
+            const size_t smem = (8*32 + 8*32 + 3*8)*sizeof(float);
+            GGML_ASSERT(smem <= props_dev->max_theadgroup_memory_size);
+
+            ggml_metal_encoder_set_threadgroup_memory_size(enc, smem, 0);
+
+            ggml_metal_encoder_dispatch_threadgroups(enc, ne01/nqptg, ne02, ne03, 32, nsg, 1);
+
+            return 1;
         }
 
         const int is_q = !use_kv_f16 && ggml_is_quantized(op->src[1]->type) ? 1 : 0;

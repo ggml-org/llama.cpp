@@ -1537,6 +1537,34 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext(
     return res;
 }
 
+ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext_tensor(
+        ggml_metal_library_t lib,
+        const ggml_tensor * op) {
+    assert(op->op == GGML_OP_FLASH_ATTN_EXT);
+
+    char name[256];
+
+    const int32_t dk = (int32_t) op->src[0]->ne[0];
+    const int32_t dv = (int32_t) op->src[2]->ne[0];
+
+    snprintf(name, 256, "kernel_flash_attn_ext_tensor_dk%d_dv%d", dk, dv);
+
+    ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
+    if (!res.pipeline) {
+        res = ggml_metal_library_compile_pipeline(lib, name, name, NULL);
+    }
+
+    // one simdgroup per threadgroup; 8 queries per threadgroup
+    res.nsg  = 1;
+    res.nr0  = 8;
+    res.nr1  = 1;
+
+    // per lane: sh_qmax[8][32] + sh_qsum[8][32] + sh_M[8] + sh_S[8] + sh_alpha[8]
+    res.smem = 4*(8*32 + 8*32 + 3*8)*sizeof(float);
+
+    return res;
+}
+
 ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext_vec(
         ggml_metal_library_t lib,
         const ggml_tensor * op,
