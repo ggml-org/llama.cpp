@@ -120,6 +120,7 @@
 						<Tooltip.Trigger>
 							<Lightbulb class="h-3 w-3 text-muted-foreground" />
 						</Tooltip.Trigger>
+
 						<Tooltip.Content>
 							<p>Reasoning</p>
 						</Tooltip.Content>
@@ -131,6 +132,7 @@
 						<Tooltip.Trigger>
 							<Image class="h-3 w-3 text-muted-foreground" />
 						</Tooltip.Trigger>
+
 						<Tooltip.Content>
 							<p>Vision</p>
 						</Tooltip.Content>
@@ -142,6 +144,7 @@
 						<Tooltip.Trigger>
 							<Video class="h-3 w-3 text-muted-foreground" />
 						</Tooltip.Trigger>
+
 						<Tooltip.Content>
 							<p>Video</p>
 						</Tooltip.Content>
@@ -153,6 +156,7 @@
 						<Tooltip.Trigger>
 							<Mic class="h-3 w-3 text-muted-foreground" />
 						</Tooltip.Trigger>
+
 						<Tooltip.Content>
 							<p>Audio</p>
 						</Tooltip.Content>
