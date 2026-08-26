@@ -59,7 +59,9 @@
 	let loadPercent = $derived(Math.round(modelLoadFraction(loadProgress) * 100));
 	let loadTitle = $derived(modelLoadProgressText(loadProgress));
 	let modalities = $derived(option.modalities);
-	let supportsThinking = $derived(modelsStore.props.checkModelSupportsThinking(option.model));
+	let capabilities = $derived.by(() => ({
+		reasoning: modelsStore.props.checkModelSupportsThinking(option.model)
+	}));
 </script>
 
 <div
@@ -83,12 +85,12 @@
 >
 	<ModelId
 		aliases={option.aliases}
+		{capabilities}
 		class="flex-1"
 		{hideOrgName}
 		{modalities}
 		modelId={option.model}
 		showRawTooltip
-		{supportsThinking}
 		tags={option.tags}
 	/>
 

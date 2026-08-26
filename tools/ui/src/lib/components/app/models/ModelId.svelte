@@ -1,10 +1,18 @@
 <script lang="ts">
-	import { Image, Lightbulb, Mic, Video } from '@lucide/svelte';
 	import { TruncatedText } from '$lib/components/app';
 	import * as Tooltip from '$lib/components/ui/tooltip';
+	import {
+		CAPABILITY_FLAG_KEYS,
+		CAPABILITY_ICONS,
+		CAPABILITY_LABELS,
+		MODALITY_FLAG_KEYS,
+		MODALITY_ICONS,
+		MODALITY_LABELS
+	} from '$lib/constants';
+	import { ModelCapability, ModelModality } from '$lib/enums';
 	import { ModelsService } from '$lib/services/models.service';
 	import { settingsStore } from '$lib/stores';
-	import type { ModelModalities } from '$lib/types/models';
+	import type { ModelCapabilities, ModelModalities } from '$lib/types/models';
 
 	interface Props {
 		modelId: string;
@@ -16,12 +24,13 @@
 		aliases?: string[];
 		tags?: string[];
 		modalities?: ModelModalities;
-		supportsThinking?: boolean;
+		capabilities?: ModelCapabilities;
 		class?: string;
 	}
 
 	let {
 		aliases,
+		capabilities,
 		class: className = '',
 		hideOrgName = false,
 		hideQuantization,
@@ -30,7 +39,6 @@
 		modelId,
 		showRaw = undefined,
 		showRawTooltip = false,
-		supportsThinking = false,
 		tags,
 		...rest
 	}: Props = $props();
@@ -51,8 +59,15 @@
 
 	let uniqueAliases = $derived([...new Set(aliases ?? [])]);
 	let uniqueTags = $derived([...new Set([...(parsed.tags ?? []), ...(tags ?? [])])]);
-	let hasModalityIcons = $derived(
-		supportsThinking || modalities?.vision || modalities?.video || modalities?.audio
+
+	const allModalities = [ModelModality.VISION, ModelModality.VIDEO, ModelModality.AUDIO] as const;
+	const allCapabilities: ModelCapability[] = [ModelCapability.REASONING];
+
+	let activeModalities = $derived(
+		allModalities.filter((modality) => modalities?.[MODALITY_FLAG_KEYS[modality]])
+	);
+	let activeCapabilities = $derived(
+		allCapabilities.filter((capability) => capabilities?.[CAPABILITY_FLAG_KEYS[capability]])
 	);
 
 	let primaryAlias = $derived(uniqueAliases.length === 1 ? uniqueAliases[0] : null);
@@ -113,55 +128,35 @@
 			{@render nameAndBadges()}
 		{/if}
 
-		{#if hasModalityIcons}
+		{#if activeCapabilities.length > 0 || activeModalities.length > 0}
 			<span class="inline-flex items-center gap-1.25 text-muted-foreground">
-				{#if supportsThinking}
+				{#each activeCapabilities as capability (capability)}
+					{@const CapabilityIcon = CAPABILITY_ICONS[capability]}
+
 					<Tooltip.Root>
 						<Tooltip.Trigger>
-							<Lightbulb class="h-3 w-3 text-muted-foreground" />
+							<CapabilityIcon class="h-3 w-3 text-muted-foreground" />
 						</Tooltip.Trigger>
 
 						<Tooltip.Content>
-							<p>Reasoning</p>
+							<p>{CAPABILITY_LABELS[capability]}</p>
 						</Tooltip.Content>
 					</Tooltip.Root>
-				{/if}
+				{/each}
 
-				{#if modalities?.vision}
+				{#each activeModalities as modality (modality)}
+					{@const ModalityIcon = MODALITY_ICONS[modality]}
+
 					<Tooltip.Root>
 						<Tooltip.Trigger>
-							<Image class="h-3 w-3 text-muted-foreground" />
+							<ModalityIcon class="h-3 w-3 text-muted-foreground" />
 						</Tooltip.Trigger>
 
 						<Tooltip.Content>
-							<p>Vision</p>
+							<p>{MODALITY_LABELS[modality]}</p>
 						</Tooltip.Content>
 					</Tooltip.Root>
-				{/if}
-
-				{#if modalities?.video}
-					<Tooltip.Root>
-						<Tooltip.Trigger>
-							<Video class="h-3 w-3 text-muted-foreground" />
-						</Tooltip.Trigger>
-
-						<Tooltip.Content>
-							<p>Video</p>
-						</Tooltip.Content>
-					</Tooltip.Root>
-				{/if}
-
-				{#if modalities?.audio}
-					<Tooltip.Root>
-						<Tooltip.Trigger>
-							<Mic class="h-3 w-3 text-muted-foreground" />
-						</Tooltip.Trigger>
-
-						<Tooltip.Content>
-							<p>Audio</p>
-						</Tooltip.Content>
-					</Tooltip.Root>
-				{/if}
+				{/each}
 			</span>
 		{/if}
 	</span>
