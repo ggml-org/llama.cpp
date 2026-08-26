@@ -17,7 +17,7 @@
 	}
 </script>
 
-<Dialog.Root {open} onOpenChange={handleOpenChange}>
+<Dialog.Root onOpenChange={handleOpenChange} {open}>
 	<Dialog.Content
 		class="md:h-[calc(100vh-4rem)]! md:max-h-240! md:w-[calc(100vw-4rem)]! md:max-w-6xl! flex flex-col p-0 md:p-6 gap-0"
 	>
@@ -29,6 +29,6 @@
 			</Dialog.Title>
 		</Dialog.Header>
 
-		<SettingsChat {initialSection} onSectionChange={() => {}} onClose={() => (open = false)} />
+		<SettingsChat {initialSection} onClose={() => (open = false)} onSectionChange={() => {}} />
 	</Dialog.Content>
 </Dialog.Root>
