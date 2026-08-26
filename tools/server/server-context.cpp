@@ -887,8 +887,6 @@ private:
 
     common_speculative_ptr spec;
 
-    std::vector<double> spec_acceptance_probs;
-
     bool add_bos_token = true;
 
     int32_t n_ctx; // total context for all clients / slots
@@ -1003,8 +1001,6 @@ private:
         load_progress_data load_progress_spec  (this, "spec_model");
 
         const bool is_resume = sleeping;
-
-        spec_acceptance_probs.clear();
 
         params_base = params;
         const auto output_limits = server_output_limits(params_base);
@@ -1231,6 +1227,9 @@ private:
                 spec.reset(common_speculative_init(params_base.speculative, params_base.n_parallel));
             } catch (const std::exception & e) {
                 SRV_ERR("failed to initialize speculative decoding context: %s\n", e.what());
+                if (params_base.speculative.has_synthetic_acceptance()) {
+                    return false;
+                }
             }
         }
 
@@ -1246,36 +1245,9 @@ private:
             model_dft = nullptr;
         }
 
-        const int32_t spec_n_max_configured = common_speculative_n_max(&params_base.speculative);
-        const int32_t spec_n_max_effective  = common_speculative_n_max(spec.get());
-        std::vector<double> spec_acceptance_rates;
-        try {
-            spec_acceptance_rates = common_speculative_resolve_synthetic_acceptance_rates(
-                    &params_base.speculative, spec_n_max_effective);
-        } catch (const std::exception & e) {
-            SRV_ERR("invalid synthetic acceptance configuration: %s\n", e.what());
+        if (!spec && params_base.speculative.has_synthetic_acceptance()) {
+            SRV_ERR("%s", "synthetic acceptance requires an initialized speculative decoding context\n");
             return false;
-        }
-
-        spec_acceptance_probs.reserve(spec_acceptance_rates.size());
-        std::vector<std::string> spec_acceptance_rates_str;
-        spec_acceptance_rates_str.reserve(spec_acceptance_rates.size());
-        double rate_prev = 1.0;
-        double acceptance_length = 1.0;
-        for (const double rate : spec_acceptance_rates) {
-            spec_acceptance_probs.push_back(rate_prev > 0.0 ? rate / rate_prev : 0.0);
-            spec_acceptance_rates_str.push_back(string_format("%.6g", rate));
-            rate_prev = rate;
-            acceptance_length += rate;
-        }
-        if (!spec_acceptance_probs.empty()) {
-            SRV_WRN("%s", "synthetic speculative acceptance is enabled for benchmarking; generated output is not valid\n");
-            if (spec_n_max_effective != spec_n_max_configured) {
-                SRV_WRN("synthetic acceptance draft limit was reduced from %d to %d by the initialized speculative implementations\n",
-                        spec_n_max_configured, spec_n_max_effective);
-            }
-            SRV_INF("synthetic acceptance: n_max = %zu, mean length = %.6f, rates = [%s]\n",
-                    spec_acceptance_rates.size(), acceptance_length, string_join(spec_acceptance_rates_str, ", ").c_str());
         }
 
         for (int i = 0; i < params_base.n_parallel; i++) {
@@ -1787,7 +1759,7 @@ private:
             SLT_TRC(slot, "sampler chain: %s\n", common_sampler_print(slot.smpl.get()).c_str());
             SLT_TRC(slot, "sampler params: \n%s\n", task.params.sampling.print().c_str());
 
-            if (!spec_acceptance_probs.empty()) {
+            if (spec && !common_speculative_get_synthetic_acceptance_probs(spec.get()).empty()) {
                 const uint32_t seed = task.params.sampling.seed == LLAMA_DEFAULT_SEED
                     ? std::random_device{}()
                     : task.params.sampling.seed;
@@ -3878,6 +3850,7 @@ private:
                 common_sampler_ptr smpl_save(common_sampler_clone(slot.smpl.get()));
 
                 GGML_ASSERT(slot.spec_i_batch.size() == n_draft + 1);
+                const auto & spec_acceptance_probs = common_speculative_get_synthetic_acceptance_probs(spec.get());
                 auto accepted = spec_acceptance_probs.empty()
                     ? common_sampler_sample_and_accept_n(slot.smpl.get(), slot.ctx_tgt, slot.spec_i_batch, slot.spec_draft)
                     : server_sample_and_accept_synthetic(

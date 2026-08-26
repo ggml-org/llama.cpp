@@ -2142,6 +2142,8 @@ struct common_speculative {
 
     // which implementaion was used for a given seq_id
     std::vector<common_speculative_impl *> impl_last;
+
+    std::vector<double> synthetic_acceptance_probs;
 };
 
 static common_ngram_map get_common_ngram_map(
@@ -2410,6 +2412,11 @@ std::vector<double> common_speculative_resolve_synthetic_acceptance_rates(const 
     return rates;
 }
 
+const std::vector<double> & common_speculative_get_synthetic_acceptance_probs(const common_speculative * spec) {
+    GGML_ASSERT(spec);
+    return spec->synthetic_acceptance_probs;
+}
+
 common_params common_base_params_to_speculative(const common_params & params) {
     const bool has_draft = params.speculative.has_dft();
 
@@ -2662,13 +2669,39 @@ common_speculative * common_speculative_init(common_params_speculative & params,
         return nullptr;
     }
 
-    auto * result = new common_speculative {
+    common_speculative_ptr result(new common_speculative {
         /* .dparams   = */ common_speculative_draft_params_vec(n_seq),
         /* .impls     = */ std::move(impls),
-        /* .impl_last = */ std::vector<common_speculative_impl *>(n_seq, nullptr)
-    };
+        /* .impl_last = */ std::vector<common_speculative_impl *>(n_seq, nullptr),
+        /* .synthetic_acceptance_probs = */ {},
+    });
 
-    return result;
+    const int32_t n_max_configured = common_speculative_n_max(&params);
+    const int32_t n_max_effective  = common_speculative_n_max(result.get());
+    const auto rates = common_speculative_resolve_synthetic_acceptance_rates(&params, n_max_effective);
+
+    std::vector<std::string> rates_str;
+    rates_str.reserve(rates.size());
+    result->synthetic_acceptance_probs.reserve(rates.size());
+    double rate_prev = 1.0;
+    double acceptance_length = 1.0;
+    for (const double rate : rates) {
+        result->synthetic_acceptance_probs.push_back(rate_prev > 0.0 ? rate / rate_prev : 0.0);
+        rates_str.push_back(string_format("%.6g", rate));
+        rate_prev = rate;
+        acceptance_length += rate;
+    }
+    if (!result->synthetic_acceptance_probs.empty()) {
+        SPC_WRN("%s", "synthetic speculative acceptance is enabled for benchmarking; generated output is not valid\n");
+        if (n_max_effective != n_max_configured) {
+            SPC_WRN("synthetic acceptance draft limit was reduced from %d to %d by the initialized speculative implementations\n",
+                    n_max_configured, n_max_effective);
+        }
+        SPC_INF("synthetic acceptance: n_max = %zu, mean length = %.6f, rates = [%s]\n",
+                rates.size(), acceptance_length, string_join(rates_str, ", ").c_str());
+    }
+
+    return result.release();
 }
 
 void common_speculative_free(common_speculative * spec) {
