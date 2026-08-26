@@ -14,7 +14,9 @@
 
 	let mcpServers = $derived(mcpStore.getServers().filter((s) => s.enabled));
 	let enabledMcpServersForChat = $derived(
-		mcpServers.filter((s) => conversationsStore.isMcpServerEnabledForChat(s.id) && s.url.trim())
+		mcpServers.filter(
+			(s) => conversationsStore.preferences.isMcpServerEnabledForChat(s.id) && s.url.trim()
+		)
 	);
 	let healthyEnabledMcpServers = $derived(
 		enabledMcpServersForChat.filter((s) => {
@@ -66,15 +68,16 @@
 					<Tooltip.Trigger>
 						<div class="box-shadow-lg overflow-hidden rounded-full bg-muted ring-1 ring-muted">
 							<img
-								src={favicon.url}
 								alt=""
 								class={ICON_CLASS_DEFAULT}
 								onerror={(e) => {
 									(e.currentTarget as HTMLImageElement).style.display = 'none';
 								}}
+								src={favicon.url}
 							/>
 						</div>
 					</Tooltip.Trigger>
+
 					<Tooltip.Content>
 						<p>{favicon.name}</p>
 					</Tooltip.Content>

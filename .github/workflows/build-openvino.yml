@@ -167,3 +167,13 @@ jobs:
 
           cd build
           ctest --test-dir ReleaseOV -L main -E "test-llama-archs|test-recurrent-state-rollback-nemotron-h" -C Release --verbose --timeout 3000
+
+      - name: ccache-clear
+        uses: ./.github/actions/ccache-clear
+        env:
+          GH_TOKEN: ${{ github.token }}
+        with:
+          key: openvino-windows-2022
+          older: 5m
+          min: 1
+          dry-run: ${{ github.event_name != 'push' || github.ref != 'refs/heads/master' }}

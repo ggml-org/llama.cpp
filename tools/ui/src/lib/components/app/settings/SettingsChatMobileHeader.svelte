@@ -1,5 +1,6 @@
 <script lang="ts">
-	import { ChevronLeft, ChevronRight, Settings } from '@lucide/svelte';
+	import { Settings } from '@lucide/svelte';
+	import { ScrollCarousel } from '$lib/components/app';
 	import { ICON_CLASS_DEFAULT, UI_DATA_ATTRS } from '$lib/constants';
 	import { BooleanString } from '$lib/enums';
 	import { useScrollCarousel } from '$lib/hooks/use-scroll-carousel.svelte';
@@ -44,70 +45,44 @@
 	</div>
 
 	<div class="border-b border-border/30 py-2">
-		<div class="relative flex items-center" style="scroll-padding: 1rem;">
-			<button
-				class="absolute left-2 z-10 flex h-6 w-6 items-center justify-center rounded-full bg-muted shadow-md backdrop-blur-sm transition-opacity hover:bg-accent {carousel.canScrollLeft
-					? 'opacity-100'
-					: 'pointer-events-none opacity-0'}"
-				onclick={carousel.scrollLeft}
-				aria-label="Scroll left"
-			>
-				<ChevronLeft class={ICON_CLASS_DEFAULT} />
-			</button>
+		<ScrollCarousel alwaysShowArrows {carousel} containerClass="py-2" innerClass="gap-2">
+			{#each sections as section (section.title)}
+				{#if getHref}
+					<a
+						class="flex cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-sm whitespace-nowrap no-underline transition-colors first:ml-4 last:mr-4 hover:bg-accent {isActive(
+							section
+						)
+							? 'bg-accent text-accent-foreground'
+							: 'text-muted-foreground'}"
+						{...{ [UI_DATA_ATTRS.ACTIVE]: isActive(section) }}
+						href={getHref(section)}
+						onclick={(e: MouseEvent) => {
+							carousel.scrollToCenter(e.currentTarget as HTMLElement);
+						}}
+					>
+						<section.icon class="{ICON_CLASS_DEFAULT} flex-shrink-0" />
 
-			<div
-				class="scrollbar-hide overflow-x-auto py-2"
-				bind:this={carousel.scrollContainer}
-				onscroll={carousel.updateScrollButtons}
-			>
-				<div class="flex min-w-max gap-2">
-					{#each sections as section (section.title)}
-						{#if getHref}
-							<a
-								class="flex cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-sm whitespace-nowrap no-underline transition-colors first:ml-4 last:mr-4 hover:bg-accent {isActive(
-									section
-								)
-									? 'bg-accent text-accent-foreground'
-									: 'text-muted-foreground'}"
-								{...{ [UI_DATA_ATTRS.ACTIVE]: isActive(section) }}
-								href={getHref(section)}
-								onclick={(e: MouseEvent) => {
-									carousel.scrollToCenter(e.currentTarget as HTMLElement);
-								}}
-							>
-								<section.icon class="{ICON_CLASS_DEFAULT} flex-shrink-0" />
-								<span>{section.title}</span>
-							</a>
-						{:else}
-							<button
-								class="flex cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-sm whitespace-nowrap transition-colors first:ml-4 last:mr-4 hover:bg-accent {isActive(
-									section
-								)
-									? 'bg-accent text-accent-foreground'
-									: 'text-muted-foreground'}"
-								{...{ [UI_DATA_ATTRS.ACTIVE]: isActive(section) }}
-								onclick={(e: MouseEvent) => {
-									onSectionChange?.(section.title);
-									carousel.scrollToCenter(e.currentTarget as HTMLElement);
-								}}
-							>
-								<section.icon class="{ICON_CLASS_DEFAULT} flex-shrink-0" />
-								<span>{section.title}</span>
-							</button>
-						{/if}
-					{/each}
-				</div>
-			</div>
+						<span>{section.title}</span>
+					</a>
+				{:else}
+					<button
+						class="flex cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-sm whitespace-nowrap transition-colors first:ml-4 last:mr-4 hover:bg-accent {isActive(
+							section
+						)
+							? 'bg-accent text-accent-foreground'
+							: 'text-muted-foreground'}"
+						{...{ [UI_DATA_ATTRS.ACTIVE]: isActive(section) }}
+						onclick={(e: MouseEvent) => {
+							onSectionChange?.(section.title);
+							carousel.scrollToCenter(e.currentTarget as HTMLElement);
+						}}
+					>
+						<section.icon class="{ICON_CLASS_DEFAULT} flex-shrink-0" />
 
-			<button
-				class="absolute right-2 z-10 flex h-6 w-6 items-center justify-center rounded-full bg-muted shadow-md backdrop-blur-sm transition-opacity hover:bg-accent {carousel.canScrollRight
-					? 'opacity-100'
-					: 'pointer-events-none opacity-0'}"
-				onclick={carousel.scrollRight}
-				aria-label="Scroll right"
-			>
-				<ChevronRight class={ICON_CLASS_DEFAULT} />
-			</button>
-		</div>
+						<span>{section.title}</span>
+					</button>
+				{/if}
+			{/each}
+		</ScrollCarousel>
 	</div>
 </div>

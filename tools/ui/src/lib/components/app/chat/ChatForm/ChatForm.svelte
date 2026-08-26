@@ -28,7 +28,6 @@
 	import {
 		chatStore,
 		conversationsStore,
-		mcpResourceStore,
 		mcpStore,
 		modelsStore,
 		serverStore,
@@ -140,7 +139,9 @@
 	// float above the box.
 	let mentionAnchor: HTMLDivElement | null = $state(null);
 
-	let cwd = $derived(conversationsStore.activeConversation?.cwd ?? conversationsStore.pendingCwd);
+	let cwd = $derived(
+		conversationsStore.activeConversation?.cwd ?? conversationsStore.preferences.pendingCwd
+	);
 
 	const pickers = useChatFormPickers({
 		focusInput: refocusInput,
@@ -151,7 +152,8 @@
 		getShowModelSelector: () => showModelSelector,
 		getValue: () => value,
 		hasCwdTools: () => toolsStore.hasEnabledCwdTools,
-		hasPrompts: () => mcpStore.hasPromptsCapability(conversationsStore.getAllMcpServerOverrides()),
+		hasPrompts: () =>
+			mcpStore.hasPromptsCapability(conversationsStore.preferences.getAllMcpServerOverrides()),
 		openModelSelector: () => chatFormActionsRef?.openModelSelector(),
 		setCaretOffset: (offset) => inputRef?.setCaretOffset(offset),
 		setValue: (v) => {
@@ -170,7 +172,7 @@
 			onValueChange?.('');
 		}
 
-		await conversationsStore.setCwd(newDir);
+		await conversationsStore.preferences.setCwd(newDir);
 
 		if (conversationsStore.activeConversation) {
 			await chatStore.recordCwdChange(newDir?.trim() || null);
@@ -535,30 +537,30 @@
 >
 	<ChatFormPickers
 		bind:this={pickersRef}
-		isCommandPickerOpen={pickers.isCommandPickerOpen}
 		commandQuery={pickers.commandQuery}
 		commands={pickers.availableCommands}
+		isCommandPickerOpen={pickers.isCommandPickerOpen}
+		isMentionPickerOpen={pickers.isMentionPickerOpen}
+		isPromptPickerOpen={pickers.isPromptPickerOpen}
+		{mentionAnchor}
+		mentionQuery={pickers.mentionQuery}
 		onCommandPickerClose={pickers.handleCommandPickerClose}
 		onCommandSelect={pickers.handleCommandSelect}
-		isPromptPickerOpen={pickers.isPromptPickerOpen}
-		promptSearchQuery={pickers.promptSearchQuery}
-		isMentionPickerOpen={pickers.isMentionPickerOpen}
-		mentionQuery={pickers.mentionQuery}
-		{mentionAnchor}
-		scopePath={pickers.mentionScopePath}
-		onPromptPickerClose={pickers.handlePromptPickerClose}
-		onMentionPickerClose={pickers.handleMentionPickerClose}
 		onMentionOpened={() => inputRef?.focus()}
+		onMentionPickerClose={pickers.handleMentionPickerClose}
 		onMentionSelect={handleMentionSelect}
-		onPromptLoadStart={handlePromptLoadStart}
 		onPromptLoadComplete={handlePromptLoadComplete}
 		onPromptLoadError={handlePromptLoadError}
+		onPromptLoadStart={handlePromptLoadStart}
+		onPromptPickerClose={pickers.handlePromptPickerClose}
+		promptSearchQuery={pickers.promptSearchQuery}
+		scopePath={pickers.mentionScopePath}
 	/>
 
 	<div
 		bind:this={mentionAnchor}
-		class="pointer-events-none absolute top-0 right-0 left-0 h-px"
 		aria-hidden="true"
+		class="pointer-events-none absolute top-0 right-0 left-0 h-px"
 	></div>
 
 	<div
@@ -568,34 +570,34 @@
 		data-slot="input-area"
 	>
 		<ChatAttachmentsList
-			{attachments}
 			bind:uploadedFiles
-			onFileRemove={handleFileRemove}
-			limitToSingleRow
-			class="py-5"
-			style="scroll-padding: 1rem;"
 			activeModelId={activeModelId ?? undefined}
+			{attachments}
+			class="py-5"
+			limitToSingleRow
+			onFileRemove={handleFileRemove}
+			style="scroll-padding: 1rem;"
 		/>
 
 		<div
 			class="flex-column relative min-h-12 items-center rounded-4xl md:rounded-3xl py-2 pb-2.25 shadow-sm transition-all focus-within:shadow-md md:py-3!"
 		>
 			<ChatFormInput
-				class="px-5 py-1.5 md:pt-0"
 				bind:this={inputRef}
 				bind:value
-				onKeydown={handleKeydown}
+				class="px-5 py-1.5 md:pt-0"
+				{disabled}
 				onInput={() => {
 					pickers.handleInput();
 					onValueChange?.(value);
 				}}
+				onKeydown={handleKeydown}
 				onPaste={handlePaste}
-				{disabled}
 				{placeholder}
 				{useRichInput}
 			/>
 
-			{#if mcpResourceStore.hasAttachments}
+			{#if mcpStore.resources.hasAttachments}
 				<ChatFormMcpResourcesList
 					class="mb-3"
 					onResourceClick={(uri) => {
@@ -606,22 +608,22 @@
 			{/if}
 
 			<ChatFormActions
-				class="px-3"
 				bind:this={chatFormActionsRef}
 				canSend={canSubmit}
+				class="px-3"
 				{disabled}
 				{isLoading}
 				isReasoning={chatStore.isReasoning}
 				{isRecording}
-				{showAddButton}
-				{showModelSelector}
-				{uploadedFiles}
 				onFileUpload={handleFileUpload}
+				onMcpPromptClick={showMcpPromptButton ? () => pickers.openPromptPicker() : undefined}
+				onMcpResourcesClick={() => (isResourceDialogOpen = true)}
 				onMicClick={handleMicClick}
 				{onStop}
 				onSystemPromptClick={() => onSystemPromptClick?.({ files: uploadedFiles, message: value })}
-				onMcpPromptClick={showMcpPromptButton ? () => pickers.openPromptPicker() : undefined}
-				onMcpResourcesClick={() => (isResourceDialogOpen = true)}
+				{showAddButton}
+				{showModelSelector}
+				{uploadedFiles}
 			/>
 		</div>
 	</div>
@@ -630,21 +632,20 @@
 
 	{#if toolsStore.hasEnabledCwdTools}
 		<ChatFormCurrentWorkingDirectory
-			directory={cwd}
-			isOpen={pickers.isWorkingDirectoryPickerOpen}
 			bind:query={pickers.workingDirectoryQuery}
 			customAnchor={mentionAnchor}
+			directory={cwd}
+			{disabled}
+			isOpen={pickers.isWorkingDirectoryPickerOpen}
 			onChange={handleWorkingDirectoryChange}
 			onClose={pickers.handleWorkingDirectoryClose}
 			onOpen={pickers.handleWorkingDirectoryOpen}
-			{disabled}
 		/>
 	{/if}
 </form>
 
 <DialogMcpResourcesBrowser
 	bind:open={isResourceDialogOpen}
-	preSelectedUri={preSelectedResourceUri}
 	onAttach={(resource: MCPResourceInfo) => {
 		mcpStore.attachResource(resource.uri);
 	}}
@@ -653,4 +654,5 @@
 			preSelectedResourceUri = undefined;
 		}
 	}}
+	preSelectedUri={preSelectedResourceUri}
 />

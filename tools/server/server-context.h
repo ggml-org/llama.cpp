@@ -4,7 +4,7 @@
 #include "server-task.h"
 #include "server-queue.h"
 
-#include <nlohmann/json_fwd.hpp>
+#include "json.h"
 
 #include <cstddef>
 #include <memory>

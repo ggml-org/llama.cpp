@@ -87,7 +87,7 @@
 		isLoading = true;
 
 		try {
-			const perChatOverrides = conversationsStore.getAllMcpServerOverrides();
+			const perChatOverrides = conversationsStore.preferences.getAllMcpServerOverrides();
 			const initialized = await mcpStore.ensureInitialized(perChatOverrides);
 
 			if (!initialized) {
@@ -359,9 +359,9 @@
 <ChatFormPickerPopover
 	bind:isOpen
 	class={className}
-	srLabel="Open prompt picker"
 	{onClose}
 	onKeydown={handleKeydown}
+	srLabel="Open prompt picker"
 >
 	{#if selectedPrompt}
 		{@const prompt = selectedPrompt}
@@ -370,10 +370,10 @@
 
 		<div class="p-4">
 			<ChatFormPickerItemHeader
+				description={prompt.description}
 				{server}
 				{serverLabel}
 				title={prompt.title || prompt.name}
-				description={prompt.description}
 			>
 				{#snippet titleExtra()}
 					{#if prompt.arguments?.length}
@@ -385,33 +385,33 @@
 			</ChatFormPickerItemHeader>
 
 			<ChatFormPromptPickerArgumentForm
-				prompt={selectedPrompt}
-				{promptArgs}
-				{suggestions}
-				{loadingSuggestions}
 				{activeAutocomplete}
 				{autocompleteIndex}
-				{promptError}
-				onArgInput={handleArgInput}
-				onArgKeydown={handleArgKeydown}
+				{loadingSuggestions}
 				onArgBlur={handleArgBlur}
 				onArgFocus={handleArgFocus}
+				onArgInput={handleArgInput}
+				onArgKeydown={handleArgKeydown}
+				onCancel={handleCancelArgumentForm}
 				onSelectSuggestion={selectSuggestion}
 				onSubmit={handleArgumentSubmit}
-				onCancel={handleCancelArgumentForm}
+				prompt={selectedPrompt}
+				{promptArgs}
+				{promptError}
+				{suggestions}
 			/>
 		</div>
 	{:else}
 		<ChatFormPickerList
-			items={filteredPrompts}
-			{isLoading}
-			{selectedIndex}
 			bind:searchQuery={internalSearchQuery}
-			{showSearchInput}
-			searchPlaceholder="Search prompts..."
 			emptyMessage="No MCP prompts available"
+			{isLoading}
 			itemKey={(prompt) => prompt.serverName + ':' + prompt.name}
+			items={filteredPrompts}
 			{scrollTrigger}
+			searchPlaceholder="Search prompts..."
+			{selectedIndex}
+			{showSearchInput}
 		>
 			{#snippet item(prompt, index, isSelected)}
 				{@const server = serverSettingsMap.get(prompt.serverName)}
@@ -423,10 +423,10 @@
 					onclick={() => handlePromptClick(prompt)}
 				>
 					<ChatFormPickerItemHeader
+						description={prompt.description}
 						{server}
 						{serverLabel}
 						title={prompt.title || prompt.name}
-						description={prompt.description}
 					>
 						{#snippet titleExtra()}
 							{#if prompt.arguments?.length}
@@ -440,7 +440,7 @@
 			{/snippet}
 
 			{#snippet skeleton()}
-				<ChatFormPickerListItemSkeleton titleWidth="w-32" showBadge />
+				<ChatFormPickerListItemSkeleton showBadge titleWidth="w-32" />
 			{/snippet}
 		</ChatFormPickerList>
 	{/if}

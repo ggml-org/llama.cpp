@@ -78,7 +78,7 @@
 	<Sheet.Root bind:open={sheetOpen}>
 		{@render trigger({ disabled: chatFormActions.disabled, onclick: () => (sheetOpen = true) })}
 
-		<Sheet.Content side="bottom" class="max-h-[85vh] gap-0 overflow-y-auto">
+		<Sheet.Content class="max-h-[85vh] gap-0 overflow-y-auto" side="bottom">
 			<Sheet.Header>
 				<Sheet.Title>Add to chat</Sheet.Title>
 
@@ -90,8 +90,8 @@
 			<div class="flex flex-col gap-1 px-1.5 pb-2">
 				{#if reasoning.modelSupportsThinking}
 					<Collapsible.Root
-						open={reasoningExpanded}
 						onOpenChange={(open) => (reasoningExpanded = open)}
+						open={reasoningExpanded}
 					>
 						<Collapsible.Trigger class={sheetItemClass}>
 							{#if reasoningExpanded}
@@ -120,10 +120,10 @@
 								{#each reasoning.levels as level (level.value)}
 									{@const tokenLabel = reasoning.tokenLabel(level)}
 									<button
-										type="button"
-										class={sheetItemRowClass}
 										class:bg-accent={reasoning.isSelected(level)}
+										class={sheetItemRowClass}
 										onclick={() => reasoning.select(level)}
+										type="button"
 									>
 										<div class="flex min-w-0 items-center gap-3">
 											{#if reasoning.isSelected(level)}
@@ -147,7 +147,7 @@
 					</Collapsible.Root>
 				{/if}
 
-				<Collapsible.Root open={filesExpanded} onOpenChange={(open) => (filesExpanded = open)}>
+				<Collapsible.Root onOpenChange={(open) => (filesExpanded = open)} open={filesExpanded}>
 					<Collapsible.Trigger class={sheetItemClass}>
 						{#if filesExpanded}
 							<ChevronDown class="{ICON_CLASS_DEFAULT} shrink-0" />
@@ -166,9 +166,9 @@
 								{@const enabled = attachmentMenu.isItemEnabled(item.enabledWhen)}
 								{#if enabled}
 									<button
-										type="button"
 										class={sheetItemClass}
 										onclick={() => attachmentMenu.callbacks[item.action]()}
+										type="button"
 									>
 										<item.icon class="{ICON_CLASS_DEFAULT} shrink-0" />
 
@@ -177,7 +177,7 @@
 								{:else if item.disabledTooltip}
 									<Tooltip.Root delayDuration={TOOLTIP_DELAY_DURATION}>
 										<Tooltip.Trigger>
-											<button type="button" class={sheetItemClass} disabled>
+											<button class={sheetItemClass} disabled type="button">
 												<item.icon class="{ICON_CLASS_DEFAULT} shrink-0" />
 
 												<span>{item.label}</span>
@@ -194,7 +194,7 @@
 					</Collapsible.Content>
 				</Collapsible.Root>
 
-				<Collapsible.Root open={mcpExpanded} onOpenChange={(open) => (mcpExpanded = open)}>
+				<Collapsible.Root onOpenChange={(open) => (mcpExpanded = open)} open={mcpExpanded}>
 					<Collapsible.Trigger class={sheetItemClass}>
 						{#if mcpExpanded}
 							<ChevronDown class="{ICON_CLASS_DEFAULT} shrink-0" />
@@ -218,23 +218,26 @@
 								{@const hasError = healthState.status === HealthCheckStatus.ERROR}
 								{@const displayName = mcpStore.getServerLabel(server)}
 								{@const faviconUrl = mcpStore.getServerFavicon(server.id)}
-								{@const isEnabled = conversationsStore.isMcpServerEnabledForChat(server.id)}
+								{@const isEnabled = conversationsStore.preferences.isMcpServerEnabledForChat(
+									server.id
+								)}
 
 								<button
-									type="button"
 									class={sheetItemRowClass}
-									onclick={() => !hasError && conversationsStore.toggleMcpServerForChat(server.id)}
 									disabled={hasError}
+									onclick={() =>
+										!hasError && conversationsStore.preferences.toggleMcpServerForChat(server.id)}
+									type="button"
 								>
 									<div class="flex min-w-0 flex-1 items-center gap-2">
 										{#if faviconUrl}
 											<img
-												src={faviconUrl}
 												alt=""
 												class="{ICON_CLASS_DEFAULT} shrink-0 rounded-sm"
 												onerror={(e) => {
 													(e.currentTarget as HTMLImageElement).style.display = 'none';
 												}}
+												src={faviconUrl}
 											/>
 										{/if}
 
@@ -250,7 +253,8 @@
 									{:else}
 										<Switch
 											checked={isEnabled}
-											onCheckedChange={() => conversationsStore.toggleMcpServerForChat(server.id)}
+											onCheckedChange={() =>
+												conversationsStore.preferences.toggleMcpServerForChat(server.id)}
 										/>
 									{/if}
 								</button>
@@ -266,7 +270,7 @@
 				</Collapsible.Root>
 
 				{#if toolsPanel.totalToolCount > 0}
-					<Collapsible.Root open={toolsExpanded} onOpenChange={(open) => (toolsExpanded = open)}>
+					<Collapsible.Root onOpenChange={(open) => (toolsExpanded = open)} open={toolsExpanded}>
 						<Collapsible.Trigger class={sheetItemClass}>
 							{#if toolsExpanded}
 								<ChevronDown class="{ICON_CLASS_DEFAULT} shrink-0" />
@@ -291,18 +295,18 @@
 									{@const favicon = toolsPanel.getFavicon(group)}
 
 									<button
-										type="button"
 										class={sheetItemRowClass}
 										onclick={() => toolsPanel.toggleGroupByKey(group.key)}
+										type="button"
 									>
 										{#if favicon}
 											<img
-												src={favicon}
 												alt=""
 												class="{ICON_CLASS_DEFAULT} shrink-0 rounded-sm"
 												onerror={(e) => {
 													(e.currentTarget as HTMLImageElement).style.display = 'none';
 												}}
+												src={favicon}
 											/>
 										{/if}
 
@@ -315,8 +319,8 @@
 										<Checkbox
 											{checked}
 											class="{ICON_CLASS_DEFAULT} shrink-0"
-											onclick={(e) => e.stopPropagation()}
 											onCheckedChange={() => toolsPanel.toggleGroupByKey(group.key)}
+											onclick={(e) => e.stopPropagation()}
 										/>
 									</button>
 								{/each}
@@ -326,9 +330,9 @@
 				{/if}
 
 				<button
-					type="button"
 					class={sheetItemClass}
 					onclick={() => attachmentMenu.callbacks[AttachmentAction.SYSTEM_PROMPT_CLICK]()}
+					type="button"
 				>
 					<MessageSquare class="{ICON_CLASS_DEFAULT} shrink-0" />
 
@@ -337,9 +341,9 @@
 
 				{#if chatFormActions.hasMcpPromptsSupport}
 					<button
-						type="button"
 						class={sheetItemClass}
 						onclick={() => attachmentMenu.callbacks[AttachmentAction.MCP_PROMPT_CLICK]()}
+						type="button"
 					>
 						<Zap class="{ICON_CLASS_DEFAULT} shrink-0" />
 
@@ -349,9 +353,9 @@
 
 				{#if chatFormActions.hasMcpResourcesSupport}
 					<button
-						type="button"
 						class={sheetItemClass}
 						onclick={() => attachmentMenu.callbacks[AttachmentAction.MCP_RESOURCES_CLICK]()}
+						type="button"
 					>
 						<FolderOpen class="{ICON_CLASS_DEFAULT} shrink-0" />
 

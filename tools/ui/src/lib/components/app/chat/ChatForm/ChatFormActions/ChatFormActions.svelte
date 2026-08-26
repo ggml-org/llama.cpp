@@ -58,13 +58,13 @@
 	let currentConfig = $derived(settingsStore.config);
 
 	let hasMcpPromptsSupport = $derived.by(() => {
-		const perChatOverrides = conversationsStore.getAllMcpServerOverrides();
+		const perChatOverrides = conversationsStore.preferences.getAllMcpServerOverrides();
 
 		return mcpStore.hasPromptsCapability(perChatOverrides);
 	});
 
 	let hasMcpResourcesSupport = $derived.by(() => {
-		const perChatOverrides = conversationsStore.getAllMcpServerOverrides();
+		const perChatOverrides = conversationsStore.preferences.getAllMcpServerOverrides();
 
 		return mcpStore.hasResourcesCapability(perChatOverrides);
 	});
@@ -121,7 +121,7 @@
 
 		if (!chatStore.isLoading && !chatStore.isStreaming()) return false;
 
-		const processingState = chatStore.activeProcessingState;
+		const processingState = chatStore.processing.activeState;
 
 		if (!processingState) return false;
 
@@ -188,14 +188,14 @@
 
 		{#if showModelSelector}
 			<ChatFormActionModels
-				{disabled}
-				bind:this={selectorModelRef}
 				bind:hasAudioModality
+				bind:hasModelSelected
 				bind:hasVideoModality
 				bind:hasVisionModality
-				bind:hasModelSelected
 				bind:isSelectedModelInCache
 				bind:submitTooltip
+				bind:this={selectorModelRef}
+				{disabled}
 				forceForegroundText
 				useGlobalSelection
 			/>
@@ -204,12 +204,12 @@
 
 	{#if isReasoning}
 		<Button
-			type="button"
-			variant="secondary"
+			class="group h-8 w-8 rounded-full p-0"
 			onclick={() =>
 				ChatService.stopReasoning(activeMessage?.completionId ?? '', activeMessage?.model)}
-			class="group h-8 w-8 rounded-full p-0"
 			title="Skip reasoning"
+			type="button"
+			variant="secondary"
 		>
 			<span class="sr-only">Skip reasoning</span>
 
@@ -221,10 +221,10 @@
 
 	{#if isLoading && !canSubmit}
 		<Button
+			class="group h-8 w-8 rounded-full p-0 hover:bg-destructive/10!"
+			onclick={onStop}
 			type="button"
 			variant="secondary"
-			onclick={onStop}
-			class="group h-8 w-8 rounded-full p-0 hover:bg-destructive/10!"
 		>
 			<span class="sr-only">Stop</span>
 
@@ -238,8 +238,8 @@
 		<ChatFormActionSubmit
 			canSend={canSend && (showModelSelector ? hasModelSelected && isSelectedModelInCache : true)}
 			{disabled}
-			tooltipLabel={submitTooltip}
 			showErrorState={showModelSelector && hasModelSelected && !isSelectedModelInCache}
+			tooltipLabel={submitTooltip}
 		/>
 	{/if}
 </div>

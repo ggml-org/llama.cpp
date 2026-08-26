@@ -35,7 +35,7 @@ export function useToolsPanel(): UseToolsPanelReturn {
 			(g) =>
 				g.source !== ToolSource.MCP ||
 				!g.serverId ||
-				conversationsStore.isMcpServerEnabledForChat(g.serverId)
+				conversationsStore.preferences.isMcpServerEnabledForChat(g.serverId)
 		)
 	);
 	const totalToolCount = $derived(activeGroups.reduce((n, g) => n + g.tools.length, 0));
@@ -73,7 +73,7 @@ export function useToolsPanel(): UseToolsPanelReturn {
 		return (
 			group.source === ToolSource.MCP &&
 			!!group.serverId &&
-			!conversationsStore.isMcpServerEnabledForChat(group.serverId)
+			!conversationsStore.preferences.isMcpServerEnabledForChat(group.serverId)
 		);
 	}
 

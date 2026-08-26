@@ -1724,6 +1724,19 @@ extern "C" {
             struct ggml_tensor  * a,
             int                   n_past);
 
+    GGML_API struct ggml_tensor * ggml_clamp(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            float                 min,
+            float                 max);
+
+    // in-place, returns view(a)
+    GGML_API struct ggml_tensor * ggml_clamp_inplace(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            float                 min,
+            float                 max);
+
     GGML_API struct ggml_tensor * ggml_soft_max(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
@@ -1989,14 +2002,6 @@ extern "C" {
     GGML_API struct ggml_tensor * ggml_rope_set_offset(
             struct ggml_tensor  * a,
             int                   n_offs);
-
-    // clamp
-    // in-place, returns view(a)
-    GGML_API struct ggml_tensor * ggml_clamp(
-            struct ggml_context * ctx,
-            struct ggml_tensor  * a,
-            float                 min,
-            float                 max);
 
     // im2col
     // converts data into a format that effectively results in a convolution when combined with matrix multiplication

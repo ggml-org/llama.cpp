@@ -57,12 +57,13 @@
 					{#if cumulativeRead > 0}
 						<ContextGaugeDetailRow
 							label="Prompt tokens evaluated"
-							value={`${cumulativeRead.toLocaleString()} tok`}
 							subtitle={cumulativeCacheTotal > 0
 								? `${cumulativeCacheTotal.toLocaleString()} reused from KV cache`
 								: undefined}
+							value={`${cumulativeRead.toLocaleString()} tok`}
 						/>
 					{/if}
+
 					{#if cumulativeOutput > 0}
 						<ContextGaugeDetailRow
 							label="Tokens generated"
@@ -83,10 +84,10 @@
 					{#if currentRead > 0}
 						<ContextGaugeDetailRow
 							label="Prompt"
-							value={`${currentRead.toLocaleString()} tok`}
 							subtitle={currentCache > 0
 								? `${currentFresh.toLocaleString()} fresh + ${currentCache.toLocaleString()} cached`
 								: undefined}
+							value={`${currentRead.toLocaleString()} tok`}
 						/>
 					{/if}
 
@@ -100,6 +101,7 @@
 					<div class="pt-1 mt-0.5 border-t border-border/30">
 						<div class="flex justify-between">
 							<span class="text-muted-foreground">KV cache total</span>
+
 							<span class="font-mono font-medium">{kvTotal.toLocaleString()} tok</span>
 						</div>
 					</div>

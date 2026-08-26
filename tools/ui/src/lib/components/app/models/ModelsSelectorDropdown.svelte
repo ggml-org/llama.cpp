@@ -116,7 +116,7 @@
 
 		if (status === ServerModelStatus.LOADING) return;
 
-		await modelsStore.unloadModel(modelId);
+		await modelsStore.status.unload(modelId);
 	}
 
 	export function open() {
@@ -174,9 +174,9 @@
 		{@const triggerLoading =
 			!!triggerModel &&
 			(triggerStatus === ServerModelStatus.LOADING ||
-				modelsStore.isModelOperationInProgress(triggerModel))}
+				modelsStore.status.isOperationInProgress(triggerModel))}
 		{@const triggerLoadPercent = triggerLoading
-			? Math.round(modelLoadFraction(modelsStore.getLoadProgress(triggerModel)) * 100)
+			? Math.round(modelLoadFraction(modelsStore.status.getLoadProgress(triggerModel)) * 100)
 			: 0}
 
 		{#if ms.isRouter}
@@ -205,10 +205,10 @@
 
 								{#if selectedOption}
 									<ModelId
-										modelId={selectedOption.model}
 										class="min-w-0 overflow-hidden"
 										hideOrgName={false}
 										hideQuantization
+										modelId={selectedOption.model}
 									/>
 								{:else}
 									<span class="min-w-0 font-medium">Select model</span>
@@ -240,25 +240,25 @@
 					onOpenAutoFocus={(event) => event.preventDefault()}
 				>
 					<DropdownMenuSearchable
-						searchValue={ms.searchTerm}
-						onSearchChange={(v) => ms.setSearchTerm(v)}
-						placeholder="Search models..."
-						onSearchKeyDown={handleSearchKeyDown}
 						emptyMessage="No models found."
 						isEmpty={ms.filteredOptions.length === 0 && ms.isCurrentModelInCache}
+						onSearchChange={(v) => ms.setSearchTerm(v)}
+						onSearchKeyDown={handleSearchKeyDown}
+						placeholder="Search models..."
+						searchValue={ms.searchTerm}
 					>
 						<div class="models-list">
 							{#if !ms.isCurrentModelInCache && currentModel}
 								<!-- Show unavailable model as first option (disabled) -->
 								<button
-									type="button"
-									class="flex w-full cursor-not-allowed items-center bg-red-400/10 p-2 text-left text-sm text-red-400"
-									role="option"
-									aria-selected="true"
 									aria-disabled="true"
+									aria-selected="true"
+									class="flex w-full cursor-not-allowed items-center bg-red-400/10 p-2 text-left text-sm text-red-400"
 									disabled
+									role="option"
+									type="button"
 								>
-									<ModelId modelId={currentModel} class="flex-1" hideQuantization />
+									<ModelId class="flex-1" hideQuantization modelId={currentModel} />
 
 									<span class="ml-2 text-xs whitespace-nowrap opacity-70">(not available)</span>
 								</button>
@@ -275,31 +275,31 @@
 								{@const isFav = ms.isFavorite(option.model)}
 
 								<ModelsSelectorOption
-									{option}
-									{isSelected}
-									{isHighlighted}
-									{isFav}
 									{hideOrgName}
-									onSelect={ms.handleSelect}
+									{isFav}
+									{isHighlighted}
+									{isSelected}
 									onInfoClick={ms.handleInfoClick}
-									onMouseEnter={() => (highlightedId = option.id)}
 									onKeyDown={(event) => {
 										if (event.key === KeyboardKey.ENTER || event.key === KeyboardKey.SPACE) {
 											event.preventDefault();
 											void handleModelKeyAction(option.id, event.altKey);
 										}
 									}}
+									onMouseEnter={() => (highlightedId = option.id)}
+									onSelect={ms.handleSelect}
+									{option}
 								/>
 							{/snippet}
 
 							<ModelsSelectorList
-								groups={ms.groupedFilteredOptions}
-								{currentModel}
 								activeId={ms.activeId}
-								sectionHeaderClass="my-1.5 px-2 py-2 text-[13px] font-semibold text-muted-foreground/70 select-none"
-								onSelect={ms.handleSelect}
+								{currentModel}
+								groups={ms.groupedFilteredOptions}
 								onInfoClick={ms.handleInfoClick}
+								onSelect={ms.handleSelect}
 								renderOption={modelOption}
+								sectionHeaderClass="my-1.5 px-2 py-2 text-[13px] font-semibold text-muted-foreground/70 select-none"
 							/>
 						</div>
 					</DropdownMenuSearchable>
@@ -323,18 +323,18 @@
 											: 'text-foreground',
 								isOpen && 'text-foreground'
 							]}
-							style="max-width: min(calc(100cqw - 6.5rem), 32rem)"
-							onclick={() => ms.handleOpenChange(true)}
 							disabled={disabled || ms.updating}
+							onclick={() => ms.handleOpenChange(true)}
+							style="max-width: min(calc(100cqw - 6.5rem), 32rem)"
 						>
 							<MODEL_SELECTOR_ICON class="h-3.5 w-3.5 shrink-0" />
 
 							{#if selectedOption}
 								<ModelId
-									modelId={selectedOption.model}
 									class="min-w-0 overflow-hidden"
 									hideOrgName={false}
 									hideQuantization
+									modelId={selectedOption.model}
 								/>
 							{/if}
 
@@ -357,8 +357,8 @@
 
 {#if ms.showModelDialog}
 	<DialogModelInformation
-		open={ms.showModelDialog}
-		onOpenChange={(v) => ms.setShowModelDialog(v)}
 		modelId={ms.infoModelId}
+		onOpenChange={(v) => ms.setShowModelDialog(v)}
+		open={ms.showModelDialog}
 	/>
 {/if}

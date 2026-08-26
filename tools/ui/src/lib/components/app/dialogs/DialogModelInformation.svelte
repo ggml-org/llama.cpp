@@ -42,7 +42,7 @@
 	let modalities = $derived.by(() => {
 		if (!firstModel?.id) return [];
 
-		return modelsStore.getModelModalitiesArray(firstModel.id);
+		return modelsStore.props.getModelModalitiesArray(firstModel.id);
 	});
 
 	// Ensure models are fetched when dialog opens
@@ -56,7 +56,7 @@
 	$effect(() => {
 		if (open && isRouter && modelId) {
 			isLoadingRouterProps = true;
-			modelsStore
+			modelsStore.props
 				.fetchModelProps(modelId)
 				.then((props) => {
 					routerModelProps = props;
@@ -108,21 +108,22 @@
 								<Table.Head>
 									<div class="inline-flex items-center gap-2">
 										<span
-											class="resizable-text-container min-w-0 flex-1 truncate"
 											style:--threshold="12rem"
+											class="resizable-text-container min-w-0 flex-1 truncate"
 										>
 											{modelName}
 										</span>
 
 										<ActionIconCopyToClipboard
-											text={modelName || ''}
-											canCopy={!!modelName}
 											ariaLabel="Copy model name to clipboard"
+											canCopy={!!modelName}
+											text={modelName || ''}
 										/>
 									</div>
 								</Table.Head>
 							</Table.Row>
 						</Table.Header>
+
 						<Table.Body>
 							<!-- Model Path -->
 							<Table.Row>
@@ -132,15 +133,15 @@
 									class="inline-flex h-10 items-center gap-2 align-middle font-mono text-xs"
 								>
 									<span
-										class="resizable-text-container min-w-0 flex-1 truncate"
 										style:--threshold="14rem"
+										class="resizable-text-container min-w-0 flex-1 truncate"
 									>
 										{serverProps.model_path}
 									</span>
 
 									<ActionIconCopyToClipboard
-										text={serverProps.model_path}
 										ariaLabel="Copy model path to clipboard"
+										text={serverProps.model_path}
 									/>
 								</Table.Cell>
 							</Table.Row>
@@ -213,6 +214,7 @@
 							{#if modelMeta?.vocab_type}
 								<Table.Row>
 									<Table.Cell class="align-middle font-medium">Vocabulary Type</Table.Cell>
+
 									<Table.Cell class="align-middle capitalize">{modelMeta.vocab_type}</Table.Cell>
 								</Table.Row>
 							{/if}
