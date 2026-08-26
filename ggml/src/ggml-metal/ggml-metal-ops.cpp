@@ -2336,10 +2336,7 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
     // to the matrix-vector kernel
     const int ne11_mm_min = 8;
 
-    // the K-quant mul_mv_ext path (ne11 4..8) regresses against the generic mat-vec
-    // path on some devices. Measured on M3 Pro (18-core, Q4_K_M): generic is 15-33%
-    // faster across the whole 4..8 window, and retuning r1ptg/nxpsg recovers only ~5%.
-    const bool use_kq_mv_ext = props_dev->device_id != GGML_METAL_DEVICE_M3_PRO;
+    const bool use_kq_mv_ext = ggml_metal_tuning::kq_mv_ext_enabled(props_dev->device_id);
 
     // first try to use small-batch mat-mv kernels
     // these should be efficient for BS [2, ~8]
