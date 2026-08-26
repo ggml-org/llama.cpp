@@ -99,7 +99,7 @@ jobs:
       - name: Download UI build
         uses: actions/download-artifact@v7
         with:
-          name: ui-build
+          name: llama-ui.zip
           path: tools/ui/dist
 
       - name: ccache
@@ -169,7 +169,7 @@ jobs:
       - name: Download UI build
         uses: actions/download-artifact@v7
         with:
-          name: ui-build
+          name: llama-ui.zip
           path: tools/ui/dist
 
       - name: Dependencies
@@ -253,7 +253,7 @@ jobs:
       - name: Download UI build
         uses: actions/download-artifact@v7
         with:
-          name: ui-build
+          name: llama-ui.zip
           path: tools/ui/dist
 
       - name: Dependencies
@@ -332,7 +332,7 @@ jobs:
       - name: Download UI build
         uses: actions/download-artifact@v7
         with:
-          name: ui-build
+          name: llama-ui.zip
           path: tools/ui/dist
 
       - name: Set up JDK
@@ -432,7 +432,7 @@ jobs:
       - name: Download UI build
         uses: actions/download-artifact@v7
         with:
-          name: ui-build
+          name: llama-ui.zip
           path: tools/ui/dist
 
       - name: ccache
@@ -547,7 +547,7 @@ jobs:
       - name: Download UI build
         uses: actions/download-artifact@v7
         with:
-          name: ui-build
+          name: llama-ui.zip
           path: tools/ui/dist
 
       - name: ccache
@@ -671,7 +671,7 @@ jobs:
       - name: Download UI build
         uses: actions/download-artifact@v7
         with:
-          name: ui-build
+          name: llama-ui.zip
           path: tools/ui/dist
 
       - name: Install Ninja
@@ -737,7 +737,7 @@ jobs:
       - name: Download UI build
         uses: actions/download-artifact@v7
         with:
-          name: ui-build
+          name: llama-ui.zip
           path: tools/ui/dist
 
       - name: ccache
@@ -1190,7 +1190,7 @@ jobs:
       - name: Download UI build
         uses: actions/download-artifact@v7
         with:
-          name: ui-build
+          name: llama-ui.zip
           path: tools/ui/dist
 
       - name: ccache
@@ -1262,7 +1262,7 @@ jobs:
       - name: Download UI build
         uses: actions/download-artifact@v7
         with:
-          name: ui-build
+          name: llama-ui.zip
           path: tools/ui/dist
 
       - name: Free up disk space
@@ -1612,7 +1612,7 @@ jobs:
         id: download_ui
         uses: actions/download-artifact@v7
         with:
-          name: ui-build
+          name: llama-ui.zip
           path: ./ui-dist
 
       - name: Package UI

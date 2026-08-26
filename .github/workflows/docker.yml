@@ -162,7 +162,7 @@ jobs:
         if: ${{ matrix.config.prebuilt_ui == true }}
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          name: ui-build
+          name: llama-ui.zip
           path: tools/ui/dist
 
       - name: Set up QEMU
