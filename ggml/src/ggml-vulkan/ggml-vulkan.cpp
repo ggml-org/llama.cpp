@@ -16530,25 +16530,10 @@ static bool ggml_vk_can_fuse_unary_mul(const struct ggml_cgraph * cgraph, int un
 // requirement that the two nodes share a shape: an OP-on-B unary result is a
 // gate that legally tiles into the MUL's shape (see ggml_vk_can_fuse_unary_mul).
 static bool ggml_vk_can_fuse_unary_mul_pair(const struct ggml_cgraph * cgraph, int node_idx) {
-    if (node_idx + 1 >= cgraph->n_nodes) {
-        return false;
-    }
-    const ggml_tensor * u = cgraph->nodes[node_idx];
-    const ggml_tensor * m = cgraph->nodes[node_idx + 1];
-    if (u->op != GGML_OP_UNARY || m->op != GGML_OP_MUL) {
-        return false;
-    }
-    if ((u->flags & GGML_TENSOR_FLAG_COMPUTE) == 0 || (m->flags & GGML_TENSOR_FLAG_COMPUTE) == 0) {
-        return false;
-    }
-    // the intermediate must not be consumed anywhere else
-    if (!ggml_node_has_n_uses(cgraph, node_idx, 1)) {
-        return false;
-    }
-    if (m->src[0] != u && m->src[1] != u) {
-        return false;
-    }
-    return ggml_vk_can_fuse_unary_mul(cgraph, node_idx, node_idx + 1);
+    const enum ggml_op ops[]    = { GGML_OP_UNARY, GGML_OP_MUL };
+    const int           outputs[] = { node_idx + 1 };   // absolute idx of the MUL result; the UNARY intermediate is elidable
+    return ggml_can_fuse_subgraph(cgraph, node_idx, 2, ops, outputs, 1) &&
+           ggml_vk_can_fuse_unary_mul(cgraph, node_idx, node_idx + 1);
 }
 
 static bool ggml_vk_can_fuse(const ggml_backend_vk_context * ctx, const struct ggml_cgraph * cgraph, int node_idx, std::initializer_list<enum ggml_op> ops) {
