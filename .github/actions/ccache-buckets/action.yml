@@ -58,34 +58,38 @@ runs:
       if: ${{ inputs.save == 'true' }}
       shell: bash
       run: |
-        set +e -uo pipefail
-        source .venv-hf/bin/activate
-        CCACHE_DIR=$(ccache -k cache_dir)
-        if [[ -d "$CCACHE_DIR" ]]; then
-            ccache -s
-            if [[ -n "${{ inputs.evict-old-files }}" ]]; then
-                ccache --evict-older-than "${{ inputs.evict-old-files }}"
+        if [[ -n "$HF_TOKEN" ]]; then
+            set +e -uo pipefail
+            source .venv-hf/bin/activate
+            CCACHE_DIR=$(ccache -k cache_dir)
+            if [[ -d "$CCACHE_DIR" ]]; then
+                ccache -s
+                if [[ -n "${{ inputs.evict-old-files }}" ]]; then
+                    ccache --evict-older-than "${{ inputs.evict-old-files }}"
+                fi
+                DATESTAMP=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+                CACHEFILE="${{ inputs.key }}-$DATESTAMP.tar.gz"
+                if tar -czf ccache_bucket.tar.gz -C "$CCACHE_DIR" .; then
+                    hf buckets cp ccache_bucket.tar.gz "hf://buckets/${{ inputs.hf_bucket }}/${{ inputs.folder }}/$CACHEFILE"
+                fi
+                rm ccache_bucket.tar.gz
+            else
+                echo "'$CCACHE_DIR' not found."
             fi
-            DATESTAMP=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
-            CACHEFILE="${{ inputs.key }}-$DATESTAMP.tar.gz"
-            if tar -czf ccache_bucket.tar.gz -C "$CCACHE_DIR" .; then
-                hf buckets cp ccache_bucket.tar.gz "hf://buckets/${{ inputs.hf_bucket }}/${{ inputs.folder }}/$CACHEFILE"
-            fi
-            rm ccache_bucket.tar.gz
-        else
-            echo "'$CCACHE_DIR' not found."
         fi
 
     - name: Remove old ccache files from buckets
       if: ${{ inputs.save == 'true' }}
       shell: bash
       run: |
-        set +e -uo pipefail
-        source .venv-hf/bin/activate
-        CACHE_FILES=$(hf buckets list "hf://buckets/${{ inputs.hf_bucket }}/${{ inputs.folder }}" --json | jq -r '[.[] | select(.type == "file") | select((.uploaded_at | .[:19]+"Z" | fromdateiso8601) < (now - 5 * 60)) | select(.path | startswith("${{ inputs.folder }}/${{ inputs.key }}") and endswith(".tar.gz"))] | sort_by(.path)[:-1] | .[] | [.path // ""] | @tsv')
-        if [[ -n "$CACHE_FILES" ]]; then
-            echo "Removing old ccache files..."
-            while IFS=$'\t' read -r CACHE_PATH; do
-                hf buckets rm "hf://buckets/${{ inputs.hf_bucket }}/$CACHE_PATH" -y
-            done <<< "$CACHE_FILES"
+        if [[ -n "$HF_TOKEN" ]]; then
+            set +e -uo pipefail
+            source .venv-hf/bin/activate
+            CACHE_FILES=$(hf buckets list "hf://buckets/${{ inputs.hf_bucket }}/${{ inputs.folder }}" --json | jq -r '[.[] | select(.type == "file") | select((.uploaded_at | .[:19]+"Z" | fromdateiso8601) < (now - 5 * 60)) | select(.path | startswith("${{ inputs.folder }}/${{ inputs.key }}") and endswith(".tar.gz"))] | sort_by(.path)[:-1] | .[] | [.path // ""] | @tsv')
+            if [[ -n "$CACHE_FILES" ]]; then
+                echo "Removing old ccache files..."
+                while IFS=$'\t' read -r CACHE_PATH; do
+                    hf buckets rm "hf://buckets/${{ inputs.hf_bucket }}/$CACHE_PATH" -y
+                done <<< "$CACHE_FILES"
+            fi
         fi
