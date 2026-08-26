@@ -1440,6 +1440,10 @@ int llama_context::encode(const llama_batch & batch_inp) {
 
     n_queued_tokens += n_tokens;
 
+    // a new evaluation invalidates any permutation the previous one left pending
+    output_swaps.clear();
+    token_swaps.clear();
+
     // reserve output buffer
     if (output_reserve(n_tokens) < n_tokens) {
         LLAMA_LOG_ERROR("%s: could not reserve space for batch with %u outputs\n", __func__, n_tokens);

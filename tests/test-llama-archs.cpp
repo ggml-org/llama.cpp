@@ -13,6 +13,7 @@
 
 #include <cinttypes>
 #include <cstddef>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <cstdint>
@@ -756,6 +757,7 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const gg
 static int test_output_reorder_nextn_rows(const size_t seed) {
     ggml_backend_dev_t dev_cpu = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
     if (dev_cpu == nullptr) {
+        printf("%s: SKIPPED, no CPU backend device\n", __func__);
         return 0;
     }
 
@@ -773,7 +775,8 @@ static int test_output_reorder_nextn_rows(const size_t seed) {
         throw std::runtime_error("failed to create llama model");
     }
 
-    const uint32_t n_embd = llama_model_n_embd(model.get());
+    // nextn rows are n_embd_out wide, not n_embd
+    const uint32_t n_embd = llama_model_n_embd_out(model.get());
 
     const llama_token tokens[4] = { 3, 5, 7, 11 };
 
@@ -837,19 +840,35 @@ static int test_output_reorder_nextn_rows(const size_t seed) {
 
     const std::vector<std::vector<float>> ref = decode_rows(4, false, out_all, -1);
 
+    // NaN never compares less, so a plain running minimum would accept a corrupt row as a match
     auto nearest = [&](const std::vector<float> & row) {
+        for (uint32_t k = 0; k < n_embd; k++) {
+            if (!std::isfinite(row[k])) {
+                return -1;
+            }
+        }
         int best = -1;
-        double best_d = 0.0;
+        double best_d = 0.0, second_d = 0.0;
         for (int j = 0; j < 4; j++) {
             double d = 0.0;
             for (uint32_t k = 0; k < n_embd; k++) {
+                if (!std::isfinite(ref[j][k])) {
+                    return -1;
+                }
                 const double e = row[k] - ref[j][k];
                 d += e*e;
             }
             if (best < 0 || d < best_d) {
-                best = j;
-                best_d = d;
+                second_d = best < 0 ? d : best_d;
+                best     = j;
+                best_d   = d;
+            } else if (d < second_d || second_d == best_d) {
+                second_d = d;
             }
+        }
+        // these rows are whole model outputs, so a tie identifies nothing
+        if (best < 0 || !(second_d > best_d*4.0 + 1e-12)) {
+            return -1;
         }
         return best;
     };
@@ -867,16 +886,35 @@ static int test_output_reorder_nextn_rows(const size_t seed) {
     for (const auto & c : cases) {
         const std::vector<std::vector<float>> got = decode_rows(2, c.masked, c.output, c.flip_to);
 
+        // without this, a case whose rows all came back empty would compare nothing and still pass
+        int expect = 0;
+        for (int i = 0; i < 4; i++) {
+            if (!c.masked || c.output[i]) {
+                expect++;
+            }
+        }
+        int checked = 0;
+
         for (int i = 0; i < 4; i++) {
             if (got[i].empty()) {
                 continue;
             }
+            checked++;
             const int j = nearest(got[i]);
-            if (j != i) {
+            if (j < 0) {
+                printf("%s: %s: the row read back for batch position %d is not finite or matches no reference row\n",
+                        __func__, c.name, i);
+                n_fail++;
+            } else if (j != i) {
                 printf("%s: %s: the row read back for batch position %d is the one for %d\n",
                         __func__, c.name, i, j);
                 n_fail++;
             }
+        }
+
+        if (checked != expect) {
+            printf("%s: %s: compared %d rows, %d were due\n", __func__, c.name, checked, expect);
+            n_fail++;
         }
     }
 
@@ -890,6 +928,7 @@ static int test_output_reorder_nextn_rows(const size_t seed) {
 static int test_output_reorder_token_rows(const size_t seed) {
     ggml_backend_dev_t dev_cpu = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
     if (dev_cpu == nullptr) {
+        printf("%s: SKIPPED, no CPU backend device\n", __func__);
         return 0;
     }
 
@@ -984,7 +1023,7 @@ static int test_output_reorder_token_rows(const size_t seed) {
             ref.assign(li, li + (size_t) n_ref*n_embd);
         }
 
-        int n_bad = 0, n_shapes = 0;
+        int n_bad = 0, n_shapes = 0, n_attempted = 0;
 
         for (uint32_t n_seq = 1; n_seq <= 4; n_seq++) {
             for (uint32_t per_seq = 1; per_seq <= 4; per_seq++) {
@@ -997,8 +1036,12 @@ static int test_output_reorder_token_rows(const size_t seed) {
                     llama_context_params cp = llama_context_default_params();
                     cp.n_ctx = 128*n_seq; cp.n_batch = std::max(n_tok, ub); cp.n_ubatch = ub;
                     cp.n_seq_max = n_seq; cp.n_threads = 2; cp.n_threads_batch = 2;
+                    n_attempted++;
                     llama_context_ptr c(llama_init_from_model(model.get(), cp));
                     if (!c) {
+                        printf("%s: n_seq=%u per_seq=%u n_ubatch=%u opat=%d: context init failed\n",
+                                __func__, n_seq, per_seq, ub, opat);
+                        n_bad++;
                         continue;
                     }
                     llama_set_embeddings_layer_inp(c.get(), 0, true);
@@ -1021,6 +1064,9 @@ static int test_output_reorder_token_rows(const size_t seed) {
                     const int rc = llama_decode(c.get(), b);
                     llama_batch_free(b);
                     if (rc != 0) {
+                        printf("%s: n_seq=%u per_seq=%u n_ubatch=%u opat=%d: decode returned %d\n",
+                                __func__, n_seq, per_seq, ub, opat, rc);
+                        n_bad++;
                         continue;
                     }
                     n_shapes++;
@@ -1048,8 +1094,15 @@ static int test_output_reorder_token_rows(const size_t seed) {
             }
         }
 
-        printf("test_output_reorder_token_rows: %d shapes swept, %d rows out of batch order\n",
-               n_shapes, n_bad);
+        // 4 n_seq x 4 per_seq x 5 n_ubatch x 2 output patterns
+        const int n_want = 4*4*5*2;
+        printf("test_output_reorder_token_rows: %d of %d shapes completed, %d rows out of batch order\n",
+               n_shapes, n_want, n_bad);
+        if (n_attempted != n_want || n_shapes != n_want) {
+            printf("%s: attempted %d and completed %d of %d shapes\n",
+                    __func__, n_attempted, n_shapes, n_want);
+            n_bad++;
+        }
         return n_bad;
     };
 
@@ -1111,7 +1164,9 @@ static int test_output_reorder_token_rows(const size_t seed) {
         cp.n_threads = 2; cp.n_threads_batch = 2;
         llama_context_ptr c(llama_init_from_model(model.get(), cp));
         if (!c) {
-            return 0;
+            // 0 is the success value here
+            printf("%s: %s: context init failed\n", __func__, name);
+            return 1;
         }
         llama_set_embeddings_layer_inp(c.get(), 0, true);
 
@@ -1153,8 +1208,8 @@ static int test_output_reorder_token_rows(const size_t seed) {
     const bool out_six_sorted[6] = { true, false, true, false, true, false };
 
     int n_fail = probe_shapes();
-    n_fail += six_token_case("six tokens, long cycle, all outputs", out_six_all);
-    n_fail += six_token_case("six tokens, long cycle, output_swaps empty", out_six_sorted);
+    n_fail += six_token_case("six tokens, four-cycle, all outputs", out_six_all);
+    n_fail += six_token_case("six tokens, four-cycle, output_swaps empty", out_six_sorted);
 
 
     for (int c = 0; c < 2; c++) {
