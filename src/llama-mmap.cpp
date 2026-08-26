@@ -3,6 +3,7 @@
 #include "llama-impl.h"
 
 #include "ggml.h"
+#include "ggml-backend.h"
 
 #include <cstring>
 #include <climits>
@@ -617,8 +618,49 @@ struct llama_mmap::impl {
     size_t size;
 };
 
-llama_mmap::llama_mmap(struct llama_file * file, size_t prefetch, bool numa) : pimpl(std::make_unique<impl>(file, prefetch, numa)) {}
-llama_mmap::~llama_mmap() = default;
+// Page-lock the mapped weights so host->device copies use DMA rather than the
+// driver's internal bounce buffer. Backends gate this themselves (the CUDA
+// backend requires GGML_CUDA_REGISTER_HOST), so it is a no-op unless requested.
+//
+// Registration makes the pages non-pageable, so it is deliberately opt-in:
+// pinning a mapping that is large relative to physical RAM will fail or put the
+// system under pressure. A failed registration is ignored and the unpinned path
+// is used unchanged.
+using llama_host_register_fn   = bool (*)(void *, size_t);
+using llama_host_unregister_fn = void (*)(void *);
+
+template <typename Fn>
+static Fn llama_get_host_register_proc(const char * name) {
+    for (size_t i = 0; i < ggml_backend_reg_count(); i++) {
+        ggml_backend_reg_t reg = ggml_backend_reg_get(i);
+        if (reg == nullptr) {
+            continue;
+        }
+        if (void * fn = ggml_backend_reg_get_proc_address(reg, name)) {
+            return (Fn) fn;
+        }
+    }
+    return nullptr;
+}
+
+llama_mmap::llama_mmap(struct llama_file * file, size_t prefetch, bool numa) : pimpl(std::make_unique<impl>(file, prefetch, numa)) {
+    auto reg_fn = llama_get_host_register_proc<llama_host_register_fn>("ggml_backend_register_host_buffer");
+    if (reg_fn != nullptr && reg_fn(pimpl->addr, pimpl->size)) {
+        host_registered = true;
+        LLAMA_LOG_INFO("%s: page-locked %.2f MiB of mapped weights for DMA\n",
+                __func__, pimpl->size / 1024.0 / 1024.0);
+    }
+}
+
+llama_mmap::~llama_mmap() {
+    if (host_registered) {
+        // must run before impl unmaps the region
+        auto unreg_fn = llama_get_host_register_proc<llama_host_unregister_fn>("ggml_backend_unregister_host_buffer");
+        if (unreg_fn != nullptr) {
+            unreg_fn(pimpl->addr);
+        }
+    }
+}
 
 size_t llama_mmap::size() const { return pimpl->size; }
 void * llama_mmap::addr() const { return pimpl->addr; }
