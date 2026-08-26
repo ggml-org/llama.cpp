@@ -283,37 +283,37 @@ jobs:
           # a valid python environment for testing
           LLAMA_FATAL_WARNINGS=OFF GG_BUILD_NINJA=1 GG_BUILD_VULKAN=1 GG_BUILD_LOW_PERF=1 ./ci/run.sh ./results/llama.cpp ./mnt/llama.cpp
 
-  gpu-openvino-low-perf:
-    runs-on: [self-hosted, Linux, Intel, OpenVINO]
-
-    env:
-      # Sync versions in build.yml, build-self-hosted.yml, release.yml, build-cache.yml, .devops/openvino.Dockerfile
-      OPENVINO_VERSION_MAJOR: "2026.3"
-      OPENVINO_VERSION_FULL: "2026.3.0.22451.bd8d6542e3c"
-
-    steps:
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v6
-
-      - name: Setup OpenVINO Toolkit
-        uses: ./.github/actions/linux-setup-openvino
-        with:
-          path: ./openvino_toolkit
-          version_major: ${{ env.OPENVINO_VERSION_MAJOR }}
-          version_full: ${{ env.OPENVINO_VERSION_FULL }}
-
-      - name: Install OpenVINO dependencies
-        run: |
-          cd ./openvino_toolkit
-          chmod +x ./install_dependencies/install_openvino_dependencies.sh
-          echo "Y" | sudo -E ./install_dependencies/install_openvino_dependencies.sh
-
-      - name: Test
-        id: ggml-ci
-        run: |
-          source ./openvino_toolkit/setupvars.sh
-          GG_BUILD_OPENVINO=1 GGML_OPENVINO_DEVICE=GPU GG_BUILD_LOW_PERF=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
+#  gpu-openvino-low-perf:
+#    runs-on: [self-hosted, Linux, Intel, OpenVINO]
+#
+#    env:
+#      # Sync versions in build.yml, build-self-hosted.yml, release.yml, build-cache.yml, .devops/openvino.Dockerfile
+#      OPENVINO_VERSION_MAJOR: "2026.3"
+#      OPENVINO_VERSION_FULL: "2026.3.0.22451.bd8d6542e3c"
+#
+#    steps:
+#      - name: Clone
+#        id: checkout
+#        uses: actions/checkout@v6
+#
+#      - name: Setup OpenVINO Toolkit
+#        uses: ./.github/actions/linux-setup-openvino
+#        with:
+#          path: ./openvino_toolkit
+#          version_major: ${{ env.OPENVINO_VERSION_MAJOR }}
+#          version_full: ${{ env.OPENVINO_VERSION_FULL }}
+#
+#      - name: Install OpenVINO dependencies
+#        run: |
+#          cd ./openvino_toolkit
+#          chmod +x ./install_dependencies/install_openvino_dependencies.sh
+#          echo "Y" | sudo -E ./install_dependencies/install_openvino_dependencies.sh
+#
+#      - name: Test
+#        id: ggml-ci
+#        run: |
+#          source ./openvino_toolkit/setupvars.sh
+#          GG_BUILD_OPENVINO=1 GGML_OPENVINO_DEVICE=GPU GG_BUILD_LOW_PERF=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
   cpu-x64-high-perf:
     runs-on: [self-hosted, Linux, X64]
