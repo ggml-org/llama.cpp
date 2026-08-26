@@ -135,6 +135,24 @@ export function swipeDirection(
 	return dy < 0 ? 'up' : 'down';
 }
 
+/**
+ * Lock document scrolling while a finger moves vertically on the chat
+ * input, unless the input itself still has room to scroll that way.
+ */
+export function shouldLockPageScroll(
+	dx: number,
+	dy: number,
+	inputEl?: HTMLElement | null
+): boolean {
+	if (Math.abs(dy) <= 2 || Math.abs(dy) <= Math.abs(dx)) {
+		return false;
+	}
+
+	const direction: PromptHistorySwipe = dy < 0 ? 'up' : 'down';
+
+	return !(inputEl && canScrollInDirection(inputEl, direction));
+}
+
 /** True when the element can still scroll in the swipe direction. */
 export function canScrollInDirection(el: HTMLElement, direction: PromptHistorySwipe): boolean {
 	const overflow = el.scrollHeight - el.clientHeight;

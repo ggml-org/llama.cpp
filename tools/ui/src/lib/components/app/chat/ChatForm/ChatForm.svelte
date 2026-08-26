@@ -56,6 +56,7 @@
 		isIMEComposing,
 		isOffsetInCodeBlock,
 		parseClipboardContent,
+		shouldLockPageScroll,
 		swipeDirection,
 		uuid
 	} from '$lib/utils';
@@ -171,9 +172,42 @@
 	});
 
 	const promptHistory = usePromptHistory();
+	let inputAreaEl: HTMLDivElement | undefined = $state();
 	let swipeStartX = 0;
 	let swipeStartY = 0;
 	let swipeTracking = false;
+
+	$effect(() => {
+		const el = inputAreaEl;
+
+		if (!el || !enablePromptHistory) {
+			return;
+		}
+
+		const onTouchMove = (event: TouchEvent) => {
+			if (!swipeTracking || event.touches.length !== 1) {
+				return;
+			}
+
+			const touch = event.touches[0];
+
+			if (
+				shouldLockPageScroll(
+					touch.clientX - swipeStartX,
+					touch.clientY - swipeStartY,
+					inputRef?.getElement()
+				)
+			) {
+				event.preventDefault();
+			}
+		};
+
+		el.addEventListener('touchmove', onTouchMove, { passive: false });
+
+		return () => {
+			el.removeEventListener('touchmove', onTouchMove);
+		};
+	});
 
 	async function handleWorkingDirectoryChange(newDir: string | null) {
 		// Committing a directory consumes the `/cwd` token; the chip's
@@ -388,6 +422,10 @@
 		swipeTracking = true;
 		swipeStartX = event.touches[0].clientX;
 		swipeStartY = event.touches[0].clientY;
+	}
+
+	function handlePromptHistoryTouchCancel() {
+		swipeTracking = false;
 	}
 
 	function handlePromptHistoryTouchEnd(event: TouchEvent) {
@@ -730,10 +768,12 @@
 	></div>
 
 	<div
+		bind:this={inputAreaEl}
 		class="{INPUT_CLASSES} overflow-hidden rounded-4xl md:rounded-3xl backdrop-blur-md {disabled
 			? 'cursor-not-allowed opacity-60'
-			: ''}"
+			: ''} {enablePromptHistory ? 'prompt-history-gestures' : ''}"
 		data-slot="input-area"
+		ontouchcancel={handlePromptHistoryTouchCancel}
 		ontouchend={handlePromptHistoryTouchEnd}
 		ontouchstart={handlePromptHistoryTouchStart}
 	>
@@ -824,3 +864,16 @@
 		}
 	}}
 />
+
+<style>
+	.prompt-history-gestures {
+		overscroll-behavior: contain;
+		touch-action: none;
+	}
+
+	.prompt-history-gestures :global(textarea),
+	.prompt-history-gestures :global([contenteditable='true']) {
+		overscroll-behavior: contain;
+		touch-action: none;
+	}
+</style>

@@ -35,6 +35,7 @@ export {
 	pushPromptHistory,
 	recallNext,
 	recallPrevious,
+	shouldLockPageScroll,
 	swipeDirection,
 	type PromptHistoryCursor,
 	type PromptHistorySwipe

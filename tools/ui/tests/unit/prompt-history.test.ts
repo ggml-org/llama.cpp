@@ -6,6 +6,7 @@ import {
 	pushPromptHistory,
 	recallNext,
 	recallPrevious,
+	shouldLockPageScroll,
 	swipeDirection
 } from '$lib/utils/prompt-history';
 import { describe, expect, it } from 'vitest';
@@ -105,5 +106,26 @@ describe('canScrollInDirection', () => {
 		el.scrollTop = 80;
 		expect(canScrollInDirection(el, 'up')).toBe(true);
 		expect(canScrollInDirection(el, 'down')).toBe(false);
+	});
+});
+
+describe('shouldLockPageScroll', () => {
+	it('locks vertical page movement when the input cannot scroll', () => {
+		const el = { clientHeight: 40, scrollHeight: 40, scrollTop: 0 } as HTMLElement;
+
+		expect(shouldLockPageScroll(0, -20, el)).toBe(true);
+		expect(shouldLockPageScroll(0, 20, el)).toBe(true);
+	});
+
+	it('does not lock a mostly-horizontal or tiny move', () => {
+		expect(shouldLockPageScroll(40, -10, undefined)).toBe(false);
+		expect(shouldLockPageScroll(0, -1, undefined)).toBe(false);
+	});
+
+	it('lets an overflowing input keep scrolling instead of locking the page', () => {
+		const el = { clientHeight: 40, scrollHeight: 120, scrollTop: 0 } as HTMLElement;
+
+		expect(shouldLockPageScroll(0, 30, el)).toBe(false);
+		expect(shouldLockPageScroll(0, -30, el)).toBe(true);
 	});
 });
