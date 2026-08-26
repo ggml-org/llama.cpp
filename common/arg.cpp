@@ -2674,7 +2674,6 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             llm_add_n_cpu_ffn_overrides(value, LLM_FFN_EXPS_REGEX, params.tensor_buft_overrides);
         }
     ).set_env("LLAMA_ARG_N_CPU_MOE"));
-    // TODO: Optimize. Current logic touches layers from 0 blindly. Optimize by prioritizing layers with the largest FFNs first, thus reducing the total offloaded layer count.
     add_opt(common_arg(
         {"-ncffn", "--n-cpu-ffn"}, "N",
         "keep the dense FFN weights of the first N layers in the CPU\n"

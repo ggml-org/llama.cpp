@@ -1091,8 +1091,8 @@ const char * const LLM_FFN_EXPS_REGEX = "\\.ffn_(up|down|gate|gate_up)_(ch|)exps
 
 const char * const LLM_FFN_DENSE_REGEX = "\\.ffn_(up|down|gate)\\.";
 
-inline std::string llm_ffn_exps_block_regex(int idx) {
-    return string_format("blk\\.%d%s", idx, LLM_FFN_EXPS_REGEX);
+inline std::string llm_ffn_block_regex(int idx, const char * ffn_regex) {
+    return string_format("blk\\.%d%s", idx, ffn_regex);
 }
 
 inline llama_model_tensor_buft_override llm_ffn_exps_cpu_override() {
@@ -1103,7 +1103,7 @@ inline void llm_add_n_cpu_ffn_overrides(int n, const char * ffn_regex, std::vect
     // keep strings alive and avoid leaking memory by storing them in a static list
     static std::list<std::string> buft_override_strings;
     for (int i = 0; i < n; ++i) {
-        buft_override_strings.push_back(string_format("blk\\.%d%s", i, ffn_regex));
+        buft_override_strings.push_back(llm_ffn_block_regex(i, ffn_regex));
         overrides.push_back({buft_override_strings.back().c_str(), ggml_backend_cpu_buffer_type()});
     }
 }
