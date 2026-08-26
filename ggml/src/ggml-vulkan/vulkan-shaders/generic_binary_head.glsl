@@ -34,6 +34,10 @@ layout (binding = 2) writeonly buffer D {D_TYPE data_d[];};
 
 // true if src0/src1 are the same shape and the indices can be reused without additional modulus
 layout(constant_id = 0) const bool norepeat = false;
+#if defined(UNARY_MUL_FUSION)
+// true if the OP is applied to the B operand (the unary result tiles into src0's shape)
+layout(constant_id = 1) const bool op_on_b = false;
+#endif
 
 uint get_idx() {
     return gl_GlobalInvocationID.z * 262144 + gl_GlobalInvocationID.y * 512 + gl_GlobalInvocationID.x;

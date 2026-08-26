@@ -179,15 +179,15 @@ void main() {
         uint i00, i01, i02, i03;
         get_indices(idx, i00, i01, i02, i03);
 
-#ifdef UNARY_MUL_B_FUSION
-        // the unary result is the B operand: it repeats into the dst shape,
-        // while the passthrough operand A is indexed directly
-        data_d[get_doffset() + dst_idx(i00, i01, i02, i03)] =
-            D_TYPE(FLOAT_TYPE(OP(float(data_b[get_boffset() + src1_idx(i00, i01, i02, i03)]))) * FLOAT_TYPE(data_a[get_aoffset() + src0_idx(i00, i01, i02, i03)]));
-#else
-        data_d[get_doffset() + dst_idx(i00, i01, i02, i03)] =
-            D_TYPE(FLOAT_TYPE(OP(float(data_a[get_aoffset() + src0_idx(i00, i01, i02, i03)]))) * FLOAT_TYPE(data_b[get_boffset() + src1_idx(i00, i01, i02, i03)]));
-#endif
+        // op_on_b: the unary result is the B operand; it repeats into the dst
+        // shape, while the passthrough operand A is indexed directly
+        if (op_on_b) {
+            data_d[get_doffset() + dst_idx(i00, i01, i02, i03)] =
+                D_TYPE(FLOAT_TYPE(OP(float(data_b[get_boffset() + src1_idx(i00, i01, i02, i03)]))) * FLOAT_TYPE(data_a[get_aoffset() + src0_idx(i00, i01, i02, i03)]));
+        } else {
+            data_d[get_doffset() + dst_idx(i00, i01, i02, i03)] =
+                D_TYPE(FLOAT_TYPE(OP(float(data_a[get_aoffset() + src0_idx(i00, i01, i02, i03)]))) * FLOAT_TYPE(data_b[get_boffset() + src1_idx(i00, i01, i02, i03)]));
+        }
 
         idx += num_threads;
     }

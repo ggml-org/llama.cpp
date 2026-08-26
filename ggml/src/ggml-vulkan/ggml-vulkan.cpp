@@ -5685,15 +5685,17 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
     CREATE_UNARY(expm1)
 #undef CREATE_UNARY
 
+// spec constant list: {norepeat, op_on_b} - the OP-on-B variants reuse the same
+// SPIR-V as the base pipelines, selected via specialization instead of separate shaders
 #define CREATE_UNARY_MUL(name) \
-    ggml_vk_create_pipeline(device, device->pipeline_ ## name ## _mul[0], #name "_mul_f32", name ## _mul_f32_len, name ## _mul_f32_data, "main", 3, sizeof(vk_op_binary_push_constants), {512, 1, 1}, {0}, 1); \
-    ggml_vk_create_pipeline(device, device->pipeline_ ## name ## _mul[1], #name "_mul_f16", name ## _mul_f16_len, name ## _mul_f16_data, "main", 3, sizeof(vk_op_binary_push_constants), {512, 1, 1}, {0}, 1); \
-    ggml_vk_create_pipeline(device, device->pipeline_ ## name ## _mul_norepeat[0], #name "_mul_f32_norepeat", name ## _mul_f32_len, name ## _mul_f32_data, "main", 3, sizeof(vk_op_binary_push_constants), {512, 1, 1}, {1}, 1); \
-    ggml_vk_create_pipeline(device, device->pipeline_ ## name ## _mul_norepeat[1], #name "_mul_f16_norepeat", name ## _mul_f16_len, name ## _mul_f16_data, "main", 3, sizeof(vk_op_binary_push_constants), {512, 1, 1}, {1}, 1); \
-    ggml_vk_create_pipeline(device, device->pipeline_ ## name ## _mul_b[0], #name "_mul_b_f32", name ## _mul_b_f32_len, name ## _mul_b_f32_data, "main", 3, sizeof(vk_op_binary_push_constants), {512, 1, 1}, {0}, 1); \
-    ggml_vk_create_pipeline(device, device->pipeline_ ## name ## _mul_b[1], #name "_mul_b_f16", name ## _mul_b_f16_len, name ## _mul_b_f16_data, "main", 3, sizeof(vk_op_binary_push_constants), {512, 1, 1}, {0}, 1); \
-    ggml_vk_create_pipeline(device, device->pipeline_ ## name ## _mul_b_norepeat[0], #name "_mul_b_f32_norepeat", name ## _mul_b_f32_len, name ## _mul_b_f32_data, "main", 3, sizeof(vk_op_binary_push_constants), {512, 1, 1}, {1}, 1); \
-    ggml_vk_create_pipeline(device, device->pipeline_ ## name ## _mul_b_norepeat[1], #name "_mul_b_f16_norepeat", name ## _mul_b_f16_len, name ## _mul_b_f16_data, "main", 3, sizeof(vk_op_binary_push_constants), {512, 1, 1}, {1}, 1);
+    ggml_vk_create_pipeline(device, device->pipeline_ ## name ## _mul[0], #name "_mul_f32", name ## _mul_f32_len, name ## _mul_f32_data, "main", 3, sizeof(vk_op_binary_push_constants), {512, 1, 1}, {0, 0}, 1); \
+    ggml_vk_create_pipeline(device, device->pipeline_ ## name ## _mul[1], #name "_mul_f16", name ## _mul_f16_len, name ## _mul_f16_data, "main", 3, sizeof(vk_op_binary_push_constants), {512, 1, 1}, {0, 0}, 1); \
+    ggml_vk_create_pipeline(device, device->pipeline_ ## name ## _mul_norepeat[0], #name "_mul_f32_norepeat", name ## _mul_f32_len, name ## _mul_f32_data, "main", 3, sizeof(vk_op_binary_push_constants), {512, 1, 1}, {1, 0}, 1); \
+    ggml_vk_create_pipeline(device, device->pipeline_ ## name ## _mul_norepeat[1], #name "_mul_f16_norepeat", name ## _mul_f16_len, name ## _mul_f16_data, "main", 3, sizeof(vk_op_binary_push_constants), {512, 1, 1}, {1, 0}, 1); \
+    ggml_vk_create_pipeline(device, device->pipeline_ ## name ## _mul_b[0], #name "_mul_b_f32", name ## _mul_f32_len, name ## _mul_f32_data, "main", 3, sizeof(vk_op_binary_push_constants), {512, 1, 1}, {0, 1}, 1); \
+    ggml_vk_create_pipeline(device, device->pipeline_ ## name ## _mul_b[1], #name "_mul_b_f16", name ## _mul_f16_len, name ## _mul_f16_data, "main", 3, sizeof(vk_op_binary_push_constants), {512, 1, 1}, {0, 1}, 1); \
+    ggml_vk_create_pipeline(device, device->pipeline_ ## name ## _mul_b_norepeat[0], #name "_mul_b_f32_norepeat", name ## _mul_f32_len, name ## _mul_f32_data, "main", 3, sizeof(vk_op_binary_push_constants), {512, 1, 1}, {1, 1}, 1); \
+    ggml_vk_create_pipeline(device, device->pipeline_ ## name ## _mul_b_norepeat[1], #name "_mul_b_f16_norepeat", name ## _mul_f16_len, name ## _mul_f16_data, "main", 3, sizeof(vk_op_binary_push_constants), {512, 1, 1}, {1, 1}, 1);
 
     CREATE_UNARY_MUL(gelu)
     CREATE_UNARY_MUL(sigmoid)
