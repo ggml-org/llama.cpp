@@ -2859,13 +2859,18 @@ static bool ggml_metal_op_flash_attn_ext_use_tensor(const struct ggml_metal_devi
         return false;
     }
 
-    // only the (dk, dv) pairs with an instantiated kernel
+    // only the (dk, dv) pairs where the tensor path is at least on par with
+    // the vec kernel.  Measured on M5 Max (nq = kv = 4096, several GQA
+    // ratios, 8:8 .. 64:8):
+    //   (256, 256): +3%..+13%
+    // all the other pairs lose: 64/64 -18%, 128/128 -12% MHA / -64% GQA
+    // 32:8, 192/128 -3%, 192/192 -53%, 320/256 -20% GQA, 512/512 -35%..-65%,
+    // 576/512 -60%..-70% (per-d-block form: NBLKx the QK^T work; the f16 Q
+    // hoisted form is blocked by an MPP bug - the coop P -> f16 right input
+    // conversion is wrong for the P tile layout induced by f16 QK operands -
+    // and the smem P workaround is 2-3x slower).  They fall back to vec.
     switch (dv) {
-        case 64:  if (dk != 64)                        return false; break;
-        case 128: if (dk != 128 && dk != 192)          return false; break;
-        case 192: if (dk != 192)                       return false; break;
-        case 256: if (dk != 256 && dk != 320)          return false; break;
-        case 512: if (dk != 512 && dk != 576)          return false; break;
+        case 256: if (dk != 256) return false; break;
         default:  return false;
     }
 
