@@ -324,7 +324,14 @@ class AgenticStore {
 
 		if (!agenticConfig.enabled) return { handled: false };
 
-		const hasMcpServers = mcpStore.hasEnabledServers();
+		// callers without an explicit policy fall back to the global defaults
+		const disabledTools = new Set(toolPolicy?.disabledTools ?? toolsStore.disabledTools);
+		const disabledToolCategories = new Set(
+			toolPolicy?.disabledToolCategories ?? toolsStore.disabledToolCategories
+		);
+		// skip MCP init when the policy disables the whole MCP category
+		const hasMcpServers =
+			mcpStore.hasEnabledServers() && !disabledToolCategories.has(ToolSource.MCP);
 
 		if (hasMcpServers) {
 			const initialized = await mcpStore.ensureInitialized();
@@ -334,11 +341,7 @@ class AgenticStore {
 			}
 		}
 
-		// callers without an explicit policy fall back to the global defaults
-		const tools = toolsStore.getEnabledToolsForLLM(
-			new Set(toolPolicy?.disabledTools ?? toolsStore.disabledTools),
-			new Set(toolPolicy?.disabledToolCategories ?? toolsStore.disabledToolCategories)
-		);
+		const tools = toolsStore.getEnabledToolsForLLM(disabledTools, disabledToolCategories);
 
 		if (tools.length === 0) {
 			return { handled: false };
