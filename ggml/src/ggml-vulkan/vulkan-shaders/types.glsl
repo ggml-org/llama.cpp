@@ -515,7 +515,7 @@ struct block_iq1_m_packed64 {
 #define A_TYPE_PACKED32 block_iq1_m_packed32
 #endif
 
-#if defined(DATA_A_IQ1_S) || defined(DATA_A_IQ1_M) || defined(MULMAT_QUANT)
+#if defined(DATA_A_IQ1_S) || defined(DATA_A_IQ1_M)
 #define IQ1S_DELTA 0.125f
 #define IQ1M_DELTA 0.125f
 
@@ -915,16 +915,9 @@ const uint32_t[2048] iq1s_grid_gpu_const = {
 };
 #endif
 
-#ifdef MULMAT_QUANT
-shared uint16_t iq1s_grid[(MmTypeA == GGML_TYPE_IQ1_S || MmTypeA == GGML_TYPE_IQ1_M) ? 2048 : 8];
-#if defined(NEEDS_IQ1S_GRID_GPU)
-shared uint32_t iq1s_grid_gpu[(MmTypeA == GGML_TYPE_IQ1_S || MmTypeA == GGML_TYPE_IQ1_M) ? 2048 : 8];
-#endif
-#else
 shared uint16_t iq1s_grid[2048];
 #if defined(NEEDS_IQ1S_GRID_GPU)
 shared uint32_t iq1s_grid_gpu[2048];
-#endif
 #endif
 
 #if defined(DATA_A_IQ1_S) || defined(DATA_A_IQ1_M)
@@ -953,10 +946,8 @@ void init_iq_shmem(uvec3 wgsize)
 #endif
 #endif
 
-#if defined(DATA_A_IQ2_XXS) || defined(DATA_A_IQ2_XS) || defined(DATA_A_IQ2_S) || defined(MULMAT_QUANT)
-#ifdef MULMAT_QUANT
-shared uvec2 iq2_grid[MmTypeA == GGML_TYPE_IQ2_S ? 1024 : MmTypeA == GGML_TYPE_IQ2_XS ? 512 : MmTypeA == GGML_TYPE_IQ2_XXS ? 256 : 8];
-#elif defined(DATA_A_IQ2_S)
+#if defined(DATA_A_IQ2_XXS) || defined(DATA_A_IQ2_XS) || defined(DATA_A_IQ2_S)
+#if defined(DATA_A_IQ2_S)
 shared uvec2 iq2_grid[1024];
 #elif defined(DATA_A_IQ2_XS)
 shared uvec2 iq2_grid[512];
@@ -980,7 +971,7 @@ struct block_iq2_xxs_packed16
     uint16_t qs[QUANT_K_IQ2_XXS/8];
 };
 
-#if defined(DATA_A_IQ2_XXS) || defined(MULMAT_QUANT)
+#if defined(DATA_A_IQ2_XXS)
 
 const uvec2[256] iq2xxs_grid_const = {
     uvec2(0x08080808, 0x08080808), uvec2(0x0808082b, 0x08080808), uvec2(0x08081919, 0x08080808), uvec2(0x08082b08, 0x08080808),
@@ -1088,7 +1079,7 @@ struct block_iq2_xs_packed16
     uint16_t scales[QUANT_K_IQ2_XS/64];
 };
 
-#if defined(DATA_A_IQ2_XS) || defined(MULMAT_QUANT)
+#if defined(DATA_A_IQ2_XS)
 
 const uvec2 iq2xs_grid_const[512] = {
     uvec2(0x08080808, 0x08080808), uvec2(0x0808082b, 0x08080808), uvec2(0x08081919, 0x08080808), uvec2(0x08082b08, 0x08080808),
@@ -1262,7 +1253,7 @@ struct block_iq2_s_packed16
     uint16_t scales[QUANT_K_IQ2_S/64];
 };
 
-#if defined(DATA_A_IQ2_S) || defined(MULMAT_QUANT)
+#if defined(DATA_A_IQ2_S)
 
 const uvec2 iq2s_grid_const[1024] = {
     uvec2(0x08080808, 0x08080808), uvec2(0x0808082b, 0x08080808), uvec2(0x08081919, 0x08080808), uvec2(0x08082b08, 0x08080808),
@@ -1545,10 +1536,8 @@ void init_iq_shmem(uvec3 wgsize)
 #endif
 #endif
 
-#if defined(DATA_A_IQ3_XXS) || defined(DATA_A_IQ3_S) || defined(MULMAT_QUANT)
-#ifdef MULMAT_QUANT
-shared uint32_t iq3_grid[MmTypeA == GGML_TYPE_IQ3_S ? 512 : MmTypeA == GGML_TYPE_IQ3_XXS ? 256 : 8];
-#elif defined(DATA_A_IQ3_S)
+#if defined(DATA_A_IQ3_XXS) || defined(DATA_A_IQ3_S)
+#if defined(DATA_A_IQ3_S)
 shared uint32_t iq3_grid[512];
 #else
 shared uint32_t iq3_grid[256];
@@ -1570,7 +1559,7 @@ struct block_iq3_xxs_packed16
     uint16_t qs[QUANT_K_IQ3_XXS/8 + QUANT_K_IQ3_XXS/16];
 };
 
-#if defined(DATA_A_IQ3_XXS) || defined(MULMAT_QUANT)
+#if defined(DATA_A_IQ3_XXS)
 
 const uint32_t iq3xxs_grid_const[256] = {
     0x04040404, 0x04040414, 0x04040424, 0x04040c0c, 0x04040c1c, 0x04040c3e, 0x04041404, 0x04041414,
@@ -1650,7 +1639,7 @@ struct block_iq3_s_packed16
     uint16_t scales[QUANT_K_IQ3_S/64/2];
 };
 
-#if defined(DATA_A_IQ3_S) || defined(MULMAT_QUANT)
+#if defined(DATA_A_IQ3_S)
 
 const uint32_t iq3s_grid_const[512] = {
     0x01010101, 0x01010103, 0x01010105, 0x0101010b, 0x0101010f, 0x01010301, 0x01010303, 0x01010305,
@@ -1845,17 +1834,13 @@ struct block_nvfp4_packed32
 #define A_TYPE_PACKED32 block_nvfp4_packed32
 #endif
 
-#if defined(DATA_A_IQ4_NL) || defined(DATA_A_IQ4_XS) || defined(MULMAT_QUANT)
+#if defined(DATA_A_IQ4_NL) || defined(DATA_A_IQ4_XS)
 const int8_t kvalues_iq4nl_const[16] = {
     int8_t(-127), int8_t(-104), int8_t(-83), int8_t(-65), int8_t(-49), int8_t(-35), int8_t(-22), int8_t(-10),
     int8_t(1), int8_t(13), int8_t(25), int8_t(38), int8_t(53), int8_t(69), int8_t(89), int8_t(113)
 };
 
-#ifdef MULMAT_QUANT
-shared FLOAT_TYPE kvalues_iq4nl[(MmTypeA == GGML_TYPE_IQ4_NL || MmTypeA == GGML_TYPE_IQ4_XS) ? 16 : 8];
-#else
 shared FLOAT_TYPE kvalues_iq4nl[16];
-#endif
 
 #if defined(DATA_A_IQ4_NL) || defined(DATA_A_IQ4_XS)
 #define NEEDS_INIT_IQ_SHMEM
@@ -1870,26 +1855,18 @@ void init_iq_shmem(uvec3 wgsize)
 #endif
 #endif
 
-#if defined(DATA_A_MXFP4) || defined(DATA_A_NVFP4) || defined(MULMAT_QUANT)
+#if defined(DATA_A_MXFP4) || defined(DATA_A_NVFP4)
 #if !defined(USE_OCP_FP4)
 const int8_t kvalues_mxfp4_const[16] = {
     int8_t(0), int8_t(1), int8_t(2), int8_t(3), int8_t(4), int8_t(6), int8_t(8), int8_t(12),
     int8_t(0), int8_t(-1), int8_t(-2), int8_t(-3), int8_t(-4), int8_t(-6), int8_t(-8), int8_t(-12),
 };
 
-#ifdef MULMAT_QUANT
-shared int8_t kvalues_mxfp4[(MmTypeA == GGML_TYPE_MXFP4 || MmTypeA == GGML_TYPE_NVFP4) ? 16 : 8];
-#else
 shared int8_t kvalues_mxfp4[16];
 #endif
-#endif
 
-#if (defined(DATA_A_NVFP4) || defined(MULMAT_QUANT)) && !defined(USE_OCP_FP4)
-#ifdef MULMAT_QUANT
-shared float ue4m3_fp32_lut[MmTypeA == GGML_TYPE_NVFP4 ? 128 : 8];
-#else
+#if defined(DATA_A_NVFP4) && !defined(USE_OCP_FP4)
 shared float ue4m3_fp32_lut[128];
-#endif
 
 float ue4m3_to_fp32_build(uint u) {
     if (u == 0u || u == 127u) {
@@ -1955,7 +1932,7 @@ float e8m0_to_fp32(uint8_t x) {
     return uintBitsToFloat(bits);
 }
 
-#if defined(DATA_A_NVFP4) || defined(MULMAT_QUANT)
+#if defined(DATA_A_NVFP4)
 #if defined(USE_OCP_FP4)
 floate4m3_t ue4m3_from_bits(uint8_t x) {
     if (x == uint8_t(0x7F)) {

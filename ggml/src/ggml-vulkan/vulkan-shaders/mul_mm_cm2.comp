@@ -50,14 +50,13 @@ layout (constant_id = 6) const uint subgroup_size = 32;
 uint mm_quant_k() {
     switch (MmTypeA) {
     case GGML_TYPE_Q4_0: case GGML_TYPE_Q4_1: case GGML_TYPE_Q5_0: case GGML_TYPE_Q5_1:
-    case GGML_TYPE_Q8_0: case GGML_TYPE_IQ4_NL: case GGML_TYPE_MXFP4:
+    case GGML_TYPE_Q8_0:
         return 32u;
     case GGML_TYPE_Q1_0:
         return 128u;
     case GGML_TYPE_Q2_0:
-    case GGML_TYPE_NVFP4:
         return 64u;
-    default: // K-quants and IQ types
+    default:
         return 256u;
     }
 }
@@ -113,17 +112,6 @@ layout (binding = 0) readonly buffer BUF_Q3_K    { block_q3_K data[];    } a_q3_
 layout (binding = 0) readonly buffer BUF_Q4_K    { block_q4_K data[];    } a_q4_k;
 layout (binding = 0) readonly buffer BUF_Q5_K    { block_q5_K data[];    } a_q5_k;
 layout (binding = 0) readonly buffer BUF_Q6_K    { block_q6_K data[];    } a_q6_k;
-layout (binding = 0) readonly buffer BUF_IQ1_S   { block_iq1_s data[];   } a_iq1_s;
-layout (binding = 0) readonly buffer BUF_IQ1_M   { block_iq1_m data[];   } a_iq1_m;
-layout (binding = 0) readonly buffer BUF_IQ2_XXS { block_iq2_xxs data[]; } a_iq2_xxs;
-layout (binding = 0) readonly buffer BUF_IQ2_XS  { block_iq2_xs data[];  } a_iq2_xs;
-layout (binding = 0) readonly buffer BUF_IQ2_S   { block_iq2_s data[];   } a_iq2_s;
-layout (binding = 0) readonly buffer BUF_IQ3_XXS { block_iq3_xxs data[]; } a_iq3_xxs;
-layout (binding = 0) readonly buffer BUF_IQ3_S   { block_iq3_s data[];   } a_iq3_s;
-layout (binding = 0) readonly buffer BUF_IQ4_XS  { block_iq4_xs data[];  } a_iq4_xs;
-layout (binding = 0) readonly buffer BUF_IQ4_NL  { block_iq4_nl data[];  } a_iq4_nl;
-layout (binding = 0) readonly buffer BUF_MXFP4   { block_mxfp4 data[];   } a_mxfp4;
-layout (binding = 0) readonly buffer BUF_NVFP4   { block_nvfp4 data[];   } a_nvfp4;
 #endif
 layout (binding = 1) readonly buffer B {B_TYPE data_b[];};
 layout (binding = 2) writeonly buffer D {D_TYPE data_d[];};
@@ -158,18 +146,7 @@ layout (binding = 1) readonly buffer B4 {B_TYPEV4 data_b_v4[];};
     else if (MmTypeA == GGML_TYPE_Q3_K) { coopMatLoadTensorNV(mat, a_q3_k.data, pos_a, tensor_layout, dequantFuncQ3_K, dequantFuncQ3_K_v); } \
     else if (MmTypeA == GGML_TYPE_Q4_K) { coopMatLoadTensorNV(mat, a_q4_k.data, pos_a, tensor_layout, dequantFuncQ4_K, dequantFuncQ4_K_v); } \
     else if (MmTypeA == GGML_TYPE_Q5_K) { coopMatLoadTensorNV(mat, a_q5_k.data, pos_a, tensor_layout, dequantFuncQ5_K, dequantFuncQ5_K_v); } \
-    else if (MmTypeA == GGML_TYPE_Q6_K) { coopMatLoadTensorNV(mat, a_q6_k.data, pos_a, tensor_layout, dequantFuncQ6_K, dequantFuncQ6_K_v); } \
-    else if (MmTypeA == GGML_TYPE_IQ1_S) { coopMatLoadTensorNV(mat, a_iq1_s.data, pos_a, tensor_layout, dequantFuncIQ1_S, dequantFuncIQ1_S_v); } \
-    else if (MmTypeA == GGML_TYPE_IQ1_M) { coopMatLoadTensorNV(mat, a_iq1_m.data, pos_a, tensor_layout, dequantFuncIQ1_M, dequantFuncIQ1_M_v); } \
-    else if (MmTypeA == GGML_TYPE_IQ2_XXS) { coopMatLoadTensorNV(mat, a_iq2_xxs.data, pos_a, tensor_layout, dequantFuncIQ2_XXS, dequantFuncIQ2_XXS_v); } \
-    else if (MmTypeA == GGML_TYPE_IQ2_XS) { coopMatLoadTensorNV(mat, a_iq2_xs.data, pos_a, tensor_layout, dequantFuncIQ2_XS, dequantFuncIQ2_XS_v); } \
-    else if (MmTypeA == GGML_TYPE_IQ2_S) { coopMatLoadTensorNV(mat, a_iq2_s.data, pos_a, tensor_layout, dequantFuncIQ2_S, dequantFuncIQ2_S_v); } \
-    else if (MmTypeA == GGML_TYPE_IQ3_XXS) { coopMatLoadTensorNV(mat, a_iq3_xxs.data, pos_a, tensor_layout, dequantFuncIQ3_XXS, dequantFuncIQ3_XXS_v); } \
-    else if (MmTypeA == GGML_TYPE_IQ3_S) { coopMatLoadTensorNV(mat, a_iq3_s.data, pos_a, tensor_layout, dequantFuncIQ3_S, dequantFuncIQ3_S_v); } \
-    else if (MmTypeA == GGML_TYPE_IQ4_XS) { coopMatLoadTensorNV(mat, a_iq4_xs.data, pos_a, tensor_layout, dequantFuncIQ4_XS, dequantFuncIQ4_XS_v); } \
-    else if (MmTypeA == GGML_TYPE_IQ4_NL) { coopMatLoadTensorNV(mat, a_iq4_nl.data, pos_a, tensor_layout, dequantFuncIQ4_NL, dequantFuncIQ4_NL_v); } \
-    else if (MmTypeA == GGML_TYPE_MXFP4) { coopMatLoadTensorNV(mat, a_mxfp4.data, pos_a, tensor_layout, dequantFuncMXFP4, dequantFuncMXFP4_v); } \
-    else if (MmTypeA == GGML_TYPE_NVFP4) { coopMatLoadTensorNV(mat, a_nvfp4.data, pos_a, tensor_layout, dequantFuncNVFP4, dequantFuncNVFP4_v); }
+    else if (MmTypeA == GGML_TYPE_Q6_K) { coopMatLoadTensorNV(mat, a_q6_k.data, pos_a, tensor_layout, dequantFuncQ6_K, dequantFuncQ6_K_v); }
 #else
 #define COOPMAT_LOAD_A(mat, tensor_layout) \
     if (MmTypeA == GGML_TYPE_Q1_0) { coopMatLoadTensorNV(mat, a_q1_0.data, pos_a, tensor_layout, dequantFuncQ1_0); } \
@@ -184,18 +161,7 @@ layout (binding = 1) readonly buffer B4 {B_TYPEV4 data_b_v4[];};
     else if (MmTypeA == GGML_TYPE_Q3_K) { coopMatLoadTensorNV(mat, a_q3_k.data, pos_a, tensor_layout, dequantFuncQ3_K); } \
     else if (MmTypeA == GGML_TYPE_Q4_K) { coopMatLoadTensorNV(mat, a_q4_k.data, pos_a, tensor_layout, dequantFuncQ4_K); } \
     else if (MmTypeA == GGML_TYPE_Q5_K) { coopMatLoadTensorNV(mat, a_q5_k.data, pos_a, tensor_layout, dequantFuncQ5_K); } \
-    else if (MmTypeA == GGML_TYPE_Q6_K) { coopMatLoadTensorNV(mat, a_q6_k.data, pos_a, tensor_layout, dequantFuncQ6_K); } \
-    else if (MmTypeA == GGML_TYPE_IQ1_S) { coopMatLoadTensorNV(mat, a_iq1_s.data, pos_a, tensor_layout, dequantFuncIQ1_S); } \
-    else if (MmTypeA == GGML_TYPE_IQ1_M) { coopMatLoadTensorNV(mat, a_iq1_m.data, pos_a, tensor_layout, dequantFuncIQ1_M); } \
-    else if (MmTypeA == GGML_TYPE_IQ2_XXS) { coopMatLoadTensorNV(mat, a_iq2_xxs.data, pos_a, tensor_layout, dequantFuncIQ2_XXS); } \
-    else if (MmTypeA == GGML_TYPE_IQ2_XS) { coopMatLoadTensorNV(mat, a_iq2_xs.data, pos_a, tensor_layout, dequantFuncIQ2_XS); } \
-    else if (MmTypeA == GGML_TYPE_IQ2_S) { coopMatLoadTensorNV(mat, a_iq2_s.data, pos_a, tensor_layout, dequantFuncIQ2_S); } \
-    else if (MmTypeA == GGML_TYPE_IQ3_XXS) { coopMatLoadTensorNV(mat, a_iq3_xxs.data, pos_a, tensor_layout, dequantFuncIQ3_XXS); } \
-    else if (MmTypeA == GGML_TYPE_IQ3_S) { coopMatLoadTensorNV(mat, a_iq3_s.data, pos_a, tensor_layout, dequantFuncIQ3_S); } \
-    else if (MmTypeA == GGML_TYPE_IQ4_XS) { coopMatLoadTensorNV(mat, a_iq4_xs.data, pos_a, tensor_layout, dequantFuncIQ4_XS); } \
-    else if (MmTypeA == GGML_TYPE_IQ4_NL) { coopMatLoadTensorNV(mat, a_iq4_nl.data, pos_a, tensor_layout, dequantFuncIQ4_NL); } \
-    else if (MmTypeA == GGML_TYPE_MXFP4) { coopMatLoadTensorNV(mat, a_mxfp4.data, pos_a, tensor_layout, dequantFuncMXFP4); } \
-    else if (MmTypeA == GGML_TYPE_NVFP4) { coopMatLoadTensorNV(mat, a_nvfp4.data, pos_a, tensor_layout, dequantFuncNVFP4); }
+    else if (MmTypeA == GGML_TYPE_Q6_K) { coopMatLoadTensorNV(mat, a_q6_k.data, pos_a, tensor_layout, dequantFuncQ6_K); }
 #endif
 #endif
 #else
