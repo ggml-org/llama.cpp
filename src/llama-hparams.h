@@ -278,11 +278,9 @@ struct llama_hparams {
     float    dsv4_hc_eps               = 0.0f;
     std::array<uint32_t, LLAMA_MAX_LAYERS> dsv4_compress_ratios;
 
-    // qwen4exp low-rank hyper-connections
-    // 0 means full rank, which is the DeepSeek-V4 parameterisation
+    // 0 = full rank (DeepSeek-V4)
     uint32_t hc_low_rank = 0;
 
-    // qwen4exp PLE n-gram hash embeddings
     uint32_t ple_ngram_size      = 0;
     uint32_t ple_heads_per_ngram = 0;
     uint32_t ple_conv_kernel     = 0;

@@ -8,28 +8,24 @@ void llama_model_qwen4exp::load_arch_hparams(llama_model_loader & ml) {
 
     ml.get_key_or_arr(LLM_KV_ROPE_DIMENSION_SECTIONS,    hparams.rope_sections, 4, true);
 
-    // gated delta net, same dimension aliasing as Qwen3.5
     ml.get_key(LLM_KV_SSM_CONV_KERNEL,    hparams.ssm_d_conv);
     ml.get_key(LLM_KV_SSM_INNER_SIZE,     hparams.ssm_d_inner);
     ml.get_key(LLM_KV_SSM_STATE_SIZE,     hparams.ssm_d_state);
     ml.get_key(LLM_KV_SSM_TIME_STEP_RANK, hparams.ssm_dt_rank);
     ml.get_key(LLM_KV_SSM_GROUP_COUNT,    hparams.ssm_n_group);
 
-    // hyper-connections. low_rank is qwen4exp specific; DeepSeek-V4 leaves it
-    // absent and uses a full rank mix projection instead
+    // HC; low_rank is qwen4exp-specific, DeepSeek-V4 leaves it absent (full rank)
     ml.get_key(LLM_KV_HYPER_CONNECTION_COUNT,    hparams.dsv4_hc_mult);
     ml.get_key(LLM_KV_HYPER_CONNECTION_LOW_RANK, hparams.hc_low_rank);
     GGML_ASSERT(hparams.dsv4_hc_mult > 0 && "qwen4exp needs a hyper-connection count");
     GGML_ASSERT(hparams.hc_low_rank  > 0 && "qwen4exp needs a hyper-connection low rank");
     hparams.n_embd_out_impl = hparams.dsv4_hc_mult * hparams.n_embd;
 
-    // QSA indexer
     ml.get_key(LLM_KV_ATTENTION_INDEXER_HEAD_COUNT, hparams.indexer_n_head);
     ml.get_key(LLM_KV_ATTENTION_INDEXER_KEY_LENGTH, hparams.indexer_head_size);
     ml.get_key(LLM_KV_ATTENTION_INDEXER_TOP_K,      hparams.indexer_top_k);
     ml.get_key_or_arr(LLM_KV_ATTENTION_COMPRESS_RATIOS, hparams.dsv4_compress_ratios, hparams.n_layer_all, false);
 
-    // PLE n-gram hash embeddings
     ml.get_key(LLM_KV_PLE_NGRAM_SIZE,      hparams.ple_ngram_size);
     ml.get_key(LLM_KV_PLE_HEADS_PER_NGRAM, hparams.ple_heads_per_ngram);
     ml.get_key(LLM_KV_PLE_CONV_KERNEL,     hparams.ple_conv_kernel);
@@ -93,9 +89,7 @@ void llama_model_qwen4exp::load_arch_tensors(llama_model_loader & ml) {
         output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), { n_embd, n_vocab }, TENSOR_DUPLICATED);
     }
 
-    // the n-gram table is one flat [ple_head_dim, n_rows] gather target. its row
-    // count is the padded sum of the per-head vocab sizes, so read it back from
-    // the file rather than trying to reproduce the padding rule
+    // flat [ple_head_dim, n_rows] gather target; n_rows is padded, so read it back
     const std::string ple_name = tn(LLM_TENSOR_PER_LAYER_TOKEN_EMBD, "weight").str();
     const auto * ple_w = ml.get_weight(ple_name.c_str());
     GGML_ASSERT(ple_w != nullptr && "qwen4exp is missing the PLE n-gram table");
@@ -117,8 +111,7 @@ void llama_model_qwen4exp::load_arch_tensors(llama_model_loader & ml) {
         const int64_t value_dim  = head_v_dim * n_v_heads;
         const int64_t conv_dim   = key_dim * 2 + value_dim;
 
-        // two hyper-connection modules per layer, one before the token mixer
-        // and one before the MoE
+        // two HC modules per layer: before the token mixer, before the MoE
         layer.hc_attn_norm   = create_tensor(tn(LLM_TENSOR_HC_ATTN_NORM,   "weight", il), { hc_dim }, 0);
         layer.hc_attn_down   = create_tensor(tn(LLM_TENSOR_HC_ATTN_DOWN,   "weight", il), { hc_dim, hc_lr }, 0);
         layer.hc_attn_up     = create_tensor(tn(LLM_TENSOR_HC_ATTN_UP,     "weight", il), { hc_lr, hc_dim }, 0);
@@ -136,7 +129,6 @@ void llama_model_qwen4exp::load_arch_tensors(llama_model_loader & ml) {
             layer.attn_q_norm = create_tensor(tn(LLM_TENSOR_ATTN_Q_NORM, "weight", il), { n_embd_head_k }, 0);
             layer.attn_k_norm = create_tensor(tn(LLM_TENSOR_ATTN_K_NORM, "weight", il), { n_embd_head_k }, 0);
 
-            // QSA pre-indexer, MQA with a single key head
             const int64_t idx_dim = hparams.indexer_head_size;
             layer.index_q_proj = create_tensor(tn(LLM_TENSOR_INDEXER_Q_PROJ, "weight", il), { n_embd, hparams.indexer_n_head * idx_dim }, 0);
             layer.index_k_proj = create_tensor(tn(LLM_TENSOR_INDEXER_K_PROJ, "weight", il), { n_embd, idx_dim }, 0);
@@ -174,7 +166,6 @@ void llama_model_qwen4exp::load_arch_tensors(llama_model_loader & ml) {
     }
 }
 
-// the graph lands in the next commit; loading and metadata come first
 std::unique_ptr<llm_graph_context> llama_model_qwen4exp::build_arch_graph(const llm_graph_params & params) const {
     GGML_UNUSED(params);
     throw std::runtime_error("qwen4exp: graph not implemented yet");

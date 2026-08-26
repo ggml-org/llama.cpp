@@ -2283,8 +2283,7 @@ struct llama_model_qwen4exp : public llama_model_base {
     struct graph : public llm_build_delta_net_base {
         graph(const llama_model & model, const llm_graph_params & params);
     private:
-        // hyper-connections replace every layer norm, so the residual carried
-        // between layers is [n_embd, hc, n_tokens] instead of [n_embd, n_tokens]
+        // HC replaces every layer norm: residual is [n_embd, hc, n_tokens]
         ggml_tensor * build_hc_mix(
                     ggml_tensor * x,
                     ggml_tensor * w_norm,
