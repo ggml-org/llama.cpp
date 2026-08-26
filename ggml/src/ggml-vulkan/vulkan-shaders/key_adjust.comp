@@ -1,0 +1,27 @@
+#version 450
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant) uniform Parameters {
+    uint ne0;
+    uint total;
+    uint k_offset;
+    uint a_offset;
+    uint ka_offset;
+    uint d_offset;
+};
+
+layout(binding = 0) readonly buffer KBuf { float k[]; };
+layout(binding = 1) readonly buffer ABuf { float a[]; };
+layout(binding = 2) readonly buffer KABuf { float k_a[]; };
+layout(binding = 3) buffer DstBuf { float dst[]; };
+
+void main() {
+    const uint idx = gl_GlobalInvocationID.x;
+    if (idx >= total) {
+        return;
+    }
+
+    const float ka = k[k_offset + idx] * k_a[ka_offset + idx % ne0];
+    dst[d_offset + idx] = k[k_offset + idx] + (a[a_offset + idx] * ka - ka);
+}
