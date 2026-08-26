@@ -257,8 +257,9 @@ void block_a_to_shmem(block_a_prefetch blk, uint buf_ib, uint ks, uint loadr) {
             mn_val = (uint(data_a[ib_k].scales[sub + 4]) >> 4) | ((uint(data_a[ib_k].scales[sub]) & 0xC0u) >> 2);
         }
         vec2 dm = vec2(data_a_packed32[ib_k].dm);
-        buf_a_d[ks * BM + buf_ib] = dm.x * float(sc_val);
-        buf_a_m[ks * BM + buf_ib] = -(dm.y * float(mn_val));
+        float d_scaled = dm.x * float(sc_val);
+        buf_a_d[ks * BM + buf_ib] = d_scaled;
+        buf_a_m[ks * BM + buf_ib] = 8.0 * d_scaled - (dm.y * float(mn_val));
     }
 }
 
@@ -314,8 +315,9 @@ void block_a_to_shmem(block_a_prefetch blk, uint buf_ib, uint ks, uint loadr) {
             mn_val = (uint(data_a[ib_k].scales[sub + 4]) >> 4) | ((uint(data_a[ib_k].scales[sub]) & 0xC0u) >> 2);
         }
         vec2 dm = vec2(data_a_packed32[ib_k].dm);
-        buf_a_d[ks * BM + buf_ib] = dm.x * float(sc_val);
-        buf_a_m[ks * BM + buf_ib] = -(dm.y * float(mn_val));
+        float d_scaled = dm.x * float(sc_val);
+        buf_a_d[ks * BM + buf_ib] = d_scaled;
+        buf_a_m[ks * BM + buf_ib] = 16.0 * d_scaled - (dm.y * float(mn_val));
     }
 }
 
