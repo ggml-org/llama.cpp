@@ -53,7 +53,10 @@ endif()
 
 set(TARGET llama-common)
 
+file(GLOB LLAMA_CHAT_PARSERS_SOURCES "parsers/*.cpp")
+
 add_library(${TARGET}
+    ${LLAMA_CHAT_PARSERS_SOURCES}
     arg.cpp
     arg.h
     base64.hpp
@@ -65,6 +68,7 @@ add_library(${TARGET}
     chat-peg-parser.h
     chat.cpp
     chat.h
+    parsers/parsers.h
     common.cpp
     common.h
     console.cpp
