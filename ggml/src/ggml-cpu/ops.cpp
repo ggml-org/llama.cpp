@@ -11844,11 +11844,20 @@ void ggml_compute_forward_opt_step_sgd(const ggml_compute_params * params, ggml_
     }
 }
 
-static void ggml_compute_forward_fwht_f32(const ggml_compute_params * params, ggml_tensor * dst) {
+static inline float ggml_fwht_load(const float value) {
+    return value;
+}
+
+static inline float ggml_fwht_load(const ggml_fp16_t value) {
+    return ggml_fp16_to_fp32(value);
+}
+
+template<typename src_t>
+static void ggml_compute_forward_fwht_impl(const ggml_compute_params * params, ggml_tensor * dst) {
     const ggml_tensor * src0 = dst->src[0];
     const ggml_tensor * src1 = dst->src[1];
 
-    GGML_ASSERT(src1->type == GGML_TYPE_F32);
+    GGML_ASSERT(src1->type == (std::is_same_v<src_t, float> ? GGML_TYPE_F32 : GGML_TYPE_F16));
     GGML_ASSERT(dst->type == GGML_TYPE_F32);
 
     GGML_TENSOR_BINARY_OP_LOCALS
@@ -11875,11 +11884,11 @@ static void ggml_compute_forward_fwht_f32(const ggml_compute_params * params, gg
         const int64_t i12 = (r - i13 * ne11 * ne12) / ne11;
         const int64_t i11 = r - i13 * ne11 * ne12 - i12 * ne11;
 
-        const float * src_row = (const float *) ((const char *) src1->data + i11 * nb11 + i12 * nb12 + i13 * nb13);
+        const src_t * src_row = (const src_t *) ((const char *) src1->data + i11 * nb11 + i12 * nb12 + i13 * nb13);
         float * dst_row = (float *) ((char *) dst->data + i11 * nb1 + i12 * nb2 + i13 * nb3);
 
         for (int64_t j = 0; j < n; j++) {
-            dst_row[j] = src_row[j] * scale;
+            dst_row[j] = ggml_fwht_load(src_row[j]) * scale;
         }
 
         // Scalar passes
@@ -11926,12 +11935,17 @@ void ggml_compute_forward_fwht(const ggml_compute_params * params, ggml_tensor *
     switch (src1->type) {
         case GGML_TYPE_F32:
             {
-                ggml_compute_forward_fwht_f32(params, dst);
+                ggml_compute_forward_fwht_impl<float>(params, dst);
+            }
+            break;
+        case GGML_TYPE_F16:
+            {
+                ggml_compute_forward_fwht_impl<ggml_fp16_t>(params, dst);
             }
             break;
         default:
             {
-                GGML_ABORT("fatal error - fwht is F32 only");
+                GGML_ABORT("fatal error - fwht supports F32 and F16 input");
             }
     }
 }
