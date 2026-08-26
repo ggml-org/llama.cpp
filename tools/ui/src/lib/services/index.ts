@@ -307,7 +307,6 @@ export { SandboxService } from './sandbox.service';
  *
  * **Key Responsibilities:**
  * - Build chat URLs for specific conversations: `RouterService.chat(id)` → `#/chat/:id`
- * - Build settings URLs for sections: `RouterService.settings(section)` → `#/settings/:section`
  *
  * @see ROUTES in constants/routes.ts — static route base paths
  */

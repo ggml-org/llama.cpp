@@ -12,6 +12,7 @@
 		enabled: boolean;
 		disabled?: boolean;
 		onToggle: (enabled: boolean) => void;
+		onBrowseResources?: () => void;
 		serverInfo?: MCPServerInfo;
 		capabilities?: MCPCapabilitiesInfo;
 		transportType?: MCPTransportType;
@@ -23,6 +24,7 @@
 		displayName,
 		enabled,
 		faviconUrl,
+		onBrowseResources,
 		onToggle,
 		serverInfo,
 		transportType
@@ -57,7 +59,7 @@
 					{/if}
 
 					{#if capabilities}
-						<McpCapabilitiesBadges {capabilities} />
+						<McpCapabilitiesBadges {capabilities} {onBrowseResources} />
 					{/if}
 				</div>
 			{/if}
