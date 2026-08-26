@@ -1185,8 +1185,8 @@ private:
         }
 
         if (params_base.speculative.prefill.enabled) {
-            if (llama_model_is_recurrent(model_tgt) || llama_model_is_hybrid(model_tgt)) {
-                SRV_WRN("%s", "speculative prefill is not supported for recurrent or hybrid models; disabling\n");
+            if (llama_model_is_recurrent(model_tgt)) {
+                SRV_WRN("%s", "speculative prefill is not supported for recurrent models; disabling\n");
                 params_base.speculative.prefill.enabled = false;
             } else {
                 const bool spec_dflash = std::find(params_base.speculative.types.begin(),

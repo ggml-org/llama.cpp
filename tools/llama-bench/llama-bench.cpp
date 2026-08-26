@@ -2439,8 +2439,8 @@ static bool test_speculative_prefill_prompt(
     const llama_vocab * vocab_tgt = llama_model_get_vocab(model_tgt);
     const int32_t       n_vocab_tgt = llama_vocab_n_tokens(vocab_tgt);
 
-    if (llama_model_is_recurrent(model_tgt) || llama_model_is_hybrid(model_tgt)) {
-        fprintf(stderr, "%s: speculative prefill is not supported for recurrent or hybrid models, skipping instance\n", __func__);
+    if (llama_model_is_recurrent(model_tgt)) {
+        fprintf(stderr, "%s: speculative prefill is not supported for recurrent models, skipping instance\n", __func__);
         return false;
     }
 

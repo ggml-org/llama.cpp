@@ -54,8 +54,8 @@ int main(int argc, char ** argv) {
     llama_model * model_tgt = init_tgt->model();
     llama_context * ctx_tgt = init_tgt->context();
 
-    if (llama_model_is_recurrent(model_tgt) || llama_model_is_hybrid(model_tgt)) {
-        LOG_ERR("%s: speculative prefill is not supported for recurrent or hybrid models\n", __func__);
+    if (llama_model_is_recurrent(model_tgt)) {
+        LOG_ERR("%s: speculative prefill is not supported for recurrent models\n", __func__);
         return 1;
     }
 
