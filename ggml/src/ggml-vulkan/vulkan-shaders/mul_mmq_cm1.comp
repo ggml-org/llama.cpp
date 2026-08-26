@@ -84,7 +84,11 @@ layout (constant_id = 9) const uint TK = 16;
 layout (constant_id = 10) const uint WARP = 32;
 
 #define BK 32
+#if defined(DATA_A_Q4_1) || defined(DATA_A_Q5_1) || defined(DATA_A_Q4_K) || defined(DATA_A_Q5_K)
+#define BK_STEP 2
+#else
 #define BK_STEP 4
+#endif
 #define GROUP_A_BUDGET (16u * 1024u * 1024u)
 
 const uint QPITCH = BK_STEP * (BK / 4) + 4;
@@ -319,6 +323,115 @@ void main() {
         // Compute from shmem
         [[unroll]] for (uint ks = 0; ks < BK_STEP; ks++) {
             const uint K_SUB = BK / TK;
+
+#if KSCALES == 2
+            [[unroll]] for (uint h = 0; h < K_SUB; h++) {
+                [[unroll]] for (uint r = 0; r < cms_per_row; r++) {
+                    coopmat<int8_t, gl_ScopeSubgroup, TM, TK, gl_MatrixUseA> cache_a;
+                    coopMatLoad(cache_a, buf_a_qs, (a_row0 + r * TM) * QPITCH + ks * (BK / 4) + h * (TK / 4), QPITCH, gl_CooperativeMatrixLayoutRowMajor);
+
+                    float scale_a[CM_ELEMS];
+                    float nbias_a[CM_ELEMS];
+                    [[unroll]] for (uint e = 0; e < CM_ELEMS; e++) {
+                        scale_a[e] = buf_a_d[(ks * KSCALES + h) * BM + a_row0 + r * TM + elem_row[e]];
+                        if (USE_MAGIC_BIAS) {
+                            nbias_a[e] = -ACC_BIAS_F * scale_a[e];
+                        }
+                    }
+
+                    [[unroll]] for (uint c = 0; c < cms_per_col; c++) {
+                        coopmat<int8_t, gl_ScopeSubgroup, TK, TN, gl_MatrixUseB> cache_b;
+                        coopMatLoad(cache_b, buf_b_qs, (b_col0 + c * TN) * QPITCH + ks * (BK / 4) + h * (TK / 4), QPITCH, gl_CooperativeMatrixLayoutColumnMajor);
+
+                        float scale_b[CM_ELEMS];
+                        [[unroll]] for (uint e = 0; e < CM_ELEMS; e++) {
+                            scale_b[e] = buf_b_d[ks * BN + b_col0 + c * TN + elem_col[e]];
+                        }
+
+                        coopmat<int32_t, gl_ScopeSubgroup, TM, TN, gl_MatrixUseAccumulator> acc =
+                            coopmat<int32_t, gl_ScopeSubgroup, TM, TN, gl_MatrixUseAccumulator>(
+                                USE_MAGIC_BIAS ? ACC_BIAS_BITS : 0);
+                        acc = coopMatMulAdd(cache_a, cache_b, acc);
+
+                        const uint tile_idx = r * cms_per_col + c;
+                        [[unroll]] for (uint e = 0; e < CM_ELEMS; e++) {
+                            if (USE_MAGIC_BIAS) {
+                                const float t = fma(intBitsToFloat(int(acc[e])),
+                                                    scale_a[e],
+                                                    nbias_a[e]);
+                                sums[tile_idx * CM_ELEMS + e] = ACC_TYPE(fma(t, scale_b[e],
+                                                                    float(sums[tile_idx * CM_ELEMS + e])));
+                            } else {
+                                sums[tile_idx * CM_ELEMS + e] += ACC_TYPE(float(acc[e])
+                                    * scale_a[e] * scale_b[e]);
+                            }
+                        }
+                    }
+                }
+            }
+#elif defined(DATA_A_Q4_1) || defined(DATA_A_Q5_1) || defined(DATA_A_Q4_K) || defined(DATA_A_Q5_K)
+            // Correction types: interleaved cache loading to reduce register pressure
+            [[unroll]] for (uint r = 0; r < cms_per_row; r++) {
+                coopmat<int8_t, gl_ScopeSubgroup, TM, TK, gl_MatrixUseA> cache_a[K_SUB];
+                [[unroll]] for (uint h = 0; h < K_SUB; h++) {
+                    coopMatLoad(cache_a[h], buf_a_qs, (a_row0 + r * TM) * QPITCH + ks * (BK / 4) + h * (TK / 4), QPITCH, gl_CooperativeMatrixLayoutRowMajor);
+                }
+
+                float scale_a[CM_ELEMS];
+                float nbias_a[CM_ELEMS];
+                [[unroll]] for (uint e = 0; e < CM_ELEMS; e++) {
+                    scale_a[e] = buf_a_d[ks * BM + a_row0 + r * TM + elem_row[e]];
+                    if (USE_MAGIC_BIAS) {
+                        nbias_a[e] = -ACC_BIAS_F * scale_a[e];
+                    }
+                }
+
+                float corr_a[CM_ELEMS];
+                [[unroll]] for (uint e = 0; e < CM_ELEMS; e++) {
+                    corr_a[e] = float(QUANT_OFFSET) * scale_a[e]
+                        + buf_a_m[ks * BM + a_row0 + r * TM + elem_row[e]];
+                }
+
+                [[unroll]] for (uint c = 0; c < cms_per_col; c++) {
+                    coopmat<int8_t, gl_ScopeSubgroup, TK, TN, gl_MatrixUseB> cache_b[K_SUB];
+                    [[unroll]] for (uint h = 0; h < K_SUB; h++) {
+                        coopMatLoad(cache_b[h], buf_b_qs, (b_col0 + c * TN) * QPITCH + ks * (BK / 4) + h * (TK / 4), QPITCH, gl_CooperativeMatrixLayoutColumnMajor);
+                    }
+
+                    float scale_b[CM_ELEMS];
+                    float sum_b[CM_ELEMS];
+                    [[unroll]] for (uint e = 0; e < CM_ELEMS; e++) {
+                        scale_b[e] = buf_b_d[ks * BN + b_col0 + c * TN + elem_col[e]];
+                        sum_b[e] = buf_b_s[ks * BN + b_col0 + c * TN + elem_col[e]];
+                    }
+
+                    coopmat<int32_t, gl_ScopeSubgroup, TM, TN, gl_MatrixUseAccumulator> acc =
+                        coopmat<int32_t, gl_ScopeSubgroup, TM, TN, gl_MatrixUseAccumulator>(
+                            USE_MAGIC_BIAS ? ACC_BIAS_BITS : 0);
+
+                    [[unroll]] for (uint h = 0; h < K_SUB; h++) {
+                        acc = coopMatMulAdd(cache_a[h], cache_b[h], acc);
+                    }
+
+                    const uint tile_idx = r * cms_per_col + c;
+                    [[unroll]] for (uint e = 0; e < CM_ELEMS; e++) {
+                        if (USE_MAGIC_BIAS) {
+                            const float t = fma(intBitsToFloat(int(acc[e])),
+                                                scale_a[e],
+                                                nbias_a[e]);
+                            sums[tile_idx * CM_ELEMS + e] = ACC_TYPE(fma(t, scale_b[e],
+                                                                float(sums[tile_idx * CM_ELEMS + e])));
+                        } else {
+                            sums[tile_idx * CM_ELEMS + e] += ACC_TYPE(float(acc[e])
+                                * scale_a[e] * scale_b[e]);
+                        }
+                        sums[tile_idx * CM_ELEMS + e] += ACC_TYPE(
+                            corr_a[e] * sum_b[e]);
+                    }
+                }
+            }
+#else
+            // Simple types: pre-load all caches for better data reuse
             coopmat<int8_t, gl_ScopeSubgroup, TM, TK, gl_MatrixUseA> cache_a[cms_per_row * K_SUB];
             coopmat<int8_t, gl_ScopeSubgroup, TK, TN, gl_MatrixUseB> cache_b[cms_per_col * K_SUB];
 
@@ -340,73 +453,16 @@ void main() {
                 }
             }
 
-#if KSCALES == 2
-            [[unroll]] for (uint h = 0; h < K_SUB; h++) {
-                float scale_a[cms_per_row * CM_ELEMS];
-                float nbias_a[cms_per_row * CM_ELEMS];
-                [[unroll]] for (uint r = 0; r < cms_per_row; r++) {
-                    [[unroll]] for (uint e = 0; e < CM_ELEMS; e++) {
-                        scale_a[r * CM_ELEMS + e] = buf_a_d[(ks * KSCALES + h) * BM + a_row0 + r * TM + elem_row[e]];
-                        if (USE_MAGIC_BIAS) {
-                            nbias_a[r * CM_ELEMS + e] = -ACC_BIAS_F * scale_a[r * CM_ELEMS + e];
-                        }
-                    }
-                }
-
-                [[unroll]] for (uint r = 0; r < cms_per_row; r++) {
-                    [[unroll]] for (uint c = 0; c < cms_per_col; c++) {
-                        coopmat<int32_t, gl_ScopeSubgroup, TM, TN, gl_MatrixUseAccumulator> acc =
-                            coopmat<int32_t, gl_ScopeSubgroup, TM, TN, gl_MatrixUseAccumulator>(
-                                USE_MAGIC_BIAS ? ACC_BIAS_BITS : 0);
-                        acc = coopMatMulAdd(cache_a[r * K_SUB + h], cache_b[c * K_SUB + h], acc);
-
-                        const uint tile_idx = r * cms_per_col + c;
-                        [[unroll]] for (uint e = 0; e < CM_ELEMS; e++) {
-                            if (USE_MAGIC_BIAS) {
-                                const float t = fma(intBitsToFloat(int(acc[e])),
-                                                    scale_a[r * CM_ELEMS + e],
-                                                    nbias_a[r * CM_ELEMS + e]);
-                                sums[tile_idx * CM_ELEMS + e] = ACC_TYPE(fma(t, scale_b[c * CM_ELEMS + e],
-                                                                    float(sums[tile_idx * CM_ELEMS + e])));
-                            } else {
-                                sums[tile_idx * CM_ELEMS + e] += ACC_TYPE(float(acc[e])
-                                    * scale_a[r * CM_ELEMS + e] * scale_b[c * CM_ELEMS + e]);
-                            }
-                        }
-                    }
-                }
-            }
-#else
-            float scale_a[cms_per_row * CM_ELEMS];
-            float nbias_a[cms_per_row * CM_ELEMS];
             [[unroll]] for (uint r = 0; r < cms_per_row; r++) {
+                float scale_a[CM_ELEMS];
+                float nbias_a[CM_ELEMS];
                 [[unroll]] for (uint e = 0; e < CM_ELEMS; e++) {
-                    scale_a[r * CM_ELEMS + e] = buf_a_d[ks * BM + a_row0 + r * TM + elem_row[e]];
+                    scale_a[e] = buf_a_d[ks * BM + a_row0 + r * TM + elem_row[e]];
                     if (USE_MAGIC_BIAS) {
-                        nbias_a[r * CM_ELEMS + e] = -ACC_BIAS_F * scale_a[r * CM_ELEMS + e];
+                        nbias_a[e] = -ACC_BIAS_F * scale_a[e];
                     }
                 }
-            }
 
-#if defined(DATA_A_Q4_1) || defined(DATA_A_Q5_1) || defined(DATA_A_Q4_K) || defined(DATA_A_Q5_K)
-            float corr_a[cms_per_row * CM_ELEMS];
-            float sum_b[cms_per_col * CM_ELEMS];
-            [[unroll]] for (uint r = 0; r < cms_per_row; r++) {
-                [[unroll]] for (uint e = 0; e < CM_ELEMS; e++) {
-                    corr_a[r * CM_ELEMS + e] = float(QUANT_OFFSET) * scale_a[r * CM_ELEMS + e]
-                        + buf_a_m[ks * BM + a_row0 + r * TM + elem_row[e]];
-                }
-            }
-            [[unroll]] for (uint c = 0; c < cms_per_col; c++) {
-                [[unroll]] for (uint e = 0; e < CM_ELEMS; e++) {
-                    sum_b[c * CM_ELEMS + e] = buf_b_s[ks * BN + b_col0 + c * TN + elem_col[e]];
-                }
-            }
-#endif
-
-            coopmat<int32_t, gl_ScopeSubgroup, TM, TN, gl_MatrixUseAccumulator> accs[cms_per_row * cms_per_col];
-
-            [[unroll]] for (uint r = 0; r < cms_per_row; r++) {
                 [[unroll]] for (uint c = 0; c < cms_per_col; c++) {
                     coopmat<int32_t, gl_ScopeSubgroup, TM, TN, gl_MatrixUseAccumulator> acc =
                         coopmat<int32_t, gl_ScopeSubgroup, TM, TN, gl_MatrixUseAccumulator>(
@@ -416,28 +472,18 @@ void main() {
                         acc = coopMatMulAdd(cache_a[r * K_SUB + h], cache_b[c * K_SUB + h], acc);
                     }
 
-                    accs[r * cms_per_col + c] = acc;
-                }
-            }
-
-            [[unroll]] for (uint r = 0; r < cms_per_row; r++) {
-                [[unroll]] for (uint c = 0; c < cms_per_col; c++) {
                     const uint tile_idx = r * cms_per_col + c;
                     [[unroll]] for (uint e = 0; e < CM_ELEMS; e++) {
                         if (USE_MAGIC_BIAS) {
-                            const float t = fma(intBitsToFloat(int(accs[tile_idx][e])),
-                                                scale_a[r * CM_ELEMS + e],
-                                                nbias_a[r * CM_ELEMS + e]);
+                            const float t = fma(intBitsToFloat(int(acc[e])),
+                                                scale_a[e],
+                                                nbias_a[e]);
                             sums[tile_idx * CM_ELEMS + e] = ACC_TYPE(fma(t, scale_b[c * CM_ELEMS + e],
                                                                 float(sums[tile_idx * CM_ELEMS + e])));
                         } else {
-                            sums[tile_idx * CM_ELEMS + e] += ACC_TYPE(float(accs[tile_idx][e])
-                                * scale_a[r * CM_ELEMS + e] * scale_b[c * CM_ELEMS + e]);
+                            sums[tile_idx * CM_ELEMS + e] += ACC_TYPE(float(acc[e])
+                                * scale_a[e] * scale_b[c * CM_ELEMS + e]);
                         }
-#if defined(DATA_A_Q4_1) || defined(DATA_A_Q5_1) || defined(DATA_A_Q4_K) || defined(DATA_A_Q5_K)
-                        sums[tile_idx * CM_ELEMS + e] += ACC_TYPE(
-                            corr_a[r * CM_ELEMS + e] * sum_b[c * CM_ELEMS + e]);
-#endif
                     }
                 }
             }
