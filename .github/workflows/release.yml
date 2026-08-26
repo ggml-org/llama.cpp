@@ -714,6 +714,8 @@ jobs:
         with:
           key: release-windows-2025-vs2026-${{ matrix.arch }}-cpu
 
+  # TODO: build only the ggml-hip backend like the other windows backend jobs
+  #       (windows-cuda, windows-sycl), then drop the ui-build dependency
   windows-rocm:
     needs: [check-release, ui-build]
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
@@ -850,6 +852,8 @@ jobs:
         with:
           key: windows-rocm-${{ matrix.ROCM_VERSION }}-${{ matrix.build }}
 
+  # note: builds only the backend library - llama-server (with the embedded UI)
+  #       is injected from the windows-cpu zip during the release "Merge artifacts" step
   windows:
     needs: [check-release]
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
@@ -942,6 +946,8 @@ jobs:
           path: llama-bin-win-${{ matrix.backend }}-${{ matrix.arch }}.zip
           name: llama-bin-win-${{ matrix.backend }}-${{ matrix.arch }}.zip
 
+  # note: builds only the ggml-cuda backend - llama-server is injected from the
+  #       windows-cpu zip during the release "Merge artifacts" step
   windows-cuda:
     name: windows-cuda (${{ matrix.cuda }}, ${{ matrix.arch }})
     needs: [check-release]
@@ -1041,6 +1047,8 @@ jobs:
         with:
           key: release-windows-2022-${{ matrix.arch }}-cuda-${{ matrix.cuda }}
 
+  # note: builds only the ggml-sycl backend - llama-server is injected from the
+  #       windows-cpu zip during the release "Merge artifacts" step
   windows-sycl:
     needs: [check-release]
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
@@ -1571,24 +1579,27 @@ jobs:
           path: ./artifact
           merge-multiple: true
 
-      - name: Move artifacts
+      - name: Merge artifacts
         id: move_artifacts
         run: |
           mkdir -p release
 
-          echo "Adding CPU backend files to existing zips..."
+          # the windows-cpu zip contains the full toolset (llama-server with the embedded
+          # UI, ggml-cpu) - inject it into the other windows zips so that every archive
+          # ships the same binaries, only with a different backend library on top
+          echo "Injecting windows-cpu binaries (llama-server + CPU backend) into the backend zips..."
           for arch in x64 arm64; do
             cpu_zip="artifact/llama-bin-win-cpu-${arch}.zip"
             temp_dir=$(mktemp -d)
-            echo "Extracting CPU backend for $arch..."
+            echo "Extracting windows-cpu-${arch} package..."
             unzip "$cpu_zip" -d "$temp_dir"
 
-            echo "Adding CPU files to $arch zips..."
+            echo "Merging into $arch zips..."
             for target_zip in artifact/llama-bin-win-*-${arch}.zip; do
               if [[ "$target_zip" == "$cpu_zip" ]]; then
                 continue
               fi
-              echo "Adding CPU backend to $(basename "$target_zip")"
+              echo "Injecting into $(basename "$target_zip")"
               realpath_target_zip=$(realpath "$target_zip")
               (cd "$temp_dir" && zip -r "$realpath_target_zip" .)
             done
