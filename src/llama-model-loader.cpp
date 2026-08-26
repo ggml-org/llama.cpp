@@ -1123,11 +1123,24 @@ struct ggml_tensor * llama_model_loader::create_tensor(
 
         // skip unused tensors
         if (info.op == GGML_OP_NONE || (flags & TENSOR_SKIP)) {
-            const size_t nbytes = ggml_nbytes(t_meta);
-            LLAMA_LOG_WARN("model has unused tensor %s (size = %zu bytes) -- ignoring\n", tn.str().c_str(), nbytes);
+            auto skip_tensor = [&](const ggml_tensor * tensor) {
+                const size_t nbytes = ggml_nbytes(tensor);
+                LLAMA_LOG_WARN("model has unused tensor %s (size = %zu bytes) -- ignoring\n", tensor->name, nbytes);
 
-            size_data -= nbytes;
-            n_created++;
+                size_data -= nbytes;
+                n_created++;
+            };
+
+            skip_tensor(t_meta);
+
+            if ((flags & TENSOR_SKIP) && tn.suffix && strcmp(tn.suffix, "weight") == 0) {
+                for (const char * suffix : { "scale", "input_scale" }) {
+                    const LLM_TN_IMPL sidecar_tn(tn.arch, tn.tensor, suffix, tn.bid, tn.xid);
+                    if (const ggml_tensor * sidecar = get_tensor_meta(sidecar_tn.str().c_str())) {
+                        skip_tensor(sidecar);
+                    }
+                }
+            }
 
             return nullptr;
         }
