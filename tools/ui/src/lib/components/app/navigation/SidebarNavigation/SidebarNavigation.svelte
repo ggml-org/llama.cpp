@@ -5,6 +5,7 @@
 	import {
 		ActionIcon,
 		DialogConversationRename,
+		DialogMcpServers,
 		DialogSettingsChat,
 		Logo,
 		SidebarNavigationActions,
@@ -92,6 +93,7 @@
 	let selectedIds = new SvelteSet<string>();
 
 	let renameDialogOpen = $state(false);
+	let mcpServersDialogOpen = $state(false);
 	let settingsDialogOpen = $state(false);
 	let renameTargetConversationId = $state<string | null>(null);
 	let renameDraft = $state('');
@@ -402,6 +404,7 @@
 					isSearchModeActive = false;
 					searchQuery = '';
 				}}
+				onMcpServersClick={() => (mcpServersDialogOpen = true)}
 				onSettingsClick={() => (settingsDialogOpen = true)}
 			/>
 
@@ -450,6 +453,7 @@
 	onConfirm={handleRenameConfirm}
 />
 
+<DialogMcpServers bind:open={mcpServersDialogOpen} />
 <DialogSettingsChat bind:open={settingsDialogOpen} />
 
 <style>
