@@ -1595,11 +1595,11 @@ jobs:
       - windows-cuda
       - windows-sycl
       - windows-rocm
-      - windows-openvino
+      #- windows-openvino
       - ubuntu-24-rocm
       - ubuntu-cpu
       - ubuntu-vulkan
-      - ubuntu-24-openvino
+      #- ubuntu-24-openvino
       - ubuntu-24-sycl
       - android-arm64
       - macos-cpu
