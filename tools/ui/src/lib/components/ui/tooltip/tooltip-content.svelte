@@ -1,15 +1,15 @@
 <script lang="ts">
-	import { Tooltip as TooltipPrimitive } from 'bits-ui';
 	import { cn } from '$lib/components/ui/utils.js';
+	import { Tooltip as TooltipPrimitive } from 'bits-ui';
 
 	let {
-		ref = $bindable(null),
-		class: className,
-		sideOffset = 0,
-		side = 'top',
-		children,
 		arrowClasses,
+		children,
+		class: className,
 		noPortal = false,
+		ref = $bindable(null),
+		side = 'top',
+		sideOffset = 4,
 		...restProps
 	}: TooltipPrimitive.ContentProps & {
 		arrowClasses?: string;
@@ -27,13 +27,14 @@
 {#snippet tooltipContent()}
 	<TooltipPrimitive.Content
 		bind:ref
-		data-slot="tooltip-content"
-		{sideOffset}
-		{side}
 		class={contentClass}
+		data-slot="tooltip-content"
+		{side}
+		{sideOffset}
 		{...restProps}
 	>
 		{@render children?.()}
+
 		<TooltipPrimitive.Arrow>
 			{#snippet child({ props })}
 				<div

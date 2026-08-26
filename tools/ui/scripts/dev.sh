@@ -14,7 +14,7 @@ cd ../../
 # Ensure node_modules are installed
 if [ ! -d "tools/ui/node_modules" ]; then
     echo "📦 Installing npm dependencies..."
-    cd tools/ui && npm install && cd ../../
+    cd tools/ui && npm ci && cd ../../
 fi
 
 # Check and install git hooks if missing

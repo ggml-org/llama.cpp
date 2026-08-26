@@ -16,6 +16,7 @@ from .qwen import Qwen3Model
 
 
 @ModelBase.register("StepVLForConditionalGeneration", "Step3p7ForConditionalGeneration")
+@ModelBase.example("stepfun-ai/Step3-VL-10B", "stepfun-ai/Step-3.7-Flash")
 class Step3VLVisionModel(MmprojModel):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -91,13 +92,16 @@ class Step3VLVisionModel(MmprojModel):
 
 
 @ModelBase.register("StepVLForConditionalGeneration")
+@ModelBase.example("stepfun-ai/Step3-VL-10B")
 class Step3VLTextModel(Qwen3Model):
     model_arch = gguf.MODEL_ARCH.QWEN3
 
 
 @ModelBase.register("Step3p5ForCausalLM", "Step3p7ForConditionalGeneration")
+@ModelBase.example("stepfun-ai/Step-3.7-Flash")
 class Step35Model(TextModel):
     model_arch = gguf.MODEL_ARCH.STEP35
+    supports_mtp_export = True
 
     # The --mtp / --no-mtp toggles are ModelBase.mtp_only / no_mtp (set in
     # convert_hf_to_gguf.py main()). Unlike Qwen3.5, which stores MTP under a

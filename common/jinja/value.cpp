@@ -3,7 +3,7 @@
 #include "value.h"
 
 // for converting from JSON to jinja values
-#include <nlohmann/json.hpp>
+#include "json.h"
 
 #include <sstream>
 #include <string>
@@ -750,11 +750,50 @@ const func_builtins & value_string_t::get_builtins() const {
             res->val_str.mark_input_based_on(args.get_pos(0)->val_str);
             return res;
         }},
+        {"format", [](const func_args & args) -> value {
+            value val_input = args.get_pos(0);
+            if (!is_val<value_string>(val_input)) {
+                throw raised_exception("format() first argument must be a string");
+            }
+            const jinja::string & fmt = val_input->as_string();
+            const bool fmt_is_input = fmt.all_parts_are_input();
+
+            const std::string str = fmt.str();
+            jinja::string result;
+            std::string literal;
+            auto flush_literal = [&]() {
+                if (!literal.empty()) {
+                    result.parts.push_back({fmt_is_input, literal});
+                    literal.clear();
+                }
+            };
+
+            size_t arg_idx = 1; // positional args follow the format string
+            for (size_t i = 0; i < str.size(); ++i) {
+                if (str[i] != '{') {
+                    literal += str[i];
+                    continue;
+                }
+                if (i + 1 >= str.size() || str[i + 1] != '}') {
+                    throw not_implemented_exception("format() only supports simple '{}' placeholders");
+                }
+                ++i;
+                flush_literal();
+                const jinja::string arg_str = args.get_pos(arg_idx++)->as_string();
+                result.parts.insert(result.parts.end(), arg_str.parts.begin(), arg_str.parts.end());
+            }
+            flush_literal();
+            return mk_val<value_string>(result);
+        }},
         {"int", [](const func_args & args) -> value {
             value val_input   = args.get_pos(0);
             value val_default = args.get_kwarg_or_pos("default", 1);
             value val_base    = args.get_kwarg_or_pos("base",    2);
             const int base = val_base->is_undefined() ? 10 : val_base->as_int();
+            if (base != 0 && (base < 2 || base > 36)) {
+                // an out-of-range base makes std::stoi fail fast on the MSVC CRT instead of throwing
+                throw raised_exception("int() base must be 0 or between 2 and 36");
+            }
             if (is_val<value_string>(val_input) == false) {
                 throw raised_exception("int() first argument must be a string");
             }
@@ -1316,7 +1355,7 @@ const func_builtins & value_undefined_t::get_builtins() const {
 //////////////////////////////////
 
 
-static value from_json(const nlohmann::ordered_json & j, bool mark_input) {
+static value from_json(const common_json & j, bool mark_input) {
     if (j.is_null()) {
         return mk_val<value_none>();
     } else if (j.is_boolean()) {
@@ -1413,7 +1452,7 @@ bool value_compare(const value & a, const value & b, value_compare_op op) {
 }
 
 template<>
-void global_from_json(context & ctx, const nlohmann::ordered_json & json_obj, bool mark_input) {
+void global_from_json(context & ctx, const common_json & json_obj, bool mark_input) {
     // printf("global_from_json: %s\n" , json_obj.dump(2).c_str());
     if (json_obj.is_null() || !json_obj.is_object()) {
         throw std::runtime_error("global_from_json: input JSON value must be an object");

@@ -187,7 +187,6 @@ int main(int argc, char ** argv) {
         struct required_check { const char * label; match_fn match; bool found; };
         required_check checks[] = {
             { "index.html",           exact("index.html"),           false },
-            { "loading.html",         exact("loading.html"),         false },
             { "manifest.webmanifest", exact("manifest.webmanifest"), false },
             { "sw.js",                exact("sw.js"),                false },
             { "build.json",           exact("build.json"),           false },
@@ -260,6 +259,8 @@ int main(int argc, char ** argv) {
             }
             cpp += fmt("static const unsigned char asset_%d_data[] = {", i);
             append_bytes_hex(cpp, bytes);
+
+            // note: this is a simple hash for cache busting, not a cryptographic hash; fnv is enough here
             const auto hash = fnv_hash(bytes.data(), bytes.size());
 
             cpp += fmt("};\nstatic const std::size_t   asset_%d_size = %zu;\n",

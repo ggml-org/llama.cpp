@@ -1,7 +1,7 @@
 <script lang="ts">
+	import { ChatAttachmentsList, MarkdownContent, MentionText } from '$lib/components/app';
 	import { Card } from '$lib/components/ui/card';
-	import { ChatAttachmentsList, MarkdownContent } from '$lib/components/app';
-	import { config } from '$lib/stores/settings.svelte';
+	import { settingsStore } from '$lib/stores';
 	import type { DatabaseMessageExtra } from '$lib/types/database';
 
 	interface Props {
@@ -14,23 +14,24 @@
 	}
 
 	let {
-		content,
 		attachments = [],
-		renderMarkdown = false,
-		textColorClass = 'text-foreground',
 		cardBgClass = 'dark:bg-primary/15',
-		maxHeightStyle = ''
+		content,
+		maxHeightStyle = '',
+		renderMarkdown = false,
+		textColorClass = 'text-foreground'
 	}: Props = $props();
 
 	let isMultiline = $state(false);
 	let messageElement: HTMLElement | undefined = $state();
-	const currentConfig = config();
+	const currentConfig = settingsStore.config;
 
 	$effect(() => {
 		if (!messageElement || !content.trim()) return;
 
 		if (content.includes('\n')) {
 			isMultiline = true;
+
 			return;
 		}
 
@@ -53,7 +54,7 @@
 
 {#if attachments && attachments.length > 0}
 	<div class="mb-2 max-w-[80%]">
-		<ChatAttachmentsList {attachments} readonly imageHeight="h-40" />
+		<ChatAttachmentsList {attachments} imageHeight="h-40" readonly />
 	</div>
 {/if}
 
@@ -65,12 +66,12 @@
 	>
 		{#if renderMarkdown && currentConfig.renderUserContentAsMarkdown}
 			<div bind:this={messageElement}>
-				<MarkdownContent class="markdown-user-content -my-4" {content} />
+				<MarkdownContent class="markdown-user-content" {content} />
 			</div>
 		{:else}
-			<span bind:this={messageElement} class="text-md whitespace-pre-wrap">
-				{content}
-			</span>
+			<span bind:this={messageElement} class="text-md whitespace-pre-wrap"
+				><MentionText {content} /></span
+			>
 		{/if}
 	</Card>
 {/if}

@@ -10,7 +10,12 @@
 #define DK_VEC (DK/4)
 #define DV_VEC (DV/4)
 #define WG_SIZE (BLOCK_M)
-#define Q1_WG_SIZE 64
+// q1 reduces over a Q1_WG_SIZE-wide WG via work-group barriers; the launch WG
+// must match. Defaults to the Adreno sg (64); host passes -D FA_SG=32 on Intel.
+#ifndef FA_SG
+#define FA_SG 64
+#endif
+#define Q1_WG_SIZE FA_SG
 
 // The kernels are built with -cl-finite-math-only. On some older Adreno GPUs,
 // infinite operand can cause undefined behavior and miscompilation for exp.
@@ -113,6 +118,17 @@ __kernel void flash_attn_f16(
     __local DATA_TYPE4 l_v[BLOCK_N][DV_VEC];
 
     for (int k_start = 0; k_start < n_kv; k_start += BLOCK_N) {
+#if WG_SIZE > FA_SG
+        // WAR on l_k/l_v: a thread that finishes the compute below early — either
+        // it skipped it (my_query_row >= n_q, the continue) or its subgroup simply
+        // ran ahead — wraps around and reloads the tiles while another subgroup is
+        // still reading them. Any WG that is exactly one lockstep subgroup
+        // (WG_SIZE == FA_SG) cannot diverge and hides this; a WG spanning multiple
+        // subgroups (Intel sg=32, or BLOCK_M > 64 on Adreno) corrupts the result.
+        // All threads reach this each iteration (no-op on the first), so it does
+        // not diverge with the continue. Compiled out when WG == one subgroup.
+        barrier(CLK_LOCAL_MEM_FENCE);
+#endif
         for (int i = tid; i < BLOCK_N * DK_VEC; i += WG_SIZE) {
             const int row = i / DK_VEC;
             const int col = i % DK_VEC;

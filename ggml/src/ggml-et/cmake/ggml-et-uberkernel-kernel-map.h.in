@@ -1,0 +1,13 @@
+// Auto-generated uberkernel kernel-id mapping. Do not edit.
+#pragma once
+
+#include <stdint.h>
+
+enum ggml_et_uberkernel_kernel_id {
+    GGML_ET_UBERKERNEL_KERNEL_INVALID = 0,
+@UBERKERNEL_ENUM_ENTRIES@
+};
+
+#ifdef GGML_ET_UBERKERNEL_HOST_LOOKUP
+uint16_t ggml_et_uberkernel_kernel_id_from_name(const char * kernel_name);
+#endif

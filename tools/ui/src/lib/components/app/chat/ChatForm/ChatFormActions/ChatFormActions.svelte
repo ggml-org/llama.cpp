@@ -1,21 +1,20 @@
 <script lang="ts">
-	import { Square, SkipForward } from '@lucide/svelte';
-	import { Button } from '$lib/components/ui/button';
-	import { ChatService } from '$lib/services';
+	import { SkipForward, Square } from '@lucide/svelte';
+	import { page } from '$app/state';
 	import {
-		ChatFormActionsAdd,
 		ChatFormActionModels,
 		ChatFormActionRecord,
+		ChatFormActionsAdd,
 		ChatFormActionSubmit,
-		ChatFormReasoningToggle
+		ChatFormContextGauge
 	} from '$lib/components/app';
-	import { FileTypeCategory } from '$lib/enums';
-	import { mcpStore } from '$lib/stores/mcp.svelte';
-	import { config } from '$lib/stores/settings.svelte';
-	import { conversationsStore } from '$lib/stores/conversations.svelte';
+	import { Button } from '$lib/components/ui/button';
+	import { ICON_CLASS_DEFAULT } from '$lib/constants';
+	import { setChatFormActionsContext } from '$lib/contexts';
+	import { FileTypeCategory, MessageRole } from '$lib/enums';
+	import { ChatService } from '$lib/services';
+	import { chatStore, conversationsStore, settingsStore } from '$lib/stores';
 	import { getFileTypeCategory } from '$lib/utils';
-	import { goto } from '$app/navigation';
-	import { ROUTES } from '$lib/constants/routes';
 
 	interface Props {
 		canSend?: boolean;
@@ -32,8 +31,7 @@
 		onMicClick?: () => void;
 		onStop?: () => void;
 		onSystemPromptClick?: () => void;
-		onMcpPromptClick?: () => void;
-		onMcpResourcesClick?: () => void;
+		onMcpSettingsClick?: () => void;
 	}
 
 	let {
@@ -44,30 +42,17 @@
 		isLoading = false,
 		isReasoning = false,
 		isRecording = false,
-		showAddButton = true,
-		showModelSelector = true,
-		uploadedFiles = [],
 		onFileUpload,
+		onMcpSettingsClick,
 		onMicClick,
 		onStop,
 		onSystemPromptClick,
-		onMcpPromptClick,
-		onMcpResourcesClick
+		showAddButton = true,
+		showModelSelector = true,
+		uploadedFiles = []
 	}: Props = $props();
 
-	let currentConfig = $derived(config());
-
-	let hasMcpPromptsSupport = $derived.by(() => {
-		const perChatOverrides = conversationsStore.getAllMcpServerOverrides();
-
-		return mcpStore.hasPromptsCapability(perChatOverrides);
-	});
-
-	let hasMcpResourcesSupport = $derived.by(() => {
-		const perChatOverrides = conversationsStore.getAllMcpServerOverrides();
-
-		return mcpStore.hasResourcesCapability(perChatOverrides);
-	});
+	let currentConfig = $derived(settingsStore.config);
 
 	let hasAudioModality = $state(false);
 	let hasVideoModality = $state(false);
@@ -93,6 +78,70 @@
 	let activeMessage = $derived(
 		conversationsStore.activeMessages[conversationsStore.activeMessages.length - 1]
 	);
+
+	let hasProcessedTokens = $derived.by(() => {
+		if (!page.params.id) return false;
+
+		const messages = conversationsStore.activeMessages as DatabaseMessage[];
+
+		let totalHistoricalTokens = 0;
+
+		for (const m of messages) {
+			if (m.role !== MessageRole.ASSISTANT) continue;
+
+			const timings = m.timings;
+
+			if (!timings) continue;
+
+			const agenticLlm = timings.agentic?.llm;
+
+			if (agenticLlm?.prompt_n != null || agenticLlm?.predicted_n != null) {
+				totalHistoricalTokens += (agenticLlm?.prompt_n ?? 0) + (agenticLlm?.predicted_n ?? 0);
+			} else {
+				totalHistoricalTokens += (timings.prompt_n ?? 0) + (timings.predicted_n ?? 0);
+			}
+		}
+
+		if (totalHistoricalTokens > 0) return true;
+
+		if (!chatStore.isLoading && !chatStore.isStreaming()) return false;
+
+		const processingState = chatStore.processing.activeState;
+
+		if (!processingState) return false;
+
+		const livePromptTokens = Math.max(
+			processingState.promptTokens ?? 0,
+			processingState.promptProgress?.processed ?? 0
+		);
+		const liveOutputTokens = processingState.outputTokensUsed ?? 0;
+
+		return livePromptTokens > 0 || liveOutputTokens > 0;
+	});
+
+	setChatFormActionsContext({
+		get disabled() {
+			return disabled;
+		},
+		get hasAudioModality() {
+			return hasAudioModality;
+		},
+		get hasVideoModality() {
+			return hasVideoModality;
+		},
+		get hasVisionModality() {
+			return hasVisionModality;
+		},
+		get onFileUpload() {
+			return onFileUpload;
+		},
+		get onMcpSettingsClick() {
+			return onMcpSettingsClick;
+		},
+		get onSystemPromptClick() {
+			return onSystemPromptClick;
+		}
+	});
 </script>
 
 <div
@@ -100,36 +149,26 @@
 	style="container-type: inline-size"
 >
 	{#if showAddButton}
-		<div class="mr-auto flex items-center gap-3">
-			<ChatFormActionsAdd
-				{disabled}
-				{hasAudioModality}
-				{hasVideoModality}
-				{hasVisionModality}
-				{hasMcpPromptsSupport}
-				{hasMcpResourcesSupport}
-				{onFileUpload}
-				{onSystemPromptClick}
-				{onMcpPromptClick}
-				{onMcpResourcesClick}
-				onMcpSettingsClick={() => goto(ROUTES.MCP_SERVERS)}
-			/>
+		<div class="mr-auto flex items-center gap-2">
+			<ChatFormActionsAdd />
 		</div>
 	{/if}
 
-	<div class="flex items-center gap-2">
-		<ChatFormReasoningToggle />
+	<div class="flex items-center gap-1.5">
+		{#if hasProcessedTokens}
+			<ChatFormContextGauge />
+		{/if}
 
 		{#if showModelSelector}
 			<ChatFormActionModels
-				{disabled}
-				bind:this={selectorModelRef}
 				bind:hasAudioModality
+				bind:hasModelSelected
 				bind:hasVideoModality
 				bind:hasVisionModality
-				bind:hasModelSelected
 				bind:isSelectedModelInCache
 				bind:submitTooltip
+				bind:this={selectorModelRef}
+				{disabled}
 				forceForegroundText
 				useGlobalSelection
 			/>
@@ -138,25 +177,27 @@
 
 	{#if isReasoning}
 		<Button
-			type="button"
-			variant="secondary"
+			class="group h-8 w-8 rounded-full p-0"
 			onclick={() =>
 				ChatService.stopReasoning(activeMessage?.completionId ?? '', activeMessage?.model)}
-			class="group h-8 w-8 rounded-full p-0"
 			title="Skip reasoning"
+			type="button"
+			variant="secondary"
 		>
 			<span class="sr-only">Skip reasoning</span>
 
-			<SkipForward class="h-4 w-4 stroke-muted-foreground group-hover:stroke-foreground" />
+			<SkipForward
+				class="{ICON_CLASS_DEFAULT} stroke-muted-foreground group-hover:stroke-foreground"
+			/>
 		</Button>
 	{/if}
 
 	{#if isLoading && !canSubmit}
 		<Button
+			class="group h-8 w-8 rounded-full p-0 hover:bg-destructive/10!"
+			onclick={onStop}
 			type="button"
 			variant="secondary"
-			onclick={onStop}
-			class="group h-8 w-8 rounded-full p-0 hover:bg-destructive/10!"
 		>
 			<span class="sr-only">Stop</span>
 
@@ -170,8 +211,8 @@
 		<ChatFormActionSubmit
 			canSend={canSend && (showModelSelector ? hasModelSelected && isSelectedModelInCache : true)}
 			{disabled}
-			tooltipLabel={submitTooltip}
 			showErrorState={showModelSelector && hasModelSelected && !isSelectedModelInCache}
+			tooltipLabel={submitTooltip}
 		/>
 	{/if}
 </div>

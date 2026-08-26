@@ -8,7 +8,7 @@
 #include "jinja/runtime.h"
 #include "jinja/caps.h"
 
-#include "nlohmann/json_fwd.hpp"
+#include "json.h"
 
 #include <chrono>
 #include <functional>
@@ -17,7 +17,6 @@
 #include <vector>
 
 using chat_template_caps = jinja::caps;
-using json = nlohmann::ordered_json;
 
 struct common_chat_templates;
 
@@ -87,7 +86,7 @@ struct common_chat_msg {
     std::string                               tool_name;
     std::string                               tool_call_id;
 
-    nlohmann::ordered_json to_json_oaicompat(bool concat_typed_text = false) const;
+    common_json to_json_oaicompat(bool concat_typed_text = false) const;
 
     std::string render_content(const std::string & delimiter = "\n\n") const;
 
@@ -211,7 +210,7 @@ struct common_chat_msg_delimiters {
     // split tokens into message spans. skips maps a start index to a length of a region to jump over without matching
     common_chat_msg_spans split(const llama_tokens & tokens, const std::map<size_t, size_t> & skips = {}) const;
 
-    nlohmann::ordered_json to_json() const;
+    common_json to_json() const;
 };
 
 struct common_chat_tool {
@@ -233,6 +232,7 @@ enum common_chat_format {
     COMMON_CHAT_FORMAT_PEG_SIMPLE,
     COMMON_CHAT_FORMAT_PEG_NATIVE,
     COMMON_CHAT_FORMAT_PEG_GEMMA4,
+    COMMON_CHAT_FORMAT_PEG_MINIMAX_M3,
 
     COMMON_CHAT_FORMAT_COUNT,  // Not a format, just the # formats
 };
@@ -274,7 +274,7 @@ struct common_chat_params {
     std::string                         generation_prompt;
     bool                                supports_thinking    = false;
     std::string                         thinking_start_tag;  // e.g., "<think>"
-    std::string                         thinking_end_tag;    // e.g., "</think>"
+    std::vector<std::string>            thinking_end_tags;   // e.g., "</think>"
     std::vector<common_grammar_trigger> grammar_triggers;
     std::vector<std::string>            preserved_tokens;
     std::vector<std::string>            additional_stops;
@@ -349,16 +349,16 @@ common_chat_tool_choice common_chat_tool_choice_parse_oaicompat(const std::strin
 bool common_chat_templates_support_enable_thinking(const common_chat_templates * chat_templates);
 
 // Parses a JSON array of messages in OpenAI's chat completion API format.
-std::vector<common_chat_msg> common_chat_msgs_parse_oaicompat(const nlohmann::ordered_json & messages);
+std::vector<common_chat_msg> common_chat_msgs_parse_oaicompat(const common_json & messages);
 
-std::vector<common_chat_tool> common_chat_tools_parse_oaicompat(const nlohmann::ordered_json & tools);
+std::vector<common_chat_tool> common_chat_tools_parse_oaicompat(const common_json & tools);
 
-common_chat_continuation common_chat_continuation_parse(const nlohmann::ordered_json & value);
+common_chat_continuation common_chat_continuation_parse(const common_json & value);
 
 // DEPRECATED: only used in tests
-nlohmann::ordered_json common_chat_msgs_to_json_oaicompat(const std::vector<common_chat_msg> & msgs, bool concat_typed_text = false);
+common_json common_chat_msgs_to_json_oaicompat(const std::vector<common_chat_msg> & msgs, bool concat_typed_text = false);
 
-nlohmann::ordered_json common_chat_tools_to_json_oaicompat(const std::vector<common_chat_tool> & tools);
+common_json common_chat_tools_to_json_oaicompat(const std::vector<common_chat_tool> & tools);
 
 // get template caps, useful for reporting to server /props endpoint
 std::map<std::string, bool> common_chat_templates_get_caps(const common_chat_templates * chat_templates);
@@ -385,4 +385,4 @@ struct common_chat_prompt_preset {
 
 common_chat_prompt_preset common_chat_get_asr_prompt(const common_chat_templates * chat_templates);
 
-common_chat_msg_delimiters common_chat_msg_delimiters_parse(const nlohmann::ordered_json & delimiters);
+common_chat_msg_delimiters common_chat_msg_delimiters_parse(const common_json & delimiters);

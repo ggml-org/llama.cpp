@@ -12,6 +12,7 @@ from .qwenvl import Qwen2VLVisionModel
 
 
 @ModelBase.register("Sarashina2VisionForCausalLM")
+@ModelBase.example("sbintuitions/sarashina2.2-vision-3b")
 class Sarashina2VLTextModel(LlamaModel):
     model_arch = gguf.MODEL_ARCH.LLAMA
 
@@ -26,6 +27,7 @@ class Sarashina2VLTextModel(LlamaModel):
 
 
 @ModelBase.register("Sarashina2VisionForCausalLM")
+@ModelBase.example("sbintuitions/sarashina2.2-vision-3b")
 class Sarashina2VLVisionModel(Qwen2VLVisionModel):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)

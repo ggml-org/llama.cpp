@@ -11,9 +11,11 @@
 #define NSUBGROUPS 4
 #define SUBGROUP_SIZE 64
 
+// scales are transposed: consecutive codes of a row are `stride` apart
 inline void get_scale_min_k4(
     int j,
     global const uchar * q,
+    uint stride,
     uchar * d,
     uchar * m,
     uchar mask_d6,
@@ -21,11 +23,11 @@ inline void get_scale_min_k4(
     uchar mask_hi2
 ) {
     if (j < 4) {
-        *d = q[j]   & mask_d6;
-        *m = q[j+4] & mask_d6;
+        *d = q[j*stride]     & mask_d6;
+        *m = q[(j+4)*stride] & mask_d6;
     } else {
-        *d = (q[j+4] & mask_d4) | ((q[j-4] & mask_hi2) >> 2);
-        *m = ((q[j+4] >> 4) & mask_d4) | ((q[j]   & mask_hi2) >> 2);
+        *d = (q[(j+4)*stride] & mask_d4) | ((q[(j-4)*stride] & mask_hi2) >> 2);
+        *m = ((q[(j+4)*stride] >> 4) & mask_d4) | ((q[j*stride] & mask_hi2) >> 2);
     }
 }
 
@@ -232,7 +234,23 @@ kernel void kernel_gemv_noshuffle_q4_k_f32(
 
     uint LINE_STRIDE_A  = M / 2;
     uint BLOCK_STRIDE_A = NSUBGROUPS * M;
-    uint scales_per_row = (K / QK_K) * 12;
+
+    // The x-grid is padded to CEIL_DIV(ne01/2,64)*64, so when ne01 % 128 != 0 the
+    // tail lanes hold gid >= ne01/2. The output stores below are guarded, but the
+    // input fetches are not: src0_d and src0_m are raw global half2 pointers,
+    // src0_s is a raw global uchar pointer, and read_imageui on an
+    // image1d_buffer_t is UNDEFINED out of range -- an image clamps only for
+    // SAMPLER reads, which these are not. Those lanes therefore read past the end
+    // of all three allocations. For a [2816, 2112] weight (2112 % 128 == 64) the
+    // top tail lane is gid = 1087 while only gid < 1056 is backed, and it runs
+    // 32 half2 past src0_d/src0_m, 31 uints past the quant image, and 63 bytes
+    // past src0_s.
+    //
+    // Clamp the row used for every fetch. The lanes stay ACTIVE, which the
+    // sub_group_broadcast in the dequant macros requires, and their results are
+    // still discarded by the existing output guard. No-op and byte-identical
+    // whenever ne01 % 128 == 0.
+    uint gid_s = min(gid, LINE_STRIDE_A - 1);
 
     private uint4     regA;
     private half2     regS;
@@ -245,15 +263,15 @@ kernel void kernel_gemv_noshuffle_q4_k_f32(
         uint sb = k / 8;
         uint j  = k % 8;
 
-        half2 d   = src0_d[gid + sb * LINE_STRIDE_A];
-        half2 dm  = src0_m[gid + sb * LINE_STRIDE_A];
+        half2 d   = src0_d[gid_s + sb * LINE_STRIDE_A];
+        half2 dm  = src0_m[gid_s + sb * LINE_STRIDE_A];
 
-        global const uchar * sc0 = src0_s + 2 * gid * scales_per_row + sb * 12;
-        global const uchar * sc1 = src0_s + (2 * gid + 1) * scales_per_row + sb * 12;
+        global const uchar * sc0 = src0_s + sb * 12 * M + 2 * gid_s;
+        global const uchar * sc1 = sc0 + 1;
 
         uchar sv0, mn0, sv1, mn1;
-        get_scale_min_k4(j, sc0, &sv0, &mn0, mask_d6, mask_d4, mask_hi2);
-        get_scale_min_k4(j, sc1, &sv1, &mn1, mask_d6, mask_d4, mask_hi2);
+        get_scale_min_k4(j, sc0, M, &sv0, &mn0, mask_d6, mask_d4, mask_hi2);
+        get_scale_min_k4(j, sc1, M, &sv1, &mn1, mask_d6, mask_d4, mask_hi2);
 
         regS = convert_half2(convert_float2(d)  * convert_float2((uchar2)(sv0, sv1)));
         regM = convert_half2(convert_float2(dm) * convert_float2((uchar2)(mn0, mn1)));
@@ -264,20 +282,20 @@ kernel void kernel_gemv_noshuffle_q4_k_f32(
         }
 
         // load half weights for two blocks in consecutive rows
-        regA.s0 = read_imageui(src0_q, (gid + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 0)).x;
-        regA.s1 = read_imageui(src0_q, (gid + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 1)).x;
-        regA.s2 = read_imageui(src0_q, (gid + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 2)).x;
-        regA.s3 = read_imageui(src0_q, (gid + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 3)).x;
+        regA.s0 = read_imageui(src0_q, (gid_s + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 0)).x;
+        regA.s1 = read_imageui(src0_q, (gid_s + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 1)).x;
+        regA.s2 = read_imageui(src0_q, (gid_s + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 2)).x;
+        regA.s3 = read_imageui(src0_q, (gid_s + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 3)).x;
 #ifdef VECTOR_SUB_GROUP_BROADCAST
         dequantizeBlockAccum_ns_sgbroadcast_8_hi(totalSum, as_ushort8(regA), regS, regM, regB);
 #else
         dequantizeBlockAccum_ns_sgbroadcast_1_hi(totalSum, as_ushort8(regA), regS, regM, regB);
 #endif // VECTOR_SUB_GROUP_BROADCAST
 
-        regA.s0 = read_imageui(src0_q, (gid + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 4)).x;
-        regA.s1 = read_imageui(src0_q, (gid + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 5)).x;
-        regA.s2 = read_imageui(src0_q, (gid + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 6)).x;
-        regA.s3 = read_imageui(src0_q, (gid + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 7)).x;
+        regA.s0 = read_imageui(src0_q, (gid_s + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 4)).x;
+        regA.s1 = read_imageui(src0_q, (gid_s + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 5)).x;
+        regA.s2 = read_imageui(src0_q, (gid_s + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 6)).x;
+        regA.s3 = read_imageui(src0_q, (gid_s + k * BLOCK_STRIDE_A + LINE_STRIDE_A * 7)).x;
 #ifdef VECTOR_SUB_GROUP_BROADCAST
         dequantizeBlockAccum_ns_sgbroadcast_8_lo(totalSum, as_ushort8(regA), regS, regM, regB);
 #else
@@ -312,7 +330,12 @@ kernel void kernel_gemv_noshuffle_q4_k_f32(
     // 2 outputs per fiber in wave 0
     if (groupId == 0) {
         dst = (global float*)((global char*)dst + offsetd);
-        vstore2(totalSum, 0, &(dst[gid * 2]));
+        // Guard the two output rows. The x-grid is padded to CEIL_DIV(ne01/2,64)*64,
+        // so when ne01 is not a multiple of 128 the tail row-pairs run past row ne01
+        // and would overrun dst into the adjacent tensor. No-op / byte-identical when
+        // ne01 % 128 == 0 (M/2 already a multiple of 64 -> no padding).
+        if (gid * 2 + 0 < M) dst[gid * 2 + 0] = totalSum.s0;
+        if (gid * 2 + 1 < M) dst[gid * 2 + 1] = totalSum.s1;
     }
 
 }

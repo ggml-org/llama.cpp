@@ -10,6 +10,7 @@
 #define GATING_FUNC_SOFTMAX 0
 #define GATING_FUNC_SIGMOID 1
 #define GATING_FUNC_SOFTMAX_WEIGHT 2
+#define GATING_FUNC_SQRT_SOFTPLUS 3
 
 layout (push_constant) uniform parameter
 {
@@ -119,6 +120,13 @@ void main() {
         for (uint i = 0; i < n_experts; i += WARP_SIZE) {
             const uint expert = i + lane;
             probs[i / WARP_SIZE] = (n_experts % WARP_SIZE == 0 || expert < n_experts) ? 1.f / (1.f + exp(-probs[i / WARP_SIZE])) : -INFINITY;
+        }
+    } else if (gating_func == GATING_FUNC_SQRT_SOFTPLUS) {
+        [[unroll]]
+        for (uint i = 0; i < n_experts; i += WARP_SIZE) {
+            const uint expert = i + lane;
+            const float val = probs[i / WARP_SIZE];
+            probs[i / WARP_SIZE] = (n_experts % WARP_SIZE == 0 || expert < n_experts) ? sqrt(val > 20.0f ? val : log(1.0f + exp(val))) : -INFINITY;
         }
     }
 
