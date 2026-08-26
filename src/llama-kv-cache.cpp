@@ -292,6 +292,26 @@ llama_kv_cache::llama_kv_cache(
         ctxs_bufs.emplace_back(std::move(ctx), buf);
     }
 
+    // the per-stream views were created before the k/v tensors were allocated, so
+    // they may still have data == NULL while their storage lives on view_src —
+    // depending on the allocation path taken. Direct IO (checkpoint serialization,
+    // stream-to-stream copies) accesses these views through
+    // ggml_backend_tensor_get/set, which requires an initialized tensor on
+    // backends that address via tensor->data. Initialize them here (#23737).
+    if (!hparams.no_alloc) {
+        for (const auto & layer : layers) {
+            for (ggml_tensor * view : layer.k_stream) {
+                if (view != nullptr && view->data == nullptr && view->view_src != nullptr && view->view_src->data != nullptr) {
+                    GGML_ASSERT(ggml_backend_view_init(view) == GGML_STATUS_SUCCESS);
+                }
+            }
+            for (ggml_tensor * view : layer.v_stream) {
+                if (view != nullptr && view->data == nullptr && view->view_src != nullptr && view->view_src->data != nullptr) {
+                    GGML_ASSERT(ggml_backend_view_init(view) == GGML_STATUS_SUCCESS);
+                }
+            }
+        }
+    }
     {
         const size_t memory_size_k = size_k_bytes();
         const size_t memory_size_v = size_v_bytes();
