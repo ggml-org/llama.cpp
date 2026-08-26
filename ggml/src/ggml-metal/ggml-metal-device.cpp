@@ -580,18 +580,12 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_ssm_scan(ggml_me
 
     const int nsg = (ne00 + 31)/32;
 
-    snprintf(base, 256, "kernel_ssm_scan_%s", ggml_type_name(op->src[0]->type));
-    snprintf(name, 256, "%s_nsg=%d_tail=%d", base, nsg, tail);
+    snprintf(base, 256, "kernel_ssm_scan_%s%s", ggml_type_name(op->src[0]->type), tail ? "_tail" : "");
+    snprintf(name, 256, "%s_nsg=%d", base, nsg);
 
     ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
     if (!res.pipeline) {
-        ggml_metal_cv_t cv = ggml_metal_cv_init();
-
-        ggml_metal_cv_set_bool(cv, tail, FC_SSM_SCAN + 0);
-
-        res = ggml_metal_library_compile_pipeline(lib, base, name, cv);
-
-        ggml_metal_cv_free(cv);
+        res = ggml_metal_library_compile_pipeline(lib, base, name, nullptr);
     }
 
     // Shared memory layout:
@@ -618,7 +612,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_ssm_scan_ssd_mma
 
     // acs/exp(acs)/state-decay vectors + dtX + SAM rows + two 8x8 tiles per simdgroup
     res.smem = (3*OP_SSM_SCAN_SSD_CS +
-                OP_SSM_SCAN_SSD_CS*64 +
+                OP_SSM_SCAN_SSD_CS*OP_SSM_SCAN_SSD_HD +
                 OP_SSM_SCAN_SSD_NSG*8*OP_SSM_SCAN_SSD_CS +
                 OP_SSM_SCAN_SSD_NSG*2*8*8)*sizeof(float);
 

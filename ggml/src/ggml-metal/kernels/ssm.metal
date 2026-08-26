@@ -157,10 +157,11 @@ kernel void kernel_ssm_conv_f32_f32_batched_4(
     x[0] = sumf;
 }
 
-constant bool FC_ssm_scan_tail [[function_constant(FC_SSM_SCAN + 0)]];
 // ref: ggml.c:ggml_compute_forward_ssm_scan_f32, Mamba-2 part
 // Optimized version: reduces redundant memory loads by having one thread load shared values
-kernel void kernel_ssm_scan_f32(
+// TAIL == false is the whole-sequence / decode path: token_offset folds away at compile time.
+template<bool TAIL>
+kernel void kernel_ssm_scan_impl(
         constant ggml_metal_kargs_ssm_scan & args,
         device const void * src0,
         device const void * src1,
@@ -201,8 +202,8 @@ kernel void kernel_ssm_scan_f32(
     const int32_t n_t = args.n_seq_tokens;
     const int32_t n_s = args.n_seqs;
     const int32_t K   = args.K;
-    const int32_t n_t_total = args.n_seq_tokens_total;
-    const int32_t t_off = FC_ssm_scan_tail ? args.token_offset : 0;
+    const int32_t n_t_total = TAIL ? args.n_seq_tokens_total : n_t;
+    const int32_t t_off     = TAIL ? args.token_offset       : 0;
 
     const int32_t s_off = args.s_off;
 
@@ -291,6 +292,11 @@ kernel void kernel_ssm_scan_f32(
     s_buff[i] = s;
 }
 
+typedef decltype(kernel_ssm_scan_impl<false>) kernel_ssm_scan_t;
+
+template [[host_name("kernel_ssm_scan_f32")]]      kernel kernel_ssm_scan_t kernel_ssm_scan_impl<false>;
+template [[host_name("kernel_ssm_scan_f32_tail")]] kernel kernel_ssm_scan_t kernel_ssm_scan_impl<true>;
+
 // Chunked SSD SSM scan via Metal simdgroup MMatrix Multiply-Accumulate (simdgroup_float8x8) fast path.
 // One threadgroup per (head, sequence) and tokens are processed in chunks.
 // C*B^T computed in each chunk one time and reused across the head_dim channel tiles.
@@ -311,7 +317,7 @@ kernel void kernel_ssm_scan_ssd_mma_f32(
         ushort  tiisg[[thread_index_in_simdgroup]]) {
     constexpr short CS  = OP_SSM_SCAN_SSD_CS;
     constexpr short TC  = 8; // Tile Count of each edge in a simdgroup 8x8 tile
-    constexpr short HD  = 64; // Head Dim chosen for Mamba-2
+    constexpr short HD  = OP_SSM_SCAN_SSD_HD;
     constexpr short NSG = OP_SSM_SCAN_SSD_NSG;
 
     // acs/exp(acs)/state-decay vectors, dtX[CS][HD], four private SAM row tiles [8][CS],
@@ -408,7 +414,7 @@ kernel void kernel_ssm_scan_ssd_mma_f32(
                 simdgroup_barrier(mem_flags::mem_threadgroup);
             }
 
-            for (short cb = 0; cb < HD/TC; ++cb) {
+            for (short ch = 0; ch < HD/TC; ++ch) {
                 simdgroup_float8x8 y_diag  = make_filled_simdgroup_matrix<float, 8>(0.0f);
                 simdgroup_float8x8 y_inter = make_filled_simdgroup_matrix<float, 8>(0.0f);
 
@@ -416,7 +422,7 @@ kernel void kernel_ssm_scan_ssd_mma_f32(
                     simdgroup_float8x8 sam;
                     simdgroup_float8x8 mdtx;
                     simdgroup_load(sam,  sam_rows + jb*TC,                   CS);
-                    simdgroup_load(mdtx, shared_dtx + jb*TC*HD + cb*TC,     HD);
+                    simdgroup_load(mdtx, shared_dtx + jb*TC*HD + ch*TC,     HD);
                     simdgroup_multiply_accumulate(y_diag, sam, mdtx, y_diag);
                 }
 
@@ -424,7 +430,7 @@ kernel void kernel_ssm_scan_ssd_mma_f32(
                     simdgroup_float8x8 mc;
                     simdgroup_float8x8 ms;
                     simdgroup_load(mc, C + (t0 + ib*TC)*(int32_t) args.ns52 + k0, args.ns52);
-                    simdgroup_load(ms, state + cb*TC*nc + k0, nc, 0, true);
+                    simdgroup_load(ms, state + ch*TC*nc + k0, nc, 0, true);
                     simdgroup_multiply_accumulate(y_inter, mc, ms, y_inter);
                 }
 
@@ -435,7 +441,7 @@ kernel void kernel_ssm_scan_ssd_mma_f32(
                     const short ri = e / TC;
                     const short ci = e % TC;
                     const int32_t token = t0 + ib*TC + ri;
-                    y[token*nh*nr + cb*TC + ci] =
+                    y[token*nh*nr + ch*TC + ci] =
                         tile0[e] + shared_exp_acs[ib*TC + ri] * tile1[e];
                 }
                 simdgroup_barrier(mem_flags::mem_threadgroup);

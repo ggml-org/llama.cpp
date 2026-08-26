@@ -107,7 +107,6 @@
 #define FC_SUM_ROWS                    1400
 #define FC_UPSCALE                     1500
 #define FC_GATED_DELTA_NET             1600
-#define FC_SSM_SCAN                    1700
 
 // op-specific constants
 #define OP_FLASH_ATTN_EXT_NQPSG 8
@@ -159,8 +158,9 @@
 #define OP_SUM_ROWS_NUM_SUM_ROWS 10
 #define OP_SUM_ROWS_NUM_MEAN     11
 
-#define OP_SSM_SCAN_SSD_CS 64 // Metal-specific; Chunk Size; 64 is largest multiple of 8 (simdgroup tile) fitting into 32 KiB Metal threadgroup mem limit (~26.75 KiB shared mem; see smem layout comment in kernel_ssm_scan_ssd_mma_f32)
-#define OP_SSM_SCAN_SSD_NSG 4 // Metal-specific; Number of SimdGroups per threadgroup;  4 × 32 = 128 threads, 4 gives 128 threads total per threadgroup to match dispatch
+#define OP_SSM_SCAN_SSD_CS  64 // Metal-specific; Chunk Size; 64 is largest multiple of 8 (simdgroup tile) fitting into 32 KiB Metal threadgroup mem limit (~26.75 KiB shared mem; see smem layout comment in kernel_ssm_scan_ssd_mma_f32)
+#define OP_SSM_SCAN_SSD_HD  64 // Metal-specific; Head Dim the MMA kernel is specialized for (Mamba-2); use_mma gates on d_inner == this
+#define OP_SSM_SCAN_SSD_NSG 4  // Metal-specific; Number of SimdGroups per threadgroup; NSG*32 == threads dispatched per threadgroup
 
 // kernel argument structs
 //

@@ -1763,10 +1763,11 @@ int ggml_metal_op_ssm_scan(ggml_metal_op_t ctx, int idx) {
         ne30 == 1 && // checks that A tensor is set to scalar decay per head (A shape {1, n_head})
         props_dev->has_simdgroup_mm && // hardware check for M1 or newer
         d_state % 8 == 0 && // d_state must be multiple of 8 to align with simdgroup_float 8x8 tiles
-        d_inner == 64; // mma kernel hardcodes HD=64 to follow Mamba-2 head dim standard; this checks it
+        d_inner == OP_SSM_SCAN_SSD_HD; // mma kernel is specialized for the Mamba-2 head dim; this checks it
 
     const auto dispatch = [&](ggml_metal_pipeline_with_params pipeline, int64_t nth, int64_t n_tg_x) {
         GGML_ASSERT(nth <= ggml_metal_pipeline_max_theads_per_threadgroup(pipeline));
+        GGML_ASSERT(pipeline.smem <= props_dev->max_theadgroup_memory_size);
 
         ggml_metal_encoder_set_pipeline(enc, pipeline);
         ggml_metal_encoder_set_bytes   (enc, &args, sizeof(args), 0);
