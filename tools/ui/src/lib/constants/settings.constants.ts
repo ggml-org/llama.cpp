@@ -57,7 +57,7 @@ export const SETTINGS_SECTION_TITLES = {
 } as const;
 
 /** Transcription model setting value that auto-picks the first loaded audio model. */
-export const TRANSCRIPTION_MODEL_AUTO = '';
+export const TRANSCRIPTION_MODEL_AUTO = 'auto';
 
 export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 	// General
@@ -115,7 +115,7 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 			},
 			{
 				defaultValue: true,
-				help: 'Automatically show microphone button instead of send button when textarea is empty for models with audio modality support.',
+				help: 'Automatically show microphone button instead of send button when textarea is empty and a model with audio modality is available.',
 				key: SETTINGS_KEYS.AUTO_MIC_ON_EMPTY,
 				label: 'Show microphone on empty input',
 				type: SettingsFieldType.CHECKBOX
@@ -123,7 +123,7 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 			{
 				defaultValue: TRANSCRIPTION_MODEL_AUTO,
 				dependsOn: SETTINGS_KEYS.AUTO_MIC_ON_EMPTY,
-				help: 'Model used to transcribe mic input when the current model does not take audio. Auto picks the first loaded model with audio input.',
+				help: 'Model used to transcribe mic input when the current model does not support audio input.',
 				key: SETTINGS_KEYS.TRANSCRIPTION_MODEL,
 				label: 'Transcription model',
 				optionsGenerator: (models) => [
