@@ -13,7 +13,7 @@ class TensorNameMap:
             "transformer.wte",                           # gpt2 gpt-j mpt refact qwen dbrx jais exaone
             "transformer.word_embeddings",               # falcon
             "word_embeddings",                           # bloom
-            "model.embed_tokens",                        # llama-hf nemotron olmoe olmo2 rwkv6qwen2 glm4-0414 plamo2 granite-hybrid
+            "model.embed_tokens",                        # llama-hf nemotron olmoe olmo2 rwkv6qwen2 glm4-0414 plamo2 granite-hybrid lumma
             "embed_tokens",                              # embeddinggemma
             "tok_embeddings",                            # llama-pth
             "embeddings.word_embeddings",                # bert nomic-bert
@@ -92,6 +92,12 @@ class TensorNameMap:
         ),
         MODEL_TENSOR.DENSE_3_OUT: (
             "dense_3_out",  # embeddinggemma
+        ),
+        MODEL_TENSOR.TOKEN_EMBD_PROJ: (
+            "model.embedding_proj",  # lumma
+        ),
+        MODEL_TENSOR.OUTPUT_PROJ: (
+            "lm_head_proj",  # lumma
         ),
         # Output norm
         MODEL_TENSOR.OUTPUT_NORM: (
