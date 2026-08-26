@@ -303,6 +303,26 @@ struct block_q2_K_packed32
 #define DATA_A_QUANT_K
 #endif
 
+#define QUANT_K_TQ1_0 256
+
+// ternary (BitNet) 1.69 bpw: valori in base 3 impacchettati — 5 per byte in
+// `qs` (48 byte = 240 valori) e 4 per byte in `qh` (4 byte = 16 valori).
+// Si decodifica con le potenze di 3: xi = (qbyte * pow3[t] * 3) >> 8, poi
+// w = d * (xi - 1) che riporta {0,1,2} su {-1,0,+1}.
+struct block_tq1_0
+{
+    uint8_t qs[(QUANT_K_TQ1_0 - 4 * QUANT_K_TQ1_0 / 64) / 5];
+    uint8_t qh[QUANT_K_TQ1_0 / 64];
+    float16_t d;
+};
+
+#if defined(DATA_A_TQ1_0)
+#define QUANT_K QUANT_K_TQ1_0
+#define QUANT_R 1
+#define A_TYPE block_tq1_0
+#define DATA_A_QUANT_K
+#endif
+
 #define QUANT_K_TQ2_0 256
 
 // ternary (BitNet): 2-bit codes, w = (q - 1) * d; qs layout matches q2_K's

@@ -608,6 +608,32 @@ vec2 get_dm(uint ib, uint a_offset) {
 }
 #endif
 
+#if defined(DATA_A_TQ1_0)
+// TQ1_0: base 3 — 5 valori per byte in `qs` (primi 240), 4 per byte in `qh`
+// (ultimi 16). La cifra t-esima si estrae con xi = (q * 3^t * 3) >> 8, che
+// mappa {0,1,2} su {-1,0,+1}. La scala `d` la applica get_dm.
+float tq1_0_val(uint ib, uint e, uint a_offset) {
+    const uint pow3[5] = uint[5](1u, 3u, 9u, 27u, 81u);
+    uint qbyte; uint t;
+    if (e < 160u) {
+        t = e / 32u;  qbyte = uint(data_a[a_offset + ib].qs[e % 32u]);
+    } else if (e < 240u) {
+        const uint e2 = e - 160u;
+        t = e2 / 16u; qbyte = uint(data_a[a_offset + ib].qs[32u + (e2 % 16u)]);
+    } else {
+        const uint e3 = e - 240u;
+        t = e3 / 4u;  qbyte = uint(data_a[a_offset + ib].qh[e3 % 4u]);
+    }
+    return float(((((qbyte * pow3[t]) & 255u)) * 3u) >> 8) - 1.0;
+}
+vec2 dequantize(uint ib, uint iqs, uint a_offset) {
+    return vec2(tq1_0_val(ib, iqs, a_offset), tq1_0_val(ib, iqs + 1u, a_offset));
+}
+vec2 get_dm(uint ib, uint a_offset) {
+    return vec2(float(data_a[a_offset + ib].d), 0);
+}
+#endif
+
 #if defined(DATA_A_TQ2_0)
 vec2 dequantize(uint ib, uint iqs, uint a_offset) {
     // elem e -> byte qs[(e/128)*32 + e%32], bits 2*((e%128)/32); w = q - 1 (d applied via get_dm)

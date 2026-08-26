@@ -247,6 +247,49 @@ f16vec4 dequantFuncQ8_0_v(const in decodeBufQ8_0 bl, const in uint blockCoords[2
     return f16vec4(vec4(qi) * vec4(float(d)));
 }
 
+layout(buffer_reference, std430, buffer_reference_align = 2) buffer decodeBufTQ1_0 {
+   block_tq1_0 block;
+};
+
+// TQ1_0: ternario in BASE 3 — 5 valori per byte in `qs` (i primi 240) e 4 per
+// byte in `qh` (gli ultimi 16). Si estrae la cifra t-esima moltiplicando per
+// 3^t e prendendo la parte alta: xi = (q * 3) >> 8, che da' {0,1,2} → {-1,0,+1}.
+// Stessa logica di dequant_tq1_0.comp, riscritta nella forma richiesta qui.
+float16_t dequantFuncTQ1_0(const in decodeBufTQ1_0 bl, const in uint blockCoords[2], const in uint coordInBlock[2])
+{
+    const uint e = coordInBlock[1];
+    const uint pow3[5] = uint[5](1u, 3u, 9u, 27u, 81u);
+
+    uint qbyte;
+    uint t;
+    if (e < 160u) {
+        t = e / 32u;
+        qbyte = uint(bl.block.qs[e % 32u]);
+    } else if (e < 240u) {
+        const uint e2 = e - 160u;
+        t = e2 / 16u;
+        qbyte = uint(bl.block.qs[32u + (e2 % 16u)]);
+    } else {
+        const uint e3 = e - 240u;
+        t = e3 / 4u;
+        qbyte = uint(bl.block.qh[e3 % 4u]);
+    }
+
+    const uint xi = (((qbyte * pow3[t]) & 255u) * 3u) >> 8;
+    return bl.block.d * (float16_t(int(xi)) - float16_t(1.0));
+}
+
+f16vec4 dequantFuncTQ1_0_v(const in decodeBufTQ1_0 bl, const in uint blockCoords[2], const in uint coordInBlock[2])
+{
+    uint c[2] = uint[2](coordInBlock[0], coordInBlock[1]);
+    f16vec4 r;
+    for (uint k = 0; k < 4; ++k) {
+        c[1] = coordInBlock[1] + k;
+        r[k] = dequantFuncTQ1_0(bl, blockCoords, c);
+    }
+    return r;
+}
+
 layout(buffer_reference, std430, buffer_reference_align = 2) buffer decodeBufTQ2_0 {
    block_tq2_0 block;
 };
@@ -1406,6 +1449,11 @@ f16vec4 dequantFuncNVFP4_v(const in decodeBufNVFP4 bl, const in uint blockCoords
 #elif defined(DATA_A_Q8_0)
 #define dequantFuncA dequantFuncQ8_0
 #define dequantFuncA_v dequantFuncQ8_0_v
+#elif defined(DATA_A_TQ1_0)
+// TQ1_0 non ha la variante vettoriale: il layout in base 3 non e' allineato a
+// gruppi di 4 come TQ2_0, quindi si usa la scalare anche per _v.
+#define dequantFuncA dequantFuncTQ1_0
+#define dequantFuncA_v dequantFuncTQ1_0_v
 #elif defined(DATA_A_TQ2_0)
 #define dequantFuncA dequantFuncTQ2_0
 #define dequantFuncA_v dequantFuncTQ2_0_v

@@ -197,6 +197,40 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
             const uint k_pair = row * LOAD_VEC_A / 2;
             store_a(col, k_pair,     FLOAT_TYPEV2(v.xy));
             store_a(col, k_pair + 1, FLOAT_TYPEV2(v.zw));
+#elif defined(DATA_A_TQ1_0)
+            // ternario 1.69 bpw: valori in base 3, 5 per byte in `qs` e 4 in `qh`.
+            // Il troncamento a 8 bit del prodotto FA PARTE dell'algoritmo
+            // (nel riferimento C `uint8_t q = qs[..] * pow3[n]`): senza, i
+            // valori alti escono di scala e i pesi diventano casuali.
+            const uint idx = pos_a + col * p.stride_a / LOAD_VEC_A + row;
+
+            const uint ib  = idx / 128;               // 2 valori per idx
+            const uint iqs = (idx % 128) * 2;         // elemento 0,2,4..254
+
+            const float d = float(data_a[ib].d);
+            const uint pow3_tq1[5] = uint[5](1u, 3u, 9u, 27u, 81u);
+
+            vec2 v;
+            for (uint kk = 0u; kk < 2u; ++kk) {
+                const uint e = iqs + kk;
+                uint qbyte; uint t;
+                if (e < 160u) {
+                    t = e / 32u;
+                    qbyte = uint(data_a[ib].qs[e % 32u]);
+                } else if (e < 240u) {
+                    const uint e2 = e - 160u;
+                    t = e2 / 16u;
+                    qbyte = uint(data_a[ib].qs[32u + (e2 % 16u)]);
+                } else {
+                    const uint e3 = e - 240u;
+                    t = e3 / 4u;
+                    qbyte = uint(data_a[ib].qh[e3 % 4u]);
+                }
+                v[kk] = d * (float((((qbyte * pow3_tq1[t]) & 255u) * 3u) >> 8) - 1.0);
+            }
+
+            const uint k_pair = row * LOAD_VEC_A / 2;
+            store_a(col, k_pair, FLOAT_TYPEV2(v.xy));
 #elif defined(DATA_A_TQ2_0)
             const uint idx = pos_a + col * p.stride_a / LOAD_VEC_A + row;
 

@@ -1,0 +1,52 @@
+#version 450
+
+#extension GL_EXT_shader_16bit_storage : require
+
+#include "types.glsl"
+
+layout (binding = 0) readonly buffer A {A_TYPE data_a[];};
+layout (binding = 1) writeonly buffer D {D_TYPE data_b[];};
+
+layout (push_constant) uniform parameter {
+    uint ne;
+} p;
+
+layout (local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+void main() {
+    const uint i = gl_GlobalInvocationID.x * 4;
+
+    if (i >= p.ne) {
+        return;
+    }
+
+    const uint ib = i / QUANT_K;
+    const float d = float(data_a[ib].d);
+    const uint pow3[5] = uint[5](1u, 3u, 9u, 27u, 81u);
+
+    for (uint j = 0; j < 4 && (i + j) < p.ne; ++j) {
+        const uint e = (i + j) % QUANT_K;
+
+        uint qbyte;
+        uint t;
+        if (e < 160u) {
+            const uint m = e % 32u;
+            t = e / 32u;
+            qbyte = uint(data_a[ib].qs[m]);
+        } else if (e < 240u) {
+            const uint e2 = e - 160u;
+            const uint m = e2 % 16u;
+            t = e2 / 16u;
+            qbyte = uint(data_a[ib].qs[32u + m]);
+        } else {
+            const uint e3 = e - 240u;
+            const uint m = e3 % 4u;
+            t = e3 / 4u;
+            qbyte = uint(data_a[ib].qh[m]);
+        }
+
+        const uint q = (qbyte * pow3[t]) & 255u;   // troncamento a 8 bit come il riferimento CPU
+        const uint xi = (q * 3u) >> 8;
+        data_b[i + j] = D_TYPE(d * (float(xi) - 1.0f));
+    }
+}
