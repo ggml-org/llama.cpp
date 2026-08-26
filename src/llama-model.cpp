@@ -2206,14 +2206,26 @@ ggml_tensor * llama_model::get_rope_factors(const llama_cparams & cparams, int i
 // Physical attention-KV cell count under streaming eviction: per-sequence
 // sink+recent capacity (scaled by n_seq_max for the unified cache) plus the
 // ubatch, so the recent window of one sequence can never evict another's.
-static uint32_t attn_cache_evict_size(const llama_cparams & cparams) {
+uint32_t llama_model_attn_cache_evict_size(const llama_cparams & cparams) {
     if (cparams.n_kv_sink == 0) {
         return cparams.n_ctx_seq;
     }
+
     const uint64_t per_seq = (uint64_t) cparams.n_kv_sink + cparams.n_kv_recent;
-    const uint64_t total   = cparams.kv_unified
-        ? (uint64_t) cparams.n_seq_max * per_seq + cparams.n_ubatch
-        : per_seq + cparams.n_ubatch;
+
+    uint64_t total = per_seq;
+    if (cparams.kv_unified) {
+        if (cparams.n_seq_max != 0 && per_seq > UINT64_MAX/cparams.n_seq_max) {
+            GGML_ABORT("kv eviction physical cache size overflow");
+        }
+        total = per_seq * cparams.n_seq_max;
+    }
+
+    if (total > UINT64_MAX - cparams.n_ubatch) {
+        GGML_ABORT("kv eviction physical cache size overflow");
+    }
+    total += cparams.n_ubatch;
+
     GGML_ASSERT(total <= UINT32_MAX && "kv eviction physical cache size overflow");
     return (uint32_t) total;
 }
@@ -2281,7 +2293,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                             !cparams.flash_attn,
                             cparams.offload_kqv,
                             cparams.kv_unified,
-                            attn_cache_evict_size(cparams),
+                            llama_model_attn_cache_evict_size(cparams),
                             cparams.n_seq_max,
                             1,
                             hparams.n_swa,
@@ -2340,7 +2352,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                             !cparams.flash_attn,
                             cparams.offload_kqv,
                             cparams.kv_unified,
-                            attn_cache_evict_size(cparams),
+                            llama_model_attn_cache_evict_size(cparams),
                             cparams.n_seq_max,
                             1,
                             hparams.n_swa,
@@ -2555,7 +2567,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                             /* attn_type_k       */ params.type_k,
                             /* attn_type_v       */ params.type_v,
                             /* attn_v_trans      */ !cparams.flash_attn,
-                            /* attn_kv_size      */ attn_cache_evict_size(cparams),
+                            /* attn_kv_size      */ llama_model_attn_cache_evict_size(cparams),
                             /* attn_n_pad        */ 1,
                             /* attn_n_swa        */ hparams.n_swa,
                             /* attn_swa_type     */ hparams.swa_type,
@@ -2564,12 +2576,12 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                             /* recurrent_kv_size */ std::max((uint32_t) 1, cparams.n_seq_max),
                             /* n_seq_max         */ cparams.n_seq_max,
                             /* n_rs_seq          */ cparams.n_rs_seq,
-                            /* n_kv_sink         */ cparams.n_kv_sink,
-                            /* n_kv_recent       */ cparams.n_kv_recent,
                             /* offload           */ cparams.offload_kqv,
                             /* unified           */ cparams.kv_unified,
                             /* filter_attn       */ std::move(filter_attn),
-                            /* filter_recr       */ std::move(filter_recr));
+                            /* filter_recr       */ std::move(filter_recr),
+                            /* n_kv_sink         */ cparams.n_kv_sink,
+                            /* n_kv_recent       */ cparams.n_kv_recent);
                     }
                 } else {
                     llama_kv_cache::layer_filter_cb filter = nullptr;
@@ -2663,7 +2675,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                                 !cparams.flash_attn,
                                 cparams.offload_kqv,
                                 cparams.kv_unified,
-                                attn_cache_evict_size(cparams),
+                                llama_model_attn_cache_evict_size(cparams),
                                 cparams.n_seq_max,
                                 1,
                                 hparams.n_swa,

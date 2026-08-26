@@ -14,6 +14,65 @@
 #include <map>
 #include <stdexcept>
 #include <unordered_map>
+#include <unordered_set>
+
+// how often to emit the periodic eviction telemetry summary (in victim-selection runs)
+static constexpr uint32_t EVICT_LOG_EVERY = 64;
+
+// clamp to 0 so the recent window never starts below position 0
+static llama_pos recent_window_start(const llama_pos p1, const uint32_t recent) {
+    return p1 > (llama_pos) recent ? p1 - (llama_pos) recent : 0;
+}
+
+// key for the ubatch claimed-cell set: (stream, cell index)
+static uint64_t claimed_key(const uint32_t strm, const uint32_t idx) {
+    return ((uint64_t) strm << 32) | idx;
+}
+
+// min ubatch position of seq_id (llama_pos max when seq_id has no tokens)
+static llama_pos ubatch_pos_min(const llama_ubatch & ubatch, const llama_seq_id seq_id) {
+    llama_pos p1_min = std::numeric_limits<llama_pos>::max();
+    for (uint32_t t = 0; t < ubatch.n_tokens; ++t) {
+        if (ubatch.seq_id[t][0] == seq_id && ubatch.pos[t] < p1_min) {
+            p1_min = ubatch.pos[t];
+        }
+    }
+    return p1_min;
+}
+
+// oldest masked-middle cells of seq_id that can be recycled: single-owner cells
+// outside the sink prefix, the ubatch's visible recent window, and the claimed set
+static std::vector<uint32_t> find_evict_victims(
+        const llama_kv_cells & cells,
+        const llama_seq_id     seq_id,
+        const uint32_t         n_kv_sink,
+        const llama_pos        window_start,
+        const std::unordered_set<uint64_t> & claimed,
+        const uint32_t         strm) {
+    std::vector<uint32_t> candidates;
+    for (uint32_t idx = 0; idx < cells.size(); ++idx) {
+        if (cells.is_empty(idx) || cells.seq_count(idx) != 1 || !cells.seq_has(idx, seq_id)) {
+            continue;
+        }
+        const llama_pos pos_cell = cells.pos_get(idx);
+        if (pos_cell < (llama_pos) n_kv_sink) continue;
+        if (pos_cell >= window_start) continue;
+        if (claimed.find(claimed_key(strm, idx)) != claimed.end()) continue;
+        candidates.push_back(idx);
+    }
+    std::sort(candidates.begin(), candidates.end(), [&](uint32_t a, uint32_t b) {
+        return cells.pos_get(a) < cells.pos_get(b);
+    });
+    return candidates;
+}
+
+// true when position p0 falls in the eviction-masked middle region [sink, p1 - recent)
+static bool evict_is_masked(const llama_pos p0, const llama_pos p1, const uint32_t n_kv_sink, const uint32_t n_kv_recent) {
+    if (n_kv_sink == 0 || n_kv_recent == 0) {
+        return false;
+    }
+    return p0 >= (llama_pos) n_kv_sink && p0 < recent_window_start(p1, n_kv_recent);
+}
 
 static bool ggml_is_power_of_2(int n) {
     return (n & (n - 1)) == 0;
@@ -983,6 +1042,11 @@ llama_kv_cache::slot_info llama_kv_cache::find_slot(const llama_ubatch & ubatch,
 
     res.resize(n_seqs);
 
+    // physical cells already assigned to earlier sequences of this ubatch,
+    // keyed by (stream, cell) since each stream has its own cell array
+    std::unordered_set<uint64_t> claimed;
+    claimed.reserve(ubatch.n_tokens);
+
     for (uint32_t s = 0; s < n_seqs; ++s) {
         const auto seq_id = ubatch.seq_id_unq[s];
 
@@ -1061,7 +1125,7 @@ llama_kv_cache::slot_info llama_kv_cache::find_slot(const llama_ubatch & ubatch,
                     }
                 }
 
-                if (can_use) {
+                if (can_use && claimed.find(claimed_key(res.strm[s], idx)) == claimed.end()) {
                     res.idxs[s].push_back(idx);
                 } else {
                     if (cont) {
@@ -1088,45 +1152,37 @@ llama_kv_cache::slot_info llama_kv_cache::find_slot(const llama_ubatch & ubatch,
             }
         }
 
+        // keep this sequence's assigned cells out of every recycle scan below
+        for (const uint32_t idx : res.idxs[s]) {
+            claimed.insert(claimed_key(res.strm[s], idx));
+        }
+
         // we didn't find a suitable slot - return empty result
         if (res.idxs[s].size() < n_tokens) {
             if (n_kv_sink > 0 && n_kv_recent > 0) {
-                // streaming eviction: recycle the oldest masked-middle cell of this sequence
-                // only recycle cells outside the recent window of EVERY query in this ubatch
-                // for this sequence, so the batch's own attention never loses a cell it must see.
-                llama_pos p1_min = std::numeric_limits<llama_pos>::max();
-                for (uint32_t t = 0; t < ubatch.n_tokens; ++t) {
-                    if (ubatch.seq_id[t][0] == seq_id && ubatch.pos[t] < p1_min) {
-                        p1_min = ubatch.pos[t];
-                    }
+                // streaming eviction: recycle the oldest masked-middle cells,
+                // outside every query's recent window so the batch's own
+                // attention never loses a cell it must see
+                const int64_t t_start = ggml_time_us();
+
+                const llama_pos p1_min = ubatch_pos_min(ubatch, seq_id);
+                if (p1_min == std::numeric_limits<llama_pos>::max()) {
+                    // cannot compute the sequence's visible window; fail explicitly
+                    LLAMA_LOG_ERROR("%s: sequence %d has no tokens in the ubatch; cannot evict\n", __func__, seq_id);
+                    return { };
                 }
 
-                std::vector<uint32_t> candidates;
-                for (uint32_t idx = 0; idx < cells.size(); ++idx) {
-                    if (cells.is_empty(idx)) continue;
-                    if (cells.seq_count(idx) != 1) continue;
-                    if (!cells.seq_has(idx, seq_id)) continue;
-
-                    const llama_pos pos_cell = cells.pos_get(idx);
-
-                    // never recycle attention-sink cells
-                    if (pos_cell < (llama_pos) n_kv_sink) continue;
-                    // never recycle cells still inside the visible recent window of this ubatch
-                    if (pos_cell >= p1_min - (llama_pos) n_kv_recent) continue;
-                    // never select a cell already claimed for this ubatch (e.g. via SWA reuse)
-                    if (std::find(res.idxs[s].begin(), res.idxs[s].end(), idx) != res.idxs[s].end()) continue;
-
-                    candidates.push_back(idx);
-                }
-
-                std::sort(candidates.begin(), candidates.end(), [&](uint32_t a, uint32_t b) {
-                    return cells.pos_get(a) < cells.pos_get(b);
-                });
+                std::vector<uint32_t> candidates = find_evict_victims(
+                        cells, seq_id, n_kv_sink, recent_window_start(p1_min, n_kv_recent), claimed, res.strm[s]);
 
                 const uint32_t need = n_tokens - res.idxs[s].size();
-                for (uint32_t i = 0; i < need && i < candidates.size(); ++i) {
+                const uint32_t n_recycle = std::min(need, (uint32_t) candidates.size());
+                for (uint32_t i = 0; i < n_recycle; ++i) {
                     res.idxs[s].push_back(candidates[i]);
+                    claimed.insert(claimed_key(res.strm[s], candidates[i]));
                 }
+
+                update_evict_stats(seq_id, need, n_recycle, t_start);
             }
 
             if (res.idxs[s].size() < n_tokens) {
@@ -1138,6 +1194,31 @@ llama_kv_cache::slot_info llama_kv_cache::find_slot(const llama_ubatch & ubatch,
     assert(res.s1 >= res.s0);
 
     return res;
+}
+
+// accumulate eviction stats, warn on victim exhaustion, and emit the periodic summary
+void llama_kv_cache::update_evict_stats(const llama_seq_id seq_id, const uint32_t need, const uint32_t n_recycle, const int64_t t_start) const {
+    evict_stats.n_cells_recycled   += n_recycle;
+    evict_stats.n_victim_select++;
+    if (n_recycle < need) {
+        evict_stats.n_victim_failed++;
+        LLAMA_LOG_WARN("%s: no recyclable cell and no free slot: sequence fully shared (seq %d: need %u, recycled %u)\n",
+                __func__, seq_id, need, n_recycle);
+    }
+    evict_stats.t_victim_select_us += (uint64_t) (ggml_time_us() - t_start);
+
+    evict_log_cnt++;
+    if (evict_log_cnt >= EVICT_LOG_EVERY) {
+        evict_log_cnt = 0;
+        LLAMA_LOG_INFO("%s: kv eviction summary: recycled = %llu, masked = %llu, victim_select = %llu, victim_fail = %llu, t_victim_select = %.2f ms, t_mask = %.2f ms\n",
+                __func__,
+                (unsigned long long) evict_stats.n_cells_recycled,
+                (unsigned long long) evict_stats.n_mask_cells,
+                (unsigned long long) evict_stats.n_victim_select,
+                (unsigned long long) evict_stats.n_victim_failed,
+                evict_stats.t_victim_select_us/1000.0,
+                evict_stats.t_mask_us/1000.0);
+    }
 }
 
 void llama_kv_cache::apply_ubatch(const slot_info & sinfo, const llama_ubatch & ubatch) {
@@ -1610,6 +1691,8 @@ struct args_set_input_kq_mask {
     int64_t n_kv;
     int64_t n_stream;
     int64_t n_tps;
+
+    uint64_t * p_n_mask_cells; // eviction telemetry: masked-cell counter
 };
 
 template<typename T, bool causal, bool swa, bool is_2d, bool alibi>
@@ -1714,10 +1797,9 @@ static void set_input_kq_mask_impl(const args_set_input_kq_mask & args, T * data
                 p0 = cells.pos_get(j);
 
                 // eviction: mask the middle region, keep [0,n_kv_sink) and [p1-n_kv_recent, p1)
-                if (args.n_kv_sink != 0 && args.n_kv_recent != 0) {
-                    if (p0 >= (llama_pos) args.n_kv_sink && p0 < p1 - (llama_pos) args.n_kv_recent) {
-                        goto skip;
-                    }
+                if (evict_is_masked(p0, p1, args.n_kv_sink, args.n_kv_recent)) {
+                    ++(*args.p_n_mask_cells);
+                    goto skip;
                 }
 
                 if (!alibi) {
@@ -1820,7 +1902,7 @@ void llama_kv_cache::set_input_kq_mask(ggml_tensor * dst, const llama_ubatch * u
     // n_tps == n_tokens_per_stream
     const int64_t n_tps = n_tokens/n_stream;
 
-    //const int64_t t_start = ggml_time_us();
+    const int64_t t_start = ggml_time_us();
 
     const args_set_input_kq_mask args = {
         /*.hparams          =*/ hparams,
@@ -1834,6 +1916,7 @@ void llama_kv_cache::set_input_kq_mask(ggml_tensor * dst, const llama_ubatch * u
         /*.n_kv             =*/ n_kv,
         /*.n_stream         =*/ n_stream,
         /*.n_tps            =*/ n_tps,
+        /*.p_n_mask_cells   =*/ &evict_stats.n_mask_cells,
     };
 
     if (dst->type == GGML_TYPE_F16) {
@@ -1842,9 +1925,7 @@ void llama_kv_cache::set_input_kq_mask(ggml_tensor * dst, const llama_ubatch * u
         set_input_kq_mask_impl<float>(args, (float *) dst->data, causal_attn);
     }
 
-    //const int64_t t_end = ggml_time_us();
-
-    //LLAMA_LOG_ERROR("%s: kq mask time: %0.3f ms\n", __func__, (t_end - t_start)/1000.0);
+    evict_stats.t_mask_us += (uint64_t) (ggml_time_us() - t_start);
 }
 
 void llama_kv_cache::set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const {

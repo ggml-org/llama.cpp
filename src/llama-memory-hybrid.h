@@ -35,13 +35,13 @@ public:
                             /* common */
                  uint32_t   n_seq_max,
                  uint32_t   n_rs_seq,
-                 uint32_t   n_kv_sink,
-                 uint32_t   n_kv_recent,
                      bool   offload,
                      bool   unified,
                             /* layer filters */
     const layer_filter_cb & filter_attn = nullptr,
-    const layer_filter_cb & filter_recr = nullptr);
+    const layer_filter_cb & filter_recr = nullptr,
+                 uint32_t   n_kv_sink   = 0,
+                 uint32_t   n_kv_recent = 0);
 
     ~llama_memory_hybrid() = default;
 

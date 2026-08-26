@@ -25,13 +25,13 @@ llama_memory_hybrid::llama_memory_hybrid(
                             /* common */
                  uint32_t   n_seq_max,
                  uint32_t   n_rs_seq,
-                 uint32_t   n_kv_sink,
-                 uint32_t   n_kv_recent,
                      bool   offload,
                      bool   unified,
                             /* layer filters */
     const layer_filter_cb & filter_attn,
-    const layer_filter_cb & filter_recr) :
+    const layer_filter_cb & filter_recr,
+                 uint32_t   n_kv_sink,
+                 uint32_t   n_kv_recent) :
     hparams(model.hparams),
     mem_attn(new llama_kv_cache(
         model,

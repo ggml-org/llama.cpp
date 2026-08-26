@@ -773,6 +773,9 @@ protected:
 llama_model * llama_model_create(llm_arch arch, const llama_model_params & params);
 llama_model * llama_model_create(llama_model_loader & ml, const llama_model_params & params);
 
+// physical attention-KV cell count under streaming eviction (sink + recent window)
+uint32_t llama_model_attn_cache_evict_size(const llama_cparams & cparams);
+
 // model must inherit from this
 struct llama_model_base : public llama_model {
     friend struct llama_model;
