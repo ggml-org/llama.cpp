@@ -48,8 +48,6 @@ class Qwen4ExpTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
                 return [int(x) for x in t.tolist()]
         raise ValueError(f"PLE constant {suffix!r} missing from the checkpoint")
 
-    # -- metadata ---------------------------------------------------------
-
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
         hp = self.hparams
@@ -91,11 +89,8 @@ class Qwen4ExpTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
             return int(eos[-1])
         return int(eos)
 
-    # -- tensors ----------------------------------------------------------
-
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        # the n-gram hash constants travel as int64 tensors; they must stay exact,
-        # and 1-D tensors would be forced to F32, so carry them as KV instead
+        # int64 hash constants must stay exact; 1-D tensors force F32, so use KV
         if name.endswith("ple_embedding.layer_multipliers"):
             self._ple_multipliers = [int(x) for x in data_torch.tolist()]
             return []
@@ -113,14 +108,12 @@ class Qwen4ExpTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
             n_parts = self.hparams["split_ngram_parts"]
             if len(self._ple_shards) < n_parts:
                 return []
-            # shards are contiguous row ranges in index order
             table = torch.cat([self._ple_shards[i] for i in range(n_parts)], dim=0)
             self._ple_shards.clear()
             name = gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.PER_LAYER_TOKEN_EMBD]
             return [(name + ".weight", table)]
 
-        # one projection feeds both indexer q and k; split it so the two get
-        # separate tensors, matching how minimax-m3 stores them
+        # one projection feeds indexer q and k; split it, as minimax-m3 does
         if ".indexer.index_qk_proj.weight" in name:
             n_q = self.hparams["indexer_n_heads"] * self.hparams["indexer_head_dim"]
             q = data_torch[:n_q]
@@ -130,7 +123,7 @@ class Qwen4ExpTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
                 (self.format_tensor_name(gguf.MODEL_TENSOR.INDEXER_K_PROJ, bid, ".weight"), k),
             ]
 
-        # Gemma-style zero-centred gammas that the inherited "norm.weight" rule misses
+        # Gemma zero-centred gammas the inherited norm.weight rule misses
         if name.endswith((".ple.norm_key.weight", ".ple.norm_query.weight", ".ple.norm_conv.weight")):
             return [(self.map_tensor_name(name), data_torch + 1)]
 

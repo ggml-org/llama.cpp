@@ -1056,8 +1056,7 @@ class GGUFWriter:
     def add_ple_conv_kernel(self, value: int) -> None:
         self.add_uint32(Keys.PLE.CONV_KERNEL.format(arch=self.arch), value)
 
-    # the hash constants must survive exactly: multipliers reach ~2.4e13, so the
-    # default int inference (INT32) would truncate them and break the n-gram hash
+    # multipliers reach ~2.4e13; default INT32 inference would truncate them
     def _add_u64_array(self, key: str, values: Sequence[int]) -> None:
         self.add_key_value(key, list(values), GGUFValueType.ARRAY, GGUFValueType.UINT64)
 

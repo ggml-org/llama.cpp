@@ -561,7 +561,6 @@ struct llama_layer {
     struct ggml_tensor * index_q_norm = nullptr;
     struct ggml_tensor * index_k_norm = nullptr;
 
-    // qwen4exp low-rank hyper-connections
     struct ggml_tensor * hc_attn_norm   = nullptr;
     struct ggml_tensor * hc_attn_down   = nullptr;
     struct ggml_tensor * hc_attn_up     = nullptr;
@@ -571,7 +570,6 @@ struct llama_layer {
     struct ggml_tensor * hc_ffn_up      = nullptr;
     struct ggml_tensor * hc_ffn_inject  = nullptr;
 
-    // qwen4exp PLE
     struct ggml_tensor * ple_key        = nullptr;
     struct ggml_tensor * ple_value      = nullptr;
     struct ggml_tensor * ple_norm_key   = nullptr;
@@ -663,7 +661,6 @@ struct llama_model {
     struct ggml_tensor * altup_unembd_proj    = nullptr;
     struct ggml_tensor * per_layer_tok_embd   = nullptr;
 
-    // qwen4exp final hyper-connection mixer
     struct ggml_tensor * hc_head_norm = nullptr;
     struct ggml_tensor * hc_head_down = nullptr;
     struct ggml_tensor * hc_head_up   = nullptr;

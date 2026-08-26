@@ -233,7 +233,6 @@ class Keys:
         LOW_RANK             = "{arch}.hyper_connection.low_rank"
 
     class PLE:
-        # per-layer n-gram hash embeddings (qwen4_exp)
         LAYERS             = "{arch}.ple.layers"
         NGRAM_SIZE         = "{arch}.ple.ngram_size"
         HEADS_PER_NGRAM    = "{arch}.ple.heads_per_ngram"
@@ -2867,12 +2866,10 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.ATTN_K_NORM,
         MODEL_TENSOR.ATTN_V,
         MODEL_TENSOR.ATTN_OUT,
-        # QSA indexer
         MODEL_TENSOR.INDEXER_Q_PROJ,
         MODEL_TENSOR.INDEXER_K_PROJ,
         MODEL_TENSOR.INDEXER_Q_NORM,
         MODEL_TENSOR.INDEXER_K_NORM,
-        # gated delta net linear attention layers
         MODEL_TENSOR.ATTN_QKV,
         MODEL_TENSOR.ATTN_GATE,
         MODEL_TENSOR.SSM_A,
@@ -2882,7 +2879,6 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.SSM_BETA,
         MODEL_TENSOR.SSM_ALPHA,
         MODEL_TENSOR.SSM_OUT,
-        # MoE, every layer, with a gated shared expert
         MODEL_TENSOR.FFN_GATE_INP,
         MODEL_TENSOR.FFN_GATE_INP_SHEXP,
         MODEL_TENSOR.FFN_UP_SHEXP,
@@ -2892,7 +2888,6 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_UP_EXP,
         MODEL_TENSOR.FFN_GATE_EXP,
         MODEL_TENSOR.FFN_GATE_UP_EXP,
-        # PLE n-gram hash embeddings, one layer only
         MODEL_TENSOR.PER_LAYER_TOKEN_EMBD,
         MODEL_TENSOR.PLE_KEY,
         MODEL_TENSOR.PLE_VALUE,
