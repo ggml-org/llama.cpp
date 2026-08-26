@@ -375,6 +375,9 @@ public:
 
     uint32_t get_n_kv() const;
 
+    // streams in the current slot info; 1 for a unified cache
+    uint32_t get_n_stream() const;
+
     ggml_type type_k() const;
     ggml_type type_v() const;
 

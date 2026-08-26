@@ -9,6 +9,7 @@ void llama_model_qwen4exp::load_arch_hparams(llama_model_loader & ml) {
 
     ml.get_key_or_arr(LLM_KV_ROPE_DIMENSION_SECTIONS,    hparams.rope_sections, 4, true);
 
+
     ml.get_key(LLM_KV_SSM_CONV_KERNEL,    hparams.ssm_d_conv);
     ml.get_key(LLM_KV_SSM_INNER_SIZE,     hparams.ssm_d_inner);
     ml.get_key(LLM_KV_SSM_STATE_SIZE,     hparams.ssm_d_state);
@@ -21,6 +22,7 @@ void llama_model_qwen4exp::load_arch_hparams(llama_model_loader & ml) {
     GGML_ASSERT(hparams.dsv4_hc_mult > 0 && "qwen4exp needs a hyper-connection count");
     GGML_ASSERT(hparams.hc_low_rank  > 0 && "qwen4exp needs a hyper-connection low rank");
     hparams.n_embd_out_impl = hparams.dsv4_hc_mult * hparams.n_embd;
+
 
     ml.get_key(LLM_KV_ATTENTION_INDEXER_HEAD_COUNT, hparams.indexer_n_head);
     ml.get_key(LLM_KV_ATTENTION_INDEXER_KEY_LENGTH, hparams.indexer_head_size);
@@ -135,6 +137,7 @@ void llama_model_qwen4exp::load_arch_tensors(llama_model_loader & ml) {
 
             layer.attn_q_norm = create_tensor(tn(LLM_TENSOR_ATTN_Q_NORM, "weight", il), { n_embd_head_k }, 0);
             layer.attn_k_norm = create_tensor(tn(LLM_TENSOR_ATTN_K_NORM, "weight", il), { n_embd_head_k }, 0);
+
 
             const int64_t idx_dim = hparams.indexer_head_size;
             layer.index_q_proj = create_tensor(tn(LLM_TENSOR_INDEXER_Q_PROJ, "weight", il), { n_embd, hparams.indexer_n_head * idx_dim }, 0);
@@ -392,11 +395,12 @@ public:
         mctx->set_input_qsa(cell_blk, blk_cells, blk_pos, bias, ubatch, ratio);
     }
 
+    // Per-stream: a cell index means a different token in each stream. n_stream 1 = the old shapes.
     ggml_tensor * k_idxs    = nullptr;   // I32 [n_tokens]
-    ggml_tensor * cell_blk  = nullptr;   // I32 [n_kv]
-    ggml_tensor * blk_cells = nullptr;   // I32 [ratio*n_blocks]
-    ggml_tensor * blk_pos   = nullptr;   // I32 [4*n_blocks]
-    ggml_tensor * bias      = nullptr;   // F32 [n_kv, n_tokens]
+    ggml_tensor * cell_blk  = nullptr;   // I32 [n_kv, n_stream]
+    ggml_tensor * blk_cells = nullptr;   // I32 [ratio*n_blocks, n_stream]
+    ggml_tensor * blk_pos   = nullptr;   // I32 [4*n_blocks*n_stream]
+    ggml_tensor * bias      = nullptr;   // F32 [n_kv, n_tokens/n_stream, n_stream]
 
     const llama_kv_cache_context * mctx;
     const uint32_t ratio;
@@ -417,13 +421,18 @@ ggml_tensor * llama_model_qwen4exp::graph::build_qsa_top_k(
 
     const int64_t n_blocks = (n_kv + r - 1)/r;
 
+    // n_tps: tokens divide evenly across streams, as build_attn_mask_top_k and the KQ mask assume.
+    const int64_t n_stream = mctx_idx->get_n_stream();
+    GGML_ASSERT(n_tokens % n_stream == 0);
+    const int64_t n_tps = n_tokens/n_stream;
+
     auto qsa = std::make_unique<llm_graph_input_qsa>(mctx_idx, (uint32_t) r);
 
     qsa->k_idxs    = mctx_idx->build_input_k_idxs(ctx0, ubatch);
-    qsa->cell_blk  = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_kv);
-    qsa->blk_cells = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, r*n_blocks);
-    qsa->blk_pos   = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, 4*n_blocks);
-    qsa->bias      = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_kv, n_tokens);
+    qsa->cell_blk  = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, n_kv, n_stream);
+    qsa->blk_cells = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, r*n_blocks, n_stream);
+    qsa->blk_pos   = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, 4*n_blocks*n_stream);
+    qsa->bias      = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, n_kv, n_tps, n_stream);
 
     ggml_set_input(qsa->cell_blk);
     ggml_set_input(qsa->blk_cells);
@@ -440,30 +449,33 @@ ggml_tensor * llama_model_qwen4exp::graph::build_qsa_top_k(
 
     ggml_build_forward_expand(gf, mctx_idx->cpy_k(ctx0, k_raw, inp->k_idxs, il));
 
-    // one key head, so the per-cell rows are contiguous and this view is dense
+    // one key head, so rows are contiguous. get_k gives [idx_dim, n_head_kv, n_kv, n_stream].
     ggml_tensor * k_all = mctx_idx->get_k(ctx0, il);
-    k_all = ggml_view_2d(ctx0, k_all, idx_dim, n_kv, k_all->nb[2], 0);
+    k_all = ggml_view_3d(ctx0, k_all, idx_dim, n_kv, n_stream, k_all->nb[2], k_all->nb[3], 0);
 
+    // gathers per stream: blk_cells row s indexes stream s's own cells
     ggml_tensor * members = ggml_get_rows(ctx0, k_all, inp->blk_cells);
-    members = ggml_reshape_3d(ctx0, members, idx_dim, r, n_blocks);
+    members = ggml_reshape_4d(ctx0, members, idx_dim, r, n_blocks, n_stream);
 
     // mean over the block's members; compress_ratio is small, so summing slices beats
     // transposing to reach ggml_sum_rows
     ggml_tensor * pooled = nullptr;
     for (int64_t i = 0; i < r; ++i) {
         ggml_tensor * slice = ggml_cont(ctx0,
-                ggml_view_2d(ctx0, members, idx_dim, n_blocks, members->nb[2], i*members->nb[1]));
+                ggml_view_3d(ctx0, members, idx_dim, n_blocks, n_stream,
+                        members->nb[2], members->nb[3], i*members->nb[1]));
         pooled = pooled ? ggml_add(ctx0, pooled, slice) : slice;
     }
     pooled = ggml_scale(ctx0, pooled, 1.0f/(float) r);
     cb(pooled, "indexer_k_pooled", il);
 
-    pooled = ggml_reshape_3d(ctx0, pooled, idx_dim, 1, n_blocks);
+    // rope wants [n_dims, n_head, n_tokens]: lay every stream's blocks flat, split after.
+    pooled = ggml_reshape_3d(ctx0, pooled, idx_dim, 1, n_blocks*n_stream);
     pooled = build_norm(pooled, model.layers[il].index_k_norm, nullptr, LLM_NORM_RMS, il);
     pooled = ggml_rope_multi(ctx0, pooled, inp->blk_pos, nullptr,
             n_rot, sections, rope_type, n_ctx_orig, freq_base, freq_scale,
             ext_factor, attn_factor, beta_fast, beta_slow);
-    pooled = ggml_reshape_2d(ctx0, pooled, idx_dim, n_blocks);
+    pooled = ggml_reshape_3d(ctx0, pooled, idx_dim, n_blocks, n_stream);
     cb(pooled, "indexer_k", il);
 
     ggml_tensor * q = build_lora_mm(model.layers[il].index_q_proj, cur);
@@ -475,15 +487,15 @@ ggml_tensor * llama_model_qwen4exp::graph::build_qsa_top_k(
     cb(q, "indexer_q", il);
 
     // Each head's dot product is rectified before summing, as in DeepSeek's lightning
-    // indexer but with no learned per-head weight. The reference's constant divisor
-    // cannot reorder anything, so it is left out.
+    // no per-head weight; the constant divisor cannot reorder. mul_mat matches ne[2], so
+    // stream s's queries only meet stream s's blocks.
     ggml_tensor * score = ggml_mul_mat(ctx0, pooled,
-            ggml_reshape_2d(ctx0, ggml_cont(ctx0, q), idx_dim, n_idx_h*n_tokens));
-    score = ggml_reshape_3d(ctx0, score, n_blocks, n_idx_h, n_tokens);
+            ggml_reshape_3d(ctx0, ggml_cont(ctx0, q), idx_dim, n_idx_h*n_tps, n_stream));
+    score = ggml_reshape_4d(ctx0, score, n_blocks, n_idx_h, n_tps, n_stream);
     score = ggml_relu(ctx0, score);
     score = ggml_cont(ctx0, ggml_permute(ctx0, score, 1, 0, 2, 3));
     score = ggml_sum_rows(ctx0, score);
-    score = ggml_reshape_2d(ctx0, score, n_blocks, n_tokens);
+    score = ggml_reshape_3d(ctx0, score, n_blocks, n_tps, n_stream);
     cb(score, "indexer_score", il);
 
     // Give every token of a block its block's score rather than expanding the block
@@ -491,8 +503,8 @@ ggml_tensor * llama_model_qwen4exp::graph::build_qsa_top_k(
     // budget is a whole number of blocks and members tie, so the cut still lands on
     // a block boundary. get_rows gathers rows, so scores are transposed first.
     ggml_tensor * expanded = ggml_get_rows(ctx0,
-            ggml_cont(ctx0, ggml_transpose(ctx0, score)), inp->cell_blk);
-    expanded = ggml_cont(ctx0, ggml_transpose(ctx0, expanded));
+            ggml_cont(ctx0, ggml_permute(ctx0, score, 1, 0, 2, 3)), inp->cell_blk);
+    expanded = ggml_cont(ctx0, ggml_permute(ctx0, expanded, 1, 0, 2, 3));
     expanded = ggml_add(ctx0, expanded, inp->bias);
     cb(expanded, "indexer_score_tokens", il);
 
@@ -501,6 +513,9 @@ ggml_tensor * llama_model_qwen4exp::graph::build_qsa_top_k(
     const int64_t width = std::min<int64_t>(n_kv, (int64_t) hparams.indexer_top_k + r - 1);
 
     ggml_tensor * top_k = ggml_cont(ctx0, ggml_top_k(ctx0, expanded, width));
+
+    // build_attn_mask_top_k reads [n_top_k, n_batch, 1, n_stream], matching the KQ mask.
+    top_k = ggml_reshape_4d(ctx0, top_k, width, n_tps, 1, n_stream);
     cb(top_k, "indexer_top_k", il);
 
     return top_k;
@@ -699,6 +714,7 @@ ggml_tensor * llama_model_qwen4exp::graph::build_layer_attn_linear(
 
     q_conv = ggml_l2_norm(ctx0, q_conv, eps_norm);
     k_conv = ggml_l2_norm(ctx0, k_conv, eps_norm);
+
 
 
     // repeat to match shapes when head keys != value keys; unneeded with the fused GDN
