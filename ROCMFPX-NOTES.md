@@ -385,6 +385,39 @@ the MoE still run for that layer.
 `_weighted` paths are unexercised. Likely the largest remaining quality lever, and free
 in file size.
 
+### MTP draft head
+
+The 2.61 B parameter head ships in the checkpoint and PR 27742 filters it out. Exporting
+it needs the two opt-out lines removed, plus the eh_proj merge and a longer
+compress_ratios array; the graph is PR 27739's, reconciled against this tree's helpers.
+
+Measured on the FP4_FAST target, 250 tokens at temp 0, each config warmed up first:
+
+| draft | t/s | acceptance |
+|---|---|---|
+| none | 28.1, 28.2 | -- |
+| MTP, n-max 2 | 31.8 | 0.695 |
+| MTP, n-max 3 | 32.4 | 0.612 |
+| MTP, adaptive n-min 1 n-max 5 | 28.4 | 0.468 |
+
+**Match the target's quantization in the draft, do not exceed it.** A Q8_0 draft against
+the same target is worse on both counts than an FP4_FAST one, and costs 1.5 GiB more:
+
+| draft | t/s | acceptance | VRAM |
+|---|---|---|---|
+| FP4_FAST, 2.27 GiB | 31.7, 31.2 | 0.612 | 87.3 GiB |
+| Q8_0, 3.85 GiB | 30.3 | 0.587 | 88.8 GiB |
+
+Acceptance measures the draft agreeing with the target, not the draft being right. Two
+models quantized the same way are wrong in the same places and so agree more often; a
+more accurate draft diverges from the target's particular errors, and each divergence is
+a rejected token.
+
+Adaptive drafting lost here. It drafts longer when acceptance looks good, and this head
+carries its own 512-expert MoE, so each extra drafted token is a real forward pass. Its
+case is mixed content where one n-max cannot be right for all of it, not a single prose
+completion where a fixed n-max is already near optimal.
+
 ### Gotchas
 
 - The default `Q4_0_ROCMFP4` recipe promotes `ffn_down_exps` to q5_K, but the expert
