@@ -10,7 +10,6 @@ export interface UseToolsPanelReturn {
 	readonly mcpGroups: ToolGroup[];
 	readonly totalToolCount: number;
 	readonly noToolsInfoMessage: string | null;
-	readonly mcpCategoryEnabled: boolean;
 	isGroupChecked(group: ToolGroup): boolean;
 	getEnabledToolCount(group: ToolGroup): number;
 	getFavicon(group: ToolGroup): string | null;
@@ -21,7 +20,6 @@ export interface UseToolsPanelReturn {
 	toggleGroupExpanded(key: string): void;
 	/** Toggle all tools in a group by its stable key (avoids stale group object references). */
 	toggleGroupByKey(key: string): void;
-	toggleMcpCategory(): void;
 	handleOpen(): void;
 }
 
@@ -43,9 +41,6 @@ export function useToolsPanel(): UseToolsPanelReturn {
 	const categoryGroups = $derived(groups.filter((g) => g.source !== ToolSource.MCP));
 	const mcpGroups = $derived(groups.filter((g) => g.source === ToolSource.MCP));
 	const totalToolCount = $derived(groups.reduce((n, g) => n + g.tools.length, 0));
-	const mcpCategoryEnabled = $derived(
-		conversationsStore.preferences.isCategoryEnabled(ToolSource.MCP)
-	);
 	const noToolsInfoMessage = $derived.by(() => {
 		if (toolsStore.loading) return null;
 
@@ -113,10 +108,6 @@ export function useToolsPanel(): UseToolsPanelReturn {
 		void conversationsStore.preferences.toggleGroup(group);
 	}
 
-	function toggleMcpCategory(): void {
-		void conversationsStore.preferences.toggleCategory(ToolSource.MCP);
-	}
-
 	function handleOpen(): void {
 		if (toolsStore.serverTools.length === 0 && !toolsStore.loading) {
 			toolsStore.fetchServerTools();
@@ -137,9 +128,6 @@ export function useToolsPanel(): UseToolsPanelReturn {
 		isGroupDisabled,
 		isToolEnabled,
 		isToolParentDisabled,
-		get mcpCategoryEnabled() {
-			return mcpCategoryEnabled;
-		},
 		get mcpGroups() {
 			return mcpGroups;
 		},
@@ -148,7 +136,6 @@ export function useToolsPanel(): UseToolsPanelReturn {
 		},
 		toggleGroupByKey,
 		toggleGroupExpanded,
-		toggleMcpCategory,
 		toggleTool,
 		get totalToolCount() {
 			return totalToolCount;
