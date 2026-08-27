@@ -7,6 +7,11 @@
 #include "generic_unary_head.glsl"
 #endif
 
+#if defined(UNARY_MUL_FUSION)
+// true if the OP is applied to the B operand (the unary result tiles into src0's shape)
+layout(constant_id = 1) const bool op_on_b = false;
+#endif
+
 // the fused variant matches the binary elementwise kernels: 256 threads x 2 unrolled
 // iterations; the plain unary op stays at 512 threads x 1 element per thread
 #if defined(UNARY_MUL_FUSION)
