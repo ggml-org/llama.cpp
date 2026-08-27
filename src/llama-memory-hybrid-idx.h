@@ -135,8 +135,11 @@ public:
     // QSA is safe only when each stream has one sequence with unique,
     // contiguous primary positions. Other layouts use dense attention.
     bool qsa_compatible(const llama_ubatch * ubatch, uint32_t ratio) const;
+    // blk_bias requests one uploaded bias value per compression block; the caller adds the
+    // per-cell visible/not mask separately.
     void set_input_qsa(ggml_tensor * cell_blk, ggml_tensor * blk_cells, ggml_tensor * blk_pos,
-                       ggml_tensor * bias, const llama_ubatch * ubatch, uint32_t ratio) const;
+                       ggml_tensor * bias, const llama_ubatch * ubatch, uint32_t ratio,
+                       bool blk_bias) const;
 
     llama_token ple_prefix_token(llama_seq_id seq_id, size_t lookback, llama_token fallback) const;
 

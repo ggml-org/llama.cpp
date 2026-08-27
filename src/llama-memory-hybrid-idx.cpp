@@ -723,7 +723,8 @@ void llama_memory_hybrid_idx_context::set_input_qsa(
         ggml_tensor * blk_pos,
         ggml_tensor * bias,
         const llama_ubatch * ubatch,
-        uint32_t ratio) const {
+        uint32_t ratio,
+        bool blk_bias) const {
     GGML_ASSERT(qsa_compatible(ubatch, ratio));
     GGML_ASSERT(ggml_backend_buffer_is_host(cell_blk->buffer));
 
@@ -763,20 +764,26 @@ void llama_memory_hybrid_idx_context::set_input_qsa(
         std::fill(filled.begin(), filled.end(), 0);
         std::fill(cur_blk_cells, cur_blk_cells + r*n_blocks, 0);
 
+        bool out_of_range = false;
         for (int64_t j = 0; j < n_kv; ++j) {
             if (cells.is_empty(j)) {
                 continue;
             }
             const llama_pos p = cells.pos_get(j);
             const int64_t b = p/r;
-            GGML_ASSERT(b >= 0 && b < n_blocks);
+            if (b >= n_blocks) {
+                out_of_range = true;
+                continue;
+            }
             blk_of[j] = (int32_t) b;
             cur_blk_cells[b*r + (p%r)] = (int32_t) j;
             filled[b]++;
         }
 
+        GGML_ASSERT((!blk_bias || !out_of_range) && "qsa: cell position runs past the cell window");
+
         for (int64_t j = 0; j < n_kv; ++j) {
-            if (blk_of[j] >= 0 && filled[blk_of[j]] < r) {
+            if (blk_of[j] >= 0 && filled[blk_of[j]] < r && !blk_bias) {
                 blk_of[j] = -1;
             }
             cur_cell_blk[j] = blk_of[j] < 0 ? 0 : blk_of[j];
@@ -787,6 +794,15 @@ void llama_memory_hybrid_idx_context::set_input_qsa(
             const llama_seq_id seq_id = ubatch->seq_id[i][0];
             const llama_pos q = ubatch->pos[i];
             const llama_pos tail_start = (q + 1)/r*r;
+
+            if (blk_bias) {
+                float * cur_blk_bias = dst_bias + i*n_blocks;
+                for (int64_t b = 0; b < n_blocks; ++b) {
+                    cur_blk_bias[b] = b*r >= tail_start ? 1e9f : (filled[b] < r ? -INFINITY : 0.0f);
+                }
+                continue;
+            }
+
             float * cur_bias = dst_bias + i*n_kv;
 
             for (int64_t j = 0; j < n_kv; ++j) {

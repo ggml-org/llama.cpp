@@ -2328,6 +2328,7 @@ struct llama_model_qwen4exp : public llama_model_base {
   const llama_memory_hybrid_idx_context * mctx_hyb,
                     ggml_tensor * cur,
                     ggml_tensor * inp_pos,
+                    ggml_tensor * kq_mask,
                             int * sections,
                             int   il);
 
