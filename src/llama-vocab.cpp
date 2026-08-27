@@ -3417,13 +3417,22 @@ std::vector<llama_token> llama_vocab::impl::tokenize(
                 } else {
                     session = std::make_unique<llm_tokenizer_bpe_session>(vocab, *tok_bpe);
                 }
+                bool is_after_bos = false;
 
                 if (add_special) {
-                    session->append_bos(output);
+                    is_after_bos = session->append_bos(output);
                 }
+
                 for (const auto & fragment : fragment_buffer) {
                     if (fragment.type == FRAGMENT_BUFFER_VARIANT_TYPE_RAW_TEXT) {
-                        std::string text = fragment.raw_text.substr(fragment.offset, fragment.length);
+                        std::string text;
+
+                        if (add_space_prefix && is_after_bos) {
+                            text = ' ';
+                        }
+                        is_after_bos = false;
+
+                        text += fragment.raw_text.substr(fragment.offset, fragment.length);
 
                         if (escape_whitespaces) {
                             llama_escape_whitespace(text);
