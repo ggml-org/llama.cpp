@@ -265,7 +265,7 @@ void llama_model_qwen4exp::load_arch_tensors(llama_model_loader & ml) {
             throw std::runtime_error("qwen4exp PLE head range exceeds the n-gram table");
         }
         per_layer_tok_embd = create_tensor(tn(LLM_TENSOR_PER_LAYER_TOKEN_EMBD, "weight"),
-                                           { hparams.ple_head_dim, (int64_t) ple_rows }, 0);
+                                           { hparams.ple_head_dim, (int64_t) ple_rows }, TENSOR_READ_LAZY);
     }
 
     for (int il = 0; il < (mtp_only ? 0 : n_layer); ++il) {
