@@ -329,9 +329,15 @@ class AgenticStore {
 		const disabledToolCategories = new Set(
 			toolPolicy?.disabledToolCategories ?? toolsStore.disabledToolCategories
 		);
-		// skip MCP init when the policy disables the whole MCP category
+		// skip MCP init when the policy leaves no usable server: either the whole
+		// MCP category is off, or every globally-enabled server has its group key
+		// disabled for this flow
 		const hasMcpServers =
-			mcpStore.hasEnabledServers() && !disabledToolCategories.has(ToolSource.MCP);
+			mcpStore.hasEnabledServers() &&
+			!disabledToolCategories.has(ToolSource.MCP) &&
+			mcpStore
+				.getServers()
+				.some((s) => s.enabled && !disabledTools.has(toolsStore.getMcpServerToolsKey(s.id)));
 
 		if (hasMcpServers) {
 			const initialized = await mcpStore.ensureInitialized();
