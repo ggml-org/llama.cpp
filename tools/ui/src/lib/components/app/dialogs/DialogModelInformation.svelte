@@ -91,7 +91,7 @@
 			<Dialog.Description>Current model details and capabilities</Dialog.Description>
 		</Dialog.Header>
 
-		<div class="space-y-6 py-4">
+		<div class="min-w-0 space-y-6 py-4">
 			{#if isLoadingModels || isLoadingRouterProps}
 				<div class="flex items-center justify-center py-8">
 					<div class="text-sm text-muted-foreground">Loading model information...</div>
@@ -100,7 +100,7 @@
 				{@const modelMeta = firstModel.meta}
 
 				{#if serverProps}
-					<Table.Root>
+					<Table.Root class="table-fixed">
 						<Table.Header>
 							<Table.Row>
 								<Table.Head class="w-[10rem]">Model</Table.Head>
