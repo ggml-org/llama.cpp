@@ -44,8 +44,14 @@ class Glm5NextModel(GlmMoeDsaModel):
     def index_tensors(self, remote_hf_model_id: str | None = None):
         # TextModel lifts text_config to the root, but only after this runs -
         # and the parent already needs num_hidden_layers from it here.
+        # Skip None values: AutoConfig.to_dict() materialises keys that the JSON
+        # omits, so text_config carries architectures=None and would clobber the
+        # valid top-level value.
         if "text_config" in self.hparams:
-            self.hparams = {**self.hparams, **self.hparams["text_config"]}
+            self.hparams = {
+                **self.hparams,
+                **{k: v for k, v in self.hparams["text_config"].items() if v is not None},
+            }
         return super().index_tensors(remote_hf_model_id=remote_hf_model_id)
 
     @classmethod
