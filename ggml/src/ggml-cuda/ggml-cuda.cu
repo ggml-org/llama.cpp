@@ -6207,6 +6207,21 @@ bool ggml_backend_is_cuda(ggml_backend_t backend) {
     return backend != NULL && ggml_guid_matches(backend->guid, ggml_backend_cuda_guid());
 }
 
+void * ggml_backend_cuda_get_stream(ggml_backend_t backend) {
+    if (!ggml_backend_is_cuda(backend)) {
+        return nullptr;
+    }
+    auto * cuda_ctx = (ggml_backend_cuda_context *) backend->context;
+    return reinterpret_cast<void *>(cuda_ctx->stream());
+}
+
+int ggml_backend_cuda_get_device(ggml_backend_t backend) {
+    if (!ggml_backend_is_cuda(backend)) {
+        return -1;
+    }
+    return ((ggml_backend_cuda_context *) backend->context)->device;
+}
+
 int ggml_backend_cuda_get_device_count() {
     return ggml_cuda_info().device_count;
 }

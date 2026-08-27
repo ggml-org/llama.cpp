@@ -33,6 +33,18 @@ int32_t common_speculative_n_max(const common_params_speculative * spec);
 
 common_params common_base_params_to_speculative(const common_params & params);
 
+// Probe an opt-in sidecar before constructing any host draft model/context.
+// Returns the selected sidecar type and marks params.draft.sidecar_only on
+// success; returns NONE when native draft loading should be retained.
+common_speculative_type common_speculative_sidecar_preflight(
+        common_params_speculative & params, const llama_model * model_tgt,
+        uint32_t n_seq, std::string & error);
+
+// Cheap pre-target check used by --fit to avoid creating a host draft model
+// solely for memory measurement when the explicit sidecar contract is present.
+bool common_speculative_sidecar_candidate(const common_params_speculative & params,
+        const std::string & target_model_path, uint32_t n_seq);
+
 struct common_speculative_output_limits {
     int32_t total;
     int32_t per_seq;
@@ -87,9 +99,18 @@ void common_speculative_draft(common_speculative * spec);
 // informs the speculative context that n_accepted tokens were accepted by the target model
 void common_speculative_accept(common_speculative * spec, llama_seq_id, uint16_t n_accepted);
 
-// (optional) get/set internal state
+// (optional) checkpoint and lifecycle state. State is keyed by implementation;
+// sidecars store only a small cursor/epoch while keeping device KV resident.
 bool common_speculative_get_state(common_speculative * spec, llama_seq_id seq_id, std::vector<uint8_t> & data);
-void common_speculative_set_state(common_speculative * spec, llama_seq_id seq_id, const std::vector<uint8_t> & data);
+bool common_speculative_set_state(common_speculative * spec, llama_seq_id seq_id, const std::vector<uint8_t> & data);
+void common_speculative_reset_state(common_speculative * spec, llama_seq_id seq_id);
+// Discard a state suffix without committing new target rows.
+bool common_speculative_truncate_state(common_speculative * spec, llama_seq_id seq_id, llama_pos pos_max);
+// Commit target rows that are known to be accepted (prompt/ordinary decode or
+// the accepted prefix of speculative verification).
+bool common_speculative_commit_state(common_speculative * spec, llama_seq_id seq_id, llama_pos pos_max);
+bool common_speculative_rebase_state(common_speculative * spec, llama_seq_id seq_id,
+        llama_pos pos_min, llama_pos pos_max, llama_pos delta);
 
 // print statistics about the speculative decoding
 void common_speculative_print_stats(const common_speculative * spec);
@@ -106,6 +127,8 @@ struct common_speculative_init_result {
 
     llama_model   * model();
     llama_context * context();
+    bool sidecar_only() const;
+    common_speculative_type sidecar_type() const;
 
 private:
     struct impl;
