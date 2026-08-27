@@ -639,7 +639,7 @@ class Qwen3_5MoeTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
     model_arch = gguf.MODEL_ARCH.QWEN35MOE
 
 
-@ModelBase.register("DFlashDraftModel")
+@ModelBase.register("DFlashDraftModel", "DFlash2DraftModel")
 @ModelBase.example("z-lab/Qwen3.5-9B-DFlash")
 class DFlashModel(Qwen3Model):
     model_arch = gguf.MODEL_ARCH.DFLASH
@@ -678,9 +678,31 @@ class DFlashModel(Qwen3Model):
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
 
-        block_size = self.hparams.get("block_size", 16)
-        self.gguf_writer.add_block_size(block_size)
         dflash_config = self.hparams.get("dflash_config", {})
+        block_size = dflash_config.get("block_size", self.hparams.get("block_size", 16))
+        self.gguf_writer.add_block_size(block_size)
+
+        if "conv_kernel_size" in dflash_config:
+            self.gguf_writer.add_conv_kernel_size(int(dflash_config["conv_kernel_size"]))
+            self.gguf_writer.add_conv_group_size(int(dflash_config["conv_group_size"]))
+            self.gguf_writer.add_selector_rank(int(dflash_config["selector_rank"]))
+            self.gguf_writer.add_selector_top_k(int(dflash_config["selector_top_k"]))
+
+        output_multiplier = dflash_config.get(
+            "output_multiplier", self.hparams.get("output_multiplier")
+        )
+        if output_multiplier is not None:
+            self.gguf_writer.add_logit_scale(float(output_multiplier))
+        softcap = dflash_config.get(
+            "final_logit_softcapping", self.hparams.get("final_logit_softcapping")
+        )
+        if softcap is not None and float(softcap) > 0:
+            self.gguf_writer.add_final_logit_softcapping(float(softcap))
+        embedding_scale = dflash_config.get(
+            "input_embedding_scale", self.hparams.get("input_embedding_scale")
+        )
+        if embedding_scale is not None:
+            self.gguf_writer.add_embedding_scale(float(embedding_scale))
 
         target_layer_ids = dflash_config.get("target_layer_ids", [])
         if target_layer_ids:
@@ -695,6 +717,21 @@ class DFlashModel(Qwen3Model):
             self.gguf_writer.add_sliding_window(sliding_window)
             self.gguf_writer.add_sliding_window_pattern(is_swa)
 
+        # M-RoPE target: the draft ropes on the temporal dim only, so write
+        # degenerate sections [n_rot/2, 0, 0, 0]
+        if self._target_uses_mrope():
+            head_dim = self.hparams.get("head_dim") or self.hparams["hidden_size"] // self.hparams["num_attention_heads"]
+            self.gguf_writer.add_rope_dimension_sections([head_dim // 2, 0, 0, 0])
+
+    def _target_uses_mrope(self) -> bool:
+        if self.target_model_dir is None:
+            return False
+        with open(self.target_model_dir / "config.json", "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+        cfg = cfg.get("text_config", cfg)
+        rope = cfg.get("rope_parameters") or cfg.get("rope_scaling") or {}
+        return "mrope_section" in rope
+
     @classmethod
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
         name, gen = item
@@ -702,9 +739,28 @@ class DFlashModel(Qwen3Model):
             name = "model." + name
         return super().filter_tensors((name, gen))
 
+    _ROPE_PERMUTE_SUFFIXES = (
+        "self_attn.q_proj.weight",
+        "self_attn.k_proj.weight",
+        "self_attn.q_norm.weight",
+        "self_attn.k_norm.weight",
+    )
+
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         if name == "model.embed_tokens.weight" and not self.hparams.get("has_embed_tokens", True):
             return
+
+        # interleaved-rope checkpoints (rope_is_neox_style = false) -> NeoX layout: per head, even dims first then odd
+        if not self.hparams.get("rope_is_neox_style", True) and name.endswith(self._ROPE_PERMUTE_SUFFIXES):
+            head_dim = self.hparams["head_dim"]
+            shape = data_torch.shape
+            data_torch = data_torch.reshape(-1, head_dim // 2, 2, *shape[1:]).transpose(1, 2).reshape(shape)
+
+        if name in (
+            "model.candidate_selector.predecessor_codebook",
+            "model.candidate_selector.successor_codebook",
+        ):
+            name += ".weight"
 
         yield from super().modify_tensors(data_torch, name, bid)
 
