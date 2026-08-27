@@ -276,7 +276,7 @@
 		</span>
 
 		<Checkbox
-			checked={checkState.checked && !checkState.indeterminate}
+			checked={checkState.checked}
 			class="{ICON_CLASS_DEFAULT} shrink-0"
 			indeterminate={checkState.indeterminate}
 			onCheckedChange={() => toolsPanel.toggleGroupByKey(group.key)}
