@@ -1,6 +1,7 @@
 #include "argsort.cuh"
 #include "top-k.cuh"
 
+#include <algorithm>
 #include <cstdlib>
 
 #ifdef GGML_CUDA_USE_CUB
@@ -57,6 +58,44 @@ static __global__ void top_k_rocprim_sort_candidates(
     }
 }
 
+static __global__ void top_k_rocprim_init_offsets(int * offsets, int width, int nrows) {
+    const int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i <= nrows) {
+        offsets[i] = i * width;
+    }
+}
+
+static void top_k_rocprim_sort_selected_large(
+        ggml_cuda_pool & pool,
+        float *          selected_keys,
+        int *            selected_vals,
+        int *            dst,
+        int              k,
+        int              nrows,
+        cudaStream_t     stream) {
+    ggml_cuda_pool_alloc<float> sorted_keys_alloc(pool, (size_t) k * nrows);
+    ggml_cuda_pool_alloc<int>   offsets_alloc(pool, nrows + 1);
+    float * sorted_keys = sorted_keys_alloc.get();
+    int *   offsets     = offsets_alloc.get();
+
+    static constexpr int block_size = 256;
+    top_k_rocprim_init_offsets<<<(nrows + 1 + block_size - 1) / block_size, block_size, 0, stream>>>(
+            offsets, k, nrows);
+    CUDA_CHECK(cudaGetLastError());
+
+    size_t temp_storage_bytes = 0;
+    CUDA_CHECK(cub::DeviceSegmentedRadixSort::SortPairsDescending(
+            nullptr, temp_storage_bytes,
+            selected_keys, sorted_keys, selected_vals, dst,
+            k * nrows, nrows, offsets, offsets + 1, 0, sizeof(float) * 8, stream));
+
+    ggml_cuda_pool_alloc<uint8_t> temp_storage_alloc(pool, temp_storage_bytes);
+    CUDA_CHECK(cub::DeviceSegmentedRadixSort::SortPairsDescending(
+            temp_storage_alloc.get(), temp_storage_bytes,
+            selected_keys, sorted_keys, selected_vals, dst,
+            k * nrows, nrows, offsets, offsets + 1, 0, sizeof(float) * 8, stream));
+}
+
 static void top_k_rocprim(
         ggml_cuda_pool & pool,
         const float *    src,
@@ -64,9 +103,8 @@ static void top_k_rocprim(
         int              ncols,
         int              nrows,
         int              k,
-        cudaStream_t     stream,
-        bool             sort_large) {
-    GGML_ASSERT(k > 0 && (k <= ROCPRIM_TOP_K_SORT_BLOCK || sort_large));
+        cudaStream_t     stream) {
+    GGML_ASSERT(k > 0 && k <= ncols);
 
     ggml_cuda_pool_alloc<float> selected_keys_alloc(pool, (size_t) k * nrows);
     ggml_cuda_pool_alloc<int>   selected_vals_alloc(pool, (size_t) k * nrows);
@@ -98,9 +136,11 @@ static void top_k_rocprim(
     if (k <= ROCPRIM_TOP_K_SORT_BLOCK) {
         top_k_rocprim_sort_candidates<ROCPRIM_TOP_K_SORT_BLOCK><<<nrows, ROCPRIM_TOP_K_SORT_BLOCK, 0, stream>>>(
             selected_keys, selected_vals, dst, k);
-    } else {
+    } else if (k <= ROCPRIM_TOP_K_SORT_BLOCK_LARGE) {
         top_k_rocprim_sort_candidates<ROCPRIM_TOP_K_SORT_BLOCK_LARGE><<<nrows, ROCPRIM_TOP_K_SORT_BLOCK_LARGE, 0, stream>>>(
             selected_keys, selected_vals, dst, k);
+    } else {
+        top_k_rocprim_sort_selected_large(pool, selected_keys, selected_vals, dst, k, nrows, stream);
     }
     CUDA_CHECK(cudaGetLastError());
 }
@@ -158,16 +198,24 @@ void ggml_cuda_op_top_k(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const int64_t    nrows = ggml_nrows(src0);
     const int64_t    k     = dst->ne[0];
     ggml_cuda_pool & pool  = ctx.pool();
+
 #ifdef ROCPRIM_TOP_K_AVAILABLE
-    // DSV4 lightning-indexer top-k reaches k=512 and a padded score width
-    // above 4096 at the ~16K context boundary. The HIP CUB argsort path can
-    // return invalid indices for this shape on gfx1030; use rocPRIM's top-k
-    // followed by a 512-thread local sort instead. The sorted result preserves
-    // normal ggml_top_k semantics. k=512 and this width are the DSV4 LID
-    // shape that exercises the problematic range on gfx1030.
-    const bool use_dsv4_rocprim = k <= ROCPRIM_TOP_K_SORT_BLOCK_LARGE && ncols > 4096;
-    if (k <= ROCPRIM_TOP_K_SORT_BLOCK || use_dsv4_rocprim) {
-        top_k_rocprim(pool, src0_d, dst_d, ncols, nrows, k, stream, use_dsv4_rocprim);
+    // The HIP CUB full-argsort fallback can return invalid indices on gfx1030
+    // when the row width exceeds 4096. DSV4 reaches this with k=512 and
+    // Qwen4Exp QSA reaches it with k=2051. Select candidates with rocPRIM;
+    // candidate sets above one workgroup are sorted at their reduced width by
+    // segmented radix sort, preserving ordered ggml_top_k semantics.
+    static constexpr int rocprim_wide_k_max = 4096;
+    const bool use_rocprim_wide = ncols > 4096 && k <= rocprim_wide_k_max;
+    if (k <= ROCPRIM_TOP_K_SORT_BLOCK || use_rocprim_wide) {
+        // Keep temporary candidate storage near the existing 64 MiB argsort
+        // chunk budget for generic callers with many rows.
+        const size_t bytes_per_row = (size_t) k * (sizeof(float) + sizeof(int));
+        const int chunk_nrows = std::max<int>(1, std::min<int64_t>(nrows, (1 << 26) / bytes_per_row));
+        for (int64_t i = 0; i < nrows; i += chunk_nrows) {
+            const int iter_nrows = std::min<int64_t>(chunk_nrows, nrows - i);
+            top_k_rocprim(pool, src0_d + i * ncols, dst_d + i * k, ncols, iter_nrows, k, stream);
+        }
         return;
     }
     // Fall through to the full argsort path for unusually large K.
