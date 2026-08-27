@@ -4883,7 +4883,8 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
             CREATE_MM2(GGML_TYPE_NVFP4,   pipeline_dequant_mul_mat_mat[GGML_TYPE_NVFP4],   matmul_nvfp4_f32,   mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, );
         }
 
-        if (device->coopmat_int_support) {
+        // cm1 int8 MMQ assumes the RDNA wave32 WMMA accumulator layout (RDNA4 reports as AMD_RDNA3)
+        if (device->coopmat_int_support && device->architecture == AMD_RDNA3) {
             CREATE_MMQ2(GGML_TYPE_Q4_0,   pipeline_dequant_mul_mat_mat_q8_1[GGML_TYPE_Q4_0],   matmul_q4_0_q8_1,   mmq_wg_denoms, warptile_mmq_cm1_int, vk_mat_mat_push_constants, 3, );
             CREATE_MMQ2(GGML_TYPE_Q4_1,   pipeline_dequant_mul_mat_mat_q8_1[GGML_TYPE_Q4_1],   matmul_q4_1_q8_1,   mmq_wg_denoms, warptile_mmq_cm1_int, vk_mat_mat_push_constants, 3, );
             CREATE_MMQ2(GGML_TYPE_Q5_0,   pipeline_dequant_mul_mat_mat_q8_1[GGML_TYPE_Q5_0],   matmul_q5_0_q8_1,   mmq_wg_denoms, warptile_mmq_cm1_int, vk_mat_mat_push_constants, 3, );
