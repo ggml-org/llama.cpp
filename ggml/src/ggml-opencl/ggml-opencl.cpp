@@ -1,4 +1,5 @@
 #include "cl-common.h"
+#include "ops.h"
 
 static ggml_backend_opencl_context * ggml_cl_init(ggml_backend_dev_t dev);
 static bool ggml_opencl_is_device_supported(ggml_backend_dev_t dev);

@@ -1,4 +1,5 @@
 #include "../cl-common.h"
+#include "../ops.h"
 
 struct ggml_cl_flash_attn_temp_buffer {
     cl_mem data = nullptr;
