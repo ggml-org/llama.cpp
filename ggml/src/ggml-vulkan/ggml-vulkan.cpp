@@ -389,12 +389,14 @@ static void ggml_vk_synchronize(ggml_backend_vk_context * ctx);
 static constexpr uint32_t mul_mat_vec_max_cols = 8;
 static constexpr uint32_t p021_max_gqa_ratio = 8;
 
+// Values are passed to mul_mmq_cm1.comp as spec constant CM_ARCH; keep CM_ARCH_AMD_RDNA4 in sync.
 enum vk_device_architecture {
     OTHER,
     AMD_GCN,
     AMD_RDNA1,
     AMD_RDNA2,
     AMD_RDNA3,
+    AMD_RDNA4,
     INTEL_XE1,
     INTEL_XE2,
     NVIDIA_PRE_TURING,
@@ -410,6 +412,7 @@ static vk_device_architecture get_device_architecture(const vk::PhysicalDevice& 
         bool amd_shader_core_properties = false;
         bool integer_dot_product = false;
         bool subgroup_size_control = false;
+        bool shader_float8 = false;  // RDNA4-only (fp8 WMMA), distinguishes it from RDNA3
 
         for (const auto& properties : ext_props) {
             if (strcmp("VK_AMD_shader_core_properties", properties.extensionName) == 0) {
@@ -418,6 +421,8 @@ static vk_device_architecture get_device_architecture(const vk::PhysicalDevice& 
                 integer_dot_product = true;
             } else if (strcmp("VK_EXT_subgroup_size_control", properties.extensionName) == 0) {
                 subgroup_size_control = true;
+            } else if (strcmp("VK_EXT_shader_float8", properties.extensionName) == 0) {
+                shader_float8 = true;
             }
         }
 
@@ -443,6 +448,9 @@ static vk_device_architecture get_device_architecture(const vk::PhysicalDevice& 
             // RDNA
             if (shader_core_props_amd.wavefrontsPerSimd == 20) {
                 return vk_device_architecture::AMD_RDNA1;
+            }
+            if (shader_float8) {
+                return vk_device_architecture::AMD_RDNA4;
             }
             if (integer_dot_props.integerDotProduct4x8BitPackedMixedSignednessAccelerated) {
                 return vk_device_architecture::AMD_RDNA3;
@@ -4346,13 +4354,13 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
             return cm1_sg * (bm / std::min(cm1_sg, bm)) * (bn / 32);
         };
 
-        l_warptile_mmq_cm1_int = { cm1_bs(128, 128), 128, 128, 32, std::min(cm1_sg, 128u), 32, 2, itm_l, itn_l, itk_l, cm1_sg };
-        m_warptile_mmq_cm1_int = { cm1_bs( 64,  64),  64,  64, 32, std::min(cm1_sg,  64u), 32, 2, itm_m, itn_m, itk_m, cm1_sg };
-        s_warptile_mmq_cm1_int = { cm1_bs( 32,  32),  32,  32, 32, std::min(cm1_sg,  32u), 32, 2, itm_s, itn_s, itk_s, cm1_sg };
+        l_warptile_mmq_cm1_int = { cm1_bs(128, 128), 128, 128, 32, std::min(cm1_sg, 128u), 32, 2, itm_l, itn_l, itk_l, cm1_sg, (uint32_t)device->architecture };
+        m_warptile_mmq_cm1_int = { cm1_bs( 64,  64),  64,  64, 32, std::min(cm1_sg,  64u), 32, 2, itm_m, itn_m, itk_m, cm1_sg, (uint32_t)device->architecture };
+        s_warptile_mmq_cm1_int = { cm1_bs( 32,  32),  32,  32, 32, std::min(cm1_sg,  32u), 32, 2, itm_s, itn_s, itk_s, cm1_sg, (uint32_t)device->architecture };
 
-        l_warptile_mmq_cm1_int_k = { cm1_bs( 64, 128),  64, 128, 32, std::min(cm1_sg,  64u), 32, 2, itm_l, itn_l, itk_l, cm1_sg };
-        m_warptile_mmq_cm1_int_k = { cm1_bs( 64,  64),  64,  64, 32, std::min(cm1_sg,  64u), 32, 2, itm_m, itn_m, itk_m, cm1_sg };
-        s_warptile_mmq_cm1_int_k = { cm1_bs( 32,  32),  32,  32, 32, std::min(cm1_sg,  32u), 32, 2, itm_s, itn_s, itk_s, cm1_sg };
+        l_warptile_mmq_cm1_int_k = { cm1_bs( 64, 128),  64, 128, 32, std::min(cm1_sg,  64u), 32, 2, itm_l, itn_l, itk_l, cm1_sg, (uint32_t)device->architecture };
+        m_warptile_mmq_cm1_int_k = { cm1_bs( 64,  64),  64,  64, 32, std::min(cm1_sg,  64u), 32, 2, itm_m, itn_m, itk_m, cm1_sg, (uint32_t)device->architecture };
+        s_warptile_mmq_cm1_int_k = { cm1_bs( 32,  32),  32,  32, 32, std::min(cm1_sg,  32u), 32, 2, itm_s, itn_s, itk_s, cm1_sg, (uint32_t)device->architecture };
 
         l_mmq_cm1_wg_denoms_k = { l_warptile_mmq_cm1_int_k[1], l_warptile_mmq_cm1_int_k[2], 1 };
         m_mmq_cm1_wg_denoms_k = { m_warptile_mmq_cm1_int_k[1], m_warptile_mmq_cm1_int_k[2], 1 };
@@ -4883,8 +4891,8 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
             CREATE_MM2(GGML_TYPE_NVFP4,   pipeline_dequant_mul_mat_mat[GGML_TYPE_NVFP4],   matmul_nvfp4_f32,   mmq_wg_denoms, warptile_mmq, vk_mat_mat_push_constants, 3, );
         }
 
-        // cm1 int8 MMQ assumes the RDNA wave32 WMMA accumulator layout (RDNA4 reports as AMD_RDNA3)
-        if (device->coopmat_int_support && device->architecture == AMD_RDNA3) {
+        // cm1 int8 MMQ assumes the RDNA wave32 WMMA accumulator layout (row order set per-arch via CM_ARCH)
+        if (device->coopmat_int_support && (device->architecture == AMD_RDNA3 || device->architecture == AMD_RDNA4)) {
             CREATE_MMQ2(GGML_TYPE_Q4_0,   pipeline_dequant_mul_mat_mat_q8_1[GGML_TYPE_Q4_0],   matmul_q4_0_q8_1,   mmq_wg_denoms, warptile_mmq_cm1_int, vk_mat_mat_push_constants, 3, );
             CREATE_MMQ2(GGML_TYPE_Q4_1,   pipeline_dequant_mul_mat_mat_q8_1[GGML_TYPE_Q4_1],   matmul_q4_1_q8_1,   mmq_wg_denoms, warptile_mmq_cm1_int, vk_mat_mat_push_constants, 3, );
             CREATE_MMQ2(GGML_TYPE_Q5_0,   pipeline_dequant_mul_mat_mat_q8_1[GGML_TYPE_Q5_0],   matmul_q5_0_q8_1,   mmq_wg_denoms, warptile_mmq_cm1_int, vk_mat_mat_push_constants, 3, );
@@ -19360,7 +19368,7 @@ static bool ggml_vk_khr_cooperative_matrix_support(const vk::PhysicalDevicePrope
     case VK_VENDOR_ID_AMD:
         if (driver_props.driverID == vk::DriverId::eAmdProprietary || driver_props.driverID == vk::DriverId::eAmdOpenSource) {
             // Workaround for AMD proprietary driver reporting support on all GPUs
-            return arch == vk_device_architecture::AMD_RDNA3;
+            return arch == vk_device_architecture::AMD_RDNA3 || arch == vk_device_architecture::AMD_RDNA4;
         }
         return true;
     default:

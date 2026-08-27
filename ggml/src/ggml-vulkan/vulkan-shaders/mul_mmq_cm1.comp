@@ -82,13 +82,11 @@ layout (constant_id = 7) const uint TM = 16;
 layout (constant_id = 8) const uint TN = 16;
 layout (constant_id = 9) const uint TK = 16;
 layout (constant_id = 10) const uint WARP = 32;
+layout (constant_id = 11) const uint CM_ARCH = 0;  // vk_device_architecture (ggml-vulkan.cpp)
+#define CM_ARCH_AMD_RDNA4 5u                        // must match enum vk_device_architecture
 
 #define BK 32
-#if defined(DATA_A_Q4_1) || defined(DATA_A_Q5_1) || defined(DATA_A_Q4_K) || defined(DATA_A_Q5_K)
-#define BK_STEP 2
-#else
 #define BK_STEP 4
-#endif
 #define GROUP_A_BUDGET (16u * 1024u * 1024u)
 
 const uint QPITCH = BK_STEP * (BK / 4) + 4;
@@ -130,7 +128,12 @@ const uint CM_ELEMS = (TM * TN) / WARP;
 #define ACC_BIAS_F    12582912.0f
 const bool USE_MAGIC_BIAS = WARP != 32;
 
-shared int32_t cm_layout_probe[TM * TN];
+// Coopmat accumulator layout (RDNA): col constant per lane, 8 distinct rows.
+// Row order differs by arch: RDNA4 blocked, RDNA3/3.5 interleaved.
+uint cm_elem_row(uint e) {
+    const uint row_half = gl_SubgroupInvocationID / TN;
+    return (CM_ARCH == CM_ARCH_AMD_RDNA4) ? (e + row_half * CM_ELEMS) : (row_half + 2u * e);
+}
 
 #ifdef MUL_MAT_ID
 #define NUM_WARPS (BLOCK_SIZE / WARP)
@@ -207,22 +210,7 @@ void main() {
     const uint warp_r = warp_i % (BM / WM);
     const uint warp_c = warp_i / (BM / WM);
 
-    // Probe coopmat element layout to discover row/col mapping
-    uint elem_row[CM_ELEMS];
-    uint elem_col[CM_ELEMS];
-
-    for (uint i = gl_LocalInvocationID.x; i < TM * TN; i += BLOCK_SIZE) {
-        cm_layout_probe[i] = int32_t(i);
-    }
-    barrier();
-
-    coopmat<int32_t, gl_ScopeSubgroup, TM, TN, gl_MatrixUseAccumulator> probe;
-    coopMatLoad(probe, cm_layout_probe, 0, TN, gl_CooperativeMatrixLayoutRowMajor);
-
-    [[unroll]] for (uint e = 0; e < CM_ELEMS; ++e) {
-        elem_row[e] = uint(probe[e]) / TN;
-        elem_col[e] = uint(probe[e]) % TN;
-    }
+    const uint elem_col0 = gl_SubgroupInvocationID % TN;  // constant per lane
 
     const uint loadr_a = gl_LocalInvocationID.x % (BK / LOAD_VEC_A);
     const uint loadc_a = gl_LocalInvocationID.x / (BK / LOAD_VEC_A);
@@ -336,7 +324,7 @@ void main() {
                     float scale_a[CM_ELEMS];
                     float nbias_a[CM_ELEMS];
                     [[unroll]] for (uint e = 0; e < CM_ELEMS; e++) {
-                        scale_a[e] = buf_a_d[(ks * KSCALES + h) * BM + a_row0 + r * TM + elem_row[e]];
+                        scale_a[e] = buf_a_d[(ks * KSCALES + h) * BM + a_row0 + r * TM + cm_elem_row(e)];
                         if (USE_MAGIC_BIAS) {
                             nbias_a[e] = -ACC_BIAS_F * scale_a[e];
                         }
@@ -346,7 +334,7 @@ void main() {
                         coopmat<int8_t, gl_ScopeSubgroup, TK, TN, gl_MatrixUseB> cache_b;
                         coopMatLoad(cache_b, buf_b_qs, (b_col0 + c * TN) * QPITCH + ks * (BK / 4) + h * (TK / 4), QPITCH, gl_CooperativeMatrixLayoutColumnMajor);
 
-                        const float scale_b_v = buf_b_d[ks * BN + b_col0 + c * TN + elem_col[0]];
+                        const float scale_b_v = buf_b_d[ks * BN + b_col0 + c * TN + elem_col0];
 
                         coopmat<int32_t, gl_ScopeSubgroup, TM, TN, gl_MatrixUseAccumulator> acc =
                             coopmat<int32_t, gl_ScopeSubgroup, TM, TN, gl_MatrixUseAccumulator>(
@@ -388,7 +376,7 @@ void main() {
                 float nbias_a[CM_ELEMS];
                 float ma[CM_ELEMS];
                 [[unroll]] for (uint e = 0; e < CM_ELEMS; e++) {
-                    vec2 dm = buf_a_dm[ks * BM + a_row0 + r * TM + elem_row[e]];
+                    vec2 dm = buf_a_dm[ks * BM + a_row0 + r * TM + cm_elem_row(e)];
                     scale_a[e] = dm.x;
                     if (USE_MAGIC_BIAS) {
                         nbias_a[e] = -ACC_BIAS_F * scale_a[e];
@@ -410,8 +398,8 @@ void main() {
                     }
 
                     const uint tile_idx = r * cms_per_col + c;
-                    const float sb = buf_b_d[ks * BN + b_col0 + c * TN + elem_col[0]];
-                    const float bs = float(buf_b_s[ks * BN + b_col0 + c * TN + elem_col[0]]);
+                    const float sb = buf_b_d[ks * BN + b_col0 + c * TN + elem_col0];
+                    const float bs = float(buf_b_s[ks * BN + b_col0 + c * TN + elem_col0]);
                     [[unroll]] for (uint e = 0; e < CM_ELEMS; e++) {
                         if (USE_MAGIC_BIAS) {
                             const float t = fma(intBitsToFloat(int(acc[e])),
@@ -444,14 +432,14 @@ void main() {
 
             float scale_b[cms_per_col];
             [[unroll]] for (uint c = 0; c < cms_per_col; c++) {
-                scale_b[c] = buf_b_d[ks * BN + b_col0 + c * TN + elem_col[0]];
+                scale_b[c] = buf_b_d[ks * BN + b_col0 + c * TN + elem_col0];
             }
 
             [[unroll]] for (uint r = 0; r < cms_per_row; r++) {
                 float scale_a[CM_ELEMS];
                 float nbias_a[CM_ELEMS];
                 [[unroll]] for (uint e = 0; e < CM_ELEMS; e++) {
-                    scale_a[e] = buf_a_d[ks * BM + a_row0 + r * TM + elem_row[e]];
+                    scale_a[e] = buf_a_d[ks * BM + a_row0 + r * TM + cm_elem_row(e)];
                     if (USE_MAGIC_BIAS) {
                         nbias_a[e] = -ACC_BIAS_F * scale_a[e];
                     }
@@ -500,10 +488,10 @@ void main() {
         [[unroll]] for (uint c = 0; c < cms_per_col; c++) {
             const uint tile_idx = r * cms_per_col + c;
             [[unroll]] for (uint e = 0; e < CM_ELEMS; e++) {
-                const uint col_i = dc + c * TN + elem_col[e];
+                const uint col_i = dc + c * TN + elem_col0;
                 if (col_i >= _ne1) continue;
 
-                const uint row_g = dr + r * TM + elem_row[e];
+                const uint row_g = dr + r * TM + cm_elem_row(e);
                 if (row_g >= p.M) continue;
 
                 const u16vec2 row_idx = row_ids[col_i - ic * BN];
@@ -519,8 +507,8 @@ void main() {
         [[unroll]] for (uint c = 0; c < cms_per_col; c++) {
             const uint tile_idx = r * cms_per_col + c;
             [[unroll]] for (uint e = 0; e < CM_ELEMS; e++) {
-                const uint row_g = dr + r * TM + elem_row[e];
-                const uint col_g = dc + c * TN + elem_col[e];
+                const uint row_g = dr + r * TM + cm_elem_row(e);
+                const uint col_g = dc + c * TN + elem_col0;
                 if (row_g < p.M && col_g < p.N) {
                     data_d[offsets + col_g * p.stride_d + row_g] = D_TYPE(sums[tile_idx * CM_ELEMS + e]);
                 }
