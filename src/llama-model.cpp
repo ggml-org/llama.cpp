@@ -2427,6 +2427,35 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
             } break;
         case LLM_ARCH_GLM5NEXT:
             {
+                GGML_ASSERT(hparams.swa_type == LLAMA_SWA_TYPE_NONE);
+
+                if (params.ctx_type == LLAMA_CONTEXT_TYPE_MTP && hparams.n_layer_nextn > 0) {
+                    // The NextN/MTP draft head is one dense-MLA block: no KDA state and no
+                    // DSA indexer, so a plain attention cache over the nextn layer(s) is
+                    // enough - same pattern as GLM_DSA / DEEPSEEK32.
+                    llama_kv_cache::layer_filter_cb filter =
+                        [&](uint32_t il) { return il >= hparams.n_layer(); };
+
+                    res = new llama_kv_cache(
+                            *this,
+                            hparams,
+                            params.type_k,
+                            params.type_v,
+                            !cparams.flash_attn,
+                            cparams.offload_kqv,
+                            cparams.kv_unified,
+                            cparams.n_ctx_seq,
+                            cparams.n_seq_max,
+                            1,
+                            hparams.n_swa,
+                            hparams.swa_type,
+                            nullptr,
+                            filter,
+                            nullptr,
+                            nullptr);
+                    break;
+                }
+
                 // KDA layers recur, MLA layers cache, and the DSA indexer shadows the MLA layers
                 llama_memory_hybrid_idx::layer_filter_cb filter_recr =
                     [&](int32_t il) { return (uint32_t) il < hparams.n_layer() &&  hparams.is_recr(il); };
@@ -2440,8 +2469,6 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                         return (uint32_t) il < hparams.n_layer() && !hparams.is_recr(il) && hparams.is_indexer_full(il);
                     };
                 }
-
-                GGML_ASSERT(hparams.swa_type == LLAMA_SWA_TYPE_NONE);
 
                 res = new llama_memory_hybrid_idx(
                     /* model             */ *this,

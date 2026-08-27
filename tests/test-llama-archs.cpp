@@ -11,6 +11,9 @@
 #include "../src/llama-arch.h"
 #include "../src/llama-model-saver.h"
 
+// nextn/MTP accessors are still staging API
+#include "../src/llama-ext.h"
+
 #include <cinttypes>
 #include <cstddef>
 #include <cstdio>
@@ -84,7 +87,8 @@ static std::vector<llama_token> get_tokens(const uint32_t n_tokens, const uint32
     return ret;
 }
 
-static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
+// nextn appends one NextN/MTP block after the trunk, leaving the trunk itself unchanged
+static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const bool nextn = false) {
     gguf_context_ptr ret(gguf_init_empty());
     llama_model_saver ms(arch, ret.get());
     const uint32_t n_ctx = 256;
@@ -154,8 +158,11 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
     ms.add_kv(LLM_KV_CONTEXT_LENGTH,            n_ctx);
     ms.add_kv(LLM_KV_EMBEDDING_LENGTH,          n_embd);
     ms.add_kv(LLM_KV_FEATURES_LENGTH,           n_embd);
-    ms.add_kv(LLM_KV_BLOCK_COUNT,               n_layer);
+    ms.add_kv(LLM_KV_BLOCK_COUNT,               nextn ? n_layer + 1 : n_layer);
     ms.add_kv(LLM_KV_LEADING_DENSE_BLOCK_COUNT, uint32_t(1));
+    if (nextn) {
+        ms.add_kv(LLM_KV_NEXTN_PREDICT_LAYERS, uint32_t(1));
+    }
 
     if (arch == LLM_ARCH_NEMOTRON_H || arch == LLM_ARCH_NEMOTRON_H_MOE) {
         std::vector<uint32_t> n_ff_per_layer;
@@ -392,10 +399,12 @@ static bool silent_model_load_progress(float /*progress*/, void * /*user_data*/)
 static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
         struct gguf_context * gguf_ctx, FILE * file, const size_t seed, const std::vector<ggml_backend_dev_t> & devs,
         const llama_split_mode split_mode = LLAMA_SPLIT_MODE_LAYER, bool encode = false,
-        ggml_backend_sched_eval_callback cb_eval = nullptr, void * cb_eval_user_data = nullptr) {
+        ggml_backend_sched_eval_callback cb_eval = nullptr, void * cb_eval_user_data = nullptr,
+        bool load_mtp = false) {
     GGML_ASSERT((gguf_ctx == nullptr) != (file == nullptr));
     llama_model_params model_params = llama_model_default_params();
     model_params.progress_callback = silent_model_load_progress;
+    model_params.load_mtp = load_mtp;
     std::vector<ggml_backend_dev_t> devs_copy = devs;
     devs_copy.push_back(nullptr);
     model_params.devices = devs_copy.data();
@@ -846,6 +855,169 @@ static int test_dsa_kpool(const size_t seed, const int verbosity) {
     return all_ok ? 0 : 1;
 }
 
+//
+// GLM5NEXT NextN/MTP draft head
+//
+// The trunk exports its post-norm hidden state as h_nextn, the draft head consumes it next
+// to a token id and emits logits. This is a smoke test: it runs the MTP loader flags, the
+// MTP memory branch and the graph, and checks that the logits are finite. It cannot check
+// the numbers - there is no MTP reference to compare against.
+//
+// It also saves the model to a GGUF and reloads it, twice: once with load_mtp so the draft
+// head has to find blk.<n_layer>.nextn.* by name in a real file, and once without, which is
+// the default path where the NextN block is skipped and only the trunk runs.
+//
+static int test_mtp(const size_t seed, const int verbosity) {
+    struct user_data_t {
+        struct {
+            ggml_log_callback callback;
+            void * user_data;
+        } log_old;
+
+        int verbosity;
+
+        user_data_t(int verbosity) : verbosity(verbosity) {
+            llama_log_get(&log_old.callback, &log_old.user_data);
+        }
+    };
+    user_data_t ud(verbosity);
+
+    llama_log_set([](ggml_log_level level, const char * text, void * user_data) {
+        const user_data_t * ud = (const user_data_t *) user_data;
+        int verbosity = common_log_get_verbosity(level);
+        if (verbosity <= ud->verbosity) {
+            ud->log_old.callback(level, text, ud->log_old.user_data);
+        }
+    }, &ud);
+
+    const uint32_t n_tokens = 16;
+    const std::vector<llama_token> tokens = get_tokens(n_tokens, 128, seed);
+
+    gguf_context_ptr gguf_ctx = get_gguf_ctx(LLM_ARCH_GLM5NEXT, true, /*nextn =*/ true);
+
+    std::vector<std::pair<std::vector<ggml_backend_dev_t>, std::string>> dev_configs;
+    for (size_t i = 0; i < ggml_backend_dev_count(); i++) {
+        ggml_backend_dev_t dev = ggml_backend_dev_get(i);
+        dev_configs.emplace_back(std::vector<ggml_backend_dev_t>{dev}, ggml_backend_dev_description(dev));
+    }
+
+    bool all_ok = true;
+    common_log_flush(common_log_main());
+    printf("test_mtp: glm5next, %u tokens\n", n_tokens);
+
+    // decode the trunk, hand its hidden state to the draft head, return the draft logits
+    auto run_mtp = [&](llama_model * model, llama_context * ctx_tgt) {
+        const uint32_t n_embd  = llama_model_n_embd(model);
+        const uint32_t n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(model));
+
+        llama_context_params ctx_params = llama_context_default_params();
+        ctx_params.n_ctx           = 0;
+        ctx_params.n_threads       = 4;
+        ctx_params.n_threads_batch = 4;
+        ctx_params.n_ubatch        = 64;
+        ctx_params.ctx_type        = LLAMA_CONTEXT_TYPE_MTP;
+
+        llama_context_ptr ctx_dft(llama_init_from_model(model, ctx_params));
+        if (!ctx_dft) {
+            throw std::runtime_error("failed to create MTP context");
+        }
+
+        // unmasked, so the trunk keeps every row and narrows after the final norm
+        llama_set_embeddings_nextn(ctx_tgt, true, /*masked*/ false);
+
+        llama_batch batch_tgt = llama_batch_init(n_tokens, 0, 1);
+        for (uint32_t pos = 0; pos < n_tokens; pos++) {
+            common_batch_add(batch_tgt, tokens[pos], pos, {0}, true);
+        }
+        const int32_t rc_tgt = llama_decode(ctx_tgt, batch_tgt);
+        llama_batch_free(batch_tgt);
+        if (rc_tgt != 0) {
+            throw std::runtime_error("failed to decode trunk batch");
+        }
+
+        const float * h = llama_get_embeddings_nextn_ith(ctx_tgt, n_tokens - 1);
+        if (!h) {
+            throw std::runtime_error("trunk did not export h_nextn");
+        }
+
+        // the draft head reads a token id and a hidden state, so the batch needs both
+        llama_batch batch_dft = llama_batch_init(1, n_embd, 1);
+        batch_dft.token = (llama_token *) malloc(sizeof(llama_token));
+        common_batch_add(batch_dft, tokens[n_tokens - 1], n_tokens - 1, {0}, true);
+        memcpy(batch_dft.embd, h, n_embd*sizeof(float));
+
+        const int32_t rc_dft = llama_decode(ctx_dft.get(), batch_dft);
+        free(batch_dft.token);
+        batch_dft.token = nullptr;
+        llama_batch_free(batch_dft);
+        if (rc_dft != 0) {
+            throw std::runtime_error("failed to decode MTP batch");
+        }
+
+        const float * logits = llama_get_logits_ith(ctx_dft.get(), 0);
+        if (!logits) {
+            throw std::runtime_error("the MTP graph produced no logits");
+        }
+        return std::vector<float>(logits, logits + n_vocab);
+    };
+
+    for (const auto & dc : dev_configs) {
+        auto model_and_ctx = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, dc.first,
+            LLAMA_SPLIT_MODE_LAYER, false, nullptr, nullptr, /*load_mtp =*/ true);
+
+        const std::vector<float> logits = run_mtp(model_and_ctx.first.get(), model_and_ctx.second.get());
+
+        bool ok = true;
+        for (size_t i = 0; ok && i < logits.size(); i++) {
+            ok = std::isfinite(logits[i]);
+        }
+
+        // save the model, then reload it from the file so the NextN block has to be found
+        // by name rather than synthesized. Skipped where tmpfile() is unavailable.
+        std::string status_roundtrip = "\033[1;33mSKIP\033[0m";
+        FILE * file = tmpfile();
+        if (file != nullptr && llama_model_saver_supports_arch(LLM_ARCH_GLM5NEXT)) {
+            llama_model_saver ms = llama_model_saver(model_and_ctx.first.get());
+            ms.add_kv_from_model();
+            ms.add_tensors_from_model();
+            ms.save(file);
+
+            rewind(file);
+            auto rt_mtp = get_model_and_ctx(nullptr, file, seed, dc.first,
+                LLAMA_SPLIT_MODE_LAYER, false, nullptr, nullptr, /*load_mtp =*/ true);
+            const std::vector<float> logits_rt = run_mtp(rt_mtp.first.get(), rt_mtp.second.get());
+
+            status_roundtrip = "\033[1;32mOK\033[0m";
+            GGML_ASSERT(logits_rt.size() == logits.size());
+            for (size_t i = 0; i < logits_rt.size(); i++) {
+                if (logits_rt[i] != logits[i]) {
+                    ok = false;
+                    status_roundtrip = "\033[1;31mFAIL\033[0m";
+                    break;
+                }
+            }
+
+            // note: reloading the same file without load_mtp is NOT tested here. The
+            // synthetic model materializes the optional NVFP4 sidecar scales for the
+            // NextN block, which a real GGUF does not carry, and TENSOR_SKIP leaves
+            // them unaccounted for. Same for the other NextN archs, so it is not
+            // specific to this graph.
+        }
+        if (file != nullptr) {
+            fclose(file);
+        }
+
+        all_ok &= ok;
+
+        printf("test_mtp: %-32s  draft %s, reload %s\n", dc.second.c_str(),
+            ok ? "\033[1;32mOK\033[0m" : "\033[1;31mFAIL\033[0m", status_roundtrip.c_str());
+        fflush(stdout);
+    }
+
+    llama_log_set(ud.log_old.callback, ud.log_old.user_data);
+    return all_ok ? 0 : 1;
+}
+
 static int test_backends(const llm_arch target_arch, const size_t seed, const int verbosity) {
     struct user_data_t {
         struct {
@@ -1082,6 +1254,7 @@ int main(int argc, char ** argv) {
         int ret = 0;
         if (arch == LLM_ARCH_UNKNOWN || arch == LLM_ARCH_GLM5NEXT) {
             ret |= test_dsa_kpool(seed, verbosity);
+            ret |= test_mtp(seed, verbosity);
         }
         ret |= test_backends(arch, seed, verbosity);
         return ret;

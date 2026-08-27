@@ -1382,6 +1382,12 @@ struct llama_model_glm5next : public llama_model_base {
         ggml_tensor * build_ffn_layer(ggml_tensor * cur, const llama_layer & layer, int il);
     };
 
+    // NextN/MTP draft head: the block appended at index n_layer(). It is dense MLA with
+    // no hyper-connections, so it runs on a plain attention cache holding only that block
+    struct graph_mtp : public llm_graph_context {
+        graph_mtp(const llama_model & model, const llm_graph_params & params);
+    };
+
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
 };
 
