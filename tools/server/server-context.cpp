@@ -52,6 +52,8 @@ static common_speculative_output_limits server_output_limits(const common_params
     return result;
 }
 
+// synthetic draft verification for benchmarking - accept draft tokens at random instead of by match with the target
+// on replay the draft was already accepted before a context checkpoint restore, so repeat the same decisions
 static std::vector<llama_token> server_sample_and_accept_synth(
         common_sampler * smpl,
         llama_context * ctx,
@@ -71,7 +73,11 @@ static std::vector<llama_token> server_sample_and_accept_synth(
     for (size_t i = 0; i < draft.size(); ++i) {
         const llama_token id = common_sampler_sample(smpl, ctx, idxs[i]);
         const bool accept = is_replay || dist(rng) < synth_probs[i];
+        // do not accept a drafted EOG token - it would end the generation early
+        // on replay the last token is from the target and can be EOG, so skip this check
         if (accept && (is_replay || !llama_vocab_is_eog(vocab, draft[i]))) {
+            // synthetic draft tokens do not advance grammar or reasoning state
+            // the last replay token is from the target and must advance both
             const bool is_replay_target = is_replay && i + 1 == draft.size();
             common_sampler_accept(smpl, draft[i], is_replay_target);
             result.push_back(draft[i]);
