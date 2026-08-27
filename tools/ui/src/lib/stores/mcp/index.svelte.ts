@@ -307,17 +307,15 @@ class MCPStore implements McpHealthHost {
 	}
 
 	/**
-	 * Initialize connections. Callers can restrict which servers connect by
-	 * passing their ids (e.g. a conversation's tool policy); a different set
-	 * changes the config signature and re-initializes, same as a settings
-	 * change.
+	 * Initialize every settings-enabled server. Policy filtering happens at tool
+	 * collection time, so switching conversation policies never re-initializes.
 	 */
-	async ensureInitialized(serverIds?: ReadonlySet<string>): Promise<boolean> {
+	async ensureInitialized(): Promise<boolean> {
 		if (!browser) {
 			return false;
 		}
 
-		const mcpConfig = this.buildMcpClientConfig(settingsStore.config, serverIds);
+		const mcpConfig = this.buildMcpClientConfig(settingsStore.config);
 		const signature = mcpConfig ? JSON.stringify(mcpConfig) : null;
 
 		if (!signature) {
@@ -1119,10 +1117,7 @@ class MCPStore implements McpHealthHost {
 	/**
 	 * Builds MCP client configuration from settings.
 	 */
-	private buildMcpClientConfig(
-		cfg: SettingsConfigType,
-		serverIds?: ReadonlySet<string>
-	): MCPClientConfig | undefined {
+	private buildMcpClientConfig(cfg: SettingsConfigType): MCPClientConfig | undefined {
 		const rawServers = parseMcpServerSettings(cfg.mcpServers);
 
 		if (!rawServers.length) {
@@ -1133,8 +1128,6 @@ class MCPStore implements McpHealthHost {
 
 		for (const [index, entry] of rawServers.entries()) {
 			if (!entry.enabled) continue;
-
-			if (serverIds && !serverIds.has(entry.id)) continue;
 
 			const normalized = this.buildServerConfig(entry);
 

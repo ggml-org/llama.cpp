@@ -15,6 +15,7 @@ import { REASONING_EFFORT_DEFAULT_LOCALSTORAGE_KEY } from '$lib/constants';
 import { ReasoningEffort, ToolSource } from '$lib/enums';
 import { DatabaseService } from '$lib/services/database.service';
 // direct imports between stores, not via the barrel, to avoid circular deps
+import { mcpStore } from '$lib/stores/mcp/index.svelte';
 import { toolsStore } from '$lib/stores/tools.svelte';
 import type { DatabaseConversation, ToolEntry, ToolGroup } from '$lib/types';
 
@@ -178,6 +179,21 @@ export class ConversationPreferences {
 			!!entry.serverId &&
 			!this.isServerToolsEnabled(entry.serverId)
 		);
+	}
+
+	/**
+	 * MCP servers usable under the effective policy: globally enabled, url set,
+	 * MCP category on and the server-scoped key not disabled.
+	 */
+	policyEnabledServerIds(): string[] {
+		if (!this.isCategoryEnabled(ToolSource.MCP)) return [];
+
+		return mcpStore
+			.getServers()
+			.filter(
+				(server) => server.enabled && server.url.trim() && this.isServerToolsEnabled(server.id)
+			)
+			.map((server) => server.id);
 	}
 
 	/** Reload persisted defaults, e.g. when the active conversation is cleared. */

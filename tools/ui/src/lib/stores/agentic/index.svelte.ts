@@ -329,20 +329,12 @@ class AgenticStore {
 		const disabledToolCategories = new Set(
 			toolPolicy?.disabledToolCategories ?? toolsStore.disabledToolCategories
 		);
-		// servers usable under this flow's policy: globally enabled, category on,
-		// and their server-scoped group key not disabled
-		const policyEnabledServerIds = new Set(
-			disabledToolCategories.has(ToolSource.MCP)
-				? []
-				: mcpStore
-						.getServers()
-						.filter((s) => s.enabled && !disabledTools.has(toolsStore.getMcpServerToolsKey(s.id)))
-						.map((s) => s.id)
-		);
-		const hasMcpServers = policyEnabledServerIds.size > 0;
+		// initialize every settings-enabled server; tool collection filters by this
+		// flow's policy, so switching policies never re-initializes connections
+		const hasMcpServers = conversationsStore.preferences.policyEnabledServerIds().length > 0;
 
 		if (hasMcpServers) {
-			const initialized = await mcpStore.ensureInitialized(policyEnabledServerIds);
+			const initialized = await mcpStore.ensureInitialized();
 
 			if (!initialized) {
 				console.log('[AgenticStore] MCP not initialized');
