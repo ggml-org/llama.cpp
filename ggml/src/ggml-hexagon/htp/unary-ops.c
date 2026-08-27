@@ -443,6 +443,34 @@ static void tanh_f32(const float * restrict src,
     }
 }
 
+static void abs_f32(const float * restrict src,
+                    float * restrict dst,
+                    const uint32_t num_rows,
+                    const struct htp_unary_context * uctx) {
+    htp_unary_op_preamble;
+
+    for (uint32_t ir = 0; ir < num_rows; ir++) {
+        const uint8_t * restrict src_local = (const uint8_t *)src + (ir * src0_row_size_aligned);
+        uint8_t * restrict dst_local       = (uint8_t *)dst + (ir * dst_row_size_aligned);
+
+        hvx_abs_f32_aa(dst_local, src_local, ne0);
+    }
+}
+
+static void log_f32(const float * restrict src,
+                    float * restrict dst,
+                    const uint32_t num_rows,
+                    const struct htp_unary_context * uctx) {
+    htp_unary_op_preamble;
+
+    for (uint32_t ir = 0; ir < num_rows; ir++) {
+        const uint8_t * restrict src_local = (const uint8_t *)src + (ir * src0_row_size_aligned);
+        uint8_t * restrict dst_local       = (uint8_t *)dst + (ir * dst_row_size_aligned);
+
+        hvx_log_f32_aa(dst_local, src_local, ne0);
+    }
+}
+
 #define DEFINE_UNARY_TASK(NAME, IS_RMS_NORM_MUL, IS_TRI, CORE_EXPR)                                                 \
 static void unary_task_f32_##NAME(unsigned int nth, unsigned int ith, void * data) {                                \
     const struct htp_unary_context * uctx = (const struct htp_unary_context *) data;                                \
@@ -611,6 +639,8 @@ DEFINE_UNARY_TASK(unary_silu,     false, false, silu_f32(src0_vtcm, dst_vtcm, bl
 DEFINE_UNARY_TASK(unary_gelu,     false, false, gelu_f32(src0_vtcm, dst_vtcm, block_size, uctx))
 DEFINE_UNARY_TASK(unary_softplus, false, false, softplus_f32(src0_vtcm, dst_vtcm, block_size, uctx))
 DEFINE_UNARY_TASK(unary_tanh,     false, false, tanh_f32(src0_vtcm, dst_vtcm, block_size, uctx))
+DEFINE_UNARY_TASK(unary_abs,      false, false, abs_f32(src0_vtcm, dst_vtcm, block_size, uctx))
+DEFINE_UNARY_TASK(unary_log,      false, false, log_f32(src0_vtcm, dst_vtcm, block_size, uctx))
 DEFINE_UNARY_TASK(l2_norm,        false, false, l2_norm_f32(src0_vtcm, dst_vtcm, block_size, uctx))
 DEFINE_UNARY_TASK(tri,            false, true,  tri_f32(src0_vtcm, dst_vtcm, block_size, ir, uctx))
 
@@ -858,6 +888,8 @@ DEFINE_UNARY_TILED_TASK(unary_silu,     false, tile_silu_f32(dst_vtcm, src_vtcm,
 DEFINE_UNARY_TILED_TASK(unary_gelu,     false, tile_gelu_f32(dst_vtcm, src_vtcm, tw))
 DEFINE_UNARY_TILED_TASK(unary_softplus, false, tile_unary_softplus_f32(dst_vtcm, src_vtcm, tw))
 DEFINE_UNARY_TILED_TASK(unary_tanh,     false, hvx_tanh_f32_aa(dst_vtcm, src_vtcm, tw))
+DEFINE_UNARY_TILED_TASK(unary_abs,      false, hvx_abs_f32_aa(dst_vtcm, src_vtcm, tw))
+DEFINE_UNARY_TILED_TASK(unary_log,      false, hvx_log_f32_aa(dst_vtcm, src_vtcm, tw))
 DEFINE_UNARY_TILED_TASK(tri,            true,  tri_apply_tile_f32(src_vtcm, dst_vtcm, tw, col, i01, ne0, tri_ttype))
 
 static int execute_op_unary_f32(struct htp_ops_context * octx) {
@@ -883,6 +915,8 @@ static int execute_op_unary_f32(struct htp_ops_context * octx) {
         case HTP_OP_UNARY_GELU:      op_type = "gelu-f32";         break;
         case HTP_OP_UNARY_SOFTPLUS:  op_type = "softplus-f32";     break;
         case HTP_OP_UNARY_TANH:      op_type = "tanh-f32";         break;
+        case HTP_OP_UNARY_ABS:       op_type = "abs-f32";          break;
+        case HTP_OP_UNARY_LOG:       op_type = "log-f32";          break;
         case HTP_OP_L2_NORM:         op_type = "l2norm-f32";       break;
         case HTP_OP_TRI:             op_type = "tri-f32";          break;
 
@@ -981,6 +1015,8 @@ static int execute_op_unary_f32(struct htp_ops_context * octx) {
                 case HTP_OP_UNARY_GELU:      task_func = unary_task_f32_tiled_unary_gelu;     break;
                 case HTP_OP_UNARY_SOFTPLUS:  task_func = unary_task_f32_tiled_unary_softplus; break;
                 case HTP_OP_UNARY_TANH:      task_func = unary_task_f32_tiled_unary_tanh;     break;
+                case HTP_OP_UNARY_ABS:       task_func = unary_task_f32_tiled_unary_abs;      break;
+                case HTP_OP_UNARY_LOG:       task_func = unary_task_f32_tiled_unary_log;      break;
                 case HTP_OP_TRI:             task_func = unary_task_f32_tiled_tri;            break;
                 default:                     break;
             }
@@ -1000,6 +1036,8 @@ static int execute_op_unary_f32(struct htp_ops_context * octx) {
                 case HTP_OP_UNARY_GELU:      task_func = unary_task_f32_unary_gelu;           break;
                 case HTP_OP_UNARY_SOFTPLUS:  task_func = unary_task_f32_unary_softplus;       break;
                 case HTP_OP_UNARY_TANH:      task_func = unary_task_f32_unary_tanh;           break;
+                case HTP_OP_UNARY_ABS:       task_func = unary_task_f32_unary_abs;            break;
+                case HTP_OP_UNARY_LOG:       task_func = unary_task_f32_unary_log;            break;
                 case HTP_OP_L2_NORM:         task_func = unary_task_f32_l2_norm;              break;
                 case HTP_OP_TRI:             task_func = unary_task_f32_tri;                  break;
                 default:                     break;

@@ -359,6 +359,34 @@ static inline void hvx_clamp_scalar_f32(uint8_t * restrict dst, const uint8_t * 
 }
 
 //
+// Abs
+//
+
+static inline void hvx_abs_f32_aa(uint8_t * restrict dst, const uint8_t * restrict src, uint32_t n) {
+    assert((unsigned long) dst % 128 == 0);
+    assert((unsigned long) src % 128 == 0);
+
+    HVX_Vector * restrict vdst = (HVX_Vector *) dst;
+    HVX_Vector * restrict vsrc = (HVX_Vector *) src;
+
+    const uint32_t elem_size = sizeof(float);
+    const uint32_t epv       = 128 / elem_size;
+    const uint32_t nvec      = n / epv;
+    const uint32_t nloe      = n % epv;
+
+    uint32_t i = 0;
+
+    _Pragma("unroll(4)")
+    for (; i < nvec; i++) {
+        vdst[i] = hvx_vec_abs_f32(vsrc[i]);
+    }
+    if (nloe) {
+        HVX_Vector v = hvx_vec_abs_f32(vsrc[i]);
+        hvx_vec_store_a((void *) &vdst[i], nloe * elem_size, v);
+    }
+}
+
+//
 // Square
 //
 
