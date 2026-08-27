@@ -1,3 +1,18 @@
+# Snapdragon-based Windows devices
+
+## Tool Dependencies
+
+Native Windows 11 arm64 builds have the following tool dependencies:
+- MS Visual Studio 2026 (Community Edition or Pro)
+  - MSVC arm64 standard and runtime libraries
+  - UCRT and Driver Kit
+- LLVM core libraries and Clang compiler (winget)
+- CMake, Git, Python (winget)
+- Hexagon SDK Community Edition 6.6 or later (see below)
+- OpenCL SDK 2.3 or later (see below)
+
+Note: The rest of the **Windows** build process assumes that you're running natively in Powershell.
+
 ## Overview
 
 The document covers procedures for installing the latest GPU and NPU drivers, and OpenCL and Hexagon SDKs.
@@ -53,7 +68,8 @@ Download the driver from
 
     https://softwarecenter.qualcomm.com/catalog/item/Qualcomm_HND
 
-After the automated installation and reboot please make sure that the Hexagon NPU device shows up in the `Device Manager` (under `Neural Processors`).
+After the automated installation and reboot please make sure that the Hexagon NPU device shows up in the `Device Manager`
+(under `Neural Processors`).
 
 If the device is not available you can try installing all components (`qcnspmcdm8380`, `qcnspmcdm8380_ext`) manually.
 The components are extracted into
@@ -130,12 +146,12 @@ However, additional settings are required for generating and signing HTP Ops lib
 
 > cmake --preset arm64-windows-snapdragon-release -B build-wos
 ...
-> cmake --install build-wos --prefix pkg-snapdragon
+> cmake --install build-wos --prefix pkg-wos
 ```
 
 Once the build is complete HTP ops libraries will be installed like this
 ```
-> dir pkg-snapdragon/lib
+> dir pkg-wos/lib
 ...
 -a----         1/22/2026   6:01 PM         187656 libggml-htp-v73.so
 -a----         1/22/2026   6:01 PM         191752 libggml-htp-v75.so
@@ -147,8 +163,8 @@ Once the build is complete HTP ops libraries will be installed like this
 The .cat file, the signature and proper certificate installation can be verified with
 
 ```
-> signtool.exe verify /v /pa .\pkg-snapdragon\lib\libggml-htp.cat
-Verifying: .\pkg-snapdragon\lib\libggml-htp.cat
+> signtool.exe verify /v /pa .\pkg-wos\lib\libggml-htp.cat
+Verifying: .\pkg-wos\lib\libggml-htp.cat
 
 Signature Index: 0 (Primary Signature)
 Hash of file (sha256): 9820C664DA59D5EAE31DBB664127FCDAEF59CDC31502496BC567544EC2F401CF
@@ -156,6 +172,6 @@ Hash of file (sha256): 9820C664DA59D5EAE31DBB664127FCDAEF59CDC31502496BC567544EC
 Signing Certificate Chain:
         Issued to: GGML.HTP.v1
 ...
-Successfully verified: .\pkg-snapdragon\lib\libggml-htp.cat
+Successfully verified: .\pkg-wos\lib\libggml-htp.cat
 ...
 ```

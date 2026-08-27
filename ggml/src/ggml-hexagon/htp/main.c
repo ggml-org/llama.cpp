@@ -18,6 +18,7 @@
 #include <qurt_memory.h>
 #include <remote.h>
 #include <string.h>
+#include <stdatomic.h>
 
 #include "hex-utils.h"
 #include "hex-dma.h"
@@ -32,6 +33,7 @@
 #include "htp_iface.h"
 #include "work-queue.h"
 #include "hex-profile.h"
+#include "allreduce-ops.h"
 
 #define HMX_QUEUE_CAPACITY     16
 #define HMX_QUEUE_STACK_SIZE   16384
@@ -45,6 +47,36 @@ _Static_assert(WORK_QUEUE_MAX_N_THREADS >= HTP_MAX_NTHREADS,
 struct htp_handle {
     struct htp_context * ctx;
 };
+
+static inline void * htp_mmap(uint32_t fd, uint32_t size) {
+    void * va = (void *)-1;
+    for (int retry = 0; retry < 2; retry++) {
+#if __HVX_ARCH__ > 73
+        va = HAP_mmap2(NULL, size, HAP_PROT_READ | HAP_PROT_WRITE, 0, fd, 0);
+#else
+        if (size > HTP_MMAP_MAX_VMEM) {
+            FARF(ERROR, "mmap failed : size %u exceeds 2GB limit for HAP_mmap", (uint32_t) size);
+            abort();
+        }
+        va = HAP_mmap(NULL, size, HAP_PROT_READ | HAP_PROT_WRITE, 0, fd, 0);
+#endif
+        if (va != (void *)-1 && va != NULL) {
+            return va;
+        }
+        if (retry == 0) {
+            FARF(HIGH, "mmap failed first try (va %p fd %u size %u), retrying...", va, fd, size);
+        }
+    }
+    return NULL;
+}
+
+static inline void htp_munmap(void * va, uint32_t size) {
+#if __HVX_ARCH__ > 73
+    HAP_munmap2(va, size);
+#else
+    HAP_munmap(va, size);
+#endif
+}
 
 AEEResult htp_iface_open(const char * uri, remote_handle64 * handle) {
     (void) uri;
@@ -127,11 +159,7 @@ AEEResult htp_iface_close(remote_handle64 handle) {
         // release the mmaps (if any)
         for (uint32_t i=0; i<HTP_MAX_MMAPS; i++) {
             if (ctx->mmap[i].size) {
-#if __HVX_ARCH__ > 73
-                HAP_munmap2((void *) ctx->mmap[i].base, ctx->mmap[i].size);
-#else
-                HAP_munmap((void *) ctx->mmap[i].base, ctx->mmap[i].size);
-#endif
+                htp_munmap((void *) ctx->mmap[i].base, ctx->mmap[i].size);
                 ctx->mmap[i].size = 0;
                 ctx->mmap[i].base = NULL;
                 ctx->mmap[i].fd   = -1;
@@ -175,18 +203,9 @@ AEEResult htp_iface_mmap(remote_handle64 handle, uint32_t fd, uint32_t size) {
         struct htp_mmap *m = &ctx->mmap[i];
         if (!m->size) {
             FARF(HIGH, "mmap : fd %u size %u", fd, size);
-#if __HVX_ARCH__ > 73
-            void *va = HAP_mmap2(NULL, size, HAP_PROT_READ | HAP_PROT_WRITE, 0, fd, 0);
-#else
-            if (size > HTP_MMAP_MAX_VMEM) { // HAP_mmap has a size limit of 2GB
-                FARF(ERROR, "mmap failed : size %u exceeds 2GB limit for HAP_mmap", (uint32_t) size);
-                abort(); // can't do much else at this point
-            }
-
-            void *va = HAP_mmap(NULL, size, HAP_PROT_READ | HAP_PROT_WRITE, 0, fd, 0);
-#endif
-            if (va == (void*)-1) {
-                FARF(ERROR, "mmap failed : va %p fd %u size %u", va, fd, (uint32_t) size);
+            void *va = htp_mmap(fd, size);
+            if (va == NULL) {
+                FARF(ERROR, "mmap failed : fd %u size %u", fd, (uint32_t) size);
                 return AEE_EFAILED;
             }
 
@@ -212,11 +231,7 @@ AEEResult htp_iface_munmap(remote_handle64 handle, uint32 fd) {
         struct htp_mmap *m = &ctx->mmap[i];
         if (fd < 0 || m->fd == fd) {
             FARF(HIGH, "unmmap : base %p fd %u size %u", (void*) m->base, m->fd, (uint32_t) m->size);
-#if __HVX_ARCH__ > 73
-            HAP_munmap2((void *) m->base, m->size);
-#else
-            HAP_munmap((void *) m->base, m->size);
-#endif
+            htp_munmap((void *) m->base, m->size);
             m->size   = 0;
             m->base   = NULL;
             m->fd     = -1;
@@ -228,7 +243,7 @@ AEEResult htp_iface_munmap(remote_handle64 handle, uint32 fd) {
 
 static void vtcm_acquire(struct htp_context * ctx) {
     if (!ctx->vtcm_valid) {
-        int err = HAP_compute_res_acquire_cached(ctx->vtcm_rctx, 1000000u);
+        int err = HAP_compute_res_acquire_cached(ctx->vtcm_rctx, 10000000u);
         if (err != 0) {
             FARF(ERROR, "ggml-hex: failed to acquire VTCM: 0x%08x", (unsigned)err);
             abort();
@@ -692,8 +707,45 @@ static inline void profile_stop(uint32_t mode, struct profile_data * d) {
     }
 }
 
+static int op_fence(struct htp_ops_context * octx) {
+    struct htp_context *ctx = octx->ctx;
+    struct htp_thread_trace * tr = &ctx->trace[0];
+    const uint32_t seq = (uint32_t) octx->op_params[0];
+
+    htp_trace_event_start(tr, HTP_TRACE_EVT_FENCE, (uint16_t) seq);
+
+    const struct htp_tensor * sync = octx->src[0];
+    atomic_uint * sync_fence = (atomic_uint *) sync->data;
+    uint64_t spins = 0;
+    while (1) {
+        Q6_dccleaninva_A((void *) sync_fence);
+        asm volatile ("syncht" : : : "memory");
+        uint32_t val = atomic_load(&sync_fence[0]);
+        if ((int32_t)(val - seq) >= 0) {
+            break;
+        }
+        if (++spins > HTP_FENCE_TIMEOUT) {
+            FARF(ERROR, "ggml-hex: sync-wait TIMEOUT : fence %p spins %llu seq %u\n", sync_fence, spins, seq);
+            break;
+        }
+        hex_pause();
+    }
+
+    htp_trace_event_stop(tr, HTP_TRACE_EVT_FENCE, (uint16_t) seq);
+
+    FARF(HIGH, "ggml-hex: sync-done : fence %p spins %llu seq %u\n", sync_fence, spins, seq);
+    return HTP_STATUS_OK;
+}
+
 static int execute_op(struct htp_ops_context * octx) {
     switch (octx->op) {
+        case HTP_OP_FENCE:
+            return op_fence(octx);
+
+        case HTP_OP_ALLREDUCE:
+        case HTP_OP_ALLREDUCE_ADD:
+            return op_allreduce(octx);
+
         case HTP_OP_MUL_MAT:
         case HTP_OP_MUL_MAT_ADD:
             return op_matmul(octx);
@@ -701,11 +753,8 @@ static int execute_op(struct htp_ops_context * octx) {
         case HTP_OP_MUL_MAT_ID:
             return op_matmul_id(octx);
 
-        case HTP_OP_MUL_MAT_QKV:
-            return op_matmul_qkv(octx);
-
-        case HTP_OP_MUL_MAT_FFN:
-            return op_matmul_ffn(octx);
+        case HTP_OP_MUL_MAT_NX:
+            return op_matmul_nx(octx);
 
         case HTP_OP_MUL:
         case HTP_OP_ADD:
@@ -818,12 +867,8 @@ static inline bool reuse_buf(struct htp_context *ctx, uint32_t *m_reuse, struct 
 
 static inline void drop_mmap(struct htp_context *ctx, struct htp_mmap *m) {
     if (m->size) {
-        FARF(HIGH, "unmap : fd %u base %p size %u", m->fd, (void*) m->base, (uint32_t) m->size);
-#if __HVX_ARCH__ > 73
-        HAP_munmap2((void *) m->base, m->size);
-#else
-        HAP_munmap((void *) m->base, m->size);
-#endif
+        FARF(ALWAYS, "unmap : fd %u base %p size %u", m->fd, (void*) m->base, (uint32_t) m->size);
+        htp_munmap((void *) m->base, m->size);
         m->size = 0;
         m->base = 0;
         m->fd   = -1;
@@ -837,18 +882,9 @@ static inline void mmap_buf(struct htp_context *ctx, struct htp_buf_desc *b) {
     for (uint32_t i=0; i < HTP_MAX_MMAPS; i++) {
         struct htp_mmap *m = &ctx->mmap[i];
         if (!m->size) {
-#if __HVX_ARCH__ > 73
-            void *va = HAP_mmap2(NULL, b->size, HAP_PROT_READ | HAP_PROT_WRITE, 0, b->fd, 0);
-#else
-            if (b->size > HTP_MMAP_MAX_VMEM) { // HAP_mmap has a size limit of 2GB
-                FARF(ERROR, "mmap failed : size %u exceeds 2GB limit for HAP_mmap", (uint32_t) b->size);
-                abort(); // can't do much else at this point
-            }
-
-            void *va = HAP_mmap(NULL, b->size, HAP_PROT_READ | HAP_PROT_WRITE, 0, b->fd, 0);
-#endif
-            if (va == (void*)-1) {
-                FARF(ERROR, "mmap failed : va %p fd %u size %u", va, b->fd, (uint32_t) b->size);
+            void *va = htp_mmap(b->fd, b->size);
+            if (va == NULL) {
+                FARF(ERROR, "mmap failed : fd %u size %u", b->fd, (uint32_t) b->size);
                 abort(); // can't do much else at this point
             }
 
@@ -856,10 +892,13 @@ static inline void mmap_buf(struct htp_context *ctx, struct htp_buf_desc *b) {
             m->fd     = b->fd;
             m->size   = b->size;
 
-            FARF(HIGH, "mmap : fd %u base %p size %u", m->fd, (void*) m->base, (uint32_t) m->size);
+            FARF(ALWAYS, "mmap : fd %u base %p size %u", m->fd, (void*) m->base, (uint32_t) m->size);
             return;
         }
     }
+
+    FARF(ERROR, "mmap failed : exceeded mapping capacity limit of %u", HTP_MAX_MMAPS);
+    abort();
 }
 
 static void prep_op_bufs(struct htp_context *ctx, struct htp_buf_desc *bufs, uint32_t n_bufs) {
@@ -1081,6 +1120,7 @@ static void process_opbatch(struct htp_context * ctx, const struct htp_opbatch_r
     rsp.usecs        = batch_prof.usecs;
     rsp.cycles_start = batch_prof.cycles_start;
     rsp.cycles_stop  = batch_prof.cycles_stop;
+    rsp.seq          = req->seq;
 
     if (ctx->profiler == HTP_PROF_TRACE) {
         for (int t = 0; t <= HTP_MAX_NTHREADS; t++) {

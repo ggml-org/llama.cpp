@@ -17,9 +17,9 @@
 
 #define hvx_arith_loop_body(dst_type, src0_type, src1_type, elem_size, vec_store, vec_op) \
     do {                                                                       \
-        dst_type * restrict vdst  = (dst_type *) dst;                          \
-        src0_type * restrict vsrc0 = (src0_type *) src0;                       \
-        src1_type * restrict vsrc1 = (src1_type *) src1;                       \
+        dst_type * vdst  = (dst_type *) dst;                                   \
+        src0_type * vsrc0 = (src0_type *) src0;                                \
+        src1_type * vsrc1 = (src1_type *) src1;                                \
                                                                                \
         const uint32_t epv  = 128 / (elem_size);                               \
         const uint32_t nvec = n / epv;                                         \
@@ -57,40 +57,40 @@
 
 // Generic macro to define alignment permutations for an op
 #define DEFINE_HVX_BINARY_OP_VARIANTS(OP_NAME, OP_MACRO, ELEM_TYPE) \
-static inline void OP_NAME##_aaa(uint8_t * restrict dst, const uint8_t * restrict src0, const uint8_t * restrict src1, uint32_t n) { \
+static inline void OP_NAME##_aaa(uint8_t * dst, const uint8_t * src0, const uint8_t * src1, uint32_t n) { \
     assert((uintptr_t) dst % 128 == 0); \
     assert((uintptr_t) src0 % 128 == 0); \
     assert((uintptr_t) src1 % 128 == 0); \
     hvx_arith_loop_body(HVX_Vector, HVX_Vector, HVX_Vector, sizeof(ELEM_TYPE), hvx_vec_store_a, OP_MACRO); \
 } \
-static inline void OP_NAME##_aau(uint8_t * restrict dst, const uint8_t * restrict src0, const uint8_t * restrict src1, uint32_t n) { \
+static inline void OP_NAME##_aau(uint8_t * dst, const uint8_t * src0, const uint8_t * src1, uint32_t n) { \
     assert((uintptr_t) dst % 128 == 0); \
     assert((uintptr_t) src0 % 128 == 0); \
     hvx_arith_loop_body(HVX_Vector, HVX_Vector, HVX_UVector, sizeof(ELEM_TYPE), hvx_vec_store_a, OP_MACRO); \
 } \
-static inline void OP_NAME##_aua(uint8_t * restrict dst, const uint8_t * restrict src0, const uint8_t * restrict src1, uint32_t n) { \
+static inline void OP_NAME##_aua(uint8_t * dst, const uint8_t * src0, const uint8_t * src1, uint32_t n) { \
     assert((uintptr_t) dst % 128 == 0); \
     assert((uintptr_t) src1 % 128 == 0); \
     hvx_arith_loop_body(HVX_Vector, HVX_UVector, HVX_Vector, sizeof(ELEM_TYPE), hvx_vec_store_a, OP_MACRO); \
 } \
-static inline void OP_NAME##_auu(uint8_t * restrict dst, const uint8_t * restrict src0, const uint8_t * restrict src1, uint32_t n) { \
+static inline void OP_NAME##_auu(uint8_t * dst, const uint8_t * src0, const uint8_t * src1, uint32_t n) { \
     assert((uintptr_t) dst % 128 == 0); \
     hvx_arith_loop_body(HVX_Vector, HVX_UVector, HVX_UVector, sizeof(ELEM_TYPE), hvx_vec_store_a, OP_MACRO); \
 } \
-static inline void OP_NAME##_uaa(uint8_t * restrict dst, const uint8_t * restrict src0, const uint8_t * restrict src1, uint32_t n) { \
+static inline void OP_NAME##_uaa(uint8_t * dst, const uint8_t * src0, const uint8_t * src1, uint32_t n) { \
     assert((uintptr_t) src0 % 128 == 0); \
     assert((uintptr_t) src1 % 128 == 0); \
     hvx_arith_loop_body(HVX_UVector, HVX_Vector, HVX_Vector, sizeof(ELEM_TYPE), hvx_vec_store_u, OP_MACRO); \
 } \
-static inline void OP_NAME##_uau(uint8_t * restrict dst, const uint8_t * restrict src0, const uint8_t * restrict src1, uint32_t n) { \
+static inline void OP_NAME##_uau(uint8_t * dst, const uint8_t * src0, const uint8_t * src1, uint32_t n) { \
     assert((uintptr_t) src0 % 128 == 0); \
     hvx_arith_loop_body(HVX_UVector, HVX_Vector, HVX_UVector, sizeof(ELEM_TYPE), hvx_vec_store_u, OP_MACRO); \
 } \
-static inline void OP_NAME##_uua(uint8_t * restrict dst, const uint8_t * restrict src0, const uint8_t * restrict src1, uint32_t n) { \
+static inline void OP_NAME##_uua(uint8_t * dst, const uint8_t * src0, const uint8_t * src1, uint32_t n) { \
     assert((uintptr_t) src1 % 128 == 0); \
     hvx_arith_loop_body(HVX_UVector, HVX_UVector, HVX_Vector, sizeof(ELEM_TYPE), hvx_vec_store_u, OP_MACRO); \
 } \
-static inline void OP_NAME##_uuu(uint8_t * restrict dst, const uint8_t * restrict src0, const uint8_t * restrict src1, uint32_t n) { \
+static inline void OP_NAME##_uuu(uint8_t * dst, const uint8_t * src0, const uint8_t * src1, uint32_t n) { \
     hvx_arith_loop_body(HVX_UVector, HVX_UVector, HVX_UVector, sizeof(ELEM_TYPE), hvx_vec_store_u, OP_MACRO); \
 } \
 
