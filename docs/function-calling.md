@@ -275,17 +275,12 @@ This table can be generated with:
 
 ```bash
 ./build/bin/test-chat ../minja/build/tests/*.jinja 2>/dev/null
-```
-
-</details>
-
-# Usage - need tool-aware Jinja template
-
-First, start a server with any model, but make sure it has a tools-enabled template: you can verify this by inspecting the `chat_template` or `chat_template_tool_use` properties in `http://localhost:8080/props`).
+Usage - need tool-aware Jinja template
+First, start a server with any model, but make sure it has a tools-enabled template: you can verify this by inspecting the chat_template or chat_template_tool_use properties in http://localhost:8080/props).
 
 Here are some models known to work (w/ chat template override when needed):
 
-```shell
+Shell
 # Native support:
 
 llama-server --jinja -fa -hf bartowski/Qwen2.5-7B-Instruct-GGUF:Q4_K_M
@@ -322,19 +317,17 @@ llama-server --jinja -fa -hf bartowski/c4ai-command-r7b-12-2024-GGUF:Q6_K_L \
 llama-server --jinja -fa -hf bartowski/phi-4-GGUF:Q4_0
 llama-server --jinja -fa -hf bartowski/gemma-2-2b-it-GGUF:Q8_0
 llama-server --jinja -fa -hf bartowski/c4ai-command-r-v01-GGUF:Q2_K
-```
+To get the official template from original HuggingFace repos, you can use scripts/get_chat_template.py (see examples invocations in models/templates/README.md)
 
-To get the official template from original HuggingFace repos, you can use [scripts/get_chat_template.py](../scripts/get_chat_template.py) (see examples invocations in [models/templates/README.md](../models/templates/README.md))
+[!TIP]
+If there is no official tool_use Jinja template, you may want to set --chat-template chatml to use a default that works with many models (YMMV!), or write your own (e.g. we provide a custom llama-cpp-deepseek-r1.jinja for DeepSeek R1 distills)
 
-> [!TIP]
-> If there is no official `tool_use` Jinja template, you may want to set `--chat-template chatml` to use a default that works with many models (YMMV!), or write your own (e.g. we provide a custom [llama-cpp-deepseek-r1.jinja](../models/templates/llama-cpp-deepseek-r1.jinja) for DeepSeek R1 distills)
-
-> [!CAUTION]
-> Beware of extreme KV quantizations (e.g. `-ctk q4_0`), they can substantially degrade the model's tool calling performance.
+[!CAUTION]
+Beware of extreme KV quantizations (e.g. -ctk q4_0), they can substantially degrade the model's tool calling performance.
 
 Test in CLI (or with any library / software that can use OpenAI-compatible API backends):
 
-```bash
+Bash
 curl http://localhost:8080/v1/chat/completions -d '{
     "model": "gpt-3.5-turbo",
     "tools": [
@@ -389,12 +382,7 @@ curl http://localhost:8080/v1/chat/completions -d '{
         }
     }]
 }'
-```
-
-<details>
-<summary>Show output</summary>
-
-```json
+JSON
 {
 "choices": [
     {
@@ -422,6 +410,35 @@ curl http://localhost:8080/v1/chat/completions -d '{
 },
 "id": "chatcmpl-Htbgh9feMmGM0LEH2hmQvwsCxq3c6Ni8"
 }
-```
+Streaming tool calls
+With "stream": true a tool call is not one object. It arrives as deltas
+the client must accumulate, keyed by index — two tools interleave as
+index 0 and index 1.
 
-</details>
+id and type: once, on the first chunk for that index
+
+function.name: once, when known
+
+function.arguments: raw JSON fragments, concatenate per index; a single
+fragment is not valid JSON on its own
+
+calls = {}
+for chunk in stream:
+for tc in chunk.choices[0].delta.tool_calls or []:
+c = calls.setdefault(tc.index,
+{"id": None, "name": None, "arguments": ""})
+if tc.id:
+c["id"] = tc.id
+if tc.function and tc.function.name:
+c["name"] = tc.function.name
+if tc.function and tc.function.arguments:
+c["arguments"] += tc.function.arguments
+
+The final chunk carries finish_reason: "tool_calls" ("stop" when the turn
+produced none).
+
+Note on Jinja
+Tool calling goes through the Jinja template path, enabled by default
+(--jinja / --no-jinja). --no-jinja disables tool calling; older builds
+need --jinja passed. If tool calls come back as plain assistant text,
+check this, then confirm the template is tool-aware via /props.
