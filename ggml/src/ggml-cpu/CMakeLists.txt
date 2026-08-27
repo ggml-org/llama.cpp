@@ -1,3 +1,7 @@
+### for debugging
+set(CMAKE_REQUIRED_QUIET OFF)
+set(CMAKE_VERBOSE_MAKEFILE ON)
+
 function(ggml_add_cpu_backend_features cpu_name arch)
     # The feature detection code is compiled as a separate target so that
     # it can be built without the architecture flags
@@ -104,9 +108,9 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
             ggml-cpu/arch/arm/repack.cpp
             )
 
-        if (MSVC AND NOT CMAKE_C_COMPILER_ID STREQUAL "Clang")
-            message(FATAL_ERROR "MSVC is not supported for ARM, use clang")
-        else()
+        # if (MSVC AND NOT CMAKE_C_COMPILER_ID STREQUAL "Clang")
+        #     message(FATAL_ERROR "MSVC is not supported for ARM, use clang")
+        # else()
             check_cxx_compiler_flag(-mfp16-format=ieee GGML_COMPILER_SUPPORTS_FP16_FORMAT_I3E)
             if (NOT "${GGML_COMPILER_SUPPORTS_FP16_FORMAT_I3E}" STREQUAL "")
                 list(APPEND ARCH_FLAGS -mfp16-format=ieee)
@@ -238,7 +242,7 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
                 )
             endforeach()
             set(CMAKE_REQUIRED_FLAGS ${CMAKE_REQUIRED_FLAGS_SAVE})
-        endif()
+        # endif()
     elseif (GGML_SYSTEM_ARCH STREQUAL "x86")
         message(STATUS "x86 detected")
         list(APPEND GGML_CPU_SOURCES

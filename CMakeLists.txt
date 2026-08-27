@@ -2,6 +2,10 @@ cmake_minimum_required(VERSION 3.14...3.28) # for add_link_options and implicit 
 project("llama.cpp" C CXX)
 include(CheckIncludeFileCXX)
 
+### debug code
+set(CMAKE_REQUIRED_QUIET OFF)
+set(CMAKE_VERBOSE_MAKEFILE ON)
+
 ### llama.cpp version
 set(LLAMA_VERSION_MAJOR 0)
 set(LLAMA_VERSION_MINOR 3)
