@@ -253,12 +253,14 @@
 							<!-- Chat Template -->
 							{#if serverProps.chat_template}
 								<Table.Row>
-									<Table.Cell class="align-middle font-medium">Chat Template</Table.Cell>
+									<Table.Cell class="py-4" colspan={2}>
+										<div class="flex flex-col gap-2">
+											<span class="font-medium">Chat Template</span>
 
-									<Table.Cell class="py-10">
-										<div class="overflow-x-auto rounded-md bg-muted p-4">
-											<pre
-												class="font-mono text-xs whitespace-pre">{serverProps.chat_template}</pre>
+											<div class="overflow-x-auto rounded-md bg-muted p-4">
+												<pre
+													class="font-mono text-xs whitespace-pre">{serverProps.chat_template}</pre>
+											</div>
 										</div>
 									</Table.Cell>
 								</Table.Row>
