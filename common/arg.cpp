@@ -4110,7 +4110,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_LOOKUP, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_DRAFT_N_MIN"));
     add_opt(common_arg(
-        {"--spec-synthetic-acceptance-length"}, "L",
+        {"--spec-synth-len"}, "L",
         "target mean synthetic acceptance length, including the target token (benchmarking only)",
         [](common_params & params, const std::string & value) {
             const std::string text = string_strip(value);
@@ -4119,11 +4119,11 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             if (pos != text.size() || length == -1.0) {
                 throw std::invalid_argument("invalid value");
             }
-            params.speculative.synthetic_acceptance_length = length;
+            params.speculative.synth_len = length;
         }
-    ).set_spec().set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_SYNTHETIC_ACCEPTANCE_LENGTH"));
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_SYNTH_LEN"));
     add_opt(common_arg(
-        {"--spec-synthetic-acceptance-rates"}, "P0,P1,...",
+        {"--spec-synth-rates"}, "P0,P1,...",
         "comma-separated unconditional per-position synthetic acceptance probabilities (benchmarking only)",
         [](common_params & params, const std::string & value) {
             const auto values = string_split<std::string>(value, ',');
@@ -4138,9 +4138,9 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                 }
                 rates.push_back(rate);
             }
-            params.speculative.synthetic_acceptance_rates = std::move(rates);
+            params.speculative.synth_rates = std::move(rates);
         }
-    ).set_spec().set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_SYNTHETIC_ACCEPTANCE_RATES"));
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_SYNTH_RATES"));
 
     add_opt(common_arg(
         {"--spec-draft-p-split", "--draft-p-split"}, "P",

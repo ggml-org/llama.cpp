@@ -218,8 +218,8 @@ Unsupported samplers and device layouts fall back to CPU sampling. Tensor split 
 
 Use exactly one of these options:
 
-- `--spec-synthetic-acceptance-rates P0,P1,...` sets unconditional per-position acceptance probabilities. Entry `i` is the probability that the first `i+1` draft tokens are all accepted. The number of entries must match the effective maximum draft length. Values must be finite, within `[0, 1]`, and monotonically non-increasing.
-- `--spec-synthetic-acceptance-length L` sets the target mean acceptance length, including the target token. For `K` maximum draft tokens, `L` must be within `[1, K+1]`. The server finds a constant conditional probability `p` such that `p + p^2 + ... + p^K = L - 1`, then uses unconditional rates `[p, p^2, ..., p^K]`.
+- `--spec-synth-rates P0,P1,...` sets unconditional per-position acceptance probabilities. Entry `i` is the probability that the first `i+1` draft tokens are all accepted. The number of entries must match the effective maximum draft length. Values must be finite, within `[0, 1]`, and monotonically non-increasing.
+- `--spec-synth-len L` sets the target mean acceptance length, including the target token. For `K` maximum draft tokens, `L` must be within `[1, K+1]`. The server finds a constant conditional probability `p` such that `p + p^2 + ... + p^K = L - 1`, then uses unconditional rates `[p, p^2, ..., p^K]`.
 
 ### General Speculative Parameters
 

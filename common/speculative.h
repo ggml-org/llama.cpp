@@ -30,10 +30,10 @@ int32_t common_speculative_n_max(const common_params_speculative * spec);
 int32_t common_speculative_n_max(const common_speculative * spec);
 
 // validate and resolve the unconditional synthetic acceptance rates
-std::vector<double> common_speculative_resolve_synthetic_acceptance_rates(const common_params_speculative * spec, int32_t n_max);
+std::vector<double> common_speculative_synth_rates_resolve(const common_params_speculative * spec, int32_t n_max);
 
 // return the conditional synthetic acceptance probabilities
-const std::vector<double> & common_speculative_get_synthetic_acceptance_probs(const common_speculative * spec);
+const std::vector<double> & common_speculative_get_synth_probs(const common_speculative * spec);
 
 common_params common_base_params_to_speculative(const common_params & params);
 

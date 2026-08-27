@@ -369,8 +369,8 @@ struct common_params_speculative_ngram_cache {
 struct common_params_speculative {
     std::vector<enum common_speculative_type> types = { COMMON_SPECULATIVE_TYPE_NONE };
 
-    double synthetic_acceptance_length = -1.0;
-    std::vector<double> synthetic_acceptance_rates;
+    double synth_len = -1.0;
+    std::vector<double> synth_rates;
 
     // used by Simple, MTP, Eagle3, etc. - all methods that require some kind of draft model
     common_params_speculative_draft draft;
@@ -386,8 +386,8 @@ struct common_params_speculative {
         return !draft.mparams.empty();
     }
 
-    bool has_synthetic_acceptance() const {
-        return synthetic_acceptance_length != -1.0 || !synthetic_acceptance_rates.empty();
+    bool has_synth() const {
+        return synth_len != -1.0 || !synth_rates.empty();
     }
 
     uint32_t need_n_rs_seq() const {

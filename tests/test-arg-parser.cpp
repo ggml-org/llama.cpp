@@ -37,17 +37,17 @@ static void test(void) {
 
     {
         common_params_speculative spec;
-        spec.synthetic_acceptance_length = 3.4;
+        spec.synth_len = 3.4;
 
         auto assert_invalid = [](const common_params_speculative & value, int32_t n_max) {
             try {
-                common_speculative_resolve_synthetic_acceptance_rates(&value, n_max);
+                common_speculative_synth_rates_resolve(&value, n_max);
                 assert(false);
             } catch (const std::invalid_argument &) {
             }
         };
 
-        const auto rates = common_speculative_resolve_synthetic_acceptance_rates(&spec, 4);
+        const auto rates = common_speculative_synth_rates_resolve(&spec, 4);
         assert(rates.size() == 4);
         assert(std::abs(rates[0] - 0.80581) < 1e-5);
         assert(std::abs(rates[1] - 0.64933) < 1e-5);
@@ -55,39 +55,39 @@ static void test(void) {
         assert(std::abs(rates[3] - 0.42163) < 1e-5);
         assert(std::abs(1.0 + rates[0] + rates[1] + rates[2] + rates[3] - 3.4) < 1e-8);
 
-        spec.synthetic_acceptance_length = 1.0;
-        assert(common_speculative_resolve_synthetic_acceptance_rates(&spec, 4) == std::vector<double>({0.0, 0.0, 0.0, 0.0}));
+        spec.synth_len = 1.0;
+        assert(common_speculative_synth_rates_resolve(&spec, 4) == std::vector<double>({0.0, 0.0, 0.0, 0.0}));
 
-        spec.synthetic_acceptance_length = 5.0;
-        assert(common_speculative_resolve_synthetic_acceptance_rates(&spec, 4) == std::vector<double>({1.0, 1.0, 1.0, 1.0}));
+        spec.synth_len = 5.0;
+        assert(common_speculative_synth_rates_resolve(&spec, 4) == std::vector<double>({1.0, 1.0, 1.0, 1.0}));
 
-        spec.synthetic_acceptance_length = 5.1;
+        spec.synth_len = 5.1;
         assert_invalid(spec, 4);
 
-        spec.synthetic_acceptance_length = std::numeric_limits<double>::quiet_NaN();
+        spec.synth_len = std::numeric_limits<double>::quiet_NaN();
         assert_invalid(spec, 4);
 
-        spec.synthetic_acceptance_length = 0.0;
+        spec.synth_len = 0.0;
         assert_invalid(spec, 4);
 
-        spec.synthetic_acceptance_length = -1.0;
-        spec.synthetic_acceptance_rates = {0.8, 0.6, 0.4};
+        spec.synth_len = -1.0;
+        spec.synth_rates = {0.8, 0.6, 0.4};
         assert_invalid(spec, 4);
 
-        spec.synthetic_acceptance_rates = {0.8, 0.6, 0.4, 0.2};
-        assert(common_speculative_resolve_synthetic_acceptance_rates(&spec, 4) == spec.synthetic_acceptance_rates);
+        spec.synth_rates = {0.8, 0.6, 0.4, 0.2};
+        assert(common_speculative_synth_rates_resolve(&spec, 4) == spec.synth_rates);
 
-        spec.synthetic_acceptance_rates = {0.8, 0.9, 0.4, 0.2};
+        spec.synth_rates = {0.8, 0.9, 0.4, 0.2};
         assert_invalid(spec, 4);
 
-        spec.synthetic_acceptance_rates = {0.8, std::numeric_limits<double>::quiet_NaN(), 0.4, 0.2};
+        spec.synth_rates = {0.8, std::numeric_limits<double>::quiet_NaN(), 0.4, 0.2};
         assert_invalid(spec, 4);
 
-        spec.synthetic_acceptance_rates = {0.8, 0.6, 0.4, -0.2};
+        spec.synth_rates = {0.8, 0.6, 0.4, -0.2};
         assert_invalid(spec, 4);
 
-        spec.synthetic_acceptance_rates = {0.8, 0.6, 0.4, 0.2};
-        spec.synthetic_acceptance_length = 3.0;
+        spec.synth_rates = {0.8, 0.6, 0.4, 0.2};
+        spec.synth_len = 3.0;
         assert_invalid(spec, 4);
     }
 
@@ -255,23 +255,23 @@ static void test(void) {
     assert(params.speculative.draft.n_max == 123);
 
     {
-        common_params synthetic_params;
-        argv = {"binary_name", "--spec-synthetic-acceptance-length", "3.4"};
-        assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), synthetic_params, LLAMA_EXAMPLE_SERVER));
-        assert(synthetic_params.speculative.synthetic_acceptance_length == 3.4);
+        common_params synth_params;
+        argv = {"binary_name", "--spec-synth-len", "3.4"};
+        assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), synth_params, LLAMA_EXAMPLE_SERVER));
+        assert(synth_params.speculative.synth_len == 3.4);
     }
 
     {
-        common_params synthetic_params;
-        argv = {"binary_name", "--spec-synthetic-acceptance-rates", "0.8,0.6,0.2"};
-        assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), synthetic_params, LLAMA_EXAMPLE_SERVER));
-        assert(synthetic_params.speculative.synthetic_acceptance_rates == std::vector<double>({0.8, 0.6, 0.2}));
+        common_params synth_params;
+        argv = {"binary_name", "--spec-synth-rates", "0.8,0.6,0.2"};
+        assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), synth_params, LLAMA_EXAMPLE_SERVER));
+        assert(synth_params.speculative.synth_rates == std::vector<double>({0.8, 0.6, 0.2}));
     }
 
     {
-        common_params synthetic_params;
-        argv = {"binary_name", "--spec-synthetic-acceptance-length", "3.4x"};
-        assert(false == common_params_parse(argv.size(), list_str_to_char(argv).data(), synthetic_params, LLAMA_EXAMPLE_SERVER));
+        common_params synth_params;
+        argv = {"binary_name", "--spec-synth-len", "3.4x"};
+        assert(false == common_params_parse(argv.size(), list_str_to_char(argv).data(), synth_params, LLAMA_EXAMPLE_SERVER));
     }
 
     argv = {"binary_name", "-lm", "none"};

@@ -52,16 +52,16 @@ static common_speculative_output_limits server_output_limits(const common_params
     return result;
 }
 
-static std::vector<llama_token> server_sample_and_accept_synthetic(
+static std::vector<llama_token> server_sample_and_accept_synth(
         common_sampler * smpl,
         llama_context * ctx,
         const std::vector<int32_t> & idxs,
         const llama_tokens & draft,
-        const std::vector<double> & acceptance_probs,
+        const std::vector<double> & synth_probs,
         std::mt19937 & rng,
         bool is_replay) {
     GGML_ASSERT(idxs.size() == draft.size() + 1);
-    GGML_ASSERT(acceptance_probs.size() >= draft.size());
+    GGML_ASSERT(synth_probs.size() >= draft.size());
 
     std::vector<llama_token> result;
     result.reserve(idxs.size());
@@ -70,7 +70,7 @@ static std::vector<llama_token> server_sample_and_accept_synthetic(
     std::uniform_real_distribution<double> dist(0.0, 1.0);
     for (size_t i = 0; i < draft.size(); ++i) {
         const llama_token id = common_sampler_sample(smpl, ctx, idxs[i]);
-        const bool accept = is_replay || dist(rng) < acceptance_probs[i];
+        const bool accept = is_replay || dist(rng) < synth_probs[i];
         if (accept && (is_replay || !llama_vocab_is_eog(vocab, draft[i]))) {
             const bool is_replay_target = is_replay && i + 1 == draft.size();
             common_sampler_accept(smpl, draft[i], is_replay_target);
@@ -250,7 +250,7 @@ struct server_slot {
     std::vector<int32_t> spec_i_batch;
     common_prompt_checkpoint spec_ckpt;
     bool spec_is_replay = false;
-    std::mt19937 spec_acceptance_rng;
+    std::mt19937 spec_synth_rng;
 
     // TODO: move members that belong to the task (such as `generated_text`, `has_new_line`) to task_results_state
     //       see https://github.com/ggml-org/llama.cpp/pull/18283#issuecomment-3710175837
@@ -1227,7 +1227,7 @@ private:
                 spec.reset(common_speculative_init(params_base.speculative, params_base.n_parallel));
             } catch (const std::exception & e) {
                 SRV_ERR("failed to initialize speculative decoding context: %s\n", e.what());
-                if (params_base.speculative.has_synthetic_acceptance()) {
+                if (params_base.speculative.has_synth()) {
                     return false;
                 }
             }
@@ -1245,7 +1245,7 @@ private:
             model_dft = nullptr;
         }
 
-        if (!spec && params_base.speculative.has_synthetic_acceptance()) {
+        if (!spec && params_base.speculative.has_synth()) {
             SRV_ERR("%s", "synthetic acceptance requires an initialized speculative decoding context\n");
             return false;
         }
@@ -1759,11 +1759,11 @@ private:
             SLT_TRC(slot, "sampler chain: %s\n", common_sampler_print(slot.smpl.get()).c_str());
             SLT_TRC(slot, "sampler params: \n%s\n", task.params.sampling.print().c_str());
 
-            if (spec && !common_speculative_get_synthetic_acceptance_probs(spec.get()).empty()) {
+            if (spec && !common_speculative_get_synth_probs(spec.get()).empty()) {
                 const uint32_t seed = task.params.sampling.seed == LLAMA_DEFAULT_SEED
                     ? std::random_device{}()
                     : task.params.sampling.seed;
-                slot.spec_acceptance_rng.seed(seed);
+                slot.spec_synth_rng.seed(seed);
             }
         } else {
             slot.smpl.reset();
@@ -3850,12 +3850,12 @@ private:
                 common_sampler_ptr smpl_save(common_sampler_clone(slot.smpl.get()));
 
                 GGML_ASSERT(slot.spec_i_batch.size() == n_draft + 1);
-                const auto & spec_acceptance_probs = common_speculative_get_synthetic_acceptance_probs(spec.get());
-                auto accepted = spec_acceptance_probs.empty()
+                const auto & synth_probs = common_speculative_get_synth_probs(spec.get());
+                auto accepted = synth_probs.empty()
                     ? common_sampler_sample_and_accept_n(slot.smpl.get(), slot.ctx_tgt, slot.spec_i_batch, slot.spec_draft)
-                    : server_sample_and_accept_synthetic(
+                    : server_sample_and_accept_synth(
                             slot.smpl.get(), slot.ctx_tgt, slot.spec_i_batch, slot.spec_draft,
-                            spec_acceptance_probs, slot.spec_acceptance_rng, slot.spec_is_replay);
+                            synth_probs, slot.spec_synth_rng, slot.spec_is_replay);
                 slot.spec_i_batch.clear();
 
                 GGML_ASSERT(accepted.size() >= 1);

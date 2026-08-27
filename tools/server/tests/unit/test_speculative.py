@@ -55,7 +55,7 @@ def test_with_and_without_draft():
     server.stop()
     create_server()
     assert server.spec_draft_n_max is not None
-    server.spec_synthetic_acceptance_rates = [0.0] * server.spec_draft_n_max
+    server.spec_synth_rates = [0.0] * server.spec_draft_n_max
     server.start()
     res = server.make_request("POST", "/completion", data=request)
 
@@ -92,10 +92,10 @@ def test_different_draft_min_draft_max():
         last_content = res.body["content"]
 
 
-def test_synthetic_acceptance_is_deterministic():
+def test_synth_is_deterministic():
     global server
     assert server.spec_draft_n_max is not None
-    server.spec_synthetic_acceptance_rates = [0.75 ** (i + 1) for i in range(server.spec_draft_n_max)]
+    server.spec_synth_rates = [0.75 ** (i + 1) for i in range(server.spec_draft_n_max)]
     server.start()
 
     request = {
@@ -114,10 +114,10 @@ def test_synthetic_acceptance_is_deterministic():
     assert responses[0].body["timings"]["draft_n_accepted"] == responses[1].body["timings"]["draft_n_accepted"]
 
 
-def test_synthetic_acceptance_ignores_target_tokens():
+def test_synth_ignores_target_tokens():
     global server
     assert server.spec_draft_n_max is not None
-    server.spec_synthetic_acceptance_rates = [1.0] * server.spec_draft_n_max
+    server.spec_synth_rates = [1.0] * server.spec_draft_n_max
     server.start()
 
     res = server.make_request("POST", "/completion", data={
