@@ -226,3 +226,64 @@ class LazyNumpyTensor(LazyBase):
         return eager.tofile(*args, **kwargs)
 
     # TODO: __array_function__
+
+
+# Tensor written to file one row-chunk at a time
+class LazyChunkedTensor:
+
+    def __init__(
+        self, chunks: list[Callable[[], np.ndarray]], shape: tuple[int, ...], dtype: DTypeLike,
+        qtype: Any = None, byteswap: bool = False,
+    ):
+        self._chunks = chunks
+        self._qtype = qtype
+        self._byteswap = byteswap
+        self.shape = tuple(shape)
+        self.dtype = np.dtype(dtype)
+
+    @property
+    def nbytes(self) -> int:
+        n = self.dtype.itemsize
+        for d in self.shape:
+            n *= d
+        return n
+
+    def numpy(self) -> LazyChunkedTensor:
+        return self
+
+    def quantize(self, qtype: Any) -> LazyChunkedTensor:
+        from .constants import GGMLQuantizationType
+        from .quants import QuantError, quant_shape_to_byte_shape
+
+        if qtype == GGMLQuantizationType.F32:
+            shape, dtype = self.shape, np.dtype(np.float32)
+        elif qtype == GGMLQuantizationType.F16:
+            shape, dtype = self.shape, np.dtype(np.float16)
+        else:
+            try:
+                shape, dtype = quant_shape_to_byte_shape(self.shape, qtype), np.dtype(np.uint8)
+            except ValueError as e:
+                # raised here and not per chunk, so callers can still fall back to F16
+                raise QuantError(str(e)) from e
+        return LazyChunkedTensor(self._chunks, shape, dtype, qtype, self._byteswap)
+
+    def byteswap(self, inplace: bool = False) -> LazyChunkedTensor:
+        if inplace:
+            raise NotImplementedError("a chunked tensor cannot be byteswapped in place")
+        return LazyChunkedTensor(self._chunks, self.shape, self.dtype, self._qtype, not self._byteswap)
+
+    def tofile(self, *args, **kwargs) -> None:
+        from .quants import quantize
+
+        written = 0
+        for load_chunk in self._chunks:
+            chunk = load_chunk()
+            if self._qtype is not None:
+                # exact only because chunks split on rows, and blocks never cross one
+                chunk = quantize(chunk, self._qtype)
+            if self._byteswap:
+                chunk = chunk.byteswap(inplace=False)
+            chunk.tofile(*args, **kwargs)
+            written += chunk.nbytes
+            del chunk
+        assert written == self.nbytes, f"chunked tensor wrote {written} bytes, expected {self.nbytes}"
