@@ -478,7 +478,7 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
 }
 
 // Used for Q3_K, IQ2_S, and IQ2_XS:
-template <ggml_type type, int J, bool fallback> static __device__ __forceinline__ void ggml_cuda_mmq_vec_dot_q8_0_16_q8_1_mma(
+template <ggml_type type, int J, bool fallback, bool force_w4a8 = false> static __device__ __forceinline__ void ggml_cuda_mmq_vec_dot_q8_0_16_q8_1_mma(
         const int * __restrict__ x, const int * __restrict__ y, float * __restrict__ sum, const int k00) {
 #if defined(AMD_MFMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
     constexpr data_layout input_layout = get_input_data_layout();
@@ -486,8 +486,8 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
     typedef tile<16,  4, int, input_layout>        tile_B;
     typedef tile<16, 16, int, DATA_LAYOUT_J_MAJOR> tile_C;
 
-    constexpr int I             = ggml_cuda_mmq_get_I(type, J, fallback);
-    constexpr int sram_stride   = ggml_cuda_mmq_get_sram_stride(type, J, fallback);
+    constexpr int I             = ggml_cuda_mmq_get_I(type, J, fallback, force_w4a8);
+    constexpr int sram_stride   = ggml_cuda_mmq_get_sram_stride(type, J, fallback, force_w4a8);
     constexpr int rows_per_warp = ggml_cuda_mmq_get_rows_per_warp(type, J, fallback);
     constexpr int ntx           = rows_per_warp/tile_C::I; // Number of x minitiles per warp.
 
@@ -537,8 +537,8 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
     typedef tile< 8, 4, int> tile_B;
     typedef tile<16, 8, int> tile_C;
 
-    constexpr int I             = ggml_cuda_mmq_get_I(type, J, fallback);
-    constexpr int sram_stride   = ggml_cuda_mmq_get_sram_stride(type, J, fallback);
+    constexpr int I             = ggml_cuda_mmq_get_I(type, J, fallback, force_w4a8);
+    constexpr int sram_stride   = ggml_cuda_mmq_get_sram_stride(type, J, fallback, force_w4a8);
     constexpr int rows_per_warp = ggml_cuda_mmq_get_rows_per_warp(type, J, fallback);
     constexpr int ntx           = rows_per_warp/tile_C::I; // Number of x minitiles per warp.
 

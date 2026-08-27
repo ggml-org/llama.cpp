@@ -56,7 +56,7 @@ static ggml_tensor * fa_build_graph(ggml_context * ctx, const fa_shape & s) {
     ggml_set_name(m, "m");
 
     ggml_tensor * out = ggml_flash_attn_ext(ctx, q, k, v, m, 1.0f / sqrtf((float) s.dk), 0.0f, 0.0f);
-    ggml_flash_attn_ext_set_prec(out, GGML_PREC_F32);
+    ggml_prec_set_acc(out, GGML_PREC_F32);
     ggml_set_name(out, "out");
 
     return out;
