@@ -2491,6 +2491,17 @@ struct llama_model_glm5_next : public llama_model_base {
         ggml_tensor * build_dsa_layer(ggml_tensor * cur, const llama_layer & layer,
                                       const llama_memory_hybrid_idx_context * mctx_hyb, llm_graph_input_attn_k * inp_attn,
                                       llm_graph_input_kpool * inp_kpool, ggml_tensor ** prev_sel, int il);
+
+    protected:
+        // for graph_mtp
+        struct no_trunk_t {};
+        graph(const llama_model & model, const llm_graph_params & params, no_trunk_t) :
+            llm_build_delta_net_base(params), model(model) {}
+    };
+
+    // Draft head, the Nextn block as a non hyper connected DSA layer
+    struct graph_mtp : public graph {
+        graph_mtp(const llama_model & model, const llm_graph_params & params);
     };
 
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;

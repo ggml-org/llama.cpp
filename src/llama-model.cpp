@@ -2321,6 +2321,16 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                     return il < hparams.n_layer() && hparams.is_recr(il);
                 };
 
+                // the draft head is a single DSA layer
+                if (params.ctx_type == LLAMA_CONTEXT_TYPE_MTP) {
+                    if (hparams.n_layer_nextn == 0) {
+                        throw std::runtime_error("GLM5-Next MTP requires the NextN block, convert without --no-mtp");
+                    }
+                    filter_attn = [&](uint32_t il) { return il >= hparams.n_layer(); };
+                    filter_idx  = [&](uint32_t il) { return il >= hparams.n_layer(); };
+                    filter_recr = [&](uint32_t)    { return false; };
+                }
+
                 res = new llama_memory_hybrid_idx(
                     /* model             */ *this,
                     /* attn_type_k       */ params.type_k,
