@@ -111,7 +111,6 @@
 		onValueChange={editCtx.setContent}
 		placeholder="Edit your message..."
 		showAddButton={editCtx.messageRole === MessageRole.USER}
-		showMcpPromptButton
 		showModelSelector={editCtx.messageRole === MessageRole.USER}
 		value={editCtx.editedContent}
 	/>

@@ -10,7 +10,7 @@
 		RECOMMENDED_MCP_SERVERS
 	} from '$lib/constants';
 	import { BooleanString, HealthCheckStatus } from '$lib/enums';
-	import { conversationsStore, mcpStore } from '$lib/stores';
+	import { mcpStore } from '$lib/stores';
 	import { canonicalizeServerUrl, parseHeadersToArray, uuid } from '$lib/utils';
 
 	interface Props {
@@ -233,8 +233,6 @@
 			url: newServerUrl.trim(),
 			useProxy: newServerUseProxy
 		});
-
-		conversationsStore.preferences.setMcpServerOverride(newServerId, true);
 
 		handleOpenChange(false);
 	}

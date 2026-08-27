@@ -5,21 +5,16 @@ export interface AttachmentModalityFlags {
 	hasVisionModality: boolean;
 	hasAudioModality: boolean;
 	hasVideoModality: boolean;
-	hasMcpPromptsSupport: boolean;
-	hasMcpResourcesSupport: boolean;
 }
 
 export interface AttachmentActionCallbacks {
 	onFileUpload?: () => void;
 	onSystemPromptClick?: () => void;
-	onMcpPromptClick?: () => void;
-	onMcpResourcesClick?: () => void;
 }
 
 export interface UseAttachmentMenuReturn {
 	readonly callbacks: Record<string, () => void>;
 	isItemEnabled(enabledWhen: string | undefined): boolean;
-	isItemVisible(visibleWhen: string | undefined): boolean;
 	getSystemMessageTooltip(): string;
 }
 
@@ -49,8 +44,6 @@ export function useAttachmentMenu(
 
 		return {
 			[AttachmentAction.FILE_UPLOAD]: wrap(cbs.onFileUpload),
-			[AttachmentAction.MCP_PROMPT_CLICK]: wrap(cbs.onMcpPromptClick),
-			[AttachmentAction.MCP_RESOURCES_CLICK]: wrap(cbs.onMcpResourcesClick),
 			[AttachmentAction.SYSTEM_PROMPT_CLICK]: wrap(cbs.onSystemPromptClick)
 		};
 	});
@@ -59,12 +52,6 @@ export function useAttachmentMenu(
 		if (!enabledWhen || enabledWhen === 'always') return true;
 
 		return !!modalityFlags[enabledWhen as keyof AttachmentModalityFlags];
-	}
-
-	function isItemVisible(visibleWhen: string | undefined): boolean {
-		if (!visibleWhen) return true;
-
-		return !!modalityFlags[visibleWhen as keyof AttachmentModalityFlags];
 	}
 
 	function getSystemMessageTooltip(): string {
@@ -78,7 +65,6 @@ export function useAttachmentMenu(
 			return callbacks;
 		},
 		getSystemMessageTooltip,
-		isItemEnabled,
-		isItemVisible
+		isItemEnabled
 	};
 }

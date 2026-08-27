@@ -37,7 +37,7 @@ import type {
 	Tool,
 	ToolExecutionResult
 } from '$lib/types';
-import type { DatabaseMessageExtraMcpResource, McpServerOverride } from '$lib/types/database';
+import type { DatabaseMessageExtraMcpResource } from '$lib/types/database';
 import type { SettingsConfigType } from '$lib/types/settings';
 import {
 	detectMcpTransportFromUrl,
@@ -306,12 +306,16 @@ class MCPStore implements McpHealthHost {
 		return extras;
 	}
 
-	async ensureInitialized(perChatOverrides?: McpServerOverride[]): Promise<boolean> {
+	/**
+	 * Initialize every settings-enabled server. Policy filtering happens at tool
+	 * collection time, so switching conversation policies never re-initializes.
+	 */
+	async ensureInitialized(): Promise<boolean> {
 		if (!browser) {
 			return false;
 		}
 
-		const mcpConfig = this.buildMcpClientConfig(settingsStore.config, perChatOverrides);
+		const mcpConfig = this.buildMcpClientConfig(settingsStore.config);
 		const signature = mcpConfig ? JSON.stringify(mcpConfig) : null;
 
 		if (!signature) {
@@ -510,14 +514,6 @@ class MCPStore implements McpHealthHost {
 	 */
 	getConnections(): Map<string, MCPConnection> {
 		return this.connections;
-	}
-
-	getEnabledServersForConversation(
-		perChatOverrides?: McpServerOverride[]
-	): MCPServerSettingsEntry[] {
-		return this.getServers().filter((server) => {
-			return this.checkServerEnabled(server, perChatOverrides);
-		});
 	}
 
 	/**
@@ -811,106 +807,8 @@ class MCPStore implements McpHealthHost {
 		);
 	}
 
-	hasEnabledServers(perChatOverrides?: McpServerOverride[]): boolean {
-		return Boolean(this.buildMcpClientConfig(settingsStore.config, perChatOverrides));
-	}
-
-	/**
-	 * Check if any enabled server with successful health check supports prompts.
-	 * Uses health check state since servers may not have active connections until
-	 * the user actually sends a message or uses prompts.
-	 */
-	hasPromptsCapability(perChatOverrides?: McpServerOverride[]): boolean {
-		let enabledServerIds: Set<string>;
-
-		if (perChatOverrides !== undefined) {
-			enabledServerIds = new Set(perChatOverrides.filter((o) => o.enabled).map((o) => o.serverId));
-		} else {
-			enabledServerIds = new Set(
-				this.getServers()
-					.filter((s) => s.enabled)
-					.map((s) => s.id)
-			);
-		}
-
-		if (enabledServerIds.size === 0) {
-			return false;
-		}
-
-		for (const [serverId, state] of Object.entries(this.health.checks)) {
-			if (!enabledServerIds.has(serverId)) continue;
-
-			if (
-				state.status === HealthCheckStatus.SUCCESS &&
-				state.capabilities?.server?.prompts !== undefined
-			) {
-				return true;
-			}
-		}
-
-		for (const [serverName, connection] of this.connections) {
-			if (!enabledServerIds.has(serverName)) continue;
-
-			if (connection.serverCapabilities?.prompts) {
-				return true;
-			}
-		}
-
-		return false;
-	}
-
-	hasPromptsSupport(): boolean {
-		for (const connection of this.connections.values()) {
-			if (connection.serverCapabilities?.prompts) {
-				return true;
-			}
-		}
-
-		return false;
-	}
-
-	/**
-	 * Check if any enabled server with successful health check supports resources.
-	 * Uses health check state since servers may not have active connections until
-	 * the user actually sends a message or uses prompts.
-	 */
-	hasResourcesCapability(perChatOverrides?: McpServerOverride[]): boolean {
-		let enabledServerIds: Set<string>;
-
-		if (perChatOverrides !== undefined) {
-			enabledServerIds = new Set(perChatOverrides.filter((o) => o.enabled).map((o) => o.serverId));
-		} else {
-			enabledServerIds = new Set(
-				this.getServers()
-					.filter((s) => s.enabled)
-					.map((s) => s.id)
-			);
-		}
-
-		if (enabledServerIds.size === 0) {
-			return false;
-		}
-
-		for (const [serverId, state] of Object.entries(this.health.checks)) {
-			if (!enabledServerIds.has(serverId)) continue;
-
-			if (
-				state.status === HealthCheckStatus.SUCCESS &&
-				state.capabilities?.server?.resources !== undefined
-			) {
-				return true;
-			}
-		}
-
-		for (const [serverName, connection] of this.connections) {
-			if (!enabledServerIds.has(serverName)) continue;
-
-			if (MCPService.supportsResources(connection)) {
-				return true;
-			}
-		}
-
-		return false;
+	hasEnabledServers(): boolean {
+		return Boolean(this.buildMcpClientConfig(settingsStore.config));
 	}
 
 	/**
@@ -1185,10 +1083,7 @@ class MCPStore implements McpHealthHost {
 	/**
 	 * Builds MCP client configuration from settings.
 	 */
-	private buildMcpClientConfig(
-		cfg: SettingsConfigType,
-		perChatOverrides?: McpServerOverride[]
-	): MCPClientConfig | undefined {
+	private buildMcpClientConfig(cfg: SettingsConfigType): MCPClientConfig | undefined {
 		const rawServers = parseMcpServerSettings(cfg.mcpServers);
 
 		if (!rawServers.length) {
@@ -1198,7 +1093,7 @@ class MCPStore implements McpHealthHost {
 		const servers: Record<string, MCPServerConfig> = {};
 
 		for (const [index, entry] of rawServers.entries()) {
-			if (!this.checkServerEnabled(entry, perChatOverrides)) continue;
+			if (!entry.enabled) continue;
 
 			const normalized = this.buildServerConfig(entry);
 
@@ -1250,20 +1145,6 @@ class MCPStore implements McpHealthHost {
 			url: entry.url,
 			useProxy: entry.useProxy
 		};
-	}
-
-	/**
-	 * Checks if a server is enabled for a given chat.
-	 * A per-chat override wins when present; a server without one resolves
-	 * to its own `enabled` flag in `mcpServers`.
-	 */
-	private checkServerEnabled(
-		server: MCPServerSettingsEntry,
-		perChatOverrides?: McpServerOverride[]
-	): boolean {
-		const override = perChatOverrides?.find((o) => o.serverId === server.id);
-
-		return override?.enabled ?? server.enabled;
 	}
 
 	private createListChangedHandlers(serverName: string): ListChangedHandlers {
@@ -1376,6 +1257,15 @@ class MCPStore implements McpHealthHost {
 		}
 
 		return `${MCP_SERVER_ID_PREFIX}-${index + 1}`;
+	}
+
+	/** Server ids that are usable right now: globally enabled ones. */
+	private globalEnabledServerIds(): Set<string> {
+		return new Set(
+			this.getServers()
+				.filter((s) => s.enabled)
+				.map((s) => s.id)
+		);
 	}
 
 	private handleToolsListChanged(serverName: string, tools: Tool[]): void {

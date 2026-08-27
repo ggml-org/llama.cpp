@@ -26,10 +26,10 @@
 >
 	{#snippet children({ checked, indeterminate })}
 		<div class="text-current transition-none" data-slot="checkbox-indicator">
-			{#if checked}
-				<CheckIcon class="size-3.5" />
-			{:else if indeterminate}
+			{#if indeterminate}
 				<MinusIcon class="size-3.5" />
+			{:else if checked}
+				<CheckIcon class="size-3.5" />
 			{/if}
 		</div>
 	{/snippet}

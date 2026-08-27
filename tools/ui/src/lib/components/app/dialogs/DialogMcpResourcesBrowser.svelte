@@ -8,7 +8,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { ICON_CLASS_DEFAULT } from '$lib/constants';
-	import { conversationsStore, mcpStore } from '$lib/stores';
+	import { mcpStore } from '$lib/stores';
 	import type { MCPResourceContent, MCPResourceInfo, MCPResourceTemplateInfo } from '$lib/types';
 	import { getResourceDisplayName } from '$lib/utils';
 	import { SvelteSet } from 'svelte/reactivity';
@@ -48,8 +48,7 @@
 	});
 
 	async function loadResources() {
-		const perChatOverrides = conversationsStore.preferences.getAllMcpServerOverrides();
-		const initialized = await mcpStore.ensureInitialized(perChatOverrides);
+		const initialized = await mcpStore.ensureInitialized();
 
 		if (initialized) {
 			await mcpStore.fetchAllResources();

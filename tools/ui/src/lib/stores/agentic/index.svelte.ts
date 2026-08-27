@@ -44,7 +44,6 @@ import type {
 	AgenticFlowParams,
 	AgenticFlowResult,
 	AgenticSession,
-	McpServerOverride,
 	MCPToolCall,
 	SettingsConfigType,
 	ToolExecutionResult
@@ -201,10 +200,10 @@ class AgenticStore {
 		return active;
 	}
 
-	getConfig(settings: SettingsConfigType, perChatOverrides?: McpServerOverride[]): AgenticConfig {
+	getConfig(settings: SettingsConfigType): AgenticConfig {
 		const maxTurns = Number(settings.agenticMaxTurns) || DEFAULT_AGENTIC_CONFIG.maxTurns;
 		const hasTools =
-			mcpStore.hasEnabledServers(perChatOverrides) ||
+			mcpStore.hasEnabledServers() ||
 			toolsStore.serverTools.length > 0 ||
 			toolsStore.browserTools.length > 0 ||
 			toolsStore.customTools.length > 0;
@@ -309,8 +308,8 @@ class AgenticStore {
 			flowRootMessageId,
 			messages,
 			options = {},
-			perChatOverrides,
-			signal
+			signal,
+			toolPolicy
 		} = params;
 
 		// Clear any pending permissions/continue requests for this conversation when starting a new flow
@@ -321,21 +320,28 @@ class AgenticStore {
 			await toolsStore.fetchServerTools();
 		}
 
-		const agenticConfig = this.getConfig(settingsStore.config, perChatOverrides);
+		const agenticConfig = this.getConfig(settingsStore.config);
 
 		if (!agenticConfig.enabled) return { handled: false };
 
-		const hasMcpServers = mcpStore.hasEnabledServers(perChatOverrides);
+		// callers without an explicit policy fall back to the global defaults
+		const disabledTools = new Set(toolPolicy?.disabledTools ?? toolsStore.disabledTools);
+		const disabledToolCategories = new Set(
+			toolPolicy?.disabledToolCategories ?? toolsStore.disabledToolCategories
+		);
+		// initialize every settings-enabled server; tool collection filters by this
+		// flow's policy, so switching policies never re-initializes connections
+		const hasMcpServers = conversationsStore.preferences.policyEnabledServerIds().length > 0;
 
 		if (hasMcpServers) {
-			const initialized = await mcpStore.ensureInitialized(perChatOverrides);
+			const initialized = await mcpStore.ensureInitialized();
 
 			if (!initialized) {
 				console.log('[AgenticStore] MCP not initialized');
 			}
 		}
 
-		const tools = toolsStore.getEnabledToolsForLLM();
+		const tools = toolsStore.getEnabledToolsForLLM(disabledTools, disabledToolCategories);
 
 		if (tools.length === 0) {
 			return { handled: false };
