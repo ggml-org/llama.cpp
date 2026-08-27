@@ -3278,6 +3278,7 @@ void ggml_prec_set_acc(
 
                 ggml_set_op_params_i32(a, 0, prec_i32);
             }
+            break;
         case GGML_OP_FLASH_ATTN_EXT:
             {
                 const int32_t prec_i32 = (int32_t) prec;
