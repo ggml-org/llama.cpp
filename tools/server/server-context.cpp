@@ -829,6 +829,7 @@ private:
     // use server_context methods instead
 
     common_params params_base;
+    uint32_t fitted_n_ctx = 0; // saved ctx-size after -fit on first load
 
     // note: keep these alive - they determine the lifetime of the model, context, etc.
     common_init_result_ptr llama_init;
@@ -914,6 +915,11 @@ private:
             destroy();
         } else {
             SRV_INF("%s", "server is exiting sleeping state\n");
+            // on wake-up, skip -fit (already fitted on first load) and reuse the fitted ctx-size
+            if (fitted_n_ctx > 0) {
+                params_base.n_ctx = fitted_n_ctx;
+                params_base.fit_params = false;
+            }
             if (!load_model(params_base)) {
                 GGML_ABORT("failed to reload model after sleeping");
             }
@@ -1061,6 +1067,13 @@ private:
         if (ctx_tgt == nullptr) {
             SRV_ERR("failed to create_context with model '%s'\n", params_base.model.path.c_str());
             return false;
+        }
+
+        // save the actual ctx-size used (may be reduced by -fit) for reuse on wake-up
+        if (!is_resume && params_base.fit_params) {
+            fitted_n_ctx = llama_n_ctx(ctx_tgt);
+            // keep params_base.n_ctx in sync so wake and derived params start from the fitted size, not 0
+            params_base.n_ctx = fitted_n_ctx;
         }
 
         vocab = llama_model_get_vocab(model_tgt);
