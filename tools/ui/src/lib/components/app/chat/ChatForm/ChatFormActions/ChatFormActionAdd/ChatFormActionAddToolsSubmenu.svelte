@@ -79,7 +79,7 @@
 	{@const isExpanded = toolsPanel.expandedGroups.has(group.key)}
 	{@const checked = toolsPanel.isGroupChecked(group)}
 	{@const enabledCount = toolsPanel.getEnabledToolCount(group)}
-	// parent on but nothing under it enabled, or partially enabled: show mixed state
+	<!-- mixed state: parent on but nothing or only part of it enabled -->
 	{@const indeterminate =
 		group.tools.length > 0 && (enabledCount === 0 ? checked : enabledCount < group.tools.length)}
 	{@const favicon = toolsPanel.getFavicon(group)}
@@ -124,7 +124,7 @@
 					{#snippet child({ props })}
 						<Checkbox
 							{...props}
-							{checked}
+							checked={checked && !indeterminate}
 							class="mr-2 {ICON_CLASS_DEFAULT} shrink-0"
 							{indeterminate}
 							onCheckedChange={() => toolsPanel.toggleGroupByKey(group.key)}
