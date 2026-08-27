@@ -16570,7 +16570,7 @@ static bool ggml_vk_can_fuse(const ggml_backend_vk_context * ctx, const struct g
     }
 
     auto const &mm_add_ok = [&](const ggml_tensor *mul, const ggml_tensor *add) {
-	const ggml_tensor *bias = add->src[0] == mul ? add->src[1] : add->src[0];
+        const ggml_tensor *bias = add->src[0] == mul ? add->src[1] : add->src[0];
 
         // mat-vec only
         if (ggml_nrows(mul) != 1) {
