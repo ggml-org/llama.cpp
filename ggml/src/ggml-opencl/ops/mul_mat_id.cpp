@@ -1,4 +1,5 @@
 #include "../cl-common.h"
+#include "../ops.h"
 
 void ggml_cl_moe_combine_fused(ggml_backend_t backend, const ggml_tensor * mul, const ggml_tensor * dst) {
     ggml_backend_opencl_context * backend_ctx = (ggml_backend_opencl_context *)backend->context;

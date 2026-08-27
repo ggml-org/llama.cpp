@@ -1,4 +1,5 @@
 #include "../cl-common.h"
+#include "../ops.h"
 
 static std::string ggml_cl_q2_k_mm_options(const ggml_backend_opencl_context * backend_ctx) {
     const bool x2 = backend_ctx->gpu_family == ADRENO &&
