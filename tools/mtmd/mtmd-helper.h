@@ -23,6 +23,23 @@ extern "C" {
 struct mtmd_helper_video;
 typedef struct mtmd_helper_video mtmd_helper_video;
 
+struct mtmd_helper_video_init_params {
+    float fps_target;            // desired output fps; <= 0 means use the video's native fps, defaulted to 4.0f
+    const char * ffmpeg_bin_dir; // directory containing ffmpeg/ffprobe binaries; NULL means search PATH
+    int64_t timestamp_interval_ms; // interval for adding timestamp as text chunk (example: "[10m50.5s]"); <= 0 means no timestamp, defaulted to 5000ms
+    // TODO @ngxson : allow "placeholder" bitmap output for counting tokens
+};
+
+MTMD_API struct mtmd_helper_video_init_params mtmd_helper_video_init_params_default(void);
+
+// opt for mtmd_helper_bitmap_init_from_*()
+struct mtmd_helper_init_opt {
+    struct mtmd_helper_video_init_params video_params;
+};
+typedef struct mtmd_helper_init_opt mtmd_helper_init_opt;
+
+MTMD_API struct mtmd_helper_init_opt mtmd_helper_init_opt_default(void);
+
 // Set callback for all future logging events.
 // If this is not called, or NULL is supplied, everything is output on stderr.
 // Note: this also call mtmd_log_set() internally
@@ -40,7 +57,11 @@ struct mtmd_helper_bitmap_wrapper {
 // it calls mtmd_helper_bitmap_init_from_buf() internally
 // returns nullptr on failure
 // this function is thread-safe
-MTMD_API struct mtmd_helper_bitmap_wrapper mtmd_helper_bitmap_init_from_file(mtmd_context * ctx, const char * fname, bool placeholder);
+MTMD_API struct mtmd_helper_bitmap_wrapper mtmd_helper_bitmap_init_from_file(
+                    mtmd_context * ctx,
+                    const char * fname,
+                    bool placeholder,
+                    struct mtmd_helper_init_opt opt);
 
 // helper function to construct a mtmd_bitmap from a buffer containing a file
 // supported formats:
@@ -53,7 +74,11 @@ MTMD_API struct mtmd_helper_bitmap_wrapper mtmd_helper_bitmap_init_from_file(mtm
 //   - output bitmap will have SHA-256 hash (hex string) as the ID
 // returns nullptr on failure
 // this function is thread-safe
-MTMD_API struct mtmd_helper_bitmap_wrapper mtmd_helper_bitmap_init_from_buf(mtmd_context * ctx, const unsigned char * buf, size_t len, bool placeholder);
+MTMD_API struct mtmd_helper_bitmap_wrapper mtmd_helper_bitmap_init_from_buf(
+                    mtmd_context * ctx,
+                    const unsigned char * buf, size_t len,
+                    bool placeholder,
+                    struct mtmd_helper_init_opt opt);
 
 // helper to count the total number of tokens from a list of chunks, useful to keep track of KV cache
 MTMD_API size_t mtmd_helper_get_n_tokens(const mtmd_input_chunks * chunks);
@@ -124,14 +149,7 @@ struct mtmd_helper_video_info {
     int32_t  n_frames; // estimated total frames at effective fps (-1 if unknown)
 };
 
-struct mtmd_helper_video_init_params {
-    float fps_target;            // desired output fps; <= 0 means use the video's native fps, defaulted to 4.0f
-    const char * ffmpeg_bin_dir; // directory containing ffmpeg/ffprobe binaries; NULL means search PATH
-    int64_t timestamp_interval_ms; // interval for adding timestamp as text chunk (example: "[10m50.5s]"); <= 0 means no timestamp, defaulted to 5000ms
-    // TODO @ngxson : allow "placeholder" bitmap output for counting tokens
-};
-
-MTMD_API struct mtmd_helper_video_init_params mtmd_helper_video_init_params_default(void);
+// note: mtmd_helper_video_init_params is defined at the top, as it is part of mtmd_helper_init_opt
 
 // returns NULL on failure (ffprobe not found, file unreadable, etc.)
 MTMD_API mtmd_helper_video * mtmd_helper_video_init(
