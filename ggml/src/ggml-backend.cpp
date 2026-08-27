@@ -254,6 +254,11 @@ size_t ggml_backend_get_max_size(ggml_backend_t backend) {
 void ggml_backend_tensor_set_async(ggml_backend_t backend, struct ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
     GGML_ASSERT(backend);
     GGML_ASSERT(tensor);
+
+    if (size == 0) {
+        return;
+    }
+
     GGML_ASSERT(tensor->data != NULL && "tensor not allocated");
     GGML_ASSERT(offset + size <= ggml_nbytes(tensor) && "tensor write out of bounds");
 
@@ -268,6 +273,11 @@ void ggml_backend_tensor_set_async(ggml_backend_t backend, struct ggml_tensor * 
 void ggml_backend_tensor_get_async(ggml_backend_t backend, const struct ggml_tensor * tensor, void * data, size_t offset, size_t size) {
     GGML_ASSERT(backend);
     GGML_ASSERT(tensor);
+
+    if (size == 0) {
+        return;
+    }
+
     GGML_ASSERT(tensor->data != NULL && "tensor not allocated");
     GGML_ASSERT(offset + size <= ggml_nbytes(tensor) && "tensor read out of bounds");
 
@@ -1630,6 +1640,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
             ggml_backend_buffer_t input_buffer = input->view_src ? input->view_src->buffer : input->buffer;
             struct ggml_tensor * input_cpy = tensor_copy(input, split_backend_id, sched->cur_copy);
             return input_buffer != nullptr && ggml_backend_buffer_is_host(input_buffer) &&
+                ggml_nbytes(input) > 0 && ggml_nbytes(input_cpy) > 0 &&
                 ggml_is_contiguous(input) && ggml_is_contiguous(input_cpy);
         };
 

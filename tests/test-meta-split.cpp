@@ -35,6 +35,8 @@ static ggml_backend_meta_split_state split_state_callback(const ggml_tensor * te
         }
     } else if (std::strcmp(tensor->name, "partial") == 0) {
         state.axis = GGML_BACKEND_SPLIT_AXIS_PARTIAL;
+    } else if (std::strcmp(tensor->name, "empty-unknown") == 0) {
+        state.axis = GGML_BACKEND_SPLIT_AXIS_UNKNOWN;
     } else if (std::strcmp(tensor->name, "segments") == 0) {
         state.axis = GGML_BACKEND_SPLIT_AXIS_0;
         state.n_segments = 2;
@@ -169,6 +171,8 @@ int main() {
     ggml_set_name(partial, "partial");
     ggml_tensor * segments = ggml_new_tensor_4d(ctx.get(), GGML_TYPE_F32, 8, 4, 1, 1);
     ggml_set_name(segments, "segments");
+    ggml_tensor * empty_unknown = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_I32, 0);
+    ggml_set_name(empty_unknown, "empty-unknown");
     // Swap dimensions 0 and 1 while preserving dimension 2.  The result is
     // deliberately non-contiguous but remains split along axis 2.
     ggml_tensor * permuted = ggml_permute(ctx.get(), root, 1, 0, 2, 3);
@@ -179,6 +183,12 @@ int main() {
         std::fprintf(stderr, "failed to allocate meta tensors\n");
         return 1;
     }
+
+    // Empty transfers are no-ops even when a backend cannot classify the tensor's
+    // split. This matches the synchronous API and covers empty output selectors.
+    int32_t empty_value = 0;
+    ggml_backend_tensor_set_async(backend.get(), empty_unknown, &empty_value, 0, 0);
+    ggml_backend_tensor_get_async(backend.get(), empty_unknown, &empty_value, 0, 0);
 
     const size_t nbytes = ggml_nbytes(root);
     std::vector<float> expected(nbytes / sizeof(float));
@@ -307,6 +317,6 @@ int main() {
         return 1;
     }
 
-    std::puts("meta split axis-2, axis-3, mirrored, partial, and multi-segment readback passed");
+    std::puts("meta split axis-2, axis-3, mirrored, partial, empty, and multi-segment readback passed");
     return 0;
 }
