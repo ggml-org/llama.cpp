@@ -1,4 +1,5 @@
 #include "../cl-common.h"
+#include "../ops.h"
 
 void ggml_cl_load_kernels_argmax(ggml_backend_opencl_context * backend_ctx) {
     auto opencl_c_std =

@@ -7,6 +7,7 @@ ggml_add_backend_library(${TARGET_NAME}
                          ggml-opencl.cpp
                          cl-common.h
                          cl-common.cpp
+                         ops.h
                          repack.cpp
                          unpack.cpp
                          ops/nop.cpp

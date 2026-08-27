@@ -1,4 +1,5 @@
 #include "cl-common.h"
+#include "ops.h"
 
 std::string read_file(const std::string &path) {
     std::ifstream ifs(path);

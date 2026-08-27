@@ -1,4 +1,5 @@
 #include "../cl-common.h"
+#include "../ops.h"
 
 void ggml_cl_load_kernels_conv_2d(ggml_backend_opencl_context * backend_ctx) {
     cl_int err;

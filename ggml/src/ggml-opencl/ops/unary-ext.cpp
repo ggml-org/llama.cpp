@@ -1,4 +1,5 @@
 #include "../cl-common.h"
+#include "../ops.h"
 
 void ggml_cl_load_kernels_unary_ext(ggml_backend_opencl_context * backend_ctx) {
     cl_int err;
@@ -127,4 +128,3 @@ GGML_CL_UNARY_EXT_WRAP(ggml_cl_round,       round)
 GGML_CL_UNARY_EXT_WRAP(ggml_cl_trunc,       trunc)
 
 #undef GGML_CL_UNARY_EXT_WRAP
-
