@@ -79,6 +79,7 @@
 
 # Examples
 
+/data
 /examples/jeopardy/results.txt
 /tools/server/*.css.hpp
 /tools/server/*.html.hpp
