@@ -106,12 +106,6 @@ shared float buf_b_d[BN * BK_STEP];
 shared float buf_b_s[BN * BK_STEP];
 #endif
 
-#if defined(DATA_A_Q4_1) || defined(DATA_A_Q4_K)
-#define QUANT_OFFSET 8.0
-#elif defined(DATA_A_Q5_1) || defined(DATA_A_Q5_K)
-#define QUANT_OFFSET 16.0
-#endif
-
 #if defined(DATA_A_IQ4_NL) || defined(DATA_A_MXFP4) || defined(DATA_A_NVFP4)
 shared int8_t cm1_kvalues[16];
 #endif
@@ -381,11 +375,7 @@ void main() {
                     if (USE_MAGIC_BIAS) {
                         nbias_a[e] = -ACC_BIAS_F * scale_a[e];
                     }
-#if defined(DATA_A_Q4_K) || defined(DATA_A_Q5_K)
                     ma[e] = dm.y;
-#else
-                    ma[e] = float(QUANT_OFFSET) * scale_a[e] + dm.y;
-#endif
                 }
 
                 [[unroll]] for (uint c = 0; c < cms_per_col; c++) {

@@ -55,7 +55,8 @@ void block_a_to_shmem(block_a_prefetch blk, uint buf_ib, uint ks, uint loadr) {
     buf_a_qs[buf_ib * QPITCH + ks * (BK / 4) + loadr + 4] = hi4;
 
     if (loadr == 0) {
-        buf_a_dm[ks * BM + buf_ib] = vec2(float(blk.dm.x), float(blk.dm.y));
+        const float d = float(blk.dm.x);
+        buf_a_dm[ks * BM + buf_ib] = vec2(d, 8.0 * d + float(blk.dm.y));
     }
 }
 
@@ -118,7 +119,8 @@ void block_a_to_shmem(block_a_prefetch blk, uint buf_ib, uint ks, uint loadr) {
     buf_a_qs[buf_ib * QPITCH + ks * (BK / 4) + loadr + 4] = hi4;
 
     if (loadr == 0) {
-        buf_a_dm[ks * BM + buf_ib] = vec2(float(blk.dm.x), float(blk.dm.y));
+        const float d = float(blk.dm.x);
+        buf_a_dm[ks * BM + buf_ib] = vec2(d, 16.0 * d + float(blk.dm.y));
     }
 }
 
