@@ -672,6 +672,7 @@ struct llama_model {
     // dspark
     struct ggml_tensor * dspark_markov_w1   = nullptr;
     struct ggml_tensor * dspark_markov_w2   = nullptr;
+    struct ggml_tensor * dspark_markov_w2_s = nullptr;
     struct ggml_tensor * dspark_conf_proj   = nullptr;
     struct ggml_tensor * dspark_conf_proj_b = nullptr;
 
