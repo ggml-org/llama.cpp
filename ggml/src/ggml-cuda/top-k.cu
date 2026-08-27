@@ -48,6 +48,101 @@ static int next_power_of_2(int x) {
 
 #endif                            // CUB_TOP_K_AVAILABLE
 
+
+// Two-stage top-k for wide rows: a global top-k element has at most k-1 larger
+// elements, so at most k-1 inside its own tile and tiling cannot drop a winner.
+#define TOPK_CAND  1024   // argsort_f32_i32_cuda_bitonic's row limit
+
+// measured on H200 and A10G
+#define TOPK_BLOCK     256
+#define TOPK_TILE_WIDE 8192
+#define TOPK_TILE      4096
+
+template <int TILE, int BLOCK>
+static __global__ void topk_tile(const float * src, float * cand_val, int * cand_idx,
+                                 const int ncols, const int ntiles, const int k) {
+    __shared__ uint64_t smem[BLOCK];
+
+    const int     row     = blockIdx.x / ntiles;
+    const int     tile    = blockIdx.x % ntiles;
+    const float * row_ptr = src + (size_t) row * ncols;
+
+    uint64_t keys[TILE / BLOCK];
+#pragma unroll
+    for (int i = 0; i < TILE / BLOCK; ++i) {
+        const int col = tile * TILE + threadIdx.x + i * BLOCK;
+        uint32_t  b   = col < ncols ? __float_as_uint(row_ptr[col]) : 0;
+        b = (b & 0x80000000u) ? ~b : (b | 0x80000000u);
+        keys[i] = col < ncols ? (((uint64_t) b << 32) | (uint32_t) (ncols - 1 - col)) : 0;
+    }
+
+    const size_t out = ((size_t) row * ntiles + tile) * k;
+    for (int j = 0; j < k; ++j) {
+        uint64_t local = 0;
+#pragma unroll
+        for (int i = 0; i < TILE / BLOCK; ++i) {
+            local = max(local, keys[i]);
+        }
+        smem[threadIdx.x] = local;
+        __syncthreads();
+        for (int s = BLOCK / 2; s > 0; s >>= 1) {
+            if (threadIdx.x < s) {
+                smem[threadIdx.x] = max(smem[threadIdx.x], smem[threadIdx.x + s]);
+            }
+            __syncthreads();
+        }
+        const uint64_t best = smem[0];
+        if (threadIdx.x == 0) {
+            const int col = ncols - 1 - (int) (best & 0xFFFFFFFFu);
+            cand_val[out + j] = best ? row_ptr[col] : -INFINITY;
+            cand_idx[out + j] = best ? col : 0;
+        }
+#pragma unroll
+        for (int i = 0; i < TILE / BLOCK; ++i) {
+            if (keys[i] == best) {
+                keys[i] = 0;
+            }
+        }
+        __syncthreads();
+    }
+}
+
+// The argsort ranks candidates; turn its positions back into columns.
+static __global__ void topk_unmap(const int * cand_idx, const int * order, int * dst,
+                                  const int ncand, const int k) {
+    for (int i = threadIdx.x; i < k; i += blockDim.x) {
+        dst[(size_t) blockIdx.x * k + i] = cand_idx[(size_t) blockIdx.x * ncand + order[(size_t) blockIdx.x * ncand + i]];
+    }
+}
+
+static bool ggml_cuda_top_k_tiled(ggml_cuda_pool & pool, const float * src, int * dst,
+                                  const int ncols, const int nrows, const int k,
+                                  cudaStream_t stream) {
+    // Narrow rows are already handled whole by the bitonic sort below.
+    const int tile   = ncols >= 65536 ? TOPK_TILE_WIDE : TOPK_TILE;
+    const int ntiles = (ncols + tile - 1) / tile;
+    const int ncand  = ntiles * k;
+    if (ncols <= TOPK_CAND || ncand > TOPK_CAND) {
+        return false;
+    }
+
+    ggml_cuda_pool_alloc<float> cand_val(pool, (size_t) nrows * ncand);
+    ggml_cuda_pool_alloc<int>   cand_idx(pool, (size_t) nrows * ncand);
+    ggml_cuda_pool_alloc<int>   order   (pool, (size_t) nrows * ncand);
+
+    if (tile == TOPK_TILE_WIDE) {
+        topk_tile<TOPK_TILE_WIDE, TOPK_BLOCK><<<nrows * ntiles, TOPK_BLOCK, 0, stream>>>(
+                src, cand_val.get(), cand_idx.get(), ncols, ntiles, k);
+    } else {
+        topk_tile<TOPK_TILE, TOPK_BLOCK><<<nrows * ntiles, TOPK_BLOCK, 0, stream>>>(
+                src, cand_val.get(), cand_idx.get(), ncols, ntiles, k);
+    }
+    argsort_f32_i32_cuda_bitonic(cand_val.get(), order.get(), ncand, nrows,
+            GGML_SORT_ORDER_DESC, stream);
+    topk_unmap<<<nrows, TOPK_BLOCK, 0, stream>>>(cand_idx.get(), order.get(), dst, ncand, k);
+    return true;
+}
+
 void ggml_cuda_op_top_k(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * src0   = dst->src[0];
     const float *       src0_d = (const float *) src0->data;
@@ -63,6 +158,11 @@ void ggml_cuda_op_top_k(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const int64_t    nrows = ggml_nrows(src0);
     const int64_t    k     = dst->ne[0];
     ggml_cuda_pool & pool  = ctx.pool();
+
+    if (ggml_cuda_top_k_tiled(pool, src0_d, dst_d, ncols, nrows, k, stream)) {
+        return;
+    }
+
 #ifdef CUB_TOP_K_AVAILABLE
     // TODO: Switch to `DeviceSegmentedTopK` for multi-row TopK once implemented
     // https://github.com/NVIDIA/cccl/issues/6391
