@@ -4132,6 +4132,38 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.speculative.draft.n_min = value;
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_LOOKUP, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_DRAFT_N_MIN"));
+    add_opt(common_arg(
+        {"--spec-synth-len"}, "L",
+        "target mean synthetic acceptance length, including the target token (benchmarking only)",
+        [](common_params & params, const std::string & value) {
+            const std::string text = string_strip(value);
+            size_t pos = 0;
+            const double length = std::stod(text, &pos);
+            if (pos != text.size() || length == -1.0) {
+                throw std::invalid_argument("invalid value");
+            }
+            params.speculative.synth_len = length;
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_SYNTH_LEN"));
+    add_opt(common_arg(
+        {"--spec-synth-rates"}, "P0,P1,...",
+        "comma-separated unconditional per-position synthetic acceptance probabilities (benchmarking only)",
+        [](common_params & params, const std::string & value) {
+            const auto values = string_split<std::string>(value, ',');
+            std::vector<double> rates;
+            rates.reserve(values.size());
+            for (const auto & raw : values) {
+                const std::string text = string_strip(raw);
+                size_t pos = 0;
+                const double rate = std::stod(text, &pos);
+                if (pos != text.size()) {
+                    throw std::invalid_argument("invalid value");
+                }
+                rates.push_back(rate);
+            }
+            params.speculative.synth_rates = std::move(rates);
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_SYNTH_RATES"));
 
     add_opt(common_arg(
         {"--spec-draft-p-split", "--draft-p-split"}, "P",
