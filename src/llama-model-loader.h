@@ -68,7 +68,7 @@ struct llama_model_loader {
     static const int TENSOR_SKIP            = 1 << 2;
     static const int TENSOR_SKIP_IF_VIRTUAL = 1 << 3;
     static const int TENSOR_ALLOW_RESHAPE   = 1 << 4;
-    static const int TENSOR_GET_ROW_LAZY    = 1 << 5; // read rows on demand instead of loading whole tensor; requires mmap for now
+    static const int TENSOR_READ_LAZY       = 1 << 5; // read rows on demand instead of loading whole tensor; requires mmap for now
 
     int n_kv      = 0;
     int n_tensors = 0;
@@ -92,7 +92,7 @@ struct llama_model_loader {
 
     llama_mmaps mappings;
 
-    // byte ranges of TENSOR_GET_ROW_LAZY tensors, per file index
+    // byte ranges of TENSOR_READ_LAZY tensors, per file index
     std::map<uint32_t, std::vector<std::pair<size_t, size_t>>> lazy_tensor_ranges;
 
     std::map<std::string, llama_tensor_weight, weight_name_comparer> weights_map;
