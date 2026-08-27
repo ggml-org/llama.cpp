@@ -21495,10 +21495,46 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
                     CL_CHECK(clReleaseMemObject(buf_src2));
 
                 } else { // for gemm
-                    kernel = backend_ctx->kernel_gemm_moe_q4_0_f32_ns;
-                    if (backend_ctx->kernel_gemm_moe_q4_0_f32_ns_bin) {
-                        kernel = backend_ctx->kernel_gemm_moe_q4_0_f32_ns_bin;
-                    }
+                    // dp4a (int8) prefill GEMM variant
+                    static const char * q4_0_moe_dp4a_env = getenv("GGML_OPENCL_Q4_0_MOE_DP4A");
+
+                    // The prebuilt kernel-lib GEMM is tuned for prefill-sized work, but it was
+                    // selected whenever it was loaded, and its presence also disabled the dp4a GEMM
+                    // for every shape. A speculative-decode verify step reaches this path at a
+                    // handful of tokens, and so does every short prefill chunk; both ran a
+                    // prefill-tuned kernel. Gate it on size instead.
+                    //
+                    // The size is the total routing count, ne20*ne21 (n_expert_used * n_tokens) -
+                    // the quantity max_post_router_tile, and so the GEMM's N, is derived from. Not
+                    // ne11: for mul_mat_id src1 is [n_embd, n_expert_used, n_tokens], so ne11 is
+                    // n_expert_used (or 1 for the down projection) and does not move with the batch.
+                    //
+                    // Measured on Adreno X2-90 by sweeping the physical batch with the kernel lib
+                    // loaded and only the threshold moving, dp4a relative to the prebuilt kernel
+                    // (pp512 t/s, gemma-4-26B-A4B-QAT-Q4_0 and Qwen3-30B-A3B-Q4_0):
+                    //
+                    //   routings    32    64   128   256   512  1024  2048   4096
+                    //   26B       +26%  +17%  +18%  +16%  +12%   +6%   +1%  -2.5%
+                    //   30B       +31%  +18%  +16%  +14%  +12%   +7%   +1%  -0.8%
+                    //
+                    // The prebuilt kernel leads only at a full 512-token ubatch, so keep it exactly
+                    // there. GGML_OPENCL_MOE_BIN_MIN_ROUTINGS overrides the threshold.
+                    static const char * moe_bin_min_env = getenv("GGML_OPENCL_MOE_BIN_MIN_ROUTINGS");
+                    const int  moe_bin_min   = moe_bin_min_env ? atoi(moe_bin_min_env) : 4096;
+                    const bool bin_available = backend_ctx->kernel_gemm_moe_q4_0_f32_ns_bin != nullptr;
+
+                    bool use_moe_dp4a = q4_0_moe_dp4a_env
+                        ? (atoi(q4_0_moe_dp4a_env) != 0)
+                        : (backend_ctx->adreno_gen == ADRENO_GPU_GEN::X2E
+                           && (!bin_available || (int)(ne20 * ne21) < moe_bin_min));
+                    // dot prod has to be available
+                    use_moe_dp4a = backend_ctx->has_integer_dot && use_moe_dp4a;
+
+                    const bool use_bin_kernel = bin_available && !use_moe_dp4a;
+
+                    kernel = use_bin_kernel
+                        ? backend_ctx->kernel_gemm_moe_q4_0_f32_ns_bin
+                        : backend_ctx->kernel_gemm_moe_q4_0_f32_ns;
 
                     // Reorder router if called from test-backend-ops or when new router is generated.
                     // Otherwise reuse the reordered result from previous mul_mat_id call.
@@ -21510,16 +21546,6 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
                     cl_mem sub_buf_src1_pre, sub_buf_dst, buf_dst_image;
                     cl_mem buf_src1_reordered = nullptr, image_src1_reordered = nullptr;
                     cl_mem buf_src2, buf_src2_emap;
-
-                    // dp4a (int8) prefill GEMM variant
-                    static const char * q4_0_moe_dp4a_env = getenv("GGML_OPENCL_Q4_0_MOE_DP4A");
-                    bool use_moe_dp4a = q4_0_moe_dp4a_env
-                        ? (atoi(q4_0_moe_dp4a_env) != 0)
-                        : (backend_ctx->adreno_gen == ADRENO_GPU_GEN::X2E);
-                    // dot prod has to be available
-                    use_moe_dp4a = backend_ctx->has_integer_dot && use_moe_dp4a;
-                    // bin kernel takes precedence
-                    use_moe_dp4a = use_moe_dp4a && backend_ctx->kernel_gemm_moe_q4_0_f32_ns_bin == nullptr;
 
                     cl_buffer_region region;
                     region.origin = 0;
@@ -21559,7 +21585,7 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
                         cl_image_desc image_desc_buf_src1;
                         image_format_buf_src1 = {CL_RGBA, CL_FLOAT};
                         image_desc_buf_src1 = {CL_MEM_OBJECT_IMAGE1D_BUFFER, static_cast<size_t>(ne00 * max_post_router_tile * n_tile_size / 4), 0,0,0,0,0,0,0, {buf_src1_reordered}};
-                        if (backend_ctx->kernel_gemm_moe_q4_0_f32_ns_bin) {
+                        if (use_bin_kernel) {
                             // bin kernel uses slightly different image format
                             image_format_buf_src1 = {CL_R, CL_FLOAT};
                             image_desc_buf_src1.image_width = static_cast<size_t>(ne00 * max_post_router_tile * n_tile_size);
