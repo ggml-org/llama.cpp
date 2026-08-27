@@ -1,10 +1,11 @@
 <script lang="ts">
 	import ModelLoadHighlight from './ModelLoadHighlight.svelte';
 	import type { ModelItem } from './utils';
-	import { ChevronDown, Lightbulb, Loader2 } from '@lucide/svelte';
+	import { ChevronDown, Lightbulb, Loader2, PackageSearch } from '@lucide/svelte';
 	import {
 		ChatFormActionAddReasoningSubmenu,
 		DialogModelInformation,
+		DialogModelsDiscover,
 		DropdownMenuSearchable,
 		ModelId,
 		ModelsSelectorList,
@@ -42,6 +43,7 @@
 	// The model submenu opens together with the menu so the list and its search
 	// box are immediately available, as before the submenu was introduced
 	let modelSubOpen = $state(false);
+	let modelsHubOpen = $state(false);
 
 	const ms = useModelsSelector({
 		currentModel: () => currentModel,
@@ -351,6 +353,17 @@
 						</DropdownMenu.SubContent>
 					</DropdownMenu.Sub>
 
+					<DropdownMenu.Separator />
+
+					<DropdownMenu.Item
+						class="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.75 text-left text-sm transition-colors hover:bg-accent"
+						onclick={() => (modelsHubOpen = true)}
+					>
+						<PackageSearch class="h-4 w-4 shrink-0 text-muted-foreground" />
+
+						<span>Discover models</span>
+					</DropdownMenu.Item>
+
 					<ChatFormActionAddReasoningSubmenu />
 				</DropdownMenu.Content>
 			</DropdownMenu.Root>
@@ -415,3 +428,5 @@
 		open={ms.showModelDialog}
 	/>
 {/if}
+
+<DialogModelsDiscover bind:open={modelsHubOpen} />
