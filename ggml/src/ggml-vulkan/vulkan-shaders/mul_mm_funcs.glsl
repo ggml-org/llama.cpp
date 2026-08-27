@@ -208,7 +208,9 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
             const uint iqs = (idx % 128) * 2;         // elemento 0,2,4..254
 
             const float d = float(data_a[ib].d);
-            const uint pow3_tq1[5] = uint[5](1u, 3u, 9u, 27u, 81u);
+            // powers of 3 packed in one 32-bit constant, 7 bits each (max 81 < 128):
+    // avoids a constant array that may not end up in registers
+    const uint POW3_PACKED = (1u << 28) | (3u << 21) | (9u << 14) | (27u << 7) | 81u;
 
             vec2 v;
             for (uint kk = 0u; kk < 2u; ++kk) {
@@ -226,7 +228,7 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
                     t = e3 / 4u;
                     qbyte = uint(data_a[ib].qh[e3 % 4u]);
                 }
-                v[kk] = d * (float((((qbyte * pow3_tq1[t]) & 255u) * 3u) >> 8) - 1.0);
+                v[kk] = d * (float((((qbyte * ((POW3_PACKED >> (7u * (4u - t))) & 0x7Fu)) & 255u) * 3u) >> 8) - 1.0);
             }
 
             const uint k_pair = row * LOAD_VEC_A / 2;

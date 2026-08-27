@@ -22,7 +22,9 @@ void main() {
 
     const uint ib = i / QUANT_K;
     const float d = float(data_a[ib].d);
-    const uint pow3[5] = uint[5](1u, 3u, 9u, 27u, 81u);
+    // powers of 3 packed in one 32-bit constant, 7 bits each (max 81 < 128):
+    // avoids a constant array that may not end up in registers
+    const uint POW3_PACKED = (1u << 28) | (3u << 21) | (9u << 14) | (27u << 7) | 81u;
 
     for (uint j = 0; j < 4 && (i + j) < p.ne; ++j) {
         const uint e = (i + j) % QUANT_K;
@@ -45,7 +47,7 @@ void main() {
             qbyte = uint(data_a[ib].qh[m]);
         }
 
-        const uint q = (qbyte * pow3[t]) & 255u;   // troncamento a 8 bit come il riferimento CPU
+        const uint q = (qbyte * ((POW3_PACKED >> (7u * (4u - t))) & 0x7Fu)) & 255u;   // troncamento a 8 bit come il riferimento CPU
         const uint xi = (q * 3u) >> 8;
         data_b[i + j] = D_TYPE(d * (float(xi) - 1.0f));
     }

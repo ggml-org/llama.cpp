@@ -20,7 +20,9 @@ void compute_outputs(const uint32_t first_row, const uint32_t num_rows) {
         }
     }
 
-    const uint pow3[5] = uint[5](1u, 3u, 9u, 27u, 81u);
+    // powers of 3 packed in one 32-bit constant, 7 bits each (max 81 < 128):
+    // avoids a constant array that may not end up in registers
+    const uint POW3_PACKED = (1u << 28) | (3u << 21) | (9u << 14) | (27u << 7) | 81u;
     for (uint nrow = 0; nrow < num_rows; ++nrow) {
         const uint ib0 = a_offset + (first_row + nrow) * num_blocks_per_row;  // a_offset e' GIA' in blocchi (get_offsets divide per QUANT_K): la doppia divisione leggeva l'esperto sbagliato
         for (uint jcol = 0; jcol < NUM_COLS; ++jcol) {
@@ -32,7 +34,7 @@ void compute_outputs(const uint32_t first_row, const uint32_t num_rows) {
                 [[unroll]] for (uint m = tid%8; m < 32; m += 8) {
                     const uint q_byte = uint(data_a[ib0 + i].qs[m]);
                     [[unroll]] for (uint t = 0; t < 5; ++t) {
-                        const uint q = (q_byte * pow3[t]) & 255u;
+                        const uint q = (q_byte * ((POW3_PACKED >> (7u * (4u - t))) & 0x7Fu)) & 255u;
                         const uint xi = (q * 3u) >> 8;
                         const FLOAT_TYPE dequant_val = FLOAT_TYPE(d * (float(xi) - 1.0f));
                         const uint elem = t * 32u + m;
@@ -45,7 +47,7 @@ void compute_outputs(const uint32_t first_row, const uint32_t num_rows) {
                 [[unroll]] for (uint m = tid%8; m < 16; m += 8) {
                     const uint q_byte = uint(data_a[ib0 + i].qs[32u + m]);
                     [[unroll]] for (uint t = 0; t < 5; ++t) {
-                        const uint q = (q_byte * pow3[t]) & 255u;
+                        const uint q = (q_byte * ((POW3_PACKED >> (7u * (4u - t))) & 0x7Fu)) & 255u;
                         const uint xi = (q * 3u) >> 8;
                         const FLOAT_TYPE dequant_val = FLOAT_TYPE(d * (float(xi) - 1.0f));
                         const uint elem = 160u + t * 16u + m;
@@ -58,7 +60,7 @@ void compute_outputs(const uint32_t first_row, const uint32_t num_rows) {
                 [[unroll]] for (uint j = tid%8; j < 4; j += 8) {
                     const uint qh_byte = uint(data_a[ib0 + i].qh[j]);
                     [[unroll]] for (uint t = 0; t < 4; ++t) {
-                        const uint q = (qh_byte * pow3[t]) & 255u;
+                        const uint q = (qh_byte * ((POW3_PACKED >> (7u * (4u - t))) & 0x7Fu)) & 255u;
                         const uint xi = (q * 3u) >> 8;
                         const FLOAT_TYPE dequant_val = FLOAT_TYPE(d * (float(xi) - 1.0f));
                         const uint elem = 240u + t * 4u + j;

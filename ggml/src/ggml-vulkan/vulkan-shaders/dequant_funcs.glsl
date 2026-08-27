@@ -613,7 +613,9 @@ vec2 get_dm(uint ib, uint a_offset) {
 // (ultimi 16). La cifra t-esima si estrae con xi = (q * 3^t * 3) >> 8, che
 // mappa {0,1,2} su {-1,0,+1}. La scala `d` la applica get_dm.
 float tq1_0_val(uint ib, uint e, uint a_offset) {
-    const uint pow3[5] = uint[5](1u, 3u, 9u, 27u, 81u);
+    // powers of 3 packed in one 32-bit constant, 7 bits each (max 81 < 128):
+    // avoids a constant array that may not end up in registers
+    const uint POW3_PACKED = (1u << 28) | (3u << 21) | (9u << 14) | (27u << 7) | 81u;
     uint qbyte; uint t;
     if (e < 160u) {
         t = e / 32u;  qbyte = uint(data_a[a_offset + ib].qs[e % 32u]);
@@ -624,7 +626,7 @@ float tq1_0_val(uint ib, uint e, uint a_offset) {
         const uint e3 = e - 240u;
         t = e3 / 4u;  qbyte = uint(data_a[a_offset + ib].qh[e3 % 4u]);
     }
-    return float(((((qbyte * pow3[t]) & 255u)) * 3u) >> 8) - 1.0;
+    return float(((((qbyte * ((POW3_PACKED >> (7u * (4u - t))) & 0x7Fu)) & 255u)) * 3u) >> 8) - 1.0;
 }
 vec2 dequantize(uint ib, uint iqs, uint a_offset) {
     return vec2(tq1_0_val(ib, iqs, a_offset), tq1_0_val(ib, iqs + 1u, a_offset));
