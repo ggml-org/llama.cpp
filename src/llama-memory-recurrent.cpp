@@ -158,13 +158,14 @@ bool llama_memory_recurrent::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos
         p1 = std::numeric_limits<llama_pos>::max();
     }
 
+    if ((uint32_t) seq_id >= this->n_seq_max) {
+        LLAMA_LOG_ERROR("%s: invalid seq_id (%d) - larger than n_seq_max (%d)\n", __func__, seq_id, this->n_seq_max);
+        return false;
+    }
+
     const bool rm_all = p0 == 0 && p1 == std::numeric_limits<llama_pos>::max();
     if (rm_all) {
-        if (seq_id >= 0) {
-            set_rs_idx(seq_id, 0);
-        } else {
-            std::fill(rs_idx.begin(), rs_idx.end(), 0);
-        }
+        set_rs_idx(seq_id, 0);
     }
 
     // models like Mamba or RWKV can't have a state partially erased at the end
@@ -181,7 +182,9 @@ bool llama_memory_recurrent::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos
             // partial rollback via per-token snapshot index (bounded by n_rs_seq)
             if (0 < p0 && p0 <= cell.pos && p1 > cell.pos) {
                 const llama_pos rollback = cell.pos - (p0 - 1);
-                if (rollback >= 1 && rollback <= (llama_pos) n_rs_seq) {
+                // pending rollback is single-use
+                const bool pending = rs_idx[seq_id] != 0;
+                if (!pending && rollback >= 1 && rollback <= (llama_pos) n_rs_seq) {
                     set_rs_idx(seq_id, (uint32_t) rollback);
                     cell.pos = p0 - 1;
                     return true;
@@ -390,10 +393,17 @@ llama_pos llama_memory_recurrent::seq_pos_max(llama_seq_id seq_id) const {
 }
 
 void llama_memory_recurrent::set_rs_idx(llama_seq_id seq_id, uint32_t idx) {
-    if (seq_id < 0 || (size_t) seq_id >= rs_idx.size()) {
+    if (seq_id < 0) {
+        std::fill(rs_idx.begin(), rs_idx.end(), 0);
         return;
     }
-    rs_idx[seq_id] = (idx > n_rs_seq) ? n_rs_seq : idx;
+
+    assert(n_seq_max == rs_idx.size());
+
+    GGML_ASSERT((uint32_t) seq_id < n_seq_max);
+    GGML_ASSERT(idx <= n_rs_seq);
+
+    rs_idx[seq_id] = idx;
 }
 
 std::map<ggml_backend_buffer_type_t, size_t> llama_memory_recurrent::memory_breakdown() const {
@@ -742,6 +752,7 @@ void llama_memory_recurrent::state_write(llama_io_write_i & io, llama_seq_id seq
     uint32_t cell_range_begin = size;
     for (uint32_t i = 0; i < size; ++i) {
         const auto & cell = cells[i];
+        // TODO: fix incosistent handling of `seq_id < 0` and `seq_id == -1` in the codebase [TAG_LLAMA_SEQ_ID_NEG]
         if ((seq_id == -1 && !cell.is_empty()) || cell.has_seq_id(seq_id)) {
             ++cell_count;
             uint32_t rs_idx_cur = 0;
@@ -827,6 +838,7 @@ void llama_memory_recurrent::state_read(llama_io_read_i & io, llama_seq_id seq_i
     }
 
     if (!res) {
+        // TODO: fix incosistent handling of `seq_id < 0` and `seq_id == -1` in the codebase [TAG_LLAMA_SEQ_ID_NEG]
         if (seq_id == -1) {
             clear(true);
         } else {
@@ -836,11 +848,7 @@ void llama_memory_recurrent::state_read(llama_io_read_i & io, llama_seq_id seq_i
     }
 
     if (n_rs_seq != 0) {
-        if (seq_id == -1) {
-            std::fill(rs_idx.begin(), rs_idx.end(), 0);
-        } else {
-            set_rs_idx(seq_id, 0);
-        }
+        set_rs_idx(seq_id, 0);
     }
 }
 

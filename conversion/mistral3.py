@@ -15,6 +15,7 @@ from .llama import LlamaModel
     "Mistral3ForConditionalGeneration",
     "Ministral3ForCausalLM",
 )
+@ModelBase.example("mistralai/Mistral-Small-3.1-24B-Instruct-2503", "hf-tiny-v2/tiny-random-Ministral3ForCausalLM")
 class Mistral3Model(TextModel):
     class Ministral3Model(LlamaModel):
         model_arch = gguf.MODEL_ARCH.MISTRAL3

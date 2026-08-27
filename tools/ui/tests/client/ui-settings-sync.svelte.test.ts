@@ -1,6 +1,6 @@
 import { CONFIG_LOCALSTORAGE_KEY } from '$lib/constants';
 import { serverStore } from '$lib/stores/server.svelte';
-import { settingsStore } from '$lib/stores/settings.svelte';
+import { settingsStore } from '$lib/stores/settings/index.svelte';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 function mockProps(uiSettings: Record<string, string | number | boolean>) {
@@ -45,6 +45,19 @@ describe('server ui_settings application semantics', () => {
 		const stored = JSON.parse(localStorage.getItem(CONFIG_LOCALSTORAGE_KEY) ?? '{}');
 
 		expect(stored.apiKey).toBe('sk-user-key');
+	});
+
+	it('keeps a value the user sets before the baseline is reachable', () => {
+		settingsStore.initialize();
+		// the splash is the only way in when the server runs with --api-key,
+		// so the first user write lands before the first successful /props
+		settingsStore.updateConfig('apiKey', 'sk-user-key');
+		mockProps({ apiKey: 'admin-placeholder', theme: 'dark' });
+
+		settingsStore.syncWithServerDefaults();
+
+		expect(settingsStore.config.apiKey).toBe('sk-user-key');
+		expect(settingsStore.config.theme).toBe('dark');
 	});
 
 	it('Reset to Default reapplies the full baseline, api key included', () => {

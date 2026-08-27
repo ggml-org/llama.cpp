@@ -67,8 +67,8 @@ test parameters:
   -nkvo, --no-kv-offload <0|1>              (default: 0)
   -fa, --flash-attn <on|off|auto>           (default: auto)
   -dev, --device <dev0/dev1/...>            (default: auto)
-  -mmp, --mmap <0|1>                        (default: 1)
-  -dio, --direct-io <0|1>                   (default: 0)
+  -mmp, --mmap <0|1>                        (DEPRECATED IN FAVOUR OF --load-mode)
+  -dio, --direct-io <0|1>                   (DEPRECATED IN FAVOUR OF --load-mode)
   -embd, --embeddings <0|1>                 (default: 0)
   -ts, --tensor-split <ts0/ts1/..>          (default: 0)
   -ot --override-tensor <tensor name pattern>=<buffer type>;...

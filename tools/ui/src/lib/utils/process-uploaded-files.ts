@@ -4,8 +4,8 @@ import { isSvgMimeType, svgBase64UrlToPngDataURL } from './svg-to-png';
 import { isWebpMimeType, webpBase64UrlToPngDataURL } from './webp-to-png';
 import { SETTINGS_KEYS } from '$lib/constants';
 import { FileTypeCategory } from '$lib/enums';
-import { modelsStore } from '$lib/stores/models.svelte';
-import { settingsStore } from '$lib/stores/settings.svelte';
+import { modelsStore } from '$lib/stores/models/index.svelte';
+import { settingsStore } from '$lib/stores/settings/index.svelte';
 import { getFileTypeCategory } from '$lib/utils';
 import { toast } from 'svelte-sonner';
 
@@ -108,7 +108,7 @@ export async function processFilesToChatUploaded(
 
 				// Show suggestion toast if vision model is available but PDF as image is disabled
 				const hasVisionSupport = activeModelId
-					? modelsStore.modelSupportsVision(activeModelId)
+					? modelsStore.props.modelSupportsVision(activeModelId)
 					: false;
 				const currentConfig = settingsStore.config;
 

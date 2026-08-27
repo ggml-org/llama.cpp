@@ -8,7 +8,8 @@
 		ChatFormInputFileInputInvisible,
 		ChatFormMcpResourcesList,
 		ChatFormPickers,
-		DialogMcpResourcesBrowser
+		DialogMcpResourcesBrowser,
+		DialogMcpServers
 	} from '$lib/components/app';
 	import {
 		CLIPBOARD_CONTENT_QUOTE_PREFIX,
@@ -22,13 +23,13 @@
 		FileExtensionText,
 		KeyboardKey,
 		MimeTypeText,
-		SpecialFileType
+		SpecialFileType,
+		ToolSource
 	} from '$lib/enums';
 	import { useChatFormPickers } from '$lib/hooks/use-chat-form-pickers.svelte';
 	import {
 		chatStore,
 		conversationsStore,
-		mcpResourceStore,
 		mcpStore,
 		modelsStore,
 		serverStore,
@@ -48,6 +49,7 @@
 		containsFileMentionLink,
 		findCommandToken,
 		findMentionToken,
+		getConversationModel,
 		isIMEComposing,
 		isOffsetInCodeBlock,
 		parseClipboardContent,
@@ -72,7 +74,6 @@
 		disabled?: boolean;
 		isLoading?: boolean;
 		placeholder?: string;
-		showMcpPromptButton?: boolean;
 		showAddButton?: boolean;
 		showModelSelector?: boolean;
 
@@ -102,7 +103,6 @@
 		onValueChange,
 		placeholder = 'Type a message...',
 		showAddButton = true,
-		showMcpPromptButton = false,
 		showModelSelector = true,
 		uploadedFiles = $bindable([]),
 		value = $bindable('')
@@ -139,7 +139,9 @@
 	// float above the box.
 	let mentionAnchor: HTMLDivElement | null = $state(null);
 
-	let cwd = $derived(conversationsStore.activeConversation?.cwd ?? conversationsStore.pendingCwd);
+	let cwd = $derived(
+		conversationsStore.activeConversation?.cwd ?? conversationsStore.preferences.pendingCwd
+	);
 
 	const pickers = useChatFormPickers({
 		focusInput: refocusInput,
@@ -149,8 +151,18 @@
 		getServerHome: () => toolsStore.serverHome ?? null,
 		getShowModelSelector: () => showModelSelector,
 		getValue: () => value,
-		hasCwdTools: () => toolsStore.hasEnabledCwdTools,
-		hasPrompts: () => mcpStore.hasPromptsCapability(conversationsStore.getAllMcpServerOverrides()),
+		hasCwdTools: () => conversationsStore.preferences.hasEnabledCwdTools(),
+		// policy-aware, same rule as the agentic flow: MCP category on and at
+		// least one globally-enabled server whose group key is not disabled
+		hasPrompts: () => {
+			const prefs = conversationsStore.preferences;
+
+			if (!prefs.isCategoryEnabled(ToolSource.MCP)) return false;
+
+			return mcpStore
+				.getServers()
+				.some((s) => s.enabled && prefs.isServerToolsEnabled(s.id) && s.url.trim());
+		},
 		openModelSelector: () => chatFormActionsRef?.openModelSelector(),
 		setCaretOffset: (offset) => inputRef?.setCaretOffset(offset),
 		setValue: (v) => {
@@ -169,7 +181,7 @@
 			onValueChange?.('');
 		}
 
-		await conversationsStore.setCwd(newDir);
+		await conversationsStore.preferences.setCwd(newDir);
 
 		if (conversationsStore.activeConversation) {
 			await chatStore.recordCwdChange(newDir?.trim() || null);
@@ -179,6 +191,9 @@
 	// Resource Dialog State
 	let isResourceDialogOpen = $state(false);
 	let preSelectedResourceUri = $state<string | undefined>(undefined);
+
+	// MCP Servers Dialog State
+	let isMcpServersDialogOpen = $state(false);
 
 	let currentConfig = $derived(settingsStore.config);
 
@@ -190,31 +205,9 @@
 
 	let isRouter = $derived(serverStore.isRouterMode);
 	let conversationModel = $derived(
-		chatStore.getConversationModel(conversationsStore.activeMessages as DatabaseMessage[])
+		getConversationModel(conversationsStore.activeMessages as DatabaseMessage[])
 	);
-	let activeModelId = $derived.by(() => {
-		const options = modelsStore.models;
-
-		if (!isRouter) {
-			return options.length > 0 ? options[0].model : null;
-		}
-
-		const selectedId = modelsStore.selectedModelId;
-
-		if (selectedId) {
-			const model = options.find((m) => m.id === selectedId);
-
-			if (model) return model.model;
-		}
-
-		if (conversationModel) {
-			const model = options.find((m) => m.model === conversationModel);
-
-			if (model) return model.model;
-		}
-
-		return null;
-	});
+	let activeModelId = $derived(modelsStore.activeModelId);
 
 	let hasModelSelected = $derived(
 		!isRouter || !!conversationModel || !!modelsStore.selectedModelId
@@ -556,30 +549,30 @@
 >
 	<ChatFormPickers
 		bind:this={pickersRef}
-		isCommandPickerOpen={pickers.isCommandPickerOpen}
 		commandQuery={pickers.commandQuery}
 		commands={pickers.availableCommands}
+		isCommandPickerOpen={pickers.isCommandPickerOpen}
+		isMentionPickerOpen={pickers.isMentionPickerOpen}
+		isPromptPickerOpen={pickers.isPromptPickerOpen}
+		{mentionAnchor}
+		mentionQuery={pickers.mentionQuery}
 		onCommandPickerClose={pickers.handleCommandPickerClose}
 		onCommandSelect={pickers.handleCommandSelect}
-		isPromptPickerOpen={pickers.isPromptPickerOpen}
-		promptSearchQuery={pickers.promptSearchQuery}
-		isMentionPickerOpen={pickers.isMentionPickerOpen}
-		mentionQuery={pickers.mentionQuery}
-		{mentionAnchor}
-		scopePath={pickers.mentionScopePath}
-		onPromptPickerClose={pickers.handlePromptPickerClose}
-		onMentionPickerClose={pickers.handleMentionPickerClose}
 		onMentionOpened={() => inputRef?.focus()}
+		onMentionPickerClose={pickers.handleMentionPickerClose}
 		onMentionSelect={handleMentionSelect}
-		onPromptLoadStart={handlePromptLoadStart}
 		onPromptLoadComplete={handlePromptLoadComplete}
 		onPromptLoadError={handlePromptLoadError}
+		onPromptLoadStart={handlePromptLoadStart}
+		onPromptPickerClose={pickers.handlePromptPickerClose}
+		promptSearchQuery={pickers.promptSearchQuery}
+		scopePath={pickers.mentionScopePath}
 	/>
 
 	<div
 		bind:this={mentionAnchor}
-		class="pointer-events-none absolute top-0 right-0 left-0 h-px"
 		aria-hidden="true"
+		class="pointer-events-none absolute top-0 right-0 left-0 h-px"
 	></div>
 
 	<div
@@ -589,34 +582,34 @@
 		data-slot="input-area"
 	>
 		<ChatAttachmentsList
-			{attachments}
 			bind:uploadedFiles
-			onFileRemove={handleFileRemove}
-			limitToSingleRow
-			class="py-5"
-			style="scroll-padding: 1rem;"
 			activeModelId={activeModelId ?? undefined}
+			{attachments}
+			class="py-5"
+			limitToSingleRow
+			onFileRemove={handleFileRemove}
+			style="scroll-padding: 1rem;"
 		/>
 
 		<div
 			class="flex-column relative min-h-12 items-center rounded-4xl md:rounded-3xl py-2 pb-2.25 shadow-sm transition-all focus-within:shadow-md md:py-3!"
 		>
 			<ChatFormInput
-				class="px-5 py-1.5 md:pt-0"
 				bind:this={inputRef}
 				bind:value
-				onKeydown={handleKeydown}
+				class="px-5 py-1.5 md:pt-0"
+				{disabled}
 				onInput={() => {
 					pickers.handleInput();
 					onValueChange?.(value);
 				}}
+				onKeydown={handleKeydown}
 				onPaste={handlePaste}
-				{disabled}
 				{placeholder}
 				{useRichInput}
 			/>
 
-			{#if mcpResourceStore.hasAttachments}
+			{#if mcpStore.resources.hasAttachments}
 				<ChatFormMcpResourcesList
 					class="mb-3"
 					onResourceClick={(uri) => {
@@ -627,45 +620,43 @@
 			{/if}
 
 			<ChatFormActions
-				class="px-3"
 				bind:this={chatFormActionsRef}
 				canSend={canSubmit}
+				class="px-3"
 				{disabled}
 				{isLoading}
 				isReasoning={chatStore.isReasoning}
 				{isRecording}
-				{showAddButton}
-				{showModelSelector}
-				{uploadedFiles}
 				onFileUpload={handleFileUpload}
+				onMcpSettingsClick={() => (isMcpServersDialogOpen = true)}
 				onMicClick={handleMicClick}
 				{onStop}
 				onSystemPromptClick={() => onSystemPromptClick?.({ files: uploadedFiles, message: value })}
-				onMcpPromptClick={showMcpPromptButton ? () => pickers.openPromptPicker() : undefined}
-				onMcpResourcesClick={() => (isResourceDialogOpen = true)}
+				{showAddButton}
+				{showModelSelector}
+				{uploadedFiles}
 			/>
 		</div>
 	</div>
 
 	<ContextGaugePopup />
 
-	{#if toolsStore.hasEnabledCwdTools}
+	{#if conversationsStore.preferences.hasEnabledCwdTools()}
 		<ChatFormCurrentWorkingDirectory
-			directory={cwd}
-			isOpen={pickers.isWorkingDirectoryPickerOpen}
 			bind:query={pickers.workingDirectoryQuery}
 			customAnchor={mentionAnchor}
+			directory={cwd}
+			{disabled}
+			isOpen={pickers.isWorkingDirectoryPickerOpen}
 			onChange={handleWorkingDirectoryChange}
 			onClose={pickers.handleWorkingDirectoryClose}
 			onOpen={pickers.handleWorkingDirectoryOpen}
-			{disabled}
 		/>
 	{/if}
 </form>
 
 <DialogMcpResourcesBrowser
 	bind:open={isResourceDialogOpen}
-	preSelectedUri={preSelectedResourceUri}
 	onAttach={(resource: MCPResourceInfo) => {
 		mcpStore.attachResource(resource.uri);
 	}}
@@ -674,4 +665,7 @@
 			preSelectedResourceUri = undefined;
 		}
 	}}
+	preSelectedUri={preSelectedResourceUri}
 />
+
+<DialogMcpServers bind:open={isMcpServersDialogOpen} />

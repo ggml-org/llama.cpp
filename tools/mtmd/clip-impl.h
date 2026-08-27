@@ -6,6 +6,7 @@
 
 #include <array>
 #include <climits>
+#include <cmath>
 #include <cstdarg>
 #include <cinttypes>
 #include <string>
@@ -74,6 +75,7 @@
 #define KEY_SAM_N_HEAD             "clip.vision.sam.head_count"
 #define KEY_SAM_N_BLOCK            "clip.vision.sam.block_count"
 #define KEY_SAM_N_EMBD             "clip.vision.sam.embedding_length"
+#define KEY_VISION_N_EXPERT_USED   "clip.vision.expert_used_count"
 // audio-specific
 #define KEY_AUDIO_PROJ_TYPE        "clip.audio.projector_type" // for models with mixed modalities
 #define KEY_A_NUM_MEL_BINS         "clip.audio.num_mel_bins"
@@ -118,7 +120,11 @@
 #define TN_FFN_DOWN        "%s.blk.%d.ffn_down.%s"
 #define TN_FFN_GATE        "%s.blk.%d.ffn_gate.%s"
 #define TN_FFN_UP          "%s.blk.%d.ffn_up.%s"
-#define TN_FFN_GATE        "%s.blk.%d.ffn_gate.%s"
+#define TN_FFN_GATE_INP    "%s.blk.%d.ffn_gate_inp.%s"    // MoE router (dots3note)
+#define TN_FFN_GATE_EXPS   "%s.blk.%d.ffn_gate_exps.%s"
+#define TN_FFN_UP_EXPS     "%s.blk.%d.ffn_up_exps.%s"
+#define TN_FFN_DOWN_EXPS   "%s.blk.%d.ffn_down_exps.%s"
+#define TN_FFN_EXP_PROBS_B "%s.blk.%d.exp_probs_b.%s"
 #define TN_LN_1            "%s.blk.%d.ln1.%s" // layer norm
 #define TN_LN_2            "%s.blk.%d.ln2.%s" // layer norm
 #define TN_LS_1            "%s.blk.%d.ls1.%s"         // layer scale
@@ -470,6 +476,8 @@ enum projector_type {
     PROJECTOR_TYPE_COGVLM,
     PROJECTOR_TYPE_JANUS_PRO,
     PROJECTOR_TYPE_DOTS_OCR,
+    PROJECTOR_TYPE_DOTS3NOTE_V,
+    PROJECTOR_TYPE_DOTS3NOTE_A,
     PROJECTOR_TYPE_DEEPSEEKOCR,
     PROJECTOR_TYPE_DEEPSEEKOCR2,
     PROJECTOR_TYPE_LFM2A,
@@ -532,6 +540,8 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_COGVLM,            "cogvlm"},
     { PROJECTOR_TYPE_JANUS_PRO,         "janus_pro"},
     { PROJECTOR_TYPE_DOTS_OCR,          "dots_ocr"},
+    { PROJECTOR_TYPE_DOTS3NOTE_V,       "dots3note_v"},
+    { PROJECTOR_TYPE_DOTS3NOTE_A,       "dots3note_a"},
     { PROJECTOR_TYPE_DEEPSEEKOCR,       "deepseekocr"},
     { PROJECTOR_TYPE_DEEPSEEKOCR2,      "deepseekocr2"},
     { PROJECTOR_TYPE_LFM2A,             "lfm2a"},
@@ -603,7 +613,7 @@ struct clip_image_u8 {
             // return a dummy value, so that legacy code can still process image without errors
             return { 0, 0, 0 };
         }
-        int idx = (y * nx + x) * 3;
+        size_t idx = ((size_t) y * (size_t) nx + (size_t) x) * 3;
         return { buf[idx], buf[idx + 1], buf[idx + 2] };
     }
 
@@ -611,8 +621,8 @@ struct clip_image_u8 {
         if (is_placeholder()) {
             return; // no-op
         }
-        int idx = (y * nx + x) * 3;
-        buf[idx] = rgb[0];
+        size_t idx = ((size_t) y * (size_t) nx + (size_t) x) * 3;
+        buf[idx]     = rgb[0];
         buf[idx + 1] = rgb[1];
         buf[idx + 2] = rgb[2];
     }
@@ -642,8 +652,24 @@ struct mtmd_serialization; // forward declaration
 struct clip_image_f32 {
     // marks the global view in e.g., DeepSeek-OCR Models
     bool add_viewsep = false;
-    // whether a learned newline (or EOI) token should be appended after the image (eg Granite4 Vision)
+    // appends a learned newline (or EOI) token after the image
+    // no model uses it now (Granite4 Vision moved to anyres), kept for future models
     bool add_newline = false;
+
+    // llava-next "anyres" tiling, used by Granite4 Vision
+    // the whole grid is encoded and assembled in a single graph
+    // NOTE: excluded from serialized: a deserialized image is always a placeholder, which is never encoded
+    struct anyres_info {
+        int grid_x = 0; // tiles per row, 0 means the image is not tiled
+        int grid_y = 0; // tiles per column
+        int orig_nx = 0; // size of the source image, used to drop the padding tokens
+        int orig_ny = 0;
+
+        bool is_tiled() const {
+            return grid_x > 0 && grid_y > 0;
+        }
+    };
+    anyres_info anyres;
 
     clip_image_size get_size() const {
         return { nx_, ny_ };
@@ -725,6 +751,25 @@ struct clip_image_f32 {
         return (size_t) nx_ * (size_t) ny_;
     }
 };
+
+// token area kept after removing the padding added by the anyres resize
+// ref: https://github.com/huggingface/transformers/blob/v5.0.0/src/transformers/models/llava_next/modeling_llava_next.py#L109
+static inline void clip_anyres_unpad(int cur_w, int cur_h, int orig_w, int orig_h,
+                                     int & off_x, int & off_y, int & out_w, int & out_h) {
+    off_x = 0;
+    off_y = 0;
+    out_w = cur_w;
+    out_h = cur_h;
+    if ((float) orig_w / orig_h > (float) cur_w / cur_h) {
+        const int new_h = (int) std::floor((double) orig_h * cur_w / orig_w + 1e-7);
+        off_y = (cur_h - new_h) / 2;
+        out_h = cur_h - 2 * off_y;
+    } else {
+        const int new_w = (int) std::floor((double) orig_w * cur_h / orig_h + 1e-7);
+        off_x = (cur_w - new_w) / 2;
+        out_w = cur_w - 2 * off_x;
+    }
+}
 
 //
 // logging
@@ -822,6 +867,9 @@ static std::ifstream open_ifstream_binary(const std::string & fname) {
 }
 #endif
 
+// in test-mtmd-impl, we include woth common.h and this file, and these functions are duplicated
+// this is a quick fix to avoid compilation errors
+#ifndef DIRECTORY_SEPARATOR
 static std::string string_format(const char * fmt, ...) {
     va_list ap;
     va_list ap2;
@@ -879,6 +927,7 @@ inline bool string_ends_with(std::string_view str, std::string_view suffix) {
     return str.size() >= suffix.size() &&
            str.compare(str.size() - suffix.size(), suffix.size(), suffix) == 0;
 }
+#endif
 
 //
 // gguf utils
