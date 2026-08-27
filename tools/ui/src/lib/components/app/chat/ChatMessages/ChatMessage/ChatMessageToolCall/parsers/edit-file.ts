@@ -24,7 +24,7 @@ export type EditFileMeta = {
 };
 
 export function parseEditFileMeta(section: AgenticSection): EditFileMeta | null {
-	const args = parseToolArgs(BuiltInTool.EDIT_FILE, section, { partial: true });
+	const args = parseToolArgs(BuiltInTool.SERVER_EDIT_FILE, section, { partial: true });
 
 	if (!args) return null;
 

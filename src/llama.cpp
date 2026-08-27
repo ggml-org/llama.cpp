@@ -257,7 +257,11 @@ static bool llama_prepare_model_devices(const llama_model_params & params, llama
                     }
 
                     case GGML_BACKEND_DEVICE_TYPE_IGPU:
-                        if (igpus.empty()) {
+                        // igpus.empty() - workaround for integrated devices seen by multiple backends
+                        // ref: https://github.com/ggml-org/llama.cpp/pull/23897
+                        // ggml_backend_dev_backend_reg - allow devices of the same backend regardless if integrated
+                        // ref: https://github.com/ggml-org/llama.cpp/pull/23897#issuecomment-5264222997
+                        if (igpus.empty() || ggml_backend_dev_backend_reg(dev) == ggml_backend_dev_backend_reg(igpus.back().dev)) {
                             igpus.push_back({false, dev});
                         }
                         break;
@@ -313,6 +317,8 @@ static std::pair<int, llama_model *> llama_model_load(struct gguf_context * meta
     try {
         llama_model_loader ml(metadata, set_tensor_data, set_tensor_data_ud, fname, splits, file, params.load_mode,
             params.check_tensors, params.no_alloc, params.load_mtp, params.kv_overrides, params.tensor_buft_overrides);
+
+        ml.tensor_read_lazy = params.tensor_read_lazy;
 
         ml.print_info();
         std::unique_ptr<llama_model> model_ptr(llama_model_create(ml, params));

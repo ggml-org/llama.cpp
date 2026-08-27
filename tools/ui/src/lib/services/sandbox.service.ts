@@ -1,3 +1,11 @@
+/**
+ * SandboxService - Runs untrusted code in a sandboxed worker
+ *
+ * Executes model-generated code inside a CSP-restricted, opaque-origin
+ * iframe worker with output and timeout limits. No reactive state; consumed
+ * by toolsStore for code-execution tools.
+ */
+
 import { buildSandboxHarness } from './sandbox-harness';
 import {
 	NEWLINE,
@@ -8,7 +16,7 @@ import {
 	SANDBOX_TOOL_NAME,
 	SANDBOX_TRUNCATION_NOTICE
 } from '$lib/constants';
-import { settingsStore } from '$lib/stores/settings.svelte';
+import { settingsStore } from '$lib/stores/settings/index.svelte';
 import type { ToolExecutionResult } from '$lib/types';
 
 /** Cached harnesses keyed by whether nerdamer is included. */
@@ -68,7 +76,7 @@ function formatReply(reply: SandboxReply): ToolExecutionResult {
 
 export class SandboxService {
 	/**
-	 * Execute a frontend sandbox tool call and return its output.
+	 * Execute a browser sandbox tool call and return its output.
 	 * One disposable iframe per execution, removed on completion,
 	 * timeout or abort. Removing the iframe terminates the worker
 	 * at the browser level, so runaway code cannot outlive it.
@@ -79,7 +87,7 @@ export class SandboxService {
 		signal?: AbortSignal
 	): Promise<ToolExecutionResult> {
 		if (toolName !== SANDBOX_TOOL_NAME) {
-			return { content: `Unknown frontend tool: ${toolName}`, isError: true };
+			return { content: `Unknown browser tool: ${toolName}`, isError: true };
 		}
 
 		const code = typeof params.code === 'string' ? params.code : '';

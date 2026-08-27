@@ -43,14 +43,14 @@
 	);
 
 	const hasReasoningError = $derived(
-		isLastAssistantMessage ? !!agenticStore.lastError(message.convId) : false
+		isLastAssistantMessage ? !!agenticStore.getLastError(message.convId) : false
 	);
 
 	let permissionDismissed = $state(false);
 
 	const pendingPermission = $derived(
 		isStreaming && isLastAssistantMessage
-			? agenticStore.pendingPermissionRequest(message.convId)
+			? agenticStore.getPendingPermissionRequest(message.convId)
 			: null
 	);
 
@@ -74,7 +74,7 @@
 
 	const pendingContinue = $derived(
 		isStreaming && isLastAssistantMessage
-			? agenticStore.pendingContinueRequest(message.convId)
+			? agenticStore.getPendingContinueRequest(message.convId)
 			: false
 	);
 
@@ -97,7 +97,7 @@
 	const sections = $derived(deriveAgenticSections(message, toolMessages, [], isStreaming));
 
 	const currentlyExecutingToolCallId = $derived(
-		isStreaming ? agenticStore.executingToolCallId(message.convId) : null
+		isStreaming ? agenticStore.getExecutingToolCallId(message.convId) : null
 	);
 
 	type TurnGroup = {
@@ -181,26 +181,26 @@
 {#snippet renderSection(section: AgenticSection, index: number)}
 	{#if section.type === AgenticSectionType.TEXT}
 		<div class="agentic-text">
-			<MarkdownContent content={section.content} attachments={message?.extra} />
+			<MarkdownContent attachments={message?.extra} content={section.content} />
 		</div>
 	{:else if section.type === AgenticSectionType.REASONING || section.type === AgenticSectionType.REASONING_PENDING}
 		<ChatMessageReasoningBlock
-			{section}
-			open={isExpanded(index, section)}
-			{isStreaming}
-			{hasReasoningError}
 			attachments={message?.extra}
+			{hasReasoningError}
+			{isStreaming}
 			onToggle={() => toggleExpanded(index, section)}
+			open={isExpanded(index, section)}
+			{section}
 		/>
 	{:else if section.type === AgenticSectionType.TOOL_CALL || section.type === AgenticSectionType.TOOL_CALL_PENDING || section.type === AgenticSectionType.TOOL_CALL_STREAMING}
 		<ChatMessageToolCallBlock
-			{section}
-			open={isExpanded(index, section)}
-			{isStreaming}
+			attachments={message?.extra}
 			isExecuting={section.toolCallId !== undefined &&
 				section.toolCallId === currentlyExecutingToolCallId}
-			attachments={message?.extra}
+			{isStreaming}
 			onToggle={() => toggleExpanded(index, section)}
+			open={isExpanded(index, section)}
+			{section}
 		/>
 	{/if}
 {/snippet}
@@ -218,15 +218,15 @@
 				{#if turnStats && showAgenticTurnStats}
 					<div class="turn-stats transition-opacity duration-150 mt-1 mb-4">
 						<ChatMessageStatistics
-							promptTokens={turnStats.llm.prompt_n}
-							promptMs={turnStats.llm.prompt_ms}
-							predictedTokens={turnStats.llm.predicted_n}
-							predictedMs={turnStats.llm.predicted_ms}
 							agenticTimings={turnStats.toolCalls.length > 0
 								? buildTurnAgenticTimings(turnStats)
 								: undefined}
-							initialView={ChatMessageStatsView.GENERATION}
 							hideSummary
+							initialView={ChatMessageStatsView.GENERATION}
+							predictedMs={turnStats.llm.predicted_ms}
+							predictedTokens={turnStats.llm.predicted_n}
+							promptMs={turnStats.llm.prompt_ms}
+							promptTokens={turnStats.llm.prompt_n}
 						/>
 					</div>
 				{/if}
@@ -240,9 +240,9 @@
 
 	{#if pendingPermission && !permissionDismissed}
 		<ChatMessageActionCardPermissionRequest
-			toolName={pendingPermission.toolName}
-			serverLabel={pendingPermission.serverLabel}
 			onDecision={handlePermission}
+			serverLabel={pendingPermission.serverLabel}
+			toolName={pendingPermission.toolName}
 		/>
 	{/if}
 

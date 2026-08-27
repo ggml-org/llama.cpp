@@ -37,6 +37,7 @@ _ACT2FN = {
 
 
 @ModelBase.register("Qwen3TTSForConditionalGeneration")
+@ModelBase.example("Qwen/Qwen3-TTS-12Hz-1.7B-Base")
 class Qwen3TTSTalkerModel(TextModel):
     model_arch = gguf.MODEL_ARCH.QWEN3TTS
 
@@ -185,6 +186,7 @@ class Qwen3TTSTalkerModel(TextModel):
 
 
 @ModelBase.register("Qwen3TTSForConditionalGeneration")
+@ModelBase.example("Qwen/Qwen3-TTS-12Hz-1.7B-Base")
 class Qwen3TTSSpeakerEncoderModel(MmprojModel):
     has_vision_encoder = False
     has_audio_encoder = True

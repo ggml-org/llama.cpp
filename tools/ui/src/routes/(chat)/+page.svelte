@@ -8,24 +8,19 @@
 
 	let qParam = $derived(page.url.searchParams.get(URL_PARAMS.QUERY));
 	let modelParam = $derived(page.url.searchParams.get(URL_PARAMS.MODEL));
-	let newChatParam = $derived(page.url.searchParams.get(URL_PARAMS.NEW_CHAT));
 	let loadParam = $derived(page.url.searchParams.get(URL_PARAMS.LOAD));
 
-	// Dialog state for model not available error
 	let showModelNotAvailable = $state(false);
 	let requestedModelName = $state('');
 	let availableModelNames = $derived(modelsStore.models.map((m) => m.model));
 
-	/**
-	 * Clear URL params after message is sent to prevent re-sending on refresh
-	 */
+	// Clear params after handling the deep link so a refresh does not replay them
 	function clearUrlParams() {
 		const url = new URL(page.url);
 
 		url.searchParams.delete(URL_PARAMS.QUERY);
 		url.searchParams.delete(URL_PARAMS.MODEL);
 		url.searchParams.delete(URL_PARAMS.LOAD);
-		url.searchParams.delete(URL_PARAMS.NEW_CHAT);
 
 		replaceState(url.toString(), {});
 	}
@@ -40,15 +35,15 @@
 				try {
 					await modelsStore.selectModelById(model.id);
 
-					// with ?load=true, start loading right away so the model is ready sooner;
-					// not awaited, so the UI stays usable during the load
+					// with ?load=true in router mode, start loading right away so the
+					// model is ready sooner; not awaited so the UI stays usable
 					if (
 						loadParam === 'true' &&
 						serverStore.isRouterMode &&
 						!modelsStore.isModelLoaded(model.id)
 					) {
-						modelsStore
-							.loadModel(model.id)
+						modelsStore.status
+							.load(model.id)
 							.catch((error) => console.error('Failed to load model:', error));
 					}
 				} catch (error) {
@@ -66,11 +61,12 @@
 			}
 		}
 
-		// Handle ?q= parameter - create new conversation and send message
+		// ?q= creates the conversation, the chat route sends the prompt once the
+		// conversation id is in the URL
 		if (qParam !== null) {
 			await conversationsStore.createConversation();
 			clearUrlParams();
-		} else if (modelParam || newChatParam === 'true') {
+		} else if (modelParam) {
 			clearUrlParams();
 		}
 	}
@@ -85,7 +81,7 @@
 
 		await modelsStore.fetch();
 
-		if (qParam !== null || modelParam !== null || newChatParam === 'true') {
+		if (qParam !== null || modelParam !== null) {
 			await handleUrlParams();
 		}
 
@@ -99,6 +95,6 @@
 
 <DialogModelNotAvailable
 	bind:open={showModelNotAvailable}
-	modelName={requestedModelName}
 	availableModels={availableModelNames}
+	modelName={requestedModelName}
 />
