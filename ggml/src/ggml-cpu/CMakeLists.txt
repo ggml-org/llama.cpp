@@ -231,15 +231,28 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
             set(CMAKE_REQUIRED_FLAGS "${ARCH_FLAGS_STR}")
             foreach(feature DOTPROD SVE MATMUL_INT8 FMA FP16_VECTOR_ARITHMETIC SME)
                 set(ARM_FEATURE "HAVE_${feature}")
-                check_cxx_source_compiles(
-                    "
-                    #if !defined(__ARM_FEATURE_${feature})
-                    #  error \"Feature ${feature} is not defined\"
-                    #endif
-                    int main() { return 0; }
-                    "
-                    ${ARM_FEATURE}
-                )
+                if (feature STREQUAL "FMA" AND MSVC AND NOT CMAKE_C_COMPILER_ID STREQUAL "Clang")
+                    # MSVC on ARM64 does not define __ARM_FEATURE_FMA, but FMA is mandatory on ARMv8-A
+                    check_cxx_source_compiles(
+                        "
+                        #if !defined(_M_ARM64) && !defined(_M_ARM64EC)
+                        #  error \"Feature FMA is not defined\"
+                        #endif
+                        int main() { return 0; }
+                        "
+                        ${ARM_FEATURE}
+                    )
+                else()
+                    check_cxx_source_compiles(
+                        "
+                        #if !defined(__ARM_FEATURE_${feature})
+                        #  error \"Feature ${feature} is not defined\"
+                        #endif
+                        int main() { return 0; }
+                        "
+                        ${ARM_FEATURE}
+                    )
+                endif()
             endforeach()
             set(CMAKE_REQUIRED_FLAGS ${CMAKE_REQUIRED_FLAGS_SAVE})
         # endif()
