@@ -2982,7 +2982,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
 
         if (metadata[i].allows_quantization && unused_kv_tensors.count(metadata[i].name)) {
             metadata[i].target_type = tensor_type_fallback(qs, tensor, GGML_TYPE_Q4_0);
-            LLAMA_LOG_INFO("====== %s: %s shares an earlier layer's kv cache, no imatrix data - using %s\n",
+            LLAMA_LOG_INFO("%s: unused tensor (%s shares an earlier layer's kv cache) - converting to %s\n",
                 __func__, metadata[i].name.c_str(), ggml_type_name(metadata[i].target_type));
         }
 
