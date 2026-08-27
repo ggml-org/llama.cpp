@@ -1446,11 +1446,11 @@ extern "C" {
 
     // set the smallest rank that the implementation can use to internally convert the src[idx] data to
     // ranks in decreasing order:
-    //  - GGML_PREC_F32  -   GGML_TYPE_F32
-    //  - GGML_PREC_BF16 -   GGML_TYPE_BF16
-    //  - GGML_PREC_F16  -   GGML_TYPE_F16,
-    //  - GGML_PREC_Q8   -   GGML_TYPE_Q8_0, GGML_TYPE_Q8_1, GGML_TYPE_Q8_K, etc.
-    //  - GGML_PREC_Q4   -   GGML_TYPE_Q4_0, GGML_TYPE_Q4_1, GGML_TYPE_Q4_K, GGML_TYPE_NVFP4, GGML_TYPE_MXFP4, etc.
+    //  - GGML_PREC_F32  - GGML_TYPE_F32
+    //  - GGML_PREC_BF16 - GGML_TYPE_BF16
+    //  - GGML_PREC_F16  - GGML_TYPE_F16,
+    //  - GGML_PREC_Q8   - GGML_TYPE_Q8_0, GGML_TYPE_Q8_1, GGML_TYPE_Q8_K, etc.
+    //  - GGML_PREC_Q4   - GGML_TYPE_Q4_0, GGML_TYPE_Q4_1, GGML_TYPE_Q4_K, GGML_TYPE_NVFP4, GGML_TYPE_MXFP4, etc.
     //
     // for example:
     //   - ggml_prec_set_src(a, GGML_PREC_Q8, 1):
