@@ -1418,27 +1418,26 @@ void llama_model_loader::unmap_weight(const llama_tensor_weight & w) const {
     mappings.at(w.idx)->unmap_fragment(w.offs, w.offs + ggml_nbytes(w.tensor));
 }
 
-void llama_model_loader::load_data_for(struct ggml_tensor * cur) const {
-    const auto & w = require_weight(ggml_get_name(cur));
+const void * llama_model_loader::load_data_range(const llama_tensor_weight & w, size_t offs, size_t size, void * buf) const {
+    GGML_ASSERT(offs + size <= ggml_nbytes(w.tensor));
+
+    const void * data = buf;
 
     if (use_mmap) {
-        const auto & mapping = mappings.at(w.idx);
-        if (cur->data == nullptr) {
-            cur->data = (uint8_t *)mapping->addr() + w.offs;
-        } else {
-            memcpy(cur->data, (uint8_t *)mapping->addr() + w.offs, ggml_nbytes(cur));
-        }
+        data = (const uint8_t *) mappings.at(w.idx)->addr() + w.offs + offs;
     } else {
-        GGML_ASSERT(cur->data != nullptr);
+        GGML_ASSERT(buf != nullptr);
         GGML_ASSERT(w.idx < files.size());
         const auto & file = files.at(w.idx);
-        file->seek(w.offs, SEEK_SET);
-        file->read_raw(cur->data, ggml_nbytes(cur));
+        file->seek(w.offs + offs, SEEK_SET);
+        file->read_raw(buf, size);
     }
 
-    if (check_tensors && !ggml_validate_row_data(cur->type, cur->data, ggml_nbytes(cur))) {
-        throw std::runtime_error(format("tensor '%s' has invalid data", ggml_get_name(cur)));
+    if (check_tensors && !ggml_validate_row_data(w.tensor->type, data, size)) {
+        throw std::runtime_error(format("tensor '%s' has invalid data", ggml_get_name(w.tensor)));
     }
+
+    return data;
 }
 
 bool llama_model_loader::load_all_data(

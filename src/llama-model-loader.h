@@ -204,8 +204,9 @@ struct llama_model_loader {
     // release a weight's mmap pages
     void unmap_weight(const llama_tensor_weight & w) const;
 
-    // for backwards compatibility, does not support ggml-backend
-    void load_data_for(struct ggml_tensor * cur) const;
+    // read a byte range of a weight's data
+    // with mmap, returns a pointer into the mapping, otherwise reads into buf and returns buf
+    const void * load_data_range(const llama_tensor_weight & w, size_t offs, size_t size, void * buf) const;
 
     // Returns false if cancelled by progress_callback
     bool load_all_data(
