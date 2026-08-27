@@ -577,6 +577,34 @@ public:
         mctx->set_input_qsa(cell_blk, blk_cells, blk_pos, bias, ubatch, ratio);
     }
 
+    // Every tensor here is sized by n_tokens, n_kv and n_stream, so the graph can be reused
+    // whenever those three are unchanged and set_input refills the contents. Without this the
+    // whole qwen4exp graph is rebuilt and reallocated on every decode ("graphs reused = 0"),
+    // which is also paid again on each of an MTP head's draft steps.
+    // ref: gist dzannotti/3ac46cf6fe8a2f8aa777097d5c17ebd2
+    bool can_reuse(const llm_graph_params & params) override {
+        const auto * hctx = static_cast<const llama_memory_hybrid_context *>(params.mctx);
+        const auto * mctx_new = hctx->get_idx();
+        if (mctx_new == nullptr) {
+            return false;
+        }
+        this->mctx = mctx_new;
+
+        const int64_t n_kv     = mctx_new->get_n_kv();
+        const int64_t n_stream = mctx_new->get_n_stream();
+        const int64_t n_tokens = params.ubatch.n_tokens;
+        const int64_t n_blocks = (n_kv + ratio - 1)/ratio;
+
+        bool res = true;
+        res &= k_idxs->ne[0]    == n_tokens;
+        res &= cell_blk->ne[0]  == n_kv && cell_blk->ne[1] == n_stream;
+        res &= blk_cells->ne[0] == (int64_t) ratio*n_blocks && blk_cells->ne[1] == n_stream;
+        res &= blk_pos->ne[0]   == 4*n_blocks*n_stream;
+        res &= n_stream > 0 && n_tokens % n_stream == 0;
+        res &= bias->ne[0] == n_kv && bias->ne[1] == n_tokens/n_stream && bias->ne[2] == n_stream;
+        return res;
+    }
+
     // Per-stream: a cell index means a different token in each stream. n_stream 1 = the old shapes.
     ggml_tensor * k_idxs    = nullptr;   // I32 [n_tokens]
     ggml_tensor * cell_blk  = nullptr;   // I32 [n_kv, n_stream]
@@ -997,6 +1025,13 @@ public:
     virtual ~llm_graph_input_ple() = default;
 
     void set_input(const llama_ubatch * ubatch) override;
+
+    // rows is [ple_n_heads * n_tokens] and set_input recomputes every index each ubatch,
+    // so only the token count has to match for the graph to be reusable
+    bool can_reuse(const llm_graph_params & params) override {
+        const int64_t n = (int64_t) pmodel.hparams.ple_n_heads * params.ubatch.n_tokens;
+        return rows != nullptr && rows->ne[0] == n;
+    }
 
     ggml_tensor * rows = nullptr;   // I32 [ple_n_heads * n_tokens]
 
