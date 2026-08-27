@@ -812,40 +812,6 @@ class MCPStore implements McpHealthHost {
 	}
 
 	/**
-	 * Check if any enabled server with successful health check supports resources.
-	 * Uses health check state since servers may not have active connections until
-	 * the user actually sends a message or uses prompts.
-	 */
-	hasResourcesCapability(enabledServerIds?: ReadonlySet<string>): boolean {
-		const ids = enabledServerIds ?? this.globalEnabledServerIds();
-
-		if (ids.size === 0) {
-			return false;
-		}
-
-		for (const [serverId, state] of Object.entries(this.health.checks)) {
-			if (!ids.has(serverId)) continue;
-
-			if (
-				state.status === HealthCheckStatus.SUCCESS &&
-				state.capabilities?.server?.resources !== undefined
-			) {
-				return true;
-			}
-		}
-
-		for (const [serverName, connection] of this.connections) {
-			if (!ids.has(serverName)) continue;
-
-			if (MCPService.supportsResources(connection)) {
-				return true;
-			}
-		}
-
-		return false;
-	}
-
-	/**
 	 * Check if any connected server has instructions.
 	 */
 	hasServerInstructions(): boolean {

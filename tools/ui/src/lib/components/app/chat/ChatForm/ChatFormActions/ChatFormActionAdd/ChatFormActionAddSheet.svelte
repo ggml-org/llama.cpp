@@ -44,13 +44,11 @@
 	const attachmentMenu = useAttachmentMenu(
 		() => ({
 			hasAudioModality: chatFormActions.hasAudioModality,
-			hasMcpResourcesSupport: chatFormActions.hasMcpResourcesSupport,
 			hasVideoModality: chatFormActions.hasVideoModality,
 			hasVisionModality: chatFormActions.hasVisionModality
 		}),
 		() => ({
 			onFileUpload: chatFormActions.onFileUpload,
-			onMcpResourcesClick: chatFormActions.onMcpResourcesClick,
 			onSystemPromptClick: chatFormActions.onSystemPromptClick
 		}),
 		() => {

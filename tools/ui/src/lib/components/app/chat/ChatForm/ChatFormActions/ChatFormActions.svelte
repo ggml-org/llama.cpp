@@ -11,9 +11,9 @@
 	import { Button } from '$lib/components/ui/button';
 	import { ICON_CLASS_DEFAULT } from '$lib/constants';
 	import { setChatFormActionsContext } from '$lib/contexts';
-	import { FileTypeCategory, MessageRole, ToolSource } from '$lib/enums';
+	import { FileTypeCategory, MessageRole } from '$lib/enums';
 	import { ChatService } from '$lib/services';
-	import { chatStore, conversationsStore, mcpStore, settingsStore } from '$lib/stores';
+	import { chatStore, conversationsStore, settingsStore } from '$lib/stores';
 	import { getFileTypeCategory } from '$lib/utils';
 
 	interface Props {
@@ -31,7 +31,6 @@
 		onMicClick?: () => void;
 		onStop?: () => void;
 		onSystemPromptClick?: () => void;
-		onMcpResourcesClick?: () => void;
 		onMcpSettingsClick?: () => void;
 	}
 
@@ -44,7 +43,6 @@
 		isReasoning = false,
 		isRecording = false,
 		onFileUpload,
-		onMcpResourcesClick,
 		onMcpSettingsClick,
 		onMicClick,
 		onStop,
@@ -55,23 +53,6 @@
 	}: Props = $props();
 
 	let currentConfig = $derived(settingsStore.config);
-
-	// usable MCP servers for this conversation: globally enabled and not
-	// disabled by the effective tool policy (category or server-scoped key)
-	let policyEnabledMcpServerIds = $derived.by(() => {
-		const prefs = conversationsStore.preferences;
-
-		if (!prefs.isCategoryEnabled(ToolSource.MCP)) return new Set<string>();
-
-		return new Set(
-			mcpStore
-				.getServers()
-				.filter((s) => s.enabled && prefs.isServerToolsEnabled(s.id))
-				.map((s) => s.id)
-		);
-	});
-
-	let hasMcpResourcesSupport = $derived(mcpStore.hasResourcesCapability(policyEnabledMcpServerIds));
 
 	let hasAudioModality = $state(false);
 	let hasVideoModality = $state(false);
@@ -145,9 +126,6 @@
 		get hasAudioModality() {
 			return hasAudioModality;
 		},
-		get hasMcpResourcesSupport() {
-			return hasMcpResourcesSupport;
-		},
 		get hasVideoModality() {
 			return hasVideoModality;
 		},
@@ -156,9 +134,6 @@
 		},
 		get onFileUpload() {
 			return onFileUpload;
-		},
-		get onMcpResourcesClick() {
-			return onMcpResourcesClick;
 		},
 		get onMcpSettingsClick() {
 			return onMcpSettingsClick;

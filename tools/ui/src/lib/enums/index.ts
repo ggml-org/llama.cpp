@@ -3,8 +3,7 @@ export {
 	AttachmentType,
 	AttachmentMenuItemId,
 	AttachmentItemEnabledWhen,
-	AttachmentAction,
-	AttachmentItemVisibleWhen
+	AttachmentAction
 } from './attachment.enums';
 
 export {

@@ -628,7 +628,6 @@
 				isReasoning={chatStore.isReasoning}
 				{isRecording}
 				onFileUpload={handleFileUpload}
-				onMcpResourcesClick={() => (isResourceDialogOpen = true)}
 				onMcpSettingsClick={() => (isMcpServersDialogOpen = true)}
 				onMicClick={handleMicClick}
 				{onStop}
