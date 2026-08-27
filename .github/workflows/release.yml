@@ -798,9 +798,8 @@ jobs:
           mkdir build
           cd build
           cmake .. `
-            -G "Unix Makefiles" `
+            -G "Ninja Multi-Config" `
             -DCMAKE_PREFIX_PATH="${env:HIP_PATH}" `
-            -DCMAKE_BUILD_TYPE=Release `
             -DGGML_BACKEND_DL=ON `
             -DGGML_NATIVE=OFF `
             -DGGML_CPU=ON `
@@ -817,11 +816,11 @@ jobs:
 
       - name: Verify HIP backend was built
         run: |
-          $hipDll = Get-ChildItem -Path build\bin -Filter "ggml-hip*.dll" -ErrorAction SilentlyContinue
+          $hipDll = Get-ChildItem -Path build\bin\Release -Filter "ggml-hip*.dll" -ErrorAction SilentlyContinue
           if (-not $hipDll) {
             Write-Host "##[error]ggml-hip*.dll was NOT produced. The HIP backend silently failed to build."
-            Write-Host "Contents of build\bin:"
-            Get-ChildItem build\bin | Format-Table -AutoSize
+            Write-Host "Contents of build\bin\Release:"
+            Get-ChildItem build\bin\Release | Format-Table -AutoSize
             exit 1
           }
           Write-Host "HIP backend artifact found:"
@@ -865,8 +864,8 @@ jobs:
 
       - name: Pack artifacts
         run: |
-          cp "LICENSE" "build\bin\"
-          7z a -snl llama-bin-win-rocm-${{ env.ROCM_VERSION_SHORT }}-${{ matrix.build }}.zip .\build\bin\*
+          cp "LICENSE" "build\bin\Release\"
+          7z a -snl llama-bin-win-rocm-${{ env.ROCM_VERSION_SHORT }}-${{ matrix.build }}.zip .\build\bin\Release\*
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v6
