@@ -858,7 +858,7 @@ jobs:
             $files = Get-ChildItem -Path $binPath -Filter $pattern -ErrorAction SilentlyContinue
             if (-not $files) { throw "no match for $pattern in $binPath" }
             foreach ($f in $files) {
-              Copy-Item $f.FullName -Destination build\bin\ -Force
+              Copy-Item $f.FullName -Destination build\bin\Release -Force
               write-host "  copied $($f.Name)"
             }
           }
