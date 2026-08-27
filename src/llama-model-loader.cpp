@@ -1282,9 +1282,13 @@ struct ggml_tensor * llama_model_loader::create_tensor(
         return NULL;
     }
 
-    if ((flags & TENSOR_GET_ROW_LAZY) && use_mmap) {
-        const auto & w = require_weight(tn.str().c_str());
-        lazy_tensor_ranges[w.idx].emplace_back(w.offs, w.offs + ggml_nbytes(cur));
+    if ((flags & TENSOR_GET_ROW_LAZY) && use_mmap && tensor_read_lazy != LLAMA_TENSOR_READ_LAZY_OFF) {
+        // in auto mode, small tensors are cheap enough to keep resident
+        constexpr size_t auto_lazy_min_size = 4ull * 1024 * 1024 * 1024;
+        if (tensor_read_lazy == LLAMA_TENSOR_READ_LAZY_ON || ggml_nbytes(cur) > auto_lazy_min_size) {
+            const auto & w = require_weight(tn.str().c_str());
+            lazy_tensor_ranges[w.idx].emplace_back(w.offs, w.offs + ggml_nbytes(cur));
+        }
     }
 
     ggml_tensor t_meta = *cur;

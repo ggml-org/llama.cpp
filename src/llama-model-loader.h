@@ -83,6 +83,9 @@ struct llama_model_loader {
     bool no_alloc;
     bool load_mtp;
 
+    // set by the caller before the create_tensor() calls
+    enum llama_tensor_read_lazy tensor_read_lazy = LLAMA_TENSOR_READ_LAZY_OFF;
+
     llama_files files;
     llama_ftype ftype;
     llama_fver  fver;
