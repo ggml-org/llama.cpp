@@ -1813,6 +1813,9 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                 SPC_ERR("llama_decode[%d] returned %d\n", i, ret);
                 break;
             }
+            // The MTP output row is copied asynchronously by the backend, but
+            // the next sampler step consumes it immediately on the host.
+            llama_synchronize(ctx_dft);
 
             // rebuild the batch for the next step: the growing-KV paths re-add only the
             // new token (the KV already holds the prefix), while chained heads re-add the

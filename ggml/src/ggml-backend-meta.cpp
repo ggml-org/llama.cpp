@@ -514,11 +514,28 @@ static struct ggml_tensor * ggml_backend_meta_simple_tensor_ensure(
         return tensor;
     }
 
+    auto * buf_ctx = (ggml_backend_meta_buffer_context *) tensor->buffer->context;
+    ggml_backend_buffer_t expected_buf = buf_ctx->bufs[index].get();
     ggml_tensor * ret = ggml_backend_meta_buffer_simple_tensor(tensor, index);
     if (ret != nullptr) {
         return ret;
     }
     auto it = stc.simple_tensors.find(tensor);
+    if (buf_ctx->bufs.size() == 1 && it != stc.simple_tensors.end() && index < it->second.size()) {
+        // Scratch shard descriptors outlive individual scheduler graph
+        // allocations. Rebuild them when the backing Meta buffer (or its
+        // base address) changes; otherwise a later readback can use a freed
+        // device pointer while retaining the new tensor's buffer type.
+        const size_t tensor_offset = size_t(tensor->data) -
+            size_t(ggml_backend_buffer_get_base(tensor->buffer));
+        const void * expected_data = (char *) ggml_backend_buffer_get_base(expected_buf) + tensor_offset;
+        ggml_tensor * cached = it->second[index];
+        if (cached->buffer != expected_buf || cached->data != expected_data) {
+            stc.simple_tensors.erase(it);
+            stc.identities.erase(tensor);
+            it = stc.simple_tensors.end();
+        }
+    }
     if (it != stc.simple_tensors.end() && stc.validate_identity) {
         auto id_it = stc.identities.find(tensor);
         if (id_it == stc.identities.end() ||
