@@ -23,7 +23,8 @@
 		FileExtensionText,
 		KeyboardKey,
 		MimeTypeText,
-		SpecialFileType
+		SpecialFileType,
+		ToolSource
 	} from '$lib/enums';
 	import { useChatFormPickers } from '$lib/hooks/use-chat-form-pickers.svelte';
 	import {
@@ -153,7 +154,17 @@
 		getShowModelSelector: () => showModelSelector,
 		getValue: () => value,
 		hasCwdTools: () => conversationsStore.preferences.hasEnabledCwdTools(),
-		hasPrompts: () => mcpStore.hasPromptsCapability(),
+		// policy-aware, same rule as the agentic flow: MCP category on and at
+		// least one globally-enabled server whose group key is not disabled
+		hasPrompts: () => {
+			const prefs = conversationsStore.preferences;
+
+			if (!prefs.isCategoryEnabled(ToolSource.MCP)) return false;
+
+			return mcpStore
+				.getServers()
+				.some((s) => s.enabled && prefs.isServerToolsEnabled(s.id) && s.url.trim());
+		},
 		openModelSelector: () => chatFormActionsRef?.openModelSelector(),
 		setCaretOffset: (offset) => inputRef?.setCaretOffset(offset),
 		setValue: (v) => {
