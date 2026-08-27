@@ -3272,12 +3272,12 @@ void ggml_prec_set_acc(
         enum ggml_prec       prec) {
     switch (a->op) {
         case GGML_OP_MUL_MAT:
+        case GGML_OP_MUL_MAT_ID:
             {
                 const int32_t prec_i32 = (int32_t) prec;
 
                 ggml_set_op_params_i32(a, 0, prec_i32);
             }
-            break;
         case GGML_OP_FLASH_ATTN_EXT:
             {
                 const int32_t prec_i32 = (int32_t) prec;
@@ -3298,6 +3298,7 @@ void ggml_prec_set_src(
 
     switch (a->op) {
         case GGML_OP_MUL_MAT:
+        case GGML_OP_MUL_MAT_ID:
             {
                 GGML_ASSERT(idx == 1);
 
