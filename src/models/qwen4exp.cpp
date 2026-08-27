@@ -3,6 +3,7 @@
 #include "llama-memory-recurrent.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <limits>
 #include <stdexcept>
 
@@ -828,10 +829,36 @@ bool llm_graph_input_qsa::can_reuse(const llm_graph_params & params) {
            bias->ne[0] == n_kv && bias->ne[1] == n_tps && bias->ne[2] == n_stream;
 }
 
+static int64_t qsa_logical_cache_length(const llama_ubatch & ubatch, uint32_t n_stream) {
+    if (n_stream == 0 || ubatch.n_tokens <= 0 || ubatch.n_tokens % n_stream != 0) {
+        return -1;
+    }
+    const int64_t n_tps = ubatch.n_tokens / n_stream;
+    int64_t result = 0;
+    for (uint32_t stream = 0; stream < n_stream; ++stream) {
+        const int64_t last = (stream + 1) * n_tps - 1;
+        result = std::max<int64_t>(result, ubatch.pos[last] + 1);
+    }
+    return result;
+}
+
+static bool qsa_within_dense_budget(
+        const llama_memory_hybrid_idx_context * mctx,
+        const llama_ubatch & ubatch,
+        uint32_t ratio,
+        uint32_t top_k) {
+    const int64_t logical = qsa_logical_cache_length(ubatch, mctx->get_n_stream());
+    return logical > 0 && logical <= (int64_t) top_k + ratio - 1;
+}
+
 class llm_graph_input_qsa_dense_guard : public llm_graph_input_i {
 public:
-    llm_graph_input_qsa_dense_guard(const llama_memory_hybrid_idx_context * mctx, uint32_t ratio) :
-        mctx(mctx), ratio(ratio) {}
+    llm_graph_input_qsa_dense_guard(
+            const llama_memory_hybrid_idx_context * mctx,
+            uint32_t ratio,
+            uint32_t top_k,
+            bool below_budget) :
+        mctx(mctx), ratio(ratio), top_k(top_k), below_budget(below_budget) {}
 
     void set_input(const llama_ubatch * ubatch) override {
         GGML_UNUSED(ubatch);
@@ -842,7 +869,16 @@ public:
             return false;
         }
         const auto * next = static_cast<const llama_memory_hybrid_idx_context *>(params.mctx);
-        if (next->get_idx() == nullptr || next->qsa_compatible(&params.ubatch, ratio)) {
+        if (next->get_idx() == nullptr) {
+            return false;
+        }
+        const bool compatible = next->qsa_compatible(&params.ubatch, ratio);
+        if (below_budget) {
+            if (!compatible || params.ubatch.n_tokens != 1 ||
+                    !qsa_within_dense_budget(next, params.ubatch, ratio, top_k)) {
+                return false;
+            }
+        } else if (compatible) {
             return false;
         }
         mctx = next;
@@ -852,6 +888,8 @@ public:
 private:
     const llama_memory_hybrid_idx_context * mctx;
     const uint32_t ratio;
+    const uint32_t top_k;
+    const bool below_budget;
 };
 
 ggml_tensor * llama_model_qwen4exp::graph::build_qsa_top_k(
@@ -1065,7 +1103,18 @@ ggml_tensor * llama_model_qwen4exp::graph::build_layer_attn(
     const auto * mctx_idx = mctx_hyb ? mctx_hyb->get_idx() : nullptr;
     const uint32_t qsa_ratio = hparams.dsv4_compress_ratios[il];
     const bool qsa_configured = mctx_idx != nullptr && qsa_ratio > 0;
-    const bool qsa = qsa_configured && mctx_hyb->qsa_compatible(&ubatch, qsa_ratio);
+    const bool qsa_compatible = qsa_configured && mctx_hyb->qsa_compatible(&ubatch, qsa_ratio);
+    static const bool dense_budget_enabled = [] {
+        const char * value = std::getenv("GGML_QWEN4EXP_DENSE_BUDGET");
+        return value != nullptr && std::atoi(value) != 0;
+    }();
+    // Below the whole-block budget QSA selects every live key, so ordinary attention
+    // is mathematically identical. Restrict the shortcut to batch-one decode: changing
+    // the multi-token graph layout can perturb later fused MoE rounding even when the
+    // attention bytes match. The dense guard forces a graph rebuild at the threshold.
+    const bool dense_budget = dense_budget_enabled && qsa_compatible && ubatch.n_tokens == 1 &&
+        qsa_within_dense_budget(mctx_hyb, ubatch, qsa_ratio, hparams.indexer_top_k);
+    const bool qsa = qsa_compatible && !dense_budget;
     if (qsa_configured) {
         // Keep indexer keys complete even while this ubatch uses dense fallback;
         // otherwise a later compatible layout could read stale historical keys.
@@ -1075,7 +1124,8 @@ ggml_tensor * llama_model_qwen4exp::graph::build_layer_attn(
         ggml_build_forward_expand(gf, mctx_idx->cpy_k(ctx0, k_raw, inp->get_k_idxs(), il));
     }
     if (qsa_configured && !qsa) {
-        res->add_input(std::make_unique<llm_graph_input_qsa_dense_guard>(mctx_hyb, qsa_ratio));
+        res->add_input(std::make_unique<llm_graph_input_qsa_dense_guard>(
+                mctx_hyb, qsa_ratio, hparams.indexer_top_k, dense_budget));
     }
 
     ggml_tensor * top_k = qsa ? build_qsa_top_k(mctx_hyb, cur, inp_pos, sections, il) : nullptr;
