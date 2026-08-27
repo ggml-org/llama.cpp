@@ -120,7 +120,7 @@
 					{#snippet child({ props })}
 						<Checkbox
 							{...props}
-							checked={checkState.checked}
+							checked={checkState.checked && !checkState.indeterminate}
 							class="mr-2 {ICON_CLASS_DEFAULT} shrink-0"
 							indeterminate={checkState.indeterminate}
 							onCheckedChange={() => toolsPanel.toggleGroupByKey(group.key)}
