@@ -812,19 +812,15 @@ class MCPStore implements McpHealthHost {
 	 * Uses health check state since servers may not have active connections until
 	 * the user actually sends a message or uses prompts.
 	 */
-	hasPromptsCapability(): boolean {
-		const enabledServerIds = new Set(
-			this.getServers()
-				.filter((s) => s.enabled)
-				.map((s) => s.id)
-		);
+	hasPromptsCapability(enabledServerIds?: ReadonlySet<string>): boolean {
+		const ids = enabledServerIds ?? this.globalEnabledServerIds();
 
-		if (enabledServerIds.size === 0) {
+		if (ids.size === 0) {
 			return false;
 		}
 
 		for (const [serverId, state] of Object.entries(this.health.checks)) {
-			if (!enabledServerIds.has(serverId)) continue;
+			if (!ids.has(serverId)) continue;
 
 			if (
 				state.status === HealthCheckStatus.SUCCESS &&
@@ -835,7 +831,7 @@ class MCPStore implements McpHealthHost {
 		}
 
 		for (const [serverName, connection] of this.connections) {
-			if (!enabledServerIds.has(serverName)) continue;
+			if (!ids.has(serverName)) continue;
 
 			if (connection.serverCapabilities?.prompts) {
 				return true;
@@ -860,19 +856,15 @@ class MCPStore implements McpHealthHost {
 	 * Uses health check state since servers may not have active connections until
 	 * the user actually sends a message or uses prompts.
 	 */
-	hasResourcesCapability(): boolean {
-		const enabledServerIds = new Set(
-			this.getServers()
-				.filter((s) => s.enabled)
-				.map((s) => s.id)
-		);
+	hasResourcesCapability(enabledServerIds?: ReadonlySet<string>): boolean {
+		const ids = enabledServerIds ?? this.globalEnabledServerIds();
 
-		if (enabledServerIds.size === 0) {
+		if (ids.size === 0) {
 			return false;
 		}
 
 		for (const [serverId, state] of Object.entries(this.health.checks)) {
-			if (!enabledServerIds.has(serverId)) continue;
+			if (!ids.has(serverId)) continue;
 
 			if (
 				state.status === HealthCheckStatus.SUCCESS &&
@@ -883,7 +875,7 @@ class MCPStore implements McpHealthHost {
 		}
 
 		for (const [serverName, connection] of this.connections) {
-			if (!enabledServerIds.has(serverName)) continue;
+			if (!ids.has(serverName)) continue;
 
 			if (MCPService.supportsResources(connection)) {
 				return true;
@@ -1339,6 +1331,15 @@ class MCPStore implements McpHealthHost {
 		}
 
 		return `${MCP_SERVER_ID_PREFIX}-${index + 1}`;
+	}
+
+	/** Server ids that are usable right now: globally enabled ones. */
+	private globalEnabledServerIds(): Set<string> {
+		return new Set(
+			this.getServers()
+				.filter((s) => s.enabled)
+				.map((s) => s.id)
+		);
 	}
 
 	private handleToolsListChanged(serverName: string, tools: Tool[]): void {

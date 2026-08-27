@@ -11,7 +11,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { ICON_CLASS_DEFAULT } from '$lib/constants';
 	import { setChatFormActionsContext } from '$lib/contexts';
-	import { FileTypeCategory, MessageRole } from '$lib/enums';
+	import { FileTypeCategory, MessageRole, ToolSource } from '$lib/enums';
 	import { ChatService } from '$lib/services';
 	import { chatStore, conversationsStore, mcpStore, settingsStore } from '$lib/stores';
 	import { getFileTypeCategory } from '$lib/utils';
@@ -58,9 +58,24 @@
 
 	let currentConfig = $derived(settingsStore.config);
 
-	let hasMcpPromptsSupport = $derived.by(() => mcpStore.hasPromptsCapability());
+	// usable MCP servers for this conversation: globally enabled and not
+	// disabled by the effective tool policy (category or server-scoped key)
+	let policyEnabledMcpServerIds = $derived.by(() => {
+		const prefs = conversationsStore.preferences;
 
-	let hasMcpResourcesSupport = $derived.by(() => mcpStore.hasResourcesCapability());
+		if (!prefs.isCategoryEnabled(ToolSource.MCP)) return new Set<string>();
+
+		return new Set(
+			mcpStore
+				.getServers()
+				.filter((s) => s.enabled && prefs.isServerToolsEnabled(s.id))
+				.map((s) => s.id)
+		);
+	});
+
+	let hasMcpPromptsSupport = $derived(mcpStore.hasPromptsCapability(policyEnabledMcpServerIds));
+
+	let hasMcpResourcesSupport = $derived(mcpStore.hasResourcesCapability(policyEnabledMcpServerIds));
 
 	let hasAudioModality = $state(false);
 	let hasVideoModality = $state(false);
