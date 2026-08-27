@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Iterable, cast
+from typing import Callable, Iterable, cast
 
 import torch
 from torch import Tensor
@@ -21,19 +21,63 @@ class Qwen4ExpTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
     Shares the Qwen3.5 gated delta net and interleaved mrope, and adds three things:
     hyper-connections in place of every layer norm, QSA sparse attention on the full
     attention layers, and PLE n-gram hash embeddings on a single layer.
+
+    The checkpoint also carries a NextN/MTP draft head under `mtp.*`, exported as a
+    trailing block; pass --no-nextn to leave it out.
     """
 
     model_arch = gguf.MODEL_ARCH.QWEN4EXP
-
-    # the MTP block is a separate draft head; vLLM drops it too
-    supports_mtp_export = False
-    no_mtp = True
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         # only the shard names, so the table itself is never held
         self._ple_shards: dict[int, str] = {}
         self._ple_row_dim: int | None = None
+
+    # The MTP head is one trunk-shaped block (dense attention + MoE, wrapped in
+    # hyper-connections) plus a combiner, so once _QwenMtpMixin renames
+    # `mtp.layers.0.*` to the trailing block index its tensors ride the existing
+    # qwen4exp mappings unchanged. Only the two head-level pieces below differ.
+
+    _MTP_MIXER_PREFIX = "mtp.hyper_connection_mixer."
+
+    @classmethod
+    def filter_tensors(cls, item):
+        # the head carries its own copy of the trunk's hc_head_* output mixer,
+        # which qwen4exp has in place of a final norm; it is unindexed in the
+        # checkpoint and per-block in the GGUF
+        name, gen = item
+        if name.startswith("model." + cls._MTP_MIXER_PREFIX):
+            name = name.replace("model.", "", 1)
+        if name.startswith(cls._MTP_MIXER_PREFIX):
+            if cls.no_mtp:
+                return None
+            assert cls._original_block_count is not None
+            return f"model.layers.{cls._original_block_count}.{name[len('mtp.'):]}", gen
+        return super().filter_tensors((name, gen))
+
+    def index_tensors(self, remote_hf_model_id: str | None = None) -> dict[str, Callable[[], Tensor]]:
+        # qwen4exp splits the combiner the shared NextN code calls eh_proj into
+        # fc_embedding and fc_hidden; W_e@e + W_h@h == [W_e|W_h] @ concat(e, h),
+        # so the two fuse back into the single expected matmul
+        tensors = super().index_tensors(remote_hf_model_id=remote_hf_model_id)
+
+        emb = tensors.pop("mtp.fc_embedding.weight", None)
+        hid = tensors.pop("mtp.fc_hidden.weight", None)
+        if emb is None and hid is None:
+            return tensors
+        if emb is None or hid is None:
+            raise ValueError(
+                "the qwen4exp MTP combiner needs both mtp.fc_embedding.weight and "
+                "mtp.fc_hidden.weight; pass --no-nextn to convert without the draft head"
+            )
+
+        assert self._original_block_count is not None
+        # fc_embedding first: the graph concatenates the token embedding ahead of
+        # the hidden state, so the fused weight has to be ordered to match
+        name = f"model.layers.{self._original_block_count}.eh_proj.weight"
+        tensors[name] = lambda: torch.cat([emb(), hid()], dim=1)
+        return tensors
 
     def _read_hash_constants(self, suffix: str) -> list[int]:
         """Read an int64 PLE constant straight from the checkpoint.
@@ -63,14 +107,18 @@ class Qwen4ExpTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
         self.gguf_writer.add_indexer_top_k(hp["indexer_budget"])
         ratio = hp["indexer_compress_ratio"]
         layer_types = hp["layer_types"]
-        self.gguf_writer.add_attention_compress_ratios(
-            [ratio if layer_types[i] == "full_attention" else 0 for i in range(n_layer)]
-        )
+        ratios = [ratio if layer_types[i] == "full_attention" else 0 for i in range(n_layer)]
+        # llama.cpp reads this array with length block_count, and the MTP blocks
+        # trailing the trunk attend densely, which is what a ratio of 0 selects
+        ratios += [0] * (self.block_count - n_layer)
+        self.gguf_writer.add_attention_compress_ratios(ratios)
 
         # ple_layer_ids is 1-based in the HF config; empty means no n-gram table,
-        # so emit no PLE keys rather than optional ones
+        # so emit no PLE keys rather than optional ones.
+        # a draft-only export carries no trunk tensors, so it carries no PLE table
+        # to describe either
         ple_layers = [i - 1 for i in hp["ple_layer_ids"]]
-        if not ple_layers:
+        if not ple_layers or self.mtp_only:
             return
         self.gguf_writer.add_ple_layers(ple_layers)
         self.gguf_writer.add_ple_ngram_size(hp["ngram_size"])
