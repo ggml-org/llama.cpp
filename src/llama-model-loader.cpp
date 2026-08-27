@@ -1073,6 +1073,9 @@ static ggml_backend_buffer_type_t select_weight_buft(const llama_hparams & hpara
 struct ggml_tensor * llama_model_loader::create_tensor(
         const llama_hparams & hparams, const buft_list_t * buft_list_cpu, const buft_list_t * buft_list_input, const buft_list_t * buft_list_output,
         const buft_list_t * buft_list_layer, const LLM_TN_IMPL & tn, const std::initializer_list<int64_t> & ne, int flags) {
+    // set below, before buft_for_tensor() runs
+    bool is_lazy = false;
+
     auto ctx_for_buft = [&](ggml_backend_buffer_type_t buft) -> ggml_context * {
         auto it = ctx_map.find(buft);
         if (it == ctx_map.end()) {
@@ -1158,6 +1161,16 @@ struct ggml_tensor * llama_model_loader::create_tensor(
             if (tn.bid == -1) {
                 GGML_ABORT("repeating layer tensor %s used without a layer number", tn.str().c_str());
             }
+        }
+
+        // if the tensor is marked as "lazy", we always keep it on CPU no matter what
+        // use case: PLE / engrams embd tensors
+        if (is_lazy) {
+            auto * cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+            if (!cpu_dev) {
+                throw std::runtime_error("no CPU backend found");
+            }
+            return ggml_backend_dev_buffer_type(cpu_dev);
         }
 
         // select the buffer type for this tensor
@@ -1287,16 +1300,20 @@ struct ggml_tensor * llama_model_loader::create_tensor(
         return NULL;
     }
 
-    if ((flags & TENSOR_READ_LAZY) && use_mmap && tensor_read_lazy != LLAMA_TENSOR_READ_LAZY_OFF) {
+    if ((flags & TENSOR_READ_LAZY) && tensor_read_lazy != LLAMA_TENSOR_READ_LAZY_OFF) {
         // in auto mode, small tensors are cheap enough to keep resident
         constexpr size_t auto_lazy_min_size = 4ull * 1024 * 1024 * 1024;
-        if (tensor_read_lazy == LLAMA_TENSOR_READ_LAZY_ON || ggml_nbytes(cur) > auto_lazy_min_size) {
-            const auto & w = require_weight(tn.str().c_str());
-            lazy_tensor_ranges[w.idx].emplace_back(w.offs, w.offs + ggml_nbytes(cur));
 
-            LLAMA_LOG_INFO("%s: tensor %s (size = %zu MiB) lazy read enabled\n",
-                    __func__, tn.str().c_str(), ggml_nbytes(cur)/1024/1024);
-        }
+        // note: this must not depend on use_mmap, or the memory-fit pass (which loads with no_alloc and no mmap)
+        is_lazy = tensor_read_lazy == LLAMA_TENSOR_READ_LAZY_ON || ggml_nbytes(cur) > auto_lazy_min_size;
+    }
+
+    if (is_lazy && use_mmap) {
+        const auto & w = require_weight(tn.str().c_str());
+        lazy_tensor_ranges[w.idx].emplace_back(w.offs, w.offs + ggml_nbytes(cur));
+
+        LLAMA_LOG_INFO("%s: tensor %s (size = %zu MiB) lazy read enabled\n",
+                __func__, tn.str().c_str(), ggml_nbytes(cur)/1024/1024);
     }
 
     ggml_tensor t_meta = *cur;
