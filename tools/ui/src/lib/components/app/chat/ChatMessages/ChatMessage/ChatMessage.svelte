@@ -7,7 +7,12 @@
 		ChatMessageSystem,
 		ChatMessageUser
 	} from '$lib/components/app/chat';
-	import { REASONING_TAGS, ROUTES, SYSTEM_MESSAGE_PLACEHOLDER } from '$lib/constants';
+	import {
+		AGENTIC_TEXT_COPY_SEPARATOR,
+		REASONING_TAGS,
+		ROUTES,
+		SYSTEM_MESSAGE_PLACEHOLDER
+	} from '$lib/constants';
 	import { setChatMessageActionsContext, setChatMessageEditContext } from '$lib/contexts';
 	import { AgenticSectionType, AttachmentType, MessageRole } from '$lib/enums';
 	import { DatabaseService } from '$lib/services/database.service';
@@ -246,7 +251,7 @@
 			const text = sections
 				.filter((section) => section.type === AgenticSectionType.TEXT)
 				.map((section) => section.content)
-				.join('\n\n');
+				.join(AGENTIC_TEXT_COPY_SEPARATOR);
 
 			if (text) {
 				chatActions.copy(message, text);
