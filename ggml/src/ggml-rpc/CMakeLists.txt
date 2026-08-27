@@ -5,6 +5,24 @@ ggml_add_backend_library(ggml-rpc
                          transport.cpp
                         )
 
+find_package(ZLIB QUIET)
+if (ZLIB_FOUND)
+    option(GGML_RPC_ZLIB "ggml: enable zlib compression support for RPC tensor uploads" ON)
+else()
+    option(GGML_RPC_ZLIB "ggml: enable zlib compression support for RPC tensor uploads" OFF)
+endif()
+
+if (GGML_RPC_ZLIB)
+    if (NOT ZLIB_FOUND)
+        find_package(ZLIB REQUIRED)
+    endif()
+    target_compile_definitions(ggml-rpc PRIVATE GGML_RPC_ZLIB)
+    target_link_libraries(ggml-rpc PRIVATE ZLIB::ZLIB)
+    message(STATUS "  RPC zlib tensor upload compression enabled")
+else()
+    message(STATUS "  RPC zlib tensor upload compression disabled")
+endif()
+
 if (WIN32)
     target_link_libraries(ggml-rpc PRIVATE ws2_32)
 endif()

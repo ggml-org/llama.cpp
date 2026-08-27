@@ -10,6 +10,7 @@
 #  include <winsock2.h>
 #else
 #  include <arpa/inet.h>
+#  include <sys/time.h>
 #  include <sys/socket.h>
 #  include <sys/types.h>
 #  include <netinet/in.h>
@@ -18,6 +19,8 @@
 #  include <unistd.h>
 #endif
 #include <cstdlib>
+#include <cerrno>
+#include <climits>
 #include <mutex>
 #include <optional>
 
@@ -114,7 +117,9 @@ static_assert(sizeof(rdma_caps) == RPC_CONN_CAPS_SIZE, "rdma_caps must match con
 #endif // GGML_RPC_RDMA
 
 struct socket_t::impl {
-    impl(sockfd_t fd) : use_rdma(false), fd(fd) {}
+    impl(sockfd_t fd)
+        : use_rdma(false), fd(fd), skip_tensor_hash(false), supports_device_type(false),
+          supports_set_tensor_zlib(false), supports_copy_tensor_async(false), supports_get_tensors(false) {}
     ~impl();
     bool send_data(const void * data, size_t size);
     bool recv_data(void * data, size_t size);
@@ -135,6 +140,12 @@ struct socket_t::impl {
 #endif // GGML_RPC_RDMA
     bool     use_rdma;
     sockfd_t fd;
+    bool     skip_tensor_hash;
+    bool     supports_device_type;
+    bool     supports_set_tensor_zlib;
+    bool     supports_copy_tensor_async;
+    bool     supports_get_tensors;
+    std::string label;
 };
 
 socket_t::impl::~impl() {
@@ -564,6 +575,54 @@ void socket_t::update_caps(const uint8_t * remote_caps) {
     return pimpl->update_caps(remote_caps);
 }
 
+void socket_t::set_skip_tensor_hash(bool value) {
+    pimpl->skip_tensor_hash = value;
+}
+
+bool socket_t::skip_tensor_hash() const {
+    return pimpl->skip_tensor_hash;
+}
+
+void socket_t::set_supports_device_type(bool value) {
+    pimpl->supports_device_type = value;
+}
+
+bool socket_t::supports_device_type() const {
+    return pimpl->supports_device_type;
+}
+
+void socket_t::set_supports_set_tensor_zlib(bool value) {
+    pimpl->supports_set_tensor_zlib = value;
+}
+
+bool socket_t::supports_set_tensor_zlib() const {
+    return pimpl->supports_set_tensor_zlib;
+}
+
+void socket_t::set_supports_copy_tensor_async(bool value) {
+    pimpl->supports_copy_tensor_async = value;
+}
+
+bool socket_t::supports_copy_tensor_async() const {
+    return pimpl->supports_copy_tensor_async;
+}
+
+void socket_t::set_supports_get_tensors(bool value) {
+    pimpl->supports_get_tensors = value;
+}
+
+bool socket_t::supports_get_tensors() const {
+    return pimpl->supports_get_tensors;
+}
+
+void socket_t::set_label(const char * label) {
+    pimpl->label = label ? label : "";
+}
+
+const std::string & socket_t::label() const {
+    return pimpl->label;
+}
+
 static bool is_valid_fd(sockfd_t sockfd) {
 #ifdef _WIN32
     return sockfd != INVALID_SOCKET;
@@ -579,6 +638,83 @@ static bool set_no_delay(sockfd_t sockfd) {
     return ret == 0;
 }
 
+static bool set_tcp_buffer_size(sockfd_t sockfd, int option, int size) {
+    return setsockopt(sockfd, SOL_SOCKET, option, (char *) &size, sizeof(size)) == 0;
+}
+
+static int get_positive_env_int(const char * name) {
+    const char * env = std::getenv(name);
+    if (env == nullptr || env[0] == '\0') {
+        return 0;
+    }
+
+    errno = 0;
+    char * end = nullptr;
+    long value = std::strtol(env, &end, 10);
+    if (errno != 0 || end == env || *end != '\0' || value <= 0 || value > INT_MAX) {
+        GGML_LOG_WARN("Ignoring invalid %s value: %s\n", name, env);
+        return 0;
+    }
+
+    return (int) value;
+}
+
+static int get_tcp_buffer_size() {
+    return get_positive_env_int("GGML_RPC_TCP_BUFFER_SIZE");
+}
+
+static int get_tcp_client_timeout_seconds() {
+    return get_positive_env_int("GGML_RPC_TIMEOUT");
+}
+
+static int get_tcp_server_timeout_seconds() {
+    return get_positive_env_int("GGML_RPC_SERVER_TIMEOUT");
+}
+
+static bool set_tcp_io_timeout(sockfd_t sockfd, int option, int seconds) {
+#ifdef _WIN32
+    if (seconds > INT_MAX / 1000) {
+        seconds = INT_MAX / 1000;
+    }
+    DWORD timeout_ms = (DWORD) seconds * 1000;
+    return setsockopt(sockfd, SOL_SOCKET, option, (char *) &timeout_ms, sizeof(timeout_ms)) == 0;
+#else
+    struct timeval timeout = {
+        /* .tv_sec  = */ seconds,
+        /* .tv_usec = */ 0,
+    };
+    return setsockopt(sockfd, SOL_SOCKET, option, (char *) &timeout, sizeof(timeout)) == 0;
+#endif
+}
+
+static bool configure_tcp_socket(sockfd_t sockfd, int timeout_seconds) {
+    if (!set_no_delay(sockfd)) {
+        GGML_LOG_ERROR("Failed to set TCP_NODELAY\n");
+        return false;
+    }
+
+    int buffer_size = get_tcp_buffer_size();
+    if (buffer_size > 0) {
+        if (!set_tcp_buffer_size(sockfd, SO_SNDBUF, buffer_size)) {
+            GGML_LOG_WARN("Failed to set SO_SNDBUF=%d\n", buffer_size);
+        }
+        if (!set_tcp_buffer_size(sockfd, SO_RCVBUF, buffer_size)) {
+            GGML_LOG_WARN("Failed to set SO_RCVBUF=%d\n", buffer_size);
+        }
+    }
+
+    if (timeout_seconds > 0) {
+        if (!set_tcp_io_timeout(sockfd, SO_SNDTIMEO, timeout_seconds)) {
+            GGML_LOG_WARN("Failed to set SO_SNDTIMEO=%d\n", timeout_seconds);
+        }
+        if (!set_tcp_io_timeout(sockfd, SO_RCVTIMEO, timeout_seconds)) {
+            GGML_LOG_WARN("Failed to set SO_RCVTIMEO=%d\n", timeout_seconds);
+        }
+    }
+
+    return true;
+}
+
 static bool set_reuse_addr(sockfd_t sockfd) {
     int flag = 1;
     int ret = setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, (char *)&flag, sizeof(int));
@@ -590,8 +726,7 @@ socket_ptr socket_t::accept() {
     if (!is_valid_fd(client_socket_fd)) {
         return nullptr;
     }
-    if (!set_no_delay(client_socket_fd)) {
-        GGML_LOG_ERROR("Failed to set TCP_NODELAY\n");
+    if (!configure_tcp_socket(client_socket_fd, get_tcp_server_timeout_seconds())) {
         return nullptr;
     }
     return socket_ptr(new socket_t(std::make_unique<impl>(client_socket_fd)));
@@ -629,8 +764,7 @@ socket_ptr socket_t::connect(const char * host, int port) {
     if (!is_valid_fd(sockfd)) {
         return nullptr;
     }
-    if (!set_no_delay(sockfd)) {
-        GGML_LOG_ERROR("Failed to set TCP_NODELAY\n");
+    if (!configure_tcp_socket(sockfd, get_tcp_client_timeout_seconds())) {
         return nullptr;
     }
     struct sockaddr_in addr;
