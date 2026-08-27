@@ -245,6 +245,9 @@ void llama_model_qwen4exp::load_arch_tensors(llama_model_loader & ml) {
 }
 
 std::unique_ptr<llm_graph_context> llama_model_qwen4exp::build_arch_graph(const llm_graph_params & params) const {
+    if (params.gtype == LLM_GRAPH_TYPE_DECODER_MTP) {
+        return std::make_unique<graph_mtp>(*this, params);
+    }
     return std::make_unique<graph>(*this, params);
 }
 
@@ -416,6 +419,21 @@ llama_model_qwen4exp::graph::graph(const llama_model & model, const llm_graph_pa
 
         // "l_last" is the layer output name that build_cvec and imatrix look for
         cb(res_hc, "l_last", il);
+    }
+
+    // hand the drafter the 4-stream residual, pre-collapse: nextn.hnorm is hc-space
+    if (cparams.embeddings_nextn) {
+        // export the REAL node, not a reshape view: the scheduler assigns no backend to a
+        // naked view and the extraction then hits GGML_ASSERT(backend_h). Contiguous
+        // [n_embd, hc, T] has the same memory layout as the flat rows the reader expects.
+        ggml_tensor * h_nextn = res_hc;
+        if (cparams.embeddings_nextn_masked && inp_out_ids) {
+            ggml_tensor * flat = ggml_reshape_2d(ctx0, res_hc, n_embd*hc, n_tokens);
+            h_nextn = ggml_get_rows(ctx0, flat, inp_out_ids);
+        }
+        cb(h_nextn, "h_nextn", -1);
+        res->t_h_nextn = h_nextn;
+        ggml_build_forward_expand(gf, h_nextn);
     }
 
     // the final mixer is the output norm: there is no separate one
@@ -749,7 +767,7 @@ ggml_tensor * llama_model_qwen4exp::graph::build_layer_attn(
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());
 
     // indexer reads the same block input as q/k/v; no cache or no ratio means dense
-    const bool qsa = mctx_hyb->get_idx() != nullptr && hparams.dsv4_compress_ratios[il] > 0;
+    const bool qsa = mctx_hyb != nullptr && mctx_hyb->get_idx() != nullptr && hparams.dsv4_compress_ratios[il] > 0;
 
     ggml_tensor * top_k = qsa ? build_qsa_top_k(mctx_hyb, cur, inp_pos, inp->get_kq_mask(), sections, il) : nullptr;
 
@@ -1251,4 +1269,118 @@ ggml_tensor * llama_model_qwen4exp::graph::build_ple(
     cb(conv_out, "ple_conv_out", il);
 
     return ggml_add(ctx0, hidden, ggml_add(ctx0, gated, conv_out));
+}
+
+
+// NextN/MTP draft graph: one full-attention QSA block fed by [enorm(embd(tok)) ; hnorm(h)]
+// through eh_proj, closing with the shared head mixer. Mirrors deepseek4::graph_mtp; the
+// differences are dictated by the format: hnorm is hc-space (the drafter consumes the target's
+// 4-stream residual, exported by the mainline graph under cparams.embeddings_nextn), the block
+// is HC-wrapped, and the head mixer doubles as the output norm.
+llama_model_qwen4exp::graph_mtp::graph_mtp(const llama_model & model, const llm_graph_params & params) :
+    graph(model, params, mtp_tag{}) {
+    GGML_ASSERT(hparams.n_layer_nextn == 1 && "QWEN4EXP MTP currently only supports a single MTP block");
+    GGML_ASSERT(cparams.nextn_layer_offset >= 0 &&
+            cparams.nextn_layer_offset < (int) hparams.n_layer_nextn &&
+            "nextn_layer_offset out of range [0, n_layer_nextn)");
+    GGML_ASSERT(ubatch.token && "QWEN4EXP MTP requires token input");
+
+    const int64_t hc     = hparams.dsv4_hc_mult;
+    const int64_t hc_dim = hc * n_embd;
+    GGML_ASSERT(hparams.n_embd_out() == (uint32_t) hc_dim && "QWEN4EXP MTP hidden width mismatch");
+
+    const int il = hparams.n_layer() + cparams.nextn_layer_offset;
+    const auto & layer = model.layers[il];
+
+    GGML_ASSERT(layer.nextn.eh_proj && layer.nextn.enorm && layer.nextn.hnorm &&
+            "MTP block tensors absent - was the draft context created with load_mtp?");
+
+    int sections[4];
+    std::copy(std::begin(hparams.rope_sections), std::begin(hparams.rope_sections) + 4, sections);
+
+    auto inp_h = std::make_unique<llm_graph_input_embd_h>(hparams.n_embd_out());
+
+    inp_h->tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_tokens);
+    ggml_set_input(inp_h->tokens);
+
+    inp_h->embd = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, hparams.n_embd_out(), n_tokens);
+    ggml_set_input(inp_h->embd);
+
+    inp_h->h = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, hparams.n_embd_out(), n_tokens);
+    ggml_set_input(inp_h->h);
+    ggml_set_name(inp_h->h, "mtp_h_input");
+
+    ggml_tensor * tok_embd = ggml_get_rows(ctx0, model.tok_embd, inp_h->tokens);
+    cb(tok_embd, "mtp_tok_embd", il);
+
+    ggml_tensor * h_state = ggml_reshape_3d(ctx0, inp_h->h, n_embd, hc, n_tokens);
+    res->add_input(std::move(inp_h));
+
+    ggml_tensor * inp_pos     = build_inp_pos();
+    ggml_tensor * inp_out_ids = build_inp_out_ids();
+
+    // the MTP context holds a plain attention cache over the nextn layer(s) only, the
+    // deepseek32 pattern: the draft runs dense (no indexer cache, no recurrent state)
+    auto * inp_attn = build_attn_inp_kv();
+    const llama_memory_hybrid_idx_context * mctx_hyb = nullptr;
+
+    // hnorm is the same grouped RMSNorm as every HC norm: rms over one stream, flat gamma
+    ggml_tensor * h_norm = ggml_rms_norm(ctx0, h_state, hparams.f_norm_rms_eps);
+    h_norm = ggml_reshape_2d(ctx0, h_norm, hc_dim, n_tokens);
+    h_norm = ggml_mul(ctx0, h_norm, layer.nextn.hnorm);
+    h_norm = ggml_reshape_3d(ctx0, h_norm, n_embd, hc, n_tokens);
+    cb(h_norm, "mtp_hnorm", il);
+
+    ggml_tensor * e_norm = ggml_rms_norm(ctx0, tok_embd, hparams.f_norm_rms_eps);
+    e_norm = ggml_mul(ctx0, e_norm, layer.nextn.enorm);
+    e_norm = ggml_reshape_3d(ctx0, e_norm, n_embd, 1, n_tokens);
+    e_norm = ggml_repeat_4d(ctx0, e_norm, n_embd, hc, n_tokens, 1);
+    cb(e_norm, "mtp_enorm", il);
+
+    ggml_tensor * concat = ggml_concat(ctx0, e_norm, h_norm, 0);
+    ggml_tensor * res_hc = build_lora_mm(layer.nextn.eh_proj, concat);
+    cb(res_hc, "mtp_eh_proj", il);
+
+    // one HC-wrapped full-attention QSA block, the mainline loop body minus PLE/GDN
+    ggml_tensor * inject = nullptr;
+    ggml_tensor * cur = build_hc_mix(res_hc,
+            layer.hc_attn_norm, layer.hc_attn_down, layer.hc_attn_up, layer.hc_attn_inject,
+            &inject, il);
+    ggml_build_forward_expand(gf, cur);
+
+    cur = build_layer_attn(inp_attn, mctx_hyb, cur, inp_pos, sections, il);
+    res_hc = build_hc_combine(res_hc, cur, inject, il);
+
+    cur = build_hc_mix(res_hc,
+            layer.hc_ffn_norm, layer.hc_ffn_down, layer.hc_ffn_up, layer.hc_ffn_inject,
+            &inject, il);
+    cur = build_layer_ffn(cur, il);
+    cb(cur, "mtp_ffn_out", il);
+    res_hc = build_hc_combine(res_hc, cur, inject, il);
+
+    // chained-draft export: the drafter's own hc state, gathered to the output rows
+    ggml_tensor * h_nextn = res_hc;   // real node; see the export note in the mainline graph
+    if (inp_out_ids) {
+        ggml_tensor * flat = ggml_reshape_2d(ctx0, res_hc, hc_dim, n_tokens);
+        h_nextn = ggml_get_rows(ctx0, flat, inp_out_ids);
+    }
+    cb(h_nextn, "h_nextn", -1);
+    res->t_h_nextn = h_nextn;
+    ggml_build_forward_expand(gf, h_nextn);
+
+    // the head mixer is the output norm; the sidecar carries its own copy of it
+    cur = build_hc_mix(res_hc,
+            model.hc_head_norm, model.hc_head_down, model.hc_head_up,
+            nullptr, nullptr, -1);
+    if (inp_out_ids) {
+        cur = ggml_get_rows(ctx0, cur, inp_out_ids);
+    }
+    cb(cur, "result_norm", -1);
+    res->t_embd = cur;
+
+    cur = build_lora_mm(model.output, cur, model.output_s);
+    cb(cur, "result_output", -1);
+    res->t_logits = cur;
+
+    ggml_build_forward_expand(gf, cur);
 }
