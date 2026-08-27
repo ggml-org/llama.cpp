@@ -272,6 +272,10 @@ void llama_kv_cache_iswa::state_read(llama_io_read_i & io, llama_seq_id seq_id, 
     kv_swa->state_read(io, seq_id, flags);
 }
 
+bool llama_kv_cache_iswa::get_has_shared_cells() const {
+    return (kv_base && kv_base->get_has_shared_cells()) || (kv_swa && kv_swa->get_has_shared_cells());
+}
+
 llama_kv_cache * llama_kv_cache_iswa::get_base() const {
     return kv_base.get();
 }

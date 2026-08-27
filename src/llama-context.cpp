@@ -3978,6 +3978,10 @@ llama_pos llama_memory_seq_pos_min(
     return mem->seq_pos_min(seq_id);
 }
 
+bool llama_memory_has_shared_cells(llama_memory_t mem) {
+    return mem != nullptr && mem->get_has_shared_cells();
+}
+
 llama_pos llama_memory_seq_pos_max(
         llama_memory_t mem,
           llama_seq_id seq_id) {
