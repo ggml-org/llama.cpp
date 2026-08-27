@@ -22,7 +22,6 @@ If AI is used to generate any portion of the code, contributors must adhere to t
 2. Check for an existing PR addressing the same change; if one exists, comment there to work with its author instead of opening a duplicate.
 3. Perform a comprehensive manual review prior to submitting the pull request.
 4. Be prepared to explain every line of code they submitted when asked about it by a maintainer.
-5. It is strictly prohibited to use AI to write your posts for you (bug reports, feature requests, pull request descriptions, Github discussions, responding to humans, ...).
 
 For more info, please refer to the [AGENTS.md](AGENTS.md) file.
 
