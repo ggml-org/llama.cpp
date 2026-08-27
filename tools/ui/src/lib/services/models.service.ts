@@ -187,8 +187,17 @@ export class ModelsService {
 
 		// 6. Model name = segments before params; tags = remaining segments after params
 		const pivotIdx = paramsIdx !== MODEL_ID.NOT_FOUND ? paramsIdx : segments.length;
+		const modelSegments = segments.slice(0, pivotIdx);
 
-		result.modelName = segments.slice(0, pivotIdx).join(MODEL_ID.SEGMENT_SEPARATOR) || null;
+		// strip trailing container-format segments (e.g. GGUF) from the model name
+		while (
+			modelSegments.length > 0 &&
+			MODEL_ID.IGNORED_SEGMENTS.has(modelSegments[modelSegments.length - 1].toUpperCase())
+		) {
+			modelSegments.pop();
+		}
+
+		result.modelName = modelSegments.join(MODEL_ID.SEGMENT_SEPARATOR) || null;
 
 		if (paramsIdx !== MODEL_ID.NOT_FOUND) {
 			result.tags = segments.slice(paramsIdx + 1).filter((_, relIdx) => {

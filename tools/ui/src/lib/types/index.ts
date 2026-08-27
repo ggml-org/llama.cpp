@@ -89,6 +89,7 @@ export type {
 
 // Model types
 export type {
+	ModelCapabilities,
 	ModelModalities,
 	ModelOption,
 	ModelLoadProgress,
