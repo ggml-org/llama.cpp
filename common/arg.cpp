@@ -2722,7 +2722,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_env("LLAMA_ARG_LOAD_MODE"));
     add_opt(common_arg(
         {"--tensor-read-lazy"}, "MODE",
-        "on-demand reading of tensors marked by the model arch (default: auto)\n"
+        "on-demand reading of certain tensors, for example per-layer embeddings (default: auto)\n"
         "- on: read the rows of such tensors from disk on demand instead of keeping them resident (requires mmap)\n"
         "- auto: on, but only for tensors larger than 4 GiB\n"
         "- off: always keep them resident",
