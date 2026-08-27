@@ -1,10 +1,6 @@
 <script lang="ts">
-	import { File, FolderOpen, MessageSquare, Plus, Zap } from '@lucide/svelte';
-	import {
-		ChatFormActionAddMcpServersSubmenu,
-		ChatFormActionAddReasoningSubmenu,
-		ChatFormActionAddToolsSubmenu
-	} from '$lib/components/app';
+	import { File, MessageSquare, Plus } from '@lucide/svelte';
+	import { ChatFormActionAddToolsSubmenu, McpLogo } from '$lib/components/app';
 	import { buttonVariants } from '$lib/components/ui/button';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Tooltip from '$lib/components/ui/tooltip';
@@ -31,23 +27,14 @@
 	// must not restore focus to the trigger on close
 	let suppressCloseAutoFocus = false;
 
-	function handleMcpSettingsClick() {
-		dropdownOpen = false;
-		chatFormActions.onMcpSettingsClick?.();
-	}
-
 	const attachmentMenu = useAttachmentMenu(
 		() => ({
 			hasAudioModality: chatFormActions.hasAudioModality,
-			hasMcpPromptsSupport: chatFormActions.hasMcpPromptsSupport,
-			hasMcpResourcesSupport: chatFormActions.hasMcpResourcesSupport,
 			hasVideoModality: chatFormActions.hasVideoModality,
 			hasVisionModality: chatFormActions.hasVisionModality
 		}),
 		() => ({
 			onFileUpload: chatFormActions.onFileUpload,
-			onMcpPromptClick: chatFormActions.onMcpPromptClick,
-			onMcpResourcesClick: chatFormActions.onMcpResourcesClick,
 			onSystemPromptClick: chatFormActions.onSystemPromptClick
 		}),
 		() => {
@@ -93,10 +80,6 @@
 				}
 			}}
 		>
-			<ChatFormActionAddReasoningSubmenu />
-
-			<DropdownMenu.Separator />
-
 			<DropdownMenu.Sub>
 				<DropdownMenu.SubTrigger class="flex cursor-pointer items-center gap-2">
 					<File class={ICON_CLASS_DEFAULT} />
@@ -156,31 +139,14 @@
 
 			<ChatFormActionAddToolsSubmenu />
 
-			<ChatFormActionAddMcpServersSubmenu onMcpSettingsClick={handleMcpSettingsClick} />
+			<DropdownMenu.Item
+				class="flex cursor-pointer items-center gap-2"
+				onclick={chatFormActions.onMcpSettingsClick}
+			>
+				<McpLogo class={ICON_CLASS_DEFAULT} />
 
-			{#if chatFormActions.hasMcpPromptsSupport}
-				<DropdownMenu.Separator />
-
-				<DropdownMenu.Item
-					class="flex cursor-pointer items-center gap-2"
-					onclick={chatFormActions.onMcpPromptClick}
-				>
-					<Zap class={ICON_CLASS_DEFAULT} />
-
-					<span>MCP Prompt</span>
-				</DropdownMenu.Item>
-			{/if}
-
-			{#if chatFormActions.hasMcpResourcesSupport}
-				<DropdownMenu.Item
-					class="flex cursor-pointer items-center gap-2"
-					onclick={chatFormActions.onMcpResourcesClick}
-				>
-					<FolderOpen class={ICON_CLASS_DEFAULT} />
-
-					<span>MCP Resources</span>
-				</DropdownMenu.Item>
-			{/if}
+				<span>MCP Servers</span>
+			</DropdownMenu.Item>
 		</DropdownMenu.Content>
 	</DropdownMenu.Root>
 </div>

@@ -30,6 +30,8 @@
 #include "ggml-common.h"
 #include "htp-ctx.h"
 #include "htp-ops.h"
+#include "htp-tensor.h"
+#include "hvx-quant.h"
 
 #include "flash-attn-ops.h"
 #include "hvx-fa-kernels.h"
@@ -85,12 +87,17 @@ struct htp_fa_context {
     uint8_t * spad_m;
     uint8_t * spad_a;
 
+    const struct htp_tensor * k;
+    const struct htp_tensor * v;
+
     uint64_t t_start;
 };
 
 struct hmx_fa_context {
     const struct htp_ops_context * octx;
     const struct htp_tensor *      sinks;  // attention sinks (src[4]), NULL if absent
+    const struct htp_tensor *      k;
+    const struct htp_tensor *      v;
     bool         pipeline;  // true when n_kv_blocks >= FA_MIN_KV_BLOCKS && n_threads >= 2
     uint32_t     n_threads;
 
@@ -214,8 +221,8 @@ static void flash_attn_ext_f16_thread(unsigned int nth, unsigned int ith, void *
     const uint32_t DV = nev0;
 
     const size_t size_q_row = DK * ((q->type == HTP_TYPE_F32) ? 4 : 2);
-    const size_t size_k_row = DK * sizeof(__fp16);
-    const size_t size_v_row = DV * sizeof(__fp16);
+    const size_t size_k_row = htp_tensor_get_row_size(k->type, DK);
+    const size_t size_v_row = htp_tensor_get_row_size(v->type, DV);
 
     // Scratchpad buffers for Q, K, V, Mask, and VKQ32 accumulator
     uint8_t * spad_q = factx->spad_q + factx->size_q_block * ith;
@@ -363,6 +370,23 @@ static void flash_attn_ext_f16_thread(unsigned int nth, unsigned int ith, void *
             uint8_t * k_base = dma_queue_pop(dma).dst; // K
             uint8_t * v_base = dma_queue_pop(dma).dst; // V
             __fp16  * m_base = mask ? dma_queue_pop(dma).dst : NULL; // M
+
+            if (factx->k->type == HTP_TYPE_Q8_0) {
+                htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_FA_K_PREP, ir);
+                for (uint32_t r = 0; r < current_block_size; ++r) {
+                    __fp16 * row_k = (__fp16 *)(k_base + r * factx->size_k_row_padded);
+                    hvx_dequantize_row_q8_0_f16(row_k, row_k, DK);
+                }
+                htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_FA_K_PREP, ir);
+            }
+            if (factx->v->type == HTP_TYPE_Q8_0) {
+                htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_FA_V_PREP, ir);
+                for (uint32_t r = 0; r < current_block_size; ++r) {
+                    __fp16 * row_v = (__fp16 *)(v_base + r * factx->size_v_row_padded);
+                    hvx_dequantize_row_q8_0_f16(row_v, row_v, DV);
+                }
+                htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_FA_V_PREP, ir);
+            }
 
             htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_FA_QK, ir);
 
@@ -625,6 +649,12 @@ static void fa_k_interleave_thread(unsigned int n, unsigned int i, void * data) 
 
     struct htp_thread_trace * tr = &factx->octx->ctx->trace[i];
     htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_FA_K_PREP, (uint16_t) (args->kv_start + start));
+    if (factx->k->type == HTP_TYPE_Q8_0) {
+        for (uint32_t r = start; r < end; ++r) {
+            __fp16 * row_k = (__fp16 *)((char *)args->curr_k + r * args->src_stride * sizeof(__fp16));
+            hvx_dequantize_row_q8_0_f16(row_k, row_k, factx->DK);
+        }
+    }
     hmx_interleave_rows_to_tiles(factx->vtcm_k_tiles[args->buf_idx], (const __fp16 *) args->curr_k, total_rows, factx->DK,
                              args->src_stride, start, end);
     htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_FA_K_PREP, (uint16_t) (args->kv_start + start));
@@ -673,6 +703,12 @@ static void fa_v_interleave_thread(unsigned int n, unsigned int i, void * data) 
 
     struct htp_thread_trace * tr = &factx->octx->ctx->trace[i];
     htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_FA_V_PREP, (uint16_t) (args->kv_start + start));
+    if (factx->v->type == HTP_TYPE_Q8_0) {
+        for (uint32_t r = start; r < end; ++r) {
+            __fp16 * row_v = (__fp16 *)((char *)args->v_src + r * args->src_stride * sizeof(__fp16));
+            hvx_dequantize_row_q8_0_f16(row_v, row_v, factx->DV);
+        }
+    }
     hmx_interleave_cols_to_tiles(v_tiles_dst, (const __fp16 *) args->v_src, total_rows, factx->DV,
                              args->src_stride, (uint32_t) args->n_col_tiles, start, end);
     htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_FA_V_PREP, (uint16_t) (args->kv_start + start));
@@ -1809,6 +1845,8 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
     memset(&factx, 0, sizeof(factx));
     factx.octx           = octx;
     factx.sinks          = octx->src[4];  // NULL if this op has no attention sinks
+    factx.k              = k;
+    factx.v              = v;
     factx.n_threads      = kparams->n_threads;
     factx.DK             = DK;
     factx.DV             = DV;
@@ -1853,10 +1891,10 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
     // ======== VTCM allocation (GQA-aware) ========
     // K/V row sizes drive the DMA descriptors (not the VTCM layout) and are used
     // throughout the KV loop below.
-    const size_t size_k_row        = DK * sizeof(__fp16);
-    const size_t size_v_row        = DV * sizeof(__fp16);
-    const size_t size_k_row_padded = hex_round_up(size_k_row, 128);
-    const size_t size_v_row_padded = hex_round_up(size_v_row, 128);
+    const size_t size_k_row        = htp_tensor_get_row_size(k->type, DK);
+    const size_t size_v_row        = htp_tensor_get_row_size(v->type, DV);
+    const size_t size_k_row_padded = hex_round_up(DK * sizeof(__fp16), 128);
+    const size_t size_v_row_padded = hex_round_up(DV * sizeof(__fp16), 128);
 
     // Build the VTCM layout once (shared with the host estimator) and place every
     // scratch buffer at its computed offset.
@@ -2348,7 +2386,9 @@ int op_flash_attn_ext(struct htp_ops_context * octx) {
     const struct htp_tensor * dst  = octx->dst;
 
     // Check support
-    if ((q->type != HTP_TYPE_F16 && q->type != HTP_TYPE_F32) || k->type != HTP_TYPE_F16 || v->type != HTP_TYPE_F16) {
+    if ((q->type != HTP_TYPE_F16 && q->type != HTP_TYPE_F32) ||
+        (k->type != HTP_TYPE_F16 && k->type != HTP_TYPE_Q8_0) ||
+        (v->type != HTP_TYPE_F16 && v->type != HTP_TYPE_Q8_0)) {
         return HTP_STATUS_NO_SUPPORT;
     }
 
@@ -2364,6 +2404,8 @@ int op_flash_attn_ext(struct htp_ops_context * octx) {
 
     struct htp_fa_context factx;
     factx.octx = octx;
+    factx.k = k;
+    factx.v = v;
 
     factx.t_start = HAP_perf_get_qtimer_count();
 
