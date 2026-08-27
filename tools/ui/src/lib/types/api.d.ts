@@ -71,6 +71,10 @@ export interface ApiModelStatus {
 	value: ServerModelStatus;
 	/** Command line arguments used when loading (only for loaded models) */
 	args?: string[];
+	/** Set when the model failed to load (unloaded with a non-zero exit code) */
+	failed?: boolean;
+	/** Process exit code, present when the model failed */
+	exit_code?: number;
 }
 
 /**
@@ -100,6 +104,10 @@ export interface ApiModelDataEntry {
 	tags?: string[];
 	/** Modality capabilities, reported by the router for every model regardless of load state */
 	architecture?: ApiModelArchitecture;
+	/** Whether the model can be removed from the server cache (DELETE /models) */
+	can_remove?: boolean;
+	/** Model source: preset, models_dir, cache, or unknown */
+	source?: string;
 	/** Legacy meta field (may be present in older responses) */
 	meta?: Record<string, unknown> | null;
 }
@@ -139,6 +147,14 @@ export interface ApiModelsSseData {
 }
 
 /**
+ * Per-file size snapshot reported by the download_progress SSE envelope.
+ * Keys are file URLs, values are byte counters (done <= total).
+ */
+export interface ApiModelsDownloadProgressData {
+	progress: Record<string, { done: number; total: number }>;
+}
+
+/**
  * Event kind multiplexed on the /models/sse feed.
  * Only the status_* events carry a status payload, models_reload signals a
  * full list refresh, model_remove drops a row, download_* drive download UI.
@@ -150,7 +166,7 @@ export interface ApiModelsSseData {
 export interface ApiModelsSseEvent {
 	model: string;
 	event: ServerModelsSseEventType;
-	data: ApiModelsSseData;
+	data?: ApiModelsSseData | ApiModelsDownloadProgressData;
 }
 
 export interface ApiModelDetails {
@@ -523,6 +539,24 @@ export interface ApiRouterModelsUnloadRequest {
 export interface ApiRouterModelsUnloadResponse {
 	success: boolean;
 	error?: string;
+}
+
+/**
+ * Request body for POST /models (PR #23976).
+ * `model` is a HuggingFace repo id, optionally suffixed with `:<tag>` to
+ * pin a quantization or variant file (e.g. `ggml-org/gemma-3-4b-it-GGUF:Q4_K_M`).
+ */
+export interface ApiRouterModelsDownloadRequest {
+	model: string;
+}
+
+/**
+ * Response from POST /models. The endpoint returns immediately; the
+ * download itself runs in the background and emits events on /models/sse.
+ */
+export interface ApiRouterModelsDownloadResponse {
+	success: boolean;
+	error?: { code: number; message: string; type: string };
 }
 
 /**

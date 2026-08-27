@@ -34,6 +34,9 @@ export type {
 	ApiRouterModelsListResponse,
 	ApiRouterModelsUnloadRequest,
 	ApiRouterModelsUnloadResponse,
+	ApiRouterModelsDownloadRequest,
+	ApiRouterModelsDownloadResponse,
+	ApiModelsDownloadProgressData,
 	AudioInputFormat,
 	ApiStreamSession
 } from './api';
@@ -93,6 +96,7 @@ export type {
 	ModelModalities,
 	ModelOption,
 	ModelLoadProgress,
+	ModelDownloadProgress,
 	ModalityCapabilities
 } from './models';
 

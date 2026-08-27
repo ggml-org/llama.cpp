@@ -11,6 +11,7 @@ import { API_MODELS, type DraftVariant, MODEL_ID } from '$lib/constants';
 import { ServerModelStatus } from '$lib/enums';
 import type { ParsedModelId } from '$lib/types/models';
 import {
+	apiDelete,
 	apiFetch,
 	apiPost,
 	extractSseDataPayload,
@@ -43,6 +44,55 @@ export class ModelsService {
 		const tag = quant.variant ? `${quant.quant}-${quant.variant.toUpperCase()}` : quant.quant;
 
 		return `${repoId}:${tag}`;
+	}
+
+	/**
+	 *
+	 *
+	 * Download
+	 *
+	 *
+	 */
+
+	/**
+	 * Cancel an in-flight download or remove a previously downloaded/failed
+	 * entry from the server's model cache (ROUTER mode only).
+	 *
+	 * Sends DELETE `/models?model=<hfRepoWithTag>`:
+	 * - while a download is running, the child subprocess is asked to exit
+	 *   and any partial `.tmp` files are removed;
+	 * - once the entry has finished downloading or has failed, the cached
+	 *   files are removed from disk.
+	 *
+	 * @param hfRepoWithTag - HuggingFace repo id in the same `<repo>:<tag>`
+	 *                        format returned by `buildDownloadTag`.
+	 * @returns Server acknowledgement containing the success flag
+	 */
+	static async cancelDownload(hfRepoWithTag: string): Promise<ApiRouterModelsDownloadResponse> {
+		return apiDelete<ApiRouterModelsDownloadResponse>(API_MODELS.DELETE, {
+			model: hfRepoWithTag
+		});
+	}
+
+	/**
+	 * Trigger a model download from HuggingFace (ROUTER mode only).
+	 *
+	 * Sends a POST request to `/models` as introduced in
+	 * ggml-org/llama.cpp#23976. The response returns immediately; the actual
+	 * download runs in the background and tracks progress through `/models/sse`.
+	 * The server picks the file that matches the supplied tag (when present)
+	 * and additionally pulls mmproj / MTP sidecar weights as appropriate for
+	 * the model.
+	 *
+	 * @param hfRepoWithTag - HuggingFace repo id, optionally suffixed with
+	 *                        `:<tag>` (e.g. `ggml-org/gemma-3-4b-it-GGUF:Q4_K_M`
+	 *                        or `:IQ1_M-MTP` for an embedded-draft GGUF).
+	 * @returns Server acknowledgement containing the success flag
+	 */
+	static async downloadModel(hfRepoWithTag: string): Promise<ApiRouterModelsDownloadResponse> {
+		const payload: ApiRouterModelsDownloadRequest = { model: hfRepoWithTag };
+
+		return apiPost<ApiRouterModelsDownloadResponse>(API_MODELS.DOWNLOAD, payload);
 	}
 
 	/**
