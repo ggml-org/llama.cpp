@@ -1,18 +1,18 @@
-ARG OPENVINO_VERSION_MAJOR=2026.2.1
-ARG OPENVINO_VERSION_FULL=2026.2.1.21919.ede283a88e3
+ARG OPENVINO_VERSION_MAJOR=2026.3
+ARG OPENVINO_VERSION_FULL=2026.3.0.22451.bd8d6542e3c
 ARG UBUNTU_VERSION=24.04
 
 # Intel GPU driver versions. https://github.com/intel/compute-runtime/releases
-ARG IGC_VERSION=v2.36.3
-ARG IGC_VERSION_FULL=2_2.36.3+21719
-ARG COMPUTE_RUNTIME_VERSION=26.22.38646.4
-ARG COMPUTE_RUNTIME_VERSION_FULL=26.22.38646.4-0
+ARG IGC_VERSION=v2.38.2
+ARG IGC_VERSION_FULL=2_2.38.2+22051
+ARG COMPUTE_RUNTIME_VERSION=26.27.39122.11
+ARG COMPUTE_RUNTIME_VERSION_FULL=26.27.39122.11-0
 ARG IGDGMM_VERSION=22.10.0
 
 # Intel NPU driver versions. https://github.com/intel/linux-npu-driver/releases
-ARG NPU_DRIVER_VERSION=v1.33.0
-ARG NPU_DRIVER_FULL=v1.33.0.20260529-26625960453
-ARG LIBZE1_VERSION=1.27.0-1~24.04~ppa2
+ARG NPU_DRIVER_VERSION=v1.35.0
+ARG NPU_DRIVER_FULL=v1.35.0.20260722-29947505341
+ARG LIBZE1_VERSION=1.28.2-1~24.04~ppa1
 
 # Optional proxy build arguments
 ARG http_proxy=
@@ -90,6 +90,9 @@ RUN bash -c "source ${OpenVINO_DIR}/setupvars.sh && \
     cmake -B build/ReleaseOV -G Ninja \
         -DCMAKE_BUILD_TYPE=Release \
         -DLLAMA_BUILD_TESTS=OFF \
+        -DGGML_NATIVE=OFF \
+        -DGGML_BACKEND_DL=ON \
+        -DGGML_CPU_ALL_VARIANTS=ON \
         -DGGML_OPENVINO=ON && \
     cmake --build build/ReleaseOV --parallel "
 
@@ -170,7 +173,7 @@ RUN --mount=type=cache,target=/var/cache/intel-npu,sharing=locked \
     fi; \
     DEB=/var/cache/intel-npu/libze1_${LIBZE1_VERSION}_amd64.deb; \
     if [ ! -f "$DEB" ]; then \
-        wget -q -O "$DEB" https://snapshot.ppa.launchpadcontent.net/kobuk-team/intel-graphics/ubuntu/20260324T100000Z/pool/main/l/level-zero-loader/libze1_${LIBZE1_VERSION}_amd64.deb; \
+        wget -q -O "$DEB" https://snapshot.ppa.launchpadcontent.net/kobuk-team/intel-graphics/ubuntu/20260606T100000Z/pool/main/l/level-zero-loader/libze1_${LIBZE1_VERSION}_amd64.deb; \
     fi; \
     mkdir /tmp/npu/ && cd /tmp/npu/ && tar -xf "$TGZ" && cp "$DEB" .; \
     apt-get update; \

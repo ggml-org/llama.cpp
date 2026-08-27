@@ -1,6 +1,6 @@
 /* eslint-disable no-irregular-whitespace */
-import { describe, it, expect, test } from 'vitest';
 import { maskInlineLaTeX, preprocessLaTeX } from '$lib/utils/latex-protection';
+import { describe, expect, it, test } from 'vitest';
 
 describe('maskInlineLaTeX', () => {
 	it('should protect LaTeX $x + y$ but not money $3.99', () => {
@@ -126,6 +126,7 @@ describe('preprocessLaTeX', () => {
 		const input =
 			'\\( \\mathrm{GL}_2(\\mathbb{F}_7) \\): Group of invertible matrices with entries in \\(\\mathbb{F}_7\\).';
 		const output = preprocessLaTeX(input);
+
 		expect(output).toBe(
 			'$ \\mathrm{GL}_2(\\mathbb{F}_7) $: Group of invertible matrices with entries in $\\mathbb{F}_7$.'
 		);
@@ -135,6 +136,7 @@ describe('preprocessLaTeX', () => {
 		const input =
 			'Chapter 20 of The TeXbook, in source "Definitions\\\\(also called Macros)", containst the formula \\((x_1,\\ldots,x_n)\\).';
 		const output = preprocessLaTeX(input);
+
 		expect(output).toBe(
 			'Chapter 20 of The TeXbook, in source "Definitions\\\\(also called Macros)", containst the formula $(x_1,\\ldots,x_n)$.'
 		);
@@ -229,6 +231,7 @@ h \\bigl[\\, d_{\\text{model}}\\;d_{k} + d_{\\text{model}}\\;d_{v}\\, \\bigr]   
 \\end{aligned}}
 \\]`;
 		const output = preprocessLaTeX(input);
+
 		expect(output).toBe(
 			`$$
 \\boxed{
@@ -280,6 +283,7 @@ $$\pi_n(\mathbb{S}^3) = \begin{cases}
 \mathbb{Z}_2 & n = 4 \\
 \end{cases}$$`;
 		const output = preprocessLaTeX(input);
+
 		// If the formula contains '\\' the $$-delimiters should be in their own line.
 		expect(output).toBe(`- Algebraic topology, Homotopy Groups of $\\mathbb{S}^3$:
 $$\n\\pi_n(\\mathbb{S}^3) = \\begin{cases}
@@ -372,5 +376,43 @@ $$\n\\pi_n(\\mathbb{S}^3) = \\begin{cases}
 
 		// All LaTeX should be converted, blockquote markers preserved
 		expect(output).toBe('Regular text with $x^2$.\n\n> Quote with $y^2$.\n\nMore text with $z^2$.');
+	});
+});
+
+// The fast path skips the whole protect/restore pipeline when the content has
+// neither `$` nor a backslash. These pin the assumption it relies on: such
+// content is returned byte-for-byte unchanged, and anything carrying a trigger
+// character still goes through the full pipeline.
+describe('preprocessLaTeX fast path', () => {
+	const untouched = [
+		['plain prose', 'The quick brown fox jumps over the lazy dog.'],
+		['headings and lists', '# Title\n\n- one\n- two\n\n## Sub\n\n1. first\n2. second'],
+		['fenced code without escapes', '```ts\nconst x = 1;\n```'],
+		['inline code and emphasis', 'Use `npm run build` with **bold** and _italic_.'],
+		['blockquotes', '> quoted line\n> another line'],
+		['tables', '| a | b |\n| --- | --- |\n| 1 | 2 |'],
+		['brackets and parens without escapes', 'array[0] and call(arg) and [link](/url)'],
+		['multi-paragraph prose', 'First para.\n\nSecond para.\n\nThird para.']
+	];
+
+	for (const [label, input] of untouched) {
+		test(`returns ${label} unchanged`, () => {
+			expect(preprocessLaTeX(input)).toBe(input);
+		});
+	}
+
+	test('still processes content once a trigger character is present', () => {
+		expect(preprocessLaTeX('inline \\(x^2\\) here')).toBe('inline $x^2$ here');
+		expect(preprocessLaTeX('Price: $5')).toBe('Price: \\$5');
+	});
+
+	test('fast path result matches the full pipeline for trigger-free content', () => {
+		// Appending a trigger char forces the slow path; stripping it back off
+		// must agree with what the fast path returned for the same prefix.
+		const body = 'Plain paragraph with no math.\n\nAnother paragraph here.';
+		const viaFastPath = preprocessLaTeX(body);
+		const viaFullPipeline = preprocessLaTeX(`${body}\n\n\\(z\\)`);
+
+		expect(viaFullPipeline.startsWith(viaFastPath)).toBe(true);
 	});
 });

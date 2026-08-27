@@ -10,7 +10,7 @@
 #include "speculative.h"
 #include "server-common.h"
 
-using json = nlohmann::ordered_json;
+#include <sstream>
 
 //
 // task_params
@@ -63,6 +63,8 @@ json task_params::to_json(bool only_metrics) const {
             {"mirostat",                  sampling.mirostat},
             {"mirostat_tau",              sampling.mirostat_tau},
             {"mirostat_eta",              sampling.mirostat_eta},
+            {"adaptive_target",           sampling.adaptive_target},
+            {"adaptive_decay",            sampling.adaptive_decay},
             {"max_tokens",                n_predict},
             {"n_predict",                 n_predict}, // TODO: deduplicate?
             {"n_keep",                    n_keep},
@@ -114,6 +116,8 @@ json task_params::to_json(bool only_metrics) const {
         {"mirostat",                  sampling.mirostat},
         {"mirostat_tau",              sampling.mirostat_tau},
         {"mirostat_eta",              sampling.mirostat_eta},
+        {"adaptive_target",           sampling.adaptive_target},
+        {"adaptive_decay",            sampling.adaptive_decay},
         {"stop",                      antiprompt},
         {"max_tokens",                n_predict},
         {"n_predict",                 n_predict}, // TODO: deduplicate?
@@ -233,34 +237,6 @@ common_chat_msg task_result_state::update_chat_msg(
 }
 
 //
-
-// result_timings
-//
-
-json result_timings::to_json() const {
-    json base = {
-        {"cache_n",                cache_n},
-
-        {"prompt_n",               prompt_n},
-        {"prompt_ms",              prompt_ms},
-        {"prompt_per_token_ms",    prompt_per_token_ms},
-        {"prompt_per_second",      prompt_per_second},
-
-        {"predicted_n",            predicted_n},
-        {"predicted_ms",           predicted_ms},
-        {"predicted_per_token_ms", predicted_per_token_ms},
-        {"predicted_per_second",   predicted_per_second},
-    };
-
-    if (draft_n > 0) {
-        base["draft_n"] = draft_n;
-        base["draft_n_accepted"] = draft_n_accepted;
-    }
-
-    return base;
-}
-
-//
 // result_prompt_progress
 //
 json result_prompt_progress::to_json() const {
@@ -326,7 +302,7 @@ json completion_token_output::probs_vector_to_json(const std::vector<completion_
 }
 
 float completion_token_output::logarithm(float x) {
-    // nlohmann::json converts -inf to null, so we need to prevent that
+    // the JSON library converts -inf to null, so we need to prevent that
     return x == 0.0f ? std::numeric_limits<float>::lowest() : std::log(x);
 }
 
@@ -378,7 +354,7 @@ json server_task_result_cmpl_final::to_json_non_oaicompat() {
         {"stop_type",           stop_type_to_str(stop)},
         {"stopping_word",       stopping_word},
         {"tokens_cached",       n_tokens_cached},
-        {"timings",             timings.to_json()},
+        {"timings",             stats.to_json()},
     };
     if (!stream && !probs_output.empty()) {
         res["completion_probabilities"] = completion_token_output::probs_vector_to_json(probs_output, post_sampling_probs);
@@ -428,8 +404,8 @@ json server_task_result_cmpl_final::to_json_oaicompat() {
     if (verbose) {
         res["__verbose"] = to_json_non_oaicompat();
     }
-    if (timings.prompt_n >= 0) {
-        res.push_back({"timings", timings.to_json()});
+    if (stats.is_set()) {
+        res["timings"] = stats.to_json();
     }
 
     return res;
@@ -476,8 +452,8 @@ json server_task_result_cmpl_final::to_json_oaicompat_chat() {
     if (verbose) {
         res["__verbose"] = to_json_non_oaicompat();
     }
-    if (timings.prompt_n >= 0) {
-        res.push_back({"timings", timings.to_json()});
+    if (stats.is_set()) {
+        res["timings"] = stats.to_json();
     }
 
     return res;
@@ -537,8 +513,8 @@ json server_task_result_cmpl_final::to_json_oaicompat_chat_stream() {
         });
     }
 
-    if (timings.prompt_n >= 0) {
-        deltas.back().push_back({"timings", timings.to_json()});
+    if (stats.is_set()) {
+        deltas.back()["timings"] = stats.to_json();
     }
 
     // extra fields for debugging purposes
@@ -730,8 +706,8 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp_stream() {
         }}
     });
 
-    if (timings.prompt_n >= 0) {
-        server_sent_events.back().at("data").push_back({"timings", timings.to_json()});
+    if (stats.is_set()) {
+        server_sent_events.back().at("data")["timings"] = stats.to_json();
     }
 
     return server_sent_events;
@@ -1082,11 +1058,11 @@ json server_task_result_cmpl_partial::to_json_non_oaicompat() {
         {"tokens_evaluated", n_prompt_tokens},
     };
     // populate the timings object when needed (usually for the last response or with timings_per_token enabled)
-    if (timings.prompt_n > 0) {
-        res.push_back({"timings", timings.to_json()});
+    if (stats.is_set()) {
+        res["timings"] = stats.to_json();
     }
     if (is_progress) {
-        res.push_back({"prompt_progress", progress.to_json()});
+        res["prompt_progress"] = progress.to_json();
     }
     if (!prob_output.probs.empty()) {
         res["completion_probabilities"] = completion_token_output::probs_vector_to_json({prob_output}, post_sampling_probs);
@@ -1122,11 +1098,11 @@ json server_task_result_cmpl_partial::to_json_oaicompat() {
     if (verbose) {
         res["__verbose"] = to_json_non_oaicompat();
     }
-    if (timings.prompt_n >= 0) {
-        res.push_back({"timings", timings.to_json()});
+    if (stats.is_set()) {
+        res["timings"] = stats.to_json();
     }
     if (is_progress) {
-        res.push_back({"prompt_progress", progress.to_json()});
+        res["prompt_progress"] = progress.to_json();
     }
 
     return res;
@@ -1176,11 +1152,11 @@ json server_task_result_cmpl_partial::to_json_oaicompat_chat() {
             };
         }
 
-        if (timings.prompt_n >= 0) {
-            last_json.push_back({"timings", timings.to_json()});
+        if (stats.is_set()) {
+            last_json["timings"] = stats.to_json();
         }
         if (is_progress) {
-            last_json.push_back({"prompt_progress", progress.to_json()});
+            last_json["prompt_progress"] = progress.to_json();
         }
     }
 
@@ -1326,11 +1302,11 @@ json server_task_result_cmpl_partial::to_json_oaicompat_resp() {
 
     if (!events.empty()) {
         json & data = events.back().at("data");
-        if (timings.prompt_n >= 0) {
-            data.push_back({"timings", timings.to_json()});
+        if (stats.is_set()) {
+            data["timings"] = stats.to_json();
         }
         if (is_progress) {
-            data.push_back({"prompt_progress", progress.to_json()});
+            data["prompt_progress"] = progress.to_json();
         }
     }
 
@@ -1534,30 +1510,110 @@ json server_task_result_error::to_json() {
 //
 // server_task_result_metrics
 //
+json server_task_result_slots::to_json() {
+    return slots_data;
+}
+
 json server_task_result_metrics::to_json() {
-    return json {
-        { "idle",                            n_idle_slots },
-        { "processing",                      n_processing_slots },
-        { "deferred",                        n_tasks_deferred },
-        { "t_start",                         t_start },
+    // not used, /metrics renders prometheus text via to_metrics()
+    return json{};
+}
 
-        { "n_prompt_tokens_processed_total", n_prompt_tokens_processed_total },
-        { "t_tokens_generation_total",       t_tokens_generation_total },
-        { "n_tokens_predicted_total",        n_tokens_predicted_total },
-        { "t_prompt_processing_total",       t_prompt_processing_total },
-
-        { "n_tokens_max",                    n_tokens_max },
-
-        { "n_prompt_tokens_processed",       n_prompt_tokens_processed },
-        { "t_prompt_processing",             t_prompt_processing },
-        { "n_tokens_predicted",              n_tokens_predicted },
-        { "t_tokens_generation",             t_tokens_generation },
-
-        { "n_decode_total",                  n_decode_total },
-        { "n_busy_slots_total",              n_busy_slots_total },
-
-        { "slots",                           slots_data },
+// metrics definition: https://prometheus.io/docs/practices/naming/#metric-names
+std::string server_task_result_metrics::to_metrics() {
+    const std::vector<metric_item> counters = {
+        {
+            "prompt_tokens_total",
+            "Number of prompt tokens processed, excluding cached tokens",
+            (double) metrics.prompt.count
+        }, {
+            "prompt_tokens_cached_total",
+            "Number of prompt tokens reused from the cache",
+            (double) metrics.n_prompt_cached
+        }, {
+            "prompt_seconds_total",
+            "Total time spent processing prompts",
+            metrics.prompt.time / 1.e6
+        }, {
+            "tokens_predicted_total",
+            "Number of generation tokens processed",
+            (double) metrics.predict.count
+        }, {
+            "tokens_predicted_seconds_total",
+            "Total time spent generating tokens",
+            metrics.predict.time / 1.e6
+        }, {
+            "n_decode_total",
+            "Total number of llama_decode() calls, excluding speculative decoding and multimodal decoding",
+            (double) metrics.n_decode
+        }, {
+            "n_tokens_max",
+            "Largest observed sequence length (prompt + generation)",
+            (double) metrics.n_tokens_max
+        }, {
+            "spec_decode_num_draft_tokens_total",
+            "Speculative: Total draft tokens generated",
+            (double) metrics.n_draft_tokens
+        }, {
+            "spec_decode_num_accepted_tokens_total",
+            "Speculative: Total draft tokens accepted by the target model",
+            (double) metrics.n_draft_accepted
+        }, {
+            "spec_decode_num_drafts_total",
+            "Speculative: Total speculative decoding verification steps",
+            (double) metrics.n_draft_verif_steps
+        },
     };
+
+    const std::vector<metric_item> gauges = {
+        {
+            "prompt_tokens_seconds",
+            "Average prompt throughput in tokens/s",
+            metrics.prompt_bucket.n_per_second()
+        }, {
+            "predicted_tokens_seconds",
+            "Average generation throughput in tokens/s",
+            metrics.predict_bucket.n_per_second()
+        }, {
+            "requests_processing",
+            "Number of requests processing",
+            (double) n_processing_slots
+        }, {
+            "requests_deferred",
+            "Number of requests deferred",
+            (double) n_tasks_deferred
+        }, {
+            "n_busy_slots_per_decode",
+            "Average number of busy slots per llama_decode() call",
+            (double) metrics.n_busy_slots / std::max((double) metrics.n_decode, 1.0)
+        },
+    };
+
+    std::stringstream prometheus;
+
+    auto add_items = [&prometheus](const char * type, const std::vector<metric_item> & items) {
+        for (const auto & item : items) {
+            prometheus << "# HELP llamacpp:" << item.name << " " << item.description << "\n"
+                       << "# TYPE llamacpp:" << item.name << " " << type             << "\n"
+                       << "llamacpp:"        << item.name << " " << item.value       << "\n";
+        }
+    };
+
+    add_items("counter", counters);
+    add_items("gauge",   gauges);
+
+    // labeled counter: one time series per draft position
+    if (!metrics.n_accepted_per_pos.empty()) {
+        prometheus << "# HELP llamacpp:spec_decode_num_accepted_tokens_per_pos_total"
+                      " Accepted tokens per draft position\n"
+                   << "# TYPE llamacpp:spec_decode_num_accepted_tokens_per_pos_total counter\n";
+        for (size_t i = 0; i < metrics.n_accepted_per_pos.size(); i++) {
+            prometheus << "llamacpp:spec_decode_num_accepted_tokens_per_pos_total{position=\""
+                       << i << "\"} " << metrics.n_accepted_per_pos[i] << "\n";
+        }
+    }
+
+    return prometheus.str();
 }
 
 //
@@ -1646,16 +1702,16 @@ size_t server_prompt_cache::n_tokens() const {
     size_t res = 0;
 
     for (const auto & state : states) {
-        res += state.n_tokens();
+        res += state.prompt.n_tokens();
     }
 
     return res;
 }
 
-server_prompt * server_prompt_cache::alloc(const server_prompt & prompt, size_t state_size_tgt, size_t state_size_dft) {
+server_prompt_cache_state * server_prompt_cache::alloc(const server_prompt & prompt, size_t state_size_tgt, size_t state_size_dft) {
     // first check if the current state is contained fully in the cache
     for (auto it = states.begin(); it != states.end(); ++it) {
-        const int cur_lcp_len = it->tokens.get_common_prefix(prompt.tokens);
+        const int cur_lcp_len = it->prompt.tokens.get_common_prefix(prompt.tokens);
 
         if (cur_lcp_len == (int) prompt.tokens.size()) {
             SRV_TRC("%s", " - prompt is already in the cache, skipping\n");
@@ -1680,9 +1736,9 @@ server_prompt * server_prompt_cache::alloc(const server_prompt & prompt, size_t 
 
     // remove any cached prompts that are fully contained in the current prompt
     for (auto it = states.begin(); it != states.end();) {
-        const int len = it->tokens.get_common_prefix(prompt.tokens);
+        const int len = it->prompt.tokens.get_common_prefix(prompt.tokens);
 
-        if (len == (int) it->tokens.size()) {
+        if (len == (int) it->prompt.tokens.size()) {
             SRV_TRC(" - removing obsolete cached prompt with length %d\n", len);
 
             it = states.erase(it);
@@ -1721,12 +1777,14 @@ server_prompt * server_prompt_cache::alloc(const server_prompt & prompt, size_t 
     }
 
     states.push_back({
-        /*.tokens      =*/ prompt.tokens.clone(),
-        /*.data        =*/ {
+        /*.prompt =*/ {
+            /*.tokens      =*/ prompt.tokens.clone(),
+            /*.checkpoints =*/ prompt.checkpoints,
+        },
+        /*.data   =*/ {
             /*.main =*/ std::move(state_data_tgt),
             /*.drft =*/ std::move(state_data_dft),
         },
-        /*.checkpoints =*/ prompt.checkpoints,
     });
 
     return &states.back();
@@ -1736,34 +1794,36 @@ bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tok
     const int lcp_best = prompt.tokens.get_common_prefix(tokens_new);
 
     float f_keep_best = prompt.tokens.size() > 0 ? float(lcp_best) / prompt.tokens.size() : -1.0f; // empty slot: any cache entry wins
-    float sim_best    = float(lcp_best) / tokens_new.size();
+    float f_sim_best  = float(lcp_best) / tokens_new.size();
 
-    SRV_TRC(" - looking for better prompt, base f_keep = %.3f, sim = %.3f\n", f_keep_best, sim_best);
+    SRV_TRC(" - looking for better prompt, base f_keep = %.3f, f_sim = %.3f\n", f_keep_best, f_sim_best);
 
     auto it_best = states.end();
 
     // find the most similar cached prompt, that would also preserve the most context
     for (auto it = states.begin(); it != states.end(); ++it) {
-        const int lcp_cur = it->tokens.get_common_prefix(tokens_new);
+        const int lcp_cur = it->prompt.tokens.get_common_prefix(tokens_new);
 
-        const float f_keep_cur = float(lcp_cur) / it->tokens.size();
-        const float sim_cur    = float(lcp_cur) / tokens_new.size();
+        const float f_keep_cur = float(lcp_cur) / it->prompt.tokens.size();
+        const float f_sim_cur  = float(lcp_cur) / tokens_new.size();
+
+        SRV_TRC("   - prompt with length %7zu, lcp = %7d, f_keep = %.3f, f_sim = %.3f\n", it->prompt.tokens.size(), lcp_cur, f_keep_cur, f_sim_cur);
 
         // don't trash large prompts
         if (f_keep_cur < 0.25f) {
             continue;
         }
 
-        if (f_keep_best < f_keep_cur && sim_best < sim_cur) {
+        if (f_keep_best < f_keep_cur && f_sim_best < f_sim_cur) {
             f_keep_best = f_keep_cur;
-            sim_best    = sim_cur;
+            f_sim_best  = f_sim_cur;
 
             it_best = it;
         }
     }
 
     if (it_best != states.end()) {
-        SRV_TRC(" - found better prompt with f_keep = %.3f, sim = %.3f\n", f_keep_best, sim_best);
+        SRV_TRC(" - found better prompt with f_keep = %.3f, f_sim = %.3f\n", f_keep_best, f_sim_best);
 
         {
             auto & data = it_best->data.main;
@@ -1799,7 +1859,7 @@ bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tok
             }
         }
 
-        prompt = std::move(*it_best);
+        prompt = std::move(it_best->prompt);
 
         states.erase(it_best);
     }
@@ -1836,6 +1896,6 @@ void server_prompt_cache::update() {
 
     for (const auto & state : states) {
         SRV_TRC("   - prompt %p: %7d tokens, checkpoints: %2zu, %9.3f MiB\n",
-                (const void *)&state, state.n_tokens(), state.checkpoints.size(), state.size() / (1024.0 * 1024.0));
+                (const void *)&state, state.prompt.n_tokens(), state.prompt.checkpoints.size(), state.size() / (1024.0 * 1024.0));
     }
 }

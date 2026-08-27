@@ -1,7 +1,7 @@
 <script lang="ts">
-	import { fly } from 'svelte/transition';
 	import { Input } from '$lib/components/ui/input';
 	import { Label } from '$lib/components/ui/label';
+	import { fly } from 'svelte/transition';
 
 	interface Props {
 		name: string;
@@ -18,22 +18,22 @@
 	}
 
 	let {
-		name,
-		value = '',
-		suggestions = [],
-		isLoadingSuggestions = false,
-		isAutocompleteActive = false,
 		autocompleteIndex = 0,
-		onInput,
-		onKeydown,
+		isAutocompleteActive = false,
+		isLoadingSuggestions = false,
+		name,
 		onBlur,
 		onFocus,
-		onSelectSuggestion
+		onInput,
+		onKeydown,
+		onSelectSuggestion,
+		suggestions = [],
+		value = ''
 	}: Props = $props();
 </script>
 
 <div class="relative grid gap-1">
-	<Label for="tpl-arg-{name}" class="mb-1 text-muted-foreground">
+	<Label class="mb-1 text-muted-foreground" for="tpl-arg-{name}">
 		<span>
 			{name}
 
@@ -46,29 +46,29 @@
 	</Label>
 
 	<Input
+		autocomplete="off"
 		id="tpl-arg-{name}"
-		type="text"
-		{value}
-		oninput={(e) => onInput(e.currentTarget.value)}
-		onkeydown={onKeydown}
 		onblur={onBlur}
 		onfocus={onFocus}
+		oninput={(e) => onInput(e.currentTarget.value)}
+		onkeydown={onKeydown}
 		placeholder="Enter {name}"
-		autocomplete="off"
+		type="text"
+		{value}
 	/>
 
 	{#if isAutocompleteActive && suggestions.length > 0}
 		<div
+			transition:fly={{ duration: 100, y: -5 }}
 			class="absolute top-full right-0 left-0 z-10 mt-1 max-h-32 overflow-y-auto rounded-lg border border-border/50 bg-background shadow-lg"
-			transition:fly={{ y: -5, duration: 100 }}
 		>
 			{#each suggestions as suggestion, i (suggestion)}
 				<button
-					type="button"
-					onmousedown={() => onSelectSuggestion(suggestion)}
 					class="w-full px-3 py-1.5 text-left text-sm hover:bg-accent {i === autocompleteIndex
 						? 'bg-accent'
 						: ''}"
+					onmousedown={() => onSelectSuggestion(suggestion)}
+					type="button"
 				>
 					{suggestion}
 				</button>

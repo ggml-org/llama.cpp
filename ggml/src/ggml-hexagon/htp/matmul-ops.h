@@ -88,6 +88,7 @@ struct htp_mm_kernel_params {
     int32_t  vtcm_src2_size;     // src2 scratchpad size in VTCM (fused only)
     int32_t  vtcm_src3_size;     // src3 scratchpad size in VTCM (fused only)
     int32_t  vtcm_dst_size;      // dst scratchpad size in VTCM
+    int32_t  n_weights;          // Number of weights for fused NX
 
     // Precomputed division values
     struct fastdiv_values div_ne12_ne1;
@@ -95,6 +96,8 @@ struct htp_mm_kernel_params {
     struct fastdiv_values div_r2;
     struct fastdiv_values div_r3;
     struct fastdiv_values div_ne11;
+    struct fastdiv_values div_n_act_threads;
+    struct fastdiv_values div_ne00_padded;
 };
 
 #if defined(__cplusplus)
@@ -458,14 +461,14 @@ static inline void htp_mm_hvx_vtcm_layout_build(
     size_t dst_row_size,
     size_t src0_row_size,
     size_t src1_row_size,
+    size_t src2_row_size,
     uint32_t n_prefetch,
     bool is_matmul_id,
-    bool is_fused_qkv,
-    bool is_fused_ffn
+    bool is_fused_nx
 ) {
     size_t src0_sz = 0;
     size_t src1_sz = 0;
-    size_t src2_sz = 0;
+    size_t src2_sz = src2_row_size > 0 ? htp_mm_round_up(src2_row_size, 128) : 0;
     size_t src3_sz = 0;
     size_t dst_sz  = 0;
 
@@ -473,44 +476,33 @@ static inline void htp_mm_hvx_vtcm_layout_build(
                             wtype == HTP_TYPE_Q8_0 || wtype == HTP_TYPE_IQ4_NL ||
                             wtype == HTP_TYPE_MXFP4);
 
-    if (is_fused_qkv || is_fused_ffn) {
+    if (is_fused_nx) {
         const size_t src0_row_size_padded = hex_round_up(src0_row_size, 128);
         const size_t quant_scratch_size = hex_round_up(ne10 * sizeof(float), QK_Q8_0_TILED * sizeof(float)) * n_threads;
 
-        size_t src0_sz_per_thread = 0;
-        size_t src2_sz_per_thread = 0;
-        size_t src3_sz_per_thread = 0;
+        size_t weight_sz_per_thread = 0;
 
         if (is_repack) {
             uint32_t aligned_tile_size = htp_mm_get_weight_aligned_tile_size(wtype);
             uint32_t n_k_tiles = hex_round_up(ne10, 32) / 32;
             uint32_t tile_row_size = n_k_tiles * aligned_tile_size;
 
-            src0_sz_per_thread = hex_round_up(n_prefetch * tile_row_size, 128);
-            src2_sz_per_thread = hex_round_up(n_prefetch * tile_row_size, 128);
-            if (is_fused_qkv) {
-                src3_sz_per_thread = hex_round_up(n_prefetch * tile_row_size, 128);
-            }
+            weight_sz_per_thread = hex_round_up(n_prefetch * tile_row_size, 128);
         } else {
-            src0_sz_per_thread = hex_round_up(n_prefetch * src0_row_size_padded, 128);
-            src2_sz_per_thread = hex_round_up(n_prefetch * src0_row_size_padded, 128);
-            if (is_fused_qkv) {
-                src3_sz_per_thread = hex_round_up(n_prefetch * src0_row_size_padded, 128);
-            }
+            weight_sz_per_thread = hex_round_up(n_prefetch * src0_row_size_padded, 128);
         }
 
-        size_t flat_src1_row_size = (wtype == HTP_TYPE_Q4_1) ? htp_mm_q8_1_flat_row_size(ne10) : htp_mm_q8_0_flat_row_size(ne10);
-        size_t tiled_src1_row_size = (wtype == HTP_TYPE_Q4_1) ? htp_mm_q8_1_tiled_row_size(ne10) : htp_mm_q8_0_tiled_row_size(ne10);
+        size_t flat_act_row_size  = (wtype == HTP_TYPE_Q4_1) ? htp_mm_q8_1_flat_row_size(ne10)  : htp_mm_q8_0_flat_row_size(ne10);
+        size_t tiled_act_row_size = (wtype == HTP_TYPE_Q4_1) ? htp_mm_q8_1_tiled_row_size(ne10) : htp_mm_q8_0_tiled_row_size(ne10);
 
-        if (kernel_type == HTP_MM_KERNEL_HVX_QUANT_ROW_FLAT) {
-            src1_sz = hex_round_up(flat_src1_row_size * src1_nrows, 128);
-        } else {
-            src1_sz = hex_round_up(tiled_src1_row_size * src1_nrows, 128);
-        }
+        size_t act_sz = (kernel_type == HTP_MM_KERNEL_HVX_QUANT_ROW_FLAT)
+            ? hex_round_up(flat_act_row_size  * src1_nrows, 128)
+            : hex_round_up(tiled_act_row_size * src1_nrows, 128);
 
-        src0_sz = src0_sz_per_thread * n_threads;
-        src2_sz = src2_sz_per_thread * n_threads;
-        src3_sz = src3_sz_per_thread * n_threads;
+        src0_sz = weight_sz_per_thread * n_threads; // shared single-weight prefetch buffer
+        src1_sz = act_sz;                           // quantized activation buffer
+        src2_sz = 0;
+        src3_sz = 0;
         dst_sz  = quant_scratch_size;
     } else if (is_matmul_id) {
         const size_t src0_row_size_padded = htp_mm_round_up(src0_row_size, 128);
@@ -613,8 +605,8 @@ static inline void htp_mm_hvx_vtcm_layout_build(
     }
 
     size_t off = 0;
-    VTCM_LAYOUT_ALLOC(off, off_src1, src1_sz);
     VTCM_LAYOUT_ALLOC(off, off_src0, src0_sz);
+    VTCM_LAYOUT_ALLOC(off, off_src1, src1_sz);
     VTCM_LAYOUT_ALLOC(off, off_src2, src2_sz);
     VTCM_LAYOUT_ALLOC(off, off_src3, src3_sz);
     VTCM_LAYOUT_ALLOC(off, off_dst,  dst_sz);
@@ -641,6 +633,136 @@ static inline size_t htp_mm_hmx_get_batched_vtcm_size(
     struct htp_mm_hmx_vtcm_layout L;
     htp_mm_hmx_vtcm_layout_build(&L, HTP_MM_KERNEL_HMX_F16_BATCHED, wtype, k, mc, nc, group_size, use_dma_activation, false, act_threads, 0);
     return L.total_bytes;
+}
+
+static inline bool htp_mm_hmx_solve_batched_params(
+    int wtype,
+    uint32_t k,
+    uint32_t ne01_padded,
+    uint32_t ne11,
+    uint32_t group_size,
+    bool use_dma_activation,
+    int n_threads,
+    bool pipeline,
+    size_t vtcm_budget,
+    size_t * m_chunk_out,
+    size_t * n_chunk_out,
+    int * act_threads_out,
+    size_t * vtcm_size_out
+) {
+    size_t best_mblocks = SIZE_MAX;
+    int best_act_threads = 0;
+    size_t best_m_chunk = 0;
+    size_t best_n_chunk = 0;
+    size_t best_vtcm_size = 0;
+
+    int act_threads = n_threads;
+    while (act_threads >= 1) {
+        size_t group_overhead = 256;
+        size_t group_size_per_n, group_size_per_m, group_size_per_mn;
+        htp_mm_hmx_get_batched_chunk_costs(k, group_size, &group_size_per_n, &group_size_per_m, &group_size_per_mn);
+
+        size_t m_chunk_candidate = 0;
+        size_t n_chunk_candidate = 0;
+        size_t vtcm_size_candidate = 0;
+
+        if (htp_mm_hmx_compute_chunks(vtcm_budget, group_overhead, group_size_per_n, group_size_per_m, group_size_per_mn, hex_align_up(ne11, 32), ne01_padded,
+                               (size_t) ne01_padded * HTP_MM_HMX_COST_W_DEQUANT, (size_t) ne11 * HTP_MM_HMX_COST_A_CONVERT,
+                               &m_chunk_candidate, &n_chunk_candidate, &vtcm_size_candidate) == 0) {
+            size_t exact_size = htp_mm_hmx_get_batched_vtcm_size(wtype, k, m_chunk_candidate, n_chunk_candidate, group_size, use_dma_activation, pipeline, act_threads);
+            if (exact_size <= vtcm_budget) {
+                size_t mblocks = ((size_t) ne11 + m_chunk_candidate - 1) / m_chunk_candidate;
+                if (mblocks < best_mblocks || (mblocks == best_mblocks && act_threads > best_act_threads)) {
+                    best_mblocks = mblocks;
+                    best_act_threads = act_threads;
+                    best_m_chunk = m_chunk_candidate;
+                    best_n_chunk = n_chunk_candidate;
+                    best_vtcm_size = exact_size;
+                }
+            }
+        }
+        if (act_threads == 1) {
+            act_threads = 0;
+        } else {
+            act_threads /= 2;
+        }
+    }
+
+    if (best_act_threads > 0) {
+        *m_chunk_out = best_m_chunk;
+        *n_chunk_out = best_n_chunk;
+        *vtcm_size_out = best_vtcm_size;
+        *act_threads_out = best_act_threads;
+        return true;
+    }
+    return false;
+}
+
+static inline bool htp_mm_hmx_solve_2d_params(
+    int wtype,
+    uint32_t k,
+    uint32_t m_id_rows,
+    uint32_t ne01_padded,
+    uint32_t ne11_padded,
+    uint32_t m_for_cost,
+    int n_threads,
+    bool pipeline,
+    bool is_matmul_id,
+    uint32_t aligned_tile_size,
+    size_t vtcm_budget,
+    size_t * m_chunk_out,
+    size_t * n_chunk_out,
+    int * act_threads_out,
+    size_t * vtcm_size_out
+) {
+    size_t best_mblocks = SIZE_MAX;
+    int best_act_threads = 0;
+    size_t best_m_chunk = 0;
+    size_t best_n_chunk = 0;
+    size_t best_vtcm_size = 0;
+
+    const int m_for_chunks = is_matmul_id ? hex_align_up(m_id_rows, 32) : ne11_padded;
+
+    int act_threads = n_threads;
+    while (act_threads >= 1) {
+        size_t simple_2d_overhead = 256;
+        size_t simple_2d_size_per_n, simple_2d_size_per_m, simple_2d_size_per_mn;
+        htp_mm_hmx_get_2d_chunk_costs(wtype, k, pipeline, aligned_tile_size, &simple_2d_size_per_n, &simple_2d_size_per_m, &simple_2d_size_per_mn);
+
+        size_t m_chunk_candidate = 0;
+        size_t n_chunk_candidate = 0;
+        size_t vtcm_size_candidate = 0;
+
+        if (htp_mm_hmx_compute_chunks(vtcm_budget, simple_2d_overhead, simple_2d_size_per_n, simple_2d_size_per_m, simple_2d_size_per_mn, m_for_chunks, ne01_padded,
+                               (size_t) ne01_padded * HTP_MM_HMX_COST_W_DEQUANT, (size_t) m_for_cost * HTP_MM_HMX_COST_A_CONVERT,
+                               &m_chunk_candidate, &n_chunk_candidate, &vtcm_size_candidate) == 0) {
+            size_t exact_size = htp_mm_hmx_get_2d_vtcm_size(wtype, k, m_chunk_candidate, n_chunk_candidate, pipeline, is_matmul_id ? 0 : act_threads, aligned_tile_size);
+            if (exact_size <= vtcm_budget) {
+                size_t mblocks = ((size_t) m_for_cost + m_chunk_candidate - 1) / m_chunk_candidate;
+                if (mblocks < best_mblocks || (mblocks == best_mblocks && act_threads > best_act_threads)) {
+                    best_mblocks = mblocks;
+                    best_act_threads = act_threads;
+                    best_m_chunk = m_chunk_candidate;
+                    best_n_chunk = n_chunk_candidate;
+                    best_vtcm_size = exact_size;
+                }
+            }
+        }
+        if (act_threads == 1) {
+            act_threads = 0;
+        } else {
+            act_threads /= 2;
+        }
+    }
+
+    if (best_act_threads > 0) {
+        *m_chunk_out = best_m_chunk;
+        *n_chunk_out = best_n_chunk;
+        *vtcm_size_out = best_vtcm_size;
+        *act_threads_out = best_act_threads;
+        return true;
+    }
+    return false;
 }
 
 #ifdef __cplusplus

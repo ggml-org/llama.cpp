@@ -43,13 +43,6 @@ enum htp_data_type {
 
 
 
-// Mask to enable various stages of the Ops.
-// Used for debugging and profiling.
-enum htp_op_stage {
-    HTP_OPSTAGE_QUEUE    = (1 << 0),  // Enable Queueing (ie calls into NPU)
-    HTP_OPSTAGE_COMPUTE  = (1 << 1),  // Enable Compute
-};
-
 // Do not reorder first 4 (used as an index)
 enum htp_op_code {
     HTP_OP_MUL = 0,
@@ -58,8 +51,7 @@ enum htp_op_code {
     HTP_OP_DIV = 3,
     HTP_OP_MUL_MAT,
     HTP_OP_MUL_MAT_ID,
-    HTP_OP_MUL_MAT_QKV,
-    HTP_OP_MUL_MAT_FFN,
+    HTP_OP_MUL_MAT_NX,
     HTP_OP_MUL_MAT_ADD,
     HTP_OP_RMS_NORM,
     HTP_OP_RMS_NORM_MUL,
@@ -97,36 +89,45 @@ enum htp_op_code {
     HTP_OP_PAD,
     HTP_OP_NORM,
     HTP_OP_CONCAT,
+    HTP_OP_CLAMP,
+    HTP_OP_IM2COL,
+    HTP_OP_FENCE,
+    HTP_OP_ALLREDUCE,
+    HTP_OP_ALLREDUCE_ADD,
 
     HTP_OP_INVALID
 };
 
 #define HTP_OP_MAX_DIMS    4    // aka GGML_MAX_DIMS
-#define HTP_OP_MAX_INPUTS  6    // aka GGML_MAX_SRCS
+#define HTP_OP_MAX_INPUTS  10   // aka GGML_MAX_SRCS
 #define HTP_OP_MAX_OUTPUTS 4
 #define HTP_OP_MAX_PARAMS  16   // aka GGML_MAX_OP_PARAMS
 #define HTP_OP_MAX_KERN_PARAMS 32
 
 #define HTP_OP_MAX_BUFS    16
-#define HTP_OP_MAX_REQS    256
-#define HTP_OP_MAX_TENSORS (HTP_OP_MAX_REQS * HTP_OP_MAX_INPUTS + HTP_OP_MAX_REQS)
+#define HTP_OP_MAX_TENSORS 8192 // must stay under 64K (uint16)
+
+#define HTP_FENCE_TIMEOUT  (1000000000ULL)
 
 #define HTP_OP_MAX_VMEM_DEFAULT (3355443200u)
 
 #define HTP_MMAP_MAX_VMEM  (2147483648u)
 
 enum htp_tensor_flags {
-    HTP_TENSOR_COMPUTE = (1U << 0), // Tensor buffer temporal compute data (not weights)
-    HTP_TENSOR_FLUSHED = (1U << 1)  // Tensor buffer has been flushed (set by the NPU)
+    HTP_TENSOR_WEIGHT  = (1U << 0), // Tensor buffer model weight data (not compute)
+    HTP_TENSOR_REPACK  = (1U << 1), // Tensor is in repacked tiled format
+    HTP_TENSOR_FENCE   = (1U << 2)  // Tensor is synchronization fence (explicitly managed)
 };
 
 // Tensor descriptor
 struct htp_tensor {
     uint32_t data;                 // Buffer offset in the messages, and data pointer on the NPU
+    uint32_t reserved;             // Reserved for alignment padding (must be multiple of 8)
     uint32_t size;                 // Data size in bytes
     uint32_t flags;                // Buffer / tensor flags
-    uint16_t type;                 // Data type
+    uint32_t type;                 // Data type
     uint16_t bi;                   // Buffer index
+    uint16_t ti;                   // Tensor index
     uint32_t ne[HTP_OP_MAX_DIMS];  // Number of elements
     uint32_t nb[HTP_OP_MAX_DIMS];  // Stride in bytes (see ggml.h ggml_tensor)
 };
@@ -169,6 +170,10 @@ enum htp_profiler_mode {
 
 enum htp_trace_event_id {
     HTP_TRACE_EVT_DMA                 = 0,
+    HTP_TRACE_EVT_L2FLUSH             = 1,
+    HTP_TRACE_EVT_INIT                = 2,
+    HTP_TRACE_EVT_BUFF                = 3,
+    HTP_TRACE_EVT_FENCE               = 4,
 
     HTP_TRACE_EVT_HVX_COMP            = 20,
     HTP_TRACE_EVT_HVX_A_QUANT         = 21,
@@ -209,6 +214,7 @@ struct htp_opbatch_req {
     uint32_t n_ops;       // Number of ops
     uint32_t n_traces;    // Number of trace descriptors per thread
     uint32_t pad;         // unused
+    uint64_t seq;         // Sequence number
     // struct htp_buf_desc  bufs[];    -- dspqueue buf 0
     // struct htp_tensor    tensors[]; -- dspqueue buf 0
     // struct htp_op_desc   ops[];     -- dspqueue buf 0
@@ -221,7 +227,11 @@ struct htp_opbatch_rsp {
     uint32_t n_tensors;  // Number of tensors
     uint32_t n_ops;      // Number of op profile descriptors
     uint32_t n_traces[HTP_MAX_NTHREADS + 1];
-    uint8_t  pad[8];     // align to 8 bytes
+    uint32_t usecs;          // Number of usec
+    uint32_t pad;            // align to 8 bytes
+    uint64_t cycles_start;   // Start cycle counter
+    uint64_t cycles_stop;    // Stop cycle counter
+    uint64_t seq;            // Sequence number
     // struct htp_prof_desc profs[];  -- dspqueue buf 0
 };
 

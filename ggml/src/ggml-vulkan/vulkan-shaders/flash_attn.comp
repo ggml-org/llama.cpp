@@ -80,7 +80,9 @@ shared vec4 occupancy_limiter[LIMIT_OCCUPANCY_SHMEM > 0 ? LIMIT_OCCUPANCY_SHMEM 
 
 void main() {
 #ifdef NEEDS_INIT_IQ_SHMEM
-    init_iq_shmem(gl_WorkGroupSize);
+    if (fa_type_needs_shmem(FaTypeK) || fa_type_needs_shmem(FaTypeV)) {
+        init_iq_shmem(gl_WorkGroupSize);
+    }
 #endif
 
     init_indices();
@@ -119,13 +121,13 @@ void main() {
         const uint buf_ib = r * qf_stride + d / 8;
         const uint buf_iqs = d % 8;
 
-        FLOAT_TYPEV4 vals = is_in_bounds ? FLOAT_TYPEV4(data_qv4[q_offset / 4 + (i * Br + r) * q_stride / 4 + d] * p.scale) : FLOAT_TYPEV4(0.0f);
-        const FLOAT_TYPEV4 abs_vals = abs(vals);
+        vec4 vals = is_in_bounds ? data_qv4[q_offset / 4 + (i * Br + r) * q_stride / 4 + d] * p.scale : vec4(0.0f);
+        const vec4 abs_vals = abs(vals);
 
-        const FLOAT_TYPE thread_max = max(max(abs_vals.x, abs_vals.y), max(abs_vals.z, abs_vals.w));
-        const FLOAT_TYPE amax = subgroupClusteredMax(thread_max, 8);
-        const FLOAT_TYPE qd = amax / FLOAT_TYPE(127.0);
-        const FLOAT_TYPE qd_inv = qd != FLOAT_TYPE(0.0) ? FLOAT_TYPE(1.0) / qd : FLOAT_TYPE(0.0);
+        const float thread_max = max(max(abs_vals.x, abs_vals.y), max(abs_vals.z, abs_vals.w));
+        const float amax = subgroupClusteredMax(thread_max, 8);
+        const float qd = amax / 127.0f;
+        const float qd_inv = qd != 0.0f ? 1.0f / qd : 0.0f;
         vals = round(vals * qd_inv);
 
         Qf[buf_ib].qs[buf_iqs] = pack32(i8vec4(vals));
@@ -134,11 +136,11 @@ void main() {
         // the row-sum scaled by qd, used in k_dot_correction.
         if (FaTypeK == FA_TYPE_Q8_0) {
             if (buf_iqs == 0) {
-                Qf[buf_ib].ds = FLOAT_TYPEV2(qd, 0.0);
+                Qf[buf_ib].ds = FLOAT_TYPEV2(qd, 0.0f);
             }
         } else {
-            const FLOAT_TYPE thread_sum = vals.x + vals.y + vals.z + vals.w;
-            const FLOAT_TYPE sum = subgroupClusteredAdd(thread_sum, 8);
+            const float thread_sum = vals.x + vals.y + vals.z + vals.w;
+            const float sum = subgroupClusteredAdd(thread_sum, 8);
 
             if (buf_iqs == 0) {
                 Qf[buf_ib].ds = FLOAT_TYPEV2(qd, sum * qd);

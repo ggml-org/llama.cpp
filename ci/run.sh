@@ -10,6 +10,9 @@
 # # with CUDA support
 # GG_BUILD_CUDA=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
 #
+# # with ROCm support
+# GG_BUILD_ROCM=1 GG_BUILD_AMDGPU_TARGETS=gfx1151 bash ./ci/run.sh ./tmp/results ./tmp/mnt
+#
 # # with SYCL support
 # GG_BUILD_SYCL=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
 #
@@ -45,6 +48,14 @@ mkdir -p "$2"
 
 OUT=$(realpath "$1")
 MNT=$(realpath "$2")
+
+# gpu-rocm self-hosted runner can't upload logs to blob; keep each run's logs in
+# their own dir keyed by the GitHub run id so an Actions run URL maps to its logs.
+if [ -n "${GG_BUILD_ROCM}" ] && [ -n "${GITHUB_RUN_ID}" ]; then
+    OUT="$OUT/run-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT:-1}"
+    mkdir -p "$OUT"
+    echo "ci results dir: $OUT"
+fi
 
 rm -f $OUT/*.log
 rm -f $OUT/*.exit
@@ -89,7 +100,7 @@ if [ ! -z ${GG_BUILD_CUDA} ]; then
 fi
 
 if [ ! -z ${GG_BUILD_ROCM} ]; then
-    CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_HIP=ON"
+    CMAKE_EXTRA="${CMAKE_EXTRA} -DCMAKE_HIP_COMPILER=$(hipconfig -l)/clang -DGGML_HIP=ON"
     if [ -z ${GG_BUILD_AMDGPU_TARGETS} ]; then
         echo "Missing GG_BUILD_AMDGPU_TARGETS, please set it to your GPU architecture (e.g. gfx90a, gfx1100, etc.)"
         exit 1
@@ -179,7 +190,7 @@ if [ ! -z ${GG_BUILD_OPENVINO} ]; then
     CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_OPENVINO=ON"
 
     # TODO: fix and re-enable the `test-llama-archs` test below
-    CTEST_EXTRA="-E test-llama-archs"
+    CTEST_EXTRA="-E test-llama-archs|test-recurrent-state-rollback-nemotron-h"
 fi
 
 ## helpers
@@ -286,6 +297,40 @@ function gg_sum_ctest_release {
     gg_printf '- status: %s\n' "$(cat $OUT/${ci}.exit)"
     gg_printf '```\n'
     gg_printf '%s\n' "$(cat $OUT/${ci}-ctest.log)"
+    gg_printf '```\n'
+}
+
+# test_llama_archs_tensor_split
+
+function gg_run_test_llama_archs_tensor_split {
+    cd ${SRC}
+
+    set -e
+
+    if [ ! -z ${GG_BUILD_CUDA} ]; then
+        GGML_CUDA_DEVICES=1 ./build-ci-release/bin/test-llama-archs -s 1 2>&1
+        GGML_CUDA_DEVICES=2 ./build-ci-release/bin/test-llama-archs -s 1 2>&1
+        GGML_CUDA_DEVICES=3 ./build-ci-release/bin/test-llama-archs -s 1 2>&1
+        GGML_CUDA_DEVICES=4 ./build-ci-release/bin/test-llama-archs -s 1 2>&1
+    fi
+
+    if [ ! -z ${GG_BUILD_METAL} ]; then
+        GGML_METAL_DEVICES=1 ./build-ci-release/bin/test-llama-archs -s 1 2>&1
+        GGML_METAL_DEVICES=2 ./build-ci-release/bin/test-llama-archs -s 1 2>&1
+        GGML_METAL_DEVICES=3 ./build-ci-release/bin/test-llama-archs -s 1 2>&1
+        GGML_METAL_DEVICES=4 ./build-ci-release/bin/test-llama-archs -s 1 2>&1
+    fi
+
+    set +e
+}
+
+function gg_sum_test_llama_archs_tensor_split {
+    gg_printf '### %s\n\n' "${ci}"
+
+    gg_printf 'Runs test-llama-archs with 1 to 4 devices\n'
+    gg_printf '- status: %s\n' "$(cat $OUT/${ci}.exit)"
+    gg_printf '```\n'
+    gg_printf '%s\n' "$(cat $OUT/${ci}.log)"
     gg_printf '```\n'
 }
 
@@ -640,39 +685,52 @@ function gg_sum_rerank_tiny {
 
 function gg_check_build_requirements {
     if ! command -v git &> /dev/null; then
-        gg_printf 'git not found, please install'
+        gg_printf 'git not found, please install\n'
+        exit 1
     fi
 
     if ! command -v git-lfs &> /dev/null; then
-        gg_printf 'git-lfs not found, please install'
+        gg_printf 'git-lfs not found, please install\n'
+        exit 1
+    fi
+
+    if ! git config --get filter.lfs.clean &> /dev/null; then
+        gg_printf 'git-lfs not initialized, please run `git lfs install`\n'
+        exit 1
     fi
 
     if ! command -v wget &> /dev/null; then
-        gg_printf 'wget not found, please install'
+        gg_printf 'wget not found, please install\n'
+        exit 1
     fi
 
     if ! command -v python3 &> /dev/null; then
-        gg_printf 'python3 not found, please install'
+        gg_printf 'python3 not found, please install\n'
+        exit 1
     fi
 
     if ! command -v pip3 &> /dev/null; then
-        gg_printf 'pip3 not found, please install'
+        gg_printf 'pip3 not found, please install\n'
+        exit 1
     fi
 
     if ! python3 -m ensurepip --help &> /dev/null; then
-        gg_printf 'ensurepip not found, please install python3-venv package'
+        gg_printf 'ensurepip not found, please install python3-venv package\n'
+        exit 1
     fi
 
     if ! command -v cmake &> /dev/null; then
-        gg_printf 'cmake not found, please install'
+        gg_printf 'cmake not found, please install\n'
+        exit 1
     fi
 
     if ! command -v ccache &> /dev/null; then
-        gg_printf 'ccache not found, please consider installing for faster builds'
+        gg_printf 'ccache not found, please consider installing for faster builds\n'
     fi
 
     if ! command -v ctest &> /dev/null; then
-        gg_printf 'ctest not found, please install'
+        gg_printf 'ctest not found, please install\n'
+        exit 1
     fi
 }
 
@@ -726,6 +784,8 @@ ret=0
 
 test $ret -eq 0 && gg_run ctest_debug
 test $ret -eq 0 && gg_run ctest_release
+
+test $ret -eq 0 && gg_run test_llama_archs_tensor_split
 
 if [ ! -z ${GG_BUILD_HIGH_PERF} ]; then
     test $ret -eq 0 && gg_run test_backend_ops_cpu

@@ -55,6 +55,7 @@ enum mtmd_input_chunk_type {
     MTMD_INPUT_CHUNK_TYPE_TEXT,
     MTMD_INPUT_CHUNK_TYPE_IMAGE,
     MTMD_INPUT_CHUNK_TYPE_AUDIO,
+    MTMD_INPUT_CHUNK_TYPE_COUNT, // for validation
 };
 
 // opaque types
@@ -88,6 +89,7 @@ typedef bool (*mtmd_progress_callback)(float progress, void * user_data);
 
 struct mtmd_context_params {
     bool use_gpu;
+    ggml_backend_dev_t device;
     bool print_timings;
     int n_threads;
     const char * image_marker; // deprecated, use media_marker instead
@@ -153,7 +155,8 @@ MTMD_API const char * mtmd_get_marker(const mtmd_context * ctx);
 //     length of data must be nx * ny * 3
 //     the data is in RGBRGBRGB... format
 //     note: some video-capable models (i.e. qwen-vl) can merge consecutive bitmaps
-//           into one chunk, mtmd_tokenize() will automatically handle this
+//           into one chunk; mtmd_tokenize() handles this, but remember to set
+//           mtmd_bitmap_set_mergeable(true) for every frame
 // if bitmap is audio:
 //     length of data must be n_samples * sizeof(float)
 //     the data is in float format (PCM F32)
@@ -174,6 +177,8 @@ MTMD_API void                  mtmd_bitmap_free       (mtmd_bitmap * bitmap);
 // these getters/setters are dedicated functions, so you can for example calculate the hash of the image based on mtmd_bitmap_get_data()
 MTMD_API const char * mtmd_bitmap_get_id(const mtmd_bitmap * bitmap);
 MTMD_API void         mtmd_bitmap_set_id(mtmd_bitmap * bitmap, const char * id);
+// if true, this bitmap can be merged (temporal merge) with an adjacent mergeable bitmap by certain video input models
+MTMD_API void         mtmd_bitmap_set_mergeable(mtmd_bitmap * bitmap, bool mergeable);
 
 // mtmd_bitmap lazy
 //
@@ -231,6 +236,18 @@ MTMD_API llama_pos                  mtmd_input_chunk_get_n_pos       (const mtmd
 // remember to free the chunk when you are done with it
 MTMD_API mtmd_input_chunk * mtmd_input_chunk_copy(const mtmd_input_chunk * chunk);
 MTMD_API void               mtmd_input_chunk_free(mtmd_input_chunk * chunk);
+
+// similar to mtmd_input_chunk_copy, but returns a placeholder chunk
+MTMD_API mtmd_input_chunk * mtmd_input_chunk_get_placeholder(const mtmd_input_chunk * chunk);
+
+// save/load an input chunk to/from a buffer (useful for KV save/load)
+// important: only chunk's metadata will be saved, the actual image/audio data will not be saved
+// the loaded chunk will always be a placeholder, cannot be used for mtmd_encode() or mtmd_batch_encode()
+// out_buf can be nullptr (to query expected_out_len)
+// returns 0 on success, non-zero on failure
+MTMD_API int32_t            mtmd_input_chunk_save(const mtmd_input_chunk * chunk, char * out_buf, size_t out_len, size_t * expected_out_len);
+// returns nullptr on failure
+MTMD_API mtmd_input_chunk * mtmd_input_chunk_load(const char * buf, size_t len);
 
 
 // mtmd_image_tokens
@@ -326,6 +343,80 @@ struct mtmd_caps {
     bool inp_audio;
 };
 MTMD_API struct mtmd_caps mtmd_get_cap_from_file(const char * mmproj_fname);
+
+/////////////////////////////////////////
+// EXPERIMENTAL API for audio generation, subjected to breaking changes
+
+// represent the pipeline type
+enum mtmd_gen_audio_type {
+    MTMD_GEN_AUDIO_TYPE_NONE, // not supported
+    MTMD_GEN_AUDIO_TYPE_QWEN3TTS,
+    MTMD_GEN_AUDIO_TYPE_POCKETTTS,
+};
+
+struct mtmd_gen_audio_info {
+    enum mtmd_gen_audio_type type;
+    int32_t sample_rate; // in Hz, for example 24000 for qwen3tts
+    const char * model_variant; // name of the weight variant, can be nullptr if not applicable
+};
+
+MTMD_API struct mtmd_gen_audio_info mtmd_gen_audio_get_info(const mtmd_context * ctx);
+
+
+enum mtmd_gen_process_type {
+    MTMD_GEN_PROCESS_TYPE_GEN_CODE, // h_state to semantic (codes, mel-spectrogram, etc.)
+    MTMD_GEN_PROCESS_TYPE_GEN_WAV,  // convert semantic to PCM audio
+                                    // for qwen3tts, this is code2wav
+                                    // for pocket-tts, this is mimi decoder
+};
+
+struct mtmd_gen_inp {
+    enum mtmd_gen_process_type type;
+
+    // for MTMD_GEN_PROCESS_TYPE_GEN_CODE
+    int32_t code0;  // the sampled codebook 0 entry from backbone
+    float * embd;   // the hidden state from backbone, must have n_text_embd elements
+    int32_t top_k;
+    float   top_p;
+    uint32_t seed; // UINT32_MAX for random
+    float    temp; // sampling temperature, or noise scale for flow-matching decoders
+
+    // for MTMD_GEN_PROCESS_TYPE_GEN_WAV
+    // pass either codes (discrete) or feats (continuous), depending on the pipeline
+    int32_t * codes;
+    size_t    n_codes;
+    const float * feats;
+    size_t        n_feats;
+    const char * state_data;
+    size_t       state_size;
+};
+
+struct mtmd_gen_out {
+    // note: output memory is allocated by the context, valid until next process() call
+
+    // for MTMD_GEN_PROCESS_TYPE_GEN_CODE
+    const int32_t * codes;
+    size_t          n_codes;
+    const float * feats; // continuous counterpart of codes
+    size_t        n_feats;
+    const float * embd; // the generated hidden state, to be fed back to backbone
+                        // it must have n_text_embd elements
+    bool is_eos; // only set by pipelines having the EOS head inside mmproj
+
+    // for MTMD_GEN_PROCESS_TYPE_GEN_WAV
+    const float * audio;
+    size_t        n_samples;
+    const char * state_data;
+    size_t       state_size;
+};
+
+// defaults tuned for the loaded pipeline, callers override only what they care about
+MTMD_API struct mtmd_gen_inp mtmd_gen_inp_default(const mtmd_context * ctx);
+
+// note: this API is stateless, caller must handle state management and audio frame accumulation
+MTMD_API int32_t mtmd_gen_audio_process(mtmd_context * ctx,
+                                const struct mtmd_gen_inp * inp,
+                                struct mtmd_gen_out * out);
 
 /////////////////////////////////////////
 

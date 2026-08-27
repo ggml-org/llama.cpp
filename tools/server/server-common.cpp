@@ -13,6 +13,8 @@
 #include <sstream>
 #include <fstream>
 #include <limits>
+#include <cstring>
+#include <type_traits>
 
 json format_error_response(const std::string & message, const enum error_type type) {
     std::string type_str;
@@ -56,6 +58,33 @@ json format_error_response(const std::string & message, const enum error_type ty
         {"message", message},
         {"type", type_str},
     };
+}
+
+//
+// server_slot_stats
+//
+
+json server_slot_stats::to_json() const {
+    json base = {
+        {"cache_n",                n_prompt_cached},
+
+        {"prompt_n",               n_prompt_processed},
+        {"prompt_ms",              t_prompt_ms()},
+        {"prompt_per_token_ms",    t_prompt_per_token_ms()},
+        {"prompt_per_second",      n_prompt_tps()},
+
+        {"predicted_n",            n_gen},
+        {"predicted_ms",           t_gen_ms()},
+        {"predicted_per_token_ms", t_gen_per_token_ms()},
+        {"predicted_per_second",   n_gen_tps()},
+    };
+
+    if (n_draft_tokens > 0) {
+        base["draft_n"]          = n_draft_tokens;
+        base["draft_n_accepted"] = n_draft_accepted;
+    }
+
+    return base;
 }
 
 //
@@ -235,6 +264,102 @@ static inline raw_buffer base64_decode(const std::string & encoded_string) {
 // server_tokens implementation
 //
 
+namespace {
+
+constexpr uint32_t SERVER_TOKENS_STATE_VERSION = 1;
+
+uint32_t server_tokens_state_u32(size_t value) {
+    if (value > std::numeric_limits<uint32_t>::max()) {
+        throw std::runtime_error("Server tokens state is too large");
+    }
+    return value;
+}
+
+class server_tokens_state_writer {
+public:
+    template <typename T>
+    void write(T value) {
+        static_assert(std::is_trivially_copyable<T>::value, "T must be trivially copyable");
+        const auto * ptr = reinterpret_cast<const char *>(&value);
+        data.insert(data.end(), ptr, ptr + sizeof(value));
+    }
+
+    template <typename T>
+    void write(const std::vector<T> & values) {
+        static_assert(std::is_trivially_copyable<T>::value, "T must be trivially copyable");
+        write(server_tokens_state_u32(values.size()));
+        if (values.empty()) {
+            return;
+        }
+        const auto * ptr = reinterpret_cast<const char *>(values.data());
+        data.insert(data.end(), ptr, ptr + values.size() * sizeof(T));
+    }
+
+    void write_media_chunk(const mtmd_input_chunk * chunk) {
+        size_t chunk_size = 0;
+        if (mtmd_input_chunk_save(chunk, nullptr, 0, &chunk_size) != 0 || chunk_size == 0) {
+            throw std::runtime_error("Cannot serialize media chunk in server tokens");
+        }
+        std::vector<char> chunk_data(server_tokens_state_u32(chunk_size));
+        if (mtmd_input_chunk_save(chunk, chunk_data.data(), chunk_data.size(), nullptr) != 0) {
+            throw std::runtime_error("Cannot serialize media chunk in server tokens");
+        }
+        write(chunk_data);
+    }
+
+    std::vector<char> take() {
+        data.resize((data.size() + sizeof(llama_token) - 1) / sizeof(llama_token) * sizeof(llama_token), 0);
+        return std::move(data);
+    }
+
+private:
+    std::vector<char> data;
+};
+
+class server_tokens_state_reader {
+public:
+    server_tokens_state_reader(const char * data, size_t size) : data(data), size(size) {}
+
+    template <typename T>
+    T read() {
+        static_assert(std::is_trivially_copyable<T>::value, "T must be trivially copyable");
+        if (size - pos < sizeof(T)) {
+            throw std::runtime_error("Unexpected end of server tokens state");
+        }
+        T value;
+        std::memcpy(&value, data + pos, sizeof(value));
+        pos += sizeof(value);
+        return value;
+    }
+
+    template <typename T>
+    std::vector<T> read_vector() {
+        static_assert(std::is_trivially_copyable<T>::value, "T must be trivially copyable");
+        const uint32_t n_values = read<uint32_t>();
+        // reject before resizing, so that a small corrupted payload cannot request a huge allocation
+        if (n_values > remaining() / sizeof(T)) {
+            throw std::runtime_error("Unexpected end of server tokens state");
+        }
+        std::vector<T> values(n_values);
+        if (n_values > 0) {
+            std::memcpy(values.data(), data + pos, values.size() * sizeof(T));
+            pos += values.size() * sizeof(T);
+        }
+        return values;
+    }
+
+    size_t remaining() const {
+        return size - pos;
+    }
+
+private:
+    const char * data;
+    size_t size;
+    size_t pos = 0;
+};
+
+} // namespace
+
 server_tokens::server_tokens(mtmd::input_chunks & mtmd_chunks, bool has_mtmd) : has_mtmd(has_mtmd) {
     for (size_t i = 0; i < mtmd_chunks.size(); ++i) {
         push_back(mtmd_chunks[i]);
@@ -382,6 +507,23 @@ void server_tokens::push_back(const mtmd_input_chunk * chunk) {
     }
 }
 
+void server_tokens::push_back_placeholder(const mtmd_input_chunk * chunk) {
+    auto type = mtmd_input_chunk_get_type(chunk);
+    if (type == MTMD_INPUT_CHUNK_TYPE_IMAGE || type == MTMD_INPUT_CHUNK_TYPE_AUDIO) {
+        GGML_ASSERT(has_mtmd);
+        mtmd::input_chunk_ptr new_chunk(mtmd_input_chunk_get_placeholder(chunk));
+        GGML_ASSERT(new_chunk != nullptr && "failed to create placeholder chunk");
+        const size_t n_tokens = mtmd_input_chunk_get_n_tokens(chunk);
+        size_t start_idx = tokens.size();
+        for (size_t i = 0; i < n_tokens; ++i) {
+            tokens.emplace_back(LLAMA_TOKEN_NULL);
+        }
+        map_idx_to_media[start_idx] = std::move(new_chunk);
+    } else {
+        push_back(chunk);
+    }
+}
+
 void server_tokens::push_back(server_tokens & tokens) {
     size_t start_idx = size();
     for (size_t i = 0; i < tokens.size(); i++) {
@@ -406,6 +548,73 @@ void server_tokens::insert(const llama_tokens & inp_tokens) {
 const llama_tokens & server_tokens::get_tokens() const {
     GGML_ASSERT(!has_mtmd);
     return tokens;
+}
+
+std::vector<char> server_tokens::serialize() const {
+    static_assert(sizeof(llama_token) == sizeof(uint32_t), "unexpected llama_token size");
+
+    server_tokens_state_writer writer;
+    writer.write((llama_token) LLAMA_TOKEN_NULL);
+    writer.write(SERVER_TOKENS_STATE_VERSION);
+    writer.write(tokens);
+
+    std::vector<uint32_t> media_keys;
+    media_keys.reserve(map_idx_to_media.size());
+    for (const auto & item : map_idx_to_media) {
+        media_keys.push_back(server_tokens_state_u32(item.first));
+    }
+    writer.write(media_keys);
+
+    for (const auto & item : map_idx_to_media) {
+        writer.write_media_chunk(item.second.get());
+    }
+
+    return writer.take();
+}
+
+server_tokens server_tokens::deserialize(const llama_tokens & packed, bool has_mtmd) {
+    static_assert(sizeof(llama_token) == sizeof(uint32_t), "unexpected llama_token size");
+
+    if (packed.empty() || packed[0] != LLAMA_TOKEN_NULL) {
+        // plain token list, as written by older versions
+        return server_tokens(packed, has_mtmd);
+    }
+
+    server_tokens_state_reader reader(reinterpret_cast<const char *>(packed.data()), packed.size() * sizeof(llama_token));
+    reader.read<llama_token>(); // format marker
+    if (reader.read<uint32_t>() != SERVER_TOKENS_STATE_VERSION) {
+        throw std::runtime_error("Unsupported server tokens state version");
+    }
+
+    const llama_tokens tokens = reader.read_vector<llama_token>();
+
+    // the media start indices, followed by the media chunks in the same order
+    const std::vector<uint32_t> media_keys = reader.read_vector<uint32_t>();
+    if (!media_keys.empty() && !has_mtmd) {
+        throw std::runtime_error("Cannot restore media tokens without an mmproj");
+    }
+
+    server_tokens result(tokens, has_mtmd);
+
+    for (const uint32_t key : media_keys) {
+        const size_t start_idx = key;
+        const std::vector<char> chunk_data = reader.read_vector<char>();
+        if (chunk_data.empty()) {
+            throw std::runtime_error("Cannot load media chunk from server tokens state");
+        }
+
+        mtmd::input_chunk_ptr chunk(mtmd_input_chunk_load(chunk_data.data(), chunk_data.size()));
+        if (!chunk) {
+            throw std::runtime_error("Cannot load media chunk from server tokens state");
+        }
+        result.map_idx_to_media[start_idx] = std::move(chunk);
+    }
+
+    if (reader.remaining() >= sizeof(llama_token)) {
+        throw std::runtime_error("Trailing data in server tokens state");
+    }
+
+    return result;
 }
 
 llama_tokens server_tokens::get_text_tokens() const {
@@ -530,14 +739,28 @@ bool server_tokens::validate(const struct llama_context * ctx) const {
     const llama_model * model = llama_get_model(ctx);
     const llama_vocab * vocab = llama_model_get_vocab(model);
     const int32_t n_vocab = llama_vocab_n_tokens(vocab);
+    size_t n_media = 0;
 
     for (size_t i = 0; i < tokens.size(); ++i) {
         const auto & t = tokens[i];
         if (t == LLAMA_TOKEN_NULL) {
             try {
                 const auto & chunk = find_chunk(i);
-                size_t n_tokens = mtmd_input_chunk_get_n_tokens(chunk.get());
-                i += n_tokens - 1; // will be +1 by the for loop
+                if (mtmd_input_chunk_get_type(chunk.get()) == MTMD_INPUT_CHUNK_TYPE_TEXT) {
+                    return false;
+                }
+                const size_t n_tokens = mtmd_input_chunk_get_n_tokens(chunk.get());
+                const llama_pos n_pos = mtmd_input_chunk_get_n_pos(chunk.get());
+                if (n_tokens == 0 || n_pos <= 0 || n_tokens > tokens.size() - i) {
+                    return false;
+                }
+                for (size_t j = i; j < i + n_tokens; ++j) {
+                    if (tokens[j] != LLAMA_TOKEN_NULL) {
+                        return false;
+                    }
+                }
+                ++n_media;
+                i += n_tokens - 1;
             } catch (const std::exception & e) {
                 return false;
             }
@@ -545,7 +768,7 @@ bool server_tokens::validate(const struct llama_context * ctx) const {
             return false;
         }
     }
-    return true;
+    return n_media == map_idx_to_media.size();
 }
 
 server_tokens server_tokens::clone() const {
@@ -687,12 +910,17 @@ size_t validate_utf8(const std::string& text) {
     return len;
 }
 
-server_tokens process_mtmd_prompt(mtmd_context * mctx, const std::string & prompt, const std::vector<raw_buffer> & files, bool is_placeholder) {
+server_tokens process_mtmd_prompt(
+        mtmd_context * mctx,
+        const std::string & prompt,
+        const std::vector<raw_buffer> & files,
+        const mtmd_helper_init_opt & init_opt,
+        bool is_placeholder) {
     // these will be freed upon going out of scope
     mtmd::bitmaps bitmaps;
     std::vector<mtmd_helper::video_ptr> videos;
     for (auto & file : files) {
-        auto out = mtmd_helper_bitmap_init_from_buf(mctx, file.data(), file.size(), is_placeholder);
+        auto out = mtmd_helper_bitmap_init_from_buf(mctx, file.data(), file.size(), is_placeholder, init_opt);
         if (!out.bitmap) {
             throw std::runtime_error("Failed to load image or audio file");
         }
@@ -733,7 +961,7 @@ server_tokens process_mtmd_prompt(mtmd_context * mctx, const std::string & promp
  * - "prompt": [12, 34, "string", 56, 78]
  * - "prompt": { "prompt_string": "string", "multimodal_data": [ "base64" ] }
  */
-static server_tokens tokenize_input_subprompt(const llama_vocab * vocab, mtmd_context * mctx, const json & json_prompt, bool add_special, bool parse_special) {
+static server_tokens tokenize_input_subprompt(const llama_vocab * vocab, mtmd_context * mctx, const json & json_prompt, bool add_special, bool parse_special, const mtmd_helper_init_opt & init_opt) {
     constexpr char JSON_STRING_PROMPT_KEY[] = "prompt_string";
     constexpr char JSON_MTMD_DATA_KEY[] = "multimodal_data";
     const bool has_mtmd = mctx != nullptr;
@@ -756,7 +984,7 @@ static server_tokens tokenize_input_subprompt(const llama_vocab * vocab, mtmd_co
             for (const auto & entry : json_prompt.at(JSON_MTMD_DATA_KEY)) {
                 files.push_back(base64_decode(entry));
             }
-            return process_mtmd_prompt(mctx, json_prompt.at(JSON_STRING_PROMPT_KEY), files);
+            return process_mtmd_prompt(mctx, json_prompt.at(JSON_STRING_PROMPT_KEY), files, init_opt);
         } else {
             // Not multimodal, but contains a subobject.
             llama_tokens tmp = tokenize_mixed(vocab, json_prompt.at(JSON_STRING_PROMPT_KEY), add_special, parse_special);
@@ -767,15 +995,15 @@ static server_tokens tokenize_input_subprompt(const llama_vocab * vocab, mtmd_co
    }
 }
 
-std::vector<server_tokens> tokenize_input_prompts(const llama_vocab * vocab, mtmd_context * mctx, const json & json_prompt, bool add_special, bool parse_special) {
+std::vector<server_tokens> tokenize_input_prompts(const llama_vocab * vocab, mtmd_context * mctx, const json & json_prompt, bool add_special, bool parse_special, const mtmd_helper_init_opt & init_opt) {
     std::vector<server_tokens> result;
     if (json_prompt.is_array() && !json_is_array_and_contains_numbers(json_prompt)) {
         result.reserve(json_prompt.size());
         for (const auto & p : json_prompt) {
-            result.push_back(tokenize_input_subprompt(vocab, mctx, p,add_special, parse_special));
+            result.push_back(tokenize_input_subprompt(vocab, mctx, p, add_special, parse_special, init_opt));
         }
     } else {
-        result.push_back(tokenize_input_subprompt(vocab, mctx, json_prompt, add_special, parse_special));
+        result.push_back(tokenize_input_subprompt(vocab, mctx, json_prompt, add_special, parse_special, init_opt));
     }
     if (result.empty()) {
         throw std::runtime_error("\"prompt\" must not be empty");
@@ -1057,6 +1285,12 @@ json oaicompat_chat_params_parse(
     if (inputs.continue_final_message != COMMON_CHAT_CONTINUATION_NONE && inputs.add_generation_prompt) {
         throw std::invalid_argument("Cannot set both add_generation_prompt and continue_final_message to true.");
     }
+    if (inputs.continue_final_message != COMMON_CHAT_CONTINUATION_NONE
+        && !inputs.messages.empty()
+        && inputs.messages.back().role == "assistant"
+        && !inputs.messages.back().tool_calls.empty()) {
+        throw std::invalid_argument("Cannot continue an assistant message that contains tool calls.");
+    }
     inputs.reasoning_format = opt.reasoning_format;
     if (body.contains("reasoning_format")) {
         inputs.reasoning_format = common_reasoning_format_from_name(body.at("reasoning_format").get<std::string>());
@@ -1084,6 +1318,17 @@ json oaicompat_chat_params_parse(
         inputs.enable_thinking = false;
     } else if (!enable_thinking_kwarg.empty() && enable_thinking_kwarg[0] == '"') {
         throw std::invalid_argument("invalid type for \"enable_thinking\" (expected boolean, got string)");
+    }
+
+    // Parse the OAI "reasoning_effort" field; "none" disables reasoning.
+    if (body.contains("reasoning_effort")) {
+        auto reasoning_effort = json_value(body, "reasoning_effort", std::string(""));
+        if (reasoning_effort == "none") {
+            inputs.enable_thinking = false;
+            inputs.chat_template_kwargs.erase("reasoning_effort");
+        } else if (!reasoning_effort.empty()) {
+            inputs.chat_template_kwargs["reasoning_effort"] = json(reasoning_effort).dump();
+        }
     }
 
     inputs.force_pure_content = opt.force_pure_content;
@@ -1123,10 +1368,10 @@ json oaicompat_chat_params_parse(
             reasoning_budget = opt.reasoning_budget;
         }
 
-        if (!chat_params.thinking_end_tag.empty()) {
+        if (!chat_params.thinking_end_tags.empty()) {
             llama_params["reasoning_budget_tokens"] = reasoning_budget;
             llama_params["reasoning_budget_start_tag"] = chat_params.thinking_start_tag;
-            llama_params["reasoning_budget_end_tag"] = chat_params.thinking_end_tag;
+            llama_params["reasoning_budget_end_tags"] = chat_params.thinking_end_tags;
             llama_params["reasoning_budget_message"] = json_value(body, "reasoning_budget_message", opt.reasoning_budget_message);
             llama_params["reasoning_control"] = json_value(body, "reasoning_control", false);
         }
@@ -1306,7 +1551,7 @@ std::vector<llama_token_data> get_token_probabilities(llama_context * ctx, int i
 }
 
 std::string safe_json_to_str(const json & data) {
-    return data.dump(-1, ' ', false, json::error_handler_t::replace);
+    return data.dump_safe();
 }
 
 // TODO: reuse llama_detokenize
@@ -1547,7 +1792,8 @@ server_tokens format_prompt_rerank(
         const struct llama_vocab * vocab,
         mtmd_context * mctx,
         const std::string & query,
-        const std::string & doc) {
+        const std::string & doc,
+        const mtmd_helper_init_opt & init_opt) {
     server_tokens result = {};
 
     const char * rerank_prompt = llama_model_chat_template(model, "rerank");
@@ -1556,12 +1802,12 @@ server_tokens format_prompt_rerank(
         std::string prompt = rerank_prompt;
         string_replace_all(prompt, "{query}"   , query);
         string_replace_all(prompt, "{document}", doc  );
-        server_tokens tokens = tokenize_input_subprompt(vocab, mctx, prompt, false, true);
+        server_tokens tokens = tokenize_input_subprompt(vocab, mctx, prompt, false, true, init_opt);
         result.push_back(tokens);
     } else {
         // Get EOS token - use SEP token as fallback if EOS is not available
-        server_tokens query_tokens = tokenize_input_subprompt(vocab, mctx, query, false, false);
-        server_tokens doc_tokens   = tokenize_input_subprompt(vocab, mctx, doc,   false, false);
+        server_tokens query_tokens = tokenize_input_subprompt(vocab, mctx, query, false, false, init_opt);
+        server_tokens doc_tokens   = tokenize_input_subprompt(vocab, mctx, doc,   false, false, init_opt);
         llama_token eos_token = llama_vocab_eos(vocab);
         if (eos_token == LLAMA_TOKEN_NULL) {
             eos_token = llama_vocab_sep(vocab);

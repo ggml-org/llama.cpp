@@ -4,7 +4,11 @@
 
 #include "types.glsl"
 
-#if defined(DATA_A_Q4_0) || defined(DATA_A_Q5_0) || defined(DATA_A_Q8_0) || defined(DATA_A_IQ1_S) || defined(DATA_A_IQ2_XXS) || defined(DATA_A_IQ2_XS) || defined(DATA_A_IQ2_S) || defined(DATA_A_IQ3_XXS) || defined(DATA_A_IQ3_S) || defined(DATA_A_IQ4_XS) || defined(DATA_A_IQ4_NL)
+#if defined(DATA_A_Q2_0)
+FLOAT_TYPE get_dm(uint ib) {
+    return FLOAT_TYPE(data_a[ib / 2].d);
+}
+#elif defined(DATA_A_Q4_0) || defined(DATA_A_Q5_0) || defined(DATA_A_Q8_0) || defined(DATA_A_IQ1_S) || defined(DATA_A_IQ2_XXS) || defined(DATA_A_IQ2_XS) || defined(DATA_A_IQ2_S) || defined(DATA_A_IQ3_XXS) || defined(DATA_A_IQ3_S) || defined(DATA_A_IQ4_XS) || defined(DATA_A_IQ4_NL)
 FLOAT_TYPE get_dm(uint ib) {
     return FLOAT_TYPE(data_a[ib].d);
 }
@@ -30,6 +34,27 @@ FLOAT_TYPEV2 get_dm(uint ib) {
 #endif
 
 // Each iqs value maps to a 32-bit integer
+#if defined(DATA_A_Q2_0)
+uint unpack_q2_0(uint bits) {
+    // Move bit pairs [1:0], [3:2], [5:4], [7:6] to [1:0], [9:8], [17:16], [25:24].
+    bits &= 0xffu;
+    bits = (bits | (bits << 12u)) & 0x000f000fu;
+    return (bits | (bits << 6u)) & 0x03030303u;
+}
+
+i32vec4 repack4(uint ib, uint iqs) {
+    const uint qs_idx = (ib & 1u) * 4u + iqs * 2u;
+    const uint bits = pack32(u16vec2(data_a_packed16[ib / 2].qs[qs_idx],
+                                     data_a_packed16[ib / 2].qs[qs_idx + 1]));
+    return i32vec4(unpack_q2_0(bits), unpack_q2_0(bits >> 8u),
+                   unpack_q2_0(bits >> 16u), unpack_q2_0(bits >> 24u));
+}
+
+FLOAT_TYPE mul_q8_1(const int32_t q_sum, const float da, const vec2 dsb, const int32_t sum_divisor) {
+    return FLOAT_TYPE(da * (float(q_sum) * dsb.x - dsb.y / float(sum_divisor)));
+}
+#endif
+
 #if defined(DATA_A_Q4_0)
 // 2-byte loads for Q4_0 blocks (18 bytes)
 i32vec2 repack(uint ib, uint iqs) {
@@ -132,7 +157,19 @@ FLOAT_TYPE mul_q8_1(const int32_t q_sum, const float da, const vec2 dsb, const i
 }
 #endif
 
-#if defined(DATA_A_QUANT_LEGACY) || defined(DATA_A_MXFP4)
+#if defined(DATA_A_Q2_0)
+FLOAT_TYPE mmvq_dot_product(const uint ib_a, const uint iqs) {
+    int32_t q_sum = 0;
+    const i32vec4 qs_a = repack4(ib_a, iqs);
+    q_sum += dotPacked4x8EXT(qs_a.x, cache_b_qs[0]);
+    q_sum += dotPacked4x8EXT(qs_a.y, cache_b_qs[1]);
+    q_sum += dotPacked4x8EXT(qs_a.z, cache_b_qs[2]);
+    q_sum += dotPacked4x8EXT(qs_a.w, cache_b_qs[3]);
+
+    // 16 quants per call => divide sums by 32/16 = 2
+    return mul_q8_1(q_sum, get_dm(ib_a), cache_b_ds, 2);
+}
+#elif defined(DATA_A_QUANT_LEGACY) || defined(DATA_A_MXFP4)
 FLOAT_TYPE mmvq_dot_product(const uint ib_a, const uint iqs) {
     int32_t q_sum = 0;
 #if QUANT_R == 2

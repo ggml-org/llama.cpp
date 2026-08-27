@@ -4,12 +4,12 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 beforeAll(() => {
 	const store = new Map<string, string>();
 	const polyfill: Storage = {
-		get length() {
-			return store.size;
-		},
 		clear: () => store.clear(),
 		getItem: (k) => (store.has(k) ? store.get(k)! : null),
 		key: (i) => Array.from(store.keys())[i] ?? null,
+		get length() {
+			return store.size;
+		},
 		removeItem: (k) => {
 			store.delete(k);
 		},
@@ -17,11 +17,12 @@ beforeAll(() => {
 			store.set(k, String(v));
 		}
 	};
+
 	(globalThis as unknown as { localStorage: Storage }).localStorage = polyfill;
 });
 
-import { ChatService } from '$lib/services/chat.service';
 import { STREAM_RESUME_LOCALSTORAGE_KEY_PREFIX } from '$lib/constants';
+import { ChatService } from '$lib/services/chat.service';
 
 describe('ChatService stream resume', () => {
 	beforeEach(() => {
@@ -38,6 +39,7 @@ describe('ChatService stream resume', () => {
 	it('saves and reads back the byte count', () => {
 		ChatService.saveStreamState('conv-a', 4242);
 		const got = ChatService.getStreamState('conv-a');
+
 		expect(got).not.toBeNull();
 		expect(got!.bytesReceived).toBe(4242);
 		expect(typeof got!.updatedAt).toBe('number');
@@ -47,6 +49,7 @@ describe('ChatService stream resume', () => {
 		ChatService.saveStreamState('conv-a', 100);
 		ChatService.saveStreamState('conv-a', 200);
 		const got = ChatService.getStreamState('conv-a');
+
 		expect(got!.bytesReceived).toBe(200);
 	});
 
@@ -87,6 +90,67 @@ describe('ChatService stream resume', () => {
 		ChatService.saveStreamState('conv-a', 10, 'model-x');
 		ChatService.saveStreamState('conv-a', 20, 'model-y');
 		expect(ChatService.getStreamState('conv-a')!.model).toBe('model-y');
+	});
+
+	describe('throttled saves (per-chunk path)', () => {
+		// unique conversation ids: the throttle tracker is module state and
+		// outlives beforeEach's localStorage.clear()
+		let counter = 0;
+
+		const freshConv = () => `conv-throttle-${++counter}`;
+
+		it('writes immediately when no write was recorded for the conversation', () => {
+			const conv = freshConv();
+
+			ChatService.saveStreamStateThrottled(conv, 100);
+			expect(ChatService.getStreamState(conv)!.bytesReceived).toBe(100);
+		});
+
+		it('holds a save pending when it lands inside the interval, flush forces it out', () => {
+			const conv = freshConv();
+
+			ChatService.saveStreamStateThrottled(conv, 100);
+			ChatService.saveStreamStateThrottled(conv, 200);
+			expect(ChatService.getStreamState(conv)!.bytesReceived).toBe(100);
+
+			ChatService.flushStreamState(conv);
+			expect(ChatService.getStreamState(conv)!.bytesReceived).toBe(200);
+		});
+
+		it('flush is a no-op when nothing is pending', () => {
+			const conv = freshConv();
+
+			ChatService.saveStreamStateThrottled(conv, 100);
+			ChatService.flushStreamState(conv);
+			ChatService.flushStreamState(conv);
+			expect(ChatService.getStreamState(conv)!.bytesReceived).toBe(100);
+		});
+
+		it('an immediate save resets the throttle window', () => {
+			const conv = freshConv();
+
+			ChatService.saveStreamStateThrottled(conv, 100);
+			ChatService.saveStreamState(conv, 150);
+			expect(ChatService.getStreamState(conv)!.bytesReceived).toBe(150);
+
+			ChatService.saveStreamStateThrottled(conv, 200);
+			expect(ChatService.getStreamState(conv)!.bytesReceived).toBe(150);
+
+			ChatService.flushStreamState(conv);
+			expect(ChatService.getStreamState(conv)!.bytesReceived).toBe(200);
+		});
+
+		it('clearStreamState drops the pending throttled state', () => {
+			const conv = freshConv();
+
+			ChatService.saveStreamStateThrottled(conv, 100);
+			ChatService.saveStreamStateThrottled(conv, 200);
+			ChatService.clearStreamState(conv);
+			expect(ChatService.getStreamState(conv)).toBeNull();
+
+			ChatService.flushStreamState(conv);
+			expect(ChatService.getStreamState(conv)).toBeNull();
+		});
 	});
 
 	describe('resumeStreamIdentity', () => {
