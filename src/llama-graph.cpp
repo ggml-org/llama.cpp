@@ -2804,8 +2804,12 @@ static std::unique_ptr<llm_graph_input_attn_kv> build_attn_inp_kv_impl(
 }
 
 llm_graph_input_attn_kv * llm_graph_context::build_attn_inp_kv() const {
-    const auto * mctx_cur = static_cast<const llama_kv_cache_context *>(mctx);
+    return build_attn_inp_kv(static_cast<const llama_kv_cache_context *>(mctx));
+}
 
+llm_graph_input_attn_kv * llm_graph_context::build_attn_inp_kv(
+        const llama_kv_cache_context * mctx_cur) const {
+    GGML_ASSERT(mctx_cur != nullptr);
     auto inp = build_attn_inp_kv_impl(ctx0, ubatch, hparams, cparams, mctx_cur);
 
     return (llm_graph_input_attn_kv *) res->add_input(std::move(inp));

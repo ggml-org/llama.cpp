@@ -1823,11 +1823,14 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
         }
     }
 
-    // Opt-in Qwen3.5/3.6 GDN sibling projection fusion. The source tensors are
-    // retained so graph construction can fall back for LoRA adapters. Packed
-    // Q8_0 rows and F32 rows are copied byte-for-byte without requantization.
+    // Opt-in Qwen GDN sibling projection fusion. The source tensors are retained
+    // so graph construction can fall back for LoRA adapters. Packed Q8_0 rows
+    // and F32 rows are copied byte-for-byte without requantization.
+    const bool qwen35_gdn_fusion = arch == LLM_ARCH_QWEN35MOE && type == LLM_TYPE_35B_A3B;
+    const bool qwen4_gdn_fusion = arch == LLM_ARCH_QWEN4EXP && type == LLM_TYPE_A3B &&
+        hparams.n_embd == 2560 && hparams.ssm_d_state == 128 && hparams.ssm_dt_rank == 48;
     if (llama_model_use_gfx1030_gdn_sibling_fusion() &&
-            arch == LLM_ARCH_QWEN35MOE && type == LLM_TYPE_35B_A3B &&
+            (qwen35_gdn_fusion || qwen4_gdn_fusion) &&
             split_mode == LLAMA_SPLIT_MODE_LAYER) {
         size_t fused_bytes = 0;
         int fused_qkvz = 0;
@@ -2666,17 +2669,24 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                             return hparams.is_recr(il) && hparams.n_ff(il) == 0;
                         };
                     } else if (arch == LLM_ARCH_QWEN3NEXT || arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_QWEN35MOE || arch == LLM_ARCH_QWEN4EXP || arch == LLM_ARCH_MINIMAX_01) {
-                        filter_attn = [&](uint32_t il) {
-                            return il < hparams.n_layer() && !hparams.is_recr(il);
+                        const bool mtp_qwen4exp = arch == LLM_ARCH_QWEN4EXP &&
+                                params.ctx_type == LLAMA_CONTEXT_TYPE_MTP;
+                        filter_attn = [&, mtp_qwen4exp](uint32_t il) {
+                            return mtp_qwen4exp
+                                ? il >= hparams.n_layer() && il < hparams.n_layer_all && !hparams.is_recr(il)
+                                : il < hparams.n_layer() && !hparams.is_recr(il);
                         };
-                        filter_recr = [&](uint32_t il) {
-                            return il < hparams.n_layer() && hparams.is_recr(il);
+                        filter_recr = [&, mtp_qwen4exp](uint32_t il) {
+                            return !mtp_qwen4exp && il < hparams.n_layer() && hparams.is_recr(il);
                         };
 
                         if (arch == LLM_ARCH_QWEN4EXP && hparams.indexer_head_size > 0) {
-                            // QSA runs on the dense-attention layers only
-                            filter_idx = [&](uint32_t il) {
-                                return il < hparams.n_layer() && !hparams.is_recr(il);
+                            // Target and MTP QSA each own an index cache that follows
+                            // the corresponding attention-cache layer filter.
+                            filter_idx = [&, mtp_qwen4exp](uint32_t il) {
+                                return mtp_qwen4exp
+                                    ? il >= hparams.n_layer() && il < hparams.n_layer_all && !hparams.is_recr(il)
+                                    : il < hparams.n_layer() && !hparams.is_recr(il);
                             };
                         }
                     }

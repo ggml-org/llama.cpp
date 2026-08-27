@@ -292,16 +292,21 @@ class _QwenMtpMixin:
     mtp_only: bool
     _original_block_count: int | None = None
     opt_num_mtp_layers: int = 0
+    saw_mtp_tensor: bool = False
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.block_count = self.hparams["num_hidden_layers"]
         if not self.no_mtp:
             n_mtp = self.hparams.get("mtp_num_hidden_layers", 0)
-            # Qwen-3-Next doesn't include `mtp_num_hidden_layers` in config.
+            # Qwen-3-Next doesn't include `mtp_num_hidden_layers` in config,
+            # so fall back to the count observed while indexing mtp.* tensors.
             if n_mtp == 0:
-                assert self.opt_num_mtp_layers != 0
                 n_mtp = self.opt_num_mtp_layers
+            if n_mtp == 0 and self.saw_mtp_tensor:
+                raise ValueError("the checkpoint carries mtp.* tensors but none name a layer")
+            if n_mtp == 0 and self.mtp_only:
+                raise ValueError("--mtp: this checkpoint has no MTP block to export")
             self.block_count += n_mtp
         self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
 
@@ -310,6 +315,7 @@ class _QwenMtpMixin:
         key = next((k for k in ["n_layers", "num_hidden_layers", "n_layer", "num_layers"] if k in hparams), None)
         type(self)._original_block_count = hparams.get(key)
         type(self).opt_num_mtp_layers = 0
+        type(self).saw_mtp_tensor = False
         return super().index_tensors(remote_hf_model_id=remote_hf_model_id)  # ty: ignore[unresolved-attribute]
 
     @classmethod
@@ -322,6 +328,7 @@ class _QwenMtpMixin:
         if name.startswith("model.mtp."):
             name = name.replace("model.", "", 1)
         if name.startswith("mtp."):
+            cls.saw_mtp_tensor = True
             if cls.no_mtp:
                 return None
             remapper = {

@@ -2281,8 +2281,12 @@ struct llama_model_qwen4exp : public llama_model_base {
     void load_arch_tensors(llama_model_loader & ml) override;
 
     struct graph : public llm_build_delta_net_base {
+        // MTP reuses these architecture-local HC/attention/MoE builders but
+        // constructs a graph containing only the auxiliary block.
+        graph(const llama_model & model, const llm_graph_params & params, bool /*mtp*/) :
+            llm_build_delta_net_base(params), model(model) {}
         graph(const llama_model & model, const llm_graph_params & params);
-    private:
+    protected:
         // HC replaces every layer norm: residual is [n_embd, hc, n_tokens]
         ggml_tensor * build_hc_mix(
                     ggml_tensor * x,
@@ -2368,6 +2372,10 @@ struct llama_model_qwen4exp : public llama_model_base {
                             int   il);
 
         const llama_model & model;
+    };
+
+    struct graph_mtp : public graph {
+        graph_mtp(const llama_model & model, const llm_graph_params & params);
     };
 
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;

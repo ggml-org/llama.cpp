@@ -9,8 +9,10 @@
 
 // TODO: replace with #include "llama-ext.h" in the future
 #include "../src/llama-arch.h"
+#include "../src/llama-ext.h"
 #include "../src/llama-model-saver.h"
 
+#include <algorithm>
 #include <cinttypes>
 #include <cmath>
 #include <cstddef>
@@ -360,6 +362,17 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
     return ret;
 }
 
+static gguf_context_ptr get_qwen4exp_mtp_gguf_ctx() {
+    gguf_context_ptr ctx = get_gguf_ctx(LLM_ARCH_QWEN4EXP, true);
+    llama_model_saver ms(LLM_ARCH_QWEN4EXP, ctx.get());
+    // Two target layers plus one auxiliary dense MTP layer.
+    ms.add_kv(LLM_KV_BLOCK_COUNT, uint32_t(3));
+    ms.add_kv(LLM_KV_NEXTN_PREDICT_LAYERS, uint32_t(1));
+    ms.add_kv(LLM_KV_ATTENTION_COMPRESS_RATIOS,
+            std::vector<uint32_t>({0, 4, 4}));
+    return ctx;
+}
+
 static bool silent_model_load_progress(float /*progress*/, void * /*user_data*/) {
     return true;
 }
@@ -368,7 +381,7 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
         struct gguf_context * gguf_ctx, FILE * file, const size_t seed, const std::vector<ggml_backend_dev_t> & devs,
         const llama_split_mode split_mode = LLAMA_SPLIT_MODE_LAYER, bool encode = false,
         uint32_t n_seq_max = 1, bool kv_unified = false,
-        ggml_type cache_type = GGML_TYPE_F16) {
+        ggml_type cache_type = GGML_TYPE_F16, bool mtp = false) {
     GGML_ASSERT((gguf_ctx == nullptr) != (file == nullptr));
     llama_model_params model_params = llama_model_default_params();
     model_params.progress_callback = silent_model_load_progress;
@@ -376,6 +389,7 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
     devs_copy.push_back(nullptr);
     model_params.devices = devs_copy.data();
     model_params.split_mode = split_mode;
+    model_params.load_mtp = mtp;
 
     llama_context_params ctx_params = llama_context_default_params();
     ctx_params.n_ctx = 0;
@@ -385,6 +399,7 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
     ctx_params.kv_unified = kv_unified;
     ctx_params.type_k = cache_type;
     ctx_params.type_v = cache_type;
+    ctx_params.ctx_type = mtp ? LLAMA_CONTEXT_TYPE_MTP : LLAMA_CONTEXT_TYPE_DEFAULT;
     if (!encode) {
         ctx_params.n_ubatch = 64;
     }
@@ -404,6 +419,85 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
         throw std::runtime_error("failed to create llama context");
     }
     return std::make_pair(std::move(model), std::move(lctx));
+}
+
+static std::vector<float> decode_qwen4exp_mtp(
+        size_t seed,
+        const std::vector<ggml_backend_dev_t> & devs = {},
+        llama_split_mode split_mode = LLAMA_SPLIT_MODE_LAYER,
+        ggml_type cache_type = GGML_TYPE_F16) {
+    gguf_context_ptr gguf_ctx = get_qwen4exp_mtp_gguf_ctx();
+    auto model_and_ctx = get_model_and_ctx(
+            gguf_ctx.get(), nullptr, seed, devs, split_mode, false,
+            1, false, cache_type, true);
+
+    llama_model * model = model_and_ctx.first.get();
+    llama_context * ctx = model_and_ctx.second.get();
+    llama_set_embeddings_nextn(ctx, true, true);
+
+    const int32_t n_tokens = 4;
+    const int32_t n_embd_out = (int32_t) llama_model_n_embd_out(model);
+    llama_batch batch = llama_batch_init(n_tokens, n_embd_out, 1);
+    batch.token = (llama_token *) std::malloc(sizeof(llama_token) * n_tokens);
+    GGML_ASSERT(batch.token != nullptr);
+    batch.n_tokens = n_tokens;
+    for (int32_t i = 0; i < n_tokens; ++i) {
+        batch.token[i] = (llama_token) (i + 1);
+        batch.pos[i] = i;
+        batch.n_seq_id[i] = 1;
+        batch.seq_id[i][0] = 0;
+        batch.logits[i] = i + 1 == n_tokens;
+        for (int32_t j = 0; j < n_embd_out; ++j) {
+            batch.embd[(int64_t) i * n_embd_out + j] =
+                    1.0e-3f * std::sin((float) ((i + 1) * (j + 1)));
+        }
+    }
+
+    const int rc = llama_decode(ctx, batch);
+    llama_batch_free(batch);
+    if (rc != 0) {
+        throw std::runtime_error("Qwen4Exp MTP synthetic decode failed");
+    }
+
+    const float * logits = llama_get_logits(ctx);
+    const uint32_t n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(model));
+    const float * hidden = llama_get_embeddings_nextn(ctx);
+    if (logits == nullptr || hidden == nullptr ||
+            !std::all_of(logits, logits + n_vocab, [](float value) { return std::isfinite(value); }) ||
+            !std::all_of(hidden, hidden + n_embd_out, [](float value) { return std::isfinite(value); })) {
+        throw std::runtime_error("Qwen4Exp MTP produced invalid output");
+    }
+
+    std::vector<float> result(logits, logits + n_vocab);
+    result.insert(result.end(), hidden, hidden + n_embd_out);
+    return result;
+}
+
+static void check_qwen4exp_mtp(size_t seed) {
+    GGML_UNUSED(decode_qwen4exp_mtp(seed));
+}
+
+static void check_qwen4exp_mtp_device(
+        size_t seed,
+        const std::vector<ggml_backend_dev_t> & devs,
+        llama_split_mode split_mode,
+        ggml_type cache_type) {
+    const std::vector<float> expected = decode_qwen4exp_mtp(seed);
+    const std::vector<float> actual = decode_qwen4exp_mtp(seed, devs, split_mode, cache_type);
+    const double value = nmse(expected, actual);
+    const size_t n_vocab = 128;
+    const double value_logits = nmse(
+            std::vector<float>(expected.begin(), expected.begin() + n_vocab),
+            std::vector<float>(actual.begin(), actual.begin() + n_vocab));
+    const double value_hidden = nmse(
+            std::vector<float>(expected.begin() + n_vocab, expected.end()),
+            std::vector<float>(actual.begin() + n_vocab, actual.end()));
+    const double limit = cache_type == GGML_TYPE_Q8_0 ? 1e-2 : 1e-4;
+    if (!std::isfinite(value) || value > limit) {
+        throw std::runtime_error("Qwen4Exp MTP device output diverged from CPU: NMSE=" +
+                std::to_string(value) + ", logits=" + std::to_string(value_logits) +
+                ", hidden=" + std::to_string(value_hidden) + ", limit=" + std::to_string(limit));
+    }
 }
 
 static void check_qwen4exp_invalid_metadata(size_t seed) {
@@ -571,6 +665,22 @@ static void check_qwen4exp_qsa_streams(gguf_context * gguf_ctx, size_t seed) {
     expected.insert(expected.end(), expected1.begin(), expected1.end());
     if (nmse(expected, actual) > 1e-6) {
         throw std::runtime_error("Qwen4Exp non-unified QSA streams changed logits");
+    }
+
+    // Cross the dense-equivalence budget in one live context. Index keys written
+    // while scoring was bypassed must be available as soon as sparse QSA starts.
+    auto crossing = get_model_and_ctx(gguf_ctx, nullptr, seed, {});
+    const std::vector<llama_token> dense_prefix(tokens0.begin(), tokens0.begin() + 8);
+    decode_qwen4exp_tokens(crossing.second.get(), dense_prefix, 0);
+    std::vector<float> crossed;
+    for (uint32_t pos = 8; pos < n_tokens; ++pos) {
+        crossed = decode_qwen4exp_one(crossing.second.get(), tokens0[pos], pos, 0);
+    }
+    const std::vector<float> expected_crossing(
+            expected.begin() + (n_tokens - 1) * n_vocab,
+            expected.begin() + n_tokens * n_vocab);
+    if (nmse(expected_crossing, crossed) > 1e-6) {
+        throw std::runtime_error("Qwen4Exp dense-to-sparse QSA transition used stale indexer keys");
     }
 
     // Quantized K/V caches enable the cache Hadamard rotations. The sparse
@@ -1180,6 +1290,7 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const gg
                             check_qwen4exp_sequence_ops(gguf_ctx.get(), seed, tokens);
                             check_qwen4exp_mrope_history(gguf_ctx.get(), seed);
                             check_qwen4exp_qsa_streams(gguf_ctx.get(), seed);
+                            check_qwen4exp_mtp(seed);
                             check_qwen4exp_invalid_metadata(seed);
                         }
                         if (arch == LLM_ARCH_DEEPSEEK4) {
@@ -1192,6 +1303,9 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const gg
                                 gguf_ctx.get(), nullptr, seed, dc.devs, dc.split_mode, encode,
                                 1, false, dc.cache_type);
                         logits_dev = get_logits(model_and_ctx_dev.first.get(), model_and_ctx_dev.second.get(), tokens, encode);
+                        if (arch == LLM_ARCH_QWEN4EXP) {
+                            check_qwen4exp_mtp_device(seed, dc.devs, dc.split_mode, dc.cache_type);
+                        }
                         if (arch == LLM_ARCH_DEEPSEEK4) {
                             GGML_ASSERT(llama_memory_seq_rm(
                                     llama_get_memory(model_and_ctx_dev.second.get()), 0, -1, -1));

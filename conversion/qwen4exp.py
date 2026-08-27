@@ -27,12 +27,17 @@ class Qwen4ExpTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
 
     model_arch = gguf.MODEL_ARCH.QWEN4EXP
 
-    # the MTP block is a separate draft head; vLLM drops it too
-    supports_mtp_export = False
-    no_mtp = True
-
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        if self.mtp_only and self.ftype not in (
+                gguf.LlamaFileType.ALL_F32,
+                gguf.LlamaFileType.MOSTLY_F16,
+                gguf.LlamaFileType.MOSTLY_BF16,
+        ):
+            raise ValueError(
+                "Qwen4Exp MTP must remain F16/BF16: whole-head Q8_0 quantization "
+                "changes expert routing and collapses real draft acceptance"
+            )
         self._ple_row_dim: int | None = None
         self._ple_rows: int | None = None
         self._ple_map: np.memmap | None = None
@@ -143,9 +148,15 @@ class Qwen4ExpTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
             raise ValueError("QSA needs a positive ratio and at least one full-attention layer")
         if any(kind not in ("full_attention", "linear_attention") for kind in layer_types):
             raise ValueError("layer_types contains an unsupported attention kind")
-        self.gguf_writer.add_attention_compress_ratios(
-            [ratio if layer_types[i] == "full_attention" else 0 for i in range(n_layer)]
-        )
+        compress_ratios = [ratio if layer_types[i] == "full_attention" else 0 for i in range(n_layer)]
+        # The released MTP block has its own QSA indexer/cache and uses the
+        # same compression ratio as the target full-attention layers.
+        compress_ratios.extend([ratio] * (self.block_count - n_layer))
+        self.gguf_writer.add_attention_compress_ratios(compress_ratios)
+
+        # An MTP-only GGUF carries no PLE table or hash metadata.
+        if self.mtp_only:
+            return
 
         # ple_layer_ids is 1-based in the HF config; empty means no n-gram table,
         # so emit no PLE keys rather than optional ones
@@ -216,6 +227,46 @@ class Qwen4ExpTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
         if eos is None:
             raise ValueError("eos_token_id is required for the PLE hash")
         return self._uint32_token(eos, "eos_token_id")
+
+    @classmethod
+    def filter_tensors(cls, item):
+        name, gen = item
+        # The MTP block has its own final hyper-connection mixer. In an
+        # MTP-only file it occupies the model-level head tensor names.
+        if name.startswith("mtp.hyper_connection_mixer."):
+            if cls.no_mtp:
+                return None
+            return name.replace("mtp.", "model.", 1), gen
+        return super().filter_tensors(item)
+
+    def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
+        yield from super().generate_extra_tensors()
+
+        # The reference computes fc_embedding(e) + fc_hidden(h). Joining the
+        # two weights makes this one projection of concat(e, h), matching the
+        # existing generic nextn tensor layout.
+        e_name = "mtp.fc_embedding.weight"
+        h_name = "mtp.fc_hidden.weight"
+        have_e = e_name in self.model_tensors
+        have_h = h_name in self.model_tensors
+        if not have_e and not have_h:
+            return
+        if not have_e or not have_h:
+            raise KeyError(f"unpaired MTP input projection: need both {e_name} and {h_name}")
+
+        e = LazyTorchTensor.to_eager(self.model_tensors[e_name]())
+        h = LazyTorchTensor.to_eager(self.model_tensors[h_name]())
+        if e.ndim != 2 or h.ndim != 2 or e.shape[0] != h.shape[0]:
+            raise ValueError(f"incompatible MTP input projections: {tuple(e.shape)} and {tuple(h.shape)}")
+        yield (
+            self.format_tensor_name(
+                gguf.MODEL_TENSOR.NEXTN_EH_PROJ,
+                int(self.hparams["num_hidden_layers"]),
+            ),
+            torch.cat([e, h], dim=1).contiguous(),
+        )
+        del self.model_tensors[e_name]
+        del self.model_tensors[h_name]
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         # int64 hash constants must stay exact; 1-D tensors force F32, so use KV
@@ -290,7 +341,7 @@ class Qwen4ExpTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
         return qtype
 
     def _stream_ple_table(self) -> None:
-        if not self.hparams.get("ple_layer_ids"):
+        if self.mtp_only or not self.hparams.get("ple_layer_ids"):
             return
 
         marker = ".ngram_embedding.shard_"
