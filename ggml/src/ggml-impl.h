@@ -165,6 +165,12 @@ static float ggml_get_op_params_f32(const struct ggml_tensor * tensor, uint32_t 
 //   1 - hint
 //   2 - src0 precision
 //   3 - src1 precision
+//
+// - GGML_OP_MUL_MAT_ID
+//   0 - acc
+//   1 - hint
+//   2 - src0 precision
+//   3 - src1 precision
 static void ggml_set_op_params_i32(struct ggml_tensor * tensor, uint32_t i, int32_t value) {
     assert(i < GGML_MAX_OP_PARAMS / sizeof(int32_t));
     ((int32_t *)(tensor->op_params))[i] = value;
