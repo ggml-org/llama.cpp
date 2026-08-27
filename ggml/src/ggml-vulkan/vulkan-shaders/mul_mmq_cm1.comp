@@ -343,10 +343,7 @@ void main() {
                         coopmat<int8_t, gl_ScopeSubgroup, TK, TN, gl_MatrixUseB> cache_b;
                         coopMatLoad(cache_b, buf_b_qs, (b_col0 + c * TN) * QPITCH + ks * (BK / 4) + h * (TK / 4), QPITCH, gl_CooperativeMatrixLayoutColumnMajor);
 
-                        float scale_b[CM_ELEMS];
-                        [[unroll]] for (uint e = 0; e < CM_ELEMS; e++) {
-                            scale_b[e] = buf_b_d[ks * BN + b_col0 + c * TN + elem_col[e]];
-                        }
+                        const float scale_b_v = buf_b_d[ks * BN + b_col0 + c * TN + elem_col[0]];
 
                         coopmat<int32_t, gl_ScopeSubgroup, TM, TN, gl_MatrixUseAccumulator> acc =
                             coopmat<int32_t, gl_ScopeSubgroup, TM, TN, gl_MatrixUseAccumulator>(
@@ -359,11 +356,11 @@ void main() {
                                 const float t = fma(intBitsToFloat(int(acc[e])),
                                                     scale_a[e],
                                                     nbias_a[e]);
-                                sums[tile_idx * CM_ELEMS + e] = ACC_TYPE(fma(t, scale_b[e],
+                                sums[tile_idx * CM_ELEMS + e] = ACC_TYPE(fma(t, scale_b_v,
                                                                     float(sums[tile_idx * CM_ELEMS + e])));
                             } else {
                                 sums[tile_idx * CM_ELEMS + e] += ACC_TYPE(float(acc[e])
-                                    * scale_a[e] * scale_b[e]);
+                                    * scale_a[e] * scale_b_v);
                             }
                         }
                     }
@@ -410,9 +407,9 @@ void main() {
                     }
 
                     const uint tile_idx = r * cms_per_col + c;
+                    const float sb = buf_b_d[ks * BN + b_col0 + c * TN + elem_col[0]];
+                    const float bs = float(buf_b_s[ks * BN + b_col0 + c * TN + elem_col[0]]);
                     [[unroll]] for (uint e = 0; e < CM_ELEMS; e++) {
-                        const float sb = buf_b_d[ks * BN + b_col0 + c * TN + elem_col[e]];
-                        const float bs = float(buf_b_s[ks * BN + b_col0 + c * TN + elem_col[e]]);
                         if (USE_MAGIC_BIAS) {
                             const float t = fma(intBitsToFloat(int(acc[e])),
                                                 scale_a[e], nbias_a[e]);
@@ -442,11 +439,9 @@ void main() {
                 }
             }
 
-            float scale_b[cms_per_col * CM_ELEMS];
+            float scale_b[cms_per_col];
             [[unroll]] for (uint c = 0; c < cms_per_col; c++) {
-                [[unroll]] for (uint e = 0; e < CM_ELEMS; e++) {
-                    scale_b[c * CM_ELEMS + e] = buf_b_d[ks * BN + b_col0 + c * TN + elem_col[e]];
-                }
+                scale_b[c] = buf_b_d[ks * BN + b_col0 + c * TN + elem_col[0]];
             }
 
             [[unroll]] for (uint r = 0; r < cms_per_row; r++) {
@@ -474,11 +469,11 @@ void main() {
                             const float t = fma(intBitsToFloat(int(acc[e])),
                                                 scale_a[e],
                                                 nbias_a[e]);
-                            sums[tile_idx * CM_ELEMS + e] = ACC_TYPE(fma(t, scale_b[c * CM_ELEMS + e],
+                            sums[tile_idx * CM_ELEMS + e] = ACC_TYPE(fma(t, scale_b[c],
                                                                 float(sums[tile_idx * CM_ELEMS + e])));
                         } else {
                             sums[tile_idx * CM_ELEMS + e] += ACC_TYPE(float(acc[e])
-                                * scale_a[e] * scale_b[c * CM_ELEMS + e]);
+                                * scale_a[e] * scale_b[c]);
                         }
                     }
                 }
