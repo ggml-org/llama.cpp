@@ -86,20 +86,14 @@ export class ConversationPreferences {
 		return buildDisabledToolCategories(this.host.activeConversation);
 	}
 
+	// Tool Policy
+
 	// getters, not $derived fields: lazy evaluation keeps them off the class
 	// field initialization order (host is assigned by the constructor), and
 	// reads of the underlying $state stay tracked in reactive contexts
 	private get _disabledTools(): Set<string> {
 		return buildDisabledTools(this.host.activeConversation);
 	}
-
-	/**
-	 *
-	 *
-	 * Tool Policy
-	 *
-	 *
-	 */
 
 	constructor(private host: ConversationsPreferencesHost) {}
 
@@ -192,13 +186,7 @@ export class ConversationPreferences {
 		this.pendingCwd = null;
 	}
 
-	/**
-	 *
-	 *
-	 * Working Directory
-	 *
-	 *
-	 */
+	// Working Directory
 
 	/**
 	 * Sets the working directory for the active conversation. Pass `null` or
@@ -233,13 +221,7 @@ export class ConversationPreferences {
 		this.pendingCwd = null;
 	}
 
-	/**
-	 *
-	 *
-	 * Reasoning Effort
-	 *
-	 *
-	 */
+	// Reasoning Effort
 
 	/**
 	 * Sets the reasoning effort for the active conversation.

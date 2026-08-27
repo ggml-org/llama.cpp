@@ -263,6 +263,14 @@ class ToolsStore {
 		}
 	}
 
+	/**
+	 * Enabled tool definitions for sending to the LLM. Callers pass an
+	 * explicit policy (the active conversation's, resolved with global
+	 * defaults when absent); without arguments the store defaults apply.
+	 * MCP tool schemas are normalized here so the wire payload is consistent
+	 * across all four sources (server, browser/sandbox, MCP, custom JSON).
+	 * The API identifies tools by name, so a name is sent at most once.
+	 */
 	getEnabledToolsForLLM(
 		disabledTools: ReadonlySet<string> = this._disabledTools,
 		disabledCategories: ReadonlySet<ToolSource> = this._disabledToolCategories
@@ -396,17 +404,6 @@ class ToolsStore {
 		return !this._disabledToolCategories.has(source);
 	}
 
-	/**
-	 * Enabled tool definitions for sending to the LLM.
-	 * MCP tool schemas are normalized here so the wire payload is consistent
-	 * across all four sources (server, browser/sandbox, MCP, custom JSON).
-	 * The API identifies tools by name, so a name is sent at most once.
-	 */
-	/**
-	 * The single enable rule for a tool entry: its category must be on, its
-	 * own key must not be disabled, and for MCP tools the server-scoped group
-	 * key must not be disabled either.
-	 */
 	isEntryEnabled(
 		entry: ToolEntry,
 		disabledTools: ReadonlySet<string>,
@@ -469,6 +466,8 @@ class ToolsStore {
 		} else {
 			this._disabledTools.add(key);
 		}
+
+		this.persistDisabledTools();
 	}
 
 	toggleCategory(source: ToolSource): void {
@@ -476,13 +475,7 @@ class ToolsStore {
 	}
 
 	toggleTool(key: string): void {
-		if (this._disabledTools.has(key)) {
-			this._disabledTools.delete(key);
-		} else {
-			this._disabledTools.add(key);
-		}
-
-		this.persistDisabledTools();
+		this.setToolEnabled(key, !this.isToolEnabled(key));
 	}
 
 	/** First canonical entry matching a tool name, runtime tool calls resolve by name */
@@ -710,7 +703,9 @@ class ToolsStore {
 	private toolKey(source: ToolSource, name: string, serverId?: string): string {
 		switch (source) {
 			case ToolSource.MCP:
-				return serverId ? `mcp-${serverId}:${name}` : `mcp:${name}`;
+				// with a serverId this is a per-tool key; without one it hits the
+				// server group key shape, which no MCP entry ever does
+				return serverId ? `mcp-${serverId}:${name}` : this.getMcpServerToolsKey(name);
 			case ToolSource.CUSTOM:
 				return `custom:${name}`;
 			case ToolSource.BROWSER:
