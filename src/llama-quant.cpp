@@ -16,6 +16,7 @@
 #include <random>
 #include <regex>
 #include <thread>
+#include <unordered_set>
 
 // result of parsing --tensor-type option
 // (changes to this struct must be reflected in tools/quantize/quantize.cpp)
@@ -98,6 +99,18 @@ static bool tensor_name_match_token_embd(const char * tensor_name) {
 
 static bool tensor_name_match_output_weight(const char * tensor_name) {
     return std::strcmp(tensor_name, "output.weight") == 0;
+}
+
+// layers sharing the kv cache of an earlier layer never run their own attn_k/attn_v
+static bool tensor_name_match_unused_kv(const std::string & tensor_name, const int n_unused_from) {
+    if (n_unused_from < 0) { return false; }
+
+    static const std::regex pattern(R"(^blk\.(\d+)\.attn_[kv]\.weight$)");
+    if (std::smatch match; std::regex_match(tensor_name, match, pattern)) {
+        return std::stoi(match[1]) >= n_unused_from;
+    }
+
+    return false;
 }
 
 // tensor categorization for quantization
@@ -2890,11 +2903,22 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         }
     }
 
+    // first layer without its own kv cache
+    int n_unused_kv_from = -1;
+    {
+        uint32_t n_block = 0;
+        uint32_t n_shared = 0;
+        ml.get_key(LLM_KV_BLOCK_COUNT, n_block, false);
+        ml.get_key(LLM_KV_ATTENTION_SHARED_KV_LAYERS, n_shared, false);
+        if (n_shared > 0 && n_shared <= n_block) { n_unused_kv_from = (int)(n_block - n_shared); }
+    }
+
     std::map<int, std::string> mapped;
     int blk_id = 0;
 
     // make a list of weights
     std::vector<const llama_model_loader::llama_tensor_weight *> tensors;
+    std::unordered_set<std::string> unused_kv_tensors;
     tensors.reserve(ml.weights_map.size());
     for (const auto & it : ml.weights_map) {
         const std::string remapped_name(remap_layer(it.first, prune_list, mapped, blk_id));
@@ -2906,9 +2930,11 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
             ggml_set_name(it.second.tensor, remapped_name.c_str());
             LLAMA_LOG_DEBUG("%s: tensor %s remapped to %s\n", __func__, it.first.c_str(), ggml_get_name(it.second.tensor));
         }
+        if (tensor_name_match_unused_kv(it.first, n_unused_kv_from)) { unused_kv_tensors.insert(remapped_name); }
 
         tensors.push_back(&it.second);
     }
+
     if (!prune_list.empty()) { gguf_set_val_u32(ctx_out.get(), ml.llm_kv(LLM_KV_BLOCK_COUNT).c_str(), blk_id); }
 
     // keep_split requires that the weights are sorted by split index
@@ -2933,6 +2959,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
     if (params->keep_split) {
         for (const auto * it : tensors) { n_split = std::max((uint16_t)(it->idx + 1), n_split); }
     }
+
     std::vector<gguf_context_ptr> ctx_outs(n_split);
     ctx_outs[0] = std::move(ctx_out);
 
@@ -2953,6 +2980,12 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         if (metadata[i].allows_quantization) { metadata[i].target_type = llama_tensor_get_type(qs, params, tensor, default_type, metadata[i]); }
         else { metadata[i].target_type = tensor->type; }
 
+        if (metadata[i].allows_quantization && unused_kv_tensors.count(metadata[i].name)) {
+            metadata[i].target_type = tensor_type_fallback(qs, tensor, GGML_TYPE_Q4_0);
+            LLAMA_LOG_INFO("====== %s: %s shares an earlier layer's kv cache, no imatrix data - using %s\n",
+                __func__, metadata[i].name.c_str(), ggml_type_name(metadata[i].target_type));
+        }
+
         metadata[i].requires_imatrix = tensor_requires_imatrix(tensor->name, metadata[i].target_type, ftype);
 
         if (params->imatrix) { metadata[i].remapped_imatrix_name = remap_imatrix(tensor->name, mapped); }
@@ -2967,6 +3000,22 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                                 metadata[i].name.c_str(), ggml_type_name(metadata[i].target_type));
                 throw std::runtime_error("this quantization requires an imatrix!");
             }
+        }
+    }
+
+    // report missing imatrix coverage early
+    if (values_data) {
+        std::vector<std::string> no_imatrix;
+        for (size_t i = 0; i < tensors.size(); ++i) {
+            const char * name = metadata[i].name.c_str();
+            if (!metadata[i].allows_quantization || unused_kv_tensors.count(metadata[i].name)) { continue; }
+            if (tensor_name_match_token_embd(name) || tensor_name_match_output_weight(name)) { continue; }
+            if (!values_data->count(metadata[i].remapped_imatrix_name)) { no_imatrix.push_back(metadata[i].name); }
+        }
+
+        if (!no_imatrix.empty()) {
+            LLAMA_LOG_WARN("%s: %zu quantizable tensors have no imatrix data:\n", __func__, no_imatrix.size());
+            for (const auto & name : no_imatrix) { LLAMA_LOG_WARN("%s:     %s\n", __func__, name.c_str()); }
         }
     }
 
@@ -3014,11 +3063,18 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                         }
                     }
                 }
+            }
 
-                if (!locked_tensors.empty()) {
-                    LLAMA_LOG_INFO("%s: locking %zu tensors to user-specified types, allocating remaining budget to the rest\n",
-                        __func__, locked_tensors.size());
+            // do not allocate budget to unused kv tensors
+            for (size_t i = 0; i < tensors.size(); ++i) {
+                if (metadata[i].allows_quantization && unused_kv_tensors.count(metadata[i].name)) {
+                    locked_tensors[metadata[i].name] = metadata[i].target_type;
                 }
+            }
+
+            if (!locked_tensors.empty()) {
+                LLAMA_LOG_INFO("%s: locking %zu tensors to user-specified types, allocating remaining budget to the rest\n",
+                    __func__, locked_tensors.size());
             }
 
             // get quantization type overrides targeting a given bits per weight budget
