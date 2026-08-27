@@ -1866,6 +1866,7 @@ shared int8_t kvalues_mxfp4[16];
 #endif
 
 #if defined(DATA_A_NVFP4) && !defined(USE_OCP_FP4)
+// UE4M3 scale in NVFP4 blocks use only 7 bits; sign (bit 7) is always zero.
 shared float ue4m3_fp32_lut[128];
 
 float ue4m3_to_fp32_build(uint u) {
