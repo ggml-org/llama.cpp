@@ -724,41 +724,57 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, const llama_mod
 // quantization implementation
 //
 
-static size_t llama_tensor_quantize_impl(enum ggml_type new_type, const float * f32_data, void * new_data, const int64_t chunk_size, int64_t nrows, int64_t n_per_row, const float * imatrix, std::vector<std::thread> & workers, const int nthread) {
+static size_t llama_tensor_quantize_impl(enum ggml_type new_type, const float * f32_data, void * new_data, const int64_t chunk_size, int64_t ne2, int64_t nrows, int64_t n_per_row, const float * imatrix, std::vector<std::thread> & workers, const int nthread) {
+    const int64_t nelements_matrix = nrows * n_per_row;
+    const size_t  row_size         = ggml_row_size(new_type, n_per_row);
+
     if (nthread < 2) {
         // single-thread
-        size_t new_size = ggml_quantize_chunk(new_type, f32_data, new_data, 0, nrows, n_per_row, imatrix);
-        if (!ggml_validate_row_data(new_type, new_data, new_size)) {
-            throw std::runtime_error("quantized data validation failed");
+        size_t new_size = 0;
+        for (int64_t i02 = 0; i02 < ne2; ++i02) {
+            const float * imatrix_02 = imatrix ? imatrix + i02 * n_per_row : nullptr;
+            void * this_data = (char *) new_data + i02 * nrows * row_size;
+            size_t this_size = ggml_quantize_chunk(new_type, f32_data + i02 * nelements_matrix, this_data, 0, nrows, n_per_row, imatrix_02);
+            if (!ggml_validate_row_data(new_type, this_data, this_size)) {
+                throw std::runtime_error("quantized data validation failed");
+            }
+            new_size += this_size;
         }
         return new_size;
     }
 
     std::mutex mutex;
-    int64_t counter = 0;
+    int64_t counter = 0; // rows handed out, counted across all ne2 expert matrices
     size_t new_size = 0;
     bool valid = true;
+    const int64_t total_rows = ne2 * nrows;
     auto compute = [&mutex, &counter, &new_size, &valid, new_type, f32_data, new_data, chunk_size,
-            nrows, n_per_row, imatrix]() {
+            nrows, n_per_row, imatrix, nelements_matrix, row_size, total_rows]() {
         const int64_t nrows_per_chunk = chunk_size / n_per_row;
         size_t local_size = 0;
         while (true) {
             std::unique_lock<std::mutex> lock(mutex);
-            int64_t first_row = counter; counter += nrows_per_chunk;
-            if (first_row >= nrows) {
+            if (counter >= total_rows) {
                 if (local_size > 0) {
                     new_size += local_size;
                 }
                 break;
             }
+            const int64_t first_row  = counter;
+            const int64_t i02        = first_row / nrows;
+            const int64_t local_row  = first_row - i02 * nrows;
+            // clamp to the end of this expert matrix: its imatrix slice differs
+            const int64_t this_nrow  = std::min(nrows - local_row, nrows_per_chunk);
+            counter += this_nrow;
             lock.unlock();
-            const int64_t this_nrow = std::min(nrows - first_row, nrows_per_chunk);
-            size_t this_size = ggml_quantize_chunk(new_type, f32_data, new_data, first_row * n_per_row, this_nrow, n_per_row, imatrix);
+
+            const float * imatrix_02 = imatrix ? imatrix + i02 * n_per_row : nullptr;
+            const float * this_src   = f32_data + i02 * nelements_matrix + local_row * n_per_row;
+            void        * this_data  = (char *) new_data + (i02 * nrows + local_row) * row_size;
+            size_t this_size = ggml_quantize_chunk(new_type, this_src, this_data, 0, this_nrow, n_per_row, imatrix_02);
             local_size += this_size;
 
             // validate the quantized data
-            const size_t row_size  = ggml_row_size(new_type, n_per_row);
-            void * this_data = (char *) new_data + first_row * row_size;
             if (!ggml_validate_row_data(new_type, this_data, this_size)) {
                 std::unique_lock<std::mutex> lock(mutex);
                 valid = false;
@@ -1252,19 +1268,13 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                 static const int64_t min_chunk_size = 32 * 512;
                 const int64_t chunk_size = (n_per_row >= min_chunk_size ? n_per_row : n_per_row * ((min_chunk_size + n_per_row - 1)/n_per_row));
 
-                const int64_t nelements_matrix = tensor->ne[0] * tensor->ne[1];
-                const int64_t nchunk = (nelements_matrix + chunk_size - 1)/chunk_size;
+                const int64_t nelements_all = tensor->ne[0] * tensor->ne[1] * tensor->ne[2];
+                const int64_t nchunk = (nelements_all + chunk_size - 1)/chunk_size;
                 const int64_t nthread_use = nthread > 1 ? std::max((int64_t)1, std::min((int64_t)nthread, nchunk)) : 1;
 
-                // quantize each expert separately since they have different importance matrices
-                new_size = 0;
-                for (int64_t i03 = 0; i03 < tensor->ne[2]; ++i03) {
-                    const float * f32_data_03 = f32_data + i03 * nelements_matrix;
-                    void * new_data_03 = (char *)new_data + ggml_row_size(new_type, n_per_row) * i03 * nrows;
-                    const float * imatrix_03 = imatrix ? imatrix + i03 * n_per_row : nullptr;
-
-                    new_size += llama_tensor_quantize_impl(new_type, f32_data_03, new_data_03, chunk_size, nrows, n_per_row, imatrix_03, workers, nthread_use);
-                }
+                // all experts of a 3D tensor share one chunk queue; chunks never cross
+                // expert boundaries since each expert has its own importance matrix
+                new_size = llama_tensor_quantize_impl(new_type, f32_data, new_data, chunk_size, tensor->ne[2], nrows, n_per_row, imatrix, workers, nthread_use);
                 LLAMA_LOG_INFO("size = %8.2f MiB -> %8.2f MiB\n", tensor_size/1024.0/1024.0, new_size/1024.0/1024.0);
             }
             total_size_org += tensor_size;
