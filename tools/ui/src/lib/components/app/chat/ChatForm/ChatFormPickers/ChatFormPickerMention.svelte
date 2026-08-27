@@ -5,10 +5,16 @@
 	import * as Popover from '$lib/components/ui/popover';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { FILE_GLOB_SEARCH_PICKERS, HOME_TILDE, SEARCH } from '$lib/constants';
-	import { BuiltInTool, FileMentionEntryType, GlobSearchType, KeyboardKey } from '$lib/enums';
+	import {
+		BuiltInTool,
+		FileMentionEntryType,
+		GlobSearchType,
+		KeyboardKey,
+		ToolSource
+	} from '$lib/enums';
 	import { useDebouncedSearch } from '$lib/hooks/use-debounced-search.svelte';
 	import { usePickerNavigation } from '$lib/hooks/use-picker-navigation.svelte';
-	import { deviceStore, settingsStore, toolsStore } from '$lib/stores';
+	import { conversationsStore, deviceStore, settingsStore, toolsStore } from '$lib/stores';
 	import type { FileMentionEntry, GlobEntryResult } from '$lib/types';
 	import { abbreviateHome, runGlobSearchWithChildren } from '$lib/utils';
 
@@ -52,8 +58,11 @@
 	// --tools) or the user disabled it, the picker still opens but explains
 	// why instead of firing searches that would only fail.
 	const fileSearchKey = $derived(toolsStore.getPermissionKey(BuiltInTool.SERVER_FILE_GLOB_SEARCH));
+	// effective policy: the active conversation's tool policy, or global defaults
 	const fileSearchEnabled = $derived(
-		fileSearchKey !== null && toolsStore.isToolEnabled(fileSearchKey)
+		fileSearchKey !== null &&
+			conversationsStore.preferences.isToolEnabled(fileSearchKey) &&
+			conversationsStore.preferences.isCategoryEnabled(ToolSource.SERVER)
 	);
 
 	let searchResults = $state<FileMentionEntry[]>([]);
