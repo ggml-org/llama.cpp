@@ -1111,7 +1111,14 @@ void launch_fattn(
     const dim3 block_dim(warp_size, nwarps, 1);
     int max_blocks_per_sm = 1; // Max. number of active blocks limited by occupancy.
     CUDA_CHECK(cudaOccupancyMaxActiveBlocksPerMultiprocessor(&max_blocks_per_sm, fattn_kernel, block_dim.x * block_dim.y * block_dim.z, nbytes_shared));
-    GGML_ASSERT(max_blocks_per_sm > 0);
+    #if defined(GGML_USE_HIP)
+        if (max_blocks_per_sm <= 0) {
+            GGML_LOG_WARN("cudaOccupancyMaxActiveBlocksPerMultiprocessor returned %d, falling back to 1\n", max_blocks_per_sm);
+            max_blocks_per_sm = 1;
+        }
+    #else
+        GGML_ASSERT(max_blocks_per_sm > 0);
+    #endif
     int parallel_blocks = max_blocks_per_sm;
 
     const int ntiles_KV = (K->ne[1] + nbatch_fa - 1) / nbatch_fa; // Max. number of parallel blocks limited by KV cache length.
