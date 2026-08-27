@@ -4043,7 +4043,7 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.NEXTN_HNORM,
         MODEL_TENSOR.NEXTN_SHARED_HEAD_HEAD,
         MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM,
-        # --- KDA linear attention (34 couches sur 45), cf. kimi-linear ---
+        # --- KDA linear attention (34 of 45 layers), see kimi-linear ---
         MODEL_TENSOR.ATTN_K,
         MODEL_TENSOR.ATTN_V,
         MODEL_TENSOR.SSM_CONV1D_Q,
@@ -4057,14 +4057,14 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.SSM_A,
         MODEL_TENSOR.SSM_DT,
         MODEL_TENSOR.SSM_NORM,
-        # --- hyper-connections (mHC, Sinkhorn), cf. deepseek4 ---
+        # --- hyper-connections (mHC, Sinkhorn), see deepseek4 ---
         MODEL_TENSOR.HC_ATTN_FN,
         MODEL_TENSOR.HC_ATTN_BASE,
         MODEL_TENSOR.HC_ATTN_SCALE,
         MODEL_TENSOR.HC_FFN_FN,
         MODEL_TENSOR.HC_FFN_BASE,
         MODEL_TENSOR.HC_FFN_SCALE,
-        # --- indexeur : compression k-pool ---
+        # --- indexer: k-pool compression ---
         MODEL_TENSOR.INDEXER_COMPRESSOR_APE,
         MODEL_TENSOR.INDEXER_COMPRESSOR_WGATE,
     ],

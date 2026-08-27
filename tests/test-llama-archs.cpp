@@ -68,6 +68,11 @@ static void usage(char ** argv) {
     printf("Usage: %s [-a/--arch arch] [-s/--seed seed] [-o/--out dir] [-v N] [-h/--help]\n", argv[0]);
 }
 
+// DSA indexer geometry of the synthetic models, shared with test_dsa_kpool below.
+// index_topk/index_kpool = 2 whole pools are selected per query row.
+static const uint32_t DSA_INDEXER_TOP_K = 8;
+static const uint32_t DSA_INDEXER_KPOOL = 4;
+
 static std::vector<llama_token> get_tokens(const uint32_t n_tokens, const uint32_t n_vocab, const size_t seed){
     std::mt19937 gen(seed);
     std::uniform_int_distribution<> dis(0, n_vocab - 1);
@@ -299,8 +304,8 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
     ms.add_kv(LLM_KV_ATTENTION_INDEXER_KEY_LENGTH,
               arch == LLM_ARCH_QWEN4EXP ? n_embd_head : uint32_t(128));
 
-    ms.add_kv(LLM_KV_ATTENTION_INDEXER_TOP_K,        uint32_t(8));
-    ms.add_kv(LLM_KV_ATTENTION_INDEXER_BLOCK_SIZE,   uint32_t(4));
+    ms.add_kv(LLM_KV_ATTENTION_INDEXER_TOP_K,        DSA_INDEXER_TOP_K);
+    ms.add_kv(LLM_KV_ATTENTION_INDEXER_BLOCK_SIZE,   DSA_INDEXER_KPOOL);
     ms.add_kv(LLM_KV_ATTENTION_INDEXER_LOCAL_BLOCKS, uint32_t(1));
     ms.add_kv(LLM_KV_ROPE_DIMENSION_SECTIONS, std::vector<uint32_t>({n_embd_head/4, n_embd_head/4, n_embd_head/4, n_embd_head/4}));
 
@@ -386,7 +391,8 @@ static bool silent_model_load_progress(float /*progress*/, void * /*user_data*/)
 
 static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
         struct gguf_context * gguf_ctx, FILE * file, const size_t seed, const std::vector<ggml_backend_dev_t> & devs,
-        const llama_split_mode split_mode = LLAMA_SPLIT_MODE_LAYER, bool encode = false) {
+        const llama_split_mode split_mode = LLAMA_SPLIT_MODE_LAYER, bool encode = false,
+        ggml_backend_sched_eval_callback cb_eval = nullptr, void * cb_eval_user_data = nullptr) {
     GGML_ASSERT((gguf_ctx == nullptr) != (file == nullptr));
     llama_model_params model_params = llama_model_default_params();
     model_params.progress_callback = silent_model_load_progress;
@@ -402,6 +408,8 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
     if (!encode) {
         ctx_params.n_ubatch = 64;
     }
+    ctx_params.cb_eval           = cb_eval;
+    ctx_params.cb_eval_user_data = cb_eval_user_data;
 
     size_t tmp = seed;
     llama_model_ptr model(gguf_ctx != nullptr ?
@@ -631,6 +639,211 @@ static int save_models(const llm_arch target_arch, const size_t seed, const int 
     }
     llama_log_set(ud.log_old.callback, ud.log_old.user_data);
     return 0;
+}
+
+//
+// GLM5NEXT DSA k-pool selection: no pool may be selected in part
+//
+// The reference indexer picks index_topk/index_kpool *whole* pools and expands each into its
+// index_kpool members. Running the top-k over individual cells instead is not equivalent: the
+// ReLU drives many distinct pool scores to exactly 0.0 and ggml_top_k is unordered among equal
+// keys, so a cell-level cut splits pools apart. Comparing selections against a reference does
+// not catch it - a cell-level implementation stays above the bf16-vs-bf16 Jaccard noise floor.
+//
+// What does catch it is counting *partially* selected pools, which needs no reference at all:
+// the count is 0 for a pooled implementation and large for a cell-level one. Both the diagnosis
+// and this metric are due to danielhanchen (llama.cpp PR #27754).
+//
+// A pool is partially selected for a query row when at least one of its index_kpool cells is
+// picked and at least one is not. The trailing incomplete pool is excluded by construction: for
+// query position q only the pools below tail_start = (q + 1)/r*r are complete, and the cells in
+// [tail_start, q] are the always_select_tail cells, which are never counted as pool members.
+//
+struct dsa_kpool_check {
+    int64_t r = 0; // index_kpool
+
+    int64_t n_tensor       = 0; // indexer_top_k tensors inspected
+    int64_t n_row          = 0; // query rows inspected
+    int64_t n_pool_whole   = 0; // pools selected in full
+    int64_t n_pool_partial = 0; // pools selected in part - must be 0
+    int64_t n_row_partial  = 0; // rows holding at least one partial pool
+    int64_t n_tail_missing = 0; // tail cells not selected - must be 0
+
+    std::vector<int32_t> buf;
+    std::vector<char>    sel;
+
+    // one query row: `sel` holds the cells picked for query position q
+    void count_row(const int32_t * row, int64_t width, int64_t q) {
+        const int64_t tail_start = (q + 1)/r*r;
+        const int64_t n_pool_vis = tail_start/r;
+
+        sel.assign(q + 1, 0);
+        for (int64_t j = 0; j < width; j++) {
+            const int32_t c = row[j];
+            if (c >= 0 && c <= q) {
+                sel[c] = 1; // cells past q are masked anyway and belong to no complete pool
+            }
+        }
+
+        // always_select_tail; doubles as a check that cell index == position holds here
+        for (int64_t c = tail_start; c <= q; c++) {
+            n_tail_missing += sel[c] == 0;
+        }
+
+        bool row_partial = false;
+        for (int64_t b = 0; b < n_pool_vis; b++) {
+            int64_t cnt = 0;
+            for (int64_t c = b*r; c < (b + 1)*r; c++) {
+                cnt += sel[c];
+            }
+            if (cnt == r) {
+                n_pool_whole++;
+            } else if (cnt > 0) {
+                n_pool_partial++;
+                row_partial = true;
+            }
+        }
+
+        n_row_partial += row_partial;
+        n_row++;
+    }
+};
+
+// the metric must not be able to read 0 by accident: a pool-aligned selection scores 0 partial
+// pools, the same selection with one cell moved across a pool boundary does not
+static void dsa_kpool_check_self_test() {
+    const std::vector<int32_t> aligned = { 0, 1, 2, 3, 8, 9, 10, 11 };
+    const std::vector<int32_t> split   = { 0, 1, 2, 4, 8, 9, 10, 11 };
+
+    dsa_kpool_check ok;
+    ok.r = 4;
+    ok.count_row(aligned.data(), aligned.size(), /*q =*/ 15);
+    GGML_ASSERT(ok.n_pool_whole == 2 && ok.n_pool_partial == 0 && ok.n_tail_missing == 0);
+
+    dsa_kpool_check bad;
+    bad.r = 4;
+    bad.count_row(split.data(), split.size(), /*q =*/ 15);
+    GGML_ASSERT(bad.n_pool_whole == 1 && bad.n_pool_partial == 2);
+}
+
+// exactly "indexer_top_k-<il>": views and backend copies inherit the name with a suffix and
+// would otherwise be counted a second time
+static bool is_indexer_top_k(const char * name) {
+    static const char * prefix = "indexer_top_k-";
+    const size_t n = strlen(prefix);
+    if (strncmp(name, prefix, n) != 0 || name[n] == '\0') {
+        return false;
+    }
+    for (const char * p = name + n; *p; p++) {
+        if (*p < '0' || *p > '9') {
+            return false;
+        }
+    }
+    return true;
+}
+
+// reads the selection out of every "indexer_top_k-<il>" node, I32 [n_top_k, n_batch, 1, n_stream]
+static bool dsa_kpool_eval_cb(struct ggml_tensor * t, bool ask, void * user_data) {
+    auto & st = *(dsa_kpool_check *) user_data;
+
+    if (ask) {
+        return is_indexer_top_k(t->name);
+    }
+
+    GGML_ASSERT(t->type == GGML_TYPE_I32);
+
+    const int64_t width = t->ne[0];
+    const int64_t n_tps = t->ne[1];
+    const int64_t ns    = t->ne[3];
+
+    st.buf.resize(ggml_nelements(t));
+    ggml_backend_tensor_get(t, st.buf.data(), 0, ggml_nbytes(t));
+
+    for (int64_t s = 0; s < ns; s++) {
+        for (int64_t i = 0; i < n_tps; i++) {
+            // one stream, one sequence, one ubatch over a fresh cache: cell index == position
+            st.count_row(st.buf.data() + (s*n_tps + i)*width, width, /*q =*/ i);
+        }
+    }
+
+    st.n_tensor++;
+    return true;
+}
+
+static int test_dsa_kpool(const size_t seed, const int verbosity) {
+    struct user_data_t {
+        struct {
+            ggml_log_callback callback;
+            void * user_data;
+        } log_old;
+
+        int verbosity;
+
+        user_data_t(int verbosity) : verbosity(verbosity) {
+            llama_log_get(&log_old.callback, &log_old.user_data);
+        }
+    };
+    user_data_t ud(verbosity);
+
+    llama_log_set([](ggml_log_level level, const char * text, void * user_data) {
+        const user_data_t * ud = (const user_data_t *) user_data;
+        int verbosity = common_log_get_verbosity(level);
+        if (verbosity <= ud->verbosity) {
+            ud->log_old.callback(level, text, ud->log_old.user_data);
+        }
+    }, &ud);
+
+    dsa_kpool_check_self_test();
+
+    // one ubatch, and enough tokens that index_topk + index_kpool - 1 is a real cut:
+    // from q = 12 on, the selection can no longer be a union of whole pools by accident
+    const uint32_t n_tokens = 64;
+    const std::vector<llama_token> tokens = get_tokens(n_tokens, 128, seed);
+
+    gguf_context_ptr gguf_ctx = get_gguf_ctx(LLM_ARCH_GLM5NEXT, true);
+
+    std::vector<std::pair<std::vector<ggml_backend_dev_t>, std::string>> dev_configs;
+    for (size_t i = 0; i < ggml_backend_dev_count(); i++) {
+        ggml_backend_dev_t dev = ggml_backend_dev_get(i);
+        dev_configs.emplace_back(std::vector<ggml_backend_dev_t>{dev}, ggml_backend_dev_description(dev));
+    }
+
+    bool all_ok = true;
+    common_log_flush(common_log_main());
+    printf("test_dsa_kpool: glm5next, index_topk=%u index_kpool=%u, %u tokens\n",
+        DSA_INDEXER_TOP_K, DSA_INDEXER_KPOOL, n_tokens);
+
+    for (const auto & dc : dev_configs) {
+        dsa_kpool_check st;
+        st.r = DSA_INDEXER_KPOOL;
+
+        auto model_and_ctx = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, dc.first,
+            LLAMA_SPLIT_MODE_LAYER, false, dsa_kpool_eval_cb, &st);
+
+        llama_batch batch = llama_batch_init(n_tokens, 0, 1);
+        for (uint32_t pos = 0; pos < n_tokens; pos++) {
+            common_batch_add(batch, tokens[pos], pos, {0}, true);
+        }
+        batch.n_tokens = n_tokens;
+        const int32_t rc = llama_decode(model_and_ctx.second.get(), batch);
+        llama_batch_free(batch);
+        if (rc != 0) {
+            throw std::runtime_error("failed to decode batch");
+        }
+
+        // a silent miss (no indexer_top_k node, or the tail not selected) is a failure too
+        const bool ok = st.n_tensor > 0 && st.n_tail_missing == 0 && st.n_pool_partial == 0;
+        all_ok &= ok;
+
+        printf("test_dsa_kpool: %-32s rows %5" PRId64 ", whole pools %6" PRId64 ", "
+               "partial pools %6" PRId64 " in %4" PRId64 " rows, tail misses %4" PRId64 "  %s\n",
+            dc.second.c_str(), st.n_row, st.n_pool_whole, st.n_pool_partial, st.n_row_partial,
+            st.n_tail_missing, ok ? "\033[1;32mOK\033[0m" : "\033[1;31mFAIL\033[0m");
+        fflush(stdout);
+    }
+
+    llama_log_set(ud.log_old.callback, ud.log_old.user_data);
+    return all_ok ? 0 : 1;
 }
 
 static int test_backends(const llm_arch target_arch, const size_t seed, const int verbosity) {
@@ -866,7 +1079,12 @@ int main(int argc, char ** argv) {
         if (!out.empty()) {
             return save_models(arch, seed, verbosity, out);
         }
-        return test_backends(arch, seed, verbosity);
+        int ret = 0;
+        if (arch == LLM_ARCH_UNKNOWN || arch == LLM_ARCH_GLM5NEXT) {
+            ret |= test_dsa_kpool(seed, verbosity);
+        }
+        ret |= test_backends(arch, seed, verbosity);
+        return ret;
     } catch (const std::exception & err) {
         fprintf(stderr, "encountered runtime error: %s\n", err.what());
         return -1;

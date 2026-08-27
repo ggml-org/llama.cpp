@@ -277,6 +277,10 @@ void llama_model_glm5next::load_arch_tensors(llama_model_loader &) {
 }
 
 std::unique_ptr<llm_graph_context> llama_model_glm5next::build_arch_graph(const llm_graph_params & params) const {
+    // n_layer_nextn > 0 lets llama_init_from_model accept an MTP context, so refuse here
+    // rather than silently return the trunk graph against the wrong memory
+    GGML_ASSERT(params.gtype != LLM_GRAPH_TYPE_DECODER_MTP && "GLM5NEXT has no MTP graph yet");
+
     return std::make_unique<graph>(*this, params);
 }
 
@@ -615,7 +619,7 @@ public:
 
     void set_input(const llama_ubatch * ubatch) override {
         mctx->get_idx()->set_input_k_idxs(k_idxs, ubatch);
-        mctx->set_input_kpool(cell_pool, pool_cells, bias, ubatch);
+        mctx->set_input_kpool(pool_cells, pool_bias, tail_cells, ubatch);
 
         GGML_ASSERT(ggml_backend_buffer_is_host(ape_slots->buffer));
         int32_t * data = (int32_t *) ape_slots->data;
@@ -632,17 +636,17 @@ public:
         bool res = true;
 
         res &= k_idxs->ne[0]    == params.ubatch.n_tokens;
-        res &= cell_pool->ne[0] == (int64_t) mctx_cur->get_idx()->get_n_kv();
-        res &= cell_pool->ne[1]*bias->ne[1] == params.ubatch.n_tokens;
+        res &= pool_bias->ne[0] == (int64_t) mctx_cur->get_idx()->get_n_kv()/mctx_cur->get_kpool();
+        res &= pool_bias->ne[1]*pool_bias->ne[2] == params.ubatch.n_tokens;
 
         return res;
     }
 
     ggml_tensor * k_idxs     = nullptr; // I64 [n_tokens]
     ggml_tensor * ape_slots  = nullptr; // I32 [kpool], the identity - reads the ape rows in order
-    ggml_tensor * cell_pool  = nullptr; // I32 [n_kv, n_stream]
     ggml_tensor * pool_cells = nullptr; // I32 [kpool*n_pools, n_stream]
-    ggml_tensor * bias       = nullptr; // F32 [n_kv, n_tokens/n_stream, n_stream]
+    ggml_tensor * pool_bias  = nullptr; // F32 [n_pools, n_tokens/n_stream, n_stream]
+    ggml_tensor * tail_cells = nullptr; // I32 [kpool-1, n_tokens/n_stream, 1, n_stream], null when kpool == 1
 
     const llama_memory_hybrid_idx_context * mctx;
 };
@@ -672,14 +676,18 @@ llm_graph_input_kpool * llama_model_glm5next::graph::build_inp_kpool(llm_graph_i
 
     kp->k_idxs     = mctx_idx->build_input_k_idxs(ctx0, ubatch);
     kp->ape_slots  = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, r);
-    kp->cell_pool  = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, n_kv, ns);
     kp->pool_cells = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, r*n_pool, ns);
-    kp->bias       = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, n_kv, n_tokens/ns, ns);
+    kp->pool_bias  = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, n_pool, n_tokens/ns, ns);
 
     ggml_set_input(kp->ape_slots);
-    ggml_set_input(kp->cell_pool);
     ggml_set_input(kp->pool_cells);
-    ggml_set_input(kp->bias);
+    ggml_set_input(kp->pool_bias);
+
+    if (r > 1 && inp_hyb->mctx->get_select_tail()) {
+        // 4d, so it concatenates straight onto the expanded pools in build_dsa_top_k
+        kp->tail_cells = ggml_new_tensor_4d(ctx0, GGML_TYPE_I32, r - 1, n_tokens/ns, 1, ns);
+        ggml_set_input(kp->tail_cells);
+    }
 
     return (llm_graph_input_kpool *) res->add_input(std::move(kp));
 }
@@ -692,8 +700,8 @@ ggml_tensor * llama_model_glm5next::graph::build_dsa_top_k(
     const int64_t d      = hparams.indexer_head_size;
     const int64_t nh     = hparams.indexer_n_head;
     const int64_t r      = hparams.indexer_block_size;
-    const int64_t n_kv   = inp->cell_pool->ne[0];
-    const int64_t ns     = inp->cell_pool->ne[1];
+    const int64_t n_kv   = mctx_idx->get_n_kv();
+    const int64_t ns     = inp->pool_cells->ne[1];
     const int64_t n_pool = inp->pool_cells->ne[0]/r;
     const int64_t n_tps  = n_tokens/ns;
 
@@ -753,22 +761,36 @@ ggml_tensor * llama_model_glm5next::graph::build_dsa_top_k(
     score = ggml_reshape_3d(ctx0, score, n_pool, n_tps, ns);
     cb(score, "indexer_score", il);
 
-    // give every cell of a pool its pool's score rather than expanding pool ids into cell ids,
-    // which would need an integer multiply-add ggml has no op for. The r members tie, so the
-    // cut still lands on a pool boundary. bias carries causality and the always-visible tail.
-    ggml_tensor * expanded = ggml_get_rows(ctx0,
-            ggml_cont(ctx0, ggml_permute(ctx0, score, 1, 0, 2, 3)), inp->cell_pool);
-    expanded = ggml_cont(ctx0, ggml_permute(ctx0, expanded, 1, 0, 2, 3));
-    expanded = ggml_add(ctx0, expanded, inp->bias);
-    cb(expanded, "indexer_score_cells", il);
+    // the cut is on whole pools, never on single cells. Scoring cells with their pool's score
+    // and cutting there is not the same thing: relu sends many distinct pools to exactly 0.0
+    // and ggml_top_k is unordered among equal keys, so the cut splits pools apart. Diagnosis
+    // and the reference-free check for it (count partly selected pools) are from PR #27754.
+    score = ggml_add(ctx0, score, inp->pool_bias);
+    cb(score, "indexer_score_pools", il);
 
-    // index_topk cells plus the incomplete tail, as in the reference
-    const int64_t width = std::min<int64_t>(n_kv, (int64_t) hparams.indexer_top_k + r - 1);
+    // index_topk cells worth of whole pools, i.e. the reference's index_topk/index_kpool
+    const int64_t n_sel = std::min<int64_t>(n_pool, (int64_t) hparams.indexer_top_k/r);
 
-    ggml_tensor * top_k = ggml_cont(ctx0, ggml_top_k(ctx0, expanded, width));
+    ggml_tensor * sel = ggml_top_k(ctx0, score, n_sel);
+    cb(sel, "indexer_top_k_pools", il);
+
+    // expand each selected pool into its members. get_rows indexes src0 ne[2] with the index
+    // ne[1], so the stream axis must stay there and n_sel*n_tps folds into one row axis
+    ggml_tensor * pools = ggml_reshape_3d(ctx0, inp->pool_cells, r, n_pool, ns);
+
+    ggml_tensor * top_k = ggml_get_rows(ctx0, pools,
+            ggml_reshape_3d(ctx0, sel, n_sel*n_tps, ns, 1));
+
+    // member j of the i-th selected pool is at i*r + j in both layouts, so this is a reshape
+    top_k = ggml_reshape_4d(ctx0, top_k, r*n_sel, n_tps, 1, ns);
+
+    // index_kpool_always_select_tail: the trailing incomplete pool has no pool key and can
+    // never be picked above, so its cells are appended instead of taking pool budget
+    if (inp->tail_cells) {
+        top_k = ggml_concat(ctx0, top_k, inp->tail_cells, 0);
+    }
 
     // build_attn_mask_top_k reads [n_top_k, n_batch, 1, n_stream], matching the KQ mask
-    top_k = ggml_reshape_4d(ctx0, top_k, width, n_tps, 1, ns);
     cb(top_k, "indexer_top_k", il);
 
     return top_k;
