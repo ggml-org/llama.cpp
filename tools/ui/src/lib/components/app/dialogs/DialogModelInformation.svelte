@@ -87,7 +87,7 @@
 			}
 		</style>
 
-		<Dialog.Header>
+		<Dialog.Header class="relative">
 			<Dialog.Title>Model Information</Dialog.Title>
 
 			<Dialog.Description>Current model details and capabilities</Dialog.Description>
