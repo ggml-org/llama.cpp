@@ -742,6 +742,10 @@ jobs:
           name: llama-ui.zip
           path: tools/ui/dist
 
+      - name: Install Ninja
+        run: |
+          choco install ninja
+
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
         with:
@@ -795,9 +799,7 @@ jobs:
 
       - name: Build
         run: |
-          mkdir build
-          cd build
-          cmake .. `
+          cmake -S . -B build `
             -G "Ninja Multi-Config" `
             -DCMAKE_PREFIX_PATH="${env:HIP_PATH}" `
             -DGGML_BACKEND_DL=ON `
@@ -812,7 +814,7 @@ jobs:
             -DHIP_PATH="${env:HIP_PATH}" `
             -DGGML_HIP_ROCWMMA_FATTN=ON `
             -DAMDGPU_TARGETS="${{ matrix.gpu_targets }}"
-          cmake --build . --config Release --parallel ${env:NUMBER_OF_PROCESSORS}
+          cmake --build build --config Release --parallel ${env:NUMBER_OF_PROCESSORS}
 
       - name: Verify HIP backend was built
         run: |
