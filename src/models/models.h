@@ -2275,11 +2275,17 @@ struct llama_model_qwen35 : public llama_model_base {
 };
 
 
+struct llama_ple_disk;
+
 struct llama_model_qwen4exp : public llama_model_base {
     llama_model_qwen4exp(const struct llama_model_params & params) : llama_model_base(params) {}
 
     class llm_graph_input_qsa;
 
+    // Set when the n-gram table is left on disk (--ngram-on-disk): per_layer_tok_embd is
+    // counted as created but never allocated, mapped or read, and build_ple takes its
+    // rows from this reader instead of ggml_get_rows.
+    std::shared_ptr<llama_ple_disk> ple_disk;
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 

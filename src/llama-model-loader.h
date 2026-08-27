@@ -87,6 +87,7 @@ struct llama_model_loader {
     enum llama_tensor_read_lazy tensor_read_lazy = LLAMA_TENSOR_READ_LAZY_OFF;
 
     llama_files files;
+    std::vector<std::string> fnames; // one per entry of files, for readers that outlive the loader
     llama_ftype ftype;
     llama_fver  fver;
 
