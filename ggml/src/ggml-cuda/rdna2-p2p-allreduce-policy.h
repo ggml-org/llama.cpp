@@ -57,6 +57,7 @@ inline ggml_cuda_rdna2_p2p_host_mode_result ggml_cuda_rdna2_p2p_host_parse_mode(
 
 enum class ggml_cuda_rdna2_p2p_host_route {
     fallback,
+    qwen4exp_width1,
     ordinary_width1,
     speculative_width5,
     speculative_width6,
@@ -77,7 +78,16 @@ struct ggml_cuda_rdna2_p2p_host_route_result {
 
 inline ggml_cuda_rdna2_p2p_host_route_result ggml_cuda_rdna2_p2p_host_select_route(
         int64_t ne0, int64_t ne1, int64_t ne2, int64_t ne3,
-        bool speculative_widths_enabled, bool exact_width1, bool exact_width5, bool exact_width6) {
+        bool speculative_widths_enabled, bool exact_qwen4exp_width1,
+        bool exact_width1, bool exact_width5, bool exact_width6) {
+    if (ne0 == 2560 && ne1 == 1 && ne2 == 1 && ne3 == 1) {
+        if (!exact_qwen4exp_width1) {
+            return { ggml_cuda_rdna2_p2p_host_route::fallback,
+                     ggml_cuda_rdna2_p2p_host_fallback_reason::self_test_failed };
+        }
+        return { ggml_cuda_rdna2_p2p_host_route::qwen4exp_width1,
+                 ggml_cuda_rdna2_p2p_host_fallback_reason::none };
+    }
     if (ne0 != 5120 || ne2 != 1 || ne3 != 1) {
         return { ggml_cuda_rdna2_p2p_host_route::fallback,
                  ggml_cuda_rdna2_p2p_host_fallback_reason::unrelated_shape };

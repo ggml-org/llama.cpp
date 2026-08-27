@@ -68,39 +68,47 @@ void test_p2p_route_policy() {
     using route = ggml_cuda_rdna2_p2p_host_route;
     using reason = ggml_cuda_rdna2_p2p_host_fallback_reason;
 
-    auto result = ggml_cuda_rdna2_p2p_host_select_route(5120, 1, 1, 1, true, true, true, true);
+    auto result = ggml_cuda_rdna2_p2p_host_select_route(2560, 1, 1, 1, true, true, true, true, true);
+    check(result.route == route::qwen4exp_width1 && result.fallback_reason == reason::none,
+            "exact Qwen4Exp width-one route rejected");
+
+    result = ggml_cuda_rdna2_p2p_host_select_route(2560, 1, 1, 1, true, false, true, true, true);
+    check(result.route == route::fallback && result.fallback_reason == reason::self_test_failed,
+            "Qwen4Exp width-one self-test failure misclassified");
+
+    result = ggml_cuda_rdna2_p2p_host_select_route(5120, 1, 1, 1, true, true, true, true, true);
     check(result.route == route::ordinary_width1 && result.fallback_reason == reason::none,
             "exact width-one route rejected");
 
-    result = ggml_cuda_rdna2_p2p_host_select_route(5120, 5, 1, 1, true, true, true, true);
+    result = ggml_cuda_rdna2_p2p_host_select_route(5120, 5, 1, 1, true, true, true, true, true);
     check(result.route == route::speculative_width5 && result.fallback_reason == reason::none,
             "exact width-five route rejected");
 
-    result = ggml_cuda_rdna2_p2p_host_select_route(5120, 6, 1, 1, true, true, true, true);
+    result = ggml_cuda_rdna2_p2p_host_select_route(5120, 6, 1, 1, true, true, true, true, true);
     check(result.route == route::speculative_width6 && result.fallback_reason == reason::none,
             "exact width-six route rejected");
 
-    result = ggml_cuda_rdna2_p2p_host_select_route(5120, 7, 1, 1, true, true, true, true);
+    result = ggml_cuda_rdna2_p2p_host_select_route(5120, 7, 1, 1, true, true, true, true, true);
     check(result.route == route::fallback && result.fallback_reason == reason::unsupported_width,
             "unsupported width did not report the width reason");
 
-    result = ggml_cuda_rdna2_p2p_host_select_route(5120, 1, 1, 1, true, false, true, true);
+    result = ggml_cuda_rdna2_p2p_host_select_route(5120, 1, 1, 1, true, true, false, true, true);
     check(result.route == route::fallback && result.fallback_reason == reason::self_test_failed,
             "width-one self-test failure misclassified");
 
-    result = ggml_cuda_rdna2_p2p_host_select_route(5120, 5, 1, 1, true, true, false, true);
+    result = ggml_cuda_rdna2_p2p_host_select_route(5120, 5, 1, 1, true, true, true, false, true);
     check(result.route == route::fallback && result.fallback_reason == reason::self_test_failed,
             "width-five self-test failure misclassified");
 
-    result = ggml_cuda_rdna2_p2p_host_select_route(5120, 5, 1, 1, false, true, true, true);
+    result = ggml_cuda_rdna2_p2p_host_select_route(5120, 5, 1, 1, false, true, true, true, true);
     check(result.route == route::fallback && result.fallback_reason == reason::policy_disabled,
             "disabled speculative-width policy misclassified");
 
-    result = ggml_cuda_rdna2_p2p_host_select_route(5120, 6, 1, 1, true, true, true, false);
+    result = ggml_cuda_rdna2_p2p_host_select_route(5120, 6, 1, 1, true, true, true, true, false);
     check(result.route == route::fallback && result.fallback_reason == reason::self_test_failed,
             "width-six self-test failure misclassified");
 
-    result = ggml_cuda_rdna2_p2p_host_select_route(4096, 6, 1, 1, true, true, true, true);
+    result = ggml_cuda_rdna2_p2p_host_select_route(4096, 6, 1, 1, true, true, true, true, true);
     check(result.route == route::fallback && result.fallback_reason == reason::unrelated_shape,
             "unrelated tensor shape misclassified");
 

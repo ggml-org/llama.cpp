@@ -1168,6 +1168,24 @@ static __global__ void ggml_cuda_rdna2_p2p_host_snapshot_reduce_dflash6_30720(
     }
 }
 
+static __global__ void ggml_cuda_rdna2_p2p_host_snapshot_reduce_2560(
+        float * dst, float * snapshot,
+        const float * p0, const float * p1, const float * p2, const float * p3,
+        int rank, volatile int * f0, volatile int * f1, volatile int * f2, volatile int * f3, int token) {
+    const int tid = int(threadIdx.x);
+    float4 * snapshot4 = reinterpret_cast<float4 *>(snapshot);
+    const float4 * dst4_in = reinterpret_cast<const float4 *>(dst);
+    if (tid < 640) {
+        snapshot4[tid] = dst4_in[tid];
+    }
+    ggml_cuda_rdna2_p2p_host_barrier4(rank, f0, f1, f2, f3, 0, token, true);
+
+    if (tid < 640) {
+        reinterpret_cast<float4 *>(dst)[tid] =
+            ggml_cuda_rdna2_p2p_reduce_vec4_exact(tid, p0, p1, p2, p3);
+    }
+}
+
 static __global__ void ggml_cuda_rdna2_p2p_host_snapshot_reduce_5120(
         float * dst, float * snapshot,
         const float * p0, const float * p1, const float * p2, const float * p3,
@@ -1273,9 +1291,11 @@ struct ggml_backend_cuda_comm_context {
     uint32_t p2p_host_token = 0;
     uint64_t p2p_host_calls = 0;
     bool p2p_host_initialized = false;
+    bool p2p_host_exact_2560 = false;
     bool p2p_host_exact_5120 = false;
     bool p2p_host_exact_25600 = false;
     bool p2p_host_exact_30720 = false;
+    bool p2p_host_logged_2560 = false;
     // Bitmasks of batch widths already logged, so a run shows every width the
     // path served or refused without duplicate messages from the fused route.
     uint32_t p2p_host_logged_widths = 0;
@@ -1426,7 +1446,12 @@ static bool ggml_cuda_rdna2_p2p_runtime_selftest(
             for (int rank = 0; rank < nr; ++rank) {
                 auto * ctx = static_cast<ggml_backend_cuda_context *>(comm_ctx->backends[rank]->context);
                 ggml_cuda_set_device(ctx->device);
-                if (ne == 30720) {
+                if (ne == 2560) {
+                    ggml_cuda_rdna2_p2p_host_snapshot_reduce_2560<<<1, 1024, 0, ctx->stream()>>>(
+                        custom[rank], const_cast<float *>(snapshots[rank]),
+                        snapshots[0], snapshots[1], snapshots[2], snapshots[3], rank,
+                        flags[0], flags[1], flags[2], flags[3], token);
+                } else if (ne == 30720) {
                     ggml_cuda_rdna2_p2p_host_snapshot_reduce_dflash6_30720<<<1, 1024, 0, ctx->stream()>>>(
                         custom[rank], const_cast<float *>(snapshots[rank]),
                         snapshots[0], snapshots[1], snapshots[2], snapshots[3], rank,
@@ -1646,8 +1671,8 @@ static bool ggml_backend_cuda_comm_allreduce_rdna2_p2p_host(
         : ggml_cuda_rdna2_p2p_host_select_route(
               tensors[0]->ne[0], tensors[0]->ne[1], tensors[0]->ne[2], tensors[0]->ne[3],
               ggml_cuda_rdna2_p2p_host_allreduce_mtp_enabled(),
-              comm_ctx->p2p_host_exact_5120, comm_ctx->p2p_host_exact_25600,
-              comm_ctx->p2p_host_exact_30720);
+              comm_ctx->p2p_host_exact_2560, comm_ctx->p2p_host_exact_5120,
+              comm_ctx->p2p_host_exact_25600, comm_ctx->p2p_host_exact_30720);
     if (route.route == ggml_cuda_rdna2_p2p_host_route::fallback) {
         const int64_t width = tensors[0] != nullptr ? tensors[0]->ne[1] : 0;
         const uint32_t bit = ggml_cuda_rdna2_p2p_host_width_bit(width);
@@ -1667,6 +1692,7 @@ static bool ggml_backend_cuda_comm_allreduce_rdna2_p2p_host(
         }
         return false;
     }
+    const bool qwen4exp = route.route == ggml_cuda_rdna2_p2p_host_route::qwen4exp_width1;
     const bool mtp5 = route.route == ggml_cuda_rdna2_p2p_host_route::speculative_width5;
     const bool mtp6 = route.route == ggml_cuda_rdna2_p2p_host_route::speculative_width6;
     for (int rank = 0; rank < 4; ++rank) {
@@ -1676,7 +1702,11 @@ static bool ggml_backend_cuda_comm_allreduce_rdna2_p2p_host(
         const bool speculative = mtp5 || mtp6;
         const bool expanded_ordinary = !speculative &&
             ggml_cuda_rdna2_p2p_host_allreduce_mode() == GGML_CUDA_RDNA2_P2P_HOST_AUTO_EXPANDED;
-        const bool name_ok = speculative
+        const bool qwen4exp_name =
+            std::strncmp(tensors[rank]->name, "linear_attn_out-", sizeof("linear_attn_out-") - 1) == 0 ||
+            std::strncmp(tensors[rank]->name, "ffn_moe_out-", sizeof("ffn_moe_out-") - 1) == 0 ||
+            std::strncmp(tensors[rank]->name, "attn_output-", sizeof("attn_output-") - 1) == 0;
+        const bool name_ok = qwen4exp ? qwen4exp_name : speculative
             ? (std::strncmp(tensors[rank]->name, "linear_attn_out-", 16) == 0 ||
                std::strncmp(tensors[rank]->name, "ffn_out-", 8) == 0 ||
                std::strncmp(tensors[rank]->name, "attn_output-", 12) == 0)
@@ -1684,7 +1714,7 @@ static bool ggml_backend_cuda_comm_allreduce_rdna2_p2p_host(
                (expanded_ordinary && (std::strncmp(tensors[rank]->name, "ffn_out-", 8) == 0 ||
                                        std::strncmp(tensors[rank]->name, "attn_output-", 12) == 0)));
         if (tensors[rank]->type != GGML_TYPE_F32 ||
-                tensors[rank]->ne[0] != 5120 ||
+                tensors[rank]->ne[0] != (qwen4exp ? 2560 : 5120) ||
                 tensors[rank]->ne[1] != (mtp5 ? 5 : mtp6 ? 6 : 1) ||
                 tensors[rank]->ne[2] != 1 || tensors[rank]->ne[3] != 1 ||
                 (tensors[rank]->flags & GGML_TENSOR_FLAG_COMPUTE) == 0 || !name_ok ||
@@ -1711,7 +1741,12 @@ static bool ggml_backend_cuda_comm_allreduce_rdna2_p2p_host(
     for (int rank = 0; rank < 4; ++rank) {
         auto * ctx = static_cast<ggml_backend_cuda_context *>(comm_ctx->backends[rank]->context);
         ggml_cuda_set_device(ctx->device);
-        if (mtp6) {
+        if (qwen4exp) {
+            ggml_cuda_rdna2_p2p_host_snapshot_reduce_2560<<<1, 1024, 0, ctx->stream()>>>(
+                static_cast<float *>(tensors[rank]->data), const_cast<float *>(snapshots[rank]),
+                snapshots[0], snapshots[1], snapshots[2], snapshots[3], rank,
+                flags[0], flags[1], flags[2], flags[3], token);
+        } else if (mtp6) {
             ggml_cuda_rdna2_p2p_host_snapshot_reduce_dflash6_30720<<<1, 1024, 0, ctx->stream()>>>(
                 static_cast<float *>(tensors[rank]->data), const_cast<float *>(snapshots[rank]),
                 snapshots[0], snapshots[1], snapshots[2], snapshots[3], rank,
@@ -1730,7 +1765,13 @@ static bool ggml_backend_cuda_comm_allreduce_rdna2_p2p_host(
         CUDA_CHECK(cudaGetLastError());
     }
     ++comm_ctx->p2p_host_calls;
-    {
+    if (qwen4exp) {
+        if (!comm_ctx->p2p_host_logged_2560) {
+            comm_ctx->p2p_host_logged_2560 = true;
+            std::fprintf(stderr, "using RDNA2 P2P host-snapshot AllReduce for %s [2560,1,1,1] F32\n",
+                    tensors[0]->name);
+        }
+    } else {
         const uint32_t bit = ggml_cuda_rdna2_p2p_host_width_bit(mtp5 ? 5 : mtp6 ? 6 : 1);
         if ((comm_ctx->p2p_host_logged_widths & bit) == 0) {
             comm_ctx->p2p_host_logged_widths |= bit;
@@ -2292,11 +2333,12 @@ static void ggml_backend_cuda_comm_init_nccl(ggml_backend_cuda_comm_context * re
                 ret->p2p_host_flags_host = nullptr;
                 ret->p2p_host_flags_dev = nullptr;
             } else {
+                ret->p2p_host_exact_2560 = ggml_cuda_rdna2_p2p_runtime_selftest(ret, 2560);
                 ret->p2p_host_exact_5120 = ggml_cuda_rdna2_p2p_runtime_selftest(ret, 5120);
                 ret->p2p_host_exact_25600 = ggml_cuda_rdna2_p2p_runtime_selftest(ret, 25600);
                 ret->p2p_host_exact_30720 = ggml_cuda_rdna2_p2p_runtime_selftest(ret, 30720);
-                if (!ret->p2p_host_exact_5120 && !ret->p2p_host_exact_25600 &&
-                        !ret->p2p_host_exact_30720) {
+                if (!ret->p2p_host_exact_2560 && !ret->p2p_host_exact_5120 &&
+                        !ret->p2p_host_exact_25600 && !ret->p2p_host_exact_30720) {
                     CUDA_CHECK(hipHostFree(ret->p2p_host_snapshots_host));
                     CUDA_CHECK(hipHostFree(ret->p2p_host_flags_host));
                     ret->p2p_host_snapshots_host = nullptr;
@@ -2307,12 +2349,12 @@ static void ggml_backend_cuda_comm_init_nccl(ggml_backend_cuda_comm_context * re
                 } else {
                     ret->p2p_host_initialized = true;
                     const int p2p_mode = ggml_cuda_rdna2_p2p_host_allreduce_mode();
-                    std::fprintf(stderr, "armed RDNA2 P2P %s host-snapshot AllReduce after installed-RCCL self-test (n1=%d n5=%d n6=%d)\n",
+                    std::fprintf(stderr, "armed RDNA2 P2P %s host-snapshot AllReduce after installed-RCCL self-test (qwen4=%d n1=%d n5=%d n6=%d)\n",
                             p2p_mode == GGML_CUDA_RDNA2_P2P_HOST_FUSED ? "consumer-fused" :
                             p2p_mode == GGML_CUDA_RDNA2_P2P_HOST_AUTO_EXPANDED ? "MTP-width5-auto-expanded" :
                             ggml_cuda_rdna2_p2p_host_allreduce_mtp_enabled() ? "MTP-width5-auto" : "double-buffered",
-                            ret->p2p_host_exact_5120 ? 1 : 0, ret->p2p_host_exact_25600 ? 1 : 0,
-                            ret->p2p_host_exact_30720 ? 1 : 0);
+                            ret->p2p_host_exact_2560 ? 1 : 0, ret->p2p_host_exact_5120 ? 1 : 0,
+                            ret->p2p_host_exact_25600 ? 1 : 0, ret->p2p_host_exact_30720 ? 1 : 0);
                 }
             }
 #else
@@ -4596,6 +4638,154 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
 
     ggml_tensor * node = cgraph->nodes[i];
 
+    // Qwen4Exp HyperConnection stream reduction:
+    // cont(stream 0) -> add(stream 1) -> add(stream 2) -> add(stream 3) -> scale(1/4).
+    if (node->op == GGML_OP_CONT && i + 7 < cgraph->n_nodes &&
+            ggml_cuda_use_qwen4exp_hc_reduce()) {
+        ggml_tensor * view0 = node->src[0];
+        ggml_tensor * view1 = cgraph->nodes[i + 1];
+        ggml_tensor * add1  = cgraph->nodes[i + 2];
+        ggml_tensor * view2 = cgraph->nodes[i + 3];
+        ggml_tensor * add2  = cgraph->nodes[i + 4];
+        ggml_tensor * view3 = cgraph->nodes[i + 5];
+        ggml_tensor * add3  = cgraph->nodes[i + 6];
+        ggml_tensor * scale = cgraph->nodes[i + 7];
+        float scale_value = 0.0f;
+        float scale_bias  = 0.0f;
+        std::memcpy(&scale_value, (const float *) scale->op_params + 0, sizeof(float));
+        std::memcpy(&scale_bias,  (const float *) scale->op_params + 1, sizeof(float));
+        const auto add_of = [](const ggml_tensor * add, const ggml_tensor * a, const ggml_tensor * b) {
+            return (add->src[0] == a && add->src[1] == b) ||
+                   (add->src[0] == b && add->src[1] == a);
+        };
+        ggml_tensor * streams = view0 != nullptr ? view0->view_src : nullptr;
+        const bool pattern_ok = view0 != nullptr && view0->op == GGML_OP_VIEW &&
+            view1->op == GGML_OP_VIEW && add1->op == GGML_OP_ADD &&
+            view2->op == GGML_OP_VIEW && add2->op == GGML_OP_ADD &&
+            view3->op == GGML_OP_VIEW && add3->op == GGML_OP_ADD && scale->op == GGML_OP_SCALE &&
+            streams != nullptr && view1->view_src == streams && view2->view_src == streams && view3->view_src == streams &&
+            view0->view_offs == 0 &&
+            view1->view_offs == 1 * view0->ne[0] * view0->nb[0] &&
+            view2->view_offs == 2 * view0->ne[0] * view0->nb[0] &&
+            view3->view_offs == 3 * view0->ne[0] * view0->nb[0] &&
+            add_of(add1, node, view1) && add_of(add2, add1, view2) && add_of(add3, add2, view3) &&
+            scale->src[0] == add3 && std::strncmp(scale->name, "hc_mixed-", sizeof("hc_mixed-") - 1) == 0 &&
+            scale_value == 0.25f && scale_bias == 0.0f;
+        // ggml_can_fuse_subgraph() deliberately rejects views of a non-constant external tensor.
+        // That is the tensor consumed by this fused kernel, so validate every skipped node directly.
+        bool graph_ok = pattern_ok && (scale->flags & GGML_TENSOR_FLAG_COMPUTE) != 0;
+        for (int k = 0; k < 7; ++k) {
+            const ggml_tensor * skipped_node = cgraph->nodes[i + k];
+            graph_ok = graph_ok && (skipped_node->flags & GGML_TENSOR_FLAG_COMPUTE) != 0 &&
+                (skipped_node->flags & GGML_TENSOR_FLAG_OUTPUT) == 0 &&
+                ggml_node_get_use_count(cgraph, i + k) == 1;
+        }
+        const uintptr_t stream_begin = streams != nullptr ? (uintptr_t) streams->data : 0;
+        const uintptr_t stream_end = stream_begin + (streams != nullptr ? ggml_nbytes(streams) : 0);
+        const uintptr_t dst_begin = (uintptr_t) scale->data;
+        const uintptr_t dst_end = dst_begin + ggml_nbytes(scale);
+        const bool ranges_ok = graph_ok && !(stream_begin < dst_end && dst_begin < stream_end);
+        if (ranges_ok && ggml_cuda_op_qwen4exp_hc_reduce(*cuda_ctx, streams, scale)) {
+            return 7;
+        }
+    }
+
+    // Qwen4Exp low-rank HC activation: scale(1/4) -> SiLU.
+    if (node->op == GGML_OP_SCALE && i + 3 < cgraph->n_nodes &&
+            ggml_cuda_use_qwen4exp_hc_scale_silu()) {
+        ggml_tensor * silu = cgraph->nodes[i + 1];
+        ggml_tensor * up   = cgraph->nodes[i + 2];
+        ggml_tensor * gate = cgraph->nodes[i + 3];
+        const ggml_op ops[] = { GGML_OP_SCALE, GGML_OP_UNARY };
+        const int out_nodes[] = { i + 1 };
+        float scale_value = 0.0f;
+        float scale_bias  = 0.0f;
+        std::memcpy(&scale_value, (const float *) node->op_params + 0, sizeof(float));
+        std::memcpy(&scale_bias,  (const float *) node->op_params + 1, sizeof(float));
+        const bool pattern_ok = silu->op == GGML_OP_UNARY && up->op == GGML_OP_MUL_MAT &&
+            gate->op == GGML_OP_UNARY && silu->src[0] == node && up->src[1] == silu && gate->src[0] == up &&
+            ggml_get_unary_op(silu) == GGML_UNARY_OP_SILU &&
+            ggml_get_unary_op(gate) == GGML_UNARY_OP_SIGMOID &&
+            std::strncmp(gate->name, "hc_gate-", sizeof("hc_gate-") - 1) == 0 &&
+            scale_value == 0.25f && scale_bias == 0.0f && node->src[0] != nullptr;
+        const bool graph_ok = pattern_ok && ggml_can_fuse_subgraph(cgraph, i, 2, ops, out_nodes, 1);
+        const uintptr_t src_begin = node->src[0] != nullptr ? (uintptr_t) node->src[0]->data : 0;
+        const uintptr_t src_end = src_begin + (node->src[0] != nullptr ? ggml_nbytes(node->src[0]) : 0);
+        const uintptr_t dst_begin = (uintptr_t) silu->data;
+        const uintptr_t dst_end = dst_begin + ggml_nbytes(silu);
+        const bool ranges_ok = graph_ok &&
+            (src_begin == dst_begin || !(src_begin < dst_end && dst_begin < src_end));
+        if (ranges_ok && ggml_cuda_op_qwen4exp_hc_scale_silu(*cuda_ctx, node->src[0], silu)) {
+            return 1;
+        }
+    }
+
+    // Qwen4Exp HyperConnection combine:
+    // scale(1/4) -> sigmoid -> scale(2) -> reshape -> mul -> residual add.
+    // Keep the canonical graph and allocator plan; only backend execution is fused.
+    if (node->op == GGML_OP_SCALE && i + 5 < cgraph->n_nodes &&
+            ggml_cuda_use_qwen4exp_hc_combine()) {
+        ggml_tensor * sigmoid = cgraph->nodes[i + 1];
+        ggml_tensor * scale2  = cgraph->nodes[i + 2];
+        ggml_tensor * reshape = cgraph->nodes[i + 3];
+        ggml_tensor * mul     = cgraph->nodes[i + 4];
+        ggml_tensor * add     = cgraph->nodes[i + 5];
+        const ggml_op ops[] = {
+            GGML_OP_SCALE, GGML_OP_UNARY, GGML_OP_SCALE,
+            GGML_OP_RESHAPE, GGML_OP_MUL, GGML_OP_ADD,
+        };
+        const int out_nodes[] = { i + 5 };
+
+        float scale1_value = 0.0f;
+        float scale1_bias  = 0.0f;
+        float scale2_value = 0.0f;
+        float scale2_bias  = 0.0f;
+        std::memcpy(&scale1_value, (const float *) node->op_params + 0, sizeof(float));
+        std::memcpy(&scale1_bias,  (const float *) node->op_params + 1, sizeof(float));
+        std::memcpy(&scale2_value, (const float *) scale2->op_params + 0, sizeof(float));
+        std::memcpy(&scale2_bias,  (const float *) scale2->op_params + 1, sizeof(float));
+
+        ggml_tensor * block_repeat = nullptr;
+        if (mul->src[0] == reshape) {
+            block_repeat = mul->src[1];
+        } else if (mul->src[1] == reshape) {
+            block_repeat = mul->src[0];
+        }
+        ggml_tensor * residual = nullptr;
+        if (add->src[0] == mul) {
+            residual = add->src[1];
+        } else if (add->src[1] == mul) {
+            residual = add->src[0];
+        }
+
+        const bool pattern_ok = sigmoid->op == GGML_OP_UNARY && scale2->op == GGML_OP_SCALE &&
+            reshape->op == GGML_OP_RESHAPE && mul->op == GGML_OP_MUL && add->op == GGML_OP_ADD &&
+            sigmoid->src[0] == node && ggml_get_unary_op(sigmoid) == GGML_UNARY_OP_SIGMOID &&
+            scale2->src[0] == sigmoid && reshape->src[0] == scale2 &&
+            block_repeat != nullptr && block_repeat->op == GGML_OP_REPEAT &&
+            residual != nullptr && node->src[0] != nullptr &&
+            std::strncmp(add->name, "hc_combine-", sizeof("hc_combine-") - 1) == 0 &&
+            scale1_value == 0.25f && scale1_bias == 0.0f &&
+            scale2_value == 2.0f && scale2_bias == 0.0f;
+
+        const bool graph_ok = pattern_ok && ggml_can_fuse_subgraph(cgraph, i, 6, ops, out_nodes, 1);
+        const bool generic_ranges_ok = graph_ok && ggml_cuda_check_fusion_memory_ranges(cgraph, i, 6, out_nodes, 1);
+        const auto overlaps = [](const ggml_tensor * a, const ggml_tensor * b) {
+            const uintptr_t a0 = (uintptr_t) a->data;
+            const uintptr_t a1 = a0 + ggml_nbytes(a);
+            const uintptr_t b0 = (uintptr_t) b->data;
+            const uintptr_t b1 = b0 + ggml_nbytes(b);
+            return a0 < b1 && b0 < a1;
+        };
+        const bool safe_residual_inplace = graph_ok && add->data == residual->data &&
+            !overlaps(add, block_repeat) && !overlaps(add, node->src[0]);
+        const bool ranges_ok = generic_ranges_ok || safe_residual_inplace;
+        if (ranges_ok && ggml_cuda_op_qwen4exp_hc_combine(
+                *cuda_ctx, residual, block_repeat, node->src[0], add)) {
+            return 5;
+        }
+    }
+
     // Prototype: fuse SwiGLU evaluation into the Q8_1 quantization feeding the
     // following down projection. This targets the PP/MMQ path first; the TG
     // gate+up+GLU path is already fused in MMVQ and is deliberately untouched.
@@ -5548,7 +5738,6 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
                 if ((node->flags & GGML_TENSOR_FLAG_COMPUTE) == 0) {
                     continue;
                 }
-
                 int nodes_to_skip = ggml_cuda_try_fuse(cuda_ctx, cgraph, i);
 
                 if (nodes_to_skip != 0) {
