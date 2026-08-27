@@ -254,9 +254,9 @@
 									<Table.Cell class="align-middle font-medium">Chat Template</Table.Cell>
 
 									<Table.Cell class="py-10">
-										<div class="rounded-md bg-muted p-4">
+										<div class="overflow-x-auto rounded-md bg-muted p-4">
 											<pre
-												class="font-mono text-xs whitespace-pre-wrap">{serverProps.chat_template}</pre>
+												class="font-mono text-xs whitespace-pre">{serverProps.chat_template}</pre>
 										</div>
 									</Table.Cell>
 								</Table.Row>
