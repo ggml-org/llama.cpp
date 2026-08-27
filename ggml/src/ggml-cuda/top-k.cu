@@ -81,8 +81,8 @@ static __global__ void top_k_radix_histogram(
         int shift) {
     constexpr int NBINS = 1 << RADIX_BITS;
 
-    const int row = blockIdx.y;
-    const int row_block = blockIdx.x;
+    const int row = blockIdx.x / blocks_per_row;
+    const int row_block = blockIdx.x % blocks_per_row;
     const int tid = threadIdx.x;
     const float * row_src = src + (size_t) row * ncols;
     __shared__ int histogram[NBINS];
@@ -154,8 +154,8 @@ static __global__ void top_k_radix_gather(
         int ncols,
         int k,
         int blocks_per_row) {
-    const int row = blockIdx.y;
-    const int row_block = blockIdx.x;
+    const int row = blockIdx.x / blocks_per_row;
+    const int row_block = blockIdx.x % blocks_per_row;
     const int tid = threadIdx.x;
     const float * row_src = src + (size_t) row * ncols;
     int * row_dst = dst + (size_t) row * k;
@@ -192,10 +192,10 @@ static void top_k_radix_cuda(
 
     top_k_radix_init<<<(nrows + BLOCK_SIZE - 1) / BLOCK_SIZE, BLOCK_SIZE, 0, stream>>>(states, nrows, k);
 
-    const dim3 histogram_grid(blocks_per_row, nrows);
+    const dim3 row_grid(blocks_per_row * nrows);
     for (int shift = 32 - RADIX_BITS; shift >= 0; shift -= RADIX_BITS) {
         top_k_radix_histogram<BLOCK_SIZE, RADIX_BITS>
-            <<<histogram_grid, BLOCK_SIZE, 0, stream>>>(
+            <<<row_grid, BLOCK_SIZE, 0, stream>>>(
                 src, states, histograms, ncols, blocks_per_row, shift);
         top_k_radix_select<BLOCK_SIZE, RADIX_BITS>
             <<<nrows, BLOCK_SIZE, 0, stream>>>(histograms, states, blocks_per_row, shift);
@@ -204,11 +204,11 @@ static void top_k_radix_cuda(
     top_k_radix_reset_counters
         <<<(nrows + BLOCK_SIZE - 1) / BLOCK_SIZE, BLOCK_SIZE, 0, stream>>>(states, nrows);
     top_k_radix_gather<BLOCK_SIZE>
-        <<<histogram_grid, BLOCK_SIZE, 0, stream>>>(
+        <<<row_grid, BLOCK_SIZE, 0, stream>>>(
             src, dst, states, ncols, k, blocks_per_row);
 }
 
-#endif // !GGML_CUDA_USE_CUB && GGML_USE_HIP
+#endif // !defined(GGML_CUDA_USE_CUB) && defined(GGML_USE_HIP)
 
 void ggml_cuda_op_top_k(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * src0   = dst->src[0];
@@ -262,7 +262,7 @@ void ggml_cuda_op_top_k(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     if (ncols > 1024) {
         top_k_radix_cuda(pool, src0_d, dst_d, ncols, nrows, k, stream);
     } else {
-#endif
+#endif // defined(GGML_USE_HIP)
         ggml_cuda_pool_alloc<int> temp_dst_alloc(pool, ncols * nrows);
         int *                     tmp_dst = temp_dst_alloc.get();
         argsort_f32_i32_cuda_bitonic(src0_d, tmp_dst, ncols, nrows, GGML_SORT_ORDER_DESC, stream);
@@ -270,6 +270,6 @@ void ggml_cuda_op_top_k(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
                                      cudaMemcpyDeviceToDevice, stream));
 #if defined(GGML_USE_HIP)
     }
-#endif
+#endif // defined(GGML_USE_HIP)
 #endif
 }
