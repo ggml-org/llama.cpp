@@ -99,8 +99,13 @@ llama_kv_cache_iswa::llama_kv_cache_iswa(
 
     LLAMA_LOG_INFO("%s: creating     SWA KV cache, size = %u cells\n", __func__, size_swa);
 
+    // The SWA subcache never uses MLA (K-only). An MLA model's SWA layers keep a conventional V
+    hparams_swa = hparams;
+    hparams_swa.n_embd_head_k_mla_impl = 0;
+    hparams_swa.n_embd_head_v_mla_impl = 0;
+
     kv_swa = std::make_unique<llama_kv_cache>(
-            model, hparams, type_k, type_v,
+            model, hparams_swa, type_k, type_v,
             v_trans, offload, unified, size_swa, n_seq_max, n_pad,
             hparams.n_swa, hparams.swa_type, mem_other_swa, filter_swa, reuse, share);
 }

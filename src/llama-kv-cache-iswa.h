@@ -93,6 +93,10 @@ public:
 private:
     const bool unified;
 
+    // hparams handed to the SWA subcache, identical to the model's, except MLA storage is supressed
+    // a MLA model's SWA layers keep a conventional V, for non MLA models this is a plain copy and changes nothing.
+    llama_hparams hparams_swa;
+
     std::unique_ptr<llama_kv_cache> kv_base;
     std::unique_ptr<llama_kv_cache> kv_swa;
 };

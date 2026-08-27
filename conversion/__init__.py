@@ -186,6 +186,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
     "ModernBertForSequenceClassification": "bert",
     "ModernBertModel": "bert",
     "NanbeigeForCausalLM": "nanbeige",
+    "MotifForCausalLM": "motif3",
     "NemotronForCausalLM": "nemotron",
     "NemotronHForCausalLM": "nemotron",
     "NeoBERT": "bert",
