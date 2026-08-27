@@ -44,6 +44,14 @@ struct llama_ubatch {
     //                          // size               | idx | val
     llama_token  *  token;      // [n_tokens]         | i   | id, token
     float        *  embd;       // [n_embd, n_tokens] | i   | embd
+
+    // device-side embedding input (zero-copy path)
+    // when set, `embd` is ignored: the graph consumes a view of this external
+    // tensor (owned by another context, e.g. the speculative target) starting
+    // at column `embd_dev_off`. both fields are optional and ignored by the host path.
+    struct ggml_tensor * embd_dev;
+    int64_t              embd_dev_off;
+
     llama_pos    *  pos;        // [n_tokens*n_pos]   | i   | pos
     int32_t      *  n_seq_id;   // [n_tokens]         | i   | -
     llama_seq_id ** seq_id;     // [n_tokens]         | s   | s0, s1, seq_id

@@ -114,6 +114,26 @@ LLAMA_API void llama_set_embeddings_layer_inp(struct llama_context * ctx, uint32
 // LLAMA_API float * llama_get_embeddings(struct llama_context * ctx);
 LLAMA_API float * llama_get_embeddings_layer_inp(struct llama_context * ctx, uint32_t lid);
 
+// returns the persistent device tensor holding the concat of the enabled layer-input
+// tensors (zero-copy embd_dev path). the tensor is [K*n_embd, n_batch] where K is the
+// number of enabled embeddings_layer_inp layers. its contents are overwritten by the
+// next llama_encode/llama_decode on the same context. returns null when zero-copy is
+// not in use.
+LLAMA_API const struct ggml_tensor * llama_get_embeddings_layer_inp_tensor(struct llama_context * ctx);
+
+// wait (GPU-side, no host block) until the target context's fused layer-input write
+// from its last decode is visible to the draft context's backends. the consumer must
+// call this before reading/consuming the tensor returned by
+// llama_get_embeddings_layer_inp_tensor on the GPU.
+LLAMA_API void llama_embd_layer_inp_wait(struct llama_context * ctx_tgt, struct llama_context * ctx_dft);
+
+// returns the persistent device tensor holding the encoder output (t_h_nextn) of the
+// last encoder compute on this context (zero-copy nextn path). the tensor is
+// [n_embd_out, n_batch]. its contents are overwritten by the next encode on the same
+// context. returns null when the zero-copy nextn path is disabled.
+LLAMA_API const struct ggml_tensor * llama_get_embeddings_nextn_tensor(struct llama_context * ctx);
+
+
 LLAMA_API llama_context * llama_get_ctx_other(struct llama_context * ctx);
 
 //

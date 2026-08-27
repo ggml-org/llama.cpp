@@ -2616,6 +2616,59 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
 
     llm->res->set_outputs(params);
 
+    // zero-copy embd_dev path: concat the enabled layer-input tensors into a
+    // persistent device buffer so a foreign context (e.g. the speculative draft)
+    // can alias it via a view on the next compute call.
+    if (params.embd_layer_inp_fused) {
+        const auto & enabled = params.cparams.embeddings_layer_inp;
+
+        ggml_tensor * fused = nullptr;
+        for (size_t il = 0; il < enabled.size(); ++il) {
+            if (!enabled[il]) {
+                continue;
+            }
+            ggml_tensor * layer_inp = llm->res->get_layer_inp((int) il);
+            if (!layer_inp) {
+                GGML_ABORT("layer input tensor not found for embd_layer_inp_fused");
+            }
+            fused = fused ? ggml_concat(llm->ctx0, fused, layer_inp, 0) : layer_inp;
+        }
+
+        if (fused) {
+            GGML_ASSERT(fused->ne[0] == params.embd_layer_inp_fused->ne[0]);
+            // copy only the columns for this ubatch (n_tokens <= n_batch) into a view
+            // of the persistent buffer at the correct offset; the rest is untouched.
+            ggml_tensor * fused_dst = ggml_view_2d(
+                    llm->ctx0, params.embd_layer_inp_fused,
+                    params.embd_layer_inp_fused->ne[0], params.ubatch.n_tokens,
+                    params.embd_layer_inp_fused->nb[1],
+                    (size_t) params.token_offset * params.embd_layer_inp_fused->nb[1]);
+            ggml_tensor * dst = ggml_cpy(llm->ctx0, fused, fused_dst);
+            ggml_build_forward_expand(llm->res->get_gf(), dst);
+        }
+    }
+
+    // zero-copy nextn path: copy the encoder output (t_h_nextn) into a persistent
+    // device buffer so the DFlash decoder KV-injection can alias it via a view,
+    // avoiding the host read + H2D copy in the speculative loop.
+    if (params.gtype == LLM_GRAPH_TYPE_ENCODER && params.embd_nextn_persist) {
+        ggml_tensor * h_nextn = llm->res->get_h_nextn();
+        if (h_nextn) {
+            // the encoder output is always consumed by the decoder KV-injection with
+            // embd_dev_off = 0, so the persist write must land at column 0. encode runs
+            // as a single ubatch with token_offset == 0; assert that invariant.
+            GGML_ASSERT(params.token_offset == 0 && "encoder nextn persist requires token_offset == 0");
+            GGML_ASSERT(h_nextn->ne[0] == params.embd_nextn_persist->ne[0]);
+            ggml_tensor * nextn_dst = ggml_view_2d(
+                    llm->ctx0, params.embd_nextn_persist,
+                    params.embd_nextn_persist->ne[0], params.ubatch.n_tokens,
+                    params.embd_nextn_persist->nb[1],
+                    (size_t) params.token_offset * params.embd_nextn_persist->nb[1]);
+            ggml_tensor * dst = ggml_cpy(llm->ctx0, h_nextn, nextn_dst);
+            ggml_build_forward_expand(llm->res->get_gf(), dst);
+        }
+    }
+
     return llm->res->get_gf();
 }
 
