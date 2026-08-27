@@ -237,6 +237,24 @@
 	}
 
 	function handleCopy() {
+		// Agentic sessions render as a single entry anchored on the first assistant
+		// turn, whose own content is typically just the first tool call. Copy the
+		// text sections of the whole session so the clipboard matches the visible
+		// response instead of the anchor turn.
+		if (message.role === MessageRole.ASSISTANT) {
+			const sections = deriveAgenticSections(message, toolMessages, [], false);
+			const text = sections
+				.filter((section) => section.type === AgenticSectionType.TEXT)
+				.map((section) => section.content)
+				.join('\n\n');
+
+			if (text) {
+				chatActions.copy(message, text);
+
+				return;
+			}
+		}
+
 		chatActions.copy(message);
 	}
 

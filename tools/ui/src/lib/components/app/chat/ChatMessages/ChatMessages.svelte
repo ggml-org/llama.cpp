@@ -29,10 +29,10 @@
 			refreshAllMessages();
 		},
 
-		copy: async (message: DatabaseMessage) => {
+		copy: async (message: DatabaseMessage, contentOverride?: string) => {
 			const asPlainText = Boolean(currentConfig.copyTextAttachmentsAsPlainText);
 			const clipboardContent = formatMessageForClipboard(
-				message.content,
+				contentOverride ?? message.content,
 				message.extra,
 				asPlainText
 			);
