@@ -1,6 +1,14 @@
 <script lang="ts">
-	import { File, MessageSquare } from '@lucide/svelte';
-	import { ChevronDown, ChevronRight, PencilRuler } from '@lucide/svelte';
+	import {
+		Check,
+		ChevronDown,
+		ChevronRight,
+		File,
+		Lightbulb,
+		LightbulbOff,
+		MessageSquare,
+		PencilRuler
+	} from '@lucide/svelte';
 	import { McpLogo } from '$lib/components/app';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import * as Collapsible from '$lib/components/ui/collapsible';
@@ -14,6 +22,7 @@
 	import { getChatFormActionsContext } from '$lib/contexts';
 	import { AttachmentAction } from '$lib/enums/attachment.enums';
 	import { useAttachmentMenu } from '$lib/hooks/use-attachment-menu.svelte';
+	import { useReasoningMenu } from '$lib/hooks/use-reasoning-menu.svelte';
 	import { useToolsPanel } from '$lib/hooks/use-tools-panel.svelte';
 	import type { ToolGroup } from '$lib/types';
 	import type { Snippet } from 'svelte';
@@ -29,6 +38,7 @@
 
 	let sheetOpen = $state(false);
 	let filesExpanded = $state(true);
+	let reasoningExpanded = $state(false);
 	let toolsExpanded = $state(false);
 
 	const attachmentMenu = useAttachmentMenu(
@@ -51,6 +61,7 @@
 	);
 
 	const toolsPanel = useToolsPanel();
+	const reasoning = useReasoningMenu();
 
 	const sheetItemClass =
 		'flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-left text-sm transition-colors hover:bg-accent active:bg-accent disabled:cursor-not-allowed disabled:opacity-50';
@@ -73,6 +84,65 @@
 			</Sheet.Header>
 
 			<div class="flex flex-col gap-1 px-1.5 pb-2">
+				{#if reasoning.modelSupportsThinking}
+					<Collapsible.Root
+						onOpenChange={(open) => (reasoningExpanded = open)}
+						open={reasoningExpanded}
+					>
+						<Collapsible.Trigger class={sheetItemClass}>
+							{#if reasoningExpanded}
+								<ChevronDown class="{ICON_CLASS_DEFAULT} shrink-0" />
+							{:else}
+								<ChevronRight class="{ICON_CLASS_DEFAULT} shrink-0" />
+							{/if}
+
+							{#if reasoning.thinkingEnabled}
+								<Lightbulb class="{ICON_CLASS_DEFAULT} shrink-0 text-amber-400" />
+							{:else if reasoning.isOff}
+								<LightbulbOff class="{ICON_CLASS_DEFAULT} shrink-0 text-muted-foreground" />
+							{:else}
+								<Lightbulb class="{ICON_CLASS_DEFAULT} shrink-0 text-muted-foreground" />
+							{/if}
+
+							<span class="flex-1">Reasoning</span>
+
+							<span class="text-xs capitalize text-muted-foreground">
+								{reasoning.currentEffort}
+							</span>
+						</Collapsible.Trigger>
+
+						<Collapsible.Content>
+							<div class="flex flex-col gap-0.5 pl-4">
+								{#each reasoning.levels as level (level.value)}
+									{@const tokenLabel = reasoning.tokenLabel(level)}
+									<button
+										class:bg-accent={reasoning.isSelected(level)}
+										class={sheetItemRowClass}
+										onclick={() => reasoning.select(level)}
+										type="button"
+									>
+										<div class="flex min-w-0 items-center gap-3">
+											{#if reasoning.isSelected(level)}
+												<Check class="{ICON_CLASS_DEFAULT} shrink-0 text-foreground" />
+											{:else}
+												<div class="{ICON_CLASS_DEFAULT} shrink-0"></div>
+											{/if}
+
+											<span class="text-sm">{level.label}</span>
+										</div>
+
+										{#if tokenLabel}
+											<span class="shrink-0 text-[11px] text-muted-foreground opacity-60">
+												{tokenLabel}
+											</span>
+										{/if}
+									</button>
+								{/each}
+							</div>
+						</Collapsible.Content>
+					</Collapsible.Root>
+				{/if}
+
 				<Collapsible.Root onOpenChange={(open) => (filesExpanded = open)} open={filesExpanded}>
 					<Collapsible.Trigger class={sheetItemClass}>
 						{#if filesExpanded}
