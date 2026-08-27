@@ -107,6 +107,14 @@ export {
 // Model name utilities
 export { normalizeModelName, isValidModelName } from './model-names';
 
+// Model hardware-compatibility estimation
+export {
+	computeFileCompatibilityTiers,
+	deviceMemoryBudgetMb,
+	resolveDeviceMemoryGb
+} from './model-compatibility';
+export type { CompatibilityTier } from './model-compatibility';
+
 // Portal utilities
 export { portalToBody } from './portal-to-body';
 
@@ -254,6 +262,8 @@ export {
 	detectThinkingSupportWithReason
 } from './chat-template-thinking-detector';
 
+export { detectToolUseSupport } from './chat-template-tool-detector';
+
 // Agentic content utilities (structured section derivation)
 export {
 	deriveAgenticSections,
@@ -339,7 +349,7 @@ export { buildSandboxToolDefinition, SANDBOX_TOOL_DEFINITION } from './sandbox-t
 export { executeGetDatetimeTool } from './get-datetime';
 
 // Browser fallback for the server's get_info tool
-export { executeBrowserInfoTool } from './browser-info';
+export { detectOs, executeBrowserInfoTool } from './browser-info';
 
 // Cryptography utilities
 

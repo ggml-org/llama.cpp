@@ -16,6 +16,7 @@ export const SETTINGS_KEYS = {
 	CUSTOM_CSS: 'customCss',
 	// PY_INTERPRETER_ENABLED: 'pyInterpreterEnabled',
 	CUSTOM_JSON: 'customJson',
+	DEVICE_MEMORY_GB: 'deviceMemoryGb',
 	DISABLE_AUTO_SCROLL: 'disableAutoScroll',
 	// Developer
 	DISABLE_REASONING_PARSING: 'disableReasoningParsing',
