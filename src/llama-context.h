@@ -247,9 +247,23 @@ public:
     // returns the result of ggml_backend_sched_graph_compute_async execution
     ggml_status graph_compute(ggml_cgraph * gf, bool batched);
 
+    struct graph_reserve_params {
+        uint32_t n_tokens;
+        uint32_t n_seqs;
+        uint32_t n_outputs;
+        const llama_memory_context_i * mctx;
+        bool split_only = false;
+        size_t * sizes = nullptr;
+    };
+
+    struct graph_reserve_result {
+        ggml_cgraph * gf;
+
+        uint32_t n_intput_tensors;
+    };
+
     // reserve a graph with a dummy ubatch of the specified size
-    ggml_cgraph * graph_reserve(
-        uint32_t n_tokens, uint32_t n_seqs, uint32_t n_outputs, const llama_memory_context_i * mctx, bool split_only = false, size_t * sizes = nullptr);
+    graph_reserve_result graph_reserve(graph_reserve_params params);
 
     bool set_sampler(llama_seq_id seq_id, llama_sampler * sampler);
 
@@ -306,7 +320,7 @@ private:
 
     struct sampling_info {
         // !samplers.empty() to check if any samplers are active
-        std::map<llama_seq_id, llama_sampler *> samplers;
+        llama_samplers samplers;
 
         buffer_view<float>       logits     = {nullptr, 0};
         buffer_view<llama_token> sampled    = {nullptr, 0};
@@ -377,6 +391,9 @@ private:
 
     // env: LLAMA_GRAPH_REUSE_DISABLE
     bool graph_reuse_disable = false;
+
+    // env: LLAMA_GRAPH_INPUT_DEBUG
+    int graph_input_debug = 0;
 
     // perf
     mutable int64_t t_start_us  = 0;
