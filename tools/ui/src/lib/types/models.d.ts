@@ -1,3 +1,4 @@
+import type { DraftVariant } from '$lib/constants/model-id.constants';
 import type { ApiModelDataEntry, ApiModelDetails, ApiModelLoadStage } from '$lib/types/api';
 
 export interface ModelModalities {
@@ -8,6 +9,7 @@ export interface ModelModalities {
 
 export interface ModelCapabilities {
 	reasoning: boolean;
+	tools: boolean;
 }
 
 export interface ModelOption {
@@ -42,6 +44,7 @@ export interface ParsedModelId {
 	params: string | null;
 	activatedParams: string | null;
 	quantization: string | null;
+	variant: DraftVariant | null;
 	tags: string[];
 }
 

@@ -7,7 +7,7 @@
  */
 
 import { base } from '$app/paths';
-import { API_MODELS, MODEL_ID } from '$lib/constants';
+import { API_MODELS, type DraftVariant, MODEL_ID } from '$lib/constants';
 import { ServerModelStatus } from '$lib/enums';
 import type { ParsedModelId } from '$lib/types/models';
 import {
@@ -19,8 +19,31 @@ import {
 } from '$lib/utils';
 import { getAuthHeaders } from '$lib/utils/api-headers';
 
+/** Building block for the `<repo>:<tag>` string consumed by POST /models. */
+export interface GgufVariantTagInput {
+	quant: string;
+	variant: DraftVariant | null;
+}
+
 export class ModelsService {
 	private static readonly SSE_RECONNECT_MS = 1000;
+
+	/**
+	 * Build the `<repo>:<tag>` string expected by POST /models from a parsed
+	 * filename quant + optional draft variant. Used by the model-hub download
+	 * dialog so callers don't have to know about the suffix convention.
+	 *
+	 * @param repoId - HuggingFace repo id (e.g. `ggml-org/gemma-3-4b-it-GGUF`)
+	 * @param quant - Quantization token, may include a draft variant
+	 * @returns Repo id possibly suffixed with `:tag`
+	 */
+	static buildDownloadTag(repoId: string, quant: GgufVariantTagInput | null): string {
+		if (!quant) return repoId;
+
+		const tag = quant.variant ? `${quant.quant}-${quant.variant.toUpperCase()}` : quant.quant;
+
+		return `${repoId}:${tag}`;
+	}
 
 	/**
 	 * Check if a model is loaded based on its metadata.
@@ -108,11 +131,39 @@ export class ModelsService {
 			params: null,
 			quantization: null,
 			raw: modelId,
-			tags: []
+			tags: [],
+			variant: null
 		};
+
 		// strip directory path and weight extension so a bare `-m /path/file.gguf`
 		// parses like a clean repo id; the HF `org/model` form is preserved
-		const source = normalizeModelName(modelId).replace(MODEL_ID.WEIGHT_EXTENSION_RE, '');
+		let source = normalizeModelName(modelId).replace(MODEL_ID.WEIGHT_EXTENSION_RE, '');
+
+		// 0. Detect sidecar variant prefix (mtp-, dflash-, mmproj-) before any other
+		//    splitting so the inner id parses cleanly.
+		const prefixVariantMatch = source.match(MODEL_ID.DRAFT_VARIANT_PREFIX_RE);
+
+		if (prefixVariantMatch) {
+			result.variant = prefixVariantMatch[1].toLowerCase() as DraftVariant;
+			source = prefixVariantMatch[2];
+		} else {
+			// 0b. Detect `-<variant>` suffix (`-mtp`, `-dflash`, `-dspark`, `-eagle3`).
+			//     Only strip it when the segment preceding it looks like a real quant
+			//     token, so a model literally named `MyModel-mtp` is not mistaken for a
+			//     draft one.
+			const suffixMatch = source.match(MODEL_ID.DRAFT_VARIANT_SUFFIX_RE);
+
+			if (suffixMatch) {
+				const candidate = suffixMatch[1];
+				const headSeg = candidate.split(MODEL_ID.SEGMENT_SEPARATOR).pop();
+
+				if (headSeg && MODEL_ID.QUANTIZATION_SEGMENT_RE.test(headSeg)) {
+					result.variant = suffixMatch[2].toLowerCase() as DraftVariant;
+					source = candidate;
+				}
+			}
+		}
+
 		// 1. Extract colon-separated quantization (e.g. `model:Q4_K_M`)
 		const colonIdx = source.indexOf(MODEL_ID.QUANTIZATION_SEPARATOR);
 

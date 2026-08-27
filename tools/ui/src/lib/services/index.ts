@@ -146,6 +146,7 @@ export { ConversationTransferService } from './conversation-transfer.service';
  * @see modelsStore in stores/models/index.svelte.ts — primary consumer for reactive model state
  */
 export { ModelsService } from './models.service';
+export type { GgufVariantTagInput } from './models.service';
 
 /**
  * **PropsService** - Server properties and capabilities retrieval

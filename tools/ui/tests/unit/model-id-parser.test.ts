@@ -12,7 +12,8 @@ describe('parseModelId', () => {
 			params: null,
 			quantization: null,
 			raw: 'model-name-1',
-			tags: []
+			tags: [],
+			variant: null
 		});
 
 		expect(parseModelId('org/model-name-2')).toStrictEqual({
@@ -22,7 +23,8 @@ describe('parseModelId', () => {
 			params: null,
 			quantization: null,
 			raw: 'org/model-name-2',
-			tags: []
+			tags: [],
+			variant: null
 		});
 	});
 
@@ -81,19 +83,23 @@ describe('parseModelId', () => {
 	it('extracts additional tags correctly', () => {
 		expect(parseModelId('model-100B-foobar-Q4_K_M')).toMatchObject({ tags: ['foobar'] });
 		expect(parseModelId('model-100B-A10B-foobar-1M-BF16')).toMatchObject({
-			tags: ['foobar', '1M']
+			tags: ['foobar', '1M'],
+			variant: null
 		});
 		expect(parseModelId('model-100B-1M-foobar:UD-Q8_K_XL')).toMatchObject({
-			tags: ['1M', 'foobar']
+			tags: ['1M', 'foobar'],
+			variant: null
 		});
 	});
 
 	it('filters out container format segments from tags', () => {
 		expect(parseModelId('model-100B-GGUF-Instruct-BF16')).toMatchObject({
-			tags: ['Instruct']
+			tags: ['Instruct'],
+			variant: null
 		});
 		expect(parseModelId('model-100B-GGML-Instruct:Q4_K_M')).toMatchObject({
-			tags: ['Instruct']
+			tags: ['Instruct'],
+			variant: null
 		});
 	});
 
@@ -105,7 +111,8 @@ describe('parseModelId', () => {
 			params: null,
 			quantization: 'Q2_K_XL',
 			raw: 'unsloth/DeepSeek-V4-Flash-0731-GGUF:Q2_K_XL',
-			tags: []
+			tags: [],
+			variant: null
 		});
 
 		expect(parseModelId('unsloth/Laguna-S-2.1-GGUF:Q4_K_XL')).toStrictEqual({
@@ -115,7 +122,8 @@ describe('parseModelId', () => {
 			params: null,
 			quantization: 'Q4_K_XL',
 			raw: 'unsloth/Laguna-S-2.1-GGUF:Q4_K_XL',
-			tags: []
+			tags: [],
+			variant: null
 		});
 
 		expect(parseModelId('org/Model-Name-GGUF')).toStrictEqual({
@@ -125,7 +133,8 @@ describe('parseModelId', () => {
 			params: null,
 			quantization: null,
 			raw: 'org/Model-Name-GGUF',
-			tags: []
+			tags: [],
+			variant: null
 		});
 	});
 
@@ -137,7 +146,8 @@ describe('parseModelId', () => {
 			params: '8B',
 			quantization: null,
 			raw: 'meta-llama/Llama-3.1-8B',
-			tags: []
+			tags: [],
+			variant: null
 		});
 
 		expect(parseModelId('openai/gpt-oss-120b-MXFP4')).toStrictEqual({
@@ -147,7 +157,8 @@ describe('parseModelId', () => {
 			params: '120B',
 			quantization: 'MXFP4',
 			raw: 'openai/gpt-oss-120b-MXFP4',
-			tags: []
+			tags: [],
+			variant: null
 		});
 
 		expect(parseModelId('openai/gpt-oss-20b:Q4_K_M')).toStrictEqual({
@@ -157,7 +168,8 @@ describe('parseModelId', () => {
 			params: '20B',
 			quantization: 'Q4_K_M',
 			raw: 'openai/gpt-oss-20b:Q4_K_M',
-			tags: []
+			tags: [],
+			variant: null
 		});
 
 		expect(parseModelId('Qwen/Qwen3-Coder-30B-A3B-Instruct-1M-BF16')).toStrictEqual({
@@ -167,7 +179,8 @@ describe('parseModelId', () => {
 			params: '30B',
 			quantization: 'BF16',
 			raw: 'Qwen/Qwen3-Coder-30B-A3B-Instruct-1M-BF16',
-			tags: ['Instruct', '1M']
+			tags: ['Instruct', '1M'],
+			variant: null
 		});
 	});
 
@@ -179,7 +192,8 @@ describe('parseModelId', () => {
 			params: '17B',
 			quantization: 'Q4_K_M',
 			raw: 'meta-llama/Llama-4-Scout-17B-16E-Instruct-Q4_K_M',
-			tags: ['16E', 'Instruct']
+			tags: ['16E', 'Instruct'],
+			variant: null
 		});
 
 		expect(parseModelId('MiniMaxAI/MiniMax-M2-IQ4_XS')).toStrictEqual({
@@ -189,7 +203,8 @@ describe('parseModelId', () => {
 			params: null,
 			quantization: 'IQ4_XS',
 			raw: 'MiniMaxAI/MiniMax-M2-IQ4_XS',
-			tags: []
+			tags: [],
+			variant: null
 		});
 
 		expect(parseModelId('MiniMaxAI/MiniMax-M2-UD-Q3_K_XL')).toStrictEqual({
@@ -199,7 +214,8 @@ describe('parseModelId', () => {
 			params: null,
 			quantization: 'UD-Q3_K_XL',
 			raw: 'MiniMaxAI/MiniMax-M2-UD-Q3_K_XL',
-			tags: []
+			tags: [],
+			variant: null
 		});
 
 		expect(parseModelId('mistralai/Devstral-2-123B-Instruct-2512-Q4_K_M')).toStrictEqual({
@@ -209,7 +225,8 @@ describe('parseModelId', () => {
 			params: '123B',
 			quantization: 'Q4_K_M',
 			raw: 'mistralai/Devstral-2-123B-Instruct-2512-Q4_K_M',
-			tags: ['Instruct', '2512']
+			tags: ['Instruct', '2512'],
+			variant: null
 		});
 
 		expect(parseModelId('mistralai/Devstral-Small-2-24B-Instruct-2512-Q8_0')).toStrictEqual({
@@ -219,7 +236,8 @@ describe('parseModelId', () => {
 			params: '24B',
 			quantization: 'Q8_0',
 			raw: 'mistralai/Devstral-Small-2-24B-Instruct-2512-Q8_0',
-			tags: ['Instruct', '2512']
+			tags: ['Instruct', '2512'],
+			variant: null
 		});
 
 		expect(parseModelId('noctrex/GLM-4.7-Flash-MXFP4_MOE')).toStrictEqual({
@@ -229,7 +247,8 @@ describe('parseModelId', () => {
 			params: null,
 			quantization: 'MXFP4_MOE',
 			raw: 'noctrex/GLM-4.7-Flash-MXFP4_MOE',
-			tags: []
+			tags: [],
+			variant: null
 		});
 
 		expect(parseModelId('Qwen/Qwen3-Coder-Next-Q4_K_M')).toStrictEqual({
@@ -239,7 +258,8 @@ describe('parseModelId', () => {
 			params: null,
 			quantization: 'Q4_K_M',
 			raw: 'Qwen/Qwen3-Coder-Next-Q4_K_M',
-			tags: []
+			tags: [],
+			variant: null
 		});
 
 		expect(parseModelId('openai/gpt-oss-120b-Q4_K_M')).toStrictEqual({
@@ -249,7 +269,8 @@ describe('parseModelId', () => {
 			params: '120B',
 			quantization: 'Q4_K_M',
 			raw: 'openai/gpt-oss-120b-Q4_K_M',
-			tags: []
+			tags: [],
+			variant: null
 		});
 
 		expect(parseModelId('openai/gpt-oss-20b-F16')).toStrictEqual({
@@ -259,7 +280,8 @@ describe('parseModelId', () => {
 			params: '20B',
 			quantization: 'F16',
 			raw: 'openai/gpt-oss-20b-F16',
-			tags: []
+			tags: [],
+			variant: null
 		});
 
 		expect(parseModelId('nomic-embed-text-v2-moe.Q4_K_M')).toStrictEqual({
@@ -269,7 +291,8 @@ describe('parseModelId', () => {
 			params: null,
 			quantization: 'Q4_K_M',
 			raw: 'nomic-embed-text-v2-moe.Q4_K_M',
-			tags: []
+			tags: [],
+			variant: null
 		});
 	});
 
@@ -279,14 +302,16 @@ describe('parseModelId', () => {
 			activatedParams: 'A3B',
 			modelName: 'Qwen3.5',
 			params: '30B',
-			tags: ['Instruct']
+			tags: ['Instruct'],
+			variant: null
 		});
 
 		expect(parseModelId('Qwen/Qwen3.5-30B-A3B-Thinking')).toMatchObject({
 			activatedParams: 'A3B',
 			modelName: 'Qwen3.5',
 			params: '30B',
-			tags: ['Thinking']
+			tags: ['Thinking'],
+			variant: null
 		});
 
 		// Dot-separated quantization with variant suffixes
@@ -294,14 +319,16 @@ describe('parseModelId', () => {
 			modelName: 'gemma-3',
 			params: '27B',
 			quantization: 'Q8_0',
-			tags: ['it', 'heretic', 'v2']
+			tags: ['it', 'heretic', 'v2'],
+			variant: null
 		});
 
 		expect(parseModelId('gemma-3-27b-it.Q8_0')).toMatchObject({
 			modelName: 'gemma-3',
 			params: '27B',
 			quantization: 'Q8_0',
-			tags: ['it']
+			tags: ['it'],
+			variant: null
 		});
 	});
 });
