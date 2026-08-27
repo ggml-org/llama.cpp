@@ -2607,6 +2607,22 @@ private:
 
                     bool has_mtmd = false;
 
+                    if (mtmd_supports_prefetch(mctx)) {
+                        std::vector<mtmd_input_chunk *> media;
+                        const size_t end = (size_t) slot.task->n_tokens();
+                        for (size_t p = slot.prompt.n_tokens(); p < end; ) {
+                            if (input_tokens[p] == LLAMA_TOKEN_NULL) {
+                                const auto & ch = input_tokens.find_chunk(p);
+                                media.push_back(ch.get());
+                                // n_tokens, not n_pos - p is a token index, and the two differ under mrope
+                                p += mtmd_input_chunk_get_n_tokens(ch.get());
+                            } else { ++p; }
+                        }
+                        if (!media.empty()) {
+                            mtmd_encode_prefetch(mctx, media.data(), media.size());
+                        }
+                    }
+
                     // check if we should process the image
                     while (slot.prompt.n_tokens() < slot.task->n_tokens() && input_tokens[slot.prompt.n_tokens()] == LLAMA_TOKEN_NULL) {
                         // process the image

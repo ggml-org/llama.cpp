@@ -235,6 +235,21 @@ MTMD_API int32_t mtmd_encode(mtmd_context * ctx,
 MTMD_API int32_t mtmd_encode_chunk(mtmd_context * ctx,
                                    const mtmd_input_chunk * chunk);
 
+// whether prefetching does anything for this context, so a caller can skip
+// gathering the chunk list when it would be a no-op
+MTMD_API bool mtmd_supports_prefetch(const mtmd_context * ctx);
+
+// hint that these chunks are about to be encoded, so a backend that encodes
+// asynchronously can start ahead and overlap the caller's decode
+// safe to call repeatedly with the not-yet-encoded chunks; anything already
+// being encoded is ignored, as are non-image chunks
+// each chunk records the encode started for it, so this must run on the thread
+// that will encode them
+// mtmd_helper_eval_chunks() already does this
+MTMD_API void mtmd_encode_prefetch(mtmd_context * ctx,
+                                   mtmd_input_chunk ** chunks,
+                                   size_t n_chunks);
+
 // get output embeddings from the last encode pass
 // the reading size (in bytes) is equal to:
 // llama_model_n_embd_inp(model) * mtmd_input_chunk_get_n_tokens(chunk) * sizeof(float)

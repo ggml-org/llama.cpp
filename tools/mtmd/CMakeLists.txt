@@ -2,6 +2,19 @@
 
 find_package(Threads REQUIRED)
 
+# Optional Hailo-NPU vision backend.
+# When enabled, links against HailoRT and compiles tools/mtmd/hailo/.
+# Set via -DLLAMA_HAILO=ON.
+option(LLAMA_HAILO "build mtmd with optional Hailo NPU vision backend" OFF)
+set(MTMD_HAILO_SOURCES "")
+if (LLAMA_HAILO)
+    find_package(HailoRT REQUIRED)
+    message(STATUS "mtmd: Hailo backend enabled (HailoRT ${HailoRT_VERSION})")
+    set(MTMD_HAILO_SOURCES
+        hailo/hailo_encoder.hpp
+        hailo/hailo_encoder.cpp)
+endif()
+
 add_library(mtmd
             mtmd.cpp
             mtmd-audio.cpp
@@ -41,6 +54,7 @@ add_library(mtmd
             models/mobilenetv5.cpp
             models/youtuvl.cpp
             models/yasa2.cpp
+            ${MTMD_HAILO_SOURCES}
             )
 
 set_target_properties(mtmd PROPERTIES
@@ -55,6 +69,11 @@ target_include_directories(mtmd PUBLIC  .)
 target_include_directories(mtmd PRIVATE ../..)
 target_include_directories(mtmd PRIVATE ../../vendor)
 target_compile_features   (mtmd PRIVATE cxx_std_17)
+
+if (LLAMA_HAILO)
+    target_compile_definitions(mtmd PRIVATE LLAMA_USE_HAILO)
+    target_link_libraries     (mtmd PRIVATE HailoRT::libhailort)
+endif()
 
 if (BUILD_SHARED_LIBS)
     set_target_properties     (mtmd PROPERTIES POSITION_INDEPENDENT_CODE ON)

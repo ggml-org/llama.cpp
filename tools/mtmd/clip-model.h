@@ -293,6 +293,9 @@ struct clip_model {
     clip_modality modality = CLIP_MODALITY_VISION;
     projector_type proj_type = PROJECTOR_TYPE_MLP;
     clip_hparams hparams;
+#ifdef LLAMA_USE_HAILO
+    bool hailo_backend = false;
+#endif
 
     // embeddings
     ggml_tensor * class_embedding = nullptr;

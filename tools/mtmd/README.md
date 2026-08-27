@@ -2,6 +2,14 @@
 
 This directory provides multimodal capabilities for `llama.cpp`. Initially intended as a showcase for running LLaVA models, its scope has expanded significantly over time to include various other vision-capable models. As a result, LLaVA is no longer the only multimodal architecture supported.
 
+> **Optional Hailo NPU vision backend:** if you have a Hailo accelerator
+> (e.g. Hailo-8 on Raspberry Pi 5) and a compiled HEF for your VLM, you can
+> off-load the vision encoder for faster image encode. Build with
+> `cmake -DLLAMA_HAILO=ON` and pass the `.hef` directly as `--mmproj`
+> (the existing flag accepts both GGUF and HEF). See
+> [docs/multimodal-hailo.md](../../docs/multimodal-hailo.md). Disabled by
+> default — non-Hailo users see no change.
+
 > [!IMPORTANT]
 >
 > Multimodal support can be viewed as a sub-project within `llama.cpp`. It is under **very heavy development**, and **breaking changes are expected**.

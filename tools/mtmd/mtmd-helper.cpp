@@ -401,6 +401,26 @@ int32_t mtmd_helper_eval_chunks(mtmd_context * ctx,
         return 0;
     }
 
+    // images in eval order; re-passing a decoded one would re-submit it, so the window only advances
+    std::vector<mtmd_input_chunk *> prefetch_images;
+    size_t prefetch_next = 0;
+    if (mtmd_supports_prefetch(ctx)) {
+        for (size_t i = 0; i < n_chunks; i++) {
+            auto * c = mtmd_input_chunks_get(chunks, i);
+            if (mtmd_input_chunk_get_type(c) == MTMD_INPUT_CHUNK_TYPE_IMAGE) {
+                // the chunks are not const - only this accessor's return type is
+                prefetch_images.push_back(const_cast<mtmd_input_chunk *>(c));
+            }
+        }
+    }
+    auto prefetch_top_up = [&]() {
+        if (prefetch_next < prefetch_images.size()) {
+            mtmd_encode_prefetch(ctx, prefetch_images.data() + prefetch_next,
+                                 prefetch_images.size() - prefetch_next);
+        }
+    };
+    prefetch_top_up();
+
     for (size_t i = 0; i < n_chunks; i++) {
         bool chunk_logits_last = (i == n_chunks - 1) && logits_last;
         auto chunk = mtmd_input_chunks_get(chunks, i);
@@ -411,6 +431,12 @@ int32_t mtmd_helper_eval_chunks(mtmd_context * ctx,
             return res;
         }
         *new_n_past = n_past;
+
+        // topping up right after an image frees a slot is what lets the next one run during its decode
+        if (prefetch_next < prefetch_images.size() && prefetch_images[prefetch_next] == chunk) {
+            ++prefetch_next;
+            prefetch_top_up();
+        }
     }
 
     return 0;

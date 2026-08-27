@@ -362,6 +362,19 @@ static projector_type clip_projector_type_from_string(const std::string & str) {
     return PROJECTOR_TYPE_UNKNOWN;
 }
 
+#ifdef LLAMA_USE_HAILO
+// Minimal clip_ctx for the Hailo path: no GGUF loaded, no tensors populated.
+struct clip_ctx * clip_init_hailo(
+    enum projector_type proj_type,
+    int32_t             max_image_edge,
+    int32_t             patch_size,
+    int32_t             spatial_merge_size,
+    int32_t             n_embd_per_stream,
+    int32_t             n_deepstack_layers,
+    const float         image_mean[3],
+    const float         image_std[3]);
+#endif
+
 // RGB uint8 image
 struct clip_image_u8 {
     int nx;

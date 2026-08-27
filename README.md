@@ -293,6 +293,7 @@ Instructions for adding support for new models: [HOWTO-add-model.md](docs/develo
 | [RPC](https://github.com/ggml-org/llama.cpp/tree/master/tools/rpc) | All |
 | [Hexagon [In Progress]](docs/backend/snapdragon/README.md) | Snapdragon |
 | [VirtGPU](docs/backend/VirtGPU.md) | VirtGPU APIR |
+| [Hailo NPU (vision encoder)](docs/multimodal-hailo.md) | Hailo-8 |
 
 ## Obtaining and quantizing models
 

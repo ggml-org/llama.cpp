@@ -2831,6 +2831,46 @@ void clip_free(clip_ctx * ctx) {
     delete ctx;
 }
 
+#ifdef LLAMA_USE_HAILO
+struct clip_ctx * clip_init_hailo(
+    enum projector_type proj_type,
+    int32_t             max_image_edge,
+    int32_t             patch_size,
+    int32_t             spatial_merge_size,
+    int32_t             n_embd_per_stream,
+    int32_t             n_deepstack_layers,
+    const float         image_mean[3],
+    const float         image_std[3]) {
+
+    clip_context_params ctx_params{};
+    auto * ctx = new clip_ctx(ctx_params);
+
+    if (proj_type != PROJECTOR_TYPE_QWEN3VL) {
+        LOG_ERR("%s: only PROJECTOR_TYPE_QWEN3VL is supported, got %d\n", __func__, static_cast<int>(proj_type));
+        clip_free(ctx);
+        return nullptr;
+    }
+
+    ctx->model.proj_type          = proj_type;
+    ctx->model.modality           = CLIP_MODALITY_VISION;
+    ctx->model.n_deepstack_layers = n_deepstack_layers;
+    ctx->model.hailo_backend      = true;
+
+    auto & hp = ctx->model.hparams;
+    hp.image_size         = max_image_edge;
+    hp.patch_size         = patch_size;
+    hp.n_embd             = n_embd_per_stream;
+    hp.projection_dim     = n_embd_per_stream;
+    hp.n_merge            = spatial_merge_size;
+    hp.image_resize_algo  = RESIZE_ALGO_BILINEAR;
+    hp.warmup_image_size  = max_image_edge;
+    hp.image_mean[0] = image_mean[0]; hp.image_mean[1] = image_mean[1]; hp.image_mean[2] = image_mean[2];
+    hp.image_std[0]  = image_std[0];  hp.image_std[1]  = image_std[1];  hp.image_std[2]  = image_std[2];
+
+    return ctx;
+}
+#endif
+
 // deprecated
 size_t clip_embd_nbytes(const struct clip_ctx * ctx) {
     const int32_t nx = ctx->model.hparams.image_size;
@@ -3806,6 +3846,13 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
             return ctx->model.mm_1_b->ne[0];
         case PROJECTOR_TYPE_QWEN3VL:
             // main path + deepstack paths
+#ifdef LLAMA_USE_HAILO
+            // Hailo HEF replaces ViT + projector, so mm_* tensors are not loaded.
+            // Read the dim from hparams.n_embd (saved from HEF metadata at init).
+            if (ctx->model.hailo_backend) {
+                return ctx->model.hparams.n_embd * (1 + ctx->model.n_deepstack_layers);
+            }
+#endif
             return ctx->model.mm_1_b->ne[0] * (1 + ctx->model.n_deepstack_layers);
         case PROJECTOR_TYPE_STEP3VL:
             return ctx->model.mm_model_proj->ne[1];

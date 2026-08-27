@@ -560,6 +560,10 @@ private:
     }
 };
 
+void mtmd_resize_image_u8(const clip_image_u8 & src, clip_image_u8 & dst, int target_width, int target_height) {
+    img_tool::resize(src, dst, {target_width, target_height}, RESIZE_ALGO_BILINEAR, /*add_padding=*/false);
+}
+
 
 //
 // mtmd_image_preprocessor_llava_uhd
