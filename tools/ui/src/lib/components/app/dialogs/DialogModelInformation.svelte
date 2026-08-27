@@ -76,7 +76,7 @@
 </script>
 
 <Dialog.Root bind:open {onOpenChange}>
-	<Dialog.Content class="@container z-9999 !max-h-[80dvh] !max-w-[60rem] max-w-full">
+	<Dialog.Content class="@container z-9999 !max-h-[80dvh] w-[calc(100vw-2rem)]! md:max-w-[60rem]!">
 		<style>
 			@container (max-width: 56rem) {
 				.resizable-text-container {
