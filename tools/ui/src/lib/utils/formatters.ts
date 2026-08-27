@@ -26,24 +26,29 @@ export function formatFileSize(bytes: number | unknown): string {
 }
 
 /**
- * Format parameter count to human-readable format (B, M, K)
+ * Format parameter count to human-readable format (T, B, M, K)
  *
  * @param params - Parameter count
+ * @param decimals - Decimal places to keep (0 rounds to a full number)
  * @returns Human-readable parameter count
  */
-export function formatParameters(params: number | unknown): string {
+export function formatParameters(params: number | unknown, decimals = 2): string {
 	if (typeof params !== 'number') return 'Unknown';
 
+	if (params >= 1e12) {
+		return `${(params / 1e12).toFixed(decimals)}T`;
+	}
+
 	if (params >= 1e9) {
-		return `${(params / 1e9).toFixed(2)}B`;
+		return `${(params / 1e9).toFixed(decimals)}B`;
 	}
 
 	if (params >= 1e6) {
-		return `${(params / 1e6).toFixed(2)}M`;
+		return `${(params / 1e6).toFixed(decimals)}M`;
 	}
 
 	if (params >= 1e3) {
-		return `${(params / 1e3).toFixed(2)}K`;
+		return `${(params / 1e3).toFixed(decimals)}K`;
 	}
 
 	return params.toString();

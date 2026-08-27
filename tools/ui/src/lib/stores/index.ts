@@ -40,6 +40,9 @@ export { mcpStore } from './mcp/index.svelte';
 // MODELS
 export { modelsStore } from './models/index.svelte';
 
+// MODELS HUB (HuggingFace browse)
+export { modelsHubStore } from './models-hub/index.svelte';
+
 // SERVER
 export { serverStore } from './server.svelte';
 

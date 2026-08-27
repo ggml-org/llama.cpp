@@ -216,3 +216,15 @@ export type { ReasoningEffortLevel } from './reasoning';
 
 // Splash
 export type { SplashDimensions } from './splash';
+
+// HuggingFace types
+export type {
+	HfModelSearchParams,
+	HfModelSort,
+	HfModelInfo,
+	HfModelCardData,
+	HfModelDetails,
+	HfModelDetailInfo,
+	HfModelSibling,
+	HfModelApiResponse
+} from './huggingface';
