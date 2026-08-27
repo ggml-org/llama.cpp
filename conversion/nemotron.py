@@ -268,6 +268,13 @@ class NemotronHModel(GraniteHybridModel):
         if self.mtp_only and self._mtp_bid is None:
             raise ValueError("--mtp was requested, but this model does not contain a supported MTP head")
 
+    def find_hparam(self, keys: Iterable[str], *args, **kwargs) -> Any:
+        # newer configs drop num_hidden_layers, the layer count comes from layers_block_type
+        if "num_hidden_layers" in keys and "num_hidden_layers" not in self.hparams:
+            if (pattern := self.hparams.get("layers_block_type")) is not None:
+                return len(pattern)
+        return super().find_hparam(keys, *args, **kwargs)
+
     def get_attn_layers(self):
         pattern = self.hparams.get("hybrid_override_pattern") or self.hparams.get("layers_block_type")
         if pattern is None:
