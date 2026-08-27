@@ -336,11 +336,9 @@ export interface ChatFormActionsContext {
 	readonly hasAudioModality: boolean;
 	readonly hasVideoModality: boolean;
 	readonly hasVisionModality: boolean;
-	readonly hasMcpPromptsSupport: boolean;
 	readonly hasMcpResourcesSupport: boolean;
 	onFileUpload?: () => void;
 	onSystemPromptClick?: () => void;
-	onMcpPromptClick?: () => void;
 	onMcpResourcesClick?: () => void;
 	onMcpSettingsClick?: () => void;
 }

@@ -31,7 +31,6 @@
 		onMicClick?: () => void;
 		onStop?: () => void;
 		onSystemPromptClick?: () => void;
-		onMcpPromptClick?: () => void;
 		onMcpResourcesClick?: () => void;
 		onMcpSettingsClick?: () => void;
 	}
@@ -45,7 +44,6 @@
 		isReasoning = false,
 		isRecording = false,
 		onFileUpload,
-		onMcpPromptClick,
 		onMcpResourcesClick,
 		onMcpSettingsClick,
 		onMicClick,
@@ -72,8 +70,6 @@
 				.map((s) => s.id)
 		);
 	});
-
-	let hasMcpPromptsSupport = $derived(mcpStore.hasPromptsCapability(policyEnabledMcpServerIds));
 
 	let hasMcpResourcesSupport = $derived(mcpStore.hasResourcesCapability(policyEnabledMcpServerIds));
 
@@ -149,9 +145,6 @@
 		get hasAudioModality() {
 			return hasAudioModality;
 		},
-		get hasMcpPromptsSupport() {
-			return hasMcpPromptsSupport;
-		},
 		get hasMcpResourcesSupport() {
 			return hasMcpResourcesSupport;
 		},
@@ -163,9 +156,6 @@
 		},
 		get onFileUpload() {
 			return onFileUpload;
-		},
-		get onMcpPromptClick() {
-			return onMcpPromptClick;
 		},
 		get onMcpResourcesClick() {
 			return onMcpResourcesClick;

@@ -74,7 +74,6 @@
 		disabled?: boolean;
 		isLoading?: boolean;
 		placeholder?: string;
-		showMcpPromptButton?: boolean;
 		showAddButton?: boolean;
 		showModelSelector?: boolean;
 
@@ -104,7 +103,6 @@
 		onValueChange,
 		placeholder = 'Type a message...',
 		showAddButton = true,
-		showMcpPromptButton = false,
 		showModelSelector = true,
 		uploadedFiles = $bindable([]),
 		value = $bindable('')
@@ -630,7 +628,6 @@
 				isReasoning={chatStore.isReasoning}
 				{isRecording}
 				onFileUpload={handleFileUpload}
-				onMcpPromptClick={showMcpPromptButton ? () => pickers.openPromptPicker() : undefined}
 				onMcpResourcesClick={() => (isResourceDialogOpen = true)}
 				onMcpSettingsClick={() => (isMcpServersDialogOpen = true)}
 				onMicClick={handleMicClick}
