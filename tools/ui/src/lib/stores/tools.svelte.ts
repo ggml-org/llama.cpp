@@ -221,9 +221,13 @@ class ToolsStore {
 
 		if (!connection) return;
 
+		// the server-scoped group key disables every tool regardless of per-tool keys
+		this._disabledTools.delete(this.getMcpServerToolsKey(serverId));
+
 		for (const tool of connection.tools) {
 			this._disabledTools.delete(this.toolKey(ToolSource.MCP, tool.name, serverId));
 		}
+
 		this.persistDisabledTools();
 	}
 
