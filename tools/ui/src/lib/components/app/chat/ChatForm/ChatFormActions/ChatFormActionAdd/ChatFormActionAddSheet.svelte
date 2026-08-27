@@ -250,11 +250,8 @@
 </div>
 
 {#snippet sheetGroupRow(group: ToolGroup)}
-	{@const checked = toolsPanel.isGroupChecked(group)}
+	{@const checkState = toolsPanel.getGroupCheckState(group)}
 	{@const enabledCount = toolsPanel.getEnabledToolCount(group)}
-	<!-- mixed state: parent on but nothing or only part of it enabled -->
-	{@const indeterminate =
-		group.tools.length > 0 && (enabledCount === 0 ? checked : enabledCount < group.tools.length)}
 	{@const favicon = toolsPanel.getFavicon(group)}
 	{@const groupDisabled = toolsPanel.isGroupDisabled(group)}
 
@@ -281,9 +278,9 @@
 		</span>
 
 		<Checkbox
-			checked={checked && !indeterminate}
+			checked={checkState.checked}
 			class="{ICON_CLASS_DEFAULT} shrink-0"
-			{indeterminate}
+			indeterminate={checkState.indeterminate}
 			onCheckedChange={() => toolsPanel.toggleGroupByKey(group.key)}
 			onclick={(e) => e.stopPropagation()}
 		/>

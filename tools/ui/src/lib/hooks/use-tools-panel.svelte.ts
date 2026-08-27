@@ -12,6 +12,7 @@ export interface UseToolsPanelReturn {
 	readonly noToolsInfoMessage: string | null;
 	isGroupChecked(group: ToolGroup): boolean;
 	getEnabledToolCount(group: ToolGroup): number;
+	getGroupCheckState(group: ToolGroup): { checked: boolean; indeterminate: boolean };
 	getFavicon(group: ToolGroup): string | null;
 	isGroupDisabled(group: ToolGroup): boolean;
 	isToolEnabled(entry: ToolEntry): boolean;
@@ -63,6 +64,22 @@ export function useToolsPanel(): UseToolsPanelReturn {
 
 	function getEnabledToolCount(group: ToolGroup): number {
 		return group.tools.filter((tool) => conversationsStore.preferences.isToolActive(tool)).length;
+	}
+
+	/**
+	 * Group checkbox state: checked is the parent flag (category on, or the
+	 * server key on for MCP groups); indeterminate marks the mixed case where
+	 * the parent is on but nothing or only part of the group is enabled.
+	 * isToolActive folds the parent gates into the count, so a disabled parent
+	 * always yields plain unchecked.
+	 */
+	function getGroupCheckState(group: ToolGroup): { checked: boolean; indeterminate: boolean } {
+		const checked = isGroupChecked(group);
+		const enabledCount = getEnabledToolCount(group);
+		const indeterminate =
+			group.tools.length > 0 && (enabledCount === 0 ? checked : enabledCount < group.tools.length);
+
+		return { checked, indeterminate };
 	}
 
 	function getFavicon(group: ToolGroup): string | null {
@@ -123,6 +140,7 @@ export function useToolsPanel(): UseToolsPanelReturn {
 		expandedGroups,
 		getEnabledToolCount,
 		getFavicon,
+		getGroupCheckState,
 		handleOpen,
 		isGroupChecked,
 		isGroupDisabled,

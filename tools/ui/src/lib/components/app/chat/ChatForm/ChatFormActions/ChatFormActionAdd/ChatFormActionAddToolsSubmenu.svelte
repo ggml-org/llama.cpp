@@ -77,11 +77,7 @@
 
 {#snippet groupRow(group: ToolGroup)}
 	{@const isExpanded = toolsPanel.expandedGroups.has(group.key)}
-	{@const checked = toolsPanel.isGroupChecked(group)}
-	{@const enabledCount = toolsPanel.getEnabledToolCount(group)}
-	<!-- mixed state: parent on but nothing or only part of it enabled -->
-	{@const indeterminate =
-		group.tools.length > 0 && (enabledCount === 0 ? checked : enabledCount < group.tools.length)}
+	{@const checkState = toolsPanel.getGroupCheckState(group)}
 	{@const favicon = toolsPanel.getFavicon(group)}
 	{@const groupDisabled = toolsPanel.isGroupDisabled(group)}
 
@@ -124,9 +120,9 @@
 					{#snippet child({ props })}
 						<Checkbox
 							{...props}
-							checked={checked && !indeterminate}
+							checked={checkState.checked}
 							class="mr-2 {ICON_CLASS_DEFAULT} shrink-0"
-							{indeterminate}
+							indeterminate={checkState.indeterminate}
 							onCheckedChange={() => toolsPanel.toggleGroupByKey(group.key)}
 						/>
 					{/snippet}
@@ -134,7 +130,7 @@
 
 				<Tooltip.Content side="right">
 					<p>
-						{checked ? 'Disable' : 'Enable'}
+						{checkState.checked ? 'Disable' : 'Enable'}
 						{group.tools.length} tool{group.tools.length !== 1 ? 's' : ''}
 					</p>
 				</Tooltip.Content>
