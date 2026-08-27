@@ -78,6 +78,10 @@
 {#snippet groupRow(group: ToolGroup)}
 	{@const isExpanded = toolsPanel.expandedGroups.has(group.key)}
 	{@const checked = toolsPanel.isGroupChecked(group)}
+	{@const enabledCount = toolsPanel.getEnabledToolCount(group)}
+	// parent on but nothing under it enabled, or partially enabled: show mixed state
+	{@const indeterminate =
+		group.tools.length > 0 && (enabledCount === 0 ? checked : enabledCount < group.tools.length)}
 	{@const favicon = toolsPanel.getFavicon(group)}
 	{@const groupDisabled = toolsPanel.isGroupDisabled(group)}
 
@@ -85,7 +89,7 @@
 		onOpenChange={() => toolsPanel.toggleGroupExpanded(group.key)}
 		open={isExpanded}
 	>
-		<div class="flex items-center gap-1 {groupDisabled ? 'opacity-50' : ''}">
+		<div class="flex items-center gap-1 {groupDisabled ? 'pointer-events-none opacity-50' : ''}">
 			<Collapsible.Trigger
 				class="flex min-w-0 flex-1 items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-muted/50"
 			>
@@ -122,6 +126,7 @@
 							{...props}
 							{checked}
 							class="mr-2 {ICON_CLASS_DEFAULT} shrink-0"
+							{indeterminate}
 							onCheckedChange={() => toolsPanel.toggleGroupByKey(group.key)}
 						/>
 					{/snippet}
