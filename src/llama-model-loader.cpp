@@ -1288,6 +1288,9 @@ struct ggml_tensor * llama_model_loader::create_tensor(
         if (tensor_read_lazy == LLAMA_TENSOR_READ_LAZY_ON || ggml_nbytes(cur) > auto_lazy_min_size) {
             const auto & w = require_weight(tn.str().c_str());
             lazy_tensor_ranges[w.idx].emplace_back(w.offs, w.offs + ggml_nbytes(cur));
+
+            LLAMA_LOG_INFO("%s: tensor %s (size = %zu MiB) lazy read enabled\n",
+                    __func__, tn.str().c_str(), ggml_nbytes(cur)/1024/1024);
         }
     }
 
@@ -1373,7 +1376,7 @@ void llama_model_loader::init_mappings(bool prefetch, llama_mlocks * mlock_mmaps
             }
 
             const auto it_lazy = lazy_tensor_ranges.find(idx);
-            static const std::vector<std::pair<size_t, size_t>> no_lazy_ranges;
+            static const llama_mmap::ranges no_lazy_ranges;
 
             std::unique_ptr<llama_mmap> mapping = std::make_unique<llama_mmap>(file.get(), prefetch ? -1 : 0, is_numa,
                     it_lazy != lazy_tensor_ranges.end() ? it_lazy->second : no_lazy_ranges);

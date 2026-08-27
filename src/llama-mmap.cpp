@@ -440,8 +440,8 @@ void llama_file::write_u32(uint32_t val) const { pimpl->write_u32(val); }
 
 #if defined(_POSIX_MAPPED_FILES) || defined(_WIN32)
 // merge `ranges` and return their complement within [0, limit)
-static std::vector<std::pair<size_t, size_t>> ranges_complement(std::vector<std::pair<size_t, size_t>> ranges, size_t limit) {
-    std::vector<std::pair<size_t, size_t>> res;
+static llama_mmap::ranges ranges_complement(llama_mmap::ranges ranges, size_t limit) {
+    llama_mmap::ranges res;
     std::sort(ranges.begin(), ranges.end());
 
     size_t pos = 0;
@@ -465,7 +465,7 @@ struct llama_mmap::impl {
 #ifdef _POSIX_MAPPED_FILES
     std::vector<std::pair<size_t, size_t>> mapped_fragments;
 
-    impl(struct llama_file * file, size_t prefetch, bool numa, const std::vector<std::pair<size_t, size_t>> & lazy_ranges) {
+    impl(struct llama_file * file, size_t prefetch, bool numa, const llama_mmap::ranges & lazy_ranges) {
         size = file->size();
         int fd = file->file_id();
         int flags = MAP_SHARED;
@@ -572,7 +572,7 @@ struct llama_mmap::impl {
 #elif defined(_WIN32)
     HANDLE hMapping = nullptr;
 
-    impl(struct llama_file * file, size_t prefetch, bool numa, const std::vector<std::pair<size_t, size_t>> & lazy_ranges) {
+    impl(struct llama_file * file, size_t prefetch, bool numa, const llama_mmap::ranges & lazy_ranges) {
         GGML_UNUSED(numa);
 
         size = file->size();
@@ -641,7 +641,7 @@ struct llama_mmap::impl {
         }
     }
 #else
-    impl(struct llama_file * file, size_t prefetch, bool numa, const std::vector<std::pair<size_t, size_t>> & lazy_ranges) {
+    impl(struct llama_file * file, size_t prefetch, bool numa, const llama_mmap::ranges & lazy_ranges) {
         GGML_UNUSED(file);
         GGML_UNUSED(prefetch);
         GGML_UNUSED(numa);
@@ -663,7 +663,7 @@ struct llama_mmap::impl {
 };
 
 llama_mmap::llama_mmap(struct llama_file * file, size_t prefetch, bool numa,
-        const std::vector<std::pair<size_t, size_t>> & lazy_ranges) : pimpl(std::make_unique<impl>(file, prefetch, numa, lazy_ranges)) {}
+        const ranges & lazy_ranges) : pimpl(std::make_unique<impl>(file, prefetch, numa, lazy_ranges)) {}
 llama_mmap::~llama_mmap() = default;
 
 size_t llama_mmap::size() const { return pimpl->size; }
