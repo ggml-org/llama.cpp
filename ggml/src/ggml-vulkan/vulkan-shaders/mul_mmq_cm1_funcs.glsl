@@ -55,8 +55,7 @@ void block_a_to_shmem(block_a_prefetch blk, uint buf_ib, uint ks, uint loadr) {
     buf_a_qs[buf_ib * QPITCH + ks * (BK / 4) + loadr + 4] = hi4;
 
     if (loadr == 0) {
-        buf_a_d[ks * BM + buf_ib] = float(blk.dm.x);
-        buf_a_m[ks * BM + buf_ib] = float(blk.dm.y);
+        buf_a_dm[ks * BM + buf_ib] = vec2(float(blk.dm.x), float(blk.dm.y));
     }
 }
 
@@ -119,8 +118,7 @@ void block_a_to_shmem(block_a_prefetch blk, uint buf_ib, uint ks, uint loadr) {
     buf_a_qs[buf_ib * QPITCH + ks * (BK / 4) + loadr + 4] = hi4;
 
     if (loadr == 0) {
-        buf_a_d[ks * BM + buf_ib] = float(blk.dm.x);
-        buf_a_m[ks * BM + buf_ib] = float(blk.dm.y);
+        buf_a_dm[ks * BM + buf_ib] = vec2(float(blk.dm.x), float(blk.dm.y));
     }
 }
 
@@ -258,8 +256,7 @@ void block_a_to_shmem(block_a_prefetch blk, uint buf_ib, uint ks, uint loadr) {
         }
         vec2 dm = vec2(data_a_packed32[ib_k].dm);
         float d_scaled = dm.x * float(sc_val);
-        buf_a_d[ks * BM + buf_ib] = d_scaled;
-        buf_a_m[ks * BM + buf_ib] = 8.0 * d_scaled - (dm.y * float(mn_val));
+        buf_a_dm[ks * BM + buf_ib] = vec2(d_scaled, 8.0 * d_scaled - (dm.y * float(mn_val)));
     }
 }
 
@@ -316,8 +313,7 @@ void block_a_to_shmem(block_a_prefetch blk, uint buf_ib, uint ks, uint loadr) {
         }
         vec2 dm = vec2(data_a_packed32[ib_k].dm);
         float d_scaled = dm.x * float(sc_val);
-        buf_a_d[ks * BM + buf_ib] = d_scaled;
-        buf_a_m[ks * BM + buf_ib] = 16.0 * d_scaled - (dm.y * float(mn_val));
+        buf_a_dm[ks * BM + buf_ib] = vec2(d_scaled, 16.0 * d_scaled - (dm.y * float(mn_val)));
     }
 }
 
