@@ -75,6 +75,11 @@ void llama_model_glm5next::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_INDEXER_TOP_K,       hparams.indexer_top_k,      false);
     // index_kpool: tokens per compressed key, always_select_tail is implied (see build_dsa_top_k)
     ml.get_key(LLM_KV_ATTENTION_INDEXER_BLOCK_SIZE,  hparams.indexer_block_size, false);
+    if (hparams.indexer_block_size == 0) {
+        // some converters write the k-pool size under `indexer.kpool` rather than
+        // `indexer.block_size`; accept it so those GGUFs load without an override
+        ml.get_key(LLM_KV_ATTENTION_INDEXER_KPOOL, hparams.indexer_block_size, false);
+    }
 
     if (hparams.indexer_head_size > 0) {
         GGML_ASSERT(hparams.indexer_n_head > 0);
