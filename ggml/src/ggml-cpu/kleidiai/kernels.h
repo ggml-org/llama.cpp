@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright 2025 Arm Limited and/or its affiliates <open-source-office@arm.com>
+// SPDX-FileCopyrightText: Copyright 2025-2026 Arm Limited and/or its affiliates <open-source-office@arm.com>
 // SPDX-License-Identifier: MIT
 //
 
@@ -12,7 +12,8 @@ enum cpu_feature {
     CPU_FEATURE_I8MM    = 2,
     CPU_FEATURE_SVE     = 4,
     CPU_FEATURE_SME     = 8,
-    CPU_FEATURE_SME2    = 16
+    CPU_FEATURE_SME2    = 16,
+    CPU_FEATURE_FP16    = 32
 };
 
 inline cpu_feature& operator|=(cpu_feature& lhs, cpu_feature rhs) {
