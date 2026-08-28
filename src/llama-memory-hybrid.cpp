@@ -29,10 +29,8 @@ llama_memory_hybrid::llama_memory_hybrid(
                      bool   unified,
                             /* layer filters */
     const layer_filter_cb & filter_attn,
-    const layer_filter_cb & filter_recr,
-    const layer_filter_cb & filter_idx) :
+    const layer_filter_cb & filter_recr) :
     hparams(model.hparams),
-    hparams_idx(model.hparams),
     mem_attn(new llama_kv_cache(
         model,
         model.hparams,
@@ -64,19 +62,7 @@ llama_memory_hybrid::llama_memory_hybrid(
         filter_recr == nullptr ?
             [&](int32_t il) { return hparams.is_recr(il); }
             : filter_recr
-    )),
-    mem_idx(filter_idx == nullptr ? nullptr : [&] {
-        // MQA with a single key head of indexer_head_size, as llama_kv_cache_dsa shapes its own
-        std::fill(hparams_idx.n_head_kv_arr.begin(), hparams_idx.n_head_kv_arr.end(), 1);
-        hparams_idx.n_embd_head_k_full = model.hparams.indexer_head_size;
-
-        LLAMA_LOG_INFO("%s: creating indexer KV cache, size = %u cells\n", __func__, kv_size);
-
-        return new llama_kv_cache(
-            model, hparams_idx, type_k, type_v, v_trans, offload, unified,
-            kv_size, n_seq_max, n_pad, n_swa, swa_type,
-            nullptr, filter_idx, nullptr, nullptr);
-    }()) {}
+    )) {}
 
 llama_memory_context_ptr llama_memory_hybrid::init_batch(llama_batch_allocr & balloc, uint32_t n_ubatch, bool embd_all) {
     do {
@@ -129,17 +115,8 @@ llama_memory_context_ptr llama_memory_hybrid::init_batch(llama_batch_allocr & ba
             return std::make_unique<llama_memory_hybrid_context>(LLAMA_MEMORY_STATUS_FAILED_PREPARE);
         }
 
-        // The indexer cache is a side buffer addressed by the attention cache's cells, so it
-        // takes that slot layout rather than finding its own. Allocating separately let the
-        // two drift once context was rewritten between turns, pointing QSA top-k at the
-        // wrong cells.
-        llama_kv_cache::slot_info_vec_t heads_idx;
-        if (mem_idx) {
-            heads_idx = heads_attn;
-        }
-
         return std::make_unique<llama_memory_hybrid_context>(
-                this, std::move(heads_attn), std::move(heads_idx), std::move(ubatches));
+                this, std::move(heads_attn), std::move(ubatches));
     } while(false);
 
     return std::make_unique<llama_memory_hybrid_context>(LLAMA_MEMORY_STATUS_FAILED_PREPARE);
@@ -160,7 +137,6 @@ bool llama_memory_hybrid::get_can_shift() const {
 
 void llama_memory_hybrid::clear(bool data) {
     mem_attn->clear(data);
-    if (mem_idx) mem_idx->clear(data);
     mem_recr->clear(data);
 }
 
@@ -170,31 +146,26 @@ bool llama_memory_hybrid::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1
     if (!mem_recr->seq_rm(seq_id, p0, p1)) {
         return false;
     }
-    if (mem_idx) mem_idx->seq_rm(seq_id, p0, p1);
     return mem_attn->seq_rm(seq_id, p0, p1);
 }
 
 void llama_memory_hybrid::seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_id_dst, llama_pos p0, llama_pos p1) {
     mem_attn->seq_cp(seq_id_src, seq_id_dst, p0, p1);
-    if (mem_idx) mem_idx->seq_cp(seq_id_src, seq_id_dst, p0, p1);
     mem_recr->seq_cp(seq_id_src, seq_id_dst, p0, p1);
 }
 
 void llama_memory_hybrid::seq_keep(llama_seq_id seq_id) {
     mem_attn->seq_keep(seq_id);
-    if (mem_idx) mem_idx->seq_keep(seq_id);
     mem_recr->seq_keep(seq_id);
 }
 
 void llama_memory_hybrid::seq_add(llama_seq_id seq_id, llama_pos p0, llama_pos p1, llama_pos shift) {
     mem_attn->seq_add(seq_id, p0, p1, shift);
-    if (mem_idx) mem_idx->seq_add(seq_id, p0, p1, shift);
     mem_recr->seq_add(seq_id, p0, p1, shift);
 }
 
 void llama_memory_hybrid::seq_div(llama_seq_id seq_id, llama_pos p0, llama_pos p1, int d) {
     mem_attn->seq_div(seq_id, p0, p1, d);
-    if (mem_idx) mem_idx->seq_div(seq_id, p0, p1, d);
     mem_recr->seq_div(seq_id, p0, p1, d);
 }
 
@@ -234,10 +205,6 @@ llama_kv_cache * llama_memory_hybrid::get_mem_attn() const {
     return mem_attn.get();
 }
 
-llama_kv_cache * llama_memory_hybrid::get_mem_idx() const {
-    return mem_idx.get();
-}
-
 llama_memory_recurrent * llama_memory_hybrid::get_mem_recr() const {
     return mem_recr.get();
 }
@@ -262,14 +229,11 @@ llama_memory_hybrid_context::llama_memory_hybrid_context(
 llama_memory_hybrid_context::llama_memory_hybrid_context(
               llama_memory_hybrid * mem,
                   slot_info_vec_t   sinfos_attn,
-                  slot_info_vec_t   sinfos_idx,
         std::vector<llama_ubatch>   ubatches) :
     ubatches(std::move(ubatches)),
     // note: here we copy the ubatches. not sure if this is ideal
     ctx_attn(new llama_kv_cache_context(mem->get_mem_attn(), std::move(sinfos_attn), this->ubatches)),
     ctx_recr(new llama_memory_recurrent_context(mem->get_mem_recr(), this->ubatches)),
-    ctx_idx(mem->get_mem_idx() == nullptr ? nullptr :
-        new llama_kv_cache_context(mem->get_mem_idx(), std::move(sinfos_idx), this->ubatches)),
     status(llama_memory_status_combine(ctx_attn->get_status(), ctx_recr->get_status())) {
 }
 
@@ -278,7 +242,6 @@ bool llama_memory_hybrid_context::next() {
 
     ctx_attn->next();
     ctx_recr->next();
-    if (ctx_idx) ctx_idx->next();
 
     if (++i_next >= ubatches.size()) {
         return false;
@@ -294,7 +257,6 @@ bool llama_memory_hybrid_context::apply() {
 
     res = res & ctx_attn->apply();
     res = res & ctx_recr->apply();
-    if (ctx_idx) res = res & ctx_idx->apply();
 
     return res;
 }
@@ -314,8 +276,4 @@ const llama_kv_cache_context * llama_memory_hybrid_context::get_attn() const {
 
 const llama_memory_recurrent_context * llama_memory_hybrid_context::get_recr() const {
     return static_cast<const llama_memory_recurrent_context *>(ctx_recr.get());
-}
-
-const llama_kv_cache_context * llama_memory_hybrid_context::get_idx() const {
-    return static_cast<const llama_kv_cache_context *>(ctx_idx.get());
 }
