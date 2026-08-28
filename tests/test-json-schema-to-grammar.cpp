@@ -1580,19 +1580,44 @@ int main() {
             )""",
         });
 
-        // the rules of the partial conversion (here "root-0") must not leak into the grammar
+        // \d, \w, \s class escapes are expanded to GBNF char classes
         run({
             SUCCESS,
-            "regexp with unsupported shorthand",
+            "regexp with class shorthand",
             R"""({
                 "type": "string",
                 "pattern": "^[0-9]{3}\\w$"
             })""",
             R"""(
-                char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
-                root ::= string
+                root ::= "\"" (root-1{3,3} [0-9A-Za-z_]) "\""
+                root-1 ::= [0-9]
                 space ::= | " " | "\n"{1,2} [ \t]{0,20}
-                string ::= "\"" char* "\""
+            )""",
+        });
+
+        run({
+            SUCCESS,
+            "regexp with all class shorthands",
+            R"""({
+                "type": "string",
+                "pattern": "^\\d\\D\\w\\W\\s\\S$"
+            })""",
+            R"""(
+                root ::= "\"" ([0-9] [^0-9] [0-9A-Za-z_] [^0-9A-Za-z_] [ \t\n\r] [^ \t\n\r]) "\""
+                space ::= | " " | "\n"{1,2} [ \t]{0,20}
+            )""",
+        });
+
+        run({
+            SUCCESS,
+            "regexp with class shorthands inside brackets",
+            R"""({
+                "type": "string",
+                "pattern": "^[\\d_][\\w-]+[\\s.]?$"
+            })""",
+            R"""(
+                root ::= "\"" ([0-9_] [0-9A-Za-z_-]+ [ \t\n\r.]?) "\""
+                space ::= | " " | "\n"{1,2} [ \t]{0,20}
             )""",
         });
 
