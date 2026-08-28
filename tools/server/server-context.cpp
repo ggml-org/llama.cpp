@@ -15,6 +15,7 @@
 #include "sampling.h"
 #include "speculative.h"
 #include "speculative-prefill.h"
+#include "src/llama-ext.h"
 #include "mtmd.h"
 #include "mtmd-helper.h"
 
@@ -1248,88 +1249,90 @@ private:
 
         if (params_base.speculative.prefill.enabled) {
             if (llama_model_is_recurrent(model_tgt)) {
-                SRV_WRN("%s", "speculative prefill is not supported for recurrent models; disabling\n");
-                params_base.speculative.prefill.enabled = false;
-            } else {
-                const bool spec_dflash = std::find(params_base.speculative.types.begin(),
-                                                   params_base.speculative.types.end(),
-                                                   COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH) != params_base.speculative.types.end();
-                const bool spec_dspark = std::find(params_base.speculative.types.begin(),
-                                                   params_base.speculative.types.end(),
-                                                   COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK) != params_base.speculative.types.end();
-                if (spec_dflash || spec_dspark) {
-                    SRV_WRN("%s", "speculative prefill is not supported with DFlash or DSpark speculative decoding; disabling\n");
-                    params_base.speculative.prefill.enabled = false;
-                }
+                SRV_ERR("%s", "speculative prefill is not supported for recurrent models\n");
+                return false;
             }
-        }
 
-        if (params_base.speculative.prefill.enabled) {
+            const bool has_target_dependent_dft = std::any_of(
+                params_base.speculative.types.begin(),
+                params_base.speculative.types.end(),
+                [](common_speculative_type t) {
+                    return t == COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH ||
+                           t == COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK ||
+                           t == COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3 ||
+                           t == COMMON_SPECULATIVE_TYPE_DRAFT_MTP;
+                });
+
             common_params_model spf_model = params_base.speculative.prefill.model;
-            if (spf_model.empty()) {
+            if (spf_model.empty() && !has_target_dependent_dft) {
                 spf_model = params_base.speculative.draft.mparams;
             }
 
             if (spf_model.empty()) {
-                SRV_WRN("%s", "speculative prefill enabled but no draft model was provided; disabling\n");
-                params_base.speculative.prefill.enabled = false;
+                SRV_ERR("%s", "speculative prefill enabled but no draft model was provided\n");
+                return false;
+            }
+
+            common_params params_spf = common_base_params_to_speculative(params_base);
+            params_spf.model = spf_model;
+            if (params_base.speculative.prefill.n_gpu_layers != -1) {
+                params_spf.n_gpu_layers = params_base.speculative.prefill.n_gpu_layers;
+            }
+            if (!params_base.speculative.prefill.devices.empty()) {
+                params_spf.devices = params_base.speculative.prefill.devices;
+            }
+            params_spf.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED;
+            params_spf.fit_params = false;
+            params_spf.n_parallel = params_base.n_parallel;
+            params_spf.speculative.prefill.enabled = false;
+            params_spf.speculative.draft.mparams = {};
+
+            const bool reuse_dft = model_dft && !has_target_dependent_dft && (
+                params_base.speculative.prefill.model.empty() ||
+                spf_model.path == params_base.speculative.draft.mparams.path);
+
+            if (reuse_dft) {
+                SRV_INF("reusing draft model for speculative prefill '%s'\n", params_spf.model.get_name().c_str());
+                llama_context_params cparams = common_context_params_to_llama(params_spf);
+                ctx_spf_own.reset(llama_init_from_model(model_dft, cparams));
+                model_spf = model_dft;
+                ctx_spf   = ctx_spf_own.get();
             } else {
-                common_params params_spf = common_base_params_to_speculative(params_base);
-                params_spf.model = spf_model;
-                if (params_base.speculative.prefill.n_gpu_layers != -1) {
-                    params_spf.n_gpu_layers = params_base.speculative.prefill.n_gpu_layers;
-                }
-                if (!params_base.speculative.prefill.devices.empty()) {
-                    params_spf.devices = params_base.speculative.prefill.devices;
-                }
-                params_spf.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED;
-                params_spf.fit_params = false;
-                params_spf.n_parallel = params_base.n_parallel;
-                params_spf.speculative.prefill.enabled = false;
-                params_spf.speculative.draft.mparams = {};
+                SRV_INF("loading speculative prefill draft model '%s'\n", params_spf.model.get_name().c_str());
+                llama_init_spf = common_init_from_params(params_spf);
+                model_spf = llama_init_spf ? llama_init_spf->model() : nullptr;
+                ctx_spf   = llama_init_spf ? llama_init_spf->context() : nullptr;
+            }
+            if (model_spf == nullptr || ctx_spf == nullptr) {
+                SRV_ERR("failed to load speculative prefill draft model, '%s'\n", params_spf.model.path.c_str());
+                return false;
+            }
 
-                const bool reuse_dft = model_dft && (
-                    params_base.speculative.prefill.model.empty() ||
-                    spf_model.path == params_base.speculative.draft.mparams.path);
+            if (llama_model_is_recurrent(model_spf)) {
+                SRV_ERR("speculative prefill draft model '%s' is recurrent and not supported\n", params_spf.model.get_name().c_str());
+                return false;
+            }
 
-                if (reuse_dft) {
-                    SRV_INF("reusing draft model for speculative prefill '%s'\n", params_spf.model.get_name().c_str());
-                    llama_context_params cparams = common_context_params_to_llama(params_spf);
-                    ctx_spf_own.reset(llama_init_from_model(model_dft, cparams));
-                    model_spf = model_dft;
-                    ctx_spf   = ctx_spf_own.get();
-                } else {
-                    SRV_INF("loading speculative prefill draft model '%s'\n", params_spf.model.get_name().c_str());
-                    llama_init_spf = common_init_from_params(params_spf);
-                    model_spf = llama_init_spf ? llama_init_spf->model() : nullptr;
-                    ctx_spf   = llama_init_spf ? llama_init_spf->context() : nullptr;
-                }
-                if (model_spf == nullptr || ctx_spf == nullptr) {
-                    SRV_ERR("failed to load speculative prefill draft model, '%s'\n", params_spf.model.path.c_str());
-                    return false;
-                }
+            if (llama_model_target_layer_ids_n(model_spf) > 0) {
+                SRV_ERR("speculative prefill draft model '%s' is target-dependent and cannot be used for speculative prefill\n", params_spf.model.get_name().c_str());
+                return false;
+            }
 
-                const llama_vocab * vocab_spf = llama_model_get_vocab(model_spf);
-                const int n_vocab_tgt = llama_vocab_n_tokens(vocab);
-                const int n_vocab_spf = llama_vocab_n_tokens(vocab_spf);
-                const int vocab_diff  = n_vocab_tgt > n_vocab_spf ? n_vocab_tgt - n_vocab_spf : n_vocab_spf - n_vocab_tgt;
-                if (vocab_diff > 128) {
-                    SRV_ERR("speculative prefill vocab size difference %d exceeds 128; disabling\n", vocab_diff);
-                    params_base.speculative.prefill.enabled = false;
-                    smpl_spf.reset();
-                    ctx_spf_own.reset();
-                    llama_init_spf.reset();
-                    ctx_spf   = nullptr;
-                    model_spf = nullptr;
-                } else {
-                    common_params_sampling sparams_spf;
-                    sparams_spf.temp = 0.0f;
-                    smpl_spf.reset(common_sampler_init(model_spf, sparams_spf));
-                    if (!smpl_spf) {
-                        SRV_ERR("%s", "failed to init speculative prefill sampler\n");
-                        return false;
-                    }
-                }
+            const llama_vocab * vocab_spf = llama_model_get_vocab(model_spf);
+            const int n_vocab_tgt = llama_vocab_n_tokens(vocab);
+            const int n_vocab_spf = llama_vocab_n_tokens(vocab_spf);
+            const int vocab_diff  = n_vocab_tgt > n_vocab_spf ? n_vocab_tgt - n_vocab_spf : n_vocab_spf - n_vocab_tgt;
+            if (vocab_diff > 128) {
+                SRV_ERR("speculative prefill vocab size difference %d exceeds 128\n", vocab_diff);
+                return false;
+            }
+
+            common_params_sampling sparams_spf;
+            sparams_spf.temp = 0.0f;
+            smpl_spf.reset(common_sampler_init(model_spf, sparams_spf));
+            if (!smpl_spf) {
+                SRV_ERR("%s", "failed to init speculative prefill sampler\n");
+                return false;
             }
         }
 
@@ -3375,7 +3378,7 @@ private:
                                 return;
                             }
 
-                            if (slot.task->params.cache_prompt) {
+                            if (slot.task->params.cache_prompt && !slot.spec_prefill_active) {
                                 // reuse any previously computed tokens that are common with the new prompt
                                 n_past = slot.prompt.tokens.get_common_prefix(input_tokens);
 

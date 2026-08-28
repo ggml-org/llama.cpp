@@ -5,6 +5,7 @@
 #include "sampling.h"
 #include "speculative.h"
 #include "speculative-prefill.h"
+#include "../../src/llama-ext.h"
 
 #include <algorithm>
 #include <clocale>
@@ -81,6 +82,16 @@ int main(int argc, char ** argv) {
 
     llama_model * model_dft = init_dft->model();
     llama_context * ctx_dft = init_dft->context();
+
+    if (llama_model_is_recurrent(model_dft)) {
+        LOG_ERR("%s: draft model is recurrent and not supported for speculative prefill\n", __func__);
+        return 1;
+    }
+
+    if (llama_model_target_layer_ids_n(model_dft) > 0) {
+        LOG_ERR("%s: draft model '%s' is target-dependent and cannot be used for speculative prefill\n", __func__, dft_model.path.c_str());
+        return 1;
+    }
 
     const llama_vocab * vocab_tgt = llama_model_get_vocab(model_tgt);
     const llama_vocab * vocab_dft = llama_model_get_vocab(model_dft);
