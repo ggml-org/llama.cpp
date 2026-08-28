@@ -12,6 +12,7 @@
 #include <queue>
 #include <condition_variable>
 #include <atomic>
+#include <set>
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
@@ -255,6 +256,11 @@ std::string basename(const std::string &path) {
     return path.substr(path.find_last_of("/\\") + 1);
 }
 
+std::string get_path_dirname(const std::string &path) {
+    size_t pos = path.find_last_of("/\\");
+    return pos == std::string::npos ? std::string(".") : path.substr(0, pos);
+}
+
 std::stringstream make_generic_stringstream() {
     std::stringstream ss;
     ss.imbue(c_locale);
@@ -335,8 +341,51 @@ compile_count_guard acquire_compile_slot() {
     return compile_count_guard(&compile_count, &decrement_compile_count);
 }
 
+// Shaders with a specialization-constant local size (local_size_*_id) lower to the
+// LocalSizeId execution mode, which the Vulkan environment rules only allow from
+// target-env vulkan1.3 onward (without it, the SPIR-V is technically invalid, even
+// though some older glslc/spirv-opt versions failed to catch it). The declaration can
+// live in an #include'd file, so this follows local (same-directory) includes.
+bool shader_needs_localsizeid(const std::string& path, std::set<std::string>& visited) {
+    if (!visited.insert(path).second) {
+        return false;
+    }
+
+    std::string source = read_binary_file(path, true);
+    if (source.find("local_size_x_id") != std::string::npos ||
+        source.find("local_size_y_id") != std::string::npos ||
+        source.find("local_size_z_id") != std::string::npos) {
+        return true;
+    }
+
+    const std::string dir = get_path_dirname(path);
+    size_t pos = 0;
+    while ((pos = source.find("#include", pos)) != std::string::npos) {
+        size_t quote_start = source.find('"', pos);
+        size_t newline = source.find('\n', pos);
+        if (quote_start == std::string::npos || (newline != std::string::npos && quote_start > newline)) {
+            pos += 8;
+            continue;
+        }
+        size_t quote_end = source.find('"', quote_start + 1);
+        if (quote_end == std::string::npos) {
+            pos = quote_start + 1;
+            continue;
+        }
+        std::string included = source.substr(quote_start + 1, quote_end - quote_start - 1);
+        if (shader_needs_localsizeid(dir + "/" + included, visited)) {
+            return true;
+        }
+        pos = quote_end + 1;
+    }
+
+    return false;
+}
+
 void string_to_spv_func(std::string name, std::string in_path, std::string out_path, std::map<std::string, std::string> defines, bool coopmat, bool dep_file, compile_count_guard slot) {
-    std::string target_env = (name.find("_cm2") != std::string::npos) ? "--target-env=vulkan1.3" : "--target-env=vulkan1.2";
+    std::set<std::string> visited;
+    bool needs_vulkan13 = name.find("_cm2") != std::string::npos || shader_needs_localsizeid(in_path, visited);
+    std::string target_env = needs_vulkan13 ? "--target-env=vulkan1.3" : "--target-env=vulkan1.2";
 
     #ifdef _WIN32
         std::vector<std::string> cmd = {GLSLC, "-fshader-stage=compute", target_env, "\"" + in_path + "\"", "-o", "\"" + out_path + "\""};
