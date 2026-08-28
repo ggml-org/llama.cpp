@@ -69,8 +69,8 @@
 		<ChatMessageEditForm />
 	{:else}
 		<ChatMessageUserBubble
-			content={message.content}
 			attachments={message.extra}
+			content={message.content}
 			renderMarkdown={true}
 		/>
 
@@ -82,8 +82,8 @@
 				>
 					<ChatMessageStatistics
 						mode={ChatMessageStatisticsMode.READING}
-						promptTokens={storedReadingStats!.promptTokens}
 						promptMs={storedReadingStats!.promptMs}
+						promptTokens={storedReadingStats!.promptTokens}
 					/>
 				</div>
 			</div>
@@ -95,10 +95,10 @@
 						class="inline-flex flex-wrap items-start justify-end gap-2 text-xs text-muted-foreground"
 					>
 						<ChatMessageStatistics
-							mode={ChatMessageStatisticsMode.READING}
 							isLive
-							promptTokens={liveStats.tokensProcessed}
+							mode={ChatMessageStatisticsMode.READING}
 							promptMs={liveStats.timeMs}
+							promptTokens={liveStats.tokensProcessed}
 						/>
 					</div>
 				</div>
