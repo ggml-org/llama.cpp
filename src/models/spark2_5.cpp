@@ -1,6 +1,6 @@
 #include "models.h"
 
-void llama_model_spark3::load_arch_hparams(llama_model_loader & ml) {
+void llama_model_spark2_5::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
     ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa);
 
@@ -17,7 +17,7 @@ void llama_model_spark3::load_arch_hparams(llama_model_loader & ml) {
     }
 }
 
-void llama_model_spark3::load_arch_tensors(llama_model_loader &) {
+void llama_model_spark2_5::load_arch_tensors(llama_model_loader &) {
     LLAMA_LOAD_LOCALS;
 
     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
@@ -49,11 +49,11 @@ void llama_model_spark3::load_arch_tensors(llama_model_loader &) {
     }
 }
 
-std::unique_ptr<llm_graph_context> llama_model_spark3::build_arch_graph(const llm_graph_params & params) const {
+std::unique_ptr<llm_graph_context> llama_model_spark2_5::build_arch_graph(const llm_graph_params & params) const {
     return std::make_unique<graph>(*this, params);
 }
 
-llama_model_spark3::graph::graph(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
+llama_model_spark2_5::graph::graph(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
     const int64_t n_embd_head = hparams.n_embd_head_v();
 
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());

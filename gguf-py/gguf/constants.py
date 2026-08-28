@@ -597,7 +597,7 @@ class MODEL_ARCH(IntEnum):
     PADDLEOCR        = auto()
     MIMO2            = auto()
     STEP35           = auto()
-    SPARK3           = auto()
+    SPARK2_5           = auto()
     LLAMA_EMBED      = auto()
     MAINCODER        = auto()
     KIMI_LINEAR      = auto()
@@ -1322,7 +1322,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.PADDLEOCR:        "paddleocr",
     MODEL_ARCH.MIMO2:            "mimo2",
     MODEL_ARCH.STEP35:           "step35",
-    MODEL_ARCH.SPARK3:           "spark3",
+    MODEL_ARCH.SPARK2_5:         "spark2_5",
     MODEL_ARCH.LLAMA_EMBED:      "llama-embed",
     MODEL_ARCH.MAINCODER:        "maincoder",
     MODEL_ARCH.KIMI_LINEAR:      "kimi-linear",
@@ -5048,7 +5048,7 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.NEXTN_SHARED_HEAD_HEAD,
         MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM,
     ],
-    MODEL_ARCH.SPARK3: [
+    MODEL_ARCH.SPARK2_5: [
         MODEL_TENSOR.TOKEN_EMBD,
         MODEL_TENSOR.OUTPUT_NORM,
         MODEL_TENSOR.OUTPUT,
