@@ -17786,6 +17786,9 @@ static void ggml_vk_graph_optimize(ggml_backend_t backend, struct ggml_cgraph * 
             if (dst->src[s] == src) {
                 return true;
             }
+            if (is_empty(dst) || is_empty(src)) {
+                continue;
+            }
             // A source view of dst may read storage written through a different view by src.
             if (dst->src[s] && base(dst->src[s]) == base(src)) {
                 return true;
