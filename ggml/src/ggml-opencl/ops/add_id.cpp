@@ -13,10 +13,11 @@ void ggml_cl_load_kernels_add_id(ggml_backend_opencl_context * backend_ctx) {
 #else
         const std::string kernel_src = read_file("add_id.cl");
 #endif
-        backend_ctx->program_add_id =
+        cl_program prog =
             build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
 
-        CL_CHECK((backend_ctx->kernel_add_id = clCreateKernel(backend_ctx->program_add_id, "kernel_add_id", &err), err));
+        CL_CHECK((backend_ctx->kernel_add_id = clCreateKernel(prog, "kernel_add_id", &err), err));
+        CL_CHECK(clReleaseProgram(prog));
         GGML_LOG_CONT(".");
     }
 }

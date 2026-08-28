@@ -14,13 +14,13 @@ void ggml_cl_load_kernels_pad(ggml_backend_opencl_context * backend_ctx) {
         const std::string kernel_src = read_file("pad.cl");
 #endif
         if (!kernel_src.empty()) {
-            backend_ctx->program_pad =
+            cl_program prog =
                 build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
-            CL_CHECK((backend_ctx->kernel_pad = clCreateKernel(backend_ctx->program_pad, "kernel_pad", &err), err));
+            CL_CHECK((backend_ctx->kernel_pad = clCreateKernel(prog, "kernel_pad", &err), err));
+            CL_CHECK(clReleaseProgram(prog));
             GGML_LOG_CONT(".");
         } else {
             GGML_LOG_WARN("ggml_opencl: pad kernel source not found or empty. Pad operations will not be available.\n");
-            backend_ctx->program_pad = nullptr;
             backend_ctx->kernel_pad = nullptr;
         }
     }

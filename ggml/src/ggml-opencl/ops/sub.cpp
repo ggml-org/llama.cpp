@@ -13,13 +13,14 @@ void ggml_cl_load_kernels_sub(ggml_backend_opencl_context * backend_ctx) {
 #else
         const std::string kernel_src = read_file("sub.cl");
 #endif
-        backend_ctx->program_sub =
+        cl_program prog =
             build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
 
-        CL_CHECK((backend_ctx->kernel_sub         = clCreateKernel(backend_ctx->program_sub, "kernel_sub", &err), err));
-        CL_CHECK((backend_ctx->kernel_sub_row     = clCreateKernel(backend_ctx->program_sub, "kernel_sub_row", &err), err));
-        CL_CHECK((backend_ctx->kernel_sub_f16     = clCreateKernel(backend_ctx->program_sub, "kernel_sub_f16", &err), err));
-        CL_CHECK((backend_ctx->kernel_sub_row_f16 = clCreateKernel(backend_ctx->program_sub, "kernel_sub_row_f16", &err), err));
+        CL_CHECK((backend_ctx->kernel_sub         = clCreateKernel(prog, "kernel_sub", &err), err));
+        CL_CHECK((backend_ctx->kernel_sub_row     = clCreateKernel(prog, "kernel_sub_row", &err), err));
+        CL_CHECK((backend_ctx->kernel_sub_f16     = clCreateKernel(prog, "kernel_sub_f16", &err), err));
+        CL_CHECK((backend_ctx->kernel_sub_row_f16 = clCreateKernel(prog, "kernel_sub_row_f16", &err), err));
+        CL_CHECK(clReleaseProgram(prog));
         GGML_LOG_CONT(".");
     }
 }

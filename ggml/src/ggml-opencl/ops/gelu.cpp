@@ -13,15 +13,16 @@ void ggml_cl_load_kernels_gelu(ggml_backend_opencl_context * backend_ctx) {
 #else
         const std::string kernel_src = read_file("gelu.cl");
 #endif
-        backend_ctx->program_gelu =
+        cl_program prog =
             build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
 
-        CL_CHECK((backend_ctx->kernel_gelu         = clCreateKernel(backend_ctx->program_gelu, "kernel_gelu", &err), err));
-        CL_CHECK((backend_ctx->kernel_gelu_4       = clCreateKernel(backend_ctx->program_gelu, "kernel_gelu_4", &err), err));
-        CL_CHECK((backend_ctx->kernel_gelu_erf     = clCreateKernel(backend_ctx->program_gelu, "kernel_gelu_erf", &err), err));
-        CL_CHECK((backend_ctx->kernel_gelu_erf_4   = clCreateKernel(backend_ctx->program_gelu, "kernel_gelu_erf_4", &err), err));
-        CL_CHECK((backend_ctx->kernel_gelu_quick   = clCreateKernel(backend_ctx->program_gelu, "kernel_gelu_quick", &err), err));
-        CL_CHECK((backend_ctx->kernel_gelu_quick_4 = clCreateKernel(backend_ctx->program_gelu, "kernel_gelu_quick_4", &err), err));
+        CL_CHECK((backend_ctx->kernel_gelu         = clCreateKernel(prog, "kernel_gelu", &err), err));
+        CL_CHECK((backend_ctx->kernel_gelu_4       = clCreateKernel(prog, "kernel_gelu_4", &err), err));
+        CL_CHECK((backend_ctx->kernel_gelu_erf     = clCreateKernel(prog, "kernel_gelu_erf", &err), err));
+        CL_CHECK((backend_ctx->kernel_gelu_erf_4   = clCreateKernel(prog, "kernel_gelu_erf_4", &err), err));
+        CL_CHECK((backend_ctx->kernel_gelu_quick   = clCreateKernel(prog, "kernel_gelu_quick", &err), err));
+        CL_CHECK((backend_ctx->kernel_gelu_quick_4 = clCreateKernel(prog, "kernel_gelu_quick_4", &err), err));
+        CL_CHECK(clReleaseProgram(prog));
         GGML_LOG_CONT(".");
     }
 }
