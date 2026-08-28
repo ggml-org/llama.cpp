@@ -574,6 +574,10 @@ struct common_params {
     bool no_op_offload     = false; // globally disable offload host tensor operations to device
     bool no_extra_bufts    = false; // disable extra buffer types (used for weight repacking)
     bool no_host           = false; // bypass host buffer allowing extra buffers to be used
+    bool    ple_on_disk    = false; // keep the n-gram hash-embedding table on disk (qwen4exp)
+    bool    ple_direct_io  = true;  // ... read with O_DIRECT
+    int32_t ple_io_threads = 64;    // ... parallel readers (random 4 KiB reads: this NVMe gives 62k IOPS at 16, 130k at 64, ~160k at 128+)
+    int32_t ple_cache_mb   = 256;   // ... row cache, 0 disables
 
     bool single_turn       = false; // single turn chat conversation
 

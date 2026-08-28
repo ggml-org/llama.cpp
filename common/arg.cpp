@@ -2742,6 +2742,37 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_OVERRIDE_TENSOR"));
     add_opt(common_arg(
+        {"--ngram-on-disk"},
+        "keep the model's n-gram hash-embedding table (per_layer_token_embd, 28.8 GB on Qwen3.8-Flash-Next)\n"
+        "on disk: it is never mapped or loaded, each batch reads just the rows it gathers from the GGUF.\n"
+        "Only qwen4exp has such a table; on any other model this is a no-op",
+        [](common_params & params) {
+            params.ple_on_disk = true;
+        }
+    ).set_env("LLAMA_ARG_NGRAM_ON_DISK"));
+    add_opt(common_arg(
+        {"--ngram-io-threads"}, "N",
+        string_format("threads reading n-gram rows for --ngram-on-disk (default: %d)", params.ple_io_threads),
+        [](common_params & params, int value) {
+            params.ple_io_threads = value;
+        }
+    ).set_env("LLAMA_ARG_NGRAM_IO_THREADS"));
+    add_opt(common_arg(
+        {"--ngram-cache"}, "MiB",
+        string_format("in-memory cache of recently read n-gram rows for --ngram-on-disk, 0 disables (default: %d)", params.ple_cache_mb),
+        [](common_params & params, int value) {
+            params.ple_cache_mb = value;
+        }
+    ).set_env("LLAMA_ARG_NGRAM_CACHE"));
+    add_opt(common_arg(
+        {"--ngram-direct-io"},
+        {"--no-ngram-direct-io"},
+        string_format("read n-gram rows with O_DIRECT so they bypass the page cache (default: %s)", params.ple_direct_io ? "enabled" : "disabled"),
+        [](common_params & params, bool value) {
+            params.ple_direct_io = value;
+        }
+    ).set_env("LLAMA_ARG_NGRAM_DIRECT_IO"));
+    add_opt(common_arg(
         {"-cmoe", "--cpu-moe"},
         "keep all Mixture of Experts (MoE) weights in the CPU",
         [](common_params & params) {
