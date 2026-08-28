@@ -7,7 +7,7 @@
 #include <openvino/op/convert.hpp>
 
 namespace ov {
-namespace frontend {    
+namespace frontend {
 namespace ggml {
 namespace op {
 
