@@ -160,6 +160,7 @@ static float ggml_get_op_params_f32(const struct ggml_tensor * tensor, uint32_t 
     return ((const float *)(tensor->op_params))[i];
 }
 
+// [TAG_GGML_PREC]
 // - GGML_OP_MUL_MAT
 //   0 - acc
 //   1 - hint
