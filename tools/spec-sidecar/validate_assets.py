@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 
 
-MTP_SCHEMA = {
+QWEN35_MTP_SCHEMA = {
     "token_embd.weight": ("2", [5120, 248320], 715161600),
     "blk.64.attn_k.weight": ("2", [5120, 1024], 2949120),
     "blk.64.attn_k_norm.weight": ("0", [256], 1024),
@@ -32,6 +32,47 @@ MTP_SCHEMA = {
     "blk.64.post_attention_norm.weight": ("0", [5120], 20480),
     "blk.64.nextn.shared_head_head.weight": ("2", [5120, 40960], 117964800),
 }
+
+
+QWEN4EXP_MTP_SCHEMA = {
+    "output.weight": ("14", [2560, 248320], 521472000),
+    "output_hc_down.weight": ("2", [10240, 320], 1843200),
+    "output_hc_norm.weight": ("0", [10240], 40960),
+    "output_hc_up.weight": ("2", [320, 10240], 1843200),
+    "token_embd.weight": ("2", [2560, 248320], 357580800),
+    "blk.48.attn_k.weight": ("2", [2560, 512], 737280),
+    "blk.48.attn_k_norm.weight": ("0", [256], 1024),
+    "blk.48.attn_output.weight": ("2", [6144, 2560], 8847360),
+    "blk.48.attn_q.weight": ("2", [2560, 12288], 17694720),
+    "blk.48.attn_q_norm.weight": ("0", [256], 1024),
+    "blk.48.attn_v.weight": ("2", [2560, 512], 737280),
+    "blk.48.ffn_down_exps.weight": ("2", [640, 2560, 512], 471859200),
+    "blk.48.ffn_down_shexp.weight": ("2", [640, 2560], 921600),
+    "blk.48.ffn_gate_exps.weight": ("2", [2560, 640, 512], 471859200),
+    "blk.48.ffn_gate_inp.weight": ("0", [2560, 512], 5242880),
+    "blk.48.ffn_gate_inp_shexp.weight": ("0", [2560], 10240),
+    "blk.48.ffn_gate_shexp.weight": ("2", [2560, 640], 921600),
+    "blk.48.ffn_up_exps.weight": ("2", [2560, 640, 512], 471859200),
+    "blk.48.ffn_up_shexp.weight": ("2", [2560, 640], 921600),
+    "blk.48.hc_attn_down.weight": ("2", [10240, 320], 1843200),
+    "blk.48.hc_attn_inject.weight": ("2", [10240, 4], 23040),
+    "blk.48.hc_attn_norm.weight": ("0", [10240], 40960),
+    "blk.48.hc_attn_up.weight": ("2", [320, 10240], 1843200),
+    "blk.48.hc_ffn_down.weight": ("2", [10240, 320], 1843200),
+    "blk.48.hc_ffn_inject.weight": ("2", [10240, 4], 23040),
+    "blk.48.hc_ffn_norm.weight": ("0", [10240], 40960),
+    "blk.48.hc_ffn_up.weight": ("2", [320, 10240], 1843200),
+    "blk.48.indexer.k_norm.weight": ("0", [128], 512),
+    "blk.48.indexer.k_proj.weight": ("1", [2560, 128], 655360),
+    "blk.48.indexer.q_norm.weight": ("0", [128], 512),
+    "blk.48.indexer.q_proj.weight": ("1", [2560, 512], 2621440),
+    "blk.48.nextn.eh_proj.weight": ("2", [5120, 2560], 7372800),
+    "blk.48.nextn.enorm.weight": ("0", [2560], 10240),
+    "blk.48.nextn.hnorm.weight": ("0", [10240], 40960),
+}
+
+# Backward-compatible name for out-of-tree callers of the asset helper.
+MTP_SCHEMA = QWEN35_MTP_SCHEMA
 
 
 def dflash_schema() -> dict[str, tuple[str, list[int], int]]:
@@ -121,11 +162,12 @@ def validate_schema(tensors: list[dict], expected: dict[str, tuple[str, list[int
             raise ValueError(f"{label} schema mismatch for {name}: expected {wanted}, found {observed}")
 
 
-def validate_ids(path: Path) -> list[int]:
+def validate_ids(path: Path, rows: int = 40_960) -> list[int]:
     raw = path.read_bytes()
-    if len(raw) != 40_960 * 4:
-        raise ValueError(f"{path}: expected 163,840 bytes, found {len(raw):,}")
-    ids = list(struct.unpack("<40960i", raw))
+    expected_bytes = rows * 4
+    if len(raw) != expected_bytes:
+        raise ValueError(f"{path}: expected {expected_bytes:,} bytes, found {len(raw):,}")
+    ids = list(struct.unpack(f"<{rows}i", raw))
     if len(set(ids)) != len(ids):
         raise ValueError(f"{path}: IDs are not unique")
     if min(ids) < 0 or max(ids) >= 248_320:
@@ -143,8 +185,21 @@ def sha256(path: Path) -> str:
 
 def validate_mtp(directory: Path) -> list[Path]:
     tensors = validate_blob(directory, "drafter_manifest.json", "drafter_weights.bin", 17)
-    validate_schema(tensors, MTP_SCHEMA, "MTP")
+    validate_schema(tensors, QWEN35_MTP_SCHEMA, "Qwen3.8-27B MTP")
     validate_ids(directory / "draft_head_ids.bin")
+    return [
+        directory / "drafter_manifest.json",
+        directory / "drafter_weights.bin",
+        directory / "draft_head_ids.bin",
+    ]
+
+
+def validate_qwen4exp_mtp(directory: Path) -> list[Path]:
+    tensors = validate_blob(directory, "drafter_manifest.json", "drafter_weights.bin", 34)
+    validate_schema(tensors, QWEN4EXP_MTP_SCHEMA, "Qwen3.8 Flash Next MTP")
+    ids = validate_ids(directory / "draft_head_ids.bin", 248_320)
+    if ids != list(range(248_320)):
+        raise ValueError("Qwen3.8 Flash Next MTP requires a full-vocabulary identity ID table")
     return [
         directory / "drafter_manifest.json",
         directory / "drafter_weights.bin",
@@ -165,7 +220,7 @@ def validate_dflash(directory: Path) -> list[Path]:
         embedding_count,
     )
     if embedding_count == 17:
-        validate_schema(embedding, MTP_SCHEMA, "DFlash target/MTP blob")
+        validate_schema(embedding, QWEN35_MTP_SCHEMA, "DFlash target/MTP blob")
     else:
         validate_schema(
             embedding,
@@ -189,12 +244,17 @@ def validate_dflash(directory: Path) -> list[Path]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("kind", choices=("mtp", "dflash"))
+    parser.add_argument("kind", choices=("mtp", "qwen4exp-mtp", "dflash"))
     parser.add_argument("directory", type=Path)
     parser.add_argument("--hash", action="store_true", help="also calculate SHA-256 (slow for large blobs)")
     args = parser.parse_args()
     try:
-        paths = validate_mtp(args.directory) if args.kind == "mtp" else validate_dflash(args.directory)
+        if args.kind == "mtp":
+            paths = validate_mtp(args.directory)
+        elif args.kind == "qwen4exp-mtp":
+            paths = validate_qwen4exp_mtp(args.directory)
+        else:
+            paths = validate_dflash(args.directory)
     except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
         print(f"INVALID: {exc}", file=sys.stderr)
         return 2

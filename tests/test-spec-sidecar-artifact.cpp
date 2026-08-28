@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -44,7 +45,7 @@ static void unset_environment(const char * name) {
 #endif
 }
 
-int main() {
+int main(int argc, char ** argv) {
     int failures = 0;
 
     failures += require(spec_sidecar_mtp::hidden_source_row(0) == -1,
@@ -95,20 +96,61 @@ int main() {
     unset_environment("SPEC_SIDECAR");
 
     const auto profile_count = common_spec_sidecar_profile_count();
-    failures += require(profile_count >= 2, "provider registry exposes multiple profiles");
-    const auto * profile0 = common_spec_sidecar_profile_at(0);
-    const auto * profile1 = common_spec_sidecar_profile_at(1);
-    failures += require(profile0 != nullptr && profile1 != nullptr &&
-                        profile0->kind != profile1->kind &&
-                        ((profile0->kind == COMMON_SPEC_SIDECAR_KIND_MTP && profile1->kind == COMMON_SPEC_SIDECAR_KIND_DFLASH) ||
-                         (profile0->kind == COMMON_SPEC_SIDECAR_KIND_DFLASH && profile1->kind == COMMON_SPEC_SIDECAR_KIND_MTP)),
-                        "MTP and DFlash are selected as distinct provider profiles");
-    const auto * mtp_profile = profile0->kind == COMMON_SPEC_SIDECAR_KIND_MTP ? profile0 : profile1;
-    const auto * dflash_profile = profile0->kind == COMMON_SPEC_SIDECAR_KIND_DFLASH ? profile0 : profile1;
-    failures += require(mtp_profile->mtp_embedding_width == 5120 && mtp_profile->mtp_head_rows == 40960 &&
-                        dflash_profile->dflash_encoded_width == 25600 && dflash_profile->dflash_block_size == 8 &&
-                        dflash_profile->dflash_head_rows == 40960,
-                        "provider profiles carry independent dimensions and head-row contracts");
+    failures += require(profile_count >= 3, "provider registry exposes all independent profiles");
+    const common_spec_sidecar_profile * qwen35_mtp = nullptr;
+    const common_spec_sidecar_profile * qwen35_dflash = nullptr;
+    const common_spec_sidecar_profile * qwen4exp_mtp = nullptr;
+    for (size_t i = 0; i < profile_count; ++i) {
+        const auto * profile = common_spec_sidecar_profile_at(i);
+        if (profile == nullptr || profile->name == nullptr) {
+            continue;
+        }
+        if (std::strcmp(profile->name, "qwen35-mtp") == 0) qwen35_mtp = profile;
+        if (std::strcmp(profile->name, "qwen35-dflash") == 0) qwen35_dflash = profile;
+        if (std::strcmp(profile->name, "qwen4exp-mtp") == 0) qwen4exp_mtp = profile;
+    }
+    failures += require(qwen35_mtp != nullptr && qwen35_dflash != nullptr && qwen4exp_mtp != nullptr &&
+                        qwen35_mtp->kind == COMMON_SPEC_SIDECAR_KIND_MTP &&
+                        qwen35_dflash->kind == COMMON_SPEC_SIDECAR_KIND_DFLASH &&
+                        qwen4exp_mtp->kind == COMMON_SPEC_SIDECAR_KIND_MTP,
+                        "Qwen3.8-27B and Flash Next use distinct named provider profiles");
+    failures += require(qwen35_mtp != nullptr && qwen35_dflash != nullptr &&
+                        qwen35_mtp->mtp_embedding_width == 5120 && qwen35_mtp->mtp_head_rows == 40960 &&
+                        qwen35_dflash->dflash_encoded_width == 25600 && qwen35_dflash->dflash_block_size == 8 &&
+                        qwen35_dflash->dflash_head_rows == 40960,
+                        "Qwen3.8-27B providers retain their independent contracts");
+    failures += require(qwen4exp_mtp != nullptr &&
+                        std::strcmp(qwen4exp_mtp->target_architecture, "qwen4exp") == 0 &&
+                        std::strcmp(qwen4exp_mtp->target_name, "Qwen3.8 Flash Next") == 0 &&
+                        qwen4exp_mtp->target_n_embd == 2560 &&
+                        qwen4exp_mtp->target_n_embd_out == 10240 &&
+                        qwen4exp_mtp->target_n_layer == 48 &&
+                        qwen4exp_mtp->target_n_layer_nextn == 0 &&
+                        qwen4exp_mtp->target_n_vocab == 248320 &&
+                        qwen4exp_mtp->mtp_embedding_width == 10240 &&
+                        qwen4exp_mtp->mtp_head_rows == 248320 &&
+                        std::strcmp(qwen4exp_mtp->default_library_name,
+                                    "spec_qwen4exp_mtp_sidecar.so") == 0,
+                        "Flash Next profile carries its separate handoff, vocabulary, and library contract");
+
+    // Optional external fixture paths keep the default host test hermetic while
+    // allowing release validation against a real sharded base target and a
+    // deliberately incompatible auxiliary-only GGUF.
+    if (argc >= 2) {
+        std::string fixture_error;
+        const auto * fixture = common_spec_sidecar_profile_for_target_file(
+                COMMON_SPEC_SIDECAR_KIND_MTP, argv[1], fixture_error);
+        failures += require(fixture != nullptr && fixture->name != nullptr &&
+                            std::strcmp(fixture->name, "qwen4exp-mtp") == 0,
+                            "real Flash Next base target selects only qwen4exp-mtp");
+    }
+    if (argc >= 3) {
+        std::string fixture_error;
+        const auto * fixture = common_spec_sidecar_profile_for_target_file(
+                COMMON_SPEC_SIDECAR_KIND_MTP, argv[2], fixture_error);
+        failures += require(fixture == nullptr,
+                            "Flash Next auxiliary-only GGUF is rejected as a base target");
+    }
 
     failures += require(sizeof(spec_sidecar_state) == 24,
                         "sidecar state ABI is a fixed 24-byte record");
