@@ -1,0 +1,53 @@
+name: Build relocatable cmake package
+on:
+  workflow_dispatch:
+  workflow_call:
+
+jobs:
+  linux:
+    runs-on: [self-hosted, Linux]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Build
+        run: |
+          PREFIX="$(pwd)"/inst
+          cmake -S . -B build \
+                -DCMAKE_PREFIX_PATH="$PREFIX" \
+                -DLLAMA_OPENSSL=OFF \
+                -DLLAMA_BUILD_TESTS=OFF \
+                -DLLAMA_BUILD_TOOLS=OFF \
+                -DLLAMA_BUILD_EXAMPLES=OFF \
+                -DLLAMA_BUILD_APP=OFF \
+                -DLLAMA_BUILD_IS_DEV=OFF \
+                -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --config Release -j $(nproc)
+          cmake --install build --prefix "$PREFIX" --config Release
+
+          export LLAMA_CONFIG="$PREFIX"/lib/cmake/llama/llama-config.cmake
+          build_commit=$(git rev-parse --short HEAD | xargs)
+          build_number=$(git rev-list --count HEAD | xargs)
+
+          major=$(grep -oE "set\(LLAMA_VERSION_MAJOR[[:space:]]+[0-9]+" CMakeLists.txt | grep -oE "[0-9]+$")
+          minor=$(grep -oE "set\(LLAMA_VERSION_MINOR[[:space:]]+[0-9]+" CMakeLists.txt | grep -oE "[0-9]+$")
+          patch=$(grep -oE "set\(LLAMA_VERSION_PATCH[[:space:]]+[0-9]+" CMakeLists.txt | grep -oE "[0-9]+$")
+          build_version="$major.$minor.$patch"
+
+          checks=("set\(LLAMA_VERSION[[:space:]]+$build_version\)"
+                  "set\(LLAMA_BUILD_COMMIT[[:space:]]+$build_commit\)"
+                  "set\(LLAMA_BUILD_NUMBER[[:space:]]+$build_number\)")
+
+          for check in "${checks[@]}"; do
+              if ! grep -qE "$check" "$LLAMA_CONFIG"; then
+                  echo "Checking llama-config.cmake version... \"$check\" failed!"
+                  exit 1
+              fi
+          done
+
+          echo "Checking llama-config.cmake version... success."
+
+          cd examples/simple-cmake-pkg
+          cmake -S . -B build -DCMAKE_PREFIX_PATH="$PREFIX"/lib/cmake
+          cmake --build build -j $(nproc)

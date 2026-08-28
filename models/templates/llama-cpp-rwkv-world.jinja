@@ -1,0 +1,34 @@
+{%- if not add_generation_prompt is defined -%}
+    {%- set add_generation_prompt = true -%}
+{%- endif -%}
+{%- set ns = namespace(system_prompt='') -%}
+{%- for message in messages -%}
+    {%- if message['role'] == 'system' -%}
+        {%- set ns.system_prompt = message['content'] -%}
+    {%- endif -%}
+{%- endfor -%}
+{{bos_token}}
+{%- if ns.system_prompt != '' -%}
+{{- 'System: ' + ns.system_prompt + '\n\n' -}}
+{%- endif -%}
+{%- for message in messages -%}
+    {%- if message['role'] == 'user' -%}
+        {{- 'User: ' + message['content']|trim + '\n\n' -}}
+    {%- endif -%}
+    {%- if message['role'] == 'assistant' and message['content'] is  not none -%}
+        {%- set content = message['content'] -%}
+        {%- if '</think>' in content -%}
+            {%- set content = content.split('</think>')[-1] -%}
+        {%- endif -%}
+        {{- 'Assistant: ' + content|trim + '\n\n' -}}
+    {%- endif -%}
+{%- endfor -%}
+{%- if add_generation_prompt -%}
+    {{- 'Assistant:' -}}
+    {%- if enable_thinking is defined and enable_thinking is false %}
+        {{- ' <think>\n</think>' }}
+    {%- endif %}
+    {%- if enable_thinking is defined and enable_thinking is true %}
+        {{- ' <think>' }}
+    {%- endif %}
+{%- endif -%}

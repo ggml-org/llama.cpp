@@ -1,0 +1,983 @@
+<script lang="ts">
+	import '$lib/styles/katex-custom.scss';
+	import {
+		getCodeInfoFromTarget,
+		getHastNodeId,
+		getMdastNodeHash,
+		isAppendMode
+	} from './markdown-utils';
+	import { rehypeEnhanceCodeBlocks } from './plugins/rehype/enhance-code-blocks';
+	import { rehypeEnhanceLinks } from './plugins/rehype/enhance-links';
+	import { rehypeEnhanceMermaidBlocks } from './plugins/rehype/enhance-mermaid-blocks';
+	import { rehypeEnhanceSvgBlocks } from './plugins/rehype/enhance-svg-blocks';
+	import { rehypeFileBadge } from './plugins/rehype/file-badge';
+	import { rehypeMermaidPre } from './plugins/rehype/mermaid-pre';
+	import { rehypeRtlSupport } from './plugins/rehype/rehype-rtl-support';
+	import { rehypeResolveAttachmentImages } from './plugins/rehype/resolve-attachment-images';
+	import { rehypeSvgPre } from './plugins/rehype/svg-pre';
+	import { rehypeRestoreTableHtml } from './plugins/rehype/table-html-restorer';
+	import { remarkLiteralHtml } from './plugins/remark/literal-html';
+	import { browser } from '$app/environment';
+	import {
+		ActionIconCopyToClipboard,
+		CodeBlockActions,
+		DialogCodePreview,
+		DialogMermaidPreview
+	} from '$lib/components/app';
+	import {
+		CODE_BLOCK_CLASS,
+		DIAGRAM_VIEW_MODE_ATTR,
+		DIAGRAM_VIEW_RENDERED,
+		DIAGRAM_VIEW_SOURCE,
+		IMAGE_NOT_ERROR_BOUND_SELECTOR,
+		MARKDOWN_DATA_ATTRS,
+		MERMAID_BLOCK_CLASS,
+		MERMAID_LANGUAGE,
+		MERMAID_RENDERED_ATTR,
+		MERMAID_SYNTAX_ATTR,
+		MERMAID_WRAPPER_CLASS,
+		SETTINGS_KEYS,
+		SVG,
+		TOGGLE_SOURCE_BTN_CLASS
+	} from '$lib/constants';
+	import { BooleanString, ColorMode, UrlProtocol } from '$lib/enums';
+	import { FileTypeText } from '$lib/enums/files.enums';
+	import { createAutoScrollController } from '$lib/hooks/use-auto-scroll.svelte';
+	import { settingsStore } from '$lib/stores';
+	import type { DatabaseMessageExtra } from '$lib/types/database';
+	import {
+		copyCodeToClipboard,
+		copyToClipboard,
+		getImageErrorFallbackHtml,
+		preprocessLaTeX,
+		splitGluedClosingCodeFences
+	} from '$lib/utils';
+	import { detectIncompleteCodeBlock, highlightCode, type IncompleteCodeBlock } from '$lib/utils';
+	import { sanitizeSvg } from '$lib/utils/sanitize-svg';
+	import { mountSvgShadow } from '$lib/utils/svg-shadow';
+	import type { Root as HastRoot, RootContent as HastRootContent } from 'hast';
+	import githubLightCss from 'highlight.js/styles/github.css?inline';
+	import githubDarkCss from 'highlight.js/styles/github-dark.css?inline';
+	import { all as lowlightAll } from 'lowlight';
+	import type { Root as MdastRoot } from 'mdast';
+	import { mode } from 'mode-watcher';
+	import rehypeHighlight from 'rehype-highlight';
+	import rehypeKatex from 'rehype-katex';
+	import rehypeStringify from 'rehype-stringify';
+	import { remark } from 'remark';
+	import remarkBreaks from 'remark-breaks';
+	import remarkGfm from 'remark-gfm';
+	import remarkMath from 'remark-math';
+	import remarkRehype from 'remark-rehype';
+	import { onDestroy, tick } from 'svelte';
+	import { SvelteMap } from 'svelte/reactivity';
+
+	interface Props {
+		attachments?: DatabaseMessageExtra[];
+		content: string;
+		class?: string;
+		disableMath?: boolean;
+	}
+
+	interface MarkdownBlock {
+		id: string;
+		html: string;
+		contentHash?: string;
+	}
+
+	let { attachments, class: className = '', content, disableMath = false }: Props = $props();
+
+	let containerRef = $state<HTMLDivElement>();
+	let renderedBlocks = $state<MarkdownBlock[]>([]);
+	let unstableBlockHtml = $state('');
+	let incompleteCodeBlock = $state<IncompleteCodeBlock | null>(null);
+	const streamingSvgCode = $derived.by(() => {
+		const block = incompleteCodeBlock;
+
+		if (!block) return null;
+
+		if (block.language === SVG.LANGUAGE) return block.code;
+
+		if (block.language === SVG.XML_LANGUAGE && block.code.trimStart().startsWith(SVG.TAG_PREFIX))
+			return block.code;
+
+		return null;
+	});
+	const liveSvgHtml = $derived(streamingSvgCode !== null ? sanitizeSvg(streamingSvgCode) : '');
+
+	// Derived rather than called inline in the template so it only recomputes when
+	// the block actually changes. Auto-detection is disabled while streaming: it
+	// costs ~38ms a call and re-guesses the language on every chunk.
+	const streamingCodeHtml = $derived(
+		incompleteCodeBlock
+			? highlightCode(incompleteCodeBlock.code, incompleteCodeBlock.language || 'text', false)
+			: ''
+	);
+	let previewDialogOpen = $state(false);
+	let previewCode = $state('');
+	let previewLanguage = $state('text');
+	let mermaidPreviewOpen = $state(false);
+	let mermaidPreviewSvgHtml = $state('');
+	let svgPreviewLive = $state(false);
+	let streamingSvgHost = $state<HTMLDivElement | null>(null);
+
+	// While the zoom dialog is open on a streaming svg, mirror the live render into it
+	$effect(() => {
+		if (svgPreviewLive && liveSvgHtml) mermaidPreviewSvgHtml = liveSvgHtml;
+	});
+
+	// Mount the streaming svg into its shadow host on every chunk so it renders live
+	$effect(() => {
+		if (streamingSvgHost) mountSvgShadow(streamingSvgHost, liveSvgHtml, SVG.INLINE_SHADOW_STYLE);
+	});
+
+	let streamingCodeScrollContainer = $state<HTMLDivElement>();
+
+	// Auto-scroll controller for streaming code block content
+	const streamingAutoScroll = createAutoScrollController();
+
+	let pendingMarkdown: string | null = null;
+	let isProcessing = false;
+
+	// Per-instance transform cache, avoids re-transforming stable blocks during streaming
+	// Garbage collected when component is destroyed (on conversation change)
+	const transformCache = new SvelteMap<string, string>();
+	let previousContent = '';
+
+	const themeStyleId = `highlight-theme-${(window.idxThemeStyle = (window.idxThemeStyle ?? 0) + 1)}`;
+
+	let processor = $derived(() => {
+		void attachments;
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		let proc: any = remark().use(remarkGfm); // GitHub Flavored Markdown
+
+		if (!disableMath) {
+			proc = proc.use(remarkMath); // Parse $inline$ and $$block$$ math
+		}
+
+		proc = proc
+			.use(remarkBreaks) // Convert line breaks to <br>
+			.use(remarkLiteralHtml) // Treat raw HTML as literal text with preserved indentation
+			.use(remarkRehype); // Convert Markdown AST to rehype
+
+		if (!disableMath) {
+			proc = proc.use(rehypeKatex); // Render math using KaTeX
+		}
+
+		return proc
+			.use(rehypeHighlight, {
+				aliases: { [FileTypeText.XML]: [FileTypeText.SVELTE, FileTypeText.VUE] },
+				languages: lowlightAll
+			}) // Add syntax highlighting
+			.use(rehypeRestoreTableHtml) // Restore limited HTML (e.g., <br>, <ul>) inside Markdown tables
+			.use(rehypeEnhanceLinks) // Add target="_blank" to links
+			.use(rehypeFileBadge) // Render file:// anchors as inline badge chips
+			.use(rehypeMermaidPre) // Convert mermaid blocks to <pre class="mermaid">
+			.use(rehypeSvgPre) // Convert svg blocks to <pre class="svg-block">
+			.use(rehypeEnhanceCodeBlocks) // Wrap code blocks with header and actions
+			.use(rehypeEnhanceMermaidBlocks) // Wrap mermaid blocks with header and actions
+			.use(rehypeEnhanceSvgBlocks) // Wrap svg blocks with header and actions
+			.use(rehypeResolveAttachmentImages, { attachments })
+			.use(rehypeRtlSupport) // Add bidirectional text support
+			.use(rehypeStringify, { allowDangerousHtml: true }); // Convert to HTML string
+	});
+
+	/**
+	 * Removes click event listeners from copy and preview buttons.
+	 * Called on component destroy.
+	 */
+	function cleanupEventListeners() {
+		if (!containerRef) return;
+
+		const copyButtons = containerRef.querySelectorAll<HTMLButtonElement>('.copy-code-btn');
+		const previewButtons = containerRef.querySelectorAll<HTMLButtonElement>('.preview-code-btn');
+
+		for (const button of copyButtons) {
+			button.removeEventListener('click', handleCopyClick);
+		}
+
+		for (const button of previewButtons) {
+			button.removeEventListener('click', handlePreviewClick);
+		}
+	}
+
+	/**
+	 * Removes this component's highlight.js theme style from the document head.
+	 * Called on component destroy to clean up injected styles.
+	 */
+	function cleanupHighlightTheme() {
+		if (!browser) return;
+
+		const existingTheme = document.getElementById(themeStyleId);
+
+		existingTheme?.remove();
+	}
+
+	/**
+	 * Loads the appropriate highlight.js theme based on dark/light mode.
+	 * Injects a scoped style element into the document head.
+	 * @param isDark - Whether to load the dark theme (true) or light theme (false)
+	 */
+	function loadHighlightTheme(isDark: boolean) {
+		if (!browser) return;
+
+		const existingTheme = document.getElementById(themeStyleId);
+
+		existingTheme?.remove();
+
+		const style = document.createElement('style');
+
+		style.id = themeStyleId;
+		style.textContent = isDark ? githubDarkCss : githubLightCss;
+
+		document.head.appendChild(style);
+	}
+
+	/**
+	 * Transforms a single MDAST node to HTML string with caching.
+
+	/**
+	 * Transforms a single MDAST node to HTML string with caching.
+	 * Runs the full remark/rehype plugin pipeline (GFM, math, syntax highlighting, etc.)
+	 * on an isolated single-node tree, then stringifies the resulting HAST to HTML.
+	 * Results are cached by node position hash for streaming performance.
+	 * @param processorInstance - The remark/rehype processor instance
+	 * @param node - The MDAST node to transform
+	 * @param index - Node index for hash fallback
+	 * @returns Object containing the HTML string and cache hash
+	 */
+	async function transformMdastNode(
+		processorInstance: ReturnType<typeof processor>,
+		node: unknown,
+		index: number
+	): Promise<{ html: string; hash: string }> {
+		const hash = getMdastNodeHash(node, index);
+		const cached = transformCache.get(hash);
+
+		if (cached) {
+			return { hash, html: cached };
+		}
+
+		const singleNodeRoot = { children: [node], type: 'root' };
+		const transformedRoot = (await processorInstance.run(singleNodeRoot as MdastRoot)) as HastRoot;
+		const html = processorInstance.stringify(transformedRoot);
+
+		transformCache.set(hash, html);
+
+		return { hash, html };
+	}
+
+	/**
+	 * Handles click events on copy buttons within code blocks.
+	 * Copies the raw code content to the clipboard.
+	 * @param event - The click event from the copy button
+	 */
+	async function handleCopyClick(event: Event) {
+		event.preventDefault();
+		event.stopPropagation();
+
+		const target = event.currentTarget as HTMLButtonElement | null;
+
+		if (!target) {
+			return;
+		}
+
+		const info = getCodeInfoFromTarget(target);
+
+		if (!info) {
+			return;
+		}
+
+		try {
+			await copyCodeToClipboard(info.rawCode);
+		} catch (error) {
+			console.error('Failed to copy code:', error);
+		}
+	}
+
+	/**
+	 * Handles preview dialog open state changes.
+	 * Clears preview content when dialog is closed.
+	 * @param open - Whether the dialog is being opened or closed
+	 */
+	function handlePreviewDialogOpenChange(open: boolean) {
+		previewDialogOpen = open;
+
+		if (!open) {
+			previewCode = '';
+			previewLanguage = 'text';
+		}
+	}
+
+	/**
+	 * Handles click events on preview buttons within HTML code blocks.
+	 * Opens a preview dialog with the rendered HTML content.
+	 * @param event - The click event from the preview button
+	 */
+	function handlePreviewClick(event: Event) {
+		event.preventDefault();
+		event.stopPropagation();
+
+		const target = event.currentTarget as HTMLButtonElement | null;
+
+		if (!target) {
+			return;
+		}
+
+		const info = getCodeInfoFromTarget(target);
+
+		if (!info) {
+			return;
+		}
+
+		previewCode = info.rawCode;
+		previewLanguage = info.language;
+		previewDialogOpen = true;
+	}
+
+	/**
+	 * Processes markdown content into stable and unstable HTML blocks.
+	 * Uses incremental rendering: stable blocks are cached, unstable block is re-rendered.
+	 * Incomplete code blocks are rendered using SyntaxHighlightedCode to maintain interactivity.
+	 * @param markdown - The raw markdown string to process
+	 */
+	async function processMarkdown(rawMarkdown: string) {
+		// Text glued to a closing code fence is not a fence to the parser -
+		// the block would swallow it. Split it onto its own line first.
+		const markdown = splitGluedClosingCodeFences(rawMarkdown);
+
+		// Early exit if content unchanged (can happen with rapid coalescing)
+		if (markdown === previousContent) {
+			return;
+		}
+
+		if (!markdown) {
+			renderedBlocks = [];
+			unstableBlockHtml = '';
+			incompleteCodeBlock = null;
+			previousContent = '';
+
+			return;
+		}
+
+		// Check for incomplete code block at the end of content
+		const incompleteBlock = detectIncompleteCodeBlock(markdown);
+
+		if (incompleteBlock) {
+			// Process only the prefix (content before the incomplete code block)
+			const prefixMarkdown = markdown.slice(0, incompleteBlock.openingIndex);
+
+			if (prefixMarkdown.trim()) {
+				const normalizedPrefix = preprocessLaTeX(prefixMarkdown);
+				const processorInstance = processor();
+				const ast = processorInstance.parse(normalizedPrefix) as MdastRoot;
+				const mdastChildren = (ast as { children?: unknown[] }).children ?? [];
+				const nextBlocks: MarkdownBlock[] = [];
+				// Check if we're in append mode for cache reuse
+				const appendMode = isAppendMode(prefixMarkdown, previousContent);
+				const previousBlockCount = appendMode ? renderedBlocks.length : 0;
+
+				// All prefix blocks are now stable since code block is separate
+				for (let index = 0; index < mdastChildren.length; index++) {
+					const child = mdastChildren[index];
+
+					// In append mode, reuse previous blocks if unchanged
+					if (appendMode && index < previousBlockCount) {
+						const prevBlock = renderedBlocks[index];
+						const currentHash = getMdastNodeHash(child, index);
+
+						if (prevBlock?.contentHash === currentHash) {
+							nextBlocks.push(prevBlock);
+
+							continue;
+						}
+					}
+
+					// Transform this block (with caching)
+					const { hash, html } = await transformMdastNode(processorInstance, child, index);
+					const id = getHastNodeId(
+						{ position: (child as { position?: unknown }).position } as HastRootContent,
+						index
+					);
+
+					nextBlocks.push({ contentHash: hash, html, id });
+				}
+
+				renderedBlocks = nextBlocks;
+			} else {
+				renderedBlocks = [];
+			}
+
+			previousContent = prefixMarkdown;
+			unstableBlockHtml = '';
+			incompleteCodeBlock = incompleteBlock;
+
+			return;
+		}
+
+		// No incomplete code block - use standard processing
+		incompleteCodeBlock = null;
+
+		const normalized = preprocessLaTeX(markdown);
+		const processorInstance = processor();
+		const ast = processorInstance.parse(normalized) as MdastRoot;
+		const mdastChildren = (ast as { children?: unknown[] }).children ?? [];
+		const stableCount = Math.max(mdastChildren.length - 1, 0);
+		const nextBlocks: MarkdownBlock[] = [];
+		// Check if we're in append mode for cache reuse
+		const appendMode = isAppendMode(markdown, previousContent);
+		const previousBlockCount = appendMode ? renderedBlocks.length : 0;
+
+		for (let index = 0; index < stableCount; index++) {
+			const child = mdastChildren[index];
+
+			// In append mode, reuse previous blocks if unchanged
+			if (appendMode && index < previousBlockCount) {
+				const prevBlock = renderedBlocks[index];
+				const currentHash = getMdastNodeHash(child, index);
+
+				if (prevBlock?.contentHash === currentHash) {
+					nextBlocks.push(prevBlock);
+
+					continue;
+				}
+			}
+
+			// Transform this block (with caching)
+			const { hash, html } = await transformMdastNode(processorInstance, child, index);
+			const id = getHastNodeId(
+				{ position: (child as { position?: unknown }).position } as HastRootContent,
+				index
+			);
+
+			nextBlocks.push({ contentHash: hash, html, id });
+		}
+
+		let unstableHtml = '';
+
+		if (mdastChildren.length > stableCount) {
+			const unstableChild = mdastChildren[stableCount];
+			const singleNodeRoot = { children: [unstableChild], type: 'root' };
+			const transformedRoot = (await processorInstance.run(
+				singleNodeRoot as MdastRoot
+			)) as HastRoot;
+
+			unstableHtml = processorInstance.stringify(transformedRoot);
+		}
+
+		renderedBlocks = nextBlocks;
+		previousContent = markdown;
+		await tick(); // Force DOM sync before updating unstable HTML block
+		unstableBlockHtml = unstableHtml;
+	}
+
+	/**
+	 * Attaches click event listeners to copy and preview buttons in code blocks.
+	 * Uses data-listener-bound attribute to prevent duplicate bindings.
+	 */
+	function setupCodeBlockActions() {
+		if (!containerRef) return;
+
+		const wrappers = containerRef.querySelectorAll<HTMLElement>('.code-block-wrapper');
+
+		for (const wrapper of wrappers) {
+			const copyButton = wrapper.querySelector<HTMLButtonElement>('.copy-code-btn');
+			const previewButton = wrapper.querySelector<HTMLButtonElement>('.preview-code-btn');
+
+			if (
+				copyButton &&
+				copyButton.getAttribute(MARKDOWN_DATA_ATTRS.LISTENER_BOUND) !== BooleanString.TRUE
+			) {
+				copyButton.setAttribute(MARKDOWN_DATA_ATTRS.LISTENER_BOUND, BooleanString.TRUE);
+				copyButton.addEventListener('click', handleCopyClick);
+			}
+
+			if (
+				previewButton &&
+				previewButton.getAttribute(MARKDOWN_DATA_ATTRS.LISTENER_BOUND) !== BooleanString.TRUE
+			) {
+				previewButton.setAttribute(MARKDOWN_DATA_ATTRS.LISTENER_BOUND, BooleanString.TRUE);
+				previewButton.addEventListener('click', handlePreviewClick);
+			}
+		}
+	}
+
+	/**
+	 * Attaches error handlers to images to show fallback UI when loading fails (e.g., CORS).
+	 * Uses data-error-bound attribute to prevent duplicate bindings.
+	 */
+	function setupImageErrorHandlers() {
+		if (!containerRef) return;
+
+		const images = containerRef.querySelectorAll<HTMLImageElement>(IMAGE_NOT_ERROR_BOUND_SELECTOR);
+
+		for (const img of images) {
+			img.setAttribute(MARKDOWN_DATA_ATTRS.ERROR_BOUND, BooleanString.TRUE);
+			img.addEventListener('error', handleImageError);
+		}
+	}
+
+	/**
+	 * Opens the mermaid diagram in a full-screen preview dialog with zoom/pan support.
+	 * Also handles copy and preview button clicks for mermaid blocks.
+	 * Uses event delegation: a single handler on the container.
+	 */
+	async function handleMermaidClick(event: MouseEvent) {
+		const target = event.target as HTMLElement;
+		// Toggle a diagram block between its rendered view and its source view.
+		// Shared by mermaid and svg, css drives the visibility from the wrapper mode.
+		const toggleBtn = target.closest(`.${TOGGLE_SOURCE_BTN_CLASS}`);
+
+		if (toggleBtn) {
+			event.preventDefault();
+			event.stopPropagation();
+
+			const wrapper = toggleBtn.closest(`.${MERMAID_WRAPPER_CLASS}, .${SVG.WRAPPER_CLASS}`);
+
+			if (!wrapper) return;
+
+			const isSource = wrapper.getAttribute(DIAGRAM_VIEW_MODE_ATTR) === DIAGRAM_VIEW_SOURCE;
+			const next = isSource ? DIAGRAM_VIEW_RENDERED : DIAGRAM_VIEW_SOURCE;
+
+			wrapper.setAttribute(DIAGRAM_VIEW_MODE_ATTR, next);
+			toggleBtn.setAttribute('aria-pressed', String(!isSource));
+
+			return;
+		}
+
+		// Check if clicking on copy or preview button in mermaid block
+		const copyBtn = target.closest(`.${MERMAID_WRAPPER_CLASS} .copy-code-btn`);
+		const previewBtn = target.closest(`.${MERMAID_WRAPPER_CLASS} .preview-code-btn`);
+
+		if (copyBtn || previewBtn) {
+			const wrapper = target.closest(`.${MERMAID_WRAPPER_CLASS}`);
+
+			if (!wrapper) return;
+
+			const preElement = wrapper.querySelector<HTMLElement>(
+				`pre.${MERMAID_BLOCK_CLASS}[${MERMAID_SYNTAX_ATTR}]`
+			);
+
+			if (!preElement) return;
+
+			const mermaidSyntax = preElement.getAttribute(MERMAID_SYNTAX_ATTR) ?? '';
+
+			if (copyBtn) {
+				event.preventDefault();
+				event.stopPropagation();
+				try {
+					await copyToClipboard(mermaidSyntax);
+				} catch (error) {
+					console.error('Failed to copy mermaid syntax:', error);
+				}
+
+				return;
+			}
+
+			if (previewBtn) {
+				event.preventDefault();
+				event.stopPropagation();
+				const svg = preElement.querySelector('svg');
+
+				if (!svg) return;
+
+				mermaidPreviewSvgHtml = svg.outerHTML;
+				svgPreviewLive = false;
+				mermaidPreviewOpen = true;
+
+				return;
+			}
+		}
+
+		// Check if clicking on copy or preview button in svg block
+		const svgCopyBtn = target.closest(`.${SVG.WRAPPER_CLASS} .copy-code-btn`);
+		const svgPreviewBtn = target.closest(`.${SVG.WRAPPER_CLASS} .preview-code-btn`);
+
+		if (svgCopyBtn || svgPreviewBtn) {
+			const wrapper = target.closest(`.${SVG.WRAPPER_CLASS}`);
+
+			if (!wrapper) return;
+
+			const preElement = wrapper.querySelector<HTMLElement>(
+				`pre.${SVG.BLOCK_CLASS}[${SVG.SOURCE_ATTR}]`
+			);
+
+			if (!preElement) return;
+
+			if (svgCopyBtn) {
+				event.preventDefault();
+				event.stopPropagation();
+				try {
+					await copyToClipboard(preElement.getAttribute(SVG.SOURCE_ATTR) ?? '');
+				} catch (error) {
+					console.error('Failed to copy svg source:', error);
+				}
+
+				return;
+			}
+
+			if (svgPreviewBtn) {
+				event.preventDefault();
+				event.stopPropagation();
+				mermaidPreviewSvgHtml = sanitizeSvg(preElement.getAttribute(SVG.SOURCE_ATTR) ?? '');
+				svgPreviewLive = false;
+				mermaidPreviewOpen = true;
+
+				return;
+			}
+		}
+
+		// A click on the header chrome targets the action buttons, never the
+		// diagram. Guard so a header click can not fall through to the click to
+		// zoom branches below, whatever the scroll position or stacking.
+		if (target.closest(`.${CODE_BLOCK_CLASS.HEADER}`)) return;
+
+		// Open preview when clicking the svg block itself. A final block carries its
+		// source, a streaming block does not and is mirrored live into the dialog.
+		const svgEl = target.closest(`.${SVG.BLOCK_CLASS}`);
+
+		if (svgEl) {
+			const source = svgEl.getAttribute(SVG.SOURCE_ATTR);
+
+			if (source !== null) {
+				mermaidPreviewSvgHtml = sanitizeSvg(source);
+				svgPreviewLive = false;
+			} else {
+				svgPreviewLive = true;
+			}
+
+			mermaidPreviewOpen = true;
+
+			return;
+		}
+
+		// Otherwise, open preview when clicking on the mermaid diagram itself
+		const mermaidEl = target.closest(`.${MERMAID_BLOCK_CLASS}`);
+
+		if (!mermaidEl) return;
+
+		const svg = mermaidEl.querySelector('svg');
+
+		if (!svg) return;
+
+		mermaidPreviewSvgHtml = svg.outerHTML;
+		svgPreviewLive = false;
+		mermaidPreviewOpen = true;
+	}
+
+	/**
+	 * Handles mermaid preview dialog open state changes.
+	 * Cleans up SVG content when dialog is closed.
+	 */
+	function handleMermaidPreviewOpenChange(open: boolean) {
+		mermaidPreviewOpen = open;
+
+		if (!open) {
+			mermaidPreviewSvgHtml = '';
+			svgPreviewLive = false;
+		}
+	}
+
+	/**
+	 * Renders mermaid diagrams that haven't been rendered yet.
+	 * Called after each markdown content update.
+	 * Marks nodes immediately to prevent duplicate renders during streaming.
+	 * Reads mode.current before await to ensure reactive tracking.
+	 */
+	async function renderMermaidDiagrams() {
+		if (!containerRef) return;
+
+		const nodes = containerRef.querySelectorAll(
+			`pre.${MERMAID_BLOCK_CLASS}:not([${MERMAID_RENDERED_ATTR}])`
+		);
+
+		if (nodes.length === 0) return;
+
+		// Mark nodes immediately to prevent duplicate renders if called again during streaming.
+		// This avoids needing a guard that would block node discovery.
+		nodes.forEach((node) => node.setAttribute(MERMAID_RENDERED_ATTR, BooleanString.TRUE));
+
+		// Read mode before await so Svelte tracks it reactively.
+		const isDark = mode.current === ColorMode.DARK;
+		// lazy load the mermaid dependecy only when needed to reduce bundle size.
+		const { default: mermaid } = await import('mermaid');
+
+		mermaid.initialize({
+			flowchart: {
+				htmlLabels: true,
+				useMaxWidth: false
+			},
+			gantt: {
+				useMaxWidth: false
+			},
+			securityLevel: 'strict',
+			sequence: {
+				useMaxWidth: false
+			},
+			startOnLoad: false,
+			theme: isDark ? 'dark' : 'default'
+		});
+
+		try {
+			await mermaid.run({
+				nodes: Array.from(nodes) as unknown as NodeListOf<HTMLElement>
+			});
+		} catch (error) {
+			console.error('Failed to render mermaid diagram:', error);
+		}
+	}
+
+	/**
+	 * Renders svg diagrams that haven't been rendered yet.
+	 * Sanitizes the source before injecting and marks each node so it renders once.
+	 * An empty sanitize result keeps the raw source as escaped text.
+	 */
+	function renderSvgDiagrams() {
+		if (!containerRef) return;
+
+		const nodes = containerRef.querySelectorAll<HTMLElement>(
+			`pre.${SVG.BLOCK_CLASS}:not([${SVG.RENDERED_ATTR}])`
+		);
+
+		if (nodes.length === 0) return;
+
+		nodes.forEach((node) => {
+			node.setAttribute(SVG.RENDERED_ATTR, BooleanString.TRUE);
+
+			const source = node.getAttribute(SVG.SOURCE_ATTR) ?? node.textContent ?? '';
+			const clean = sanitizeSvg(source);
+
+			if (clean) {
+				node.textContent = '';
+				const host = document.createElement('div');
+
+				node.appendChild(host);
+				mountSvgShadow(host, clean, SVG.INLINE_SHADOW_STYLE);
+			}
+		});
+	}
+
+	/**
+	 * Handles image load errors by replacing the image with a fallback UI.
+	 * Shows a placeholder with a link to open the image in a new tab.
+	 */
+	function handleImageError(event: Event) {
+		const img = event.target as HTMLImageElement;
+
+		if (!img || !img.src) return;
+
+		// Don't handle data URLs or already-handled images
+		if (
+			img.src.startsWith(UrlProtocol.DATA) ||
+			img.getAttribute(MARKDOWN_DATA_ATTRS.ERROR_HANDLED) === BooleanString.TRUE
+		)
+			return;
+
+		img.setAttribute(MARKDOWN_DATA_ATTRS.ERROR_HANDLED, BooleanString.TRUE);
+
+		const src = img.src;
+		// Create fallback element
+		const fallback = document.createElement('div');
+
+		fallback.className = 'image-load-error';
+		fallback.innerHTML = getImageErrorFallbackHtml(src);
+
+		// Replace image with fallback
+		img.parentNode?.replaceChild(fallback, img);
+	}
+
+	/**
+	 * Queues markdown for processing with coalescing support.
+	 * Only processes the latest markdown when multiple updates arrive quickly.
+	 * Uses requestAnimationFrame to yield to browser paint between batches.
+	 * @param markdown - The markdown content to render
+	 */
+	async function updateRenderedBlocks(markdown: string) {
+		pendingMarkdown = markdown;
+
+		if (isProcessing) {
+			return;
+		}
+
+		isProcessing = true;
+
+		try {
+			while (pendingMarkdown !== null) {
+				const nextMarkdown = pendingMarkdown;
+
+				pendingMarkdown = null;
+
+				await processMarkdown(nextMarkdown);
+
+				// Yield to browser for paint. During this, new chunks coalesce
+				// into pendingMarkdown, so we always render the latest state.
+				if (pendingMarkdown !== null) {
+					await new Promise((resolve) => requestAnimationFrame(resolve));
+				}
+			}
+		} catch (error) {
+			console.error('Failed to process markdown:', error);
+			renderedBlocks = [];
+			unstableBlockHtml = markdown.replace(/\n/g, '<br>');
+		} finally {
+			isProcessing = false;
+		}
+	}
+
+	$effect(() => {
+		const currentMode = mode.current;
+		const isDark = currentMode === ColorMode.DARK;
+
+		loadHighlightTheme(isDark);
+	});
+
+	$effect(() => {
+		updateRenderedBlocks(content);
+	});
+
+	$effect(() => {
+		const hasRenderedBlocks = renderedBlocks.length > 0;
+		const hasUnstableBlock = Boolean(unstableBlockHtml);
+
+		if ((hasRenderedBlocks || hasUnstableBlock) && containerRef) {
+			setupCodeBlockActions();
+			setupImageErrorHandlers();
+			renderMermaidDiagrams();
+			renderSvgDiagrams();
+		}
+	});
+
+	// Auto-scroll for streaming code block
+	$effect(() => {
+		streamingAutoScroll.setContainer(streamingCodeScrollContainer);
+	});
+
+	$effect(() => {
+		streamingAutoScroll.updateInterval(incompleteCodeBlock !== null);
+	});
+
+	onDestroy(() => {
+		cleanupEventListeners();
+		cleanupHighlightTheme();
+		streamingAutoScroll.destroy();
+	});
+</script>
+
+<!-- svelte-ignore a11y_click_events_have_key_events -->
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<div
+	bind:this={containerRef}
+	class="markdown-content {className}{settingsStore.config[SETTINGS_KEYS.FULL_HEIGHT_CODE_BLOCKS]
+		? ' full-height-code-blocks'
+		: ''}"
+	onclick={handleMermaidClick}
+>
+	{#each renderedBlocks as block (block.id)}
+		<div class="markdown-block" {...{ [MARKDOWN_DATA_ATTRS.BLOCK_ID]: block.id }}>
+			{@html block.html}
+		</div>
+	{/each}
+
+	{#if unstableBlockHtml}
+		<div
+			class="markdown-block markdown-block--unstable"
+			{...{ [MARKDOWN_DATA_ATTRS.BLOCK_ID]: 'unstable' }}
+		>
+			<!-- eslint-disable-next-line no-at-html-tags -->
+			{@html unstableBlockHtml}
+		</div>
+	{/if}
+
+	{#if incompleteCodeBlock}
+		{#if incompleteCodeBlock.language === MERMAID_LANGUAGE}
+			<div class="mermaid-block-wrapper streaming-mermaid-block">
+				<div class="code-block-header">
+					<span class="code-language">mermaid</span>
+
+					<div class="code-block-actions">
+						<ActionIconCopyToClipboard
+							ariaLabel="Diagram incomplete"
+							canCopy={false}
+							text={incompleteCodeBlock.code}
+						/>
+					</div>
+				</div>
+
+				<div class="mermaid-loading-placeholder">
+					<span class="mermaid-loading-text">Generating diagram...</span>
+				</div>
+			</div>
+		{:else if streamingSvgCode !== null}
+			<div class="svg-block-wrapper streaming-svg-block">
+				<div class="code-block-header">
+					<span class="code-language">svg</span>
+
+					<div class="code-block-actions">
+						<ActionIconCopyToClipboard
+							ariaLabel="Diagram incomplete"
+							canCopy={false}
+							text={incompleteCodeBlock.code}
+						/>
+					</div>
+				</div>
+
+				{#if liveSvgHtml}
+					<div class="svg-scroll-container">
+						<div class={SVG.BLOCK_CLASS}>
+							<div bind:this={streamingSvgHost}></div>
+						</div>
+					</div>
+				{:else}
+					<div class="mermaid-loading-placeholder">
+						<span class="mermaid-loading-text">Rendering svg...</span>
+					</div>
+				{/if}
+			</div>
+		{:else}
+			<div class="code-block-wrapper streaming-code-block relative">
+				<div class="code-block-header">
+					<span class="code-language">{incompleteCodeBlock.language || 'text'}</span>
+
+					<CodeBlockActions
+						code={incompleteCodeBlock.code}
+						disabled
+						language={incompleteCodeBlock.language || 'text'}
+						onPreview={(code, lang) => {
+							previewCode = code;
+							previewLanguage = lang;
+							previewDialogOpen = true;
+						}}
+					/>
+				</div>
+
+				<div
+					bind:this={streamingCodeScrollContainer}
+					class="streaming-code-scroll-container"
+					onscroll={() => streamingAutoScroll.handleScroll()}
+				>
+					<pre class="streaming-code-pre"><code
+							class="hljs language-{incompleteCodeBlock.language || 'text'}"
+							>{@html streamingCodeHtml}</code
+						></pre>
+				</div>
+			</div>
+		{/if}
+	{/if}
+</div>
+
+<DialogCodePreview
+	code={previewCode}
+	language={previewLanguage}
+	onOpenChange={handlePreviewDialogOpenChange}
+	open={previewDialogOpen}
+/>
+
+<DialogMermaidPreview
+	onOpenChange={handleMermaidPreviewOpenChange}
+	open={mermaidPreviewOpen}
+	svgHtml={mermaidPreviewSvgHtml}
+/>
+
+<style>
+	@import './markdown-content.css';
+</style>

@@ -1,0 +1,18 @@
+[flake8]
+max-line-length = 125
+ignore = E203,E211,E221,E225,E231,E241,E251,E261,E266,E501,E701,E704,W503
+exclude =
+    # Do not traverse examples and tools
+    examples,
+    tools,
+    # Do not include package initializers
+    __init__.py,
+    # No need to traverse our git directory
+    .git,
+    # There's no value in checking cache directories
+    __pycache__,
+    # No need to include the build path
+    build,
+    # This contains builds that we don't want to check
+    dist  # This is generated with `python build .` for package releases
+# max-complexity = 10

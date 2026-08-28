@@ -1,0 +1,7 @@
+# A probably incorrect grammar for Japanese
+root        ::= jp-char+ ([ \t\n] jp-char+)*
+jp-char     ::= hiragana | katakana | punctuation | cjk
+hiragana    ::= [ぁ-ゟ]
+katakana    ::= [ァ-ヿ]
+punctuation ::= [、-〾]
+cjk         ::= [一-鿿]

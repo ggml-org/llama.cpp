@@ -1,0 +1,5 @@
+-r ./requirements-convert_legacy_llama.txt
+--extra-index-url https://download.pytorch.org/whl/cpu
+
+## Embedding Gemma requires PyTorch 2.6.0 or later, bumped to 2.11.0 for compatibility
+torch==2.11.0

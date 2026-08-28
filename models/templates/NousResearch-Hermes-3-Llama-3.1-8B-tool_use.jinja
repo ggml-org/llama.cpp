@@ -1,0 +1,152 @@
+{%- macro json_to_python_type(json_spec) %}
+{%- set basic_type_map = {
+    "string": "str",
+    "number": "float",
+    "integer": "int",
+    "boolean": "bool"
+} %}
+
+{%- if basic_type_map[json_spec.type] is defined %}
+    {{- basic_type_map[json_spec.type] }}
+{%- elif json_spec.type == "array" %}
+    {{- "list[" +  json_to_python_type(json_spec|items) + "]"}}
+{%- elif json_spec.type == "object" %}
+    {%- if json_spec.additionalProperties is defined %}
+        {{- "dict[str, " + json_to_python_type(json_spec.additionalProperties) + ']'}}
+    {%- else %}
+        {{- "dict" }}
+    {%- endif %}
+{%- elif json_spec.type is iterable %}
+    {{- "Union[" }}
+    {%- for t in json_spec.type %}
+      {{- json_to_python_type({"type": t}) }}
+      {%- if not loop.last %}
+        {{- "," }} 
+    {%- endif %}
+    {%- endfor %}
+    {{- "]" }}
+{%- else %}
+    {{- "Any" }}
+{%- endif %}
+{%- endmacro %}
+
+
+{{- bos_token }}
+{{- '<|im_start|>system
+' }}
+{{- "You are a function calling AI model. You are provided with function signatures within <tools></tools> XML tags. You may call one or more functions to assist with the user query. Don't make assumptions about what values to plug into functions. Here are the available tools: <tools> " }}
+{%- for tool in tools %}
+    {%- if tool.function is defined %}
+        {%- set tool = tool.function %}
+    {%- endif %}
+    {{- '{"type": "function", "function": ' }}
+    {{- '{"name": "' + tool.name + '", ' }}
+    {{- '"description": "' + tool.name + '(' }}
+    {%- for param_name, param_fields in tool.parameters.properties|items %}
+        {{- param_name + ": " + json_to_python_type(param_fields) }}
+        {%- if not loop.last %}
+            {{- ", " }}
+        {%- endif %}
+    {%- endfor %}
+    {{- ")" }}
+    {%- if tool.return is defined %}
+        {{- " -> " + json_to_python_type(tool.return) }}
+    {%- endif %}
+    {{- " - " + tool.description + "
+
+" }}
+    {%- for param_name, param_fields in tool.parameters.properties|items %}
+        {%- if loop.first %}
+            {{- "    Args:
+" }}
+        {%- endif %}
+        {{- "        " + param_name + "(" + json_to_python_type(param_fields) + "): " + param_fields.description|trim }}
+    {%- endfor %}
+    {%- if tool.return is defined and tool.return.description is defined %}
+        {{- "
+    Returns:
+        " + tool.return.description }}
+    {%- endif %}
+    {{- '"' }}
+    {{- ', "parameters": ' }}
+    {%- if tool.parameters.properties | length == 0 %}
+        {{- "{}" }}
+    {%- else %}
+        {{- tool.parameters|tojson }}
+    {%- endif %}
+    {{- "}" }}
+    {%- if not loop.last %}
+        {{- "
+" }}
+    {%- endif %}
+{%- endfor %}
+{{- " </tools>" }}
+{{- 'Use the following pydantic model json schema for each tool call you will make: {"properties": {"name": {"title": "Name", "type": "string"}, "arguments": {"title": "Arguments", "type": "object"}}, "required": ["name", "arguments"], "title": "FunctionCall", "type": "object"}}
+' }}
+{{- "For each function call return a json object with function name and arguments within <tool_call></tool_call> XML tags as follows:
+" }}
+{{- "<tool_call>
+" }}
+{{- '{"name": <function-name>, "arguments": <args-dict>}
+' }}
+{{- '</tool_call><|im_end|>
+' }}
+{%- for message in messages %}
+    {%- if message.role == "user" or message.role == "system" or (message.role == "assistant" and message.tool_calls is not defined) %}
+        {{- '<|im_start|>' + message.role + '
+' + message.content + '<|im_end|>' + '
+' }}
+    {%- elif message.role == "assistant" %}
+        {{- '<|im_start|>' + message.role }}
+    {%- for tool_call in message.tool_calls %}
+       {{- '
+<tool_call>
+' }}           {%- if tool_call.function is defined %}
+                {%- set tool_call = tool_call.function %}
+            {%- endif %}
+            {{- '{' }}
+            {{- '"name": "' }}
+            {{- tool_call.name }}
+            {{- '"' }}
+            {{- ', '}}
+            {%- if tool_call.arguments is defined %}
+                {{- '"arguments": ' }}
+                {%- if tool_call.arguments is string %}
+                    {{- tool_call.arguments }}
+                {%- else %}
+                    {{- tool_call.arguments|tojson }}
+                {%- endif %}
+            {%- endif %}
+             {{- '}' }}
+            {{- '
+</tool_call>' }}
+    {%- endfor %}
+        {{- '<|im_end|>
+' }}
+    {%- elif message.role == "tool" %}
+        {%- if loop.previtem and loop.previtem.role != "tool" %}
+            {{- '<|im_start|>tool
+' }}
+        {%- endif %}
+        {{- '<tool_response>
+' }}
+        {{- message.content }}
+        {%- if not loop.last %}
+            {{- '
+</tool_response>
+' }}
+        {%- else %}
+            {{- '
+</tool_response>' }}
+        {%- endif %}
+        {%- if not loop.last and loop.nextitem.role != "tool" %}
+            {{- '<|im_end|>' }}
+        {%- elif loop.last %}
+            {{- '<|im_end|>' }}
+        {%- endif %}
+    {%- endif %}
+{%- endfor %}
+{%- if add_generation_prompt %}
+    {{- '<|im_start|>assistant
+' }}
+{%- endif %}

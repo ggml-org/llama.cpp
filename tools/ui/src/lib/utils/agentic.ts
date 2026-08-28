@@ -1,0 +1,496 @@
+import {
+	ATTACHMENT_SAVED_REGEX,
+	MARKDOWN,
+	NEWLINE,
+	REASONING_TAGS,
+	SEARCH_SUMMARY,
+	TOOL_RESULT_JSON_OPEN_REGEX
+} from '$lib/constants';
+import {
+	AgenticSectionType,
+	AttachmentType,
+	ContinueIntentKind,
+	MessageRole,
+	ToolResultKind
+} from '$lib/enums';
+import type { AgenticSection, ContinueIntent, ToolResultLine } from '$lib/types/agentic';
+import type { ApiChatCompletionToolCall } from '$lib/types/api';
+import type {
+	DatabaseMessage,
+	DatabaseMessageExtra,
+	DatabaseMessageExtraImageFile
+} from '$lib/types/database';
+
+/**
+ * Derives display sections from a single assistant message and its direct tool results.
+ *
+ * @param message - The assistant message
+ * @param toolMessages - Tool result messages for this assistant's tool_calls
+ * @param streamingToolCalls - Partial tool calls during streaming (not yet persisted)
+ */
+function deriveSingleTurnSections(
+	message: DatabaseMessage,
+	toolMessages: DatabaseMessage[] = [],
+	streamingToolCalls: ApiChatCompletionToolCall[] = [],
+	isStreaming: boolean = false
+): AgenticSection[] {
+	const sections: AgenticSection[] = [];
+
+	// 1. Reasoning content (from dedicated field)
+	if (message.reasoningContent) {
+		const toolCalls = parseToolCalls(message.toolCalls);
+		const hasContentAfterReasoning =
+			!!message.content?.trim() || toolCalls.length > 0 || streamingToolCalls.length > 0;
+		const isPending = isStreaming && !hasContentAfterReasoning;
+
+		sections.push({
+			content: message.reasoningContent,
+			type: isPending ? AgenticSectionType.REASONING_PENDING : AgenticSectionType.REASONING,
+			wasInterrupted: !isStreaming && !hasContentAfterReasoning
+		});
+	}
+
+	// 2. Text content
+	if (message.content?.trim()) {
+		sections.push({
+			content: message.content,
+			type: AgenticSectionType.TEXT
+		});
+	}
+
+	// 3. Persisted tool calls (from message.toolCalls field)
+	const toolCalls = parseToolCalls(message.toolCalls);
+	// Index tool messages by toolCallId for O(1) lookup instead of O(n) find()
+	const toolMsgById = new Map<string, DatabaseMessage>();
+
+	for (const tm of toolMessages) {
+		if (tm.toolCallId && !toolMsgById.has(tm.toolCallId)) {
+			toolMsgById.set(tm.toolCallId, tm);
+		}
+	}
+
+	for (const tc of toolCalls) {
+		const resultMsg = tc.id ? toolMsgById.get(tc.id) : undefined;
+		// Only show as pending/loading if we're actively streaming; otherwise it's just a tool call without result
+		const type = resultMsg
+			? AgenticSectionType.TOOL_CALL
+			: isStreaming
+				? AgenticSectionType.TOOL_CALL_PENDING
+				: AgenticSectionType.TOOL_CALL;
+
+		sections.push({
+			content: resultMsg?.content || '',
+			toolArgs: tc.function?.arguments,
+			toolCallId: tc.id,
+			toolCwd: resultMsg?.toolCwd,
+			toolName: tc.function?.name,
+			toolResult: resultMsg?.content,
+			toolResultExtras: resultMsg?.extra,
+			type
+		});
+	}
+
+	// 4. Streaming tool calls (not yet persisted - currently being received)
+	const persistedIds = new Set(toolCalls.map((t) => t.id).filter(Boolean));
+
+	for (const tc of streamingToolCalls) {
+		// Skip if already in persisted tool calls
+		if (tc.id && persistedIds.has(tc.id)) continue;
+
+		sections.push({
+			content: '',
+			toolArgs: tc.function?.arguments,
+			toolCallId: tc.id,
+			toolName: tc.function?.name,
+			type: AgenticSectionType.TOOL_CALL_STREAMING
+		});
+	}
+
+	return sections;
+}
+
+/**
+ * Derives display sections from structured message data.
+ *
+ * Handles both single-turn (one assistant + its tool results) and multi-turn
+ * agentic sessions (multiple assistant + tool messages grouped together).
+ *
+ * When `toolMessages` contains continuation assistant messages (from multi-turn
+ * agentic flows), they are processed in order to produce sections across all turns.
+ *
+ * @param message - The first/anchor assistant message
+ * @param toolMessages - Tool result messages and continuation assistant messages
+ * @param streamingToolCalls - Partial tool calls during streaming (not yet persisted)
+ * @param isStreaming - Whether the message is currently being streamed
+ */
+export function deriveAgenticSections(
+	message: DatabaseMessage,
+	toolMessages: DatabaseMessage[] = [],
+	streamingToolCalls: ApiChatCompletionToolCall[] = [],
+	isStreaming: boolean = false
+): AgenticSection[] {
+	const hasAssistantContinuations = toolMessages.some((m) => m.role === MessageRole.ASSISTANT);
+
+	if (!hasAssistantContinuations) {
+		return deriveSingleTurnSections(message, toolMessages, streamingToolCalls, isStreaming);
+	}
+
+	const sections: AgenticSection[] = [];
+	const firstTurnToolMsgs = collectToolMessages(toolMessages, 0);
+
+	sections.push(...deriveSingleTurnSections(message, firstTurnToolMsgs));
+
+	let i = firstTurnToolMsgs.length;
+
+	while (i < toolMessages.length) {
+		const msg = toolMessages[i];
+
+		if (msg.role === MessageRole.ASSISTANT) {
+			const turnToolMsgs = collectToolMessages(toolMessages, i + 1);
+			const isLastTurn = i + 1 + turnToolMsgs.length >= toolMessages.length;
+
+			sections.push(
+				...deriveSingleTurnSections(
+					msg,
+					turnToolMsgs,
+					isLastTurn ? streamingToolCalls : [],
+					isLastTurn && isStreaming
+				)
+			);
+
+			i += 1 + turnToolMsgs.length;
+		} else {
+			i++;
+		}
+	}
+
+	return sections;
+}
+
+/**
+ * Build the raw text representation shown in the "raw output" view of an
+ * assistant message. Each section is formatted as it would appear in the
+ * model-facing transcript, joined by blank lines.
+ */
+export function buildAssistantRawOutput(sections: AgenticSection[]): string {
+	const parts: string[] = [];
+
+	for (const section of sections) {
+		switch (section.type) {
+			case AgenticSectionType.REASONING:
+			case AgenticSectionType.REASONING_PENDING:
+				parts.push(`${REASONING_TAGS.START}${NEWLINE}${section.content}${REASONING_TAGS.END}`);
+
+				break;
+
+			case AgenticSectionType.TEXT:
+				parts.push(section.content);
+
+				break;
+
+			case AgenticSectionType.TOOL_CALL:
+			case AgenticSectionType.TOOL_CALL_PENDING:
+			case AgenticSectionType.TOOL_CALL_STREAMING: {
+				const callObj: Record<string, unknown> = { name: section.toolName };
+
+				if (section.toolArgs) {
+					try {
+						callObj.arguments = JSON.parse(section.toolArgs);
+					} catch {
+						callObj.arguments = section.toolArgs;
+					}
+				}
+
+				parts.push(JSON.stringify(callObj, null, 2));
+
+				if (section.toolResult) {
+					parts.push(`${NEWLINE}${section.toolResult}`);
+				}
+
+				break;
+			}
+		}
+	}
+
+	return parts.join(`${NEWLINE}${NEWLINE}`);
+}
+
+/**
+ * Collect consecutive tool messages starting at `startIndex`.
+ */
+function collectToolMessages(messages: DatabaseMessage[], startIndex: number): DatabaseMessage[] {
+	const result: DatabaseMessage[] = [];
+
+	for (let i = startIndex; i < messages.length; i++) {
+		if (messages[i].role === MessageRole.TOOL) {
+			result.push(messages[i]);
+		} else {
+			break;
+		}
+	}
+
+	return result;
+}
+
+/**
+ * Split a tool-result blob into a list and an optional "Total matches: N"
+ * summary. Both file-glob and grep tools emit this format on the server:
+ *
+ *   <matches>
+ *   ---
+ *   Total matches: 42
+ *
+ * Returns the lines and exposes a callback for capturing the total so each
+ * caller can stash it on its own meta type without taking a return-tuple.
+ */
+export function splitSearchSummaryList(
+	text: string,
+	captureTotal: (n: number) => void
+): { lines: string[] } {
+	const separatorIndex = text.indexOf(SEARCH_SUMMARY.SEPARATOR);
+	const matchesText = separatorIndex === -1 ? text : text.slice(0, separatorIndex);
+	const summaryText =
+		separatorIndex === -1 ? '' : text.slice(separatorIndex + SEARCH_SUMMARY.SEPARATOR.length);
+	const totalMatch = summaryText.match(SEARCH_SUMMARY.TOTAL_REGEX);
+
+	if (totalMatch) {
+		captureTotal(parseInt(totalMatch[1], 10));
+	}
+
+	const lines = matchesText
+		.split(NEWLINE)
+		.map((line) => line.trim())
+		.filter((line) => line.length > 0);
+
+	return { lines };
+}
+
+/** Bounded cache for parseToolResultWithMedia results. */
+const TOOL_RESULT_LINES_CACHE_MAX_SIZE = 32;
+const toolResultLinesCache = new Map<string, ToolResultLine[]>();
+
+/**
+ * Parse tool result text into lines, matching media attachments (images and audio) by name.
+ * Memoized: called per render during streaming on unchanged tool result
+ * strings with unchanged extras.
+ */
+export function parseToolResultWithMedia(
+	toolResult: string,
+	extras?: DatabaseMessageExtra[]
+): ToolResultLine[] {
+	// Cache key includes image attachment names so we recompute when
+	// attachments change, even if the count stays the same.
+	const imageNames = (extras ?? [])
+		.filter((e): e is DatabaseMessageExtraImageFile => e.type === AttachmentType.IMAGE)
+		.map((e) => e.name)
+		.join(NEWLINE);
+	const cacheKey = `${imageNames}:${toolResult}`;
+	const cached = toolResultLinesCache.get(cacheKey);
+
+	if (cached !== undefined) return cached;
+
+	const lines = toolResult.split(NEWLINE);
+	const result = lines.map((line) => {
+		const match = line.match(ATTACHMENT_SAVED_REGEX);
+
+		if (!match || !extras) return { text: line };
+
+		const attachmentName = match[1];
+		const media = extras.find(
+			(e): e is DatabaseMessageExtraImageFile | DatabaseMessageExtraAudioFile =>
+				(e.type === AttachmentType.IMAGE || e.type === AttachmentType.AUDIO) &&
+				e.name === attachmentName
+		);
+
+		return { media, text: line };
+	});
+
+	if (toolResultLinesCache.size >= TOOL_RESULT_LINES_CACHE_MAX_SIZE) {
+		toolResultLinesCache.delete(toolResultLinesCache.keys().next().value!);
+	}
+
+	toolResultLinesCache.set(cacheKey, result);
+
+	return result;
+}
+
+/** Bounded cache for classifyToolResult results. */
+const CLASSIFY_CACHE_MAX_SIZE = 32;
+const classifyCache = new Map<string, ToolResultKind>();
+
+/**
+ * Pick a renderer tier for a tool's result content.
+ *
+ *   json     - trimmed content starts with `{` or `[` and parses cleanly.
+ *   markdown - content shows structural markdown markers (headers, code
+ *              fences, links, lists, blockquotes, tables) and should render
+ *              through MarkdownContent for proper formatting.
+ *   text     - everything else, rendered as plain text lines (with image
+ *              attachment resolution as a side effect).
+ * Memoized: called per render during streaming on unchanged content.
+ */
+export function classifyToolResult(content: string | undefined): ToolResultKind {
+	if (!content) return ToolResultKind.TEXT;
+
+	const cached = classifyCache.get(content);
+
+	if (cached !== undefined) return cached;
+
+	const trimmed = content.trim();
+
+	if (!trimmed) return ToolResultKind.TEXT;
+
+	let result: ToolResultKind = ToolResultKind.TEXT;
+
+	// Strongest signal: JSON object/array round-trips through JSON.parse.
+	if (TOOL_RESULT_JSON_OPEN_REGEX.test(trimmed)) {
+		try {
+			JSON.parse(trimmed);
+			result = ToolResultKind.JSON;
+		} catch (error) {
+			console.error('[agentic] tool result looked like JSON but failed to parse:', error);
+		}
+	}
+
+	if (result === ToolResultKind.TEXT && looksLikeMarkdown(trimmed)) {
+		result = ToolResultKind.MARKDOWN;
+	}
+
+	if (classifyCache.size >= CLASSIFY_CACHE_MAX_SIZE) {
+		classifyCache.delete(classifyCache.keys().next().value!);
+	}
+
+	classifyCache.set(content, result);
+
+	return result;
+}
+
+/**
+ * Heuristic detector for "is this content a markdown document rather than
+ * plain text?". True when at least one well-known structural marker shows
+ * up - headers, code fences, links, bold, lists, blockquotes, tables.
+ * Each marker is specific enough that plain tool-output prose rarely
+ * trips it, but plain text starting with `# 5` will - acceptable false
+ * positive for the gain in formatting for tool results like search
+ * summaries that come back already-mardown.
+ */
+function looksLikeMarkdown(content: string): boolean {
+	// Code fences are unambiguous - triple backticks or tildes at line start.
+	if (MARKDOWN.CODE_FENCE_REGEX.test(content)) return true;
+
+	const lines = content.split(NEWLINE);
+
+	for (const line of lines) {
+		if (MARKDOWN.ATX_HEADING_REGEX.test(line)) return true;
+
+		if (MARKDOWN.BLOCKQUOTE_REGEX.test(line)) return true;
+
+		if (MARKDOWN.LIST_BULLET_REGEX.test(line)) return true;
+
+		if (MARKDOWN.LIST_NUMBERED_REGEX.test(line)) return true;
+	}
+
+	// Inline structural markers anywhere in the body.
+	if (MARKDOWN.LINK_REGEX.test(content)) return true;
+
+	if (MARKDOWN.BOLD_REGEX.test(content)) return true;
+
+	// Tables: a pipe-bearing header line followed by a separator row.
+	if (lines.length >= 2) {
+		const head = lines[0];
+		const sep = lines[1];
+
+		if (head.includes('|') && MARKDOWN.TABLE_SEPARATOR_REGEX.test(sep)) return true;
+	}
+
+	return false;
+}
+
+/** Bounded cache for parsed tool-call JSON blobs. */
+const TOOL_CALLS_CACHE_MAX_SIZE = 64;
+const toolCallsParseCache = new Map<string, ApiChatCompletionToolCall[]>();
+
+/**
+ * Safely parse the toolCalls JSON string from a DatabaseMessage.
+ * Memoized: the same JSON string is re-parsed on every render during
+ * streaming, which is wasted CPU since tool calls don't change mid-stream.
+ */
+function parseToolCalls(toolCallsJson?: string): ApiChatCompletionToolCall[] {
+	if (!toolCallsJson) return [];
+
+	const cached = toolCallsParseCache.get(toolCallsJson);
+
+	if (cached) return cached;
+
+	let result: ApiChatCompletionToolCall[];
+
+	try {
+		const parsed = JSON.parse(toolCallsJson);
+
+		result = Array.isArray(parsed) ? parsed : [];
+	} catch {
+		result = [];
+	}
+
+	if (toolCallsParseCache.size >= TOOL_CALLS_CACHE_MAX_SIZE) {
+		toolCallsParseCache.delete(toolCallsParseCache.keys().next().value!);
+	}
+
+	toolCallsParseCache.set(toolCallsJson, result);
+
+	return result;
+}
+
+/**
+ * Check if a message has agentic content (tool calls or is part of an agentic flow).
+ */
+export function hasAgenticContent(
+	message: DatabaseMessage,
+	toolMessages: DatabaseMessage[] = []
+): boolean {
+	if (message.toolCalls) {
+		const tc = parseToolCalls(message.toolCalls);
+
+		if (tc.length > 0) return true;
+	}
+
+	return toolMessages.length > 0;
+}
+
+/**
+ * Decide how a Continue click on messages[idx] should resume generation.
+ * Pure function over the persisted history snapshot.
+ */
+export function classifyContinueIntent(messages: DatabaseMessage[], idx: number): ContinueIntent {
+	const target = messages[idx];
+
+	// Defensive default: callers already filter by role, stay deterministic.
+	if (!target || target.role !== MessageRole.ASSISTANT) {
+		return { kind: ContinueIntentKind.APPEND_TEXT };
+	}
+
+	const hasToolCalls = parseToolCalls(target.toolCalls).length > 0;
+
+	if (!hasToolCalls) {
+		return { kind: ContinueIntentKind.APPEND_TEXT };
+	}
+
+	// Walk consecutive trailing tool results. The agentic loop only emits tool
+	// messages directly after the assistant turn that owns them, so the first
+	// non tool message marks the boundary.
+	let lastTrailingTool = idx;
+
+	for (let i = idx + 1; i < messages.length; i++) {
+		if (messages[i].role === MessageRole.TOOL) {
+			lastTrailingTool = i;
+		} else {
+			break;
+		}
+	}
+
+	if (lastTrailingTool > idx) {
+		return { kind: ContinueIntentKind.NEXT_TURN, truncateAfter: lastTrailingTool };
+	}
+
+	return { kind: ContinueIntentKind.RERUN_TURN, truncateAfter: idx - 1 };
+}

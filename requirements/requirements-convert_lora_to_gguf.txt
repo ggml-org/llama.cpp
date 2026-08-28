@@ -1,0 +1,2 @@
+-r ./requirements-convert_hf_to_gguf.txt
+--extra-index-url https://download.pytorch.org/whl/cpu
