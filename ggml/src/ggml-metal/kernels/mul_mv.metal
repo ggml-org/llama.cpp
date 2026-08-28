@@ -2659,6 +2659,8 @@ void kernel_mul_mv_iq2_nl_f32_impl(
         ushort sgitg) {
     const short NSG = FC_mul_mv_nsg;
 
+    threadgroup float * shmem_f32 = (threadgroup float *) shmem;
+
     const int r0 = tgpig.x;
     const int r1 = tgpig.y;
     const int im = tgpig.z;
@@ -2677,25 +2679,61 @@ void kernel_mul_mv_iq2_nl_f32_impl(
     const int nb   = args.ne00/QK2_NL;
     const int ns01 = args.nb01/args.nb00;
 
-    float sumf[NR0] = {0.f};
+    const short ix = tiisg/2;  // 0...15
+    const short it = tiisg%2;  // 0 or 1
 
-    // each lane accumulates whole 32-weight blocks; simd_sum reduces across the simdgroup
-    for (int ib = tiisg; ib < nb && ib < ns01; ib += 32) {
-        device const float * yb = y + ib*QK2_NL;
+    shmem_f32[tiisg] = kvalues_iq2nl_f[tiisg%4];
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    float4 yl[4];
+    float sumf[NR0]={0.f};
+
+    device const float * yb = y + ix*QK2_NL + it*4;
+
+    uint32_t aux32;
+    uint32_t v32;
+    thread const uint8_t * q8 = (thread const uint8_t *)&v32;
+
+    float4 qf1, qf2;
+
+    // [TAG_MUL_MV_WEIRD]
+    for (int ib = ix; ib < nb && ib < ns01; ib += 16) {
+        device const float4 * y4 = (device const float4 *)yb;
+        yl[0] = y4[0];
+        yl[1] = y4[2];
+        yl[2] = y4[4];
+        yl[3] = y4[6];
 
         for (short row = 0; row < NR0; row++) {
             device const block_iq2_nl & xb = x[row*ns01 + ib];
+            device const uint16_t * q2 = (device const uint16_t *)(xb.qs + 4*it);
 
-            float acc = 0.f;
-            for (short j = 0; j < QK2_NL/4; ++j) {
-                const uint8_t q = xb.qs[j];
-                acc += yb[j + 0*(QK2_NL/4)] * kvalues_iq2nl_f[(q >> 0) & 3];
-                acc += yb[j + 1*(QK2_NL/4)] * kvalues_iq2nl_f[(q >> 2) & 3];
-                acc += yb[j + 2*(QK2_NL/4)] * kvalues_iq2nl_f[(q >> 4) & 3];
-                acc += yb[j + 3*(QK2_NL/4)] * kvalues_iq2nl_f[(q >> 6) & 3];
-            }
-            sumf[row] += (float)xb.d * acc;
+            float4 acc1 = {0.f}, acc2 = {0.f};
+
+            aux32 = q2[0] | (q2[1] << 16);
+
+            v32 = aux32 & 0x03030303;
+            qf1 = {shmem_f32[q8[0]], shmem_f32[q8[1]], shmem_f32[q8[2]], shmem_f32[q8[3]]};
+            acc1 += yl[0] * qf1;
+
+            v32 = (aux32 >> 2) & 0x03030303;
+            qf2 = {shmem_f32[q8[0]], shmem_f32[q8[1]], shmem_f32[q8[2]], shmem_f32[q8[3]]};
+            acc2 += yl[1] * qf2;
+
+            v32 = (aux32 >> 4) & 0x03030303;
+            qf1 = {shmem_f32[q8[0]], shmem_f32[q8[1]], shmem_f32[q8[2]], shmem_f32[q8[3]]};
+            acc1 += yl[2] * qf1;
+
+            v32 = (aux32 >> 6) & 0x03030303;
+            qf2 = {shmem_f32[q8[0]], shmem_f32[q8[1]], shmem_f32[q8[2]], shmem_f32[q8[3]]};
+            acc2 += yl[3] * qf2;
+
+            acc1 += acc2;
+
+            sumf[row] += (float)xb.d * (acc1[0] + acc1[1] + acc1[2] + acc1[3]);
         }
+
+        yb += 16 * QK2_NL;
     }
 
     device float * dst_f32 = (device float *) dst + (uint64_t)im*args.ne0*args.ne1 + (uint64_t)r1*args.ne0;
@@ -2714,11 +2752,19 @@ kernel void kernel_mul_mv_iq2_nl_f32(
         device const char * src0,
         device const char * src1,
         device       char * dst,
+        threadgroup  char * shmem [[threadgroup(0)]],
         uint3  tgpig[[threadgroup_position_in_grid]],
         ushort tiisg[[thread_index_in_simdgroup]],
         ushort sgitg[[simdgroup_index_in_threadgroup]]) {
 
-    kernel_mul_mv_iq2_nl_f32_impl<N_R0_IQ2_NL, constant ggml_metal_kargs_mul_mv &>(args, src0, src1, dst, nullptr, tgpig, tiisg, sgitg);
+    kernel_mul_mv_iq2_nl_f32_impl<N_R0_IQ2_NL, constant ggml_metal_kargs_mul_mv &>(args, src0, src1, dst, shmem, tgpig, tiisg, sgitg);
+}
+
+inline float4 iq3_nl_lut4(threadgroup const float * lut, thread const uint8_t * q8, uint8_t hb) {
+    return {lut[q8[0] | ((hb << 2) & 4)],
+            lut[q8[1] | ((hb << 1) & 4)],
+            lut[q8[2] | ( hb       & 4)],
+            lut[q8[3] | ((hb >> 1) & 4)]};
 }
 
 template<int NR0, typename args_t>
@@ -2732,6 +2778,8 @@ void kernel_mul_mv_iq3_nl_f32_impl(
         ushort tiisg,
         ushort sgitg) {
     const short NSG = FC_mul_mv_nsg;
+
+    threadgroup float * shmem_f32 = (threadgroup float *) shmem;
 
     const int r0 = tgpig.x;
     const int r1 = tgpig.y;
@@ -2751,25 +2799,63 @@ void kernel_mul_mv_iq3_nl_f32_impl(
     const int nb   = args.ne00/QK3_NL;
     const int ns01 = args.nb01/args.nb00;
 
-    float sumf[NR0] = {0.f};
+    const short ix = tiisg/2;  // 0...15
+    const short it = tiisg%2;  // 0 or 1
 
-    // each lane accumulates whole 32-weight blocks; simd_sum reduces across the simdgroup
-    for (int ib = tiisg; ib < nb && ib < ns01; ib += 32) {
-        device const float * yb = y + ib*QK3_NL;
+    shmem_f32[tiisg] = kvalues_iq3nl_f[tiisg%8];
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    float4 yl[4];
+    float sumf[NR0]={0.f};
+    device const float * yb = y + ix*QK3_NL + it*4;
+
+    uint32_t aux32;
+    uint32_t v32;
+    thread const uint8_t * q8 = (thread const uint8_t *)&v32;
+
+    float4 qf1, qf2;
+
+    // [TAG_MUL_MV_WEIRD]
+    for (int ib = ix; ib < nb && ib < ns01; ib += 16) {
+        device const float4 * y4 = (device const float4 *)yb;
+        yl[0] = y4[0];
+        yl[1] = y4[2];
+        yl[2] = y4[4];
+        yl[3] = y4[6];
 
         for (short row = 0; row < NR0; row++) {
             device const block_iq3_nl & xb = x[row*ns01 + ib];
+            device const uint16_t * q2 = (device const uint16_t *)(xb.qs + 4*it);
+            device const uint16_t * qh = (device const uint16_t *)xb.qh;
 
-            float acc = 0.f;
-            for (short j = 0; j < QK3_NL/4; ++j) {
-                const uint8_t q = xb.qs[j];
-                for (short g = 0; g < 4; ++g) {
-                    const short idx = ((q >> (2*g)) & 3) | (((xb.qh[g] >> j) & 1) << 2);
-                    acc += yb[j + g*(QK3_NL/4)] * kvalues_iq3nl_f[idx];
-                }
-            }
-            sumf[row] += (float)xb.d * acc;
+            float4 acc1 = {0.f}, acc2 = {0.f};
+
+            aux32 = q2[0] | (q2[1] << 16);
+
+            const uint32_t qh32 = (qh[0] | (qh[1] << 16)) >> (4*it);
+
+            v32 = aux32 & 0x03030303;
+            qf1 = iq3_nl_lut4(shmem_f32, q8, (qh32 >> 0) & 0xf);
+            acc1 += yl[0] * qf1;
+
+            v32 = (aux32 >> 2) & 0x03030303;
+            qf2 = iq3_nl_lut4(shmem_f32, q8, (qh32 >> 8) & 0xf);
+            acc2 += yl[1] * qf2;
+
+            v32 = (aux32 >> 4) & 0x03030303;
+            qf1 = iq3_nl_lut4(shmem_f32, q8, (qh32 >> 16) & 0xf);
+            acc1 += yl[2] * qf1;
+
+            v32 = (aux32 >> 6) & 0x03030303;
+            qf2 = iq3_nl_lut4(shmem_f32, q8, (qh32 >> 24) & 0xf);
+            acc2 += yl[3] * qf2;
+
+            acc1 += acc2;
+
+            sumf[row] += (float)xb.d * (acc1[0] + acc1[1] + acc1[2] + acc1[3]);
         }
+
+        yb += 16 * QK3_NL;
     }
 
     device float * dst_f32 = (device float *) dst + (uint64_t)im*args.ne0*args.ne1 + (uint64_t)r1*args.ne0;
@@ -2788,11 +2874,12 @@ kernel void kernel_mul_mv_iq3_nl_f32(
         device const char * src0,
         device const char * src1,
         device       char * dst,
+        threadgroup  char * shmem [[threadgroup(0)]],
         uint3  tgpig[[threadgroup_position_in_grid]],
         ushort tiisg[[thread_index_in_simdgroup]],
         ushort sgitg[[simdgroup_index_in_threadgroup]]) {
 
-    kernel_mul_mv_iq3_nl_f32_impl<N_R0_IQ3_NL, constant ggml_metal_kargs_mul_mv &>(args, src0, src1, dst, nullptr, tgpig, tiisg, sgitg);
+    kernel_mul_mv_iq3_nl_f32_impl<N_R0_IQ3_NL, constant ggml_metal_kargs_mul_mv &>(args, src0, src1, dst, shmem, tgpig, tiisg, sgitg);
 }
 
 template<int NR0, typename args_t>
