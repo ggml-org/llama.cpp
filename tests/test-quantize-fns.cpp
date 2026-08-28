@@ -6,6 +6,7 @@
 #undef NDEBUG
 #include <assert.h>
 #include <algorithm>
+#include <cmath>
 #include <math.h>
 #include <stdio.h>
 #include <string>
@@ -122,12 +123,12 @@ static float dot_product_error(const ggml_type_traits_cpu * qfns_cpu, ggml_type 
     const float ref01 = dot_product(test_data1, test_data4, test_size);
     const float ref11 = dot_product(test_data3, test_data4, test_size);
 
-    const float err00 = fabsf(result[0]      - ref00) / test_size;
-    const float err10 = fabsf(result[1]      - ref10) / test_size;
-    const float err01 = fabsf(result[bs]     - ref01) / test_size;
-    const float err11 = fabsf(result[bs + 1] - ref11) / test_size;
+    const auto err = [test_size](float val, float ref) {
+        const float e = fabsf(val - ref) / test_size;
+        return std::isfinite(e) ? e : INFINITY;
+    };
 
-    return std::max({err00, err01, err10, err11});
+    return std::max({err(result[0], ref00), err(result[1], ref10), err(result[bs], ref01), err(result[bs + 1], ref11)});
 }
 
 static int test_vec_dot_f32(bool verbose) {
