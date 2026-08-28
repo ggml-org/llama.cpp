@@ -210,6 +210,14 @@ struct common_speculative_impl {
         }
     }
 
+    // record the width a sequence was actually drafted at, when the caller had to
+    // override the per-sequence choice (see the DFlash/DSpark batch below)
+    void set_last_draft(llama_seq_id seq_id, int32_t n) {
+        if (seq_id >= 0 && (size_t) seq_id < n_last_draft.size()) {
+            n_last_draft[seq_id] = n;
+        }
+    }
+
     // effective draft length for this step, never above the configured n_max
     int32_t adaptive_n_draft(llama_seq_id seq_id, int32_t n_cfg, int32_t n_min) {
         if (!adaptive_n || seq_id < 0 || (size_t) seq_id >= acc_ema.size()) {
@@ -1283,6 +1291,44 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
         std::vector<int32_t> i_block_beg(n_seq, -1);
         std::vector<int32_t> n_block    (n_seq,  0);
 
+        // DFlash decodes the whole block in one pass, so a shorter block does not save
+        // draft time -- but it does shrink the target's verification batch, which is
+        // where the cost actually is.
+        //
+        // The block width has to be the same for every sequence in this batch. All the
+        // blocks go into one decode, and the draft graph reshapes those tokens into
+        // [block_size, n_seqs] -- build_dflash2_conv and the DSpark markov head both
+        // assert n_tokens % n_seqs_unq == 0. Per-sequence widths break that: with an
+        // equal ubatch split the longer block is silently cut across two ubatches, so
+        // its tail is convolved as a block of its own and drafts from a truncated
+        // window; with a simple split it trips the assert and takes the server down.
+        // So size the batch once, from the sequence with the highest measured
+        // acceptance: no sequence drafts shorter than its own estimate, and the extra
+        // positions a colder sequence receives are just rejected at verification.
+        int32_t n_draft_batch = params.n_max;
+
+        if (adaptive_n) {
+            n_draft_batch = 0;
+
+            for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
+                if (!dparams[seq_id].drafting) {
+                    continue;
+                }
+
+                n_draft_batch = std::max(n_draft_batch, adaptive_n_draft(seq_id, params.n_max, params.n_min));
+            }
+
+            if (n_draft_batch == 0) {
+                return;
+            }
+
+            for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
+                if (dparams[seq_id].drafting) {
+                    set_last_draft(seq_id, n_draft_batch);
+                }
+            }
+        }
+
         for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
             auto & dp = dparams[seq_id];
             if (!dp.drafting) {
@@ -1293,10 +1339,7 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
 
             const int32_t n = (int32_t) dp.n_past;
 
-            // DFlash decodes the whole block in one pass, so a shorter block does
-            // not save draft time -- but it does shrink the target's verification
-            // batch, which is where the cost actually is.
-            const int32_t n_draft = adaptive_n_draft(seq_id, params.n_max, params.n_min);
+            const int32_t n_draft = n_draft_batch;
 
             const int32_t n_block_tokens = n_draft + (is_dspark && sample_from_anchor ? 0 : 1);
             i_block_beg[seq_id] = batch.n_tokens;
