@@ -456,6 +456,7 @@ static clip_flash_attn_type mtmd_get_clip_flash_attn_type(enum llama_flash_attn_
 mtmd_context_params mtmd_context_params_default() {
     mtmd_context_params params {
         /* use_gpu           */ true,
+        /* device            */ nullptr,
         /* print_timings     */ true,
         /* n_threads         */ 4,
         /* image_marker      */ nullptr,
@@ -564,6 +565,7 @@ struct mtmd_context {
 
         clip_context_params ctx_clip_params {
             /* use_gpu           */ ctx_params.use_gpu,
+            /* device            */ ctx_params.device,
             /* flash_attn_type   */ mtmd_get_clip_flash_attn_type(ctx_params.flash_attn_type),
             /* image_min_tokens  */ ctx_params.image_min_tokens,
             /* image_max_tokens  */ ctx_params.image_max_tokens,
@@ -823,6 +825,7 @@ struct mtmd_context {
                     image_preproc = std::make_unique<mtmd_image_preprocessor_longest_edge>(ctx_v);
                 } break;
             case PROJECTOR_TYPE_DOTS_OCR:
+            case PROJECTOR_TYPE_DOTS3NOTE_V:
                 {
                     // <|img|> ... (image embeddings) ... <|endofimg|>
                     img_beg = "<|img|>";
@@ -973,6 +976,13 @@ struct mtmd_context {
                     aud_beg = "<|audio>";
                     aud_end = "<audio|>";
                     audio_preproc = std::make_unique<mtmd_audio_preprocessor_gemma4ua>(ctx_a);
+                } break;
+            case PROJECTOR_TYPE_DOTS3NOTE_A:
+                {
+                    // <|audio_comp_start|> ... (embeddings) ... <|audio_comp_end|>
+                    aud_beg = "<|audio_comp_start|>";
+                    aud_end = "<|audio_comp_end|>";
+                    audio_preproc = std::make_unique<mtmd_audio_preprocessor_dots3note>(ctx_a);
                 } break;
             case PROJECTOR_TYPE_MIMO_AUDIO:
                 {
