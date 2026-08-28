@@ -2572,15 +2572,18 @@ static bool ggml_cuda_graph_check_compability(ggml_cgraph * cgraph) {
 
 #if defined(GGML_USE_HIP)
         // [TAG_TOP_K_HIP_CUDA_GRAPHS]
-        // The ROCm partial top-k path (rocprim::partial_sort_copy) synchronizes the stream, so it
-        // cannot be captured into a HIP graph. k == ncols uses the capture-safe bitonic sort.
-        if (node->op == GGML_OP_TOP_K && node->ne[0] < node->src[0]->ne[0]) {
+        // Multi-row top-k uses hipCUB DeviceSegmentedRadixSort. Instantiating a HIP graph that
+        // contains a large segmented sort overflows the ROCm runtime's graph builder (stack
+        // overflow inside libamdhip64). Single-row top-k (decode) uses DeviceRadixSort and is
+        // graph-safe, so only skip graphs for the nrows>1 case (prefill/batched, which does not
+        // rely on CUDA graphs anyway).
+        if (node->op == GGML_OP_TOP_K && ggml_nrows(node->src[0]) > 1) {
             use_cuda_graph = false;
 #ifndef NDEBUG
-            GGML_LOG_DEBUG("%s: disabling HIP graphs due to ROCm partial top-k\n", __func__);
+            GGML_LOG_DEBUG("%s: disabling CUDA graphs due to multi-row TOP_K on ROCm\n", __func__);
 #endif
         }
-#endif
+#endif // GGML_USE_HIP
 
         if (!use_cuda_graph) {
             break;
@@ -5272,9 +5275,8 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
             return ggml_is_contiguous_rows(op->src[0]);
         case GGML_OP_TOP_K:
 #if defined(GGML_USE_HIP)
-            // rocPRIM partial top-k (partial_sort_copy) handles any ncols when k < ncols;
-            // k == ncols uses the bitonic fallback, which is limited to ncols <= 1024.
-            return op->ne[0] < op->src[0]->ne[0] || op->src[0]->ne[0] <= 1024;
+            // capture-safe radix SortPairs handles any ncols / nrows on ROCm
+            return true;
 #elif !defined(GGML_CUDA_USE_CUB)
             return op->src[0]->ne[0] <= 1024;
 #else

@@ -49,24 +49,21 @@ static int next_power_of_2(int x) {
 #endif                            // CUB_TOP_K_AVAILABLE
 
 #if defined(GGML_USE_HIP)
-#include <rocprim/rocprim.hpp>
-// rocPRIM has no DeviceTopK equivalent; partial_sort_copy is nth_element(O(ncols)) + a sort of only
-// the first k, i.e. the same algorithmic class as cub::DeviceTopK and far cheaper than the generic
-// full-sort fallback when k << ncols. It is keys-only, so pack (order-preserving float bits, index)
-// into one u64 key to carry the index through the sort.
-static __global__ void ggml_cuda_topk_pack_kv(const float * x, uint64_t * packed, const int ncols) {
-    const int col = blockIdx.x * blockDim.x + threadIdx.x;
-    if (col >= ncols) {
-        return;
+#include <hipcub/hipcub.hpp>
+// hipCUB has no DeviceTopK, so on ROCm top-k is implemented by sorting (score, index) pairs in
+// descending order with DeviceRadixSort (single row) / DeviceSegmentedRadixSort (multi-row) and
+// keeping the first k of each row. These radix sorts are stream-capture-safe. The helpers below
+// fill the per-element value (original column index) and the per-row segment offsets.
+static __global__ void ggml_cuda_topk_iota_rows(int * idx, const int ncols, const int64_t n) {
+    const int64_t i = (int64_t) blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) {
+        idx[i] = (int) (i % ncols);
     }
-    uint32_t u = __float_as_uint(x[col]);
-    u ^= (u & 0x80000000u) ? 0xFFFFFFFFu : 0x80000000u; // order-preserving float -> u32
-    packed[col] = ((uint64_t) (~u) << 32) | (uint32_t) col; // hi = ~score (ascending == descending), lo = index
 }
-static __global__ void ggml_cuda_topk_unpack_idx(const uint64_t * packed, int * dst, const int k) {
-    const int j = blockIdx.x * blockDim.x + threadIdx.x;
-    if (j < k) {
-        dst[j] = (int) (uint32_t) (packed[j] & 0xFFFFFFFFu);
+static __global__ void ggml_cuda_topk_init_offsets(int * off, const int ncols, const int n1) {
+    const int s = blockIdx.x * blockDim.x + threadIdx.x;
+    if (s < n1) {
+        off[s] = s * ncols;
     }
 }
 #endif // GGML_USE_HIP
@@ -94,33 +91,39 @@ void ggml_cuda_op_top_k(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
         top_k_cub(pool, src0_d + i * ncols, dst_d + i * k, ncols, k, stream);
     }
 #elif defined(GGML_USE_HIP)  // CUB_TOP_K_AVAILABLE
-    // ROCm partial top-k (see doc/PLAN_hip_partial_topk.md). rocprim::partial_sort_copy requires
-    // middle < size, so k == ncols falls back to a full descending sort.
-    if (k < ncols) {
-        const int block = 256;
-        ggml_cuda_pool_alloc<uint64_t> packed_in_alloc(pool, ncols);
-        ggml_cuda_pool_alloc<uint64_t> packed_out_alloc(pool, ncols + 1);
-        uint64_t * packed_in  = packed_in_alloc.get();
-        uint64_t * packed_out = packed_out_alloc.get();
-        for (int64_t r = 0; r < nrows; ++r) {
-            const dim3 grid((ncols + block - 1) / block);
-            ggml_cuda_topk_pack_kv<<<grid, block, 0, stream>>>(src0_d + r * ncols, packed_in, (int) ncols);
+    // ROCm top-k via capture-safe radix sort-pairs (see doc/PLAN_hip_partial_topk.md).
+    {
+        const int     block = 256;
+        const int64_t n     = ncols * nrows;
+        ggml_cuda_pool_alloc<float> keys_alloc(pool, n);
+        ggml_cuda_pool_alloc<int>   vals_in_alloc(pool, n);
+        ggml_cuda_pool_alloc<int>   vals_out_alloc(pool, n);
+        float * keys     = keys_alloc.get();
+        int   * vals_in  = vals_in_alloc.get();
+        int   * vals_out = vals_out_alloc.get();
 
-            size_t tmp_bytes = 0;
-            CUDA_CHECK(rocprim::partial_sort_copy(nullptr, tmp_bytes, packed_in, packed_out,
-                                                  (size_t) k, (size_t) ncols, rocprim::less<uint64_t>(), stream));
+        CUDA_CHECK(cudaMemcpyAsync(keys, src0_d, n * sizeof(float), cudaMemcpyDeviceToDevice, stream));
+        ggml_cuda_topk_iota_rows<<<(n + block - 1) / block, block, 0, stream>>>(vals_in, (int) ncols, n);
+
+        size_t tmp_bytes = 0;
+        if (nrows == 1) {
+            CUDA_CHECK(hipcub::DeviceRadixSort::SortPairsDescending(nullptr, tmp_bytes, keys, keys,
+                vals_in, vals_out, (int) ncols, 0, (int) sizeof(float) * 8, stream));
             ggml_cuda_pool_alloc<uint8_t> tmp_alloc(pool, tmp_bytes);
-            CUDA_CHECK(rocprim::partial_sort_copy(tmp_alloc.get(), tmp_bytes, packed_in, packed_out,
-                                                  (size_t) k, (size_t) ncols, rocprim::less<uint64_t>(), stream));
-
-            const dim3 ugrid((k + block - 1) / block);
-            ggml_cuda_topk_unpack_idx<<<ugrid, block, 0, stream>>>(packed_out, dst_d + r * k, (int) k);
+            CUDA_CHECK(hipcub::DeviceRadixSort::SortPairsDescending(tmp_alloc.get(), tmp_bytes, keys, keys,
+                vals_in, vals_out, (int) ncols, 0, (int) sizeof(float) * 8, stream));
+        } else {
+            ggml_cuda_pool_alloc<int> off_alloc(pool, nrows + 1);
+            int * off = off_alloc.get();
+            ggml_cuda_topk_init_offsets<<<(nrows + 1 + block - 1) / block, block, 0, stream>>>(off, (int) ncols, (int) (nrows + 1));
+            CUDA_CHECK(hipcub::DeviceSegmentedRadixSort::SortPairsDescending(nullptr, tmp_bytes, keys, keys,
+                vals_in, vals_out, (int) n, (int) nrows, off, off + 1, 0, (int) sizeof(float) * 8, stream));
+            ggml_cuda_pool_alloc<uint8_t> tmp_alloc(pool, tmp_bytes);
+            CUDA_CHECK(hipcub::DeviceSegmentedRadixSort::SortPairsDescending(tmp_alloc.get(), tmp_bytes, keys, keys,
+                vals_in, vals_out, (int) n, (int) nrows, off, off + 1, 0, (int) sizeof(float) * 8, stream));
         }
-    } else {
-        ggml_cuda_pool_alloc<int> temp_dst_alloc(pool, ncols * nrows);
-        int * tmp_dst = temp_dst_alloc.get();
-        argsort_f32_i32_cuda_bitonic(src0_d, tmp_dst, ncols, nrows, GGML_SORT_ORDER_DESC, stream);
-        CUDA_CHECK(cudaMemcpy2DAsync(dst_d, k * sizeof(int), tmp_dst, ncols * sizeof(int),
+        // keep the first k sorted indices of each row
+        CUDA_CHECK(cudaMemcpy2DAsync(dst_d, k * sizeof(int), vals_out, ncols * sizeof(int),
                                      k * sizeof(int), nrows, cudaMemcpyDeviceToDevice, stream));
     }
 #elif defined(GGML_CUDA_USE_CUB)  // CUB_TOP_K_AVAILABLE
