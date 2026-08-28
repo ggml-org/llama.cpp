@@ -883,9 +883,10 @@ static int ggml_backend_sched_backend_from_buffer(ggml_backend_sched_t sched, co
     }
 
     // find highest prio backend that supports the buffer type and the op
+    const bool skip_op_none = (op->op == GGML_OP_NONE);
     for (int i = 0; i < sched->n_backends; i++) {
         if (ggml_backend_supports_buft(sched->backends[i], buffer->buft) &&
-            ggml_backend_supports_op(sched->backends[i], op)) {
+            (skip_op_none || ggml_backend_supports_op(sched->backends[i], op))) {
             return i;
         }
     }
