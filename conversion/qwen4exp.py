@@ -8,7 +8,7 @@ from torch import Tensor
 import gguf
 import numpy as np
 
-from .base import ModelBase
+from .base import LazyTorchTensor, ModelBase
 from .qwen import _LinearAttentionVReorderBase, _Qwen35MRopeMixin
 from .qwen3vl import Qwen3VLVisionModel
 
@@ -25,9 +25,12 @@ class Qwen4ExpTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
 
     model_arch = gguf.MODEL_ARCH.QWEN4EXP
 
-    # the MTP block is a separate draft head; vLLM drops it too
-    supports_mtp_export = False
-    no_mtp = True
+    # The MTP block is a separate draft head. It is skipped by default (as vLLM does), but
+    # `--mtp` exports it on its own as a draft model for speculative decoding. The mixin
+    # machinery arrives via _LinearAttentionVReorderBase -> Qwen3NextModel -> _QwenMtpMixin;
+    # these flags previously overrode it off.
+    supports_mtp_export = True
+    no_mtp = False
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -63,9 +66,17 @@ class Qwen4ExpTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
         self.gguf_writer.add_indexer_top_k(hp["indexer_budget"])
         ratio = hp["indexer_compress_ratio"]
         layer_types = hp["layer_types"]
-        self.gguf_writer.add_attention_compress_ratios(
-            [ratio if layer_types[i] == "full_attention" else 0 for i in range(n_layer)]
-        )
+        ratios = [ratio if layer_types[i] == "full_attention" else 0 for i in range(n_layer)]
+        # the loader sizes this array by n_layer_all, which counts the MTP block. That block
+        # carries indexer tensors and is never recurrent, so it takes the full-attention ratio.
+        ratios += [ratio] * max(0, self.block_count - n_layer)
+        self.gguf_writer.add_attention_compress_ratios(ratios)
+
+        # The MTP block carries no PLE n-gram layers. Emitting the key group anyway would make
+        # the loader demand the PLE hparams -- and the per-layer input width -- for tensors that
+        # are not in an MTP-only file.
+        if self.mtp_only:
+            return
 
         # ple_layer_ids is 1-based in the HF config; empty means no n-gram table,
         # so emit no PLE keys rather than optional ones
@@ -105,6 +116,15 @@ class Qwen4ExpTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
             raise ValueError("eos_token_id is required: the PLE hash resets its n-grams on it")
         return int(eos)
 
+    @classmethod
+    def filter_tensors(cls, item):
+        name = item[0]
+        # The MTP block brings its own hyper-connection mixer. In an MTP-only file it takes the
+        # model-level slot, so rename it before _QwenMtpMixin drops it as a non-MTP tensor.
+        if name.startswith("mtp.hyper_connection_mixer."):
+            return None if cls.no_mtp else (name.replace("mtp.", "model.", 1), item[1])
+        return super().filter_tensors(item)
+
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         # int64 hash constants must stay exact; 1-D tensors force F32, so use KV
         if name.endswith("ple_embedding.layer_multipliers"):
@@ -142,6 +162,28 @@ class Qwen4ExpTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
 
     # the shards concatenate into a tensor of well over 100 GB
     # use LazyChunkedTensor here, a single shard resident at a time
+    def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
+        yield from super().generate_extra_tensors()
+
+        # Qwen3.8 splits the MTP input projection in two (fc_embedding for the token embedding,
+        # fc_hidden for the previous hidden state) where the shared nextn tensor map expects a
+        # single eh_proj. They are summed in the reference, and A*e + B*h == [A|B]*concat(e,h),
+        # so concatenating along the input axis is exact.
+        e_name, h_name = "mtp.fc_embedding.weight", "mtp.fc_hidden.weight"
+        have_e, have_h = e_name in self.model_tensors, h_name in self.model_tensors
+        if not have_e and not have_h:
+            return
+        if not have_e or not have_h:
+            raise KeyError(f"unpaired MTP input projection: need both {e_name} and {h_name}")
+
+        e = LazyTorchTensor.to_eager(self.model_tensors[e_name]())
+        h = LazyTorchTensor.to_eager(self.model_tensors[h_name]())
+        yield (self.format_tensor_name(gguf.MODEL_TENSOR.NEXTN_EH_PROJ,
+                                       self.hparams["num_hidden_layers"]),
+               torch.cat([e, h], dim=1).contiguous())
+        del self.model_tensors[e_name]
+        del self.model_tensors[h_name]
+
     def _place_ple_shard(self, data_torch: Tensor, name: str) -> Iterable[tuple[str, Tensor]]:
 
         idx = int(name.rpartition(".shard_")[2].partition(".")[0])
