@@ -32,6 +32,8 @@ void ggml_openvino_device_config::init() {
         "GGML_OPENVINO_DEVICE",
         "GGML_OPENVINO_CACHE_DIR",
         "GGML_OPENVINO_DEBUG_NODE",
+        "GGML_OPENVINO_COMPILED_MODEL_CACHE_DIR",
+        "GGML_OPENVINO_NPU_COMPILE_CONFIG",
         // Integer values (use ggml_openvino_getenv_int)
         "GGML_OPENVINO_PREFILL_CHUNK_SIZE",
         // Boolean toggles (treated as int flags via ggml_openvino_getenv_int)
@@ -41,6 +43,9 @@ void ggml_openvino_device_config::init() {
         "GGML_OPENVINO_DUMP_IR",
         "GGML_OPENVINO_DEBUG_INPUT",
         "GGML_OPENVINO_DEBUG_OUTPUT",
+        // Force the static (NPU-shape) compute path on any device, e.g. GGML_OPENVINO_DEVICE=CPU,
+        // to test the static-shape translation without NPUW/real NPU hardware in the loop.
+        "GGML_OPENVINO_FORCE_STATIC",
         "GGML_OPENVINO_PRINT_CGRAPH_TENSOR_ADDRESS",
         "GGML_OPENVINO_ENABLE_CACHE",
         "GGML_OPENVINO_DISABLE_CACHE",
@@ -50,7 +55,7 @@ void ggml_openvino_device_config::init() {
         "GGML_OPENVINO_MEMORY_OPTIMIZE",
         "GGML_OPENVINO_RELEASE_WEIGHTS",
         "GGML_OPENVINO_REDUCE_COMPILE_MEM",
-        "GGML_OPENVINO_COMPILED_MODEL_CACHE_DIR",
+        "GGML_OPENVINO_LOG_UNSUPPORTED_OPS",
     };
 
     for (const char * const & env_var : env_var_names) {
@@ -84,6 +89,11 @@ void ggml_openvino_device_config::init() {
         if (cache_dir && strlen(cache_dir) > 0) {
             compile_config["NPUW_CACHE_DIR"] = cache_dir;
             compile_config.insert(ov::cache_mode(ov::CacheMode::OPTIMIZE_SIZE));
+        }
+        const char * compilation_mode_params =
+            ggml_openvino_getenv_str("GGML_OPENVINO_NPU_COMPILE_CONFIG");
+        if (compilation_mode_params && strlen(compilation_mode_params) > 0) {
+            compile_config["NPU_COMPILATION_MODE_PARAMS"] = compilation_mode_params;
         }
     } else if (cache_dir && strlen(cache_dir) > 0) {
         compile_config.insert(ov::cache_dir(cache_dir));

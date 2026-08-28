@@ -294,7 +294,7 @@ export { SandboxService } from './sandbox.service';
  * **RouterService** — Dynamic route URL construction utility
  *
  * Stateless utility for building dynamic route URLs from ROUTES base paths.
- * Static routes (START, NEW_CHAT, MCP_SERVERS) live in ROUTES constants;
+ * Static routes (START, MCP_SERVERS) live in ROUTES constants;
  * dynamic routes (CHAT, SETTINGS) are constructed here by appending parameters.
  *
  * **Architecture & Relationships:**
@@ -307,7 +307,6 @@ export { SandboxService } from './sandbox.service';
  *
  * **Key Responsibilities:**
  * - Build chat URLs for specific conversations: `RouterService.chat(id)` → `#/chat/:id`
- * - Build settings URLs for sections: `RouterService.settings(section)` → `#/settings/:section`
  *
  * @see ROUTES in constants/routes.ts — static route base paths
  */

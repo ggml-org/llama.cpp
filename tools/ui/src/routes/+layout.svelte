@@ -11,6 +11,7 @@
 		FAVICON_PATHS,
 		FAVICON_SELECTORS,
 		HEADERS,
+		NEW_CHAT_TAB_ID,
 		ROUTES,
 		SETTINGS_KEYS,
 		TOOLTIP_DELAY_DURATION
@@ -26,6 +27,7 @@
 		modelsStore,
 		serverStore,
 		settingsStore,
+		tabsStore,
 		versionStore
 	} from '$lib/stores';
 	import { initStores } from '$lib/stores/init';
@@ -74,6 +76,27 @@
 		}
 	}
 
+	function navigateToTab(direction: -1 | 1) {
+		// only makes sense with conversation tabs enabled
+		if (!settingsStore.config.conversationTabs) return;
+
+		const openTabs = tabsStore.openTabs;
+
+		if (openTabs.length === 0) return;
+
+		const activeId = page.params.id ?? NEW_CHAT_TAB_ID;
+		const idx = openTabs.indexOf(activeId);
+		// active tab not in list (e.g. a non-chat route): start from an edge
+		const targetIdx =
+			idx === -1
+				? direction === 1
+					? 0
+					: openTabs.length - 1
+				: (idx + direction + openTabs.length) % openTabs.length;
+
+		void tabsStore.activate(openTabs[targetIdx]);
+	}
+
 	function navigateToConversation(direction: -1 | 1) {
 		const allConvs = conversationsStore.conversations;
 
@@ -96,15 +119,31 @@
 		if (targetIdx >= 0 && targetIdx < allConvs.length) {
 			goto(RouterService.chat(allConvs[targetIdx].id));
 		} else {
-			goto(ROUTES.NEW_CHAT);
+			conversationsStore.openNewChat();
 		}
 	}
 
+	// navigating away from the new-chat screen drops its tab, so it does not
+	// linger once the user moves to a real conversation or another route
+	let previousChatId = $state<string | undefined>(undefined);
+
+	$effect(() => {
+		const id = page.params.id ?? (page.route.id === '/(chat)' ? NEW_CHAT_TAB_ID : undefined);
+		const prev = untrack(() => previousChatId);
+
+		previousChatId = id;
+
+		if (id !== prev && prev && settingsStore.config.conversationTabs && prev === NEW_CHAT_TAB_ID) {
+			untrack(() => tabsStore.removeTabs([NEW_CHAT_TAB_ID]));
+		}
+	});
 	// Global keyboard shortcuts
 	const { handleKeydown } = useKeyboardShortcuts({
 		editActiveConversation: () => chatSidebar?.editActiveConversation?.(),
 		navigateToNextConversation: () => navigateToConversation(1),
-		navigateToPrevConversation: () => navigateToConversation(-1)
+		navigateToNextTab: () => navigateToTab(1),
+		navigateToPrevConversation: () => navigateToConversation(-1),
+		navigateToPrevTab: () => navigateToTab(-1)
 	});
 
 	function checkApiKey() {
@@ -257,7 +296,7 @@
 
 <svelte:head>
 	{#if pwaAssetsHead.themeColor}
-		<meta name="theme-color" content={pwaAssetsHead.themeColor.content} />
+		<meta content={pwaAssetsHead.themeColor.content} name="theme-color" />
 	{/if}
 
 	{#if settingsStore.config.customCss}
@@ -271,7 +310,7 @@
 	<PwaMetaTags />
 </svelte:head>
 
-<svelte:window onkeydown={handleKeydown} bind:innerHeight bind:innerWidth />
+<svelte:window bind:innerHeight bind:innerWidth onkeydown={handleKeydown} />
 <svelte:document onvisibilitychange={handleVisibilityChange} />
 
 <Tooltip.Provider delayDuration={TOOLTIP_DELAY_DURATION}>
@@ -303,8 +342,8 @@
 	{/if}
 
 	<PwaRefreshAlert
-		needRefresh={$needRefresh || pwa.needRefreshByStorage}
 		forceReload={pwa.needRefreshByStorage}
+		needRefresh={$needRefresh || pwa.needRefreshByStorage}
 		{updateServiceWorker}
 	/>
 </div>

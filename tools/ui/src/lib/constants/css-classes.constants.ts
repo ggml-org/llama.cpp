@@ -26,5 +26,11 @@ export const CHAT_INPUT_FOCUS_SELECTOR =
 /** Default Tailwind size class for inline icon components (lucide, etc.). */
 export const ICON_CLASS_DEFAULT = 'h-4 w-4';
 
+/** Small Tailwind size class for inline icons. */
+export const ICON_CLASS_SM = 'h-3.5 w-3.5';
+
+/** Extra-small Tailwind size class for inline icons. */
+export const ICON_CLASS_XS = 'h-3 w-3';
+
 /** Icon size + spinning animation; used for live-streaming tool indicators. */
 export const ICON_CLASS_SPIN = 'h-4 w-4 animate-spin';
