@@ -8,6 +8,8 @@
 #include <cmath>
 #include <map>
 
+class llama_memory_hybrid_idx_context;
+
 //
 // base classes
 //
@@ -2276,17 +2278,16 @@ struct llama_model_qwen35 : public llama_model_base {
 };
 
 
+struct llama_ple_disk;
+
 struct llama_model_qwen4exp : public llama_model_base {
     llama_model_qwen4exp(const struct llama_model_params & params) : llama_model_base(params) {}
 
-    // PLE predecessors are absent from a decode ubatch, so remember them here
-    // (vLLM's ngram_context). next_pos guards it: a mismatch means the sequence
-    // was reset or rewound, and the hash falls back to EOS padding.
-    struct ple_history {
-        llama_pos                next_pos = -1;
-        std::vector<llama_token> toks;
-    };
-    mutable std::unordered_map<llama_seq_id, ple_history> ple_hist;
+    class llm_graph_input_qsa;
+
+    // set when the PLE table is left on disk (params.ple_on_disk): per_layer_tok_embd is
+    // then null and build_ple takes its rows from this reader instead of ggml_get_rows
+    std::shared_ptr<llama_ple_disk> ple_disk;
 
     // The n-gram table is stored one tensor per head. Joined it is 20.9 GiB, over the
     // 4 GiB maxBufferSize a Vulkan device reports, so it could only ever live on the
@@ -2295,9 +2296,6 @@ struct llama_model_qwen4exp : public llama_model_base {
     // ranges of the same table, and index by head, so they follow the layer device.
     std::vector<ggml_tensor *> ple_ngram_embd;
 
-    // A file written the upstream way carries the heads joined into one tensor instead.
-    // It is read through 16 views, so the graph does not care which layout it got.
-    ggml_tensor * ple_joined = nullptr;
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
@@ -2324,18 +2322,33 @@ struct llama_model_qwen4exp : public llama_model_base {
                             int   il);
 
         ggml_tensor * build_layer_attn(
-        llm_graph_input_attn_kv * inp_attn,
-  const llama_kv_cache_context * mctx_idx,
+              llm_graph_input_attn_kv * inp_attn,
+  const llama_memory_hybrid_idx_context * mctx_hyb,
                     ggml_tensor * cur,
                     ggml_tensor * inp_pos,
                             int * sections,
                             int   il);
 
+        // dense self-attention restricted to the cells that top_k names
+        ggml_tensor * build_attn_qsa(
+        llm_graph_input_attn_kv * inp,
+                    ggml_tensor * q_cur,
+                    ggml_tensor * k_cur,
+                    ggml_tensor * v_cur,
+                    ggml_tensor * top_k,
+                          float   kq_scale,
+                            int   il);
+
+        // the QSA cache layout inputs do not depend on the layer, only on its compress ratio,
+        // so the layers sharing a ratio share one input set
+        std::map<uint32_t, llm_graph_input_qsa *> qsa_inps;
+
         // QSA: token indices this layer's queries may attend to, or nullptr for dense
         ggml_tensor * build_qsa_top_k(
-  const llama_kv_cache_context * mctx_idx,
+  const llama_memory_hybrid_idx_context * mctx_hyb,
                     ggml_tensor * cur,
                     ggml_tensor * inp_pos,
+                    ggml_tensor * kq_mask,
                             int * sections,
                             int   il);
 
@@ -2354,22 +2367,21 @@ struct llama_model_qwen4exp : public llama_model_base {
                     ggml_tensor * gate,
                             int   layer);
 
-        // build_rs writes the state tensor in place, so run it at most once per
-        // layer; both convolutions share this gather.
-        std::map<int, ggml_tensor *> rs_rows;
+        // build_rs writes the state tensor in place, so one gather per cache tensor is reused
+        std::map<ggml_tensor *, ggml_tensor *> rs_rows;
 
-        // conv history at an explicit offset: delta-net and PLE share the row
+        // one conv history per cache tensor: delta-net and PLE each have their own
         ggml_tensor * build_conv_state_at(
              llm_graph_input_rs * inp,
                     ggml_tensor * conv_states_all,
                     ggml_tensor * x,
                         int64_t   state_cols,
                         int64_t   channels,
-                        int64_t   row_offset,
                             int   il);
 
         ggml_tensor * build_ple(
              llm_graph_input_rs * inp,
+  const llama_memory_hybrid_idx_context * mctx_hyb,
                     ggml_tensor * hidden,
                             int   il);
 
