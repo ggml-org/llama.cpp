@@ -60,7 +60,8 @@
 	let loadTitle = $derived(modelLoadProgressText(loadProgress));
 	let modalities = $derived(option.modalities);
 	let capabilities = $derived.by(() => ({
-		reasoning: modelsStore.props.checkModelSupportsThinking(option.model)
+		reasoning: modelsStore.props.checkModelSupportsThinking(option.model),
+		tools: option.capabilities.includes('tools')
 	}));
 </script>
 

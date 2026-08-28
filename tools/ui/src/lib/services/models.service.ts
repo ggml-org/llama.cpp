@@ -7,7 +7,7 @@
  */
 
 import { base } from '$app/paths';
-import { API_MODELS, MODEL_ID } from '$lib/constants';
+import { API_MODELS, MODEL_ID, type ModelSidecar, sidecarFromFileToken } from '$lib/constants';
 import { ServerModelStatus } from '$lib/enums';
 import type { ParsedModelId } from '$lib/types/models';
 import {
@@ -21,6 +21,30 @@ import { getAuthHeaders } from '$lib/utils/api-headers';
 
 export class ModelsService {
 	private static readonly SSE_RECONNECT_MS = 1000;
+
+	/**
+	 * Build the `<repo>:<tag>` string expected by POST /models from a parsed
+	 * filename quant + optional sidecar type. Used by the model download
+	 * dialog so callers don't have to know about the tag conventions.
+	 *
+	 * @param repoId - HuggingFace repo id (e.g. `ggml-org/gemma-3-4b-it-GGUF`)
+	 * @param quant - Quantization token, e.g. `Q4_K_M`
+	 * @param sidecar - Sidecar type, uppercased into the tag (e.g. `MTP`)
+	 * @returns Repo id possibly suffixed with `:tag`
+	 */
+	static buildDownloadTag(
+		repoId: string,
+		quant: string | null,
+		sidecar: ModelSidecar | null
+	): string {
+		if (!quant && !sidecar) return repoId;
+
+		if (!quant) return `${repoId}:${sidecar}`;
+
+		const tag = sidecar ? `${quant}-${sidecar}` : quant;
+
+		return `${repoId}:${tag}`;
+	}
 
 	/**
 	 * Check if a model is loaded based on its metadata.
@@ -97,11 +121,46 @@ export class ModelsService {
 			params: null,
 			quantization: null,
 			raw: modelId,
+			sidecar: null,
 			tags: []
 		};
+
 		// strip directory path and weight extension so a bare `-m /path/file.gguf`
 		// parses like a clean repo id; the HF `org/model` form is preserved
-		const source = normalizeModelName(modelId).replace(MODEL_ID.WEIGHT_EXTENSION_RE, '');
+		let source = normalizeModelName(modelId).replace(MODEL_ID.WEIGHT_EXTENSION_RE, '');
+
+		// 0. Detect sidecar prefix (mtp-, dflash-, mmproj-) before any other
+		//    splitting so the inner id parses cleanly.
+		const prefixMatch = source.match(MODEL_ID.SIDECAR_PREFIX_RE);
+
+		if (prefixMatch) {
+			result.sidecar = sidecarFromFileToken(prefixMatch[1].toLowerCase());
+			source = prefixMatch[2];
+
+			// a sidecar filename's remainder may be just the quant token,
+			// e.g. `mtp-Q4_0.gguf` or `mmproj-F16.gguf`
+			if (MODEL_ID.QUANTIZATION_SEGMENT_RE.test(source)) {
+				result.quantization = source.toUpperCase();
+				source = '';
+			}
+		} else {
+			// 0b. Detect `-<type>` suffix (`-mtp`, `-dflash`, `-dspark`, `-eagle3`).
+			//     Only strip it when the segment preceding it looks like a real quant
+			//     token, so a model literally named `MyModel-mtp` is not mistaken for a
+			//     draft one.
+			const suffixMatch = source.match(MODEL_ID.SIDECAR_SUFFIX_RE);
+
+			if (suffixMatch) {
+				const candidate = suffixMatch[1];
+				const headSeg = candidate.split(MODEL_ID.SEGMENT_SEPARATOR).pop();
+
+				if (headSeg && MODEL_ID.QUANTIZATION_SEGMENT_RE.test(headSeg)) {
+					result.sidecar = sidecarFromFileToken(suffixMatch[2].toLowerCase());
+					source = candidate;
+				}
+			}
+		}
+
 		// 1. Extract colon-separated quantization (e.g. `model:Q4_K_M`)
 		const colonIdx = source.indexOf(MODEL_ID.QUANTIZATION_SEPARATOR);
 
