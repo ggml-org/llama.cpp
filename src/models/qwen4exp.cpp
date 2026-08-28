@@ -432,6 +432,16 @@ llama_model_qwen4exp::graph::graph(const llama_model & model, const llm_graph_pa
             cur = build_layer_attn(inp->get_attn(), mctx_hyb, cur, inp_pos, sections, il);
         }
 
+        if (il == n_layer - 1) {
+            // Hand the wide residual to an MTP head, before the final mix collapses it. The
+            // draft reads every position, not just the ones this ubatch needs logits for, so
+            // this has to run before the inp_out_ids gather below narrows res_hc down to the
+            // output rows -- capturing res_hc after the loop (as the old code did) captured
+            // the already-gathered tensor instead, which silently produced zero rows whenever
+            // inp_out_ids was non-null and none of the positions needed logits.
+            res->t_h_nextn = res_hc;
+        }
+
         if (il == n_layer - 1 && inp_out_ids) {
             // everything below is per token, so drop the rows that produce no output
             cur    = ggml_get_rows(ctx0, cur,    inp_out_ids);
@@ -459,8 +469,6 @@ llama_model_qwen4exp::graph::graph(const llama_model & model, const llm_graph_pa
         // "l_last" is the layer output name that build_cvec and imatrix look for
         cb(res_hc, "l_last", il);
     }
-
-    res->t_h_nextn = res_hc;
 
     // the final mixer is the output norm: there is no separate one
     ggml_tensor * cur = build_hc_mix(res_hc,
@@ -896,8 +904,9 @@ ggml_tensor * llama_model_qwen4exp::graph::build_layer_attn(
     const int64_t n_embd_head = hparams.n_embd_head_v();
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());
 
-    // indexer reads the same block input as q/k/v; no cache or no ratio means dense
-    const bool qsa = mctx_hyb->get_idx() != nullptr && hparams.dsv4_compress_ratios[il] > 0;
+    // indexer reads the same block input as q/k/v; no context (the MTP draft attends
+    // dense, see build_layer_attn's caller in graph_mtp), no cache, or no ratio means dense
+    const bool qsa = mctx_hyb != nullptr && mctx_hyb->get_idx() != nullptr && hparams.dsv4_compress_ratios[il] > 0;
 
     ggml_tensor * top_k = qsa ? build_qsa_top_k(mctx_hyb, cur, inp_pos, inp->get_kq_mask(), sections, il) : nullptr;
 
