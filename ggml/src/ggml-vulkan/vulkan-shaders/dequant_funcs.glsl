@@ -609,24 +609,13 @@ vec2 get_dm(uint ib, uint a_offset) {
 #endif
 
 #if defined(DATA_A_TQ1_0)
-// TQ1_0: base 3 — 5 valori per byte in `qs` (primi 240), 4 per byte in `qh`
-// (ultimi 16). La cifra t-esima si estrae con xi = (q * 3^t * 3) >> 8, che
-// mappa {0,1,2} su {-1,0,+1}. La scala `d` la applica get_dm.
+// TQ1_0: see types.glsl for the format and the shared decode helpers.
+// The scale `d` is applied by get_dm.
 float tq1_0_val(uint ib, uint e, uint a_offset) {
-    // powers of 3 packed in one 32-bit constant, 7 bits each (max 81 < 128):
-    // avoids a constant array that may not end up in registers
-    const uint POW3_PACKED = (1u << 28) | (3u << 21) | (9u << 14) | (27u << 7) | 81u;
-    uint qbyte; uint t;
-    if (e < 160u) {
-        t = e / 32u;  qbyte = uint(data_a[a_offset + ib].qs[e % 32u]);
-    } else if (e < 240u) {
-        const uint e2 = e - 160u;
-        t = e2 / 16u; qbyte = uint(data_a[a_offset + ib].qs[32u + (e2 % 16u)]);
-    } else {
-        const uint e3 = e - 240u;
-        t = e3 / 4u;  qbyte = uint(data_a[a_offset + ib].qh[e3 % 4u]);
-    }
-    return float(((((qbyte * ((POW3_PACKED >> (7u * (4u - t))) & 0x7Fu)) & 255u)) * 3u) >> 8) - 1.0;
+    const uint bidx = tq1_0_byte_of(e);
+    const uint qbyte = uint(bidx < 48u ? data_a[a_offset + ib].qs[bidx]
+                                       : data_a[a_offset + ib].qh[bidx - 48u]);
+    return float(tq1_0_trit(qbyte, tq1_0_digit_of(e))) - 1.0;
 }
 vec2 dequantize(uint ib, uint iqs, uint a_offset) {
     return vec2(tq1_0_val(ib, iqs, a_offset), tq1_0_val(ib, iqs + 1u, a_offset));

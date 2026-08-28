@@ -251,31 +251,14 @@ layout(buffer_reference, std430, buffer_reference_align = 2) buffer decodeBufTQ1
    block_tq1_0 block;
 };
 
-// TQ1_0: ternario in BASE 3 — 5 valori per byte in `qs` (i primi 240) e 4 per
-// byte in `qh` (gli ultimi 16). Si estrae la cifra t-esima moltiplicando per
-// 3^t e prendendo la parte alta: xi = (q * 3) >> 8, che da' {0,1,2} → {-1,0,+1}.
-// Stessa logica di dequant_tq1_0.comp, riscritta nella forma richiesta qui.
+// TQ1_0: see types.glsl for the format and the shared decode helpers.
+// Same logic as dequant_tq1_0.comp, rewritten in the shape required here.
 float16_t dequantFuncTQ1_0(const in decodeBufTQ1_0 bl, const in uint blockCoords[2], const in uint coordInBlock[2])
 {
     const uint e = coordInBlock[1];
-    const uint pow3[5] = uint[5](1u, 3u, 9u, 27u, 81u);
-
-    uint qbyte;
-    uint t;
-    if (e < 160u) {
-        t = e / 32u;
-        qbyte = uint(bl.block.qs[e % 32u]);
-    } else if (e < 240u) {
-        const uint e2 = e - 160u;
-        t = e2 / 16u;
-        qbyte = uint(bl.block.qs[32u + (e2 % 16u)]);
-    } else {
-        const uint e3 = e - 240u;
-        t = e3 / 4u;
-        qbyte = uint(bl.block.qh[e3 % 4u]);
-    }
-
-    const uint xi = (((qbyte * pow3[t]) & 255u) * 3u) >> 8;
+    const uint bidx = tq1_0_byte_of(e);
+    const uint qbyte = uint(bidx < 48u ? bl.block.qs[bidx] : bl.block.qh[bidx - 48u]);
+    const uint xi = tq1_0_trit(qbyte, tq1_0_digit_of(e));
     return bl.block.d * (float16_t(int(xi)) - float16_t(1.0));
 }
 
@@ -1450,8 +1433,10 @@ f16vec4 dequantFuncNVFP4_v(const in decodeBufNVFP4 bl, const in uint blockCoords
 #define dequantFuncA dequantFuncQ8_0
 #define dequantFuncA_v dequantFuncQ8_0_v
 #elif defined(DATA_A_TQ1_0)
-// TQ1_0 non ha la variante vettoriale: il layout in base 3 non e' allineato a
-// gruppi di 4 come TQ2_0, quindi si usa la scalare anche per _v.
+// TQ1_0 has no native vectorized variant: the base-3 layout is not aligned
+// to groups of 4 like TQ2_0, so the scalar path serves _v as well.
+// (Reviewer note: a native vectorized implementation would perform better —
+// deferred, see PR discussion.)
 #define dequantFuncA dequantFuncTQ1_0
 #define dequantFuncA_v dequantFuncTQ1_0_v
 #elif defined(DATA_A_TQ2_0)

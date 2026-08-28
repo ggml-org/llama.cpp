@@ -198,37 +198,21 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
             store_a(col, k_pair,     FLOAT_TYPEV2(v.xy));
             store_a(col, k_pair + 1, FLOAT_TYPEV2(v.zw));
 #elif defined(DATA_A_TQ1_0)
-            // ternario 1.69 bpw: valori in base 3, 5 per byte in `qs` e 4 in `qh`.
-            // Il troncamento a 8 bit del prodotto FA PARTE dell'algoritmo
-            // (nel riferimento C `uint8_t q = qs[..] * pow3[n]`): senza, i
-            // valori alti escono di scala e i pesi diventano casuali.
+            // TQ1_0: see types.glsl for the format and the shared decode
+            // helpers (including why the 8-bit truncation is mandatory).
             const uint idx = pos_a + col * p.stride_a / LOAD_VEC_A + row;
 
-            const uint ib  = idx / 128;               // 2 valori per idx
-            const uint iqs = (idx % 128) * 2;         // elemento 0,2,4..254
+            const uint ib  = idx / 128;               // 2 values per idx
+            const uint iqs = (idx % 128) * 2;         // element 0,2,4..254
 
             const float d = float(data_a[ib].d);
-            // powers of 3 packed in one 32-bit constant, 7 bits each (max 81 < 128):
-    // avoids a constant array that may not end up in registers
-    const uint POW3_PACKED = (1u << 28) | (3u << 21) | (9u << 14) | (27u << 7) | 81u;
-
             vec2 v;
             for (uint kk = 0u; kk < 2u; ++kk) {
                 const uint e = iqs + kk;
-                uint qbyte; uint t;
-                if (e < 160u) {
-                    t = e / 32u;
-                    qbyte = uint(data_a[ib].qs[e % 32u]);
-                } else if (e < 240u) {
-                    const uint e2 = e - 160u;
-                    t = e2 / 16u;
-                    qbyte = uint(data_a[ib].qs[32u + (e2 % 16u)]);
-                } else {
-                    const uint e3 = e - 240u;
-                    t = e3 / 4u;
-                    qbyte = uint(data_a[ib].qh[e3 % 4u]);
-                }
-                v[kk] = d * (float((((qbyte * ((POW3_PACKED >> (7u * (4u - t))) & 0x7Fu)) & 255u) * 3u) >> 8) - 1.0);
+                const uint bidx = tq1_0_byte_of(e);
+                const uint qbyte = uint(bidx < 48u ? data_a[ib].qs[bidx]
+                                                   : data_a[ib].qh[bidx - 48u]);
+                v[kk] = d * (float(tq1_0_trit(qbyte, tq1_0_digit_of(e))) - 1.0);
             }
 
             const uint k_pair = row * LOAD_VEC_A / 2;
