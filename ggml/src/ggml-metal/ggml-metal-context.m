@@ -71,7 +71,7 @@ struct ggml_metal {
 
     // buffers to release after async Metal operations complete
     // if Metal released them, it would do so on a Metal-internal thread without an autorelease pool, which could cause leaks
-    NSMutableArray * bufs_release_later;
+    NSMutableArray * buf_refs;
 
     // the last command buffer queued into the Metal queue with operations relevant to the current Metal backend
     id<MTLCommandBuffer> cmd_buf_last;
@@ -182,8 +182,8 @@ ggml_metal_t ggml_metal_init(ggml_metal_device_t dev) {
             res->cmd_bufs[i].obj = nil;
         }
 
-        res->cmd_bufs_ext       = [[NSMutableArray alloc] init];
-        res->bufs_release_later = [[NSMutableArray alloc] init];
+        res->cmd_bufs_ext = [[NSMutableArray alloc] init];
+        res->buf_refs     = [[NSMutableArray alloc] init];
 
         res->cmd_buf_last = nil;
 
@@ -212,8 +212,8 @@ void ggml_metal_free(ggml_metal_t ctx) {
     [ctx->cmd_bufs_ext release];
 
     @autoreleasepool {
-        [ctx->bufs_release_later removeAllObjects];
-        [ctx->bufs_release_later release];
+        [ctx->buf_refs removeAllObjects];
+        [ctx->buf_refs release];
     }
 
     if (ctx->pipelines_ext) {
@@ -306,7 +306,7 @@ void ggml_metal_synchronize(ggml_metal_t ctx) {
     }
 
     @autoreleasepool {
-        [ctx->bufs_release_later removeAllObjects];
+        [ctx->buf_refs removeAllObjects];
     }
 }
 
@@ -352,7 +352,7 @@ void ggml_metal_set_tensor_async(ggml_metal_t ctx, struct ggml_tensor * tensor, 
         [encoder endEncoding];
         [cmd_buf commit];
 
-        [ctx->bufs_release_later addObject:buf_src];
+        [ctx->buf_refs addObject:buf_src];
         [buf_src release];
 
         // do not wait here for completion
@@ -398,7 +398,7 @@ void ggml_metal_get_tensor_async(ggml_metal_t ctx, const struct ggml_tensor * te
         [encoder endEncoding];
         [cmd_buf commit];
 
-        [ctx->bufs_release_later addObject:buf_dst];
+        [ctx->buf_refs addObject:buf_dst];
         [buf_dst release];
 
         // do not wait here for completion
