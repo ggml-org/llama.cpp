@@ -49,8 +49,6 @@ export { uiStore } from './ui.svelte';
 // SETTINGS / UI PREFERENCES
 export { settingsStore } from './settings/index.svelte';
 
-export { settingsReferrer } from './settings/referrer.svelte';
-
 export { permissionsStore } from './permissions.svelte';
 
 // TOOLS

@@ -8,6 +8,7 @@ import { getConversationModel } from '$lib/utils';
 export interface UseReasoningMenuReturn {
 	readonly modelSupportsThinking: boolean;
 	readonly thinkingEnabled: boolean;
+	readonly isReasoningActive: boolean;
 	readonly isOff: boolean;
 	readonly currentEffort: ReasoningEffort;
 	readonly levels: ReasoningEffortLevel[];
@@ -59,6 +60,12 @@ export function useReasoningMenu(): UseReasoningMenuReturn {
 	const thinkingEnabled = $derived(
 		currentEffort !== ReasoningEffort.OFF && currentEffort !== ReasoningEffort.DEFAULT
 	);
+	// Thinking is effectively on (lightbulb lit) either when an explicit effort
+	// is selected, or when the effort is left at "Default" and the model
+	// supports thinking.
+	const isReasoningActive = $derived(
+		thinkingEnabled || (currentEffort === ReasoningEffort.DEFAULT && modelSupportsThinking)
+	);
 
 	return {
 		get currentEffort() {
@@ -66,6 +73,9 @@ export function useReasoningMenu(): UseReasoningMenuReturn {
 		},
 		get isOff() {
 			return currentEffort === ReasoningEffort.OFF;
+		},
+		get isReasoningActive() {
+			return isReasoningActive;
 		},
 		isSelected(level: ReasoningEffortLevel): boolean {
 			return currentEffort === level.value;
