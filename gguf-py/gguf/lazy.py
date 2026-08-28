@@ -251,6 +251,10 @@ class LazyChunkedTensor:
     def numpy(self) -> LazyChunkedTensor:
         return self
 
+    def __array__(self, *args, **kwargs):
+        # numpy would otherwise make a 1-element object array of self, and write 8 bytes
+        raise TypeError("LazyChunkedTensor cannot become an ndarray, it is written in chunks")
+
     def quantize(self, qtype: Any) -> LazyChunkedTensor:
         from .constants import GGMLQuantizationType
         from .quants import QuantError, quant_shape_to_byte_shape
