@@ -53,9 +53,9 @@
  * - Reasoning content stripping from prompt history to avoid KV cache pollution
  * - Error translation (network, timeout, server errors → user-friendly messages)
  *
- * @see chatStore in stores/chat.svelte.ts — primary consumer for chat state management
- * @see agenticStore in stores/agentic.svelte.ts — uses ChatService for agentic loop streaming
- * @see conversationsStore in stores/conversations.svelte.ts — provides message context
+ * @see chatStore in stores/chat/index.svelte.ts — primary consumer for chat state management
+ * @see agenticStore in stores/agentic/index.svelte.ts — uses ChatService for agentic loop streaming
+ * @see conversationsStore in stores/conversations/index.svelte.ts — provides message context
  */
 export { ChatService } from './chat.service';
 
@@ -98,10 +98,19 @@ export { ChatService } from './chat.service';
  * enabling conversation branching and alternative response paths. The conversation's
  * `currNode` tracks the currently active branch endpoint.
  *
- * @see conversationsStore in stores/conversations.svelte.ts — reactive layer on top of DatabaseService
- * @see chatStore in stores/chat.svelte.ts — uses DatabaseService directly for message CRUD during streaming
+ * @see conversationsStore in stores/conversations/index.svelte.ts — reactive layer on top of DatabaseService
+ * @see chatStore in stores/chat/index.svelte.ts — uses DatabaseService directly for message CRUD during streaming
  */
 export { DatabaseService } from './database.service';
+
+/**
+ * **ConversationTransferService** - Conversation import/export format layer
+ *
+ * Owns the JSONL session format (SESSION header + MESSAGE records), ZIP
+ * archiving and browser downloads. Stateless; DB access and store refreshes
+ * stay in conversationsStore.
+ */
+export { ConversationTransferService } from './conversation-transfer.service';
 
 /**
  * **ModelsService** - Model management API communication
@@ -134,7 +143,7 @@ export { DatabaseService } from './database.service';
  * - `POST /models/load` — Load a model (ROUTER mode only)
  * - `POST /models/unload` — Unload a model (ROUTER mode only)
  *
- * @see modelsStore in stores/models.svelte.ts — primary consumer for reactive model state
+ * @see modelsStore in stores/models/index.svelte.ts — primary consumer for reactive model state
  */
 export { ModelsService } from './models.service';
 
@@ -165,8 +174,8 @@ export { ModelsService } from './models.service';
  * - `&autoload=false` → Prevents model auto-loading when querying props
  *
  * @see serverStore in stores/server.svelte.ts — consumes global server props
- * @see modelsStore in stores/models.svelte.ts — consumes per-model props for modalities
- * @see settingsStore in stores/settings.svelte.ts — syncs default generation params from props
+ * @see modelsStore in stores/models/index.svelte.ts — consumes per-model props for modalities
+ * @see settingsStore in stores/settings/index.svelte.ts — syncs default generation params from props
  */
 export { PropsService } from './props.service';
 
@@ -208,7 +217,7 @@ export { PropsService } from './props.service';
  * - `ParameterSyncService` class — static methods for sync logic
  * - `SYNCABLE_PARAMETERS` — mapping of UI setting keys to server parameter keys
  *
- * @see settingsStore in stores/settings.svelte.ts — primary consumer for settings sync
+ * @see settingsStore in stores/settings/index.svelte.ts — primary consumer for settings sync
  * @see SettingsChatParameterSourceIndicator — displays parameter source badges in UI
  */
 export { ParameterSyncService } from './parameter-sync.service';
@@ -232,7 +241,7 @@ export { ParameterSyncService } from './parameter-sync.service';
  *   - Manages connection lifecycle, health checks, reconnection
  *   - Handles tool name conflict resolution and server coordination
  *
- * - **mcpResourceStore**: Reactive resource state
+ * - **mcpResourceStore** (composed as mcpStore.resources): Reactive resource state
  *   - Receives resource data fetched via MCPService
  *   - Manages resource caching, subscriptions, and attachments
  *
@@ -254,17 +263,17 @@ export { ParameterSyncService } from './parameter-sync.service';
  * 2. **StreamableHTTP** — modern HTTP-based, supports CORS proxy
  * 3. **SSE** — legacy fallback, supports CORS proxy
  *
- * @see mcpStore in stores/mcp.svelte.ts — reactive business logic facade on top of MCPService
- * @see mcpResourceStore in stores/mcp-resources.svelte.ts — reactive resource state management
- * @see agenticStore in stores/agentic.svelte.ts — uses MCPService (via mcpStore) for tool execution
+ * @see mcpStore in stores/mcp/index.svelte.ts — reactive business logic facade on top of MCPService
+ * @see mcpStore.resources in stores/mcp/resources.svelte.ts — reactive resource state management
+ * @see agenticStore in stores/agentic/index.svelte.ts — uses MCPService (via mcpStore) for tool execution
  * @see MCP Protocol Specification: https://modelcontextprotocol.io/specification/2025-06-18
  */
 export { MCPService } from './mcp.service';
 
 /**
- * **SandboxService** - Frontend JavaScript execution in a browser sandbox
+ * **SandboxService** - Browser JavaScript execution in a browser sandbox
  *
- * Stateless executor for the run_javascript frontend tool. Model generated
+ * Stateless executor for the run_javascript browser tool. Model generated
  * code runs in a Web Worker spawned inside a sandboxed iframe with an opaque
  * origin: no access to the app origin, its storage or its API, and outgoing
  * requests carry a null origin. The code never touches a main thread, so the
@@ -274,10 +283,10 @@ export { MCPService } from './mcp.service';
  * **Architecture & Relationships:**
  * - **SandboxService** (this class): Stateless sandbox execution
  * - **toolsStore**: Exposes the tool definition when the sandbox is enabled
- * - **agenticStore**: Dispatches ToolSource.FRONTEND calls here
+ * - **agenticStore**: Dispatches ToolSource.BROWSER calls here
  *
- * @see buildSandboxToolDefinition in constants/sandbox.ts - tool schema sent to the LLM
- * @see agenticStore in stores/agentic.svelte.ts - tool dispatch
+ * @see buildSandboxToolDefinition in utils/sandbox-tool - tool schema sent to the LLM
+ * @see agenticStore in stores/agentic/index.svelte.ts - tool dispatch
  */
 export { SandboxService } from './sandbox.service';
 
@@ -285,7 +294,7 @@ export { SandboxService } from './sandbox.service';
  * **RouterService** — Dynamic route URL construction utility
  *
  * Stateless utility for building dynamic route URLs from ROUTES base paths.
- * Static routes (START, NEW_CHAT, MCP_SERVERS) live in ROUTES constants;
+ * Static routes (START, MCP_SERVERS) live in ROUTES constants;
  * dynamic routes (CHAT, SETTINGS) are constructed here by appending parameters.
  *
  * **Architecture & Relationships:**
@@ -298,7 +307,6 @@ export { SandboxService } from './sandbox.service';
  *
  * **Key Responsibilities:**
  * - Build chat URLs for specific conversations: `RouterService.chat(id)` → `#/chat/:id`
- * - Build settings URLs for sections: `RouterService.settings(section)` → `#/settings/:section`
  *
  * @see ROUTES in constants/routes.ts — static route base paths
  */
@@ -331,3 +339,13 @@ export { RouterService } from './router.service';
  * @see migration.service.ts — full implementation (non-destructive)
  */
 export { MigrationService } from './migration.service';
+
+/**
+ * **SettingsService** - localStorage persistence layer for settings
+ *
+ * Stateless read/write of the settings config and user-override keys. Business
+ * logic (default merging, mobile defaults, theme migration) stays in the store.
+ *
+ * @see settingsStore in stores/settings/index.svelte.ts - reactive state + business logic
+ */
+export { SettingsService } from './settings.service';

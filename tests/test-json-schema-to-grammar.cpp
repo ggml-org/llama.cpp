@@ -6,7 +6,7 @@
 
 #include "../src/llama-grammar.h"
 
-#include <nlohmann/json.hpp>
+#include "json.h"
 
 #include <cassert>
 #include <fstream>
@@ -1442,7 +1442,7 @@ static void test_resolves_to_string() {
     auto test = [](const std::string & name, const std::string & schema_str, bool expected) {
         fprintf(stderr, "- %s\n", name.c_str());
         common_schema_info info;
-        auto schema = nlohmann::ordered_json::parse(schema_str);
+        auto schema = common_json::parse(schema_str);
         info.resolve_refs(schema);
         bool result = info.resolves_to_string(schema);
         if (result != expected) {
@@ -1517,7 +1517,7 @@ int main() {
 
     test_all("C++", [](const TestCase & tc) {
         try {
-            tc.verify(json_schema_to_grammar(nlohmann::ordered_json::parse(tc.schema), true));
+            tc.verify(json_schema_to_grammar(common_json::parse(tc.schema), true));
             tc.verify_status(SUCCESS);
         } catch (const std::invalid_argument & ex) {
             fprintf(stderr, "Error: %s\n", ex.what());
@@ -1531,7 +1531,7 @@ int main() {
         auto run = [](const TestCase & tc) {
             fprintf(stderr, "- %s\n", tc.name.c_str());
             try {
-                tc.verify(json_schema_to_grammar(nlohmann::ordered_json::parse(tc.schema), true));
+                tc.verify(json_schema_to_grammar(common_json::parse(tc.schema), true));
                 tc.verify_status(SUCCESS);
             } catch (const std::invalid_argument & ex) {
                 fprintf(stderr, "Error: %s\n", ex.what());
@@ -1562,6 +1562,70 @@ int main() {
             R"""(
                 root ::= "\"" ((("ab")+ "c")? "d") "\""
                 space ::= | " " | "\n"{1,2} [ \t]{0,20}
+            )""",
+        });
+
+        run({
+            SUCCESS,
+            "unanchored regexp",
+            R"""({
+                "type": "string",
+                "pattern": "[0-9]+"
+            })""",
+            R"""(
+                char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
+                root ::= string
+                space ::= | " " | "\n"{1,2} [ \t]{0,20}
+                string ::= "\"" char* "\""
+            )""",
+        });
+
+        // the rules of the partial conversion (here "root-0") must not leak into the grammar
+        run({
+            SUCCESS,
+            "regexp with unsupported shorthand",
+            R"""({
+                "type": "string",
+                "pattern": "^[0-9]{3}\\w$"
+            })""",
+            R"""(
+                char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
+                root ::= string
+                space ::= | " " | "\n"{1,2} [ \t]{0,20}
+                string ::= "\"" char* "\""
+            )""",
+        });
+
+        // a regexp that is invalid under any flavor is still an error
+        run({
+            FAILURE,
+            "regexp with unbalanced parentheses",
+            R"""({
+                "type": "string",
+                "pattern": "^(a$"
+            })""",
+            ""
+        });
+
+        // only the property with the bad pattern degrades
+        run({
+            SUCCESS,
+            "unsupported regexp in a property",
+            R"""({
+                "type": "object",
+                "properties": {
+                    "a": { "type": "string", "pattern": "^[a-z\\-]+$" }
+                },
+                "required": ["a"],
+                "additionalProperties": false
+            })""",
+            R"""(
+                a ::= string
+                a-kv ::= "\"a\"" space ":" space a
+                char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F]{4})
+                root ::= "{" space a-kv space "}"
+                space ::= | " " | "\n"{1,2} [ \t]{0,20}
+                string ::= "\"" char* "\""
             )""",
         });
     }

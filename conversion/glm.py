@@ -15,6 +15,7 @@ from .deepseek import DeepseekV2Model
 
 
 @ModelBase.register("Glm4ForCausalLM", "Glm4vForConditionalGeneration")
+@ModelBase.example("zai-org/GLM-4-9B-0414")
 class Glm4Model(TextModel):
     model_arch = gguf.MODEL_ARCH.GLM4
     use_mrope = False
@@ -86,6 +87,7 @@ class Glm4Model(TextModel):
 
 
 @ModelBase.register("GlmOcrForConditionalGeneration")
+@ModelBase.example("zai-org/GLM-OCR")
 class GlmOCRModel(Glm4Model):
     model_arch = gguf.MODEL_ARCH.GLM4
     use_mrope = False
@@ -107,14 +109,41 @@ class GlmOCRModel(Glm4Model):
 
 
 @ModelBase.register("Glm4MoeForCausalLM", "Glm4vMoeForConditionalGeneration")
+@ModelBase.example("zai-org/GLM-4.5-Air")
 class Glm4MoeModel(TextModel):
     model_arch = gguf.MODEL_ARCH.GLM4_MOE
+    supports_mtp_export = True
+    _n_main_layers: int | None = None
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # GLM4_MOE has num_hidden_layers + 1 actual layers (including NextN layer)
-        self.block_count = self.hparams["num_hidden_layers"] + self.hparams.get("num_nextn_predict_layers", 0)
-        self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
+        if not self.no_mtp:
+            self.block_count += self.hparams.get("num_nextn_predict_layers", 0)
+            self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
+
+    def index_tensors(self, remote_hf_model_id: str | None = None):
+        hparams = {**self.hparams, **self.hparams.get("text_config", {})}
+        key = next((k for k in ["n_layers", "num_hidden_layers", "n_layer", "num_layers"] if k in hparams), None)
+        type(self)._n_main_layers = hparams.get(key)
+        return super().index_tensors(remote_hf_model_id=remote_hf_model_id)
+
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        if (titem := super().filter_tensors(item)) is None:
+            return None
+        name, gen = titem
+
+        assert cls._n_main_layers is not None
+        is_mtp = (m := re.match(r"model\.layers\.(\d+)\.", name)) is not None and int(m.group(1)) >= cls._n_main_layers
+
+        if is_mtp and cls.no_mtp:
+            return None
+        if cls.mtp_only and not is_mtp and name not in (
+            "model.embed_tokens.weight", "model.norm.weight", "lm_head.weight",
+        ):
+            return None
+
+        return name, gen
 
     def set_vocab(self):
         return self._set_vocab_glm()
@@ -150,9 +179,21 @@ class Glm4MoeModel(TextModel):
         if (norm_topk_prob := self.hparams.get("norm_topk_prob")) is not None:
             self.gguf_writer.add_expert_weights_norm(norm_topk_prob)
 
-        # NextN/MTP prediction layers
-        if (num_nextn_predict_layers := self.hparams.get("num_nextn_predict_layers")) is not None:
+        if not self.no_mtp and (num_nextn_predict_layers := self.hparams.get("num_nextn_predict_layers")) is not None:
             self.gguf_writer.add_nextn_predict_layers(num_nextn_predict_layers)
+
+    def prepare_metadata(self, vocab_only: bool):
+        from_dir = self.fname_out.is_dir()
+        super().prepare_metadata(vocab_only=vocab_only)
+
+        if not self.mtp_only or not from_dir:
+            return
+
+        output_type: str = self.ftype.name.partition("_")[2]
+        fname_default: str = gguf.naming_convention(
+            self.metadata.name, self.metadata.basename, self.metadata.finetune,
+            self.metadata.version, size_label=None, output_type=output_type, model_type=None)
+        self.fname_out = self.fname_out.parent / f"mtp-{fname_default}.gguf"
 
     _experts: list[dict[str, Tensor]] | None = None
 
@@ -204,14 +245,76 @@ class Glm4MoeModel(TextModel):
 
 
 @ModelBase.register("Glm4MoeLiteForCausalLM")
+@ModelBase.example("zai-org/GLM-4.7-Flash")
 class Glm4MoeLiteModel(DeepseekV2Model):
     model_arch = gguf.MODEL_ARCH.DEEPSEEK2
+    skip_mtp = False
+    supports_mtp_export = True
+    _n_main_layers: int | None = None
 
     def set_vocab(self):
         return self._set_vocab_glm()
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        num_hidden_layers = self.hparams["num_hidden_layers"]
+        self.num_nextn_predict_layers = self.hparams.get("num_nextn_predict_layers", 0)
+        self.skip_mtp = self.no_mtp or self.num_nextn_predict_layers == 0
+
+        if self.skip_mtp:
+            self.block_count = num_hidden_layers
+        else:
+            self.block_count = num_hidden_layers + self.num_nextn_predict_layers
+
+        self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+
+        if self.skip_mtp:
+            return
+
+        self.gguf_writer.add_nextn_predict_layers(self.num_nextn_predict_layers)
+
+    def index_tensors(self, remote_hf_model_id: str | None = None):
+        type(self)._n_main_layers = self.hparams["num_hidden_layers"]
+        return super().index_tensors(remote_hf_model_id=remote_hf_model_id)
+
+    @classmethod
+    def filter_tensors(cls, item):
+        if (titem := super().filter_tensors(item)) is None:
+            return None
+        name, gen = titem
+
+        if cls._n_main_layers is not None:
+            match = re.match(r"model\.layers\.(\d+)\.", name)
+            is_mtp = match is not None and int(match.group(1)) >= cls._n_main_layers
+            if is_mtp and cls.no_mtp:
+                return None
+            if cls.mtp_only and not is_mtp and name not in (
+                "model.embed_tokens.weight", "model.norm.weight", "lm_head.weight",
+            ):
+                return None
+
+        return name, gen
+
+    def prepare_metadata(self, vocab_only: bool):
+        from_dir = self.fname_out.is_dir()
+        super().prepare_metadata(vocab_only=vocab_only)
+
+        if not self.mtp_only or not from_dir:
+            return
+
+        output_type: str = self.ftype.name.partition("_")[2]
+        fname_default: str = gguf.naming_convention(
+            self.metadata.name, self.metadata.basename, self.metadata.finetune,
+            self.metadata.version, size_label=None, output_type=output_type, model_type=None)
+        self.fname_out = self.fname_out.parent / f"mtp-{fname_default}.gguf"
+
 
 @ModelBase.register("GlmMoeDsaForCausalLM")
+@ModelBase.example("zai-org/GLM-5.2")
 class GlmMoeDsaModel(DeepseekV2Model):
     model_arch = gguf.MODEL_ARCH.GLM_DSA
     skip_mtp = False
@@ -280,8 +383,10 @@ class GlmMoeDsaModel(DeepseekV2Model):
 
 
 @ModelBase.register("SolarOpenForCausalLM")
+@ModelBase.example("upstage/Solar-Open-100B")
 class SolarOpenModel(Glm4MoeModel):
     model_arch = gguf.MODEL_ARCH.GLM4_MOE
+    supports_mtp_export = False
 
     def set_vocab(self):
         from transformers import AutoTokenizer

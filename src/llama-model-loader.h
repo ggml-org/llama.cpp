@@ -67,6 +67,8 @@ struct llama_model_loader {
     static const int TENSOR_DUPLICATED      = 1 << 1;
     static const int TENSOR_SKIP            = 1 << 2;
     static const int TENSOR_SKIP_IF_VIRTUAL = 1 << 3;
+    static const int TENSOR_ALLOW_RESHAPE   = 1 << 4;
+    static const int TENSOR_READ_LAZY       = 1 << 5; // read rows on demand instead of loading whole tensor; requires mmap for now
 
     int n_kv      = 0;
     int n_tensors = 0;
@@ -79,12 +81,19 @@ struct llama_model_loader {
     bool use_direct_io = false;
     bool check_tensors;
     bool no_alloc;
+    bool load_mtp;
+
+    // set by the caller before the create_tensor() calls
+    enum llama_lazy_mode lazy_mode = LLAMA_LAZY_MODE_OFF;
 
     llama_files files;
     llama_ftype ftype;
     llama_fver  fver;
 
     llama_mmaps mappings;
+
+    // byte ranges of TENSOR_READ_LAZY tensors, per file index
+    std::map<uint32_t, llama_mmap::ranges> lazy_tensor_ranges;
 
     std::map<std::string, llama_tensor_weight, weight_name_comparer> weights_map;
     std::unordered_map<std::string, llama_model_kv_override> kv_overrides;
@@ -129,6 +138,7 @@ struct llama_model_loader {
         llama_load_mode load_mode,
         bool check_tensors,
         bool no_alloc,
+        bool load_mtp,
         const llama_model_kv_override * param_overrides_p,
         const llama_model_tensor_buft_override * param_tensor_buft_overrides_p);
 
@@ -175,13 +185,15 @@ struct llama_model_loader {
 
     struct ggml_tensor * require_tensor_meta(const std::string & name) const;
 
-    const struct ggml_tensor * check_tensor_dims(const std::string & name, const std::vector<int64_t> & ne, bool required) const;
+    const struct ggml_tensor * check_tensor_dims(
+            const std::string & name,
+            const std::vector<int64_t> & ne,
+            bool required,
+            bool allow_reshape) const;
 
     struct ggml_tensor * create_tensor(
         const llama_hparams & hparams, const buft_list_t * buft_list_cpu, const buft_list_t * buft_list_input, const buft_list_t * buft_list_output,
         const buft_list_t * buft_list_layer, const LLM_TN_IMPL & tn, const std::initializer_list<int64_t> & ne, int flags);
-
-    struct ggml_tensor * create_tensor_as_view(struct ggml_context * ctx, struct ggml_tensor * base, const std::string & name, const std::initializer_list<int64_t> & ne, size_t offset, bool required = true);
 
     void done_getting_tensors(bool partial = false) const;
 
@@ -189,8 +201,12 @@ struct llama_model_loader {
 
     void get_mapping_range(size_t * first, size_t * last, void ** addr, int idx, ggml_context * ctx) const;
 
-    // for backwards compatibility, does not support ggml-backend
-    void load_data_for(struct ggml_tensor * cur) const;
+    // release a weight's mmap pages
+    void unmap_weight(const llama_tensor_weight & w) const;
+
+    // read a byte range of a weight's data
+    // with mmap, returns a pointer into the mapping, otherwise reads into buf and returns buf
+    const void * load_data_range(const llama_tensor_weight & w, size_t offs, size_t size, void * buf) const;
 
     // Returns false if cancelled by progress_callback
     bool load_all_data(

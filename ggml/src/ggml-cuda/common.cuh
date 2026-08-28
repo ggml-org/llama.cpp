@@ -627,7 +627,8 @@ template <typename T> struct block_reduce_policy<block_reduce_method::MAX, T> {
 };
 
 template <block_reduce_method reduce_method_t, const unsigned int block_size_template = 0, typename T>
-static __device__ T block_reduce(T val, T * shared_vals) {
+static __device__ T block_reduce(T val, [[maybe_unused]] T * shared_vals) {
+    // for multi-warp reductions, callers must not reuse shared_vals until all reads from this invocation have completed
     val                           = block_reduce_policy<reduce_method_t, T>::reduce(val);
     const unsigned int block_size = block_size_template == 0 ? blockDim.x : block_size_template;
     if (block_size > WARP_SIZE) {
@@ -975,6 +976,13 @@ struct ggml_cuda_type_traits<GGML_TYPE_Q1_0> {
     static constexpr int qk = QK1_0;
     static constexpr int qr = QR1_0;
     static constexpr int qi = QI1_0;
+};
+
+template<>
+struct ggml_cuda_type_traits<GGML_TYPE_Q2_0> {
+    static constexpr int qk = QK2_0;
+    static constexpr int qr = QR2_0;
+    static constexpr int qi = QI2_0;
 };
 
 template<>
@@ -1410,7 +1418,9 @@ struct ggml_backend_cuda_context {
     cudaEvent_t copy_event = nullptr;
 
     cudaStream_t streams[GGML_CUDA_MAX_DEVICES][GGML_CUDA_MAX_STREAMS] = { { nullptr } };
-    cublasHandle_t cublas_handles[GGML_CUDA_MAX_DEVICES] = {nullptr};
+    cublasHandle_t cublas_handles[GGML_CUDA_MAX_DEVICES][GGML_CUDA_MAX_STREAMS] = {nullptr};
+    void * cublas_workspaces[GGML_CUDA_MAX_DEVICES][GGML_CUDA_MAX_STREAMS] = {nullptr};
+    size_t cublas_workspace_sizes[GGML_CUDA_MAX_DEVICES] = {0};
 
     int curr_stream_no = 0;
 
@@ -1487,17 +1497,22 @@ struct ggml_backend_cuda_context {
 
     ggml_cuda_stream_context & stream_context() { return concurrent_stream_context; }
 
-    cublasHandle_t cublas_handle(int device) {
-        if (cublas_handles[device] == nullptr) {
-            ggml_cuda_set_device(device);
-            CUBLAS_CHECK(cublasCreate(&cublas_handles[device]));
-            CUBLAS_CHECK(cublasSetMathMode(cublas_handles[device], CUBLAS_TF32_TENSOR_OP_MATH));
-        }
-        return cublas_handles[device];
-    }
-
     cublasHandle_t cublas_handle() {
-        return cublas_handle(device);
+        if (cublas_handles[device][curr_stream_no] == nullptr) {
+            ggml_cuda_set_device(device);
+            CUBLAS_CHECK(cublasCreate(&cublas_handles[device][curr_stream_no]));
+            CUBLAS_CHECK(cublasSetMathMode(cublas_handles[device][curr_stream_no], CUBLAS_TF32_TENSOR_OP_MATH));
+            CUBLAS_CHECK(cublasSetStream(cublas_handles[device][curr_stream_no], stream()));
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && (CUBLAS_VER_MAJOR > 11 || (CUBLAS_VER_MAJOR == 11 && CUBLAS_VER_MINOR >= 2))
+            if (cublas_workspace_sizes[device] == 0) {
+                const int cc = ggml_cuda_info().devices[device].cc;
+                cublas_workspace_sizes[device] = (cc >= GGML_CUDA_CC_HOPPER) ? 32 * 1024 * 1024 : 4 * 1024 * 1024;
+            }
+            CUDA_CHECK(cudaMalloc(&cublas_workspaces[device][curr_stream_no], cublas_workspace_sizes[device]));
+            CUBLAS_CHECK(cublasSetWorkspace(cublas_handles[device][curr_stream_no], cublas_workspaces[device][curr_stream_no], cublas_workspace_sizes[device]));
+#endif
+        }
+        return cublas_handles[device][curr_stream_no];
     }
 
     // pool
