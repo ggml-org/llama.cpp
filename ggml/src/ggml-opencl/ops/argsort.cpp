@@ -19,10 +19,11 @@ void ggml_cl_load_kernels_argsort(ggml_backend_opencl_context *backend_ctx) {
 #else
         const std::string kernel_src = read_file("argsort.cl");
 #endif
-        backend_ctx->program_argsort_f32_i32 =
+        cl_program prog =
             build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
 
-        CL_CHECK((backend_ctx->kernel_argsort_f32_i32 = clCreateKernel(backend_ctx->program_argsort_f32_i32, "kernel_argsort_f32_i32", &err), err));
+        CL_CHECK((backend_ctx->kernel_argsort_f32_i32 = clCreateKernel(prog, "kernel_argsort_f32_i32", &err), err));
+        CL_CHECK(clReleaseProgram(prog));
         backend_ctx->kernels_loaded_argsort = true;
     }
 }

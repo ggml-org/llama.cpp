@@ -13,11 +13,12 @@ void ggml_cl_load_kernels_sigmoid(ggml_backend_opencl_context * backend_ctx) {
 #else
         const std::string kernel_src = read_file("sigmoid.cl");
 #endif
-        backend_ctx->program_sigmoid =
+        cl_program prog =
             build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
 
-        CL_CHECK((backend_ctx->kernel_sigmoid_f32 = clCreateKernel(backend_ctx->program_sigmoid, "kernel_sigmoid_f32", &err), err));
-        CL_CHECK((backend_ctx->kernel_sigmoid_f16 = clCreateKernel(backend_ctx->program_sigmoid, "kernel_sigmoid_f16", &err), err));
+        CL_CHECK((backend_ctx->kernel_sigmoid_f32 = clCreateKernel(prog, "kernel_sigmoid_f32", &err), err));
+        CL_CHECK((backend_ctx->kernel_sigmoid_f16 = clCreateKernel(prog, "kernel_sigmoid_f16", &err), err));
+        CL_CHECK(clReleaseProgram(prog));
         GGML_LOG_CONT(".");
     }
 }

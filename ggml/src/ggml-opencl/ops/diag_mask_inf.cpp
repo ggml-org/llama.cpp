@@ -13,11 +13,12 @@ void ggml_cl_load_kernels_diag_mask_inf(ggml_backend_opencl_context * backend_ct
 #else
         const std::string kernel_src = read_file("diag_mask_inf.cl");
 #endif
-        backend_ctx->program_diag_mask_inf =
+        cl_program prog =
             build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
 
-        CL_CHECK((backend_ctx->kernel_diag_mask_inf_8 = clCreateKernel(backend_ctx->program_diag_mask_inf, "kernel_diag_mask_inf_8", &err), err));
-        CL_CHECK((backend_ctx->kernel_diag_mask_inf   = clCreateKernel(backend_ctx->program_diag_mask_inf, "kernel_diag_mask_inf", &err), err));
+        CL_CHECK((backend_ctx->kernel_diag_mask_inf_8 = clCreateKernel(prog, "kernel_diag_mask_inf_8", &err), err));
+        CL_CHECK((backend_ctx->kernel_diag_mask_inf   = clCreateKernel(prog, "kernel_diag_mask_inf", &err), err));
+        CL_CHECK(clReleaseProgram(prog));
         GGML_LOG_CONT(".");
     }
 }
