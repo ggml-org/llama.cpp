@@ -1,12 +1,17 @@
 #include "argsort.cuh"
 
 #ifdef GGML_CUDA_USE_CUB
-#    include <cub/cub.cuh>
-#    if (CCCL_MAJOR_VERSION >= 3 && CCCL_MINOR_VERSION >= 1)
-#        define STRIDED_ITERATOR_AVAILABLE
-#        include <cuda/iterator>
+#    if defined(GGML_USE_HIP)
+#        include <hipcub/hipcub.hpp>
+         using namespace hipcub;
+#    else
+#        include <cub/cub.cuh>
+#        if (CCCL_MAJOR_VERSION >= 3 && CCCL_MINOR_VERSION >= 1)
+#            define STRIDED_ITERATOR_AVAILABLE
+#            include <cuda/iterator>
+#        endif
+         using namespace cub;
 #    endif
-using namespace cub;
 #endif  // GGML_CUDA_USE_CUB
 
 static __global__ void init_indices(int * indices, const int ncols, const int nrows) {
@@ -74,14 +79,19 @@ void argsort_f32_i32_cuda_cub(ggml_cuda_pool & pool,
     size_t temp_storage_bytes = 0;
 
     bool is_capturing = false;
-#ifdef USE_CUDA_GRAPH
+#if defined(USE_CUDA_GRAPH) && !defined(GGML_USE_HIP)
     // Currently (confirmed for CCCL <= 3.2) DeviceSegmentedSort does not support stream capture, while DeviceSegmentedRadixSort does.
     // See https://github.com/NVIDIA/cccl/issues/5661#issuecomment-3229037149
     // TODO: constrain this to the CCCL versions that have this issue once it's resolved in a future CCCL release.
     cudaStreamCaptureStatus capture_status;
     CUDA_CHECK(cudaStreamIsCapturing(stream, &capture_status));
     is_capturing = (capture_status != cudaStreamCaptureStatusNone);
-#endif  // USE_CUDA_GRAPH
+#endif  // USE_CUDA_GRAPH && !GGML_USE_HIP
+#ifdef GGML_USE_HIP
+    // hipCUB (rocPRIM) has no DeviceSegmentedSort; use DeviceSegmentedRadixSort
+    // unconditionally (works inside and outside stream capture).
+    is_capturing = true;
+#endif
 
     if (order == GGML_SORT_ORDER_ASC) {
         if (nrows == 1) {

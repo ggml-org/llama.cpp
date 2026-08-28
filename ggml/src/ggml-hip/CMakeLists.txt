@@ -47,6 +47,11 @@ find_package(hip     REQUIRED)
 find_package(hipblas REQUIRED)
 find_package(rocblas REQUIRED)
 
+option(GGML_CUDA_USE_CUB "Use hipCUB-based CUB code paths on HIP (argsort/top-k/mean/sum/cumsum)" OFF)
+if (GGML_CUDA_USE_CUB)
+    add_compile_definitions(GGML_CUDA_USE_CUB)
+endif()
+
 if (GGML_HIP_RCCL)
     find_package(rccl REQUIRED)
 endif()

@@ -1674,3 +1674,16 @@ static __inline__ void ggml_cuda_kernel_launch(Kernel kernel, const ggml_cuda_ke
     CUDA_CHECK(cudaGetLastError());
 }
 
+
+// HIP compat: the CUDA capture-status API is not aliased by the HIP runtime;
+// map it for GGML_CUDA_USE_CUB code paths (argsort/top-k/mean/sum/...).
+#if defined(GGML_USE_HIP) && defined(GGML_CUDA_USE_CUB)
+#ifndef cudaStreamCaptureStatus
+#define cudaStreamCaptureStatus hipStreamCaptureStatus
+#define cudaStreamIsCapturing hipStreamIsCapturing
+#define cudaStreamCaptureStatusNone hipStreamCaptureStatusNone
+#define cudaStreamCaptureStatusActive hipStreamCaptureStatusActive
+#define cudaStreamCaptureStatusGlobal hipStreamCaptureStatusGlobal
+#define cudaStreamCaptureStatusRelaxed hipStreamCaptureStatusRelaxed
+#endif
+#endif

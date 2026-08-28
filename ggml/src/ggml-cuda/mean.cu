@@ -2,8 +2,13 @@
 #include "reduce_rows.cuh"
 
 #ifdef GGML_CUDA_USE_CUB
-#include <cub/cub.cuh>
-using namespace cub;
+#   if defined(GGML_USE_HIP)
+#       include <hipcub/hipcub.hpp>
+        using namespace hipcub;
+#   else
+#       include <cub/cub.cuh>
+        using namespace cub;
+#   endif
 #endif  // GGML_CUDA_USE_CUB
 
 template <typename T> __global__ void divide_by_count(T * result, size_t count) {
