@@ -57,7 +57,6 @@ COPY --from=web /app/tools/ui/dist tools/ui/dist
 RUN HIPCXX="$(hipconfig -l)/clang" HIP_PATH="$(hipconfig -R)" \
     cmake -S . -B build \
         -DGGML_HIP=ON \
-        -DGGML_HIP_ROCWMMA_FATTN=ON \
         -DAMDGPU_TARGETS="$ROCM_DOCKER_ARCH" \
         -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON \
         -DCMAKE_BUILD_TYPE=Release -DLLAMA_BUILD_TESTS=OFF \
@@ -127,7 +126,7 @@ ENTRYPOINT ["/app/tools.sh"]
 ### Light, CLI only
 FROM base AS light
 
-COPY --from=build /app/full/llama-cli /app/full/llama-completion /app
+COPY --from=build /app/full/llama /app/full/llama-cli /app/full/llama-completion /app
 
 WORKDIR /app
 
@@ -138,7 +137,7 @@ FROM base AS server
 
 ENV LLAMA_ARG_HOST=0.0.0.0
 
-COPY --from=build /app/full/llama-server /app
+COPY --from=build /app/full/llama /app/full/llama-server /app
 
 WORKDIR /app
 

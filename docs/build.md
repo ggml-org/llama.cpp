@@ -70,17 +70,23 @@ cmake --build build --config Release
     - Tab Workload: Desktop-development with C++
     - Tab Components (select quickly via search): C++-_CMake_ Tools for Windows, _Git_ for Windows, C++-_Clang_ Compiler for Windows, MS-Build Support for LLVM-Toolset (clang)
     - Please remember to always use a Developer Command Prompt / PowerShell for VS2022 for git, build, test
-    - For Windows on ARM (arm64, WoA) build with:
-    ```bash
-    cmake --preset arm64-windows-llvm-release -D GGML_OPENMP=OFF
-    cmake --build build-arm64-windows-llvm-release
-    ```
-    For building with ninja generator and clang compiler as default:
-      -set path:set LIB=C:\Program Files (x86)\Windows Kits\10\Lib\10.0.22621.0\um\x64;C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.41.34120\lib\x64\uwp;C:\Program Files (x86)\Windows Kits\10\Lib\10.0.22621.0\ucrt\x64
+    - For Windows on ARM (arm64, WoA), build with:
       ```bash
-      cmake --preset x64-windows-llvm-release
-      cmake --build build-x64-windows-llvm-release
+      cmake --preset arm64-windows-llvm-release -D GGML_OPENMP_FETCH=ON
+      cmake --build build-arm64-windows-llvm-release
       ```
+      - Use `ARM64 Native Tools Command Prompt for VS 2022` if you are building on an ARM64 machine.
+      - `GGML_OPENMP_FETCH` downloads the official LLVM OpenMP runtime and requires Clang, 7-Zip and network access during configuration. CMake selects the runtime from the target architecture, so this also works when cross-compiling for WoA from x64. The extracted header, import library, DLL and OpenMP license are placed under `build/_deps`. The build copies `libomp.dll` and `LICENSE-LLVM-OpenMP` to the runtime output directory and installs them together. Omit the option to use CMake's normal OpenMP detection, or pass `-D GGML_OPENMP=OFF` to disable OpenMP.
+    - For building with ninja generator and clang compiler as default:
+      - Set path:
+        ```
+        set LIB=C:\Program Files (x86)\Windows Kits\10\Lib\10.0.22621.0\um\x64;C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.41.34120\lib\x64\uwp;C:\Program Files (x86)\Windows Kits\10\Lib\10.0.22621.0\ucrt\x64
+        ```
+      - Run:
+        ```bash
+        cmake --preset x64-windows-llvm-release
+        cmake --build build-x64-windows-llvm-release
+        ```
 - If you want HTTPS/TLS features, you may install OpenSSL development libraries. If not installed, the project will build and run without SSL support.
   - **Debian / Ubuntu:** `sudo apt-get install libssl-dev`
   - **Fedora / RHEL / Rocky / Alma:** `sudo dnf install openssl-devel`
@@ -270,13 +276,10 @@ The environment variable [`CUDA_SCALE_LAUNCH_QUEUES`](https://docs.nvidia.com/cu
 
 Consider setting `CUDA_SCALE_LAUNCH_QUEUES=4x`, which increases the CUDA command buffer to 4 times its default size. This optimization is particularly beneficial for **Multi-GPU setups with pipeline parallelism**, where it significantly improves prompt processing throughput by allowing more operations to be enqueued across GPUs.
 
-#### GGML_CUDA_FORCE_CUBLAS_COMPUTE_32F
+#### GGML_CUDA_CUBLAS_COMPUTE_TYPE
 
-Use `GGML_CUDA_FORCE_CUBLAS_COMPUTE_32F` environment variable to use FP32 compute type on all GPUs in FP16 cuBLAS for preventing possible numerical overflows in exchange for slower prompt processing (small impact on RTX PRO/Datacenter products and significant on GeForce products).
-
-#### GGML_CUDA_FORCE_CUBLAS_COMPUTE_16F
-
-Use `GGML_CUDA_FORCE_CUBLAS_COMPUTE_16F` environment variable to force use FP16 compute type (instead of default FP32) in FP16 cuBLAS for V100, CDNA and RDNA4.
+Override default, speed-optimized compute types for cuBLAS matrix multiplications.
+Legal values: `auto`, `f16`, `fp16`, `bf16`, `f32`, `fp32`.
 
 ### Unified Memory
 
@@ -363,12 +366,6 @@ You can download it from your Linux distro's package manager or from here: [ROCm
   ```
 
   Note: `GPU_TARGETS` is optional, omitting it will build the code for all GPUs in the current system.
-
-  To enhance flash attention performance on RDNA3+ or CDNA architectures, you can utilize the rocWMMA library by enabling the `-DGGML_HIP_ROCWMMA_FATTN=ON` option. This requires rocWMMA headers to be installed on the build system.
-
-  The rocWMMA library is included by default when installing the ROCm SDK using the `rocm` meta package provided by AMD. Alternatively, if you are not using the meta package, you can install the library using the `rocwmma-dev` or `rocwmma-devel` package, depending on your system's package manager.
-
-  As an alternative, you can manually install the library by cloning it from the official [GitHub repository](https://github.com/ROCm/rocWMMA), checkout the corresponding version tag (e.g. `rocm-6.2.4`) and set `-DCMAKE_CXX_FLAGS="-I<path/to/rocwmma>/library/include/"` in CMake. This also works under Windows despite not officially supported by AMD.
 
   Note that if you get the following error:
   ```

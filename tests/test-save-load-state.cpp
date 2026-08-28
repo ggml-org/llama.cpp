@@ -3,8 +3,12 @@
 #include "log.h"
 #include "llama-cpp.h"
 
+#include <algorithm>
 #include <clocale>
+#include <cstring>
+#include <filesystem>
 #include <random>
+#include <string>
 #include <vector>
 
 struct llama_batch_ptr {
@@ -53,7 +57,9 @@ static llama_tokens generate_tokens(llama_context * ctx, llama_sampler * smpl, i
 // - decode the last token
 // - generate n_predict tokens
 static llama_tokens test_baseline(struct llama_model * model, const struct common_params & params, const llama_tokens & tokens) {
-    auto ctx = llama_context_ptr{llama_init_from_model(model, common_context_params_to_llama(params))};
+    auto params_ctx = common_context_params_to_llama(params);
+    params_ctx.n_seq_max = 2;
+    auto ctx = llama_context_ptr{llama_init_from_model(model, params_ctx)};
 
     auto sparams = llama_sampler_chain_default_params();
     auto smpl = llama_sampler_ptr{llama_sampler_chain_init(sparams)};
@@ -78,19 +84,98 @@ static llama_tokens test_baseline(struct llama_model * model, const struct commo
 }
 
 
-// Test 2: state load
+// Test 2: sequence removal isolation
+// - decode the same prefix into two sequences
+// - remove sequence 0
+// - verify that sequence 1 remains unchanged
+static bool test_seq_rm_isolated(
+        struct llama_model         * model,
+        const struct common_params & params,
+        const llama_tokens         & tokens) {
+    auto params_ctx = common_context_params_to_llama(params);
+    params_ctx.n_ctx      = 256;
+    params_ctx.n_seq_max  = 2;
+    params_ctx.kv_unified = true;
+
+    auto ctx = llama_context_ptr{llama_init_from_model(model, params_ctx)};
+    if (!ctx) {
+        LOG_ERR("%s: failed to create context\n", __func__);
+        return false;
+    }
+
+    LOG("\n=== Test 2: sequence removal isolation ===\n");
+
+    const size_t n_tokens = tokens.size() < 128 ? tokens.size() : 128;
+    for (llama_seq_id seq_id = 0; seq_id < 2; ++seq_id) {
+        llama_batch_ptr batch(n_tokens, 0, 1);
+        for (size_t i = 0; i < n_tokens; ++i) {
+            common_batch_add(batch.get(), tokens[i], i, { seq_id }, false);
+        }
+
+        if (llama_decode(ctx.get(), batch.get())) {
+            LOG_ERR("%s: failed to decode prompt for sequence %d\n", __func__, seq_id);
+            return false;
+        }
+    }
+
+    const auto get_seq_state = [&](llama_seq_id seq_id, std::vector<uint8_t> & state) {
+        const size_t state_size = llama_state_seq_get_size(ctx.get(), seq_id);
+        if (state_size == 0) {
+            LOG_ERR("%s: sequence state is empty\n", __func__);
+            return false;
+        }
+
+        state.resize(state_size);
+        const size_t ncopy = llama_state_seq_get_data(ctx.get(), state.data(), state.size(), seq_id);
+        if (ncopy != state.size()) {
+            LOG_ERR("%s: sequence state length %zu does not match expected length %zu\n",
+                    __func__, ncopy, state.size());
+            return false;
+        }
+
+        return true;
+    };
+
+    std::vector<uint8_t> state_before;
+    if (!get_seq_state(1, state_before)) {
+        return false;
+    }
+
+    if (!llama_memory_seq_rm(llama_get_memory(ctx.get()), 0, -1, -1)) {
+        LOG_ERR("%s: failed to remove sequence 0\n", __func__);
+        return false;
+    }
+
+    std::vector<uint8_t> state_after;
+    if (!get_seq_state(1, state_after)) {
+        return false;
+    }
+
+    if (state_before != state_after) {
+        LOG_ERR("%s: removing sequence 0 changed sequence 1\n", __func__);
+        return false;
+    }
+
+    LOG("PASS\n");
+    return true;
+}
+
+
+// Test 3: state load
 // - create a new context
 // - load state from file
 // - replay the last prompt token
 // - generate n_predict tokens and compare against expected result
 static bool test_state_load(struct llama_model * model, const struct common_params & params, const llama_tokens & tokens, const llama_tokens & expected_result) {
-    auto ctx = llama_context_ptr{llama_init_from_model(model, common_context_params_to_llama(params))};
+    auto params_ctx = common_context_params_to_llama(params);
+    params_ctx.n_seq_max = 2;
+    auto ctx = llama_context_ptr{llama_init_from_model(model, params_ctx)};
 
     auto sparams = llama_sampler_chain_default_params();
     auto smpl = llama_sampler_ptr{llama_sampler_chain_init(sparams)};
     llama_sampler_chain_add(smpl.get(), llama_sampler_init_dist(params.sampling.seed));
 
-    LOG("\n=== Test 2: state load ===\n");
+    LOG("\n=== Test 3: state load ===\n");
 
     // Load state from file
     llama_tokens unused_sts(tokens.size());
@@ -126,7 +211,7 @@ static bool test_state_load(struct llama_model * model, const struct common_para
 }
 
 
-// Test 3: seq copy (host)
+// Test 4: seq copy (host)
 // - create a multi-seq context
 // - load state from file
 // - replay the last prompt token
@@ -141,7 +226,7 @@ static bool test_seq_cp_host(struct llama_model * model, const struct common_par
     auto smpl = llama_sampler_ptr{llama_sampler_chain_init(sparams)};
     llama_sampler_chain_add(smpl.get(), llama_sampler_init_dist(params.sampling.seed));
 
-    LOG("\n=== Test 3: seq copy (host) ===\n");
+    LOG("\n=== Test 4: seq copy (host) ===\n");
 
     // Load state from file
     llama_tokens unused_sts(tokens.size());
@@ -198,7 +283,7 @@ static bool test_seq_cp_host(struct llama_model * model, const struct common_par
 }
 
 
-// Test 4: seq copy (device)
+// Test 5: seq copy (device)
 // - create a multi-seq context
 // - load state from file
 // - replay the last prompt token
@@ -213,7 +298,7 @@ static bool test_seq_cp_device(struct llama_model * model, const struct common_p
     auto smpl = llama_sampler_ptr{llama_sampler_chain_init(sparams)};
     llama_sampler_chain_add(smpl.get(), llama_sampler_init_dist(params.sampling.seed));
 
-    LOG("\n=== Test 4: seq copy (device) ===\n");
+    LOG("\n=== Test 5: seq copy (device) ===\n");
 
     // Load state from file
     llama_tokens unused_sts(tokens.size());
@@ -270,38 +355,18 @@ static bool test_seq_cp_device(struct llama_model * model, const struct common_p
 }
 
 
-int main(int argc, char ** argv) {
-    std::setlocale(LC_NUMERIC, "C");
-
-    common_params params;
-    params.prompt = "";
-    params.n_batch = 100;
-    params.out_file = "dump_state.bin";
-    params.sampling.seed = 1234;
-
-    common_init();
-
-    if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_COMMON)) {
-        return 1;
-    }
-
-    if (params.n_parallel == 1) {
-        LOG_TRC("%s: n_parallel == 1, enabling unified kv cache\n", __func__);
-        params.kv_unified = true;
-    }
-
-    if (params.n_predict < 0) {
-        params.n_predict = 16;
-    }
-
-    ggml_backend_load_all();
+// Run the full save/load test suite (tests 1-5) for a single model.
+// Returns true if all tests pass, false otherwise.
+static bool run_save_load_tests_for_model(const std::string & model_path, const struct common_params & base_params) {
+    struct common_params params = base_params;
+    params.model.path = model_path;
 
     auto llama_init = common_init_from_params(params, true);
     auto * model = llama_init->model();
 
     if (model == nullptr) {
-        LOG_ERR("%s: failed to init\n", __func__);
-        return 1;
+        LOG_ERR("%s: failed to init model '%s'\n", __func__, model_path.c_str());
+        return false;
     }
 
     GGML_ASSERT(llama_init->context() == nullptr);
@@ -334,25 +399,127 @@ int main(int argc, char ** argv) {
     // Test 1: baseline (saves state to disk)
     auto result_baseline = test_baseline(model, params, tokens);
     if (result_baseline.empty()) {
-        return 1;
+        return false;
     }
 
-    // Test 2: state load
+    // Test 2: sequence removal isolation
+    if (!test_seq_rm_isolated(model, params, tokens)) {
+        return false;
+    }
+
+    // Test 3: state load
     if (!test_state_load(model, params, tokens, result_baseline)) {
-        return 1;
+        return false;
     }
 
-    // Test 3: seq copy (host)
+    // Test 4: seq copy (host)
     if (!test_seq_cp_host(model, params, tokens, result_baseline)) {
-        return 1;
+        return false;
     }
 
-    // Test 4: seq copy (device)
+    // Test 5: seq copy (device)
     if (!test_seq_cp_device(model, params, tokens, result_baseline)) {
-        return 1;
+        return false;
     }
 
     LOG("\nAll tests passed.\n");
 
-    return 0;
+    return true;
+}
+
+
+int main(int argc, char ** argv) {
+    std::setlocale(LC_NUMERIC, "C");
+
+    common_params params;
+    params.prompt = "";
+    params.n_batch = 100;
+    params.out_file = "dump_state.bin";
+    params.sampling.seed = 1234;
+
+    common_init();
+
+    // extract our own --models DIR option before handing the rest to the common arg parser
+    std::string models_dir;
+    std::vector<char *> filtered_argv;
+    filtered_argv.push_back(argv[0]);
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--models") == 0) {
+            if (i + 1 >= argc) {
+                LOG_ERR("%s: --models requires a directory argument\n", __func__);
+                return 1;
+            }
+            models_dir = argv[i + 1];
+            i++;
+        } else {
+            filtered_argv.push_back(argv[i]);
+        }
+    }
+    filtered_argv.push_back(nullptr);
+    const int fargc = (int)filtered_argv.size() - 1;
+
+    // in --models mode there is no single model; set a placeholder so the common parser's
+    // "--model is required" check passes (each model is set individually inside the loop)
+    if (!models_dir.empty()) {
+        params.model.path = models_dir;
+    }
+
+    if (!common_params_parse(fargc, filtered_argv.data(), params, LLAMA_EXAMPLE_COMMON)) {
+        return 1;
+    }
+
+    if (params.n_parallel == 1) {
+        LOG_TRC("%s: n_parallel == 1, enabling unified kv cache\n", __func__);
+        params.kv_unified = true;
+    }
+
+    if (params.n_predict < 0) {
+        params.n_predict = 16;
+    }
+
+    ggml_backend_load_all();
+
+    if (!models_dir.empty()) {
+        // run the suite over every dummy model in the directory
+        if (!std::filesystem::exists(models_dir) || !std::filesystem::is_directory(models_dir)) {
+            LOG_ERR("%s: models directory '%s' does not exist\n", __func__, models_dir.c_str());
+            return 1;
+        }
+
+        std::vector<std::string> models;
+        for (const auto & entry : std::filesystem::directory_iterator(models_dir)) {
+            if (entry.is_regular_file() && entry.path().extension() == ".gguf") {
+                models.push_back(entry.path().string());
+            }
+        }
+        std::sort(models.begin(), models.end());
+
+        if (models.empty()) {
+            LOG_ERR("%s: no .gguf models found in '%s'\n", __func__, models_dir.c_str());
+            return 1;
+        }
+
+        LOG_INF("%s: running save/load tests over %zu models in '%s'\n", __func__, models.size(), models_dir.c_str());
+
+        size_t n_pass = 0;
+        size_t n_fail = 0;
+        for (const auto & model_path : models) {
+            LOG("\n================================================================\n");
+            LOG_INF("%s: model %s\n", __func__, model_path.c_str());
+
+            if (run_save_load_tests_for_model(model_path, params)) {
+                n_pass++;
+            } else {
+                n_fail++;
+            }
+        }
+
+        LOG("\n================================================================\n");
+        LOG_INF("%s: summary: %zu passed, %zu failed (of %zu)\n", __func__, n_pass, n_fail, models.size());
+
+        return n_fail == 0 ? 0 : 1;
+    }
+
+    // single-model mode
+    return run_save_load_tests_for_model(params.model.path, params) ? 0 : 1;
 }

@@ -158,7 +158,7 @@ const uint32_t Csh_stride = BS_NPQ;
 #ifdef COOPMAT
 const uint32_t Csh_len    = BS_K * Csh_stride;
 #else
-const uint32_t Csh_len    = csh_store != 0 ? BS_K * Csh_stride : 1;
+const uint32_t Csh_len    = csh_store != 0 ? BS_K * Csh_stride : 8; // 8 to workaround compiler bug
 #endif
 shared SHMEM_TYPE Csh[Csh_len];  // K x NPQ
 #endif

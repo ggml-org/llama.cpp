@@ -1,7 +1,6 @@
+import { getAuthHeaders, getJsonHeaders } from './api-headers';
 import { base } from '$app/paths';
-import { getJsonHeaders, getAuthHeaders } from './api-headers';
-import { UrlProtocol } from '$lib/enums';
-import { ERROR_MESSAGES, HTTP_CODE_TO_STRING } from '$lib/constants/error';
+import { API_ABSOLUTE_URL_PROTOCOLS, ERROR_MESSAGES, HTTP_CODE_TO_STRING } from '$lib/constants';
 
 /**
  * API Fetch Utilities
@@ -11,6 +10,21 @@ import { ERROR_MESSAGES, HTTP_CODE_TO_STRING } from '$lib/constants/error';
  * - Error handling with proper error messages
  * - Base path resolution
  */
+
+/**
+ * Error thrown when an API request fails, carrying the HTTP status code
+ * so callers can distinguish e.g. a 503 "still loading" response from a
+ * genuine failure.
+ */
+export class ApiError extends Error {
+	status: number;
+
+	constructor(message: string, status: number) {
+		super(message);
+		this.name = 'ApiError';
+		this.status = status;
+	}
+}
 
 export interface ApiFetchOptions extends Omit<RequestInit, 'headers'> {
 	/**
@@ -46,16 +60,13 @@ export interface ApiFetchOptions extends Omit<RequestInit, 'headers'> {
  */
 export async function apiFetch<T>(path: string, options: ApiFetchOptions = {}): Promise<T> {
 	const { authOnly = false, headers: customHeaders, ...fetchOptions } = options;
-
 	const baseHeaders = authOnly ? getAuthHeaders() : getJsonHeaders();
 	const headers = { ...baseHeaders, ...customHeaders };
-
-	const url =
-		path.startsWith(UrlProtocol.HTTP) || path.startsWith(UrlProtocol.HTTPS)
-			? path
-			: `${base}${path}`;
+	// absolute URLs with an allowed protocol pass through untouched; relative paths get the base prefix
+	const url = API_ABSOLUTE_URL_PROTOCOLS.some((p) => path.startsWith(p)) ? path : `${base}${path}`;
 
 	let response;
+
 	try {
 		response = await fetch(url, {
 			...fetchOptions,
@@ -67,7 +78,8 @@ export async function apiFetch<T>(path: string, options: ApiFetchOptions = {}): 
 
 	if (!response.ok) {
 		const errorMessage = await parseErrorMessage(response);
-		throw new Error(errorMessage);
+
+		throw new ApiError(errorMessage, response.status);
 	}
 
 	return response.json() as Promise<T>;
@@ -102,27 +114,7 @@ export async function apiFetchWithParams<T>(
 		}
 	}
 
-	const { authOnly = false, headers: customHeaders, ...fetchOptions } = options;
-
-	const baseHeaders = authOnly ? getAuthHeaders() : getJsonHeaders();
-	const headers = { ...baseHeaders, ...customHeaders };
-
-	let response;
-	try {
-		response = await fetch(url.toString(), {
-			...fetchOptions,
-			headers
-		});
-	} catch (e) {
-		throw new Error(beautifyNetworkError(e));
-	}
-
-	if (!response.ok) {
-		const errorMessage = await parseErrorMessage(response);
-		throw new Error(errorMessage);
-	}
-
-	return response.json() as Promise<T>;
+	return apiFetch<T>(url.toString(), options);
 }
 
 /**
@@ -139,8 +131,8 @@ export async function apiPost<T, B = unknown>(
 	options: ApiFetchOptions = {}
 ): Promise<T> {
 	return apiFetch<T>(path, {
-		method: 'POST',
 		body: JSON.stringify(body),
+		method: 'POST',
 		...options
 	});
 }
@@ -152,12 +144,15 @@ export async function apiPost<T, B = unknown>(
 async function parseErrorMessage(response: Response): Promise<string> {
 	try {
 		const errorData = await response.json();
+
 		if (errorData?.error?.message) {
 			return errorData.error.message;
 		}
+
 		if (errorData?.error && typeof errorData.error === 'string') {
 			return errorData.error;
 		}
+
 		if (errorData?.message) {
 			return errorData.message;
 		}
@@ -166,6 +161,7 @@ async function parseErrorMessage(response: Response): Promise<string> {
 	}
 
 	const httpErrorStr = HTTP_CODE_TO_STRING[response.status];
+
 	if (httpErrorStr) {
 		return httpErrorStr;
 	}
@@ -180,8 +176,10 @@ async function parseErrorMessage(response: Response): Promise<string> {
  */
 function beautifyNetworkError(throwable: unknown): string {
 	let message;
+
 	if (throwable instanceof Error) {
 		message = throwable.message;
+
 		if (throwable.name === 'TypeError' && message.includes('fetch')) {
 			return ERROR_MESSAGES.NETWORK.UNREACHABLE;
 		}

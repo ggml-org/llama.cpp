@@ -13,6 +13,7 @@ from .base import ModelBase, TextModel, gguf, logger
 
 
 @ModelBase.register("GPTNeoXForCausalLM")
+@ModelBase.example("EleutherAI/pythia-70m")
 class GPTNeoXModel(TextModel):
     model_arch = gguf.MODEL_ARCH.GPTNEOX
 

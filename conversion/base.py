@@ -58,6 +58,11 @@ logger = logging.getLogger("hf-to-gguf")
 AnyModel = TypeVar("AnyModel", bound="type[ModelBase]")
 
 
+# for checkpoints that ship no config.json, we will try to provide a synthetic one
+HparamsMatcher = Callable[[Path], bool]
+HparamsLoader = Callable[[Path], dict[str, Any]]
+
+
 class SentencePieceTokenTypes(IntEnum):
     NORMAL = 1
     UNKNOWN = 2
@@ -77,6 +82,7 @@ class ModelBase:
         ModelType.TEXT: {},
         ModelType.MMPROJ: {},
     }
+    _hparams_loaders: list[tuple[HparamsMatcher, HparamsLoader]] = []
 
     dir_model: Path
     ftype: gguf.LlamaFileType
@@ -109,7 +115,9 @@ class ModelBase:
     sentence_transformers_dense_modules: bool = False
 
     # MTP (multi-token prediction) export modes; set by main() before instantiation.
-    # Architectures opt in by overriding the handling (see _Qwen35MtpMixin).
+    # Architectures that implement the filtering/export behavior opt in by
+    # setting supports_mtp_export = True on their model class or a mixin.
+    supports_mtp_export: bool = False
     mtp_only: bool = False
     no_mtp: bool = False
 
@@ -651,6 +659,43 @@ class ModelBase:
         return ()
 
     @staticmethod
+    def repack_mxfp4_blocks(packed: Tensor, scale: Tensor) -> np.ndarray:
+        """
+        Repack 4-bit MX weights into ggml `block_mxfp4`. Lossless - only moves bits.
+
+        Source (compressed-tensors "mxfp4-pack-quantized", also used by DeepSeek-V4):
+          packed  uint8 [rows, cols/2]  element 2i in the low nibble, 2i+1 in the high one
+          scale   uint8 [rows, cols/32] one E8M0 biased exponent per 32-element group
+
+        Destination, per group: one scale byte then 16 code bytes, where byte j holds
+        element j in the low nibble and element j+16 in the high one.
+
+        The 4-bit codes need no remapping: both sides index into ggml's kvalues_mxfp4
+        order. ggml doubles the kvalues and halves the scale, so the value is the same.
+        """
+        p = packed.contiguous().view(torch.uint8)
+        s = scale.contiguous().view(torch.uint8)
+
+        rows, packed_cols = p.shape
+        cols = packed_cols * 2
+        if cols % 32 != 0:
+            raise ValueError(f"MXFP4 source row has {cols} values, expected a multiple of 32")
+
+        n_blocks = cols // 32
+        if tuple(s.shape) != (rows, n_blocks):
+            raise ValueError(f"MXFP4 scale shape {tuple(s.shape)} does not match {(rows, n_blocks)}")
+
+        src = p.reshape(rows, n_blocks, 16)
+        lo = src & 0x0F           # elements 0, 2, 4, ...
+        hi = (src >> 4) & 0x0F    # elements 1, 3, 5, ...
+
+        vals = torch.stack((lo, hi), dim=-1).reshape(rows, n_blocks, 32)
+        qs = vals[:, :, :16] | (vals[:, :, 16:] << 4)
+
+        raw = torch.cat((s.unsqueeze(-1), qs.to(torch.uint8)), dim=-1)
+        return raw.reshape(rows, n_blocks * 17).cpu().numpy()
+
+    @staticmethod
     def _nvfp4_pack(weight: Tensor, scale: Tensor) -> tuple[np.ndarray, list[int]]:
         """Repack NVFP4 ModelOpt tensors into ggml super-block layout.
         Preserves original E4M3 scale bits as UE4M3 (strip sign bit).
@@ -821,7 +866,7 @@ class ModelBase:
             elif any(str(v.get("quant_algo")).endswith("NVFP4") for v in quant_layers.values() if isinstance(v, dict)):
                 quant_algo = "NVFP4"
 
-        self._is_nvfp4 = quant_algo == "NVFP4"
+        self._is_nvfp4 = quant_algo in ("NVFP4", "W4A16_NVFP4")
         self._is_mxfp4 = quant_method == "mxfp4"
 
         # NVFP4 weights are repacked and written directly to gguf_writer.
@@ -961,12 +1006,16 @@ class ModelBase:
                     else:
                         raise ValueError(f"Unknown file type: {self.ftype.name}")
 
+                # a chunked tensor quantizes as one chunk at a time, while it is written
+                quantize = data.quantize if isinstance(data, gguf.LazyChunkedTensor) else (
+                    lambda qtype, d=data: gguf.quants.quantize(d, qtype))
+
                 try:
-                    data = gguf.quants.quantize(data, data_qtype)
+                    data = quantize(data_qtype)
                 except gguf.QuantError as e:
                     logger.warning("%s, %s", e, "falling back to F16")
                     data_qtype = gguf.GGMLQuantizationType.F16
-                    data = gguf.quants.quantize(data, data_qtype)
+                    data = quantize(data_qtype)
 
                 shape = gguf.quant_shape_from_byte_shape(data.shape, data_qtype) if data.dtype == np.uint8 else data.shape
 
@@ -1039,6 +1088,24 @@ class ModelBase:
         return part_names
 
     @staticmethod
+    def load_hparams_guess(dir_model: Path) -> dict[str, Any] | None:
+        # some models ship no config.json, will try to guess them
+        from conversion import load_all_models
+        load_all_models()
+
+        for matcher, loader in ModelBase._hparams_loaders:
+            if matcher(dir_model):
+                return loader(dir_model)
+        return None
+
+    @classmethod
+    def register_hparams_loader(cls, matcher: HparamsMatcher) -> Callable[[HparamsLoader], HparamsLoader]:
+        def inner(loader: HparamsLoader) -> HparamsLoader:
+            cls._hparams_loaders.append((matcher, loader))
+            return loader
+        return inner
+
+    @staticmethod
     def load_hparams(dir_model: Path, is_mistral_format: bool):
         if is_mistral_format:
             with open(dir_model / "params.json", "r", encoding="utf-8") as f:
@@ -1051,6 +1118,10 @@ class ModelBase:
             config = AutoConfig.from_pretrained(dir_model, trust_remote_code=False).to_dict()
         except Exception as e:
             logger.warning(f"Failed to load model config from {dir_model}: {e}")
+            if not (dir_model / "config.json").is_file():
+                config = ModelBase.load_hparams_guess(dir_model)
+                if config is not None:
+                    return config
             logger.warning("Trying to load config.json instead")
             with open(dir_model / "config.json", "r", encoding="utf-8") as f:
                 config = json.load(f)
@@ -1079,6 +1150,14 @@ class ModelBase:
             model_type = ModelType.MMPROJ if modelcls.model_arch == gguf.MODEL_ARCH.MMPROJ else ModelType.TEXT
             for name in names:
                 cls._model_classes[model_type][name] = modelcls
+            return modelcls
+        return func
+
+    @classmethod
+    def example(cls, *hf_repos: str) -> Callable[[AnyModel], AnyModel]:
+        del hf_repos  # unused
+
+        def func(modelcls: AnyModel) -> AnyModel:
             return modelcls
         return func
 
@@ -1154,7 +1233,7 @@ class TextModel(ModelBase):
                 or "projector." in name or "pre_mm_projector_norm" in name \
                 or "image_newline" in name or "view_seperator" in name \
                 or "patch_embed" in name or "patch_embedding" in name \
-                or "patch_merger." in name or "model.connector." in name:
+                or "patch_merger." in name or "patch_merge_mlp." in name or "model.connector." in name:
             return None
 
         return super().filter_tensors(item)
@@ -1201,7 +1280,7 @@ class TextModel(ModelBase):
             self.gguf_writer.add_embedding_length(n_embd)
             logger.info(f"gguf: embedding length = {n_embd}")
 
-        if (n_ff := self.find_hparam(["prefix_dense_intermediate_size", "intermediate_size", "n_inner", "hidden_dim"], optional=True)) is not None:
+        if (n_ff := self.find_hparam(["prefix_dense_intermediate_size", "dense_intermediate_size", "intermediate_size", "n_inner", "hidden_dim"], optional=True)) is not None:
             self.gguf_writer.add_feed_forward_length(n_ff)
             logger.info(f"gguf: feed forward length = {n_ff}")
 
@@ -1273,7 +1352,7 @@ class TextModel(ModelBase):
         if (f_norm_eps := self.find_hparam(["layer_norm_eps", "layer_norm_epsilon", "norm_epsilon"], optional=True)) is not None:
             self.gguf_writer.add_layer_norm_eps(f_norm_eps)
             logger.info(f"gguf: layer norm epsilon = {f_norm_eps}")
-        if (n_experts := self.find_hparam(["num_local_experts", "num_experts"], optional=True)) is not None:
+        if (n_experts := self.find_hparam(["num_local_experts", "num_experts", "n_routed_experts"], optional=True)) is not None:
             self.gguf_writer.add_expert_count(n_experts)
             logger.info(f"gguf: expert count = {n_experts}")
         if (n_experts_used := self.find_hparam(["num_experts_per_tok", "num_experts_per_token", "top_k_experts"], optional=True)) is not None:
@@ -1291,6 +1370,8 @@ class TextModel(ModelBase):
                 self.gguf_writer.add_expert_gating_func(gguf.ExpertGatingFuncType.SIGMOID)
             elif score_func == "softmax":
                 self.gguf_writer.add_expert_gating_func(gguf.ExpertGatingFuncType.SOFTMAX)
+            elif score_func == "sqrtsoftplus":
+                self.gguf_writer.add_expert_gating_func(gguf.ExpertGatingFuncType.SQRTSOFTPLUS)
             else:
                 raise ValueError(f"Unsupported expert score gating function value: {score_func}")
             logger.info(f"gguf: expert score gating function = {score_func}")
@@ -1678,6 +1759,9 @@ class TextModel(ModelBase):
         if chkhsh == "9dcf830ee9990cdbf78cc523a5f7bd9ad8f3f9890c2d3581d2785ad10f07049d":
             # ref: https://huggingface.co/JetBrains/Mellum2-12B-A2.5B-Base
             res = "mellum2"
+        if chkhsh == "972da7b59cec44d1f0a490a86c96df53859e486e481563e5dddac155013d87ac":
+            # ref: https://huggingface.co/poolside/Laguna-XS.2
+            res = "laguna"
 
         if res is None:
             logger.warning("\n")
@@ -2600,6 +2684,17 @@ class LazyTorchTensor(gguf.LazyBase):
         return cls._wrap_fn(func)(*args, **kwargs)
 
 
+if hasattr(torch, "float8_e8m0fnu"):
+    _torch_float8_e8m0 = torch.float8_e8m0fnu
+    LazyTorchTensor._dtype_map[_torch_float8_e8m0] = np.uint8
+    LazyTorchTensor._dtype_byteswap_map[_torch_float8_e8m0] = np.uint8
+    LazyTorchTensor._dtype_str_map["F8_E8M0"] = _torch_float8_e8m0
+else:
+    # Older torch builds do not expose F8_E8M0. Keep the raw bytes so callers
+    # that know the format can decode them explicitly.
+    LazyTorchTensor._dtype_str_map["F8_E8M0"] = torch.uint8
+
+
 def get_model_architecture(hparams: dict[str, Any], model_type: ModelType) -> str:
     # TODO @ngxson : this won't work correctly if the model has both audio & vision encoders
     # maybe we should fallback to text model's arch in that case, since not many models have both
@@ -2615,7 +2710,10 @@ def get_model_architecture(hparams: dict[str, Any], model_type: ModelType) -> st
     # Step3-VL keeps text config under text_config but uses a custom top-level architecture.
     # For text conversion we route to a dedicated text-only class.
     # TODO: refactor this later to avoid adding exception here
-    if model_type == ModelType.TEXT and arch in ("StepVLForConditionalGeneration", "Sarashina2VisionForCausalLM", "Exaone4_5_ForConditionalGeneration", "Step3p7ForConditionalGeneration"):
+    # Kimi-K3's text_config reports "KimiLinearForCausalLM", which is the older
+    # Kimi-Linear-48B architecture and cannot load K3 (no attention residuals,
+    # latent MoE, situ, ...). Route on the top-level architecture instead.
+    if model_type == ModelType.TEXT and arch in ("StepVLForConditionalGeneration", "Sarashina2VisionForCausalLM", "Exaone4_5_ForConditionalGeneration", "Step3p7ForConditionalGeneration", "KimiK3ForConditionalGeneration"):
         return arch
 
     # if "architectures" is found in the sub-config, use that instead

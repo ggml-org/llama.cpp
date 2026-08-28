@@ -1,21 +1,22 @@
 <script lang="ts">
 	import { ChevronDown, ChevronRight } from '@lucide/svelte';
+	import { McpServerIdentity, TruncatedText } from '$lib/components/app';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import * as Collapsible from '$lib/components/ui/collapsible';
-	import { TruncatedText, McpServerIdentity } from '$lib/components/app';
-	import { toolsStore } from '$lib/stores/tools.svelte';
-	import { permissionsStore } from '$lib/stores/permissions.svelte';
-	import { mcpStore } from '$lib/stores/mcp.svelte';
+	import { ICON_CLASS_DEFAULT } from '$lib/constants';
+	import { ToolSource } from '$lib/enums/tools.enums';
+	import { mcpStore, permissionsStore, toolsStore } from '$lib/stores';
+	import { getToolUi } from '$lib/utils';
 	import { SvelteSet } from 'svelte/reactivity';
 
 	let expandedGroups = new SvelteSet<string>();
 	let groups = $derived(toolsStore.toolGroups);
 
-	function toggleExpanded(label: string) {
-		if (expandedGroups.has(label)) {
-			expandedGroups.delete(label);
+	function toggleExpanded(key: string) {
+		if (expandedGroups.has(key)) {
+			expandedGroups.delete(key);
 		} else {
-			expandedGroups.add(label);
+			expandedGroups.add(key);
 		}
 	}
 </script>
@@ -24,9 +25,13 @@
 	<div class="py-8 text-center text-sm text-muted-foreground">No tools available</div>
 {:else}
 	<div class="space-y-2">
-		{#each groups as group (group.label)}
-			{@const isExpanded = expandedGroups.has(group.label)}
-			<Collapsible.Root open={isExpanded} onOpenChange={() => toggleExpanded(group.label)}>
+		<p class="text-sm text-muted-foreground">
+			Applies to new conversations. Tool picks inside a chat only affect that chat.
+		</p>
+
+		{#each groups as group (group.key)}
+			{@const isExpanded = expandedGroups.has(group.key)}
+			<Collapsible.Root onOpenChange={() => toggleExpanded(group.key)} open={isExpanded}>
 				<Collapsible.Trigger
 					class="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-muted/50"
 				>
@@ -36,16 +41,31 @@
 						<ChevronRight class="h-3.5 w-3.5 shrink-0" />
 					{/if}
 
+					{@const isCategoryEnabled =
+						group.source !== ToolSource.MCP && toolsStore.isCategoryEnabled(group.source)}
+
+					{#if group.source !== ToolSource.MCP}
+						<Checkbox
+							checked={isCategoryEnabled}
+							onCheckedChange={() => toolsStore.toggleCategory(group.source)}
+							onclick={(e) => e.stopPropagation()}
+						/>
+					{/if}
+
 					{@const faviconUrl = group.serverId ? mcpStore.getServerFavicon(group.serverId) : null}
 
 					<span class="inline-flex min-w-0 items-center gap-1.5 font-medium">
-						<McpServerIdentity
-							iconClass="h-4 w-4"
-							iconRounded="rounded-sm"
-							showVersion={false}
-							displayName={group.label}
-							{faviconUrl}
-						/>
+						{#if group.source === 'mcp'}
+							<McpServerIdentity
+								displayName={group.label}
+								{faviconUrl}
+								iconClass={ICON_CLASS_DEFAULT}
+								iconRounded="rounded-sm"
+								showVersion={false}
+							/>
+						{:else}
+							<TruncatedText class="font-medium" text={group.label} />
+						{/if}
 					</span>
 
 					<span class="ml-auto shrink-0 text-xs text-muted-foreground">
@@ -58,30 +78,45 @@
 						<!-- Header row -->
 						<div class="flex items-center gap-2 px-2 py-1 text-xs text-muted-foreground">
 							<span class="min-w-0 flex-1">Tool</span>
+
 							<span class="w-16 shrink-0 text-center">Enabled</span>
+
 							<span class="w-20 shrink-0 text-center">Always allow</span>
 						</div>
 
 						{#each group.tools as entry (entry.key)}
 							{@const toolName = entry.definition.function.name}
+							{@const toolUi =
+								entry.source === ToolSource.SERVER || entry.source === ToolSource.BROWSER
+									? getToolUi(toolName)
+									: null}
+							{@const displayLabel = toolUi?.label ?? toolName}
+							{@const IconComponent = toolUi?.icon ?? null}
 							{@const isEnabled = toolsStore.isToolEnabled(entry.key)}
 							{@const permissionKey = entry.key}
 							{@const isAlwaysAllowed = permissionsStore.hasTool(permissionKey)}
 
 							<div class="flex items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-muted/50">
-								<TruncatedText text={toolName} class="flex-1" showTooltip={true} />
+								<span class="flex min-w-0 flex-1 items-center gap-1.5">
+									{#if IconComponent}
+										<IconComponent class={ICON_CLASS_DEFAULT} />
+									{/if}
+
+									<TruncatedText class="min-w-0" showTooltip={true} text={displayLabel} />
+								</span>
 
 								<div class="flex w-16 shrink-0 justify-center">
 									<Checkbox
 										checked={isEnabled}
+										class={ICON_CLASS_DEFAULT}
 										onCheckedChange={() => toolsStore.toggleTool(entry.key)}
-										class="h-4 w-4"
 									/>
 								</div>
 
 								<div class="flex w-20 shrink-0 justify-center">
 									<Checkbox
 										checked={isAlwaysAllowed}
+										class={ICON_CLASS_DEFAULT}
 										onCheckedChange={() => {
 											if (isAlwaysAllowed) {
 												permissionsStore.revokeTool(permissionKey);
@@ -89,7 +124,6 @@
 												permissionsStore.allowTool(permissionKey);
 											}
 										}}
-										class="h-4 w-4"
 									/>
 								</div>
 							</div>

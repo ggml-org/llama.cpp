@@ -23,7 +23,8 @@ llama_kv_cache_dsa::llama_kv_cache_dsa(
                  uint32_t   n_pad,
                  uint32_t   n_swa,
            llama_swa_type   swa_type,
-    const layer_filter_cb & filter,
+    const layer_filter_cb & filter_mla,
+    const layer_filter_cb & filter_lid,
     const  layer_reuse_cb & reuse) :
     hparams_lid(model.hparams), n_stream(unified ? 1 : n_seq_max) {
 
@@ -32,7 +33,7 @@ llama_kv_cache_dsa::llama_kv_cache_dsa(
     kv_mla = std::make_unique<llama_kv_cache>(
             model, model.hparams, type_k, type_v,
             v_trans, offload, unified, kv_size, n_seq_max, n_pad,
-            n_swa, swa_type, nullptr, filter, reuse, nullptr);
+            n_swa, swa_type, nullptr, filter_mla, reuse, nullptr);
 
     // we use llama_kv_cache for caching indexer keys
     // by hand-tweaking some hparams we fool it to create
@@ -49,7 +50,7 @@ llama_kv_cache_dsa::llama_kv_cache_dsa(
     kv_lid = std::make_unique<llama_kv_cache>(
             model, hparams_lid, type_k, type_v,
             v_trans, offload, unified, kv_size, n_seq_max, n_pad,
-            n_swa, swa_type, nullptr, filter, reuse, nullptr);
+            n_swa, swa_type, nullptr, filter_lid, reuse, nullptr);
 }
 
 void llama_kv_cache_dsa::clear(bool data) {
@@ -113,7 +114,7 @@ llama_memory_context_ptr llama_kv_cache_dsa::init_batch(
 
         std::vector<llama_ubatch> ubatches;
         while (true) {
-            auto ubatch = n_stream == 1 ? balloc.split_simple(n_ubatch) : balloc.split_equal(n_ubatch, true);
+            auto ubatch = n_stream == 1 ? balloc.split_simple(n_ubatch) : balloc.split_equal(n_ubatch, true, 0);
 
             if (ubatch.n_tokens == 0) {
                 break;
