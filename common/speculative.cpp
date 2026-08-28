@@ -15,7 +15,6 @@
 #include <algorithm>
 #include <cassert>
 #include <cmath>
-#include <cstdlib>
 #include <cstring>
 #include <iomanip>
 #include <map>
@@ -1382,7 +1381,6 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
     std::vector<int>                i_last;
     std::vector<std::vector<float>> chain_h;
 
-
     common_speculative_impl_draft_mtp(const common_params_speculative & params, uint32_t n_seq)
         : common_speculative_impl(COMMON_SPECULATIVE_TYPE_DRAFT_MTP, n_seq, params.draft.n_max)
         , params(params.draft)
@@ -1463,7 +1461,6 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         verify_h_rows.assign(n_seq, 0);
 
     }
-
     ~common_speculative_impl_draft_mtp() override {
         auto * ctx_dft = this->params.ctx_dft;
         for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) backend_chains.size(); ++seq_id) {
@@ -1533,7 +1530,6 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
         auto * ctx_tgt = this->params.ctx_tgt;
         auto * ctx_dft = this->params.ctx_dft;
-
 
         const size_t row_bytes = (size_t) n_embd * sizeof(float);
 
@@ -1624,7 +1620,6 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
     void draft(common_speculative_draft_params_vec & dparams) override {
         auto & ctx_dft = params.ctx_dft;
 
-
         common_batch_clear(batch);
 
         // keep track of which sequences are still drafting
@@ -1657,7 +1652,6 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         int i = 0;
 
         while (n_drafting > 0) {
-
             // each step decodes under a different head, i.e. a different decoder layer, and
             // KV is per layer. process() filled this layer's KV only for positions < n_past
             // (prompt + accepted prefix) — nothing in the draft region yet. so reset the
@@ -1679,7 +1673,6 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                 SPC_ERR("llama_decode[%d] returned %d\n", i, ret);
                 break;
             }
-
 
             // rebuild the batch for the next step: the growing-KV paths re-add only the
             // new token (the KV already holds the prefix), while chained heads re-add the
@@ -1758,7 +1751,6 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
             ++i;
         }
-
 
         if (chain_heads) {
             llama_set_nextn_layer_offset(ctx_dft, 0); // restore default for non-draft decodes
