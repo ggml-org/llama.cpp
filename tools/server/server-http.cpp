@@ -35,6 +35,7 @@ static void log_server_request(const httplib::Request & req, const httplib::Resp
         || req.path == "/v1/models"
         || req.path == "/props"
         || req.path == "/metrics"
+        || req.path == "/memory"
     ) {
         return;
     }
