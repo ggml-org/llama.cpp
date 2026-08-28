@@ -255,7 +255,10 @@ public:
 
     void set_input(const llama_ubatch * ubatch) override {
         mctx->get_idx()->set_input_k_idxs(k_idxs, ubatch);
-        mctx->set_input_kpool(pool_idxs, pool_mask, tail_idxs, cell_pool, ubatch, kpool);
+        mctx->set_input_kpool(pool_cells, pool_idxs, pool_mask, tail_idxs, gather_mask, gather, new_pool_idxs, new_pool_rep, ubatch, kpool);
+        if (reuse_sel != nullptr) {
+            mctx->set_input_mtp_dsa_selection(reuse_sel, gather_mask, gather, ubatch, kpool);
+        }
     }
 
     bool can_reuse(const llm_graph_params & params) override {
@@ -268,23 +271,42 @@ public:
 
         bool res = true;
 
-        res &= k_idxs->ne[0]    == params.ubatch.n_tokens;
-        res &= pool_idxs->ne[1] == mctx->get_n_kpool(kpool);
-        res &= pool_mask->ne[1] == params.ubatch.n_tokens;
-        res &= tail_idxs->ne[1] == params.ubatch.n_tokens;
-        res &= cell_pool->ne[0] == idx->get_n_kv();
+        res &= k_idxs->ne[0]     == params.ubatch.n_tokens;
+        res &= pool_cells->ne[0] == mctx->get_n_kpool(kpool);
+        res &= pool_mask->ne[1]  == params.ubatch.n_tokens;
+        res &= tail_idxs->ne[1]  == params.ubatch.n_tokens;
+        // The scatter mask shape follows n_kv.
+        res &= n_kv              == idx->get_n_kv();
+        // The new pool path is sized exactly
+        res &= n_new             == mctx->get_n_kpool_new(kpool, &params.ubatch);
+        res &= cache_safe        == mctx->get_kpool_cache_safe(kpool);
+        const bool share = params.cparams.ctx_type == LLAMA_CONTEXT_TYPE_MTP && mctx->get_mtp_dsa_index_share();
+        const size_t saved = mctx->get_mtp_dsa_selection_size();
+        const bool reuse = share && saved == (size_t) n_sel*params.ubatch.n_tokens;
+        res &= mtp_share == share;
+        res &= (reuse_sel != nullptr) == reuse;
 
         return res;
     }
 
-    ggml_tensor * k_idxs    = nullptr; // I64     [n_tokens]
-    ggml_tensor * pool_idxs = nullptr; // I32     [kpool, n_pool]
-    ggml_tensor * pool_mask = nullptr; // F32/F16 [n_pool, n_tokens]
-    ggml_tensor * tail_idxs = nullptr; // I32     [kpool - 1, n_tokens]
-    ggml_tensor * cell_pool = nullptr; // I32     [n_kv]
+    ggml_tensor * k_idxs        = nullptr; // I64     [n_tokens]
+    ggml_tensor * pool_cells    = nullptr; // I32     [n_pool]         cell caching each pool's pooled key
+    ggml_tensor * pool_idxs     = nullptr; // I32     [kpool, n_pool]  member cells per pool, n_kv sentinel for the padded pools
+    ggml_tensor * pool_mask     = nullptr; // F32/F16 [n_pool, n_tokens]
+    ggml_tensor * tail_idxs     = nullptr; // I32     [kpool - 1, n_tokens]
+    ggml_tensor * gather_mask   = nullptr; // F32     [n_sel, 1, 1, n_tokens]
+    ggml_tensor * reuse_sel     = nullptr; // I32     [n_sel, n_tokens]
+    ggml_tensor * new_pool_idxs = nullptr; // I32     [kpool, n_new]   members of the pools completed this ubatch
+    ggml_tensor * new_pool_rep  = nullptr; // I64     [n_new]          cell to write each new pooled key into
 
     const llama_memory_hybrid_idx_context * mctx;
     const uint32_t kpool;
+    uint32_t n_new = 0;
+    uint32_t n_sel = 0;
+    bool cache_safe = true;
+    bool gather = false;
+    bool mtp_share = false;
+    uint32_t n_kv  = 0;
 };
 
 llama_model_glm5_next::llm_graph_input_kpool * llama_model_glm5_next::graph::build_inp_kpool(const llama_memory_hybrid_idx_context * mctx_hyb) {
@@ -294,21 +316,70 @@ llama_model_glm5_next::llm_graph_input_kpool * llama_model_glm5_next::graph::bui
     const uint32_t kpool  = hparams.indexer_kpool;
     const uint32_t n_pool = mctx_hyb->get_n_kpool(kpool);
     const uint32_t n_kv   = mctx_idx->get_n_kv();
+    const uint32_t n_new  = mctx_hyb->get_n_kpool_new(kpool, &ubatch);
+    const bool cache_safe = mctx_hyb->get_kpool_cache_safe(kpool);
 
     // the fused lightning indexer wants an f16 mask
     const auto type_mask = cparams.fused_lid ? GGML_TYPE_F16 : GGML_TYPE_F32;
 
     auto inp = std::make_unique<llm_graph_input_kpool>(mctx_hyb, kpool);
 
-    inp->k_idxs    = mctx_idx->build_input_k_idxs(ctx0, ubatch);
-    inp->pool_idxs = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, kpool, n_pool);
-    inp->pool_mask = ggml_new_tensor_2d(ctx0, type_mask, n_pool, n_tokens);
-    inp->tail_idxs = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, kpool - 1, n_tokens);
-    inp->cell_pool = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_kv);
+    inp->k_idxs     = mctx_idx->build_input_k_idxs(ctx0, ubatch);
+    inp->pool_cells = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_pool);
+    inp->pool_idxs  = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, kpool, n_pool);
+    inp->pool_mask  = ggml_new_tensor_2d(ctx0, type_mask, n_pool, n_tokens);
+    inp->tail_idxs  = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, kpool - 1, n_tokens);
+    ggml_set_input(inp->pool_cells);
     ggml_set_input(inp->pool_idxs);
     ggml_set_input(inp->pool_mask);
     ggml_set_input(inp->tail_idxs);
-    ggml_set_input(inp->cell_pool);
+
+    ggml_build_forward_expand(gf, inp->pool_cells);
+    ggml_build_forward_expand(gf, inp->pool_idxs);
+    ggml_build_forward_expand(gf, inp->pool_mask);
+    ggml_build_forward_expand(gf, inp->tail_idxs);
+
+    inp->n_kv = n_kv;
+
+    // Gather selected latents for small decode batches when n_kv exceeds n_sel.
+    {
+        static const int64_t max_ub = [] {
+            const char * s = getenv("LLAMA_GLM5_GATHER_UBATCH");
+            return s != nullptr ? (int64_t) atoll(s) : (int64_t) 16;
+        }();
+
+        const int64_t n_top_pool = std::min<int64_t>(n_pool, hparams.indexer_top_k / kpool);
+        const int64_t n_sel      = kpool*n_top_pool + (hparams.indexer_kpool_select_tail ? kpool - 1 : 0);
+        const bool mtp_share = cparams.ctx_type == LLAMA_CONTEXT_TYPE_MTP && mctx_hyb->get_mtp_dsa_index_share();
+
+        inp->n_sel = (uint32_t) n_sel;
+        inp->gather = (int64_t) n_tokens <= max_ub && (int64_t) n_kv > n_sel;
+        inp->mtp_share = mtp_share;
+
+        if (inp->gather || mtp_share) {
+            inp->gather_mask = ggml_new_tensor_4d(ctx0, GGML_TYPE_F32, n_sel, 1, 1, n_tokens);
+            ggml_set_input(inp->gather_mask);
+            // Keep the mask allocated even when no op reads it, because set_input_kpool always fills it.
+            ggml_build_forward_expand(gf, inp->gather_mask);
+        }
+
+        const size_t saved = mctx_hyb->get_mtp_dsa_selection_size();
+        if (mtp_share && saved == (size_t) n_sel*n_tokens) {
+            inp->reuse_sel = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, n_sel, n_tokens);
+            ggml_set_input(inp->reuse_sel);
+        }
+    }
+
+    inp->n_new = n_new;
+    inp->cache_safe = cache_safe;
+    if (n_new > 0) {
+        inp->new_pool_idxs = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, kpool, n_new);
+        ggml_set_input(inp->new_pool_idxs);
+        if (cache_safe) {
+            inp->new_pool_rep = ggml_new_tensor_1d(ctx0, GGML_TYPE_I64, n_new);
+            ggml_set_input(inp->new_pool_rep);
+        }
+    }
 
     return (llm_graph_input_kpool *) res->add_input(std::move(inp));
 }
@@ -498,9 +569,11 @@ ggml_tensor * llama_model_glm5_next::graph::build_kda_layer(
     ggml_tensor * state = build_rs(inp_rs, ssm_states_all, hparams.n_embd_s(), n_seqs);
     state = ggml_reshape_4d(ctx0, state, head_dim, head_dim, n_head_kda, n_seqs);
 
-    const float eps = hparams.f_norm_rms_eps;
-    Qcur = ggml_l2_norm(ctx0, Qcur, eps);
-    Kcur = ggml_l2_norm(ctx0, Kcur, eps);
+    // Match FLA l2 norm
+    constexpr float l2_eps = 1e-6f;
+    const float l2_scale = 1.0f / std::sqrt((float) head_dim);
+    Qcur = ggml_scale(ctx0, ggml_rms_norm(ctx0, Qcur, l2_eps / (float) head_dim), l2_scale);
+    Kcur = ggml_scale(ctx0, ggml_rms_norm(ctx0, Kcur, l2_eps / (float) head_dim), l2_scale);
 
     auto attn_out = build_delta_net(Qcur, Kcur, Vcur, g1, beta, state, il);
 
@@ -534,7 +607,7 @@ ggml_tensor * llama_model_glm5_next::graph::build_kda_layer(
 // Scores pools of kpool consecutive tokens, expands the selected pools and the incomplete tail into an additive mask
 
 ggml_tensor * llama_model_glm5_next::graph::build_kpool_select(
-        ggml_tensor * cur, ggml_tensor * qr, const llama_layer & layer,
+        ggml_tensor * cur, ggml_tensor * qr, ggml_tensor * kq_mask, const llama_layer & layer,
         const llama_memory_hybrid_idx_context * mctx_hyb, llm_graph_input_kpool * inp_kpool, int il) {
 
     const auto * mctx_lid = mctx_hyb->get_idx();
@@ -542,12 +615,15 @@ ggml_tensor * llama_model_glm5_next::graph::build_kpool_select(
     const int64_t n_indexer_head = hparams.indexer_n_head;
     const int64_t n_embd_indexer = hparams.indexer_head_size;
     const int64_t kpool          = hparams.indexer_kpool;
-    const int64_t n_pool         = inp_kpool->pool_idxs->ne[1];
+    const int64_t n_pool         = inp_kpool->pool_cells->ne[0];
+    const int64_t n_new          = inp_kpool->n_new;
 
-    // queries
-    ggml_tensor * iq = ggml_mul_mat(ctx0, layer.indexer_attn_q_b, qr);
-    iq = ggml_reshape_3d(ctx0, iq, n_embd_indexer, n_indexer_head, n_tokens);
-    cb(iq, "indexer_q", il);
+    ggml_tensor * iq = nullptr;
+    if (inp_kpool->reuse_sel == nullptr) {
+        iq = ggml_mul_mat(ctx0, layer.indexer_attn_q_b, qr);
+        iq = ggml_reshape_3d(ctx0, iq, n_embd_indexer, n_indexer_head, n_tokens);
+        cb(iq, "indexer_q", il);
+    }
 
     // Per-token key and pool gate scores, cached together
     ggml_tensor * ik = ggml_mul_mat(ctx0, layer.indexer_attn_k, cur);
@@ -557,77 +633,127 @@ ggml_tensor * llama_model_glm5_next::graph::build_kpool_select(
     ggml_tensor * ig = ggml_mul_mat(ctx0, layer.indexer_kpool_gate, cur);
     cb(ig, "indexer_gate", il);
 
-    ggml_tensor * packed = ggml_concat(ctx0, ik, ig, 0);
-    packed = ggml_reshape_3d(ctx0, packed, 2*n_embd_indexer, 1, n_tokens);
+    // Cache rows store key | gate | pooled
+    ggml_tensor * pzero = ggml_fill(ctx0, ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd_indexer, n_tokens), 0.0f);
+    ggml_tensor * packed = ggml_concat(ctx0, ggml_concat(ctx0, ik, ig, 0), pzero, 0);
+    packed = ggml_reshape_3d(ctx0, packed, 3*n_embd_indexer, 1, n_tokens);
     ggml_build_forward_expand(gf, mctx_lid->cpy_k(ctx0, packed, inp_kpool->k_idxs, il));
 
     ggml_tensor * k_all = mctx_lid->get_k(ctx0, il);
     GGML_ASSERT(k_all->ne[3] == 1 && "TODO: k-pool indexer with multiple streams");
     const int64_t n_kv = k_all->ne[2];
-    k_all = ggml_view_2d(ctx0, k_all, 2*n_embd_indexer, n_kv, k_all->nb[2], 0);
 
-    // Gather the member of every pool
-    ggml_tensor * rows = ggml_get_rows(ctx0, k_all, ggml_reshape_1d(ctx0, inp_kpool->pool_idxs, kpool*n_pool));
-    rows = ggml_reshape_3d(ctx0, rows, 2*n_embd_indexer, kpool, n_pool);
+    ggml_tensor * kg_all     = ggml_view_2d(ctx0, k_all, 2*n_embd_indexer, n_kv, k_all->nb[2], 0);
+    ggml_tensor * pooled_all = ggml_view_2d(ctx0, k_all,   n_embd_indexer, n_kv, k_all->nb[2],
+                                            ggml_row_size(k_all->type, 2*n_embd_indexer));
 
-    ggml_tensor * pk = ggml_view_3d(ctx0, rows, n_embd_indexer, kpool, n_pool, rows->nb[1], rows->nb[2], 0);
-    ggml_tensor * pg = ggml_view_3d(ctx0, rows, n_embd_indexer, kpool, n_pool, rows->nb[1], rows->nb[2], ggml_row_size(rows->type, n_embd_indexer));
+    ggml_tensor * pooled_new = nullptr;
+    // Pool only entries completed by this ubatch.
+    if (n_new > 0) {
+        ggml_tensor * rows = ggml_get_rows(ctx0, kg_all, ggml_reshape_1d(ctx0, inp_kpool->new_pool_idxs, kpool*n_new));
+        rows = ggml_reshape_3d(ctx0, rows, 2*n_embd_indexer, kpool, n_new);
 
-    ggml_tensor * logits = ggml_add(ctx0, pg, layer.indexer_kpool_ape);
-    logits = ggml_cont(ctx0, ggml_permute(ctx0, logits, 1, 0, 2, 3)); // [kpool, head_dim, n_pool]
-    ggml_tensor * probs = ggml_soft_max(ctx0, logits);
+        ggml_tensor * pk = ggml_view_3d(ctx0, rows, n_embd_indexer, kpool, n_new, rows->nb[1], rows->nb[2], 0);
+        ggml_tensor * pg = ggml_view_3d(ctx0, rows, n_embd_indexer, kpool, n_new, rows->nb[1], rows->nb[2], ggml_row_size(rows->type, n_embd_indexer));
 
-    pk = ggml_cont(ctx0, ggml_permute(ctx0, pk, 1, 0, 2, 3));
-    ggml_tensor * pooled = ggml_sum_rows(ctx0, ggml_mul(ctx0, probs, pk)); // [1, head_dim, n_pool]
+        ggml_tensor * logits = ggml_add(ctx0, pg, layer.indexer_kpool_ape);
+        logits = ggml_cont(ctx0, ggml_permute(ctx0, logits, 1, 0, 2, 3)); // [kpool, head_dim, n_new]
+        ggml_tensor * probs = ggml_soft_max(ctx0, logits);
+
+        pk = ggml_cont(ctx0, ggml_permute(ctx0, pk, 1, 0, 2, 3));
+        pooled_new = ggml_sum_rows(ctx0, ggml_mul(ctx0, probs, pk)); // [1, head_dim, n_new]
+        pooled_new = ggml_reshape_2d(ctx0, pooled_new, n_embd_indexer, n_new);
+        cb(pooled_new, "indexer_pool_k_new", il);
+
+        if (inp_kpool->cache_safe) {
+            // Write before the pool gather.
+            ggml_build_forward_expand(gf, ggml_set_rows(ctx0, pooled_all, pooled_new, inp_kpool->new_pool_rep));
+        }
+    }
+
+    ggml_tensor * pooled = nullptr;
+    if (inp_kpool->cache_safe) {
+        pooled = ggml_get_rows(ctx0, pooled_all, inp_kpool->pool_cells);
+    } else {
+        GGML_ASSERT(n_new <= n_pool);
+        ggml_tensor * pad = ggml_fill(ctx0,
+                ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd_indexer, n_pool - n_new), 0.0f);
+        pooled = n_new > 0 ? ggml_concat(ctx0, pooled_new, pad, 1) : pad;
+    }
     pooled = ggml_reshape_3d(ctx0, pooled, n_embd_indexer, 1, n_pool);
     cb(pooled, "indexer_pool_k", il);
 
-    ggml_tensor * weights = ggml_mul_mat(ctx0, layer.indexer_proj, cur);
-    weights = ggml_scale(ctx0, weights, 1.0f / sqrtf(float(n_embd_indexer * n_indexer_head)));
-    cb(weights, "indexer_weights", il);
+    ggml_tensor * sel_idx = inp_kpool->reuse_sel;
+    if (sel_idx == nullptr) {
+        ggml_tensor * weights = ggml_mul_mat(ctx0, layer.indexer_proj, cur);
+        weights = ggml_scale(ctx0, weights, 1.0f / sqrtf(float(n_embd_indexer * n_indexer_head)));
+        cb(weights, "indexer_weights", il);
 
-    ggml_tensor * score = nullptr;
-    if (cparams.fused_lid) {
-        score = ggml_lightning_indexer(ctx0, iq, pooled, weights, inp_kpool->pool_mask);
-        res->add_fused_node({LLM_FUSED_OP_LIGHTNING_INDEXER, score, il});
+        ggml_tensor * score = nullptr;
+        if (cparams.fused_lid) {
+            score = ggml_lightning_indexer(ctx0, iq, pooled, weights, inp_kpool->pool_mask);
+            res->add_fused_node({LLM_FUSED_OP_LIGHTNING_INDEXER, score, il});
+        } else {
+            ggml_tensor * q_p = ggml_permute(ctx0, iq, 0, 2, 1, 3);     // [head_dim, n_tokens, n_head]
+            ggml_tensor * k_p = ggml_permute(ctx0, pooled, 0, 2, 1, 3); // [head_dim, n_pool, 1]
+
+            ggml_tensor * kq = ggml_mul_mat(ctx0, k_p, q_p);            // [n_pool, n_tokens, n_head]
+            kq = ggml_cont(ctx0, ggml_permute(ctx0, kq, 2, 1, 0, 3));   // [n_head, n_tokens, n_pool]
+            score = ggml_relu(ctx0, kq);
+            score = ggml_mul(ctx0, score, weights);
+            score = ggml_sum_rows(ctx0, score);                          // [1, n_tokens, n_pool]
+            score = ggml_cont(ctx0, ggml_permute(ctx0, score, 2, 1, 0, 3)); // [n_pool, n_tokens, 1]
+            score = ggml_add(ctx0, score, inp_kpool->pool_mask);
+        }
+        cb(score, "indexer_score", il);
+
+        const int64_t n_top_pool = std::min<int64_t>(n_pool, hparams.indexer_top_k / kpool);
+        ggml_tensor * top_k = ggml_cont(ctx0, ggml_top_k(ctx0, score, n_top_pool)); // [n_top_pool, n_tokens]
+        cb(top_k, "indexer_top_k", il);
+
+        sel_idx = ggml_get_rows(ctx0, inp_kpool->pool_idxs,
+                ggml_reshape_1d(ctx0, top_k, n_top_pool*n_tokens));  // [kpool, n_top_pool*n_tokens]
+        sel_idx = ggml_reshape_2d(ctx0, sel_idx, kpool*n_top_pool, n_tokens);
+
+        if (hparams.indexer_kpool_select_tail) {
+            // Append the incomplete tail with n_kv for missing cells.
+            sel_idx = ggml_concat(ctx0, sel_idx, inp_kpool->tail_idxs, 0);
+        }
     } else {
-        ggml_tensor * q_p = ggml_permute(ctx0, iq, 0, 2, 1, 3);     // [head_dim, n_tokens, n_head]
-        ggml_tensor * k_p = ggml_permute(ctx0, pooled, 0, 2, 1, 3); // [head_dim, n_pool, 1]
-
-        ggml_tensor * kq = ggml_mul_mat(ctx0, k_p, q_p);            // [n_pool, n_tokens, n_head]
-        kq = ggml_cont(ctx0, ggml_permute(ctx0, kq, 2, 1, 0, 3));   // [n_head, n_tokens, n_pool]
-        score = ggml_relu(ctx0, kq);
-        score = ggml_mul(ctx0, score, weights);
-        score = ggml_sum_rows(ctx0, score);                          // [1, n_tokens, n_pool]
-        score = ggml_cont(ctx0, ggml_permute(ctx0, score, 2, 1, 0, 3)); // [n_pool, n_tokens, 1]
-        score = ggml_add(ctx0, score, inp_kpool->pool_mask);
+        cb(sel_idx, "indexer_sel_reuse", il);
     }
-    cb(score, "indexer_score", il);
+    const int64_t n_sel = sel_idx->ne[0];
 
-    const int64_t n_top_pool = std::min<int64_t>(n_pool, hparams.indexer_top_k / kpool);
-    ggml_tensor * top_k = ggml_cont(ctx0, ggml_top_k(ctx0, score, n_top_pool)); // [n_top_pool, n_tokens]
-    cb(top_k, "indexer_top_k", il);
-
-    // Pool-level selection mask, -inf everywhere except the selected pools
-    ggml_tensor * pool_sel = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, 1, n_pool, n_tokens);
-    pool_sel = ggml_fill(ctx0, pool_sel, -INFINITY);
-    ggml_tensor * zeros = ggml_fill(ctx0, ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, 1, n_top_pool, n_tokens), 0.0f);
-    pool_sel = ggml_set_rows(ctx0, pool_sel, zeros, ggml_reshape_3d(ctx0, top_k, n_top_pool, n_tokens, 1));
-    pool_sel = ggml_reshape_2d(ctx0, pool_sel, n_pool, n_tokens);
-
-    // Expand to the cells
-    ggml_tensor * pool_sel_t = ggml_cont(ctx0, ggml_transpose(ctx0, pool_sel));            // [n_tokens, n_pool]
-    ggml_tensor * sel_t      = ggml_get_rows(ctx0, pool_sel_t, inp_kpool->cell_pool);          // [n_tokens, n_kv]
-    ggml_tensor * sel        = ggml_cont(ctx0, ggml_transpose(ctx0, sel_t));                 // [n_kv, n_tokens]
-
-    if (hparams.indexer_kpool_select_tail) {
-        ggml_tensor * pad = ggml_fill(ctx0, ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, 1, n_tokens), -INFINITY);
-        sel = ggml_concat(ctx0, sel, pad, 0);                                                // [n_kv + 1, n_tokens]
-        sel = ggml_reshape_3d(ctx0, sel, 1, n_kv + 1, n_tokens);
-        ggml_tensor * tzeros = ggml_fill(ctx0, ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, 1, kpool - 1, n_tokens), 0.0f);
-        sel = ggml_set_rows(ctx0, sel, tzeros, ggml_reshape_3d(ctx0, inp_kpool->tail_idxs, kpool - 1, n_tokens, 1));
-        sel = ggml_view_2d(ctx0, sel, n_kv, n_tokens, sel->nb[2], 0);
+    if (inp_kpool->mtp_share && il >= (int) hparams.n_layer() && inp_kpool->reuse_sel == nullptr) {
+        res->t_mtp_dsa_sel  = sel_idx;
+        res->t_mtp_dsa_mask = inp_kpool->gather_mask;
     }
+
+    // Gather returns selected cell indices and masks padding separately.
+    if (inp_kpool->gather) {
+        GGML_ASSERT(inp_kpool->gather_mask->ne[0] == n_sel && inp_kpool->gather_mask->ne[3] == n_tokens);
+        cb(sel_idx, "indexer_sel_idx", il);
+        return sel_idx;
+    }
+
+    // Tie scatter storage lifetime to this layer's selected indices.
+    ggml_tensor * seed = ggml_cast(ctx0, ggml_view_1d(ctx0, sel_idx, 1, 0), GGML_TYPE_F32);
+
+    ggml_tensor * mask_seed = kq_mask->type == GGML_TYPE_F32 ? seed : ggml_cast(ctx0, seed, kq_mask->type);
+    mask_seed = ggml_fill(ctx0, mask_seed, -INFINITY);
+    ggml_tensor * mask_all = ggml_repeat_4d(ctx0, mask_seed, 1, n_kv + 1, n_tokens, 1);
+    mask_all = ggml_reshape_3d(ctx0, mask_all, 1, n_kv + 1, n_tokens);
+
+    ggml_tensor * zero_seed = ggml_fill(ctx0, seed, 0.0f);
+    ggml_tensor * zeros = ggml_repeat_4d(ctx0, zero_seed, 1, n_sel, n_tokens, 1);
+    zeros = ggml_reshape_3d(ctx0, zeros, 1, n_sel, n_tokens);
+
+    ggml_tensor * sel = ggml_set_rows(ctx0, mask_all, zeros, ggml_reshape_3d(ctx0, sel_idx, n_sel, n_tokens, 1));
+    sel = ggml_view_2d(ctx0, sel, n_kv, n_tokens, sel->nb[2], 0);
+
+    // Fold causal visibility before shared-indexer reuse.
+    GGML_ASSERT(kq_mask->ne[0] == n_kv && kq_mask->ne[1] == n_tokens && kq_mask->ne[2]*kq_mask->ne[3] == 1);
+    sel = ggml_add(ctx0, sel, ggml_reshape_2d(ctx0, kq_mask, n_kv, n_tokens));
     cb(sel, "indexer_sel", il);
 
     return sel;
@@ -667,9 +793,11 @@ ggml_tensor * llama_model_glm5_next::graph::build_dsa_layer(
     q_absorbed = ggml_permute(ctx0, q_absorbed, 0, 2, 1, 3);
     cb(q_absorbed, "q_absorbed", il);
 
+    ggml_tensor * kq_mask = inp_attn->get_kq_mask();
+
     ggml_tensor * sel = nullptr;
     if (il >= (int) hparams.n_layer() || hparams.is_indexer_full(il)) { // the NextN block always has a full indexer
-        sel = build_kpool_select(cur, qr, layer, mctx_hyb, inp_kpool, il);
+        sel = build_kpool_select(cur, qr, kq_mask, layer, mctx_hyb, inp_kpool, il);
         *prev_sel = sel;
     } else {
         GGML_ASSERT(*prev_sel != nullptr && "shared indexer layer must follow a full indexer layer");
@@ -680,20 +808,48 @@ ggml_tensor * llama_model_glm5_next::graph::build_dsa_layer(
     ggml_build_forward_expand(gf, kv_cmpr);
     ggml_build_forward_expand(gf, mctx_mla->cpy_k(ctx0, kv_cmpr, inp_attn->get_k_idxs(), il));
 
-    // Combine the causal mask with the indexer selection
-    ggml_tensor * kq_mask = inp_attn->get_kq_mask();
-    ggml_tensor * mask = kq_mask->type == GGML_TYPE_F32 ? kq_mask : ggml_cast(ctx0, kq_mask, GGML_TYPE_F32);
-    mask = ggml_add(ctx0, ggml_reshape_2d(ctx0, mask, mask->ne[0], mask->ne[1]), sel);
-    if (kq_mask->type != GGML_TYPE_F32) {
-        mask = ggml_cast(ctx0, mask, kq_mask->type);
+    ggml_tensor * out = nullptr;
+    if (inp_kpool->gather) {
+        // Attend over gathered latents with the token dimension in ne[3].
+
+        ggml_build_forward_expand(gf, kq_mask);
+
+        ggml_tensor * sel_idx = sel; // I32 [n_sel, n_tokens]
+        const int64_t n_sel = sel_idx->ne[0];
+
+        ggml_tensor * k = mctx_mla->get_k(ctx0, il);
+        GGML_ASSERT(k->ne[3] == 1 && "TODO: gathered DSA with multiple streams");
+        GGML_ASSERT(k->ne[1] == 1 && k->ne[0] == kv_lora_rank && "GLM5-Next MLA cache holds a single latent head");
+
+        ggml_tensor * rows = ggml_view_2d(ctx0, k, k->ne[0], k->ne[2], k->nb[2], 0);
+        ggml_tensor * k_g  = ggml_get_rows(ctx0, rows, ggml_reshape_1d(ctx0, sel_idx, n_sel*n_tokens));
+        k_g = ggml_reshape_4d(ctx0, k_g, k->ne[0], n_sel, 1, n_tokens); // F32 [kv_lora_rank, n_sel, 1, n_tokens]
+        cb(k_g, "kv_gathered", il);
+
+        ggml_tensor * q_g = ggml_permute(ctx0, q_absorbed, 0, 2, 3, 1); // [kv_lora_rank, 1, n_head, n_tokens]
+
+        ggml_tensor * kq = ggml_mul_mat(ctx0, k_g, q_g);                // [n_sel, 1, n_head, n_tokens]
+        ggml_mul_mat_set_prec(kq, GGML_PREC_F32);
+        kq = ggml_soft_max_ext(ctx0, kq, inp_kpool->gather_mask, kq_scale, 0.0f);
+        cb(kq, "kq_soft_max_gathered", il);
+
+        ggml_tensor * v_t = ggml_cont(ctx0, ggml_transpose(ctx0, k_g)); // [n_sel, kv_lora_rank, 1, n_tokens]
+        ggml_tensor * kqv = ggml_mul_mat(ctx0, v_t, kq);                // [kv_lora_rank, 1, n_head, n_tokens]
+        kqv = ggml_mul_mat(ctx0, layer.wv_b, kqv);                      // [n_embd_head_v, 1, n_head, n_tokens]
+        cb(kqv, "kqv_gathered", il);
+
+        out = ggml_cont(ctx0, ggml_permute(ctx0, kqv, 0, 2, 1, 3));     // [n_embd_head_v, n_head, 1, n_tokens]
+        out = ggml_reshape_2d(ctx0, out, kqv->ne[0]*n_head, n_tokens);
+    } else {
+        // The scatter selection already includes the causal mask.
+        ggml_tensor * mask = ggml_reshape_4d(ctx0, sel, kq_mask->ne[0], kq_mask->ne[1], kq_mask->ne[2], kq_mask->ne[3]);
+        cb(mask, "kq_mask_dsa", il);
+
+        ggml_tensor * k = mctx_mla->get_k(ctx0, il);
+        ggml_tensor * v = ggml_view_4d(ctx0, k, kv_lora_rank, k->ne[1], k->ne[2], k->ne[3], k->nb[1], k->nb[2], k->nb[3], 0);
+
+        out = build_attn_mha(q_absorbed, k, v, nullptr, mask, nullptr, layer.wv_b, kq_scale, il);
     }
-    mask = ggml_reshape_4d(ctx0, mask, kq_mask->ne[0], kq_mask->ne[1], kq_mask->ne[2], kq_mask->ne[3]);
-    cb(mask, "kq_mask_dsa", il);
-
-    ggml_tensor * k = mctx_mla->get_k(ctx0, il);
-    ggml_tensor * v = ggml_view_4d(ctx0, k, kv_lora_rank, k->ne[1], k->ne[2], k->ne[3], k->nb[1], k->nb[2], k->nb[3], 0);
-
-    ggml_tensor * out = build_attn_mha(q_absorbed, k, v, nullptr, mask, nullptr, layer.wv_b, kq_scale, il);
     cb(out, "kqv_out", il);
 
     out = ggml_mul_mat(ctx0, layer.wo, out);
