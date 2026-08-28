@@ -97,6 +97,38 @@ describe('parseModelId', () => {
 		});
 	});
 
+	it('strips trailing container format segments from model names', () => {
+		expect(parseModelId('unsloth/DeepSeek-V4-Flash-0731-GGUF:Q2_K_XL')).toStrictEqual({
+			activatedParams: null,
+			modelName: 'DeepSeek-V4-Flash-0731',
+			orgName: 'unsloth',
+			params: null,
+			quantization: 'Q2_K_XL',
+			raw: 'unsloth/DeepSeek-V4-Flash-0731-GGUF:Q2_K_XL',
+			tags: []
+		});
+
+		expect(parseModelId('unsloth/Laguna-S-2.1-GGUF:Q4_K_XL')).toStrictEqual({
+			activatedParams: null,
+			modelName: 'Laguna-S-2.1',
+			orgName: 'unsloth',
+			params: null,
+			quantization: 'Q4_K_XL',
+			raw: 'unsloth/Laguna-S-2.1-GGUF:Q4_K_XL',
+			tags: []
+		});
+
+		expect(parseModelId('org/Model-Name-GGUF')).toStrictEqual({
+			activatedParams: null,
+			modelName: 'Model-Name',
+			orgName: 'org',
+			params: null,
+			quantization: null,
+			raw: 'org/Model-Name-GGUF',
+			tags: []
+		});
+	});
+
 	it('handles real-world examples correctly', () => {
 		expect(parseModelId('meta-llama/Llama-3.1-8B')).toStrictEqual({
 			activatedParams: null,
