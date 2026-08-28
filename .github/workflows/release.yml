@@ -415,8 +415,8 @@ jobs:
 
     env:
       # Sync versions in build-openvino.yml, build-self-hosted.yml, release.yml, build-cache.yml, .devops/openvino.Dockerfile
-      OPENVINO_VERSION_MAJOR: "2026.3"
-      OPENVINO_VERSION_FULL: "2026.3.0.22451.bd8d6542e3c"
+      OPENVINO_VERSION_MAJOR: "2026.3.1"
+      OPENVINO_VERSION_FULL: "2026.3.1.22476.56d9685302d"
 
     steps:
       - name: Set OpenVINO version output
@@ -529,8 +529,8 @@ jobs:
 
     env:
       # Sync versions in build-openvino.yml, build-self-hosted.yml, release.yml, build-cache.yml, .devops/openvino.Dockerfile
-      OPENVINO_VERSION_MAJOR: "2026.3"
-      OPENVINO_VERSION_FULL: "2026.3.0.22451.bd8d6542e3c"
+      OPENVINO_VERSION_MAJOR: "2026.3.1"
+      OPENVINO_VERSION_FULL: "2026.3.1.22476.56d9685302d"
 
     steps:
       - name: Set OpenVINO version output
@@ -714,10 +714,10 @@ jobs:
         with:
           key: release-windows-2025-vs2026-${{ matrix.arch }}-cpu
 
-  # TODO: build only the ggml-hip backend like the other windows backend jobs
-  #       (windows-cuda, windows-sycl), then drop the ui-build dependency
+  # note: builds only the ggml-hip backend - llama-server is injected from the
+  #       windows-cpu zip during the release "Merge artifacts" step
   windows-rocm:
-    needs: [check-release, ui-build]
+    needs: [check-release]
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
     runs-on: windows-2022
@@ -735,12 +735,6 @@ jobs:
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
-
-      - name: Download UI build
-        uses: actions/download-artifact@v7
-        with:
-          name: llama-ui.zip
-          path: tools/ui/dist
 
       - name: Install Ninja
         run: |
@@ -804,17 +798,15 @@ jobs:
             -DCMAKE_PREFIX_PATH="${env:HIP_PATH}" `
             -DGGML_BACKEND_DL=ON `
             -DGGML_NATIVE=OFF `
-            -DGGML_CPU=ON `
-            -DGGML_CPU_ALL_VARIANTS=ON `
+            -DGGML_CPU=OFF `
             -DGGML_HIP=ON `
             -DCMAKE_C_COMPILER="${env:HIP_PATH}\lib\llvm\bin\clang.exe" `
             -DCMAKE_CXX_COMPILER="${env:HIP_PATH}\lib\llvm\bin\clang++.exe" `
             -DCMAKE_C_FLAGS="-Wno-error=incompatible-pointer-types" `
             -DCMAKE_HIP_COMPILER="${env:HIP_PATH}\lib\llvm\bin\clang.exe" `
             -DHIP_PATH="${env:HIP_PATH}" `
-            -DGGML_HIP_ROCWMMA_FATTN=ON `
             -DAMDGPU_TARGETS="${{ matrix.gpu_targets }}"
-          cmake --build build --config Release --parallel ${env:NUMBER_OF_PROCESSORS}
+          cmake --build build --config Release --parallel ${env:NUMBER_OF_PROCESSORS} --target ggml-hip
 
       - name: Verify HIP backend was built
         run: |
@@ -866,8 +858,11 @@ jobs:
 
       - name: Pack artifacts
         run: |
-          cp "LICENSE" "build\bin\Release\"
-          7z a -snl llama-bin-win-rocm-${{ env.ROCM_VERSION_SHORT }}-${{ matrix.build }}.zip .\build\bin\Release\*
+          7z a -snl llama-bin-win-rocm-${{ env.ROCM_VERSION_SHORT }}-${{ matrix.build }}.zip `
+            .\build\bin\Release\ggml-hip.dll `
+            .\build\bin\Release\amdhip64_7.dll `
+            .\build\bin\Release\rocm_kpack.dll `
+            .\build\bin\Release\amd_comgr.dll
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v6
