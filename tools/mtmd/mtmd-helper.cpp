@@ -599,6 +599,8 @@ struct mtmd_helper_video {
     std::string prompt_start         = "Video:";
     int32_t     timestamp_interval_ms = 5000; // emit a timestamp text every N ms (0 = disabled)
     float       next_timestamp_ms     = 0.0f; // next elapsed-ms threshold at which to emit
+    float       tokens_per_frame      = 0.0f;
+    float       max_tokens            = 0.0f;
 
     std::vector<uint8_t> frame_buf;
     std::string pending_text; // text queued to be returned before the next frame
@@ -678,7 +680,17 @@ struct mtmd_helper_video {
             duration = (float)n_frames_orig / orig_fps;
         }
 
-        fps_target = fps_target_arg > 0.0f ? fps_target_arg : orig_fps;
+        // clamp video to the given token amount
+        // no fps_target_arg <= 0.0f && because max_tokens should have more priority
+        if (max_tokens > 0.0f && tokens_per_frame > 0.0f && duration > 0.0f) {
+            float computed_fps = max_tokens / (duration * tokens_per_frame);
+            float base_fps     = fps_target_arg > 0.0f ? fps_target_arg : orig_fps;
+
+            fps_target = std::min(base_fps, computed_fps);
+        } else {
+            fps_target = fps_target_arg > 0.0f ? fps_target_arg : orig_fps;
+        }
+
         info.width    = width;
         info.height   = height;
         info.fps      = fps_target;
@@ -856,6 +868,8 @@ mtmd_helper_video_init_params mtmd_helper_video_init_params_default() {
         /* fps_target             */ 4.0f,
         /* ffmpeg_bin_dir         */ nullptr,
         /* timestamp_interval_ms  */ 5000,
+        /* tokens_per_frame       */ 0.0f,
+        /* max_tokens             */ 0.0f
     };
 }
 
@@ -924,6 +938,8 @@ mtmd_helper_video * mtmd_helper_video_init(
     ctx->ffmpeg_bin           = video_resolve_bin(params.ffmpeg_bin_dir, "ffmpeg");
     ctx->ffprobe_bin          = video_resolve_bin(params.ffmpeg_bin_dir, "ffprobe");
     ctx->timestamp_interval_ms = params.timestamp_interval_ms;
+    ctx->tokens_per_frame     = params.tokens_per_frame;
+    ctx->max_tokens           = params.max_tokens;
 
     if (!ctx->probe(params.fps_target)) {
         LOG_ERR("%s: ffprobe failed for '%s' (is ffprobe in PATH?)\n", __func__, path);
@@ -959,6 +975,8 @@ mtmd_helper_video * mtmd_helper_video_init_from_buf(
     ctx->ffmpeg_bin            = video_resolve_bin(params.ffmpeg_bin_dir, "ffmpeg");
     ctx->ffprobe_bin           = video_resolve_bin(params.ffmpeg_bin_dir, "ffprobe");
     ctx->timestamp_interval_ms = params.timestamp_interval_ms;
+    ctx->tokens_per_frame = params.tokens_per_frame;
+    ctx->max_tokens       = params.max_tokens;
 
     if (!ctx->probe(params.fps_target)) {
         LOG_ERR("%s: ffprobe failed on buffer (is ffprobe in PATH?)\n", __func__);

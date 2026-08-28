@@ -2127,6 +2127,17 @@ bool mtmd_support_vision(const mtmd_context * ctx) {
     return ctx->ctx_v != nullptr;
 }
 
+uint32_t mtmd_get_image_num_tokens(const mtmd_context * ctx) {
+    if (!ctx->ctx_v) {
+        return 0;
+    }
+
+    const clip_hparams * hp = clip_get_hparams(ctx->ctx_v);
+    // tokens per image = (image_size / (patch_size * n_merge))^2
+    const int tpi = hp->image_size / (hp->patch_size * hp->n_merge);
+    return (uint32_t)(tpi * tpi);
+}
+
 bool mtmd_support_audio(const mtmd_context * ctx) {
     return ctx->ctx_a != nullptr;
 }
