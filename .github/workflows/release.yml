@@ -714,10 +714,10 @@ jobs:
         with:
           key: release-windows-2025-vs2026-${{ matrix.arch }}-cpu
 
-  # TODO: build only the ggml-hip backend like the other windows backend jobs
-  #       (windows-cuda, windows-sycl), then drop the ui-build dependency
+  # note: builds only the ggml-hip backend - llama-server is injected from the
+  #       windows-cpu zip during the release "Merge artifacts" step
   windows-rocm:
-    needs: [check-release, ui-build]
+    needs: [check-release]
     if: ${{ needs.check-release.outputs.should_release == 'true' }}
 
     runs-on: windows-2022
@@ -736,11 +736,9 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Download UI build
-        uses: actions/download-artifact@v7
-        with:
-          name: llama-ui.zip
-          path: tools/ui/dist
+      - name: Install Ninja
+        run: |
+          choco install ninja
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
@@ -795,33 +793,28 @@ jobs:
 
       - name: Build
         run: |
-          mkdir build
-          cd build
-          cmake .. `
-            -G "Unix Makefiles" `
+          cmake -S . -B build `
+            -G "Ninja Multi-Config" `
             -DCMAKE_PREFIX_PATH="${env:HIP_PATH}" `
-            -DCMAKE_BUILD_TYPE=Release `
             -DGGML_BACKEND_DL=ON `
             -DGGML_NATIVE=OFF `
-            -DGGML_CPU=ON `
-            -DGGML_CPU_ALL_VARIANTS=ON `
+            -DGGML_CPU=OFF `
             -DGGML_HIP=ON `
             -DCMAKE_C_COMPILER="${env:HIP_PATH}\lib\llvm\bin\clang.exe" `
             -DCMAKE_CXX_COMPILER="${env:HIP_PATH}\lib\llvm\bin\clang++.exe" `
             -DCMAKE_C_FLAGS="-Wno-error=incompatible-pointer-types" `
             -DCMAKE_HIP_COMPILER="${env:HIP_PATH}\lib\llvm\bin\clang.exe" `
             -DHIP_PATH="${env:HIP_PATH}" `
-            -DGGML_HIP_ROCWMMA_FATTN=ON `
             -DAMDGPU_TARGETS="${{ matrix.gpu_targets }}"
-          cmake --build . --config Release --parallel ${env:NUMBER_OF_PROCESSORS}
+          cmake --build build --config Release --parallel ${env:NUMBER_OF_PROCESSORS} --target ggml-hip
 
       - name: Verify HIP backend was built
         run: |
-          $hipDll = Get-ChildItem -Path build\bin -Filter "ggml-hip*.dll" -ErrorAction SilentlyContinue
+          $hipDll = Get-ChildItem -Path build\bin\Release -Filter "ggml-hip*.dll" -ErrorAction SilentlyContinue
           if (-not $hipDll) {
             Write-Host "##[error]ggml-hip*.dll was NOT produced. The HIP backend silently failed to build."
-            Write-Host "Contents of build\bin:"
-            Get-ChildItem build\bin | Format-Table -AutoSize
+            Write-Host "Contents of build\bin\Release:"
+            Get-ChildItem build\bin\Release | Format-Table -AutoSize
             exit 1
           }
           Write-Host "HIP backend artifact found:"
@@ -836,10 +829,40 @@ jobs:
           $rocmVersionShort = ('${{ matrix.ROCM_VERSION }}'.Split('.')[0..1] -join '.')
           echo "ROCM_VERSION_SHORT=$rocmVersionShort" >> $env:GITHUB_ENV
 
+      - name: Bundle HIP runtime DLLs (amdhip64_7.dll, rocm_kpack.dll, amd_comgr.dll)
+        run: |
+          $ErrorActionPreference = "Stop"
+          # See issue https://github.com/ggml-org/llama.cpp/issues/26929.
+          # ggml-hip.dll loads amdhip64_7.dll at run time. The Adrenalin driver
+          # ships an amdhip64_7.dll in System32, which the loader searches before PATH,
+          # so a matching DLL from PATH cannot win. Copy amdhip64 next to the
+          # binaries (exe directory is searched before System32) so the correct
+          # runtime is used. rocm_kpack.dll is amdhip64_7's direct dependency, so
+          # copy the matching version too. amd_comgr is copied as well to keep it
+          # in sync with the bundled amdhip64, avoiding a version mismatch with a
+          # amd_comgr from System32.
+          # rocblas/hipblaslt kernels resolve fine via PATH and are not copied.
+          $binPath = (rocm-sdk path --bin).Trim()
+          if (-not $binPath) { throw "rocm-sdk path --bin returned empty" }
+          write-host "ROCm bin path: $binPath"
+
+          $patterns = @("amdhip64_7.dll", "rocm_kpack.dll", "amd_comgr.dll")
+          foreach ($pattern in $patterns) {
+            $files = Get-ChildItem -Path $binPath -Filter $pattern -ErrorAction SilentlyContinue
+            if (-not $files) { throw "no match for $pattern in $binPath" }
+            foreach ($f in $files) {
+              Copy-Item $f.FullName -Destination build\bin\Release -Force
+              write-host "  copied $($f.Name)"
+            }
+          }
+
       - name: Pack artifacts
         run: |
-          cp "LICENSE" "build\bin\"
-          7z a -snl llama-bin-win-rocm-${{ env.ROCM_VERSION_SHORT }}-${{ matrix.build }}.zip .\build\bin\*
+          7z a -snl llama-bin-win-rocm-${{ env.ROCM_VERSION_SHORT }}-${{ matrix.build }}.zip `
+            .\build\bin\Release\ggml-hip.dll `
+            .\build\bin\Release\amdhip64_7.dll `
+            .\build\bin\Release\rocm_kpack.dll `
+            .\build\bin\Release\amd_comgr.dll
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v6
