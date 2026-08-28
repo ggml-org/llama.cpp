@@ -828,7 +828,7 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
 
 #if defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
     int   * x_qs = (int   *)  x_tile;
-    half2 * x_dm = (half2 *) (x_qs + 2*MMQ_TILE_NE_K);
+    half2 * x_dm = (half2 *) (x_qs + MMQ_TILE_NE_K*2);
 #else
     constexpr tile_x_sizes txs = mmq_get_dp4a_tile_x_sizes(GGML_TYPE_Q5_K, I);
     int   * x_qs = (int   *)  x_tile;
@@ -1015,7 +1015,7 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
     constexpr int rows_per_warp = warp_size / 4;
 #pragma unroll
     for (int i0 = 0; i0 < I; i0 += nwarps*rows_per_warp) {
-        int i = i0 + threadIdx.y*rows_per_warp + threadIdx.x/(MMQ_TILE_NE_K/8);
+        int i = (i0 + threadIdx.y*rows_per_warp + threadIdx.x/(MMQ_TILE_NE_K/8)) % I;
 
         if (fallback) {
             i = min(i, i_max);
