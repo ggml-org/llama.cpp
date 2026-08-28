@@ -340,6 +340,10 @@ extern "C" {
         // override key-value pairs of the model meta data
         const struct llama_model_kv_override * kv_overrides;
 
+        // already loaded model to take the shared embeddings and lm head from, for a draft
+        // head that declares nextn_shared_target_tensors. must outlive the model being loaded
+        const struct llama_model * model_shared;
+
         // Keep the booleans together to avoid misalignment during copy-by-value.
         bool vocab_only;      // only load the vocabulary, no weights
         bool check_tensors;   // validate model tensor data

@@ -126,6 +126,10 @@ def parse_args() -> argparse.Namespace:
         help="Exclude NextN speculative draft tensors from the converted GGUF. Pair with --mtp or --dspark on a second run to publish target and draft as two files.",
     )
     parser.add_argument(
+        "--mtp-shared-embd", action="store_true",
+        help="With --mtp, leave the token embeddings, output norm and LM head out of the draft and take them from the target model at load time. Much smaller draft, but it needs a llama.cpp new enough to read it.",
+    )
+    parser.add_argument(
         "--dspark", action="store_true",
         help="Export only the DeepSeek-V4 DSpark draft tensors as a separate GGUF.",
     )
@@ -277,6 +281,12 @@ def main() -> None:
                 model_class.no_mtp = True
             if args.mtp:
                 model_class.mtp_only = True
+
+        if args.mtp_shared_embd:
+            if not args.mtp:
+                logger.error("--mtp-shared-embd only applies together with --mtp")
+                sys.exit(1)
+            model_class.mtp_shared_embd = True
 
         model_instance = model_class(dir_model, output_type, fname_out,
                                      is_big_endian=args.bigendian, use_temp_file=args.use_temp_file,
