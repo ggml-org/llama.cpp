@@ -242,6 +242,7 @@ struct server_slot {
 
     llama_context * ctx_tgt = nullptr;
     llama_context * ctx_dft = nullptr;
+    llama_context * ctx_spf = nullptr;
 
     common_memory mem;
 
@@ -339,6 +340,9 @@ struct server_slot {
         SLT_TRC(*this, "clearing prompt with %zu tokens\n", prompt.tokens.size());
 
         mem.seq_rm(id, -1, -1);
+        if (ctx_spf) {
+            llama_memory_seq_rm(llama_get_memory(ctx_spf), id, -1, -1);
+        }
 
         prompt.clear();
     }
@@ -568,6 +572,10 @@ struct server_slot {
 
             state = SLOT_STATE_IDLE;
 
+            if (ctx_spf) {
+                llama_memory_seq_rm(llama_get_memory(ctx_spf), id, -1, -1);
+            }
+
             // do not keep context of the child slots - the parent's context is enough
             if (task->is_child()) {
                 prompt_clear();
@@ -748,6 +756,10 @@ struct server_slot {
 
         mem.seq_rm(other.id,     -1, -1);
         mem.seq_cp(id, other.id, -1, -1);
+
+        if (ctx_spf) {
+            llama_memory_seq_rm(llama_get_memory(ctx_spf), other.id, -1, -1);
+        }
 
         other.i_batch = i_batch;
 
@@ -1059,6 +1071,8 @@ private:
 
         const common_speculative_prefill_result res = common_speculative_prefill_execute(
             ctx_spf, smpl_spf.get(), prompt, slot.id, params_base.speculative.prefill);
+
+        llama_memory_seq_rm(llama_get_memory(ctx_spf), slot.id, -1, -1);
 
         if (res.kept_indices.empty() || (int32_t) res.kept_indices.size() >= (int32_t) prompt.size()) {
             return;
@@ -1438,6 +1452,7 @@ private:
             slot.id      = i;
             slot.ctx_tgt = ctx_tgt;
             slot.ctx_dft = ctx_dft;
+            slot.ctx_spf = ctx_spf;
             slot.mem.init(ctx_tgt, ctx_dft);
             slot.spec    = spec.get();
             slot.n_ctx   = n_ctx_slot;
