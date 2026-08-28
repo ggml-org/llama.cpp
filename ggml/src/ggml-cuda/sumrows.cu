@@ -38,7 +38,14 @@ void ggml_cuda_op_sum_rows(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
 
     const int id  = ggml_cuda_get_device();
     const int nsm = ggml_cuda_info().devices[id].nsm;
-    const dim3 block_dims((nrows / nsm) < 2 ? 512 : (ncols < 1024 ? 32 : 128), 1, 1);
+    dim3 block_dims;
+    if ((nrows / nsm) < 2) {
+        // Increase num threads to 512 for small nrows to better hide the latency
+        block_dims = dim3(512, 1, 1);
+    } else {
+        // Enough active SMs to hide latency, use smaller blocks to allow better scheduling
+        block_dims = dim3(ncols < 1024 ? 32 : 128, 1, 1);
+    }
     const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(block_nums, block_dims, 0, stream);
     const char * src0_d_bytes = (const char *) src0->data;
     ggml_cuda_kernel_launch(reduce_rows_f32_strided</*norm=*/false>, launch_params, src0_d_bytes, dst_d, ncols,

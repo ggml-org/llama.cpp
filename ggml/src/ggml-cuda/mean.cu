@@ -65,7 +65,12 @@ void ggml_cuda_op_mean(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
 
     // Heuristic for block size selection to optimize occupancy.
     // See discussion in: https://github.com/ggml-org/llama.cpp/pull/15132
-    const dim3 block_dims((nrows / nsm) < 2 ? 512 : (ncols < 1024 ? 32 : 128), 1, 1);
+    dim3 block_dims;
+    if ((nrows / nsm) < 2) {
+        block_dims = dim3(512, 1, 1);
+    } else {
+        block_dims = dim3(ncols < 1024 ? 32 : 128, 1, 1);
+    }
     const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(block_nums, block_dims, 0, stream);
 
     if (ggml_is_contiguous(src0)) {
