@@ -104,7 +104,6 @@ enum best_fattn_kernel {
 
 
 static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const ggml_tensor * dst) {
-    GGML_UNUSED(device);
 #ifndef SYCL_FLASH_ATTN
     GGML_UNUSED(dst);
     return BEST_FATTN_KERNEL_NONE;
@@ -263,6 +262,11 @@ static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const
             }
         } else {
             if (Q->ne[1] <= 2) {
+                // TILE is faster for quantized KV decode on Xe2 (BMG); keep VEC on untested archs
+                const gpu_arch arch = ggml_sycl_info().devices[device].hw_info.arch;
+                if (arch == gpu_arch::intel_gpu_bmg_g21 || arch == gpu_arch::intel_gpu_bmg_g31) {
+                    return BEST_FATTN_KERNEL_TILE;
+                }
                 return BEST_FATTN_KERNEL_VEC;
             }
         }
