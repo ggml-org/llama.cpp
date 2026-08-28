@@ -449,6 +449,7 @@ constexpr fa_vec_entry_t fa_vec_tuned_table[] = {
     { { GGML_METAL_DEVICE_M2_ULTRA, GGML_TYPE_Q8_0, 512, 512, -1, 1 }, { 1, 4 } },
     { { GGML_METAL_DEVICE_M2_ULTRA, GGML_TYPE_Q8_0, 576, 512, -1, 0 }, { 1, 4 } },
     { { GGML_METAL_DEVICE_M2_ULTRA, GGML_TYPE_Q8_0, 576, 512, -1, 1 }, { 1, 4 } },
+
     { { GGML_METAL_DEVICE_M3_MAX, GGML_TYPE_F16, 32, 32, 1, 3 }, { 4, 4 } },
     { { GGML_METAL_DEVICE_M3_MAX, GGML_TYPE_F16, 32, 32, 2, 1 }, { 2, 4 } },
     { { GGML_METAL_DEVICE_M3_MAX, GGML_TYPE_F16, 32, 32, 2, 3 }, { 4, 4 } },
@@ -896,6 +897,7 @@ constexpr fa_vec_entry_t fa_vec_tuned_table[] = {
     { { GGML_METAL_DEVICE_M5, GGML_TYPE_Q8_0, 512, 512, 3, 1 }, { 1, 4 } },
     { { GGML_METAL_DEVICE_M5, GGML_TYPE_Q8_0, 576, 512, -1, 0 }, { 1, 4 } },
     { { GGML_METAL_DEVICE_M5, GGML_TYPE_Q8_0, 576, 512, -1, 1 }, { 1, 4 } },
+
     { { GGML_METAL_DEVICE_M5_PRO, GGML_TYPE_F16, 32, 32, -1, 1 }, { 2, 4 } },
     { { GGML_METAL_DEVICE_M5_PRO, GGML_TYPE_F16, 32, 32, 1, 2 }, { 1, 4 } },
     { { GGML_METAL_DEVICE_M5_PRO, GGML_TYPE_F16, 32, 32, 1, 4 }, { 1, 4 } },
