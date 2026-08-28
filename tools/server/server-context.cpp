@@ -1139,12 +1139,13 @@ private:
                 }
 
                 if (ctx_dft == nullptr) {
-                    SRV_ERR("%s", "failed to create MTP context\n");
+                    SRV_ERR("%s", "failed to create draft context\n");
                     return false;
                 }
 
                 params_base.speculative.draft.ctx_tgt = ctx_tgt;
                 params_base.speculative.draft.ctx_dft = ctx_dft;
+                params_base.speculative.draft.ctx_mtp = spec_init->context_mtp();
             }
 
             load_progress_callback(1.0f, &load_progress_spec);
