@@ -2483,8 +2483,6 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                     /* recurrent_type_s  */ GGML_TYPE_F32,
                     /* recurrent_rs_size */ std::max((uint32_t) 1, cparams.n_seq_max),
                     /* idx_row_size      */ 2*hparams.indexer_head_size, // key | k-pool gate
-                    /* idx_kpool         */ hparams.indexer_block_size,
-                    /* idx_select_tail   */ true, // index_kpool_always_select_tail
                     /* n_seq_max         */ cparams.n_seq_max,
                     /* n_rs_seq          */ cparams.n_rs_seq,
                     /* offload           */ cparams.offload_kqv,
@@ -2611,6 +2609,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                             /* recurrent_type_k  */ GGML_TYPE_F32,
                             /* recurrent_type_v  */ GGML_TYPE_F32,
                             /* recurrent_kv_size */ std::max((uint32_t) 1, cparams.n_seq_max),
+                            /* idx_row_size      */ 0, // the indexer key alone
                             /* n_seq_max         */ cparams.n_seq_max,
                             /* n_rs_seq          */ cparams.n_rs_seq,
                             /* offload           */ cparams.offload_kqv,

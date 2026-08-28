@@ -629,12 +629,13 @@ ggml_tensor * llama_model_glm5next::graph::build_kda_layer(
 
 class llm_graph_input_kpool : public llm_graph_input_i {
 public:
-    llm_graph_input_kpool(const llama_memory_hybrid_idx_context * mctx) : mctx(mctx) {}
+    llm_graph_input_kpool(const llama_memory_hybrid_idx_context * mctx, uint32_t kpool) :
+        mctx(mctx), kpool(kpool) {}
     virtual ~llm_graph_input_kpool() = default;
 
     void set_input(const llama_ubatch * ubatch) override {
         mctx->get_idx()->set_input_k_idxs(k_idxs, ubatch);
-        mctx->set_input_kpool(pool_cells, pool_bias, tail_cells, ubatch);
+        mctx->set_input_kpool(pool_cells, pool_bias, tail_cells, ubatch, kpool);
 
         GGML_ASSERT(ggml_backend_buffer_is_host(ape_slots->buffer));
         int32_t * data = (int32_t *) ape_slots->data;
@@ -651,7 +652,7 @@ public:
         bool res = true;
 
         res &= k_idxs->ne[0]    == params.ubatch.n_tokens;
-        res &= pool_bias->ne[0] == (int64_t) mctx_cur->get_idx()->get_n_kv()/mctx_cur->get_kpool();
+        res &= pool_bias->ne[0] == (int64_t) (mctx_cur->get_idx()->get_n_kv()/kpool);
         res &= pool_bias->ne[1]*pool_bias->ne[2] == params.ubatch.n_tokens;
 
         return res;
@@ -664,6 +665,8 @@ public:
     ggml_tensor * tail_cells = nullptr; // I32 [kpool-1, n_tokens/n_stream, 1, n_stream], null when kpool == 1
 
     const llama_memory_hybrid_idx_context * mctx;
+
+    const uint32_t kpool;
 };
 
 llm_graph_input_kpool * llama_model_glm5next::graph::build_inp_kpool(llm_graph_input_mem_hybrid_idx * inp_hyb) {
@@ -687,7 +690,7 @@ llm_graph_input_kpool * llama_model_glm5next::graph::build_inp_kpool(llm_graph_i
         return nullptr;
     }
 
-    auto kp = std::make_unique<llm_graph_input_kpool>(inp_hyb->mctx);
+    auto kp = std::make_unique<llm_graph_input_kpool>(inp_hyb->mctx, (uint32_t) r);
 
     kp->k_idxs     = mctx_idx->build_input_k_idxs(ctx0, ubatch);
     kp->ape_slots  = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, r);
@@ -698,7 +701,7 @@ llm_graph_input_kpool * llama_model_glm5next::graph::build_inp_kpool(llm_graph_i
     ggml_set_input(kp->pool_cells);
     ggml_set_input(kp->pool_bias);
 
-    if (r > 1 && inp_hyb->mctx->get_select_tail()) {
+    if (r > 1) {
         // 4d, so it concatenates straight onto the expanded pools in build_dsa_top_k
         kp->tail_cells = ggml_new_tensor_4d(ctx0, GGML_TYPE_I32, r - 1, n_tokens/ns, 1, ns);
         ggml_set_input(kp->tail_cells);
