@@ -1674,18 +1674,14 @@ static bool ggml_backend_cuda_comm_allreduce_rdna2_p2p_host(
               comm_ctx->p2p_host_exact_2560, comm_ctx->p2p_host_exact_5120,
               comm_ctx->p2p_host_exact_25600, comm_ctx->p2p_host_exact_30720);
     if (route.route == ggml_cuda_rdna2_p2p_host_route::fallback) {
-        const int64_t width = tensors[0] != nullptr ? tensors[0]->ne[1] : 0;
-        const uint32_t bit = ggml_cuda_rdna2_p2p_host_width_bit(width);
-        const bool should_log =
-            route.fallback_reason == ggml_cuda_rdna2_p2p_host_fallback_reason::unsupported_width ||
-            route.fallback_reason == ggml_cuda_rdna2_p2p_host_fallback_reason::self_test_failed;
-        if (bit != 0 && should_log && (comm_ctx->p2p_host_refused_widths & bit) == 0) {
-            comm_ctx->p2p_host_refused_widths |= bit;
-            if (route.fallback_reason == ggml_cuda_rdna2_p2p_host_fallback_reason::unsupported_width) {
-                GGML_LOG_WARN("RDNA2 P2P host-snapshot AllReduce has no exact kernel for tensor shape "
-                        "[5120,%d,1,1]; using RCCL (implemented widths: 1, 5, and 6). Speculative verify "
-                        "width is commonly --spec-draft-n-max + 1.\n", int(width));
-            } else {
+        // Unsupported shapes are an expected RCCL fallback, not a warning. Only
+        // report a shape whose optimized kernel exists but failed its exactness
+        // self-test.
+        if (route.fallback_reason == ggml_cuda_rdna2_p2p_host_fallback_reason::self_test_failed) {
+            const int64_t width = tensors[0] != nullptr ? tensors[0]->ne[1] : 0;
+            const uint32_t bit = ggml_cuda_rdna2_p2p_host_width_bit(width);
+            if (bit != 0 && (comm_ctx->p2p_host_refused_widths & bit) == 0) {
+                comm_ctx->p2p_host_refused_widths |= bit;
                 GGML_LOG_WARN("RDNA2 P2P host-snapshot AllReduce implements batch width %d, but its "
                         "startup exactness self-test did not pass; using RCCL.\n", int(width));
             }
