@@ -148,6 +148,12 @@ void llama_model_dflash::load_arch_tensors(llama_model_loader &) {
                 hparams.dflash_selector_rank, hparams.dflash_selector_top_k);
     }
 
+    // DFlash2/DSpark rank the full draft vocabulary in-graph (top_k/argmax on the lm_head
+    // output), which requires the lm_head to be replicated on every device
+    if (params.split_mode == LLAMA_SPLIT_MODE_TENSOR && (selector_meta || markov_meta)) {
+        output_replicated = true;
+    }
+
     fc              = create_tensor(tn(LLM_TENSOR_FC,              "weight"), { n_embd_inp, n_embd }, 0);
     fc_s            = create_tensor(tn(LLM_TENSOR_FC,              "scale"),  { 1 }, TENSOR_NOT_REQUIRED);
     output_norm_enc = create_tensor(tn(LLM_TENSOR_ENC_OUTPUT_NORM, "weight"), { n_embd }, 0); // encoder hidden_norm (after fc)

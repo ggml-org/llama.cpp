@@ -575,7 +575,7 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
 
         // output
         if (std::regex_match(tensor_name, pattern_output_weight)) {
-            if (is_dsv4) {
+            if (is_dsv4 || ud->model->output_replicated) {
                 return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_MIRRORED);
             }
             return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_1);
@@ -583,6 +583,11 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
         if (std::regex_match(tensor_name, pattern_output_bias)) {
             const ggml_tensor * output_weight = ud->model->get_tensor("output.weight");
             GGML_ASSERT(output_weight != nullptr);
+            // bias must follow the lm_head: when the weight is replicated the bias is too,
+            // otherwise the ADD of (MIRRORED logits + axis-0 bias) is invalid in the meta backend
+            if (is_dsv4 || ud->model->output_replicated) {
+                return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_MIRRORED);
+            }
             return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_0);
         }
 
@@ -1180,6 +1185,8 @@ llama_model::llama_model(const llama_model_params & params) : params(params), pi
         this->params.tensor_split = pimpl->tensor_split_owned.data();
     }
     pimpl->has_tensor_overrides = params.tensor_buft_overrides && params.tensor_buft_overrides[0].pattern;
+
+    output_replicated = params.output_replicated;
 }
 
 llama_model::~llama_model() {
@@ -2693,6 +2700,7 @@ llama_model_params llama_model_default_params() {
         /*.no_host                     =*/ false,
         /*.no_alloc                    =*/ false,
         /*.load_mtp                    =*/ false,
+        /*.output_replicated           =*/ false,
     };
 
     return result;

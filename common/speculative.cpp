@@ -2358,6 +2358,44 @@ std::vector<common_speculative_type> common_speculative_types_from_gguf(const st
     return { type };
 }
 
+bool common_speculative_draft_ranks_full_output(const std::string & path) {
+    struct gguf_init_params gguf_params = {
+        /* .no_alloc = */ true,
+        /* .ctx      = */ nullptr,
+    };
+
+    gguf_context_ptr gguf_ctx(gguf_init_from_file(path.c_str(), gguf_params));
+    if (!gguf_ctx) {
+        return false;
+    }
+
+    const int64_t arch_id = gguf_find_key(gguf_ctx.get(), "general.architecture");
+    if (arch_id < 0 || gguf_get_kv_type(gguf_ctx.get(), arch_id) != GGUF_TYPE_STRING) {
+        return false;
+    }
+
+    const std::string arch = gguf_get_val_str(gguf_ctx.get(), arch_id);
+    if (arch != "dflash") {
+        return false;
+    }
+
+    // DFlash2's candidate selector and DSpark's markov head rank the full draft
+    // vocabulary in-graph (top_k / argmax on the lm_head output)
+    bool ranks_full_output = false;
+    if (gguf_find_tensor(gguf_ctx.get(), "selector_hidden.weight") >= 0) {
+        ranks_full_output = true; // DFlash2
+    }
+    if (gguf_find_tensor(gguf_ctx.get(), "markov_w1.weight") >= 0) {
+        ranks_full_output = true; // DSpark
+    }
+    if (!ranks_full_output) {
+        return false;
+    }
+
+    // a draft with its own lm_head replicates it itself; only the shared target lm_head needs the flag
+    return gguf_find_tensor(gguf_ctx.get(), "output.weight") < 0;
+}
+
 static uint32_t common_get_enabled_speculative_configs(const std::vector<common_speculative_type> & configs) {
     uint32_t result = 0;
     for (size_t i = 0; i < configs.size(); i++) {
