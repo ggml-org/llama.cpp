@@ -2570,6 +2570,20 @@ static bool ggml_cuda_graph_check_compability(ggml_cgraph * cgraph) {
             }
         }
 
+#if defined(GGML_USE_HIP)
+        // [TAG_ARGSORT_HIP_CUDA_GRAPHS]
+        // Multi-row argsort uses hipCUB DeviceSegmentedRadixSort. Instantiating a HIP graph that
+        // contains a large segmented sort overflows the ROCm runtime's graph builder (stack
+        // overflow inside libamdhip64). Single-row argsort uses DeviceRadixSort and is graph-safe,
+        // so only skip graphs for the nrows>1 case (prefill/batched, which does not rely on graphs).
+        if (node->op == GGML_OP_ARGSORT && ggml_nrows(node->src[0]) > 1) {
+            use_cuda_graph = false;
+#ifndef NDEBUG
+            GGML_LOG_DEBUG("%s: disabling CUDA graphs due to multi-row ARGSORT on ROCm\n", __func__);
+#endif
+        }
+#endif // GGML_USE_HIP
+
         if (!use_cuda_graph) {
             break;
         }
@@ -5260,10 +5274,10 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
             return ggml_is_contiguous_rows(op->src[0]);
         case GGML_OP_TOP_K:
         case GGML_OP_ARGSORT:
-#ifndef GGML_CUDA_USE_CUB
-            return op->src[0]->ne[0] <= 1024;
-#else
+#if defined(GGML_USE_HIP) || defined(GGML_CUDA_USE_CUB)
             return true;
+#else
+            return op->src[0]->ne[0] <= 1024;
 #endif
         case GGML_OP_SUM_ROWS:
         case GGML_OP_MEAN:

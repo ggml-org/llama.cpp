@@ -9,6 +9,10 @@
 using namespace cub;
 #endif  // GGML_CUDA_USE_CUB
 
+#if defined(GGML_USE_HIP)
+#include <hipcub/hipcub.hpp>
+#endif
+
 static __global__ void init_indices(int * indices, const int ncols, const int nrows) {
     const int col = blockIdx.x * blockDim.x + threadIdx.x;
     const int row = blockIdx.y;
@@ -155,6 +159,60 @@ void argsort_f32_i32_cuda_cub(ggml_cuda_pool & pool,
 }
 #endif  // GGML_CUDA_USE_CUB
 
+#if defined(GGML_USE_HIP)
+// hipCUB provides DeviceRadixSort / DeviceSegmentedRadixSort (both stream-capture-safe) but not
+// DeviceSegmentedSort, so argsort for wide rows (ncols > 1024) is done with radix sort-pairs:
+// sort (score, index) pairs, writing the permuted indices straight into dst.
+static void argsort_f32_i32_cuda_hip(ggml_cuda_pool & pool,
+                                     const float *    x,
+                                     int *            dst,
+                                     const int        ncols,
+                                     const int        nrows,
+                                     ggml_sort_order  order,
+                                     cudaStream_t     stream) {
+    ggml_cuda_pool_alloc<int>   temp_indices_alloc(pool, (size_t) ncols * nrows);
+    ggml_cuda_pool_alloc<float> temp_keys_alloc(pool, (size_t) ncols * nrows);
+    int *   temp_indices = temp_indices_alloc.get();
+    float * temp_keys    = temp_keys_alloc.get();
+
+    static const int block_size = 256;
+    const dim3 grid_size((ncols + block_size - 1) / block_size, nrows);
+    init_indices<<<grid_size, block_size, 0, stream>>>(temp_indices, ncols, nrows);
+    CUDA_CHECK(cudaMemcpyAsync(temp_keys, x, (size_t) ncols * nrows * sizeof(float), cudaMemcpyDeviceToDevice, stream));
+
+    const bool desc      = (order == GGML_SORT_ORDER_DESC);
+    const int  begin_bit = 0;
+    const int  end_bit   = sizeof(float) * 8;
+    size_t     tmp_bytes = 0;
+
+    if (nrows == 1) {
+        if (desc) {
+            CUDA_CHECK(hipcub::DeviceRadixSort::SortPairsDescending(nullptr, tmp_bytes, temp_keys, temp_keys, temp_indices, dst, ncols, begin_bit, end_bit, stream));
+            ggml_cuda_pool_alloc<uint8_t> tmp(pool, tmp_bytes);
+            CUDA_CHECK(hipcub::DeviceRadixSort::SortPairsDescending(tmp.get(), tmp_bytes, temp_keys, temp_keys, temp_indices, dst, ncols, begin_bit, end_bit, stream));
+        } else {
+            CUDA_CHECK(hipcub::DeviceRadixSort::SortPairs(nullptr, tmp_bytes, temp_keys, temp_keys, temp_indices, dst, ncols, begin_bit, end_bit, stream));
+            ggml_cuda_pool_alloc<uint8_t> tmp(pool, tmp_bytes);
+            CUDA_CHECK(hipcub::DeviceRadixSort::SortPairs(tmp.get(), tmp_bytes, temp_keys, temp_keys, temp_indices, dst, ncols, begin_bit, end_bit, stream));
+        }
+    } else {
+        ggml_cuda_pool_alloc<int> offsets_alloc(pool, nrows + 1);
+        int * offsets = offsets_alloc.get();
+        const dim3 offset_grid((nrows + 1 + block_size - 1) / block_size);
+        init_offsets<<<offset_grid, block_size, 0, stream>>>(offsets, ncols, nrows);
+        if (desc) {
+            CUDA_CHECK(hipcub::DeviceSegmentedRadixSort::SortPairsDescending(nullptr, tmp_bytes, temp_keys, temp_keys, temp_indices, dst, ncols * nrows, nrows, offsets, offsets + 1, begin_bit, end_bit, stream));
+            ggml_cuda_pool_alloc<uint8_t> tmp(pool, tmp_bytes);
+            CUDA_CHECK(hipcub::DeviceSegmentedRadixSort::SortPairsDescending(tmp.get(), tmp_bytes, temp_keys, temp_keys, temp_indices, dst, ncols * nrows, nrows, offsets, offsets + 1, begin_bit, end_bit, stream));
+        } else {
+            CUDA_CHECK(hipcub::DeviceSegmentedRadixSort::SortPairs(nullptr, tmp_bytes, temp_keys, temp_keys, temp_indices, dst, ncols * nrows, nrows, offsets, offsets + 1, begin_bit, end_bit, stream));
+            ggml_cuda_pool_alloc<uint8_t> tmp(pool, tmp_bytes);
+            CUDA_CHECK(hipcub::DeviceSegmentedRadixSort::SortPairs(tmp.get(), tmp_bytes, temp_keys, temp_keys, temp_indices, dst, ncols * nrows, nrows, offsets, offsets + 1, begin_bit, end_bit, stream));
+        }
+    }
+}
+#endif // GGML_USE_HIP
+
 // Bitonic sort implementation
 template<typename T>
 static inline __device__ void ggml_cuda_swap(T & a, T & b) {
@@ -263,7 +321,7 @@ void ggml_cuda_op_argsort(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
 
     enum ggml_sort_order order = (enum ggml_sort_order) dst->op_params[0];
 
-#ifdef GGML_CUDA_USE_CUB
+#if defined(GGML_CUDA_USE_CUB) || defined(GGML_USE_HIP)
     const int    ncols_pad      = next_power_of_2(ncols);
     const size_t shared_mem     = ncols_pad * sizeof(int);
     const size_t max_shared_mem = ggml_cuda_info().devices[ggml_cuda_get_device()].smpb;
@@ -274,9 +332,12 @@ void ggml_cuda_op_argsort(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
         return;
     }
 
-    const int chunk_nrows = argsort_f32_i32_cuda_cub_chunk_nrows(src0->nb[1], nrows);
-
     ggml_cuda_pool & pool = ctx.pool();
+
+#if defined(GGML_USE_HIP)
+    argsort_f32_i32_cuda_hip(pool, src0_d, (int *) dst_d, ncols, nrows, order, stream);
+#else
+    const int chunk_nrows = argsort_f32_i32_cuda_cub_chunk_nrows(src0->nb[1], nrows);
 
     for (int64_t i = 0; i < nrows; i += chunk_nrows) {
         int iter_nrows = std::min((int64_t) chunk_nrows, nrows - i);
@@ -286,6 +347,7 @@ void ggml_cuda_op_argsort(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
         src0_d += ncols * iter_nrows;
         dst_d  += ncols * iter_nrows;
     }
+#endif
 #else
     argsort_f32_i32_cuda_bitonic(src0_d, (int *) dst_d, ncols, nrows, order, stream);
 #endif
