@@ -47,16 +47,14 @@ block_a_prefetch block_a_load(uint ib, uint loadr) {
 }
 
 void block_a_to_shmem(block_a_prefetch blk, uint buf_ib, uint ks, uint loadr) {
+    // Store raw unsigned nibbles; the -8 offset is absorbed by the min term.
     uint32_t lo4 = blk.qs & 0x0F0F0F0F;
     uint32_t hi4 = (blk.qs >> 4) & 0x0F0F0F0F;
-    lo4 = ((lo4 | 0x80808080) - 0x08080808) ^ 0x80808080;
-    hi4 = ((hi4 | 0x80808080) - 0x08080808) ^ 0x80808080;
     buf_a_qs[buf_ib * QPITCH + ks * (BK / 4) + loadr    ] = lo4;
     buf_a_qs[buf_ib * QPITCH + ks * (BK / 4) + loadr + 4] = hi4;
 
     if (loadr == 0) {
-        const float d = float(blk.dm.x);
-        buf_a_dm[ks * BM + buf_ib] = vec2(d, 8.0 * d + float(blk.dm.y));
+        buf_a_dm[ks * BM + buf_ib] = vec2(float(blk.dm.x), float(blk.dm.y));
     }
 }
 
@@ -109,18 +107,16 @@ block_a_prefetch block_a_load(uint ib, uint loadr) {
 }
 
 void block_a_to_shmem(block_a_prefetch blk, uint buf_ib, uint ks, uint loadr) {
+    // Store raw unsigned 5-bit values; the -16 offset is absorbed by the min term.
     uint32_t lo4 = blk.qs & 0x0F0F0F0F;
     uint32_t hi4 = (blk.qs >> 4) & 0x0F0F0F0F;
     lo4 |= ((blk.qh >> (4u * loadr       )) & 0xFu) * 0x02040810u & 0x10101010u;
     hi4 |= ((blk.qh >> (4u * loadr + 16u )) & 0xFu) * 0x02040810u & 0x10101010u;
-    lo4 = ((lo4 | 0x80808080) - 0x10101010) ^ 0x80808080;
-    hi4 = ((hi4 | 0x80808080) - 0x10101010) ^ 0x80808080;
     buf_a_qs[buf_ib * QPITCH + ks * (BK / 4) + loadr    ] = lo4;
     buf_a_qs[buf_ib * QPITCH + ks * (BK / 4) + loadr + 4] = hi4;
 
     if (loadr == 0) {
-        const float d = float(blk.dm.x);
-        buf_a_dm[ks * BM + buf_ib] = vec2(d, 16.0 * d + float(blk.dm.y));
+        buf_a_dm[ks * BM + buf_ib] = vec2(float(blk.dm.x), float(blk.dm.y));
     }
 }
 
@@ -240,25 +236,22 @@ block_a_prefetch block_a_load(uint ib, uint loadr) {
 }
 
 void block_a_to_shmem(block_a_prefetch blk, uint buf_ib, uint ks, uint loadr) {
-    uint32_t v0 = ((blk.qs0 | 0x80808080) - 0x08080808) ^ 0x80808080;
-    uint32_t v1 = ((blk.qs1 | 0x80808080) - 0x08080808) ^ 0x80808080;
-    buf_a_qs[buf_ib * QPITCH + ks * (BK / 4) + loadr * 2    ] = v0;
-    buf_a_qs[buf_ib * QPITCH + ks * (BK / 4) + loadr * 2 + 1] = v1;
+    // Store raw unsigned nibbles (blk.qs already masked); no -8 recentering needed.
+    buf_a_qs[buf_ib * QPITCH + ks * (BK / 4) + loadr * 2    ] = blk.qs0;
+    buf_a_qs[buf_ib * QPITCH + ks * (BK / 4) + loadr * 2 + 1] = blk.qs1;
 
     if (loadr == 0) {
         const uint ib_k = blk.ib / 8;
         const uint sub = blk.ib % 8;
-        uint sc_val, mn_val;
-        if (sub < 4) {
-            sc_val = uint(data_a[ib_k].scales[sub]) & 0x3Fu;
-            mn_val = uint(data_a[ib_k].scales[sub + 4]) & 0x3Fu;
-        } else {
-            sc_val = (uint(data_a[ib_k].scales[sub + 4]) & 0xFu) | ((uint(data_a[ib_k].scales[sub - 4]) & 0xC0u) >> 2);
-            mn_val = (uint(data_a[ib_k].scales[sub + 4]) >> 4) | ((uint(data_a[ib_k].scales[sub]) & 0xC0u) >> 2);
-        }
+        const uint j = sub & 3u;
+        const uint s_j  = uint(data_a[ib_k].scales[j]);
+        const uint s_j4 = uint(data_a[ib_k].scales[j + 4]);
+        const uint s_j8 = uint(data_a[ib_k].scales[j + 8]);
+        const uint sc_val = (sub < 4) ? (s_j  & 0x3Fu) : ((s_j8 & 0x0Fu) | ((s_j  >> 6) << 4));
+        const uint mn_val = (sub < 4) ? (s_j4 & 0x3Fu) : ((s_j8 >> 4)    | ((s_j4 >> 6) << 4));
         vec2 dm = vec2(data_a_packed32[ib_k].dm);
         float d_scaled = dm.x * float(sc_val);
-        buf_a_dm[ks * BM + buf_ib] = vec2(d_scaled, 8.0 * d_scaled - (dm.y * float(mn_val)));
+        buf_a_dm[ks * BM + buf_ib] = vec2(d_scaled, -(dm.y * float(mn_val)));
     }
 }
 
@@ -295,27 +288,24 @@ block_a_prefetch block_a_load(uint ib, uint loadr) {
 }
 
 void block_a_to_shmem(block_a_prefetch blk, uint buf_ib, uint ks, uint loadr) {
+    // Store raw unsigned 5-bit values (qs nibble | qh bit); no -16 recentering needed.
     uint32_t v0 = blk.qs0 | blk.qh0;
     uint32_t v1 = blk.qs1 | blk.qh1;
-    v0 = ((v0 | 0x80808080) - 0x10101010) ^ 0x80808080;
-    v1 = ((v1 | 0x80808080) - 0x10101010) ^ 0x80808080;
     buf_a_qs[buf_ib * QPITCH + ks * (BK / 4) + loadr * 2    ] = v0;
     buf_a_qs[buf_ib * QPITCH + ks * (BK / 4) + loadr * 2 + 1] = v1;
 
     if (loadr == 0) {
         const uint ib_k = blk.ib / 8;
         const uint sub = blk.ib % 8;
-        uint sc_val, mn_val;
-        if (sub < 4) {
-            sc_val = uint(data_a[ib_k].scales[sub]) & 0x3Fu;
-            mn_val = uint(data_a[ib_k].scales[sub + 4]) & 0x3Fu;
-        } else {
-            sc_val = (uint(data_a[ib_k].scales[sub + 4]) & 0xFu) | ((uint(data_a[ib_k].scales[sub - 4]) & 0xC0u) >> 2);
-            mn_val = (uint(data_a[ib_k].scales[sub + 4]) >> 4) | ((uint(data_a[ib_k].scales[sub]) & 0xC0u) >> 2);
-        }
+        const uint j = sub & 3u;
+        const uint s_j  = uint(data_a[ib_k].scales[j]);
+        const uint s_j4 = uint(data_a[ib_k].scales[j + 4]);
+        const uint s_j8 = uint(data_a[ib_k].scales[j + 8]);
+        const uint sc_val = (sub < 4) ? (s_j  & 0x3Fu) : ((s_j8 & 0x0Fu) | ((s_j  >> 6) << 4));
+        const uint mn_val = (sub < 4) ? (s_j4 & 0x3Fu) : ((s_j8 >> 4)    | ((s_j4 >> 6) << 4));
         vec2 dm = vec2(data_a_packed32[ib_k].dm);
         float d_scaled = dm.x * float(sc_val);
-        buf_a_dm[ks * BM + buf_ib] = vec2(d_scaled, 16.0 * d_scaled - (dm.y * float(mn_val)));
+        buf_a_dm[ks * BM + buf_ib] = vec2(d_scaled, -(dm.y * float(mn_val)));
     }
 }
 

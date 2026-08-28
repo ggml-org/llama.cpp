@@ -10,7 +10,6 @@
 #extension GL_KHR_memory_scope_semantics : enable
 
 #if defined(MUL_MAT_ID_USE_SUBGROUPS)
-#extension GL_KHR_shader_subgroup_basic : enable
 #extension GL_KHR_shader_subgroup_ballot : enable
 #endif
 
@@ -91,10 +90,9 @@ layout (constant_id = 11) const uint CM_ARCH = 0;  // vk_device_architecture (gg
 
 const uint QPITCH = BK_STEP * (BK / 4) + 4;
 
-// Shared memory cache
 shared uint32_t buf_a_qs[BM * QPITCH];
 #if defined(DATA_A_Q4_1) || defined(DATA_A_Q5_1) || defined(DATA_A_Q4_K) || defined(DATA_A_Q5_K)
-shared vec2 buf_a_dm[BM * BK_STEP];   // .x = d (== old buf_a_d), .y = m (== old buf_a_m)
+shared vec2 buf_a_dm[BM * BK_STEP];   // .x = d, .y = m
 #else
 shared float buf_a_d[BM * BK_STEP * KSCALES];
 #endif
@@ -122,11 +120,19 @@ const uint CM_ELEMS = (TM * TN) / WARP;
 #define ACC_BIAS_F    12582912.0f
 const bool USE_MAGIC_BIAS = WARP != 32;
 
-// Coopmat accumulator layout (RDNA): col constant per lane, 8 distinct rows.
-// Row order differs by arch: RDNA4 blocked, RDNA3/3.5 interleaved.
+// Accumulator row for element e: RDNA4 blocked, RDNA3/3.5 interleaved.
 uint cm_elem_row(uint e) {
     const uint row_half = gl_SubgroupInvocationID / TN;
     return (CM_ARCH == CM_ARCH_AMD_RDNA4) ? (e + row_half * CM_ELEMS) : (row_half + 2u * e);
+}
+
+// min_term = asymmetric-quant min*b_sum correction (0 for symmetric types).
+ACC_TYPE cm1_accumulate(ACC_TYPE prev, int acc_e, float scale_a, float nbias_a, float scale_b, float min_term) {
+    if (USE_MAGIC_BIAS) {
+        const float t = fma(intBitsToFloat(acc_e), scale_a, nbias_a);
+        return ACC_TYPE(fma(t, scale_b, float(prev) + min_term));
+    }
+    return prev + ACC_TYPE(fma(float(acc_e) * scale_a, scale_b, min_term));
 }
 
 #ifdef MUL_MAT_ID
@@ -237,7 +243,6 @@ void main() {
     barrier();
 #endif
 
-    // Workgroup has no work
     if (ic * BN >= _ne1) return;
 #endif
 
@@ -274,7 +279,6 @@ void main() {
     block_a_prefetch pre_a[A_LOADS * BK_STEP];
     block_b_prefetch pre_b[B_LOADS * BK_STEP];
 
-    // Prefetch first block
     if (start_k < end_k) {
         PREFETCH_BLOCK(start_k)
     }
@@ -290,7 +294,6 @@ void main() {
     barrier();
 
     for (uint block = start_k; block < end_k; block += BK * BK_STEP) {
-        // Store prefetched data to shmem
         STORE_BLOCK_TO_LDS(block)
 
         barrier();
@@ -298,14 +301,12 @@ void main() {
         pos_a_ib += BK_STEP;
         pos_b_ib += BK_STEP;
 
-        // Prefetch next block (overlaps with compute)
         const uint next_block = block + BK * BK_STEP;
         if (next_block < end_k) {
             PREFETCH_BLOCK(next_block)
         }
 
         if (active_col_tile) {
-        // Compute from shmem
         [[unroll]] for (uint ks = 0; ks < BK_STEP; ks++) {
             const uint K_SUB = BK / TK;
 
@@ -337,35 +338,37 @@ void main() {
 
                         const uint tile_idx = r * cms_per_col + c;
                         [[unroll]] for (uint e = 0; e < CM_ELEMS; e++) {
-                            if (USE_MAGIC_BIAS) {
-                                const float t = fma(intBitsToFloat(int(acc[e])),
-                                                    scale_a[e],
-                                                    nbias_a[e]);
-                                sums[tile_idx * CM_ELEMS + e] = ACC_TYPE(fma(t, scale_b_v,
-                                                                    float(sums[tile_idx * CM_ELEMS + e])));
-                            } else {
-                                sums[tile_idx * CM_ELEMS + e] += ACC_TYPE(float(acc[e])
-                                    * scale_a[e] * scale_b_v);
-                            }
+                            sums[tile_idx * CM_ELEMS + e] = cm1_accumulate(
+                                sums[tile_idx * CM_ELEMS + e], int(acc[e]),
+                                scale_a[e], nbias_a[e], scale_b_v, 0.0);
                         }
                     }
                 }
             }
 #elif defined(DATA_A_Q4_1) || defined(DATA_A_Q5_1) || defined(DATA_A_Q4_K) || defined(DATA_A_Q5_K)
-            // Preload all B fragments for this ks to avoid re-loading them per r (halves B LDS reads).
+            // Preload all A/B fragments up front (ILP).
+            coopmat<int8_t, gl_ScopeSubgroup, TM, TK, gl_MatrixUseA> cache_a[cms_per_row * K_SUB];
             coopmat<int8_t, gl_ScopeSubgroup, TK, TN, gl_MatrixUseB> cache_b[cms_per_col * K_SUB];
+
+            [[unroll]] for (uint r = 0; r < cms_per_row; r++) {
+                [[unroll]] for (uint h = 0; h < K_SUB; h++) {
+                    coopMatLoad(cache_a[r * K_SUB + h], buf_a_qs, (a_row0 + r * TM) * QPITCH + ks * (BK / 4) + h * (TK / 4), QPITCH, gl_CooperativeMatrixLayoutRowMajor);
+                }
+            }
             [[unroll]] for (uint c = 0; c < cms_per_col; c++) {
                 [[unroll]] for (uint h = 0; h < K_SUB; h++) {
                     coopMatLoad(cache_b[c * K_SUB + h], buf_b_qs, (b_col0 + c * TN) * QPITCH + ks * (BK / 4) + h * (TK / 4), QPITCH, gl_CooperativeMatrixLayoutColumnMajor);
                 }
             }
 
-            [[unroll]] for (uint r = 0; r < cms_per_row; r++) {
-                coopmat<int8_t, gl_ScopeSubgroup, TM, TK, gl_MatrixUseA> cache_a[K_SUB];
-                [[unroll]] for (uint h = 0; h < K_SUB; h++) {
-                    coopMatLoad(cache_a[h], buf_a_qs, (a_row0 + r * TM) * QPITCH + ks * (BK / 4) + h * (TK / 4), QPITCH, gl_CooperativeMatrixLayoutRowMajor);
-                }
+            float scale_b[cms_per_col];
+            float bs[cms_per_col];
+            [[unroll]] for (uint c = 0; c < cms_per_col; c++) {
+                scale_b[c] = buf_b_d[ks * BN + b_col0 + c * TN + elem_col0];
+                bs[c] = float(buf_b_s[ks * BN + b_col0 + c * TN + elem_col0]);
+            }
 
+            [[unroll]] for (uint r = 0; r < cms_per_row; r++) {
                 float scale_a[CM_ELEMS];
                 float nbias_a[CM_ELEMS];
                 float ma[CM_ELEMS];
@@ -384,28 +387,19 @@ void main() {
                             USE_MAGIC_BIAS ? ACC_BIAS_BITS : 0);
 
                     [[unroll]] for (uint h = 0; h < K_SUB; h++) {
-                        acc = coopMatMulAdd(cache_a[h], cache_b[c * K_SUB + h], acc);
+                        acc = coopMatMulAdd(cache_a[r * K_SUB + h], cache_b[c * K_SUB + h], acc);
                     }
 
                     const uint tile_idx = r * cms_per_col + c;
-                    const float sb = buf_b_d[ks * BN + b_col0 + c * TN + elem_col0];
-                    const float bs = float(buf_b_s[ks * BN + b_col0 + c * TN + elem_col0]);
                     [[unroll]] for (uint e = 0; e < CM_ELEMS; e++) {
-                        if (USE_MAGIC_BIAS) {
-                            const float t = fma(intBitsToFloat(int(acc[e])),
-                                                scale_a[e], nbias_a[e]);
-                            sums[tile_idx * CM_ELEMS + e] = ACC_TYPE(fma(t, sb,
-                                                                fma(ma[e], bs,
-                                                                float(sums[tile_idx * CM_ELEMS + e]))));
-                        } else {
-                            sums[tile_idx * CM_ELEMS + e] += ACC_TYPE(
-                                fma(float(acc[e]) * scale_a[e], sb, ma[e] * bs));
-                        }
+                        sums[tile_idx * CM_ELEMS + e] = cm1_accumulate(
+                            sums[tile_idx * CM_ELEMS + e], int(acc[e]),
+                            scale_a[e], nbias_a[e], scale_b[c], ma[e] * bs[c]);
                     }
                 }
             }
 #else
-            // Simple types: pre-load all caches for better data reuse
+            // Preload all A/B fragments up front (ILP).
             coopmat<int8_t, gl_ScopeSubgroup, TM, TK, gl_MatrixUseA> cache_a[cms_per_row * K_SUB];
             coopmat<int8_t, gl_ScopeSubgroup, TK, TN, gl_MatrixUseB> cache_b[cms_per_col * K_SUB];
 
@@ -446,16 +440,9 @@ void main() {
 
                     const uint tile_idx = r * cms_per_col + c;
                     [[unroll]] for (uint e = 0; e < CM_ELEMS; e++) {
-                        if (USE_MAGIC_BIAS) {
-                            const float t = fma(intBitsToFloat(int(acc[e])),
-                                                scale_a[e],
-                                                nbias_a[e]);
-                            sums[tile_idx * CM_ELEMS + e] = ACC_TYPE(fma(t, scale_b[c],
-                                                                float(sums[tile_idx * CM_ELEMS + e])));
-                        } else {
-                            sums[tile_idx * CM_ELEMS + e] += ACC_TYPE(float(acc[e])
-                                * scale_a[e] * scale_b[c]);
-                        }
+                        sums[tile_idx * CM_ELEMS + e] = cm1_accumulate(
+                            sums[tile_idx * CM_ELEMS + e], int(acc[e]),
+                            scale_a[e], nbias_a[e], scale_b[c], 0.0);
                     }
                 }
             }
