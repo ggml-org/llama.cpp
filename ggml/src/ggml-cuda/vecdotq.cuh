@@ -760,7 +760,7 @@ static __device__ __forceinline__ float vec_dot_q2_0_q8_1(
         // unshuffle values
         const int qx = __byte_perm(qe, qo, 0x5140);
         const int qy = __byte_perm(qe, qo, 0x7362);
-#endif
+#endif // defined(GGML_USE_HIP)
 
         sumi = ggml_cuda_dp4a(u, qx, sumi);
         sumi = ggml_cuda_dp4a(v, qy, sumi);
