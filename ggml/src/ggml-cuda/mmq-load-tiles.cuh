@@ -151,7 +151,7 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
             // unshuffle values
             const int qx = __byte_perm(qe, qo, 0x5140);
             const int qy = __byte_perm(qe, qo, 0x7362);
-#endif
+#endif // defined(GGML_USE_HIP)
 
 #if defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
             x_qs[i*sram_stride           + dst_offset + j*2+0] = qx;
@@ -828,7 +828,7 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
 
 #if defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
     int   * x_qs = (int   *)  x_tile;
-    half2 * x_dm = (half2 *) (x_qs + MMQ_TILE_NE_K*2);
+    half2 * x_dm = (half2 *) (x_qs + 2*MMQ_TILE_NE_K);
 #else
     constexpr tile_x_sizes txs = mmq_get_dp4a_tile_x_sizes(GGML_TYPE_Q5_K, I);
     int   * x_qs = (int   *)  x_tile;
@@ -1015,7 +1015,7 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
     constexpr int rows_per_warp = warp_size / 4;
 #pragma unroll
     for (int i0 = 0; i0 < I; i0 += nwarps*rows_per_warp) {
-        int i = (i0 + threadIdx.y*rows_per_warp + threadIdx.x/(MMQ_TILE_NE_K/8)) % I;
+        int i = i0 + threadIdx.y*rows_per_warp + threadIdx.x/(MMQ_TILE_NE_K/8);
 
         if (fallback) {
             i = min(i, i_max);
