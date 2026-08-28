@@ -154,6 +154,14 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
                     check_cxx_source_runs("${code}" GGML_MACHINE_SUPPORTS_${tag})
                     if (GGML_MACHINE_SUPPORTS_${tag})
                         set(ARM_NATIVE_FLAG_FIX "${ARM_NATIVE_FLAG_FIX}+${tag}")
+                        # On MSVC, `-mcpu=native+${tag}` is ignored and never defines
+                        # __ARM_FEATURE_<X>. The runtime probe just proved the CPU has
+                        # this feature, so forward the decision into the preprocessor
+                        # manually. Downstream compile-time guards then agree with the
+                        # runtime probe.
+                        if (MSVC AND NOT CMAKE_C_COMPILER_ID STREQUAL "Clang")
+                            list(APPEND ARCH_FLAGS "-D__ARM_FEATURE_${feature}=1")
+                        endif()
                     else()
                         set(CMAKE_REQUIRED_FLAGS "${ARM_NATIVE_FLAG}+no${tag}")
                         check_cxx_source_compiles("int main() { return 0; }" GGML_MACHINE_SUPPORTS_no${tag})
