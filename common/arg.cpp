@@ -2535,6 +2535,20 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             LOG_WRN("DEPRECATED: --defrag-thold is deprecated and no longer necessary to specify\n");
         }
     ).set_env("LLAMA_ARG_DEFRAG_THOLD"));
+    add_opt(common_arg(
+        {"--moe-expert-cache"}, "N",
+        string_format("GPU cache slots per host-resident MoE expert layer, 0 = disabled (default: %d)", params.n_moe_cache_slots),
+        [](common_params & params, int value) {
+            params.n_moe_cache_slots = value;
+        }
+    ).set_env("LLAMA_ARG_MOE_EXPERT_CACHE"));
+    add_opt(common_arg(
+        {"--moe-expert-cache-inserts"}, "N",
+        string_format("max expert uploads per layer per decode step for the MoE expert cache (default: %d)", params.n_moe_cache_inserts),
+        [](common_params & params, int value) {
+            params.n_moe_cache_inserts = value;
+        }
+    ).set_env("LLAMA_ARG_MOE_EXPERT_CACHE_INSERTS"));
     if (ex == LLAMA_EXAMPLE_SERVER) {
         // this is to make sure this option appears in the server-specific section of the help message
         add_opt(common_arg(

@@ -352,6 +352,15 @@ extern "C" {
     // Returns the old callback for chaining
     GGML_API ggml_abort_callback_t ggml_set_abort_callback(ggml_abort_callback_t callback);
 
+    struct ggml_tensor;
+
+    // MoE expert-routing observation callback: invoked by the CPU mul_mat_id
+    // with the op's expert-id tensor (I32 [n_expert_used, n_tokens]). Used by
+    // the llama MoE expert cache to drive LRU placement decisions.
+    typedef void (*ggml_moe_obs_cb_t)(const char * tensor_name, const struct ggml_tensor * ids, void * ud);
+    GGML_API void            ggml_set_moe_obs_callback(ggml_moe_obs_cb_t cb, void * ud);
+    GGML_API ggml_moe_obs_cb_t ggml_get_moe_obs_callback(void ** ud);
+
     GGML_NORETURN GGML_ATTRIBUTE_FORMAT(3, 4)
     GGML_API void ggml_abort(const char * file, int line, const char * fmt, ...);
 
