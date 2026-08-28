@@ -48,6 +48,29 @@ static int next_power_of_2(int x) {
 
 #endif                            // CUB_TOP_K_AVAILABLE
 
+#if defined(GGML_USE_HIP)
+#include <rocprim/rocprim.hpp>
+// rocPRIM has no DeviceTopK equivalent; partial_sort_copy is nth_element(O(ncols)) + a sort of only
+// the first k, i.e. the same algorithmic class as cub::DeviceTopK and far cheaper than the generic
+// full-sort fallback when k << ncols. It is keys-only, so pack (order-preserving float bits, index)
+// into one u64 key to carry the index through the sort.
+static __global__ void ggml_cuda_topk_pack_kv(const float * x, uint64_t * packed, const int ncols) {
+    const int col = blockIdx.x * blockDim.x + threadIdx.x;
+    if (col >= ncols) {
+        return;
+    }
+    uint32_t u = __float_as_uint(x[col]);
+    u ^= (u & 0x80000000u) ? 0xFFFFFFFFu : 0x80000000u; // order-preserving float -> u32
+    packed[col] = ((uint64_t) (~u) << 32) | (uint32_t) col; // hi = ~score (ascending == descending), lo = index
+}
+static __global__ void ggml_cuda_topk_unpack_idx(const uint64_t * packed, int * dst, const int k) {
+    const int j = blockIdx.x * blockDim.x + threadIdx.x;
+    if (j < k) {
+        dst[j] = (int) (uint32_t) (packed[j] & 0xFFFFFFFFu);
+    }
+}
+#endif // GGML_USE_HIP
+
 void ggml_cuda_op_top_k(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * src0   = dst->src[0];
     const float *       src0_d = (const float *) src0->data;
@@ -69,6 +92,36 @@ void ggml_cuda_op_top_k(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     // TODO: investigate if there exists a point where parallelized argsort is faster than sequential top-k
     for (int i = 0; i < nrows; i++) {
         top_k_cub(pool, src0_d + i * ncols, dst_d + i * k, ncols, k, stream);
+    }
+#elif defined(GGML_USE_HIP)  // CUB_TOP_K_AVAILABLE
+    // ROCm partial top-k (see doc/PLAN_hip_partial_topk.md). rocprim::partial_sort_copy requires
+    // middle < size, so k == ncols falls back to a full descending sort.
+    if (k < ncols) {
+        const int block = 256;
+        ggml_cuda_pool_alloc<uint64_t> packed_in_alloc(pool, ncols);
+        ggml_cuda_pool_alloc<uint64_t> packed_out_alloc(pool, ncols + 1);
+        uint64_t * packed_in  = packed_in_alloc.get();
+        uint64_t * packed_out = packed_out_alloc.get();
+        for (int64_t r = 0; r < nrows; ++r) {
+            const dim3 grid((ncols + block - 1) / block);
+            ggml_cuda_topk_pack_kv<<<grid, block, 0, stream>>>(src0_d + r * ncols, packed_in, (int) ncols);
+
+            size_t tmp_bytes = 0;
+            CUDA_CHECK(rocprim::partial_sort_copy(nullptr, tmp_bytes, packed_in, packed_out,
+                                                  (size_t) k, (size_t) ncols, rocprim::less<uint64_t>(), stream));
+            ggml_cuda_pool_alloc<uint8_t> tmp_alloc(pool, tmp_bytes);
+            CUDA_CHECK(rocprim::partial_sort_copy(tmp_alloc.get(), tmp_bytes, packed_in, packed_out,
+                                                  (size_t) k, (size_t) ncols, rocprim::less<uint64_t>(), stream));
+
+            const dim3 ugrid((k + block - 1) / block);
+            ggml_cuda_topk_unpack_idx<<<ugrid, block, 0, stream>>>(packed_out, dst_d + r * k, (int) k);
+        }
+    } else {
+        ggml_cuda_pool_alloc<int> temp_dst_alloc(pool, ncols * nrows);
+        int * tmp_dst = temp_dst_alloc.get();
+        argsort_f32_i32_cuda_bitonic(src0_d, tmp_dst, ncols, nrows, GGML_SORT_ORDER_DESC, stream);
+        CUDA_CHECK(cudaMemcpy2DAsync(dst_d, k * sizeof(int), tmp_dst, ncols * sizeof(int),
+                                     k * sizeof(int), nrows, cudaMemcpyDeviceToDevice, stream));
     }
 #elif defined(GGML_CUDA_USE_CUB)  // CUB_TOP_K_AVAILABLE
     // Fall back to argsort + copy
