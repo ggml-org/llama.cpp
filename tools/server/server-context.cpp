@@ -3001,7 +3001,13 @@ private:
                         common_speculative_get_draft_params(spec.get(), slot.id) = {
                             /* .drafting = */ true,
                             /* .n_max    = */ n_draft_max,
-                            /* .n_past   = */ slot.prompt.n_tokens(),
+                            // n_past is a llama_pos, not a token count: with mtmd media the two
+                            // differ. An M-RoPE image chunk spans max(nx, ny) positions but holds
+                            // nx*ny tokens, so tokens.size() overshoots the sequence position and
+                            // the draft ends up decoding past the end of its own cache.
+                            // pos_next() returns tokens.size() when !has_mtmd, so this is a no-op
+                            // for text-only prompts and for the other speculative backends.
+                            /* .n_past   = */ slot.prompt.tokens.pos_next(),
                             /* .id_last  = */ slot.sampled,
                             /* .prompt   = */ &slot.spec_prompt,
                             /* .result   = */ &slot.spec_draft,

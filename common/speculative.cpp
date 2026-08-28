@@ -1090,19 +1090,111 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
         }
     }
 
+    // Close a hole in ctx_dft's KV cache by injecting zero-filled placeholder rows
+    // at the consecutive positions [pos_max+1, pos_end).
+    //
+    // process() mirrors only pure-token batches, so multimodal (mtmd) chunks leave
+    // the draft cache short. The DFlash draft requires strictly consecutive KV
+    // positions, so the skipped ones must still be materialized. Zeros are NaN-safe
+    // because the encoder ends in an RMS norm with a non-zero eps.
+    //
+    // Drafts spanning these positions know nothing about the media content; the goal
+    // is only to keep the cache geometry valid so speculation engages at all.
+    bool fill_gap(llama_seq_id seq_id, llama_pos pos_end) {
+        auto * ctx_dft = this->params.ctx_dft;
+
+        llama_pos pos_cur = llama_memory_seq_pos_max(llama_get_memory(ctx_dft), seq_id) + 1;
+        if (pos_cur >= pos_end) {
+            return true;
+        }
+
+        LOG_DBG("%s: closing ctx_dft gap for seq_id=%d: positions [%d, %d)\n",
+                __func__, (int) seq_id, (int) pos_cur, (int) pos_end);
+
+        const int32_t n_ubatch = (int32_t) llama_n_ubatch(ctx_dft);
+
+        std::vector<llama_pos> enc_pos;
+
+        while (pos_cur < pos_end) {
+            const int32_t n_chunk = std::min<int32_t>(n_ubatch, pos_end - pos_cur);
+
+            features_buf.assign((size_t) n_chunk * n_embd_enc, 0.0f);
+
+            // M-RoPE drafts read 4 position rows per token from embd batches
+            if (is_mrope) {
+                enc_pos.resize((size_t) 4 * n_chunk);
+                for (int32_t i = 0; i < n_chunk; ++i) {
+                    const llama_pos p = pos_cur + i;
+                    enc_pos[0 * n_chunk + i] = p;
+                    enc_pos[1 * n_chunk + i] = p;
+                    enc_pos[2 * n_chunk + i] = p;
+                    enc_pos[3 * n_chunk + i] = 0;
+                }
+            }
+
+            llama_batch enc_batch = {
+                /*.n_tokens =*/ n_chunk,
+                /*.token    =*/ nullptr,
+                /*.embd     =*/ features_buf.data(),
+                /*.pos      =*/ is_mrope ? enc_pos.data() : nullptr,
+                /*.n_seq_id =*/ nullptr,
+                /*.seq_id   =*/ nullptr,
+                /*.logits   =*/ nullptr,
+            };
+
+            int32_t rc = llama_encode(ctx_dft, enc_batch);
+            if (rc != 0) {
+                LOG_ERR("%s: llama_encode(ctx_dft) failed rc=%d (n_tokens=%d, pos=%d)\n",
+                        __func__, rc, (int) n_chunk, (int) pos_cur);
+                return false;
+            }
+
+            const float * inp_g = llama_get_embeddings_nextn(ctx_dft);
+            GGML_ASSERT(inp_g && "DFlash encoder produced no output.");
+
+            batch_inject.n_tokens = n_chunk;
+            std::memcpy(batch_inject.embd, inp_g, (size_t) n_chunk * n_embd_dec * sizeof(float));
+
+            for (int32_t i = 0; i < n_chunk; ++i) {
+                const llama_pos p = pos_cur + i;
+                batch_inject.pos[i] = p;
+                if (is_mrope) {
+                    batch_inject.pos[1 * n_chunk + i] = p;
+                    batch_inject.pos[2 * n_chunk + i] = p;
+                    batch_inject.pos[3 * n_chunk + i] = 0;
+                }
+                batch_inject.n_seq_id[i]  = 1;
+                batch_inject.seq_id[i][0] = seq_id;
+                batch_inject.logits[i]    = false;
+            }
+
+            rc = llama_decode(ctx_dft, batch_inject);
+            if (rc != 0) {
+                LOG_ERR("%s: llama_decode(ctx_dft) failed rc=%d (n_tokens=%d, pos=%d)\n",
+                        __func__, rc, (int) n_chunk, (int) pos_cur);
+                return false;
+            }
+
+            pos_cur += n_chunk;
+        }
+
+        return true;
+    }
+
     bool process(const llama_batch & batch_in) override {
         if (batch_in.n_tokens <= 0) {
             return true;
         }
 
-        // Target prefill may contain token IDs or multimodal embeddings. Both
-        // produce the target-layer features used to seed the draft KV cache, so
-        // skipping the embedding batches leaves a hole in the draft's cache and
-        // the next injection fails to initialize.
+        // Mirror pure-token batches only (same guard as EAGLE3 / MTP).
+        //
+        // A multimodal embd batch cannot be mirrored: mtmd gives every row of an
+        // image chunk the same M-RoPE temporal position, so injecting those rows
+        // verbatim into the plain-RoPE draft cache stacks N rows on one position,
+        // never advances pos_max, and makes the *next* injection fail. The hole the
+        // skip leaves is closed by fill_gap() below.
         // TODO: revisit after https://github.com/ggml-org/llama.cpp/pull/24669 is merged
-        const bool has_tokens     = batch_in.token != nullptr;
-        const bool has_embeddings = batch_in.embd  != nullptr;
-        if (has_tokens == has_embeddings) {
+        if (batch_in.token == nullptr || batch_in.embd != nullptr) {
             return true;
         }
 
@@ -1136,6 +1228,12 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
 
             for (int32_t offset = 0; offset < n_rows; offset += n_ubatch) {
                 const int32_t n_chunk = std::min(n_ubatch, n_rows - offset);
+
+                // the target may have consumed positions we skipped (media chunks) - close the hole
+                // before injecting, otherwise the draft cache is non-consecutive and the decode fails
+                if (!fill_gap(seq_id, batch_in.pos[i_batch_beg[seq_id] + offset])) {
+                    return false;
+                }
 
                 // gather this chunk's target features, interleaved by extract layer
                 features_buf.resize((size_t) n_chunk * n_embd_enc);
@@ -1232,6 +1330,14 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
             common_sampler_reset(smpls[seq_id].get());
 
             const int32_t n = (int32_t) dp.n_past;
+
+            // a media chunk at the very end of the prompt is skipped by process() with no
+            // following token batch to trigger fill_gap(), so close any remaining hole here
+            if (!fill_gap(seq_id, dp.n_past)) {
+                LOG_WRN("%s: failed to close the ctx_dft gap for seq_id=%d - skipping draft\n",
+                        __func__, (int) seq_id);
+                continue;
+            }
 
             const int32_t n_draft = params.n_max;
 
