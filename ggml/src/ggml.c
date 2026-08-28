@@ -3279,7 +3279,7 @@ struct ggml_tensor * ggml_l2_norm_inplace(
 
 // ggml_prec
 
-void ggml_prec_set_acc(
+bool ggml_prec_set_acc(
         struct ggml_tensor * a,
         enum ggml_prec       prec) {
     switch (a->op) {
@@ -3299,11 +3299,13 @@ void ggml_prec_set_acc(
             }
             break;
         default:
-            GGML_ABORT("not implemented");
+            return false;
     };
+
+    return true;
 }
 
-void ggml_prec_set_src(
+bool ggml_prec_set_src(
         struct ggml_tensor * a,
         enum ggml_prec       prec,
         int                  idx) {
@@ -3313,7 +3315,9 @@ void ggml_prec_set_src(
         case GGML_OP_MUL_MAT:
         case GGML_OP_MUL_MAT_ID:
             {
-                GGML_ASSERT(idx == 1);
+                if (idx != 1) {
+                    return false;
+                }
 
                 const int32_t prec_i32 = (int32_t) prec;
 
@@ -3321,8 +3325,10 @@ void ggml_prec_set_src(
             }
             break;
         default:
-            GGML_ABORT("not implemented");
+            return false;
     };
+
+    return true;
 }
 
 // ggml_mul_mat
