@@ -48,6 +48,7 @@ void llama_model_glm5_next::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_INDEXER_TOP_K,             hparams.indexer_top_k);
     ml.get_key(LLM_KV_ATTENTION_INDEXER_KPOOL,             hparams.indexer_kpool);
     ml.get_key(LLM_KV_ATTENTION_INDEXER_KPOOL_SELECT_TAIL, hparams.indexer_kpool_select_tail, false);
+    ml.get_key(LLM_KV_ATTENTION_INDEXER_INDEX_SHARE_MTP,   hparams.indexer_index_share_mtp,   false);
     GGML_ASSERT(hparams.indexer_kpool > 1 && hparams.indexer_top_k % hparams.indexer_kpool == 0);
     std::fill(hparams.is_indexer_full_impl.begin(), hparams.is_indexer_full_impl.end(), 1);
     ml.get_key_or_arr(LLM_KV_ATTENTION_INDEXER_TYPES, hparams.is_indexer_full_impl, hparams.n_layer(), false);
@@ -343,10 +344,7 @@ llama_model_glm5_next::llm_graph_input_kpool * llama_model_glm5_next::graph::bui
 
     // Gather selected latents for small decode batches when n_kv exceeds n_sel.
     {
-        static const int64_t max_ub = [] {
-            const char * s = getenv("LLAMA_GLM5_GATHER_UBATCH");
-            return s != nullptr ? (int64_t) atoll(s) : (int64_t) 16;
-        }();
+        constexpr int64_t max_ub = 16;
 
         const int64_t n_top_pool = std::min<int64_t>(n_pool, hparams.indexer_top_k / kpool);
         const int64_t n_sel      = kpool*n_top_pool + (hparams.indexer_kpool_select_tail ? kpool - 1 : 0);

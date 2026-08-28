@@ -264,7 +264,7 @@ class Glm5NextVisionModel(Glm4VVisionModel):
         assert self.hparams_vision is not None
         self.gguf_writer.add_vision_spatial_merge_size(int(self.hparams_vision.get("spatial_merge_size", 2)))
         if (limit := self.hparams_vision.get("swiglu_limit")) is not None:
-            self.gguf_writer.add_vision_swiglu_limit(float(limit))
+            self.gguf_writer.add_vision_swiglu_clamp(float(limit))
 
         # image token budget from the processor, stored as single-frame pixel counts
         pc = self.preprocessor_config

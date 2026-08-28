@@ -648,9 +648,9 @@ ggml_tensor * clip_graph::build_ffn(
     switch (type_op) {
         case FFN_SILU:
             if (gate) {
-                if (hparams.swiglu_limit > 0.0f) {
-                    cur = ggml_clamp(ctx0, cur, -INFINITY, hparams.swiglu_limit);
-                    tmp = ggml_clamp(ctx0, tmp, -hparams.swiglu_limit, hparams.swiglu_limit);
+                if (hparams.has_swiglu_clamp()) {
+                    cur = ggml_clamp(ctx0, cur, hparams.swiglu_clamp_gate.first, hparams.swiglu_clamp_gate.second);
+                    tmp = ggml_clamp(ctx0, tmp, hparams.swiglu_clamp_up.first,   hparams.swiglu_clamp_up.second);
                     cb(cur, "ffn_gate_clamped", il);
                 }
                 cur = ggml_swiglu_split(ctx0, cur, tmp);
@@ -1739,10 +1739,14 @@ struct clip_model_loader {
                         hparams.n_merge = 2;
                         hparams.image_resize_algo = RESIZE_ALGO_BICUBIC;
                         get_u32(KEY_SPATIAL_MERGE_SIZE, hparams.n_merge, false);
-                        get_f32(KEY_SWIGLU_LIMIT, hparams.swiglu_limit, false);
+                        float swiglu_clamp = 0.0f;
+                        get_f32(KEY_SWIGLU_CLAMP, swiglu_clamp, true);
+                        if (swiglu_clamp > 0.0f) {
+                            hparams.swiglu_clamp_gate = { -INFINITY,     swiglu_clamp };
+                            hparams.swiglu_clamp_up   = { -swiglu_clamp, swiglu_clamp };
+                        }
                         get_u32(KEY_IMAGE_MIN_PIXELS, hparams.image_min_pixels);
                         get_u32(KEY_IMAGE_MAX_PIXELS, hparams.image_max_pixels);
-                        hparams.warmup_image_size = static_cast<int>(std::sqrt(hparams.image_max_pixels));
                         hparams.set_warmup_n_tokens(46*46); // avoid OOM on warmup
                     } break;
                 case PROJECTOR_TYPE_LLAMA4:

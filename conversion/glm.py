@@ -511,6 +511,7 @@ class Glm5NextModel(TextModel):
         self.gguf_writer.add_indexer_top_k(hp["index_topk"])
         self.gguf_writer.add_indexer_kpool(hp["index_kpool"])
         self.gguf_writer.add_indexer_kpool_select_tail(hp.get("index_kpool_always_select_tail", True))
+        self.gguf_writer.add_indexer_index_share_mtp(hp.get("index_share_for_mtp_iteration", False))
         if (indexer_types := hp.get("indexer_types")) is not None:
             self.gguf_writer.add_indexer_types([t == "full" for t in indexer_types[:n_layer]])
 
@@ -593,7 +594,7 @@ class Glm5NextModel(TextModel):
     def tensor_force_quant(self, name: str, new_name: str, bid: int | None, n_dims: int) -> gguf.GGMLQuantizationType | bool:
         # keep the small mHC / gating parameters exact
         if (new_name.startswith(("blk.", "output_hc")) and any(k in new_name for k in
-                ("hc_attn_", "hc_ffn_", "indexer.kpool", "ssm_a", "ssm_dt", "exp_probs_b"))):
+                ("hc_attn_", "hc_ffn_", "indexer_compressor_", "ssm_a", "ssm_dt", "exp_probs_b"))):
             return gguf.GGMLQuantizationType.F32
         return super().tensor_force_quant(name, new_name, bid, n_dims)
 

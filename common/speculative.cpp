@@ -1400,8 +1400,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                 "MTP input row width must match the target h_nextn width");
         n_mtp_layers = std::max(1, (int) llama_model_n_layer_nextn(llama_get_model(ctx_dft)));
 
-        const char * env_share = getenv("LLAMA_GLM5_MTP_INDEX_SHARE");
-        dsa_index_share = (env_share == nullptr || atoi(env_share) != 0) && llama_set_mtp_dsa_index_share(ctx_dft, true);
+        dsa_index_share = llama_set_mtp_dsa_index_share(ctx_dft, true);
         if (dsa_index_share) {
             dsa_sel.resize(n_seq);
         }

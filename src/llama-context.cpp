@@ -977,14 +977,15 @@ bool llama_context::set_mtp_dsa_index_share(bool enabled) {
         return false;
     }
 
+    enabled = enabled && model.hparams.indexer_index_share_mtp;
+
     auto * mem = static_cast<llama_memory_hybrid_idx *>(memory.get());
-    if (mem->get_mtp_dsa_index_share() == enabled) {
-        return true;
+    if (mem->get_mtp_dsa_index_share() != enabled) {
+        mem->set_mtp_dsa_index_share(enabled);
+        sched_need_reserve = true;
     }
 
-    mem->set_mtp_dsa_index_share(enabled);
-    sched_need_reserve = true;
-    return true;
+    return enabled;
 }
 
 bool llama_context::set_mtp_dsa_selection(const int32_t * data, size_t size) {

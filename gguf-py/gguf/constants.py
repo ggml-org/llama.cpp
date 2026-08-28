@@ -225,6 +225,7 @@ class Keys:
             LOCAL_BLOCKS = "{arch}.attention.indexer.local_blocks"  # MSA
             TYPES      = "{arch}.attention.indexer.types"
             KPOOL             = "{arch}.attention.indexer.kpool"              # GLM5-Next
+            INDEX_SHARE_MTP   = "{arch}.attention.indexer.index_share_mtp"    # GLM5-Next
             KPOOL_SELECT_TAIL = "{arch}.attention.indexer.kpool_select_tail"  # GLM5-Next
 
     class HyperConnection:
@@ -383,7 +384,7 @@ class Keys:
         IMAGE_MEAN            = "clip.vision.image_mean"
         IMAGE_STD             = "clip.vision.image_std"
         SPATIAL_MERGE_SIZE    = "clip.vision.spatial_merge_size"
-        SWIGLU_LIMIT          = "clip.vision.swiglu_limit"
+        SWIGLU_CLAMP          = "clip.vision.swiglu_clamp"
         EXPERT_COUNT_PER_LAYER = "clip.vision.expert_count_per_layer" # dots3note pyramid MoE, 0 = dense layer
         EXPERT_USED_COUNT     = "clip.vision.expert_used_count"
         USE_GELU              = "clip.use_gelu"
@@ -1641,8 +1642,8 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.INDEXER_COMPRESSOR_WGATE:  "blk.{bid}.indexer_compressor_gate",
     MODEL_TENSOR.INDEXER_COMPRESSOR_APE:    "blk.{bid}.indexer_compressor_ape",
     MODEL_TENSOR.INDEXER_COMPRESSOR_NORM:   "blk.{bid}.indexer_compressor_norm",
-    MODEL_TENSOR.INDEXER_KPOOL_GATE:        "blk.{bid}.indexer.kpool_gate",
-    MODEL_TENSOR.INDEXER_KPOOL_APE:         "blk.{bid}.indexer.kpool_ape",
+    MODEL_TENSOR.INDEXER_KPOOL_GATE:        "blk.{bid}.indexer_compressor_gate",
+    MODEL_TENSOR.INDEXER_KPOOL_APE:         "blk.{bid}.indexer_compressor_ape",
     # vision
     MODEL_TENSOR.V_MMPROJ:                  "mm.{bid}",
     MODEL_TENSOR.V_MMPROJ_FC:               "mm.model.fc",

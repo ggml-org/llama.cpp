@@ -63,7 +63,7 @@
 #define KEY_PROJ_SAMPLE_WINDOW_SIDE "clip.vision.projector.window_side"
 #define KEY_PROJ_SPATIAL_OFFSETS    "clip.vision.projector.spatial_offsets"
 #define KEY_SPATIAL_MERGE_SIZE      "clip.vision.spatial_merge_size"
-#define KEY_SWIGLU_LIMIT            "clip.vision.swiglu_limit"
+#define KEY_SWIGLU_CLAMP            "clip.vision.swiglu_clamp"
 
 #define KEY_MM_PATCH_MERGE_TYPE    "clip.vision.mm_patch_merge_type"
 #define KEY_IMAGE_GRID_PINPOINTS   "clip.vision.image_grid_pinpoints"

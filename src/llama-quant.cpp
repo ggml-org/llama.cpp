@@ -330,9 +330,10 @@ static bool tensor_allows_quantization(const llama_model_quantize_params * param
 
     // GLM5-Next: the k-pool position bias is added elementwise; the indexer, mHC mixers,
     // KDA gates and MLA low-rank paths are small and precision-sensitive (~1 GB total)
-    quantize &= name.find("indexer.kpool_ape.weight") == std::string::npos;
     if (arch == LLM_ARCH_GLM5_NEXT) {
         quantize &= name.find("indexer.")            == std::string::npos;
+        quantize &= name.find("indexer_compressor_gate.weight") == std::string::npos;
+        quantize &= name.find("indexer_compressor_ape.weight")  == std::string::npos;
         quantize &= name.find("hc_attn_fn.weight")   == std::string::npos;
         quantize &= name.find("hc_ffn_fn.weight")    == std::string::npos;
         quantize &= name.find("ssm_f_a.weight")      == std::string::npos;
@@ -344,6 +345,15 @@ static bool tensor_allows_quantization(const llama_model_quantize_params * param
         quantize &= name.find("attn_kv_a_mqa.weight") == std::string::npos;
         quantize &= name.find("attn_k_b.weight")     == std::string::npos;
         quantize &= name.find("attn_v_b.weight")     == std::string::npos;
+
+        // the NextN draft head runs once per speculative token, so its error compounds
+        quantize &= name.find("nextn.eh_proj.weight") == std::string::npos;
+
+        quantize &= name.find("attn_q.weight")      == std::string::npos; //This is too strict, relax these later
+        quantize &= name.find("attn_k.weight")      == std::string::npos;
+        quantize &= name.find("attn_v.weight")      == std::string::npos;
+        quantize &= name.find("attn_q_b.weight")    == std::string::npos;
+        quantize &= name.find("attn_output.weight") == std::string::npos;
     }
 
     // do not quantize RWKV's small yet 2D weights
