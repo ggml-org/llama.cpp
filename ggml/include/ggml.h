@@ -433,8 +433,8 @@ extern "C" {
         GGML_TYPE_COUNT   = 43,
     };
 
-    // precision
-    // this enum is used to declare the allowed floating-point types that can be used during the compute of an op
+    // [TAG_GGML_PREC]
+    // this enum is used to declare the allowed numerical precision/data-types types that can be used during the compute of an op
     // the declared types can be:
     //  - result accumulation type
     //  - source tensor data representation type
@@ -1433,6 +1433,7 @@ extern "C" {
             struct ggml_tensor  * b,
             float                 eps);
 
+    // [TAG_GGML_PREC]
     // set the minimum required accumulator type for the implementation to use during the compute
     // for example:
     //  - GGML_PREC_F32  - requires accumulation of the results in F32
@@ -1440,10 +1441,13 @@ extern "C" {
     //  - GGML_PREC_F16  - can accumulate the results in F16, F32
     //  - GGML_PREC_Q8   - not allowed
     //  - GGML_PREC_Q4   - not allowed
-    GGML_API void ggml_prec_set_acc(
+    //
+    // return false on faliure
+    GGML_API bool ggml_prec_set_acc(
             struct ggml_tensor * a,
             enum ggml_prec       prec);
 
+    // [TAG_GGML_PREC]
     // set the smallest rank that the implementation can use to internally convert the src[idx] data to
     // ranks in decreasing order:
     //  - GGML_PREC_F32  - GGML_TYPE_F32
@@ -1457,9 +1461,10 @@ extern "C" {
     //     - allows the implementation to quantize F32, BF16, F16 data of src[1] down to GGML_TYPE_Q8_0
     //     - cannot quantize it down to GGML_TYPE_Q4_0 or GGML_TYPE_NVFP4
     //   - ggml_prec_set_src(a, GGML_PREC_Q4, 1):
-    //     - allows the implementation to quantize F32, BF16, F16 data of src[1] down to GGML_TYPE_Q8_0 or GGML_TYPE_NVFP4
+    //     - allows the implementation to quantize F32, BF16, F16 data of src[1] down to 4-bit datatypes such as GGML_TYPE_Q4_K, GGML_TYPE_NVFP4 etc.
     //
-    GGML_API void ggml_prec_set_src(
+    // return false on faliure
+    GGML_API bool ggml_prec_set_src(
             struct ggml_tensor * a,
             enum ggml_prec       prec,
             int                  idx);
