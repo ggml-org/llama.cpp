@@ -24,7 +24,18 @@ must be included in the .cat file digitally signed with a trusted certificate.
 This document covers details on how to generate personal certificate files (.pfx) and how to configure the system
 to allow for test signatures (aka test-signing).
 
-## Install the latest Adreno OpenCL SDK
+## Install Windows SDKs
+
+The recommended method is `setup-sdk.py`:
+
+```
+> python scripts\snapdragon\setup-sdk.py --list-sdk-releases
+> python scripts\snapdragon\setup-sdk.py --hexagon --opencl
+```
+
+It installs the selected SDKs under `C:\Qualcomm` and sets their corresponding environment variables for the current user. Start a new terminal after it completes; native Windows builds check all SDK paths before CMake runs.
+
+Select the SDKs to install with `--hexagon` and `--opencl`; use both to prepare a dual-backend build. To select a different available version, pass it to the SDK option, for example `--hexagon 6.4.0.2`. SDK versions install side by side, so you can switch versions without deleting an existing installation. Use `--force` to reinstall the selected SDKs. Use a new CMake build directory after each switch because CMake caches the SDK paths.
 
 Either use the trimmed down version (optimized for CI) from
 

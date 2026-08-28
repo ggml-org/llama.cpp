@@ -11,6 +11,8 @@ import platform
 import shutil
 import logging
 
+from sdk import validate_windows_sdks
+
 logger = logging.getLogger("build")
 
 
@@ -64,6 +66,13 @@ def main():
     if not target_type:
         logger.error(f"Error: Invalid target format '{args.target}'. Must be android[:serial]/adb[:serial], linux:[user@]host/lnx:[user@]host/ubuntu:[user@]host, or windows/wos.")
         sys.exit(1)
+
+    if target_type == "windows":
+        logger.info("Windows target selected. Forcing native compilation...")
+        args.no_docker = True
+        if platform.system() != "Windows":
+            logger.warning("Warning: Windows compilation is intended to run on Windows arm64 hosts.")
+        validate_windows_sdks()
 
     # Determine preset and check if it's debug
     preset = args.preset
@@ -119,12 +128,6 @@ def main():
         logger.warning("Warning: CMakeUserPresets.json not found in docs/backend/snapdragon/.")
 
     jobs = args.jobs if args.jobs else os.cpu_count() or 4
-
-    if target_type == "windows":
-        logger.info("Windows target selected. Forcing native compilation...")
-        args.no_docker = True
-        if platform.system() != "Windows":
-            logger.warning("Warning: Windows compilation is intended to run on Windows arm64 hosts.")
 
     if args.no_docker:
         # Native/local host build
@@ -258,3 +261,6 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         logger.info("\nInterrupted by user.")
         sys.exit(130)
+    except RuntimeError as err:
+        logger.error("Error: %s", err)
+        sys.exit(1)
