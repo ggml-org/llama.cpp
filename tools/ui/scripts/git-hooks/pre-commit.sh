@@ -14,7 +14,7 @@ cd "$REPO_ROOT/tools/ui"
 
 # Check that node_modules exists
 if [ ! -d "node_modules" ]; then
-    echo "❌ node_modules not found. Run 'npm install' first."
+    echo "❌ node_modules not found. Run 'npm ci' first."
     exit 1
 fi
 

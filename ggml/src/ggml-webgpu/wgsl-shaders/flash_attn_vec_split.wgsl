@@ -3,200 +3,35 @@ enable f16;
 enable subgroups;
 
 #define BYTE_HELPERS
+#define FLASH_ATTN_VEC_SPLIT
+#include "flash_attn_decls.tmpl"
 #include "common_decls.tmpl"
 
-#ifdef K_F32
-#define K_TYPE f32
-#elif defined(K_Q4_0) || defined(K_Q8_0)
-#define K_TYPE u32
-#else
-#define K_TYPE f16
-#endif
-
-#ifdef V_F32
-#define V_TYPE f32
-#elif defined(V_Q4_0) || defined(V_Q8_0)
-#define V_TYPE u32
-#else
-#define V_TYPE f16
-#endif
-
-#ifdef Q_F16
-#define Q_TYPE f16
-#else
-#define Q_TYPE f32
-#endif
-
-#ifdef DST_F16
-#define DST_TYPE f16
-#else
-#define DST_TYPE f32
-#endif
-
+// Default values
+// The actual values are defined in shader-lib.
 #define HEAD_DIM_QK 64
 #define HEAD_DIM_V 64
-
-#define KV_GRANULARITY 8
 #define KV_TILE 16
 #define WG_SIZE 64
 
-#define KV_BLOCKS (KV_TILE / KV_GRANULARITY)
-
-struct Params {
-    offset_q: u32,
-    offset_k: u32,
-    offset_v: u32,
-    offset_mask: u32,
-    offset_sinks: u32,
-    offset_dst: u32,
-
-    // shapes of Q/K/V
-    n_heads: u32,
-    seq_len_q: u32,
-    seq_len_kv: u32,
-
-    // strides (in elements)
-    stride_q1: u32,
-    stride_q2: u32,
-    stride_q3: u32,
-    stride_k1: u32,
-    stride_k2: u32,
-    stride_k3: u32,
-    stride_v1: u32,
-    stride_v2: u32,
-    stride_v3: u32,
-    stride_mask3: u32,
-
-    // repeat factors for K/V, e.g., MHA vs. MQA vs. GQA
-    q_per_kv: u32,
-
-    // softmax params
-    scale: f32,
-    max_bias: f32,
-    logit_softcap: f32,
-    n_head_log2: f32,
-    m0: f32,
-    m1: f32,
-
-#ifdef BLK
-    blk_base: u32,
-    blk_nblk0: u32,
-    blk_nblk1: u32,
-#endif
-
-    tmp_data_base: u32,
-    tmp_stats_base: u32,
-    nwg: u32,
-};
-
-@group(0) @binding(0) var<storage, read_write> Q: array<Q_TYPE>;
-#ifdef KV_OVERLAP
-#if defined(K_Q4_0) || defined(K_Q8_0)
-@group(0) @binding(1) var<storage, read_write> K: array<K_TYPE>;
-#else
-@group(0) @binding(1) var<storage, read_write> K: array<vec4<K_TYPE>>;
-#endif
-#define V K
-#else
-#if defined(K_Q4_0) || defined(K_Q8_0)
-@group(0) @binding(1) var<storage, read_write> K: array<K_TYPE>;
-#else
-@group(0) @binding(1) var<storage, read_write> K: array<vec4<K_TYPE>>;
-#endif
-#if defined(V_Q4_0) || defined(V_Q8_0)
-@group(0) @binding(2) var<storage, read_write> V: array<V_TYPE>;
-#else
-@group(0) @binding(2) var<storage, read_write> V: array<vec4<V_TYPE>>;
-#endif
-#endif
-#if defined(MASK) && defined(SINKS)
-#ifdef KV_OVERLAP
-@group(0) @binding(2) var<storage, read_write> mask: array<f16>;
-@group(0) @binding(3) var<storage, read_write> sinks: array<f32>;
-#ifdef BLK
-#define BLK_BINDING 4
-#define TMP_BINDING 5
-#define DST_BINDING 6
-#define PARAMS_BINDING 7
-#else
-#define TMP_BINDING 4
-#define DST_BINDING 5
-#define PARAMS_BINDING 6
-#endif
-#else
-@group(0) @binding(3) var<storage, read_write> mask: array<f16>;
-@group(0) @binding(4) var<storage, read_write> sinks: array<f32>;
-#ifdef BLK
-#define BLK_BINDING 5
-#define TMP_BINDING 6
-#define DST_BINDING 7
-#define PARAMS_BINDING 8
-#else
-#define TMP_BINDING 5
-#define DST_BINDING 6
-#define PARAMS_BINDING 7
-#endif
-#endif
-#elif defined(MASK)
-#ifdef KV_OVERLAP
-@group(0) @binding(2) var<storage, read_write> mask: array<f16>;
-#ifdef BLK
-#define BLK_BINDING 3
-#define TMP_BINDING 4
-#define DST_BINDING 5
-#define PARAMS_BINDING 6
-#else
-#define TMP_BINDING 3
-#define DST_BINDING 4
-#define PARAMS_BINDING 5
-#endif
-#else
-@group(0) @binding(3) var<storage, read_write> mask: array<f16>;
-#ifdef BLK
-#define BLK_BINDING 4
-#define TMP_BINDING 5
-#define DST_BINDING 6
-#define PARAMS_BINDING 7
-#else
-#define TMP_BINDING 4
-#define DST_BINDING 5
-#define PARAMS_BINDING 6
-#endif
-#endif
-#elif defined(SINKS)
-#ifdef KV_OVERLAP
-@group(0) @binding(2) var<storage, read_write> sinks: array<f32>;
-#define TMP_BINDING 3
-#define DST_BINDING 4
-#define PARAMS_BINDING 5
-#else
-@group(0) @binding(3) var<storage, read_write> sinks: array<f32>;
-#define TMP_BINDING 4
-#define DST_BINDING 5
-#define PARAMS_BINDING 6
-#endif
-#else
-#ifdef KV_OVERLAP
-#define TMP_BINDING 2
-#define DST_BINDING 3
-#define PARAMS_BINDING 4
-#else
-#define TMP_BINDING 3
-#define DST_BINDING 4
-#define PARAMS_BINDING 5
-#endif
-#endif
-
-#ifdef BLK
-@group(0) @binding(BLK_BINDING) var<storage, read_write> blk: array<u32>;
-#endif
-@group(0) @binding(TMP_BINDING) var<storage, read_write> tmp: array<f32>;
-@group(0) @binding(DST_BINDING) var<storage, read_write> dst: array<vec4<DST_TYPE>>;
-@group(0) @binding(PARAMS_BINDING) var<uniform> params: Params;
-
-// Just a very small float value.
-const FLOAT_MIN: f32 = -1.0e9;
+const Q_CHUNKS: u32 = HEAD_DIM_QK / 4u;
+const V_CHUNKS: u32 = HEAD_DIM_V / 4u;
 const kv_shmem_size = KV_TILE * max(HEAD_DIM_QK, HEAD_DIM_V);
+
+#if defined(K_DIRECT) || defined(V_DIRECT)
+// Shared memory for scale factor (d) in quantized K/V. Multiple threads use the same value,
+// so caching it is more efficient, even on the direct path.
+var<workgroup> d_shmem: array<f32, kv_shmem_size / 32>;
+#endif
+
+// K/V shared memory handling
+#if !defined(K_DIRECT) || !defined(V_DIRECT)
+#define STAGING_SHMEM kv_shmem
+#define STAGING_OUT_TYPE f32
+#include "flash_attn_staging.tmpl"
+// we can reuse the same shmem for K and V since we only need one at a time
+var<workgroup> kv_shmem: array<f32, kv_shmem_size>;
+#endif
 
 var<workgroup> q_shmem: array<f32, HEAD_DIM_QK>;
 var<workgroup> o_shmem: array<f32, HEAD_DIM_V>;
@@ -207,59 +42,6 @@ var<workgroup> inter_shmem: array<f32, KV_TILE>;
 // storage for mask values
 var<workgroup> mask_shmem: array<f32, KV_TILE>;
 #endif
-
-#if defined(K_DIRECT) || defined(V_DIRECT)
-// Shared memory for scale factor (d) in quantized K/V. Multiple threads use the same value,
-// so caching it is more efficient, even on the direct path.
-var<workgroup> d_shmem: array<f32, kv_shmem_size / 32>;
-#endif
-
-// K/V shared memory handling
-#if !defined(K_DIRECT) || !defined(V_DIRECT)
-
-// we can reuse the same shmem for K and V since we only need one at a time
-var<workgroup> kv_shmem: array<f32, kv_shmem_size>;
-
-#define QUANT_SHMEM kv_shmem
-#define QUANT_OUT_TYPE f32
-#include "flash_attn_quant_staging.tmpl"
-
-#if !defined(K_DIRECT) && !defined(K_Q4_0) && !defined(K_Q8_0)
-fn load_k_tile_block(local_x: u32, kv_count: u32, kv_tile: u32, k_head_offset: u32) {
-    for (var elem_idx = local_x * 4u; elem_idx < KV_TILE * HEAD_DIM_QK; elem_idx += WG_SIZE * 4u) {
-        let k_row = elem_idx / HEAD_DIM_QK;
-        let k_col = elem_idx % HEAD_DIM_QK;
-        let global_k_row = kv_tile + k_row;
-        let global_k_row_offset = k_head_offset + global_k_row * params.stride_k1;
-        let in_bounds = global_k_row < params.seq_len_kv && (k_col + 3u) < HEAD_DIM_QK;
-        let vec_idx = (global_k_row_offset + k_col) >> 2u;
-        let k4 = select(vec4<K_TYPE>(0.0), K[vec_idx], in_bounds);
-        kv_shmem[elem_idx + 0u] = f32(k4.x);
-        kv_shmem[elem_idx + 1u] = f32(k4.y);
-        kv_shmem[elem_idx + 2u] = f32(k4.z);
-        kv_shmem[elem_idx + 3u] = f32(k4.w);
-    }
-}
-#endif
-
-#if !defined(V_DIRECT) && !defined(V_Q4_0) && !defined(V_Q8_0)
-fn load_v_tile_block(local_x: u32, kv_count: u32, kv_tile: u32, v_head_offset: u32) {
-    for (var elem_idx = local_x * 4u; elem_idx < KV_TILE * HEAD_DIM_V; elem_idx += WG_SIZE * 4u) {
-        let v_row = elem_idx / HEAD_DIM_V;
-        let v_col = elem_idx % HEAD_DIM_V;
-        let global_v_row = kv_tile + v_row;
-        let global_v_row_offset = v_head_offset + global_v_row * params.stride_v1;
-        let in_bounds = global_v_row < params.seq_len_kv && (v_col + 3u) < HEAD_DIM_V;
-        let vec_idx = (global_v_row_offset + v_col) >> 2u;
-        let v4 = select(vec4<V_TYPE>(0.0), V[vec_idx], in_bounds);
-        kv_shmem[elem_idx + 0u] = f32(v4.x);
-        kv_shmem[elem_idx + 1u] = f32(v4.y);
-        kv_shmem[elem_idx + 2u] = f32(v4.z);
-        kv_shmem[elem_idx + 3u] = f32(v4.w);
-    }
-}
-#endif
-#endif // !defined(K_DIRECT) || !defined(V_DIRECT)
 
 // Storage for row max and exp sum during online softmax
 fn calc_softmax_term(kv_idx: u32, slope: f32, has_bias: bool, apply_mask: bool) -> f32 {

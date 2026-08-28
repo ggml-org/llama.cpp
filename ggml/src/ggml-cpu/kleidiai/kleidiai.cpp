@@ -2,10 +2,12 @@
 // SPDX-License-Identifier: MIT
 //
 #include <arm_neon.h>
-#include <assert.h>
-#include <stdio.h>
+#include <cassert>
+#include <cstdio>
+#include <cstdlib>
 #include <atomic>
 #include <cfloat>
+#include <cctype>
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
@@ -17,25 +19,21 @@
 #include <cstddef>
 #include <cstdint>
 #include <fstream>
-#include <set>
+#include <map>
 #include <iostream>
 #include <climits>
+#include <charconv>
+#include <system_error>
 #if defined(__linux__)
 #include <asm/hwcap.h>
+#include <dirent.h>
 #include <sys/auxv.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <unistd.h>
-#ifndef HWCAP2_SME2
-#define HWCAP2_SME2 (1UL << 37)
-#endif
 #elif defined(__APPLE__)
-#include <string_view>
 #include <sys/sysctl.h>
 #include <sys/types.h>
-#elif defined(_WIN32)
-#include <windows.h>
-#include <excpt.h>
 #endif
 
 #include "kleidiai.h"
@@ -43,13 +41,14 @@
 #include "ggml-cpu.h"
 #include "ggml-cpu-impl.h"
 #include "ggml-impl.h"
+#include "ggml-feats.h"
 #include "ggml-backend-impl.h"
 #include "ggml-threading.h"
 #include "traits.h"
 
 #include "kernels.h"
 
-#include "kai_common.h"
+#include "kai/kai_common.h"
 
 #define GGML_COMMON_DECL_CPP
 #include "ggml-common.h"
@@ -64,8 +63,8 @@ struct ggml_kleidiai_context {
     ggml_kleidiai_kernels * kernels_q4;
     ggml_kleidiai_kernels * kernels_q8;
     ggml_kleidiai_kernels * kernels_f32;
-    int sme_thread_cap; // <= 0 means “SME disabled/unknown”;
-    int thread_hint;    // <= 0 means “no hint”
+    int sme_thread_cap; // <= 0 means "SME disabled/unknown"
+    int thread_hint;    // <= 0 means "no hint"
     int chunk_multiplier;
 } static ctx = { CPU_FEATURE_NONE, nullptr, nullptr, nullptr, 0, -1, 4 };
 
@@ -93,24 +92,117 @@ static const char* cpu_feature_to_string(cpu_feature f) {
     }
 }
 
+#if defined(__linux__) && defined(__aarch64__)
+static bool parse_cpu_dir_name(const char* name, size_t* cpu) {
+    if (strncmp(name, "cpu", 3) != 0 ||
+        name[3] < '0' || name[3] > '9') {
+        return false;
+    }
+
+    const char* first = name + 3;
+    const char* last = name + strlen(name);
+
+    size_t value = 0;
+    const auto [end, ec] = std::from_chars(first, last, value, 10);
+
+    if (ec != std::errc{} || end != last) {
+        return false;
+    }
+
+    *cpu = value;
+    return true;
+}
+
+static std::vector<size_t> detect_cpu_ids() {
+    std::vector<size_t> cpus;
+
+    DIR * dir = opendir("/sys/devices/system/cpu");
+    if (dir == nullptr) {
+        return cpus;
+    }
+
+    while (dirent * entry = readdir(dir)) {
+        size_t cpu = 0;
+        if (parse_cpu_dir_name(entry->d_name, &cpu)) {
+            cpus.push_back(cpu);
+        }
+    }
+    closedir(dir);
+
+    std::sort(cpus.begin(), cpus.end());
+    cpus.erase(std::unique(cpus.begin(), cpus.end()), cpus.end());
+    return cpus;
+}
+#endif
+
+#if defined(__APPLE__) && defined(__aarch64__)
+static bool apple_sme_counted_perf_level(std::string name) {
+    for (std::string::size_type i = 0; i < name.size(); ++i) {
+        name[i] = (char) std::tolower((unsigned char) name[i]);
+    }
+
+    // Conservative ceiling: only count perf-level names observed to provide full SME throughput.
+    // Future names should be calibrated here before they raise the automatic SME thread cap.
+    return name.find("super") != std::string::npos ||
+           name.find("performance") != std::string::npos;
+}
+#endif
+
+static void add_smcus_from_smidr(uint64_t smidr, size_t & num_private, std::map<uint32_t, size_t> & shared_counts) {
+    // Arm ARM: SMIDR_EL1. SH==0 is implementation-defined; keep the existing
+    // conservative policy and only treat zero affinity as private.
+    const uint32_t sh = (uint32_t)((smidr >> 13) & 0x3);
+    const uint32_t nsmc = (uint32_t)((smidr >> 56) & 0xF);
+    const size_t shared_count = nsmc == 0xF ? 1 : (size_t)nsmc + 1;
+    const uint32_t affinity = (uint32_t)(smidr & 0xFFFu);
+    const uint32_t affinity2 = (uint32_t)((smidr >> 32) & 0xFFFFFu);
+    const uint32_t id = (affinity2 << 12) | affinity;
+
+    if (nsmc == 0xF) {
+        GGML_LOG_WARN("kleidiai: NSMC detected as 0xF indicating reseved value, setting min safe shared SMCU count to 1");
+    }
+
+    switch (sh) {
+        case 2: // private SMCU
+            ++num_private;
+            break;
+        case 3: // shared SMCU
+            if (shared_counts[id] < shared_count) {
+                shared_counts[id] = shared_count;
+            }
+            break;
+        case 0:
+            if (id == 0) {
+                ++num_private;
+            } else if (shared_counts[id] < shared_count) {
+                shared_counts[id] = shared_count;
+            }
+            break;
+        default:
+            break;
+    }
+}
+
 static size_t detect_num_smcus() {
-    if (!ggml_cpu_has_sme()) {
+    const auto runtime_feat = ggml_feats_get_arch64_runtime();
+    if (!runtime_feat.has_sme) {
         return 0;
     }
 
 #if defined(__linux__) && defined(__aarch64__)
     // Linux/aarch64: Best-effort count of Streaming Mode Compute Units (SMCUs) via SMIDR_EL1 sysfs.
     size_t num_private = 0;
-    std::set<uint32_t> shared_ids;
+    std::map<uint32_t, size_t> shared_counts;
 
-    for (size_t cpu = 0;; ++cpu) {
+    const std::vector<size_t> cpus = detect_cpu_ids();
+    for (const size_t cpu : cpus) {
         const std::string path =
             "/sys/devices/system/cpu/cpu" + std::to_string(cpu) +
             "/regs/identification/smidr_el1";
 
         std::ifstream file(path);
         if (!file.is_open()) {
-            break;
+            continue;
         }
 
         uint64_t smidr = 0;
@@ -118,54 +210,69 @@ static size_t detect_num_smcus() {
             continue;
         }
 
-        // Arm ARM: SMIDR_EL1
-        const uint32_t sh = (uint32_t)((smidr >> 13) & 0x3);
-        // Build an "affinity-like" identifier for shared SMCUs.
-        // Keep the original packing logic, but isolate it here.
-        const uint32_t id = (uint32_t)((smidr & 0xFFFu) | ((smidr >> 20) & 0xFFFFF000u));
-
-        switch (sh) {
-            case 0b10: // private SMCU
-                ++num_private;
-                break;
-            case 0b11: // shared SMCU
-                shared_ids.emplace(id);
-                break;
-            case 0b00:
-                // Ambiguous / implementation-defined. Be conservative:
-                // treat id==0 as private, otherwise as shared.
-                if (id == 0) ++num_private;
-                else shared_ids.emplace(id);
-                break;
-            default:
-                break;
-        }
+        add_smcus_from_smidr(smidr, num_private, shared_counts);
     }
 
-    return num_private + shared_ids.size();
+    size_t total = num_private;
+    for (const auto & entry : shared_counts) {
+        total += entry.second;
+    }
+    return total;
 
 #elif defined(__APPLE__) && defined(__aarch64__)
-    // table for known M4 variants. Users can override via GGML_KLEIDIAI_SME=<n>.
-    char chip_name[256] = {};
-    size_t size = sizeof(chip_name);
+    int perf_levels = 0;
+    size_t size = sizeof(perf_levels);
+    if (sysctlbyname("hw.nperflevels", &perf_levels, &size, nullptr, 0) != 0 ||
+        size != sizeof(perf_levels) || perf_levels <= 0) {
+        return 0;
+    }
 
-    if (sysctlbyname("machdep.cpu.brand_string", chip_name, &size, nullptr, 0) == 0) {
-        const std::string brand(chip_name);
+    size_t units = 0;
+    for (int i = 0; i < perf_levels; ++i) {
+        char key[64] = {};
+        int physical_cpus = 0;
+        int cpus_per_l2 = 0;
 
-        struct ModelSMCU { const char *match; size_t smcus; };
-        static const ModelSMCU table[] = {
-            { "M4 Ultra", 2 },
-            { "M4 Max",   2 },
-            { "M4 Pro",   2 },
-            { "M4",       1 },
-        };
+        snprintf(key, sizeof(key), "hw.perflevel%d.physicalcpu", i);
+        size = sizeof(physical_cpus);
+        if (sysctlbyname(key, &physical_cpus, &size, nullptr, 0) != 0 ||
+            size != sizeof(physical_cpus) || physical_cpus <= 0) {
+            continue;
+        }
 
-        for (const auto &e : table) {
-            if (brand.find(e.match) != std::string::npos) {
-                return e.smcus;
-            }
+        snprintf(key, sizeof(key), "hw.perflevel%d.cpusperl2", i);
+        size = sizeof(cpus_per_l2);
+        if (sysctlbyname(key, &cpus_per_l2, &size, nullptr, 0) != 0 ||
+            size != sizeof(cpus_per_l2) || cpus_per_l2 <= 0) {
+            continue;
+        }
+
+        snprintf(key, sizeof(key), "hw.perflevel%d.name", i);
+        size = 0;
+        if (sysctlbyname(key, nullptr, &size, nullptr, 0) != 0 || size == 0) {
+            continue;
+        }
+
+        std::string name(size, '\0');
+        if (sysctlbyname(key, &name[0], &size, nullptr, 0) != 0) {
+            continue;
+        }
+        name.resize(size);
+        while (!name.empty() && name.back() == '\0') {
+            name.pop_back();
+        }
+
+        if (apple_sme_counted_perf_level(name)) {
+            units += (size_t) ((physical_cpus + cpus_per_l2 - 1) / cpus_per_l2);
         }
     }
+
+    return units;
+
+#elif defined(_WIN32) && (defined(_M_ARM64) || defined(__aarch64__))
+    // No verified Windows arm64 SMCU detection path yet. Return unknown and use
+    // GGML_KLEIDIAI_SME=N as a diagnostics/debug override for SME thread cap
+    // calibration until a detection mechanism is verified on real hardware.
     return 0;
 
 #else
@@ -198,15 +305,19 @@ static void init_kleidiai_context(void) {
     if (!initialized) {
         initialized = true;
 
+        // Optional diagnostics/debug overrides; production defaults come from runtime detection.
         const char *env_sme         = getenv("GGML_KLEIDIAI_SME");
         const char *env_threads     = getenv("GGML_TOTAL_THREADS");
         const char *env_chunk_mult  = getenv("GGML_KLEIDIAI_CHUNK_MULTIPLIER");
 
+        const auto runtime_feat = ggml_feats_get_arch64_runtime();
+
         size_t detected_smcus = 0;
 
-        ctx.features  = (ggml_cpu_has_dotprod()     ? CPU_FEATURE_DOTPROD : CPU_FEATURE_NONE) |
-                        (ggml_cpu_has_matmul_int8() ? CPU_FEATURE_I8MM    : CPU_FEATURE_NONE) |
-                        ((ggml_cpu_has_sve() && ggml_cpu_get_sve_cnt() == QK8_0) ? CPU_FEATURE_SVE : CPU_FEATURE_NONE);
+        ctx.features  = (runtime_feat.has_dotprod  ? CPU_FEATURE_DOTPROD : CPU_FEATURE_NONE) |
+                        (runtime_feat.has_i8mm     ? CPU_FEATURE_I8MM    : CPU_FEATURE_NONE) |
+                        (runtime_feat.has_fp16     ? CPU_FEATURE_FP16    : CPU_FEATURE_NONE) |
+                        (runtime_feat.sve_cnt == QK8_0 ? CPU_FEATURE_SVE : CPU_FEATURE_NONE);
 
         if (env_threads) {
             bool ok = false;
@@ -224,54 +335,54 @@ static void init_kleidiai_context(void) {
             }
         }
 
-        // SME policy:
-        // - env unset => auto-detect SMCUs; enable SME only if detected > 0.
-        // - env=0     => force off.
-        // - env>0     => force N cores, if the binary was built with SME.
         int sme_cores = 0;
         bool sme_env_ok = false;
         bool sme_env_set = (env_sme != nullptr);
 
+        const bool has_supported_sme_family = runtime_feat.has_sme;
+        bool sme_cap_detected = false;
+
+        if (has_supported_sme_family) {
+            detected_smcus = detect_num_smcus();
+            sme_cap_detected = detected_smcus > 0;
+            // Some platforms expose SME without exposing a calibrated SMCU count.
+            // Use one SME thread as the conservative default; add platform SMCU detection to raise it.
+            sme_cores = sme_cap_detected ? (int)detected_smcus : 1;
+
+            if (!sme_env_set && !sme_cap_detected) {
+                GGML_LOG_INFO("kleidiai: SME detected; SMCU count unavailable, using conservative SME thread cap=1\n");
+            }
+        }
+
+        // Runtime-detect SME support and available SMCUs first. The detected SMCU
+        // count is used as the SME thread cap, and GGML_KLEIDIAI_SME can debug-override that:
+        //   - unset: use runtime detection.
+        //   - 0:     disable SME-family kernels.
+        //   - N > 0: use N as the SME thread cap, if an SME-family kernel is selectable.
         if (sme_env_set) {
             bool ok = false;
             int v = parse_uint_env(env_sme, "GGML_KLEIDIAI_SME", &ok);
             sme_env_ok = ok;
 
-            if (!ok) {
-                GGML_LOG_WARN("kleidiai: GGML_KLEIDIAI_SME set but parsing failed; falling back to runtime SME-core detection\n");
-                detected_smcus = detect_num_smcus();
-                sme_cores = detected_smcus > 0 ? (int)detected_smcus : 0;
-            } else if (v == 0) {
-                sme_cores = 0;
-            } else if (!ggml_cpu_has_sme()) {
-                GGML_LOG_WARN("kleidiai: GGML_KLEIDIAI_SME=%d but the binary was not built with SME; disabling SME\n", v);
-                sme_cores = 0;
+            if (ok) {
+                if (has_supported_sme_family) {
+                    sme_cores = v;
+                } else {
+                    if (v > 0) {
+                        GGML_LOG_WARN("kleidiai: GGML_KLEIDIAI_SME=%d but SME is not supported on this CPU; disabling SME-family kernels\n", v);
+                    }
+                    sme_cores = 0;
+                }
             } else {
-                sme_cores = v;
+                GGML_LOG_WARN("kleidiai: GGML_KLEIDIAI_SME set but parsing failed; using automatic SME thread cap\n");
             }
-        } else {
-            detected_smcus = detect_num_smcus();
-            sme_cores = detected_smcus > 0 ? (int)detected_smcus : 0;
         }
 
-        if (!sme_env_set && ggml_cpu_has_sme() && sme_cores == 0) {
-            GGML_LOG_WARN("kleidiai: runtime SME-core detection returned 0; falling back to NEON\n");
-        }
-
-        if (sme_cores > 0) {
+        if (sme_cores > 0 && has_supported_sme_family) {
             ctx.features |= CPU_FEATURE_SME;
-#if defined(__aarch64__) && defined(__linux__)
-            // ARM guarantees SME2 implies SME, so only check SME2 when SME is enabled.
-            if (getauxval(AT_HWCAP2) & HWCAP2_SME2) {
+            if (runtime_feat.has_sme2) {
                 ctx.features |= CPU_FEATURE_SME2;
             }
-#elif defined(__aarch64__) && defined(__APPLE__)
-            int feat_sme2 = 0;
-            size_t size = sizeof(feat_sme2);
-            if (sysctlbyname("hw.optional.arm.FEAT_SME2", &feat_sme2, &size, NULL, 0) == 0 && feat_sme2) {
-                ctx.features |= CPU_FEATURE_SME2;
-            }
-#endif
         }
 
         // Kernel selection
@@ -297,16 +408,19 @@ static void init_kleidiai_context(void) {
             GGML_LOG_INFO("kleidiai: primary f32 kernel feature %s\n", cpu_feature_to_string(ctx.kernels_f32->required_cpu));
         }
 
-        ctx.sme_thread_cap = (ctx.features & CPU_FEATURE_SME) ? sme_cores : 0;
+        const bool has_selected_sme_family_kernel =
+            (ctx.kernels_q4  && is_sme_family(ctx.kernels_q4->required_cpu)) ||
+            (ctx.kernels_q8  && is_sme_family(ctx.kernels_q8->required_cpu)) ||
+            (ctx.kernels_f32 && is_sme_family(ctx.kernels_f32->required_cpu));
+        ctx.sme_thread_cap = has_selected_sme_family_kernel ? sme_cores : 0;
 
-        if (ctx.features & CPU_FEATURE_SME) {
-            const bool has_sme2 = (ctx.features & CPU_FEATURE_SME2) != CPU_FEATURE_NONE;
+        if (has_selected_sme_family_kernel) {
             if (sme_env_set && sme_env_ok && sme_cores > 0) {
-                GGML_LOG_INFO("kleidiai: SME%s enabled (GGML_KLEIDIAI_SME=%d override)\n",
-                    has_sme2 ? "2" : "", sme_cores);
+                GGML_LOG_INFO("kleidiai: SME enabled (GGML_KLEIDIAI_SME=%d debug override)\n", sme_cores);
+            } else if (sme_cap_detected) {
+                GGML_LOG_INFO("kleidiai: SME enabled (runtime-detected SME thread cap=%d)\n", sme_cores);
             } else {
-                GGML_LOG_INFO("kleidiai: SME%s enabled (runtime-detected SME cores=%d)\n",
-                    has_sme2 ? "2" : "", sme_cores);
+                GGML_LOG_INFO("kleidiai: SME enabled (runtime SME detected, conservative thread cap=%d)\n", sme_cores);
             }
         } else {
             GGML_LOG_INFO("kleidiai: SME disabled\n");
@@ -467,7 +581,7 @@ static int kleidiai_collect_kernel_chain_common(
     }
 
     if (is_sme_family(primary->required_cpu)) {
-        const cpu_feature fallback_mask = static_cast<cpu_feature>(features & ~CPU_FEATURE_SME & ~CPU_FEATURE_SME2);
+        const cpu_feature fallback_mask = static_cast<cpu_feature>(features & ~(CPU_FEATURE_SME | CPU_FEATURE_SME2));
         if (fallback_mask != CPU_FEATURE_NONE) {
             ggml_kleidiai_kernels * fallback = select_fallback(fallback_mask);
             if (fallback && fallback != primary &&
@@ -583,6 +697,15 @@ class tensor_traits : public ggml::cpu::tensor_traits {
         }
 
         if (op->src[0]->type == GGML_TYPE_F32) {
+            ggml_kleidiai_kernels * primary     = kernel_chain[0];
+            kernel_info *           gemv_kernel = primary ? &primary->gemv : nullptr;
+            if (is_gemv && op->src[1]->nb[0] == (int64_t) sizeof(float) && gemv_kernel &&
+                gemv_kernel->get_lhs_offset_ex && gemv_kernel->get_rhs_packed_offset_ex &&
+                gemv_kernel->run_kernel_ex && gemv_kernel->get_dst_offset) {
+                size = 0;
+                return true;
+            }
+
             size_t cursor = 0;
             bool any_slot = false;
 
@@ -698,12 +821,25 @@ class tensor_traits : public ggml::cpu::tensor_traits {
             return false;
         }
 
-        kernel_info * kernel        = &kernels->gemm;
+        const size_t k = ne00;
+        const size_t m = ne11;
+        const size_t n = ne01;
+        const bool use_gemv = m == 1 && src1->nb[0] == (int64_t) sizeof(float) &&
+                              kernels->gemv.get_lhs_offset_ex &&
+                              kernels->gemv.get_rhs_packed_offset_ex &&
+                              kernels->gemv.run_kernel_ex &&
+                              kernels->gemv.get_dst_offset;
+
+        kernel_info * kernel        = use_gemv ? &kernels->gemv : &kernels->gemm;
         lhs_packing_info * lhs_info = &kernels->gemm_lhs_info;
 
-        if (!kernel || !lhs_info || !lhs_info->get_offset || !lhs_info->get_packed_offset_ex ||
-            !lhs_info->packed_size_ex || !lhs_info->pack_func_ex ||
+        if (!kernel || !kernel->get_lhs_offset_ex ||
             !kernel->get_rhs_packed_offset_ex || !kernel->run_kernel_ex || !kernel->get_dst_offset) {
+            return false;
+        }
+
+        if (!use_gemv && (!lhs_info || !lhs_info->get_offset || !lhs_info->get_packed_offset_ex ||
+                          !lhs_info->packed_size_ex || !lhs_info->pack_func_ex)) {
             return false;
         }
 
@@ -719,16 +855,14 @@ class tensor_traits : public ggml::cpu::tensor_traits {
         const int nth = params->nth > 0 ? params->nth : 1;
         const int ith = params->ith;
 
-        const size_t k = ne00;
-        const size_t m = ne11;
-        const size_t n = ne01;
-
         const size_t mr = kernel->get_mr();
         const size_t kr = kernel->get_kr();
         const size_t sr = kernel->get_sr();
 
-        const size_t lhs_packed_size = lhs_info->packed_size_ex(m, k, 0, mr, kr, sr);
-        GGML_ASSERT(lhs_packed_size <= params->wsize);
+        const size_t lhs_packed_size = use_gemv ? 0 : lhs_info->packed_size_ex(m, k, 0, mr, kr, sr);
+        if (!use_gemv) {
+            GGML_ASSERT(lhs_packed_size <= params->wsize);
+        }
 
         uint8_t * lhs_packed   = static_cast<uint8_t *>(params->wdata);
         const size_t dst_stride = dst->nb[1];
@@ -740,7 +874,7 @@ class tensor_traits : public ggml::cpu::tensor_traits {
             const uint8_t * lhs_batch_base = static_cast<const uint8_t *>(src1->data) + batch_idx * src1->nb[2];
             uint8_t * dst_batch_base = static_cast<uint8_t *>(dst->data) + batch_idx * dst->nb[2];
 
-            {
+            if (!use_gemv) {
                 const int64_t m_roundup_mr = kai_roundup((int64_t)m, (int64_t)mr);
                 int64_t max_threads = mr ? (m_roundup_mr / (int64_t)mr) : nth;
                 max_threads = std::max<int64_t>(1, max_threads);
@@ -790,15 +924,17 @@ class tensor_traits : public ggml::cpu::tensor_traits {
                 const size_t n_to_process = std::min(chunk_cols, n - n_start);
 
                 if (n_to_process > 0) {
-                    const size_t lhs_packed_offset = lhs_info->get_packed_offset_ex(0, k, 0, mr, kr, sr);
+                    const size_t lhs_offset = use_gemv ? kernel->get_lhs_offset_ex(0, k, 0)
+                                                       : lhs_info->get_packed_offset_ex(0, k, 0, mr, kr, sr);
                     const size_t rhs_packed_offset = kernel->get_rhs_packed_offset_ex(n_start, k, 0);
                     const size_t dst_offset        = kernel->get_dst_offset(0, n_start, dst_stride);
 
-                    const void * lhs_ptr = lhs_packed + lhs_packed_offset;
+                    const void * lhs_ptr = use_gemv ? lhs_batch_base + lhs_offset
+                                                    : lhs_packed + lhs_offset;
                     const void * rhs_ptr = rhs_base + rhs_packed_offset;
                     float * dst_ptr      = reinterpret_cast<float *>(dst_batch_base + dst_offset);
 
-                    kernel->run_kernel_ex(m, n_to_process, k, 0,
+                    kernel->run_kernel_ex(m, n_to_process, k, use_gemv ? src1->nb[1] : 0,
                                           lhs_ptr,
                                           rhs_ptr,
                                           dst_ptr,
@@ -1077,13 +1213,14 @@ class tensor_traits : public ggml::cpu::tensor_traits {
         const int ith_total = params->ith;
 
         int sme_slot = -1;
+        int non_sme_slot = -1;
         for (int i = 0; i < runtime_count; ++i) {
             if (is_sme_family(runtime[i].kernels->required_cpu)) {
                 sme_slot = i;
                 break;
             }
         }
-        int non_sme_slot = -1;
+
         for (int i = 0; i < runtime_count; ++i) {
             if (!is_sme_family(runtime[i].kernels->required_cpu)) {
                 non_sme_slot = i;

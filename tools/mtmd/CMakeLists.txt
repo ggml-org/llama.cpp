@@ -17,6 +17,7 @@ add_library(mtmd
             mtmd-audio.cpp
             mtmd-image.cpp
             mtmd.h
+            mtmd-internal.h
             mtmd-helper.cpp
             mtmd-helper-gen.cpp
             mtmd-helper-common.h
@@ -29,6 +30,7 @@ add_library(mtmd
             models/models.h
             models/cogvlm.cpp
             models/conformer.cpp
+            models/dots3note.cpp
             models/dotsocr.cpp
             models/exaone4_5.cpp
             models/gemma4a.cpp
@@ -43,6 +45,7 @@ add_library(mtmd
             models/kimivl.cpp
             models/kimik25.cpp
             models/nemotron-v2-vl.cpp
+            models/muse-glimmer.cpp
             models/llama4.cpp
             models/llava.cpp
             models/minicpmv.cpp
@@ -56,6 +59,9 @@ add_library(mtmd
             models/mimo-audio.cpp
             models/qwen3tts-spkenc.cpp
             models/qwen3tts-gen.cpp
+            models/pockettts-seanet.cpp
+            models/pockettts-spkenc.cpp
+            models/pockettts-gen.cpp
             models/step3vl.cpp
             models/siglip.cpp
             models/whisper-enc.cpp
@@ -68,16 +74,14 @@ add_library(mtmd
             )
 
 set_target_properties(mtmd PROPERTIES
-    VERSION ${LLAMA_INSTALL_VERSION}
-    SOVERSION 0
+    VERSION ${LLAMA_VERSION_BASE}
+    SOVERSION ${LLAMA_VERSION_MAJOR}
     MACHO_CURRENT_VERSION 0 # keep macOS linker from seeing oversized version number
 )
 
 target_link_libraries     (mtmd PUBLIC ggml llama)
-target_link_libraries     (mtmd PRIVATE Threads::Threads)
+target_link_libraries     (mtmd PRIVATE Threads::Threads vendor::hash vendor::miniaudio vendor::stb vendor::sheredom)
 target_include_directories(mtmd PUBLIC  .)
-target_include_directories(mtmd PRIVATE ../..)
-target_include_directories(mtmd PRIVATE ../../vendor)
 target_compile_features   (mtmd PRIVATE cxx_std_17)
 
 if (MTMD_VIDEO)
@@ -88,6 +92,9 @@ if (BUILD_SHARED_LIBS)
     set_target_properties     (mtmd PROPERTIES POSITION_INDEPENDENT_CODE ON)
     target_compile_definitions(mtmd PRIVATE LLAMA_BUILD)
     target_compile_definitions(mtmd PUBLIC  LLAMA_SHARED)
+
+    # export all symbols so that internal components can be tested by test-mtmd-impl
+    set_target_properties     (mtmd PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
 endif()
 
 set(MTMD_PUBLIC_HEADERS

@@ -20,8 +20,6 @@
 #define MATRIX_ROW_PADDING 512 // last row of quant. matrices is a multiple of this to avoid out-of-bounds memory accesses
 
 #define SYCL_COL2IM_1D_BLOCK_SIZE 256
-#define SYCL_GELU_BLOCK_SIZE 256
-#define SYCL_SILU_BLOCK_SIZE 256
 #define SYCL_TANH_BLOCK_SIZE 256
 #define SYCL_RELU_BLOCK_SIZE 256
 #define SYCL_HARDSIGMOID_BLOCK_SIZE 256

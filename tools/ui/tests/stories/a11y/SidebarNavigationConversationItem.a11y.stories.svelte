@@ -1,29 +1,29 @@
-<script module lang="ts">
+<script lang="ts" module>
 	import { defineMeta } from '@storybook/addon-svelte-csf';
 	import SidebarNavigationConversationItem from '$lib/components/app/navigation/SidebarNavigation/SidebarNavigationConversationItem.svelte';
 	import { expect } from 'storybook/test';
 
 	const mockForkedConversation: DatabaseConversation = {
-		id: 'conv-2',
-		name: 'Forked Conversation',
-		lastModified: Date.now(),
 		currNode: 'msg-2',
-		forkedFromConversationId: 'conv-1'
+		forkedFromConversationId: 'conv-1',
+		id: 'conv-2',
+		lastModified: Date.now(),
+		name: 'Forked Conversation'
 	};
 
 	const { Story } = defineMeta({
-		title: 'Components/SidebarNavigationConversationItem/Accessibility',
 		component: SidebarNavigationConversationItem,
 		parameters: {
 			layout: 'centered'
 		},
-		tags: ['!dev']
+		tags: ['!dev'],
+		title: 'Components/SidebarNavigationConversationItem/Accessibility'
 	});
 </script>
 
 <Story
-	name="ForkIconSingleTabStop"
 	args={{ conversation: mockForkedConversation, depth: 1 }}
+	name="ForkIconSingleTabStop"
 	play={async ({ canvas, userEvent }) => {
 		const row = await canvas.findByRole('button', { name: /Forked Conversation/ });
 		const forkIcon = await canvas.findByRole('link');
