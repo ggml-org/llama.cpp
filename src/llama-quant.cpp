@@ -1538,7 +1538,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                 }
                 tensor->data = read_data.data();
             }
-            ml.load_data_for(tensor);
+            tensor->data = const_cast<void *>(ml.load_data_range(weight, 0, tensor_size, tensor->data));
         }
 
         LLAMA_LOG_INFO("[%4d/%4d] %-36s - [%s], type = %6s, ",

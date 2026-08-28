@@ -672,6 +672,7 @@ struct llama_model {
     // dspark
     struct ggml_tensor * dspark_markov_w1   = nullptr;
     struct ggml_tensor * dspark_markov_w2   = nullptr;
+    struct ggml_tensor * dspark_markov_w2_s = nullptr;
     struct ggml_tensor * dspark_conf_proj   = nullptr;
     struct ggml_tensor * dspark_conf_proj_b = nullptr;
 
@@ -786,6 +787,7 @@ struct llama_model_base : public llama_model {
     const int TENSOR_SKIP;
     const int TENSOR_SKIP_IF_VIRTUAL;
     const int TENSOR_ALLOW_RESHAPE;
+    const int TENSOR_READ_LAZY;
 
     explicit llama_model_base(const llama_model_params & params);
     virtual ~llama_model_base() = default;

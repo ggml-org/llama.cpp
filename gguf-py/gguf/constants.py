@@ -5593,7 +5593,7 @@ class LlamaFileType(IntEnum):
     MOSTLY_Q8_0_ROCMFPX_AGENT    = 115
     MOSTLY_Q6_0_ROCMFPX_LEAN     = 116
     MOSTLY_Q6_0_ROCMFPX_AGENT_LEAN = 117
-    MOSTLY_Q2_0_ROCMFPX  = 119  # except 1d tensors
+    MOSTLY_Q2_0_ROCMFPX  = 122  # matches ciru-ai/ROCmFPX upstream id; 119 is their Q7_0_ROCMFPX
 
     GUESSED              = 1024  # not specified in the model file
 

@@ -16,6 +16,7 @@
 #include "llama-kv-cache-dsv4.h"
 #include "llama-memory-hybrid.h"
 #include "llama-memory-hybrid-iswa.h"
+#include "llama-memory-hybrid-idx.h"
 #include "llama-memory-recurrent.h"
 
 #include "llama.h"
@@ -1663,7 +1664,9 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
         }
     }
 
-    ml.init_mappings(true, use_mlock ? &pimpl->mlock_mmaps : nullptr);
+    // With the n-gram table left on disk, a populated mapping would pull the table's
+    // third of the file resident for nothing; readahead alone carries the sequential load.
+    ml.init_mappings(!params.ple_on_disk, use_mlock ? &pimpl->mlock_mmaps : nullptr);
     pimpl->mappings.reserve(ml.mappings.size());
 
     // create the backend buffers
@@ -2434,9 +2437,10 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                     // layer filters, so pick the right one here
                     llama_memory_hybrid::layer_filter_cb filter_attn = nullptr;
                     llama_memory_hybrid::layer_filter_cb filter_recr = nullptr;
-                    // null for every architecture but the sparse-attention ones, which is what keeps
-                    // the indexer cache from existing
+                    // only the sparse-attention architectures use llama_memory_hybrid_idx
+                    // a null filter_idx means the GGUF has no indexer tensors
                     llama_memory_hybrid::layer_filter_cb filter_idx  = nullptr;
+                    const bool needs_mem_idx = (arch == LLM_ARCH_QWEN4EXP);
                     if (arch == LLM_ARCH_FALCON_H1) {
                         filter_attn = [&](uint32_t) { return true; };
                         filter_recr = [&](uint32_t) { return true; };
@@ -2484,8 +2488,9 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                             /* unified           */ cparams.kv_unified,
                             /* filter_attn       */ std::move(filter_attn),
                             /* filter_recr       */ std::move(filter_recr));
-                    } else {
-                        res = new llama_memory_hybrid(
+                    } else if (needs_mem_idx) {
+                        // sparse attention over a per-token indexer cache, in its own memory type
+                        res = new llama_memory_hybrid_idx(
                             /* model             */ *this,
                             /* attn_type_k       */ params.type_k,
                             /* attn_type_v       */ params.type_v,
@@ -2504,6 +2509,25 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                             /* filter_attn       */ std::move(filter_attn),
                             /* filter_recr       */ std::move(filter_recr),
                             /* filter_idx        */ std::move(filter_idx));
+                    } else {
+                        res = new llama_memory_hybrid(
+                            /* model             */ *this,
+                            /* attn_type_k       */ params.type_k,
+                            /* attn_type_v       */ params.type_v,
+                            /* attn_v_trans      */ !cparams.flash_attn,
+                            /* attn_kv_size      */ cparams.n_ctx_seq,
+                            /* attn_n_pad        */ 1,
+                            /* attn_n_swa        */ hparams.n_swa,
+                            /* attn_swa_type     */ hparams.swa_type,
+                            /* recurrent_type_k  */ GGML_TYPE_F32,
+                            /* recurrent_type_v  */ GGML_TYPE_F32,
+                            /* recurrent_kv_size */ std::max((uint32_t) 1, cparams.n_seq_max),
+                            /* n_seq_max         */ cparams.n_seq_max,
+                            /* n_rs_seq          */ cparams.n_rs_seq,
+                            /* offload           */ cparams.offload_kqv,
+                            /* unified           */ cparams.kv_unified,
+                            /* filter_attn       */ std::move(filter_attn),
+                            /* filter_recr       */ std::move(filter_recr));
                     }
                 } else {
                     llama_kv_cache::layer_filter_cb filter = nullptr;
@@ -2647,7 +2671,10 @@ llama_model_params llama_model_default_params() {
         /*.n_gpu_layers                =*/ -1,
         /*.split_mode                  =*/ LLAMA_SPLIT_MODE_LAYER,
         /*.load_mode                   =*/ LLAMA_LOAD_MODE_AUTO,
+        /*.tensor_read_lazy            =*/ LLAMA_TENSOR_READ_LAZY_OFF,
         /*.main_gpu                    =*/ 0,
+        /*.ple_io_threads              =*/ 64,
+        /*.ple_cache_mb                =*/ 256,
         /*.tensor_split                =*/ nullptr,
         /*.progress_callback           =*/ nullptr,
         /*.progress_callback_user_data =*/ nullptr,
@@ -2658,6 +2685,8 @@ llama_model_params llama_model_default_params() {
         /*.no_host                     =*/ false,
         /*.no_alloc                    =*/ false,
         /*.load_mtp                    =*/ false,
+        /*.ple_on_disk                 =*/ false,
+        /*.ple_direct_io               =*/ true,
     };
 
     return result;
@@ -3084,7 +3113,8 @@ llama_model_base::llama_model_base(const struct llama_model_params & params) : l
     TENSOR_NOT_REQUIRED   (llama_model_loader::TENSOR_NOT_REQUIRED),
     TENSOR_SKIP           (llama_model_loader::TENSOR_SKIP),
     TENSOR_SKIP_IF_VIRTUAL(llama_model_loader::TENSOR_SKIP_IF_VIRTUAL),
-    TENSOR_ALLOW_RESHAPE  (llama_model_loader::TENSOR_ALLOW_RESHAPE) {}
+    TENSOR_ALLOW_RESHAPE  (llama_model_loader::TENSOR_ALLOW_RESHAPE),
+    TENSOR_READ_LAZY      (llama_model_loader::TENSOR_READ_LAZY) {}
 
 ggml_tensor * llama_model_base::create_tensor(const LLM_TN_IMPL & tn, const std::initializer_list<int64_t> & ne, int flags) {
     GGML_ASSERT(ml != nullptr);

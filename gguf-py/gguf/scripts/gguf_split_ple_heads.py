@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
-"""Split a qwen4exp n-gram table into one tensor per head.
+"""Convert a qwen4exp n-gram table between its joined and per-head layouts.
 
 The joined per_layer_token_embd is ~20.9 GiB, past the 4 GiB buffer a Vulkan device
 will accept, so it can only ever sit on the host. Each n-gram head is a contiguous row
 range of that table and is ~1.3 GiB, which fits. Rows are 160 elements, a whole number
 of blocks for every 32-block type, so the heads split on block boundaries and the
 quantized bytes are copied through untouched: no dequantize, no requantize, no loss.
+The same holds in reverse: joining concatenates the head tensors' raw bytes back into
+one tensor, in head order, which reproduces the original joined layout exactly.
+
+Direction is auto-detected from which tensors the input has: a joined
+per_layer_token_embd.weight splits, a full set of ple_ngram_embd.N.weight tensors joins.
 
 Head bounds come from the file's own ple.head_offsets and ple.head_vocab_sizes.
 """
@@ -18,6 +23,8 @@ import os
 import sys
 from pathlib import Path
 
+import numpy as np
+
 if "NO_LOCAL_GGUF" not in os.environ:
     sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
@@ -26,6 +33,7 @@ import gguf  # noqa: E402
 logger = logging.getLogger("gguf-split-ple-heads")
 
 JOINED = "per_layer_token_embd.weight"
+HEAD_RE = re.compile(r"ple_ngram_embd\.(\d+)\.weight$")
 
 
 def split(readers: list[gguf.GGUFReader], writer: gguf.GGUFWriter) -> None:
@@ -41,7 +49,7 @@ def split(readers: list[gguf.GGUFReader], writer: gguf.GGUFWriter) -> None:
 
     for field in reader.fields.values():
         # a split input becomes one file, so its shard bookkeeping must not carry over
-        if field.name == "GGUF.tensor_count" or field.name.startswith("split."):
+        if field.name.startswith("GGUF.") or field.name.startswith("split."):
             continue
         val_type = field.types[0]
         sub_type = field.types[-1] if val_type == gguf.GGUFValueType.ARRAY else None
@@ -83,12 +91,81 @@ def split(readers: list[gguf.GGUFReader], writer: gguf.GGUFWriter) -> None:
     writer.close()
 
 
+def join(readers: list[gguf.GGUFReader], writer: gguf.GGUFWriter) -> None:
+    reader = readers[0]
+    offs = reader.fields.get("qwen4exp.ple.head_offsets")
+    vocs = reader.fields.get("qwen4exp.ple.head_vocab_sizes")
+    if offs is None or vocs is None:
+        raise ValueError("file has no qwen4exp.ple.head_offsets / head_vocab_sizes; is it qwen4exp?")
+    offs = [int(x) for x in offs.contents()]
+    vocs = [int(x) for x in vocs.contents()]
+    n_heads = len(offs)
+
+    for field in reader.fields.values():
+        if field.name.startswith("GGUF.") or field.name.startswith("split."):
+            continue
+        val_type = field.types[0]
+        sub_type = field.types[-1] if val_type == gguf.GGUFValueType.ARRAY else None
+        writer.add_key_value(field.name, field.contents(), val_type, sub_type=sub_type)
+
+    tensors = [t for r in readers for t in r.tensors]
+    heads = {}
+    for t in tensors:
+        m = HEAD_RE.match(t.name)
+        if m:
+            heads[int(m.group(1))] = t
+    if len(heads) != n_heads:
+        raise ValueError(f"expected {n_heads} ple_ngram_embd.N tensors, found {len(heads)}; already joined?")
+
+    qtype = heads[0].tensor_type
+    for h in range(n_heads):
+        if h not in heads:
+            raise ValueError(f"missing ple_ngram_embd.{h}.weight")
+        if heads[h].tensor_type != qtype:
+            raise ValueError(f"head {h} has type {heads[h].tensor_type}, expected {qtype} "
+                              "(heads must share one type to join into a single tensor)")
+        if heads[h].data.shape[0] != vocs[h]:
+            raise ValueError(f"head {h} has {heads[h].data.shape[0]} rows, expected {vocs[h]}")
+        logger.info(f"{heads[h].name}: rows {offs[h]}..{offs[h] + vocs[h]} "
+                    f"({heads[h].data.nbytes / 2**30:.2f} GiB)")
+
+    joined_data = np.concatenate([heads[h].data for h in range(n_heads)], axis=0)
+
+    # tensor infos first, in the order the data is written below; the joined tensor
+    # takes the position of the first head so the file keeps its original ordering
+    plan = []
+    inserted = False
+    for t in tensors:
+        if HEAD_RE.match(t.name):
+            if not inserted:
+                plan.append((JOINED, joined_data, qtype))
+                inserted = True
+            continue
+        plan.append((t.name, t.data, t.tensor_type))
+
+    for name, data, qtype_ in plan:
+        writer.add_tensor_info(name, data.shape, data.dtype, data.nbytes, qtype_)
+
+    writer.write_header_to_file()
+    writer.write_kv_data_to_file()
+    writer.write_ti_data_to_file()
+
+    done = 0
+    total = sum(d.nbytes for _, d, _ in plan)
+    for name, data, _ in plan:
+        writer.write_tensor_data(data, tensor_endianess=reader.endianess)
+        done += data.nbytes
+        logger.info(f"  {done / total * 100:5.1f}%  {name}")
+
+    writer.close()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("input", type=Path,
-                        help="qwen4exp GGUF with a joined n-gram table; pass shard 1 of a split file "
-                             "and the rest are picked up, and the output is written unsplit")
-    parser.add_argument("output", type=Path, help="where to write the split file")
+                        help="qwen4exp GGUF, joined or per-head; pass shard 1 of a split file "
+                             "and the rest are picked up")
+    parser.add_argument("output", type=Path, help="where to write the converted file")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
 
@@ -110,7 +187,13 @@ def main() -> None:
     readers = [gguf.GGUFReader(p, "r") for p in paths]
     arch = readers[0].fields["general.architecture"].contents()
     writer = gguf.GGUFWriter(args.output, arch=arch, endianess=readers[0].endianess)
-    split(readers, writer)
+    names = {t.name for r in readers for t in r.tensors}
+    if JOINED in names:
+        split(readers, writer)
+    elif any(HEAD_RE.match(n) for n in names):
+        join(readers, writer)
+    else:
+        raise SystemExit(f"neither {JOINED} nor ple_ngram_embd.N.weight tensors found; is this qwen4exp?")
     logger.info(f"wrote {args.output}")
 
 

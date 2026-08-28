@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import json
-import logging
-from typing import Callable, Iterable
+from typing import Iterable, cast
 
 import torch
 from torch import Tensor
@@ -10,15 +8,13 @@ from torch import Tensor
 import gguf
 import numpy as np
 
-from .base import ModelBase, MmprojModel
+from .base import ModelBase
 from .qwen import _LinearAttentionVReorderBase, _Qwen35MRopeMixin
 from .qwen3vl import Qwen3VLVisionModel
 
-logger = logging.getLogger(__name__)
-
 
 @ModelBase.register("Qwen4ExpForConditionalGeneration", "Qwen4ExpForCausalLM")
-@ModelBase.example("unsloth/Qwen3.8-Flash-Next")
+@ModelBase.example("Qwen/Qwen3.8-Flash-Next")
 class Qwen4ExpTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
     """Qwen3.8-Flash-Next.
 
@@ -30,23 +26,14 @@ class Qwen4ExpTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
     model_arch = gguf.MODEL_ARCH.QWEN4EXP
 
     # the MTP block is a separate draft head; vLLM drops it too
+    supports_mtp_export = False
+    no_mtp = True
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # shards held only until the row stride is known, normally none
-        self._ple_pending: dict[int, Tensor] = {}
-        self._ple_shard_rows: dict[int, int] = {}
+        # only the shard names, so the table itself is never held
+        self._ple_shards: dict[int, str] = {}
         self._ple_row_dim: int | None = None
-        self._ple_rows_per_shard: int | None = None
-        self._ple_map = None
-        self._ple_path = None
-        # The table is quantized a shard at a time on the way to disk. Holding it as F32
-        # first needs a 205 GB scratch file and then a 54 GB array in one piece, because
-        # gguf.quants allocates the whole output. Q8_0 is the smallest type gguf-py can
-        # encode, and llama-quantize takes it the rest of the way.
-        self._ple_qtype = gguf.GGMLQuantizationType.Q8_0
-        self._ple_row_bytes: int | None = None
-        self._ple_weight_scale: float | None = None
 
     def _read_hash_constants(self, suffix: str) -> list[int]:
         """Read an int64 PLE constant straight from the checkpoint.
@@ -63,26 +50,6 @@ class Qwen4ExpTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
                 return [int(x) for x in t.tolist()]
         raise ValueError(f"PLE constant {suffix!r} missing from the checkpoint")
 
-    def _read_ple_weight_scale(self) -> float:
-        """Scale of the FP8 n-gram table.
-
-        The table is FP8 with one scalar scale for the whole thing, not the 128x128
-        block scales the rest of an FP8 checkpoint carries, and one scale serves all
-        128 shards. base.py only rewrites tensors whose scale names its own weight,
-        so nothing dequantizes this one and the shards arrive as raw codes.
-        """
-        if self._ple_weight_scale is None:
-            for name, gen in self.model_tensors.items():
-                if name.endswith("ngram_embedding.weight_scale"):
-                    from .base import LazyTorchTensor
-
-                    t = LazyTorchTensor.to_eager(gen())
-                    self._ple_weight_scale = float(t.to(torch.float32).reshape(-1)[0])
-                    break
-            else:
-                raise ValueError("PLE n-gram table is FP8 but ngram_embedding.weight_scale is missing")
-        return self._ple_weight_scale
-
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
         hp = self.hparams
@@ -96,15 +63,13 @@ class Qwen4ExpTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
         self.gguf_writer.add_indexer_top_k(hp["indexer_budget"])
         ratio = hp["indexer_compress_ratio"]
         layer_types = hp["layer_types"]
-        ratios = [ratio if layer_types[i] == "full_attention" else 0 for i in range(n_layer)]
-        # the MTP block extends block_count, and this array is read per block. The draft
-        # attends dense, so it takes 0, the same value a non-QSA layer gets.
-        ratios += [0] * (self.block_count - n_layer)
-        self.gguf_writer.add_attention_compress_ratios(ratios)
+        self.gguf_writer.add_attention_compress_ratios(
+            [ratio if layer_types[i] == "full_attention" else 0 for i in range(n_layer)]
+        )
 
         # ple_layer_ids is 1-based in the HF config; empty means no n-gram table,
         # so emit no PLE keys rather than optional ones
-        ple_layers = [] if self._no_ple else [i - 1 for i in hp["ple_layer_ids"]]
+        ple_layers = [i - 1 for i in hp["ple_layer_ids"]]
         if not ple_layers:
             return
         self.gguf_writer.add_ple_layers(ple_layers)
@@ -112,9 +77,8 @@ class Qwen4ExpTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
         self.gguf_writer.add_ple_heads_per_ngram(hp["heads_per_ngram"])
         self.gguf_writer.add_ple_conv_kernel(hp["ple_conv_kernel_size"])
         self.gguf_writer.add_ple_eos_token_id(self._eos_token_id())
-        # The PLE hash runs over token ids, but a multimodal batch arrives as embeddings
-        # with the placeholder consumed. Carry it so those positions hash what the
-        # reference sees in input_ids instead of being undefined.
+        # an image is decoded as an embeddings-only batch, so the graph has no placeholder
+        # ids to hash; carry the id and let it stand in for those positions
         _img = self._image_token_id()
         if _img is not None:
             self.gguf_writer.add_ple_image_token_id(int(_img))
@@ -129,16 +93,7 @@ class Qwen4ExpTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
             self._read_hash_constants("ple_embedding.ngram_heads_vocab_sizes"))
 
     def _image_token_id(self) -> int | None:
-        # image_token_id is top-level in config.json, not in self.hparams once that is
-        # narrowed to text_config, and the text model has no global_config; read the file
         img = self.hparams.get("image_token_id")
-        if img is not None:
-            return int(img)
-        try:
-            with open(self.dir_model / "config.json", "r", encoding="utf-8") as f:
-                img = json.load(f).get("image_token_id")
-        except Exception:
-            return None
         return None if img is None else int(img)
 
     def _eos_token_id(self) -> int:
@@ -146,52 +101,11 @@ class Qwen4ExpTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
         if isinstance(eos, list):
             # the PLE hash resets n-grams on the primary EOS
             return int(eos[-1])
+        if eos is None:
+            raise ValueError("eos_token_id is required: the PLE hash resets its n-grams on it")
         return int(eos)
 
-    @classmethod
-    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
-        name = item[0]
-        # The MTP block carries its own final hyper-connection mixer. An MTP-only file has
-        # no trunk, so that one becomes the file's mixer; a full model already has the
-        # trunk's, and graph_mtp reads it, so this copy is dropped.
-        if name.startswith("mtp.hyper_connection_mixer."):
-            if cls.no_mtp or not cls.mtp_only:
-                return None
-            return (name.replace("mtp.", "model.", 1), item[1])
-        return super().filter_tensors(item)
-
-    def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
-        yield from super().generate_extra_tensors()
-
-        # the reference adds the two MTP input projections, and A*e + B*h == [A|B]*concat(e, h),
-        # so they join into the one eh_proj the tensor map already handles
-        e_name = "mtp.fc_embedding.weight"
-        h_name = "mtp.fc_hidden.weight"
-
-        have_e = e_name in self.model_tensors
-        have_h = h_name in self.model_tensors
-        if not have_e and not have_h:
-            return
-        if not have_e or not have_h:
-            raise KeyError(f"unpaired MTP input projection: need both {e_name} and {h_name}")
-
-        from .base import LazyTorchTensor
-
-        e = LazyTorchTensor.to_eager(self.model_tensors[e_name]())
-        h = LazyTorchTensor.to_eager(self.model_tensors[h_name]())
-        yield (self.format_tensor_name(gguf.MODEL_TENSOR.NEXTN_EH_PROJ,
-                                       self.hparams["num_hidden_layers"]),
-               torch.cat([e, h], dim=1).contiguous())
-
-        del self.model_tensors[e_name]
-        del self.model_tensors[h_name]
-
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        # --no-ple drops the whole block: the table, its hash constants, and the
-        # projections, norms and conv that only read it
-        if self._no_ple and ".ple." in name:
-            return []
-
         # int64 hash constants must stay exact; 1-D tensors force F32, so use KV
         if name.endswith("ple_embedding.layer_multipliers"):
             self._ple_multipliers = [int(x) for x in data_torch.tolist()]
@@ -201,8 +115,6 @@ class Qwen4ExpTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
             return []
         if name.endswith("ple_embedding.ngram_heads_vocab_sizes"):
             self._ple_head_vocab_sizes = [int(x) for x in data_torch.tolist()]
-            return []
-        if name.endswith("ngram_embedding.weight_scale"):
             return []
 
         if ".ngram_embedding.shard_" in name:
@@ -228,128 +140,56 @@ class Qwen4ExpTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
 
         return super().modify_tensors(data_torch, name, bid)
 
-    # -- the PLE table ----------------------------------------------------
-    #
-    # 128 shards concatenate into one enormous tensor. Holding them all and then
-    # torch.cat-ing peaks near 300 GB of RSS, which most machines that can
-    # otherwise convert this model do not have. Each shard is instead written
-    # straight into a memory-mapped file at its final row offset and dropped, so
-    # the peak is one shard and the rest is the page cache's problem. The trade
-    # is a temporary file beside the output, removed when the write finishes.
-    #
-    # The file holds float32 because that is what base.py has already cast the
-    # shards to by the time modify_tensors sees them, and what it calls .numpy()
-    # on afterwards.
-
+    # the shards concatenate into a tensor of well over 100 GB
+    # use LazyChunkedTensor here, a single shard resident at a time
     def _place_ple_shard(self, data_torch: Tensor, name: str) -> Iterable[tuple[str, Tensor]]:
 
         idx = int(name.rpartition(".shard_")[2].partition(".")[0])
         n_parts = self.hparams["split_ngram_parts"]
-        rows, row_dim = int(data_torch.shape[0]), int(data_torch.shape[-1])
 
-        self._ple_row_dim = row_dim
-        self._ple_shard_rows[idx] = rows
+        self._ple_shards[idx] = name
+        self._ple_row_dim = int(data_torch.shape[-1])
 
-        if self._ple_map is None:
-            if idx == n_parts - 1 and n_parts > 1:
-                # the last shard may be short, so it cannot set the stride. This
-                # only happens if the checkpoint yields shards out of order
-                self._ple_pending[idx] = data_torch
-                return []
-            self._ple_rows_per_shard = rows
-            blck, tsize = gguf.GGML_QUANT_SIZES[self._ple_qtype]
-            if row_dim % blck != 0:
-                raise ValueError(f"PLE row of {row_dim} is not a multiple of the {self._ple_qtype.name} block {blck}")
-            self._ple_row_bytes = row_dim // blck * tsize
-            self._ple_path = self.fname_out.parent / f".{self.fname_out.stem}.ple.tmp"
-            self._ple_map = np.memmap(
-                self._ple_path, dtype=np.uint8, mode="w+",
-                shape=(n_parts * rows, self._ple_row_bytes))
-
-        for i, held in list(self._ple_pending.items()):
-            self._ple_pending.pop(i)
-            self._write_ple_shard(i, held)
-        self._write_ple_shard(idx, data_torch)
-
-        if len(self._ple_shard_rows) < n_parts:
+        if len(self._ple_shards) < n_parts:
             return []
 
-        total = sum(self._ple_shard_rows.values())
-        table = self._finish_ple_table(total)
+        # the checkpoint may yield the shards in any order, the row order is by index
+        shards = [self._ple_shards[i] for i in sorted(self._ple_shards)]
+        rows = 0
+        for shard in shards:
+            shape = self.model_tensors[shard]().shape
+            if int(shape[-1]) != self._ple_row_dim:
+                raise ValueError(
+                    f"PLE shard {shard} has row dim {int(shape[-1])}, expected {self._ple_row_dim}")
+            rows += int(shape[0])
 
-        # Emit one tensor per n-gram head rather than the joined table. A head is a
-        # contiguous row range, so each is a plain slice of the same memory map, and at
-        # ~1.3 GiB it fits the 4 GiB buffer a Vulkan device will accept. The joined
-        # 20.9 GiB table never could, which pinned it to the host.
-        offs = self._read_hash_constants("ple_embedding.ngram_heads_offsets")
-        vocs = self._read_hash_constants("ple_embedding.ngram_heads_vocab_sizes")
-        if len(offs) != len(vocs):
-            raise ValueError(f"PLE head offsets ({len(offs)}) and vocab sizes ({len(vocs)}) disagree")
-        if offs[-1] + vocs[-1] > total:
-            raise ValueError(f"PLE heads need {offs[-1] + vocs[-1]} rows, table has {total}")
+        table = gguf.LazyChunkedTensor(
+            [self._load_ple_shard(shard) for shard in shards],
+            shape=(rows, self._ple_row_dim),
+            dtype=np.float32,
+        )
+        gguf_name = gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.PER_LAYER_TOKEN_EMBD]
+        return [(gguf_name + ".weight", cast(Tensor, table))]
 
-        for h, (o, v) in enumerate(zip(offs, vocs)):
-            name = gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.PLE_NGRAM_EMBD].format(bid=h) + ".weight"
-            logger.info(f"{name}, {self._ple_qtype.name}, shape = {{{self._ple_row_dim}, {v}}}")
-            self.gguf_writer.add_tensor(name, table[o:o + v], raw_dtype=self._ple_qtype)
-        return []
+    def _load_ple_shard(self, name: str):
+        def load() -> np.ndarray:
+            from .base import LazyTorchTensor
 
-    def _write_ple_shard(self, idx: int, shard: Tensor) -> None:
-
-        rows = int(shard.shape[0])
-        if idx != self.hparams["split_ngram_parts"] - 1 and rows != self._ple_rows_per_shard:
-            raise ValueError(
-                f"PLE shard {idx} has {rows} rows, expected {self._ple_rows_per_shard}; "
-                "shards other than the last must be uniform for direct placement"
-            )
-
-        start = idx * self._ple_rows_per_shard
-        # the shard is still lazy here; force it, since the point of this path
-        # is that exactly one shard is resident at a time
-        from .base import LazyTorchTensor
-
-        eager = LazyTorchTensor.to_eager(shard).to(torch.float32).contiguous()
-        eager = eager * self._read_ple_weight_scale()
-
-        if idx == 0:
-            a = eager.abs()
-            logger.info(f"PLE shard 0 after scaling by {self._read_ple_weight_scale():.6g}: "
-                        f"absmax {a.max():.6g}, std {eager.std():.6g}")
-
-        self._ple_map[start:start + rows] = gguf.quants.quantize(eager.numpy(), self._ple_qtype)
-        del eager
-
-    def _finish_ple_table(self, total_rows: int):
-
-        self._ple_map.flush()
-        del self._ple_map
-        self._ple_map = None
-
-        # trim the tail if the last shard came up short of a full stride
-        want = total_rows * self._ple_row_bytes
-        if self._ple_path.stat().st_size != want:
-            with open(self._ple_path, "r+b") as f:
-                f.truncate(want)
-
-        return np.memmap(self._ple_path, dtype=np.uint8, mode="r",
-                         shape=(total_rows, self._ple_row_bytes))
+            # a fresh lazy tensor every call, or to_eager() memoizes every shard
+            eager = LazyTorchTensor.to_eager(self.model_tensors[name]())
+            return eager.to(torch.float32).contiguous().numpy()
+        return load
 
     def prepare_tensors(self):
         super().prepare_tensors()
-        if self._ple_pending:
+        n_parts = self.hparams.get("split_ngram_parts", 0)
+        if self._ple_shards and len(self._ple_shards) != n_parts:
             raise ValueError(
-                f"unprocessed PLE embedding shards: {sorted(self._ple_pending)}"
+                f"got {len(self._ple_shards)} PLE embedding shards, expected {n_parts}"
             )
-
-    def write(self):
-        try:
-            super().write()
-        finally:
-            if self._ple_path is not None and self._ple_path.exists():
-                self._ple_path.unlink()
 
 
 @ModelBase.register("Qwen4ExpForConditionalGeneration")
-@ModelBase.example("unsloth/Qwen3.8-Flash-Next")
+@ModelBase.example("Qwen/Qwen3.8-Flash-Next")
 class Qwen4ExpVisionModel(Qwen3VLVisionModel):
     """The vision tower is an unmodified Qwen3-VL ViT."""
