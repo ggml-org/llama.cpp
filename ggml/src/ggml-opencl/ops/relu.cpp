@@ -13,10 +13,11 @@ void ggml_cl_load_kernels_relu(ggml_backend_opencl_context * backend_ctx) {
 #else
         const std::string kernel_src = read_file("relu.cl");
 #endif
-        backend_ctx->program_relu =
+        cl_program prog =
             build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
 
-        CL_CHECK((backend_ctx->kernel_relu = clCreateKernel(backend_ctx->program_relu, "kernel_relu", &err), err));
+        CL_CHECK((backend_ctx->kernel_relu = clCreateKernel(prog, "kernel_relu", &err), err));
+        CL_CHECK(clReleaseProgram(prog));
         GGML_LOG_CONT(".");
     }
 }

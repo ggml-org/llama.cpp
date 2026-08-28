@@ -768,70 +768,6 @@ struct ggml_backend_opencl_context {
     ggml_cl_buffer prealloc_total_tiles;
     ggml_cl_buffer prealloc_slot_counter;
 
-    cl_program program_add;
-    cl_program program_add_id;
-    cl_program program_moe_add_id_glu;
-    cl_program program_clamp;
-    cl_program program_cvt;
-    cl_program program_diag_mask_inf;
-    cl_program program_gelu;
-    cl_program program_gemv_noshuffle_general;
-    cl_program program_gemv_noshuffle;
-    cl_program program_get_rows;
-    cl_program program_set_rows;
-    cl_program program_glu;
-    cl_program program_im2col_f16;
-    cl_program program_im2col_f32;
-    cl_program program_mul_mat_Ab_Bi_8x4;
-    cl_program program_mul_mv_q4_0_f32;
-    cl_program program_mul_mv_q4_0_f32_v;
-    cl_program program_mul_mv_q4_0_f32_8x_flat;
-    cl_program program_mul_mv_q4_0_f32_1d_8x_flat;
-    cl_program program_mul_mv_q4_0_f32_1d_16x_flat;
-    cl_program program_mul_mv_q6_K;
-    cl_program program_mul_mv_q8_0_f32, program_mul_mv_q8_0_f32_flat;
-    cl_program program_mul_mv_mxfp4_f32;
-    cl_program program_mul_mv_mxfp4_f32_flat;
-    cl_program program_mul_mv_f16_f16;
-    cl_program program_mul_mv_f16_f32_1row;
-    cl_program program_mul_mv_f16_f32_l4;
-    cl_program program_mul_mv_f16_f32;
-    cl_program program_mul_mv_f32_f32;
-    cl_program program_mul;
-    cl_program program_mul_mat_f16_f32_tiled;
-    cl_program program_mul_mm_f16_f32_kqv;
-    cl_program program_mul_mm_f16_f32_kq;
-    cl_program program_div;
-    cl_program program_sub;
-    cl_program program_norm;
-    cl_program program_relu;
-    cl_program program_rms_norm;
-    cl_program program_group_norm;
-    cl_program program_rope;
-    cl_program program_silu;
-    cl_program program_sigmoid;
-    cl_program program_softmax_f32;
-    cl_program program_softmax_f16;
-    cl_program program_softmax_4_f32;
-    cl_program program_softmax_4_f16;
-    cl_program program_argsort_f32_i32;
-    cl_program program_sum_rows_f32;
-    cl_program program_pad;
-    cl_program program_upscale;
-    cl_program program_conv_2d_f16;
-    cl_program program_conv_2d_f32;
-    cl_program program_conv_2d_f16_f32;
-    cl_program program_tsembd;
-    cl_program program_gemv_moe_mxfp4_f32, program_gemm_moe_mxfp4_f32;
-    cl_program program_mul_mv_id_q4_0_f32_8x_flat;
-    cl_program program_mul_mv_id_q8_0_f32, program_mul_mv_id_q8_0_f32_flat;
-    cl_program program_mul_mv_id_mxfp4_f32;
-    cl_program program_mul_mv_id_mxfp4_f32_flat;
-    cl_program program_mul_mm_f32_f32_l4_lm;
-    cl_program program_mul_mm_f16_f32_l4_lm;
-    cl_program program_mul_mm_f16_f32_l4_lm_n8;
-    cl_program program_mul_mm_q8_0_f32_l4_lm;
-
     cl_kernel kernel_add, kernel_add_row, kernel_add_f16, kernel_add_row_f16;
     cl_kernel kernel_mul, kernel_mul_row, kernel_mul_f16, kernel_mul_row_f16;
     cl_kernel kernel_div, kernel_div_row, kernel_div_f16, kernel_div_row_f16;
@@ -884,7 +820,6 @@ struct ggml_backend_opencl_context {
     cl_kernel kernel_mul_mat_f32_f32;
     cl_kernel kernel_mul_mat_f16_f16;
     cl_kernel kernel_mul_mat_f16_f32_1row;
-    cl_program program_mul_mv_f16_f32_mrow;
     cl_kernel kernel_mul_mat_f16_f32_mrow      = nullptr;  // multi-row decode GEMV (attn proj + lm_head)
     cl_kernel kernel_mul_mat_f16_f32_mrow_r2   = nullptr;
     cl_kernel kernel_mul_mat_f16_f32_mrow_r4   = nullptr;
@@ -1236,8 +1171,6 @@ struct ggml_backend_opencl_context {
 
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
     // Transpose kernels
-    cl_program program_transpose;
-
     cl_kernel kernel_transpose_32;
     cl_kernel kernel_transpose_32_16;
     cl_kernel kernel_transpose_16;

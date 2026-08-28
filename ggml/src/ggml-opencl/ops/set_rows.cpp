@@ -13,21 +13,22 @@ void ggml_cl_load_kernels_set_rows(ggml_backend_opencl_context * backend_ctx) {
 #else
         const std::string kernel_src = read_file("set_rows.cl");
 #endif
-        backend_ctx->program_set_rows =
+        cl_program prog =
             build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
 
-        CL_CHECK((backend_ctx->kernel_set_rows_f32_i64 = clCreateKernel(backend_ctx->program_set_rows, "kernel_set_rows_f32_i64", &err), err));
-        CL_CHECK((backend_ctx->kernel_set_rows_f32_i32 = clCreateKernel(backend_ctx->program_set_rows, "kernel_set_rows_f32_i32", &err), err));
-        CL_CHECK((backend_ctx->kernel_set_rows_f16_i64 = clCreateKernel(backend_ctx->program_set_rows, "kernel_set_rows_f16_i64", &err), err));
-        CL_CHECK((backend_ctx->kernel_set_rows_f16_i32 = clCreateKernel(backend_ctx->program_set_rows, "kernel_set_rows_f16_i32", &err), err));
-        CL_CHECK((backend_ctx->kernel_set_rows_q8_0_i64 = clCreateKernel(backend_ctx->program_set_rows, "kernel_set_rows_q8_0_i64", &err), err));
-        CL_CHECK((backend_ctx->kernel_set_rows_q8_0_i32 = clCreateKernel(backend_ctx->program_set_rows, "kernel_set_rows_q8_0_i32", &err), err));
-        CL_CHECK((backend_ctx->kernel_set_rows_q8_0_soa_i64 = clCreateKernel(backend_ctx->program_set_rows, "kernel_set_rows_q8_0_soa_i64", &err), err));
-        CL_CHECK((backend_ctx->kernel_set_rows_q8_0_soa_i32 = clCreateKernel(backend_ctx->program_set_rows, "kernel_set_rows_q8_0_soa_i32", &err), err));
-        CL_CHECK((backend_ctx->kernel_set_rows_q4_0_i64     = clCreateKernel(backend_ctx->program_set_rows, "kernel_set_rows_q4_0_i64",     &err), err));
-        CL_CHECK((backend_ctx->kernel_set_rows_q4_0_i32     = clCreateKernel(backend_ctx->program_set_rows, "kernel_set_rows_q4_0_i32",     &err), err));
-        CL_CHECK((backend_ctx->kernel_set_rows_q4_0_soa_i64 = clCreateKernel(backend_ctx->program_set_rows, "kernel_set_rows_q4_0_soa_i64", &err), err));
-        CL_CHECK((backend_ctx->kernel_set_rows_q4_0_soa_i32 = clCreateKernel(backend_ctx->program_set_rows, "kernel_set_rows_q4_0_soa_i32", &err), err));
+        CL_CHECK((backend_ctx->kernel_set_rows_f32_i64     = clCreateKernel(prog, "kernel_set_rows_f32_i64",     &err), err));
+        CL_CHECK((backend_ctx->kernel_set_rows_f32_i32     = clCreateKernel(prog, "kernel_set_rows_f32_i32",     &err), err));
+        CL_CHECK((backend_ctx->kernel_set_rows_f16_i64     = clCreateKernel(prog, "kernel_set_rows_f16_i64",     &err), err));
+        CL_CHECK((backend_ctx->kernel_set_rows_f16_i32     = clCreateKernel(prog, "kernel_set_rows_f16_i32",     &err), err));
+        CL_CHECK((backend_ctx->kernel_set_rows_q8_0_i64    = clCreateKernel(prog, "kernel_set_rows_q8_0_i64",    &err), err));
+        CL_CHECK((backend_ctx->kernel_set_rows_q8_0_i32    = clCreateKernel(prog, "kernel_set_rows_q8_0_i32",    &err), err));
+        CL_CHECK((backend_ctx->kernel_set_rows_q8_0_soa_i64 = clCreateKernel(prog, "kernel_set_rows_q8_0_soa_i64", &err), err));
+        CL_CHECK((backend_ctx->kernel_set_rows_q8_0_soa_i32 = clCreateKernel(prog, "kernel_set_rows_q8_0_soa_i32", &err), err));
+        CL_CHECK((backend_ctx->kernel_set_rows_q4_0_i64     = clCreateKernel(prog, "kernel_set_rows_q4_0_i64",     &err), err));
+        CL_CHECK((backend_ctx->kernel_set_rows_q4_0_i32     = clCreateKernel(prog, "kernel_set_rows_q4_0_i32",     &err), err));
+        CL_CHECK((backend_ctx->kernel_set_rows_q4_0_soa_i64 = clCreateKernel(prog, "kernel_set_rows_q4_0_soa_i64", &err), err));
+        CL_CHECK((backend_ctx->kernel_set_rows_q4_0_soa_i32 = clCreateKernel(prog, "kernel_set_rows_q4_0_soa_i32", &err), err));
+        CL_CHECK(clReleaseProgram(prog));
         GGML_LOG_CONT(".");
     }
 }

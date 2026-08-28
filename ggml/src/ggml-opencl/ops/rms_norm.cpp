@@ -13,12 +13,13 @@ void ggml_cl_load_kernels_rms_norm(ggml_backend_opencl_context * backend_ctx) {
 #else
         const std::string kernel_src = read_file("rms_norm.cl");
 #endif
-        backend_ctx->program_rms_norm =
+        cl_program prog =
             build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
 
-        CL_CHECK((backend_ctx->kernel_rms_norm     = clCreateKernel(backend_ctx->program_rms_norm, "kernel_rms_norm", &err), err));
-        CL_CHECK((backend_ctx->kernel_rms_norm_mul = clCreateKernel(backend_ctx->program_rms_norm, "kernel_rms_norm_mul", &err), err));
-        CL_CHECK((backend_ctx->kernel_rms_norm_mul_add = clCreateKernel(backend_ctx->program_rms_norm, "kernel_rms_norm_mul_add", &err), err));
+        CL_CHECK((backend_ctx->kernel_rms_norm     = clCreateKernel(prog, "kernel_rms_norm", &err), err));
+        CL_CHECK((backend_ctx->kernel_rms_norm_mul = clCreateKernel(prog, "kernel_rms_norm_mul", &err), err));
+        CL_CHECK((backend_ctx->kernel_rms_norm_mul_add = clCreateKernel(prog, "kernel_rms_norm_mul_add", &err), err));
+        CL_CHECK(clReleaseProgram(prog));
         GGML_LOG_CONT(".");
     }
 

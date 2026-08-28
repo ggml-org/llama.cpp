@@ -13,17 +13,18 @@ void ggml_cl_load_kernels_rope(ggml_backend_opencl_context * backend_ctx) {
 #else
         const std::string kernel_src = read_file("rope.cl");
 #endif
-        backend_ctx->program_rope =
+        cl_program prog =
             build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
 
-        CL_CHECK((backend_ctx->kernel_rope_norm_f32   = clCreateKernel(backend_ctx->program_rope, "kernel_rope_norm_f32", &err), err));
-        CL_CHECK((backend_ctx->kernel_rope_norm_f16   = clCreateKernel(backend_ctx->program_rope, "kernel_rope_norm_f16", &err), err));
-        CL_CHECK((backend_ctx->kernel_rope_neox_f32   = clCreateKernel(backend_ctx->program_rope, "kernel_rope_neox_f32", &err), err));
-        CL_CHECK((backend_ctx->kernel_rope_neox_f16   = clCreateKernel(backend_ctx->program_rope, "kernel_rope_neox_f16", &err), err));
-        CL_CHECK((backend_ctx->kernel_rope_multi_f32  = clCreateKernel(backend_ctx->program_rope, "kernel_rope_multi_f32", &err), err));
-        CL_CHECK((backend_ctx->kernel_rope_multi_f16  = clCreateKernel(backend_ctx->program_rope, "kernel_rope_multi_f16", &err), err));
-        CL_CHECK((backend_ctx->kernel_rope_vision_f32 = clCreateKernel(backend_ctx->program_rope, "kernel_rope_vision_f32", &err), err));
-        CL_CHECK((backend_ctx->kernel_rope_vision_f16 = clCreateKernel(backend_ctx->program_rope, "kernel_rope_vision_f16", &err), err));
+        CL_CHECK((backend_ctx->kernel_rope_norm_f32   = clCreateKernel(prog, "kernel_rope_norm_f32", &err), err));
+        CL_CHECK((backend_ctx->kernel_rope_norm_f16   = clCreateKernel(prog, "kernel_rope_norm_f16", &err), err));
+        CL_CHECK((backend_ctx->kernel_rope_neox_f32   = clCreateKernel(prog, "kernel_rope_neox_f32", &err), err));
+        CL_CHECK((backend_ctx->kernel_rope_neox_f16   = clCreateKernel(prog, "kernel_rope_neox_f16", &err), err));
+        CL_CHECK((backend_ctx->kernel_rope_multi_f32  = clCreateKernel(prog, "kernel_rope_multi_f32", &err), err));
+        CL_CHECK((backend_ctx->kernel_rope_multi_f16  = clCreateKernel(prog, "kernel_rope_multi_f16", &err), err));
+        CL_CHECK((backend_ctx->kernel_rope_vision_f32 = clCreateKernel(prog, "kernel_rope_vision_f32", &err), err));
+        CL_CHECK((backend_ctx->kernel_rope_vision_f16 = clCreateKernel(prog, "kernel_rope_vision_f16", &err), err));
+        CL_CHECK(clReleaseProgram(prog));
         GGML_LOG_CONT(".");
     }
 }
