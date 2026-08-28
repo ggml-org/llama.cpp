@@ -94,6 +94,9 @@ LLAMA_API llama_memory_breakdown llama_get_memory_breakdown(const struct llama_c
 // If masked == true,  output the embeddings only for the tokens with batch.logits != 0
 // If masked == false, output the embeddings for all tokens in the batch regardless of batch.logits
 LLAMA_API void llama_set_embeddings_nextn(struct llama_context * ctx, bool value, bool masked);
+// Prefer retaining nextn output on the HIP device. Host getters lazily
+// materialize it, so non-HIP and multi-ubatch callers retain a safe fallback.
+LLAMA_API void llama_set_embeddings_nextn_device_preferred(struct llama_context * ctx, bool value);
 
 // Select which appended NextN block the DECODER_MTP graph runs (offset past
 // the trunk: il = n_layer() + offset). Used by the speculative NextN driver to
@@ -104,15 +107,32 @@ LLAMA_API void llama_set_nextn_layer_offset(struct llama_context * ctx, int32_t 
 // LLAMA_API float * llama_get_embeddings(struct llama_context * ctx);
 LLAMA_API float * llama_get_embeddings_nextn(struct llama_context * ctx);
 
+// Borrowed device-side output view for integrations that can enqueue work on
+// the same backend stream. This never synchronizes and is valid until the next
+// context evaluation; callers must fall back to the host getter when false.
+struct llama_device_view {
+    const void * data = nullptr;
+    size_t       row_stride = 0;
+    uint32_t     n_rows = 0;
+    int32_t      device = -1;
+    void *       stream = nullptr;
+};
+LLAMA_API bool llama_get_embeddings_nextn_device(
+        struct llama_context * ctx, struct llama_device_view * view);
+
 // LLAMA_API float * llama_get_embeddings_ith(struct llama_context * ctx, int32_t i);
 LLAMA_API float * llama_get_embeddings_nextn_ith(struct llama_context * ctx, int32_t i);
 
 // Set whether the context outputs the input embeddings of a specific layer
 LLAMA_API void llama_set_embeddings_layer_inp(struct llama_context * ctx, uint32_t lid, bool value);
+LLAMA_API void llama_set_embeddings_layer_inp_device_preferred(
+        struct llama_context * ctx, uint32_t lid, bool value);
 
 // mirrors:
 // LLAMA_API float * llama_get_embeddings(struct llama_context * ctx);
 LLAMA_API float * llama_get_embeddings_layer_inp(struct llama_context * ctx, uint32_t lid);
+LLAMA_API bool llama_get_embeddings_layer_inp_device(
+        struct llama_context * ctx, uint32_t lid, struct llama_device_view * view);
 
 LLAMA_API llama_context * llama_get_ctx_other(struct llama_context * ctx);
 

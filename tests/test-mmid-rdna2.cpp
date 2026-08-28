@@ -44,6 +44,9 @@ struct params {
     weight_fixture fixture = weight_fixture::prototypes;
     bool explicit_multi = false;
     bool mmvq_batch6_hint = false;
+    bool mmq_j16_hint = false;
+    bool plain = false;
+    bool swiglu = false;
     const char * device_name = nullptr;
     const char * dump_output = nullptr;
     const char * compare_output = nullptr;
@@ -84,7 +87,7 @@ struct output_stats {
 void usage(const char * program) {
     std::printf("Synthetic routed quantized MUL_MAT_ID benchmark using the HIP GGML backend graph.\n\n");
     std::printf("usage: %s [options]\n\n", program);
-    std::printf("  --type TYPE             q4_0, q4_k, q5_k, q6_k, iq2_xxs, iq2_s, iq3_xxs, or iq3_s (q4_k)\n");
+    std::printf("  --type TYPE             q4_0, q4_k, q5_1, q5_k, q6_k, q8_0, iq2_xxs, iq2_s, iq3_xxs, or iq3_s (q4_k)\n");
     std::printf("  --k N                   input width, divisible by the quant block size (4096)\n");
     std::printf("  --n N                   expert output rows (512)\n");
     std::printf("  --batch N               routed tokens, 1..256 (32)\n");
@@ -92,8 +95,11 @@ void usage(const char * program) {
     std::printf("  --top-k N               unique experts selected per token (10)\n");
     std::printf("  --routing MODE          uniform or hot (uniform)\n");
     std::printf("  --fixture MODE          prototypes or unique (prototypes)\n");
-    std::printf("  --explicit-multi        src1 = [k, top_k, batch] (replicas the DSV4 down-exps ne11>1 form)\n");
+    std::printf("  --explicit-multi        src1 = [k, top_k, batch] (replicates the routed down-exps ne11>1 form)\n");
     std::printf("  --mmvq-batch6-hint      mark quantized routed weights for the native RDNA2 six-row MMVQ override\n");
+    std::printf("  --mmq-j16-hint          request the validated RDNA2 MMQ J=16 schedule when dispatch selects MMQ\n");
+    std::printf("  --plain                 benchmark non-routed MUL_MAT; requires experts=top-k=1\n");
+    std::printf("  --swiglu                build two routed matrices plus SwiGLU to exercise production gate/up fusion\n");
     std::printf("  --warmup N              warmup graph executions (10)\n");
     std::printf("  --iterations N          timed graph executions (50)\n");
     std::printf("  --device NAME           exact ROCm GGML device name; defaults to the first GPU\n");
@@ -114,12 +120,20 @@ bool parse_type(const char * value, ggml_type & type) {
         type = GGML_TYPE_Q4_K;
         return true;
     }
+    if (std::strcmp(value, "q5_1") == 0) {
+        type = GGML_TYPE_Q5_1;
+        return true;
+    }
     if (std::strcmp(value, "q5_k") == 0) {
         type = GGML_TYPE_Q5_K;
         return true;
     }
     if (std::strcmp(value, "q6_k") == 0) {
         type = GGML_TYPE_Q6_K;
+        return true;
+    }
+    if (std::strcmp(value, "q8_0") == 0) {
+        type = GGML_TYPE_Q8_0;
         return true;
     }
     if (std::strcmp(value, "iq2_xxs") == 0) {
@@ -220,6 +234,15 @@ params parse_args(int argc, char ** argv) {
         } else if (std::strcmp(arg, "--mmvq-batch6-hint") == 0) {
             result.mmvq_batch6_hint = true;
             continue;
+        } else if (std::strcmp(arg, "--mmq-j16-hint") == 0) {
+            result.mmq_j16_hint = true;
+            continue;
+        } else if (std::strcmp(arg, "--plain") == 0) {
+            result.plain = true;
+            continue;
+        } else if (std::strcmp(arg, "--swiglu") == 0) {
+            result.swiglu = true;
+            continue;
         } else if (std::strcmp(arg, "--device") == 0) {
             result.device_name = require_value(arg);
         } else if (std::strcmp(arg, "--dump-output") == 0) {
@@ -244,6 +267,12 @@ params parse_args(int argc, char ** argv) {
 
     if (result.top_k > result.experts) {
         fail("--top-k cannot exceed --experts");
+    }
+    if (result.plain && (result.experts != 1 || result.top_k != 1 || result.explicit_multi || result.swiglu)) {
+        fail("--plain requires --experts 1 --top-k 1 without --explicit-multi or --swiglu");
+    }
+    if (result.swiglu && result.explicit_multi) {
+        fail("--swiglu does not support --explicit-multi");
     }
     if (result.k % ggml_blck_size(result.type) != 0) {
         std::fprintf(stderr, "error: k=%lld is not divisible by %lld for %s\n",
@@ -468,7 +497,8 @@ int main(int argc, char ** argv) {
     }
 
     std::printf("backend: %s (%s)\n", ggml_backend_name(backend.get()), ggml_backend_dev_description(device));
-    std::printf("routed MMID case: type=%s K=%lld N=%lld batch=%lld experts=%lld top_k=%lld routing=%s fixture=%s\n",
+    std::printf("%s case: type=%s K=%lld N=%lld batch=%lld experts=%lld top_k=%lld routing=%s fixture=%s\n",
+                p.plain ? "plain MUL_MAT" : p.swiglu ? "routed MMID SwiGLU" : "routed MMID",
                 ggml_type_name(p.type), static_cast<long long>(p.k), static_cast<long long>(p.n),
                 static_cast<long long>(p.batch), static_cast<long long>(p.experts), static_cast<long long>(p.top_k),
                 p.routing == routing_mode::uniform ? "uniform" : "hot",
@@ -495,16 +525,42 @@ int main(int argc, char ** argv) {
         fail("failed to create GGML contexts");
     }
 
-    ggml_tensor * expert_weights = ggml_new_tensor_3d(ctx_weights.get(), p.type, p.k, p.n, p.experts);
-    if (p.mmvq_batch6_hint) {
-        expert_weights->flags |= GGML_TENSOR_FLAG_MUL_MAT_ID_MMVQ_BATCH6;
+    ggml_tensor * expert_weights = p.plain
+        ? ggml_new_tensor_2d(ctx_weights.get(), p.type, p.k, p.n)
+        : ggml_new_tensor_3d(ctx_weights.get(), p.type, p.k, p.n, p.experts);
+    ggml_tensor * expert_weights_gate = p.swiglu
+        ? ggml_new_tensor_3d(ctx_weights.get(), p.type, p.k, p.n, p.experts)
+        : nullptr;
+    for (ggml_tensor * weights : {expert_weights, expert_weights_gate}) {
+        if (weights == nullptr) {
+            continue;
+        }
+        if (p.mmvq_batch6_hint) {
+            weights->flags |= GGML_TENSOR_FLAG_MUL_MAT_ID_MMVQ_BATCH6;
+        }
+        if (p.mmq_j16_hint) {
+            weights->flags |= GGML_TENSOR_FLAG_MUL_MAT_ID_MMQ_J16;
+        }
     }
-    ggml_tensor * ids_full = ggml_new_tensor_2d(ctx.get(), GGML_TYPE_I32, p.experts, p.batch);
-    ggml_tensor * ids = ggml_view_2d(ctx.get(), ids_full, p.top_k, p.batch, ids_full->nb[1], 0);
-    ggml_tensor * activation = p.explicit_multi
-        ? ggml_new_tensor_3d(ctx.get(), GGML_TYPE_F32, p.k, p.top_k, p.batch)
-        : ggml_new_tensor_3d(ctx.get(), GGML_TYPE_F32, p.k, 1, p.batch);
-    ggml_tensor * output = ggml_mul_mat_id(ctx.get(), expert_weights, activation, ids);
+    ggml_tensor * ids_full = p.plain ? nullptr : ggml_new_tensor_2d(ctx.get(), GGML_TYPE_I32, p.experts, p.batch);
+    ggml_tensor * ids = p.plain ? nullptr : ggml_view_2d(ctx.get(), ids_full, p.top_k, p.batch, ids_full->nb[1], 0);
+    ggml_tensor * activation = p.plain
+        ? ggml_new_tensor_2d(ctx.get(), GGML_TYPE_F32, p.k, p.batch)
+        : p.explicit_multi
+            ? ggml_new_tensor_3d(ctx.get(), GGML_TYPE_F32, p.k, p.top_k, p.batch)
+            : ggml_new_tensor_3d(ctx.get(), GGML_TYPE_F32, p.k, 1, p.batch);
+    ggml_tensor * output;
+    if (p.plain) {
+        output = ggml_mul_mat(ctx.get(), expert_weights, activation);
+    } else {
+        ggml_tensor * up = ggml_mul_mat_id(ctx.get(), expert_weights, activation, ids);
+        if (p.swiglu) {
+            ggml_tensor * gate = ggml_mul_mat_id(ctx.get(), expert_weights_gate, activation, ids);
+            output = ggml_swiglu_split(ctx.get(), gate, up);
+        } else {
+            output = up;
+        }
+    }
     ggml_cgraph * graph = ggml_new_graph(ctx.get());
     ggml_build_forward_expand(graph, output);
 
@@ -519,7 +575,12 @@ int main(int argc, char ** argv) {
     }
     ggml_backend_buffer_set_usage(weight_buffer.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
     ggml_backend_tensor_set(expert_weights, weights_packed.data(), 0, weights_packed.size());
-    ggml_backend_tensor_set(ids_full, ids_host.data(), 0, ids_host.size() * sizeof(int32_t));
+    if (expert_weights_gate != nullptr) {
+        ggml_backend_tensor_set(expert_weights_gate, weights_packed.data(), 0, weights_packed.size());
+    }
+    if (ids_full != nullptr) {
+        ggml_backend_tensor_set(ids_full, ids_host.data(), 0, ids_host.size() * sizeof(int32_t));
+    }
     ggml_backend_tensor_set(activation, activations.data(), 0, activations.size() * sizeof(float));
 
     for (int i = 0; i < p.warmup; ++i) {
@@ -550,7 +611,7 @@ int main(int argc, char ** argv) {
 
     const double seconds = static_cast<double>(elapsed_us) / 1e6;
     const double average_us = static_cast<double>(elapsed_us) / p.iterations;
-    const double gmacs = (static_cast<double>(p.k) * p.n * p.batch * p.top_k * p.iterations) / (seconds * 1e9);
+    const double gmacs = (static_cast<double>(p.k) * p.n * p.batch * p.top_k * p.iterations * (p.swiglu ? 2 : 1)) / (seconds * 1e9);
     std::printf("time: total=%lld us avg=%.2f us logical=%0.2f GMAC/s\n",
                 static_cast<long long>(elapsed_us), average_us, gmacs);
     std::printf("output: fnv1a=%016llx\n", static_cast<unsigned long long>(stats.checksum));

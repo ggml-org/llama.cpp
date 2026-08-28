@@ -6,6 +6,7 @@
 
 #include <map>
 #include <set>
+#include <string>
 #include <vector>
 
 //
@@ -24,7 +25,10 @@ public:
                      uint32_t   mem_size,
                      uint32_t   n_seq_max,
                      uint32_t   n_rs_seq,
-        const layer_filter_cb & filter);
+        const layer_filter_cb & filter,
+                     uint32_t   n_embd_r_override = 0,
+                     uint32_t   n_embd_s_override = 0,
+           const std::string & name_prefix = "cache");
 
     ~llama_memory_recurrent() = default;
 
@@ -119,6 +123,12 @@ public:
 private:
     //const llama_model & model;
     const llama_hparams & hparams;
+
+    // Optional model-specific state geometry. Defaults preserve every existing
+    // recurrent-memory user; Qwen4Exp uses a separate PLE convolution cache.
+    const uint32_t n_embd_r;
+    const uint32_t n_embd_s;
+    const std::string name_prefix;
 
     const uint32_t n_seq_max = 1;
 

@@ -100,6 +100,8 @@ add_library(${TARGET}
     sampling.h
     speculative.cpp
     speculative.h
+    spec_sidecar.cpp
+    spec_sidecar.h
     subproc.cpp
     subproc.h
     trie.cpp
@@ -142,7 +144,7 @@ if (BUILD_SHARED_LIBS)
 endif()
 
 target_link_libraries(${TARGET} PUBLIC  llama-common-base)
-target_link_libraries(${TARGET} PRIVATE cpp-httplib)
+target_link_libraries(${TARGET} PRIVATE cpp-httplib ${CMAKE_DL_LIBS})
 
 if (LLAMA_LLGUIDANCE)
     include(ExternalProject)

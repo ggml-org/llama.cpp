@@ -15,6 +15,9 @@
 #include "llama-ext.h"
 #include "llama-sampler.h"
 #include "llama.h"
+#if defined(GGML_USE_HIP)
+#include "ggml-cuda.h"
+#endif
 
 #include <cinttypes>
 #include <cmath>
@@ -939,13 +942,55 @@ float * llama_context::get_embeddings_seq(llama_seq_id seq_id) {
     return it->second.data();
 }
 
+void llama_context::materialize_device_outputs() {
+    for (const auto & copy : pending_embd_nextn_copies) {
+        if (copy.tensor != nullptr && copy.backend != nullptr && copy.dst != nullptr) {
+            ggml_backend_tensor_get(copy.tensor, copy.dst, 0, copy.size);
+        }
+    }
+    for (const auto & layer : pending_embd_layer_inp_copies) {
+        for (const auto & copy : layer) {
+            if (copy.tensor != nullptr && copy.backend != nullptr && copy.dst != nullptr) {
+                ggml_backend_tensor_get(copy.tensor, copy.dst, 0, copy.size);
+            }
+        }
+    }
+    pending_embd_nextn_copies.clear();
+    pending_embd_layer_inp_copies.clear();
+}
+
 float * llama_context::get_embeddings_nextn() {
+    materialize_device_outputs();
     output_reorder();
 
     return embd_nextn.data;
 }
 
+bool llama_context::get_embeddings_nextn_device(llama_device_view & view) const {
+    view = {};
+#if defined(GGML_USE_HIP)
+    if (!device_views_valid || !embd_nextn_device.valid || embd_nextn_device.tensor == nullptr ||
+            embd_nextn_device.backend == nullptr || !ggml_backend_is_cuda(embd_nextn_device.backend)) {
+        return false;
+    }
+    const auto * tensor = embd_nextn_device.tensor;
+    if (tensor->type != GGML_TYPE_F32) {
+        return false;
+    }
+    view.data       = tensor->data;
+    view.row_stride = tensor->nb[1];
+    view.n_rows     = embd_nextn_device.n_rows;
+    view.device     = ggml_backend_cuda_get_device(embd_nextn_device.backend);
+    view.stream     = ggml_backend_cuda_get_stream(embd_nextn_device.backend);
+    return view.data != nullptr && view.row_stride >= ggml_row_size(tensor->type, tensor->ne[0]) &&
+           view.n_rows > 0 && view.stream != nullptr && view.device >= 0;
+#else
+    return false;
+#endif
+}
+
 float * llama_context::get_embeddings_nextn_ith(int32_t i) {
+    materialize_device_outputs();
     output_reorder();
 
     try {
@@ -976,11 +1021,40 @@ float * llama_context::get_embeddings_nextn_ith(int32_t i) {
 }
 
 float * llama_context::get_embeddings_layer_inp(uint32_t lid) {
+    materialize_device_outputs();
     output_reorder();
 
     GGML_ASSERT(lid < embd_layer_inp.size() && embd_layer_inp[lid].has_data());
 
     return embd_layer_inp[lid].data;
+}
+
+bool llama_context::get_embeddings_layer_inp_device(uint32_t lid, llama_device_view & view) const {
+    view = {};
+#if defined(GGML_USE_HIP)
+    if (!device_views_valid || lid >= embd_layer_inp_device.size()) {
+        return false;
+    }
+    const auto & candidate = embd_layer_inp_device[lid];
+    if (!candidate.valid || candidate.tensor == nullptr || candidate.backend == nullptr ||
+            !ggml_backend_is_cuda(candidate.backend)) {
+        return false;
+    }
+    const auto * tensor = candidate.tensor;
+    if (tensor->type != GGML_TYPE_F32) {
+        return false;
+    }
+    view.data       = tensor->data;
+    view.row_stride = tensor->nb[1];
+    view.n_rows     = candidate.n_rows;
+    view.device     = ggml_backend_cuda_get_device(candidate.backend);
+    view.stream     = ggml_backend_cuda_get_stream(candidate.backend);
+    return view.data != nullptr && view.row_stride >= ggml_row_size(tensor->type, tensor->ne[0]) &&
+           view.n_rows > 0 && view.stream != nullptr && view.device >= 0;
+#else
+    GGML_UNUSED(lid);
+    return false;
+#endif
 }
 
 llama_token llama_context::get_sampled_token_ith(int32_t idx) {
@@ -1170,6 +1244,10 @@ void llama_context::set_embeddings_nextn(bool value, bool masked) {
     cparams.embeddings_nextn_masked = masked;
 }
 
+void llama_context::set_embeddings_nextn_device_preferred(bool value) {
+    embd_nextn_device_preferred = value;
+}
+
 void llama_context::set_embeddings_layer_inp(uint32_t lid, bool enable) {
     LLAMA_LOG_DEBUG("%s: lid = %d, enable = %d\n", __func__, lid, enable);
 
@@ -1179,6 +1257,14 @@ void llama_context::set_embeddings_layer_inp(uint32_t lid, bool enable) {
 
     // note: without this reserve, the draft acceptance drops to zero. not sure why - this is unexpected
     sched_need_reserve = true;
+}
+
+void llama_context::set_embeddings_layer_inp_device_preferred(uint32_t lid, bool value) {
+    GGML_ASSERT(lid < embd_layer_inp_device_preferred.size() || lid <= model.hparams.n_layer());
+    if (embd_layer_inp_device_preferred.size() < model.hparams.n_layer() + 1) {
+        embd_layer_inp_device_preferred.resize(model.hparams.n_layer() + 1, false);
+    }
+    embd_layer_inp_device_preferred[lid] = value;
 }
 
 void llama_context::set_nextn_layer_offset(int32_t offset) {
@@ -1429,6 +1515,12 @@ int llama_context::encode(const llama_batch & batch_inp) {
     // so accept either present rather than requiring exactly one.
     GGML_ASSERT(batch_inp.token || batch_inp.embd);
 
+    device_views_valid = false;
+    embd_nextn_device = {};
+    embd_layer_inp_device.assign(cparams.embeddings_layer_inp.size(), {});
+    pending_embd_nextn_copies.clear();
+    pending_embd_layer_inp_copies.assign(cparams.embeddings_layer_inp.size(), {});
+
     if (batch_inp.n_tokens == 0) {
         LLAMA_LOG_ERROR("%s: n_tokens == 0\n", __func__);
         return -1;
@@ -1667,6 +1759,12 @@ int llama_context::decode(const llama_batch & batch_inp) {
     // so accept either present rather than requiring exactly one.
     GGML_ASSERT(batch_inp.token || batch_inp.embd);
 
+    device_views_valid = false;
+    embd_nextn_device = {};
+    embd_layer_inp_device.assign(cparams.embeddings_layer_inp.size(), {});
+    pending_embd_nextn_copies.clear();
+    pending_embd_layer_inp_copies.assign(cparams.embeddings_layer_inp.size(), {});
+
     if (!memory) {
         LLAMA_LOG_DEBUG("%s: cannot decode batches with this context (calling encode() instead)\n", __func__);
         return encode(batch_inp);
@@ -1885,6 +1983,27 @@ int llama_context::decode(const llama_batch & batch_inp) {
         auto * t_embd    = cparams.embeddings       ? res->get_embd()     : nullptr;
         auto * t_h_nextn = cparams.embeddings_nextn ? res->get_h_nextn()  : nullptr;
 
+        // A direct device view is safe only when the logical decode stayed in
+        // one ubatch. A later ubatch invalidates all borrowed pointers.
+        const bool one_ubatch = n_tokens_prev == 0 && ubatch.n_tokens == n_tokens_all;
+        if (!one_ubatch) {
+            device_views_valid = false;
+            embd_nextn_device = {};
+            for (auto & item : embd_layer_inp_device) item = {};
+        } else {
+            device_views_valid = true;
+        }
+        if (device_views_valid && one_ubatch && t_h_nextn) {
+            ggml_backend_t backend_h = ggml_backend_sched_get_tensor_backend(sched.get(), t_h_nextn);
+            if (backend_h != nullptr) {
+#if defined(GGML_USE_HIP)
+                if (ggml_backend_is_cuda(backend_h)) {
+                    embd_nextn_device = { t_h_nextn, backend_h, ubatch.n_tokens, true };
+                }
+#endif
+            }
+        }
+
         if (t_embd && res->get_embd_pooled()) {
             t_embd = res->get_embd_pooled();
         }
@@ -1981,7 +2100,17 @@ int llama_context::decode(const llama_batch & batch_inp) {
                 float * embd_nextn_out = embd_nextn.data + offset*n_embd;
 
                 GGML_ASSERT((offset + n_rows)*n_embd <= (int64_t) embd_nextn.size);
-                ggml_backend_tensor_get_async(backend_h, t_h_nextn, embd_nextn_out, 0, n_rows*n_embd*sizeof(float));
+#if defined(GGML_USE_HIP)
+                if (embd_nextn_device_preferred && ggml_backend_is_cuda(backend_h)) {
+                    pending_embd_nextn_copies.push_back({
+                        t_h_nextn, backend_h, embd_nextn_out,
+                        (size_t) n_rows * n_embd * sizeof(float) });
+                } else
+#endif
+                {
+                    ggml_backend_tensor_get_async(backend_h, t_h_nextn, embd_nextn_out,
+                            0, (size_t) n_rows * n_embd * sizeof(float));
+                }
             }
         }
 
@@ -2245,7 +2374,21 @@ void llama_context::extract_layer_inputs(const llm_graph_result * res, size_t to
 
         ggml_backend_t backend = ggml_backend_sched_get_tensor_backend(sched.get(), t);
         GGML_ASSERT(backend != nullptr);
-        ggml_backend_tensor_get_async(backend, t, embd_layer_inp[il].data + dst_offset, 0, nbytes);
+        if (device_views_valid && token_offset == 0) {
+            embd_layer_inp_device[il] = { t, backend, (uint32_t) n_tokens, true };
+        } else {
+            embd_layer_inp_device[il] = {};
+        }
+#if defined(GGML_USE_HIP)
+        if (il < embd_layer_inp_device_preferred.size() &&
+                embd_layer_inp_device_preferred[il] && ggml_backend_is_cuda(backend)) {
+            pending_embd_layer_inp_copies[il].push_back({
+                t, backend, embd_layer_inp[il].data + dst_offset, nbytes });
+        } else
+#endif
+        {
+            ggml_backend_tensor_get_async(backend, t, embd_layer_inp[il].data + dst_offset, 0, nbytes);
+        }
     }
 }
 
@@ -2331,6 +2474,7 @@ uint32_t llama_context::graph_max_nodes(uint32_t n_tokens) const {
         model.arch == LLM_ARCH_BAILINGMOE3 ||
         model.arch == LLM_ARCH_QWEN35 ||
         model.arch == LLM_ARCH_QWEN35MOE ||
+        model.arch == LLM_ARCH_QWEN4EXP ||
         model.arch == LLM_ARCH_DEEPSEEK4 ||
         (model.arch == LLM_ARCH_DFLASH && model.hparams.dsv4_hc_mult > 0) ||
         model.arch == LLM_ARCH_NANBEIGE ||
@@ -3929,8 +4073,20 @@ void llama_set_embeddings_nextn(llama_context * ctx, bool value, bool masked) {
     ctx->set_embeddings_nextn(value, masked);
 }
 
+void llama_set_embeddings_nextn_device_preferred(llama_context * ctx, bool value) {
+    if (ctx != nullptr) {
+        ctx->set_embeddings_nextn_device_preferred(value);
+    }
+}
+
 void llama_set_embeddings_layer_inp(llama_context * ctx, uint32_t lid, bool value) {
     ctx->set_embeddings_layer_inp(lid, value);
+}
+
+void llama_set_embeddings_layer_inp_device_preferred(llama_context * ctx, uint32_t lid, bool value) {
+    if (ctx != nullptr) {
+        ctx->set_embeddings_layer_inp_device_preferred(lid, value);
+    }
 }
 
 void llama_set_nextn_layer_offset(llama_context * ctx, int32_t offset) {
@@ -3951,6 +4107,13 @@ float * llama_get_embeddings_nextn(llama_context * ctx) {
     return ctx->get_embeddings_nextn();
 }
 
+bool llama_get_embeddings_nextn_device(llama_context * ctx, llama_device_view * view) {
+    if (ctx == nullptr || view == nullptr) {
+        return false;
+    }
+    return ctx->get_embeddings_nextn_device(*view);
+}
+
 float * llama_get_embeddings_nextn_ith(llama_context * ctx, int32_t i) {
     ctx->synchronize();
 
@@ -3961,6 +4124,13 @@ float * llama_get_embeddings_layer_inp(llama_context * ctx, uint32_t lid) {
     ctx->synchronize();
 
     return ctx->get_embeddings_layer_inp(lid);
+}
+
+bool llama_get_embeddings_layer_inp_device(llama_context * ctx, uint32_t lid, llama_device_view * view) {
+    if (ctx == nullptr || view == nullptr) {
+        return false;
+    }
+    return ctx->get_embeddings_layer_inp_device(lid, *view);
 }
 
 bool llama_set_sampler(llama_context * ctx, llama_seq_id seq_id, llama_sampler * smpl) {

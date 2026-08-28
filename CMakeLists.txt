@@ -134,6 +134,7 @@ option(LLAMA_BUILD_TOOLS     "llama: build tools"                               
 option(LLAMA_BUILD_EXAMPLES  "llama: build examples"                                                             ${LLAMA_STANDALONE})
 option(LLAMA_BUILD_SERVER    "llama: build server example"                                                       ${LLAMA_STANDALONE})
 option(LLAMA_BUILD_APP       "llama: build the unified binary"                                                   ${LLAMA_STANDALONE})
+option(LLAMA_BUILD_SPEC_SIDECARS "build the optional Qwen3.8-27B speculative sidecar HIP sidecars"                         OFF)
 option(LLAMA_BUILD_UI        "llama: build the embedded Web UI for server"                                       ON)
 option(LLAMA_USE_PREBUILT_UI "llama: use prebuilt UI from HF Bucket when available (requires LLAMA_BUILD_UI=ON)" ON)
 
@@ -242,6 +243,10 @@ endif()
 
 if (LLAMA_BUILD_COMMON AND LLAMA_BUILD_TOOLS)
     add_subdirectory(tools)
+endif()
+
+if (LLAMA_BUILD_SPEC_SIDECARS)
+    add_subdirectory(tools/spec-sidecar)
 endif()
 
 if (LLAMA_BUILD_APP)

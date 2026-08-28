@@ -61,6 +61,9 @@ int main(int argc, char ** argv) {
 
         params.speculative.draft.ctx_tgt = ctx_tgt;
         params.speculative.draft.ctx_dft = spec_init->context();
+        params.speculative.draft.sidecar_only = spec_init->sidecar_only();
+        params.speculative.draft.sidecar_type = spec_init->sidecar_only()
+                ? spec_init->sidecar_type() : COMMON_SPECULATIVE_TYPE_NONE;
     }
 
     llama_context * ctx_dft = params.speculative.draft.ctx_dft;
@@ -68,7 +71,8 @@ int main(int argc, char ** argv) {
     // check if the context supports partial sequence removal
     const auto ctx_tgt_seq_rm_type = common_context_can_seq_rm(ctx_tgt);
     const bool use_ckpt_tgt = ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL;
-    const bool use_ckpt_dft = common_context_can_seq_rm(ctx_dft) == COMMON_CONTEXT_SEQ_RM_TYPE_FULL;
+    const bool use_ckpt_dft = ctx_dft != nullptr &&
+            common_context_can_seq_rm(ctx_dft) == COMMON_CONTEXT_SEQ_RM_TYPE_FULL;
 
     if (use_ckpt_tgt) {
         LOG_INF("speculative decoding will use checkpoints (context does not support partial sequence removal)\n");
@@ -135,6 +139,12 @@ int main(int argc, char ** argv) {
 
         if (!common_speculative_process(spec, batch_prompt)) {
             LOG_ERR("%s", "failed to process speculative prompt\n");
+            return 1;
+        }
+        // Prompt rows are unconditionally accepted. Sidecars stage target KV
+        // until this explicit commit so their first draft starts at n_past.
+        if (!common_speculative_commit_state(spec, seq_id, (llama_pos) batch_prompt.n_tokens)) {
+            LOG_ERR("%s", "failed to commit speculative prompt state\n");
             return 1;
         }
     }
@@ -206,6 +216,7 @@ int main(int argc, char ** argv) {
                 if (use_ckpt_tgt) {
                     ckpt.update_tgt(ctx_tgt, seq_id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
                 }
+                common_speculative_get_state(spec, seq_id, ckpt.data_spec);
             }
 
             // reset the draft context to the checkpoint before verification
@@ -241,6 +252,11 @@ int main(int argc, char ** argv) {
         // feed the batch to the speculative implementation(s) - this drives the draft model, MTP, Eagle3, etc.
         if (!common_speculative_process(spec, batch_tgt)) {
             LOG_ERR("%s", "failed to process speculative batch\n");
+            break;
+        }
+        if (draft.empty() && !common_speculative_commit_state(
+                    spec, seq_id, batch_tgt.pos[batch_tgt.n_tokens - 1] + 1)) {
+            LOG_ERR("%s", "failed to commit non-speculative target state\n");
             break;
         }
 
@@ -282,6 +298,9 @@ int main(int argc, char ** argv) {
 
             {
                 ckpt.load_tgt(ctx_tgt, seq_id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+                if (!common_speculative_set_state(spec, seq_id, ckpt.data_spec)) {
+                    LOG_WRN("%s", "failed to restore speculative sidecar state; continuing target-only\n");
+                }
 
                 llama_memory_seq_rm(llama_get_memory(ctx_tgt), seq_id, ckpt.pos_max + 1, -1);
             }

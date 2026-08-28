@@ -497,6 +497,11 @@ struct server_slot {
         n_sent_text    = 0;
 
         if (can_speculate()) {
+            // A prompt-cache/slot reset restores the target and native draft
+            // contexts separately from the optional sidecar. Invalidate the
+            // sidecar epoch before the slot can accept another request; the
+            // next full prompt prefill will seed it again without copying KV.
+            common_speculative_reset_state(spec, id);
             spec_draft.clear();
             spec_dists.clear();
             spec_i_batch.clear();
@@ -1175,7 +1180,12 @@ private:
         const bool spec_mtp = std::find(params_base.speculative.types.begin(),
                                         params_base.speculative.types.end(),
                                         COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params_base.speculative.types.end();
-        const bool has_spec = has_draft || spec_mtp;
+        // A sidecar-only DFlash invocation may intentionally omit -md: the
+        // ABI/artifact probe is enough to establish the speculative stage.
+        const bool sidecar_candidate = common_speculative_sidecar_candidate(
+                params_base.speculative, params_base.model.path,
+                (uint32_t) params_base.n_parallel);
+        const bool has_spec = has_draft || spec_mtp || sidecar_candidate;
 
         if (callback_state) {
             std::vector<std::string> stages = {"text_model"};
@@ -1243,9 +1253,11 @@ private:
             }
         }
 
-        // optionally reserve VRAM for the draft / MTP context before fitting the target model
+        // Optionally reserve VRAM for a native draft / MTP context before
+        // fitting the target model. A validated sidecar candidate owns draft
+        // execution and must not trigger a host draft-model measurement load.
         if (params_base.fit_params) {
-            if (has_spec) {
+            if (has_spec && !sidecar_candidate) {
                 // MTP draft context lives on the target model, only context+compute are new
                 bool measure_model_bytes = has_draft;
 
@@ -1297,6 +1309,8 @@ private:
                     SRV_WRN("[spec] failed to measure %s memory: %s\n",
                             has_draft ? "draft model" : "MTP context", e.what());
                 }
+            } else if (has_spec && sidecar_candidate) {
+                SRV_INF("%s", "sidecar candidate found; skipping host draft model/context memory measurement\n");
             }
         }
 
@@ -1363,22 +1377,29 @@ private:
                 params_dft.load_progress_callback           = load_progress_callback;
                 params_dft.load_progress_callback_user_data = &load_progress_spec;
 
-                spec_init = common_speculative_init_from_params(params_dft, model_tgt, ctx_tgt);
+                spec_init = common_speculative_init_from_params(
+                        params_dft, model_tgt, ctx_tgt);
                 model_dft = spec_init->model();
                 ctx_dft   = spec_init->context();
+                const bool sidecar_only = spec_init->sidecar_only();
 
-                if (has_draft && model_dft == nullptr) {
+                if (has_draft && model_dft == nullptr && !sidecar_only) {
                     SRV_ERR("failed to load draft model, '%s'\n", params_dft.model.path.c_str());
                     return false;
                 }
 
-                if (ctx_dft == nullptr) {
+                if (ctx_dft == nullptr && !sidecar_only) {
                     SRV_ERR("%s", "failed to create MTP context\n");
                     return false;
                 }
 
                 params_base.speculative.draft.ctx_tgt = ctx_tgt;
                 params_base.speculative.draft.ctx_dft = ctx_dft;
+                params_base.speculative.draft.sidecar_only = sidecar_only;
+                params_base.speculative.draft.sidecar_type = sidecar_only
+                        ? spec_init->sidecar_type() : COMMON_SPECULATIVE_TYPE_NONE;
+                params_base.speculative.draft.sidecar_profile = sidecar_only
+                        ? params_dft.speculative.draft.sidecar_profile : nullptr;
             }
 
             load_progress_callback(1.0f, &load_progress_spec);
@@ -3288,8 +3309,18 @@ private:
 
                 SLT_WRN(slot, "slot context shift, n_keep = %d, n_left = %d, n_discard = %d\n", n_keep, n_left, n_discard);
 
+                // The sidecar has an absolute-position KV array, whereas the
+                // native memory abstraction changes positions in-place. Move
+                // the live sidecar range before rewriting prompt.tokens; its
+                // epoch invalidation makes older checkpoints fail closed.
+                const llama_pos sidecar_pos_max = llama_memory_seq_pos_max(
+                        llama_get_memory(slot.ctx_tgt), slot.id) + 1;
                 slot.mem.seq_rm (slot.id, n_keep            , n_keep + n_discard);
                 slot.mem.seq_add(slot.id, n_keep + n_discard, slot.prompt.tokens.pos_next(), -n_discard);
+                if (slot.can_speculate() && !common_speculative_rebase_state(
+                            spec.get(), slot.id, n_keep + n_discard, sidecar_pos_max, -n_discard)) {
+                    SLT_WRN(slot, "%s", "speculative sidecar rebase failed; continuing target-only\n");
+                }
 
                 // add generated tokens to cache
                 // ref: https://github.com/ggml-org/llama.cpp/pull/16818#discussion_r2473269481
@@ -3437,6 +3468,12 @@ private:
                 if (use_ckpt_dft) {
                     ckpt.update_dft(ctx_dft, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
                 }
+
+                // Capture the sidecar cursor at the same logical boundary as
+                // the target/draft checkpoint. This is a tiny host snapshot;
+                // it does not copy the sidecar's device KV cache.
+                ckpt.data_spec.clear();
+                common_speculative_get_state(spec.get(), slot.id, ckpt.data_spec);
             }
         });
 
@@ -3722,8 +3759,11 @@ private:
                                         // restore the context checkpoint
                                         it->load_tgt(ctx_tgt, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
                                         it->load_dft(ctx_dft, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
-                                        // restore the draft's speculative state
-                                        common_speculative_set_state(spec.get(), slot.id, it->data_spec);
+                                        // restore the draft's speculative state,
+                                        // including the sidecar's logical KV cursor
+                                        if (!common_speculative_set_state(spec.get(), slot.id, it->data_spec)) {
+                                            SLT_WRN(slot, "%s", "speculative sidecar state restore failed; continuing target-only\n");
+                                        }
 
                                         pos_next = std::min(pos_next, std::max(it->pos_min + 1, it->pos_max));
                                         n_past   = std::min(slot.prompt.tokens.size_up_to_pos(pos_next), (size_t) it->n_tokens);
@@ -4028,7 +4068,7 @@ private:
 
         // TODO @ngxson : dft model may have different n_embd than the tgt model, so we check & reject if that's the case
         // this case is not currently used by any models, but may need to be supported in the future
-        if (spec && batch.has_embd) {
+        if (spec && batch.has_embd && model_dft != nullptr) {
             if (llama_model_n_embd_inp(model_dft) != llama_model_n_embd_inp(model_tgt)) {
                 SRV_ERR("%s", "unsupported batch.has_embd + spec case\n");
                 throw std::runtime_error("unsupported batch.has_embd + spec case");
@@ -4147,6 +4187,28 @@ private:
     }
 
     void post_decode(int32_t n_batch_tokens, int32_t off, llama_batch & batch_view) {
+        // Commit target rows that are unconditionally accepted (prompt rows and
+        // ordinary one-token generation). Speculative verification commits its
+        // accepted prefix later, after sampler rejection has completed.
+        auto commit_target_rows = [&](server_slot & slot) {
+            if (!slot.can_speculate()) {
+                return;
+            }
+            llama_pos pos_max = -1;
+            for (int32_t i = 0; i < batch_view.n_tokens; ++i) {
+                if (batch_view.n_seq_id[i] != 1 || batch_view.seq_id[i][0] != slot.id ||
+                        batch_view.pos == nullptr) {
+                    continue;
+                }
+                pos_max = std::max(pos_max, batch_view.pos[i] + 1);
+            }
+            if (pos_max < 0 || !common_speculative_commit_state(spec.get(), slot.id, pos_max)) {
+                if (pos_max >= 0) {
+                    SLT_WRN(slot, "%s", "speculative sidecar target commit failed; continuing target-only\n");
+                }
+            }
+        };
+
         // for checking if a given batch index is inside batch_view
         auto is_inside_view = [&](int32_t idx) {
             return idx >= off && idx < off + n_batch_tokens;
@@ -4173,6 +4235,10 @@ private:
                 if (slot.task->params.stream && slot.task->params.return_progress) {
                     send_partial_response(slot, {}, true);
                 }
+            }
+
+            if (slot.state == SLOT_STATE_PROCESSING_PROMPT || slot.state == SLOT_STATE_DONE_PROMPT) {
+                commit_target_rows(slot);
             }
 
             if (!is_inside_view(slot.i_batch)) {
@@ -4224,6 +4290,7 @@ private:
             slot.i_batch = -1;
 
             common_sampler_accept(slot.smpl.get(), id, true);
+            commit_target_rows(slot);
 
             // here we have synchronized the llama_context (due to the sampling above), so we can do time measurement
             const int64_t t_now = ggml_time_us();
@@ -4326,6 +4393,9 @@ private:
 
                         if (slot.ctx_dft) {
                             ckpt.load_dft(slot.ctx_dft, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+                        }
+                        if (!common_speculative_set_state(spec.get(), slot.id, ckpt.data_spec)) {
+                            SLT_WRN(slot, "%s", "speculative sidecar rollback state restore failed; continuing target-only\n");
                         }
 
                         slot.mem.seq_rm(slot.id, ckpt.pos_max + 1, -1, (llama_pos) ckpt.n_tokens);

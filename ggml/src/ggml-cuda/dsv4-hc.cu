@@ -1,5 +1,6 @@
 #include "common.cuh"
 #include "dsv4-hc.cuh"
+#include "unary.cuh"
 
 #include <cstdlib>
 #include <cstring>
@@ -29,6 +30,204 @@ static bool dsv4_hc_mixes_override_enabled() {
 #else
     return false;
 #endif
+}
+
+bool ggml_cuda_use_qwen4exp_hc_combine() {
+#if defined(GGML_USE_HIP)
+    static const bool value = []() {
+        const char * env = std::getenv("GGML_HIP_QWEN4EXP_HC_COMBINE");
+        if (env == nullptr || std::strcmp(env, "0") == 0) {
+            return false;
+        }
+        if (std::strcmp(env, "1") == 0) {
+            return true;
+        }
+        fprintf(stderr, "GGML_HIP_QWEN4EXP_HC_COMBINE must be 0 or 1 (got '%s')\n", env);
+        GGML_ABORT("invalid Qwen4Exp HC combine override");
+    }();
+    return value;
+#else
+    return false;
+#endif
+}
+
+static __global__ void qwen4exp_hc_combine_f32(
+        const float * residual,
+        const float * block_repeat,
+        const float * inject,
+        float *       dst,
+        int64_t       n_embd,
+        int64_t       hc,
+        int64_t       n_tokens) {
+    ggml_cuda_pdl_lc();
+    const int64_t i = (int64_t) blockIdx.x * blockDim.x + threadIdx.x;
+    const int64_t n = n_embd * hc * n_tokens;
+    if (i >= n) {
+        return;
+    }
+    ggml_cuda_pdl_sync();
+
+    const int64_t ih = (i / n_embd) % hc;
+    const int64_t it = i / (n_embd * hc);
+    const float inject_scaled = 0.25f * inject[ih + hc * it];
+    const float weight_sigmoid = 1.0f / (1.0f + expf(-inject_scaled));
+    const float weight_scaled = 2.0f * weight_sigmoid;
+    volatile float product = block_repeat[i] * weight_scaled;
+    dst[i] = residual[i] + product;
+}
+
+bool ggml_cuda_op_qwen4exp_hc_combine(
+        ggml_backend_cuda_context & ctx,
+        const ggml_tensor * residual,
+        const ggml_tensor * block_repeat,
+        const ggml_tensor * inject,
+        ggml_tensor * dst) {
+    if (!ggml_cuda_use_qwen4exp_hc_combine()) {
+        return false;
+    }
+    if (residual->type != GGML_TYPE_F32 || block_repeat->type != GGML_TYPE_F32 ||
+            inject->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32 ||
+            residual->ne[0] != 2560 || residual->ne[1] != 4 || residual->ne[3] != 1 ||
+            !ggml_are_same_shape(residual, block_repeat) || !ggml_are_same_shape(residual, dst) ||
+            inject->ne[0] != 4 || inject->ne[1] != residual->ne[2] ||
+            inject->ne[2] != 1 || inject->ne[3] != 1 ||
+            !ggml_is_contiguous(residual) || !ggml_is_contiguous(block_repeat) ||
+            !ggml_is_contiguous(inject) || !ggml_is_contiguous(dst)) {
+        return false;
+    }
+
+    const int64_t n = ggml_nelements(dst);
+    const int block_size = 256;
+    const ggml_cuda_kernel_launch_params launch_params(
+            (n + block_size - 1) / block_size, block_size, 0, ctx.stream());
+    ggml_cuda_kernel_launch(qwen4exp_hc_combine_f32, launch_params,
+            (const float *) residual->data, (const float *) block_repeat->data,
+            (const float *) inject->data, (float *) dst->data,
+            residual->ne[0], residual->ne[1], residual->ne[2]);
+    return true;
+}
+
+bool ggml_cuda_use_qwen4exp_hc_reduce() {
+#if defined(GGML_USE_HIP)
+    static const bool value = []() {
+        const char * env = std::getenv("GGML_HIP_QWEN4EXP_HC_REDUCE");
+        if (env == nullptr || std::strcmp(env, "0") == 0) {
+            return false;
+        }
+        if (std::strcmp(env, "1") == 0) {
+            return true;
+        }
+        fprintf(stderr, "GGML_HIP_QWEN4EXP_HC_REDUCE must be 0 or 1 (got '%s')\n", env);
+        GGML_ABORT("invalid Qwen4Exp HC reduce override");
+    }();
+    return value;
+#else
+    return false;
+#endif
+}
+
+bool ggml_cuda_use_qwen4exp_hc_scale_silu() {
+#if defined(GGML_USE_HIP)
+    static const bool value = []() {
+        const char * env = std::getenv("GGML_HIP_QWEN4EXP_HC_SCALE_SILU");
+        if (env == nullptr || std::strcmp(env, "0") == 0) {
+            return false;
+        }
+        if (std::strcmp(env, "1") == 0) {
+            return true;
+        }
+        fprintf(stderr, "GGML_HIP_QWEN4EXP_HC_SCALE_SILU must be 0 or 1 (got '%s')\n", env);
+        GGML_ABORT("invalid Qwen4Exp HC scale-SiLU override");
+    }();
+    return value;
+#else
+    return false;
+#endif
+}
+
+static __global__ void qwen4exp_hc_reduce_f32(
+        const float * streams,
+        float *       dst,
+        int64_t       n_embd,
+        int64_t       n_tokens) {
+    ggml_cuda_pdl_lc();
+    const int64_t i = (int64_t) blockIdx.x * blockDim.x + threadIdx.x;
+    const int64_t n = n_embd * n_tokens;
+    if (i >= n) {
+        return;
+    }
+    ggml_cuda_pdl_sync();
+
+    const int64_t i0 = i % n_embd;
+    const int64_t it = i / n_embd;
+    const int64_t base = i0 + 4 * n_embd * it;
+    volatile float sum = streams[base];
+    sum = sum + streams[base + n_embd];
+    sum = sum + streams[base + 2 * n_embd];
+    sum = sum + streams[base + 3 * n_embd];
+    dst[i] = 0.25f * sum;
+}
+
+bool ggml_cuda_op_qwen4exp_hc_reduce(
+        ggml_backend_cuda_context & ctx,
+        const ggml_tensor * streams,
+        ggml_tensor * dst) {
+    if (!ggml_cuda_use_qwen4exp_hc_reduce()) {
+        return false;
+    }
+    if (streams->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32 ||
+            dst->ne[0] != 2560 || dst->ne[2] != 1 || dst->ne[3] != 1 ||
+            ggml_nelements(streams) != 4 * ggml_nelements(dst) ||
+            !ggml_is_contiguous(streams) || !ggml_is_contiguous(dst)) {
+        return false;
+    }
+
+    const int64_t n = ggml_nelements(dst);
+    const int block_size = 256;
+    const ggml_cuda_kernel_launch_params launch_params(
+            (n + block_size - 1) / block_size, block_size, 0, ctx.stream());
+    ggml_cuda_kernel_launch(qwen4exp_hc_reduce_f32, launch_params,
+            (const float *) streams->data, (float *) dst->data,
+            dst->ne[0], dst->ne[1]);
+    return true;
+}
+
+static __global__ void qwen4exp_hc_scale_silu_f32(
+        const float * src,
+        float *       dst,
+        int64_t       n) {
+    ggml_cuda_pdl_lc();
+    const int64_t i = (int64_t) blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= n) {
+        return;
+    }
+    ggml_cuda_pdl_sync();
+
+    volatile float scaled = 0.25f * src[i];
+    dst[i] = ggml_cuda_op_silu_single(scaled);
+}
+
+bool ggml_cuda_op_qwen4exp_hc_scale_silu(
+        ggml_backend_cuda_context & ctx,
+        const ggml_tensor * src,
+        ggml_tensor * dst) {
+    if (!ggml_cuda_use_qwen4exp_hc_scale_silu()) {
+        return false;
+    }
+    if (src->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32 ||
+            src->ne[0] != 320 || src->ne[2] != 1 || src->ne[3] != 1 ||
+            !ggml_are_same_shape(src, dst) ||
+            !ggml_is_contiguous(src) || !ggml_is_contiguous(dst)) {
+        return false;
+    }
+
+    const int64_t n = ggml_nelements(dst);
+    const int block_size = 256;
+    const ggml_cuda_kernel_launch_params launch_params(
+            (n + block_size - 1) / block_size, block_size, 0, ctx.stream());
+    ggml_cuda_kernel_launch(qwen4exp_hc_scale_silu_f32, launch_params,
+            (const float *) src->data, (float *) dst->data, n);
+    return true;
 }
 
 // Specialized kernel for the exact DSV4 hidden-channel mixer shape; env 0 is a diagnostic control:

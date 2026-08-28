@@ -9,6 +9,8 @@
 #include "ngram-map.h"
 #include "ngram-mod.h"
 #include "sampling.h"
+#include "spec_sidecar.h"
+#include "../include/spec_sidecar/sidecar_abi.h"
 
 #include "../src/llama-ext.h" // staging API: llama_set_embeddings_nextn / llama_get_embeddings_nextn_ith (used by MTP)
 
@@ -36,6 +38,53 @@ static bool common_speculative_rdna2_auto_enabled() {
            (std::strcmp(value, "0") != 0 &&
             std::strcmp(value, "off") != 0 &&
             std::strcmp(value, "false") != 0);
+}
+
+// Sidecar acceleration is an explicit experimental opt-in. Artifact paths or
+// libraries in the environment must never activate it by themselves.
+static bool common_speculative_sidecar_enabled() {
+    const char * value = std::getenv("SPEC_SIDECAR");
+    return value != nullptr && std::strcmp(value, "1") == 0;
+}
+
+static uint64_t common_spec_sidecar_stochastic_key(uint32_t seed, llama_seq_id seq_id,
+        llama_pos n_past, uint32_t kind) {
+    if (seed == LLAMA_DEFAULT_SEED) {
+        seed = (uint32_t) std::chrono::high_resolution_clock::now().time_since_epoch().count();
+    }
+    uint64_t key = (uint64_t) seed << 32;
+    key ^= (uint64_t) (uint32_t) seq_id * UINT64_C(0x632be59bd9b4e019);
+    key ^= (uint64_t) (uint32_t) n_past * UINT64_C(0x8cb92ba72f3d8dd7);
+    key ^= (uint64_t) kind * UINT64_C(0x9e3779b97f4a7c15);
+    return spec_sidecar_stochastic_mix64(key);
+}
+
+static bool common_spec_sidecar_validate_distribution(const int32_t * ids, const float * probs,
+        int count, int32_t n_vocab, common_speculative_token_dist & dist) {
+    if (ids == nullptr || probs == nullptr || count <= 0) {
+        return false;
+    }
+    dist.ids.resize((size_t) count);
+    dist.probs.resize((size_t) count);
+    float sum = 0.0f;
+    for (int i = 0; i < count; ++i) {
+        if (ids[i] < 0 || ids[i] >= n_vocab || !std::isfinite(probs[i]) || probs[i] < 0.0f) {
+            return false;
+        }
+        dist.ids[i] = (llama_token) ids[i];
+        dist.probs[i] = probs[i];
+        sum += probs[i];
+    }
+    if (!std::isfinite(sum) || sum <= 0.0f) {
+        return false;
+    }
+    // Normalize defensively at the ABI boundary. The sidecar samples the same
+    // top-k row before returning it, while this removes harmless reduction
+    // round-off before the target residual sampler consumes q.
+    for (float & value : dist.probs) {
+        value /= sum;
+    }
+    return true;
 }
 
 #define SPEC_VOCAB_MAX_SIZE_DIFFERENCE  128
@@ -177,13 +226,25 @@ struct common_speculative_impl {
 
     virtual bool process(const llama_batch & batch) = 0;
 
+    // Lets sidecar-backed implementations inspect the per-request sampling
+    // mode before process() decides whether native draft state can be skipped.
+    // Existing implementations do not need this hook.
+    virtual void prepare_process(const common_speculative_draft_params_vec & /*dparams*/) {}
+
     virtual void draft(common_speculative_draft_params_vec & dparams) = 0;
 
     virtual void accept(llama_seq_id seq_id, uint16_t n_accepted, bool is_other) = 0;
 
     // (optional) serialize/restore per-seq internal state (e.g. eagle3's deferred boundary).
-    virtual bool get_state(llama_seq_id /*seq_id*/, std::vector<uint8_t> & /*data*/) const { return false; }
-    virtual void set_state(llama_seq_id /*seq_id*/, const std::vector<uint8_t> & /*data*/) {}
+    // Sidecar implementations serialize only a small logical cursor; their
+    // large device KV allocation stays resident and is never copied here.
+    virtual bool get_state(llama_seq_id /*seq_id*/, std::vector<uint8_t> & /*data*/) { return false; }
+    virtual bool set_state(llama_seq_id /*seq_id*/, const std::vector<uint8_t> & /*data*/) { return true; }
+    virtual bool state_required(llama_seq_id /*seq_id*/) const { return false; }
+    virtual bool reset_state(llama_seq_id /*seq_id*/) { return true; }
+    virtual bool truncate_state(llama_seq_id /*seq_id*/, llama_pos /*pos_max*/) { return true; }
+    virtual bool commit_state(llama_seq_id /*seq_id*/, llama_pos /*pos_max*/) { return true; }
+    virtual bool rebase_state(llama_seq_id /*seq_id*/, llama_pos /*pos_min*/, llama_pos /*pos_max*/, llama_pos /*delta*/) { return true; }
 };
 
 struct common_speculative_impl_draft_simple : public common_speculative_impl {
@@ -879,7 +940,7 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
         return llama_model_is_recurrent(model_tgt) || llama_model_is_hybrid(model_tgt);
     }
 
-    bool get_state(llama_seq_id seq_id, std::vector<uint8_t> & data) const override {
+    bool get_state(llama_seq_id seq_id, std::vector<uint8_t> & data) override {
         if (!need_boundary_stash()) {
             return false;
         }
@@ -896,15 +957,15 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
         return true;
     }
 
-    void set_state(llama_seq_id seq_id, const std::vector<uint8_t> & data) override {
+    bool set_state(llama_seq_id seq_id, const std::vector<uint8_t> & data) override {
         if (!need_boundary_stash()) {
-            return;
+            return true;
         }
         if (seq_id < 0 || seq_id >= (llama_seq_id) n_seq) {
-            return;
+            return false;
         }
         if (data.size() != sizeof(llama_pos) + (size_t) n_embd_dec * sizeof(float)) {
-            return;
+            return false;
         }
 
         llama_pos pos = -1;
@@ -913,6 +974,7 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
         pending_pos_last[seq_id] = pos;
         pending_g_last[seq_id].resize(n_embd_dec);
         std::memcpy(pending_g_last[seq_id].data(), data.data() + sizeof(llama_pos), (size_t) n_embd_dec * sizeof(float));
+        return true;
     }
 };
 
@@ -920,8 +982,8 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
 struct common_speculative_impl_draft_dflash : public common_speculative_impl {
     common_params_speculative_draft params;
 
-    llama_batch batch;        // noise tokens
-    llama_batch batch_inject; // target features for KV cache injection
+    llama_batch batch = {};        // noise tokens
+    llama_batch batch_inject = {}; // target features for KV cache injection
 
     std::vector<common_sampler_ptr> smpls;
 
@@ -952,6 +1014,11 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
 
     // scratch buffer for concatenated target features [n_tokens, n_embd_enc]
     std::vector<float> features_buf;
+    std::vector<llama_pos> verify_pos_first;
+    std::vector<int32_t> verify_rows;
+
+    common_spec_sidecar_dflash sidecar;
+    bool sidecar_target_only = false; // runtime failure or unsupported sampling mode
 
     common_speculative_impl_draft_dflash(const common_params_speculative & params, uint32_t n_seq,
             common_speculative_type type = COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH)
@@ -961,22 +1028,35 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
     {
         auto * ctx_tgt = this->params.ctx_tgt;
         auto * ctx_dft = this->params.ctx_dft;
-        GGML_ASSERT(ctx_tgt && ctx_dft && "DFlash requires ctx_tgt and ctx_dft to be set");
+        const bool sidecar_only = this->params.sidecar_only &&
+                this->params.sidecar_type == COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH;
+        const common_spec_sidecar_profile * sidecar_profile = this->params.sidecar_profile;
+        GGML_ASSERT(ctx_tgt && (ctx_dft != nullptr || sidecar_only) &&
+                "DFlash requires a target context or a validated sidecar-only mode");
 
-        const llama_model * model_dft = llama_get_model(ctx_dft);
         const llama_model * model_tgt = llama_get_model(ctx_tgt);
+        const llama_model * model_dft = ctx_dft != nullptr ? llama_get_model(ctx_dft) : nullptr;
 
-        target_layer_ids   = llama_model_target_layer_ids  (model_dft);
-        target_layer_ids_n = llama_model_target_layer_ids_n(model_dft);
+        if (model_dft != nullptr) {
+            target_layer_ids   = llama_model_target_layer_ids  (model_dft);
+            target_layer_ids_n = llama_model_target_layer_ids_n(model_dft);
+        } else if (sidecar_only && sidecar_profile != nullptr &&
+                sidecar_profile->kind == COMMON_SPEC_SIDECAR_KIND_DFLASH) {
+            target_layer_ids   = sidecar_profile->dflash_target_layer_ids;
+            target_layer_ids_n = sidecar_profile->dflash_target_layer_ids_n;
+        }
         GGML_ASSERT(target_layer_ids_n > 0 && "DFlash model has no target_layer_ids");
 
         n_embd_tgt    = llama_model_n_embd(model_tgt);
-        n_embd_dec    = llama_model_n_embd(model_dft);
+        n_embd_dec    = model_dft != nullptr ? llama_model_n_embd(model_dft) :
+                (sidecar_profile != nullptr ? sidecar_profile->dflash_decoder_width : 0);
         n_embd_enc    = (int32_t) target_layer_ids_n * n_embd_tgt;
 
-        // read the trained block size from the dflash.block_size metadata key
-        block_size = 16;
-        {
+        // Read trained block metadata from a native model, or use the provider
+        // profile when no host draft exists.
+        block_size = sidecar_only && sidecar_profile != nullptr
+                ? sidecar_profile->dflash_block_size : 16;
+        if (model_dft != nullptr) {
             char buf[32] = {};
             if (llama_model_meta_val_str(model_dft, "dflash.block_size", buf, sizeof(buf)) >= 0) {
                 block_size = std::atoi(buf);
@@ -988,8 +1068,14 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
                 selector_top_k = std::atoi(buf);
                 is_dflash2 = selector_top_k > 0;
             }
+        } else if (sidecar_only && sidecar_profile != nullptr &&
+                sidecar_profile->kind == COMMON_SPEC_SIDECAR_KIND_DFLASH) {
+            selector_top_k = sidecar_profile->dflash_selector_top_k;
+            is_dflash2 = selector_top_k > 0;
         }
-        mask_token_id = llama_vocab_mask(llama_model_get_vocab(model_dft));
+        mask_token_id = model_dft != nullptr
+                ? llama_vocab_mask(llama_model_get_vocab(model_dft)) : 0;
+        n_layer_tgt = llama_model_n_layer(model_tgt);
 
         LOG_INF("%s: adding speculative implementation '%s'\n", __func__, common_speculative_type_to_str(type).c_str());
         LOG_INF("%s: - n_max=%d, n_min=%d, p_min=%.2f\n", __func__, this->params.n_max, this->params.n_min, this->params.p_min);
@@ -1006,20 +1092,65 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
             this->params.n_min = std::min(this->params.n_min, n_draft_max);
         }
 
-        batch        = llama_batch_init(llama_n_batch(ctx_dft), 0,          n_seq);
-        batch_inject = llama_batch_init(llama_n_batch(ctx_dft), n_embd_dec, n_seq);
+        // speculative sidecar's DFlash DLL is selected only after the preflight probe.
+        // A sidecar-only construction has no native draft context to fall back
+        // to if HIP initialization fails, so it enters target-only mode.
+        // The provider profile is selected only after the preflight probe.
+        // A sidecar-only construction has no native draft context to fall back
+        // to if HIP initialization fails, so it enters target-only mode.
+        if (sidecar_only && is_dflash2 && sidecar_profile != nullptr &&
+                sidecar_profile->kind == COMMON_SPEC_SIDECAR_KIND_DFLASH) {
+            common_spec_sidecar_paths paths;
+            std::string error;
+            if (common_spec_sidecar_get_paths(*sidecar_profile, paths, error) &&
+                    n_embd_enc == sidecar_profile->dflash_encoded_width &&
+                    block_size == sidecar_profile->dflash_block_size) {
+                if (sidecar.load(paths.library, paths.artifact_dir,
+                        sidecar_profile->dflash_encoded_width,
+                        sidecar_profile->dflash_block_size, (int32_t) n_seq, error)) {
+                    for (uint32_t k = 0; k < target_layer_ids_n; ++k) {
+                        if (target_layer_ids[k] == n_layer_tgt) {
+                            llama_set_embeddings_nextn_device_preferred(ctx_tgt, true);
+                        } else {
+                            llama_set_embeddings_layer_inp_device_preferred(
+                                    ctx_tgt, (uint32_t) target_layer_ids[k], true);
+                        }
+                    }
+                    SPC_INF("DFlash sidecar active: %s\n", paths.library.c_str());
+                } else {
+                    sidecar_target_only = true;
+                    SPC_WRN("DFlash sidecar unavailable (%s); target-only mode\n", error.c_str());
+                }
+            } else {
+                sidecar_target_only = true;
+                if (error.empty()) {
+                    error = "provider profile dimensions do not match the target";
+                }
+                SPC_WRN("DFlash sidecar unavailable (%s); target-only mode\n", error.c_str());
+            }
+        }
+        if (sidecar_only && !sidecar.active()) {
+            sidecar_target_only = true;
+        }
 
-        smpls.resize(n_seq);
-        for (auto & s : smpls) {
-            common_params_sampling sparams;
-            sparams.no_perf  = false;
-            sparams.top_k    = is_dflash2 ? selector_top_k : 10;
-            sparams.samplers = { COMMON_SAMPLER_TYPE_TOP_K };
-            s.reset(common_sampler_init(model_dft, sparams));
+        if (ctx_dft != nullptr) {
+            batch        = llama_batch_init(llama_n_batch(ctx_dft), 0,          n_seq);
+            batch_inject = llama_batch_init(llama_n_batch(ctx_dft), n_embd_dec, n_seq);
+
+            smpls.resize(n_seq);
+            for (auto & s : smpls) {
+                common_params_sampling sparams;
+                sparams.no_perf  = false;
+                sparams.top_k    = is_dflash2 ? selector_top_k : 10;
+                sparams.samplers = { COMMON_SAMPLER_TYPE_TOP_K };
+                s.reset(common_sampler_init(model_dft, sparams));
+            }
         }
 
         selector_rng.resize(n_seq);
         selector_reset.assign(n_seq, true);
+        verify_pos_first.assign(n_seq, -1);
+        verify_rows.assign(n_seq, 0);
 
         // offload draft sampling to the backend
         backend_chains.assign(n_seq, nullptr);
@@ -1040,7 +1171,6 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
         // turn on extraction of the target layers' input embeddings; an id equal
         // to the target's layer count means the pre-final-norm hidden state,
         // which is captured through the unmasked nextn path instead
-        n_layer_tgt = llama_model_n_layer(model_tgt);
         for (uint32_t k = 0; k < target_layer_ids_n; ++k) {
             if (target_layer_ids[k] == n_layer_tgt) {
                 llama_set_embeddings_nextn(ctx_tgt, true, /*masked*/ false);
@@ -1051,15 +1181,43 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
 
         // DFlash2 reads its selector lattice from h_nextn and never consumes raw logits.
         // Legacy Laguna drafters retain their causal noise-block attention.
-        llama_set_embeddings_nextn(ctx_dft, true, /*masked*/ !is_dflash2);
-        bool causal = false;
-        if (!is_dflash2) {
-            char buf[32] = {};
-            if (llama_model_meta_val_str(model_dft, "dflash.decoder_arch", buf, sizeof(buf)) >= 0) {
-                causal = std::strcmp(buf, "laguna") == 0;
+        if (ctx_dft != nullptr) {
+            llama_set_embeddings_nextn(ctx_dft, true, /*masked*/ !is_dflash2);
+            bool causal = false;
+            if (!is_dflash2) {
+                char buf[32] = {};
+                if (llama_model_meta_val_str(model_dft, "dflash.decoder_arch", buf, sizeof(buf)) >= 0) {
+                    causal = std::strcmp(buf, "laguna") == 0;
+                }
+            }
+            llama_set_causal_attn(ctx_dft, causal);
+        }
+    }
+
+    void prepare_process(const common_speculative_draft_params_vec & dparams) override {
+        if (!sidecar.active()) {
+            return;
+        }
+        for (const auto & dp : dparams) {
+            if (!dp.drafting) {
+                continue;
+            }
+            if (dp.temperature > 0.0f && dp.dists == nullptr) {
+                // A stochastic proposal must carry q to the verifier. Never
+                // fall back to equality-only verification, which would bias
+                // the target distribution.
+                sidecar.disable();
+                sidecar_target_only = true;
+                SPC_WRN("%s", "DFlash sidecar requires proposal distributions for stochastic sampling; target-only mode\n");
+                break;
+            }
+            if (dp.temperature <= 0.0f && this->params.p_min > 0.0f) {
+                sidecar.disable();
+                sidecar_target_only = true;
+                SPC_WRN("%s", "DFlash sidecar does not support p_min in greedy mode; target-only mode\n");
+                break;
             }
         }
-        llama_set_causal_attn(ctx_dft, causal);
     }
 
     ~common_speculative_impl_draft_dflash() override {
@@ -1091,12 +1249,140 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
 
         selector_reset[seq_id] = true;
 
+        if (params.ctx_dft == nullptr) {
+            return;
+        }
         const llama_pos pos_max = llama_memory_seq_pos_max(llama_get_memory(params.ctx_dft), seq_id);
         if (pos_max < N - 1) {
             LOG_WRN("%s: ctx_dft pos_max=%d < N-1=%d - process() did not run on every prefill ubatch. "
                     "Drafts may degrade.\n",
                     __func__, (int) pos_max, N - 1);
         }
+    }
+
+    bool process_sidecar(const llama_batch & batch_in,
+            const std::vector<int32_t> & i_batch_beg,
+            const std::vector<int32_t> & i_batch_end) {
+        auto * ctx_tgt = this->params.ctx_tgt;
+        std::vector<llama_device_view> layers(target_layer_ids_n);
+        bool direct = false;
+        void * stream = nullptr;
+        int32_t device = -1;
+#if defined(GGML_USE_HIP)
+        direct = true;
+#endif
+        for (uint32_t k = 0; k < target_layer_ids_n; ++k) {
+            const bool is_nextn = target_layer_ids[k] == n_layer_tgt;
+            const bool has_device_layer = is_nextn
+                    ? llama_get_embeddings_nextn_device(ctx_tgt, &layers[k])
+                    : llama_get_embeddings_layer_inp_device(ctx_tgt, (uint32_t) target_layer_ids[k], &layers[k]);
+            if (!has_device_layer || layers[k].row_stride != (size_t) n_embd_tgt * sizeof(float) ||
+                    layers[k].n_rows < (uint32_t) batch_in.n_tokens) {
+                direct = false;
+                break;
+            }
+            if (stream == nullptr) {
+                stream = layers[k].stream;
+                device = layers[k].device;
+            } else if (layers[k].stream != stream || layers[k].device != device) {
+                direct = false;
+                break;
+            }
+        }
+        if (direct && !sidecar.attach_target_stream(stream, device)) {
+            direct = false;
+        }
+
+        std::vector<bool> contiguous(n_seq, true);
+        for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
+            if (i_batch_beg[seq_id] < 0) continue;
+            for (int32_t i = i_batch_beg[seq_id]; i <= i_batch_end[seq_id]; ++i) {
+                if (batch_in.seq_id[i][0] != seq_id) {
+                    contiguous[seq_id] = false;
+                    break;
+                }
+            }
+        }
+
+        std::vector<std::vector<float>> host_layer_rows;
+        if (!direct) {
+            host_layer_rows.resize(target_layer_ids_n);
+            for (uint32_t k = 0; k < target_layer_ids_n; ++k) {
+                float * layer = target_layer_ids[k] == n_layer_tgt
+                        ? llama_get_embeddings_nextn(ctx_tgt)
+                        : llama_get_embeddings_layer_inp(ctx_tgt, (uint32_t) target_layer_ids[k]);
+                if (layer == nullptr) {
+                    sidecar.disable();
+                    sidecar_target_only = true;
+                    SPC_ERR("%s", "DFlash sidecar target layer output unavailable; entering target-only mode\n");
+                    return true;
+                }
+                host_layer_rows[k].assign(layer, layer +
+                        (size_t) batch_in.n_tokens * n_embd_tgt);
+            }
+        }
+
+        for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
+            const int32_t beg = i_batch_beg[seq_id];
+            const int32_t end = i_batch_end[seq_id];
+            if (beg < 0 || end < beg) continue;
+            std::vector<int32_t> indices;
+            if (!contiguous[seq_id]) {
+                for (int32_t i = 0; i < batch_in.n_tokens; ++i) {
+                    if (batch_in.seq_id[i][0] == seq_id) indices.push_back(i);
+                }
+            }
+            const int32_t n_rows = contiguous[seq_id] ? end - beg + 1 : (int32_t) indices.size();
+            if (n_rows <= 0) continue;
+            verify_rows[seq_id] = n_rows;
+            verify_pos_first[seq_id] = batch_in.pos[contiguous[seq_id] ? beg : indices.front()];
+
+            int rc = -1;
+            if (direct && contiguous[seq_id]) {
+                std::vector<const void *> layer_ptrs(target_layer_ids_n);
+                for (uint32_t k = 0; k < target_layer_ids_n; ++k) {
+                    layer_ptrs[k] = static_cast<const char *>(layers[k].data) +
+                            (size_t) beg * layers[k].row_stride;
+                }
+                rc = sidecar.chunk_device(seq_id, batch_in.pos + beg, layer_ptrs.data(),
+                        (int) target_layer_ids_n, n_embd_tgt, n_rows);
+            } else {
+                features_buf.resize((size_t) n_rows * n_embd_enc);
+                std::vector<int32_t> positions((size_t) n_rows);
+                for (int32_t r = 0; r < n_rows; ++r) {
+                    const int32_t i = contiguous[seq_id] ? beg + r : indices[r];
+                    positions[r] = batch_in.pos[i];
+                    for (uint32_t k = 0; k < target_layer_ids_n; ++k) {
+                        std::memcpy(features_buf.data() + (size_t) r * n_embd_enc +
+                                (size_t) k * n_embd_tgt,
+                                host_layer_rows[k].data() + (size_t) i * n_embd_tgt,
+                                (size_t) n_embd_tgt * sizeof(float));
+                    }
+                }
+                size_t n_bad = 0;
+                for (float & value : features_buf) {
+                    if (!std::isfinite(value)) {
+                        value = value != value ? 0.0f : (value > 0.0f ? 65504.0f : -65504.0f);
+                        ++n_bad;
+                    }
+                }
+                if (n_bad > 0) {
+                    static bool warned = false;
+                    if (!warned) {
+                        SPC_WRN("%s", "sanitized non-finite target features for DFlash sidecar\n");
+                        warned = true;
+                    }
+                }
+                rc = sidecar.chunk(seq_id, positions.data(), features_buf.data(), n_rows);
+            }
+            if (rc != 0) {
+                sidecar.disable();
+                sidecar_target_only = true;
+                SPC_ERR("%s", "DFlash sidecar target feature update failed; entering target-only mode\n");
+                return true;
+            }
+        }
+        return true;
     }
 
     bool process(const llama_batch & batch_in) override {
@@ -1112,6 +1398,11 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
         const bool has_tokens     = batch_in.token != nullptr;
         const bool has_embeddings = batch_in.embd  != nullptr;
         if (has_tokens == has_embeddings) {
+            if (sidecar.active()) {
+                sidecar.disable();
+                sidecar_target_only = true;
+                SPC_WRN("%s", "DFlash sidecar requires text token batches; entering target-only mode\n");
+            }
             return true;
         }
 
@@ -1132,6 +1423,19 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
             }
         }
 
+        if (sidecar.active()) {
+            if (batch_in.pos == nullptr) {
+                sidecar.disable();
+                sidecar_target_only = true;
+                SPC_ERR("%s", "DFlash sidecar requires explicit target positions; entering target-only mode\n");
+                return true;
+            }
+            return process_sidecar(batch_in, i_batch_beg, i_batch_end);
+        }
+        if (sidecar_target_only) {
+            return true;
+        }
+
         auto * ctx_tgt = this->params.ctx_tgt;
         auto * ctx_dft = this->params.ctx_dft;
 
@@ -1142,6 +1446,9 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
                 continue;
             }
             const int32_t n_rows = i_batch_end[seq_id] - i_batch_beg[seq_id] + 1;
+            verify_rows[seq_id] = n_rows;
+            verify_pos_first[seq_id] = batch_in.pos != nullptr
+                    ? batch_in.pos[i_batch_beg[seq_id]] : -1;
 
             // M-RoPE target positions are tuples whose temporal component can repeat across image
             // tokens. The 1-D draft cache instead keeps exactly one dense row per target token.
@@ -1190,6 +1497,10 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
                     }
                 }
 
+                if (sidecar_target_only) {
+                    continue;
+                }
+
                 // fuse extracted features through DFlash encoder
                 llama_batch enc_batch = {
                     /*.n_tokens =*/ n_chunk,
@@ -1235,6 +1546,101 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
     }
 
     void draft(common_speculative_draft_params_vec & dparams) override {
+        if (sidecar_target_only) {
+            return;
+        }
+
+        if (sidecar.active()) {
+            for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
+                auto & dp = dparams[seq_id];
+                if (!dp.drafting) {
+                    continue;
+                }
+                const bool stochastic = dp.temperature > 0.0f;
+                if (!stochastic && params.p_min > 0.0f) {
+                    sidecar.disable();
+                    sidecar_target_only = true;
+                    return;
+                }
+                if (stochastic && dp.dists == nullptr) {
+                    sidecar.disable();
+                    sidecar_target_only = true;
+                    SPC_ERR("%s", "DFlash sidecar has no proposal-distribution output; entering target-only mode\n");
+                    return;
+                }
+
+                const int limit = std::min(params.n_max, dp.n_max > 0 ? dp.n_max : params.n_max);
+                if (limit < 1) {
+                    return;
+                }
+                int32_t ids[7] = {};
+                std::vector<int32_t> dist_ids;
+                std::vector<float> dist_probs;
+                if (stochastic) {
+                    dist_ids.resize((size_t) limit * SPEC_SIDECAR_DFLASH_DRAFT_TOP_K, -1);
+                    dist_probs.resize((size_t) limit * SPEC_SIDECAR_DFLASH_DRAFT_TOP_K, 0.0f);
+                } else if (dp.dists != nullptr) {
+                    dp.dists->clear();
+                }
+                const int n = stochastic
+                        ? sidecar.draft_stochastic(seq_id, dp.id_last, (int32_t) dp.n_past,
+                                dp.temperature, params.p_min,
+                                common_spec_sidecar_stochastic_key(dp.seed, seq_id, dp.n_past, 2),
+                                limit, ids, dist_ids.data(), dist_probs.data())
+                        : sidecar.draft(seq_id, dp.id_last, (int32_t) dp.n_past, ids);
+                if (n < 0 || n > (stochastic ? limit : 7)) {
+                    sidecar.disable();
+                    sidecar_target_only = true;
+                    SPC_ERR("%s", "DFlash sidecar draft failed; entering target-only mode\n");
+                    return;
+                }
+
+                // The greedy DFlash ABI always fills the trained seven-token
+                // block, while the request may reserve a smaller speculative
+                // width. Only expose the requested prefix to target verification.
+                const int n_emit = std::min(n, limit);
+
+                const int32_t n_vocab = llama_vocab_n_tokens(
+                        llama_model_get_vocab(llama_get_model(params.ctx_tgt)));
+                auto & result = *dp.result;
+                if (stochastic) {
+                    dp.dists->clear();
+                    dp.dists->reserve((size_t) n_emit);
+                }
+                for (int i = 0; i < n_emit; ++i) {
+                    if (ids[i] < 0 || ids[i] >= n_vocab) {
+                        result.clear();
+                        if (dp.dists != nullptr) dp.dists->clear();
+                        sidecar.disable();
+                        sidecar_target_only = true;
+                        SPC_ERR("%s", "DFlash sidecar returned invalid token ID; entering target-only mode\n");
+                        return;
+                    }
+                    result.push_back((llama_token) ids[i]);
+                    if (stochastic) {
+                        common_speculative_token_dist dist;
+                        if (!common_spec_sidecar_validate_distribution(
+                                    dist_ids.data() + (size_t) i * SPEC_SIDECAR_DFLASH_DRAFT_TOP_K,
+                                    dist_probs.data() + (size_t) i * SPEC_SIDECAR_DFLASH_DRAFT_TOP_K,
+                                    SPEC_SIDECAR_DFLASH_DRAFT_TOP_K, n_vocab, dist)) {
+                            result.clear();
+                            dp.dists->clear();
+                            sidecar.disable();
+                            sidecar_target_only = true;
+                            SPC_ERR("%s", "DFlash sidecar returned invalid proposal distribution; entering target-only mode\n");
+                            return;
+                        }
+                        dp.dists->push_back(std::move(dist));
+                    }
+                }
+                if (result.size() < (size_t) params.n_min) {
+                    result.clear();
+                    if (dp.dists != nullptr) dp.dists->clear();
+                }
+            }
+            return;
+        }
+
         auto & ctx_dft = params.ctx_dft;
 
         common_batch_clear(batch);
@@ -1422,15 +1828,94 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
         }
     }
 
-    void accept(llama_seq_id /*seq_id*/, uint16_t /*n_accepted*/, bool /*is_other*/) override {
-        // noop
+    bool state_required(llama_seq_id /*seq_id*/) const override {
+        return sidecar.active();
+    }
+
+    bool get_state(llama_seq_id seq_id, std::vector<uint8_t> & data) override {
+        if (!sidecar.active()) return false;
+        if (!sidecar.get_state(seq_id, data)) {
+            sidecar.disable();
+            sidecar_target_only = true;
+            SPC_ERR("%s", "DFlash sidecar state snapshot failed; entering target-only mode\n");
+            return false;
+        }
+        return true;
+    }
+
+    bool set_state(llama_seq_id seq_id, const std::vector<uint8_t> & data) override {
+        if (!sidecar.active()) return true;
+        if (!sidecar.set_state(seq_id, data)) {
+            sidecar.disable();
+            sidecar_target_only = true;
+            SPC_ERR("%s", "DFlash sidecar state restore failed; entering target-only mode\n");
+            return false;
+        }
+        return true;
+    }
+
+    bool reset_state(llama_seq_id seq_id) override {
+        if (!sidecar.active()) return true;
+        if (!sidecar.reset_state(seq_id)) {
+            sidecar.disable();
+            sidecar_target_only = true;
+            SPC_ERR("%s", "DFlash sidecar state reset failed; entering target-only mode\n");
+            return false;
+        }
+        return true;
+    }
+
+    bool truncate_state(llama_seq_id seq_id, llama_pos pos_max) override {
+        if (!sidecar.active()) return true;
+        if (!sidecar.truncate_state(seq_id, pos_max)) {
+            sidecar.disable();
+            sidecar_target_only = true;
+            SPC_ERR("%s", "DFlash sidecar state truncate failed; entering target-only mode\n");
+            return false;
+        }
+        return true;
+    }
+
+    bool commit_state(llama_seq_id seq_id, llama_pos pos_max) override {
+        if (!sidecar.active()) return true;
+        if (!sidecar.commit_state(seq_id, pos_max)) {
+            sidecar.disable();
+            sidecar_target_only = true;
+            SPC_ERR("%s", "DFlash sidecar state commit failed; entering target-only mode\n");
+            return false;
+        }
+        return true;
+    }
+
+    bool rebase_state(llama_seq_id seq_id, llama_pos pos_min, llama_pos pos_max, llama_pos delta) override {
+        if (!sidecar.active()) return true;
+        if (!sidecar.rebase_state(seq_id, pos_min, pos_max, delta)) {
+            sidecar.disable();
+            sidecar_target_only = true;
+            SPC_ERR("%s", "DFlash sidecar state rebase failed; entering target-only mode\n");
+            return false;
+        }
+        return true;
+    }
+
+    void accept(llama_seq_id seq_id, uint16_t n_accepted, bool /*is_other*/) override {
+        if (seq_id < 0 || seq_id >= (llama_seq_id) n_seq || verify_pos_first[seq_id] < 0 || verify_rows[seq_id] <= 0) {
+            return;
+        }
+        const int32_t n_commit = std::min<int32_t>((int32_t) n_accepted + 1, verify_rows[seq_id]);
+        commit_state(seq_id, verify_pos_first[seq_id] + n_commit);
     }
 };
 
 struct common_speculative_impl_draft_mtp : public common_speculative_impl {
     common_params_speculative_draft params; // reuses the draft-model params slot (ctx_tgt/ctx_dft)
 
-    llama_batch batch;
+    common_spec_sidecar_mtp sidecar;
+    bool sidecar_target_only = false; // runtime failure or unsupported sampling mode
+    std::vector<const float *> verify_h_device;
+    std::vector<size_t> verify_h_device_stride;
+
+    llama_batch batch = {};
 
     std::vector<common_sampler_ptr> smpls;
 
@@ -1459,6 +1944,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
     // Row 0 corresponds to the sampled token, row N to the Nth accepted draft token.
     std::vector<std::vector<float>> verify_h;
     std::vector<int32_t> verify_h_rows;
+    std::vector<llama_pos> verify_pos_first;
 
     std::vector<int>                i_last;
     std::vector<std::vector<float>> chain_h;
@@ -1484,12 +1970,18 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
     {
         auto * ctx_tgt = this->params.ctx_tgt;
         auto * ctx_dft = this->params.ctx_dft;
-        GGML_ASSERT(ctx_tgt && ctx_dft && "MTP requires ctx_tgt and ctx_dft to be set");
+        const bool sidecar_only = this->params.sidecar_only &&
+                this->params.sidecar_type == COMMON_SPECULATIVE_TYPE_DRAFT_MTP;
+        const common_spec_sidecar_profile * sidecar_profile = this->params.sidecar_profile;
+        GGML_ASSERT(ctx_tgt && (ctx_dft != nullptr || sidecar_only) &&
+                "MTP requires a target context or a validated sidecar-only mode");
 
-        n_embd = llama_model_n_embd_out(llama_get_model(ctx_dft));
-        GGML_ASSERT(n_embd == llama_model_n_embd_out(llama_get_model(ctx_tgt)) &&
+        const llama_model * model_tgt = llama_get_model(ctx_tgt);
+        const llama_model * model_dft = ctx_dft != nullptr ? llama_get_model(ctx_dft) : model_tgt;
+        n_embd = llama_model_n_embd_out(model_dft);
+        GGML_ASSERT(n_embd == llama_model_n_embd_out(model_tgt) &&
                 "MTP input row width must match the target h_nextn width");
-        n_mtp_layers = std::max(1, (int) llama_model_n_layer_nextn(llama_get_model(ctx_dft)));
+        n_mtp_layers = std::max(1, (int) llama_model_n_layer_nextn(model_dft));
         char target_arch[32] = {};
         const int32_t arch_len = llama_model_meta_val_str(
             llama_get_model(ctx_tgt), "general.architecture", target_arch, sizeof(target_arch));
@@ -1506,24 +1998,28 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                 ctx_dft ? "yes" : "no",
                 common_speculative_get_devices_str(this->params.devices).c_str());
 
-        const int32_t n_b = (int32_t) llama_n_batch(ctx_dft);
-        batch = llama_batch_init(/*n_tokens=*/ n_b, /*embd=*/ n_embd, /*n_seq_max=*/ 1);
-        // llama_batch_init allocates only one of token/embd; MTP needs both.
-        // TODO: fix, how to call without malloc
-        batch.token = (llama_token *) malloc(sizeof(llama_token) * n_b);
+        if (ctx_dft != nullptr) {
+            const int32_t n_b = (int32_t) llama_n_batch(ctx_dft);
+            batch = llama_batch_init(/*n_tokens=*/ n_b, /*embd=*/ n_embd, /*n_seq_max=*/ 1);
+            // llama_batch_init allocates only one of token/embd; MTP needs both.
+            // TODO: fix, how to call without malloc
+            batch.token = (llama_token *) malloc(sizeof(llama_token) * n_b);
+        }
 
-        smpls.resize(n_seq);
-        for (auto & s : smpls) {
-            common_params_sampling sparams;
-            sparams.no_perf  = false;
-            sparams.top_k    = 10;
-            sparams.samplers = { COMMON_SAMPLER_TYPE_TOP_K };
-            s.reset(common_sampler_init(llama_get_model(ctx_dft), sparams));
+        if (ctx_dft != nullptr) {
+            smpls.resize(n_seq);
+            for (auto & s : smpls) {
+                common_params_sampling sparams;
+                sparams.no_perf  = false;
+                sparams.top_k    = 10;
+                sparams.samplers = { COMMON_SAMPLER_TYPE_TOP_K };
+                s.reset(common_sampler_init(model_dft, sparams));
+            }
         }
 
         // offload draft sampling to the backend
         backend_chains.assign(n_seq, nullptr);
-        if (this->params.backend_sampling) {
+        if (ctx_dft != nullptr && this->params.backend_sampling) {
             for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
                 llama_sampler * chain = llama_sampler_chain_init(llama_sampler_chain_default_params());
                 llama_sampler_chain_add(chain, llama_sampler_init_top_k(10));
@@ -1538,9 +2034,11 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         }
 
         llama_set_embeddings_nextn(ctx_tgt, true, /*masked*/ false);
-        llama_set_embeddings_nextn(ctx_dft, true, /*masked*/ true);
+        if (ctx_dft != nullptr) {
+            llama_set_embeddings_nextn(ctx_dft, true, /*masked*/ true);
+        }
 
-        is_mem_shared = llama_get_ctx_other(ctx_dft) == ctx_tgt;
+        is_mem_shared = ctx_dft != nullptr && llama_get_ctx_other(ctx_dft) == ctx_tgt;
         chain_heads   = n_mtp_layers > 1 && !is_mem_shared;
 
         if (chain_heads) {
@@ -1554,12 +2052,57 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
         pending_h.assign(n_seq, std::vector<float>(n_embd, 0.0f));
 
+        if (sidecar_only && n_mtp_layers == 1 && !chain_heads && !is_mem_shared &&
+                sidecar_profile != nullptr && sidecar_profile->kind == COMMON_SPEC_SIDECAR_KIND_MTP) {
+            common_spec_sidecar_paths paths;
+            std::string error;
+            if (common_spec_sidecar_get_paths(*sidecar_profile, paths, error) &&
+                    sidecar.load(paths.library, paths.artifact_dir, paths.ids,
+                            sidecar_profile->mtp_embedding_width,
+                            sidecar_profile->mtp_head_rows, (int32_t) n_seq, error)) {
+                llama_set_embeddings_nextn_device_preferred(ctx_tgt, true);
+                SPC_INF("MTP sidecar active: %s\n", paths.library.c_str());
+            } else {
+                sidecar_target_only = true;
+                SPC_WRN("MTP sidecar unavailable (%s); target-only mode\n", error.c_str());
+            }
+        }
+        if (sidecar_only && !sidecar.active()) {
+            sidecar_target_only = true;
+        }
+
         i_last.assign(n_seq, -1);
         i_batch_beg.assign(n_seq, -1);
         i_batch_end.assign(n_seq, -1);
 
         verify_h.assign(n_seq, {});
         verify_h_rows.assign(n_seq, 0);
+        verify_pos_first.assign(n_seq, -1);
+        verify_h_device.assign(n_seq, nullptr);
+        verify_h_device_stride.assign(n_seq, 0);
+    }
+
+    void prepare_process(const common_speculative_draft_params_vec & dparams) override {
+        if (!sidecar.active()) {
+            return;
+        }
+        for (const auto & dp : dparams) {
+            if (!dp.drafting) {
+                continue;
+            }
+            if (dp.temperature > 0.0f && dp.dists == nullptr) {
+                sidecar.disable();
+                sidecar_target_only = true;
+                SPC_WRN("%s", "MTP sidecar requires proposal distributions for stochastic sampling; target-only mode\n");
+                break;
+            }
+            if (dp.temperature <= 0.0f && params.p_min > 0.0f) {
+                sidecar.disable();
+                sidecar_target_only = true;
+                SPC_WRN("%s", "MTP sidecar does not support p_min in greedy mode; target-only mode\n");
+                break;
+            }
+        }
     }
 
     ~common_speculative_impl_draft_mtp() override {
@@ -1589,6 +2132,9 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         }
 
         auto * ctx_dft = this->params.ctx_dft;
+        if (ctx_dft == nullptr) {
+            return;
+        }
         const llama_pos pos_max = llama_memory_seq_pos_max(llama_get_memory(ctx_dft), seq_id);
 
         if (pos_max < N - 1 && !is_mem_shared) {
@@ -1598,6 +2144,90 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                     "Drafts may degrade.\n",
                     (int) pos_max, N - 1);
         }
+    }
+
+    bool process_sidecar(const llama_batch & batch_in,
+            const std::vector<int32_t> & i_batch_beg,
+            const std::vector<int32_t> & i_batch_end) {
+        auto * ctx_tgt = this->params.ctx_tgt;
+        llama_device_view device_view;
+        bool direct = false;
+#if defined(GGML_USE_HIP)
+        direct = llama_get_embeddings_nextn_device(ctx_tgt, &device_view) &&
+                device_view.row_stride == (size_t) n_embd * sizeof(float) &&
+                device_view.n_rows >= (uint32_t) batch_in.n_tokens &&
+                sidecar.attach_target_stream(device_view.stream, device_view.device);
+#endif
+
+        // If any sequence is interleaved, direct rows cannot be represented by
+        // one contiguous pointer for that sequence. The host fallback gathers
+        // only that sequence while other contiguous sequences retain D2D input.
+        std::vector<bool> contiguous(n_seq, true);
+        for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
+            if (i_batch_beg[seq_id] < 0) continue;
+            for (int32_t i = i_batch_beg[seq_id]; i <= i_batch_end[seq_id]; ++i) {
+                if (batch_in.seq_id[i][0] != seq_id) {
+                    contiguous[seq_id] = false;
+                    break;
+                }
+            }
+        }
+        bool need_host = false;
+        for (bool value : contiguous) need_host = need_host || !value;
+        float * host_h = nullptr;
+        if (!direct || need_host) {
+            host_h = llama_get_embeddings_nextn(ctx_tgt);
+        }
+
+        for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
+            const int32_t beg = i_batch_beg[seq_id];
+            const int32_t end = i_batch_end[seq_id];
+            if (beg < 0 || end < beg) continue;
+
+            std::vector<int32_t> indices;
+            if (!contiguous[seq_id]) {
+                for (int32_t i = 0; i < batch_in.n_tokens; ++i) {
+                    if (batch_in.seq_id[i][0] == seq_id) indices.push_back(i);
+                }
+            }
+            const int32_t n_rows = contiguous[seq_id] ? end - beg + 1 : (int32_t) indices.size();
+            if (n_rows <= 0) continue;
+            verify_h_rows[seq_id] = n_rows;
+            verify_pos_first[seq_id] = batch_in.pos[contiguous[seq_id] ? beg : indices.front()];
+            verify_h_device[seq_id] = nullptr;
+            verify_h_device_stride[seq_id] = 0;
+            verify_h[seq_id].clear();
+
+            int rc = -1;
+            if (direct && contiguous[seq_id]) {
+                const float * rows = static_cast<const float *>(device_view.data) +
+                        (size_t) beg * device_view.row_stride / sizeof(float);
+                verify_h_device[seq_id] = rows;
+                verify_h_device_stride[seq_id] = device_view.row_stride;
+                rc = sidecar.catchup_device(seq_id, batch_in.token + beg, batch_in.pos + beg,
+                        rows, n_rows);
+            } else {
+                std::vector<int32_t> tokens((size_t) n_rows);
+                std::vector<int32_t> positions((size_t) n_rows);
+                verify_h[seq_id].resize((size_t) n_rows * n_embd);
+                for (int32_t r = 0; r < n_rows; ++r) {
+                    const int32_t i = contiguous[seq_id] ? beg + r : indices[r];
+                    tokens[r] = batch_in.token[i];
+                    positions[r] = batch_in.pos[i];
+                    std::memcpy(verify_h[seq_id].data() + (size_t) r * n_embd,
+                            host_h + (size_t) i * n_embd, (size_t) n_embd * sizeof(float));
+                }
+                rc = sidecar.catchup(seq_id, tokens.data(), positions.data(),
+                        verify_h[seq_id].data(), n_rows);
+            }
+            if (rc != 0) {
+                sidecar.disable();
+                sidecar_target_only = true;
+                SPC_ERR("%s", "MTP sidecar catch-up failed; entering target-only mode\n");
+                return true;
+            }
+        }
+        return true;
     }
 
     bool process(const llama_batch & batch_in) override {
@@ -1618,6 +2248,11 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
         // TODO: how to make it work with vision tokens?
         if (batch_in.token == nullptr || batch_in.embd != nullptr) {
+            if (sidecar.active()) {
+                sidecar.disable();
+                sidecar_target_only = true;
+                SPC_WRN("%s", "MTP sidecar requires text token batches; entering target-only mode\n");
+            }
             return true;
         }
 
@@ -1638,6 +2273,19 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                     }
                 }
             }
+        }
+
+        if (sidecar.active()) {
+            if (batch_in.pos == nullptr) {
+                sidecar.disable();
+                sidecar_target_only = true;
+                SPC_ERR("%s", "MTP sidecar requires explicit target positions; entering target-only mode\n");
+                return true;
+            }
+            return process_sidecar(batch_in, i_batch_beg, i_batch_end);
+        }
+        if (sidecar_target_only) {
+            return true;
         }
 
         auto * ctx_tgt = this->params.ctx_tgt;
@@ -1743,6 +2391,8 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
             const int32_t n_rows = i_batch_end[seq_id] - i_batch_beg[seq_id] + 1;
             verify_h_rows[seq_id] = n_rows;
+            verify_pos_first[seq_id] = batch_in.pos != nullptr
+                    ? batch_in.pos[i_batch_beg[seq_id]] : -1;
             verify_h[seq_id].resize((size_t) n_rows * n_embd);
 
             for (int32_t i = 0; i < n_rows; ++i) {
@@ -1758,6 +2408,104 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
     }
 
     void draft(common_speculative_draft_params_vec & dparams) override {
+        if (sidecar_target_only) {
+            return;
+        }
+
+        if (sidecar.active()) {
+            for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
+                auto & dp = dparams[seq_id];
+                if (!dp.drafting) {
+                    continue;
+                }
+                const bool stochastic = dp.temperature > 0.0f;
+                if (!stochastic && params.p_min > 0.0f) {
+                    sidecar.disable();
+                    sidecar_target_only = true;
+                    return;
+                }
+                if (stochastic && dp.dists == nullptr) {
+                    sidecar.disable();
+                    sidecar_target_only = true;
+                    SPC_ERR("%s", "MTP sidecar has no proposal-distribution output; entering target-only mode\n");
+                    return;
+                }
+
+                const int limit = std::min(params.n_max, dp.n_max > 0 ? dp.n_max : params.n_max);
+                if (limit < 1) {
+                    return;
+                }
+                std::vector<int32_t> ids((size_t) limit, -1);
+                std::vector<int32_t> dist_ids;
+                std::vector<float> dist_probs;
+                if (stochastic) {
+                    dist_ids.resize((size_t) limit * SPEC_SIDECAR_MTP_DRAFT_TOP_K, -1);
+                    dist_probs.resize((size_t) limit * SPEC_SIDECAR_MTP_DRAFT_TOP_K, 0.0f);
+                } else if (dp.dists != nullptr) {
+                    dp.dists->clear();
+                }
+                const int n = stochastic
+                        ? (verify_h_device[seq_id] != nullptr
+                            ? sidecar.draft_stochastic_device(seq_id, dp.id_last, (int32_t) dp.n_past,
+                                    dp.temperature, params.p_min,
+                                    common_spec_sidecar_stochastic_key(dp.seed, seq_id, dp.n_past, 1),
+                                    limit, ids.data(), dist_ids.data(), dist_probs.data())
+                            : sidecar.draft_stochastic(seq_id, dp.id_last, (int32_t) dp.n_past,
+                                    pending_h[seq_id].data(), dp.temperature, params.p_min,
+                                    common_spec_sidecar_stochastic_key(dp.seed, seq_id, dp.n_past, 1),
+                                    limit, ids.data(), dist_ids.data(), dist_probs.data()))
+                        : (verify_h_device[seq_id] != nullptr
+                            ? sidecar.draft_device(seq_id, dp.id_last, (int32_t) dp.n_past, limit, ids.data())
+                            : sidecar.draft(seq_id, dp.id_last, (int32_t) dp.n_past,
+                                    pending_h[seq_id].data(), limit, ids.data()));
+                if (n < 0 || n > limit) {
+                    sidecar.disable();
+                    sidecar_target_only = true;
+                    SPC_ERR("%s", "MTP sidecar draft failed; entering target-only mode\n");
+                    return;
+                }
+
+                const int32_t n_vocab = llama_vocab_n_tokens(
+                        llama_model_get_vocab(llama_get_model(params.ctx_tgt)));
+                auto & result = *dp.result;
+                if (stochastic) {
+                    dp.dists->clear();
+                    dp.dists->reserve((size_t) n);
+                }
+                for (int i = 0; i < n; ++i) {
+                    if (ids[i] < 0 || ids[i] >= n_vocab) {
+                        result.clear();
+                        if (dp.dists != nullptr) dp.dists->clear();
+                        sidecar.disable();
+                        sidecar_target_only = true;
+                        SPC_ERR("%s", "MTP sidecar returned invalid token ID; entering target-only mode\n");
+                        return;
+                    }
+                    result.push_back((llama_token) ids[i]);
+                    if (stochastic) {
+                        common_speculative_token_dist dist;
+                        if (!common_spec_sidecar_validate_distribution(
+                                    dist_ids.data() + (size_t) i * SPEC_SIDECAR_MTP_DRAFT_TOP_K,
+                                    dist_probs.data() + (size_t) i * SPEC_SIDECAR_MTP_DRAFT_TOP_K,
+                                    SPEC_SIDECAR_MTP_DRAFT_TOP_K, n_vocab, dist)) {
+                            result.clear();
+                            dp.dists->clear();
+                            sidecar.disable();
+                            sidecar_target_only = true;
+                            SPC_ERR("%s", "MTP sidecar returned invalid proposal distribution; entering target-only mode\n");
+                            return;
+                        }
+                        dp.dists->push_back(std::move(dist));
+                    }
+                }
+                if (result.size() < (size_t) params.n_min) {
+                    result.clear();
+                    if (dp.dists != nullptr) dp.dists->clear();
+                }
+            }
+            return;
+        }
+
         auto & ctx_dft = params.ctx_dft;
 
         common_batch_clear(batch);
@@ -1813,6 +2561,9 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                 SPC_ERR("llama_decode[%d] returned %d\n", i, ret);
                 break;
             }
+            // The MTP output row is copied asynchronously by the backend, but
+            // the next sampler step consumes it immediately on the host.
+            llama_synchronize(ctx_dft);
 
             // rebuild the batch for the next step: the growing-KV paths re-add only the
             // new token (the KV already holds the prefix), while chained heads re-add the
@@ -1908,6 +2659,101 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         }
     }
 
+    bool state_required(llama_seq_id /*seq_id*/) const override {
+        return sidecar.active();
+    }
+
+    bool get_state(llama_seq_id seq_id, std::vector<uint8_t> & data) override {
+        if (!sidecar.active()) return false;
+        if (!sidecar.get_state(seq_id, data)) {
+            sidecar.disable();
+            sidecar_target_only = true;
+            SPC_ERR("%s", "MTP sidecar state snapshot failed; entering target-only mode\n");
+            return false;
+        }
+        return true;
+    }
+
+    bool set_state(llama_seq_id seq_id, const std::vector<uint8_t> & data) override {
+        if (!sidecar.active()) return true;
+        if (!sidecar.set_state(seq_id, data)) {
+            sidecar.disable();
+            sidecar_target_only = true;
+            SPC_ERR("%s", "MTP sidecar state restore failed; entering target-only mode\n");
+            return false;
+        }
+        return true;
+    }
+
+    bool reset_state(llama_seq_id seq_id) override {
+        if (!sidecar.active()) return true;
+        if (!sidecar.reset_state(seq_id)) {
+            sidecar.disable();
+            sidecar_target_only = true;
+            SPC_ERR("%s", "MTP sidecar state reset failed; entering target-only mode\n");
+            return false;
+        }
+        return true;
+    }
+
+    bool truncate_state(llama_seq_id seq_id, llama_pos pos_max) override {
+        if (!sidecar.active()) return true;
+        if (!sidecar.truncate_state(seq_id, pos_max)) {
+            sidecar.disable();
+            sidecar_target_only = true;
+            SPC_ERR("%s", "MTP sidecar state truncate failed; entering target-only mode\n");
+            return false;
+        }
+        return true;
+    }
+
+    bool commit_state(llama_seq_id seq_id, llama_pos pos_max) override {
+        if (!sidecar.active()) return true;
+        if (seq_id < 0 || seq_id >= (llama_seq_id) n_seq) {
+            sidecar.disable();
+            sidecar_target_only = true;
+            SPC_ERR("%s", "MTP sidecar state commit sequence invalid; entering target-only mode\n");
+            return false;
+        }
+        const int32_t first = verify_pos_first[seq_id];
+        const int32_t rows = verify_h_rows[seq_id];
+        if (first < 0 || rows <= 0 ||
+                pos_max < first || pos_max > first + rows) {
+            sidecar.disable();
+            sidecar_target_only = true;
+            SPC_ERR("%s", "MTP sidecar state commit boundary invalid; entering target-only mode\n");
+            return false;
+        }
+        const int32_t row = (int32_t) (pos_max - first) - 1;
+        const float * hidden_device = verify_h_device[seq_id] != nullptr && row >= 0
+                ? verify_h_device[seq_id] + (size_t) row * verify_h_device_stride[seq_id] / sizeof(float)
+                : nullptr;
+        if (!sidecar.commit_state(seq_id, pos_max, hidden_device)) {
+            sidecar.disable();
+            sidecar_target_only = true;
+            SPC_ERR("%s", "MTP sidecar state commit failed; entering target-only mode\n");
+            return false;
+        }
+        if (hidden_device == nullptr && row >= 0 &&
+                (size_t) (row + 1) * n_embd <= verify_h[seq_id].size()) {
+            std::memcpy(pending_h[seq_id].data(),
+                    verify_h[seq_id].data() + (size_t) row * n_embd,
+                    (size_t) n_embd * sizeof(float));
+        }
+        return true;
+    }
+
+    bool rebase_state(llama_seq_id seq_id, llama_pos pos_min, llama_pos pos_max, llama_pos delta) override {
+        if (!sidecar.active()) return true;
+        if (!sidecar.rebase_state(seq_id, pos_min, pos_max, delta)) {
+            sidecar.disable();
+            sidecar_target_only = true;
+            SPC_ERR("%s", "MTP sidecar state rebase failed; entering target-only mode\n");
+            return false;
+        }
+        return true;
+    }
+
     void accept(llama_seq_id seq_id, uint16_t n_accepted, bool /*is_other*/) override {
         if (seq_id < 0 || seq_id >= (llama_seq_id) n_seq) {
             return;
@@ -1916,6 +2762,11 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         const int32_t n_rows = verify_h_rows[seq_id];
         if (n_rows <= 0) {
             return;
+        }
+
+        if (sidecar.active()) {
+            const int32_t n_commit = std::min<int32_t>((int32_t) n_accepted + 1, n_rows);
+            commit_state(seq_id, verify_pos_first[seq_id] + n_commit);
         }
 
         if (deferred_catchup_ready) {
@@ -1941,7 +2792,9 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
         const int32_t i_h = std::min<int32_t>(n_accepted, n_rows - 1);
         const size_t row_bytes = (size_t) n_embd * sizeof(float);
-        std::memcpy(pending_h[seq_id].data(), verify_h[seq_id].data() + (size_t) i_h * n_embd, row_bytes);
+        if (verify_h_device[seq_id] == nullptr) {
+            std::memcpy(pending_h[seq_id].data(), verify_h[seq_id].data() + (size_t) i_h * n_embd, row_bytes);
+        }
     }
 };
 
@@ -2501,6 +3354,98 @@ std::vector<common_speculative_type> common_speculative_types_from_gguf(const st
     return { type };
 }
 
+static bool common_speculative_has_type(const common_params_speculative & params,
+        common_speculative_type type) {
+    return std::find(params.types.begin(), params.types.end(), type) != params.types.end();
+}
+
+static bool common_speculative_has_host_draft_type(const common_params_speculative & params) {
+    return common_speculative_has_type(params, COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE) ||
+           common_speculative_has_type(params, COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3) ||
+           common_speculative_has_type(params, COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK);
+}
+
+bool common_speculative_sidecar_candidate(const common_params_speculative & params,
+        const std::string & target_model_path, uint32_t n_seq) {
+    if (!common_speculative_sidecar_enabled()) {
+        return false;
+    }
+
+    const bool has_mtp = common_speculative_has_type(params, COMMON_SPECULATIVE_TYPE_DRAFT_MTP);
+    const bool has_dflash = common_speculative_has_type(params, COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH);
+    if (common_speculative_has_host_draft_type(params) || (has_mtp && has_dflash)) {
+        return false;
+    }
+
+    std::string error;
+    if (has_mtp) {
+        const auto * profile = common_spec_sidecar_profile_for_target_file(
+                COMMON_SPEC_SIDECAR_KIND_MTP, target_model_path, error);
+        if (profile != nullptr && common_spec_sidecar_probe(*profile, n_seq, error)) {
+            return true;
+        }
+    }
+    if (has_dflash) {
+        const auto * profile = common_spec_sidecar_profile_for_target_file(
+                COMMON_SPEC_SIDECAR_KIND_DFLASH, target_model_path, error);
+        if (profile != nullptr && common_spec_sidecar_probe(*profile, n_seq, error)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+common_speculative_type common_speculative_sidecar_preflight(
+        common_params_speculative & params, const llama_model * model_tgt,
+        uint32_t n_seq, std::string & error) {
+    if (!common_speculative_sidecar_enabled()) {
+        params.draft.sidecar_only = false;
+        params.draft.sidecar_type = COMMON_SPECULATIVE_TYPE_NONE;
+        params.draft.sidecar_profile = nullptr;
+        error.clear();
+        return COMMON_SPECULATIVE_TYPE_NONE;
+    }
+
+    params.draft.sidecar_only = false;
+    params.draft.sidecar_type = COMMON_SPECULATIVE_TYPE_NONE;
+    params.draft.sidecar_profile = nullptr;
+    error.clear();
+    const bool has_mtp = common_speculative_has_type(params, COMMON_SPECULATIVE_TYPE_DRAFT_MTP);
+    const bool has_dflash = common_speculative_has_type(params, COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH);
+    if (model_tgt == nullptr || n_seq < 1 || n_seq > 8 ||
+            common_speculative_has_host_draft_type(params) || (has_mtp && has_dflash)) {
+        return COMMON_SPECULATIVE_TYPE_NONE;
+    }
+
+    std::string probe_error;
+    if (has_mtp) {
+        const auto * profile = common_spec_sidecar_profile_for_model(
+                COMMON_SPEC_SIDECAR_KIND_MTP, model_tgt, probe_error);
+        if (profile != nullptr && common_spec_sidecar_probe(*profile, n_seq, probe_error)) {
+            params.draft.sidecar_only = true;
+            params.draft.sidecar_type = COMMON_SPECULATIVE_TYPE_DRAFT_MTP;
+            params.draft.sidecar_profile = profile;
+            return params.draft.sidecar_type;
+        }
+    }
+
+    if (has_dflash) {
+        const auto * profile = common_spec_sidecar_profile_for_model(
+                COMMON_SPEC_SIDECAR_KIND_DFLASH, model_tgt, probe_error);
+        if (profile != nullptr && common_spec_sidecar_probe(*profile, n_seq, probe_error)) {
+            params.draft.sidecar_only = true;
+            params.draft.sidecar_type = COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH;
+            params.draft.sidecar_profile = profile;
+            return params.draft.sidecar_type;
+        }
+    }
+
+    if (!probe_error.empty()) {
+        error = probe_error;
+    }
+    return COMMON_SPECULATIVE_TYPE_NONE;
+}
+
 static uint32_t common_get_enabled_speculative_configs(const std::vector<common_speculative_type> & configs) {
     uint32_t result = 0;
     for (size_t i = 0; i < configs.size(); i++) {
@@ -2612,6 +3557,8 @@ struct common_speculative_init_result::impl {
     // note: the order in which model, context, etc. are declared matters because their destructors will be called bottom-to-top
     llama_model_ptr   model;
     llama_context_ptr context;
+    bool sidecar_only = false;
+    common_speculative_type sidecar_type = COMMON_SPECULATIVE_TYPE_NONE;
 };
 
 common_speculative_init_result::common_speculative_init_result(
@@ -2654,8 +3601,20 @@ common_speculative_init_result::common_speculative_init_result(
     cparams.n_rs_seq  = 0;
     cparams.ctx_other = ctx_tgt;
 
+    std::string sidecar_error;
+    pimpl->sidecar_type = common_speculative_sidecar_preflight(
+            params.speculative, model_tgt, params.n_parallel, sidecar_error);
+    pimpl->sidecar_only = pimpl->sidecar_type != COMMON_SPECULATIVE_TYPE_NONE;
+    if (pimpl->sidecar_only) {
+        LOG_INF("%s: sidecar-only draft selected (%s); skipping host draft model/context load\n",
+                __func__, common_speculative_type_to_str(pimpl->sidecar_type).c_str());
+    } else if (!sidecar_error.empty()) {
+        LOG_WRN("%s: sidecar probe unavailable; retaining native draft loading: %s\n",
+                __func__, sidecar_error.c_str());
+    }
+
     std::string model_path;
-    if (has_draft) {
+    if (has_draft && !pimpl->sidecar_only) {
         model_path = params_dft.model.path;
         LOG_INF("%s: loading draft model '%s'\n", __func__, model_path.c_str());
 
@@ -2674,7 +3633,7 @@ common_speculative_init_result::common_speculative_init_result(
         }
 
         pimpl->context.reset(ctx_dft);
-    } else if (spec_mtp) {
+    } else if (spec_mtp && !pimpl->sidecar_only) {
         model_path = params.model.path;
 
         LOG_INF("%s: creating MTP draft context against the target model '%s'\n", __func__, model_path.c_str());
@@ -2697,6 +3656,14 @@ llama_model * common_speculative_init_result::model() {
 
 llama_context * common_speculative_init_result::context() {
     return pimpl->context.get();
+}
+
+bool common_speculative_init_result::sidecar_only() const {
+    return pimpl->sidecar_only;
+}
+
+common_speculative_type common_speculative_init_result::sidecar_type() const {
+    return pimpl->sidecar_type;
 }
 
 common_speculative_init_result_ptr common_speculative_init_from_params(common_params & params, llama_model * model_tgt, llama_context * ctx_tgt) {
@@ -2739,11 +3706,16 @@ common_speculative * common_speculative_init(common_params_speculative & params,
         add_config_if_enabled(COMMON_SPECULATIVE_TYPE_NGRAM_MOD);
         add_config_if_enabled(COMMON_SPECULATIVE_TYPE_NGRAM_CACHE);
 
-        add_config_if_enabled(COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE);
-        add_config_if_enabled(COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3, params.draft.ctx_dft != nullptr);
-        add_config_if_enabled(COMMON_SPECULATIVE_TYPE_DRAFT_MTP,    params.draft.ctx_dft != nullptr);
-        add_config_if_enabled(COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH, params.draft.ctx_dft != nullptr);
-        add_config_if_enabled(COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK, params.draft.ctx_dft != nullptr);
+        const bool has_draft_ctx = params.draft.ctx_dft != nullptr;
+        const bool mtp_sidecar = params.draft.sidecar_only &&
+                params.draft.sidecar_type == COMMON_SPECULATIVE_TYPE_DRAFT_MTP;
+        const bool dflash_sidecar = params.draft.sidecar_only &&
+                params.draft.sidecar_type == COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH;
+        add_config_if_enabled(COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE, has_draft_ctx);
+        add_config_if_enabled(COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3, has_draft_ctx);
+        add_config_if_enabled(COMMON_SPECULATIVE_TYPE_DRAFT_MTP, has_draft_ctx || mtp_sidecar);
+        add_config_if_enabled(COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH, has_draft_ctx || dflash_sidecar);
+        add_config_if_enabled(COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK, has_draft_ctx);
     }
 
     std::vector<std::unique_ptr<common_speculative_impl>> impls = {};
@@ -2872,6 +3844,7 @@ bool common_speculative_process(common_speculative * spec, const llama_batch & b
     }
 
     for (auto & impl : spec->impls) {
+        impl->prepare_process(spec->dparams);
         result = result && impl->process(batch);
     }
 
@@ -2999,29 +3972,208 @@ void common_speculative_accept(common_speculative * spec, llama_seq_id seq_id, u
     }
 }
 
-// TODO: support the case of more than one speculative implementations having a state
+// Speculative checkpoints can contain state for more than one implementation
+// (for example, an MTP sidecar plus an n-gram fallback). Keep the envelope
+// compact and implementation-keyed so a restore never feeds one format to a
+// different implementation. Sidecar payloads are only a fixed-size cursor.
+static constexpr uint32_t COMMON_SPECULATIVE_STATE_MAGIC   = UINT32_C(0x53504353); // "SPCS"
+static constexpr uint32_t COMMON_SPECULATIVE_STATE_VERSION = 1;
+
+static void common_speculative_state_put_u32(std::vector<uint8_t> & data, uint32_t value) {
+    data.push_back((uint8_t) (value & 0xffU));
+    data.push_back((uint8_t) ((value >> 8) & 0xffU));
+    data.push_back((uint8_t) ((value >> 16) & 0xffU));
+    data.push_back((uint8_t) ((value >> 24) & 0xffU));
+}
+
+static bool common_speculative_state_get_u32(const std::vector<uint8_t> & data,
+        size_t & offset, uint32_t & value) {
+    if (offset > data.size() || data.size() - offset < sizeof(uint32_t)) {
+        return false;
+    }
+    value = (uint32_t) data[offset] |
+            ((uint32_t) data[offset + 1] << 8) |
+            ((uint32_t) data[offset + 2] << 16) |
+            ((uint32_t) data[offset + 3] << 24);
+    offset += sizeof(uint32_t);
+    return true;
+}
+
 bool common_speculative_get_state(common_speculative * spec, llama_seq_id seq_id, std::vector<uint8_t> & data) {
+    data.clear();
     if (spec == nullptr) {
         return false;
     }
 
+    struct state_entry {
+        uint32_t type;
+        std::vector<uint8_t> data;
+    };
+    std::vector<state_entry> entries;
+
     for (auto & impl : spec->impls) {
-        if (impl->get_state(seq_id, data)) {
-            return true;
+        std::vector<uint8_t> impl_data;
+        if (!impl->get_state(seq_id, impl_data)) {
+            continue;
         }
+        if (impl_data.size() > UINT32_MAX) {
+            SPC_ERR("speculative state for %s is too large to checkpoint\n",
+                    common_speculative_type_to_str(impl->type).c_str());
+            data.clear();
+            return false;
+        }
+        entries.push_back({ (uint32_t) impl->type, std::move(impl_data) });
     }
 
-    return false;
+    if (entries.empty() || entries.size() > UINT32_MAX) {
+        return false;
+    }
+
+    size_t total = 3 * sizeof(uint32_t);
+    for (const auto & entry : entries) {
+        if (entry.data.size() > UINT32_MAX || total > SIZE_MAX - 2 * sizeof(uint32_t) - entry.data.size()) {
+            data.clear();
+            return false;
+        }
+        total += 2 * sizeof(uint32_t) + entry.data.size();
+    }
+    data.reserve(total);
+    common_speculative_state_put_u32(data, COMMON_SPECULATIVE_STATE_MAGIC);
+    common_speculative_state_put_u32(data, COMMON_SPECULATIVE_STATE_VERSION);
+    common_speculative_state_put_u32(data, (uint32_t) entries.size());
+    for (const auto & entry : entries) {
+        common_speculative_state_put_u32(data, entry.type);
+        common_speculative_state_put_u32(data, (uint32_t) entry.data.size());
+        data.insert(data.end(), entry.data.begin(), entry.data.end());
+    }
+    return true;
 }
 
-void common_speculative_set_state(common_speculative * spec, llama_seq_id seq_id, const std::vector<uint8_t> & data) {
+bool common_speculative_set_state(common_speculative * spec, llama_seq_id seq_id, const std::vector<uint8_t> & data) {
+    if (spec == nullptr) {
+        return true;
+    }
+
+    // Preserve compatibility with the pre-envelope EAGLE3 state that may be
+    // supplied by an embedding application. New checkpoints always use the
+    // keyed format above; a sidecar rejects legacy bytes rather than guessing.
+    size_t offset = 0;
+    uint32_t magic = 0;
+    uint32_t version = 0;
+    uint32_t n_entries = 0;
+    if (!common_speculative_state_get_u32(data, offset, magic) ||
+            magic != COMMON_SPECULATIVE_STATE_MAGIC) {
+        bool result = true;
+        for (auto & impl : spec->impls) {
+            result = impl->set_state(seq_id, data) && result;
+        }
+        return result;
+    }
+
+    if (!common_speculative_state_get_u32(data, offset, version) ||
+            !common_speculative_state_get_u32(data, offset, n_entries) ||
+            version != COMMON_SPECULATIVE_STATE_VERSION ||
+            offset > data.size() ||
+            n_entries > (data.size() - offset) / (2 * sizeof(uint32_t))) {
+        for (auto & impl : spec->impls) {
+            if (impl->state_required(seq_id)) {
+                impl->set_state(seq_id, {});
+            }
+        }
+        return false;
+    }
+
+    struct state_entry_view {
+        uint32_t type;
+        const uint8_t * data;
+        size_t size;
+    };
+    std::vector<state_entry_view> entries;
+    entries.reserve(n_entries);
+    for (uint32_t i = 0; i < n_entries; ++i) {
+        uint32_t type = 0;
+        uint32_t size = 0;
+        if (!common_speculative_state_get_u32(data, offset, type) ||
+                !common_speculative_state_get_u32(data, offset, size) ||
+                offset > data.size() || data.size() - offset < size) {
+            for (auto & impl : spec->impls) {
+                if (impl->state_required(seq_id)) {
+                    impl->set_state(seq_id, {});
+                }
+            }
+            return false;
+        }
+        entries.push_back({ type, data.data() + offset, size });
+        offset += size;
+    }
+    if (offset != data.size()) {
+        for (auto & impl : spec->impls) {
+            if (impl->state_required(seq_id)) {
+                impl->set_state(seq_id, {});
+            }
+        }
+        return false;
+    }
+
+    bool result = true;
+    for (auto & impl : spec->impls) {
+        const auto it = std::find_if(entries.begin(), entries.end(), [&](const state_entry_view & entry) {
+            return entry.type == (uint32_t) impl->type;
+        });
+        if (it == entries.end()) {
+            if (impl->state_required(seq_id)) {
+                result = impl->set_state(seq_id, {}) && result;
+            }
+            continue;
+        }
+
+        const std::vector<uint8_t> impl_data(it->data, it->data + it->size);
+        result = impl->set_state(seq_id, impl_data) && result;
+    }
+    return result;
+}
+
+void common_speculative_reset_state(common_speculative * spec, llama_seq_id seq_id) {
     if (spec == nullptr) {
         return;
     }
-
     for (auto & impl : spec->impls) {
-        impl->set_state(seq_id, data);
+        impl->reset_state(seq_id);
     }
+}
+
+bool common_speculative_truncate_state(common_speculative * spec, llama_seq_id seq_id, llama_pos pos_max) {
+    if (spec == nullptr) {
+        return true;
+    }
+    bool result = true;
+    for (auto & impl : spec->impls) {
+        result = impl->truncate_state(seq_id, pos_max) && result;
+    }
+    return result;
+}
+
+bool common_speculative_commit_state(common_speculative * spec, llama_seq_id seq_id, llama_pos pos_max) {
+    if (spec == nullptr) {
+        return true;
+    }
+    bool result = true;
+    for (auto & impl : spec->impls) {
+        result = impl->commit_state(seq_id, pos_max) && result;
+    }
+    return result;
+}
+
+bool common_speculative_rebase_state(common_speculative * spec, llama_seq_id seq_id,
+        llama_pos pos_min, llama_pos pos_max, llama_pos delta) {
+    if (spec == nullptr) {
+        return true;
+    }
+    bool result = true;
+    for (auto & impl : spec->impls) {
+        result = impl->rebase_state(seq_id, pos_min, pos_max, delta) && result;
+    }
+    return result;
 }
 
 void common_speculative_print_stats(const common_speculative * spec) {

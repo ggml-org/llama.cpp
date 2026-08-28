@@ -514,11 +514,28 @@ static struct ggml_tensor * ggml_backend_meta_simple_tensor_ensure(
         return tensor;
     }
 
+    auto * buf_ctx = (ggml_backend_meta_buffer_context *) tensor->buffer->context;
+    ggml_backend_buffer_t expected_buf = buf_ctx->bufs[index].get();
     ggml_tensor * ret = ggml_backend_meta_buffer_simple_tensor(tensor, index);
     if (ret != nullptr) {
         return ret;
     }
     auto it = stc.simple_tensors.find(tensor);
+    if (buf_ctx->bufs.size() == 1 && it != stc.simple_tensors.end() && index < it->second.size()) {
+        // Scratch shard descriptors outlive individual scheduler graph
+        // allocations. Rebuild them when the backing Meta buffer (or its
+        // base address) changes; otherwise a later readback can use a freed
+        // device pointer while retaining the new tensor's buffer type.
+        const size_t tensor_offset = size_t(tensor->data) -
+            size_t(ggml_backend_buffer_get_base(tensor->buffer));
+        const void * expected_data = (char *) ggml_backend_buffer_get_base(expected_buf) + tensor_offset;
+        ggml_tensor * cached = it->second[index];
+        if (cached->buffer != expected_buf || cached->data != expected_data) {
+            stc.simple_tensors.erase(it);
+            stc.identities.erase(tensor);
+            it = stc.simple_tensors.end();
+        }
+    }
     if (it != stc.simple_tensors.end() && stc.validate_identity) {
         auto id_it = stc.identities.find(tensor);
         if (id_it == stc.identities.end() ||
@@ -2252,6 +2269,24 @@ struct ggml_backend_meta_context {
             bufs.resize(n_reduce_steps);
         }
     };
+
+    // One previous graph plan is enough for scheduler graphs split by a CPU
+    // island: calls alternate A/B/A/B. Tensor shards live in the existing two
+    // stc_compute arenas; scratch AllReduce buffers remain shared and grow-only.
+    struct graph_plan {
+        uint64_t uid           = 0;
+        size_t   n_subgraphs   = 0;
+        int      max_nnodes    = 0;
+        size_t   max_subgraphs = 0;
+        int      stc_index     = 0;
+
+        ggml_context_ptr ctx;
+        std::vector<std::vector<cgraph_config>> cgraphs;
+        std::vector<std::vector<ggml_tensor *>> nodes;
+        std::vector<ggml_cgraph *> cgraphs_aux;
+        std::vector<ggml_tensor *> nodes_aux;
+    };
+
     std::string                 name;
     std::vector<backend_config> backend_configs;
     ggml_context_ptr            ctx;
@@ -2276,7 +2311,63 @@ struct ggml_backend_meta_context {
     ggml_backend_comm_allreduce_fused_prefix_t comm_allreduce_fused_prefix = nullptr;
     bool                                     logged_generic_allreduce = false;
 
+    // Two-plan reuse is exact by UID and only allocates a second plan when a
+    // scheduler graph actually alternates (for example around a CPU island).
+    // Keep an explicit opt-out while retaining the old single-plan fallback.
+    bool       graph_cache_two_enabled = true;
+    graph_plan previous_plan;
+
+    graph_plan take_current_plan(int replacement_stc_index) {
+        graph_plan out;
+        out.uid           = uid;
+        out.n_subgraphs   = n_subgraphs;
+        out.max_nnodes    = max_nnodes;
+        out.max_subgraphs = max_subgraphs;
+        out.stc_index     = stc_index;
+        out.ctx           = std::move(ctx);
+        out.cgraphs_aux   = std::move(cgraphs_aux);
+        out.nodes_aux     = std::move(nodes_aux);
+        out.cgraphs.resize(backend_configs.size());
+        out.nodes.resize(backend_configs.size());
+        for (size_t i = 0; i < backend_configs.size(); ++i) {
+            out.cgraphs[i] = std::move(backend_configs[i].cgraphs);
+            out.nodes[i]   = std::move(backend_configs[i].nodes);
+        }
+
+        uid           = 0;
+        n_subgraphs   = 0;
+        max_nnodes    = 0;
+        max_subgraphs = 0;
+        stc_index     = replacement_stc_index;
+        return out;
+    }
+
+    void swap_current_plan(graph_plan & other) {
+        std::swap(uid,           other.uid);
+        std::swap(n_subgraphs,   other.n_subgraphs);
+        std::swap(max_nnodes,    other.max_nnodes);
+        std::swap(max_subgraphs, other.max_subgraphs);
+        std::swap(stc_index,     other.stc_index);
+        ctx.swap(other.ctx);
+        cgraphs_aux.swap(other.cgraphs_aux);
+        nodes_aux.swap(other.nodes_aux);
+
+        if (other.cgraphs.empty()) {
+            other.cgraphs.resize(backend_configs.size());
+            other.nodes.resize(backend_configs.size());
+        }
+        GGML_ASSERT(other.cgraphs.size() == backend_configs.size());
+        GGML_ASSERT(other.nodes.size() == backend_configs.size());
+        for (size_t i = 0; i < backend_configs.size(); ++i) {
+            backend_configs[i].cgraphs.swap(other.cgraphs[i]);
+            backend_configs[i].nodes.swap(other.nodes[i]);
+        }
+    }
+
     ggml_backend_meta_context(ggml_backend_dev_t meta_dev, const char * params) {
+        if (const char * value = std::getenv("GGML_META_GRAPH_CACHE_2")) {
+            graph_cache_two_enabled = std::atoi(value) != 0;
+        }
         const size_t n_devs = ggml_backend_meta_dev_n_devs(meta_dev);
         {
             const ggml_init_params stc_params = {
@@ -2528,8 +2619,24 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
     const size_t n_backends = ggml_backend_meta_n_backends(backend);
     ggml_backend_meta_context * backend_ctx = (ggml_backend_meta_context *) backend->context;
 
+    // If either of the two most recent cgraphs has a matching UID, reuse its
+    // complete per-rank plan. This matters when a CPU island makes the scheduler
+    // alternate two Meta fragments every decode.
+    if (backend_ctx->graph_cache_two_enabled && cgraph->uid != 0 &&
+            backend_ctx->previous_plan.uid == cgraph->uid) {
+        backend_ctx->swap_current_plan(backend_ctx->previous_plan);
+    }
+
     // If the previous cgraph had a defined UID it can be used to skip rebuilding the subgraphs per simple backend.
     const bool needs_rebuild = (cgraph->uid == 0) || (cgraph->uid != backend_ctx->uid);
+    bool stc_index_preselected = false;
+    if (backend_ctx->graph_cache_two_enabled && needs_rebuild && backend_ctx->uid != 0) {
+        const int replacement_stc_index = backend_ctx->previous_plan.uid != 0
+            ? backend_ctx->previous_plan.stc_index
+            : (backend_ctx->stc_index ^ 1);
+        backend_ctx->previous_plan = backend_ctx->take_current_plan(replacement_stc_index);
+        stc_index_preselected = true;
+    }
 
     bool max_nnodes_raised = false;
     if (cgraph->n_nodes > backend_ctx->max_nnodes) {
@@ -2544,9 +2651,13 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
     }
 
     if (needs_rebuild) {
-        // flip + reset this instance's shard container; registrations for the
-        // new subgraphs are created below
-        backend_ctx->stc_index ^= 1;
+        // Flip on an ordinary miss. A two-plan-cache miss already selected the
+        // evicted plan's arena, which is the only arena safe to reset.
+        if (!stc_index_preselected) {
+            backend_ctx->stc_index ^= 1;
+        }
+        // reset this plan's shard container; registrations for the new
+        // subgraphs are created below
         {
             ggml_backend_meta_simple_tensor_container & stc = backend_ctx->stc_compute[backend_ctx->stc_index];
             for (ggml_context_ptr & ctx : stc.ctxs) {
@@ -2857,7 +2968,10 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
                 continue;
             }
             ggml_tensor * node_zero = get_node_aux(node);
-            node_zero->op = GGML_OP_SCALE; // FIXME 0.0f * NaN == NaN
+            // A disabled zero-sized shard can alias a buffer that previously
+            // held Inf/NaN. Multiplication by zero preserves NaNs; FILL writes
+            // an actual additive identity before the collective.
+            node_zero->op = GGML_OP_FILL;
             node_zero->src[0] = node;
             ggml_set_op_params_f32(node_zero, 0, 0.0f);
             node_zero->data = node->data;
@@ -2960,7 +3074,6 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
 
         return GGML_STATUS_SUCCESS;
     };
-
 
     size_t next_subgraph_skip = 0;
     for (size_t i = 0; i < backend_ctx->n_subgraphs; i++) {
