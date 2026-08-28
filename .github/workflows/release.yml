@@ -415,8 +415,8 @@ jobs:
 
     env:
       # Sync versions in build-openvino.yml, build-self-hosted.yml, release.yml, build-cache.yml, .devops/openvino.Dockerfile
-      OPENVINO_VERSION_MAJOR: "2026.3"
-      OPENVINO_VERSION_FULL: "2026.3.0.22451.bd8d6542e3c"
+      OPENVINO_VERSION_MAJOR: "2026.3.1"
+      OPENVINO_VERSION_FULL: "2026.3.1.22476.56d9685302d"
 
     steps:
       - name: Set OpenVINO version output
@@ -529,8 +529,8 @@ jobs:
 
     env:
       # Sync versions in build-openvino.yml, build-self-hosted.yml, release.yml, build-cache.yml, .devops/openvino.Dockerfile
-      OPENVINO_VERSION_MAJOR: "2026.3"
-      OPENVINO_VERSION_FULL: "2026.3.0.22451.bd8d6542e3c"
+      OPENVINO_VERSION_MAJOR: "2026.3.1"
+      OPENVINO_VERSION_FULL: "2026.3.1.22476.56d9685302d"
 
     steps:
       - name: Set OpenVINO version output

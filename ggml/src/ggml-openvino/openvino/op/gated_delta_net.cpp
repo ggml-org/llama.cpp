@@ -7,12 +7,15 @@
 #include <cmath>
 #include <cstdint>
 #include <memory>
+#include <numeric>
 #include <openvino/op/add.hpp>
 #include <openvino/op/broadcast.hpp>
 #include <openvino/op/concat.hpp>
 #include <openvino/op/constant.hpp>
+#include <openvino/op/convert.hpp>
 #include <openvino/op/exp.hpp>
 #include <openvino/op/gather.hpp>
+#include <openvino/op/less.hpp>
 #include <openvino/op/loop.hpp>
 #include <openvino/op/matmul.hpp>
 #include <openvino/op/multiply.hpp>
@@ -79,6 +82,28 @@ OutputVector translate_gated_delta_net(const NodeContext & context) {
 
     g = std::make_shared<ov::op::v0::Squeeze>(g, ov::op::v0::Constant::create(ov::element::i64, {1}, {3}));
     beta = std::make_shared<ov::op::v0::Squeeze>(beta, ov::op::v0::Constant::create(ov::element::i64, {1}, {3}));
+
+    if (context.has_input("chunk_valid_len")) {
+        // The last prefill chunk is padded with fabricated tokens. The recurrence is
+        //   S_t = S_{t-1} * exp(g_t) + k_t (x) ((v_t - S_{t-1}^T k_t) * beta_t)
+        // so forcing g = 0 and beta = 0 makes a padded step an exact identity and keeps the final
+        // state equal to the state after the last real token. Attention output at those positions
+        // is garbage but never read.
+        const auto & g_ps = g.get_partial_shape();
+        FRONT_END_OP_CONVERSION_CHECK(g_ps.rank().is_static() && g_ps.rank().get_length() == 3 && g_ps[1].is_static(),
+                                      "GATED_DELTA_NET pad masking requires a static token dimension");
+        const int64_t n_tokens = g_ps[1].get_length();
+        std::vector<int64_t> positions(n_tokens);
+        std::iota(positions.begin(), positions.end(), 0);
+        auto valid = std::make_shared<ov::op::v1::Less>(
+            ov::op::v0::Constant::create(ov::element::i64, {(size_t) n_tokens}, positions),
+            context.get_input("chunk_valid_len"));
+        auto mask = std::make_shared<ov::op::v0::Unsqueeze>(
+            std::make_shared<ov::op::v0::Convert>(valid, g.get_element_type()),
+            ov::op::v0::Constant::create(ov::element::i64, {2}, std::vector<int64_t>{0, 2}));
+        g = std::make_shared<ov::op::v1::Multiply>(g, mask);
+        beta = std::make_shared<ov::op::v1::Multiply>(beta, mask);
+    }
 
     // std::cout << "GatedDeltaNet input shapes: q=" << q.get_partial_shape() << ", k=" << k.get_partial_shape()
     //           << ", v=" << v.get_partial_shape() << ", g=" << g.get_partial_shape()

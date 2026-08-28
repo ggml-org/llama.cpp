@@ -5,6 +5,7 @@
 #include "ggml-openvino/openvino/node_context.h"
 #include "ggml-openvino/openvino/utils.h"
 #include "input_model.h"
+#include "pass/fuse_to_conv.h"
 #include "pass/mark_decompression_convert_constant_folding.h"
 #include "pass/mark_dequantization_subgraph.h"
 #include "pass/squeeze_matmul.h"
@@ -109,7 +110,8 @@ ov::pass::MakeStateful::ParamResPairs get_kv_param_res_pairs(
 void add_sliced_mask_stateful(TensorMap & tensor_map) {
     auto create_sliced_mask = [&](const std::string & mask_name, const std::string & sliced_name) {
         if ((tensor_map.find(mask_name) != tensor_map.end()) &&
-            (tensor_map.find("token_len_per_seq") != tensor_map.end())) {
+            (tensor_map.find("token_len_per_seq") != tensor_map.end()) &&
+            (tensor_map.find("inp_pos") != tensor_map.end())) {
             auto token_len_per_seq = tensor_map.at("token_len_per_seq").get_node_shared_ptr();
             auto mask = tensor_map.at(mask_name).get_node_shared_ptr();
             std::shared_ptr<ov::Node> mask_sliced = mask;
@@ -137,6 +139,7 @@ void add_sliced_mask_stateful(TensorMap & tensor_map) {
     };
 
     create_sliced_mask("self_kq_mask", "KQ_mask_sliced");
+    create_sliced_mask("KQ_mask", "KQ_mask_sliced");
     create_sliced_mask("self_kq_mask_swa", "KQ_mask_swa_sliced");
 }
 
@@ -395,6 +398,7 @@ std::shared_ptr<Model> TranslateSession::apply_transformations(std::shared_ptr<M
         // is_decompression_multiply() recognizes GatherMatmul as a valid consumer.
         manager.register_pass<ov::pass::MarkDequantization>(
             std::vector<ov::element::Type>{ov::element::u8, ov::element::i8, ov::element::u4, ov::element::i4});
+        manager.register_pass<pass::FuseToConv>();
 
         if (ggml_model_decoder->is_stateful()) {
             const auto kv_param_res_names = ggml_model_decoder->get_kv_param_res_names();

@@ -17,6 +17,13 @@ namespace op {
 OutputVector translate_view(const NodeContext & context) {
     num_inputs_check(context, 1, 1);
 
+    if (context.get_op_case() == 1) {
+        // Static-mode identity pass-through for VIEWs over a GATED_DELTA_NET combined output or
+        // the conv_input CONCAT; the consuming op (CPY/RMS_NORM) does its own runtime-correct
+        // slicing on the full tensor (see ggml-decoder.cpp compute_op_case, GGML_OP_VIEW).
+        return {context.get_input(0)};
+    }
+
     if (!context.is_static()) {
         // On the stateless/non-static path VIEW is normally a no-op (consumers re-slice).
         // EXCEPTION: the MoE expert aggregation slices each expert plane out of
