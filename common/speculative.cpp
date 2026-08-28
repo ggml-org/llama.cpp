@@ -2142,8 +2142,12 @@ struct common_speculative_impl_ngram_cache : public common_speculative_impl {
         }
     }
 
-    void begin(llama_seq_id /*seq_id*/, const llama_tokens & /*prompt*/) override {
-        // noop
+    void begin(llama_seq_id seq_id, const llama_tokens & /*prompt*/) override {
+        auto & sinfo = sinfos[seq_id];
+
+        // per-request state - do not carry it over to the next request on this sequence
+        sinfo.ngram_cache_context.clear();
+        sinfo.cache_size = 0;
     }
 
     void draft_one(
