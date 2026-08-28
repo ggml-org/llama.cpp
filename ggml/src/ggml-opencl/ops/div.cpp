@@ -18,13 +18,14 @@ void ggml_cl_load_kernels_div(ggml_backend_opencl_context * backend_ctx) {
         std::string div_compile_opts = std::string("-cl-std=") + opencl_c_std +
                                " -cl-mad-enable -cl-finite-math-only ";
 
-        backend_ctx->program_div =
+        cl_program prog =
             build_program_from_source(backend_ctx, kernel_src.c_str(), div_compile_opts);
 
-        CL_CHECK((backend_ctx->kernel_div         = clCreateKernel(backend_ctx->program_div, "kernel_div", &err), err));
-        CL_CHECK((backend_ctx->kernel_div_row     = clCreateKernel(backend_ctx->program_div, "kernel_div_row", &err), err));
-        CL_CHECK((backend_ctx->kernel_div_f16     = clCreateKernel(backend_ctx->program_div, "kernel_div_f16", &err), err));
-        CL_CHECK((backend_ctx->kernel_div_row_f16 = clCreateKernel(backend_ctx->program_div, "kernel_div_row_f16", &err), err));
+        CL_CHECK((backend_ctx->kernel_div         = clCreateKernel(prog, "kernel_div", &err), err));
+        CL_CHECK((backend_ctx->kernel_div_row     = clCreateKernel(prog, "kernel_div_row", &err), err));
+        CL_CHECK((backend_ctx->kernel_div_f16     = clCreateKernel(prog, "kernel_div_f16", &err), err));
+        CL_CHECK((backend_ctx->kernel_div_row_f16 = clCreateKernel(prog, "kernel_div_row_f16", &err), err));
+        CL_CHECK(clReleaseProgram(prog));
         GGML_LOG_CONT(".");
     }
 }

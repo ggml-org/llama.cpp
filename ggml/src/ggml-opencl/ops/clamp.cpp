@@ -13,11 +13,12 @@ void ggml_cl_load_kernels_clamp(ggml_backend_opencl_context * backend_ctx) {
 #else
         const std::string kernel_src = read_file("clamp.cl");
 #endif
-        backend_ctx->program_clamp =
+        cl_program prog =
             build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
 
-        CL_CHECK((backend_ctx->kernel_clamp = clCreateKernel(backend_ctx->program_clamp, "kernel_clamp", &err), err));
-        CL_CHECK((backend_ctx->kernel_clamp_nc = clCreateKernel(backend_ctx->program_clamp, "kernel_clamp_nc", &err), err));
+        CL_CHECK((backend_ctx->kernel_clamp = clCreateKernel(prog, "kernel_clamp", &err), err));
+        CL_CHECK((backend_ctx->kernel_clamp_nc = clCreateKernel(prog, "kernel_clamp_nc", &err), err));
+        CL_CHECK(clReleaseProgram(prog));
         GGML_LOG_CONT(".");
     }
 }

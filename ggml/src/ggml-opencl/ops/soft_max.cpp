@@ -13,10 +13,11 @@ void ggml_cl_load_kernels_soft_max(ggml_backend_opencl_context * backend_ctx) {
 #else
         const std::string kernel_src = read_file("softmax_f32.cl");
 #endif
-        backend_ctx->program_softmax_f32 =
+        cl_program prog =
             build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
 
-        CL_CHECK((backend_ctx->kernel_soft_max = clCreateKernel(backend_ctx->program_softmax_f32, "kernel_soft_max", &err), err));
+        CL_CHECK((backend_ctx->kernel_soft_max = clCreateKernel(prog, "kernel_soft_max", &err), err));
+        CL_CHECK(clReleaseProgram(prog));
         GGML_LOG_CONT(".");
     }
 
@@ -29,10 +30,11 @@ void ggml_cl_load_kernels_soft_max(ggml_backend_opencl_context * backend_ctx) {
 #else
         const std::string kernel_src = read_file("softmax_f16.cl");
 #endif
-        backend_ctx->program_softmax_f16 =
+        cl_program prog =
             build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
 
-        CL_CHECK((backend_ctx->kernel_soft_max_f16 = clCreateKernel(backend_ctx->program_softmax_f16, "kernel_soft_max_f16", &err), err));
+        CL_CHECK((backend_ctx->kernel_soft_max_f16 = clCreateKernel(prog, "kernel_soft_max_f16", &err), err));
+        CL_CHECK(clReleaseProgram(prog));
         GGML_LOG_CONT(".");
     }
 
@@ -45,10 +47,11 @@ void ggml_cl_load_kernels_soft_max(ggml_backend_opencl_context * backend_ctx) {
 #else
         const std::string kernel_src = read_file("softmax_4_f32.cl");
 #endif
-        backend_ctx->program_softmax_4_f32 =
+        cl_program prog =
             build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
 
-        CL_CHECK((backend_ctx->kernel_soft_max_4 = clCreateKernel(backend_ctx->program_softmax_4_f32, "kernel_soft_max_4", &err), err));
+        CL_CHECK((backend_ctx->kernel_soft_max_4 = clCreateKernel(prog, "kernel_soft_max_4", &err), err));
+        CL_CHECK(clReleaseProgram(prog));
         GGML_LOG_CONT(".");
     }
 
@@ -61,10 +64,11 @@ void ggml_cl_load_kernels_soft_max(ggml_backend_opencl_context * backend_ctx) {
 #else
         const std::string kernel_src = read_file("softmax_4_f16.cl");
 #endif
-        backend_ctx->program_softmax_4_f16 =
+        cl_program prog =
             build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
 
-        CL_CHECK((backend_ctx->kernel_soft_max_4_f16 = clCreateKernel(backend_ctx->program_softmax_4_f16, "kernel_soft_max_4_f16", &err), err));
+        CL_CHECK((backend_ctx->kernel_soft_max_4_f16 = clCreateKernel(prog, "kernel_soft_max_4_f16", &err), err));
+        CL_CHECK(clReleaseProgram(prog));
         GGML_LOG_CONT(".");
     }
 }

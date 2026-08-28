@@ -13,22 +13,23 @@ void ggml_cl_load_kernels_glu(ggml_backend_opencl_context * backend_ctx) {
 #else
         const std::string kernel_src = read_file("glu.cl");
 #endif
-        backend_ctx->program_glu =
+        cl_program prog =
             build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
 
-        CL_CHECK((backend_ctx->kernel_geglu           = clCreateKernel(backend_ctx->program_glu, "kernel_geglu", &err), err));
-        CL_CHECK((backend_ctx->kernel_reglu           = clCreateKernel(backend_ctx->program_glu, "kernel_reglu", &err), err));
-        CL_CHECK((backend_ctx->kernel_swiglu          = clCreateKernel(backend_ctx->program_glu, "kernel_swiglu", &err), err));
-        CL_CHECK((backend_ctx->kernel_swiglu_oai      = clCreateKernel(backend_ctx->program_glu, "kernel_swiglu_oai", &err), err));
-        CL_CHECK((backend_ctx->kernel_swiglu_clamp    = clCreateKernel(backend_ctx->program_glu, "kernel_swiglu_clamp", &err), err));
-        CL_CHECK((backend_ctx->kernel_geglu_erf       = clCreateKernel(backend_ctx->program_glu, "kernel_geglu_erf", &err), err));
-        CL_CHECK((backend_ctx->kernel_geglu_quick     = clCreateKernel(backend_ctx->program_glu, "kernel_geglu_quick", &err), err));
-        CL_CHECK((backend_ctx->kernel_geglu_f16       = clCreateKernel(backend_ctx->program_glu, "kernel_geglu_f16", &err), err));
-        CL_CHECK((backend_ctx->kernel_reglu_f16       = clCreateKernel(backend_ctx->program_glu, "kernel_reglu_f16", &err), err));
-        CL_CHECK((backend_ctx->kernel_swiglu_f16      = clCreateKernel(backend_ctx->program_glu, "kernel_swiglu_f16", &err), err));
-        CL_CHECK((backend_ctx->kernel_swiglu_clamp_f16 = clCreateKernel(backend_ctx->program_glu, "kernel_swiglu_clamp_f16", &err), err));
-        CL_CHECK((backend_ctx->kernel_geglu_erf_f16   = clCreateKernel(backend_ctx->program_glu, "kernel_geglu_erf_f16", &err), err));
-        CL_CHECK((backend_ctx->kernel_geglu_quick_f16 = clCreateKernel(backend_ctx->program_glu, "kernel_geglu_quick_f16", &err), err));
+        CL_CHECK((backend_ctx->kernel_geglu           = clCreateKernel(prog, "kernel_geglu", &err), err));
+        CL_CHECK((backend_ctx->kernel_reglu           = clCreateKernel(prog, "kernel_reglu", &err), err));
+        CL_CHECK((backend_ctx->kernel_swiglu          = clCreateKernel(prog, "kernel_swiglu", &err), err));
+        CL_CHECK((backend_ctx->kernel_swiglu_oai      = clCreateKernel(prog, "kernel_swiglu_oai", &err), err));
+        CL_CHECK((backend_ctx->kernel_swiglu_clamp    = clCreateKernel(prog, "kernel_swiglu_clamp", &err), err));
+        CL_CHECK((backend_ctx->kernel_geglu_erf       = clCreateKernel(prog, "kernel_geglu_erf", &err), err));
+        CL_CHECK((backend_ctx->kernel_geglu_quick     = clCreateKernel(prog, "kernel_geglu_quick", &err), err));
+        CL_CHECK((backend_ctx->kernel_geglu_f16       = clCreateKernel(prog, "kernel_geglu_f16", &err), err));
+        CL_CHECK((backend_ctx->kernel_reglu_f16       = clCreateKernel(prog, "kernel_reglu_f16", &err), err));
+        CL_CHECK((backend_ctx->kernel_swiglu_f16      = clCreateKernel(prog, "kernel_swiglu_f16", &err), err));
+        CL_CHECK((backend_ctx->kernel_swiglu_clamp_f16 = clCreateKernel(prog, "kernel_swiglu_clamp_f16", &err), err));
+        CL_CHECK((backend_ctx->kernel_geglu_erf_f16   = clCreateKernel(prog, "kernel_geglu_erf_f16", &err), err));
+        CL_CHECK((backend_ctx->kernel_geglu_quick_f16 = clCreateKernel(prog, "kernel_geglu_quick_f16", &err), err));
+        CL_CHECK(clReleaseProgram(prog));
         GGML_LOG_CONT(".");
     }
 }
