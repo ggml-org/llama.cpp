@@ -29,9 +29,9 @@
 	}
 </script>
 
-<div class="sticky bottom-0 mx-auto mt-4 flex w-full justify-between p-6">
+<div class="sticky bottom-0 mx-auto mt-4 flex w-full justify-between pb-4 md:pb-0">
 	<div class="flex gap-2">
-		<Button variant="outline" onclick={handleResetClick}>
+		<Button onclick={handleResetClick} variant="outline">
 			<RotateCcw class="h-3 w-3" />
 
 			Reset to default
@@ -45,14 +45,17 @@
 	<AlertDialog.Content>
 		<AlertDialog.Header>
 			<AlertDialog.Title>Reset Settings to Default</AlertDialog.Title>
+
 			<AlertDialog.Description>
 				Are you sure you want to reset all settings to their default values? This will reset all
 				parameters to the values provided by the server's /props endpoint and remove all your custom
 				configurations.
 			</AlertDialog.Description>
 		</AlertDialog.Header>
+
 		<AlertDialog.Footer>
 			<AlertDialog.Cancel>Cancel</AlertDialog.Cancel>
+
 			<AlertDialog.Action onclick={handleConfirmReset}>Reset to Default</AlertDialog.Action>
 		</AlertDialog.Footer>
 	</AlertDialog.Content>

@@ -8,6 +8,7 @@ import { getConversationModel } from '$lib/utils';
 export interface UseReasoningMenuReturn {
 	readonly modelSupportsThinking: boolean;
 	readonly thinkingEnabled: boolean;
+	readonly isReasoningActive: boolean;
 	readonly isOff: boolean;
 	readonly currentEffort: ReasoningEffort;
 	readonly levels: ReasoningEffortLevel[];
@@ -42,21 +43,28 @@ export function useReasoningMenu(): UseReasoningMenuReturn {
 	});
 	const modelSupportsThinking = $derived.by(() => {
 		void modelsStore.loadedModelIds;
-		void modelsStore.propsCacheVersion;
+		void modelsStore.props.cacheVersion;
 
 		if (serverStore.isRouterMode) {
 			const modelId = modelsStore.selectedModelName || conversationModel;
 
 			return (
-				modelsStore.checkModelSupportsThinking(modelId ?? '') || modelSupportsThinkingFromMessages
+				modelsStore.props.checkModelSupportsThinking(modelId ?? '') ||
+				modelSupportsThinkingFromMessages
 			);
 		}
 
-		return modelsStore.supportsThinking || modelSupportsThinkingFromMessages;
+		return modelsStore.props.supportsThinking || modelSupportsThinkingFromMessages;
 	});
-	const currentEffort = $derived(conversationsStore.getReasoningEffort());
+	const currentEffort = $derived(conversationsStore.preferences.getReasoningEffort());
 	const thinkingEnabled = $derived(
 		currentEffort !== ReasoningEffort.OFF && currentEffort !== ReasoningEffort.DEFAULT
+	);
+	// Thinking is effectively on (lightbulb lit) either when an explicit effort
+	// is selected, or when the effort is left at "Default" and the model
+	// supports thinking.
+	const isReasoningActive = $derived(
+		thinkingEnabled || (currentEffort === ReasoningEffort.DEFAULT && modelSupportsThinking)
 	);
 
 	return {
@@ -65,6 +73,9 @@ export function useReasoningMenu(): UseReasoningMenuReturn {
 		},
 		get isOff() {
 			return currentEffort === ReasoningEffort.OFF;
+		},
+		get isReasoningActive() {
+			return isReasoningActive;
 		},
 		isSelected(level: ReasoningEffortLevel): boolean {
 			return currentEffort === level.value;
@@ -76,7 +87,7 @@ export function useReasoningMenu(): UseReasoningMenuReturn {
 			return modelSupportsThinking;
 		},
 		select(level: ReasoningEffortLevel): void {
-			conversationsStore.setReasoningEffort(level.value as ReasoningEffort);
+			conversationsStore.preferences.setReasoningEffort(level.value as ReasoningEffort);
 		},
 		get thinkingEnabled() {
 			return thinkingEnabled;

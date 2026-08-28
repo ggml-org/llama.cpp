@@ -2714,6 +2714,7 @@ static webgpu_encoded_op ggml_webgpu_rope(webgpu_context & ctx,
     const int n_dims     = ((int32_t *) dst->op_params)[1];
     const int mode       = ((int32_t *) dst->op_params)[2];
     const int n_ctx_orig = ((int32_t *) dst->op_params)[4];
+    const int n_offs     = ((int32_t *) dst->op_params)[15];
 
     float freq_base;
     float freq_scale;
@@ -2762,7 +2763,8 @@ static webgpu_encoded_op ggml_webgpu_rope(webgpu_context & ctx,
         (uint32_t) sections[0],
         (uint32_t) sections[1],
         (uint32_t) sections[2],
-        (uint32_t) sections[3]
+        (uint32_t) sections[3],
+        (uint32_t) n_offs
     };
 
     std::vector<wgpu::BindGroupEntry> entries     = { ggml_webgpu_make_tensor_bind_group_entry(ctx, 0, src0),
@@ -4472,9 +4474,7 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
             supports_op = (op->type == GGML_TYPE_F32 && src0->type == GGML_TYPE_F32) && ggml_is_contiguous_rows(src0);
             break;
         case GGML_OP_ROPE:
-            // FIXME: support ggml_rope_set_offset
-            supports_op =
-                (op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16) && ((const int32_t *) op->op_params)[15] == 0;
+            supports_op = op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16;
             break;
         case GGML_OP_GLU:
             switch (ggml_get_glu_op(op)) {

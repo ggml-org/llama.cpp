@@ -3,8 +3,8 @@
 #include "../utils.h"
 #include "ggml-openvino/ggml-openvino-extra.h"
 
+#include <cstddef>
 #include <cstdint>
-#include <cstdlib>
 #include <memory>
 #include <openvino/op/add.hpp>
 #include <openvino/op/broadcast.hpp>
@@ -15,6 +15,7 @@
 #include <openvino/op/multiply.hpp>
 #include <openvino/op/reshape.hpp>
 #include <openvino/op/scaled_dot_product_attention.hpp>
+#include <openvino/op/slice.hpp>
 #include <openvino/op/softmax.hpp>
 #include <openvino/op/transpose.hpp>
 #include <openvino/op/unsqueeze.hpp>
@@ -24,13 +25,62 @@ namespace ov {
 namespace frontend {
 namespace ggml {
 namespace op {
+static ov::Output<ov::Node> reshape_flat_kv(const ov::Output<ov::Node> & kv_flat,
+                                            size_t view_offset_bytes,
+                                            size_t nb1_bytes,
+                                            int64_t n_head,
+                                            int64_t head_size,
+                                            const ov::Output<ov::Node> & attention_size) {
+    int64_t n_state = n_head * head_size;
+    int64_t layer_start_elem = (int64_t) (view_offset_bytes / (nb1_bytes / n_state));
+    // Dynamic slice: [layer_start_elem, layer_start_elem + n_kv * n_state)
+    auto start_c = ov::op::v0::Constant::create(ov::element::i64, {1}, {layer_start_elem});
+    auto n_state_c = ov::op::v0::Constant::create(ov::element::i64, {1}, {n_state});
+    // end = start + attention_size * n_state  (both static + dynamic)
+    auto kv_len_elems = std::make_shared<ov::op::v1::Multiply>(attention_size, n_state_c);
+    auto end_c = std::make_shared<ov::op::v1::Add>(start_c, kv_len_elems);
+    auto step_c = ov::op::v0::Constant::create(ov::element::i64, {1}, {1});
+    auto axis_c = ov::op::v0::Constant::create(ov::element::i64, {1}, {3});
+    auto sliced = std::make_shared<ov::op::v8::Slice>(kv_flat, start_c, end_c, step_c, axis_c);
+
+    // KV cache is laid out as {n_kv, n_head, head_size} in memory
+    // Reshape to {1, n_kv, n_head, head_size}, then transpose to {1, n_head, n_kv, head_size}
+    // as required by SDPA.
+    auto one_c = ov::op::v0::Constant::create(ov::element::i64, {1}, {1});
+    auto n_head_c = ov::op::v0::Constant::create(ov::element::i64, {1}, {n_head});
+    auto head_size_c = ov::op::v0::Constant::create(ov::element::i64, {1}, {head_size});
+    // reshape: {n_kv*n_state} -> {1, n_kv, n_head, head_size}
+    auto new_shape =
+        std::make_shared<ov::op::v0::Concat>(ov::OutputVector{one_c, attention_size, n_head_c, head_size_c}, 0);
+    auto reshaped = std::make_shared<ov::op::v1::Reshape>(sliced, new_shape, false);
+    // transpose: {1, n_kv, n_head, head_size} -> {1, n_head, n_kv, head_size}
+    auto perm = ov::op::v0::Constant::create(ov::element::i64, {4}, {0, 2, 1, 3});
+    auto ret = std::make_shared<ov::op::v1::Transpose>(reshaped, perm);
+    return ret;
+}
 
 OutputVector translate_flash_attn_ext(const NodeContext & context) {
-    num_inputs_check(context, 4, 4);
+    num_inputs_check(context, 3, 4);
+    const bool has_mask = context.get_input_size() == 4;
     auto q_f32 = context.get_input(0);
     auto k = context.get_input(1);
     auto v = context.get_input(2);
-    auto mask = context.get_input(3);
+    const int op_case = context.get_op_case();
+
+    if (op_case == 1 || op_case == 2) {
+        int64_t n_state_head = (int64_t) context.get_view_input_ggml_shape(1, 0)[3];
+        int64_t n_head = (int64_t) context.get_view_input_ggml_shape(1, 0)[1];
+        size_t nb1 = context.get_view_input_stride(1, 0)[2];
+        size_t offset = context.get_view_input_offset(1, 0);
+        ov::Output<ov::Node> attention_size;
+        if (op_case == 1) {
+            attention_size = context.get_input("attention_size");
+        } else {
+            attention_size = context.get_input("attention_size_static");
+        }
+        k = reshape_flat_kv(k, offset, nb1, n_head, n_state_head, attention_size);
+        v = reshape_flat_kv(v, offset, nb1, n_head, n_state_head, attention_size);
+    }
 
     float * params = reinterpret_cast<float *>(context.get_output_op_params());
     float scale = params[0];
@@ -43,16 +93,19 @@ OutputVector translate_flash_attn_ext(const NodeContext & context) {
     ov::Output<ov::Node> res;
 
     // For stateful
-    std::string mask_name = "KQ_mask_sliced";
-    if (context.get_input_names()[3].find("swa") != std::string::npos) {
-        mask_name = "KQ_mask_swa_sliced";
-    }
-    if (context.has_input(mask_name)) {
-        mask = context.get_input(mask_name);
-    }
-
-    if (mask.get_element_type() != ov::element::f16) {
-        mask = std::make_shared<ov::op::v0::Convert>(mask, ov::element::f16);
+    ov::Output<ov::Node> mask;
+    if (has_mask) {
+        mask = context.get_input(3);
+        std::string mask_name = "KQ_mask_sliced";
+        if (context.get_input_names()[3].find("swa") != std::string::npos) {
+            mask_name = "KQ_mask_swa_sliced";
+        }
+        if (context.has_input(mask_name)) {
+            mask = context.get_input(mask_name);
+        }
+        if (mask.get_element_type() != ov::element::f16) {
+            mask = std::make_shared<ov::op::v0::Convert>(mask, ov::element::f16);
+        }
     }
 
     //auto tile_kv = [&](int64_t num_heads, int64_t num_heads_kv, int64_t head_size, ov::Output<Node> kv) {
@@ -108,10 +161,14 @@ OutputVector translate_flash_attn_ext(const NodeContext & context) {
         // get [B, 1, 1, S_q, S_k], which NUMPY-broadcasts cleanly against the
         // [B, num_heads_kv, factor, S_q, S_k] scores: B==B, then 1→num_heads_kv and
         // 1→factor on the head dims.
-        auto mask_unsq1 =
-            std::make_shared<ov::op::v0::Unsqueeze>(mask, ov::op::v0::Constant::create(ov::element::i64, {1}, {2}));
-        // mask_unsq1: [B, 1, 1, S_q, S_k] (rank 5)
-        ov::Output<ov::Node> qk_masked = std::make_shared<ov::op::v1::Add>(qk_scaled, mask_unsq1);
+        ov::Output<ov::Node> qk_masked;
+        if (has_mask) {
+            auto mask_unsq1 =
+                std::make_shared<ov::op::v0::Unsqueeze>(mask, ov::op::v0::Constant::create(ov::element::i64, {1}, {2}));
+            qk_masked = std::make_shared<ov::op::v1::Add>(qk_scaled, mask_unsq1);
+        } else {
+            qk_masked = qk_scaled;
+        }
 
         auto softmax = std::make_shared<ov::op::v8::Softmax>(qk_masked, /*axis=*/-1);
 
@@ -164,9 +221,16 @@ OutputVector translate_flash_attn_ext(const NodeContext & context) {
     k = tile_kv(num_heads, num_heads_kv, head_size, k);
     v = tile_kv(num_heads, num_heads_kv, head_size, v);
 
-    auto sdpa = std::make_shared<ov::op::v13::ScaledDotProductAttention>(q, k, v, mask, scale_node, false);
-    res = std::make_shared<ov::op::v1::Transpose>(sdpa,
-                                                  ov::op::v0::Constant::create(ov::element::i64, {4}, {0, 2, 1, 3}));
+    constexpr auto causal = false;
+    if (has_mask) {
+        auto sdpa = std::make_shared<ov::op::v13::ScaledDotProductAttention>(q, k, v, mask, scale_node, causal);
+        res = std::make_shared<ov::op::v1::Transpose>(
+            sdpa, ov::op::v0::Constant::create(ov::element::i64, {4}, {0, 2, 1, 3}));
+    } else {
+        auto sdpa = std::make_shared<ov::op::v13::ScaledDotProductAttention>(q, k, v, scale_node, causal);
+        res = std::make_shared<ov::op::v1::Transpose>(
+            sdpa, ov::op::v0::Constant::create(ov::element::i64, {4}, {0, 2, 1, 3}));
+    }
     res = std::make_shared<ov::op::v0::Convert>(res, ov::element::f32);
     return rename_outputs_with_suffix({res}, context.get_name());
 }

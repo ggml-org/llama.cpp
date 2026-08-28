@@ -1,3 +1,10 @@
+/**
+ * ToolsService - Stateless server tools API layer
+ *
+ * Fetches the server's /tools listing and streams tool execution results.
+ * No reactive state; consumed by toolsStore.
+ */
+
 import { base } from '$app/paths';
 import { API_TOOLS, HEADERS } from '$lib/constants';
 import { ToolResponseField } from '$lib/enums';
@@ -7,15 +14,6 @@ import { getJsonHeaders } from '$lib/utils/api-headers';
 import { parseSseJsonStream, type SseJsonEvent } from '$lib/utils/sse';
 
 export class ToolsService {
-	/**
-	 * Fetch the list of server tools from the server.
-	 *
-	 * @returns Array of tool definitions in OpenAI-compatible format
-	 */
-	static async list(): Promise<ServerToolInfo[]> {
-		return apiFetch<ServerToolInfo[]>(API_TOOLS.LIST);
-	}
-
 	/**
 	 * Execute a server tool on the server.
 	 *
@@ -74,6 +72,15 @@ export class ToolsService {
 			method: 'POST',
 			signal
 		});
+	}
+
+	/**
+	 * Fetch the list of server tools from the server.
+	 *
+	 * @returns Array of tool definitions in OpenAI-compatible format
+	 */
+	static async list(): Promise<ServerToolInfo[]> {
+		return apiFetch<ServerToolInfo[]>(API_TOOLS.LIST);
 	}
 
 	/**
