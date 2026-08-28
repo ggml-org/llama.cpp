@@ -88,7 +88,7 @@ struct llama_model_loader {
     // use case: keep PLE / engrams embd tensors on disk, read them on demand
     struct lazy_read {
         // set by the caller before the create_tensor() calls
-        enum llama_tensor_read_lazy mode = LLAMA_TENSOR_READ_LAZY_OFF;
+        enum llama_lazy_mode mode = LLAMA_LAZY_MODE_OFF;
 
         // decide whether this tensor is read lazily
         // pass w to also record it, or nullptr to only ask

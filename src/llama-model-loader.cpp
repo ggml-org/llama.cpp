@@ -1079,13 +1079,13 @@ ggml_backend_buffer_type_t llama_model_loader::lazy_read::buft() {
 }
 
 bool llama_model_loader::lazy_read::add(const std::string & name, const ggml_tensor * t, const llama_tensor_weight * w) {
-    if (mode == LLAMA_TENSOR_READ_LAZY_OFF) {
+    if (mode == LLAMA_LAZY_MODE_OFF) {
         return false;
     }
 
     // do not lazy-read small tensors, it has significant overhead and is not worth it
     constexpr size_t auto_min_size = 4ull * 1024 * 1024 * 1024;
-    if (mode != LLAMA_TENSOR_READ_LAZY_ON && ggml_nbytes(t) <= auto_min_size) {
+    if (mode != LLAMA_LAZY_MODE_ON && ggml_nbytes(t) <= auto_min_size) {
         return false;
     }
 
