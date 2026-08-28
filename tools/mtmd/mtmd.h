@@ -458,6 +458,9 @@ struct mtmd_memory_usage {
 MTMD_API struct mtmd_memory_usage mtmd_get_memory_usage(
     const char * mmproj_fname,
     struct mtmd_context_params ctx_params);
+
+// Note: same caveat as above; reports the memory currently allocated by a loaded context
+MTMD_API std::map<ggml_backend_dev_t, size_t> mtmd_get_ctx_memory_usage(const mtmd_context * ctx);
 #endif
 
 //
