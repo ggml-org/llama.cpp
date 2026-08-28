@@ -438,14 +438,21 @@ layout(buffer_reference, std430, buffer_reference_align = 16) buffer decodeBufQ4
 // function that stores into shared memory.
 // Q4_K and Q5_K have the same encoding of scales, so everything is shared except
 // the part that fetches from the structure (which has a different block layout).
-#if defined(DATA_A_Q4_K) || defined(DATA_A_Q5_K)
+#if defined(DATA_A_Q4_K) || defined(DATA_A_Q5_K) || defined(MULMAT_QUANT)
 const uint shAscales_stride = (BM + 2);
 // 1 scale per 32 elements -> 8 scales per block, per row
+#if defined(MULMAT_QUANT)
+// In the unified shader the quant type is a runtime spec constant, so only reserve
+// the full scales tile when Q4_K/Q5_K is actually selected. Otherwise size it down
+// to 8 (1 triggers an Nvidia compiler bug) so it costs no meaningful shared memory.
+shared vec2 shAscales[(MmTypeA == GGML_TYPE_Q4_K || MmTypeA == GGML_TYPE_Q5_K) ? 8 * shAscales_stride : 8];
+#else
 shared vec2 shAscales[8 * shAscales_stride];
+#endif
 uvec4 row_v;
 #endif
 
-#if defined(DATA_A_Q4_K)
+#if defined(DATA_A_Q4_K) || defined(MULMAT_QUANT)
 layout (binding = 0) readonly buffer A_Q4_K_128 {block_q4_K_packed128 data_a_q4_k_packed128[];};
 
 void fetch_scalesQ4_K(uint ir_BM, uint pos_a, uint stride_a, uint block_k, uint tid, bool in_bounds)
@@ -456,13 +463,13 @@ void fetch_scalesQ4_K(uint ir_BM, uint pos_a, uint stride_a, uint block_k, uint 
     uint tid_row = tid / tids_per_row;
 
     uint row = ir_BM + tid_row;
-    uint block_index = pos_a + row * stride_a + (block_k / QUANT_K);
+    uint block_index = pos_a + row * stride_a + (block_k / QUANT_K_Q4_K);
     if (in_bounds || row < p.M) {
         row_v = data_a_q4_k_packed128[block_index].q4k[0];
     }
 }
 #endif
-#if defined(DATA_A_Q5_K)
+#if defined(DATA_A_Q5_K) || defined(MULMAT_QUANT)
 layout (binding = 0) readonly buffer A_Q5_K_128 {block_q5_K_packed128 data_a_q5_k_packed128[];};
 
 void fetch_scalesQ5_K(uint ir_BM, uint pos_a, uint stride_a, uint block_k, uint tid, bool in_bounds)
@@ -473,14 +480,14 @@ void fetch_scalesQ5_K(uint ir_BM, uint pos_a, uint stride_a, uint block_k, uint 
     uint tid_row = tid / tids_per_row;
 
     uint row = ir_BM + tid_row;
-    uint block_index = pos_a + row * stride_a + (block_k / QUANT_K);
+    uint block_index = pos_a + row * stride_a + (block_k / QUANT_K_Q5_K);
     if (in_bounds || row < p.M) {
         row_v = data_a_q5_k_packed128[block_index].q5k[0];
     }
 }
 #endif
 
-#if defined(DATA_A_Q4_K) || defined(DATA_A_Q5_K)
+#if defined(DATA_A_Q4_K) || defined(DATA_A_Q5_K) || defined(MULMAT_QUANT)
 void store_scalesQ4_K(uint tid)
 {
     barrier();
@@ -523,6 +530,26 @@ void store_scalesQ4_K(uint tid)
 }
 #endif
 
+#if defined(MULMAT_QUANT)
+// Runtime dispatch for the unified shader: pick the right fetch based on the spec
+// constant type. Only Q4_K/Q5_K use the shared-scales path; other types are no-ops.
+void fetch_scales_cm2(uint ir_BM, uint pos_a, uint stride_a, uint block_k, uint tid, bool in_bounds)
+{
+    if (MmTypeA == GGML_TYPE_Q4_K) {
+        fetch_scalesQ4_K(ir_BM, pos_a, stride_a, block_k, tid, in_bounds);
+    } else if (MmTypeA == GGML_TYPE_Q5_K) {
+        fetch_scalesQ5_K(ir_BM, pos_a, stride_a, block_k, tid, in_bounds);
+    }
+}
+
+void store_scales_cm2(uint tid)
+{
+    if (MmTypeA == GGML_TYPE_Q4_K || MmTypeA == GGML_TYPE_Q5_K) {
+        store_scalesQ4_K(tid);
+    }
+}
+#endif
+
 #endif
 
 float16_t dequantFuncQ4_K(const in decodeBufQ4_K bl, const in uint blockCoords[2], const in uint coordInBlock[2])
@@ -534,7 +561,7 @@ float16_t dequantFuncQ4_K(const in decodeBufQ4_K bl, const in uint blockCoords[2
     const uint b = (idx & 0x20) >> 5;            // 0,1
     const uint is = (idx & 0xE0) >> 5;         // 0..7
 
-#if defined(IS_MUL_MM2) && defined(DATA_A_Q4_K)
+#if defined(IS_MUL_MM2) && (defined(DATA_A_Q4_K) || defined(MULMAT_QUANT))
     vec2 v = shAscales[is * shAscales_stride + (blockCoords[0] % BM)];
     float d = v.x;
     float m = v.y;
@@ -581,7 +608,7 @@ f16vec4 dequantFuncQ4_K_v(const in decodeBufQ4_K bl, const in uint blockCoords[2
 
     const uint is = idx >> 5;                    // 0..7
 
-#if defined(IS_MUL_MM2) && defined(DATA_A_Q4_K)
+#if defined(IS_MUL_MM2) && (defined(DATA_A_Q4_K) || defined(MULMAT_QUANT))
     vec2 v = shAscales[is * shAscales_stride + (blockCoords[0] % BM)];
     float d = v.x;
     float m = v.y;
@@ -647,7 +674,7 @@ float16_t dequantFuncQ5_K(const in decodeBufQ5_K bl, const in uint blockCoords[2
     const uint b = (idx & 0x20) >> 5;          // 0,1
     const uint is = (idx & 0xE0) >> 5;         // 0..7
 
-#if defined(IS_MUL_MM2) && defined(DATA_A_Q5_K)
+#if defined(IS_MUL_MM2) && (defined(DATA_A_Q5_K) || defined(MULMAT_QUANT))
     vec2 v = shAscales[is * shAscales_stride + (blockCoords[0] % BM)];
     float d = v.x;
     float m = v.y;
@@ -698,7 +725,7 @@ f16vec4 dequantFuncQ5_K_v(const in decodeBufQ5_K bl, const in uint blockCoords[2
     const uint idx = coordInBlock[1];
     const uint is = idx >> 5;
 
-#if defined(IS_MUL_MM2) && defined(DATA_A_Q5_K)
+#if defined(IS_MUL_MM2) && (defined(DATA_A_Q5_K) || defined(MULMAT_QUANT))
     vec2 v = shAscales[is * shAscales_stride + (blockCoords[0] % BM)];
     float d = v.x;
     float m = v.y;
@@ -1463,4 +1490,10 @@ f16vec4 dequantFuncNVFP4_v(const in decodeBufNVFP4 bl, const in uint blockCoords
 #define dequantFuncA_v dequantFuncNVFP4_v
 #elif defined(DATA_A_F32)
 #define dequantFuncA dequantFuncF32
+#endif
+
+// Unified shader: dispatch the Q4_K/Q5_K shared-scales path at runtime on MmTypeA.
+#if defined(MULMAT_QUANT)
+#define fetch_scales fetch_scales_cm2
+#define store_scales store_scales_cm2
 #endif
