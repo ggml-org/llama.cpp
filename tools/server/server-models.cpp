@@ -516,6 +516,10 @@ void server_models::load_models() {
     common_preset global = {};
     common_presets custom_presets = {};
     if (!base_params.models_preset.empty()) {
+        if (!base_params.models_preset_hf.empty()) {
+            // preset came from a remote repo, restrict which keys it may set
+            ctx_preset.set_remote_allowed_keys();
+        }
         custom_presets = ctx_preset.load_from_ini(base_params.models_preset, global);
         SRV_INF("Loaded %zu custom model presets from %s\n", custom_presets.size(), base_params.models_preset.c_str());
     }
