@@ -3,7 +3,6 @@ import type { DatabaseMessage, DatabaseMessageExtra } from './database';
 import type {
 	AttachmentAction,
 	AttachmentItemEnabledWhen,
-	AttachmentItemVisibleWhen,
 	AttachmentMenuItemId,
 	ChatFormCommandAction,
 	ErrorDialogType,
@@ -30,8 +29,6 @@ export interface AttachmentMenuItem {
 	disabledTooltip?: string;
 	/** Callback key on the Props interface to invoke when clicked */
 	action: AttachmentAction;
-	/** Whether the item is only shown when a specific capability is present */
-	visibleWhen?: AttachmentItemVisibleWhen;
 	/** Whether this item has a tooltip even when enabled (uses dynamic text) */
 	hasEnabledTooltip?: boolean;
 }
@@ -336,11 +333,7 @@ export interface ChatFormActionsContext {
 	readonly hasAudioModality: boolean;
 	readonly hasVideoModality: boolean;
 	readonly hasVisionModality: boolean;
-	readonly hasMcpPromptsSupport: boolean;
-	readonly hasMcpResourcesSupport: boolean;
 	onFileUpload?: () => void;
 	onSystemPromptClick?: () => void;
-	onMcpPromptClick?: () => void;
-	onMcpResourcesClick?: () => void;
 	onMcpSettingsClick?: () => void;
 }
