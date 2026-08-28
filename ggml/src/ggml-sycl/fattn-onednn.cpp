@@ -1,3 +1,4 @@
+#include <array>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -150,7 +151,8 @@ struct sdpa_partition {
 
 // Build + compile the contiguous-input GQA SDPA graph (MatMul->Divide->Add->SoftMax->MatMul), f32 out.
 // Mirrors the hardware-verified scratch/onednn_sdpa_probe.cpp build_gqa (partitions=1, sdp_primitive_kernel_t).
-static sdpa_partition build_sdpa(const engine & eng, int H, int Hkv, int q, int seq, int d) {
+static sdpa_partition build_sdpa(const engine & eng, int H, int Hkv, int q, int seq, int d,
+                                 const std::array<int64_t, 5> & k_str, const std::array<int64_t, 5> & v_str) try {
     using ltype = logical_tensor::layout_type;
     using dt    = logical_tensor::data_type;
     using ldims = logical_tensor::dims;
@@ -158,11 +160,12 @@ static sdpa_partition build_sdpa(const engine & eng, int H, int Hkv, int q, int 
     const int   rep = H / Hkv;
     const ldims q_sz = {1, Hkv, rep, q, d}, kv_sz = {1, Hkv, 1, seq, d}, s_sz = {1, Hkv, rep, q, seq},
                 sc = {1, 1, 1, 1, 1}, msk = {1, 1, 1, q, seq}, o_sz = {1, Hkv, rep, q, d};
+    const ldims k_st(k_str.begin(), k_str.end()), v_st(v_str.begin(), v_str.end());
     int64_t        id = 0;
     sdpa_partition E;
 
     auto query  = logical_tensor(id++, t,  q_sz, ltype::strided);
-    auto key    = logical_tensor(id++, t,  kv_sz, ltype::strided);
+    auto key    = logical_tensor(id++, t,  kv_sz, k_st);
     auto score  = logical_tensor(id++, fi, s_sz, ltype::strided);
     auto bmm1   = op(id++, op::kind::MatMul, "bmm1");
     bmm1.set_attr<bool>(op::attr::transpose_b, true);          // key is [.., seq, d]
@@ -184,7 +187,7 @@ static sdpa_partition build_sdpa(const engine & eng, int H, int Hkv, int q, int 
     smax.set_attr<std::string>(op::attr::mode, "inf_as_zero");
     smax.add_inputs({masked}); smax.add_outputs({probs});
 
-    auto value  = logical_tensor(id++, t,  kv_sz, ltype::strided);
+    auto value  = logical_tensor(id++, t,  kv_sz, v_st);
     // f16 output is REQUIRED to hit sdp_primitive_kernel_t (the systolic micro-kernel); an f32 output
     // falls to larger_partition_kernel_t which materializes N^2 (confirmed: scratch/onednn_sdpa_kernel_probe.cpp).
     // converted to the f32 ggml dst in the permute below.
@@ -198,6 +201,7 @@ static sdpa_partition build_sdpa(const engine & eng, int H, int Hkv, int q, int 
 
     auto parts = g.get_partitions();
     if (parts.size() != 1 || !parts[0].is_supported()) {
+        GGML_LOG_WARN("%s: oneDNN did not fuse the SDPA graph; falling back to TILE kernel\n", __func__);
         return E;   // ok stays false -> caller falls back to TILE
     }
     E.ins      = parts[0].get_input_ports();
@@ -208,6 +212,12 @@ static sdpa_partition build_sdpa(const engine & eng, int H, int Hkv, int q, int 
     E.id_scale = scale.get_id(); E.id_mask = mask.get_id();
     E.ok       = true;
     return E;
+}
+catch (const std::exception & e) {
+    // compile() can reject a stride set the partitioner never inspects; memoise the failure so the
+    // fallback costs one build rather than one per call.
+    GGML_LOG_WARN("%s: oneDNN SDPA partition build failed (%s); falling back to TILE kernel\n", __func__, e.what());
+    return {};
 }
 
 void ggml_sycl_flash_attn_ext_onednn(ggml_backend_sycl_context & ctx, ggml_tensor * dst) try {
@@ -234,13 +244,34 @@ void ggml_sycl_flash_attn_ext_onednn(ggml_backend_sycl_context & ctx, ggml_tenso
     ggml_sycl_pool_alloc<sycl::half> Qf(ctx.pool(), (size_t) H * q * d);
     cont_to_f16_sycl<float>((const char *) Q->data, Qf.get(), d, q, H, mb, Q->nb[1], Q->nb[2], Q->nb[3], stream);
 
-    // K/V: use pool-alloc for both F16 and dequant paths.
+    // K/V: bind the f16 cache in place. llama.cpp permutes it to [token][head][dim], so its head
+    // plane is strided rather than dense, which is what an explicit stride vector expresses.
+    // Quantized and f32 KV still stage a dense copy -- the layout the k_str/v_str defaults describe.
     sycl::half * K_ptr = nullptr;
     sycl::half * V_ptr = nullptr;
+    std::array<int64_t, 5> k_str{ Hkv * seq * d, seq * d, seq * d, d, 1 };
+    std::array<int64_t, 5> v_str = k_str;
     std::optional<ggml_sycl_pool_alloc<sycl::half>> Kf_pool;
     std::optional<ggml_sycl_pool_alloc<sycl::half>> Vf_pool;
 
-    if (K->type == GGML_TYPE_F16 && V->type == GGML_TYPE_F16) {
+    auto bindable = [](const ggml_tensor * t) {
+        return t->nb[0] == sizeof(sycl::half) && t->nb[1] % sizeof(sycl::half) == 0 &&
+               t->nb[2] % sizeof(sycl::half) == 0 && t->nb[3] % sizeof(sycl::half) == 0;
+    };
+    auto elem_strides = [](const ggml_tensor * t) {
+        const int64_t s1 = (int64_t) (t->nb[1] / t->nb[0]);
+        const int64_t s2 = (int64_t) (t->nb[2] / t->nb[0]);
+        const int64_t s3 = (int64_t) (t->nb[3] / t->nb[0]);
+        // dims are {mb=1, Hkv, rep=1, seq, d}; the size-1 dims at 0 and 2 never advance an address.
+        return std::array<int64_t, 5>{ s3, s2, s2, s1, 1 };
+    };
+
+    if (K->type == GGML_TYPE_F16 && V->type == GGML_TYPE_F16 && bindable(K) && bindable(V)) {
+        K_ptr = (sycl::half *) K->data;
+        V_ptr = (sycl::half *) V->data;
+        k_str = elem_strides(K);
+        v_str = elem_strides(V);
+    } else if (K->type == GGML_TYPE_F16 && V->type == GGML_TYPE_F16) {
         Kf_pool.emplace(ctx.pool(), (size_t) Hkv * seq * d);
         Vf_pool.emplace(ctx.pool(), (size_t) Hkv * seq * d);
         cont_to_f16_sycl<sycl::half>((const char *) K->data, Kf_pool->get(), d, seq, Hkv, mb, K->nb[1], K->nb[2], K->nb[3], stream);
@@ -341,19 +372,24 @@ void ggml_sycl_flash_attn_ext_onednn(ggml_backend_sycl_context & ctx, ggml_tenso
 
     ggml_sycl_pool_alloc<sycl::half> outf(ctx.pool(), (size_t) H * q * d);   // f16 contiguous SDPA out [mb,H,q,d]
 
-    // compile once per (device, shape), reuse across layers/calls.
+    // compile once per (device, shape, KV strides), reuse across layers/calls. Stride 2 always
+    // repeats stride 1 and stride 4 is always 1, so the key covers every entry that can differ.
     static std::unordered_map<std::string, sdpa_partition> cache;
-    char keyb[96];
-    snprintf(keyb, sizeof(keyb), "%d:%lld:%lld:%lld:%lld:%lld", ggml_sycl_get_device(),
-             (long long) H, (long long) Hkv, (long long) q, (long long) seq, (long long) d);
+    char keyb[256];
+    snprintf(keyb, sizeof(keyb), "%d:%lld:%lld:%lld:%lld:%lld:%lld:%lld:%lld:%lld:%lld:%lld", ggml_sycl_get_device(),
+             (long long) H, (long long) Hkv, (long long) q, (long long) seq, (long long) d,
+             (long long) k_str[0], (long long) k_str[1], (long long) k_str[3],
+             (long long) v_str[0], (long long) v_str[1], (long long) v_str[3]);
     auto it = cache.find(keyb);
     if (it == cache.end()) {
-        it = cache.emplace(keyb, build_sdpa(eng, (int) H, (int) Hkv, (int) q, (int) seq, (int) d)).first;
+        it = cache.emplace(keyb, build_sdpa(eng, (int) H, (int) Hkv, (int) q, (int) seq, (int) d, k_str, v_str)).first;
     }
     sdpa_partition & E = it->second;
-    // _supported() is authoritative: if it accepted this op the partition must build.
-    // A failure here is a gap in _supported() -- surface it, don't mask it with a fallback.
-    GGML_ASSERT(E.ok && "oneDNN SDPA partition failed to build for a _supported() shape");
+    if (!E.ok) {
+        // oneDNN can decline a shape or a stride set that _supported() never sees; build_sdpa warns per key.
+        ggml_sycl_flash_attn_ext_tile(ctx, dst);
+        return;
+    }
 
     auto id2ptr = [&](size_t r) -> void * {
         if (r == E.id_q)     return Qf.get();
