@@ -181,7 +181,7 @@ public:
         return res;
     }
 
-    const llama_hparams & hparams;
+    const llama_hparams hparams;
 
     ggml_tensor * inp_slopes     = nullptr; // F32 [n_head]
     ggml_tensor * inp_q_decay    = nullptr; // F32 [1, n_head, n_batch]
