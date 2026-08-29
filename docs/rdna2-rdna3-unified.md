@@ -110,6 +110,22 @@ is off unless explicitly requested with `GGML_HIP_RCCL=ON`. Embedded/prebuilt
 Web UI assets are disabled so rebuilds do not fall back to an unpinned network
 artifact; the OpenAI-compatible HTTP API remains available.
 
+### Runtime environment
+
+The unified launcher sets the small amount of required environment itself:
+
+- Native gfx1100: `HSA_NO_SCRATCH_RECLAIM=1` and
+  `GGML_HIP_SAFE_STATE_IO=1`. The Q8_0 VDR=4 optimization is compile-time;
+  there is no runtime switch for it.
+- Sidecar MTP: `SPEC_SIDECAR=1` plus the four `LLAMA_SPEC_*`/draft-ID paths;
+  these are set automatically when sidecar mode is enabled.
+- Safe defaults: `GGML_HIP_RDNA3_GDN_CHUNKED=0` and
+  `GGML_HIP_RDNA3_ADD_RMS_NORM_FUSION=0`. The latter is an optional
+  prompt-heavy A/B switch, not required for Q8 decode.
+- Native gfx1100 must leave `HSA_OVERRIDE_GFX_VERSION` unset. The
+  `GGML_HIP_RDNA2_AUTO` and `GGML_HIP_GFX1030_*` controls are for gfx1030 only.
+  `GGML_TP_SHARDED_OUTPUT` is not part of this unified control surface.
+
 ## Verified model
 
 The server model is pinned to Hugging Face revision
