@@ -25,9 +25,9 @@
 	<CollapsibleContentBlock
 		bind:open
 		icon={FoldVertical}
-		title={isPending ? COMPACTION_HEADER_PENDING : COMPACTION_HEADER}
-		subtitle={isPending ? undefined : COMPACTION_SUBTITLE}
 		shimmerTitle={isPending}
+		subtitle={isPending ? undefined : COMPACTION_SUBTITLE}
+		title={isPending ? COMPACTION_HEADER_PENDING : COMPACTION_HEADER}
 	>
 		{#if !isPending}
 			<div class="text-muted-foreground pb-2 text-sm">
