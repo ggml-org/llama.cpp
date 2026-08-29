@@ -1,6 +1,9 @@
 <script lang="ts">
 	import { FlaskConical, RotateCcw } from '@lucide/svelte';
-	import { SettingsChatParameterSourceIndicator } from '$lib/components/app/settings';
+	import {
+		SettingsChatModelSelector,
+		SettingsChatParameterSourceIndicator
+	} from '$lib/components/app/settings';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import { Input } from '$lib/components/ui/input';
 	import Label from '$lib/components/ui/label/label.svelte';
@@ -159,9 +162,31 @@
 						</Label>
 					</div>
 				{/if}
+			{:else if field.type === SettingsFieldType.MODEL_SELECT}
+				<Label class="flex items-center gap-1.5 text-sm font-medium" for={field.key}>
+					{field.label}
+
+					{#if field.isExperimental}
+						<FlaskConical class="h-3.5 w-3.5 text-muted-foreground" />
+					{/if}
+				</Label>
+
+				<SettingsChatModelSelector
+					emptyOption={field.emptyOption}
+					filter={field.modelFilter}
+					id={field.key}
+					onSelect={(model) => onConfigChange(field.key, model)}
+					placeholder={`Select ${field.label.toLowerCase()}`}
+					value={String(localConfig[field.key] ?? '')}
+				/>
+
+				{#if field.help || SETTING_CONFIG_INFO[field.key]}
+					<p class="mt-1 text-xs text-muted-foreground">
+						{field.help || SETTING_CONFIG_INFO[field.key]}
+					</p>
+				{/if}
 			{:else if field.type === SettingsFieldType.SELECT}
-				{@const selectOptions = field.optionsGenerator?.(modelsStore.models) ?? field.options}
-				{@const selectedOption = selectOptions?.find(
+				{@const selectedOption = field.options?.find(
 					(opt: { value: string; label: string; icon?: Component }) =>
 						opt.value === localConfig[field.key]
 				)}
@@ -229,8 +254,8 @@
 					</div>
 
 					<Select.Content>
-						{#if selectOptions}
-							{#each selectOptions as option (option.value)}
+						{#if field.options}
+							{#each field.options as option (option.value)}
 								<Select.Item label={option.label} value={option.value}>
 									<div class="flex items-center gap-2">
 										{#if option.icon}
