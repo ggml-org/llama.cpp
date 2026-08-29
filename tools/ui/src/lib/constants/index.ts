@@ -44,6 +44,7 @@ export * from './message-export.constants';
 export * from './path-display.constants';
 export * from './model-id.constants';
 export * from './model-loading.constants';
+export * from './models-discover.constants';
 export * from './precision.constants';
 export * from './pwa.constants';
 export * from './routes.constants';
