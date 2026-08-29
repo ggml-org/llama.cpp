@@ -1,4 +1,4 @@
-> Details of changes in this fork can be found in [notes.md](notes.md).
+> Details of changes in this fork can be found in [NOTES.md](NOTES.md).
 
 # llama.cpp
 
