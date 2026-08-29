@@ -330,7 +330,12 @@ export { getToolUi } from './tool-ui';
 // Chat command picker
 
 export { getChatCommands } from './chat-commands';
-export { canCompactMessages, lastContextBearingMessage, sliceAtLastCompaction } from './compaction';
+export {
+	canCompactMessages,
+	customCompactionModel,
+	lastContextBearingMessage,
+	sliceAtLastCompaction
+} from './compaction';
 
 // Sandbox tool definition
 // SANDBOX_TOOL_DEFINITION is deprecated; kept for backward compatibility.

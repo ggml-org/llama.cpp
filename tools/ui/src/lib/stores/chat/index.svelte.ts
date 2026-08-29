@@ -47,6 +47,7 @@ import type {
 } from '$lib/types';
 import {
 	canCompactMessages,
+	customCompactionModel,
 	filterByLeafNodeId,
 	findMessageById,
 	formatCwdMessage,
@@ -328,11 +329,16 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 		};
 		const abortController = this.getOrCreateAbortController(convId);
 		const compactionStreamId = COMPACTION.STREAM_ID_PREFIX + convId;
+		const config = settingsStore.config;
 		// Model resolution mirrors the request funnel: the selected model
 		// first, then the model the branch was generated with, so router
 		// mode targets the child that owns this conversation's KV cache.
+		// A dedicated compaction model wins over both.
+		const compactionModel = serverStore.isRouterMode
+			? customCompactionModel(Boolean(config.compactionUseCustomModel), config.compactionModel)
+			: undefined;
 		const effectiveModel = serverStore.isRouterMode
-			? modelsStore.selectedModelName || getConversationModel(source)
+			? compactionModel || modelsStore.selectedModelName || getConversationModel(source)
 			: undefined;
 
 		let summary = '';
@@ -341,13 +347,19 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 			const apiMessages: ApiChatMessageData[] = await Promise.all(
 				source.map((m) => ChatService.convertDbMessageToApiChatMessageData(m))
 			);
-			const configValue = settingsStore.config;
 			const compactionPrompt =
-				typeof configValue.compactionPrompt === 'string' && configValue.compactionPrompt.trim()
-					? configValue.compactionPrompt
+				typeof config.compactionPrompt === 'string' && config.compactionPrompt.trim()
+					? config.compactionPrompt
 					: COMPACTION.DEFAULT_PROMPT;
 
 			apiMessages.push({ content: compactionPrompt, role: MessageRole.USER });
+
+			// A dedicated model that is not resident is loaded on demand. The
+			// status manager surfaces the failure toast and throws, so the
+			// rollback below removes the node instead of leaving it empty.
+			if (compactionModel && !modelsStore.isModelLoaded(compactionModel)) {
+				await modelsStore.status.load(compactionModel);
+			}
 
 			await ChatService.sendMessage(
 				apiMessages,
