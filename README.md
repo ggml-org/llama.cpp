@@ -43,9 +43,21 @@ backends, CPU variants, the server, examples, and tools. It builds Release
 with tests disabled. `GGML_BACKEND_DL=ON` requires shared libraries; the helper
 sets both explicitly.
 
+For the native RDNA3/gfx11 build on this unified branch, use the matching
+portable helper instead:
+
+```bash
+./scripts/build-rdna3-portable.sh
+```
+
+It discovers ROCm/clang and the gfx11 target, defaults RCCL and the optional
+sidecar targets on, keeps UI assets disabled, and rejects
+`HSA_OVERRIDE_GFX_VERSION` for native RDNA3. Set `TARGET_ARCH=gfx1100` or
+`ROCM_PATH=/path/to/rocm` when discovery is ambiguous.
+
 The existing `scripts/build-rdna2-rocm.sh` remains the maintainer-oriented
-V620/ROCm-7.14 helper. The new portable helper is the recommended user entry
-point.
+V620/ROCm-7.14 helper. The RDNA2 portable helper remains the corresponding
+user entry point for gfx1030.
 
 ### 3. Launch
 
@@ -87,10 +99,12 @@ GGML_HIP_SAFE_STATE_IO=1 \
 ```
 
 Linux normally selects RCCL automatically after an RCCL build. For the
-qualified native two-gfx1100 launch, set the single umbrella
+qualified native multi-gfx1100 launch, set the single umbrella
 `GGML_HIP_RDNA3_AUTO=1`; it supplies unset `GGML_CUDA_ALLREDUCE=nccl`,
 `GGML_CUDA_P2P=1`, and `NCCL_P2P_DISABLE=0` defaults while leaving RCCL's P2P
-level, algorithm, protocol, and channel autotuning untouched. Set
+level, algorithm, protocol, and channel autotuning untouched. The unified
+launcher uses all matching RX 7900 XT/gfx1100 GPUs by default; set
+`REQUIRE_GPUS=N` only to select an exact count. Set
 `GGML_CUDA_ALLREDUCE=nccl` manually only when an explicit collective selection
 is needed. Add `--device` only when the backend should use a specific device
 list, for example `--device ROCm0,ROCm1,ROCm2,ROCm3`. Unsupported models retain

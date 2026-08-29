@@ -95,7 +95,18 @@ needed to enable these WMMA kernels.
 
 ## Build
 
-Build each architecture separately:
+Build each architecture separately. For a portable native RDNA3/gfx11 build
+with ROCm/RCCL discovery and sidecar targets enabled by default:
+
+```bash
+./scripts/build-rdna3-portable.sh
+
+# Or make the target and installation explicit:
+ROCM_PATH=/opt/rocm/core-10.0 TARGET_ARCH=gfx1100 \
+  ./scripts/build-rdna3-portable.sh --jobs 2
+```
+
+For deterministic branch builds, the lower-level helper remains available:
 
 ```bash
 GGML_HIP_RCCL=ON ./scripts/build-rdna-unified.sh --arch gfx1100 \
@@ -105,11 +116,12 @@ GGML_HIP_RCCL=ON ./scripts/build-rdna-unified.sh --arch gfx1100 \
 ./scripts/build-rdna-unified.sh --arch gfx1030 --jobs 2
 ```
 
-The script refuses an inherited `HSA_OVERRIDE_GFX_VERSION` for gfx1100. RCCL
-is required for the native gfx1100 automatic collective profile and is enabled
-explicitly above; the generic build default remains off for portability.
-Embedded/prebuilt Web UI assets are disabled so rebuilds do not fall back to an
-unpinned network artifact; the OpenAI-compatible HTTP API remains available.
+Both gfx1100 helpers refuse an inherited `HSA_OVERRIDE_GFX_VERSION`. The
+portable helper defaults RCCL on because it is the required build dependency
+for the native gfx1100 automatic collective profile; the generic build helper
+keeps RCCL off for portability. Embedded/prebuilt Web UI assets are disabled so
+rebuilds do not fall back to an unpinned network artifact; the OpenAI-compatible
+HTTP API remains available.
 
 ### Runtime environment
 
@@ -119,8 +131,8 @@ The unified launcher sets the small amount of required environment itself:
   `GGML_HIP_SAFE_STATE_IO=1`. The Q8_0 VDR=4 optimization is compile-time;
   there is no runtime switch for it.
 - Optional native gfx1100 umbrella: set only
-  `GGML_HIP_RDNA3_AUTO=1` when using an RCCL-enabled build. On the qualified
-  two-card RX 7900 XT/gfx1100 topology it defaults unset communication controls
+  `GGML_HIP_RDNA3_AUTO=1` when using an RCCL-enabled build. On a qualified
+  multi-card RX 7900 XT/gfx1100 topology it defaults unset communication controls
   to `GGML_CUDA_ALLREDUCE=nccl`, `GGML_CUDA_P2P=1`, and
   `NCCL_P2P_DISABLE=0`. It preserves explicit user values and leaves
   `NCCL_P2P_LEVEL`, `NCCL_ALGO`, `NCCL_PROTO`, and channel counts to RCCL Auto.
@@ -172,7 +184,8 @@ Its source metadata and a pinned Apache-2.0 license copy are under
 
 The launcher discovers GPU ordinals dynamically through AMD SMI and accepts
 only the complete RX 7900 XT identity tuple. Unknown devices are logged and
-skipped; BDFs and ordinals are not hard-coded.
+skipped; BDFs and ordinals are not hard-coded. It uses all matching GPUs by
+default (`REQUIRE_GPUS=all`); set `REQUIRE_GPUS=N` to request an exact count.
 
 ```bash
 # Validate command and identity without starting the server:

@@ -13,7 +13,7 @@ PROFILE="${PROFILE:-safe}"
 CTX_SIZE="${CTX_SIZE:-262144}"
 HOST="${HOST:-0.0.0.0}"
 PORT="${PORT:-8080}"
-REQUIRE_GPUS="${REQUIRE_GPUS:-2}"
+REQUIRE_GPUS="${REQUIRE_GPUS:-all}"
 SPLIT_MODE="${SPLIT_MODE:-tensor}"
 KV_TYPE="${KV_TYPE:-}"
 USE_SIDECAR=1
@@ -36,6 +36,7 @@ Usage: scripts/run-qwen38-rdna-unified.sh [options] [-- extra llama-server args]
   --ctx-size N         target context (default 262144)
   --host HOST          listen address (default 0.0.0.0)
   --port PORT          listen port (default 8080)
+  REQUIRE_GPUS=all     use all matching GPUs (default); set a positive integer for an exact count
   --no-sidecar         target-only smoke mode
   --gfx1100-add-rms-fusion
                        opt in to the validated, default-off Add+RMSNorm fusion
@@ -75,7 +76,8 @@ fi
 if [[ $SPLIT_MODE == tensor && $KV_TYPE != f16 && $KV_TYPE != bf16 ]]; then
     fail "tensor mode requires f16 or bf16 KV; got $KV_TYPE"
 fi
-[[ $REQUIRE_GPUS =~ ^[1-9][0-9]*$ ]] || fail "REQUIRE_GPUS must be positive"
+[[ $REQUIRE_GPUS == all || $REQUIRE_GPUS =~ ^[1-9][0-9]*$ ]] ||
+    fail "REQUIRE_GPUS must be all or a positive integer"
 [[ $CTX_SIZE =~ ^[1-9][0-9]*$ ]] || fail "CTX_SIZE must be a positive integer"
 [[ -x $ROCM_PATH/bin/amd-smi ]] || fail "AMD SMI not found under $ROCM_PATH"
 SERVER=$BUILD_DIR/bin/llama-server
@@ -118,7 +120,11 @@ for row in rows:
         print(f"SKIP unknown GPU index={row.get('gpu')} bdf={b.get('bdf')} asic={a}", file=sys.stderr)
 PY
 )
-((${#gpu_rows[@]} == REQUIRE_GPUS)) || fail "expected $REQUIRE_GPUS matching GPUs, found ${#gpu_rows[@]}"
+if [[ $REQUIRE_GPUS == all ]]; then
+    ((${#gpu_rows[@]} >= 2)) || fail "expected at least 2 matching GPUs, found ${#gpu_rows[@]}"
+else
+    ((${#gpu_rows[@]} == REQUIRE_GPUS)) || fail "expected $REQUIRE_GPUS matching GPUs, found ${#gpu_rows[@]}"
+fi
 
 indices=() devices=() splits=() arches=()
 for row in "${gpu_rows[@]}"; do

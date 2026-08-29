@@ -30,3 +30,9 @@ inline bool ggml_cuda_rdna3_auto_enabled() {
     return ggml_cuda_rdna3_auto_parse(std::getenv("GGML_HIP_RDNA3_AUTO")) ==
         ggml_cuda_rdna3_auto_flag::enabled;
 }
+
+// The automatic profile may use every visible physical GPU, but must never
+// turn on for a virtual-device configuration or a single-device launch.
+inline bool ggml_cuda_rdna3_auto_counts_qualified(int physical_device_count, int device_count) {
+    return physical_device_count >= 2 && device_count == physical_device_count;
+}

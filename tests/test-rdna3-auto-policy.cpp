@@ -31,6 +31,12 @@ int main() {
     for (const char * value : { "", "TRUE", "garbage" }) {
         check(ggml_cuda_rdna3_auto_parse(value) == flag::invalid, "invalid RDNA3 Auto spelling accepted");
     }
-    std::puts("RDNA3 auto policy parser: PASS");
+    for (int count : { 2, 3, 4, 8 }) {
+        check(ggml_cuda_rdna3_auto_counts_qualified(count, count), "native multi-GPU count rejected");
+    }
+    check(!ggml_cuda_rdna3_auto_counts_qualified(1, 1), "single-GPU profile accepted");
+    check(!ggml_cuda_rdna3_auto_counts_qualified(4, 2), "partial physical-device set accepted");
+    check(!ggml_cuda_rdna3_auto_counts_qualified(2, 4), "virtual-device set accepted");
+    std::puts("RDNA3 auto policy parser/topology counts: PASS");
     return 0;
 }

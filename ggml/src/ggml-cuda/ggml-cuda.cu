@@ -141,11 +141,12 @@ static bool ggml_cuda_rdna2_is_four_v620_pcie_hop2(int physical_device_count) {
 static bool ggml_cuda_rdna3_auto_active = false;
 
 static bool ggml_cuda_rdna3_auto_qualified_topology(const ggml_cuda_device_info & info) {
-    if (info.physical_device_count != 2 || info.device_count != 2) {
+    if (!ggml_cuda_rdna3_auto_counts_qualified(info.physical_device_count, info.device_count)) {
         return false;
     }
 
-    for (int device = 0; device < 2; ++device) {
+    const int device_count = info.physical_device_count;
+    for (int device = 0; device < device_count; ++device) {
         if (info.devices[device].physical_device != device ||
                 info.devices[device].cc != GGML_CUDA_CC_RDNA3) {
             return false;
@@ -160,8 +161,10 @@ static bool ggml_cuda_rdna3_auto_qualified_topology(const ggml_cuda_device_info 
         }
     }
 
-    for (int src = 0; src < 2; ++src) {
-        for (int dst = 0; dst < 2; ++dst) {
+    // Require a fully peer-accessible set before installing the P2P default.
+    // RCCL remains available without this profile on partial-peer topologies.
+    for (int src = 0; src < device_count; ++src) {
+        for (int dst = 0; dst < device_count; ++dst) {
             if (src == dst) {
                 continue;
             }
@@ -187,7 +190,7 @@ static bool ggml_cuda_rdna3_auto_apply(const ggml_cuda_device_info & info) {
         return false;
     }
     if (!ggml_cuda_rdna3_auto_qualified_topology(info)) {
-        GGML_LOG_INFO("native RDNA3 Auto: no qualified two-card gfx1100 topology; leaving runtime policy unchanged\n");
+        GGML_LOG_INFO("native RDNA3 Auto: no qualified native gfx1100 multi-GPU topology; leaving runtime policy unchanged\n");
         return false;
     }
 
