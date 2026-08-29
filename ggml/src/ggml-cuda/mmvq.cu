@@ -124,6 +124,7 @@ enum mmvq_parameter_table_id {
     MMVQ_PARAMETERS_GCN,
     MMVQ_PARAMETERS_RDNA2,
     MMVQ_PARAMETERS_RDNA3_0,
+    MMVQ_PARAMETERS_RDNA3_5,
     MMVQ_PARAMETERS_RDNA4,
     MMVQ_PARAMETERS_GB10
 };
@@ -133,7 +134,9 @@ static constexpr __device__ mmvq_parameter_table_id get_device_table_id() {
     return MMVQ_PARAMETERS_RDNA4;
 #elif defined(RDNA3_0)
     return MMVQ_PARAMETERS_RDNA3_0;
-#elif defined(RDNA2) || defined(RDNA3_5)
+#elif defined(RDNA3_5)
+    return MMVQ_PARAMETERS_RDNA3_5;
+#elif defined(RDNA2)
     return MMVQ_PARAMETERS_RDNA2;
 #elif defined(GCN) || defined(CDNA)
     return MMVQ_PARAMETERS_GCN;
@@ -153,7 +156,10 @@ static __host__ mmvq_parameter_table_id get_device_table_id(int cc) {
     if (GGML_CUDA_CC_IS_RDNA3_0(cc)) {
         return MMVQ_PARAMETERS_RDNA3_0;
     }
-    if (GGML_CUDA_CC_IS_RDNA2(cc) || GGML_CUDA_CC_IS_RDNA3_5(cc)) {
+    if (GGML_CUDA_CC_IS_RDNA3_5(cc)) {
+        return MMVQ_PARAMETERS_RDNA3_5;
+    }
+    if (GGML_CUDA_CC_IS_RDNA2(cc)) {
         return MMVQ_PARAMETERS_RDNA2;
     }
     if (GGML_CUDA_CC_IS_GCN(cc) || GGML_CUDA_CC_IS_CDNA(cc)) {
@@ -308,8 +314,17 @@ static constexpr __host__ __device__ int get_mmvq_mmid_max_batch_rdna4(ggml_type
 
 static bool mmvq_use_gfx1030_native(int cc) {
 #if defined(GGML_USE_HIP)
-    GGML_UNUSED(cc); // this branch targets RDNA2/gfx1030 exclusively
-    return ggml_cuda_rdna2_native_profile_enabled();
+    if (GGML_CUDA_CC_IS_RDNA2(cc)) {
+        // Preserve the existing gfx1030 profile and its automatic feature policy.
+        return ggml_cuda_rdna2_native_profile_enabled();
+    }
+    if (GGML_CUDA_CC_IS_RDNA3(cc) || GGML_CUDA_CC_IS_RDNA4(cc)) {
+        // gfx11+ uses its native mixed signed/unsigned dot8 path only when
+        // explicitly requested. Never emulate gfx1030 through HSA_OVERRIDE.
+        const char * env = std::getenv("GGML_HIP_RDNA3_NATIVE");
+        return env != nullptr && std::atoi(env) != 0;
+    }
+    return false;
 #else
     GGML_UNUSED(cc);
     return false;
@@ -357,7 +372,8 @@ int get_mmvq_mmid_max_batch(const ggml_tensor * src0, const ggml_tensor * ids, i
         : src0->type == GGML_TYPE_Q6_K
             ? ggml_cuda_mmvq_batch6_type::q6_k
             : ggml_cuda_mmvq_batch6_type::other;
-    if (!mmvq_use_gfx1030_native(cc)) {
+    // The model-scoped six-row policy was qualified only for gfx1030.
+    if (!GGML_CUDA_CC_IS_RDNA2(cc) || !mmvq_use_gfx1030_native(cc)) {
         return max_batch;
     }
     const ggml_cuda_mmvq_batch6_input input = {
@@ -513,10 +529,10 @@ static constexpr __host__ __device__ int calc_nwarps(ggml_type type, int ncols_d
         }
     }
     if (table_id == MMVQ_PARAMETERS_RDNA4) {
-        // nwarps=8 benefits types with simple vec_dot on RDNA4 (ncols_dst=1).
-        // Types with complex vec_dot (Q3_K, IQ2_*, IQ3_*) regress due to register
-        // pressure and lookup table contention at higher thread counts.
-        if (ncols_dst == 1) {
+        // Keep decode and speculative verification on the same reduction width
+        // so acceptance compares identical accumulation orders.
+        // Types with complex vec_dot (Q3_K, IQ2_*, IQ3_*) stay at one warp.
+        if (ncols_dst <= MMVQ_MAX_BATCH_SIZE) {
             switch (type) {
                 case GGML_TYPE_Q4_0:
                 case GGML_TYPE_Q4_1:
@@ -537,9 +553,10 @@ static constexpr __host__ __device__ int calc_nwarps(ggml_type type, int ncols_d
         return 1;
     }
     if (table_id == MMVQ_PARAMETERS_RDNA3_0) {
-        // RDNA3 (W7900): stricter whitelist than RDNA4.
+        // RDNA3 (gfx1100): stricter whitelist than RDNA4. Apply the same
+        // reduction width to decode and speculative verification batches.
         // Q2_K / Q5_K / IQ4_XS regress in full quant sweeps.
-        if (ncols_dst == 1) {
+        if (ncols_dst <= MMVQ_MAX_BATCH_SIZE) {
             switch (type) {
                 case GGML_TYPE_Q4_0:
                 case GGML_TYPE_Q4_1:
@@ -553,6 +570,13 @@ static constexpr __host__ __device__ int calc_nwarps(ggml_type type, int ncols_d
                 default:
                     return 1;
             }
+        }
+        return 1;
+    }
+    if (table_id == MMVQ_PARAMETERS_RDNA3_5) {
+        // gfx115x benefits from two warps for Q8_0, while wider blocks regress.
+        if (ncols_dst <= MMVQ_MAX_BATCH_SIZE && type == GGML_TYPE_Q8_0) {
+            return 2;
         }
         return 1;
     }
@@ -1707,14 +1731,20 @@ static bool mmvq_use_gfx1030_native() {
 }
 
 static bool mmvq_use_gfx1030_native_for_type(ggml_type type) {
-    const bool gfx1030_native = mmvq_use_gfx1030_native();
+    const int device = ggml_cuda_get_device();
+    const int cc = ggml_cuda_info().devices[device].cc;
+    const bool rdna_native = mmvq_use_gfx1030_native(cc);
     if (type != GGML_TYPE_NVFP4) {
-        return gfx1030_native;
+        return rdna_native;
     }
 
 #if defined(GGML_USE_HIP)
+    // The bit-exact NVFP4 scale decoder is a gfx1030-only optimization.
+    if (!GGML_CUDA_CC_IS_RDNA2(cc)) {
+        return false;
+    }
     return ggml_cuda_mmvq_use_rdna2_nvfp4_scale_decode({
-        gfx1030_native,
+        rdna_native,
         true,
         ggml_cuda_rdna2_feature_enabled("GGML_HIP_GFX1030_NVFP4_FAST_SCALE"),
     });
@@ -1725,8 +1755,17 @@ static bool mmvq_use_gfx1030_native_for_type(ggml_type type) {
 
 static bool mmvq_use_gfx1030_q8_cache() {
 #if defined(GGML_USE_HIP)
-    return ggml_cuda_rdna2_feature_enabled("GGML_HIP_GFX1030_Q8_CACHE") &&
-           mmvq_use_gfx1030_native();
+    const int device = ggml_cuda_get_device();
+    const int cc = ggml_cuda_info().devices[device].cc;
+    if (GGML_CUDA_CC_IS_RDNA2(cc)) {
+        return ggml_cuda_rdna2_feature_enabled("GGML_HIP_GFX1030_Q8_CACHE") &&
+               mmvq_use_gfx1030_native(cc);
+    }
+    if (GGML_CUDA_CC_IS_RDNA3(cc) || GGML_CUDA_CC_IS_RDNA4(cc)) {
+        const char * env = std::getenv("GGML_HIP_RDNA3_Q8_CACHE");
+        return env != nullptr && std::atoi(env) != 0 && mmvq_use_gfx1030_native(cc);
+    }
+    return false;
 #else
     return false;
 #endif
@@ -1734,11 +1773,17 @@ static bool mmvq_use_gfx1030_q8_cache() {
 
 static bool mmvq_use_gfx1030_q8_cache_telemetry() {
 #if defined(GGML_USE_HIP)
-    static const bool enabled = [] {
-        const char * telemetry = std::getenv("GGML_HIP_GFX1030_Q8_CACHE_TELEMETRY");
-        return telemetry != nullptr && std::atoi(telemetry) != 0;
-    }();
-    return (enabled || mmvq_use_gfx1030_q8_cache()) && mmvq_use_gfx1030_native();
+    const int device = ggml_cuda_get_device();
+    const int cc = ggml_cuda_info().devices[device].cc;
+    const char * env_name = nullptr;
+    if (GGML_CUDA_CC_IS_RDNA2(cc)) {
+        env_name = "GGML_HIP_GFX1030_Q8_CACHE_TELEMETRY";
+    } else if (GGML_CUDA_CC_IS_RDNA3(cc) || GGML_CUDA_CC_IS_RDNA4(cc)) {
+        env_name = "GGML_HIP_RDNA3_Q8_CACHE_TELEMETRY";
+    }
+    const char * telemetry = env_name != nullptr ? std::getenv(env_name) : nullptr;
+    const bool enabled = telemetry != nullptr && std::atoi(telemetry) != 0;
+    return (enabled || mmvq_use_gfx1030_q8_cache()) && mmvq_use_gfx1030_native(cc);
 #else
     return false;
 #endif

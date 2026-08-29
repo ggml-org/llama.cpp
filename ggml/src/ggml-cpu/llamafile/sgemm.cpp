@@ -371,10 +371,10 @@ template <> inline __m512 load(const ggml_bf16_t *p) {
 
 #if defined(__AVX512BF16__)
 template <> inline __m512bh load(const ggml_bf16_t *p) {
-    return (__m512bh)_mm512_loadu_ps((const float *)p);
+    return _mm512_castps_si512(_mm512_loadu_ps((const float *)p));
 }
 template <> inline __m256bh load(const ggml_bf16_t *p) {
-    return (__m256bh)_mm256_loadu_ps((const float *)p);
+    return _mm256_castps_si256(_mm256_loadu_ps((const float *)p));
 }
 template <> inline __m512bh load(const float *p) {
     return _mm512_cvtne2ps_pbh(_mm512_loadu_ps(p + 16), _mm512_loadu_ps(p));
@@ -3816,8 +3816,14 @@ bool llamafile_sgemm(const struct ggml_compute_params * params, int64_t m, int64
     assert(params->ith < params->nth);
 
     // only enable sgemm for prompt processing
+    // decode (n_q = 1) and speculative verify batches (n_q = n_draft+1) must run the
+    // same kernels: llamafile rejects n < 2, so verify batches (n_q >= 2) ran tinyBLAS
+    // while decode ran vec_dot, accumulating differently and breaking the
+    // batch-vs-seq bit-identity that speculative acceptance checks rely on.
+    // Route every decode-scale batch through the plain vec_dot path and use
+    // llamafile only for prefill (n_q > 8, i.e. beyond the speculative batch range).
 #if !defined(__MMA__)
-    if (n < 2)
+    if (n <= 8)
         return false;
 #endif
 

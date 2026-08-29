@@ -3081,7 +3081,10 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
         return;
     }
 
-    if (ggml_cuda_should_use_mmvf(src0->type, cc, src0->ne, src0->nb, ne11)) {
+    // Decode and small speculative verification batches must select the same
+    // vector kernel to preserve their accumulation order.
+    const int64_t ne11_mmvf = ne11 <= MMVF_MAX_BATCH_SIZE ? 1 : ne11;
+    if (ggml_cuda_should_use_mmvf(src0->type, cc, src0->ne, src0->nb, ne11_mmvf)) {
         // The custom F16 vector kernel can be used over batched cuBLAS GEMM.
         // But this is only faster for GPUs without tensor cores or with a thin src0 matrix (particularly KQV in attention)
         ggml_cuda_mul_mat_vec_f(ctx, src0, src1, nullptr, dst);
@@ -4556,16 +4559,19 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph *                cgraph,
 
 static bool ggml_cuda_use_gfx1030_q8_cache() {
 #if defined(GGML_USE_HIP)
-    static const bool enabled = []() {
+    const int device = ggml_cuda_get_device();
+    const int cc = ggml_cuda_info().devices[device].cc;
+    if (GGML_CUDA_CC_IS_RDNA2(cc)) {
         return ggml_cuda_rdna2_native_profile_enabled() &&
                ggml_cuda_rdna2_feature_enabled("GGML_HIP_GFX1030_Q8_CACHE");
-    }();
-    if (!enabled) {
-        return false;
     }
-
-    const int device = ggml_cuda_get_device();
-    return GGML_CUDA_CC_IS_RDNA2(ggml_cuda_info().devices[device].cc);
+    if (GGML_CUDA_CC_IS_RDNA3(cc) || GGML_CUDA_CC_IS_RDNA4(cc)) {
+        const char * native = std::getenv("GGML_HIP_RDNA3_NATIVE");
+        const char * cache = std::getenv("GGML_HIP_RDNA3_Q8_CACHE");
+        return native != nullptr && std::atoi(native) != 0 &&
+               cache != nullptr && std::atoi(cache) != 0;
+    }
+    return false;
 #else
     return false;
 #endif
@@ -4573,17 +4579,20 @@ static bool ggml_cuda_use_gfx1030_q8_cache() {
 
 static bool ggml_cuda_use_gfx1030_q8_cache_telemetry() {
 #if defined(GGML_USE_HIP)
-    static const bool enabled = []() {
+    const int device = ggml_cuda_get_device();
+    const int cc = ggml_cuda_info().devices[device].cc;
+    if (GGML_CUDA_CC_IS_RDNA2(cc)) {
         const char * telemetry = std::getenv("GGML_HIP_GFX1030_Q8_CACHE_TELEMETRY");
         return ggml_cuda_rdna2_native_profile_enabled() &&
                telemetry != nullptr && std::atoi(telemetry) != 0;
-    }();
-    if (!enabled) {
-        return false;
     }
-
-    const int device = ggml_cuda_get_device();
-    return GGML_CUDA_CC_IS_RDNA2(ggml_cuda_info().devices[device].cc);
+    if (GGML_CUDA_CC_IS_RDNA3(cc) || GGML_CUDA_CC_IS_RDNA4(cc)) {
+        const char * native = std::getenv("GGML_HIP_RDNA3_NATIVE");
+        const char * telemetry = std::getenv("GGML_HIP_RDNA3_Q8_CACHE_TELEMETRY");
+        return native != nullptr && std::atoi(native) != 0 &&
+               telemetry != nullptr && std::atoi(telemetry) != 0;
+    }
+    return false;
 #else
     return false;
 #endif

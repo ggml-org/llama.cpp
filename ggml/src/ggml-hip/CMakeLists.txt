@@ -82,18 +82,23 @@ else()
         ../ggml-cuda/template-instances/fattn-vec-instance-bf16-bf16.cu)
 endif()
 
-# The RDNA2 Q4_K/Q6_K MMQ variants use aligned 128-bit LDS activation loads.
-# Compile them only into their own template instances; device code additionally
-# guards the path with RDNA2, so other HIP targets retain their existing paths.
-set_source_files_properties(../ggml-cuda/template-instances/mmq-instance-q4_k.cu PROPERTIES
-    COMPILE_DEFINITIONS "GGML_HIP_RDNA2_Q4_K_MMQ_WIDE_LDS=1")
-set_source_files_properties(../ggml-cuda/template-instances/mmq-instance-q6_k.cu PROPERTIES
-    COMPILE_DEFINITIONS "GGML_HIP_RDNA2_Q6_K_MMQ_WIDE_LDS=1")
+# RDNA Q4_K/Q5_K/Q6_K MMQ variants use aligned 128-bit LDS activation loads.
+# Compile the opt-in path only into its own template instances.
+if (CMAKE_HIP_ARCHITECTURES MATCHES "gfx11" OR GPU_TARGETS MATCHES "gfx11")
+    set(GGML_RDNA_MMQ_WIDE_LDS "RDNA3")
+else()
+    set(GGML_RDNA_MMQ_WIDE_LDS "RDNA2")
+endif()
 
-# Q5_K uses the same aligned LDS window at J=64, where its synthetic RDNA2
-# sweep has a clear win; the J<64 scalar path remains selected in device code.
+set_source_files_properties(../ggml-cuda/template-instances/mmq-instance-q4_k.cu PROPERTIES
+    COMPILE_DEFINITIONS "GGML_HIP_${GGML_RDNA_MMQ_WIDE_LDS}_Q4_K_MMQ_WIDE_LDS=1")
+set_source_files_properties(../ggml-cuda/template-instances/mmq-instance-q6_k.cu PROPERTIES
+    COMPILE_DEFINITIONS "GGML_HIP_${GGML_RDNA_MMQ_WIDE_LDS}_Q6_K_MMQ_WIDE_LDS=1")
+
+# Q5_K uses the same aligned LDS window at J=64; the J<64 scalar path remains
+# selected in device code.
 set_source_files_properties(../ggml-cuda/template-instances/mmq-instance-q5_k.cu PROPERTIES
-    COMPILE_DEFINITIONS "GGML_HIP_RDNA2_Q5_K_MMQ_WIDE_LDS=1")
+    COMPILE_DEFINITIONS "GGML_HIP_${GGML_RDNA_MMQ_WIDE_LDS}_Q5_K_MMQ_WIDE_LDS=1")
 
 ggml_add_backend_library(ggml-hip
                          ${GGML_HEADERS_ROCM}
@@ -145,6 +150,12 @@ endif()
 
 if (CXX_IS_HIPCC)
     set_source_files_properties(${GGML_SOURCES_ROCM} PROPERTIES LANGUAGE CXX)
+    # Windows uses the CXX workaround above instead of CMake's HIP compiler
+    # language, so CMAKE_HIP_FLAGS would otherwise be silently omitted from
+    # the .cu compile commands (for example, the AMDGPU unroll tuning flag).
+    if (WIN32 AND CMAKE_HIP_FLAGS)
+        set_source_files_properties(${GGML_SOURCES_ROCM} PROPERTIES COMPILE_FLAGS "${CMAKE_HIP_FLAGS}")
+    endif()
     if (WIN32 AND CMAKE_BUILD_TYPE STREQUAL "Debug")
         # CMake on Windows doesn't support the HIP language yet.
         # Therefore we workaround debug build's failure on HIP backend this way.

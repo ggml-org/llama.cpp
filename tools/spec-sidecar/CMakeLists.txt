@@ -10,6 +10,9 @@ if (WIN32)
     message(FATAL_ERROR "speculative sidecar CMake builds are currently supported on Linux; use a HIP build script on Windows")
 endif()
 
+# HIP is enabled by the ggml backend in a sibling directory. Enable it in this
+# directory too so CMake initializes the HIP compile rules for sidecar sources.
+enable_language(HIP)
 find_package(hip REQUIRED)
 
 set(LLAMA_SPEC_SIDECAR_HIP_ARCHITECTURES "" CACHE STRING
