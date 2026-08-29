@@ -735,6 +735,161 @@ static std::vector<size_t> unicode_regex_split_custom_qwen35(const std::string &
     return bpe_offsets;
 }
 
+// Long letter runs in this shared pre-tokenizer regex can overflow recursive std::regex.
+static std::vector<size_t> unicode_regex_split_custom_deepseek_hunyuan_joyai(const std::string & text, const std::vector<size_t> & offsets) {
+    std::vector<size_t> bpe_offsets;
+    bpe_offsets.reserve(offsets.size());
+
+    const auto cpts = unicode_cpts_from_utf8(text);
+
+    size_t start = 0;
+    for (auto offset : offsets) {
+        const size_t offset_ini = start;
+        const size_t offset_end = start + offset;
+        assert(offset_end <= cpts.size());
+        start = offset_end;
+
+        static const uint32_t OUT_OF_RANGE = 0xFFFFFFFF;
+        auto get_cpt = [&] (const size_t pos) -> uint32_t {
+            return (offset_ini <= pos && pos < offset_end) ? cpts[pos] : OUT_OF_RANGE;
+        };
+
+        auto get_flags = [&] (const size_t pos) -> unicode_cpt_flags {
+            return (offset_ini <= pos && pos < offset_end) ? unicode_cpt_flags_from_cpt(cpts[pos]) : unicode_cpt_flags{};
+        };
+
+        auto is_ascii_letter = [&] (const size_t pos) -> bool {
+            const uint32_t cpt = get_cpt(pos);
+            return ('A' <= cpt && cpt <= 'Z') || ('a' <= cpt && cpt <= 'z');
+        };
+
+        auto is_letter_or_mark = [&] (const size_t pos) -> bool {
+            const auto flags = get_flags(pos);
+            return flags.is_letter || flags.is_accent_mark;
+        };
+
+        auto is_punctuation_or_symbol = [&] (const size_t pos) -> bool {
+            const uint32_t cpt = get_cpt(pos);
+            const auto flags = get_flags(pos);
+            // The collapsed property maps omit '~'.
+            return cpt != '~' && (flags.is_punctuation || flags.is_symbol);
+        };
+
+        size_t prev_end = offset_ini;
+        auto add_token = [&] (const size_t end) {
+            assert(prev_end <= end && end <= offset_end);
+            if (prev_end < end) {
+                bpe_offsets.push_back(end - prev_end);
+            }
+            prev_end = end;
+        };
+
+        for (size_t pos = offset_ini; pos < offset_end; ) {
+            const uint32_t cpt = get_cpt(pos);
+            const auto flags = get_flags(pos);
+
+            // regex: [!"#$%&'()*+,\-./:;<=>?@\[\\\]^_`{|}~][A-Za-z]+
+            const bool is_ascii_punctuation =
+                ('!' <= cpt && cpt <= '/') ||
+                (':' <= cpt && cpt <= '@') ||
+                ('[' <= cpt && cpt <= '`') ||
+                ('{' <= cpt && cpt <= '~');
+            if (is_ascii_punctuation && is_ascii_letter(pos + 1)) {
+                pos += 2;
+                while (is_ascii_letter(pos)) {
+                    ++pos;
+                }
+                add_token(pos);
+                continue;
+            }
+
+            // regex: [^\r\n\p{L}\p{P}\p{S}]?[\p{L}\p{M}]+
+            const bool optional_prefix =
+                cpt != '\r' && cpt != '\n' &&
+                !flags.is_letter && !is_punctuation_or_symbol(pos) &&
+                is_letter_or_mark(pos + 1);
+            if (is_letter_or_mark(pos) || optional_prefix) {
+                if (optional_prefix) {
+                    ++pos;
+                }
+                while (is_letter_or_mark(pos)) {
+                    ++pos;
+                }
+                add_token(pos);
+                continue;
+            }
+
+            // regex: <space>?[\p{P}\p{S}]+[\r\n]*
+            size_t punctuation_pos = pos;
+            if (cpt == ' ' && is_punctuation_or_symbol(pos + 1)) {
+                ++punctuation_pos;
+            }
+            if (is_punctuation_or_symbol(punctuation_pos)) {
+                pos = punctuation_pos + 1;
+                while (is_punctuation_or_symbol(pos)) {
+                    ++pos;
+                }
+                while (get_cpt(pos) == '\r' || get_cpt(pos) == '\n') {
+                    ++pos;
+                }
+                add_token(pos);
+                continue;
+            }
+
+            size_t num_whitespaces = 0;
+            size_t last_end_r_or_n = 0;
+            while (get_flags(pos + num_whitespaces).is_whitespace) {
+                const uint32_t cpt2 = get_cpt(pos + num_whitespaces);
+                if (cpt2 == '\r' || cpt2 == '\n') {
+                    last_end_r_or_n = pos + num_whitespaces + 1;
+                }
+                ++num_whitespaces;
+            }
+
+            // regex: \s*[\r\n]+
+            if (last_end_r_or_n > 0) {
+                pos = last_end_r_or_n;
+                add_token(pos);
+                continue;
+            }
+
+            // regex: \s+(?!\S)
+            if (num_whitespaces > 1 && get_cpt(pos + num_whitespaces) != OUT_OF_RANGE) {
+                pos += num_whitespaces - 1;
+                add_token(pos);
+                continue;
+            }
+
+            // regex: \s+
+            if (num_whitespaces > 0) {
+                pos += num_whitespaces;
+                add_token(pos);
+                continue;
+            }
+
+            // Preserve number groups split by earlier regex passes.
+            size_t unmatched_end = pos + 1;
+            while (unmatched_end < offset_end) {
+                const uint32_t next_cpt = get_cpt(unmatched_end);
+                const auto next_flags = get_flags(unmatched_end);
+                const bool next_optional_prefix =
+                    next_cpt != '\r' && next_cpt != '\n' &&
+                    !next_flags.is_letter && !is_punctuation_or_symbol(unmatched_end) &&
+                    is_letter_or_mark(unmatched_end + 1);
+                if (next_flags.is_whitespace || is_letter_or_mark(unmatched_end) ||
+                    is_punctuation_or_symbol(unmatched_end) || next_optional_prefix) {
+                    break;
+                }
+                ++unmatched_end;
+            }
+            pos = unmatched_end;
+            add_token(pos);
+        }
+    }
+
+    return bpe_offsets;
+}
+
 template <typename CharT>
 static std::vector<size_t> unicode_regex_split_stl(const std::basic_string<CharT> & text, const std::basic_string<CharT> & regex, const std::vector<size_t> & offsets) {
     using BidirIt = typename std::basic_string<CharT>::const_iterator;
@@ -1062,6 +1217,9 @@ static std::vector<size_t> unicode_regex_split_custom(const std::string & text, 
     } else if (
            regex_expr == "(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])|[^\\r\\n\\p{L}\\p{N}]?[\\p{L}\\p{M}]+|\\p{N}| ?[^\\s\\p{L}\\p{M}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+") {
         bpe_offsets = unicode_regex_split_custom_qwen35(text, offsets);
+    } else if (
+           regex_expr == "[!\"#$%&'()*+,\\-./:;<=>?@\\[\\\\\\]^_`{|}~][A-Za-z]+|[^\r\n\\p{L}\\p{P}\\p{S}]?[\\p{L}\\p{M}]+| ?[\\p{P}\\p{S}]+[\r\n]*|\\s*[\r\n]+|\\s+(?!\\S)|\\s+") {
+        bpe_offsets = unicode_regex_split_custom_deepseek_hunyuan_joyai(text, offsets);
     } else if (regex_expr == "\\p{Han}+") {
         // K2's first pattern - handle all K2 patterns together
         bpe_offsets = unicode_regex_split_custom_kimi_k2(text, offsets);
