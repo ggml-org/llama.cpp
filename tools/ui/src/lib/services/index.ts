@@ -148,6 +148,16 @@ export { ConversationTransferService } from './conversation-transfer.service';
 export { ModelsService } from './models.service';
 
 /**
+ * **HuggingFaceService** - Hugging Face Hub browsing and searching
+ *
+ * Stateless HTTP client for the HF REST API (`/api/models`, `/tree`, raw
+ * README) and the llama.app model catalog. Provides GGUF file analysis
+ * (quant metadata, shard collapsing, size formatting) used by the models
+ * discover UI.
+ */
+export { HuggingFaceService, type SidecarForm } from './huggingface.service';
+
+/**
  * **PropsService** - Server properties and capabilities retrieval
  *
  * Fetches server configuration, model information, and capabilities from the `/props`
