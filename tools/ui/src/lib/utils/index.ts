@@ -31,14 +31,19 @@ export {
 	canScrollInDirection,
 	isCaretOnFirstLine,
 	isCaretOnLastLine,
+	getPromptHistoryEntries,
 	parsePromptHistory,
+	parsePromptHistoryBuckets,
 	pushPromptHistory,
 	recallNext,
 	recallPrevious,
+	setPromptHistoryEntries,
 	shouldLockPageScroll,
 	swipeDirection,
 	wheelHistoryDirection,
+	type PromptHistoryBuckets,
 	type PromptHistoryCursor,
+	type PromptHistoryScope,
 	type PromptHistorySwipe
 } from './prompt-history';
 

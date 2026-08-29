@@ -2,8 +2,9 @@
 	import { afterNavigate } from '$app/navigation';
 	import { page } from '$app/state';
 	import { ChatForm } from '$lib/components/app';
+	import { SETTINGS_KEYS } from '$lib/constants';
 	import { useDraftMessages } from '$lib/hooks/use-draft-messages.svelte';
-	import { deviceStore } from '$lib/stores';
+	import { deviceStore, settingsStore } from '$lib/stores';
 	import { onMount } from 'svelte';
 
 	interface Props {
@@ -61,6 +62,9 @@
 		};
 	});
 	let hasLoadingAttachments = $derived(uploadedFiles.some((f) => f.isLoading));
+	let enablePromptHistory = $derived(
+		settingsStore.config[SETTINGS_KEYS.ENABLE_PROMPT_HISTORY] !== false
+	);
 	let message = $derived(initialMessage);
 	let previousIsLoading = $derived(isLoading);
 	let previousInitialMessage = $derived(initialMessage);
@@ -154,7 +158,7 @@
 		bind:value={message}
 		class="mx-auto max-w-3xl {className}"
 		{disabled}
-		enablePromptHistory
+		{enablePromptHistory}
 		{isLoading}
 		onFilesAdd={handleFilesAdd}
 		{onStop}

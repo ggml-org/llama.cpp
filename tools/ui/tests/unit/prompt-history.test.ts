@@ -2,8 +2,11 @@ import {
 	canScrollInDirection,
 	isCaretOnFirstLine,
 	isCaretOnLastLine,
+	getPromptHistoryEntries,
 	parsePromptHistory,
+	parsePromptHistoryBuckets,
 	pushPromptHistory,
+	setPromptHistoryEntries,
 	recallNext,
 	recallPrevious,
 	shouldLockPageScroll,
@@ -51,6 +54,34 @@ describe('parsePromptHistory', () => {
 
 	it('keeps only non-empty strings', () => {
 		expect(parsePromptHistory(JSON.stringify(['ok', '', 2, 'also']))).toEqual(['ok', 'also']);
+	});
+});
+
+describe('prompt history buckets', () => {
+	it('migrates a legacy array into combined history', () => {
+		expect(parsePromptHistoryBuckets(JSON.stringify(['a', 'b']))).toEqual({
+			combined: ['a', 'b'],
+			sessions: {}
+		});
+	});
+
+	it('keeps combined and per-session lists independent', () => {
+		const store = parsePromptHistoryBuckets(
+			JSON.stringify({
+				combined: ['all'],
+				sessions: { chat1: ['one'], chat2: ['two'] }
+			})
+		);
+
+		expect(getPromptHistoryEntries(store, 'combine', 'chat1')).toEqual(['all']);
+		expect(getPromptHistoryEntries(store, 'separate', 'chat1')).toEqual(['one']);
+		expect(getPromptHistoryEntries(store, 'separate', 'missing')).toEqual([]);
+
+		const after = setPromptHistoryEntries(store, 'separate', 'chat1', ['one', 'new']);
+
+		expect(after.combined).toEqual(['all']);
+		expect(after.sessions.chat2).toEqual(['two']);
+		expect(after.sessions.chat1).toEqual(['one', 'new']);
 	});
 });
 

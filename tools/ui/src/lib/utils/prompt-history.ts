@@ -65,6 +65,81 @@ export function parsePromptHistory(raw: string | null): string[] {
 	}
 }
 
+export type PromptHistoryScope = 'separate' | 'combine';
+
+export interface PromptHistoryBuckets {
+	combined: string[];
+	sessions: Record<string, string[]>;
+}
+
+function parseEntryList(value: unknown): string[] {
+	if (!Array.isArray(value)) {
+		return [];
+	}
+
+	return value.filter((item): item is string => typeof item === 'string' && item.trim() !== '');
+}
+
+/** Combined + per-session lists. A legacy JSON array becomes `combined`. */
+export function parsePromptHistoryBuckets(raw: string | null): PromptHistoryBuckets {
+	if (!raw) {
+		return { combined: [], sessions: {} };
+	}
+
+	try {
+		const parsed: unknown = JSON.parse(raw);
+
+		if (Array.isArray(parsed)) {
+			return { combined: parseEntryList(parsed), sessions: {} };
+		}
+
+		if (!parsed || typeof parsed !== 'object') {
+			return { combined: [], sessions: {} };
+		}
+
+		const record = parsed as { combined?: unknown; sessions?: unknown };
+		const sessions: Record<string, string[]> = {};
+
+		if (record.sessions && typeof record.sessions === 'object' && !Array.isArray(record.sessions)) {
+			for (const [id, list] of Object.entries(record.sessions as Record<string, unknown>)) {
+				sessions[id] = parseEntryList(list);
+			}
+		}
+
+		return { combined: parseEntryList(record.combined), sessions };
+	} catch {
+		return { combined: [], sessions: {} };
+	}
+}
+
+export function getPromptHistoryEntries(
+	store: PromptHistoryBuckets,
+	scope: PromptHistoryScope,
+	sessionId: string
+): string[] {
+	if (scope === 'combine') {
+		return store.combined;
+	}
+
+	return store.sessions[sessionId] ?? [];
+}
+
+export function setPromptHistoryEntries(
+	store: PromptHistoryBuckets,
+	scope: PromptHistoryScope,
+	sessionId: string,
+	entries: string[]
+): PromptHistoryBuckets {
+	if (scope === 'combine') {
+		return { combined: entries, sessions: store.sessions };
+	}
+
+	return {
+		combined: store.combined,
+		sessions: { ...store.sessions, [sessionId]: entries }
+	};
+}
+
 export function recallPrevious(
 	entries: string[],
 	cursor: PromptHistoryCursor,

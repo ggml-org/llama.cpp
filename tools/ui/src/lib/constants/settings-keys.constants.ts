@@ -26,6 +26,7 @@ export const SETTINGS_KEYS = {
 	DYNATEMP_EXPONENT: 'dynatemp_exponent',
 	DYNATEMP_RANGE: 'dynatemp_range',
 	ENABLE_CONTINUE_GENERATION: 'enableContinueGeneration',
+	ENABLE_PROMPT_HISTORY: 'enablePromptHistory',
 	EXCLUDE_REASONING_FROM_CONTEXT: 'excludeReasoningFromContext',
 	FREQUENCY_PENALTY: 'frequency_penalty',
 	FULL_HEIGHT_CODE_BLOCKS: 'fullHeightCodeBlocks',
@@ -43,6 +44,8 @@ export const SETTINGS_KEYS = {
 	PDF_PARSE_TEXT: 'pdfParseText',
 	// Performance
 	PRE_ENCODE_CONVERSATION: 'preEncodeConversation',
+	PROMPT_HISTORY_COMBINE: 'promptHistoryCombine',
+	PROMPT_HISTORY_PER_SESSION: 'promptHistoryPerSession',
 	PRESENCE_PENALTY: 'presence_penalty',
 	RENDER_THINKING_AS_MARKDOWN: 'renderThinkingAsMarkdown',
 	RENDER_USER_CONTENT_AS_MARKDOWN: 'renderUserContentAsMarkdown',
