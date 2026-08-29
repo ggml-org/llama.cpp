@@ -788,8 +788,6 @@ void ggml_metal_encoder_debug_group_pop (ggml_metal_encoder_t encoder) {
 }
 
 void ggml_metal_encoder_set_pipeline(ggml_metal_encoder_t encoder, struct ggml_metal_pipeline_with_params pipeline) {
-    // compile_pipeline already logs the missing kernel name; dummy_kernel probes
-    // use compile_pipeline directly and must still be allowed to return nil
     if (!pipeline.pipeline) {
         GGML_ABORT("%s: nil Metal pipeline (missing kernel; see compile_pipeline log above)\n", __func__);
     }
@@ -1413,6 +1411,30 @@ void ggml_metal_device_get_memory(ggml_metal_device_t dev, size_t * free, size_t
     }
 }
 
+static bool ggml_metal_supports_mul_mat_op(
+        bool has_simdgroup_reduction,
+        const struct ggml_tensor * op,
+        bool src0_f16_has_mv,
+        bool mm_path) {
+    if (!has_simdgroup_reduction || op->src[0]->type == GGML_TYPE_NVFP4) {
+        return false;
+    }
+
+    if (op->src[1]->type != GGML_TYPE_F16) {
+        return true;
+    }
+
+    if (op->src[0]->type == GGML_TYPE_BF16) {
+        return false;
+    }
+
+    if (src0_f16_has_mv && op->src[0]->type == GGML_TYPE_F16) {
+        return true;
+    }
+
+    return mm_path;
+}
+
 bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_tensor * op) {
     const bool has_simdgroup_mm        = dev->props.has_simdgroup_mm;
     const bool has_simdgroup_reduction = dev->props.has_simdgroup_reduction;
@@ -1716,53 +1738,21 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
         case GGML_OP_GATED_DELTA_NET:
             return has_simdgroup_reduction && op->src[2]->ne[0] % 32 == 0;
         case GGML_OP_SOLVE_TRI:
-            return has_simdgroup_reduction && op->src[0]->type != GGML_TYPE_NVFP4;
+            return has_simdgroup_reduction && op->src[0]->type == GGML_TYPE_F32;
         case GGML_OP_MUL_MAT:
-            {
-                if (!has_simdgroup_reduction || op->src[0]->type == GGML_TYPE_NVFP4) {
-                    return false;
-                }
-
-                // the mat-vec kernels only have an f16 x f16 variant when src0 is F16;
-                // for BF16 there is no f16-src1 kernel at all (mat-mat included), and for
-                // F32/quantized src0 there is no kernel_mul_mv_<type>_f16 (only _f32), so
-                // those shapes must take the mat-mat path instead, which does have full
-                // f16 coverage (see ggml_metal_op_mul_mat for the matching dispatch logic)
-                if (op->src[1]->type == GGML_TYPE_F16 && op->src[0]->type != GGML_TYPE_F16) {
-                    if (op->src[0]->type == GGML_TYPE_BF16) {
-                        return false;
-                    }
-
-                    return !ggml_is_transposed(op->src[0]) &&
-                           !ggml_is_transposed(op->src[1]) &&
-                           has_simdgroup_mm &&
-                           op->src[0]->ne[0] >= 64 &&
-                           op->src[1]->ne[1] > 8;
-                }
-
-                return true;
-            }
+            return ggml_metal_supports_mul_mat_op(
+                    has_simdgroup_reduction, op, true,
+                    !ggml_is_transposed(op->src[0]) &&
+                    !ggml_is_transposed(op->src[1]) &&
+                    has_simdgroup_mm &&
+                    op->src[0]->ne[0] >= 64 &&
+                    op->src[1]->ne[1] > 8);
         case GGML_OP_MUL_MAT_ID:
-            {
-                if (!has_simdgroup_reduction || op->src[0]->type == GGML_TYPE_NVFP4) {
-                    return false;
-                }
-
-                // the mat-vec-id kernels have no f16-src1 variant for any src0 type (only
-                // f32); f16 src1 is only supported via the mat-mat-id path, and even that
-                // path has no f16-src1 kernel for BF16 src0
-                if (op->src[1]->type == GGML_TYPE_F16) {
-                    if (op->src[0]->type == GGML_TYPE_BF16) {
-                        return false;
-                    }
-
-                    return has_simdgroup_mm &&
-                           op->src[0]->ne[0] >= 64 &&
-                           op->src[2]->ne[1] >= 32;
-                }
-
-                return true;
-            }
+            return ggml_metal_supports_mul_mat_op(
+                    has_simdgroup_reduction, op, false,
+                    has_simdgroup_mm &&
+                    op->src[0]->ne[0] >= 64 &&
+                    op->src[2]->ne[1] >= 32);
         case GGML_OP_SET:
         case GGML_OP_CPY:
         case GGML_OP_DUP:
