@@ -5476,11 +5476,11 @@ catch (sycl::exception const &exc) {
 void ggml_backend_sycl_get_device_memory(int device, size_t * free, size_t * total) try {
     GGML_SYCL_DEBUG("[SYCL] call ggml_backend_sycl_get_device_memory\n");
     bool res = get_memory_size(dpct::dev_mgr::instance().get_device(device), *free, *total,
-                                   (MemoryAPIType) g_ggml_sycl_get_mem_api);
+                               (MemoryAPIType) g_ggml_sycl_get_mem_api);
     if (!res) {
         GGML_ABORT("[%s] failed to get device memory size", __func__);
     }
-    } catch (const sycl::exception & exc) {
+} catch (const sycl::exception & exc) {
     std::cerr << exc.what() << "Exception caught at file:" << __FILE__ << ", line:" << __LINE__ << std::endl;
     std::exit(1);
 }
@@ -5902,7 +5902,6 @@ static const char * ggml_backend_sycl_device_get_description(ggml_backend_dev_t 
 
 static void ggml_backend_sycl_device_get_memory(ggml_backend_dev_t dev, size_t * free, size_t * total) {
     ggml_backend_sycl_device_context * ctx = (ggml_backend_sycl_device_context *) dev->context;
-    printf("ggml_backend_sycl_get_device_memory2-init: device=%d free=%zu total=%zu\n", ctx->device, *free, *total);
     bool res = get_memory_size(dpct::dev_mgr::instance().get_device(ctx->device), *free, *total,
                                (MemoryAPIType) g_ggml_sycl_get_mem_api);
     if (!res) {
