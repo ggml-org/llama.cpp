@@ -6191,6 +6191,13 @@ struct test_top_k : public test_case {
                 diff += std::fabs(b[i] - ib[i]);
             }
 
+            if (n == (size_t) (ggml_nrows(input) * k)) {
+                for (int64_t r = 0; r < ggml_nrows(input); ++r) {
+                    diff += jdst(ia.data() + r * k, ib.data() + r * k, k);
+                }
+                return diff;
+            }
+
             return diff + jdst(ia.data(), ib.data(), n);
         }
     }
@@ -9723,6 +9730,13 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             }
         }
     }
+
+    // Large-k argsort fallback, including multi-row output.
+    test_cases.emplace_back(new test_top_k(GGML_TYPE_F32, { 1024, 1, 1, 1 }, 1024));
+    test_cases.emplace_back(new test_top_k(GGML_TYPE_F32, { 2048, 2, 1, 1 }, 1024));
+    test_cases.emplace_back(new test_top_k(GGML_TYPE_F32, { 4096, 1, 1, 1 }, 2048));
+    test_cases.emplace_back(new test_top_k(GGML_TYPE_F32, { 8192, 2, 1, 1 }, 2051));
+
     for (int k : {4, 8, 16, 32}) {
         for (int nrows : {1, 8, 16}) {
             test_cases.emplace_back(new test_top_k(GGML_TYPE_F32, {202048, nrows, 1, 1}, k));
