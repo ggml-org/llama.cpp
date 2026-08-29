@@ -4565,12 +4565,6 @@ static bool ggml_cuda_use_gfx1030_q8_cache() {
         return ggml_cuda_rdna2_native_profile_enabled() &&
                ggml_cuda_rdna2_feature_enabled("GGML_HIP_GFX1030_Q8_CACHE");
     }
-    if (GGML_CUDA_CC_IS_RDNA3(cc) || GGML_CUDA_CC_IS_RDNA4(cc)) {
-        const char * native = std::getenv("GGML_HIP_RDNA3_NATIVE");
-        const char * cache = std::getenv("GGML_HIP_RDNA3_Q8_CACHE");
-        return native != nullptr && std::atoi(native) != 0 &&
-               cache != nullptr && std::atoi(cache) != 0;
-    }
     return false;
 #else
     return false;
@@ -4584,12 +4578,6 @@ static bool ggml_cuda_use_gfx1030_q8_cache_telemetry() {
     if (GGML_CUDA_CC_IS_RDNA2(cc)) {
         const char * telemetry = std::getenv("GGML_HIP_GFX1030_Q8_CACHE_TELEMETRY");
         return ggml_cuda_rdna2_native_profile_enabled() &&
-               telemetry != nullptr && std::atoi(telemetry) != 0;
-    }
-    if (GGML_CUDA_CC_IS_RDNA3(cc) || GGML_CUDA_CC_IS_RDNA4(cc)) {
-        const char * native = std::getenv("GGML_HIP_RDNA3_NATIVE");
-        const char * telemetry = std::getenv("GGML_HIP_RDNA3_Q8_CACHE_TELEMETRY");
-        return native != nullptr && std::atoi(native) != 0 &&
                telemetry != nullptr && std::atoi(telemetry) != 0;
     }
     return false;

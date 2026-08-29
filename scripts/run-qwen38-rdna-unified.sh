@@ -30,7 +30,7 @@ Usage: scripts/run-qwen38-rdna-unified.sh [options] [-- extra llama-server args]
   --model PATH         verified target GGUF
   --mmproj PATH        verified multimodal projector
   --bundle PATH        prepared spec-sidecar-mtp bundle
-  --profile NAME       safe | native | experimental (default safe)
+  --profile NAME       safe | experimental (default safe)
   --split-mode MODE    tensor | layer (default tensor)
   --kv-type TYPE       cache type (default f16 for tensor, q8_0 for layer)
   --ctx-size N         target context (default 262144)
@@ -67,7 +67,7 @@ while (($#)); do
         *) fail "unknown argument: $1 (put llama-server arguments after --)" ;;
     esac
 done
-case "$PROFILE" in safe|native|experimental) ;; *) fail "invalid profile: $PROFILE" ;; esac
+case "$PROFILE" in safe|experimental) ;; *) fail "invalid profile: $PROFILE" ;; esac
 case "$SPLIT_MODE" in tensor|layer) ;; *) fail "invalid split mode: $SPLIT_MODE" ;; esac
 if [[ -z $KV_TYPE ]]; then
     [[ $SPLIT_MODE == tensor ]] && KV_TYPE=f16 || KV_TYPE=q8_0
@@ -146,14 +146,13 @@ if [[ $ARCH == gfx1100 ]]; then
     unset GGML_HIP_RDNA2_AUTO GGML_HIP_GFX1030_NATIVE GGML_HIP_GFX1030_Q8_1_FUSION
     export GGML_HIP_RDNA3_ADD_RMS_NORM_FUSION=$USE_GFX1100_ADD_RMS_FUSION
     case "$PROFILE" in
-        safe)         export GGML_HIP_RDNA3_NATIVE=0 GGML_HIP_RDNA3_Q8_CACHE=0 GGML_HIP_RDNA3_GDN_CHUNKED=0 ;;
-        native)       export GGML_HIP_RDNA3_NATIVE=1 GGML_HIP_RDNA3_Q8_CACHE=0 GGML_HIP_RDNA3_GDN_CHUNKED=0 ;;
-        experimental) export GGML_HIP_RDNA3_NATIVE=1 GGML_HIP_RDNA3_Q8_CACHE=1 GGML_HIP_RDNA3_GDN_CHUNKED=1 ;;
+        safe)         export GGML_HIP_RDNA3_GDN_CHUNKED=0 ;;
+        experimental) export GGML_HIP_RDNA3_GDN_CHUNKED=1 ;;
     esac
 elif [[ $ARCH == gfx1030 ]]; then
     export HSA_OVERRIDE_GFX_VERSION="${HSA_OVERRIDE_GFX_VERSION:-10.3.0}"
     export GGML_HIP_RDNA2_AUTO="${GGML_HIP_RDNA2_AUTO:-1}"
-    unset GGML_HIP_RDNA3_NATIVE GGML_HIP_RDNA3_Q8_CACHE GGML_HIP_RDNA3_GDN_CHUNKED GGML_HIP_RDNA3_ADD_RMS_NORM_FUSION
+    unset GGML_HIP_RDNA3_GDN_CHUNKED GGML_HIP_RDNA3_ADD_RMS_NORM_FUSION
 else
     fail "unsupported architecture: $ARCH"
 fi

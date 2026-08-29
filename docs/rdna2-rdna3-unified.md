@@ -36,13 +36,9 @@ older BridgeSpec sidecar directory from the RDNA3 fork.
 - NVFP4 fast-scale decode and MMVQ six-row/width-eight policies;
 - Q8_1 unary/matmul fusion. This remains structurally restricted to RDNA2.
 
-### gfx1100 / RDNA3 opt-in
+### gfx1100 / RDNA3 behavior
 
-- `GGML_HIP_RDNA3_NATIVE=1`: enables the native gfx11 Q4_0 dot8 MMVQ path;
-- `GGML_HIP_RDNA3_Q8_CACHE=1`: enables graph-scoped Q8 activation reuse,
-  independently of the rejected RDNA3 unary-Q8 fusion;
-- `GGML_HIP_RDNA3_Q8_CACHE_TELEMETRY=1`: cache diagnostics;
-- `GGML_HIP_RDNA3_GDN_CHUNKED=1`: chunked GDN prefill;
+- `GGML_HIP_RDNA3_GDN_CHUNKED=1`: opt-in chunked GDN prefill;
 - `GGML_HIP_RDNA3_ADD_RMS_NORM_FUSION=1`: exact-gfx1100 residual
   Add+RMSNorm+MUL fusion. This independent, default-off control is exposed by
   the launcher as `--gfx1100-add-rms-fusion`;
@@ -52,32 +48,31 @@ older BridgeSpec sidecar directory from the RDNA3 fork.
 
 ### Rejected or deferred
 
-- `HSA_OVERRIDE_GFX_VERSION=10.3.0` on native gfx1100;
+- `HSA_OVERRIDE_GFX_VERSION=10.3.0` on actual gfx1100 hardware;
 - `GGML_TP_SHARDED_OUTPUT` (not present in either final source tree);
 - older `sidecars/bridgespec` duplication;
 - reverted DFlash residual/output-trimming experiment;
 - RDNA3 unary-MUL/Q8_1 fusion, which previously produced corrupt repeated
   tokens and is irrelevant to this dense (non-MoE) target;
-- the trial `GGML_HIP_RDNA3_MMVQ_WIDE_LOAD` port, removed after a balanced A/B
-  measured no speedup;
+- the trial MMVQ wide-load port, removed after a balanced A/B measured no
+  speedup;
+- the experimental gfx1100 Q4_0 dot8 MMVQ and dependent Q8 cache controls,
+  removed after they measured slower than the safe dispatcher;
 - experimental multi-op GDN/sibling/residual fusions until independent output
   parity tests pass;
 - broad replacement of current MMVQ, CUDA dispatcher, or communication code.
 
-All gfx1100 features are opt-in at runtime. The safe launch profile leaves
-native, Q8 cache, chunked GDN, and Add+RMSNorm fusion off. Promote a path only
-after comparing fixed-seed output against that profile. The dispatcher also
-checks the actual runtime architecture before selecting RDNA2-only DFlash
-width-six, MMVQ width-eight, or Q8 schedules; setting the gfx1100 native dot8
-flag cannot select those gfx1030 policies.
+The safe launch profile leaves chunked GDN and Add+RMSNorm fusion off. Promote
+an optional path only after comparing fixed-seed output against that profile.
+The dispatcher checks the actual runtime architecture before selecting
+RDNA2-only DFlash width-six, MMVQ width-eight, or Q8 schedules.
 
 ## gfx1100 WMMA audit
 
-WMMA is already a compiled architecture capability, not a runtime profile.
-`GGML_HIP_RDNA3_NATIVE` selects an experimental Q4_0 dot8 **MMVQ decode** path;
-it neither enables nor disables WMMA. The gfx1100 build emits WMMA in **MMQ
-prompt processing** and compatible F16 flash attention even with the `safe`
-profile.
+WMMA is a compiled architecture capability, not a runtime profile. The retired
+Q4_0 dot8 experiment affected **MMVQ decode** only; it neither enabled nor
+disabled WMMA. The gfx1100 build emits WMMA in **MMQ prompt processing** and
+compatible F16 flash attention with the `safe` profile.
 
 Generated-code and runtime tracing established both halves of that claim:
 
@@ -90,8 +85,8 @@ Generated-code and runtime tracing established both halves of that claim:
   instructions.
 
 `rocprofv3` kernel traces and the extracted gfx1100 code objects are preserved
-under `~/llama-rdna2-rdna3-evidence/wmma-followup/`. Consequently, the
-existing `native` profile should not be described as a WMMA profile.
+under `~/llama-rdna2-rdna3-evidence/wmma-followup/`. No runtime switch is
+needed to enable these WMMA kernels.
 
 ## Build
 
@@ -171,11 +166,10 @@ CTX_SIZE=8192 ./scripts/run-qwen38-rdna-unified.sh \
 
 Profiles:
 
-- `safe`: all new gfx1100 runtime paths off, including Add+RMSNorm fusion;
-- `native`: native Q4_0 dot8 MMVQ on, Q8 cache and chunked GDN off; this does
-  not control WMMA;
-- `experimental`: native MMVQ, Q8 cache, and chunked GDN on. It is retained
-  for A/B work and is not the recommended profile.
+- `safe`: chunked GDN off; Add+RMSNorm is also off unless its independent
+  launcher option is supplied;
+- `experimental`: chunked GDN on. It is retained for A/B work and is not the
+  recommended profile.
 
 The launcher defaults to true tensor mode with F16 KV and a `1,1` split. It
 uses `draft-mtp,ngram-map-k4v`, N/M sizes 12/48, draft maximum 3, the first
@@ -194,12 +188,12 @@ capacity is installed and tested.
 ## Initial two-GPU evidence
 
 At 8,192 context on two 180 W RX 7900 XT cards, a deterministic 39-token code
-response was byte-identical in safe, native, experimental, and MTP-sidecar
-modes. Measured decode rates were:
+response was byte-identical in the safe configuration, the now-retired dot8
+trials, and MTP-sidecar mode. Measured decode rates were:
 
 - layer/Q8 safe target: 28.51 tokens/s;
-- layer/Q8 native target: 20.58 tokens/s;
-- layer/Q8 experimental native + Q8 cache + chunked GDN: 20.61 tokens/s;
+- layer/Q8 retired dot8 trial: 20.58 tokens/s;
+- layer/Q8 retired grouped dot8/cache/GDN trial: 20.61 tokens/s;
 - layer/Q8 safe target + MTP/ngram: 64.09-65.14 tokens/s;
 - tensor/F16 safe target: 37.54 tokens/s;
 - tensor/F16 safe target + MTP/ngram: 87.01-87.38 tokens/s after warmup;
@@ -207,8 +201,8 @@ modes. Measured decode rates were:
 
 MTP accepted 30/33 draft tokens (0.90909) in each code run. Therefore the
 production recommendation is the **safe tensor target plus current MTP
-sidecar**. The native dot8/cache controls remain opt-in research paths; their
-correct output does not justify enabling them on this Q4 AutoRound model.
+sidecar**. The slower dot8 and dependent Q8 cache controls were removed rather
+than retained as confusing research switches.
 
 A later balanced tensor/F16 target-only A/B used two server loads per mode and
 16 warm deterministic requests per aggregate. Safe decode averaged 39.920

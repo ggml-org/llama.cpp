@@ -318,12 +318,6 @@ static bool mmvq_use_gfx1030_native(int cc) {
         // Preserve the existing gfx1030 profile and its automatic feature policy.
         return ggml_cuda_rdna2_native_profile_enabled();
     }
-    if (GGML_CUDA_CC_IS_RDNA3(cc) || GGML_CUDA_CC_IS_RDNA4(cc)) {
-        // gfx11+ uses its native mixed signed/unsigned dot8 path only when
-        // explicitly requested. Never emulate gfx1030 through HSA_OVERRIDE.
-        const char * env = std::getenv("GGML_HIP_RDNA3_NATIVE");
-        return env != nullptr && std::atoi(env) != 0;
-    }
     return false;
 #else
     GGML_UNUSED(cc);
@@ -1762,10 +1756,6 @@ static bool mmvq_use_gfx1030_q8_cache() {
         return ggml_cuda_rdna2_feature_enabled("GGML_HIP_GFX1030_Q8_CACHE") &&
                mmvq_use_gfx1030_native(cc);
     }
-    if (GGML_CUDA_CC_IS_RDNA3(cc) || GGML_CUDA_CC_IS_RDNA4(cc)) {
-        const char * env = std::getenv("GGML_HIP_RDNA3_Q8_CACHE");
-        return env != nullptr && std::atoi(env) != 0 && mmvq_use_gfx1030_native(cc);
-    }
     return false;
 #else
     return false;
@@ -1779,8 +1769,6 @@ static bool mmvq_use_gfx1030_q8_cache_telemetry() {
     const char * env_name = nullptr;
     if (GGML_CUDA_CC_IS_RDNA2(cc)) {
         env_name = "GGML_HIP_GFX1030_Q8_CACHE_TELEMETRY";
-    } else if (GGML_CUDA_CC_IS_RDNA3(cc) || GGML_CUDA_CC_IS_RDNA4(cc)) {
-        env_name = "GGML_HIP_RDNA3_Q8_CACHE_TELEMETRY";
     }
     const char * telemetry = env_name != nullptr ? std::getenv(env_name) : nullptr;
     const bool enabled = telemetry != nullptr && std::atoi(telemetry) != 0;
