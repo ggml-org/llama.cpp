@@ -10,6 +10,10 @@
 #include <set>
 #include <vector>
 
+#if defined(_MSC_VER)
+#include <intrin.h>
+#endif
+
 struct llama_kv_cell_ext {
     // 2D spatial positions, typically used for M-RoPE
     llama_pos x = 0;
@@ -29,6 +33,106 @@ struct llama_kv_cell_ext {
 
         *this = llama_kv_cell_ext{};
     }
+};
+
+// index of the lowest set bit, and of the highest; the word is never zero here
+#if defined(_MSC_VER)
+static inline uint32_t llama_kv_ctz64(uint64_t x) {
+    unsigned long r;
+    _BitScanForward64(&r, x);
+    return (uint32_t) r;
+}
+
+static inline uint32_t llama_kv_clz64(uint64_t x) {
+    unsigned long r;
+    _BitScanReverse64(&r, x);
+    return (uint32_t) r;
+}
+#else
+static inline uint32_t llama_kv_ctz64(uint64_t x) {
+    return (uint32_t) __builtin_ctzll(x);
+}
+
+static inline uint32_t llama_kv_clz64(uint64_t x) {
+    return (uint32_t) (63 - __builtin_clzll(x));
+}
+#endif
+
+// a dense set of cell indices, kept as a bitmap so that a full pass reads words instead of
+// chasing tree nodes. the cells it tracks are a large fraction of the cache, so the bitmap is
+// both smaller and faster to walk than a node per index
+class llama_kv_idx_set {
+public:
+    void resize(uint32_t n) {
+        bits.assign((n + 63)/64, 0);
+        n_set = 0;
+    }
+
+    void clear() {
+        std::fill(bits.begin(), bits.end(), 0);
+        n_set = 0;
+    }
+
+    void insert(uint32_t i) {
+        uint64_t & w = bits[i/64];
+        const uint64_t b = 1ull << (i%64);
+
+        n_set += (w & b) == 0;
+        w |= b;
+    }
+
+    void erase(uint32_t i) {
+        uint64_t & w = bits[i/64];
+        const uint64_t b = 1ull << (i%64);
+
+        n_set -= (w & b) != 0;
+        w &= ~b;
+    }
+
+    bool contains(uint32_t i) const {
+        return (bits[i/64] >> (i%64)) & 1;
+    }
+
+    uint32_t size()  const { return n_set; }
+    bool     empty() const { return n_set == 0; }
+
+    uint32_t first() const {
+        for (size_t w = 0; w < bits.size(); ++w) {
+            if (bits[w]) {
+                return 64*w + llama_kv_ctz64(bits[w]);
+            }
+        }
+
+        return 0;
+    }
+
+    uint32_t last() const {
+        for (size_t w = bits.size(); w-- > 0; ) {
+            if (bits[w]) {
+                return 64*w + llama_kv_clz64(bits[w]);
+            }
+        }
+
+        return 0;
+    }
+
+    // visits the indices in ascending order
+    template <class F>
+    void for_each(F && f) const {
+        for (size_t w = 0; w < bits.size(); ++w) {
+            uint64_t m = bits[w];
+
+            while (m) {
+                f((uint32_t) (64*w + llama_kv_ctz64(m)));
+                m &= m - 1;
+            }
+        }
+    }
+
+private:
+    std::vector<uint64_t> bits;
+
+    uint32_t n_set = 0;
 };
 
 // meta information about KV cells that can be part of multiple sequences at the same time
@@ -69,6 +173,7 @@ public:
         ext.resize(n);
         shift.resize(n);
         seq.resize(n);
+        used.resize(n);
 
         reset();
     }
@@ -87,13 +192,13 @@ public:
     // the index of the first cell that is used
     // return 0 if no cells are used
     uint32_t used_min() const {
-        return used.empty() ? 0 : *used.begin();
+        return used.empty() ? 0 : used.first();
     }
 
     // the index of the last cell that is used + 1
     // return 0 if no cells are used
     uint32_t used_max_p1() const {
-        return used.empty() ? 0 : *used.rbegin() + 1;
+        return used.empty() ? 0 : used.last() + 1;
     }
 
     bool get_has_shift() const {
@@ -314,9 +419,9 @@ public:
     // note: used by n-gram input embeddings to recover the tokens preceding a ubatch
     template<typename F>
     void for_each_token_in(const std::bitset<LLAMA_MAX_SEQ> & seqs, llama_pos p0, llama_pos p1, F && f) const {
-        for (const auto & i : used) {
+        used.for_each([&](uint32_t i) {
             if (pos[i] < p0 || pos[i] >= p1) {
-                continue;
+                return;
             }
 
             const auto m = seq[i] & seqs;
@@ -331,7 +436,7 @@ public:
                     --left;
                 }
             }
-        }
+        });
     }
 
     // note: call only if the cell is not empty and the seq_id is not in the cell
@@ -488,7 +593,7 @@ private:
     bool has_shift = false;
 
     // set of indices of used cells (i.e. pos[i] != -1, allowed to not have any seq_id)
-    std::set<uint32_t> used;
+    llama_kv_idx_set used;
 
     std::vector<llama_pos> pos;
 
