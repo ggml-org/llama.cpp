@@ -338,11 +338,7 @@ static ggml_type fallback_type_for(const ggml_type target_type) {
         case GGML_TYPE_Q5_K:   return GGML_TYPE_Q5_1;
         case GGML_TYPE_Q6_K:   return GGML_TYPE_Q8_0;
         default:
-            if (ggml_blck_size(target_type) <= 32) {
-                // the target is already a 32-block type, so there is no smaller block to demote to
-                // the caller's check turns it into F16, as a 256-block type does when its fallback does not fit
-                return target_type;
-            }
+            if (ggml_blck_size(target_type) <= 32) { return GGML_TYPE_COUNT; } // nothing smaller to demote to
             throw std::runtime_error(format("no tensor type fallback is defined for type %s", ggml_type_name(target_type)));
     }
 }
@@ -357,7 +353,7 @@ static ggml_type tensor_type_fallback(quantize_state_impl & qs, const ggml_tenso
         t->name, ncols, qk_k, ggml_type_name(target_type));
 
     ggml_type fallback_type = fallback_type_for(target_type);
-    if (ncols % ggml_blck_size(fallback_type) != 0) {
+    if (fallback_type == GGML_TYPE_COUNT || ncols % ggml_blck_size(fallback_type) != 0) {
         //
         // the fallback return type is still not compatible for this tensor!
         //
@@ -813,7 +809,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
     auto make_compatible = [&](const ggml_tensor * gt, const ggml_type gq) -> ggml_type {
         if (is_compatible(gt, gq)) { return gq; }
         const ggml_type fb = fallback_type_for(gq);
-        return is_compatible(gt, fb) ? fb : GGML_TYPE_F16;
+        return fb != GGML_TYPE_COUNT && is_compatible(gt, fb) ? fb : GGML_TYPE_F16;
     };
 
     // Check if tensor is an IQ type
