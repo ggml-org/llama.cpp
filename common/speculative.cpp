@@ -1690,7 +1690,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         // vision batch was skipped by process()), reset the sequence's cache so
         // the first draft decode does not hit stale cells
         for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
-            if (dparams[seq_id].drafting) {
+            if (dparams[seq_id].drafting && !is_mem_shared) {
                 reset_kv_if_out_of_sync(seq_id, dparams[seq_id].n_past);
             }
         }
