@@ -366,7 +366,8 @@ kernel void kernel_conv_transpose_2d(
 
     const int64_t out_x = tgpig[0];
     const int64_t out_y = tgpig[1];
-    const int64_t out_c = tgpig[2];
+    const int64_t batch = tgpig[2] / args.OC;
+    const int64_t out_c = tgpig[2] % args.OC;
 
     const int64_t kw = tpitg[0];
     const int64_t kh = tpitg[1];
@@ -390,7 +391,7 @@ kernel void kernel_conv_transpose_2d(
 
         if (in_x >= args.IW) continue;
 
-        const int64_t input_idx = (args.IW * args.IH) * in_c + (args.IW) * in_y + in_x;
+        const int64_t input_idx = (args.IW * args.IH) * (args.IC * batch + in_c) + (args.IW) * in_y + in_x;
         const int64_t kernel_idx = (args.KH * args.KW * args.OC) * in_c + (args.KH * args.KW) * out_c + (args.KW) * kh + kw;
 
         v += (float)src0[kernel_idx] * src1[input_idx];
@@ -408,7 +409,7 @@ kernel void kernel_conv_transpose_2d(
             total += shared_sum[i];
         }
 
-        device float * dst_ptr = (device float *) (dst + out_x*args.nb0 + out_y * args.nb1 + out_c*args.nb2);
+        device float * dst_ptr = (device float *) (dst + batch*args.nb3 + out_c*args.nb2 + out_y * args.nb1 + out_x*args.nb0);
         dst_ptr[0] = total;
     }
 }
