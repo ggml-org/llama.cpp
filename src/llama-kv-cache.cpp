@@ -1868,15 +1868,32 @@ void llama_kv_cache::get_prev_tokens(const llama_ubatch & ubatch, uint32_t n, st
 
     for (uint32_t s = 0; s < n_stream; ++s) {
         // p_max inclusive: an embd token looks up cells at its own (shared) position
-        v_cells[s].for_each_token_in(seqs, 0, p_max + 1,
+        v_cells[s].for_each_token_in(seqs, w0, p_max + 1,
             [&](llama_seq_id seq_id, llama_pos pos, llama_token tok) {
-                if (pos >= w0) {
-                    hist[key(seq_id, pos)] = tok;
-                } else if (pos > below[seq_id].first) {
-                    below[seq_id] = { pos, tok };
-                }
+                hist[key(seq_id, pos)] = tok;
             });
     }
+
+    // below[] only answers when an M-RoPE gap leaves the window empty, so it costs a pass of
+    // its own that contiguous positions never pay
+    bool below_ready = false;
+
+    const auto ensure_below = [&]() {
+        if (below_ready) {
+            return;
+        }
+
+        below_ready = true;
+
+        for (uint32_t s = 0; s < n_stream; ++s) {
+            v_cells[s].for_each_token_in(seqs, 0, w0,
+                [&](llama_seq_id seq_id, llama_pos pos, llama_token tok) {
+                    if (pos > below[seq_id].first) {
+                        below[seq_id] = { pos, tok };
+                    }
+                });
+        }
+    };
 
     // the token at pos p, or the nearest earlier one when p falls in an M-RoPE gap
     const auto lookup = [&](llama_seq_id seq_id, llama_pos p) -> llama_token {
@@ -1886,6 +1903,9 @@ void llama_kv_cache::get_prev_tokens(const llama_ubatch & ubatch, uint32_t n, st
                 return it->second;
             }
         }
+
+        ensure_below();
+
         return below[seq_id].second;
     };
 
