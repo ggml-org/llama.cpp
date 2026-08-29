@@ -593,7 +593,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_ssm_scan(ggml_me
     // - sgptg floats for shared_x_dt (nsg)
     // - sgptg floats for shared_dA (nsg)
     // Total: nsg * (32 + 2) floats
-    res.smem = (32 + 2)*sizeof(float)*nsg;
+    res.smem = GGML_PAD((32 + 2)*sizeof(float)*nsg, 16);
 
     return res;
 }
@@ -1029,6 +1029,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mm_id_map0(g
     }
 
     res.smem = (size_t) ne02*ne20*sizeof(uint16_t);
+    res.smem = GGML_PAD(res.smem, 16);
 
     return res;
 }
