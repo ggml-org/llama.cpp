@@ -273,7 +273,13 @@ template <int vdr> static __device__ __forceinline__ float vec_dot_q5_1_q8_1_imp
     return sumi*d5d8 + m5s8 / (QI5_1 / vdr);
 }
 
+#if defined(RDNA3_0)
+// Native gfx1100 Q8_0 decode: VDR=4 was faster on both RX 7900 XT cards
+// across representative FFN/QKV/SSM/lm_head shapes; MMQ remains unchanged.
+#define VDR_Q8_0_Q8_1_MMVQ 4
+#else
 #define VDR_Q8_0_Q8_1_MMVQ 2
+#endif
 #define VDR_Q8_0_Q8_1_MMQ 8
 
 template <typename T, int vdr> static __device__ __forceinline__ T vec_dot_q8_0_q8_1_impl(

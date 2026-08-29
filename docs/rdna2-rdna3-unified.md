@@ -44,6 +44,9 @@ older BridgeSpec sidecar directory from the RDNA3 fork.
   the launcher as `--gfx1100-add-rms-fusion`;
 - gfx1100-specific flash-attention launch configurations;
 - Q4_K/Q5_K/Q6_K aligned LDS MMQ loads, compiled only into gfx11 builds;
+- native gfx1100 Q8_0 MMVQ decode uses VDR=4, while Q8_0 MMQ remains unchanged;
+  this was measured faster on both RX 7900 XT cards across representative
+  FFN/QKV/SSM/lm_head shapes and is architecture-gated to `RDNA3_0`;
 - consistent RDNA3 MMVQ reduction widths for decode and speculative verify.
 
 ### Rejected or deferred
@@ -56,8 +59,9 @@ older BridgeSpec sidecar directory from the RDNA3 fork.
   tokens and is irrelevant to this dense (non-MoE) target;
 - the trial MMVQ wide-load port, removed after a balanced A/B measured no
   speedup;
-- the experimental gfx1100 Q4_0 dot8 MMVQ and dependent Q8 cache controls,
-  removed after they measured slower than the safe dispatcher;
+- the experimental gfx1100 Q4_0 dot8 MMVQ and its dependent Q8 activation-cache
+  controls, removed after they measured slower than the safe dispatcher; this
+  is distinct from the tested native Q8_0 weight VDR=4 path;
 - experimental multi-op GDN/sibling/residual fusions until independent output
   parity tests pass;
 - broad replacement of current MMVQ, CUDA dispatcher, or communication code.
@@ -71,7 +75,8 @@ RDNA2-only DFlash width-six, MMVQ width-eight, or Q8 schedules.
 
 WMMA is a compiled architecture capability, not a runtime profile. The retired
 Q4_0 dot8 experiment affected **MMVQ decode** only; it neither enabled nor
-disabled WMMA. The gfx1100 build emits WMMA in **MMQ prompt processing** and
+disabled WMMA. The tested Q8_0 VDR=4 path is also an MMVQ decode-width change,
+not a WMMA switch. The gfx1100 build emits WMMA in **MMQ prompt processing** and
 compatible F16 flash attention with the `safe` profile.
 
 Generated-code and runtime tracing established both halves of that claim:
@@ -214,3 +219,12 @@ comparison matched all 39 selected-token log probabilities and 194 common top
 log probabilities exactly. The Add+RMSNorm path is therefore retained as an
 independent opt-in, but the production default stays off because the measured
 benefit is small and prompt-only.
+
+A focused Q8_0 weight-kernel A/B then compared VDR=2 against native gfx1100
+VDR=4 on both cards. Three samples per mode covered m=1024/6144/10240/12288/
+248320, k=5120, n=1; the lm_head-shaped m=248320 case improved 8.02% and
+7.33% on GPUs 0 and 1, respectively. The representative m=10240 case improved
+13.90% and 19.01%. Q8_0 correctness passed 47/47 cases on both devices in
+both modes. The change is now architecture-gated to `RDNA3_0`; it does not
+change the MMQ VDR or RDNA2 behavior. No Q8 GGUF was installed, so this remains
+a kernel/shape qualification rather than an end-to-end Q8 model benchmark.
