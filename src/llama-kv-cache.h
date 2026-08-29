@@ -243,6 +243,11 @@ public:
     // note: used by n-gram input embeddings
     void get_prev_tokens(const llama_ubatch & ubatch, uint32_t n, std::vector<llama_token> & res) const;
 
+    // (seq, pos) -> token index variant of get_prev_tokens - O(needs * log n) instead of scanning all cells
+    // returns false if the ubatch is not eligible (multimodal predecessors are resolved by ubatch order)
+    // see llama_kv_cells::seq_pos_token_le() and the LLAMA_KV_PREV_TOKENS modes in llama-kv-cache.cpp
+    bool get_prev_tokens_indexed(const llama_ubatch & ubatch, uint32_t n, std::vector<llama_token> & res) const;
+
 private:
     const llama_model & model;
     const llama_hparams & hparams;

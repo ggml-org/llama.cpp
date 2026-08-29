@@ -246,7 +246,7 @@ public:
         assert(seq_id >= 0);
 
         seq[i].reset(seq_id);
-        seq_pos_dec(seq_id, pos[i]);
+        seq_pos_dec(seq_id, pos[i], i);
 
         if (seq[i].none()) {
             pos[i] = -1;
@@ -270,7 +270,7 @@ public:
             seq[i].reset();
 
             seq[i].set(seq_id);
-            seq_pos_inc(seq_id, pos[i]);
+            seq_pos_inc(seq_id, pos[i], i);
 
             return false;
         }
@@ -340,7 +340,7 @@ public:
         assert(!seq[i].test(seq_id));
 
         seq[i].set(seq_id);
-        seq_pos_inc(seq_id, pos[i]);
+        seq_pos_inc(seq_id, pos[i], i);
     }
 
     // return the sequence id of this cell
@@ -367,7 +367,7 @@ public:
             return -1;
         }
 
-        assert(seq_pos[seq_id].begin()->second > 0);
+        assert(!seq_pos[seq_id].begin()->second.empty());
 
         return seq_pos[seq_id].begin()->first;
     }
@@ -382,9 +382,34 @@ public:
             return -1;
         }
 
-        assert(seq_pos[seq_id].rbegin()->second > 0);
+        assert(!seq_pos[seq_id].rbegin()->second.empty());
 
         return seq_pos[seq_id].rbegin()->first;
+    }
+
+    // the token of the newest cell (largest row) at the largest position <= p for the given sequence
+    // this reproduces the result of an ascending scan over all cells building a (seq, pos) -> token map, where
+    // the last cell written for a (seq, pos) pair wins - see llama_kv_cache::get_prev_tokens()
+    // return values:
+    //  +1: found, *tok is set
+    //   0: the sequence has no cell at or before p
+    int seq_pos_token_le(llama_seq_id seq_id, llama_pos p, llama_token * tok) const {
+        assert(seq_id >= 0);
+        assert(seq_id < LLAMA_MAX_SEQ);
+
+        const auto & m = seq_pos[seq_id];
+
+        auto it = m.upper_bound(p);
+        if (it == m.begin()) {
+            return 0;
+        }
+
+        --it;
+        assert(!it->second.empty());
+
+        *tok = ext[*it->second.rbegin()].tok;
+
+        return 1;
     }
 
     // note: call only if the cell is not empty
@@ -516,7 +541,7 @@ private:
     // the bitset seq[i] tells us which sequences are currently occupying the i-th cell
     std::vector<seq_set_t> seq;
 
-    // the set seq_pos[s][p] tells us how many times the position p is currently present for sequence s
+    // the set seq_pos[s][p] contains the rows (cell indices) of all cells currently occupying position p for sequence s
     // if the position p is not present, seq_pos[s][p] is not set
     // this way seq_pos[s].begin() and seq_pos[s].rbegin() give us the min/max positions currently in the cache
     //
@@ -524,28 +549,34 @@ private:
     //  - during performing a cache reuse via (rm + add)
     //  - some vision models have input embeddings with repeating positions
     //
-    std::map<llama_pos, int> seq_pos[LLAMA_MAX_SEQ];
+    // keeping the rows (and not just a reference count) allows resolving the token of a (seq, pos) pair without
+    // scanning all cells. the rows are sorted, so *rbegin() reproduces the "last cell wins" result of an ascending
+    // scan over all cells - see llama_kv_cache::get_prev_tokens() and llama_kv_cells::seq_pos_token_le()
+    //
+    std::map<llama_pos, std::set<uint32_t>> seq_pos[LLAMA_MAX_SEQ];
 
     // helper functions for updating `seq_pos`, once cell at a time:
 
-    void seq_pos_dec(llama_seq_id s, llama_pos p) {
+    void seq_pos_dec(llama_seq_id s, llama_pos p, uint32_t row) {
         auto it = seq_pos[s].find(p);
         assert(it != seq_pos[s].end());
 
-        if (--it->second == 0) {
+        it->second.erase(row);
+
+        if (it->second.empty()) {
             seq_pos[s].erase(it);
         }
     }
 
-    void seq_pos_inc(llama_seq_id s, llama_pos p) {
-        seq_pos[s][p]++;
+    void seq_pos_inc(llama_seq_id s, llama_pos p, uint32_t row) {
+        seq_pos[s][p].insert(row);
     }
 
     // remove cell i
     void seq_pos_rm(uint32_t i) {
         for (int s = 0; s < LLAMA_MAX_SEQ; ++s) {
             if (seq[i].test(s)) {
-                seq_pos_dec(s, pos[i]);
+                seq_pos_dec(s, pos[i], i);
             }
         }
     }
@@ -554,7 +585,7 @@ private:
     void seq_pos_add(uint32_t i) {
         for (int s = 0; s < LLAMA_MAX_SEQ; ++s) {
             if (seq[i].test(s)) {
-                seq_pos_inc(s, pos[i]);
+                seq_pos_inc(s, pos[i], i);
             }
         }
     }

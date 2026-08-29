@@ -8,7 +8,9 @@
 #include <algorithm>
 #include <array>
 #include <cassert>
+#include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <map>
@@ -1826,6 +1828,88 @@ bool llama_kv_cache::has_cell_ext() const {
     return hparams.n_pos_per_embd() > 1 || hparams.ple_n_heads > 0;
 }
 
+//
+// (seq, pos) -> token index for the n-gram predecessor lookups in get_prev_tokens()
+//
+// the llama_kv_cells::seq_pos index stores the rows of the cells per (seq, pos), which allows resolving the
+// predecessor tokens in O(needs * log n) instead of scanning all used cells once per ubatch. controlled by the
+// LLAMA_KV_PREV_TOKENS environment variable:
+//
+//   fast (default):   use the index for eligible ubatches, fall back to the general scan when not applicable
+//   verify:           run the general scan (source of truth) and the index for every call, compare them and log
+//                     mismatches (with a heartbeat of the scan / index cost). intended for testing and debugging
+//   off:              general scan only (the index is still maintained, but never queried)
+//
+
+enum class llama_prev_tokens_idx_mode {
+    VERIFY,
+    FAST,
+    OFF,
+};
+
+static llama_prev_tokens_idx_mode llama_prev_tokens_idx_mode_get() {
+    static const llama_prev_tokens_idx_mode mode = []() {
+        const char * env = getenv("LLAMA_KV_PREV_TOKENS");
+
+        if (env && strcmp(env, "verify") == 0) { return llama_prev_tokens_idx_mode::VERIFY; }
+        if (env && strcmp(env, "off")    == 0) { return llama_prev_tokens_idx_mode::OFF;    }
+
+        return llama_prev_tokens_idx_mode::FAST;
+    }();
+
+    return mode;
+}
+
+// diagnostic counters - decode is serialized per context, benign otherwise (reporting only):
+static struct {
+    uint64_t n_calls        = 0;
+    uint64_t n_needs        = 0;
+    uint64_t n_mismatch     = 0;
+    uint64_t n_not_applic   = 0; // ubatches the index cannot serve (multimodal)
+    uint64_t n_fast_hits    = 0;
+    double   t_scan_us      = 0.0;
+    double   t_index_us     = 0.0;
+} g_prev_tokens_diag;
+
+bool llama_kv_cache::get_prev_tokens_indexed(const llama_ubatch & ubatch, uint32_t n, std::vector<llama_token> & res) const {
+    // an embd (multimodal) ubatch can repeat one position for a whole image, so positions do not encode the
+    // token order - the general scan resolves those predecessors by ubatch order instead
+    if (!ubatch.token) {
+        return false;
+    }
+
+    res.clear();
+    res.resize(ubatch.n_tokens*n, LLAMA_TOKEN_NULL);
+
+    for (uint32_t i = 0; i < ubatch.n_tokens; ++i) {
+        // same choice as the general scan's consumer (the n-gram architectures reject shared tokens)
+        const llama_seq_id seq_id = ubatch.seq_id[i][0];
+
+        for (uint32_t j = 0; j < n; ++j) {
+            const llama_pos p = ubatch.pos[i] - (llama_pos) (n - j);
+
+            if (p < 0) {
+                continue;
+            }
+
+            llama_token tok = LLAMA_TOKEN_NULL;
+
+            for (uint32_t s = 0; s < n_stream; ++s) {
+                llama_token t = LLAMA_TOKEN_NULL;
+
+                // later stream wins, matching the general scan which merges all streams into one hist
+                if (v_cells[s].seq_pos_token_le(seq_id, p, &t)) {
+                    tok = t;
+                }
+            }
+
+            res[i*n + j] = tok;
+        }
+    }
+
+    return true;
+}
+
 void llama_kv_cache::get_prev_tokens(const llama_ubatch & ubatch, uint32_t n, std::vector<llama_token> & res) const {
     const uint32_t n_tokens = ubatch.n_tokens;
 
@@ -1834,6 +1918,45 @@ void llama_kv_cache::get_prev_tokens(const llama_ubatch & ubatch, uint32_t n, st
 
     if (n == 0) {
         return;
+    }
+
+    const llama_prev_tokens_idx_mode idx_mode = llama_prev_tokens_idx_mode_get();
+    const auto t_start = std::chrono::steady_clock::now();
+
+    if (idx_mode == llama_prev_tokens_idx_mode::FAST) {
+        const auto t_i0 = std::chrono::steady_clock::now();
+
+        if (get_prev_tokens_indexed(ubatch, n, res)) {
+            const auto t_i1 = std::chrono::steady_clock::now();
+
+            g_prev_tokens_diag.n_calls++;
+            g_prev_tokens_diag.n_needs += (uint64_t) n_tokens*n;
+            g_prev_tokens_diag.n_fast_hits++;
+            g_prev_tokens_diag.t_index_us += std::chrono::duration<double, std::micro>(t_i1 - t_i0).count();
+
+            if (g_prev_tokens_diag.n_calls % 2000 == 0) {
+                LLAMA_LOG_WARN("%s: PLE-IDX mode=fast calls=%llu needs=%llu hits=%llu not_applicable=%llu mismatches=%llu idx_avg=%.3f us used=%u\n",
+                        __func__,
+                        (unsigned long long) g_prev_tokens_diag.n_calls,
+                        (unsigned long long) g_prev_tokens_diag.n_needs,
+                        (unsigned long long) g_prev_tokens_diag.n_fast_hits,
+                        (unsigned long long) g_prev_tokens_diag.n_not_applic,
+                        (unsigned long long) g_prev_tokens_diag.n_mismatch,
+                        g_prev_tokens_diag.t_index_us / g_prev_tokens_diag.n_calls,
+                        v_cells[0].get_used());
+            }
+
+            return;
+        }
+
+        // the index is not applicable to this ubatch - run the general scan below
+        g_prev_tokens_diag.n_not_applic++;
+
+        res.clear();
+        res.resize(n_tokens*n, LLAMA_TOKEN_NULL);
+
+        LLAMA_LOG_WARN("%s: PLE-IDX mode=fast fell back to general scan (n_tokens=%u multimodal=%d)\n",
+                __func__, n_tokens, !ubatch.token);
     }
 
     // note: apply_ubatch() has already stored the current ubatch
@@ -1926,6 +2049,64 @@ void llama_kv_cache::get_prev_tokens(const llama_ubatch & ubatch, uint32_t n, st
             }
 
             res[i*n + j] = lookup(seq_id, p);
+        }
+    }
+
+    if (idx_mode == llama_prev_tokens_idx_mode::OFF) {
+        return;
+    }
+
+    // verify the index against the general scan, which remains the source of truth (no speedup intended here):
+    // any MISMATCH line means the index and the scan disagree and must not be trusted yet
+    {
+        const auto t_g1 = std::chrono::steady_clock::now();
+
+        std::vector<llama_token> res_idx;
+
+        const auto t_i0 = std::chrono::steady_clock::now();
+        const bool applicable = get_prev_tokens_indexed(ubatch, n, res_idx);
+        const auto t_i1 = std::chrono::steady_clock::now();
+
+        g_prev_tokens_diag.n_calls++;
+        g_prev_tokens_diag.t_scan_us  += std::chrono::duration<double, std::micro>(t_g1 - t_start).count();
+        g_prev_tokens_diag.t_index_us += std::chrono::duration<double, std::micro>(t_i1 - t_i0).count();
+
+        if (!applicable) {
+            g_prev_tokens_diag.n_not_applic++;
+        } else {
+            for (uint32_t i = 0; i < n_tokens; ++i) {
+                for (uint32_t j = 0; j < n; ++j) {
+                    const llama_token a = res[i*n + j];
+                    const llama_token b = res_idx[i*n + j];
+
+                    if (a == b) {
+                        continue;
+                    }
+
+                    if (g_prev_tokens_diag.n_mismatch < 32) {
+                        LLAMA_LOG_ERROR("%s: PLE-IDX MISMATCH calls=%llu i=%u j=%u seq=%d pos[i]=%d scan=%d index=%d\n",
+                                __func__,
+                                (unsigned long long) g_prev_tokens_diag.n_calls,
+                                i, j, ubatch.seq_id[i][0], ubatch.pos[i], a, b);
+                    }
+
+                    g_prev_tokens_diag.n_mismatch++;
+                }
+            }
+
+            g_prev_tokens_diag.n_needs += (uint64_t) n_tokens*n;
+        }
+
+        if (g_prev_tokens_diag.n_calls % 2000 == 0) {
+            LLAMA_LOG_WARN("%s: PLE-IDX mode=verify calls=%llu needs=%llu mismatches=%llu not_applicable=%llu scan_avg=%.1f us index_avg=%.3f us used=%u\n",
+                    __func__,
+                    (unsigned long long) g_prev_tokens_diag.n_calls,
+                    (unsigned long long) g_prev_tokens_diag.n_needs,
+                    (unsigned long long) g_prev_tokens_diag.n_mismatch,
+                    (unsigned long long) g_prev_tokens_diag.n_not_applic,
+                    g_prev_tokens_diag.t_scan_us  / g_prev_tokens_diag.n_calls,
+                    g_prev_tokens_diag.t_index_us / g_prev_tokens_diag.n_calls,
+                    v_cells[0].get_used());
         }
     }
 }
