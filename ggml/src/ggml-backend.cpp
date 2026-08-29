@@ -1442,6 +1442,7 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
 
     // optimize the split graphs and collect the allocation dependencies added by the backends
     // this needs to happen before we make graph_copy, so they are in sync
+    // TODO: this may create many small allocations in the scheduler, restructure to use a flat array
     std::unordered_map<ggml_tensor *, std::vector<ggml_tensor *>> alloc_deps;
 
     struct ggml_backend_graph_optimize_params opt_params = {
