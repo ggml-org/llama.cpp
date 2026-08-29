@@ -874,7 +874,7 @@ static int spec_hip_draft_stochastic_impl(int32_t seq_id, int32_t id_last, int32
         block_phase1(c, S.st, xh_in, n_past + j, q->Kc, q->Vc);
         block_phase2(c, S.st, n_past + j, nullptr, q->Kc, q->Vc, true);
         topk_partial<<<S.nparts, 256, 0, S.st>>>(S.logits, N_HEAD_ROWS, S.pmax, S.pidx);
-        topk_final<<<1, 1, 0, S.st>>>(S.pmax, S.pidx, S.nparts, S.remap_d, SC_N_VOCAB,
+        topk_final<<<1, 256, 0, S.st>>>(S.pmax, S.pidx, S.nparts, S.remap_d, SC_N_VOCAB,
                 S.draft_ids + (size_t) j * MTP_DRAFT_TOP_K,
                 S.draft_logits + (size_t) j * MTP_DRAFT_TOP_K);
         sample_topk<<<1, 1, 0, S.st>>>(
