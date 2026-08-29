@@ -400,7 +400,7 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
         struct gguf_context * gguf_ctx, FILE * file, const size_t seed, const std::vector<ggml_backend_dev_t> & devs,
         const llama_split_mode split_mode = LLAMA_SPLIT_MODE_LAYER, bool encode = false,
         ggml_backend_sched_eval_callback cb_eval = nullptr, void * cb_eval_user_data = nullptr,
-        bool load_mtp = false) {
+        bool load_mtp = false, uint32_t n_seq_max = 1, bool kv_unified = false) {
     GGML_ASSERT((gguf_ctx == nullptr) != (file == nullptr));
     llama_model_params model_params = llama_model_default_params();
     model_params.progress_callback = silent_model_load_progress;
@@ -419,6 +419,8 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
     }
     ctx_params.cb_eval           = cb_eval;
     ctx_params.cb_eval_user_data = cb_eval_user_data;
+    ctx_params.n_seq_max         = n_seq_max;
+    ctx_params.kv_unified        = kv_unified;
 
     size_t tmp = seed;
     llama_model_ptr model(gguf_ctx != nullptr ?
@@ -849,6 +851,53 @@ static int test_dsa_kpool(const size_t seed, const int verbosity) {
             dc.second.c_str(), st.n_row, st.n_pool_whole, st.n_pool_partial, st.n_row_partial,
             st.n_tail_missing, ok ? "\033[1;32mOK\033[0m" : "\033[1;31mFAIL\033[0m");
         fflush(stdout);
+    }
+
+    // Second pass: two sequences on a unified cache. This is what llama-server does by
+    // default - leaving --parallel unset selects auto slots, which set n_parallel = 4 and
+    // kv_unified = true. The single-stream pass above never exercises it.
+    // control: the same two sequences on SEPARATE streams. There cell index == position holds
+    // again per stream, so a metric artefact shows up here too while a real unified-cache
+    // pool-mixing bug does not.
+    // cfg 0/1: two sequences, separate then unified. cfg 2: unified cache but a SINGLE
+    // decoding sequence - there cell index == position still holds, so the metric stays valid
+    // and any degradation is the unified addressing itself rather than the cross-sequence mix.
+    for (int cfg = 0; cfg < 3; cfg++) {
+    const bool unified = cfg != 0;
+    const bool two_seq = cfg != 2;
+    printf("test_dsa_kpool: glm5next, %s, kv_unified=%s\n",
+        two_seq ? "2 seqs x 32 tokens" : "1 seq x 64 tokens", unified ? "true" : "false");
+
+    for (const auto & dc : dev_configs) {
+        dsa_kpool_check st;
+        st.r = DSA_INDEXER_KPOOL;
+
+        auto model_and_ctx = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, dc.first,
+            LLAMA_SPLIT_MODE_LAYER, false, dsa_kpool_eval_cb, &st, false, 2, unified);
+
+        const uint32_t n_half = two_seq ? n_tokens/2 : n_tokens;
+        llama_batch batch = llama_batch_init(n_tokens, 0, 2);
+        for (uint32_t pos = 0; pos < n_half; pos++) {
+            common_batch_add(batch, tokens[pos], pos, {0}, true);
+        }
+        if (two_seq) {
+            for (uint32_t pos = 0; pos < n_half; pos++) {
+                common_batch_add(batch, tokens[n_half + pos], pos, {1}, true);
+            }
+        }
+        batch.n_tokens = n_tokens;
+        const int32_t rc = llama_decode(model_and_ctx.second.get(), batch);
+        llama_batch_free(batch);
+        if (rc != 0) {
+            throw std::runtime_error("failed to decode batch");
+        }
+
+        printf("test_dsa_kpool: %-32s rows %5" PRId64 ", whole pools %6" PRId64 ", "
+               "partial pools %6" PRId64 " in %4" PRId64 " rows, tail misses %4" PRId64 "\n",
+            dc.second.c_str(), st.n_row, st.n_pool_whole, st.n_pool_partial, st.n_row_partial,
+            st.n_tail_missing);
+        fflush(stdout);
+    }
     }
 
     llama_log_set(ud.log_old.callback, ud.log_old.user_data);

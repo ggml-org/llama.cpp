@@ -734,7 +734,10 @@ void llama_memory_hybrid_idx_context::set_input_kpool(
         std::fill(cur_pool_cells, cur_pool_cells + r*n_pool, 0);
 
         for (int64_t j = 0; j < n_kv; ++j) {
-            if (cells.is_empty(j)) {
+            // a unified cache holds every sequence in one cell array, so a cell from another
+            // sequence would land in this stream's pools and collide with its own cell at the
+            // same position. The tail loop below already filters this way.
+            if (cells.is_empty(j) || !cells.seq_has(j, seq_of_stream)) {
                 continue;
             }
 
