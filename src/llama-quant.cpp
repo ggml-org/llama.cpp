@@ -328,32 +328,23 @@ static bool tensor_allows_quantization(const llama_model_quantize_params * param
     quantize &= name.find("indexer.k_proj.weight") == std::string::npos;
     quantize &= name.find("indexer.q_proj.weight") == std::string::npos;
 
-    // GLM5-Next: the k-pool position bias is added elementwise; the indexer, mHC mixers,
-    // KDA gates and MLA low-rank paths are small and precision-sensitive (~1 GB total)
+    // glm5-next
     if (arch == LLM_ARCH_GLM5_NEXT) {
-        quantize &= name.find("indexer.")            == std::string::npos;
-        quantize &= name.find("indexer_compressor_gate.weight") == std::string::npos;
-        quantize &= name.find("indexer_compressor_ape.weight")  == std::string::npos;
-        quantize &= name.find("hc_attn_fn.weight")   == std::string::npos;
-        quantize &= name.find("hc_ffn_fn.weight")    == std::string::npos;
-        quantize &= name.find("ssm_f_a.weight")      == std::string::npos;
-        quantize &= name.find("ssm_f_b.weight")      == std::string::npos;
-        quantize &= name.find("ssm_g_a.weight")      == std::string::npos;
-        quantize &= name.find("ssm_g_b.weight")      == std::string::npos;
-        quantize &= name.find("ssm_beta.weight")     == std::string::npos;
-        quantize &= name.find("attn_q_a.weight")     == std::string::npos;
-        quantize &= name.find("attn_kv_a_mqa.weight") == std::string::npos;
-        quantize &= name.find("attn_k_b.weight")     == std::string::npos;
-        quantize &= name.find("attn_v_b.weight")     == std::string::npos;
-
-        // the NextN draft head runs once per speculative token, so its error compounds
-        quantize &= name.find("nextn.eh_proj.weight") == std::string::npos;
-
-        quantize &= name.find("attn_q.weight")      == std::string::npos; //This is too strict, relax these later
-        quantize &= name.find("attn_k.weight")      == std::string::npos;
-        quantize &= name.find("attn_v.weight")      == std::string::npos;
-        quantize &= name.find("attn_q_b.weight")    == std::string::npos;
-        quantize &= name.find("attn_output.weight") == std::string::npos;
+        quantize &= name.find("hc_")                     == std::string::npos;
+        quantize &= name.find("indexer.attn_q_b")        == std::string::npos;
+        quantize &= name.find("indexer.attn_k")          == std::string::npos;
+        quantize &= name.find("indexer.proj")            == std::string::npos;
+        quantize &= name.find("indexer_compressor_gate") == std::string::npos;
+        quantize &= name.find("indexer_compressor_ape")  == std::string::npos;
+        quantize &= name.find("hc_")                     == std::string::npos;
+        quantize &= name.find("ssm_f_a.weight")          == std::string::npos;
+        quantize &= name.find("ssm_f_b.weight")          == std::string::npos;
+        quantize &= name.find("ssm_g_a.weight")          == std::string::npos;
+        quantize &= name.find("ssm_g_b.weight")          == std::string::npos;
+        quantize &= name.find("ssm_beta.weight")         == std::string::npos;
+        quantize &= name.find("attn_kv_a_mqa.weight")    == std::string::npos;
+        quantize &= name.find("attn_k_b.weight")         == std::string::npos;
+        quantize &= name.find("attn_v_b.weight")         == std::string::npos;
     }
 
     // do not quantize RWKV's small yet 2D weights
@@ -478,6 +469,22 @@ static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type 
         }
         return std::make_pair(i_layer, n_layer);
     };
+
+    // by default, for glm5-next, don't let these tensors be quantized below Q8_0
+    if (arch == LLM_ARCH_GLM5_NEXT && (
+        name.find("attn_q_a")      != std::string::npos ||
+        name.find("attn_q_b")      != std::string::npos ||
+        name.find("nextn.eh_proj") != std::string::npos))
+    {
+        switch (new_type) {
+            case GGML_TYPE_F32:
+            case GGML_TYPE_BF16:
+            case GGML_TYPE_F16:
+                break;
+            default:
+                return GGML_TYPE_Q8_0;
+        }
+    }
 
     // for arches that share the same tensor between the token embeddings and the output, we quantize the token embeddings
     // with the quantization of the output tensor
