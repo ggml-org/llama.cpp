@@ -1414,7 +1414,7 @@ static void mul_mat_vec_q_switch_ncols_dst(
                     return ggml_cuda_rdna2_auto_enabled() &&
                            (value == nullptr || std::atoi(value) != 0);
                 }();
-                if (dflash_rows2_enabled) {
+                if (table_id == MMVQ_PARAMETERS_RDNA2 && dflash_rows2_enabled) {
                     // DFlash Q4_K_M uses six output rows. Reuse each weight tile
                     // across two rows instead of assigning one wave/block per row.
                     constexpr int rows_per_block = 2;
@@ -1461,7 +1461,7 @@ static void mul_mat_vec_q_switch_ncols_dst(
                                          ggml_cuda_mmvq_rdna2_type::other;
             const ggml_cuda_mmvq_rdna2_w8_rows2_input rows2_input = {
                 policy_type,
-                use_gfx1030_native &&
+                use_gfx1030_native && table_id == MMVQ_PARAMETERS_RDNA2 &&
                     ggml_cuda_rdna2_feature_enabled("GGML_HIP_GFX1030_MMVQ_W8_ROWS2"),
                 has_ids,
                 true,
@@ -1471,7 +1471,7 @@ static void mul_mat_vec_q_switch_ncols_dst(
             };
             const ggml_cuda_mmvq_rdna2_w8_rows2_input rows4_input = {
                 policy_type,
-                use_gfx1030_native &&
+                use_gfx1030_native && table_id == MMVQ_PARAMETERS_RDNA2 &&
                     ggml_cuda_rdna2_feature_enabled("GGML_HIP_GFX1030_MMVQ_W8_ROWS4"),
                 has_ids,
                 true,
@@ -1668,7 +1668,8 @@ static void mul_mat_vec_q_switch_type(
             nrows_x,
             ncols_dst,
         };
-        if (ggml_cuda_mmvq_use_rdna2_q8_w8(input)) {
+        const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
+        if (GGML_CUDA_CC_IS_RDNA2(cc) && ggml_cuda_mmvq_use_rdna2_q8_w8(input)) {
             constexpr int c_ncols_dst = 1;
             constexpr int nwarps = 8;
             const uint3 nchannels_y_fd   = make_uint3(0, 0, 0);

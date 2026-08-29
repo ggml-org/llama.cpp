@@ -4617,17 +4617,21 @@ static bool ggml_cuda_use_gfx1030_q8_1_fusion() {
 #endif
 }
 
-static bool ggml_cuda_use_gfx1030_add_rms_norm_fusion() {
+static bool ggml_cuda_use_rdna_add_rms_norm_fusion() {
 #if defined(GGML_USE_HIP)
-    static const bool enabled = []() {
-        return ggml_cuda_rdna2_feature_enabled("GGML_HIP_GFX1030_ADD_RMS_NORM_FUSION");
-    }();
-    if (!enabled) {
-        return false;
-    }
-
     const int device = ggml_cuda_get_device();
-    return GGML_CUDA_CC_IS_RDNA2(ggml_cuda_info().devices[device].cc);
+    const int cc = ggml_cuda_info().devices[device].cc;
+    if (GGML_CUDA_CC_IS_RDNA2(cc)) {
+        return ggml_cuda_rdna2_feature_enabled("GGML_HIP_GFX1030_ADD_RMS_NORM_FUSION");
+    }
+    if (cc == GGML_CUDA_CC_RDNA3) {
+        static const bool enabled = [] {
+            const char * env = std::getenv("GGML_HIP_RDNA3_ADD_RMS_NORM_FUSION");
+            return env != nullptr && std::atoi(env) != 0;
+        }();
+        return enabled;
+    }
+    return false;
 #else
     return false;
 #endif
@@ -5521,8 +5525,18 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
         return fused_node_count - 1;
     }
 
-    if (ggml_cuda_use_gfx1030_add_rms_norm_fusion() &&
+    if (ggml_cuda_use_rdna_add_rms_norm_fusion() &&
             ggml_cuda_can_fuse(cgraph, i, { GGML_OP_ADD, GGML_OP_RMS_NORM, GGML_OP_MUL }, {})) {
+#if defined(GGML_USE_HIP)
+        const int device = ggml_cuda_get_device();
+        const int cc = ggml_cuda_info().devices[device].cc;
+        if (cc == GGML_CUDA_CC_RDNA3) {
+            static std::atomic<bool> logged{false};
+            if (!logged.exchange(true, std::memory_order_relaxed)) {
+                std::fprintf(stderr, "using gfx1100 ADD+RMS_NORM+MUL fusion\n");
+            }
+        }
+#endif
         ggml_cuda_op_add_rms_norm_fused(*cuda_ctx, node, cgraph->nodes[i + 1], cgraph->nodes[i + 2]);
         return 2;
     }

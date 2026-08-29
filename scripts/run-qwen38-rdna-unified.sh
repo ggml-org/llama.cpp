@@ -17,6 +17,7 @@ REQUIRE_GPUS="${REQUIRE_GPUS:-2}"
 SPLIT_MODE="${SPLIT_MODE:-tensor}"
 KV_TYPE="${KV_TYPE:-}"
 USE_SIDECAR=1
+USE_GFX1100_ADD_RMS_FUSION=0
 DRY_RUN=0
 EXTRA_ARGS=()
 
@@ -36,6 +37,8 @@ Usage: scripts/run-qwen38-rdna-unified.sh [options] [-- extra llama-server args]
   --host HOST          listen address (default 0.0.0.0)
   --port PORT          listen port (default 8080)
   --no-sidecar         target-only smoke mode
+  --gfx1100-add-rms-fusion
+                       opt in to the validated, default-off Add+RMSNorm fusion
   --dry-run            validate and print the command without executing it
 
 GPU ordinals are derived at runtime from AMD SMI after validating the complete
@@ -57,6 +60,7 @@ while (($#)); do
         --host)      [[ $# -ge 2 ]] || fail "$1 requires a value"; HOST=$2; shift 2 ;;
         --port)      [[ $# -ge 2 ]] || fail "$1 requires a value"; PORT=$2; shift 2 ;;
         --no-sidecar) USE_SIDECAR=0; shift ;;
+        --gfx1100-add-rms-fusion) USE_GFX1100_ADD_RMS_FUSION=1; shift ;;
         --dry-run) DRY_RUN=1; shift ;;
         --) shift; EXTRA_ARGS+=("$@"); break ;;
         -h|--help) usage; exit 0 ;;
@@ -140,6 +144,7 @@ if [[ $ARCH == gfx1100 ]]; then
     [[ -z ${HSA_OVERRIDE_GFX_VERSION:-} ]] || fail "HSA_OVERRIDE_GFX_VERSION must be unset for native gfx1100"
     unset HSA_OVERRIDE_GFX_VERSION
     unset GGML_HIP_RDNA2_AUTO GGML_HIP_GFX1030_NATIVE GGML_HIP_GFX1030_Q8_1_FUSION
+    export GGML_HIP_RDNA3_ADD_RMS_NORM_FUSION=$USE_GFX1100_ADD_RMS_FUSION
     case "$PROFILE" in
         safe)         export GGML_HIP_RDNA3_NATIVE=0 GGML_HIP_RDNA3_Q8_CACHE=0 GGML_HIP_RDNA3_GDN_CHUNKED=0 ;;
         native)       export GGML_HIP_RDNA3_NATIVE=1 GGML_HIP_RDNA3_Q8_CACHE=0 GGML_HIP_RDNA3_GDN_CHUNKED=0 ;;
@@ -148,7 +153,7 @@ if [[ $ARCH == gfx1100 ]]; then
 elif [[ $ARCH == gfx1030 ]]; then
     export HSA_OVERRIDE_GFX_VERSION="${HSA_OVERRIDE_GFX_VERSION:-10.3.0}"
     export GGML_HIP_RDNA2_AUTO="${GGML_HIP_RDNA2_AUTO:-1}"
-    unset GGML_HIP_RDNA3_NATIVE GGML_HIP_RDNA3_Q8_CACHE GGML_HIP_RDNA3_GDN_CHUNKED
+    unset GGML_HIP_RDNA3_NATIVE GGML_HIP_RDNA3_Q8_CACHE GGML_HIP_RDNA3_GDN_CHUNKED GGML_HIP_RDNA3_ADD_RMS_NORM_FUSION
 else
     fail "unsupported architecture: $ARCH"
 fi
@@ -204,7 +209,7 @@ else
 fi
 cmd+=("${EXTRA_ARGS[@]}")
 
-printf 'profile=%s arch=%s devices=%s split_mode=%s tensor_split=%s kv=%s mmproj=%s sidecar=%s\n' \
-    "$PROFILE" "$ARCH" "$DEVICES" "$SPLIT_MODE" "$TENSOR_SPLIT" "$KV_TYPE" "$MMPROJ_MODE" "$USE_SIDECAR" >&2
+printf 'profile=%s arch=%s devices=%s split_mode=%s tensor_split=%s kv=%s mmproj=%s sidecar=%s add_rms_fusion=%s\n' \
+    "$PROFILE" "$ARCH" "$DEVICES" "$SPLIT_MODE" "$TENSOR_SPLIT" "$KV_TYPE" "$MMPROJ_MODE" "$USE_SIDECAR" "$USE_GFX1100_ADD_RMS_FUSION" >&2
 if ((DRY_RUN)); then printf '%q ' "${cmd[@]}"; printf '\n'; exit 0; fi
 exec "${cmd[@]}"

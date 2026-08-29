@@ -43,6 +43,9 @@ older BridgeSpec sidecar directory from the RDNA3 fork.
   independently of the rejected RDNA3 unary-Q8 fusion;
 - `GGML_HIP_RDNA3_Q8_CACHE_TELEMETRY=1`: cache diagnostics;
 - `GGML_HIP_RDNA3_GDN_CHUNKED=1`: chunked GDN prefill;
+- `GGML_HIP_RDNA3_ADD_RMS_NORM_FUSION=1`: exact-gfx1100 residual
+  Add+RMSNorm+MUL fusion. This independent, default-off control is exposed by
+  the launcher as `--gfx1100-add-rms-fusion`;
 - gfx1100-specific flash-attention launch configurations;
 - Q4_K/Q5_K/Q6_K aligned LDS MMQ loads, compiled only into gfx11 builds;
 - consistent RDNA3 MMVQ reduction widths for decode and speculative verify.
@@ -54,14 +57,41 @@ older BridgeSpec sidecar directory from the RDNA3 fork.
 - older `sidecars/bridgespec` duplication;
 - reverted DFlash residual/output-trimming experiment;
 - RDNA3 unary-MUL/Q8_1 fusion, which previously produced corrupt repeated
-  tokens;
+  tokens and is irrelevant to this dense (non-MoE) target;
+- the trial `GGML_HIP_RDNA3_MMVQ_WIDE_LOAD` port, removed after a balanced A/B
+  measured no speedup;
 - experimental multi-op GDN/sibling/residual fusions until independent output
   parity tests pass;
 - broad replacement of current MMVQ, CUDA dispatcher, or communication code.
 
 All gfx1100 features are opt-in at runtime. The safe launch profile leaves
-native, Q8 cache, and chunked GDN paths off. Promote a path only after comparing
-fixed-seed output against that profile.
+native, Q8 cache, chunked GDN, and Add+RMSNorm fusion off. Promote a path only
+after comparing fixed-seed output against that profile. The dispatcher also
+checks the actual runtime architecture before selecting RDNA2-only DFlash
+width-six, MMVQ width-eight, or Q8 schedules; setting the gfx1100 native dot8
+flag cannot select those gfx1030 policies.
+
+## gfx1100 WMMA audit
+
+WMMA is already a compiled architecture capability, not a runtime profile.
+`GGML_HIP_RDNA3_NATIVE` selects an experimental Q4_0 dot8 **MMVQ decode** path;
+it neither enables nor disables WMMA. The gfx1100 build emits WMMA in **MMQ
+prompt processing** and compatible F16 flash attention even with the `safe`
+profile.
+
+Generated-code and runtime tracing established both halves of that claim:
+
+- the runtime-dispatched Q4_0 `mul_mat_q<...,32,true>` symbol contains 32
+  `v_wmma_i32_16x16x16_iu8` instructions;
+- the runtime-dispatched F16
+  `flash_attn_ext_f16<128,128,16,4,false,false>` symbol contains 384
+  `v_wmma_f32_16x16x16_f16` instructions;
+- the audited Q4_K MMQ code object also contains 204 integer WMMA
+  instructions.
+
+`rocprofv3` kernel traces and the extracted gfx1100 code objects are preserved
+under `~/llama-rdna2-rdna3-evidence/wmma-followup/`. Consequently, the
+existing `native` profile should not be described as a WMMA profile.
 
 ## Build
 
@@ -131,14 +161,19 @@ CTX_SIZE=8192 ./scripts/run-qwen38-rdna-unified.sh \
 # Recommended stacked MTP + ngram-map-k4v:
 ./scripts/run-qwen38-rdna-unified.sh --profile safe
 
+# Optional, independently gated prompt optimization (not the default):
+./scripts/run-qwen38-rdna-unified.sh --profile safe \
+  --gfx1100-add-rms-fusion
+
 # Layer split remains available for faster startup/lower full-context VRAM:
 ./scripts/run-qwen38-rdna-unified.sh --profile safe --split-mode layer --kv-type q8_0
 ```
 
 Profiles:
 
-- `safe`: all new gfx1100 runtime paths off;
-- `native`: native Q4_0 MMVQ on, Q8 cache and chunked GDN off;
+- `safe`: all new gfx1100 runtime paths off, including Add+RMSNorm fusion;
+- `native`: native Q4_0 dot8 MMVQ on, Q8 cache and chunked GDN off; this does
+  not control WMMA;
 - `experimental`: native MMVQ, Q8 cache, and chunked GDN on. It is retained
   for A/B work and is not the recommended profile.
 
@@ -174,3 +209,14 @@ MTP accepted 30/33 draft tokens (0.90909) in each code run. Therefore the
 production recommendation is the **safe tensor target plus current MTP
 sidecar**. The native dot8/cache controls remain opt-in research paths; their
 correct output does not justify enabling them on this Q4 AutoRound model.
+
+A later balanced tensor/F16 target-only A/B used two server loads per mode and
+16 warm deterministic requests per aggregate. Safe decode averaged 39.920
+tokens/s. The trial wide-load path averaged 39.771 tokens/s (-0.374%) and was
+removed. Add+RMSNorm fusion averaged 39.819 tokens/s (-0.252%, effectively
+neutral) while prompt processing improved from 329.737 to 335.490 tokens/s
+(+1.745%). All 60 A/B outputs matched the reference, and a final control/fused
+comparison matched all 39 selected-token log probabilities and 194 common top
+log probabilities exactly. The Add+RMSNorm path is therefore retained as an
+independent opt-in, but the production default stays off because the measured
+benefit is small and prompt-only.
