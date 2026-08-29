@@ -342,6 +342,7 @@ private:
     std::vector<swap_info> output_swaps;
 
     ggml_backend_sched_ptr sched;
+    llama_context * ctx_compute = nullptr;
 
     bool sched_need_reserve = true;
 

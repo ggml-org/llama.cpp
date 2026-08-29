@@ -88,6 +88,8 @@ static void dummy_backend_buffer_clear(ggml_backend_buffer_t, uint8_t) {}
 struct dummy_backend {
     std::unique_ptr<dummy_backend_context> context;
     ggml_backend_buffer_type               buffer_type;
+    ggml_backend_device                    device;
+    ggml_backend                           backend;
 };
 
 static dummy_backend dummy_backend_init(size_t max_buffer_size, size_t alignment = 8) {
@@ -111,6 +113,40 @@ static dummy_backend dummy_backend_init(size_t max_buffer_size, size_t alignment
     b.buffer_type.iface.get_max_size  = dummy_backend_buffer_type_get_max_size;
     b.buffer_type.iface.is_host       = dummy_backend_buffer_type_is_host;
     return b;
+}
+
+//
+// ggml_backend / device interface
+//
+
+static const char * dummy_backend_get_name(ggml_backend_t) {
+    return "dummy_backend";
+}
+
+static enum ggml_backend_dev_type dummy_backend_device_get_type(ggml_backend_dev_t) {
+    return GGML_BACKEND_DEVICE_TYPE_CPU;
+}
+
+static bool dummy_backend_device_supports_op(ggml_backend_dev_t, const ggml_tensor *) {
+    return true;
+}
+
+static bool dummy_backend_device_supports_buft(ggml_backend_dev_t device, ggml_backend_buffer_type_t buft) {
+    return buft == device->context;
+}
+
+static ggml_backend_sched_ptr dummy_backend_sched_new(dummy_backend & b) {
+    b.device.iface.get_type      = dummy_backend_device_get_type;
+    b.device.iface.supports_op   = dummy_backend_device_supports_op;
+    b.device.iface.supports_buft = dummy_backend_device_supports_buft;
+    b.device.context             = &b.buffer_type;
+
+    b.backend.iface.get_name = dummy_backend_get_name;
+    b.backend.device         = &b.device;
+
+    ggml_backend_t             backends[] = { &b.backend };
+    ggml_backend_buffer_type_t bufts[]    = { &b.buffer_type };
+    return ggml_backend_sched_ptr(ggml_backend_sched_new(backends, bufts, 1, 64, false, false));
 }
 
 //
@@ -142,6 +178,13 @@ static ggml_tensor * make_input_1d(ggml_context * ctx, int64_t n_elements) {
 static ggml_tensor * make_input_with_size(ggml_context * ctx, size_t size_bytes) {
     GGML_ASSERT(size_bytes % 4 == 0);
     return make_input_1d(ctx, size_bytes / 4);
+}
+
+static ggml_tensor * make_scale_graph(ggml_context * ctx, ggml_cgraph * graph, size_t size_bytes) {
+    ggml_tensor * out = ggml_scale(ctx, make_input_with_size(ctx, size_bytes), 2.0f);
+    ggml_set_output(out);
+    ggml_build_forward_expand(graph, out);
+    return out;
 }
 
 static void assign_names(ggml_context * ctx, const char * prefix = "x") {
@@ -583,6 +626,55 @@ static void test_reallocation() {
     }
 }
 
+static void test_shared_buffers() {
+    dummy_backend backend = dummy_backend_init(SIZE_MAX);
+
+    auto [ctx_src, graph_src, ctx_src_ptr] = make_context();
+    ggml_tensor * src_out = make_scale_graph(ctx_src, graph_src, 16);
+
+    ggml_backend_sched_ptr src = dummy_backend_sched_new(backend);
+    GGML_ASSERT(ggml_backend_sched_reserve(src.get(), graph_src));
+    GGML_ASSERT(ggml_backend_sched_alloc_graph(src.get(), graph_src));
+    const size_t shared_size = backend.context->allocated_total();
+    GGML_ASSERT(shared_size > 0);
+
+    auto [ctx_dst, graph_dst, ctx_dst_ptr] = make_context();
+    ggml_tensor * dst_out = make_scale_graph(ctx_dst, graph_dst, 8);
+
+    ggml_backend_sched_ptr dst = dummy_backend_sched_new(backend);
+    GGML_ASSERT(ggml_backend_sched_share_compute_buffers(dst.get(), src.get()));
+    GGML_ASSERT(ggml_backend_sched_reserve(dst.get(), graph_dst));
+    GGML_ASSERT(ggml_backend_sched_alloc_graph(dst.get(), graph_dst));
+    GGML_ASSERT(backend.context->allocated_total() == shared_size);
+    GGML_ASSERT(src_out->buffer == dst_out->buffer);
+
+    // Schedulers keep independent allocation plans.
+    ggml_backend_sched_reset(src.get());
+    GGML_ASSERT(ggml_backend_sched_alloc_graph(src.get(), graph_src));
+
+    auto [ctx_big, graph_big, ctx_big_ptr] = make_context();
+    ggml_tensor * big_out = make_scale_graph(ctx_big, graph_big, 64);
+
+    // A larger reservation detaches from shared buffers.
+    ggml_backend_sched_ptr big = dummy_backend_sched_new(backend);
+    GGML_ASSERT(ggml_backend_sched_share_compute_buffers(big.get(), src.get()));
+    GGML_ASSERT(ggml_backend_sched_reserve(big.get(), graph_big));
+    GGML_ASSERT(ggml_backend_sched_alloc_graph(big.get(), graph_big));
+    GGML_ASSERT(big_out->buffer != src_out->buffer);
+    GGML_ASSERT(backend.context->allocated_total() > shared_size);
+
+    big.reset();
+    GGML_ASSERT(backend.context->allocated_total() == shared_size);
+    // Freeing the source does not invalidate the destination.
+    src.reset();
+    GGML_ASSERT(backend.context->allocated_total() == shared_size);
+    ggml_backend_sched_reset(dst.get());
+    GGML_ASSERT(ggml_backend_sched_alloc_graph(dst.get(), graph_dst));
+    GGML_ASSERT(backend.context->allocated_total() == shared_size);
+    dst.reset();
+    GGML_ASSERT(backend.context->allocated_total() == 0);
+}
+
 static void run(const char * name, void (*f)()) {
     printf("%s ", name);
     fflush(stdout);
@@ -604,5 +696,6 @@ int main() {
     run("test_multiple_buffer_types", test_multiple_buffer_types);
     run("test_buffer_size_zero", test_buffer_size_zero);
     run("test_reallocation", test_reallocation);
+    run("test_shared_buffers", test_shared_buffers);
     return 0;
 }

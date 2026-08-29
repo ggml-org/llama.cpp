@@ -479,8 +479,15 @@ struct node_alloc {
     struct tensor_alloc src[GGML_MAX_SRC];
 };
 
+struct ggml_gallocr_shared_buffers {
+    size_t refs;
+    int n_buffers;
+    struct vbuffer ** buffers;
+};
+
 struct ggml_gallocr {
     ggml_backend_buffer_type_t * bufts; // [n_buffers]
+    struct ggml_gallocr_shared_buffers * shared_buffers;
     struct vbuffer ** buffers; // [n_buffers]
     struct ggml_dyn_tallocr ** buf_tallocs; // [n_buffers]
     int n_buffers;
@@ -535,9 +542,37 @@ ggml_gallocr_t ggml_gallocr_new(ggml_backend_buffer_type_t buft) {
     return ggml_gallocr_new_n(&buft, 1);
 }
 
+static void ggml_gallocr_shared_buffers_unref(struct ggml_gallocr_shared_buffers * shared) {
+    GGML_ASSERT(shared != NULL && shared->refs > 0);
+    if (--shared->refs > 0) {
+        return;
+    }
+
+    for (int i = 0; i < shared->n_buffers; ++i) {
+        bool freed = false;
+        for (int j = 0; j < i; ++j) {
+            if (shared->buffers[j] == shared->buffers[i]) {
+                freed = true;
+                break;
+            }
+        }
+        if (!freed) {
+            ggml_vbuffer_free(shared->buffers[i]);
+        }
+    }
+
+    free(shared->buffers);
+    free(shared);
+}
+
 void ggml_gallocr_free(ggml_gallocr_t galloc) {
     if (galloc == NULL) {
         return;
+    }
+
+    if (galloc->shared_buffers != NULL) {
+        ggml_gallocr_shared_buffers_unref(galloc->shared_buffers);
+        galloc->buffers = NULL;
     }
 
     for (int i = 0; i < galloc->n_buffers; i++) {
@@ -577,6 +612,40 @@ void ggml_gallocr_free(ggml_gallocr_t galloc) {
     free(galloc->node_allocs);
     free(galloc->leaf_allocs);
     free(galloc);
+}
+
+bool ggml_gallocr_share_buffers(ggml_gallocr_t dst, ggml_gallocr_t src) {
+    if (dst == NULL || src == NULL || dst == src ||
+        dst->n_buffers != src->n_buffers || dst->shared_buffers != NULL) {
+        return false;
+    }
+
+    for (int i = 0; i < dst->n_buffers; ++i) {
+        if (dst->bufts[i] != src->bufts[i] || dst->buffers[i] != NULL || src->buffers[i] == NULL) {
+            return false;
+        }
+    }
+
+    struct ggml_gallocr_shared_buffers * shared = src->shared_buffers;
+    if (shared != NULL &&
+        (shared->n_buffers != src->n_buffers || shared->buffers != src->buffers)) {
+        return false;
+    }
+
+    if (shared == NULL) {
+        shared = calloc(1, sizeof(*shared));
+        GGML_ASSERT(shared != NULL);
+        shared->refs = 1;
+        shared->n_buffers = src->n_buffers;
+        shared->buffers = src->buffers;
+        src->shared_buffers = shared;
+    }
+
+    free(dst->buffers);
+    shared->refs++;
+    dst->shared_buffers = shared;
+    dst->buffers = shared->buffers;
+    return true;
 }
 
 typedef struct ggml_gallocr * ggml_gallocr_t;
@@ -822,6 +891,18 @@ static void ggml_gallocr_alloc_graph_impl(ggml_gallocr_t galloc, struct ggml_cgr
     }
 }
 
+static bool ggml_gallocr_shared_buffers_need_grow(ggml_gallocr_t galloc) {
+    for (int i = 0; i < galloc->n_buffers; ++i) {
+        for (int c = 0; c < galloc->buf_tallocs[i]->n_chunks; ++c) {
+            const size_t current = galloc->buffers[i] ? ggml_vbuffer_chunk_size(galloc->buffers[i], c) : 0;
+            if (ggml_dyn_tallocr_max_size(galloc->buf_tallocs[i], c) > current) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 static bool ggml_gallocr_reserve_n_impl(
         ggml_gallocr_t galloc, struct ggml_cgraph * graph, const int * node_buffer_ids, const int * leaf_buffer_ids, bool no_alloc) {
     size_t min_hash_size = graph->n_nodes + graph->n_leafs;
@@ -899,6 +980,18 @@ static bool ggml_gallocr_reserve_n_impl(
             galloc->leaf_allocs[i].leaf.addr = hn->addr;
             galloc->leaf_allocs[i].leaf.size_max = ggml_backend_buft_get_alloc_size(galloc->bufts[hn->buffer_id], leaf);
         }
+    }
+
+    // Never resize storage still referenced by another gallocr.
+    if (galloc->shared_buffers != NULL && ggml_gallocr_shared_buffers_need_grow(galloc)) {
+        GGML_LOG_DEBUG("%s: detaching shared compute buffers for a larger reservation\n", __func__);
+        struct vbuffer ** buffers = calloc(galloc->n_buffers, sizeof(*buffers));
+        GGML_ASSERT(buffers != NULL);
+
+        struct ggml_gallocr_shared_buffers * shared = galloc->shared_buffers;
+        galloc->shared_buffers = NULL;
+        galloc->buffers = buffers;
+        ggml_gallocr_shared_buffers_unref(shared);
     }
 
     // reallocate buffers if needed
