@@ -26,6 +26,8 @@ export enum ServerModelStatus {
  * tools/server/server-models.cpp from the C++ server.
  */
 export enum ServerModelsSseEventType {
+	DOWNLOAD_FAILED = 'download_failed',
+	DOWNLOAD_FINISHED = 'download_finished',
 	DOWNLOAD_PROGRESS = 'download_progress',
 	MODEL_REMOVE = 'model_remove',
 	MODEL_STATUS = 'model_status',
