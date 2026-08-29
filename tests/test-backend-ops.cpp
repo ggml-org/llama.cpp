@@ -9193,11 +9193,6 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
 #endif
 
 #if 1
-    // TQ1_0 MoE shapes: small-n decode hits the mat-vec path, which has
-    // different offset conventions than the matrix path (see mul_mat_vec_tq1_0.comp)
-    test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_TQ1_0, GGML_TYPE_F32, 28, 10, false, 1024, 1, 4096));
-    test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_TQ1_0, GGML_TYPE_F32, 128, 8, false, 1024, 1, 2048));
-    test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_TQ1_0, GGML_TYPE_F32, 512, 10, false, 1024, 2048, 4096));
     for (ggml_type type_a : base_types) {
         for (ggml_type type_b : {GGML_TYPE_F32, GGML_TYPE_F16}) {
             std::vector<int> ks = { 256 };
@@ -9372,6 +9367,14 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     // gpt-oss issue with Vulkan mmq_id
     test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_MXFP4, GGML_TYPE_F32, 32, 2, false, 2880, 32, 2880));
     test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_Q4_0, GGML_TYPE_F32, 32, 2, false, 2880, 32, 2880));
+
+    // TQ1_0 mat-vec with more than one block per row. The generic mul_mat_id
+    // loops below only reach n == 1 at k == 256, i.e. a single 256-element
+    // block per row, so the block-stride loop in mul_mat_vec_tq1_0.comp never
+    // iterates and a wrong per-expert base offset stays invisible. These two
+    // use k == 4096 / 2048 (16 / 8 blocks per row) with n_used < n_mats.
+    test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_TQ1_0, GGML_TYPE_F32, 28, 10, false, 1024, 1, 4096));
+    test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_TQ1_0, GGML_TYPE_F32, 128, 8, false, 1024, 1, 2048));
 
     for (ggml_type type_a : all_types) {
         test_cases.emplace_back(new test_mul_mat_id(type_a, GGML_TYPE_F32, 4, 2, false, 64, 16, 3*ggml_blck_size(type_a)));

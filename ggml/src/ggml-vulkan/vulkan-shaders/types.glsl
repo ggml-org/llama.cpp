@@ -305,7 +305,7 @@ struct block_q2_K_packed32
 
 #define QUANT_K_TQ1_0 256
 
-// ternary (BitNet) 1.69 bpw: base-3 packed values — 5 per byte in `qs`
+// ternary (BitNet) 1.69 bpw: base-3 packed values, 5 per byte in `qs`
 // (48 bytes = 240 values) and 4 per byte in `qh` (4 bytes = 16 values).
 // Decoded via powers of 3: xi = (qbyte * pow3[t] * 3) >> 8, then
 // w = d * (xi - 1) maps {0,1,2} onto {-1,0,+1}.

@@ -1434,9 +1434,7 @@ f16vec4 dequantFuncNVFP4_v(const in decodeBufNVFP4 bl, const in uint blockCoords
 #define dequantFuncA_v dequantFuncQ8_0_v
 #elif defined(DATA_A_TQ1_0)
 // TQ1_0 has no native vectorized variant: the base-3 layout is not aligned
-// to groups of 4 like TQ2_0, so the scalar path serves _v as well.
-// (Reviewer note: a native vectorized implementation would perform better —
-// deferred, see PR discussion.)
+// to groups of 4 like TQ2_0, so _v is built from 4 scalar decodes.
 #define dequantFuncA dequantFuncTQ1_0
 #define dequantFuncA_v dequantFuncTQ1_0_v
 #elif defined(DATA_A_TQ2_0)
