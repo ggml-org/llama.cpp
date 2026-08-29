@@ -164,7 +164,9 @@ std::vector<T> pad_input(const ggml_tensor * tensor, size_t padded_rows, size_t 
 
 const ggml_tensor * get_inp_pos_tensor(struct ggml_cgraph * cgraph);
 
-bool get_is_prefill(const ggml_tensor * inp_pos);
+int64_t get_inp_pos_n_tokens(struct ggml_cgraph * cgraph, const ggml_tensor * inp_pos);
+
+bool get_is_prefill(struct ggml_cgraph * cgraph, const ggml_tensor * inp_pos);
 
 ov::Tensor get_ov_input_tensor(std::shared_ptr<GgmlOvDecoder> ggml_decoder, const std::string & param_name);
 ov::Tensor get_ov_input_tensor_static_decode(std::shared_ptr<GgmlOvDecoder> ggml_decoder,

@@ -61,6 +61,7 @@ Options:
 * `--token-embedding-type` use a specific quant type for the token embeddings tensor
 * `--keep-split` generate the quantized model in the same shards as the input file instead of a single quantized file
 * `--dry-run` simulate the quantization process
+* `--max-buffer-size MiB` cap the amount of tensor rows kept in memory while quantizing one tensor (default: 8192). Lower it to quantize models with very large tensors on a machine with little RAM
 
 Advanced options:
 * `--tensor-type` quantize specific tensor(s) to specific quant types. Supports regex syntax. May be specified multiple times
