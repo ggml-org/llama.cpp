@@ -330,10 +330,10 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 		const abortController = this.getOrCreateAbortController(convId);
 		const compactionStreamId = COMPACTION.STREAM_ID_PREFIX + convId;
 		const config = settingsStore.config;
-		// Model resolution mirrors the request funnel: the selected model
-		// first, then the model the branch was generated with, so router
-		// mode targets the child that owns this conversation's KV cache.
-		// A dedicated compaction model wins over both.
+		// A dedicated compaction model wins over the funnel's own resolution:
+		// the selected model first, then the model the branch was generated
+		// with, so router mode targets the child that owns this conversation's
+		// KV cache.
 		const compactionModel = serverStore.isRouterMode
 			? customCompactionModel(Boolean(config.compactionUseCustomModel), config.compactionModel)
 			: undefined;
