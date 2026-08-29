@@ -10,6 +10,8 @@ __launch_bounds__(256, 1)
 static __global__ void flash_attn_mask_to_sparse_indices(
         const half * mask_ptr, int32_t * indices_ptr, const int ne30, const int n_kv_max,
         const int64_t s31, const int64_t s33) {
+    ggml_cuda_pdl_sync();
+
     constexpr int values_per_lane = 8;
     const int tid      = threadIdx.x;
     const int warp     = tid / WARP_SIZE;
@@ -56,7 +58,7 @@ static __global__ void flash_attn_mask_to_sparse_indices(
         }
         __syncthreads();
 
-        const uint32_t lane_mask = lane == 0 ? 0 : (uint32_t(1) << lane) - 1;
+        const uint32_t lane_mask = lane == 0 ? 0 : (1u << lane) - 1;
         int warp_item_offset = 0;
 #pragma unroll
         for (int item = 0; item < values_per_lane; ++item) {
@@ -75,13 +77,17 @@ static __global__ void flash_attn_mask_to_sparse_indices(
         __syncthreads();
     }
 
+    ggml_cuda_pdl_lc();
+
     const int count = row_count;
     for (int i = count + tid; i < n_kv_max; i += blockDim.x) {
         indices[i] = -1;
     }
-    if (tid == 0 && count > n_kv_max) {
-        printf("flash attention sparse mask row exceeds n_kv_max (%d > %d)\n", count, n_kv_max);
-        __trap();
+    if (count > n_kv_max) {
+        if (tid == 0) {
+            printf("flash attention sparse mask row exceeds n_kv_max (%d > %d)\n", count, n_kv_max);
+            __trap();
+        }
     }
 }
 #endif
