@@ -86,12 +86,16 @@ GGML_HIP_SAFE_STATE_IO=1 \
   --port 8080
 ```
 
-Linux normally selects RCCL automatically after an RCCL build. Set
-`GGML_CUDA_ALLREDUCE=nccl` only when an explicit collective selection is
-needed. Add `--device` only when the backend should use a specific device list,
-for example `--device ROCm0,ROCm1,ROCm2,ROCm3`. Unsupported models retain the
-mirrored output-head fallback even when `GGML_TP_SHARDED_OUTPUT=1` is set; an
-external DFlash shared head also intentionally remains mirrored.
+Linux normally selects RCCL automatically after an RCCL build. For the
+qualified native two-gfx1100 launch, set the single umbrella
+`GGML_HIP_RDNA3_AUTO=1`; it supplies unset `GGML_CUDA_ALLREDUCE=nccl`,
+`GGML_CUDA_P2P=1`, and `NCCL_P2P_DISABLE=0` defaults while leaving RCCL's P2P
+level, algorithm, protocol, and channel autotuning untouched. Set
+`GGML_CUDA_ALLREDUCE=nccl` manually only when an explicit collective selection
+is needed. Add `--device` only when the backend should use a specific device
+list, for example `--device ROCm0,ROCm1,ROCm2,ROCm3`. Unsupported models retain
+the mirrored output-head fallback even when `GGML_TP_SHARDED_OUTPUT=1` is set;
+an external DFlash shared head also intentionally remains mirrored.
 
 For the validated four-V620 ordinary TP4 host-snapshot expansion, the optional
 new-branch mode is:
@@ -149,7 +153,9 @@ commit when comparing performance.
 ## Variables users normally do not need
 
 These are redundant when the HSA umbrella is active and should be omitted unless
-performing an A/B test or forcing a fallback:
+performing an A/B test or forcing a fallback. `GGML_HIP_RDNA3_AUTO=1` is not in
+this list: it is the explicit opt-in umbrella for the qualified native gfx1100
+RCCL/P2P profile.
 
 ```text
 GGML_HIP_RDNA2_AUTO=1
@@ -159,12 +165,13 @@ GGML_HIP_GFX1030_Q8_CACHE=1
 GGML_HIP_GFX1030_Q8_1_FUSION=1
 GGML_HIP_GFX1030_GDN_SIBLING_FUSION=1
 GGML_HIP_GRAPHS=1              # runtime variable; CMake enables graphs
-GGML_CUDA_P2P=1                # not required by the RCCL policy
+GGML_CUDA_P2P=1                # RDNA3 Auto supplies this on the qualified pair
 ```
 
 Use `GGML_HIP_RDNA2_AUTO=0` to disable the automatic RDNA2/model coordination
-profile for comparison or recovery. Explicit `0` values for individual feature
-variables similarly disable only that feature.
+profile for comparison or recovery. Use `GGML_HIP_RDNA3_AUTO=0` to disable the
+qualified native gfx1100 RCCL/P2P umbrella. Explicit `0` values for individual
+feature variables similarly disable only that feature.
 
 ## Important limits
 

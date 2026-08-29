@@ -137,6 +137,85 @@ static bool ggml_cuda_rdna2_is_four_v620_pcie_hop2(int physical_device_count) {
 }
 #endif
 
+#if defined(GGML_USE_HIP) && defined(__linux__)
+static bool ggml_cuda_rdna3_auto_active = false;
+
+static bool ggml_cuda_rdna3_auto_qualified_topology(const ggml_cuda_device_info & info) {
+    if (info.physical_device_count != 2 || info.device_count != 2) {
+        return false;
+    }
+
+    for (int device = 0; device < 2; ++device) {
+        if (info.devices[device].physical_device != device ||
+                info.devices[device].cc != GGML_CUDA_CC_RDNA3) {
+            return false;
+        }
+
+        cudaDeviceProp prop{};
+        if (cudaGetDeviceProperties(&prop, device) != cudaSuccess ||
+                std::strcmp(prop.name, "AMD Radeon RX 7900 XT") != 0 ||
+                std::strcmp(prop.gcnArchName, "gfx1100") != 0) {
+            (void) cudaGetLastError();
+            return false;
+        }
+    }
+
+    for (int src = 0; src < 2; ++src) {
+        for (int dst = 0; dst < 2; ++dst) {
+            if (src == dst) {
+                continue;
+            }
+            int can_access = 0;
+            if (cudaDeviceCanAccessPeer(&can_access, src, dst) != cudaSuccess || !can_access) {
+                (void) cudaGetLastError();
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+static bool ggml_cuda_rdna3_auto_apply(const ggml_cuda_device_info & info) {
+    const char * value = std::getenv("GGML_HIP_RDNA3_AUTO");
+    const auto flag = ggml_cuda_rdna3_auto_parse(value);
+    if (flag == ggml_cuda_rdna3_auto_flag::invalid) {
+        GGML_LOG_WARN("GGML_HIP_RDNA3_AUTO=\"%s\" is not recognized; disabling the RDNA3 Auto profile\n",
+                value == nullptr ? "<unset>" : value);
+        return false;
+    }
+    if (flag != ggml_cuda_rdna3_auto_flag::enabled) {
+        return false;
+    }
+    if (!ggml_cuda_rdna3_auto_qualified_topology(info)) {
+        GGML_LOG_INFO("native RDNA3 Auto: no qualified two-card gfx1100 topology; leaving runtime policy unchanged\n");
+        return false;
+    }
+
+#ifndef GGML_USE_NCCL
+    GGML_LOG_WARN("native RDNA3 Auto: RCCL is not compiled in; rebuild with GGML_HIP_RCCL=ON\n");
+    return false;
+#else
+    auto set_default = [](const char * name, const char * default_value) {
+        if (std::getenv(name) != nullptr) {
+            return;
+        }
+        if (setenv(name, default_value, 1) != 0) {
+            GGML_LOG_WARN("native RDNA3 Auto: failed to set default %s=%s\n", name, default_value);
+        }
+    };
+
+    // These defaults are the safe, tested collective/P2P umbrella. Do not
+    // force P2P distance, algorithm, protocol, or channel counts: RCCL Auto
+    // selected direct P2P on this topology and owns those decisions.
+    set_default("GGML_CUDA_ALLREDUCE", "nccl");
+    set_default("GGML_CUDA_P2P", "1");
+    set_default("NCCL_P2P_DISABLE", "0");
+    GGML_LOG_INFO("native RDNA3 Auto: RCCL/direct-P2P defaults enabled; preserving user overrides and leaving NCCL level/algorithm/protocol on Auto\n");
+    return true;
+#endif
+}
+#endif
+
 #define GGML_LOG_WARN_ONCE(str) \
     { static std::once_flag warn_flag; std::call_once(warn_flag, []() { GGML_LOG_WARN(str); }); }
 
@@ -432,10 +511,16 @@ static ggml_cuda_device_info ggml_cuda_init() {
         info.default_tensor_split[id] /= total_vram;
     }
 
+    bool rdna3_auto_active = false;
+#if defined(GGML_USE_HIP) && defined(__linux__)
+    rdna3_auto_active = ggml_cuda_rdna3_auto_apply(info);
+    ggml_cuda_rdna3_auto_active = rdna3_auto_active;
+#endif
+
     // configure logging to stdout
     // CUBLAS_CHECK(cublasLoggerConfigure(1, 1, 0, nullptr));
 
-    bool enable_peer_access = getenv("GGML_CUDA_P2P") != nullptr;
+    bool enable_peer_access = getenv("GGML_CUDA_P2P") != nullptr || rdna3_auto_active;
 #if defined(GGML_USE_HIP) && defined(__linux__)
     enable_peer_access = enable_peer_access ||
         ggml_cuda_rdna2_is_four_v620_pcie_hop2(info.physical_device_count);
@@ -2415,6 +2500,18 @@ static void * ggml_backend_cuda_comm_init(ggml_backend_t * backends, size_t n_ba
         ret->dev_ids.push_back(static_cast<ggml_backend_cuda_context *>(backends[i]->context)->device);
     }
     ret->rdna2_bf16_hidden_topology = ggml_backend_cuda_comm_is_four_distinct_rdna2(ret);
+#if defined(GGML_USE_HIP) && defined(__linux__)
+    if (ggml_cuda_rdna3_auto_active) {
+        const char * allreduce = std::getenv("GGML_CUDA_ALLREDUCE");
+        const char * p2p = std::getenv("GGML_CUDA_P2P");
+        const char * p2p_disable = std::getenv("NCCL_P2P_DISABLE");
+        GGML_LOG_INFO("native RDNA3 Auto active: GGML_CUDA_ALLREDUCE=%s GGML_CUDA_P2P=%s "
+            "NCCL_P2P_DISABLE=%s; NCCL level/algorithm/protocol remain on Auto\n",
+            allreduce != nullptr ? allreduce : "<unset>",
+            p2p != nullptr ? p2p : "<unset>",
+            p2p_disable != nullptr ? p2p_disable : "<unset>");
+    }
+#endif
     if (audit_env != nullptr) {
         ret->rdna2_bf16_hidden_audit_path = audit_env;
         ret->audit_context_id = ggml_cuda_rdna2_bf16_hidden_audit_next_context.fetch_add(1);

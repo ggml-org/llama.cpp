@@ -22,6 +22,7 @@
 #endif
 #endif
 #include "ggml-common.h"
+#include "rdna3-auto-policy.h"
 
 #include <array>
 #include <algorithm>

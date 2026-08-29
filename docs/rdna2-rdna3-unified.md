@@ -98,7 +98,7 @@ needed to enable these WMMA kernels.
 Build each architecture separately:
 
 ```bash
-./scripts/build-rdna-unified.sh --arch gfx1100 \
+GGML_HIP_RCCL=ON ./scripts/build-rdna-unified.sh --arch gfx1100 \
   --rocm /opt/rocm/core-10.0 --jobs 2
 
 # On a native gfx1030 host/build worker:
@@ -106,9 +106,10 @@ Build each architecture separately:
 ```
 
 The script refuses an inherited `HSA_OVERRIDE_GFX_VERSION` for gfx1100. RCCL
-is off unless explicitly requested with `GGML_HIP_RCCL=ON`. Embedded/prebuilt
-Web UI assets are disabled so rebuilds do not fall back to an unpinned network
-artifact; the OpenAI-compatible HTTP API remains available.
+is required for the native gfx1100 automatic collective profile and is enabled
+explicitly above; the generic build default remains off for portability.
+Embedded/prebuilt Web UI assets are disabled so rebuilds do not fall back to an
+unpinned network artifact; the OpenAI-compatible HTTP API remains available.
 
 ### Runtime environment
 
@@ -117,6 +118,13 @@ The unified launcher sets the small amount of required environment itself:
 - Native gfx1100: `HSA_NO_SCRATCH_RECLAIM=1` and
   `GGML_HIP_SAFE_STATE_IO=1`. The Q8_0 VDR=4 optimization is compile-time;
   there is no runtime switch for it.
+- Optional native gfx1100 umbrella: set only
+  `GGML_HIP_RDNA3_AUTO=1` when using an RCCL-enabled build. On the qualified
+  two-card RX 7900 XT/gfx1100 topology it defaults unset communication controls
+  to `GGML_CUDA_ALLREDUCE=nccl`, `GGML_CUDA_P2P=1`, and
+  `NCCL_P2P_DISABLE=0`. It preserves explicit user values and leaves
+  `NCCL_P2P_LEVEL`, `NCCL_ALGO`, `NCCL_PROTO`, and channel counts to RCCL Auto.
+  It never applies the RDNA2/V620 `NCCL_P2P_LEVEL=PXB` policy.
 - Sidecar MTP: `SPEC_SIDECAR=1` plus the four `LLAMA_SPEC_*`/draft-ID paths;
   these are set automatically when sidecar mode is enabled.
 - Safe defaults: `GGML_HIP_RDNA3_GDN_CHUNKED=0` and
@@ -174,8 +182,8 @@ skipped; BDFs and ordinals are not hard-coded.
 CTX_SIZE=8192 ./scripts/run-qwen38-rdna-unified.sh \
   --profile safe --no-sidecar
 
-# Recommended stacked MTP + ngram-map-k4v:
-./scripts/run-qwen38-rdna-unified.sh --profile safe
+# Recommended stacked MTP + ngram-map-k4v with automatic RCCL/P2P defaults:
+GGML_HIP_RDNA3_AUTO=1 ./scripts/run-qwen38-rdna-unified.sh --profile safe
 
 # Optional, independently gated prompt optimization (not the default):
 ./scripts/run-qwen38-rdna-unified.sh --profile safe \
@@ -194,10 +202,10 @@ Profiles:
 
 The launcher defaults to true tensor mode with F16 KV and a `1,1` split. It
 uses `draft-mtp,ngram-map-k4v`, N/M sizes 12/48, draft maximum 3, the first
-dynamically matched GPU for the drafter, and a 4096 draft ubatch. Tensor mode
-currently reports that its internal all-reduce cannot initialize and safely
-uses the generic meta-backend butterfly fallback. Layer/Q8 mode remains a
-supported fallback.
+dynamically matched GPU for the drafter, and a 4096 draft ubatch. With an
+RCCL-enabled build and `GGML_HIP_RDNA3_AUTO=1`, tensor mode initializes RCCL
+and direct P2P automatically. Without RCCL, it retains the safe generic
+meta-backend butterfly fallback. Layer/Q8 mode remains a supported fallback.
 
 Sidecar KV is capped at 131,072 positions; requests beyond that ceiling fall
 back to the authoritative target. Above 131,072 target context, the 1.76 GiB

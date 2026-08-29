@@ -296,6 +296,10 @@ target_include_directories(test-rdna2-rccl-policy PRIVATE ${CMAKE_CURRENT_SOURCE
 llama_build_and_test(test-rdna2-p2p-policy.cpp)
 target_include_directories(test-rdna2-p2p-policy PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../ggml/src/ggml-cuda)
 
+# Pure host-side parser contract for the opt-in native gfx1100 runtime umbrella.
+llama_build_and_test(test-rdna3-auto-policy.cpp)
+target_include_directories(test-rdna3-auto-policy PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../ggml/src/ggml-cuda)
+
 # Pure host-side selector contract for the bounded gfx1030 routed MMVQ six-row path.
 llama_build_and_test(test-mmvq-batch6-config.cpp)
 target_include_directories(test-mmvq-batch6-config PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../ggml/src/ggml-cuda)
