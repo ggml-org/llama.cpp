@@ -74,6 +74,7 @@
 #include <array>
 #include <atomic>
 #include <charconv>
+#include <chrono>
 #include <cinttypes>
 #include <condition_variable>
 #include <cstddef>
@@ -88,6 +89,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <string>
+#include <thread>
 #include <vector>
 
 static_assert(sizeof(half) == sizeof(ggml_fp16_t), "wrong fp16 size");
@@ -220,8 +222,39 @@ static ggml_cuda_device_info ggml_cuda_init() {
 
     cudaError_t err = cudaGetDeviceCount(&info.physical_device_count);
     if (err != cudaSuccess) {
-        GGML_LOG_ERROR("%s: failed to initialize " GGML_CUDA_NAME ": %s\n", __func__, cudaGetErrorString(err));
-        return info;
+        // on some systems (e.g. a systemd service started at boot) the GPU driver stack
+        // (e.g. nvidia-uvm) can still be initializing when we get here; GGML_CUDA_INIT_RETRY_MS
+        // lets the caller opt into a bounded retry instead of a one-shot failure
+        int retry_budget_ms = 0;
+        const char * retry_env = getenv("GGML_CUDA_INIT_RETRY_MS");
+        if (retry_env != nullptr) {
+            retry_budget_ms = atoi(retry_env);
+            if (retry_budget_ms < 0) {
+                GGML_LOG_WARN("%s: ignoring invalid GGML_CUDA_INIT_RETRY_MS=\"%s\"\n", __func__, retry_env);
+                retry_budget_ms = 0;
+            }
+        }
+
+        if (retry_budget_ms > 0) {
+            constexpr int retry_delay_ms = 200;
+            GGML_LOG_WARN("%s: failed to initialize " GGML_CUDA_NAME " (%s), retrying for up to %d ms "
+                          "in case the driver is still initializing\n",
+                          __func__, cudaGetErrorString(err), retry_budget_ms);
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(retry_budget_ms);
+            do {
+                (void) cudaGetLastError(); // clear the sticky error before retrying
+                std::this_thread::sleep_for(std::chrono::milliseconds(retry_delay_ms));
+                err = cudaGetDeviceCount(&info.physical_device_count);
+            } while (err != cudaSuccess && std::chrono::steady_clock::now() < deadline);
+            if (err == cudaSuccess) {
+                GGML_LOG_INFO("%s: " GGML_CUDA_NAME " became available after retrying\n", __func__);
+            }
+        }
+
+        if (err != cudaSuccess) {
+            GGML_LOG_ERROR("%s: failed to initialize " GGML_CUDA_NAME ": %s\n", __func__, cudaGetErrorString(err));
+            return info;
+        }
     }
 
     GGML_ASSERT(info.physical_device_count <= GGML_CUDA_MAX_DEVICES);
