@@ -39,9 +39,19 @@ function(spec_sidecar_add_sidecar target output source)
         PREFIX ""
         OUTPUT_NAME "${output}"
         POSITION_INDEPENDENT_CODE ON)
+    set(_spec_arches "${LLAMA_SPEC_SIDECAR_HIP_ARCHITECTURES}")
     if (LLAMA_SPEC_SIDECAR_HIP_ARCHITECTURES)
         set_property(TARGET ${target} PROPERTY HIP_ARCHITECTURES
             "${LLAMA_SPEC_SIDECAR_HIP_ARCHITECTURES}")
+    elseif (CMAKE_HIP_ARCHITECTURES)
+        set(_spec_arches "${CMAKE_HIP_ARCHITECTURES}")
+    endif()
+    # HIP exposes __gfx1030__ only in the device compilation pass. The host
+    # pass also needs a matching constant to select the corresponding kernel
+    # launch; define it only for an exact single-architecture sidecar build,
+    # never for a multi-arch/fallback target.
+    if (_spec_arches STREQUAL "gfx1030")
+        target_compile_definitions(${target} PRIVATE SPEC_SIDECAR_GFX1030=1)
     endif()
     if (LLAMA_TOOLS_INSTALL)
         install(TARGETS ${target} LIBRARY DESTINATION lib RUNTIME DESTINATION bin)
