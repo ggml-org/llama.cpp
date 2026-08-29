@@ -1,7 +1,7 @@
 # llama.cpp RDNA2 / RDNA3
 
-This fork keeps the RDNA2/gfx1030 and RDNA3/gfx1100 paths separate. Choose the
-section matching the GPU you are building for; do not mix the runtime profiles.
+This fork keeps the RDNA2/gfx1030 and RDNA3/gfx1100 paths separate. Use only
+the section matching the GPU you are building for.
 Unsupported models, shapes, quantizations, and topologies retain the normal
 llama.cpp fallbacks.
 
@@ -9,22 +9,23 @@ llama.cpp fallbacks.
 
 | GPU | Build helper | Runtime profile |
 |---|---|---|
-| Native RDNA3/gfx1100 | `scripts/build-rdna3-portable.sh` | `GGML_HIP_RDNA3_AUTO=1` on a qualified native multi-GPU system |
+| Native RDNA3/gfx1100 | `scripts/build-rdna3-portable.sh` | `GGML_HIP_RDNA3_AUTO=1` with the RCCL-enabled build |
 | RDNA2/gfx1030/V620 | `scripts/build-rdna2-portable.sh` | `HSA_OVERRIDE_GFX_VERSION=10.3.0` plus the RDNA2 profile |
 
 `HSA_OVERRIDE_GFX_VERSION=10.3.0` is **never** used on native gfx1100.
 
 ## RDNA3: native gfx1100
 
-The RDNA3 profile is qualified for matching AMD Radeon RX 7900 XT / `gfx1100`
-cards. It can use two or more matching physical GPUs; the launcher selects all
-matching cards by default. The current machine has two cards, so runtime
+The RDNA3 profile is qualified for two or more matching AMD Radeon RX 7900 XT /
+`gfx1100` cards. The launcher selects all matching cards by default. For Auto to
+activate, every visible physical GPU must match and every pair must support
+bidirectional peer access. The current machine has two cards, so runtime
 measurements for a 3+ card topology remain to be collected on suitable hardware.
 
 ### Build
 
-The portable helper discovers ROCm and clang, detects a gfx11 target, builds the
-server and speculative sidecars, and disables embedded/prebuilt UI assets:
+The portable helper discovers ROCm and clang, detects one gfx11 target, builds
+the server and speculative sidecars, and disables embedded/prebuilt UI assets:
 
 ```bash
 ./scripts/build-rdna3-portable.sh
@@ -39,13 +40,9 @@ TARGET_ARCH=gfx1100 \
 ./scripts/build-rdna3-portable.sh --jobs 2
 ```
 
-The lower-level deterministic helper is also available, but its portable RCCL
-default is intentionally off:
-
-```bash
-GGML_HIP_RCCL=ON \
-./scripts/build-rdna-unified.sh --arch gfx1100 --jobs 2
-```
+The lower-level `scripts/build-rdna-unified.sh` helper remains available for
+maintainer-controlled builds; set `GGML_HIP_RCCL=ON` when using it for RDNA3
+Auto.
 
 ### Model and sidecar assets
 
@@ -63,7 +60,7 @@ Prepare the MTP sidecar bundle once after building. Use the pinned 40,960-ID
 source recorded by the project, then validate the generated bundle:
 
 ```bash
-MODEL_DIR="${MODEL_DIR:-$HOME/models/Qwen3.8-27B-Q4-AutoRound-Code-GGUF}"
+export MODEL_DIR="${MODEL_DIR:-$HOME/models/Qwen3.8-27B-Q4-AutoRound-Code-GGUF}"
 python tools/spec-sidecar/prepare_assets.py mtp \
   --target "$MODEL_DIR/Qwen3.8-27B-Q4_0-AutoRound-Code.gguf" \
   --ids "$HOME/models/.manifests/qwen38-sidecar/draft_vocab_ids-c954724104a7856a07abb7031cc4af780ae7f5bf.json" \
@@ -72,11 +69,11 @@ python tools/spec-sidecar/validate_assets.py mtp \
   build-gfx1100-portable/bin/spec-sidecar-mtp
 ```
 
-### Launch: full RDNA3 feature example
+### Launch: all available RDNA3 options
 
-This is the full feature example: RCCL/direct-P2P auto policy, sidecar MTP plus
-ngram drafting (launcher default), experimental chunked GDN, and the validated
-but default-off Add+RMSNorm fusion:
+This enables the available RDNA3 options: RCCL/direct-P2P auto policy, sidecar
+MTP plus ngram drafting (launcher default), experimental chunked GDN, and the
+validated but default-off Add+RMSNorm fusion.
 
 ```bash
 GGML_HIP_RDNA3_AUTO=1 \
@@ -124,12 +121,12 @@ parity testing. Do not set `HSA_OVERRIDE_GFX_VERSION` on gfx1100.
   variables are not required.
 - Explicit values always win. For example, `NCCL_P2P_DISABLE=1` remains a
   request to disable RCCL P2P.
-- The auto profile activates only for at least two identical native
-  RX 7900 XT/`gfx1100` physical devices with bidirectional peer access and
-  `GGML_HIP_RCCL` compiled in. Mixed, virtual, or partial-peer topologies stay
-  on the safe generic behavior.
+- The auto profile activates only when all visible physical devices are identical
+  native RX 7900 XT/`gfx1100` cards, there are at least two, every pair has
+  bidirectional peer access, and `GGML_HIP_RCCL` is compiled in. Mixed, virtual,
+  or partial-peer topologies stay on the safe generic behavior.
 - Do not force `NCCL_P2P_LEVEL=PXB`, `NCCL_ALGO`, or `NCCL_PROTO` on this topology;
-  RCCL Auto selected the best tested transport.
+  RCCL Auto selected the tested direct transport.
 
 ## RDNA2: gfx1030 / V620
 
