@@ -539,6 +539,23 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
             const uint k_pair = row * LOAD_VEC_A / 2;
             store_a(col, k_pair,     d * FLOAT_TYPEV2(kvalues_iq2nl[q.x], kvalues_iq2nl[q.y]));
             store_a(col, k_pair + 1, d * FLOAT_TYPEV2(kvalues_iq2nl[q.z], kvalues_iq2nl[q.w]));
+#elif defined(DATA_A_IQ3_NL)
+            const uint idx = pos_a + col * p.stride_a / LOAD_VEC_A + row;
+
+            const uint ib  = idx / 8;         // 4 values per idx
+            const uint iqs = (idx % 8) * 4;   // first element of the group
+
+            const uint j = iqs % 8;   // 0 or 4
+            const uint g = iqs / 8;
+
+            const FLOAT_TYPE d = FLOAT_TYPE(data_a_packed16[ib].d);
+            const uint qsw = pack32(u16vec2(data_a_packed16[ib].qs[j/2],
+                                            data_a_packed16[ib].qs[j/2 + 1]));
+            const uvec4 q = iq3nl_index4(qsw, uint(data_a[ib].qh[g]), j, g);
+
+            const uint k_pair = row * LOAD_VEC_A / 2;
+            store_a(col, k_pair,     d * FLOAT_TYPEV2(kvalues_iq3nl[q.x], kvalues_iq3nl[q.y]));
+            store_a(col, k_pair + 1, d * FLOAT_TYPEV2(kvalues_iq3nl[q.z], kvalues_iq3nl[q.w]));
 #elif defined(DATA_A_IQ4_NL)
             const uint idx = pos_a + col * p.stride_a / LOAD_VEC_A + row;
 
