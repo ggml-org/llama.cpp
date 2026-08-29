@@ -24,22 +24,22 @@
 
 {#if showMessageStats && isLiveFlowRoot && liveLlm}
 	<ChatMessageStatistics
-		mode={ChatMessageStatisticsMode.GENERATION}
 		isLive
-		promptTokens={liveLlm.prompt_n}
-		promptMs={liveLlm.prompt_ms}
-		predictedTokens={liveLlm.predicted_n}
+		mode={ChatMessageStatisticsMode.GENERATION}
 		predictedMs={liveLlm.predicted_ms}
+		predictedTokens={liveLlm.predicted_n}
+		promptMs={liveLlm.prompt_ms}
+		promptTokens={liveLlm.prompt_n}
 	/>
 {:else if showMessageStats && message.timings && message.timings.predicted_n && message.timings.predicted_ms}
 	{@const agentic = message.timings.agentic}
 	<ChatMessageStatistics
-		mode={ChatMessageStatisticsMode.GENERATION}
-		promptTokens={agentic ? agentic.llm.prompt_n : message.timings.prompt_n}
-		promptMs={agentic ? agentic.llm.prompt_ms : message.timings.prompt_ms}
-		predictedTokens={agentic ? agentic.llm.predicted_n : message.timings.predicted_n}
-		predictedMs={agentic ? agentic.llm.predicted_ms : message.timings.predicted_ms}
 		agenticTimings={agentic}
+		mode={ChatMessageStatisticsMode.GENERATION}
+		predictedMs={agentic ? agentic.llm.predicted_ms : message.timings.predicted_ms}
+		predictedTokens={agentic ? agentic.llm.predicted_n : message.timings.predicted_n}
+		promptMs={agentic ? agentic.llm.prompt_ms : message.timings.prompt_ms}
+		promptTokens={agentic ? agentic.llm.prompt_n : message.timings.prompt_n}
 	/>
 {:else if isLoading && showMessageStats}
 	{@const liveStats = processingState.getLiveProcessingStats()}
@@ -47,12 +47,12 @@
 
 	{#if genStats}
 		<ChatMessageStatistics
-			mode={ChatMessageStatisticsMode.GENERATION}
 			isLive
-			promptTokens={liveStats?.tokensProcessed}
-			promptMs={liveStats?.timeMs}
-			predictedTokens={genStats.tokensGenerated}
+			mode={ChatMessageStatisticsMode.GENERATION}
 			predictedMs={genStats.timeMs}
+			predictedTokens={genStats.tokensGenerated}
+			promptMs={liveStats?.timeMs}
+			promptTokens={liveStats?.tokensProcessed}
 		/>
 	{/if}
 {/if}

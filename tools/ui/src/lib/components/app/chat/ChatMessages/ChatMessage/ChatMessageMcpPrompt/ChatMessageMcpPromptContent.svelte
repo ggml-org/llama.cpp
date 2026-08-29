@@ -99,12 +99,12 @@
 				<Tooltip.Trigger>
 					{#if serverFavicon}
 						<img
-							src={serverFavicon}
 							alt=""
 							class="h-3.5 w-3.5 shrink-0 rounded-sm"
 							onerror={(e) => {
 								(e.currentTarget as HTMLImageElement).style.display = 'none';
 							}}
+							src={serverFavicon}
 						/>
 					{/if}
 				</Tooltip.Trigger>
