@@ -9,14 +9,26 @@ uint fastmod(uint a, uint b) {
     return a % b;
 }
 
-uint fastdiv(uint a, uint b) {
+// see init_fastdiv_values in ggml-vulkan.cpp
+uint fastdiv(uint n, uint mp, uint L) {
+    uint msbs, lsbs;
+    // msbs = mulhi(n, mp)
+    umulExtended(n, mp, msbs, lsbs);
+    return (msbs + n) >> L;
+}
+
+uint fastdiv_L(uint packed, uint slot) {
+    return (packed >> (slot * 8)) & 0x3Fu;
+}
+
+uint fastdiv_small(uint a, uint b) {
     return (a < b) ? 0 : (a / b);
 }
 
 void get_indices(uint idx, out uint i00, out uint i01, out uint i02, out uint i03, uint ne00, uint ne01, uint ne02, uint ne03) {
-    i03 = fastdiv(idx, (ne02*ne01*ne00));
+    i03 = fastdiv_small(idx, (ne02*ne01*ne00));
     const uint i03_offset = i03 * ne02*ne01*ne00;
-    i02 = fastdiv((idx - i03_offset), (ne01*ne00));
+    i02 = fastdiv_small((idx - i03_offset), (ne01*ne00));
     const uint i02_offset = i02*ne01*ne00;
     i01 = (idx - i03_offset - i02_offset) / ne00;
     i00 = idx - i03_offset - i02_offset - i01*ne00;

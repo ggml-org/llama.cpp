@@ -15,6 +15,7 @@
 #endif
 
 #include "types.glsl"
+#include "utils.glsl"
 
 // shape notation: [dim(N), ..., dim(0)] -- stride(dim(j)) >= stride(dim(i)) if i > j
 layout(binding = 0) readonly buffer A {
@@ -177,14 +178,6 @@ const uint32_t ArpWg = WG_SIZE / BS_CRS;
 uint32_t       Br    = tid / BS_NPQ;
 uint32_t       Bc    = tid % BS_NPQ;
 const uint32_t BrpWg = WG_SIZE / BS_NPQ;
-
-// see init_fastdiv_values in ggml-vulkan.cpp
-uint fastdiv(uint n, uint mp, uint L) {
-    uint msbs, lsbs;
-    // msbs = mulhi(n, mp)
-    umulExtended(n, mp, msbs, lsbs);
-    return (msbs + n) >> L;
-}
 
 void split_crs(uint32_t crs_idx, out uint32_t ic, out uint32_t kd, out uint32_t kh, out uint32_t kw) {
     const uint32_t KHKW = KH * KW;
