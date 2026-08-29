@@ -1,6 +1,6 @@
 import { COMPACTION } from '$lib/constants';
 import { MessageRole, MessageType } from '$lib/enums';
-import type { DatabaseMessage } from '$lib/types';
+import type { DatabaseMessage, SettingsConfigValue } from '$lib/types';
 
 /**
  * Applies the compaction boundary to a branch message list before it is
@@ -40,6 +40,22 @@ export function sliceAtLastCompaction(messages: DatabaseMessage[]): DatabaseMess
 	};
 
 	return [...systemPrefix, framedNode, ...messages.slice(boundary + 1)];
+}
+
+/**
+ * The model dedicated to summarization, or undefined when the conversation
+ * model writes the summary. The opt-in flag gates the setting, and an unset
+ * or blank value keeps the conversation model.
+ */
+export function customCompactionModel(
+	useCustomModel: boolean,
+	model: SettingsConfigValue
+): string | undefined {
+	if (!useCustomModel || typeof model !== 'string') return undefined;
+
+	const trimmed = model.trim();
+
+	return trimmed === COMPACTION.MODEL_UNSET ? undefined : trimmed;
 }
 
 /**

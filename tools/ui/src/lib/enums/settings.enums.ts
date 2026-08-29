@@ -21,6 +21,7 @@ export enum SyncableParameterType {
 export enum SettingsFieldType {
 	CHECKBOX = 'checkbox',
 	INPUT = 'input',
+	MODEL_SELECT = 'model-select',
 	RADIO = 'radio',
 	SELECT = 'select',
 	TEXTAREA = 'textarea'

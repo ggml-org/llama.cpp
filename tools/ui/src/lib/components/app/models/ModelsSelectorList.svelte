@@ -10,7 +10,7 @@
 		sectionHeaderClass?: string;
 		orgHeaderClass?: string;
 		onSelect: (modelId: string) => void;
-		onInfoClick: (modelName: string) => void;
+		onInfoClick?: (modelName: string) => void;
 		renderOption?: import('svelte').Snippet<[ModelItem, boolean]>;
 	}
 
