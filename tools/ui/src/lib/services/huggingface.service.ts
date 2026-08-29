@@ -255,26 +255,26 @@ export class HuggingFaceService {
 		sidecar: ModelSidecar | null;
 		sidecarForm: SidecarForm | null;
 	} | null {
-		if (!MODEL_ID.WEIGHT_EXTENSION_RE.test(filename)) return null;
+		if (!MODEL_ID.WEIGHT_EXTENSION_REGEX.test(filename)) return null;
 
-		let source = filename.replace(MODEL_ID.WEIGHT_EXTENSION_RE, '');
+		let source = filename.replace(MODEL_ID.WEIGHT_EXTENSION_REGEX, '');
 		let sidecar: ModelSidecar | null = null;
 		let sidecarForm: SidecarForm | null = null;
 
-		const prefixMatch = source.match(MODEL_ID.SIDECAR_PREFIX_RE);
+		const prefixMatch = source.match(MODEL_ID.SIDECAR_PREFIX_REGEX);
 
 		if (prefixMatch) {
 			sidecar = sidecarFromFileToken(prefixMatch[1].toLowerCase());
 			sidecarForm = 'prefix';
 			source = prefixMatch[2];
 		} else {
-			const suffixMatch = source.match(MODEL_ID.SIDECAR_SUFFIX_RE);
+			const suffixMatch = source.match(MODEL_ID.SIDECAR_SUFFIX_REGEX);
 
 			if (suffixMatch) {
 				const candidate = suffixMatch[1];
 				const headSeg = candidate.split(MODEL_ID.SEGMENT_SEPARATOR).pop();
 
-				if (headSeg && MODEL_ID.QUANTIZATION_SEGMENT_RE.test(headSeg)) {
+				if (headSeg && MODEL_ID.QUANTIZATION_SEGMENT_REGEX.test(headSeg)) {
 					sidecar = sidecarFromFileToken(suffixMatch[2].toLowerCase());
 					sidecarForm = 'suffix';
 					source = candidate;
@@ -287,7 +287,7 @@ export class HuggingFaceService {
 		// - For embedded MTP like `Hy3-IQ1_M-mtp.gguf` we have `Hy3-IQ1_M` and `IQ1_M` matches.
 		// - For main files like `Llama-3-8B-Q4_K_M.gguf` we land on the trailing quant.
 		const segments = source.split(MODEL_ID.SEGMENT_SEPARATOR);
-		const quantIdx = segments.findIndex((seg) => MODEL_ID.QUANTIZATION_SEGMENT_RE.test(seg));
+		const quantIdx = segments.findIndex((seg) => MODEL_ID.QUANTIZATION_SEGMENT_REGEX.test(seg));
 
 		let quant = quantIdx >= 0 ? segments[quantIdx].toUpperCase() : null;
 
