@@ -8,6 +8,7 @@
 #endif
 
 #include "types.glsl"
+#include "utils.glsl"
 
 layout (push_constant) uniform parameter
 {
@@ -32,14 +33,6 @@ layout (binding = 1) writeonly buffer D {uint data_d[];};
 shared uint vals[BLOCK_SIZE];
 shared uint offsets[BLOCK_SIZE];
 shared uint cursors[BLOCK_SIZE];
-
-// see init_fastdiv_values in ggml-vulkan.cpp
-uint fastdiv(uint n, uint mp, uint L) {
-    uint msbs, lsbs;
-    // msbs = mulhi(n, mp)
-    umulExtended(n, mp, msbs, lsbs);
-    return (msbs + n) >> L;
-}
 
 // data_d layout when p.hoist_row_ids is set:
 //   [0,              n_experts)   per-expert row count
