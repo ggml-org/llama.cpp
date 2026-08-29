@@ -98,6 +98,8 @@ template [[host_name("kernel_cpy_f32_q4_0")]]   kernel cpy_f_q_t kernel_cpy_f32_
 template [[host_name("kernel_cpy_f32_q4_1")]]   kernel cpy_f_q_t kernel_cpy_f32_q<QK4_1,  block_q4_1,   quantize_q4_1>;
 template [[host_name("kernel_cpy_f32_q5_0")]]   kernel cpy_f_q_t kernel_cpy_f32_q<QK5_0,  block_q5_0,   quantize_q5_0>;
 template [[host_name("kernel_cpy_f32_q5_1")]]   kernel cpy_f_q_t kernel_cpy_f32_q<QK5_1,  block_q5_1,   quantize_q5_1>;
+template [[host_name("kernel_cpy_f32_iq2_nl")]] kernel cpy_f_q_t kernel_cpy_f32_q<QK2_NL, block_iq2_nl, quantize_iq2_nl>;
+template [[host_name("kernel_cpy_f32_iq3_nl")]] kernel cpy_f_q_t kernel_cpy_f32_q<QK3_NL, block_iq3_nl, quantize_iq3_nl>;
 template [[host_name("kernel_cpy_f32_iq4_nl")]] kernel cpy_f_q_t kernel_cpy_f32_q<QK4_NL, block_iq4_nl, quantize_iq4_nl>;
 template [[host_name("kernel_cpy_f32_tq2_0")]]  kernel cpy_f_q_t kernel_cpy_f32_q<QK_K,   block_tq2_0,  quantize_tq2_0>;
 
@@ -298,6 +300,8 @@ template [[host_name("kernel_get_rows_iq3_s")]]   kernel get_rows_q_t kernel_get
 template [[host_name("kernel_get_rows_iq2_s")]]   kernel get_rows_q_t kernel_get_rows_q<block_iq2_s,   QK_NL, dequantize_iq2_s>;
 template [[host_name("kernel_get_rows_iq1_s")]]   kernel get_rows_q_t kernel_get_rows_q<block_iq1_s,   QK_NL, dequantize_iq1_s>;
 template [[host_name("kernel_get_rows_iq1_m")]]   kernel get_rows_q_t kernel_get_rows_q<block_iq1_m,   QK_NL, dequantize_iq1_m>;
+template [[host_name("kernel_get_rows_iq2_nl")]]  kernel get_rows_q_t kernel_get_rows_q<block_iq2_nl,  2,     dequantize_iq2_nl>;
+template [[host_name("kernel_get_rows_iq3_nl")]]  kernel get_rows_q_t kernel_get_rows_q<block_iq3_nl,  2,     dequantize_iq3_nl>;
 template [[host_name("kernel_get_rows_iq4_nl")]]  kernel get_rows_q_t kernel_get_rows_q<block_iq4_nl,  2,     dequantize_iq4_nl>;
 template [[host_name("kernel_get_rows_iq4_xs")]]  kernel get_rows_q_t kernel_get_rows_q<block_iq4_xs,  QK_NL, dequantize_iq4_xs>;
 template [[host_name("kernel_get_rows_tq2_0")]]   kernel get_rows_q_t kernel_get_rows_q<block_tq2_0,   QK_NL, dequantize_tq2_0>;
@@ -425,6 +429,10 @@ template [[host_name("kernel_set_rows_f32_i64_q5_0")]]   kernel set_rows_q32_t k
 template [[host_name("kernel_set_rows_f32_i32_q5_0")]]   kernel set_rows_q32_t kernel_set_rows_q32<float, int32_t, block_q5_0,   quantize_q5_0>;
 template [[host_name("kernel_set_rows_f32_i64_q5_1")]]   kernel set_rows_q32_t kernel_set_rows_q32<float, int64_t, block_q5_1,   quantize_q5_1>;
 template [[host_name("kernel_set_rows_f32_i32_q5_1")]]   kernel set_rows_q32_t kernel_set_rows_q32<float, int32_t, block_q5_1,   quantize_q5_1>;
+template [[host_name("kernel_set_rows_f32_i64_iq2_nl")]] kernel set_rows_q32_t kernel_set_rows_q32<float, int64_t, block_iq2_nl, quantize_iq2_nl>;
+template [[host_name("kernel_set_rows_f32_i32_iq2_nl")]] kernel set_rows_q32_t kernel_set_rows_q32<float, int32_t, block_iq2_nl, quantize_iq2_nl>;
+template [[host_name("kernel_set_rows_f32_i64_iq3_nl")]] kernel set_rows_q32_t kernel_set_rows_q32<float, int64_t, block_iq3_nl, quantize_iq3_nl>;
+template [[host_name("kernel_set_rows_f32_i32_iq3_nl")]] kernel set_rows_q32_t kernel_set_rows_q32<float, int32_t, block_iq3_nl, quantize_iq3_nl>;
 template [[host_name("kernel_set_rows_f32_i64_iq4_nl")]] kernel set_rows_q32_t kernel_set_rows_q32<float, int64_t, block_iq4_nl, quantize_iq4_nl>;
 template [[host_name("kernel_set_rows_f32_i32_iq4_nl")]] kernel set_rows_q32_t kernel_set_rows_q32<float, int32_t, block_iq4_nl, quantize_iq4_nl>;
 

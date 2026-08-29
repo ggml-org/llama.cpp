@@ -1238,6 +1238,81 @@ f16vec4 dequantFuncIQ4_XS_v(const in decodeBufIQ4_XS bl, const in uint blockCoor
 }
 #endif
 
+#if defined(DATA_A_IQ2_NL)
+layout(buffer_reference, std430, buffer_reference_align = 2) buffer decodeBufIQ2_NL {
+   block_iq2_nl block;
+};
+
+layout(buffer_reference, std430, buffer_reference_align = 2) buffer decodeBufIQ2_NL_packed16 {
+   block_iq2_nl_packed16 block;
+};
+
+float16_t dequantFuncIQ2_NL(const in decodeBufIQ2_NL bl, const in uint blockCoords[2], const in uint coordInBlock[2])
+{
+    const float16_t d = bl.block.d;
+    const uint idx = coordInBlock[1];
+    const uint j     = idx & 7;            // position inside the planar group
+    const uint shift = (idx & 0x18) >> 2;  // 2 * (idx / 8), in {0, 2, 4, 6}
+    const uint q = (uint(bl.block.qs[j]) >> shift) & 3;
+    return float16_t(kvalues_iq2nl[q]) * d;
+}
+
+f16vec4 dequantFuncIQ2_NL_v(const in decodeBufIQ2_NL bl, const in uint blockCoords[2], const in uint coordInBlock[2])
+{
+    decodeBufIQ2_NL_packed16 bl16 = decodeBufIQ2_NL_packed16(bl);
+    const float16_t d = bl.block.d;
+    const uint idx = coordInBlock[1];
+    const uint j     = idx & 7;            // 0 or 4: idx is a multiple of 4
+    const uint shift = (idx & 0x18) >> 2;  // 2 * (idx / 8), in {0, 2, 4, 6}
+    const uint qsw = uint32_t(bl16.block.qs[j / 2])
+                   | (uint32_t(bl16.block.qs[j / 2 + 1u]) << 16);
+    // shift is even and below 8: the per-byte mask keeps the wanted bit pair
+    const u8vec4 q = unpack8((qsw >> shift) & 0x03030303u);
+    return f16vec4(
+        float(d) * float(kvalues_iq2nl[q.x]),
+        float(d) * float(kvalues_iq2nl[q.y]),
+        float(d) * float(kvalues_iq2nl[q.z]),
+        float(d) * float(kvalues_iq2nl[q.w]));
+}
+#endif
+
+#if defined(DATA_A_IQ3_NL)
+layout(buffer_reference, std430, buffer_reference_align = 2) buffer decodeBufIQ3_NL {
+   block_iq3_nl block;
+};
+
+layout(buffer_reference, std430, buffer_reference_align = 2) buffer decodeBufIQ3_NL_packed16 {
+   block_iq3_nl_packed16 block;
+};
+
+float16_t dequantFuncIQ3_NL(const in decodeBufIQ3_NL bl, const in uint blockCoords[2], const in uint coordInBlock[2])
+{
+    const float16_t d = bl.block.d;
+    const uint idx = coordInBlock[1];
+    const uint j = idx & 7;          // position inside the planar group
+    const uint g = (idx >> 3) & 3;   // which planar group
+    const uint q = iq3nl_index(uint(bl.block.qs[j]), uint(bl.block.qh[g]), j, g);
+    return float16_t(kvalues_iq3nl[q]) * d;
+}
+
+f16vec4 dequantFuncIQ3_NL_v(const in decodeBufIQ3_NL bl, const in uint blockCoords[2], const in uint coordInBlock[2])
+{
+    decodeBufIQ3_NL_packed16 bl16 = decodeBufIQ3_NL_packed16(bl);
+    const float16_t d = bl.block.d;
+    const uint idx = coordInBlock[1];
+    const uint j = idx & 7;          // 0 or 4: idx is a multiple of 4
+    const uint g = (idx >> 3) & 3;
+    const uint qsw = uint32_t(bl16.block.qs[j / 2])
+                   | (uint32_t(bl16.block.qs[j / 2 + 1u]) << 16);
+    const uvec4 q = iq3nl_index4(qsw, uint(bl.block.qh[g]), j, g);
+    return f16vec4(
+        float(d) * float(kvalues_iq3nl[q.x]),
+        float(d) * float(kvalues_iq3nl[q.y]),
+        float(d) * float(kvalues_iq3nl[q.z]),
+        float(d) * float(kvalues_iq3nl[q.w]));
+}
+#endif
+
 #if defined(DATA_A_IQ4_NL)
 layout(buffer_reference, std430, buffer_reference_align = 2) buffer decodeBufIQ4_NL {
    block_iq4_nl block;
@@ -1452,6 +1527,12 @@ f16vec4 dequantFuncNVFP4_v(const in decodeBufNVFP4 bl, const in uint blockCoords
 #elif defined(DATA_A_IQ4_XS)
 #define dequantFuncA dequantFuncIQ4_XS
 #define dequantFuncA_v dequantFuncIQ4_XS_v
+#elif defined(DATA_A_IQ2_NL)
+#define dequantFuncA dequantFuncIQ2_NL
+#define dequantFuncA_v dequantFuncIQ2_NL_v
+#elif defined(DATA_A_IQ3_NL)
+#define dequantFuncA dequantFuncIQ3_NL
+#define dequantFuncA_v dequantFuncIQ3_NL_v
 #elif defined(DATA_A_IQ4_NL)
 #define dequantFuncA dequantFuncIQ4_NL
 #define dequantFuncA_v dequantFuncIQ4_NL_v
