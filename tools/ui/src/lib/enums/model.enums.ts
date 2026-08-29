@@ -6,7 +6,7 @@ export enum ModelModality {
 }
 
 export enum ModelCapability {
-	REASONING = 'REASONING',
+	REASONING = 'reasoning',
 	TOOL_USE = 'tools'
 }
 
