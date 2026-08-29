@@ -765,47 +765,106 @@ ggml_tensor * llama_model_glm5next::graph::build_dsa_top_k(
     q = ggml_reshape_3d(ctx0, q, d, nh*n_tps, ns);
     cb(q, "indexer_q", il);
 
-    ggml_tensor * score = ggml_mul_mat(ctx0, pooled, q);
-    score = ggml_relu(ctx0, ggml_reshape_4d(ctx0, score, n_pool, nh, n_tps, ns));
-
     // relu(x*s) == s*relu(x) for s > 0, so both positive scalars (the softmax scale and
     // n_heads^-1/2) fold into the small weights tensor instead of the big score one
     ggml_tensor * wts = ggml_mul_mat(ctx0, layer.indexer_proj, cur);
     wts = ggml_scale(ctx0, wts, 1.0f/sqrtf(float(d*nh)));
     wts = ggml_reshape_4d(ctx0, wts, nh, 1, n_tps, ns);
 
-    score = ggml_cont(ctx0, ggml_permute(ctx0, score, 1, 0, 2, 3));
-    score = ggml_sum_rows(ctx0, ggml_mul(ctx0, score, wts));
-    score = ggml_reshape_3d(ctx0, score, n_pool, n_tps, ns);
-    cb(score, "indexer_score", il);
-
-    // the cut is on whole pools, never on single cells. Scoring cells with their pool's score
-    // and cutting there is not the same thing: relu sends many distinct pools to exactly 0.0
-    // and ggml_top_k is unordered among equal keys, so the cut splits pools apart. Diagnosis
-    // and the reference-free check for it (count partly selected pools) are from PR #27754.
-    score = ggml_add(ctx0, score, inp->pool_bias);
-    cb(score, "indexer_score_pools", il);
-
     // index_topk cells worth of whole pools, i.e. the reference's index_topk/index_kpool
     const int64_t n_sel = std::min<int64_t>(n_pool, (int64_t) hparams.indexer_top_k/r);
-
-    ggml_tensor * sel = ggml_top_k(ctx0, score, n_sel);
-    cb(sel, "indexer_top_k_pools", il);
 
     // expand each selected pool into its members. get_rows indexes src0 ne[2] with the index
     // ne[1], so the stream axis must stay there and n_sel*n_tps folds into one row axis
     ggml_tensor * pools = ggml_reshape_3d(ctx0, inp->pool_cells, r, n_pool, ns);
 
-    ggml_tensor * top_k = ggml_get_rows(ctx0, pools,
-            ggml_reshape_3d(ctx0, sel, n_sel*n_tps, ns, 1));
+    // The scores are [n_pool, nh, n_tokens] and the head reduction needs the head axis in
+    // ne[0], so the tensor is materialised twice - once by the mul_mat and once by the
+    // permute+cont below. That is 2*n_pool*nh*n_tokens*4 B PER DEVICE (the DSA layers are
+    // spread across the trunk, so every device in a layer split pays it): 16 MiB per token
+    // at n_ctx 262144 with kpool 4 and 32 heads. It therefore caps ubatch - -ub 4096 there
+    // asks for ~70 GiB on a single device.
+    //
+    // Scoring a token depends only on its own query and on `pooled`, which is shared across
+    // the batch, and no reduction in this path runs across tokens. So the token loop can be
+    // split into chunks with identical results, and ggml-alloc reuses one buffer across the
+    // chunks - bounding the scratch by the chunk size instead of by the ubatch.
+    //
+    // The chunk is sized to keep that scratch near a fixed target: small enough to leave room
+    // on ~8 GB devices, large enough that the extra kernel launches stay amortised. Short
+    // contexts, where the tensor is small anyway, come out unchunked and pay nothing.
+    // One step covers nc*ns tokens, so ns belongs in the divisor.
+    constexpr int64_t idx_scratch_target = 2ll*1024*1024*1024;
 
-    // member j of the i-th selected pool is at i*r + j in both layouts, so this is a reshape
-    top_k = ggml_reshape_4d(ctx0, top_k, r*n_sel, n_tps, 1, ns);
+    const int64_t idx_bytes_per_step = 2*n_pool*nh*ns*(int64_t) sizeof(float);
+    const int64_t idx_chunk = std::clamp<int64_t>(idx_scratch_target/idx_bytes_per_step, 1, n_tps);
 
-    // index_kpool_always_select_tail: the trailing incomplete pool has no pool key and can
-    // never be picked above, so its cells are appended instead of taking pool budget
-    if (inp->tail_cells) {
-        top_k = ggml_concat(ctx0, top_k, inp->tail_cells, 0);
+    ggml_tensor * top_k = nullptr;
+
+    for (int64_t t0 = 0; t0 < n_tps; t0 += idx_chunk) {
+        const int64_t nc = std::min<int64_t>(idx_chunk, n_tps - t0);
+
+        ggml_tensor * q_c    = q;
+        ggml_tensor * wts_c  = wts;
+        ggml_tensor * bias_c = inp->pool_bias;
+        ggml_tensor * tail_c = inp->tail_cells;
+
+        if (nc != n_tps) {
+            // q packs (head, token) in ne[1] with the head fastest, so a token range is the
+            // row range [nh*t0, nh*(t0 + nc)). Strides are kept, so this is also correct for
+            // n_stream > 1, where a token slice is not contiguous across streams.
+            q_c = ggml_view_3d(ctx0, q, d, nh*nc, ns,
+                    q->nb[1], q->nb[2], (size_t) (nh*t0)*q->nb[1]);
+            wts_c = ggml_view_4d(ctx0, wts, nh, 1, nc, ns,
+                    wts->nb[1], wts->nb[2], wts->nb[3], (size_t) t0*wts->nb[2]);
+            bias_c = ggml_view_3d(ctx0, inp->pool_bias, n_pool, nc, ns,
+                    inp->pool_bias->nb[1], inp->pool_bias->nb[2],
+                    (size_t) t0*inp->pool_bias->nb[1]);
+            if (tail_c) {
+                tail_c = ggml_view_4d(ctx0, inp->tail_cells, r - 1, nc, 1, ns,
+                        inp->tail_cells->nb[1], inp->tail_cells->nb[2], inp->tail_cells->nb[3],
+                        (size_t) t0*inp->tail_cells->nb[1]);
+            }
+        }
+
+        ggml_tensor * score = ggml_mul_mat(ctx0, pooled, q_c);
+        score = ggml_relu(ctx0, ggml_reshape_4d(ctx0, score, n_pool, nh, nc, ns));
+
+        score = ggml_cont(ctx0, ggml_permute(ctx0, score, 1, 0, 2, 3));
+        score = ggml_sum_rows(ctx0, ggml_mul(ctx0, score, wts_c));
+        score = ggml_reshape_3d(ctx0, score, n_pool, nc, ns);
+
+        // the cut is on whole pools, never on single cells. Scoring cells with their pool's
+        // score and cutting there is not the same thing: relu sends many distinct pools to
+        // exactly 0.0 and ggml_top_k is unordered among equal keys, so the cut splits pools
+        // apart. Diagnosis and the reference-free check for it (count partly selected pools)
+        // are from PR #27754.
+        score = ggml_add(ctx0, score, bias_c);
+
+        ggml_tensor * sel = ggml_top_k(ctx0, score, n_sel);
+
+        // only meaningful when the loop runs once; otherwise an eval-callback dump would get
+        // one identically-named tensor per chunk per layer
+        if (nc == n_tps) {
+            cb(score, "indexer_score_pools", il);
+            cb(sel,   "indexer_top_k_pools", il);
+        }
+
+        ggml_tensor * tk = ggml_get_rows(ctx0, pools,
+                ggml_reshape_3d(ctx0, sel, n_sel*nc, ns, 1));
+
+        // member j of the i-th selected pool is at i*r + j in both layouts, so this is a reshape
+        tk = ggml_reshape_4d(ctx0, tk, r*n_sel, nc, 1, ns);
+
+        // index_kpool_always_select_tail: the trailing incomplete pool has no pool key and can
+        // never be picked above, so its cells are appended instead of taking pool budget
+        if (tail_c) {
+            tk = ggml_concat(ctx0, tk, tail_c, 0);
+        }
+
+        // appends this chunk's tokens along the token axis; recopies earlier chunks each
+        // iteration, which is negligible I32 traffic next to the scoring GEMMs
+        top_k = top_k ? ggml_concat(ctx0, top_k, tk, 1) : tk;
     }
 
     // build_attn_mask_top_k reads [n_top_k, n_batch, 1, n_stream], matching the KQ mask
