@@ -4277,7 +4277,7 @@ static void ggml_backend_cuda_event_wait(ggml_backend_t backend, ggml_backend_ev
     }
 }
 
-static void ggml_backend_cuda_graph_optimize(ggml_backend_t backend, ggml_cgraph * cgraph) {
+static void ggml_backend_cuda_graph_optimize(ggml_backend_t backend, ggml_cgraph * cgraph, ggml_backend_graph_optimize_params * params) {
     ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *) backend->context;
 
 #ifdef USE_CUDA_GRAPH
@@ -4350,8 +4350,8 @@ static void ggml_backend_cuda_graph_optimize(ggml_backend_t backend, ggml_cgraph
     // 1. find fan-out (fork) nodes where the same input is used at least N times (in QKV, it would be "attn-norm")
     // 2. find the join node, where 2 or more of the outputs are required (in QKV, this would "KQ" or "flash-attn")
     // 3. account for all branches from the fork to the join
-    // 4. To extend lifetimes of the tensors, we interleave the branches (see below for more details)
-    // 5. save the original cgraph and restore it in graph_compute, to enable fusion within streams
+    // 4. add allocation dependencies to keep branch tensors alive until the join
+    // 5. save the stream mapping for graph_compute
     // See discussion: https://github.com/ggml-org/llama.cpp/pull/16991#issuecomment-3522620030
 
     const int min_fan_out = 3;
@@ -4392,7 +4392,7 @@ static void ggml_backend_cuda_graph_optimize(ggml_backend_t backend, ggml_cgraph
             GGML_ASSERT(nodes_per_branch.size() == (size_t) count);
 
             //find the join point
-            const ggml_tensor * join_node = nullptr;
+            ggml_tensor * join_node = nullptr;
 
             const auto & belongs_to_branch = [&](const ggml_tensor *                      node,
                                                  const std::vector<const ggml_tensor *> & branch) -> bool {
@@ -4405,7 +4405,7 @@ static void ggml_backend_cuda_graph_optimize(ggml_backend_t backend, ggml_cgraph
             };
 
             for (int i = root_node_idx + 1; i < cgraph->n_nodes; ++i) {
-                const ggml_tensor * curr_node = cgraph->nodes[i];
+                ggml_tensor * curr_node = cgraph->nodes[i];
 
                 int num_joins = 0;
                 for (size_t branch_idx = 0; branch_idx < nodes_per_branch.size(); branch_idx++) {
@@ -4475,15 +4475,10 @@ static void ggml_backend_cuda_graph_optimize(ggml_backend_t backend, ggml_cgraph
                 for (size_t branch_idx = 0; branch_idx < nodes_per_branch.size(); branch_idx++) {
                     for (const ggml_tensor * n : nodes_per_branch[branch_idx]) {
                         concurrent_event.stream_mapping[n] = branch_idx + 1;
-                        // tag branch node and its sources so the allocator doesn't recycle
-                        // their memory while concurrent streams still read/write it
-                        const_cast<ggml_tensor *>(n)->flags |= GGML_TENSOR_FLAG_NO_ALLOC_FREE;
-                        for (int si = 0; si < GGML_MAX_SRC; ++si) {
-                            const ggml_tensor * s = n->src[si];
-                            if (!s) continue;
-                            const_cast<ggml_tensor *>(s)->flags |= GGML_TENSOR_FLAG_NO_ALLOC_FREE;
-                            if (s->view_src) {
-                                const_cast<ggml_tensor *>(s->view_src)->flags |= GGML_TENSOR_FLAG_NO_ALLOC_FREE;
+                        params->add_alloc_dep(params->user_data, const_cast<ggml_tensor *>(n), join_node);
+                        for (int src_idx = 0; src_idx < GGML_MAX_SRC; ++src_idx) {
+                            if (n->src[src_idx] != nullptr) {
+                                params->add_alloc_dep(params->user_data, n->src[src_idx], join_node);
                             }
                         }
                     }
