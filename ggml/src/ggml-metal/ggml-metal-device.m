@@ -800,6 +800,9 @@ void ggml_metal_encoder_set_buffer(ggml_metal_encoder_t encoder, struct ggml_met
 }
 
 void ggml_metal_encoder_set_threadgroup_memory_size(ggml_metal_encoder_t encoder, size_t size, int idx) {
+    // ref: https://developer.apple.com/documentation/metal/mtlcomputecommandencoder/setthreadgroupmemorylength(_:index:)
+    GGML_ASSERT(size % 16 == 0);
+
     [encoder->obj setThreadgroupMemoryLength:size atIndex:idx];
 }
 
