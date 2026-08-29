@@ -14,7 +14,6 @@ import {
 	HF_BASE_URL,
 	HF_CACHE_DIR_SEPARATOR,
 	HF_CACHE_PATH_REGEX,
-	HF_CATALOG_URL,
 	HF_DEFAULT_LIMIT,
 	HF_FIRST_SHARD,
 	HF_FRONTMATTER_REGEX,
@@ -49,6 +48,7 @@ import {
 	MEGA_LABEL,
 	MEGABYTE,
 	MEGABYTE_LABEL,
+	MODELS_DISCOVER_CATALOG_URL,
 	MONTHS_AGO_LABEL,
 	MS_PER_DAY,
 	TODAY_LABEL,
@@ -140,9 +140,9 @@ export class HuggingFaceService {
 			}
 
 			// Keep only the first shard; its size becomes the whole shard set's.
-			if (parseInt(match[1], 10) !== HF_FIRST_SHARD) continue;
+			if (Number(match[1]) !== HF_FIRST_SHARD) continue;
 
-			const total = parseInt(match[2], 10);
+			const total = Number(match[2]);
 			const stem = file.path.slice(0, file.path.length - match[0].length);
 
 			let size = 0;
@@ -217,7 +217,11 @@ export class HuggingFaceService {
 		let quant = quantIdx >= 0 ? segments[quantIdx].toUpperCase() : null;
 
 		// Recombine a `UD-` (Unsloth Dynamic) prefix, e.g. `...-UD-Q4_K_XL.gguf`.
-		if (quant && quantIdx > 0 && segments[quantIdx - 1].toUpperCase() === HF_UD_QUANT_PREFIX) {
+		// The prefix must be the whole previous segment, matching the server's
+		// `UD-<quant>` custom-quant convention (e.g. not `-mtp-Q4_K_M`).
+		const udPrefixIdx = quantIdx - 1;
+
+		if (quant && quantIdx > 0 && segments[udPrefixIdx].toUpperCase() === HF_UD_QUANT_PREFIX) {
 			quant = `${HF_UD_QUANT_PREFIX}-${quant}`;
 		}
 
@@ -427,7 +431,7 @@ export class HuggingFaceService {
 	 */
 	static async getCatalog(): Promise<HfCatalogEntry[]> {
 		try {
-			const response = await fetch(HF_CATALOG_URL);
+			const response = await fetch(MODELS_DISCOVER_CATALOG_URL);
 
 			if (!response.ok) throw new Error(`Failed to fetch catalog: ${response.status}`);
 

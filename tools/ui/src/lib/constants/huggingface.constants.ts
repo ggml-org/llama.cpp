@@ -10,7 +10,6 @@
 export const HF_BASE_URL = 'https://huggingface.co';
 export const HF_API_MODELS_URL = `${HF_BASE_URL}/api/models`;
 export const HF_AVATARS_URL = `${HF_BASE_URL}/api/avatars`;
-export const HF_CATALOG_URL = 'https://llama.app/v1/catalog.json';
 
 // Query params
 
