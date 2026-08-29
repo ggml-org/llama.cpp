@@ -76,22 +76,19 @@
 </script>
 
 <Dialog.Root bind:open {onOpenChange}>
-	<Dialog.Content class="@container z-9999 !max-h-[80dvh] !max-w-[60rem] max-w-full">
-		<style>
-			@container (max-width: 56rem) {
-				.resizable-text-container {
-					max-width: calc(100vw - var(--threshold));
-				}
-			}
-		</style>
+	<Dialog.Content
+		class="z-9999 max-md:h-[100dvh]! max-md:w-screen! max-md:max-w-none! md:w-[calc(100vw-4rem)]! md:max-w-[60rem]! md:max-h-[80dvh]!"
+	>
+		<!-- sticky header holds only the close button; the title scrolls with the body -->
+		<Dialog.Header />
 
-		<Dialog.Header>
-			<Dialog.Title>Model Information</Dialog.Title>
+		<div class="min-w-0 space-y-6 md:py-4 -mt-4! md:mt-0 pb-4">
+			<div class="min-w-0 space-y-2">
+				<Dialog.Title>Model Information</Dialog.Title>
 
-			<Dialog.Description>Current model details and capabilities</Dialog.Description>
-		</Dialog.Header>
+				<Dialog.Description>Current model details and capabilities</Dialog.Description>
+			</div>
 
-		<div class="space-y-6 py-4">
 			{#if isLoadingModels || isLoadingRouterProps}
 				<div class="flex items-center justify-center py-8">
 					<div class="text-sm text-muted-foreground">Loading model information...</div>
@@ -100,17 +97,15 @@
 				{@const modelMeta = firstModel.meta}
 
 				{#if serverProps}
-					<Table.Root>
+					<!-- Desktop: fixed-layout table, long values scroll inside their cell -->
+					<Table.Root class="hidden table-fixed md:table">
 						<Table.Header>
 							<Table.Row>
 								<Table.Head class="w-[10rem]">Model</Table.Head>
 
 								<Table.Head>
-									<div class="inline-flex items-center gap-2">
-										<span
-											style:--threshold="12rem"
-											class="resizable-text-container min-w-0 flex-1 truncate"
-										>
+									<div class="flex min-w-0 items-center gap-2">
+										<span class="min-w-0 flex-1 overflow-x-auto whitespace-nowrap">
 											{modelName}
 										</span>
 
@@ -129,20 +124,17 @@
 							<Table.Row>
 								<Table.Cell class="h-10 align-middle font-medium">File Path</Table.Cell>
 
-								<Table.Cell
-									class="inline-flex h-10 items-center gap-2 align-middle font-mono text-xs"
-								>
-									<span
-										style:--threshold="14rem"
-										class="resizable-text-container min-w-0 flex-1 truncate"
-									>
-										{serverProps.model_path}
-									</span>
+								<Table.Cell class="h-10 align-middle font-mono text-xs">
+									<div class="flex min-w-0 items-center gap-2">
+										<span class="min-w-0 flex-1 overflow-x-auto whitespace-nowrap">
+											{serverProps.model_path}
+										</span>
 
-									<ActionIconCopyToClipboard
-										ariaLabel="Copy model path to clipboard"
-										text={serverProps.model_path}
-									/>
+										<ActionIconCopyToClipboard
+											ariaLabel="Copy model path to clipboard"
+											text={serverProps.model_path}
+										/>
+									</div>
 								</Table.Cell>
 							</Table.Row>
 
@@ -251,18 +243,113 @@
 							<!-- Chat Template -->
 							{#if serverProps.chat_template}
 								<Table.Row>
-									<Table.Cell class="align-middle font-medium">Chat Template</Table.Cell>
+									<Table.Cell class="py-4" colspan={2}>
+										<div class="flex flex-col gap-2">
+											<span class="font-medium">Chat Template</span>
 
-									<Table.Cell class="py-10">
-										<div class="rounded-md bg-muted p-4">
-											<pre
-												class="font-mono text-xs whitespace-pre-wrap">{serverProps.chat_template}</pre>
+											<div class="overflow-x-auto rounded-md bg-muted p-4">
+												<pre
+													class="font-mono text-xs whitespace-pre">{serverProps.chat_template}</pre>
+											</div>
 										</div>
 									</Table.Cell>
 								</Table.Row>
 							{/if}
 						</Table.Body>
 					</Table.Root>
+
+					<!-- Mobile: stacked layout; long values wrap instead of scrolling the page -->
+					<div class="flex min-w-0 flex-col gap-4 md:hidden">
+						<div class="min-w-0 space-y-1">
+							<div class="text-xs font-medium text-muted-foreground">Model</div>
+
+							<div class="flex min-w-0 items-start gap-2">
+								<span class="min-w-0 flex-1 break-all font-mono text-xs">{modelName}</span>
+
+								<ActionIconCopyToClipboard
+									ariaLabel="Copy model name to clipboard"
+									canCopy={!!modelName}
+									text={modelName || ''}
+								/>
+							</div>
+						</div>
+
+						<div class="min-w-0 space-y-1">
+							<div class="text-xs font-medium text-muted-foreground">File Path</div>
+
+							<div class="flex min-w-0 items-start gap-2">
+								<span class="min-w-0 flex-1 break-all font-mono text-xs"
+									>{serverProps.model_path}</span
+								>
+
+								<ActionIconCopyToClipboard
+									ariaLabel="Copy model path to clipboard"
+									text={serverProps.model_path}
+								/>
+							</div>
+						</div>
+
+						{#if serverProps?.default_generation_settings?.n_ctx}
+							{@render infoRow(
+								'Context Size',
+								`${formatNumber(serverProps.default_generation_settings.n_ctx)} tokens`
+							)}
+						{:else}
+							{@render infoRow('Context Size', 'Not available', 'text-red-500')}
+						{/if}
+
+						{#if modelMeta?.n_ctx_train}
+							{@render infoRow('Training Context', `${formatNumber(modelMeta.n_ctx_train)} tokens`)}
+						{/if}
+
+						{#if modelMeta?.size}
+							{@render infoRow('Model Size', formatFileSize(modelMeta.size))}
+						{/if}
+
+						{#if modelMeta?.n_params}
+							{@render infoRow('Parameters', formatParameters(modelMeta.n_params))}
+						{/if}
+
+						{#if modelMeta?.n_embd}
+							{@render infoRow('Embedding Size', formatNumber(modelMeta.n_embd))}
+						{/if}
+
+						{#if modelMeta?.n_vocab}
+							{@render infoRow('Vocabulary Size', `${formatNumber(modelMeta.n_vocab)} tokens`)}
+						{/if}
+
+						{#if modelMeta?.vocab_type}
+							{@render infoRow('Vocabulary Type', modelMeta.vocab_type, 'capitalize')}
+						{/if}
+
+						{@render infoRow('Parallel Slots', `${serverProps.total_slots}`)}
+
+						{#if modalities.length > 0}
+							<div class="min-w-0 space-y-1">
+								<div class="text-xs font-medium text-muted-foreground">Modalities</div>
+
+								<div class="flex flex-wrap gap-1">
+									<BadgesModality {modalities} />
+								</div>
+							</div>
+						{/if}
+
+						<div class="min-w-0 space-y-1">
+							<div class="text-xs font-medium text-muted-foreground">Build Info</div>
+
+							<span class="block break-all font-mono text-xs">{serverProps.build_info}</span>
+						</div>
+
+						{#if serverProps.chat_template}
+							<div class="min-w-0 space-y-2">
+								<div class="text-xs font-medium text-muted-foreground">Chat Template</div>
+
+								<div class="overflow-x-auto rounded-md bg-muted p-4">
+									<pre class="font-mono text-xs whitespace-pre">{serverProps.chat_template}</pre>
+								</div>
+							</div>
+						{/if}
+					</div>
 				{/if}
 			{:else if !isLoadingModels}
 				<div class="flex items-center justify-center py-8">
@@ -272,3 +359,11 @@
 		</div>
 	</Dialog.Content>
 </Dialog.Root>
+
+{#snippet infoRow(label: string, value: string, valueClass: string = '')}
+	<div class="flex items-center justify-between gap-3">
+		<span class="shrink-0 text-xs font-medium text-muted-foreground {valueClass}">{label}</span>
+
+		<span class="text-sm {valueClass}">{value}</span>
+	</div>
+{/snippet}

@@ -302,6 +302,10 @@ class NemotronHModel(GraniteHybridModel):
             )
             if not keep:
                 return None
+        # PEFT names adapter tensors using model.layers.*, while Nemotron-H checkpoints
+        # and the GGUF tensor map use backbone.layers.*
+        if name.startswith("model.layers.") and ".mixer." in name:
+            name = name.replace("model.layers.", "backbone.layers.", 1)
         return super().filter_tensors((name, gen))
 
     def prepare_metadata(self, vocab_only: bool):

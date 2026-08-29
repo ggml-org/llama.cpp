@@ -221,19 +221,6 @@ export { default as ChatFormActionModels } from './ChatForm/ChatFormActions/Chat
 export { default as ChatFormActionAddToolsSubmenu } from './ChatForm/ChatFormActions/ChatFormActionAdd/ChatFormActionAddToolsSubmenu.svelte';
 
 /**
- * Dropdown submenu for MCP prompts and resources in the chat form.
- *
- * Shows an "MCP" sub-menu item with entries for MCP Prompts and MCP
- * Resources. Only visible when the server supports them.
- *
- * @example
- * ```svelte
- * <ChatFormActionAddMcpSubmenu />
- * ```
- */
-export { default as ChatFormActionAddMcpSubmenu } from './ChatForm/ChatFormActions/ChatFormActionAdd/ChatFormActionAddMcpSubmenu.svelte';
-
-/**
  * Dropdown submenu for selecting reasoning effort level.
  *
  * Shows a "Reasoning" sub-menu item with a lightbulb icon indicating

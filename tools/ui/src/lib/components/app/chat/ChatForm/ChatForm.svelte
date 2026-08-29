@@ -24,7 +24,8 @@
 		FileExtensionText,
 		KeyboardKey,
 		MimeTypeText,
-		SpecialFileType
+		SpecialFileType,
+		ToolSource
 	} from '$lib/enums';
 	import { useChatFormPickers } from '$lib/hooks/use-chat-form-pickers.svelte';
 	import { usePromptHistory } from '$lib/hooks/use-prompt-history.svelte';
@@ -83,7 +84,6 @@
 		enablePromptHistory?: boolean;
 		isLoading?: boolean;
 		placeholder?: string;
-		showMcpPromptButton?: boolean;
 		showAddButton?: boolean;
 		showModelSelector?: boolean;
 
@@ -114,7 +114,6 @@
 		onValueChange,
 		placeholder = 'Type a message...',
 		showAddButton = true,
-		showMcpPromptButton = false,
 		showModelSelector = true,
 		uploadedFiles = $bindable([]),
 		value = $bindable('')
@@ -163,9 +162,18 @@
 		getServerHome: () => toolsStore.serverHome ?? null,
 		getShowModelSelector: () => showModelSelector,
 		getValue: () => value,
-		hasCwdTools: () => toolsStore.hasEnabledCwdTools,
-		hasPrompts: () =>
-			mcpStore.hasPromptsCapability(conversationsStore.preferences.getAllMcpServerOverrides()),
+		hasCwdTools: () => conversationsStore.preferences.hasEnabledCwdTools(),
+		// policy-aware, same rule as the agentic flow: MCP category on and at
+		// least one globally-enabled server whose group key is not disabled
+		hasPrompts: () => {
+			const prefs = conversationsStore.preferences;
+
+			if (!prefs.isCategoryEnabled(ToolSource.MCP)) return false;
+
+			return mcpStore
+				.getServers()
+				.some((s) => s.enabled && prefs.isServerToolsEnabled(s.id) && s.url.trim());
+		},
 		openModelSelector: () => chatFormActionsRef?.openModelSelector(),
 		setCaretOffset: (offset) => inputRef?.setCaretOffset(offset),
 		setValue: (v) => {
@@ -881,8 +889,6 @@
 				isReasoning={chatStore.isReasoning}
 				{isRecording}
 				onFileUpload={handleFileUpload}
-				onMcpPromptClick={showMcpPromptButton ? () => pickers.openPromptPicker() : undefined}
-				onMcpResourcesClick={() => (isResourceDialogOpen = true)}
 				onMcpSettingsClick={() => (isMcpServersDialogOpen = true)}
 				onMicClick={handleMicClick}
 				{onStop}
@@ -896,7 +902,7 @@
 
 	<ContextGaugePopup />
 
-	{#if toolsStore.hasEnabledCwdTools}
+	{#if conversationsStore.preferences.hasEnabledCwdTools()}
 		<ChatFormCurrentWorkingDirectory
 			bind:query={pickers.workingDirectoryQuery}
 			customAnchor={mentionAnchor}

@@ -165,6 +165,5 @@
 		onSubmit={handleSubmit}
 		onSystemPromptClick={handleSystemPromptClick}
 		onUploadedFileRemove={handleUploadedFileRemove}
-		showMcpPromptButton
 	/>
 </div>
