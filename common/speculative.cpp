@@ -1911,7 +1911,15 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
     common_params_speculative_draft params; // reuses the draft-model params slot (ctx_tgt/ctx_dft)
 
     common_spec_sidecar_mtp sidecar;
+    common_spec_sidecar_paths sidecar_paths;
+    int32_t sidecar_embedding_width = 0;
+    int32_t sidecar_head_rows = 0;
+    bool sidecar_load_pending = false;
     bool sidecar_target_only = false; // runtime failure or unsupported sampling mode
+    bool sidecar_catchup_deferred = false;
+    bool sidecar_catchup_deferred_logged = false;
+    std::vector<std::vector<int32_t>> sidecar_deferred_tokens;
+    std::vector<std::vector<int32_t>> sidecar_deferred_pos;
     std::vector<const float *> verify_h_device;
     std::vector<size_t> verify_h_device_stride;
 
@@ -1962,6 +1970,12 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         deferred_pos.clear();
         deferred_embd.clear();
         deferred_catchup_ready = false;
+    }
+
+    void clear_sidecar_deferred_catchup() {
+        for (auto & values : sidecar_deferred_tokens) values.clear();
+        for (auto & values : sidecar_deferred_pos) values.clear();
+        sidecar_catchup_deferred = false;
     }
 
     common_speculative_impl_draft_mtp(const common_params_speculative & params, uint32_t n_seq)
@@ -2054,20 +2068,20 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
         if (sidecar_only && n_mtp_layers == 1 && !chain_heads && !is_mem_shared &&
                 sidecar_profile != nullptr && sidecar_profile->kind == COMMON_SPEC_SIDECAR_KIND_MTP) {
-            common_spec_sidecar_paths paths;
             std::string error;
-            if (common_spec_sidecar_get_paths(*sidecar_profile, paths, error) &&
-                    sidecar.load(paths.library, paths.artifact_dir, paths.ids,
-                            sidecar_profile->mtp_embedding_width,
-                            sidecar_profile->mtp_head_rows, (int32_t) n_seq, error)) {
+            if (common_spec_sidecar_get_paths(*sidecar_profile, sidecar_paths, error)) {
+                sidecar_embedding_width = sidecar_profile->mtp_embedding_width;
+                sidecar_head_rows = sidecar_profile->mtp_head_rows;
+                // Retain h_nextn on the backend from the first evaluation;
+                // the actual device ID is still bound lazily from its view.
                 llama_set_embeddings_nextn_device_preferred(ctx_tgt, true);
-                SPC_INF("MTP sidecar active: %s\n", paths.library.c_str());
+                sidecar_load_pending = true;
             } else {
                 sidecar_target_only = true;
                 SPC_WRN("MTP sidecar unavailable (%s); target-only mode\n", error.c_str());
             }
         }
-        if (sidecar_only && !sidecar.active()) {
+        if (sidecar_only && !sidecar.active() && !sidecar_load_pending) {
             sidecar_target_only = true;
         }
 
@@ -2080,6 +2094,8 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         verify_pos_first.assign(n_seq, -1);
         verify_h_device.assign(n_seq, nullptr);
         verify_h_device_stride.assign(n_seq, 0);
+        sidecar_deferred_tokens.assign(n_seq, {});
+        sidecar_deferred_pos.assign(n_seq, {});
     }
 
     void prepare_process(const common_speculative_draft_params_vec & dparams) override {
@@ -2148,16 +2164,49 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
     bool process_sidecar(const llama_batch & batch_in,
             const std::vector<int32_t> & i_batch_beg,
-            const std::vector<int32_t> & i_batch_end) {
+            const std::vector<int32_t> & i_batch_end,
+            bool defer_catchup) {
         auto * ctx_tgt = this->params.ctx_tgt;
         llama_device_view device_view;
+        bool have_device_view = false;
         bool direct = false;
+        int32_t target_device = -1;
 #if defined(GGML_USE_HIP)
-        direct = llama_get_embeddings_nextn_device(ctx_tgt, &device_view) &&
-                device_view.row_stride == (size_t) n_embd * sizeof(float) &&
-                device_view.n_rows >= (uint32_t) batch_in.n_tokens &&
-                sidecar.attach_target_stream(device_view.stream, device_view.device);
+        have_device_view = llama_get_embeddings_nextn_device(ctx_tgt, &device_view);
+        if (have_device_view) {
+            target_device = device_view.device;
+        }
 #endif
+
+        if (sidecar_load_pending) {
+            std::string error;
+            // The first target evaluation gives us the backend/device that
+            // owns h_nextn. Bind the sidecar there before accepting any rows.
+            if (!sidecar.load(sidecar_paths.library, sidecar_paths.artifact_dir,
+                    sidecar_paths.ids, sidecar_embedding_width, sidecar_head_rows,
+                    (int32_t) n_seq, error, target_device)) {
+                sidecar_load_pending = false;
+                sidecar_target_only = true;
+                SPC_WRN("MTP sidecar unavailable on target device %d (%s); target-only mode\n",
+                        target_device, error.c_str());
+                return true;
+            }
+            sidecar_load_pending = false;
+            llama_set_embeddings_nextn_device_preferred(ctx_tgt, true);
+            SPC_INF("MTP sidecar active: %s (bound device=%d)\n",
+                    sidecar_paths.library.c_str(), target_device);
+        }
+
+#if defined(GGML_USE_HIP)
+        const bool view_shape_ok = have_device_view &&
+                device_view.row_stride == (size_t) n_embd * sizeof(float) &&
+                device_view.n_rows >= (uint32_t) batch_in.n_tokens;
+        direct = view_shape_ok && sidecar.attach_target_stream(device_view.stream, device_view.device);
+#endif
+        if (std::getenv("LLAMA_SPEC_HIP_DEBUG") != nullptr) {
+            SPC_DBG("MTP catch-up input mode: %s (target device=%d)\n",
+                    direct ? "DIRECT D2D" : "HOST FALLBACK", target_device);
+        }
 
         // If any sequence is interleaved, direct rows cannot be represented by
         // one contiguous pointer for that sequence. The host fallback gathers
@@ -2197,6 +2246,8 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
             verify_h_device[seq_id] = nullptr;
             verify_h_device_stride[seq_id] = 0;
             verify_h[seq_id].clear();
+            sidecar_deferred_tokens[seq_id].clear();
+            sidecar_deferred_pos[seq_id].clear();
 
             int rc = -1;
             if (direct && contiguous[seq_id]) {
@@ -2204,8 +2255,13 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                         (size_t) beg * device_view.row_stride / sizeof(float);
                 verify_h_device[seq_id] = rows;
                 verify_h_device_stride[seq_id] = device_view.row_stride;
-                rc = sidecar.catchup_device(seq_id, batch_in.token + beg, batch_in.pos + beg,
-                        rows, n_rows);
+                sidecar_deferred_tokens[seq_id].assign(
+                        batch_in.token + beg, batch_in.token + beg + n_rows);
+                sidecar_deferred_pos[seq_id].assign(
+                        batch_in.pos + beg, batch_in.pos + beg + n_rows);
+                rc = defer_catchup ? 0 : sidecar.catchup_device(
+                        seq_id, sidecar_deferred_tokens[seq_id].data(),
+                        sidecar_deferred_pos[seq_id].data(), rows, n_rows);
             } else {
                 std::vector<int32_t> tokens((size_t) n_rows);
                 std::vector<int32_t> positions((size_t) n_rows);
@@ -2217,7 +2273,10 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                     std::memcpy(verify_h[seq_id].data() + (size_t) r * n_embd,
                             host_h + (size_t) i * n_embd, (size_t) n_embd * sizeof(float));
                 }
-                rc = sidecar.catchup(seq_id, tokens.data(), positions.data(),
+                sidecar_deferred_tokens[seq_id] = tokens;
+                sidecar_deferred_pos[seq_id] = positions;
+                rc = defer_catchup ? 0 : sidecar.catchup(
+                        seq_id, tokens.data(), positions.data(),
                         verify_h[seq_id].data(), n_rows);
             }
             if (rc != 0) {
@@ -2225,6 +2284,13 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                 sidecar_target_only = true;
                 SPC_ERR("%s", "MTP sidecar catch-up failed; entering target-only mode\n");
                 return true;
+            }
+        }
+        if (defer_catchup) {
+            sidecar_catchup_deferred = true;
+            if (!sidecar_catchup_deferred_logged) {
+                SPC_INF("%s", "using deferred MTP sidecar catch-up scheduling\n");
+                sidecar_catchup_deferred_logged = true;
             }
         }
         return true;
@@ -2240,6 +2306,10 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                 deferred_replay_logged = true;
             }
             clear_deferred_catchup();
+        }
+        if (sidecar_catchup_deferred) {
+            SPC_INF("%s", "discarding deferred MTP sidecar catch-up after checkpoint/replay restore\n");
+            clear_sidecar_deferred_catchup();
         }
 
         if (batch_in.n_tokens <= 0) {
@@ -2275,14 +2345,32 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
             }
         }
 
-        if (sidecar.active()) {
+        const char * sidecar_defer_env = std::getenv("GGML_MTP_DEFER_CATCHUP");
+        const bool sidecar_defer_force = sidecar_defer_env != nullptr &&
+                std::strcmp(sidecar_defer_env, "1") == 0;
+        const bool sidecar_defer_auto = sidecar_defer_env == nullptr ||
+                std::strcmp(sidecar_defer_env, "auto") == 0;
+        const bool sidecar_defer_requested = common_speculative_rdna2_auto_enabled() &&
+                (sidecar_defer_force || (sidecar_defer_auto && deferred_auto_model));
+        bool sidecar_all_logits = batch_in.logits != nullptr;
+        for (int32_t k = 0; sidecar_all_logits && k < n_tokens; ++k) {
+            sidecar_all_logits = batch_in.logits[k] != 0;
+        }
+        const bool sidecar_defer_catchup = (sidecar.active() || sidecar_load_pending) &&
+                sidecar_defer_requested && n_seq == 1 && n_mtp_layers == 1 &&
+                !chain_heads && !is_mem_shared && this->params.n_max == 4 &&
+                n_tokens == 5 && sidecar_all_logits;
+
+        if (sidecar.active() || sidecar_load_pending) {
             if (batch_in.pos == nullptr) {
                 sidecar.disable();
+                sidecar_load_pending = false;
                 sidecar_target_only = true;
                 SPC_ERR("%s", "MTP sidecar requires explicit target positions; entering target-only mode\n");
                 return true;
             }
-            return process_sidecar(batch_in, i_batch_beg, i_batch_end);
+            return process_sidecar(batch_in, i_batch_beg, i_batch_end,
+                    sidecar_defer_catchup);
         }
         if (sidecar_target_only) {
             return true;
@@ -2754,6 +2842,34 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         return true;
     }
 
+    bool flush_sidecar_deferred_catchup() {
+        if (!sidecar_catchup_deferred) return true;
+        for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
+            const int count = (int) sidecar_deferred_tokens[seq_id].size();
+            if (count <= 0 || sidecar_deferred_pos[seq_id].size() != (size_t) count) {
+                continue;
+            }
+            const int rc = verify_h_device[seq_id] != nullptr
+                    ? sidecar.catchup_device(seq_id,
+                            sidecar_deferred_tokens[seq_id].data(),
+                            sidecar_deferred_pos[seq_id].data(),
+                            verify_h_device[seq_id], count)
+                    : sidecar.catchup(seq_id,
+                            sidecar_deferred_tokens[seq_id].data(),
+                            sidecar_deferred_pos[seq_id].data(),
+                            verify_h[seq_id].data(), count);
+            if (rc != 0) {
+                sidecar.disable();
+                sidecar_target_only = true;
+                clear_sidecar_deferred_catchup();
+                SPC_ERR("%s", "MTP sidecar deferred catch-up failed; entering target-only mode\n");
+                return false;
+            }
+        }
+        clear_sidecar_deferred_catchup();
+        return true;
+    }
+
     void accept(llama_seq_id seq_id, uint16_t n_accepted, bool /*is_other*/) override {
         if (seq_id < 0 || seq_id >= (llama_seq_id) n_seq) {
             return;
@@ -2765,6 +2881,9 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         }
 
         if (sidecar.active()) {
+            if (!flush_sidecar_deferred_catchup()) {
+                return;
+            }
             const int32_t n_commit = std::min<int32_t>((int32_t) n_accepted + 1, n_rows);
             commit_state(seq_id, verify_pos_first[seq_id] + n_commit);
         }

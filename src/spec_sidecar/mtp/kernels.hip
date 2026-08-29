@@ -51,6 +51,177 @@ __device__ __forceinline__ float q4_0_get(const block_q4_0 * b, int j) {
     return (q - 8) * f16_to_f32(b->d);
 }
 
+// Keep this path compile-time gated. The sidecar is also useful as a
+// portable fallback, but the packed DOT8 builtins and its correction term are
+// only validated for the exact gfx1030 build used by the RDNA2 deployment.
+#if defined(__gfx1030__) || defined(SPEC_SIDECAR_GFX1030)
+struct block_q8_1 {
+    __half2 ds; // d and d * sum(qs)
+    int8_t qs[32];
+};
+static_assert(sizeof(block_q8_1) == 36, "q8_1 block size");
+
+struct block_q8_1_sum_hi {
+    int8_t sum_hi[2];
+};
+static_assert(sizeof(block_q8_1_sum_hi) == 2, "q8_1 high-nibble sum size");
+
+static __device__ __forceinline__ uint32_t sidecar_get_int_b4(const int8_t * x, int i) {
+    return reinterpret_cast<const uint32_t *>(x)[i];
+}
+
+static __device__ __forceinline__ uint32_t sidecar_get_int_b2(const uint8_t * x, int i) {
+    const uint16_t * x16 = reinterpret_cast<const uint16_t *>(x);
+    return (uint32_t) x16[2*i] | ((uint32_t) x16[2*i + 1] << 16);
+}
+
+static __device__ __forceinline__ int sidecar_udot8_u4(uint32_t a, uint32_t b, int c) {
+    return (int) __builtin_amdgcn_udot8(a, b, (uint32_t) c, false);
+}
+
+static __device__ __forceinline__ int sidecar_sdot8_i4(int a, int b, int c) {
+    return __builtin_amdgcn_sdot8(a, b, c, false);
+}
+
+// This is the compact sidecar equivalent of llama.cpp's
+// vec_dot_q4_0_q8_1_dot8(). VDR=2 maps one wave to a q4_0 row: paired lanes
+// cover the two four-byte q4 chunks in each 32-value block.
+template <int vdr>
+static __device__ __forceinline__ float sidecar_vec_dot_q4_0_q8_1_dot8(
+        const block_q4_0 * bq4, const block_q8_1 * bq8,
+        const block_q8_1_sum_hi * sum_hi, int iqs) {
+    int acc_lo = 0;
+    int acc_hi = 0;
+#pragma unroll
+    for (int i = 0; i < vdr; ++i) {
+        const uint32_t qw_u = sidecar_get_int_b2(bq4->qs, iqs + i);
+        const uint32_t qw_s = qw_u ^ 0x88888888u;
+        const uint32_t qa0 = sidecar_get_int_b4(bq8->qs, iqs + i);
+        const uint32_t qa1 = sidecar_get_int_b4(bq8->qs, iqs + i + 4);
+        const uint32_t qa_lo = (qa0 & 0x0F0F0F0Fu) | ((qa1 & 0x0F0F0F0Fu) << 4);
+        const uint32_t qa_hi = ((qa0 >> 4) & 0x0F0F0F0Fu) | (qa1 & 0xF0F0F0F0u);
+        acc_lo = sidecar_udot8_u4(qw_u, qa_lo, acc_lo);
+        acc_hi = sidecar_sdot8_i4((int) qw_s, (int) qa_hi, acc_hi);
+    }
+    const int sumi = acc_lo + 16 * acc_hi +
+            128 * (int) sum_hi->sum_hi[iqs / vdr];
+    const float2 ds = __half22float2(bq8->ds);
+    return f16_to_f32(bq4->d) *
+            (sumi * ds.x - (8 * vdr / 4) * ds.y);
+}
+
+// Fused RMSNorm -> Q8_1. The optional float output is retained because the
+// normalized hidden row is also the autoregressive input to the next draft
+// step. One wave quantizes one q8_1 block after the block-wide RMS reduction.
+__global__ void rmsnorm_q8_1(const float * __restrict__ x, const float * __restrict__ w,
+                             float * __restrict__ y, block_q8_1 * __restrict__ q,
+                             block_q8_1_sum_hi * __restrict__ sum_hi, int n) {
+    __shared__ float ssum[256];
+    float ss = 0.0f;
+    for (int i = threadIdx.x; i < n; i += blockDim.x) ss += x[i] * x[i];
+    ssum[threadIdx.x] = ss;
+    __syncthreads();
+    for (int off = blockDim.x / 2; off > 0; off >>= 1) {
+        if ((int) threadIdx.x < off) ssum[threadIdx.x] += ssum[threadIdx.x + off];
+        __syncthreads();
+    }
+    const float scale = rsqrtf(ssum[0] / n + RMS_EPS);
+    const int lane = threadIdx.x & 31;
+    const int warp = threadIdx.x >> 5;
+    const int nblocks = n / 32;
+    for (int ib = warp; ib < nblocks; ib += blockDim.x / 32) {
+        const int i = ib * 32 + lane;
+        const float value = x[i] * scale * w[i];
+        if (y != nullptr) y[i] = value;
+        float amax = fabsf(value);
+        float sum = value;
+        for (int off = 16; off > 0; off >>= 1) {
+            amax = fmaxf(amax, __shfl_down(amax, off, 32));
+            sum += __shfl_down(sum, off, 32);
+        }
+        amax = __shfl(amax, 0, 32);
+        sum = __shfl(sum, 0, 32);
+        const float d = amax / 127.0f;
+        const int8_t qi = amax == 0.0f ? 0 : (int8_t) roundf(value / d);
+        q[ib].qs[lane] = qi;
+        int hi0 = 0;
+        int hi1 = 0;
+#pragma unroll
+        for (int j = 0; j < 16; ++j) {
+            hi0 += __shfl((int) qi, j, 32) >> 4;
+            hi1 += __shfl((int) qi, 16 + j, 32) >> 4;
+        }
+        if (lane == 0) {
+            q[ib].ds = make_half2(d, sum);
+            sum_hi[ib].sum_hi[0] = (int8_t) hi0;
+            sum_hi[ib].sum_hi[1] = (int8_t) hi1;
+        }
+    }
+}
+
+// Quantize an already-produced float vector for the down projection.
+__global__ void quantize_q8_1(const float * __restrict__ x,
+                              block_q8_1 * __restrict__ q,
+                              block_q8_1_sum_hi * __restrict__ sum_hi, int n) {
+    const int lane = threadIdx.x & 31;
+    const int warp = threadIdx.x >> 5;
+    const int nblocks = n / 32;
+    for (int ib = warp; ib < nblocks; ib += blockDim.x / 32) {
+        const int i = ib * 32 + lane;
+        const float value = x[i];
+        float amax = fabsf(value);
+        float sum = value;
+        for (int off = 16; off > 0; off >>= 1) {
+            amax = fmaxf(amax, __shfl_down(amax, off, 32));
+            sum += __shfl_down(sum, off, 32);
+        }
+        amax = __shfl(amax, 0, 32);
+        sum = __shfl(sum, 0, 32);
+        const float d = amax / 127.0f;
+        const int8_t qi = amax == 0.0f ? 0 : (int8_t) roundf(value / d);
+        q[ib].qs[lane] = qi;
+        int hi0 = 0;
+        int hi1 = 0;
+#pragma unroll
+        for (int j = 0; j < 16; ++j) {
+            hi0 += __shfl((int) qi, j, 32) >> 4;
+            hi1 += __shfl((int) qi, 16 + j, 32) >> 4;
+        }
+        if (lane == 0) {
+            q[ib].ds = make_half2(d, sum);
+            sum_hi[ib].sum_hi[0] = (int8_t) hi0;
+            sum_hi[ib].sum_hi[1] = (int8_t) hi1;
+        }
+    }
+}
+
+// Real gfx1030 GEMV: one wave32 per output row, with paired lanes reusing
+// each q4_0/q8_1 block load and the RDNA2 packed DOT8 operations.
+__global__ void gemv_q4_0_q8_1_dot8(
+        const block_q4_0 * __restrict__ W, const block_q8_1 * __restrict__ q,
+        const block_q8_1_sum_hi * __restrict__ sum_hi, float * __restrict__ y,
+        int n_in, int n_out) {
+    const int row = blockIdx.x;
+    const int lane = threadIdx.x;
+    if (row >= n_out) return;
+    constexpr int vdr = 2;
+    constexpr int lanes_per_block = 2;
+    constexpr int blocks_per_iter = 32 / lanes_per_block;
+    const int nblocks = n_in / 32;
+    const block_q4_0 * wr = W + (size_t) row * nblocks;
+    float acc = 0.0f;
+    for (int kbx = lane / lanes_per_block; kbx < nblocks; kbx += blocks_per_iter) {
+        const int iqs = vdr * (lane % lanes_per_block);
+        acc += sidecar_vec_dot_q4_0_q8_1_dot8<vdr>(
+                wr + kbx, q + kbx, sum_hi + kbx, iqs);
+    }
+    for (int off = 16; off > 0; off >>= 1) {
+        acc += __shfl_down(acc, off, 32);
+    }
+    if (lane == 0) y[row] = acc;
+}
+#endif // defined(__gfx1030__) || defined(SPEC_SIDECAR_GFX1030)
+
 // ---------------- kernels ----------------
 
 // y[row] = sum_k W[row,k] * x[k]; W is q4_0, row-major rows of n_in elems.

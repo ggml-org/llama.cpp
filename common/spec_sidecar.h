@@ -108,7 +108,8 @@ public:
               int32_t embedding_width,
               int32_t head_rows,
               int32_t n_seq,
-              std::string & error);
+              std::string & error,
+              int32_t device = -1);
 
     bool active() const;
     void disable();
