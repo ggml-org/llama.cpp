@@ -155,7 +155,7 @@ export { ModelsService } from './models.service';
  * (quant metadata, shard collapsing, size formatting) used by the models
  * discover UI.
  */
-export { HuggingFaceService, type SidecarForm } from './huggingface.service';
+export { HuggingFaceService } from './huggingface.service';
 
 /**
  * **PropsService** - Server properties and capabilities retrieval
