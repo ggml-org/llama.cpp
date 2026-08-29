@@ -85,7 +85,11 @@ layout (constant_id = 11) const uint CM_ARCH = 0;  // vk_device_architecture (gg
 #define CM_ARCH_AMD_RDNA4 5u                        // must match enum vk_device_architecture
 
 #define BK 32
+#ifdef MUL_MAT_ID
+#define BK_STEP 2
+#else
 #define BK_STEP 4
+#endif
 #define GROUP_A_BUDGET (16u * 1024u * 1024u)
 
 const uint QPITCH = BK_STEP * (BK / 4) + 4;
