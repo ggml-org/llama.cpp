@@ -56,7 +56,7 @@ __device__ __forceinline__ float q4_0_get(const block_q4_0 * b, int j) {
 // only validated for the exact gfx1030 build used by the RDNA2 deployment.
 #if defined(__gfx1030__) || defined(SPEC_SIDECAR_GFX1030)
 struct block_q8_1 {
-    __half2 ds; // d and d * sum(qs)
+    __half2 ds; // d and raw sum(qs), matching native block_q8_1
     int8_t qs[32];
 };
 static_assert(sizeof(block_q8_1) == 36, "q8_1 block size");
