@@ -23,6 +23,11 @@ import {
 import { settingsStore } from '$lib/stores/settings/index.svelte';
 import { tabsStore } from '$lib/stores/tabs.svelte';
 import { filterByLeafNodeId, findLeafNode, generateConversationTitle } from '$lib/utils';
+import { userPromptTextsFromMessages } from '$lib/utils/prompt-history';
+import {
+	addImportedConversationPrompts,
+	clearAllPromptHistory
+} from '$lib/utils/prompt-history-storage';
 import { SvelteSet } from 'svelte/reactivity';
 import { toast } from 'svelte-sonner';
 
@@ -287,6 +292,7 @@ class ConversationsStore implements ConversationsPreferencesHost {
 			this.conversations = [];
 			tabsStore.clear();
 			this.notifyConversationsDeleted(allIds);
+			clearAllPromptHistory();
 
 			toast.success('All conversations deleted');
 
@@ -462,6 +468,19 @@ class ConversationsStore implements ConversationsPreferencesHost {
 		data: ExportedConversations
 	): Promise<{ imported: DatabaseConversation[]; skipped: DatabaseConversation[] }> {
 		const result = await DatabaseService.importConversations(data);
+		const importedIds = new Set(result.imported.map((conversation) => conversation.id));
+		const items = Array.isArray(data) ? data : [data];
+
+		for (const item of items) {
+			if (!importedIds.has(item.conv.id)) {
+				continue;
+			}
+
+			addImportedConversationPrompts(
+				item.conv.id,
+				userPromptTextsFromMessages(item.messages)
+			);
+		}
 
 		await this.loadConversations();
 

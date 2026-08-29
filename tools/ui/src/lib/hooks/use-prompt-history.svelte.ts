@@ -1,9 +1,12 @@
 import { browser } from '$app/environment';
-import { NEW_CHAT_DRAFT_KEY, PROMPT_HISTORY_LOCALSTORAGE_KEY, SETTINGS_KEYS } from '$lib/constants';
+import { NEW_CHAT_DRAFT_KEY, PROMPT_HISTORY_CHANGED_EVENT, SETTINGS_KEYS } from '$lib/constants';
 import { conversationsStore, settingsStore } from '$lib/stores';
 import {
+	loadPromptHistoryBuckets,
+	savePromptHistoryBuckets
+} from '$lib/utils/prompt-history-storage';
+import {
 	getPromptHistoryEntries,
-	parsePromptHistoryBuckets,
 	pushPromptHistory,
 	recallNext,
 	recallPrevious,
@@ -12,30 +15,6 @@ import {
 	type PromptHistoryCursor,
 	type PromptHistoryScope
 } from '$lib/utils/prompt-history';
-
-function loadBuckets(): PromptHistoryBuckets {
-	if (!browser) {
-		return { combined: [], sessions: {} };
-	}
-
-	try {
-		return parsePromptHistoryBuckets(localStorage.getItem(PROMPT_HISTORY_LOCALSTORAGE_KEY));
-	} catch {
-		return { combined: [], sessions: {} };
-	}
-}
-
-function saveBuckets(store: PromptHistoryBuckets) {
-	if (!browser) {
-		return;
-	}
-
-	try {
-		localStorage.setItem(PROMPT_HISTORY_LOCALSTORAGE_KEY, JSON.stringify(store));
-	} catch (error) {
-		console.error('[prompt-history] Failed to persist prompt history:', error);
-	}
-}
 
 function currentScope(): PromptHistoryScope {
 	return settingsStore.config[SETTINGS_KEYS.PROMPT_HISTORY_PER_SESSION] === true
@@ -58,23 +37,40 @@ function activeEntries(store: PromptHistoryBuckets): string[] {
  * the user can switch scope without losing either list.
  */
 export function usePromptHistory() {
-	const initial = activeEntries(loadBuckets());
+	const initial = activeEntries(loadPromptHistoryBuckets());
 	let entries = $state<string[]>(initial);
 	let cursor = $state<PromptHistoryCursor>({ draft: '', index: initial.length });
 
-	$effect(() => {
-		const next = activeEntries(loadBuckets());
+	function reload() {
+		const next = activeEntries(loadPromptHistoryBuckets());
 
 		entries = next;
 		cursor = { draft: '', index: next.length };
+	}
+
+	$effect(() => {
+		void currentScope();
+		void currentSessionId();
+		reload();
+
+		if (!browser) {
+			return;
+		}
+
+		window.addEventListener(PROMPT_HISTORY_CHANGED_EVENT, reload);
+
+		return () => {
+			window.removeEventListener(PROMPT_HISTORY_CHANGED_EVENT, reload);
+		};
 	});
 
 	function record(text: string) {
-		const store = loadBuckets();
+		const store = loadPromptHistoryBuckets();
 		const scope = currentScope();
 		const sessionId = currentSessionId();
 		const updated = pushPromptHistory(getPromptHistoryEntries(store, scope, sessionId), text);
-		saveBuckets(setPromptHistoryEntries(store, scope, sessionId, updated));
+
+		savePromptHistoryBuckets(setPromptHistoryEntries(store, scope, sessionId, updated));
 		entries = updated;
 		cursor = { draft: '', index: updated.length };
 	}

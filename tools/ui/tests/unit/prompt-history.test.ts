@@ -2,11 +2,13 @@ import {
 	canScrollInDirection,
 	isCaretOnFirstLine,
 	isCaretOnLastLine,
+	appendImportedPrompts,
 	getPromptHistoryEntries,
 	parsePromptHistory,
 	parsePromptHistoryBuckets,
 	pushPromptHistory,
 	setPromptHistoryEntries,
+	userPromptTextsFromMessages,
 	recallNext,
 	recallPrevious,
 	shouldLockPageScroll,
@@ -82,6 +84,28 @@ describe('prompt history buckets', () => {
 		expect(after.combined).toEqual(['all']);
 		expect(after.sessions.chat2).toEqual(['two']);
 		expect(after.sessions.chat1).toEqual(['one', 'new']);
+	});
+
+	it('appends imported prompts to combined and that session', () => {
+		const store = parsePromptHistoryBuckets(
+			JSON.stringify({ combined: ['old'], sessions: { chat1: ['old'] } })
+		);
+		const next = appendImportedPrompts(store, 'chat1', ['hello', 'hello', 'world']);
+
+		expect(next.combined).toEqual(['old', 'hello', 'world']);
+		expect(next.sessions.chat1).toEqual(['old', 'hello', 'world']);
+	});
+
+	it('extracts non-synthetic user prompts in time order', () => {
+		expect(
+			userPromptTextsFromMessages([
+				{ content: 'second', role: 'user', timestamp: 2 },
+				{ content: 'first', role: 'user', timestamp: 1 },
+				{ content: 'skip', isSynthetic: true, role: 'user', timestamp: 3 },
+				{ content: 'nope', role: 'assistant', timestamp: 4 },
+				{ content: '  ', role: 'user', timestamp: 5 }
+			])
+		).toEqual(['first', 'second']);
 	});
 });
 

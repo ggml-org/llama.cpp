@@ -140,6 +140,45 @@ export function setPromptHistoryEntries(
 	};
 }
 
+export function emptyPromptHistoryBuckets(): PromptHistoryBuckets {
+	return { combined: [], sessions: {} };
+}
+
+/** User message texts in time order; skips blank and synthetic rows. */
+export function userPromptTextsFromMessages(
+	messages: { content?: string; isSynthetic?: boolean; role: string; timestamp?: number }[]
+): string[] {
+	return [...messages]
+		.sort((a, b) => (a.timestamp ?? 0) - (b.timestamp ?? 0))
+		.filter(
+			(message) => message.role === 'user' && !message.isSynthetic && Boolean(message.content?.trim())
+		)
+		.map((message) => message.content!.trim());
+}
+
+/**
+ * Append prompts to both the combined list and that session's list so
+ * either scope still works after a later settings change.
+ */
+export function appendImportedPrompts(
+	store: PromptHistoryBuckets,
+	sessionId: string,
+	texts: string[]
+): PromptHistoryBuckets {
+	let combined = store.combined;
+	let session = store.sessions[sessionId] ?? [];
+
+	for (const text of texts) {
+		combined = pushPromptHistory(combined, text);
+		session = pushPromptHistory(session, text);
+	}
+
+	return {
+		combined,
+		sessions: { ...store.sessions, [sessionId]: session }
+	};
+}
+
 export function recallPrevious(
 	entries: string[],
 	cursor: PromptHistoryCursor,
