@@ -202,17 +202,54 @@ json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
                     });
                 } else {
                     json chatcmpl_outputs = item.at("output");
+                    json tool_content     = json::array();
+                    json trailing_images  = json::array();
+
                     for (json & chatcmpl_output : chatcmpl_outputs) {
-                        if (!chatcmpl_output.contains("type") || chatcmpl_output.at("type") != "input_text") {
-                            throw std::invalid_argument("Output of tool call should be 'Input text'");
+                        const std::string output_type = json_value(chatcmpl_output, "type", std::string());
+
+                        if (output_type == "input_text") {
+                            chatcmpl_output["type"] = "text";
+                            tool_content.push_back(chatcmpl_output);
+                        } else if (output_type == "input_image") {
+                            // Mirrors the "Input image" branch of input messages above.
+                            // Some clients (e.g. Codex) return screenshots as the output of
+                            // a tool call. Chat templates cannot render media inside a
+                            // `tool` message, so the image is forwarded as a following
+                            // user message instead.
+                            if (!chatcmpl_output.contains("image_url")) {
+                                throw std::invalid_argument("'image_url' is required");
+                            }
+                            trailing_images.push_back(json {
+                                {"image_url", json {
+                                    {"url", chatcmpl_output.at("image_url")}
+                                }},
+                                {"type", "image_url"},
+                            });
+                        } else {
+                            throw std::invalid_argument("Output of tool call should be 'Input text' or 'Input image'");
                         }
-                        chatcmpl_output["type"] = "text";
                     }
+
+                    if (tool_content.empty()) {
+                        tool_content.push_back(json {
+                            {"text", "(see the image in the following message)"},
+                            {"type", "text"},
+                        });
+                    }
+
                     chatcmpl_messages.push_back(json {
-                        {"content",      chatcmpl_outputs},
+                        {"content",      tool_content},
                         {"role",         "tool"},
                         {"tool_call_id", item.at("call_id")},
                     });
+
+                    if (!trailing_images.empty()) {
+                        chatcmpl_messages.push_back(json {
+                            {"content", trailing_images},
+                            {"role",    "user"},
+                        });
+                    }
                 }
             } else if (exists_and_is_array(item, "summary") &&
                 exists_and_is_string(item, "type") &&
