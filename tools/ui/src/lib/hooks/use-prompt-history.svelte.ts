@@ -38,9 +38,9 @@ function saveBuckets(store: PromptHistoryBuckets) {
 }
 
 function currentScope(): PromptHistoryScope {
-	return settingsStore.config[SETTINGS_KEYS.PROMPT_HISTORY_PER_SESSION] === false
-		? 'combine'
-		: 'separate';
+	return settingsStore.config[SETTINGS_KEYS.PROMPT_HISTORY_PER_SESSION] === true
+		? 'separate'
+		: 'combine';
 }
 
 function currentSessionId(): string {
