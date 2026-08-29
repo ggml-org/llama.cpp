@@ -3414,7 +3414,19 @@ private:
 
                     SLT_TRC(slot, "cached n_tokens = %d, memory_seq_rm [%d, end)\n", slot.prompt.n_tokens(), p0);
 
-                    slot.mem.seq_rm(slot.id, p0, -1);
+                    // note: recurrent memories (e.g. hybrid models) can refuse to remove tokens
+                    // if the rollback exceeds the recurrent snapshot ring
+                    const bool rm_tgt = llama_memory_seq_rm(llama_get_memory(ctx_tgt), slot.id, p0, -1);
+                    const bool rm_dft = !ctx_dft || llama_memory_seq_rm(llama_get_memory(ctx_dft), slot.id, p0, -1);
+                    if (!rm_tgt || !rm_dft) {
+                        // the cached prefix can no longer be used - clear the sequence and re-process the full prompt
+                        SLT_WRN(slot, "memory could not roll back to pos %d - clearing the sequence and re-processing the full prompt\n", p0);
+                        llama_memory_seq_rm(llama_get_memory(ctx_tgt), slot.id, -1, -1);
+                        if (ctx_dft) {
+                            llama_memory_seq_rm(llama_get_memory(ctx_dft), slot.id, -1, -1);
+                        }
+                        slot.prompt.tokens.keep_first(0);
+                    }
 
                     // If using an alora, there may be uncached tokens that come
                     // before the invocation sequence. When this happens, the
