@@ -47,6 +47,14 @@ find_package(hip     REQUIRED)
 find_package(hipblas REQUIRED)
 find_package(rocblas REQUIRED)
 
+# hipCUB gives the top-k op a device-side path for rows wider than the shared
+# memory bitonic argsort can handle (1024).  Without it, vocabulary-width top-k
+# is not supported by this backend and falls back to the CPU.
+option(GGML_HIP_TOPK_HIPCUB "ggml: use hipCUB for wide-row top-k" ON)
+if (GGML_HIP_TOPK_HIPCUB)
+    find_package(hipcub)
+endif()
+
 if (GGML_HIP_RCCL)
     find_package(rccl REQUIRED)
 endif()
@@ -151,3 +159,9 @@ if (GGML_HIP_RCCL)
 endif()
 
 target_link_libraries(ggml-hip PRIVATE ggml-base hip::host roc::rocblas roc::hipblas)
+
+if (GGML_HIP_TOPK_HIPCUB AND hipcub_FOUND)
+    message(STATUS "HIP: using hipCUB for wide-row top-k")
+    target_compile_definitions(ggml-hip PRIVATE GGML_HIP_TOPK_HIPCUB)
+    target_link_libraries(ggml-hip PRIVATE hip::hipcub)
+endif()
