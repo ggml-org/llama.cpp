@@ -477,6 +477,27 @@ vec4 dequantize4(uint ib, uint iqs, uint a_offset) {
 }
 #endif
 
+#if defined(DATA_A_IQ2_NL)
+vec2 dequantize(uint ib, uint iqs, uint a_offset) {
+    const uint j     = iqs % 8;
+    const uint shift = 2 * (iqs / 8);
+    const uint q0 = (uint(data_a[a_offset + ib].qs[j    ]) >> shift) & 3;
+    const uint q1 = (uint(data_a[a_offset + ib].qs[j + 1]) >> shift) & 3;
+    return vec2(kvalues_iq2nl[q0], kvalues_iq2nl[q1]);
+}
+vec4 dequantize4(uint ib, uint iqs, uint a_offset) {
+    const uint j     = iqs % 8;
+    const uint shift = 2 * (iqs / 8);
+    const uint qsw = pack32(u16vec2(data_a_packed16[a_offset + ib].qs[j/2],
+                                    data_a_packed16[a_offset + ib].qs[j/2 + 1]));
+    // shift is even and below 8: the per-byte mask keeps the wanted bit pair
+    const u8vec4 q = unpack8((qsw >> shift) & 0x03030303);
+    return vec4(
+        kvalues_iq2nl[q.x], kvalues_iq2nl[q.y],
+        kvalues_iq2nl[q.z], kvalues_iq2nl[q.w]);
+}
+#endif
+
 #if defined(DATA_A_IQ4_NL)
 vec2 dequantize(uint ib, uint iqs, uint a_offset) {
     const uint vui = uint(data_a[a_offset + ib].qs[iqs]);
@@ -558,7 +579,7 @@ vec2 get_dm(uint ib, uint a_offset) {
 }
 #endif
 
-#if defined(DATA_A_Q2_0) || defined(DATA_A_Q4_0) || defined(DATA_A_Q5_0) || defined(DATA_A_Q8_0) || defined(DATA_A_IQ1_S) || defined(DATA_A_IQ2_XXS) || defined(DATA_A_IQ2_XS) || defined(DATA_A_IQ2_S) || defined(DATA_A_IQ3_XXS) || defined(DATA_A_IQ3_S) || defined(DATA_A_IQ4_XS) || defined(DATA_A_IQ4_NL)
+#if defined(DATA_A_Q2_0) || defined(DATA_A_Q4_0) || defined(DATA_A_Q5_0) || defined(DATA_A_Q8_0) || defined(DATA_A_IQ1_S) || defined(DATA_A_IQ2_XXS) || defined(DATA_A_IQ2_XS) || defined(DATA_A_IQ2_S) || defined(DATA_A_IQ3_XXS) || defined(DATA_A_IQ3_S) || defined(DATA_A_IQ4_XS) || defined(DATA_A_IQ2_NL) || defined(DATA_A_IQ4_NL)
 vec2 get_dm(uint ib, uint a_offset) {
     return vec2(float(data_a[a_offset + ib].d), 0);
 }

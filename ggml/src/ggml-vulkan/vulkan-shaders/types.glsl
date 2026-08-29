@@ -1735,6 +1735,29 @@ struct block_iq4_xs_packed32
 #define A_TYPE_PACKED32 block_iq4_xs_packed32
 #endif
 
+#define QUANT_K_IQ2_NL 32
+#define QUANT_R_IQ2_NL 1
+
+struct block_iq2_nl
+{
+    float16_t d;
+    uint8_t qs[QUANT_K_IQ2_NL/4];
+};
+
+// no packed32: a uint32_t member pads the 10 byte block stride to 12
+struct block_iq2_nl_packed16
+{
+    float16_t d;
+    uint16_t qs[QUANT_K_IQ2_NL/4/2];
+};
+
+#if defined(DATA_A_IQ2_NL)
+#define QUANT_K QUANT_K_IQ2_NL
+#define QUANT_R QUANT_R_IQ2_NL
+#define A_TYPE block_iq2_nl
+#define A_TYPE_PACKED16 block_iq2_nl_packed16
+#endif
+
 #define QUANT_K_IQ4_NL 32
 #define QUANT_R_IQ4_NL 2
 
@@ -1802,6 +1825,24 @@ struct block_nvfp4_packed32
 #define A_TYPE block_nvfp4
 #define A_TYPE_PACKED16 block_nvfp4_packed16
 #define A_TYPE_PACKED32 block_nvfp4_packed32
+#endif
+
+#if defined(DATA_A_IQ2_NL)
+const int8_t kvalues_iq2nl_const[4] = {
+    int8_t(-127), int8_t(-49), int8_t(9), int8_t(88)
+};
+
+shared FLOAT_TYPE kvalues_iq2nl[4];
+
+#define NEEDS_INIT_IQ_SHMEM
+void init_iq_shmem(uvec3 wgsize)
+{
+    // copy the table into shared memory and sync
+    for (uint i = gl_LocalInvocationIndex.x; i < kvalues_iq2nl.length(); i += wgsize.x) {
+        kvalues_iq2nl[i] = FLOAT_TYPE(kvalues_iq2nl_const[i]);
+    }
+    barrier();
+}
 #endif
 
 #if defined(DATA_A_IQ4_NL) || defined(DATA_A_IQ4_XS)
