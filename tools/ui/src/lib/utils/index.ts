@@ -341,6 +341,17 @@ export { executeGetDatetimeTool } from './get-datetime';
 // Browser fallback for the server's get_info tool
 export { executeBrowserInfoTool } from './browser-info';
 
+// Tool-use support detection from a chat template
+export { detectToolUseSupport } from './chat-template-tool-detector';
+
+// Model hardware-compatibility estimation
+export {
+	computeFileCompatibilityTiers,
+	deviceMemoryBudgetMb,
+	resolveDeviceMemoryGb,
+	type CompatibilityTier
+} from './model-compatibility';
+
 // Cryptography utilities
 
 export { uuid } from './uuid';
