@@ -5472,10 +5472,39 @@ static ggml_backend_feature * ggml_backend_cuda_get_features(ggml_backend_reg_t 
     GGML_UNUSED(reg);
 }
 
+// the NUMA node this GPU hangs off, from sysfs - lets the scheduler read op-offload weight uploads from the NUMA replica local to the destination card instead of always from the home node (on a dual-socket box the wrong choice spends the card's PCIe link dragging bytes over the socket interconnect)
+static int ggml_backend_cuda_get_numa_node(ggml_backend_t backend) {
+    ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *) backend->context;
+    char bus[64] = {0};
+    if (cudaDeviceGetPCIBusId(bus, (int) sizeof(bus) - 1, cuda_ctx->device) != cudaSuccess) {
+        return -1;
+    }
+    for (char * c = bus; *c; ++c) {
+        if (*c >= 'A' && *c <= 'Z') {
+            *c = (char) (*c + 32); // sysfs paths are lowercase
+        }
+    }
+    char path[256];
+    snprintf(path, sizeof(path), "/sys/bus/pci/devices/%s/numa_node", bus);
+    FILE * f = fopen(path, "r");
+    if (f == NULL) {
+        return -1;
+    }
+    int node = -1;
+    if (fscanf(f, "%d", &node) != 1) {
+        node = -1;
+    }
+    fclose(f);
+    return node;
+}
+
 static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, const char * name) {
     GGML_UNUSED(reg);
     if (strcmp(name, "ggml_backend_comm_init") == 0) {
         return (void *)ggml_backend_cuda_comm_init;
+    }
+    if (strcmp(name, "ggml_backend_cuda_get_numa_node") == 0) {
+        return (void *)ggml_backend_cuda_get_numa_node;
     }
     if (strcmp(name, "ggml_backend_comm_free") == 0) {
         return (void *)ggml_backend_cuda_comm_free;

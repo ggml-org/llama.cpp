@@ -1,6 +1,7 @@
 #include "ggml-backend.h"
 #include "ggml-backend-impl.h"
 #include "ggml-cpu.h"
+#include "ggml-cpu-impl.h"
 #include "repack.h"
 #include "traits.h"
 #include "ggml-impl.h"
@@ -85,6 +86,9 @@ static ggml_backend_buffer_type_t * ggml_backend_cpu_device_get_extra_buffers_ty
     GGML_UNUSED(device);
 }
 
+// true for any buffer type whose memory the CPU GEMM paths read directly, so the NUMA mirror can replicate it (see ggml-cpu-impl.h)
+extern "C" bool ggml_backend_cpu_buft_is_mirrorable(ggml_backend_buffer_type_t buft);
+
 static bool ggml_backend_cpu_is_extra_buffer_type(ggml_backend_buffer_type_t buft) {
     for (auto * extra : ggml_backend_cpu_get_extra_buffer_types()) {
         if (extra == buft) {
@@ -92,6 +96,10 @@ static bool ggml_backend_cpu_is_extra_buffer_type(ggml_backend_buffer_type_t buf
         }
     }
     return false;
+}
+
+extern "C" bool ggml_backend_cpu_buft_is_mirrorable(ggml_backend_buffer_type_t buft) {
+    return buft != nullptr && (ggml_backend_buft_is_host(buft) || ggml_backend_cpu_is_extra_buffer_type(buft));
 }
 
 // CPU backend - backend (stream)
@@ -170,6 +178,9 @@ static enum ggml_status ggml_backend_cpu_graph_plan_compute(ggml_backend_t backe
 static enum ggml_status ggml_backend_cpu_graph_compute(ggml_backend_t backend, struct ggml_cgraph * cgraph) {
     struct ggml_backend_cpu_context * cpu_ctx = (struct ggml_backend_cpu_context *)backend->context;
 
+    // no-op unless --numa mirror is set; first call builds the replicas
+    ggml_numa_mirror_scan_graph(cgraph);
+
     struct ggml_cplan cplan = ggml_graph_plan(cgraph, cpu_ctx->n_threads, cpu_ctx->threadpool);
 
     if (cpu_ctx->work_size < cplan.work_size) {
@@ -217,6 +228,9 @@ static ggml_guid_t ggml_backend_cpu_guid(void) {
 ggml_backend_t ggml_backend_cpu_init(void) {
     // initialize CPU backend now to avoid slowing the first graph computation
     ggml_cpu_init();
+
+    // hand the scheduler our NUMA-mirror remap function (see ggml-backend-impl.h); both init paths (direct and device registry) funnel through here
+    ggml_sched_set_remap_node_fn(ggml_numa_mirror_remap_node);
 
     struct ggml_backend_cpu_context * ctx = new ggml_backend_cpu_context;
     if (ctx == NULL) {
