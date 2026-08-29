@@ -3,6 +3,7 @@
 #import "ggml-impl.h"
 #import "ggml-backend-impl.h"
 #import "ggml-metal-impl.h"
+#import "ggml-metal-common.h"
 
 #include <Foundation/Foundation.h>
 
@@ -1742,17 +1743,11 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
         case GGML_OP_MUL_MAT:
             return ggml_metal_supports_mul_mat_op(
                     has_simdgroup_reduction, op, true,
-                    !ggml_is_transposed(op->src[0]) &&
-                    !ggml_is_transposed(op->src[1]) &&
-                    has_simdgroup_mm &&
-                    op->src[0]->ne[0] >= 64 &&
-                    op->src[1]->ne[1] > 8);
+                    ggml_metal_op_mul_mat_use_mm(op, has_simdgroup_mm));
         case GGML_OP_MUL_MAT_ID:
             return ggml_metal_supports_mul_mat_op(
                     has_simdgroup_reduction, op, false,
-                    has_simdgroup_mm &&
-                    op->src[0]->ne[0] >= 64 &&
-                    op->src[2]->ne[1] >= 32);
+                    ggml_metal_op_mul_mat_id_use_mm(op, has_simdgroup_mm));
         case GGML_OP_SET:
         case GGML_OP_CPY:
         case GGML_OP_DUP:
