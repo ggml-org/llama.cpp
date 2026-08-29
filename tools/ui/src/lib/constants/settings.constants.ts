@@ -112,9 +112,9 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 			},
 			{
 				defaultValue: true,
-				help: 'Recall sent prompts with ArrowUp/Down, mouse wheel, or swipe on the chat input.',
+				help: 'Recall sent messages with ArrowUp/Down, mouse wheel, or swipe on the chat input.',
 				key: SETTINGS_KEYS.ENABLE_PROMPT_HISTORY,
-				label: 'Enable prompt history',
+				label: 'Enable message history',
 				type: SettingsFieldType.CHECKBOX
 			},
 			{
@@ -122,7 +122,7 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 				dependsOn: SETTINGS_KEYS.ENABLE_PROMPT_HISTORY,
 				help: 'Keep a history per conversation, or one shared list. Switching does not delete the other list.',
 				key: SETTINGS_KEYS.PROMPT_HISTORY_PER_SESSION,
-				label: 'Prompt history scope',
+				label: 'Message history scope',
 				radioOptions: [
 					{
 						key: SETTINGS_KEYS.PROMPT_HISTORY_PER_SESSION,
@@ -139,7 +139,7 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 			},
 			{
 				defaultValue: true,
-				help: 'Counterpart of prompt history scope radio: one shared list across conversations.',
+				help: 'Counterpart of message history scope radio: one shared list across conversations.',
 				key: SETTINGS_KEYS.PROMPT_HISTORY_COMBINE,
 				label: 'Combine all sessions',
 				standaloneField: false,
