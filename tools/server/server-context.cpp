@@ -21,9 +21,12 @@
 #include <cstddef>
 #include <cinttypes>
 #include <exception>
+#include <iomanip>
+#include <limits>
 #include <memory>
 #include <filesystem>
 #include <random>
+#include <sstream>
 #include <utility>
 #include <fstream>
 
@@ -37,6 +40,79 @@
 #endif
 
 constexpr int HTTP_POLLING_SECONDS = 1;
+
+static void server_prompt_cache_key_add_file(
+        std::ostringstream & key,
+        const char * label,
+        const std::string & path) {
+    key << label << '=' << path.size() << ':' << path;
+    if (path.empty()) {
+        key << "\n";
+        return;
+    }
+
+    std::error_code ec;
+    const auto absolute_path = std::filesystem::absolute(path, ec);
+    if (!ec) {
+        const std::string normalized = absolute_path.lexically_normal().string();
+        key << '|' << normalized.size() << ':' << normalized;
+    }
+
+    ec.clear();
+    const auto size = std::filesystem::file_size(path, ec);
+    key << "|size=" << (ec ? 0 : size);
+
+    ec.clear();
+    const auto modified = std::filesystem::last_write_time(path, ec);
+    key << "|mtime=" << static_cast<long long>(ec ? 0 : modified.time_since_epoch().count()) << "\n";
+}
+
+static std::string server_prompt_cache_key(
+        const common_params & params,
+        const llama_context * ctx_tgt,
+        const llama_context * ctx_dft) {
+    std::ostringstream key;
+    key << "format=1\n";
+    key << "commit=" << llama_commit() << "\n";
+    server_prompt_cache_key_add_file(key, "model", params.model.path);
+    server_prompt_cache_key_add_file(key, "draft", params.speculative.draft.mparams.path);
+    server_prompt_cache_key_add_file(key, "mmproj", params.mmproj.path);
+
+    key << "n_ctx_tgt=" << llama_n_ctx(ctx_tgt) << "\n";
+    key << "n_batch_tgt=" << llama_n_batch(ctx_tgt) << "\n";
+    key << "n_ubatch_tgt=" << llama_n_ubatch(ctx_tgt) << "\n";
+    key << "n_ctx_dft=" << (ctx_dft ? llama_n_ctx(ctx_dft) : 0) << "\n";
+    key << "n_batch_dft=" << (ctx_dft ? llama_n_batch(ctx_dft) : 0) << "\n";
+    key << "n_ubatch_dft=" << (ctx_dft ? llama_n_ubatch(ctx_dft) : 0) << "\n";
+    key << "n_parallel=" << params.n_parallel << "\n";
+    key << "cache_type_k=" << (int) params.cache_type_k << "\n";
+    key << "cache_type_v=" << (int) params.cache_type_v << "\n";
+    key << "draft_cache_type_k=" << (int) params.speculative.draft.cache_type_k << "\n";
+    key << "draft_cache_type_v=" << (int) params.speculative.draft.cache_type_v << "\n";
+    key << "swa_full=" << params.swa_full << "\n";
+    key << "kv_unified=" << params.kv_unified << "\n";
+    key << "flash_attn=" << (int) params.flash_attn_type << "\n";
+    key << "no_kv_offload=" << params.no_kv_offload << "\n";
+
+    key << std::hexfloat;
+    key << "rope_freq_base=" << params.rope_freq_base << "\n";
+    key << "rope_freq_scale=" << params.rope_freq_scale << "\n";
+    key << "yarn_ext_factor=" << params.yarn_ext_factor << "\n";
+    key << "yarn_attn_factor=" << params.yarn_attn_factor << "\n";
+    key << "yarn_beta_fast=" << params.yarn_beta_fast << "\n";
+    key << "yarn_beta_slow=" << params.yarn_beta_slow << "\n";
+    key << "yarn_orig_ctx=" << params.yarn_orig_ctx << "\n";
+    for (const auto & lora : params.lora_adapters) {
+        server_prompt_cache_key_add_file(key, "lora", lora.path);
+        key << "lora_scale=" << lora.scale << "\n";
+    }
+    for (const auto & control_vector : params.control_vectors) {
+        server_prompt_cache_key_add_file(key, "control_vector", control_vector.fname);
+        key << "control_vector_strength=" << control_vector.strength << "\n";
+    }
+
+    return key.str();
+}
 
 static common_speculative_output_limits server_output_limits(const common_params & params) {
     if (params.embedding ||
@@ -314,16 +390,46 @@ struct server_slot {
             return false;
         }
 
-        llama_state_seq_get_data_ext(ctx_tgt, cur->data.main.data(), cur_size_tgt, id, LLAMA_STATE_SEQ_FLAGS_NONE);
-        if (ctx_dft) {
-            llama_state_seq_get_data_ext(ctx_dft, cur->data.drft.data(), cur_size_dft, id, LLAMA_STATE_SEQ_FLAGS_NONE);
+        if (cur->data.is_disk()) {
+            GGML_ASSERT(cur->data.mapping != nullptr);
+
+            const size_t n_tgt = llama_state_seq_get_data_ext(
+                ctx_tgt, cur->data.mapping, cur_size_tgt, id, LLAMA_STATE_SEQ_FLAGS_NONE);
+            if (n_tgt != cur_size_tgt) {
+                SLT_WRN(*this, "failed to save target prompt state: expected %zu bytes, wrote %zu\n", cur_size_tgt, n_tgt);
+                prompt_cache.discard(cur);
+                return false;
+            }
+            if (ctx_dft) {
+                const size_t n_dft = llama_state_seq_get_data_ext(
+                    ctx_dft, cur->data.mapping + cur_size_tgt, cur_size_dft, id, LLAMA_STATE_SEQ_FLAGS_NONE);
+                if (n_dft != cur_size_dft) {
+                    SLT_WRN(*this, "failed to save draft prompt state: expected %zu bytes, wrote %zu\n", cur_size_dft, n_dft);
+                    prompt_cache.discard(cur);
+                    return false;
+                }
+            }
+
+            return prompt_cache.commit(cur);
+        } else {
+            llama_state_seq_get_data_ext(ctx_tgt, cur->data.main.data(), cur_size_tgt, id, LLAMA_STATE_SEQ_FLAGS_NONE);
+            if (ctx_dft) {
+                llama_state_seq_get_data_ext(ctx_dft, cur->data.drft.data(), cur_size_dft, id, LLAMA_STATE_SEQ_FLAGS_NONE);
+            }
         }
 
         return true;
     }
 
-    bool prompt_load(server_prompt_cache & prompt_cache, const server_tokens & tokens) {
-        bool res = prompt_cache.load(prompt, tokens, ctx_tgt, ctx_dft, id);
+    bool prompt_load(
+            server_prompt_cache & prompt_cache,
+            const server_tokens & tokens,
+            bool cache_prompt,
+            bool needs_checkpoint,
+            int32_t n_swa,
+            float slot_prompt_similarity) {
+        bool res = prompt_cache.load(
+            prompt, tokens, ctx_tgt, ctx_dft, id, cache_prompt, needs_checkpoint, n_swa, slot_prompt_similarity);
         if (!res) {
             SLT_WRN(*this, "%s", "failed to load prompt from cache\n");
         }
@@ -1348,17 +1454,41 @@ private:
             batch.init(std::max(n_batch, params_base.n_parallel), n_embd);
         }
 
-        if (params_base.cache_ram_mib != 0) {
-            if (params_base.cache_ram_mib < 0) {
-                SRV_TRC("prompt cache is enabled, size limit: %s\n", "no limit");
-            } else {
-                SRV_TRC("prompt cache is enabled, size limit: %d MiB\n", params_base.cache_ram_mib);
-            }
-            SRV_TRC("%s", "use `--cache-ram 0` to disable the prompt cache\n");
+        const bool cache_disk_enabled = !params_base.cache_disk_path.empty() && params_base.cache_disk_max_mib != 0;
+        const bool prompt_cache_enabled = cache_disk_enabled || params_base.cache_ram_mib != 0;
 
-            prompt_cache = std::make_unique<server_prompt_cache>(params_base.cache_ram_mib, n_ctx);
+        if (prompt_cache_enabled) {
+            const int32_t cache_limit_mib = cache_disk_enabled ? params_base.cache_disk_max_mib : params_base.cache_ram_mib;
+            const size_t cache_limit_tokens = cache_disk_enabled ? 0 : n_ctx;
+
+            if (cache_disk_enabled) {
+                std::error_code ec;
+                std::filesystem::create_directories(params_base.cache_disk_path, ec);
+                const bool cache_dir_valid = !ec && std::filesystem::is_directory(params_base.cache_disk_path, ec);
+                if (ec || !cache_dir_valid) {
+                    SRV_ERR("failed to create prompt cache directory %s: %s\n",
+                            params_base.cache_disk_path.c_str(), ec ? ec.message().c_str() : "path is not a directory");
+                    return false;
+                }
+                SRV_TRC("prompt cache is enabled on disk: %s\n", params_base.cache_disk_path.c_str());
+            } else {
+                SRV_TRC("%s", "prompt cache is enabled in RAM\n");
+            }
+
+            if (cache_limit_mib < 0) {
+                SRV_TRC("prompt cache size limit: %s\n", "no limit");
+            } else {
+                SRV_TRC("prompt cache size limit: %d MiB\n", cache_limit_mib);
+            }
+
+            prompt_cache = std::make_unique<server_prompt_cache>(
+                cache_limit_mib,
+                cache_limit_tokens,
+                cache_disk_enabled ? params_base.cache_disk_path : "",
+                cache_disk_enabled ? server_prompt_cache_key(params_base, ctx_tgt, ctx_dft) : "",
+                mctx != nullptr);
         } else {
-            SRV_TRC("%s", "prompt cache is disabled - use `--cache-ram N` to enable it\n");
+            SRV_TRC("%s", "prompt cache is disabled - use `--cache-ram N` or `--cache-disk PATH` to enable it\n");
         }
         SRV_TRC("%s", "for more info see https://github.com/ggml-org/llama.cpp/pull/16391\n");
 
@@ -1418,8 +1548,8 @@ private:
         metrics.init();
 
         if (params_base.cache_idle_slots) {
-            if (params_base.cache_ram_mib == 0) {
-                SRV_WRN("%s", "--cache-idle-slots requires --cache-ram, disabling\n");
+            if (!prompt_cache) {
+                SRV_WRN("%s", "--cache-idle-slots requires a prompt cache, disabling\n");
                 params_base.cache_idle_slots = false;
             } else {
                 if (params_base.kv_unified) {
@@ -1635,7 +1765,17 @@ private:
 
                 ret->prompt_save(*prompt_cache);
 
-                if (!ret->prompt_load(*prompt_cache, task.tokens)) {
+                const bool needs_checkpoint =
+                    ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL ||
+                    ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_RS   ||
+                    n_swa > 0;
+                if (!ret->prompt_load(
+                        *prompt_cache,
+                        task.tokens,
+                        task.params.cache_prompt,
+                        needs_checkpoint,
+                        n_swa,
+                        slot_prompt_similarity)) {
                     ret->prompt_clear();
                 }
 
@@ -3267,7 +3407,7 @@ private:
                             const bool has_new_tokens = (n_past < slot.task->n_tokens());
 
                             // the largest pos_min required for a checkpoint to be useful
-                            const auto pos_min_thold = std::max(0, pos_next - n_swa - (has_new_tokens ? 0 : 1));
+                            const auto pos_min_thold = server_prompt_pos_min_thold(pos_next, n_swa, has_new_tokens);
 
                             if (n_past > 0 && n_past <= slot.prompt.n_tokens()) {
                                 const auto pos_min = llama_memory_seq_pos_min(llama_get_memory(ctx_tgt), slot.id);
@@ -3321,17 +3461,21 @@ private:
 
                                 if (pos_min >= pos_min_thold) {
                                     // search for a context checkpoint
+                                    int checkpoint_reuse = -1;
                                     const auto it = std::find_if(
                                         slot.prompt.checkpoints.rbegin(),
                                         slot.prompt.checkpoints.rend(),
                                         [&](const auto & cur) {
                                             // guarantee that a checkpoint will result in at least one token being processed [TAG_PROMPT_LOGITS]
                                             SLT_TRC(slot, "checking checkpoint with [%d, %d] against %d...\n", cur.pos_min, cur.pos_max, pos_min_thold);
-                                            // workaround for [TAG_CHECKPOINTS_FIX_POS_MIN]
-                                            if (cur.pos_max > pos_next) {
-                                                return false;
-                                            }
-                                            return cur.pos_min < pos_min_thold || cur.pos_min == 0;
+                                            checkpoint_reuse = server_prompt_checkpoint_reuse(
+                                                slot.prompt.tokens,
+                                                cur.n_tokens,
+                                                cur.pos_min,
+                                                cur.pos_max,
+                                                pos_next,
+                                                pos_min_thold);
+                                            return checkpoint_reuse >= 0;
                                         }
                                     );
 
@@ -3345,7 +3489,7 @@ private:
                                         common_speculative_set_state(spec.get(), slot.id, it->data_spec);
 
                                         pos_next = std::min(pos_next, std::max(it->pos_min + 1, it->pos_max));
-                                        n_past   = std::min(slot.prompt.tokens.size_up_to_pos(pos_next), (size_t) it->n_tokens);
+                                        n_past   = checkpoint_reuse;
                                         SLT_TRC(slot, "restored context checkpoint (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", n_past = %d, size = %.3f MiB)\n", it->pos_min, it->pos_max, it->n_tokens, n_past, (float) it->size() / 1024 / 1024);
                                     }
 

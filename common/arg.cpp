@@ -1718,6 +1718,23 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_CACHE_RAM").set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
     add_opt(common_arg(
+        {"--cache-disk"}, "PATH",
+        "persist prompt cache state under this directory and restore it after server restart",
+        [](common_params & params, const std::string & value) {
+            params.cache_disk_path = value;
+        }
+    ).set_env("LLAMA_ARG_CACHE_DISK").set_examples({LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
+        {"--cache-disk-max"}, "N",
+        string_format("set the maximum disk cache size in MiB (default: %d, -1 - no limit, 0 - disable)", params.cache_disk_max_mib),
+        [](common_params & params, int value) {
+            if (value < -1) {
+                throw std::invalid_argument("cache-disk-max must be -1 or non-negative");
+            }
+            params.cache_disk_max_mib = value;
+        }
+    ).set_env("LLAMA_ARG_CACHE_DISK_MAX").set_examples({LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
         {"-kvu", "--kv-unified"},
         {"-no-kvu", "--no-kv-unified"},
         "use single unified KV buffer shared across all sequences (default: enabled if number of slots is auto)",
@@ -1728,7 +1745,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     add_opt(common_arg(
         {"--cache-idle-slots"},
         {"--no-cache-idle-slots"},
-        "save idle slots to the prompt cache on new task, and clear them when using unified KV (default: enabled, requires cache-ram)",
+        "save idle slots to the prompt cache on new task, and clear them when using unified KV (default: enabled, requires a prompt cache)",
         [](common_params & params, bool value) {
             params.cache_idle_slots = value;
         }
