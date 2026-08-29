@@ -1784,6 +1784,9 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
     };
 
     // Parallelize tensor processing (courtesy of https://github.com/ddh0)
+    const int n_workers = std::max(1, std::min(nthread, (int) tensors.size()));
+    const size_t max_buf_worker = std::max<size_t>(1, (qs.params->max_buf_size ? qs.params->max_buf_size : LLAMA_QUANT_MAX_BUF_SIZE) / n_workers);
+
     auto process_tensor = [&](
         const llama_model_loader::llama_tensor_weight * tw,
         std::vector<no_init<uint8_t>> & thread_local_buffer,
@@ -1823,14 +1826,24 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
             LLAMA_LOG_INFO("\t%s: - processing tensor %45s \t(%12" PRId64 " elements)\n", func, name.c_str(), ggml_nelements(tensor));
         }
 
-        // rows are sampled with a stride over the whole tensor, so the whole tensor is read here
-        if (!ml.use_mmap) {
-            if (thread_local_buffer.size() < ggml_nbytes(tensor)) { thread_local_buffer.resize(ggml_nbytes(tensor)); }
-        }
-        {
+        const size_t tensor_nbytes = ggml_nbytes(tensor);
+        const size_t row_nbytes = ggml_row_size(tensor->type, tensor->ne[0]);
+        const bool stream_rows = !ml.use_mmap && tensor_nbytes > max_buf_worker;
+
+        if (!stream_rows) {
+            if (!ml.use_mmap && thread_local_buffer.size() < tensor_nbytes) { thread_local_buffer.resize(tensor_nbytes); }
             std::lock_guard<std::mutex> lock(loader_mutex);
-            tensor->data = const_cast<void *>(ml.load_data_range(*tw, 0, ggml_nbytes(tensor), thread_local_buffer.data()));
+            tensor->data = const_cast<void *>(ml.load_data_range(*tw, 0, tensor_nbytes, thread_local_buffer.data()));
+        } else if (thread_local_buffer.size() < row_nbytes) {
+            thread_local_buffer.resize(row_nbytes);
         }
+
+        auto load_row = [&](const int64_t slice, const int64_t row) -> const uint8_t * {
+            const size_t offs = ((size_t) slice*tensor->ne[1] + row) * row_nbytes;
+            if (!stream_rows) { return (const uint8_t *) tensor->data + offs; }
+            std::lock_guard<std::mutex> lock(loader_mutex);
+            return (const uint8_t *) ml.load_data_range(*tw, offs, row_nbytes, thread_local_buffer.data());
+        };
 
         // Sampling
         const int64_t n_per_row = tensor->ne[0];
@@ -1859,7 +1872,6 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         // Populate f32_sample
         {
             const ggml_type src_type = tensor->type;
-            const size_t src_row_sz = ggml_row_size(src_type, n_per_row);
             const ggml_type_traits * traits = ggml_get_type_traits(src_type);
 
             for (int64_t slice = 0; slice < ne2; ++slice) {
@@ -1873,7 +1885,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
                     int64_t r = offset + std::llround(i * stride);
                     if (r >= nrows_total) { break; }
 
-                    const uint8_t * src = (const uint8_t *)tensor->data + slice * (src_row_sz * nrows_total) + r * src_row_sz;
+                    const uint8_t * src = load_row(slice, r);
                     size_t cur_sz = f32_sample.size();
                     f32_sample.resize(cur_sz + n_per_row);
                     float * dst = f32_sample.data() + cur_sz;
@@ -2169,7 +2181,6 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         std::exception_ptr w_exception;
         std::atomic<bool> w_failed{false};
         std::vector<std::thread> threads;
-        int n_workers = std::max(1, std::min(nthread, (int)tensors.size()));
         threads.reserve(n_workers);
 
         for (int i = 0; i < n_workers; ++i) {
