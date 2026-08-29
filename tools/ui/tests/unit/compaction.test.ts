@@ -1,7 +1,7 @@
 import { COMPACTION } from '$lib/constants';
 import { MessageRole, MessageType } from '$lib/enums';
 import type { DatabaseMessage } from '$lib/types';
-import { canCompactMessages, sliceAtLastCompaction } from '$lib/utils';
+import { canCompactMessages, customCompactionModel, sliceAtLastCompaction } from '$lib/utils';
 import { describe, expect, it } from 'vitest';
 
 const CONV_ID = 'conv';
@@ -142,5 +142,24 @@ describe('canCompactMessages', () => {
 		];
 
 		expect(canCompactMessages(messages)).toBe(true);
+	});
+});
+
+describe('customCompactionModel', () => {
+	it('keeps the conversation model when the opt-in is off', () => {
+		expect(customCompactionModel(false, 'summarizer')).toBeUndefined();
+	});
+
+	it('returns the selected model when the opt-in is on', () => {
+		expect(customCompactionModel(true, 'summarizer')).toBe('summarizer');
+	});
+
+	it('keeps the conversation model when no model is selected', () => {
+		expect(customCompactionModel(true, COMPACTION.MODEL_UNSET)).toBeUndefined();
+	});
+
+	it('keeps the conversation model for a blank or non string value', () => {
+		expect(customCompactionModel(true, '   ')).toBeUndefined();
+		expect(customCompactionModel(true, undefined)).toBeUndefined();
 	});
 });
