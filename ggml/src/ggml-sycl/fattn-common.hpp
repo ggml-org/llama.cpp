@@ -6,6 +6,7 @@
 #include "convert.hpp"
 #include "vecdotq.hpp"
 #include "fattn-buffers.hpp"
+#include "fattn.hpp"
 
 #include "ggml.h"
 
@@ -926,6 +927,7 @@ void launch_fattn(
 
     ggml_sycl_fattn_alloc        K_f16(fbuf.K);
     ggml_sycl_fattn_alloc        V_f16(fbuf.V);
+    const ggml_sycl_fattn_extra  extra = ggml_sycl_fattn_get_extra(dst);
     ggml_sycl_pool_alloc<int>    KV_max(pool);
     ggml_sycl_pool_alloc<float>  dst_tmp(pool);
     ggml_sycl_pool_alloc<sycl::float2> dst_tmp_meta(pool);
@@ -944,10 +946,11 @@ void launch_fattn(
         const size_t bs = ggml_blck_size(K->type);
         const size_t ts = ggml_type_size(K->type);
 
-        K_f16.alloc(ggml_nelements(K));
+        sycl::half * K_f16_ptr = extra.K_buffer_ptr ? (sycl::half *) extra.K_buffer_ptr
+                                                    : K_f16.alloc(ggml_nelements(K));
         if (ggml_is_contiguously_allocated(K)) {
             to_fp16_sycl_t to_fp16 = ggml_get_to_fp16_sycl(K->type, dst);
-            to_fp16(K_data, K_f16.ptr, ggml_nelements(K), main_stream);
+            to_fp16(K_data, K_f16_ptr, ggml_nelements(K), main_stream);
 
             nb11 = nb11 * bs * sizeof(sycl::half) / ts;
             nb12 = nb12 * bs * sizeof(sycl::half) / ts;
@@ -958,13 +961,13 @@ void launch_fattn(
             const int64_t s01 = nb11 / ts;
             const int64_t s02 = nb12 / ts;
             const int64_t s03 = nb13 / ts;
-            to_fp16(K_data, K_f16.ptr, K->ne[0], K->ne[1], K->ne[2], K->ne[3], s01, s02, s03, main_stream);
+            to_fp16(K_data, K_f16_ptr, K->ne[0], K->ne[1], K->ne[2], K->ne[3], s01, s02, s03, main_stream);
 
             nb11 = K->ne[0] * sizeof(sycl::half);
             nb12 = K->ne[1] * nb11;
             nb13 = K->ne[2] * nb12;
         }
-        K_data = (char *) K_f16.ptr;
+        K_data = (char *) K_f16_ptr;
     }
 
     if (need_f16_V && V->type != GGML_TYPE_F16) {
@@ -977,11 +980,12 @@ void launch_fattn(
             const size_t bs = ggml_blck_size(V->type);
             const size_t ts = ggml_type_size(V->type);
 
-            V_f16.alloc(ggml_nelements(V));
+            sycl::half * V_f16_ptr = extra.V_buffer_ptr ? (sycl::half *) extra.V_buffer_ptr
+                                                        : V_f16.alloc(ggml_nelements(V));
             if (ggml_is_contiguously_allocated(V)) {
                 to_fp16_sycl_t to_fp16 = ggml_get_to_fp16_sycl(V->type, dst);
-                to_fp16(V_data, V_f16.ptr, ggml_nelements(V), main_stream);
-                V_data = (char *) V_f16.ptr;
+                to_fp16(V_data, V_f16_ptr, ggml_nelements(V), main_stream);
+                V_data = (char *) V_f16_ptr;
 
                 nb21 = nb21 * bs * sizeof(sycl::half) / ts;
                 nb22 = nb22 * bs * sizeof(sycl::half) / ts;
@@ -992,13 +996,13 @@ void launch_fattn(
                 const int64_t s01 = nb21 / ts;
                 const int64_t s02 = nb22 / ts;
                 const int64_t s03 = nb23 / ts;
-                to_fp16(V_data, V_f16.ptr, V->ne[0], V->ne[1], V->ne[2], V->ne[3], s01, s02, s03, main_stream);
+                to_fp16(V_data, V_f16_ptr, V->ne[0], V->ne[1], V->ne[2], V->ne[3], s01, s02, s03, main_stream);
 
                 nb21 = V->ne[0] * sizeof(sycl::half);
                 nb22 = V->ne[1] * nb21;
                 nb23 = V->ne[2] * nb22;
             }
-            V_data = (char *) V_f16.ptr;
+            V_data = (char *) V_f16_ptr;
         }
     }
 
