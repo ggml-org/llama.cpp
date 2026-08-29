@@ -168,13 +168,13 @@ inline server_spec_target_backend_profile server_spec_target_backend_profile_sel
 }
 
 // A stacked n-gram map has its own value width and can otherwise override the
-// neural drafter's much smaller cycle. On the certified gfx1030 profiles, K4V
-// m=48 can turn a new hit into a 49-row target pass and make the 248K-vocabulary
-// output visibly pause. Reuse the existing request-level cap to chunk those
-// hits at the validated neural-drafter width. The server applies this policy
-// only after separately confirming gfx1030 TP4; an explicit request-level
+// neural drafter's much smaller cycle. K4V m=48 can turn a new hit into a
+// 49-row target pass and make the 248K-vocabulary output visibly pause. Reuse
+// the existing request-level cap to chunk those hits at the validated neural
+// drafter width. The server applies this policy only after separately
+// qualifying the automatic hardware profile; an explicit request-level
 // speculative.n_max continues to take precedence.
-inline int32_t server_spec_gfx1030_neural_k4v_cycle_cap(
+inline int32_t server_spec_neural_k4v_cycle_cap(
         const common_params_speculative & params) {
     int n_dflash = 0;
     int n_mtp = 0;

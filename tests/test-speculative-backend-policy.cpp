@@ -137,21 +137,21 @@ int main() {
         COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V,
     }, 5);
     dflash_k4v.ngram_map_k4v.size_m = 48;
-    require(server_spec_gfx1030_neural_k4v_cycle_cap(dflash_k4v) == 5,
+    require(server_spec_neural_k4v_cycle_cap(dflash_k4v) == 5,
             "wide DFlash+K4V stack is capped at the certified cycle width");
 
     dflash_k4v.ngram_map_k4v.size_m = 5;
-    require(server_spec_gfx1030_neural_k4v_cycle_cap(dflash_k4v) == -1,
+    require(server_spec_neural_k4v_cycle_cap(dflash_k4v) == -1,
             "already narrow DFlash+K4V stack is unchanged");
 
     dflash_k4v.ngram_map_k4v.size_m = 48;
     dflash_k4v.draft.n_max = 7;
-    require(server_spec_gfx1030_neural_k4v_cycle_cap(dflash_k4v) == -1,
+    require(server_spec_neural_k4v_cycle_cap(dflash_k4v) == -1,
             "unqualified DFlash cycle width is unchanged");
 
     auto dflash_only = make_spec({COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH}, 5);
     dflash_only.ngram_map_k4v.size_m = 48;
-    require(server_spec_gfx1030_neural_k4v_cycle_cap(dflash_only) == -1,
+    require(server_spec_neural_k4v_cycle_cap(dflash_only) == -1,
             "DFlash-only profile is unchanged");
 
     auto mtp_k4v = make_spec({
@@ -159,29 +159,29 @@ int main() {
         COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V,
     }, 4);
     mtp_k4v.ngram_map_k4v.size_m = 48;
-    require(server_spec_gfx1030_neural_k4v_cycle_cap(mtp_k4v) == 4,
+    require(server_spec_neural_k4v_cycle_cap(mtp_k4v) == 4,
             "wide MTP+K4V stack is capped at MTP width four");
 
     mtp_k4v.draft.n_max = 3;
-    require(server_spec_gfx1030_neural_k4v_cycle_cap(mtp_k4v) == 3,
+    require(server_spec_neural_k4v_cycle_cap(mtp_k4v) == 3,
             "sidecar-sized MTP+K4V stack is capped at MTP width three");
 
     mtp_k4v.draft.n_max = 2;
-    require(server_spec_gfx1030_neural_k4v_cycle_cap(mtp_k4v) == 2,
+    require(server_spec_neural_k4v_cycle_cap(mtp_k4v) == 2,
             "narrow MTP+K4V stack is capped at MTP width two");
 
     mtp_k4v.draft.n_max = 5;
-    require(server_spec_gfx1030_neural_k4v_cycle_cap(mtp_k4v) == -1,
+    require(server_spec_neural_k4v_cycle_cap(mtp_k4v) == -1,
             "unqualified MTP width five is unchanged");
 
     mtp_k4v.draft.n_max = 4;
     mtp_k4v.ngram_map_k4v.size_m = 4;
-    require(server_spec_gfx1030_neural_k4v_cycle_cap(mtp_k4v) == -1,
+    require(server_spec_neural_k4v_cycle_cap(mtp_k4v) == -1,
             "already narrow MTP+K4V stack is unchanged");
 
     auto mtp_only = make_spec({COMMON_SPECULATIVE_TYPE_DRAFT_MTP}, 4);
     mtp_only.ngram_map_k4v.size_m = 48;
-    require(server_spec_gfx1030_neural_k4v_cycle_cap(mtp_only) == -1,
+    require(server_spec_neural_k4v_cycle_cap(mtp_only) == -1,
             "MTP-only profile is unchanged");
 
     auto extended_stack = make_spec({
@@ -190,7 +190,7 @@ int main() {
         COMMON_SPECULATIVE_TYPE_NGRAM_MOD,
     }, 5);
     extended_stack.ngram_map_k4v.size_m = 48;
-    require(server_spec_gfx1030_neural_k4v_cycle_cap(extended_stack) == -1,
+    require(server_spec_neural_k4v_cycle_cap(extended_stack) == -1,
             "unqualified extended stack is unchanged");
 
     return 0;

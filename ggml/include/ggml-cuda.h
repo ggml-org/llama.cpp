@@ -42,6 +42,10 @@ GGML_BACKEND_API int  ggml_backend_cuda_get_device_count(void);
 GGML_BACKEND_API void ggml_backend_cuda_get_device_description(int device, char * description, size_t description_size);
 GGML_BACKEND_API void ggml_backend_cuda_get_device_memory(int device, size_t * free, size_t * total);
 
+// True only while the qualified native HIP RDNA3 Auto topology policy is active.
+// Non-HIP/CUDA builds return false.
+GGML_BACKEND_API bool ggml_backend_cuda_rdna3_auto_active(void);
+
 GGML_BACKEND_API bool ggml_backend_cuda_register_host_buffer(void * buffer, size_t size);
 GGML_BACKEND_API void ggml_backend_cuda_unregister_host_buffer(void * buffer);
 
