@@ -1275,6 +1275,9 @@ private:
 
             common_params params_spf = common_base_params_to_speculative(params_base);
             params_spf.model = spf_model;
+            if (params_base.speculative.prefill.n_ctx > 0) {
+                params_spf.n_ctx = params_base.speculative.prefill.n_ctx;
+            }
             if (params_base.speculative.prefill.n_gpu_layers != -1) {
                 params_spf.n_gpu_layers = params_base.speculative.prefill.n_gpu_layers;
             }

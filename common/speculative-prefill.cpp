@@ -212,6 +212,19 @@ common_speculative_prefill_result common_speculative_prefill_execute(
         return res;
     }
 
+    const int32_t n_ctx_dft = llama_n_ctx(ctx_dft);
+    const int32_t lookahead = std::max(1, params.look_ahead_cnt);
+
+    if ((int32_t) prompt.size() + lookahead > n_ctx_dft) {
+        SPF_INF("prompt size (%d) + lookahead (%d) exceeds draft context (%d); skipping speculative prefill\n",
+                (int32_t) prompt.size(), lookahead, n_ctx_dft);
+        res.kept_indices.resize(prompt.size());
+        std::iota(res.kept_indices.begin(), res.kept_indices.end(), 0);
+        res.n_prompt_kept = (int32_t) res.kept_indices.size();
+        res.importance_scores.assign(prompt.size(), 1.0f);
+        return res;
+    }
+
     const auto t_start = ggml_time_us();
 
     const llama_model * model_dft = llama_get_model(ctx_dft);
@@ -250,7 +263,6 @@ common_speculative_prefill_result common_speculative_prefill_execute(
     res.t_draft_eval_us = t_prefill_end - t_start;
 
     // 2. lookahead decode steps with attention extraction
-    const int32_t lookahead = std::max(1, params.look_ahead_cnt);
     std::vector<float> total_importance(prompt.size(), 0.0f);
 
     cb_attn_collector_data cb_data;

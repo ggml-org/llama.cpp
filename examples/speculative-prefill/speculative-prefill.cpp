@@ -64,6 +64,9 @@ int main(int argc, char ** argv) {
     LOG_INF("%s: loading draft model...\n", __func__);
     common_params params_dft = common_base_params_to_speculative(params);
     params_dft.model = dft_model;
+    if (params.speculative.prefill.n_ctx > 0) {
+        params_dft.n_ctx = params.speculative.prefill.n_ctx;
+    }
     if (params.speculative.prefill.n_gpu_layers != -1) {
         params_dft.n_gpu_layers = params.speculative.prefill.n_gpu_layers;
     }

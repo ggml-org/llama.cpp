@@ -343,6 +343,7 @@ struct cmd_params {
     std::vector<std::string>         spec_prefill_model;
     std::vector<std::string>         spec_prefill_hf_repo;
     std::vector<std::string>         spec_prefill_hf_file;
+    std::vector<int>                 spec_prefill_n_ctx;
     std::vector<int>                 spec_prefill_n_gpu_layers;
     std::vector<float>               spec_prefill_percentage;
     std::vector<int>                 spec_prefill_chunk_size;
@@ -395,6 +396,7 @@ static const cmd_params cmd_params_defaults = {
     /* spec_prefill_model        */ {},
     /* spec_prefill_hf_repo      */ {},
     /* spec_prefill_hf_file      */ {},
+    /* spec_prefill_n_ctx        */ { 0 },
     /* spec_prefill_n_gpu_layers */ { -1 },
     /* spec_prefill_percentage   */ { 0.30f },
     /* spec_prefill_chunk_size   */ { 32 },
@@ -478,6 +480,8 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -hfpd, --spec-prefill-hf, --spec-prefill-draft-hf <user>/<model>[:quant]\n");
     printf("                                                    Hugging Face draft model repo for speculative prefill (default: unused)\n");
     printf("  -hffpd, --spec-prefill-hf-file <file>             Hugging Face draft model file for speculative prefill (default: unused)\n");
+    printf("  -cpd, --spec-prefill-ctx, --spec-prefill-draft-ctx <n>\n");
+    printf("                                                    draft context size for speculative prefill (default: %s)\n", join(cmd_params_defaults.spec_prefill_n_ctx, ",").c_str());
     printf("  -nglpd, --spec-prefill-ngl, --spec-prefill-draft-ngl <n>\n");
     printf("                                                    GPU layers for speculative prefill draft model (default: %s)\n", join(cmd_params_defaults.spec_prefill_n_gpu_layers, ",").c_str());
     printf("  -spfp, --spec-prefill-p, --spec-prefill-percentage <p>\n");
@@ -635,6 +639,15 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 }
                 auto p = string_split<std::string>(argv[i], split_delim);
                 params.spec_prefill_hf_file.insert(params.spec_prefill_hf_file.end(), p.begin(), p.end());
+            } else if (arg == "-cpd" || arg == "--spec-prefill-ctx" || arg == "--spec-prefill-draft-ctx" ||
+                       arg == "--spec-prefill-ctx-size" || arg == "--spec-prefill-max-ctx" ||
+                       arg == "--speculative-prefill-ctx" || arg == "--speculative-prefill-max-ctx") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                auto p = parse_int_range(argv[i]);
+                params.spec_prefill_n_ctx.insert(params.spec_prefill_n_ctx.end(), p.begin(), p.end());
             } else if (arg == "-nglpd" || arg == "--spec-prefill-ngl" || arg == "--spec-prefill-draft-ngl" ||
                        arg == "--speculative-prefill-ngl" || arg == "--speculative-prefill-draft-ngl") {
                 if (++i >= argc) {
@@ -1248,6 +1261,12 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
     if (params.spec_prefill_model.empty()) {
         params.spec_prefill_model = { "" };
     }
+    if (params.spec_prefill_hf_file.empty()) {
+        params.spec_prefill_hf_file = cmd_params_defaults.spec_prefill_hf_file;
+    }
+    if (params.spec_prefill_n_ctx.empty()) {
+        params.spec_prefill_n_ctx = cmd_params_defaults.spec_prefill_n_ctx;
+    }
     if (params.spec_prefill_n_gpu_layers.empty()) {
         params.spec_prefill_n_gpu_layers = cmd_params_defaults.spec_prefill_n_gpu_layers;
     }
@@ -1351,6 +1370,7 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
 struct cmd_params_instance {
     std::string        model;
     std::string        spec_prefill_model;
+    int                spec_prefill_n_ctx;
     int                spec_prefill_n_gpu_layers;
     float              spec_prefill_percentage;
     int                spec_prefill_chunk_size;
@@ -1468,6 +1488,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
     // clang-format off
     for (const auto & m : params.model)
     for (const auto & mpd : params.spec_prefill_model)
+    for (const auto & spfc : (mpd.empty() || mpd == "none" ? std::vector<int>{0} : params.spec_prefill_n_ctx))
     for (const auto & nglpd : (mpd.empty() || mpd == "none" ? std::vector<int>{-1} : params.spec_prefill_n_gpu_layers))
     for (const auto & spfp : (mpd.empty() || mpd == "none" ? std::vector<float>{0.30f} : params.spec_prefill_percentage))
     for (const auto & spfcs : (mpd.empty() || mpd == "none" ? std::vector<int>{32} : params.spec_prefill_chunk_size))
@@ -1504,6 +1525,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
             cmd_params_instance instance = {
                 /* .model                     = */ m,
                 /* .spec_prefill_model        = */ mpd,
+                /* .spec_prefill_n_ctx        = */ spfc,
                 /* .spec_prefill_n_gpu_layers = */ nglpd,
                 /* .spec_prefill_percentage   = */ spfp,
                 /* .spec_prefill_chunk_size   = */ spfcs,
@@ -1546,6 +1568,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
             cmd_params_instance instance = {
                 /* .model                     = */ m,
                 /* .spec_prefill_model        = */ mpd,
+                /* .spec_prefill_n_ctx        = */ spfc,
                 /* .spec_prefill_n_gpu_layers = */ nglpd,
                 /* .spec_prefill_percentage   = */ spfp,
                 /* .spec_prefill_chunk_size   = */ spfcs,
@@ -1588,6 +1611,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
             cmd_params_instance instance = {
                 /* .model                     = */ m,
                 /* .spec_prefill_model        = */ mpd,
+                /* .spec_prefill_n_ctx        = */ spfc,
                 /* .spec_prefill_n_gpu_layers = */ nglpd,
                 /* .spec_prefill_percentage   = */ spfp,
                 /* .spec_prefill_chunk_size   = */ spfcs,
@@ -2747,7 +2771,7 @@ int llama_bench(int argc, char ** argv) {
 
         if (has_spec_prefill) {
             llama_context_params dft_cparams = llama_context_default_params();
-            dft_cparams.n_ctx           = inst.n_prompt + inst.spec_prefill_lookahead + 16;
+            dft_cparams.n_ctx           = inst.spec_prefill_n_ctx > 0 ? inst.spec_prefill_n_ctx : (inst.n_prompt + inst.spec_prefill_lookahead + 16);
             dft_cparams.n_batch         = inst.n_batch;
             dft_cparams.n_ubatch        = inst.n_ubatch;
             dft_cparams.type_k          = inst.type_k;
@@ -2772,6 +2796,7 @@ int llama_bench(int argc, char ** argv) {
             smpl_dft.reset(common_sampler_init(lmodel_dft, sparams_dft));
 
             spf_params.enabled          = true;
+            spf_params.n_ctx            = inst.spec_prefill_n_ctx;
             spf_params.percentage       = inst.spec_prefill_percentage;
             spf_params.chunk_size       = inst.spec_prefill_chunk_size;
             spf_params.look_ahead_cnt   = inst.spec_prefill_lookahead;
