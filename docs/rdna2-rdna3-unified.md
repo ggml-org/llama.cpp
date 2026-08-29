@@ -76,7 +76,9 @@ Build each architecture separately:
 ```
 
 The script refuses an inherited `HSA_OVERRIDE_GFX_VERSION` for gfx1100. RCCL
-is off unless explicitly requested with `GGML_HIP_RCCL=ON`.
+is off unless explicitly requested with `GGML_HIP_RCCL=ON`. Embedded/prebuilt
+Web UI assets are disabled so rebuilds do not fall back to an unpinned network
+artifact; the OpenAI-compatible HTTP API remains available.
 
 ## Verified model
 
