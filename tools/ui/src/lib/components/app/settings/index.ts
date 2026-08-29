@@ -20,6 +20,13 @@ export { default as SettingsChatDesktopSidebar } from './SettingsChatDesktopSide
 export { default as SettingsChatMobileHeader } from './SettingsChatMobileHeader.svelte';
 
 /**
+ * Model picker for settings fields. Shares the search, grouping and option
+ * rendering of the chat model selector, and writes the chosen model back
+ * through `onSelect`.
+ */
+export { default as SettingsChatModelSelector } from './SettingsChat/SettingsChatModelSelector.svelte';
+
+/**
  * Badge indicating parameter source for sampling settings. Shows one of:
  * - **Custom**: User has explicitly set this value (orange badge)
  * - **Server Props**: Using default from `/props` endpoint (blue badge)
