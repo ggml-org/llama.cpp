@@ -46,7 +46,7 @@
 #define LLAMA_SESSION_VERSION 10
 
 #define LLAMA_STATE_SEQ_MAGIC   LLAMA_FILE_MAGIC_GGSQ
-#define LLAMA_STATE_SEQ_VERSION 3
+#define LLAMA_STATE_SEQ_VERSION 4
 
 #ifdef __cplusplus
 extern "C" {
@@ -902,6 +902,26 @@ extern "C" {
                      llama_token * tokens_out,
                           size_t   n_token_capacity,
                           size_t * n_token_count_out);
+
+    // Saves arbitrary caller data with the sequence state. data may be NULL when data_size is zero.
+    // Returns the number of bytes written, or zero on failure.
+    LLAMA_API size_t llama_state_seq_save_file_data(
+            struct llama_context * ctx,
+                      const char * filepath,
+                    llama_seq_id   seq_id,
+                   const uint8_t * data,
+                          size_t   data_size);
+
+    // Reads both token-based and byte-based sequence state files. data_size_out must not be NULL.
+    // If data_out is NULL, only the data size is reported through data_size_out and no state is loaded.
+    // Pass a non-NULL data_out to load a zero-byte payload. Returns the number of bytes read, or zero on failure.
+    LLAMA_API size_t llama_state_seq_load_file_data(
+            struct llama_context * ctx,
+                      const char * filepath,
+                    llama_seq_id   dest_seq_id,
+                         uint8_t * data_out,
+                          size_t   data_capacity,
+                          size_t * data_size_out);
 
 #define LLAMA_STATE_SEQ_FLAGS_NONE 0
 

@@ -180,6 +180,19 @@ struct llama_context {
      const llama_token * tokens,
                 size_t   n_token_count);
 
+    size_t state_seq_load_file_data(
+          llama_seq_id   seq_id,
+            const char * filepath,
+               uint8_t * data_out,
+                size_t   data_capacity,
+                size_t * data_size_out);
+
+    size_t state_seq_save_file_data(
+          llama_seq_id   seq_id,
+            const char * filepath,
+         const uint8_t * data,
+                size_t   data_size);
+
     //
     // perf
     //

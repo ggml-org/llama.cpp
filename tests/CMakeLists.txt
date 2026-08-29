@@ -246,6 +246,14 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
         ARGS --models "${MODEL_DIR}"
     )
     set_tests_properties(test-save-load-state PROPERTIES FIXTURES_REQUIRED generate-models)
+
+    llama_test(
+        test-save-load-state
+        NAME test-save-load-state-file-data-empty
+        LABEL main
+        ARGS -m "${MODEL_DIR}/dream-dense.gguf"
+    )
+    set_tests_properties(test-save-load-state-file-data-empty PROPERTIES FIXTURES_REQUIRED generate-models)
 endif()
 
 llama_build_and_test(test-chat-peg-parser.cpp peg-parser/simple-tokenize.cpp)
@@ -315,6 +323,9 @@ llama_build_and_test(test-backend-sampler.cpp   LABEL "model")
 # Requires a model, uses same args pattern as test-thread-safety
 llama_build_and_test(test-state-restore-fragmented.cpp LABEL "model" ARGS -m "${MODEL_DEST}")
 set_tests_properties(test-state-restore-fragmented PROPERTIES FIXTURES_REQUIRED test-download-model)
+
+llama_test(test-save-load-state NAME test-save-load-state-file-data LABEL "model" ARGS -m "${MODEL_DEST}")
+set_tests_properties(test-save-load-state-file-data PROPERTIES FIXTURES_REQUIRED test-download-model)
 
 if (APPLE)
     llama_build(test-rset-release.cpp)
