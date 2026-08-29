@@ -65,6 +65,7 @@ ggml_backend_t ggml_backend_remoting_device_init(ggml_backend_dev_t dev, const c
         /* .interface = */ ggml_backend_remoting_interface,
         /* .device    = */ ggml_backend_reg_dev_get(ggml_backend_virtgpu_reg(), ctx->device),
         /* .context   = */ ctx,
+        /* .profiler  = */ nullptr,
     };
 
     return remoting_backend;
