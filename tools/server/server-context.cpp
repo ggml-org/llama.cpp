@@ -2546,7 +2546,7 @@ private:
                     std::string filename = task.slot_action.filename;
                     std::string filepath = task.slot_action.filepath;
 
-                    std::vector<char> packed;
+                    raw_buffer packed;
                     try {
                         packed = slot->prompt.tokens.serialize();
                     } catch (const std::exception & err) {
@@ -2554,10 +2554,8 @@ private:
                         break;
                     }
 
-                    GGML_ASSERT(packed.size() % sizeof(llama_token) == 0);
-                    const size_t nwrite = llama_state_seq_save_file(
-                        ctx_tgt, filepath.c_str(), slot->id,
-                        reinterpret_cast<const llama_token *>(packed.data()), packed.size() / sizeof(llama_token));
+                    const size_t nwrite = llama_state_seq_save_file_data(
+                        ctx_tgt, filepath.c_str(), slot->id, packed.data(), packed.size());
                     if (nwrite == 0) {
                         send_error(task, "Unable to save slot", ERROR_TYPE_SERVER);
                         break;
@@ -2599,11 +2597,11 @@ private:
                     size_t nread = 0;
                     try {
                         size_t n_packed = 0;
-                        llama_tokens packed;
-                        nread = llama_state_seq_load_file(ctx_tgt, filepath.c_str(), slot->id, nullptr, 0, &n_packed);
+                        raw_buffer packed;
+                        nread = llama_state_seq_load_file_data(ctx_tgt, filepath.c_str(), slot->id, nullptr, 0, &n_packed);
                         if (nread != 0) {
                             packed.resize(std::max<size_t>(1, n_packed));
-                            nread = llama_state_seq_load_file(ctx_tgt, filepath.c_str(), slot->id, packed.data(), packed.size(), &n_packed);
+                            nread = llama_state_seq_load_file_data(ctx_tgt, filepath.c_str(), slot->id, packed.data(), packed.size(), &n_packed);
                         }
                         if (nread == 0) {
                             throw std::runtime_error("No available space in KV cache or invalid slot save file");
