@@ -104,6 +104,12 @@ void common_speculative_accept(common_speculative * spec, llama_seq_id, uint16_t
 bool common_speculative_get_state(common_speculative * spec, llama_seq_id seq_id, std::vector<uint8_t> & data);
 bool common_speculative_set_state(common_speculative * spec, llama_seq_id seq_id, const std::vector<uint8_t> & data);
 void common_speculative_reset_state(common_speculative * spec, llama_seq_id seq_id);
+// Release per-request state while allowing implementations to retain state tied
+// to a resident target prompt. Before reusing that prompt, prepare validates the
+// implementation cursor; false means the caller must replay from position zero.
+void common_speculative_release_state(common_speculative * spec, llama_seq_id seq_id);
+bool common_speculative_prepare_prompt_state(
+        common_speculative * spec, llama_seq_id seq_id, llama_pos pos_next, bool can_reuse_resident);
 // Discard a state suffix without committing new target rows.
 bool common_speculative_truncate_state(common_speculative * spec, llama_seq_id seq_id, llama_pos pos_max);
 // Commit target rows that are known to be accepted (prompt/ordinary decode or
