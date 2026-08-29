@@ -58,9 +58,8 @@ static inline uint32_t llama_kv_clz64(uint64_t x) {
 }
 #endif
 
-// a dense set of cell indices, kept as a bitmap so that a full pass reads words instead of
-// chasing tree nodes. the cells it tracks are a large fraction of the cache, so the bitmap is
-// both smaller and faster to walk than a node per index
+// the cells tracked are a large fraction of the cache, so a bitmap is both smaller and faster
+// to walk than a tree node per index
 class llama_kv_idx_set {
 public:
     void resize(uint32_t n) {
@@ -116,7 +115,7 @@ public:
         return 0;
     }
 
-    // visits the indices in ascending order
+    // ascending order, as the set it replaces guaranteed
     template <class F>
     void for_each(F && f) const {
         for (size_t w = 0; w < bits.size(); ++w) {

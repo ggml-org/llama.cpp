@@ -666,10 +666,8 @@ ggml_tensor * llama_model_qwen4exp::graph::build_attn_qsa(
     const int64_t n_tps = top_k->ne[1];
     const int64_t n_kv  = mctx_cur->get_n_kv();
 
-    // the scan reads the window once for all the queries of a stream, the gather moves the
-    // selected cells twice, so the two meet at 2*n_tps*width == n_kv. the margin below keeps
-    // the win clear and the windows small enough to stay in the compute buffer of a decode
-    // graph. flash attention keeps the value side as rows, which is what the gather reads
+    // the two costs meet at 2*n_tps*width == n_kv; the margin keeps the windows small enough
+    // for the compute buffer of a decode graph. flash attention is what keeps the values as rows
     ggml_tensor * cur = cparams.flash_attn && 4*n_tps*width < n_kv
         ? build_qsa_gather(inp, q_cur, top_k, kq_scale, il)
         : build_qsa_scan  (inp, q_cur, top_k, kq_scale, il);
@@ -728,9 +726,8 @@ ggml_tensor * llama_model_qwen4exp::graph::build_qsa_scan(
     return build_attn_mha(q, k, v, nullptr, kq_mask_top_k, nullptr, nullptr, kq_scale, il);
 }
 
-// The selected cells are gathered into a window of their own, one per query, so the key and
-// value traffic follows the budget instead of the whole cache. The queries then ride the stream
-// axis of the attention: each one carries the window its own selection named.
+// Key and value traffic follows the budget instead of the whole cache. The queries ride the
+// stream axis of the attention, each carrying the window its own selection named.
 ggml_tensor * llama_model_qwen4exp::graph::build_qsa_gather(
         llm_graph_input_attn_kv * inp,
         ggml_tensor *             q_cur,
