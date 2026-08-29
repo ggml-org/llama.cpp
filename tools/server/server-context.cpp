@@ -1146,6 +1146,18 @@ private:
                 params_base.speculative.draft.ctx_tgt = ctx_tgt;
                 params_base.speculative.draft.ctx_dft = ctx_dft;
                 params_base.speculative.draft.ctx_mtp = spec_init->context_mtp();
+
+                // combined spec lists: when the target has no MTP layers the draft-mtp
+                // component is skipped during init — mirror that here so the runtime
+                // chain never sees a null MTP context under an active draft-mtp type
+                if (params_base.speculative.draft.ctx_mtp == nullptr) {
+                    auto & types = params_base.speculative.types;
+                    auto it = std::find(types.begin(), types.end(), COMMON_SPECULATIVE_TYPE_DRAFT_MTP);
+                    if (it != types.end()) {
+                        SRV_WRN("%s", "target model has no MTP layers, disabling draft-mtp\n");
+                        types.erase(it);
+                    }
+                }
             }
 
             load_progress_callback(1.0f, &load_progress_spec);
