@@ -143,7 +143,7 @@ python convert_hf_to_gguf.py --mmproj --outfile mmproj-gemma-4-E2B-it-Q8_0.gguf 
 ```
 
 ```bash
-# quantize model targeting a specific bpw average reusing previous target computations in deault file (e.g. input-model-8fd7a8bef0803042.bpw_state)
+# quantize model targeting a specific bpw average reusing previous target computations in default file (e.g. input-model-8fd7a8bef0803042.bpw_state)
 ./llama-quantize --target-bpw 2.345 ---state-file --imatrix imatrix.gguf input-model-f32.gguf 8
 ```
 
