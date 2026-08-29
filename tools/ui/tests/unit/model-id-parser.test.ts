@@ -1,3 +1,4 @@
+import { ModelAuxSidecar, ModelDraftSidecar } from '$lib/enums';
 import { ModelsService } from '$lib/services/models.service';
 import { describe, expect, it } from 'vitest';
 
@@ -328,24 +329,24 @@ describe('parseModelId', () => {
 		// sidecar prefix: bare filename or multi-slash path reduces to the filename
 		expect(parseModelId('mtp-Q4_0.gguf')).toMatchObject({
 			quantization: 'Q4_0',
-			sidecar: 'mtp'
+			sidecar: ModelDraftSidecar.MTP
 		});
 
 		expect(parseModelId('ggml-org/Model-GGUF/mtp-Q4_0.gguf')).toMatchObject({
 			quantization: 'Q4_0',
-			sidecar: 'mtp'
+			sidecar: ModelDraftSidecar.MTP
 		});
 
 		expect(parseModelId('ggml-org/Model-GGUF/mmproj-F16.gguf')).toMatchObject({
 			quantization: 'F16',
-			sidecar: 'mmproj'
+			sidecar: ModelAuxSidecar.MMPROJ
 		});
 
 		// embedded-draft suffix: -<type> only strips when preceded by a quant
 		expect(parseModelId('ggml-org/Hy3-IQ1_M-mtp')).toMatchObject({
 			modelName: 'Hy3',
 			quantization: 'IQ1_M',
-			sidecar: 'mtp'
+			sidecar: ModelDraftSidecar.MTP
 		});
 
 		// a model literally named MyModel-mtp is not a draft
