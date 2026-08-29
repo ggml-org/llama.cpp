@@ -1355,34 +1355,6 @@ class TensorNameMap:
             "model.confidence_head.proj", # dspark
         ),
 
-        MODEL_TENSOR.DFLASH_ATTN_CONV_BASE: (
-            "model.layers.{bid}.attention_conv.base_kernel",
-        ),
-
-        MODEL_TENSOR.DFLASH_ATTN_CONV_PROJ: (
-            "model.layers.{bid}.attention_conv.kernel_projection",
-        ),
-
-        MODEL_TENSOR.DFLASH_FFN_CONV_BASE: (
-            "model.layers.{bid}.mlp_conv.base_kernel",
-        ),
-
-        MODEL_TENSOR.DFLASH_FFN_CONV_PROJ: (
-            "model.layers.{bid}.mlp_conv.kernel_projection",
-        ),
-
-        MODEL_TENSOR.DFLASH_SELECTOR_PREV: (
-            "model.candidate_selector.predecessor_codebook",
-        ),
-
-        MODEL_TENSOR.DFLASH_SELECTOR_NEXT: (
-            "model.candidate_selector.successor_codebook",
-        ),
-
-        MODEL_TENSOR.DFLASH_SELECTOR_HIDDEN: (
-            "model.candidate_selector.hidden_projection",
-        ),
-
         MODEL_TENSOR.CLS: (
             "classifier",       # jina
             "classifier.dense", # roberta
@@ -2741,6 +2713,16 @@ class TensorNameMap:
             ),
             MODEL_TENSOR.HC_HEAD_UP: (
                 "model.hyper_connection_mixer.input_mix_weight_up",
+            ),
+            # the MTP head carries its own copy of the head mixer above
+            MODEL_TENSOR.NEXTN_HC_HEAD_NORM: (
+                "model.layers.{bid}.hyper_connection_mixer.hc_norm",
+            ),
+            MODEL_TENSOR.NEXTN_HC_HEAD_DOWN: (
+                "model.layers.{bid}.hyper_connection_mixer.input_mix_weight_down",
+            ),
+            MODEL_TENSOR.NEXTN_HC_HEAD_UP: (
+                "model.layers.{bid}.hyper_connection_mixer.input_mix_weight_up",
             ),
             MODEL_TENSOR.INDEXER_Q_NORM: (
                 "model.layers.{bid}.self_attn.indexer.q_layernorm",

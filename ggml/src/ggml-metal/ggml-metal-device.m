@@ -800,7 +800,7 @@ void ggml_metal_encoder_set_buffer(ggml_metal_encoder_t encoder, struct ggml_met
 }
 
 void ggml_metal_encoder_set_threadgroup_memory_size(ggml_metal_encoder_t encoder, size_t size, int idx) {
-    [encoder->obj setThreadgroupMemoryLength:size atIndex:idx];
+    [encoder->obj setThreadgroupMemoryLength:GGML_PAD(size, 16) atIndex:idx];
 }
 
 void ggml_metal_encoder_dispatch_threadgroups(ggml_metal_encoder_t encoder, int tg0, int tg1, int tg2, int tptg0, int tptg1, int tptg2) {

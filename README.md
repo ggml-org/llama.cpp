@@ -1,19 +1,21 @@
+> Details of changes in this fork can be found in [notes.md](notes.md).
+
 # llama.cpp
 
-![llama](https://raw.githubusercontent.com/ggml-org/llama.brand/refs/heads/master/cover/llama-cpp/cover-llama-cpp-dark.svg)
+!\[llama](https://raw.githubusercontent.com/ggml-org/llama.brand/refs/heads/master/cover/llama-cpp/cover-llama-cpp-dark.svg)
 
 <div align="center">
 
-<b>LLM inference in C/C++</b>
+**LLM inference in C/C++**
 
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://opensource.org/licenses/MIT)
-[![Release](https://img.shields.io/github/v/release/ggml-org/llama.cpp?filter=v*&color=brightgreen)](https://github.com/ggml-org/llama.cpp/releases?q=tag:v0)
-[![Nightly](https://img.shields.io/github/v/release/ggml-org/llama.cpp?label=nightly&filter=b*&color=orange)](https://github.com/ggml-org/llama.cpp/releases?q=b)
-[![Server](https://img.shields.io/github/actions/workflow/status/ggml-org/llama.cpp/server.yml?label=Server)](https://github.com/ggml-org/llama.cpp/actions/workflows/server.yml)
-[![Docker](https://img.shields.io/github/actions/workflow/status/ggml-org/llama.cpp/docker.yml?label=Docker)](https://github.com/ggml-org/llama.cpp/actions/workflows/docker.yml)
-[![Winget](https://img.shields.io/github/actions/workflow/status/ggml-org/llama.cpp/winget.yml?label=Winget)](https://github.com/ggml-org/llama.cpp/actions/workflows/winget.yml)
+[!\[License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+[!\[Release](https://img.shields.io/github/v/release/ggml-org/llama.cpp?filter=v\*\&color=brightgreen)](https://github.com/ggml-org/llama.cpp/releases?q=tag:v0)
+[!\[Nightly](https://img.shields.io/github/v/release/ggml-org/llama.cpp?label=nightly\&filter=b\*\&color=orange)](https://github.com/ggml-org/llama.cpp/releases?q=b)
+[!\[Server](https://img.shields.io/github/actions/workflow/status/ggml-org/llama.cpp/server.yml?label=Server)](https://github.com/ggml-org/llama.cpp/actions/workflows/server.yml)
+[!\[Docker](https://img.shields.io/github/actions/workflow/status/ggml-org/llama.cpp/docker.yml?label=Docker)](https://github.com/ggml-org/llama.cpp/actions/workflows/docker.yml)
+[!\[Winget](https://img.shields.io/github/actions/workflow/status/ggml-org/llama.cpp/winget.yml?label=Winget)](https://github.com/ggml-org/llama.cpp/actions/workflows/winget.yml)
 
-[ggml](https://github.com/ggml-org/ggml) / [ops](https://github.com/ggml-org/llama.cpp/blob/master/docs/ops.md) / [maintainer PRs](https://github.com/ggml-org/llama.cpp/issues?q=is%3Apr%20is%3Aopen%20draft%3AFalse%20(author%3Argerganov%20OR%20author%3AKitaitiMakoto%20OR%20author%3Adanbev%20OR%20author%3Aaldehir%20OR%20author%3Amax-krasnyansky%20OR%20author%3ACISC%20OR%20author%3Aggerganov%20OR%20author%3Aam17an%20OR%20author%3Abartowski1182%20OR%20author%3Anikwen%20OR%20author%3Ahipudding%20OR%20author%3AServeurpersoCom%20OR%20author%3Apwilkin%20OR%20author%3Areeselevine%20OR%20author%3Angxson%20OR%20author%3Ajeffbolznv%20OR%20author%3Amarty1885%20OR%20author%3A0cc4m%20OR%20author%3ATitaniumtown%20OR%20author%3Aangt%20OR%20author%3AIMbackK%20OR%20author%3Aarthw%20OR%20author%3AJohannesGaessler%20OR%20author%3AORippler%20OR%20author%3Aruixiang63%20OR%20author%3Axctan%20OR%20author%3Aallozaur%20OR%20author%3Ayomaytk%20OR%20author%3Aaendk%20OR%20author%3Agaugarg-nv%20OR%20author%3Ataronaeo%20OR%20author%3Aforforever73%20OR%20author%3Alhez%20OR%20author%3Anetrunnereve%20OR%20author%3Afairydreaming)%20sort%3Aupdated-desc) / [dev stats](https://github.com/ggml-org/llama.cpp-dev) / [lib llama API](https://github.com/ggml-org/llama.cpp/issues/9289) / [llama-server REST API](https://github.com/ggml-org/llama.cpp/issues/9291)
+[ggml](https://github.com/ggml-org/ggml) / [ops](https://github.com/ggml-org/llama.cpp/blob/master/docs/ops.md) / [maintainer PRs](https://github.com/ggml-org/llama.cpp/issues?q=is:pr%20is:open%20draft:False%20%28author:rgerganov%20OR%20author:KitaitiMakoto%20OR%20author:danbev%20OR%20author:aldehir%20OR%20author:max-krasnyansky%20OR%20author:CISC%20OR%20author:ggerganov%20OR%20author:am17an%20OR%20author:bartowski1182%20OR%20author:nikwen%20OR%20author:hipudding%20OR%20author:ServeurpersoCom%20OR%20author:pwilkin%20OR%20author:reeselevine%20OR%20author:ngxson%20OR%20author:jeffbolznv%20OR%20author:marty1885%20OR%20author:0cc4m%20OR%20author:Titaniumtown%20OR%20author:angt%20OR%20author:IMbackK%20OR%20author:arthw%20OR%20author:JohannesGaessler%20OR%20author:ORippler%20OR%20author:ruixiang63%20OR%20author:xctan%20OR%20author:allozaur%20OR%20author:yomaytk%20OR%20author:aendk%20OR%20author:gaugarg-nv%20OR%20author:taronaeo%20OR%20author:forforever73%20OR%20author:lhez%20OR%20author:netrunnereve%20OR%20author:fairydreaming%29%20sort:updated-desc) / [dev stats](https://github.com/ggml-org/llama.cpp-dev) / [lib llama API](https://github.com/ggml-org/llama.cpp/issues/9289) / [llama-server REST API](https://github.com/ggml-org/llama.cpp/issues/9291)
 
 </div>
 
@@ -21,10 +23,10 @@
 
 A few options to get `llama.cpp` installed on your machine:
 
-- Visit https://llama.app and follow the instructions
-- Run with Docker - see our [Docker documentation](docs/docker.md)
-- Download pre-built binaries from the [releases page](https://github.com/ggml-org/llama.cpp/releases)
-- Build from source by cloning this repository - check out [our build guide](docs/build.md)
+* Visit https://llama.app and follow the instructions
+* Run with Docker - see our [Docker documentation](docs/docker.md)
+* Download pre-built binaries from the [releases page](https://github.com/ggml-org/llama.cpp/releases)
+* Build from source by cloning this repository - check out [our build guide](docs/build.md)
 
 Once installed:
 
@@ -54,73 +56,74 @@ llama serve -hf ggml-org/Qwen3.5-0.8B-GGUF
 The main goal of `llama.cpp` is to enable LLM (and VLM) inference with minimal setup and state-of-the-art performance on
 a wide range of hardware - locally and in the cloud.
 
-- Plain C/C++ implementation without any dependencies
-- Apple silicon is a first-class citizen - optimized via ARM NEON, Accelerate and Metal frameworks
-- AVX, AVX2, AVX512 and AMX support for x86 architectures
-- RVV, ZVFH, ZFH, ZICBOP and ZIHINTPAUSE support for RISC-V architectures
-- 1.5-bit, 2-bit, 3-bit, 4-bit, 5-bit, 6-bit, and 8-bit integer quantization for faster inference and reduced memory use
-- Custom CUDA kernels for running LLMs on NVIDIA GPUs (support for AMD GPUs via HIP and Moore Threads GPUs via MUSA)
-- Vulkan and SYCL backend support
-- CPU+GPU hybrid inference to partially accelerate models larger than the total VRAM capacity
+* Plain C/C++ implementation without any dependencies
+* Apple silicon is a first-class citizen - optimized via ARM NEON, Accelerate and Metal frameworks
+* AVX, AVX2, AVX512 and AMX support for x86 architectures
+* RVV, ZVFH, ZFH, ZICBOP and ZIHINTPAUSE support for RISC-V architectures
+* 1.5-bit, 2-bit, 3-bit, 4-bit, 5-bit, 6-bit, and 8-bit integer quantization for faster inference and reduced memory use
+* Custom CUDA kernels for running LLMs on NVIDIA GPUs (support for AMD GPUs via HIP and Moore Threads GPUs via MUSA)
+* Vulkan and SYCL backend support
+* CPU+GPU hybrid inference to partially accelerate models larger than the total VRAM capacity
 
 The `llama.cpp` project is build on top of the [ggml](https://github.com/ggml-org/ggml) library.
 
 ## Supported backends
 
-| Backend | Target devices |
-| --- | --- |
-| [BLAS](docs/build.md#blas-build) | All |
-| [BLIS](docs/backend/BLIS.md) | All |
-| [CANN](docs/build.md#cann) | Ascend NPU |
-| [CUDA](docs/build.md#cuda) | Nvidia GPU |
-| [HIP](docs/build.md#hip) | AMD GPU |
-| [Hexagon [In Progress]](docs/backend/snapdragon/README.md) | Snapdragon |
-| [IBM zDNN](docs/backend/zDNN.md) | IBM Z & LinuxONE |
-| [MUSA](docs/build.md#musa) | Moore Threads GPU |
-| [Metal](docs/build.md#metal-build) | Apple Silicon |
-| [OpenCL](docs/backend/OPENCL.md) | Adreno GPU |
-| [OpenVINO [In Progress]](docs/backend/OPENVINO.md) | Intel CPUs, GPUs, and NPUs |
-| [RPC](https://github.com/ggml-org/llama.cpp/tree/master/tools/rpc) | All |
-| [SYCL](docs/backend/SYCL.md) | Intel GPU |
-| [VirtGPU](docs/backend/VirtGPU.md) | VirtGPU APIR |
-| [Vulkan](docs/build.md#vulkan) | GPU |
-| [WebGPU](docs/build.md#webgpu) | All |
-| [ZenDNN](docs/build.md#zendnn) | AMD CPU |
+|Backend|Target devices|
+|-|-|
+|[BLAS](docs/build.md#blas-build)|All|
+|[BLIS](docs/backend/BLIS.md)|All|
+|[CANN](docs/build.md#cann)|Ascend NPU|
+|[CUDA](docs/build.md#cuda)|Nvidia GPU|
+|[HIP](docs/build.md#hip)|AMD GPU|
+|[Hexagon \[In Progress]](docs/backend/snapdragon/README.md)|Snapdragon|
+|[IBM zDNN](docs/backend/zDNN.md)|IBM Z \& LinuxONE|
+|[MUSA](docs/build.md#musa)|Moore Threads GPU|
+|[Metal](docs/build.md#metal-build)|Apple Silicon|
+|[OpenCL](docs/backend/OPENCL.md)|Adreno GPU|
+|[OpenVINO \[In Progress]](docs/backend/OPENVINO.md)|Intel CPUs, GPUs, and NPUs|
+|[RPC](https://github.com/ggml-org/llama.cpp/tree/master/tools/rpc)|All|
+|[SYCL](docs/backend/SYCL.md)|Intel GPU|
+|[VirtGPU](docs/backend/VirtGPU.md)|VirtGPU APIR|
+|[Vulkan](docs/build.md#vulkan)|GPU|
+|[WebGPU](docs/build.md#webgpu)|All|
+|[ZenDNN](docs/build.md#zendnn)|AMD CPU|
 
 ## Documentation
 
 #### Tools
 
-- [cli](tools/cli/README.md)
-- [completion](tools/completion/README.md)
-- [server](tools/server/README.md)
-- [GBNF grammars](grammars/README.md)
+* [cli](tools/cli/README.md)
+* [completion](tools/completion/README.md)
+* [server](tools/server/README.md)
+* [GBNF grammars](grammars/README.md)
 
 #### Development
 
-- [How to build](docs/build.md)
-- [Running on Docker](docs/docker.md)
-- [Build on Android](docs/android.md)
-- [Multi-GPU usage](docs/multi-gpu.md)
-- [Performance troubleshooting](docs/development/token_generation_performance_tips.md)
-- [GGML tips & tricks](https://github.com/ggml-org/llama.cpp/wiki/GGML-Tips-&-Tricks)
-- [XCFramework](docs/xcframework.md)
-- [Completions](docs/completions.md)
-- [Models](docs/models.md)
-- [Release process](docs/release.md)
+* [How to build](docs/build.md)
+* [Running on Docker](docs/docker.md)
+* [Build on Android](docs/android.md)
+* [Multi-GPU usage](docs/multi-gpu.md)
+* [Performance troubleshooting](docs/development/token_generation_performance_tips.md)
+* [GGML tips \& tricks](https://github.com/ggml-org/llama.cpp/wiki/GGML-Tips-&-Tricks)
+* [XCFramework](docs/xcframework.md)
+* [Completions](docs/completions.md)
+* [Models](docs/models.md)
+* [Release process](docs/release.md)
 
 ## Contributing
 
-- Contributors can open PRs
-- Collaborators will be invited based on contributions
-- Maintainers can push to branches in the `llama.cpp` repo and merge PRs into the `master` branch
-- Any help with managing issues, PRs and projects is very appreciated!
-- Read the [CONTRIBUTING.md](CONTRIBUTING.md) for more information
+* Contributors can open PRs
+* Collaborators will be invited based on contributions
+* Maintainers can push to branches in the `llama.cpp` repo and merge PRs into the `master` branch
+* Any help with managing issues, PRs and projects is very appreciated!
+* Read the [CONTRIBUTING.md](CONTRIBUTING.md) for more information
 
 ## Acknowledgements
 
-- [yhirose/cpp-httplib](https://github.com/yhirose/cpp-httplib) - Single-header HTTP server, used by `llama-server` - MIT license
-- [nothings/stb](https://github.com/nothings/stb) - Single-header image format decoder, used by multimodal subsystem - Public domain
-- [nlohmann/json](https://github.com/nlohmann/json) - Single-header JSON library, used by various tools/examples - MIT License
-- [mackron/miniaudio](https://github.com/mackron/miniaudio) - Single-header audio format decoder, used by multimodal subsystem - Public domain
-- [sheredom/subprocess.h](https://github.com/sheredom/subprocess.h) - Single-header process launching solution for C and C++ - Public domain
+* [yhirose/cpp-httplib](https://github.com/yhirose/cpp-httplib) - Single-header HTTP server, used by `llama-server` - MIT license
+* [nothings/stb](https://github.com/nothings/stb) - Single-header image format decoder, used by multimodal subsystem - Public domain
+* [nlohmann/json](https://github.com/nlohmann/json) - Single-header JSON library, used by various tools/examples - MIT License
+* [mackron/miniaudio](https://github.com/mackron/miniaudio) - Single-header audio format decoder, used by multimodal subsystem - Public domain
+* [sheredom/subprocess.h](https://github.com/sheredom/subprocess.h) - Single-header process launching solution for C and C++ - Public domain
+

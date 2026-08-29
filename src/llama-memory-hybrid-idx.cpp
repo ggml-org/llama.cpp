@@ -9,7 +9,9 @@
 #include <cassert>
 #include <cmath>
 #include <iterator>
+#include <limits>
 #include <stdexcept>
+#include <tuple>
 
 //
 // llama_memory_hybrid_idx
@@ -47,6 +49,7 @@ llama_memory_hybrid_idx::llama_memory_hybrid_idx(
     hparams_idx(model.hparams),
     mem_idx(filter_idx == nullptr ? nullptr : [&] {
         // MQA with a single key head of indexer_head_size, as llama_kv_cache_dsa shapes its own
+        hparams_idx.rope_type = LLAMA_ROPE_TYPE_NONE;
         std::fill(hparams_idx.n_head_kv_arr.begin(), hparams_idx.n_head_kv_arr.end(), 1);
         hparams_idx.n_embd_head_k_full = model.hparams.indexer_head_size;
 
@@ -137,6 +140,8 @@ void llama_memory_hybrid_idx::clear(bool data) {
     if (mem_idx) {
         mem_idx->clear(data);
     }
+
+    qsa_histories.clear();
 }
 
 bool llama_memory_hybrid_idx::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
@@ -149,14 +154,95 @@ bool llama_memory_hybrid_idx::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_po
         mem_idx->seq_rm(seq_id, p0, p1);
     }
 
-    return get_mem_attn()->seq_rm(seq_id, p0, p1);
+    const bool res = get_mem_attn()->seq_rm(seq_id, p0, p1);
+    if (!res) {
+        return false;
+    }
+
+    auto remove = [&](qsa_history & history) {
+        history.erase(std::remove_if(history.begin(), history.end(), [&](const qsa_token & token) {
+            return (p0 < 0 || token.pos[0] >= p0) && (p1 < 0 || token.pos[0] < p1);
+        }), history.end());
+    };
+
+    if (seq_id < 0) {
+        for (auto & item : qsa_histories) {
+            remove(item.second);
+        }
+    } else {
+        auto it = qsa_histories.find(seq_id);
+        if (it != qsa_histories.end()) {
+            remove(it->second);
+            if (it->second.empty()) {
+                qsa_histories.erase(it);
+            }
+        }
+    }
+
+    return true;
 }
 
 void llama_memory_hybrid_idx::seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_id_dst, llama_pos p0, llama_pos p1) {
+    if (seq_id_src == seq_id_dst) {
+        return;
+    }
+
+    qsa_history copied;
+    const auto & cells_src = get_mem_attn()->get_cells(seq_id_src);
+    const auto & cells_dst = get_mem_attn()->get_cells(seq_id_dst);
+    const bool replace = &cells_src != &cells_dst;
+    const auto src = qsa_histories.find(seq_id_src);
+    if (src != qsa_histories.end()) {
+        using pos_key = std::tuple<llama_pos, llama_pos, llama_pos>;
+        std::map<pos_key, std::vector<bool>> cells_by_pos;
+        for (uint32_t cell = 0; cell < cells_src.size(); ++cell) {
+            if (cells_src.is_empty(cell) || !cells_src.seq_has(cell, seq_id_src)) {
+                continue;
+            }
+
+            const llama_pos pos = cells_src.pos_get(cell);
+            if ((p0 >= 0 && pos < p0) || (p1 >= 0 && pos >= p1)) {
+                continue;
+            }
+
+            const auto & ext = cells_src.ext_get(cell);
+            cells_by_pos[{ pos, ext.y, ext.x }].push_back(!replace && cells_src.seq_has(cell, seq_id_dst));
+        }
+
+        std::map<pos_key, size_t> next_cell;
+        for (const auto & token : src->second) {
+            if ((p0 >= 0 && token.pos[0] < p0) || (p1 >= 0 && token.pos[0] >= p1)) {
+                continue;
+            }
+
+            const pos_key key = { token.pos[0], token.pos[1], token.pos[2] };
+            auto cells = cells_by_pos.find(key);
+            if (cells == cells_by_pos.end()) {
+                continue;
+            }
+
+            size_t & index = next_cell[key];
+            if (index < cells->second.size() && !cells->second[index++]) {
+                copied.push_back(token);
+            }
+        }
+    }
+
     llama_memory_hybrid::seq_cp(seq_id_src, seq_id_dst, p0, p1);
 
     if (mem_idx) {
         mem_idx->seq_cp(seq_id_src, seq_id_dst, p0, p1);
+    }
+
+    if (replace) {
+        if (copied.empty()) {
+            qsa_histories.erase(seq_id_dst);
+        } else {
+            qsa_histories[seq_id_dst] = std::move(copied);
+        }
+    } else if (!copied.empty()) {
+        auto & dst = qsa_histories[seq_id_dst];
+        dst.insert(dst.end(), copied.begin(), copied.end());
     }
 }
 
@@ -166,6 +252,13 @@ void llama_memory_hybrid_idx::seq_keep(llama_seq_id seq_id) {
     if (mem_idx) {
         mem_idx->seq_keep(seq_id);
     }
+
+    auto it = qsa_histories.find(seq_id);
+    qsa_history keep = it == qsa_histories.end() ? qsa_history{} : std::move(it->second);
+    qsa_histories.clear();
+    if (!keep.empty()) {
+        qsa_histories.emplace(seq_id, std::move(keep));
+    }
 }
 
 void llama_memory_hybrid_idx::seq_add(llama_seq_id seq_id, llama_pos p0, llama_pos p1, llama_pos shift) {
@@ -174,6 +267,15 @@ void llama_memory_hybrid_idx::seq_add(llama_seq_id seq_id, llama_pos p0, llama_p
     if (mem_idx) {
         mem_idx->seq_add(seq_id, p0, p1, shift);
     }
+
+    auto it = qsa_histories.find(seq_id);
+    if (it != qsa_histories.end()) {
+        for (auto & token : it->second) {
+            if ((p0 < 0 || token.pos[0] >= p0) && (p1 < 0 || token.pos[0] < p1)) {
+                token.pos[0] += shift;
+            }
+        }
+    }
 }
 
 void llama_memory_hybrid_idx::seq_div(llama_seq_id seq_id, llama_pos p0, llama_pos p1, int d) {
@@ -181,6 +283,15 @@ void llama_memory_hybrid_idx::seq_div(llama_seq_id seq_id, llama_pos p0, llama_p
 
     if (mem_idx) {
         mem_idx->seq_div(seq_id, p0, p1, d);
+    }
+
+    auto it = qsa_histories.find(seq_id);
+    if (it != qsa_histories.end()) {
+        for (auto & token : it->second) {
+            if ((p0 < 0 || token.pos[0] >= p0) && (p1 < 0 || token.pos[0] < p1)) {
+                token.pos[0] /= d;
+            }
+        }
     }
 }
 
@@ -205,8 +316,28 @@ void llama_memory_hybrid_idx::state_write(llama_io_write_i & io, llama_seq_id se
         if (mem_idx) {
             mem_idx->state_write(io, seq_id, flags);
         }
-    }
 
+        uint32_t n_histories = 0;
+        if (seq_id < 0) {
+            n_histories = (uint32_t) qsa_histories.size();
+        } else if (qsa_histories.count(seq_id) != 0) {
+            n_histories = 1;
+        }
+        io.write(&n_histories, sizeof(n_histories));
+
+        for (const auto & item : qsa_histories) {
+            if (seq_id >= 0 && item.first != seq_id) {
+                continue;
+            }
+
+            io.write(&item.first, sizeof(item.first));
+            const uint64_t n_tokens = item.second.size();
+            io.write(&n_tokens, sizeof(n_tokens));
+            for (const auto & token : item.second) {
+                io.write(token.pos.data(), sizeof(token.pos));
+            }
+        }
+    }
 }
 
 void llama_memory_hybrid_idx::state_read(llama_io_read_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) {
@@ -229,6 +360,34 @@ void llama_memory_hybrid_idx::state_read(llama_io_read_i & io, llama_seq_id seq_
         if ((flags & LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY) == 0) {
             if (mem_idx) {
                 mem_idx->state_read_sinfo(io, seq_id, flags, nullptr, &sinfos_attn);
+            }
+
+            uint32_t n_histories;
+            io.read(&n_histories, sizeof(n_histories));
+            if (n_histories > LLAMA_MAX_SEQ) {
+                throw std::runtime_error("invalid QSA history count");
+            }
+
+            if (seq_id < 0) {
+                qsa_histories.clear();
+            } else {
+                qsa_histories.erase(seq_id);
+            }
+
+            for (uint32_t ih = 0; ih < n_histories; ++ih) {
+                llama_seq_id stored_seq;
+                uint64_t n_tokens;
+                io.read(&stored_seq, sizeof(stored_seq));
+                io.read(&n_tokens, sizeof(n_tokens));
+                if (stored_seq < 0 || stored_seq >= LLAMA_MAX_SEQ || n_tokens > get_mem_attn()->get_size()) {
+                    throw std::runtime_error("invalid QSA history");
+                }
+
+                auto & history = qsa_histories[seq_id < 0 ? stored_seq : seq_id];
+                history.resize(n_tokens);
+                for (auto & token : history) {
+                    io.read(token.pos.data(), sizeof(token.pos));
+                }
             }
         }
 
@@ -255,10 +414,154 @@ void llama_memory_hybrid_idx::state_drop(llama_seq_id seq_id) {
     if (mem_idx) {
         mem_idx->seq_rm(seq_id, -1, -1);
     }
+
+    qsa_histories.erase(seq_id);
 }
 
 llama_kv_cache * llama_memory_hybrid_idx::get_mem_idx() const {
     return mem_idx.get();
+}
+
+void llama_memory_hybrid_idx::commit_qsa_tokens(const llama_ubatch & ubatch) {
+    if (!mem_idx) {
+        return;
+    }
+
+    for (uint32_t i = 0; i < ubatch.n_tokens; ++i) {
+        qsa_token token = {};
+        if (ubatch.token) {
+            token.pos = { ubatch.pos[i], ubatch.pos[i], ubatch.pos[i], 0 };
+        } else {
+            for (uint32_t ip = 0; ip < token.pos.size(); ++ip) {
+                token.pos[ip] = ip < ubatch.n_pos ? ubatch.pos[i + ip*ubatch.n_tokens] : ubatch.pos[i];
+            }
+        }
+
+        for (int32_t is = 0; is < ubatch.n_seq_id[i]; ++is) {
+            qsa_histories[ubatch.seq_id[i][is]].push_back(token);
+        }
+    }
+}
+
+void llama_memory_hybrid_idx::set_input_qsa(
+        ggml_tensor *       block_cells,
+        ggml_tensor *       block_pos,
+        ggml_tensor *       block_mask,
+        ggml_tensor *       selected,
+        const ggml_tensor * kq_mask,
+        const llama_ubatch * ubatch,
+        uint32_t            ratio,
+        uint32_t            block_topk) const {
+    GGML_ASSERT(ggml_backend_buffer_is_host(block_cells->buffer));
+    GGML_ASSERT(ggml_backend_buffer_is_host(block_pos->buffer));
+    GGML_ASSERT(ggml_backend_buffer_is_host(block_mask->buffer));
+    GGML_ASSERT(ggml_backend_buffer_is_host(selected->buffer));
+    GGML_ASSERT(ggml_backend_buffer_is_host(kq_mask->buffer));
+
+    const int64_t n_blocks = block_cells->ne[1];
+    const int64_t n_tokens = ubatch->n_tokens;
+    const int64_t n_pos    = block_pos->ne[1];
+    const int64_t n_kv     = selected->ne[0];
+
+    GGML_ASSERT(block_cells->type == GGML_TYPE_I32);
+    GGML_ASSERT(block_pos->type   == GGML_TYPE_I32);
+    GGML_ASSERT(block_mask->type  == GGML_TYPE_F32);
+    GGML_ASSERT(selected->type    == GGML_TYPE_F32);
+    GGML_ASSERT(block_cells->ne[0] == ratio && block_cells->ne[2] == n_tokens);
+    GGML_ASSERT(block_pos->ne[0] == n_blocks && block_pos->ne[2] == n_tokens);
+    GGML_ASSERT(block_mask->ne[0] == n_blocks && block_mask->ne[1] == n_tokens);
+    GGML_ASSERT(selected->ne[1] == n_tokens);
+    GGML_ASSERT(kq_mask->ne[0] == n_kv);
+
+    int32_t * cell_data     = (int32_t *) block_cells->data;
+    int32_t * pos_data      = (int32_t *) block_pos->data;
+    float *   mask_data     = (float *) block_mask->data;
+    float *   selected_data = (float *) selected->data;
+
+    std::fill(cell_data, cell_data + ggml_nelements(block_cells), 0);
+    std::fill(pos_data, pos_data + ggml_nelements(block_pos), 0);
+    std::fill(mask_data, mask_data + ggml_nelements(block_mask), -INFINITY);
+    std::fill(selected_data, selected_data + ggml_nelements(selected), 0.0f);
+
+    auto mask_visible = [&](int64_t query, uint32_t cell) {
+        const int64_t index = query*n_kv + cell;
+        if (kq_mask->type == GGML_TYPE_F16) {
+            return std::isfinite(ggml_fp16_to_fp32(((const ggml_fp16_t *) kq_mask->data)[index]));
+        }
+        return std::isfinite(((const float *) kq_mask->data)[index]);
+    };
+
+    for (int64_t iq = 0; iq < n_tokens; ++iq) {
+        const llama_seq_id seq_id = ubatch->seq_id[iq][0];
+        const auto found = qsa_histories.find(seq_id);
+        if (found == qsa_histories.end()) {
+            continue;
+        }
+
+        const auto & cells = get_mem_attn()->get_cells(seq_id);
+        using pos_key = std::tuple<llama_pos, llama_pos, llama_pos>;
+        std::map<pos_key, std::vector<uint32_t>> cells_by_pos;
+        for (uint32_t cell = 0; cell < cells.size() && cell < (uint32_t) n_kv; ++cell) {
+            if (cells.is_empty(cell) || !cells.seq_has(cell, seq_id)) {
+                continue;
+            }
+
+            const auto & ext = cells.ext_get(cell);
+            cells_by_pos[{ cells.pos_get(cell), ext.y, ext.x }].push_back(cell);
+        }
+
+        std::map<pos_key, size_t> next_cell;
+        std::vector<std::pair<const qsa_token *, uint32_t>> visible;
+        for (const auto & token : found->second) {
+            const pos_key key = { token.pos[0], token.pos[1], token.pos[2] };
+            auto cells = cells_by_pos.find(key);
+            if (cells == cells_by_pos.end()) {
+                continue;
+            }
+
+            size_t & index = next_cell[key];
+            if (index >= cells->second.size()) {
+                continue;
+            }
+
+            const uint32_t cell = cells->second[index++];
+            if (mask_visible(iq, cell)) {
+                visible.emplace_back(&token, cell);
+            }
+        }
+
+        const size_t n_complete = visible.size()/ratio;
+        const size_t n_write = std::min<size_t>(n_complete, n_blocks);
+        std::vector<uint8_t> used_cells(n_kv, 0);
+        for (size_t ib = 0; ib < n_write; ++ib) {
+            mask_data[iq*n_blocks + ib] = 0.0f;
+            for (uint32_t ir = 0; ir < ratio; ++ir) {
+                const uint32_t cell = visible[ib*ratio + ir].second;
+                cell_data[(iq*n_blocks + ib)*ratio + ir] = cell;
+                used_cells[cell] = 1;
+            }
+            for (int64_t ip = 0; ip < n_pos; ++ip) {
+                pos_data[(iq*n_pos + ip)*n_blocks + ib] = visible[ib*ratio].first->pos[ip];
+            }
+        }
+
+        uint32_t fallback_cell = 0;
+        for (size_t ib = n_write; ib < (size_t) n_blocks; ++ib) {
+            for (uint32_t ir = 0; ir < ratio; ++ir) {
+                while (fallback_cell < used_cells.size() && used_cells[fallback_cell]) {
+                    ++fallback_cell;
+                }
+                GGML_ASSERT(fallback_cell < used_cells.size());
+                cell_data[(iq*n_blocks + ib)*ratio + ir] = fallback_cell;
+                used_cells[fallback_cell++] = 1;
+            }
+        }
+
+        const size_t selected_start = n_complete <= block_topk ? 0 : n_complete*ratio;
+        for (size_t iv = selected_start; iv < visible.size(); ++iv) {
+            selected_data[iq*n_kv + visible[iv].second] = 1.0f;
+        }
+    }
 }
 
 //
@@ -295,7 +598,9 @@ llama_memory_hybrid_idx_context::llama_memory_hybrid_idx_context(
                   llama_context * lctx,
                            bool   optimize) :
     llama_memory_hybrid_context(mem, lctx, optimize),
-    mem(mem) {}
+    mem(mem),
+    ctx_idx(mem->get_mem_idx() == nullptr ? nullptr :
+        mem->get_mem_idx()->init_update(lctx, optimize)) {}
 
 llama_memory_hybrid_idx_context::llama_memory_hybrid_idx_context(
         llama_memory_hybrid_idx * mem,
@@ -307,7 +612,8 @@ llama_memory_hybrid_idx_context::llama_memory_hybrid_idx_context(
     mem(mem),
     ns_ubatch(llama_memory_hybrid_idx_ns(sinfos_idx)),
     ctx_idx(mem->get_mem_idx() == nullptr ? nullptr :
-        new llama_kv_cache_context(mem->get_mem_idx(), std::move(sinfos_idx), ubatches)) {}
+        new llama_kv_cache_context(mem->get_mem_idx(), std::move(sinfos_idx), ubatches)),
+    has_ubatches(true) {}
 
 bool llama_memory_hybrid_idx_context::next() {
     if (ctx_idx) {
@@ -326,6 +632,10 @@ bool llama_memory_hybrid_idx_context::apply() {
         res = res & ctx_idx->apply();
     }
 
+    if (res && ctx_idx && has_ubatches) {
+        mem->commit_qsa_tokens(ctx_idx->get_ubatch());
+    }
+
     return res;
 }
 
@@ -340,126 +650,17 @@ uint32_t llama_memory_hybrid_idx_context::get_n_stream() const {
 }
 
 void llama_memory_hybrid_idx_context::set_input_qsa(
-        ggml_tensor * cell_blk,
-        ggml_tensor * blk_cells,
-        ggml_tensor * blk_pos,
-        ggml_tensor * bias,
+        ggml_tensor *       block_cells,
+        ggml_tensor *       block_pos,
+        ggml_tensor *       block_mask,
+        ggml_tensor *       selected,
+        const ggml_tensor * kq_mask,
         const llama_ubatch * ubatch,
-        uint32_t ratio,
-        bool blk_bias) const {
+        uint32_t            ratio,
+        uint32_t            block_topk) const {
     GGML_ASSERT(ratio > 0);
     GGML_ASSERT(mem != nullptr && mem->get_mem_idx() != nullptr);
 
-    GGML_ASSERT(ggml_backend_buffer_is_host(cell_blk->buffer));
-
-    const int64_t n_kv     = cell_blk->ne[0];
-    const int64_t n_ns     = cell_blk->ne[1];        // streams in this ubatch
-    const int64_t n_blocks = blk_pos->ne[0]/(4*n_ns);
-    const int64_t n_tokens = ubatch->n_tokens;
-    const int64_t r        = ratio;
-
-    GGML_ASSERT(n_tokens % n_ns == 0);
-    const int64_t n_tps = n_tokens/n_ns;             // tokens per stream
-
-    int32_t * dst_cell_blk  = (int32_t *) cell_blk->data;
-    int32_t * dst_blk_cells = (int32_t *) blk_cells->data;
-    int32_t * dst_blk_pos   = (int32_t *) blk_pos->data;
-    float   * dst_bias      = (float   *) bias->data;
-
-    // block b covers [b*ratio, (b+1)*ratio), so its first token is at b*ratio
-    // all mrope sections carry it: exact for text, approximate for images
-    for (int64_t sec = 0; sec < 4; ++sec) {
-        for (int64_t s = 0; s < n_ns; ++s) {
-            for (int64_t b = 0; b < n_blocks; ++b) {
-                dst_blk_pos[sec*(n_blocks*n_ns) + s*n_blocks + b] = (int32_t) (b*r);
-            }
-        }
-    }
-
-    // one pass per stream: cell j is a different token in each, so no mapping is shared
-    std::vector<int32_t> blk_of(n_kv);
-    std::vector<int32_t> filled(n_blocks);
-
-    for (int64_t s = 0; s < n_ns; ++s) {
-        // ubatch index s*n_tps belongs to this stream; ask which cells array it uses
-        const llama_seq_id seq_of_stream = ubatch->seq_id[s*n_tps][0];
-        const auto & cells = mem->get_mem_idx()->get_cells(seq_of_stream);
-
-        int32_t * cur_cell_blk  = dst_cell_blk  + s*n_kv;
-        int32_t * cur_blk_cells = dst_blk_cells + s*(r*n_blocks);
-
-        // an incomplete block cannot be pooled; the bias below forces those tail cells in
-        // -1 means no usable block, and block 0 only keeps the gather in range
-        std::fill(blk_of.begin(),  blk_of.end(),  -1);
-        std::fill(filled.begin(),  filled.end(),   0);
-        std::fill(cur_blk_cells, cur_blk_cells + r*n_blocks, 0);
-
-        // a cell no block covers needs its own -inf, which a per-block bias cannot carry
-        // every cache path keeps the position below the cell window, so this stays false
-        bool oor = false;
-
-        for (int64_t j = 0; j < n_kv; ++j) {
-            if (cells.is_empty(j)) {
-                continue;
-            }
-
-            const llama_pos p = cells.pos_get(j);
-            const int64_t   b = p/r;
-
-            if (b >= n_blocks) {
-                oor = true;
-                continue;
-            }
-
-            blk_of[j] = (int32_t) b;
-            cur_blk_cells[b*r + (p%r)] = (int32_t) j;
-            filled[b]++;
-        }
-
-        GGML_ASSERT((!blk_bias || !oor) && "qsa: cell position runs past the cell window");
-
-        // per-block mode keeps an unpooled cell's real block, so the block's own -inf reaches it
-        // per-cell mode carries that -inf itself and only needs the gather in range
-        for (int64_t j = 0; j < n_kv; ++j) {
-            if (blk_of[j] >= 0 && filled[blk_of[j]] < r && !blk_bias) {
-                blk_of[j] = -1;
-            }
-            cur_cell_blk[j] = blk_of[j] < 0 ? 0 : blk_of[j];
-        }
-
-        for (int64_t ii = 0; ii < n_tps; ++ii) {
-            const int64_t      i      = s*n_tps + ii;
-            const llama_seq_id seq_id = ubatch->seq_id[i][0];
-            const llama_pos    q      = ubatch->pos[i];
-
-            // the tail is an incomplete block and is always visible, as in the reference
-            const llama_pos tail_start = (q + 1)/r*r;
-
-            if (blk_bias) {
-                // a block sits wholly inside or outside the tail, so one value covers it
-                // the caller adds the attention mask, which drops empty, foreign and future cells
-                float * cur_blk_bias = dst_bias + i*n_blocks;
-
-                for (int64_t b = 0; b < n_blocks; ++b) {
-                    // finite, so it can never meet a -inf and produce a nan
-                    cur_blk_bias[b] = b*r >= tail_start ? 1e9f : (filled[b] < r ? -INFINITY : 0.0f);
-                }
-
-                continue;
-            }
-
-            float * cur_bias = dst_bias + i*n_kv;
-
-            for (int64_t j = 0; j < n_kv; ++j) {
-                float v = -INFINITY;
-
-                if (!cells.is_empty(j) && cells.seq_has(j, seq_id) && cells.pos_get(j) <= q) {
-                    // finite, so it can never meet a -inf and produce a nan
-                    v = cells.pos_get(j) >= tail_start ? 1e9f : (blk_of[j] < 0 ? -INFINITY : 0.0f);
-                }
-
-                cur_bias[j] = v;
-            }
-        }
-    }
+    mem->set_input_qsa(block_cells, block_pos, block_mask, selected,
+            kq_mask, ubatch, ratio, block_topk);
 }
