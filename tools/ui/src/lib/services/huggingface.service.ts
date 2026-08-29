@@ -1,145 +1,76 @@
+import { PATH_SEPARATOR } from '$lib/constants';
+import {
+	BYTE,
+	BYTE_LABEL,
+	DAYS_AGO_LABEL,
+	DAYS_PER_MONTH,
+	DAYS_PER_WEEK,
+	DAYS_PER_YEAR,
+	GIGABYTE,
+	GIGABYTE_LABEL,
+	HF_API_MODELS_URL,
+	HF_AVATARS_URL,
+	HF_BASE_MODEL_TAG_REGEX,
+	HF_BASE_URL,
+	HF_CACHE_DIR_SEPARATOR,
+	HF_CACHE_PATH_REGEX,
+	HF_CATALOG_URL,
+	HF_DEFAULT_LIMIT,
+	HF_FIRST_SHARD,
+	HF_FRONTMATTER_REGEX,
+	HF_FULL_DETAIL_PARAM,
+	HF_GATED_TAG,
+	HF_GGUF_FILTER,
+	HF_GGUF_TAG,
+	HF_HTTP_NOT_FOUND,
+	HF_HTTP_SERVER_ERROR_MIN,
+	HF_LICENSE_TAG_PREFIX,
+	HF_LINK_HEADER,
+	HF_LINK_NEXT_REGEX,
+	HF_MAIN_BRANCH,
+	HF_MAX_LIMIT,
+	HF_PARAM_COUNT_REGEX,
+	HF_QUANT_PRECISION_REGEX,
+	HF_RAW_PATH,
+	HF_README_FILENAME,
+	HF_RECURSIVE_TREE_PARAM,
+	HF_RETRY_ATTEMPTS,
+	HF_RETRY_DELAY_MS,
+	HF_SAFETENSORS_TAG,
+	HF_SHARD_PAD_WIDTH,
+	HF_SHARD_REGEX,
+	HF_TASK_TAGS,
+	HF_TREE_PATH,
+	HF_UD_QUANT_PREFIX,
+	HF_UD_QUANT_PREFIX_REGEX,
+	KILO_LABEL,
+	KILOBYTE,
+	KILOBYTE_LABEL,
+	MEGA_LABEL,
+	MEGABYTE,
+	MEGABYTE_LABEL,
+	MONTHS_AGO_LABEL,
+	MS_PER_DAY,
+	TODAY_LABEL,
+	WEEKS_AGO_LABEL,
+	YEARS_AGO_LABEL,
+	YESTERDAY_LABEL
+} from '$lib/constants';
 import { MODEL_ID, type ModelSidecar, sidecarFromFileToken } from '$lib/constants';
+import { HfEntryType, HfModelSort, SidecarForm } from '$lib/enums';
 import type {
 	HfCatalogEntry,
 	HfModelDetailInfo,
 	HfModelInfo,
 	HfModelSearchParams,
-	HfModelSibling,
-	HfModelSort
+	HfModelSibling
 } from '$lib/types/huggingface';
-
-/**
- * Where the sidecar token (`mtp` / `dflash` / `mmproj` / ...) sits in the filename.
- * - `prefix`  sidecar file that lives next to the main weights, e.g. `mtp-Q4_0.gguf`
- * - `suffix`  embedded draft baked into the main weights, e.g. `Hy3-IQ1_M-mtp.gguf`
- */
-export type SidecarForm = 'prefix' | 'suffix';
-
-// Constants
-
-export const HF_TASKS: Record<string, string> = {
-	'audio-classification': 'Audio Classification',
-	'audio-to-audio': 'Audio-to-Audio',
-	'automatic-speech-recognition': 'Speech Recognition',
-	conversational: 'Conversational',
-	'depth-estimation': 'Depth Estimation',
-	'feature-extraction': 'Feature Extraction',
-	'fill-mask': 'Fill Mask',
-	'image-classification': 'Image Classification',
-	'image-feature-extraction': 'Image Feature Extraction',
-	'image-segmentation': 'Image Segmentation',
-	'image-text-to-text': 'Image-Text-to-Text',
-	'image-to-text': 'Image-to-Text',
-	'image-to-video': 'Image-to-Video',
-	'object-detection': 'Object Detection',
-	'question-answering': 'Question Answering',
-	'reinforcement-learning': 'Reinforcement Learning',
-	robotics: 'Robotics',
-	'sentence-similarity': 'Sentence Similarity',
-	summarization: 'Summarization',
-	'text2text-generation': 'Text2Text Generation',
-	'text-classification': 'Text Classification',
-	'text-generation': 'Text Generation',
-	'text-to-image': 'Text-to-Image',
-	'text-to-speech': 'Text to Speech',
-	'text-to-video': 'Text-to-Video',
-	'token-classification': 'Token Classification',
-	translation: 'Translation',
-	'video-to-video': 'Video-to-Video',
-	'voice-activity-detection': 'Voice Activity Detection',
-	'zero-shot-classification': 'Zero-Shot Classification'
-};
-
-/**
- * Best-effort readable label for an HF pipeline tag. Falls back to a
- * title-cased version of the kebab-case `pipeline_tag` (e.g. `image-text-to-text`
- * becomes `Image-Text-to-Text`) when we don't have an explicit entry above.
- */
-function pipelineTagLabel(tag: string): string {
-	if (HF_TASKS[tag]) return HF_TASKS[tag];
-
-	return tag
-		.split('-')
-		.map((part) => (part ? part[0].toUpperCase() + part.slice(1) : part))
-		.join('-');
-}
-
-/**
- * Lucide icon name (string identifier, used to lazy-import the Svelte component)
- * matching the HF pipeline_tag. Used for the filter chips on the model browser.
- * Returns `null` for unknown tags so the consumer can render a generic icon.
- */
-const HF_PIPELINE_ICONS: Record<string, string> = {
-	'audio-classification': 'mic',
-	'audio-to-audio': 'audio-lines',
-	'automatic-speech-recognition': 'mic',
-	conversational: 'message-circle',
-	'depth-estimation': 'layers',
-	'feature-extraction': 'hash',
-	'fill-mask': 'replace',
-	'image-classification': 'image',
-	'image-feature-extraction': 'image',
-	'image-segmentation': 'image',
-	'image-text-to-text': 'image-plus',
-	'image-to-text': 'image',
-	'image-to-video': 'video',
-	'object-detection': 'scan',
-	'question-answering': 'help-circle',
-	'sentence-similarity': 'equal',
-	summarization: 'list-collapse',
-	'text2text-generation': 'message-square-more',
-	'text-generation': 'message-square',
-	'text-to-image': 'image',
-	'text-to-speech': 'volume-2',
-	'text-to-video': 'video',
-	translation: 'languages',
-	'video-to-video': 'video',
-	'voice-activity-detection': 'mic'
-};
-
-function pipelineTagIcon(tag: string): string | null {
-	return HF_PIPELINE_ICONS[tag] ?? null;
-}
-
-export const HF_LIBRARIES: Record<string, string> = {
-	gguf: 'GGUF',
-	mlx: 'MLX',
-	onnx: 'ONNX',
-	safetensors: 'Safetensors',
-	transformers: 'Transformers',
-	vllm: 'vLLM'
-};
 
 /**
  * HuggingFaceService - Service for browsing and searching GGUF models on Hugging Face Hub
  */
 export class HuggingFaceService {
-	// Configuration
-
-	/** Available library names with display labels */
-	static readonly LIBRARIES: Record<string, string> = HF_LIBRARIES;
-	/** Sort option display labels */
-	static readonly SORT_LABELS: Record<HfModelSort, string> = {
-		createdAt: 'Newest',
-		downloads: 'Most Downloads',
-		lastModified: 'Recently Updated',
-		likes: 'Most Likes',
-		trendingScore: 'Trending'
-	};
-	/** Available sort options */
-	static readonly SORT_OPTIONS: HfModelSort[] = [
-		'downloads',
-		'likes',
-		'trendingScore',
-		'createdAt'
-	];
-
-	// Available options for filtering
-
-	/** Available pipeline tasks with display labels */
-	static readonly TASKS: Record<string, string> = HF_TASKS;
-
-	private static readonly BASE_URL = 'https://huggingface.co/api/models';
+	private static readonly BASE_URL = HF_API_MODELS_URL;
 
 	// Cached base model lookups keyed by repo id, so repeated selector opens
 	// never re-hit the HF API for the same repo.
@@ -149,12 +80,6 @@ export class HuggingFaceService {
 		string,
 		Promise<{ org: string; name: string } | null>
 	>();
-
-	private static readonly DEFAULT_LIMIT = 50;
-
-	private static readonly MAX_LIMIT = 100;
-
-	// GGUF Model Searching
 
 	/**
 	 * Map of quant token to its average bit-depth in bits-per-weight (bpw).
@@ -206,7 +131,7 @@ export class HuggingFaceService {
 		const result: HfModelSibling[] = [];
 
 		for (const file of siblings) {
-			const match = /-(\d{5})-of-(\d{5})\.gguf$/i.exec(file.path);
+			const match = HF_SHARD_REGEX.exec(file.path);
 
 			if (!match) {
 				result.push(file);
@@ -215,15 +140,15 @@ export class HuggingFaceService {
 			}
 
 			// Keep only the first shard; its size becomes the whole shard set's.
-			if (match[1] !== '00001') continue;
+			if (parseInt(match[1], 10) !== HF_FIRST_SHARD) continue;
 
 			const total = parseInt(match[2], 10);
 			const stem = file.path.slice(0, file.path.length - match[0].length);
 
 			let size = 0;
 
-			for (let i = 1; i <= total; i++) {
-				const shard = `${stem}-${String(i).padStart(5, '0')}-of-${String(total).padStart(5, '0')}.gguf`;
+			for (let i = HF_FIRST_SHARD; i <= total; i++) {
+				const shard = HuggingFaceService.shardPath(stem, i, total);
 
 				size += sizeByPath.get(shard) ?? 0;
 			}
@@ -265,7 +190,7 @@ export class HuggingFaceService {
 
 		if (prefixMatch) {
 			sidecar = sidecarFromFileToken(prefixMatch[1].toLowerCase());
-			sidecarForm = 'prefix';
+			sidecarForm = SidecarForm.PREFIX;
 			source = prefixMatch[2];
 		} else {
 			const suffixMatch = source.match(MODEL_ID.SIDECAR_SUFFIX_REGEX);
@@ -276,7 +201,7 @@ export class HuggingFaceService {
 
 				if (headSeg && MODEL_ID.QUANTIZATION_SEGMENT_REGEX.test(headSeg)) {
 					sidecar = sidecarFromFileToken(suffixMatch[2].toLowerCase());
-					sidecarForm = 'suffix';
+					sidecarForm = SidecarForm.SUFFIX;
 					source = candidate;
 				}
 			}
@@ -292,8 +217,8 @@ export class HuggingFaceService {
 		let quant = quantIdx >= 0 ? segments[quantIdx].toUpperCase() : null;
 
 		// Recombine a `UD-` (Unsloth Dynamic) prefix, e.g. `...-UD-Q4_K_XL.gguf`.
-		if (quant && quantIdx > 0 && segments[quantIdx - 1].toUpperCase() === 'UD') {
-			quant = `UD-${quant}`;
+		if (quant && quantIdx > 0 && segments[quantIdx - 1].toUpperCase() === HF_UD_QUANT_PREFIX) {
+			quant = `${HF_UD_QUANT_PREFIX}-${quant}`;
 		}
 
 		return { quant, sidecar, sidecarForm };
@@ -312,12 +237,12 @@ export class HuggingFaceService {
 	 * Format model downloads count with K/M/B suffix
 	 */
 	static formatDownloads(downloads: number): string {
-		if (downloads >= 1_000_000) {
-			return `${(downloads / 1_000_000).toFixed(1)}M`;
+		if (downloads >= MEGABYTE) {
+			return `${(downloads / MEGABYTE).toFixed(1)}${MEGA_LABEL}`;
 		}
 
-		if (downloads >= 1_000) {
-			return `${(downloads / 1_000).toFixed(1)}K`;
+		if (downloads >= KILOBYTE) {
+			return `${(downloads / KILOBYTE).toFixed(1)}${KILO_LABEL}`;
 		}
 
 		return downloads.toString();
@@ -327,27 +252,27 @@ export class HuggingFaceService {
 	 * Format file size in bytes to human-readable string
 	 */
 	static formatFileSize(bytes: number): string {
-		if (bytes >= 1_000_000_000) {
-			return `${(bytes / 1_000_000_000).toFixed(1)} GB`;
+		if (bytes >= GIGABYTE) {
+			return `${(bytes / GIGABYTE).toFixed(1)} ${GIGABYTE_LABEL}`;
 		}
 
-		if (bytes >= 1_000_000) {
-			return `${(bytes / 1_000_000).toFixed(1)} MB`;
+		if (bytes >= MEGABYTE) {
+			return `${(bytes / MEGABYTE).toFixed(1)} ${MEGABYTE_LABEL}`;
 		}
 
-		if (bytes >= 1_000) {
-			return `${(bytes / 1_000).toFixed(1)} KB`;
+		if (bytes >= KILOBYTE) {
+			return `${(bytes / KILOBYTE).toFixed(1)} ${KILOBYTE_LABEL}`;
 		}
 
-		return `${bytes} B`;
+		return `${bytes} ${BYTE_LABEL}`;
 	}
 
 	/**
 	 * Format likes count with K suffix if applicable
 	 */
 	static formatLikes(likes: number): string {
-		if (likes >= 1_000) {
-			return `${(likes / 1_000).toFixed(1)}K`;
+		if (likes >= KILOBYTE) {
+			return `${(likes / KILOBYTE).toFixed(1)}${KILO_LABEL}`;
 		}
 
 		return likes.toString();
@@ -360,19 +285,23 @@ export class HuggingFaceService {
 		const date = new Date(timestamp);
 		const now = new Date();
 		const diffMs = now.getTime() - date.getTime();
-		const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+		const diffDays = Math.floor(diffMs / MS_PER_DAY);
 
-		if (diffDays === 0) return 'Today';
+		if (diffDays === 0) return TODAY_LABEL;
 
-		if (diffDays === 1) return 'Yesterday';
+		if (diffDays === 1) return YESTERDAY_LABEL;
 
-		if (diffDays < 7) return `${diffDays} days ago`;
+		if (diffDays < DAYS_PER_WEEK) return `${diffDays} ${DAYS_AGO_LABEL}`;
 
-		if (diffDays < 30) return `${Math.floor(diffDays / 7)} weeks ago`;
+		if (diffDays < DAYS_PER_MONTH) {
+			return `${Math.floor(diffDays / DAYS_PER_WEEK)} ${WEEKS_AGO_LABEL}`;
+		}
 
-		if (diffDays < 365) return `${Math.floor(diffDays / 30)} months ago`;
+		if (diffDays < DAYS_PER_YEAR) {
+			return `${Math.floor(diffDays / DAYS_PER_MONTH)} ${MONTHS_AGO_LABEL}`;
+		}
 
-		return `${Math.floor(diffDays / 365)} years ago`;
+		return `${Math.floor(diffDays / DAYS_PER_YEAR)} ${YEARS_AGO_LABEL}`;
 	}
 
 	/**
@@ -380,10 +309,23 @@ export class HuggingFaceService {
 	 * around the dash, e.g. `19.0-28.6 GB`.
 	 */
 	static formatSizeRange(min: number, max: number): string {
-		const unit = max >= 1_000_000_000 ? 'GB' : max >= 1_000_000 ? 'MB' : max >= 1_000 ? 'KB' : 'B';
+		const unit =
+			max >= GIGABYTE
+				? GIGABYTE_LABEL
+				: max >= MEGABYTE
+					? MEGABYTE_LABEL
+					: max >= KILOBYTE
+						? KILOBYTE_LABEL
+						: BYTE_LABEL;
 		const div =
-			unit === 'GB' ? 1_000_000_000 : unit === 'MB' ? 1_000_000 : unit === 'KB' ? 1_000 : 1;
-		const fmt = (n: number) => (div === 1 ? `${n}` : `${(n / div).toFixed(1)}`);
+			unit === GIGABYTE_LABEL
+				? GIGABYTE
+				: unit === MEGABYTE_LABEL
+					? MEGABYTE
+					: unit === KILOBYTE_LABEL
+						? KILOBYTE
+						: BYTE;
+		const fmt = (n: number) => (div === BYTE ? `${n}` : `${(n / div).toFixed(1)}`);
 
 		return `${fmt(min)}-${fmt(max)} ${unit}`;
 	}
@@ -395,7 +337,7 @@ export class HuggingFaceService {
 	 * exist, so callers should provide a fallback.
 	 */
 	static getAvatarUrl(author: string): string {
-		return `https://huggingface.co/api/avatars/${author}`;
+		return `${HF_AVATARS_URL}${PATH_SEPARATOR}${author}`;
 	}
 
 	/**
@@ -418,9 +360,9 @@ export class HuggingFaceService {
 
 			if (!base) return null;
 
-			const [org, ...rest] = base.split('/');
+			const [org, ...rest] = base.split(PATH_SEPARATOR);
 
-			return { name: rest.join('/'), org };
+			return { name: rest.join(PATH_SEPARATOR), org };
 		})();
 
 		this.baseModelPending.set(repoId, promise);
@@ -442,7 +384,7 @@ export class HuggingFaceService {
 		const cardBase = model.cardData?.base_model;
 		const fromCard: string[] = Array.isArray(cardBase) ? cardBase : cardBase ? [cardBase] : [];
 		const fromTags = (model.tags ?? [])
-			.map((t) => /^base_model:(?:quantized:)?(.+)$/.exec(t)?.[1])
+			.map((t) => HF_BASE_MODEL_TAG_REGEX.exec(t)?.[1])
 			.filter((v): v is string => Boolean(v));
 
 		return Array.from(new Set([...fromCard, ...fromTags]));
@@ -454,14 +396,14 @@ export class HuggingFaceService {
 	 */
 	static getBitDepth(quant: string): number | null {
 		// Strip a leading `UD-` (Unsloth Dynamic) prefix before lookup.
-		const base = quant.replace(/^UD-/i, '');
+		const base = quant.replace(HF_UD_QUANT_PREFIX_REGEX, '');
 		const direct = HuggingFaceService.QUANT_BIT_DEPTH[base];
 
 		if (direct !== undefined) return direct;
 
 		// Fall back to the leading precision digits for variants missing from the
 		// map, e.g. `Q4_K_XL` -> 4, `IQ2_XXS` -> 2, `TQ1_0` -> 1, `BF16` -> 16.
-		const match = /^(?:I?Q|TQ|BF|F|MXFP)?(\d+)/i.exec(base);
+		const match = HF_QUANT_PRECISION_REGEX.exec(base);
 
 		return match ? parseInt(match[1], 10) : null;
 	}
@@ -480,17 +422,12 @@ export class HuggingFaceService {
 	}
 
 	/**
-	 * Get detailed information about a specific GGUF model
-	 */
-	/**
-	 * Fetch the llama.app model catalog (https://llama.app/v1/catalog.json).
-	 * Returns an empty array on failure so callers can fall back gracefully.
+	 * Fetch the llama.app model catalog. Returns an empty array on failure so
+	 * callers can fall back gracefully.
 	 */
 	static async getCatalog(): Promise<HfCatalogEntry[]> {
-		const url = 'https://llama.app/v1/catalog.json';
-
 		try {
-			const response = await fetch(url);
+			const response = await fetch(HF_CATALOG_URL);
 
 			if (!response.ok) throw new Error(`Failed to fetch catalog: ${response.status}`);
 
@@ -505,12 +442,12 @@ export class HuggingFaceService {
 	static async getDetails(modelId: string): Promise<HfModelDetailInfo | null> {
 		// Do not encode the modelId, it contains slashes for author/name.
 		// `full=true` includes cardData (description, base_model) and safetensors.
-		const url = `https://huggingface.co/api/models/${modelId}?full=true`;
+		const url = `${HF_API_MODELS_URL}${PATH_SEPARATOR}${modelId}?${HF_FULL_DETAIL_PARAM}`;
 
 		try {
 			const response = await fetch(url);
 
-			if (response.status === 404) return null;
+			if (response.status === HF_HTTP_NOT_FOUND) return null;
 
 			if (!response.ok) throw new Error(`Failed to fetch model details: ${response.status}`);
 
@@ -528,7 +465,7 @@ export class HuggingFaceService {
 	 * Get model URL on Hugging Face Hub
 	 */
 	static getModelUrl(modelId: string): string {
-		return `https://huggingface.co/${modelId}`;
+		return `${HF_BASE_URL}${PATH_SEPARATOR}${modelId}`;
 	}
 
 	// Utility Methods
@@ -536,26 +473,22 @@ export class HuggingFaceService {
 	/**
 	 * Get most liked GGUF models
 	 */
-	static async getMostLiked(
-		limit: number = HuggingFaceService.DEFAULT_LIMIT
-	): Promise<HfModelInfo[]> {
-		return this.search({ limit, sort: 'likes' });
+	static async getMostLiked(limit: number = HF_DEFAULT_LIMIT): Promise<HfModelInfo[]> {
+		return this.search({ limit, sort: HfModelSort.LIKES });
 	}
 
 	/**
 	 * Get newly released GGUF models
 	 */
-	static async getNew(limit: number = HuggingFaceService.DEFAULT_LIMIT): Promise<HfModelInfo[]> {
-		return this.search({ limit, sort: 'createdAt' });
+	static async getNew(limit: number = HF_DEFAULT_LIMIT): Promise<HfModelInfo[]> {
+		return this.search({ limit, sort: HfModelSort.CREATED_AT });
 	}
 
 	/**
 	 * Get most popular GGUF models by downloads
 	 */
-	static async getPopular(
-		limit: number = HuggingFaceService.DEFAULT_LIMIT
-	): Promise<HfModelInfo[]> {
-		return this.search({ limit, sort: 'downloads' });
+	static async getPopular(limit: number = HF_DEFAULT_LIMIT): Promise<HfModelInfo[]> {
+		return this.search({ limit, sort: HfModelSort.DOWNLOADS });
 	}
 
 	/**
@@ -563,12 +496,12 @@ export class HuggingFaceService {
 	 */
 	static async getReadme(modelId: string): Promise<string | null> {
 		// Do not encode the modelId, it contains slashes for author/name
-		const url = `https://huggingface.co/${modelId}/raw/main/README.md`;
+		const url = `${HF_BASE_URL}${PATH_SEPARATOR}${modelId}${PATH_SEPARATOR}${HF_RAW_PATH}${PATH_SEPARATOR}${HF_MAIN_BRANCH}${PATH_SEPARATOR}${HF_README_FILENAME}`;
 
 		try {
 			const response = await fetch(url);
 
-			if (response.status === 404) return null;
+			if (response.status === HF_HTTP_NOT_FOUND) return null;
 
 			if (!response.ok) throw new Error(`Failed to fetch README: ${response.status}`);
 
@@ -587,9 +520,11 @@ export class HuggingFaceService {
 	 */
 	static async getTree(modelId: string): Promise<HfModelSibling[]> {
 		const files: HfModelSibling[] = [];
+		const firstUrl =
+			`${HF_API_MODELS_URL}${PATH_SEPARATOR}${modelId}${PATH_SEPARATOR}${HF_TREE_PATH}` +
+			`${PATH_SEPARATOR}${HF_MAIN_BRANCH}?${HF_RECURSIVE_TREE_PARAM}`;
 
-		let url: string | null =
-			`https://huggingface.co/api/models/${modelId}/tree/main?recursive=true`;
+		let url: string | null = firstUrl;
 
 		try {
 			while (url) {
@@ -599,9 +534,9 @@ export class HuggingFaceService {
 
 				const data = (await response.json()) as HfModelSibling[];
 
-				files.push(...data.filter((f) => f.type !== 'directory'));
+				files.push(...data.filter((f) => f.type !== HfEntryType.DIRECTORY));
 
-				url = HuggingFaceService.parseNextPageUrl(response.headers.get('Link'));
+				url = HuggingFaceService.parseNextPageUrl(response.headers.get(HF_LINK_HEADER));
 			}
 		} catch {
 			// Return whatever was fetched before the failure.
@@ -613,26 +548,28 @@ export class HuggingFaceService {
 	/**
 	 * Get trending GGUF models
 	 */
-	static async getTrending(
-		limit: number = HuggingFaceService.DEFAULT_LIMIT
-	): Promise<HfModelInfo[]> {
-		return this.search({ limit, sort: 'trendingScore' });
+	static async getTrending(limit: number = HF_DEFAULT_LIMIT): Promise<HfModelInfo[]> {
+		return this.search({ limit, sort: HfModelSort.TRENDING_SCORE });
 	}
+
 	/**
 	 * Parse a local HF cache file path
 	 * (`.../models--<org>--<name>/snapshots/<sha>/<file>`) into its repo id and
 	 * repo-relative file path. Returns null when the path is not an HF cache path.
 	 */
 	static parseCachePath(path: string): { repo: string; file: string } | null {
-		const match = /models--(.+?)\/snapshots\/[^/]+\/(.+)$/.exec(path);
+		const match = HF_CACHE_PATH_REGEX.exec(path);
 
 		if (!match) return null;
 
-		const parts = match[1].split('--');
+		const parts = match[1].split(HF_CACHE_DIR_SEPARATOR);
 
 		if (parts.length < 2) return null;
 
-		return { file: match[2], repo: `${parts[0]}/${parts.slice(1).join('--')}` };
+		return {
+			file: match[2],
+			repo: `${parts[0]}${PATH_SEPARATOR}${parts.slice(1).join(HF_CACHE_DIR_SEPARATOR)}`
+		};
 	}
 
 	/**
@@ -641,7 +578,7 @@ export class HuggingFaceService {
 	 * when no size token is present.
 	 */
 	static parseParamCount(name: string): string | null {
-		const match = /(?:^|[^a-z0-9])(\d+(?:[._]\d+)?)\s*([bm])(?![a-z0-9])/i.exec(name);
+		const match = HF_PARAM_COUNT_REGEX.exec(name);
 
 		if (!match) return null;
 
@@ -658,38 +595,27 @@ export class HuggingFaceService {
 		isSafetensors: boolean;
 		tasks: string[];
 	} {
-		const license = tags.find((tag) => tag.startsWith('license:'))?.replace('license:', '') || null;
-		const isGated = tags.includes('gated');
-		const isGguf = tags.includes('gguf');
-		const isSafetensors = tags.includes('safetensors');
-		const tasks = tags.filter((tag) => Object.keys(HuggingFaceService.TASKS).includes(tag));
+		const license =
+			tags
+				.find((tag) => tag.startsWith(HF_LICENSE_TAG_PREFIX))
+				?.replace(HF_LICENSE_TAG_PREFIX, '') || null;
+		const isGated = tags.includes(HF_GATED_TAG);
+		const isGguf = tags.includes(HF_GGUF_TAG);
+		const isSafetensors = tags.includes(HF_SAFETENSORS_TAG);
+		const tasks = tags.filter((tag) => HF_TASK_TAGS.includes(tag));
 
 		return { isGated, isGguf, isSafetensors, license, tasks };
-	}
-
-	/** Resolve a pipeline_tag to a lucide icon name, or null when unknown. */
-	static pipelineTagIcon(tag: string | null | undefined): string | null {
-		if (!tag) return null;
-
-		return pipelineTagIcon(tag);
-	}
-
-	/** Resolve a pipeline_tag to a human-readable label. */
-	static pipelineTagLabel(tag: string | null | undefined): string | null {
-		if (!tag) return null;
-
-		return pipelineTagLabel(tag);
 	}
 
 	/**
 	 * Search GGUF models with various filters and options
 	 */
 	static async search(params: HfModelSearchParams = {}): Promise<HfModelInfo[]> {
-		const { limit = HuggingFaceService.DEFAULT_LIMIT, ...restParams } = params;
+		const { limit = HF_DEFAULT_LIMIT, ...restParams } = params;
 		const url = this.buildUrl({
 			...restParams,
-			filter: 'gguf',
-			limit: Math.min(limit, HuggingFaceService.MAX_LIMIT)
+			filter: HF_GGUF_FILTER,
+			limit: Math.min(limit, HF_MAX_LIMIT)
 		});
 
 		return this.fetchWithRetry(url);
@@ -734,25 +660,20 @@ export class HuggingFaceService {
 		return new Promise((resolve) => setTimeout(resolve, ms));
 	}
 
-	// Internal Methods
-
 	/**
 	 * Fetch data with retry logic for resilience
 	 */
 	private static async fetchWithRetry(url: string, attempt: number = 1): Promise<HfModelInfo[]> {
-		const RETRY_ATTEMPTS = 3;
-		const RETRY_DELAY_MS = 1000;
-
 		try {
 			const response = await fetch(url);
 
 			if (!response.ok) {
-				if (response.status === 404) {
+				if (response.status === HF_HTTP_NOT_FOUND) {
 					return [];
 				}
 
-				if (response.status >= 500 && attempt < RETRY_ATTEMPTS) {
-					await this.delay(RETRY_DELAY_MS * attempt);
+				if (response.status >= HF_HTTP_SERVER_ERROR_MIN && attempt < HF_RETRY_ATTEMPTS) {
+					await this.delay(HF_RETRY_DELAY_MS * attempt);
 
 					return this.fetchWithRetry(url, attempt + 1);
 				}
@@ -772,8 +693,8 @@ export class HuggingFaceService {
 
 			throw new Error('Unexpected API response format');
 		} catch (error) {
-			if (attempt < RETRY_ATTEMPTS) {
-				await this.delay(RETRY_DELAY_MS * attempt);
+			if (attempt < HF_RETRY_ATTEMPTS) {
+				await this.delay(HF_RETRY_DELAY_MS * attempt);
 
 				return this.fetchWithRetry(url, attempt + 1);
 			}
@@ -782,18 +703,27 @@ export class HuggingFaceService {
 		}
 	}
 
+	// Internal Methods
+
 	/** Extract the `rel="next"` URL from an RFC 5988 `Link` header, if present. */
 	private static parseNextPageUrl(linkHeader: string | null): string | null {
 		if (!linkHeader) return null;
 
-		const match = /<([^>]+)>;\s*rel="next"/.exec(linkHeader);
+		const match = HF_LINK_NEXT_REGEX.exec(linkHeader);
 
 		return match ? match[1] : null;
 	}
 
+	/** Full path of one shard in a split-shard GGUF set. */
+	private static shardPath(stem: string, index: number, total: number): string {
+		const pad = (n: number) => String(n).padStart(HF_SHARD_PAD_WIDTH, '0');
+
+		return `${stem}-${pad(index)}-of-${pad(total)}.gguf`;
+	}
+
 	/** Strip a leading YAML frontmatter block (--- ... ---) from a markdown document. */
 	private static stripFrontmatter(text: string): string {
-		const match = text.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/);
+		const match = text.match(HF_FRONTMATTER_REGEX);
 
 		return match ? text.slice(match[0].length) : text;
 	}

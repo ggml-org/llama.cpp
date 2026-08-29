@@ -34,7 +34,7 @@ export interface HfModelSearchParams {
 	gated?: boolean;
 }
 
-export type HfModelSort = 'downloads' | 'likes' | 'createdAt' | 'lastModified' | 'trendingScore';
+import type { HfEntryType, HfModelSort } from '$lib/enums';
 
 // Model Info (from /api/models)
 
@@ -165,7 +165,7 @@ export interface HfModelSibling {
 	/** Size in bytes (omitted for directories) */
 	size?: number;
 	/** Whether this entry is a directory */
-	type?: 'file' | 'directory';
+	type?: HfEntryType;
 	/** OID/hash for the blob */
 	oid?: string;
 	[key: string]: unknown;
