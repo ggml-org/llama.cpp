@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "artifact_manifest.h"
+#include "mtp/catchup_alignment.h"
 #include "spec_sidecar.h"
 #include "../common/speculative.h"
 #include "../include/spec_sidecar/sidecar_abi.h"
@@ -45,6 +46,19 @@ static void unset_environment(const char * name) {
 
 int main() {
     int failures = 0;
+
+    failures += require(spec_sidecar_mtp::hidden_source_row(0) == -1,
+                        "first MTP token row consumes prior committed hidden state");
+    failures += require(spec_sidecar_mtp::hidden_source_row(1) == 0 &&
+                        spec_sidecar_mtp::hidden_source_row(7) == 6,
+                        "MTP catch-up token rows consume the preceding target hidden row");
+    failures += require(spec_sidecar_mtp::can_begin_catchup(0, false) &&
+                        spec_sidecar_mtp::can_begin_catchup(7, true) &&
+                        !spec_sidecar_mtp::can_begin_catchup(7, false),
+                        "MTP catch-up requires retained hidden state away from BOS");
+    failures += require(spec_sidecar_mtp::committed_hidden_matches_tip(7, 7) &&
+                        !spec_sidecar_mtp::committed_hidden_matches_tip(7, 5),
+                        "MTP restore retains hidden state only at the unchanged committed tip");
 
     // The master gate must run before target metadata, artifact, or library
     // inspection. The deliberately invalid model pointer makes an accidental

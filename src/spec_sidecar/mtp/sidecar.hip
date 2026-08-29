@@ -7,6 +7,7 @@
 // sequence-scoped lazy-catchup/commit API.
 #include "kernels.hip"
 #include "kernels_b.hip"
+#include "catchup_alignment.h"
 #include "../artifact_manifest.h"
 #include "spec_sidecar/sidecar_abi.h"
 
@@ -33,8 +34,10 @@ struct SeqState {
     __half * Vc = nullptr;
     __half * Kp = nullptr; // pending target rows; never read by draft()
     __half * Vp = nullptr;
+    float  * Hp = nullptr; // host-path target h rows retained until commit
     float  * h_committed = nullptr;
     int pending_capacity = 0;
+    int pending_h_capacity = 0;
     int32_t pending_pos_min = 0;
     int32_t pending_pos_max = 0;
     int32_t state_pos_min = 0;
@@ -198,6 +201,18 @@ static int ensure_pending_storage(SeqState & q, int count) {
     return 0;
 }
 
+static int ensure_pending_h_storage(SeqState & q, int count) {
+    if (count <= q.pending_h_capacity) {
+        return 0;
+    }
+    SC_CHECK(hipStreamSynchronize(S.st));
+    if (q.Hp != nullptr) SC_CHECK(hipFree(q.Hp));
+    const int capacity = std::max(count, std::max(8, q.pending_h_capacity * 2));
+    SC_CHECK(hipMalloc(&q.Hp, (size_t) capacity * N_EMBD * sizeof(float)));
+    q.pending_h_capacity = capacity;
+    return 0;
+}
+
 static void discard_pending(SeqState & q) {
     q.pending_pos_min = q.state_pos_max;
     q.pending_pos_max = q.state_pos_max;
@@ -256,8 +271,9 @@ SC_API int spec_hip_set_state(int32_t seq_id, const void * data, int size) {
     if (q == nullptr || !spec_hip_state_matches(seq_id, data, size, state)) {
         return -1;
     }
+    q->h_valid = q->h_valid && spec_sidecar_mtp::committed_hidden_matches_tip(
+            q->state_pos_max, state.pos_max);
     q->state_pos_max = state.pos_max;
-    q->h_valid = false;
     discard_pending(*q);
     return 0;
 }
@@ -284,8 +300,9 @@ SC_API int spec_hip_truncate_state(int32_t seq_id, int32_t pos_max) {
     if (!S.ok || q == nullptr || pos_max < q->state_pos_min || pos_max > q->state_pos_max) {
         return -1;
     }
+    q->h_valid = q->h_valid && spec_sidecar_mtp::committed_hidden_matches_tip(
+            q->state_pos_max, pos_max);
     q->state_pos_max = pos_max;
-    q->h_valid = false;
     discard_pending(*q);
     return 0;
 }
@@ -310,14 +327,20 @@ SC_API int spec_hip_commit_state(int32_t seq_id, int32_t pos_max, const float * 
         SC_CHECK(hipMemcpyAsync(q->Vc + (size_t) q->state_pos_max * N_HEAD_KV * HEAD_DIM,
                                 q->Vp + src_row * N_HEAD_KV * HEAD_DIM,
                                 n_rows * row_bytes, hipMemcpyDeviceToDevice, S.st));
+        if (q->h_committed == nullptr) return -1;
+        // Preserve the target hidden row at the accepted boundary. The direct
+        // path uses the target-owned pointer; only the host fallback retains a
+        // temporary device copy of all pending hidden rows.
         if (hidden_device != nullptr) {
-            if (q->h_committed == nullptr) return -1;
-            // The host selects the hidden row corresponding to the last
-            // accepted target token; the ABI receives that row directly.
             SC_CHECK(hipMemcpyAsync(q->h_committed, hidden_device,
                                     N_EMBD * sizeof(float), hipMemcpyDeviceToDevice, S.st));
-            q->h_valid = true;
+        } else {
+            const size_t hidden_row = (size_t) (pos_max - 1 - q->pending_pos_min);
+            if (q->Hp == nullptr || hidden_row >= (size_t) q->pending_h_capacity) return -1;
+            SC_CHECK(hipMemcpyAsync(q->h_committed, q->Hp + hidden_row * N_EMBD,
+                                    N_EMBD * sizeof(float), hipMemcpyDeviceToDevice, S.st));
         }
+        q->h_valid = true;
         q->state_pos_max = pos_max;
     }
     discard_pending(*q);
@@ -597,6 +620,11 @@ static int spec_hip_catchup_impl(int32_t seq_id, const int32_t * toks, const int
     if (!S.ok || q == nullptr || n < 0 ||
             (n > 0 && (toks == nullptr || poss == nullptr || h_rows == nullptr))) return -1;
     if (n == 0) return 0;
+    if (!spec_sidecar_mtp::can_begin_catchup(q->state_pos_max, q->h_valid)) {
+        fprintf(stderr, "[hip-sidecar] catchup: prior hidden state unavailable at position %d\n",
+                q->state_pos_max);
+        return -1;
+    }
     if (n > (int) S.max_pos - q->state_pos_max ||
             q->pending_pos_max != q->state_pos_max || ensure_seq_storage(*q) != 0 ||
             ensure_pending_storage(*q, n) != 0) return -1;
@@ -621,15 +649,36 @@ static int spec_hip_catchup_impl(int32_t seq_id, const int32_t * toks, const int
     q->pending_pos_max = q->state_pos_max + n;
     auto & b = S.bs;
     hipStream_t st = S.st;
+    const float * pending_h_rows = h_rows;
+    if (!h_rows_device) {
+        if (ensure_pending_h_storage(*q, n) != 0) return -1;
+        SC_CHECK(hipMemcpyAsync(q->Hp, h_rows, (size_t) n * N_EMBD * sizeof(float),
+                                hipMemcpyHostToDevice, st));
+        pending_h_rows = q->Hp;
+    }
     static const bool full_catchup = getenv("LLAMA_SPEC_HIP_FULL_CATCHUP") != nullptr;
     for (int r0 = 0; r0 < n; r0 += N_BATCH) {
         const int nb = std::min(N_BATCH, n - r0);
-        if (h_rows_device) {
-            SC_CHECK(hipMemcpyAsync(b.ffn_tmp, h_rows + (size_t) r0 * N_EMBD,
-                                    (size_t) nb * N_EMBD * sizeof(float), hipMemcpyDeviceToDevice, st));
+        // Native MTP pairs token x_p with target hidden h_(p-1). The first row
+        // consumes the previously committed target hidden (or zeros at BOS),
+        // and all remaining rows consume the preceding row from this batch.
+        const int32_t hidden_row0 = spec_sidecar_mtp::hidden_source_row(r0);
+        if (hidden_row0 < 0) {
+            if (q->h_valid) {
+                SC_CHECK(hipMemcpyAsync(b.ffn_tmp, q->h_committed,
+                                        N_EMBD * sizeof(float), hipMemcpyDeviceToDevice, st));
+            } else {
+                SC_CHECK(hipMemsetAsync(b.ffn_tmp, 0, N_EMBD * sizeof(float), st));
+            }
+            if (nb > 1) {
+                SC_CHECK(hipMemcpyAsync(b.ffn_tmp + N_EMBD, pending_h_rows,
+                                        (size_t) (nb - 1) * N_EMBD * sizeof(float),
+                                        hipMemcpyDeviceToDevice, st));
+            }
         } else {
-            SC_CHECK(hipMemcpyAsync(b.ffn_tmp, h_rows + (size_t) r0 * N_EMBD,
-                                    (size_t) nb * N_EMBD * sizeof(float), hipMemcpyHostToDevice, st));
+            SC_CHECK(hipMemcpyAsync(b.ffn_tmp, pending_h_rows + (size_t) hidden_row0 * N_EMBD,
+                                    (size_t) nb * N_EMBD * sizeof(float),
+                                    hipMemcpyDeviceToDevice, st));
         }
         const int pos_base = poss[r0];
         const int32_t t0 = toks[r0];
@@ -825,7 +874,7 @@ static int spec_hip_draft_stochastic_impl(int32_t seq_id, int32_t id_last, int32
         block_phase1(c, S.st, xh_in, n_past + j, q->Kc, q->Vc);
         block_phase2(c, S.st, n_past + j, nullptr, q->Kc, q->Vc, true);
         topk_partial<<<S.nparts, 256, 0, S.st>>>(S.logits, N_HEAD_ROWS, S.pmax, S.pidx);
-        topk_final<<<1, 1, 0, S.st>>>(S.pmax, S.pidx, S.nparts, S.remap_d, SC_N_VOCAB,
+        topk_final<<<1, 256, 0, S.st>>>(S.pmax, S.pidx, S.nparts, S.remap_d, SC_N_VOCAB,
                 S.draft_ids + (size_t) j * MTP_DRAFT_TOP_K,
                 S.draft_logits + (size_t) j * MTP_DRAFT_TOP_K);
         sample_topk<<<1, 1, 0, S.st>>>(

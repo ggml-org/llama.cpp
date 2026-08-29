@@ -95,6 +95,30 @@ static bool server_gfx1030_spec_target_backend_sampling_profile(const common_par
     return n_rocm_devices == 4;
 }
 
+static int32_t server_gfx1030_neural_k4v_cycle_cap(const common_params & params) {
+    if (!server_gfx1030_native_auto_enabled() || params.split_mode != LLAMA_SPLIT_MODE_TENSOR) {
+        return -1;
+    }
+
+    size_t n_rocm_devices = 0;
+    for (ggml_backend_dev_t device : params.devices) {
+        if (device == nullptr) {
+            continue;
+        }
+        const char * name = ggml_backend_dev_name(device);
+        if (ggml_backend_dev_type(device) != GGML_BACKEND_DEVICE_TYPE_GPU ||
+                name == nullptr || std::strncmp(name, "ROCm", 4) != 0) {
+            return -1;
+        }
+        ++n_rocm_devices;
+    }
+    if (n_rocm_devices != 4) {
+        return -1;
+    }
+
+    return server_spec_gfx1030_neural_k4v_cycle_cap(params.speculative);
+}
+
 static bool server_greedy_backend_sampling_eligible(const common_params_sampling & sampling) {
     if (sampling.samplers.empty() || sampling.samplers.back() != COMMON_SAMPLER_TYPE_TEMPERATURE) {
         return false;
@@ -1034,6 +1058,7 @@ private:
     // use server_context methods instead
 
     common_params params_base;
+    int32_t gfx1030_neural_k4v_cycle_cap = -1;
 
     // note: keep these alive - they determine the lifetime of the model, context, etc.
     common_init_result_ptr llama_init;
@@ -1357,6 +1382,17 @@ private:
         }
 
         vocab = llama_model_get_vocab(model_tgt);
+
+        gfx1030_neural_k4v_cycle_cap = server_gfx1030_neural_k4v_cycle_cap(params_base);
+        if (gfx1030_neural_k4v_cycle_cap > 0) {
+            const bool is_mtp = std::find(params_base.speculative.types.begin(),
+                                          params_base.speculative.types.end(),
+                                          COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params_base.speculative.types.end();
+            SRV_INF("capping automatic gfx1030 TP4 %s+K4V cycles at %d draft tokens "
+                    "(configured K4V m=%u); explicit request speculative.n_max overrides\n",
+                    is_mtp ? "MTP" : "DFlash", gfx1030_neural_k4v_cycle_cap,
+                    params_base.speculative.ngram_map_k4v.size_m);
+        }
 
         needs_reeval = llama_model_is_recurrent(model_tgt) || llama_model_is_hybrid(model_tgt);
         n_parallel_user = params_base.n_parallel;
@@ -2108,6 +2144,10 @@ private:
 
         // initialize samplers
         if (task.need_sampling()) {
+            if (task.params.speculative_n_max < 0 && gfx1030_neural_k4v_cycle_cap > 0) {
+                task.params.speculative_n_max = gfx1030_neural_k4v_cycle_cap;
+            }
+
             const auto auto_backend_sampling_mode = !task.params.backend_sampling_set &&
                 !task.params.sampling.backend_sampling &&
                 (task.params.speculative_n_max < 0 ||
