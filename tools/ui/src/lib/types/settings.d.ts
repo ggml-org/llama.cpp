@@ -26,8 +26,10 @@ export interface SettingsEntry {
 	defaultValue: SettingsConfigValue;
 	type: SettingsFieldType;
 	options?: Array<{ value: string; label: string; icon: Component }>;
-	/** For SELECT fields whose options are computed at render time; receives the live model list. */
-	optionsGenerator?: (models: ModelOption[]) => Array<{ value: string; label: string }>;
+	/** For MODEL_SELECT fields: entry above the model list that stores its own value, e.g. an automatic choice. */
+	emptyOption?: { label: string; value: string };
+	/** For MODEL_SELECT fields: restricts the model list, e.g. to audio-capable models. */
+	modelFilter?: (model: ModelOption) => boolean;
 	/** Options rendered for RADIO fields. Each entry maps a `value` (the radio's selected value) to the underlying config `key` whose boolean state mirrors it. */
 	radioOptions?: Array<{ value: string; label: string; key: string; isExperimental?: boolean }>;
 	isExperimental?: boolean;
@@ -67,8 +69,10 @@ export interface SettingsFieldConfig {
 	dependsOn?: string;
 	help?: string;
 	options?: Array<{ value: string; label: string; icon?: typeof Icon }>;
-	/** For SELECT fields whose options are computed at render time; receives the live model list. */
-	optionsGenerator?: (models: ModelOption[]) => Array<{ value: string; label: string }>;
+	/** For MODEL_SELECT fields: entry above the model list that stores its own value, e.g. an automatic choice. */
+	emptyOption?: { label: string; value: string };
+	/** For MODEL_SELECT fields: restricts the model list, e.g. to audio-capable models. */
+	modelFilter?: (model: ModelOption) => boolean;
 	/** Options rendered for RADIO fields. Each entry maps a `value` (the radio's selected value) to the underlying config `key` whose boolean state mirrors it. */
 	radioOptions?: Array<{ value: string; label: string; key: string; isExperimental?: boolean }>;
 }

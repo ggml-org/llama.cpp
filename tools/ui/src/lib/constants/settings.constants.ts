@@ -123,16 +123,15 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 			{
 				defaultValue: TRANSCRIPTION_MODEL_AUTO,
 				dependsOn: SETTINGS_KEYS.AUTO_MIC_ON_EMPTY,
+				emptyOption: {
+					label: 'Auto (first loaded audio model)',
+					value: TRANSCRIPTION_MODEL_AUTO
+				},
 				help: 'Model used to transcribe mic input when the current model does not support audio input.',
 				key: SETTINGS_KEYS.TRANSCRIPTION_MODEL,
 				label: 'Transcription model',
-				optionsGenerator: (models) => [
-					{ label: 'Auto (first loaded audio model)', value: TRANSCRIPTION_MODEL_AUTO },
-					...models
-						.filter((m) => m.modalities?.audio)
-						.map((m) => ({ label: m.name, value: m.model }))
-				],
-				type: SettingsFieldType.SELECT
+				modelFilter: (model) => model.modalities?.audio ?? false,
+				type: SettingsFieldType.MODEL_SELECT
 			},
 			{
 				defaultValue: false,
@@ -682,6 +681,7 @@ function toSettingsSection(section: SettingsSectionEntry): SettingsSection {
 			.filter((s) => s.standaloneField !== false)
 			.map((s) => ({
 				dependsOn: s.dependsOn,
+				emptyOption: s.emptyOption,
 				help: s.help,
 				isExperimental: s.isExperimental,
 				isPositiveInteger: s.isPositiveInteger,
@@ -690,8 +690,8 @@ function toSettingsSection(section: SettingsSectionEntry): SettingsSection {
 				label: s.label,
 				max: s.max,
 				min: s.min,
+				modelFilter: s.modelFilter,
 				options: s.options as SettingsFieldConfig['options'],
-				optionsGenerator: s.optionsGenerator,
 				placeholder: s.placeholder,
 				radioOptions: s.radioOptions,
 				type: s.type
