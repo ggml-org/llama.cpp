@@ -319,11 +319,48 @@ struct block_tq2_0_packed16
     float16_t d;
 };
 
+struct block_tq2_0_packed32
+{
+    uint32_t qs[QUANT_K_TQ2_0/4/4];
+    float16_t d;
+};
+
 #if defined(DATA_A_TQ2_0)
 #define QUANT_K QUANT_K_TQ2_0
 #define QUANT_R 1
 #define A_TYPE block_tq2_0
 #define A_TYPE_PACKED16 block_tq2_0_packed16
+#define A_TYPE_PACKED32 block_tq2_0_packed32
+#define DATA_A_QUANT_K
+#endif
+
+#define QUANT_K_TQ1_0 256
+
+// ternary (BitNet/TriLM): 5 trits per byte in qs[48] + 4 trits per byte in qh[4].
+// Each byte packs 5 (or 4 for qh) base-3 digits; trit l is extracted by
+//   q = byte * pow3[l]  (uint8 wrap)
+//   xi = (q * 3) >> 8   (0, 1, or 2)
+//   w = (xi - 1) * d    (-1, 0, +1 scaled by d)
+// Block layout: { u8 qs[48]; u8 qh[4]; f16 d; } = 54 bytes per 256 elements.
+struct block_tq1_0
+{
+    uint8_t qs[48];
+    uint8_t qh[4];
+    float16_t d;
+};
+
+struct block_tq1_0_packed16
+{
+    uint16_t qs[48/2];
+    uint16_t qh[4/2];
+    float16_t d;
+};
+
+#if defined(DATA_A_TQ1_0)
+#define QUANT_K QUANT_K_TQ1_0
+#define QUANT_R 1
+#define A_TYPE block_tq1_0
+#define A_TYPE_PACKED16 block_tq1_0_packed16
 #define DATA_A_QUANT_K
 #endif
 

@@ -285,6 +285,59 @@ f16vec4 dequantFuncTQ2_0_v(const in decodeBufTQ2_0 bl, const in uint blockCoords
     return bl.block.d * (f16vec4(q) - f16vec4(1.0));
 }
 
+layout(buffer_reference, std430, buffer_reference_align = 2) buffer decodeBufTQ1_0 {
+   block_tq1_0 block;
+};
+
+float16_t dequantFuncTQ1_0(const in decodeBufTQ1_0 bl, const in uint blockCoords[2], const in uint coordInBlock[2])
+{
+    const uint idx = coordInBlock[1];
+    uint byte_val, trit;
+    if (idx < 160u) {
+        byte_val = uint(bl.block.qs[idx % 32u]);
+        trit = idx / 32u;
+    } else if (idx < 240u) {
+        uint loc = idx - 160u;
+        byte_val = uint(bl.block.qs[32u + loc % 16u]);
+        trit = loc / 16u;
+    } else {
+        uint loc = idx - 240u;
+        byte_val = uint(bl.block.qh[loc % 4u]);
+        trit = loc / 4u;
+    }
+    uint p3 = (trit == 0u) ? 1u : (trit == 1u) ? 3u : (trit == 2u) ? 9u : (trit == 3u) ? 27u : 81u;
+    uint q = (byte_val * p3) & 0xFFu;
+    uint xi = (q * 3u) >> 8u;
+    return bl.block.d * (float16_t(int(xi)) - float16_t(1.0));
+}
+
+f16vec4 dequantFuncTQ1_0_v(const in decodeBufTQ1_0 bl, const in uint blockCoords[2], const in uint coordInBlock[2])
+{
+    const uint idx = coordInBlock[1];
+    f16vec4 result;
+    for (int p = 0; p < 4; ++p) {
+        uint e = idx + p;
+        uint byte_val, trit;
+        if (e < 160u) {
+            byte_val = uint(bl.block.qs[e % 32u]);
+            trit = e / 32u;
+        } else if (e < 240u) {
+            uint loc = e - 160u;
+            byte_val = uint(bl.block.qs[32u + loc % 16u]);
+            trit = loc / 16u;
+        } else {
+            uint loc = e - 240u;
+            byte_val = uint(bl.block.qh[loc % 4u]);
+            trit = loc / 4u;
+        }
+        uint p3 = (trit == 0u) ? 1u : (trit == 1u) ? 3u : (trit == 2u) ? 9u : (trit == 3u) ? 27u : 81u;
+        uint q = (byte_val * p3) & 0xFFu;
+        uint xi = (q * 3u) >> 8u;
+        result[p] = bl.block.d * (float16_t(int(xi)) - float16_t(1.0));
+    }
+    return result;
+}
+
 layout(buffer_reference, std430, buffer_reference_align = 4) buffer decodeBufQ2_K {
    block_q2_K block;
 };
@@ -1409,6 +1462,9 @@ f16vec4 dequantFuncNVFP4_v(const in decodeBufNVFP4 bl, const in uint blockCoords
 #elif defined(DATA_A_TQ2_0)
 #define dequantFuncA dequantFuncTQ2_0
 #define dequantFuncA_v dequantFuncTQ2_0_v
+#elif defined(DATA_A_TQ1_0)
+#define dequantFuncA dequantFuncTQ1_0
+#define dequantFuncA_v dequantFuncTQ1_0_v
 #elif defined(DATA_A_Q2_K)
 #define dequantFuncA dequantFuncQ2_K
 #define dequantFuncA_v dequantFuncQ2_K_v

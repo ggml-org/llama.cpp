@@ -1,0 +1,44 @@
+#version 450
+
+#include "dequant_head.glsl"
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout (binding = 0) readonly buffer A {A_TYPE data_a[];};
+layout (binding = 1) writeonly buffer D {D_TYPE data_b[];};
+
+void main() {
+    [[unroll]] for (uint wgy = 0; wgy < 256; wgy++) {
+        const uint i = gl_WorkGroupID.x * 256 + wgy;
+        if (i >= p.nel / QUANT_K) {
+            return;
+        }
+
+        const uint tid = gl_LocalInvocationID.x;
+        // 64 threads * 4 elements = 256 elements per block
+        const uint base = tid * 4;
+
+        const FLOAT_TYPE d = FLOAT_TYPE(data_a[i].d);
+
+        [[unroll]] for (uint e = 0; e < 4; ++e) {
+            uint idx = base + e;
+            uint byte_val, trit;
+            if (idx < 160u) {
+                byte_val = uint(data_a[i].qs[idx % 32u]);
+                trit = idx / 32u;
+            } else if (idx < 240u) {
+                uint loc = idx - 160u;
+                byte_val = uint(data_a[i].qs[32u + loc % 16u]);
+                trit = loc / 16u;
+            } else {
+                uint loc = idx - 240u;
+                byte_val = uint(data_a[i].qh[loc % 4u]);
+                trit = loc / 4u;
+            }
+            uint p3 = (trit == 0u) ? 1u : (trit == 1u) ? 3u : (trit == 2u) ? 9u : (trit == 3u) ? 27u : 81u;
+            uint q = (byte_val * p3) & 0xFFu;
+            uint xi = (q * 3u) >> 8u;
+            data_b[i * QUANT_K + idx] = D_TYPE(d * FLOAT_TYPE(int(xi) - 1));
+        }
+    }
+}

@@ -213,6 +213,39 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
 
             const uint k_pair = row * LOAD_VEC_A / 2;
             store_a(col, k_pair, FLOAT_TYPEV2(v.xy));
+#elif defined(DATA_A_TQ1_0)
+            const uint idx = pos_a + col * p.stride_a / LOAD_VEC_A + row;
+
+            const uint ib = idx / (QUANT_K / LOAD_VEC_A);
+            const uint iqs = (idx % (QUANT_K / LOAD_VEC_A)) * LOAD_VEC_A;
+
+            const float d = float(data_a[ib].d);
+
+            // Extract trits for elements iqs and iqs+1
+            vec2 v;
+            for (int p = 0; p < 2; ++p) {
+                uint e = iqs + p;
+                uint byte_val, trit;
+                if (e < 160u) {
+                    byte_val = uint(data_a[ib].qs[e % 32u]);
+                    trit = e / 32u;
+                } else if (e < 240u) {
+                    uint loc = e - 160u;
+                    byte_val = uint(data_a[ib].qs[32u + loc % 16u]);
+                    trit = loc / 16u;
+                } else {
+                    uint loc = e - 240u;
+                    byte_val = uint(data_a[ib].qh[loc % 4u]);
+                    trit = loc / 4u;
+                }
+                uint p3 = (trit == 0u) ? 1u : (trit == 1u) ? 3u : (trit == 2u) ? 9u : (trit == 3u) ? 27u : 81u;
+                uint q = (byte_val * p3) & 0xFFu;
+                uint xi = (q * 3u) >> 8u;
+                v[p] = d * float(int(xi) - 1);
+            }
+
+            const uint k_pair = row * LOAD_VEC_A / 2;
+            store_a(col, k_pair, FLOAT_TYPEV2(v));
 #elif defined(DATA_A_Q3_K)
             const uint idx = pos_a + col * p.stride_a / LOAD_VEC_A + row;
 

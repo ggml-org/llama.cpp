@@ -622,6 +622,49 @@ vec2 get_dm(uint ib, uint a_offset) {
 }
 #endif
 
+#if defined(DATA_A_TQ1_0)
+// TQ1_0 trit extraction: each byte packs 5 base-3 digits (qs) or 4 (qh).
+// pow3 = {1, 3, 9, 27, 81, 243}
+// q = (byte * pow3[l]) & 0xFF
+// xi = (q * 3) >> 8   (0, 1, or 2)
+// w = (xi - 1) * d
+vec2 dequantize(uint ib, uint iqs, uint a_offset) {
+    // Element layout (matches ggml_vec_dot_tq1_0_q8_K_generic):
+    //   [0,160):  qs[m], trit l, m = iqs%32, l = iqs/32
+    //   [160,240): qs[32+m], trit l, m = (iqs-160)%16, l = (iqs-160)/16
+    //   [240,256): qh[j], trit l, j = (iqs-240)%4, l = (iqs-240)/4
+    // iqs is processed in pairs (iqs, iqs+1) for vec2 return.
+    const uvec3 pow3 = uvec3(1, 3, 9);
+    vec2 result;
+    for (int p = 0; p < 2; ++p) {
+        uint e = iqs + p;
+        uint byte_val, trit;
+        if (e < 160u) {
+            byte_val = uint(data_a[a_offset + ib].qs[e % 32u]);
+            trit = e / 32u;
+        } else if (e < 240u) {
+            uint loc = e - 160u;
+            byte_val = uint(data_a[a_offset + ib].qs[32u + loc % 16u]);
+            trit = loc / 16u;
+        } else {
+            uint loc = e - 240u;
+            byte_val = uint(data_a[a_offset + ib].qh[loc % 4u]);
+            trit = loc / 4u;
+        }
+        uint q = (byte_val * (1u << trit)) & 0xFFu;  // pow3[l] = 3^l, but 3^l != 1<<l!
+        // Actually pow3 = {1,3,9,27,81}. Use a lookup.
+        uint p3 = (trit == 0u) ? 1u : (trit == 1u) ? 3u : (trit == 2u) ? 9u : (trit == 3u) ? 27u : 81u;
+        q = (byte_val * p3) & 0xFFu;
+        uint xi = (q * 3u) >> 8u;
+        result[p] = float(int(xi) - 1);
+    }
+    return result;
+}
+vec2 get_dm(uint ib, uint a_offset) {
+    return vec2(float(data_a[a_offset + ib].d), 0);
+}
+#endif
+
 #if defined(DATA_A_Q3_K)
 vec2 dequantize(uint ib, uint iqs, uint a_offset) {
     iqs /= 2;
