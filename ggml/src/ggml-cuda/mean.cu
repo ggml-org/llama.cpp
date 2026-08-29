@@ -4,6 +4,9 @@
 #ifdef GGML_CUDA_USE_CUB
 #include <cub/cub.cuh>
 using namespace cub;
+#elif defined(GGML_USE_HIP)
+#include <hipcub/hipcub.hpp>
+using namespace hipcub;
 #endif  // GGML_CUDA_USE_CUB
 
 template <typename T> __global__ void divide_by_count(T * result, size_t count) {
@@ -24,13 +27,13 @@ void ggml_cuda_op_mean(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const int64_t nrows = ggml_nrows(src0);
 
 // Special case for reducing vectors
-#ifdef GGML_CUDA_USE_CUB
-#ifdef USE_CUDA_GRAPH
+#if defined(GGML_CUDA_USE_CUB) || defined(GGML_USE_HIP)
+#if defined(USE_CUDA_GRAPH) && !defined(GGML_USE_HIP)
     cudaStreamCaptureStatus iscapturing;
     CUDA_CHECK(cudaStreamIsCapturing(stream, &iscapturing));
 #endif // USE_CUDA_GRAPH
     if ((nrows == 1) &&
-#ifdef USE_CUDA_GRAPH
+#if defined(USE_CUDA_GRAPH) && !defined(GGML_USE_HIP)
             // Determine if CUDA graphs are effectively disabled for this context
             // (no graph instance exists and we're not capturing, OR graphs are explicitly enabled)
             (((ncols > 65536) &&
@@ -47,10 +50,10 @@ void ggml_cuda_op_mean(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
         size_t           tmp_size = 0;
         ggml_cuda_pool & pool     = ctx.pool();
 
-        DeviceReduce::Sum(nullptr, tmp_size, src0_d, dst_d, ncols, stream);
+        CUDA_CHECK(DeviceReduce::Sum(nullptr, tmp_size, src0_d, dst_d, ncols, stream));
 
         ggml_cuda_pool_alloc<uint8_t> tmp_alloc(pool, tmp_size);
-        DeviceReduce::Sum(tmp_alloc.ptr, tmp_size, src0_d, dst_d, ncols, stream);
+        CUDA_CHECK(DeviceReduce::Sum(tmp_alloc.ptr, tmp_size, src0_d, dst_d, ncols, stream));
 
         // Divide by ncols
         divide_by_count<float><<<1, 1, 0, stream>>>(dst_d, ncols);
