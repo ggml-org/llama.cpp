@@ -83,8 +83,8 @@ layout (constant_id = 7) const uint TM = 16;
 layout (constant_id = 8) const uint TN = 16;
 layout (constant_id = 9) const uint TK = 16;
 layout (constant_id = 10) const uint WARP = 32;
-layout (constant_id = 11) const uint CM_ARCH = 0;  // vk_device_architecture (ggml-vulkan.cpp)
-#define CM_ARCH_AMD_RDNA4 5u                        // must match enum vk_device_architecture
+layout (constant_id = 11) const uint DEVICE_ARCH = 0; // vk_device_architecture (ggml-vulkan.cpp)
+#define VK_ARCH_AMD_RDNA4 5u
 
 #define BK 32
 #ifdef MUL_MAT_ID
@@ -129,7 +129,7 @@ const bool USE_MAGIC_BIAS = WARP != 32;
 // Accumulator row for element e: RDNA4 blocked, RDNA3/3.5 interleaved.
 uint cm_elem_row(uint e) {
     const uint row_half = gl_SubgroupInvocationID / TN;
-    return (CM_ARCH == CM_ARCH_AMD_RDNA4) ? (e + row_half * CM_ELEMS) : (row_half + 2u * e);
+    return (DEVICE_ARCH == VK_ARCH_AMD_RDNA4) ? (e + row_half * CM_ELEMS) : (row_half + 2u * e);
 }
 
 // min_term = asymmetric-quant min*b_sum correction (0 for symmetric types).
@@ -216,7 +216,7 @@ void main() {
     const uint warp_r = warp_i % (BM / WM);
     const uint warp_c = warp_i / (BM / WM);
 
-    const uint elem_col0 = gl_SubgroupInvocationID % TN;  // constant per lane
+    const uint elem_col0 = gl_SubgroupInvocationID % TN;
 
     const uint loadr_a = gl_LocalInvocationID.x % (BK / LOAD_VEC_A);
     const uint loadc_a = gl_LocalInvocationID.x / (BK / LOAD_VEC_A);
