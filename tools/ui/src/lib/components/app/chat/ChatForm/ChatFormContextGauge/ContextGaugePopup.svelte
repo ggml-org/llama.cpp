@@ -123,11 +123,11 @@
 
 			{#if showCompactButton}
 				<Button
-					variant="outline"
-					size="sm"
 					class="w-full gap-1.5"
 					disabled={isCompactDisabled}
 					onclick={handleCompact}
+					size="sm"
+					variant="outline"
 				>
 					<FoldVertical class="h-3.5 w-3.5" />
 					Compact conversation
