@@ -11,6 +11,7 @@ import { API_MODELS, MODEL_ID, type ModelSidecar, sidecarFromFileToken } from '$
 import { ServerModelStatus } from '$lib/enums';
 import type { ParsedModelId } from '$lib/types/models';
 import {
+	apiDelete,
 	apiFetch,
 	apiPost,
 	extractSseDataPayload,
@@ -44,6 +45,46 @@ export class ModelsService {
 		const tag = sidecar ? `${quant}-${sidecar}` : quant;
 
 		return `${repoId}:${tag}`;
+	}
+
+	/**
+	 * Cancel an in-flight download or remove a previously downloaded/failed
+	 * entry from the server's model cache (ROUTER mode only).
+	 *
+	 * Sends DELETE `/models?model=<hfRepoWithTag>`:
+	 * - while a download is running, the child subprocess is asked to exit
+	 *   and any partial `.tmp` files are removed;
+	 * - once the entry has finished downloading or has failed, the cached
+	 *   files are removed from disk.
+	 *
+	 * @param hfRepoWithTag - HuggingFace repo id in the same `<repo>:<tag>`
+	 *                        format returned by `buildDownloadTag`.
+	 * @returns Server acknowledgement containing the success flag
+	 */
+	static async cancelDownload(hfRepoWithTag: string): Promise<ApiModelsDownloadResponse> {
+		return apiDelete<ApiModelsDownloadResponse>(API_MODELS.DELETE, {
+			model: hfRepoWithTag
+		});
+	}
+
+	/**
+	 * Trigger a model download from HuggingFace (ROUTER mode only).
+	 *
+	 * Sends a POST request to `/models`. The response returns immediately; the
+	 * actual download runs in the background and tracks progress through
+	 * `/models/sse`. The server picks the file that matches the supplied tag
+	 * (when present) and additionally pulls mmproj / draft sidecar weights as
+	 * appropriate for the model.
+	 *
+	 * @param hfRepoWithTag - HuggingFace repo id, optionally suffixed with
+	 *                        `:<tag>` (e.g. `ggml-org/gemma-3-4b-it-GGUF:Q4_K_M`
+	 *                        or `:IQ1_M-mtp` for an embedded-draft GGUF).
+	 * @returns Server acknowledgement containing the success flag
+	 */
+	static async downloadModel(hfRepoWithTag: string): Promise<ApiModelsDownloadResponse> {
+		const payload: ApiModelsDownloadRequest = { model: hfRepoWithTag };
+
+		return apiPost<ApiModelsDownloadResponse>(API_MODELS.DOWNLOAD, payload);
 	}
 
 	/**
