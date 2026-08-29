@@ -18,6 +18,7 @@
 #include "htp-ctx.h"
 #include "htp-ops.h"
 #include "htp-ops.h"
+#include "htp-tensor.h"
 
 // Redefined the rope type constants as we can't include ggml.h
 #define HTP_ROPE_TYPE_NORMAL 0
@@ -52,6 +53,7 @@
 
 struct htp_rope_context {
     int32_t n_dims;
+    int32_t n_offs;
     int32_t mode;
     int32_t n_ctx_orig;
     int32_t sections[4];
@@ -404,32 +406,40 @@ static inline void hvx_rope_f32_aa(float * restrict dst, const float * restrict 
 
 static void inline rope_basic_f32(struct htp_rope_context * rctx, uint8_t * restrict dst, uint8_t * restrict src,
                    uint32_t nr, uint32_t ne0, const float * restrict theta_cache) {
+    const uint32_t n_offs = rctx->n_offs; // VLEN-aligned (enforced by supports_op)
     #pragma unroll(4)
     for (uint32_t i = 0; i < nr; i++) {
         float * d = (float *) (dst + i * rctx->dst_row_size_aligned);
         float * s = (float *) (src + i * rctx->src0_row_size_aligned);
 
-        hvx_rope_f32_aa(d, s, rctx->n_dims, theta_cache);
+        hvx_rope_f32_aa(d + n_offs, s + n_offs, rctx->n_dims, theta_cache);
 
         // fill the remain channels with data from src tensor
-        if (rctx->n_dims < ne0) {
-            hvx_copy_f32_uu((uint8_t *)(d + rctx->n_dims), (uint8_t *)(s + rctx->n_dims), ne0 - rctx->n_dims);
+        if (n_offs > 0) {
+            hvx_copy_f32_uu((uint8_t *) d, (uint8_t *) s, n_offs);
+        }
+        if (n_offs + rctx->n_dims < ne0) {
+            hvx_copy_f32_uu((uint8_t *)(d + n_offs + rctx->n_dims), (uint8_t *)(s + n_offs + rctx->n_dims), ne0 - n_offs - rctx->n_dims);
         }
     }
 }
 
 static void inline rope_neox_f32(struct htp_rope_context * rctx, uint8_t * restrict dst, uint8_t * restrict src,
                    uint32_t nr, uint32_t ne0, const float * restrict theta_cache) {
+    const uint32_t n_offs = rctx->n_offs; // VLEN-aligned (enforced by supports_op)
     #pragma unroll(4)
     for (uint32_t i = 0; i < nr; i++) {
         float * d = (float *) (dst + i * rctx->dst_row_size_aligned);
         float * s = (float *) (src + i * rctx->src0_row_size_aligned);
 
-        hvx_rope_neox_f32_aa(d, s, rctx->n_dims, theta_cache);
+        hvx_rope_neox_f32_aa(d + n_offs, s + n_offs, rctx->n_dims, theta_cache);
 
         // fill the remain channels with data from src tensor
-        if (rctx->n_dims < ne0) {
-            hvx_copy_f32_uu((uint8_t *)(d + rctx->n_dims), (uint8_t *)(s + rctx->n_dims), ne0 - rctx->n_dims);
+        if (n_offs > 0) {
+            hvx_copy_f32_uu((uint8_t *) d, (uint8_t *) s, n_offs);
+        }
+        if (n_offs + rctx->n_dims < ne0) {
+            hvx_copy_f32_uu((uint8_t *)(d + n_offs + rctx->n_dims), (uint8_t *)(s + n_offs + rctx->n_dims), ne0 - n_offs - rctx->n_dims);
         }
     }
 }
@@ -672,6 +682,7 @@ static int execute_op_rope_f32(struct htp_ops_context * octx) {
     rctx.n_dims     = ((const int32_t *) op_params)[1];
     rctx.mode       = ((const int32_t *) op_params)[2];
     rctx.n_ctx_orig = ((const int32_t *) op_params)[4];
+    rctx.n_offs     = ((const int32_t *) op_params)[15];
 
     memcpy(&rctx.freq_base,   (int32_t *) op_params + 5,  sizeof(float));
     memcpy(&rctx.freq_scale,  (int32_t *) op_params + 6,  sizeof(float));
@@ -712,17 +723,11 @@ static int execute_op_rope_f32(struct htp_ops_context * octx) {
 }
 
 int op_rope(struct htp_ops_context * octx) {
-    int err = HTP_STATUS_OK;
-
     switch (octx->src[0]->type) {
         case HTP_TYPE_F32:
-            err = execute_op_rope_f32(octx);
-            break;
+            return execute_op_rope_f32(octx);
 
         default:
-            err = HTP_STATUS_NO_SUPPORT;
-            break;
+            return HTP_STATUS_NO_SUPPORT;
     }
-
-    return err;
 }

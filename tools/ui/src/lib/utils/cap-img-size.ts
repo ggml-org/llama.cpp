@@ -1,6 +1,5 @@
-import { MEGAPIXELS_TO_PIXELS } from '$lib/constants/image-size';
-import { BASE64_IMAGE_URI_REGEX } from '$lib/constants/uri-template';
 import { getJpegOrientationFromDataURL, isJpegMimeType } from './jpeg-orientation';
+import { BASE64_IMAGE_URI_REGEX, IMAGE } from '$lib/constants';
 import { MimeTypeImage } from '$lib/enums';
 
 /**
@@ -37,7 +36,6 @@ export function capImageDataURLSize(
 			const orientation = isJpegMimeType(mimeType)
 				? getJpegOrientationFromDataURL(base64UrlImage)
 				: 1;
-
 			const img = new Image();
 
 			img.onload = () => {
@@ -52,10 +50,11 @@ export function capImageDataURLSize(
 					const targetWidth = img.naturalWidth;
 					const targetHeight = img.naturalHeight;
 					const totalPixels = targetWidth * targetHeight;
-					const maxPixels = Math.floor(maxMegapixels * MEGAPIXELS_TO_PIXELS);
+					const maxPixels = Math.floor(maxMegapixels * IMAGE.MEGAPIXELS_TO_PIXELS);
 
 					if (maxPixels > 0 && totalPixels > maxPixels) {
 						const scaleFactor = Math.sqrt(maxPixels / totalPixels);
+
 						canvas.width = Math.floor(targetWidth * scaleFactor);
 						canvas.height = Math.floor(targetHeight * scaleFactor);
 					} else if (orientation > 1) {
@@ -81,6 +80,7 @@ export function capImageDataURLSize(
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			const errorMessage = `Error resizing image: ${message}`;
+
 			console.error(errorMessage, error);
 			reject(new Error(errorMessage));
 		}

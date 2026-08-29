@@ -1,24 +1,8 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
-	import { beforeNavigate, afterNavigate } from '$app/navigation';
 	import { ChatMessage, ChatMessageUserPending } from '$lib/components/app';
-	import { setChatActionsContext } from '$lib/contexts';
 	import { MessageRole } from '$lib/enums';
-	import { chatStore } from '$lib/stores/chat.svelte';
-	import {
-		chatPendingMessageContent,
-		chatPendingMessageExtras,
-		chatClearPendingMessage,
-		chatInjectPendingMessage
-	} from '$lib/stores/chat.svelte';
-	import { conversationsStore, activeConversation } from '$lib/stores/conversations.svelte';
-	import { config } from '$lib/stores/settings.svelte';
-	import {
-		agenticPendingSteeringMessageContent,
-		agenticPendingSteeringMessageExtras,
-		agenticClearSteeringMessage,
-		agenticInjectSteeringMessage
-	} from '$lib/stores/agentic.svelte';
+	import { agenticStore, chatStore, conversationsStore, settingsStore } from '$lib/stores';
+	import type { ChatMessageActions } from '$lib/types';
 	import {
 		buildSiblingInfoMap,
 		copyToClipboard,
@@ -32,16 +16,19 @@
 		onMessagesReady?: (messageCount: number) => void;
 	}
 
-	let { messages = [], onUserAction, onMessagesReady }: Props = $props();
+	let { messages = [], onMessagesReady, onUserAction }: Props = $props();
 
 	let allConversationMessages = $state<DatabaseMessage[]>([]);
-	let isVisible = $state(false);
-	let previousConversationId = $state<string | null>(null);
-	let previousRouteId = $state<string | null>(null);
 
-	const currentConfig = config();
+	const currentConfig = settingsStore.config;
 
-	setChatActionsContext({
+	const chatActions: ChatMessageActions = {
+		continueAssistantMessage: async (message: DatabaseMessage) => {
+			onUserAction?.();
+			await chatStore.continueAssistantMessage(message.id);
+			refreshAllMessages();
+		},
+
 		copy: async (message: DatabaseMessage) => {
 			const asPlainText = Boolean(currentConfig.copyTextAttachmentsAsPlainText);
 			const clipboardContent = formatMessageForClipboard(
@@ -49,6 +36,7 @@
 				message.extra,
 				asPlainText
 			);
+
 			await copyToClipboard(clipboardContent, 'Message copied to clipboard');
 		},
 
@@ -57,8 +45,14 @@
 			refreshAllMessages();
 		},
 
-		navigateToSibling: async (siblingId: string) => {
-			await conversationsStore.navigateToSibling(siblingId);
+		editUserMessagePreserveResponses: async (
+			message: DatabaseMessage,
+			newContent: string,
+			newExtras?: DatabaseMessageExtra[]
+		) => {
+			onUserAction?.();
+			await chatStore.editUserMessagePreserveResponses(message.id, newContent, newExtras);
+			refreshAllMessages();
 		},
 
 		editWithBranching: async (
@@ -81,38 +75,26 @@
 			refreshAllMessages();
 		},
 
-		editUserMessagePreserveResponses: async (
+		forkConversation: async (
 			message: DatabaseMessage,
-			newContent: string,
-			newExtras?: DatabaseMessageExtra[]
+			options: { name: string; includeAttachments: boolean }
 		) => {
-			onUserAction?.();
-			await chatStore.editUserMessagePreserveResponses(message.id, newContent, newExtras);
-			refreshAllMessages();
+			await conversationsStore.forkConversation(message.id, options);
+		},
+
+		navigateToSibling: async (siblingId: string) => {
+			await conversationsStore.navigateToSibling(siblingId);
 		},
 
 		regenerateWithBranching: async (message: DatabaseMessage, modelOverride?: string) => {
 			onUserAction?.();
 			await chatStore.regenerateMessageWithBranching(message.id, modelOverride);
 			refreshAllMessages();
-		},
-
-		continueAssistantMessage: async (message: DatabaseMessage) => {
-			onUserAction?.();
-			await chatStore.continueAssistantMessage(message.id);
-			refreshAllMessages();
-		},
-
-		forkConversation: async (
-			message: DatabaseMessage,
-			options: { name: string; includeAttachments: boolean }
-		) => {
-			await conversationsStore.forkConversation(message.id, options);
 		}
-	});
+	};
 
 	function refreshAllMessages() {
-		const conversation = activeConversation();
+		const conversation = conversationsStore.activeConversation;
 
 		if (conversation) {
 			conversationsStore.getConversationMessages(conversation.id).then((messages) => {
@@ -123,26 +105,10 @@
 		}
 	}
 
-	// Track conversation changes to trigger transition even on same route
+	// Refresh messages whenever the active conversation changes
 	$effect(() => {
-		const conversation = activeConversation();
-		const currentId = conversation?.id ?? null;
-
-		if (currentId !== previousConversationId && previousConversationId !== null) {
-			// Conversation changed - trigger fade out/in
-			isVisible = false;
-			requestAnimationFrame(() => {
-				refreshAllMessages();
-				previousConversationId = currentId;
-				requestAnimationFrame(() => {
-					isVisible = true;
-				});
-			});
-		} else {
-			previousConversationId = currentId;
-			if (conversation) {
-				refreshAllMessages();
-			}
+		if (conversationsStore.activeConversation) {
+			refreshAllMessages();
 		}
 	});
 
@@ -150,23 +116,6 @@
 		void allConversationMessages;
 
 		onMessagesReady?.(displayMessages.length);
-	});
-
-	onMount(() => {
-		requestAnimationFrame(() => {
-			isVisible = true;
-		});
-	});
-
-	beforeNavigate((navigation) => {
-		isVisible = false;
-		previousRouteId = navigation.from?.route.id ?? null;
-	});
-
-	afterNavigate(() => {
-		requestAnimationFrame(() => {
-			isVisible = true;
-		});
 	});
 
 	let siblingInfoByMessageId = $derived(buildSiblingInfoMap(allConversationMessages));
@@ -179,7 +128,6 @@
 		const filteredMessages = currentConfig.showSystemMessage
 			? messages
 			: messages.filter((msg) => msg.type !== MessageRole.SYSTEM);
-
 		// Build display entries, grouping agentic sessions into single entries.
 		// An agentic session = assistant(with tool_calls) → tool → assistant → tool → ... → assistant(final)
 		const result: Array<{
@@ -198,6 +146,7 @@
 			if (msg.role === MessageRole.TOOL) continue;
 
 			const toolMessages: DatabaseMessage[] = [];
+
 			if (msg.role === MessageRole.ASSISTANT && hasAgenticContent(msg)) {
 				let j = i + 1;
 
@@ -228,27 +177,29 @@
 			}
 
 			const siblingInfo = siblingInfoByMessageId.get(msg.id) ?? {
+				currentIndex: 0,
 				message: msg,
 				siblingIds: [msg.id],
-				currentIndex: 0,
 				totalSiblings: 1
 			};
 
 			result.push({
-				message: msg,
-				toolMessages,
 				isLastAssistantMessage: false,
 				isLastUserMessage: false,
+				message: msg,
 				nextAssistantMessage: null,
-				siblingInfo
+				siblingInfo,
+				toolMessages
 			});
 		}
 
 		let lastAssistantIdx = -1;
+
 		for (let i = result.length - 1; i >= 0; i--) {
 			if (result[i].message.role === MessageRole.ASSISTANT) {
 				result[i].isLastAssistantMessage = true;
 				lastAssistantIdx = i;
+
 				break;
 			}
 		}
@@ -263,6 +214,7 @@
 			for (let j = i + 1; j < result.length; j++) {
 				if (result[j].message.role === MessageRole.ASSISTANT) {
 					result[i].nextAssistantMessage = result[j].message;
+
 					break;
 				}
 			}
@@ -272,49 +224,47 @@
 	});
 </script>
 
-<div
-	class="transition-opacity duration-500 ease-out
-		{isVisible ? 'opacity-100' : 'opacity-0'}
-		{previousRouteId === '/(chat)/chat/[id]' ? '' : 'delay-300'}"
->
-	{#each displayMessages as { message, toolMessages, isLastAssistantMessage, isLastUserMessage, nextAssistantMessage, siblingInfo } (message.id)}
+<div>
+	{#each displayMessages as { isLastAssistantMessage, isLastUserMessage, message, nextAssistantMessage, siblingInfo, toolMessages } (message.id)}
 		<ChatMessage
+			{chatActions}
 			class="mx-auto mt-12 w-full max-w-3xl"
-			{message}
-			{toolMessages}
 			{isLastAssistantMessage}
 			{isLastUserMessage}
+			{message}
 			{nextAssistantMessage}
 			{siblingInfo}
+			{toolMessages}
 		/>
 	{/each}
 
-	{#if activeConversation() && agenticPendingSteeringMessageContent(activeConversation()!.id)}
-		{@const convId = activeConversation()!.id}
-		{@const pendingContent = agenticPendingSteeringMessageContent(convId)}
+	{#if conversationsStore.activeConversation && agenticStore.getPendingSteeringMessageContent(conversationsStore.activeConversation!.id)}
+		{@const convId = conversationsStore.activeConversation!.id}
+		{@const pendingContent = agenticStore.getPendingSteeringMessageContent(convId)}
 
 		{#if pendingContent}
 			<ChatMessageUserPending
 				class="mx-auto mt-12 w-full max-w-[48rem]"
 				content={pendingContent}
-				extras={agenticPendingSteeringMessageExtras(convId)}
+				extras={agenticStore.getPendingSteeringMessageExtras(convId)}
+				onDelete={() => agenticStore.clearSteeringMessage(convId)}
+				onEdit={(newContent, extras) =>
+					agenticStore.injectSteeringMessage(convId, newContent, extras)}
 				onSendImmediately={() => chatStore.abortCurrentFlow(convId)}
-				onEdit={(newContent, extras) => agenticInjectSteeringMessage(convId, newContent, extras)}
-				onDelete={() => agenticClearSteeringMessage(convId)}
 			/>
 		{/if}
-	{:else if activeConversation() && chatPendingMessageContent(activeConversation()!.id)}
-		{@const convId = activeConversation()!.id}
-		{@const pendingContent = chatPendingMessageContent(convId)}
+	{:else if conversationsStore.activeConversation && chatStore.getPendingMessageContent(conversationsStore.activeConversation!.id)}
+		{@const convId = conversationsStore.activeConversation!.id}
+		{@const pendingContent = chatStore.getPendingMessageContent(convId)}
 
 		{#if pendingContent}
 			<ChatMessageUserPending
 				class="mx-auto mt-12 w-full max-w-[48rem]"
 				content={pendingContent}
-				extras={chatPendingMessageExtras(convId)}
+				extras={chatStore.getPendingMessageExtras(convId)}
+				onDelete={() => chatStore.clearPendingMessage(convId)}
+				onEdit={(newContent, extras) => chatStore.injectPendingMessage(convId, newContent, extras)}
 				onSendImmediately={() => chatStore.abortCurrentFlow(convId)}
-				onEdit={(newContent, extras) => chatInjectPendingMessage(convId, newContent, extras)}
-				onDelete={() => chatClearPendingMessage(convId)}
 			/>
 		{/if}
 	{/if}

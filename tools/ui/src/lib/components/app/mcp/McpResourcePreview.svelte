@@ -1,17 +1,18 @@
 <script lang="ts">
-	import { FileText, Loader2, AlertCircle, Download } from '@lucide/svelte';
-	import { Button } from '$lib/components/ui/button';
-	import { mcpStore } from '$lib/stores/mcp.svelte';
-	import {
-		isImageMimeType,
-		createBase64DataUrl,
-		getResourceTextContent,
-		getResourceBlobContent,
-		downloadResourceContent
-	} from '$lib/utils';
-	import { MimeTypeApplication, MimeTypeText } from '$lib/enums';
+	import { AlertCircle, Download, FileText, Loader2 } from '@lucide/svelte';
 	import { ActionIconCopyToClipboard } from '$lib/components/app';
-	import type { MCPResourceInfo, MCPResourceContent } from '$lib/types';
+	import { Button } from '$lib/components/ui/button';
+	import { ICON_CLASS_DEFAULT } from '$lib/constants';
+	import { MimeTypeApplication, MimeTypeText } from '$lib/enums';
+	import { mcpStore } from '$lib/stores';
+	import type { MCPResourceContent, MCPResourceInfo } from '$lib/types';
+	import {
+		createBase64DataUrl,
+		downloadResourceContent,
+		getResourceBlobContent,
+		getResourceTextContent,
+		isImageMimeType
+	} from '$lib/utils';
 
 	interface Props {
 		resource: MCPResourceInfo | null;
@@ -20,7 +21,7 @@
 		class?: string;
 	}
 
-	let { resource, preloadedContent, class: className }: Props = $props();
+	let { class: className, preloadedContent, resource }: Props = $props();
 
 	let content = $state<MCPResourceContent[] | null>(null);
 	let isLoading = $state(false);
@@ -47,6 +48,7 @@
 
 		try {
 			const result = await mcpStore.readResource(uri);
+
 			if (result) {
 				content = result;
 			} else {
@@ -61,7 +63,9 @@
 
 	function handleDownload() {
 		const text = getResourceTextContent(content);
+
 		if (!text || !resource) return;
+
 		downloadResourceContent(
 			text,
 			resource.mimeType || MimeTypeText.PLAIN,
@@ -91,18 +95,18 @@
 
 			<div class="flex items-center gap-1">
 				<ActionIconCopyToClipboard
-					text={getResourceTextContent(content)}
-					canCopy={!isLoading && !!getResourceTextContent(content)}
 					ariaLabel="Copy content"
+					canCopy={!isLoading && !!getResourceTextContent(content)}
+					text={getResourceTextContent(content)}
 				/>
 
 				<Button
-					variant="ghost"
-					size="sm"
 					class="h-7 w-7 p-0"
-					onclick={handleDownload}
 					disabled={isLoading || !getResourceTextContent(content)}
+					onclick={handleDownload}
+					size="sm"
 					title="Download content"
+					variant="ghost"
 				>
 					<Download class="h-3.5 w-3.5" />
 				</Button>
@@ -131,16 +135,16 @@
 				{#each blobContent as blob (blob.uri)}
 					{#if isImageMimeType(blob.mimeType ?? MimeTypeApplication.OCTET_STREAM)}
 						<img
+							alt="Resource content"
+							class="max-w-full rounded"
 							src={createBase64DataUrl(
 								blob.mimeType ?? MimeTypeApplication.OCTET_STREAM,
 								blob.blob
 							)}
-							alt="Resource content"
-							class="max-w-full rounded"
 						/>
 					{:else}
 						<div class="flex items-center gap-2 rounded bg-muted p-2 text-sm text-muted-foreground">
-							<FileText class="h-4 w-4" />
+							<FileText class={ICON_CLASS_DEFAULT} />
 
 							<span>Binary content ({blob.mimeType || 'unknown type'})</span>
 						</div>

@@ -4,11 +4,11 @@
 #include "chat.h"
 #include "common.h"
 #include "log.h"
-#include "nlohmann/json.hpp"
 #include "peg-parser.h"
 
 #include <algorithm>
 #include <cctype>
+#include <numeric>
 #include <ostream>
 #include <sstream>
 
@@ -17,7 +17,7 @@
 #define ANSI_ORANGE "\033[1m\x1b[38;5;214m"
 #define ANSI_RED    "\033[1m\x1b[38;5;196m"
 
-using json = nlohmann::ordered_json;
+using json = common_json;
 
 namespace autoparser {
 
@@ -171,6 +171,34 @@ static std::vector<std::function<void(const common_chat_template & tmpl, autopar
               tmpl.src.find("Do not use variables.") != std::string::npos) {
               analysis.tools.format.openai_wrapper_trigger = true;
               LOG_DBG(ANSI_ORANGE "[Patch: JSON name/parameters tool instruction]\n" ANSI_RESET);
+          }
+      },
+      // Laguna (poolside) - the v4 chat template renders reasoning and tool-arg
+      // delimiters with formatting whitespace ("<think>\n", "</arg_value>\n") that
+      // the model does not emit, so the inferred delimiters carry a spurious
+      // newline and never match the model output. Trim to the bare tag. (v8
+      // renders without the whitespace, so this is a no-op there.)
+      [](const common_chat_template & tmpl, autoparser & analysis) -> void {
+          if (tmpl.src.find("laguna_glm_thinking") != std::string::npos) {
+              analysis.reasoning.start              = trim_whitespace(analysis.reasoning.start);
+              analysis.reasoning.end                = trim_whitespace(analysis.reasoning.end);
+              analysis.tools.arguments.value_prefix = trim_whitespace(analysis.tools.arguments.value_prefix);
+              analysis.tools.arguments.value_suffix = trim_whitespace(analysis.tools.arguments.value_suffix);
+              analysis.tools.arguments.separator    = trim_whitespace(analysis.tools.arguments.separator);
+              analysis.tools.arguments.tolerate_intertag_whitespace = true;
+              // The CONTROL/eot </assistant> token only halts generation when emitted as the
+              // single token; after tool calls the model can spell it out as text tokens.
+              // A literal stop string catches it either way.
+              analysis.additional_stops.push_back("</assistant>");
+              LOG_DBG(ANSI_ORANGE "[Patch: Laguna]\n" ANSI_RESET);
+          }
+      },
+      // Bailing V3
+      [](const common_chat_template & tmpl, autoparser & analysis) -> void {
+          if (tmpl.src.find("Bailing V3 chat template") != std::string::npos) {
+              analysis.tools.arguments.value_suffix = trim_whitespace(analysis.tools.arguments.value_suffix);
+              analysis.tools.arguments.tolerate_intertag_whitespace = true;
+              LOG_DBG(ANSI_ORANGE "[Patch: Bailing V3]\n" ANSI_RESET);
           }
       },
 
@@ -901,7 +929,7 @@ void analyze_tools::analyze_tool_call_format_json_native(const std::string & cle
     int  json_end       = clean_haystack.find_last_of('}');
     std::string cut     = clean_haystack.substr(json_start, json_end - json_start + 1);
     json call_struct    = json::parse(cut);
-    auto register_field = [&](const std::string & prefix, const nlohmann::detail::iteration_proxy_value<json::iterator> & subel) {
+    auto register_field = [&](const std::string & prefix, const common_json_entry & subel) {
         if (subel.value().is_string() && std::string(subel.value()).find("call0000") != std::string::npos) {
             format.id_field = !prefix.empty() ? prefix + "." + subel.key() : subel.key();
         } else if (subel.value().is_string() && std::string(subel.value()) == fun_name_needle) {

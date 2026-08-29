@@ -96,7 +96,22 @@ struct Params {
 @group(0) @binding(0)
 var<storage, read_write> src0: array<DataType>;
 
-#ifdef NO_SPLIT
+#ifdef SRC_OVERLAP
+@group(0) @binding(1)
+var<storage, read_write> dst: array<DataType>;
+
+@group(0) @binding(2)
+var<uniform> params: Params;
+
+fn a_value(base: u32) -> DataType {
+    return src0[base];
+}
+
+fn b_value(base: u32) -> DataType {
+    return src0[base];
+}
+
+#elif defined(NO_SPLIT)
 @group(0) @binding(1)
 var<storage, read_write> dst: array<DataType>;
 

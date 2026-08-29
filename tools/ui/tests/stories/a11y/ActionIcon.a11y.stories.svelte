@@ -1,16 +1,16 @@
-<script module lang="ts">
-	import { defineMeta } from '@storybook/addon-svelte-csf';
+<script lang="ts" module>
 	import { Copy } from '@lucide/svelte';
+	import { defineMeta } from '@storybook/addon-svelte-csf';
 	import ActionIcon from '$lib/components/app/actions/ActionIcon.svelte';
 	import { expect } from 'storybook/test';
 
 	const { Story } = defineMeta({
-		title: 'Components/ActionIcon/Accessibility',
 		component: ActionIcon,
 		parameters: {
 			layout: 'centered'
 		},
-		tags: ['!dev']
+		tags: ['!dev'],
+		title: 'Components/ActionIcon/Accessibility'
 	});
 </script>
 
@@ -29,6 +29,7 @@
 >
 	<div>
 		<button type="button">before</button>
-		<ActionIcon icon={Copy} tooltip="Copy" onclick={() => {}} />
+
+		<ActionIcon icon={Copy} onclick={() => {}} tooltip="Copy" />
 	</div>
 </Story>
