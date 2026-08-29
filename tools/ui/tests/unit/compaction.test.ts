@@ -158,8 +158,11 @@ describe('customCompactionModel', () => {
 		expect(customCompactionModel(true, COMPACTION.MODEL_UNSET)).toBeUndefined();
 	});
 
-	it('keeps the conversation model for a blank or non string value', () => {
+	it('keeps the conversation model for a blank value', () => {
 		expect(customCompactionModel(true, '   ')).toBeUndefined();
+	});
+
+	it('keeps the conversation model for a non string value', () => {
 		expect(customCompactionModel(true, undefined)).toBeUndefined();
 	});
 });
