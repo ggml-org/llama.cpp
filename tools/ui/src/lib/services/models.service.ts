@@ -127,11 +127,11 @@ export class ModelsService {
 
 		// strip directory path and weight extension so a bare `-m /path/file.gguf`
 		// parses like a clean repo id; the HF `org/model` form is preserved
-		let source = normalizeModelName(modelId).replace(MODEL_ID.WEIGHT_EXTENSION_RE, '');
+		let source = normalizeModelName(modelId).replace(MODEL_ID.WEIGHT_EXTENSION_REGEX, '');
 
 		// 0. Detect sidecar prefix (mtp-, dflash-, mmproj-) before any other
 		//    splitting so the inner id parses cleanly.
-		const prefixMatch = source.match(MODEL_ID.SIDECAR_PREFIX_RE);
+		const prefixMatch = source.match(MODEL_ID.SIDECAR_PREFIX_REGEX);
 
 		if (prefixMatch) {
 			result.sidecar = sidecarFromFileToken(prefixMatch[1].toLowerCase());
@@ -139,7 +139,7 @@ export class ModelsService {
 
 			// a sidecar filename's remainder may be just the quant token,
 			// e.g. `mtp-Q4_0.gguf` or `mmproj-F16.gguf`
-			if (MODEL_ID.QUANTIZATION_SEGMENT_RE.test(source)) {
+			if (MODEL_ID.QUANTIZATION_SEGMENT_REGEX.test(source)) {
 				result.quantization = source.toUpperCase();
 				source = '';
 			}
@@ -148,13 +148,13 @@ export class ModelsService {
 			//     Only strip it when the segment preceding it looks like a real quant
 			//     token, so a model literally named `MyModel-mtp` is not mistaken for a
 			//     draft one.
-			const suffixMatch = source.match(MODEL_ID.SIDECAR_SUFFIX_RE);
+			const suffixMatch = source.match(MODEL_ID.SIDECAR_SUFFIX_REGEX);
 
 			if (suffixMatch) {
 				const candidate = suffixMatch[1];
 				const headSeg = candidate.split(MODEL_ID.SEGMENT_SEPARATOR).pop();
 
-				if (headSeg && MODEL_ID.QUANTIZATION_SEGMENT_RE.test(headSeg)) {
+				if (headSeg && MODEL_ID.QUANTIZATION_SEGMENT_REGEX.test(headSeg)) {
 					result.sidecar = sidecarFromFileToken(suffixMatch[2].toLowerCase());
 					source = candidate;
 				}
@@ -191,7 +191,7 @@ export class ModelsService {
 		if (dotIdx !== MODEL_ID.NOT_FOUND && !result.quantization) {
 			const afterDot = modelStr.slice(dotIdx + 1);
 
-			if (MODEL_ID.QUANTIZATION_SEGMENT_RE.test(afterDot)) {
+			if (MODEL_ID.QUANTIZATION_SEGMENT_REGEX.test(afterDot)) {
 				result.quantization = afterDot;
 				modelStr = modelStr.slice(0, dotIdx);
 			}
@@ -206,8 +206,8 @@ export class ModelsService {
 			const last = segments[segments.length - 1];
 			const secondLast = segments.length > 2 ? segments[segments.length - 2] : null;
 
-			if (MODEL_ID.QUANTIZATION_SEGMENT_RE.test(last)) {
-				if (secondLast && MODEL_ID.CUSTOM_QUANTIZATION_PREFIX_RE.test(secondLast)) {
+			if (MODEL_ID.QUANTIZATION_SEGMENT_REGEX.test(last)) {
+				if (secondLast && MODEL_ID.CUSTOM_QUANTIZATION_PREFIX_REGEX.test(secondLast)) {
 					result.quantization = `${secondLast}-${last}`;
 					segments.splice(segments.length - 2, 2);
 				} else {
@@ -224,10 +224,10 @@ export class ModelsService {
 		for (let i = 0; i < segments.length; i++) {
 			const seg = segments[i];
 
-			if (paramsIdx === MODEL_ID.NOT_FOUND && MODEL_ID.PARAMS_RE.test(seg)) {
+			if (paramsIdx === MODEL_ID.NOT_FOUND && MODEL_ID.PARAMS_REGEX.test(seg)) {
 				paramsIdx = i;
 				result.params = seg.toUpperCase();
-			} else if (paramsIdx !== MODEL_ID.NOT_FOUND && MODEL_ID.ACTIVATED_PARAMS_RE.test(seg)) {
+			} else if (paramsIdx !== MODEL_ID.NOT_FOUND && MODEL_ID.ACTIVATED_PARAMS_REGEX.test(seg)) {
 				activatedParamsIdx = i;
 				result.activatedParams = seg.toUpperCase();
 			}

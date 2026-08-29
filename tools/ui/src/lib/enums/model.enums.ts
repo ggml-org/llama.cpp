@@ -7,7 +7,7 @@ export enum ModelModality {
 
 export enum ModelCapability {
 	REASONING = 'REASONING',
-	TOOL_USE = 'TOOL_USE'
+	TOOL_USE = 'tools'
 }
 
 /**
@@ -16,13 +16,13 @@ export enum ModelCapability {
  */
 export enum ModelDraftSidecar {
 	/** DFlash block-diffusion draft (spec-type draft-dflash). */
-	DFLASH = 'DFLASH',
+	DFLASH = 'dflash',
 	/** DSpark block-diffusion draft (spec-type draft-dspark). */
-	DSPARK = 'DSPARK',
+	DSPARK = 'dspark',
 	/** EAGLE-3 speculative draft (spec-type draft-eagle3). */
-	EAGLE3 = 'EAGLE3',
+	EAGLE3 = 'eagle3',
 	/** Multi-token-prediction draft head (spec-type draft-mtp). */
-	MTP = 'MTP'
+	MTP = 'mtp'
 }
 
 /**
@@ -31,5 +31,5 @@ export enum ModelDraftSidecar {
  */
 export enum ModelAuxSidecar {
 	/** Multimodal projector: unlocks vision and/or audio input modalities. */
-	MMPROJ = 'MMPROJ'
+	MMPROJ = 'mmproj'
 }

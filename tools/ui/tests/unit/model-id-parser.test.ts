@@ -328,24 +328,24 @@ describe('parseModelId', () => {
 		// sidecar prefix: bare filename or multi-slash path reduces to the filename
 		expect(parseModelId('mtp-Q4_0.gguf')).toMatchObject({
 			quantization: 'Q4_0',
-			sidecar: 'MTP'
+			sidecar: 'mtp'
 		});
 
 		expect(parseModelId('ggml-org/Model-GGUF/mtp-Q4_0.gguf')).toMatchObject({
 			quantization: 'Q4_0',
-			sidecar: 'MTP'
+			sidecar: 'mtp'
 		});
 
 		expect(parseModelId('ggml-org/Model-GGUF/mmproj-F16.gguf')).toMatchObject({
 			quantization: 'F16',
-			sidecar: 'MMPROJ'
+			sidecar: 'mmproj'
 		});
 
 		// embedded-draft suffix: -<type> only strips when preceded by a quant
 		expect(parseModelId('ggml-org/Hy3-IQ1_M-mtp')).toMatchObject({
 			modelName: 'Hy3',
 			quantization: 'IQ1_M',
-			sidecar: 'MTP'
+			sidecar: 'mtp'
 		});
 
 		// a model literally named MyModel-mtp is not a draft
