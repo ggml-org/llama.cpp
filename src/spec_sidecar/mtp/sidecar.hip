@@ -22,6 +22,10 @@ namespace {
 struct Scratch {
     float *x_tok, *x_h, *e_n, *h_n, *cat, *proj, *attin, *qfull, *q, *gate, *k, *v, *attout,
           *ffn_in, *ffn_g, *ffn_u, *ffn_tmp, *resid, *hnorm2;
+#if defined(__gfx1030__) || defined(SPEC_SIDECAR_GFX1030)
+    block_q8_1 *q8;
+    block_q8_1_sum_hi *q8_sum_hi;
+#endif
     int * id_dev;
 };
 #define N_BATCH 8
@@ -101,6 +105,16 @@ __global__ void shift_kv_rows(__half * kv, int src_min, int src_max, int delta, 
     }
 }
 
+#if defined(__gfx1030__) || defined(SPEC_SIDECAR_GFX1030)
+static bool sidecar_gfx1030_gemv_enabled() {
+    static const bool enabled = [] {
+        const char * value = getenv("LLAMA_SPEC_HIP_GFX1030_GEMV");
+        return value == nullptr || (std::atoi(value) != 0);
+    }();
+    return enabled;
+}
+#endif
+
 // phase 1: inputs -> projection -> Q/K/V -> rope -> KV store (rows independent)
 void block_phase1(Scratch & c, hipStream_t st, const float * xh_in, int pos,
         __half * Kc, __half * Vc) {
@@ -133,15 +147,51 @@ void block_phase2(Scratch & c, hipStream_t st, int pos, int * tok_dst,
     sigmoid_gate<<<(N_HEAD * HEAD_DIM + 255) / 256, 256, 0, st>>>(c.attout, c.gate, N_HEAD * HEAD_DIM);
     gemv_q4_0<<<N_EMBD, 32, 0, st>>>(s.W_o, c.attout, c.resid, N_HEAD * HEAD_DIM, N_EMBD);
     add_inplace<<<(N_EMBD + 255) / 256, 256, 0, st>>>(c.resid, c.proj, N_EMBD);
-    rmsnorm<<<1, 256, 0, st>>>(c.resid, s.w_post, c.ffn_in, N_EMBD);
-    gemv_q4_0<<<N_FF, 32, 0, st>>>(s.W_fg, c.ffn_in, c.ffn_g, N_EMBD, N_FF);
-    gemv_q4_0<<<N_FF, 32, 0, st>>>(s.W_fu, c.ffn_in, c.ffn_u, N_EMBD, N_FF);
+#if defined(__gfx1030__) || defined(SPEC_SIDECAR_GFX1030)
+    if (sidecar_gfx1030_gemv_enabled()) {
+        rmsnorm_q8_1<<<1, 256, 0, st>>>(c.resid, s.w_post, c.ffn_in,
+                                        c.q8, c.q8_sum_hi, N_EMBD);
+        // W_fg and W_fu consume the same normalized activation. Quantize once
+        // and keep the Q8_1 payload resident for both sibling projections.
+        gemv_q4_0_q8_1_dot8<<<N_FF, 32, 0, st>>>(s.W_fg, c.q8, c.q8_sum_hi,
+                                                 c.ffn_g, N_EMBD, N_FF);
+        gemv_q4_0_q8_1_dot8<<<N_FF, 32, 0, st>>>(s.W_fu, c.q8, c.q8_sum_hi,
+                                                 c.ffn_u, N_EMBD, N_FF);
+    } else
+#endif
+    {
+        rmsnorm<<<1, 256, 0, st>>>(c.resid, s.w_post, c.ffn_in, N_EMBD);
+        gemv_q4_0<<<N_FF, 32, 0, st>>>(s.W_fg, c.ffn_in, c.ffn_g, N_EMBD, N_FF);
+        gemv_q4_0<<<N_FF, 32, 0, st>>>(s.W_fu, c.ffn_in, c.ffn_u, N_EMBD, N_FF);
+    }
     silu_mul<<<(N_FF + 255) / 256, 256, 0, st>>>(c.ffn_g, c.ffn_u, N_FF);
-    gemv_q4_0<<<N_EMBD, 32, 0, st>>>(s.W_fd, c.ffn_g, c.ffn_tmp, N_FF, N_EMBD);
+#if defined(__gfx1030__) || defined(SPEC_SIDECAR_GFX1030)
+    if (sidecar_gfx1030_gemv_enabled()) {
+        quantize_q8_1<<<1, 256, 0, st>>>(c.ffn_g, c.q8, c.q8_sum_hi, N_FF);
+        gemv_q4_0_q8_1_dot8<<<N_EMBD, 32, 0, st>>>(s.W_fd, c.q8, c.q8_sum_hi,
+                                                    c.ffn_tmp, N_FF, N_EMBD);
+    } else
+#endif
+    {
+        gemv_q4_0<<<N_EMBD, 32, 0, st>>>(s.W_fd, c.ffn_g, c.ffn_tmp, N_FF, N_EMBD);
+    }
     add_inplace<<<(N_EMBD + 255) / 256, 256, 0, st>>>(c.resid, c.ffn_tmp, N_EMBD);
     if (tok_dst != nullptr || emit_logits) {
-        rmsnorm<<<1, 256, 0, st>>>(c.resid, s.w_shn, c.hnorm2, N_EMBD);
-        gemv_q4_0<<<N_HEAD_ROWS, 32, 0, st>>>(s.W_head, c.hnorm2, s.logits, N_EMBD, N_HEAD_ROWS);
+#if defined(__gfx1030__) || defined(SPEC_SIDECAR_GFX1030)
+        if (sidecar_gfx1030_gemv_enabled()) {
+            // Keep hnorm2 in float for the next autoregressive step while
+            // producing the Q8_1 activation needed by the shared head.
+            rmsnorm_q8_1<<<1, 256, 0, st>>>(c.resid, s.w_shn, c.hnorm2,
+                                            c.q8, c.q8_sum_hi, N_EMBD);
+            gemv_q4_0_q8_1_dot8<<<N_HEAD_ROWS, 32, 0, st>>>(s.W_head, c.q8,
+                                                            c.q8_sum_hi, s.logits,
+                                                            N_EMBD, N_HEAD_ROWS);
+        } else
+#endif
+        {
+            rmsnorm<<<1, 256, 0, st>>>(c.resid, s.w_shn, c.hnorm2, N_EMBD);
+            gemv_q4_0<<<N_HEAD_ROWS, 32, 0, st>>>(s.W_head, c.hnorm2, s.logits, N_EMBD, N_HEAD_ROWS);
+        }
         if (tok_dst != nullptr) {
             argmax_partial<<<s.nparts, 256, 0, st>>>(s.logits, N_HEAD_ROWS, s.pmax, s.pidx);
             argmax_final<<<1, 1, 0, st>>>(s.pmax, s.pidx, s.nparts, N_HEAD_ROWS,
@@ -389,6 +439,10 @@ SC_API int spec_hip_rebase_state(int32_t seq_id, int32_t pos_min, int32_t pos_ma
 
 SC_API int spec_hip_attach_target_stream(void * stream, int32_t device) {
     if (!S.ok || device != S.device) {
+        if (getenv("LLAMA_SPEC_HIP_DEBUG") != nullptr) {
+            fprintf(stderr, "[hip-sidecar] target stream device mismatch: sidecar=%d target=%d\n",
+                    S.device, device);
+        }
         return -1;
     }
     if (stream == nullptr) {
@@ -410,11 +464,23 @@ SC_API int spec_hip_attach_target_stream(void * stream, int32_t device) {
 
 // init: weights_dir holds drafter_manifest.json + drafter_weights.bin;
 // ids_path = little-endian i32 slice->full-vocab remap table (40960 entries).
-SC_API int spec_hip_init(const char * weights_dir, const char * ids_path, int32_t n_seq) {
-    if (S.ok) return n_seq == S.n_seq ? 0 : -1;
+// requested_device >= 0 binds all sidecar allocations and streams to that
+// target device. -1 preserves the legacy "current device" behavior for the
+// standalone harness and older callers.
+static int spec_hip_init_impl(const char * weights_dir, const char * ids_path,
+        int32_t n_seq, int32_t requested_device) {
+    if (requested_device < -1) return -1;
+    if (S.ok) {
+        return n_seq == S.n_seq &&
+                (requested_device < 0 || requested_device == S.device) ? 0 : -1;
+    }
     if (n_seq < 1 || n_seq > SC_MAX_SEQ) return -1;
     S.n_seq = n_seq;
+    if (requested_device >= 0) {
+        SC_CHECK(hipSetDevice(requested_device));
+    }
     SC_CHECK(hipGetDevice(&S.device));
+    if (requested_device >= 0 && S.device != requested_device) return -1;
     char pbuf[1024];
     std::string validation_error;
     if (!spec_sidecar_artifact::make_path(pbuf, sizeof(pbuf), weights_dir, "drafter_manifest.json")) {
@@ -532,6 +598,10 @@ SC_API int spec_hip_init(const char * weights_dir, const char * ids_path, int32_
         SC_CHECK(hipMalloc(&c.ffn_in, N_EMBD * 4)); SC_CHECK(hipMalloc(&c.ffn_g, N_FF * 4)); SC_CHECK(hipMalloc(&c.ffn_u, N_FF * 4));
         SC_CHECK(hipMalloc(&c.ffn_tmp, N_EMBD * 4));
         SC_CHECK(hipMalloc(&c.resid, N_EMBD * 4));  SC_CHECK(hipMalloc(&c.hnorm2, N_EMBD * 4));
+#if defined(__gfx1030__) || defined(SPEC_SIDECAR_GFX1030)
+        SC_CHECK(hipMalloc(&c.q8, (size_t) (N_FF / 32) * sizeof(block_q8_1)));
+        SC_CHECK(hipMalloc(&c.q8_sum_hi, (size_t) (N_FF / 32) * sizeof(block_q8_1_sum_hi)));
+#endif
         SC_CHECK(hipMalloc(&c.id_dev, 4));
     }
     {
@@ -608,8 +678,24 @@ SC_API int spec_hip_init(const char * weights_dir, const char * ids_path, int32_
     s.W_head = W("blk.64.nextn.shared_head_head.weight");
 
     S.ok = true;
-    fprintf(stderr, "[hip-sidecar] initialized: %zu tensors, KV %zu positions f16\n", S.tensors.size(), S.max_pos);
+    fprintf(stderr, "[hip-sidecar] initialized: %zu tensors, KV %zu positions f16, device=%d\n",
+            S.tensors.size(), S.max_pos, S.device);
+#if defined(__gfx1030__) || defined(SPEC_SIDECAR_GFX1030)
+    if (getenv("LLAMA_SPEC_HIP_DEBUG") != nullptr) {
+        fprintf(stderr, "[hip-sidecar] gfx1030 GEMV path: %s\n",
+                sidecar_gfx1030_gemv_enabled() ? "enabled" : "disabled");
+    }
+#endif
     return 0;
+}
+
+SC_API int spec_hip_init_device(const char * weights_dir, const char * ids_path,
+        int32_t n_seq, int32_t device) {
+    return spec_hip_init_impl(weights_dir, ids_path, n_seq, device);
+}
+
+SC_API int spec_hip_init(const char * weights_dir, const char * ids_path, int32_t n_seq) {
+    return spec_hip_init_impl(weights_dir, ids_path, n_seq, -1);
 }
 
 // Catch-up rows are staged in pending KV. The host path synchronizes only to
@@ -643,6 +729,13 @@ static int spec_hip_catchup_impl(int32_t seq_id, const int32_t * toks, const int
     static int n_calls = 0, n_rows = 0;
     static double total_ms = 0.0, total_gpu = 0.0;
     const bool dbg = getenv("LLAMA_SPEC_HIP_DEBUG") != nullptr;
+    static int last_input_mode = -1;
+    const int input_mode = h_rows_device ? 1 : 0;
+    if (dbg && input_mode != last_input_mode) {
+        fprintf(stderr, "[hip-sidecar] catch-up input: %s (sidecar device=%d)\n",
+                h_rows_device ? "DIRECT D2D" : "HOST FALLBACK", S.device);
+        last_input_mode = input_mode;
+    }
     auto t0 = std::chrono::high_resolution_clock::now();
     if (dbg) SC_CHECK(hipEventRecord(S.ev_a, S.st));
     q->pending_pos_min = q->state_pos_max;

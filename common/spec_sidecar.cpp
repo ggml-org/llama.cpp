@@ -598,6 +598,7 @@ using attach_stream_fn_t     = int (*)(void *, int32_t);
 using mtp_release_abi_fn = int (*)();
 using mtp_check_fn      = int (*)(int32_t, int32_t, int32_t);
 using mtp_init_fn       = int (*)(const char *, const char *, int32_t);
+using mtp_init_device_fn = int (*)(const char *, const char *, int32_t, int32_t);
 using mtp_catchup_fn    = int (*)(int32_t, const int32_t *, const int32_t *, const float *, int);
 using mtp_catchup_device_fn = int (*)(int32_t, const int32_t *, const int32_t *, const float *, int);
 using mtp_draft_fn      = int (*)(int32_t, int32_t, int32_t, const float *, int, int32_t *);
@@ -720,6 +721,7 @@ struct common_spec_sidecar_mtp::impl {
     mtp_state_commit_fn_t state_commit_fn = nullptr;
     state_rebase_fn_t state_rebase_fn = nullptr;
     attach_stream_fn_t attach_stream_fn = nullptr;
+    mtp_init_device_fn init_device_fn = nullptr;
     mtp_catchup_fn catchup_fn = nullptr;
     mtp_catchup_device_fn catchup_device_fn = nullptr;
     mtp_draft_fn draft_fn = nullptr;
@@ -739,7 +741,8 @@ common_spec_sidecar_mtp::~common_spec_sidecar_mtp() {
 
 bool common_spec_sidecar_mtp::load(const std::string & library_path,
         const std::string & weights_dir, const std::string & ids_path,
-        int32_t embedding_width, int32_t head_rows, int32_t n_seq, std::string & error) {
+        int32_t embedding_width, int32_t head_rows, int32_t n_seq,
+        std::string & error, int32_t device) {
     if (active()) {
         error = "MTP sidecar is already loaded";
         return false;
@@ -762,6 +765,7 @@ bool common_spec_sidecar_mtp::load(const std::string & library_path,
     mtp_release_abi_fn release_abi = nullptr;
     mtp_check_fn check = nullptr;
     mtp_init_fn init = nullptr;
+    mtp_init_device_fn init_device = nullptr;
     if (!resolve_symbol(handle, "spec_hip_release_abi", release_abi, error) ||
         !resolve_symbol(handle, "spec_hip_check", check, error) ||
         !resolve_symbol(handle, "spec_hip_state_size", pimpl->state_size_fn, error) ||
@@ -780,6 +784,18 @@ bool common_spec_sidecar_mtp::load(const std::string & library_path,
         !resolve_symbol(handle, "spec_hip_stochastic_top_k", pimpl->stochastic_top_k_fn, error) ||
         !resolve_symbol(handle, "spec_hip_draft_stochastic", pimpl->draft_stochastic_fn, error) ||
         !resolve_symbol(handle, "spec_hip_draft_stochastic_device", pimpl->draft_stochastic_device_fn, error)) {
+        close_library(handle);
+        return false;
+    }
+    // The device-aware entry point is an additive ABI-4 capability. Keep the
+    // legacy entry point for standalone/older callers, but require the new
+    // symbol whenever the caller asks us to bind the sidecar explicitly.
+    std::string init_device_error;
+    if (resolve_symbol(handle, "spec_hip_init_device", init_device, init_device_error)) {
+        pimpl->init_device_fn = init_device;
+    }
+    if (device >= 0 && init_device == nullptr) {
+        error = "MTP sidecar lacks explicit device-binding entry point";
         close_library(handle);
         return false;
     }
@@ -811,7 +827,10 @@ bool common_spec_sidecar_mtp::load(const std::string & library_path,
         pimpl->draft_fn = nullptr;
         return false;
     }
-    if (init(weights_dir.c_str(), ids_path.c_str(), n_seq) != 0) {
+    const int init_rc = init_device != nullptr
+            ? init_device(weights_dir.c_str(), ids_path.c_str(), n_seq, device)
+            : init(weights_dir.c_str(), ids_path.c_str(), n_seq);
+    if (init_rc != 0) {
         error = "MTP sidecar initialization failed";
         close_library(handle);
         pimpl->state_size_fn = nullptr;
