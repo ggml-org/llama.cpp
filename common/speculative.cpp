@@ -2099,7 +2099,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
     }
 
     void prepare_process(const common_speculative_draft_params_vec & dparams) override {
-        if (!sidecar.active()) {
+        if (!sidecar.active() && !sidecar_load_pending) {
             return;
         }
         for (const auto & dp : dparams) {
@@ -2108,12 +2108,14 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
             }
             if (dp.temperature > 0.0f && dp.dists == nullptr) {
                 sidecar.disable();
+                sidecar_load_pending = false;
                 sidecar_target_only = true;
                 SPC_WRN("%s", "MTP sidecar requires proposal distributions for stochastic sampling; target-only mode\n");
                 break;
             }
             if (dp.temperature <= 0.0f && params.p_min > 0.0f) {
                 sidecar.disable();
+                sidecar_load_pending = false;
                 sidecar_target_only = true;
                 SPC_WRN("%s", "MTP sidecar does not support p_min in greedy mode; target-only mode\n");
                 break;
