@@ -436,7 +436,7 @@ class Glm5NextModel(TextModel):
             # the repo ships only a transformers v5 style tokenizer.json, load it directly
             from transformers import PreTrainedTokenizerFast
             tokenizer = PreTrainedTokenizerFast(tokenizer_file=str(self.dir_model / "tokenizer.json"))
-        return self._set_vocab_glm(tokenizer)
+        return self._set_vocab_glm(tokenizer, tokpre="glm5")
 
     def index_tensors(self, remote_hf_model_id: str | None = None):
         hp = self.hparams.get("text_config", self.hparams)
